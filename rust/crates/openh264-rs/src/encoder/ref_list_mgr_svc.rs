@@ -1194,7 +1194,10 @@ pub unsafe fn WelsUpdateSliceHeaderSyntax(
 }
 
 /// Updates reference picture syntax and picture number delta in slice headers.
-pub unsafe fn WelsUpdateRefSyntax(pCtx: *mut sWelsEncCtx, kiPOC: i32, kiFrameType: i32) {
+pub fn WelsUpdateRefSyntax(pCtx: &mut sWelsEncCtx, kiPOC: i32, kiFrameType: i32) { unsafe {
+    // **T6.J1.** Safe signature, raw body: one derivation from the
+    // caller's `&mut`, and the body below is unchanged.
+    let pCtx: *mut sWelsEncCtx = pCtx;
     if pCtx.is_null() || ctx_param(pCtx).is_null() || current_layer(pCtx).is_null() {
         return;
     }
@@ -1218,7 +1221,7 @@ pub unsafe fn WelsUpdateRefSyntax(pCtx: *mut sWelsEncCtx, kiPOC: i32, kiFrameTyp
         current_layer(pCtx),
         kiFrameType,
     );
-}
+}}
 
 /// Synchronizes reconstructed picture metadata back to the source input picture.
 /// **The one place the two pools meet by name** — `pOrigPic` is a spatial source
@@ -1644,38 +1647,47 @@ impl RefStrategyKind {
     /// # Safety
     /// `pCtx` must be a live encoder context.
     #[inline]
-    pub unsafe fn BuildRefList(self, pCtx: *mut sWelsEncCtx, iPOC: i32, iBestLtrRefIdx: i32) -> bool {
+    pub fn BuildRefList(self, pCtx: &mut sWelsEncCtx, iPOC: i32, iBestLtrRefIdx: i32) -> bool { unsafe {
+        // **T6.J1.** Safe signature, raw body: one derivation from the
+        // caller's `&mut`, and the body below is unchanged.
+        let pCtx: *mut sWelsEncCtx = pCtx;
         match self {
             RefStrategyKind::TemporalLayer | RefStrategyKind::Screen => {
                 WelsBuildRefList(pCtx, iPOC, iBestLtrRefIdx)
             }
             RefStrategyKind::LosslessWithLtr => WelsBuildRefListScreen(pCtx, iPOC, iBestLtrRefIdx),
         }
-    }
+    }}
 
     /// `MarkPic` — `ref_list_mgr_svc.cpp`'s `WelsMarkPic` / `WelsMarkPicScreen`.
     ///
     /// # Safety
     /// `pCtx` must be a live encoder context.
     #[inline]
-    pub unsafe fn MarkPic(self, pCtx: *mut sWelsEncCtx) {
+    pub fn MarkPic(self, pCtx: &mut sWelsEncCtx) { unsafe {
+        // **T6.J1.** Safe signature, raw body: one derivation from the
+        // caller's `&mut`, and the body below is unchanged.
+        let pCtx: *mut sWelsEncCtx = pCtx;
         match self {
             RefStrategyKind::TemporalLayer | RefStrategyKind::Screen => WelsMarkPic(pCtx),
             RefStrategyKind::LosslessWithLtr => WelsMarkPicScreen(pCtx),
         }
-    }
+    }}
 
     /// `UpdateRefList`.
     ///
     /// # Safety
     /// `pCtx` must be a live encoder context.
     #[inline]
-    pub unsafe fn UpdateRefList(self, pCtx: *mut sWelsEncCtx) -> bool {
+    pub fn UpdateRefList(self, pCtx: &mut sWelsEncCtx) -> bool { unsafe {
+        // **T6.J1.** Safe signature, raw body: one derivation from the
+        // caller's `&mut`, and the body below is unchanged.
+        let pCtx: *mut sWelsEncCtx = pCtx;
         match self {
             RefStrategyKind::TemporalLayer | RefStrategyKind::Screen => WelsUpdateRefList(pCtx),
             RefStrategyKind::LosslessWithLtr => WelsUpdateRefListScreen(pCtx),
         }
-    }
+    }}
 
     /// `EndofUpdateRefList` — `ref_list_mgr_svc.cpp:1041` / `:1057` / `:1073`. The one
     /// method where all three variants differ.
@@ -1699,12 +1711,15 @@ impl RefStrategyKind {
     /// # Safety
     /// `pCtx` must be a live encoder context.
     #[inline]
-    pub unsafe fn AfterBuildRefList(self, pCtx: *mut sWelsEncCtx) {
+    pub fn AfterBuildRefList(self, pCtx: &mut sWelsEncCtx) { unsafe {
+        // **T6.J1.** Safe signature, raw body: one derivation from the
+        // caller's `&mut`, and the body below is unchanged.
+        let pCtx: *mut sWelsEncCtx = pCtx;
         match self {
             RefStrategyKind::TemporalLayer => DoNothing(pCtx),
             RefStrategyKind::Screen | RefStrategyKind::LosslessWithLtr => UpdateBlockStatic(pCtx),
         }
-    }
+    }}
 }
 
 #[cfg(test)]

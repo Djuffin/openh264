@@ -684,18 +684,21 @@ pub unsafe fn WelsMoveMemory_c(
 
 /// Updates the spatial index map pointer for a dependency layer.
 #[inline]
-pub unsafe fn WelsUpdateSpatialIdxMap(
-    pEncCtx: *mut sWelsEncCtx,
+pub fn WelsUpdateSpatialIdxMap(
+    pEncCtx: &mut sWelsEncCtx,
     iPos: i32,
     pPic: Option<SrcPicId>,
     iDidx: i32,
-) {
+) { unsafe {
+    // **T6.J1.** Safe signature, raw body: one derivation from the
+    // caller's `&mut`, and the body below is unchanged.
+    let pEncCtx: *mut sWelsEncCtx = pEncCtx;
     if !pEncCtx.is_null() && iPos >= 0 && (iPos as usize) < MAX_DEPENDENCY_LAYER {
         let idx = iPos as usize;
         (*pEncCtx).sSpatialIndexMap[idx].pSrc = pPic;
         (*pEncCtx).sSpatialIndexMap[idx].iDid = iDidx;
     }
-}
+}}
 
 /// Evaluates whether the input picture requires aspect-ratio preserving scaling.
 pub unsafe fn JudgeNeedOfScaling(
@@ -1008,12 +1011,15 @@ impl CWelsPreProcess {
     // stop, leaving every method `None` and the whole video-analysis stage
     // silently producing zeros — see `crate::processing`.
 
-    pub unsafe fn WelsPreprocessReset(
+    pub fn WelsPreprocessReset(
         &mut self,
-        pCtx: *mut sWelsEncCtx,
+        pCtx: &mut sWelsEncCtx,
         iWidth: i32,
         iHeight: i32,
-    ) -> i32 {
+    ) -> i32 { unsafe {
+        // **T6.J1.** Safe signature, raw body: one derivation from the
+        // caller's `&mut`, and the body below is unchanged.
+        let pCtx: *mut sWelsEncCtx = pCtx;
         if pCtx.is_null() || ctx_param(pCtx).is_null() {
             return -1;
         }
@@ -1031,7 +1037,7 @@ impl CWelsPreProcess {
         FreeScaledPic(&mut self.m_sScaledPicture);
         self.InitLastSpatialPictures(pCtx);
         WelsInitScaledPic(ctx_param(pCtx), &mut self.m_sScaledPicture)
-    }
+    }}
 
     pub unsafe fn AllocSpatialPictures(
         &mut self,
@@ -1123,13 +1129,13 @@ impl CWelsPreProcess {
         *pSpatialNum = 0;
 
         if !self.m_bInitDone {
-            if self.WelsPreprocessReset(pCtx, iWidth, iHeight) != 0 {
+            if self.WelsPreprocessReset(&mut *pCtx, iWidth, iHeight) != 0 {
                 return ENC_RETURN_MEMALLOCERR;
             }
             self.m_iAvaliableRefInSpatialPicList = (*pSvcParam).iNumRefFrame;
             self.m_bInitDone = true;
         } else if iWidth != (*pSvcParam).SUsedPicRect.iWidth || iHeight != (*pSvcParam).SUsedPicRect.iHeight {
-            if self.WelsPreprocessReset(pCtx, iWidth, iHeight) != 0 {
+            if self.WelsPreprocessReset(&mut *pCtx, iWidth, iHeight) != 0 {
                 return ENC_RETURN_MEMALLOCERR;
             }
         }
@@ -1269,7 +1275,7 @@ impl CWelsPreProcess {
                 // no scaling is configured, and then no scaled picture exists.
                 SrcPicRef::Scaled => None,
             };
-            WelsUpdateSpatialIdxMap(pCtx, iActualSpatialNum, idDst, iDependencyId);
+            WelsUpdateSpatialIdxMap(&mut *pCtx, iActualSpatialNum, idDst, iDependencyId);
             iActualSpatialNum -= 1;
         }
 
@@ -1312,7 +1318,7 @@ impl CWelsPreProcess {
                 );
 
                 if tId != INVALID_TEMPORAL_ID {
-                    WelsUpdateSpatialIdxMap(pCtx, iActualSpatialNum, Some(pDstId), iDependencyId);
+                    WelsUpdateSpatialIdxMap(&mut *pCtx, iActualSpatialNum, Some(pDstId), iDependencyId);
                     iActualSpatialNum -= 1;
                 }
 
@@ -1326,7 +1332,10 @@ impl CWelsPreProcess {
         ENC_RETURN_SUCCESS
     }
 
-    pub unsafe fn AnalyzeSpatialPic(&mut self, pCtx: *mut sWelsEncCtx, kiDidx: i32) -> i32 {
+    pub fn AnalyzeSpatialPic(&mut self, pCtx: &mut sWelsEncCtx, kiDidx: i32) -> i32 { unsafe {
+        // **T6.J1.** Safe signature, raw body: one derivation from the
+        // caller's `&mut`, and the body below is unchanged.
+        let pCtx: *mut sWelsEncCtx = pCtx;
         let pSvcParam = ctx_param(pCtx);
         let bNeededMbAq = (*pSvcParam).bEnableAdaptiveQuant && ((*pCtx).eSliceType == EWelsSliceType::P_SLICE);
         let bCalculateBGD = ((*pCtx).eSliceType == EWelsSliceType::P_SLICE) && (*pSvcParam).bEnableBackgroundDetection;
@@ -1444,7 +1453,7 @@ impl CWelsPreProcess {
         }
 
         0
-    }
+    }}
 
     /// The picture a spatial-pool handle names.
     ///
@@ -2504,14 +2513,17 @@ impl CWelsPreProcess {
         }
     }
 
-    pub unsafe fn AnalyzePictureComplexity(
+    pub fn AnalyzePictureComplexity(
         &mut self,
-        pCtx: *mut sWelsEncCtx,
+        pCtx: &mut sWelsEncCtx,
         pCurPicture: Option<SrcPicId>,
         pRefPicture: Option<RecPicId>,
         kiDependencyId: i32,
         bCalculateBGD: bool,
-    ) {
+    ) { unsafe {
+        // **T6.J1.** Safe signature, raw body: one derivation from the
+        // caller's `&mut`, and the body below is unchanged.
+        let pCtx: *mut sWelsEncCtx = pCtx;
         if pCtx.is_null() || ctx_param(pCtx).is_null() {
             return;
         }
@@ -2634,7 +2646,7 @@ impl CWelsPreProcess {
                 self.m_vp.sComplexityAnalysis.Get(sComplexityAnalysisParam);
             }
         }
-    }
+    }}
 
     /// Look up the source picture and long-term index for a best-reference candidate.
     ///

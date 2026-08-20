@@ -304,7 +304,7 @@ impl CWelsParametersetIdStrategyObj {
 
     /// `UpdatePpsList` — `paraset_strategy.h:114`; empty body.
     #[inline]
-    pub fn UpdatePpsList(&mut self, _pCtx: *mut sWelsEncCtx) {}
+    pub fn UpdatePpsList(&mut self, _pCtx: &mut sWelsEncCtx) {}
 
     /// `CheckParamCompatibility` — `paraset_strategy.h:116`; unconditionally true.
     #[inline]
@@ -320,15 +320,18 @@ impl CWelsParametersetIdStrategyObj {
     ///
     /// # Safety
     /// `pCtx` must satisfy [`WelsGenerateNewSps`]'s contract.
-    pub unsafe fn GenerateNewSps(
+    pub fn GenerateNewSps(
         &mut self,
-        pCtx: *mut sWelsEncCtx,
+        pCtx: &mut sWelsEncCtx,
         kbUseSubsetSps: bool,
         iDlayerIndex: i32,
         iDlayerCount: i32,
         kuiSpsId: u32,
         bSVCBaselayer: bool,
-    ) -> u32 {
+    ) -> u32 { unsafe {
+        // **T6.J1.** Safe signature, raw body: one derivation from the
+        // caller's `&mut`, and the body below is unchanged.
+        let pCtx: *mut sWelsEncCtx = pCtx;
         WelsGenerateNewSps(
             pCtx,
             kbUseSubsetSps,
@@ -338,7 +341,7 @@ impl CWelsParametersetIdStrategyObj {
             bSVCBaselayer,
         );
         kuiSpsId
-    }
+    }}
 
     /// `InitPps` — `paraset_strategy.cpp:276`.
     ///
@@ -350,9 +353,9 @@ impl CWelsParametersetIdStrategyObj {
     ///
     /// # Safety
     /// `pCtx->pPPSArray` must hold at least `kuiPpsId + 1` entries.
-    pub unsafe fn InitPps(
+    pub fn InitPps(
         &mut self,
-        pCtx: *mut sWelsEncCtx,
+        pCtx: &mut sWelsEncCtx,
         _kiSpsId: u32,
         pSps: Option<&SWelsSPS>,
         pSubsetSps: Option<&SSubsetSps>,
@@ -360,7 +363,10 @@ impl CWelsParametersetIdStrategyObj {
         _kbDeblockingFilterPresentFlag: bool,
         kbUsingSubsetSps: bool,
         kbEntropyCodingModeFlag: bool,
-    ) -> u32 {
+    ) -> u32 { unsafe {
+        // **T6.J1.** Safe signature, raw body: one derivation from the
+        // caller's `&mut`, and the body below is unchanged.
+        let pCtx: *mut sWelsEncCtx = pCtx;
         WelsInitPps(
             &mut *ctx_pps_array(pCtx).add(kuiPpsId as usize),
             pSps,
@@ -372,7 +378,7 @@ impl CWelsParametersetIdStrategyObj {
         );
         self.SetUseSubsetFlag(kuiPpsId, kbUsingSubsetSps);
         kuiPpsId
-    }
+    }}
 
     /// `SetUseSubsetFlag` — `paraset_strategy.cpp:288`.
     #[inline]
@@ -382,7 +388,7 @@ impl CWelsParametersetIdStrategyObj {
 
     /// `UpdateParaSetNum` — `paraset_strategy.h:139`; empty.
     #[inline]
-    pub fn UpdateParaSetNum(&mut self, _pCtx: *mut sWelsEncCtx) {}
+    pub fn UpdateParaSetNum(&mut self, _pCtx: &mut sWelsEncCtx) {}
 
     /// `GetCurrentPpsId` — `paraset_strategy.h:141`.
     #[inline]

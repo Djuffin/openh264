@@ -1634,7 +1634,10 @@ pub unsafe fn LoadBackFrameNum(pEncCtx: *mut sWelsEncCtx, kiDidx: i32) {
 ///
 /// # Safety
 /// `pEncCtx` must be non-null and contain a valid `pOut`.
-pub unsafe fn InitBitStream(pEncCtx: *mut sWelsEncCtx) {
+pub fn InitBitStream(pEncCtx: &mut sWelsEncCtx) { unsafe {
+    // **T6.J1.** Safe signature, raw body: one derivation from the
+    // caller's `&mut`, and the body below is unchanged.
+    let pEncCtx: *mut sWelsEncCtx = pEncCtx;
     if pEncCtx.is_null() || (*pEncCtx).pOut.is_null() {
         return;
     }
@@ -1648,17 +1651,20 @@ pub unsafe fn InitBitStream(pEncCtx: *mut sWelsEncCtx) {
     // `pStartBuf: *mut u8` and written through — is deleted rather than amended
     // (`phase2_findings.md` F13, third site).
     (*(*pEncCtx).pOut).sBsWrite = crate::encoder::vlc_encoder::BsWriter::new();
-}
+}}
 
 /// Configures slice types, NAL headers, and Picture Order Count (POC) for the frame.
 ///
 /// # Safety
 /// `pEncCtx` must be non-null and properly initialized.
-pub unsafe fn InitFrameCoding(
-    pEncCtx: *mut sWelsEncCtx,
+pub fn InitFrameCoding(
+    pEncCtx: &mut sWelsEncCtx,
     keFrameType: EVideoFrameType,
     kiDidx: i32,
-) {
+) { unsafe {
+    // **T6.J1.** Safe signature, raw body: one derivation from the
+    // caller's `&mut`, and the body below is unchanged.
+    let pEncCtx: *mut sWelsEncCtx = pEncCtx;
     if pEncCtx.is_null() || ctx_param(pEncCtx).is_null() || ctx_sps(pEncCtx).is_null() {
         return;
     }
@@ -1704,18 +1710,21 @@ pub unsafe fn InitFrameCoding(
         (*pEncCtx).eSliceType = EWelsSliceType::I_SLICE;
         (*pEncCtx).eNalPriority = EWelsNalRefIdc::NRI_PRI_HIGHEST;
     }
-}
+}}
 
 /// Evaluates VAA scene change analysis, LTR feedback, and rate control constraints to classify frame coding type.
 ///
 /// # Safety
 /// `pEncCtx` must be non-null and initialized.
-pub unsafe fn DecideFrameType(
-    pEncCtx: *mut sWelsEncCtx,
+pub fn DecideFrameType(
+    pEncCtx: &mut sWelsEncCtx,
     kiSpatialNum: i8,
     kiDidx: i32,
     bSkipFrameFlag: bool,
-) -> EVideoFrameType {
+) -> EVideoFrameType { unsafe {
+    // **T6.J1.** Safe signature, raw body: one derivation from the
+    // caller's `&mut`, and the body below is unchanged.
+    let pEncCtx: *mut sWelsEncCtx = pEncCtx;
     if pEncCtx.is_null() || ctx_param(pEncCtx).is_null() {
         return EVideoFrameType::videoFrameTypeInvalid;
     }
@@ -1805,7 +1814,7 @@ pub unsafe fn DecideFrameType(
     }
 
     iFrameType
-}
+}}
 
 /// Zeroes `iSize` bytes at `pDst`.
 ///
