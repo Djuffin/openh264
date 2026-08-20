@@ -324,8 +324,6 @@ impl CWelsParametersetIdStrategyObj {
         iDlayerIndex: i32,
         iDlayerCount: i32,
         kuiSpsId: u32,
-        pSps: *mut *mut SWelsSPS,
-        pSubsetSps: *mut *mut SSubsetSps,
         bSVCBaselayer: bool,
     ) -> u32 {
         WelsGenerateNewSps(
@@ -334,8 +332,6 @@ impl CWelsParametersetIdStrategyObj {
             iDlayerIndex,
             iDlayerCount,
             kuiSpsId as i32,
-            pSps,
-            pSubsetSps,
             bSVCBaselayer,
         );
         kuiSpsId
@@ -346,21 +342,24 @@ impl CWelsParametersetIdStrategyObj {
     /// Note the literal `true` C++ passes for `kbDeblockingFilterPresentFlag`, ignoring
     /// the argument of the same name.
     ///
+    /// **The two SPS parameters are `Option`s since T6.G3** — see [`WelsInitPps`],
+    /// which this forwards to unchanged.
+    ///
     /// # Safety
     /// `pCtx->pPPSArray` must hold at least `kuiPpsId + 1` entries.
     pub unsafe fn InitPps(
         &mut self,
         pCtx: *mut sWelsEncCtx,
         _kiSpsId: u32,
-        pSps: *mut SWelsSPS,
-        pSubsetSps: *mut SSubsetSps,
+        pSps: Option<&SWelsSPS>,
+        pSubsetSps: Option<&SSubsetSps>,
         kuiPpsId: u32,
         _kbDeblockingFilterPresentFlag: bool,
         kbUsingSubsetSps: bool,
         kbEntropyCodingModeFlag: bool,
     ) -> u32 {
         WelsInitPps(
-            (*pCtx).pPPSArray.add(kuiPpsId as usize),
+            &mut *(*pCtx).pPPSArray.add(kuiPpsId as usize),
             pSps,
             pSubsetSps,
             kuiPpsId,
@@ -406,19 +405,17 @@ pub unsafe fn WelsGenerateNewSps(
     iDlayerIndex: i32,
     iDlayerCount: i32,
     kiSpsId: i32,
-    pSps: *mut *mut SWelsSPS,
-    pSubsetSps: *mut *mut SSubsetSps,
     bSVCBaselayer: bool,
 ) -> i32 {
     let iRet;
-
-    if !kbUseSubsetSps {
-        *pSps = (*pCtx).pSpsArray.add(kiSpsId as usize);
-    } else {
-        *pSubsetSps = (*pCtx).pSubsetArray.add(kiSpsId as usize);
-        *pSps = std::ptr::addr_of_mut!((**pSubsetSps).pSps);
-    }
-
+    // **T6.G3: the two `*mut *mut` out-parameters are gone**, and with them the
+    // block that filled them. They handed the caller back exactly
+    // `pSpsArray[kiSpsId]` / `pSubsetArray[kiSpsId]` — values it recomputed from the
+    // id this function returns, in the very next statement — so they were a second
+    // copy of the return value carrying a pointer's failure modes. Each arm below
+    // now reaches its own array once, where it uses it, and the two-arm derivation
+    // that stood here (which computed one pointer the caller's arm never read) is
+    // gone with them.
     let pParam = (*pCtx).pSvcParam;
     // S29's named shape. `WelsInitSps` takes `*mut SSpatialLayerConfig`, so the
     // reference here only existed to retag and be cast away — and its retag is
@@ -427,7 +424,7 @@ pub unsafe fn WelsGenerateNewSps(
     // Need port pSps/pPps initialization due to spatial scalability changed
     if !kbUseSubsetSps {
         iRet = WelsInitSps(
-            *pSps,
+            &mut *(*pCtx).pSpsArray.add(kiSpsId as usize),
             pDlayerParam,
             std::ptr::addr_of_mut!((*pParam).sDependencyLayers[iDlayerIndex as usize]),
             (*pParam).uiIntraPeriod,
@@ -440,7 +437,7 @@ pub unsafe fn WelsGenerateNewSps(
         );
     } else {
         iRet = WelsInitSubsetSps(
-            *pSubsetSps,
+            &mut *(*pCtx).pSubsetArray.add(kiSpsId as usize),
             pDlayerParam,
             std::ptr::addr_of_mut!((*pParam).sDependencyLayers[iDlayerIndex as usize]),
             (*pParam).uiIntraPeriod,
