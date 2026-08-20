@@ -373,10 +373,63 @@ impl SPicture {
 /// A picture's plane roots and geometry, copied out of it — see [`SPicture::planes`].
 #[derive(Clone, Copy, Debug)]
 pub struct PicPlanes {
+    /// Null on a `Default` — "no picture bound", which is what the C++'s null
+    /// `pRefPic` meant at the sites that read this.
     pub pData: [*mut u8; 3],
     pub iLineSize: [i32; 3],
     pub iWidthInPixel: i32,
     pub iHeightInPixel: i32,
+}
+
+impl Default for PicPlanes {
+    /// "No picture bound" — three null roots and zero geometry, which is the state
+    /// `SDqLayer`'s stamped views hold on an I-slice, where the C++ leaves `pRefPic`
+    /// null and no reader reaches them.
+    fn default() -> Self {
+        Self {
+            pData: [std::ptr::null_mut(); 3],
+            iLineSize: [0; 3],
+            iWidthInPixel: 0,
+            iHeightInPixel: 0,
+        }
+    }
+}
+
+/// A reference or reconstruction picture **as one frame sees it** — the plane roots,
+/// the strides, the picture type, and the dormant screen-feature slot.
+///
+/// **T6.F5, and it is `pEncData`/`pCsData`'s own treatment applied to the other two
+/// pictures.** The picture-id flip made every per-macroblock read of a stride or a
+/// plane root resolve a handle through a pool: read the `Option`, read the layer's
+/// reference list, null-check it, bounds-check the slot, and follow `Vec` → `Box` →
+/// `SPicture`. That is five dependent loads where the C++ has one, at roughly forty
+/// sites inside the macroblock loop, and it **measured**: +1.45% median on the encode
+/// bench, against a +0.00% null (session F's span attribution).
+///
+/// A reference picture does not move for the duration of a frame, which is exactly
+/// why the layer already carries `pEncData`/`pCsData` as raw cursors re-derived once
+/// a frame. This is the same fact stated for the other two pictures: stamped by
+/// `WelsInitCurrentLayer`, read as plain fields, and **the handle stays the truth** —
+/// `pRefPic`/`pDecPic` are still `Option<RecPicId>` and every access that needs the
+/// picture *itself* (the four per-macroblock side arrays) still resolves it.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct SRefPicView {
+    pub sPlanes: PicPlanes,
+    pub iPictureType: i32,
+    // SCREEN_CONTENT(dormant: Phase 10)
+    pub pScreenBlockFeatureStorage: *mut SScreenBlockFeatureStorage,
+}
+
+impl SPicture {
+    /// This picture's per-frame view — see [`SRefPicView`].
+    #[inline]
+    pub fn view(&mut self) -> SRefPicView {
+        SRefPicView {
+            sPlanes: self.planes(),
+            iPictureType: self.iPictureType,
+            pScreenBlockFeatureStorage: self.pScreenBlockFeatureStorage,
+        }
+    }
 }
 
 // ===========================================================================

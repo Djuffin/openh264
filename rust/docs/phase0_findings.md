@@ -2494,3 +2494,47 @@ one `git stash` and five minutes, and it is what this measurement rests on.
 
 Running total: **seventy-seven measurements, twenty-five alternations, fifty
 acquittals.**
+
+---
+
+### Seventy-eighth measurement — 2026-08-20, Phase 6 session F, the T6.F5 `family` gate: two hits, and **the first retry loop was wrong**
+
+```
+debug: mt CiscoVT2people_160x96_6fps  t=4 sm=3 n=600 cabac=0 rc=0 :: C++ 42538  Rust 0
+debug: mt CiscoVT2people_320x192_12fps t=4 sm=3 n=600 cabac=0 rc=0 :: C++ 40992  Rust 0
+```
+
+Release sweep of the same battery **369/369**.
+
+**The first retry loop reported 5/5 failures on both — and it was the loop that was
+broken, not the tree.** It was written as
+
+```zsh
+for cfg in "clip 160 96 20 0"; do set -- $cfg; compare.sh ".../$1.yuv" $2 $3 $4 ...
+```
+
+and **the interactive shell here is zsh, which does not word-split unquoted
+expansions**, so `$1` became the entire string and `$2..$5` were empty. `compare.sh`
+was handed garbage and both drivers failed. This is the trap `sweep.sh`'s own header
+comment has warned about since Phase 1 — "keep it bash, keep the `read -r` idiom,
+quote every expansion" — collected here because it now has a second victim and
+because *a wrong retry loop looks exactly like a reproducible regression*. Running the
+same configuration with literal arguments in the same shell: byte-identical.
+
+**Re-measured properly**: cfg A **0/5**, cfg B **1/5 then 0/20 more — 1/25**, which is
+the rate measurement 77 recorded at head on the neighbouring configuration (1/25
+against the pre-face tree's 4/25). Same signature, same zero-byte shape, same
+`SM_SIZELIMITED_SLICE` + 4-thread path, and the face under test moved *no* threading
+machinery: it replaced a handle resolution with a field read inside the macroblock
+loop.
+
+**Acquitted as F3.**
+
+**The lesson, and it is about instruments again.** Measurement 77 refined the retry
+rule (a tight loop is load, so a hit inside it needs a comparison, not a verdict);
+this one refines the *loop*. Before believing a retry result, check that the retry ran
+the configuration you meant — a 5/5 failure on a configuration whose single run is
+byte-identical is a bug in the harness you just wrote, not a finding.
+
+Running total: **seventy-eight measurements, twenty-five alternations, fifty-one
+acquittals.**

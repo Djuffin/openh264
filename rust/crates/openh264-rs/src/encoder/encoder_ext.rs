@@ -13,7 +13,7 @@
 #![allow(non_snake_case, non_camel_case_types, non_upper_case_globals)]
 
 // Phase 4a: `pfMdCost`/`pfMeCost` are enum selectors, not interior pointers (F13).
-use crate::encoder::picture::{RecPicId, RecPicPool, SrcPicId, SrcPicPool};
+use crate::encoder::picture::{RecPicId, RecPicPool, SRefPicView, SrcPicId, SrcPicPool};
 use crate::encoder::md::CostFamily;
 use std::ffi::{c_char, c_void};
 use std::ptr::{null, null_mut};
@@ -1907,6 +1907,37 @@ pub unsafe fn WelsSwapDqLayers(pCtx: *mut sWelsEncCtx, kiNextDqIdx: i32) {
     (*(*pCtx).pCurDqLayer).pRefLayer = Some(kRefIdx);
 }
 
+/// Re-derive the layer's two picture **views** from the two handles it holds — T6.F5.
+///
+/// Called at every point either handle is assigned (`WelsInitCurrentLayer` and
+/// [`PrefetchReferencePicture`]), so a view can never name a picture the layer has
+/// stopped pointing at. That is the whole invariant, and stamping both together at
+/// both sites is what makes it checkable by reading two call sites instead of four
+/// assignments.
+///
+/// # Safety
+/// `pCtx->pCurDqLayer` must be live and stamped with its reference list.
+pub unsafe fn StampLayerPictureViews(pCtx: *mut sWelsEncCtx) {
+    let pCurDq = (*pCtx).pCurDqLayer;
+    if pCurDq.is_null() {
+        return;
+    }
+    let pRefList = (*pCurDq).pRefList;
+    if pRefList.is_null() {
+        (*pCurDq).sRefPicView = SRefPicView::default();
+        (*pCurDq).sDecPicView = SRefPicView::default();
+        return;
+    }
+    (*pCurDq).sRefPicView = match (*pCurDq).pRefPic {
+        Some(id) => (*pRefList).pic_mut(id).view(),
+        None => SRefPicView::default(),
+    };
+    (*pCurDq).sDecPicView = match (*pCurDq).pDecPic {
+        Some(id) => (*pRefList).pic_mut(id).view(),
+        None => SRefPicView::default(),
+    };
+}
+
 /// `encoder_ext.cpp:2808`. Prefetch the reference picture after `WelsBuildRefList`.
 pub unsafe fn PrefetchReferencePicture(pCtx: *mut sWelsEncCtx, keFrameType: EVideoFrameType) {
     let kiSliceCount = (*(*pCtx).pCurDqLayer).iMaxSliceNum;
@@ -1925,6 +1956,7 @@ pub unsafe fn PrefetchReferencePicture(pCtx: *mut sWelsEncCtx, keFrameType: EVid
         (*pCtx).pRefPic = None;
         (*(*pCtx).pCurDqLayer).pRefPic = None;
     }
+    StampLayerPictureViews(pCtx);
 
     let mut iIdx = 0;
     while iIdx < kiSliceCount {
@@ -2025,6 +2057,7 @@ pub unsafe fn WelsInitCurrentLayer(pCtx: *mut sWelsEncCtx, _kiWidth: i32, _kiHei
     let pParamInternal = std::ptr::addr_of_mut!((*pParam).sDependencyLayers[kiCurDid as usize]);
 
     (*pCurDq).pDecPic = (*pCtx).pDecPic;
+    StampLayerPictureViews(pCtx);
 
     debug_assert!(iSliceCount > 0);
 

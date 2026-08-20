@@ -127,6 +127,18 @@ assert_size!(SWelsNalRaw, 32);
 // bytes each, 192 total). The picture owns every byte it has, and `CMemoryAlign` has
 // nothing left to allocate for one. **344, measured.**
 assert_size!(SPicture, 344);
+
+// codec/encoder/core/inc/encoder_context.h — `SRefList`, **newly pinned at T6.F1**.
+// It has no C++ number worth asserting any more (it owns its pictures), and it is
+// pinned for the reason `SMeRefinePointer` is: one builder, one shape, and a silent
+// change to it would be a silent change to how a dependency layer holds its
+// reference pictures. 34 handles + a pool + two counts; profile-split like every
+// other struct that stores a handle.
+assert_size_by_profile!(
+    crate::encoder::encoder_context::SRefList,
+    debug 240,
+    release 120
+);
 assert_size!(SScreenBlockFeatureStorage, 88);
 
 // codec/encoder/core/inc/parameter_sets.h
@@ -272,8 +284,10 @@ assert_size!(SSliceBufferInfo, 32);
 // **640 after T6.D8** grew the four inline `sSliceBufferInfo` banks by 16 apiece.
 // **Measured** at each step; the number tracks the port, not the C++.
 // **T6.F1**: `pRefPic`/`pDecPic`/`pRefOri[16]` become handles and `pRefList` is
-// added — **712 debug / 640 release**, measured.
-assert_size_by_profile!(SDqLayer, debug 712, release 640);
+// added — 712 debug / 640 release. **T6.F5**: +128 for the two `SRefPicView`s the
+// macroblock loop reads instead of resolving a handle per access — **840 debug /
+// 768 release**, measured.
+assert_size_by_profile!(SDqLayer, debug 840, release 768);
 
 // codec/encoder/core/inc/wels_func_ptr_def.h
 // 1280 before Phase 4a; -8 for `SSampleDealingFunc`'s shrink above; -24 at T4b.1,
