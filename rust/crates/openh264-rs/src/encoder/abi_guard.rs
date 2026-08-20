@@ -77,7 +77,14 @@ assert_size!(SNalUnitHeaderExt, 24);
 assert_size!(SWelsNalRaw, 32);
 
 // codec/encoder/core/inc/picture.h
-assert_size!(SPicture, 136);
+//
+// **136 in the C++, and 192 is the port's own number since T6.F0.** The four
+// per-macroblock side arrays (`uiRefMbType`, `pRefMbQp`, `pMbSkipSad`, `sMvList`) are
+// owned `Vec`s rather than four `WelsMallocz`'d pointers, so the struct trades 4
+// pointers for 4 fat pointers (+48) and loses `#[repr(C)]` with them; Rust then packs
+// the six one-byte flags into the hole after `iFrameAverageQp`, so the measured total
+// is 192 rather than the 200 a `repr(C)` layout would give. Measured, not predicted.
+assert_size!(SPicture, 192);
 assert_size!(SScreenBlockFeatureStorage, 88);
 
 // codec/encoder/core/inc/parameter_sets.h
@@ -177,7 +184,9 @@ assert_size!(SSliceCtx, 48);
 // selectors and the alignment padding around them. **5600, measured** — and it is the
 // same memory the C++ allocates per slice, in one block instead of eight.
 // `SSlice`, which embeds it, is **6544** (was 1520).
-assert_size!(SMbCache, 5600);
+// **5584 since T6.F0**: `pEncSad`, the last alias into an `SPicture`, is deleted —
+// one pointer plus the 8 bytes of padding its removal let the compiler reclaim.
+assert_size!(SMbCache, 5584);
 // 152 in the C++ and in this port until **T6.C1**, which moved the five
 // per-macroblock scratch arrays the C++ reaches by pointer (`sMv`, `pRefIndex`,
 // `pSadCost`, `pIntra4x4PredMode`, `pNonZeroCount`) into the struct as inline

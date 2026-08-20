@@ -559,7 +559,7 @@ pub unsafe extern "C" fn WelsMdBackgroundMbEnc(
         iLineSizeY,
     );
     (*pCurMb).sP16x16Mv = SMVUnitXY::default();
-    *(*(*pCurDqLayer).pDecPic).sMvList.offset((*pCurMb).iMbXY as isize) = SMVUnitXY::default();
+    (&mut (*(*pCurDqLayer).pDecPic).sMvList)[(*pCurMb).iMbXY as usize] = SMVUnitXY::default();
 
     if bSkipMbFlag {
         (*pCurMb).uiMbType = MB_TYPE_BACKGROUND;
@@ -1262,13 +1262,13 @@ pub unsafe extern "C" fn WelsMdP16x16(
     if !(*pCurLayer).pRefPic.is_null() && (*(*pCurLayer).pRefPic).iPictureType == P_SLICE {
         let ref_pic = (*pCurLayer).pRefPic;
         if ((*pCurMb).iMbX as i32) < kiMbWidth - 1 {
-            let sTempMv = *(*ref_pic).sMvList.offset(((*pCurMb).iMbXY + 1) as isize);
+            let sTempMv = (&(*ref_pic).sMvList)[((*pCurMb).iMbXY + 1) as usize];
             (*pSlice).sMvc[(*pSlice).uiMvcNum as usize].iMvX = sTempMv.iMvX >> (*pSlice).sScaleShift;
             (*pSlice).sMvc[(*pSlice).uiMvcNum as usize].iMvY = sTempMv.iMvY >> (*pSlice).sScaleShift;
             (*pSlice).uiMvcNum += 1;
         }
         if ((*pCurMb).iMbY as i32) < kiMbHeight - 1 {
-            let sTempMv = *(*ref_pic).sMvList.offset(((*pCurMb).iMbXY + kiMbWidth) as isize);
+            let sTempMv = (&(*ref_pic).sMvList)[((*pCurMb).iMbXY + kiMbWidth) as usize];
             (*pSlice).sMvc[(*pSlice).uiMvcNum as usize].iMvX = sTempMv.iMvX >> (*pSlice).sScaleShift;
             (*pSlice).sMvc[(*pSlice).uiMvcNum as usize].iMvY = sTempMv.iMvY >> (*pSlice).sScaleShift;
             (*pSlice).uiMvcNum += 1;
@@ -1288,8 +1288,10 @@ pub unsafe extern "C" fn WelsMdP16x16(
     }
 
     (*pCurMb).sP16x16Mv = (*pMe16x16).sMv;
-    if !(*pCurLayer).pDecPic.is_null() && !(*(*pCurLayer).pDecPic).sMvList.is_null() {
-        *(*(*pCurLayer).pDecPic).sMvList.offset((*pCurMb).iMbXY as isize) = (*pMe16x16).sMv;
+    // `is_empty()` is the port's spelling of the C++'s null test: a picture built
+    // without `bNeedMbInfo` carries no MV list at all (T6.F0).
+    if !(*pCurLayer).pDecPic.is_null() && !(*(*pCurLayer).pDecPic).sMvList.is_empty() {
+        (&mut (*(*pCurLayer).pDecPic).sMvList)[(*pCurMb).iMbXY as usize] = (*pMe16x16).sMv;
     }
 
     (*pMe16x16).uiSatdCost as i32
@@ -1584,8 +1586,8 @@ pub unsafe fn IsCostLessEqualSkipCost(
     (iPredPskipSad > iSmallestInvisibleTh && iCurCost >= iPredPskipSad)
         || ((*pRef).iPictureType == P_SLICE
             && iRefMbType == MB_TYPE_SKIP
-            && *(*pRef).pMbSkipSad.offset(iMbXy as isize) > iSmallestInvisibleTh
-            && iCurCost >= *(*pRef).pMbSkipSad.offset(iMbXy as isize))
+            && (&(*pRef).pMbSkipSad)[iMbXy as usize] > iSmallestInvisibleTh
+            && iCurCost >= (&(*pRef).pMbSkipSad)[iMbXy as usize])
 }
 
 pub unsafe fn CheckChromaCost(
@@ -1642,7 +1644,7 @@ pub unsafe extern "C" fn WelsMdInterJudgeBGDPskip(
     let pMbCache = std::ptr::addr_of_mut!((*pSlice).sMbCacheInfo);
     let pCurDqLayer = (*pEncCtx).pCurDqLayer;
 
-    let kiRefMbQp = *(*(*pCurDqLayer).pRefPic).pRefMbQp.offset((*pCurMb).iMbXY as isize) as i32;
+    let kiRefMbQp = (&(*(*pCurDqLayer).pRefPic).pRefMbQp)[(*pCurMb).iMbXY as usize] as i32;
     let kiCurMbQp = (*pCurMb).uiLumaQp as i32;
     let pVaaBgMbFlag = (*(*pEncCtx).pVaa).pVaaBackgroundMbFlag.offset((*pCurMb).iMbXY as isize);
 
@@ -1685,15 +1687,17 @@ pub unsafe extern "C" fn WelsMdUpdateBGDInfo(
     bCollocatedPredFlag: bool,
     iRefPictureType: i32,
 ) {
-    let pTargetRefMbQpList = (*(*pCurLayer).pDecPic).pRefMbQp;
-    let kiMbXY = (*pCurMb).iMbXY as isize;
+    let kiMbXY = (*pCurMb).iMbXY as usize;
 
-    if (*pCurMb).uiCbp != 0 || iRefPictureType == I_SLICE || !bCollocatedPredFlag {
-        *pTargetRefMbQpList.offset(kiMbXY) = (*pCurMb).uiLumaQp;
+    // Two *different* pictures, and the read is sequenced before the write so neither
+    // borrow of a `pRefMbQp` outlives the other — `pDecPic` and `pRefPic` are distinct
+    // slots by construction (session B's F42 note), but the spelling does not rely on it.
+    let uiQp = if (*pCurMb).uiCbp != 0 || iRefPictureType == I_SLICE || !bCollocatedPredFlag {
+        (*pCurMb).uiLumaQp
     } else {
-        let pRefPicRefMbQpList = (*(*pCurLayer).pRefPic).pRefMbQp;
-        *pTargetRefMbQpList.offset(kiMbXY) = *pRefPicRefMbQpList.offset(kiMbXY);
-    }
+        (&(*(*pCurLayer).pRefPic).pRefMbQp)[kiMbXY]
+    };
+    (&mut (*(*pCurLayer).pDecPic).pRefMbQp)[kiMbXY] = uiQp;
 
     if (*pCurMb).uiMbType == MB_TYPE_BACKGROUND {
         (*pCurMb).uiMbType = MB_TYPE_SKIP;
@@ -1955,7 +1959,7 @@ pub unsafe extern "C" fn SvcMdSCDMbEnc(
     (*pWelsMd).iCostSkipMb = sad_cost;
 
     (*pCurMb).sP16x16Mv = sCandidateMv;
-    *(*(*pCurDqLayer).pDecPic).sMvList.offset((*pCurMb).iMbXY as isize) = sCandidateMv;
+    (&mut (*(*pCurDqLayer).pDecPic).sMvList)[(*pCurMb).iMbXY as usize] = sCandidateMv;
 
     if bQpSimilarFlag && bMbSkipFlag {
         (*pCurMb).iRefIndex = [0; MB_BLOCK8x8_NUM];
@@ -2035,7 +2039,7 @@ pub unsafe extern "C" fn MdInterSCDPskipProcess(
     let pVaaExt = (*pEncCtx).pVaa as *mut SVAAFrameInfoExt_t;
     let pCurDqLayer = (*pEncCtx).pCurDqLayer;
 
-    let kiRefMbQp = *(*(*pCurDqLayer).pRefPic).pRefMbQp.offset((*pCurMb).iMbXY as isize) as i32;
+    let kiRefMbQp = (&(*(*pCurDqLayer).pRefPic).pRefMbQp)[(*pCurMb).iMbXY as usize] as i32;
     let kiCurMbQp = (*pCurMb).uiLumaQp as i32;
 
     let pJudgeSkip: [pJudgeSkipFun; 2] = [JudgeStaticSkip, JudgeScrollSkip];
