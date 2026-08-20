@@ -50,7 +50,7 @@
 //! | 61 | `pEncCtx`/`pCtx` parameters, raw `sWelsEncCtx` | **session I** — the context is the largest arena in the tree, and the S37 inventory decides `&mut` for all of it at once, not file by file |
 //! | 16 | `SWelsSvcRc`'s own five member pointers and the reaches through them | **spent at T6.H6** — the five are owned containers, reached through `rc_temporal_over` and its four siblings |
 //! |  7 | `pSlice` parameters, raw `SSlice` | **session I** — five sit behind `pfWelsRcMbInit`/`pfWelsRcMbInfoUpdate`, which is 4b's fence, and the two that do not are covered by the blocker below |
-//! |  6 | `(*pEncCtx).pVaa` cast to a raw `SVAAFrameInfoExt` | **Phase 10** — the `SCREEN_CONTENT(dormant)` family, fenced |
+//! |  6 | `ctx_vaa(pEncCtx)` cast to a raw `SVAAFrameInfoExt` | **Phase 10** — the `SCREEN_CONTENT(dormant)` family, fenced |
 //! |  3 | `RcInitLayerMemory`'s carve-up of one `CMemoryAlign` block | **spent at T6.H6** — the carve-up is gone; this file no longer names `CMemoryAlign` at all |
 //!
 //! **The one that looks convertible and is not.** `GomRCInitForOneSlice` takes a raw
@@ -96,7 +96,7 @@ pub use crate::encoder::svc_encode_slice::SSlice;
 pub use crate::encoder::svc_encode_slice::SDqLayer;
 pub use crate::encoder::wels_func_ptr_def::SWelsFuncPtrList;
 pub use crate::encoder::encoder_context::sWelsEncCtx;
-use crate::encoder::encoder_context::{ctx_rc, ctx_rc_at};
+use crate::encoder::encoder_context::{ctx_rc, ctx_rc_at, ctx_vaa};
 
 // ============================================================================
 // Constants and Macros
@@ -1154,10 +1154,10 @@ pub unsafe fn RcCalculateIdrQp(pEncCtx: *mut sWelsEncCtx) {
     ];
     let iQpRangeArray: [[i32; 2]; 5] = [[40, 28], [37, 25], [36, 24], [35, 23], [34, 22]];
 
-    let mut iFrameComplexity = (*(*pEncCtx).pVaa).sComplexityAnalysisParam.iFrameComplexity;
+    let mut iFrameComplexity = (*ctx_vaa(pEncCtx)).sComplexityAnalysisParam.iFrameComplexity;
     let fix_rc_overshoot = (*(*pEncCtx).pSvcParam).bFixRCOverShoot;
     if (*(*pEncCtx).pSvcParam).iUsageType == EUsageType::SCREEN_CONTENT_REAL_TIME {
-        let pVaa = (*pEncCtx).pVaa as *mut SVAAFrameInfoExt;
+        let pVaa = ctx_vaa(pEncCtx) as *mut SVAAFrameInfoExt;
         iFrameComplexity = (*pVaa).sComplexityScreenParam.iFrameComplexity;
     }
 
@@ -1248,9 +1248,9 @@ pub unsafe fn RcCalculatePictureQp(pEncCtx: *mut sWelsEncCtx) {
 
     let mut iLumaQp: i32;
     let mut iDeltaQpTemporal: i32 = 0;
-    let mut iFrameComplexity = (*(*pEncCtx).pVaa).sComplexityAnalysisParam.iFrameComplexity;
+    let mut iFrameComplexity = (*ctx_vaa(pEncCtx)).sComplexityAnalysisParam.iFrameComplexity;
     if (*(*pEncCtx).pSvcParam).iUsageType == EUsageType::SCREEN_CONTENT_REAL_TIME {
-        let pVaa = (*pEncCtx).pVaa as *mut SVAAFrameInfoExt;
+        let pVaa = ctx_vaa(pEncCtx) as *mut SVAAFrameInfoExt;
         iFrameComplexity = (*pVaa).sComplexityScreenParam.iFrameComplexity;
     }
 
@@ -1312,7 +1312,7 @@ pub unsafe fn RcCalculatePictureQp(pEncCtx: *mut sWelsEncCtx) {
     iLumaQp = WELS_CLIP3(iLumaQp, (*pWelsSvcRc).iMinFrameQp, (*pWelsSvcRc).iMaxFrameQp);
 
     if (*(*pEncCtx).pSvcParam).bEnableAdaptiveQuant {
-        let delta_offset = (*(*pEncCtx).pVaa)
+        let delta_offset = (*ctx_vaa(pEncCtx))
             .sAdaptiveQuantParam
             .iAverMotionTextureIndexToDeltaQp;
         iLumaQp = WELS_DIV_ROUND(iLumaQp * INT_MULTIPLY - delta_offset, INT_MULTIPLY);
@@ -1504,7 +1504,7 @@ pub unsafe fn RcCalculateMbQp(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSlice, pC
     let kuiChromaQpIndexOffset = (*layer_pps(pEncCtx, pCurLayer)).uiChromaQpIndexOffset;
 
     if (*(*pEncCtx).pSvcParam).bEnableAdaptiveQuant {
-        let pVaa = (*pEncCtx).pVaa;
+        let pVaa = ctx_vaa(pEncCtx);
         let delta_qp_ptr = (*pVaa).sAdaptiveQuantParam.pMotionTextureIndexToDeltaQp;
         let mb_xy = (*pCurMb).iMbXY as usize;
         let delta = *delta_qp_ptr.add(mb_xy) as i32;
@@ -2011,9 +2011,9 @@ pub unsafe fn RcUpdateIntraComplexity(pEncCtx: *mut sWelsEncCtx) {
     let pWelsSvcRc = ctx_rc_at(pEncCtx, did);
     let iQStep = RcConvertQp2QStep((*pWelsSvcRc).iAverageFrameQp);
     let iIntraCmplx = iQStep as i64 * (*pWelsSvcRc).iFrameDqBits as i64;
-    let mut iFrameComplexity = (*(*pEncCtx).pVaa).sComplexityAnalysisParam.iFrameComplexity;
+    let mut iFrameComplexity = (*ctx_vaa(pEncCtx)).sComplexityAnalysisParam.iFrameComplexity;
     if (*(*pEncCtx).pSvcParam).iUsageType == EUsageType::SCREEN_CONTENT_REAL_TIME {
-        let pVaa = (*pEncCtx).pVaa as *mut SVAAFrameInfoExt;
+        let pVaa = ctx_vaa(pEncCtx) as *mut SVAAFrameInfoExt;
         iFrameComplexity = (*pVaa).sComplexityScreenParam.iFrameComplexity;
     }
 
@@ -2047,9 +2047,9 @@ pub unsafe fn RcUpdateFrameComplexity(pEncCtx: *mut sWelsEncCtx) {
     let kiTl = (*pEncCtx).uiTemporalId as usize;
     let pTOverRc = rc_temporal_over(pWelsSvcRc).add(kiTl);
 
-    let mut iFrameComplexity = (*(*pEncCtx).pVaa).sComplexityAnalysisParam.iFrameComplexity;
+    let mut iFrameComplexity = (*ctx_vaa(pEncCtx)).sComplexityAnalysisParam.iFrameComplexity;
     if (*(*pEncCtx).pSvcParam).iUsageType == EUsageType::SCREEN_CONTENT_REAL_TIME {
-        let pVaa = (*pEncCtx).pVaa as *mut SVAAFrameInfoExt;
+        let pVaa = ctx_vaa(pEncCtx) as *mut SVAAFrameInfoExt;
         iFrameComplexity = (*pVaa).sComplexityScreenParam.iFrameComplexity;
     }
 
@@ -2302,7 +2302,7 @@ pub unsafe extern "C" fn WelsRcPictureInitDisable(pEncCtx: *mut sWelsEncCtx, _ui
     (*pEncCtx).iGlobalQp = RcCalculateCascadingQp(pEncCtx, kiQp);
 
     if (*(*pEncCtx).pSvcParam).bEnableAdaptiveQuant && (*pEncCtx).eSliceType as i32 == P_SLICE {
-        let delta_offset = (*(*pEncCtx).pVaa)
+        let delta_offset = (*ctx_vaa(pEncCtx))
             .sAdaptiveQuantParam
             .iAverMotionTextureIndexToDeltaQp;
         (*pEncCtx).iGlobalQp = WELS_CLIP3(
@@ -2333,7 +2333,7 @@ pub unsafe extern "C" fn WelsRcMbInitDisable(
     let kuiChromaQpIndexOffset = (*layer_pps(pEncCtx, pCurLayer)).uiChromaQpIndexOffset;
 
     if (*(*pEncCtx).pSvcParam).bEnableAdaptiveQuant && (*pEncCtx).eSliceType as i32 == P_SLICE {
-        let pVaa = (*pEncCtx).pVaa;
+        let pVaa = ctx_vaa(pEncCtx);
         let delta_qp_ptr = (*pVaa).sAdaptiveQuantParam.pMotionTextureIndexToDeltaQp;
         let mb_xy = (*pCurMb).iMbXY as usize;
         let delta = *delta_qp_ptr.add(mb_xy) as i32;
@@ -2363,7 +2363,7 @@ pub unsafe extern "C" fn WelRcPictureInitBufferBasedQp(
     pEncCtx: *mut sWelsEncCtx,
     _uiTimeStamp: i64,
 ) {
-    let pVaa = (*pEncCtx).pVaa;
+    let pVaa = ctx_vaa(pEncCtx);
     let did = (*pEncCtx).uiDependencyId as usize;
     let pWelsSvcRc = ctx_rc_at(pEncCtx, did);
 
@@ -2388,7 +2388,7 @@ pub unsafe extern "C" fn WelRcPictureInitBufferBasedQp(
 pub unsafe extern "C" fn WelRcPictureInitScc(pEncCtx: *mut sWelsEncCtx, uiTimeStamp: i64) {
     let did = (*pEncCtx).uiDependencyId as usize;
     let pWelsSvcRc = ctx_rc_at(pEncCtx, did);
-    let pVaa = (*pEncCtx).pVaa as *mut SVAAFrameInfoExt;
+    let pVaa = ctx_vaa(pEncCtx) as *mut SVAAFrameInfoExt;
     let pDLayerConfig = &(*(*pEncCtx).pSvcParam).sSpatialLayers[did];
     let pDLayerParamInternal = &(*(*pEncCtx).pSvcParam).sDependencyLayers[did];
 
@@ -2441,7 +2441,7 @@ pub unsafe extern "C" fn WelRcPictureInitScc(pEncCtx: *mut sWelsEncCtx, uiTimeSt
         }
 
         if iDeltaQp > 5 {
-            let scene_change = (*(*pEncCtx).pVaa).eSceneChangeIdc;
+            let scene_change = (*ctx_vaa(pEncCtx)).eSceneChangeIdc;
             if scene_change as i32 == LARGE_CHANGED_SCENE
                 || (*pWelsSvcRc).iBufferFullnessSkip > 2 * iBitRate as i64
                 || iDeltaQp > 10
@@ -2479,7 +2479,7 @@ pub unsafe extern "C" fn WelsRcPictureInfoUpdateScc(pEncCtx: *mut sWelsEncCtx, i
     let iFrameBits = iNalSize << 3;
     (*pWelsSvcRc).iBufferFullnessSkip += iFrameBits as i64;
 
-    let pVaa = (*pEncCtx).pVaa as *mut SVAAFrameInfoExt;
+    let pVaa = ctx_vaa(pEncCtx) as *mut SVAAFrameInfoExt;
     let iQstep = RcConvertQp2QStep((*pEncCtx).iGlobalQp);
     let screen_cmplx = (*pVaa).sComplexityScreenParam.iFrameComplexity;
     let iCost2Bits = if screen_cmplx != 0 {

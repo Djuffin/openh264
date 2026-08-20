@@ -73,7 +73,7 @@ pub const MAX_REF_PIC_COUNT: usize = 16;
 // MAX_SHORT_REF_COUNT was 16 where C++ derives 4, which over-sized `SRefList` here and
 // let the `WelsPreprocess` unref loop read one past `pShortRefList`.
 pub use crate::encoder::encoder_context::{MAX_GOP_SIZE, MAX_SHORT_REF_COUNT, MAX_TEMPORAL_LEVEL};
-use crate::encoder::encoder_context::{ctx_ltr_at, ctx_rc_at, ctx_ref_list};
+use crate::encoder::encoder_context::{ctx_ltr_at, ctx_rc_at, ctx_ref_list, ctx_vaa};
 use crate::encoder::rc::{rc_gom_fg_blocks, rc_gom_sad};
 pub use crate::encoder::encoder_context::SRefList;
 pub use crate::encoder::picture::SPicture;
@@ -1134,9 +1134,9 @@ impl CWelsPreProcess {
             }
         }
 
-        if !(*pCtx).pVaa.is_null() {
-            (*(*pCtx).pVaa).bSceneChangeFlag = false;
-            (*(*pCtx).pVaa).bIdrPeriodFlag = false;
+        if !ctx_vaa(pCtx).is_null() {
+            (*ctx_vaa(pCtx)).bSceneChangeFlag = false;
+            (*ctx_vaa(pCtx)).bIdrPeriodFlag = false;
         }
 
         // The `pScaledPic` argument stood here — `addr_of_mut!(self.m_sScaledPicture)`
@@ -1176,8 +1176,8 @@ impl CWelsPreProcess {
         let iSrcWidth = (*pSvcParam).SUsedPicRect.iWidth;
         let iSrcHeight = (*pSvcParam).SUsedPicRect.iHeight;
 
-        if (*pSvcParam).uiIntraPeriod != 0 && !(*pCtx).pVaa.is_null() {
-            (*(*pCtx).pVaa).bIdrPeriodFlag = (1 + (*pDlayerParamInternal).iFrameIndex) >= (*pSvcParam).uiIntraPeriod as i32;
+        if (*pSvcParam).uiIntraPeriod != 0 && !ctx_vaa(pCtx).is_null() {
+            (*ctx_vaa(pCtx)).bIdrPeriodFlag = (1 + (*pDlayerParamInternal).iFrameIndex) >= (*pSvcParam).uiIntraPeriod as i32;
         }
 
         *pSpatialNum = 0;
@@ -1224,28 +1224,28 @@ impl CWelsPreProcess {
             false,
         );
 
-        if (*pSvcParam).bEnableSceneChangeDetect && !(*pCtx).pVaa.is_null() && !(*(*pCtx).pVaa).bIdrPeriodFlag {
+        if (*pSvcParam).bEnableSceneChangeDetect && !ctx_vaa(pCtx).is_null() && !(*ctx_vaa(pCtx)).bIdrPeriodFlag {
             if (*pSvcParam).iUsageType == EUsageType::SCREEN_CONTENT_REAL_TIME {
                 let idc = if (*pDlayerParamInternal).bEncCurFrmAsIdrFlag {
                     ESceneChangeIdc::LARGE_CHANGED_SCENE
                 } else {
                     self.DetectSceneChange(pDstPic, None)
                 };
-                (*(*pCtx).pVaa).eSceneChangeIdc = idc;
-                (*(*pCtx).pVaa).bSceneChangeFlag = idc == ESceneChangeIdc::LARGE_CHANGED_SCENE;
+                (*ctx_vaa(pCtx)).eSceneChangeIdc = idc;
+                (*ctx_vaa(pCtx)).bSceneChangeFlag = idc == ESceneChangeIdc::LARGE_CHANGED_SCENE;
             } else if !(*pDlayerParamInternal).bEncCurFrmAsIdrFlag
                 && ((*pDlayerParamInternal).iCodingIndex & ((*pSvcParam).uiGopSize as i32 - 1)) == 0
             {
                 let pRefPic = if (*ctx_ltr_at(pCtx, depIdx)).bReceivedT0LostFlag {
                     let pos = self.m_uiSpatialLayersInTemporal[depIdx] as usize
-                        + (*(*pCtx).pVaa).uiValidLongTermPicIdx as usize;
+                        + (*ctx_vaa(pCtx)).uiValidLongTermPicIdx as usize;
                     self.m_pSpatialPic[depIdx][pos]
                 } else {
                     self.m_pLastSpatialPicture[depIdx][0]
                 };
                 let pRefPic = pRefPic.map(SrcPicRef::Pooled);
                 let idc = self.DetectSceneChange(pDstPic, pRefPic);
-                (*(*pCtx).pVaa).bSceneChangeFlag = self.GetSceneChangeFlag(idc);
+                (*ctx_vaa(pCtx)).bSceneChangeFlag = self.GetSceneChangeFlag(idc);
             }
         }
 
@@ -1343,7 +1343,7 @@ impl CWelsPreProcess {
             && (*ctx_ltr_at(pCtx, (*pCtx).uiDependencyId as usize)).bReceivedT0LostFlag
         {
             iRefTemporalIdx = self.m_uiSpatialLayersInTemporal[dIdx] as i32
-                + (*(*pCtx).pVaa).uiValidLongTermPicIdx as i32;
+                + (*ctx_vaa(pCtx)).uiValidLongTermPicIdx as i32;
         }
 
         let pCurPic = self.m_pSpatialPic[dIdx][iCurTemporalIdx as usize];
@@ -1358,14 +1358,14 @@ impl CWelsPreProcess {
                 iRefTemporalIdx,
             );
 
-            self.VaaCalculation((*pCtx).pVaa, pCurPic, pRefPic, false, bCalculateVar, bCalculateBGD);
+            self.VaaCalculation(ctx_vaa(pCtx), pCurPic, pRefPic, false, bCalculateVar, bCalculateBGD);
 
             if (*pSvcParam).bEnableBackgroundDetection {
                 let bFlag = bCalculateBGD && self.ref_is_inter(pRefPic);
-                self.BackgroundDetection((*pCtx).pVaa, pCurPic, pRefPic, bFlag);
+                self.BackgroundDetection(ctx_vaa(pCtx), pCurPic, pRefPic, bFlag);
             }
             if bNeededMbAq {
-                self.AdaptiveQuantCalculation((*pCtx).pVaa, pCurPic, pRefPic);
+                self.AdaptiveQuantCalculation(ctx_vaa(pCtx), pCurPic, pRefPic);
             }
         } else {
             let pRefPic = self.GetBestRefPic(kiDidx, iRefTemporalIdx);
@@ -1379,16 +1379,16 @@ impl CWelsPreProcess {
             let bCalculateSQDiff =
                 pLastPic.is_some() && pLastPic == pRefPic && bNeededMbAq;
 
-            self.VaaCalculation((*pCtx).pVaa, pCurPic, pRefPic, bCalculateSQDiff, bCalculateVar, bCalculateBGD);
+            self.VaaCalculation(ctx_vaa(pCtx), pCurPic, pRefPic, bCalculateSQDiff, bCalculateVar, bCalculateBGD);
 
             if (*pSvcParam).bEnableBackgroundDetection {
                 let bFlag = bCalculateBGD && self.ref_is_inter(pRefPic);
-                self.BackgroundDetection((*pCtx).pVaa, pCurPic, pRefPic, bFlag);
+                self.BackgroundDetection(ctx_vaa(pCtx), pCurPic, pRefPic, bFlag);
             }
 
             if bNeededMbAq {
                 self.AdaptiveQuantCalculation(
-                    (*pCtx).pVaa,
+                    ctx_vaa(pCtx),
                     self.m_pLastSpatialPicture[dIdx][1],
                     self.m_pLastSpatialPicture[dIdx][0],
                 );
@@ -1398,15 +1398,15 @@ impl CWelsPreProcess {
 
         if crate::encoder::dump_enabled(&VP_DUMP, "OH264_VPDUMP")
             && (*pCtx).eSliceType == EWelsSliceType::P_SLICE
-            && !(*(*pCtx).pVaa).pVaaBackgroundMbFlag.is_empty()
-            && !(*(*pCtx).pVaa).sVaaCalcInfo.pSad8x8.is_empty()
-            && !(*(*pCtx).pVaa).sVaaCalcInfo.pSumOfDiff8x8.is_empty()
-            && !(*(*pCtx).pVaa).sVaaCalcInfo.pMad8x8.is_empty()
-            && !(*(*pCtx).pVaa).sVaaCalcInfo.pSsd16x16.is_empty()
-            && !(*(*pCtx).pVaa).sVaaCalcInfo.pSum16x16.is_empty()
-            && !(*(*pCtx).pVaa).sVaaCalcInfo.pSumOfSquare16x16.is_empty()
+            && !(*ctx_vaa(pCtx)).pVaaBackgroundMbFlag.is_empty()
+            && !(*ctx_vaa(pCtx)).sVaaCalcInfo.pSad8x8.is_empty()
+            && !(*ctx_vaa(pCtx)).sVaaCalcInfo.pSumOfDiff8x8.is_empty()
+            && !(*ctx_vaa(pCtx)).sVaaCalcInfo.pMad8x8.is_empty()
+            && !(*ctx_vaa(pCtx)).sVaaCalcInfo.pSsd16x16.is_empty()
+            && !(*ctx_vaa(pCtx)).sVaaCalcInfo.pSum16x16.is_empty()
+            && !(*ctx_vaa(pCtx)).sVaaCalcInfo.pSumOfSquare16x16.is_empty()
         {
-            let v = &*(*pCtx).pVaa;
+            let v = &*ctx_vaa(pCtx);
             let sCurGeom = self
                 .m_pSpatialPicPool
                 .get_mut(pCurPic.expect("the spatial pool is allocated"))
@@ -1493,7 +1493,7 @@ impl CWelsPreProcess {
         _kiDidx: i32,
         _iRefTemporalIdx: i32,
     ) -> Option<SrcPicId> {
-        let pVaaExt = (*self.m_pEncCtx).pVaa as *mut SVAAFrameInfoExt;
+        let pVaaExt = ctx_vaa(self.m_pEncCtx) as *mut SVAAFrameInfoExt;
         let pBest = if bSceneLtr {
             &(*pVaaExt).sVaaLtrBestRefCandidate[0]
         } else {
@@ -1527,7 +1527,7 @@ impl CWelsPreProcess {
             }
             if (*pCtx).bRefOfCurTidIsLtr[dIdx][iCurTid as usize] {
                 let kiAvailableLtrPos = self.m_uiSpatialLayersInTemporal[dIdx] as usize
-                    + (*(*pCtx).pVaa).uiMarkLongTermPicIdx as usize;
+                    + (*ctx_vaa(pCtx)).uiMarkLongTermPicIdx as usize;
                 Self::WelsExchangeSpatialPictures(
                     &mut self.m_pSpatialPic[dIdx][kiAvailableLtrPos],
                     &mut self.m_pSpatialPic[dIdx][iCurTid as usize],
@@ -2104,12 +2104,12 @@ impl CWelsPreProcess {
         _pRef: Option<SrcPicRef>,
     ) -> ESceneChangeIdc {
         let pCtx = self.m_pEncCtx;
-        if pCtx.is_null() || (*pCtx).pVaa.is_null() {
+        if pCtx.is_null() || ctx_vaa(pCtx).is_null() {
             return ESceneChangeIdc::LARGE_CHANGED_SCENE;
         }
 
         let pSvcParam = (*pCtx).pSvcParam;
-        let pVaaExt = (*pCtx).pVaa as *mut SVAAFrameInfoExt;
+        let pVaaExt = ctx_vaa(pCtx) as *mut SVAAFrameInfoExt;
         let iTargetDid = (*pSvcParam).iSpatialLayerNum - 1;
         if iTargetDid != 0 {
             return ESceneChangeIdc::LARGE_CHANGED_SCENE;
@@ -2532,7 +2532,7 @@ impl CWelsPreProcess {
 
         let pSvcParam = (*pCtx).pSvcParam;
         if (*pSvcParam).iUsageType == EUsageType::SCREEN_CONTENT_REAL_TIME {
-            let pVaaExt = (*pCtx).pVaa as *mut SVAAFrameInfoExt;
+            let pVaaExt = ctx_vaa(pCtx) as *mut SVAAFrameInfoExt;
             let sComplexityAnalysisParam = &mut (*pVaaExt).sComplexityScreenParam;
             let pWelsSvcRc = ctx_rc_at(pCtx, kiDependencyId as usize);
 
@@ -2566,7 +2566,7 @@ impl CWelsPreProcess {
             let iRet = crate::processing::vaacalc::RET_NOTSUPPORTED;
             debug_assert_ne!(iRet, 0);
         } else {
-            let pVaaInfo = (*pCtx).pVaa;
+            let pVaaInfo = ctx_vaa(pCtx);
             let sComplexityAnalysisParam = &mut (*pVaaInfo).sComplexityAnalysisParam;
             let pWelsSvcRc = ctx_rc_at(pCtx, kiDependencyId as usize);
 
@@ -2652,7 +2652,7 @@ impl CWelsPreProcess {
         pRefOri: &mut Option<SrcPicId>,
     ) -> i32 {
         let iTargetDid = (*(*self.m_pEncCtx).pSvcParam).iSpatialLayerNum - 1;
-        let pVaaExt = (*self.m_pEncCtx).pVaa as *mut SVAAFrameInfoExt;
+        let pVaaExt = ctx_vaa(self.m_pEncCtx) as *mut SVAAFrameInfoExt;
         let pBestRefCandidateParam = if bCurrentFrameIsSceneLtr {
             &(*pVaaExt).sVaaLtrBestRefCandidate[iRefIdx as usize]
         } else {
