@@ -207,6 +207,7 @@ impl Default for SMVComponentUnit {
 
 
 pub use crate::encoder::svc_encode_slice::SDqLayer;
+use crate::encoder::svc_encode_slice::ctx_sps;
 
 pub use crate::encoder::wels_encoder_ext::{SSpatialLayerInternal, SWelsSvcCodingParam};
 
@@ -313,6 +314,7 @@ pub use crate::encoder::picture::{RecPicId, RecPicPool, SrcPicId, SrcPicPool};
 pub use crate::encoder::param_svc::SWelsSPS;
 pub use crate::encoder::param_svc::SWelsPPS;
 pub use crate::encoder::param_svc::SSubsetSps;
+pub use crate::encoder::param_svc::{PpsId, SpsId, SubsetSpsId};
 pub use crate::encoder::wels_preprocess::ESceneChangeIdc;
 pub use crate::encoder::set_mb_syn_cabac::SStateCtx;
 pub use crate::encoder::md::SMcFunc;
@@ -539,11 +541,23 @@ pub struct sWelsEncCtx {
     pub pVaa: *mut SVAAFrameInfo,
     pub pVpp: *mut crate::encoder::wels_preprocess::CWelsPreProcess,
     pub pSpsArray: *mut SWelsSPS,
-    pub pSps: *mut SWelsSPS,
+    /// The **active** SPS, as its position in `pSpsArray` — T6.G3. It was a pointer
+    /// into that array, aimed at the head by `WelsInitEncoderExt` and never re-aimed,
+    /// which is what `Some(SpsId(0))` says without a second address to keep true.
+    /// Resolve it with [`ctx_sps`](crate::encoder::svc_encode_slice::ctx_sps).
+    pub iSps: Option<SpsId>,
     pub pPPSArray: *mut SWelsPPS,
-    pub pPps: *mut SWelsPPS,
+    /// The **active** PPS, as its position in `pPPSArray` — see [`iSps`](Self::iSps).
+    /// Resolve it with [`ctx_pps`](crate::encoder::svc_encode_slice::ctx_pps).
+    pub iPps: Option<PpsId>,
     pub pSubsetArray: *mut SSubsetSps,
-    pub pSubsetSps: *mut SSubsetSps,
+    // **`pSubsetSps` stood here and is deleted, not converted** (T6.G3). The C++
+    // declares it (`encoder_context.h`) and this port transcribed it; neither ever
+    // read it, and neither ever wrote it. `WelsInitCurrentLayer` aims
+    // `pCurDq->sLayerInfo.pSubsetSpsP` at `pSubsetArray[iCurSpsId]` and every subset
+    // consumer goes through the layer. A field that is only ever a declaration is
+    // not an alias to convert; it is a line to remove.
+
     pub iSpsNum: i32,
     pub iSubsetSpsNum: i32,
     pub iPpsNum: i32,
@@ -698,11 +712,10 @@ impl sWelsEncCtx {
             // heads — step 3 of this session makes them ids. The three counts are
             // `InitDqLayers`'s, and zero is the honest starting length.
             pSpsArray: std::ptr::null_mut(),
-            pSps: std::ptr::null_mut(),
+            iSps: None,
             pPPSArray: std::ptr::null_mut(),
-            pPps: std::ptr::null_mut(),
+            iPps: None,
             pSubsetArray: std::ptr::null_mut(),
-            pSubsetSps: std::ptr::null_mut(),
             iSpsNum: 0,
             iSubsetSpsNum: 0,
             iPpsNum: 0,
@@ -1023,7 +1036,7 @@ unsafe fn InitCoeffFunc(
 /// # Safety
 /// `pEncCtx` must be non-null and initialized.
 pub unsafe fn UpdateFrameNum(pEncCtx: *mut sWelsEncCtx, kiDidx: i32) {
-    if pEncCtx.is_null() || (*pEncCtx).pSvcParam.is_null() || (*pEncCtx).pSps.is_null() {
+    if pEncCtx.is_null() || (*pEncCtx).pSvcParam.is_null() || ctx_sps(pEncCtx).is_null() {
         return;
     }
     let pParamInternal = std::ptr::addr_of_mut!((*(*pEncCtx).pSvcParam).sDependencyLayers[kiDidx as usize]);
@@ -1034,7 +1047,7 @@ pub unsafe fn UpdateFrameNum(pEncCtx: *mut sWelsEncCtx, kiDidx: i32) {
     }
 
     if bNeedFrameNumIncreasing {
-        let max_frame_num_minus1 = (1 << (*(*pEncCtx).pSps).uiLog2MaxFrameNum) - 1;
+        let max_frame_num_minus1 = (1 << (*ctx_sps(pEncCtx)).uiLog2MaxFrameNum) - 1;
         if (*pParamInternal).iFrameNum < max_frame_num_minus1 {
             (*pParamInternal).iFrameNum += 1;
         } else {
@@ -1050,7 +1063,7 @@ pub unsafe fn UpdateFrameNum(pEncCtx: *mut sWelsEncCtx, kiDidx: i32) {
 /// # Safety
 /// `pEncCtx` must be non-null and initialized.
 pub unsafe fn LoadBackFrameNum(pEncCtx: *mut sWelsEncCtx, kiDidx: i32) {
-    if pEncCtx.is_null() || (*pEncCtx).pSvcParam.is_null() || (*pEncCtx).pSps.is_null() {
+    if pEncCtx.is_null() || (*pEncCtx).pSvcParam.is_null() || ctx_sps(pEncCtx).is_null() {
         return;
     }
     let pParamInternal = std::ptr::addr_of_mut!((*(*pEncCtx).pSvcParam).sDependencyLayers[kiDidx as usize]);
@@ -1064,7 +1077,7 @@ pub unsafe fn LoadBackFrameNum(pEncCtx: *mut sWelsEncCtx, kiDidx: i32) {
         if (*pParamInternal).iFrameNum != 0 {
             (*pParamInternal).iFrameNum -= 1;
         } else {
-            (*pParamInternal).iFrameNum = (1 << (*(*pEncCtx).pSps).uiLog2MaxFrameNum) - 1;
+            (*pParamInternal).iFrameNum = (1 << (*ctx_sps(pEncCtx)).uiLog2MaxFrameNum) - 1;
         }
     }
 }
@@ -1098,7 +1111,7 @@ pub unsafe fn InitFrameCoding(
     keFrameType: EVideoFrameType,
     kiDidx: i32,
 ) {
-    if pEncCtx.is_null() || (*pEncCtx).pSvcParam.is_null() || (*pEncCtx).pSps.is_null() {
+    if pEncCtx.is_null() || (*pEncCtx).pSvcParam.is_null() || ctx_sps(pEncCtx).is_null() {
         return;
     }
     let pParamInternal = std::ptr::addr_of_mut!((*(*pEncCtx).pSvcParam).sDependencyLayers[kiDidx as usize]);
@@ -1106,7 +1119,7 @@ pub unsafe fn InitFrameCoding(
     if keFrameType == EVideoFrameType::videoFrameTypeP {
         (*pParamInternal).iFrameIndex += 1;
 
-        let max_poc_boundary = (1 << (*(*pEncCtx).pSps).iLog2MaxPocLsb) - 2;
+        let max_poc_boundary = (1 << (*ctx_sps(pEncCtx)).iLog2MaxPocLsb) - 2;
         if (*pParamInternal).iPOC < max_poc_boundary {
             (*pParamInternal).iPOC += 2;
         } else {
@@ -1130,7 +1143,7 @@ pub unsafe fn InitFrameCoding(
 
         (*pParamInternal).iCodingIndex = 0;
     } else if keFrameType == EVideoFrameType::videoFrameTypeI {
-        let max_poc_boundary = (1 << (*(*pEncCtx).pSps).iLog2MaxPocLsb) - 2;
+        let max_poc_boundary = (1 << (*ctx_sps(pEncCtx)).iLog2MaxPocLsb) - 2;
         if (*pParamInternal).iPOC < max_poc_boundary {
             (*pParamInternal).iPOC += 2;
         } else {
@@ -1371,9 +1384,9 @@ mod tests {
         iNumRef0, uiDependencyId, uiTemporalId, bNeedPrefixNalFlag,
         pWelsSvcRc, bCheckWindowStatusRefreshFlag, iCheckWindowStartTs, iCheckWindowCurrentTs,
         iCheckWindowInterval, iCheckWindowIntervalShift, bCheckWindowShiftResetFlag, iGlobalQp,
-        pVaa, pVpp, pSpsArray, pSps,
-        pPPSArray, pPps, pSubsetArray, pSubsetSps,
-        iSpsNum, iSubsetSpsNum, iPpsNum, pOut,
+        pVaa, pVpp, pSpsArray, iSps,
+        pPPSArray, iPps, pSubsetArray, iSpsNum,
+        iSubsetSpsNum, iPpsNum, pOut,
         pFrameBs, iFrameBsSize, iPosBsBuffer, sSpatialIndexMap,
         iSliceBufferSize, bRefOfCurTidIsLtr, iMaxSliceCount, iActiveThreadsNum,
         pDqIdcMap, sPSOVector, pPSOVector, pMemAlign,
@@ -1381,7 +1394,7 @@ mod tests {
         iEncoderError, mutexEncoderError, bDeliveryFlag, sWelsCabacContexts,
         uiLastTimestamp, pDynamicBsBuffer,
         ];
-        assert_eq!(extents.len(), 70, "a field was added or removed without updating this list");
+        assert_eq!(extents.len(), 69, "a field was added or removed without updating this list");
 
         // ---- tier 2: the F64 fields, excluded by name and asserted by value ----
         const BY_VALUE: [&str; 7] = [
@@ -1483,7 +1496,7 @@ mod tests {
         // Only the fields this test exercises; SWelsSPS is now the full
         // parameter_sets.h:43 struct rather than the four-field copy that used to
         // live in this module.
-        let mut sps = SWelsSPS {
+        let sps = SWelsSPS {
             uiLog2MaxFrameNum: 4,
             iLog2MaxPocLsb: 4,
             bFrameCroppingFlag: false,
@@ -1492,7 +1505,13 @@ mod tests {
         };
         let mut ctx = sWelsEncCtx::new();
         ctx.pSvcParam = &mut param;
-        ctx.pSps = &mut sps;
+        // T6.G3: the context names its SPS by position, so the test stands up the
+        // one-entry array the position indexes into — `RequestMemorySvc`'s job on the
+        // live path. `sps` outlives `ctx` in this scope.
+        let mut sps_array = [sps];
+        ctx.pSpsArray = sps_array.as_mut_ptr();
+        ctx.iSpsNum = 1;
+        ctx.iSps = Some(SpsId(0));
         ctx.eLastNalPriority[0] = EWelsNalRefIdc::NRI_PRI_HIGH;
 
         unsafe {

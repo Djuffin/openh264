@@ -341,7 +341,11 @@ assert_size!(crate::encoder::encoder_context::SLogContext, 24);
 // elsewhere, and every offset from `ppDqLayerList` on drops by 8. Both numbers are
 // measured, in the profile they name — S36, and a reminder that predicting a
 // `repr(C)` offset is not measuring it.
-assert_size_by_profile!(sWelsEncCtx, debug 97880, release 97792);
+// **T6.G3**: **-8 both profiles.** `pSps`/`pPps` become `Option<SpsId>` /
+// `Option<PpsId>` (2 and 4 bytes against 8 apiece) and `pSubsetSps` is deleted
+// outright — the C++ declares it, nothing ever read or wrote it. Only the three pins
+// after the parameter-set block move.
+assert_size_by_profile!(sWelsEncCtx, debug 97872, release 97784);
 
 
 // The fifteen `sWelsEncCtx` fields the preprocessor touches, pinned at their C++
@@ -384,9 +388,9 @@ assert_ctx_offset_by_profile!(uiTemporalId, debug 306, release 234);
 assert_ctx_offset_by_profile!(pWelsSvcRc, debug 312, release 240);
 assert_ctx_offset_by_profile!(pVaa, debug 360, release 288);
 assert_ctx_offset_by_profile!(pVpp, debug 368, release 296);
-assert_ctx_offset_by_profile!(sSpatialIndexMap, debug 464, release 392);
-assert_ctx_offset_by_profile!(bRefOfCurTidIsLtr, debug 528, release 440);
-assert_ctx_offset_by_profile!(pMemAlign, debug 1752, release 1664);
+assert_ctx_offset_by_profile!(sSpatialIndexMap, debug 456, release 384);
+assert_ctx_offset_by_profile!(bRefOfCurTidIsLtr, debug 520, release 432);
+assert_ctx_offset_by_profile!(pMemAlign, debug 1744, release 1656);
 
 // encoder_context.h:198 -- the element type of `sSpatialIndexMap`. `wels_preprocess.rs`
 // carried a byte-identical copy of this under the invented name `SSpatialIndexMap`;
@@ -398,6 +402,7 @@ const _: () = assert!(std::mem::offset_of!(SSpatialPicIndex, pSrc) == 0);
 const _: () = assert!(std::mem::offset_of!(SSpatialPicIndex, iDid) == 8);
 #[cfg(not(debug_assertions))]
 const _: () = assert!(std::mem::offset_of!(SSpatialPicIndex, iDid) == 4);
+
 
 
 

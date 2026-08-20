@@ -631,6 +631,46 @@ pub unsafe fn set_current_layer(pCtx: *mut sWelsEncCtx, kIdx: Option<LayerIdx>) 
     (*pCtx).iCurDqLayer = kIdx;
 }
 
+/// The context's **active SPS**, resolved from its position — T6.G3.
+///
+/// `sWelsEncCtx::pSps` was a pointer into `pSpsArray`; `iSps` is the index, and this
+/// answers the same address, including **null in the two cases the pointer was
+/// null**: before `WelsInitEncoderExt` names one, and before the array exists. The
+/// spelling is S40's — `pSpsArray` is raw, so `.add()` on it forms no reference and
+/// repeated calls are independent.
+///
+/// # Safety
+/// `pCtx` must point to a live encoder context.
+#[inline]
+pub unsafe fn ctx_sps(pCtx: *const sWelsEncCtx) -> *mut SWelsSPS {
+    let Some(id) = (*pCtx).iSps else {
+        return std::ptr::null_mut();
+    };
+    let arr = (*pCtx).pSpsArray;
+    if arr.is_null() {
+        return std::ptr::null_mut();
+    }
+    debug_assert!((id.get() as i32) < (*pCtx).iSpsNum.max(1), "iSps past iSpsNum");
+    arr.add(id.get())
+}
+
+/// The context's **active PPS**, resolved from its position — see [`ctx_sps`].
+///
+/// # Safety
+/// `pCtx` must point to a live encoder context.
+#[inline]
+pub unsafe fn ctx_pps(pCtx: *const sWelsEncCtx) -> *mut SWelsPPS {
+    let Some(id) = (*pCtx).iPps else {
+        return std::ptr::null_mut();
+    };
+    let arr = (*pCtx).pPPSArray;
+    if arr.is_null() {
+        return std::ptr::null_mut();
+    }
+    debug_assert!((id.get() as i32) < (*pCtx).iPpsNum.max(1), "iPps past iPpsNum");
+    arr.add(id.get())
+}
+
 /// The context's current reference picture, resolved through the current dependency
 /// layer's reference list.
 ///
