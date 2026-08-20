@@ -608,6 +608,20 @@ pub unsafe fn ctx_mb_index_x(pCtx: *mut sWelsEncCtx, kiDid: usize) -> *mut i16 {
     }
 }
 
+/// The **root** of `pCtx->pDqIdcMap` — T6.H3; see [`ctx_sps_array`] for the
+/// spelling and for what empty means.
+///
+/// # Safety
+/// `pCtx` must point to a live encoder context.
+#[inline]
+pub unsafe fn ctx_dq_idc_map(pCtx: *mut sWelsEncCtx) -> *mut SDqIdc {
+    let arr: &mut Vec<SDqIdc> = &mut (*pCtx).pDqIdcMap;
+    if arr.is_empty() {
+        return std::ptr::null_mut();
+    }
+    arr.as_mut_ptr()
+}
+
 /// The **root** of `pCtx->pSpsArray` — T6.H2, and S40's spelling again.
 ///
 /// The three parameter-set arrays were `WelsMallocz`'d blocks that every consumer
@@ -792,7 +806,10 @@ pub struct sWelsEncCtx {
     pub bRefOfCurTidIsLtr: [[bool; MAX_TEMPORAL_LEVEL]; MAX_DEPENDENCY_LAYER],
     pub iMaxSliceCount: i32,
     pub iActiveThreadsNum: i16,
-    pub pDqIdcMap: *mut SDqIdc,
+    /// **T6.H3 — owned.** One row per dependency layer, `WelsMallocz`'d at
+    /// `RequestMemorySvc` and freed in the cascade; `SDqIdc` is four bytes of POD and
+    /// its derived `Default` *is* the memset image. Root: [`ctx_dq_idc_map`].
+    pub pDqIdcMap: Vec<SDqIdc>,
     pub sPSOVector: SParaSetOffset,
     pub pPSOVector: *mut SParaSetOffset,
     pub pMemAlign: *mut CMemoryAlign,
@@ -960,7 +977,7 @@ impl sWelsEncCtx {
             iMaxSliceCount: 0,
             iActiveThreadsNum: 0,           // set from iMultipleThreadIdc
 
-            pDqIdcMap: std::ptr::null_mut(),
+            pDqIdcMap: Vec::new(),
 
             // `sPSOVector` is held **by value** and `pPSOVector` points either at it
             // or at the caller's, so the value's zero has to be the zero of the
@@ -1770,10 +1787,11 @@ mod tests {
         // the empty container, which is the null the raw pointer held, and which
         // `ctx_sps_array` and its siblings answer as null so that every downstream
         // `is_null()` guard still asks its question.
-        const OWNED: [&str; 3] = ["pSpsArray", "pSubsetArray", "pPPSArray"];
+        const OWNED: [&str; 4] = ["pSpsArray", "pSubsetArray", "pPPSArray", "pDqIdcMap"];
         assert!(built.pSpsArray.is_empty(), "new(): no SPS array is allocated yet");
         assert!(built.pSubsetArray.is_empty(), "new(): no subset SPS array is allocated yet");
         assert!(built.pPPSArray.is_empty(), "new(): no PPS array is allocated yet");
+        assert!(built.pDqIdcMap.is_empty(), "new(): no dq-idc map is allocated yet");
 
         // ---- tier 2: the F64 fields, excluded by name and asserted by value ----
         const BY_VALUE: [&str; 10] = [
