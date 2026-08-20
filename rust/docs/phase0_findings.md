@@ -2327,3 +2327,42 @@ which is where session D also landed on this machine.
 
 Running total: **seventy-three measurements, twenty-three alternations, forty-six
 acquittals.**
+
+### Seventy-fourth measurement — 2026-08-19, Phase 6 session E, the post-correction `family` gate: the *longer*-output clause, on measurement 6's own clip
+
+The `family` battery after session E's Miri correction (the `SMbCache` reference
+conversion reverted, `WelsMdInterInit` back to a raw macroblock parameter, and every
+reborrow spelling re-derived by the compiler) read **353/353 debug** and **352/353
+release**:
+
+```
+mt CiscoVT2people_160x96_6fps t=2 sm=3 n=600 cabac=1 rc=0 ::  C++ 42088   Rust 42255
+```
+
+`mt`, `sm=3`, `t=2`, release — and the output is **1.4% LONGER**, not short or
+zero. That is measurement 6's clause, and this is measurement 6's configuration:
+`CiscoVT2people_160x96 t=2 sm=3 n=600`, differing only in `cabac` (0 there, 1 here).
+Measurement 6 widened the signature's output clause to *any wrong-length output at
+`mt` `sm=3`, `t` in {2, 4}, either profile*, on the reasoning that a slice-list race
+repacks slices rather than truncating them. This is the second recorded instance of
+the long arm, on the same clip, nine sessions later.
+
+**Step 1 — the configuration re-run 5x, machine otherwise idle: BYTE-IDENTICAL all
+five**, 42088 against 42088 every time.
+
+**Step 2 — no third alternation.** This session ran one at measurement 72 (head 3 /
+control 1 over 800 alternated encodes under load, 0/0 over 120 idle) and the tree has
+moved since only by *removing* code: the correction reverts 62 reference parameters
+to the raw spellings they had at the session's start, deletes 49 entry reborrows, and
+re-derives every remaining reborrow from the compiler's own type errors. It adds no
+threading machinery, no slice-list growth and no allocation, and it moves the
+macroblock path *closer* to the pre-session tree that measurement 72's control arm
+already hit this signature on.
+
+Session rate: **four gate hits across six `family` batteries of 706 configurations
+each — 4/4236 ~ 1/1060**, inside the documented ~1/400-1000 band.
+
+**Acquitted as F3.**
+
+Running total: **seventy-four measurements, twenty-three alternations, forty-seven
+acquittals.**

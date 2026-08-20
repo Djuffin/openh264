@@ -532,21 +532,34 @@ impl Default for SMbCache {
 /// (that family is session E's and F's), so these hand them exactly what they took
 /// before: the same address, with the whole array's provenance.
 ///
-/// **T6.E2c — why these ten keep their raw parameter while every caller's became a
-/// reference.** A caller now receives `pMbCache: &mut SMbCache` and opens with
+/// **T6.E — and why `SMbCache` is passed as `*mut`, at every parameter, on purpose.**
+/// Session E converted this family to a reference and the exit battery's Miri step
+/// rejected it, at `WelsEncRecUV` and 57 other call sites. The reason generalises
+/// and is worth stating here rather than rediscovering:
 ///
-/// ```text
-/// let pMbCache: *mut SMbCache = pMbCache; // one entry retag — md.rs's accessor note
-/// ```
+/// **`SMbCache` is an arena, and a `&mut` to it covers all 5600 bytes.** Its
+/// consumers hold *several* cursors into different parts of it at once — `pCurRS`
+/// into `sCoeffLevel`, `pBestPred` into `sMemPredMb`, `pBlock` into `sDct`,
+/// `pBufMe` into `sBufferInterPredMe` — and they hold them across calls, because the
+/// arena is how a macroblock's DCT / quantise / reconstruct steps hand work to each
+/// other. Creating a `&mut SMbCache` from the shared parent pointer retags the whole
+/// arena and **invalidates every one of those cursors**, including the ones the
+/// *caller* is still holding. Two shapes make that unfixable rather than merely
+/// awkward:
 ///
-/// That single line is the whole discipline. The cursors these accessors return —
-/// `pRes`, `pBlock`, `pPred`, the `SPicData` pointers — routinely live across a
-/// *later* accessor call on the same cache, and every access made through a `&mut`
-/// (a direct `(*p).field`, or re-coercing it for the next accessor) is an access
-/// through the Unique tag, which pops every raw child taken before it. Spending the
-/// reference exactly once, at the top, is what keeps those cursors alive; taking
-/// these ten to `&mut` would move the retag *inside* the loop and break the very
-/// rule this block exists to state.
+/// - `WelsEncRecUV(pFunc, pCurMb, pMbCache, pRes, iUV)` takes the arena **and** a
+///   cursor into it in one call. Whichever argument is evaluated second invalidates
+///   the first; no ordering works.
+/// - `WelsIMbChromaEncode` uses `pCurRS` *before and after* the call, because the
+///   sequence is DCT into the buffer, quantise it, IDCT it back out.
+///
+/// So the parameter stays raw, these ten accessors stay raw with it, and every
+/// cursor they return carries the whole array's provenance (S28/S29). What *did*
+/// convert is the other half of the same problem: fourteen callees took `pSlice`
+/// **and** a pointer to `(*pSlice).sMbCacheInfo` — two live paths to one slice — and
+/// those parameters are **deleted** rather than retyped, the callee deriving the
+/// arena from the slice it already has. **A reference is the wrong tool for an
+/// arena; deleting the second path is the right one.**
 #[inline]
 pub unsafe fn coeff_level(pMbCache: *mut SMbCache) -> *mut i16 {
     std::ptr::addr_of_mut!((*pMbCache).sCoeffLevel).cast::<i16>()
@@ -607,7 +620,7 @@ pub unsafe fn dct(pMbCache: *mut SMbCache) -> *mut SDCTCoeff {
 }
 
 pub type PFillInterNeighborCacheFunc = unsafe extern "C" fn(
-    pMbCache: &mut SMbCache,
+    pMbCache: *mut SMbCache,
     pCurMb: *mut SMB,
     iMbWidth: i32,
     pVaaBgMbFlag: *mut i8,
@@ -802,11 +815,10 @@ pub fn IS_SVC_INTER(uiMbType: u32) -> bool {
 
 // Function Implementations
 pub unsafe extern "C" fn FillNeighborCacheIntra(
-    pMbCache: &mut SMbCache,
+    pMbCache: *mut SMbCache,
     pCurMb: *mut SMB,
     iMbWidth: i32,
 ) {
-    let pMbCache: *mut SMbCache = pMbCache; // one entry retag — md.rs's accessor note
     let uiNeighborAvail = (*pCurMb).uiNeighborAvail as u32;
     let mut uiNeighborIntra: u32 = 0;
 
@@ -895,12 +907,11 @@ pub unsafe extern "C" fn FillNeighborCacheIntra(
 }
 
 pub unsafe extern "C" fn FillNeighborCacheInterWithoutBGD(
-    pMbCache: &mut SMbCache,
+    pMbCache: *mut SMbCache,
     pCurMb: *mut SMB,
     iMbWidth: i32,
     _pVaaBgMbFlag: *mut i8,
 ) {
-    let pMbCache: *mut SMbCache = pMbCache; // one entry retag — md.rs's accessor note
     let uiNeighborAvail = (*pCurMb).uiNeighborAvail as u32;
     // F14's class: a neighbour pointer formed before its availability guard, dereferenced only under it — `wrapping_offset` keeps the arithmetic defined off the edge of the MB array (the encode probe, Phase 6 session B).
     let pLeftMb = pCurMb.wrapping_offset(-1);
@@ -1027,12 +1038,11 @@ pub unsafe extern "C" fn FillNeighborCacheInterWithoutBGD(
 }
 
 pub unsafe extern "C" fn FillNeighborCacheInterWithBGD(
-    pMbCache: &mut SMbCache,
+    pMbCache: *mut SMbCache,
     pCurMb: *mut SMB,
     iMbWidth: i32,
     pVaaBgMbFlag: *mut i8,
 ) {
-    let pMbCache: *mut SMbCache = pMbCache; // one entry retag — md.rs's accessor note
     let uiNeighborAvail = (*pCurMb).uiNeighborAvail as u32;
     // F14's class: a neighbour pointer formed before its availability guard, dereferenced only under it — `wrapping_offset` keeps the arithmetic defined off the edge of the MB array (the encode probe, Phase 6 session B).
     let pLeftMb = pCurMb.wrapping_offset(-1);

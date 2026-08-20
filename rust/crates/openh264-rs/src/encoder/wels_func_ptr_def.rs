@@ -53,7 +53,7 @@ pub type PIntraFineMdFunc = unsafe extern "C" fn(
     pEncCtx: *mut sWelsEncCtx,
     pWelsMd: &mut SWelsMD,
     pCurMb: &mut SMB,
-    pMbCache: &mut SMbCache,
+    pMbCache: *mut SMbCache,
 ) -> i32;
 
 /// `wels_func_ptr_def.h:107`
@@ -70,7 +70,7 @@ pub type PInterMdFirstIntraModeFunc = unsafe extern "C" fn(
     pEncCtx: *mut sWelsEncCtx,
     pWelsMd: &mut SWelsMD,
     pCurMb: &mut SMB,
-    pMbCache: &mut SMbCache,
+    pMbCache: *mut SMbCache,
 ) -> bool;
 
 /// `wels_func_ptr_def.h:111`

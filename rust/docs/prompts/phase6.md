@@ -440,20 +440,57 @@ at a family boundary, and only with a written reason):
   names in the output. **Miri ran once, at the close, on the steward's in-session direction
   (S30)**; face 0's reds predate it. **Drop-from-the-end was taken at the authorised boundary
   and nowhere else**: the `*mut SMB` (128 sites) and `*mut SMbCache` parameter families go to E.
-* **E** — **brief written** ([`phase6_session_e.md`](phase6_session_e.md), steward,
-  2026-08-19). The ME/MD/CABAC records (6.3's scratch — `SWelsMD` 53, `SWelsME` 39,
-  `SMVUnitXY` 65, `SMeRefinePointer` 17, `SCabacCtx` 25, take-what-you-reach) **and
-  the `*mut SMB` (128) / `*mut SMbCache` (96) parameter families D handed over**, cut
-  as three closures (syntax writers; MD; ME) with the dispatch-slot types retyped in
-  place. Two chores first: the `sl` sweep preset (F60's realloc path gets permanent
-  byte coverage — no existing configuration crosses `iMaxSliceNum` = 35) and the
-  screen-content residue **fenced, not deleted** (D-scr-1: the feature is live in
-  the C++ and blocked only by the port's init guard at `encoder_ext.rs:817`, so the
-  search half is tagged `SCREEN_CONTENT(dormant: Phase 10)` and kept, unconverted). Last and boxed, drop-from-the-end
-  first: the third attempt at the parked SAD/SATD families (plan §4 6.3) — SATD's owed
-  solo measurement, then direct dispatch at the converted call sites, ≤1.05x bar, one
-  dated verdict either way. Stays raw by settlement: `pMvdCost` (context's table, G),
-  the `SWelsME` plane cursors and `pEncSad` (F), `pEncCtx`/`pCurDqLayer` (G).
+* **E — SPENT** (2026-08-19). **The records become references, and the neighbour
+  rule gets written down** — brief:
+  [`phase6_session_e.md`](phase6_session_e.md). **All six steps landed, in order.**
+  Five of the seven families read **zero**: `SCabacCtx` 25 → 0 crate-wide,
+  `SWelsMD` 51 → 0 (and `Copy`/`Clone` dropped off the 4000-byte record — nothing
+  copied it by value), `SWelsME` 39 → 0, `SMeRefinePointer` 17 → 0,
+  `SQuarRefineParams` 1 → 0; `SMVUnitXY` 65 → **2**, both the F-owned
+  `SPicture.sMvList` sites on the boundary list. **`SMbCache` has zero parameters
+  left** (96 → 0): fourteen were deleted outright as caches of `pSlice` (rule (c) —
+  `WelsWriteMbResidualCabac` took `pSlice`, `sMbCacheInfo` *and* `pCabacCtx` while
+  its body wrote `(*pSlice).uiLastMbQp` between uses of them), 43 became
+  `&mut SMbCache`, and what the grep still reads is ten accessor signatures plus one
+  entry-reborrow line per converted body. **`SMeRefinePointer` holds no pointer**:
+  its five `*mut u8` were four fixed offsets into one `SMbCache` buffer plus an
+  alias slot, so it is `iStride` + `iHalfPixHV` + a `bQuarPixSwapped` selector that
+  replaced the `pQuarPixBest`/`pQuarPixTmp` `mem::swap` — **48 → 32 bytes, newly
+  pinned**.
+  **`*mut SMB` is 125 → 46, and the shortfall is the session's main finding.** A
+  macroblock parameter converts only if the function (1) does no cursor arithmetic
+  on it and (2) does not re-reach the array through another parameter — both clauses
+  are provenance, and the second is F13's shape. Classified mechanically over every
+  `src/encoder/*.rs`, then applied: 68 converted (svc_mode_decision 31,
+  svc_base_layer_md 15, rc.rs 9, svc_encode_slice 5, deblocking 2, plus 7 slot
+  types), 46 named as survivors in four groups — neighbour-walkers (the CABAC
+  writers' 11, deblocking's 9 with 18 arithmetic sites, md's `FillNeighborCache*`),
+  array-owners (svc_encode_slice 8, encoder_ext 2), slot entry points
+  (svc_set_mb_syn_cavlc 3), and Phase 7's one. **The brief's step-4 note about
+  `deblocking.rs` turned out to be the rule for the whole family, not one file's
+  exception.**
+  **Step 0a closed F60's coverage hole for good**: preset `sl`, 12 rows, all twelve
+  measured entering `FrameBsRealloc`, and a **red-proof** — with session D's re-aim
+  loop deleted the preset reads 0/12 (eight divergences, two hard crashes), restored
+  12/12. Sweep totals **341 → 353** in both profiles for every gate from here.
+  **Step 0b fenced the screen-content family** (D-scr-1): 16 items tagged
+  `SCREEN_CONTENT(dormant: Phase 10)`, the init guard verified standing, nothing
+  converted.
+  **Step 5 discharged the SATD debt and parked both families a third time**: SATD's
+  first-ever measurement is **1.36x–4.05x** (flatter than SAD's 1.3–5.7x — a bigger
+  body absorbs a fixed per-call cost better), SAD re-measured at 1.30–5.68x, and the
+  ledger's untested slices-and-offsets lead is now **tested and failing** —
+  `PlaneCursor::advance` re-runs the constructor's asserts, so building cursors once
+  per search moves the per-candidate cost rather than removing it. Re-attempt named:
+  **Phase 9**, and the thing to build there is a kernel signature, not another
+  call-site rearrangement.
+  **The span is flat**: 7 pairs, encode median **+0.00%** (max +1.52%) against a
+  +0.16%/+1.52% null, decode **−0.24%**; cumulative ≈ **+10…+12%** unmoved and the
+  +25% tripwire untouched. Encoder-side `raw_ptr` **2331 → 2003 (−328)**,
+  `unsafe_fn` 684 → 679. **F3 measurements 71, 72 and 73**, with the alternation the
+  second owed: **head 3 / control 1 over 800 encodes under load, and 0/0 over 120 on
+  an idle machine** — the sharpest demonstration on record that load is the variable,
+  not the tree.
 * **F** — `wels_preprocess` + the plane families (6.2), the `common/` kernel
   callers (§3), **and 6.1's recon-pool alias family**, handed over by session B with
   its settlement written and its size measured (~184 sites, nine files).
