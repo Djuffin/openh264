@@ -886,6 +886,63 @@ impl SWelsSvcCodingParam {
     }
 }
 
+/// A parameter set's **position in the encoder context's array of them** — Phase 6
+/// session G.
+///
+/// The context used to carry `pSps`/`pPps`/`pSubsetSps` as pointers *into*
+/// `pSpsArray`/`pPPSArray`/`pSubsetArray`, and the layer and slice headers carried
+/// copies of the same addresses. That is cache-not-carrier with the id already
+/// named: **`SDqIdc` stores exactly these two numbers as data** (`iPpsId: u16`,
+/// `iSpsId: u8`) because `InitDqLayers` writes them there, and the C++ itself indexes
+/// the arrays with them (`&pCtx->pPPSArray[iCurPpsId]`). These types are those
+/// numbers, given names.
+///
+/// **Position, not the syntax element.** `SWelsSPS::uiSpsId` and `SWelsPPS::iPpsId`
+/// are what goes on the wire, and the id strategy may add an offset to the latter
+/// when it does (`GetPpsIdOffset`). They agree with the position today because
+/// `WelsGenerateSps`/`WelsGeneratePps` stamp each set with its own index — but they
+/// are different things, and only one of them can index an array.
+///
+/// The widths are `SDqIdc`'s, which are the C++'s: the arrays are bounded by
+/// `MAX_SPS_COUNT` and `MAX_PPS_COUNT` (57), so both fit several times over.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct SpsId(pub u8);
+
+/// A PPS's position in `sWelsEncCtx::pPPSArray` — see [`SpsId`].
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct PpsId(pub u16);
+
+/// A subset SPS's position in `sWelsEncCtx::pSubsetArray` — see [`SpsId`].
+///
+/// **Its own type, because the id strategy has its own space for it**:
+/// `PARA_SET_TYPE_AVCSPS`, `PARA_SET_TYPE_SUBSETSPS` and `PARA_SET_TYPE_PPS` are
+/// three separate id counters in `paraset_strategy.rs`, and the context keeps three
+/// separate arrays. `WelsInitCurrentLayer` indexes `pSpsArray` and `pSubsetArray`
+/// with the same local (`iCurSpsId`) in its two arms, which is precisely the
+/// confusion a shared type would let through.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct SubsetSpsId(pub u8);
+
+macro_rules! paraset_id {
+    ($t:ident, $raw:ty) => {
+        impl $t {
+            #[inline(always)]
+            pub fn get(self) -> usize {
+                self.0 as usize
+            }
+        }
+        impl From<$t> for $raw {
+            #[inline(always)]
+            fn from(v: $t) -> $raw {
+                v.0
+            }
+        }
+    };
+}
+paraset_id!(SpsId, u8);
+paraset_id!(PpsId, u16);
+paraset_id!(SubsetSpsId, u8);
+
 /// Frame crop offset syntax element in SPS
 
 /// Sequence Parameter Set (SPS) syntax structure

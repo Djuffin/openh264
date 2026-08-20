@@ -81,6 +81,7 @@ pub use crate::encoder::picture::SPicture;
 pub use crate::encoder::picture::SScreenBlockFeatureStorage;
 pub use crate::encoder::param_svc::SWelsSPS;
 pub use crate::encoder::svc_encode_slice::SSliceHeader;
+use crate::encoder::svc_encode_slice::ctx_sps;
 use crate::encoder::svc_encode_slice::current_layer;
 pub use crate::encoder::svc_encode_slice::SSliceHeaderExt;
 pub use crate::encoder::encoder_context::EWelsSliceType;
@@ -374,7 +375,7 @@ pub fn CompareFrameNum(iFrameNumA: i32, iFrameNumB: i32, iMaxFrameNumPlus1: i32)
 
 /// Purges unacknowledged or invalid LTR frames based on decoder feedback.
 pub unsafe fn DeleteInvalidLTR(pCtx: *mut sWelsEncCtx) {
-    if pCtx.is_null() || (*pCtx).pSps.is_null() || (*pCtx).pSvcParam.is_null() {
+    if pCtx.is_null() || ctx_sps(pCtx).is_null() || (*pCtx).pSvcParam.is_null() {
         return;
     }
     let uiDid = (*pCtx).uiDependencyId as usize;
@@ -383,7 +384,7 @@ pub unsafe fn DeleteInvalidLTR(pCtx: *mut sWelsEncCtx) {
         return;
     }
     let pLtr = &mut *(*pCtx).pLtr.add((uiDid) as usize);
-    let iMaxFrameNumPlus1 = 1 << (*(*pCtx).pSps).uiLog2MaxFrameNum;
+    let iMaxFrameNumPlus1 = 1 << (*ctx_sps(pCtx)).uiLog2MaxFrameNum;
     let pParamInternal = std::ptr::addr_of_mut!((*(*pCtx).pSvcParam).sDependencyLayers[uiDid]);
 
     for i in 0..LONG_TERM_REF_NUM {
@@ -504,7 +505,7 @@ pub unsafe fn HandleLTRMarkFeedback(pCtx: *mut sWelsEncCtx) {
 
 /// Executes promotion and movement of frames from short-term to long-term lists.
 pub unsafe fn LTRMarkProcess(pCtx: *mut sWelsEncCtx) {
-    if pCtx.is_null() || (*pCtx).pSvcParam.is_null() || (*pCtx).pSps.is_null() {
+    if pCtx.is_null() || (*pCtx).pSvcParam.is_null() || ctx_sps(pCtx).is_null() {
         return;
     }
     let uiDid = (*pCtx).uiDependencyId as usize;
@@ -519,7 +520,7 @@ pub unsafe fn LTRMarkProcess(pCtx: *mut sWelsEncCtx) {
     } else {
         1
     };
-    let iMaxFrameNumPlus1 = 1 << (*(*pCtx).pSps).uiLog2MaxFrameNum;
+    let iMaxFrameNumPlus1 = 1 << (*ctx_sps(pCtx)).uiLog2MaxFrameNum;
     let mut i = 0usize;
     let mut bMoveLtrFromShortToLong = false;
     let pParamInternal = std::ptr::addr_of_mut!((*(*pCtx).pSvcParam).sDependencyLayers[uiDid]);
@@ -801,7 +802,7 @@ pub unsafe fn WelsUpdateRefList(pCtx: *mut sWelsEncCtx) -> bool {
 
 /// Checks whether candidate frame number is already occupied in LTR list.
 pub unsafe fn CheckCurMarkFrameNumUsed(pCtx: *mut sWelsEncCtx) -> bool {
-    if pCtx.is_null() || (*pCtx).pSvcParam.is_null() || (*pCtx).pSps.is_null() {
+    if pCtx.is_null() || (*pCtx).pSvcParam.is_null() || ctx_sps(pCtx).is_null() {
         return false;
     }
     let uiDid = (*pCtx).uiDependencyId as usize;
@@ -816,7 +817,7 @@ pub unsafe fn CheckCurMarkFrameNumUsed(pCtx: *mut sWelsEncCtx) -> bool {
     } else {
         1
     };
-    let iMaxFrameNumPlus1 = 1 << (*(*pCtx).pSps).uiLog2MaxFrameNum;
+    let iMaxFrameNumPlus1 = 1 << (*ctx_sps(pCtx)).uiLog2MaxFrameNum;
     let pParamInternal = &(*(*pCtx).pSvcParam).sDependencyLayers[uiDid];
 
     for i in 0..((*pRefList).uiLongRefCount as usize) {
@@ -975,7 +976,7 @@ pub unsafe fn FilterLTRRecoveryRequest(
         }
 
         let pLtr = &mut *(*pCtx).pLtr.add((iLayerId as usize) as usize);
-        let iMaxFrameNumPlus1 = 1 << (*(*pCtx).pSps).uiLog2MaxFrameNum;
+        let iMaxFrameNumPlus1 = 1 << (*ctx_sps(pCtx)).uiLog2MaxFrameNum;
         let pParamInternal = std::ptr::addr_of_mut!((*(*pCtx).pSvcParam).sDependencyLayers[iLayerId as usize]);
 
         if (*pRequest).uiFeedbackType == LTR_RECOVERY_REQUEST && (*pRequest).uiIDRPicId == (*pParamInternal).uiIdrPicId as u32 {
@@ -1204,8 +1205,8 @@ pub unsafe fn WelsUpdateRefSyntax(pCtx: *mut sWelsEncCtx, kiPOC: i32, kiFrameTyp
         let pRefList = *(*pCtx).ppRefPicListExt.add(uiDid);
         if let Some(id) = (*pCtx).pRefList0[0] {
             iAbsDiffPicNumMinus1 = pParamD.iFrameNum - (*pRefList).pic(id).iFrameNum - 1;
-            if iAbsDiffPicNumMinus1 < 0 && !(*pCtx).pSps.is_null() {
-                iAbsDiffPicNumMinus1 += 1 << (*(*pCtx).pSps).uiLog2MaxFrameNum;
+            if iAbsDiffPicNumMinus1 < 0 && !ctx_sps(pCtx).is_null() {
+                iAbsDiffPicNumMinus1 += 1 << (*ctx_sps(pCtx)).uiLog2MaxFrameNum;
             }
         }
     }
@@ -1524,7 +1525,7 @@ pub unsafe fn WelsMarkPicScreen(pCtx: *mut sWelsEncCtx) {
                 }
 
                 let mut iLongestDeltaFrameNum = -1i32;
-                let iMaxFrameNum = 1 << (*(*pCtx).pSps).uiLog2MaxFrameNum;
+                let iMaxFrameNum = 1 << (*ctx_sps(pCtx)).uiLog2MaxFrameNum;
 
                 for i in 0..((*pRefList).uiLongRefCount as usize) {
                     let Some(idPic) = (*pRefList).pLongRefList[i] else {

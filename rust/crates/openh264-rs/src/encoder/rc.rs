@@ -47,6 +47,7 @@
 use crate::common::memory_align::CMemoryAlign;
 use crate::{RCMode, SSliceArgument, SSpatialLayerConfig, EUsageType};
 pub use crate::encoder::svc_encode_slice::SSliceHeader;
+use crate::encoder::svc_encode_slice::ctx_pps;
 use crate::encoder::svc_encode_slice::current_layer;
 pub use crate::encoder::svc_encode_slice::SSliceHeaderExt;
 pub use crate::encoder::encoder_context::SSpatialPicIndex;
@@ -2442,7 +2443,7 @@ pub unsafe extern "C" fn WelsRcMbInitScc(
     _pSlice: *mut SSlice,
 ) {
     (*pCurMb).uiLumaQp = (*pEncCtx).iGlobalQp as u8;
-    let offset = (*(*pEncCtx).pPps).uiChromaQpIndexOffset as i32;
+    let offset = (*ctx_pps(pEncCtx)).uiChromaQpIndexOffset as i32;
     (*pCurMb).uiChromaQp = g_kuiChromaQpTable[CLIP3_QP_0_51((*pCurMb).uiLumaQp as i32 + offset)];
 }
 

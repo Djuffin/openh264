@@ -32,6 +32,7 @@ use crate::encoder::md::INTRA_4x4_MODE_NUM;
 use crate::encoder::param_svc::{
     SExistingParasetList, SWelsSvcCodingParam, MB_WIDTH_LUMA, UNSPECIFIED_BIT_RATE,
 };
+use crate::encoder::param_svc::{PpsId, SpsId};
 use crate::encoder::paraset_strategy::{ParasetStrategy, PARA_SET_TYPE_AVCSPS, PARA_SET_TYPE_PPS};
 use crate::api::codec_api::EParameterSetStrategy;
 use crate::encoder::picture::SPicture;
@@ -40,6 +41,7 @@ use crate::encoder::slice_multi_threading::{
 };
 use crate::encoder::svc_enc_slice_segment::{GetInitialSliceNum, InitSlicePEncCtx};
 use crate::encoder::svc_encode_slice::{InitSliceInLayer, WelsMbToSliceIdc};
+use crate::encoder::svc_encode_slice::{ctx_sps, ctx_pps};
 use crate::encoder::svc_encode_slice::{current_layer, set_current_layer};
 use crate::encoder::svc_mode_decision::{
     LEFT_MB_POS, TOPLEFT_MB_POS, TOPRIGHT_MB_POS, TOP_MB_POS,
@@ -1254,8 +1256,11 @@ pub unsafe fn RequestMemorySvc(
         (**ppCtx).pDecPic = None; // error here
     }
 
-    (**ppCtx).pSps = (**ppCtx).pSpsArray;
-    (**ppCtx).pPps = (**ppCtx).pPPSArray;
+    // T6.G3: the head of each array, which is what "= pSpsArray" said. Nothing
+    // re-aims these, in this port or in the C++ — `encoder_ext.cpp` assigns them here
+    // and nowhere else — so the active set is position 0 for the encoder's whole life.
+    (**ppCtx).iSps = Some(SpsId(0));
+    (**ppCtx).iPps = Some(PpsId(0));
 
     0
 }
@@ -1650,8 +1655,8 @@ mod tests {
             assert_eq!((*pCtx).iSpsNum, 1);
             assert_eq!((*pCtx).iPpsNum, 1);
             assert_eq!((*pCtx).iSubsetSpsNum, 0);
-            assert_eq!((*pCtx).pSps, (*pCtx).pSpsArray);
-            assert_eq!((*pCtx).pPps, (*pCtx).pPPSArray);
+            assert_eq!(ctx_sps(pCtx), (*pCtx).pSpsArray);
+            assert_eq!(ctx_pps(pCtx), (*pCtx).pPPSArray);
 
             // The SPS the strategy generated must be the one Phase 3 proved
             // byte-exact against the C++ reference for this configuration.
@@ -2011,7 +2016,7 @@ pub unsafe fn StackBackEncoderStatus(pEncCtx: *mut sWelsEncCtx, keFrameType: EVi
         if (*pParamInternal).iPOC != 0 {
             (*pParamInternal).iPOC -= 2;
         } else {
-            (*pParamInternal).iPOC = (1 << (*(*pEncCtx).pSps).iLog2MaxPocLsb) - 2;
+            (*pParamInternal).iPOC = (1 << (*ctx_sps(pEncCtx)).iLog2MaxPocLsb) - 2;
         }
 
         crate::encoder::encoder_context::LoadBackFrameNum(pEncCtx, (*pEncCtx).uiDependencyId as i32);
