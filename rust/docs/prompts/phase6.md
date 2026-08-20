@@ -567,8 +567,10 @@ at a family boundary, and only with a written reason):
   size, two instances paid down inside the session. Step 0 paid F63 forward: the
   decoder's `data_ptr` **did** carry the trap, red-proofed under Miri before the fix.
   F3 measurements **80–84**, all the signature, all 5/5.
-* **H** — **the members own**: `RequestMemorySvc` → constructors, `FreeMemorySvc`
-  → `Drop` with F19's leak check per `Box::into_raw` member, the 18 container
+* **H** — **brief written** ([`phase6_session_h.md`](phase6_session_h.md), steward,
+  2026-08-20; carries **D-gate-2**: Miri encoder-scoped from here, the full set
+  once at I's close). **The members own**: `RequestMemorySvc` → constructors, the
+  free cascade → `Drop` with F19's leak check per member, the container
   fields → owned (`Vec<Box<SDqLayer>>`, `Vec<Box<SRefList>>`, the parameter-set
   arrays, P11's `pMvdCostTable`, `pFrameBs`, the rc blocks), and `CMemoryAlign`'s
   census reads 0 — the allocator dies with `memory_align.rs`. Phase-7 members
