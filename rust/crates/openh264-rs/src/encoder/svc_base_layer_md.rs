@@ -1409,8 +1409,10 @@ pub unsafe fn WelsMdPSkipEnc(
 
     let mut iEncStride = (*pCurLayer).iEncStride[0];
     let mut pEncMb = (*pMbCache).SPicData.pEncMb[0];
-    let pStrideEncBlockOffset =
-        (*(*pEncCtx).pStrideTab).pStrideEncBlockOffset[(*pEncCtx).uiDependencyId as usize];
+    let pStrideEncBlockOffset = crate::encoder::encoder_context::ctx_stride_enc_block_offset(
+        pEncCtx,
+        (*pEncCtx).uiDependencyId as usize,
+    );
     let mut pEncBlockOffset: *mut i32;
 
     let iSadCostLuma: i32;

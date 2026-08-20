@@ -26,6 +26,7 @@ use crate::api::codec_api::{ELevelIdc, SSpatialLayerConfig};
 use crate::common::memory_align::CMemoryAlign;
 use crate::decoder::nalu::g_ksLevelLimits;
 use crate::encoder::encoder_context::{
+    ctx_mb_index_x, ctx_mb_index_y, ctx_stride_enc_block_offset,
     sWelsEncCtx, SDqIdc, SLogContext, SRefList, SStrideTables, BASE_DEPENDENCY_ID,
 };
 use crate::encoder::md::INTRA_4x4_MODE_NUM;
@@ -266,15 +267,14 @@ pub unsafe fn AllocStrideTables(ppCtx: *mut *mut sWelsEncCtx, kiNumSpatialLayers
         return 1;
     }
 
-    let pPtr = (*pMa).WelsMallocz(
-        std::mem::size_of::<SStrideTables>() as u32,
-        tag!("SStrideTables"),
-    ) as *mut SStrideTables;
-    if pPtr.is_null() {
-        return 1;
-    }
-    (**ppCtx).pStrideTab = pPtr;
-
+    // **T6.H1.** Two `WelsMallocz` calls stood here and at the `pBase` line below —
+    // the table struct and the one block its sixteen pointers carved up. The struct
+    // owns the block now, so both are one `Box::new(SStrideTables::new(..))` built
+    // where the block's size is known, and the two `WelsFree`s they paired with are
+    // the context's own drop. Nothing is installed into the context until the size
+    // is computed, which is the only ordering change: the C++ installs the struct
+    // first so an early `return 1` still frees it, and an owned table has no such
+    // failure to protect against.
     let iCntTid = if (*pParam).iTemporalLayerNum > 1 { 2 } else { 1 };
 
     iSpatialIdx = 0;
@@ -319,15 +319,16 @@ pub unsafe fn AllocStrideTables(ppCtx: *mut *mut sWelsEncCtx, kiNumSpatialLayers
 
     let iNeedAllocSize = iSizeDec + iSizeEnc + (iUnit2Size << 1);
 
-    let pBase = (*pMa).WelsMallocz(iNeedAllocSize as u32, tag!("pBase")) as *mut u8;
-    if pBase.is_null() {
-        return 1;
-    }
+    (**ppCtx).pStrideTab = Some(Box::new(SStrideTables::new(iNeedAllocSize)));
+    let pPtr: &mut SStrideTables = (**ppCtx).pStrideTab.as_mut().unwrap();
 
-    let mut pBaseDec = pBase; // iCountLayersNeedCs
-    let mut pBaseEnc = pBaseDec.add(iSizeDec as usize); // iNumSpatialLayers
-    let mut pBaseMbX = pBaseEnc.add(iSizeEnc as usize); // iNumSpatialLayers
-    let mut pBaseMbY = pBaseMbX.add(iUnit2Size as usize); // iNumSpatialLayers
+    // The C++ carves the block with four running `uint8_t*` cursors. They are byte
+    // *offsets* into the same block here, advanced by the same amounts in the same
+    // order — the arithmetic below is unchanged, only its unit is.
+    let mut pBaseDec: u32 = 0; // iCountLayersNeedCs
+    let mut pBaseEnc: u32 = iSizeDec as u32; // iNumSpatialLayers
+    let mut pBaseMbX: u32 = pBaseEnc + iSizeEnc as u32; // iNumSpatialLayers
+    let mut pBaseMbY: u32 = pBaseMbX + iUnit2Size as u32; // iNumSpatialLayers
 
     iTemporalIdx = 0;
     while iTemporalIdx < iCntTid {
@@ -340,11 +341,13 @@ pub unsafe fn AllocStrideTables(ppCtx: *mut *mut sWelsEncCtx, kiNumSpatialLayers
             let kiLumaWidth = iLineSizeY[kiActualSpatialIdx][kbBaseTemporalFlag];
             let kiChromaWidth = iLineSizeUV[kiActualSpatialIdx][kbBaseTemporalFlag];
 
-            WelsGetEncBlockStrideOffset(pBaseDec as *mut i32, kiLumaWidth, kiChromaWidth);
-
-            (*pPtr).pStrideDecBlockOffset[kiActualSpatialIdx][kbBaseTemporalFlag] =
-                pBaseDec as *mut i32;
-            pBaseDec = pBaseDec.add(kiUnit1Size as usize);
+            pPtr.pStrideDecBlockOffset[kiActualSpatialIdx][kbBaseTemporalFlag] = Some(pBaseDec);
+            WelsGetEncBlockStrideOffset(
+                pPtr.StrideDecBlockOffset(kiActualSpatialIdx, kbBaseTemporalFlag),
+                kiLumaWidth,
+                kiChromaWidth,
+            );
+            pBaseDec += kiUnit1Size as u32;
 
             iSpatialIdx += 1;
         }
@@ -379,9 +382,10 @@ pub unsafe fn AllocStrideTables(ppCtx: *mut *mut sWelsEncCtx, kiNumSpatialLayers
                 continue;
             }
 
-            // not in the spatial map: assign the matching one to it
-            (*pPtr).pStrideDecBlockOffset[iSpatialIdx as usize][kbBaseTemporalFlag] =
-                (*pPtr).pStrideDecBlockOffset[iMatchIndex as usize][kbBaseTemporalFlag];
+            // not in the spatial map: assign the matching one to it. **This is the
+            // aliasing the arena has to preserve** — two layers naming one region.
+            pPtr.pStrideDecBlockOffset[iSpatialIdx as usize][kbBaseTemporalFlag] =
+                pPtr.pStrideDecBlockOffset[iMatchIndex as usize][kbBaseTemporalFlag];
 
             iSpatialIdx += 1;
         }
@@ -392,24 +396,24 @@ pub unsafe fn AllocStrideTables(ppCtx: *mut *mut sWelsEncCtx, kiNumSpatialLayers
     while iSpatialIdx < kiNumSpatialLayers {
         let kiAllocMbSize = sMbSizeMap[iSpatialIdx as usize].iSizeAllMbAlignCache;
 
-        (*pPtr).pStrideEncBlockOffset[iSpatialIdx as usize] = pBaseEnc as *mut i32;
+        pPtr.pStrideEncBlockOffset[iSpatialIdx as usize] = Some(pBaseEnc);
 
-        (*pPtr).pMbIndexX[iSpatialIdx as usize] = pBaseMbX as *mut i16;
-        (*pPtr).pMbIndexY[iSpatialIdx as usize] = pBaseMbY as *mut i16;
+        pPtr.pMbIndexX[iSpatialIdx as usize] = Some(pBaseMbX);
+        pPtr.pMbIndexY[iSpatialIdx as usize] = Some(pBaseMbY);
 
-        pBaseEnc = pBaseEnc.add(kiUnit1Size as usize);
-        pBaseMbX = pBaseMbX.add(kiAllocMbSize as usize);
-        pBaseMbY = pBaseMbY.add(kiAllocMbSize as usize);
+        pBaseEnc += kiUnit1Size as u32;
+        pBaseMbX += kiAllocMbSize as u32;
+        pBaseMbY += kiAllocMbSize as u32;
 
         iSpatialIdx += 1;
     }
 
     while iSpatialIdx < MAX_DEPENDENCY_LAYER as i32 {
-        (*pPtr).pStrideDecBlockOffset[iSpatialIdx as usize][0] = null_mut();
-        (*pPtr).pStrideDecBlockOffset[iSpatialIdx as usize][1] = null_mut();
-        (*pPtr).pStrideEncBlockOffset[iSpatialIdx as usize] = null_mut();
-        (*pPtr).pMbIndexX[iSpatialIdx as usize] = null_mut();
-        (*pPtr).pMbIndexY[iSpatialIdx as usize] = null_mut();
+        pPtr.pStrideDecBlockOffset[iSpatialIdx as usize][0] = None;
+        pPtr.pStrideDecBlockOffset[iSpatialIdx as usize][1] = None;
+        pPtr.pStrideEncBlockOffset[iSpatialIdx as usize] = None;
+        pPtr.pMbIndexX[iSpatialIdx as usize] = None;
+        pPtr.pMbIndexY[iSpatialIdx as usize] = None;
 
         iSpatialIdx += 1;
     }
@@ -420,11 +424,11 @@ pub unsafe fn AllocStrideTables(ppCtx: *mut *mut sWelsEncCtx, kiNumSpatialLayers
     let iMaxMbWidth = WELS_ALIGN(sMbSizeMap[(kiNumSpatialLayers - 1) as usize].iMbWidth, 4);
     let iRowSize = iMaxMbWidth * 2;
 
-    let pTmpRow = (*pMa).WelsMallocz(iRowSize as u32, tag!("pTmpRow")) as *mut i16;
-    if pTmpRow.is_null() {
-        return 1;
-    }
-    let pRowX = pTmpRow;
+    // `pTmpRow` was a `WelsMallocz`/`WelsFree` pair scoped to this function — the
+    // C++ scratch row both coordinate tables are stamped out of. A local `Vec` is
+    // the same block with the same zeros and no free to forget.
+    let mut sTmpRow = vec![0i16; (iRowSize as usize).div_ceil(std::mem::size_of::<i16>())];
+    let pRowX = sTmpRow.as_mut_ptr();
     let pRowY = pRowX;
     // initialize pRowX & pRowY
     i = 0;
@@ -445,7 +449,7 @@ pub unsafe fn AllocStrideTables(ppCtx: *mut *mut sWelsEncCtx, kiNumSpatialLayers
         if iSpatialIdx < 0 {
             break;
         }
-        let mut pMbIndexX = (*pPtr).pMbIndexX[iSpatialIdx as usize];
+        let mut pMbIndexX = pPtr.MbIndexX(iSpatialIdx as usize);
         let kiMbWidth = sMbSizeMap[iSpatialIdx as usize].iMbWidth;
         let kiMbHeight = sMbSizeMap[iSpatialIdx as usize].iCountMbNum / kiMbWidth;
 
@@ -471,7 +475,7 @@ pub unsafe fn AllocStrideTables(ppCtx: *mut *mut sWelsEncCtx, kiNumSpatialLayers
         while iSpatialIdx >= 0 {
             let kiMbWidth = sMbSizeMap[iSpatialIdx as usize].iMbWidth;
             let kiMbHeight = sMbSizeMap[iSpatialIdx as usize].iCountMbNum / kiMbWidth;
-            let pMbIndexY = (*pPtr).pMbIndexY[iSpatialIdx as usize].add((i * kiMbWidth) as usize);
+            let pMbIndexY = pPtr.MbIndexY(iSpatialIdx as usize).add((i * kiMbWidth) as usize);
 
             if i < kiMbHeight {
                 std::ptr::copy_nonoverlapping(pRowY, pMbIndexY, kiMbWidth as usize);
@@ -498,7 +502,7 @@ pub unsafe fn AllocStrideTables(ppCtx: *mut *mut sWelsEncCtx, kiNumSpatialLayers
         }
     }
 
-    (*pMa).WelsFree(pTmpRow as *mut c_void, tag!("pTmpRow"));
+    drop(sTmpRow);
 
     0
 }
@@ -576,8 +580,8 @@ unsafe fn InitMbInfo(
     for iIdx in 0..iMbNum as usize {
         let pMb = pList.add(iIdx);
 
-        (*pMb).iMbX = *(*(*pEnc).pStrideTab).pMbIndexX[kiDlayerId as usize].add(iIdx);
-        (*pMb).iMbY = *(*(*pEnc).pStrideTab).pMbIndexY[kiDlayerId as usize].add(iIdx);
+        (*pMb).iMbX = *ctx_mb_index_x(pEnc, kiDlayerId as usize).add(iIdx);
+        (*pMb).iMbY = *ctx_mb_index_y(pEnc, kiDlayerId as usize).add(iIdx);
         (*pMb).iMbXY = iIdx as i32;
 
         // [0..65535] > 36864 of LEVEL5.2
@@ -713,7 +717,7 @@ pub unsafe fn InitDqLayers(
         iPicChromaWidth = WELS_ALIGN(iPicChromaWidth, 16);
 
         WelsGetEncBlockStrideOffset(
-            (*(**ppCtx).pStrideTab).pStrideEncBlockOffset[iDlayerIndex as usize],
+            ctx_stride_enc_block_offset(*ppCtx, iDlayerIndex as usize),
             iPicWidth,
             iPicChromaWidth,
         );
@@ -1727,7 +1731,7 @@ mod tests {
                 Some((**(*pCtx).ppRefPicListExt).pRef.at(0))
             );
 
-            assert!(!(*pCtx).pStrideTab.is_null());
+            assert!((*pCtx).pStrideTab.is_some());
             assert!(!(*pCtx).pMvdCostTable.is_null());
             assert_eq!(
                 (*pCtx).eRefStrategy,
@@ -1761,16 +1765,11 @@ pub unsafe fn WelsUninitEncoderExt(ppCtx: *mut *mut sWelsEncCtx) {
 
     let pMa = (*pCtx).pMemAlign;
     if !pMa.is_null() {
-        if !(*pCtx).pStrideTab.is_null() {
-            if !(*(*pCtx).pStrideTab).pStrideDecBlockOffset[0][1].is_null() {
-                (*pMa).WelsFree(
-                    (*(*pCtx).pStrideTab).pStrideDecBlockOffset[0][1] as *mut c_void,
-                    tag!("pBase"),
-                );
-            }
-            (*pMa).WelsFree((*pCtx).pStrideTab as *mut c_void, tag!("SStrideTables"));
-            (*pCtx).pStrideTab = null_mut();
-        }
+        // **T6.H1**: two `WelsFree`s stood here — the one block, reached as
+        // `pStrideDecBlockOffset[0][1]` because that was the only field still
+        // holding its head, and then the table struct. The table owns the block and
+        // the context owns the table, so both are the `drop(Box::from_raw(pCtx))` at
+        // the end of this function, and the entry is deleted rather than converted.
         if !(*pCtx).pDqIdcMap.is_null() {
             (*pMa).WelsFree((*pCtx).pDqIdcMap as *mut c_void, tag!("pDqIdcMap"));
             (*pCtx).pDqIdcMap = null_mut();

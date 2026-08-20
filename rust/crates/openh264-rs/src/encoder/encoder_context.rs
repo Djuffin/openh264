@@ -446,23 +446,177 @@ impl Default for SSpatialPicIndex {
 }
 
 /// Stride and coordinate lookup tables across spatial dependency layers.
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
+///
+/// **T6.H1 — the arena is owned, and the four tables are offsets into it.**
+///
+/// `AllocStrideTables` takes *one* block from the allocator (`tag!("pBase")`) and
+/// carves four regions out of it: the decoder-side 4x4 block offsets, the
+/// encoder-side ones, and the two macroblock coordinate tables. The C++ stores a
+/// pointer per layer into that one block, and so did this port; the block itself
+/// was reachable only as `pStrideDecBlockOffset[0][1]`, which is how
+/// `WelsUninitEncoderExt` used to free it.
+///
+/// It is an arena, so it converts as an arena: **one owned `Vec`, and the per-layer
+/// fields become byte offsets into it.** Per-field `Vec`s would be four allocations
+/// where the C++ has one, and — the reason they are actually wrong rather than
+/// merely different — they would change *what a cursor may reach*. Two layers can
+/// share one region: when a spatial layer is absent from the temporal map,
+/// `AllocStrideTables` assigns it the matching layer's table, so
+/// `pStrideDecBlockOffset[i][t]` and `[j][t]` are the same address. Copying an
+/// offset reproduces that exactly; four separate allocations could not.
+///
+/// The offsets are **bytes**, because the arena's own arithmetic is in bytes
+/// (`kiUnit1Size` is `24 * sizeof(int32_t)`) and keeping it that way leaves
+/// `AllocStrideTables` a statement-for-statement translation. `None` is the null
+/// the field used to hold: "this layer has no table", which
+/// `AllocStrideTables` writes for every layer past `kiNumSpatialLayers`.
+///
+/// The backing store is `Vec<i32>` rather than `Vec<u8>` for its **alignment**: the
+/// two block-offset regions are read as `i32`, and a `Vec<u8>` is only byte-aligned.
+/// Every `i32` region starts at a multiple of `kiUnit1Size` (96) and every `i16`
+/// region at an even offset, so both casts below are aligned by construction.
 pub struct SStrideTables {
-    pub pStrideDecBlockOffset: [[*mut i32; 2]; MAX_DEPENDENCY_LAYER],
-    pub pStrideEncBlockOffset: [*mut i32; MAX_DEPENDENCY_LAYER],
-    pub pMbIndexX: [*mut i16; MAX_DEPENDENCY_LAYER],
-    pub pMbIndexY: [*mut i16; MAX_DEPENDENCY_LAYER],
+    /// The one block. Zero-filled, as `WelsMallocz` left it.
+    base: Vec<i32>,
+    pub pStrideDecBlockOffset: [[Option<u32>; 2]; MAX_DEPENDENCY_LAYER],
+    pub pStrideEncBlockOffset: [Option<u32>; MAX_DEPENDENCY_LAYER],
+    pub pMbIndexX: [Option<u32>; MAX_DEPENDENCY_LAYER],
+    pub pMbIndexY: [Option<u32>; MAX_DEPENDENCY_LAYER],
 }
 
-impl Default for SStrideTables {
-    fn default() -> Self {
+impl SStrideTables {
+    /// The tables with their arena sized at `kiNeedAllocSize` **bytes** and no layer
+    /// wired yet — `WelsMallocz(iNeedAllocSize)` plus the memset the struct itself got.
+    pub fn new(kiNeedAllocSize: i32) -> Self {
+        let words = (kiNeedAllocSize.max(0) as usize).div_ceil(std::mem::size_of::<i32>());
         Self {
-            pStrideDecBlockOffset: [[std::ptr::null_mut(); 2]; MAX_DEPENDENCY_LAYER],
-            pStrideEncBlockOffset: [std::ptr::null_mut(); MAX_DEPENDENCY_LAYER],
-            pMbIndexX: [std::ptr::null_mut(); MAX_DEPENDENCY_LAYER],
-            pMbIndexY: [std::ptr::null_mut(); MAX_DEPENDENCY_LAYER],
+            base: vec![0i32; words],
+            pStrideDecBlockOffset: [[None; 2]; MAX_DEPENDENCY_LAYER],
+            pStrideEncBlockOffset: [None; MAX_DEPENDENCY_LAYER],
+            pMbIndexX: [None; MAX_DEPENDENCY_LAYER],
+            pMbIndexY: [None; MAX_DEPENDENCY_LAYER],
         }
+    }
+
+    /// The arena's **root address**, in bytes — S40's spelling, and the property the
+    /// four accessors below inherit.
+    ///
+    /// `Vec::as_mut_ptr` reads the pointer out of the `Vec`'s own header; it does not
+    /// form a `&mut [i32]` over the block. So two calls are sibling derivations that
+    /// coexist, and a caller may hold a cursor from the first across the second —
+    /// which is what `AllocStrideTables` does throughout (it carves four running
+    /// cursors out of the block and advances them in interleaved loops) and what
+    /// `svc_encode_mb.rs` does per macroblock. See `PaddedPlane::root_ptr` for the
+    /// same statement on the picture planes, and F63 for what the other spelling did.
+    #[inline]
+    fn root(&mut self) -> *mut u8 {
+        self.base.as_mut_ptr().cast::<u8>()
+    }
+
+    #[inline]
+    fn at_i32(&mut self, kiByteOffset: Option<u32>) -> *mut i32 {
+        match kiByteOffset {
+            // SAFETY: every offset stored here was produced by `AllocStrideTables`
+            // carving the very block `base` is, and is a multiple of 4.
+            Some(off) => unsafe { self.root().add(off as usize).cast::<i32>() },
+            None => std::ptr::null_mut(),
+        }
+    }
+
+    #[inline]
+    fn at_i16(&mut self, kiByteOffset: Option<u32>) -> *mut i16 {
+        match kiByteOffset {
+            // SAFETY: as `at_i32`; the two coordinate regions are even-aligned.
+            Some(off) => unsafe { self.root().add(off as usize).cast::<i16>() },
+            None => std::ptr::null_mut(),
+        }
+    }
+
+    /// `pStrideDecBlockOffset[kiDid][kiTid0]` as the cursor it used to be. `kiTid0`
+    /// is the C++'s `kbBaseTemporalFlag` — 1 for the base temporal layer.
+    #[inline]
+    pub fn StrideDecBlockOffset(&mut self, kiDid: usize, kiTid0: usize) -> *mut i32 {
+        let off = self.pStrideDecBlockOffset[kiDid][kiTid0];
+        self.at_i32(off)
+    }
+
+    /// `pStrideEncBlockOffset[kiDid]` as the cursor it used to be.
+    #[inline]
+    pub fn StrideEncBlockOffset(&mut self, kiDid: usize) -> *mut i32 {
+        let off = self.pStrideEncBlockOffset[kiDid];
+        self.at_i32(off)
+    }
+
+    /// `pMbIndexX[kiDid]` as the cursor it used to be.
+    #[inline]
+    pub fn MbIndexX(&mut self, kiDid: usize) -> *mut i16 {
+        let off = self.pMbIndexX[kiDid];
+        self.at_i16(off)
+    }
+
+    /// `pMbIndexY[kiDid]` as the cursor it used to be.
+    #[inline]
+    pub fn MbIndexY(&mut self, kiDid: usize) -> *mut i16 {
+        let off = self.pMbIndexY[kiDid];
+        self.at_i16(off)
+    }
+}
+
+/// [`SStrideTables::StrideDecBlockOffset`] reached through the context — the
+/// spelling every consumer used when `pStrideTab` was a raw pointer.
+///
+/// The `&mut` these four take covers the `Option<Box<SStrideTables>>` field and the
+/// 160-odd bytes it points at; the cursor they answer points into the *arena*, which
+/// is a different allocation and is never retagged by any of them. That is the whole
+/// reason repeated calls are safe to interleave with held cursors.
+///
+/// # Safety
+/// `pCtx` must point to a live encoder context.
+#[inline]
+pub unsafe fn ctx_stride_dec_block_offset(
+    pCtx: *mut sWelsEncCtx,
+    kiDid: usize,
+    kiTid0: usize,
+) -> *mut i32 {
+    match (*pCtx).pStrideTab.as_mut() {
+        Some(tab) => tab.StrideDecBlockOffset(kiDid, kiTid0),
+        None => std::ptr::null_mut(),
+    }
+}
+
+/// [`SStrideTables::StrideEncBlockOffset`] reached through the context.
+///
+/// # Safety
+/// As [`ctx_stride_dec_block_offset`].
+#[inline]
+pub unsafe fn ctx_stride_enc_block_offset(pCtx: *mut sWelsEncCtx, kiDid: usize) -> *mut i32 {
+    match (*pCtx).pStrideTab.as_mut() {
+        Some(tab) => tab.StrideEncBlockOffset(kiDid),
+        None => std::ptr::null_mut(),
+    }
+}
+
+/// [`SStrideTables::MbIndexX`] reached through the context.
+///
+/// # Safety
+/// As [`ctx_stride_dec_block_offset`].
+#[inline]
+pub unsafe fn ctx_mb_index_x(pCtx: *mut sWelsEncCtx, kiDid: usize) -> *mut i16 {
+    match (*pCtx).pStrideTab.as_mut() {
+        Some(tab) => tab.MbIndexX(kiDid),
+        None => std::ptr::null_mut(),
+    }
+}
+
+/// [`SStrideTables::MbIndexY`] reached through the context.
+///
+/// # Safety
+/// As [`ctx_stride_dec_block_offset`].
+#[inline]
+pub unsafe fn ctx_mb_index_y(pCtx: *mut sWelsEncCtx, kiDid: usize) -> *mut i16 {
+    match (*pCtx).pStrideTab.as_mut() {
+        Some(tab) => tab.MbIndexY(kiDid),
+        None => std::ptr::null_mut(),
     }
 }
 
@@ -481,7 +635,12 @@ pub struct sWelsEncCtx {
     // into `SMB` as inline arrays, so the context neither allocates them, wires
     // them, nor frees them; the two parity banks the first two carried are
     // unnecessary once every macroblock owns its row.
-    pub pStrideTab: *mut SStrideTables,
+    /// **T6.H1 — owned.** `RequestMemorySvc` used to `WelsMallocz` this and
+    /// `WelsUninitEncoderExt` to free it, together with the one block hanging off it.
+    /// `None` is the null the raw pointer held before `AllocStrideTables` runs, and
+    /// the drop that replaces both frees is the context's own — see the field's
+    /// accessors, [`ctx_stride_enc_block_offset`] and its three siblings.
+    pub pStrideTab: Option<Box<SStrideTables>>,
     pub pFuncList: *mut SWelsFuncPtrList,
     pub pSliceThreading: *mut SSliceThreading,
     pub pTaskManage: *mut c_void,
@@ -644,7 +803,7 @@ impl sWelsEncCtx {
             pMvdCostTable: std::ptr::null_mut(),
             iMvdCostTableSize: 0,           // paired with the table above
             iMvdCostTableStride: 0,
-            pStrideTab: std::ptr::null_mut(),
+            pStrideTab: None,
             pFuncList: std::ptr::null_mut(),
             pSliceThreading: std::ptr::null_mut(),
             pTaskManage: std::ptr::null_mut(),
@@ -1284,7 +1443,91 @@ pub unsafe fn WelsSetMemZero_c(pDst: *mut u8, iSize: i32) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
+    /// **S40, for the arena `SStrideTables` now owns: the accessor is asked twice
+    /// and the first cursor is used after the second call.**
+    ///
+    /// The four accessors hand out raw cursors their callers keep — `AllocStrideTables`
+    /// carves the block with four of them live at once, and `svc_encode_mb.rs` holds
+    /// two per macroblock — so the spelling has to be retag-stable. It is
+    /// `PaddedPlane::root_ptr`'s: read the address out of the `Vec`'s header, never
+    /// through a `&mut [i32]` over the block. F63 is what the other spelling costs.
+    ///
+    /// Red-proofed at the commit that added it: spelling `root` as
+    /// `self.base.as_mut_slice().as_mut_ptr()` fails this test under Miri with
+    /// "attempting a write access using <tag> but that tag does not exist in the
+    /// borrow stack" at the first write below, and passes without Miri.
+    #[test]
+    fn stride_table_accessors_leave_the_first_cursor_usable() {
+        // Two 96-byte block-offset regions, then two 64-byte coordinate ones — the
+        // shape `AllocStrideTables` carves, at its smallest.
+        let mut tab = SStrideTables::new(96 * 2 + 64 * 2);
+        tab.pStrideDecBlockOffset[0][1] = Some(0);
+        // The **shared region**: a layer absent from the temporal map is given the
+        // matching layer's table, and two layers name one address.
+        tab.pStrideDecBlockOffset[1][1] = Some(0);
+        tab.pStrideEncBlockOffset[0] = Some(96);
+        tab.pMbIndexX[0] = Some(96 * 2);
+        tab.pMbIndexY[0] = Some(96 * 2 + 64);
+
+        let first = tab.StrideDecBlockOffset(0, 1);
+        let second = tab.StrideDecBlockOffset(0, 1);
+        assert_eq!(first, second, "the same table resolves to the same address");
+
+        // The use that matters: the FIRST cursor, after the second derivation.
+        unsafe { *first = 0x5A5A };
+        assert_eq!(unsafe { *second }, 0x5A5A, "sibling cursors read each other's writes");
+        unsafe { *second = 0x3C3C };
+        assert_eq!(unsafe { *first }, 0x3C3C);
+
+        // Cursors into the other three regions, live across a re-derivation of this one
+        // — `AllocStrideTables` holds exactly this set while it fills the block.
+        let enc = tab.StrideEncBlockOffset(0);
+        let x = tab.MbIndexX(0);
+        let y = tab.MbIndexY(0);
+        let dec_again = tab.StrideDecBlockOffset(0, 1);
+        unsafe {
+            *enc = 7;
+            *x = 3;
+            *y = 4;
+        }
+        assert_eq!(unsafe { *dec_again }, 0x3C3C, "re-deriving did not disturb the region");
+        assert_eq!(unsafe { (*enc, *x, *y) }, (7, 3, 4));
+
+        assert_eq!(tab.StrideDecBlockOffset(1, 1), first, "two layers, one region");
+        assert!(tab.MbIndexX(3).is_null(), "None answers the null the field used to hold");
+        assert!(tab.StrideEncBlockOffset(3).is_null());
+    }
+
+    /// The same property through the context's four accessors, which is how every
+    /// consumer outside `AllocStrideTables` reaches the tables.
+    #[test]
+    fn ctx_stride_accessors_are_sibling_derivations() {
+        let mut ctx = Box::new(sWelsEncCtx::new());
+        let p: *mut sWelsEncCtx = &mut *ctx;
+        // Before `AllocStrideTables` runs, all four answer null — the value the raw
+        // `pStrideTab` held, and the question every `is_null()` guard was written to ask.
+        assert!(unsafe { ctx_stride_enc_block_offset(p, 0) }.is_null());
+        assert!(unsafe { ctx_stride_dec_block_offset(p, 0, 1) }.is_null());
+        assert!(unsafe { ctx_mb_index_x(p, 0) }.is_null());
+        assert!(unsafe { ctx_mb_index_y(p, 0) }.is_null());
+
+        let mut tab = SStrideTables::new(96 * 2);
+        tab.pStrideEncBlockOffset[0] = Some(0);
+        tab.pStrideEncBlockOffset[1] = Some(96);
+        ctx.pStrideTab = Some(Box::new(tab));
+
+        let p: *mut sWelsEncCtx = &mut *ctx;
+        let first = unsafe { ctx_stride_enc_block_offset(p, 0) };
+        let other = unsafe { ctx_stride_enc_block_offset(p, 1) };
+        let again = unsafe { ctx_stride_enc_block_offset(p, 0) };
+        unsafe {
+            *first = 11;
+            *other = 22;
+        }
+        assert_eq!(unsafe { (*again, *first, *other) }, (11, 11, 22));
+    }
+
     #[test]
     fn test_calc_bi_stride() {
         assert_eq!(CALC_BI_STRIDE(640, 24), 1920);
