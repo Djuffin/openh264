@@ -271,6 +271,74 @@ the half Phase 7 is for.
 
 ---
 
+## F62 — `ParamTranscode` drops the caller's `iLTRRefNum`, and no gate could see it
+
+*Phase 6 session F, 2026-08-20, found while checking the long-term-reference
+paths' reachability before the picture-id flip.*
+
+`param_svc.h:384` is
+
+```cpp
+iLTRRefNum = (pCodingParam.bEnableLongTermReference ? pCodingParam.iLTRRefNum : 0);
+```
+
+and the port's `SWelsSvcCodingParam::ParamTranscode` had transcribed it as
+
+```rust
+self.iLTRRefNum = if pCodingParam.bEnableLongTermReference { 0 } else { 0 };
+```
+
+— both arms zero, the caller's value discarded. It is a **transcription defect,
+masked**: every init path that reaches `ParamTranscode` also reaches
+`WelsCheckNumRefSetting` (`au_set.rs`, `au_set.cpp:92`), which overwrites the
+field with `LONG_TERM_REF_NUM` (2 for camera content, 4 for screen) whenever LTR
+is on and zeroes it whenever LTR is off. So the two implementations agree at
+every point either of them is read, and the new `ltr` preset reads **16/16
+byte-identical with the defect in place and 16/16 with it fixed**. Fixed as a
+transcription rather than as a behaviour change, with that equality measured
+both ways.
+
+**What is worth carrying forward is not the line, it is why nothing found it.**
+Both differential drivers hard-coded `bEnableLongTermReference = false`, so *the
+entire long-term-reference subsystem* — `LTRMarkProcess`, `DeleteInvalidLTR`,
+`DeleteLTRFromLongList`, `HandleLTRMarkFeedback`, `FilterLTRMarkingFeedback`,
+`FilterLTRRecoveryRequest`, `WelsBuildRefList`'s long-reference arm,
+`SetRefMbType`'s long half and every `pLongRefList` shift — had **no byte
+coverage of any kind**, in any preset, in any profile. That is F60's shape
+exactly (a path the sweep cannot reach is a path a refactor can break silently),
+and it was found the same way: by asking what the harness *can* express before
+converting the code, rather than after.
+
+The `ltr` preset closes it — see `sweep.sh`. Two knobs were needed, not one:
+`ltr` alone reaches marking and the list shifts, but **the feedback packets are
+what unlock the rest**. Without `ENCODER_LTR_MARKING_FEEDBACK` the mark is never
+confirmed, so `DeleteLTRFromLongList` never runs; without
+`ENCODER_LTR_RECOVERY_REQUEST` `bReceivedT0LostFlag` is never set, so
+`WelsBuildRefList` never takes its long arm. Measured entry counts over 72
+frames at 320x192, `gop=0`:
+
+| probe | fb=0 | fb=1 | fb=2 | fb=3 |
+|---|---|---|---|---|
+| `LTRMarkProcess` | 72 | 72 | 72 | 72 |
+| `DeleteInvalidLTR` | 71 | 71 | 71 | 70 |
+| `pLongRefList` shift | 1 | 14 | 1 | 3 |
+| `DeleteLTRFromLongList` | 0 | **13** | 0 | **3** |
+| `WelsBuildRefList` long arm | 0 | 0 | **17** | **15** |
+
+and the four values produce four *different* streams (223062 / 223075 / 229470 /
+236572 bytes), so the axis carries signal rather than repeating one encode four
+times. The feedback has to quote the encoder's own `uiIdrPicId` back or
+`FilterLTRMarkingFeedback` drops the packet; both drivers count coded IDR frames
+to reconstruct it, which is deterministic and identical on both sides.
+
+**Still unreached, and named rather than claimed**: `LTRMarkProcessScreen`,
+`WelsUpdateRefListScreen`, `WelsBuildRefListScreen`,
+`WelsMarkMMCORefInfoScreen` and `UpdateSrcPicListLosslessScreenRefSelectionWithLtr`
+are the screen-content half, fenced dormant under D-scr-1 and refused by
+`ParamValidationExt` for a lossy link anyway.
+
+---
+
 ## F52's six — the Phase 6 close (adjudicated by reading, 2026-08-18, session B)
 
 `phase5_findings.md`'s F52 repaired `tools/find_shadowing_stubs.py` and left the
