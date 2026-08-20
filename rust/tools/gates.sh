@@ -14,6 +14,16 @@
 #                              frame-skip path, not encoding — perf_baseline.md §2)
 #     BENCH_ITERS=3            passes per bench row
 #     SKIP_SWEEP=1             drop the sweep gates (use only when you know why)
+#     MIRI_SCOPE=encoder       run the Miri `--lib` step over the encoder side only:
+#                              the skip list gains `--skip decoder::`, which is exactly
+#                              the 101 decoder-module tests including the three decoder
+#                              probes (the expensive ones — session A measured them at
+#                              665s of the 835s step). Phase 6 decision D-gate-2: a
+#                              session that touches only `src/encoder`/`src/processing`
+#                              buys nothing from re-running them, and the phase runs the
+#                              full unscoped step at its own exit. Unset (or any other
+#                              value) = the whole library, which is the default and what
+#                              every phase exit must use.
 #
 # Written as bash on purpose, like the diffharness: the interactive shell here is
 # zsh, which does not word-split unquoted expansions, and the sweep scripts rely
@@ -343,7 +353,24 @@ if [ "${LEVEL_DONE:-0}" != 1 ]; then
   # — which is what the skip had been hiding, and is F18's lesson again: the
   # backlog behind a skip is not confined to the code the skip was written for.
   MIRI_SKIPS=(--skip wels_thread_pool)
-  hdr "miri (--lib, minus the F12 skip)"
+  # SCOPE (Phase 6 session H, decision D-gate-2). `MIRI_SCOPE=encoder` adds one
+  # more skip — and it is a *scope*, not a skip in the sense above: it names no
+  # finding and hides no defect, because the code it drops out is code the session
+  # did not touch. `--skip decoder::` is a substring filter and it was measured to
+  # match the 101 `decoder::` tests and nothing else (no test outside that module
+  # path carries the string). All three decoder probes are inside it, which is the
+  # point: they are the expensive tests. The four encoder probes are
+  # `encoder::svc_encode_slice::tests::*` and are unaffected — the check that this
+  # knob is honest is that they still appear by name in the run's test list.
+  #
+  # This is for Phase 6's encoder sessions only. Every phase exit runs unscoped.
+  if [ "${MIRI_SCOPE:-}" = encoder ]; then
+    MIRI_SKIPS+=(--skip 'decoder::')
+    MIRI_DESC="--lib, encoder scope (minus the F12 skip and decoder::)"
+  else
+    MIRI_DESC="--lib (whole library, minus the F12 skip)"
+  fi
+  hdr "miri ($MIRI_DESC)"
   if ! rustup toolchain list 2>/dev/null | grep -q nightly; then
     skip "miri: no nightly toolchain (rustup toolchain install nightly)"
   else
@@ -362,7 +389,7 @@ if [ "${LEVEL_DONE:-0}" != 1 ]; then
     # and nothing else: aliasing (Stacked Borrows) and validity checking are exactly
     # what they were. The forbidden list stands — `-Zmiri-disable-stacked-borrows`,
     # `-Zmiri-disable-validation`, and anything else that weakens the checker.
-    run_miri lib "--lib (whole library, minus the F12 skip)" \
+    run_miri lib "$MIRI_DESC" \
       "-Zmiri-ignore-leaks -Zmiri-disable-isolation" --lib -- "${MIRI_SKIPS[@]}"
   fi
 fi
