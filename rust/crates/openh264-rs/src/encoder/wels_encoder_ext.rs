@@ -59,7 +59,8 @@ use crate::encoder::param_svc::GetLogFactor;
 use crate::encoder::param_svc::SExistingParasetList;
 use crate::encoder::svc_motion_estimate::CheckInRangeCloseOpen;
 use crate::encoder::encoder_context::{
-    ctx_frame_bs, ctx_frame_bs_at, ctx_ltr, ctx_pps_array, ctx_sps_array, ctx_subset_array,
+    ctx_frame_bs, ctx_frame_bs_at, ctx_ltr, ctx_pps_array, ctx_rc, ctx_rc_at, ctx_sps_array,
+    ctx_subset_array,
     SParaSetOffsetVariable, MAX_DQ_LAYER_NUM,
     MAX_PPS_COUNT, PARA_SET_TYPE,
 };
@@ -1897,8 +1898,8 @@ impl CWelsH264SVCEncoder {
                     (*self.m_pEncContext).uiStartTimestamp = kiCurrentFrameTs;
                 }
 
-                pStatistics.uiAverageFrameQP = if !(*self.m_pEncContext).pWelsSvcRc.is_null() {
-                    (*(*self.m_pEncContext).pWelsSvcRc.add(iDid as usize)).iAverageFrameQp as u32
+                pStatistics.uiAverageFrameQP = if !ctx_rc(self.m_pEncContext).is_null() {
+                    (*ctx_rc_at(self.m_pEncContext, iDid as usize)).iAverageFrameQp as u32
                 } else {
                     26
                 };

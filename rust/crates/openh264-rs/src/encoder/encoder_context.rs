@@ -608,6 +608,34 @@ pub unsafe fn ctx_mb_index_x(pCtx: *mut sWelsEncCtx, kiDid: usize) -> *mut i16 {
     }
 }
 
+/// The **root** of `pCtx->pWelsSvcRc` — T6.H6; see [`ctx_sps_array`] for the spelling.
+///
+/// # Safety
+/// `pCtx` must point to a live encoder context.
+#[inline]
+pub unsafe fn ctx_rc(pCtx: *mut sWelsEncCtx) -> *mut SWelsSvcRc {
+    let arr: &mut Vec<SWelsSvcRc> = &mut (*pCtx).pWelsSvcRc;
+    if arr.is_empty() {
+        return std::ptr::null_mut();
+    }
+    arr.as_mut_ptr()
+}
+
+/// The rate-control state of spatial layer `kiDid` — `pWelsSvcRc[did]`, which is how
+/// all ~60 consumers spell it. See [`ctx_rc`].
+///
+/// # Safety
+/// As [`ctx_rc`], and `kiDid` must be a layer the array holds.
+#[inline]
+pub unsafe fn ctx_rc_at(pCtx: *mut sWelsEncCtx, kiDid: usize) -> *mut SWelsSvcRc {
+    let root = ctx_rc(pCtx);
+    if root.is_null() {
+        return std::ptr::null_mut();
+    }
+    debug_assert!(kiDid < (*pCtx).pWelsSvcRc.len(), "rc layer {kiDid} is past the array");
+    root.add(kiDid)
+}
+
 /// The **root** of `pCtx->pLtr` — T6.H5; see [`ctx_sps_array`] for the spelling.
 ///
 /// # Safety
@@ -838,7 +866,11 @@ pub struct sWelsEncCtx {
     pub uiDependencyId: u8,
     pub uiTemporalId: u8,
     pub bNeedPrefixNalFlag: bool,
-    pub pWelsSvcRc: *mut SWelsSvcRc,
+    /// **T6.H6 — owned, and it took the rate controller's own allocations with it.**
+    /// One state per spatial layer; each holds the five arrays `RcInitLayerMemory`
+    /// used to carve from a `CMemoryAlign` block. Root: [`ctx_rc`]; per-layer:
+    /// [`ctx_rc_at`].
+    pub pWelsSvcRc: Vec<SWelsSvcRc>,
     pub bCheckWindowStatusRefreshFlag: bool,
     pub iCheckWindowStartTs: i64,
     pub iCheckWindowCurrentTs: i64,
@@ -1024,7 +1056,7 @@ impl sWelsEncCtx {
             bNeedPrefixNalFlag: false,
 
             // ---- rate control ---------------------------------------------------
-            pWelsSvcRc: std::ptr::null_mut(),
+            pWelsSvcRc: Vec::new(),
             // The check-window trio. Zero timestamps mean "the window has never
             // opened"; `WelsRcInitFuncPointers` and the first frame set all of them.
             bCheckWindowStatusRefreshFlag: false,
@@ -1926,14 +1958,17 @@ mod tests {
         // the empty container, which is the null the raw pointer held, and which
         // `ctx_sps_array` and its siblings answer as null so that every downstream
         // `is_null()` guard still asks its question.
-        const OWNED: [&str; 6] =
-            ["pSpsArray", "pSubsetArray", "pPPSArray", "pDqIdcMap", "pFrameBs", "pLtr"];
+        const OWNED: [&str; 7] = [
+            "pSpsArray", "pSubsetArray", "pPPSArray", "pDqIdcMap", "pFrameBs", "pLtr",
+            "pWelsSvcRc",
+        ];
         assert!(built.pSpsArray.is_empty(), "new(): no SPS array is allocated yet");
         assert!(built.pSubsetArray.is_empty(), "new(): no subset SPS array is allocated yet");
         assert!(built.pPPSArray.is_empty(), "new(): no PPS array is allocated yet");
         assert!(built.pDqIdcMap.is_empty(), "new(): no dq-idc map is allocated yet");
         assert!(built.pFrameBs.is_empty(), "new(): no frame bitstream is allocated yet");
         assert!(built.pLtr.is_empty(), "new(): no LTR state array is allocated yet");
+        assert!(built.pWelsSvcRc.is_empty(), "new(): no rate-control state is allocated yet");
 
         // ---- tier 2: the F64 fields, excluded by name and asserted by value ----
         const BY_VALUE: [&str; 10] = [
