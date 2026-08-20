@@ -37,7 +37,8 @@ use crate::api::codec_api::EParameterSetStrategy;
 use crate::api::codec_api::RC_MODES::RC_OFF_MODE;
 use crate::encoder::au_set::{WelsInitPps, WelsInitSps, WelsInitSubsetSps};
 use crate::encoder::encoder_context::{
-    ctx_pps_array, ctx_sps_array, ctx_subset_array, sWelsEncCtx, SLogContext, SParaSetOffset,
+    ctx_param, ctx_pps_array, ctx_sps_array, ctx_subset_array, sWelsEncCtx, SLogContext,
+    SParaSetOffset,
     SParaSetOffsetVariable, MAX_PPS_COUNT, PARA_SET_TYPE,
 };
 use crate::encoder::param_svc::{
@@ -417,7 +418,7 @@ pub unsafe fn WelsGenerateNewSps(
     // now reaches its own array once, where it uses it, and the two-arm derivation
     // that stood here (which computed one pointer the caller's arm never read) is
     // gone with them.
-    let pParam = (*pCtx).pSvcParam;
+    let pParam = ctx_param(pCtx);
     // S29's named shape. `WelsInitSps` takes `*mut SSpatialLayerConfig`, so the
     // reference here only existed to retag and be cast away — and its retag is
     // what invalidated `InitDqLayers`'s live pointer into the same layer.

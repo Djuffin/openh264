@@ -59,8 +59,8 @@ use crate::encoder::param_svc::GetLogFactor;
 use crate::encoder::param_svc::SExistingParasetList;
 use crate::encoder::svc_motion_estimate::CheckInRangeCloseOpen;
 use crate::encoder::encoder_context::{
-    ctx_frame_bs, ctx_frame_bs_at, ctx_ltr, ctx_pps_array, ctx_rc, ctx_rc_at, ctx_sps_array,
-    ctx_subset_array,
+    ctx_frame_bs, ctx_frame_bs_at, ctx_ltr, ctx_param, ctx_pps_array, ctx_rc, ctx_rc_at,
+    ctx_sps_array, ctx_subset_array,
     SParaSetOffsetVariable, MAX_DQ_LAYER_NUM,
     MAX_PPS_COUNT, PARA_SET_TYPE,
 };
@@ -690,7 +690,7 @@ pub unsafe fn WelsEncoderParamAdjust(
         return iReturn;
     }
 
-    let pOldParam: *mut SWelsSvcCodingParam = (**ppCtx).pSvcParam;
+    let pOldParam: *mut SWelsSvcCodingParam = ctx_param(*ppCtx);
 
     if (*pOldParam).iUsageType != (*pNewParam).iUsageType {
         return ENC_RETURN_UNSUPPORTED_PARA;
@@ -837,7 +837,7 @@ pub unsafe fn WelsEncoderParamAdjust(
         // for LTR or SPS,PPS ID update
         iIndexD = 0;
         while iIndexD < (*pNewParam).iSpatialLayerNum {
-            (*(**ppCtx).pSvcParam).sDependencyLayers[iIndexD as usize].uiIdrPicId = uiMaxIdrPicId;
+            (*ctx_param(*ppCtx)).sDependencyLayers[iIndexD as usize].uiIdrPicId = uiMaxIdrPicId;
             iIndexD += 1;
         }
 
@@ -1035,7 +1035,7 @@ pub unsafe fn WelsEncoderApplyLTR(
     ppCtx: *mut *mut sWelsEncCtx,
     pLTRValue: *mut SLTRConfig,
 ) -> i32 {
-    let mut sConfig: SWelsSvcCodingParam = (*(**ppCtx).pSvcParam).clone();
+    let mut sConfig: SWelsSvcCodingParam = (*ctx_param(*ppCtx)).clone();
     let mut iNumRefFrame;
     sConfig.bEnableLongTermReference = (*pLTRValue).bEnableLongTermReference;
     sConfig.iLTRRefNum = (*pLTRValue).iLTRRefNum;
@@ -1834,14 +1834,14 @@ impl CWelsH264SVCEncoder {
 
     pub fn UpdateStatistics(&mut self, pBsInfo: *mut SFrameBSInfo, kiCurrentFrameMs: i64) {
         unsafe {
-            if self.m_pEncContext.is_null() || (*self.m_pEncContext).pSvcParam.is_null() || pBsInfo.is_null() {
+            if self.m_pEncContext.is_null() || ctx_param(self.m_pEncContext).is_null() || pBsInfo.is_null() {
                 return;
             }
             let kiCurrentFrameTs = (*pBsInfo).uiTimeStamp;
             (*self.m_pEncContext).uiLastTimestamp = kiCurrentFrameTs;
             let kiTimeDiff = kiCurrentFrameTs - (*self.m_pEncContext).iLastStatisticsLogTs;
 
-            let iMaxDid = (*(*self.m_pEncContext).pSvcParam).iSpatialLayerNum - 1;
+            let iMaxDid = (*ctx_param(self.m_pEncContext)).iSpatialLayerNum - 1;
             for iDid in 0..=iMaxDid {
                 let mut eFrameType = EVideoFrameType::videoFrameTypeSkip;
                 let mut kiCurrentFrameSize = 0;
@@ -1862,7 +1862,7 @@ impl CWelsH264SVCEncoder {
                 let pStatistics =
                     &mut (*self.m_pEncContext).sEncoderStatistics[iDid as usize];
                 let pSpatialLayerInternalParam =
-                    &(*(*self.m_pEncContext).pSvcParam).sDependencyLayers[iDid as usize];
+                    &(*ctx_param(self.m_pEncContext)).sDependencyLayers[iDid as usize];
 
                 if pStatistics.uiWidth != 0
                     && pStatistics.uiHeight != 0
@@ -1920,7 +1920,7 @@ impl CWelsH264SVCEncoder {
                     - pStatistics.iLastStatisticsFrameCount)
                     as i32;
                 if kiDeltaFrames as f32
-                    > (*(*self.m_pEncContext).pSvcParam).fMaxFrameRate * 2.0
+                    > (*ctx_param(self.m_pEncContext)).fMaxFrameRate * 2.0
                 {
                     if kiTimeDiff >= (*self.m_pEncContext).iStatisticsLogInterval as i64 {
                         let fTimeDiffSec = kiTimeDiff as f32 / 1000.0;
@@ -1974,10 +1974,10 @@ impl CWelsH264SVCEncoder {
                     if iValue <= -1 {
                         iValue = 0;
                     }
-                    if iValue == (*(*self.m_pEncContext).pSvcParam).uiIntraPeriod as i32 {
+                    if iValue == (*ctx_param(self.m_pEncContext)).uiIntraPeriod as i32 {
                         return cmResultSuccess;
                     }
-                    (*(*self.m_pEncContext).pSvcParam).uiIntraPeriod = iValue as u32;
+                    (*ctx_param(self.m_pEncContext)).uiIntraPeriod = iValue as u32;
                 }
                 EncoderOption::ENCODER_OPTION_SVC_ENCODE_PARAM_BASE => {
                     let sEncodingParam = *(pOption as *const SEncParamBase);
@@ -2042,9 +2042,9 @@ impl CWelsH264SVCEncoder {
                     if iValue <= 0.0 {
                         return cmInitParaError;
                     }
-                    (*(*self.m_pEncContext).pSvcParam).fMaxFrameRate =
+                    (*ctx_param(self.m_pEncContext)).fMaxFrameRate =
                         WELS_CLIP3(iValue, MIN_FRAME_RATE, MAX_FRAME_RATE);
-                    WelsEncoderApplyFrameRate((*self.m_pEncContext).pSvcParam);
+                    WelsEncoderApplyFrameRate(ctx_param(self.m_pEncContext));
                 }
                 EncoderOption::ENCODER_OPTION_BITRATE => {
                     let pInfo = &*(pOption as *const SBitrateInfo);
@@ -2055,11 +2055,11 @@ impl CWelsH264SVCEncoder {
                     iBitrate = WELS_CLIP3(iBitrate, MIN_BIT_RATE, MAX_BIT_RATE);
                     match pInfo.iLayer {
                         SPATIAL_LAYER_ALL => {
-                            (*(*self.m_pEncContext).pSvcParam).iTargetBitrate = iBitrate;
+                            (*ctx_param(self.m_pEncContext)).iTargetBitrate = iBitrate;
                         }
                         SPATIAL_LAYER_0 | SPATIAL_LAYER_1 | SPATIAL_LAYER_2
                         | SPATIAL_LAYER_3 => {
-                            (*(*self.m_pEncContext).pSvcParam).sSpatialLayers[pInfo.iLayer as usize]
+                            (*ctx_param(self.m_pEncContext)).sSpatialLayers[pInfo.iLayer as usize]
                                 .iSpatialBitrate = iBitrate;
                         }
                         _ => return cmInitParaError,
@@ -2069,7 +2069,7 @@ impl CWelsH264SVCEncoder {
                     } else {
                         null_mut()
                     };
-                    if WelsEncoderApplyBitRate(log_ctx, (*self.m_pEncContext).pSvcParam, pInfo.iLayer as i32)
+                    if WelsEncoderApplyBitRate(log_ctx, ctx_param(self.m_pEncContext), pInfo.iLayer as i32)
                         != 0
                     {
                         return cmInitParaError;
@@ -2084,11 +2084,11 @@ impl CWelsH264SVCEncoder {
                     iBitrate = WELS_CLIP3(iBitrate, MIN_BIT_RATE, MAX_BIT_RATE);
                     match pInfo.iLayer {
                         SPATIAL_LAYER_ALL => {
-                            (*(*self.m_pEncContext).pSvcParam).iMaxBitrate = iBitrate;
+                            (*ctx_param(self.m_pEncContext)).iMaxBitrate = iBitrate;
                         }
                         SPATIAL_LAYER_0 | SPATIAL_LAYER_1 | SPATIAL_LAYER_2
                         | SPATIAL_LAYER_3 => {
-                            (*(*self.m_pEncContext).pSvcParam).sSpatialLayers[pInfo.iLayer as usize]
+                            (*ctx_param(self.m_pEncContext)).sSpatialLayers[pInfo.iLayer as usize]
                                 .iMaxSpatialBitrate = iBitrate;
                         }
                         _ => return cmInitParaError,
@@ -2098,7 +2098,7 @@ impl CWelsH264SVCEncoder {
                     } else {
                         null_mut()
                     };
-                    if WelsEncoderApplyBitRate(log_ctx, (*self.m_pEncContext).pSvcParam, pInfo.iLayer as i32)
+                    if WelsEncoderApplyBitRate(log_ctx, ctx_param(self.m_pEncContext), pInfo.iLayer as i32)
                         != 0
                     {
                         return cmInitParaError;
@@ -2107,10 +2107,10 @@ impl CWelsH264SVCEncoder {
                 EncoderOption::ENCODER_OPTION_RC_MODE => {
                     // 0:quality mode;1:bit-rate mode;2:bitrate limited mode
                     let iValue = *(pOption as *const i32);
-                    (*(*self.m_pEncContext).pSvcParam).iRCMode = rc_mode_from_raw(iValue);
+                    (*ctx_param(self.m_pEncContext)).iRCMode = rc_mode_from_raw(iValue);
                     // Re-point the dispatch table. Setting the field alone leaves
                     // the encoder running the previous mode's callbacks.
-                    let iRCMode = (*(*self.m_pEncContext).pSvcParam).iRCMode;
+                    let iRCMode = (*ctx_param(self.m_pEncContext)).iRCMode;
                     WelsRcInitFuncPointers(
                         &mut (*(*self.m_pEncContext).pFuncList).pfRc,
                         iRCMode,
@@ -2119,15 +2119,15 @@ impl CWelsH264SVCEncoder {
                 EncoderOption::ENCODER_OPTION_RC_FRAME_SKIP => {
                     // 0:FRAME-SKIP disabled;1:FRAME-SKIP enabled
                     let bValue = *(pOption as *const bool);
-                    if (*(*self.m_pEncContext).pSvcParam).iRCMode != RC_OFF_MODE {
-                        (*(*self.m_pEncContext).pSvcParam).bEnableFrameSkip = bValue;
+                    if (*ctx_param(self.m_pEncContext)).iRCMode != RC_OFF_MODE {
+                        (*ctx_param(self.m_pEncContext)).bEnableFrameSkip = bValue;
                     }
                     // rc off: the setting is accepted and ignored, as in C++.
                 }
                 EncoderOption::ENCODER_PADDING_PADDING => {
                     // 0:disable padding;1:padding
                     let iValue = *(pOption as *const i32);
-                    (*(*self.m_pEncContext).pSvcParam).iPaddingFlag = iValue;
+                    (*ctx_param(self.m_pEncContext)).iPaddingFlag = iValue;
                 }
                 EncoderOption::ENCODER_LTR_RECOVERY_REQUEST => {
                     let pLTR_Recover_Request = pOption as *mut SLTRRecoverRequest;
@@ -2139,7 +2139,7 @@ impl CWelsH264SVCEncoder {
                 }
                 EncoderOption::ENCODER_LTR_MARKING_PERIOD => {
                     let iValue = *(pOption as *const u32);
-                    (*(*self.m_pEncContext).pSvcParam).iLtrMarkPeriod = iValue;
+                    (*ctx_param(self.m_pEncContext)).iLtrMarkPeriod = iValue;
                 }
                 EncoderOption::ENCODER_OPTION_LTR => {
                     let pLTRValue = pOption as *mut SLTRConfig;
@@ -2154,11 +2154,11 @@ impl CWelsH264SVCEncoder {
                 }
                 EncoderOption::ENCODER_OPTION_ENABLE_SSEI => {
                     let iValue = *(pOption as *const bool);
-                    (*(*self.m_pEncContext).pSvcParam).bEnableSSEI = iValue;
+                    (*ctx_param(self.m_pEncContext)).bEnableSSEI = iValue;
                 }
                 EncoderOption::ENCODER_OPTION_ENABLE_PREFIX_NAL_ADDING => {
                     let iValue = *(pOption as *const bool);
-                    (*(*self.m_pEncContext).pSvcParam).bPrefixNalAddingCtrl = iValue;
+                    (*ctx_param(self.m_pEncContext)).bPrefixNalAddingCtrl = iValue;
                 }
                 EncoderOption::ENCODER_OPTION_SPS_PPS_ID_STRATEGY => {
                     let iValue = *(pOption as *const i32);
@@ -2174,7 +2174,7 @@ impl CWelsH264SVCEncoder {
                         _ => {}
                     }
 
-                    let eOld = (*(*self.m_pEncContext).pSvcParam).eSpsPpsIdStrategy;
+                    let eOld = (*ctx_param(self.m_pEncContext)).eSpsPpsIdStrategy;
                     if ((eNewStrategy as i32 & SPS_LISTING as i32) != 0
                         || (eOld as i32 & SPS_LISTING as i32) != 0)
                         && eOld != eNewStrategy
@@ -2184,7 +2184,7 @@ impl CWelsH264SVCEncoder {
                         return cmInitParaError;
                     }
                     let mut sConfig: SWelsSvcCodingParam =
-                        *(*self.m_pEncContext).pSvcParam;
+                        *ctx_param(self.m_pEncContext);
                     sConfig.eSpsPpsIdStrategy = eNewStrategy;
 
                     if WelsEncoderParamAdjust(&mut self.m_pEncContext, &mut sConfig) != 0 {
@@ -2192,9 +2192,9 @@ impl CWelsH264SVCEncoder {
                     }
                 }
                 EncoderOption::ENCODER_OPTION_CURRENT_PATH => {
-                    if !(*self.m_pEncContext).pSvcParam.is_null() {
+                    if !ctx_param(self.m_pEncContext).is_null() {
                         let path = pOption as *mut c_char;
-                        (*(*self.m_pEncContext).pSvcParam).pCurPath = path;
+                        (*ctx_param(self.m_pEncContext)).pCurPath = path;
                     }
                 }
                 EncoderOption::ENCODER_OPTION_DUMP_FILE => {
@@ -2216,7 +2216,7 @@ impl CWelsH264SVCEncoder {
                     };
                     CheckProfileSetting(
                         log_ctx,
-                        (*self.m_pEncContext).pSvcParam,
+                        ctx_param(self.m_pEncContext),
                         pProfileInfo.iLayer as i32,
                         pProfileInfo.uiProfileIdc,
                     );
@@ -2235,7 +2235,7 @@ impl CWelsH264SVCEncoder {
                     };
                     CheckLevelSetting(
                         log_ctx,
-                        (*self.m_pEncContext).pSvcParam,
+                        ctx_param(self.m_pEncContext),
                         pLevelInfo.iLayer as i32,
                         pLevelInfo.uiLevelIdc,
                     );
@@ -2247,7 +2247,7 @@ impl CWelsH264SVCEncoder {
                     } else {
                         null_mut()
                     };
-                    CheckReferenceNumSetting(log_ctx, (*self.m_pEncContext).pSvcParam, iValue);
+                    CheckReferenceNumSetting(log_ctx, ctx_param(self.m_pEncContext), iValue);
                 }
                 EncoderOption::ENCODER_OPTION_DELIVERY_STATUS => {
                     let pValue = &*(pOption as *const SDeliveryStatus);
@@ -2255,7 +2255,7 @@ impl CWelsH264SVCEncoder {
                 }
                 EncoderOption::ENCODER_OPTION_COMPLEXITY => {
                     let iValue = *(pOption as *const i32);
-                    (*(*self.m_pEncContext).pSvcParam).iComplexityMode = match iValue {
+                    (*ctx_param(self.m_pEncContext)).iComplexityMode = match iValue {
                         0 => EComplexityMode::LOW_COMPLEXITY,
                         1 => EComplexityMode::MEDIUM_COMPLEXITY,
                         _ => EComplexityMode::HIGH_COMPLEXITY,
@@ -2270,21 +2270,21 @@ impl CWelsH264SVCEncoder {
                 }
                 EncoderOption::ENCODER_OPTION_IS_LOSSLESS_LINK => {
                     let bValue = *(pOption as *const bool);
-                    (*(*self.m_pEncContext).pSvcParam).bIsLosslessLink = bValue;
+                    (*ctx_param(self.m_pEncContext)).bIsLosslessLink = bValue;
                 }
                 EncoderOption::ENCODER_OPTION_BITS_VARY_PERCENTAGE => {
                     let iValue = *(pOption as *const i32);
-                    (*(*self.m_pEncContext).pSvcParam).iBitsVaryPercentage =
+                    (*ctx_param(self.m_pEncContext)).iBitsVaryPercentage =
                         WELS_CLIP3(iValue, 0, 100);
                     let log_ctx = if !self.m_pWelsTrace.is_null() {
                         &mut (*self.m_pWelsTrace).m_sLogCtx
                     } else {
                         null_mut()
                     };
-                    let iRang = (*(*self.m_pEncContext).pSvcParam).iBitsVaryPercentage;
+                    let iRang = (*ctx_param(self.m_pEncContext)).iBitsVaryPercentage;
                     WelsEncoderApplyBitVaryRang(
                         log_ctx,
-                        (*self.m_pEncContext).pSvcParam,
+                        ctx_param(self.m_pEncContext),
                         iRang,
                     );
                 }
@@ -2336,25 +2336,25 @@ impl CWelsH264SVCEncoder {
                 }
                 EncoderOption::ENCODER_OPTION_IDR_INTERVAL => {
                     *(pOption as *mut i32) =
-                        (*(*self.m_pEncContext).pSvcParam).uiIntraPeriod as i32;
+                        (*ctx_param(self.m_pEncContext)).uiIntraPeriod as i32;
                 }
                 EncoderOption::ENCODER_OPTION_SVC_ENCODE_PARAM_EXT => {
-                    let param_ext = (*(*self.m_pEncContext).pSvcParam).to_param_ext();
+                    let param_ext = (*ctx_param(self.m_pEncContext)).to_param_ext();
                     *(pOption as *mut SEncParamExt) = param_ext;
                 }
                 EncoderOption::ENCODER_OPTION_SVC_ENCODE_PARAM_BASE => {
-                    (*(*self.m_pEncContext).pSvcParam)
+                    (*ctx_param(self.m_pEncContext))
                         .GetBaseParams(&mut *(pOption as *mut SEncParamBase));
                 }
                 EncoderOption::ENCODER_OPTION_FRAME_RATE => {
-                    *(pOption as *mut f32) = (*(*self.m_pEncContext).pSvcParam).fMaxFrameRate;
+                    *(pOption as *mut f32) = (*ctx_param(self.m_pEncContext)).fMaxFrameRate;
                 }
                 EncoderOption::ENCODER_OPTION_BITRATE => {
                     let pInfo = &mut *(pOption as *mut SBitrateInfo);
                     if pInfo.iLayer == SPATIAL_LAYER_ALL {
-                        pInfo.iBitrate = (*(*self.m_pEncContext).pSvcParam).iTargetBitrate;
+                        pInfo.iBitrate = (*ctx_param(self.m_pEncContext)).iTargetBitrate;
                     } else if (pInfo.iLayer as i32) >= 0 && (pInfo.iLayer as i32) < MAX_DEPENDENCY_LAYER {
-                        pInfo.iBitrate = (*(*self.m_pEncContext).pSvcParam).sSpatialLayers
+                        pInfo.iBitrate = (*ctx_param(self.m_pEncContext)).sSpatialLayers
                             [pInfo.iLayer as usize]
                             .iSpatialBitrate;
                     } else {
@@ -2364,9 +2364,9 @@ impl CWelsH264SVCEncoder {
                 EncoderOption::ENCODER_OPTION_MAX_BITRATE => {
                     let pInfo = &mut *(pOption as *mut SBitrateInfo);
                     if pInfo.iLayer == SPATIAL_LAYER_ALL {
-                        pInfo.iBitrate = (*(*self.m_pEncContext).pSvcParam).iMaxBitrate;
+                        pInfo.iBitrate = (*ctx_param(self.m_pEncContext)).iMaxBitrate;
                     } else if (pInfo.iLayer as i32) >= 0 && (pInfo.iLayer as i32) < MAX_DEPENDENCY_LAYER {
-                        pInfo.iBitrate = (*(*self.m_pEncContext).pSvcParam).sSpatialLayers
+                        pInfo.iBitrate = (*ctx_param(self.m_pEncContext)).sSpatialLayers
                             [pInfo.iLayer as usize]
                             .iMaxSpatialBitrate;
                     } else {
@@ -2376,7 +2376,7 @@ impl CWelsH264SVCEncoder {
                 EncoderOption::ENCODER_OPTION_GET_STATISTICS => {
                     let pStatistics = &mut *(pOption as *mut crate::SEncoderStatistics);
                     let iLayerIdx =
-                        ((*(*self.m_pEncContext).pSvcParam).iSpatialLayerNum - 1) as usize;
+                        ((*ctx_param(self.m_pEncContext)).iSpatialLayerNum - 1) as usize;
                     let pEncStats = &(*self.m_pEncContext).sEncoderStatistics[iLayerIdx];
 
                     pStatistics.uiWidth = pEncStats.uiWidth;
@@ -2402,7 +2402,7 @@ impl CWelsH264SVCEncoder {
                 }
                 EncoderOption::ENCODER_OPTION_COMPLEXITY => {
                     *(pOption as *mut i32) =
-                        (*(*self.m_pEncContext).pSvcParam).iComplexityMode as i32;
+                        (*ctx_param(self.m_pEncContext)).iComplexityMode as i32;
                 }
                 // NOTE: C++'s GetOption has **no** ENCODER_OPTION_TRACE_LEVEL case —
                 // it is set-only, and a get falls to `default: return cmInitParaError`.

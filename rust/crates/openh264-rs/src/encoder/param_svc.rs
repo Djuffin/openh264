@@ -1175,35 +1175,23 @@ impl Default for SExistingParasetList {
 }
 
 /// Releases dynamic coding param buffer via CMemoryAlign
-pub unsafe fn FreeCodingParam(pParam: *mut *mut SWelsSvcCodingParam, pMa: *mut CMemoryAlign) -> i32 {
-    if pParam.is_null() || (*pParam).is_null() || pMa.is_null() {
-        return 1;
-    }
-    let tag = b"SWelsSvcCodingParam\0".as_ptr() as *const c_char;
-    (*pMa).WelsFree(*pParam as *mut c_void, tag);
-    *pParam = std::ptr::null_mut();
-    0
-}
-
-/// Allocates zeroed coding param buffer via CMemoryAlign and initializes defaults
-pub unsafe fn AllocCodingParam(pParam: *mut *mut SWelsSvcCodingParam, pMa: *mut CMemoryAlign) -> i32 {
-    if pParam.is_null() || pMa.is_null() {
-        return 1;
-    }
-    if !(*pParam).is_null() {
-        FreeCodingParam(pParam, pMa);
-    }
-    let tag = b"SWelsSvcCodingParam\0".as_ptr() as *const c_char;
-    let pCodingParam = (*pMa).WelsMallocz(
-        std::mem::size_of::<SWelsSvcCodingParam>() as u32,
-        tag,
-    ) as *mut SWelsSvcCodingParam;
-    if pCodingParam.is_null() {
-        return 1;
-    }
-    (*pCodingParam).FillDefault();
-    *pParam = pCodingParam;
-    0
+/// The encoder's own copy of the coding parameters — **T6.H11**, and what
+/// `AllocCodingParam`/`FreeCodingParam` became.
+///
+/// The pair was `WelsMallocz` + `FillDefault` and a matching `WelsFree`. The context
+/// owns the block (see the field's own note for the ownership read this session did),
+/// so the free is its drop and the allocation is a `Box`.
+///
+/// **The starting image is `Default`'s, not a memset's, and that is a deviation
+/// worth one line**: the C++ zeroes the block and then calls `FillDefault`, which
+/// writes some of it. `SWelsSvcCodingParam` holds `repr(C)` enums whose zero is not
+/// in every case a declared variant, so there is no safe zero image to reproduce.
+/// It is unobservable: `WelsInitEncoderExt` assigns the caller's whole parameter
+/// struct over this one on the very next line, and it is the only live caller.
+pub fn NewCodingParam() -> Box<SWelsSvcCodingParam> {
+    let mut p = Box::new(SWelsSvcCodingParam::default());
+    p.FillDefault();
+    p
 }
 
 #[cfg(test)]
@@ -1247,19 +1235,13 @@ mod tests {
         assert_eq!(param.sDependencyLayers[0].iHighestTemporalId, 2);
     }
 
+    /// T6.H11: the allocate/free pair is one constructor, so what is left to test is
+    /// that `FillDefault` ran — which is what the old test actually checked, either
+    /// side of a `WelsFree` that is now the `Box`'s own.
     #[test]
-    fn test_alloc_free_coding_param() {
-        let mut ma = CMemoryAlign::new(16);
-        let mut param_ptr: *mut SWelsSvcCodingParam = std::ptr::null_mut();
-        unsafe {
-            let ret = AllocCodingParam(&mut param_ptr, &mut ma);
-            assert_eq!(ret, 0);
-            assert!(!param_ptr.is_null());
-            assert_eq!((*param_ptr).uiGopSize, 1);
-
-            let free_ret = FreeCodingParam(&mut param_ptr, &mut ma);
-            assert_eq!(free_ret, 0);
-            assert!(param_ptr.is_null());
-        }
+    fn new_coding_param_is_filled() {
+        let p = NewCodingParam();
+        assert_eq!(p.uiGopSize, 1);
+        assert_eq!(p.iNumRefFrame, AUTO_REF_PIC_COUNT);
     }
 }
