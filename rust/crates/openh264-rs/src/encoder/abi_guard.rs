@@ -371,7 +371,7 @@ assert_size!(crate::encoder::encoder_context::SLogContext, 24);
 // `Option<PpsId>` (2 and 4 bytes against 8 apiece) and `pSubsetSps` is deleted
 // outright — the C++ declares it, nothing ever read or wrote it. Only the three pins
 // after the parameter-set block move.
-assert_size_by_profile!(sWelsEncCtx, debug 98016, release 97928);
+assert_size_by_profile!(sWelsEncCtx, debug 98032, release 97944);
 
 
 // The fifteen `sWelsEncCtx` fields the preprocessor touches, pinned at their C++
@@ -405,18 +405,18 @@ macro_rules! assert_ctx_offset {
 assert_ctx_offset!(sLogCtx, 0);
 assert_ctx_offset!(pSvcParam, 24);
 assert_ctx_offset!(iMvRange, 32);
-assert_ctx_offset_by_profile!(ppRefPicListExt, debug 144, release 136);
-assert_ctx_offset_by_profile!(pLtr, debug 296, release 224);
-assert_ctx_offset_by_profile!(bCurFrameMarkedAsSceneLtr, debug 320, release 248);
-assert_ctx_offset_by_profile!(eSliceType, debug 324, release 252);
-assert_ctx_offset_by_profile!(uiDependencyId, debug 353, release 281);
-assert_ctx_offset_by_profile!(uiTemporalId, debug 354, release 282);
-assert_ctx_offset_by_profile!(pWelsSvcRc, debug 360, release 288);
-assert_ctx_offset_by_profile!(pVaa, debug 424, release 352);
-assert_ctx_offset_by_profile!(pVpp, debug 432, release 360);
-assert_ctx_offset_by_profile!(sSpatialIndexMap, debug 584, release 512);
-assert_ctx_offset_by_profile!(bRefOfCurTidIsLtr, debug 648, release 560);
-assert_ctx_offset_by_profile!(pMemAlign, debug 1888, release 1800);
+assert_ctx_offset_by_profile!(ppRefPicListExt, debug 160, release 152);
+assert_ctx_offset_by_profile!(pLtr, debug 312, release 240);
+assert_ctx_offset_by_profile!(bCurFrameMarkedAsSceneLtr, debug 336, release 264);
+assert_ctx_offset_by_profile!(eSliceType, debug 340, release 268);
+assert_ctx_offset_by_profile!(uiDependencyId, debug 369, release 297);
+assert_ctx_offset_by_profile!(uiTemporalId, debug 370, release 298);
+assert_ctx_offset_by_profile!(pWelsSvcRc, debug 376, release 304);
+assert_ctx_offset_by_profile!(pVaa, debug 440, release 368);
+assert_ctx_offset_by_profile!(pVpp, debug 448, release 376);
+assert_ctx_offset_by_profile!(sSpatialIndexMap, debug 600, release 528);
+assert_ctx_offset_by_profile!(bRefOfCurTidIsLtr, debug 664, release 576);
+assert_ctx_offset_by_profile!(pMemAlign, debug 1904, release 1816);
 
 // encoder_context.h:198 -- the element type of `sSpatialIndexMap`. `wels_preprocess.rs`
 // carried a byte-identical copy of this under the invented name `SSpatialIndexMap`;

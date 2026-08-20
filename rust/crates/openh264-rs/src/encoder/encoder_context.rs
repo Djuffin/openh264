@@ -608,6 +608,48 @@ pub unsafe fn ctx_mb_index_x(pCtx: *mut sWelsEncCtx, kiDid: usize) -> *mut i16 {
     }
 }
 
+/// The **root** of `pCtx->pMvdCostTable` — T6.H9; see [`ctx_sps_array`] for the
+/// spelling and for what empty means.
+///
+/// # Safety
+/// `pCtx` must point to a live encoder context.
+#[inline]
+pub unsafe fn ctx_mvd_cost_table(pCtx: *mut sWelsEncCtx) -> *mut u16 {
+    let v: &mut Vec<u16> = &mut (*pCtx).pMvdCostTable;
+    if v.is_empty() {
+        return std::ptr::null_mut();
+    }
+    v.as_mut_ptr()
+}
+
+/// The MVD cost table's **origin** — the entry a zero MVD indexes, which is
+/// `iMvdCostTableSize` into the table. Every consumer wants this rather than the
+/// root: `COST_MVD` indexes it with a *signed* MVD, so the bias is what makes a
+/// negative motion-vector difference a negative offset from a pointer that is still
+/// inside the allocation.
+///
+/// It is derived **once per slice**, which is where the two call sites already
+/// derived it — the cadence is unchanged, which is what keeps this off the perf span.
+/// The two record fields that cache a row of it (`SWelsMD::pMvdCost`,
+/// `SWelsME::pMvdCost`) stay raw and are enumerated for session I's inventory: they
+/// are per-macroblock caches of `origin + uiLumaQp * iMvdCostTableStride`, re-stamped
+/// by `WelsInitInterMDStruc` on every macroblock.
+///
+/// # Safety
+/// As [`ctx_mvd_cost_table`].
+#[inline]
+pub unsafe fn ctx_mvd_cost_origin(pCtx: *mut sWelsEncCtx) -> *mut u16 {
+    let root = ctx_mvd_cost_table(pCtx);
+    if root.is_null() {
+        return std::ptr::null_mut();
+    }
+    debug_assert!(
+        ((*pCtx).iMvdCostTableSize as usize) < (*pCtx).pMvdCostTable.len(),
+        "the MVD table's origin is outside the table"
+    );
+    root.add((*pCtx).iMvdCostTableSize as usize)
+}
+
 /// Dependency layer `kiDid`'s **DQ layer** — `ppDqLayerList[did]`, and null where the
 /// slot's pointer was null. T6.H8; the same shape as [`ctx_ref_list`], and
 /// [`current_layer`](crate::encoder::svc_encode_slice::current_layer) resolves
@@ -829,7 +871,12 @@ pub struct sWelsEncCtx {
     pub sLogCtx: SLogContext,
     pub pSvcParam: *mut SWelsSvcCodingParam,
     pub iMvRange: i32,
-    pub pMvdCostTable: *mut u16,
+    /// The motion-vector-difference cost table — **T6.H9, and plan item P11 landing.**
+    /// 52 QP rows of `iMvdCostTableStride` entries each, plus F57's overshoot. Root:
+    /// [`ctx_mvd_cost_table`]; the **origin** every consumer actually wants (the
+    /// zero-MVD entry, `iMvdCostTableSize` into the table, so that a negative MVD is a
+    /// negative offset) is [`ctx_mvd_cost_origin`].
+    pub pMvdCostTable: Vec<u16>,
     pub iMvdCostTableSize: i32,
     pub iMvdCostTableStride: i32,
     // encoder_context.h:129-136 carries five per-macroblock scratch arrays here --
@@ -1052,7 +1099,7 @@ impl sWelsEncCtx {
             // the C++ can call it on a half-built context after an early failure.)
             pSvcParam: std::ptr::null_mut(),
             iMvRange: 0,                    // set by InitMvRange from the level limit
-            pMvdCostTable: std::ptr::null_mut(),
+            pMvdCostTable: Vec::new(),
             iMvdCostTableSize: 0,           // paired with the table above
             iMvdCostTableStride: 0,
             pStrideTab: None,
@@ -2004,9 +2051,9 @@ mod tests {
         // the empty container, which is the null the raw pointer held, and which
         // `ctx_sps_array` and its siblings answer as null so that every downstream
         // `is_null()` guard still asks its question.
-        const OWNED: [&str; 9] = [
+        const OWNED: [&str; 10] = [
             "pSpsArray", "pSubsetArray", "pPPSArray", "pDqIdcMap", "pFrameBs", "pLtr",
-            "pWelsSvcRc", "ppRefPicListExt", "ppDqLayerList",
+            "pWelsSvcRc", "ppRefPicListExt", "ppDqLayerList", "pMvdCostTable",
         ];
         assert!(built.pSpsArray.is_empty(), "new(): no SPS array is allocated yet");
         assert!(built.pSubsetArray.is_empty(), "new(): no subset SPS array is allocated yet");
@@ -2017,6 +2064,7 @@ mod tests {
         assert!(built.pWelsSvcRc.is_empty(), "new(): no rate-control state is allocated yet");
         assert!(built.ppRefPicListExt.is_empty(), "new(): no reference lists are allocated yet");
         assert!(built.ppDqLayerList.is_empty(), "new(): no DQ layers are allocated yet");
+        assert!(built.pMvdCostTable.is_empty(), "new(): no MVD cost table is allocated yet");
 
         // ---- tier 2: the F64 fields, excluded by name and asserted by value ----
         const BY_VALUE: [&str; 10] = [

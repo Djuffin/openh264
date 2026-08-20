@@ -27,7 +27,7 @@ use crate::common::memory_align::CMemoryAlign;
 use crate::decoder::nalu::g_ksLevelLimits;
 use crate::encoder::encoder_context::{
     ctx_dq_idc_map, ctx_dq_layer, ctx_frame_bs, ctx_frame_bs_at, ctx_ltr_at, ctx_mb_index_x,
-    ctx_mb_index_y, ctx_ref_list,
+    ctx_mb_index_y, ctx_mvd_cost_table, ctx_ref_list,
     ctx_rc_at,
     ctx_pps_array, ctx_sps_array,
     ctx_stride_enc_block_offset,
@@ -1245,14 +1245,14 @@ pub unsafe fn RequestMemorySvc(
     // encoded byte can move. Deleting the term restores the UB and the encoder
     // aliasing probe catches it, which is how it was found.
     let kuiMvdCostTableOvershoot = 2 * ((kuiMvdInterTableStride >> 1) + 1);
-    (**ppCtx).pMvdCostTable = (*pMa).WelsMallocz(
-        (52 * kuiMvdCacheAlignedSize + kuiMvdCostTableOvershoot) as u32,
-        tag!("pMvdCostTable"),
-    ) as *mut u16;
-    if (**ppCtx).pMvdCostTable.is_null() {
-        return 1;
-    }
-    crate::encoder::md::MvdCostInit((**ppCtx).pMvdCostTable, kuiMvdInterTableStride);
+    // **T6.H9 — plan item P11.** The size above is in *bytes* (the C++ `WelsMalloc`
+    // takes bytes and casts to `uint16_t*`), so the `Vec`'s length is that over two.
+    (**ppCtx).pMvdCostTable = vec![
+        0u16;
+        (52 * kuiMvdCacheAlignedSize + kuiMvdCostTableOvershoot) as usize
+            / std::mem::size_of::<u16>()
+    ];
+    crate::encoder::md::MvdCostInit(ctx_mvd_cost_table(*ppCtx), kuiMvdInterTableStride);
 
     let pRefList0 = ctx_ref_list(*ppCtx, 0);
     if !pRefList0.is_null() && !(*pRefList0).pRef.is_empty() {
@@ -1716,7 +1716,7 @@ mod tests {
             );
 
             assert!((*pCtx).pStrideTab.is_some());
-            assert!(!(*pCtx).pMvdCostTable.is_null());
+            assert!(!ctx_mvd_cost_table(pCtx).is_null());
             assert_eq!(
                 (*pCtx).eRefStrategy,
                 crate::encoder::ref_list_mgr_svc::RefStrategyKind::TemporalLayer,
@@ -1779,10 +1779,8 @@ pub unsafe fn WelsUninitEncoderExt(ppCtx: *mut *mut sWelsEncCtx) {
         // The five per-macroblock arrays freed here in encoder_ext.cpp:1932-1961 are
         // inline in `SMB` since T6.C1 and go with the `SMB` list below.
         // `ppMbListD` is gone: each layer owns its own `MbArray<SMB>` (T6.D5).
-        if !(*pCtx).pMvdCostTable.is_null() {
-            (*pMa).WelsFree((*pCtx).pMvdCostTable as *mut c_void, tag!("pMvdCostTable"));
-            (*pCtx).pMvdCostTable = null_mut();
-        }
+        // **T6.H9**: `pMvdCostTable`'s `WelsFree` stood here; the `Vec` is the
+        // context's.
         // **T6.H6**: this entry was the cascade's one *ordered* pair —
         // `WelsRcFreeMemory(pCtx)` had to run before the `WelsFree` below it, because
         // the per-layer blocks hung off the array being freed. Ownership is what that

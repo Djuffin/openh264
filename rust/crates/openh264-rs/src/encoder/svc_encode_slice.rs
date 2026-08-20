@@ -60,7 +60,8 @@ use crate::{
 
 pub use crate::encoder::encoder_context::EWelsSliceType;
 use crate::encoder::encoder_context::{
-    ctx_dq_layer, ctx_pps_array, ctx_rc_at, ctx_ref_list, ctx_sps_array, ctx_subset_array,
+    ctx_dq_layer, ctx_mvd_cost_origin, ctx_pps_array, ctx_rc_at, ctx_ref_list, ctx_sps_array,
+    ctx_subset_array,
 };
 
 pub const P_SLICE: i32 = 0;
@@ -2122,11 +2123,7 @@ pub unsafe fn WelsMdInterMbLoop(
     let mut iCurMbIdx: i32;
     let kiTotalNumMb: i32 = (*pCurLayer).iMbWidth as i32 * (*pCurLayer).iMbHeight as i32;
     let kiMvdInterTableStride = (*pEncCtx).iMvdCostTableStride;
-    let pMvdCostTable = if !(*pEncCtx).pMvdCostTable.is_null() {
-        (*pEncCtx).pMvdCostTable.add((*pEncCtx).iMvdCostTableSize as usize)
-    } else {
-        std::ptr::null_mut()
-    };
+    let pMvdCostTable = ctx_mvd_cost_origin(pEncCtx);
     let kiSliceIdx = (*pSlice).iSliceIdx;
     let kuiChromaQpIndexOffset = if !layer_pps(pEncCtx, pCurLayer).is_null() {
         (*layer_pps(pEncCtx, pCurLayer)).uiChromaQpIndexOffset
@@ -2290,11 +2287,7 @@ pub unsafe fn WelsMdInterMbLoopOverDynamicSlice(
     let mut iNextMbIdx = kiSliceFirstMbXY;
     let mut iCurMbIdx: i32;
     let kiMvdInterTableStride = (*pEncCtx).iMvdCostTableStride;
-    let pMvdCostTable = if !(*pEncCtx).pMvdCostTable.is_null() {
-        (*pEncCtx).pMvdCostTable.add((*pEncCtx).iMvdCostTableSize as usize)
-    } else {
-        std::ptr::null_mut()
-    };
+    let pMvdCostTable = ctx_mvd_cost_origin(pEncCtx);
     let kiSliceIdx = (*pSlice).iSliceIdx;
     let kiPartitionId = (kiSliceIdx % ((*pEncCtx).iActiveThreadsNum as i32)) as usize;
     let kuiChromaQpIndexOffset = if !layer_pps(pEncCtx, pCurLayer).is_null() {
