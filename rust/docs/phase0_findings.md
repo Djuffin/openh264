@@ -2573,3 +2573,37 @@ change.
 
 Running total: **seventy-nine measurements, twenty-five alternations, fifty-two
 acquittals.**
+
+---
+
+### Eightieth measurement — 2026-08-20, Phase 6 session G's step-1 `family`: one hit per profile, both the signature, both clear
+
+The `family` battery after `sWelsEncCtx::new()` landed (T6.G1) failed **one
+configuration in each profile**, and both are the signature exactly — `mt`, `sm=3`,
+`t=4`, zero-byte Rust output:
+
+```
+debug:   mt CiscoVT2people_160x96_6fps   t=4 sm=3 n=600 cabac=0 rc=0 :: C++ 42538  Rust 0
+release: mt CiscoVT2people_320x192_12fps t=4 sm=3 n=600 cabac=0 rc=0 :: C++ 40992  Rust 0
+```
+
+Everything else in the battery was green: 368/369 each way, tests 492/486/20, census 58.
+
+**The retry rule, applied to each configuration in its own profile: 5/5
+byte-identical, both.** The loop rebuilt the harness per profile before running (the
+two profiles share `out/` names) and was written as bash — measurement 78's trap,
+which is now the second thing this retry script checks after the configuration
+itself.
+
+The commit under test cannot produce this class in any case, and that is worth saying
+because it is the cheapest kind of acquittal there is: T6.G1 replaces
+`mem::zeroed()` with a field-wise constructor that this same commit proves equal to
+the zeroed image at every byte the type defines, and adds a test. It changes no
+encoder arithmetic, no slice bookkeeping, and nothing on any thread. F61's class —
+the multi-threaded slice-bank growth that never re-stamps the layer's slice list — is
+untouched and is still Phase 7's.
+
+**Acquitted as F3, both.**
+
+Running total: **eighty-one measurements, twenty-five alternations, fifty-four
+acquittals.**
