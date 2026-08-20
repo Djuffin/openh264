@@ -304,7 +304,7 @@ impl CWelsParametersetIdStrategyObj {
 
     /// `UpdatePpsList` — `paraset_strategy.h:114`; empty body.
     #[inline]
-    pub fn UpdatePpsList(&mut self, _pCtx: &mut sWelsEncCtx) {}
+    pub fn UpdatePpsList(&mut self, _pCtx: *mut sWelsEncCtx) {}
 
     /// `CheckParamCompatibility` — `paraset_strategy.h:116`; unconditionally true.
     #[inline]
@@ -320,20 +320,17 @@ impl CWelsParametersetIdStrategyObj {
     ///
     /// # Safety
     /// `pCtx` must satisfy [`WelsGenerateNewSps`]'s contract.
-    pub fn GenerateNewSps(
+    pub unsafe fn GenerateNewSps(
         &mut self,
-        pCtx: &mut sWelsEncCtx,
+        pCtx: *mut sWelsEncCtx,
         kbUseSubsetSps: bool,
         iDlayerIndex: i32,
         iDlayerCount: i32,
         kuiSpsId: u32,
         bSVCBaselayer: bool,
-    ) -> u32 { unsafe {
-        // **T6.J1.** Safe signature, raw body: one derivation from the
-        // caller's `&mut`, and the body below is unchanged.
-        let pCtx: *mut sWelsEncCtx = pCtx;
+    ) -> u32 {
         WelsGenerateNewSps(
-            &mut *pCtx,
+            pCtx,
             kbUseSubsetSps,
             iDlayerIndex,
             iDlayerCount,
@@ -341,7 +338,7 @@ impl CWelsParametersetIdStrategyObj {
             bSVCBaselayer,
         );
         kuiSpsId
-    }}
+    }
 
     /// `InitPps` — `paraset_strategy.cpp:276`.
     ///
@@ -353,9 +350,9 @@ impl CWelsParametersetIdStrategyObj {
     ///
     /// # Safety
     /// `pCtx->pPPSArray` must hold at least `kuiPpsId + 1` entries.
-    pub fn InitPps(
+    pub unsafe fn InitPps(
         &mut self,
-        pCtx: &mut sWelsEncCtx,
+        pCtx: *mut sWelsEncCtx,
         _kiSpsId: u32,
         pSps: Option<&SWelsSPS>,
         pSubsetSps: Option<&SSubsetSps>,
@@ -363,10 +360,7 @@ impl CWelsParametersetIdStrategyObj {
         _kbDeblockingFilterPresentFlag: bool,
         kbUsingSubsetSps: bool,
         kbEntropyCodingModeFlag: bool,
-    ) -> u32 { unsafe {
-        // **T6.J1.** Safe signature, raw body: one derivation from the
-        // caller's `&mut`, and the body below is unchanged.
-        let pCtx: *mut sWelsEncCtx = pCtx;
+    ) -> u32 {
         WelsInitPps(
             &mut *ctx_pps_array(pCtx).add(kuiPpsId as usize),
             pSps,
@@ -378,7 +372,7 @@ impl CWelsParametersetIdStrategyObj {
         );
         self.SetUseSubsetFlag(kuiPpsId, kbUsingSubsetSps);
         kuiPpsId
-    }}
+    }
 
     /// `SetUseSubsetFlag` — `paraset_strategy.cpp:288`.
     #[inline]
@@ -388,7 +382,7 @@ impl CWelsParametersetIdStrategyObj {
 
     /// `UpdateParaSetNum` — `paraset_strategy.h:139`; empty.
     #[inline]
-    pub fn UpdateParaSetNum(&mut self, _pCtx: &mut sWelsEncCtx) {}
+    pub fn UpdateParaSetNum(&mut self, _pCtx: *mut sWelsEncCtx) {}
 
     /// `GetCurrentPpsId` — `paraset_strategy.h:141`.
     #[inline]
@@ -408,17 +402,14 @@ impl CWelsParametersetIdStrategyObj {
 /// # Safety
 /// `pCtx` must have `pSvcParam` set and `pSpsArray`/`pSubsetArray` allocated to at
 /// least `kiSpsId + 1` entries.
-pub fn WelsGenerateNewSps(
-    pCtx: &mut sWelsEncCtx,
+pub unsafe fn WelsGenerateNewSps(
+    pCtx: *mut sWelsEncCtx,
     kbUseSubsetSps: bool,
     iDlayerIndex: i32,
     iDlayerCount: i32,
     kiSpsId: i32,
     bSVCBaselayer: bool,
-) -> i32 { unsafe {
-    // **T6.J2.** Safe signature, raw body: one derivation from the
-    // caller's `&mut`, and the body below is unchanged.
-    let pCtx: *mut sWelsEncCtx = pCtx;
+) -> i32 {
     let iRet;
     // **T6.G3: the two `*mut *mut` out-parameters are gone**, and with them the
     // block that filled them. They handed the caller back exactly
@@ -461,7 +452,7 @@ pub fn WelsGenerateNewSps(
         );
     }
     iRet
-}}
+}
 
 /// `ParasetIdAdditionIdAdjust` — `paraset_strategy.cpp:337`.
 ///
@@ -522,17 +513,14 @@ fn ParasetIdAdditionIdAdjust(
 /// call sites that run before that point test the field first. Panics rather than
 /// dereferencing null if the invariant is broken; the vtable version was UB there.
 #[inline]
-pub fn ParasetStrategy<'a>(
-    pCtx: &mut sWelsEncCtx,
-) -> &'a mut CWelsParametersetIdStrategyObj { unsafe {
-    // **T6.J2.** Safe signature, raw body: one derivation from the
-    // caller's `&mut`, and the body below is unchanged.
-    let pCtx: *mut sWelsEncCtx = pCtx;
+pub unsafe fn ParasetStrategy<'a>(
+    pCtx: *mut sWelsEncCtx,
+) -> &'a mut CWelsParametersetIdStrategyObj {
     (*ctx_func_list(pCtx))
         .pParametersetStrategy
         .as_deref_mut()
         .expect("pParametersetStrategy is installed by InitFunctionPointers")
-}}
+}
 
 /// `IWelsParametersetStrategy::CreateParametersetStrategy` — `paraset_strategy.cpp:40`.
 ///

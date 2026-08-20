@@ -426,7 +426,7 @@ pub unsafe fn WelsWriteOneSPS(pCtx: *mut sWelsEncCtx, kiSpsIdx: i32, iNalSize: *
         &mut (&mut *pOut).sBsBuffer[..],
         &*ctx_sps_array(pCtx).add(kiSpsIdx as usize),
         &mut (*pOut).sBsWrite,
-        ParasetStrategy(&mut *pCtx).GetSpsIdOffsetList(PARA_SET_TYPE_AVCSPS as i32),
+        ParasetStrategy(pCtx).GetSpsIdOffsetList(PARA_SET_TYPE_AVCSPS as i32),
     );
     crate::encoder::nal_encap::WelsUnloadNal(pOut);
 
@@ -462,7 +462,7 @@ pub unsafe fn WelsWriteOnePPS(pCtx: *mut sWelsEncCtx, kiPpsIdx: i32, iNalSize: *
         &mut (&mut *pOut).sBsBuffer[..],
         &*ctx_pps_array(pCtx).add(kiPpsIdx as usize),
         &mut (*pOut).sBsWrite,
-        ParasetStrategy(&mut *pCtx),
+        ParasetStrategy(pCtx),
     );
     crate::encoder::nal_encap::WelsUnloadNal(pOut);
 
@@ -519,12 +519,12 @@ pub unsafe fn WelsWriteParameterSets(
     /* write all SPS */
     iIdx = 0;
     while iIdx < (*pCtx).iSpsNum {
-        ParasetStrategy(&mut *pCtx).Update(
+        ParasetStrategy(pCtx).Update(
             (*ctx_sps_array(pCtx).add(iIdx as usize)).uiSpsId,
             PARA_SET_TYPE_AVCSPS as i32,
         );
         /* generate sequence parameters set */
-        iId = ParasetStrategy(&mut *pCtx).GetSpsIdx(iIdx);
+        iId = ParasetStrategy(pCtx).GetSpsIdx(iIdx);
 
         WelsWriteOneSPS(pCtx, iId, &mut iNalLength);
 
@@ -540,7 +540,7 @@ pub unsafe fn WelsWriteParameterSets(
     while iIdx < (*pCtx).iSubsetSpsNum {
         iNal = (*(*pCtx).pOut).iNalIndex;
 
-        ParasetStrategy(&mut *pCtx).Update(
+        ParasetStrategy(pCtx).Update(
             (*ctx_subset_array(pCtx).add(iIdx as usize)).pSps.uiSpsId,
             PARA_SET_TYPE_SUBSETSPS as i32,
         );
@@ -558,7 +558,7 @@ pub unsafe fn WelsWriteParameterSets(
             &mut (&mut *(*pCtx).pOut).sBsBuffer[..],
             &*ctx_subset_array(pCtx).add(iId as usize),
             &mut (*(*pCtx).pOut).sBsWrite,
-            ParasetStrategy(&mut *pCtx).GetSpsIdOffsetList(PARA_SET_TYPE_SUBSETSPS as i32),
+            ParasetStrategy(pCtx).GetSpsIdOffsetList(PARA_SET_TYPE_SUBSETSPS as i32),
         );
         crate::encoder::nal_encap::WelsUnloadNal((*pCtx).pOut);
 
@@ -582,11 +582,11 @@ pub unsafe fn WelsWriteParameterSets(
         iCountNal += 1;
     }
 
-    ParasetStrategy(&mut *pCtx).UpdatePpsList(&mut *pCtx);
+    ParasetStrategy(pCtx).UpdatePpsList(pCtx);
 
     iIdx = 0;
     while iIdx < (*pCtx).iPpsNum {
-        ParasetStrategy(&mut *pCtx).Update(
+        ParasetStrategy(pCtx).Update(
             (*ctx_pps_array(pCtx).add(iIdx as usize)).iPpsId,
             PARA_SET_TYPE_PPS as i32,
         );
@@ -645,15 +645,12 @@ pub unsafe fn WelsEncoderEncodeParameterSetsRust(
     ENC_RETURN_SUCCESS
 }
 
-pub fn ForceCodingIDR(pCtx: &mut sWelsEncCtx, _iLayerId: i32) -> i32 { unsafe {
-    // **T6.J2.** Safe signature, raw body: one derivation from the
-    // caller's `&mut`, and the body below is unchanged.
-    let pCtx: *mut sWelsEncCtx = pCtx;
+pub unsafe fn ForceCodingIDR(pCtx: *mut sWelsEncCtx, _iLayerId: i32) -> i32 {
     if pCtx.is_null() {
         return 1;
     }
     0
-}}
+}
 
 /// `WelsEncoderParamAdjust` — codec/encoder/core/src/encoder_ext.cpp:4182.
 ///
@@ -817,7 +814,7 @@ pub unsafe fn WelsEncoderParamAdjust(
         let mut pExistingParasetList: *mut SExistingParasetList = null_mut();
 
         if iOldSpsPpsIdStrategy != CONSTANT_ID && (*pNewParam).eSpsPpsIdStrategy != CONSTANT_ID {
-            ParasetStrategy(&mut **ppCtx).OutputCurrentStructure(
+            ParasetStrategy(*ppCtx).OutputCurrentStructure(
                 sTmpPsoVariable.as_mut_ptr(),
                 iTmpPpsIdList.as_mut_ptr(),
                 *ppCtx,
@@ -857,7 +854,7 @@ pub unsafe fn WelsEncoderParamAdjust(
             || (iOldSpsPpsIdStrategy == SPS_PPS_LISTING
                 && (*pNewParam).eSpsPpsIdStrategy == SPS_PPS_LISTING)
         {
-            ParasetStrategy(&mut **ppCtx).LoadPreviousStructure(
+            ParasetStrategy(*ppCtx).LoadPreviousStructure(
                 sTmpPsoVariable.as_mut_ptr(),
                 iTmpPpsIdList.as_mut_ptr(),
             );
@@ -1826,7 +1823,7 @@ impl CWelsH264SVCEncoder {
                 return 1;
             }
             unsafe {
-                ForceCodingIDR(&mut *self.m_pEncContext, iLayerId);
+                ForceCodingIDR(self.m_pEncContext, iLayerId);
             }
         }
         0

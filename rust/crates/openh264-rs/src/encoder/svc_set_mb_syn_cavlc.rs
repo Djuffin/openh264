@@ -670,13 +670,10 @@ pub unsafe fn WelsSpatialWriteSubMbPred(
 ///                                                  negative — same verdict)
 pub fn CheckBitstreamBuffer(
     _kuiSliceIdx: u32,
-    _pEncCtx: &mut sWelsEncCtx,
+    _pEncCtx: *mut sWelsEncCtx,
     buf: &[u8],
     pBs: &BsWriter,
-) -> i32 { unsafe {
-    // **T6.J1.** Safe signature, raw body: one derivation from the
-    // caller's `&mut`, and the body below is unchanged.
-    let _pEncCtx: *mut sWelsEncCtx = _pEncCtx;
+) -> i32 {
     let (pos, len) = (pBs.pos(), buf.len());
     debug_assert!(pos + 1 < len, "the writer is already at or past the buffer end");
 
@@ -684,7 +681,7 @@ pub fn CheckBitstreamBuffer(
         return ENC_RETURN_VLCOVERFLOWFOUND;
     }
     ENC_RETURN_SUCCESS
-}}
+}
 
 /// Top-level macroblock CAVLC bitstream serialization function.
 ///
@@ -768,7 +765,7 @@ pub unsafe fn WelsSpatialWriteMbSyn(
         // Step 4: Check the left buffer
         CheckBitstreamBuffer(
             (*pSlice).iSliceIdx as u32,
-            &mut *pEncCtx,
+            pEncCtx,
             crate::encoder::svc_encode_slice::slice_bs_buffer(pEncCtx, pSlice),
             &*pBs,
         )
