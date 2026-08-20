@@ -219,7 +219,10 @@ pub unsafe fn ResetLtrState(pLtr: *mut SLTRState) {
 }
 
 /// Reset active reference picture lists for current spatial layer.
-pub unsafe fn WelsResetRefList(pCtx: *mut sWelsEncCtx) {
+pub fn WelsResetRefList(pCtx: &mut sWelsEncCtx) { unsafe {
+    // **T6.J3.** Safe signature, raw body: one derivation from the
+    // caller's `&mut`, and the body below is unchanged.
+    let pCtx: *mut sWelsEncCtx = pCtx;
     if pCtx.is_null() {
         return;
     }
@@ -261,7 +264,7 @@ pub unsafe fn WelsResetRefList(pCtx: *mut sWelsEncCtx) {
     } else {
         Some((*pRefList).pRef.at(0))
     };
-}
+}}
 
 /// Remove a long-term reference entry by index from pLongRefList.
 pub unsafe fn DeleteLTRFromLongList(pCtx: *mut sWelsEncCtx, iIdx: i32) {
@@ -310,7 +313,10 @@ pub unsafe fn DeleteSTRFromShortList(pCtx: *mut sWelsEncCtx, iIdx: i32) {
 }
 
 /// Unreferences non-scene LTR frames when current frame is marked as Scene LTR.
-pub unsafe fn DeleteNonSceneLTR(pCtx: *mut sWelsEncCtx) {
+pub fn DeleteNonSceneLTR(pCtx: &mut sWelsEncCtx) { unsafe {
+    // **T6.J3.** Safe signature, raw body: one derivation from the
+    // caller's `&mut`, and the body below is unchanged.
+    let pCtx: *mut sWelsEncCtx = pCtx;
     if pCtx.is_null() || ctx_param(pCtx).is_null() {
         return;
     }
@@ -340,7 +346,7 @@ pub unsafe fn DeleteNonSceneLTR(pCtx: *mut sWelsEncCtx) {
         }
         i += 1;
     }
-}
+}}
 
 /// Modular frame number distance comparison arithmetic.
 pub fn CompareFrameNum(iFrameNumA: i32, iFrameNumB: i32, iMaxFrameNumPlus1: i32) -> i32 {
@@ -375,7 +381,10 @@ pub fn CompareFrameNum(iFrameNumA: i32, iFrameNumB: i32, iMaxFrameNumPlus1: i32)
 }
 
 /// Purges unacknowledged or invalid LTR frames based on decoder feedback.
-pub unsafe fn DeleteInvalidLTR(pCtx: *mut sWelsEncCtx) {
+pub fn DeleteInvalidLTR(pCtx: &mut sWelsEncCtx) { unsafe {
+    // **T6.J3.** Safe signature, raw body: one derivation from the
+    // caller's `&mut`, and the body below is unchanged.
+    let pCtx: *mut sWelsEncCtx = pCtx;
     if pCtx.is_null() || ctx_sps(pCtx).is_null() || ctx_param(pCtx).is_null() {
         return;
     }
@@ -424,10 +433,13 @@ pub unsafe fn DeleteInvalidLTR(pCtx: *mut sWelsEncCtx) {
             }
         }
     }
-}
+}}
 
 /// Handles asynchronous decoder confirmation or failure feedback for LTR marking.
-pub unsafe fn HandleLTRMarkFeedback(pCtx: *mut sWelsEncCtx) {
+pub fn HandleLTRMarkFeedback(pCtx: &mut sWelsEncCtx) { unsafe {
+    // **T6.J3.** Safe signature, raw body: one derivation from the
+    // caller's `&mut`, and the body below is unchanged.
+    let pCtx: *mut sWelsEncCtx = pCtx;
     if pCtx.is_null() || ctx_param(pCtx).is_null() {
         return;
     }
@@ -502,10 +514,13 @@ pub unsafe fn HandleLTRMarkFeedback(pCtx: *mut sWelsEncCtx) {
             (*pParamInternal).bEncCurFrmAsIdrFlag = true;
         }
     }
-}
+}}
 
 /// Executes promotion and movement of frames from short-term to long-term lists.
-pub unsafe fn LTRMarkProcess(pCtx: *mut sWelsEncCtx) {
+pub fn LTRMarkProcess(pCtx: &mut sWelsEncCtx) { unsafe {
+    // **T6.J3.** Safe signature, raw body: one derivation from the
+    // caller's `&mut`, and the body below is unchanged.
+    let pCtx: *mut sWelsEncCtx = pCtx;
     if pCtx.is_null() || ctx_param(pCtx).is_null() || ctx_sps(pCtx).is_null() {
         return;
     }
@@ -605,10 +620,13 @@ pub unsafe fn LTRMarkProcess(pCtx: *mut sWelsEncCtx) {
         }
         DeleteSTRFromShortList(pCtx, i as i32);
     }
-}
+}}
 
 /// Executes promotion of screen content references to long-term reference slots.
-pub unsafe fn LTRMarkProcessScreen(pCtx: *mut sWelsEncCtx) {
+pub fn LTRMarkProcessScreen(pCtx: &mut sWelsEncCtx) { unsafe {
+    // **T6.J3.** Safe signature, raw body: one derivation from the
+    // caller's `&mut`, and the body below is unchanged.
+    let pCtx: *mut sWelsEncCtx = pCtx;
     if pCtx.is_null() {
         return;
     }
@@ -632,7 +650,7 @@ pub unsafe fn LTRMarkProcessScreen(pCtx: *mut sWelsEncCtx) {
         }
         (*pRefList).pLongRefList[iLtrIdx as usize] = Some(idDec);
     }
-}
+}}
 
 /// Pre-allocates destination frame buffer pointer pDecPic for upcoming reconstruction.
 pub unsafe fn PrefetchNextBuffer(pCtx: *mut sWelsEncCtx) {
@@ -741,9 +759,9 @@ pub fn WelsUpdateRefList(pCtx: &mut sWelsEncCtx) -> bool { unsafe {
     if keSliceType == EWelsSliceType::P_SLICE {
         if (*pCtx).uiTemporalId == 0 {
             if (*ctx_param(pCtx)).bEnableLongTermReference {
-                LTRMarkProcess(pCtx);
-                DeleteInvalidLTR(pCtx);
-                HandleLTRMarkFeedback(pCtx);
+                LTRMarkProcess(&mut *pCtx);
+                DeleteInvalidLTR(&mut *pCtx);
+                HandleLTRMarkFeedback(&mut *pCtx);
 
                 pLtr.bReceivedT0LostFlag = false;
                 pLtr.bLTRMarkingFlag = false;
@@ -775,7 +793,7 @@ pub fn WelsUpdateRefList(pCtx: &mut sWelsEncCtx) -> bool { unsafe {
         }
     } else {
         if (*ctx_param(pCtx)).bEnableLongTermReference {
-            LTRMarkProcess(pCtx);
+            LTRMarkProcess(&mut *pCtx);
 
             pLtr.iCurLtrIdx = (pLtr.iCurLtrIdx + 1) % LONG_TERM_REF_NUM;
             pLtr.iLTRMarkSuccessNum = 1;
@@ -800,12 +818,15 @@ pub fn WelsUpdateRefList(pCtx: &mut sWelsEncCtx) -> bool { unsafe {
     // `RefStrategyKind::UpdateRefList` is its one caller, so by the time the body
     // runs the kind has already been read. The guard was re-checking a thing its
     // caller had just dereferenced.
-    (*pCtx).eRefStrategy.EndofUpdateRefList(pCtx);
+    (*pCtx).eRefStrategy.EndofUpdateRefList(&mut *pCtx);
     true
 }}
 
 /// Checks whether candidate frame number is already occupied in LTR list.
-pub unsafe fn CheckCurMarkFrameNumUsed(pCtx: *mut sWelsEncCtx) -> bool {
+pub fn CheckCurMarkFrameNumUsed(pCtx: &mut sWelsEncCtx) -> bool { unsafe {
+    // **T6.J3.** Safe signature, raw body: one derivation from the
+    // caller's `&mut`, and the body below is unchanged.
+    let pCtx: *mut sWelsEncCtx = pCtx;
     if pCtx.is_null() || ctx_param(pCtx).is_null() || ctx_sps(pCtx).is_null() {
         return false;
     }
@@ -842,7 +863,7 @@ pub unsafe fn CheckCurMarkFrameNumUsed(pCtx: *mut sWelsEncCtx) -> bool {
         }
     }
     true
-}
+}}
 
 /// Replicates base slice header reference marking syntax across all slices.
 pub unsafe fn WelsMarkMMCORefInfoWithBase(
@@ -939,7 +960,7 @@ pub fn WelsMarkPic(pCtx: &mut sWelsEncCtx) { unsafe {
     if (*ctx_param(pCtx)).bEnableLongTermReference && pLtr.bLTRMarkEnable && (*pCtx).uiTemporalId == 0 {
         if !pLtr.bReceivedT0LostFlag
             && pLtr.uiLtrMarkInterval > (*ctx_param(pCtx)).iLtrMarkPeriod as u32
-            && CheckCurMarkFrameNumUsed(pCtx)
+            && CheckCurMarkFrameNumUsed(&mut *pCtx)
         {
             pLtr.bLTRMarkingFlag = true;
             pLtr.bLTRMarkEnable = false;
@@ -1094,7 +1115,7 @@ pub fn WelsBuildRefList(
             }
         }
     } else {
-        WelsResetRefList(pCtx);
+        WelsResetRefList(&mut *pCtx);
         ResetLtrState(&mut *ctx_ltr_at(pCtx, (uiDid) as usize));
         for k in 0..MAX_TEMPORAL_LEVEL {
             (*pCtx).bRefOfCurTidIsLtr[uiDid][k] = false;
@@ -1348,12 +1369,12 @@ pub fn WelsUpdateRefListScreen(pCtx: &mut sWelsEncCtx) -> bool { unsafe {
     }
 
     if (*pCtx).eSliceType == EWelsSliceType::P_SLICE {
-        DeleteNonSceneLTR(pCtx);
-        LTRMarkProcessScreen(pCtx);
+        DeleteNonSceneLTR(&mut *pCtx);
+        LTRMarkProcessScreen(&mut *pCtx);
         pLtr.bLTRMarkingFlag = false;
         pLtr.uiLtrMarkInterval += 1;
     } else {
-        LTRMarkProcessScreen(pCtx);
+        LTRMarkProcessScreen(&mut *pCtx);
         pLtr.iCurLtrIdx = 1;
         pLtr.iSceneLtrIdx = 1;
         pLtr.uiLtrMarkInterval = 0;
@@ -1364,7 +1385,7 @@ pub fn WelsUpdateRefListScreen(pCtx: &mut sWelsEncCtx) -> bool { unsafe {
 
     // Same dispatch and the same guard argument as `WelsUpdateRefList` above: this
     // body is reached only through `RefStrategyKind::UpdateRefList`.
-    (*pCtx).eRefStrategy.EndofUpdateRefList(pCtx);
+    (*pCtx).eRefStrategy.EndofUpdateRefList(&mut *pCtx);
     true
 }}
 
@@ -1439,7 +1460,7 @@ pub fn WelsBuildRefListScreen(
             }
         }
     } else {
-        WelsResetRefList(pCtx);
+        WelsResetRefList(&mut *pCtx);
         ResetLtrState(&mut *ctx_ltr_at(pCtx, (uiDid) as usize));
         (*pCtx).pRefList0[0] = None;
     }
@@ -1598,7 +1619,7 @@ pub fn WelsMarkPicScreen(pCtx: &mut sWelsEncCtx) { unsafe {
 
 /// Intentional no-op reference list manager callback.
 /// Matches `void DoNothing (sWelsEncCtx* pointer)` in `ref_list_mgr_svc.cpp:996`.
-pub unsafe fn DoNothing(_pCtx: *mut sWelsEncCtx) {}
+pub fn DoNothing(_pCtx: &mut sWelsEncCtx) {}
 
 // ============================================================================
 // Reference strategy — T4b.2b
@@ -1716,7 +1737,10 @@ impl RefStrategyKind {
     /// # Safety
     /// `pCtx` must be a live encoder context.
     #[inline]
-    pub unsafe fn EndofUpdateRefList(self, pCtx: *mut sWelsEncCtx) {
+    pub fn EndofUpdateRefList(self, pCtx: &mut sWelsEncCtx) { unsafe {
+        // **T6.J3.** Safe signature, raw body: one derivation from the
+        // caller's `&mut`, and the body below is unchanged.
+        let pCtx: *mut sWelsEncCtx = pCtx;
         match self {
             RefStrategyKind::TemporalLayer => PrefetchNextBuffer(pCtx),
             RefStrategyKind::Screen => UpdateSrcPicList(pCtx),
@@ -1724,7 +1748,7 @@ impl RefStrategyKind {
                 UpdateSrcPicListLosslessScreenRefSelectionWithLtr(pCtx)
             }
         }
-    }
+    }}
 
     /// `AfterBuildRefList` — `DoNothing` for the temporal-layer strategy,
     /// `UpdateBlockStatic` for both screen ones.
@@ -1737,7 +1761,7 @@ impl RefStrategyKind {
         // caller's `&mut`, and the body below is unchanged.
         let pCtx: *mut sWelsEncCtx = pCtx;
         match self {
-            RefStrategyKind::TemporalLayer => DoNothing(pCtx),
+            RefStrategyKind::TemporalLayer => DoNothing(&mut *pCtx),
             RefStrategyKind::Screen | RefStrategyKind::LosslessWithLtr => UpdateBlockStatic(&mut *pCtx),
         }
     }}
@@ -1749,9 +1773,14 @@ mod tests {
 
     #[test]
     fn test_ref_list_mgr_noop_callback() {
-        unsafe {
-            DoNothing(std::ptr::null_mut());
-        }
+        // **T6.J3.** `DoNothing` takes `&mut sWelsEncCtx` now, and a null reference
+        // is UB `deny(deref_nullptr)` rejects outright, so the null that used to
+        // prove "reads nothing" is gone. A real context and an unchanged field is
+        // the weaker claim that survives.
+        let mut ctx = sWelsEncCtx::new();
+        let before = ctx.iGlobalQp;
+        DoNothing(&mut ctx);
+        assert_eq!(ctx.iGlobalQp, before, "the no-op callback wrote to the context");
     }
 
     /// The whole of `CreateReferenceStrategy`, which used to be a two-level `match`
