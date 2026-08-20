@@ -267,7 +267,10 @@ pub fn WelsResetRefList(pCtx: &mut sWelsEncCtx) { unsafe {
 }}
 
 /// Remove a long-term reference entry by index from pLongRefList.
-pub unsafe fn DeleteLTRFromLongList(pCtx: *mut sWelsEncCtx, iIdx: i32) {
+pub fn DeleteLTRFromLongList(pCtx: &mut sWelsEncCtx, iIdx: i32) { unsafe {
+    // **T6.J4.** Safe signature, raw body: one derivation from the
+    // caller's `&mut`, and the body below is unchanged.
+    let pCtx: *mut sWelsEncCtx = pCtx;
     if pCtx.is_null() {
         return;
     }
@@ -287,10 +290,13 @@ pub unsafe fn DeleteLTRFromLongList(pCtx: *mut sWelsEncCtx, iIdx: i32) {
     if (*pRefList).uiLongRefCount > 0 {
         (*pRefList).uiLongRefCount -= 1;
     }
-}
+}}
 
 /// Remove a short-term reference entry by index from pShortRefList.
-pub unsafe fn DeleteSTRFromShortList(pCtx: *mut sWelsEncCtx, iIdx: i32) {
+pub fn DeleteSTRFromShortList(pCtx: &mut sWelsEncCtx, iIdx: i32) { unsafe {
+    // **T6.J4.** Safe signature, raw body: one derivation from the
+    // caller's `&mut`, and the body below is unchanged.
+    let pCtx: *mut sWelsEncCtx = pCtx;
     if pCtx.is_null() {
         return;
     }
@@ -310,7 +316,7 @@ pub unsafe fn DeleteSTRFromShortList(pCtx: *mut sWelsEncCtx, iIdx: i32) {
     if (*pRefList).uiShortRefCount > 0 {
         (*pRefList).uiShortRefCount -= 1;
     }
-}
+}}
 
 /// Unreferences non-scene LTR frames when current frame is marked as Scene LTR.
 pub fn DeleteNonSceneLTR(pCtx: &mut sWelsEncCtx) { unsafe {
@@ -341,7 +347,7 @@ pub fn DeleteNonSceneLTR(pCtx: &mut sWelsEncCtx) { unsafe {
         if hit {
             let id = (*pRefList).pLongRefList[i as usize].expect("checked just above");
             (*pRefList).pic_mut(id).SetUnref();
-            DeleteLTRFromLongList(pCtx, i);
+            DeleteLTRFromLongList(&mut *pCtx, i);
             i -= 1;
         }
         i += 1;
@@ -408,7 +414,7 @@ pub fn DeleteInvalidLTR(pCtx: &mut sWelsEncCtx) { unsafe {
 
             if cond1 {
                 (*pRefList).pic_mut(idPic).SetUnref();
-                DeleteLTRFromLongList(pCtx, i);
+                DeleteLTRFromLongList(&mut *pCtx, i);
                 pLtr.bLTRMarkEnable = true;
                 if (*pRefList).uiLongRefCount == 0 {
                     (*pParamInternal).bEncCurFrmAsIdrFlag = true;
@@ -424,7 +430,7 @@ pub fn DeleteInvalidLTR(pCtx: &mut sWelsEncCtx) { unsafe {
 
                 if cond2 {
                     (*pRefList).pic_mut(idPic).SetUnref();
-                    DeleteLTRFromLongList(pCtx, i);
+                    DeleteLTRFromLongList(&mut *pCtx, i);
                     pLtr.bLTRMarkEnable = true;
                     if (*pRefList).uiLongRefCount == 0 {
                         (*pParamInternal).bEncCurFrmAsIdrFlag = true;
@@ -478,7 +484,7 @@ pub fn HandleLTRMarkFeedback(pCtx: &mut sWelsEncCtx) { unsafe {
                     if drop {
                         let id = (*pRefList).pLongRefList[j as usize].expect("checked just above");
                         (*pRefList).pic_mut(id).SetUnref();
-                        DeleteLTRFromLongList(pCtx, j);
+                        DeleteLTRFromLongList(&mut *pCtx, j);
                     } else {
                         j += 1;
                     }
@@ -503,7 +509,7 @@ pub fn HandleLTRMarkFeedback(pCtx: &mut sWelsEncCtx) { unsafe {
             };
             if (*pRefList).pic(idPic).iFrameNum == pLtr.iLtrMarkFbFrameNum {
                 (*pRefList).pic_mut(idPic).SetUnref();
-                DeleteLTRFromLongList(pCtx, i);
+                DeleteLTRFromLongList(&mut *pCtx, i);
                 break;
             }
         }
@@ -616,9 +622,9 @@ pub fn LTRMarkProcess(pCtx: &mut sWelsEncCtx) { unsafe {
             if let Some(id) = (*pRefList).pLongRefList[lastIdx] {
                 (*pRefList).pic_mut(id).SetUnref();
             }
-            DeleteLTRFromLongList(pCtx, lastIdx as i32);
+            DeleteLTRFromLongList(&mut *pCtx, lastIdx as i32);
         }
-        DeleteSTRFromShortList(pCtx, i as i32);
+        DeleteSTRFromShortList(&mut *pCtx, i as i32);
     }
 }}
 
@@ -653,7 +659,10 @@ pub fn LTRMarkProcessScreen(pCtx: &mut sWelsEncCtx) { unsafe {
 }}
 
 /// Pre-allocates destination frame buffer pointer pDecPic for upcoming reconstruction.
-pub unsafe fn PrefetchNextBuffer(pCtx: *mut sWelsEncCtx) {
+pub fn PrefetchNextBuffer(pCtx: &mut sWelsEncCtx) { unsafe {
+    // **T6.J4.** Safe signature, raw body: one derivation from the
+    // caller's `&mut`, and the body below is unchanged.
+    let pCtx: *mut sWelsEncCtx = pCtx;
     if pCtx.is_null() || ctx_param(pCtx).is_null() {
         return;
     }
@@ -684,7 +693,7 @@ pub unsafe fn PrefetchNextBuffer(pCtx: *mut sWelsEncCtx) {
     }
 
     (*pCtx).pDecPic = (*pRefList).pNextBuffer;
-}
+}}
 
 /// Updates reference picture list after current frame reconstruction.
 pub fn WelsUpdateRefList(pCtx: &mut sWelsEncCtx) -> bool { unsafe {
@@ -773,7 +782,7 @@ pub fn WelsUpdateRefList(pCtx: &mut sWelsEncCtx) -> bool { unsafe {
                 if let Some(id) = (*pRefList).pShortRefList[i as usize] {
                     (*pRefList).pic_mut(id).SetUnref();
                 }
-                DeleteSTRFromShortList(pCtx, i);
+                DeleteSTRFromShortList(&mut *pCtx, i);
                 i -= 1;
             }
             if (*pRefList).uiShortRefCount > 0 {
@@ -787,7 +796,7 @@ pub fn WelsUpdateRefList(pCtx: &mut sWelsEncCtx) -> bool { unsafe {
                 if stale {
                     let id = (*pRefList).pShortRefList[0].expect("checked just above");
                     (*pRefList).pic_mut(id).SetUnref();
-                    DeleteSTRFromShortList(pCtx, 0);
+                    DeleteSTRFromShortList(&mut *pCtx, 0);
                 }
             }
         }
@@ -1276,7 +1285,10 @@ pub fn UpdateOriginalPicInfo(pOrigPic: &mut SPicture, pReconPic: &SPicture) {
 
 /// `UpdateOriginalPicInfo` over the context's current pair, resolving each handle in
 /// its own pool. A no-op if either is unset, as the C++'s null tests are.
-unsafe fn UpdateOriginalPicInfoFromCtx(pCtx: *mut sWelsEncCtx) {
+fn UpdateOriginalPicInfoFromCtx(pCtx: &mut sWelsEncCtx) { unsafe {
+    // **T6.J4.** Safe signature, raw body: one derivation from the
+    // caller's `&mut`, and the body below is unchanged.
+    let pCtx: *mut sWelsEncCtx = pCtx;
     let (Some(idEnc), Some(idDec)) = ((*pCtx).pEncPic, (*pCtx).pDecPic) else {
         return;
     };
@@ -1289,15 +1301,18 @@ unsafe fn UpdateOriginalPicInfoFromCtx(pCtx: *mut sWelsEncCtx) {
     let pRecon: &SPicture = (*pRefList).pic(idDec);
     let pOrig: &mut SPicture = (*(*pCtx).pVpp).m_pSpatialPicPool.get_mut(idEnc);
     UpdateOriginalPicInfo(pOrig, pRecon);
-}
+}}
 
-pub unsafe fn UpdateSrcPicListLosslessScreenRefSelectionWithLtr(pCtx: *mut sWelsEncCtx) {
+pub fn UpdateSrcPicListLosslessScreenRefSelectionWithLtr(pCtx: &mut sWelsEncCtx) { unsafe {
+    // **T6.J4.** Safe signature, raw body: one derivation from the
+    // caller's `&mut`, and the body below is unchanged.
+    let pCtx: *mut sWelsEncCtx = pCtx;
     if pCtx.is_null() {
         return;
     }
     let iDIdx = (*pCtx).uiDependencyId as i32;
-    UpdateOriginalPicInfoFromCtx(pCtx);
-    PrefetchNextBuffer(pCtx);
+    UpdateOriginalPicInfoFromCtx(&mut *pCtx);
+    PrefetchNextBuffer(&mut *pCtx);
     if !(*pCtx).pVpp.is_null() && !ctx_vaa(pCtx).is_null() {
         let pRefList = &*(ctx_ref_list(pCtx, iDIdx as usize));
         // wels_preprocess.h:143 takes const int32_t; the uint8_t field promotes.
@@ -1308,21 +1323,24 @@ pub unsafe fn UpdateSrcPicListLosslessScreenRefSelectionWithLtr(pCtx: *mut sWels
             pRefList,
         );
     }
-}
+}}
 
-pub unsafe fn UpdateSrcPicList(pCtx: *mut sWelsEncCtx) {
+pub fn UpdateSrcPicList(pCtx: &mut sWelsEncCtx) { unsafe {
+    // **T6.J4.** Safe signature, raw body: one derivation from the
+    // caller's `&mut`, and the body below is unchanged.
+    let pCtx: *mut sWelsEncCtx = pCtx;
     if pCtx.is_null() {
         return;
     }
     let iDIdx = (*pCtx).uiDependencyId as i32;
-    UpdateOriginalPicInfoFromCtx(pCtx);
-    PrefetchNextBuffer(pCtx);
+    UpdateOriginalPicInfoFromCtx(&mut *pCtx);
+    PrefetchNextBuffer(&mut *pCtx);
     if !(*pCtx).pVpp.is_null() {
         let pRefList = ctx_ref_list(pCtx, (iDIdx as usize) as usize);
         let shortCount = (*pRefList).uiShortRefCount;
         (*(*pCtx).pVpp).UpdateSrcList((*pCtx).pEncPic, iDIdx, shortCount as u32);
     }
-}
+}}
 
 /// Screen content specialized reference picture list update.
 pub fn WelsUpdateRefListScreen(pCtx: &mut sWelsEncCtx) -> bool { unsafe {
@@ -1742,10 +1760,10 @@ impl RefStrategyKind {
         // caller's `&mut`, and the body below is unchanged.
         let pCtx: *mut sWelsEncCtx = pCtx;
         match self {
-            RefStrategyKind::TemporalLayer => PrefetchNextBuffer(pCtx),
-            RefStrategyKind::Screen => UpdateSrcPicList(pCtx),
+            RefStrategyKind::TemporalLayer => PrefetchNextBuffer(&mut *pCtx),
+            RefStrategyKind::Screen => UpdateSrcPicList(&mut *pCtx),
             RefStrategyKind::LosslessWithLtr => {
-                UpdateSrcPicListLosslessScreenRefSelectionWithLtr(pCtx)
+                UpdateSrcPicListLosslessScreenRefSelectionWithLtr(&mut *pCtx)
             }
         }
     }}
