@@ -52,7 +52,7 @@ pub type PGetIntraPredFunc =
 pub type PIntraFineMdFunc = unsafe extern "C" fn(
     pEncCtx: *mut sWelsEncCtx,
     pWelsMd: &mut SWelsMD,
-    pCurMb: *mut SMB,
+    pCurMb: &mut SMB,
     pMbCache: &mut SMbCache,
 ) -> i32;
 
@@ -61,7 +61,7 @@ pub type PInterFineMdFunc = unsafe extern "C" fn(
     pEncCtx: *mut sWelsEncCtx,
     pWelsMd: &mut SWelsMD,
     slice: *mut SSlice,
-    pCurMb: *mut SMB,
+    pCurMb: &mut SMB,
     bestCost: i32,
 );
 
@@ -69,7 +69,7 @@ pub type PInterFineMdFunc = unsafe extern "C" fn(
 pub type PInterMdFirstIntraModeFunc = unsafe extern "C" fn(
     pEncCtx: *mut sWelsEncCtx,
     pWelsMd: &mut SWelsMD,
-    pCurMb: *mut SMB,
+    pCurMb: &mut SMB,
     pMbCache: &mut SMbCache,
 ) -> bool;
 
@@ -86,14 +86,14 @@ pub type PInterMdBackgroundDecisionFunc = unsafe extern "C" fn(
     pEncCtx: *mut sWelsEncCtx,
     pWelsMd: &mut SWelsMD,
     slice: *mut SSlice,
-    pCurMb: *mut SMB,
+    pCurMb: &mut SMB,
     pKeepPskip: *mut bool,
 ) -> bool;
 
 /// `wels_func_ptr_def.h:118`
 pub type PMdBackgroundInfoUpdateFunc = unsafe extern "C" fn(
     pCurLayer: *mut SDqLayer,
-    pCurMb: *mut SMB,
+    pCurMb: &mut SMB,
     bFlag: bool,
     kiRefPictureType: i32,
 );
@@ -103,7 +103,7 @@ pub type PInterMdScrollingPSkipDecisionFunc = unsafe extern "C" fn(
     pEncCtx: *mut sWelsEncCtx,
     pWelsMd: &mut SWelsMD,
     slice: *mut SSlice,
-    pCurMb: *mut SMB,
+    pCurMb: &mut SMB,
 ) -> bool;
 
 /// `wels_func_ptr_def.h:123`

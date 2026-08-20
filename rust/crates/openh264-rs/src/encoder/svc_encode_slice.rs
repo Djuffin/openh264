@@ -828,11 +828,8 @@ pub use crate::encoder::vlc_encoder::{
 
 /// Copies non-zero coefficient counts from `SMB` into the slice's `SMbCache`.
 #[inline]
-pub unsafe fn UpdateNonZeroCountCache(pMb: *mut SMB, pMbCache: &mut SMbCache) {
+pub unsafe fn UpdateNonZeroCountCache(pMb: &SMB, pMbCache: &mut SMbCache) {
     let pMbCache: *mut SMbCache = pMbCache; // one entry retag — md.rs's accessor note
-    if pMb.is_null() || pMbCache.is_null() {
-        return;
-    }
     // The `mb_nz.is_null()` guard that stood here was the port's own; the row is an
     // inline array and cannot be absent.
     let mb_nz = &(*pMb).iNonZeroCount;
@@ -1263,11 +1260,8 @@ pub unsafe fn WelsSliceHeaderExtWrite(
 // quantisation and reconstruction entirely. It was dead, but one unqualified
 // call in this file would have silently activated it.
 
-pub unsafe fn WelsIMbChromaEncode(pEncCtx: *mut sWelsEncCtx, pCurMb: *mut SMB, pMbCache: &mut SMbCache) {
+pub unsafe fn WelsIMbChromaEncode(pEncCtx: *mut sWelsEncCtx, pCurMb: &mut SMB, pMbCache: &mut SMbCache) {
     let pMbCache: *mut SMbCache = pMbCache; // one entry retag — md.rs's accessor note
-    if pEncCtx.is_null() || pCurMb.is_null() || pMbCache.is_null() {
-        return;
-    }
     let pCurLayer = (*pEncCtx).pCurDqLayer;
     let kiEncStride = (*pCurLayer).iEncStride[1];
     let kiCsStride = (*pCurLayer).iCsStride[1];
@@ -1302,10 +1296,7 @@ pub unsafe fn WelsIMbChromaEncode(pEncCtx: *mut sWelsEncCtx, pCurMb: *mut SMB, p
     pfIDctFourT4(pCsCr, kiCsStride, pBestPred.add(64), 8, pCurRS.add(64));
 }
 
-pub unsafe fn WelsPMbChromaEncode(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSlice, pCurMb: *mut SMB) {
-    if pEncCtx.is_null() || pSlice.is_null() || pCurMb.is_null() {
-        return;
-    }
+pub unsafe fn WelsPMbChromaEncode(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSlice, pCurMb: &mut SMB) {
     let pCurLayer = (*pEncCtx).pCurDqLayer;
     let kiEncStride = (*pCurLayer).iEncStride[1];
     let pMbCache = std::ptr::addr_of_mut!((*pSlice).sMbCacheInfo);
@@ -1359,10 +1350,7 @@ pub unsafe fn OutputPMbWithoutConstructCsRsNoCopy(pCtx: *mut sWelsEncCtx, pDq: *
     }
 }
 
-pub unsafe fn UpdateQpForOverflow(pCurMb: *mut SMB, kuiChromaQpIndexOffset: u8) {
-    if pCurMb.is_null() {
-        return;
-    }
+pub unsafe fn UpdateQpForOverflow(pCurMb: &mut SMB, kuiChromaQpIndexOffset: u8) {
     (*pCurMb).uiLumaQp = (*pCurMb).uiLumaQp.wrapping_add(DELTA_QP as u8);
     let clamped_idx = CLIP3_QP_0_51((*pCurMb).uiLumaQp as i32 + kuiChromaQpIndexOffset as i32);
     (*pCurMb).uiChromaQp = g_kuiChromaQpTable[clamped_idx];
@@ -1486,8 +1474,8 @@ pub unsafe fn WelsISliceMdEnc(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSlice) ->
         // TRY_REENCODING
         loop {
             sMd.iLambda = g_kiQpCostTable[(*pCurMb).uiLumaQp as usize];
-            crate::encoder::svc_base_layer_md::WelsMdIntraMb(pEncCtx, &mut sMd, pCurMb, &mut *pMbCache);
-            UpdateNonZeroCountCache(pCurMb, &mut *pMbCache);
+            crate::encoder::svc_base_layer_md::WelsMdIntraMb(pEncCtx, &mut sMd, &mut *pCurMb, &mut *pMbCache);
+            UpdateNonZeroCountCache(&*pCurMb, &mut *pMbCache);
 
             let mut iEncReturn = ENC_RETURN_SUCCESS;
             if let Some(func_list) = (*pEncCtx).pFuncList.as_ref() {
@@ -1502,7 +1490,7 @@ pub unsafe fn WelsISliceMdEnc(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSlice) ->
                         .eEntropyCoder
                         .StashPopMBStatus(slice_bs_buffer(pEncCtx, pSlice), slice_writer(pEncCtx, pSlice), &mut sDss, pSlice);
                 }
-                UpdateQpForOverflow(pCurMb, kuiChromaQpIndexOffset);
+                UpdateQpForOverflow(&mut *pCurMb, kuiChromaQpIndexOffset);
                 continue;
             }
 
@@ -1516,7 +1504,7 @@ pub unsafe fn WelsISliceMdEnc(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSlice) ->
 
         if let Some(func_list) = (*pEncCtx).pFuncList.as_ref() {
             if let Some(func) = func_list.pfMdBackgroundInfoUpdate {
-                func(pCurLayer, pCurMb, (*pMbCache).bCollocatedPredFlag, I_SLICE);
+                func(pCurLayer, &mut *pCurMb, (*pMbCache).bCollocatedPredFlag, I_SLICE);
             }
             func_list.pfRc.WelsRcMbInfoUpdate(
                 pEncCtx as *mut _,
@@ -1604,8 +1592,8 @@ pub unsafe fn WelsISliceMdEncDynamic(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSl
         // TRY_REENCODING
         loop {
             sMd.iLambda = g_kiQpCostTable[(*pCurMb).uiLumaQp as usize];
-            crate::encoder::svc_base_layer_md::WelsMdIntraMb(pEncCtx, &mut sMd, pCurMb, &mut *pMbCache);
-            UpdateNonZeroCountCache(pCurMb, &mut *pMbCache);
+            crate::encoder::svc_base_layer_md::WelsMdIntraMb(pEncCtx, &mut sMd, &mut *pCurMb, &mut *pMbCache);
+            UpdateNonZeroCountCache(&*pCurMb, &mut *pMbCache);
 
             let mut iEncReturn = ENC_RETURN_SUCCESS;
             if let Some(func_list) = (*pEncCtx).pFuncList.as_ref() {
@@ -1620,7 +1608,7 @@ pub unsafe fn WelsISliceMdEncDynamic(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSl
                         .eEntropyCoder
                         .StashPopMBStatus(slice_bs_buffer(pEncCtx, pSlice), slice_writer(pEncCtx, pSlice), &mut sDss, pSlice);
                 }
-                UpdateQpForOverflow(pCurMb, kuiChromaQpIndexOffset);
+                UpdateQpForOverflow(&mut *pCurMb, kuiChromaQpIndexOffset);
                 continue;
             }
 
@@ -1681,7 +1669,7 @@ pub unsafe fn WelsISliceMdEncDynamic(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSl
 ///
 /// # Safety
 /// All three pointers must be valid, with `pCurMb`'s side arrays allocated.
-unsafe fn mb_dump(pCurMb: *mut SMB, pMd: &SWelsMD, pSlice: *const SSlice) {
+unsafe fn mb_dump(pCurMb: &SMB, pMd: &SWelsMD, pSlice: *const SSlice) {
     if !crate::encoder::dump_enabled(&MB_DUMP, "OH264_MBDUMP") {
         return;
     }
@@ -1790,7 +1778,7 @@ pub unsafe fn WelsMdInterMbLoop(
         crate::encoder::svc_base_layer_md::WelsMdInterInit(
             pEncCtx,
             pSlice,
-            pCurMb,
+            &mut *pCurMb,
             kiSliceFirstMbXY,
         );
 
@@ -1812,15 +1800,15 @@ pub unsafe fn WelsMdInterMbLoop(
                 if let Some(func) = func_list.pfMdBackgroundInfoUpdate {
                     func(
                         pCurLayer,
-                        pCurMb,
+                        &mut *pCurMb,
                         (*pMbCache).bCollocatedPredFlag,
                         if !(*pEncCtx).pRefPic.is_null() { (*(*pEncCtx).pRefPic).iPictureType } else { 0 },
                     );
                 }
-                mb_dump(pCurMb, pMd, pSlice);
+                mb_dump(&*pCurMb, pMd, pSlice);
             }
             //step (5): update cache
-            UpdateNonZeroCountCache(pCurMb, &mut *pMbCache);
+            UpdateNonZeroCountCache(&*pCurMb, &mut *pMbCache);
 
             let mut iEncReturn = ENC_RETURN_SUCCESS;
             if let Some(func_list) = (*pEncCtx).pFuncList.as_ref() {
@@ -1838,7 +1826,7 @@ pub unsafe fn WelsMdInterMbLoop(
                         pSlice,
                     );
                 }
-                UpdateQpForOverflow(pCurMb, kuiChromaQpIndexOffset);
+                UpdateQpForOverflow(&mut *pCurMb, kuiChromaQpIndexOffset);
                 continue;
             }
 
@@ -1958,7 +1946,7 @@ pub unsafe fn WelsMdInterMbLoopOverDynamicSlice(
         crate::encoder::svc_base_layer_md::WelsMdInterInit(
             pEncCtx,
             pSlice,
-            pCurMb,
+            &mut *pCurMb,
             kiSliceFirstMbXY,
         );
 
@@ -1981,13 +1969,13 @@ pub unsafe fn WelsMdInterMbLoopOverDynamicSlice(
                 if let Some(func) = func_list.pfMdBackgroundInfoUpdate {
                     func(
                         pCurLayer,
-                        pCurMb,
+                        &mut *pCurMb,
                         (*pMbCache).bCollocatedPredFlag,
                         if !(*pEncCtx).pRefPic.is_null() { (*(*pEncCtx).pRefPic).iPictureType } else { 0 },
                     );
                 }
             }
-            UpdateNonZeroCountCache(pCurMb, &mut *pMbCache);
+            UpdateNonZeroCountCache(&*pCurMb, &mut *pMbCache);
 
             let mut iEncReturn = ENC_RETURN_SUCCESS;
             if let Some(func_list) = (*pEncCtx).pFuncList.as_ref() {
@@ -2005,7 +1993,7 @@ pub unsafe fn WelsMdInterMbLoopOverDynamicSlice(
                         pSlice,
                     );
                 }
-                UpdateQpForOverflow(pCurMb, kuiChromaQpIndexOffset);
+                UpdateQpForOverflow(&mut *pCurMb, kuiChromaQpIndexOffset);
                 continue;
             }
 

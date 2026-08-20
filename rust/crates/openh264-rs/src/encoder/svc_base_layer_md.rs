@@ -376,7 +376,7 @@ pub unsafe fn WelsMdIntraInit(
 pub unsafe extern "C" fn WelsMdI4x4(
     pEncCtx: *mut sWelsEncCtx,
     pWelsMd: &mut SWelsMD,
-    pCurMb: *mut SMB,
+    pCurMb: &mut SMB,
     pMbCache: &mut SMbCache,
 ) -> i32 {
     let pMbCache: *mut SMbCache = pMbCache; // one entry retag — md.rs's accessor note
@@ -470,7 +470,7 @@ pub unsafe extern "C" fn WelsMdI4x4(
 /// bottom-row I4x4 prediction modes into the macroblock so the *next* macroblock's
 /// `FillNeighborCacheIntra` can read them.
 #[inline]
-unsafe fn StoreIntra4x4PredModeToMb(pCurMb: *mut SMB, pMbCache: &mut SMbCache) {
+unsafe fn StoreIntra4x4PredModeToMb(pCurMb: &mut SMB, pMbCache: &mut SMbCache) {
     let pMbCache: *mut SMbCache = pMbCache; // one entry retag — md.rs's accessor note
     // ST32 (pCurMb->pIntra4x4PredMode, LD32 (&pMbCache->iIntraPredMode[33]));
     let pMbMode = &mut (*pCurMb).iIntra4x4PredMode;
@@ -490,7 +490,7 @@ unsafe fn StoreIntra4x4PredModeToMb(pCurMb: *mut SMB, pMbCache: &mut SMbCache) {
 pub unsafe extern "C" fn WelsMdI4x4Fast(
     pEncCtx: *mut sWelsEncCtx,
     pWelsMd: &mut SWelsMD,
-    pCurMb: *mut SMB,
+    pCurMb: &mut SMB,
     pMbCache: &mut SMbCache,
 ) -> i32 {
     let pMbCache: *mut SMbCache = pMbCache; // one entry retag — md.rs's accessor note
@@ -743,7 +743,7 @@ pub unsafe extern "C" fn WelsMdIntraChroma(
 pub unsafe extern "C" fn WelsMdIntraFinePartition(
     pEncCtx: *mut sWelsEncCtx,
     pWelsMd: &mut SWelsMD,
-    pCurMb: *mut SMB,
+    pCurMb: &mut SMB,
     pMbCache: &mut SMbCache,
 ) -> i32 {
     let pMbCache: *mut SMbCache = pMbCache; // one entry retag — md.rs's accessor note
@@ -765,7 +765,7 @@ pub unsafe extern "C" fn WelsMdIntraFinePartition(
 pub unsafe extern "C" fn WelsMdIntraFinePartitionVaa(
     pEncCtx: *mut sWelsEncCtx,
     pWelsMd: &mut SWelsMD,
-    pCurMb: *mut SMB,
+    pCurMb: &mut SMB,
     pMbCache: &mut SMbCache,
 ) -> i32 {
     let pMbCache: *mut SMbCache = pMbCache; // one entry retag — md.rs's accessor note
@@ -791,7 +791,7 @@ pub unsafe extern "C" fn WelsMdIntraFinePartitionVaa(
 pub unsafe fn WelsMdIntraMb(
     pEncCtx: *mut sWelsEncCtx,
     pWelsMd: &mut SWelsMD,
-    pCurMb: *mut SMB,
+    pCurMb: &mut SMB,
     pMbCache: &mut SMbCache,
 ) {
     let pMbCache: *mut SMbCache = pMbCache; // one entry retag — md.rs's accessor note
@@ -868,7 +868,7 @@ pub const g_kiPixStrideIdx4x4: [[i32; 4]; 4] = [
 pub unsafe fn WelsMdInterInit(
     pEncCtx: *mut sWelsEncCtx,
     pSlice: *mut SSlice,
-    pCurMb: *mut SMB,
+    pCurMb: &mut SMB,
     iSliceFirstMbXY: i32,
 ) {
     let pCurLayer = (*pEncCtx).pCurDqLayer;
@@ -1242,7 +1242,7 @@ pub unsafe extern "C" fn WelsMdInterFinePartition(
     pEncCtx: *mut sWelsEncCtx,
     pWelsMd: &mut SWelsMD,
     pSlice: *mut SSlice,
-    pCurMb: *mut SMB,
+    pCurMb: &mut SMB,
     iBestCost: i32,
 ) {
     let pCurDqLayer = (*pEncCtx).pCurDqLayer;
@@ -1280,7 +1280,7 @@ pub unsafe extern "C" fn WelsMdInterFinePartitionVaa(
     pEncCtx: *mut sWelsEncCtx,
     pWelsMd: &mut SWelsMD,
     pSlice: *mut SSlice,
-    pCurMb: *mut SMB,
+    pCurMb: &mut SMB,
     iBestCostIn: i32,
 ) {
     let pCurDqLayer = (*pEncCtx).pCurDqLayer;
@@ -1381,7 +1381,7 @@ pub unsafe extern "C" fn WelsMdInterFinePartitionVaa(
 pub unsafe fn WelsMdPSkipEnc(
     pEncCtx: *mut sWelsEncCtx,
     pWelsMd: &mut SWelsMD,
-    pCurMb: *mut SMB,
+    pCurMb: &mut SMB,
     pMbCache: &mut SMbCache,
 ) -> bool {
     let pMbCache: *mut SMbCache = pMbCache; // one entry retag — md.rs's accessor note
@@ -1529,7 +1529,7 @@ pub unsafe fn WelsMdPSkipEnc(
 unsafe fn AcceptPskip(
     pEncCtx: *mut sWelsEncCtx,
     pWelsMd: &mut SWelsMD,
-    pCurMb: *mut SMB,
+    pCurMb: &mut SMB,
     pMbCache: &mut SMbCache,
     sMvp: &SMVUnitXY,
     iSadCostLuma: i32,
@@ -1574,7 +1574,7 @@ unsafe fn AcceptPskip(
 pub unsafe fn WelsMdInterMbRefinement(
     pEncCtx: *mut sWelsEncCtx,
     pWelsMd: &mut SWelsMD,
-    pCurMb: *mut SMB,
+    pCurMb: &mut SMB,
     pMbCache: &mut SMbCache,
 ) {
     let pMbCache: *mut SMbCache = pMbCache; // one entry retag — md.rs's accessor note
@@ -2068,7 +2068,7 @@ pub unsafe fn WelsMdInterMbRefinement(
 pub unsafe extern "C" fn WelsMdFirstIntraMode(
     pEncCtx: *mut sWelsEncCtx,
     pWelsMd: &mut SWelsMD,
-    pCurMb: *mut SMB,
+    pCurMb: &mut SMB,
     pMbCache: &mut SMbCache,
 ) -> bool {
     let pMbCache: *mut SMbCache = pMbCache; // one entry retag — md.rs's accessor note
@@ -2159,7 +2159,7 @@ pub unsafe extern "C" fn WelsMdInterMb(
         pEncCtx,
         pWelsMd,
         pSlice,
-        pCurMb,
+        &mut *pCurMb,
         &mut bKeepSkip as *mut bool,
     ) {
         return;
@@ -2168,17 +2168,17 @@ pub unsafe extern "C" fn WelsMdInterMb(
     //try static or scrolled Pskip
     if (*(*pEncCtx).pFuncList)
         .pfSCDPSkipDecision
-        .expect("pfSCDPSkipDecision unset")(pEncCtx, pWelsMd, pSlice, pCurMb)
+        .expect("pfSCDPSkipDecision unset")(pEncCtx, pWelsMd, pSlice, &mut *pCurMb)
     {
         return;
     }
 
     //step 1: try SKIP
-    bSkip = WelsMdInterJudgePskip(pEncCtx, pWelsMd, pSlice, pCurMb, bTrySkip);
+    bSkip = WelsMdInterJudgePskip(pEncCtx, pWelsMd, pSlice, &mut *pCurMb, bTrySkip);
 
     if bSkip {
         if bKeepSkip {
-            WelsMdInterDecidedPskip(pEncCtx, pSlice, pCurMb);
+            WelsMdInterDecidedPskip(pEncCtx, pSlice, &mut *pCurMb);
             return;
         }
     } else {
@@ -2200,7 +2200,7 @@ pub unsafe extern "C" fn WelsMdInterMb(
         (*pCurMb).uiMbType = MB_TYPE_16x16;
     }
 
-    WelsMdInterSecondaryModesEnc(pEncCtx, pWelsMd, pSlice, pCurMb, bSkip);
+    WelsMdInterSecondaryModesEnc(pEncCtx, pWelsMd, pSlice, &mut *pCurMb, bSkip);
 }
 
 /// `svc_base_layer_md.cpp:1937`. Re-classifies a zero-CBP 16x16 as P_SKIP when its MV
@@ -2208,7 +2208,7 @@ pub unsafe extern "C" fn WelsMdInterMb(
 ///
 /// # Safety
 /// `pCurMb` and `pMbCache` must be valid.
-pub unsafe fn WelsMdInterDoubleCheckPskip(pCurMb: *mut SMB, pMbCache: &mut SMbCache) {
+pub unsafe fn WelsMdInterDoubleCheckPskip(pCurMb: &mut SMB, pMbCache: &mut SMbCache) {
     let pMbCache: *mut SMbCache = pMbCache; // one entry retag — md.rs's accessor note
     if MB_TYPE_16x16 == (*pCurMb).uiMbType && 0 == (*pCurMb).uiCbp {
         if 0 == (*pCurMb).iRefIndex[0] {
@@ -2240,7 +2240,7 @@ fn LD32_MV_PUB(pMv: &SMVUnitXY) -> u32 {
 pub unsafe fn WelsMdInterEncode(
     pEncCtx: *mut sWelsEncCtx,
     pSlice: *mut SSlice,
-    pCurMb: *mut SMB,
+    pCurMb: &mut SMB,
 ) {
     let pMbCache = std::ptr::addr_of_mut!((*pSlice).sMbCacheInfo);
     let pFunc = (*pEncCtx).pFuncList;
