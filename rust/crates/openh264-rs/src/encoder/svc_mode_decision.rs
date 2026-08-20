@@ -148,7 +148,7 @@ pub enum ESkipModes {
 
 pub type pJudgeSkipFun = unsafe extern "C" fn(
     pEncCtx: *mut sWelsEncCtx,
-    pCurMb: *mut SMB,
+    pCurMb: &mut SMB,
     pMbCache: &mut SMbCache,
     pWelsMd: &mut SWelsMD,
 ) -> bool;
@@ -268,7 +268,7 @@ pub fn WELS_CLIP3(iX: i32, iMin: i32, iMax: i32) -> i32 {
 pub unsafe extern "C" fn WelsMdInterUpdatePskip(
     pCurDqLayer: *mut SDqLayer,
     pSlice: *mut SSlice,
-    pCurMb: *mut SMB,
+    pCurMb: &mut SMB,
 ) {
     let pMbCache = std::ptr::addr_of_mut!((*pSlice).sMbCacheInfo);
     //add pEnc&rec to MD--2010.3.15
@@ -300,7 +300,7 @@ pub unsafe extern "C" fn WelsMdInterJudgePskip(
     pEncCtx: *mut sWelsEncCtx,
     pWelsMd: &mut SWelsMD,
     pSlice: *mut SSlice,
-    pCurMb: *mut SMB,
+    pCurMb: &mut SMB,
     bTrySkip: bool,
 ) -> bool {
     let pMbCache = std::ptr::addr_of_mut!((*pSlice).sMbCacheInfo);
@@ -333,7 +333,7 @@ pub unsafe extern "C" fn WelsMdInterJudgePskip(
 pub unsafe extern "C" fn WelsMdInterDecidedPskip(
     pEncCtx: *mut sWelsEncCtx,
     pSlice: *mut SSlice,
-    pCurMb: *mut SMB,
+    pCurMb: &mut SMB,
 ) {
     let pMbCache = std::ptr::addr_of_mut!((*pSlice).sMbCacheInfo);
     let pCurDqLayer = (*pEncCtx).pCurDqLayer;
@@ -356,7 +356,7 @@ pub unsafe extern "C" fn WelsMdInterSecondaryModesEnc(
     pEncCtx: *mut sWelsEncCtx,
     pWelsMd: &mut SWelsMD,
     pSlice: *mut SSlice,
-    pCurMb: *mut SMB,
+    pCurMb: &mut SMB,
     bSkip: bool,
 ) {
     let pMbCache = std::ptr::addr_of_mut!((*pSlice).sMbCacheInfo);
@@ -409,7 +409,7 @@ pub unsafe extern "C" fn WelsMdInterSecondaryModesEnc(
 pub unsafe extern "C" fn WelsMdIntraSecondaryModesEnc(
     pEncCtx: *mut sWelsEncCtx,
     pWelsMd: &mut SWelsMD,
-    pCurMb: *mut SMB,
+    pCurMb: &mut SMB,
     pMbCache: &mut SMbCache,
 ) {
     let pMbCache: *mut SMbCache = pMbCache; // one entry retag — md.rs's accessor note
@@ -449,7 +449,7 @@ pub unsafe extern "C" fn WelsMdIntraSecondaryModesEnc(
 pub unsafe extern "C" fn WelsRecPskip(
     pCurLayer: *mut SDqLayer,
     pFuncList: *mut SWelsFuncPtrList,
-    pCurMb: *mut SMB,
+    pCurMb: &mut SMB,
     pMbCache: &mut SMbCache,
 ) {
     let pMbCache: *mut SMbCache = pMbCache; // one entry retag — md.rs's accessor note
@@ -478,7 +478,7 @@ pub unsafe extern "C" fn WelsRecPskip(
 unsafe fn VaaBackgroundMbDataUpdate(
     pFunc: *mut SWelsFuncPtrList,
     pVaaInfo: *mut crate::encoder::wels_preprocess::SVAAFrameInfo,
-    pCurMb: *mut SMB,
+    pCurMb: &mut SMB,
 ) {
     let kiPicStride = (*pVaaInfo).iPicStride;
     let kiPicStrideUV = (*pVaaInfo).iPicStrideUV;
@@ -521,7 +521,7 @@ unsafe fn VaaBackgroundMbDataUpdate(
 pub unsafe extern "C" fn WelsMdBackgroundMbEnc(
     pEncCtx: *mut sWelsEncCtx,
     pWelsMd: &mut SWelsMD,
-    pCurMb: *mut SMB,
+    pCurMb: &mut SMB,
     pSlice: *mut SSlice,
     bSkipMbFlag: bool,
 ) {
@@ -621,7 +621,7 @@ pub unsafe extern "C" fn WelsMdBackgroundMbEnc(
     WelsPMbChromaEncode(
         pEncCtx as *mut crate::encoder::svc_encode_slice::sWelsEncCtx,
         pSlice as *mut crate::encoder::svc_encode_slice::SSlice,
-        pCurMb as *mut crate::encoder::svc_encode_slice::SMB,
+        pCurMb,
     );
 
     if let Some(copy16) = (*pFunc).pfCopy16x16Aligned {
@@ -774,14 +774,15 @@ pub unsafe extern "C" fn PredInter8x16Mv(pMbCache: &mut SMbCache, iPartIdx: i32,
 
 pub unsafe extern "C" fn UpdateP16x16MotionInfo(
     pMbCache: &mut SMbCache,
-    pCurMb: *mut SMB,
+    pCurMb: &mut SMB,
     kiRef: i8,
     pMv: *mut SMVUnitXY,
 ) {
     let pMbCache: *mut SMbCache = pMbCache; // one entry retag — md.rs's accessor note
-    if pMbCache.is_null() || pCurMb.is_null() || pMv.is_null() {
-        return;
-    }
+    // The entry guard that stood here was the port's own — `mv_pred.cpp:148` opens
+    // straight at `SMVComponentUnit* pMvComp = &pMbCache->sMvComponents;`. Two of its
+    // three clauses were about parameters that are references now and cannot be null;
+    // the third named `pMv`, which every caller spells `&mut …sMe.sMe16x16.sMv`.
     let pMvComp = &mut (*pMbCache).sMvComponents;
     for i in 0..16 {
         pMvComp.iRefIndexCache[g_kuiCache30ScanIdx[i] as usize] = kiRef;
@@ -843,7 +844,7 @@ fn st64_mv_mb(sMv: &mut [SMVUnitXY; MB_BLOCK4x4_NUM], k: usize, mv: SMVUnitXY) {
 /// `kiPartIdx` must be 0 or 8.
 pub unsafe extern "C" fn UpdateP16x8MotionInfo(
     pMbCache: &mut SMbCache,
-    pCurMb: *mut SMB,
+    pCurMb: &mut SMB,
     kiPartIdx: i32,
     kiRef: i8,
     pMv: *mut SMVUnitXY,
@@ -888,7 +889,7 @@ pub unsafe extern "C" fn UpdateP16x8MotionInfo(
 /// As [`UpdateP16x8MotionInfo`]; `kiPartIdx` must be 0 or 4.
 pub unsafe extern "C" fn update_P8x16_motion_info(
     pMbCache: &mut SMbCache,
-    pCurMb: *mut SMB,
+    pCurMb: &mut SMB,
     kiPartIdx: i32,
     kiRef: i8,
     pMv: *mut SMVUnitXY,
@@ -931,7 +932,7 @@ pub unsafe extern "C" fn update_P8x16_motion_info(
 /// As [`UpdateP16x8MotionInfo`].
 pub unsafe extern "C" fn UpdateP8x8MotionInfo(
     pMbCache: &mut SMbCache,
-    pCurMb: *mut SMB,
+    pCurMb: &mut SMB,
     kiPartIdx: i32,
     kiRef: i8,
     pMv: *mut SMVUnitXY,
@@ -964,7 +965,7 @@ pub unsafe extern "C" fn UpdateP8x8MotionInfo(
 /// As [`UpdateP16x8MotionInfo`].
 pub unsafe extern "C" fn UpdateP4x4MotionInfo(
     pMbCache: &mut SMbCache,
-    pCurMb: *mut SMB,
+    pCurMb: &mut SMB,
     kiPartIdx: i32,
     kiRef: i8,
     pMv: *mut SMVUnitXY,
@@ -985,7 +986,7 @@ pub unsafe extern "C" fn UpdateP4x4MotionInfo(
 /// As [`UpdateP16x8MotionInfo`].
 pub unsafe extern "C" fn UpdateP8x4MotionInfo(
     pMbCache: &mut SMbCache,
-    pCurMb: *mut SMB,
+    pCurMb: &mut SMB,
     kiPartIdx: i32,
     kiRef: i8,
     pMv: *mut SMVUnitXY,
@@ -1009,7 +1010,7 @@ pub unsafe extern "C" fn UpdateP8x4MotionInfo(
 /// As [`UpdateP16x8MotionInfo`].
 pub unsafe extern "C" fn UpdateP4x8MotionInfo(
     pMbCache: &mut SMbCache,
-    pCurMb: *mut SMB,
+    pCurMb: &mut SMB,
     kiPartIdx: i32,
     kiRef: i8,
     pMv: *mut SMVUnitXY,
@@ -1391,10 +1392,9 @@ pub unsafe extern "C" fn WelsMdP8x8(
     iCostP8x8
 }
 
-pub unsafe extern "C" fn WelsInterMbEncode(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSlice, pCurMb: *mut SMB) {
-    if pEncCtx.is_null() || pSlice.is_null() || pCurMb.is_null() {
-        return;
-    }
+pub unsafe extern "C" fn WelsInterMbEncode(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSlice, pCurMb: &mut SMB) {
+    // Port-added guard deleted with the retyping: `svc_encode_slice.cpp:458` opens at
+    // `SMbCache* pMbCache = &pSlice->sMbCacheInfo;` and checks nothing.
     let pMbCache = std::ptr::addr_of_mut!((*pSlice).sMbCacheInfo);
     let pCurDqLayer = (*pEncCtx).pCurDqLayer;
     let pFuncList = (*pEncCtx).pFuncList;
@@ -1435,7 +1435,7 @@ pub unsafe extern "C" fn WelsInterMbEncode(pEncCtx: *mut sWelsEncCtx, pSlice: *m
 /// `SDqLayer` than `pCurDqLayer`, which is why this reads through the list rather
 /// than through the current layer.
 #[inline(always)]
-pub unsafe extern "C" fn GetRefMb(pEncCtx: *mut sWelsEncCtx, pCurMb: *mut SMB) -> *mut SMB {
+pub unsafe extern "C" fn GetRefMb(pEncCtx: *mut sWelsEncCtx, pCurMb: &mut SMB) -> *mut SMB {
     let kRefIdx = (*(*pEncCtx).pCurDqLayer)
         .pRefLayer
         .expect("GetRefMb on a layer with no base layer: bBaseLayerAvailableFlag gates every caller");
@@ -1448,7 +1448,7 @@ pub unsafe extern "C" fn GetRefMb(pEncCtx: *mut sWelsEncCtx, pCurMb: *mut SMB) -
 /// Scales base-layer motion vectors by 2x to initialize enhancement-layer candidates.
 pub unsafe extern "C" fn SetMvBaseEnhancelayer(
     pMd: &mut SWelsMD,
-    pCurMb: *mut SMB,
+    pCurMb: &mut SMB,
     kpRefMb: *const SMB,
 ) {
     let kuiRefMbType = (*kpRefMb).uiMbType;
@@ -1520,16 +1520,16 @@ pub unsafe extern "C" fn WelsMdSpatialelInterMbIlfmdNoilp(
     let bSkip: bool;
 
     if let Some(pfBgd) = (*(*pEncCtx).pFuncList).pfInterMdBackgroundDecision {
-        if pfBgd(pEncCtx, pWelsMd, pSlice, pCurMb, &mut bKeepSkip) {
+        if pfBgd(pEncCtx, pWelsMd, pSlice, &mut *pCurMb, &mut bKeepSkip) {
             return;
         }
     }
 
     // Step 1: Try SKIP
-    bSkip = WelsMdInterJudgePskip(pEncCtx, pWelsMd, pSlice, pCurMb, bTrySkip);
+    bSkip = WelsMdInterJudgePskip(pEncCtx, pWelsMd, pSlice, &mut *pCurMb, bTrySkip);
 
     if bSkip && bKeepSkip {
-        WelsMdInterDecidedPskip(pEncCtx, pSlice, pCurMb);
+        WelsMdInterDecidedPskip(pEncCtx, pSlice, &mut *pCurMb);
         return;
     }
 
@@ -1548,7 +1548,7 @@ pub unsafe extern "C" fn WelsMdSpatialelInterMbIlfmdNoilp(
             (*pCurMb).uiMbType = MB_TYPE_16x16;
         }
 
-        WelsMdInterSecondaryModesEnc(pEncCtx, pWelsMd, pSlice, pCurMb, bSkip);
+        WelsMdInterSecondaryModesEnc(pEncCtx, pWelsMd, pSlice, &mut *pCurMb, bSkip);
     } else {
         // Base layer is Intra (BLMODE == SVC_INTRA)
         let kiCostI16x16 = WelsMdI16x16(
@@ -1558,12 +1558,12 @@ pub unsafe extern "C" fn WelsMdSpatialelInterMbIlfmdNoilp(
             (*pWelsMd).iLambda,
         );
         if bSkip && ((*pWelsMd).iCostLuma <= kiCostI16x16) {
-            WelsMdInterDecidedPskip(pEncCtx, pSlice, pCurMb);
+            WelsMdInterDecidedPskip(pEncCtx, pSlice, &mut *pCurMb);
         } else {
             (*pWelsMd).iCostLuma = kiCostI16x16;
             (*pCurMb).uiMbType = MB_TYPE_INTRA16x16;
 
-            WelsMdIntraSecondaryModesEnc(pEncCtx, pWelsMd, pCurMb, &mut *pMbCache);
+            WelsMdIntraSecondaryModesEnc(pEncCtx, pWelsMd, &mut *pCurMb, &mut *pMbCache);
         }
     }
 }
@@ -1575,10 +1575,10 @@ pub unsafe extern "C" fn WelsMdInterMbEnhancelayer(
     pSlice: *mut SSlice,
     pCurMb: *mut SMB,
 ) {
-    let kpInterLayerRefMb = GetRefMb(pEncCtx, pCurMb);
+    let kpInterLayerRefMb = GetRefMb(pEncCtx, &mut *pCurMb);
     let kuiInterLayerRefMbType = (*kpInterLayerRefMb).uiMbType;
 
-    SetMvBaseEnhancelayer(pMd, pCurMb, kpInterLayerRefMb);
+    SetMvBaseEnhancelayer(pMd, &mut *pCurMb, kpInterLayerRefMb);
     WelsMdSpatialelInterMbIlfmdNoilp(pEncCtx, pMd, pSlice, pCurMb, kuiInterLayerRefMbType);
 }
 
@@ -1668,7 +1668,7 @@ pub unsafe extern "C" fn WelsMdInterJudgeBGDPskip(
     pEncCtx: *mut sWelsEncCtx,
     pWelsMd: &mut SWelsMD,
     pSlice: *mut SSlice,
-    pCurMb: *mut SMB,
+    pCurMb: &mut SMB,
     bKeepSkip: *mut bool,
 ) -> bool {
     let pMbCache = std::ptr::addr_of_mut!((*pSlice).sMbCacheInfo);
@@ -1705,7 +1705,7 @@ pub unsafe extern "C" fn WelsMdInterJudgeBGDPskipFalse(
     _pCtx: *mut sWelsEncCtx,
     _pMd: &mut SWelsMD,
     _pSlice: *mut SSlice,
-    _pCurMb: *mut SMB,
+    _pCurMb: &mut SMB,
     _bKeepSkip: *mut bool,
 ) -> bool {
     false
@@ -1713,7 +1713,7 @@ pub unsafe extern "C" fn WelsMdInterJudgeBGDPskipFalse(
 
 pub unsafe extern "C" fn WelsMdUpdateBGDInfo(
     pCurLayer: *mut SDqLayer,
-    pCurMb: *mut SMB,
+    pCurMb: &mut SMB,
     bCollocatedPredFlag: bool,
     iRefPictureType: i32,
 ) {
@@ -1734,7 +1734,7 @@ pub unsafe extern "C" fn WelsMdUpdateBGDInfo(
 
 pub unsafe extern "C" fn WelsMdUpdateBGDInfoNULL(
     pCurLayer: *mut SDqLayer,
-    pCurMb: *mut SMB,
+    pCurMb: &mut SMB,
     bCollocatedPredFlag: bool,
     iRefPictureType: i32,
 ) {
@@ -1800,7 +1800,7 @@ pub fn CheckBorder(
 
 pub unsafe extern "C" fn JudgeStaticSkip(
     pEncCtx: *mut sWelsEncCtx,
-    pCurMb: *mut SMB,
+    pCurMb: &mut SMB,
     pMbCache: &mut SMbCache,
     pWelsMd: &mut SWelsMD,
 ) -> bool {
@@ -1845,7 +1845,7 @@ pub unsafe extern "C" fn JudgeStaticSkip(
 
 pub unsafe extern "C" fn JudgeScrollSkip(
     pEncCtx: *mut sWelsEncCtx,
-    pCurMb: *mut SMB,
+    pCurMb: &mut SMB,
     pMbCache: &mut SMbCache,
     pWelsMd: &mut SWelsMD,
 ) -> bool {
@@ -1906,7 +1906,7 @@ pub unsafe extern "C" fn JudgeScrollSkip(
 pub unsafe extern "C" fn SvcMdSCDMbEnc(
     pEncCtx: *mut sWelsEncCtx,
     pWelsMd: &mut SWelsMD,
-    pCurMb: *mut SMB,
+    pCurMb: &mut SMB,
     pSlice: *mut SSlice,
     bQpSimilarFlag: bool,
     bMbSkipFlag: bool,
@@ -2031,7 +2031,7 @@ pub unsafe extern "C" fn SvcMdSCDMbEnc(
     WelsPMbChromaEncode(
         pEncCtx as *mut crate::encoder::svc_encode_slice::sWelsEncCtx,
         pSlice as *mut crate::encoder::svc_encode_slice::SSlice,
-        pCurMb as *mut crate::encoder::svc_encode_slice::SMB,
+        pCurMb,
     );
 
     if let Some(copy16) = (*pFunc).pfCopy16x16Aligned {
@@ -2062,7 +2062,7 @@ pub unsafe extern "C" fn MdInterSCDPskipProcess(
     pEncCtx: *mut sWelsEncCtx,
     pWelsMd: &mut SWelsMD,
     pSlice: *mut SSlice,
-    pCurMb: *mut SMB,
+    pCurMb: &mut SMB,
     eSkipMode: ESkipModes,
 ) -> bool {
     let pMbCache = std::ptr::addr_of_mut!((*pSlice).sMbCacheInfo);
@@ -2114,7 +2114,7 @@ pub unsafe extern "C" fn MdInterSCDPskipProcess(
 pub unsafe extern "C" fn SetBlockStaticIdcToMd(
     pVaaExt: *mut SVAAFrameInfoExt_t,
     pWelsMd: &mut SWelsMD,
-    pCurMb: *mut SMB,
+    pCurMb: &mut SMB,
     pDqLayer: *mut SDqLayer,
 ) {
 
@@ -2140,7 +2140,7 @@ pub unsafe extern "C" fn WelsMdInterJudgeSCDPskip(
     pEncCtx: *mut sWelsEncCtx,
     pWelsMd: &mut SWelsMD,
     slice: *mut SSlice,
-    pCurMb: *mut SMB,
+    pCurMb: &mut SMB,
 ) -> bool {
     let pCurDqLayer = (*pEncCtx).pCurDqLayer;
     SetBlockStaticIdcToMd((*pEncCtx).pVaa as *mut SVAAFrameInfoExt_t, pWelsMd, pCurMb, pCurDqLayer);
@@ -2159,7 +2159,7 @@ pub unsafe extern "C" fn WelsMdInterJudgeSCDPskipFalse(
     _pEncCtx: *mut sWelsEncCtx,
     _pWelsMd: &mut SWelsMD,
     _slice: *mut SSlice,
-    _pCurMb: *mut SMB,
+    _pCurMb: &mut SMB,
 ) -> bool {
     false
 }
@@ -2194,7 +2194,7 @@ pub fn IsSameMv(sMv0: &SMVUnitXY, sMv1: &SMVUnitXY) -> bool {
 pub unsafe fn TryModeMerge(
     pMbCache: &mut SMbCache,
     pWelsMd: &mut SWelsMD,
-    pCurMb: *mut SMB,
+    pCurMb: &mut SMB,
 ) -> bool {
     let pMbCache: *mut SMbCache = pMbCache; // one entry retag — md.rs's accessor note
     let pMe8x8 = (*pWelsMd).sMe.sMe8x8.as_ptr();
@@ -2239,7 +2239,7 @@ pub unsafe extern "C" fn WelsMdInterFinePartitionVaaOnScreen(
     pEncCtx: *mut sWelsEncCtx,
     pWelsMd: &mut SWelsMD,
     pSlice: *mut SSlice,
-    pCurMb: *mut SMB,
+    pCurMb: &mut SMB,
     mut iBestCost: i32,
 ) {
     let pMbCache = std::ptr::addr_of_mut!((*pSlice).sMbCacheInfo);
@@ -2418,7 +2418,7 @@ mod tests {
             let mut target_mv = SMVUnitXY { iMvX: 42, iMvY: -15 };
             UpdateP16x16MotionInfo(
                 &mut mb_cache,
-                &mut cur_mb as *mut SMB,
+                &mut cur_mb,
                 0,
                 &mut target_mv as *mut SMVUnitXY,
             );
