@@ -502,9 +502,18 @@ at a family boundary, and only with a written reason):
   second owed: **head 3 / control 1 over 800 encodes under load, and 0/0 over 120 on
   an idle machine** — the sharpest demonstration on record that load is the variable,
   not the tree.
-* **F** — `wels_preprocess` + the plane families (6.2), the `common/` kernel
-  callers (§3), **and 6.1's recon-pool alias family**, handed over by session B with
-  its settlement written and its size measured (~184 sites, nine files).
+* **F** — **brief written** ([`phase6_session_f.md`](phase6_session_f.md), steward,
+  2026-08-19). `wels_preprocess` + the plane families (6.2), **and 6.1's recon-pool
+  alias family**, handed over by session B with its settlement written and its size
+  measured (~184 sites, nine files): the id flip (two pools → `Pool<Box<SPicture>>`,
+  `SrcPicId`/`RecPicId` over the fourteen-row table, S34 clean, F42 needs nothing),
+  `SPicture` constructor-built — side arrays owned, `pEncSad` deleted as a neighbour
+  cursor, planes owned with root accessors (separable, the hot-path risk) — then
+  VAA/preprocess per-frame views (P9's out-views). **The `common/` caller scope
+  narrowed by E's verdict**: only the per-frame `expand_pic` caller converts;
+  per-MB/per-candidate kernel signatures (`mc`, SAD/SATD, intra, deblock) are
+  Phase 9's kernel-signature work, and S37 forbids `&mut SPicture` across a
+  resolving call throughout.
 * **G** — the context flip and the deny sweep (6.6), then the phase close. **Opens
   with 6.5's fold** (steward, 2026-08-19): `au_set.rs` + `paraset_strategy.rs` R1
   remnants and `rc.rs`'s 56 `*mut sWelsEncCtx` land here with the flip;
