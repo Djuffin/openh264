@@ -979,6 +979,69 @@ pub struct SWelsSPS {
     pub sAspectRatioExtHeight: u16,
 }
 
+/// **The C++'s `memset (pSps, 0, sizeof (SWelsSPS))`, spelled out** — T6.G3.
+///
+/// `WelsInitSps` and `WelsInitSubsetSps` begin with that memset, and this is what
+/// they assign now that they take a `&mut` instead of a `*mut`. It is deliberately
+/// **not** [`Default`](SWelsSPS::default), which seeds `uiProfileIdc = PRO_BASELINE`
+/// and the VUI `*_UNDEF` values — the port has carried that warning as a comment at
+/// the memset since Phase 3, and this is the same statement as a value. F56's rule:
+/// a zero image is ruled, not defaulted, and the two are different here.
+impl SWelsSPS {
+    pub const ZERO: Self = Self {
+        uiSpsId: 0,
+        iMbWidth: 0,
+        iMbHeight: 0,
+        uiLog2MaxFrameNum: 0,
+        uiPocType: 0,
+        iLog2MaxPocLsb: 0,
+        sFrameCrop: SCropOffset { iCropLeft: 0, iCropRight: 0, iCropTop: 0, iCropBottom: 0 },
+        iNumRefFrames: 0,
+        // 0 is not `PRO_BASELINE`; `WelsInitSps` sets it, and its subset-SPS caller
+        // deliberately takes `uiProfileIdc` verbatim with no fallback for 0.
+        uiProfileIdc: 0,
+        iLevelIdc: 0,
+        bGapsInFrameNumValueAllowedFlag: false,
+        bFrameCroppingFlag: false,
+        bVuiParamPresentFlag: false,
+        bVideoSignalTypePresent: false,
+        uiVideoFormat: 0,
+        bFullRange: false,
+        bColorDescriptionPresent: false,
+        // 0 in each of these three is *not* the `*_UNDEF` that `Default` seeds.
+        uiColorPrimaries: 0,
+        uiTransferCharacteristics: 0,
+        uiColorMatrix: 0,
+        bConstraintSet0Flag: false,
+        bConstraintSet1Flag: false,
+        bConstraintSet2Flag: false,
+        bConstraintSet3Flag: false,
+        bAspectRatioPresent: false,
+        eAspectRatio: 0,
+        sAspectRatioExtWidth: 0,
+        sAspectRatioExtHeight: 0,
+    };
+}
+
+/// The zero image of the SVC extension block — see [`SWelsSPS::ZERO`].
+impl SSpsSvcExt {
+    pub const ZERO: Self = Self {
+        iExtendedSpatialScalability: 0,
+        bSeqTcoeffLevelPredFlag: false,
+        bAdaptiveTcoeffLevelPredFlag: false,
+        bSliceHeaderRestrictionFlag: false,
+    };
+}
+
+/// The zero image of a whole subset SPS — `WelsInitSubsetSps`'s
+/// `memset (pSubsetSps, 0, sizeof (SSubsetSps))`. See [`SWelsSPS::ZERO`].
+impl SSubsetSps {
+    pub const ZERO: Self = Self {
+        pSps: SWelsSPS::ZERO,
+        sSpsSvcExt: SSpsSvcExt::ZERO,
+    };
+}
+
 impl Default for SWelsSPS {
     fn default() -> Self {
         Self {

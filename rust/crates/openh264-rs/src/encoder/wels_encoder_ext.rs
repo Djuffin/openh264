@@ -420,7 +420,7 @@ pub unsafe fn WelsWriteOneSPS(pCtx: *mut sWelsEncCtx, kiSpsIdx: i32, iNalSize: *
 
     WelsWriteSpsNal(
         &mut (&mut *pOut).sBsBuffer[..],
-        (*pCtx).pSpsArray.add(kiSpsIdx as usize),
+        &*(*pCtx).pSpsArray.add(kiSpsIdx as usize),
         &mut (*pOut).sBsWrite,
         ParasetStrategy(pCtx).GetSpsIdOffsetList(PARA_SET_TYPE_AVCSPS as i32),
     );
@@ -456,7 +456,7 @@ pub unsafe fn WelsWriteOnePPS(pCtx: *mut sWelsEncCtx, kiPpsIdx: i32, iNalSize: *
 
     WelsWritePpsSyntax(
         &mut (&mut *pOut).sBsBuffer[..],
-        (*pCtx).pPPSArray.add(kiPpsIdx as usize),
+        &*(*pCtx).pPPSArray.add(kiPpsIdx as usize),
         &mut (*pOut).sBsWrite,
         ParasetStrategy(pCtx),
     );
@@ -552,7 +552,7 @@ pub unsafe fn WelsWriteParameterSets(
 
         WelsWriteSubsetSpsSyntax(
             &mut (&mut *(*pCtx).pOut).sBsBuffer[..],
-            (*pCtx).pSubsetArray.add(iId as usize),
+            &*(*pCtx).pSubsetArray.add(iId as usize),
             &mut (*(*pCtx).pOut).sBsWrite,
             ParasetStrategy(pCtx).GetSpsIdOffsetList(PARA_SET_TYPE_SUBSETSPS as i32),
         );

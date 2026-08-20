@@ -907,24 +907,35 @@ pub unsafe fn InitDqLayers(
             iDlayerIndex,
             iDlayerCount,
             iSpsId as u32,
-            &mut pSps,
-            &mut pSubsetSps,
             bSvcBaselayer,
         ) as i32;
         if 0 > iSpsId {
             return ENC_RETURN_UNSUPPORTED_PARA;
         }
+        // T6.G3: `GenerateNewSps` used to hand these back through two
+        // pointer-to-pointer out-parameters, and this block then recomputed the
+        // selected one from `iSpsId` anyway — the id was already the carrier and the
+        // pointers were a second copy of it. Both arms are derived here now, in the
+        // spelling the callee used, including the subset arm's inner SPS, which
+        // lines 945-946 below read and which this block did *not* previously
+        // reassign.
         if !bUseSubsetSps {
             pSps = (**ppCtx).pSpsArray.add(iSpsId as usize);
         } else {
             pSubsetSps = (**ppCtx).pSubsetArray.add(iSpsId as usize);
+            pSps = std::ptr::addr_of_mut!((*pSubsetSps).pSps);
         }
 
         iPpsId = ParasetStrategy(*ppCtx).InitPps(
             *ppCtx,
             iSpsId as u32,
-            pSps,
-            pSubsetSps,
+            // T6.G3: `InitPps` takes the arm it will actually use, not both plus a
+            // flag. The two locals are still raw here — they are cursors into the
+            // context's arrays, which are session H's — so the reference is formed
+            // at this one boundary, where the branch above has just proved which of
+            // them is live.
+            pSps.as_ref(),
+            pSubsetSps.as_ref(),
             iPpsId,
             true,
             bUseSubsetSps,

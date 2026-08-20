@@ -45,36 +45,36 @@ pub const CpbBrNalFactor: i32 = 1200;
 /// `int16_t` widened to `uint32_t` before multiplying, and the products are allowed to
 /// wrap. `uiPicInMBs * fFrameRate` promotes to `float` and truncates back.
 ///
-/// # Safety
-/// `kpSps` and `kpLevelLimit` must reference initialised values.
-pub unsafe fn WelsCheckLevelLimitation(
-    kpSps: *const SWelsSPS,
-    kpLevelLimit: *const SLevelLimits,
+/// **Safe since T6.G3**: both parameters were `*const` to single objects with one
+/// caller each, which is R1's shape exactly.
+pub fn WelsCheckLevelLimitation(
+    kpSps: &SWelsSPS,
+    kpLevelLimit: &SLevelLimits,
     fFrameRate: f32,
     iTargetBitRate: i32,
 ) -> i32 {
-    let uiPicWidthInMBs = (*kpSps).iMbWidth as u32;
-    let uiPicHeightInMBs = (*kpSps).iMbHeight as u32;
+    let uiPicWidthInMBs = kpSps.iMbWidth as u32;
+    let uiPicHeightInMBs = kpSps.iMbHeight as u32;
     let uiPicInMBs = uiPicWidthInMBs.wrapping_mul(uiPicHeightInMBs);
-    let uiNumRefFrames = (*kpSps).iNumRefFrames as u32;
+    let uiNumRefFrames = kpSps.iNumRefFrames as u32;
 
-    if (*kpLevelLimit).uiMaxMBPS < (uiPicInMBs as f32 * fFrameRate) as u32 {
+    if kpLevelLimit.uiMaxMBPS < (uiPicInMBs as f32 * fFrameRate) as u32 {
         return 0;
     }
-    if (*kpLevelLimit).uiMaxFS < uiPicInMBs {
+    if kpLevelLimit.uiMaxFS < uiPicInMBs {
         return 0;
     }
-    if ((*kpLevelLimit).uiMaxFS << 3) < uiPicWidthInMBs.wrapping_mul(uiPicWidthInMBs) {
+    if (kpLevelLimit.uiMaxFS << 3) < uiPicWidthInMBs.wrapping_mul(uiPicWidthInMBs) {
         return 0;
     }
-    if ((*kpLevelLimit).uiMaxFS << 3) < uiPicHeightInMBs.wrapping_mul(uiPicHeightInMBs) {
+    if (kpLevelLimit.uiMaxFS << 3) < uiPicHeightInMBs.wrapping_mul(uiPicHeightInMBs) {
         return 0;
     }
-    if (*kpLevelLimit).uiMaxDPBMbs < uiNumRefFrames.wrapping_mul(uiPicInMBs) {
+    if kpLevelLimit.uiMaxDPBMbs < uiNumRefFrames.wrapping_mul(uiPicInMBs) {
         return 0;
     }
     if iTargetBitRate != UNSPECIFIED_BIT_RATE
-        && ((*kpLevelLimit).uiMaxBR as i32).wrapping_mul(1200) < iTargetBitRate
+        && (kpLevelLimit.uiMaxBR as i32).wrapping_mul(1200) < iTargetBitRate
     {
         // RC enabled, considering bitrate constraint
         return 0;
@@ -91,9 +91,10 @@ pub unsafe fn WelsCheckLevelLimitation(
 ///
 /// # Safety
 /// `kpSps` must reference an initialised value.
-pub unsafe fn WelsGetLevelIdc(kpSps: *const SWelsSPS, fFrameRate: f32, iTargetBitRate: i32) -> ELevelIdc {
+pub fn WelsGetLevelIdc(kpSps: &SWelsSPS, fFrameRate: f32, iTargetBitRate: i32) -> ELevelIdc {
     for iOrder in 0..LEVEL_NUMBER {
-        if WelsCheckLevelLimitation(kpSps, &g_ksLevelLimits[iOrder], fFrameRate, iTargetBitRate) != 0
+        if WelsCheckLevelLimitation(kpSps, &g_ksLevelLimits[iOrder], fFrameRate, iTargetBitRate)
+            != 0
         {
             return level_idc_from_raw(g_ksLevelLimits[iOrder].uiLevelIdc);
         }
@@ -326,36 +327,36 @@ pub unsafe fn WelsCheckRefFrameLimitationLevelIdcFirst(
 /// Both pointers must be non-null and `pBsWriter` must have room for the VUI.
 pub unsafe fn WelsWriteVUI(
     buf: &mut [u8],
-    pSps: *mut SWelsSPS,
+    pSps: &SWelsSPS,
     pBsWriter: *mut BsWriter,
 ) -> i32 {
     let pBs = &mut *pBsWriter;
-    debug_assert!(!pSps.is_null() && !pBsWriter.is_null());
+    debug_assert!(!pBsWriter.is_null());
 
-    BsWriteOneBit(buf, pBs, (*pSps).bAspectRatioPresent as u32); // aspect_ratio_info_present_flag
-    if (*pSps).bAspectRatioPresent {
-        BsWriteBits(buf, pBs, 8, (*pSps).eAspectRatio as u32); // aspect_ratio_idc
-        if (*pSps).eAspectRatio == ASP_EXT_SAR as i32 {
-            BsWriteBits(buf, pBs, 16, (*pSps).sAspectRatioExtWidth as u32); // sar_width
-            BsWriteBits(buf, pBs, 16, (*pSps).sAspectRatioExtHeight as u32); // sar_height
+    BsWriteOneBit(buf, pBs, pSps.bAspectRatioPresent as u32); // aspect_ratio_info_present_flag
+    if pSps.bAspectRatioPresent {
+        BsWriteBits(buf, pBs, 8, pSps.eAspectRatio as u32); // aspect_ratio_idc
+        if pSps.eAspectRatio == ASP_EXT_SAR as i32 {
+            BsWriteBits(buf, pBs, 16, pSps.sAspectRatioExtWidth as u32); // sar_width
+            BsWriteBits(buf, pBs, 16, pSps.sAspectRatioExtHeight as u32); // sar_height
         }
     }
     BsWriteOneBit(buf, pBs, 0); // overscan_info_present_flag
 
     // See codec_app_def.h and parameter_sets.h for more info about members
     // bVideoSignalTypePresent through uiColorMatrix.
-    BsWriteOneBit(buf, pBs, (*pSps).bVideoSignalTypePresent as u32); // video_signal_type_present_flag
-    if (*pSps).bVideoSignalTypePresent {
+    BsWriteOneBit(buf, pBs, pSps.bVideoSignalTypePresent as u32); // video_signal_type_present_flag
+    if pSps.bVideoSignalTypePresent {
         // write video signal type info to header
-        BsWriteBits(buf, pBs, 3, (*pSps).uiVideoFormat as u32);
-        BsWriteOneBit(buf, pBs, (*pSps).bFullRange as u32);
-        BsWriteOneBit(buf, pBs, (*pSps).bColorDescriptionPresent as u32);
+        BsWriteBits(buf, pBs, 3, pSps.uiVideoFormat as u32);
+        BsWriteOneBit(buf, pBs, pSps.bFullRange as u32);
+        BsWriteOneBit(buf, pBs, pSps.bColorDescriptionPresent as u32);
 
-        if (*pSps).bColorDescriptionPresent {
+        if pSps.bColorDescriptionPresent {
             // write color description info to header
-            BsWriteBits(buf, pBs, 8, (*pSps).uiColorPrimaries as u32);
-            BsWriteBits(buf, pBs, 8, (*pSps).uiTransferCharacteristics as u32);
-            BsWriteBits(buf, pBs, 8, (*pSps).uiColorMatrix as u32);
+            BsWriteBits(buf, pBs, 8, pSps.uiColorPrimaries as u32);
+            BsWriteBits(buf, pBs, 8, pSps.uiTransferCharacteristics as u32);
+            BsWriteBits(buf, pBs, 8, pSps.uiColorMatrix as u32);
         }
     }
 
@@ -373,7 +374,7 @@ pub unsafe fn WelsWriteVUI(
     BsWriteUE(buf, pBs, 16); // log2_max_mv_length_vertical
 
     BsWriteUE(buf, pBs, 0); // max_num_reorder_frames
-    BsWriteUE(buf, pBs, (*pSps).iNumRefFrames as u32); // max_dec_frame_buffering
+    BsWriteUE(buf, pBs, pSps.iNumRefFrames as u32); // max_dec_frame_buffering
 
     0
 }
@@ -391,24 +392,24 @@ pub unsafe fn WelsWriteVUI(
 /// indexable by `pSps->uiSpsId`.
 pub unsafe fn WelsWriteSpsSyntax(
     buf: &mut [u8],
-    pSps: *mut SWelsSPS,
+    pSps: &SWelsSPS,
     pBsWriter: *mut BsWriter,
     pSpsIdDelta: *mut i32,
     bBaseLayer: bool,
 ) -> i32 {
     let pBs = &mut *pBsWriter;
 
-    debug_assert!(!pSps.is_null() && !pBsWriter.is_null());
+    debug_assert!(!pBsWriter.is_null());
 
-    BsWriteBits(buf, pBs, 8, (*pSps).uiProfileIdc as u32);
+    BsWriteBits(buf, pBs, 8, pSps.uiProfileIdc as u32);
 
-    BsWriteOneBit(buf, pBs, (*pSps).bConstraintSet0Flag as u32);
-    BsWriteOneBit(buf, pBs, (*pSps).bConstraintSet1Flag as u32);
-    BsWriteOneBit(buf, pBs, (*pSps).bConstraintSet2Flag as u32);
-    BsWriteOneBit(buf, pBs, (*pSps).bConstraintSet3Flag as u32);
-    if PRO_HIGH as u8 == (*pSps).uiProfileIdc
-        || PRO_EXTENDED as u8 == (*pSps).uiProfileIdc
-        || PRO_MAIN as u8 == (*pSps).uiProfileIdc
+    BsWriteOneBit(buf, pBs, pSps.bConstraintSet0Flag as u32);
+    BsWriteOneBit(buf, pBs, pSps.bConstraintSet1Flag as u32);
+    BsWriteOneBit(buf, pBs, pSps.bConstraintSet2Flag as u32);
+    BsWriteOneBit(buf, pBs, pSps.bConstraintSet3Flag as u32);
+    if PRO_HIGH as u8 == pSps.uiProfileIdc
+        || PRO_EXTENDED as u8 == pSps.uiProfileIdc
+        || PRO_MAIN as u8 == pSps.uiProfileIdc
     {
         // constraint_set4_flag: with profile_idc 77/88/100, 1 means frame_mbs_only_flag is 1
         BsWriteOneBit(buf, pBs, 1);
@@ -418,22 +419,22 @@ pub unsafe fn WelsWriteSpsSyntax(
     } else {
         BsWriteBits(buf, pBs, 4, 0); // reserved_zero_4bits, equal to 0
     }
-    BsWriteBits(buf, pBs, 8, (*pSps).iLevelIdc as u32); // iLevelIdc
+    BsWriteBits(buf, pBs, 8, pSps.iLevelIdc as u32); // iLevelIdc
     // seq_parameter_set_id
     BsWriteUE(buf, pBs,
         (*pSps)
             .uiSpsId
-            .wrapping_add(*pSpsIdDelta.add((*pSps).uiSpsId as usize) as u32),
+            .wrapping_add(*pSpsIdDelta.add(pSps.uiSpsId as usize) as u32),
     );
 
-    if PRO_SCALABLE_BASELINE as u8 == (*pSps).uiProfileIdc
-        || PRO_SCALABLE_HIGH as u8 == (*pSps).uiProfileIdc
-        || PRO_HIGH as u8 == (*pSps).uiProfileIdc
-        || PRO_HIGH10 as u8 == (*pSps).uiProfileIdc
-        || PRO_HIGH422 as u8 == (*pSps).uiProfileIdc
-        || PRO_HIGH444 as u8 == (*pSps).uiProfileIdc
-        || PRO_CAVLC444 as u8 == (*pSps).uiProfileIdc
-        || 44 == (*pSps).uiProfileIdc
+    if PRO_SCALABLE_BASELINE as u8 == pSps.uiProfileIdc
+        || PRO_SCALABLE_HIGH as u8 == pSps.uiProfileIdc
+        || PRO_HIGH as u8 == pSps.uiProfileIdc
+        || PRO_HIGH10 as u8 == pSps.uiProfileIdc
+        || PRO_HIGH422 as u8 == pSps.uiProfileIdc
+        || PRO_HIGH444 as u8 == pSps.uiProfileIdc
+        || PRO_CAVLC444 as u8 == pSps.uiProfileIdc
+        || 44 == pSps.uiProfileIdc
     {
         BsWriteUE(buf, pBs, 1); // uiChromaFormatIdc, now should be 1
         BsWriteUE(buf, pBs, 0); // uiBitDepthLuma
@@ -442,32 +443,32 @@ pub unsafe fn WelsWriteSpsSyntax(
         BsWriteOneBit(buf, pBs, 0); // seq_scaling_matrix_present_flag
     }
 
-    BsWriteUE(buf, pBs, (*pSps).uiLog2MaxFrameNum.wrapping_sub(4)); // log2_max_frame_num_minus4
-    BsWriteUE(buf, pBs, (*pSps).uiPocType); // pic_order_cnt_type
-    if (*pSps).uiPocType == 0 {
-        BsWriteUE(buf, pBs, ((*pSps).iLog2MaxPocLsb - 4) as u32); // log2_max_pic_order_cnt_lsb_minus4
-    } else if (*pSps).uiPocType == 1 {
+    BsWriteUE(buf, pBs, pSps.uiLog2MaxFrameNum.wrapping_sub(4)); // log2_max_frame_num_minus4
+    BsWriteUE(buf, pBs, pSps.uiPocType); // pic_order_cnt_type
+    if pSps.uiPocType == 0 {
+        BsWriteUE(buf, pBs, (pSps.iLog2MaxPocLsb - 4) as u32); // log2_max_pic_order_cnt_lsb_minus4
+    } else if pSps.uiPocType == 1 {
         // C++: `assert (0)` under a "TODO: implement".
         return 1;
     } else {
         // no-op for uiPocType 2.
     }
 
-    BsWriteUE(buf, pBs, (*pSps).iNumRefFrames as u32); // max_num_ref_frames
-    BsWriteOneBit(buf, pBs, (*pSps).bGapsInFrameNumValueAllowedFlag as u32); // gaps_in_frame_num_value_allowed_flag
-    BsWriteUE(buf, pBs, ((*pSps).iMbWidth as i32 - 1) as u32); // pic_width_in_mbs_minus1
-    BsWriteUE(buf, pBs, ((*pSps).iMbHeight as i32 - 1) as u32); // pic_height_in_map_units_minus1
+    BsWriteUE(buf, pBs, pSps.iNumRefFrames as u32); // max_num_ref_frames
+    BsWriteOneBit(buf, pBs, pSps.bGapsInFrameNumValueAllowedFlag as u32); // gaps_in_frame_num_value_allowed_flag
+    BsWriteUE(buf, pBs, (pSps.iMbWidth as i32 - 1) as u32); // pic_width_in_mbs_minus1
+    BsWriteUE(buf, pBs, (pSps.iMbHeight as i32 - 1) as u32); // pic_height_in_map_units_minus1
     BsWriteOneBit(buf, pBs, 1); // bFrameMbsOnlyFlag, hardcoded true in C++
 
-    let d8x8: u8 = if (*pSps).iLevelIdc >= 30 { 1 } else { 0 };
+    let d8x8: u8 = if pSps.iLevelIdc >= 30 { 1 } else { 0 };
     BsWriteOneBit(buf, pBs, d8x8 as u32); // direct_8x8_inference_flag
 
-    BsWriteOneBit(buf, pBs, (*pSps).bFrameCroppingFlag as u32); // bFrameCroppingFlag
-    if (*pSps).bFrameCroppingFlag {
-        BsWriteUE(buf, pBs, (*pSps).sFrameCrop.iCropLeft as u32); // frame_crop_left_offset
-        BsWriteUE(buf, pBs, (*pSps).sFrameCrop.iCropRight as u32); // frame_crop_right_offset
-        BsWriteUE(buf, pBs, (*pSps).sFrameCrop.iCropTop as u32); // frame_crop_top_offset
-        BsWriteUE(buf, pBs, (*pSps).sFrameCrop.iCropBottom as u32); // frame_crop_bottom_offset
+    BsWriteOneBit(buf, pBs, pSps.bFrameCroppingFlag as u32); // bFrameCroppingFlag
+    if pSps.bFrameCroppingFlag {
+        BsWriteUE(buf, pBs, pSps.sFrameCrop.iCropLeft as u32); // frame_crop_left_offset
+        BsWriteUE(buf, pBs, pSps.sFrameCrop.iCropRight as u32); // frame_crop_right_offset
+        BsWriteUE(buf, pBs, pSps.sFrameCrop.iCropTop as u32); // frame_crop_top_offset
+        BsWriteUE(buf, pBs, pSps.sFrameCrop.iCropBottom as u32); // frame_crop_bottom_offset
     }
     if bBaseLayer {
         BsWriteOneBit(buf, pBs, 1); // vui_parameters_present_flag
@@ -484,7 +485,7 @@ pub unsafe fn WelsWriteSpsSyntax(
 /// See [`WelsWriteSpsSyntax`].
 pub unsafe fn WelsWriteSpsNal(
     buf: &mut [u8],
-    pSps: *mut SWelsSPS,
+    pSps: &SWelsSPS,
     pBsWriter: *mut BsWriter,
     pSpsIdDelta: *mut i32,
 ) -> i32 {
@@ -501,18 +502,18 @@ pub unsafe fn WelsWriteSpsNal(
 /// See [`WelsWriteSpsSyntax`].
 pub unsafe fn WelsWriteSubsetSpsSyntax(
     buf: &mut [u8],
-    pSubsetSps: *mut SSubsetSps,
+    pSubsetSps: &SSubsetSps,
     pBsWriter: *mut BsWriter,
     pSpsIdDelta: *mut i32,
 ) -> i32 {
-    let pSps = &mut (*pSubsetSps).pSps as *mut SWelsSPS;
+    let pSps = &pSubsetSps.pSps;
 
     WelsWriteSpsSyntax(buf, pSps, pBsWriter, pSpsIdDelta, false);
 
-    if (*pSps).uiProfileIdc == PRO_SCALABLE_BASELINE as u8
-        || (*pSps).uiProfileIdc == PRO_SCALABLE_HIGH as u8
+    if pSps.uiProfileIdc == PRO_SCALABLE_BASELINE as u8
+        || pSps.uiProfileIdc == PRO_SCALABLE_HIGH as u8
     {
-        let pSubsetSpsExt = &mut (*pSubsetSps).sSpsSvcExt;
+        let pSubsetSpsExt = &pSubsetSps.sSpsSvcExt;
 
         BsWriteOneBit(buf, &mut *pBsWriter, 1); // bInterLayerDeblockingFilterCtrlPresentFlag
         BsWriteBits(buf, &mut *pBsWriter, 2, pSubsetSpsExt.iExtendedSpatialScalability as u32);
@@ -552,7 +553,7 @@ pub unsafe fn WelsWriteSubsetSpsSyntax(
 /// so unlike C++ there is no null case to consider here.
 pub unsafe fn WelsWritePpsSyntax(
     buf: &mut [u8],
-    pPps: *mut SWelsPPS,
+    pPps: &SWelsPPS,
     pBsWriter: *mut BsWriter,
     pParametersetStrategy: &CWelsParametersetIdStrategyObj,
 ) -> i32 {
@@ -561,16 +562,16 @@ pub unsafe fn WelsWritePpsSyntax(
     BsWriteUE(buf, pBs,
         (*pPps)
             .iPpsId
-            .wrapping_add(pParametersetStrategy.GetPpsIdOffset((*pPps).iPpsId as i32) as u32),
+            .wrapping_add(pParametersetStrategy.GetPpsIdOffset(pPps.iPpsId as i32) as u32),
     );
     BsWriteUE(buf, pBs,
-        (*pPps).iSpsId.wrapping_add(
-            pParametersetStrategy.GetSpsIdOffset((*pPps).iPpsId as i32, (*pPps).iSpsId as i32)
+        pPps.iSpsId.wrapping_add(
+            pParametersetStrategy.GetSpsIdOffset(pPps.iPpsId as i32, pPps.iSpsId as i32)
                 as u32,
         ),
     );
 
-    BsWriteOneBit(buf, pBs, (*pPps).bEntropyCodingModeFlag as u32);
+    BsWriteOneBit(buf, pBs, pPps.bEntropyCodingModeFlag as u32);
     BsWriteOneBit(buf, pBs, 0); // bPicOrderPresentFlag
 
     // DISABLE_FMO_FEATURE branch, au_set.cpp:417.
@@ -582,12 +583,12 @@ pub unsafe fn WelsWritePpsSyntax(
     BsWriteOneBit(buf, pBs, 0); // bWeightedPredFlag
     BsWriteBits(buf, pBs, 2, 0); // uiWeightedBiPredIdc
 
-    BsWriteSE(buf, pBs, (*pPps).iPicInitQp as i32 - 26);
-    BsWriteSE(buf, pBs, (*pPps).iPicInitQs as i32 - 26);
+    BsWriteSE(buf, pBs, pPps.iPicInitQp as i32 - 26);
+    BsWriteSE(buf, pBs, pPps.iPicInitQs as i32 - 26);
 
-    BsWriteSE(buf, pBs, (*pPps).uiChromaQpIndexOffset as i32);
+    BsWriteSE(buf, pBs, pPps.uiChromaQpIndexOffset as i32);
     BsWriteOneBit(buf, pBs,
-        (*pPps).bDeblockingFilterControlPresentFlag as u32,
+        pPps.bDeblockingFilterControlPresentFlag as u32,
     );
     BsWriteOneBit(buf, pBs, 0); // bConstainedIntraPredFlag
     BsWriteOneBit(buf, pBs, 0); // bRedundantPicCntPresentFlag
@@ -632,7 +633,7 @@ pub fn WelsGetPaddingOffset(
 /// # Safety
 /// All three pointers must be non-null and point to writable values.
 pub unsafe fn WelsInitSps(
-    pSps: *mut SWelsSPS,
+    pSps: &mut SWelsSPS,
     pLayerParam: *mut SSpatialLayerConfig,
     pLayerParamInternal: *mut SSpatialLayerInternal,
     _kuiIntraPeriod: u32,
@@ -644,44 +645,45 @@ pub unsafe fn WelsInitSps(
     bSVCBaselayer: bool,
 ) -> i32 {
     // C++ `memset (pSps, 0, sizeof (SWelsSPS))`. Deliberately not `SWelsSPS::default()`,
-    // which seeds uiProfileIdc = PRO_BASELINE and the VUI *_UNDEF values rather than 0.
-    std::ptr::write_bytes(pSps, 0, 1);
-    (*pSps).uiSpsId = kuiSpsId;
-    (*pSps).iMbWidth = (((*pLayerParam).iVideoWidth + 15) >> 4) as i16;
-    (*pSps).iMbHeight = (((*pLayerParam).iVideoHeight + 15) >> 4) as i16;
+    // which seeds uiProfileIdc = PRO_BASELINE and the VUI *_UNDEF values rather than 0
+    // — `SWelsSPS::ZERO` is that memset as a value (T6.G3).
+    *pSps = SWelsSPS::ZERO;
+    pSps.uiSpsId = kuiSpsId;
+    pSps.iMbWidth = (((*pLayerParam).iVideoWidth + 15) >> 4) as i16;
+    pSps.iMbHeight = (((*pLayerParam).iVideoHeight + 15) >> 4) as i16;
 
     // max value of both iFrameNum and POC are 2^16-1; in this encoder iPOC = 2*iFrameNum,
     // so max of iFrameNum should be 2^15-1.
-    (*pSps).uiLog2MaxFrameNum = 15; // 16;
-    (*pSps).uiPocType = 2;
-    (*pSps).iLog2MaxPocLsb = 1 + (*pSps).uiLog2MaxFrameNum as i32;
+    pSps.uiLog2MaxFrameNum = 15; // 16;
+    pSps.uiPocType = 2;
+    pSps.iLog2MaxPocLsb = 1 + pSps.uiLog2MaxFrameNum as i32;
 
-    (*pSps).iNumRefFrames = kiNumRefFrame as i16; /* min pRef size when fifo pRef operation */
+    pSps.iNumRefFrames = kiNumRefFrame as i16; /* min pRef size when fifo pRef operation */
 
     if kbEnableFrameCropping {
-        (*pSps).bFrameCroppingFlag = WelsGetPaddingOffset(
+        pSps.bFrameCroppingFlag = WelsGetPaddingOffset(
             (*pLayerParamInternal).iActualWidth,
             (*pLayerParamInternal).iActualHeight,
             (*pLayerParam).iVideoWidth,
             (*pLayerParam).iVideoHeight,
-            &mut (*pSps).sFrameCrop,
+            &mut pSps.sFrameCrop,
         );
     } else {
-        (*pSps).bFrameCroppingFlag = false;
+        pSps.bFrameCroppingFlag = false;
     }
-    (*pSps).uiProfileIdc = if (*pLayerParam).uiProfileIdc as u8 != 0 {
+    pSps.uiProfileIdc = if (*pLayerParam).uiProfileIdc as u8 != 0 {
         (*pLayerParam).uiProfileIdc as u8
     } else {
         PRO_BASELINE as u8
     };
     if (*pLayerParam).uiProfileIdc == PRO_BASELINE {
-        (*pSps).bConstraintSet0Flag = true;
+        pSps.bConstraintSet0Flag = true;
     }
     if ((*pLayerParam).uiProfileIdc as i32) <= PRO_MAIN as i32 {
-        (*pSps).bConstraintSet1Flag = true;
+        pSps.bConstraintSet1Flag = true;
     }
     if (kiDlayerCount > 1) && bSVCBaselayer {
-        (*pSps).bConstraintSet2Flag = true;
+        pSps.bConstraintSet2Flag = true;
     }
 
     let mut uiLevel = WelsGetLevelIdc(
@@ -694,44 +696,44 @@ pub unsafe fn WelsInitSps(
     // For Baseline/Constrained Baseline/Main/Extended, level_idc 11 with
     // constraint_set3_flag 1 means level 1b.
     if uiLevel == ELevelIdc::LEVEL_1_B
-        && ((*pSps).uiProfileIdc == PRO_BASELINE as u8
-            || (*pSps).uiProfileIdc == PRO_MAIN as u8
-            || (*pSps).uiProfileIdc == PRO_EXTENDED as u8)
+        && (pSps.uiProfileIdc == PRO_BASELINE as u8
+            || pSps.uiProfileIdc == PRO_MAIN as u8
+            || pSps.uiProfileIdc == PRO_EXTENDED as u8)
     {
         uiLevel = ELevelIdc::LEVEL_1_1;
-        (*pSps).bConstraintSet3Flag = true;
+        pSps.bConstraintSet3Flag = true;
     }
     if ((*pLayerParam).uiLevelIdc == LEVEL_UNKNOWN)
         || (((*pLayerParam).uiLevelIdc as i32) < uiLevel as i32)
     {
         (*pLayerParam).uiLevelIdc = uiLevel;
     }
-    (*pSps).iLevelIdc = (*pLayerParam).uiLevelIdc as u8;
+    pSps.iLevelIdc = (*pLayerParam).uiLevelIdc as u8;
 
     // bGapsInFrameNumValueAllowedFlag is false when spatial and temporal layer counts
     // are both 1 and ltr is 0.
-    if (kiDlayerCount == 1) && ((*pSps).iNumRefFrames == 1) {
-        (*pSps).bGapsInFrameNumValueAllowedFlag = false;
+    if (kiDlayerCount == 1) && (pSps.iNumRefFrames == 1) {
+        pSps.bGapsInFrameNumValueAllowedFlag = false;
     } else {
-        (*pSps).bGapsInFrameNumValueAllowedFlag = true;
+        pSps.bGapsInFrameNumValueAllowedFlag = true;
     }
 
-    (*pSps).bVuiParamPresentFlag = true;
+    pSps.bVuiParamPresentFlag = true;
 
-    (*pSps).bAspectRatioPresent = (*pLayerParam).bAspectRatioPresent;
-    (*pSps).eAspectRatio = (*pLayerParam).eAspectRatio as i32;
-    (*pSps).sAspectRatioExtWidth = (*pLayerParam).sAspectRatioExtWidth;
-    (*pSps).sAspectRatioExtHeight = (*pLayerParam).sAspectRatioExtHeight;
+    pSps.bAspectRatioPresent = (*pLayerParam).bAspectRatioPresent;
+    pSps.eAspectRatio = (*pLayerParam).eAspectRatio as i32;
+    pSps.sAspectRatioExtWidth = (*pLayerParam).sAspectRatioExtWidth;
+    pSps.sAspectRatioExtHeight = (*pLayerParam).sAspectRatioExtHeight;
 
     // See codec_app_def.h and parameter_sets.h for more info about members
     // bVideoSignalTypePresent through uiColorMatrix.
-    (*pSps).bVideoSignalTypePresent = (*pLayerParam).bVideoSignalTypePresent;
-    (*pSps).uiVideoFormat = (*pLayerParam).uiVideoFormat;
-    (*pSps).bFullRange = (*pLayerParam).bFullRange;
-    (*pSps).bColorDescriptionPresent = (*pLayerParam).bColorDescriptionPresent;
-    (*pSps).uiColorPrimaries = (*pLayerParam).uiColorPrimaries;
-    (*pSps).uiTransferCharacteristics = (*pLayerParam).uiTransferCharacteristics;
-    (*pSps).uiColorMatrix = (*pLayerParam).uiColorMatrix;
+    pSps.bVideoSignalTypePresent = (*pLayerParam).bVideoSignalTypePresent;
+    pSps.uiVideoFormat = (*pLayerParam).uiVideoFormat;
+    pSps.bFullRange = (*pLayerParam).bFullRange;
+    pSps.bColorDescriptionPresent = (*pLayerParam).bColorDescriptionPresent;
+    pSps.uiColorPrimaries = (*pLayerParam).uiColorPrimaries;
+    pSps.uiTransferCharacteristics = (*pLayerParam).uiTransferCharacteristics;
+    pSps.uiColorMatrix = (*pLayerParam).uiColorMatrix;
 
     0
 }
@@ -742,7 +744,7 @@ pub unsafe fn WelsInitSps(
 /// All three pointers must be non-null and point to writable values.
 #[allow(clippy::too_many_arguments)]
 pub unsafe fn WelsInitSubsetSps(
-    pSubsetSps: *mut SSubsetSps,
+    pSubsetSps: &mut SSubsetSps,
     pLayerParam: *mut SSpatialLayerConfig,
     pLayerParamInternal: *mut SSpatialLayerInternal,
     kuiIntraPeriod: u32,
@@ -752,12 +754,13 @@ pub unsafe fn WelsInitSubsetSps(
     bEnableRc: bool,
     kiDlayerCount: i32,
 ) -> i32 {
-    let pSps = &mut (*pSubsetSps).pSps as *mut SWelsSPS;
-
-    std::ptr::write_bytes(pSubsetSps, 0, 1);
+    // The memset comes first now and the borrow after it, which is the same order
+    // of effects: the C++ takes `pSps` before the memset and the memset then zeroes
+    // the very bytes it points at.
+    *pSubsetSps = SSubsetSps::ZERO;
 
     WelsInitSps(
-        pSps,
+        &mut pSubsetSps.pSps,
         pLayerParam,
         pLayerParamInternal,
         kuiIntraPeriod,
@@ -771,12 +774,12 @@ pub unsafe fn WelsInitSubsetSps(
 
     // Note: unlike WelsInitSps this takes uiProfileIdc verbatim, with no PRO_BASELINE
     // fallback for 0.
-    (*pSps).uiProfileIdc = (*pLayerParam).uiProfileIdc as u8;
+    pSubsetSps.pSps.uiProfileIdc = (*pLayerParam).uiProfileIdc as u8;
 
-    (*pSubsetSps).sSpsSvcExt.iExtendedSpatialScalability = 0; /* ESS is 0 in default */
-    (*pSubsetSps).sSpsSvcExt.bAdaptiveTcoeffLevelPredFlag = false;
-    (*pSubsetSps).sSpsSvcExt.bSeqTcoeffLevelPredFlag = false;
-    (*pSubsetSps).sSpsSvcExt.bSliceHeaderRestrictionFlag = true;
+    pSubsetSps.sSpsSvcExt.iExtendedSpatialScalability = 0; /* ESS is 0 in default */
+    pSubsetSps.sSpsSvcExt.bAdaptiveTcoeffLevelPredFlag = false;
+    pSubsetSps.sSpsSvcExt.bSeqTcoeffLevelPredFlag = false;
+    pSubsetSps.sSpsSvcExt.bSliceHeaderRestrictionFlag = true;
 
     0
 }
@@ -786,46 +789,43 @@ pub unsafe fn WelsInitSubsetSps(
 /// The `#if !defined(DISABLE_FMO_FEATURE)` slice-group block at au_set.cpp:614-636 is
 /// not compiled — see `as264_common.h:53`.
 ///
-/// # Safety
-/// `pPps` must be writable; at least one of `pSps`/`pSubsetSps` must be non-null, and
-/// the one selected by `kbUsingSubsetSps` must be.
-pub unsafe fn WelsInitPps(
-    pPps: *mut SWelsPPS,
-    pSps: *mut SWelsSPS,
-    pSubsetSps: *mut SSubsetSps,
+/// **T6.G3: the two "at least one of these is null" parameters are `Option`s.** The
+/// C++ takes both as pointers and picks between them on `kbUsingSubsetSps`, checking
+/// the chosen one for null; that is three runtime states standing in for two, and the
+/// port's own `debug_assert!`s were the record of which. The signature says it now,
+/// and the selection is one expression that cannot pick something absent.
+pub fn WelsInitPps(
+    pPps: &mut SWelsPPS,
+    pSps: Option<&SWelsSPS>,
+    pSubsetSps: Option<&SSubsetSps>,
     kuiPpsId: u32,
     kbDeblockingFilterPresentFlag: bool,
     kbUsingSubsetSps: bool,
     kbEntropyCodingModeFlag: bool,
 ) -> i32 {
-    let pUsedSps: *mut SWelsSPS;
-    if pPps.is_null() || (pSps.is_null() && pSubsetSps.is_null()) {
-        return 1;
-    }
-    if !kbUsingSubsetSps {
-        debug_assert!(!pSps.is_null());
-        if pSps.is_null() {
-            return 1;
-        }
-        pUsedSps = pSps;
+    let pUsedSps = if kbUsingSubsetSps {
+        pSubsetSps.map(|s| &s.pSps)
     } else {
-        debug_assert!(!pSubsetSps.is_null());
-        if pSubsetSps.is_null() {
-            return 1;
-        }
-        pUsedSps = std::ptr::addr_of_mut!((*pSubsetSps).pSps);
-    }
+        pSps
+    };
+    // The C++'s two guards collapse to one: it rejected "neither pointer given"
+    // up front and `debug_assert!`ed the selected arm separately. `None` on the
+    // selected arm is the same rejection either way, and the caller cannot now
+    // supply the wrong arm's set and have it silently used.
+    let Some(pUsedSps) = pUsedSps else {
+        return 1;
+    };
 
     /* fill picture parameter set syntax */
-    (*pPps).iPpsId = kuiPpsId;
-    (*pPps).iSpsId = (*pUsedSps).uiSpsId;
-    (*pPps).bEntropyCodingModeFlag = kbEntropyCodingModeFlag;
+    pPps.iPpsId = kuiPpsId;
+    pPps.iSpsId = pUsedSps.uiSpsId;
+    pPps.bEntropyCodingModeFlag = kbEntropyCodingModeFlag;
 
-    (*pPps).iPicInitQp = 26;
-    (*pPps).iPicInitQs = 26;
+    pPps.iPicInitQp = 26;
+    pPps.iPicInitQs = 26;
 
-    (*pPps).uiChromaQpIndexOffset = 0;
-    (*pPps).bDeblockingFilterControlPresentFlag = kbDeblockingFilterPresentFlag;
+    pPps.uiChromaQpIndexOffset = 0;
+    pPps.bDeblockingFilterControlPresentFlag = kbDeblockingFilterPresentFlag;
 
     0
 }
@@ -925,7 +925,7 @@ mod tests {
         unsafe {
             WelsInitSps(&mut sps, &mut lp, &mut li, 0, 1, 0, true, false, 1, false);
             assert_eq!(
-                WelsInitPps(&mut pps, &mut sps, std::ptr::null_mut(), 0, true, false, false),
+                WelsInitPps(&mut pps, Some(&sps), None, 0, true, false, false),
                 0
             );
         }
@@ -956,7 +956,7 @@ mod tests {
         // test above.
         let written = unsafe {
             WelsInitSps(&mut sps, &mut lp, &mut li, 0, 1, 0, true, false, 1, false);
-            WelsInitPps(&mut pps, &mut sps, std::ptr::null_mut(), 0, true, false, false);
+            WelsInitPps(&mut pps, Some(&sps), None, 0, true, false, false);
 
             let st = CreateParametersetStrategy(EParameterSetStrategy::CONSTANT_ID, false, 1)
                 .expect("CONSTANT_ID is ported");
@@ -977,15 +977,7 @@ mod tests {
         let mut pps = SWelsPPS::default();
         unsafe {
             assert_eq!(
-                WelsInitPps(
-                    &mut pps,
-                    std::ptr::null_mut(),
-                    std::ptr::null_mut(),
-                    0,
-                    true,
-                    false,
-                    false
-                ),
+                WelsInitPps(&mut pps, None, None, 0, true, false, false),
                 1
             );
         }
