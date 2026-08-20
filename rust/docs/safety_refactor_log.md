@@ -11927,3 +11927,189 @@ kernel signatures, the screen-content family (now including `SVAAFrameInfoExt` a
 `SVAAFrameInfoExt_t`, newly tagged), `sSliceBs.pBs` and the MT files,
 `wels_encoder_ext.rs`'s internals, and session E's named `*mut SMB` 48 /
 `*mut SMbCache` 72.
+
+## Phase 6, session G — the constructor, the aliases, and the fields that were only ever declarations (2026-08-20)
+
+**All five steps landed, none dropped.** The encoder context has a real constructor;
+its current layer, its active SPS and its active PPS are ids; the layer's three
+parameter-set pointers are two id fields; and **six fields were deleted rather than
+converted**, because six of them were never read by anything. `mem::zeroed::<sWelsEncCtx>()`
+reads **0** tree-wide. No stored field anywhere names `*mut SWelsSPS`, `*mut SWelsPPS`
+or `*mut SSubsetSps`. Nothing owns yet and nothing takes `&mut sWelsEncCtx` — both are
+H's and I's, by the brief's own boundary.
+
+**The brief's premises, re-grepped (S24).** `pCurDqLayer` 281 lines: **confirmed
+exactly**, though the number is lines and the conversion surface is the 152 *field
+accesses* — the decoder has ~600 unrelated locals of the same name. The rest drifted:
+the offset pins are **15, not 17** (`encoder_context.rs`'s own doc comment said
+fifteen), the context has **70 fields, not 71**, `rc.rs` is 93 raw *occurrences* on 87
+lines and `paraset_strategy.rs` 36 lines, not 41. Every number below was measured at
+this session's close.
+
+**Step 0 — the inherited chore was not a formality.** S40 says an accessor surviving
+on "no caller re-derives yet" inherits F63's test rather than the assumption, and named
+the decoder's `SPicture::data_ptr`. It was not surviving on merit: the test —
+`data_ptr` twice, then the **first** cursor written through — fails under Miri against
+the spelling that was in the tree, with the `Unique` retag at `safe/plane.rs:233`
+(`&mut self.buf`) named as the invalidator. Red proof taken before the fix; fix is
+F63's (`PaddedPlane::root_ptr`, the address out of the `Vec` header). The test also
+holds a chroma cursor live across a re-derivation of luma, so a future spelling that
+narrows to one plane fails here too.
+
+**Step 1 — F64, and the byte-comparison test the brief asked for could not exist.**
+The recipe was: build `sWelsEncCtx::new()` field-wise, then compare
+`size_of::<sWelsEncCtx>()` bytes against the shell it replaces and expect zero
+differences. It reads zero differences — but not as a `memcmp`, and the reason is
+worth the finding number:
+
+> **A field-wise constructor cannot be proved *byte*-equal to a memset image, only
+> value-equal, and the difference is exactly the bytes the type does not define.**
+
+Miri found it **four times, and the last one is the finding's real content.** `None`
+defines its *discriminant* and nothing else, so `None` of an `Option<SrcPicId>` is four
+defined bytes (the `NonZeroU32` niche) and four uninitialized ones (`pool::Id`'s
+debug-only generation) where the shell wrote zeros; `SSpatialPicIndex::pSrc` does it
+one level down; **interior `repr(C)` padding does it with no `Option` at all** — 3
+bytes inside `SParaSetOffsetVariable`, 8 inside `TagVideoEncoderStatistics`; and then
+**`iCurDqLayer` did it with no niche at all**, three commits after the field landed,
+surfacing only in the phase-`exit` battery because ordinary `cargo test` reads whatever
+is in the heap slot and it happened to be zero. `Option<LayerIdx>` is a tag byte plus a
+payload byte; `None` writes the tag. The first three readings all said "niche-optimized"
+and that adjective was doing no work — **it changes where the discriminant lives, not
+whether the payload is written** — so the rule is written about `Option`, full stop.
+The instrument is two tiers: **59 fields compared byte for byte and attributed by name
+(96071 of 97872 bytes), 10 named fields compared by value, 61 bytes of inter-field
+padding reported**, plus the sentence that stops a fifth round: *a field added to this
+struct as an `Option` belongs on the by-value list, and the test says so under Miri
+when it is not.* Excluding them silently would have been the failure the test exists to
+prevent, one level up.
+
+**Step 2 — three of the four writers got *shorter*, which is the argument for the
+whole face.** `pCurDqLayer` was a `*mut SDqLayer` alias into `ppDqLayerList`; it is
+`Option<LayerIdx>`, resolved by `current_layer(pCtx)` at all 152 sites, answering null
+in exactly the two cases the field was null so every `is_null()` guard still asks its
+own question. 25 sites are `let pCurDqLayer = current_layer(pEncCtx);` at a function's
+head and offset out of the cursor exactly as before — **the identity moved, the idiom
+did not**. `WelsEncoderEncodeExt`'s two writers stored `ppDqLayerList[iCurDid]` and now
+store `iCurDid`. `WelsSwapDqLayers` is the sharp one: T6.D3's comment says the layer
+carries `iDqIdx` *because* this site holds only an address, and the context holds the
+index itself now, so the round trip is gone. The fourth is the recorded MT one-liner —
+`AdjustBaseLayer`, which had read `ppDqLayerList[0]` two lines up; one line changed,
+body untouched, Phase 7's.
+
+**Step 3 — six fields were declarations and nothing else, and the C++ agrees.**
+`sWelsEncCtx::pSubsetSps`: never read, never written, by either tree. `SSliceHeader::pSps`
+and `pPps`: written in three places, read nowhere — and their replacement was *already
+in the struct*, because `iSpsId`/`iPpsId` are the same two numbers, written from the
+same locals in the same statement block. Converting them to ids would have made a second
+dead copy of a number stored two lines down. (The C++ **does** read
+`pSliceHeader->pPps->iPpsId`; this port reads `sLayerInfo.pPpsP` at both of those sites
+and has said so in a comment since Phase 4b. `iPpsId` is write-only for the same reason
+and stays — it is a syntax element, not a pointer.) `SSliceHeaderExt::pSubsetSps`:
+never touched by either tree. And `WelsGenerateNewSps`'s two `*mut *mut` out-parameters
+handed back values the caller recomputed from the id the function returns, in the very
+next statement.
+
+**The one that had to become a type rather than an id.** `SLayerInfo::pSpsP` did **not**
+name a position in one array: `WelsInitCurrentLayer`'s SVC arm aims `pSubsetSpsP` at
+`pSubsetArray[id]` and then aims `pSpsP` *inside it*, at `SSubsetSps::pSps`; its AVC arm
+nulls the first and aims `pSpsP` at `pSpsArray[id]`. That is a tagged union whose tag is
+spelled as a null pointer. It is `Option<LayerSps>` — `Avc(SpsId)` | `Subset(SubsetSpsId)`
+— one field where there were two, because two `Option`s would leave three states the
+encoder cannot be in and one of them (both `Some`, disagreeing) is the bug the null
+spelling could produce. Three id types, not one, because the *strategy* has three id
+spaces and the context three arrays, and `WelsInitCurrentLayer` reaches two of them with
+the same local.
+
+**Step 3c, the 6.5 R1 fold.** Nine `au_set.rs` signatures take references; two stop
+being `unsafe fn`. `WelsInitPps` took two SPS pointers and a flag choosing between them
+— three runtime states standing in for two — and takes `Option<&SWelsSPS>` /
+`Option<&SSubsetSps>` now. The two `memset`s the builders open with are `SWelsSPS::ZERO`
+and `SSubsetSps::ZERO`, field by field, and they exist because **`Default` is
+deliberately not the zero here**: it seeds `uiProfileIdc = PRO_BASELINE` and the VUI
+`*_UNDEF` values. The port has carried that as a comment at the memset since Phase 3;
+this is the ruling F56 asks for. `au_set.rs`'s 22 remaining raw pointers name no
+parameter set.
+
+**Step 4 found nothing to sweep, and that is the result.** `rc.rs`'s 93 raw pointers,
+attributed line by line into the module header where the next session will see it:
+**61** context parameters (I — the arena is decided all at once by the S37 inventory,
+not file by file), **16** `SWelsSvcRc` members and reaches (H), **7** slice parameters
+(I; five behind `pfWelsRcMbInit`/`pfWelsRcMbInfoUpdate`, 4b's fence), **6**
+screen-content `SVAAFrameInfoExt` casts (Phase 10, fenced), **3** the `CMemoryAlign`
+carve-up (H). The entry worth having is the one that looks convertible and is not:
+`GomRCInitForOneSlice` is R1's shape exactly, and its caller binds
+`pBs = slice_writer(pEncCtx, pCurSlice)` **before** the call and uses `pBs` **after**
+it — a `&mut SSlice` is a `Unique` retag over 6496 bytes and would pop `pBs`. F13's
+family, S25's rule. Converting it is a decision with an owner, not a sweep.
+
+**Sizes and pins, re-measured in both profiles at every step that moved one (S36).**
+`sWelsEncCtx` **97888/97792 → 97872/97784**. The asymmetry at step 2 is the lesson:
+`Option<LayerIdx>` is 2 bytes against a pointer's 8, and in **release** it lands in the
+padding the following pointer already required, so nothing after it moves and the size
+does not change — while in **debug** every offset from `ppDqLayerList` on drops by 8.
+The first prediction was wrong in one profile; the pins are measured, never predicted.
+`SSliceHeader` 168 → **152**, `SSliceHeaderExt` 192 → **168**, `SLayerInfo` 48 → **32**
+(and no longer `repr(C)` — an `Option` over a payload enum has no C shape, `SDqLayer`'s
+precedent), `SDqLayer` 840/768 → **824/752**.
+
+**Perf.** One span at the close, 7 pairs against `4a414c27`, fresh null band the same
+run. Null: 28 rows, median **+0.00%**, spread −6.25%…+2.02%, 0 rows over 5%. Span:
+decode median **+0.00%** (3 rows, −0.07%…+0.12%); encode median **+1.07%**, min
+**+0.00%**, max **+2.32%**, **0 rows over 5%**. **No tripwire breached, so no S39
+attribution was owed** — but the shape is diagnostic and is worth writing down anyway:
+every encode row is non-negative where the null's signs straddled zero, and the cost
+concentrates exactly where session F's residue does — SMPTE Bars +1.4…2.3%, Mandelbrot
++0.44…0.76%. That is a fixed per-macroblock overhead, invisible where a macroblock
+costs a lot and visible where it costs nothing, and here it is the resolution accessors
+turning one load into two or three. Two of them were paid down inside the session:
+`svc_set_mb_syn_cabac`'s two adjacent resolutions became one, and
+`svc_set_mb_syn_cavlc` stopped resolving the same PPS a second time to recompute a
+value already bound at its function's head. `svc_set_mb_syn_cavlc`'s *other* pair was
+deliberately **not** hoisted — that file's own header records why it derives at each
+use, and the hoist would cross the calls the record is about. Cumulative encoder
+deficit ≈ **+14…+16%**; D-perf-4's +25% tripwire unbreached.
+
+**Metrics** (`src/encoder` + `src/processing`), `4a414c27` → close: `raw_ptr`
+**1888 → 1874 (−14)**, `unsafe_fn` **684 → 688 (+4)**, `unsafe_block` **288 → 286
+(−2)**, `mem_zeroed` **21 → 20**. Crate-wide `raw_ptr` **2481 → 2467**, `unsafe_block`
+454 → 459 (**+5 net, and +7 of those are the decoder's new S40 test**). The `unsafe_fn`
+rise is **seven** new resolution accessors (`current_layer`, `set_current_layer`,
+`ctx_sps`, `ctx_pps`, `layer_sps`, `layer_pps`, `layer_subset_sps`) against **three**
+functions that stopped being `unsafe` at all (`WelsGetLevelIdc`,
+`WelsCheckLevelLimitation`, `WelsInitPps` — T6.G3c's message says two, and it was
+written before the third landed in the same commit). **The metric cannot see this face's real
+win**: `(*pCtx).pCurDqLayer` never contained the token it counts, and 152 of those
+became a call into one audited body.
+
+**Gates.** `family` at every step's close. **The `exit` battery ran twice: the first
+run failed on Miri `--lib` — F64's fourth round, above — and that is the fifth
+consecutive session in which it has caught a defect the session introduced**, this one
+three commits old and invisible to every other instrument (ordinary `cargo test` reads
+whatever is in the heap slot, and it was zero). The second reads **15 passed / 0 failed
+/ 1 skipped, OVERALL: PASS**: Miri `--lib` **349 passed / 0 failed** at 1411.29 s with
+all four encoder probes read out of the output by name plus
+`encoder_initialisation_runs_under_the_aliasing_checker`,
+`kernels_differential_phase2` 20/0, `safe_bits_differential` 7/0,
+`safe_plane_differential` 3/0, tests **492 / 486 / 20**, both benches bit-identical,
+**both sweeps 369/369**, census 58, ratchet clean. The one SKIP is the standing fuzz
+one (Phase 0 T7 was never built).
+
+**F3 measurements 80–84, five hits across four batteries, every one the signature** (`mt`, `sm=3`, `t` ∈ {2,4}, zero-byte
+output), every one cleared **5/5** on the mandated retry in its own profile. The retry
+script rebuilds the harness per profile before running and is written as bash —
+measurement 78's trap, checked second after the configuration itself. Steps 2, 3c and 4
+read **369/369 both profiles** with no retry needed.
+
+**What session H inherits, named.** Every container the context still holds raw and the
+allocation behind it: `ppDqLayerList`'s block, `ppRefPicListExt`, the three
+parameter-set arrays (which is all that is left of the SPS/PPS/subset types),
+`pMvdCostTable`, `pFrameBs`, `pWelsSvcRc` and `RcInitLayerMemory`'s carve-up, `pOut`,
+`pDqIdcMap`, `pPSOVector`, `pStrideTab`, `pVaa`, `pVpp`, `pMemAlign`. Four `mem::zeroed`
+`Default`s survive on types H or I owns — `SSliceHeader`, `SSliceHeaderExt` (both sound:
+they lost their pointers this session and hold no niche type), `SWelsOut`, and
+`SWelsFuncPtrList`'s seven sites, which are I's with the dispatch tables. The boundary
+list is otherwise untouched: `&mut sWelsEncCtx` anywhere (I, after S37),
+`SWelsFuncPtrList` (I), the MT files and `sSliceBs.pBs` (Phase 7), `wels_encoder_ext.rs`
+internals (Phase 8), E's and F's named survivors and F5's ~10 per-macroblock handle
+resolutions (Phase 9), the `SCREEN_CONTENT(dormant)` family (Phase 10).

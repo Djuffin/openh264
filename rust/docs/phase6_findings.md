@@ -331,6 +331,94 @@ retag. The three encode probes go from **aborting** to **3 passed / 0 failed**.
 
 ---
 
+## F64 — a field-wise constructor is not byte-equal to a memset image, and the difference is the bytes the type does not define
+
+**Status: understood and instrumented, 2026-08-20 (Phase 6 session G, T6.G1). Not a
+defect in the port — a defect in a *method* the port was about to adopt.**
+
+### What it is
+
+Phase 5b's recipe for replacing a `mem::zeroed()` shell with a real constructor ends
+with a verification step: compare `size_of::<T>()` bytes between the constructor's
+output and the shell it replaces, attribute every differing offset by `offset_of!`,
+and expect zero differences. Session G's brief carried it forward verbatim for
+`sWelsEncCtx` — 70 fields, 97888 bytes.
+
+**The comparison cannot be written as stated.** A struct literal writes the struct's
+*fields*; it does not write anything else. Two things in `sWelsEncCtx` are not fields:
+
+* **`repr(C)` padding between fields.** `mem::zeroed()` writes it; a literal does not.
+  53 bytes, in this struct, at this commit.
+* **An `Option`'s payload, when it is `None`.** `None` defines the *discriminant* and
+  nothing else. `Option<SrcPicId>` in a debug build is 8 bytes — a `NonZeroU32` index
+  and `pool::Id`'s generation counter — and `None` writes the niche (index 0) and
+  leaves the generation bytes **undefined**. `mem::zeroed()` wrote zeros there.
+  `new()` does not, and is not obliged to.
+
+Reading either kind of byte is UB (`reading memory at …, but memory is uninitialized`),
+so the naive instrument does not merely report noise: it is unsound, and Miri says so.
+
+**It said so four times, and the third and fourth are the finding's real content**,
+because each time the taxonomy was corrected it was still too narrow:
+
+1. `pEncPic` — the handle case above.
+2. `sSpatialIndexMap` — the same thing one level down, in an element type.
+3. `sPSOVector` and `sEncoderStatistics` — **interior `repr(C)` padding**, with no
+   `Option` involved at all: 3 bytes inside `SParaSetOffsetVariable` (between
+   `bUsedParaSetIdInBs[57]` and a `u32`), 8 inside `TagVideoEncoderStatistics`.
+4. `iCurDqLayer` — **and this one only surfaced in the phase-`exit` battery**, three
+   commits after the field landed, because ordinary `cargo test` reads whatever
+   happens to be in the heap slot and it happened to be zero. `Option<LayerIdx>` has
+   **no niche**: `LayerIdx` is a plain `u8`, so the `Option` is a tag byte plus a
+   payload byte. `None` writes the tag and leaves the payload undefined, exactly as
+   the handles do.
+
+The fourth is why the rule below is written about `Option`, not about niches. The
+first three readings all said "niche-optimized", and that adjective was doing no work
+— it changes *where* the discriminant lives, not whether the payload is written.
+
+### The statement that is true
+
+> A field-wise constructor cannot be proved *byte*-equal to a memset image, only
+> **value**-equal, and the difference is exactly the bytes the type does not define.
+
+### What it means in practice
+
+The verification survives, narrower and stronger, in two tiers — and the tiering is
+the finding, because the thing it prevents is a field being excluded *silently*:
+
+1. **Byte-compared, attributed by name.** Every field whose type defines all of its
+   bytes: scalars, pointers, `repr(C)` enums, and arrays of those. 59 fields, 96071 of
+   97872 bytes, differences reported per field with the offset.
+2. **Value-compared, listed by name in the test.** The ten that are an `Option` or
+   carry interior padding — `pEncPic`, `pDecPic`, `pRefPic`, `pRefList0`,
+   `sSpatialIndexMap`, `iCurDqLayer`, `iSps`, `iPps`, `sPSOVector`,
+   `sEncoderStatistics`. Each gets an assertion saying what its zero *means* ("no
+   picture is bound", "no layer is current", "nothing has been encoded").
+   **A field added to this struct as an `Option` belongs on that list**, and the test
+   says so under Miri when it is not — which is how the fourth round was found.
+3. The residue — 61 bytes of inter-field padding at this session's close — is
+   **printed, not asserted**,
+   because it moves whenever a field's width does, and every later step of this
+   session moved one.
+
+Nothing reads a `None`'s payload (it is read when a `Some` is unwrapped, and there is
+no `Some` in a fresh context) and nothing reads padding, so the narrower statement is
+the one that was load-bearing all along. In a **release** build the picture handles are
+4 bytes with no generation at all, so that part of the residue is debug-only; the tag
++ payload `Option`s are the same size in both.
+
+### Where it applies next
+
+Every remaining `mem::zeroed()` `Default` this port replaces — `SWelsFuncPtrList` (7
+sites, session I), `SSliceHeader`, `SSliceHeaderExt`, `SWelsOut` (session H) — and
+every `SomeStruct::ZERO` written to stand in for a C++ `memset`. Session G wrote three
+of those (`SWelsSPS::ZERO`, `SSpsSvcExt::ZERO`, `SSubsetSps::ZERO`) and they carry the
+same caveat: they reproduce the memset's *values*, and a caller that compares them to
+one byte for byte is asking a question with no answer.
+
+---
+
 ## F62 — `ParamTranscode` drops the caller's `iLTRRefNum`, and no gate could see it
 
 *Phase 6 session F, 2026-08-20, found while checking the long-term-reference
