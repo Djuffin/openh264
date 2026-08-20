@@ -199,7 +199,14 @@ assert_size!(SMcFunc, 48);
 // guard: -64, measured 176.
 assert_size!(SSampleDealingFunc, 176);
 assert_size!(SRCSlicing, 44);
-assert_size!(SStrideTables, 160);
+// **160 in the C++, and 184 is the port's own number since T6.H1** — the same
+// move `SPicture` made at T6.F0. The struct held sixteen raw pointers into one
+// block it did not own; it now owns the block (`Vec<i32>`, 24 bytes) and the
+// sixteen pointers are `Option<u32>` byte offsets into it (8 each where a pointer
+// was 8). The pin stays because what it catches is unchanged — a field added,
+// dropped, or given the wrong width, and a second declaration read at the wrong
+// offsets — it just no longer claims correspondence with a C++ `sizeof`.
+assert_size!(SStrideTables, 184);
 assert_size!(SWelsME, 96);
 assert_size!(SWelsMD, 4000);
 // `SVAAFrameInfo`: 264 in the C++. Phase 6 session B dissolved the `IWelsVP`

@@ -654,8 +654,10 @@ pub unsafe fn WelsEncRecI4x4Y(
 
     let did = (*pEncCtx).uiDependencyId as usize;
     let tid_is_zero = if (*pEncCtx).uiTemporalId == 0 { 1 } else { 0 };
-    let pStrideEncBlockOffset = (*(*pEncCtx).pStrideTab).pStrideEncBlockOffset[did];
-    let pStrideDecBlockOffset = (*(*pEncCtx).pStrideTab).pStrideDecBlockOffset[did][tid_is_zero];
+    let pStrideEncBlockOffset =
+        crate::encoder::encoder_context::ctx_stride_enc_block_offset(pEncCtx, did);
+    let pStrideDecBlockOffset =
+        crate::encoder::encoder_context::ctx_stride_dec_block_offset(pEncCtx, did, tid_is_zero);
 
     let enc_block_offset = *pStrideEncBlockOffset.add(uiI4x4Idx as usize) as isize;
     let dec_block_offset = *pStrideDecBlockOffset.add(uiI4x4Idx as usize) as isize;
