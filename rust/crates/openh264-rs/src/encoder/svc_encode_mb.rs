@@ -52,6 +52,7 @@ pub use crate::encoder::encoder_context::SPicData;
 pub use crate::encoder::param_svc::SWelsPPS;
 pub use crate::encoder::encoder_context::SStrideTables;
 pub use crate::encoder::svc_encode_slice::SLayerInfo;
+use crate::encoder::svc_encode_slice::layer_pps;
 use crate::encoder::svc_encode_slice::current_layer;
 pub use crate::encoder::md::SMbCache;
 pub use crate::encoder::md::SMB;
@@ -1007,7 +1008,7 @@ pub unsafe fn WelsTryPUVskip(
         crate::encoder::md::coeff_level(pMbCache).add(256 + 64)
     };
 
-    let pPpsP = (*current_layer(pEncCtx)).sLayerInfo.pPpsP;
+    let pPpsP = layer_pps(pEncCtx, current_layer(pEncCtx));
     let chroma_qp_index_offset = if !pPpsP.is_null() {
         (*pPpsP).uiChromaQpIndexOffset as i32
     } else {

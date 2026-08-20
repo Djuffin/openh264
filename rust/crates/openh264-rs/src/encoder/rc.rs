@@ -47,6 +47,7 @@
 use crate::common::memory_align::CMemoryAlign;
 use crate::{RCMode, SSliceArgument, SSpatialLayerConfig, EUsageType};
 pub use crate::encoder::svc_encode_slice::SSliceHeader;
+use crate::encoder::svc_encode_slice::layer_pps;
 use crate::encoder::svc_encode_slice::ctx_pps;
 use crate::encoder::svc_encode_slice::current_layer;
 pub use crate::encoder::svc_encode_slice::SSliceHeaderExt;
@@ -1436,7 +1437,7 @@ pub unsafe fn RcCalculateMbQp(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSlice, pC
 
     let mut iLumaQp = pSOverRc.iCalculatedQpSlice;
     let pCurLayer = current_layer(pEncCtx);
-    let kuiChromaQpIndexOffset = (*(*pCurLayer).sLayerInfo.pPpsP).uiChromaQpIndexOffset;
+    let kuiChromaQpIndexOffset = (*layer_pps(pEncCtx, pCurLayer)).uiChromaQpIndexOffset;
 
     if (*(*pEncCtx).pSvcParam).bEnableAdaptiveQuant {
         let pVaa = (*pEncCtx).pVaa;
@@ -2165,7 +2166,7 @@ pub unsafe extern "C" fn WelsRcMbInitGom(
     let pWelsSvcRc = (*pEncCtx).pWelsSvcRc.add(did);
     let pSOverRc = &mut (*pSlice).sSlicingOverRc;
     let pCurLayer = current_layer(pEncCtx);
-    let kuiChromaQpIndexOffset = (*(*pCurLayer).sLayerInfo.pPpsP).uiChromaQpIndexOffset;
+    let kuiChromaQpIndexOffset = (*layer_pps(pEncCtx, pCurLayer)).uiChromaQpIndexOffset;
 
     pSOverRc.iBsPosSlice = (*(*pEncCtx).pFuncList).eEntropyCoder.GetBsPosition(crate::encoder::svc_encode_slice::slice_writer(pEncCtx, pSlice), pSlice);
 
@@ -2266,7 +2267,7 @@ pub unsafe extern "C" fn WelsRcMbInitDisable(
     let did = (*pEncCtx).uiDependencyId as usize;
     let pWelsSvcRc = (*pEncCtx).pWelsSvcRc.add(did);
     let pCurLayer = current_layer(pEncCtx);
-    let kuiChromaQpIndexOffset = (*(*pCurLayer).sLayerInfo.pPpsP).uiChromaQpIndexOffset;
+    let kuiChromaQpIndexOffset = (*layer_pps(pEncCtx, pCurLayer)).uiChromaQpIndexOffset;
 
     if (*(*pEncCtx).pSvcParam).bEnableAdaptiveQuant && (*pEncCtx).eSliceType as i32 == P_SLICE {
         let pVaa = (*pEncCtx).pVaa;

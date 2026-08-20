@@ -222,8 +222,19 @@ pub struct SSliceHeader {
     pub uiDisableDeblockingFilterIdc: u8,
     pub iSliceAlphaC0Offset: i8,
     pub iSliceBetaOffset: i8,
-    pub pSps: *mut SWelsSPS,
-    pub pPps: *mut SWelsPPS,
+    // **`pSps` and `pPps` stood here and are deleted, not converted** (T6.G3).
+    // Their replacement was already in the struct: `iSpsId`/`iPpsId`, immediately
+    // below, are the same two numbers, written from the same locals in the same
+    // statement block (`WelsInitCurrentLayer`) and copied by the same function
+    // (`InitSliceHeadWithBase`). Converting the pointers to ids would have produced
+    // a second dead copy of a number already stored two lines down.
+    //
+    // Dead is measured, not assumed: grepped tree-wide at this step, both fields are
+    // **written and never read**. The C++ does read `pSliceHeader->pPps->iPpsId`
+    // (`svc_encode_slice.cpp:285`/`:361`) — this port reads `sLayerInfo.pPpsP`
+    // there instead, and says so at both sites. So does `iPpsId` below, which is
+    // write-only for the same reason; it stays because it is a syntax element and
+    // not a pointer, and naming it here is cheaper than finding it again.
     pub iSpsId: i32,
     pub iPpsId: i32,
     pub uiIdrPicId: u16,
@@ -243,7 +254,9 @@ impl Default for SSliceHeader {
 #[derive(Debug, Copy, Clone)]
 pub struct SSliceHeaderExt {
     pub sSliceHeader: SSliceHeader,
-    pub pSubsetSps: *mut SSubsetSps,
+    // **`pSubsetSps` stood here and is deleted** (T6.G3): declared by the C++,
+    // transcribed by this port, and never written or read by either. The layer's
+    // `sLayerInfo` is where every subset consumer looks.
     pub uiNumMbsInSlice: u32,
     pub bStoreRefBasePicFlag: bool,
     pub bConstrainedIntraResamplingFlag: bool,
@@ -419,20 +432,62 @@ impl Default for SSliceBufferInfo {
     }
 }
 
-#[repr(C)]
+/// **Which array a layer's active SPS lives in** — T6.G3.
+///
+/// `SLayerInfo` carried two pointers for this, `pSubsetSpsP` and `pSpsP`, and the
+/// choice between them was encoded in whether the first was null:
+/// `WelsInitCurrentLayer`'s SVC arm aims `pSubsetSpsP` at `pSubsetArray[id]` and then
+/// aims `pSpsP` *inside it*, at `SSubsetSps::pSps`; its AVC arm nulls the first and
+/// aims `pSpsP` at `pSpsArray[id]`. So `pSpsP` was **not** an index into one array —
+/// it named a position in either of two, and the discriminator was a null.
+///
+/// That is a tagged union with the tag spelled as a null pointer, and this is the
+/// same statement with the tag spelled as a tag. It is why the two fields become one:
+/// an `Option<SpsId>` plus an `Option<SubsetSpsId>` would leave three states the
+/// encoder cannot be in, and one of them (both `Some`, disagreeing) is the bug the
+/// null spelling could actually produce.
+///
+/// The two ids are *different spaces* — `pSpsArray` and `pSubsetArray` are different
+/// allocations with different lengths — which is why the arms carry different types
+/// even though `WelsInitCurrentLayer` reaches both with the same local.
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub enum LayerSps {
+    /// `pCtx->pSpsArray[id]` — every simulcast-AVC layer, and the base layer always.
+    Avc(SpsId),
+    /// `pCtx->pSubsetArray[id].pSps` — an SVC enhancement layer, whose SPS is
+    /// embedded in the subset SPS rather than standing alone.
+    Subset(SubsetSpsId),
+}
+
+/// `TagLayerInfo` — `codec/encoder/core/inc/svc_enc_frame.h:77`. 48 bytes in the C++.
+///
+/// **Not `repr(C)` since T6.G3**, for `SDqLayer`'s reason one level down:
+/// `Option<LayerSps>` has no C shape. The C++'s three parameter-set pointers are two
+/// fields here, and neither is an address — see [`LayerSps`], and
+/// [`layer_sps`]/[`layer_pps`]/[`layer_subset_sps`] for the resolution.
 #[derive(Debug, Copy, Clone)]
-/// `TagLayerInfo` — `codec/encoder/core/inc/svc_enc_frame.h:77`. 48 bytes.
-/// Field order follows C++: pSubsetSpsP precedes pSpsP and pPpsP.
 pub struct SLayerInfo {
     pub sNalHeaderExt: SNalUnitHeaderExt,
-    pub pSubsetSpsP: *mut SSubsetSps,
-    pub pSpsP: *mut SWelsSPS,
-    pub pPpsP: *mut SWelsPPS,
+    /// The layer's active SPS and which array it is in — `pSubsetSpsP` + `pSpsP`.
+    pub eSps: Option<LayerSps>,
+    /// The layer's active PPS, as a position in `pCtx->pPPSArray` — `pPpsP`.
+    pub iPps: Option<PpsId>,
 }
 
 impl Default for SLayerInfo {
+    /// **Field-wise, and it has to be** (F56/S21): `Option<LayerSps>` and
+    /// `Option<PpsId>` have no niche — `LayerSps`'s payloads are plain integers — so
+    /// the all-zero image of this struct is `Some(Avc(SpsId(0)))` and
+    /// `Some(PpsId(0))`, a layer that already has parameter sets. `mem::zeroed()`
+    /// stood here and would still have compiled.
     fn default() -> Self {
-        unsafe { std::mem::zeroed() }
+        Self {
+            // All scalars, and its own `Default` is its zero; the header is stamped
+            // per layer by `WelsInitCurrentLayer` before any NAL is written.
+            sNalHeaderExt: SNalUnitHeaderExt::default(),
+            eSps: None,
+            iPps: None,
+        }
     }
 }
 
@@ -629,6 +684,82 @@ pub unsafe fn set_current_layer(pCtx: *mut sWelsEncCtx, kIdx: Option<LayerIdx>) 
         "{kIdx:?} is past the largest list InitDqLayers can build"
     );
     (*pCtx).iCurDqLayer = kIdx;
+}
+
+/// A layer's **active SPS**, resolved from [`LayerSps`] — T6.G3.
+///
+/// This is `sLayerInfo.pSpsP`, and the pointer it replaces pointed into one of two
+/// allocations: `pSpsArray[id]`, or the `pSps` *embedded inside* `pSubsetArray[id]`.
+/// Both arms are reproduced exactly, including the inner one's spelling: the subset
+/// arm takes `addr_of_mut!` of the field rather than a reference to it, so the
+/// returned cursor carries the whole `SSubsetSps`'s provenance the way the C++'s
+/// `&pSubsetSpsP->pSps` does (S29).
+///
+/// Null when the layer has no SPS yet, or the array it names is not allocated —
+/// the two cases `pSpsP` was null in.
+///
+/// # Safety
+/// `pCtx` must point to a live encoder context and `pCurLayer` to one of its layers.
+#[inline]
+pub unsafe fn layer_sps(pCtx: *const sWelsEncCtx, pCurLayer: *const SDqLayer) -> *mut SWelsSPS {
+    match (*pCurLayer).sLayerInfo.eSps {
+        None => std::ptr::null_mut(),
+        Some(LayerSps::Avc(id)) => {
+            let arr = (*pCtx).pSpsArray;
+            if arr.is_null() {
+                return std::ptr::null_mut();
+            }
+            arr.add(id.get())
+        }
+        Some(LayerSps::Subset(id)) => {
+            let arr = (*pCtx).pSubsetArray;
+            if arr.is_null() {
+                return std::ptr::null_mut();
+            }
+            std::ptr::addr_of_mut!((*arr.add(id.get())).pSps)
+        }
+    }
+}
+
+/// A layer's **subset SPS**, or null when the layer is not on the SVC arm — T6.G3.
+///
+/// `pSubsetSpsP` was null in exactly the AVC case, and this answers null there for
+/// the same reason: [`LayerSps::Avc`] has no subset SPS to name.
+///
+/// # Safety
+/// As [`layer_sps`].
+#[inline]
+pub unsafe fn layer_subset_sps(
+    pCtx: *const sWelsEncCtx,
+    pCurLayer: *const SDqLayer,
+) -> *mut SSubsetSps {
+    match (*pCurLayer).sLayerInfo.eSps {
+        Some(LayerSps::Subset(id)) => {
+            let arr = (*pCtx).pSubsetArray;
+            if arr.is_null() {
+                return std::ptr::null_mut();
+            }
+            arr.add(id.get())
+        }
+        _ => std::ptr::null_mut(),
+    }
+}
+
+/// A layer's **active PPS**, resolved from its position in `pCtx->pPPSArray` — the
+/// `sLayerInfo.pPpsP` of T6.G3, and the most-read of this family (26 sites).
+///
+/// # Safety
+/// As [`layer_sps`].
+#[inline]
+pub unsafe fn layer_pps(pCtx: *const sWelsEncCtx, pCurLayer: *const SDqLayer) -> *mut SWelsPPS {
+    let Some(id) = (*pCurLayer).sLayerInfo.iPps else {
+        return std::ptr::null_mut();
+    };
+    let arr = (*pCtx).pPPSArray;
+    if arr.is_null() {
+        return std::ptr::null_mut();
+    }
+    arr.add(id.get())
 }
 
 /// The context's **active SPS**, resolved from its position — T6.G3.
@@ -1027,6 +1158,7 @@ pub use crate::encoder::nal_encap::{bs_buffer, SWelsSliceBs};
 pub use crate::encoder::param_svc::SWelsSPS;
 pub use crate::encoder::param_svc::SWelsPPS;
 pub use crate::encoder::param_svc::SSubsetSps;
+pub use crate::encoder::param_svc::{PpsId, SpsId, SubsetSpsId};
 pub use crate::encoder::param_svc::SSpsSvcExt;
 pub use crate::encoder::ref_list_mgr_svc::SMmcoRef;
 pub use crate::encoder::ref_list_mgr_svc::SReorderingSyntax;
@@ -1247,8 +1379,8 @@ pub unsafe fn WelsSliceHeaderExtInit(pEncCtx: *mut sWelsEncCtx, pCurLayer: *mut 
 
     if (*pEncCtx).eSliceType == EWelsSliceType::P_SLICE {
         pCurSliceHeader.uiNumRefIdxL0Active = 1;
-        let num_ref = if !(*pCurLayer).sLayerInfo.pSpsP.is_null() {
-            (*(*pCurLayer).sLayerInfo.pSpsP).iNumRefFrames
+        let num_ref = if !layer_sps(pEncCtx, pCurLayer).is_null() {
+            (*layer_sps(pEncCtx, pCurLayer)).iNumRefFrames
         } else {
             1
         };
@@ -1260,8 +1392,8 @@ pub unsafe fn WelsSliceHeaderExtInit(pEncCtx: *mut sWelsEncCtx, pCurLayer: *mut 
         }
     }
 
-    let pic_init_qp = if !(*pCurLayer).sLayerInfo.pPpsP.is_null() {
-        (*(*pCurLayer).sLayerInfo.pPpsP).iPicInitQp
+    let pic_init_qp = if !layer_pps(pEncCtx, pCurLayer).is_null() {
+        (*layer_pps(pEncCtx, pCurLayer)).iPicInitQp
     } else {
         26
     };
@@ -1362,8 +1494,8 @@ pub unsafe fn WelsSliceHeaderWrite(
     // `pBs` is `slice_writer(pCtx, pSlice)` at the only call site, and
     // `slice_bs_buffer` reads the same one-bit choice to pick the buffer.
     let buf = slice_bs_buffer(pCtx, pSlice);
-    let pSps = (*pCurLayer).sLayerInfo.pSpsP;
-    let pPps = (*pCurLayer).sLayerInfo.pPpsP;
+    let pSps = layer_sps(pCtx, pCurLayer);
+    let pPps = layer_pps(pCtx, pCurLayer);
     let pSliceHeader = &mut (*pSlice).sSliceHeaderExt.sSliceHeader;
     let pNalHead = &mut (*pCurLayer).sLayerInfo.sNalHeaderExt;
 
@@ -1448,9 +1580,9 @@ pub unsafe fn WelsSliceHeaderExtWrite(
     // `pBs` is `slice_writer(pCtx, pSlice)` at the only call site, and
     // `slice_bs_buffer` reads the same one-bit choice to pick the buffer.
     let buf = slice_bs_buffer(pCtx, pSlice);
-    let pSps = (*pCurLayer).sLayerInfo.pSpsP;
-    let pPps = (*pCurLayer).sLayerInfo.pPpsP;
-    let pSubSps = (*pCurLayer).sLayerInfo.pSubsetSpsP;
+    let pSps = layer_sps(pCtx, pCurLayer);
+    let pPps = layer_pps(pCtx, pCurLayer);
+    let pSubSps = layer_subset_sps(pCtx, pCurLayer);
     let pSliceHeadExt = &mut (*pSlice).sSliceHeaderExt;
     let pSliceHeader = &mut pSliceHeadExt.sSliceHeader;
     let pNalHead = &mut (*pCurLayer).sLayerInfo.sNalHeaderExt;
@@ -1699,8 +1831,8 @@ pub unsafe fn WelsISliceMdEnc(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSlice) ->
     let mut iCurMbIdx: i32;
     let mut iNumMbCoded = 0;
     let kiSliceIdx = (*pSlice).iSliceIdx;
-    let kuiChromaQpIndexOffset = if !(*pCurLayer).sLayerInfo.pPpsP.is_null() {
-        (*(*pCurLayer).sLayerInfo.pPpsP).uiChromaQpIndexOffset
+    let kuiChromaQpIndexOffset = if !layer_pps(pEncCtx, pCurLayer).is_null() {
+        (*layer_pps(pEncCtx, pCurLayer)).uiChromaQpIndexOffset
     } else {
         0
     };
@@ -1815,8 +1947,8 @@ pub unsafe fn WelsISliceMdEncDynamic(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSl
     let mut iNumMbCoded = 0;
     let kiSliceIdx = (*pSlice).iSliceIdx;
     let kiPartitionId = (kiSliceIdx % ((*pEncCtx).iActiveThreadsNum as i32)) as usize;
-    let kuiChromaQpIndexOffset = if !(*pCurLayer).sLayerInfo.pPpsP.is_null() {
-        (*(*pCurLayer).sLayerInfo.pPpsP).uiChromaQpIndexOffset
+    let kuiChromaQpIndexOffset = if !layer_pps(pEncCtx, pCurLayer).is_null() {
+        (*layer_pps(pEncCtx, pCurLayer)).uiChromaQpIndexOffset
     } else {
         0
     };
@@ -1997,8 +2129,8 @@ pub unsafe fn WelsMdInterMbLoop(
         std::ptr::null_mut()
     };
     let kiSliceIdx = (*pSlice).iSliceIdx;
-    let kuiChromaQpIndexOffset = if !(*pCurLayer).sLayerInfo.pPpsP.is_null() {
-        (*(*pCurLayer).sLayerInfo.pPpsP).uiChromaQpIndexOffset
+    let kuiChromaQpIndexOffset = if !layer_pps(pEncCtx, pCurLayer).is_null() {
+        (*layer_pps(pEncCtx, pCurLayer)).uiChromaQpIndexOffset
     } else {
         0
     };
@@ -2166,8 +2298,8 @@ pub unsafe fn WelsMdInterMbLoopOverDynamicSlice(
     };
     let kiSliceIdx = (*pSlice).iSliceIdx;
     let kiPartitionId = (kiSliceIdx % ((*pEncCtx).iActiveThreadsNum as i32)) as usize;
-    let kuiChromaQpIndexOffset = if !(*pCurLayer).sLayerInfo.pPpsP.is_null() {
-        (*(*pCurLayer).sLayerInfo.pPpsP).uiChromaQpIndexOffset
+    let kuiChromaQpIndexOffset = if !layer_pps(pEncCtx, pCurLayer).is_null() {
+        (*layer_pps(pEncCtx, pCurLayer)).uiChromaQpIndexOffset
     } else {
         0
     };
@@ -2587,8 +2719,8 @@ pub unsafe fn WelsCodeOneSlice(pEncCtx: *mut sWelsEncCtx, pCurSlice: *mut SSlice
         },
     );
 
-    let pic_init_qp = if !(*pCurLayer).sLayerInfo.pPpsP.is_null() {
-        (*(*pCurLayer).sLayerInfo.pPpsP).iPicInitQp
+    let pic_init_qp = if !layer_pps(pEncCtx, pCurLayer).is_null() {
+        (*layer_pps(pEncCtx, pCurLayer)).iPicInitQp
     } else {
         26
     };
@@ -3090,10 +3222,11 @@ pub unsafe fn InitSliceHeadWithBase(pSlice: *mut SSlice, pBaseSlice: *mut SSlice
     let pSHExt = &mut (*pSlice).sSliceHeaderExt;
 
     (*pSlice).bSliceHeaderExtFlag = (*pBaseSlice).bSliceHeaderExtFlag;
+    // T6.G3: the C++ copies each id and then the pointer derived from it
+    // (`svc_encode_slice.cpp:1169-1172`). The pointers are gone; the ids they were
+    // derived from are these two lines, unchanged.
     pSHExt.sSliceHeader.iPpsId = pBaseSHExt.sSliceHeader.iPpsId;
-    pSHExt.sSliceHeader.pPps = pBaseSHExt.sSliceHeader.pPps;
     pSHExt.sSliceHeader.iSpsId = pBaseSHExt.sSliceHeader.iSpsId;
-    pSHExt.sSliceHeader.pSps = pBaseSHExt.sSliceHeader.pSps;
 }
 
 pub unsafe fn InitSliceRefInfoWithBase(pSlice: *mut SSlice, pBaseSlice: *mut SSlice, kuiRefCount: u8) {
