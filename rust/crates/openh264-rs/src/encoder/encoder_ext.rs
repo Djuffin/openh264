@@ -27,7 +27,7 @@ use crate::common::memory_align::CMemoryAlign;
 use crate::decoder::nalu::g_ksLevelLimits;
 use crate::encoder::encoder_context::{
     ctx_dq_idc_map, ctx_dq_layer, ctx_frame_bs, ctx_frame_bs_at, ctx_ltr_at, ctx_mb_index_x,
-    ctx_mb_index_y, ctx_mvd_cost_table, ctx_ref_list, ctx_vaa,
+    ctx_mb_index_y, ctx_mvd_cost_table, ctx_param, ctx_ref_list, ctx_vaa,
     ctx_rc_at,
     ctx_pps_array, ctx_sps_array,
     ctx_stride_enc_block_offset,
@@ -248,7 +248,7 @@ pub unsafe fn AcquireLayersNals(
 /// `ppCtx` must point to a live context with `pMemAlign` and `pSvcParam` set.
 pub unsafe fn AllocStrideTables(ppCtx: *mut *mut sWelsEncCtx, kiNumSpatialLayers: i32) -> i32 {
     let pMa = (**ppCtx).pMemAlign;
-    let pParam = (**ppCtx).pSvcParam;
+    let pParam = ctx_param(*ppCtx);
 
     // The C++ local `sMbSizeMap` is an array of a small anonymous struct.
     #[derive(Clone, Copy, Default)]
@@ -632,7 +632,7 @@ unsafe fn InitMbInfo(
 /// # Safety
 /// `ppCtx` must point to a live context with `ppDqLayerList` populated.
 pub unsafe fn InitMbListD(ppCtx: *mut *mut sWelsEncCtx) -> i32 {
-    let iNumDlayer = (*(**ppCtx).pSvcParam).iSpatialLayerNum;
+    let iNumDlayer = (*ctx_param(*ppCtx)).iSpatialLayerNum;
 
     if iNumDlayer > MAX_DEPENDENCY_LAYER as i32 {
         return 1;
@@ -648,8 +648,8 @@ pub unsafe fn InitMbListD(ppCtx: *mut *mut sWelsEncCtx) -> i32 {
     // since T6.D3 and the dimensions are the allocation's own — T5.E2's rule), and
     // `ppMbListD`, its two allocations and its free are gone.
     for i in 0..iNumDlayer as usize {
-        let iMbWidth = ((*(**ppCtx).pSvcParam).sSpatialLayers[i].iVideoWidth + 15) >> 4;
-        let iMbHeight = ((*(**ppCtx).pSvcParam).sSpatialLayers[i].iVideoHeight + 15) >> 4;
+        let iMbWidth = ((*ctx_param(*ppCtx)).sSpatialLayers[i].iVideoWidth + 15) >> 4;
+        let iMbHeight = ((*ctx_param(*ppCtx)).sSpatialLayers[i].iVideoHeight + 15) >> 4;
         let pLayer = ctx_dq_layer(*ppCtx, i);
         if pLayer.is_null() {
             return 1;
@@ -693,7 +693,7 @@ pub unsafe fn InitDqLayers(
     }
 
     let pMa = (**ppCtx).pMemAlign;
-    let pParam = (**ppCtx).pSvcParam;
+    let pParam = ctx_param(*ppCtx);
     let iDlayerCount = (*pParam).iSpatialLayerNum;
     let iNumRef = (*pParam).iMaxNumRefFrame as u32;
 
@@ -992,7 +992,7 @@ pub unsafe fn RequestMemorySvc(
     ppCtx: *mut *mut sWelsEncCtx,
     pExistingParasetList: *mut SExistingParasetList,
 ) -> i32 {
-    let pParam = (**ppCtx).pSvcParam;
+    let pParam = ctx_param(*ppCtx);
     let pMa = (**ppCtx).pMemAlign;
     let mut iCountNals: i32 = 0;
     let mut iCountLayers: i32 = 0;
@@ -1192,10 +1192,10 @@ pub unsafe fn RequestMemorySvc(
     // **T6.H10**: `Box::into_raw` stood here; the context holds the `Box`.
     (**ppCtx).pVaa = Some(crate::encoder::wels_preprocess::SVAAFrameInfo::new(
         iCountMaxMbNum,
-        (*(**ppCtx).pSvcParam).bEnableBackgroundDetection,
+        (*ctx_param(*ppCtx)).bEnableBackgroundDetection,
     ));
 
-    if (*(**ppCtx).pSvcParam).bEnableAdaptiveQuant {
+    if (*ctx_param(*ppCtx)).bEnableAdaptiveQuant {
         // encoder_ext.cpp:1720, sAdaptiveQuantParam buffers. Not ported.
         return ENC_RETURN_UNSUPPORTED_PARA;
     }
@@ -1439,13 +1439,11 @@ pub unsafe fn WelsInitEncoderExt(
 
     (*pCtx).pMemAlign = Box::into_raw(Box::new(CMemoryAlign::new(iCacheLineSize as u32)));
 
-    iRet = crate::encoder::param_svc::AllocCodingParam(&mut (*pCtx).pSvcParam, (*pCtx).pMemAlign);
-    if iRet != 0 {
-        let mut p = pCtx;
-        WelsUninitEncoderExt(&mut p);
-        return iRet;
-    }
-    *(*pCtx).pSvcParam = *pCodingParam;
+    // **T6.H11**: `AllocCodingParam` and its failure branch were here. The context
+    // owns the parameters, so the allocation is a `Box` and failure is panic-on-OOM
+    // — the trade `pOut` made at T3.6 and the paraset arrays at T6.H2.
+    (*pCtx).pSvcParam = Some(crate::encoder::param_svc::NewCodingParam());
+    *ctx_param(pCtx) = *pCodingParam;
 
     (*pCtx).pFuncList = (*(*pCtx).pMemAlign).WelsMallocz(
         std::mem::size_of::<crate::encoder::wels_func_ptr_def::SWelsFuncPtrList>() as u32,
@@ -1458,7 +1456,7 @@ pub unsafe fn WelsInitEncoderExt(
     }
     iRet = crate::encoder::encoder_context::InitFunctionPointers(
         pCtx,
-        (*pCtx).pSvcParam,
+        ctx_param(pCtx),
         uiCpuFeatureFlags,
     );
     if iRet != ENC_RETURN_SUCCESS {
@@ -1480,7 +1478,7 @@ pub unsafe fn WelsInitEncoderExt(
     if (*pCodingParam).iEntropyCodingModeFlag != 0 {
         crate::encoder::set_mb_syn_cabac::WelsCabacInit(pCtx);
     }
-    crate::encoder::rc::WelsRcInitModule(pCtx, (*(*pCtx).pSvcParam).iRCMode);
+    crate::encoder::rc::WelsRcInitModule(pCtx, (*ctx_param(pCtx)).iRCMode);
 
     (*pCtx).pVpp = crate::encoder::wels_preprocess::CWelsPreProcess::CreatePreProcess(pCtx);
     if (*pCtx).pVpp.is_null() {
@@ -1488,7 +1486,7 @@ pub unsafe fn WelsInitEncoderExt(
         WelsUninitEncoderExt(&mut p);
         return 1;
     }
-    iRet = (*(*pCtx).pVpp).AllocSpatialPictures(pCtx, (*pCtx).pSvcParam);
+    iRet = (*(*pCtx).pVpp).AllocSpatialPictures(pCtx, ctx_param(pCtx));
     if iRet != 0 {
         let mut p = pCtx;
         WelsUninitEncoderExt(&mut p);
@@ -1556,7 +1554,7 @@ mod tests {
     use super::*;
     use crate::api::codec_api::EProfileIdc;
     use crate::encoder::encoder_context::InitFunctionPointers;
-    use crate::encoder::param_svc::AllocCodingParam;
+    use crate::encoder::param_svc::NewCodingParam;
     use crate::encoder::wels_func_ptr_def::SWelsFuncPtrList;
 
     /// Builds the context up to and including `RequestMemorySvc`, which is everything
@@ -1617,18 +1615,15 @@ mod tests {
 
         let pCtx = Box::into_raw(Box::new(sWelsEncCtx::default()));
         (*pCtx).pMemAlign = Box::into_raw(Box::new(CMemoryAlign::new(iCacheLineSize as u32)));
-        assert_eq!(
-            AllocCodingParam(&mut (*pCtx).pSvcParam, (*pCtx).pMemAlign),
-            0
-        );
-        *(*pCtx).pSvcParam = param;
+        (*pCtx).pSvcParam = Some(NewCodingParam());
+        *ctx_param(pCtx) = param;
         (*pCtx).pFuncList = (*(*pCtx).pMemAlign).WelsMallocz(
             std::mem::size_of::<SWelsFuncPtrList>() as u32,
             tag!("SWelsFuncPtrList"),
         ) as *mut SWelsFuncPtrList;
         assert!(!(*pCtx).pFuncList.is_null());
         assert_eq!(
-            InitFunctionPointers(pCtx, (*pCtx).pSvcParam, uiCpuFeatureFlags),
+            InitFunctionPointers(pCtx, ctx_param(pCtx), uiCpuFeatureFlags),
             ENC_RETURN_SUCCESS
         );
         (*pCtx).iActiveThreadsNum = param.iMultipleThreadIdc as i16;
@@ -1810,9 +1805,7 @@ pub unsafe fn WelsUninitEncoderExt(ppCtx: *mut *mut sWelsEncCtx) {
         // **T6.F3** put seven `WelsFree`s and their null tests here into one
         // `drop(Box::from_raw(..))`; **T6.H10** deletes that too — the context holds
         // the `Box`, so releasing the VAA block is the context's own drop.
-        if !(*pCtx).pSvcParam.is_null() {
-            let _ = crate::encoder::param_svc::FreeCodingParam(&mut (*pCtx).pSvcParam, pMa);
-        }
+        // **T6.H11**: `FreeCodingParam` stood here; the `Box` is the context's.
         if !(*pCtx).pFuncList.is_null() {
             // F19: this `take()` is `encoder_ext.cpp:1995`'s
             // `WELS_DELETE_OP (pCtx->pFuncList->pParametersetStrategy)`, which the
@@ -1957,7 +1950,7 @@ pub unsafe fn ClearFrameBsInfo(pCtx: *mut sWelsEncCtx, pFbi: *mut SFrameBSInfo) 
 /// `encoder_ext.cpp:3341`. Roll the encoder state back one frame after the rate
 /// controller decides to drop it.
 pub unsafe fn StackBackEncoderStatus(pEncCtx: *mut sWelsEncCtx, keFrameType: EVideoFrameType) {
-    let pParamInternal = (*(*pEncCtx).pSvcParam)
+    let pParamInternal = (*ctx_param(pEncCtx))
         .sDependencyLayers
         .as_mut_ptr()
         .add((*pEncCtx).uiDependencyId as usize);
@@ -2006,7 +1999,7 @@ pub unsafe fn StackBackEncoderStatus(pEncCtx: *mut sWelsEncCtx, keFrameType: EVi
 /// `encoder_ext.cpp:2534`. Bind the current DQ layer to this frame's parameter sets,
 /// NAL header and picture buffers.
 pub unsafe fn WelsInitCurrentLayer(pCtx: *mut sWelsEncCtx, _kiWidth: i32, _kiHeight: i32) {
-    let pParam = (*pCtx).pSvcParam;
+    let pParam = ctx_param(pCtx);
     let pCurDq = current_layer(pCtx);
     if pCurDq.is_null() {
         return;
@@ -2293,12 +2286,12 @@ pub unsafe fn SetMeMethod(uiMethod: u32, pSearchMethodFunc: *mut Option<PSearchM
 /// not translated; see the comment at its position below.
 pub unsafe fn PreprocessSliceCoding(pCtx: *mut sWelsEncCtx) {
     let pCurLayer = current_layer(pCtx);
-    let bFastMode = (*(*pCtx).pSvcParam).iComplexityMode == LOW_COMPLEXITY;
+    let bFastMode = (*ctx_param(pCtx)).iComplexityMode == LOW_COMPLEXITY;
     let pFuncList = (*pCtx).pFuncList;
 
     // function pointers conditional assignment under sWelsEncCtx
-    if ((*(*pCtx).pSvcParam).iUsageType == CAMERA_VIDEO_REAL_TIME && bFastMode)
-        || ((*(*pCtx).pSvcParam).iUsageType == SCREEN_CONTENT_REAL_TIME
+    if ((*ctx_param(pCtx)).iUsageType == CAMERA_VIDEO_REAL_TIME && bFastMode)
+        || ((*ctx_param(pCtx)).iUsageType == SCREEN_CONTENT_REAL_TIME
             && (*pCtx).eSliceType == EWelsSliceType::P_SLICE
             && bFastMode)
     {
@@ -2358,7 +2351,7 @@ pub unsafe fn PreprocessSliceCoding(pCtx: *mut sWelsEncCtx) {
 
     let kiCurDid = (*pCtx).uiDependencyId as usize;
     let kiCurTid = (*pCtx).uiTemporalId as i32;
-    let pDep = &(*(*pCtx).pSvcParam).sDependencyLayers[kiCurDid];
+    let pDep = &(*ctx_param(pCtx)).sDependencyLayers[kiCurDid];
     if (*pCurLayer).bDeblockingParallelFlag
         && (*pCurLayer).iLoopFilterDisableIdc != 1
         // ENABLE_FRAME_DUMP is not defined, so this clause is compiled in.
@@ -2396,7 +2389,7 @@ pub unsafe fn WriteSsvcParaset(
     }
 
     for iSpatialId in 0..kiSpatialNum as usize {
-        let pParamInternal = std::ptr::addr_of_mut!((*(*pCtx).pSvcParam).sDependencyLayers[iSpatialId]);
+        let pParamInternal = std::ptr::addr_of_mut!((*ctx_param(pCtx)).sDependencyLayers[iSpatialId]);
         if (*pParamInternal).uiIdrPicId < 65535 {
             (*pParamInternal).uiIdrPicId += 1;
         } else {
@@ -2521,7 +2514,7 @@ pub unsafe fn PrepareEncodeFrame(
     iFrameSize: *mut i32,
     uiTimeStamp: i64,
 ) -> EVideoFrameType {
-    let pSvcParam = (*pCtx).pSvcParam;
+    let pSvcParam = ctx_param(pCtx);
     let pSpatialIndexMap = (*pCtx).sSpatialIndexMap.as_ptr();
 
     let bSkipFrameFlag = crate::encoder::rc::WelsRcCheckFrameStatus(
@@ -2564,7 +2557,7 @@ pub unsafe fn PrepareEncodeFrame(
 
         if eFrameType == EVideoFrameType::videoFrameTypeIDR {
             // write parameter sets bitstream or SEI/SSEI (if any) here
-            if ((*(*pCtx).pSvcParam).eSpsPpsIdStrategy as i32
+            if ((*ctx_param(pCtx)).eSpsPpsIdStrategy as i32
                 & EParameterSetStrategy::SPS_LISTING as i32)
                 == 0
             {
@@ -2597,8 +2590,8 @@ pub unsafe fn PrepareEncodeFrame(
 /// on past behaviour becomes available.
 pub unsafe fn PicPartitionNumDecision(pCtx: *mut sWelsEncCtx) -> i32 {
     let mut iPartitionNum = 1;
-    if (*(*pCtx).pSvcParam).iMultipleThreadIdc > 1 {
-        iPartitionNum = (*(*pCtx).pSvcParam).iMultipleThreadIdc as i32;
+    if (*ctx_param(pCtx)).iMultipleThreadIdc > 1 {
+        iPartitionNum = (*ctx_param(pCtx)).iMultipleThreadIdc as i32;
     }
     iPartitionNum
 }
@@ -2729,15 +2722,15 @@ pub unsafe fn WelsInitCurrentDlayerMltslc(pCtx: *mut sWelsEncCtx, iPartitionNum:
         let iCurDid = (*pCtx).uiDependencyId as usize;
         let mut uiFrmByte: u32;
 
-        if (*(*pCtx).pSvcParam).iRCMode != crate::RCMode::RC_OFF_MODE {
+        if (*ctx_param(pCtx)).iRCMode != crate::RCMode::RC_OFF_MODE {
             // RC case
-            uiFrmByte = (((*(*pCtx).pSvcParam).sSpatialLayers[iCurDid].iSpatialBitrate as u32)
-                / ((*(*pCtx).pSvcParam).sDependencyLayers[iCurDid].fInputFrameRate as u32))
+            uiFrmByte = (((*ctx_param(pCtx)).sSpatialLayers[iCurDid].iSpatialBitrate as u32)
+                / ((*ctx_param(pCtx)).sDependencyLayers[iCurDid].fInputFrameRate as u32))
                 >> 3;
         } else {
             // fixed QP case
             let iTtlMbNumInFrame = (*pCurDq).sSliceEncCtx.iMbNumInFrame;
-            let mut iQDeltaTo26 = 26 - (*(*pCtx).pSvcParam).sSpatialLayers[iCurDid].iDLayerQp;
+            let mut iQDeltaTo26 = 26 - (*ctx_param(pCtx)).sSpatialLayers[iCurDid].iDLayerQp;
 
             uiFrmByte = (iTtlMbNumInFrame as u32).wrapping_mul(byte_complexIMBat26);
             if iQDeltaTo26 > 0 {
@@ -2934,7 +2927,7 @@ pub unsafe fn WelsEncoderEncodeExt(
     if pCtx.is_null() {
         return ENC_RETURN_MEMALLOCERR;
     }
-    let pSvcParam = (*pCtx).pSvcParam;
+    let pSvcParam = ctx_param(pCtx);
     // The two pictures this loop names, as **geometry copied out of them** rather than
     // as references: `fsnr` is a reconstruction picture and `pEncPic` a spatial source
     // picture, they live in different owners, and both are read after the calls that

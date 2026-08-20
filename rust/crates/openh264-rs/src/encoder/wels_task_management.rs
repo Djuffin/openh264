@@ -14,6 +14,7 @@
 use std::ptr::null_mut;
 use std::sync::{Arc, Condvar, Mutex};
 pub use crate::encoder::encoder_context::SLogContext;
+use crate::encoder::encoder_context::ctx_param;
 pub use crate::encoder::param_svc::SWelsSvcCodingParam;
 pub use crate::encoder::svc_encode_slice::SDqLayer;
 use crate::encoder::svc_encode_slice::{current_layer, LayerIdx};
@@ -725,8 +726,8 @@ impl CWelsTaskManageBase {
         }
         self.m_pEncCtx = pEncCtx;
         unsafe {
-            if !(*pEncCtx).pSvcParam.is_null() {
-                self.m_iThreadNum = (*(*pEncCtx).pSvcParam).iMultipleThreadIdc as i32;
+            if !ctx_param(pEncCtx).is_null() {
+                self.m_iThreadNum = (*ctx_param(pEncCtx)).iMultipleThreadIdc as i32;
             } else {
                 self.m_iThreadNum = 1;
             }
@@ -786,8 +787,8 @@ impl CWelsTaskManageBase {
         let mut kiTaskCount: i32 = 1;
 
         unsafe {
-            if !(*pEncCtx).pSvcParam.is_null() {
-                let pParam = &*(*pEncCtx).pSvcParam;
+            if !ctx_param(pEncCtx).is_null() {
+                let pParam = &*ctx_param(pEncCtx);
                 uiSliceMode = pParam.sSpatialLayers[did].sSliceArgument.uiSliceMode;
                 if uiSliceMode != crate::SliceMode::SM_SIZELIMITED_SLICE {
                     kiTaskCount =
@@ -817,8 +818,8 @@ impl CWelsTaskManageBase {
 
         // Encoding tasks
         let bUseLoadBalancing = unsafe {
-            if !(*pEncCtx).pSvcParam.is_null() {
-                (*(*pEncCtx).pSvcParam).bUseLoadBalancing
+            if !ctx_param(pEncCtx).is_null() {
+                (*ctx_param(pEncCtx)).bUseLoadBalancing
             } else {
                 false
             }
@@ -1113,7 +1114,7 @@ mod tests {
         // `RequestMemorySvc` builds on the live path. **T6.H8**: the list owns the
         // layer now, so the fixture hands it a `Box` instead of borrowing a local.
         let mut enc_ctx = sWelsEncCtx::default();
-        enc_ctx.pSvcParam = &mut coding_param;
+        enc_ctx.pSvcParam = Some(Box::new(coding_param.clone()));
         enc_ctx.ppDqLayerList = vec![Some(Box::new(SDqLayer::default()))];
         enc_ctx.iCurDqLayer = Some(LayerIdx(0));
 
@@ -1142,7 +1143,7 @@ mod tests {
         coding_param.sSpatialLayers[0].sSliceArgument.uiSliceNum = 2;
 
         let mut enc_ctx = sWelsEncCtx::default();
-        enc_ctx.pSvcParam = &mut coding_param;
+        enc_ctx.pSvcParam = Some(Box::new(coding_param.clone()));
 
         unsafe {
             let mut one = CWelsTaskManageOne::new();

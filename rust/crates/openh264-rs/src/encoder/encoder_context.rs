@@ -608,6 +608,26 @@ pub unsafe fn ctx_mb_index_x(pCtx: *mut sWelsEncCtx, kiDid: usize) -> *mut i16 {
     }
 }
 
+/// The encoder's **coding parameters** — T6.H11, and null before
+/// `WelsInitEncoderExt` builds them, which is what the raw field held.
+///
+/// This is the most-read field in the encoder (256 sites), and every one of them
+/// spelled it `ctx_param(pCtx)` and offset from there; they all spell it this way
+/// now. The `Box`'s address is read without forming a reference to the parameters,
+/// so repeated calls are sibling derivations — which matters because
+/// `WelsEncoderParamAdjust` binds `pOldParam` once and holds it across a dozen
+/// further reaches into the same context.
+///
+/// # Safety
+/// `pCtx` must point to a live encoder context.
+#[inline]
+pub unsafe fn ctx_param(pCtx: *mut sWelsEncCtx) -> *mut SWelsSvcCodingParam {
+    match (*pCtx).pSvcParam.as_mut() {
+        Some(b) => &raw mut **b,
+        None => std::ptr::null_mut(),
+    }
+}
+
 /// The frame's **video-analysis block** — T6.H10, and null before the preprocessor
 /// builds one, which is what the raw field held.
 ///
@@ -886,7 +906,21 @@ pub unsafe fn ctx_mb_index_y(pCtx: *mut sWelsEncCtx, kiDid: usize) -> *mut i16 {
 #[repr(C)]
 pub struct sWelsEncCtx {
     pub sLogCtx: SLogContext,
-    pub pSvcParam: *mut SWelsSvcCodingParam,
+    /// The encoder's coding parameters — **T6.H11, owned, and the ownership read is
+    /// the reason it is owned rather than left raw.**
+    ///
+    /// The brief's open question was whether this is the decoder's F41 shape — the
+    /// context aliasing a block the api object owns and outlives — in which case it
+    /// would stay raw and go to Phase 8. It is not. `WelsInitEncoderExt` calls
+    /// `AllocCodingParam` to take a block **from the context's own `pMemAlign`**, and
+    /// then *copies* the caller's parameters into it by value
+    /// (`*ctx_param(pCtx) = *pCodingParam`); `WelsUninitEncoderExt` frees it.
+    /// The api object never hands the context a pointer to anything it owns — the
+    /// only other writers in the tree are unit-test fixtures. The context is the sole
+    /// owner, and now says so.
+    ///
+    /// Resolve it with [`ctx_param`]. `None` before `WelsInitEncoderExt` runs.
+    pub pSvcParam: Option<Box<SWelsSvcCodingParam>>,
     pub iMvRange: i32,
     /// The motion-vector-difference cost table — **T6.H9, and plan item P11 landing.**
     /// 52 QP rows of `iMvdCostTableStride` entries each, plus F57's overshoot. Root:
@@ -1118,7 +1152,7 @@ impl sWelsEncCtx {
             // (Session H's list. Every one of these is freed by FreeMemorySvc, and
             // null is the value that makes the paired free a no-op — which is why
             // the C++ can call it on a half-built context after an early failure.)
-            pSvcParam: std::ptr::null_mut(),
+            pSvcParam: None,
             iMvRange: 0,                    // set by InitMvRange from the level limit
             pMvdCostTable: Vec::new(),
             iMvdCostTableSize: 0,           // paired with the table above
@@ -1427,7 +1461,7 @@ pub unsafe fn InitFunctionPointers(
         pFuncList,
         bScreenContent
             && (*pParam).bEnableSceneChangeDetect
-            && ((*(*pEncCtx).pSvcParam).iComplexityMode as i32)
+            && ((*ctx_param(pEncCtx)).iComplexityMode as i32)
                 < (crate::api::codec_api::ECOMPLEXITY_MODE::HIGH_COMPLEXITY as i32),
     );
 
@@ -1515,10 +1549,10 @@ unsafe fn InitCoeffFunc(
 /// # Safety
 /// `pEncCtx` must be non-null and initialized.
 pub unsafe fn UpdateFrameNum(pEncCtx: *mut sWelsEncCtx, kiDidx: i32) {
-    if pEncCtx.is_null() || (*pEncCtx).pSvcParam.is_null() || ctx_sps(pEncCtx).is_null() {
+    if pEncCtx.is_null() || ctx_param(pEncCtx).is_null() || ctx_sps(pEncCtx).is_null() {
         return;
     }
-    let pParamInternal = std::ptr::addr_of_mut!((*(*pEncCtx).pSvcParam).sDependencyLayers[kiDidx as usize]);
+    let pParamInternal = std::ptr::addr_of_mut!((*ctx_param(pEncCtx)).sDependencyLayers[kiDidx as usize]);
     let mut bNeedFrameNumIncreasing = false;
 
     if (*pEncCtx).eLastNalPriority[kiDidx as usize] != EWelsNalRefIdc::NRI_PRI_LOWEST {
@@ -1542,10 +1576,10 @@ pub unsafe fn UpdateFrameNum(pEncCtx: *mut sWelsEncCtx, kiDidx: i32) {
 /// # Safety
 /// `pEncCtx` must be non-null and initialized.
 pub unsafe fn LoadBackFrameNum(pEncCtx: *mut sWelsEncCtx, kiDidx: i32) {
-    if pEncCtx.is_null() || (*pEncCtx).pSvcParam.is_null() || ctx_sps(pEncCtx).is_null() {
+    if pEncCtx.is_null() || ctx_param(pEncCtx).is_null() || ctx_sps(pEncCtx).is_null() {
         return;
     }
-    let pParamInternal = std::ptr::addr_of_mut!((*(*pEncCtx).pSvcParam).sDependencyLayers[kiDidx as usize]);
+    let pParamInternal = std::ptr::addr_of_mut!((*ctx_param(pEncCtx)).sDependencyLayers[kiDidx as usize]);
     let mut bNeedFrameNumIncreasing = false;
 
     if (*pEncCtx).eLastNalPriority[kiDidx as usize] != EWelsNalRefIdc::NRI_PRI_LOWEST {
@@ -1590,10 +1624,10 @@ pub unsafe fn InitFrameCoding(
     keFrameType: EVideoFrameType,
     kiDidx: i32,
 ) {
-    if pEncCtx.is_null() || (*pEncCtx).pSvcParam.is_null() || ctx_sps(pEncCtx).is_null() {
+    if pEncCtx.is_null() || ctx_param(pEncCtx).is_null() || ctx_sps(pEncCtx).is_null() {
         return;
     }
-    let pParamInternal = std::ptr::addr_of_mut!((*(*pEncCtx).pSvcParam).sDependencyLayers[kiDidx as usize]);
+    let pParamInternal = std::ptr::addr_of_mut!((*ctx_param(pEncCtx)).sDependencyLayers[kiDidx as usize]);
 
     if keFrameType == EVideoFrameType::videoFrameTypeP {
         (*pParamInternal).iFrameIndex += 1;
@@ -1647,10 +1681,10 @@ pub unsafe fn DecideFrameType(
     kiDidx: i32,
     bSkipFrameFlag: bool,
 ) -> EVideoFrameType {
-    if pEncCtx.is_null() || (*pEncCtx).pSvcParam.is_null() {
+    if pEncCtx.is_null() || ctx_param(pEncCtx).is_null() {
         return EVideoFrameType::videoFrameTypeInvalid;
     }
-    let pSvcParam = (*pEncCtx).pSvcParam;
+    let pSvcParam = ctx_param(pEncCtx);
     let pParamInternal = std::ptr::addr_of_mut!((*pSvcParam).sDependencyLayers[kiDidx as usize]);
     let mut iFrameType: EVideoFrameType;
     let mut bSceneChangeFlag = false;
@@ -2248,23 +2282,29 @@ mod tests {
             ..Default::default()
         };
         let mut ctx = sWelsEncCtx::new();
-        ctx.pSvcParam = &mut param;
+        // **T6.H11**: the context *owns* its parameters, so the fixture hands them
+        // over rather than lending them — and the read-back below goes through the
+        // context, which is where the writes land. Aliasing a stack local here was
+        // the fixture standing in for an ownership the live path never had.
+        ctx.pSvcParam = Some(Box::new(param));
         // T6.G3: the context names its SPS by position, so the test stands up the
         // one-entry array the position indexes into — `RequestMemorySvc`'s job on the
-        // live path. `sps` outlives `ctx` in this scope.
+        // live path.
         ctx.pSpsArray = vec![sps];
         ctx.iSpsNum = 1;
         ctx.iSps = Some(SpsId(0));
         ctx.eLastNalPriority[0] = EWelsNalRefIdc::NRI_PRI_HIGH;
 
+        let frame_num = |c: &sWelsEncCtx| c.pSvcParam.as_ref().unwrap().sDependencyLayers[0].iFrameNum;
+
         unsafe {
             UpdateFrameNum(&mut ctx, 0);
-            assert_eq!(param.sDependencyLayers[0].iFrameNum, 1);
+            assert_eq!(frame_num(&ctx), 1);
             assert_eq!(ctx.eLastNalPriority[0], EWelsNalRefIdc::NRI_PRI_LOWEST);
 
             ctx.eLastNalPriority[0] = EWelsNalRefIdc::NRI_PRI_HIGH;
             LoadBackFrameNum(&mut ctx, 0);
-            assert_eq!(param.sDependencyLayers[0].iFrameNum, 0);
+            assert_eq!(frame_num(&ctx), 0);
         }
     }
 
@@ -2273,7 +2313,7 @@ mod tests {
         let mut param = SWelsSvcCodingParam::default();
         let mut ctx = sWelsEncCtx::new();
         param.sDependencyLayers[0].bEncCurFrmAsIdrFlag = true;
-        ctx.pSvcParam = &mut param;
+        ctx.pSvcParam = Some(Box::new(param.clone()));
         // T6.H10: the context owns the block, so the fixture hands it one.
         ctx.pVaa = Some(Box::new(SVAAFrameInfo::default()));
 
@@ -2290,7 +2330,7 @@ mod tests {
             let mut param = SWelsSvcCodingParam::default();
             let mut ctx = sWelsEncCtx::default();
             ctx.pFuncList = &mut func_list;
-            ctx.pSvcParam = &mut param;
+            ctx.pSvcParam = Some(Box::new(param.clone()));
 
             let ret = InitFunctionPointers(&mut ctx, &mut param, 0);
             assert_eq!(ret, ENC_RETURN_SUCCESS);

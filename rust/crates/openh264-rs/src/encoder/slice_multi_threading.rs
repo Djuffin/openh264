@@ -63,7 +63,7 @@ pub use crate::encoder::encoder_context::sWelsEncCtx;
 // accessors. Field spellings only — no body in this file is touched, and the
 // thread machinery is Phase 7's.
 use crate::encoder::encoder_context::{
-    ctx_dq_layer, ctx_frame_bs, ctx_frame_bs_at, ctx_rc, ctx_rc_at,
+    ctx_dq_layer, ctx_frame_bs, ctx_frame_bs_at, ctx_param, ctx_rc, ctx_rc_at,
 };
 
 // ============================================================================
@@ -497,7 +497,7 @@ pub unsafe fn DynamicAdjustSlicing(
     let mut iRunLen = [0i32; MAX_THREADS_NUM];
     let mut iSliceIdx: i32;
 
-    let pSvcParam = (*pCtx).pSvcParam;
+    let pSvcParam = ctx_param(pCtx);
     if pSvcParam.is_null() {
         return;
     }
@@ -731,7 +731,7 @@ pub unsafe fn ReleaseMtResource(ppCtx: *mut *mut sWelsEncCtx) {
     WelsMutexDestroy(&mut (*pCtx).mutexEncoderError);
 
     if !(*pSmt).pThreadPEncCtx.is_null() {
-        let pSvcParam = (*pCtx).pSvcParam;
+        let pSvcParam = ctx_param(pCtx);
         let iThreadNum = if !pSvcParam.is_null() {
             (*pSvcParam).iMultipleThreadIdc as usize
         } else {
@@ -922,7 +922,7 @@ pub unsafe fn AdjustEnhanceLayer(pCtx: *mut sWelsEncCtx, iCurDid: i32) -> i32 {
         return 0;
     }
 
-    let pSvcParam = (*pCtx).pSvcParam;
+    let pSvcParam = ctx_param(pCtx);
     if pSvcParam.is_null() {
         return 0;
     }
