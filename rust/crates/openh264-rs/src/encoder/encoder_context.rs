@@ -558,9 +558,202 @@ pub struct sWelsEncCtx {
     pub pDynamicBsBuffer: [*mut u8; MAX_THREADS_NUM],
 }
 
+impl sWelsEncCtx {
+    /// The encoder context's **allocation zero**, spelled out — `WelsInitEncoderExt`'s
+    /// `WelsMalloc` + `memset(0)` in a form that survives a field changing type.
+    ///
+    /// # Why a constructor at all, when the shell it replaces was correct
+    ///
+    /// `mem::zeroed()` is not a construction, it is a *bet*: that every field's
+    /// all-zero bit pattern is a value that field is allowed to hold. The bet is
+    /// currently sound and has been audited field by field (S21) — three of the
+    /// enums below carry their zero variant *because* of that audit, and
+    /// `ref_strategy_zero_is_the_default_arm` is the assertion that keeps one of them
+    /// honest. But it is a bet that has to be re-won on every field that changes
+    /// type, silently, by whoever changes it, and Phase 6 sessions G and H change
+    /// almost every field in this struct. `Option<LayerIdx>` — the very next step —
+    /// has **no niche**: `LayerIdx` is a plain `u8`, so all-zero is `Some(LayerIdx(0))`,
+    /// which is layer zero, not "no layer". The shell would keep compiling and
+    /// keep producing a context whose current layer is silently the base layer.
+    ///
+    /// So the constructor lands **before** anything owns and before any field flips
+    /// (F56/S21: zeros are ruled, not defaulted). What it buys is spent in steps 2
+    /// and 3 and in session H; what it costs is this comment.
+    ///
+    /// # What it is not
+    ///
+    /// It is **not** an "init". `WelsInitEncoderExt` does the initialization, in the
+    /// order the C++ does it, and every non-zero starting value the encoder has lives
+    /// there. Session F's `SPicture` lesson applies here in reverse: there,
+    /// `with_planes` had to reproduce the *memset*, not `Default`, because the live
+    /// value of `eSliceType` was `P_SLICE` and `Default` said `UNKNOWN_SLICE`. Here
+    /// the memset **is** the semantics, so nothing may be imported into `new()` that
+    /// the zeroed shell did not have. `ctx_new_reproduces_the_zeroed_shell` is that
+    /// rule as a test, and it is meant to read zero differences.
+    ///
+    /// # The zeros, and what each one means
+    ///
+    /// Grouped by who is responsible for making the field non-zero. Four groups:
+    /// the log sink (the caller's, before anything else runs), the members
+    /// `RequestMemorySvc` allocates (session H turns these into owned containers,
+    /// and null is "not allocated yet"), the per-frame state `WelsInitCurrentLayer`
+    /// and the frame loop restamp every frame (zero is "no frame has run"), and the
+    /// parameter-set bookkeeping `InitDqLayers` fills.
+    #[allow(clippy::new_without_default)]
+    pub fn new() -> Self {
+        Self {
+            // The caller's log sink. `WelsInitEncoderExt` copies it in from
+            // `SExistingParasetList`'s neighbourhood before anything can log; three
+            // null `c_void`s mean "no sink installed", which is what the C tests for.
+            sLogCtx: SLogContext::default(),
+
+            // ---- allocated by RequestMemorySvc; null == not allocated yet -------
+            // (Session H's list. Every one of these is freed by FreeMemorySvc, and
+            // null is the value that makes the paired free a no-op — which is why
+            // the C++ can call it on a half-built context after an early failure.)
+            pSvcParam: std::ptr::null_mut(),
+            iMvRange: 0,                    // set by InitMvRange from the level limit
+            pMvdCostTable: std::ptr::null_mut(),
+            iMvdCostTableSize: 0,           // paired with the table above
+            iMvdCostTableStride: 0,
+            pStrideTab: std::ptr::null_mut(),
+            pFuncList: std::ptr::null_mut(),
+            pSliceThreading: std::ptr::null_mut(),
+            pTaskManage: std::ptr::null_mut(),
+
+            // `TemporalLayer`, the zero discriminant, is the variant the old
+            // `CreateReferenceStrategy` factory's `_ =>` arm produced — asserted in
+            // `ref_list_mgr_svc::tests::ref_strategy_zero_is_the_default_arm`.
+            eRefStrategy: crate::encoder::ref_list_mgr_svc::RefStrategyKind::TemporalLayer,
+
+            // ---- per-frame picture handles; None == no picture bound ------------
+            // These are pool handles, not pointers, since T6.F1. `None` is the whole
+            // reason the handles have a niche: it is a *state*, "the frame loop has
+            // not picked a picture yet", and the encoder tests for it.
+            pEncPic: None,
+            pDecPic: None,
+            pRefPic: None,
+
+            // The current layer. Null until `WelsInitCurrentLayer` / `WelsSwapDqLayers`
+            // aims it into `ppDqLayerList`, which cannot happen before that list is
+            // allocated two fields down.
+            pCurDqLayer: std::ptr::null_mut(),
+            ppDqLayerList: std::ptr::null_mut(),
+            ppRefPicListExt: std::ptr::null_mut(),
+
+            // `iNumRef0` below is the live length of this list; sixteen `None`s is the
+            // empty list, and the two agree only because both are zero here.
+            pRefList0: [None; 16],
+
+            pLtr: std::ptr::null_mut(),
+            bCurFrameMarkedAsSceneLtr: false,
+
+            // ---- per-frame NAL/slice state; restamped every frame ---------------
+            // `P_SLICE` (0) is not a placeholder: it is the value the memset leaves
+            // and the one an encode inherits until `DecideFrameType` runs.
+            eSliceType: EWelsSliceType::P_SLICE,
+            eNalType: EWelsNalUnitType::NAL_UNIT_UNSPEC_0,
+            eNalPriority: EWelsNalRefIdc::NRI_PRI_LOWEST,
+            // Per-dependency-layer memory of the last NAL's priority, read back by
+            // `LoadBackFrameNum` when a frame is dropped. Lowest == nothing sent yet.
+            eLastNalPriority: [EWelsNalRefIdc::NRI_PRI_LOWEST; MAX_DEPENDENCY_LAYER],
+            iNumRef0: 0,                    // the live length of pRefList0
+            uiDependencyId: 0,              // the base layer, and a real starting value
+            uiTemporalId: 0,                // likewise: T0
+            bNeedPrefixNalFlag: false,
+
+            // ---- rate control ---------------------------------------------------
+            pWelsSvcRc: std::ptr::null_mut(),
+            // The check-window trio. Zero timestamps mean "the window has never
+            // opened"; `WelsRcInitFuncPointers` and the first frame set all of them.
+            bCheckWindowStatusRefreshFlag: false,
+            iCheckWindowStartTs: 0,
+            iCheckWindowCurrentTs: 0,
+            iCheckWindowInterval: 0,
+            iCheckWindowIntervalShift: 0,
+            bCheckWindowShiftResetFlag: false,
+            iGlobalQp: 0,                   // overwritten by WelsRcPictureInitGom etc.
+
+            // ---- preprocessing --------------------------------------------------
+            pVaa: std::ptr::null_mut(),
+            pVpp: std::ptr::null_mut(),
+
+            // ---- parameter sets: the arrays, their aliases, their counts --------
+            // The three `Array` members are allocations (H's); the three singular
+            // ones are *aliases into them* that `WelsInitEncoderExt` aims at the
+            // heads — step 3 of this session makes them ids. The three counts are
+            // `InitDqLayers`'s, and zero is the honest starting length.
+            pSpsArray: std::ptr::null_mut(),
+            pSps: std::ptr::null_mut(),
+            pPPSArray: std::ptr::null_mut(),
+            pPps: std::ptr::null_mut(),
+            pSubsetArray: std::ptr::null_mut(),
+            pSubsetSps: std::ptr::null_mut(),
+            iSpsNum: 0,
+            iSubsetSpsNum: 0,
+            iPpsNum: 0,
+
+            // ---- output bitstream ------------------------------------------------
+            pOut: std::ptr::null_mut(),
+            pFrameBs: std::ptr::null_mut(),
+            iFrameBsSize: 0,                // paired with pFrameBs
+            iPosBsBuffer: 0,                // the write cursor into it, rewound per AU
+
+            // The spatial pool's per-layer index map. `SSpatialPicIndex::default()`
+            // is `{ pSrc: None, iDid: 0 }`, which *is* this struct's zero image —
+            // spelled through `Default` rather than repeated, because that impl is
+            // itself the statement that the two agree.
+            sSpatialIndexMap: [SSpatialPicIndex::default(); MAX_DEPENDENCY_LAYER],
+            iSliceBufferSize: [0; MAX_DEPENDENCY_LAYER],
+            // "Is the reference for this (did, tid) a long-term one?" — false until a
+            // reference exists at all.
+            bRefOfCurTidIsLtr: [[false; MAX_TEMPORAL_LEVEL]; MAX_DEPENDENCY_LAYER],
+            iMaxSliceCount: 0,
+            iActiveThreadsNum: 0,           // set from iMultipleThreadIdc
+
+            pDqIdcMap: std::ptr::null_mut(),
+
+            // `sPSOVector` is held **by value** and `pPSOVector` points either at it
+            // or at the caller's, so the value's zero has to be the zero of the
+            // pointer's target. `SParaSetOffset::default()` is all-zero throughout
+            // (its own impl, field for field), which is the id-strategy's "no id has
+            // been handed out yet".
+            sPSOVector: SParaSetOffset::default(),
+            pPSOVector: std::ptr::null_mut(),
+
+            pMemAlign: std::ptr::null_mut(),
+
+            // ---- statistics and timestamps ---------------------------------------
+            // Timestamps are absolute and in the caller's clock, so zero is a real
+            // "not yet stamped" and every consumer compares against the previous one.
+            uiStartTimestamp: 0,
+            sEncoderStatistics:
+                [crate::encoder::wels_encoder_ext::TagVideoEncoderStatistics::default(); MAX_DEPENDENCY_LAYER],
+            iStatisticsLogInterval: 0,      // set from the param's log interval
+            iLastStatisticsLogTs: 0,
+            iEncoderError: 0,               // == ENC_RETURN_SUCCESS, and that matters
+            mutexEncoderError: std::ptr::null_mut(),
+            bDeliveryFlag: false,
+
+            // The CABAC probability tables. Zero is `{ MPS = 0, state = 0 }`, which is
+            // not a valid coding state — `WelsCabacContextInit` fills all four
+            // models for every QP before any of it is read, exactly as the C++ does
+            // after its own memset.
+            sWelsCabacContexts: [[[SStateCtx::new(0); WELS_CONTEXT_COUNT]; WELS_QP_MAX + 1]; 4],
+            uiLastTimestamp: 0,
+
+            // Phase 7's. One dynamic bitstream buffer per thread, allocated on the
+            // first slice that needs one.
+            pDynamicBsBuffer: [std::ptr::null_mut(); MAX_THREADS_NUM],
+        }
+    }
+}
+
 impl Default for sWelsEncCtx {
+    /// The zeroed shell, by way of [`new`](Self::new) — same bytes, ruled rather
+    /// than bet on.
     fn default() -> Self {
-        unsafe { std::mem::zeroed() }
+        Self::new()
     }
 }
 
@@ -1091,6 +1284,185 @@ mod tests {
         assert_eq!(src_pic.iStride[2], 320);
     }
 
+
+    /// **The temporary instrument for T6.G1**: `sWelsEncCtx::new()` reproduces the
+    /// zeroed shell it replaces, byte for byte, and every difference is
+    /// attributed to a *named field* before it is accepted.
+    ///
+    /// It is meant to read **zero differences**. A constructor whose whole claim is
+    /// "same bytes, ruled instead of bet on" has to prove the first half, and the
+    /// only proof that catches a field the author quietly gave a live starting value
+    /// is a comparison against the thing being replaced. The freedom the constructor
+    /// buys is spent in later steps — where fields change *type* and the shell stops
+    /// being reproducible at all — and this test dies at the first such step rather
+    /// than being weakened to keep passing.
+    ///
+    /// # Why the comparison is per field and not one `memcmp`
+    ///
+    /// A `#[repr(C)]` struct has padding, and a struct literal does not write it.
+    /// A `zeroed()` shell does. So a flat `memcmp` over `size_of::<sWelsEncCtx>()`
+    /// compares bytes the constructor is not obliged to define, reads uninitialized
+    /// memory doing it (UB, and Miri says so), and reports differences that mean
+    /// nothing. Walking the fields compares exactly the bytes that have values,
+    /// names the field when they differ, and reports the residue separately so the
+    /// coverage is visible rather than assumed.
+    ///
+    /// # F64 — the seven fields that cannot be compared as bytes at all
+    ///
+    /// The first draft *was* a field-extent walk and Miri failed it anyway, at
+    /// `pEncPic`: **a niche-optimized `Option` writes the niche and leaves the rest
+    /// of the payload undefined**, so `None` of an `Option<SrcPicId>` is four defined
+    /// bytes (the `NonZeroU32` index, zero) followed by four *uninitialized* ones
+    /// (`pool::Id`'s generation counter, which exists only under
+    /// `debug_assertions`). The shell wrote zeros there. `new()` does not. The
+    /// same holds one level down, inside `SSpatialPicIndex::pSrc`; and **interior
+    /// `repr(C)` padding does it again without any niche at all** —
+    /// `SParaSetOffsetVariable` has 3 bytes between `bUsedParaSetIdInBs[57]` and
+    /// `uiNextParaSetIdToUseInBs`, and `TagVideoEncoderStatistics` has 4 before
+    /// `iStatisticsTs` and 4 of tail, none of which a struct literal writes.
+    ///
+    /// So the honest statement is narrower than "byte-identical", and it is the
+    /// narrower one that is true: `new()` reproduces the shell **everywhere the
+    /// shell's bytes are defined by the type**, and at the seven fields below it
+    /// reproduces the *values*, which is all anything reads. Nothing reads a `None`
+    /// handle's generation — that is read when a `Some` is resolved, and there is no
+    /// `Some` here — and nothing reads padding at all. The seven are excluded **by
+    /// name** and asserted **by value**; excluding them silently would have been the
+    /// failure this test exists to prevent, one level up.
+    ///
+    /// The general rule this leaves behind: *a field-wise constructor cannot be
+    /// proved byte-equal to a memset image, only value-equal, and the difference is
+    /// exactly the bytes the type does not define.*
+    #[test]
+    fn ctx_new_reproduces_the_zeroed_shell() {
+        use std::mem::{offset_of, size_of, size_of_val};
+
+        let built = Box::new(sWelsEncCtx::new());
+        let shell: Box<sWelsEncCtx> = Box::new(unsafe { std::mem::zeroed() });
+
+        // (name, offset, size) for every field, taken off a real instance so the
+        // sizes are the compiler's and not a transcription.
+        macro_rules! extents {
+            ($($f:ident),* $(,)?) => {
+                vec![$((stringify!($f), offset_of!(sWelsEncCtx, $f), size_of_val(&built.$f))),*]
+            };
+        }
+        let extents: Vec<(&str, usize, usize)> = extents![
+        sLogCtx, pSvcParam, iMvRange, pMvdCostTable,
+        iMvdCostTableSize, iMvdCostTableStride, pStrideTab, pFuncList,
+        pSliceThreading, pTaskManage, eRefStrategy, pEncPic,
+        pDecPic, pRefPic, pCurDqLayer, ppDqLayerList,
+        ppRefPicListExt, pRefList0, pLtr, bCurFrameMarkedAsSceneLtr,
+        eSliceType, eNalType, eNalPriority, eLastNalPriority,
+        iNumRef0, uiDependencyId, uiTemporalId, bNeedPrefixNalFlag,
+        pWelsSvcRc, bCheckWindowStatusRefreshFlag, iCheckWindowStartTs, iCheckWindowCurrentTs,
+        iCheckWindowInterval, iCheckWindowIntervalShift, bCheckWindowShiftResetFlag, iGlobalQp,
+        pVaa, pVpp, pSpsArray, pSps,
+        pPPSArray, pPps, pSubsetArray, pSubsetSps,
+        iSpsNum, iSubsetSpsNum, iPpsNum, pOut,
+        pFrameBs, iFrameBsSize, iPosBsBuffer, sSpatialIndexMap,
+        iSliceBufferSize, bRefOfCurTidIsLtr, iMaxSliceCount, iActiveThreadsNum,
+        pDqIdcMap, sPSOVector, pPSOVector, pMemAlign,
+        uiStartTimestamp, sEncoderStatistics, iStatisticsLogInterval, iLastStatisticsLogTs,
+        iEncoderError, mutexEncoderError, bDeliveryFlag, sWelsCabacContexts,
+        uiLastTimestamp, pDynamicBsBuffer,
+        ];
+        assert_eq!(extents.len(), 70, "a field was added or removed without updating this list");
+
+        // ---- tier 2: the F64 fields, excluded by name and asserted by value ----
+        const BY_VALUE: [&str; 7] = [
+            // niche-carrying: `None` leaves pool::Id's generation half undefined
+            "pEncPic", "pDecPic", "pRefPic", "pRefList0", "sSpatialIndexMap",
+            // interior repr(C) padding a struct literal does not write
+            "sPSOVector", "sEncoderStatistics",
+        ];
+
+        let paraset_is_zero = |p: &SParaSetOffset| {
+            p.sParaSetOffsetVariable.iter().all(|v| {
+                v.iParaSetIdDelta.iter().all(|&d| d == 0)
+                    && v.bUsedParaSetIdInBs.iter().all(|&b| !b)
+                    && v.uiNextParaSetIdToUseInBs == 0
+            }) && p.bPpsIdMappingIntoSubsetsps.iter().all(|&b| !b)
+                && p.iPpsIdList.iter().all(|r| r.iter().all(|&i| i == 0))
+                && (p.uiNeededSpsNum, p.uiNeededSubsetSpsNum, p.uiNeededPpsNum) == (0, 0, 0)
+                && (p.uiInUseSpsNum, p.uiInUseSubsetSpsNum, p.uiInUsePpsNum) == (0, 0, 0)
+        };
+        let stats_are_zero = |s: &crate::encoder::wels_encoder_ext::TagVideoEncoderStatistics| {
+            (s.uiWidth, s.uiHeight, s.uiBitRate, s.uiAverageFrameQP) == (0, 0, 0, 0)
+                && (s.fAverageFrameSpeedInMs, s.fAverageFrameRate, s.fLatestFrameRate)
+                    == (0.0, 0.0, 0.0)
+                && (s.uiInputFrameCount, s.uiSkippedFrameCount, s.uiResolutionChangeTimes) == (0, 0, 0)
+                && (s.uiIDRReqNum, s.uiIDRSentNum, s.uiLTRSentNum) == (0, 0, 0)
+                && (s.iStatisticsTs, s.iTotalEncodedBytes) == (0, 0)
+                && (s.iLastStatisticsBytes, s.iLastStatisticsFrameCount) == (0, 0)
+        };
+
+        for (which, c) in [("new()", &built), ("shell", &shell)] {
+            assert!(c.pEncPic.is_none(), "{which}: no source picture is bound");
+            assert!(c.pDecPic.is_none(), "{which}: nothing is being reconstructed into");
+            assert!(c.pRefPic.is_none(), "{which}: no reference picture is bound");
+            assert!(c.pRefList0.iter().all(|h| h.is_none()), "{which}: list 0 is empty");
+            assert!(
+                c.sSpatialIndexMap.iter().all(|e| e.pSrc.is_none() && e.iDid == 0),
+                "{which}: the spatial index map holds no pictures"
+            );
+            assert!(paraset_is_zero(&c.sPSOVector), "{which}: no parameter-set id handed out");
+            assert!(
+                c.sEncoderStatistics.iter().all(stats_are_zero),
+                "{which}: nothing has been encoded"
+            );
+        }
+
+        let a = (&*built as *const sWelsEncCtx).cast::<u8>();
+        let b = (&*shell as *const sWelsEncCtx).cast::<u8>();
+
+        // ---- tier 1: everything else, byte for byte, attributed by name -------
+        let (mut compared, mut excluded) = (0usize, 0usize);
+        let mut diffs: Vec<String> = Vec::new();
+        for (name, off, len) in &extents {
+            if BY_VALUE.contains(name) {
+                excluded += len;
+                continue;
+            }
+            compared += len;
+            for k in 0..*len {
+                // SAFETY: `off + k` is inside `name`'s extent, and every byte of a
+                // field outside `BY_VALUE` is defined by its type in both images —
+                // scalars, pointers, `repr(C)` enums, and arrays of those, none of
+                // which have a niche or interior padding.
+                let (x, y) = unsafe { (*a.add(off + k), *b.add(off + k)) };
+                if x != y {
+                    diffs.push(format!(
+                        "{name} (offset {off}, +{k}): new()=0x{x:02x} shell=0x{y:02x}"
+                    ));
+                    break; // one line per field is enough to name it
+                }
+            }
+        }
+
+        assert!(
+            diffs.is_empty(),
+            "sWelsEncCtx::new() is not the zeroed shell — {} field(s) differ:\n  {}",
+            diffs.len(),
+            diffs.join("\n  ")
+        );
+
+        // Coverage, so "zero differences" cannot be true by comparing nothing. The
+        // rest is inter-field `repr(C)` padding plus the seven F64 fields; both are
+        // reported rather than asserted at a number, because both move whenever a
+        // field's width does — and every step after this one moves a field's width.
+        let total = size_of::<sWelsEncCtx>();
+        assert!(compared > 0 && compared + excluded <= total);
+        println!(
+            "ctx_new_reproduces_the_zeroed_shell: {compared}/{total} bytes compared byte-wise \
+             across {} fields, {excluded} in the {} F64 fields (compared by value), {} of \
+             inter-field repr(C) padding",
+            extents.len() - BY_VALUE.len(),
+            BY_VALUE.len(),
+            total - compared - excluded
+        );
+    }
+
     #[test]
     fn test_update_and_loadback_framenum() {
         let mut param = SWelsSvcCodingParam::default();
@@ -1104,7 +1476,7 @@ mod tests {
             sFrameCrop: SCropOffset::default(),
             ..Default::default()
         };
-        let mut ctx = unsafe { std::mem::zeroed::<sWelsEncCtx>() };
+        let mut ctx = sWelsEncCtx::new();
         ctx.pSvcParam = &mut param;
         ctx.pSps = &mut sps;
         ctx.eLastNalPriority[0] = EWelsNalRefIdc::NRI_PRI_HIGH;
@@ -1124,7 +1496,7 @@ mod tests {
     fn test_decide_frame_type() {
         let mut param = SWelsSvcCodingParam::default();
         let mut vaa = SVAAFrameInfo::default();
-        let mut ctx = unsafe { std::mem::zeroed::<sWelsEncCtx>() };
+        let mut ctx = sWelsEncCtx::new();
         param.sDependencyLayers[0].bEncCurFrmAsIdrFlag = true;
         ctx.pSvcParam = &mut param;
         ctx.pVaa = &mut vaa;
