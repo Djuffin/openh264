@@ -446,10 +446,10 @@ at a family boundary, and only with a written reason):
   the `*mut SMB` (128) / `*mut SMbCache` (96) parameter families D handed over**, cut
   as three closures (syntax writers; MD; ME) with the dispatch-slot types retyped in
   place. Two chores first: the `sl` sweep preset (F60's realloc path gets permanent
-  byte coverage — no existing configuration crosses `iMaxSliceNum` = 35) and the dead
-  screen-content *search* half (S18 — same `SCREEN_CONTENT_REAL_TIME` guard whose
-  preparation half D deleted; `SWelsME.pRefFeatureStorage` and
-  `SPicture.pScreenBlockFeatureStorage` go with it). Last and boxed, drop-from-the-end
+  byte coverage — no existing configuration crosses `iMaxSliceNum` = 35) and the
+  screen-content residue **fenced, not deleted** (D-scr-1: the feature is live in
+  the C++ and blocked only by the port's init guard at `encoder_ext.rs:817`, so the
+  search half is tagged `SCREEN_CONTENT(dormant: Phase 10)` and kept, unconverted). Last and boxed, drop-from-the-end
   first: the third attempt at the parked SAD/SATD families (plan §4 6.3) — SATD's owed
   solo measurement, then direct dispatch at the converted call sites, ≤1.05x bar, one
   dated verdict either way. Stays raw by settlement: `pMvdCost` (context's table, G),
@@ -481,9 +481,10 @@ Phase 6's close is defined now, and it is the decoder's close, transposed:
    thread machinery — each exception named in the close log with **Phase 7** as its
    owner. An exception is a file, never a blanket.
 2. **Every surviving `#[allow(unsafe_code)]` item under the denied modules is
-   enumerated by category with an owner**, and only three categories are lawful:
+   enumerated by category with an owner**, and only four categories are lawful:
    values crossing the C ABI (Phase 8), pool/allocator machinery carrying S28's
-   mandated Miri test, and an MT seam (Phase 7). "The lint is on" is not the test;
+   mandated Miri test, an MT seam (Phase 7), and the `SCREEN_CONTENT(dormant)` tag
+   (Phase 10, D-scr-1). "The lint is on" is not the test;
    the enumeration is.
 3. **Encoder-side `raw_ptr` residue is enumerated by category**, code split from
    prose (S16), the way 5b handed the decoder's 47+66 to Phase 8.

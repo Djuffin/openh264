@@ -14,7 +14,8 @@ This session:
 
 1. closes a **byte-coverage hole** in the differential sweep (the slice-realloc path
    is exercised by no standing configuration),
-2. deletes a **dead screen-content search family** (~large, compiler-enumerated),
+2. fences the **screen-content residue** — dormant feature scope kept for Phase 10
+   (decision D-scr-1), tagged rather than deleted,
 3. converts the **record and parameter families** to references —
    `SWelsMD`, `SWelsME`, `SMVUnitXY`, `SMeRefinePointer`, `SCabacCtx`, and the
    `*mut SMB` / `*mut SMbCache` parameter spellings — as three signature closures,
@@ -76,7 +77,7 @@ Raw pointer fields **inside** the records, and their disposition:
 |---|---|---|
 | `SWelsMD.pMvdCost`, `SWelsME.pMvdCost` (`*mut u16`) | a **row root** of the context's MVD cost table — set at `svc_encode_slice.rs:1418` as `pMvdCostTable.add(luma_qp * stride)`, copied into each `SWelsME` by `InitMe`; the table is one context-owned `WelsMallocz` block (`encoder_ext.rs:1293`, freed `:1857`); readers: `md.rs:706` (`MvdCost` accessor), `svc_motion_estimate.rs:550/:674/:835/:979–:1005` | **stays raw** — it aliases context-owned memory; converts at G when the table becomes owned |
 | `SWelsME.pEncMb/pRefMb/pColoRefMb` (`*mut u8`) | per-MB cursors into the encode/reference picture planes | **stay raw** — the picture family is session F's |
-| `SWelsME.pRefFeatureStorage` | dead screen-content machinery | **deleted in step 0b** |
+| `SWelsME.pRefFeatureStorage` | the screen-content feature search — dormant in the port, **live in the C++** | **stays raw, tagged in step 0b** (Phase 10) |
 | `SMeRefinePointer`'s five `*mut u8` | fixed offsets into one `SMbCache` buffer (details in step 3) | **converted in step 3** |
 | `SMeRefinePointer.pfCopyBlockByMode` | fn pointer (params are planes) | stays a fn-pointer field |
 
@@ -180,47 +181,46 @@ byte-identical after. At the probe's constraint (401 bytes), 112x96 codes 37 sli
 **Check**: both profiles green at the new totals (341 + N); the totals and the
 red-proof go in the commit message, and every later gate quote uses the new totals.
 
-## Step 0b — delete the dead screen-content search half
+## Step 0b — fence the screen-content residue (keep it; do not convert it)
 
-**Goal**: the feature-search machinery is unreachable; remove it so steps 2–3 don't
-convert dead code.
+**Goal**: the screen-content machinery is enumerated and tagged so steps 2–3 flow
+around it. It is dormant feature scope — kept for Phase 10 — not dead code.
 
-**Facts**: parameter validation returns `ENC_RETURN_UNSUPPORTED_PARA` for
-`iUsageType == SCREEN_CONTENT_REAL_TIME` — **find the site and cite it in the
-commit; if it does not stand, stop and report instead of deleting.** Session D
-already deleted the *preparation* half behind the same guard
-(`SFeatureSearchPreparation`, `RequestFeatureSearchPreparation`,
-`ReleaseFeatureSearchPreparation`, `UpdateFMESwitch`, `CountFMECostDown`,
-`UpdateFMEGoodFrameCount`; `pfUpdateFMESwitch` is unconditionally
-`UpdateFMESwitchNull`, installed in `WelsInitMeFunc`,
-svc_motion_estimate.rs:473). The *search* half is equally dead.
+**Facts** (decision D-scr-1, 2026-08-19): `SCREEN_CONTENT_REAL_TIME` is live,
+supported code in the C++ — validation accepts it with constraints
+(encoder_ext.cpp:274: one spatial layer, AQ off, background detection off,
+scene-change detect on; the port translates that block faithfully at
+wels_encoder_ext.rs:1085), the FME storage is allocated for it
+(encoder_ext.cpp:1032, :1129), and `PerformFMEPreprocess` runs per frame (:2747).
+What blocks the mode in the port is one **port-added init-time guard**:
+encoder_ext.rs:817 returns `ENC_RETURN_UNSUPPORTED_PARA` where the C++ allocates
+the FME preparation, because that machinery was never ported (the preparation half
+was deleted at T6.D2 and returns as a re-port from the C++). Re-enabling the mode
+is **Phase 10**; until then nothing reaches the in-tree search half, so converting
+it would be unverifiable by every gate this project owns — it stays exactly as it
+is.
 
-**Do**: delete `SWelsME.pRefFeatureStorage` (svc_motion_estimate.rs:170) first and
-let the build enumerate. Expected to fall (verify against what the compiler names):
+**Do**:
+1. Verify the guard stands (encoder_ext.rs:817) — it is what makes leaving the
+   family unconverted sound. If it does not, stop and report.
+2. Tag each item of the dormant family with a one-line comment
+   `// SCREEN_CONTENT(dormant: Phase 10)` — no other edit, no behavior change:
+   - `svc_motion_estimate.rs`: `WelsMotionEstimateSearchStatic` (:586),
+     `WelsMotionEstimateSearchScrolled` (:619), `WelsDiamondCrossFeatureSearch`
+     (:1076), `SetFeatureSearchIn` (:1321), `SaveFeatureSearchOut` (:1370),
+     `FeatureSearchOne` (:1383), `PerformFMEPreprocess` (:1296),
+     `SFeatureSearchIn` (:201), `SFeatureSearchOut` (:252), `CalcFMESwitchFlag`
+     (:441), `SWelsME.pRefFeatureStorage` (:170)
+   - `svc_mode_decision.rs`: `InitMe`'s `pRefFeatureStorage` parameter (≈:1204)
+   - `ref_list_mgr_svc.rs:1142`: the allocation branch
+   - `picture.rs`: `SScreenBlockFeatureStorage` (:30),
+     `SPicture.pScreenBlockFeatureStorage` (:101) and its `Reset` touch (:120)
+3. Convert none of it. Steps 2–3 convert the signatures *around* it; a converted
+   function that passes the storage through (`InitMe`) keeps that one parameter as
+   `*mut SScreenBlockFeatureStorage`.
 
-- `svc_motion_estimate.rs`: `WelsMotionEstimateSearchStatic` (:586),
-  `WelsMotionEstimateSearchScrolled` (:619), `WelsDiamondCrossFeatureSearch`
-  (:1076), `SetFeatureSearchIn` (:1321), `SaveFeatureSearchOut` (:1370),
-  `FeatureSearchOne` (:1383), `PerformFMEPreprocess` (:1296),
-  `SFeatureSearchIn` (:201), `SFeatureSearchOut` (:252)
-- `svc_mode_decision.rs`: `InitMe`'s `pRefFeatureStorage` parameter (≈:1204) and
-  the argument at every `InitMe` call
-- `ref_list_mgr_svc.rs:1142`: the allocation branch under
-  `iUsageType == SCREEN_CONTENT_REAL_TIME`
-- `picture.rs`: `SPicture.pScreenBlockFeatureStorage` (:101) with its `Reset` touch
-  (:120–:121), and `SScreenBlockFeatureStorage` itself (:30) once the last reader
-  is gone
-- `CalcFMESwitchFlag` (svc_motion_estimate.rs:441): delete **only if orphaned**.
-
-**Keep**: `uiSliceFMECostDown` (the real motion search writes it — measured in D);
-the ref-strategy table rows naming `SCREEN_CONTENT_REAL_TIME`
-(ref_list_mgr_svc.rs:1658/:1662) — that file is session F's.
-
-**Check**: build clean; `grep -rn 'FeatureSearch\|ScreenBlockFeatureStorage'` over
-`src/` reads zero code hits outside the kept strategy rows. Re-pin sizes in the same
-commit: `SWelsME` 96 → expect 88, `SWelsMD` 4000 → expect 3672 (41 × 8 less),
-`SPicture` re-measured. Note in the commit that session F's `SPicture` alias table
-loses its storage row.
+**Check**: `grep -rn 'SCREEN_CONTENT(dormant' src/` enumerates exactly the list
+above; sizes unmoved (`SWelsME` 96, `SWelsMD` 4000); build clean.
 
 ## Step 1 — the syntax-writer closure
 
@@ -262,7 +262,7 @@ cache. `pSlice`/`pCurLayer`/`pEncCtx` params: rule (g).
 ## Step 3 — the motion-estimation closure
 
 **Goal**: `*mut SWelsME`, `*mut SMVUnitXY`, `*mut SMeRefinePointer` read zero
-(minus the two F-owned SMVUnitXY sites); `SMeRefinePointer` holds no raw pointer.
+(minus the two F-owned SMVUnitXY sites and the `SCREEN_CONTENT`-tagged family); `SMeRefinePointer` holds no raw pointer.
 
 **Files**: `svc_motion_estimate.rs` (21 ME + 2 SMVUnitXY), `svc_base_layer_md.rs`
 (12 ME + 34 SMVUnitXY + 14 MeRefine), `md.rs` (2 ME + 3 MeRefine),
@@ -283,9 +283,8 @@ convert the pair to one selector bit over {1280, 1920} (the same recipe that tur
    `&mut SMbCache` already in scope at each use (rule (d) for any raw tail handed
    to a kernel). The struct is stack-local with one builder
    (svc_base_layer_md.rs:1576).
-2. `InitMe` (post-0b: `iMbPixX, iMbPixY, pMvdCost, iBlockSize, pEnc, pRef,
-   sWelsMe`) — `sWelsMe` becomes `&mut SWelsME`; `pMvdCost`/`pEnc`/`pRef` stay raw
-   (boundary list).
+2. `InitMe` (svc_mode_decision.rs:1204) — `sWelsMe` becomes `&mut SWelsME`;
+   `pMvdCost`/`pEnc`/`pRef`/`pRefFeatureStorage` stay raw (boundary list).
 3. `SMVUnitXY`: drop the caller casts (rule (b)); single-element params →
    `&mut SMVUnitXY`; array params → `&mut SMVComponentUnit` or
    `&mut [SMVUnitXY; N]` from the host in scope.
@@ -359,7 +358,8 @@ record it as owed in the ledger row.
    tree.
 4. Log entry (`rust/docs/safety_refactor_log.md`) with: family counts before/after;
    the survivor list (rule (g) leftovers, deblocking's neighbour-walkers, the two
-   F-owned SMVUnitXY sites, the MT file's one SMB site); sizes re-pinned; the
+   F-owned SMVUnitXY sites, the `SCREEN_CONTENT`-tagged family, the MT file's
+   one SMB site); sizes re-pinned; the
    sweep's new totals with the red-proof; the SATD numbers and the step-5 verdict;
    the span. Update the session E rows in `rust/docs/safety_refactor_plan.md` §0
    and `rust/docs/prompts/phase6.md` §6, and `rust/docs/perf_baseline.md`.
@@ -371,9 +371,10 @@ record it as owed in the ledger row.
 | `pEncCtx`/`pCtx`/`pFunc` params, everything `(*pCtx).…`-reached, `pCurDqLayer` (271 sites) | the context is `mem::zeroed`-built until its flip | G |
 | `pMvdCost` fields + `pMvdCostTable` | context-owned allocation (see the map) | G |
 | `SWelsME.pEncMb/pRefMb/pColoRefMb`, `pEncSad`, every `*mut u8` plane+stride param, `SQuarRefineParams.pRef/pSrcB` | picture/plane family | F |
-| `SPicture` (beyond 0b's dead field), SVAA, `picture.rs` + `wels_preprocess.rs` SMVUnitXY sites, ref-strategy table | preprocess/pool session | F |
+| `SPicture`, SVAA, `picture.rs` + `wels_preprocess.rs` SMVUnitXY sites, ref-strategy table | preprocess/pool session | F |
 | `wels_encoder_ext.rs` | ABI boundary | Phase 8 |
 | `slice_multi_threading.rs`, `wels_task_management.rs`, `wels_thread_pool`, `sSliceBs.pBs` | thread machinery | Phase 7 |
+| the screen-content family — the tagged feature-search items, `SScreenBlockFeatureStorage`, `SPicture.pScreenBlockFeatureStorage`, the ref-list allocation branch | dormant feature scope behind the port's init guard (`encoder_ext.rs:817`); unverifiable until ported | Phase 10 (D-scr-1) |
 
 No new `Vec`/`Box` fields anywhere this session; no allocation changes; sweep
 changes are additive only.
@@ -382,7 +383,8 @@ changes are additive only.
 
 - `grep -rn '\*mut SWelsMD\b\|\*mut SWelsME\b\|\*mut SMVUnitXY\b\|\*mut SMeRefinePointer\b\|\*mut SCabacCtx\b\|\*mut SMB\b\|\*mut SMbCache\b' --include='*.rs' src/encoder src/processing`
   reads **zero code sites** except the enumerated survivors.
-- The feature-search family is gone, sizes re-pinned.
+- The screen-content family is tagged `SCREEN_CONTENT(dormant: Phase 10)` and
+  otherwise byte-for-byte unchanged; `SWelsME` still 96, `SWelsMD` still 4000.
 - The `sl` preset runs in `gates.sh` in both profiles, with the red-proof recorded.
 - The SATD solo measurement exists; step 5 has a dated verdict (swap or third park).
 - The span is inside its null band; `gates.sh exit` reads PASS.
