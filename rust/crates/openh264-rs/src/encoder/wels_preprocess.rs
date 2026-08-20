@@ -49,6 +49,7 @@ pub use crate::processing::complexity_analysis::{FRAME_SAD, GOM_SAD, GOM_VAR};
     unused_unsafe
 )]
 
+use crate::encoder::picture::{PicPlanes, RecPicId, RecPicPool, SrcPicId, SrcPicPool};
 use std::ffi::{c_char, c_void};
 use std::mem::size_of;
 use crate::{
@@ -188,10 +189,12 @@ pub enum EPixMapBufferProperty {
 // Preprocessing & VAA Data Structures
 // ============================================================================
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
+/// **Not `#[repr(C)]` and not `Copy` since T6.F1**: the scaled input picture is the
+/// third and smallest of the encoder's three picture owners — one slot, owned in
+/// place rather than pooled, because nothing else ever names it.
+#[derive(Debug)]
 pub struct Scaled_Picture {
-    pub pScaledInputPicture: *mut SPicture,
+    pub pScaledInputPicture: Option<Box<SPicture>>,
     pub iScaledWidth: [i32; MAX_DEPENDENCY_LAYER],
     pub iScaledHeight: [i32; MAX_DEPENDENCY_LAYER],
 }
@@ -199,7 +202,7 @@ pub struct Scaled_Picture {
 impl Default for Scaled_Picture {
     fn default() -> Self {
         Self {
-            pScaledInputPicture: std::ptr::null_mut(),
+            pScaledInputPicture: None,
             iScaledWidth: [0; MAX_DEPENDENCY_LAYER],
             iScaledHeight: [0; MAX_DEPENDENCY_LAYER],
         }
@@ -231,7 +234,7 @@ impl Default for SRefJudgement {
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct SRefInfoParam {
-    pub pRefPicture: *mut SPicture,
+    pub pRefPicture: Option<SrcPicId>,
     pub iSrcListIdx: i32,
     pub bSceneLtrFlag: bool,
     pub pBestBlockStaticIdc: *mut u8,
@@ -240,7 +243,7 @@ pub struct SRefInfoParam {
 impl Default for SRefInfoParam {
     fn default() -> Self {
         Self {
-            pRefPicture: std::ptr::null_mut(),
+            pRefPicture: None,
             iSrcListIdx: 0,
             bSceneLtrFlag: false,
             pBestBlockStaticIdc: std::ptr::null_mut(),
@@ -645,7 +648,7 @@ pub unsafe fn WelsMoveMemory_c(
 pub unsafe fn WelsUpdateSpatialIdxMap(
     pEncCtx: *mut sWelsEncCtx,
     iPos: i32,
-    pPic: *mut SPicture,
+    pPic: Option<SrcPicId>,
     iDidx: i32,
 ) {
     if !pEncCtx.is_null() && iPos >= 0 && (iPos as usize) < MAX_DEPENDENCY_LAYER {
@@ -736,7 +739,7 @@ pub unsafe fn AllocPicture(
     kiHeight: i32,
     bNeedMbInfo: bool,
     iNeedFeatureStorage: i32,
-) -> *mut SPicture {
+) -> Option<Box<SPicture>> {
     // `RequestScreenBlockFeatureStorage` is part of the screen-content path, which is
     // outside the gate configuration and unported; refuse rather than hand back a
     // picture whose storage the caller believes exists. **Hoisted above the
@@ -744,7 +747,7 @@ pub unsafe fn AllocPicture(
     // it through `FreePicture`; the answer is the same null either way, and refusing
     // first is one path instead of two.
     if iNeedFeatureStorage != 0 {
-        return std::ptr::null_mut();
+        return None;
     }
 
     // **T6.F0**: the struct, and the four per-macroblock side arrays with it, come
@@ -778,7 +781,7 @@ pub unsafe fn AllocPicture(
         (*pMa).WelsMallocz((iLumaSize + (iChromaSize << 1)) as u32, tag!("pPic->pBuffer")) as *mut u8;
     if pPic.pBuffer.is_null() {
         // `pPic` drops here, and the side arrays with it.
-        return std::ptr::null_mut();
+        return None;
     }
     pPic.iLineSize[0] = iPicWidth;
     pPic.iLineSize[1] = iPicChromaWidth;
@@ -797,32 +800,29 @@ pub unsafe fn AllocPicture(
     // same seven fields `picture_handle.cpp` writes over its zeroed block.
     // SCREEN_CONTENT(dormant: Phase 10) — refused above, so the slot stays null.
 
-    Box::into_raw(pPic)
+    Some(pPic)
 }
 
-/// `picture_handle.cpp:129`. Releases a picture and the one block `AllocPicture` still
-/// takes from `pMa`.
+/// `picture_handle.cpp:129`, what is left of it. Releases the one block
+/// [`AllocPicture`] still takes from `pMa`; the picture itself, its side arrays and
+/// its box are Rust's and drop with the owner.
 ///
-/// The side arrays are the picture's own since T6.F0, so this frees the plane buffer
-/// and drops the `Box`; the field-by-field reset the C++ does before `WelsFree` was
-/// never observable (nothing reads a picture between free and reuse) and dies with the
+/// **Transitional (T6.F1), and it dies in T6.F2** with the last raw plane. Its two
+/// callers are the scaled-input slot and, through
+/// [`SrcPicPool::free_planes_and_clear`]/[`RecPicPool::free_planes_and_clear`], the
+/// two pools; the field-by-field reset the C++ does before `WelsFree` was never
+/// observable (nothing reads a picture between free and reuse) and went with the
 /// four `WelsFree`s it stood among.
 ///
 /// # Safety
-/// `pMa` must be the allocator the picture was built with, and `*ppPic` must have come
-/// from [`AllocPicture`].
-pub unsafe fn FreePicture(pMa: *mut CMemoryAlign, ppPic: *mut *mut SPicture) {
-    if ppPic.is_null() || (*ppPic).is_null() {
-        return;
-    }
-    let mut pPic = Box::from_raw(*ppPic);
-    *ppPic = std::ptr::null_mut();
-
+/// `pMa` must be the allocator the picture was built with.
+pub unsafe fn FreePicturePlanes(pMa: *mut CMemoryAlign, pPic: &mut SPicture) {
     if !pPic.pBuffer.is_null() {
         (*pMa).WelsFree(pPic.pBuffer as *mut c_void, tag!("pPic->pBuffer"));
         pPic.pBuffer = std::ptr::null_mut();
     }
-    drop(pPic);
+    pPic.pData = [std::ptr::null_mut(); 3];
+    pPic.iLineSize = [0; 3];
 }
 
 /// Initializes scaled intermediate picture buffers if aspect-ratio scaling is required.
@@ -840,28 +840,31 @@ pub unsafe fn WelsInitScaledPic(
             false,
             0,
         );
-        if (*pScaledPicture).pScaledInputPicture.is_null() {
+        if (*pScaledPicture).pScaledInputPicture.is_none() {
             return -1;
         }
 
-        let pPic = (*pScaledPicture).pScaledInputPicture;
+        let pPic = (*pScaledPicture)
+            .pScaledInputPicture
+            .as_deref()
+            .expect("just allocated");
         ClearEndOfLinePadding(
-            (*pPic).pData[0],
-            (*pPic).iLineSize[0],
-            (*pPic).iWidthInPixel,
-            (*pPic).iHeightInPixel,
+            pPic.pData[0],
+            pPic.iLineSize[0],
+            pPic.iWidthInPixel,
+            pPic.iHeightInPixel,
         );
         ClearEndOfLinePadding(
-            (*pPic).pData[1],
-            (*pPic).iLineSize[1],
-            (*pPic).iWidthInPixel >> 1,
-            (*pPic).iHeightInPixel >> 1,
+            pPic.pData[1],
+            pPic.iLineSize[1],
+            pPic.iWidthInPixel >> 1,
+            pPic.iHeightInPixel >> 1,
         );
         ClearEndOfLinePadding(
-            (*pPic).pData[2],
-            (*pPic).iLineSize[2],
-            (*pPic).iWidthInPixel >> 1,
-            (*pPic).iHeightInPixel >> 1,
+            pPic.pData[2],
+            pPic.iLineSize[2],
+            pPic.iWidthInPixel >> 1,
+            pPic.iHeightInPixel >> 1,
         );
     }
     0
@@ -872,17 +875,19 @@ pub unsafe fn FreeScaledPic(
     pScaledPicture: *mut Scaled_Picture,
     pMemoryAlign: *mut CMemoryAlign,
 ) {
-    if !pScaledPicture.is_null() && !(*pScaledPicture).pScaledInputPicture.is_null() {
-        FreePicture(pMemoryAlign, &mut (*pScaledPicture).pScaledInputPicture);
-        (*pScaledPicture).pScaledInputPicture = std::ptr::null_mut();
+    if pScaledPicture.is_null() {
+        return;
     }
+    if let Some(pPic) = (*pScaledPicture).pScaledInputPicture.as_deref_mut() {
+        FreePicturePlanes(pMemoryAlign, pPic);
+    }
+    (*pScaledPicture).pScaledInputPicture = None;
 }
 
 // ============================================================================
 // Core Preprocessing Engine: CWelsPreProcess
 // ============================================================================
 
-#[repr(C)]
 pub struct CWelsPreProcess {
     /// The video-processing plugins, owned. Was `m_pInterfaceVp: *mut IWelsVP`, a
     /// pointer to the dissolved vtable whose `pCtx` was this object behind a `void*`.
@@ -890,10 +895,16 @@ pub struct CWelsPreProcess {
     pub m_pEncCtx: *mut sWelsEncCtx,
     pub m_uiSpatialLayersInTemporal: [u8; MAX_DEPENDENCY_LAYER],
     pub m_sScaledPicture: Scaled_Picture,
-    pub m_pLastSpatialPicture: [[*mut SPicture; 2]; MAX_DEPENDENCY_LAYER],
+    pub m_pLastSpatialPicture: [[Option<SrcPicId>; 2]; MAX_DEPENDENCY_LAYER],
     pub m_bInitDone: bool,
     pub m_uiSpatialPicNum: [u8; MAX_DEPENDENCY_LAYER],
-    pub m_pSpatialPic: [[*mut SPicture; MAX_REF_PIC_COUNT + 1]; MAX_DEPENDENCY_LAYER],
+    /// **The spatial source pool** — every dependency layer's pictures in one owner,
+    /// with [`m_pSpatialPic`](Self::m_pSpatialPic) the per-layer index into it. The
+    /// C++ has one `SPicture*` array per layer and allocates into it directly; a
+    /// handle has to name *one* pool, so the storage is flat and the shape
+    /// `[did][i]` survives as the index.
+    pub m_pSpatialPicPool: SrcPicPool,
+    pub m_pSpatialPic: [[Option<SrcPicId>; MAX_REF_PIC_COUNT + 1]; MAX_DEPENDENCY_LAYER],
     pub m_iAvaliableRefInSpatialPicList: i32,
     pub m_eUsageType: EUsageType,
 }
@@ -908,17 +919,98 @@ impl Default for CWelsPreProcess {
             m_pEncCtx: std::ptr::null_mut(),
             m_uiSpatialLayersInTemporal: [0; MAX_DEPENDENCY_LAYER],
             m_sScaledPicture: Scaled_Picture::default(),
-            m_pLastSpatialPicture: [[std::ptr::null_mut(); 2]; MAX_DEPENDENCY_LAYER],
+            m_pLastSpatialPicture: [[None; 2]; MAX_DEPENDENCY_LAYER],
             m_bInitDone: false,
             m_uiSpatialPicNum: [0; MAX_DEPENDENCY_LAYER],
-            m_pSpatialPic: [[std::ptr::null_mut(); MAX_REF_PIC_COUNT + 1]; MAX_DEPENDENCY_LAYER],
+            m_pSpatialPicPool: SrcPicPool::empty(),
+            m_pSpatialPic: [[None; MAX_REF_PIC_COUNT + 1]; MAX_DEPENDENCY_LAYER],
             m_iAvaliableRefInSpatialPicList: 0,
             m_eUsageType: EUsageType::CAMERA_VIDEO_REAL_TIME,
         }
     }
 }
 
+/// Which **source-side** picture a preprocessing step reads or writes.
+///
+/// The spatial pool is one of the encoder's three picture owners; the scaled input is
+/// another, a single slot with no pool because nothing else ever names it. Almost
+/// every preprocessing step can be handed either — `SingleLayerPreprocess` moves the
+/// caller's frame into whichever of the two is in play and downsamples out of it — so
+/// the two are one parameter here rather than two overloads.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SrcPicRef {
+    /// A slot of `CWelsPreProcess::m_pSpatialPicPool`.
+    Pooled(SrcPicId),
+    /// `Scaled_Picture::pScaledInputPicture`.
+    Scaled,
+}
+
 impl CWelsPreProcess {
+    /// The source-side picture `which` names.
+    ///
+    /// # Panics
+    /// If `which` is [`SrcPicRef::Scaled`] and no scaled picture was allocated —
+    /// which cannot happen: the only writer of `Scaled` is `SingleLayerPreprocess`,
+    /// under the test that the slot is occupied.
+    #[inline]
+    pub fn src(&self, which: SrcPicRef) -> &SPicture {
+        match which {
+            SrcPicRef::Pooled(id) => self.m_pSpatialPicPool.get(id),
+            SrcPicRef::Scaled => self
+                .m_sScaledPicture
+                .pScaledInputPicture
+                .as_deref()
+                .expect("the scaled input picture is allocated"),
+        }
+    }
+
+    /// Mutable form of [`src`](Self::src).
+    #[inline]
+    pub fn src_mut(&mut self, which: SrcPicRef) -> &mut SPicture {
+        match which {
+            SrcPicRef::Pooled(id) => self.m_pSpatialPicPool.get_mut(id),
+            SrcPicRef::Scaled => self
+                .m_sScaledPicture
+                .pScaledInputPicture
+                .as_deref_mut()
+                .expect("the scaled input picture is allocated"),
+        }
+    }
+
+    /// Two *different* source-side pictures at once — the read-one-write-another
+    /// shape every downsampling step has.
+    ///
+    /// # Panics
+    /// If both name the same picture.
+    pub fn src_pair_mut(
+        &mut self,
+        a: SrcPicRef,
+        b: SrcPicRef,
+    ) -> (&mut SPicture, &mut SPicture) {
+        match (a, b) {
+            (SrcPicRef::Pooled(x), SrcPicRef::Pooled(y)) => self.m_pSpatialPicPool.pair_mut(x, y),
+            (SrcPicRef::Pooled(x), SrcPicRef::Scaled) => {
+                let scaled = self
+                    .m_sScaledPicture
+                    .pScaledInputPicture
+                    .as_deref_mut()
+                    .expect("the scaled input picture is allocated");
+                (self.m_pSpatialPicPool.get_mut(x), scaled)
+            }
+            (SrcPicRef::Scaled, SrcPicRef::Pooled(y)) => {
+                let scaled = self
+                    .m_sScaledPicture
+                    .pScaledInputPicture
+                    .as_deref_mut()
+                    .expect("the scaled input picture is allocated");
+                (scaled, self.m_pSpatialPicPool.get_mut(y))
+            }
+            (SrcPicRef::Scaled, SrcPicRef::Scaled) => {
+                panic!("src_pair_mut on one picture (the scaled input)")
+            }
+        }
+    }
+
     /// Factory constructor instantiating the preprocessing subsystem.
     pub unsafe fn CreatePreProcess(pEncCtx: *mut sWelsEncCtx) -> *mut CWelsPreProcess {
         if pEncCtx.is_null() || (*pEncCtx).pSvcParam.is_null() {
@@ -992,6 +1084,10 @@ impl CWelsPreProcess {
         let pMa = (*pCtx).pMemAlign;
         let kiDlayerCount = (*pParam).iSpatialLayerNum;
         let mut iDlayerIndex = 0;
+        // The pool takes its slots in one piece and never grows, so the pictures are
+        // collected first and the per-layer index is stamped from the finished pool.
+        let mut pending: Vec<Box<SPicture>> = Vec::new();
+        let mut slots = [[None::<usize>; MAX_REF_PIC_COUNT + 1]; MAX_DEPENDENCY_LAYER];
 
         while iDlayerIndex < kiDlayerCount {
             let idx = iDlayerIndex as usize;
@@ -1007,11 +1103,13 @@ impl CWelsPreProcess {
             self.m_uiSpatialPicNum[idx] = kuiRefNumInTemporal;
             let mut i: u8 = 0;
             while i < kuiRefNumInTemporal {
-                let pPic = AllocPicture(pMa, kiPicWidth, kiPicHeight, false, 0);
-                if pPic.is_null() {
+                let Some(pPic) = AllocPicture(pMa, kiPicWidth, kiPicHeight, false, 0) else {
                     return 1;
-                }
-                self.m_pSpatialPic[idx][i as usize] = pPic;
+                };
+                // The pool is flat across layers; `m_pSpatialPic[did][i]` keeps the
+                // C++'s shape as the index into it.
+                pending.push(pPic);
+                slots[idx][i as usize] = Some(pending.len() - 1);
                 i += 1;
             }
 
@@ -1024,6 +1122,12 @@ impl CWelsPreProcess {
             iDlayerIndex += 1;
         }
 
+        self.m_pSpatialPicPool = SrcPicPool::new(pending);
+        for d in 0..MAX_DEPENDENCY_LAYER {
+            for i in 0..=MAX_REF_PIC_COUNT {
+                self.m_pSpatialPic[d][i] = slots[d][i].map(|k| self.m_pSpatialPicPool.at(k));
+            }
+        }
         0
     }
 
@@ -1039,15 +1143,14 @@ impl CWelsPreProcess {
             let uiRefNumInTemporal = self.m_uiSpatialPicNum[jIdx];
 
             while i < uiRefNumInTemporal {
-                let iIdx = i as usize;
-                if !self.m_pSpatialPic[jIdx][iIdx].is_null() {
-                    FreePicture(pMa, &mut self.m_pSpatialPic[jIdx][iIdx]);
-                }
+                self.m_pSpatialPic[jIdx][i as usize] = None;
                 i += 1;
             }
             self.m_uiSpatialLayersInTemporal[jIdx] = 0;
             j += 1;
         }
+        self.m_pLastSpatialPicture = [[None; 2]; MAX_DEPENDENCY_LAYER];
+        self.m_pSpatialPicPool.free_planes_and_clear(pMa);
     }
 
     pub unsafe fn BuildSpatialPicList(
@@ -1120,10 +1223,14 @@ impl CWelsPreProcess {
         }
 
         *pSpatialNum = 0;
-        let pSrcPic = if !self.m_sScaledPicture.pScaledInputPicture.is_null() {
-            self.m_sScaledPicture.pScaledInputPicture
+        let bScaling = self.m_sScaledPicture.pScaledInputPicture.is_some();
+        let pSrcPic = if bScaling {
+            SrcPicRef::Scaled
         } else {
-            self.GetCurrentOrigFrame(iDependencyId)
+            SrcPicRef::Pooled(
+                self.GetCurrentOrigFrame(iDependencyId)
+                    .expect("the spatial pool is allocated before any frame is preprocessed"),
+            )
         };
 
         let iRet = self.WelsMoveMemoryWrapper(pSvcParam, pSrcPic, kpSrc, iSrcWidth, iSrcHeight);
@@ -1138,8 +1245,11 @@ impl CWelsPreProcess {
         let mut iShrinkWidth = iSrcWidth;
         let mut iShrinkHeight = iSrcHeight;
         let mut pDstPic = pSrcPic;
-        if !self.m_sScaledPicture.pScaledInputPicture.is_null() {
-            pDstPic = self.GetCurrentOrigFrame(iDependencyId);
+        if bScaling {
+            pDstPic = SrcPicRef::Pooled(
+                self.GetCurrentOrigFrame(iDependencyId)
+                    .expect("the spatial pool is allocated before any frame is preprocessed"),
+            );
             iShrinkWidth = self.m_sScaledPicture.iScaledWidth[depIdx];
             iShrinkHeight = self.m_sScaledPicture.iScaledHeight[depIdx];
         }
@@ -1161,7 +1271,7 @@ impl CWelsPreProcess {
                 let idc = if (*pDlayerParamInternal).bEncCurFrmAsIdrFlag {
                     ESceneChangeIdc::LARGE_CHANGED_SCENE
                 } else {
-                    self.DetectSceneChange(pDstPic, std::ptr::null_mut())
+                    self.DetectSceneChange(pDstPic, None)
                 };
                 (*(*pCtx).pVaa).eSceneChangeIdc = idc;
                 (*(*pCtx).pVaa).bSceneChangeFlag = idc == ESceneChangeIdc::LARGE_CHANGED_SCENE;
@@ -1175,6 +1285,7 @@ impl CWelsPreProcess {
                 } else {
                     self.m_pLastSpatialPicture[depIdx][0]
                 };
+                let pRefPic = pRefPic.map(SrcPicRef::Pooled);
                 let idc = self.DetectSceneChange(pDstPic, pRefPic);
                 (*(*pCtx).pVaa).bSceneChangeFlag = self.GetSceneChangeFlag(idc);
             }
@@ -1194,7 +1305,13 @@ impl CWelsPreProcess {
         let tid = (*pDlayerParamInternal).uiCodingIdx2TemporalId[((*pDlayerParamInternal).iCodingIndex & gopMask) as usize];
         let mut iActualSpatialNum = iSpatialNum - 1;
         if tid != INVALID_TEMPORAL_ID {
-            WelsUpdateSpatialIdxMap(pCtx, iActualSpatialNum, pDstPic, iDependencyId);
+            let idDst = match pDstPic {
+                SrcPicRef::Pooled(id) => Some(id),
+                // Unreachable in practice: `pDstPic` is only the scaled picture when
+                // no scaling is configured, and then no scaled picture exists.
+                SrcPicRef::Scaled => None,
+            };
+            WelsUpdateSpatialIdxMap(pCtx, iActualSpatialNum, idDst, iDependencyId);
             iActualSpatialNum -= 1;
         }
 
@@ -1207,14 +1324,20 @@ impl CWelsPreProcess {
                 let curDepIdx = iDependencyId as usize;
                 let pInt = &(*pSvcParam).sDependencyLayers[curDepIdx];
                 let pLay = &(*pSvcParam).sSpatialLayers[curDepIdx];
-                let pSrcPic = self.m_pLastSpatialPicture[iClosestDid as usize][1];
+                let pSrcPic = SrcPicRef::Pooled(
+                    self.m_pLastSpatialPicture[iClosestDid as usize][1]
+                        .expect("the closer layer was just written"),
+                );
                 let iTargetW = pLay.iVideoWidth;
                 let iTargetH = pLay.iVideoHeight;
                 let tId = pInt.uiCodingIdx2TemporalId[(pInt.iCodingIndex & gopMask) as usize];
 
                 let iSrcW = self.m_sScaledPicture.iScaledWidth[iClosestDid as usize];
                 let iSrcH = self.m_sScaledPicture.iScaledHeight[iClosestDid as usize];
-                let pDst = self.GetCurrentOrigFrame(iDependencyId);
+                let pDstId = self
+                    .GetCurrentOrigFrame(iDependencyId)
+                    .expect("the spatial pool is allocated");
+                let pDst = SrcPicRef::Pooled(pDstId);
                 let iShrinkW = self.m_sScaledPicture.iScaledWidth[curDepIdx];
                 let iShrinkH = self.m_sScaledPicture.iScaledHeight[curDepIdx];
 
@@ -1231,11 +1354,11 @@ impl CWelsPreProcess {
                 );
 
                 if tId != INVALID_TEMPORAL_ID {
-                    WelsUpdateSpatialIdxMap(pCtx, iActualSpatialNum, pDst, iDependencyId);
+                    WelsUpdateSpatialIdxMap(pCtx, iActualSpatialNum, Some(pDstId), iDependencyId);
                     iActualSpatialNum -= 1;
                 }
 
-                self.m_pLastSpatialPicture[curDepIdx][1] = pDst;
+                self.m_pLastSpatialPicture[curDepIdx][1] = Some(pDstId);
                 iClosestDid = iDependencyId;
                 iDependencyId -= 1;
             }
@@ -1280,7 +1403,7 @@ impl CWelsPreProcess {
             self.VaaCalculation((*pCtx).pVaa, pCurPic, pRefPic, false, bCalculateVar, bCalculateBGD);
 
             if (*pSvcParam).bEnableBackgroundDetection {
-                let bFlag = bCalculateBGD && !pRefPic.is_null() && ((*pRefPic).iPictureType != I_SLICE);
+                let bFlag = bCalculateBGD && self.ref_is_inter(pRefPic);
                 self.BackgroundDetection((*pCtx).pVaa, pCurPic, pRefPic, bFlag);
             }
             if bNeededMbAq {
@@ -1289,15 +1412,19 @@ impl CWelsPreProcess {
         } else {
             let pRefPic = self.GetBestRefPic(kiDidx, iRefTemporalIdx);
             let pLastPic = self.m_pLastSpatialPicture[dIdx][0];
-            let bCalculateSQDiff = !pLastPic.is_null()
-                && !pRefPic.is_null()
-                && ((*pLastPic).pData[0] == (*pRefPic).pData[0])
-                && bNeededMbAq;
+            // **The one picture-identity test in `src/encoder`** (T6.F1). The C++ asks
+            // it as `pLastPic->pData[0] == pRefPic->pData[0]` — two plane roots, which
+            // is why session B's grep for `SPicture*` comparisons did not see it. Two
+            // slots hold two distinct buffers, so equal roots is equal slots, and the
+            // handle comparison is the same question asked directly. F42's arm, in the
+            // encoder, is one line.
+            let bCalculateSQDiff =
+                pLastPic.is_some() && pLastPic == pRefPic && bNeededMbAq;
 
             self.VaaCalculation((*pCtx).pVaa, pCurPic, pRefPic, bCalculateSQDiff, bCalculateVar, bCalculateBGD);
 
             if (*pSvcParam).bEnableBackgroundDetection {
-                let bFlag = bCalculateBGD && !pRefPic.is_null() && ((*pRefPic).iPictureType != I_SLICE);
+                let bFlag = bCalculateBGD && self.ref_is_inter(pRefPic);
                 self.BackgroundDetection((*pCtx).pVaa, pCurPic, pRefPic, bFlag);
             }
 
@@ -1322,8 +1449,11 @@ impl CWelsPreProcess {
             && !(*(*pCtx).pVaa).sVaaCalcInfo.pSumOfSquare16x16.is_null()
         {
             let v = &*(*pCtx).pVaa;
-            let iMbNum = (((*pCurPic).iWidthInPixel + 15) >> 4)
-                * (((*pCurPic).iHeightInPixel + 15) >> 4);
+            let sCurGeom = self
+                .src_id(pCurPic.expect("the spatial pool is allocated"))
+                .planes();
+            let iMbNum = ((sCurGeom.iWidthInPixel + 15) >> 4)
+                * ((sCurGeom.iHeightInPixel + 15) >> 4);
             let (mut aq, mut bg, mut sad, mut ssd, mut sd, mut mad, mut sum, mut sqsum) =
                 (0i64, 0i64, 0i64, 0i64, 0i64, 0i64, 0i64, 0i64);
             for i in 0..iMbNum as isize {
@@ -1357,11 +1487,33 @@ impl CWelsPreProcess {
         0
     }
 
+    /// The picture a spatial-pool handle names.
+    ///
+    /// # Panics
+    /// If the pool has not been allocated. Every caller runs after
+    /// `AllocSpatialPictures`.
+    #[inline]
+    pub fn src_id(&self, id: SrcPicId) -> &SPicture {
+        self.m_pSpatialPicPool.get(id)
+    }
+
+    /// `pRef != NULL && pRef->iPictureType != I_SLICE` — the analysis stages' test
+    /// for "there is a reference and it is not an intra frame", spelled once because
+    /// three call sites ask it and each would otherwise borrow the pool inline while
+    /// building an argument list for a `&mut self` method.
+    #[inline]
+    pub fn ref_is_inter(&self, id: Option<SrcPicId>) -> bool {
+        match id {
+            Some(id) => self.src_id(id).iPictureType != I_SLICE,
+            None => false,
+        }
+    }
+
     pub unsafe fn GetCurPicPosition(&self, kiDidx: i32) -> i32 {
         self.m_uiSpatialLayersInTemporal[kiDidx as usize] as i32 - 1
     }
 
-    pub unsafe fn GetCurrentOrigFrame(&mut self, iDIdx: i32) -> *mut SPicture {
+    pub unsafe fn GetCurrentOrigFrame(&mut self, iDIdx: i32) -> Option<SrcPicId> {
         if self.m_eUsageType == EUsageType::SCREEN_CONTENT_REAL_TIME {
             self.m_pSpatialPic[iDIdx as usize][0]
         } else {
@@ -1370,7 +1522,7 @@ impl CWelsPreProcess {
         }
     }
 
-    pub unsafe fn GetBestRefPic(&self, kiDidx: i32, iRefTemporalIdx: i32) -> *mut SPicture {
+    pub unsafe fn GetBestRefPic(&self, kiDidx: i32, iRefTemporalIdx: i32) -> Option<SrcPicId> {
         self.m_pSpatialPic[kiDidx as usize][iRefTemporalIdx as usize]
     }
 
@@ -1381,7 +1533,7 @@ impl CWelsPreProcess {
         _eSliceType: EWelsSliceType,
         _kiDidx: i32,
         _iRefTemporalIdx: i32,
-    ) -> *mut SPicture {
+    ) -> Option<SrcPicId> {
         let pVaaExt = (*self.m_pEncCtx).pVaa as *mut SVAAFrameInfoExt;
         let pBest = if bSceneLtr {
             &(*pVaaExt).sVaaLtrBestRefCandidate[0]
@@ -1437,17 +1589,14 @@ impl CWelsPreProcess {
     /// denoise plugin in place here; the port's dispatch returned
     /// `RET_NOTSUPPORTED`, which this caller never read, so nothing happened and
     /// nothing happens. Gated by `bEnableDenoise`, off in every gate configuration.
-    pub unsafe fn BilateralDenoising(&mut self, pSrc: *mut SPicture, _kiWidth: i32, _kiHeight: i32) {
-        if pSrc.is_null() {
-            return;
-        }
+    pub unsafe fn BilateralDenoising(&mut self, _pSrc: SrcPicRef, _kiWidth: i32, _kiHeight: i32) {
         // METHOD_DENOISE: untranslated — no plugin runs (S18: no stub is invented).
     }
 
     pub unsafe fn DownsamplePadding(
         &mut self,
-        pSrc: *mut SPicture,
-        pDstPic: *mut SPicture,
+        srcRef: SrcPicRef,
+        dstRef: SrcPicRef,
         iSrcWidth: i32,
         iSrcHeight: i32,
         mut iShrinkWidth: i32,
@@ -1460,27 +1609,33 @@ impl CWelsPreProcess {
         let mut sSrcPixMap = SPixMap::default();
         let mut sDstPicMap = SPixMap::default();
 
-        sSrcPixMap.pPixel[0] = (*pSrc).pData[0];
-        sSrcPixMap.pPixel[1] = (*pSrc).pData[1];
-        sSrcPixMap.pPixel[2] = (*pSrc).pData[2];
+        // S37: resolve both pictures to their plane roots up front and work through
+        // raw cursors from here — `srcRef` and `dstRef` are frequently *the same*
+        // picture (no scaling configured), which no pair of references could express.
+        let pSrc = self.src(srcRef).planes();
+        let pDstPic = self.src(dstRef).planes();
+
+        sSrcPixMap.pPixel[0] = pSrc.pData[0];
+        sSrcPixMap.pPixel[1] = pSrc.pData[1];
+        sSrcPixMap.pPixel[2] = pSrc.pData[2];
         sSrcPixMap.iSizeInBits = g_kiPixMapSizeInBits;
         sSrcPixMap.sRect.iRectWidth = iSrcWidth;
         sSrcPixMap.sRect.iRectHeight = iSrcHeight;
-        sSrcPixMap.iStride[0] = (*pSrc).iLineSize[0];
-        sSrcPixMap.iStride[1] = (*pSrc).iLineSize[1];
-        sSrcPixMap.iStride[2] = (*pSrc).iLineSize[2];
+        sSrcPixMap.iStride[0] = pSrc.iLineSize[0];
+        sSrcPixMap.iStride[1] = pSrc.iLineSize[1];
+        sSrcPixMap.iStride[2] = pSrc.iLineSize[2];
         sSrcPixMap.eFormat = VideoFormat::videoFormatI420;
 
         if iSrcWidth != iShrinkWidth || iSrcHeight != iShrinkHeight || bForceCopy {
-            sDstPicMap.pPixel[0] = (*pDstPic).pData[0];
-            sDstPicMap.pPixel[1] = (*pDstPic).pData[1];
-            sDstPicMap.pPixel[2] = (*pDstPic).pData[2];
+            sDstPicMap.pPixel[0] = pDstPic.pData[0];
+            sDstPicMap.pPixel[1] = pDstPic.pData[1];
+            sDstPicMap.pPixel[2] = pDstPic.pData[2];
             sDstPicMap.iSizeInBits = g_kiPixMapSizeInBits;
             sDstPicMap.sRect.iRectWidth = iShrinkWidth;
             sDstPicMap.sRect.iRectHeight = iShrinkHeight;
-            sDstPicMap.iStride[0] = (*pDstPic).iLineSize[0];
-            sDstPicMap.iStride[1] = (*pDstPic).iLineSize[1];
-            sDstPicMap.iStride[2] = (*pDstPic).iLineSize[2];
+            sDstPicMap.iStride[0] = pDstPic.iLineSize[0];
+            sDstPicMap.iStride[1] = pDstPic.iLineSize[1];
+            sDstPicMap.iStride[2] = pDstPic.iLineSize[2];
             sDstPicMap.eFormat = VideoFormat::videoFormatI420;
 
             if iSrcWidth != iShrinkWidth || iSrcHeight != iShrinkHeight {
@@ -1492,18 +1647,18 @@ impl CWelsPreProcess {
                 iRet = crate::processing::vaacalc::RET_NOTSUPPORTED;
             } else {
                 WelsMoveMemory_c(
-                    (*pDstPic).pData[0],
-                    (*pDstPic).pData[1],
-                    (*pDstPic).pData[2],
-                    (*pDstPic).iLineSize[0],
-                    (*pDstPic).iLineSize[1],
-                    (*pDstPic).iLineSize[2],
-                    (*pSrc).pData[0],
-                    (*pSrc).pData[1],
-                    (*pSrc).pData[2],
-                    (*pSrc).iLineSize[0],
-                    (*pSrc).iLineSize[1],
-                    (*pSrc).iLineSize[2],
+                    pDstPic.pData[0],
+                    pDstPic.pData[1],
+                    pDstPic.pData[2],
+                    pDstPic.iLineSize[0],
+                    pDstPic.iLineSize[1],
+                    pDstPic.iLineSize[2],
+                    pSrc.pData[0],
+                    pSrc.pData[1],
+                    pSrc.pData[2],
+                    pSrc.iLineSize[0],
+                    pSrc.iLineSize[1],
+                    pSrc.iLineSize[2],
                     iSrcWidth,
                     iSrcHeight,
                 );
@@ -1532,34 +1687,41 @@ impl CWelsPreProcess {
     pub unsafe fn VaaCalculation(
         &mut self,
         pVaaInfo: *mut SVAAFrameInfo,
-        pCurPicture: *mut SPicture,
-        pRefPicture: *mut SPicture,
+        pCurPicture: Option<SrcPicId>,
+        pRefPicture: Option<SrcPicId>,
         bCalculateSQDiff: bool,
         bCalculateVar: bool,
         bCalculateBGD: bool,
     ) {
-        if pVaaInfo.is_null() || pCurPicture.is_null() || pRefPicture.is_null() {
+        if pVaaInfo.is_null() {
             return;
         }
-        (*pVaaInfo).sVaaCalcInfo.pCurY = (*pCurPicture).pData[0];
-        (*pVaaInfo).sVaaCalcInfo.pRefY = (*pRefPicture).pData[0];
+        // S37: both pictures resolved once to their plane roots; everything below
+        // walks raw cursors, so no borrow of the pool outlives this prologue.
+        let (Some(idCur), Some(idRef)) = (pCurPicture, pRefPicture) else {
+            return;
+        };
+        let sCur = self.src_id(idCur).planes();
+        let sRef = self.src_id(idRef).planes();
+        (*pVaaInfo).sVaaCalcInfo.pCurY = sCur.pData[0];
+        (*pVaaInfo).sVaaCalcInfo.pRefY = sRef.pData[0];
 
         let mut sCurPixMap = SPixMap::default();
         let mut sRefPixMap = SPixMap::default();
         let mut calc_param = SVAACalcParam::default();
 
-        sCurPixMap.pPixel[0] = (*pCurPicture).pData[0];
+        sCurPixMap.pPixel[0] = sCur.pData[0];
         sCurPixMap.iSizeInBits = g_kiPixMapSizeInBits;
-        sCurPixMap.sRect.iRectWidth = (*pCurPicture).iWidthInPixel;
-        sCurPixMap.sRect.iRectHeight = (*pCurPicture).iHeightInPixel;
-        sCurPixMap.iStride[0] = (*pCurPicture).iLineSize[0];
+        sCurPixMap.sRect.iRectWidth = sCur.iWidthInPixel;
+        sCurPixMap.sRect.iRectHeight = sCur.iHeightInPixel;
+        sCurPixMap.iStride[0] = sCur.iLineSize[0];
         sCurPixMap.eFormat = VideoFormat::videoFormatI420;
 
-        sRefPixMap.pPixel[0] = (*pRefPicture).pData[0];
+        sRefPixMap.pPixel[0] = sRef.pData[0];
         sRefPixMap.iSizeInBits = g_kiPixMapSizeInBits;
-        sRefPixMap.sRect.iRectWidth = (*pRefPicture).iWidthInPixel;
-        sRefPixMap.sRect.iRectHeight = (*pRefPicture).iHeightInPixel;
-        sRefPixMap.iStride[0] = (*pRefPicture).iLineSize[0];
+        sRefPixMap.sRect.iRectWidth = sRef.iWidthInPixel;
+        sRefPixMap.sRect.iRectHeight = sRef.iHeightInPixel;
+        sRefPixMap.iStride[0] = sRef.iLineSize[0];
         sRefPixMap.eFormat = VideoFormat::videoFormatI420;
 
         calc_param.iCalcVar = bCalculateVar;
@@ -1575,49 +1737,55 @@ impl CWelsPreProcess {
     pub unsafe fn BackgroundDetection(
         &mut self,
         pVaaInfo: *mut SVAAFrameInfo,
-        pCurPicture: *mut SPicture,
-        pRefPicture: *mut SPicture,
+        pCurPicture: Option<SrcPicId>,
+        pRefPicture: Option<SrcPicId>,
         bDetectFlag: bool,
     ) {
-        if pVaaInfo.is_null() || pCurPicture.is_null() {
+        if pVaaInfo.is_null() {
             return;
         }
-        if bDetectFlag && !pRefPicture.is_null() {
-            (*pVaaInfo).iPicWidth = (*pCurPicture).iWidthInPixel;
-            (*pVaaInfo).iPicHeight = (*pCurPicture).iHeightInPixel;
-            (*pVaaInfo).iPicStride = (*pCurPicture).iLineSize[0];
-            (*pVaaInfo).iPicStrideUV = (*pCurPicture).iLineSize[1];
-            (*pVaaInfo).pCurY = (*pCurPicture).pData[0];
-            (*pVaaInfo).pRefY = (*pRefPicture).pData[0];
-            (*pVaaInfo).pCurU = (*pCurPicture).pData[1];
-            (*pVaaInfo).pRefU = (*pRefPicture).pData[1];
-            (*pVaaInfo).pCurV = (*pCurPicture).pData[2];
-            (*pVaaInfo).pRefV = (*pRefPicture).pData[2];
+        let Some(idCur) = pCurPicture else {
+            return;
+        };
+        // S37 again — resolved once, then raw cursors.
+        let sCur = self.src_id(idCur).planes();
+        let sRef = pRefPicture.map(|id| self.src_id(id).planes());
+        if let (true, Some(sRef)) = (bDetectFlag, sRef) {
+            (*pVaaInfo).iPicWidth = sCur.iWidthInPixel;
+            (*pVaaInfo).iPicHeight = sCur.iHeightInPixel;
+            (*pVaaInfo).iPicStride = sCur.iLineSize[0];
+            (*pVaaInfo).iPicStrideUV = sCur.iLineSize[1];
+            (*pVaaInfo).pCurY = sCur.pData[0];
+            (*pVaaInfo).pRefY = sRef.pData[0];
+            (*pVaaInfo).pCurU = sCur.pData[1];
+            (*pVaaInfo).pRefU = sRef.pData[1];
+            (*pVaaInfo).pCurV = sCur.pData[2];
+            (*pVaaInfo).pRefV = sRef.pData[2];
 
             let mut sSrcPixMap = SPixMap::default();
             let mut sRefPixMap = SPixMap::default();
             let mut BGDParam = SBGDInterface::default();
 
-            sSrcPixMap.pPixel[0] = (*pCurPicture).pData[0];
-            sSrcPixMap.pPixel[1] = (*pCurPicture).pData[1];
-            sSrcPixMap.pPixel[2] = (*pCurPicture).pData[2];
+            sSrcPixMap.pPixel[0] = sCur.pData[0];
+            sSrcPixMap.pPixel[1] = sCur.pData[1];
+            sSrcPixMap.pPixel[2] = sCur.pData[2];
             sSrcPixMap.iSizeInBits = g_kiPixMapSizeInBits;
-            sSrcPixMap.iStride[0] = (*pCurPicture).iLineSize[0];
-            sSrcPixMap.iStride[1] = (*pCurPicture).iLineSize[1];
-            sSrcPixMap.iStride[2] = (*pCurPicture).iLineSize[2];
-            sSrcPixMap.sRect.iRectWidth = (*pCurPicture).iWidthInPixel;
-            sSrcPixMap.sRect.iRectHeight = (*pCurPicture).iHeightInPixel;
+            sSrcPixMap.iStride[0] = sCur.iLineSize[0];
+            sSrcPixMap.iStride[1] = sCur.iLineSize[1];
+            sSrcPixMap.iStride[2] = sCur.iLineSize[2];
+            sSrcPixMap.sRect.iRectWidth = sCur.iWidthInPixel;
+            sSrcPixMap.sRect.iRectHeight = sCur.iHeightInPixel;
             sSrcPixMap.eFormat = VideoFormat::videoFormatI420;
 
-            sRefPixMap.pPixel[0] = (*pRefPicture).pData[0];
-            sRefPixMap.pPixel[1] = (*pRefPicture).pData[1];
-            sRefPixMap.pPixel[2] = (*pRefPicture).pData[2];
+            sRefPixMap.pPixel[0] = sRef.pData[0];
+            sRefPixMap.pPixel[1] = sRef.pData[1];
+            sRefPixMap.pPixel[2] = sRef.pData[2];
             sRefPixMap.iSizeInBits = g_kiPixMapSizeInBits;
-            sRefPixMap.iStride[0] = (*pRefPicture).iLineSize[0];
-            sRefPixMap.iStride[1] = (*pRefPicture).iLineSize[1];
-            sRefPixMap.iStride[2] = (*pRefPicture).iLineSize[2];
-            sRefPixMap.sRect.iRectWidth = (*pRefPicture).iWidthInPixel;
-            sRefPixMap.sRect.iRectHeight = (*pRefPicture).iHeightInPixel;
+            sRefPixMap.iStride[0] = sRef.iLineSize[0];
+            sRefPixMap.iStride[1] = sRef.iLineSize[1];
+            sRefPixMap.iStride[2] = sRef.iLineSize[2];
+            sRefPixMap.sRect.iRectWidth = sRef.iWidthInPixel;
+            sRefPixMap.sRect.iRectHeight = sRef.iHeightInPixel;
             sRefPixMap.eFormat = VideoFormat::videoFormatI420;
 
             BGDParam.pBackgroundMbFlag = (*pVaaInfo).pVaaBackgroundMbFlag;
@@ -1626,8 +1794,8 @@ impl CWelsPreProcess {
             self.m_vp.sBackgroundDetection.Set(&BGDParam);
             self.m_vp.sBackgroundDetection.Process(&sSrcPixMap, &sRefPixMap, &(*pVaaInfo).sVaaCalcInfo);
         } else if !(*pVaaInfo).pVaaBackgroundMbFlag.is_null() {
-            let iPicWidthInMb = ((*pCurPicture).iWidthInPixel + 15) >> 4;
-            let iPicHeightInMb = ((*pCurPicture).iHeightInPixel + 15) >> 4;
+            let iPicWidthInMb = (sCur.iWidthInPixel + 15) >> 4;
+            let iPicHeightInMb = (sCur.iHeightInPixel + 15) >> 4;
             std::ptr::write_bytes(
                 (*pVaaInfo).pVaaBackgroundMbFlag as *mut u8,
                 0,
@@ -1639,12 +1807,19 @@ impl CWelsPreProcess {
     pub unsafe fn AdaptiveQuantCalculation(
         &mut self,
         pVaaInfo: *mut SVAAFrameInfo,
-        pCurPicture: *mut SPicture,
-        pRefPicture: *mut SPicture,
+        pCurPicture: Option<SrcPicId>,
+        pRefPicture: Option<SrcPicId>,
     ) {
-        if pVaaInfo.is_null() || pCurPicture.is_null() || pRefPicture.is_null() {
+        if pVaaInfo.is_null() {
             return;
         }
+        // S37: both pictures resolved once to their plane roots; everything below
+        // walks raw cursors, so no borrow of the pool outlives this prologue.
+        let (Some(idCur), Some(idRef)) = (pCurPicture, pRefPicture) else {
+            return;
+        };
+        let sCur = self.src_id(idCur).planes();
+        let sRef = self.src_id(idRef).planes();
         // The C++ stored `&pVaaInfo->sVaaCalcInfo` *inside* `pVaaInfo` here
         // (`sAdaptiveQuantParam.pCalcResult`) — a self-pointer; the result is
         // handed over at the `Process` call instead.
@@ -1653,18 +1828,18 @@ impl CWelsPreProcess {
         let mut pSrc = SPixMap::default();
         let mut pRef = SPixMap::default();
 
-        pSrc.pPixel[0] = (*pCurPicture).pData[0];
+        pSrc.pPixel[0] = sCur.pData[0];
         pSrc.iSizeInBits = g_kiPixMapSizeInBits;
-        pSrc.iStride[0] = (*pCurPicture).iLineSize[0];
-        pSrc.sRect.iRectWidth = (*pCurPicture).iWidthInPixel;
-        pSrc.sRect.iRectHeight = (*pCurPicture).iHeightInPixel;
+        pSrc.iStride[0] = sCur.iLineSize[0];
+        pSrc.sRect.iRectWidth = sCur.iWidthInPixel;
+        pSrc.sRect.iRectHeight = sCur.iHeightInPixel;
         pSrc.eFormat = VideoFormat::videoFormatI420;
 
-        pRef.pPixel[0] = (*pRefPicture).pData[0];
+        pRef.pPixel[0] = sRef.pData[0];
         pRef.iSizeInBits = g_kiPixMapSizeInBits;
-        pRef.iStride[0] = (*pRefPicture).iLineSize[0];
-        pRef.sRect.iRectWidth = (*pRefPicture).iWidthInPixel;
-        pRef.sRect.iRectHeight = (*pRefPicture).iHeightInPixel;
+        pRef.iStride[0] = sRef.iLineSize[0];
+        pRef.sRect.iRectWidth = sRef.iWidthInPixel;
+        pRef.sRect.iRectHeight = sRef.iHeightInPixel;
         pRef.eFormat = VideoFormat::videoFormatI420;
 
         // METHOD_ADAPTIVE_QUANT.
@@ -1731,8 +1906,8 @@ impl CWelsPreProcess {
     }
 
     pub unsafe fn WelsExchangeSpatialPictures(
-        ppPic1: *mut *mut SPicture,
-        ppPic2: *mut *mut SPicture,
+        ppPic1: *mut Option<SrcPicId>,
+        ppPic2: *mut Option<SrcPicId>,
     ) {
         if !ppPic1.is_null() && !ppPic2.is_null() {
             let tmp = *ppPic1;
@@ -1748,8 +1923,8 @@ impl CWelsPreProcess {
 
         if (*pParam).iUsageType == EUsageType::SCREEN_CONTENT_REAL_TIME {
             while iDlayerIndex < MAX_DEPENDENCY_LAYER {
-                self.m_pLastSpatialPicture[iDlayerIndex][0] = std::ptr::null_mut();
-                self.m_pLastSpatialPicture[iDlayerIndex][1] = std::ptr::null_mut();
+                self.m_pLastSpatialPicture[iDlayerIndex][0] = None;
+                self.m_pLastSpatialPicture[iDlayerIndex][1] = None;
                 iDlayerIndex += 1;
             }
         } else {
@@ -1757,12 +1932,12 @@ impl CWelsPreProcess {
                 let kiLayerInTemporal = self.m_uiSpatialLayersInTemporal[iDlayerIndex as usize] as usize;
                 self.m_pLastSpatialPicture[iDlayerIndex as usize][0] =
                     self.m_pSpatialPic[iDlayerIndex as usize][kiLayerInTemporal.saturating_sub(2)];
-                self.m_pLastSpatialPicture[iDlayerIndex as usize][1] = std::ptr::null_mut();
+                self.m_pLastSpatialPicture[iDlayerIndex as usize][1] = None;
                 iDlayerIndex += 1;
             }
             while (iDlayerIndex as usize) < MAX_DEPENDENCY_LAYER {
-                self.m_pLastSpatialPicture[iDlayerIndex as usize][0] = std::ptr::null_mut();
-                self.m_pLastSpatialPicture[iDlayerIndex as usize][1] = std::ptr::null_mut();
+                self.m_pLastSpatialPicture[iDlayerIndex as usize][0] = None;
+                self.m_pLastSpatialPicture[iDlayerIndex as usize][1] = None;
                 iDlayerIndex += 1;
             }
         }
@@ -1773,7 +1948,7 @@ impl CWelsPreProcess {
     pub unsafe fn WelsMoveMemoryWrapper(
         &self,
         pSvcParam: *mut SWelsSvcCodingParam,
-        pDstPic: *mut SPicture,
+        pDstRef: SrcPicRef,
         kpSrc: *const SSourcePicture,
         kiTargetWidth: i32,
         kiTargetHeight: i32,
@@ -1781,6 +1956,9 @@ impl CWelsPreProcess {
         if (VideoFormat::videoFormatI420 as i32) != ((*kpSrc).iColorFormat & !(-0x80000000i32)) {
             return ENC_RETURN_INVALIDINPUT;
         }
+
+        // S37: the destination resolved once to its plane roots.
+        let pDstPic = self.src(pDstRef).planes();
 
         let mut iSrcWidth = (*kpSrc).iPicWidth;
         let mut iSrcHeight = (*kpSrc).iPicHeight;
@@ -1828,12 +2006,12 @@ impl CWelsPreProcess {
         let kiSrcStrideU = (*kpSrc).iStride[1];
         let kiSrcStrideV = (*kpSrc).iStride[2];
 
-        let pDstY = (*pDstPic).pData[0];
-        let pDstU = (*pDstPic).pData[1];
-        let pDstV = (*pDstPic).pData[2];
-        let kiDstStrideY = (*pDstPic).iLineSize[0];
-        let kiDstStrideU = (*pDstPic).iLineSize[1];
-        let kiDstStrideV = (*pDstPic).iLineSize[2];
+        let pDstY = pDstPic.pData[0];
+        let pDstU = pDstPic.pData[1];
+        let pDstV = pDstPic.pData[2];
+        let kiDstStrideY = pDstPic.iLineSize[0];
+        let kiDstStrideU = pDstPic.iLineSize[1];
+        let kiDstStrideV = pDstPic.iLineSize[2];
 
         if !pSrcY.is_null() {
             if iSrcWidth <= 0 || iSrcHeight <= 0 || (iSrcWidth * iSrcHeight > (MAX_MBS_PER_FRAME << 8)) {
@@ -1915,8 +2093,8 @@ impl CWelsPreProcess {
 
     pub unsafe fn DetectSceneChange(
         &mut self,
-        pCurPicture: *mut SPicture,
-        pRefPicture: *mut SPicture,
+        pCurPicture: SrcPicRef,
+        pRefPicture: Option<SrcPicRef>,
     ) -> ESceneChangeIdc {
         if self.m_eUsageType == EUsageType::SCREEN_CONTENT_REAL_TIME {
             self.DetectSceneChangeScreen(pCurPicture, pRefPicture)
@@ -1927,30 +2105,33 @@ impl CWelsPreProcess {
 
     unsafe fn DetectSceneChangeVideo(
         &mut self,
-        pCurPicture: *mut SPicture,
-        pRefPicture: *mut SPicture,
+        pCurPicture: SrcPicRef,
+        pRefPicture: Option<SrcPicRef>,
     ) -> ESceneChangeIdc {
-        if pCurPicture.is_null() || pRefPicture.is_null() {
+        let Some(pRefPicture) = pRefPicture else {
             return ESceneChangeIdc::SIMILAR_SCENE;
-        }
+        };
+        // S37: resolved once, raw cursors after.
+        let sCur = self.src(pCurPicture).planes();
+        let sRef = self.src(pRefPicture).planes();
 
         // METHOD_SCENE_CHANGE_DETECTION_VIDEO: no `Set` in the C++ either.
         let mut sSceneChangeDetectResult = SSceneChangeResult::default();
         let mut sSrcPixMap = SPixMap::default();
         let mut sRefPixMap = SPixMap::default();
 
-        sSrcPixMap.pPixel[0] = (*pCurPicture).pData[0];
+        sSrcPixMap.pPixel[0] = sCur.pData[0];
         sSrcPixMap.iSizeInBits = g_kiPixMapSizeInBits;
-        sSrcPixMap.iStride[0] = (*pCurPicture).iLineSize[0];
-        sSrcPixMap.sRect.iRectWidth = (*pCurPicture).iWidthInPixel;
-        sSrcPixMap.sRect.iRectHeight = (*pCurPicture).iHeightInPixel;
+        sSrcPixMap.iStride[0] = sCur.iLineSize[0];
+        sSrcPixMap.sRect.iRectWidth = sCur.iWidthInPixel;
+        sSrcPixMap.sRect.iRectHeight = sCur.iHeightInPixel;
         sSrcPixMap.eFormat = VideoFormat::videoFormatI420;
 
-        sRefPixMap.pPixel[0] = (*pRefPicture).pData[0];
+        sRefPixMap.pPixel[0] = sRef.pData[0];
         sRefPixMap.iSizeInBits = g_kiPixMapSizeInBits;
-        sRefPixMap.iStride[0] = (*pRefPicture).iLineSize[0];
-        sRefPixMap.sRect.iRectWidth = (*pRefPicture).iWidthInPixel;
-        sRefPixMap.sRect.iRectHeight = (*pRefPicture).iHeightInPixel;
+        sRefPixMap.iStride[0] = sRef.iLineSize[0];
+        sRefPixMap.sRect.iRectWidth = sRef.iWidthInPixel;
+        sRefPixMap.sRect.iRectHeight = sRef.iHeightInPixel;
         sRefPixMap.eFormat = VideoFormat::videoFormatI420;
 
         let iRet = self.m_vp.sSceneChangeDetection.Process(&sSrcPixMap, &sRefPixMap);
@@ -1962,11 +2143,11 @@ impl CWelsPreProcess {
 
     unsafe fn DetectSceneChangeScreen(
         &mut self,
-        pCurPicture: *mut SPicture,
-        _pRef: *mut SPicture,
+        pCurPicture: SrcPicRef,
+        _pRef: Option<SrcPicRef>,
     ) -> ESceneChangeIdc {
         let pCtx = self.m_pEncCtx;
-        if pCtx.is_null() || (*pCtx).pVaa.is_null() || pCurPicture.is_null() {
+        if pCtx.is_null() || (*pCtx).pVaa.is_null() {
             return ESceneChangeIdc::LARGE_CHANGED_SCENE;
         }
 
@@ -1977,7 +2158,10 @@ impl CWelsPreProcess {
             return ESceneChangeIdc::LARGE_CHANGED_SCENE;
         }
 
-        let pRefPicList = self.m_pSpatialPic[iTargetDid as usize].as_ptr().cast_mut().add(1);
+        // The layer's spatial list from index 1 — the C++ passes `&m_pSpatialPic[d][1]`.
+        let pRefPicList: [Option<SrcPicId>; MAX_REF_PIC_COUNT] = std::array::from_fn(|i| {
+            self.m_pSpatialPic[iTargetDid as usize][i + 1]
+        });
         let mut sAvailableRefParam = [SRefInfoParam::default(); MAX_REF_PIC_COUNT];
         let mut iAvailableRefNum = 0;
         let mut iAvailableSceneRefNum = 0;
@@ -1993,7 +2177,7 @@ impl CWelsPreProcess {
             (*(*pCtx).pLtr.add(iTargetDid as usize)).iLastLtrIdx[iCurTid as usize];
         if (*pSvcParam).bEnableLongTermReference {
             self.GetAvailableRefListLosslessScreenRefSelection(
-                pRefPicList,
+                &pRefPicList,
                 iCurTid,
                 iClosestLtrFrameNum,
                 sAvailableRefParam.as_mut_ptr(),
@@ -2002,7 +2186,7 @@ impl CWelsPreProcess {
             );
         } else {
             self.GetAvailableRefList(
-                pRefPicList,
+                &pRefPicList,
                 iCurTid,
                 iClosestLtrFrameNum,
                 sAvailableRefParam.as_mut_ptr(),
@@ -2025,12 +2209,13 @@ impl CWelsPreProcess {
         let mut iNumOfLargeChange = 0;
         let mut iNumOfMediumChangeToLtr = 0;
 
-        self.InitPixMap(pCurPicture, &mut sSrcMap);
+        let sCur = self.src(pCurPicture).planes();
+        Self::InitPixMap(&sCur, &mut sSrcMap);
         self.InitRefJudgement(&mut sLtrJudgement);
         self.InitRefJudgement(&mut sSceneLtrJudgement);
 
-        let iNegligibleMotionBlocks = (((*pCurPicture).iWidthInPixel >> 3)
-            * ((*pCurPicture).iHeightInPixel >> 3)) as f32
+        let iNegligibleMotionBlocks = ((sCur.iWidthInPixel >> 3)
+            * (sCur.iHeightInPixel >> 3)) as f32
             * STATIC_SCENE_MOTION_RATIO;
         let iNegligibleBlocks = iNegligibleMotionBlocks as i32;
 
@@ -2044,13 +2229,14 @@ impl CWelsPreProcess {
             sSceneChangeResult.pStaticBlockIdc = pCurBlockStaticPointer;
 
             let pRefPicInfo = &mut sAvailableRefParam[iScdIdx as usize];
-            let pRefPic = pRefPicInfo.pRefPicture;
-            if pRefPic.is_null() {
+            let Some(idRefPic) = pRefPicInfo.pRefPicture else {
                 continue;
-            }
-            self.InitPixMap(pRefPic, &mut sRefMap);
+            };
+            let sRefGeom = self.src_id(idRefPic).planes();
+            Self::InitPixMap(&sRefGeom, &mut sRefMap);
 
-            let bIsClosestLtrFrame = (*pRefPic).iLongTermPicNum == iClosestLtrFrameNum;
+            let bIsClosestLtrFrame =
+                self.src_id(idRefPic).iLongTermPicNum == iClosestLtrFrameNum;
             if iScdIdx == 0 {
                 let pScrollDetectInfo = &mut (*pVaaExt).sScrollDetectInfo;
                 *pScrollDetectInfo = SScrollDetectionParam::default();
@@ -2087,8 +2273,8 @@ impl CWelsPreProcess {
                     let iSceneDetectIdc = sSceneChangeResult.eSceneChangeIdc;
                     let iMotionBlockNum = sSceneChangeResult.iMotionBlockNum;
 
-                    let bCurRefIsSceneLtr = (*pRefPic).bIsSceneLTR;
-                    let iRefPicAvQP = (*pRefPic).iFrameAverageQp;
+                    let bCurRefIsSceneLtr = self.src_id(idRefPic).bIsSceneLTR;
+                    let iRefPicAvQP = self.src_id(idRefPic).iFrameAverageQp;
 
                     if iSceneDetectIdc == ESceneChangeIdc::LARGE_CHANGED_SCENE {
                         iNumOfLargeChange += 1;
@@ -2097,12 +2283,12 @@ impl CWelsPreProcess {
                         iNumOfMediumChangeToLtr += 1;
                     }
 
-                    if self.JudgeBestRef(pRefPic, &sLtrJudgement, iFrameComplexity, bIsClosestLtrFrame) {
+                    if self.JudgeBestRef(idRefPic, &sLtrJudgement, iFrameComplexity, bIsClosestLtrFrame) {
                         self.SaveBestRefToJudgement(iRefPicAvQP, iFrameComplexity, &mut sLtrJudgement);
                         self.SaveBestRefToLocal(pRefPicInfo, &sSceneChangeResult, &mut sLtrSaved);
                     }
                     if bCurRefIsSceneLtr
-                        && self.JudgeBestRef(pRefPic, &sSceneLtrJudgement, iFrameComplexity, bIsClosestLtrFrame)
+                        && self.JudgeBestRef(idRefPic, &sSceneLtrJudgement, iFrameComplexity, bIsClosestLtrFrame)
                     {
                         self.SaveBestRefToJudgement(iRefPicAvQP, iFrameComplexity, &mut sSceneLtrJudgement);
                         self.SaveBestRefToLocal(pRefPicInfo, &sSceneChangeResult, &mut sSceneLtrSaved);
@@ -2124,8 +2310,8 @@ impl CWelsPreProcess {
         };
 
         self.SaveBestRefToVaa(&sLtrSaved, &mut (*pVaaExt).sVaaStrBestRefCandidate[0]);
-        if !sLtrSaved.pRefPicture.is_null() {
-            (*pVaaExt).iVaaBestRefFrameNum = (*sLtrSaved.pRefPicture).iFrameNum;
+        if let Some(id) = sLtrSaved.pRefPicture {
+            (*pVaaExt).iVaaBestRefFrameNum = self.src_id(id).iFrameNum;
         }
         (*pVaaExt).pVaaBestBlockStaticIdc = sLtrSaved.pBestBlockStaticIdc;
 
@@ -2137,16 +2323,16 @@ impl CWelsPreProcess {
         iVaaFrameSceneChangeIdc
     }
 
-    unsafe fn InitPixMap(&self, pPicture: *const SPicture, pPixMap: *mut SPixMap) {
-        if !pPicture.is_null() && !pPixMap.is_null() {
-            (*pPixMap).pPixel[0] = (*pPicture).pData[0];
-            (*pPixMap).pPixel[1] = (*pPicture).pData[1];
-            (*pPixMap).pPixel[2] = (*pPicture).pData[2];
+    unsafe fn InitPixMap(pPicture: &PicPlanes, pPixMap: *mut SPixMap) {
+        if !pPixMap.is_null() {
+            (*pPixMap).pPixel[0] = pPicture.pData[0];
+            (*pPixMap).pPixel[1] = pPicture.pData[1];
+            (*pPixMap).pPixel[2] = pPicture.pData[2];
             (*pPixMap).iSizeInBits = std::mem::size_of::<u8>() as i32;
-            (*pPixMap).iStride[0] = (*pPicture).iLineSize[0];
-            (*pPixMap).iStride[1] = (*pPicture).iLineSize[1];
-            (*pPixMap).sRect.iRectWidth = (*pPicture).iWidthInPixel;
-            (*pPixMap).sRect.iRectHeight = (*pPicture).iHeightInPixel;
+            (*pPixMap).iStride[0] = pPicture.iLineSize[0];
+            (*pPixMap).iStride[1] = pPicture.iLineSize[1];
+            (*pPixMap).sRect.iRectWidth = pPicture.iWidthInPixel;
+            (*pPixMap).sRect.iRectHeight = pPicture.iHeightInPixel;
             (*pPixMap).eFormat = VideoFormat::videoFormatI420;
         }
     }
@@ -2163,7 +2349,7 @@ impl CWelsPreProcess {
 
     unsafe fn JudgeBestRef(
         &self,
-        pRefPic: *mut SPicture,
+        idRefPic: SrcPicId,
         sRefJudgement: &SRefJudgement,
         iFrameComplexity: i64,
         bIsClosestLtrFrame: bool,
@@ -2173,7 +2359,7 @@ impl CWelsPreProcess {
         } else {
             (iFrameComplexity < sRefJudgement.iMinFrameComplexity08)
                 || ((iFrameComplexity <= sRefJudgement.iMinFrameComplexity11)
-                    && (!pRefPic.is_null() && ((*pRefPic).iFrameAverageQp < sRefJudgement.iMinFrameQp)))
+                    && (self.src_id(idRefPic).iFrameAverageQp < sRefJudgement.iMinFrameQp))
         }
     }
 
@@ -2211,7 +2397,7 @@ impl CWelsPreProcess {
 
     unsafe fn GetAvailableRefListLosslessScreenRefSelection(
         &self,
-        pRefPicList: *mut *mut SPicture,
+        pRefPicList: &[Option<SrcPicId>],
         iCurTid: u8,
         iClosestLtrFrameNum: i32,
         pAvailableRefParam: *mut SRefInfoParam,
@@ -2231,21 +2417,24 @@ impl CWelsPreProcess {
 
         let mut i = iSourcePicNum - 1;
         while i >= 0 {
-            let pRefPic = *pRefPicList.offset(i as isize);
-            if pRefPic.is_null()
-                || !(*pRefPic).bUsedAsRef
-                || !(*pRefPic).bIsLongRef
-                || (bCurFrameMarkedAsSceneLtr && !(*pRefPic).bIsSceneLTR)
+            let Some(idRefPic) = pRefPicList[i as usize] else {
+                i -= 1;
+                continue;
+            };
+            let pRefPic = self.src_id(idRefPic);
+            if !pRefPic.bUsedAsRef
+                || !pRefPic.bIsLongRef
+                || (bCurFrameMarkedAsSceneLtr && !pRefPic.bIsSceneLTR)
             {
                 i -= 1;
                 continue;
             }
 
-            let uiRefTid = (*pRefPic).uiTemporalId;
-            let bRefRealLtr = (*pRefPic).bIsSceneLTR;
+            let uiRefTid = pRefPic.uiTemporalId;
+            let bRefRealLtr = pRefPic.bIsSceneLTR;
 
             if bRefRealLtr || (iCurTid == 0 && uiRefTid == 0) || (uiRefTid < iCurTid) {
-                let idx = if (*pRefPic).iLongTermPicNum == iClosestLtrFrameNum {
+                let idx = if pRefPic.iLongTermPicNum == iClosestLtrFrameNum {
                     0
                 } else {
                     let old = *pAvailableRefNum;
@@ -2253,7 +2442,7 @@ impl CWelsPreProcess {
                     old
                 };
                 let param = &mut *pAvailableRefParam.offset(idx as isize);
-                param.pRefPicture = pRefPic;
+                param.pRefPicture = Some(idRefPic);
                 param.iSrcListIdx = i + 1;
                 if bRefRealLtr {
                     *pAvailableSceneRefNum += 1;
@@ -2263,7 +2452,7 @@ impl CWelsPreProcess {
             i -= 1;
         }
 
-        if (*pAvailableRefParam.offset(0)).pRefPicture.is_null() {
+        if (*pAvailableRefParam.offset(0)).pRefPicture.is_none() {
             let mut j = 1;
             while j < *pAvailableRefNum {
                 let pPrev = &mut *pAvailableRefParam.offset((j - 1) as isize);
@@ -2273,7 +2462,7 @@ impl CWelsPreProcess {
                 j += 1;
             }
             let last = &mut *pAvailableRefParam.offset((*pAvailableRefNum - 1) as isize);
-            last.pRefPicture = std::ptr::null_mut();
+            last.pRefPicture = None;
             last.iSrcListIdx = 0;
             *pAvailableRefNum -= 1;
         }
@@ -2281,7 +2470,7 @@ impl CWelsPreProcess {
 
     unsafe fn GetAvailableRefList(
         &self,
-        pSrcPicList: *mut *mut SPicture,
+        pSrcPicList: &[Option<SrcPicId>],
         iCurTid: u8,
         _iClosestLtrFrameNum: i32,
         pAvailableRefList: *mut SRefInfoParam,
@@ -2300,16 +2489,19 @@ impl CWelsPreProcess {
 
         let mut i = iSourcePicNum - 1;
         while i >= 0 {
-            let pRefPic = *pSrcPicList.offset(i as isize);
-            if pRefPic.is_null() || !(*pRefPic).bUsedAsRef {
+            let Some(idRefPic) = pSrcPicList[i as usize] else {
+                i -= 1;
+                continue;
+            };
+            if !self.src_id(idRefPic).bUsedAsRef {
                 i -= 1;
                 continue;
             }
 
-            let uiRefTid = (*pRefPic).uiTemporalId;
+            let uiRefTid = self.src_id(idRefPic).uiTemporalId;
             if uiRefTid <= iCurTid {
                 let param = &mut *pAvailableRefList.offset(*pAvailableRefNum as isize);
-                param.pRefPicture = pRefPic;
+                param.pRefPicture = Some(idRefPic);
                 param.iSrcListIdx = i + 1;
                 *pAvailableRefNum += 1;
             }
@@ -2333,21 +2525,22 @@ impl CWelsPreProcess {
 
         if (*(*pCtx).pSvcParam).bEnableLongTermReference && (*pLtr).bReceivedT0LostFlag && uiTid == 0 {
             for i in 0..(*pRefPicLlist).uiLongRefCount as usize {
-                let pRef = (*pRefPicLlist).pLongRefList[i];
-                if !pRef.is_null() && (*pRef).uiRecieveConfirmed == RECIEVE_SUCCESS {
-                    *pRefMbTypeArray = (*pRef).ref_mb_type_root();
+                let Some(id) = (*pRefPicLlist).pLongRefList[i] else {
+                    continue;
+                };
+                if (*pRefPicLlist).pic(id).uiRecieveConfirmed == RECIEVE_SUCCESS {
+                    *pRefMbTypeArray = (*pRefPicLlist).pic_mut(id).ref_mb_type_root();
                     break;
                 }
             }
         } else {
             for i in 0..(*pRefPicLlist).uiShortRefCount as usize {
-                let pRef = (*pRefPicLlist).pShortRefList[i];
-                if !pRef.is_null()
-                    && (*pRef).bUsedAsRef
-                    && (*pRef).iFramePoc >= 0
-                    && (*pRef).uiTemporalId <= uiTid
-                {
-                    *pRefMbTypeArray = (*pRef).ref_mb_type_root();
+                let Some(id) = (*pRefPicLlist).pShortRefList[i] else {
+                    continue;
+                };
+                let pRef = (*pRefPicLlist).pic(id);
+                if pRef.bUsedAsRef && pRef.iFramePoc >= 0 && pRef.uiTemporalId <= uiTid {
+                    *pRefMbTypeArray = (*pRefPicLlist).pic_mut(id).ref_mb_type_root();
                     break;
                 }
             }
@@ -2357,14 +2550,28 @@ impl CWelsPreProcess {
     pub unsafe fn AnalyzePictureComplexity(
         &mut self,
         pCtx: *mut sWelsEncCtx,
-        pCurPicture: *mut SPicture,
-        pRefPicture: *mut SPicture,
+        pCurPicture: Option<SrcPicId>,
+        pRefPicture: Option<RecPicId>,
         kiDependencyId: i32,
         bCalculateBGD: bool,
     ) {
-        if pCtx.is_null() || (*pCtx).pSvcParam.is_null() || pCurPicture.is_null() {
+        if pCtx.is_null() || (*pCtx).pSvcParam.is_null() {
             return;
         }
+        let Some(idCur) = pCurPicture else {
+            return;
+        };
+        // **The flip caught a second two-pool crossing here.** The current picture is
+        // a spatial *source* picture (`pCtx->pEncPic`) and the reference is a
+        // *reconstruction* picture (`pCtx->pRefList0[0]`, `encoder_ext.cpp:2662`) —
+        // both `SPicture*` in C++, so nothing there says the two arguments come from
+        // different owners. S37: each resolved once in its own pool, to geometry.
+        let pRefList = *(*pCtx).ppRefPicListExt.add((*pCtx).uiDependencyId as usize);
+        let sCur = self.src_id(idCur).planes();
+        let sRefPic = pRefPicture.filter(|_| !pRefList.is_null());
+        let sRef = sRefPic
+            .map(|id| (*pRefList).pic(id).planes())
+            .unwrap_or(sCur);
 
         let pSvcParam = (*pCtx).pSvcParam;
         if (*pSvcParam).iUsageType == EUsageType::SCREEN_CONTENT_REAL_TIME {
@@ -2434,11 +2641,13 @@ impl CWelsPreProcess {
 
             sComplexityAnalysisParam.iComplexityAnalysisMode = iComplexityAnalysisMode;
             sComplexityAnalysisParam.pBackgroundMbFlag = (*pVaaInfo).pVaaBackgroundMbFlag;
-            if !pRefPicture.is_null() {
+            if sRefPic.is_some() {
                 self.SetRefMbType(
                     pCtx,
                     &mut sComplexityAnalysisParam.uiRefMbType,
-                    (*pRefPicture).iPictureType,
+                    (*pRefList)
+                        .pic(sRefPic.expect("checked just above"))
+                        .iPictureType,
                 );
             }
             sComplexityAnalysisParam.iCalcBgd = bCalculateBGD;
@@ -2467,19 +2676,19 @@ impl CWelsPreProcess {
             let mut sSrcPixMap = SPixMap::default();
             let mut sRefPixMap = SPixMap::default();
 
-            sSrcPixMap.pPixel[0] = (*pCurPicture).pData[0];
+            sSrcPixMap.pPixel[0] = sCur.pData[0];
             sSrcPixMap.iSizeInBits = g_kiPixMapSizeInBits;
-            sSrcPixMap.iStride[0] = (*pCurPicture).iLineSize[0];
-            sSrcPixMap.sRect.iRectWidth = (*pCurPicture).iWidthInPixel;
-            sSrcPixMap.sRect.iRectHeight = (*pCurPicture).iHeightInPixel;
+            sSrcPixMap.iStride[0] = sCur.iLineSize[0];
+            sSrcPixMap.sRect.iRectWidth = sCur.iWidthInPixel;
+            sSrcPixMap.sRect.iRectHeight = sCur.iHeightInPixel;
             sSrcPixMap.eFormat = VideoFormat::videoFormatI420;
 
-            if !pRefPicture.is_null() {
-                sRefPixMap.pPixel[0] = (*pRefPicture).pData[0];
+            if sRefPic.is_some() {
+                sRefPixMap.pPixel[0] = sRef.pData[0];
                 sRefPixMap.iSizeInBits = g_kiPixMapSizeInBits;
-                sRefPixMap.iStride[0] = (*pRefPicture).iLineSize[0];
-                sRefPixMap.sRect.iRectWidth = (*pRefPicture).iWidthInPixel;
-                sRefPixMap.sRect.iRectHeight = (*pRefPicture).iHeightInPixel;
+                sRefPixMap.iStride[0] = sRef.iLineSize[0];
+                sRefPixMap.sRect.iRectWidth = sRef.iWidthInPixel;
+                sRefPixMap.sRect.iRectHeight = sRef.iHeightInPixel;
                 sRefPixMap.eFormat = VideoFormat::videoFormatI420;
             }
 
@@ -2505,7 +2714,7 @@ impl CWelsPreProcess {
         &mut self,
         iRefIdx: i32,
         bCurrentFrameIsSceneLtr: bool,
-        pRefOri: *mut *mut SPicture,
+        pRefOri: &mut Option<SrcPicId>,
     ) -> i32 {
         let iTargetDid = (*(*self.m_pEncCtx).pSvcParam).iSpatialLayerNum - 1;
         let pVaaExt = (*self.m_pEncCtx).pVaa as *mut SVAAFrameInfoExt;
@@ -2517,16 +2726,17 @@ impl CWelsPreProcess {
         let pPic =
             self.m_pSpatialPic[iTargetDid as usize][pBestRefCandidateParam.iSrcListIdx as usize];
         *pRefOri = pPic;
-        (*pPic).iLongTermPicNum
+        self.src_id(pPic.expect("the best-reference candidate names a live slot"))
+            .iLongTermPicNum
     }
 
     pub unsafe fn UpdateBlockIdcForScreen(
         &self,
         pCurBlockStaticPointer: *mut u8,
-        kpRefPic: *const SPicture,
-        kpSrcPic: *const SPicture,
+        kpRefPic: Option<&PicPlanes>,
+        kpSrcPic: Option<&PicPlanes>,
     ) -> i32 {
-        if kpRefPic.is_null() || kpSrcPic.is_null() {
+        if kpRefPic.is_none() || kpSrcPic.is_none() {
             return 1;
         }
 
@@ -2541,17 +2751,27 @@ impl CWelsPreProcess {
         crate::processing::vaacalc::RET_NOTSUPPORTED
     }
 
+    /// **`pShortRefList` stood in this signature and nothing read it** (S18): the
+    /// C++ passes the reference list and uses only its *count*. Deleted with the
+    /// flip rather than converted, because converting it would have meant handing
+    /// the preprocessor a handle type it has no pool for.
     pub unsafe fn UpdateSrcList(
         &mut self,
-        pCurPicture: *mut SPicture,
+        pCurPicture: Option<SrcPicId>,
         kiCurDid: i32,
-        pShortRefList: *mut *mut SPicture,
         kuiShortRefCount: u32,
     ) {
-        let pRefSrcList = &mut self.m_pSpatialPic[kiCurDid as usize][0] as *mut *mut SPicture;
+        let pRefSrcList = self.m_pSpatialPic[kiCurDid as usize].as_mut_ptr();
 
-        if !pCurPicture.is_null() && ((*pCurPicture).bUsedAsRef || (*pCurPicture).bIsLongRef) {
-            if (*pCurPicture).iPictureType == P_SLICE && (*pCurPicture).uiTemporalId != 0 {
+        let bCur = match pCurPicture {
+            Some(id) => {
+                let p = self.src_id(id);
+                (p.bUsedAsRef || p.bIsLongRef, p.iPictureType, p.uiTemporalId)
+            }
+            None => (false, 0, 0),
+        };
+        if bCur.0 {
+            if bCur.1 == P_SLICE && bCur.2 != 0 {
                 let mut iRefIdx = kuiShortRefCount as i32 - 1;
                 while iRefIdx >= 0 {
                     Self::WelsExchangeSpatialPictures(
@@ -2565,46 +2785,53 @@ impl CWelsPreProcess {
                 Self::WelsExchangeSpatialPictures(pRefSrcList, pRefSrcList.offset(1));
                 let mut i = MAX_SHORT_REF_COUNT as i32 - 1;
                 while i > 0 {
-                    let pRef = *pRefSrcList.offset((i + 1) as isize);
-                    if !pRef.is_null() {
-                        (*pRef).SetUnref();
+                    if let Some(id) = self.m_pSpatialPic[kiCurDid as usize][(i + 1) as usize] {
+                        self.m_pSpatialPicPool.get_mut(id).SetUnref();
                     }
                     i -= 1;
                 }
                 self.m_iAvaliableRefInSpatialPicList = 1;
             }
         }
-        let pOrig = self.GetCurrentOrigFrame(kiCurDid);
-        if !pOrig.is_null() {
-            (*pOrig).SetUnref();
+        if let Some(id) = self.GetCurrentOrigFrame(kiCurDid) {
+            self.m_pSpatialPicPool.get_mut(id).SetUnref();
         }
     }
 
     pub unsafe fn UpdateSrcListLosslessScreenRefSelectionWithLtr(
         &mut self,
-        _pCurPicture: *mut SPicture,
+        _pCurPicture: Option<SrcPicId>,
         kiCurDid: i32,
         kuiMarkLongTermPicIdx: i32,
-        pLongRefList: *mut *mut SPicture,
+        pLongRefList: &crate::encoder::encoder_context::SRefList,
     ) {
-        let pLongRefSrcList = &mut self.m_pSpatialPic[kiCurDid as usize][0] as *mut *mut SPicture;
+        let pLongRefSrcList = self.m_pSpatialPic[kiCurDid as usize].as_mut_ptr();
         for i in 0..MAX_REF_PIC_COUNT {
-            let pRef = *pLongRefSrcList.offset((i + 1) as isize);
-            let pLong = *pLongRefList.offset(i as isize);
-            if pRef.is_null() || (!pLong.is_null() && (*pLong).bUsedAsRef && (*pLong).bIsLongRef) {
+            // The *source* picture at `i + 1` and the *reconstruction* picture at `i`
+            // — two pools, which is why the reference list arrives whole rather than
+            // as a slice of handles this object could not resolve.
+            let Some(idRef) = self.m_pSpatialPic[kiCurDid as usize][i + 1] else {
                 continue;
-            } else {
-                (*pRef).SetUnref();
+            };
+            let bLongLive = match pLongRefList.pLongRefList[i] {
+                Some(idLong) => {
+                    let p = pLongRefList.pic(idLong);
+                    p.bUsedAsRef && p.bIsLongRef
+                }
+                None => false,
+            };
+            if bLongLive {
+                continue;
             }
+            self.m_pSpatialPicPool.get_mut(idRef).SetUnref();
         }
         Self::WelsExchangeSpatialPictures(
             pLongRefSrcList,
             pLongRefSrcList.offset((1 + kuiMarkLongTermPicIdx) as isize),
         );
         self.m_iAvaliableRefInSpatialPicList = MAX_REF_PIC_COUNT as i32;
-        let pOrig = self.GetCurrentOrigFrame(kiCurDid);
-        if !pOrig.is_null() {
-            (*pOrig).SetUnref();
+        if let Some(id) = self.GetCurrentOrigFrame(kiCurDid) {
+            self.m_pSpatialPicPool.get_mut(id).SetUnref();
         }
     }
 }
@@ -2639,7 +2866,7 @@ mod tests {
         let scaled_pic = Scaled_Picture::default();
         assert_eq!(scaled_pic.iScaledWidth[0], 0);
         assert_eq!(scaled_pic.iScaledHeight[0], 0);
-        assert!(scaled_pic.pScaledInputPicture.is_null());
+        assert!(scaled_pic.pScaledInputPicture.is_none());
     }
 
     #[test]

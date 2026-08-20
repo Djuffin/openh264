@@ -31,6 +31,8 @@
 #![allow(non_snake_case, non_upper_case_globals, non_camel_case_types, dead_code)]
 
 // Phase 4a: MC is called directly, not via `sMcFuncs`.
+use crate::encoder::svc_encode_slice::{layer_dec_pic, layer_dec_pic_mut, layer_ref_pic};
+use crate::encoder::picture::{RecPicId, SrcPicId};
 use crate::common::mc::{McChroma_c, McLuma_c};
 use crate::encoder::encoder_context::{sWelsEncCtx, SMVComponentUnit, SMVUnitXY};
 use crate::encoder::md::{
@@ -330,14 +332,16 @@ pub unsafe fn WelsMdIntraInit(
         (*pMbCache).SPicData.pCsMb[1] = (*pCurLayer).pCsData[1].offset(iOffsetUV as isize);
         (*pMbCache).SPicData.pCsMb[2] = (*pCurLayer).pCsData[2].offset(iOffsetUV as isize);
 
-        let pDecPic = (*pCurLayer).pDecPic;
-        iStrideY = (*pDecPic).iLineSize[0];
-        iStrideUV = (*pDecPic).iLineSize[1];
+        let pDecPic = layer_dec_pic(pCurLayer)
+            .expect("the layer's reconstruction picture is bound")
+            .planes();
+        iStrideY = pDecPic.iLineSize[0];
+        iStrideUV = pDecPic.iLineSize[1];
         iOffsetY = (kiMbX + kiMbY * iStrideY) << 4;
         iOffsetUV = (kiMbX + kiMbY * iStrideUV) << 3;
-        (*pMbCache).SPicData.pDecMb[0] = (*pDecPic).pData[0].offset(iOffsetY as isize);
-        (*pMbCache).SPicData.pDecMb[1] = (*pDecPic).pData[1].offset(iOffsetUV as isize);
-        (*pMbCache).SPicData.pDecMb[2] = (*pDecPic).pData[2].offset(iOffsetUV as isize);
+        (*pMbCache).SPicData.pDecMb[0] = pDecPic.pData[0].offset(iOffsetY as isize);
+        (*pMbCache).SPicData.pDecMb[1] = pDecPic.pData[1].offset(iOffsetUV as isize);
+        (*pMbCache).SPicData.pDecMb[2] = pDecPic.pData[2].offset(iOffsetUV as isize);
     } else {
         (*pMbCache).SPicData.pEncMb[0] = (*pMbCache).SPicData.pEncMb[0].add(MB_WIDTH_LUMA);
         (*pMbCache).SPicData.pEncMb[1] = (*pMbCache).SPicData.pEncMb[1].add(MB_WIDTH_CHROMA);
@@ -890,34 +894,36 @@ pub unsafe fn WelsMdInterInit(
         pCurMb,
         kiMbWidth,
         (*(*pEncCtx).pVaa).pVaaBackgroundMbFlag.offset(kiMbXY as isize),
-        &(*(*pCurLayer).pDecPic).pMbSkipSad,
+        &layer_dec_pic(pCurLayer)
+            .expect("the layer's reconstruction picture is bound")
+            .pMbSkipSad,
     ); //BGD spatial pFunc
 
     //step 4. locating current p_ref
     // merge loops
     if 0 == kiMbX || iSliceFirstMbXY == kiMbXY {
-        let kiRefStrideY = (*(*pCurLayer).pRefPic).iLineSize[0];
-        let kiRefStrideUV = (*(*pCurLayer).pRefPic).iLineSize[1];
+        let kiRefStrideY = layer_ref_pic(pCurLayer).expect("bound").iLineSize[0];
+        let kiRefStrideUV = layer_ref_pic(pCurLayer).expect("bound").iLineSize[1];
         let kiCurStrideY = (kiMbX + kiMbY * kiRefStrideY) << 4;
         let kiCurStrideUV = (kiMbX + kiMbY * kiRefStrideUV) << 3;
         (*pMbCache).SPicData.pRefMb[0] =
-            (*(*pCurLayer).pRefPic).pData[0].offset(kiCurStrideY as isize);
+            layer_ref_pic(pCurLayer).expect("bound").pData[0].offset(kiCurStrideY as isize);
         (*pMbCache).SPicData.pRefMb[1] =
-            (*(*pCurLayer).pRefPic).pData[1].offset(kiCurStrideUV as isize);
+            layer_ref_pic(pCurLayer).expect("bound").pData[1].offset(kiCurStrideUV as isize);
         (*pMbCache).SPicData.pRefMb[2] =
-            (*(*pCurLayer).pRefPic).pData[2].offset(kiCurStrideUV as isize);
+            layer_ref_pic(pCurLayer).expect("bound").pData[2].offset(kiCurStrideUV as isize);
     } else {
         (*pMbCache).SPicData.pRefMb[0] = (*pMbCache).SPicData.pRefMb[0].add(MB_WIDTH_LUMA);
         (*pMbCache).SPicData.pRefMb[1] = (*pMbCache).SPicData.pRefMb[1].add(MB_WIDTH_CHROMA);
         (*pMbCache).SPicData.pRefMb[2] = (*pMbCache).SPicData.pRefMb[2].add(MB_WIDTH_CHROMA);
     }
 
-    (*pMbCache).uiRefMbType = (&(*(*pCurLayer).pRefPic).uiRefMbType)[kiMbXY as usize];
+    (*pMbCache).uiRefMbType = (&layer_ref_pic(pCurLayer).expect("bound").uiRefMbType)[kiMbXY as usize];
     (*pMbCache).bCollocatedPredFlag = false;
 
     //comment: sometimes, mode decision process may skip the md_p16x16 and md_pskip function,
     (*pCurMb).sP16x16Mv = SMVUnitXY { iMvX: 0, iMvY: 0 };
-    (&mut (*(*pCurLayer).pDecPic).sMvList)[kiMbXY as usize] = SMVUnitXY { iMvX: 0, iMvY: 0 };
+    (&mut layer_dec_pic_mut(pCurLayer).expect("bound").sMvList)[kiMbXY as usize] = SMVUnitXY { iMvX: 0, iMvY: 0 };
 
     SetMvWithinIntegerMvRange(
         kiMbWidth,
@@ -942,7 +948,7 @@ pub unsafe extern "C" fn WelsMdP16x8(
 ) -> i32 {
     let pMbCache = std::ptr::addr_of_mut!((*pSlice).sMbCacheInfo);
     let iStrideEnc = (*pCurDqLayer).iEncStride[0];
-    let iStrideRef = (*(*pCurDqLayer).pRefPic).iLineSize[0];
+    let iStrideRef = layer_ref_pic(pCurDqLayer).expect("bound").iLineSize[0];
     let mut iCostP16x8 = 0i32;
     for i in 0..2i32 {
         let sMe16x8 = &mut (*pWelsMd).sMe.sMe16x8[i as usize];
@@ -954,7 +960,7 @@ pub unsafe extern "C" fn WelsMdP16x8(
             BLOCK_16x8 as i32,
             (*pMbCache).SPicData.pEncMb[0].offset((iPixelY * iStrideEnc) as isize),
             (*pMbCache).SPicData.pRefMb[0].offset((iPixelY * iStrideRef) as isize),
-            (*(*pCurDqLayer).pRefPic).pScreenBlockFeatureStorage,
+            layer_ref_pic(pCurDqLayer).expect("bound").pScreenBlockFeatureStorage,
             sMe16x8,
         );
         //not putting the lines below into InitMe to avoid judging mode in InitMe
@@ -1004,7 +1010,7 @@ pub unsafe extern "C" fn WelsMdP8x16(
             BLOCK_8x16 as i32,
             (*pMbCache).SPicData.pEncMb[0].offset(iPixelX as isize),
             (*pMbCache).SPicData.pRefMb[0].offset(iPixelX as isize),
-            (*(*pCurLayer).pRefPic).pScreenBlockFeatureStorage,
+            layer_ref_pic(pCurLayer).expect("bound").pScreenBlockFeatureStorage,
             sMe8x16,
         );
         //not putting the lines below into InitMe to avoid judging mode in InitMe
@@ -1045,7 +1051,7 @@ pub unsafe extern "C" fn WelsMdP4x4(
 ) -> i32 {
     let pMbCache = std::ptr::addr_of_mut!((*pSlice).sMbCacheInfo);
     let iLineSizeEnc = (*pCurDqLayer).iEncStride[0];
-    let iLineSizeRef = (*(*pCurDqLayer).pRefPic).iLineSize[0];
+    let iLineSizeRef = layer_ref_pic(pCurDqLayer).expect("bound").iLineSize[0];
     let mut iCostP4x4 = 0i32;
     for i4x4Idx in 0..4i32 {
         let iPartIdx = (ki8x8Idx << 2) + i4x4Idx;
@@ -1065,7 +1071,7 @@ pub unsafe extern "C" fn WelsMdP4x4(
             BLOCK_4x4 as i32,
             (*pMbCache).SPicData.pEncMb[0].offset(iStrideEnc as isize),
             (*pMbCache).SPicData.pRefMb[0].offset(iStrideRef as isize),
-            (*(*pCurDqLayer).pRefPic).pScreenBlockFeatureStorage,
+            layer_ref_pic(pCurDqLayer).expect("bound").pScreenBlockFeatureStorage,
             sMe4x4,
         );
         //not putting these three lines below into InitMe to avoid judging mode in InitMe
@@ -1113,7 +1119,7 @@ pub unsafe extern "C" fn WelsMdP8x4(
 ) -> i32 {
     let pMbCache = std::ptr::addr_of_mut!((*pSlice).sMbCacheInfo);
     let iLineSizeEnc = (*pCurDqLayer).iEncStride[0];
-    let iLineSizeRef = (*(*pCurDqLayer).pRefPic).iLineSize[0];
+    let iLineSizeRef = layer_ref_pic(pCurDqLayer).expect("bound").iLineSize[0];
     let mut iCostP8x4 = 0i32;
     for i8x4Idx in 0..2i32 {
         let iPartIdx = (ki8x8Idx << 2) + (i8x4Idx << 1);
@@ -1133,7 +1139,7 @@ pub unsafe extern "C" fn WelsMdP8x4(
             BLOCK_8x4 as i32,
             (*pMbCache).SPicData.pEncMb[0].offset(iStrideEnc as isize),
             (*pMbCache).SPicData.pRefMb[0].offset(iStrideRef as isize),
-            (*(*pCurDqLayer).pRefPic).pScreenBlockFeatureStorage,
+            layer_ref_pic(pCurDqLayer).expect("bound").pScreenBlockFeatureStorage,
             sMe8x4,
         );
         //not putting these three lines below into InitMe to avoid judging mode in InitMe
@@ -1181,7 +1187,7 @@ pub unsafe extern "C" fn WelsMdP4x8(
 ) -> i32 {
     let pMbCache = std::ptr::addr_of_mut!((*pSlice).sMbCacheInfo);
     let iLineSizeEnc = (*pCurDqLayer).iEncStride[0];
-    let iLineSizeRef = (*(*pCurDqLayer).pRefPic).iLineSize[0];
+    let iLineSizeRef = layer_ref_pic(pCurDqLayer).expect("bound").iLineSize[0];
     let mut iCostP4x8 = 0i32;
     for i4x8Idx in 0..2i32 {
         let iPartIdx = (ki8x8Idx << 2) + i4x8Idx;
@@ -1201,7 +1207,7 @@ pub unsafe extern "C" fn WelsMdP4x8(
             BLOCK_4x8 as i32,
             (*pMbCache).SPicData.pEncMb[0].offset(iStrideEnc as isize),
             (*pMbCache).SPicData.pRefMb[0].offset(iStrideRef as isize),
-            (*(*pCurDqLayer).pRefPic).pScreenBlockFeatureStorage,
+            layer_ref_pic(pCurDqLayer).expect("bound").pScreenBlockFeatureStorage,
             sMe4x8,
         );
         //not putting these three lines below into InitMe to avoid judging mode in InitMe
@@ -1392,8 +1398,8 @@ pub unsafe fn WelsMdPSkipEnc(
     let mut pRefLuma = (*pMbCache).SPicData.pRefMb[0];
     let mut pRefCb = (*pMbCache).SPicData.pRefMb[1];
     let mut pRefCr = (*pMbCache).SPicData.pRefMb[2];
-    let iLineSizeY = (*(*pCurLayer).pRefPic).iLineSize[0];
-    let iLineSizeUV = (*(*pCurLayer).pRefPic).iLineSize[1];
+    let iLineSizeY = layer_ref_pic(pCurLayer).expect("bound").iLineSize[0];
+    let iLineSizeUV = layer_ref_pic(pCurLayer).expect("bound").iLineSize[1];
 
     let pDstLuma = crate::encoder::md::skip_mb(pMbCache);
     let pDstCb = crate::encoder::md::skip_mb(pMbCache).add(256);
@@ -1471,9 +1477,9 @@ pub unsafe fn WelsMdPSkipEnc(
 
     if iSadCostMb == 0
         || iSadCostMb < (*pWelsMd).iSadPredSkip
-        || ((*(*pCurLayer).pRefPic).iPictureType == EWelsSliceType::P_SLICE as i32
+        || (layer_ref_pic(pCurLayer).expect("bound").iPictureType == EWelsSliceType::P_SLICE as i32
             && (*pMbCache).uiRefMbType == MB_TYPE_SKIP
-            && iSadCostMb < (&(*(*pCurLayer).pRefPic).pMbSkipSad)[(*pCurMb).iMbXY as usize])
+            && iSadCostMb < (&layer_ref_pic(pCurLayer).expect("bound").pMbSkipSad)[(*pCurMb).iMbXY as usize])
     {
         //update motion info to current MB
         AcceptPskip(pEncCtx, pWelsMd, pCurMb, pMbCache, &sMvp, iSadCostLuma, iSadCostMb, pDstLuma);
@@ -1560,7 +1566,7 @@ unsafe fn AcceptPskip(
     (*pWelsMd).iCostSkipMb = iSadCostMb;
 
     (*pCurMb).sP16x16Mv = *sMvp;
-    (&mut (*(*pCurLayer).pDecPic).sMvList)[(*pCurMb).iMbXY as usize] = *sMvp;
+    (&mut layer_dec_pic_mut(pCurLayer).expect("bound").sMvList)[(*pCurMb).iMbXY as usize] = *sMvp;
 }
 
 /// `svc_base_layer_md.cpp:1573`. Quarter-pel refinement of whichever partitioning the
@@ -1592,7 +1598,7 @@ pub unsafe fn WelsMdInterMbRefinement(
     // from the cache root, and handed to each `MeRefineFracPixel` call below (S28).
     let pBufMe = crate::encoder::md::buffer_inter_pred_me(pMbCache);
 
-    let iLineSizeRefUV = (*(*pCurDqLayer).pRefPic).iLineSize[1];
+    let iLineSizeRefUV = layer_ref_pic(pCurDqLayer).expect("bound").iLineSize[1];
 
     match (*pCurMb).uiMbType {
         MB_TYPE_16x16 => {

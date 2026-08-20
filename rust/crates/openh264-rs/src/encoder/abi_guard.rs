@@ -50,6 +50,44 @@ macro_rules! assert_size {
     };
 }
 
+// ---------------------------------------------------------------------------
+// **Profile-split pins — T6.F1.**
+//
+// `Option<SrcPicId>` / `Option<RecPicId>` are **4 bytes in a release build and 8 in
+// a debug build**: `pool::Id` carries a generation counter under `debug_assertions`
+// (that is the whole staleness instrument — see `safe/pool.rs`), and the `NonZeroU32`
+// niche keeps the `Option` free either way. So every struct that stores a picture
+// handle now has two sizes, and every offset after the first handle has two values.
+//
+// The choice was between splitting these pins and giving `Id` a generation field in
+// both profiles. The second would make `Id` 8 bytes in release everywhere, including
+// the decoder's `[[Option<PicId>; 16]; 2]` per-macroblock deblocking arrays, which
+// `safe/pool.rs` documents the niche as existing for. A measured decoder cost to keep
+// an assertion one line shorter is the wrong trade, so the pins split.
+//
+// Both numbers are measured, in the profile they name. What the pins still catch is
+// what they were written for: a second declaration of the type, read at the wrong
+// offsets.
+// ---------------------------------------------------------------------------
+macro_rules! assert_size_by_profile {
+    ($t:ty, debug $d:expr, release $r:expr) => {
+        #[cfg(debug_assertions)]
+        const _: () = assert!(size_of::<$t>() == $d, concat!(stringify!($t), " (debug)"));
+        #[cfg(not(debug_assertions))]
+        const _: () = assert!(size_of::<$t>() == $r, concat!(stringify!($t), " (release)"));
+    };
+}
+
+macro_rules! assert_ctx_offset_by_profile {
+    ($field:ident, debug $d:expr, release $r:expr) => {
+        #[cfg(debug_assertions)]
+        const _: () = assert!(std::mem::offset_of!(sWelsEncCtx, $field) == $d);
+        #[cfg(not(debug_assertions))]
+        const _: () = assert!(std::mem::offset_of!(sWelsEncCtx, $field) == $r);
+    };
+}
+
+
 // codec/common/inc/wels_common_defs.h
 //
 // `assert_size!(SBitStringAux, 48)` was here. The type is a pointer-triple cursor
@@ -138,7 +176,6 @@ assert_size!(SMcFunc, 48);
 // guard: -64, measured 176.
 assert_size!(SSampleDealingFunc, 176);
 assert_size!(SRCSlicing, 44);
-assert_size!(SSpatialPicIndex, 16);
 assert_size!(SStrideTables, 160);
 assert_size!(SWelsME, 96);
 assert_size!(SWelsMD, 4000);
@@ -225,7 +262,9 @@ assert_size!(SSliceBufferInfo, 32);
 // `Vec`s), **576 after T6.D7** grew the inline `sSliceEncCtx` by the same trade, and
 // **640 after T6.D8** grew the four inline `sSliceBufferInfo` banks by 16 apiece.
 // **Measured** at each step; the number tracks the port, not the C++.
-assert_size!(SDqLayer, 640);
+// **T6.F1**: `pRefPic`/`pDecPic`/`pRefOri[16]` become handles and `pRefList` is
+// added — **712 debug / 640 release**, measured.
+assert_size_by_profile!(SDqLayer, debug 712, release 640);
 
 // codec/encoder/core/inc/wels_func_ptr_def.h
 // 1280 before Phase 4a; -8 for `SSampleDealingFunc`'s shrink above; -24 at T4b.1,
@@ -268,7 +307,10 @@ assert_size!(crate::encoder::encoder_context::SLogContext, 24);
 // **T6.D5**: -8 more, `ppMbListD` deleted — `InitMbListD` cut one flat block across
 // the layers and stored the cuts twice, and each layer owns its own `MbArray<SMB>`
 // now. **97904, measured.**
-assert_size!(sWelsEncCtx, 97904);
+// **T6.F1**: -16 debug / -112 release. `pEncPic`/`pDecPic`/`pRefPic` and
+// `pRefList0[16]` are handles now — nineteen 8-byte pointers become nineteen 8-byte
+// (debug) or 4-byte (release) handles.
+assert_size_by_profile!(sWelsEncCtx, debug 97888, release 97792);
 
 
 // The fifteen `sWelsEncCtx` fields the preprocessor touches, pinned at their C++
@@ -302,25 +344,29 @@ macro_rules! assert_ctx_offset {
 assert_ctx_offset!(sLogCtx, 0);
 assert_ctx_offset!(pSvcParam, 24);
 assert_ctx_offset!(iMvRange, 32);
-assert_ctx_offset!(ppRefPicListExt, 136);
-assert_ctx_offset!(pLtr, 272);
-assert_ctx_offset!(bCurFrameMarkedAsSceneLtr, 280);
-assert_ctx_offset!(eSliceType, 284);
-assert_ctx_offset!(uiDependencyId, 313);
-assert_ctx_offset!(uiTemporalId, 314);
-assert_ctx_offset!(pWelsSvcRc, 320);
-assert_ctx_offset!(pVaa, 368);
-assert_ctx_offset!(pVpp, 376);
-assert_ctx_offset!(sSpatialIndexMap, 472);
-assert_ctx_offset!(bRefOfCurTidIsLtr, 552);
-assert_ctx_offset!(pMemAlign, 1776);
+assert_ctx_offset_by_profile!(ppRefPicListExt, debug 136, release 120);
+assert_ctx_offset_by_profile!(pLtr, debug 272, release 192);
+assert_ctx_offset_by_profile!(bCurFrameMarkedAsSceneLtr, debug 280, release 200);
+assert_ctx_offset_by_profile!(eSliceType, debug 284, release 204);
+assert_ctx_offset_by_profile!(uiDependencyId, debug 313, release 233);
+assert_ctx_offset_by_profile!(uiTemporalId, debug 314, release 234);
+assert_ctx_offset_by_profile!(pWelsSvcRc, debug 320, release 240);
+assert_ctx_offset_by_profile!(pVaa, debug 368, release 288);
+assert_ctx_offset_by_profile!(pVpp, debug 376, release 296);
+assert_ctx_offset_by_profile!(sSpatialIndexMap, debug 472, release 392);
+assert_ctx_offset_by_profile!(bRefOfCurTidIsLtr, debug 536, release 440);
+assert_ctx_offset_by_profile!(pMemAlign, debug 1760, release 1664);
 
 // encoder_context.h:198 -- the element type of `sSpatialIndexMap`. `wels_preprocess.rs`
 // carried a byte-identical copy of this under the invented name `SSpatialIndexMap`;
 // a scan that compares identifiers cannot catch a rename, so the layout is pinned here.
-assert_size!(SSpatialPicIndex, 16);
+// 16 in the C++; **12 debug / 8 release since T6.F1** — `pSrc` is an `Option<SrcPicId>`.
+assert_size_by_profile!(SSpatialPicIndex, debug 12, release 8);
 const _: () = assert!(std::mem::offset_of!(SSpatialPicIndex, pSrc) == 0);
+#[cfg(debug_assertions)]
 const _: () = assert!(std::mem::offset_of!(SSpatialPicIndex, iDid) == 8);
+#[cfg(not(debug_assertions))]
+const _: () = assert!(std::mem::offset_of!(SSpatialPicIndex, iDid) == 4);
 
 
 

@@ -46,6 +46,7 @@
     unused_mut
 )]
 
+use crate::encoder::picture::{PicRef, RecPicId, SPicture, SrcPicId};
 use std::ffi::{c_char, c_void};
 use crate::common::memory_align::CMemoryAlign;
 use crate::{
@@ -434,7 +435,7 @@ impl Default for SLayerInfo {
     }
 }
 
-pub use crate::encoder::encoder_context::SPicture;
+pub use crate::encoder::encoder_context::SRefList;
 
 /// `TagDqLayer` — `codec/encoder/core/inc/svc_enc_frame.h:84`. 512 bytes.
 ///
@@ -562,6 +563,99 @@ pub unsafe fn mb_at(pCurLayer: *mut SDqLayer, kiMbXY: i32) -> *mut SMB {
     mb_list_root(pCurLayer).add(kiMbXY as usize)
 }
 
+/// The context's current reference picture, resolved through the current dependency
+/// layer's reference list.
+///
+/// # Safety
+/// `pCtx` must be a live encoder context past `RequestMemorySvc`.
+#[inline]
+pub unsafe fn ctx_ref_pic<'a>(pCtx: *mut sWelsEncCtx) -> Option<&'a SPicture> {
+    let id = (*pCtx).pRefPic?;
+    let pRefList = *(*pCtx).ppRefPicListExt.add((*pCtx).uiDependencyId as usize);
+    if pRefList.is_null() {
+        return None;
+    }
+    Some((*pRefList).pic(id))
+}
+
+/// The picture a [`PicRef`] names — the reconstruction pool through the current
+/// dependency layer's reference list, or the spatial source pool through the
+/// preprocessor. `SDqLayer::pRefOri` is the one field that holds either; see
+/// [`PicRef`].
+///
+/// # Safety
+/// As [`ctx_ref_pic`].
+#[inline]
+pub unsafe fn ctx_pic_ref<'a>(pCtx: *mut sWelsEncCtx, r: PicRef) -> Option<&'a SPicture> {
+    match r {
+        PicRef::Rec(id) => {
+            let pRefList = *(*pCtx).ppRefPicListExt.add((*pCtx).uiDependencyId as usize);
+            if pRefList.is_null() {
+                None
+            } else {
+                Some((*pRefList).pic(id))
+            }
+        }
+        PicRef::Src(id) => {
+            if (*pCtx).pVpp.is_null() {
+                None
+            } else {
+                Some((*(*pCtx).pVpp).src_id(id))
+            }
+        }
+    }
+}
+
+/// The reconstruction picture this layer is **referencing**, resolved through the
+/// reference list the layer was stamped with — `None` before the first inter frame,
+/// or if the layer has not been initialised for a frame yet.
+///
+/// **S37, and the rule this family exists to keep**: the returned borrow is not tied
+/// to `pLayer` (the layer is reached raw, so it cannot be), and a caller must not hold
+/// it across a call that resolves *another* handle in the same pool. Every consumer
+/// below takes what it needs — a stride, a plane root, one array element — and drops
+/// the borrow in the same statement.
+///
+/// # Safety
+/// `pLayer` must be a live layer stamped by `WelsInitCurrentLayer`.
+#[inline]
+pub unsafe fn layer_ref_pic<'a>(pLayer: *mut SDqLayer) -> Option<&'a SPicture> {
+    let id = (*pLayer).pRefPic?;
+    let pRefList = (*pLayer).pRefList;
+    if pRefList.is_null() {
+        return None;
+    }
+    Some((*pRefList).pic(id))
+}
+
+/// The reconstruction picture this layer is **decoding into** — see [`layer_ref_pic`].
+///
+/// # Safety
+/// As [`layer_ref_pic`].
+#[inline]
+pub unsafe fn layer_dec_pic<'a>(pLayer: *mut SDqLayer) -> Option<&'a SPicture> {
+    let id = (*pLayer).pDecPic?;
+    let pRefList = (*pLayer).pRefList;
+    if pRefList.is_null() {
+        return None;
+    }
+    Some((*pRefList).pic(id))
+}
+
+/// Mutable form of [`layer_dec_pic`].
+///
+/// # Safety
+/// As [`layer_ref_pic`], and no other borrow of the same pool may be live.
+#[inline]
+pub unsafe fn layer_dec_pic_mut<'a>(pLayer: *mut SDqLayer) -> Option<&'a mut SPicture> {
+    let id = (*pLayer).pDecPic?;
+    let pRefList = (*pLayer).pRefList;
+    if pRefList.is_null() {
+        return None;
+    }
+    Some((*pRefList).pic_mut(id))
+}
+
 /// Not `repr(C)`: `pRefLayer` is an `Option<LayerIdx>`, which has no C shape.
 /// `assert_size!(SDqLayer, ...)` is re-pinned to the measured size in the same
 /// commit (phase6.md §5).
@@ -604,9 +698,23 @@ pub struct SDqLayer {
     pub iInterLayerSliceBetaOffset: i8,
     pub bDeblockingParallelFlag: bool,
 
-    pub pRefPic: *mut SPicture,
-    pub pDecPic: *mut SPicture,
-    pub pRefOri: [*mut SPicture; MAX_REF_PIC_COUNT as usize],
+    /// This layer's reference list — the **owner** of the reconstruction pool that
+    /// [`pRefPic`](Self::pRefPic) and [`pDecPic`](Self::pDecPic) name slots in.
+    ///
+    /// Raw, and for the same reason `sWelsEncCtx::ppRefPicListExt` is raw (session
+    /// F's boundary list): the pointee owns, the pointer does not. It exists because
+    /// the per-macroblock mode-decision family reaches the reference picture through
+    /// `pCurDqLayer` alone — `WelsMdP16x16`, `WelsMdUpdateBGDInfo` and the motion
+    /// search take no context — so without it a handle here would name a pool nothing
+    /// in scope could open. Stamped by `WelsInitCurrentLayer` from
+    /// `ppRefPicListExt[uiDependencyId]`, which is the list these handles belong to.
+    pub pRefList: *mut crate::encoder::encoder_context::SRefList,
+
+    pub pRefPic: Option<RecPicId>,
+    pub pDecPic: Option<RecPicId>,
+    /// The *source* pictures behind the reference list — slots of the preprocessor's
+    /// spatial pool, resolved through `pCtx->pVpp` (both readers hold the context).
+    pub pRefOri: [Option<PicRef>; MAX_REF_PIC_COUNT as usize],
 
     pub bThreadSlcBufferFlag: bool,
     pub bSliceBsBufferFlag: bool,
@@ -688,10 +796,12 @@ impl SDqLayer {
             iInterLayerSliceAlphaC0Offset: 0,
             iInterLayerSliceBetaOffset: 0,
             bDeblockingParallelFlag: false,
-            // Picture slots, aimed per frame; null is "no picture bound".
-            pRefPic: std::ptr::null_mut(),
-            pDecPic: std::ptr::null_mut(),
-            pRefOri: [std::ptr::null_mut(); MAX_REF_PIC_COUNT as usize],
+            // Picture slots, aimed per frame; `None` is "no picture bound", and the
+            // list they name slots in is stamped with them (T6.F1).
+            pRefList: std::ptr::null_mut(),
+            pRefPic: None,
+            pDecPic: None,
+            pRefOri: [None; MAX_REF_PIC_COUNT as usize],
             // Both are `iMultipleThreadIdc > 1` predicates that `InitSliceInLayer`
             // computes; false is the single-threaded answer and the honest default.
             bThreadSlcBufferFlag: false,
@@ -974,8 +1084,8 @@ pub unsafe fn WelsSliceHeaderExtInit(pEncCtx: *mut sWelsEncCtx, pCurLayer: *mut 
     pCurSliceHeader.iFrameNum = pParamInternal.iFrameNum;
     pCurSliceHeader.uiIdrPicId = pParamInternal.uiIdrPicId;
 
-    if !(*pEncCtx).pEncPic.is_null() {
-        pCurSliceHeader.iPicOrderCntLsb = (*(*pEncCtx).pEncPic).iFramePoc;
+    if let Some(id) = (*pEncCtx).pEncPic {
+        pCurSliceHeader.iPicOrderCntLsb = (*(*pEncCtx).pVpp).src_id(id).iFramePoc;
     }
 
     if (*pEncCtx).eSliceType == EWelsSliceType::P_SLICE {
@@ -1326,8 +1436,11 @@ pub unsafe fn OutputPMbWithoutConstructCsRsNoCopy(pCtx: *mut sWelsEncCtx, pDq: *
         let pDecU = (*pMbCache).SPicData.pDecMb[1];
         let pDecV = (*pMbCache).SPicData.pDecMb[2];
         let pScaledTcoeff = crate::encoder::md::coeff_level(pMbCache);
-        let kiDecStrideLuma = (*(*pDq).pDecPic).iLineSize[0];
-        let kiDecStrideChroma = (*(*pDq).pDecPic).iLineSize[1];
+        let sDec = layer_dec_pic(pDq)
+            .expect("the layer's reconstruction picture is bound for this frame")
+            .planes();
+        let kiDecStrideLuma = sDec.iLineSize[0];
+        let kiDecStrideChroma = sDec.iLineSize[1];
         let pfIdctFour4x4 = (*(*pCtx).pFuncList).pfIDctFourT4.expect("pfIDctFourT4 unset");
 
         // The luma half of this function was missing: no `pDecY`, no
@@ -1791,10 +1904,11 @@ pub unsafe fn WelsMdInterMbLoop(
                 {
                     // Two disjoint fields of one picture; the borrows do not overlap, so the
                     // arrays go in whole (T6.F0 — `pMbCache->pEncSad` no longer carries either).
-                    let pDecPic = (*pCurLayer).pDecPic;
+                    let pDecPic = layer_dec_pic_mut(pCurLayer)
+                        .expect("the layer's reconstruction picture is bound");
                     crate::encoder::svc_base_layer_md::WelsMdInterSaveSadAndRefMbType(
-                        &mut (*pDecPic).uiRefMbType,
-                        &mut (*pDecPic).pMbSkipSad,
+                        &mut pDecPic.uiRefMbType,
+                        &mut pDecPic.pMbSkipSad,
                         pCurMb,
                         pMd,
                     );
@@ -1805,7 +1919,7 @@ pub unsafe fn WelsMdInterMbLoop(
                         pCurLayer,
                         &mut *pCurMb,
                         (*pMbCache).bCollocatedPredFlag,
-                        if !(*pEncCtx).pRefPic.is_null() { (*(*pEncCtx).pRefPic).iPictureType } else { 0 },
+                        ctx_ref_pic(pEncCtx).map_or(0, |p| p.iPictureType),
                     );
                 }
                 mb_dump(&*pCurMb, pMd, pSlice);
@@ -1965,10 +2079,11 @@ pub unsafe fn WelsMdInterMbLoopOverDynamicSlice(
             {
                 // Two disjoint fields of one picture; the borrows do not overlap, so the
                 // arrays go in whole (T6.F0 — `pMbCache->pEncSad` no longer carries either).
-                let pDecPic = (*pCurLayer).pDecPic;
+                let pDecPic = layer_dec_pic_mut(pCurLayer)
+                    .expect("the layer's reconstruction picture is bound");
                 crate::encoder::svc_base_layer_md::WelsMdInterSaveSadAndRefMbType(
-                    &mut (*pDecPic).uiRefMbType,
-                    &mut (*pDecPic).pMbSkipSad,
+                    &mut pDecPic.uiRefMbType,
+                    &mut pDecPic.pMbSkipSad,
                     pCurMb,
                     pMd,
                 );
@@ -1979,7 +2094,7 @@ pub unsafe fn WelsMdInterMbLoopOverDynamicSlice(
                         pCurLayer,
                         &mut *pCurMb,
                         (*pMbCache).bCollocatedPredFlag,
-                        if !(*pEncCtx).pRefPic.is_null() { (*(*pEncCtx).pRefPic).iPictureType } else { 0 },
+                        ctx_ref_pic(pEncCtx).map_or(0, |p| p.iPictureType),
                     );
                 }
             }
@@ -2290,7 +2405,7 @@ pub unsafe fn WelsCodeOneSlice(pEncCtx: *mut sWelsEncCtx, pCurSlice: *mut SSlice
         (*pCurSlice).sScaleShift = 0;
     } else {
         let kuiTemporalId = (*pNalHeadExt).uiTemporalId;
-        let ref_temporal = if !(*pEncCtx).pRefPic.is_null() { (*(*pEncCtx).pRefPic).uiTemporalId } else { 0 };
+        let ref_temporal = ctx_ref_pic(pEncCtx).map_or(0, |p| p.uiTemporalId);
         (*pCurSlice).sScaleShift = if kuiTemporalId != 0 { kuiTemporalId.saturating_sub(ref_temporal) } else { 0 };
     }
 
