@@ -1,234 +1,284 @@
-# Phase 6, session I — the deny sweep, and the phase closes
+# Phase 6, session I — the deny sweep and the phase close
 
-## What this session does
+You are executing one session of a long-running refactor. Work through the steps
+in order. Commit per unit of work. Run the gates exactly as stated. Report at the
+end in the format given in the last section.
 
-Everything the encoder context reaches is owned or an id; what remains is
-spelling and proof. This session: deletes one dead field, gives the dispatch
-tables their owner, converts the context *parameters* to references where the
-aliasing structure permits, puts `#![deny(unsafe_code)]` on every encoder and
-processing module with each surviving unsafe item enumerated in a lawful
-category — and closes Phase 6 against the written exit conditions
-(`phase6.md` §7, restated below).
+## Context
 
-**The phase does not close around leftovers.** If the parameter conversion
-(step 2) overflows the session, stop at a family boundary, report, and a
-session J finishes — §7 is not bent to fit a calendar.
+- Repo: `/Users/eugene/projects/openh264`, branch `rust3`. The Rust crate is
+  `rust/crates/openh264-rs/`; all source paths below are relative to its `src/`.
+  The C++ tree at `codec/` is the behavioral reference — byte parity against it
+  is enforced by the gates; its code style is not a constraint.
+- The project: a full Rust port of the openh264 encoder+decoder, byte-identical
+  to the C++, being converted from raw-pointer C-style Rust to safe Rust. The
+  decoder is done (`src/decoder/` carries `#![deny(unsafe_code)]` on all 22
+  modules, 3 allow items). Phase 6 is the encoder's structural rewrite; this is
+  its **final planned session**.
+- State after session H (start commit `5be7b175`, tree clean): the encoder
+  context `sWelsEncCtx` (`encoder/encoder_context.rs:469`) has a real
+  constructor, all its members but one are owned (`Vec`/`Box`) or ids, the
+  custom allocator is down to 15 call sites, and every remaining raw-pointer
+  family has been measured and assigned an owner phase. What is left for this
+  session: one dead field, one unowned member (`pFuncList`), the context
+  *parameter* spellings (`*mut sWelsEncCtx` → references), the
+  `#![deny(unsafe_code)]` sweep, and the phase-close bookkeeping.
+- Documents you will update at the close:
+  `rust/docs/safety_refactor_log.md` (append the session entry),
+  `rust/docs/safety_refactor_plan.md` (§0 status row, §4 phase rows),
+  `rust/docs/prompts/phase6.md` (§6 session row),
+  `rust/docs/perf_baseline.md` (the span),
+  `rust/docs/phase0_findings.md` (only if an F3 measurement occurs).
+- Commit messages: `refactor(T6.I<n>): <what changed>` /
+  `gate(T6.I<n>): …` / `docs(T6.I-close): …`, with a body saying what and why.
 
-Five results define done (they are §7's five conditions):
+## Hard rules
 
-1. `#![deny(unsafe_code)]` on every module of `src/encoder` + `src/processing`
-   except an enumerated MT set, each exception a *file* with Phase 7 as owner.
-2. Every surviving `#[allow(unsafe_code)]` item enumerated in one of four
-   categories: **C-ABI** (Phase 8), **owned-storage cursor machinery carrying
-   its mandated Miri tests** (the derive-twice tests exist for every accessor
-   since T6.H14), **MT seam** (Phase 7), **`SCREEN_CONTENT(dormant)`**
-   (Phase 10).
-3. Encoder-side `raw_ptr` residue enumerated by category, code split from prose.
-4. Full exit battery PASS — **including the one full unscoped Miri run this
-   phase still owes** (D-gate-2: every other run stays `MIRI_SCOPE=encoder`) —
-   and the cumulative perf position restated.
-5. The handoffs written into the plan: Phase 7, 8, 9, 10 (the lists below).
+1. **Gates.** `bash rust/tools/gates.sh commit` must pass in every commit.
+   `bash rust/tools/gates.sh family` at the end of every step (it runs the
+   differential sweeps: expect **369/369 in both profiles**). One full
+   `bash rust/tools/gates.sh exit` at the close — see step 5 for its Miri mode.
+2. **Miri.** Run Miri only via the gates, only at step ends where stated, always
+   as `MIRI_SCOPE=encoder bash rust/tools/gates.sh …` (252 tests, ≈600 s) —
+   **except the final close battery in step 5, which runs unscoped** (349
+   tests, ≈1411 s; this is the phase's handoff gate and the one unscoped run
+   allowed by decision D-gate-2).
+3. **Perf.** Exactly one stream measurement for the whole session, at the close:
+   `rust/tools/perfpair.py build` at the start commit and at HEAD,
+   `perfpair.py run <start> <head> --pairs 7`, plus `perfpair.py null <head>
+   --pairs 7` for the floor. If the median breaches the null band: bisect the
+   session's commits with `perfpair.py` pairs per commit **before** changing
+   anything, then fix the measured contributor or record it with a Phase-9
+   owner. Do not revert on suspicion. Cumulative encoder deficit stands at
+   ≈+15…17%; the tripwire is +25% median — restate both numbers in the close.
+4. **Counts are anchors.** Every number and line anchor below was measured
+   2026-08-20 at commit `250b3732`. Re-run the given grep before acting on it;
+   if it disagrees, trust the grep and say so in the log.
+5. **Layout pins.** Any struct whose fields change gets its `assert_size!` /
+   `assert_ctx_offset!` in `encoder/abi_guard.rs` re-measured and re-pinned in
+   the same commit (both profiles where the numbers split). Never delete an
+   assertion.
+6. **The `&mut`-from-raw rule** (governs step 2). Creating `&mut *pCtx` while
+   the caller keeps using its own `*mut sWelsEncCtx` afterwards is UB that
+   compiles silently:
 
-## Ground rules (self-contained)
+   ```rust
+   // BAD: callee(&mut *pCtx) pops pCtx; the (*pCtx) read after is UB.
+   callee(&mut *pCtx);
+   let x = (*pCtx).iFrameNum;
+   // GOOD: convert top-down. The api boundary owns the Box; a &mut is
+   // derived from the owner once per call and passed down; callees that
+   // still need raw get the raw they were given, never a fresh &mut.
+   ```
 
-- **Gates**: `gates.sh commit` per commit, `family` per step, the full `exit`
-  at the close. Sweeps read **369/369 per profile** (`st mt def sl ltr`).
-- **Miri**: `MIRI_SCOPE=encoder` (252 tests, ≈600 s) for every run **except the
-  final phase-close battery**, which runs the full unscoped step once (349
-  tests, ≈1411 s at G's close) — the handoff gate.
-- **Perf**: one span (7 pairs + fresh null, `rust/tools/perfpair.py`); on a
-  breach, **attribute commit-by-commit before acting** — two sessions running,
-  the first hypothesis was wrong and attribution found the real contributor.
-  Then the close restates the cumulative position: it stands at ≈ **+15…+17%**
-  encode against D-perf-4's +25% median tripwire; D-perf-6's recovery is
-  Phase 9's and this session only *reports* the number.
-- **Anchors, not surfaces**: every count and line number below was read
-  2026-08-20 at H's close — re-grep before acting.
-- **Pins**: layout changes re-pin `assert_size!`/`assert_ctx_offset!` in
-  `src/encoder/abi_guard.rs` in the same commit, both profiles where split.
-- **The `&mut`-from-raw trap governs step 2**: if a caller holds `*mut
-  sWelsEncCtx` and creates `&mut` from it for a callee, the caller's raw
-  pointer is popped the moment the `&mut` exists — using it after the call is
-  UB. So conversion proceeds **from the call-tree root down** (the api entry
-  holds the `Box`; each `&mut` derives fresh from the owner), never
-  bottom-up, and never `&mut *pCtx` at a call site whose caller keeps using
-  `pCtx` (the silent-reborrow trap: it compiles, no lint sees it, only Miri
-  does).
-- **Sweep flake protocol**: the known signature (`mt`, `sm=3`, `t` ∈ {2,4},
-  **wrong output length — since measurement 85 that includes short streams,
-  not only empty ones**) → re-run that exact configuration 5×; byte-identical
-  every time → record as an F3 measurement in `rust/docs/phase0_findings.md`,
-  continue. Anything else is yours.
-- The C++ is the behavioral reference; byte parity is the gate.
+   Therefore step 2 converts **from the call-tree root down**, never bottom-up.
+7. **Sweep flake (known issue F3).** If exactly one sweep configuration fails
+   with: `mt` preset, `sm=3`, `t=2` or `t=4`, and the Rust output has the
+   **wrong length** (empty or short — a short stream is a known shape since
+   measurement 85): re-run that exact configuration 5 times. If all 5 are
+   byte-identical, append a measurement entry to
+   `rust/docs/phase0_findings.md`'s F3 section and continue. Any other failure:
+   stop and fix it; it is this session's.
+8. **No behavior change.** No encoded byte may move. The gates enforce it;
+   don't rationalize around them.
+9. **Overflow.** If step 2 cannot finish this session, stop at a whole-closure
+   boundary, run the step-3-onward close on what is done ONLY if the §7
+   conditions in step 4 can all be met; otherwise leave the phase open,
+   enumerate the shortfall, and end the report with "session J scope: …".
+   Do not weaken a condition to close.
 
-## The map (verified 2026-08-20, H's close)
+## Current state — verified facts you will act on
 
-**`pPSOVector` is dead**: 4 occurrences tree-wide — the field declaration, its
-`new()` initializer, and the equality instrument's field list. Never written,
-never read. H measured this and left it only because deleting a context field
-re-pins the offset asserts and its exit battery was already running.
-
-**The dispatch tables** (`SWelsFuncPtrList`):
-- The context's last unowned member: `pFuncList` allocated at
-  `encoder_ext.rs:1448` and `:1620` (two sites), freed at `:1817` — the three
-  "session I" allocator hits. One `mem::zeroed` `Default` in
-  `wels_func_ptr_def.rs`; the `init_fills_*` tests
-  (`init_fills_sad_and_satd_and_clears_combined3`,
+- **`pPSOVector`** (`encoder/encoder_context.rs`, a context field): dead.
+  `grep -rn 'pPSOVector' --include='*.rs' src/` → exactly 4 hits: the field
+  declaration, the `new()` initializer, and the equality-instrument's field
+  list. Never read, never written elsewhere.
+- **`pFuncList`** (`*mut SWelsFuncPtrList`): the context's last unowned member.
+  Allocated at `encoder/encoder_ext.rs:1448` and `:1620` (two sites), freed at
+  `:1817`. These are 3 of the 15 remaining allocator hits. One
+  `mem::zeroed` `Default` in `encoder/wels_func_ptr_def.rs`. Existing tests
+  that already pin the table's initialization:
+  `init_fills_sad_and_satd_and_clears_combined3`,
   `init_fills_every_slot_the_md_layer_indexes`,
-  `init_fills_every_reconstruction_slot`) are the existing instruments for a
-  field-wise constructor.
-- **The tables are re-written mid-stream**: `SetFastCodingFunc` /
-  `SetNormalCodingFunc` (`encoder_ext.rs:2233`/`:2243`, called per frame at
-  `:2298`/`:2300`) and `WelsInitSampleSadFunc`
-  (`encoder_context.rs:1457`, `svc_mode_decision.rs:2444`) swap slot values on
-  complexity switches. So: the three writer functions take `&mut
-  SWelsFuncPtrList`; every reader takes `&SWelsFuncPtrList` **derived per call**
-  — readers copy `Option<fn>` values out and hold no cursor into the table
-  across calls (verify with the type-driven checker session E built; if it
-  finds a holder, that one site stays raw and is enumerated).
-- 57 `*mut SWelsFuncPtrList` parameter sites re-spell with the above.
+  `init_fills_every_reconstruction_slot`.
+- **The tables are re-written mid-stream** — this is why readers cannot hold
+  `&SWelsFuncPtrList` across frames: `SetFastCodingFunc`
+  (`encoder/encoder_ext.rs:2233`) and `SetNormalCodingFunc` (`:2243`) are
+  called per frame at `:2298`/`:2300`; `WelsInitSampleSadFunc` is called from
+  `encoder/encoder_context.rs:1457` and `encoder/svc_mode_decision.rs:2444`.
+  Readers copy `Option<fn>` values out of the table; none holds a pointer into
+  it across calls. Session E built a type-driven checker for exactly this
+  claim — run it; if it finds a cross-call holder, that site stays raw and
+  goes on the survivor list.
+- **`*mut SWelsFuncPtrList` parameter sites**: 57.
+- **`*mut sWelsEncCtx`**: 297 lines total. By file: rc.rs 55,
+  svc_encode_slice.rs 50, ref_list_mgr_svc.rs 32, encoder_context.rs 31,
+  encoder_ext.rs 28, svc_mode_decision.rs 21, svc_base_layer_md.rs 15,
+  wels_preprocess.rs 13, **wels_task_management.rs 12 — Phase 7's file, do not
+  touch**, **wels_encoder_ext.rs 8 — Phase 8's file, do not touch**, remainder
+  in smaller files. Conversion surface ≈270 lines.
+- **Known cross-call cursor holders** (will stay raw parameters, category 2):
+  the NAL-writer chain over the frame bitstream — session H enumerated its
+  **19** cursor derivations (list in H's log entry).
+- **Allocator hits**: 15 = 4 Phase 7 (`DynamicSliceBs` at
+  `encoder_ext.rs:1122`/`:1767`; `sSliceBs.pBs` at
+  `svc_encode_slice.rs:2982`/`:3011`) + 3 this session (`pFuncList`, above) +
+  8 dormant screen-content (`svc_motion_estimate.rs`, tagged
+  `SCREEN_CONTENT(dormant: Phase 10)`).
+- **`mem::zeroed`**: 9 sites — wels_func_ptr_def 1 (dies in step 1),
+  svc_encode_slice 2, ref_list_mgr_svc 1, decode_mb_aux 1,
+  get_intra_predictor 3, sample 1 (POD `Default`s and test fixtures — each
+  either keeps a one-line soundness comment or converts if its type gains an
+  owned field).
+- **Modules**: 32 files in `src/encoder`, plus `src/processing`. None carries
+  `deny(unsafe_code)` yet. The idiom to copy is the decoder's:
+  `#![deny(unsafe_code)]` as an inner attribute at module top (see
+  `decoder/decoder_core.rs:43`), `#[allow(unsafe_code)]` on each surviving
+  item.
+- **The four lawful allow categories** (phase6.md §7, condition 2 — every
+  surviving `#[allow(unsafe_code)]` item must be one of these, tagged in a
+  comment on the item):
+  - `C-ABI` — values crossing the C ABI (owner: Phase 8)
+  - `cursor` — owned-storage cursor machinery carrying its derive-twice
+    Miri tests (the frame-bitstream writers, pool accessors, the named
+    neighbour-walkers)
+  - `MT` — a multi-threading seam (owner: Phase 7)
+  - `SCREEN_CONTENT(dormant)` — the fenced screen-content family
+    (owner: Phase 10)
 
-**The context parameters**: 297 `*mut sWelsEncCtx` lines, by file — rc 55,
-svc_encode_slice 50, ref_list_mgr_svc 32, encoder_context 31, encoder_ext 28,
-svc_mode_decision 21, svc_base_layer_md 15, wels_preprocess 13,
-**wels_task_management 12 (Phase 7 — do not touch)**, **wels_encoder_ext 8
-(Phase 8 — do not touch)**, tail in smaller files. The conversion surface is
-therefore ≈270 lines. Known cross-call cursor holders that stay raw-parameter
-and become allow items in category 2: the NAL-writer chain over the frame
-bitstream (H enumerated its **19** cursor derivations), and any function the
-step-2 audit finds holding a context-derived cursor across a call that takes
-the context again.
+## Step 0 — delete `pPSOVector`
 
-**The 9 remaining `mem::zeroed` sites, attributed**: wels_func_ptr_def 1 (this
-session, with the constructor), svc_encode_slice 2 + ref_list_mgr_svc 1 +
-decode_mb_aux 1 + get_intra_predictor 3 + sample 1 — POD `Default`s and test
-fixtures: each keeps its one-line soundness comment or converts if step 2 gives
-its type an owned/`Option` field. Zero must remain unattributed.
+1. Delete the field, its `new()` line, and its row in the equality instrument.
+2. Re-measure and re-pin `assert_size!(sWelsEncCtx, …)` and every
+   `assert_ctx_offset!` (they all shift). One commit.
 
-**Modules**: 32 files in `src/encoder`, plus `src/processing`. Expected deny
-exceptions (files, not blankets): `slice_multi_threading.rs`,
-`wels_task_management.rs` — Phase 7's, enumerated in the close log.
+Accept: `grep -rn 'pPSOVector' --include='*.rs' src/` → 0 hits;
+`gates.sh commit` green.
 
-**The handoff lists to write** (step 4; collect, verify each against the tree,
-and put them in the plan's §4 phase rows):
-- **Phase 7**: F61 (MT bank growth never re-stamps the slice list — the C++
-  shares the defect); F3's close-by-ablation with the measurement-85 shape
-  note; F12 and the thread pool; `sSliceBs.pBs` (alloc
-  `svc_encode_slice.rs:2982`, free `:3011`) and the thread-buffer ownership;
-  `DynamicSliceBs` (`encoder_ext.rs:1122`/`:1767`); the context's MT members
-  (`pSliceThreading`, `pTaskManage`, `mutexEncoderError`, `pDynamicBsBuffer`);
-  the MT files; `pMemAlign` + `common/memory_align.rs`'s death once the MT
-  allocations go; E's one MT `*mut SMB` site.
-- **Phase 8**: `wels_encoder_ext.rs` internals (its 8 ctx lines included); the
-  `c_void` C-ABI line; the decoder-side items already listed there (F23, F37,
-  F41, the api inventory). Note in the row: **the encoder's `pSvcParam` is
-  context-owned (H's verdict) — Phase 8 inherits nothing there.**
-- **Phase 9**: the SAD/SATD third park (1.30–5.68x / 1.36–4.05x, kernel
-  signature needed); `SMbCache`'s 72 kernels-take-slices sites; F5's ~10
-  side-array resolutions; **H's measured lead — `Vec`-backed accessors cost
-  where `Option<Box>` ones are free** (the mechanism named:
-  `WelsRcMbInitGom` per macroblock opens with `ctx_rc_at`; cost localised to
-  {LTR, rate control, ref lists}); D-perf-6's recovery with cumulative
-  restated; the two `pMvdCost` record fields.
-- **Phase 10**: the `SCREEN_CONTENT(dormant)` tag census (16 items + the 8
-  allocator hits H's census added).
+## Step 1 — `pFuncList` becomes `Box<SWelsFuncPtrList>`; the tables re-spell
 
-## Step 0 — `pPSOVector` is deleted
+1. Field-wise constructor for `SWelsFuncPtrList` replacing the zeroed
+   `Default`; the `init_fills_*` tests must stay green unmodified (they are the
+   proof).
+2. Both alloc sites become `Box::new(...)` through the constructor path; the
+   free at `:1817` is deleted (the `Box` drops with the context).
+3. Parameter re-spelling: `SetFastCodingFunc`, `SetNormalCodingFunc`,
+   `WelsInitSampleSadFunc` take `&mut SWelsFuncPtrList`. Every reader takes
+   `&SWelsFuncPtrList`, derived fresh at each call from the context's `Box`.
+   Run session E's type-driven checker first; any cross-call holder it finds
+   stays `*mut` and goes on the survivor list with the checker's output quoted.
 
-**Result**: the field, its initializer, and its instrument row are gone (dead
-code is deleted, not converted); the context's size and all offset pins
-re-measured once, before anything else moves them.
+Accept:
+`grep -rn 'WelsMalloc\|WelsMallocz\|WelsFree' --include='*.rs' src/encoder src/processing`
+→ exactly the 4 Phase-7 hits + the 8 dormant;
+`grep -rn '\*mut SWelsFuncPtrList' --include='*.rs' src/encoder src/processing`
+→ 0 outside the enumerated survivors;
+`gates.sh family` green; `MIRI_SCOPE=encoder` Miri green.
 
-**Check**: `grep -rn 'pPSOVector' --include='*.rs' src/` reads 0;
-`gates.sh commit`.
+## Step 2 — context parameters, root-down
 
-## Step 1 — the dispatch tables own and re-spell
+Procedure, per function on the ≈270-line surface, starting from the api entries
+(`WelsInitEncoderExt`, `WelsEncoderEncodeExt`, and their callers in
+`wels_encoder_ext.rs`, which keep their raw handle — the reference is born at
+that boundary, derived from the owner once per call) and descending
+closure-by-closure (a reachability closure of signatures is one commit):
 
-**Result**: `pFuncList: Box<SWelsFuncPtrList>` built by a field-wise
-constructor (the `init_fills_*` instruments prove it; the zeroed `Default`
-dies); the free entry at `:1817` is gone; the three writers take `&mut`, the
-readers take per-call `&`; the 57 parameter sites re-spelled; allocator hits in
-`src/encoder src/processing` read **Phase 7's four only**.
+Ask two questions of the function body:
+- **Q1**: does it hold a context-derived raw cursor across a call that reaches
+  the context again?
+- **Q2**: does it reach the same object through two of its parameters?
 
-**Check**: `grep -rn 'WelsMalloc\|WelsMallocz\|WelsFree' --include='*.rs'
-src/encoder src/processing` → 4 hits, all Phase 7's;
-`grep -rn '\*mut SWelsFuncPtrList' …` → 0 outside enumerated survivors;
-`gates.sh family`.
+If both answers are no → the parameter becomes `&mut sWelsEncCtx` (or
+`&sWelsEncCtx` if it only reads). If either is yes → the parameter stays
+`*mut`, and the function goes on the **survivor list** with a one-line blocker:
+`fn name — Q1: <the cursor and the call>` or `Q2: <the two paths>`, plus its
+category (`cursor` / `MT` / `C-ABI`).
 
-## Step 2 — the context parameters, root-down
+Do not edit `wels_task_management.rs` or `wels_encoder_ext.rs`; their lines are
+pre-attributed survivors.
 
-**Result**: every function on the conversion surface takes `&mut sWelsEncCtx`
-(or `&` where it only reads), **or** is enumerated as a survivor with its
-blocker named — cross-call cursor holder (category 2), MT (Phase 7), boundary
-(Phase 8). No caller anywhere keeps a raw context pointer live across a callee
-that takes a reference.
-
-**Do**: start at the api entries that hold the owner
-(`WelsInitEncoderExt` / `WelsEncoderEncodeExt` / the `wels_encoder_ext.rs`
-boundary keeps its raw handle — the reference is *born* at that boundary,
-derived from the `Box`, once per call). Convert closure-by-closure downward
-(the reachability closure is the commit unit). Per function, the audit is two
-questions: does it hold a context-derived cursor across a call that reaches
-the context again, and does it re-reach the same object through two
-parameters? Two nos → reference; any yes → survivor, enumerated.
-
-**Check**: `grep -rn '\*mut sWelsEncCtx' --include='*.rs' src/encoder
-src/processing` reads only the enumerated survivor list + the two untouched
-files; `gates.sh family`; sweeps 369/369.
+Accept: `grep -rn '\*mut sWelsEncCtx' --include='*.rs' src/encoder src/processing`
+→ only the survivor list + the two untouched files, and the list is in the log;
+`gates.sh family` green; `MIRI_SCOPE=encoder` Miri green.
 
 ## Step 3 — the deny sweep
 
-**Result**: `#![deny(unsafe_code)]` at the top of every `src/encoder` and
-`src/processing` module except the enumerated MT files; every surviving
-`unsafe` item carries `#[allow(unsafe_code)]` with a one-line category tag
-(the four categories above); the counts recorded — items per category per
-file.
+1. Module by module, smallest first: add `#![deny(unsafe_code)]` at the top
+   (decoder idiom), build, and put `#[allow(unsafe_code)]` + a category tag
+   comment on every item the compiler names. An `unsafe fn` whose signature
+   names a raw pointer is *correctly* `unsafe fn` — allow and tag it; do not
+   force-convert.
+2. The two MT files get no deny — instead a module-top comment:
+   `// deny(unsafe_code) lands with Phase 7; this file is the thread machinery.`
+3. Record per file: allow-item count per category. Re-baseline the ratchet
+   (`bash rust/tools/unsafe_ratchet.sh` writes the new baseline) and explain
+   every delta in the commit.
 
-**Do**: module-by-module, smallest first; strip-and-build names what the
-compiler still needs. An `unsafe fn` whose signature names a raw pointer stays
-`unsafe fn` — that is its correct spelling, allowed and categorised, not
-converted by force.
+Accept: `grep -rln 'deny(unsafe_code)' src/encoder src/processing | wc -l` =
+module count − 2; every allow item greps with a category tag on the same or
+preceding line; `gates.sh family` green.
 
-**Check**: `grep -rn 'deny(unsafe_code)' src/encoder src/processing | wc -l`
-= module count minus the MT exceptions; `grep -c 'allow(unsafe_code)'` per
-file matches the log's enumeration; ratchet re-baselined with the shape
-explained.
+## Step 4 — the exit conditions and the handoffs
 
-## Step 4 — §7's checklist, the residue, the handoffs
+Check phase6.md §7's five conditions one by one and write the evidence into the
+log entry:
 
-**Result**: each of §7's five conditions checked line by line in the log with
-its evidence; the `raw_ptr` residue enumerated by category with the code/prose
-split; the four handoff lists (the map above, verified) written into the
-plan's Phase 7/8/9/10 rows; the cumulative perf position restated against
-D-perf-4 and D-perf-6.
+1. deny on every module except the enumerated MT files → the step-3 grep.
+2. every allow item in one of the four categories → the step-3 table.
+3. encoder-side `raw_ptr` residue enumerated by category, code split from prose
+   → run `bash rust/tools/unsafe_ratchet.sh` and the per-family greps; produce
+   the table.
+4. full battery PASS + cumulative perf restated → step 5.
+5. handoffs written → edit `rust/docs/safety_refactor_plan.md` §4, adding to
+   each phase row (verify each item against the tree before writing it):
+   - **Phase 7**: F61; F3 ablation (85 measurements, the short-stream shape);
+     F12/thread pool; `sSliceBs.pBs` + `DynamicSliceBs` + the MT context
+     members + both MT files; `pMemAlign` and `common/memory_align.rs`'s
+     retirement; E's one MT `*mut SMB` site.
+   - **Phase 8**: `wels_encoder_ext.rs` internals; the `c_void` C-ABI line;
+     note that `pSvcParam` is context-owned (H's verdict) so it is NOT
+     inherited.
+   - **Phase 9**: SAD/SATD third park (1.30–5.68x / 1.36–4.05x); `SMbCache`'s
+     72 kernels-take-slices sites; F5's ~10 side-array resolutions; H's
+     Vec-vs-`Option<Box>` accessor cost ({LTR, rc, ref lists},
+     `WelsRcMbInitGom`/`ctx_rc_at` named); D-perf-6's recovery; the two
+     `pMvdCost` record fields.
+   - **Phase 10**: the `SCREEN_CONTENT(dormant)` census (16 tagged items + 8
+     allocator hits).
 
-## Step 5 — the phase closes
+## Step 5 — the close
 
-1. The span, then the **full unscoped exit battery** — Miri `--lib` complete
-   (all four encoder probes and all three decoder probes green by name), both
-   sweeps both profiles, both benches, ratchet, census.
-2. The phase-close log entry: Phase 6's whole arc in numbers — encoder-side
-   `raw_ptr` from 2668 at the phase's open to the close's reading, `unsafe_fn`
-   likewise, the allow-item enumeration, the finding ledger (F57–F64), the
-   sweep growth 341 → 369, the perf arc with every session's span.
-3. Plan §0: the **Phase 6 COMPLETE** row (model: Phase 5b's), session I marked
-   spent, **Phase 7 named next**; phase6.md §6's I row; `perf_baseline.md`.
+1. The span (hard rule 3), recorded in `rust/docs/perf_baseline.md`.
+2. The full battery: `bash rust/tools/gates.sh exit` **without** `MIRI_SCOPE`
+   — the unscoped Miri `--lib` step must show all four encoder probes AND all
+   three decoder probes green by name. Adjudicate any F3 hit per hard rule 7.
+3. The phase-close log entry in `rust/docs/safety_refactor_log.md`: Phase 6's
+   arc in numbers — encoder-side `raw_ptr` 2668 (phase open) → final,
+   `unsafe_fn` 710 → final, allow items per category, findings F57–F64 with
+   dispositions, sweep growth 341 → 369, the per-session span list, cumulative
+   perf vs both perf decisions.
+4. `rust/docs/safety_refactor_plan.md` §0: write the **Phase 6 COMPLETE** row
+   (model it on the existing "Phase 5b COMPLETE" row: what closed, the
+   numbers, what each later phase inherits), mark session I spent, name
+   **Phase 7** next. Update phase6.md §6's I row to SPENT with the same
+   summary. Commit as `docs(T6.I-close): …`.
 
-## Stays untouched — the boundary list
+## Do not touch
 
-| what | why | whose |
-|---|---|---|
-| `slice_multi_threading.rs`, `wels_task_management.rs`, the MT context members, `sSliceBs.pBs`, `DynamicSliceBs`, `pMemAlign` + `memory_align.rs` | thread machinery | Phase 7 |
-| `wels_encoder_ext.rs` internals (8 ctx lines included) | ABI boundary | Phase 8 |
-| measured parks and settlements: SAD/SATD, `SMbCache` 72, `*mut SMB` 48's named groups, per-MB plane cursors, the two `pMvdCost` fields, {LTR, rc, ref-list} accessor cost | Phase 9 owns each with its number | Phase 9 |
-| everything `SCREEN_CONTENT(dormant)` | live upstream, fenced | Phase 10 |
-| behavior: no byte may move; no parity deviation beyond the recorded ones | the gate | — |
+| what | owner |
+|---|---|
+| `slice_multi_threading.rs`, `wels_task_management.rs`, MT context members, `sSliceBs.pBs`, `DynamicSliceBs`, `pMemAlign`, `common/memory_align.rs`, `common/wels_thread_pool.rs` | Phase 7 |
+| `wels_encoder_ext.rs` internals | Phase 8 |
+| SAD/SATD kernels, `SMbCache`'s 72 kernel sites, `*mut SMB`'s 48 named survivors, per-MB plane cursors, the two `pMvdCost` fields, the {LTR, rc, ref-list} accessor cost | Phase 9 |
+| anything tagged `SCREEN_CONTENT(dormant: Phase 10)` | Phase 10 |
 
-## Done-test
+## Report back, in this order
 
-§7's five conditions, each with evidence in the log — the deny grep, the
-category enumeration, the residue split, the full battery PASS with the
-unscoped Miri run, the handoffs present in the plan's §4 rows — and the
-phase-close row in plan §0. If any condition cannot be met this session: the
-phase stays open, the shortfall is enumerated, and session J's scope is the
-report's last section.
+1. One line: phase closed or not; `exit` verdict; tree state and HEAD.
+2. The five §7 conditions, each with its evidence one-liner.
+3. `*mut sWelsEncCtx` before → after, with the survivor count and its category
+   split; same for `*mut SWelsFuncPtrList`.
+4. Deny/allow numbers: modules denied, allow items per category.
+5. The span and the cumulative restatement.
+6. Anything found and not fixed, with owner.
+7. If the phase did not close: "session J scope:" with the enumerated remainder.
