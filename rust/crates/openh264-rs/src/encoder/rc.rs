@@ -34,6 +34,34 @@
 //! governing bit allocation across Virtual GOPs, frame-level quantization parameter ($QP$) derivation,
 //! Group of Macroblocks (GOM) adaptive quantization, Virtual Buffer Verifier (VBV) leaky-bucket
 //! management, and dynamic frame skipping for temporal and spatial layers.
+//!
+//! # The raw-pointer census, attributed — T6.G4
+//!
+//! Phase 6 session G's step 4 was "sweep `rc.rs`'s remaining single-object
+//! parameters". The sweep found **none left to take**, and that is a result rather
+//! than an omission, so it is written down here where the next session will see it.
+//! All **93** occurrences of `*mut`/`*const` in this file, by who owns them:
+//!
+//! | count | what | whose |
+//! |---|---|---|
+//! | 61 | `pEncCtx`/`pCtx` parameters, raw `sWelsEncCtx` | **session I** — the context is the largest arena in the tree, and the S37 inventory decides `&mut` for all of it at once, not file by file |
+//! | 16 | `SWelsSvcRc`'s own five member pointers and the reaches through them | **session H** — the rc blocks become owned containers there |
+//! |  7 | `pSlice` parameters, raw `SSlice` | **session I** — five sit behind `pfWelsRcMbInit`/`pfWelsRcMbInfoUpdate`, which is 4b's fence, and the two that do not are covered by the blocker below |
+//! |  6 | `(*pEncCtx).pVaa` cast to a raw `SVAAFrameInfoExt` | **Phase 10** — the `SCREEN_CONTENT(dormant)` family, fenced |
+//! |  3 | `RcInitLayerMemory`'s carve-up of one `CMemoryAlign` block | **session H** — `CMemoryAlign` dies with it |
+//!
+//! **The one that looks convertible and is not.** `GomRCInitForOneSlice` takes a raw
+//! `SSlice` and nothing else but an integer: a plain function with a single caller and
+//! a single-object parameter — R1's shape exactly. Its caller is `WelsCodeOneSlice`
+//! (`svc_encode_slice.rs`), which binds `pBs = slice_writer(pEncCtx, pCurSlice)`
+//! **before** this call and uses `pBs` **after** it. A `&mut SSlice` here is a
+//! `Unique` retag over the whole 6496-byte slice, so it would pop `pBs` — F13's
+//! family and S25's rule, the same shape `svc_set_mb_syn_cavlc`'s header comment
+//! records for its own writers. Converting it needs either the caller's binding
+//! moved after the call (a behavioural change to check, not a spelling) or a
+//! parameter narrowed to `&mut SRCSlicing` plus the two slice fields it reads,
+//! which walks away from the C++ signature. Neither is a sweep; both are a decision
+//! with an owner, and it is not this session's.
 
 #![allow(
     non_snake_case,
