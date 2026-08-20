@@ -2638,3 +2638,43 @@ Both are measurement 78's, now as code rather than as a sentence.
 
 Running total: **eighty-four measurements, twenty-five alternations, fifty-seven
 acquittals.**
+
+---
+
+### Measurement 85 — Phase 6 session H's `exit` battery (2026-08-20)
+
+One configuration, release profile, in a battery whose debug sweep read 369/369 and
+whose every other step passed:
+
+```
+release: mt CiscoVT2people_160x96_6fps t=2 sm=3 n=600 cabac=0 rc=0 :: C++ 41938  Rust 40124
+```
+
+**The signature, checked before the retry rather than assumed**: `mt` preset, `sm=3`,
+`t=2`, wrong output length, exactly one configuration — and the same clip, slice mode
+and byte constraint (`CiscoVT2people_160x96_6fps`, `sm=3`, `n=600`) that accounts for
+four of measurement 80–84's five hits. **One thing is different and is worth the
+line**: every previously recorded instance produced **zero** bytes, and this one
+produced a *short* stream (40124 of 41938). The finding's signature is "wrong output
+length", so it qualifies, but a partial write is a new shape for it and the next
+session should know that before it treats "Rust 0" as the whole tell.
+
+Retried per the protocol: the failing configuration alone, **5×**, in its own profile,
+with the harness rebuilt for release first (the two profiles share `out/` file names)
+and a pause between runs, because a tight loop under load is not a quiet run. Script
+written as bash — measurement 78's trap, checked second after the configuration.
+
+**5/5 pass.**
+
+The commit under test cannot produce this class: session H moves the encoder context's
+members into owned containers and changes no encoder arithmetic, no slice bookkeeping,
+and nothing on any thread — and the three steps whose members touch the multi-threaded
+slice path at all (`pFrameBs`'s one MT field spelling, `FreeDqLayer`'s loop,
+`DynamicSliceBs` untouched) are field spellings over the same addresses. F61's class —
+the multi-threaded slice-bank growth that never re-stamps the layer's slice list — is
+untouched and is still **Phase 7's**.
+
+**Acquitted as F3.**
+
+Running total: **eighty-five measurements, twenty-five alternations, fifty-eight
+acquittals.**

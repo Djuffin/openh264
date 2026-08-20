@@ -2711,3 +2711,80 @@ PPS's `uiChromaQpIndexOffset` as a value in their signature, not a layer to reso
 encoder deficit ≈ **+13…+15%** → ≈ **+14…+16%**. What it buys: the last alias family
 in the encoder context, a constructor that makes session H's ownership flip possible at
 all, and six fields that were only ever declarations.
+
+## Phase 6 session H — the members own, and the cost is in one of eleven (2026-08-20)
+
+**Method** (S1/S2, `perfpair.py`): 7 interleaved pairs, `h_base` = `675e558b` (the
+HEAD session H's brief was committed at) vs `h_head` = `b2df1c86`, with a **fresh null
+run in the same sitting**. `Spatial Ramps` excluded from every statistic, as always.
+
+| run | rows | median | min | max | rows over +5% |
+|---|---|---|---|---|---|
+| **null** (`h_head` vs itself), encode | 28 | +0.10% | −1.48% | +1.41% | **0** |
+| **span**, encode | 28 | **+1.31%** | −0.97% | **+5.80%** | **2** |
+
+**The span breaches its null** — the median is 1.2 points above the floor's, and two
+rows clear +5% where the null had none. The brief's rule for a breach is *attribute
+commit-by-commit before acting*, because session F's planned revert was aimed at the
+wrong step. So the span was bisected across the session's eleven member conversions,
+3 pairs per segment, then the guilty segment split again.
+
+### The attribution
+
+| segment | members | encode median | max | rows over +5% |
+|---|---|---|---|---|
+| `h_base` → `h_m1` (`ff070ead`) | H1 stride tables, H2 parameter sets, H3 dq-idc, H4 frame bitstream | **+0.00%** | +2.45% | 0 |
+| `h_m1` → `h_m2` (`ce9636c6`) | H5 LTR, H6 rate control, H7 ref lists, H8 DQ layers, H9 MVD table | **+1.04%** | +5.10% | 1 |
+| `h_m2` → `h_head` | H10 VAA, H11 coding parameters, H12/H13 census | **−0.01%** | +2.82% | 0 |
+| — split — | | | | |
+| `h_m1` → `h_m1b` (`b2ff7792`) | H5 LTR, H6 rate control, H7 ref lists | **+1.43%** | +5.19% | 2 |
+| `h_m1b` → `h_m2` | H8 DQ layers, H9 MVD table | +0.57% | +2.82% | 0 |
+
+**Eight of the eleven members are measurably free, and two of them are the ones that
+looked most expensive.** H1's stride-table accessors are called **per 4x4 block** —
+sixteen times a macroblock in the intra path — and read +0.00%. H11 replaced the most
+frequently read field in the encoder at **256 sites** and read −0.01%. The reason is
+visible in the types: `Option<Box<T>>` has the null-pointer niche, so
+`match opt.as_mut() { Some(b) => &raw mut **b, None => null_mut() }` is an identity
+function on the loaded word and the optimiser removes it entirely. **A `Vec` accessor
+is not free** — it adds a length load and a branch to what used to be one pointer
+load. That is the session's perf lesson, and it is worth more than the number:
+*the container's shape decides the cost, not the number of call sites.*
+
+**The cost is in the middle five, weighted toward {LTR, rate control, ref lists}.**
+The sub-splits do not sum exactly (+1.43 and +0.57 against the +1.04 of the segment
+that contains them), which is what 3-pair medians look like when the effect is ~1% and
+the null's own per-row spread is ±1.4%. Splitting further would be reading past the
+harness's resolution, so it was not done, and this is recorded as a three-member
+window rather than a single member.
+
+**The mechanism is named, and it is the one this phase keeps meeting.**
+`WelsRcMbInitGom` and `WelsRcMbInfoUpdateGom` run **per macroblock**, and each begins
+`let pWelsSvcRc = ctx_rc_at(pEncCtx, did);` — formerly one load and an add, now a
+length load, a branch, a pointer load and an add. `SWelsSvcRc` also grew **360 → 440**
+bytes, so the per-layer state those functions read spans more cache lines. The
+per-content shape is F's and G's exactly:
+
+| content | delta |
+|---|---|
+| Mandelbrot (QVGA → 1080p), dense | −0.88 … +1.19% |
+| SMPTE Bars / PAL 75% / RGB Test / YUV Space, flat | +1.26 … +5.80% |
+
+**A fixed per-macroblock overhead is invisible where a macroblock costs a lot and
+visible where it costs nothing.** The two rows over +5% are the two *smallest* rows in
+the set (0.069 s and 0.256 s), where the harness prints to 0.0001 s and one tick is
+already 1.4% — they are the resolution floor showing, not a separate effect. The
+median is the number to carry.
+
+**Disposition: nothing is reverted, and nothing is hoisted this session.** The remedy
+for a per-macroblock resolution is the one session G named and deliberately deferred —
+bind once per slice where the callee does not re-derive — and `rc.rs`'s own header
+already records why its per-macroblock functions cannot take the borrow at their head
+(`GomRCInitForOneSlice`, F13's family). **Phase 9 owns it**, with the kernel-signature
+work, and it now has a measured target rather than a suspicion. D-perf-4's **+25%
+median** tripwire is unbreached by ~24 points. Cumulative encoder deficit
+≈ **+14…+16%** → ≈ **+15…+17%**.
+
+**What it buys**: every member of the encoder context owns its memory,
+`RequestMemorySvc` calls the allocator once, the free cascade holds nothing this phase
+owns, and a latent teardown leak is gone.

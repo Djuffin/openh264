@@ -12113,3 +12113,263 @@ list is otherwise untouched: `&mut sWelsEncCtx` anywhere (I, after S37),
 `SWelsFuncPtrList` (I), the MT files and `sSliceBs.pBs` (Phase 7), `wels_encoder_ext.rs`
 internals (Phase 8), E's and F's named survivors and F5's ~10 per-macroblock handle
 resolutions (Phase 9), the `SCREEN_CONTENT(dormant)` family (Phase 10).
+
+## Phase 6, session H — the members own, and 45 allocator calls become 15 (2026-08-20)
+
+**All five steps landed, none dropped.** Every row of the brief's member table is
+converted. `RequestMemorySvc` calls the allocator **once** — `DynamicSliceBs`, Phase
+7's — and the free cascade is down to six entries, none of them this phase's.
+Allocator hits across `src/encoder`+`src/processing` go **45 → 15**: fifteen
+allocations and fifteen frees became container drops, and `WelsRcFreeMemory`,
+`RcFreeLayerMemory`, `FreeRefList`, the `AllocCodingParam`/`FreeCodingParam` pair and
+the dead type `SWelsOut` were deleted rather than converted.
+
+**The brief's anchors, re-grepped (S24).** The member table's line numbers held. Two
+counts did not: `pFrameBs`'s "22 / 6 / 4 / 3 / 4 consumers" are *substring* counts —
+most of `svc_encode_slice`'s and half of `slice_multi_threading`'s hits are
+`pFrameBsInfo`, the api's `SFrameBSInfo`, and `svc_encode_slice.rs` has **no** real
+`pFrameBs` use at all. And `rc.rs`'s inner-array conversion turned out to be 77 sites
+across five fields rather than the header's 16 occurrences, because the header counts
+`*mut` tokens and the conversion counts *reaches*.
+
+**Step 0 — the Miri scope knob (`e4af4185`).** `MIRI_SCOPE=encoder` adds one skip,
+`--skip decoder::`, to the `--lib` step. Measured before it was written: `cargo test
+--lib -- --list` reads 353 tests, `decoder::` matches exactly 101 of them and no test
+outside that module path carries the string. With both skips the list reads **250
+tests, 0 `decoder::`, 0 `wels_thread_pool`**, and all four encoder probes are still
+there by name — which is the check that keeps the knob honest, and it was done with
+`--list` rather than under Miri because the filter is libtest's, identical in both.
+**It is a scope, not a skip**: the skips above it each name a finding and hide
+production code that trips the checker; this one names no finding and drops out code
+the session did not touch. Every phase exit still runs unscoped.
+
+**What it cost and what it bought, measured at this session's own `exit`**: the scoped
+step reads **252 passed / 0 failed / 2 ignored, 103 filtered out, 600.69 s**, against
+the unscoped **349 / 0 at 1411.29 s** session G recorded — **57% less wall clock**, and
+all four encoder probes green *by name* in the output. (252 + 2 against 250 listed at
+step 0 is this session's own four new S40 tests; 103 filtered is 101 `decoder::` plus
+the two `wels_thread_pool`.) The full unscoped step runs once more at session I's
+close, per D-gate-2.
+
+**Step 1 — eleven members, in `RequestMemorySvc`'s own order.** Two of them are the
+session's findings and one is a defect the session would otherwise have shipped.
+
+**The leak check (F19), done once and cited eleven times.** The live free path is
+`WelsDestroySVCEncoder` (`api/codec_api.rs:2109`) → `Drop for CWelsH264SVCEncoder`
+(`wels_encoder_ext.rs:2416`) → `Uninitialize` (`:1740`) → `WelsUninitEncoderExt`
+(`encoder_ext.rs`), plus the re-init path at `wels_encoder_ext.rs:827`; and the drop
+that replaces a cascade entry is the `drop(Box::from_raw(pCtx))` that function already
+ends with, because `WelsInitEncoderExt` builds the context with `Box::into_raw`. Every
+owner this session installs is therefore on the same executed path as the `WelsFree`
+it replaces — the check the paraset strategy failed at T4b.2a, leaking ~1.2 KB a
+teardown behind a destructor that existed in source and ran nowhere.
+
+**Two arenas, converted two different ways, and the difference is the point.**
+`SStrideTables` (T6.H1) stays **one** owned `Vec` with the per-layer tables as byte
+offsets, because a spatial layer absent from the temporal map is given the *matching*
+layer's table — two layers naming one address — and only offsets into a shared
+allocation reproduce that. `SWelsSvcRc` (T6.H6) becomes **five** owned containers,
+because no two of its regions are ever named by one pointer and nothing walks from one
+into the next. The C++ allocates one block in both cases; the aliasing is what decides,
+not the allocation pattern.
+
+**F64's instrument grew a third tier, and it caught a real defect (T6.H2).** The moment
+`pSpsArray` became a `Vec`, `mem::zeroed::<sWelsEncCtx>()` in
+`ctx_new_reproduces_the_zeroed_shell` became **undefined behaviour** — the memset image
+of a `Vec` is a null `Unique`, which is not a `Vec` — and it kept compiling and kept
+passing. Measured, not argued:
+
+> error: Undefined Behavior: constructing invalid value of type sWelsEncCtx:
+>   at .pSpsArray.buf.inner.ptr.pointer.pointer, encountered 0,
+>   but expected something greater or equal to 1
+
+That is exactly the failure mode the test exists to catch, one level up again — F64's
+own lesson repeating on the instrument that recorded it. The shell is raw bytes now
+(`MaybeUninit::zeroed`, never `assume_init`ed) and there are three tiers: byte-wise for
+the fields defined in both; **by value** for the ten F64 fields, whose shell values are
+recovered with `ptr::read` out of the zero image, sound precisely because their
+all-zero pattern *is* a value of their type; and **`OWNED`** for the ten containers,
+where there is no zero image to recover and what is asserted is that `new()` builds the
+empty container. Tier 3 shrinks the test's reach, so it is named and counted in the
+output rather than inferred from what is missing. `Option<Box<T>>` fields stayed in
+tier 1 and were *asked* rather than assumed: their `None` is the null pointer and
+defines all eight bytes.
+
+**T6.H4 — `pFrameBs`, the one that was audited before it was converted.** Nineteen
+cursor derivations in production: sixteen walking ones spelled
+`pFrameBs.add(iPosBsBuffer)` (12 `encoder_ext`, 3 `wels_encoder_ext`, 1 MT) and three
+of the root itself stored into an `SLayerBSInfo::pBsBuf`, which outlives the call that
+made it. The conversion adds **no `&mut`** to that path, and
+`frame_bs_cursors_are_siblings` is the property as a test — store a `pBsBuf`, walk
+eight cursors past it, then read and write through the stored one. **Red-proofed**:
+with the root spelled `buf.as_mut_slice().as_mut_ptr()` it fails under Miri
+("attempting a read access using <565587> ... but that tag does not exist in the borrow
+stack") and passes without it. The zero-fill is this session's one recorded deviation —
+the C++ takes this block with `WelsMalloc`, uninitialized, and it is the only member
+that does; sound because every read sits behind a write cursor.
+
+**T6.H7 — a latent leak, found by conversion.** The reference-list free loop read its
+bound from `(*pCtx->pSvcParam).iSpatialLayerNum` **at teardown**, so a re-init that
+lowered the layer count (`wels_encoder_ext.rs:827` tears down and rebuilds with
+`pNewParam`) would have left every slot past the new count unfreed. Latent because the
+gate configurations do not shrink the layer count. A `Vec` cannot read the wrong bound.
+`ppDqLayerList`'s loop next door had the same shape and was fixed with it.
+
+**T6.H8 — the entry that shrinks rather than dies, and it is the honest answer.**
+`FreeDqLayer` still calls `FreeSliceInLayer`, which releases one `CMemoryAlign` block
+per slice (`sSliceBs.pBs`) — Phase 7's by the boundary list. Ownership cannot run it,
+because a `Drop` on `SDqLayer` has no way to reach `pMemAlign`. So the loop stays ahead
+of the context's drop and the function is *reduced* to exactly that residue.
+
+**T6.H11 — the `pSvcParam` verdict, which was the brief's one open question.** Not the
+decoder's F41 shape. `WelsInitEncoderExt` takes the block **from the context's own
+allocator** and copies the caller's parameters into it by value one line later; every
+write of the field in the tree is that one plus five test fixtures; the api object never
+hands the context a pointer to anything it owns. **The context is the sole owner** —
+`Option<Box<SWelsSvcCodingParam>>`, 256 consumer sites, and Phase 8 inherits nothing
+here. One aliasing question the read raised and cleared: `WelsEncoderParamAdjust` binds
+`pOldParam` and its teardown branch later calls `WelsUninitEncoderExt`, but every use
+of `pOldParam` is in the *other* branch — no use-after-free, before or after.
+
+A fixture that had been standing in for an ownership the live path never had failed
+loudly when it was converted mechanically: `test_update_and_loadback_framenum` did
+`ctx.pSvcParam = &mut param` and asserted on `param`. It reads back through the context
+now, which is where the writes land.
+
+**Step 2 — nine `mem::zeroed` sites remain in `src/encoder`+`src/processing`, each
+attributed where a grep lands.** `SSliceHeader`/`SSliceHeaderExt` **stay zeroed** under
+the brief's own rule — a type earns a field-wise constructor only if it holds an owned
+or `Option` field, and these hold integers, `bool`s, two POD sub-structs and an enum
+whose zero discriminant is declared — with that as their `Default`'s doc.
+`SWelsFuncPtrList::default()` and its five test fixtures are session I's, and the
+fixtures now point at the type's own S21 argument instead of leaving a reader to find
+it. `ref_strategy_zero_is_the_default_arm` is an instrument and stays. **And one
+deletion**: `SWelsOut` — session G's inheritance list named it as a zeroed `Default`
+"on a type H or I owns", and the tree held exactly two references to it, its own
+declaration and that `Default`. A type that is only ever a declaration is not a
+`Default` to audit.
+
+**Step 3 — the census, and its one finding.** Fifteen allocator hits remain in
+`src/encoder`+`src/processing`:
+
+| site | tag | owner |
+|---|---|---|
+| `encoder_ext.rs` :1122, :1767 | `DynamicSliceBs` | **Phase 7** |
+| `svc_encode_slice.rs` :2978, :3007 | `sSliceBs.pBs` (reached via `FreeDqLayer`) | **Phase 7** |
+| `encoder_ext.rs` :1448, :1620, :1817 | `SWelsFuncPtrList` (:1620 is a test) | **session I** |
+| `svc_motion_estimate.rs` :1557 :1564 :1571 :1579, :1606 :1611 :1616 :1621 | screen-block feature storage | **Phase 10** |
+
+The last eight were the finding: the only remaining hits belonging to neither Phase 7
+nor session I, and **unreachable** — the one would-be caller refuses
+`iNeedFeatureStorage != 0` before it can get there. They are now tagged
+`SCREEN_CONTENT(dormant: Phase 10)` like the rest of that family rather than left for
+the next session to re-derive. `pMemAlign` survives serving exactly that list.
+
+**What session I inherits, named.** The context's remaining raw fields and who owns
+each: `pFuncList` and the dispatch tables (**I**, with the deny sweep — plus its
+`Default`'s `mem::zeroed` and the five test fixtures that copy it); `pOut`, `pVpp` and
+`pMemAlign` (three `Box::into_raw`/`from_raw` pairs, the obvious next owners, and
+`pMemAlign` dies with **Phase 7**); `pSliceThreading`, `pTaskManage`,
+`mutexEncoderError`, `pDynamicBsBuffer` and `sSliceBs.pBs` (**Phase 7**);
+and **`pPSOVector`, which is a deletion waiting to happen and is measured as one
+here**: grepped tree-wide at this session's close, it has **zero** uses outside its
+declaration, its `new()` initializer and the F64 instrument's field list — never
+written on any path, never read, exactly the shape of `SWelsOut` and session G's six
+deleted fields. Its own doc comment says it "points either at `sPSOVector` or at the
+caller's", and neither ever happens. It is left standing only because deleting a
+context field moves the pins and the `exit` battery was already running against these
+ones; **session I should delete it, not convert it.**
+`&mut sWelsEncCtx` is still taken nowhere — that is I's, after the S37 inventory, and
+this session's twenty-five accessors were all written to take `*mut sWelsEncCtx` so
+that the inventory has one shape to reason about rather than two. The two `pMvdCost`
+record fields (`SWelsMD`, `SWelsME`) are enumerated for that inventory: per-macroblock
+caches of `origin + uiLumaQp * iMvdCostTableStride`, re-stamped every macroblock. The
+boundary list is otherwise untouched: `wels_encoder_ext.rs` internals (**Phase 8** —
+and `pSvcParam` is *not* among them, per this session's read), E/F/G's named survivors
+and the per-macroblock resolutions (**Phase 9**), the `SCREEN_CONTENT(dormant)` family
+(**Phase 10**, now including the eight allocator calls the census found).
+
+**The free cascade, in full, at the close.** Six entries, and each one has a name and
+an owner: `pVpp` and `pOut` — both already `drop(Box::from_raw(..))`, session F's and
+T3.6's, which the brief itself points at as the recipe the rest copied and which are
+the obvious next owners; `DynamicSliceBs` (**Phase 7**); the `FreeDqLayer` loop
+(**Phase 7's** residue, `sSliceBs.pBs`); `pFuncList` (**session I**); and `pMemAlign`
+itself, which dies with Phase 7. Nothing in it belongs to this session's set any more.
+
+**Step 4 — the span breached its null, and attribution cleared eight of eleven
+members.** 7 pairs, `675e558b` → `b2df1c86`, with a fresh null in the same sitting:
+null **+0.10%** median (max +1.41%, 0 rows over 5%), span **+1.31%** median (max
++5.80%, **2 rows over 5%**). A breach, so the brief's rule applied — *attribute
+commit-by-commit before acting* — and the span was bisected 3 pairs a segment, then
+the guilty segment split again:
+
+| segment | members | encode median | rows over +5% |
+|---|---|---|---|
+| base → `ff070ead` | H1 stride, H2 parameter sets, H3 dq-idc, H4 frame bitstream | **+0.00%** | 0 |
+| `ff070ead` → `ce9636c6` | H5 LTR, H6 rate control, H7 ref lists, H8 DQ layers, H9 MVD | **+1.04%** | 1 |
+| `ce9636c6` → head | H10 VAA, H11 coding parameters, H12/H13 census | **−0.01%** | 0 |
+| `ff070ead` → `b2ff7792` | H5 LTR, H6 rate control, H7 ref lists | **+1.43%** | 2 |
+| `b2ff7792` → `ce9636c6` | H8 DQ layers, H9 MVD | +0.57% | 0 |
+
+**Both of the members that looked most expensive are free, and the reason is a type,
+not a call count.** H1's stride accessors run **per 4x4 block** — sixteen times a
+macroblock — and read +0.00%; H11 replaced the encoder's most-read field at **256
+sites** and read −0.01%. `Option<Box<T>>` has the null-pointer niche, so its accessor
+is an identity function on the loaded word and the optimiser deletes it. **A `Vec`
+accessor is not free**: it adds a length load and a branch where there was one pointer
+load. *The container's shape decides the cost, not the number of call sites* — which
+is the opposite of the intuition that sent the first hypothesis at the per-4x4-block
+accessor, and is exactly why the brief forbids acting before attributing.
+
+The cost sits in the middle five, weighted toward {LTR, rate control, ref lists}, and
+is **not** narrowed further on purpose: the sub-splits do not sum (+1.43 and +0.57
+inside a +1.04 segment), which is what 3-pair medians look like against an effect of
+~1% and a null whose own per-row spread is ±1.4%. Splitting again would be reading
+past the harness. The mechanism is named instead, and it is this phase's recurring
+one: `WelsRcMbInitGom`/`WelsRcMbInfoUpdateGom` run **per macroblock** and each opens
+with `ctx_rc_at(pEncCtx, did)`, while `SWelsSvcRc` grew 360 → 440 bytes. Dense content
+(Mandelbrot) reads −0.88…+1.19%; flat content reads +1.26…+5.80%. The two rows over
+5% are the two *smallest* rows in the set, where one printed tick is already 1.4% —
+the resolution floor, not a second effect.
+
+**Disposition: nothing reverted, nothing hoisted.** The remedy is the one session G
+named and deferred, and `rc.rs`'s own header already records why its per-macroblock
+functions cannot take a borrow at their head (F13's family). **Phase 9 owns it**, now
+with a measured target. D-perf-4's +25% median tripwire unbreached by ~24 points;
+cumulative encoder deficit ≈ +14…+16% → ≈ **+15…+17%**.
+
+**Gates.** `commit` at every commit, `family` at step 1's close (**both sweeps
+369/369**, no retry needed). The `exit` battery reads **12 passed / 1 failed / 1
+skipped**, and the one failure is adjudicated on the record rather than waved past:
+`sweep (release)` returned **368/1** on
+
+```
+mt CiscoVT2people_160x96_6fps t=2 sm=3 n=600 cabac=0 rc=0 :: C++ 41938  Rust 40124
+```
+
+— the F3 signature (`mt`, `sm=3`, `t=2`, wrong output length, exactly one
+configuration, and the same clip/slice-mode/constraint family that accounts for four
+of measurements 80–84). Checked against the signature *before* retrying, then retried
+per the protocol: that configuration alone, **5×**, in its own profile, harness
+rebuilt for release first, paused between runs, script written as bash. **5/5 pass** —
+recorded as **F3 measurement 85**, with one thing the next session should know: every
+previously recorded instance produced *zero* bytes and this one produced a **short**
+stream, so "Rust 0" is not the whole tell.
+
+Everything else in the battery is green: **Miri `--lib` encoder-scoped 252 / 0** at
+600.69 s with all four encoder probes read out of the output by name,
+`kernels_differential_phase2` 20/0, `safe_bits_differential` 7/0,
+`safe_plane_differential` 3/0, tests **496 / 490 / 20**, sweep (debug) **369/369**,
+**both benches bit-identical**, census 58, ratchet clean. The one SKIP is the standing
+fuzz one (Phase 0 T7 was never built).
+
+**Metrics** (`src/encoder` + `src/processing`), `675e558b` → close: `raw_ptr`
+**1874 → 1840 (−34)**, `unsafe_fn` **688 → 708 (+20)**, `unsafe_block` **286 → 310
+(+24)**, `mem_zeroed` **20 → 19**. Crate-wide `raw_ptr` **2467 → 2433 (−34)**,
+`unsafe_block` 459 → 483, `unsafe_fn` 807 → 827. The `unsafe_fn` rise is **twenty-five
+new root accessors** (twenty `ctx_*`, five `rc_*`) against the five functions that
+stopped existing; the `unsafe_block` rise is almost entirely the three new S40 tests,
+which are `unsafe` per assertion by construction. **As in session G, the metric cannot
+see this face's real win**: `(*pCtx).pSpsArray` never contained the token it counts,
+and 256 of those became a call into one audited body — the number that moved is the
+*allocator* census, 45 → 15.
