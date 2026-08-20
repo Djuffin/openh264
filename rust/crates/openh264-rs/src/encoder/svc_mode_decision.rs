@@ -23,6 +23,7 @@ use crate::encoder::svc_encode_slice::WelsPMbChromaEncode;
 use crate::encoder::svc_set_mb_syn_cavlc::IS_INTRA16x16;
 use crate::encoder::vlc_encoder::BsSizeUE;
 pub use crate::encoder::encoder_context::SMVUnitXY;
+use crate::encoder::encoder_context::ctx_dq_layer;
 pub use crate::encoder::encoder_context::SMVComponentUnit;
 pub use crate::encoder::encoder_context::EWelsSliceType;
 pub use crate::encoder::picture::SScreenBlockFeatureStorage;
@@ -1427,7 +1428,7 @@ pub unsafe extern "C" fn GetRefMb(pEncCtx: *mut sWelsEncCtx, pCurMb: &mut SMB) -
     let kRefIdx = (*current_layer(pEncCtx))
         .pRefLayer
         .expect("GetRefMb on a layer with no base layer: bBaseLayerAvailableFlag gates every caller");
-    let kpRefLayer = *(*pEncCtx).ppDqLayerList.add(kRefIdx.get());
+    let kpRefLayer = ctx_dq_layer(pEncCtx, kRefIdx.get());
     let kiRefMbIdx =
         (((*pCurMb).iMbY as i32 >> 1) * (*kpRefLayer).iMbWidth as i32) + ((*pCurMb).iMbX as i32 >> 1);
     crate::encoder::svc_encode_slice::mb_at(kpRefLayer, kiRefMbIdx)

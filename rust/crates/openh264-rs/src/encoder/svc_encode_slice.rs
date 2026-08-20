@@ -60,7 +60,7 @@ use crate::{
 
 pub use crate::encoder::encoder_context::EWelsSliceType;
 use crate::encoder::encoder_context::{
-    ctx_pps_array, ctx_rc_at, ctx_ref_list, ctx_sps_array, ctx_subset_array,
+    ctx_dq_layer, ctx_pps_array, ctx_rc_at, ctx_ref_list, ctx_sps_array, ctx_subset_array,
 };
 
 pub const P_SLICE: i32 = 0;
@@ -632,12 +632,12 @@ pub unsafe fn mb_at(pCurLayer: *mut SDqLayer, kiMbXY: i32) -> *mut SMB {
 /// before. Nothing downstream changed, which is the point — the identity moved, the
 /// idiom did not.
 ///
-/// **The spelling is S40's.** `ppDqLayerList` is a raw pointer to raw pointers, so
-/// reading an element is a plain load through a raw pointer: no reference is formed
-/// over the list, and repeated calls are therefore independent loads that cannot pop
-/// each other's results. That property is what lets a caller keep the cursor across
-/// another call to this function — which is what the frame loop does, twice per
-/// spatial layer.
+/// **The spelling is S40's.** T6.H8 made the list a `Vec<Option<Box<SDqLayer>>>`, and
+/// [`ctx_dq_layer`] reads the `Box`'s address without forming a reference to the
+/// layer it points at — so repeated calls are still sibling derivations that cannot
+/// pop each other's results. That property is what lets a caller keep the cursor
+/// across another call to this function, which is what the frame loop does, twice
+/// per spatial layer.
 ///
 /// Answers **null** exactly where the old field was null: before any layer is
 /// current (`iCurDqLayer == None`), and before the list exists. Every `is_null()`
@@ -646,28 +646,24 @@ pub unsafe fn mb_at(pCurLayer: *mut SDqLayer, kiMbXY: i32) -> *mut SMB {
 /// # Safety
 /// `pCtx` must point to a live encoder context.
 #[inline]
-pub unsafe fn current_layer(pCtx: *const sWelsEncCtx) -> *mut SDqLayer {
+pub unsafe fn current_layer(pCtx: *mut sWelsEncCtx) -> *mut SDqLayer {
     let Some(idx) = (*pCtx).iCurDqLayer else {
         return std::ptr::null_mut();
     };
-    let list = (*pCtx).ppDqLayerList;
     // A `Some` index with no list is a programming error, not a state: every writer
     // names a layer the list already holds. It cannot arise on a live path — the
-    // field starts `None` and `FreeDqLayer` nulls the list only at teardown — so it
-    // is asserted rather than handled, and answers null in release for the same
-    // reason the field's null answered there.
+    // field starts `None` and the list only empties at teardown — so it is asserted
+    // rather than handled, and answers null in release for the same reason the
+    // field's null answered there.
     debug_assert!(
-        !list.is_null(),
+        !(*pCtx).ppDqLayerList.is_empty(),
         "iCurDqLayer = {idx:?} with no ppDqLayerList"
     );
     debug_assert!(
         idx.get() < MAX_DEPENDENCY_LAYER,
         "iCurDqLayer = {idx:?} is past the largest list InitDqLayers can build"
     );
-    if list.is_null() {
-        return std::ptr::null_mut();
-    }
-    *list.add(idx.get())
+    ctx_dq_layer(pCtx, idx.get())
 }
 
 /// Make `kIdx` the current layer — the setter half of [`current_layer`], and the
