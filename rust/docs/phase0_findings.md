@@ -2538,3 +2538,38 @@ byte-identical is a bug in the harness you just wrote, not a finding.
 
 Running total: **seventy-eight measurements, twenty-five alternations, fifty-one
 acquittals.**
+
+---
+
+### Seventy-ninth measurement — 2026-08-20, Phase 6 session F's `exit` battery: the same configuration a third time, and the rate is the load
+
+```
+debug: mt CiscoVT2people_320x192_12fps t=4 sm=3 n=600 cabac=0 rc=1 :: C++ 40992  Rust 0
+debug: mt CiscoVT2people_320x192_12fps t=4 sm=3 n=600 cabac=1 rc=0 :: C++ 39981  Rust 0
+```
+
+Release sweep of the same battery **369/369**; Miri `--lib` **347/0** with all four
+encoder probes green.
+
+The `cabac=1 rc=0` row cleared **5/5**. The `cabac=0 rc=1` row — **the same
+configuration measurement 77 was adjudicated on** — read **2/5**, then **0/20 more**:
+**2/25**, against **4/25** on the pre-face tree that measurement already established
+for it. No new alternation: the tree has moved since 77 only by (i) stamping the
+reference and reconstruction plane views on the layer once a frame, which *removes*
+per-macroblock work, and (ii) F63's one-line change of how a plane root is derived,
+which changes no arithmetic at all and is the reason Miri went from aborting to 347/0.
+
+**What is worth writing down is the rate, because it moved without the tree moving.**
+This configuration has now been measured at head three times in one session: **1/25**
+(quiet), **1/25** (quiet), and **2/25** (immediately after a full `exit` battery, i.e.
+with the machine still warm from a Miri run, two sweeps and two benches). The finding's
+second measurement said this in 2026-08-07 — "the rate rises noticeably when the
+machine is busy" — and the practical consequence stands: **a retry loop run straight
+after the battery that reported the failure is the *worst* place to measure it**, and
+the only reading that settles anything is the same loop against a tree without the
+change.
+
+**Acquitted as F3.**
+
+Running total: **seventy-nine measurements, twenty-five alternations, fifty-two
+acquittals.**

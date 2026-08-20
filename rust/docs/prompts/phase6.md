@@ -502,18 +502,45 @@ at a family boundary, and only with a written reason):
   second owed: **head 3 / control 1 over 800 encodes under load, and 0/0 over 120 on
   an idle machine** — the sharpest demonstration on record that load is the variable,
   not the tree.
-* **F** — **brief written** ([`phase6_session_f.md`](phase6_session_f.md), steward,
-  2026-08-19). `wels_preprocess` + the plane families (6.2), **and 6.1's recon-pool
-  alias family**, handed over by session B with its settlement written and its size
-  measured (~184 sites, nine files): the id flip (two pools → `Pool<Box<SPicture>>`,
-  `SrcPicId`/`RecPicId` over the fourteen-row table, S34 clean, F42 needs nothing),
-  `SPicture` constructor-built — side arrays owned, `pEncSad` deleted as a neighbour
-  cursor, planes owned with root accessors (separable, the hot-path risk) — then
-  VAA/preprocess per-frame views (P9's out-views). **The `common/` caller scope
-  narrowed by E's verdict**: only the per-frame `expand_pic` caller converts;
-  per-MB/per-candidate kernel signatures (`mc`, SAD/SATD, intra, deblock) are
-  Phase 9's kernel-signature work, and S37 forbids `&mut SPicture` across a
-  resolving call throughout.
+* **F — SPENT** (2026-08-20). **The pictures** — brief:
+  [`phase6_session_f.md`](phase6_session_f.md). **All five steps landed, none
+  dropped.** `*mut SPicture` **59 → 0** code sites; `pEncSad`, `pBuffer` and
+  `*mut SMVUnitXY` **0** each. Both pools own (`SRefList::pRef` `Box`-built with a
+  constructor, `CWelsPreProcess::m_pSpatialPicPool` flat across layers), the scaled
+  input is an `Option<Box<SPicture>>`, and all fourteen alias rows are handles.
+  **The two id types earned themselves twice in places the C++ cannot express**:
+  `SDqLayer::pRefOri` holds a *reconstruction* picture on the camera path and a
+  *source* picture on the screen path (it is `Option<PicRef>`, an enum over both),
+  and `AnalyzePictureComplexity` takes a source picture with a reconstruction
+  reference. **F42's encoder arm is one line** and session B's grep could not have
+  found it — `AnalyzeSpatialPic` asks identity as `pLastPic->pData[0] ==
+  pRefPic->pData[0]`, two plane roots rather than two `SPicture*`. **The coverage
+  check came first and found F62**: both drivers hard-coded
+  `bEnableLongTermReference = false`, so the entire long-term-reference subsystem
+  had no byte coverage in any preset; preset `ltr` (two knobs — the feedback packets
+  are what unlock `DeleteLTRFromLongList` and the long arm) takes the sweeps **353 →
+  369**, and the defect it found (`ParamTranscode` dropping the caller's
+  `iLTRRefNum`) is masked and was measured both ways. `CMemoryAlign` allocates
+  nothing for a picture or the VAA block any more; `ExpandReferencingPicture` has no
+  caller and is deleted, so **nothing in the port rebuilds an allocation from a
+  mid-plane pointer** outside the differential shims. **S28's test is red-proofed**
+  (the narrowing spelling fails under Miri, the root spelling passes, 369/369
+  either way) — **and the `exit` battery then failed on the same accessor for a
+  different reason, F63**: S28 answers provenance, not aliasing, and
+  `as_mut_slice()`'s `Unique` retag pops the cursor the previous call handed out,
+  which the encoder trips by asking the same picture for its planes twice a frame.
+  `PaddedPlane::root_ptr` makes repeated derivations siblings. Sizes re-pinned, **and the pins split by profile** — `Option<PicId>`
+  is 4 bytes in release and 8 in debug because `pool::Id` carries its generation
+  counter, and giving `Id` a generation in both would cost the *decoder's*
+  per-macroblock deblocking arrays their niche. **The span is the first
+  session-scale encode cost this phase has recorded**: +4.67% against a +0.00% null,
+  attributed commit by commit (**the id flip, +1.45%; the planes, +0.24%** — so the
+  brief's separable step was not the cost and reverting it would have fixed
+  nothing), then **+2.72% after T6.F5** stamped the reference and reconstruction
+  plane views on the layer once a frame. Residue named for **Phase 9**: ~10
+  per-macroblock resolutions reaching the four side arrays, which want slices, not
+  addresses. F3 measurements **75–78**, all acquitted, two of them refining the
+  retry protocol.
 * **G** — the context flip and the deny sweep (6.6), then the phase close. **Opens
   with 6.5's fold** (steward, 2026-08-19): `au_set.rs` + `paraset_strategy.rs` R1
   remnants and `rc.rs`'s 56 `*mut sWelsEncCtx` land here with the flip;

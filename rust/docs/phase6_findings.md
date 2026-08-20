@@ -271,6 +271,66 @@ the half Phase 7 is for.
 
 ---
 
+## F63 — a plane root taken through `as_mut_slice()` invalidates the last one, and the encoder asks twice a frame
+
+*Phase 6 session F, 2026-08-20, found by the `exit` battery's Miri `--lib` step on
+its first run — the fourth consecutive session in which that battery caught a defect
+the session introduced.*
+
+`SPicture::data_ptr` was written the way the decoder's has been written since Phase 5:
+
+```rust
+plane.as_mut_slice().as_mut_ptr().wrapping_add(origin)
+```
+
+That spelling is **S28-correct about provenance** — it derives from the allocation
+root rather than through a narrowing slice, which is the trap S28 exists for, and the
+Miri test this session added for it passes and fails on cue. It is **wrong about
+aliasing**, and the two are different questions.
+
+`&mut self.buf` deref-coerces to `&mut [u8]`, which is a **`Unique` retag over the
+whole allocation**. Every pointer previously derived from that plane is popped off the
+borrow stack. So a caller that takes a cursor, keeps it, and later asks the same plane
+for another cursor has invalidated its own first one.
+
+**The encoder does exactly that, within one frame.** `WelsInitCurrentLayer` stamps
+`SDqLayer::pEncData[i]` from the source picture's planes; several hundred lines later
+in the same `WelsEncoderEncodeExt` iteration, `AnalyzePictureComplexity` asks the same
+source picture for its planes again. `WelsMdI16x16`'s SAD then reads through the first
+cursor. Miri's report names all three points:
+
+```
+attempting a read access using <147783471> ..., but that tag does not exist
+  --> src/common/sad_common.rs:149          (WelsSampleSad8x8_c, from WelsMdI16x16)
+help: <147783471> was created by a SharedReadWrite retag
+  --> src/encoder/picture.rs:261            (SPicture::data_ptr)
+help: <147783471> was later invalidated by a Unique retag
+  --> src/safe/plane.rs:233                 (PaddedPlane::as_mut_slice)
+```
+
+**The fix is `PaddedPlane::root_ptr`**, which reads the address out of the `Vec`'s own
+header (`Vec::as_mut_ptr`) instead of taking a slice of it. Repeated calls are then
+sibling `SharedReadWrite` derivations that coexist, which is the C's behaviour and the
+behaviour every raw cursor in the port assumes. Same address, same provenance, no
+retag. The three encode probes go from **aborting** to **3 passed / 0 failed**.
+
+**Three things worth carrying.**
+
+1. **S28 answers provenance, not aliasing, and a rule that answers one question does
+   not answer the other.** The narrowing-slice trap and the Unique-retag trap have the
+   same shape at the call site and different fixes; the S28 test catches the first and
+   is silent about the second. Both need saying at the accessor.
+2. **No byte-level gate can see either.** The sweep read 369/369 with this in the
+   tree, in both profiles, and both benches were bit-identical.
+3. **The decoder's `data_ptr` has the same spelling and passes**, because *its*
+   callers do not re-derive while a cursor lives — `DecodeFrameConstruction`'s three
+   `ppDst[i]` writes are one derivation each at the end of a frame. That is a property
+   of the decoder's call graph, not of the accessor, and it is why this sat undetected
+   through a whole phase of the other codec. Worth re-checking there if a decoder
+   caller ever gains a second derivation.
+
+---
+
 ## F62 — `ParamTranscode` drops the caller's `iLTRRefNum`, and no gate could see it
 
 *Phase 6 session F, 2026-08-20, found while checking the long-term-reference

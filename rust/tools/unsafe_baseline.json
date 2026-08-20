@@ -1,5 +1,5 @@
 {
-  "commit": "7a135935",
+  "commit": "23fe9bb0",
   "metrics": ["unsafe_fn", "unsafe_block", "raw_ptr", "transmute", "unsafe_impl", "mem_zeroed", "no_mangle", "shim"],
   "files": {
     "api/abi_guard.rs": { "unsafe_fn": 0, "unsafe_block": 0, "raw_ptr": 0, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 0, "no_mangle": 0, "shim": 0 },
@@ -81,7 +81,7 @@
     "safe/err.rs": { "unsafe_fn": 0, "unsafe_block": 0, "raw_ptr": 0, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 0, "no_mangle": 0, "shim": 0 },
     "safe/mb_grid.rs": { "unsafe_fn": 0, "unsafe_block": 0, "raw_ptr": 2, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 0, "no_mangle": 0, "shim": 0 },
     "safe/mod.rs": { "unsafe_fn": 0, "unsafe_block": 0, "raw_ptr": 0, "transmute": 0, "unsafe_impl": 1, "mem_zeroed": 0, "no_mangle": 0, "shim": 0 },
-    "safe/plane.rs": { "unsafe_fn": 0, "unsafe_block": 0, "raw_ptr": 0, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 0, "no_mangle": 0, "shim": 0 },
+    "safe/plane.rs": { "unsafe_fn": 0, "unsafe_block": 0, "raw_ptr": 1, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 0, "no_mangle": 0, "shim": 0 },
     "safe/pool.rs": { "unsafe_fn": 0, "unsafe_block": 0, "raw_ptr": 0, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 0, "no_mangle": 0, "shim": 0 },
     "safe/prng.rs": { "unsafe_fn": 0, "unsafe_block": 0, "raw_ptr": 0, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 0, "no_mangle": 0, "shim": 0 }
   }
