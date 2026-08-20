@@ -1334,32 +1334,45 @@ mod tests {
     /// names the field when they differ, and reports the residue separately so the
     /// coverage is visible rather than assumed.
     ///
-    /// # F64 — the seven fields that cannot be compared as bytes at all
+    /// # F64 — the ten fields that cannot be compared as bytes at all
     ///
     /// The first draft *was* a field-extent walk and Miri failed it anyway, at
-    /// `pEncPic`: **a niche-optimized `Option` writes the niche and leaves the rest
-    /// of the payload undefined**, so `None` of an `Option<SrcPicId>` is four defined
-    /// bytes (the `NonZeroU32` index, zero) followed by four *uninitialized* ones
-    /// (`pool::Id`'s generation counter, which exists only under
-    /// `debug_assertions`). The shell wrote zeros there. `new()` does not. The
-    /// same holds one level down, inside `SSpatialPicIndex::pSrc`; and **interior
-    /// `repr(C)` padding does it again without any niche at all** —
-    /// `SParaSetOffsetVariable` has 3 bytes between `bUsedParaSetIdInBs[57]` and
-    /// `uiNextParaSetIdToUseInBs`, and `TagVideoEncoderStatistics` has 4 before
-    /// `iStatisticsTs` and 4 of tail, none of which a struct literal writes.
+    /// `pEncPic`: **`None` writes the discriminant and leaves the payload
+    /// undefined**, so `None` of an `Option<SrcPicId>` is four defined bytes (the
+    /// `NonZeroU32` niche, zero) followed by four *uninitialized* ones (`pool::Id`'s
+    /// generation counter, which exists only under `debug_assertions`). The shell
+    /// wrote zeros there. `new()` does not. The same holds one level down, inside
+    /// `SSpatialPicIndex::pSrc`; and **interior `repr(C)` padding does it with no
+    /// `Option` involved at all** — `SParaSetOffsetVariable` has 3 bytes between
+    /// `bUsedParaSetIdInBs[57]` and `uiNextParaSetIdToUseInBs`, and
+    /// `TagVideoEncoderStatistics` has 4 before `iStatisticsTs` and 4 of tail, none
+    /// of which a struct literal writes.
+    ///
+    /// **And the *niche* is not what makes it happen** — that took a second reading,
+    /// paid for by the `exit` battery. `iCurDqLayer`, `iSps` and `iPps` are
+    /// `Option`s over plain integer newtypes with **no** niche: a tag byte plus a
+    /// payload. `None` writes the tag and leaves the payload undefined exactly as the
+    /// handles do. The first cut of this list said "niche-carrying" and excluded only
+    /// the handles, which is the same mistake one level down: it is not the niche,
+    /// it is that **an `Option`'s `None` defines only its discriminant**.
     ///
     /// So the honest statement is narrower than "byte-identical", and it is the
     /// narrower one that is true: `new()` reproduces the shell **everywhere the
-    /// shell's bytes are defined by the type**, and at the seven fields below it
-    /// reproduces the *values*, which is all anything reads. Nothing reads a `None`
-    /// handle's generation — that is read when a `Some` is resolved, and there is no
-    /// `Some` here — and nothing reads padding at all. The seven are excluded **by
-    /// name** and asserted **by value**; excluding them silently would have been the
-    /// failure this test exists to prevent, one level up.
+    /// shell's bytes are defined by the type**, and at the ten fields below it
+    /// reproduces the *values*, which is all anything reads. Nothing reads a `None`'s
+    /// payload — that is read when a `Some` is unwrapped, and there is no `Some`
+    /// here — and nothing reads padding at all. The ten are excluded **by name** and
+    /// asserted **by value**; excluding them silently would have been the failure
+    /// this test exists to prevent, one level up.
     ///
     /// The general rule this leaves behind: *a field-wise constructor cannot be
     /// proved byte-equal to a memset image, only value-equal, and the difference is
-    /// exactly the bytes the type does not define.*
+    /// exactly the bytes the type does not define.* In practice, for this port: every
+    /// `Option` field, and all padding.
+    ///
+    /// **A field added to this struct as an `Option` belongs on the `BY_VALUE` list**,
+    /// and the test will say so under Miri if it is not — which is how each of these
+    /// four rounds was found.
     #[test]
     fn ctx_new_reproduces_the_zeroed_shell() {
         use std::mem::{offset_of, size_of, size_of_val};
@@ -1397,9 +1410,11 @@ mod tests {
         assert_eq!(extents.len(), 69, "a field was added or removed without updating this list");
 
         // ---- tier 2: the F64 fields, excluded by name and asserted by value ----
-        const BY_VALUE: [&str; 7] = [
-            // niche-carrying: `None` leaves pool::Id's generation half undefined
+        const BY_VALUE: [&str; 10] = [
+            // `Option` with a niche: `None` leaves pool::Id's generation half undefined
             "pEncPic", "pDecPic", "pRefPic", "pRefList0", "sSpatialIndexMap",
+            // `Option` without one: `None` writes the tag and leaves the payload byte
+            "iCurDqLayer", "iSps", "iPps",
             // interior repr(C) padding a struct literal does not write
             "sPSOVector", "sEncoderStatistics",
         ];
@@ -1433,6 +1448,9 @@ mod tests {
                 c.sSpatialIndexMap.iter().all(|e| e.pSrc.is_none() && e.iDid == 0),
                 "{which}: the spatial index map holds no pictures"
             );
+            assert!(c.iCurDqLayer.is_none(), "{which}: no layer is current");
+            assert!(c.iSps.is_none(), "{which}: no SPS is active");
+            assert!(c.iPps.is_none(), "{which}: no PPS is active");
             assert!(paraset_is_zero(&c.sPSOVector), "{which}: no parameter-set id handed out");
             assert!(
                 c.sEncoderStatistics.iter().all(stats_are_zero),
