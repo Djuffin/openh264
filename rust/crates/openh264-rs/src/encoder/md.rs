@@ -254,27 +254,75 @@ pub type PSampleSadSatdCostFunc = unsafe extern "C" fn(
     iStride2: i32,
 ) -> i32;
 
+/// The four fractional-pixel refinement planes, as **offsets** into the one buffer
+/// they all point into.
+///
+/// **T6.E3.** This used to be five `*mut u8`, and reading `InitMeRefinePointer`
+/// showed what they were: four fixed offsets into `SMbCache.sBufferInterPredMe` —
+/// 0, 640, 1280 and 1920, each plus the partition's `iStride` — and a fifth,
+/// `pHalfPixHV`, that the builder never wrote at all. So the record was carrying
+/// five addresses to say one number.
+///
+/// Two things fell out of writing it as offsets:
+///
+/// - **`pHalfPixHV` is an alias, not a plane.** Its only writers are the four arms
+///   of `MeRefineFracPixel`'s half-pixel `match`, each setting it to *whichever of
+///   H or V that arm reuses* for the diagonal filter. As an offset that is one
+///   assignment of `half_pix_h()` or `half_pix_v()`, and the aliasing is stated
+///   rather than implied by two pointers holding the same address.
+/// - **`pQuarPixBest`/`pQuarPixTmp` ping-pong.** `MeRefineQuarPixel` runs four
+///   candidate positions and `mem::swap`s the pair whenever the candidate wins, so
+///   the two names are one selector over `{1280, 1920}`. `bQuarPixSwapped` is that
+///   selector, and `swap_quar()` is the `mem::swap`. Same recipe as session C's
+///   half-selectors over `SMbCache`'s prediction buffers.
+///
+/// The buffer root is **not** stored here. Readers combine an offset with the
+/// `*mut u8` base that the caller derives once from the cache
+/// (`md::buffer_inter_pred_me`) and passes down — one cursor with the whole
+/// buffer's provenance, S28's rule, and no second live path into `SMbCache`.
 #[repr(C)]
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Default)]
 pub struct SMeRefinePointer {
-    pub pHalfPixH: *mut u8,
-    pub pHalfPixV: *mut u8,
-    pub pHalfPixHV: *mut u8,
-    pub pQuarPixBest: *mut u8,
-    pub pQuarPixTmp: *mut u8,
+    /// The partition's offset within each 640-byte plane. `InitMeRefinePointer`'s
+    /// third argument, and the only thing that call still has to say.
+    pub iStride: usize,
+    /// Offset of the plane the diagonal (H+V) filter writes into and reads back —
+    /// always equal to `half_pix_h()` or `half_pix_v()`, chosen per half-pixel arm.
+    pub iHalfPixHV: usize,
+    /// `false`: best is plane 2 (1280), tmp is plane 3 (1920). `true`: swapped.
+    pub bQuarPixSwapped: bool,
     pub pfCopyBlockByMode: Option<PCopyFunc>,
 }
 
-impl Default for SMeRefinePointer {
-    fn default() -> Self {
-        Self {
-            pHalfPixH: std::ptr::null_mut(),
-            pHalfPixV: std::ptr::null_mut(),
-            pHalfPixHV: std::ptr::null_mut(),
-            pQuarPixBest: std::ptr::null_mut(),
-            pQuarPixTmp: std::ptr::null_mut(),
-            pfCopyBlockByMode: None,
-        }
+/// Plane bases inside `SMbCache.sBufferInterPredMe`, in bytes.
+const ME_PLANE_HALF_PIX_H: usize = 0;
+const ME_PLANE_HALF_PIX_V: usize = 640;
+const ME_PLANE_QUAR_A: usize = 1280;
+const ME_PLANE_QUAR_B: usize = 1920;
+
+impl SMeRefinePointer {
+    #[inline(always)]
+    pub fn half_pix_h(&self) -> usize {
+        ME_PLANE_HALF_PIX_H + self.iStride
+    }
+    #[inline(always)]
+    pub fn half_pix_v(&self) -> usize {
+        ME_PLANE_HALF_PIX_V + self.iStride
+    }
+    /// The quarter-pixel plane currently holding the best candidate.
+    #[inline(always)]
+    pub fn quar_pix_best(&self) -> usize {
+        (if self.bQuarPixSwapped { ME_PLANE_QUAR_B } else { ME_PLANE_QUAR_A }) + self.iStride
+    }
+    /// The other one — where the next candidate is built.
+    #[inline(always)]
+    pub fn quar_pix_tmp(&self) -> usize {
+        (if self.bQuarPixSwapped { ME_PLANE_QUAR_A } else { ME_PLANE_QUAR_B }) + self.iStride
+    }
+    /// What `mem::swap(&mut pQuarPixBest, &mut pQuarPixTmp)` was.
+    #[inline(always)]
+    pub fn swap_quar(&mut self) {
+        self.bQuarPixSwapped = !self.bQuarPixSwapped;
     }
 }
 
@@ -1252,26 +1300,30 @@ pub unsafe extern "C" fn MdIntraAnalysisVaaInfo(
     kiVariance >= INTRA_VARIANCE_SAD_THRESHOLD
 }
 
-pub unsafe extern "C" fn InitMeRefinePointer(
-    pMeRefine: *mut SMeRefinePointer,
-    pMbCache: &mut SMbCache,
-    iStride: i32,
-) {
-    let pMbCache: *mut SMbCache = pMbCache; // one entry retag — md.rs's accessor note
-    (*pMeRefine).pHalfPixH = crate::encoder::md::buffer_inter_pred_me(pMbCache).add(iStride as usize);
-    (*pMeRefine).pHalfPixV = crate::encoder::md::buffer_inter_pred_me(pMbCache).add(640 + iStride as usize);
-    (*pMeRefine).pQuarPixBest = crate::encoder::md::buffer_inter_pred_me(pMbCache).add(1280 + iStride as usize);
-    (*pMeRefine).pQuarPixTmp = crate::encoder::md::buffer_inter_pred_me(pMbCache).add(1920 + iStride as usize);
+/// Aim the refinement record at one partition. The `pMbCache` argument is gone with
+/// the pointers: there is nothing left to read from the cache here, only a number to
+/// record.
+///
+/// **The quarter-pixel selector reset is not cosmetic.** Every `MeRefineFracPixel`
+/// call is preceded by one of these, and the old body re-established
+/// `pQuarPixBest = 1280`, `pQuarPixTmp = 1920` unconditionally — so a partition that
+/// left the pair swapped did not leak that state into the next one. `Default` is the
+/// unswapped assignment and this restores it.
+pub fn InitMeRefinePointer(pMeRefine: &mut SMeRefinePointer, iStride: i32) {
+    pMeRefine.iStride = iStride as usize;
+    pMeRefine.iHalfPixHV = 0;
+    pMeRefine.bQuarPixSwapped = false;
 }
 
 #[inline(always)]
 pub unsafe fn MeRefineQuarPixel(
     pFunc: *mut SWelsFuncPtrList,
-    pMe: *mut SWelsME,
-    pMeRefine: *mut SMeRefinePointer,
+    pMe: &mut SWelsME,
+    pMeRefine: &mut SMeRefinePointer,
+    pBufMe: *mut u8,
     kiWidth: i32,
     kiHeight: i32,
-    pParams: *mut SQuarRefineParams,
+    pParams: &mut SQuarRefineParams,
     iStrideEnc: i32,
 ) {
     let pEncMb = (*pMe).pEncMb;
@@ -1280,86 +1332,90 @@ pub unsafe fn MeRefineQuarPixel(
 
     // =========================(0, -1) [TOP] =========================
     PixelAvg_c(
-        (*pMeRefine).pQuarPixTmp,
+        pBufMe.add(pMeRefine.quar_pix_tmp()),
         ME_REFINE_BUF_STRIDE,
-        (*pParams).pSrcA[0],
+        pParams.pSrcA[0],
         ME_REFINE_BUF_STRIDE,
-        (*pParams).pSrcB[0],
-        (*pParams).iStrideA,
+        pParams.pSrcB[0],
+        pParams.iStrideA,
         kiWidth,
         kiHeight,
     );
 
-    let mut iCurCost = pfMeCost(pEncMb, iStrideEnc, (*pMeRefine).pQuarPixTmp, ME_REFINE_BUF_STRIDE) + (*pParams).iLms[0];
-    if iCurCost < (*pParams).iBestCost {
-        (*pParams).iBestCost = iCurCost;
-        (*pParams).iBestQuarPix = ME_QUAR_PIXEL_TOP;
-        std::mem::swap(&mut (*pMeRefine).pQuarPixBest, &mut (*pMeRefine).pQuarPixTmp);
+    let mut iCurCost = pfMeCost(pEncMb, iStrideEnc, pBufMe.add(pMeRefine.quar_pix_tmp()), ME_REFINE_BUF_STRIDE) + pParams.iLms[0];
+    if iCurCost < pParams.iBestCost {
+        pParams.iBestCost = iCurCost;
+        pParams.iBestQuarPix = ME_QUAR_PIXEL_TOP;
+        pMeRefine.swap_quar();
     }
 
     // =========================(0, 1) [BOTTOM] =======================
     PixelAvg_c(
-        (*pMeRefine).pQuarPixTmp,
+        pBufMe.add(pMeRefine.quar_pix_tmp()),
         ME_REFINE_BUF_STRIDE,
-        (*pParams).pSrcA[1],
+        pParams.pSrcA[1],
         ME_REFINE_BUF_STRIDE,
-        (*pParams).pSrcB[1],
-        (*pParams).iStrideA,
+        pParams.pSrcB[1],
+        pParams.iStrideA,
         kiWidth,
         kiHeight,
     );
 
-    iCurCost = pfMeCost(pEncMb, iStrideEnc, (*pMeRefine).pQuarPixTmp, ME_REFINE_BUF_STRIDE) + (*pParams).iLms[1];
-    if iCurCost < (*pParams).iBestCost {
-        (*pParams).iBestCost = iCurCost;
-        (*pParams).iBestQuarPix = ME_QUAR_PIXEL_BOTTOM;
-        std::mem::swap(&mut (*pMeRefine).pQuarPixBest, &mut (*pMeRefine).pQuarPixTmp);
+    iCurCost = pfMeCost(pEncMb, iStrideEnc, pBufMe.add(pMeRefine.quar_pix_tmp()), ME_REFINE_BUF_STRIDE) + pParams.iLms[1];
+    if iCurCost < pParams.iBestCost {
+        pParams.iBestCost = iCurCost;
+        pParams.iBestQuarPix = ME_QUAR_PIXEL_BOTTOM;
+        pMeRefine.swap_quar();
     }
 
     // =========================(-1, 0) [LEFT] ========================
     PixelAvg_c(
-        (*pMeRefine).pQuarPixTmp,
+        pBufMe.add(pMeRefine.quar_pix_tmp()),
         ME_REFINE_BUF_STRIDE,
-        (*pParams).pSrcA[2],
+        pParams.pSrcA[2],
         ME_REFINE_BUF_STRIDE,
-        (*pParams).pSrcB[2],
-        (*pParams).iStrideB,
+        pParams.pSrcB[2],
+        pParams.iStrideB,
         kiWidth,
         kiHeight,
     );
 
-    iCurCost = pfMeCost(pEncMb, iStrideEnc, (*pMeRefine).pQuarPixTmp, ME_REFINE_BUF_STRIDE) + (*pParams).iLms[2];
-    if iCurCost < (*pParams).iBestCost {
-        (*pParams).iBestCost = iCurCost;
-        (*pParams).iBestQuarPix = ME_QUAR_PIXEL_LEFT;
-        std::mem::swap(&mut (*pMeRefine).pQuarPixBest, &mut (*pMeRefine).pQuarPixTmp);
+    iCurCost = pfMeCost(pEncMb, iStrideEnc, pBufMe.add(pMeRefine.quar_pix_tmp()), ME_REFINE_BUF_STRIDE) + pParams.iLms[2];
+    if iCurCost < pParams.iBestCost {
+        pParams.iBestCost = iCurCost;
+        pParams.iBestQuarPix = ME_QUAR_PIXEL_LEFT;
+        pMeRefine.swap_quar();
     }
 
     // =========================(1, 0) [RIGHT] ========================
     PixelAvg_c(
-        (*pMeRefine).pQuarPixTmp,
+        pBufMe.add(pMeRefine.quar_pix_tmp()),
         ME_REFINE_BUF_STRIDE,
-        (*pParams).pSrcA[3],
+        pParams.pSrcA[3],
         ME_REFINE_BUF_STRIDE,
-        (*pParams).pSrcB[3],
-        (*pParams).iStrideB,
+        pParams.pSrcB[3],
+        pParams.iStrideB,
         kiWidth,
         kiHeight,
     );
 
-    iCurCost = pfMeCost(pEncMb, iStrideEnc, (*pMeRefine).pQuarPixTmp, ME_REFINE_BUF_STRIDE) + (*pParams).iLms[3];
-    if iCurCost < (*pParams).iBestCost {
-        (*pParams).iBestCost = iCurCost;
-        (*pParams).iBestQuarPix = ME_QUAR_PIXEL_RIGHT;
-        std::mem::swap(&mut (*pMeRefine).pQuarPixBest, &mut (*pMeRefine).pQuarPixTmp);
+    iCurCost = pfMeCost(pEncMb, iStrideEnc, pBufMe.add(pMeRefine.quar_pix_tmp()), ME_REFINE_BUF_STRIDE) + pParams.iLms[3];
+    if iCurCost < pParams.iBestCost {
+        pParams.iBestCost = iCurCost;
+        pParams.iBestQuarPix = ME_QUAR_PIXEL_RIGHT;
+        pMeRefine.swap_quar();
     }
 }
 
 pub unsafe extern "C" fn MeRefineFracPixel(
     pEncCtx: *mut sWelsEncCtx,
     pMemPredInterMb: *mut u8,
-    pMe: *mut SWelsME,
-    pMeRefine: *mut SMeRefinePointer,
+    pMe: &mut SWelsME,
+    pMeRefine: &mut SMeRefinePointer,
+    // The one cursor every plane offset in `pMeRefine` is measured from: the caller
+    // derives it once with `md::buffer_inter_pred_me`, so it carries the whole
+    // buffer's provenance (S28) and the cache keeps a single live path.
+    pBufMe: *mut u8,
     iWidth: i32,
     iHeight: i32,
 ) {
@@ -1412,7 +1468,7 @@ pub unsafe extern "C" fn MeRefineFracPixel(
     McHorVer02_c(
         pRef.offset(-(kiStrideRef as isize)),
         kiStrideRef,
-        (*pMeRefine).pHalfPixV,
+        pBufMe.add(pMeRefine.half_pix_v()),
         ME_REFINE_BUF_STRIDE,
         iWidth,
         iHeight + 1,
@@ -1420,31 +1476,31 @@ pub unsafe extern "C" fn MeRefineFracPixel(
 
     // step 1: vertical filter
     // (0, -2) [TOP]
-    iCurCost = pfMeCost(pEncData, kiStrideEnc, (*pMeRefine).pHalfPixV, ME_REFINE_BUF_STRIDE)
+    iCurCost = pfMeCost(pEncData, kiStrideEnc, pBufMe.add(pMeRefine.half_pix_v()), ME_REFINE_BUF_STRIDE)
         + COST_MVD((*pMe).pMvdCost, (iMvx - (*pMe).sMvp.iMvX) as i32, (iMvy - 2 - (*pMe).sMvp.iMvY) as i32);
     if iCurCost < iBestCost {
         iBestCost = iCurCost;
         iBestHalfPix = REFINE_ME_HALF_PIXEL_TOP;
-        pBestPredInter = (*pMeRefine).pHalfPixV;
+        pBestPredInter = pBufMe.add(pMeRefine.half_pix_v());
     }
 
     // (0, 2) [BOTTOM]
     iCurCost = pfMeCost(
         pEncData,
         kiStrideEnc,
-        (*pMeRefine).pHalfPixV.add(ME_REFINE_BUF_STRIDE as usize),
+        pBufMe.add(pMeRefine.half_pix_v() + ME_REFINE_BUF_STRIDE as usize),
         ME_REFINE_BUF_STRIDE,
     ) + COST_MVD((*pMe).pMvdCost, (iMvx - (*pMe).sMvp.iMvX) as i32, (iMvy + 2 - (*pMe).sMvp.iMvY) as i32);
     if iCurCost < iBestCost {
         iBestCost = iCurCost;
         iBestHalfPix = REFINE_ME_HALF_PIXEL_BOTTOM;
-        pBestPredInter = (*pMeRefine).pHalfPixV.add(ME_REFINE_BUF_STRIDE as usize);
+        pBestPredInter = pBufMe.add(pMeRefine.half_pix_v() + ME_REFINE_BUF_STRIDE as usize);
     }
 
     McHorVer20_c(
         pRef.offset(-1),
         kiStrideRef,
-        (*pMeRefine).pHalfPixH,
+        pBufMe.add(pMeRefine.half_pix_h()),
         ME_REFINE_BUF_STRIDE,
         iWidth + 1,
         iHeight,
@@ -1452,25 +1508,25 @@ pub unsafe extern "C" fn MeRefineFracPixel(
 
     // step 2: horizontal filter
     // (-2, 0) [LEFT]
-    iCurCost = pfMeCost(pEncData, kiStrideEnc, (*pMeRefine).pHalfPixH, ME_REFINE_BUF_STRIDE)
+    iCurCost = pfMeCost(pEncData, kiStrideEnc, pBufMe.add(pMeRefine.half_pix_h()), ME_REFINE_BUF_STRIDE)
         + COST_MVD((*pMe).pMvdCost, (iMvx - 2 - (*pMe).sMvp.iMvX) as i32, (iMvy - (*pMe).sMvp.iMvY) as i32);
     if iCurCost < iBestCost {
         iBestCost = iCurCost;
         iBestHalfPix = REFINE_ME_HALF_PIXEL_LEFT;
-        pBestPredInter = (*pMeRefine).pHalfPixH;
+        pBestPredInter = pBufMe.add(pMeRefine.half_pix_h());
     }
 
     // (2, 0) [RIGHT]
     iCurCost = pfMeCost(
         pEncData,
         kiStrideEnc,
-        (*pMeRefine).pHalfPixH.add(1),
+        pBufMe.add(pMeRefine.half_pix_h() + 1),
         ME_REFINE_BUF_STRIDE,
     ) + COST_MVD((*pMe).pMvdCost, (iMvx + 2 - (*pMe).sMvp.iMvX) as i32, (iMvy - (*pMe).sMvp.iMvY) as i32);
     if iCurCost < iBestCost {
         iBestCost = iCurCost;
         iBestHalfPix = REFINE_ME_HALF_PIXEL_RIGHT;
-        pBestPredInter = (*pMeRefine).pHalfPixH.add(1);
+        pBestPredInter = pBufMe.add(pMeRefine.half_pix_h() + 1);
     }
 
     sParams.iBestCost = iBestCost;
@@ -1482,10 +1538,10 @@ pub unsafe extern "C" fn MeRefineFracPixel(
     if REFINE_ME_NO_BEST_HALF_PIXEL == iBestHalfPix {
         sParams.iStrideA = kiStrideRef;
         sParams.iStrideB = kiStrideRef;
-        sParams.pSrcA[0] = (*pMeRefine).pHalfPixV;
-        sParams.pSrcA[1] = (*pMeRefine).pHalfPixV.add(ME_REFINE_BUF_STRIDE as usize);
-        sParams.pSrcA[2] = (*pMeRefine).pHalfPixH;
-        sParams.pSrcA[3] = (*pMeRefine).pHalfPixH.add(1);
+        sParams.pSrcA[0] = pBufMe.add(pMeRefine.half_pix_v());
+        sParams.pSrcA[1] = pBufMe.add(pMeRefine.half_pix_v() + ME_REFINE_BUF_STRIDE as usize);
+        sParams.pSrcA[2] = pBufMe.add(pMeRefine.half_pix_h());
+        sParams.pSrcA[3] = pBufMe.add(pMeRefine.half_pix_h() + 1);
 
         sParams.pSrcB[0] = pRef;
         sParams.pSrcB[1] = pRef;
@@ -1499,11 +1555,11 @@ pub unsafe extern "C" fn MeRefineFracPixel(
     } else {
         match iBestHalfPix {
             REFINE_ME_HALF_PIXEL_LEFT => {
-                (*pMeRefine).pHalfPixHV = (*pMeRefine).pHalfPixV;
+                pMeRefine.iHalfPixHV = pMeRefine.half_pix_v();
                 McHorVer22_c(
                     pRef.offset(-1 - kiStrideRef as isize),
                     kiStrideRef,
-                    (*pMeRefine).pHalfPixHV,
+                    pBufMe.add(pMeRefine.iHalfPixHV),
                     ME_REFINE_BUF_STRIDE,
                     iWidth + 1,
                     iHeight + 1,
@@ -1512,21 +1568,21 @@ pub unsafe extern "C" fn MeRefineFracPixel(
                 iHalfMvx -= 2;
                 sParams.iStrideA = ME_REFINE_BUF_STRIDE;
                 sParams.iStrideB = kiStrideRef;
-                sParams.pSrcA[0] = (*pMeRefine).pHalfPixH;
-                sParams.pSrcA[1] = (*pMeRefine).pHalfPixH;
-                sParams.pSrcA[2] = (*pMeRefine).pHalfPixH;
-                sParams.pSrcA[3] = (*pMeRefine).pHalfPixH;
-                sParams.pSrcB[0] = (*pMeRefine).pHalfPixHV;
-                sParams.pSrcB[1] = (*pMeRefine).pHalfPixHV.add(ME_REFINE_BUF_STRIDE as usize);
+                sParams.pSrcA[0] = pBufMe.add(pMeRefine.half_pix_h());
+                sParams.pSrcA[1] = pBufMe.add(pMeRefine.half_pix_h());
+                sParams.pSrcA[2] = pBufMe.add(pMeRefine.half_pix_h());
+                sParams.pSrcA[3] = pBufMe.add(pMeRefine.half_pix_h());
+                sParams.pSrcB[0] = pBufMe.add(pMeRefine.iHalfPixHV);
+                sParams.pSrcB[1] = pBufMe.add(pMeRefine.iHalfPixHV + ME_REFINE_BUF_STRIDE as usize);
                 sParams.pSrcB[2] = pRef.offset(-1);
                 sParams.pSrcB[3] = pRef;
             }
             REFINE_ME_HALF_PIXEL_RIGHT => {
-                (*pMeRefine).pHalfPixHV = (*pMeRefine).pHalfPixV;
+                pMeRefine.iHalfPixHV = pMeRefine.half_pix_v();
                 McHorVer22_c(
                     pRef.offset(-1 - kiStrideRef as isize),
                     kiStrideRef,
-                    (*pMeRefine).pHalfPixHV,
+                    pBufMe.add(pMeRefine.iHalfPixHV),
                     ME_REFINE_BUF_STRIDE,
                     iWidth + 1,
                     iHeight + 1,
@@ -1535,21 +1591,21 @@ pub unsafe extern "C" fn MeRefineFracPixel(
                 iHalfMvx += 2;
                 sParams.iStrideA = ME_REFINE_BUF_STRIDE;
                 sParams.iStrideB = kiStrideRef;
-                sParams.pSrcA[0] = (*pMeRefine).pHalfPixH.add(1);
-                sParams.pSrcA[1] = (*pMeRefine).pHalfPixH.add(1);
-                sParams.pSrcA[2] = (*pMeRefine).pHalfPixH.add(1);
-                sParams.pSrcA[3] = (*pMeRefine).pHalfPixH.add(1);
-                sParams.pSrcB[0] = (*pMeRefine).pHalfPixHV.add(1);
-                sParams.pSrcB[1] = (*pMeRefine).pHalfPixHV.add(1 + ME_REFINE_BUF_STRIDE as usize);
+                sParams.pSrcA[0] = pBufMe.add(pMeRefine.half_pix_h() + 1);
+                sParams.pSrcA[1] = pBufMe.add(pMeRefine.half_pix_h() + 1);
+                sParams.pSrcA[2] = pBufMe.add(pMeRefine.half_pix_h() + 1);
+                sParams.pSrcA[3] = pBufMe.add(pMeRefine.half_pix_h() + 1);
+                sParams.pSrcB[0] = pBufMe.add(pMeRefine.iHalfPixHV + 1);
+                sParams.pSrcB[1] = pBufMe.add(pMeRefine.iHalfPixHV + 1 + ME_REFINE_BUF_STRIDE as usize);
                 sParams.pSrcB[2] = pRef;
                 sParams.pSrcB[3] = pRef.add(1);
             }
             REFINE_ME_HALF_PIXEL_TOP => {
-                (*pMeRefine).pHalfPixHV = (*pMeRefine).pHalfPixH;
+                pMeRefine.iHalfPixHV = pMeRefine.half_pix_h();
                 McHorVer22_c(
                     pRef.offset(-1 - kiStrideRef as isize),
                     kiStrideRef,
-                    (*pMeRefine).pHalfPixHV,
+                    pBufMe.add(pMeRefine.iHalfPixHV),
                     ME_REFINE_BUF_STRIDE,
                     iWidth + 1,
                     iHeight + 1,
@@ -1558,21 +1614,21 @@ pub unsafe extern "C" fn MeRefineFracPixel(
                 iHalfMvy -= 2;
                 sParams.iStrideA = kiStrideRef;
                 sParams.iStrideB = ME_REFINE_BUF_STRIDE;
-                sParams.pSrcA[0] = (*pMeRefine).pHalfPixV;
-                sParams.pSrcA[1] = (*pMeRefine).pHalfPixV;
-                sParams.pSrcA[2] = (*pMeRefine).pHalfPixV;
-                sParams.pSrcA[3] = (*pMeRefine).pHalfPixV;
+                sParams.pSrcA[0] = pBufMe.add(pMeRefine.half_pix_v());
+                sParams.pSrcA[1] = pBufMe.add(pMeRefine.half_pix_v());
+                sParams.pSrcA[2] = pBufMe.add(pMeRefine.half_pix_v());
+                sParams.pSrcA[3] = pBufMe.add(pMeRefine.half_pix_v());
                 sParams.pSrcB[0] = pRef.offset(-(kiStrideRef as isize));
                 sParams.pSrcB[1] = pRef;
-                sParams.pSrcB[2] = (*pMeRefine).pHalfPixHV;
-                sParams.pSrcB[3] = (*pMeRefine).pHalfPixHV.add(1);
+                sParams.pSrcB[2] = pBufMe.add(pMeRefine.iHalfPixHV);
+                sParams.pSrcB[3] = pBufMe.add(pMeRefine.iHalfPixHV + 1);
             }
             REFINE_ME_HALF_PIXEL_BOTTOM => {
-                (*pMeRefine).pHalfPixHV = (*pMeRefine).pHalfPixH;
+                pMeRefine.iHalfPixHV = pMeRefine.half_pix_h();
                 McHorVer22_c(
                     pRef.offset(-1 - kiStrideRef as isize),
                     kiStrideRef,
-                    (*pMeRefine).pHalfPixHV,
+                    pBufMe.add(pMeRefine.iHalfPixHV),
                     ME_REFINE_BUF_STRIDE,
                     iWidth + 1,
                     iHeight + 1,
@@ -1581,14 +1637,14 @@ pub unsafe extern "C" fn MeRefineFracPixel(
                 iHalfMvy += 2;
                 sParams.iStrideA = kiStrideRef;
                 sParams.iStrideB = ME_REFINE_BUF_STRIDE;
-                sParams.pSrcA[0] = (*pMeRefine).pHalfPixV.add(ME_REFINE_BUF_STRIDE as usize);
-                sParams.pSrcA[1] = (*pMeRefine).pHalfPixV.add(ME_REFINE_BUF_STRIDE as usize);
-                sParams.pSrcA[2] = (*pMeRefine).pHalfPixV.add(ME_REFINE_BUF_STRIDE as usize);
-                sParams.pSrcA[3] = (*pMeRefine).pHalfPixV.add(ME_REFINE_BUF_STRIDE as usize);
+                sParams.pSrcA[0] = pBufMe.add(pMeRefine.half_pix_v() + ME_REFINE_BUF_STRIDE as usize);
+                sParams.pSrcA[1] = pBufMe.add(pMeRefine.half_pix_v() + ME_REFINE_BUF_STRIDE as usize);
+                sParams.pSrcA[2] = pBufMe.add(pMeRefine.half_pix_v() + ME_REFINE_BUF_STRIDE as usize);
+                sParams.pSrcA[3] = pBufMe.add(pMeRefine.half_pix_v() + ME_REFINE_BUF_STRIDE as usize);
                 sParams.pSrcB[0] = pRef;
                 sParams.pSrcB[1] = pRef.offset(kiStrideRef as isize);
-                sParams.pSrcB[2] = (*pMeRefine).pHalfPixHV.add(ME_REFINE_BUF_STRIDE as usize);
-                sParams.pSrcB[3] = (*pMeRefine).pHalfPixHV.add(ME_REFINE_BUF_STRIDE as usize + 1);
+                sParams.pSrcB[2] = pBufMe.add(pMeRefine.iHalfPixHV + ME_REFINE_BUF_STRIDE as usize);
+                sParams.pSrcB[3] = pBufMe.add(pMeRefine.iHalfPixHV + ME_REFINE_BUF_STRIDE as usize + 1);
             }
             _ => {}
         }
@@ -1599,10 +1655,10 @@ pub unsafe extern "C" fn MeRefineFracPixel(
         sParams.iLms[3] = COST_MVD((*pMe).pMvdCost, (iHalfMvx + 1 - (*pMe).sMvp.iMvX) as i32, (iHalfMvy - (*pMe).sMvp.iMvY) as i32);
     }
 
-    MeRefineQuarPixel(pFunc, pMe, pMeRefine, iWidth, iHeight, &mut sParams, kiStrideEnc);
+    MeRefineQuarPixel(pFunc, pMe, pMeRefine, pBufMe, iWidth, iHeight, &mut sParams, kiStrideEnc);
 
     if iBestCost > sParams.iBestCost {
-        pBestPredInter = (*pMeRefine).pQuarPixBest;
+        pBestPredInter = pBufMe.add(pMeRefine.quar_pix_best());
         iBestCost = sParams.iBestCost;
     }
     let iBestQuarPix = sParams.iBestQuarPix;
@@ -1616,7 +1672,7 @@ pub unsafe extern "C" fn MeRefineFracPixel(
         iInterBlk4Stride = kiStrideRef;
     }
 
-    let pfCopyBlockByMode = (*pMeRefine).pfCopyBlockByMode.unwrap();
+    let pfCopyBlockByMode = pMeRefine.pfCopyBlockByMode.unwrap();
     pfCopyBlockByMode(pMemPredInterMb, MB_WIDTH_LUMA, pBestPredInter, iInterBlk4Stride);
 }
 

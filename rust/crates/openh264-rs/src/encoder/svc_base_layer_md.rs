@@ -923,8 +923,8 @@ pub unsafe fn WelsMdInterInit(
         kiMbX,
         kiMbY,
         (*pEncCtx).iMvRange,
-        &mut (*pSlice).sMvStartMin as *mut SMVUnitXY,
-        &mut (*pSlice).sMvStartMax as *mut SMVUnitXY,
+        &mut (*pSlice).sMvStartMin,
+        &mut (*pSlice).sMvStartMax,
     );
 }
 
@@ -943,7 +943,7 @@ pub unsafe extern "C" fn WelsMdP16x8(
     let iStrideRef = (*(*pCurDqLayer).pRefPic).iLineSize[0];
     let mut iCostP16x8 = 0i32;
     for i in 0..2i32 {
-        let sMe16x8 = &mut (*pWelsMd).sMe.sMe16x8[i as usize] as *mut SWelsME;
+        let sMe16x8 = &mut (*pWelsMd).sMe.sMe16x8[i as usize];
         let iPixelY = i << 3;
         InitMe(
             (*pWelsMd).iMbPixX,
@@ -962,7 +962,7 @@ pub unsafe extern "C" fn WelsMdP16x8(
         (*pSlice).sMvc[0] = (*sMe16x8).sMvBase;
         (*pSlice).uiMvcNum = 1;
 
-        PredInter16x8Mv(&mut *pMbCache, i << 3, 0, &mut (*sMe16x8).sMvp as *mut SMVUnitXY);
+        PredInter16x8Mv(&mut *pMbCache, i << 3, 0, &mut (*sMe16x8).sMvp);
         (*pFunc).pfMotionSearch[0].expect("pfMotionSearch[0] unset")(
             pFunc,
             pCurDqLayer,
@@ -973,7 +973,7 @@ pub unsafe extern "C" fn WelsMdP16x8(
             &mut *pMbCache,
             i << 3,
             (*pWelsMd).uiRef as i8,
-            &mut (*sMe16x8).sMv as *mut SMVUnitXY,
+            &mut (*sMe16x8).sMv,
         );
         iCostP16x8 += (*sMe16x8).uiSatdCost as i32;
     }
@@ -994,7 +994,7 @@ pub unsafe extern "C" fn WelsMdP8x16(
     let mut iCostP8x16 = 0i32;
     for i in 0..2i32 {
         let iPixelX = i << 3;
-        let sMe8x16 = &mut (*pWelsMd).sMe.sMe8x16[i as usize] as *mut SWelsME;
+        let sMe8x16 = &mut (*pWelsMd).sMe.sMe8x16[i as usize];
         InitMe(
             (*pWelsMd).iMbPixX,
             (*pWelsMd).iMbPixY,
@@ -1012,7 +1012,7 @@ pub unsafe extern "C" fn WelsMdP8x16(
         (*pSlice).sMvc[0] = (*sMe8x16).sMvBase;
         (*pSlice).uiMvcNum = 1;
 
-        PredInter8x16Mv(&mut *pMbCache, i << 2, 0, &mut (*sMe8x16).sMvp as *mut SMVUnitXY);
+        PredInter8x16Mv(&mut *pMbCache, i << 2, 0, &mut (*sMe8x16).sMvp);
         (*pFunc).pfMotionSearch[0].expect("pfMotionSearch[0] unset")(
             pFunc,
             pCurLayer,
@@ -1023,7 +1023,7 @@ pub unsafe extern "C" fn WelsMdP8x16(
             &mut *pMbCache,
             i << 2,
             (*pWelsMd).uiRef as i8,
-            &mut (*sMe8x16).sMv as *mut SMVUnitXY,
+            &mut (*sMe8x16).sMv,
         );
         iCostP8x16 += (*sMe8x16).uiSatdCost as i32;
     }
@@ -1055,7 +1055,7 @@ pub unsafe extern "C" fn WelsMdP4x4(
         let iStrideRef = iPixelX + (iPixelY * iLineSizeRef);
 
         let sMe4x4 =
-            &mut (*pWelsMd).sMe.sMe4x4[ki8x8Idx as usize][i4x4Idx as usize] as *mut SWelsME;
+            &mut (*pWelsMd).sMe.sMe4x4[ki8x8Idx as usize][i4x4Idx as usize];
         InitMe(
             (*pWelsMd).iMbPixX,
             (*pWelsMd).iMbPixY,
@@ -1079,7 +1079,7 @@ pub unsafe extern "C" fn WelsMdP4x4(
             iPartIdx as i8,
             1,
             (*pWelsMd).uiRef as i32,
-            &mut (*sMe4x4).sMvp as *mut SMVUnitXY,
+            &mut (*sMe4x4).sMvp,
         );
         (*pFunc).pfMotionSearch[0].expect("pfMotionSearch[0] unset")(
             pFunc,
@@ -1091,7 +1091,7 @@ pub unsafe extern "C" fn WelsMdP4x4(
             &mut *pMbCache,
             iPartIdx,
             (*pWelsMd).uiRef as i8,
-            &mut (*sMe4x4).sMv as *mut SMVUnitXY,
+            &mut (*sMe4x4).sMv,
         );
         iCostP4x4 += (*sMe4x4).uiSatdCost as i32;
     }
@@ -1123,7 +1123,7 @@ pub unsafe extern "C" fn WelsMdP8x4(
         let iStrideRef = iPixelX + (iPixelY * iLineSizeRef);
 
         let sMe8x4 =
-            &mut (*pWelsMd).sMe.sMe8x4[ki8x8Idx as usize][i8x4Idx as usize] as *mut SWelsME;
+            &mut (*pWelsMd).sMe.sMe8x4[ki8x8Idx as usize][i8x4Idx as usize];
         InitMe(
             (*pWelsMd).iMbPixX,
             (*pWelsMd).iMbPixY,
@@ -1147,7 +1147,7 @@ pub unsafe extern "C" fn WelsMdP8x4(
             iPartIdx as i8,
             2,
             (*pWelsMd).uiRef as i32,
-            &mut (*sMe8x4).sMvp as *mut SMVUnitXY,
+            &mut (*sMe8x4).sMvp,
         );
         (*pFunc).pfMotionSearch[0].expect("pfMotionSearch[0] unset")(
             pFunc,
@@ -1159,7 +1159,7 @@ pub unsafe extern "C" fn WelsMdP8x4(
             &mut *pMbCache,
             iPartIdx,
             (*pWelsMd).uiRef as i8,
-            &mut (*sMe8x4).sMv as *mut SMVUnitXY,
+            &mut (*sMe8x4).sMv,
         );
         iCostP8x4 += (*sMe8x4).uiSatdCost as i32;
     }
@@ -1191,7 +1191,7 @@ pub unsafe extern "C" fn WelsMdP4x8(
         let iStrideRef = iPixelX + (iPixelY * iLineSizeRef);
 
         let sMe4x8 =
-            &mut (*pWelsMd).sMe.sMe4x8[ki8x8Idx as usize][i4x8Idx as usize] as *mut SWelsME;
+            &mut (*pWelsMd).sMe.sMe4x8[ki8x8Idx as usize][i4x8Idx as usize];
         InitMe(
             (*pWelsMd).iMbPixX,
             (*pWelsMd).iMbPixY,
@@ -1215,7 +1215,7 @@ pub unsafe extern "C" fn WelsMdP4x8(
             iPartIdx as i8,
             1,
             (*pWelsMd).uiRef as i32,
-            &mut (*sMe4x8).sMvp as *mut SMVUnitXY,
+            &mut (*sMe4x8).sMvp,
         );
         (*pFunc).pfMotionSearch[0].expect("pfMotionSearch[0] unset")(
             pFunc,
@@ -1227,7 +1227,7 @@ pub unsafe extern "C" fn WelsMdP4x8(
             &mut *pMbCache,
             iPartIdx,
             (*pWelsMd).uiRef as i8,
-            &mut (*sMe4x8).sMv as *mut SMVUnitXY,
+            &mut (*sMe4x8).sMv,
         );
         iCostP4x8 += (*sMe4x8).uiSatdCost as i32;
     }
@@ -1411,7 +1411,7 @@ pub unsafe fn WelsMdPSkipEnc(
     let mut iSadCostChroma: i32;
     let iSadCostMb: i32;
 
-    PredSkipMv(&mut *pMbCache, &mut sMvp as *mut SMVUnitXY);
+    PredSkipMv(&mut *pMbCache, &mut sMvp);
 
     // Special case, need to clip the vector //
     let sQpelMvp = SMVUnitXY {
@@ -1591,19 +1591,23 @@ pub unsafe fn WelsMdInterMbRefinement(
     let pDstCb = crate::encoder::md::mem_pred_chroma(pMbCache);
     let pDstCr = crate::encoder::md::mem_pred_chroma(pMbCache).add(64);
     let pDstLuma = crate::encoder::md::mem_pred_luma(pMbCache);
+    // The one cursor every `sMeRefine` offset is measured from — derived once here,
+    // from the cache root, and handed to each `MeRefineFracPixel` call below (S28).
+    let pBufMe = crate::encoder::md::buffer_inter_pred_me(pMbCache);
 
     let iLineSizeRefUV = (*(*pCurDqLayer).pRefPic).iLineSize[1];
 
     match (*pCurMb).uiMbType {
         MB_TYPE_16x16 => {
             //luma
-            InitMeRefinePointer(&mut sMeRefine as *mut SMeRefinePointer, &mut *pMbCache, 0);
+            InitMeRefinePointer(&mut sMeRefine, 0);
             sMeRefine.pfCopyBlockByMode = (*pFunc).pfCopy16x16NotAligned;
             MeRefineFracPixel(
                 pEncCtx,
                 pDstLuma,
-                &mut (*pWelsMd).sMe.sMe16x16 as *mut SWelsME,
-                &mut sMeRefine as *mut SMeRefinePointer,
+                &mut (*pWelsMd).sMe.sMe16x16,
+                &mut sMeRefine,
+                pBufMe,
                 16,
                 16,
             );
@@ -1611,7 +1615,7 @@ pub unsafe fn WelsMdInterMbRefinement(
                 &mut *pMbCache,
                 pCurMb,
                 (*pWelsMd).uiRef as i8,
-                &mut (*pWelsMd).sMe.sMe16x16.sMv as *mut SMVUnitXY,
+                &mut (*pWelsMd).sMe.sMe16x16.sMv,
             );
 
             (*pMbCache).sMbMvp[0] = (*pWelsMd).sMe.sMe16x16.sMvp;
@@ -1620,7 +1624,7 @@ pub unsafe fn WelsMdInterMbRefinement(
             iBestSatdCost = (*pWelsMd).sMe.sMe16x16.uiSatdCost as i32;
 
             //chroma
-            let pMv = &mut (*pWelsMd).sMe.sMe16x16.sMv as *mut SMVUnitXY;
+            let pMv = &mut (*pWelsMd).sMe.sMe16x16.sMv;
             let iMvStride =
                 ((*pMv).iMvY as i32 >> 3) * iLineSizeRefUV + ((*pMv).iMvX as i32 >> 3);
             pTmpRefCb = pRefCb.offset(iMvStride as isize);
@@ -1655,19 +1659,20 @@ pub unsafe fn WelsMdInterMbRefinement(
             for i in 0..2usize {
                 //luma
                 let iIdx = (i as i32) << 3;
-                InitMeRefinePointer(&mut sMeRefine as *mut SMeRefinePointer, &mut *pMbCache, iPixStride);
+                InitMeRefinePointer(&mut sMeRefine, iPixStride);
                 iPixStride += ME_REFINE_BUF_STRIDE_BLK8;
                 PredInter16x8Mv(
                     &mut *pMbCache,
                     iIdx,
                     (*pWelsMd).uiRef as i8,
-                    &mut (*pWelsMd).sMe.sMe16x8[i].sMvp as *mut SMVUnitXY,
+                    &mut (*pWelsMd).sMe.sMe16x8[i].sMvp,
                 );
                 MeRefineFracPixel(
                     pEncCtx,
                     pDstLuma.add(g_kuiSmb4AddrIn256[iIdx as usize] as usize),
-                    &mut (*pWelsMd).sMe.sMe16x8[i] as *mut SWelsME,
-                    &mut sMeRefine as *mut SMeRefinePointer,
+                    &mut (*pWelsMd).sMe.sMe16x8[i],
+                    &mut sMeRefine,
+                pBufMe,
                     16,
                     8,
                 );
@@ -1676,7 +1681,7 @@ pub unsafe fn WelsMdInterMbRefinement(
                     pCurMb,
                     iIdx,
                     (*pWelsMd).uiRef as i8,
-                    &mut (*pWelsMd).sMe.sMe16x8[i].sMv as *mut SMVUnitXY,
+                    &mut (*pWelsMd).sMe.sMe16x8[i].sMv,
                 );
                 (*pMbCache).sMbMvp[i] = (*pWelsMd).sMe.sMe16x8[i].sMvp;
                 //save the best cost of final mode
@@ -1686,7 +1691,7 @@ pub unsafe fn WelsMdInterMbRefinement(
                 //chroma
                 let iRefBlk4Stride = ((i as i32) << 2) * iLineSizeRefUV;
                 let iDstBlk4Stride = (i as i32) << 5; // 4*8
-                let pMv = &mut (*pWelsMd).sMe.sMe16x8[i].sMv as *mut SMVUnitXY;
+                let pMv = &mut (*pWelsMd).sMe.sMe16x8[i].sMv;
                 let iMvStride =
                     ((*pMv).iMvY as i32 >> 3) * iLineSizeRefUV + ((*pMv).iMvX as i32 >> 3);
                 let pTmpRefCb = pRefCb.offset((iRefBlk4Stride + iMvStride) as isize);
@@ -1704,19 +1709,20 @@ pub unsafe fn WelsMdInterMbRefinement(
             for i in 0..2usize {
                 //luma
                 let iIdx = (i as i32) << 2;
-                InitMeRefinePointer(&mut sMeRefine as *mut SMeRefinePointer, &mut *pMbCache, iPixStride);
+                InitMeRefinePointer(&mut sMeRefine, iPixStride);
                 iPixStride += ME_REFINE_BUF_WIDTH_BLK8;
                 PredInter8x16Mv(
                     &mut *pMbCache,
                     iIdx,
                     (*pWelsMd).uiRef as i8,
-                    &mut (*pWelsMd).sMe.sMe8x16[i].sMvp as *mut SMVUnitXY,
+                    &mut (*pWelsMd).sMe.sMe8x16[i].sMvp,
                 );
                 MeRefineFracPixel(
                     pEncCtx,
                     pDstLuma.add(g_kuiSmb4AddrIn256[iIdx as usize] as usize),
-                    &mut (*pWelsMd).sMe.sMe8x16[i] as *mut SWelsME,
-                    &mut sMeRefine as *mut SMeRefinePointer,
+                    &mut (*pWelsMd).sMe.sMe8x16[i],
+                    &mut sMeRefine,
+                pBufMe,
                     8,
                     16,
                 );
@@ -1725,7 +1731,7 @@ pub unsafe fn WelsMdInterMbRefinement(
                     pCurMb,
                     iIdx,
                     (*pWelsMd).uiRef as i8,
-                    &mut (*pWelsMd).sMe.sMe8x16[i].sMv as *mut SMVUnitXY,
+                    &mut (*pWelsMd).sMe.sMe8x16[i].sMv,
                 );
                 (*pMbCache).sMbMvp[i] = (*pWelsMd).sMe.sMe8x16[i].sMvp;
                 //save the best cost of final mode
@@ -1734,7 +1740,7 @@ pub unsafe fn WelsMdInterMbRefinement(
 
                 //chroma
                 let iRefBlk4Stride = iIdx; //4
-                let pMv = &mut (*pWelsMd).sMe.sMe8x16[i].sMv as *mut SMVUnitXY;
+                let pMv = &mut (*pWelsMd).sMe.sMe8x16[i].sMv;
                 let iMvStride =
                     ((*pMv).iMvY as i32 >> 3) * iLineSizeRefUV + ((*pMv).iMvX as i32 >> 3);
                 let pTmpRefCb = pRefCb.offset((iRefBlk4Stride + iMvStride) as isize);
@@ -1757,23 +1763,20 @@ pub unsafe fn WelsMdInterMbRefinement(
                     SUB_MB_TYPE_8x8 => {
                         sMeRefine.pfCopyBlockByMode = (*pFunc).pfCopy8x8Aligned;
                         //luma
-                        InitMeRefinePointer(
-                            &mut sMeRefine as *mut SMeRefinePointer,
-                            &mut *pMbCache,
-                            g_kiPixStrideIdx8x8[i],
-                        );
+                        InitMeRefinePointer(&mut sMeRefine, g_kiPixStrideIdx8x8[i]);
                         PredMv(
                             &(*pMbCache).sMvComponents as *const SMVComponentUnit,
                             iBlk8Idx as i8,
                             2,
                             (*pWelsMd).uiRef as i32,
-                            &mut (*pWelsMd).sMe.sMe8x8[i].sMvp as *mut SMVUnitXY,
+                            &mut (*pWelsMd).sMe.sMe8x8[i].sMvp,
                         );
                         MeRefineFracPixel(
                             pEncCtx,
                             pDstLuma.add(g_kuiSmb4AddrIn256[iBlk8Idx as usize] as usize),
-                            &mut (*pWelsMd).sMe.sMe8x8[i] as *mut SWelsME,
-                            &mut sMeRefine as *mut SMeRefinePointer,
+                            &mut (*pWelsMd).sMe.sMe8x8[i],
+                            &mut sMeRefine,
+                pBufMe,
                             8,
                             8,
                         );
@@ -1782,7 +1785,7 @@ pub unsafe fn WelsMdInterMbRefinement(
                             pCurMb,
                             iBlk8Idx,
                             (*pWelsMd).uiRef as i8,
-                            &mut (*pWelsMd).sMe.sMe8x8[i].sMv as *mut SMVUnitXY,
+                            &mut (*pWelsMd).sMe.sMe8x8[i].sMv,
                         );
                         (*pMbCache).sMbMvp[g_kuiMbCountScan4Idx[iBlk8Idx as usize] as usize] =
                             (*pWelsMd).sMe.sMe8x8[i].sMvp;
@@ -1790,7 +1793,7 @@ pub unsafe fn WelsMdInterMbRefinement(
                         iBestSatdCost += (*pWelsMd).sMe.sMe8x8[i].uiSatdCost as i32;
 
                         //chroma
-                        let pMv = &mut (*pWelsMd).sMe.sMe8x8[i].sMv as *mut SMVUnitXY;
+                        let pMv = &mut (*pWelsMd).sMe.sMe8x8[i].sMv;
                         let iMvStride =
                             ((*pMv).iMvY as i32 >> 3) * iLineSizeRefUV + ((*pMv).iMvX as i32 >> 3);
 
@@ -1829,23 +1832,20 @@ pub unsafe fn WelsMdInterMbRefinement(
                         //luma
                         for j in 0..4usize {
                             let iBlk4x4Idx = iBlk8Idx + j as i32;
-                            InitMeRefinePointer(
-                                &mut sMeRefine as *mut SMeRefinePointer,
-                                &mut *pMbCache,
-                                g_kiPixStrideIdx4x4[i][j],
-                            );
+                            InitMeRefinePointer(&mut sMeRefine, g_kiPixStrideIdx4x4[i][j]);
                             PredMv(
                                 &(*pMbCache).sMvComponents as *const SMVComponentUnit,
                                 iBlk4x4Idx as i8,
                                 1,
                                 (*pWelsMd).uiRef as i32,
-                                &mut (*pWelsMd).sMe.sMe4x4[i][j].sMvp as *mut SMVUnitXY,
+                                &mut (*pWelsMd).sMe.sMe4x4[i][j].sMvp,
                             );
                             MeRefineFracPixel(
                                 pEncCtx,
                                 pDstLuma.add(g_kuiSmb4AddrIn256[iBlk4x4Idx as usize] as usize),
-                                &mut (*pWelsMd).sMe.sMe4x4[i][j] as *mut SWelsME,
-                                &mut sMeRefine as *mut SMeRefinePointer,
+                                &mut (*pWelsMd).sMe.sMe4x4[i][j],
+                                &mut sMeRefine,
+                pBufMe,
                                 4,
                                 4,
                             );
@@ -1854,7 +1854,7 @@ pub unsafe fn WelsMdInterMbRefinement(
                                 pCurMb,
                                 iBlk4x4Idx,
                                 (*pWelsMd).uiRef as i8,
-                                &mut (*pWelsMd).sMe.sMe4x4[i][j].sMv as *mut SMVUnitXY,
+                                &mut (*pWelsMd).sMe.sMe4x4[i][j].sMv,
                             );
                             (*pMbCache).sMbMvp
                                 [g_kuiMbCountScan4Idx[iBlk4x4Idx as usize] as usize] =
@@ -1863,7 +1863,7 @@ pub unsafe fn WelsMdInterMbRefinement(
                             iBestSatdCost += (*pWelsMd).sMe.sMe4x4[i][j].uiSatdCost as i32;
 
                             //chroma
-                            let pMv = &mut (*pWelsMd).sMe.sMe4x4[i][j].sMv as *mut SMVUnitXY;
+                            let pMv = &mut (*pWelsMd).sMe.sMe4x4[i][j].sMv;
                             let iMvStride = ((*pMv).iMvY as i32 >> 3) * iLineSizeRefUV
                                 + ((*pMv).iMvX as i32 >> 3);
 
@@ -1903,23 +1903,20 @@ pub unsafe fn WelsMdInterMbRefinement(
                         //luma
                         for j in 0..2usize {
                             let iBlk4x4Idx = iBlk8Idx + ((j as i32) << 1);
-                            InitMeRefinePointer(
-                                &mut sMeRefine as *mut SMeRefinePointer,
-                                &mut *pMbCache,
-                                g_kiPixStrideIdx4x4[i][j << 1],
-                            );
+                            InitMeRefinePointer(&mut sMeRefine, g_kiPixStrideIdx4x4[i][j << 1]);
                             PredMv(
                                 &(*pMbCache).sMvComponents as *const SMVComponentUnit,
                                 iBlk4x4Idx as i8,
                                 2,
                                 (*pWelsMd).uiRef as i32,
-                                &mut (*pWelsMd).sMe.sMe8x4[i][j].sMvp as *mut SMVUnitXY,
+                                &mut (*pWelsMd).sMe.sMe8x4[i][j].sMvp,
                             );
                             MeRefineFracPixel(
                                 pEncCtx,
                                 pDstLuma.add(g_kuiSmb4AddrIn256[iBlk4x4Idx as usize] as usize),
-                                &mut (*pWelsMd).sMe.sMe8x4[i][j] as *mut SWelsME,
-                                &mut sMeRefine as *mut SMeRefinePointer,
+                                &mut (*pWelsMd).sMe.sMe8x4[i][j],
+                                &mut sMeRefine,
+                pBufMe,
                                 8,
                                 4,
                             );
@@ -1928,7 +1925,7 @@ pub unsafe fn WelsMdInterMbRefinement(
                                 pCurMb,
                                 iBlk4x4Idx,
                                 (*pWelsMd).uiRef as i8,
-                                &mut (*pWelsMd).sMe.sMe8x4[i][j].sMv as *mut SMVUnitXY,
+                                &mut (*pWelsMd).sMe.sMe8x4[i][j].sMv,
                             );
                             (*pMbCache).sMbMvp
                                 [g_kuiMbCountScan4Idx[iBlk4x4Idx as usize] as usize] =
@@ -1937,7 +1934,7 @@ pub unsafe fn WelsMdInterMbRefinement(
                             iBestSatdCost += (*pWelsMd).sMe.sMe8x4[i][j].uiSatdCost as i32;
 
                             //chroma
-                            let pMv = &mut (*pWelsMd).sMe.sMe8x4[i][j].sMv as *mut SMVUnitXY;
+                            let pMv = &mut (*pWelsMd).sMe.sMe8x4[i][j].sMv;
                             let iMvStride = ((*pMv).iMvY as i32 >> 3) * iLineSizeRefUV
                                 + ((*pMv).iMvX as i32 >> 3);
 
@@ -1977,23 +1974,20 @@ pub unsafe fn WelsMdInterMbRefinement(
                         //luma
                         for j in 0..2usize {
                             let iBlk4x4Idx = iBlk8Idx + j as i32;
-                            InitMeRefinePointer(
-                                &mut sMeRefine as *mut SMeRefinePointer,
-                                &mut *pMbCache,
-                                g_kiPixStrideIdx4x4[i][j],
-                            );
+                            InitMeRefinePointer(&mut sMeRefine, g_kiPixStrideIdx4x4[i][j]);
                             PredMv(
                                 &(*pMbCache).sMvComponents as *const SMVComponentUnit,
                                 iBlk4x4Idx as i8,
                                 1,
                                 (*pWelsMd).uiRef as i32,
-                                &mut (*pWelsMd).sMe.sMe4x8[i][j].sMvp as *mut SMVUnitXY,
+                                &mut (*pWelsMd).sMe.sMe4x8[i][j].sMvp,
                             );
                             MeRefineFracPixel(
                                 pEncCtx,
                                 pDstLuma.add(g_kuiSmb4AddrIn256[iBlk4x4Idx as usize] as usize),
-                                &mut (*pWelsMd).sMe.sMe4x8[i][j] as *mut SWelsME,
-                                &mut sMeRefine as *mut SMeRefinePointer,
+                                &mut (*pWelsMd).sMe.sMe4x8[i][j],
+                                &mut sMeRefine,
+                pBufMe,
                                 4,
                                 8,
                             );
@@ -2002,7 +1996,7 @@ pub unsafe fn WelsMdInterMbRefinement(
                                 pCurMb,
                                 iBlk4x4Idx,
                                 (*pWelsMd).uiRef as i8,
-                                &mut (*pWelsMd).sMe.sMe4x8[i][j].sMv as *mut SMVUnitXY,
+                                &mut (*pWelsMd).sMe.sMe4x8[i][j].sMv,
                             );
                             (*pMbCache).sMbMvp
                                 [g_kuiMbCountScan4Idx[iBlk4x4Idx as usize] as usize] =
@@ -2011,7 +2005,7 @@ pub unsafe fn WelsMdInterMbRefinement(
                             iBestSatdCost += (*pWelsMd).sMe.sMe4x8[i][j].uiSatdCost as i32;
 
                             //chroma
-                            let pMv = &mut (*pWelsMd).sMe.sMe4x8[i][j].sMv as *mut SMVUnitXY;
+                            let pMv = &mut (*pWelsMd).sMe.sMe4x8[i][j].sMv;
                             let iMvStride = ((*pMv).iMvY as i32 >> 3) * iLineSizeRefUV
                                 + ((*pMv).iMvX as i32 >> 3);
 
@@ -2214,7 +2208,7 @@ pub unsafe fn WelsMdInterDoubleCheckPskip(pCurMb: &mut SMB, pMbCache: &mut SMbCa
         if 0 == (*pCurMb).iRefIndex[0] {
             let mut sMvp = SMVUnitXY { iMvX: 0, iMvY: 0 };
 
-            PredSkipMv(&mut *pMbCache, &mut sMvp as *mut SMVUnitXY);
+            PredSkipMv(&mut *pMbCache, &mut sMvp);
             if LD32_MV_PUB(&sMvp) == LD32_MV_PUB(&(*pCurMb).sMv[0]) {
                 (*pCurMb).uiMbType = MB_TYPE_SKIP;
             }

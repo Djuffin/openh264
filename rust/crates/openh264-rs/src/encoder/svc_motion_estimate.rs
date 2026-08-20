@@ -305,13 +305,13 @@ pub type PSampleSadHor8Func = unsafe extern "C" fn(
 pub type PMotionSearchFunc = unsafe extern "C" fn(
     pFuncList: *mut SWelsFuncPtrList,
     pCurDqLayer: *mut SDqLayer,
-    pMe: *mut SWelsME,
+    pMe: &mut SWelsME,
     pSlice: *mut SSlice,
 );
 
 pub type PSearchMethodFunc = unsafe extern "C" fn(
     pFuncList: *mut SWelsFuncPtrList,
-    pMe: *mut SWelsME,
+    pMe: &mut SWelsME,
     pSlice: *mut SSlice,
     kiEncStride: i32,
     kiRefStride: i32,
@@ -319,14 +319,14 @@ pub type PSearchMethodFunc = unsafe extern "C" fn(
 
 pub type PCalculateSatdFunc = unsafe extern "C" fn(
     pSatd: Option<PSampleSadSatdCostFunc>,
-    pMe: *mut SWelsME,
+    pMe: &mut SWelsME,
     kiEncStride: i32,
     kiRefStride: i32,
 );
 
 pub type PCheckDirectionalMv = unsafe extern "C" fn(
     pSad: Option<PSampleSadSatdCostFunc>,
-    pMe: *mut SWelsME,
+    pMe: &mut SWelsME,
     ksMinMv: SMVUnitXY,
     ksMaxMv: SMVUnitXY,
     kiEncStride: i32,
@@ -336,7 +336,7 @@ pub type PCheckDirectionalMv = unsafe extern "C" fn(
 
 pub type PLineFullSearchFunc = unsafe extern "C" fn(
     pFuncList: *mut SWelsFuncPtrList,
-    pMe: *mut SWelsME,
+    pMe: &mut SWelsME,
     pMvdTable: *mut u16,
     kiEncStride: i32,
     kiRefStride: i32,
@@ -393,7 +393,7 @@ pub unsafe fn UpdateMeResults(
     ksBestMv: SMVUnitXY,
     kiBestSadCost: u32,
     pRef: *mut u8,
-    pMe: *mut SWelsME,
+    pMe: &mut SWelsME,
 ) {
     unsafe {
         (*pMe).sMv = ksBestMv;
@@ -403,7 +403,7 @@ pub unsafe fn UpdateMeResults(
 }
 
 #[inline]
-pub unsafe fn MeEndIntepelSearch(pMe: *mut SWelsME) {
+pub unsafe fn MeEndIntepelSearch(pMe: &mut SWelsME) {
     unsafe {
         (*pMe).sMv.iMvX *= 1 << 2;
         (*pMe).sMv.iMvY *= 1 << 2;
@@ -429,8 +429,8 @@ pub unsafe fn SetMvWithinIntegerMvRange(
     kiMbX: i32,
     kiMbY: i32,
     kiMaxMvRange: i32,
-    pMvMin: *mut SMVUnitXY,
-    pMvMax: *mut SMVUnitXY,
+    pMvMin: &mut SMVUnitXY,
+    pMvMax: &mut SMVUnitXY,
 ) {
     unsafe {
         (*pMvMin).iMvX = ((-1 * ((kiMbX + 1) * (1 << 4)) + INTPEL_NEEDED_MARGIN)).max(-1 * kiMaxMvRange) as i16;
@@ -508,7 +508,7 @@ pub unsafe extern "C" fn WelsInitMeFunc(
 pub unsafe extern "C" fn WelsMotionEstimateSearch(
     pFuncList: *mut SWelsFuncPtrList,
     pCurDqLayer: *mut SDqLayer,
-    pMe: *mut SWelsME,
+    pMe: &mut SWelsME,
     pSlice: *mut SSlice,
 ) {
     unsafe {
@@ -591,7 +591,7 @@ pub unsafe extern "C" fn WelsMotionEstimateSearch(
 pub unsafe extern "C" fn WelsMotionEstimateSearchStatic(
     pFuncList: *mut SWelsFuncPtrList,
     pCurDqLayer: *mut SDqLayer,
-    pMe: *mut SWelsME,
+    pMe: &mut SWelsME,
     _pSlice: *mut SSlice,
 ) {
     unsafe {
@@ -625,7 +625,7 @@ pub unsafe extern "C" fn WelsMotionEstimateSearchStatic(
 pub unsafe extern "C" fn WelsMotionEstimateSearchScrolled(
     pFuncList: *mut SWelsFuncPtrList,
     pCurDqLayer: *mut SDqLayer,
-    pMe: *mut SWelsME,
+    pMe: &mut SWelsME,
     _pSlice: *mut SSlice,
 ) {
     unsafe {
@@ -669,7 +669,7 @@ pub unsafe extern "C" fn WelsMotionEstimateSearchScrolled(
 /// Evaluates spatial MVP, MVC candidate list, and directional scrolling vectors.
 pub unsafe extern "C" fn WelsMotionEstimateInitialPoint(
     pFuncList: *mut SWelsFuncPtrList,
-    pMe: *mut SWelsME,
+    pMe: &mut SWelsME,
     pSlice: *mut SSlice,
     iStrideEnc: i32,
     iStrideRef: i32,
@@ -753,7 +753,7 @@ pub unsafe extern "C" fn WelsMotionEstimateInitialPoint(
 
 pub unsafe extern "C" fn CalculateSatdCost(
     pSatd: Option<PSampleSadSatdCostFunc>,
-    pMe: *mut SWelsME,
+    pMe: &mut SWelsME,
     kiEncStride: i32,
     kiRefStride: i32,
 ) {
@@ -772,7 +772,7 @@ pub unsafe extern "C" fn CalculateSatdCost(
 
 pub unsafe extern "C" fn NotCalculateSatdCost(
     _pSatd: Option<PSampleSadSatdCostFunc>,
-    _pMe: *mut SWelsME,
+    _pMe: &mut SWelsME,
     _kiEncStride: i32,
     _kiRefStride: i32,
 ) {
@@ -826,7 +826,7 @@ pub unsafe extern "C" fn WelsMeSadCostSelect(
 
 pub unsafe extern "C" fn WelsDiamondSearch(
     pFuncList: *mut SWelsFuncPtrList,
-    pMe: *mut SWelsME,
+    pMe: &mut SWelsME,
     pSlice: *mut SSlice,
     kiStrideEnc: i32,
     kiStrideRef: i32,
@@ -903,7 +903,7 @@ pub unsafe extern "C" fn WelsDiamondSearch(
 
 pub unsafe extern "C" fn CheckDirectionalMv(
     pSad: Option<PSampleSadSatdCostFunc>,
-    pMe: *mut SWelsME,
+    pMe: &mut SWelsME,
     ksMinMv: SMVUnitXY,
     ksMaxMv: SMVUnitXY,
     kiEncStride: i32,
@@ -939,7 +939,7 @@ pub unsafe extern "C" fn CheckDirectionalMv(
 
 pub unsafe extern "C" fn CheckDirectionalMvFalse(
     _pSad: Option<PSampleSadSatdCostFunc>,
-    _pMe: *mut SWelsME,
+    _pMe: &mut SWelsME,
     _ksMinMv: SMVUnitXY,
     _ksMaxMv: SMVUnitXY,
     _kiEncStride: i32,
@@ -955,7 +955,7 @@ pub unsafe extern "C" fn CheckDirectionalMvFalse(
 
 pub unsafe extern "C" fn LineFullSearch_c(
     pFuncList: *mut SWelsFuncPtrList,
-    pMe: *mut SWelsME,
+    pMe: &mut SWelsME,
     pMvdTable: *mut u16,
     kiEncStride: i32,
     kiRefStride: i32,
@@ -1023,7 +1023,7 @@ pub unsafe extern "C" fn LineFullSearch_c(
 
 pub unsafe extern "C" fn WelsMotionCrossSearch(
     pFuncList: *mut SWelsFuncPtrList,
-    pMe: *mut SWelsME,
+    pMe: &mut SWelsME,
     pSlice: *mut SSlice,
     kiEncStride: i32,
     kiRefStride: i32,
@@ -1061,7 +1061,7 @@ pub unsafe extern "C" fn WelsMotionCrossSearch(
 
 pub unsafe extern "C" fn WelsDiamondCrossSearch(
     pFunc: *mut SWelsFuncPtrList,
-    pMe: *mut SWelsME,
+    pMe: &mut SWelsME,
     pSlice: *mut SSlice,
     kiEncStride: i32,
     kiRefStride: i32,
@@ -1082,7 +1082,7 @@ pub unsafe extern "C" fn WelsDiamondCrossSearch(
 // SCREEN_CONTENT(dormant: Phase 10)
 pub unsafe extern "C" fn WelsDiamondCrossFeatureSearch(
     pFunc: *mut SWelsFuncPtrList,
-    pMe: *mut SWelsME,
+    pMe: &mut SWelsME,
     pSlice: *mut SSlice,
     kiEncStride: i32,
     kiRefStride: i32,
@@ -1482,7 +1482,7 @@ pub unsafe fn FeatureSearchOne(
 pub unsafe extern "C" fn MotionEstimateFeatureFullSearch(
     sFeatureSearchIn: SFeatureSearchIn,
     kuiMaxSearchPoint: u32,
-    pMe: *mut SWelsME,
+    pMe: &mut SWelsME,
 ) {
     unsafe {
         let mut sFeatureSearchOut = SFeatureSearchOut {

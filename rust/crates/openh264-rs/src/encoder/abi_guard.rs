@@ -24,7 +24,7 @@ use crate::encoder::nal_encap::SWelsNalRaw;
 use crate::encoder::param_svc::{SSpsSvcExt, SSubsetSps, SWelsPPS, SWelsSPS};
 use crate::common::mc::SMcFunc;
 use crate::encoder::encoder_context::{sWelsEncCtx, SLTRState, SSpatialPicIndex, SStrideTables};
-use crate::encoder::md::{SMB, SMbCache, SSampleDealingFunc, SWelsMD};
+use crate::encoder::md::{SMB, SMbCache, SMeRefinePointer, SSampleDealingFunc, SWelsMD};
 use crate::encoder::svc_encode_slice::{SDqLayer, SLayerInfo, SSlice, SSliceBufferInfo};
 use crate::encoder::picture::{SPicture, SScreenBlockFeatureStorage};
 use crate::encoder::param_svc::{SSpatialLayerInternal, SWelsSvcCodingParam};
@@ -185,6 +185,15 @@ assert_size!(SMbCache, 5600);
 // alignment falls from 8 to 4. **208, measured.** The number tracks the port from
 // here, exactly as `SWelsFuncPtrList`'s does.
 assert_size!(SMB, 208);
+// **T6.E3**: newly pinned, because the record's shape changed. `SMeRefinePointer`
+// was five raw byte pointers plus a function pointer — 48 bytes — and is now `iStride` +
+// `iHalfPixHV` (two `usize` offsets into `SMbCache.sBufferInterPredMe`), the
+// `bQuarPixSwapped` selector that replaced the `pQuarPixBest`/`pQuarPixTmp`
+// `mem::swap`, and the same function pointer. **32, measured.** It is stack-local
+// with one builder, so this pin is a shape record rather than an ABI one — which is
+// exactly why it should exist: the next session to touch the record sees the number
+// move.
+assert_size!(SMeRefinePointer, 32);
 assert_size!(SLayerInfo, 48);
 
 // codec/encoder/core/inc/slice.h. `assert_size!(SSlice, 1584)` was here — see the

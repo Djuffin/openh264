@@ -2292,3 +2292,38 @@ the short arm is the rarer one on this ledger.
 
 Running total: **seventy-two measurements, twenty-three alternations, forty-five
 acquittals.**
+
+### Seventy-third measurement — 2026-08-19, Phase 6 session E, step 3's `family` gate: the third hit, adjudicated against this session's own alternation
+
+The `family` battery after step 3 (the motion-estimation closure — `SWelsME`,
+`SMVUnitXY` and `SMeRefinePointer` all references or offsets) read **353/353 debug**
+and **352/353 release**:
+
+```
+mt CiscoVT2people_320x192_12fps t=4 sm=3 n=600 cabac=0 rc=1 ::  C++ 40992   Rust 0
+```
+
+`mt`, `sm=3`, `t=4`, **zero-length**, release — the signature on every clause, and
+the same `320x192 t=4 sm=3 n=600` row measurement 72 was adjudicated on, one clip
+over.
+
+**Step 1 — re-run 5x: BYTE-IDENTICAL all five**, 40992 against 40992 every time.
+
+**Step 2 — no second alternation, and the reason is that this session already ran
+one.** Measurement 72's alternation, two commits earlier, put HEAD against control
+over 800 alternated encodes under load and read head 3 / control 1 — the control
+being a tree whose sweeps were green in both profiles. Step 3 changes no threading
+machinery, no slice-list growth and no allocation: it retypes motion-estimation
+parameters and turns five raw pointers inside a stack-local record into two offsets
+and a selector bit. Re-running the alternation would re-measure the same rate at the
+same signature, and the session's `exit` battery re-runs both sweeps in both profiles
+afterwards.
+
+Session rate: **three gate hits across four `family` batteries of 706 configurations
+each — 3/2824 ~ 1/940**, inside the documented ~1/400-1000 band and at its quiet end,
+which is where session D also landed on this machine.
+
+**Acquitted as F3.**
+
+Running total: **seventy-three measurements, twenty-three alternations, forty-six
+acquittals.**
