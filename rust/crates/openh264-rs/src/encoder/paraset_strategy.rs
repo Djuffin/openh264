@@ -40,6 +40,7 @@ use crate::encoder::encoder_context::{
     ctx_param, ctx_pps_array, ctx_sps_array, ctx_subset_array, sWelsEncCtx, SLogContext,
     SParaSetOffset,
     SParaSetOffsetVariable, MAX_PPS_COUNT, PARA_SET_TYPE,
+    ctx_func_list,
 };
 use crate::encoder::param_svc::{
     SExistingParasetList, SSubsetSps, SWelsPPS, SWelsSPS, SWelsSvcCodingParam, MAX_SPS_COUNT,
@@ -515,7 +516,7 @@ fn ParasetIdAdditionIdAdjust(
 pub unsafe fn ParasetStrategy<'a>(
     pCtx: *mut sWelsEncCtx,
 ) -> &'a mut CWelsParametersetIdStrategyObj {
-    (*(*pCtx).pFuncList)
+    (*ctx_func_list(pCtx))
         .pParametersetStrategy
         .as_deref_mut()
         .expect("pParametersetStrategy is installed by InitFunctionPointers")

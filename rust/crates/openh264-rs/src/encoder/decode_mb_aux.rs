@@ -495,7 +495,7 @@ mod tests {
         // Zeroing this table is sound for the reason its own `Default` gives
         // (`wels_func_ptr_def.rs`, S21); session I converts both with the dispatch
         // tables. T6.H12 enumerated it here rather than leaving it to a grep.
-        let mut fl: SWelsFuncPtrList = unsafe { core::mem::zeroed() };
+        let mut fl = SWelsFuncPtrList::default();
         unsafe { WelsInitReconstructionFuncs(&mut fl, 0) };
         assert!(fl.pfDequantization4x4.is_some());
         assert!(fl.pfDequantizationFour4x4.is_some());

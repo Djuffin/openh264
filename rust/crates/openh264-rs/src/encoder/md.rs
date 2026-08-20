@@ -42,6 +42,7 @@
 )]
 
 pub use crate::encoder::encoder_context::SMVUnitXY;
+use crate::encoder::encoder_context::ctx_func_list;
 pub use crate::encoder::encoder_context::SMVComponentUnit;
 pub use crate::encoder::picture::SPicture;
 pub use crate::encoder::svc_motion_estimate::SWelsME;
@@ -1320,7 +1321,7 @@ pub unsafe extern "C" fn MdIntraAnalysisVaaInfo(
 ) -> bool {
     let pCurDqLayer = current_layer(pEncCtx);
     let kiLineSize = (*pCurDqLayer).iEncStride[0];
-    let pfGetVariance = (*(*pEncCtx).pFuncList).pfGetVarianceFromIntraVaa.unwrap();
+    let pfGetVariance = (*ctx_func_list(pEncCtx)).pfGetVarianceFromIntraVaa.unwrap();
     let kiVariance = pfGetVariance(pEncMb, kiLineSize);
     kiVariance >= INTRA_VARIANCE_SAD_THRESHOLD
 }
@@ -1444,7 +1445,7 @@ pub unsafe extern "C" fn MeRefineFracPixel(
     iWidth: i32,
     iHeight: i32,
 ) {
-    let pFunc = (*pEncCtx).pFuncList;
+    let pFunc = ctx_func_list(pEncCtx);
     let iMvx = (*pMe).sMv.iMvX;
     let iMvy = (*pMe).sMv.iMvY;
 

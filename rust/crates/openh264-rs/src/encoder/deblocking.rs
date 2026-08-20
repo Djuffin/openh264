@@ -294,6 +294,7 @@ pub struct tagDeblockingFunc {
 pub type DeblockingFunc = tagDeblockingFunc;
 
 pub use crate::encoder::encoder_context::{SPicture, SWelsFuncPtrList, sWelsEncCtx};
+use crate::encoder::encoder_context::ctx_func_list;
 pub use crate::encoder::svc_encode_slice::{SDqLayer, SSlice};
 
 // ============================================================================
@@ -1450,13 +1451,13 @@ pub unsafe extern "C" fn PerformDeblockingFilter(pEnc: *mut sWelsEncCtx) {
     }
 
     if (*pCurLayer).iLoopFilterDisableIdc == 0 {
-        DeblockingFilterFrameAvcbase(pCurLayer, (*pEnc).pFuncList);
+        DeblockingFilterFrameAvcbase(pCurLayer, ctx_func_list(pEnc));
     } else if (*pCurLayer).iLoopFilterDisableIdc == 2 {
         let iSliceCount = GetCurrentSliceNum(pCurLayer);
         for iSliceIdx in 0..iSliceCount {
             let pSlice = crate::encoder::svc_encode_slice::slice_in_layer(pCurLayer, iSliceIdx);
             if !pSlice.is_null() {
-                DeblockingFilterSliceAvcbase(pCurLayer, (*pEnc).pFuncList, pSlice);
+                DeblockingFilterSliceAvcbase(pCurLayer, ctx_func_list(pEnc), pSlice);
             }
         }
     }

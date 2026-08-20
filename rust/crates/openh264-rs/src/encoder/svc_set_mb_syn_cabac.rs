@@ -42,6 +42,7 @@
 //! `codec/encoder/core/inc/svc_set_mb_syn.h`, and `codec/encoder/core/inc/set_mb_syn_cabac.h`.
 
 pub use crate::encoder::encoder_context::SMVUnitXY;
+use crate::encoder::encoder_context::ctx_func_list;
 pub use crate::encoder::encoder_context::SDCTCoeff;
 pub use crate::encoder::encoder_context::SMVComponentUnit;
 
@@ -1226,7 +1227,7 @@ pub unsafe fn WelsSpatialWriteMbSynCabac(
                 WelsCabacMbCbp(buf, pCurMb, iMbWidth, &mut *pCabacCtx);
             }
 
-            let pFuncList = (*pEncCtx).pFuncList as *mut SWelsFuncPtrList;
+            let pFuncList = ctx_func_list(pEncCtx);
             iRet = WelsWriteMbResidualCabac(
                 buf,
                 pFuncList,

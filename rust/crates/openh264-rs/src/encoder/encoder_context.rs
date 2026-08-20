@@ -628,6 +628,23 @@ pub unsafe fn ctx_param(pCtx: *mut sWelsEncCtx) -> *mut SWelsSvcCodingParam {
     }
 }
 
+/// The encoder's **kernel dispatch table** — T6.I1, and never null: the context
+/// owns the `Box` from its constructor on.
+///
+/// Same spelling as [`ctx_param`]: the `Box`'s address is read without forming a
+/// reference to the table, so repeated calls are sibling derivations rather than
+/// nested ones. That is what this session needs it for — the table is **re-written
+/// mid-stream** (`SetFastCodingFunc` / `SetNormalCodingFunc` run per frame), so a
+/// reader may not hold anything derived from it across a call that can reach it
+/// again, and every reader deriving its own sibling is how that stays true.
+///
+/// # Safety
+/// `pCtx` must point to a live encoder context.
+#[inline]
+pub unsafe fn ctx_func_list(pCtx: *mut sWelsEncCtx) -> *mut SWelsFuncPtrList {
+    &raw mut *(*pCtx).pFuncList
+}
+
 /// The frame's **video-analysis block** — T6.H10, and null before the preprocessor
 /// builds one, which is what the raw field held.
 ///
@@ -942,7 +959,18 @@ pub struct sWelsEncCtx {
     /// the drop that replaces both frees is the context's own — see the field's
     /// accessors, [`ctx_stride_enc_block_offset`] and its three siblings.
     pub pStrideTab: Option<Box<SStrideTables>>,
-    pub pFuncList: *mut SWelsFuncPtrList,
+    /// **T6.I1 — owned.** The kernel dispatch table, `WelsMallocz`'d at
+    /// `WelsInitEncoderExt` and `WelsFree`'d in the teardown cascade until this
+    /// session; the context owns the `Box` and it drops with the context.
+    ///
+    /// A plain `Box`, not an `Option<Box<_>>` like [`pSvcParam`](Self::pSvcParam):
+    /// the table has no "not built yet" state worth modelling. Its `Default` is
+    /// every slot `None`, which is bit-for-bit the image `WelsMallocz` produced,
+    /// so the context is born with the same table the C++ memsets and
+    /// `InitFunctionPointers` writes over it exactly as before. Every null check
+    /// on the *field* dies with the null; the checks on raw table *parameters*
+    /// stay, because the survivors still take one. Root: [`ctx_func_list`].
+    pub pFuncList: Box<SWelsFuncPtrList>,
     pub pSliceThreading: *mut SSliceThreading,
     pub pTaskManage: *mut c_void,
     /// `IWelsReferenceStrategy*` in C++ (`encoder_context.h`); **T4b.2b** made it
@@ -1162,7 +1190,7 @@ impl sWelsEncCtx {
             iMvdCostTableSize: 0,           // paired with the table above
             iMvdCostTableStride: 0,
             pStrideTab: None,
-            pFuncList: std::ptr::null_mut(),
+            pFuncList: Box::new(SWelsFuncPtrList::default()),
             pSliceThreading: std::ptr::null_mut(),
             pTaskManage: std::ptr::null_mut(),
 
@@ -1436,10 +1464,12 @@ pub unsafe fn InitFunctionPointers(
     pParam: *mut SWelsSvcCodingParam,
     _uiCpuFlag: u32,
 ) -> i32 {
-    if pEncCtx.is_null() || pParam.is_null() || (*pEncCtx).pFuncList.is_null() {
+    // A third arm testing the table for null was here; T6.I1 made it an owned
+    // `Box`, so there is no null to test.
+    if pEncCtx.is_null() || pParam.is_null() {
         return ENC_RETURN_SUCCESS;
     }
-    let pFuncList = (*pEncCtx).pFuncList;
+    let pFuncList = ctx_func_list(pEncCtx);
 
     let bScreenContent = (*pParam).iUsageType == crate::api::codec_api::EUsageType::SCREEN_CONTENT_REAL_TIME;
 
@@ -2239,9 +2269,16 @@ mod tests {
         // the empty container, which is the null the raw pointer held, and which
         // `ctx_sps_array` and its siblings answer as null so that every downstream
         // `is_null()` guard still asks its question.
-        const OWNED: [&str; 10] = [
+        const OWNED: [&str; 11] = [
             "pSpsArray", "pSubsetArray", "pPPSArray", "pDqIdcMap", "pFrameBs", "pLtr",
             "pWelsSvcRc", "ppRefPicListExt", "ppDqLayerList", "pMvdCostTable",
+            // **T6.I1.** `pFuncList` joined this tier when it became a `Box`. It is
+            // the one owned field whose empty state is not "no elements" — a `Box`
+            // is always inhabited — so what tier 3 asserts for it is the *content*:
+            // the table `new()` builds is the uninstalled table, which is the image
+            // `WelsMallocz` used to hand back. That is the whole behavioural claim
+            // of T6.I1, and it is asserted below rather than assumed.
+            "pFuncList",
         ];
         // `pVaa` is `Option<Box<_>>`: its `None` is the null pointer and defines all
         // eight of its bytes, so it stays in tier 1 with `pStrideTab`.
@@ -2255,6 +2292,44 @@ mod tests {
         assert!(built.ppRefPicListExt.is_empty(), "new(): no reference lists are allocated yet");
         assert!(built.ppDqLayerList.is_empty(), "new(): no DQ layers are allocated yet");
         assert!(built.pMvdCostTable.is_empty(), "new(): no MVD cost table is allocated yet");
+
+        // `pFuncList`: not "empty" — uninstalled. One assertion per *kind* of member
+        // the table has, which is what makes this a statement about the whole struct
+        // rather than about the fields that happened to get written down: a leading
+        // and a trailing plain slot, each of the three predictor arrays, the two
+        // embedded POD sub-tables, both enum discriminants, and the owned box.
+        // Field for field the claim is `SWelsFuncPtrList::default()`'s own
+        // definition; the three `init_fills_*` tests pin what gets written on top.
+        let fl = &*built.pFuncList;
+        assert!(fl.pfFillInterNeighborCache.is_none(), "new(): the table is uninstalled");
+        assert!(fl.pfCavlcParamCal.is_none(), "new(): the table is uninstalled");
+        assert!(fl.pfGetLumaI16x16Pred.iter().all(Option::is_none), "new(): no I16x16 predictors");
+        assert!(fl.pfGetLumaI4x4Pred.iter().all(Option::is_none), "new(): no I4x4 predictors");
+        assert!(fl.pfGetChromaPred.iter().all(Option::is_none), "new(): no chroma predictors");
+        assert!(fl.pfMotionSearch.iter().all(Option::is_none), "new(): no motion search");
+        assert!(fl.pfSearchMethod.iter().all(Option::is_none), "new(): no search method");
+        assert!(fl.sMcFuncs.pMcLumaFunc.is_none(), "new(): no motion compensation");
+        assert!(
+            fl.sSampleDealingFuncs.pfSampleSad.iter().all(Option::is_none)
+                && fl.sSampleDealingFuncs.pfMdCost == crate::encoder::md::CostFamily::Unset
+                && fl.sSampleDealingFuncs.pfMeCost == crate::encoder::md::CostFamily::Unset,
+            "new(): no sample-dealing kernels, and neither cost family is selected"
+        );
+        assert!(
+            fl.pfDeblocking.pfDeblockingBSCalc.is_none()
+                && fl.pfDeblocking.pfDeblockingFilterSlice.is_none(),
+            "new(): no deblocking kernels"
+        );
+        // The two discriminants whose zero *is* a declared variant — which is what
+        // made the old memset-image constructor sound, and is now stated by
+        // `Default` writing the variant out.
+        assert_eq!(fl.eEntropyCoder, EntropyCoder::Cavlc, "new(): the memset's entropy coder");
+        assert_eq!(
+            fl.pfRc.eInstalledMode,
+            crate::api::codec_api::RC_MODES::RC_QUALITY_MODE,
+            "new(): the memset's rate-control mode"
+        );
+        assert!(fl.pParametersetStrategy.is_none(), "new(): no paraset strategy is installed yet");
 
         // ---- tier 2: the F64 fields, excluded by name and asserted by value ----
         const BY_VALUE: [&str; 10] = [
@@ -2459,17 +2534,21 @@ mod tests {
     #[test]
     fn test_init_function_pointers() {
         unsafe {
-            let mut func_list = SWelsFuncPtrList::default();
             let mut param = SWelsSvcCodingParam::default();
             let mut ctx = sWelsEncCtx::default();
-            ctx.pFuncList = &mut func_list;
+            // T6.I1: the context brings its own table, so the fixture no longer
+            // aims the field at a stack one — it reads the context's back out.
             ctx.pSvcParam = Some(Box::new(param.clone()));
 
             let ret = InitFunctionPointers(&mut ctx, &mut param, 0);
             assert_eq!(ret, ENC_RETURN_SUCCESS);
 
-            assert!(func_list.pfDctFourT4.is_some());
-            assert!(func_list.pfIDctFourT4.is_some());
+            // Each assertion reads the table back through its owner rather than
+            // binding a reference to it once. That is not stylistic: the
+            // `InitCoeffFunc` call below *writes* the table, and a `&` held across
+            // it is the exact shape this session's step-1 checker exists to reject.
+            assert!(ctx.pFuncList.pfDctFourT4.is_some());
+            assert!(ctx.pFuncList.pfIDctFourT4.is_some());
             // pfInterMd is deliberately NOT asserted: C++ InitFunctionPointers
             // (encoder.cpp) never sets it. It is assigned per-slice in
             // svc_encode_slice.cpp:733/736. This assertion passed only because the
@@ -2481,11 +2560,11 @@ mod tests {
             // arm goes through `InitCoeffFunc` rather than a second
             // `InitFunctionPointers`, which would allocate a second parameter-set
             // strategy over the first.
-            assert_eq!(func_list.eEntropyCoder, EntropyCoder::Cavlc);
-            InitCoeffFunc(&mut func_list, 0, 1);
-            assert_eq!(func_list.eEntropyCoder, EntropyCoder::Cabac);
+            assert_eq!(ctx.pFuncList.eEntropyCoder, EntropyCoder::Cavlc);
+            InitCoeffFunc(ctx_func_list(&mut ctx), 0, 1);
+            assert_eq!(ctx.pFuncList.eEntropyCoder, EntropyCoder::Cabac);
 
-            assert!(func_list.pfDeblocking.pfDeblockingFilterSlice.is_some());
+            assert!(ctx.pFuncList.pfDeblocking.pfDeblockingFilterSlice.is_some());
         }
     }
 }
