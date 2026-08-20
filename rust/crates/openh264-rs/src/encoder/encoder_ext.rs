@@ -850,8 +850,8 @@ pub unsafe fn InitDqLayers(
     if (*ctx_func_list(*ppCtx)).pParametersetStrategy.is_none() {
         return 1;
     }
-    let kiNeededSpsNum = ParasetStrategy(*ppCtx).GetNeededSpsNum() as i32;
-    let kiNeededSubsetSpsNum = ParasetStrategy(*ppCtx).GetNeededSubsetSpsNum() as i32;
+    let kiNeededSpsNum = ParasetStrategy(&mut **ppCtx).GetNeededSpsNum() as i32;
+    let kiNeededSubsetSpsNum = ParasetStrategy(&mut **ppCtx).GetNeededSubsetSpsNum() as i32;
     // **T6.H2.** Three `WelsMallocz` calls and their three null checks were here.
     // The lengths are the strategy's own numbers, unchanged; the entries are the
     // zeros `WelsMallocz` left, spelled as `ZERO` rather than `Default` because
@@ -867,10 +867,10 @@ pub unsafe fn InitDqLayers(
     ];
 
     // PPS
-    let kiNeededPpsNum = ParasetStrategy(*ppCtx).GetNeededPpsNum() as i32;
+    let kiNeededPpsNum = ParasetStrategy(&mut **ppCtx).GetNeededPpsNum() as i32;
     (**ppCtx).pPPSArray = vec![crate::encoder::param_svc::SWelsPPS::ZERO; kiNeededPpsNum as usize];
 
-    ParasetStrategy(*ppCtx).LoadPrevious(
+    ParasetStrategy(&mut **ppCtx).LoadPrevious(
         pExistingParasetList,
         ctx_sps_array(*ppCtx),
         ctx_subset_array(*ppCtx),
@@ -895,7 +895,7 @@ pub unsafe fn InitDqLayers(
             && (iDlayerIndex == BASE_DEPENDENCY_ID as i32);
         (*pDqIdc).uiSpatialId = iDlayerIndex as i8;
 
-        iSpsId = ParasetStrategy(*ppCtx).GenerateNewSps(
+        iSpsId = ParasetStrategy(&mut **ppCtx).GenerateNewSps(
             &mut **ppCtx,
             bUseSubsetSps,
             iDlayerIndex,
@@ -920,7 +920,7 @@ pub unsafe fn InitDqLayers(
             pSps = std::ptr::addr_of_mut!((*pSubsetSps).pSps);
         }
 
-        iPpsId = ParasetStrategy(*ppCtx).InitPps(
+        iPpsId = ParasetStrategy(&mut **ppCtx).InitPps(
             &mut **ppCtx,
             iSpsId as u32,
             // T6.G3: `InitPps` takes the arm it will actually use, not both plus a
@@ -966,7 +966,7 @@ pub unsafe fn InitDqLayers(
         iDlayerIndex += 1;
     }
 
-    ParasetStrategy(*ppCtx).UpdateParaSetNum(&mut **ppCtx);
+    ParasetStrategy(&mut **ppCtx).UpdateParaSetNum(&mut **ppCtx);
     ENC_RETURN_SUCCESS
 }
 
@@ -1017,8 +1017,8 @@ pub unsafe fn RequestMemorySvc(
         return 1;
     }
 
-    let kiSpsSize = ParasetStrategy(*ppCtx).GetNeededSpsNum() as i32 * SPS_BUFFER_SIZE;
-    let kiPpsSize = ParasetStrategy(*ppCtx).GetNeededPpsNum() as i32 * PPS_BUFFER_SIZE;
+    let kiSpsSize = ParasetStrategy(&mut **ppCtx).GetNeededSpsNum() as i32 * SPS_BUFFER_SIZE;
+    let kiPpsSize = ParasetStrategy(&mut **ppCtx).GetNeededPpsNum() as i32 * PPS_BUFFER_SIZE;
     let iNonVclLayersBsSizeCount = SSEI_BUFFER_SIZE + kiSpsSize + kiPpsSize;
 
     let mut bDynamicSlice = false;
@@ -1725,7 +1725,7 @@ pub unsafe fn WelsUninitEncoderExt(ppCtx: *mut *mut sWelsEncCtx) {
     let pCtx = *ppCtx;
 
     if !(*pCtx).pVpp.is_null() {
-        (*(*pCtx).pVpp).FreeSpatialPictures(pCtx);
+        (*(*pCtx).pVpp).FreeSpatialPictures(&mut *pCtx);
         drop(Box::from_raw((*pCtx).pVpp));
         (*pCtx).pVpp = null_mut();
     }
@@ -1861,7 +1861,7 @@ pub fn WelsSwapDqLayers(pCtx: &mut sWelsEncCtx, kiNextDqIdx: i32) { unsafe {
     // `expect` cannot fire on a live path — the frame loop makes a layer current
     // before any swap — and the old spelling dereferenced a null pointer there.
     let kRefIdx = (*pCtx).iCurDqLayer.expect("WelsSwapDqLayers with no current layer");
-    set_current_layer(pCtx, Some(LayerIdx(kiNextDqIdx as u8)));
+    set_current_layer(&mut *pCtx, Some(LayerIdx(kiNextDqIdx as u8)));
     (*current_layer(pCtx)).pRefLayer = Some(kRefIdx);
 }}
 
@@ -1875,7 +1875,10 @@ pub fn WelsSwapDqLayers(pCtx: &mut sWelsEncCtx, kiNextDqIdx: i32) { unsafe {
 ///
 /// # Safety
 /// `pCtx->pCurDqLayer` must be live and stamped with its reference list.
-pub unsafe fn StampLayerPictureViews(pCtx: *mut sWelsEncCtx) {
+pub fn StampLayerPictureViews(pCtx: &mut sWelsEncCtx) { unsafe {
+    // **T6.J2.** Safe signature, raw body: one derivation from the
+    // caller's `&mut`, and the body below is unchanged.
+    let pCtx: *mut sWelsEncCtx = pCtx;
     let pCurDq = current_layer(pCtx);
     if pCurDq.is_null() {
         return;
@@ -1894,7 +1897,7 @@ pub unsafe fn StampLayerPictureViews(pCtx: *mut sWelsEncCtx) {
         Some(id) => (*pRefList).pic_mut(id).view(),
         None => SRefPicView::default(),
     };
-}
+}}
 
 /// `encoder_ext.cpp:2808`. Prefetch the reference picture after `WelsBuildRefList`.
 pub fn PrefetchReferencePicture(pCtx: &mut sWelsEncCtx, keFrameType: EVideoFrameType) { unsafe {
@@ -1917,7 +1920,7 @@ pub fn PrefetchReferencePicture(pCtx: &mut sWelsEncCtx, keFrameType: EVideoFrame
         (*pCtx).pRefPic = None;
         (*current_layer(pCtx)).pRefPic = None;
     }
-    StampLayerPictureViews(pCtx);
+    StampLayerPictureViews(&mut *pCtx);
 
     let mut iIdx = 0;
     while iIdx < kiSliceCount {
@@ -1976,7 +1979,7 @@ pub fn StackBackEncoderStatus(pEncCtx: &mut sWelsEncCtx, keFrameType: EVideoFram
             (*pParamInternal).iPOC = (1 << (*ctx_sps(pEncCtx)).iLog2MaxPocLsb) - 2;
         }
 
-        crate::encoder::encoder_context::LoadBackFrameNum(pEncCtx, (*pEncCtx).uiDependencyId as i32);
+        crate::encoder::encoder_context::LoadBackFrameNum(&mut *pEncCtx, (*pEncCtx).uiDependencyId as i32);
 
         (*pEncCtx).eNalType = EWelsNalUnitType::NAL_UNIT_CODED_SLICE;
         (*pEncCtx).eSliceType = EWelsSliceType::P_SLICE;
@@ -1984,7 +1987,7 @@ pub fn StackBackEncoderStatus(pEncCtx: &mut sWelsEncCtx, keFrameType: EVideoFram
     } else if keFrameType == EVideoFrameType::videoFrameTypeIDR {
         (*pParamInternal).uiIdrPicId -= 1;
         // set the next frame to be IDR
-        crate::encoder::wels_encoder_ext::ForceCodingIDR(pEncCtx, (*pEncCtx).uiDependencyId as i32);
+        crate::encoder::wels_encoder_ext::ForceCodingIDR(&mut *pEncCtx, (*pEncCtx).uiDependencyId as i32);
     } else {
         // B pictures are not supported now
         debug_assert!(false, "StackBackEncoderStatus: unsupported frame type");
@@ -2024,14 +2027,14 @@ pub fn WelsInitCurrentLayer(pCtx: &mut sWelsEncCtx, _kiWidth: i32, _kiHeight: i3
     let pParamInternal = std::ptr::addr_of_mut!((*pParam).sDependencyLayers[kiCurDid as usize]);
 
     (*pCurDq).pDecPic = (*pCtx).pDecPic;
-    StampLayerPictureViews(pCtx);
+    StampLayerPictureViews(&mut *pCtx);
 
     debug_assert!(iSliceCount > 0);
 
     let mut iCurPpsId = (*pDqIdc).iPpsId as i32;
     let iCurSpsId = (*pDqIdc).iSpsId as i32;
 
-    iCurPpsId = ParasetStrategy(pCtx).GetCurrentPpsId(
+    iCurPpsId = ParasetStrategy(&mut *pCtx).GetCurrentPpsId(
         iCurPpsId,
         ((*pParamInternal).uiIdrPicId as i32 - 1).abs() % MAX_PPS_COUNT as i32,
     );
@@ -2633,12 +2636,15 @@ pub unsafe fn DynslcUpdateMbNeighbourInfoListForAllSlices(pCurDq: *mut SDqLayer,
 ///
 /// # Safety
 /// `pCtx` must be a context built by [`WelsInitEncoderExt`].
-pub unsafe fn WelsInitCurrentQBLayerMltslc(pCtx: *mut sWelsEncCtx) {
+pub fn WelsInitCurrentQBLayerMltslc(pCtx: &mut sWelsEncCtx) { unsafe {
+    // **T6.J2.** Safe signature, raw body: one derivation from the
+    // caller's `&mut`, and the body below is unchanged.
+    let pCtx: *mut sWelsEncCtx = pCtx;
     // pData init
     let pCurDq = current_layer(pCtx);
     // mb_neighbor
     DynslcUpdateMbNeighbourInfoListForAllSlices(pCurDq, crate::encoder::svc_encode_slice::mb_list_root(pCurDq));
-}
+}}
 
 /// `UpdateSlicepEncCtxWithPartition` — encoder_ext.cpp:2430.
 ///
@@ -2762,7 +2768,7 @@ pub fn WelsInitCurrentDlayerMltslc(pCtx: &mut sWelsEncCtx, iPartitionNum: i32) {
         // C++ only WelsLogs a warning here when uiSliceSizeConstraint is smaller.
     }
 
-    WelsInitCurrentQBLayerMltslc(pCtx);
+    WelsInitCurrentQBLayerMltslc(&mut *pCtx);
 }}
 
 /// `DynSliceRealloc` — encoder_ext.cpp:4525.
@@ -3014,7 +3020,7 @@ pub unsafe fn WelsEncoderEncodeExt(
     (*pLayerBsInfo).pBsBuf = ctx_frame_bs(pCtx);
     (*pLayerBsInfo).pNalLengthInByte = (*(*pCtx).pOut).sNalLen.as_mut_ptr();
     iCurDid = (*pSpatialIndexMap).iDid as i8;
-    set_current_layer(pCtx, Some(LayerIdx(iCurDid as u8)));
+    set_current_layer(&mut *pCtx, Some(LayerIdx(iCurDid as u8)));
     (*current_layer(pCtx)).pRefLayer = None;
 
     if !(*pSvcParam).bSimulcastAVC {
@@ -3060,7 +3066,7 @@ pub unsafe fn WelsEncoderEncodeExt(
         let pParamInternal =
             std::ptr::addr_of_mut!((*pSvcParam).sDependencyLayers[iCurDid as usize]);
         let iDecompositionStages = (*pParamInternal).iDecompositionStages as i32;
-        set_current_layer(pCtx, Some(LayerIdx(iCurDid as u8)));
+        set_current_layer(&mut *pCtx, Some(LayerIdx(iCurDid as u8)));
         (*pCtx).uiDependencyId = iCurDid as u8;
 
         if (*pSvcParam).bSimulcastAVC {
@@ -3658,7 +3664,7 @@ pub unsafe fn WelsEncoderEncodeExt(
         }
 
         if (*(*pCtx).pVpp).UpdateSpatialPictures(pCtx, pSvcParam, iCurTid as i8, iCurDid as i32) != 0 {
-            crate::encoder::wels_encoder_ext::ForceCodingIDR(pCtx, iCurDid as i32);
+            crate::encoder::wels_encoder_ext::ForceCodingIDR(&mut *pCtx, iCurDid as i32);
             // the above sets the next frame to IDR
             (*pFbi).eFrameType = eFrameType;
             (*pLayerBsInfo).eFrameType = eFrameType;
@@ -3687,7 +3693,7 @@ pub unsafe fn WelsEncoderEncodeExt(
     if ENC_RETURN_CORRECTED == (*pCtx).iEncoderError {
         let iDid = (*pSpatialIndexMap.add(iSpatialIdx as usize)).iDid;
         (*(*pCtx).pVpp).UpdateSpatialPictures(pCtx, pSvcParam, iCurTid as i8, iDid);
-        crate::encoder::wels_encoder_ext::ForceCodingIDR(pCtx, iDid);
+        crate::encoder::wels_encoder_ext::ForceCodingIDR(&mut *pCtx, iDid);
         // the above sets the next frame to IDR
         (*pFbi).eFrameType = eFrameType;
         (*pLayerBsInfo).eFrameType = eFrameType;

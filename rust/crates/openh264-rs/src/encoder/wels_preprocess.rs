@@ -1035,7 +1035,7 @@ impl CWelsPreProcess {
         }
 
         FreeScaledPic(&mut self.m_sScaledPicture);
-        self.InitLastSpatialPictures(pCtx);
+        self.InitLastSpatialPictures(&mut *pCtx);
         WelsInitScaledPic(ctx_param(pCtx), &mut self.m_sScaledPicture)
     }}
 
@@ -1094,7 +1094,10 @@ impl CWelsPreProcess {
         0
     }
 
-    pub unsafe fn FreeSpatialPictures(&mut self, pCtx: *mut sWelsEncCtx) {
+    pub fn FreeSpatialPictures(&mut self, pCtx: &mut sWelsEncCtx) { unsafe {
+        // **T6.J2.** Safe signature, raw body: one derivation from the
+        // caller's `&mut`, and the body below is unchanged.
+        let pCtx: *mut sWelsEncCtx = pCtx;
         if pCtx.is_null() || ctx_param(pCtx).is_null() {
             return;
         }
@@ -1115,7 +1118,7 @@ impl CWelsPreProcess {
         self.m_pLastSpatialPicture = [[None; 2]; MAX_DEPENDENCY_LAYER];
         // T6.F2: the pool owns its pictures whole, so releasing them is dropping them.
         self.m_pSpatialPicPool = SrcPicPool::empty();
-    }
+    }}
 
     pub unsafe fn BuildSpatialPicList(
         &mut self,
@@ -1531,7 +1534,7 @@ impl CWelsPreProcess {
         let kiCurPos = self.GetCurPicPosition(kiDidx);
         if (iCurTid as i32) < kiCurPos || (*pParam).iDecompStages == 0 {
             if (iCurTid as usize) >= MAX_TEMPORAL_LEVEL || (kiCurPos as usize) > MAX_TEMPORAL_LEVEL {
-                self.InitLastSpatialPictures(pCtx);
+                self.InitLastSpatialPictures(&mut *pCtx);
                 return 1;
             }
             if (*pCtx).bRefOfCurTidIsLtr[dIdx][iCurTid as usize] {
@@ -1882,7 +1885,10 @@ impl CWelsPreProcess {
         }
     }
 
-    pub unsafe fn InitLastSpatialPictures(&mut self, pCtx: *mut sWelsEncCtx) -> i32 {
+    pub fn InitLastSpatialPictures(&mut self, pCtx: &mut sWelsEncCtx) -> i32 { unsafe {
+        // **T6.J2.** Safe signature, raw body: one derivation from the
+        // caller's `&mut`, and the body below is unchanged.
+        let pCtx: *mut sWelsEncCtx = pCtx;
         let pParam = ctx_param(pCtx);
         let kiDlayerCount = (*pParam).iSpatialLayerNum;
         let mut iDlayerIndex = 0;
@@ -1909,7 +1915,7 @@ impl CWelsPreProcess {
         }
 
         0
-    }
+    }}
 
     pub unsafe fn WelsMoveMemoryWrapper(
         &mut self,

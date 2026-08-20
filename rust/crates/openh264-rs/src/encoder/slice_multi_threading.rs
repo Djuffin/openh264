@@ -905,7 +905,7 @@ pub unsafe fn AdjustBaseLayer(pCtx: *mut sWelsEncCtx) -> i32 {
     // T6.G2's one edit in an MT file: the field is a position now, and layer 0 is
     // the position this function has always meant (`ppDqLayerList[0]`, two lines
     // up). Body otherwise untouched — Phase 7 owns everything else here.
-    set_current_layer(pCtx, Some(LayerIdx(0)));
+    set_current_layer(&mut *pCtx, Some(LayerIdx(0)));
 
     let iNeedAdj = NeedDynamicAdjust(pCurDq, (*pCurDq).sSliceEncCtx.iSliceNumInFrame);
 

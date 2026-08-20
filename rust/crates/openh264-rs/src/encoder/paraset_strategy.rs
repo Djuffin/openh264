@@ -333,7 +333,7 @@ impl CWelsParametersetIdStrategyObj {
         // caller's `&mut`, and the body below is unchanged.
         let pCtx: *mut sWelsEncCtx = pCtx;
         WelsGenerateNewSps(
-            pCtx,
+            &mut *pCtx,
             kbUseSubsetSps,
             iDlayerIndex,
             iDlayerCount,
@@ -408,14 +408,17 @@ impl CWelsParametersetIdStrategyObj {
 /// # Safety
 /// `pCtx` must have `pSvcParam` set and `pSpsArray`/`pSubsetArray` allocated to at
 /// least `kiSpsId + 1` entries.
-pub unsafe fn WelsGenerateNewSps(
-    pCtx: *mut sWelsEncCtx,
+pub fn WelsGenerateNewSps(
+    pCtx: &mut sWelsEncCtx,
     kbUseSubsetSps: bool,
     iDlayerIndex: i32,
     iDlayerCount: i32,
     kiSpsId: i32,
     bSVCBaselayer: bool,
-) -> i32 {
+) -> i32 { unsafe {
+    // **T6.J2.** Safe signature, raw body: one derivation from the
+    // caller's `&mut`, and the body below is unchanged.
+    let pCtx: *mut sWelsEncCtx = pCtx;
     let iRet;
     // **T6.G3: the two `*mut *mut` out-parameters are gone**, and with them the
     // block that filled them. They handed the caller back exactly
@@ -458,7 +461,7 @@ pub unsafe fn WelsGenerateNewSps(
         );
     }
     iRet
-}
+}}
 
 /// `ParasetIdAdditionIdAdjust` — `paraset_strategy.cpp:337`.
 ///
@@ -519,14 +522,17 @@ fn ParasetIdAdditionIdAdjust(
 /// call sites that run before that point test the field first. Panics rather than
 /// dereferencing null if the invariant is broken; the vtable version was UB there.
 #[inline]
-pub unsafe fn ParasetStrategy<'a>(
-    pCtx: *mut sWelsEncCtx,
-) -> &'a mut CWelsParametersetIdStrategyObj {
+pub fn ParasetStrategy<'a>(
+    pCtx: &mut sWelsEncCtx,
+) -> &'a mut CWelsParametersetIdStrategyObj { unsafe {
+    // **T6.J2.** Safe signature, raw body: one derivation from the
+    // caller's `&mut`, and the body below is unchanged.
+    let pCtx: *mut sWelsEncCtx = pCtx;
     (*ctx_func_list(pCtx))
         .pParametersetStrategy
         .as_deref_mut()
         .expect("pParametersetStrategy is installed by InitFunctionPointers")
-}
+}}
 
 /// `IWelsParametersetStrategy::CreateParametersetStrategy` — `paraset_strategy.cpp:40`.
 ///
