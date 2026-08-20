@@ -309,6 +309,7 @@ pub use crate::encoder::rc::SWelsRcFunc;
 pub use crate::encoder::nal_encap::EWelsNalUnitType;
 pub use crate::encoder::nal_encap::EWelsNalRefIdc;
 pub use crate::encoder::picture::SPicture;
+pub use crate::encoder::picture::{RecPicId, RecPicPool, SrcPicId, SrcPicPool};
 pub use crate::encoder::param_svc::SWelsSPS;
 pub use crate::encoder::param_svc::SWelsPPS;
 pub use crate::encoder::param_svc::SSubsetSps;
@@ -326,29 +327,63 @@ pub use crate::encoder::wels_func_ptr_def::{EntropyCoder, SWelsFuncPtrList};
 // ============================================================================
 
 /// Reference picture lists for each spatial dependency/quality layer in SVC.
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
+///
+/// **Not `#[repr(C)]` and not `Copy` since T6.F1**, and `Box`-built with a real
+/// constructor: `pRef` *is* this layer's reconstruction pool, so the struct owns its
+/// pictures and a `WelsMallocz`'d shell would be UB at the pool's first drop (S21).
+/// It is reached only through `sWelsEncCtx::ppRefPicListExt`, a raw pointer field in
+/// the zeroed context — T3.6's precedent, the same argument `SDqLayer` was rebuilt
+/// on in session D.
+///
+/// The two lists and `pNextBuffer` are **handles into `pRef`**, not addresses.
+#[derive(Debug)]
 pub struct SRefList {
-    pub pShortRefList: [*mut SPicture; 1 + MAX_SHORT_REF_COUNT],
-    pub pLongRefList: [*mut SPicture; 1 + MAX_REF_PIC_COUNT],
-    pub pNextBuffer: *mut SPicture,
-    pub pRef: [*mut SPicture; 1 + MAX_REF_PIC_COUNT],
+    pub pShortRefList: [Option<RecPicId>; 1 + MAX_SHORT_REF_COUNT],
+    pub pLongRefList: [Option<RecPicId>; 1 + MAX_REF_PIC_COUNT],
+    pub pNextBuffer: Option<RecPicId>,
+    /// The pool. Was `[*mut SPicture; 1 + MAX_REF_PIC_COUNT]`, allocated one picture
+    /// at a time by `RequestMemorySvc` and freed one at a time by `FreeMemorySvc`.
+    pub pRef: RecPicPool,
     pub uiShortRefCount: u8,
     pub uiLongRefCount: u8,
 }
 
-impl Default for SRefList {
-    fn default() -> Self {
-        Self {
-            pShortRefList: [std::ptr::null_mut(); 1 + MAX_SHORT_REF_COUNT],
-            pLongRefList: [std::ptr::null_mut(); 1 + MAX_REF_PIC_COUNT],
-            pNextBuffer: std::ptr::null_mut(),
-            pRef: [std::ptr::null_mut(); 1 + MAX_REF_PIC_COUNT],
+impl SRefList {
+    /// An empty reference list for one dependency layer. `RequestMemorySvc` fills
+    /// [`pRef`](Self::pRef) immediately after and points `pNextBuffer` at slot 0,
+    /// exactly as the C++ does over its `WelsMallocz`'d block.
+    ///
+    /// **F56**: every field's zero is written out. The C++ takes this from
+    /// `WelsMallocz`, so the lists are null and both counts are 0 — and `None` is
+    /// that null, ruled rather than inherited from a zero image.
+    pub fn new() -> Box<SRefList> {
+        Box::new(SRefList {
+            pShortRefList: [None; 1 + MAX_SHORT_REF_COUNT],
+            pLongRefList: [None; 1 + MAX_REF_PIC_COUNT],
+            pNextBuffer: None,
+            pRef: RecPicPool::empty(),
             uiShortRefCount: 0,
             uiLongRefCount: 0,
-        }
+        })
+    }
+
+    /// The picture a handle out of one of this list's arrays names.
+    ///
+    /// Every `RecPicId` in `pShortRefList`, `pLongRefList`, `pNextBuffer`, the
+    /// context's `pDecPic`/`pRefPic`/`pRefList0` and the layer's `pDecPic`/`pRefPic`
+    /// is a slot of *this* list's `pRef`, so this is the one resolution they all use.
+    #[inline]
+    pub fn pic(&self, id: RecPicId) -> &SPicture {
+        self.pRef.get(id)
+    }
+
+    /// Mutable form of [`pic`](Self::pic).
+    #[inline]
+    pub fn pic_mut(&mut self, id: RecPicId) -> &mut SPicture {
+        self.pRef.get_mut(id)
     }
 }
+
 
 /// Long-Term Reference (LTR) State Machine.
 #[repr(C)]
@@ -395,14 +430,14 @@ impl Default for SLTRState {
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct SSpatialPicIndex {
-    pub pSrc: *mut SPicture,
+    pub pSrc: Option<SrcPicId>,
     pub iDid: i32,
 }
 
 impl Default for SSpatialPicIndex {
     fn default() -> Self {
         Self {
-            pSrc: std::ptr::null_mut(),
+            pSrc: None,
             iDid: 0,
         }
     }
@@ -459,13 +494,16 @@ pub struct sWelsEncCtx {
     /// (`ppRefPicListExt` 184, `pLtr` 320, `sSpatialIndexMap` 520, `pMemAlign` 1824)
     /// sit after this field and encode C++ `offsetof` values that must not change.
     pub eRefStrategy: crate::encoder::ref_list_mgr_svc::RefStrategyKind,
-    pub pEncPic: *mut SPicture,
-    pub pDecPic: *mut SPicture,
-    pub pRefPic: *mut SPicture,
+    /// The source picture being encoded — a slot of `pVpp`'s spatial pool.
+    pub pEncPic: Option<SrcPicId>,
+    /// The picture being reconstructed into, and the one being referenced — slots of
+    /// **the current dependency layer's** `SRefList` (`ppRefPicListExt[uiDependencyId]`).
+    pub pDecPic: Option<RecPicId>,
+    pub pRefPic: Option<RecPicId>,
     pub pCurDqLayer: *mut SDqLayer,
     pub ppDqLayerList: *mut *mut SDqLayer,
     pub ppRefPicListExt: *mut *mut SRefList,
-    pub pRefList0: [*mut SPicture; 16],
+    pub pRefList0: [Option<RecPicId>; 16],
     pub pLtr: *mut SLTRState,
     pub bCurFrameMarkedAsSceneLtr: bool,
     pub eSliceType: EWelsSliceType,
@@ -944,14 +982,12 @@ pub unsafe fn DecideFrameType(
             if !(*pEncCtx).ppRefPicListExt.is_null() {
                 let ref_list_0 = *(*pEncCtx).ppRefPicListExt;
                 if !ref_list_0.is_null() {
-                    let pLongTermRefList = (*ref_list_0).pLongRefList.as_ptr();
                     for i in 0..(*pSvcParam).iLTRRefNum {
-                        let pic = *pLongTermRefList.add(i as usize);
-                        if !pic.is_null()
-                            && (*pic).bUsedAsRef
-                            && (*pic).bIsLongRef
-                            && (*pic).bIsSceneLTR
-                        {
+                        let Some(id) = (*ref_list_0).pLongRefList[i as usize] else {
+                            continue;
+                        };
+                        let pic = (*ref_list_0).pic(id);
+                        if pic.bUsedAsRef && pic.bIsLongRef && pic.bIsSceneLTR {
                             iActualLtrcount += 1;
                         }
                     }

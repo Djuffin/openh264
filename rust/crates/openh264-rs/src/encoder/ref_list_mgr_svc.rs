@@ -12,6 +12,7 @@
 //! Translated from `codec/encoder/core/inc/ref_list_mgr_svc.h` and
 //! `codec/encoder/core/src/ref_list_mgr_svc.cpp`.
 
+use crate::encoder::picture::{PicRef, RecPicId, SrcPicId};
 use crate::*;
 
 // ============================================================================
@@ -227,7 +228,7 @@ pub unsafe fn WelsResetRefList(pCtx: *mut sWelsEncCtx) {
     }
 
     for i in 0..=(MAX_SHORT_REF_COUNT) {
-        (*pRefList).pShortRefList[i] = std::ptr::null_mut();
+        (*pRefList).pShortRefList[i] = None;
     }
     let ltrRefNum = if !(*pCtx).pSvcParam.is_null() {
         (*(*pCtx).pSvcParam).iLTRRefNum as usize
@@ -236,7 +237,7 @@ pub unsafe fn WelsResetRefList(pCtx: *mut sWelsEncCtx) {
     };
     for i in 0..=(ltrRefNum) {
         if i <= MAX_REF_PIC_COUNT {
-            (*pRefList).pLongRefList[i] = std::ptr::null_mut();
+            (*pRefList).pLongRefList[i] = None;
         }
     }
     let numRefFrame = if !(*pCtx).pSvcParam.is_null() {
@@ -245,17 +246,19 @@ pub unsafe fn WelsResetRefList(pCtx: *mut sWelsEncCtx) {
         0
     };
     for i in 0..=(numRefFrame) {
-        if i <= MAX_REF_PIC_COUNT {
-            let pPic = (*pRefList).pRef[i];
-            if !pPic.is_null() {
-                (*pPic).SetUnref();
-            }
+        if i < (*pRefList).pRef.len() {
+            let id = (*pRefList).pRef.at(i);
+            (*pRefList).pic_mut(id).SetUnref();
         }
     }
 
     (*pRefList).uiLongRefCount = 0;
     (*pRefList).uiShortRefCount = 0;
-    (*pRefList).pNextBuffer = (*pRefList).pRef[0];
+    (*pRefList).pNextBuffer = if (*pRefList).pRef.is_empty() {
+        None
+    } else {
+        Some((*pRefList).pRef.at(0))
+    };
 }
 
 /// Remove a long-term reference entry by index from pLongRefList.
@@ -274,7 +277,7 @@ pub unsafe fn DeleteLTRFromLongList(pCtx: *mut sWelsEncCtx, iIdx: i32) {
         k += 1;
     }
     if k >= 0 && (k as usize) <= MAX_REF_PIC_COUNT {
-        (*pRefList).pLongRefList[k as usize] = std::ptr::null_mut();
+        (*pRefList).pLongRefList[k as usize] = None;
     }
     if (*pRefList).uiLongRefCount > 0 {
         (*pRefList).uiLongRefCount -= 1;
@@ -297,7 +300,7 @@ pub unsafe fn DeleteSTRFromShortList(pCtx: *mut sWelsEncCtx, iIdx: i32) {
         k += 1;
     }
     if k >= 0 && (k as usize) <= MAX_SHORT_REF_COUNT {
-        (*pRefList).pShortRefList[k as usize] = std::ptr::null_mut();
+        (*pRefList).pShortRefList[k as usize] = None;
     }
     if (*pRefList).uiShortRefCount > 0 {
         (*pRefList).uiShortRefCount -= 1;
@@ -316,14 +319,20 @@ pub unsafe fn DeleteNonSceneLTR(pCtx: *mut sWelsEncCtx) {
     let numRef = (*(*pCtx).pSvcParam).iNumRefFrame;
     let mut i = 0;
     while i < numRef {
-        let pRef = (*pRefList).pLongRefList[i as usize];
-        if !pRef.is_null()
-            && (*pRef).bUsedAsRef
-            && (*pRef).bIsLongRef
-            && (!(*pRef).bIsSceneLTR)
-            && ((*pCtx).uiTemporalId < (*pRef).uiTemporalId || (*pCtx).bCurFrameMarkedAsSceneLtr)
-        {
-            (*pRef).SetUnref();
+        let hit = match (*pRefList).pLongRefList[i as usize] {
+            Some(id) => {
+                let pRef = (*pRefList).pic(id);
+                pRef.bUsedAsRef
+                    && pRef.bIsLongRef
+                    && (!pRef.bIsSceneLTR)
+                    && ((*pCtx).uiTemporalId < pRef.uiTemporalId
+                        || (*pCtx).bCurFrameMarkedAsSceneLtr)
+            }
+            None => false,
+        };
+        if hit {
+            let id = (*pRefList).pLongRefList[i as usize].expect("checked just above");
+            (*pRefList).pic_mut(id).SetUnref();
             DeleteLTRFromLongList(pCtx, i);
             i -= 1;
         }
@@ -378,31 +387,32 @@ pub unsafe fn DeleteInvalidLTR(pCtx: *mut sWelsEncCtx) {
     let pParamInternal = std::ptr::addr_of_mut!((*(*pCtx).pSvcParam).sDependencyLayers[uiDid]);
 
     for i in 0..LONG_TERM_REF_NUM {
-        let pPic = (*pRefList).pLongRefList[i as usize];
-        if !pPic.is_null() {
-            let cond1 = CompareFrameNum((*pPic).iFrameNum, pLtr.iLastCorFrameNumDec, iMaxFrameNumPlus1)
+        if let Some(idPic) = (*pRefList).pLongRefList[i as usize] {
+            let pPic = (*pRefList).pic(idPic);
+            let cond1 = CompareFrameNum(pPic.iFrameNum, pLtr.iLastCorFrameNumDec, iMaxFrameNumPlus1)
                 == COMPARE_FRAME_NUM::FRAME_NUM_BIGGER as i32
-                && ((CompareFrameNum((*pPic).iFrameNum, pLtr.iCurFrameNumInDec, iMaxFrameNumPlus1)
+                && ((CompareFrameNum(pPic.iFrameNum, pLtr.iCurFrameNumInDec, iMaxFrameNumPlus1)
                     & (COMPARE_FRAME_NUM::FRAME_NUM_EQUAL as i32 | COMPARE_FRAME_NUM::FRAME_NUM_SMALLER as i32))
                     != 0);
 
             if cond1 {
-                (*pPic).SetUnref();
+                (*pRefList).pic_mut(idPic).SetUnref();
                 DeleteLTRFromLongList(pCtx, i);
                 pLtr.bLTRMarkEnable = true;
                 if (*pRefList).uiLongRefCount == 0 {
                     (*pParamInternal).bEncCurFrmAsIdrFlag = true;
                 }
             } else {
-                let cond2 = CompareFrameNum((*pPic).iMarkFrameNum, pLtr.iLastCorFrameNumDec, iMaxFrameNumPlus1)
+                let pPic = (*pRefList).pic(idPic);
+                let cond2 = CompareFrameNum(pPic.iMarkFrameNum, pLtr.iLastCorFrameNumDec, iMaxFrameNumPlus1)
                     == COMPARE_FRAME_NUM::FRAME_NUM_BIGGER as i32
-                    && ((CompareFrameNum((*pPic).iMarkFrameNum, pLtr.iCurFrameNumInDec, iMaxFrameNumPlus1)
+                    && ((CompareFrameNum(pPic.iMarkFrameNum, pLtr.iCurFrameNumInDec, iMaxFrameNumPlus1)
                         & (COMPARE_FRAME_NUM::FRAME_NUM_EQUAL as i32 | COMPARE_FRAME_NUM::FRAME_NUM_SMALLER as i32))
                         != 0)
                     && pLtr.iLTRMarkMode == LTR_MARKING_PROCESS_MODE::LTR_DELAY_MARK as i32;
 
                 if cond2 {
-                    (*pPic).SetUnref();
+                    (*pRefList).pic_mut(idPic).SetUnref();
                     DeleteLTRFromLongList(pCtx, i);
                     pLtr.bLTRMarkEnable = true;
                     if (*pRefList).uiLongRefCount == 0 {
@@ -429,14 +439,17 @@ pub unsafe fn HandleLTRMarkFeedback(pCtx: *mut sWelsEncCtx) {
 
     if pLtr.uiLtrMarkState == LTR_MARKING_SUCCESS {
         for i in 0..((*pRefList).uiLongRefCount as i32) {
-            let pPic = (*pRefList).pLongRefList[i as usize];
-            if !pPic.is_null()
-                && (*pPic).iFrameNum == pLtr.iLtrMarkFbFrameNum
-                && (*pPic).uiRecieveConfirmed != RECIEVE_SUCCESS
+            let Some(idPic) = (*pRefList).pLongRefList[i as usize] else {
+                continue;
+            };
+            let pPic = (*pRefList).pic(idPic);
+            if pPic.iFrameNum == pLtr.iLtrMarkFbFrameNum
+                && pPic.uiRecieveConfirmed != RECIEVE_SUCCESS
             {
-                (*pPic).uiRecieveConfirmed = RECIEVE_SUCCESS;
+                (*pRefList).pic_mut(idPic).uiRecieveConfirmed = RECIEVE_SUCCESS;
                 if !(*pCtx).pVaa.is_null() {
-                    (*(*pCtx).pVaa).uiValidLongTermPicIdx = (*pPic).iLongTermPicNum as u8;
+                    (*(*pCtx).pVaa).uiValidLongTermPicIdx =
+                        (*pRefList).pic(idPic).iLongTermPicNum as u8;
                 }
                 pLtr.iCurFrameNumInDec = pLtr.iLtrMarkFbFrameNum;
                 pLtr.iLastRecoverFrameNum = pLtr.iLtrMarkFbFrameNum;
@@ -444,9 +457,13 @@ pub unsafe fn HandleLTRMarkFeedback(pCtx: *mut sWelsEncCtx) {
 
                 let mut j = 0;
                 while j < (*pRefList).uiLongRefCount as i32 {
-                    let pLong = (*pRefList).pLongRefList[j as usize];
-                    if !pLong.is_null() && (*pLong).iLongTermPicNum != pLtr.iCurLtrIdx {
-                        (*pLong).SetUnref();
+                    let drop = match (*pRefList).pLongRefList[j as usize] {
+                        Some(id) => (*pRefList).pic(id).iLongTermPicNum != pLtr.iCurLtrIdx,
+                        None => false,
+                    };
+                    if drop {
+                        let id = (*pRefList).pLongRefList[j as usize].expect("checked just above");
+                        (*pRefList).pic_mut(id).SetUnref();
                         DeleteLTRFromLongList(pCtx, j);
                     } else {
                         j += 1;
@@ -467,9 +484,11 @@ pub unsafe fn HandleLTRMarkFeedback(pCtx: *mut sWelsEncCtx) {
         pLtr.uiLtrMarkState = NO_LTR_MARKING_FEEDBACK;
     } else if pLtr.uiLtrMarkState == LTR_MARKING_FAILED {
         for i in 0..((*pRefList).uiLongRefCount as i32) {
-            let pPic = (*pRefList).pLongRefList[i as usize];
-            if !pPic.is_null() && (*pPic).iFrameNum == pLtr.iLtrMarkFbFrameNum {
-                (*pPic).SetUnref();
+            let Some(idPic) = (*pRefList).pLongRefList[i as usize] else {
+                continue;
+            };
+            if (*pRefList).pic(idPic).iFrameNum == pLtr.iLtrMarkFbFrameNum {
+                (*pRefList).pic_mut(idPic).SetUnref();
                 DeleteLTRFromLongList(pCtx, i);
                 break;
             }
@@ -507,9 +526,8 @@ pub unsafe fn LTRMarkProcess(pCtx: *mut sWelsEncCtx) {
 
     if (*pCtx).eSliceType == EWelsSliceType::I_SLICE {
         i = 0;
-        let pShort = (*pRefList).pShortRefList[i];
-        if !pShort.is_null() {
-            (*pShort).uiRecieveConfirmed = RECIEVE_SUCCESS;
+        if let Some(id) = (*pRefList).pShortRefList[i] {
+            (*pRefList).pic_mut(id).uiRecieveConfirmed = RECIEVE_SUCCESS;
         }
     } else if pLtr.bLTRMarkingFlag {
         if !(*pCtx).pVaa.is_null() {
@@ -518,11 +536,10 @@ pub unsafe fn LTRMarkProcess(pCtx: *mut sWelsEncCtx) {
 
         if pLtr.iLTRMarkMode == LTR_MARKING_PROCESS_MODE::LTR_DELAY_MARK as i32 {
             for idx in 0..((*pRefList).uiShortRefCount as usize) {
-                let pShort = (*pRefList).pShortRefList[idx];
-                if !pShort.is_null() {
+                if let Some(id) = (*pRefList).pShortRefList[idx] {
                     if CompareFrameNum(
                         (*pParamInternal).iFrameNum,
-                        (*pShort).iFrameNum + iGoPFrameNumInterval,
+                        (*pRefList).pic(id).iFrameNum + iGoPFrameNumInterval,
                         iMaxFrameNumPlus1,
                     ) == COMPARE_FRAME_NUM::FRAME_NUM_EQUAL as i32
                     {
@@ -535,11 +552,12 @@ pub unsafe fn LTRMarkProcess(pCtx: *mut sWelsEncCtx) {
     }
 
     if (*pCtx).eSliceType == EWelsSliceType::I_SLICE || pLtr.bLTRMarkingFlag {
-        let pShort = (*pRefList).pShortRefList[i];
-        if !pShort.is_null() {
-            (*pShort).bIsLongRef = true;
-            (*pShort).iLongTermPicNum = pLtr.iCurLtrIdx;
-            (*pShort).iMarkFrameNum = (*pParamInternal).iFrameNum;
+        if let Some(id) = (*pRefList).pShortRefList[i] {
+            let iFrameNum = (*pParamInternal).iFrameNum;
+            let pShort = (*pRefList).pic_mut(id);
+            pShort.bIsLongRef = true;
+            pShort.iLongTermPicNum = pLtr.iCurLtrIdx;
+            pShort.iMarkFrameNum = iFrameNum;
         }
     }
 
@@ -548,11 +566,12 @@ pub unsafe fn LTRMarkProcess(pCtx: *mut sWelsEncCtx) {
         && !pLtr.bLTRMarkingFlag
     {
         for j in 0..((*pRefList).uiShortRefCount as usize) {
-            let pShort = (*pRefList).pShortRefList[j];
-            if !pShort.is_null() && (*pShort).bIsLongRef {
-                i = j;
-                bMoveLtrFromShortToLong = true;
-                break;
+            if let Some(id) = (*pRefList).pShortRefList[j] {
+                if (*pRefList).pic(id).bIsLongRef {
+                    i = j;
+                    bMoveLtrFromShortToLong = true;
+                    break;
+                }
             }
         }
     }
@@ -577,9 +596,8 @@ pub unsafe fn LTRMarkProcess(pCtx: *mut sWelsEncCtx) {
         (*pRefList).uiLongRefCount += 1;
         if (*pRefList).uiLongRefCount as i32 > (*(*pCtx).pSvcParam).iLTRRefNum {
             let lastIdx = ((*pRefList).uiLongRefCount - 1) as usize;
-            let pLast = (*pRefList).pLongRefList[lastIdx];
-            if !pLast.is_null() {
-                (*pLast).SetUnref();
+            if let Some(id) = (*pRefList).pLongRefList[lastIdx] {
+                (*pRefList).pic_mut(id).SetUnref();
             }
             DeleteLTRFromLongList(pCtx, lastIdx as i32);
         }
@@ -589,27 +607,28 @@ pub unsafe fn LTRMarkProcess(pCtx: *mut sWelsEncCtx) {
 
 /// Executes promotion of screen content references to long-term reference slots.
 pub unsafe fn LTRMarkProcessScreen(pCtx: *mut sWelsEncCtx) {
-    if pCtx.is_null() || (*pCtx).pDecPic.is_null() {
+    if pCtx.is_null() {
         return;
     }
+    let Some(idDec) = (*pCtx).pDecPic else {
+        return;
+    };
     let uiDid = (*pCtx).uiDependencyId as usize;
     let pRefList = *(*pCtx).ppRefPicListExt.add((uiDid) as usize);
     if pRefList.is_null() {
         return;
     }
-    let iLtrIdx = (*(*pCtx).pDecPic).iLongTermPicNum;
+    let iLtrIdx = (*pRefList).pic(idDec).iLongTermPicNum;
     if !(*pCtx).pVaa.is_null() {
-        (*(*pCtx).pVaa).uiMarkLongTermPicIdx = (*(*pCtx).pDecPic).iLongTermPicNum as u8;
+        (*(*pCtx).pVaa).uiMarkLongTermPicIdx = iLtrIdx as u8;
     }
 
     if iLtrIdx >= 0 && (iLtrIdx as usize) < MAX_REF_PIC_COUNT {
-        let pLong = (*pRefList).pLongRefList[iLtrIdx as usize];
-        if !pLong.is_null() {
-            (*pLong).SetUnref();
-        } else {
-            (*pRefList).uiLongRefCount += 1;
+        match (*pRefList).pLongRefList[iLtrIdx as usize] {
+            Some(id) => (*pRefList).pic_mut(id).SetUnref(),
+            None => (*pRefList).uiLongRefCount += 1,
         }
-        (*pRefList).pLongRefList[iLtrIdx as usize] = (*pCtx).pDecPic;
+        (*pRefList).pLongRefList[iLtrIdx as usize] = Some(idDec);
     }
 }
 
@@ -625,22 +644,22 @@ pub unsafe fn PrefetchNextBuffer(pCtx: *mut sWelsEncCtx) {
     }
     let kiNumRef = (*(*pCtx).pSvcParam).iNumRefFrame;
 
-    (*pRefList).pNextBuffer = std::ptr::null_mut();
+    (*pRefList).pNextBuffer = None;
     for i in 0..=(kiNumRef as usize) {
-        if i <= MAX_REF_PIC_COUNT {
-            let pPic = (*pRefList).pRef[i];
-            if !pPic.is_null() && !(*pPic).bUsedAsRef {
-                (*pRefList).pNextBuffer = pPic;
+        if i < (*pRefList).pRef.len() {
+            let id = (*pRefList).pRef.at(i);
+            if !(*pRefList).pic(id).bUsedAsRef {
+                (*pRefList).pNextBuffer = Some(id);
                 break;
             }
         }
     }
 
-    if (*pRefList).pNextBuffer.is_null() && (*pRefList).uiShortRefCount > 0 {
+    if (*pRefList).pNextBuffer.is_none() && (*pRefList).uiShortRefCount > 0 {
         let lastIdx = ((*pRefList).uiShortRefCount - 1) as usize;
         (*pRefList).pNextBuffer = (*pRefList).pShortRefList[lastIdx];
-        if !(*pRefList).pNextBuffer.is_null() {
-            (*(*pRefList).pNextBuffer).SetUnref();
+        if let Some(id) = (*pRefList).pNextBuffer {
+            (*pRefList).pic_mut(id).SetUnref();
         }
     }
 
@@ -654,7 +673,7 @@ pub unsafe fn WelsUpdateRefList(pCtx: *mut sWelsEncCtx) -> bool {
     }
     let uiDid = (*pCtx).uiDependencyId as usize;
     let pRefList = *(*pCtx).ppRefPicListExt.add((uiDid) as usize);
-    if pRefList.is_null() || (*pRefList).pRef[0].is_null() {
+    if pRefList.is_null() || (*pRefList).pRef.is_empty() {
         return false;
     }
 
@@ -664,30 +683,33 @@ pub unsafe fn WelsUpdateRefList(pCtx: *mut sWelsEncCtx) -> bool {
     let kuiDid = (*pCtx).uiDependencyId;
     let keSliceType = (*pCtx).eSliceType;
 
-    if !(*pCtx).pDecPic.is_null() {
-        let pDecPic = (*pCtx).pDecPic;
+    if let Some(idDec) = (*pCtx).pDecPic {
+        // The reconstruction picture, resolved once — S37: everything below either
+        // reads its geometry or writes its own fields, and the borrow ends before the
+        // reference-list shifts that would touch the pool again.
+        let pDecPic: &mut SPicture = (*pRefList).pic_mut(idDec);
         if (*pParamD).iHighestTemporalId == 0 || (kuiTid as i32) < (*pParamD).iHighestTemporalId as i32 {
             // T4b.3b: the `pFuncList` null guard went with the table it guarded.
             // The C++ (`ref_list_mgr_svc.cpp:375`) dereferences `pCtx->pFuncList`
             // here unconditionally, so dropping it is the closer reading.
             ExpandReferencingPicture(
-                &(*pDecPic).pData,
-                (*pDecPic).iWidthInPixel,
-                (*pDecPic).iHeightInPixel,
-                &(*pDecPic).iLineSize,
+                &pDecPic.pData,
+                pDecPic.iWidthInPixel,
+                pDecPic.iHeightInPixel,
+                &pDecPic.iLineSize,
             );
         }
 
         if crate::encoder::dump_enabled(&REC_DUMP, "OH264_RECDUMP") {
             for pl in 0..3usize {
-                let w = if pl != 0 { (*pDecPic).iWidthInPixel >> 1 } else { (*pDecPic).iWidthInPixel };
-                let h = if pl != 0 { (*pDecPic).iHeightInPixel >> 1 } else { (*pDecPic).iHeightInPixel };
+                let w = if pl != 0 { pDecPic.iWidthInPixel >> 1 } else { pDecPic.iWidthInPixel };
+                let h = if pl != 0 { pDecPic.iHeightInPixel >> 1 } else { pDecPic.iHeightInPixel };
                 let (mut sum, mut x) = (0u32, 1u32);
                 for y in 0..h {
                     for i in 0..w {
                         x = x
                             .wrapping_mul(31)
-                            .wrapping_add(*(*pDecPic).pData[pl].offset((y * (*pDecPic).iLineSize[pl] + i) as isize) as u32);
+                            .wrapping_add(*pDecPic.pData[pl].offset((y * pDecPic.iLineSize[pl] + i) as isize) as u32);
                         sum = sum.wrapping_add(x);
                     }
                 }
@@ -695,12 +717,12 @@ pub unsafe fn WelsUpdateRefList(pCtx: *mut sWelsEncCtx) -> bool {
             }
         }
 
-        (*pDecPic).uiTemporalId = kuiTid;
-        (*pDecPic).uiSpatialId = kuiDid;
-        (*pDecPic).iFrameNum = (*pParamD).iFrameNum;
-        (*pDecPic).iFramePoc = (*pParamD).iPOC;
-        (*pDecPic).uiRecieveConfirmed = RECIEVE_UNKOWN;
-        (*pDecPic).bUsedAsRef = true;
+        pDecPic.uiTemporalId = kuiTid;
+        pDecPic.uiSpatialId = kuiDid;
+        pDecPic.iFrameNum = (*pParamD).iFrameNum;
+        pDecPic.iFramePoc = (*pParamD).iPOC;
+        pDecPic.uiRecieveConfirmed = RECIEVE_UNKOWN;
+        pDecPic.bUsedAsRef = true;
 
         let shortCount = (*pRefList).uiShortRefCount as usize;
         for iRefIdx in (0..shortCount).rev() {
@@ -708,7 +730,7 @@ pub unsafe fn WelsUpdateRefList(pCtx: *mut sWelsEncCtx) -> bool {
                 (*pRefList).pShortRefList[iRefIdx + 1] = (*pRefList).pShortRefList[iRefIdx];
             }
         }
-        (*pRefList).pShortRefList[0] = pDecPic;
+        (*pRefList).pShortRefList[0] = Some(idDec);
         (*pRefList).uiShortRefCount += 1;
     }
 
@@ -726,17 +748,23 @@ pub unsafe fn WelsUpdateRefList(pCtx: *mut sWelsEncCtx) -> bool {
 
             let mut i = ((*pRefList).uiShortRefCount as i32) - 1;
             while i > 0 {
-                let pShort = (*pRefList).pShortRefList[i as usize];
-                if !pShort.is_null() {
-                    (*pShort).SetUnref();
+                if let Some(id) = (*pRefList).pShortRefList[i as usize] {
+                    (*pRefList).pic_mut(id).SetUnref();
                 }
                 DeleteSTRFromShortList(pCtx, i);
                 i -= 1;
             }
             if (*pRefList).uiShortRefCount > 0 {
-                let p0 = (*pRefList).pShortRefList[0];
-                if !p0.is_null() && ((*p0).uiTemporalId > 0 || (*p0).iFrameNum != (*pParamD).iFrameNum) {
-                    (*p0).SetUnref();
+                let stale = match (*pRefList).pShortRefList[0] {
+                    Some(id) => {
+                        let p0 = (*pRefList).pic(id);
+                        p0.uiTemporalId > 0 || p0.iFrameNum != (*pParamD).iFrameNum
+                    }
+                    None => false,
+                };
+                if stale {
+                    let id = (*pRefList).pShortRefList[0].expect("checked just above");
+                    (*pRefList).pic_mut(id).SetUnref();
                     DeleteSTRFromShortList(pCtx, 0);
                 }
             }
@@ -793,13 +821,13 @@ pub unsafe fn CheckCurMarkFrameNumUsed(pCtx: *mut sWelsEncCtx) -> bool {
     let pParamInternal = &(*(*pCtx).pSvcParam).sDependencyLayers[uiDid];
 
     for i in 0..((*pRefList).uiLongRefCount as usize) {
-        let pLong = (*pRefList).pLongRefList[i];
-        if !pLong.is_null() {
-            let cond1 = pParamInternal.iFrameNum == (*pLong).iFrameNum
+        if let Some(idLong) = (*pRefList).pLongRefList[i] {
+            let iFrameNum = (*pRefList).pic(idLong).iFrameNum;
+            let cond1 = pParamInternal.iFrameNum == iFrameNum
                 && pLtr.iLTRMarkMode == LTR_MARKING_PROCESS_MODE::LTR_DIRECT_MARK as i32;
             let cond2 = CompareFrameNum(
                 pParamInternal.iFrameNum + iGoPFrameNumInterval,
-                (*pLong).iFrameNum,
+                iFrameNum,
                 iMaxFrameNumPlus1,
             ) == COMPARE_FRAME_NUM::FRAME_NUM_EQUAL as i32
                 && pLtr.iLTRMarkMode == LTR_MARKING_PROCESS_MODE::LTR_DELAY_MARK as i32;
@@ -1027,11 +1055,15 @@ pub unsafe fn WelsBuildRefList(
     if (*pCtx).eSliceType != EWelsSliceType::I_SLICE {
         if (*(*pCtx).pSvcParam).bEnableLongTermReference && pLtr.bReceivedT0LostFlag && (*pCtx).uiTemporalId == 0 {
             for i in 0..((*pRefList).uiLongRefCount as usize) {
-                let pLong = (*pRefList).pLongRefList[i];
-                if !pLong.is_null() && (*pLong).uiRecieveConfirmed == RECIEVE_SUCCESS {
+                let Some(idLong) = (*pRefList).pLongRefList[i] else {
+                    continue;
+                };
+                if (*pRefList).pic(idLong).uiRecieveConfirmed == RECIEVE_SUCCESS {
                     let numRef0 = (*pCtx).iNumRef0 as usize;
-                    (*(*pCtx).pCurDqLayer).pRefOri[numRef0] = pLong;
-                    (*pCtx).pRefList0[numRef0] = pLong;
+                    // The camera path puts a *reconstruction* picture in `pRefOri`
+                    // where the screen path puts a source picture — see `PicRef`.
+                    (*(*pCtx).pCurDqLayer).pRefOri[numRef0] = Some(PicRef::Rec(idLong));
+                    (*pCtx).pRefList0[numRef0] = Some(idLong);
                     (*pCtx).iNumRef0 += 1;
                     pLtr.iLastRecoverFrameNum = (*pParamD).iFrameNum;
                     break;
@@ -1039,15 +1071,14 @@ pub unsafe fn WelsBuildRefList(
             }
         } else {
             for i in 0..((*pRefList).uiShortRefCount as usize) {
-                let pRef = (*pRefList).pShortRefList[i];
-                if !pRef.is_null()
-                    && (*pRef).bUsedAsRef
-                    && (*pRef).iFramePoc >= 0
-                    && (*pRef).uiTemporalId <= kuiTid
-                {
+                let Some(idRef) = (*pRefList).pShortRefList[i] else {
+                    continue;
+                };
+                let pRef = (*pRefList).pic(idRef);
+                if pRef.bUsedAsRef && pRef.iFramePoc >= 0 && pRef.uiTemporalId <= kuiTid {
                     let numRef0 = (*pCtx).iNumRef0 as usize;
-                    (*(*pCtx).pCurDqLayer).pRefOri[numRef0] = pRef;
-                    (*pCtx).pRefList0[numRef0] = pRef;
+                    (*(*pCtx).pCurDqLayer).pRefOri[numRef0] = Some(PicRef::Rec(idRef));
+                    (*pCtx).pRefList0[numRef0] = Some(idRef);
                     (*pCtx).iNumRef0 += 1;
                 }
             }
@@ -1058,7 +1089,7 @@ pub unsafe fn WelsBuildRefList(
         for k in 0..MAX_TEMPORAL_LEVEL {
             (*pCtx).bRefOfCurTidIsLtr[uiDid][k] = false;
         }
-        (*pCtx).pRefList0[0] = std::ptr::null_mut();
+        (*pCtx).pRefList0[0] = None;
     }
 
     if (*pCtx).iNumRef0 as i32 > kiNumRef {
@@ -1074,13 +1105,22 @@ pub unsafe fn UpdateBlockStatic(pCtx: *mut sWelsEncCtx) {
     }
     // ref_list_mgr_svc.cpp:649 — static_cast<SVAAFrameInfoExt*> (pCtx->pVaa)
         let pVaaExt = (*pCtx).pVaa as *mut SVAAFrameInfoExt;
+    let pRefList = *(*pCtx).ppRefPicListExt.add((*pCtx).uiDependencyId as usize);
     for idx in 0..((*pCtx).iNumRef0 as usize) {
-        let pRef = (*pCtx).pRefList0[idx];
-        if !pRef.is_null() && (*pVaaExt).iVaaBestRefFrameNum != (*pRef).iFrameNum {
+        let Some(idRef) = (*pCtx).pRefList0[idx] else {
+            continue;
+        };
+        // Two pools again: the reference is a reconstruction picture, the current one
+        // a spatial source picture. Both are copied to geometry before the call.
+        let sRef = (*pRefList).pic(idRef).planes();
+        if (*pVaaExt).iVaaBestRefFrameNum != (*pRefList).pic(idRef).iFrameNum {
+            let sSrc = (*pCtx)
+                .pEncPic
+                .map(|id| (*(*pCtx).pVpp).src_id(id).planes());
             (*(*pCtx).pVpp).UpdateBlockIdcForScreen(
                 (*pVaaExt).pVaaBestBlockStaticIdc,
-                pRef,
-                (*pCtx).pEncPic,
+                Some(&sRef),
+                sSrc.as_ref(),
             );
         }
     }
@@ -1111,8 +1151,11 @@ pub unsafe fn WelsUpdateSliceHeaderSyntax(
 
         pSliceHdr.uiRefCount = (*pCtx).iNumRef0 as u8;
         if (*pCtx).iNumRef0 > 0 {
-            let pRef0 = (*pCtx).pRefList0[0];
-            let isLongRef = !pRef0.is_null() && (*pRef0).bIsLongRef;
+            let pRefList = *(*pCtx).ppRefPicListExt.add((*pCtx).uiDependencyId as usize);
+            let isLongRef = match (*pCtx).pRefList0[0] {
+                Some(id) => (*pRefList).pic(id).bIsLongRef,
+                None => false,
+            };
             if !isLongRef || !(*(*pCtx).pSvcParam).bEnableLongTermReference {
                 pRefReorder.SReorderingSyntax[0].uiReorderingOfPicNumsIdc = 0;
                 pRefReorder.SReorderingSyntax[0].uiAbsDiffPicNumMinus1 = iAbsDiffPicNumMinus1 as u32;
@@ -1122,9 +1165,9 @@ pub unsafe fn WelsUpdateSliceHeaderSyntax(
                 while (iRefIdx as i32) < (*pCtx).iNumRef0 as i32 {
                     if iRefIdx < MAX_REFERENCE_REORDER_COUNT_NUM {
                         pRefReorder.SReorderingSyntax[iRefIdx].uiReorderingOfPicNumsIdc = 2;
-                        let pR = (*pCtx).pRefList0[iRefIdx];
-                        if !pR.is_null() {
-                            pRefReorder.SReorderingSyntax[iRefIdx].iLongTermPicNum = (*pR).iLongTermPicNum as u16;
+                        if let Some(id) = (*pCtx).pRefList0[iRefIdx] {
+                            pRefReorder.SReorderingSyntax[iRefIdx].iLongTermPicNum =
+                                (*pRefList).pic(id).iLongTermPicNum as u16;
                         }
                     }
                     iRefIdx += 1;
@@ -1159,9 +1202,9 @@ pub unsafe fn WelsUpdateRefSyntax(pCtx: *mut sWelsEncCtx, kiPOC: i32, kiFrameTyp
     let pParamD = &(*(*pCtx).pSvcParam).sDependencyLayers[uiDid];
 
     if (*pCtx).iNumRef0 > 0 {
-        let pRef0 = (*pCtx).pRefList0[0];
-        if !pRef0.is_null() {
-            iAbsDiffPicNumMinus1 = pParamD.iFrameNum - (*pRef0).iFrameNum - 1;
+        let pRefList = *(*pCtx).ppRefPicListExt.add(uiDid);
+        if let Some(id) = (*pCtx).pRefList0[0] {
+            iAbsDiffPicNumMinus1 = pParamD.iFrameNum - (*pRefList).pic(id).iFrameNum - 1;
             if iAbsDiffPicNumMinus1 < 0 && !(*pCtx).pSps.is_null() {
                 iAbsDiffPicNumMinus1 += 1 << (*(*pCtx).pSps).uiLog2MaxFrameNum;
             }
@@ -1177,20 +1220,38 @@ pub unsafe fn WelsUpdateRefSyntax(pCtx: *mut sWelsEncCtx, kiPOC: i32, kiFrameTyp
 }
 
 /// Synchronizes reconstructed picture metadata back to the source input picture.
-pub unsafe fn UpdateOriginalPicInfo(pOrigPic: *mut SPicture, pReconPic: *mut SPicture) {
-    if pOrigPic.is_null() || pReconPic.is_null() {
+/// **The one place the two pools meet by name** — `pOrigPic` is a spatial source
+/// picture, `pReconPic` a reconstruction picture. Two owners, so two references can
+/// be live at once, and the two handle types are what keep the arguments the right
+/// way round (session B's settlement, and the reason there are two).
+pub fn UpdateOriginalPicInfo(pOrigPic: &mut SPicture, pReconPic: &SPicture) {
+    pOrigPic.iPictureType = pReconPic.iPictureType;
+    pOrigPic.iFramePoc = pReconPic.iFramePoc;
+    pOrigPic.iFrameNum = pReconPic.iFrameNum;
+    pOrigPic.uiSpatialId = pReconPic.uiSpatialId;
+    pOrigPic.uiTemporalId = pReconPic.uiTemporalId;
+    pOrigPic.iLongTermPicNum = pReconPic.iLongTermPicNum;
+    pOrigPic.bUsedAsRef = pReconPic.bUsedAsRef;
+    pOrigPic.bIsLongRef = pReconPic.bIsLongRef;
+    pOrigPic.bIsSceneLTR = pReconPic.bIsSceneLTR;
+    pOrigPic.iFrameAverageQp = pReconPic.iFrameAverageQp;
+}
+
+/// `UpdateOriginalPicInfo` over the context's current pair, resolving each handle in
+/// its own pool. A no-op if either is unset, as the C++'s null tests are.
+unsafe fn UpdateOriginalPicInfoFromCtx(pCtx: *mut sWelsEncCtx) {
+    let (Some(idEnc), Some(idDec)) = ((*pCtx).pEncPic, (*pCtx).pDecPic) else {
+        return;
+    };
+    let pRefList = *(*pCtx).ppRefPicListExt.add((*pCtx).uiDependencyId as usize);
+    if pRefList.is_null() || (*pCtx).pVpp.is_null() {
         return;
     }
-    (*pOrigPic).iPictureType = (*pReconPic).iPictureType;
-    (*pOrigPic).iFramePoc = (*pReconPic).iFramePoc;
-    (*pOrigPic).iFrameNum = (*pReconPic).iFrameNum;
-    (*pOrigPic).uiSpatialId = (*pReconPic).uiSpatialId;
-    (*pOrigPic).uiTemporalId = (*pReconPic).uiTemporalId;
-    (*pOrigPic).iLongTermPicNum = (*pReconPic).iLongTermPicNum;
-    (*pOrigPic).bUsedAsRef = (*pReconPic).bUsedAsRef;
-    (*pOrigPic).bIsLongRef = (*pReconPic).bIsLongRef;
-    (*pOrigPic).bIsSceneLTR = (*pReconPic).bIsSceneLTR;
-    (*pOrigPic).iFrameAverageQp = (*pReconPic).iFrameAverageQp;
+    // Two owners, two raw parents, so both references are live at once without either
+    // borrow overlapping the other.
+    let pRecon: &SPicture = (*pRefList).pic(idDec);
+    let pOrig: &mut SPicture = (*(*pCtx).pVpp).m_pSpatialPicPool.get_mut(idEnc);
+    UpdateOriginalPicInfo(pOrig, pRecon);
 }
 
 pub unsafe fn UpdateSrcPicListLosslessScreenRefSelectionWithLtr(pCtx: *mut sWelsEncCtx) {
@@ -1198,16 +1259,16 @@ pub unsafe fn UpdateSrcPicListLosslessScreenRefSelectionWithLtr(pCtx: *mut sWels
         return;
     }
     let iDIdx = (*pCtx).uiDependencyId as i32;
-    UpdateOriginalPicInfo((*pCtx).pEncPic, (*pCtx).pDecPic);
+    UpdateOriginalPicInfoFromCtx(pCtx);
     PrefetchNextBuffer(pCtx);
     if !(*pCtx).pVpp.is_null() && !(*pCtx).pVaa.is_null() {
-        let pLongRefList = (**(*pCtx).ppRefPicListExt.add((iDIdx as usize) as usize)).pLongRefList.as_mut_ptr();
+        let pRefList = &*(*(*pCtx).ppRefPicListExt.add(iDIdx as usize));
         // wels_preprocess.h:143 takes const int32_t; the uint8_t field promotes.
         (*(*pCtx).pVpp).UpdateSrcListLosslessScreenRefSelectionWithLtr(
             (*pCtx).pEncPic,
             iDIdx,
             (*(*pCtx).pVaa).uiMarkLongTermPicIdx as i32,
-            pLongRefList,
+            pRefList,
         );
     }
 }
@@ -1217,18 +1278,12 @@ pub unsafe fn UpdateSrcPicList(pCtx: *mut sWelsEncCtx) {
         return;
     }
     let iDIdx = (*pCtx).uiDependencyId as i32;
-    UpdateOriginalPicInfo((*pCtx).pEncPic, (*pCtx).pDecPic);
+    UpdateOriginalPicInfoFromCtx(pCtx);
     PrefetchNextBuffer(pCtx);
     if !(*pCtx).pVpp.is_null() {
         let pRefList = *(*pCtx).ppRefPicListExt.add((iDIdx as usize) as usize);
-        let pShortRefList = (*pRefList).pShortRefList.as_mut_ptr();
         let shortCount = (*pRefList).uiShortRefCount;
-        (*(*pCtx).pVpp).UpdateSrcList(
-            (*pCtx).pEncPic,
-            iDIdx,
-            pShortRefList,
-            shortCount as u32,
-        );
+        (*(*pCtx).pVpp).UpdateSrcList((*pCtx).pEncPic, iDIdx, shortCount as u32);
     }
 }
 
@@ -1239,36 +1294,39 @@ pub unsafe fn WelsUpdateRefListScreen(pCtx: *mut sWelsEncCtx) -> bool {
     }
     let uiDid = (*pCtx).uiDependencyId as usize;
     let pRefList = *(*pCtx).ppRefPicListExt.add((uiDid) as usize);
-    if pRefList.is_null() || (*pRefList).pRef[0].is_null() {
+    if pRefList.is_null() || (*pRefList).pRef.is_empty() {
         return false;
     }
     let pLtr = &mut *(*pCtx).pLtr.add((uiDid) as usize);
     let pParamD = std::ptr::addr_of_mut!((*(*pCtx).pSvcParam).sDependencyLayers[uiDid]);
     let kuiTid = (*pCtx).uiTemporalId;
 
-    if !(*pCtx).pDecPic.is_null() {
-        let pDecPic = (*pCtx).pDecPic;
+    if let Some(idDec) = (*pCtx).pDecPic {
+        // The reconstruction picture, resolved once — S37: everything below either
+        // reads its geometry or writes its own fields, and the borrow ends before the
+        // reference-list shifts that would touch the pool again.
+        let pDecPic: &mut SPicture = (*pRefList).pic_mut(idDec);
         if (*pParamD).iHighestTemporalId == 0 || (kuiTid as i32) < (*pParamD).iHighestTemporalId as i32 {
             // T4b.3b: as above — `ref_list_mgr_svc.cpp:779`, the second of the
             // encoder's two identical expand sites.
             ExpandReferencingPicture(
-                &(*pDecPic).pData,
-                (*pDecPic).iWidthInPixel,
-                (*pDecPic).iHeightInPixel,
-                &(*pDecPic).iLineSize,
+                &pDecPic.pData,
+                pDecPic.iWidthInPixel,
+                pDecPic.iHeightInPixel,
+                &pDecPic.iLineSize,
             );
         }
 
-        (*pDecPic).uiTemporalId = (*pCtx).uiTemporalId;
-        (*pDecPic).uiSpatialId = (*pCtx).uiDependencyId;
-        (*pDecPic).iFrameNum = (*pParamD).iFrameNum;
-        (*pDecPic).iFramePoc = (*pParamD).iPOC;
-        (*pDecPic).bUsedAsRef = true;
-        (*pDecPic).bIsLongRef = true;
-        (*pDecPic).bIsSceneLTR = pLtr.bLTRMarkingFlag
+        pDecPic.uiTemporalId = (*pCtx).uiTemporalId;
+        pDecPic.uiSpatialId = (*pCtx).uiDependencyId;
+        pDecPic.iFrameNum = (*pParamD).iFrameNum;
+        pDecPic.iFramePoc = (*pParamD).iPOC;
+        pDecPic.bUsedAsRef = true;
+        pDecPic.bIsLongRef = true;
+        pDecPic.bIsSceneLTR = pLtr.bLTRMarkingFlag
             || ((*(*pCtx).pSvcParam).bEnableLongTermReference
                 && (*pCtx).eSliceType == EWelsSliceType::I_SLICE);
-        (*pDecPic).iLongTermPicNum = pLtr.iCurLtrIdx;
+        pDecPic.iLongTermPicNum = pLtr.iCurLtrIdx;
     }
 
     if (*pCtx).eSliceType == EWelsSliceType::P_SLICE {
@@ -1312,7 +1370,9 @@ pub unsafe fn WelsBuildRefListScreen(
 
     if (*pCtx).eSliceType != EWelsSliceType::I_SLICE {
         let mut iLtrRefIdx = 0i32;
-        let mut pRefOri: *mut SPicture = std::ptr::null_mut();
+        // The screen path's `pRefOri` is a **spatial source** picture, where the
+        // camera path's is a reconstruction picture — see [`PicRef`].
+        let mut pRefOri: Option<SrcPicId> = None;
 
         for idx in 0..(*pVaaExt).iNumOfAvailableRef {
             if !(*pCtx).pVpp.is_null() {
@@ -1322,29 +1382,34 @@ pub unsafe fn WelsBuildRefListScreen(
                     &mut pRefOri,
                 );
             }
+            let refOri = pRefOri.map(PicRef::Src);
             if iLtrRefIdx >= 0 && iLtrRefIdx <= (*pParam).iLTRRefNum {
-                let pRefPic = (*pRefList).pLongRefList[iLtrRefIdx as usize];
-                if !pRefPic.is_null() && (*pRefPic).bUsedAsRef && (*pRefPic).bIsLongRef {
-                    if (*pRefPic).uiTemporalId <= (*pCtx).uiTemporalId
-                        && (!(*pCtx).bCurFrameMarkedAsSceneLtr || (*pRefPic).bIsSceneLTR)
-                    {
-                        let num0 = (*pCtx).iNumRef0 as usize;
-                        (*(*pCtx).pCurDqLayer).pRefOri[num0] = pRefOri;
-                        (*pCtx).pRefList0[num0] = pRefPic;
-                        (*pCtx).iNumRef0 += 1;
-                    }
+                let Some(idRefPic) = (*pRefList).pLongRefList[iLtrRefIdx as usize] else {
+                    continue;
+                };
+                let pRefPic = (*pRefList).pic(idRefPic);
+                if pRefPic.bUsedAsRef
+                    && pRefPic.bIsLongRef
+                    && pRefPic.uiTemporalId <= (*pCtx).uiTemporalId
+                    && (!(*pCtx).bCurFrameMarkedAsSceneLtr || pRefPic.bIsSceneLTR)
+                {
+                    let num0 = (*pCtx).iNumRef0 as usize;
+                    (*(*pCtx).pCurDqLayer).pRefOri[num0] = refOri;
+                    (*pCtx).pRefList0[num0] = Some(idRefPic);
+                    (*pCtx).iNumRef0 += 1;
                 }
             } else {
                 let mut i = iNumRef;
                 while i >= 0 {
-                    let pLong = (*pRefList).pLongRefList[i as usize];
-                    if pLong.is_null() {
+                    let Some(idLong) = (*pRefList).pLongRefList[i as usize] else {
                         i -= 1;
                         continue;
-                    } else if (*pLong).uiTemporalId == 0 || (*pLong).uiTemporalId < (*pCtx).uiTemporalId {
+                    };
+                    let uiTemporalId = (*pRefList).pic(idLong).uiTemporalId;
+                    if uiTemporalId == 0 || uiTemporalId < (*pCtx).uiTemporalId {
                         let num0 = (*pCtx).iNumRef0 as usize;
-                        (*(*pCtx).pCurDqLayer).pRefOri[num0] = pRefOri;
-                        (*pCtx).pRefList0[num0] = pLong;
+                        (*(*pCtx).pCurDqLayer).pRefOri[num0] = refOri;
+                        (*pCtx).pRefList0[num0] = Some(idLong);
                         (*pCtx).iNumRef0 += 1;
                         break;
                     }
@@ -1355,7 +1420,7 @@ pub unsafe fn WelsBuildRefListScreen(
     } else {
         WelsResetRefList(pCtx);
         ResetLtrState(&mut *(*pCtx).pLtr.add((uiDid) as usize));
-        (*pCtx).pRefList0[0] = std::ptr::null_mut();
+        (*pCtx).pRefList0[0] = None;
     }
 
     if (*pCtx).iNumRef0 as i32 > iNumRef {
@@ -1433,7 +1498,7 @@ pub unsafe fn WelsMarkPicScreen(pCtx: *mut sWelsEncCtx) {
             pLtr.bLTRMarkingFlag = false;
             if bIsRefListNotFull {
                 for i in 0..iLongRefNum {
-                    if (*pRefList).pLongRefList[i as usize].is_null() {
+                    if (*pRefList).pLongRefList[i as usize].is_none() {
                         pLtr.iCurLtrIdx = i;
                         break;
                     }
@@ -1441,9 +1506,12 @@ pub unsafe fn WelsMarkPicScreen(pCtx: *mut sWelsEncCtx) {
             } else {
                 let mut iRefNum_t = [0i32; MAX_TEMPORAL_LAYER_NUM];
                 for i in 0..((*pRefList).uiLongRefCount as usize) {
-                    let pPic = (*pRefList).pLongRefList[i];
-                    if !pPic.is_null() && (*pPic).bUsedAsRef && (*pPic).bIsLongRef && !(*pPic).bIsSceneLTR {
-                        let tid = (*pPic).uiTemporalId as usize;
+                    let Some(idPic) = (*pRefList).pLongRefList[i] else {
+                        continue;
+                    };
+                    let pPic = (*pRefList).pic(idPic);
+                    if pPic.bUsedAsRef && pPic.bIsLongRef && !pPic.bIsSceneLTR {
+                        let tid = pPic.uiTemporalId as usize;
                         if tid < MAX_TEMPORAL_LAYER_NUM {
                             iRefNum_t[tid] += 1;
                         }
@@ -1461,24 +1529,26 @@ pub unsafe fn WelsMarkPicScreen(pCtx: *mut sWelsEncCtx) {
                 let iMaxFrameNum = 1 << (*(*pCtx).pSps).uiLog2MaxFrameNum;
 
                 for i in 0..((*pRefList).uiLongRefCount as usize) {
-                    let pPic = (*pRefList).pLongRefList[i];
-                    if !pPic.is_null()
-                        && (*pPic).bUsedAsRef
-                        && (*pPic).bIsLongRef
-                        && !(*pPic).bIsSceneLTR
-                        && iMaxMultiRefTid == (*pPic).uiTemporalId as i32
+                    let Some(idPic) = (*pRefList).pLongRefList[i] else {
+                        continue;
+                    };
+                    let pPic = (*pRefList).pic(idPic);
+                    if pPic.bUsedAsRef
+                        && pPic.bIsLongRef
+                        && !pPic.bIsSceneLTR
+                        && iMaxMultiRefTid == pPic.uiTemporalId as i32
                     {
-                        if !IsValidFrameNum((*pPic).iFrameNum) {
+                        if !IsValidFrameNum(pPic.iFrameNum) {
                             return;
                         }
-                        let iDeltaFrameNum = if pParamD.iFrameNum >= (*pPic).iFrameNum {
-                            pParamD.iFrameNum - (*pPic).iFrameNum
+                        let iDeltaFrameNum = if pParamD.iFrameNum >= pPic.iFrameNum {
+                            pParamD.iFrameNum - pPic.iFrameNum
                         } else {
-                            pParamD.iFrameNum + iMaxFrameNum - (*pPic).iFrameNum
+                            pParamD.iFrameNum + iMaxFrameNum - pPic.iFrameNum
                         };
 
                         if iDeltaFrameNum > iLongestDeltaFrameNum {
-                            pLtr.iCurLtrIdx = (*pPic).iLongTermPicNum;
+                            pLtr.iCurLtrIdx = pPic.iLongTermPicNum;
                             iLongestDeltaFrameNum = iDeltaFrameNum;
                         }
                     }

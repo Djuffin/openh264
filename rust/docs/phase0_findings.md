@@ -2366,3 +2366,56 @@ each — 4/4236 ~ 1/1060**, inside the documented ~1/400-1000 band.
 
 Running total: **seventy-four measurements, twenty-three alternations, forty-seven
 acquittals.**
+
+---
+
+### Seventy-fifth measurement — 2026-08-20, Phase 6 session F, the picture-id flip's `family` gate: **two** configurations in one run, and the alternation says the head is the *better* side
+
+The first hit of this session, on the battery closing the flip that turns every
+stored `SPicture*` into a handle. **Two** debug-sweep configurations failed in one
+run, where the protocol's retry rule is written for one:
+
+```
+mt CiscoVT2people_160x96_6fps  t=4 sm=3 n=600 cabac=1 rc=0 :: C++ 42281  Rust 0
+mt CiscoVT2people_320x192_12fps t=4 sm=3 n=600 cabac=1 rc=1 :: C++ 39981  Rust 37837
+```
+
+Both carry F3's signature exactly — `mt`, `sm=3`, `t=4`, wrong output length — and the
+release sweep of the same battery read **369/369**. The `Rust 0` row is the
+zero-length variant measurement 6 recorded; the other is the ordinary short output.
+Because the count was two rather than one, this was **not** adjudicated on the retry
+rule alone.
+
+**Step 1 — each configuration re-run 5x, machine otherwise idle: BYTE-IDENTICAL
+5/5 each**, ten runs, no exception.
+
+**Step 2 — three whole `mt` presets at head, idle: 360/360, zero failures.**
+
+**Step 3 — the alternation, run because the count was anomalous.** Base
+(`bf3488d3`, this session's own pre-flip commit) built into a separate worktree with
+its own `rust_enc`, and the two sides alternated round by round on the same machine
+under the same load:
+
+| round | base FAIL | head FAIL |
+|---|---|---|
+| 1 | 1 | 0 |
+| 2 | 2 | 0 |
+| 3 | 1 | 0 |
+| 4 | 0 | 0 |
+| 5 | 1 | 1 |
+| 6 | 0 | 1 |
+| **total** | **5** | **2** |
+
+**720 configurations a side.** The head is not worse than the base; it is, on this
+sample, hit less than half as often. Whatever produces this signature was in the tree
+before the flip and the flip did not feed it — which is what F61 already says about
+this exact configuration class (the multi-threaded slice-bank growth never re-stamps
+the layer's slice list, and *the C++ has the same shape*).
+
+**The lesson for the protocol**: "a single failing configuration" is a threshold for
+*skipping* the alternation, not a threshold for suspicion. Two hits in one battery on
+one signature is still one phenomenon; the count only decides how much evidence the
+adjudication owes, and here it bought the alternation. **Acquitted as F3.**
+
+Running total: **seventy-five measurements, twenty-four alternations, forty-eight
+acquittals.**

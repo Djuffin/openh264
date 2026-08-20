@@ -1304,7 +1304,7 @@ pub unsafe fn DeblockingMbAvcbase(
 // ============================================================================
 
 pub unsafe fn DeblockingFilterFrameAvcbase(pCurDq: *mut SDqLayer, pFunc: *mut SWelsFuncPtrList) {
-    if pCurDq.is_null() || (*pCurDq).pDecPic.is_null() {
+    if pCurDq.is_null() || (*pCurDq).pDecPic.is_none() {
         return;
     }
     let pSlice = crate::encoder::svc_encode_slice::slice_in_layer(pCurDq, 0);
@@ -1328,19 +1328,24 @@ pub unsafe fn DeblockingFilterFrameAvcbase(pCurDq: *mut SDqLayer, pFunc: *mut SW
         0
     };
 
-    let pDecPic = (*pCurDq).pDecPic;
-    pFilter.iCsStride[0] = (*pDecPic).iLineSize[0];
-    pFilter.iCsStride[1] = (*pDecPic).iLineSize[1];
-    pFilter.iCsStride[2] = (*pDecPic).iLineSize[2];
+    // S37: the reconstruction picture resolved once to its plane roots; the walk
+    // below is raw cursors derived from them.
+    let Some(pDecPic) = crate::encoder::svc_encode_slice::layer_dec_pic(pCurDq) else {
+        return;
+    };
+    let pDecPic = pDecPic.planes();
+    pFilter.iCsStride[0] = pDecPic.iLineSize[0];
+    pFilter.iCsStride[1] = pDecPic.iLineSize[1];
+    pFilter.iCsStride[2] = pDecPic.iLineSize[2];
 
     pFilter.iSliceAlphaC0Offset = sSliceHeaderExt.sSliceHeader.iSliceAlphaC0Offset;
     pFilter.iSliceBetaOffset = sSliceHeaderExt.sSliceHeader.iSliceBetaOffset;
     pFilter.iMbStride = kiMbWidth as i16;
 
     for j in 0..kiMbHeight {
-        pFilter.pCsData[0] = (*pDecPic).pData[0].add(((j as i32 * pFilter.iCsStride[0]) << 4) as usize);
-        pFilter.pCsData[1] = (*pDecPic).pData[1].add(((j as i32 * pFilter.iCsStride[1]) << 3) as usize);
-        pFilter.pCsData[2] = (*pDecPic).pData[2].add(((j as i32 * pFilter.iCsStride[2]) << 3) as usize);
+        pFilter.pCsData[0] = pDecPic.pData[0].add(((j as i32 * pFilter.iCsStride[0]) << 4) as usize);
+        pFilter.pCsData[1] = pDecPic.pData[1].add(((j as i32 * pFilter.iCsStride[1]) << 3) as usize);
+        pFilter.pCsData[2] = pDecPic.pData[2].add(((j as i32 * pFilter.iCsStride[2]) << 3) as usize);
 
         for _ in 0..kiMbWidth {
             DeblockingMbAvcbase(pFunc, pCurrentMbBlock, &mut pFilter);
@@ -1390,10 +1395,15 @@ pub unsafe extern "C" fn DeblockingFilterSliceAvcbase(
         0
     };
 
-    let pDecPic = (*pCurDq).pDecPic;
-    pFilter.iCsStride[0] = (*pDecPic).iLineSize[0];
-    pFilter.iCsStride[1] = (*pDecPic).iLineSize[1];
-    pFilter.iCsStride[2] = (*pDecPic).iLineSize[2];
+    // S37: the reconstruction picture resolved once to its plane roots; the walk
+    // below is raw cursors derived from them.
+    let Some(pDecPic) = crate::encoder::svc_encode_slice::layer_dec_pic(pCurDq) else {
+        return;
+    };
+    let pDecPic = pDecPic.planes();
+    pFilter.iCsStride[0] = pDecPic.iLineSize[0];
+    pFilter.iCsStride[1] = pDecPic.iLineSize[1];
+    pFilter.iCsStride[2] = pDecPic.iLineSize[2];
 
     pFilter.iSliceAlphaC0Offset = sSliceHeaderExt.sSliceHeader.iSliceAlphaC0Offset;
     pFilter.iSliceBetaOffset = sSliceHeaderExt.sSliceHeader.iSliceBetaOffset;
@@ -1408,9 +1418,9 @@ pub unsafe extern "C" fn DeblockingFilterSliceAvcbase(
         let mbX = (*pCurrentMbBlock).iMbX as i32;
         let mbY = (*pCurrentMbBlock).iMbY as i32;
 
-        pFilter.pCsData[0] = (*pDecPic).pData[0].add(((mbX + mbY * pFilter.iCsStride[0]) << 4) as usize);
-        pFilter.pCsData[1] = (*pDecPic).pData[1].add(((mbX + mbY * pFilter.iCsStride[1]) << 3) as usize);
-        pFilter.pCsData[2] = (*pDecPic).pData[2].add(((mbX + mbY * pFilter.iCsStride[2]) << 3) as usize);
+        pFilter.pCsData[0] = pDecPic.pData[0].add(((mbX + mbY * pFilter.iCsStride[0]) << 4) as usize);
+        pFilter.pCsData[1] = pDecPic.pData[1].add(((mbX + mbY * pFilter.iCsStride[1]) << 3) as usize);
+        pFilter.pCsData[2] = pDecPic.pData[2].add(((mbX + mbY * pFilter.iCsStride[2]) << 3) as usize);
 
         DeblockingMbAvcbase(pFunc, pCurrentMbBlock, &mut pFilter);
 

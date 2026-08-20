@@ -13,6 +13,7 @@
 #![allow(non_snake_case, non_camel_case_types, non_upper_case_globals)]
 
 // Phase 4a: `pfMdCost`/`pfMeCost` are enum selectors, not interior pointers (F13).
+use crate::encoder::picture::{RecPicId, RecPicPool, SrcPicId, SrcPicPool};
 use crate::encoder::md::CostFamily;
 use std::ffi::{c_char, c_void};
 use std::ptr::{null, null_mut};
@@ -713,17 +714,14 @@ pub unsafe fn InitDqLayers(
             iPicChromaWidth,
         );
 
-        // reference list
-        let pRefList = (*pMa).WelsMallocz(
-            std::mem::size_of::<SRefList>() as u32,
-            tag!("pRefList"),
-        ) as *mut SRefList;
-        if pRefList.is_null() {
-            return 1;
-        }
+        // Reference list. **`Box`-built with a real constructor since T6.F1** — it
+        // owns this layer's reconstruction pool now, and a `WelsMallocz`'d shell is UB
+        // at the pool's first drop (S21). It is still reached through a raw pointer in
+        // the zeroed context, exactly as `SDqLayer` is.
+        let mut pending: Vec<Box<SPicture>> = Vec::new();
         loop {
             // use the actual size of the current layer
-            (*pRefList).pRef[i as usize] = AllocPicture(
+            let Some(pPic) = AllocPicture(
                 pMa,
                 kiWidth,
                 kiHeight,
@@ -733,18 +731,20 @@ pub unsafe fn InitDqLayers(
                 } else {
                     0
                 },
-            );
-            if (*pRefList).pRef[i as usize].is_null() {
+            ) else {
                 return 1;
-            }
+            };
+            pending.push(pPic);
             i += 1;
             if i >= 1 + iNumRef {
                 break;
             }
         }
 
-        (*pRefList).pNextBuffer = (*pRefList).pRef[0];
-        *(**ppCtx).ppRefPicListExt.add(iDlayerIndex as usize) = pRefList;
+        let mut pRefListBox = SRefList::new();
+        pRefListBox.pRef = RecPicPool::new(pending);
+        pRefListBox.pNextBuffer = Some(pRefListBox.pRef.at(0));
+        *(**ppCtx).ppRefPicListExt.add(iDlayerIndex as usize) = Box::into_raw(pRefListBox);
         iDlayerIndex += 1;
     }
 
@@ -1299,10 +1299,10 @@ pub unsafe fn RequestMemorySvc(
     }
     crate::encoder::md::MvdCostInit((**ppCtx).pMvdCostTable, kuiMvdInterTableStride);
 
-    if !(*(**ppCtx).ppRefPicListExt).is_null() && !(**(**ppCtx).ppRefPicListExt).pRef[0].is_null() {
-        (**ppCtx).pDecPic = (**(**ppCtx).ppRefPicListExt).pRef[0];
+    if !(*(**ppCtx).ppRefPicListExt).is_null() && !(**(**ppCtx).ppRefPicListExt).pRef.is_empty() {
+        (**ppCtx).pDecPic = Some((**(**ppCtx).ppRefPicListExt).pRef.at(0));
     } else {
-        (**ppCtx).pDecPic = null_mut(); // error here
+        (**ppCtx).pDecPic = None; // error here
     }
 
     (**ppCtx).pSps = (**ppCtx).pSpsArray;
@@ -1590,26 +1590,18 @@ pub unsafe fn FreeDqLayer(pDq: *mut *mut SDqLayer, pMa: *mut CMemoryAlign) {
 pub unsafe fn FreeRefList(
     pRefList: *mut *mut SRefList,
     pMa: *mut CMemoryAlign,
-    iMaxNumRefFrame: i32,
+    _iMaxNumRefFrame: i32,
 ) {
     if (*pRefList).is_null() {
         return;
     }
-    let p = *pRefList;
-
-    let mut iRef: i32 = 0;
-    loop {
-        if !(*p).pRef[iRef as usize].is_null() {
-            crate::encoder::wels_preprocess::FreePicture(pMa, &mut (*p).pRef[iRef as usize]);
-        }
-        iRef += 1;
-        if iRef >= 1 + iMaxNumRefFrame {
-            break;
-        }
-    }
-
-    (*pMa).WelsFree(p as *mut c_void, tag!("pRefList"));
+    // **T6.F1**: the per-picture walk is the pool's, and the list is a `Box`. What is
+    // left of the C++'s loop is the plane buffers, which are still `CMemoryAlign`'s
+    // until T6.F2 — after that this is one `from_raw`.
+    let mut p = Box::from_raw(*pRefList);
     *pRefList = null_mut();
+    p.pRef.free_planes_and_clear(pMa);
+    drop(p);
 }
 
 #[cfg(test)]
@@ -1765,8 +1757,11 @@ mod tests {
             );
 
             assert!(!(*pCtx).ppRefPicListExt.is_null());
-            assert!(!(**(*pCtx).ppRefPicListExt).pRef[0].is_null());
-            assert_eq!((*pCtx).pDecPic, (**(*pCtx).ppRefPicListExt).pRef[0]);
+            assert!(!(**(*pCtx).ppRefPicListExt).pRef.is_empty());
+            assert_eq!(
+                (*pCtx).pDecPic,
+                Some((**(*pCtx).ppRefPicListExt).pRef.at(0))
+            );
 
             assert!(!(*pCtx).pStrideTab.is_null());
             assert!(!(*pCtx).pMvdCostTable.is_null());
@@ -2024,8 +2019,8 @@ pub unsafe fn PrefetchReferencePicture(pCtx: *mut sWelsEncCtx, keFrameType: EVid
         uiRefIdx = 0; // reordered reference index
     } else {
         // safe for IDR coding
-        (*pCtx).pRefPic = null_mut();
-        (*(*pCtx).pCurDqLayer).pRefPic = null_mut();
+        (*pCtx).pRefPic = None;
+        (*(*pCtx).pCurDqLayer).pRefPic = None;
     }
 
     let mut iIdx = 0;
@@ -2104,12 +2099,15 @@ pub unsafe fn StackBackEncoderStatus(pEncCtx: *mut sWelsEncCtx, keFrameType: EVi
 /// NAL header and picture buffers.
 pub unsafe fn WelsInitCurrentLayer(pCtx: *mut sWelsEncCtx, _kiWidth: i32, _kiHeight: i32) {
     let pParam = (*pCtx).pSvcParam;
-    let pEncPic = (*pCtx).pEncPic;
-    let pDecPic = (*pCtx).pDecPic;
     let pCurDq = (*pCtx).pCurDqLayer;
     if pCurDq.is_null() {
         return;
     }
+    // **T6.F1**: the layer is stamped with the list its handles belong to, here, once
+    // a frame — `pRefPic`/`pDecPic` on `SDqLayer` are slots of *this* list, and the
+    // per-macroblock mode-decision family resolves them through it.
+    let pRefList = *(*pCtx).ppRefPicListExt.add((*pCtx).uiDependencyId as usize);
+    (*pCurDq).pRefList = pRefList;
     let pBaseSlice = crate::encoder::svc_encode_slice::slice_in_layer(pCurDq, 0);
     if pBaseSlice.is_null() {
         return;
@@ -2123,7 +2121,7 @@ pub unsafe fn WelsInitCurrentLayer(pCtx: *mut sWelsEncCtx, _kiWidth: i32, _kiHei
     // the latter reborrows the whole array and a second such derivation pops the first.
     let pParamInternal = std::ptr::addr_of_mut!((*pParam).sDependencyLayers[kiCurDid as usize]);
 
-    (*pCurDq).pDecPic = pDecPic;
+    (*pCurDq).pDecPic = (*pCtx).pDecPic;
 
     debug_assert!(iSliceCount > 0);
 
@@ -2178,20 +2176,33 @@ pub unsafe fn WelsInitCurrentLayer(pCtx: *mut sWelsEncCtx, _kiWidth: i32, _kiHei
             || (*pCtx).eSliceType == EWelsSliceType::I_SLICE);
     pNalHdExt.uiTemporalId = (*pCtx).uiTemporalId;
 
-    // pEncPic data
-    (*pCurDq).pEncData[0] = (*pEncPic).pData[0];
-    (*pCurDq).pEncData[1] = (*pEncPic).pData[1];
-    (*pCurDq).pEncData[2] = (*pEncPic).pData[2];
-    (*pCurDq).iEncStride[0] = (*pEncPic).iLineSize[0];
-    (*pCurDq).iEncStride[1] = (*pEncPic).iLineSize[1];
-    (*pCurDq).iEncStride[2] = (*pEncPic).iLineSize[2];
+    // pEncPic data. **S37, and the resolution sits here rather than at the top of the
+    // function on purpose**: the C++ loads both `SPicture*`s at entry and dereferences
+    // them only at this line, so resolving here leaves every statement above it
+    // running on a path where a picture is not bound — which is what the C++ does,
+    // minus the null dereference it would take three lines later.
+    let (Some(idEnc), Some(idDec)) = ((*pCtx).pEncPic, (*pCtx).pDecPic) else {
+        return;
+    };
+    if pRefList.is_null() || (*pCtx).pVpp.is_null() {
+        return;
+    }
+    let pEncPic = (*(*pCtx).pVpp).src_id(idEnc).planes();
+    let pDecPic = (*pRefList).pic(idDec).planes();
+
+    (*pCurDq).pEncData[0] = pEncPic.pData[0];
+    (*pCurDq).pEncData[1] = pEncPic.pData[1];
+    (*pCurDq).pEncData[2] = pEncPic.pData[2];
+    (*pCurDq).iEncStride[0] = pEncPic.iLineSize[0];
+    (*pCurDq).iEncStride[1] = pEncPic.iLineSize[1];
+    (*pCurDq).iEncStride[2] = pEncPic.iLineSize[2];
     // cs data
-    (*pCurDq).pCsData[0] = (*pDecPic).pData[0];
-    (*pCurDq).pCsData[1] = (*pDecPic).pData[1];
-    (*pCurDq).pCsData[2] = (*pDecPic).pData[2];
-    (*pCurDq).iCsStride[0] = (*pDecPic).iLineSize[0];
-    (*pCurDq).iCsStride[1] = (*pDecPic).iLineSize[1];
-    (*pCurDq).iCsStride[2] = (*pDecPic).iLineSize[2];
+    (*pCurDq).pCsData[0] = pDecPic.pData[0];
+    (*pCurDq).pCsData[1] = pDecPic.pData[1];
+    (*pCurDq).pCsData[2] = pDecPic.pData[2];
+    (*pCurDq).iCsStride[0] = pDecPic.iLineSize[0];
+    (*pCurDq).iCsStride[1] = pDecPic.iLineSize[1];
+    (*pCurDq).iCsStride[2] = pDecPic.iLineSize[2];
 
     (*pCurDq).bBaseLayerAvailableFlag = (*pCurDq).pRefLayer.is_some();
 
@@ -3013,8 +3024,12 @@ pub unsafe fn WelsEncoderEncodeExt(
         return ENC_RETURN_MEMALLOCERR;
     }
     let pSvcParam = (*pCtx).pSvcParam;
-    let mut fsnr: *mut SPicture;
-    let mut pEncPic: *mut SPicture;
+    // The two pictures this loop names, as **geometry copied out of them** rather than
+    // as references: `fsnr` is a reconstruction picture and `pEncPic` a spatial source
+    // picture, they live in different owners, and both are read after the calls that
+    // resolve the other (S37).
+    let mut fsnr: Option<crate::encoder::picture::PicPlanes>;
+    let mut pEncPic: crate::encoder::picture::PicPlanes;
     let mut iLayerNum = 0i32;
     let mut iLayerSize;
     let mut iSpatialNum = 0i32;
@@ -3158,10 +3173,16 @@ pub unsafe fn WelsEncoderEncodeExt(
         // the use is the ordering that holds however the calls are rearranged. The
         // binding above stays correct for `iDecompositionStages`, read before any
         // of them. Found by the encoder aliasing probe, Phase 6 session A.
-        pEncPic = (*pSpatialIndexMap.add(iSpatialIdx as usize)).pSrc;
-        (*pCtx).pEncPic = pEncPic;
-        (*pEncPic).iPictureType = (*pCtx).eSliceType as i32;
-        (*pEncPic).iFramePoc = (*pSvcParam).sDependencyLayers[iCurDid as usize].iPOC;
+        let idEncPic = (*pSpatialIndexMap.add(iSpatialIdx as usize))
+            .pSrc
+            .expect("the spatial index map names a live source picture");
+        (*pCtx).pEncPic = Some(idEncPic);
+        {
+            let p = (*(*pCtx).pVpp).m_pSpatialPicPool.get_mut(idEncPic);
+            p.iPictureType = (*pCtx).eSliceType as i32;
+            p.iFramePoc = (*pSvcParam).sDependencyLayers[iCurDid as usize].iPOC;
+        }
+        pEncPic = (*(*pCtx).pVpp).src_id(idEncPic).planes();
 
         iCurWidth = (*pParam).iVideoWidth;
         iCurHeight = (*pParam).iVideoHeight;
@@ -3231,10 +3252,17 @@ pub unsafe fn WelsEncoderEncodeExt(
         (*pCtx).eNalType = eNalType;
         (*pCtx).eNalPriority = eNalRefIdc;
 
-        (*pCtx).pDecPic = (**(*pCtx).ppRefPicListExt.add(iCurDid as usize)).pNextBuffer;
-        fsnr = (*pCtx).pDecPic;
-        (*(*pCtx).pDecPic).iPictureType = (*pCtx).eSliceType as i32;
-        (*(*pCtx).pDecPic).iFramePoc = (*pSvcParam).sDependencyLayers[iCurDid as usize].iPOC;
+        let pRefListCur = *(*pCtx).ppRefPicListExt.add(iCurDid as usize);
+        (*pCtx).pDecPic = (*pRefListCur).pNextBuffer;
+        fsnr = match (*pCtx).pDecPic {
+            Some(id) => {
+                let p = (*pRefListCur).pic_mut(id);
+                p.iPictureType = (*pCtx).eSliceType as i32;
+                p.iFramePoc = (*pSvcParam).sDependencyLayers[iCurDid as usize].iPOC;
+                Some(p.planes())
+            }
+            None => None,
+        };
 
         WelsInitCurrentLayer(pCtx, iCurWidth, iCurHeight);
 
@@ -3253,7 +3281,7 @@ pub unsafe fn WelsEncoderEncodeExt(
             let pRef = if (*pCtx).eSliceType == EWelsSliceType::P_SLICE && (*pCtx).iNumRef0 > 0 {
                 (*pCtx).pRefList0[0]
             } else {
-                null_mut()
+                None
             };
             (*(*pCtx).pVpp).AnalyzePictureComplexity(
                 pCtx,
@@ -3582,8 +3610,11 @@ pub unsafe fn WelsEncoderEncodeExt(
             .WelsRcPictureInfoUpdate(pCtx, iLayerSize);
         iFrameSize += iLayerSize;
         crate::encoder::rc::RcTraceFrameBits(pCtx, (*pFbi).uiTimeStamp, iFrameSize);
-        (*(*pCtx).pDecPic).iFrameAverageQp =
-            (*(*pCtx).pWelsSvcRc.add(iCurDid as usize)).iAverageFrameQp;
+        if let Some(id) = (*pCtx).pDecPic {
+            (**(*pCtx).ppRefPicListExt.add(iCurDid as usize))
+                .pic_mut(id)
+                .iFrameAverageQp = (*(*pCtx).pWelsSvcRc.add(iCurDid as usize)).iAverageFrameQp;
+        }
 
         // update scc related
         if let Some(f) = (*(*pCtx).pFuncList).pfUpdateFMESwitch {
@@ -3609,32 +3640,33 @@ pub unsafe fn WelsEncoderEncodeExt(
         let mut fSnrY: f32 = 0.0;
         let mut fSnrU: f32 = 0.0;
         let mut fSnrV: f32 = 0.0;
-        if !fsnr.is_null() && ((*pSvcParam).bPsnrY || (*pSrcPic).bPsnrY) {
+        let sFsnr = fsnr.unwrap_or(pEncPic);
+        if fsnr.is_some() && ((*pSvcParam).bPsnrY || (*pSrcPic).bPsnrY) {
             fSnrY = crate::common::wels_common_defs::WelsCalcPsnr(
-                (*fsnr).pData[0],
-                (*fsnr).iLineSize[0],
-                (*pEncPic).pData[0],
-                (*pEncPic).iLineSize[0],
+                sFsnr.pData[0],
+                sFsnr.iLineSize[0],
+                pEncPic.pData[0],
+                pEncPic.iLineSize[0],
                 iCurWidth,
                 iCurHeight,
             );
         }
-        if !fsnr.is_null() && ((*pSvcParam).bPsnrU || (*pSrcPic).bPsnrU) {
+        if fsnr.is_some() && ((*pSvcParam).bPsnrU || (*pSrcPic).bPsnrU) {
             fSnrU = crate::common::wels_common_defs::WelsCalcPsnr(
-                (*fsnr).pData[1],
-                (*fsnr).iLineSize[1],
-                (*pEncPic).pData[1],
-                (*pEncPic).iLineSize[1],
+                sFsnr.pData[1],
+                sFsnr.iLineSize[1],
+                pEncPic.pData[1],
+                pEncPic.iLineSize[1],
                 iCurWidth >> 1,
                 iCurHeight >> 1,
             );
         }
-        if !fsnr.is_null() && ((*pSvcParam).bPsnrV || (*pSrcPic).bPsnrV) {
+        if fsnr.is_some() && ((*pSvcParam).bPsnrV || (*pSrcPic).bPsnrV) {
             fSnrV = crate::common::wels_common_defs::WelsCalcPsnr(
-                (*fsnr).pData[2],
-                (*fsnr).iLineSize[2],
-                (*pEncPic).pData[2],
-                (*pEncPic).iLineSize[2],
+                sFsnr.pData[2],
+                sFsnr.iLineSize[2],
+                pEncPic.pData[2],
+                pEncPic.iLineSize[2],
                 iCurWidth >> 1,
                 iCurHeight >> 1,
             );

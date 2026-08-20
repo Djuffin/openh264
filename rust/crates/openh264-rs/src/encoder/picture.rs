@@ -192,6 +192,24 @@ impl SPicture {
         }
     }
 
+    /// The picture's plane roots, strides and visible geometry, copied out.
+    ///
+    /// **S37's shape for a per-frame step**: a picture is an arena, so the
+    /// preprocessing and analysis stages resolve it once, take this, and then work
+    /// through raw cursors — rather than holding an `&SPicture` across the calls that
+    /// resolve the *other* picture they need. Six fields by value, no borrow left
+    /// behind, and both pictures of a read-one-write-another pair can be in hand at
+    /// once without asking the pool for two references.
+    #[inline]
+    pub fn planes(&self) -> PicPlanes {
+        PicPlanes {
+            pData: self.pData,
+            iLineSize: self.iLineSize,
+            iWidthInPixel: self.iWidthInPixel,
+            iHeightInPixel: self.iHeightInPixel,
+        }
+    }
+
     /// Set picture as unreferenced. Matches `SPicture::SetUnref()`, `picture.h:106`.
     ///
     /// # Safety
@@ -223,3 +241,170 @@ impl SPicture {
 // picture it would have become observable at exactly the wrong moment. F56's rule is
 // that a zero is ruled rather than defaulted, and the ruling here is that `SPicture`
 // has one constructor, [`SPicture::new`], and no default.
+
+/// A picture's plane roots and geometry, copied out of it — see [`SPicture::planes`].
+#[derive(Clone, Copy, Debug)]
+pub struct PicPlanes {
+    pub pData: [*mut u8; 3],
+    pub iLineSize: [i32; 3],
+    pub iWidthInPixel: i32,
+    pub iHeightInPixel: i32,
+}
+
+// ===========================================================================
+// The two pools, and the two handle types that address them — T6.F1
+// ===========================================================================
+
+/// The encoder owns pictures in exactly **three** places, confirmed at their
+/// allocation and free sites (Phase 6 session B's settlement):
+///
+/// * the **reconstruction pool**, one per dependency layer, in that layer's
+///   `SRefList` — the pictures the encoder decodes into and then references;
+/// * the **spatial source pool**, in `CWelsPreProcess` — the downsampled copies of
+///   the caller's frames;
+/// * **one scaled input picture**, a slot of its own in `Scaled_Picture`.
+///
+/// Every other place a picture appeared — fourteen fields across the context, the
+/// reference lists, the layer and the preprocessor — was an *alias*: a `SPicture*`
+/// answering "which picture", spelled as an address. Those are handles now, and the
+/// handles are **two distinct types that do not convert to each other**, because
+/// `pEncPic` (source) and `pDecPic`/`pRefPic` (reconstruction) meet in one
+/// `WelsEncoderEncodeExt` iteration and in `UpdateOriginalPicInfo`: one shared type
+/// would let either be passed where the other belongs, and nothing would say so.
+///
+/// A handle is `Copy`, names a slot rather than an address, and does not own — so
+/// the recycling hazard the C++ has is *preserved* (a slot reused under an old
+/// handle) rather than fixed, with a debug-build generation counter to catch it in
+/// tests. See [`crate::safe::pool`].
+///
+/// **Scope of a [`RecPicId`]**: it names a slot in **one dependency layer's**
+/// `SRefList`, not a global picture. Every consumer resolves it through the layer it
+/// came from — `ppRefPicListExt[uiDependencyId]`, or `SDqLayer::pRefList`, which is
+/// that same list. Nothing in the port carries a `RecPicId` across a layer switch;
+/// `WelsEncoderEncodeExt` sets `pDecPic`/`pRefPic` from the current layer's list at
+/// the top of each iteration and consumes them inside it.
+/// A reference-picture handle that may name **either** pool.
+///
+/// One field in the encoder holds both kinds and the C++ cannot see it:
+/// `SDqLayer::pRefOri`. `WelsBuildRefList` (camera) stores *reconstruction* pictures
+/// there — `ref_list_mgr_svc.cpp:613`/`:626` assign `pRefList->pLongRefList[i]` and
+/// `pShortRefList[i]` — while `WelsBuildRefListScreen` stores *spatial source*
+/// pictures, taken from `m_pSpatialPic` through `GetRefFrameInfo`
+/// (`wels_preprocess.cpp:1267`). Both are `SPicture*` in C++, so the disagreement is
+/// invisible there; two handle types make it a type error, and this enum is the
+/// answer — the field really does hold either, and which one depends on a usage-type
+/// branch taken frames earlier.
+///
+/// Its readers are `JudgeStaticSkip` and `JudgeScrollSkip`, both screen-content
+/// paths, so on the camera path the `Rec` writes are dead stores. They are
+/// transcribed rather than dropped: that is a behaviour question, not a spelling one.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum PicRef {
+    /// A slot of a dependency layer's reconstruction pool.
+    Rec(RecPicId),
+    /// A slot of the spatial source pool.
+    Src(SrcPicId),
+}
+
+macro_rules! pic_pool {
+    ($id:ident, $pool:ident, $what:literal) => {
+        #[doc = concat!("A handle to a slot of the ", $what, " picture pool.")]
+        ///
+        /// See the module note on [`SrcPicId`]/[`RecPicId`]: the two handle types are
+        /// deliberately unrelated, and there is no conversion in either direction.
+        #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
+        pub struct $id(crate::safe::pool::Id);
+
+        #[doc = concat!("The ", $what, " picture pool: the owner of its slots.")]
+        #[derive(Debug)]
+        pub struct $pool(crate::safe::pool::Pool<Box<SPicture>>);
+
+        impl $pool {
+            /// Takes ownership of `slots`. The pool never grows: both C++ picture
+            /// sets are sized once at initialisation and recycled thereafter.
+            pub fn new(slots: Vec<Box<SPicture>>) -> Self {
+                Self(crate::safe::pool::Pool::new(slots))
+            }
+
+            /// A pool with no slots — what a host holds before `RequestMemorySvc`
+            /// runs and after the pictures are released.
+            pub fn empty() -> Self {
+                Self::new(Vec::new())
+            }
+
+            /// Number of slots.
+            #[inline]
+            pub fn len(&self) -> usize {
+                self.0.len()
+            }
+
+            /// Whether the pool has no slots.
+            #[inline]
+            pub fn is_empty(&self) -> bool {
+                self.0.is_empty()
+            }
+
+            /// A handle to slot `index`.
+            ///
+            /// # Panics
+            /// If `index` is out of range.
+            #[inline]
+            pub fn at(&self, index: usize) -> $id {
+                $id(self.0.id(index))
+            }
+
+            /// Handles to every slot, in order — the iteration the recycling
+            /// predicates do.
+            pub fn ids(&self) -> impl Iterator<Item = $id> + '_ {
+                self.0.ids().map($id)
+            }
+
+            /// The picture `id` names.
+            #[inline]
+            pub fn get(&self, id: $id) -> &SPicture {
+                self.0.get(id.0)
+            }
+
+            /// Mutable form of [`get`](Self::get).
+            #[inline]
+            pub fn get_mut(&mut self, id: $id) -> &mut SPicture {
+                self.0.get_mut(id.0)
+            }
+
+            /// Two *different* pictures mutably at once — the read-one-write-another
+            /// shape (downsampling, motion-compensated analysis).
+            ///
+            /// # Panics
+            /// If `a == b`.
+            #[inline]
+            pub fn pair_mut(&mut self, a: $id, b: $id) -> (&mut SPicture, &mut SPicture) {
+                let (x, y) = self.0.pair_mut(a.0, b.0);
+                (&mut **x, &mut **y)
+            }
+
+            /// Releases the plane buffer of every slot back to `pMa`, then empties
+            /// the pool.
+            ///
+            /// **Transitional (T6.F1), and it dies in T6.F2.** The picture owns its
+            /// side arrays and its own box, but `pBuffer` is still a `CMemoryAlign`
+            /// block, and dropping a `Box<SPicture>` would leak it. When the planes
+            /// become owned this walk is a plain `= Self::empty()`.
+            ///
+            /// # Safety
+            /// `pMa` must be the allocator every slot's `pBuffer` was taken from.
+            pub unsafe fn free_planes_and_clear(
+                &mut self,
+                pMa: *mut crate::common::memory_align::CMemoryAlign,
+            ) {
+                for i in 0..self.0.len() {
+                    let id = self.0.id(i);
+                    crate::encoder::wels_preprocess::FreePicturePlanes(pMa, self.0.get_mut(id));
+                }
+                *self = Self::empty();
+            }
+        }
+    };
+}
+
+pic_pool!(SrcPicId, SrcPicPool, "spatial source");
+pic_pool!(RecPicId, RecPicPool, "reconstruction");
