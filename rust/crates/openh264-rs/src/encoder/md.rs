@@ -190,7 +190,6 @@ pub struct SWelsMD_sMe {
 }
 
 #[repr(C)]
-#[derive(Copy, Clone)]
 pub struct SWelsMD {
     pub iLambda: i32,
     pub pMvdCost: *mut u16,

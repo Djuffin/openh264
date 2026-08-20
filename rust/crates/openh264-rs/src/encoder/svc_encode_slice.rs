@@ -1407,9 +1407,9 @@ pub unsafe fn WelsInitInterMDStruc(
     pCurMb: *const SMB,
     pMvdCostTable: *mut u16,
     kiMvdInterTableStride: i32,
-    pMd: *mut SWelsMD,
+    pMd: &mut SWelsMD,
 ) {
-    if pCurMb.is_null() || pMd.is_null() {
+    if pCurMb.is_null() {
         return;
     }
     let luma_qp = (*pCurMb).uiLumaQp as usize;
@@ -1679,7 +1679,7 @@ pub unsafe fn WelsISliceMdEncDynamic(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSl
 ///
 /// # Safety
 /// All three pointers must be valid, with `pCurMb`'s side arrays allocated.
-unsafe fn mb_dump(pCurMb: *mut SMB, pMd: *const SWelsMD, pSlice: *const SSlice) {
+unsafe fn mb_dump(pCurMb: *mut SMB, pMd: &SWelsMD, pSlice: *const SSlice) {
     if !crate::encoder::dump_enabled(&MB_DUMP, "OH264_MBDUMP") {
         return;
     }
@@ -1716,10 +1716,10 @@ unsafe fn mb_dump(pCurMb: *mut SMB, pMd: *const SWelsMD, pSlice: *const SSlice) 
 pub unsafe fn WelsMdInterMbLoop(
     pEncCtx: *mut sWelsEncCtx,
     pSlice: *mut SSlice,
-    pWelsMd: *mut SWelsMD,
+    pWelsMd: &mut SWelsMD,
     kiSliceFirstMbXY: i32,
 ) -> i32 {
-    if pEncCtx.is_null() || pSlice.is_null() || pWelsMd.is_null() || (*pEncCtx).pCurDqLayer.is_null() || (*(*pEncCtx).pCurDqLayer).sMbDataP.dims().count() == 0 || (*(*pEncCtx).pCurDqLayer).iMbWidth <= 0 || (*(*pEncCtx).pCurDqLayer).iMbHeight <= 0 {
+    if pEncCtx.is_null() || pSlice.is_null() || (*pEncCtx).pCurDqLayer.is_null() || (*(*pEncCtx).pCurDqLayer).sMbDataP.dims().count() == 0 || (*(*pEncCtx).pCurDqLayer).iMbWidth <= 0 || (*(*pEncCtx).pCurDqLayer).iMbHeight <= 0 {
         return ENC_RETURN_SUCCESS;
     }
     let pMd = pWelsMd;
@@ -1876,10 +1876,10 @@ pub unsafe fn WelsMdInterMbLoop(
 pub unsafe fn WelsMdInterMbLoopOverDynamicSlice(
     pEncCtx: *mut sWelsEncCtx,
     pSlice: *mut SSlice,
-    pWelsMd: *mut SWelsMD,
+    pWelsMd: &mut SWelsMD,
     kiSliceFirstMbXY: i32,
 ) -> i32 {
-    if pEncCtx.is_null() || pSlice.is_null() || pWelsMd.is_null() || (*pEncCtx).pCurDqLayer.is_null() || (*(*pEncCtx).pCurDqLayer).sMbDataP.dims().count() == 0 || (*(*pEncCtx).pCurDqLayer).iMbWidth <= 0 || (*(*pEncCtx).pCurDqLayer).iMbHeight <= 0 {
+    if pEncCtx.is_null() || pSlice.is_null() || (*pEncCtx).pCurDqLayer.is_null() || (*(*pEncCtx).pCurDqLayer).sMbDataP.dims().count() == 0 || (*(*pEncCtx).pCurDqLayer).iMbWidth <= 0 || (*(*pEncCtx).pCurDqLayer).iMbHeight <= 0 {
         return ENC_RETURN_SUCCESS;
     }
     let pMd = pWelsMd;
