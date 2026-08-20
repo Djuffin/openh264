@@ -58,6 +58,11 @@ pub use crate::encoder::md::SMB;
 pub use crate::encoder::svc_encode_slice::SSlice;
 pub use crate::encoder::svc_encode_slice::SDqLayer;
 pub use crate::encoder::encoder_context::sWelsEncCtx;
+// **T6.H4, and the one MT edit this session makes**: the frame bitstream is owned
+// by the context now, so the two `pFrameBs` spellings in this file become the two
+// accessors. Field spellings only — no body in this file is touched, and the
+// thread machinery is Phase 7's.
+use crate::encoder::encoder_context::{ctx_frame_bs, ctx_frame_bs_at};
 
 // ============================================================================
 // Constants and Thresholds
@@ -788,10 +793,10 @@ pub unsafe fn AppendSliceToFrameBs(
                     return 0;
                 }
 
-                if !(*pCtx).pFrameBs.is_null() && !pSliceBs.pBs.is_null() {
+                if !ctx_frame_bs(pCtx).is_null() && !pSliceBs.pBs.is_null() {
                     std::ptr::copy(
                         pSliceBs.pBs,
-                        (*pCtx).pFrameBs.add((*pCtx).iPosBsBuffer as usize),
+                        ctx_frame_bs_at(pCtx, (*pCtx).iPosBsBuffer),
                         pSliceBs.uiBsPos as usize,
                     );
                 }

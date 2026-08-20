@@ -26,7 +26,8 @@ use crate::api::codec_api::{ELevelIdc, SSpatialLayerConfig};
 use crate::common::memory_align::CMemoryAlign;
 use crate::decoder::nalu::g_ksLevelLimits;
 use crate::encoder::encoder_context::{
-    ctx_dq_idc_map, ctx_mb_index_x, ctx_mb_index_y, ctx_pps_array, ctx_sps_array,
+    ctx_dq_idc_map, ctx_frame_bs, ctx_frame_bs_at, ctx_mb_index_x, ctx_mb_index_y,
+    ctx_pps_array, ctx_sps_array,
     ctx_stride_enc_block_offset,
     ctx_subset_array,
     sWelsEncCtx, SDqIdc, SLogContext, SRefList, SStrideTables, BASE_DEPENDENCY_ID,
@@ -1093,10 +1094,14 @@ pub unsafe fn RequestMemorySvc(
         iCountNals as usize,
     ));
 
-    (**ppCtx).pFrameBs = (*pMa).WelsMalloc(iTotalLength as u32, tag!("pFrameBs")) as *mut u8;
-    if (**ppCtx).pFrameBs.is_null() {
-        return 1;
-    }
+    // **T6.H4, and the session's one recorded zero-fill deviation.** The C++ takes
+    // this block with `WelsMalloc` — *uninitialized* — and it is the only member of
+    // this function's set that does. `vec![0; n]` writes zeros the C++ does not.
+    // Sound because every read of this buffer sits behind a write cursor: bytes are
+    // read back only up to `iPosBsBuffer` / `pOut->iNalLen`, which only ever name
+    // bytes a NAL writer has just written. A safe container has no uninitialized
+    // alternative, so the cost is one memset per encoder, at init.
+    (**ppCtx).pFrameBs = vec![0u8; iTotalLength.max(0) as usize];
     (**ppCtx).iFrameBsSize = iTotalLength;
     (**ppCtx).iPosBsBuffer = 0;
 
@@ -1773,10 +1778,7 @@ pub unsafe fn WelsUninitEncoderExt(ppCtx: *mut *mut sWelsEncCtx) {
         // T4b.2b: `DestroyReferenceStrategy` freed a box holding one back-pointer.
         // With the strategy an enum there is no allocation, so this free-cascade entry
         // is deleted rather than converted.
-        if !(*pCtx).pFrameBs.is_null() {
-            (*pMa).WelsFree((*pCtx).pFrameBs as *mut c_void, tag!("pFrameBs"));
-            (*pCtx).pFrameBs = null_mut();
-        }
+        // **T6.H4**: `pFrameBs`'s `WelsFree` stood here; the `Vec` is the context's.
         for pBuf in (*pCtx).pDynamicBsBuffer.iter_mut() {
             if !pBuf.is_null() {
                 (*pMa).WelsFree(*pBuf as *mut c_void, tag!("DynamicSliceBs"));
@@ -1965,7 +1967,7 @@ pub unsafe fn PrefetchReferencePicture(pCtx: *mut sWelsEncCtx, keFrameType: EVid
 
 /// `encoder_ext.cpp:3376`.
 pub unsafe fn ClearFrameBsInfo(pCtx: *mut sWelsEncCtx, pFbi: *mut SFrameBSInfo) {
-    (*pFbi).sLayerInfo[0].pBsBuf = (*pCtx).pFrameBs;
+    (*pFbi).sLayerInfo[0].pBsBuf = ctx_frame_bs(pCtx);
     (*pFbi).sLayerInfo[0].pNalLengthInByte = (*(*pCtx).pOut).sNalLen.as_mut_ptr();
 
     for i in 0..(*pFbi).iLayerNum as usize {
@@ -2192,7 +2194,7 @@ pub unsafe fn AddPrefixNal(
         &(&*pOut).sNalList[(*pOut).iNalIndex as usize - 1],
         &(&*pOut).sBsBuffer[..],
         Some(&(*current_layer(pCtx)).sLayerInfo.sNalHeaderExt),
-        (*pCtx).pFrameBs.add((*pCtx).iPosBsBuffer as usize),
+        ctx_frame_bs_at(pCtx, (*pCtx).iPosBsBuffer),
         (*pCtx).iFrameBsSize - (*pCtx).iPosBsBuffer,
         &mut *pNalLen.add(*pNalIdxInLayer as usize),
     );
@@ -2244,7 +2246,7 @@ pub unsafe fn WritePadding(pCtx: *mut sWelsEncCtx, iLen: i32, iSize: *mut i32) -
         &(&*pOut).sNalList[iNal as usize],
         &(&*pOut).sBsBuffer[..],
         None,
-        (*pCtx).pFrameBs.add((*pCtx).iPosBsBuffer as usize),
+        ctx_frame_bs_at(pCtx, (*pCtx).iPosBsBuffer),
         (*pCtx).iFrameBsSize - (*pCtx).iPosBsBuffer,
         &mut iNalLen,
     );
@@ -2438,7 +2440,7 @@ pub unsafe fn WriteSsvcParaset(
     let pNext = pLayerBsInfo.add(1);
     *ppLayerBsInfo = pNext;
     (*(*pCtx).pOut).iLayerBsIndex += 1;
-    (*pNext).pBsBuf = (*pCtx).pFrameBs.add((*pCtx).iPosBsBuffer as usize);
+    (*pNext).pBsBuf = ctx_frame_bs_at(pCtx, (*pCtx).iPosBsBuffer);
     (*pNext).pNalLengthInByte = (*pLayerBsInfo).pNalLengthInByte.add(iCountNal as usize);
 
     // update for external countings
@@ -2491,7 +2493,7 @@ pub unsafe fn WriteSavcParaset(
 
     let mut pNext = pLayerBsInfo.add(1);
     (*(*pCtx).pOut).iLayerBsIndex += 1;
-    (*pNext).pBsBuf = (*pCtx).pFrameBs.add((*pCtx).iPosBsBuffer as usize);
+    (*pNext).pBsBuf = ctx_frame_bs_at(pCtx, (*pCtx).iPosBsBuffer);
     (*pNext).pNalLengthInByte = (*pLayerBsInfo).pNalLengthInByte.add(iCountNal as usize);
     *iLayerNum += 1;
     pLayerBsInfo = pNext;
@@ -2522,7 +2524,7 @@ pub unsafe fn WriteSavcParaset(
 
     pNext = pLayerBsInfo.add(1);
     (*(*pCtx).pOut).iLayerBsIndex += 1;
-    (*pNext).pBsBuf = (*pCtx).pFrameBs.add((*pCtx).iPosBsBuffer as usize);
+    (*pNext).pBsBuf = ctx_frame_bs_at(pCtx, (*pCtx).iPosBsBuffer);
     (*pNext).pNalLengthInByte = (*pLayerBsInfo).pNalLengthInByte.add(iCountNal as usize);
     *iLayerNum += 1;
 
@@ -2902,7 +2904,7 @@ pub unsafe fn WelsCodeOnePicPartition(
             &(&*(*pCtx).pOut).sNalList[((*(*pCtx).pOut).iNalIndex - 1) as usize],
             &(&*(*pCtx).pOut).sBsBuffer[..],
             Some(&(*current_layer(pCtx)).sLayerInfo.sNalHeaderExt),
-            (*pCtx).pFrameBs.add((*pCtx).iPosBsBuffer as usize),
+            ctx_frame_bs_at(pCtx, (*pCtx).iPosBsBuffer),
             (*pCtx).iFrameBsSize - (*pCtx).iPosBsBuffer,
             &mut *(*pLayerBsInfo).pNalLengthInByte.add(iNalIdxInLayer as usize),
         );
@@ -3026,7 +3028,7 @@ pub unsafe fn WelsEncoderEncodeExt(
     // this pointer is below. Found by the encoder aliasing probe, Phase 6 session A.
     let pSpatialIndexMap = (*pCtx).sSpatialIndexMap.as_ptr();
     crate::encoder::encoder_context::InitBitStream(pCtx);
-    (*pLayerBsInfo).pBsBuf = (*pCtx).pFrameBs;
+    (*pLayerBsInfo).pBsBuf = ctx_frame_bs(pCtx);
     (*pLayerBsInfo).pNalLengthInByte = (*(*pCtx).pOut).sNalLen.as_mut_ptr();
     iCurDid = (*pSpatialIndexMap).iDid as i8;
     set_current_layer(pCtx, Some(LayerIdx(iCurDid as u8)));
@@ -3288,7 +3290,7 @@ pub unsafe fn WelsEncoderEncodeExt(
                 &(&*(*pCtx).pOut).sNalList[(*(*pCtx).pOut).iNalIndex as usize - 1],
                 &(&*(*pCtx).pOut).sBsBuffer[..],
                 Some(&(*current_layer(pCtx)).sLayerInfo.sNalHeaderExt),
-                (*pCtx).pFrameBs.add((*pCtx).iPosBsBuffer as usize),
+                ctx_frame_bs_at(pCtx, (*pCtx).iPosBsBuffer),
                 (*pCtx).iFrameBsSize - (*pCtx).iPosBsBuffer,
                 &mut *(*pLayerBsInfo).pNalLengthInByte.add(iNalIdxInLayer as usize),
             );
@@ -3342,7 +3344,7 @@ pub unsafe fn WelsEncoderEncodeExt(
                 return ENC_RETURN_UNEXPECTED;
             }
             //note: the old codes are removed at commit: 3e0ee69
-            (*pLayerBsInfo).pBsBuf = (*pCtx).pFrameBs.add((*pCtx).iPosBsBuffer as usize);
+            (*pLayerBsInfo).pBsBuf = ctx_frame_bs_at(pCtx, (*pCtx).iPosBsBuffer);
             (*pLayerBsInfo).uiLayerType = VIDEO_CODING_LAYER;
             (*pLayerBsInfo).uiSpatialId = (*pCtx).uiDependencyId;
             (*pLayerBsInfo).uiTemporalId = (*pCtx).uiTemporalId;
@@ -3376,7 +3378,7 @@ pub unsafe fn WelsEncoderEncodeExt(
             //TODO: use a function to remove duplicate code here and ln3994
             let iLayerBsIdx = (*(*pCtx).pOut).iLayerBsIndex;
             let pLbi = &mut (*pFbi).sLayerInfo[iLayerBsIdx as usize] as *mut SLayerBSInfo;
-            (*pLbi).pBsBuf = (*pCtx).pFrameBs.add((*pCtx).iPosBsBuffer as usize);
+            (*pLbi).pBsBuf = ctx_frame_bs_at(pCtx, (*pCtx).iPosBsBuffer);
             (*pLbi).uiLayerType = VIDEO_CODING_LAYER;
             (*pLbi).uiSpatialId = (*pCtx).uiDependencyId;
             (*pLbi).uiTemporalId = (*pCtx).uiTemporalId;
@@ -3481,7 +3483,7 @@ pub unsafe fn WelsEncoderEncodeExt(
                     &(&*(*pCtx).pOut).sNalList[(*(*pCtx).pOut).iNalIndex as usize - 1],
                     &(&*(*pCtx).pOut).sBsBuffer[..],
                     Some(&(*current_layer(pCtx)).sLayerInfo.sNalHeaderExt),
-                    (*pCtx).pFrameBs.add((*pCtx).iPosBsBuffer as usize),
+                    ctx_frame_bs_at(pCtx, (*pCtx).iPosBsBuffer),
                     (*pCtx).iFrameBsSize - (*pCtx).iPosBsBuffer,
                     &mut *(*pLayerBsInfo).pNalLengthInByte.add(iNalIdxInLayer as usize),
                 );
@@ -3623,7 +3625,7 @@ pub unsafe fn WelsEncoderEncodeExt(
         let pPrev = pLayerBsInfo;
         pLayerBsInfo = pLayerBsInfo.add(1);
         (*(*pCtx).pOut).iLayerBsIndex += 1;
-        (*pLayerBsInfo).pBsBuf = (*pCtx).pFrameBs.add((*pCtx).iPosBsBuffer as usize);
+        (*pLayerBsInfo).pBsBuf = ctx_frame_bs_at(pCtx, (*pCtx).iPosBsBuffer);
         (*pLayerBsInfo).pNalLengthInByte =
             (*pPrev).pNalLengthInByte.add(iCountNal as usize);
 
@@ -3657,7 +3659,7 @@ pub unsafe fn WelsEncoderEncodeExt(
             let pPrev2 = pLayerBsInfo;
             pLayerBsInfo = pLayerBsInfo.add(1);
             (*(*pCtx).pOut).iLayerBsIndex += 1;
-            (*pLayerBsInfo).pBsBuf = (*pCtx).pFrameBs.add((*pCtx).iPosBsBuffer as usize);
+            (*pLayerBsInfo).pBsBuf = ctx_frame_bs_at(pCtx, (*pCtx).iPosBsBuffer);
             (*pLayerBsInfo).pNalLengthInByte = (*pPrev2).pNalLengthInByte.add(1);
             iLayerNum += 1;
 

@@ -59,7 +59,8 @@ use crate::encoder::param_svc::GetLogFactor;
 use crate::encoder::param_svc::SExistingParasetList;
 use crate::encoder::svc_motion_estimate::CheckInRangeCloseOpen;
 use crate::encoder::encoder_context::{
-    ctx_pps_array, ctx_sps_array, ctx_subset_array, SParaSetOffsetVariable, MAX_DQ_LAYER_NUM,
+    ctx_frame_bs, ctx_frame_bs_at, ctx_pps_array, ctx_sps_array, ctx_subset_array,
+    SParaSetOffsetVariable, MAX_DQ_LAYER_NUM,
     MAX_PPS_COUNT, PARA_SET_TYPE,
 };
 use crate::encoder::encoder_ext::{
@@ -431,7 +432,7 @@ pub unsafe fn WelsWriteOneSPS(pCtx: *mut sWelsEncCtx, kiSpsIdx: i32, iNalSize: *
         &(&*pOut).sNalList[iNal as usize],
         &(&*pOut).sBsBuffer[..],
         None,
-        (*pCtx).pFrameBs.add((*pCtx).iPosBsBuffer as usize),
+        ctx_frame_bs_at(pCtx, (*pCtx).iPosBsBuffer),
         // available buffer to be written, so need to subtract the used length
         (*pCtx).iFrameBsSize - (*pCtx).iPosBsBuffer,
         &mut *iNalSize,
@@ -467,7 +468,7 @@ pub unsafe fn WelsWriteOnePPS(pCtx: *mut sWelsEncCtx, kiPpsIdx: i32, iNalSize: *
         &(&*pOut).sNalList[iNal as usize],
         &(&*pOut).sBsBuffer[..],
         None,
-        (*pCtx).pFrameBs.add((*pCtx).iPosBsBuffer as usize),
+        ctx_frame_bs_at(pCtx, (*pCtx).iPosBsBuffer),
         (*pCtx).iFrameBsSize - (*pCtx).iPosBsBuffer,
         &mut *iNalSize,
     );
@@ -563,7 +564,7 @@ pub unsafe fn WelsWriteParameterSets(
             &(&*(*pCtx).pOut).sNalList[iNal as usize],
             &(&*(*pCtx).pOut).sBsBuffer[..],
             None,
-            (*pCtx).pFrameBs.add((*pCtx).iPosBsBuffer as usize),
+            ctx_frame_bs_at(pCtx, (*pCtx).iPosBsBuffer),
             (*pCtx).iFrameBsSize - (*pCtx).iPosBsBuffer,
             &mut iNalLength,
         );
@@ -614,7 +615,7 @@ pub unsafe fn WelsEncoderEncodeParameterSetsRust(
         return ENC_RETURN_INVALIDINPUT;
     }
     let pLayerBsInfo = &mut (*pBsInfo).sLayerInfo[0];
-    pLayerBsInfo.pBsBuf = (*pCtx).pFrameBs;
+    pLayerBsInfo.pBsBuf = ctx_frame_bs(pCtx);
     pLayerBsInfo.pNalLengthInByte = (*(*pCtx).pOut).sNalLen.as_mut_ptr();
     // Was `InitBits(&…sBsWrite, …pBsBuffer, …uiSize)`. The buffer and its length stay
     // where they were; the writer is a position, and resetting it is all `InitBits`

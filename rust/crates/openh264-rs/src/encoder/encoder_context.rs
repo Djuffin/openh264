@@ -608,6 +608,51 @@ pub unsafe fn ctx_mb_index_x(pCtx: *mut sWelsEncCtx, kiDid: usize) -> *mut i16 {
     }
 }
 
+/// The **root** of `pCtx->pFrameBs` — T6.H4.
+///
+/// This is the one this session had to enumerate before converting, because the
+/// cursors it hands out are *held*: `SLayerBSInfo::pBsBuf` keeps one for the life of
+/// a layer's bitstream info while the NAL writers derive more from the same buffer.
+/// There are **nineteen** cursor derivations in production — sixteen walking ones
+/// through [`ctx_frame_bs_at`] (12 in `encoder_ext.rs`, 3 in `wels_encoder_ext.rs`,
+/// 1 in `slice_multi_threading.rs`) and three of the root itself stored into a
+/// `pBsBuf` — plus one null guard in `slice_multi_threading.rs`. The conversion adds
+/// no `&mut` to any of them: as everywhere in this family, `Vec::as_mut_ptr` reads
+/// the header, so the derivations are siblings and none pops another.
+/// `frame_bs_cursors_are_siblings` is that as a test.
+///
+/// Empty answers null, which is what the field held before `RequestMemorySvc` ran.
+///
+/// # Safety
+/// `pCtx` must point to a live encoder context.
+#[inline]
+pub unsafe fn ctx_frame_bs(pCtx: *mut sWelsEncCtx) -> *mut u8 {
+    let buf: &mut Vec<u8> = &mut (*pCtx).pFrameBs;
+    if buf.is_empty() {
+        return std::ptr::null_mut();
+    }
+    buf.as_mut_ptr()
+}
+
+/// The frame bitstream's write cursor at byte `kiPos` — `pFrameBs + iPosBsBuffer`,
+/// which is how all fourteen of the walking derivations spell it. See
+/// [`ctx_frame_bs`].
+///
+/// # Safety
+/// As [`ctx_frame_bs`], and `kiPos` must be within the buffer.
+#[inline]
+pub unsafe fn ctx_frame_bs_at(pCtx: *mut sWelsEncCtx, kiPos: i32) -> *mut u8 {
+    let root = ctx_frame_bs(pCtx);
+    if root.is_null() {
+        return std::ptr::null_mut();
+    }
+    debug_assert!(
+        kiPos >= 0 && (kiPos as usize) <= (*pCtx).pFrameBs.len(),
+        "frame bitstream cursor {kiPos} is outside the buffer"
+    );
+    root.add(kiPos as usize)
+}
+
 /// The **root** of `pCtx->pDqIdcMap` — T6.H3; see [`ctx_sps_array`] for the
 /// spelling and for what empty means.
 ///
@@ -798,7 +843,19 @@ pub struct sWelsEncCtx {
     pub iSubsetSpsNum: i32,
     pub iPpsNum: i32,
     pub pOut: *mut SWelsEncoderOutput,
-    pub pFrameBs: *mut u8,
+    /// The frame's output bitstream — **T6.H4, and the encoder's one arena of
+    /// bytes.** Every NAL the frame emits is written into it at `iPosBsBuffer`, and
+    /// `SLayerBSInfo::pBsBuf` holds cursors into it that outlive the call that made
+    /// them. Root: [`ctx_frame_bs`]; the write cursor: [`ctx_frame_bs_at`].
+    ///
+    /// **A recorded deviation.** The C++ takes this block with `WelsMalloc`, not
+    /// `WelsMallocz` — it is the one member of `RequestMemorySvc`'s set that starts
+    /// *uninitialized*. The `Vec` is zero-filled, because a safe container has no
+    /// uninitialized alternative; that is sound because every read of this buffer
+    /// sits behind a write cursor (`iPosBsBuffer` only ever advances past bytes a NAL
+    /// writer has just written, and `pOut->iNalLen` bounds every read back), so no
+    /// consumer can observe the difference between "uninitialized" and "zero".
+    pub pFrameBs: Vec<u8>,
     pub iFrameBsSize: i32,
     pub iPosBsBuffer: i32,
     pub sSpatialIndexMap: [SSpatialPicIndex; MAX_DEPENDENCY_LAYER],
@@ -961,7 +1018,7 @@ impl sWelsEncCtx {
 
             // ---- output bitstream ------------------------------------------------
             pOut: std::ptr::null_mut(),
-            pFrameBs: std::ptr::null_mut(),
+            pFrameBs: Vec::new(),
             iFrameBsSize: 0,                // paired with pFrameBs
             iPosBsBuffer: 0,                // the write cursor into it, rewound per AU
 
@@ -1579,6 +1636,51 @@ mod tests {
         assert!(tab.StrideEncBlockOffset(3).is_null());
     }
 
+    /// **S40 for the frame bitstream — the one buffer whose cursors are *stored*.**
+    ///
+    /// `SLayerBSInfo::pBsBuf` keeps a cursor into `pFrameBs` for the life of a
+    /// layer's bitstream info, while the NAL writers keep deriving more from the same
+    /// buffer at `iPosBsBuffer`: nineteen derivations across the tree, sixteen of
+    /// them walking. So this is the accessor where the retag-stable spelling is not
+    /// a precaution but the whole conversion — the first cursor is live across every
+    /// later one by construction, not by accident.
+    ///
+    /// Red-proofed with `ctx_frame_bs` spelled `buf.as_mut_slice().as_mut_ptr()`:
+    /// under Miri the read back through `stored` fails with "attempting a read
+    /// access using <565587> ... but that tag does not exist in the borrow stack",
+    /// and without Miri it passes.
+    #[test]
+    fn frame_bs_cursors_are_siblings() {
+        let mut ctx = Box::new(sWelsEncCtx::new());
+        let p: *mut sWelsEncCtx = &mut *ctx;
+        // Before `RequestMemorySvc`, both answer the null the raw field held.
+        assert!(unsafe { ctx_frame_bs(p) }.is_null());
+        assert!(unsafe { ctx_frame_bs_at(p, 0) }.is_null());
+
+        ctx.pFrameBs = vec![0u8; 64];
+        ctx.iFrameBsSize = 64;
+        let p: *mut sWelsEncCtx = &mut *ctx;
+
+        // `pBsBuf` — the root, stored and kept, exactly as the three sites that take
+        // it do.
+        let stored = unsafe { ctx_frame_bs(p) };
+
+        // The frame loop then walks: derive at the cursor, write, advance, repeat.
+        for i in 0..8i32 {
+            let at = unsafe { ctx_frame_bs_at(p, i) };
+            unsafe { *at = 0xA0 | i as u8 };
+        }
+        // The use that matters: the FIRST cursor, after eight later derivations.
+        assert_eq!(unsafe { *stored }, 0xA0, "the stored pBsBuf still reaches the buffer");
+        unsafe { *stored.add(8) = 0x5A };
+        assert_eq!(unsafe { *ctx_frame_bs_at(p, 8) }, 0x5A);
+
+        // And the whole buffer reads back through the container, which is the point
+        // of owning it: no third party is needed to free or bound it.
+        assert_eq!(&ctx.pFrameBs[..4], &[0xA0, 0xA1, 0xA2, 0xA3]);
+        assert_eq!(ctx.pFrameBs.len(), ctx.iFrameBsSize as usize);
+    }
+
     /// The same property through the context's four accessors, which is how every
     /// consumer outside `AllocStrideTables` reaches the tables.
     #[test]
@@ -1787,11 +1889,13 @@ mod tests {
         // the empty container, which is the null the raw pointer held, and which
         // `ctx_sps_array` and its siblings answer as null so that every downstream
         // `is_null()` guard still asks its question.
-        const OWNED: [&str; 4] = ["pSpsArray", "pSubsetArray", "pPPSArray", "pDqIdcMap"];
+        const OWNED: [&str; 5] =
+            ["pSpsArray", "pSubsetArray", "pPPSArray", "pDqIdcMap", "pFrameBs"];
         assert!(built.pSpsArray.is_empty(), "new(): no SPS array is allocated yet");
         assert!(built.pSubsetArray.is_empty(), "new(): no subset SPS array is allocated yet");
         assert!(built.pPPSArray.is_empty(), "new(): no PPS array is allocated yet");
         assert!(built.pDqIdcMap.is_empty(), "new(): no dq-idc map is allocated yet");
+        assert!(built.pFrameBs.is_empty(), "new(): no frame bitstream is allocated yet");
 
         // ---- tier 2: the F64 fields, excluded by name and asserted by value ----
         const BY_VALUE: [&str; 10] = [
