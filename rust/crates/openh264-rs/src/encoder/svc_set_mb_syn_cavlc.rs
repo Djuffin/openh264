@@ -743,7 +743,7 @@ pub unsafe fn WelsSpatialWriteMbSyn(
             );
             let pMbCache = std::ptr::addr_of_mut!((*pSlice).sMbCacheInfo);
             let buf = crate::encoder::svc_encode_slice::slice_bs_buffer(pEncCtx, pSlice);
-            if WelsWriteMbResidual((*pEncCtx).pFuncList, pMbCache, pCurMb, buf, pBs) != 0 {
+            if WelsWriteMbResidual((*pEncCtx).pFuncList, &mut *pMbCache, &*pCurMb, buf, pBs) != 0 {
                 return ENC_RETURN_VLCOVERFLOWFOUND;
             }
         } else {
@@ -770,14 +770,20 @@ pub unsafe fn WelsSpatialWriteMbSyn(
 /// Matches `int32_t WelsWriteMbResidual (SWelsFuncPtrList* pFuncList, SMbCache* sMbCacheInfo, SMB* pCurMb, SBitStringAux* pBs)`
 pub unsafe fn WelsWriteMbResidual(
     pFuncList: *mut SWelsFuncPtrList,
-    sMbCacheInfo: *mut SMbCache,
-    pCurMb: *mut SMB,
+    sMbCacheInfo: &mut SMbCache,
+    pCurMb: &SMB,
     buf: &mut [u8],
     pBs: *mut BsWriter,
 ) -> i32 {
-    let uiMbType = (*pCurMb).uiMbType;
-    let kiCbpChroma = ((*pCurMb).uiCbp >> 4) as i32;
-    let kiCbpLuma = ((*pCurMb).uiCbp & 0x0F) as i32;
+    // One reborrow, at the top, and every derivation below hangs off it. Written
+    // this way on purpose: `pNonZeroCoeffCount` lives across a dozen
+    // `md::dct(sMbCacheInfo)` calls, and re-coercing the `&mut` at each of those
+    // would retag the whole struct and pop the cursor taken here (S28 — derive from
+    // the one root the consumers share, not from the reference at each use).
+    let sMbCacheInfo: *mut SMbCache = sMbCacheInfo;
+    let uiMbType = pCurMb.uiMbType;
+    let kiCbpChroma = (pCurMb.uiCbp >> 4) as i32;
+    let kiCbpLuma = (pCurMb.uiCbp & 0x0F) as i32;
     let pNonZeroCoeffCount = (*sMbCacheInfo).iNonZeroCoeffCount.as_mut_ptr();
 
     let mut pBlock: *mut i16;

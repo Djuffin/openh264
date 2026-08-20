@@ -830,15 +830,12 @@ pub unsafe extern "C" fn WelsCabacInit(pEncCtx: *mut crate::encoder::encoder_con
 /// - `pCbCtx` must point to a valid, writable `SCabacCtx` instance.
 #[inline]
 pub unsafe fn WelsCabacContextInitFromContexts(
-    pCbCtx: *mut SCabacCtx,
+    pCbCtx: &mut SCabacCtx,
     contexts: &[[[SStateCtx; WELS_CONTEXT_COUNT]; (WELS_QP_MAX + 1) as usize]; 4],
     eSliceType: i32,
     iGlobalQp: i32,
     iModel: i32,
 ) {
-    if pCbCtx.is_null() {
-        return;
-    }
     let iIdx = if eSliceType == 2 {
         0usize
     } else {
@@ -848,7 +845,7 @@ pub unsafe fn WelsCabacContextInitFromContexts(
     let model_idx = iIdx.min(3);
     std::ptr::copy_nonoverlapping(
         contexts[model_idx][qp].as_ptr(),
-        (*pCbCtx).m_sStateCtx.as_mut_ptr(),
+        pCbCtx.m_sStateCtx.as_mut_ptr(),
         WELS_CONTEXT_COUNT,
     );
 }
@@ -866,10 +863,10 @@ pub unsafe fn WelsCabacContextInitFromContexts(
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn WelsCabacContextInit(
     pCtx: *mut crate::encoder::encoder_context::sWelsEncCtx,
-    pCbCtx: *mut SCabacCtx,
+    pCbCtx: &mut SCabacCtx,
     iModel: i32,
 ) {
-    if pCbCtx.is_null() || pCtx.is_null() {
+    if pCtx.is_null() {
         return;
     }
     let pEncCtx = pCtx as *mut crate::encoder::encoder_context::sWelsEncCtx;
@@ -891,17 +888,14 @@ pub unsafe extern "C" fn WelsCabacContextInit(
 /// # Safety
 /// - `pCbCtx` must point to a valid, writable `SCabacCtx` instance.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn WelsCabacEncodeInit(pCbCtx: *mut SCabacCtx, iStart: usize, iEnd: usize) {
-    if pCbCtx.is_null() {
-        return;
-    }
-    (*pCbCtx).m_uiLow = 0;
-    (*pCbCtx).m_iLowBitCnt = 9;
-    (*pCbCtx).m_iRenormCnt = 0;
-    (*pCbCtx).m_uiRange = 510;
-    (*pCbCtx).m_iBufStart = iStart;
-    (*pCbCtx).m_iBufEnd = iEnd;
-    (*pCbCtx).m_iBufCur = iStart;
+pub unsafe extern "C" fn WelsCabacEncodeInit(pCbCtx: &mut SCabacCtx, iStart: usize, iEnd: usize) {
+    pCbCtx.m_uiLow = 0;
+    pCbCtx.m_iLowBitCnt = 9;
+    pCbCtx.m_iRenormCnt = 0;
+    pCbCtx.m_uiRange = 510;
+    pCbCtx.m_iBufStart = iStart;
+    pCbCtx.m_iBufEnd = iEnd;
+    pCbCtx.m_iBufCur = iStart;
 }
 
 /// Flushes accumulated bits from `m_uiLow` to the output bitstream when bit capacity reaches/exceeds 64 bits.
@@ -909,20 +903,20 @@ pub unsafe extern "C" fn WelsCabacEncodeInit(pCbCtx: *mut SCabacCtx, iStart: usi
 /// # Safety
 /// - `pCbCtx` must point to a valid, initialized `SCabacCtx` with allocated buffers.
 #[inline(never)]
-pub unsafe fn WelsCabacEncodeUpdateLowNontrivial_(buf: &mut [u8], pCbCtx: *mut SCabacCtx) {
-    let mut iLowBitCnt = (*pCbCtx).m_iLowBitCnt;
-    let mut iRenormCnt = (*pCbCtx).m_iRenormCnt;
-    let mut uiLow = (*pCbCtx).m_uiLow;
+pub unsafe fn WelsCabacEncodeUpdateLowNontrivial_(buf: &mut [u8], pCbCtx: &mut SCabacCtx) {
+    let mut iLowBitCnt = pCbCtx.m_iLowBitCnt;
+    let mut iRenormCnt = pCbCtx.m_iRenormCnt;
+    let mut uiLow = pCbCtx.m_uiLow;
 
     loop {
         // Audit site 1: exactly six bytes forward per iteration — a 4-byte
         // store then two single-byte stores — plus the optional backward carry.
-        let mut iBufCur = (*pCbCtx).m_iBufCur;
+        let mut iBufCur = pCbCtx.m_iBufCur;
         let kiInc = (CABAC_LOW_WIDTH as i32) - 1 - iLowBitCnt;
 
         uiLow = uiLow.wrapping_shl(kiInc as u32);
         if (uiLow & (1u64 << ((CABAC_LOW_WIDTH as u32) - 1))) != 0 {
-            PropagateCarry(buf, iBufCur, (*pCbCtx).m_iBufStart);
+            PropagateCarry(buf, iBufCur, pCbCtx.m_iBufStart);
         }
 
         if CABAC_LOW_WIDTH > 32 {
@@ -938,15 +932,15 @@ pub unsafe fn WelsCabacEncodeUpdateLowNontrivial_(buf: &mut [u8], pCbCtx: *mut S
         iRenormCnt -= kiInc;
         iLowBitCnt = 15;
         uiLow &= (1u64 << iLowBitCnt) - 1;
-        (*pCbCtx).m_iBufCur = iBufCur;
+        pCbCtx.m_iBufCur = iBufCur;
 
         if (iLowBitCnt + iRenormCnt) <= ((CABAC_LOW_WIDTH as i32) - 1) {
             break;
         }
     }
 
-    (*pCbCtx).m_iLowBitCnt = iLowBitCnt + iRenormCnt;
-    (*pCbCtx).m_uiLow = uiLow.wrapping_shl(iRenormCnt as u32);
+    pCbCtx.m_iLowBitCnt = iLowBitCnt + iRenormCnt;
+    pCbCtx.m_uiLow = uiLow.wrapping_shl(iRenormCnt as u32);
 }
 
 /// Inline fast path for updating the 64-bit lower bound register `m_uiLow`.
@@ -954,14 +948,14 @@ pub unsafe fn WelsCabacEncodeUpdateLowNontrivial_(buf: &mut [u8], pCbCtx: *mut S
 /// # Safety
 /// - `pCbCtx` must point to a valid `SCabacCtx` instance.
 #[inline(always)]
-pub unsafe fn WelsCabacEncodeUpdateLow_(buf: &mut [u8], pCbCtx: *mut SCabacCtx) {
-    if ((*pCbCtx).m_iLowBitCnt + (*pCbCtx).m_iRenormCnt) < (CABAC_LOW_WIDTH as i32) {
-        (*pCbCtx).m_iLowBitCnt += (*pCbCtx).m_iRenormCnt;
-        (*pCbCtx).m_uiLow = (*pCbCtx).m_uiLow.wrapping_shl((*pCbCtx).m_iRenormCnt as u32);
+pub unsafe fn WelsCabacEncodeUpdateLow_(buf: &mut [u8], pCbCtx: &mut SCabacCtx) {
+    if (pCbCtx.m_iLowBitCnt + pCbCtx.m_iRenormCnt) < (CABAC_LOW_WIDTH as i32) {
+        pCbCtx.m_iLowBitCnt += pCbCtx.m_iRenormCnt;
+        pCbCtx.m_uiLow = pCbCtx.m_uiLow.wrapping_shl(pCbCtx.m_iRenormCnt as u32);
     } else {
         WelsCabacEncodeUpdateLowNontrivial_(buf, pCbCtx);
     }
-    (*pCbCtx).m_iRenormCnt = 0;
+    pCbCtx.m_iRenormCnt = 0;
 }
 
 /// Out-of-line slow path for Least Probable Symbol (LPS) bin encoding.
@@ -970,23 +964,23 @@ pub unsafe fn WelsCabacEncodeUpdateLow_(buf: &mut [u8], pCbCtx: *mut SCabacCtx) 
 /// - `pCbCtx` must point to a valid `SCabacCtx` instance.
 /// - `iCtx` must be in $[0, \text{WELS\_CONTEXT\_COUNT} - 1]$.
 #[inline]
-pub unsafe fn WelsCabacEncodeDecisionLps_(buf: &mut [u8], pCbCtx: *mut SCabacCtx, iCtx: i32) {
+pub unsafe fn WelsCabacEncodeDecisionLps_(buf: &mut [u8], pCbCtx: &mut SCabacCtx, iCtx: i32) {
     let ctx_idx = iCtx as usize;
-    let kiState = (*pCbCtx).m_sStateCtx[ctx_idx].State() as usize;
-    let mut uiRange = (*pCbCtx).m_uiRange;
+    let kiState = pCbCtx.m_sStateCtx[ctx_idx].State() as usize;
+    let mut uiRange = pCbCtx.m_uiRange;
     let uiRangeLps = g_kuiCabacRangeLps[kiState][((uiRange & 0xff) >> 6) as usize] as u32;
     uiRange = uiRange.wrapping_sub(uiRangeLps);
 
-    let current_mps = (*pCbCtx).m_sStateCtx[ctx_idx].Mps();
+    let current_mps = pCbCtx.m_sStateCtx[ctx_idx].Mps();
     let toggle = if kiState == 0 { 1u8 } else { 0u8 };
-    (*pCbCtx).m_sStateCtx[ctx_idx].Set(g_kuiStateTransTable[kiState][0], current_mps ^ toggle);
+    pCbCtx.m_sStateCtx[ctx_idx].Set(g_kuiStateTransTable[kiState][0], current_mps ^ toggle);
 
     WelsCabacEncodeUpdateLow_(buf, pCbCtx);
-    (*pCbCtx).m_uiLow = (*pCbCtx).m_uiLow.wrapping_add(uiRange as u64);
+    pCbCtx.m_uiLow = pCbCtx.m_uiLow.wrapping_add(uiRange as u64);
 
     let kiRenormAmount = g_kiClz5Table[(uiRangeLps >> 3) as usize] as i32;
-    (*pCbCtx).m_uiRange = uiRangeLps << (kiRenormAmount as u32);
-    (*pCbCtx).m_iRenormCnt = kiRenormAmount;
+    pCbCtx.m_uiRange = uiRangeLps << (kiRenormAmount as u32);
+    pCbCtx.m_iRenormCnt = kiRenormAmount;
 }
 
 /// Encodes a regular context-modeled binary symbol (`uiBin`).
@@ -995,18 +989,18 @@ pub unsafe fn WelsCabacEncodeDecisionLps_(buf: &mut [u8], pCbCtx: *mut SCabacCtx
 /// - `pCbCtx` must point to a valid `SCabacCtx` instance.
 /// - `iCtx` must be in $[0, \text{WELS\_CONTEXT\_COUNT} - 1]$.
 #[inline(always)]
-pub unsafe fn WelsCabacEncodeDecision(buf: &mut [u8], pCbCtx: *mut SCabacCtx, iCtx: i32, uiBin: u32) {
+pub unsafe fn WelsCabacEncodeDecision(buf: &mut [u8], pCbCtx: &mut SCabacCtx, iCtx: i32, uiBin: u32) {
     let ctx_idx = iCtx as usize;
-    if (uiBin as u8) == (*pCbCtx).m_sStateCtx[ctx_idx].Mps() {
-        let kiState = (*pCbCtx).m_sStateCtx[ctx_idx].State() as usize;
-        let mut uiRange = (*pCbCtx).m_uiRange;
+    if (uiBin as u8) == pCbCtx.m_sStateCtx[ctx_idx].Mps() {
+        let kiState = pCbCtx.m_sStateCtx[ctx_idx].State() as usize;
+        let mut uiRange = pCbCtx.m_uiRange;
         let uiRangeLps = g_kuiCabacRangeLps[kiState][((uiRange & 0xff) >> 6) as usize] as u32;
         uiRange = uiRange.wrapping_sub(uiRangeLps);
 
         let kiRenormAmount = ((uiRange >> 8) ^ 1) as i32;
-        (*pCbCtx).m_uiRange = uiRange << (kiRenormAmount as u32);
-        (*pCbCtx).m_iRenormCnt += kiRenormAmount;
-        (*pCbCtx).m_sStateCtx[ctx_idx].Set(g_kuiStateTransTable[kiState][1], uiBin as u8);
+        pCbCtx.m_uiRange = uiRange << (kiRenormAmount as u32);
+        pCbCtx.m_iRenormCnt += kiRenormAmount;
+        pCbCtx.m_sStateCtx[ctx_idx].Set(g_kuiStateTransTable[kiState][1], uiBin as u8);
     } else {
         WelsCabacEncodeDecisionLps_(buf, pCbCtx, iCtx);
     }
@@ -1017,12 +1011,12 @@ pub unsafe fn WelsCabacEncodeDecision(buf: &mut [u8], pCbCtx: *mut SCabacCtx, iC
 /// # Safety
 /// - `pCbCtx` must point to a valid `SCabacCtx` instance.
 #[inline(always)]
-pub unsafe fn WelsCabacEncodeBypassOne(buf: &mut [u8], pCbCtx: *mut SCabacCtx, uiBin: i32) {
+pub unsafe fn WelsCabacEncodeBypassOne(buf: &mut [u8], pCbCtx: &mut SCabacCtx, uiBin: i32) {
     let kuiBinBitmask = (uiBin as u32).wrapping_neg();
-    (*pCbCtx).m_iRenormCnt += 1;
+    pCbCtx.m_iRenormCnt += 1;
     WelsCabacEncodeUpdateLow_(buf, pCbCtx);
-    let mask_range = (kuiBinBitmask & (*pCbCtx).m_uiRange) as u64;
-    (*pCbCtx).m_uiLow = (*pCbCtx).m_uiLow.wrapping_add(mask_range);
+    let mask_range = (kuiBinBitmask & pCbCtx.m_uiRange) as u64;
+    pCbCtx.m_uiLow = pCbCtx.m_uiLow.wrapping_add(mask_range);
 }
 
 /// Encodes terminating syntax elements (`end_of_slice_flag` or `I_PCM` type).
@@ -1030,22 +1024,22 @@ pub unsafe fn WelsCabacEncodeBypassOne(buf: &mut [u8], pCbCtx: *mut SCabacCtx, u
 /// # Safety
 /// - `pCbCtx` must point to a valid `SCabacCtx` instance.
 #[inline]
-pub unsafe fn WelsCabacEncodeTerminate(buf: &mut [u8], pCbCtx: *mut SCabacCtx, uiBin: u32) {
-    (*pCbCtx).m_uiRange = (*pCbCtx).m_uiRange.wrapping_sub(2);
+pub unsafe fn WelsCabacEncodeTerminate(buf: &mut [u8], pCbCtx: &mut SCabacCtx, uiBin: u32) {
+    pCbCtx.m_uiRange = pCbCtx.m_uiRange.wrapping_sub(2);
     if uiBin != 0 {
         WelsCabacEncodeUpdateLow_(buf, pCbCtx);
-        (*pCbCtx).m_uiLow = (*pCbCtx).m_uiLow.wrapping_add((*pCbCtx).m_uiRange as u64);
+        pCbCtx.m_uiLow = pCbCtx.m_uiLow.wrapping_add(pCbCtx.m_uiRange as u64);
 
         let kiRenormAmount: i32 = 7;
-        (*pCbCtx).m_uiRange = 2 << (kiRenormAmount as u32);
-        (*pCbCtx).m_iRenormCnt = kiRenormAmount;
+        pCbCtx.m_uiRange = 2 << (kiRenormAmount as u32);
+        pCbCtx.m_iRenormCnt = kiRenormAmount;
 
         WelsCabacEncodeUpdateLow_(buf, pCbCtx);
-        (*pCbCtx).m_uiLow |= 0x80;
+        pCbCtx.m_uiLow |= 0x80;
     } else {
-        let kiRenormAmount = (((*pCbCtx).m_uiRange >> 8) ^ 1) as i32;
-        (*pCbCtx).m_uiRange = (*pCbCtx).m_uiRange << (kiRenormAmount as u32);
-        (*pCbCtx).m_iRenormCnt += kiRenormAmount;
+        let kiRenormAmount = ((pCbCtx.m_uiRange >> 8) ^ 1) as i32;
+        pCbCtx.m_uiRange = pCbCtx.m_uiRange << (kiRenormAmount as u32);
+        pCbCtx.m_iRenormCnt += kiRenormAmount;
     }
 }
 
@@ -1054,7 +1048,7 @@ pub unsafe fn WelsCabacEncodeTerminate(buf: &mut [u8], pCbCtx: *mut SCabacCtx, u
 /// # Safety
 /// - `pCbCtx` must point to a valid `SCabacCtx` instance.
 #[inline]
-pub unsafe fn WelsCabacEncodeUeBypass(buf: &mut [u8], pCbCtx: *mut SCabacCtx, iExpBits: i32, uiVal: u32) {
+pub unsafe fn WelsCabacEncodeUeBypass(buf: &mut [u8], pCbCtx: &mut SCabacCtx, iExpBits: i32, uiVal: u32) {
     let mut iSufS = uiVal as i32;
     let mut iStopLoop = 0;
     let mut k = iExpBits;
@@ -1082,19 +1076,19 @@ pub unsafe fn WelsCabacEncodeUeBypass(buf: &mut [u8], pCbCtx: *mut SCabacCtx, iE
 /// # Safety
 /// - `pCbCtx` must point to a valid `SCabacCtx` instance.
 #[inline]
-pub unsafe fn WelsCabacEncodeFlush(buf: &mut [u8], pCbCtx: *mut SCabacCtx) {
+pub unsafe fn WelsCabacEncodeFlush(buf: &mut [u8], pCbCtx: &mut SCabacCtx) {
     WelsCabacEncodeTerminate(buf, pCbCtx, 1);
 
-    let mut uiLow = (*pCbCtx).m_uiLow;
-    let mut iLowBitCnt = (*pCbCtx).m_iLowBitCnt;
-    let mut iBufCur = (*pCbCtx).m_iBufCur;
+    let mut uiLow = pCbCtx.m_uiLow;
+    let mut iLowBitCnt = pCbCtx.m_iLowBitCnt;
+    let mut iBufCur = pCbCtx.m_iBufCur;
 
     let shift = (CABAC_LOW_WIDTH as i32) - 1 - iLowBitCnt;
     if shift >= 0 && shift < 64 {
         uiLow = uiLow.wrapping_shl(shift as u32);
     }
     if (uiLow & (1u64 << ((CABAC_LOW_WIDTH as u32) - 1))) != 0 {
-        PropagateCarry(buf, iBufCur, (*pCbCtx).m_iBufStart);
+        PropagateCarry(buf, iBufCur, pCbCtx.m_iBufStart);
     }
     // Audit site 2: one byte per iteration while `iLowBitCnt -= 8` stays
     // non-negative — at most 7, since `iLowBitCnt <= 63`.
@@ -1108,7 +1102,7 @@ pub unsafe fn WelsCabacEncodeFlush(buf: &mut [u8], pCbCtx: *mut SCabacCtx) {
         uiLow = uiLow.wrapping_shl(8);
     }
 
-    (*pCbCtx).m_iBufCur = iBufCur;
+    pCbCtx.m_iBufCur = iBufCur;
 }
 
 /// Returns the current byte write cursor `m_iBufCur`, as an offset into the
@@ -1122,12 +1116,8 @@ pub unsafe fn WelsCabacEncodeFlush(buf: &mut [u8], pCbCtx: *mut SCabacCtx) {
 /// # Safety
 /// - `pCbCtx` must point to a valid `SCabacCtx` instance or null.
 #[inline(always)]
-pub unsafe fn WelsCabacEncodePos(pCbCtx: *mut SCabacCtx) -> usize {
-    if pCbCtx.is_null() {
-        0
-    } else {
-        (*pCbCtx).m_iBufCur
-    }
+pub fn WelsCabacEncodePos(pCbCtx: &SCabacCtx) -> usize {
+    pCbCtx.m_iBufCur
 }
 
 // `PWriteBlockResidualCabac` was here — a function-pointer prototype for the CABAC
