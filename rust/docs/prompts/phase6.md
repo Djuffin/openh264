@@ -541,11 +541,30 @@ at a family boundary, and only with a written reason):
   per-macroblock resolutions reaching the four side arrays, which want slices, not
   addresses. F3 measurements **75–78**, all acquitted, two of them refining the
   retry protocol.
-* **G** — the context flip and the deny sweep (6.6), then the phase close. **Opens
-  with 6.5's fold** (steward, 2026-08-19): `au_set.rs` + `paraset_strategy.rs` R1
-  remnants and `rc.rs`'s 56 `*mut sWelsEncCtx` land here with the flip;
-  `wels_encoder_ext.rs` internals are Phase 8's boundary and are **not** this
-  session's. Close against §7's exit conditions, not against "the lint is on".
+* **G** — **brief written** ([`phase6_session_g.md`](phase6_session_g.md), steward,
+  2026-08-20). **The flip's first third: the constructor and the aliases.**
+  `sWelsEncCtx::new()` kills the three `mem::zeroed` shells (5b's recipe:
+  field-wise, zero-meaning documented, byte-compare test at **zero** attributed
+  differences), then the context's *aliases* become ids while every container
+  stays raw — `pCurDqLayer` → `Option<LayerIdx>` (281 sites; four writers, one a
+  recorded MT one-liner), `pSps`/`pPps`/`pSubsetSps` and the layer/slice-header
+  parameter-set pointers → the ids `SDqIdc` already stores as data — with the 6.5
+  writers folded in (`au_set.rs`, `paraset_strategy.rs`, `rc.rs`'s reaches). Step
+  0 pays F63 forward: the decoder's `data_ptr` gets S40's twice-derived test. No
+  member owns; no `&mut sWelsEncCtx` anywhere (S37).
+* **H** — **the members own**: `RequestMemorySvc` → constructors, `FreeMemorySvc`
+  → `Drop` with F19's leak check per `Box::into_raw` member, the 18 container
+  fields → owned (`Vec<Box<SDqLayer>>`, `Vec<Box<SRefList>>`, the parameter-set
+  arrays, P11's `pMvdCostTable`, `pFrameBs`, the rc blocks), and `CMemoryAlign`'s
+  census reads 0 — the allocator dies with `memory_align.rs`. Phase-7 members
+  (`pSliceThreading`, `pTaskManage`, `mutexEncoderError`, `pDynamicBsBuffer`)
+  stay raw, enumerated.
+* **I** — **the S37 inventory, then references where it is clean; the deny sweep
+  module-by-module; §7's exit conditions checked line by line; the residue
+  enumerated in the four lawful categories; the handoffs written (Phase 7, 8, 9,
+  10); cumulative perf restated; the phase close.** `SWelsFuncPtrList` (57) and
+  the dispatch tables resolve here. Close against §7, not against "the lint is
+  on".
 
 **Seven sessions is the estimate, not the contract**; Phase 5 ran fourteen against
 a plan of nine to twelve, and the difference was discovery, which this phase has
