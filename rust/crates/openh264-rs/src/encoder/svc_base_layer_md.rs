@@ -877,9 +877,12 @@ pub unsafe fn WelsMdInterInit(
     let kiMbWidth = (*pCurLayer).iMbWidth as i32;
     let kiMbHeight = (*pCurLayer).iMbHeight as i32;
 
-    (*pMbCache).pEncSad = (*(*pCurLayer).pDecPic).pMbSkipSad.offset(kiMbXY as isize);
-
     //step 1. load neighbor cache
+    //
+    // **T6.F0**: the skip-SAD array goes to the fill function whole. The C++ stashes
+    // `pDecPic->pMbSkipSad + kiMbXY` in `pMbCache->pEncSad` first and the callee walks
+    // backwards off it; the array is the picture's own now, so the callee indexes
+    // `iMbXY + <neighbour offset>` against its root under the same guards.
     (*(*pEncCtx).pFuncList)
         .pfFillInterNeighborCache
         .expect("pfFillInterNeighborCache unset")(
@@ -887,6 +890,7 @@ pub unsafe fn WelsMdInterInit(
         pCurMb,
         kiMbWidth,
         (*(*pEncCtx).pVaa).pVaaBackgroundMbFlag.offset(kiMbXY as isize),
+        &(*(*pCurLayer).pDecPic).pMbSkipSad,
     ); //BGD spatial pFunc
 
     //step 4. locating current p_ref
@@ -908,12 +912,12 @@ pub unsafe fn WelsMdInterInit(
         (*pMbCache).SPicData.pRefMb[2] = (*pMbCache).SPicData.pRefMb[2].add(MB_WIDTH_CHROMA);
     }
 
-    (*pMbCache).uiRefMbType = *(*(*pCurLayer).pRefPic).uiRefMbType.offset(kiMbXY as isize);
+    (*pMbCache).uiRefMbType = (&(*(*pCurLayer).pRefPic).uiRefMbType)[kiMbXY as usize];
     (*pMbCache).bCollocatedPredFlag = false;
 
     //comment: sometimes, mode decision process may skip the md_p16x16 and md_pskip function,
     (*pCurMb).sP16x16Mv = SMVUnitXY { iMvX: 0, iMvY: 0 };
-    *(*(*pCurLayer).pDecPic).sMvList.offset(kiMbXY as isize) = SMVUnitXY { iMvX: 0, iMvY: 0 };
+    (&mut (*(*pCurLayer).pDecPic).sMvList)[kiMbXY as usize] = SMVUnitXY { iMvX: 0, iMvY: 0 };
 
     SetMvWithinIntegerMvRange(
         kiMbWidth,
@@ -1469,7 +1473,7 @@ pub unsafe fn WelsMdPSkipEnc(
         || iSadCostMb < (*pWelsMd).iSadPredSkip
         || ((*(*pCurLayer).pRefPic).iPictureType == EWelsSliceType::P_SLICE as i32
             && (*pMbCache).uiRefMbType == MB_TYPE_SKIP
-            && iSadCostMb < *(*(*pCurLayer).pRefPic).pMbSkipSad.offset((*pCurMb).iMbXY as isize))
+            && iSadCostMb < (&(*(*pCurLayer).pRefPic).pMbSkipSad)[(*pCurMb).iMbXY as usize])
     {
         //update motion info to current MB
         AcceptPskip(pEncCtx, pWelsMd, pCurMb, pMbCache, &sMvp, iSadCostLuma, iSadCostMb, pDstLuma);
@@ -1556,9 +1560,7 @@ unsafe fn AcceptPskip(
     (*pWelsMd).iCostSkipMb = iSadCostMb;
 
     (*pCurMb).sP16x16Mv = *sMvp;
-    *(*(*pCurLayer).pDecPic)
-        .sMvList
-        .offset((*pCurMb).iMbXY as isize) = *sMvp;
+    (&mut (*(*pCurLayer).pDecPic).sMvList)[(*pCurMb).iMbXY as usize] = *sMvp;
 }
 
 /// `svc_base_layer_md.cpp:1573`. Quarter-pel refinement of whichever partitioning the
@@ -2266,25 +2268,31 @@ pub unsafe fn WelsMdInterEncode(
 /// `svc_base_layer_md.cpp:1987`. Records the skip SAD and the coded macroblock type
 /// for the next frame's predictors.
 ///
+/// **T6.F0**: both arrays arrive whole. The C++ writes the SAD through
+/// `pMbCache->pEncSad`, the cursor `WelsMdInterInit` parked at `kiMbXY`; the cursor is
+/// gone and this indexes `iMbXY` in the reconstruction picture's own array, exactly as
+/// it already did for `pRefMbtypeList`. `pMbCache` was the only reason this function
+/// took the arena and it no longer needs it.
+///
 /// # Safety
-/// `pRefMbtypeList` must have room for `pCurMb->iMbXY`; `pMbCache->pEncSad` must be
-/// assigned (`WelsMdInterInit` does this).
+/// Both arrays must have room for `pCurMb->iMbXY`.
 pub unsafe fn WelsMdInterSaveSadAndRefMbType(
-    pRefMbtypeList: *mut u32,
-    pMbCache: *mut SMbCache,
+    pRefMbtypeList: &mut [u32],
+    pMbSkipSadList: &mut [i32],
     pCurMb: *const SMB,
     pMd: &SWelsMD,
 ) {
     let kmtCurMbtype = (*pCurMb).uiMbType;
+    let kiMbXY = (*pCurMb).iMbXY as usize;
 
     //sad
-    *(*pMbCache).pEncSad.add(0) = if kmtCurMbtype == MB_TYPE_SKIP {
+    pMbSkipSadList[kiMbXY] = if kmtCurMbtype == MB_TYPE_SKIP {
         (*pMd).iCostSkipMb
     } else {
         0
     };
     //uiMbType
-    *pRefMbtypeList.offset((*pCurMb).iMbXY as isize) = kmtCurMbtype;
+    pRefMbtypeList[kiMbXY] = kmtCurMbtype;
 }
 
 #[cfg(test)]

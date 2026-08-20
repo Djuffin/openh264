@@ -737,10 +737,20 @@ pub unsafe fn AllocPicture(
     bNeedMbInfo: bool,
     iNeedFeatureStorage: i32,
 ) -> *mut SPicture {
-    let pPic = (*pMa).WelsMallocz(size_of::<SPicture>() as u32, tag!("pPic")) as *mut SPicture;
-    if pPic.is_null() {
+    // `RequestScreenBlockFeatureStorage` is part of the screen-content path, which is
+    // outside the gate configuration and unported; refuse rather than hand back a
+    // picture whose storage the caller believes exists. **Hoisted above the
+    // allocations at T6.F0** — the old body built the whole picture and then unwound
+    // it through `FreePicture`; the answer is the same null either way, and refusing
+    // first is one path instead of two.
+    if iNeedFeatureStorage != 0 {
         return std::ptr::null_mut();
     }
+
+    // **T6.F0**: the struct, and the four per-macroblock side arrays with it, come
+    // from `SPicture::new` rather than `WelsMallocz` + four more `WelsMallocz`es. Only
+    // the plane buffer is still the allocator's; that is step 2's.
+    let mut pPic = SPicture::new(kiWidth, kiHeight, bNeedMbInfo);
 
     // with width of horizon / height of vertical
     let mut iPicWidth = WELS_ALIGN(kiWidth, MB_WIDTH_LUMA) + (PADDING_LENGTH << 1);
@@ -764,119 +774,55 @@ pub unsafe fn AllocPicture(
     // fresh 18 KB `malloc` is served from zero pages, which is why 341/341 has
     // always agreed. Found by the encoder aliasing probe, Phase 6 session A, at
     // `processing/vaacalc.rs:307`.
-    (*pPic).pBuffer =
+    pPic.pBuffer =
         (*pMa).WelsMallocz((iLumaSize + (iChromaSize << 1)) as u32, tag!("pPic->pBuffer")) as *mut u8;
-    if (*pPic).pBuffer.is_null() {
-        let mut p = pPic;
-        FreePicture(pMa, &mut p);
+    if pPic.pBuffer.is_null() {
+        // `pPic` drops here, and the side arrays with it.
         return std::ptr::null_mut();
     }
-    (*pPic).iLineSize[0] = iPicWidth;
-    (*pPic).iLineSize[1] = iPicChromaWidth;
-    (*pPic).iLineSize[2] = iPicChromaWidth;
-    (*pPic).pData[0] = (*pPic)
+    pPic.iLineSize[0] = iPicWidth;
+    pPic.iLineSize[1] = iPicChromaWidth;
+    pPic.iLineSize[2] = iPicChromaWidth;
+    pPic.pData[0] = pPic.pBuffer.add(((1 + pPic.iLineSize[0]) * PADDING_LENGTH) as usize);
+    pPic.pData[1] = pPic
         .pBuffer
-        .add(((1 + (*pPic).iLineSize[0]) * PADDING_LENGTH) as usize);
-    (*pPic).pData[1] = (*pPic)
-        .pBuffer
-        .add(iLumaSize as usize + ((((1 + (*pPic).iLineSize[1]) * PADDING_LENGTH) >> 1) as usize));
-    (*pPic).pData[2] = (*pPic).pBuffer.add(
+        .add(iLumaSize as usize + ((((1 + pPic.iLineSize[1]) * PADDING_LENGTH) >> 1) as usize));
+    pPic.pData[2] = pPic.pBuffer.add(
         (iLumaSize + iChromaSize) as usize
-            + ((((1 + (*pPic).iLineSize[2]) * PADDING_LENGTH) >> 1) as usize),
+            + ((((1 + pPic.iLineSize[2]) * PADDING_LENGTH) >> 1) as usize),
     );
 
-    (*pPic).iWidthInPixel = kiWidth;
-    (*pPic).iHeightInPixel = kiHeight;
-    (*pPic).iFrameNum = -1;
+    // `iWidthInPixel`, `iHeightInPixel`, `iFrameNum`, `bIsLongRef`, `iLongTermPicNum`,
+    // `uiRecieveConfirmed` and `iMarkFrameNum` are `SPicture::new`'s — it writes the
+    // same seven fields `picture_handle.cpp` writes over its zeroed block.
+    // SCREEN_CONTENT(dormant: Phase 10) — refused above, so the slot stays null.
 
-    (*pPic).bIsLongRef = false;
-    (*pPic).iLongTermPicNum = -1;
-    (*pPic).uiRecieveConfirmed = 0;
-    (*pPic).iMarkFrameNum = -1;
-
-    if bNeedMbInfo {
-        let kuiCountMbNum = (((15 + kiWidth) >> 4) * ((15 + kiHeight) >> 4)) as u32;
-
-        (*pPic).uiRefMbType =
-            (*pMa).WelsMallocz(kuiCountMbNum * 4, tag!("pPic->uiRefMbType")) as *mut u32;
-        (*pPic).pRefMbQp = (*pMa).WelsMallocz(kuiCountMbNum, tag!("pPic->pRefMbQp")) as *mut u8;
-        (*pPic).sMvList = (*pMa).WelsMallocz(
-            kuiCountMbNum * size_of::<SMVUnitXY>() as u32,
-            tag!("pPic->sMvList"),
-        ) as *mut SMVUnitXY;
-        (*pPic).pMbSkipSad =
-            (*pMa).WelsMallocz(kuiCountMbNum * 4, tag!("pPic->pMbSkipSad")) as *mut i32;
-
-        if (*pPic).uiRefMbType.is_null()
-            || (*pPic).pRefMbQp.is_null()
-            || (*pPic).sMvList.is_null()
-            || (*pPic).pMbSkipSad.is_null()
-        {
-            let mut p = pPic;
-            FreePicture(pMa, &mut p);
-            return std::ptr::null_mut();
-        }
-    }
-
-    // `RequestScreenBlockFeatureStorage` is part of the screen-content path, which is
-    // outside the gate configuration and unported; refuse rather than hand back a
-    // picture whose storage the caller believes exists.
-    if iNeedFeatureStorage != 0 {
-        let mut p = pPic;
-        FreePicture(pMa, &mut p);
-        return std::ptr::null_mut();
-    }
-    (*pPic).pScreenBlockFeatureStorage = std::ptr::null_mut();
-
-    pPic
+    Box::into_raw(pPic)
 }
 
-/// `picture_handle.cpp:129`. Releases a picture and every block `AllocPicture` took
-/// from `pMa`.
+/// `picture_handle.cpp:129`. Releases a picture and the one block `AllocPicture` still
+/// takes from `pMa`.
+///
+/// The side arrays are the picture's own since T6.F0, so this frees the plane buffer
+/// and drops the `Box`; the field-by-field reset the C++ does before `WelsFree` was
+/// never observable (nothing reads a picture between free and reuse) and dies with the
+/// four `WelsFree`s it stood among.
 ///
 /// # Safety
-/// `pMa` must be the allocator the picture was built with.
+/// `pMa` must be the allocator the picture was built with, and `*ppPic` must have come
+/// from [`AllocPicture`].
 pub unsafe fn FreePicture(pMa: *mut CMemoryAlign, ppPic: *mut *mut SPicture) {
     if ppPic.is_null() || (*ppPic).is_null() {
         return;
     }
-    let pPic = *ppPic;
-
-    if !(*pPic).pBuffer.is_null() {
-        (*pMa).WelsFree((*pPic).pBuffer as *mut c_void, tag!("pPic->pBuffer"));
-        (*pPic).pBuffer = std::ptr::null_mut();
-    }
-    (*pPic).pData = [std::ptr::null_mut(); 3];
-    (*pPic).iLineSize = [0; 3];
-
-    (*pPic).iWidthInPixel = 0;
-    (*pPic).iHeightInPixel = 0;
-    (*pPic).iFrameNum = -1;
-
-    (*pPic).bIsLongRef = false;
-    (*pPic).uiRecieveConfirmed = 0;
-    (*pPic).iLongTermPicNum = -1;
-    (*pPic).iMarkFrameNum = -1;
-
-    if !(*pPic).uiRefMbType.is_null() {
-        (*pMa).WelsFree((*pPic).uiRefMbType as *mut c_void, tag!("pPic->uiRefMbType"));
-        (*pPic).uiRefMbType = std::ptr::null_mut();
-    }
-    if !(*pPic).pRefMbQp.is_null() {
-        (*pMa).WelsFree((*pPic).pRefMbQp as *mut c_void, tag!("pPic->pRefMbQp"));
-        (*pPic).pRefMbQp = std::ptr::null_mut();
-    }
-    if !(*pPic).sMvList.is_null() {
-        (*pMa).WelsFree((*pPic).sMvList as *mut c_void, tag!("pPic->sMvList"));
-        (*pPic).sMvList = std::ptr::null_mut();
-    }
-    if !(*pPic).pMbSkipSad.is_null() {
-        (*pMa).WelsFree((*pPic).pMbSkipSad as *mut c_void, tag!("pPic->pMbSkipSad"));
-        (*pPic).pMbSkipSad = std::ptr::null_mut();
-    }
-
-    (*pMa).WelsFree(pPic as *mut c_void, tag!("pPic"));
+    let mut pPic = Box::from_raw(*ppPic);
     *ppPic = std::ptr::null_mut();
+
+    if !pPic.pBuffer.is_null() {
+        (*pMa).WelsFree(pPic.pBuffer as *mut c_void, tag!("pPic->pBuffer"));
+        pPic.pBuffer = std::ptr::null_mut();
+    }
+    drop(pPic);
 }
 
 /// Initializes scaled intermediate picture buffers if aspect-ratio scaling is required.
@@ -2389,7 +2335,7 @@ impl CWelsPreProcess {
             for i in 0..(*pRefPicLlist).uiLongRefCount as usize {
                 let pRef = (*pRefPicLlist).pLongRefList[i];
                 if !pRef.is_null() && (*pRef).uiRecieveConfirmed == RECIEVE_SUCCESS {
-                    *pRefMbTypeArray = (*pRef).uiRefMbType;
+                    *pRefMbTypeArray = (*pRef).ref_mb_type_root();
                     break;
                 }
             }
@@ -2401,7 +2347,7 @@ impl CWelsPreProcess {
                     && (*pRef).iFramePoc >= 0
                     && (*pRef).uiTemporalId <= uiTid
                 {
-                    *pRefMbTypeArray = (*pRef).uiRefMbType;
+                    *pRefMbTypeArray = (*pRef).ref_mb_type_root();
                     break;
                 }
             }

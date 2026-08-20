@@ -469,10 +469,13 @@ pub struct SMbCache {
     pub uiBestPredI4x4Blk4Half: u8,
     pub iSadCostSkip: [i32; 4],
     pub bMbTypeSkip: [bool; 4],
-    /// The one alias that stays: it names a slot of a *picture*
-    /// (`pDecPic->pMbSkipSad + kiMbXY`), and the `SPicture` family is 6.1/6.2's.
-    /// Re-derived per macroblock, exactly as the C++ does.
-    pub pEncSad: *mut i32,
+    // **`pEncSad` stood here, and it was the last alias into a picture (T6.F0).**
+    // It cached `pDecPic->pMbSkipSad + kiMbXY` so that four neighbour reads could be
+    // spelled `.offset(-1)`, `.offset(-iMbWidth)` and friends. The array is the
+    // picture's own `Vec` now, so the cursor is gone and the four reads index the
+    // **root** at `iMbXY + <neighbour offset>` (S28) — the same arithmetic, under the
+    // same availability guards, with the array reached through the parameter the fill
+    // functions gained instead of through a stale copy in this arena.
     pub sDct: SDCTCoeff,
     pub uiNeighborIntra: u8,
     pub uiLumaI16x16Mode: u8,
@@ -505,7 +508,6 @@ impl Default for SMbCache {
             uiBestPredI4x4Blk4Half: 0,
             iSadCostSkip: [0; 4],
             bMbTypeSkip: [false; 4],
-            pEncSad: std::ptr::null_mut(),
             sDct: SDCTCoeff::default(),
             uiNeighborIntra: 0,
             uiLumaI16x16Mode: 0,
@@ -619,11 +621,17 @@ pub unsafe fn dct(pMbCache: *mut SMbCache) -> *mut SDCTCoeff {
     std::ptr::addr_of_mut!((*pMbCache).sDct)
 }
 
-pub type PFillInterNeighborCacheFunc = unsafe extern "C" fn(
+/// **T6.F0**: `kpMbSkipSad` is the reconstruction picture's whole `pMbSkipSad` array,
+/// not a cursor into it. `SMbCache::pEncSad` used to carry the cursor; the four
+/// neighbour reads index `pCurMb->iMbXY + <offset>` against the root instead (S28).
+/// The slot drops `extern "C"` to take the slice — the precedent is `PUpdateMbMvFunc`
+/// and `PSetNoneZeroCountZeroFunc`, both plain `fn` over references since session C.
+pub type PFillInterNeighborCacheFunc = unsafe fn(
     pMbCache: *mut SMbCache,
     pCurMb: *mut SMB,
     iMbWidth: i32,
     pVaaBgMbFlag: *mut i8,
+    kpMbSkipSad: &[i32],
 );
 pub type PGetVarianceFromIntraVaaFunc = unsafe extern "C" fn(pDataY: *mut u8, kiLineSize: i32) -> i32;
 pub type PGetMbSignFromInterVaaFunc = unsafe extern "C" fn(pSad8x8: *mut i32) -> u8;
@@ -906,13 +914,15 @@ pub unsafe extern "C" fn FillNeighborCacheIntra(
     (*pMbCache).uiNeighborIntra = uiNeighborIntra as u8;
 }
 
-pub unsafe extern "C" fn FillNeighborCacheInterWithoutBGD(
+pub unsafe fn FillNeighborCacheInterWithoutBGD(
     pMbCache: *mut SMbCache,
     pCurMb: *mut SMB,
     iMbWidth: i32,
     _pVaaBgMbFlag: *mut i8,
+    kpMbSkipSad: &[i32],
 ) {
     let uiNeighborAvail = (*pCurMb).uiNeighborAvail as u32;
+    let kiMbXY = (*pCurMb).iMbXY as isize;
     // F14's class: a neighbour pointer formed before its availability guard, dereferenced only under it — `wrapping_offset` keeps the arithmetic defined off the edge of the MB array (the encode probe, Phase 6 session B).
     let pLeftMb = pCurMb.wrapping_offset(-1);
     let pTopMb = pCurMb.wrapping_offset(-(iMbWidth as isize));
@@ -933,7 +943,7 @@ pub unsafe extern "C" fn FillNeighborCacheInterWithoutBGD(
 
         if (*pLeftMb).uiMbType == MB_TYPE_SKIP {
             (*pMbCache).bMbTypeSkip[3] = true;
-            (*pMbCache).iSadCostSkip[3] = *(*pMbCache).pEncSad.offset(-1);
+            (*pMbCache).iSadCostSkip[3] = kpMbSkipSad[(kiMbXY - 1) as usize];
         } else {
             (*pMbCache).bMbTypeSkip[3] = false;
             (*pMbCache).iSadCostSkip[3] = 0;
@@ -965,7 +975,7 @@ pub unsafe extern "C" fn FillNeighborCacheInterWithoutBGD(
 
         if (*pTopMb).uiMbType == MB_TYPE_SKIP {
             (*pMbCache).bMbTypeSkip[1] = true;
-            (*pMbCache).iSadCostSkip[1] = *(*pMbCache).pEncSad.offset(-(iMbWidth as isize));
+            (*pMbCache).iSadCostSkip[1] = kpMbSkipSad[(kiMbXY - iMbWidth as isize) as usize];
         } else {
             (*pMbCache).bMbTypeSkip[1] = false;
             (*pMbCache).iSadCostSkip[1] = 0;
@@ -992,7 +1002,7 @@ pub unsafe extern "C" fn FillNeighborCacheInterWithoutBGD(
 
         if (*pLeftTopMb).uiMbType == MB_TYPE_SKIP {
             (*pMbCache).bMbTypeSkip[0] = true;
-            (*pMbCache).iSadCostSkip[0] = *(*pMbCache).pEncSad.offset(-(iMbWidth as isize) - 1);
+            (*pMbCache).iSadCostSkip[0] = kpMbSkipSad[(kiMbXY - iMbWidth as isize - 1) as usize];
         } else {
             (*pMbCache).bMbTypeSkip[0] = false;
             (*pMbCache).iSadCostSkip[0] = 0;
@@ -1012,7 +1022,7 @@ pub unsafe extern "C" fn FillNeighborCacheInterWithoutBGD(
 
         if (*iRightTopMb).uiMbType == MB_TYPE_SKIP {
             (*pMbCache).bMbTypeSkip[2] = true;
-            (*pMbCache).iSadCostSkip[2] = *(*pMbCache).pEncSad.offset(-(iMbWidth as isize) + 1);
+            (*pMbCache).iSadCostSkip[2] = kpMbSkipSad[(kiMbXY - iMbWidth as isize + 1) as usize];
         } else {
             (*pMbCache).bMbTypeSkip[2] = false;
             (*pMbCache).iSadCostSkip[2] = 0;
@@ -1037,13 +1047,15 @@ pub unsafe extern "C" fn FillNeighborCacheInterWithoutBGD(
     pMvComp.iRefIndexCache[23] = REF_NOT_AVAIL;
 }
 
-pub unsafe extern "C" fn FillNeighborCacheInterWithBGD(
+pub unsafe fn FillNeighborCacheInterWithBGD(
     pMbCache: *mut SMbCache,
     pCurMb: *mut SMB,
     iMbWidth: i32,
     pVaaBgMbFlag: *mut i8,
+    kpMbSkipSad: &[i32],
 ) {
     let uiNeighborAvail = (*pCurMb).uiNeighborAvail as u32;
+    let kiMbXY = (*pCurMb).iMbXY as isize;
     // F14's class: a neighbour pointer formed before its availability guard, dereferenced only under it — `wrapping_offset` keeps the arithmetic defined off the edge of the MB array (the encode probe, Phase 6 session B).
     let pLeftMb = pCurMb.wrapping_offset(-1);
     let pTopMb = pCurMb.wrapping_offset(-(iMbWidth as isize));
@@ -1064,7 +1076,7 @@ pub unsafe extern "C" fn FillNeighborCacheInterWithBGD(
 
         if (*pLeftMb).uiMbType == MB_TYPE_SKIP && *pVaaBgMbFlag.offset(-1) == 0 {
             (*pMbCache).bMbTypeSkip[3] = true;
-            (*pMbCache).iSadCostSkip[3] = *(*pMbCache).pEncSad.offset(-1);
+            (*pMbCache).iSadCostSkip[3] = kpMbSkipSad[(kiMbXY - 1) as usize];
         } else {
             (*pMbCache).bMbTypeSkip[3] = false;
             (*pMbCache).iSadCostSkip[3] = 0;
@@ -1096,7 +1108,7 @@ pub unsafe extern "C" fn FillNeighborCacheInterWithBGD(
 
         if (*pTopMb).uiMbType == MB_TYPE_SKIP && *pVaaBgMbFlag.offset(-(iMbWidth as isize)) == 0 {
             (*pMbCache).bMbTypeSkip[1] = true;
-            (*pMbCache).iSadCostSkip[1] = *(*pMbCache).pEncSad.offset(-(iMbWidth as isize));
+            (*pMbCache).iSadCostSkip[1] = kpMbSkipSad[(kiMbXY - iMbWidth as isize) as usize];
         } else {
             (*pMbCache).bMbTypeSkip[1] = false;
             (*pMbCache).iSadCostSkip[1] = 0;
@@ -1123,7 +1135,7 @@ pub unsafe extern "C" fn FillNeighborCacheInterWithBGD(
 
         if (*pLeftTopMb).uiMbType == MB_TYPE_SKIP && *pVaaBgMbFlag.offset(-(iMbWidth as isize) - 1) == 0 {
             (*pMbCache).bMbTypeSkip[0] = true;
-            (*pMbCache).iSadCostSkip[0] = *(*pMbCache).pEncSad.offset(-(iMbWidth as isize) - 1);
+            (*pMbCache).iSadCostSkip[0] = kpMbSkipSad[(kiMbXY - iMbWidth as isize - 1) as usize];
         } else {
             (*pMbCache).bMbTypeSkip[0] = false;
             (*pMbCache).iSadCostSkip[0] = 0;
@@ -1143,7 +1155,7 @@ pub unsafe extern "C" fn FillNeighborCacheInterWithBGD(
 
         if (*iRightTopMb).uiMbType == MB_TYPE_SKIP && *pVaaBgMbFlag.offset(-(iMbWidth as isize) + 1) == 0 {
             (*pMbCache).bMbTypeSkip[2] = true;
-            (*pMbCache).iSadCostSkip[2] = *(*pMbCache).pEncSad.offset(-(iMbWidth as isize) + 1);
+            (*pMbCache).iSadCostSkip[2] = kpMbSkipSad[(kiMbXY - iMbWidth as isize + 1) as usize];
         } else {
             (*pMbCache).bMbTypeSkip[2] = false;
             (*pMbCache).iSadCostSkip[2] = 0;

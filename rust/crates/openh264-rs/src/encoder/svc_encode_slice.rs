@@ -1788,12 +1788,17 @@ pub unsafe fn WelsMdInterMbLoop(
                 }
 
                 //step (4): save from the MD process for future use
-                crate::encoder::svc_base_layer_md::WelsMdInterSaveSadAndRefMbType(
-                    (*(*pCurLayer).pDecPic).uiRefMbType,
-                    pMbCache,
-                    pCurMb,
-                    pMd,
-                );
+                {
+                    // Two disjoint fields of one picture; the borrows do not overlap, so the
+                    // arrays go in whole (T6.F0 — `pMbCache->pEncSad` no longer carries either).
+                    let pDecPic = (*pCurLayer).pDecPic;
+                    crate::encoder::svc_base_layer_md::WelsMdInterSaveSadAndRefMbType(
+                        &mut (*pDecPic).uiRefMbType,
+                        &mut (*pDecPic).pMbSkipSad,
+                        pCurMb,
+                        pMd,
+                    );
+                }
 
                 if let Some(func) = func_list.pfMdBackgroundInfoUpdate {
                     func(
@@ -1957,12 +1962,17 @@ pub unsafe fn WelsMdInterMbLoopOverDynamicSlice(
                 }
             }
             // step (4): save from the MD process for future use
-            crate::encoder::svc_base_layer_md::WelsMdInterSaveSadAndRefMbType(
-                (*(*pCurLayer).pDecPic).uiRefMbType,
-                pMbCache,
-                pCurMb,
-                pMd,
-            );
+            {
+                // Two disjoint fields of one picture; the borrows do not overlap, so the
+                // arrays go in whole (T6.F0 — `pMbCache->pEncSad` no longer carries either).
+                let pDecPic = (*pCurLayer).pDecPic;
+                crate::encoder::svc_base_layer_md::WelsMdInterSaveSadAndRefMbType(
+                    &mut (*pDecPic).uiRefMbType,
+                    &mut (*pDecPic).pMbSkipSad,
+                    pCurMb,
+                    pMd,
+                );
+            }
             if let Some(func_list) = (*pEncCtx).pFuncList.as_ref() {
                 if let Some(func) = func_list.pfMdBackgroundInfoUpdate {
                     func(
