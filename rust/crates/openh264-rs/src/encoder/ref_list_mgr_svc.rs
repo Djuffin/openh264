@@ -24,7 +24,7 @@ pub const STR_ROOM: i32 = 1;
 // `encoder_context.rs` from `wels_const.h`. This module previously had its own copies
 // with MAX_SHORT_REF_COUNT = 16 (C++: 4) and MAX_TEMPORAL_LEVEL = 8 (C++: 4).
 pub use crate::encoder::encoder_context::{MAX_GOP_SIZE, MAX_SHORT_REF_COUNT, MAX_TEMPORAL_LEVEL};
-use crate::encoder::encoder_context::ctx_ltr_at;
+use crate::encoder::encoder_context::{ctx_ltr_at, ctx_ref_list};
 pub const MAX_REF_PIC_COUNT: usize = 16;
 pub const LONG_TERM_REF_NUM: i32 = 2;
 pub const MAX_TEMPORAL_LAYER_NUM: usize = 4;
@@ -224,7 +224,7 @@ pub unsafe fn WelsResetRefList(pCtx: *mut sWelsEncCtx) {
         return;
     }
     let uiDid = (*pCtx).uiDependencyId as usize;
-    let pRefList = *(*pCtx).ppRefPicListExt.add((uiDid) as usize);
+    let pRefList = ctx_ref_list(pCtx, (uiDid) as usize);
     if pRefList.is_null() {
         return;
     }
@@ -268,7 +268,7 @@ pub unsafe fn DeleteLTRFromLongList(pCtx: *mut sWelsEncCtx, iIdx: i32) {
     if pCtx.is_null() {
         return;
     }
-    let pRefList = *(*pCtx).ppRefPicListExt.add(((*pCtx).uiDependencyId as usize) as usize);
+    let pRefList = ctx_ref_list(pCtx, (*pCtx).uiDependencyId as usize);
     if pRefList.is_null() {
         return;
     }
@@ -291,7 +291,7 @@ pub unsafe fn DeleteSTRFromShortList(pCtx: *mut sWelsEncCtx, iIdx: i32) {
     if pCtx.is_null() {
         return;
     }
-    let pRefList = *(*pCtx).ppRefPicListExt.add(((*pCtx).uiDependencyId as usize) as usize);
+    let pRefList = ctx_ref_list(pCtx, (*pCtx).uiDependencyId as usize);
     if pRefList.is_null() {
         return;
     }
@@ -314,7 +314,7 @@ pub unsafe fn DeleteNonSceneLTR(pCtx: *mut sWelsEncCtx) {
     if pCtx.is_null() || (*pCtx).pSvcParam.is_null() {
         return;
     }
-    let pRefList = *(*pCtx).ppRefPicListExt.add(((*pCtx).uiDependencyId as usize) as usize);
+    let pRefList = ctx_ref_list(pCtx, (*pCtx).uiDependencyId as usize);
     if pRefList.is_null() {
         return;
     }
@@ -380,7 +380,7 @@ pub unsafe fn DeleteInvalidLTR(pCtx: *mut sWelsEncCtx) {
         return;
     }
     let uiDid = (*pCtx).uiDependencyId as usize;
-    let pRefList = *(*pCtx).ppRefPicListExt.add((uiDid) as usize);
+    let pRefList = ctx_ref_list(pCtx, (uiDid) as usize);
     if pRefList.is_null() {
         return;
     }
@@ -432,7 +432,7 @@ pub unsafe fn HandleLTRMarkFeedback(pCtx: *mut sWelsEncCtx) {
         return;
     }
     let uiDid = (*pCtx).uiDependencyId as usize;
-    let pRefList = *(*pCtx).ppRefPicListExt.add((uiDid) as usize);
+    let pRefList = ctx_ref_list(pCtx, (uiDid) as usize);
     if pRefList.is_null() {
         return;
     }
@@ -510,7 +510,7 @@ pub unsafe fn LTRMarkProcess(pCtx: *mut sWelsEncCtx) {
         return;
     }
     let uiDid = (*pCtx).uiDependencyId as usize;
-    let pRefList = *(*pCtx).ppRefPicListExt.add((uiDid) as usize);
+    let pRefList = ctx_ref_list(pCtx, (uiDid) as usize);
     if pRefList.is_null() {
         return;
     }
@@ -616,7 +616,7 @@ pub unsafe fn LTRMarkProcessScreen(pCtx: *mut sWelsEncCtx) {
         return;
     };
     let uiDid = (*pCtx).uiDependencyId as usize;
-    let pRefList = *(*pCtx).ppRefPicListExt.add((uiDid) as usize);
+    let pRefList = ctx_ref_list(pCtx, (uiDid) as usize);
     if pRefList.is_null() {
         return;
     }
@@ -640,7 +640,7 @@ pub unsafe fn PrefetchNextBuffer(pCtx: *mut sWelsEncCtx) {
         return;
     }
     let uiDid = (*pCtx).uiDependencyId as usize;
-    let pRefList = *(*pCtx).ppRefPicListExt.add((uiDid) as usize);
+    let pRefList = ctx_ref_list(pCtx, (uiDid) as usize);
     if pRefList.is_null() {
         return;
     }
@@ -674,7 +674,7 @@ pub unsafe fn WelsUpdateRefList(pCtx: *mut sWelsEncCtx) -> bool {
         return false;
     }
     let uiDid = (*pCtx).uiDependencyId as usize;
-    let pRefList = *(*pCtx).ppRefPicListExt.add((uiDid) as usize);
+    let pRefList = ctx_ref_list(pCtx, (uiDid) as usize);
     if pRefList.is_null() || (*pRefList).pRef.is_empty() {
         return false;
     }
@@ -808,7 +808,7 @@ pub unsafe fn CheckCurMarkFrameNumUsed(pCtx: *mut sWelsEncCtx) -> bool {
     }
     let uiDid = (*pCtx).uiDependencyId as usize;
     let pLtr = &*ctx_ltr_at(pCtx, (uiDid) as usize);
-    let pRefList = *(*pCtx).ppRefPicListExt.add((uiDid) as usize);
+    let pRefList = ctx_ref_list(pCtx, (uiDid) as usize);
     if pRefList.is_null() {
         return false;
     }
@@ -1043,7 +1043,7 @@ pub unsafe fn WelsBuildRefList(
         return false;
     }
     let uiDid = (*pCtx).uiDependencyId as usize;
-    let pRefList = *(*pCtx).ppRefPicListExt.add((uiDid) as usize);
+    let pRefList = ctx_ref_list(pCtx, (uiDid) as usize);
     if pRefList.is_null() {
         return false;
     }
@@ -1106,7 +1106,7 @@ pub unsafe fn UpdateBlockStatic(pCtx: *mut sWelsEncCtx) {
     }
     // ref_list_mgr_svc.cpp:649 — static_cast<SVAAFrameInfoExt*> (pCtx->pVaa)
         let pVaaExt = (*pCtx).pVaa as *mut SVAAFrameInfoExt;
-    let pRefList = *(*pCtx).ppRefPicListExt.add((*pCtx).uiDependencyId as usize);
+    let pRefList = ctx_ref_list(pCtx, (*pCtx).uiDependencyId as usize);
     for idx in 0..((*pCtx).iNumRef0 as usize) {
         let Some(idRef) = (*pCtx).pRefList0[idx] else {
             continue;
@@ -1152,7 +1152,7 @@ pub unsafe fn WelsUpdateSliceHeaderSyntax(
 
         pSliceHdr.uiRefCount = (*pCtx).iNumRef0 as u8;
         if (*pCtx).iNumRef0 > 0 {
-            let pRefList = *(*pCtx).ppRefPicListExt.add((*pCtx).uiDependencyId as usize);
+            let pRefList = ctx_ref_list(pCtx, (*pCtx).uiDependencyId as usize);
             let isLongRef = match (*pCtx).pRefList0[0] {
                 Some(id) => (*pRefList).pic(id).bIsLongRef,
                 None => false,
@@ -1203,7 +1203,7 @@ pub unsafe fn WelsUpdateRefSyntax(pCtx: *mut sWelsEncCtx, kiPOC: i32, kiFrameTyp
     let pParamD = &(*(*pCtx).pSvcParam).sDependencyLayers[uiDid];
 
     if (*pCtx).iNumRef0 > 0 {
-        let pRefList = *(*pCtx).ppRefPicListExt.add(uiDid);
+        let pRefList = ctx_ref_list(pCtx, uiDid);
         if let Some(id) = (*pCtx).pRefList0[0] {
             iAbsDiffPicNumMinus1 = pParamD.iFrameNum - (*pRefList).pic(id).iFrameNum - 1;
             if iAbsDiffPicNumMinus1 < 0 && !ctx_sps(pCtx).is_null() {
@@ -1244,7 +1244,7 @@ unsafe fn UpdateOriginalPicInfoFromCtx(pCtx: *mut sWelsEncCtx) {
     let (Some(idEnc), Some(idDec)) = ((*pCtx).pEncPic, (*pCtx).pDecPic) else {
         return;
     };
-    let pRefList = *(*pCtx).ppRefPicListExt.add((*pCtx).uiDependencyId as usize);
+    let pRefList = ctx_ref_list(pCtx, (*pCtx).uiDependencyId as usize);
     if pRefList.is_null() || (*pCtx).pVpp.is_null() {
         return;
     }
@@ -1263,7 +1263,7 @@ pub unsafe fn UpdateSrcPicListLosslessScreenRefSelectionWithLtr(pCtx: *mut sWels
     UpdateOriginalPicInfoFromCtx(pCtx);
     PrefetchNextBuffer(pCtx);
     if !(*pCtx).pVpp.is_null() && !(*pCtx).pVaa.is_null() {
-        let pRefList = &*(*(*pCtx).ppRefPicListExt.add(iDIdx as usize));
+        let pRefList = &*(ctx_ref_list(pCtx, iDIdx as usize));
         // wels_preprocess.h:143 takes const int32_t; the uint8_t field promotes.
         (*(*pCtx).pVpp).UpdateSrcListLosslessScreenRefSelectionWithLtr(
             (*pCtx).pEncPic,
@@ -1282,7 +1282,7 @@ pub unsafe fn UpdateSrcPicList(pCtx: *mut sWelsEncCtx) {
     UpdateOriginalPicInfoFromCtx(pCtx);
     PrefetchNextBuffer(pCtx);
     if !(*pCtx).pVpp.is_null() {
-        let pRefList = *(*pCtx).ppRefPicListExt.add((iDIdx as usize) as usize);
+        let pRefList = ctx_ref_list(pCtx, (iDIdx as usize) as usize);
         let shortCount = (*pRefList).uiShortRefCount;
         (*(*pCtx).pVpp).UpdateSrcList((*pCtx).pEncPic, iDIdx, shortCount as u32);
     }
@@ -1294,7 +1294,7 @@ pub unsafe fn WelsUpdateRefListScreen(pCtx: *mut sWelsEncCtx) -> bool {
         return false;
     }
     let uiDid = (*pCtx).uiDependencyId as usize;
-    let pRefList = *(*pCtx).ppRefPicListExt.add((uiDid) as usize);
+    let pRefList = ctx_ref_list(pCtx, (uiDid) as usize);
     if pRefList.is_null() || (*pRefList).pRef.is_empty() {
         return false;
     }
@@ -1360,7 +1360,7 @@ pub unsafe fn WelsBuildRefListScreen(
         return false;
     }
     let uiDid = (*pCtx).uiDependencyId as usize;
-    let pRefList = *(*pCtx).ppRefPicListExt.add((uiDid) as usize);
+    let pRefList = ctx_ref_list(pCtx, (uiDid) as usize);
     let pParam = (*pCtx).pSvcParam;
     // ref_list_mgr_svc.cpp:649 — static_cast<SVAAFrameInfoExt*> (pCtx->pVaa)
         let pVaaExt = (*pCtx).pVaa as *mut SVAAFrameInfoExt;
@@ -1481,7 +1481,7 @@ pub unsafe fn WelsMarkPicScreen(pCtx: *mut sWelsEncCtx) {
         iMaxActualLtrIdx = (*(*pCtx).pSvcParam).iNumRefFrame - STR_ROOM - 1 - maxTidAdj;
     }
 
-    let pRefList = *(*pCtx).ppRefPicListExt.add((uiDid) as usize);
+    let pRefList = ctx_ref_list(pCtx, (uiDid) as usize);
     let iNumRef = (*(*pCtx).pSvcParam).iNumRefFrame;
     let iLongRefNum = iNumRef - STR_ROOM;
     let bIsRefListNotFull = ((*pRefList).uiLongRefCount as i32) < iLongRefNum;

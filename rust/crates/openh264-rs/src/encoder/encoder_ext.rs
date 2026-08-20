@@ -27,6 +27,7 @@ use crate::common::memory_align::CMemoryAlign;
 use crate::decoder::nalu::g_ksLevelLimits;
 use crate::encoder::encoder_context::{
     ctx_dq_idc_map, ctx_frame_bs, ctx_frame_bs_at, ctx_ltr_at, ctx_mb_index_x, ctx_mb_index_y,
+    ctx_ref_list,
     ctx_rc_at,
     ctx_pps_array, ctx_sps_array,
     ctx_stride_enc_block_offset,
@@ -755,7 +756,9 @@ pub unsafe fn InitDqLayers(
         let mut pRefListBox = SRefList::new();
         pRefListBox.pRef = RecPicPool::new(pending);
         pRefListBox.pNextBuffer = Some(pRefListBox.pRef.at(0));
-        *(**ppCtx).ppRefPicListExt.add(iDlayerIndex as usize) = Box::into_raw(pRefListBox);
+        // The autoref is explicit because the place is behind a raw pointer: this is a
+        // write into the context's own `Vec` header, not into the list's allocation.
+        (&mut (**ppCtx).ppRefPicListExt)[iDlayerIndex as usize] = Some(pRefListBox);
         iDlayerIndex += 1;
     }
 
@@ -1197,13 +1200,10 @@ pub unsafe fn RequestMemorySvc(
 
     // End of pVaa memory allocation
 
-    (**ppCtx).ppRefPicListExt = (*pMa).WelsMallocz(
-        (kiNumDependencyLayers as usize * std::mem::size_of::<*mut SRefList>()) as u32,
-        tag!("ppRefPicListExt"),
-    ) as *mut *mut SRefList;
-    if (**ppCtx).ppRefPicListExt.is_null() {
-        return 1;
-    }
+    // **T6.H7.** A `WelsMallocz`'d block of `kiNumDependencyLayers` null pointers,
+    // which `InitDqLayers` then fills with `Box::into_raw`'d lists. `None` is that
+    // null, and the `Box` stays where it already was — it just has an owner now.
+    (**ppCtx).ppRefPicListExt = (0..kiNumDependencyLayers).map(|_| None).collect();
 
     (**ppCtx).ppDqLayerList = (*pMa).WelsMallocz(
         (kiNumDependencyLayers as usize * std::mem::size_of::<*mut SDqLayer>()) as u32,
@@ -1254,8 +1254,9 @@ pub unsafe fn RequestMemorySvc(
     }
     crate::encoder::md::MvdCostInit((**ppCtx).pMvdCostTable, kuiMvdInterTableStride);
 
-    if !(*(**ppCtx).ppRefPicListExt).is_null() && !(**(**ppCtx).ppRefPicListExt).pRef.is_empty() {
-        (**ppCtx).pDecPic = Some((**(**ppCtx).ppRefPicListExt).pRef.at(0));
+    let pRefList0 = ctx_ref_list(*ppCtx, 0);
+    if !pRefList0.is_null() && !(*pRefList0).pRef.is_empty() {
+        (**ppCtx).pDecPic = Some((*pRefList0).pRef.at(0));
     } else {
         (**ppCtx).pDecPic = None; // error here
     }
@@ -1545,20 +1546,9 @@ pub unsafe fn FreeDqLayer(pDq: *mut *mut SDqLayer, pMa: *mut CMemoryAlign) {
 ///
 /// # Safety
 /// `pRefList` must have come from `InitDqLayers` and must not be used afterwards.
-pub unsafe fn FreeRefList(
-    pRefList: *mut *mut SRefList,
-    pMa: *mut CMemoryAlign,
-    _iMaxNumRefFrame: i32,
-) {
-    if (*pRefList).is_null() {
-        return;
-    }
-    // **T6.F1**: the per-picture walk is the pool's, and the list is a `Box`. What is
-    // left of the C++'s loop is the plane buffers, which are still `CMemoryAlign`'s
-    // until T6.F2 — after that this is one `from_raw`.
-    drop(Box::from_raw(*pRefList));
-    *pRefList = null_mut();
-}
+// **T6.H7**: `FreeRefList` stood here. T6.F1 had already reduced it to
+// `drop(Box::from_raw(*pRefList))`; the slot owns that `Box` now, so the last line
+// of it is drop glue and the function is deleted rather than converted.
 
 #[cfg(test)]
 mod tests {
@@ -1717,11 +1707,11 @@ mod tests {
                 LEFT_MB_POS | TOP_MB_POS | TOPLEFT_MB_POS | TOPRIGHT_MB_POS
             );
 
-            assert!(!(*pCtx).ppRefPicListExt.is_null());
-            assert!(!(**(*pCtx).ppRefPicListExt).pRef.is_empty());
+            assert!(!ctx_ref_list(pCtx, 0).is_null());
+            assert!(!(*ctx_ref_list(pCtx, 0)).pRef.is_empty());
             assert_eq!(
                 (*pCtx).pDecPic,
-                Some((**(*pCtx).ppRefPicListExt).pRef.at(0))
+                Some((*ctx_ref_list(pCtx, 0)).pRef.at(0))
             );
 
             assert!((*pCtx).pStrideTab.is_some());
@@ -1809,18 +1799,12 @@ pub unsafe fn WelsUninitEncoderExt(ppCtx: *mut *mut sWelsEncCtx) {
             (*pMa).WelsFree((*pCtx).ppDqLayerList as *mut c_void, tag!("ppDqLayerList"));
             (*pCtx).ppDqLayerList = null_mut();
         }
-        // reference picture list extension
-        if !(*pCtx).ppRefPicListExt.is_null() && !(*pCtx).pSvcParam.is_null() {
-            for ilayer in 0..(*(*pCtx).pSvcParam).iSpatialLayerNum as usize {
-                FreeRefList(
-                    (*pCtx).ppRefPicListExt.add(ilayer),
-                    pMa,
-                    (*(*pCtx).pSvcParam).iMaxNumRefFrame,
-                );
-            }
-            (*pMa).WelsFree((*pCtx).ppRefPicListExt as *mut c_void, tag!("ppRefPicListExt"));
-            (*pCtx).ppRefPicListExt = null_mut();
-        }
+        // **T6.H7**: the reference-list entry stood here — a loop calling `FreeRefList`
+        // over `iSpatialLayerNum` slots, then one `WelsFree` for the block. The `Vec`
+        // drops every slot it holds, which is strictly more than the loop did: the
+        // loop read `iSpatialLayerNum` back out of the *parameters* at teardown, so a
+        // configuration change between init and teardown would have leaked the slots
+        // past the new count. `FreeRefList` is deleted with it.
         if !(*pCtx).pVaa.is_null() {
             // **T6.F3**: seven `WelsFree`s and their null tests were here. The VAA
             // block owns its per-frame arrays, so releasing it is dropping it.
@@ -2031,7 +2015,7 @@ pub unsafe fn WelsInitCurrentLayer(pCtx: *mut sWelsEncCtx, _kiWidth: i32, _kiHei
     // **T6.F1**: the layer is stamped with the list its handles belong to, here, once
     // a frame — `pRefPic`/`pDecPic` on `SDqLayer` are slots of *this* list, and the
     // per-macroblock mode-decision family resolves them through it.
-    let pRefList = *(*pCtx).ppRefPicListExt.add((*pCtx).uiDependencyId as usize);
+    let pRefList = ctx_ref_list(pCtx, (*pCtx).uiDependencyId as usize);
     (*pCurDq).pRefList = pRefList;
     let pBaseSlice = crate::encoder::svc_encode_slice::slice_in_layer(pCurDq, 0);
     if pBaseSlice.is_null() {
@@ -3180,7 +3164,7 @@ pub unsafe fn WelsEncoderEncodeExt(
         (*pCtx).eNalType = eNalType;
         (*pCtx).eNalPriority = eNalRefIdc;
 
-        let pRefListCur = *(*pCtx).ppRefPicListExt.add(iCurDid as usize);
+        let pRefListCur = ctx_ref_list(pCtx, iCurDid as usize);
         (*pCtx).pDecPic = (*pRefListCur).pNextBuffer;
         fsnr = match (*pCtx).pDecPic {
             Some(id) => {
@@ -3539,7 +3523,7 @@ pub unsafe fn WelsEncoderEncodeExt(
         iFrameSize += iLayerSize;
         crate::encoder::rc::RcTraceFrameBits(pCtx, (*pFbi).uiTimeStamp, iFrameSize);
         if let Some(id) = (*pCtx).pDecPic {
-            (**(*pCtx).ppRefPicListExt.add(iCurDid as usize))
+            (*ctx_ref_list(pCtx, iCurDid as usize))
                 .pic_mut(id)
                 .iFrameAverageQp = (*ctx_rc_at(pCtx, iCurDid as usize)).iAverageFrameQp;
         }

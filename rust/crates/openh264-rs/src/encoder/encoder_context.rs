@@ -608,6 +608,25 @@ pub unsafe fn ctx_mb_index_x(pCtx: *mut sWelsEncCtx, kiDid: usize) -> *mut i16 {
     }
 }
 
+/// Dependency layer `kiDid`'s **reference list** — `ppRefPicListExt[did]`, and null
+/// where the slot's pointer was null: before `InitDqLayers` fills it, and past the
+/// layers the configuration uses. T6.H7.
+///
+/// The `Box` is dereferenced without forming a reference to its target, so repeated
+/// calls hand out sibling cursors — `svc_encode_slice.rs` asks three times in one
+/// function and the frame loop holds one across a fourth.
+///
+/// # Safety
+/// `pCtx` must point to a live encoder context.
+#[inline]
+pub unsafe fn ctx_ref_list(pCtx: *mut sWelsEncCtx, kiDid: usize) -> *mut SRefList {
+    let arr: &mut Vec<Option<Box<SRefList>>> = &mut (*pCtx).ppRefPicListExt;
+    match arr.get_mut(kiDid) {
+        Some(Some(b)) => &raw mut **b,
+        _ => std::ptr::null_mut(),
+    }
+}
+
 /// The **root** of `pCtx->pWelsSvcRc` — T6.H6; see [`ctx_sps_array`] for the spelling.
 ///
 /// # Safety
@@ -851,7 +870,12 @@ pub struct sWelsEncCtx {
     /// would have silently produced a context that already had one (F56/S21).
     pub iCurDqLayer: Option<crate::encoder::svc_encode_slice::LayerIdx>,
     pub ppDqLayerList: *mut *mut SDqLayer,
-    pub ppRefPicListExt: *mut *mut SRefList,
+    /// **T6.H7 — owned.** One reference list per dependency layer. The array was a
+    /// `WelsMallocz`'d block of pointers; the `SRefList`s themselves have been
+    /// `Box`-built since T6.F1, so the list is simply their owner now. `None` is the
+    /// null a slot held between `RequestMemorySvc` sizing the array and
+    /// `InitDqLayers` filling it. Resolve a layer's list with [`ctx_ref_list`].
+    pub ppRefPicListExt: Vec<Option<Box<SRefList>>>,
     pub pRefList0: [Option<RecPicId>; 16],
     /// **T6.H5 — owned.** One long-term-reference state per dependency layer,
     /// `WelsMallocz`'d and then `ResetLtrState`'d entry by entry. Root:
@@ -1032,7 +1056,7 @@ impl sWelsEncCtx {
             // allocated. `None`, not `Some(LayerIdx(0))` — see the field.
             iCurDqLayer: None,
             ppDqLayerList: std::ptr::null_mut(),
-            ppRefPicListExt: std::ptr::null_mut(),
+            ppRefPicListExt: Vec::new(),
 
             // `iNumRef0` below is the live length of this list; sixteen `None`s is the
             // empty list, and the two agree only because both are zero here.
@@ -1564,8 +1588,8 @@ pub unsafe fn DecideFrameType(
                 || (!pVaa.is_null() && (*pVaa).eSceneChangeIdc == ESceneChangeIdc::LARGE_CHANGED_SCENE))
         {
             let mut iActualLtrcount = 0;
-            if !(*pEncCtx).ppRefPicListExt.is_null() {
-                let ref_list_0 = *(*pEncCtx).ppRefPicListExt;
+            {
+                let ref_list_0 = ctx_ref_list(pEncCtx, 0);
                 if !ref_list_0.is_null() {
                     for i in 0..(*pSvcParam).iLTRRefNum {
                         let Some(id) = (*ref_list_0).pLongRefList[i as usize] else {
@@ -1958,9 +1982,9 @@ mod tests {
         // the empty container, which is the null the raw pointer held, and which
         // `ctx_sps_array` and its siblings answer as null so that every downstream
         // `is_null()` guard still asks its question.
-        const OWNED: [&str; 7] = [
+        const OWNED: [&str; 8] = [
             "pSpsArray", "pSubsetArray", "pPPSArray", "pDqIdcMap", "pFrameBs", "pLtr",
-            "pWelsSvcRc",
+            "pWelsSvcRc", "ppRefPicListExt",
         ];
         assert!(built.pSpsArray.is_empty(), "new(): no SPS array is allocated yet");
         assert!(built.pSubsetArray.is_empty(), "new(): no subset SPS array is allocated yet");
@@ -1969,6 +1993,7 @@ mod tests {
         assert!(built.pFrameBs.is_empty(), "new(): no frame bitstream is allocated yet");
         assert!(built.pLtr.is_empty(), "new(): no LTR state array is allocated yet");
         assert!(built.pWelsSvcRc.is_empty(), "new(): no rate-control state is allocated yet");
+        assert!(built.ppRefPicListExt.is_empty(), "new(): no reference lists are allocated yet");
 
         // ---- tier 2: the F64 fields, excluded by name and asserted by value ----
         const BY_VALUE: [&str; 10] = [

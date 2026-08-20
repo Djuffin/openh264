@@ -73,7 +73,7 @@ pub const MAX_REF_PIC_COUNT: usize = 16;
 // MAX_SHORT_REF_COUNT was 16 where C++ derives 4, which over-sized `SRefList` here and
 // let the `WelsPreprocess` unref loop read one past `pShortRefList`.
 pub use crate::encoder::encoder_context::{MAX_GOP_SIZE, MAX_SHORT_REF_COUNT, MAX_TEMPORAL_LEVEL};
-use crate::encoder::encoder_context::{ctx_ltr_at, ctx_rc_at};
+use crate::encoder::encoder_context::{ctx_ltr_at, ctx_rc_at, ctx_ref_list};
 use crate::encoder::rc::{rc_gom_fg_blocks, rc_gom_sad};
 pub use crate::encoder::encoder_context::SRefList;
 pub use crate::encoder::picture::SPicture;
@@ -2474,7 +2474,7 @@ impl CWelsPreProcess {
     pub unsafe fn SetRefMbType(&self, pCtx: *mut sWelsEncCtx, pRefMbTypeArray: *mut *mut u32, _iRefPicType: i32) {
         let uiTid = (*pCtx).uiTemporalId;
         let uiDid = (*pCtx).uiDependencyId;
-        let pRefPicLlist = *(*pCtx).ppRefPicListExt.add(uiDid as usize);
+        let pRefPicLlist = ctx_ref_list(pCtx, uiDid as usize);
         let pLtr = ctx_ltr_at(pCtx, uiDid as usize);
         if pRefPicLlist.is_null() {
             return;
@@ -2523,7 +2523,7 @@ impl CWelsPreProcess {
         // *reconstruction* picture (`pCtx->pRefList0[0]`, `encoder_ext.cpp:2662`) —
         // both `SPicture*` in C++, so nothing there says the two arguments come from
         // different owners. S37: each resolved once in its own pool, to geometry.
-        let pRefList = *(*pCtx).ppRefPicListExt.add((*pCtx).uiDependencyId as usize);
+        let pRefList = ctx_ref_list(pCtx, (*pCtx).uiDependencyId as usize);
         let sCur = self.m_pSpatialPicPool.get_mut(idCur).planes();
         let sRefPic = pRefPicture.filter(|_| !pRefList.is_null());
         let sRef = sRefPic
