@@ -515,7 +515,7 @@ pub unsafe extern "C" fn WelsMotionEstimateSearch(
 ) {
     unsafe {
         let kiStrideEnc = (*pCurDqLayer).iEncStride[0];
-        let kiStrideRef = layer_ref_pic(pCurDqLayer).expect("bound").stride(0);
+        let kiStrideRef = (*pCurDqLayer).sRefPicView.sPlanes.iLineSize[0];
 
         if crate::encoder::dump_enabled(&ME_DUMP, "OH264_MEDUMP") {
             let mut mvc = String::new();
@@ -598,7 +598,7 @@ pub unsafe extern "C" fn WelsMotionEstimateSearchStatic(
 ) {
     unsafe {
         let kiStrideEnc = (*pCurDqLayer).iEncStride[0];
-        let kiStrideRef = layer_ref_pic(pCurDqLayer).expect("bound").stride(0);
+        let kiStrideRef = (*pCurDqLayer).sRefPicView.sPlanes.iLineSize[0];
         let block_size = (*pMe).uiBlockSize as usize;
 
         (*pMe).sMv.iMvX = 0;
@@ -632,7 +632,7 @@ pub unsafe extern "C" fn WelsMotionEstimateSearchScrolled(
 ) {
     unsafe {
         let kiStrideEnc = (*pCurDqLayer).iEncStride[0];
-        let kiStrideRef = layer_ref_pic(pCurDqLayer).expect("bound").stride(0);
+        let kiStrideRef = (*pCurDqLayer).sRefPicView.sPlanes.iLineSize[0];
         let block_size = (*pMe).uiBlockSize as usize;
 
         (*pMe).sMv = (*pMe).sDirectionalMv;

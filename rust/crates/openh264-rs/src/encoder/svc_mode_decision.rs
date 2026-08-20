@@ -536,8 +536,8 @@ pub unsafe extern "C" fn WelsMdBackgroundMbEnc(
     let pRefLuma = (*pMbCache).SPicData.pRefMb[0];
     let pRefCb = (*pMbCache).SPicData.pRefMb[1];
     let pRefCr = (*pMbCache).SPicData.pRefMb[2];
-    let iLineSizeY = layer_ref_pic(pCurDqLayer).expect("bound").stride(0);
-    let iLineSizeUV = layer_ref_pic(pCurDqLayer).expect("bound").stride(1);
+    let iLineSizeY = (*pCurDqLayer).sRefPicView.sPlanes.iLineSize[0];
+    let iLineSizeUV = (*pCurDqLayer).sRefPicView.sPlanes.iLineSize[1];
 
     let mut pDstLuma = crate::encoder::md::skip_mb(pMbCache);
     let mut pDstCb = crate::encoder::md::skip_mb(pMbCache).add(256);
@@ -1239,7 +1239,7 @@ pub unsafe extern "C" fn WelsMdP16x16(
         BLOCK_16x16 as i32,
         (*pMbCache).SPicData.pEncMb[0],
         (*pMbCache).SPicData.pRefMb[0],
-        layer_ref_pic(pCurLayer).expect("bound").pScreenBlockFeatureStorage,
+        (*pCurLayer).sRefPicView.pScreenBlockFeatureStorage,
         pMe16x16,
     );
     //not putting the line below into InitMe to avoid judging mode in InitMe
@@ -1264,7 +1264,7 @@ pub unsafe extern "C" fn WelsMdP16x16(
         }
     }
 
-    if layer_ref_pic(pCurLayer).map_or(false, |p| p.iPictureType == P_SLICE) {
+    if ((*pCurLayer).pRefPic.is_some() && (*pCurLayer).sRefPicView.iPictureType == P_SLICE) {
         if ((*pCurMb).iMbX as i32) < kiMbWidth - 1 {
             let sTempMv =
                 layer_ref_pic(pCurLayer).expect("bound").sMvList[((*pCurMb).iMbXY + 1) as usize];
@@ -1337,7 +1337,7 @@ pub unsafe extern "C" fn WelsMdP8x8(
             BLOCK_8x8 as i32,
             (*pMbCache).SPicData.pEncMb[0].offset(iStrideEnc as isize),
             (*pMbCache).SPicData.pRefMb[0].offset(iStrideRef as isize),
-            layer_ref_pic(pCurDqLayer).expect("bound").pScreenBlockFeatureStorage,
+            (*pCurDqLayer).sRefPicView.pScreenBlockFeatureStorage,
             sMe8x8,
         );
         //not putting these three lines below into InitMe to avoid judging mode in InitMe
@@ -1614,7 +1614,7 @@ pub unsafe fn CheckChromaCost(
 
     let iCbEncStride = (*pCurDqLayer).iEncStride[1];
     let iCrEncStride = (*pCurDqLayer).iEncStride[2];
-    let iChromaRefStride = layer_ref_pic(pCurDqLayer).expect("bound").stride(1);
+    let iChromaRefStride = (*pCurDqLayer).sRefPicView.sPlanes.iLineSize[1];
 
     let iCbSad = GetChromaCost(pSad, pCbEnc, iCbEncStride, pCbRef, iChromaRefStride);
     let iCrSad = GetChromaCost(pSad, pCrEnc, iCrEncStride, pCrRef, iChromaRefStride);
@@ -1909,8 +1909,8 @@ pub unsafe extern "C" fn SvcMdSCDMbEnc(
     let pRefLuma = (*pMbCache).SPicData.pRefMb[0];
     let pRefCb = (*pMbCache).SPicData.pRefMb[1];
     let pRefCr = (*pMbCache).SPicData.pRefMb[2];
-    let iLineSizeY = layer_ref_pic(pCurDqLayer).expect("bound").stride(0);
-    let iLineSizeUV = layer_ref_pic(pCurDqLayer).expect("bound").stride(1);
+    let iLineSizeY = (*pCurDqLayer).sRefPicView.sPlanes.iLineSize[0];
+    let iLineSizeUV = (*pCurDqLayer).sRefPicView.sPlanes.iLineSize[1];
 
     let mut pDstLuma = crate::encoder::md::skip_mb(pMbCache);
     let mut pDstCb = crate::encoder::md::skip_mb(pMbCache).add(256);

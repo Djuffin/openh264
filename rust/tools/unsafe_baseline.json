@@ -1,5 +1,5 @@
 {
-  "commit": "6ead14ee",
+  "commit": "7a135935",
   "metrics": ["unsafe_fn", "unsafe_block", "raw_ptr", "transmute", "unsafe_impl", "mem_zeroed", "no_mangle", "shim"],
   "files": {
     "api/abi_guard.rs": { "unsafe_fn": 0, "unsafe_block": 0, "raw_ptr": 0, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 0, "no_mangle": 0, "shim": 0 },
@@ -44,14 +44,14 @@
     "encoder/decode_mb_aux.rs": { "unsafe_fn": 6, "unsafe_block": 14, "raw_ptr": 13, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 1, "no_mangle": 0, "shim": 4 },
     "encoder/encode_mb_aux.rs": { "unsafe_fn": 22, "unsafe_block": 45, "raw_ptr": 69, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 0, "no_mangle": 0, "shim": 21 },
     "encoder/encoder_context.rs": { "unsafe_fn": 10, "unsafe_block": 7, "raw_ptr": 57, "transmute": 2, "unsafe_impl": 0, "mem_zeroed": 3, "no_mangle": 0, "shim": 0 },
-    "encoder/encoder_ext.rs": { "unsafe_fn": 40, "unsafe_block": 2, "raw_ptr": 154, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 0, "no_mangle": 0, "shim": 0 },
+    "encoder/encoder_ext.rs": { "unsafe_fn": 41, "unsafe_block": 2, "raw_ptr": 155, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 0, "no_mangle": 0, "shim": 0 },
     "encoder/get_intra_predictor.rs": { "unsafe_fn": 30, "unsafe_block": 53, "raw_ptr": 56, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 3, "no_mangle": 0, "shim": 26 },
     "encoder/md.rs": { "unsafe_fn": 25, "unsafe_block": 0, "raw_ptr": 75, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 0, "no_mangle": 0, "shim": 0 },
     "encoder/mod.rs": { "unsafe_fn": 0, "unsafe_block": 0, "raw_ptr": 0, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 0, "no_mangle": 0, "shim": 0 },
     "encoder/nal_encap.rs": { "unsafe_fn": 7, "unsafe_block": 5, "raw_ptr": 10, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 1, "no_mangle": 0, "shim": 1 },
     "encoder/param_svc.rs": { "unsafe_fn": 2, "unsafe_block": 1, "raw_ptr": 12, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 0, "no_mangle": 0, "shim": 0 },
     "encoder/paraset_strategy.rs": { "unsafe_fn": 9, "unsafe_block": 0, "raw_ptr": 41, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 1, "no_mangle": 0, "shim": 0 },
-    "encoder/picture.rs": { "unsafe_fn": 1, "unsafe_block": 5, "raw_ptr": 13, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 0, "no_mangle": 0, "shim": 0 },
+    "encoder/picture.rs": { "unsafe_fn": 1, "unsafe_block": 5, "raw_ptr": 14, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 0, "no_mangle": 0, "shim": 0 },
     "encoder/rc.rs": { "unsafe_fn": 60, "unsafe_block": 1, "raw_ptr": 93, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 1, "no_mangle": 0, "shim": 0 },
     "encoder/ref_list_mgr_svc.rs": { "unsafe_fn": 34, "unsafe_block": 2, "raw_ptr": 44, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 3, "no_mangle": 0, "shim": 0 },
     "encoder/sample.rs": { "unsafe_fn": 8, "unsafe_block": 5, "raw_ptr": 15, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 1, "no_mangle": 0, "shim": 0 },

@@ -46,7 +46,7 @@
     unused_mut
 )]
 
-use crate::encoder::picture::{PicRef, RecPicId, SPicture, SrcPicId};
+use crate::encoder::picture::{PicRef, RecPicId, SPicture, SRefPicView, SrcPicId};
 use std::ffi::{c_char, c_void};
 use crate::common::memory_align::CMemoryAlign;
 use crate::{
@@ -752,6 +752,13 @@ pub struct SDqLayer {
 
     pub pRefPic: Option<RecPicId>,
     pub pDecPic: Option<RecPicId>,
+    /// The two pictures above **as this frame sees them** — plane roots, strides and
+    /// picture type, stamped once by `WelsInitCurrentLayer` (T6.F5). The handles are
+    /// still the truth; these are the per-macroblock world's read path, and they are
+    /// `pEncData`/`pCsData`'s own treatment applied to the other two pictures. See
+    /// [`SRefPicView`].
+    pub sRefPicView: SRefPicView,
+    pub sDecPicView: SRefPicView,
     /// The *source* pictures behind the reference list — slots of the preprocessor's
     /// spatial pool, resolved through `pCtx->pVpp` (both readers hold the context).
     pub pRefOri: [Option<PicRef>; MAX_REF_PIC_COUNT as usize],
@@ -841,6 +848,8 @@ impl SDqLayer {
             pRefList: std::ptr::null_mut(),
             pRefPic: None,
             pDecPic: None,
+            sRefPicView: SRefPicView::default(),
+            sDecPicView: SRefPicView::default(),
             pRefOri: [None; MAX_REF_PIC_COUNT as usize],
             // Both are `iMultipleThreadIdc > 1` predicates that `InitSliceInLayer`
             // computes; false is the single-threaded answer and the honest default.

@@ -1451,7 +1451,7 @@ pub unsafe extern "C" fn MeRefineFracPixel(
     let mut iHalfMvy = iMvy;
     let pCurDqLayer = (*pEncCtx).pCurDqLayer;
     let kiStrideEnc = (*pCurDqLayer).iEncStride[0];
-    let kiStrideRef = layer_ref_pic(pCurDqLayer).expect("bound").stride(0);
+    let kiStrideRef = (*pCurDqLayer).sRefPicView.sPlanes.iLineSize[0];
 
     let pEncData = (*pMe).pEncMb;
     let pRef = (*pMe).pRefMb;
