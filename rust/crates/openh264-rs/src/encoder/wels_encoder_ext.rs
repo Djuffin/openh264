@@ -59,7 +59,8 @@ use crate::encoder::param_svc::GetLogFactor;
 use crate::encoder::param_svc::SExistingParasetList;
 use crate::encoder::svc_motion_estimate::CheckInRangeCloseOpen;
 use crate::encoder::encoder_context::{
-    SParaSetOffsetVariable, MAX_DQ_LAYER_NUM, MAX_PPS_COUNT, PARA_SET_TYPE,
+    ctx_pps_array, ctx_sps_array, ctx_subset_array, SParaSetOffsetVariable, MAX_DQ_LAYER_NUM,
+    MAX_PPS_COUNT, PARA_SET_TYPE,
 };
 use crate::encoder::encoder_ext::{
     GetMultipleThreadIdc, WelsInitEncoderExt, WelsUninitEncoderExt,
@@ -420,7 +421,7 @@ pub unsafe fn WelsWriteOneSPS(pCtx: *mut sWelsEncCtx, kiSpsIdx: i32, iNalSize: *
 
     WelsWriteSpsNal(
         &mut (&mut *pOut).sBsBuffer[..],
-        &*(*pCtx).pSpsArray.add(kiSpsIdx as usize),
+        &*ctx_sps_array(pCtx).add(kiSpsIdx as usize),
         &mut (*pOut).sBsWrite,
         ParasetStrategy(pCtx).GetSpsIdOffsetList(PARA_SET_TYPE_AVCSPS as i32),
     );
@@ -456,7 +457,7 @@ pub unsafe fn WelsWriteOnePPS(pCtx: *mut sWelsEncCtx, kiPpsIdx: i32, iNalSize: *
 
     WelsWritePpsSyntax(
         &mut (&mut *pOut).sBsBuffer[..],
-        &*(*pCtx).pPPSArray.add(kiPpsIdx as usize),
+        &*ctx_pps_array(pCtx).add(kiPpsIdx as usize),
         &mut (*pOut).sBsWrite,
         ParasetStrategy(pCtx),
     );
@@ -516,7 +517,7 @@ pub unsafe fn WelsWriteParameterSets(
     iIdx = 0;
     while iIdx < (*pCtx).iSpsNum {
         ParasetStrategy(pCtx).Update(
-            (*(*pCtx).pSpsArray.add(iIdx as usize)).uiSpsId,
+            (*ctx_sps_array(pCtx).add(iIdx as usize)).uiSpsId,
             PARA_SET_TYPE_AVCSPS as i32,
         );
         /* generate sequence parameters set */
@@ -537,7 +538,7 @@ pub unsafe fn WelsWriteParameterSets(
         iNal = (*(*pCtx).pOut).iNalIndex;
 
         ParasetStrategy(pCtx).Update(
-            (*(*pCtx).pSubsetArray.add(iIdx as usize)).pSps.uiSpsId,
+            (*ctx_subset_array(pCtx).add(iIdx as usize)).pSps.uiSpsId,
             PARA_SET_TYPE_SUBSETSPS as i32,
         );
 
@@ -552,7 +553,7 @@ pub unsafe fn WelsWriteParameterSets(
 
         WelsWriteSubsetSpsSyntax(
             &mut (&mut *(*pCtx).pOut).sBsBuffer[..],
-            &*(*pCtx).pSubsetArray.add(iId as usize),
+            &*ctx_subset_array(pCtx).add(iId as usize),
             &mut (*(*pCtx).pOut).sBsWrite,
             ParasetStrategy(pCtx).GetSpsIdOffsetList(PARA_SET_TYPE_SUBSETSPS as i32),
         );
@@ -583,7 +584,7 @@ pub unsafe fn WelsWriteParameterSets(
     iIdx = 0;
     while iIdx < (*pCtx).iPpsNum {
         ParasetStrategy(pCtx).Update(
-            (*(*pCtx).pPPSArray.add(iIdx as usize)).iPpsId,
+            (*ctx_pps_array(pCtx).add(iIdx as usize)).iPpsId,
             PARA_SET_TYPE_PPS as i32,
         );
 

@@ -37,7 +37,8 @@ use crate::api::codec_api::EParameterSetStrategy;
 use crate::api::codec_api::RC_MODES::RC_OFF_MODE;
 use crate::encoder::au_set::{WelsInitPps, WelsInitSps, WelsInitSubsetSps};
 use crate::encoder::encoder_context::{
-    sWelsEncCtx, SLogContext, SParaSetOffset, SParaSetOffsetVariable, MAX_PPS_COUNT, PARA_SET_TYPE,
+    ctx_pps_array, ctx_sps_array, ctx_subset_array, sWelsEncCtx, SLogContext, SParaSetOffset,
+    SParaSetOffsetVariable, MAX_PPS_COUNT, PARA_SET_TYPE,
 };
 use crate::encoder::param_svc::{
     SExistingParasetList, SSubsetSps, SWelsPPS, SWelsSPS, SWelsSvcCodingParam, MAX_SPS_COUNT,
@@ -359,7 +360,7 @@ impl CWelsParametersetIdStrategyObj {
         kbEntropyCodingModeFlag: bool,
     ) -> u32 {
         WelsInitPps(
-            &mut *(*pCtx).pPPSArray.add(kuiPpsId as usize),
+            &mut *ctx_pps_array(pCtx).add(kuiPpsId as usize),
             pSps,
             pSubsetSps,
             kuiPpsId,
@@ -424,7 +425,7 @@ pub unsafe fn WelsGenerateNewSps(
     // Need port pSps/pPps initialization due to spatial scalability changed
     if !kbUseSubsetSps {
         iRet = WelsInitSps(
-            &mut *(*pCtx).pSpsArray.add(kiSpsId as usize),
+            &mut *ctx_sps_array(pCtx).add(kiSpsId as usize),
             pDlayerParam,
             std::ptr::addr_of_mut!((*pParam).sDependencyLayers[iDlayerIndex as usize]),
             (*pParam).uiIntraPeriod,
@@ -437,7 +438,7 @@ pub unsafe fn WelsGenerateNewSps(
         );
     } else {
         iRet = WelsInitSubsetSps(
-            &mut *(*pCtx).pSubsetArray.add(kiSpsId as usize),
+            &mut *ctx_subset_array(pCtx).add(kiSpsId as usize),
             pDlayerParam,
             std::ptr::addr_of_mut!((*pParam).sDependencyLayers[iDlayerIndex as usize]),
             (*pParam).uiIntraPeriod,

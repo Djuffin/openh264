@@ -1033,6 +1033,22 @@ impl SSpsSvcExt {
     };
 }
 
+/// The zero image of a PPS — `WelsMallocz`'s zeros for `pCtx->pPPSArray`, spelled
+/// out. [`Default`](SWelsPPS::default) happens to agree field for field today; this
+/// exists so that if it ever stops agreeing — as `SWelsSPS`'s already does — the
+/// array does not silently change with it. See [`SWelsSPS::ZERO`].
+impl SWelsPPS {
+    pub const ZERO: Self = Self {
+        iSpsId: 0,
+        iPpsId: 0,
+        iPicInitQp: 0,
+        iPicInitQs: 0,
+        uiChromaQpIndexOffset: 0,
+        bEntropyCodingModeFlag: false,
+        bDeblockingFilterControlPresentFlag: false,
+    };
+}
+
 /// The zero image of a whole subset SPS — `WelsInitSubsetSps`'s
 /// `memset (pSubsetSps, 0, sizeof (SSubsetSps))`. See [`SWelsSPS::ZERO`].
 impl SSubsetSps {
