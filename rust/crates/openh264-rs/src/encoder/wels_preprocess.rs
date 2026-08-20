@@ -73,6 +73,7 @@ pub const MAX_REF_PIC_COUNT: usize = 16;
 // MAX_SHORT_REF_COUNT was 16 where C++ derives 4, which over-sized `SRefList` here and
 // let the `WelsPreprocess` unref loop read one past `pShortRefList`.
 pub use crate::encoder::encoder_context::{MAX_GOP_SIZE, MAX_SHORT_REF_COUNT, MAX_TEMPORAL_LEVEL};
+use crate::encoder::encoder_context::ctx_ltr_at;
 pub use crate::encoder::encoder_context::SRefList;
 pub use crate::encoder::picture::SPicture;
 pub use crate::encoder::encoder_context::SLTRState;
@@ -1234,7 +1235,7 @@ impl CWelsPreProcess {
             } else if !(*pDlayerParamInternal).bEncCurFrmAsIdrFlag
                 && ((*pDlayerParamInternal).iCodingIndex & ((*pSvcParam).uiGopSize as i32 - 1)) == 0
             {
-                let pRefPic = if (*(*pCtx).pLtr.add(depIdx)).bReceivedT0LostFlag {
+                let pRefPic = if (*ctx_ltr_at(pCtx, depIdx)).bReceivedT0LostFlag {
                     let pos = self.m_uiSpatialLayersInTemporal[depIdx] as usize
                         + (*(*pCtx).pVaa).uiValidLongTermPicIdx as usize;
                     self.m_pSpatialPic[depIdx][pos]
@@ -1338,7 +1339,7 @@ impl CWelsPreProcess {
         let mut iRefTemporalIdx = g_kuiRefTemporalIdx[stageIdx][gopIdx] as i32;
 
         if (*pCtx).uiTemporalId == 0
-            && (*(*pCtx).pLtr.add((*pCtx).uiDependencyId as usize)).bReceivedT0LostFlag
+            && (*ctx_ltr_at(pCtx, (*pCtx).uiDependencyId as usize)).bReceivedT0LostFlag
         {
             iRefTemporalIdx = self.m_uiSpatialLayersInTemporal[dIdx] as i32
                 + (*(*pCtx).pVaa).uiValidLongTermPicIdx as i32;
@@ -2129,7 +2130,7 @@ impl CWelsPreProcess {
         }
 
         let iClosestLtrFrameNum =
-            (*(*pCtx).pLtr.add(iTargetDid as usize)).iLastLtrIdx[iCurTid as usize];
+            (*ctx_ltr_at(pCtx, iTargetDid as usize)).iLastLtrIdx[iCurTid as usize];
         if (*pSvcParam).bEnableLongTermReference {
             self.GetAvailableRefListLosslessScreenRefSelection(
                 &pRefPicList,
@@ -2473,7 +2474,7 @@ impl CWelsPreProcess {
         let uiTid = (*pCtx).uiTemporalId;
         let uiDid = (*pCtx).uiDependencyId;
         let pRefPicLlist = *(*pCtx).ppRefPicListExt.add(uiDid as usize);
-        let pLtr = (*pCtx).pLtr.add(uiDid as usize);
+        let pLtr = ctx_ltr_at(pCtx, uiDid as usize);
         if pRefPicLlist.is_null() {
             return;
         }

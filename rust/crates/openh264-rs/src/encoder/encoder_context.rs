@@ -608,6 +608,34 @@ pub unsafe fn ctx_mb_index_x(pCtx: *mut sWelsEncCtx, kiDid: usize) -> *mut i16 {
     }
 }
 
+/// The **root** of `pCtx->pLtr` — T6.H5; see [`ctx_sps_array`] for the spelling.
+///
+/// # Safety
+/// `pCtx` must point to a live encoder context.
+#[inline]
+pub unsafe fn ctx_ltr(pCtx: *mut sWelsEncCtx) -> *mut SLTRState {
+    let arr: &mut Vec<SLTRState> = &mut (*pCtx).pLtr;
+    if arr.is_empty() {
+        return std::ptr::null_mut();
+    }
+    arr.as_mut_ptr()
+}
+
+/// The long-term-reference state of dependency layer `kiDid` — `pLtr[did]`, which is
+/// how all 24 consumers spell it. See [`ctx_ltr`].
+///
+/// # Safety
+/// As [`ctx_ltr`], and `kiDid` must be a layer the array holds.
+#[inline]
+pub unsafe fn ctx_ltr_at(pCtx: *mut sWelsEncCtx, kiDid: usize) -> *mut SLTRState {
+    let root = ctx_ltr(pCtx);
+    if root.is_null() {
+        return std::ptr::null_mut();
+    }
+    debug_assert!(kiDid < (*pCtx).pLtr.len(), "LTR layer {kiDid} is past the array");
+    root.add(kiDid)
+}
+
 /// The **root** of `pCtx->pFrameBs` — T6.H4.
 ///
 /// This is the one this session had to enumerate before converting, because the
@@ -762,10 +790,16 @@ pub struct sWelsEncCtx {
     ///
     /// **S20**: this is `#[repr(C)]` and the member sits between two 8-byte-aligned
     /// pointers, so the 7 bytes of padding that realign `pEncPic` exactly replace the
-    /// 7 bytes the pointer loses. `assert_size!(sWelsEncCtx, ...)` does not move, and
-    /// neither does any of the fifteen `assert_ctx_offset!` pins -- four of which
-    /// (`ppRefPicListExt` 184, `pLtr` 320, `sSpatialIndexMap` 520, `pMemAlign` 1824)
-    /// sit after this field and encode C++ `offsetof` values that must not change.
+    /// 7 bytes the pointer loses — the change that introduced this field moved
+    /// neither `assert_size!(sWelsEncCtx, ...)` nor any of the fifteen
+    /// `assert_ctx_offset!` pins.
+    ///
+    /// The numbers this note used to quote are gone: session H's owned members are
+    /// `Vec`s at 16 bytes over the pointer each, so every pin after the first of them
+    /// has moved, and they are the port's own measured offsets rather than C++
+    /// `offsetof` values. What the pins still catch is a field added, dropped or
+    /// re-widened without anyone noticing — which is why they are re-measured in the
+    /// commit that moves them and never deleted.
     pub eRefStrategy: crate::encoder::ref_list_mgr_svc::RefStrategyKind,
     /// The source picture being encoded — a slot of `pVpp`'s spatial pool.
     pub pEncPic: Option<SrcPicId>,
@@ -791,7 +825,10 @@ pub struct sWelsEncCtx {
     pub ppDqLayerList: *mut *mut SDqLayer,
     pub ppRefPicListExt: *mut *mut SRefList,
     pub pRefList0: [Option<RecPicId>; 16],
-    pub pLtr: *mut SLTRState,
+    /// **T6.H5 — owned.** One long-term-reference state per dependency layer,
+    /// `WelsMallocz`'d and then `ResetLtrState`'d entry by entry. Root:
+    /// [`ctx_ltr`]; the per-layer entry: [`ctx_ltr_at`].
+    pub pLtr: Vec<SLTRState>,
     pub bCurFrameMarkedAsSceneLtr: bool,
     pub eSliceType: EWelsSliceType,
     pub eNalType: EWelsNalUnitType,
@@ -969,7 +1006,7 @@ impl sWelsEncCtx {
             // empty list, and the two agree only because both are zero here.
             pRefList0: [None; 16],
 
-            pLtr: std::ptr::null_mut(),
+            pLtr: Vec::new(),
             bCurFrameMarkedAsSceneLtr: false,
 
             // ---- per-frame NAL/slice state; restamped every frame ---------------
@@ -1889,13 +1926,14 @@ mod tests {
         // the empty container, which is the null the raw pointer held, and which
         // `ctx_sps_array` and its siblings answer as null so that every downstream
         // `is_null()` guard still asks its question.
-        const OWNED: [&str; 5] =
-            ["pSpsArray", "pSubsetArray", "pPPSArray", "pDqIdcMap", "pFrameBs"];
+        const OWNED: [&str; 6] =
+            ["pSpsArray", "pSubsetArray", "pPPSArray", "pDqIdcMap", "pFrameBs", "pLtr"];
         assert!(built.pSpsArray.is_empty(), "new(): no SPS array is allocated yet");
         assert!(built.pSubsetArray.is_empty(), "new(): no subset SPS array is allocated yet");
         assert!(built.pPPSArray.is_empty(), "new(): no PPS array is allocated yet");
         assert!(built.pDqIdcMap.is_empty(), "new(): no dq-idc map is allocated yet");
         assert!(built.pFrameBs.is_empty(), "new(): no frame bitstream is allocated yet");
+        assert!(built.pLtr.is_empty(), "new(): no LTR state array is allocated yet");
 
         // ---- tier 2: the F64 fields, excluded by name and asserted by value ----
         const BY_VALUE: [&str; 10] = [

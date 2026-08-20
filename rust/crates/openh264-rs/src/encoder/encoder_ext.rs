@@ -26,7 +26,7 @@ use crate::api::codec_api::{ELevelIdc, SSpatialLayerConfig};
 use crate::common::memory_align::CMemoryAlign;
 use crate::decoder::nalu::g_ksLevelLimits;
 use crate::encoder::encoder_context::{
-    ctx_dq_idc_map, ctx_frame_bs, ctx_frame_bs_at, ctx_mb_index_x, ctx_mb_index_y,
+    ctx_dq_idc_map, ctx_frame_bs, ctx_frame_bs_at, ctx_ltr_at, ctx_mb_index_x, ctx_mb_index_y,
     ctx_pps_array, ctx_sps_array,
     ctx_stride_enc_block_offset,
     ctx_subset_array,
@@ -1149,17 +1149,16 @@ pub unsafe fn RequestMemorySvc(
 
     (**ppCtx).iGlobalQp = 26; // global qp in default
 
-    (**ppCtx).pLtr = (*pMa).WelsMallocz(
-        (kiNumDependencyLayers as usize
-            * std::mem::size_of::<crate::encoder::ref_list_mgr_svc::SLTRState>())
-            as u32,
-        tag!("SLTRState"),
-    ) as *mut crate::encoder::ref_list_mgr_svc::SLTRState;
-    if (**ppCtx).pLtr.is_null() {
-        return 1;
-    }
+    // **T6.H5.** `SLTRState::default()` is all-zero field for field, which is what
+    // `WelsMallocz` left; `ResetLtrState` then writes the four `-1`s and the
+    // `LTR_DIRECT_MARK` that make it a *state* rather than a zeroed block, exactly as
+    // before — the loop is unchanged.
+    (**ppCtx).pLtr = vec![
+        crate::encoder::ref_list_mgr_svc::SLTRState::default();
+        kiNumDependencyLayers as usize
+    ];
     for i in 0..kiNumDependencyLayers as usize {
-        crate::encoder::ref_list_mgr_svc::ResetLtrState((**ppCtx).pLtr.add(i));
+        crate::encoder::ref_list_mgr_svc::ResetLtrState(ctx_ltr_at(*ppCtx, i));
     }
 
     // stride tables
@@ -1802,10 +1801,7 @@ pub unsafe fn WelsUninitEncoderExt(ppCtx: *mut *mut sWelsEncCtx) {
             (*pMa).WelsFree((*pCtx).pWelsSvcRc as *mut c_void, tag!("pWelsSvcRc"));
             (*pCtx).pWelsSvcRc = null_mut();
         }
-        if !(*pCtx).pLtr.is_null() {
-            (*pMa).WelsFree((*pCtx).pLtr as *mut c_void, tag!("SLTRState"));
-            (*pCtx).pLtr = null_mut();
-        }
+        // **T6.H5**: `pLtr`'s `WelsFree` stood here; the `Vec` is the context's.
         // DQ layers list
         if !(*pCtx).ppDqLayerList.is_null() && !(*pCtx).pSvcParam.is_null() {
             for ilayer in 0..(*(*pCtx).pSvcParam).iSpatialLayerNum as usize {
@@ -3682,7 +3678,7 @@ pub unsafe fn WelsEncoderEncodeExt(
             return ENC_RETURN_CORRECTED;
         }
 
-        let pLtr = (*pCtx).pLtr.add((*pCtx).uiDependencyId as usize);
+        let pLtr = ctx_ltr_at(pCtx, (*pCtx).uiDependencyId as usize);
         if (*pSvcParam).bEnableLongTermReference
             && (((*pLtr).bLTRMarkingFlag
                 && (*pLtr).iLTRMarkMode == crate::encoder::ref_list_mgr_svc::LTR_MARKING_PROCESS_MODE::LTR_DIRECT_MARK as i32)
