@@ -2440,3 +2440,57 @@ machinery, no slice-list growth, and one *fewer* allocator round trip per pictur
 
 Running total: **seventy-six measurements, twenty-four alternations, forty-nine
 acquittals.**
+
+---
+
+### Seventy-seventh measurement — 2026-08-20, Phase 6 session F, steps 3-4's `family` gate: **the retry rule did not acquit it, and the alternation had to**
+
+Two configurations, one in each profile, both the signature:
+
+```
+release: mt CiscoVT2people_160x96_6fps  t=4 sm=3 n=600 cabac=1 rc=1 :: C++ 42281  Rust 0
+debug:   mt CiscoVT2people_320x192_12fps t=4 sm=3 n=600 cabac=0 rc=1 :: C++ 40992  Rust 0
+```
+
+**Step 1 — the retry rule, and it came back split.** The release configuration re-ran
+**5/5 byte-identical**. The debug one **failed once in five** — so the rule's "byte-identical
+every time" did *not* hold, and by the protocol's own next sentence this stopped
+being adjudicable by the rule and became the session's to explain.
+
+**Step 2 — the rate at head.** The same configuration, twenty more back-to-back runs:
+**0/20 failures**. Combined with step 1, head is **1/25**.
+
+**Step 3 — the same configuration on the tree before this face.** `git stash`, rebuild,
+twenty-five runs of the identical command line: **4/25 failures**, every one
+`C++ 40992 / Rust 0`. The pre-face tree fails this configuration **four times as
+often** as the tree under test. Whatever the race is, steps 3 and 4 did not introduce
+it and did not widen it.
+
+**Step 4 — the failure's own account.** Captured from a failing run's driver log:
+
+```
+EncodeFrame failed at 1: 2
+coded 0 frames
+```
+
+`EncodeFrame` *returns an error* on the second frame rather than producing wrong
+bytes — the zero-byte shape this finding recorded at its first measurement, seen from
+the inside for the first time. It is the `iMultipleThreadIdc=4` +
+`SM_SIZELIMITED_SLICE` slice-bank path, which is **F61**'s class exactly (the
+multi-threaded bank growth never re-stamps the layer's slice list, *and the C++ has
+the same shape*) and Phase 7's to fix.
+
+**Acquitted as F3.**
+
+**A refinement to the retry rule, worth carrying.** F3's first measurement wrote
+"isolated, the failing configuration ran 40/40 clean, so it needs the sweep's
+back-to-back load to show up", and the retry rule was built on that: five quiet runs
+should be clean. **A `for i in 1..5; do compare.sh; done` loop is not a quiet run** —
+it is precisely the back-to-back load the finding names, and it reproduces the race at
+roughly the sweep's own rate. So a single hit inside the retry loop is not by itself
+evidence against the session; what settles it is the *comparison* — the same
+configuration, the same loop, on the tree without the change. That comparison costs
+one `git stash` and five minutes, and it is what this measurement rests on.
+
+Running total: **seventy-seven measurements, twenty-five alternations, fifty
+acquittals.**

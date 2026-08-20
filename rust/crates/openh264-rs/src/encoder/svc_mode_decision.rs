@@ -202,8 +202,9 @@ impl Default for SSampleDealingPicData {
 
 
 
+// SCREEN_CONTENT(dormant: Phase 10) — `pVaa` is only ever an `SVAAFrameInfoExt`
+// under screen content, which `RequestMemorySvc` refuses.
 #[repr(C)]
-#[derive(Copy, Clone)]
 pub struct SVAAFrameInfoExt_t {
     pub sVaaBase: SVAAFrameInfo,
     pub sScrollDetectInfo: SScrollDetectionParam,
@@ -1653,7 +1654,7 @@ pub unsafe extern "C" fn WelsMdInterJudgeBGDPskip(
 
     let kiRefMbQp = (&layer_ref_pic(pCurDqLayer).expect("bound").pRefMbQp)[(*pCurMb).iMbXY as usize] as i32;
     let kiCurMbQp = (*pCurMb).uiLumaQp as i32;
-    let pVaaBgMbFlag = (*(*pEncCtx).pVaa).pVaaBackgroundMbFlag.offset((*pCurMb).iMbXY as isize);
+    let pVaaBgMbFlag = (*(*pEncCtx).pVaa).pVaaBackgroundMbFlag.as_mut_ptr().add((*pCurMb).iMbXY as usize);
 
     let kiMbWidth: isize = (*pCurDqLayer).iMbWidth as isize;
 
@@ -2227,8 +2228,11 @@ pub unsafe extern "C" fn WelsMdInterFinePartitionVaaOnScreen(
     let pMbCache = std::ptr::addr_of_mut!((*pSlice).sMbCacheInfo);
     let pCurDqLayer = (*pEncCtx).pCurDqLayer;
 
-    let pSad8x8_ptr =
-        (*(*(*pEncCtx).pVaa).sVaaCalcInfo.pSad8x8.offset((*pCurMb).iMbXY as isize)).as_mut_ptr();
+    let pSad8x8_ptr = (*(*pEncCtx).pVaa)
+        .sVaaCalcInfo
+        .pSad8x8
+        .as_mut_ptr()
+        .add((*pCurMb).iMbXY as usize) as *mut i32;
     let get_sign = (*(*pEncCtx).pFuncList).pfGetMbSignFromInterVaa.unwrap();
     let uiMbSign = get_sign(pSad8x8_ptr);
 

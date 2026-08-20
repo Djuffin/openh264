@@ -279,6 +279,47 @@ impl SPicture {
         &mut self.planes[i]
     }
 
+    /// `ExpandReferencingPicture` for a picture that owns its planes — **T6.F4**, and
+    /// it is the sentence `decoder/picture.rs::expand_as_reference` left for this
+    /// phase ("the encoder's two call sites keep the raw entry point: converting them
+    /// is Phase 6's").
+    ///
+    /// `common::expand_pic::ExpandReferencingPicture` takes three raw plane origins
+    /// and each of its two kernels then rebuilds the whole allocation out of the
+    /// mid-plane pointer it was handed — `expand_shim_span`, the one place in the port
+    /// that does that arithmetic, and the exact backward reach the S28 test below
+    /// pins. A picture that owns its planes has nothing to rebuild:
+    /// `plane_mut(i).as_mut_slice()` **is** the padded allocation, `origin()` is the
+    /// `pad * stride + pad` the shim computed, and `expand_picture` — already safe,
+    /// already the single copy of the C++ body — takes it directly.
+    ///
+    /// This runs once per plane per reference picture, so it is per-frame work and
+    /// the bounds checks amortise over a whole plane (session E's rule for what may
+    /// convert). The per-plane null guards the raw form carried are
+    /// `plane(i).is_empty()`, which is what the null answered.
+    pub fn expand_as_reference(&mut self) {
+        let (kiWidthY, kiHeightY) = (self.iWidthInPixel, self.iHeightInPixel);
+        let planes = [
+            (0usize, kiWidthY, kiHeightY, PADDING_LENGTH),
+            (1, kiWidthY >> 1, kiHeightY >> 1, PADDING_LENGTH >> 1),
+            (2, kiWidthY >> 1, kiHeightY >> 1, PADDING_LENGTH >> 1),
+        ];
+        for (i, pic_w, pic_h, pad) in planes {
+            let stride = self.stride(i) as usize;
+            let plane = self.plane_mut(i);
+            if plane.is_empty() || pic_w <= 0 || pic_h <= 0 {
+                continue;
+            }
+            crate::common::expand_pic::expand_picture(
+                plane.as_mut_slice(),
+                stride,
+                pic_w as usize,
+                pic_h as usize,
+                pad,
+            );
+        }
+    }
+
     /// The picture's plane roots, strides and visible geometry, copied out.
     ///
     /// **S37's shape for a per-frame step**: a picture is an arena, so the

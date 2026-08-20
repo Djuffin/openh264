@@ -87,7 +87,6 @@ pub use crate::encoder::encoder_context::SLTRState;
 // T4b.3b: `ExpandReferencingPicture` was one of three copies of one C++ function
 // in this port. `common/expand_pic.rs` now holds the single one, and the
 // `SExpandPicFunc` table it used to be handed is deleted.
-use crate::common::expand_pic::ExpandReferencingPicture;
 pub use crate::encoder::encoder_context::SLogContext;
 pub use crate::encoder::wels_preprocess::SVAAFrameInfoExt;
 pub use crate::encoder::wels_preprocess::CWelsPreProcess;
@@ -693,12 +692,10 @@ pub unsafe fn WelsUpdateRefList(pCtx: *mut sWelsEncCtx) -> bool {
             // T4b.3b: the `pFuncList` null guard went with the table it guarded.
             // The C++ (`ref_list_mgr_svc.cpp:375`) dereferences `pCtx->pFuncList`
             // here unconditionally, so dropping it is the closer reading.
-            ExpandReferencingPicture(
-                &sDec.pData,
-                pDecPic.iWidthInPixel,
-                pDecPic.iHeightInPixel,
-                &sDec.iLineSize,
-            );
+            // T6.F4: the picture owns its planes, so the expansion is a method on it
+            // and `ExpandReferencingPicture`'s three raw origins are gone from the
+            // encoder entirely.
+            pDecPic.expand_as_reference();
         }
 
         if crate::encoder::dump_enabled(&REC_DUMP, "OH264_RECDUMP") {
@@ -1311,12 +1308,10 @@ pub unsafe fn WelsUpdateRefListScreen(pCtx: *mut sWelsEncCtx) -> bool {
         if (*pParamD).iHighestTemporalId == 0 || (kuiTid as i32) < (*pParamD).iHighestTemporalId as i32 {
             // T4b.3b: as above — `ref_list_mgr_svc.cpp:779`, the second of the
             // encoder's two identical expand sites.
-            ExpandReferencingPicture(
-                &sDec.pData,
-                pDecPic.iWidthInPixel,
-                pDecPic.iHeightInPixel,
-                &sDec.iLineSize,
-            );
+            // T6.F4: the picture owns its planes, so the expansion is a method on it
+            // and `ExpandReferencingPicture`'s three raw origins are gone from the
+            // encoder entirely.
+            pDecPic.expand_as_reference();
         }
 
         pDecPic.uiTemporalId = (*pCtx).uiTemporalId;

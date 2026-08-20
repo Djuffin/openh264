@@ -1173,72 +1173,21 @@ pub unsafe fn RequestMemorySvc(
         // encoder_ext.cpp:1708, SVAAFrameInfoExt + RequestMemoryVaaScreen. Not ported.
         return ENC_RETURN_UNSUPPORTED_PARA;
     }
-    (**ppCtx).pVaa = (*pMa).WelsMallocz(
-        std::mem::size_of::<crate::encoder::wels_preprocess::SVAAFrameInfo>() as u32,
-        tag!("pVaa"),
-    ) as *mut crate::encoder::wels_preprocess::SVAAFrameInfo;
-    if (**ppCtx).pVaa.is_null() {
-        return 1;
-    }
+    // **T6.F3**: one constructor where the C++ cuts seven `CMemoryAlign` blocks.
+    // `SVAAFrameInfo` is `Box`-built and owns its per-frame result arrays; the
+    // background-detection pair exists exactly when the C++ allocates it.
+    (**ppCtx).pVaa = Box::into_raw(
+        crate::encoder::wels_preprocess::SVAAFrameInfo::new(
+            iCountMaxMbNum,
+            (*(**ppCtx).pSvcParam).bEnableBackgroundDetection,
+        ),
+    );
 
     if (*(**ppCtx).pSvcParam).bEnableAdaptiveQuant {
         // encoder_ext.cpp:1720, sAdaptiveQuantParam buffers. Not ported.
         return ENC_RETURN_UNSUPPORTED_PARA;
     }
 
-    (*(**ppCtx).pVaa).pVaaBackgroundMbFlag = (*pMa).WelsMallocz(
-        iCountMaxMbNum as u32,
-        tag!("pVaa->pVaaBackgroundMbFlag"),
-    ) as *mut i8;
-    if (*(**ppCtx).pVaa).pVaaBackgroundMbFlag.is_null() {
-        return 1;
-    }
-
-    (*(**ppCtx).pVaa).sVaaCalcInfo.pSad8x8 = (*pMa).WelsMallocz(
-        (iCountMaxMbNum as u32) * 4 * 4,
-        tag!("pVaa->sVaaCalcInfo.sad8x8"),
-    ) as *mut [i32; 4];
-    if (*(**ppCtx).pVaa).sVaaCalcInfo.pSad8x8.is_null() {
-        return 1;
-    }
-    (*(**ppCtx).pVaa).sVaaCalcInfo.pSsd16x16 = (*pMa).WelsMallocz(
-        (iCountMaxMbNum as u32) * 4,
-        tag!("pVaa->sVaaCalcInfo.pSsd16x16"),
-    ) as *mut i32;
-    if (*(**ppCtx).pVaa).sVaaCalcInfo.pSsd16x16.is_null() {
-        return 1;
-    }
-    (*(**ppCtx).pVaa).sVaaCalcInfo.pSum16x16 = (*pMa).WelsMallocz(
-        (iCountMaxMbNum as u32) * 4,
-        tag!("pVaa->sVaaCalcInfo.pSum16x16"),
-    ) as *mut i32;
-    if (*(**ppCtx).pVaa).sVaaCalcInfo.pSum16x16.is_null() {
-        return 1;
-    }
-    (*(**ppCtx).pVaa).sVaaCalcInfo.pSumOfSquare16x16 = (*pMa).WelsMallocz(
-        (iCountMaxMbNum as u32) * 4,
-        tag!("pVaa->sVaaCalcInfo.pSumOfSquare16x16"),
-    ) as *mut i32;
-    if (*(**ppCtx).pVaa).sVaaCalcInfo.pSumOfSquare16x16.is_null() {
-        return 1;
-    }
-
-    if (*(**ppCtx).pSvcParam).bEnableBackgroundDetection {
-        (*(**ppCtx).pVaa).sVaaCalcInfo.pSumOfDiff8x8 = (*pMa).WelsMallocz(
-            (iCountMaxMbNum as u32) * 4 * 4,
-            tag!("pVaa->sVaaCalcInfo.pSumOfDiff8x8"),
-        ) as *mut [i32; 4];
-        if (*(**ppCtx).pVaa).sVaaCalcInfo.pSumOfDiff8x8.is_null() {
-            return 1;
-        }
-        (*(**ppCtx).pVaa).sVaaCalcInfo.pMad8x8 = (*pMa).WelsMallocz(
-            (iCountMaxMbNum as u32) * 4,
-            tag!("pVaa->sVaaCalcInfo.pMad8x8"),
-        ) as *mut [u8; 4];
-        if (*(**ppCtx).pVaa).sVaaCalcInfo.pMad8x8.is_null() {
-            return 1;
-        }
-    }
     // End of pVaa memory allocation
 
     (**ppCtx).ppRefPicListExt = (*pMa).WelsMallocz(
@@ -1884,52 +1833,9 @@ pub unsafe fn WelsUninitEncoderExt(ppCtx: *mut *mut sWelsEncCtx) {
             (*pCtx).ppRefPicListExt = null_mut();
         }
         if !(*pCtx).pVaa.is_null() {
-            let pVaa = (*pCtx).pVaa;
-            if !(*pVaa).pVaaBackgroundMbFlag.is_null() {
-                (*pMa).WelsFree(
-                    (*pVaa).pVaaBackgroundMbFlag as *mut c_void,
-                    tag!("pVaa->pVaaBackgroundMbFlag"),
-                );
-            }
-            if !(*pVaa).sVaaCalcInfo.pSad8x8.is_null() {
-                (*pMa).WelsFree(
-                    (*pVaa).sVaaCalcInfo.pSad8x8 as *mut c_void,
-                    tag!("pVaa->sVaaCalcInfo.sad8x8"),
-                );
-            }
-            if !(*pVaa).sVaaCalcInfo.pSsd16x16.is_null() {
-                (*pMa).WelsFree(
-                    (*pVaa).sVaaCalcInfo.pSsd16x16 as *mut c_void,
-                    tag!("pVaa->sVaaCalcInfo.pSsd16x16"),
-                );
-            }
-            if !(*pVaa).sVaaCalcInfo.pSum16x16.is_null() {
-                (*pMa).WelsFree(
-                    (*pVaa).sVaaCalcInfo.pSum16x16 as *mut c_void,
-                    tag!("pVaa->sVaaCalcInfo.pSum16x16"),
-                );
-            }
-            if !(*pVaa).sVaaCalcInfo.pSumOfSquare16x16.is_null() {
-                (*pMa).WelsFree(
-                    (*pVaa).sVaaCalcInfo.pSumOfSquare16x16 as *mut c_void,
-                    tag!("pVaa->sVaaCalcInfo.pSumOfSquare16x16"),
-                );
-            }
-            if !(*pCtx).pSvcParam.is_null() && (*(*pCtx).pSvcParam).bEnableBackgroundDetection {
-                if !(*pVaa).sVaaCalcInfo.pSumOfDiff8x8.is_null() {
-                    (*pMa).WelsFree(
-                        (*pVaa).sVaaCalcInfo.pSumOfDiff8x8 as *mut c_void,
-                        tag!("pVaa->sVaaCalcInfo.pSumOfDiff8x8"),
-                    );
-                }
-                if !(*pVaa).sVaaCalcInfo.pMad8x8.is_null() {
-                    (*pMa).WelsFree(
-                        (*pVaa).sVaaCalcInfo.pMad8x8 as *mut c_void,
-                        tag!("pVaa->sVaaCalcInfo.pMad8x8"),
-                    );
-                }
-            }
-            (*pMa).WelsFree(pVaa as *mut c_void, tag!("pVaa"));
+            // **T6.F3**: seven `WelsFree`s and their null tests were here. The VAA
+            // block owns its per-frame arrays, so releasing it is dropping it.
+            drop(Box::from_raw((*pCtx).pVaa));
             (*pCtx).pVaa = null_mut();
         }
         if !(*pCtx).pSvcParam.is_null() {
