@@ -455,7 +455,7 @@ pub unsafe extern "C" fn WelsMdI4x4(
         (*pMbCache).iIntraPredMode[g_kuiCache48CountScan4Idx[i] as usize] = iFinalMode as i8;
 
         //step 6: encoding I_4x4
-        WelsEncRecI4x4Y(pEncCtx, pCurMb, pMbCache, i as u8);
+        WelsEncRecI4x4Y(pEncCtx, &mut *pCurMb, &mut *pMbCache, i as u8);
     }
 
     StoreIntra4x4PredModeToMb(pCurMb, pMbCache);
@@ -667,7 +667,7 @@ pub unsafe extern "C" fn WelsMdI4x4Fast(
         }
         (*pMbCache).iIntraPredMode[g_kuiCache48CountScan4Idx[i] as usize] = iFinalMode;
         //step 6: encoding I_4x4
-        WelsEncRecI4x4Y(pEncCtx, pCurMb, pMbCache, i as u8);
+        WelsEncRecI4x4Y(pEncCtx, &mut *pCurMb, &mut *pMbCache, i as u8);
     }
 
     StoreIntra4x4PredModeToMb(pCurMb, pMbCache);
@@ -1478,7 +1478,7 @@ pub unsafe fn WelsMdPSkipEnc(
         (*(*pEncCtx).pFuncList).pfDctFourT4,
     );
 
-    if WelsTryPYskip(pEncCtx, pCurMb, pMbCache) {
+    if WelsTryPYskip(pEncCtx, &mut *pCurMb, &mut *pMbCache) {
         iEncStride = (*(*pEncCtx).pCurDqLayer).iEncStride[1];
         pEncMb = (*pMbCache).SPicData.pEncMb[1];
         pEncBlockOffset = pStrideEncBlockOffset.add(16);
@@ -1489,7 +1489,7 @@ pub unsafe fn WelsMdPSkipEnc(
             crate::encoder::md::skip_mb(pMbCache).add(256),
             8,
         );
-        if WelsTryPUVskip(pEncCtx, pCurMb, pMbCache, 1) {
+        if WelsTryPUVskip(pEncCtx, &mut *pCurMb, &mut *pMbCache, 1) {
             pEncMb = (*pMbCache).SPicData.pEncMb[2];
             pEncBlockOffset = pStrideEncBlockOffset.add(20);
             (*pFunc).pfDctFourT4.expect("pfDctFourT4 unset")(
@@ -1499,7 +1499,7 @@ pub unsafe fn WelsMdPSkipEnc(
                 crate::encoder::md::skip_mb(pMbCache).add(320),
                 8,
             );
-            if WelsTryPUVskip(pEncCtx, pCurMb, pMbCache, 2) {
+            if WelsTryPUVskip(pEncCtx, &mut *pCurMb, &mut *pMbCache, 2) {
                 //update motion info to current MB
                 AcceptPskip(
                     pEncCtx, pWelsMd, pCurMb, pMbCache, &sMvp, iSadCostLuma, iSadCostMb, pDstLuma,
@@ -2079,7 +2079,7 @@ pub unsafe extern "C" fn WelsMdFirstIntraMode(
         //add pEnc&rec to MD--2010.3.15
         if IS_INTRA16x16((*pCurMb).uiMbType) {
             (*pCurMb).uiCbp = 0;
-            crate::encoder::svc_encode_mb::WelsEncRecI16x16Y(pEncCtx, pCurMb, pMbCache);
+            crate::encoder::svc_encode_mb::WelsEncRecI16x16Y(pEncCtx, &mut *pCurMb, &mut *pMbCache);
         }
 
         //chroma

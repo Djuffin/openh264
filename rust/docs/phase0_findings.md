@@ -2194,3 +2194,44 @@ of 682 configurations each — ≈ 1/1360**, at the quiet end of the documented
 
 Running total: **seventy measurements, twenty-two alternations, forty-three
 acquittals.**
+
+### Seventy-first measurement — 2026-08-19, Phase 6 session E, step 1's `family` gate: `t=2`, the rarer thread count
+
+The `family` battery after step 1 (the syntax-writer closure — `SCabacCtx` gone as a
+raw parameter, the writers' cache parameters converted or deleted) read **353/353
+debug** and **352/353 release**:
+
+```
+mt CiscoVT2people_320x192_12fps t=2 sm=3 n=600 cabac=0 rc=1 ::  C++ 40809   Rust 0
+```
+
+`mt`, `sm=3`, **zero-length** output, release — the signature on every clause. Two
+clauses worth recording:
+
+- **`t=2`, not `t=4`.** The last several hits have all been `t=4`; `t=2` is the
+  minority arm of the signature and its appearance here is a reminder that the
+  signature's thread clause is `{2, 4}` and not `4`, exactly as it is written.
+- **`n=600`**, back to the majority arm after five `n=1500` hits — which is the same
+  point session K made in the other direction: `n`'s distribution is a rate artifact,
+  not a condition.
+
+**Step 1 — the configuration re-run 5x, machine otherwise idle: `BYTE-IDENTICAL` all
+five**, 40809 against 40809 every time.
+
+**Step 2 — no alternation this time, and the reason is the tree.** Step 1 changed
+parameter *types* in four syntax-writer files (`set_mb_syn_cabac`,
+`svc_set_mb_syn_cabac`, `svc_set_mb_syn_cavlc`, `svc_encode_mb`) and deleted two dead
+parameters. It touches no threading machinery, no slice-list growth, and no
+allocation — the mechanism F3 lives in is untouched by the diff under suspicion. The
+step's own new preset (`sl`, 12 single-threaded configurations) had just gone
+353/353 in both profiles one commit earlier at 0a's `family` gate, on the same
+machine.
+
+Session rate so far: **one gate hit across two `family` batteries of 706
+configurations each — ≈ 1/1400**, at the quiet end of the documented ≈1/400–1000
+band, and the same end session D measured.
+
+**Acquitted as F3.**
+
+Running total: **seventy-one measurements, twenty-two alternations, forty-four
+acquittals.**

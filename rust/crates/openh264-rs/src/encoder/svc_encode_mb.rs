@@ -482,9 +482,14 @@ pub unsafe fn WelsDctMb(
 /// All pointers in `pEncCtx`, `pCurMb`, and `pMbCache` must be properly initialized and valid.
 pub unsafe fn WelsEncRecI16x16Y(
     pEncCtx: *mut sWelsEncCtx,
-    pCurMb: *mut SMB,
-    pMbCache: *mut SMbCache,
+    pCurMb: &mut SMB,
+    pMbCache: &mut SMbCache,
 ) {
+    // One reborrow, here, and every raw cursor below hangs off it: `pRes`,
+    // `pBlock` and the `SPicData` pointers all outlive the next
+    // `md::dct(pMbCache)`/`md::skip_mb(pMbCache)` call, and re-coercing the
+    // `&mut` at each of those would retag the whole struct and pop them (S28).
+    let pMbCache: *mut SMbCache = pMbCache;
     let mut aDctT4Dc = [0i16; 16];
     let pFuncList = (*pEncCtx).pFuncList;
     let pCurDqLayer = (*pEncCtx).pCurDqLayer;
@@ -629,10 +634,15 @@ pub unsafe fn WelsEncRecI16x16Y(
 /// All pointers in `pEncCtx`, `pCurMb`, and `pMbCache` must be properly initialized and valid.
 pub unsafe fn WelsEncRecI4x4Y(
     pEncCtx: *mut sWelsEncCtx,
-    pCurMb: *mut SMB,
-    pMbCache: *mut SMbCache,
+    pCurMb: &mut SMB,
+    pMbCache: &mut SMbCache,
     uiI4x4Idx: u8,
 ) {
+    // One reborrow, here, and every raw cursor below hangs off it: `pRes`,
+    // `pBlock` and the `SPicData` pointers all outlive the next
+    // `md::dct(pMbCache)`/`md::skip_mb(pMbCache)` call, and re-coercing the
+    // `&mut` at each of those would retag the whole struct and pop them (S28).
+    let pMbCache: *mut SMbCache = pMbCache;
     let pFuncList = (*pEncCtx).pFuncList;
     let pCurDqLayer = (*pEncCtx).pCurDqLayer;
     let iEncStride = (*pCurDqLayer).iEncStride[0];
@@ -702,9 +712,14 @@ pub unsafe fn WelsEncRecI4x4Y(
 /// All pointers in `pFuncList`, `pCurMb`, and `pMbCache` must be properly initialized and valid.
 pub unsafe fn WelsEncInterY(
     pFuncList: *mut SWelsFuncPtrList,
-    pCurMb: *mut SMB,
-    pMbCache: *mut SMbCache,
+    pCurMb: &mut SMB,
+    pMbCache: &mut SMbCache,
 ) {
+    // One reborrow, here, and every raw cursor below hangs off it: `pRes`,
+    // `pBlock` and the `SPicData` pointers all outlive the next
+    // `md::dct(pMbCache)`/`md::skip_mb(pMbCache)` call, and re-coercing the
+    // `&mut` at each of those would retag the whole struct and pop them (S28).
+    let pMbCache: *mut SMbCache = pMbCache;
     let pfQuantizationFour4x4Max = (*pFuncList).pfQuantizationFour4x4Max;
     let pfScan4x4 = (*pFuncList).pfScan4x4;
     let pfCalculateSingleCtr4x4 = (*pFuncList).pfCalculateSingleCtr4x4;
@@ -793,11 +808,16 @@ pub unsafe fn WelsEncInterY(
 /// All pointers in `pFuncList`, `pCurMb`, `pMbCache`, and `pRes` must be properly initialized and valid.
 pub unsafe fn WelsEncRecUV(
     pFuncList: *mut SWelsFuncPtrList,
-    pCurMb: *mut SMB,
-    pMbCache: *mut SMbCache,
+    pCurMb: &mut SMB,
+    pMbCache: &mut SMbCache,
     mut pRes: *mut i16,
     iUV: i32,
 ) {
+    // One reborrow, here, and every raw cursor below hangs off it: `pRes`,
+    // `pBlock` and the `SPicData` pointers all outlive the next
+    // `md::dct(pMbCache)`/`md::skip_mb(pMbCache)` call, and re-coercing the
+    // `&mut` at each of those would retag the whole struct and pop them (S28).
+    let pMbCache: *mut SMbCache = pMbCache;
     let pfQuantizationHadamard2x2 = (*pFuncList).pfQuantizationHadamard2x2;
     let pfQuantizationFour4x4Max = (*pFuncList).pfQuantizationFour4x4Max;
     let pfScan4x4Ac = (*pFuncList).pfScan4x4Ac;
@@ -910,9 +930,14 @@ pub unsafe fn WelsEncRecUV(
 pub unsafe fn WelsRecPskip(
     pCurLayer: *mut SDqLayer,
     pFuncList: *mut SWelsFuncPtrList,
-    pCurMb: *mut SMB,
-    pMbCache: *mut SMbCache,
+    pCurMb: &mut SMB,
+    pMbCache: &mut SMbCache,
 ) {
+    // One reborrow, here, and every raw cursor below hangs off it: `pRes`,
+    // `pBlock` and the `SPicData` pointers all outlive the next
+    // `md::dct(pMbCache)`/`md::skip_mb(pMbCache)` call, and re-coercing the
+    // `&mut` at each of those would retag the whole struct and pop them (S28).
+    let pMbCache: *mut SMbCache = pMbCache;
     let iRecStride = (*pCurLayer).iCsStride.as_ptr();
     let pCsMb = (*pMbCache).SPicData.pCsMb.as_ptr();
 
@@ -947,8 +972,8 @@ pub unsafe fn WelsRecPskip(
 /// All pointers in `pEncCtx`, `pCurMb`, and `pMbCache` must be valid.
 pub unsafe fn WelsTryPYskip(
     pEncCtx: *mut sWelsEncCtx,
-    pCurMb: *mut SMB,
-    pMbCache: *mut SMbCache,
+    pCurMb: &mut SMB,
+    pMbCache: &mut SMbCache,
 ) -> bool {
     let mut iSingleCtrMb = 0i32;
     let mut pRes = crate::encoder::md::coeff_level(pMbCache);
@@ -996,8 +1021,8 @@ pub unsafe fn WelsTryPYskip(
 /// All pointers in `pEncCtx`, `pCurMb`, and `pMbCache` must be valid.
 pub unsafe fn WelsTryPUVskip(
     pEncCtx: *mut sWelsEncCtx,
-    pCurMb: *mut SMB,
-    pMbCache: *mut SMbCache,
+    pCurMb: &mut SMB,
+    pMbCache: &mut SMbCache,
     iUV: i32,
 ) -> bool {
     let mut pRes = if iUV == 1 {
@@ -1008,6 +1033,11 @@ pub unsafe fn WelsTryPUVskip(
 
     let pPpsP = (*(*pEncCtx).pCurDqLayer).sLayerInfo.pPpsP;
     let chroma_qp_index_offset = if !pPpsP.is_null() {
+    // One reborrow, here, and every raw cursor below hangs off it: `pRes`,
+    // `pBlock` and the `SPicData` pointers all outlive the next
+    // `md::dct(pMbCache)`/`md::skip_mb(pMbCache)` call, and re-coercing the
+    // `&mut` at each of those would retag the whole struct and pop them (S28).
+    let pMbCache: *mut SMbCache = pMbCache;
         (*pPpsP).uiChromaQpIndexOffset as i32
     } else {
         0

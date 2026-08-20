@@ -422,7 +422,7 @@ pub unsafe extern "C" fn WelsMdIntraSecondaryModesEnc(
     //add pEnc&rec to MD--2010.3.15
     if IS_INTRA16x16((*pCurMb).uiMbType) {
         (*pCurMb).uiCbp = 0;
-        crate::encoder::svc_encode_mb::WelsEncRecI16x16Y(pEncCtx, pCurMb, pMbCache);
+        crate::encoder::svc_encode_mb::WelsEncRecI16x16Y(pEncCtx, &mut *pCurMb, &mut *pMbCache);
     }
 
     //chroma
@@ -1405,8 +1405,8 @@ pub unsafe extern "C" fn WelsInterMbEncode(pEncCtx: *mut sWelsEncCtx, pSlice: *m
 
     WelsEncInterY(
         pFuncList as *mut crate::encoder::svc_encode_mb::SWelsFuncPtrList,
-        pCurMb as *mut crate::encoder::svc_encode_mb::SMB,
-        pMbCache as *mut crate::encoder::svc_encode_mb::SMbCache,
+        &mut *pCurMb,
+        &mut *pMbCache,
     );
 }
 
