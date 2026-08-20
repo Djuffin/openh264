@@ -688,13 +688,16 @@ pub unsafe fn current_layer(pCtx: *mut sWelsEncCtx) -> *mut SDqLayer {
 /// # Safety
 /// `pCtx` must point to a live encoder context.
 #[inline]
-pub unsafe fn set_current_layer(pCtx: *mut sWelsEncCtx, kIdx: Option<LayerIdx>) {
+pub fn set_current_layer(pCtx: &mut sWelsEncCtx, kIdx: Option<LayerIdx>) { unsafe {
+    // **T6.J2.** Safe signature, raw body: one derivation from the
+    // caller's `&mut`, and the body below is unchanged.
+    let pCtx: *mut sWelsEncCtx = pCtx;
     debug_assert!(
         kIdx.is_none_or(|i| i.get() < MAX_DEPENDENCY_LAYER),
         "{kIdx:?} is past the largest list InitDqLayers can build"
     );
     (*pCtx).iCurDqLayer = kIdx;
-}
+}}
 
 /// A layer's **active SPS**, resolved from [`LayerSps`] — T6.G3.
 ///
@@ -3405,11 +3408,14 @@ pub unsafe fn ReallocateSliceInThread(
     ENC_RETURN_SUCCESS
 }
 
-pub unsafe fn ExtendLayerBuffer(
-    pCtx: *mut sWelsEncCtx,
+pub fn ExtendLayerBuffer(
+    pCtx: &mut sWelsEncCtx,
     kiMaxSliceNumOld: i32,
     kiMaxSliceNumNew: i32,
-) -> i32 {
+) -> i32 { unsafe {
+    // **T6.J2.** Safe signature, raw body: one derivation from the
+    // caller's `&mut`, and the body below is unchanged.
+    let pCtx: *mut sWelsEncCtx = pCtx;
     let pMA = (*pCtx).pMemAlign;
     let pCurLayer = current_layer(pCtx);
 
@@ -3436,7 +3442,7 @@ pub unsafe fn ExtendLayerBuffer(
     let _ = (pMA, kiMaxSliceNumOld);
 
     ENC_RETURN_SUCCESS
-}
+}}
 
 pub fn ReallocSliceBuffer(pCtx: &mut sWelsEncCtx) -> i32 { unsafe {
     // **T6.J1.** Safe signature, raw body: one derivation from the
@@ -3465,7 +3471,7 @@ pub fn ReallocSliceBuffer(pCtx: &mut sWelsEncCtx) -> i32 { unsafe {
         iMaxSliceNumNew += (*pCurLayer).sSliceBufferInfo[iSlcBuffIdx as usize].iMaxSliceNum;
     }
 
-    iRet = ExtendLayerBuffer(pCtx, (*pCurLayer).iMaxSliceNum, iMaxSliceNumNew);
+    iRet = ExtendLayerBuffer(&mut *pCtx, (*pCurLayer).iMaxSliceNum, iMaxSliceNumNew);
     if iRet != ENC_RETURN_SUCCESS {
         return iRet;
     }
@@ -3650,7 +3656,7 @@ pub unsafe fn SliceLayerInfoUpdate(
     }
 
     if iMaxSliceNum > (*current_layer(pCtx)).iMaxSliceNum {
-        let iRet = ExtendLayerBuffer(pCtx, (*current_layer(pCtx)).iMaxSliceNum, iMaxSliceNum);
+        let iRet = ExtendLayerBuffer(&mut *pCtx, (*current_layer(pCtx)).iMaxSliceNum, iMaxSliceNum);
         if iRet != ENC_RETURN_SUCCESS {
             return iRet;
         }

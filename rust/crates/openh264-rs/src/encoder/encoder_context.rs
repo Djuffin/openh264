@@ -1583,7 +1583,10 @@ unsafe fn InitCoeffFunc(
 ///
 /// # Safety
 /// `pEncCtx` must be non-null and initialized.
-pub unsafe fn UpdateFrameNum(pEncCtx: *mut sWelsEncCtx, kiDidx: i32) {
+pub fn UpdateFrameNum(pEncCtx: &mut sWelsEncCtx, kiDidx: i32) { unsafe {
+    // **T6.J2.** Safe signature, raw body: one derivation from the
+    // caller's `&mut`, and the body below is unchanged.
+    let pEncCtx: *mut sWelsEncCtx = pEncCtx;
     if pEncCtx.is_null() || ctx_param(pEncCtx).is_null() || ctx_sps(pEncCtx).is_null() {
         return;
     }
@@ -1604,13 +1607,16 @@ pub unsafe fn UpdateFrameNum(pEncCtx: *mut sWelsEncCtx, kiDidx: i32) {
     }
 
     (*pEncCtx).eLastNalPriority[kiDidx as usize] = EWelsNalRefIdc::NRI_PRI_LOWEST;
-}
+}}
 
 /// Rolls back the `frame_num` counter if a reference frame encoding attempt fails.
 ///
 /// # Safety
 /// `pEncCtx` must be non-null and initialized.
-pub unsafe fn LoadBackFrameNum(pEncCtx: *mut sWelsEncCtx, kiDidx: i32) {
+pub fn LoadBackFrameNum(pEncCtx: &mut sWelsEncCtx, kiDidx: i32) { unsafe {
+    // **T6.J2.** Safe signature, raw body: one derivation from the
+    // caller's `&mut`, and the body below is unchanged.
+    let pEncCtx: *mut sWelsEncCtx = pEncCtx;
     if pEncCtx.is_null() || ctx_param(pEncCtx).is_null() || ctx_sps(pEncCtx).is_null() {
         return;
     }
@@ -1628,7 +1634,7 @@ pub unsafe fn LoadBackFrameNum(pEncCtx: *mut sWelsEncCtx, kiDidx: i32) {
             (*pParamInternal).iFrameNum = (1 << (*ctx_sps(pEncCtx)).uiLog2MaxFrameNum) - 1;
         }
     }
-}
+}}
 
 /// Reinitializes bitstream buffer write offsets and NAL indices.
 ///
@@ -1680,7 +1686,7 @@ pub fn InitFrameCoding(
             (*pParamInternal).iPOC = 0;
         }
 
-        UpdateFrameNum(pEncCtx, kiDidx);
+        UpdateFrameNum(&mut *pEncCtx, kiDidx);
 
         (*pEncCtx).eNalType = EWelsNalUnitType::NAL_UNIT_CODED_SLICE;
         (*pEncCtx).eSliceType = EWelsSliceType::P_SLICE;
@@ -1704,7 +1710,7 @@ pub fn InitFrameCoding(
             (*pParamInternal).iPOC = 0;
         }
 
-        UpdateFrameNum(pEncCtx, kiDidx);
+        UpdateFrameNum(&mut *pEncCtx, kiDidx);
 
         (*pEncCtx).eNalType = EWelsNalUnitType::NAL_UNIT_CODED_SLICE;
         (*pEncCtx).eSliceType = EWelsSliceType::I_SLICE;
