@@ -4,7 +4,7 @@
 #   usage: rust/tools/gates.sh [level]
 #
 #     commit   build --all-targets + cargo test (debug + release) + ratchet (~2 min)
-#     family   commit + diffharness sweeps st/mt/def in BOTH profiles     (~5 min)
+#     family   commit + diffharness sweeps st/mt/def/sl in BOTH profiles  (~5 min)
 #     full     family + decode bench + encoder bench + Miri --lib         (default)
 #     exit     full + Miri over the differential integration tests        (phase exits)
 #
@@ -190,13 +190,13 @@ fi
 # ---------------------------------------------------------------------------
 sweep_gate() {  # $1 = profile
   local prof=$1 log="$LOGS/sweep_$1.log" rc t0 t1
-  hdr "diffharness sweep st mt def ($prof)"
+  hdr "diffharness sweep st mt def sl ($prof)"
   if ! RUST_ENC_PROFILE="$prof" bash "$DIFF/build.sh" > "$LOGS/build_$prof.log" 2>&1; then
     fail "sweep ($prof): harness build failed — see $LOGS/build_$prof.log"
     return
   fi
   t0=$(date +%s)
-  RUST_ENC_PROFILE="$prof" bash "$DIFF/sweep.sh" st mt def 2>&1 | tee "$log" | tail -20
+  RUST_ENC_PROFILE="$prof" bash "$DIFF/sweep.sh" st mt def sl 2>&1 | tee "$log" | tail -20
   rc=${PIPESTATUS[0]}
   t1=$(date +%s)
   local tally wall=$((t1 - t0))

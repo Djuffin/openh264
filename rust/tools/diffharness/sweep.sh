@@ -11,6 +11,8 @@
 #             def   GetDefaultParams + InitializeExt (baseinit=2) on inputs
 #                   looped to 72+ frames x threads 1/2/4, plus 720p x 1/4
 #                                                                        (11 configs)
+#             sl    SM_SIZELIMITED_SLICE at constraints tight enough to cross
+#                   iMaxSliceNum and drive the slice-realloc path         (12 configs)
 #             all   every preset above
 #
 # st and mt encode SWEEP_FRAMES (default 16, rounded up to 18-20 by looping) frames
@@ -50,6 +52,32 @@ RCMODES=(-1 0 1 2 3)
 # "<slicemode> <slicenum>"; slicenum is the slice count for 1, rows-per-slice for
 # 2, and the byte constraint for 3.
 SLICES=("1 2" "1 4" "2 3" "3 1500" "3 600")
+
+# `sl` rows: "<qp> <slice byte constraint>". SM_SIZELIMITED_SLICE only.
+#
+# The slice-realloc path (`FrameBsRealloc`/`ExtendLayerBuffer`, svc_encode_slice.rs)
+# runs only when a frame's coded slice count crosses `iMaxSliceNum`, which opens at
+# 35. Every other preset here tops out around 9 coded slices, so that path had no
+# standing byte coverage at all — session D found and fixed a re-aim bug in it
+# out-of-band, against a hand-run comparison that then evaporated.
+#
+# These three pairs at 320x192 (20x12 = 240 macroblocks) each cross 35 slices in a
+# frame, and all 12 rows below were measured entering `FrameBsRealloc` at least once
+# (Phase 6 session E, 2026-08-19; probe = an eprintln at the function's head).
+# The constraint floor is 401: `ParamValidationExt` rejects anything <=
+# MAX_MACROBLOCK_SIZE_IN_BYTE (400).
+#
+# rc modes -1 (RC_OFF) and 2 (RC_BUFFERBASED) are the two that reach it. 0/1/3 hold
+# the frame budget low enough that the slice count stays under 35 whatever the qp
+# argument says, which is why this preset names its rc modes rather than looping
+# RCMODES.
+#
+# The three constraints must differ from each other, not just the three qps: under
+# rc=2 the rate controller picks the quantiser and the qp column is inert, so two
+# rows sharing a constraint would be the same encode twice. (They were, in this
+# preset's first draft: "26 401" and "10 401" produced byte-identical streams under
+# rc=2.) The constraint is the only axis both rc modes actually read.
+SL_ROWS=("26 401" "16 601" "10 501")
 
 PASS=0; FAIL=0; FAILED=()
 
@@ -173,6 +201,23 @@ sweep_def() {
   done
 }
 
+sweep_sl() {
+  echo "-- preset: sl"
+  local YUV="res/CiscoVT2people_320x192_12fps.yuv" W=320 H=192
+  local name qp con cabac rc
+  name=$(basename "$YUV" .yuv)
+  loopfile "$YUV" "$W" "$H" "$ST_FRAMES"
+  for row in "${SL_ROWS[@]}"; do
+    read -r qp con <<< "$row"
+    for rc in -1 2; do
+      for cabac in 0 1; do
+        check "sl $name qp=$qp con=$con rc=$rc cabac=$cabac" \
+              "$LOOP_PATH" "$W" "$H" "$LOOP_FRAMES" "$qp" "$cabac" -1 "$rc" 0 3 "$con" 1
+      done
+    done
+  done
+}
+
 sweep_qp() {
   echo "-- preset: qp"
   local YUV W H qp cabac
@@ -195,7 +240,8 @@ for preset in "$@"; do
     mt)  sweep_mt ;;
     qp)  sweep_qp ;;
     def) sweep_def ;;
-    all) sweep_st; sweep_mt; sweep_qp; sweep_def ;;
+    sl)  sweep_sl ;;
+    all) sweep_st; sweep_mt; sweep_qp; sweep_def; sweep_sl ;;
     *)   echo "unknown preset: $preset" >&2; exit 2 ;;
   esac
 done
