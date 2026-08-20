@@ -2788,3 +2788,45 @@ median** tripwire is unbreached by ~24 points. Cumulative encoder deficit
 **What it buys**: every member of the encoder context owns its memory,
 `RequestMemorySvc` calls the allocator once, the free cascade holds nothing this phase
 owns, and a latent teardown leak is gone.
+
+---
+
+## Phase 6 session I — the table owns, and the instrument cannot tell it from nothing (2026-08-20)
+
+**One span for the session** (hard rule 3): `i_base` = `036e18c0` (session start),
+`i_head` = `8ffdd064` (three commits: `pPSOVector` deleted, `pFuncList` becomes an
+owned `Box`, the table's parameters re-spelled). `perfpair.py run i_base i_head
+--pairs 7`, then `perfpair.py null i_head --pairs 7` for the floor.
+`FFMPEG=/opt/homebrew/bin/ffmpeg` (S17).
+
+| | span (i_base → i_head) | null floor (i_head vs itself) |
+|---|---|---|
+| **decode**, 3 rows | median **+0.18%**, −0.14 … +0.53% | median −0.25%, −0.32 … +0.09% |
+| **encode**, 28 rows | median **+0.00%**, −1.35 … +0.77% | median +0.00%, −1.35 … +1.56% |
+
+`Spatial Ramps` excluded from every statistic per S2 (it read +12.6% / +14.5% on the
+span and is the row that has moved ±38%, −11% and +226% between runs of one binary).
+Rows over +5%: **0**, both benches, both directions.
+
+**The span is inside the floor on both benches, and on encode it is inside it on
+every statistic at once** — same median, same minimum, and a *narrower* maximum than
+the null run's own. There is nothing here to attribute: the encode span's widest row
+(+0.77%) is half the null's (+1.56%). No bisection was run, because D-perf's rule is
+to bisect on a breach and there is no breach.
+
+**Why that is the expected answer rather than a lucky one.** The session's three
+commits delete a never-read field, move a 1072-byte dispatch table from a
+`WelsMallocz`'d pointer to a `Box` (same size, same address stability, one allocation
+either way — and one *fewer*, since the table now comes with the context), and change
+parameter *spellings* from `*mut T` to `&T`/`&mut T`, which is the same machine
+pointer. The two hot-path derivation points (`InitFunctionPointers`,
+`PreprocessSliceCoding`) each went from one raw read per call site to one `&mut`
+derived once and reborrowed — strictly fewer derivations, not more. Nothing in the
+per-macroblock loop changed shape.
+
+**Cumulative position, restated as D-perf-4 requires.** Cumulative encoder deficit
+stands at ≈ **+15…+17%**, unmoved by this session. D-perf-4's tripwire is **+25%
+median**; it is unbreached by roughly 8-10 points. D-perf-6's parked recovery is
+untouched and still **Phase 9's**, now with session H's measured target
+(`WelsRcMbInitGom` / `ctx_rc_at`, the per-macroblock accessor cost) beside it.
+

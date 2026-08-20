@@ -609,13 +609,54 @@ at a family boundary, and only with a written reason):
   **`Option<Box<T>>` accessors are free and `Vec` accessors are not** — the
   container's shape decides the cost, not the call count. Cost localised to
   {LTR, rc, ref lists} with the mechanism named; nothing reverted, Phase 9 owns it.
-* **I** — **brief written** ([`phase6_session_i.md`](phase6_session_i.md), steward,
-  2026-08-20). **The S37 inventory, then references where it is clean; the deny sweep
-  module-by-module; §7's exit conditions checked line by line; the residue
-  enumerated in the four lawful categories; the handoffs written (Phase 7, 8, 9,
-  10); cumulative perf restated; the phase close.** `SWelsFuncPtrList` (57) and
-  the dispatch tables resolve here. Close against §7, not against "the lint is
-  on".
+* **I** — **SPENT** (2026-08-20), **and the phase does not close.**
+  `036e18c0` → `8ffdd064`, three commits, tree clean.
+  **Landed in full:** `pPSOVector` deleted (T6.I0 — and only *one* of the fifteen
+  pinned offsets moved, not all fifteen as the brief predicted); `pFuncList`
+  becomes an owned `Box` with a field-wise 63-member constructor replacing the
+  zeroed one, taking the encoder's allocator sites **15 → 12** (the 4 Phase-7 hits
+  and the 8 dormant ones are all that is left) and closing **F19** structurally
+  (T6.I1); the table's parameters re-spelled, **`*mut SWelsFuncPtrList` 57 → 28**,
+  with **22 enumerated survivors** (T6.I2).
+  **The survivors are structural, not residue.** Five function-pointer slot *types*
+  name `*mut SWelsFuncPtrList` in their own signature, so the table is handed back
+  into its own callees — retiring them is a Phase-4a-style de-virtualization, now
+  handed to Phase 9.
+  **Step 2 (context parameters) was not begun** — deliberately, at a whole-closure
+  boundary, because a half-done root-down conversion is the exact UB shape rule 6
+  forbids.
+  **Step 3 was measured instead of attempted, and that is the session's main
+  result — F65.** The deny sweep names **894 items** (612 `unsafe fn` declarations,
+  177 `unsafe` blocks, 92 `unsafe` method impls, …), and it is a *lower* bound. Of
+  the 709 `unsafe fn` declarations in scope, 272 name `*mut sWelsEncCtx` but only
+  **117** have it as their only raw parameter — so a perfect step 2 clears at most
+  117 of 612 and leaves ~780 allow items whose raw types (`*mut u8` 177, `SSlice`
+  105, `SDqLayer` 79, `SMbCache` 66, `SMB` 45) are on this phase's own
+  do-not-touch table, owned by Phases 7 and 9.
+  **§7 condition 2 is therefore unreachable in this phase by construction**: several
+  hundred survivors are none of the four lawful categories, and tagging them as one
+  would be false. F65 states the two ways out — a fifth residue category naming an
+  owning phase, or deferring condition 2 past Phases 7–10 — and **picks neither;
+  that is the steward's call.** The phase was left open rather than closed by
+  weakening a condition (hard rule 9).
+  **Gates:** `commit` green on all three commits; `full` with `MIRI_SCOPE=encoder`
+  at the close — 496/490/20, ratchet clean, census 58, both benches bit-identical,
+  **Miri 252/0 with all four encoder probes named**. Sweeps 368/369 in both
+  profiles across two batteries — **four hits, all F3, acquitted by measurement
+  86's alternation** (HEAD 6/48 vs control 3/48, interleaved). **No unscoped `exit`
+  battery: that is the phase's handoff gate and the phase is not handing off.**
+  **Perf:** one span, encode median **+0.00%**, decode **+0.18%**, both inside the
+  null floor; cumulative ≈ **+15…+17%** against D-perf-4's **+25%** tripwire.
+  **Handoffs to Phases 7/8/9/10 were written anyway** (plan §5), since they are
+  verified facts about the tree and do not depend on the phase closing.
+
+* **J** — **needed, and its first item is not code.** (1) The **condition-2
+  decision** (F65) — steward's, and everything else is cheaper once it is made.
+  (2) **Step 2**, the context parameters, root-down from `WelsInitEncoderExt` /
+  `WelsEncoderEncodeExt`: ~270 lines, 272 functions, 117 of which can become safe
+  `fn`. (3) **Step 3**, the deny sweep, scoped by whatever (1) decides. (4) **Steps
+  4 and 5**, the exit conditions and the close, including the one unscoped `exit`
+  battery (349 tests, ≈1411 s) that D-gate-2 reserves for the phase exit.
 
 **Seven sessions is the estimate, not the contract**; Phase 5 ran fourteen against
 a plan of nine to twelve, and the difference was discovery, which this phase has
