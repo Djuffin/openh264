@@ -639,6 +639,7 @@ at a family boundary, and only with a written reason):
   owning phase, or deferring condition 2 past Phases 7–10 — and **picks neither;
   that is the steward's call.** The phase was left open rather than closed by
   weakening a condition (hard rule 9).
+  *(Ruled the next day: **D-exit-1**, §7's fifth category — session J executes.)*
   **Gates:** `commit` green on all three commits; `full` with `MIRI_SCOPE=encoder`
   at the close — 496/490/20, ratchet clean, census 58, both benches bit-identical,
   **Miri 252/0 with all four encoder probes named**. Sweeps 368/369 in both
@@ -658,6 +659,14 @@ at a family boundary, and only with a written reason):
   4 and 5**, the exit conditions and the close, including the one unscoped `exit`
   battery (349 tests, ≈1411 s) that D-gate-2 reserves for the phase exit.
 
+* **J** — **brief written** ([`phase6_session_j.md`](phase6_session_j.md),
+  steward, 2026-08-20). Executes **D-exit-1** (§7's fifth category,
+  `port-raw(<phase>)`): the 117 root-down context-parameter conversions, the 17
+  attribute-position fixes, the deny sweep over all 36 non-MT modules with the
+  five-way tag table (F65's census as the assignment map), the condition-3
+  residue table, §7 checked line by line, and the close on the one unscoped
+  exit battery D-gate-2 reserves.
+
 **Seven sessions is the estimate, not the contract**; Phase 5 ran fourteen against
 a plan of nine to twelve, and the difference was discovery, which this phase has
 already done. A session that closes no family and moves no metric is a stall and
@@ -676,11 +685,15 @@ Phase 6's close is defined now, and it is the decoder's close, transposed:
    thread machinery — each exception named in the close log with **Phase 7** as its
    owner. An exception is a file, never a blanket.
 2. **Every surviving `#[allow(unsafe_code)]` item under the denied modules is
-   enumerated by category with an owner**, and only four categories are lawful:
+   enumerated by category with an owner**, and only five categories are lawful:
    values crossing the C ABI (Phase 8), owned-storage cursor machinery carrying
    its mandated Miri tests (S28/S40 — the pool, the frame bitstream's writers,
-   the named neighbour-walkers), an MT seam (Phase 7), and the
-   `SCREEN_CONTENT(dormant)` tag (Phase 10, D-scr-1). "The lint is on" is not the test;
+   the named neighbour-walkers), an MT seam (Phase 7), the
+   `SCREEN_CONTENT(dormant)` tag (Phase 10, D-scr-1), and **`port-raw(<phase>)`
+   (added by D-exit-1, 2026-08-20, ruling F65)** — a port-internal raw-pointer
+   signature whose parameter family is owned by Phase 7 or Phase 9; the tag dies
+   with the item when that phase converts it. Untagged or unowned `unsafe`
+   remains a build error; the enumeration, not the lint, is still the test. "The lint is on" is not the test;
    the enumeration is.
 3. **Encoder-side `raw_ptr` residue is enumerated by category**, code split from
    prose (S16), the way 5b handed the decoder's 47+66 to Phase 8.
