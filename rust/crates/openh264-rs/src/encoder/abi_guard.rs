@@ -149,10 +149,17 @@ assert_size!(SSubsetSps, 60);
 
 // codec/encoder/core/inc/slice.h. SSliceHeader excludes iSliceGroupChangeCycle,
 // which sits inside `#if !defined(DISABLE_FMO_FEATURE)` at slice.h:124.
+//
+// **168 → 152 and 192 → 168 at T6.G3, and these are the port's own numbers now.**
+// `SSliceHeader::pSps`/`pPps` and `SSliceHeaderExt::pSubsetSps` are deleted: all
+// three were write-only or never touched at all, and the first two had their own
+// replacement sitting in the same struct (`iSpsId`/`iPpsId`, which the C++ writes in
+// the same statement block). `SSliceHeaderExt` loses its own 8 plus the 16 its
+// embedded header lost. Measured.
 assert_size!(SRefPicMarking, 100);
 assert_size!(SRefPicListReorderSyntax, 16);
-assert_size!(SSliceHeader, 168);
-assert_size!(SSliceHeaderExt, 192);
+assert_size!(SSliceHeader, 152);
+assert_size!(SSliceHeaderExt, 168);
 
 // codec/encoder/core/inc/wels_common_basis.h, mb_cache.h
 assert_size!(SMVUnitXY, 4);
@@ -261,7 +268,14 @@ assert_size!(SMB, 208);
 // exactly why it should exist: the next session to touch the record sees the number
 // move.
 assert_size!(SMeRefinePointer, 32);
-assert_size!(SLayerInfo, 48);
+
+// codec/encoder/core/inc/svc_enc_frame.h:77. **48 in the C++, 32 here since T6.G3**:
+// its three parameter-set pointers are two id fields, and one of those two —
+// `Option<LayerSps>` — is the tagged union the C++ spelled as "`pSubsetSpsP` null or
+// not". The struct is no longer `repr(C)`, for `SDqLayer`'s reason: that `Option` has
+// no C shape. The pin stays because it is the record of the port's own layout, which
+// is what it has been since T6.C1 for everything around it.
+assert_size!(SLayerInfo, 32);
 
 // codec/encoder/core/inc/slice.h. `assert_size!(SSlice, 1584)` was here — see the
 // `SWelsSliceBs` note above; `SSlice` embeds it by value.
@@ -286,8 +300,8 @@ assert_size!(SSliceBufferInfo, 32);
 // **T6.F1**: `pRefPic`/`pDecPic`/`pRefOri[16]` become handles and `pRefList` is
 // added — 712 debug / 640 release. **T6.F5**: +128 for the two `SRefPicView`s the
 // macroblock loop reads instead of resolving a handle per access — **840 debug /
-// 768 release**, measured.
-assert_size_by_profile!(SDqLayer, debug 840, release 768);
+// 768 release**, measured. **T6.G3**: -16, the `SLayerInfo` it embeds — **824 / 752**.
+assert_size_by_profile!(SDqLayer, debug 824, release 752);
 
 // codec/encoder/core/inc/wels_func_ptr_def.h
 // 1280 before Phase 4a; -8 for `SSampleDealingFunc`'s shrink above; -24 at T4b.1,
@@ -402,6 +416,8 @@ const _: () = assert!(std::mem::offset_of!(SSpatialPicIndex, pSrc) == 0);
 const _: () = assert!(std::mem::offset_of!(SSpatialPicIndex, iDid) == 8);
 #[cfg(not(debug_assertions))]
 const _: () = assert!(std::mem::offset_of!(SSpatialPicIndex, iDid) == 4);
+
+
 
 
 

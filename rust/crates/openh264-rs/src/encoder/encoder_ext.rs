@@ -32,7 +32,8 @@ use crate::encoder::md::INTRA_4x4_MODE_NUM;
 use crate::encoder::param_svc::{
     SExistingParasetList, SWelsSvcCodingParam, MB_WIDTH_LUMA, UNSPECIFIED_BIT_RATE,
 };
-use crate::encoder::param_svc::{PpsId, SpsId};
+use crate::encoder::param_svc::{PpsId, SpsId, SubsetSpsId};
+use crate::encoder::svc_encode_slice::LayerSps;
 use crate::encoder::paraset_strategy::{ParasetStrategy, PARA_SET_TYPE_AVCSPS, PARA_SET_TYPE_PPS};
 use crate::api::codec_api::EParameterSetStrategy;
 use crate::encoder::picture::SPicture;
@@ -2076,20 +2077,22 @@ pub unsafe fn WelsInitCurrentLayer(pCtx: *mut sWelsEncCtx, _kiWidth: i32, _kiHei
         ((*pParamInternal).uiIdrPicId as i32 - 1).abs() % MAX_PPS_COUNT as i32,
     );
 
+    // T6.G3. The C++ writes the id and then an address derived from it, three times
+    // over (`encoder_ext.cpp:2560-2576`); the layer keeps the id and the slice
+    // header's own `iPpsId`/`iSpsId` — already here, already the same numbers — are
+    // what the header carries. The two pointer copies the header used to take are
+    // gone with the fields.
     (*pBaseSlice).sSliceHeaderExt.sSliceHeader.iPpsId = iCurPpsId;
-    (*pCurDq).sLayerInfo.pPpsP = (*pCtx).pPPSArray.add(iCurPpsId as usize);
-    (*pBaseSlice).sSliceHeaderExt.sSliceHeader.pPps = (*pCurDq).sLayerInfo.pPpsP;
+    (*pCurDq).sLayerInfo.iPps = Some(PpsId(iCurPpsId as u16));
 
     (*pBaseSlice).sSliceHeaderExt.sSliceHeader.iSpsId = iCurSpsId;
-    if kbUseSubsetSpsFlag {
-        (*pCurDq).sLayerInfo.pSubsetSpsP = (*pCtx).pSubsetArray.add(iCurSpsId as usize);
-        (*pCurDq).sLayerInfo.pSpsP = std::ptr::addr_of_mut!((*(*pCurDq).sLayerInfo.pSubsetSpsP).pSps);
-        (*pBaseSlice).sSliceHeaderExt.sSliceHeader.pSps = (*pCurDq).sLayerInfo.pSpsP;
+    // The null-versus-not that used to select the arm is the tag now — same two
+    // arms, same `iCurSpsId`, indexing the same two different arrays.
+    (*pCurDq).sLayerInfo.eSps = Some(if kbUseSubsetSpsFlag {
+        LayerSps::Subset(SubsetSpsId(iCurSpsId as u8))
     } else {
-        (*pCurDq).sLayerInfo.pSubsetSpsP = null_mut();
-        (*pCurDq).sLayerInfo.pSpsP = (*pCtx).pSpsArray.add(iCurSpsId as usize);
-        (*pBaseSlice).sSliceHeaderExt.sSliceHeader.pSps = (*pCurDq).sLayerInfo.pSpsP;
-    }
+        LayerSps::Avc(SpsId(iCurSpsId as u8))
+    });
 
     (*pBaseSlice).bSliceHeaderExtFlag =
         (*pCtx).eNalType == EWelsNalUnitType::NAL_UNIT_CODED_SLICE_EXT;

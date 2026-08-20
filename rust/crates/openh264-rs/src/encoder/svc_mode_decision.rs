@@ -14,6 +14,7 @@
 
 
 use crate::encoder::svc_encode_slice::{layer_dec_pic, layer_dec_pic_mut, layer_ref_pic, layer_ref_pic_mut};
+use crate::encoder::svc_encode_slice::layer_pps;
 use crate::encoder::svc_encode_slice::current_layer;
 use crate::encoder::picture::{RecPicId, SrcPicId};
 use crate::encoder::md::{PredictSad, PredictSadSkip, WelsMedian};
@@ -267,9 +268,18 @@ pub fn WELS_CLIP3(iX: i32, iMin: i32, iMax: i32) -> i32 {
 /// here — its caller already has) and skipped the QP carry-over and the collocated
 /// flag entirely, so every P_SKIP macroblock coded with a stale luma/chroma QP.
 ///
+/// **Takes the context since T6.G3**, which the C++ signature does not
+/// (`svc_base_layer_md.h:86`). The layer names its PPS by *position* now, and the
+/// arrays it indexes live on the context, so resolving one needs both — this is the
+/// only consumer of the family that did not already hold a context. It is a plain
+/// function with two direct callers, not a dispatch-table slot, so widening it is not
+/// 4b's fence: both callers pass the `pEncCtx` they already have, and each was
+/// deriving `pCurDqLayer` from it one line earlier.
+///
 /// # Safety
-/// All four pointers must be valid and `pCurDqLayer->sLayerInfo.pPpsP` assigned.
+/// All pointers must be valid and the layer's PPS position assigned.
 pub unsafe extern "C" fn WelsMdInterUpdatePskip(
+    pEncCtx: *mut sWelsEncCtx,
     pCurDqLayer: *mut SDqLayer,
     pSlice: *mut SSlice,
     pCurMb: &mut SMB,
@@ -278,7 +288,7 @@ pub unsafe extern "C" fn WelsMdInterUpdatePskip(
     //add pEnc&rec to MD--2010.3.15
     (*pCurMb).uiCbp = 0;
     (*pCurMb).uiLumaQp = (*pSlice).uiLastMbQp;
-    let kiChromaQpIndexOffset = (*(*pCurDqLayer).sLayerInfo.pPpsP).uiChromaQpIndexOffset as i32;
+    let kiChromaQpIndexOffset = (*layer_pps(pEncCtx, pCurDqLayer)).uiChromaQpIndexOffset as i32;
     (*pCurMb).uiChromaQp = crate::encoder::svc_encode_slice::g_kuiChromaQpTable
         [WELS_CLIP3((*pCurMb).uiLumaQp as i32 + kiChromaQpIndexOffset, 0, 51) as usize];
     (*pMbCache).bCollocatedPredFlag = LD32_MV(&(*pCurMb).sMv[0]) == 0;
@@ -345,7 +355,7 @@ pub unsafe extern "C" fn WelsMdInterDecidedPskip(
     let pCurDqLayer = current_layer(pEncCtx);
     (*pCurMb).uiMbType = MB_TYPE_SKIP;
     WelsRecPskip(pCurDqLayer, (*pEncCtx).pFuncList, pCurMb, pMbCache);
-    WelsMdInterUpdatePskip(pCurDqLayer, pSlice, pCurMb);
+    WelsMdInterUpdatePskip(pEncCtx, pCurDqLayer, pSlice, pCurMb);
 }
 
 /// `svc_base_layer_md.cpp:1997`.
@@ -579,7 +589,7 @@ pub unsafe extern "C" fn WelsMdBackgroundMbEnc(
         (*pCurMb).uiLumaQp = (*pSlice).uiLastMbQp;
         (*pCurMb).uiChromaQp = crate::encoder::svc_encode_slice::g_kuiChromaQpTable
             [crate::encoder::svc_encode_slice::CLIP3_QP_0_51(
-                (*pCurMb).uiLumaQp as i32 + (*(*pCurDqLayer).sLayerInfo.pPpsP).uiChromaQpIndexOffset as i32,
+                (*pCurMb).uiLumaQp as i32 + (*layer_pps(pEncCtx, pCurDqLayer)).uiChromaQpIndexOffset as i32,
             )];
 
         WelsRecPskip(pCurDqLayer, pFunc, pCurMb, pMbCache);
@@ -1981,7 +1991,7 @@ pub unsafe extern "C" fn SvcMdSCDMbEnc(
         }
         (*pCurMb).uiMbType = MB_TYPE_SKIP;
         WelsRecPskip(pCurDqLayer, pFunc, pCurMb, pMbCache);
-        WelsMdInterUpdatePskip(pCurDqLayer, pSlice, pCurMb);
+        WelsMdInterUpdatePskip(pEncCtx, pCurDqLayer, pSlice, pCurMb);
         return;
     }
 

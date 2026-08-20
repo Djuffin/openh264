@@ -18,6 +18,7 @@ pub use crate::encoder::encoder_context::EWelsSliceType;
 pub use crate::encoder::encoder_context::SMVUnitXY;
 pub use crate::encoder::encoder_context::SDCTCoeff;
 pub use crate::encoder::svc_encode_slice::SSliceHeader;
+use crate::encoder::svc_encode_slice::layer_pps;
 use crate::encoder::svc_encode_slice::current_layer;
 pub use crate::encoder::svc_encode_slice::SSliceHeaderExt;
 pub use crate::encoder::md::SMbCache;
@@ -700,7 +701,7 @@ pub unsafe fn WelsSpatialWriteMbSyn(
     // Step 1 is invalidated by Step 1 and used again in Steps 2-4. This is not a
     // spelling: the borrow has to be taken after the call that pops it.
     let pBs = crate::encoder::svc_encode_slice::slice_writer(pEncCtx, pSlice);
-    let kuiChromaQpIndexOffset = (*(*current_layer(pEncCtx)).sLayerInfo.pPpsP).uiChromaQpIndexOffset;
+    let kuiChromaQpIndexOffset = (*layer_pps(pEncCtx, current_layer(pEncCtx))).uiChromaQpIndexOffset;
 
     if IS_SKIP((*pCurMb).uiMbType) {
         (*pCurMb).uiLumaQp = (*pSlice).uiLastMbQp;
@@ -749,9 +750,13 @@ pub unsafe fn WelsSpatialWriteMbSyn(
             }
         } else {
             (*pCurMb).uiLumaQp = (*pSlice).uiLastMbQp;
+            // `kuiChromaQpIndexOffset`, bound at this function's head from the same
+            // expression. The C++ re-reads `pCurLayer->sLayerInfo.pPpsP->…` here
+            // (`svc_set_mb_syn_cavlc.cpp`) and so did this port; nothing between the
+            // two can change the layer's PPS, and T6.G3 made the re-read cost a
+            // resolution rather than a load. Same value, once per macroblock.
             let idx = CLIP3_QP_0_51(
-                ((*pCurMb).uiLumaQp as i32)
-                    + ((*(*current_layer(pEncCtx)).sLayerInfo.pPpsP).uiChromaQpIndexOffset as i32),
+                ((*pCurMb).uiLumaQp as i32) + (kuiChromaQpIndexOffset as i32),
             );
             (*pCurMb).uiChromaQp = g_kuiChromaQpTable[idx as usize];
         }
