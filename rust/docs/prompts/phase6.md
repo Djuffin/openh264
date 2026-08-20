@@ -567,15 +567,48 @@ at a family boundary, and only with a written reason):
   size, two instances paid down inside the session. Step 0 paid F63 forward: the
   decoder's `data_ptr` **did** carry the trap, red-proofed under Miri before the fix.
   F3 measurements **80–84**, all the signature, all 5/5.
-* **H** — **brief written** ([`phase6_session_h.md`](phase6_session_h.md), steward,
-  2026-08-20; carries **D-gate-2**: Miri encoder-scoped from here, the full set
-  once at I's close). **The members own**: `RequestMemorySvc` → constructors, the
-  free cascade → `Drop` with F19's leak check per member, the container
-  fields → owned (`Vec<Box<SDqLayer>>`, `Vec<Box<SRefList>>`, the parameter-set
-  arrays, P11's `pMvdCostTable`, `pFrameBs`, the rc blocks), and `CMemoryAlign`'s
-  census reads 0 — the allocator dies with `memory_align.rs`. Phase-7 members
-  (`pSliceThreading`, `pTaskManage`, `mutexEncoderError`, `pDynamicBsBuffer`)
-  stay raw, enumerated.
+* **H — SPENT** (2026-08-20). **The members own** — brief:
+  [`phase6_session_h.md`](phase6_session_h.md). All five steps landed. Every row of
+  the member table converted: `RequestMemorySvc` calls the allocator **once**
+  (`DynamicSliceBs`, Phase 7's), the free cascade is **six entries** and none is this
+  phase's, allocator hits across `src/encoder`+`src/processing` go **45 → 15** —
+  fifteen allocations and fifteen frees became container drops — and
+  `WelsRcFreeMemory`, `RcFreeLayerMemory`, `FreeRefList`, the
+  `AllocCodingParam`/`FreeCodingParam` pair and the dead type `SWelsOut` were
+  **deleted** rather than converted. **Two arenas, two
+  conversions, and the difference is the finding**: `SStrideTables` keeps one owned
+  `Vec` with byte offsets because two spatial layers can name one region;
+  `SWelsSvcRc` becomes five containers because none of its regions is ever aliased.
+  The C++ allocates one block in both cases — the *aliasing* decides, not the
+  allocation pattern. **F64's instrument caught a defect the session would otherwise
+  have shipped**: the first `Vec` field made `mem::zeroed::<sWelsEncCtx>()` itself UB
+  and it kept compiling and passing; the shell is `MaybeUninit` bytes now, with a
+  third `OWNED` tier that reports its own shrunk reach. **T6.H7 found a latent
+  leak** — the reference-list free loop read its bound from `iSpatialLayerNum` *at
+  teardown*. **The `pSvcParam` verdict: the context owns it**, not the api (not F41's
+  shape), so Phase 8 inherits nothing there. `pFrameBs`'s **nineteen** cursor
+  derivations were enumerated before the conversion; its zero-fill is the one
+  recorded deviation. **The census reads 15, not 0** — the §6 row as written expected
+  `CMemoryAlign` to reach zero here, and the brief corrected that: `pMemAlign`
+  survives serving Phase 7's four hits, session I's three and a dormant
+  screen-content family's eight, and *that list* is the deliverable. The eight were
+  the census's own finding — unreachable, now tagged `SCREEN_CONTENT(dormant)`.
+  `MIRI_SCOPE=encoder` exists, documented and measured: the scoped `exit` step reads
+  **252 / 0 at 600.69 s** against the unscoped **349 / 0 at 1411.29 s** — 57% less wall
+  clock, all four encoder probes green *by name*. `exit` **12/1/1**; the single failure
+  is the F3 signature on `mt sm=3 t=2`, cleared **5/5** on the mandated retry
+  (measurement 85 — and a **new shape** for the finding: a short stream, where every
+  prior instance produced zero bytes). **Handed to I, measured**: `pPSOVector` has **zero** uses
+  tree-wide outside its declaration, its `new()` initializer and the F64 instrument —
+  never written, never read, `SWelsOut`'s shape exactly; it is a deletion, not a
+  conversion, and was left standing only because moving a context field re-pins
+  sixteen assertions. **Span +1.31% encode median against a null of +0.10%, 2 rows
+  over 5% — a breach, so it was attributed before anything was acted on**, and eight
+  of eleven members came back free, including the per-4x4-block stride accessors
+  (+0.00%) and the 256-site `pSvcParam` flip (−0.01%). The rule that fell out:
+  **`Option<Box<T>>` accessors are free and `Vec` accessors are not** — the
+  container's shape decides the cost, not the call count. Cost localised to
+  {LTR, rc, ref lists} with the mechanism named; nothing reverted, Phase 9 owns it.
 * **I** — **the S37 inventory, then references where it is clean; the deny sweep
   module-by-module; §7's exit conditions checked line by line; the residue
   enumerated in the four lawful categories; the handoffs written (Phase 7, 8, 9,
