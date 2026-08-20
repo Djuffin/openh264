@@ -667,8 +667,17 @@ impl SWelsSvcCodingParam {
             self.iMaxNumRefFrame = self.iNumRefFrame;
         }
 
+        // **F62** (`param_svc.h:384`): `iLTRRefNum = (bEnableLongTermReference ?
+        // pCodingParam.iLTRRefNum : 0)`. This read `0 : 0` — the caller's value was
+        // dropped on the floor — and nothing saw it, because no configuration the
+        // differential harness could express ever set `bEnableLongTermReference` until
+        // Phase 6 session F added the `ltr` preset. It is *masked* rather than
+        // observable even so: `WelsCheckNumRefSetting` (`au_set.rs`) overwrites the
+        // field with `LONG_TERM_REF_NUM` on every init path that reaches it. Fixed as
+        // a transcription, not as a behaviour change — the `ltr` preset reads 16/16
+        // byte-identical either way.
         self.iLTRRefNum = if pCodingParam.bEnableLongTermReference {
-            0
+            pCodingParam.iLTRRefNum
         } else {
             0
         };

@@ -13,6 +13,8 @@
 #                                                                        (11 configs)
 #             sl    SM_SIZELIMITED_SLICE at constraints tight enough to cross
 #                   iMaxSliceNum and drive the slice-realloc path         (12 configs)
+#             ltr   bEnableLongTermReference on, x LTR feedback bitmask
+#                   x intra period                                        (16 configs)
 #             all   every preset above
 #
 # st and mt encode SWEEP_FRAMES (default 16, rounded up to 18-20 by looping) frames
@@ -78,6 +80,28 @@ SLICES=("1 2" "1 4" "2 3" "3 1500" "3 600")
 # preset's first draft: "26 401" and "10 401" produced byte-identical streams under
 # rc=2.) The constraint is the only axis both rc modes actually read.
 SL_ROWS=("26 401" "16 601" "10 501")
+
+# `ltr` rows: "<gop> <ltrfb>". bEnableLongTermReference is ON for all of them.
+#
+# Long-term reference had **no byte coverage at all** until Phase 6 session F: both
+# drivers hard-coded `bEnableLongTermReference = false`, so `LTRMarkProcess`,
+# `DeleteInvalidLTR`, `DeleteLTRFromLongList`, `HandleLTRMarkFeedback`,
+# `FilterLTRMarkingFeedback`, `WelsBuildRefList`'s long-reference arm and every
+# `pLongRefList` shift were unreachable — and the picture-id flip (T6.F1) rewrites
+# all of them. Session E's `sl` is the precedent, F60's silent divergence the reason.
+#
+# `ltrfb` is a bitmask over the two feedback packets a real application relays from
+# its decoder — 1 = ENCODER_LTR_MARKING_FEEDBACK, 2 = ENCODER_LTR_RECOVERY_REQUEST.
+# They are not decoration: without bit 1 `DeleteLTRFromLongList` never runs, and
+# without bit 2 `bReceivedT0LostFlag` is never set, so `WelsBuildRefList` never takes
+# its long-reference arm and `SetRefMbType` never takes its long half. Each of the
+# four values produces a *different* stream (measured: 223062 / 223075 / 229470 /
+# 236572 bytes at gop=0 on the 320x192 clip), so the axis is real, not inert.
+#
+# The `ltr` argument's own value is inert by design and 2 is spelled for honesty
+# rather than effect: `WelsCheckNumRefSetting` (au_set.cpp:92) resets iLTRRefNum to
+# LONG_TERM_REF_NUM = 2 for camera content whatever the caller asked for.
+LTR_ROWS=("0 0" "0 1" "0 2" "0 3" "8 0" "8 1" "8 2" "8 3")
 
 PASS=0; FAIL=0; FAILED=()
 
@@ -218,6 +242,24 @@ sweep_sl() {
   done
 }
 
+sweep_ltr() {
+  echo "-- preset: ltr"
+  local YUV W H gop fb name
+  for spec in "res/CiscoVT2people_160x96_6fps.yuv 160 96" \
+              "res/CiscoVT2people_320x192_12fps.yuv 320 192"; do
+    read -r YUV W H <<< "$spec"
+    name=$(basename "$YUV" .yuv)
+    # LTR state cycles over several GOPs — the mark/confirm/delete round trip needs
+    # more frames than st's 16 to complete even once.
+    loopfile "$YUV" "$W" "$H" 72
+    for row in "${LTR_ROWS[@]}"; do
+      read -r gop fb <<< "$row"
+      check "ltr $name gop=$gop fb=$fb" \
+            "$LOOP_PATH" "$W" "$H" "$LOOP_FRAMES" 26 1 "$gop" -1 0 0 1 1 0 2 4 "$fb"
+    done
+  done
+}
+
 sweep_qp() {
   echo "-- preset: qp"
   local YUV W H qp cabac
@@ -241,7 +283,8 @@ for preset in "$@"; do
     qp)  sweep_qp ;;
     def) sweep_def ;;
     sl)  sweep_sl ;;
-    all) sweep_st; sweep_mt; sweep_qp; sweep_def; sweep_sl ;;
+    ltr) sweep_ltr ;;
+    all) sweep_st; sweep_mt; sweep_qp; sweep_def; sweep_sl; sweep_ltr ;;
     *)   echo "unknown preset: $preset" >&2; exit 2 ;;
   esac
 done

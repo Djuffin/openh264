@@ -3,13 +3,14 @@
 #![allow(non_snake_case)]
 
 use openh264_rs::api::codec_api::*;
+use openh264_rs::encoder::wels_encoder_ext::{SLTRMarkingFeedback, SLTRRecoverRequest};
 use std::fs::File;
 use std::io::{Read, Write};
 
 fn main() {
     let a: Vec<String> = std::env::args().collect();
     if a.len() < 9 {
-        eprintln!("usage: rust_enc <src.yuv> <w> <h> <frames> <qp> <cabac> <gop> <out.264> [rcmode] [baseinit 0|1|2] [slicemode] [slicenum] [threads]");
+        eprintln!("usage: rust_enc <src.yuv> <w> <h> <frames> <qp> <cabac> <gop> <out.264> [rcmode] [baseinit 0|1|2] [slicemode] [slicenum] [threads] [complexity] [ltr] [ltrperiod] [ltrfb]");
         std::process::exit(1);
     }
     let src = &a[1];
@@ -41,6 +42,15 @@ fn main() {
     // Optional 14th: iComplexityMode. 0 LOW (default, and what every sweep preset
     // runs), 1 MEDIUM, 2 HIGH. See cxx_enc.cpp.
     let complexity: i32 = if a.len() > 14 { a[14].parse().unwrap() } else { 0 };
+    // Optional 15th: iLTRRefNum. 0 (default) leaves long-term reference OFF, which is
+    // what every preset before `ltr` ran; N > 0 turns bEnableLongTermReference on and
+    // asks for N long-term slots. See cxx_enc.cpp.
+    let ltr: i32 = if a.len() > 15 { a[15].parse().unwrap() } else { 0 };
+    // Optional 16th: iLtrMarkPeriod. 30 is FillDefault's.
+    let ltrperiod: i32 = if a.len() > 16 { a[16].parse().unwrap() } else { 30 };
+    // Optional 17th: LTR feedback bitmask. 1 = marking feedback, 2 = recovery
+    // request. See cxx_enc.cpp — the schedule is fixed and identical on both sides.
+    let ltrfb: i32 = if a.len() > 17 { a[17].parse().unwrap() } else { 0 };
 
     unsafe {
         let mut pEnc: *mut ISVCEncoder = std::ptr::null_mut();
@@ -89,9 +99,9 @@ fn main() {
         p.iMaxQp = 51;
         p.iMinQp = 0;
         p.uiMaxNalSize = 0;
-        p.bEnableLongTermReference = false;
-        p.iLTRRefNum = 0;
-        p.iLtrMarkPeriod = 30;
+        p.bEnableLongTermReference = ltr > 0;
+        p.iLTRRefNum = ltr;
+        p.iLtrMarkPeriod = ltrperiod as u32;
         p.iMultipleThreadIdc = threads as u16;
         p.bUseLoadBalancing = false;
         p.iLoopFilterDisableIdc = 0;
@@ -168,6 +178,10 @@ fn main() {
         let mut buf = vec![0u8; size];
 
         let mut coded = 0;
+
+        // See cxx_enc.cpp: the feedback must quote the encoder's own `uiIdrPicId`.
+
+        let mut idr_seen: u32 = 0;
         for f in 0..frames {
             if fsrc.read_exact(&mut buf).is_err() {
                 break;
@@ -211,6 +225,35 @@ fn main() {
                 f, info.eFrameType, info.iLayerNum, info.iFrameSizeInBytes
             );
             coded += 1;
+            if info.eFrameType == EVideoFrameType::videoFrameTypeIDR {
+                idr_seen += 1;
+            }
+
+            if (ltrfb & 1) != 0 && f >= 2 {
+                let mut fb = SLTRMarkingFeedback {
+                    uiFeedbackType: 4, // LTR_MARKING_SUCCESS
+                    uiIDRPicId: idr_seen,
+                    iLTRFrameNum: f - 1,
+                    iLayerId: 0,
+                };
+                (*pEnc).SetOption(
+                    EncoderOption::ENCODER_LTR_MARKING_FEEDBACK,
+                    &mut fb as *mut _ as *mut std::ffi::c_void,
+                );
+            }
+            if (ltrfb & 2) != 0 && f > 0 && (f % 8) == 5 {
+                let mut rq = SLTRRecoverRequest {
+                    uiFeedbackType: 1, // LTR_RECOVERY_REQUEST
+                    uiIDRPicId: idr_seen,
+                    iLastCorrectFrameNum: f - 2,
+                    iCurrentFrameNum: f,
+                    iLayerId: 0,
+                };
+                (*pEnc).SetOption(
+                    EncoderOption::ENCODER_LTR_RECOVERY_REQUEST,
+                    &mut rq as *mut _ as *mut std::ffi::c_void,
+                );
+            }
         }
         eprintln!("coded {} frames", coded);
         (*pEnc).Uninitialize();

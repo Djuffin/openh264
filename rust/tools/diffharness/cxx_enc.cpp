@@ -15,7 +15,7 @@
 
 int main (int argc, char** argv) {
   if (argc < 9) {
-    fprintf (stderr, "usage: %s <src.yuv> <w> <h> <frames> <qp> <cabac> <gop> <out.264> [rcmode] [baseinit 0|1|2] [slicemode] [slicenum] [threads]\n", argv[0]);
+    fprintf (stderr, "usage: %s <src.yuv> <w> <h> <frames> <qp> <cabac> <gop> <out.264> [rcmode] [baseinit 0|1|2] [slicemode] [slicenum] [threads] [complexity] [ltr] [ltrperiod] [ltrfb]\n", argv[0]);
     return 1;
   }
   const char* kpSrc    = argv[1];
@@ -49,6 +49,22 @@ int main (int argc, char** argv) {
   // 1 MEDIUM, 2 HIGH. Anything but LOW turns `bFastMode` off in the encoder and
   // selects the fine mode-decision family.
   const int   kiComplexity = (argc > 14) ? atoi (argv[14]) : 0;
+  // 15th: iLTRRefNum. 0 (default) leaves long-term reference OFF, which is what
+  // every preset before `ltr` ran; N > 0 turns bEnableLongTermReference on and asks
+  // for N long-term slots. It also grows the spatial picture pool
+  // (`kuiRefNumInTemporal = kuiLayerInTemporal + iLTRRefNum`).
+  const int   kiLtrRefNum = (argc > 15) ? atoi (argv[15]) : 0;
+  // 16th: iLtrMarkPeriod. 30 is FillDefault's. Small values mark far more often.
+  const int   kiLtrPeriod = (argc > 16) ? atoi (argv[16]) : 30;
+  // 17th: LTR feedback bitmask. 1 = send ENCODER_LTR_MARKING_FEEDBACK
+  // (LTR_MARKING_SUCCESS) after every frame from the third on; 2 = send
+  // ENCODER_LTR_RECOVERY_REQUEST every eighth frame. Both are what a real
+  // application relays from its decoder; without them `bLTRMarkingFlag` and
+  // `bReceivedT0LostFlag` are never set, so `HandleLTRMarkFeedback`'s marking arms,
+  // `DeleteLTRFromLongList` and `WelsBuildRefList`'s long-reference arm are
+  // unreachable. The values below are a fixed schedule, identical on both sides,
+  // which is all a differential test needs.
+  const int   kiLtrFb     = (argc > 17) ? atoi (argv[17]) : 0;
 
   ISVCEncoder* pEnc = NULL;
   if (WelsCreateSVCEncoder (&pEnc) != 0 || pEnc == NULL) {
@@ -96,9 +112,9 @@ int main (int argc, char** argv) {
   sParam.iMaxQp                     = 51;
   sParam.iMinQp                     = 0;
   sParam.uiMaxNalSize               = 0;
-  sParam.bEnableLongTermReference   = false;
-  sParam.iLTRRefNum                 = 0;
-  sParam.iLtrMarkPeriod             = 30;
+  sParam.bEnableLongTermReference   = (kiLtrRefNum > 0);
+  sParam.iLTRRefNum                 = kiLtrRefNum;
+  sParam.iLtrMarkPeriod             = kiLtrPeriod;
   sParam.iMultipleThreadIdc         = kiThreads;
   sParam.bUseLoadBalancing          = false;
   sParam.iLoopFilterDisableIdc      = 0;
@@ -190,6 +206,11 @@ int main (int argc, char** argv) {
 
   SFrameBSInfo sInfo;
   int iCoded = 0;
+  // The encoder's own `uiIdrPicId` counts coded IDRs, and the LTR feedback below has
+  // to quote it back or `FilterLTRMarkingFeedback` drops the packet. A real
+  // application learns it from the stream; both drivers count the same frame types,
+  // so counting is deterministic and identical on both sides.
+  unsigned int uiIdrSeen = 0;
   for (int f = 0; f < kiFrames; ++f) {
     if ((int) fread (pBuf, 1, kiSize, fSrc) != kiSize)
       break;
@@ -212,6 +233,28 @@ int main (int argc, char** argv) {
     fprintf (stderr, "frame %d: type=%d layers=%d bytes=%d\n",
              f, (int) sInfo.eFrameType, sInfo.iLayerNum, sInfo.iFrameSizeInBytes);
     ++iCoded;
+    if (sInfo.eFrameType == videoFrameTypeIDR)
+      ++uiIdrSeen;
+
+    if ((kiLtrFb & 1) && f >= 2) {
+      SLTRMarkingFeedback sFb;
+      memset (&sFb, 0, sizeof (sFb));
+      sFb.uiFeedbackType = LTR_MARKING_SUCCESS;
+      sFb.uiIDRPicId     = uiIdrSeen;
+      sFb.iLTRFrameNum   = f - 1;
+      sFb.iLayerId       = 0;
+      pEnc->SetOption (ENCODER_LTR_MARKING_FEEDBACK, &sFb);
+    }
+    if ((kiLtrFb & 2) && f > 0 && (f % 8) == 5) {
+      SLTRRecoverRequest sRq;
+      memset (&sRq, 0, sizeof (sRq));
+      sRq.uiFeedbackType       = LTR_RECOVERY_REQUEST;
+      sRq.uiIDRPicId           = uiIdrSeen;
+      sRq.iLastCorrectFrameNum = f - 2;
+      sRq.iCurrentFrameNum     = f;
+      sRq.iLayerId             = 0;
+      pEnc->SetOption (ENCODER_LTR_RECOVERY_REQUEST, &sRq);
+    }
   }
 
   fprintf (stderr, "coded %d frames\n", iCoded);
