@@ -59,6 +59,7 @@ use std::hint::black_box;
 use std::time::Instant;
 
 use openh264_rs::common::sad_common as sad;
+use openh264_rs::encoder::sample as satd;
 use openh264_rs::safe::plane::PlaneCursor;
 
 /// L1-resident, and stated: 64-byte stride over 4 KB is the residency a motion
@@ -144,6 +145,120 @@ macro_rules! bench_sad {
     }};
 }
 
+/// One SATD shape: raw kernel vs safe kernel, interleaved, median ratio.
+///
+/// Same protocol as `bench_sad!` — S1 interleaving, S3 residency and opaque
+/// inputs/outputs, S4's genuinely-raw other side. The only difference is the safe
+/// signature: the SATD kernels are not generic over the block shape, so the shape
+/// is the function rather than a const parameter.
+macro_rules! bench_satd {
+    ($name:literal, $raw:path, $safe:path, $a:expr, $b:expr) => {{
+        let mut ratios = Vec::with_capacity(ROUNDS);
+        let mut raws = Vec::with_capacity(ROUNDS);
+        let mut safes = Vec::with_capacity(ROUNDS);
+        for _ in 0..ROUNDS {
+            let t0 = Instant::now();
+            let mut acc0: i64 = 0;
+            for _ in 0..ITERS {
+                let s = stride();
+                let r = unsafe {
+                    $raw(
+                        black_box($a.as_ptr().add(ANCHOR)) as *mut u8, s,
+                        black_box($b.as_ptr().add(ANCHOR)) as *mut u8, s,
+                    )
+                };
+                acc0 = black_box(acc0 + r as i64);
+            }
+            let raw_ns = t0.elapsed().as_nanos() as f64 / ITERS as f64;
+
+            let t1 = Instant::now();
+            let mut acc1: i64 = 0;
+            for _ in 0..ITERS {
+                let s = stride() as usize;
+                let c1 = PlaneCursor::new(black_box(&$a[..]), ANCHOR, s);
+                let c2 = PlaneCursor::new(black_box(&$b[..]), ANCHOR, s);
+                let r = $safe(&c1, &c2);
+                acc1 = black_box(acc1 + r as i64);
+            }
+            let safe_ns = t1.elapsed().as_nanos() as f64 / ITERS as f64;
+
+            assert_eq!(acc0, acc1, concat!($name, ": raw and safe disagree"));
+            ratios.push(safe_ns / raw_ns);
+            raws.push(raw_ns);
+            safes.push(safe_ns);
+        }
+        let ratio = median(ratios);
+        println!(
+            "  {:<7} raw {:>6.2} ns   safe {:>6.2} ns   ratio {:>6.2}x",
+            $name, median(raws), median(safes), ratio
+        );
+        ($name, ratio)
+    }};
+}
+
+/// How many kernel calls one partition search makes against one pair of cursors.
+///
+/// The ledger's untested lead (perf_baseline.md, Parked): *per-call cursor
+/// construction was the measured cost, and callers building slices once per
+/// partition search is exactly what steps 2-3 make possible.* This models it —
+/// the two `PlaneCursor::new` calls move outside the inner loop, and the safe
+/// kernel is called `AMORT` times against them, as a diamond/cross search does
+/// against one reference window.
+const AMORT: usize = 8;
+
+/// The same shape, with cursor construction amortised over `AMORT` calls.
+macro_rules! bench_amort {
+    ($name:literal, $raw:path, $safecall:expr, $a:expr, $b:expr) => {{
+        let mut ratios = Vec::with_capacity(ROUNDS);
+        let mut raws = Vec::with_capacity(ROUNDS);
+        let mut safes = Vec::with_capacity(ROUNDS);
+        let iters = ITERS / AMORT;
+        for _ in 0..ROUNDS {
+            let t0 = Instant::now();
+            let mut acc0: i64 = 0;
+            for _ in 0..iters {
+                let s = stride();
+                for k in 0..AMORT {
+                    let r = unsafe {
+                        $raw(
+                            black_box($a.as_ptr().add(ANCHOR + k)) as *mut u8, s,
+                            black_box($b.as_ptr().add(ANCHOR)) as *mut u8, s,
+                        )
+                    };
+                    acc0 = black_box(acc0 + r as i64);
+                }
+            }
+            let raw_ns = t0.elapsed().as_nanos() as f64 / (iters * AMORT) as f64;
+
+            let t1 = Instant::now();
+            let mut acc1: i64 = 0;
+            for _ in 0..iters {
+                let s = stride() as usize;
+                // built ONCE per search, not once per candidate
+                let base = PlaneCursor::new(black_box(&$a[..]), ANCHOR, s);
+                let c2 = PlaneCursor::new(black_box(&$b[..]), ANCHOR, s);
+                for k in 0..AMORT {
+                    let c1 = base.advance(k as isize, 0);
+                    let r = $safecall(&c1, &c2);
+                    acc1 = black_box(acc1 + r as i64);
+                }
+            }
+            let safe_ns = t1.elapsed().as_nanos() as f64 / (iters * AMORT) as f64;
+
+            assert_eq!(acc0, acc1, concat!($name, " (amortised): raw and safe disagree"));
+            ratios.push(safe_ns / raw_ns);
+            raws.push(raw_ns);
+            safes.push(safe_ns);
+        }
+        let ratio = median(ratios);
+        println!(
+            "  {:<7} raw {:>6.2} ns   safe {:>6.2} ns   ratio {:>6.2}x",
+            $name, median(raws), median(safes), ratio
+        );
+        ($name, ratio)
+    }};
+}
+
 fn main() {
     println!();
     println!("SAD body cost at the shim boundary — Phase 4a parked-family re-attempt");
@@ -169,10 +284,48 @@ fn main() {
     println!();
     let worst = rows.iter().map(|r| r.1).fold(0.0_f64, f64::max);
     let best = rows.iter().map(|r| r.1).fold(f64::MAX, f64::min);
-    println!("  range {best:.2}x .. {worst:.2}x   (bar: <= 1.05x)");
+    println!("  SAD range {best:.2}x .. {worst:.2}x   (bar: <= 1.05x)");
     println!(
-        "  verdict: {}",
+        "  SAD verdict: {}",
         if worst <= 1.05 { "PARITY — re-land" } else { "over the bar — stays parked" }
     );
+
+    // ------------------------------------------------------------------ SATD
+    // T6.E5. `encoder/sample.rs`'s seven SATD kernels were parked in D-perf-4 **by
+    // projection** — "SATD = SAD + a Hadamard butterfly, strictly more work" — and
+    // have never had a measurement of their own. This is it.
+    println!();
+    println!("single-block SATD (never measured before — parked by projection at D-perf-4):");
+    let mut satd_rows: Vec<(&str, f64)> = Vec::new();
+    satd_rows.push(bench_satd!("16x16", satd::WelsSampleSatd16x16_c, satd::satd_16x16, a, b));
+    satd_rows.push(bench_satd!("16x8", satd::WelsSampleSatd16x8_c, satd::satd_16x8, a, b));
+    satd_rows.push(bench_satd!("8x16", satd::WelsSampleSatd8x16_c, satd::satd_8x16, a, b));
+    satd_rows.push(bench_satd!("8x8", satd::WelsSampleSatd8x8_c, satd::satd_8x8, a, b));
+    satd_rows.push(bench_satd!("8x4", satd::WelsSampleSatd8x4_c, satd::satd_8x4, a, b));
+    satd_rows.push(bench_satd!("4x8", satd::WelsSampleSatd4x8_c, satd::satd_4x8, a, b));
+    satd_rows.push(bench_satd!("4x4", satd::WelsSampleSatd4x4_c, satd::satd_4x4, a, b));
+    println!();
+    let sworst = satd_rows.iter().map(|r| r.1).fold(0.0_f64, f64::max);
+    let sbest = satd_rows.iter().map(|r| r.1).fold(f64::MAX, f64::min);
+    println!("  SATD range {sbest:.2}x .. {sworst:.2}x   (bar: <= 1.05x)");
+    println!(
+        "  SATD verdict: {}",
+        if sworst <= 1.05 { "PARITY — re-land" } else { "over the bar — stays parked" }
+    );
+
+    // ------------------------------------------------- cursors built once per search
+    println!();
+    println!("cursor construction amortised over {AMORT} calls (the ledger's untested lead):");
+    let mut am: Vec<(&str, f64)> = Vec::new();
+    am.push(bench_amort!("sad16", sad::WelsSampleSad16x16_c, sad::sample_sad::<16, 16>, a, b));
+    am.push(bench_amort!("sad8", sad::WelsSampleSad8x8_c, sad::sample_sad::<8, 8>, a, b));
+    am.push(bench_amort!("sad4", sad::WelsSampleSad4x4_c, sad::sample_sad::<4, 4>, a, b));
+    am.push(bench_amort!("satd16", satd::WelsSampleSatd16x16_c, satd::satd_16x16, a, b));
+    am.push(bench_amort!("satd8", satd::WelsSampleSatd8x8_c, satd::satd_8x8, a, b));
+    am.push(bench_amort!("satd4", satd::WelsSampleSatd4x4_c, satd::satd_4x4, a, b));
+    println!();
+    let aworst = am.iter().map(|r| r.1).fold(0.0_f64, f64::max);
+    let abest = am.iter().map(|r| r.1).fold(f64::MAX, f64::min);
+    println!("  amortised range {abest:.2}x .. {aworst:.2}x   (bar: <= 1.05x)");
     println!();
 }

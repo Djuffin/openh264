@@ -941,6 +941,84 @@ latent-UB finding in that one parked family (F10 three times, F14 once). It is
 the family that has spent longest uninstalled with raw bodies live, and that is
 not a coincidence.
 
+### Parked families — THIRD verdict, and the SATD debt is discharged
+
+**Both stay parked. Dated 2026-08-19, Phase 6 session E (T6.E5).** Same harness
+(`benches/sad_bodies_bench.rs`), same rules, two sections added: the SATD family's
+own measurement, and the ledger's untested slices-and-offsets lead.
+
+**1. The SATD measurement that was owed, and has been owed since Phase 4a.**
+`encoder/sample.rs`'s seven kernels had never been measured — the park was a
+projection off the SAD numbers ("SATD is SAD plus a Hadamard butterfly"). It has
+now been measured, against the raw `WelsSampleSatd*_c` bodies, interleaved, median
+of seven rounds, `assert_eq!` on every accumulator so the two sides are proven
+equal at every shape:
+
+| shape | 16x16 | 16x8 | 8x16 | 8x8 | 8x4 | 4x8 | 4x4 |
+|---|---|---|---|---|---|---|---|
+| raw ns | 77.63 | 38.01 | 48.90 | 19.28 | 13.43 | 10.42 | 4.94 |
+| safe ns | 133.29 | 66.61 | 66.57 | 33.20 | 17.63 | 17.91 | 20.42 |
+| **safe / raw** | **1.71x** | **1.77x** | **1.36x** | **1.71x** | **1.46x** | **1.71x** | **4.05x** |
+
+Bar is <=1.05x. Range **1.36x - 4.05x**. **The debt is discharged and the projection
+was right in verdict**, though not in shape: the SATD ratios are *flatter* than the
+SAD ones (1.4-1.8x across six of seven shapes against SAD's 1.3-5.7x), because a
+bigger body amortises a fixed per-call cost better. 4x4 is the outlier at 4.05x, and
+it is the same cliff the second verdict named — per-row cost, falling off at W = 4.
+
+**2. The SAD family, re-measured on the same run** (single-block framing, unchanged
+protocol), against the second verdict's row:
+
+| shape | 16x16 | 16x8 | 8x16 | 8x8 | 8x4 | 4x8 | 4x4 |
+|---|---|---|---|---|---|---|---|
+| 2026-08-10 | 1.41x | 1.51x | 2.38x | 2.30x | 3.89x | 4.89x | 4.66x |
+| **2026-08-19** | **1.30x** | **1.50x** | **2.30x** | **2.30x** | **4.85x** | **4.78x** | **5.68x** |
+
+Reproduced within the harness's stated ~3% at five of seven shapes; 8x4 and 4x4 read
+worse. Nothing moved toward the bar.
+
+**3. The untested lead is now tested, and it does not close the gap.** The ledger's
+standing note was: *per-call cursor construction was the measured cost, and callers
+building slices once per partition search is exactly what a converted call site makes
+possible.* Session E's steps 2-3 made those call sites, so the harness models the
+result — `PlaneCursor::new` hoisted out of the candidate loop, one pair of cursors per
+search, `AMORT = 8` candidates rebased off it, monomorphic direct calls with no
+`Option<fn>` table anywhere:
+
+| | sad16 | sad8 | sad4 | satd16 | satd8 | satd4 |
+|---|---|---|---|---|---|---|
+| **safe / raw, amortised** | **2.15x** | **6.55x** | **4.07x** | **1.65x** | **1.42x** | **1.67x** |
+
+Read this within its own column and not against the single-block table: the raw side
+moves too (an eight-call inner loop pipelines, so `sad16` raw goes 17.79 -> 9.86 ns),
+so the two framings share no denominator. Within the framing, the range is
+**1.42x - 6.55x** and the bar is untouched.
+
+**And the reason is worth more than the numbers.** `PlaneCursor::advance` is
+`Self::new(self.buf, idx(...), self.stride)` — it *re-runs the constructor's two
+asserts*. So "build the cursor once per search" does not remove the per-candidate
+cost at all; it moves it from construction to rebasing, at the same price. That is
+why SATD improves under amortisation (a body 4-16x larger absorbs a fixed cost) and
+SAD does not (`sad8` is ~3 ns of work; nothing absorbs anything).
+
+**VERDICT: third park, both families.** Re-attempt point named: **Phase 9**, and the
+thing to build there is not another call-site rearrangement. It is a kernel that
+takes the base slice plus integer offsets and pays **one** bounds check for the whole
+block — the "real slices-and-offsets kernel" the second verdict asked for, which
+neither the second nor this third attempt has actually written. Both attempts so far
+have re-arranged *callers* around a cursor whose per-anchor validation is the cost;
+the third re-attempt has to change the *kernel signature* instead.
+
+Two leads for whoever opens it:
+
+- **`advance` is the load-bearing cost, and it is fixable in isolation.** An
+  `advance_unchecked`, or an `advance` that proves the new anchor from the old one's
+  already-validated bounds, would be measurable in an afternoon and would move every
+  row in the amortised table.
+- **Start at 4x4 and 8x4.** They are the worst ratios in every table this ledger has
+  ever printed (4.66x, 5.68x, 4.05x), they are the shapes motion estimation calls
+  most, and 16x16 has been within 1.3-1.4x for three verdicts running.
+
 ---
 
 ## Phase 3 — the bitstream layer (2026-08-10 →)
