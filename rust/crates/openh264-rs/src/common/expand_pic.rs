@@ -184,27 +184,12 @@ pub unsafe extern "C" fn ExpandPictureChroma_c(pDst: *mut u8, kiStride: i32, kiP
     }
 }
 
-pub unsafe fn ExpandReferencingPicture(pData: &[*mut u8], iWidth: i32, iHeight: i32, iStride: &[i32]) {
-    let pPicY = pData[0];
-    let pPicCb = pData[1];
-    let pPicCr = pData[2];
-    let kiWidthY = iWidth;
-    let kiHeightY = iHeight;
-    let kiWidthUV = kiWidthY >> 1;
-    let kiHeightUV = kiHeightY >> 1;
-
-    if !pPicY.is_null() {
-        ExpandPictureLuma_c(pPicY, iStride[0], kiWidthY, kiHeightY);
-    }
-    // Both former table slots held `ExpandPictureChroma_c`, so the C++'s
-    // `pExpChrom[kbChrAligned]` and its `else` branch are one call here. The
-    // alignment test is what would pick a `_sse2` variant in a SIMD build; it
-    // selects nothing in this port, which is why the index is gone rather than
-    // computed and discarded.
-    if !pPicCb.is_null() {
-        ExpandPictureChroma_c(pPicCb, iStride[1], kiWidthUV, kiHeightUV);
-    }
-    if !pPicCr.is_null() {
-        ExpandPictureChroma_c(pPicCr, iStride[2], kiWidthUV, kiHeightUV);
-    }
-}
+// **`ExpandReferencingPicture` stood here and has no caller left (T6.F4, S18).**
+// It was the dispatcher over `ExpandPictureLuma_c`/`ExpandPictureChroma_c`, taking
+// three raw plane origins because it was shared by two codecs whose pictures did not
+// own their planes. Both do now — `decoder::picture::SPicture::expand_as_reference`
+// (T5.AC5) and `encoder::picture::SPicture::expand_as_reference` (T6.F4) each hand
+// `expand_picture` the plane's own allocation, so nothing rebuilds an allocation out
+// of a mid-plane pointer any more. The two `_c` kernels stay: they are the C-shaped
+// subjects `tests/kernels_differential_phase2.rs` runs against the reference, and
+// `expand_shim_span` with them.

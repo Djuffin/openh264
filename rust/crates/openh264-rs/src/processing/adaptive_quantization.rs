@@ -208,25 +208,24 @@ impl CAdaptiveQuantization {
         let iCurStride = pSrcPixMap.iStride[0];
 
         let mut pMotionTexture = self.m_sAdaptiveQuantParam.pMotionTextureUnit;
-        let pVaaCalcResults: *const SVAACalcResult = calc;
 
         // Reuse the VAA statistics when they were computed over exactly this pair
         // of pictures; otherwise recompute per macroblock.
-        if (*pVaaCalcResults).pRefY as *const u8 == pRefFrameY
-            && (*pVaaCalcResults).pCurY as *const u8 == pCurFrameY
+        if calc.pRefY as *const u8 == pRefFrameY
+            && calc.pCurY as *const u8 == pCurFrameY
         {
             let mut iMbIndex = 0isize;
             for _j in 0..iMbHeight {
                 for _i in 0..iMbWidth {
-                    let sad8x8 = &*(*pVaaCalcResults).pSad8x8.offset(iMbIndex);
+                    let sad8x8 = &calc.pSad8x8[(iMbIndex) as usize];
                     let mut iSumDiff = sad8x8[0];
                     iSumDiff += sad8x8[1];
                     iSumDiff += sad8x8[2];
                     iSumDiff += sad8x8[3];
 
-                    let iSQDiff = *(*pVaaCalcResults).pSsd16x16.offset(iMbIndex);
-                    let mut uiSum = *(*pVaaCalcResults).pSum16x16.offset(iMbIndex);
-                    let iSQSum = *(*pVaaCalcResults).pSumOfSquare16x16.offset(iMbIndex);
+                    let iSQDiff = calc.pSsd16x16[(iMbIndex) as usize];
+                    let mut uiSum = calc.pSum16x16[(iMbIndex) as usize];
+                    let iSQSum = calc.pSumOfSquare16x16[(iMbIndex) as usize];
 
                     // Every one of these is `int32_t` in C++ and the result is
                     // stored into a `uint16_t` field, so the truncation is at the

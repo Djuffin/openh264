@@ -188,15 +188,20 @@ assert_size!(SWelsMD, 4000);
 // blocks this embeds (`sAdaptiveQuantParam`, `sComplexityAnalysisParam` — the
 // VAA result is handed to each plugin at its `Process` call instead), 8 bytes
 // each: 248. `SVAAFrameInfoExt` embeds this one and moved by the same 16.
-assert_size!(SVAAFrameInfo, 248);
-assert_size!(SVAAFrameInfoExt, 1264);
+// **T6.F3**: +104. The six per-frame result arrays are the block's own `Vec`s, so
+// six pointers become six fat pointers (+48) and `pVaaBackgroundMbFlag` a seventh
+// (+16); `repr(C)` comes off with them and the compiler repacks. **352, measured.**
+assert_size!(SVAAFrameInfo, 352);
+// **T6.F3**: +104, all of it its embedded `SVAAFrameInfo`. **1368, measured.**
+assert_size!(SVAAFrameInfoExt, 1368);
 // SSliceThreading is deliberately NOT asserted. C++ (mt_defs.h:68) embeds
 // WELS_EVENT (pthread_cond_t, 48 B) and WELS_MUTEX (pthread_mutex_t, 64 B) by
 // value, reaching 1256 bytes on darwin; those sizes are libc-specific, and this
 // port models the primitives as opaque handles. Nothing crosses a C ABI here, so
 // the field-for-field size correspondence that holds for the codec's own structs
 // does not apply. Revisit if the threading types are ever given real bodies.
-assert_size!(SVAACalcResult, 72);
+// **T6.F3**: +96, six owned arrays where six pointers were. **168, measured.**
+assert_size!(SVAACalcResult, 168);
 assert_size!(SScrollDetectionParam, 32);
 // 40 and 64 in the C++; each lost its stored `pCalcResult` pointer at Phase 6
 // session B (see `SVAAFrameInfo` above): 32 and 56, measured.

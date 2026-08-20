@@ -148,15 +148,11 @@ impl CBackgroundDetection {
     }
 
     /// `CBackgroundDetection::GetOUParameters` — `BackgroundDetection.cpp:114`.
-    unsafe fn GetOUParameters(
-        sVaaCalcInfo: *const SVAACalcResult,
-        iMbIndex: i32,
-        pBgdOU: &mut SBackgroundOU,
-    ) {
-        let idx = iMbIndex as isize;
-        let iSubSAD = *(*sVaaCalcInfo).pSad8x8.offset(idx);
-        let iSubSD = *(*sVaaCalcInfo).pSumOfDiff8x8.offset(idx);
-        let iSubMAD = *(*sVaaCalcInfo).pMad8x8.offset(idx);
+    fn GetOUParameters(sVaaCalcInfo: &SVAACalcResult, iMbIndex: i32, pBgdOU: &mut SBackgroundOU) {
+        let idx = iMbIndex as usize;
+        let iSubSAD = sVaaCalcInfo.pSad8x8[idx];
+        let iSubSD = sVaaCalcInfo.pSumOfDiff8x8[idx];
+        let iSubMAD = sVaaCalcInfo.pMad8x8[idx];
 
         pBgdOU.iSD = iSubSD[0] + iSubSD[1] + iSubSD[2] + iSubSD[3];
         pBgdOU.iSAD = iSubSAD[0] + iSubSAD[1] + iSubSAD[2] + iSubSAD[3];
@@ -181,14 +177,13 @@ impl CBackgroundDetection {
         let iPicWidthInOU = self.m_BgdParam.iBgdWidth >> LOG2_BGD_OU_SIZE;
         let iPicHeightInOU = self.m_BgdParam.iBgdHeight >> LOG2_BGD_OU_SIZE;
         let iPicWidthInMb = (15 + self.m_BgdParam.iBgdWidth) >> 4;
-        let pCalcRes: *const SVAACalcResult = calc;
 
         let mut ou = 0usize;
         for j in 0..iPicHeightInOU {
             for i in 0..iPicWidthInOU {
                 let pBackgroundOU = &mut self.m_BgdParam.pOU_array[ou];
                 Self::GetOUParameters(
-                    pCalcRes,
+                    calc,
                     (j * iPicWidthInMb + i) << (LOG2_BGD_OU_SIZE - LOG2_MB_SIZE),
                     pBackgroundOU,
                 );

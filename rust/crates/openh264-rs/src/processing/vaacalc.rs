@@ -649,77 +649,63 @@ impl CVAACalculation {
         if pCurData.is_null() || pRefData.is_null() {
             return RET_INVALIDPARAM;
         }
-        let pResult: *mut SVAACalcResult = result;
 
-        (*pResult).pCurY = pCurData;
-        (*pResult).pRefY = pRefData;
+        result.pCurY = pCurData;
+        result.pRefY = pRefData;
+
+        // **T6.F3**: the five `VAACalc*_c` shims stood here, each handed the six out
+        // arrays as bare pointers and each rebuilding a slice over them with
+        // `from_raw_parts_mut` and a length it re-derived. The arrays are the VAA
+        // block's own `Vec`s now, so the safe kernels underneath those shims are
+        // called *directly* and the length is the `Vec`'s. The shims stay: they are
+        // the C-ABI-shaped subjects `tests/kernels_differential_phase2.rs` runs
+        // against the reference implementation, and that is what they are for.
+        //
+        // The two planes still arrive as raw roots (`SPicture::data_ptr`), so they are
+        // the one `from_raw_parts` left — over `vaa_span`, the exact reach the walk
+        // has, which the same differential test pins.
+        let span = vaa_span(iPicWidth, iPicHeight, iPicStride);
+        let cur = core::slice::from_raw_parts(pCurData, span);
+        let refp = core::slice::from_raw_parts(pRefData, span);
 
         // `vaacalculation.cpp:135` — the same nesting, in the same order.
-        if self.m_sCalcParam.iCalcBgd {
+        result.iFrameSad = if self.m_sCalcParam.iCalcBgd {
             if self.m_sCalcParam.iCalcSsd {
-                VAACalcSadSsdBgd_c(
-                    pCurData,
-                    pRefData,
-                    iPicWidth,
-                    iPicHeight,
-                    iPicStride,
-                    &mut (*pResult).iFrameSad as *mut i32,
-                    (*pResult).pSad8x8 as *mut i32,
-                    (*pResult).pSum16x16,
-                    (*pResult).pSumOfSquare16x16,
-                    (*pResult).pSsd16x16,
-                    (*pResult).pSumOfDiff8x8 as *mut i32,
-                    (*pResult).pMad8x8 as *mut u8,
-                );
+                let SVAACalcResult {
+                    pSad8x8,
+                    pSum16x16,
+                    pSumOfSquare16x16,
+                    pSsd16x16,
+                    pSumOfDiff8x8,
+                    pMad8x8,
+                    ..
+                } = result;
+                vaa_calc_sad_ssd_bgd(
+                    cur, refp, iPicWidth, iPicHeight, iPicStride,
+                    pSad8x8, pSum16x16, pSumOfSquare16x16, pSsd16x16, pSumOfDiff8x8, pMad8x8,
+                )
             } else {
-                VAACalcSadBgd_c(
-                    pCurData,
-                    pRefData,
-                    iPicWidth,
-                    iPicHeight,
-                    iPicStride,
-                    &mut (*pResult).iFrameSad as *mut i32,
-                    (*pResult).pSad8x8 as *mut i32,
-                    (*pResult).pSumOfDiff8x8 as *mut i32,
-                    (*pResult).pMad8x8 as *mut u8,
-                );
+                let SVAACalcResult { pSad8x8, pSumOfDiff8x8, pMad8x8, .. } = result;
+                vaa_calc_sad_bgd(
+                    cur, refp, iPicWidth, iPicHeight, iPicStride,
+                    pSad8x8, pSumOfDiff8x8, pMad8x8,
+                )
             }
         } else if self.m_sCalcParam.iCalcSsd {
-            VAACalcSadSsd_c(
-                pCurData,
-                pRefData,
-                iPicWidth,
-                iPicHeight,
-                iPicStride,
-                &mut (*pResult).iFrameSad as *mut i32,
-                (*pResult).pSad8x8 as *mut i32,
-                (*pResult).pSum16x16,
-                (*pResult).pSumOfSquare16x16,
-                (*pResult).pSsd16x16,
-            );
+            let SVAACalcResult { pSad8x8, pSum16x16, pSumOfSquare16x16, pSsd16x16, .. } = result;
+            vaa_calc_sad_ssd(
+                cur, refp, iPicWidth, iPicHeight, iPicStride,
+                pSad8x8, pSum16x16, pSumOfSquare16x16, pSsd16x16,
+            )
         } else if self.m_sCalcParam.iCalcVar {
-            VAACalcSadVar_c(
-                pCurData,
-                pRefData,
-                iPicWidth,
-                iPicHeight,
-                iPicStride,
-                &mut (*pResult).iFrameSad as *mut i32,
-                (*pResult).pSad8x8 as *mut i32,
-                (*pResult).pSum16x16,
-                (*pResult).pSumOfSquare16x16,
-            );
+            let SVAACalcResult { pSad8x8, pSum16x16, pSumOfSquare16x16, .. } = result;
+            vaa_calc_sad_var(
+                cur, refp, iPicWidth, iPicHeight, iPicStride,
+                pSad8x8, pSum16x16, pSumOfSquare16x16,
+            )
         } else {
-            VAACalcSad_c(
-                pCurData,
-                pRefData,
-                iPicWidth,
-                iPicHeight,
-                iPicStride,
-                &mut (*pResult).iFrameSad as *mut i32,
-                (*pResult).pSad8x8 as *mut i32,
-            );
-        }
+            vaa_calc_sad(cur, refp, iPicWidth, iPicHeight, iPicStride, &mut result.pSad8x8)
+        };
         RET_SUCCESS
     }
 }

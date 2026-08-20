@@ -118,8 +118,7 @@ impl CComplexityAnalysis {
         pRefPixMap: &SPixMap,
         calc: &SVAACalcResult,
     ) {
-        let pVaaCalcResults: *const SVAACalcResult = calc;
-        self.m_sComplexityAnalysisParam.iFrameComplexity = (*pVaaCalcResults).iFrameSad as i64;
+        self.m_sComplexityAnalysisParam.iFrameComplexity = calc.iFrameSad as i64;
 
         if self.m_sComplexityAnalysisParam.iCalcBgd {
             //BGD control
@@ -150,7 +149,6 @@ impl CComplexityAnalysis {
 
         let pBackgroundMbFlag = self.m_sComplexityAnalysisParam.pBackgroundMbFlag;
         let uiRefMbType = self.m_sComplexityAnalysisParam.uiRefMbType;
-        let pVaaCalcResults: *const SVAACalcResult = calc;
         let pGomForegroundBlockNum = self.m_sComplexityAnalysisParam.pGomForegroundBlockNum;
 
         let mut uiFrameSad: u32 = 0;
@@ -163,7 +161,7 @@ impl CComplexityAnalysis {
                     || IS_INTRA(*uiRefMbType.offset(i as isize))
                 {
                     *pGomForegroundBlockNum.offset(j as isize) += 1;
-                    let sad8x8 = &*(*pVaaCalcResults).pSad8x8.offset(i as isize);
+                    let sad8x8 = &calc.pSad8x8[(i as isize) as usize];
                     uiFrameSad = uiFrameSad.wrapping_add(sad8x8[0] as u32);
                     uiFrameSad = uiFrameSad.wrapping_add(sad8x8[1] as u32);
                     uiFrameSad = uiFrameSad.wrapping_add(sad8x8[2] as u32);
@@ -196,7 +194,6 @@ impl CComplexityAnalysis {
 
         let pBackgroundMbFlag = self.m_sComplexityAnalysisParam.pBackgroundMbFlag;
         let uiRefMbType = self.m_sComplexityAnalysisParam.uiRefMbType;
-        let pVaaCalcResults: *const SVAACalcResult = calc;
         let pGomForegroundBlockNum = self.m_sComplexityAnalysisParam.pGomForegroundBlockNum;
         let pGomComplexity = self.m_sComplexityAnalysisParam.pGomComplexity;
 
@@ -230,7 +227,7 @@ impl CComplexityAnalysis {
                         && !IS_INTRA(*uiRefMbType.offset(i as isize));
                     if !bExceptBackground || !uiBackgroundMbFlag {
                         *pGomForegroundBlockNum.offset(j as isize) += 1;
-                        let sad8x8 = &*(*pVaaCalcResults).pSad8x8.offset(i as isize);
+                        let sad8x8 = &calc.pSad8x8[(i as isize) as usize];
                         uiGomSad = uiGomSad.wrapping_add(sad8x8[0] as u32);
                         uiGomSad = uiGomSad.wrapping_add(sad8x8[1] as u32);
                         uiGomSad = uiGomSad.wrapping_add(sad8x8[2] as u32);
@@ -268,7 +265,6 @@ impl CComplexityAnalysis {
         let iMbNumInGom = self.m_sComplexityAnalysisParam.iMbNumInGom;
         let iGomMbNum = (iMbNum + iMbNumInGom - 1) / iMbNumInGom;
 
-        let pVaaCalcResults: *const SVAACalcResult = calc;
         let pGomComplexity = self.m_sComplexityAnalysisParam.pGomComplexity;
         let mut uiFrameSad: u32 = 0;
 
@@ -290,9 +286,9 @@ impl CComplexityAnalysis {
             loop {
                 for i in iMbStartIndex..iMbEndIndex {
                     uiSampleSum = uiSampleSum
-                        .wrapping_add(*(*pVaaCalcResults).pSum16x16.offset(i as isize) as u32);
+                        .wrapping_add(calc.pSum16x16[(i as isize) as usize] as u32);
                     uiSquareSum = uiSquareSum.wrapping_add(
-                        *(*pVaaCalcResults).pSumOfSquare16x16.offset(i as isize) as u32,
+                        calc.pSumOfSquare16x16[(i as isize) as usize] as u32,
                     );
                 }
 

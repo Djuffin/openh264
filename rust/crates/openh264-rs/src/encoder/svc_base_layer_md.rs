@@ -893,7 +893,7 @@ pub unsafe fn WelsMdInterInit(
         pMbCache,
         pCurMb,
         kiMbWidth,
-        (*(*pEncCtx).pVaa).pVaaBackgroundMbFlag.offset(kiMbXY as isize),
+        (*(*pEncCtx).pVaa).pVaaBackgroundMbFlag.as_mut_ptr().add(kiMbXY as usize),
         &layer_dec_pic_mut(pCurLayer)
             .expect("the layer's reconstruction picture is bound")
             .pMbSkipSad,
@@ -1299,14 +1299,12 @@ pub unsafe extern "C" fn WelsMdInterFinePartitionVaa(
         (*(*pEncCtx).pVaa)
             .sVaaCalcInfo
             .pSad8x8
-            .offset((*pCurMb).iMbXY as isize) as *mut i32,
+            .as_mut_ptr()
+            .add((*pCurMb).iMbXY as usize) as *mut i32,
     );
 
     if crate::encoder::dump_enabled(&FP_DUMP, "OH264_FPDUMP") {
-        let sad = *(*(*pEncCtx).pVaa)
-            .sVaaCalcInfo
-            .pSad8x8
-            .offset((*pCurMb).iMbXY as isize);
+        let sad = (&(*(*pEncCtx).pVaa).sVaaCalcInfo.pSad8x8)[(*pCurMb).iMbXY as usize];
         eprintln!(
             "FP mb={:3} sign={:2} best={:7} sad8x8={},{},{},{}",
             (*pCurMb).iMbXY,

@@ -55,17 +55,14 @@ use std::mem::size_of;
 use crate::{
     EUsageType, SEncParamExt, SSourcePicture, SSpatialLayerConfig, VideoFormat,
 };
-use crate::common::memory_align::CMemoryAlign;
 use crate::encoder::encoder_ext::{PADDING_LENGTH, WELS_ALIGN};
 use crate::encoder::param_svc::{MB_HEIGHT_LUMA, MB_WIDTH_LUMA};
 use crate::encoder::encoder_context::SMVUnitXY;
 
-/// Allocation tag for `CMemoryAlign`; the C++ tags are diagnostic strings only.
-macro_rules! tag {
-    ($s:literal) => {
-        concat!($s, "\0").as_ptr() as *const c_char
-    };
-}
+// **The `tag!` macro stood here** and it has no use left: `CMemoryAlign` allocated
+// six things for a picture and one for the scaled slot, and since T6.F2 it allocates
+// none of them (T6.F3 took the VAA block the same way). The tags were diagnostic
+// strings for an allocator this module no longer calls.
 
 // ============================================================================
 // Constants
@@ -319,17 +316,23 @@ impl Default for SSceneChangeResult {
     }
 }
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug)]
 pub struct SVAACalcResult {
+    /// The two plane roots the walk reads. Still raw, and Phase 9's: they are
+    /// `SPicture::data_ptr` cursors, handed over per frame by `VaaCalculation`.
     pub pCurY: *mut u8,
     pub pRefY: *mut u8,
-    pub pSad8x8: *mut [i32; 4],
-    pub pSsd16x16: *mut i32,
-    pub pSum16x16: *mut i32,
-    pub pSumOfSquare16x16: *mut i32,
-    pub pSumOfDiff8x8: *mut [i32; 4],
-    pub pMad8x8: *mut [u8; 4],
+    /// **The six per-frame result arrays, owned since T6.F3.** They were six
+    /// `WelsMallocz` blocks `RequestMemorySvc` cut and `FreeMemorySvc` released one
+    /// at a time, reachable only through this struct; each is one entry per
+    /// macroblock, and the three that only the background-detection path fills are
+    /// **empty** rather than null when it is off (`bEnableBackgroundDetection`).
+    pub pSad8x8: Vec<[i32; 4]>,
+    pub pSsd16x16: Vec<i32>,
+    pub pSum16x16: Vec<i32>,
+    pub pSumOfSquare16x16: Vec<i32>,
+    pub pSumOfDiff8x8: Vec<[i32; 4]>,
+    pub pMad8x8: Vec<[u8; 4]>,
     pub iFrameSad: i32,
 }
 
@@ -338,12 +341,12 @@ impl Default for SVAACalcResult {
         Self {
             pCurY: std::ptr::null_mut(),
             pRefY: std::ptr::null_mut(),
-            pSad8x8: std::ptr::null_mut(),
-            pSsd16x16: std::ptr::null_mut(),
-            pSum16x16: std::ptr::null_mut(),
-            pSumOfSquare16x16: std::ptr::null_mut(),
-            pSumOfDiff8x8: std::ptr::null_mut(),
-            pMad8x8: std::ptr::null_mut(),
+            pSad8x8: Vec::new(),
+            pSsd16x16: Vec::new(),
+            pSum16x16: Vec::new(),
+            pSumOfSquare16x16: Vec::new(),
+            pSumOfDiff8x8: Vec::new(),
+            pMad8x8: Vec::new(),
             iFrameSad: 0,
         }
     }
@@ -466,8 +469,7 @@ impl Default for SComplexityAnalysisScreenParam {
     }
 }
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug)]
 pub struct SVAAFrameInfo {
     pub sVaaCalcInfo: SVAACalcResult,
     pub sAdaptiveQuantParam: SAdaptiveQuantizationParam,
@@ -485,13 +487,47 @@ pub struct SVAAFrameInfo {
     pub pRefV: *mut u8,
     pub pCurV: *mut u8,
 
-    pub pVaaBackgroundMbFlag: *mut i8,
+    /// One byte per macroblock, **owned since T6.F3** — `RequestMemorySvc`'s
+    /// seventh and last `WelsMallocz` for the VAA block.
+    pub pVaaBackgroundMbFlag: Vec<i8>,
     pub uiValidLongTermPicIdx: u8,
     pub uiMarkLongTermPicIdx: u8,
 
     pub eSceneChangeIdc: ESceneChangeIdc,
     pub bSceneChangeFlag: bool,
     pub bIdrPeriodFlag: bool,
+}
+
+impl SVAAFrameInfo {
+    /// `RequestMemorySvc`'s VAA block, `encoder_ext.cpp:1712-1760`, as a constructor.
+    ///
+    /// The C++ takes the struct from `WelsMallocz` and then cuts seven more blocks
+    /// out of `CMemoryAlign` for its per-frame result arrays, each sized
+    /// `iCountMaxMbNum`; here the struct is a `Box` and the seven are its own `Vec`s
+    /// (S21 — a `Vec` field in a zeroed block is UB at its first drop, so the
+    /// construction has to change before the ownership can).
+    ///
+    /// `bEnableBackgroundDetection` decides whether the last three exist at all, as
+    /// it decides in the C++: `pSumOfDiff8x8` and `pMad8x8` are allocated only under
+    /// it. **Empty is the port's spelling of that null.**
+    ///
+    /// **F56**: every other field's value is the zeroed block's, which is what
+    /// `Default` already spells — and here `Default` *is* the zero image (no field of
+    /// this struct is deliberately non-zero), so it is used rather than re-spelled.
+    pub fn new(iCountMaxMbNum: i32, bEnableBackgroundDetection: bool) -> Box<SVAAFrameInfo> {
+        let n = iCountMaxMbNum.max(0) as usize;
+        let mut p = Box::new(SVAAFrameInfo::default());
+        p.pVaaBackgroundMbFlag = vec![0i8; n];
+        p.sVaaCalcInfo.pSad8x8 = vec![[0i32; 4]; n];
+        p.sVaaCalcInfo.pSsd16x16 = vec![0i32; n];
+        p.sVaaCalcInfo.pSum16x16 = vec![0i32; n];
+        p.sVaaCalcInfo.pSumOfSquare16x16 = vec![0i32; n];
+        if bEnableBackgroundDetection {
+            p.sVaaCalcInfo.pSumOfDiff8x8 = vec![[0i32; 4]; n];
+            p.sVaaCalcInfo.pMad8x8 = vec![[0u8; 4]; n];
+        }
+        p
+    }
 }
 
 impl Default for SVAAFrameInfo {
@@ -510,7 +546,7 @@ impl Default for SVAAFrameInfo {
             pCurU: std::ptr::null_mut(),
             pRefV: std::ptr::null_mut(),
             pCurV: std::ptr::null_mut(),
-            pVaaBackgroundMbFlag: std::ptr::null_mut(),
+            pVaaBackgroundMbFlag: Vec::new(),
             uiValidLongTermPicIdx: 0,
             uiMarkLongTermPicIdx: 0,
             eSceneChangeIdc: ESceneChangeIdc::SIMILAR_SCENE,
@@ -520,8 +556,9 @@ impl Default for SVAAFrameInfo {
     }
 }
 
+// SCREEN_CONTENT(dormant: Phase 10) — see `SVAAFrameInfoExt_t`.
 #[repr(C)]
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug)]
 pub struct SVAAFrameInfoExt {
     pub sVaaFrameInfo: SVAAFrameInfo,
     pub sComplexityScreenParam: SComplexityAnalysisScreenParam,
@@ -730,9 +767,8 @@ pub unsafe fn JudgeNeedOfScaling(
 /// `pMbSkipSad`. It also used Rust's global allocator where the caller frees through
 /// `CMemoryAlign`.
 ///
-/// # Safety
-/// `pMa` must be a valid `CMemoryAlign`. The returned picture must be released with
-/// [`FreePicture`] against the same allocator.
+/// **Safe since T6.F2**: the picture owns every byte it has, so there is no allocator
+/// to be valid and no free contract to honour — dropping the `Box` releases it.
 pub fn AllocPicture(
     kiWidth: i32,
     kiHeight: i32,
@@ -759,7 +795,6 @@ pub fn AllocPicture(
 pub unsafe fn WelsInitScaledPic(
     pParam: *mut SWelsSvcCodingParam,
     pScaledPicture: *mut Scaled_Picture,
-    pMemoryAlign: *mut CMemoryAlign,
 ) -> i32 {
     let bInputPicNeedScaling = JudgeNeedOfScaling(pParam, pScaledPicture);
     if bInputPicNeedScaling {
@@ -993,7 +1028,7 @@ impl CWelsPreProcess {
 
         FreeScaledPic(&mut self.m_sScaledPicture);
         self.InitLastSpatialPictures(pCtx);
-        WelsInitScaledPic((*pCtx).pSvcParam, &mut self.m_sScaledPicture, (*pCtx).pMemAlign)
+        WelsInitScaledPic((*pCtx).pSvcParam, &mut self.m_sScaledPicture)
     }
 
     pub unsafe fn AllocSpatialPictures(
@@ -1361,13 +1396,13 @@ impl CWelsPreProcess {
 
         if crate::encoder::dump_enabled(&VP_DUMP, "OH264_VPDUMP")
             && (*pCtx).eSliceType == EWelsSliceType::P_SLICE
-            && !(*(*pCtx).pVaa).pVaaBackgroundMbFlag.is_null()
-            && !(*(*pCtx).pVaa).sVaaCalcInfo.pSad8x8.is_null()
-            && !(*(*pCtx).pVaa).sVaaCalcInfo.pSumOfDiff8x8.is_null()
-            && !(*(*pCtx).pVaa).sVaaCalcInfo.pMad8x8.is_null()
-            && !(*(*pCtx).pVaa).sVaaCalcInfo.pSsd16x16.is_null()
-            && !(*(*pCtx).pVaa).sVaaCalcInfo.pSum16x16.is_null()
-            && !(*(*pCtx).pVaa).sVaaCalcInfo.pSumOfSquare16x16.is_null()
+            && !(*(*pCtx).pVaa).pVaaBackgroundMbFlag.is_empty()
+            && !(*(*pCtx).pVaa).sVaaCalcInfo.pSad8x8.is_empty()
+            && !(*(*pCtx).pVaa).sVaaCalcInfo.pSumOfDiff8x8.is_empty()
+            && !(*(*pCtx).pVaa).sVaaCalcInfo.pMad8x8.is_empty()
+            && !(*(*pCtx).pVaa).sVaaCalcInfo.pSsd16x16.is_empty()
+            && !(*(*pCtx).pVaa).sVaaCalcInfo.pSum16x16.is_empty()
+            && !(*(*pCtx).pVaa).sVaaCalcInfo.pSumOfSquare16x16.is_empty()
         {
             let v = &*(*pCtx).pVaa;
             let sCurGeom = self
@@ -1380,18 +1415,18 @@ impl CWelsPreProcess {
                 (0i64, 0i64, 0i64, 0i64, 0i64, 0i64, 0i64, 0i64);
             for i in 0..iMbNum as isize {
                 let w = i as i64 + 1;
-                bg += w * *v.pVaaBackgroundMbFlag.offset(i) as i64;
-                let s8 = &*v.sVaaCalcInfo.pSad8x8.offset(i);
-                let d8 = &*v.sVaaCalcInfo.pSumOfDiff8x8.offset(i);
-                let m8 = &*v.sVaaCalcInfo.pMad8x8.offset(i);
+                bg += w * v.pVaaBackgroundMbFlag[i as usize] as i64;
+                let s8 = &v.sVaaCalcInfo.pSad8x8[i as usize];
+                let d8 = &v.sVaaCalcInfo.pSumOfDiff8x8[i as usize];
+                let m8 = &v.sVaaCalcInfo.pMad8x8[i as usize];
                 for k in 0..4 {
                     sad += w * s8[k] as i64;
                     sd += w * d8[k] as i64;
                     mad += w * m8[k] as i64;
                 }
-                ssd += w * *v.sVaaCalcInfo.pSsd16x16.offset(i) as i64;
-                sum += w * *v.sVaaCalcInfo.pSum16x16.offset(i) as i64;
-                sqsum += w * *v.sVaaCalcInfo.pSumOfSquare16x16.offset(i) as i64;
+                ssd += w * v.sVaaCalcInfo.pSsd16x16[i as usize] as i64;
+                sum += w * v.sVaaCalcInfo.pSum16x16[i as usize] as i64;
+                sqsum += w * v.sVaaCalcInfo.pSumOfSquare16x16[i as usize] as i64;
             }
             eprintln!(
                 "VP st={} sqd={} var={} bgd={} frmsad={} aqavg={} aq={} bg={} sad={} sd={} mad={} ssd={} sum={} sqsum={} scd={}",
@@ -1710,19 +1745,17 @@ impl CWelsPreProcess {
             sRefPixMap.sRect.iRectHeight = sRef.iHeightInPixel;
             sRefPixMap.eFormat = VideoFormat::videoFormatI420;
 
-            BGDParam.pBackgroundMbFlag = (*pVaaInfo).pVaaBackgroundMbFlag;
+            BGDParam.pBackgroundMbFlag = (*pVaaInfo).pVaaBackgroundMbFlag.as_mut_ptr();
 
             // METHOD_BACKGROUND_DETECTION; the VAA result handed over at the call.
             self.m_vp.sBackgroundDetection.Set(&BGDParam);
             self.m_vp.sBackgroundDetection.Process(&sSrcPixMap, &sRefPixMap, &(*pVaaInfo).sVaaCalcInfo);
-        } else if !(*pVaaInfo).pVaaBackgroundMbFlag.is_null() {
+        } else {
             let iPicWidthInMb = (sCur.iWidthInPixel + 15) >> 4;
             let iPicHeightInMb = (sCur.iHeightInPixel + 15) >> 4;
-            std::ptr::write_bytes(
-                (*pVaaInfo).pVaaBackgroundMbFlag as *mut u8,
-                0,
-                (iPicWidthInMb * iPicHeightInMb) as usize,
-            );
+            let n = ((iPicWidthInMb * iPicHeightInMb).max(0) as usize)
+                .min((*pVaaInfo).pVaaBackgroundMbFlag.len());
+            (&mut (*pVaaInfo).pVaaBackgroundMbFlag)[..n].fill(0);
         }
     }
 
@@ -2562,7 +2595,7 @@ impl CWelsPreProcess {
             };
 
             sComplexityAnalysisParam.iComplexityAnalysisMode = iComplexityAnalysisMode;
-            sComplexityAnalysisParam.pBackgroundMbFlag = (*pVaaInfo).pVaaBackgroundMbFlag;
+            sComplexityAnalysisParam.pBackgroundMbFlag = (*pVaaInfo).pVaaBackgroundMbFlag.as_mut_ptr();
             if sRefPic.is_some() {
                 self.SetRefMbType(
                     pCtx,
@@ -2774,7 +2807,6 @@ mod tests {
     /// session B). This used to exercise `WelsPreprocessCreate`/`Destroy`.
     #[test]
     fn test_wels_preprocess_init_and_uninit() {
-        let _align = CMemoryAlign::new(16);
         let preprocess = CWelsPreProcess::default();
         assert!(!preprocess.m_bInitDone);
         assert!(preprocess.m_pEncCtx.is_null());
