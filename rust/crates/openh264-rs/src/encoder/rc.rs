@@ -940,7 +940,10 @@ pub fn RcInitSequenceParameter(pEncCtx: &mut sWelsEncCtx) { unsafe {
 }}
 
 /// Initializes temporal layer weighting matrices for Virtual GOP bit allocation.
-pub unsafe fn RcInitTlWeight(pEncCtx: *mut sWelsEncCtx) {
+pub fn RcInitTlWeight(pEncCtx: &mut sWelsEncCtx) { unsafe {
+    // **T6.J4.** Safe signature, raw body: one derivation from the
+    // caller's `&mut`, and the body below is unchanged.
+    let pEncCtx: *mut sWelsEncCtx = pEncCtx;
     let did = (*pEncCtx).uiDependencyId as usize;
     let pWelsSvcRc = ctx_rc_at(pEncCtx, did);
     let pTOverRc = rc_temporal_over(pWelsSvcRc);
@@ -982,10 +985,13 @@ pub unsafe fn RcInitTlWeight(pEncCtx: *mut sWelsEncCtx) {
     }
     (*pWelsSvcRc).iPreviousGopSize = kiGopSize;
     (*pWelsSvcRc).iGopNumberInVGop = VGOP_SIZE as i32 / kiGopSize;
-}
+}}
 
 /// Updates frame and temporal bit quotas whenever user bitrate or framerate changes.
-pub unsafe fn RcUpdateBitrateFps(pEncCtx: *mut sWelsEncCtx) {
+pub fn RcUpdateBitrateFps(pEncCtx: &mut sWelsEncCtx) { unsafe {
+    // **T6.J4.** Safe signature, raw body: one derivation from the
+    // caller's `&mut`, and the body below is unchanged.
+    let pEncCtx: *mut sWelsEncCtx = pEncCtx;
     let did = (*pEncCtx).uiDependencyId as usize;
     let pWelsSvcRc = ctx_rc_at(pEncCtx, did);
     let pTOverRc = rc_temporal_over(pWelsSvcRc);
@@ -1043,10 +1049,13 @@ pub unsafe fn RcUpdateBitrateFps(pEncCtx: *mut sWelsEncCtx) {
     } else {
         0
     };
-}
+}}
 
 /// Resets the bit budget accumulator at the start of a Virtual GOP.
-pub unsafe fn RcInitVGop(pEncCtx: *mut sWelsEncCtx) {
+pub fn RcInitVGop(pEncCtx: &mut sWelsEncCtx) { unsafe {
+    // **T6.J4.** Safe signature, raw body: one derivation from the
+    // caller's `&mut`, and the body below is unchanged.
+    let pEncCtx: *mut sWelsEncCtx = pEncCtx;
     let kiDid = (*pEncCtx).uiDependencyId as usize;
     let pWelsSvcRc = ctx_rc_at(pEncCtx, kiDid);
     let pTOverRc = rc_temporal_over(pWelsSvcRc);
@@ -1078,7 +1087,7 @@ pub unsafe fn RcInitVGop(pEncCtx: *mut sWelsEncCtx) {
         (*pTOverRc.add(i as usize)).iGopBitsDq = 0;
     }
     (*pWelsSvcRc).iSkipFrameInVGop = 0;
-}
+}}
 
 /// Full reset of the rate control state machine upon encoder initialization or IDR insertion.
 pub fn RcInitRefreshParameter(pEncCtx: &mut sWelsEncCtx) { unsafe {
@@ -1124,9 +1133,9 @@ pub fn RcInitRefreshParameter(pEncCtx: &mut sWelsEncCtx) { unsafe {
     // owned, so its length is the bound rather than `iGomSize` restated.
     (*pWelsSvcRc).pCurrentFrameGomSad.fill(0);
 
-    RcInitTlWeight(pEncCtx);
-    RcUpdateBitrateFps(pEncCtx);
-    RcInitVGop(pEncCtx);
+    RcInitTlWeight(&mut *pEncCtx);
+    RcUpdateBitrateFps(&mut *pEncCtx);
+    RcInitVGop(&mut *pEncCtx);
 }}
 
 /// Checks whether user bitrate or framerate settings have changed at runtime.
@@ -1160,12 +1169,12 @@ pub fn RcUpdateTemporalZero(pEncCtx: &mut sWelsEncCtx) { unsafe {
     let kiGopSize = 1 << pDLayerParam.iDecompositionStages;
 
     if (*pWelsSvcRc).iPreviousGopSize != kiGopSize {
-        RcInitTlWeight(pEncCtx);
-        RcInitVGop(pEncCtx);
+        RcInitTlWeight(&mut *pEncCtx);
+        RcInitVGop(&mut *pEncCtx);
     } else if (*pWelsSvcRc).iGopIndexInVGop == (*pWelsSvcRc).iGopNumberInVGop
         || (*pEncCtx).eSliceType as i32 == I_SLICE
     {
-        RcInitVGop(pEncCtx);
+        RcInitVGop(&mut *pEncCtx);
     }
     (*pWelsSvcRc).iGopIndexInVGop += 1;
 }}
@@ -2199,7 +2208,7 @@ pub unsafe extern "C" fn WelsRcPictureInitGom(pEncCtx: &mut sWelsEncCtx, uiTimeS
         RcInitRefreshParameter(&mut *pEncCtx);
     }
     if RcJudgeBitrateFpsUpdate(&mut *pEncCtx) {
-        RcUpdateBitrateFps(pEncCtx);
+        RcUpdateBitrateFps(&mut *pEncCtx);
     }
     if (*pEncCtx).uiTemporalId == 0 {
         RcUpdateTemporalZero(&mut *pEncCtx);
