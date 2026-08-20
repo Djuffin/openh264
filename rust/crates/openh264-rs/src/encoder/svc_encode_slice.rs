@@ -688,16 +688,13 @@ pub unsafe fn current_layer(pCtx: *mut sWelsEncCtx) -> *mut SDqLayer {
 /// # Safety
 /// `pCtx` must point to a live encoder context.
 #[inline]
-pub fn set_current_layer(pCtx: &mut sWelsEncCtx, kIdx: Option<LayerIdx>) { unsafe {
-    // **T6.J2.** Safe signature, raw body: one derivation from the
-    // caller's `&mut`, and the body below is unchanged.
-    let pCtx: *mut sWelsEncCtx = pCtx;
+pub unsafe fn set_current_layer(pCtx: *mut sWelsEncCtx, kIdx: Option<LayerIdx>) {
     debug_assert!(
         kIdx.is_none_or(|i| i.get() < MAX_DEPENDENCY_LAYER),
         "{kIdx:?} is past the largest list InitDqLayers can build"
     );
     (*pCtx).iCurDqLayer = kIdx;
-}}
+}
 
 /// A layer's **active SPS**, resolved from [`LayerSps`] — T6.G3.
 ///
@@ -821,17 +818,14 @@ pub unsafe fn ctx_pps(pCtx: *mut sWelsEncCtx) -> *mut SWelsPPS {
 /// # Safety
 /// `pCtx` must be a live encoder context past `RequestMemorySvc`.
 #[inline]
-pub fn ctx_ref_pic<'a>(pCtx: &mut sWelsEncCtx) -> Option<&'a SPicture> { unsafe {
-    // **T6.J1.** Safe signature, raw body: one derivation from the
-    // caller's `&mut`, and the body below is unchanged.
-    let pCtx: *mut sWelsEncCtx = pCtx;
+pub unsafe fn ctx_ref_pic<'a>(pCtx: *mut sWelsEncCtx) -> Option<&'a SPicture> {
     let id = (*pCtx).pRefPic?;
     let pRefList = ctx_ref_list(pCtx, (*pCtx).uiDependencyId as usize);
     if pRefList.is_null() {
         return None;
     }
     Some((*pRefList).pic(id))
-}}
+}
 
 /// The picture a [`PicRef`] names — the reconstruction pool through the current
 /// dependency layer's reference list, or the spatial source pool through the
@@ -841,10 +835,7 @@ pub fn ctx_ref_pic<'a>(pCtx: &mut sWelsEncCtx) -> Option<&'a SPicture> { unsafe 
 /// # Safety
 /// As [`ctx_ref_pic`].
 #[inline]
-pub fn ctx_pic_ref_mut<'a>(pCtx: &mut sWelsEncCtx, r: PicRef) -> Option<&'a mut SPicture> { unsafe {
-    // **T6.J1.** Safe signature, raw body: one derivation from the
-    // caller's `&mut`, and the body below is unchanged.
-    let pCtx: *mut sWelsEncCtx = pCtx;
+pub unsafe fn ctx_pic_ref_mut<'a>(pCtx: *mut sWelsEncCtx, r: PicRef) -> Option<&'a mut SPicture> {
     match r {
         PicRef::Rec(id) => {
             let pRefList = ctx_ref_list(pCtx, (*pCtx).uiDependencyId as usize);
@@ -862,17 +853,14 @@ pub fn ctx_pic_ref_mut<'a>(pCtx: &mut sWelsEncCtx, r: PicRef) -> Option<&'a mut 
             }
         }
     }
-}}
+}
 
 /// Shared form of [`ctx_pic_ref_mut`].
 ///
 /// # Safety
 /// As [`ctx_ref_pic`].
 #[inline]
-pub fn ctx_pic_ref<'a>(pCtx: &mut sWelsEncCtx, r: PicRef) -> Option<&'a SPicture> { unsafe {
-    // **T6.J1.** Safe signature, raw body: one derivation from the
-    // caller's `&mut`, and the body below is unchanged.
-    let pCtx: *mut sWelsEncCtx = pCtx;
+pub unsafe fn ctx_pic_ref<'a>(pCtx: *mut sWelsEncCtx, r: PicRef) -> Option<&'a SPicture> {
     match r {
         PicRef::Rec(id) => {
             let pRefList = ctx_ref_list(pCtx, (*pCtx).uiDependencyId as usize);
@@ -890,7 +878,7 @@ pub fn ctx_pic_ref<'a>(pCtx: &mut sWelsEncCtx, r: PicRef) -> Option<&'a SPicture
             }
         }
     }
-}}
+}
 
 /// The reconstruction picture this layer is **referencing**, resolved through the
 /// reference list the layer was stamped with — `None` before the first inter frame,
@@ -2221,7 +2209,7 @@ pub unsafe fn WelsMdInterMbLoop(
                         pCurLayer,
                         &mut *pCurMb,
                         (*pMbCache).bCollocatedPredFlag,
-                        ctx_ref_pic(&mut *pEncCtx).map_or(0, |p| p.iPictureType),
+                        ctx_ref_pic(pEncCtx).map_or(0, |p| p.iPictureType),
                     );
                 }
                 mb_dump(&*pCurMb, pMd, pSlice);
@@ -2392,7 +2380,7 @@ pub unsafe fn WelsMdInterMbLoopOverDynamicSlice(
                         pCurLayer,
                         &mut *pCurMb,
                         (*pMbCache).bCollocatedPredFlag,
-                        ctx_ref_pic(&mut *pEncCtx).map_or(0, |p| p.iPictureType),
+                        ctx_ref_pic(pEncCtx).map_or(0, |p| p.iPictureType),
                     );
                 }
             }
@@ -2703,7 +2691,7 @@ pub unsafe fn WelsCodeOneSlice(pEncCtx: *mut sWelsEncCtx, pCurSlice: *mut SSlice
         (*pCurSlice).sScaleShift = 0;
     } else {
         let kuiTemporalId = (*pNalHeadExt).uiTemporalId;
-        let ref_temporal = ctx_ref_pic(&mut *pEncCtx).map_or(0, |p| p.uiTemporalId);
+        let ref_temporal = ctx_ref_pic(pEncCtx).map_or(0, |p| p.uiTemporalId);
         (*pCurSlice).sScaleShift = if kuiTemporalId != 0 { kuiTemporalId.saturating_sub(ref_temporal) } else { 0 };
     }
 
@@ -3060,10 +3048,7 @@ pub unsafe fn InitSliceList(
     ENC_RETURN_SUCCESS
 }
 
-pub fn InitAllSlicesInThread(pCtx: &mut sWelsEncCtx) -> i32 { unsafe {
-    // **T6.J1.** Safe signature, raw body: one derivation from the
-    // caller's `&mut`, and the body below is unchanged.
-    let pCtx: *mut sWelsEncCtx = pCtx;
+pub unsafe fn InitAllSlicesInThread(pCtx: *mut sWelsEncCtx) -> i32 {
     let pCurDqLayer = current_layer(pCtx);
     for iSliceIdx in 0..(*pCurDqLayer).iMaxSliceNum {
         let slice_ptr = slice_in_layer(pCurDqLayer, iSliceIdx);
@@ -3078,7 +3063,7 @@ pub fn InitAllSlicesInThread(pCtx: &mut sWelsEncCtx) -> i32 { unsafe {
     }
 
     ENC_RETURN_SUCCESS
-}}
+}
 
 pub unsafe fn InitOneSliceInThread(
     pCtx: *mut sWelsEncCtx,
@@ -3408,14 +3393,11 @@ pub unsafe fn ReallocateSliceInThread(
     ENC_RETURN_SUCCESS
 }
 
-pub fn ExtendLayerBuffer(
-    pCtx: &mut sWelsEncCtx,
+pub unsafe fn ExtendLayerBuffer(
+    pCtx: *mut sWelsEncCtx,
     kiMaxSliceNumOld: i32,
     kiMaxSliceNumNew: i32,
-) -> i32 { unsafe {
-    // **T6.J2.** Safe signature, raw body: one derivation from the
-    // caller's `&mut`, and the body below is unchanged.
-    let pCtx: *mut sWelsEncCtx = pCtx;
+) -> i32 {
     let pMA = (*pCtx).pMemAlign;
     let pCurLayer = current_layer(pCtx);
 
@@ -3442,12 +3424,9 @@ pub fn ExtendLayerBuffer(
     let _ = (pMA, kiMaxSliceNumOld);
 
     ENC_RETURN_SUCCESS
-}}
+}
 
-pub fn ReallocSliceBuffer(pCtx: &mut sWelsEncCtx) -> i32 { unsafe {
-    // **T6.J1.** Safe signature, raw body: one derivation from the
-    // caller's `&mut`, and the body below is unchanged.
-    let pCtx: *mut sWelsEncCtx = pCtx;
+pub unsafe fn ReallocSliceBuffer(pCtx: *mut sWelsEncCtx) -> i32 {
     let pCurLayer = current_layer(pCtx);
     let iMaxSliceNumOld = (*pCurLayer).sSliceBufferInfo[0].iMaxSliceNum;
     let mut iMaxSliceNumNew = 0;
@@ -3471,7 +3450,7 @@ pub fn ReallocSliceBuffer(pCtx: &mut sWelsEncCtx) -> i32 { unsafe {
         iMaxSliceNumNew += (*pCurLayer).sSliceBufferInfo[iSlcBuffIdx as usize].iMaxSliceNum;
     }
 
-    iRet = ExtendLayerBuffer(&mut *pCtx, (*pCurLayer).iMaxSliceNum, iMaxSliceNumNew);
+    iRet = ExtendLayerBuffer(pCtx, (*pCurLayer).iMaxSliceNum, iMaxSliceNumNew);
     if iRet != ENC_RETURN_SUCCESS {
         return iRet;
     }
@@ -3489,7 +3468,7 @@ pub fn ReallocSliceBuffer(pCtx: &mut sWelsEncCtx) -> i32 { unsafe {
     (*pCurLayer).iMaxSliceNum = iMaxSliceNumNew;
 
     ENC_RETURN_SUCCESS
-}}
+}
 
 #[inline]
 pub unsafe fn CheckAllSliceBuffer(pCurLayer: *mut SDqLayer, kiCodedSliceNum: i32) -> i32 {
@@ -3502,10 +3481,7 @@ pub unsafe fn CheckAllSliceBuffer(pCurLayer: *mut SDqLayer, kiCodedSliceNum: i32
     ENC_RETURN_SUCCESS
 }
 
-pub fn ReOrderSliceInLayer(pCtx: &mut sWelsEncCtx, kuiSliceMode: SliceMode, kiThreadNum: i32) -> i32 { unsafe {
-    // **T6.J1.** Safe signature, raw body: one derivation from the
-    // caller's `&mut`, and the body below is unchanged.
-    let pCtx: *mut sWelsEncCtx = pCtx;
+pub unsafe fn ReOrderSliceInLayer(pCtx: *mut sWelsEncCtx, kuiSliceMode: SliceMode, kiThreadNum: i32) -> i32 {
     let pCurLayer = current_layer(pCtx);
     let mut iEncodeSliceNum = 0;
     let mut iUsedSliceNum = 0;
@@ -3556,7 +3532,7 @@ pub fn ReOrderSliceInLayer(pCtx: &mut sWelsEncCtx, kuiSliceMode: SliceMode, kiTh
     }
 
     CheckAllSliceBuffer(pCurLayer, iEncodeSliceNum)
-}}
+}
 
 pub unsafe fn GetCurLayerNalCount(pCurDq: *mut SDqLayer, kiCodedSliceNum: i32) -> i32 {
     let mut iTotalNalCount = 0;
@@ -3656,14 +3632,14 @@ pub unsafe fn SliceLayerInfoUpdate(
     }
 
     if iMaxSliceNum > (*current_layer(pCtx)).iMaxSliceNum {
-        let iRet = ExtendLayerBuffer(&mut *pCtx, (*current_layer(pCtx)).iMaxSliceNum, iMaxSliceNum);
+        let iRet = ExtendLayerBuffer(pCtx, (*current_layer(pCtx)).iMaxSliceNum, iMaxSliceNum);
         if iRet != ENC_RETURN_SUCCESS {
             return iRet;
         }
         (*current_layer(pCtx)).iMaxSliceNum = iMaxSliceNum;
     }
 
-    let mut iRet = ReOrderSliceInLayer(&mut *pCtx, kuiSliceMode, (*pCtx).iActiveThreadsNum as i32);
+    let mut iRet = ReOrderSliceInLayer(pCtx, kuiSliceMode, (*pCtx).iActiveThreadsNum as i32);
     if iRet != ENC_RETURN_SUCCESS {
         return iRet;
     }

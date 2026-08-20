@@ -850,8 +850,8 @@ pub unsafe fn InitDqLayers(
     if (*ctx_func_list(*ppCtx)).pParametersetStrategy.is_none() {
         return 1;
     }
-    let kiNeededSpsNum = ParasetStrategy(&mut **ppCtx).GetNeededSpsNum() as i32;
-    let kiNeededSubsetSpsNum = ParasetStrategy(&mut **ppCtx).GetNeededSubsetSpsNum() as i32;
+    let kiNeededSpsNum = ParasetStrategy(*ppCtx).GetNeededSpsNum() as i32;
+    let kiNeededSubsetSpsNum = ParasetStrategy(*ppCtx).GetNeededSubsetSpsNum() as i32;
     // **T6.H2.** Three `WelsMallocz` calls and their three null checks were here.
     // The lengths are the strategy's own numbers, unchanged; the entries are the
     // zeros `WelsMallocz` left, spelled as `ZERO` rather than `Default` because
@@ -867,10 +867,10 @@ pub unsafe fn InitDqLayers(
     ];
 
     // PPS
-    let kiNeededPpsNum = ParasetStrategy(&mut **ppCtx).GetNeededPpsNum() as i32;
+    let kiNeededPpsNum = ParasetStrategy(*ppCtx).GetNeededPpsNum() as i32;
     (**ppCtx).pPPSArray = vec![crate::encoder::param_svc::SWelsPPS::ZERO; kiNeededPpsNum as usize];
 
-    ParasetStrategy(&mut **ppCtx).LoadPrevious(
+    ParasetStrategy(*ppCtx).LoadPrevious(
         pExistingParasetList,
         ctx_sps_array(*ppCtx),
         ctx_subset_array(*ppCtx),
@@ -895,8 +895,8 @@ pub unsafe fn InitDqLayers(
             && (iDlayerIndex == BASE_DEPENDENCY_ID as i32);
         (*pDqIdc).uiSpatialId = iDlayerIndex as i8;
 
-        iSpsId = ParasetStrategy(&mut **ppCtx).GenerateNewSps(
-            &mut **ppCtx,
+        iSpsId = ParasetStrategy(*ppCtx).GenerateNewSps(
+            *ppCtx,
             bUseSubsetSps,
             iDlayerIndex,
             iDlayerCount,
@@ -920,8 +920,8 @@ pub unsafe fn InitDqLayers(
             pSps = std::ptr::addr_of_mut!((*pSubsetSps).pSps);
         }
 
-        iPpsId = ParasetStrategy(&mut **ppCtx).InitPps(
-            &mut **ppCtx,
+        iPpsId = ParasetStrategy(*ppCtx).InitPps(
+            *ppCtx,
             iSpsId as u32,
             // T6.G3: `InitPps` takes the arm it will actually use, not both plus a
             // flag. The two locals are still raw here — they are cursors into the
@@ -966,7 +966,7 @@ pub unsafe fn InitDqLayers(
         iDlayerIndex += 1;
     }
 
-    ParasetStrategy(&mut **ppCtx).UpdateParaSetNum(&mut **ppCtx);
+    ParasetStrategy(*ppCtx).UpdateParaSetNum(*ppCtx);
     ENC_RETURN_SUCCESS
 }
 
@@ -1017,8 +1017,8 @@ pub unsafe fn RequestMemorySvc(
         return 1;
     }
 
-    let kiSpsSize = ParasetStrategy(&mut **ppCtx).GetNeededSpsNum() as i32 * SPS_BUFFER_SIZE;
-    let kiPpsSize = ParasetStrategy(&mut **ppCtx).GetNeededPpsNum() as i32 * PPS_BUFFER_SIZE;
+    let kiSpsSize = ParasetStrategy(*ppCtx).GetNeededSpsNum() as i32 * SPS_BUFFER_SIZE;
+    let kiPpsSize = ParasetStrategy(*ppCtx).GetNeededPpsNum() as i32 * PPS_BUFFER_SIZE;
     let iNonVclLayersBsSizeCount = SSEI_BUFFER_SIZE + kiSpsSize + kiPpsSize;
 
     let mut bDynamicSlice = false;
@@ -1471,7 +1471,7 @@ pub unsafe fn WelsInitEncoderExt(
     if (*pCodingParam).iEntropyCodingModeFlag != 0 {
         crate::encoder::set_mb_syn_cabac::WelsCabacInit(pCtx);
     }
-    crate::encoder::rc::WelsRcInitModule(&mut *pCtx, (*ctx_param(pCtx)).iRCMode);
+    crate::encoder::rc::WelsRcInitModule(pCtx, (*ctx_param(pCtx)).iRCMode);
 
     (*pCtx).pVpp = crate::encoder::wels_preprocess::CWelsPreProcess::CreatePreProcess(pCtx);
     if (*pCtx).pVpp.is_null() {
@@ -1725,7 +1725,7 @@ pub unsafe fn WelsUninitEncoderExt(ppCtx: *mut *mut sWelsEncCtx) {
     let pCtx = *ppCtx;
 
     if !(*pCtx).pVpp.is_null() {
-        (*(*pCtx).pVpp).FreeSpatialPictures(&mut *pCtx);
+        (*(*pCtx).pVpp).FreeSpatialPictures(pCtx);
         drop(Box::from_raw((*pCtx).pVpp));
         (*pCtx).pVpp = null_mut();
     }
@@ -1829,10 +1829,7 @@ pub unsafe fn GetTemporalLevel(
 }
 
 /// `encoder_ext.cpp:3114`.
-pub fn GetSubSequenceId(pCtx: &mut sWelsEncCtx, eFrameType: EVideoFrameType) -> i32 { unsafe {
-    // **T6.J1.** Safe signature, raw body: one derivation from the
-    // caller's `&mut`, and the body below is unchanged.
-    let pCtx: *mut sWelsEncCtx = pCtx;
+pub unsafe fn GetSubSequenceId(pCtx: *mut sWelsEncCtx, eFrameType: EVideoFrameType) -> i32 {
     if eFrameType == EVideoFrameType::videoFrameTypeIDR {
         0
     } else if eFrameType == EVideoFrameType::videoFrameTypeI {
@@ -1847,23 +1844,20 @@ pub fn GetSubSequenceId(pCtx: &mut sWelsEncCtx, eFrameType: EVideoFrameType) -> 
     } else {
         3 + MAX_TEMPORAL_LAYER_NUM as i32
     }
-}}
+}
 
 /// `encoder_ext.cpp:2797`. Swap the current DQ layer with the next one and make the
 /// outgoing layer the reference.
-pub fn WelsSwapDqLayers(pCtx: &mut sWelsEncCtx, kiNextDqIdx: i32) { unsafe {
-    // **T6.J1.** Safe signature, raw body: one derivation from the
-    // caller's `&mut`, and the body below is unchanged.
-    let pCtx: *mut sWelsEncCtx = pCtx;
+pub unsafe fn WelsSwapDqLayers(pCtx: *mut sWelsEncCtx, kiNextDqIdx: i32) {
     // The outgoing layer's *position*, not its address — T6.D3, and since T6.G2 the
     // context holds nothing else: `iCurDqLayer` **is** the index, so the round trip
     // through `pCurDqLayer->iDqIdx` that this site used to need is gone. The
     // `expect` cannot fire on a live path — the frame loop makes a layer current
     // before any swap — and the old spelling dereferenced a null pointer there.
     let kRefIdx = (*pCtx).iCurDqLayer.expect("WelsSwapDqLayers with no current layer");
-    set_current_layer(&mut *pCtx, Some(LayerIdx(kiNextDqIdx as u8)));
+    set_current_layer(pCtx, Some(LayerIdx(kiNextDqIdx as u8)));
     (*current_layer(pCtx)).pRefLayer = Some(kRefIdx);
-}}
+}
 
 /// Re-derive the layer's two picture **views** from the two handles it holds — T6.F5.
 ///
@@ -1875,10 +1869,7 @@ pub fn WelsSwapDqLayers(pCtx: &mut sWelsEncCtx, kiNextDqIdx: i32) { unsafe {
 ///
 /// # Safety
 /// `pCtx->pCurDqLayer` must be live and stamped with its reference list.
-pub fn StampLayerPictureViews(pCtx: &mut sWelsEncCtx) { unsafe {
-    // **T6.J2.** Safe signature, raw body: one derivation from the
-    // caller's `&mut`, and the body below is unchanged.
-    let pCtx: *mut sWelsEncCtx = pCtx;
+pub unsafe fn StampLayerPictureViews(pCtx: *mut sWelsEncCtx) {
     let pCurDq = current_layer(pCtx);
     if pCurDq.is_null() {
         return;
@@ -1897,13 +1888,10 @@ pub fn StampLayerPictureViews(pCtx: &mut sWelsEncCtx) { unsafe {
         Some(id) => (*pRefList).pic_mut(id).view(),
         None => SRefPicView::default(),
     };
-}}
+}
 
 /// `encoder_ext.cpp:2808`. Prefetch the reference picture after `WelsBuildRefList`.
-pub fn PrefetchReferencePicture(pCtx: &mut sWelsEncCtx, keFrameType: EVideoFrameType) { unsafe {
-    // **T6.J1.** Safe signature, raw body: one derivation from the
-    // caller's `&mut`, and the body below is unchanged.
-    let pCtx: *mut sWelsEncCtx = pCtx;
+pub unsafe fn PrefetchReferencePicture(pCtx: *mut sWelsEncCtx, keFrameType: EVideoFrameType) {
     let kiSliceCount = (*current_layer(pCtx)).iMaxSliceNum;
     // C++ declares `uint8_t uiRefIdx = -1;`, which wraps to 255.
     let mut uiRefIdx: u8 = 0xff;
@@ -1920,7 +1908,7 @@ pub fn PrefetchReferencePicture(pCtx: &mut sWelsEncCtx, keFrameType: EVideoFrame
         (*pCtx).pRefPic = None;
         (*current_layer(pCtx)).pRefPic = None;
     }
-    StampLayerPictureViews(&mut *pCtx);
+    StampLayerPictureViews(pCtx);
 
     let mut iIdx = 0;
     while iIdx < kiSliceCount {
@@ -1930,7 +1918,7 @@ pub fn PrefetchReferencePicture(pCtx: &mut sWelsEncCtx, keFrameType: EVideoFrame
         }
         iIdx += 1;
     }
-}}
+}
 
 /// `encoder_ext.cpp:3376`.
 pub unsafe fn ClearFrameBsInfo(pCtx: *mut sWelsEncCtx, pFbi: *mut SFrameBSInfo) {
@@ -1947,10 +1935,7 @@ pub unsafe fn ClearFrameBsInfo(pCtx: *mut sWelsEncCtx, pFbi: *mut SFrameBSInfo) 
 
 /// `encoder_ext.cpp:3341`. Roll the encoder state back one frame after the rate
 /// controller decides to drop it.
-pub fn StackBackEncoderStatus(pEncCtx: &mut sWelsEncCtx, keFrameType: EVideoFrameType) { unsafe {
-    // **T6.J1.** Safe signature, raw body: one derivation from the
-    // caller's `&mut`, and the body below is unchanged.
-    let pEncCtx: *mut sWelsEncCtx = pEncCtx;
+pub unsafe fn StackBackEncoderStatus(pEncCtx: *mut sWelsEncCtx, keFrameType: EVideoFrameType) {
     let pParamInternal = (*ctx_param(pEncCtx))
         .sDependencyLayers
         .as_mut_ptr()
@@ -1979,7 +1964,7 @@ pub fn StackBackEncoderStatus(pEncCtx: &mut sWelsEncCtx, keFrameType: EVideoFram
             (*pParamInternal).iPOC = (1 << (*ctx_sps(pEncCtx)).iLog2MaxPocLsb) - 2;
         }
 
-        crate::encoder::encoder_context::LoadBackFrameNum(&mut *pEncCtx, (*pEncCtx).uiDependencyId as i32);
+        crate::encoder::encoder_context::LoadBackFrameNum(pEncCtx, (*pEncCtx).uiDependencyId as i32);
 
         (*pEncCtx).eNalType = EWelsNalUnitType::NAL_UNIT_CODED_SLICE;
         (*pEncCtx).eSliceType = EWelsSliceType::P_SLICE;
@@ -1987,7 +1972,7 @@ pub fn StackBackEncoderStatus(pEncCtx: &mut sWelsEncCtx, keFrameType: EVideoFram
     } else if keFrameType == EVideoFrameType::videoFrameTypeIDR {
         (*pParamInternal).uiIdrPicId -= 1;
         // set the next frame to be IDR
-        crate::encoder::wels_encoder_ext::ForceCodingIDR(&mut *pEncCtx, (*pEncCtx).uiDependencyId as i32);
+        crate::encoder::wels_encoder_ext::ForceCodingIDR(pEncCtx, (*pEncCtx).uiDependencyId as i32);
     } else {
         // B pictures are not supported now
         debug_assert!(false, "StackBackEncoderStatus: unsupported frame type");
@@ -1995,14 +1980,11 @@ pub fn StackBackEncoderStatus(pEncCtx: &mut sWelsEncCtx, keFrameType: EVideoFram
 
     // No need to stack back RC info -- it is still useful for later RQ model
     // calculation -- nor MB slicing info for dynamic balancing.
-}}
+}
 
 /// `encoder_ext.cpp:2534`. Bind the current DQ layer to this frame's parameter sets,
 /// NAL header and picture buffers.
-pub fn WelsInitCurrentLayer(pCtx: &mut sWelsEncCtx, _kiWidth: i32, _kiHeight: i32) { unsafe {
-    // **T6.J1.** Safe signature, raw body: one derivation from the
-    // caller's `&mut`, and the body below is unchanged.
-    let pCtx: *mut sWelsEncCtx = pCtx;
+pub unsafe fn WelsInitCurrentLayer(pCtx: *mut sWelsEncCtx, _kiWidth: i32, _kiHeight: i32) {
     let pParam = ctx_param(pCtx);
     let pCurDq = current_layer(pCtx);
     if pCurDq.is_null() {
@@ -2027,14 +2009,14 @@ pub fn WelsInitCurrentLayer(pCtx: &mut sWelsEncCtx, _kiWidth: i32, _kiHeight: i3
     let pParamInternal = std::ptr::addr_of_mut!((*pParam).sDependencyLayers[kiCurDid as usize]);
 
     (*pCurDq).pDecPic = (*pCtx).pDecPic;
-    StampLayerPictureViews(&mut *pCtx);
+    StampLayerPictureViews(pCtx);
 
     debug_assert!(iSliceCount > 0);
 
     let mut iCurPpsId = (*pDqIdc).iPpsId as i32;
     let iCurSpsId = (*pDqIdc).iSpsId as i32;
 
-    iCurPpsId = ParasetStrategy(&mut *pCtx).GetCurrentPpsId(
+    iCurPpsId = ParasetStrategy(pCtx).GetCurrentPpsId(
         iCurPpsId,
         ((*pParamInternal).uiIdrPicId as i32 - 1).abs() % MAX_PPS_COUNT as i32,
     );
@@ -2119,7 +2101,7 @@ pub fn WelsInitCurrentLayer(pCtx: &mut sWelsEncCtx, _kiWidth: i32, _kiHeight: i3
             (*pCtx).pTaskManage as *mut crate::encoder::wels_task_management::CWelsTaskManageBase;
         (*pTaskManage).InitFrame(kiCurDid as i32);
     }
-}}
+}
 
 /// `encoder_ext.cpp:2954`. Emit the SVC prefix NAL that precedes each VCL NAL when
 /// `bNeedPrefixNalFlag` is set.
@@ -2288,10 +2270,7 @@ pub unsafe fn SetMeMethod(uiMethod: u32, pSearchMethodFunc: *mut Option<PSearchM
 ///
 /// The `SCREEN_CONTENT_REAL_TIME` block (`encoder_ext.cpp:2708-2771`) is the only part
 /// not translated; see the comment at its position below.
-pub fn PreprocessSliceCoding(pCtx: &mut sWelsEncCtx) { unsafe {
-    // **T6.J1.** Safe signature, raw body: one derivation from the
-    // caller's `&mut`, and the body below is unchanged.
-    let pCtx: *mut sWelsEncCtx = pCtx;
+pub unsafe fn PreprocessSliceCoding(pCtx: *mut sWelsEncCtx) {
     let pCurLayer = current_layer(pCtx);
     let bFastMode = (*ctx_param(pCtx)).iComplexityMode == LOW_COMPLEXITY;
     // **T6.I2**, as `InitFunctionPointers`: one `&mut` derived from the owner, not
@@ -2375,7 +2354,7 @@ pub fn PreprocessSliceCoding(pCtx: &mut sWelsEncCtx) { unsafe {
         fl.pfDeblocking.pfDeblockingFilterSlice =
             Some(crate::encoder::deblocking::DeblockingFilterSliceAvcbaseNull);
     }
-}}
+}
 
 /// `encoder_ext.cpp:3131`. Write the parameter sets for (simulcast) SVC.
 pub unsafe fn WriteSsvcParaset(
@@ -2414,7 +2393,7 @@ pub unsafe fn WriteSsvcParaset(
     (*pLayerBsInfo).uiLayerType = NON_VIDEO_CODING_LAYER;
     (*pLayerBsInfo).iNalCount = iCountNal;
     (*pLayerBsInfo).eFrameType = EVideoFrameType::videoFrameTypeIDR;
-    (*pLayerBsInfo).iSubSeqId = GetSubSequenceId(&mut *pCtx, EVideoFrameType::videoFrameTypeIDR);
+    (*pLayerBsInfo).iSubSeqId = GetSubSequenceId(pCtx, EVideoFrameType::videoFrameTypeIDR);
 
     // point to next pLayerBsInfo
     let pNext = pLayerBsInfo.add(1);
@@ -2469,7 +2448,7 @@ pub unsafe fn WriteSavcParaset(
     (*pLayerBsInfo).uiLayerType = NON_VIDEO_CODING_LAYER;
     (*pLayerBsInfo).iNalCount = iCountNal;
     (*pLayerBsInfo).eFrameType = EVideoFrameType::videoFrameTypeIDR;
-    (*pLayerBsInfo).iSubSeqId = GetSubSequenceId(&mut *pCtx, EVideoFrameType::videoFrameTypeIDR);
+    (*pLayerBsInfo).iSubSeqId = GetSubSequenceId(pCtx, EVideoFrameType::videoFrameTypeIDR);
 
     let mut pNext = pLayerBsInfo.add(1);
     (*(*pCtx).pOut).iLayerBsIndex += 1;
@@ -2500,7 +2479,7 @@ pub unsafe fn WriteSavcParaset(
     (*pLayerBsInfo).uiLayerType = NON_VIDEO_CODING_LAYER;
     (*pLayerBsInfo).iNalCount = iCountNal;
     (*pLayerBsInfo).eFrameType = EVideoFrameType::videoFrameTypeIDR;
-    (*pLayerBsInfo).iSubSeqId = GetSubSequenceId(&mut *pCtx, EVideoFrameType::videoFrameTypeIDR);
+    (*pLayerBsInfo).iSubSeqId = GetSubSequenceId(pCtx, EVideoFrameType::videoFrameTypeIDR);
 
     pNext = pLayerBsInfo.add(1);
     (*(*pCtx).pOut).iLayerBsIndex += 1;
@@ -2529,13 +2508,13 @@ pub unsafe fn PrepareEncodeFrame(
     let pSpatialIndexMap = (*pCtx).sSpatialIndexMap.as_ptr();
 
     let bSkipFrameFlag = crate::encoder::rc::WelsRcCheckFrameStatus(
-        &mut *pCtx,
+        pCtx,
         uiTimeStamp,
         iSpatialNum,
         *iCurDid as i32,
     );
     let eFrameType = crate::encoder::encoder_context::DecideFrameType(
-        &mut *pCtx,
+        pCtx,
         iSpatialNum as i8,
         *iCurDid as i32,
         bSkipFrameFlag,
@@ -2547,10 +2526,10 @@ pub unsafe fn PrepareEncodeFrame(
         // `bSimulcastAVC` alone, and an absent callback made both arms no-ops.
         let pfRc = (*ctx_func_list(pCtx)).pfRc;
         if (*pSvcParam).bSimulcastAVC {
-            pfRc.WelsUpdateBufferWhenSkip(&mut *pCtx, *iCurDid as i32);
+            pfRc.WelsUpdateBufferWhenSkip(pCtx, *iCurDid as i32);
         } else {
             for i in 0..iSpatialNum as usize {
-                pfRc.WelsUpdateBufferWhenSkip(&mut *pCtx, (*pSpatialIndexMap.add(i)).iDid);
+                pfRc.WelsUpdateBufferWhenSkip(pCtx, (*pSpatialIndexMap.add(i)).iDid);
             }
         }
     } else {
@@ -2599,16 +2578,13 @@ pub unsafe fn PrepareEncodeFrame(
 
 /// `encoder_ext.cpp:2415`. TUNE back if a picture-partition decision algorithm based
 /// on past behaviour becomes available.
-pub fn PicPartitionNumDecision(pCtx: &mut sWelsEncCtx) -> i32 { unsafe {
-    // **T6.J1.** Safe signature, raw body: one derivation from the
-    // caller's `&mut`, and the body below is unchanged.
-    let pCtx: *mut sWelsEncCtx = pCtx;
+pub unsafe fn PicPartitionNumDecision(pCtx: *mut sWelsEncCtx) -> i32 {
     let mut iPartitionNum = 1;
     if (*ctx_param(pCtx)).iMultipleThreadIdc > 1 {
         iPartitionNum = (*ctx_param(pCtx)).iMultipleThreadIdc as i32;
     }
     iPartitionNum
-}}
+}
 
 /// `DynslcUpdateMbNeighbourInfoListForAllSlices` — encoder_ext.cpp:2397.
 ///
@@ -2636,15 +2612,12 @@ pub unsafe fn DynslcUpdateMbNeighbourInfoListForAllSlices(pCurDq: *mut SDqLayer,
 ///
 /// # Safety
 /// `pCtx` must be a context built by [`WelsInitEncoderExt`].
-pub fn WelsInitCurrentQBLayerMltslc(pCtx: &mut sWelsEncCtx) { unsafe {
-    // **T6.J2.** Safe signature, raw body: one derivation from the
-    // caller's `&mut`, and the body below is unchanged.
-    let pCtx: *mut sWelsEncCtx = pCtx;
+pub unsafe fn WelsInitCurrentQBLayerMltslc(pCtx: *mut sWelsEncCtx) {
     // pData init
     let pCurDq = current_layer(pCtx);
     // mb_neighbor
     DynslcUpdateMbNeighbourInfoListForAllSlices(pCurDq, crate::encoder::svc_encode_slice::mb_list_root(pCurDq));
-}}
+}
 
 /// `UpdateSlicepEncCtxWithPartition` — encoder_ext.cpp:2430.
 ///
@@ -2726,10 +2699,7 @@ pub unsafe fn UpdateSlicepEncCtxWithPartition(pCurDq: *mut SDqLayer, mut iPartit
 ///
 /// # Safety
 /// `pCtx` must be a context built by [`WelsInitEncoderExt`].
-pub fn WelsInitCurrentDlayerMltslc(pCtx: &mut sWelsEncCtx, iPartitionNum: i32) { unsafe {
-    // **T6.J1.** Safe signature, raw body: one derivation from the
-    // caller's `&mut`, and the body below is unchanged.
-    let pCtx: *mut sWelsEncCtx = pCtx;
+pub unsafe fn WelsInitCurrentDlayerMltslc(pCtx: *mut sWelsEncCtx, iPartitionNum: i32) {
     /// `#define byte_complexIMBat26 (60)`, local to this function in the C++.
     const byte_complexIMBat26: u32 = 60;
 
@@ -2768,8 +2738,8 @@ pub fn WelsInitCurrentDlayerMltslc(pCtx: &mut sWelsEncCtx, iPartitionNum: i32) {
         // C++ only WelsLogs a warning here when uiSliceSizeConstraint is smaller.
     }
 
-    WelsInitCurrentQBLayerMltslc(&mut *pCtx);
-}}
+    WelsInitCurrentQBLayerMltslc(pCtx);
+}
 
 /// `DynSliceRealloc` — encoder_ext.cpp:4525.
 ///
@@ -2790,7 +2760,7 @@ pub unsafe fn DynSliceRealloc(
         return iRet;
     }
 
-    iRet = crate::encoder::svc_encode_slice::ReallocSliceBuffer(&mut *pCtx);
+    iRet = crate::encoder::svc_encode_slice::ReallocSliceBuffer(pCtx);
     if iRet != ENC_RETURN_SUCCESS {
         return iRet;
     }
@@ -2997,7 +2967,7 @@ pub unsafe fn WelsEncoderEncodeExt(
 
     (*ctx_func_list(pCtx))
         .pfRc
-        .WelsUpdateMaxBrWindowStatus(&mut *pCtx, iSpatialNum, (*pFbi).uiTimeStamp);
+        .WelsUpdateMaxBrWindowStatus(pCtx, iSpatialNum, (*pFbi).uiTimeStamp);
 
     if iSpatialNum < 1 {
         for iDidIdx in 0..(*pSvcParam).iSpatialLayerNum as usize {
@@ -3016,11 +2986,11 @@ pub unsafe fn WelsEncoderEncodeExt(
     // but only ordering rescues one the parent then writes through. Every use of
     // this pointer is below. Found by the encoder aliasing probe, Phase 6 session A.
     let pSpatialIndexMap = (*pCtx).sSpatialIndexMap.as_ptr();
-    crate::encoder::encoder_context::InitBitStream(&mut *pCtx);
+    crate::encoder::encoder_context::InitBitStream(pCtx);
     (*pLayerBsInfo).pBsBuf = ctx_frame_bs(pCtx);
     (*pLayerBsInfo).pNalLengthInByte = (*(*pCtx).pOut).sNalLen.as_mut_ptr();
     iCurDid = (*pSpatialIndexMap).iDid as i8;
-    set_current_layer(&mut *pCtx, Some(LayerIdx(iCurDid as u8)));
+    set_current_layer(pCtx, Some(LayerIdx(iCurDid as u8)));
     (*current_layer(pCtx)).pRefLayer = None;
 
     if !(*pSvcParam).bSimulcastAVC {
@@ -3066,7 +3036,7 @@ pub unsafe fn WelsEncoderEncodeExt(
         let pParamInternal =
             std::ptr::addr_of_mut!((*pSvcParam).sDependencyLayers[iCurDid as usize]);
         let iDecompositionStages = (*pParamInternal).iDecompositionStages as i32;
-        set_current_layer(&mut *pCtx, Some(LayerIdx(iCurDid as u8)));
+        set_current_layer(pCtx, Some(LayerIdx(iCurDid as u8)));
         (*pCtx).uiDependencyId = iCurDid as u8;
 
         if (*pSvcParam).bSimulcastAVC {
@@ -3086,8 +3056,8 @@ pub unsafe fn WelsEncoderEncodeExt(
                 continue;
             }
         }
-        crate::encoder::encoder_context::InitFrameCoding(&mut *pCtx, eFrameType, iCurDid as i32);
-        (*(*pCtx).pVpp).AnalyzeSpatialPic(&mut *pCtx, iCurDid as i32);
+        crate::encoder::encoder_context::InitFrameCoding(pCtx, eFrameType, iCurDid as i32);
+        (*(*pCtx).pVpp).AnalyzeSpatialPic(pCtx, iCurDid as i32);
 
         // **`iPOC` is read at each use below rather than through a held pointer.**
         // Every call in this loop — `InitFrameCoding`, `AnalyzeSpatialPic`,
@@ -3128,11 +3098,11 @@ pub unsafe fn WelsEncoderEncodeExt(
                 }
             }
             SliceModeEnum::SM_SIZELIMITED_SLICE => {
-                let iPicIPartitionNum = PicPartitionNumDecision(&mut *pCtx);
+                let iPicIPartitionNum = PicPartitionNumDecision(pCtx);
                 // MT compatibility: try to activate a number of threads equal to
                 // the number of picture partitions.
                 (*pCtx).iActiveThreadsNum = iPicIPartitionNum as i16;
-                WelsInitCurrentDlayerMltslc(&mut *pCtx, iPicIPartitionNum);
+                WelsInitCurrentDlayerMltslc(pCtx, iPicIPartitionNum);
             }
             _ => {}
         }
@@ -3188,17 +3158,17 @@ pub unsafe fn WelsEncoderEncodeExt(
             None => None,
         };
 
-        WelsInitCurrentLayer(&mut *pCtx, iCurWidth, iCurHeight);
+        WelsInitCurrentLayer(pCtx, iCurWidth, iCurHeight);
 
         let eRefStrategy = (*pCtx).eRefStrategy;
-        eRefStrategy.MarkPic(&mut *pCtx);
-        if !eRefStrategy.BuildRefList(&mut *pCtx, (*pSvcParam).sDependencyLayers[iCurDid as usize].iPOC, 0) {
+        eRefStrategy.MarkPic(pCtx);
+        if !eRefStrategy.BuildRefList(pCtx, (*pSvcParam).sDependencyLayers[iCurDid as usize].iPOC, 0) {
             eFrameType = EVideoFrameType::videoFrameTypeIDR;
             (*pCtx).iEncoderError = ENC_RETURN_CORRECTED;
             break;
         }
         if (*pCtx).eSliceType != EWelsSliceType::I_SLICE {
-            eRefStrategy.AfterBuildRefList(&mut *pCtx);
+            eRefStrategy.AfterBuildRefList(pCtx);
         }
 
         if (*pSvcParam).iRCMode != RC_OFF_MODE {
@@ -3208,7 +3178,7 @@ pub unsafe fn WelsEncoderEncodeExt(
                 None
             };
             (*(*pCtx).pVpp).AnalyzePictureComplexity(
-                &mut *pCtx,
+                pCtx,
                 (*pCtx).pEncPic,
                 pRef,
                 iCurDid as i32,
@@ -3218,17 +3188,17 @@ pub unsafe fn WelsEncoderEncodeExt(
         }
         // get reordering syntax used for writing the slice header
         crate::encoder::ref_list_mgr_svc::WelsUpdateRefSyntax(
-            &mut *pCtx,
+            pCtx,
             (*pSvcParam).sDependencyLayers[iCurDid as usize].iPOC,
             eFrameType as i32,
         );
         // update reference picture for the current DQ layer
-        PrefetchReferencePicture(&mut *pCtx, eFrameType);
+        PrefetchReferencePicture(pCtx, eFrameType);
         (*ctx_func_list(pCtx))
             .pfRc
-            .WelsRcPictureInit(&mut *pCtx, (*pFbi).uiTimeStamp);
+            .WelsRcPictureInit(pCtx, (*pFbi).uiTimeStamp);
         // MUST be called after pfWelsRcPictureInit() and WelsInitCurrentLayer()
-        PreprocessSliceCoding(&mut *pCtx);
+        PreprocessSliceCoding(pCtx);
 
         iLayerSize = 0;
         if (*pParam).sSliceArgument.uiSliceMode == SM_SINGLE_SLICE {
@@ -3297,7 +3267,7 @@ pub unsafe fn WelsEncoderEncodeExt(
             (*pLayerBsInfo).uiQualityId = 0;
             (*pLayerBsInfo).iNalCount = iNalIdxInLayer;
             (*pLayerBsInfo).eFrameType = eFrameType;
-            (*pLayerBsInfo).iSubSeqId = GetSubSequenceId(&mut *pCtx, eFrameType);
+            (*pLayerBsInfo).iSubSeqId = GetSubSequenceId(pCtx, eFrameType);
         } else if (*pParam).sSliceArgument.uiSliceMode == SM_SIZELIMITED_SLICE
             && (*pSvcParam).iMultipleThreadIdc <= 1
         {
@@ -3314,7 +3284,7 @@ pub unsafe fn WelsEncoderEncodeExt(
                 0,
             );
             (*pLayerBsInfo).eFrameType = eFrameType;
-            (*pLayerBsInfo).iSubSeqId = GetSubSequenceId(&mut *pCtx, eFrameType);
+            (*pLayerBsInfo).iSubSeqId = GetSubSequenceId(pCtx, eFrameType);
             if (*pCtx).iEncoderError != ENC_RETURN_SUCCESS {
                 return (*pCtx).iEncoderError;
             }
@@ -3340,7 +3310,7 @@ pub unsafe fn WelsEncoderEncodeExt(
             (*pLayerBsInfo).uiQualityId = 0;
             (*pLayerBsInfo).iNalCount = 0;
             (*pLayerBsInfo).eFrameType = eFrameType;
-            (*pLayerBsInfo).iSubSeqId = GetSubSequenceId(&mut *pCtx, eFrameType);
+            (*pLayerBsInfo).iSubSeqId = GetSubSequenceId(pCtx, eFrameType);
 
             let pTaskManage = (*pCtx).pTaskManage
                 as *mut crate::encoder::wels_task_management::CWelsTaskManageBase;
@@ -3373,7 +3343,7 @@ pub unsafe fn WelsEncoderEncodeExt(
             (*pLbi).uiTemporalId = (*pCtx).uiTemporalId;
             (*pLbi).uiQualityId = 0;
             (*pLbi).eFrameType = eFrameType;
-            (*pLbi).iSubSeqId = GetSubSequenceId(&mut *pCtx, eFrameType);
+            (*pLbi).iSubSeqId = GetSubSequenceId(pCtx, eFrameType);
             (*pLbi).iNalCount = 0;
 
             let mut iIdx = 0i32;
@@ -3384,7 +3354,7 @@ pub unsafe fn WelsEncoderEncodeExt(
                 iIdx += 1;
             }
 
-            let mut iRet = crate::encoder::svc_encode_slice::InitAllSlicesInThread(&mut *pCtx);
+            let mut iRet = crate::encoder::svc_encode_slice::InitAllSlicesInThread(pCtx);
             if iRet != 0 {
                 return ENC_RETURN_UNEXPECTED;
             }
@@ -3494,16 +3464,16 @@ pub unsafe fn WelsEncoderEncodeExt(
             (*pLayerBsInfo).uiQualityId = 0;
             (*pLayerBsInfo).iNalCount = iNalIdxInLayer;
             (*pLayerBsInfo).eFrameType = eFrameType;
-            (*pLayerBsInfo).iSubSeqId = GetSubSequenceId(&mut *pCtx, eFrameType);
+            (*pLayerBsInfo).iSubSeqId = GetSubSequenceId(pCtx, eFrameType);
         }
 
         // `None` here meant "never take this path", which is what the method's
         // empty arms return: `false`.
         if (*ctx_func_list(pCtx))
             .pfRc
-            .WelsRcPostFrameSkipping(&mut *pCtx, iCurDid as i32, (*pFbi).uiTimeStamp)
+            .WelsRcPostFrameSkipping(pCtx, iCurDid as i32, (*pFbi).uiTimeStamp)
         {
-            StackBackEncoderStatus(&mut *pCtx, eFrameType);
+            StackBackEncoderStatus(pCtx, eFrameType);
             ClearFrameBsInfo(pCtx, pFbi);
 
             iFrameSize = 0;
@@ -3511,9 +3481,9 @@ pub unsafe fn WelsEncoderEncodeExt(
 
             (*ctx_func_list(pCtx))
                 .pfRc
-                .WelsUpdateBufferWhenSkip(&mut *pCtx, iSpatialNum);
+                .WelsUpdateBufferWhenSkip(pCtx, iSpatialNum);
 
-            crate::encoder::rc::WelsRcPostFrameSkippedUpdate(&mut *pCtx, iCurDid as i32);
+            crate::encoder::rc::WelsRcPostFrameSkippedUpdate(pCtx, iCurDid as i32);
             (*pCtx).iEncoderError = ENC_RETURN_SUCCESS;
             let _ = iLayerNum;
             return ENC_RETURN_SUCCESS;
@@ -3526,14 +3496,14 @@ pub unsafe fn WelsEncoderEncodeExt(
             && ((*pParamInternal).iHighestTemporalId == 0
                 || iCurTid < (*pParamInternal).iHighestTemporalId as i32)
         {
-            crate::encoder::deblocking::PerformDeblockingFilter(&mut *pCtx);
+            crate::encoder::deblocking::PerformDeblockingFilter(pCtx);
         }
 
         (*ctx_func_list(pCtx))
             .pfRc
-            .WelsRcPictureInfoUpdate(&mut *pCtx, iLayerSize);
+            .WelsRcPictureInfoUpdate(pCtx, iLayerSize);
         iFrameSize += iLayerSize;
-        crate::encoder::rc::RcTraceFrameBits(&mut *pCtx, (*pFbi).uiTimeStamp, iFrameSize);
+        crate::encoder::rc::RcTraceFrameBits(pCtx, (*pFbi).uiTimeStamp, iFrameSize);
         if let Some(id) = (*pCtx).pDecPic {
             (*ctx_ref_list(pCtx, iCurDid as usize))
                 .pic_mut(id)
@@ -3547,7 +3517,7 @@ pub unsafe fn WelsEncoderEncodeExt(
 
         // reference picture list update
         if eNalRefIdc != EWelsNalRefIdc::NRI_PRI_LOWEST
-            && !eRefStrategy.UpdateRefList(&mut *pCtx)
+            && !eRefStrategy.UpdateRefList(pCtx)
         {
             // set the next frame to be IDR
             (*pCtx).iEncoderError = ENC_RETURN_CORRECTED;
@@ -3644,7 +3614,7 @@ pub unsafe fn WelsEncoderEncodeExt(
             (*pLayerBsInfo).iNalCount = 1;
             *(*pLayerBsInfo).pNalLengthInByte = iPaddingNalSize;
             (*pLayerBsInfo).eFrameType = eFrameType;
-            (*pLayerBsInfo).iSubSeqId = GetSubSequenceId(&mut *pCtx, eFrameType);
+            (*pLayerBsInfo).iSubSeqId = GetSubSequenceId(pCtx, eFrameType);
             let pPrev2 = pLayerBsInfo;
             pLayerBsInfo = pLayerBsInfo.add(1);
             (*(*pCtx).pOut).iLayerBsIndex += 1;
@@ -3660,11 +3630,11 @@ pub unsafe fn WelsEncoderEncodeExt(
 
         if (iCurDid as i32) + 1 < (*pSvcParam).iSpatialLayerNum {
             // iSpatialIdx has already been incremented, so this points at the next layer
-            WelsSwapDqLayers(&mut *pCtx, (*pSpatialIndexMap.add(iSpatialIdx as usize)).iDid);
+            WelsSwapDqLayers(pCtx, (*pSpatialIndexMap.add(iSpatialIdx as usize)).iDid);
         }
 
         if (*(*pCtx).pVpp).UpdateSpatialPictures(pCtx, pSvcParam, iCurTid as i8, iCurDid as i32) != 0 {
-            crate::encoder::wels_encoder_ext::ForceCodingIDR(&mut *pCtx, iCurDid as i32);
+            crate::encoder::wels_encoder_ext::ForceCodingIDR(pCtx, iCurDid as i32);
             // the above sets the next frame to IDR
             (*pFbi).eFrameType = eFrameType;
             (*pLayerBsInfo).eFrameType = eFrameType;
@@ -3693,7 +3663,7 @@ pub unsafe fn WelsEncoderEncodeExt(
     if ENC_RETURN_CORRECTED == (*pCtx).iEncoderError {
         let iDid = (*pSpatialIndexMap.add(iSpatialIdx as usize)).iDid;
         (*(*pCtx).pVpp).UpdateSpatialPictures(pCtx, pSvcParam, iCurTid as i8, iDid);
-        crate::encoder::wels_encoder_ext::ForceCodingIDR(&mut *pCtx, iDid);
+        crate::encoder::wels_encoder_ext::ForceCodingIDR(pCtx, iDid);
         // the above sets the next frame to IDR
         (*pFbi).eFrameType = eFrameType;
         (*pLayerBsInfo).eFrameType = eFrameType;

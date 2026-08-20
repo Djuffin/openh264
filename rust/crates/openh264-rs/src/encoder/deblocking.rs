@@ -1441,10 +1441,7 @@ pub unsafe extern "C" fn DeblockingFilterSliceAvcbaseNull(
 ) {
 }
 
-pub unsafe extern "C" fn PerformDeblockingFilter(pEnc: &mut sWelsEncCtx) { unsafe {
-    // **T6.J1.** Safe signature, raw body: one derivation from the
-    // caller's `&mut`, and the body below is unchanged.
-    let pEnc: *mut sWelsEncCtx = pEnc;
+pub unsafe extern "C" fn PerformDeblockingFilter(pEnc: *mut sWelsEncCtx) {
     if pEnc.is_null() {
         return;
     }
@@ -1464,7 +1461,7 @@ pub unsafe extern "C" fn PerformDeblockingFilter(pEnc: &mut sWelsEncCtx) { unsaf
             }
         }
     }
-}}
+}
 
 // ============================================================================
 // Architecture and Dispatch Table Initialization

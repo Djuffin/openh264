@@ -1583,10 +1583,7 @@ unsafe fn InitCoeffFunc(
 ///
 /// # Safety
 /// `pEncCtx` must be non-null and initialized.
-pub fn UpdateFrameNum(pEncCtx: &mut sWelsEncCtx, kiDidx: i32) { unsafe {
-    // **T6.J2.** Safe signature, raw body: one derivation from the
-    // caller's `&mut`, and the body below is unchanged.
-    let pEncCtx: *mut sWelsEncCtx = pEncCtx;
+pub unsafe fn UpdateFrameNum(pEncCtx: *mut sWelsEncCtx, kiDidx: i32) {
     if pEncCtx.is_null() || ctx_param(pEncCtx).is_null() || ctx_sps(pEncCtx).is_null() {
         return;
     }
@@ -1607,16 +1604,13 @@ pub fn UpdateFrameNum(pEncCtx: &mut sWelsEncCtx, kiDidx: i32) { unsafe {
     }
 
     (*pEncCtx).eLastNalPriority[kiDidx as usize] = EWelsNalRefIdc::NRI_PRI_LOWEST;
-}}
+}
 
 /// Rolls back the `frame_num` counter if a reference frame encoding attempt fails.
 ///
 /// # Safety
 /// `pEncCtx` must be non-null and initialized.
-pub fn LoadBackFrameNum(pEncCtx: &mut sWelsEncCtx, kiDidx: i32) { unsafe {
-    // **T6.J2.** Safe signature, raw body: one derivation from the
-    // caller's `&mut`, and the body below is unchanged.
-    let pEncCtx: *mut sWelsEncCtx = pEncCtx;
+pub unsafe fn LoadBackFrameNum(pEncCtx: *mut sWelsEncCtx, kiDidx: i32) {
     if pEncCtx.is_null() || ctx_param(pEncCtx).is_null() || ctx_sps(pEncCtx).is_null() {
         return;
     }
@@ -1634,16 +1628,13 @@ pub fn LoadBackFrameNum(pEncCtx: &mut sWelsEncCtx, kiDidx: i32) { unsafe {
             (*pParamInternal).iFrameNum = (1 << (*ctx_sps(pEncCtx)).uiLog2MaxFrameNum) - 1;
         }
     }
-}}
+}
 
 /// Reinitializes bitstream buffer write offsets and NAL indices.
 ///
 /// # Safety
 /// `pEncCtx` must be non-null and contain a valid `pOut`.
-pub fn InitBitStream(pEncCtx: &mut sWelsEncCtx) { unsafe {
-    // **T6.J1.** Safe signature, raw body: one derivation from the
-    // caller's `&mut`, and the body below is unchanged.
-    let pEncCtx: *mut sWelsEncCtx = pEncCtx;
+pub unsafe fn InitBitStream(pEncCtx: *mut sWelsEncCtx) {
     if pEncCtx.is_null() || (*pEncCtx).pOut.is_null() {
         return;
     }
@@ -1657,20 +1648,17 @@ pub fn InitBitStream(pEncCtx: &mut sWelsEncCtx) { unsafe {
     // `pStartBuf: *mut u8` and written through — is deleted rather than amended
     // (`phase2_findings.md` F13, third site).
     (*(*pEncCtx).pOut).sBsWrite = crate::encoder::vlc_encoder::BsWriter::new();
-}}
+}
 
 /// Configures slice types, NAL headers, and Picture Order Count (POC) for the frame.
 ///
 /// # Safety
 /// `pEncCtx` must be non-null and properly initialized.
-pub fn InitFrameCoding(
-    pEncCtx: &mut sWelsEncCtx,
+pub unsafe fn InitFrameCoding(
+    pEncCtx: *mut sWelsEncCtx,
     keFrameType: EVideoFrameType,
     kiDidx: i32,
-) { unsafe {
-    // **T6.J1.** Safe signature, raw body: one derivation from the
-    // caller's `&mut`, and the body below is unchanged.
-    let pEncCtx: *mut sWelsEncCtx = pEncCtx;
+) {
     if pEncCtx.is_null() || ctx_param(pEncCtx).is_null() || ctx_sps(pEncCtx).is_null() {
         return;
     }
@@ -1686,7 +1674,7 @@ pub fn InitFrameCoding(
             (*pParamInternal).iPOC = 0;
         }
 
-        UpdateFrameNum(&mut *pEncCtx, kiDidx);
+        UpdateFrameNum(pEncCtx, kiDidx);
 
         (*pEncCtx).eNalType = EWelsNalUnitType::NAL_UNIT_CODED_SLICE;
         (*pEncCtx).eSliceType = EWelsSliceType::P_SLICE;
@@ -1710,27 +1698,24 @@ pub fn InitFrameCoding(
             (*pParamInternal).iPOC = 0;
         }
 
-        UpdateFrameNum(&mut *pEncCtx, kiDidx);
+        UpdateFrameNum(pEncCtx, kiDidx);
 
         (*pEncCtx).eNalType = EWelsNalUnitType::NAL_UNIT_CODED_SLICE;
         (*pEncCtx).eSliceType = EWelsSliceType::I_SLICE;
         (*pEncCtx).eNalPriority = EWelsNalRefIdc::NRI_PRI_HIGHEST;
     }
-}}
+}
 
 /// Evaluates VAA scene change analysis, LTR feedback, and rate control constraints to classify frame coding type.
 ///
 /// # Safety
 /// `pEncCtx` must be non-null and initialized.
-pub fn DecideFrameType(
-    pEncCtx: &mut sWelsEncCtx,
+pub unsafe fn DecideFrameType(
+    pEncCtx: *mut sWelsEncCtx,
     kiSpatialNum: i8,
     kiDidx: i32,
     bSkipFrameFlag: bool,
-) -> EVideoFrameType { unsafe {
-    // **T6.J1.** Safe signature, raw body: one derivation from the
-    // caller's `&mut`, and the body below is unchanged.
-    let pEncCtx: *mut sWelsEncCtx = pEncCtx;
+) -> EVideoFrameType {
     if pEncCtx.is_null() || ctx_param(pEncCtx).is_null() {
         return EVideoFrameType::videoFrameTypeInvalid;
     }
@@ -1820,7 +1805,7 @@ pub fn DecideFrameType(
     }
 
     iFrameType
-}}
+}
 
 /// Zeroes `iSize` bytes at `pDst`.
 ///

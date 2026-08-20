@@ -647,3 +647,114 @@ substring), and both ran green under the `--lib` step's flags
 (`MIRIFLAGS=-Zmiri-ignore-leaks`, **2 passed / 0 failed**, Miri clock 16.92s).
 There was no backlog behind the skip; S15's clause applied and the line went
 with the finding it named. F13 has no open site anywhere in the tree.
+
+---
+
+## F66 — a `&mut sWelsEncCtx` parameter invalidates every context cursor, so step 2's conversion cannot land before Phases 7 and 9
+
+**Measured 2026-08-20, session J, at `2bcf0743`. The conversion was made, gated,
+Miri'd, and reverted; the measurement below is what it produced.**
+
+Session I's brief (step 2) and session J's brief (step 1) both call for the
+~117 `unsafe fn` whose only raw parameter is `*mut sWelsEncCtx` to become safe
+`fn` taking `&mut sWelsEncCtx`. Session J did it: 109 functions (the true set —
+113 ctx-only non-MT signatures minus four that take `*mut *mut sWelsEncCtx`),
+converted root-down in five depth levels, four commits, each green on
+`gates.sh commit`, 496/490 tests, sweeps 368/369 with one F3-signature hit per
+profile.
+
+**Then the aliasing checker refused it, and the reason generalises.**
+
+A `&mut sWelsEncCtx` **function-entry retag invalidates the entire context, at
+every offset.** Miri says so in as many words:
+
+```
+help: <17125342> was created by a SharedReadOnly retag at offsets [0x258..0x288]
+    --> encoder_ext.rs:3033   let pSpatialIndexMap = (*pCtx).sSpatialIndexMap.as_ptr();
+help: <17125342> was later invalidated at offsets [0x0..0x17ee8] by a Unique retag
+    --> encoder_ext.rs:3034   InitBitStream(&mut *pCtx);
+```
+
+`[0x0..0x17ee8]` is the whole `sWelsEncCtx`. This is the asymmetry that makes
+the class new: a **raw write** through the parent pops only the offsets it
+touches — which is why the port's dominant idiom (derive a cursor from the
+context, call something, use the cursor) has been sound through five phases —
+but a **`&mut` retag** pops every cursor into the context regardless of what the
+callee goes near.
+
+### The measurement
+
+Of the 109 converted functions, **64 have at least one call site that holds a
+context-derived pointer across the call** — 93 sites in 28 caller functions:
+
+| file | hazardous sites |
+|---|---|
+| `encoder_ext.rs` | 81 |
+| `ref_list_mgr_svc.rs` | 32 |
+| `rc.rs` | 31 |
+| `svc_encode_slice.rs` | 6 |
+| `svc_mode_decision.rs` | 5 |
+| `wels_encoder_ext.rs` | 5 |
+| `encoder_context.rs`, `wels_preprocess.rs`, `slice_multi_threading.rs` | 5 |
+
+The worst caller is `WelsEncoderEncodeExt` with 68 — it is the frame loop, and
+holding `pSpatialIndexMap`, `pLayerBsInfo`, `pSvcParam` and the layer cursor
+across calls is what a frame loop *is*.
+
+Three of the 64 are themselves cursor accessors — `ctx_pic_ref_mut`,
+`ctx_ref_pic`, `set_current_layer`. Converting an accessor is the sharpest form
+of the problem: its whole purpose is to hand out a cursor, and taking `&mut`
+makes calling it invalidate every cursor already handed out.
+
+### What Miri saw versus what is there
+
+Miri (`MIRI_SCOPE=encoder`, 252 tests) found **two**, one per run, aborting at
+the first:
+
+1. `encoder_ext.rs:1474` — `WelsRcInitModule(&mut *pCtx, (*ctx_param(pCtx)).iRCMode)`.
+   Argument order: the reference is built, then argument 2 reads through the raw
+   and pops it. Fixable by hoisting, and hoisted.
+2. `encoder_ext.rs:3037` — `pSpatialIndexMap` above. **Not** fixable by hoisting
+   in general: the derivation sits where a previous session deliberately put it
+   (session A's comment at `encoder_ext.rs:3028` explains the ordering), and
+   moving a derivation past a call that may reallocate the container is a
+   behaviour change, not a spelling change.
+
+Two of 93 is the coverage ratio, not the defect ratio. The other 91 are on paths
+the encoder probe does not drive — LTR marking, screen content, the timestamp RC
+mode. **rustc reports none of them**, at any optimisation level.
+
+### Why this is not a "fix the sites" problem
+
+The three available moves each fail:
+
+- **Reorder every site.** Some of these calls reallocate the container the
+  cursor points into (`ExtendLayerBuffer`, `ReallocSliceBuffer`,
+  `RequestMemorySvc`). Moving a derivation across them changes which allocation
+  the cursor names. That is hard rule 8's line.
+- **Keep the 45 with no detected hazard.** The detector is a heuristic; a false
+  negative is silent UB with no gate behind it, and the set is unstable — the
+  next session to add a cursor at one of those call sites reintroduces UB with
+  nothing to catch it.
+- **Convert deeper first.** Ordering is irrelevant. This is a *caller-side*
+  property, orthogonal to the root-down rule that the briefs prescribe. Root-down
+  conversion prevents a converted callee under a raw caller; it does nothing
+  about a caller holding a cursor.
+
+### Disposition
+
+**Step 1 reverted in full** (T6.J5), tree restored byte-identical to
+`2bcf0743`. The conversion is not blocked by anything in its own module — it is
+blocked by the raw cursors that Phases 7 (`SSlice`, `SDqLayer`'s MT share) and 9
+(`*mut u8` planes, `SMbCache`, `SMB`, the coefficient cursors) still hand out of
+the context. **It becomes available when those retire, and not before.**
+
+This is F65's shape a second time: Phase 6's remaining moves are gated on
+families this phase's own do-not-touch table assigns elsewhere. It costs the
+phase nothing — the context conversion is not one of §7's five exit conditions —
+and the handoffs in the plan's §5 carry it forward.
+
+**Recommended for Phase 9's brief:** do the context conversion *after* the
+plane and macroblock cursors are gone, and run this session's detector
+(`q1c.py`, reproduced in the session J log) as the precondition rather than as
+the post-mortem.
