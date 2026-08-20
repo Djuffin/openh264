@@ -23,7 +23,7 @@ use crate::encoder::svc_encode_slice::WelsPMbChromaEncode;
 use crate::encoder::svc_set_mb_syn_cavlc::IS_INTRA16x16;
 use crate::encoder::vlc_encoder::BsSizeUE;
 pub use crate::encoder::encoder_context::SMVUnitXY;
-use crate::encoder::encoder_context::ctx_dq_layer;
+use crate::encoder::encoder_context::{ctx_dq_layer, ctx_vaa};
 pub use crate::encoder::encoder_context::SMVComponentUnit;
 pub use crate::encoder::encoder_context::EWelsSliceType;
 pub use crate::encoder::picture::SScreenBlockFeatureStorage;
@@ -392,7 +392,7 @@ pub unsafe extern "C" fn WelsMdInterSecondaryModesEnc(
     } else {
         //Step 3: SubP16 MD
         (*pFuncList).pfSetScrollingMv.expect("pfSetScrollingMv is unset")(
-            (*pEncCtx).pVaa,
+            ctx_vaa(pEncCtx),
             pWelsMd,
         ); //SCC
         (*pFuncList).pfInterFineMd.expect(
@@ -596,7 +596,7 @@ pub unsafe extern "C" fn WelsMdBackgroundMbEnc(
         WelsRecPskip(pCurDqLayer, pFunc, pCurMb, pMbCache);
         VaaBackgroundMbDataUpdate(
             pFunc,
-            (*pEncCtx).pVaa as *mut crate::encoder::wels_preprocess::SVAAFrameInfo,
+            ctx_vaa(pEncCtx) as *mut crate::encoder::wels_preprocess::SVAAFrameInfo,
             pCurMb,
         );
         return;
@@ -1666,7 +1666,7 @@ pub unsafe extern "C" fn WelsMdInterJudgeBGDPskip(
 
     let kiRefMbQp = (&layer_ref_pic(pCurDqLayer).expect("bound").pRefMbQp)[(*pCurMb).iMbXY as usize] as i32;
     let kiCurMbQp = (*pCurMb).uiLumaQp as i32;
-    let pVaaBgMbFlag = (*(*pEncCtx).pVaa).pVaaBackgroundMbFlag.as_mut_ptr().add((*pCurMb).iMbXY as usize);
+    let pVaaBgMbFlag = (*ctx_vaa(pEncCtx)).pVaaBackgroundMbFlag.as_mut_ptr().add((*pCurMb).iMbXY as usize);
 
     let kiMbWidth: isize = (*pCurDqLayer).iMbWidth as isize;
 
@@ -1847,7 +1847,7 @@ pub unsafe extern "C" fn JudgeScrollSkip(
     let kiMbY = (*pCurMb).iMbY as i32;
     let kiMbWidth: i32 = (*pCurDqLayer).iMbWidth as i32;
     let kiMbHeight: i32 = (*pCurDqLayer).iMbHeight as i32;
-    let pVaaExt = (*pEncCtx).pVaa as *mut SVAAFrameInfoExt_t;
+    let pVaaExt = ctx_vaa(pEncCtx) as *mut SVAAFrameInfoExt_t;
 
     let mut bTryScrollSkip;
     if (*pVaaExt).sScrollDetectInfo.bScrollDetectFlag {
@@ -2060,7 +2060,7 @@ pub unsafe extern "C" fn MdInterSCDPskipProcess(
     eSkipMode: ESkipModes,
 ) -> bool {
     let pMbCache = std::ptr::addr_of_mut!((*pSlice).sMbCacheInfo);
-    let pVaaExt = (*pEncCtx).pVaa as *mut SVAAFrameInfoExt_t;
+    let pVaaExt = ctx_vaa(pEncCtx) as *mut SVAAFrameInfoExt_t;
     let pCurDqLayer = current_layer(pEncCtx);
 
     let kiRefMbQp = (&layer_ref_pic(pCurDqLayer).expect("bound").pRefMbQp)[(*pCurMb).iMbXY as usize] as i32;
@@ -2137,7 +2137,7 @@ pub unsafe extern "C" fn WelsMdInterJudgeSCDPskip(
     pCurMb: &mut SMB,
 ) -> bool {
     let pCurDqLayer = current_layer(pEncCtx);
-    SetBlockStaticIdcToMd((*pEncCtx).pVaa as *mut SVAAFrameInfoExt_t, pWelsMd, pCurMb, pCurDqLayer);
+    SetBlockStaticIdcToMd(ctx_vaa(pEncCtx) as *mut SVAAFrameInfoExt_t, pWelsMd, pCurMb, pCurDqLayer);
 
     if MdInterSCDPskipProcess(pEncCtx, pWelsMd, slice, pCurMb, ESkipModes::STATIC) {
         return true;
@@ -2240,7 +2240,7 @@ pub unsafe extern "C" fn WelsMdInterFinePartitionVaaOnScreen(
     let pMbCache = std::ptr::addr_of_mut!((*pSlice).sMbCacheInfo);
     let pCurDqLayer = current_layer(pEncCtx);
 
-    let pSad8x8_ptr = (*(*pEncCtx).pVaa)
+    let pSad8x8_ptr = (*ctx_vaa(pEncCtx))
         .sVaaCalcInfo
         .pSad8x8
         .as_mut_ptr()

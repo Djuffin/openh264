@@ -36,6 +36,7 @@ use crate::encoder::svc_encode_slice::current_layer;
 use crate::encoder::picture::{RecPicId, SrcPicId};
 use crate::common::mc::{McChroma_c, McLuma_c};
 use crate::encoder::encoder_context::{sWelsEncCtx, SMVComponentUnit, SMVUnitXY};
+use crate::encoder::encoder_context::ctx_vaa;
 use crate::encoder::md::{
     FillNeighborCacheIntra, InitMeRefinePointer, MdIntraAnalysisVaaInfo, MeRefineFracPixel, SMB,
     SMbCache, SMeRefinePointer, SWelsMD, BsSizeUE, MB_TYPE_16x16, MB_TYPE_16x8, MB_TYPE_8x16,
@@ -894,7 +895,7 @@ pub unsafe fn WelsMdInterInit(
         pMbCache,
         pCurMb,
         kiMbWidth,
-        (*(*pEncCtx).pVaa).pVaaBackgroundMbFlag.as_mut_ptr().add(kiMbXY as usize),
+        (*ctx_vaa(pEncCtx)).pVaaBackgroundMbFlag.as_mut_ptr().add(kiMbXY as usize),
         &layer_dec_pic_mut(pCurLayer)
             .expect("the layer's reconstruction picture is bound")
             .pMbSkipSad,
@@ -1297,7 +1298,7 @@ pub unsafe extern "C" fn WelsMdInterFinePartitionVaa(
     let uiMbSign = (*(*pEncCtx).pFuncList)
         .pfGetMbSignFromInterVaa
         .expect("pfGetMbSignFromInterVaa unset")(
-        (*(*pEncCtx).pVaa)
+        (*ctx_vaa(pEncCtx))
             .sVaaCalcInfo
             .pSad8x8
             .as_mut_ptr()
@@ -1305,7 +1306,7 @@ pub unsafe extern "C" fn WelsMdInterFinePartitionVaa(
     );
 
     if crate::encoder::dump_enabled(&FP_DUMP, "OH264_FPDUMP") {
-        let sad = (&(*(*pEncCtx).pVaa).sVaaCalcInfo.pSad8x8)[(*pCurMb).iMbXY as usize];
+        let sad = (&(*ctx_vaa(pEncCtx)).sVaaCalcInfo.pSad8x8)[(*pCurMb).iMbXY as usize];
         eprintln!(
             "FP mb={:3} sign={:2} best={:7} sad8x8={},{},{},{}",
             (*pCurMb).iMbXY,

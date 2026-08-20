@@ -24,7 +24,7 @@ pub const STR_ROOM: i32 = 1;
 // `encoder_context.rs` from `wels_const.h`. This module previously had its own copies
 // with MAX_SHORT_REF_COUNT = 16 (C++: 4) and MAX_TEMPORAL_LEVEL = 8 (C++: 4).
 pub use crate::encoder::encoder_context::{MAX_GOP_SIZE, MAX_SHORT_REF_COUNT, MAX_TEMPORAL_LEVEL};
-use crate::encoder::encoder_context::{ctx_ltr_at, ctx_ref_list};
+use crate::encoder::encoder_context::{ctx_ltr_at, ctx_ref_list, ctx_vaa};
 pub const MAX_REF_PIC_COUNT: usize = 16;
 pub const LONG_TERM_REF_NUM: i32 = 2;
 pub const MAX_TEMPORAL_LAYER_NUM: usize = 4;
@@ -449,8 +449,8 @@ pub unsafe fn HandleLTRMarkFeedback(pCtx: *mut sWelsEncCtx) {
                 && pPic.uiRecieveConfirmed != RECIEVE_SUCCESS
             {
                 (*pRefList).pic_mut(idPic).uiRecieveConfirmed = RECIEVE_SUCCESS;
-                if !(*pCtx).pVaa.is_null() {
-                    (*(*pCtx).pVaa).uiValidLongTermPicIdx =
+                if !ctx_vaa(pCtx).is_null() {
+                    (*ctx_vaa(pCtx)).uiValidLongTermPicIdx =
                         (*pRefList).pic(idPic).iLongTermPicNum as u8;
                 }
                 pLtr.iCurFrameNumInDec = pLtr.iLtrMarkFbFrameNum;
@@ -532,8 +532,8 @@ pub unsafe fn LTRMarkProcess(pCtx: *mut sWelsEncCtx) {
             (*pRefList).pic_mut(id).uiRecieveConfirmed = RECIEVE_SUCCESS;
         }
     } else if pLtr.bLTRMarkingFlag {
-        if !(*pCtx).pVaa.is_null() {
-            (*(*pCtx).pVaa).uiMarkLongTermPicIdx = pLtr.iCurLtrIdx as u8;
+        if !ctx_vaa(pCtx).is_null() {
+            (*ctx_vaa(pCtx)).uiMarkLongTermPicIdx = pLtr.iCurLtrIdx as u8;
         }
 
         if pLtr.iLTRMarkMode == LTR_MARKING_PROCESS_MODE::LTR_DELAY_MARK as i32 {
@@ -621,8 +621,8 @@ pub unsafe fn LTRMarkProcessScreen(pCtx: *mut sWelsEncCtx) {
         return;
     }
     let iLtrIdx = (*pRefList).pic(idDec).iLongTermPicNum;
-    if !(*pCtx).pVaa.is_null() {
-        (*(*pCtx).pVaa).uiMarkLongTermPicIdx = iLtrIdx as u8;
+    if !ctx_vaa(pCtx).is_null() {
+        (*ctx_vaa(pCtx)).uiMarkLongTermPicIdx = iLtrIdx as u8;
     }
 
     if iLtrIdx >= 0 && (iLtrIdx as usize) < MAX_REF_PIC_COUNT {
@@ -779,9 +779,9 @@ pub unsafe fn WelsUpdateRefList(pCtx: *mut sWelsEncCtx) -> bool {
             pLtr.bLTRMarkEnable = true;
             pLtr.uiLtrMarkInterval = 0;
 
-            if !(*pCtx).pVaa.is_null() {
-                (*(*pCtx).pVaa).uiValidLongTermPicIdx = 0;
-                (*(*pCtx).pVaa).uiMarkLongTermPicIdx = 0;
+            if !ctx_vaa(pCtx).is_null() {
+                (*ctx_vaa(pCtx)).uiValidLongTermPicIdx = 0;
+                (*ctx_vaa(pCtx)).uiMarkLongTermPicIdx = 0;
             }
         }
     }
@@ -1101,11 +1101,11 @@ pub unsafe fn WelsBuildRefList(
 
 /// Invokes VPP UpdateBlockIdcForScreen to update static block map.
 pub unsafe fn UpdateBlockStatic(pCtx: *mut sWelsEncCtx) {
-    if pCtx.is_null() || (*pCtx).pVaa.is_null() || (*pCtx).pVpp.is_null() {
+    if pCtx.is_null() || ctx_vaa(pCtx).is_null() || (*pCtx).pVpp.is_null() {
         return;
     }
     // ref_list_mgr_svc.cpp:649 — static_cast<SVAAFrameInfoExt*> (pCtx->pVaa)
-        let pVaaExt = (*pCtx).pVaa as *mut SVAAFrameInfoExt;
+        let pVaaExt = ctx_vaa(pCtx) as *mut SVAAFrameInfoExt;
     let pRefList = ctx_ref_list(pCtx, (*pCtx).uiDependencyId as usize);
     for idx in 0..((*pCtx).iNumRef0 as usize) {
         let Some(idRef) = (*pCtx).pRefList0[idx] else {
@@ -1262,13 +1262,13 @@ pub unsafe fn UpdateSrcPicListLosslessScreenRefSelectionWithLtr(pCtx: *mut sWels
     let iDIdx = (*pCtx).uiDependencyId as i32;
     UpdateOriginalPicInfoFromCtx(pCtx);
     PrefetchNextBuffer(pCtx);
-    if !(*pCtx).pVpp.is_null() && !(*pCtx).pVaa.is_null() {
+    if !(*pCtx).pVpp.is_null() && !ctx_vaa(pCtx).is_null() {
         let pRefList = &*(ctx_ref_list(pCtx, iDIdx as usize));
         // wels_preprocess.h:143 takes const int32_t; the uint8_t field promotes.
         (*(*pCtx).pVpp).UpdateSrcListLosslessScreenRefSelectionWithLtr(
             (*pCtx).pEncPic,
             iDIdx,
-            (*(*pCtx).pVaa).uiMarkLongTermPicIdx as i32,
+            (*ctx_vaa(pCtx)).uiMarkLongTermPicIdx as i32,
             pRefList,
         );
     }
@@ -1339,8 +1339,8 @@ pub unsafe fn WelsUpdateRefListScreen(pCtx: *mut sWelsEncCtx) -> bool {
         pLtr.iCurLtrIdx = 1;
         pLtr.iSceneLtrIdx = 1;
         pLtr.uiLtrMarkInterval = 0;
-        if !(*pCtx).pVaa.is_null() {
-            (*(*pCtx).pVaa).uiValidLongTermPicIdx = 0;
+        if !ctx_vaa(pCtx).is_null() {
+            (*ctx_vaa(pCtx)).uiValidLongTermPicIdx = 0;
         }
     }
 
@@ -1356,14 +1356,14 @@ pub unsafe fn WelsBuildRefListScreen(
     iPOC: i32,
     iBestLtrRefIdx: i32,
 ) -> bool {
-    if pCtx.is_null() || (*pCtx).pSvcParam.is_null() || (*pCtx).pVaa.is_null() || current_layer(pCtx).is_null() {
+    if pCtx.is_null() || (*pCtx).pSvcParam.is_null() || ctx_vaa(pCtx).is_null() || current_layer(pCtx).is_null() {
         return false;
     }
     let uiDid = (*pCtx).uiDependencyId as usize;
     let pRefList = ctx_ref_list(pCtx, (uiDid) as usize);
     let pParam = (*pCtx).pSvcParam;
     // ref_list_mgr_svc.cpp:649 — static_cast<SVAAFrameInfoExt*> (pCtx->pVaa)
-        let pVaaExt = (*pCtx).pVaa as *mut SVAAFrameInfoExt;
+        let pVaaExt = ctx_vaa(pCtx) as *mut SVAAFrameInfoExt;
     let iNumRef = (*pParam).iNumRefFrame;
     let pParamD = &(*pParam).sDependencyLayers[uiDid];
     (*pCtx).iNumRef0 = 0;

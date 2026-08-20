@@ -608,6 +608,23 @@ pub unsafe fn ctx_mb_index_x(pCtx: *mut sWelsEncCtx, kiDid: usize) -> *mut i16 {
     }
 }
 
+/// The frame's **video-analysis block** — T6.H10, and null before the preprocessor
+/// builds one, which is what the raw field held.
+///
+/// Six of its ~80 consumers cast the answer to `*mut SVAAFrameInfoExt` — the
+/// screen-content extension, `SCREEN_CONTENT(dormant: Phase 10)` and fenced. They
+/// keep the cast; this only changes where the pointer comes from.
+///
+/// # Safety
+/// `pCtx` must point to a live encoder context.
+#[inline]
+pub unsafe fn ctx_vaa(pCtx: *mut sWelsEncCtx) -> *mut SVAAFrameInfo {
+    match (*pCtx).pVaa.as_mut() {
+        Some(b) => &raw mut **b,
+        None => std::ptr::null_mut(),
+    }
+}
+
 /// The **root** of `pCtx->pMvdCostTable` — T6.H9; see [`ctx_sps_array`] for the
 /// spelling and for what empty means.
 ///
@@ -971,7 +988,11 @@ pub struct sWelsEncCtx {
     pub iCheckWindowIntervalShift: i32,
     pub bCheckWindowShiftResetFlag: bool,
     pub iGlobalQp: i32,
-    pub pVaa: *mut SVAAFrameInfo,
+    /// The video-analysis block for the frame in flight — **T6.H10, owned.** It has
+    /// been `Box`-built and has owned its seven per-frame arrays since T6.F3; this is
+    /// the last step, giving the `Box` an owner so `Create`/`Destroy` are `new`/`Drop`.
+    /// `None` before the preprocessor runs. Resolve it with [`ctx_vaa`].
+    pub pVaa: Option<Box<SVAAFrameInfo>>,
     pub pVpp: *mut crate::encoder::wels_preprocess::CWelsPreProcess,
     /// **T6.H2 — owned.** `RequestMemorySvc` sized this from the strategy's
     /// `GetNeededSpsNum` and `WelsMallocz`'d it; the length is the same number and
@@ -1161,7 +1182,7 @@ impl sWelsEncCtx {
             iGlobalQp: 0,                   // overwritten by WelsRcPictureInitGom etc.
 
             // ---- preprocessing --------------------------------------------------
-            pVaa: std::ptr::null_mut(),
+            pVaa: None,
             pVpp: std::ptr::null_mut(),
 
             // ---- parameter sets: the arrays, their aliases, their counts --------
@@ -1635,7 +1656,7 @@ pub unsafe fn DecideFrameType(
     let mut bSceneChangeFlag = false;
 
     if (*pSvcParam).iUsageType == EUsageType::SCREEN_CONTENT_REAL_TIME {
-        let pVaa = (*pEncCtx).pVaa;
+        let pVaa = ctx_vaa(pEncCtx);
         let vaa_idr = !pVaa.is_null() && (*pVaa).bIdrPeriodFlag;
 
         if !(*pSvcParam).bEnableSceneChangeDetect
@@ -1688,7 +1709,7 @@ pub unsafe fn DecideFrameType(
             (*pEncCtx).bCurFrameMarkedAsSceneLtr = true;
         }
     } else {
-        let pVaa = (*pEncCtx).pVaa;
+        let pVaa = ctx_vaa(pEncCtx);
         let vaa_idr = !pVaa.is_null() && (*pVaa).bIdrPeriodFlag;
 
         if !(*pSvcParam).bEnableSceneChangeDetect
@@ -2055,6 +2076,8 @@ mod tests {
             "pSpsArray", "pSubsetArray", "pPPSArray", "pDqIdcMap", "pFrameBs", "pLtr",
             "pWelsSvcRc", "ppRefPicListExt", "ppDqLayerList", "pMvdCostTable",
         ];
+        // `pVaa` is `Option<Box<_>>`: its `None` is the null pointer and defines all
+        // eight of its bytes, so it stays in tier 1 with `pStrideTab`.
         assert!(built.pSpsArray.is_empty(), "new(): no SPS array is allocated yet");
         assert!(built.pSubsetArray.is_empty(), "new(): no subset SPS array is allocated yet");
         assert!(built.pPPSArray.is_empty(), "new(): no PPS array is allocated yet");
@@ -2248,11 +2271,11 @@ mod tests {
     #[test]
     fn test_decide_frame_type() {
         let mut param = SWelsSvcCodingParam::default();
-        let mut vaa = SVAAFrameInfo::default();
         let mut ctx = sWelsEncCtx::new();
         param.sDependencyLayers[0].bEncCurFrmAsIdrFlag = true;
         ctx.pSvcParam = &mut param;
-        ctx.pVaa = &mut vaa;
+        // T6.H10: the context owns the block, so the fixture hands it one.
+        ctx.pVaa = Some(Box::new(SVAAFrameInfo::default()));
 
         unsafe {
             let ft = DecideFrameType(&mut ctx, 1, 0, false);

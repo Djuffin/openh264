@@ -27,7 +27,7 @@ use crate::common::memory_align::CMemoryAlign;
 use crate::decoder::nalu::g_ksLevelLimits;
 use crate::encoder::encoder_context::{
     ctx_dq_idc_map, ctx_dq_layer, ctx_frame_bs, ctx_frame_bs_at, ctx_ltr_at, ctx_mb_index_x,
-    ctx_mb_index_y, ctx_mvd_cost_table, ctx_ref_list,
+    ctx_mb_index_y, ctx_mvd_cost_table, ctx_ref_list, ctx_vaa,
     ctx_rc_at,
     ctx_pps_array, ctx_sps_array,
     ctx_stride_enc_block_offset,
@@ -1189,12 +1189,11 @@ pub unsafe fn RequestMemorySvc(
     // **T6.F3**: one constructor where the C++ cuts seven `CMemoryAlign` blocks.
     // `SVAAFrameInfo` is `Box`-built and owns its per-frame result arrays; the
     // background-detection pair exists exactly when the C++ allocates it.
-    (**ppCtx).pVaa = Box::into_raw(
-        crate::encoder::wels_preprocess::SVAAFrameInfo::new(
-            iCountMaxMbNum,
-            (*(**ppCtx).pSvcParam).bEnableBackgroundDetection,
-        ),
-    );
+    // **T6.H10**: `Box::into_raw` stood here; the context holds the `Box`.
+    (**ppCtx).pVaa = Some(crate::encoder::wels_preprocess::SVAAFrameInfo::new(
+        iCountMaxMbNum,
+        (*(**ppCtx).pSvcParam).bEnableBackgroundDetection,
+    ));
 
     if (*(**ppCtx).pSvcParam).bEnableAdaptiveQuant {
         // encoder_ext.cpp:1720, sAdaptiveQuantParam buffers. Not ported.
@@ -1808,12 +1807,9 @@ pub unsafe fn WelsUninitEncoderExt(ppCtx: *mut *mut sWelsEncCtx) {
         // loop read `iSpatialLayerNum` back out of the *parameters* at teardown, so a
         // configuration change between init and teardown would have leaked the slots
         // past the new count. `FreeRefList` is deleted with it.
-        if !(*pCtx).pVaa.is_null() {
-            // **T6.F3**: seven `WelsFree`s and their null tests were here. The VAA
-            // block owns its per-frame arrays, so releasing it is dropping it.
-            drop(Box::from_raw((*pCtx).pVaa));
-            (*pCtx).pVaa = null_mut();
-        }
+        // **T6.F3** put seven `WelsFree`s and their null tests here into one
+        // `drop(Box::from_raw(..))`; **T6.H10** deletes that too — the context holds
+        // the `Box`, so releasing the VAA block is the context's own drop.
         if !(*pCtx).pSvcParam.is_null() {
             let _ = crate::encoder::param_svc::FreeCodingParam(&mut (*pCtx).pSvcParam, pMa);
         }
