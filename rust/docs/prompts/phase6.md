@@ -541,17 +541,32 @@ at a family boundary, and only with a written reason):
   per-macroblock resolutions reaching the four side arrays, which want slices, not
   addresses. F3 measurements **75–78**, all acquitted, two of them refining the
   retry protocol.
-* **G** — **brief written** ([`phase6_session_g.md`](phase6_session_g.md), steward,
-  2026-08-20). **The flip's first third: the constructor and the aliases.**
-  `sWelsEncCtx::new()` kills the three `mem::zeroed` shells (5b's recipe:
-  field-wise, zero-meaning documented, byte-compare test at **zero** attributed
-  differences), then the context's *aliases* become ids while every container
-  stays raw — `pCurDqLayer` → `Option<LayerIdx>` (281 sites; four writers, one a
-  recorded MT one-liner), `pSps`/`pPps`/`pSubsetSps` and the layer/slice-header
-  parameter-set pointers → the ids `SDqIdc` already stores as data — with the 6.5
-  writers folded in (`au_set.rs`, `paraset_strategy.rs`, `rc.rs`'s reaches). Step
-  0 pays F63 forward: the decoder's `data_ptr` gets S40's twice-derived test. No
-  member owns; no `&mut sWelsEncCtx` anywhere (S37).
+* **G** — **spent** (2026-08-20). **All five steps landed, none dropped.**
+  `sWelsEncCtx::new()` exists and `mem::zeroed::<sWelsEncCtx>()` reads **0**; the
+  brief's byte-comparison test could not be written as specified and the reason is
+  **F64** — *a field-wise constructor cannot be proved byte-equal to a memset image,
+  only value-equal, and the difference is exactly the bytes the type does not define*
+  (a niche `Option` leaves its non-niche payload undefined; `repr(C)` padding does the
+  same with no niche). Two tiers, **zero attributed differences**: 63 fields byte-wise
+  (96103/97888), 7 by value, 53 bytes of padding reported. `pCurDqLayer` →
+  `Option<LayerIdx>` at all **152** field accesses behind `current_layer`, with the
+  identifier surviving as the C++'s own name for the local cursor; three of its four
+  writers got *shorter* because they already held the index, the fourth is the recorded
+  MT one-liner. The parameter-set aliases are ids, `SLayerInfo`'s two SPS pointers are
+  one `Option<LayerSps>` (the C++ spelled that tag as a null pointer), and **six fields
+  were deleted rather than converted** — none of them read by either tree, two of them
+  with their replacement already in the same struct. `au_set.rs`'s nine builders take
+  references (two stop being `unsafe fn`); `paraset_strategy.rs`'s `*mut *mut`
+  out-parameters handed back the id the function returns. **Step 4 found nothing to
+  sweep**: `rc.rs`'s 93 raw pointers are attributed line by line in its own module
+  header — 61 arena (I), 16+3 (H), 7 slice (I/4b), 6 screen-content (P10) — with the
+  one convertible-looking function named against its blocker. Sizes and all 15 pins
+  re-measured in both profiles (`sWelsEncCtx` 97872/97784; `SLayerInfo` 48 → 32 and no
+  longer `repr(C)`). Span **+1.07%** encode median, max +2.32%, **0 rows over 5%**,
+  against a null of +0.00% — a fixed per-macroblock cost, F's shape at a fifth the
+  size, two instances paid down inside the session. Step 0 paid F63 forward: the
+  decoder's `data_ptr` **did** carry the trap, red-proofed under Miri before the fix.
+  F3 measurements **80–84**, all the signature, all 5/5.
 * **H** — **the members own**: `RequestMemorySvc` → constructors, `FreeMemorySvc`
   → `Drop` with F19's leak check per `Box::into_raw` member, the 18 container
   fields → owned (`Vec<Box<SDqLayer>>`, `Vec<Box<SRefList>>`, the parameter-set

@@ -2607,3 +2607,34 @@ untouched and is still Phase 7's.
 
 Running total: **eighty-one measurements, twenty-five alternations, fifty-four
 acquittals.**
+
+---
+
+### Measurements 82, 83 and 84 — 2026-08-20, Phase 6 session G's steps 3a and 3b: three more, all the signature, all 5/5
+
+Three further single-configuration hits across two `family` batteries, each the
+signature, each cleared 5/5 on the retry in its own profile:
+
+```
+82  release: mt CiscoVT2people_160x96_6fps t=2 sm=3 n=600 cabac=0 rc=0 :: C++ 41938  Rust 0
+83  release: mt CiscoVT2people_160x96_6fps t=2 sm=3 n=600 cabac=0 rc=1 :: C++ 41938  Rust 0
+84  debug:   mt CiscoVT2people_160x96_6fps t=4 sm=3 n=600 cabac=0 rc=1 :: C++ 42538  Rust 0
+```
+
+**Five hits in one session, across four batteries, in a session whose other three
+batteries read 369/369 both profiles.** That is the rate this finding has always
+described, and there is nothing new in it — but the *distribution* is worth one line,
+because it is the practical argument for the retry rule existing at all: the same
+configuration family (`CiscoVT2people_160x96_6fps`, `sm=3`, `n=600`) accounts for four
+of the five, at three different thread/cabac/rc combinations, and it cleared 5/5 every
+time it was asked again. A session that treated any one of them as a regression would
+have spent its remaining time bisecting a race Phase 7 owns.
+
+The retry script this session used rebuilds the harness for the profile under test
+before running — the two profiles share `out/` file names — and is written as bash.
+Both are measurement 78's, now as code rather than as a sentence.
+
+**Acquitted as F3, all three.**
+
+Running total: **eighty-four measurements, twenty-five alternations, fifty-seven
+acquittals.**

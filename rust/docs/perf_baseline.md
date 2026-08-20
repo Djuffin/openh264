@@ -2657,3 +2657,57 @@ session-scale encode cost Phase 6 has recorded, and it buys 59 stored raw pictur
 pointers becoming handles with two types that do not convert. **S33 in reverse**: this
 one *is* claimed, because it is outside the floor in every row and the attribution
 reproduces.
+
+## Phase 6 session G — the constructor and the aliases, at a fifth of F's cost (2026-08-20)
+
+**Method** (S1/S2, `perfpair.py`): 7 interleaved pairs, `g_base` = `4a414c27` (the
+HEAD session G's brief was committed at) vs `g_head` = `703155ff`, with a **fresh null
+run in the same sitting**.
+
+| run | rows | median | min | max | rows over +5% |
+|---|---|---|---|---|---|
+| **null** (`g_head` vs itself), encode | 28 | +0.00% | −6.25% | +2.02% | 0 |
+| **span**, decode | 3 | +0.00% | −0.07% | +0.12% | 0 |
+| **span**, encode | 28 | **+1.07%** | +0.00% | **+2.32%** | **0** |
+
+`Spatial Ramps` excluded from every statistic, as always (S2).
+
+**Nothing rests on a breach, because there is not one** — no row is over 5%, the span's
+max is inside the null's own spread, and no contingency was owed. **The result is
+claimed anyway, and narrowly**, because the *signs* separate it from the floor: every
+encode row is non-negative (min +0.00%) where the null's signs straddled zero, and the
+per-content shape reproduces session F's exactly.
+
+| content | rows | delta |
+|---|---|---|
+| Mandelbrot (QVGA → 1080p) | 6 | +0.44 … +0.76% |
+| Testsrc 1080p | 2 | +0.91 … +1.09% |
+| SMPTE Bars / PAL 75% / RGB Test / YUV Space | 14 | +1.05 … +2.32% |
+
+Same reading as F's, one fifth the size: **a fixed per-macroblock overhead is invisible
+where a macroblock costs a lot and visible where it costs nothing.** Here it is not a
+handle resolution but an *id* resolution — `current_layer(pCtx)` and `layer_pps(pCtx,
+pCurLayer)` turn one pointer load into two or three plus a predictable branch, and the
+per-macroblock writers (`svc_set_mb_syn_cavlc`, `svc_set_mb_syn_cabac`,
+`svc_mode_decision`, `rc`) are where those calls land.
+
+**Two instances were paid down inside the session**, both by F5's rule and both
+byte-identical by construction: `svc_set_mb_syn_cabac`'s two adjacent resolutions
+became one binding, and `svc_set_mb_syn_cavlc` stopped resolving the same PPS a second
+time to recompute a value already bound at its function's head (the C++ re-reads there;
+under a pointer that was two loads, under a position it is a resolution).
+
+**One was deliberately not taken, and it is the interesting one.**
+`svc_set_mb_syn_cavlc`'s remaining pair sits either side of `WelsSpatialWriteMbPred`,
+and that file's own header records why it derives at each use rather than once at the
+top: the callee re-derives the frame buffer and the slice's `sMbCacheInfo`, so a borrow
+taken before it is invalidated by it. Hoisting the layer resolution across that call
+would be safe *today* — the layer is a different allocation — but it would put a
+long-lived cursor exactly where the file's rule says not to, for ~0.3% on flat content.
+**Phase 9** owns this properly, with the kernel-signature work: the writers want the
+PPS's `uiChromaQpIndexOffset` as a value in their signature, not a layer to resolve.
+
+**Verdict.** D-perf-4's **+25% median** tripwire unbreached by ~23 points. Cumulative
+encoder deficit ≈ **+13…+15%** → ≈ **+14…+16%**. What it buys: the last alias family
+in the encoder context, a constructor that makes session H's ownership flip possible at
+all, and six fields that were only ever declarations.
