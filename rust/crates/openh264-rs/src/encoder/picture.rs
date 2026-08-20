@@ -25,6 +25,7 @@ pub const LIST_SIZE: usize = 0x10000;
 
 /// `SScreenBlockFeatureStorage` — `codec/encoder/core/inc/picture.h:43`.
 /// Stored with a reference picture, one per frame.
+// SCREEN_CONTENT(dormant: Phase 10)
 #[repr(C)]
 #[derive(Debug)]
 pub struct SScreenBlockFeatureStorage {
@@ -98,6 +99,7 @@ pub struct SPicture {
     pub iFrameAverageQp: i32,
 
     // for screen reference frames
+    // SCREEN_CONTENT(dormant: Phase 10)
     pub pScreenBlockFeatureStorage: *mut SScreenBlockFeatureStorage,
 }
 
@@ -117,6 +119,7 @@ impl SPicture {
         self.iMarkFrameNum = -1;
         self.bUsedAsRef = false;
 
+        // SCREEN_CONTENT(dormant: Phase 10)
         if !self.pScreenBlockFeatureStorage.is_null() {
             (*self.pScreenBlockFeatureStorage).bRefBlockFeatureCalculated = false;
         }

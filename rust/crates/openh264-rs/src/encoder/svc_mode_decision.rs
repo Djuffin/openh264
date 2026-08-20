@@ -1208,6 +1208,7 @@ pub(crate) unsafe fn InitMe(
     iBlockSize: i32,
     pEnc: *mut u8,
     pRef: *mut u8,
+    // SCREEN_CONTENT(dormant: Phase 10)
     pRefFeatureStorage: *mut SScreenBlockFeatureStorage,
     sWelsMe: *mut SWelsME,
 ) {

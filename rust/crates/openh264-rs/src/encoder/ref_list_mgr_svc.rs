@@ -1139,6 +1139,7 @@ pub unsafe fn WelsUpdateSliceHeaderSyntax(
             pRefPicMark.bNoOutputOfPriorPicsFlag = false;
             pRefPicMark.bLongTermRefFlag = (*(*pCtx).pSvcParam).bEnableLongTermReference;
         } else {
+            // SCREEN_CONTENT(dormant: Phase 10)
             if (*(*pCtx).pSvcParam).iUsageType == EUsageType::SCREEN_CONTENT_REAL_TIME {
                 pRefPicMark.bAdaptiveRefPicMarkingModeFlag = (*(*pCtx).pSvcParam).bEnableLongTermReference;
             } else {
