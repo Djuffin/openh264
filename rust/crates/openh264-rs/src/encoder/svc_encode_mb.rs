@@ -47,6 +47,7 @@
 
 use crate::safe::plane::{PlaneCursor, PlaneCursorMut};
 pub use crate::encoder::encoder_context::SMVUnitXY;
+use crate::encoder::encoder_context::ctx_func_list;
 pub use crate::encoder::encoder_context::SDCTCoeff;
 pub use crate::encoder::encoder_context::SPicData;
 pub use crate::encoder::param_svc::SWelsPPS;
@@ -488,7 +489,7 @@ pub unsafe fn WelsEncRecI16x16Y(
     pMbCache: *mut SMbCache,
 ) {
     let mut aDctT4Dc = [0i16; 16];
-    let pFuncList = (*pEncCtx).pFuncList;
+    let pFuncList = ctx_func_list(pEncCtx);
     let pCurDqLayer = current_layer(pEncCtx);
     let kiEncStride = (*pCurDqLayer).iEncStride[0];
     let mut pRes = crate::encoder::md::coeff_level(pMbCache);
@@ -635,7 +636,7 @@ pub unsafe fn WelsEncRecI4x4Y(
     pMbCache: *mut SMbCache,
     uiI4x4Idx: u8,
 ) {
-    let pFuncList = (*pEncCtx).pFuncList;
+    let pFuncList = ctx_func_list(pEncCtx);
     let pCurDqLayer = current_layer(pEncCtx);
     let iEncStride = (*pCurDqLayer).iEncStride[0];
     let uiQp = (*pCurMb).uiLumaQp;
@@ -965,7 +966,7 @@ pub unsafe fn WelsTryPYskip(
     let pFF = g_kiQuantInterFF[kuiQp as usize].as_ptr();
 
     for _ in 0..4 {
-        if let Some(func) = (*(*pEncCtx).pFuncList).pfQuantizationFour4x4Max {
+        if let Some(func) = (*ctx_func_list(pEncCtx)).pfQuantizationFour4x4Max {
             func(pRes, pFF, pMF, aMax.as_mut_ptr() as *mut i16);
         }
 
@@ -973,10 +974,10 @@ pub unsafe fn WelsTryPYskip(
             if aMax[j] > 1 {
                 return false;
             } else if aMax[j] == 1 {
-                if let Some(func) = (*(*pEncCtx).pFuncList).pfScan4x4 {
+                if let Some(func) = (*ctx_func_list(pEncCtx)).pfScan4x4 {
                     func(pBlock, pRes);
                 }
-                if let Some(func) = (*(*pEncCtx).pFuncList).pfCalculateSingleCtr4x4 {
+                if let Some(func) = (*ctx_func_list(pEncCtx)).pfCalculateSingleCtr4x4 {
                     iSingleCtrMb += func(pBlock);
                 }
             }
@@ -1022,7 +1023,7 @@ pub unsafe fn WelsTryPUVskip(
     let pMF = g_kiQuantMF[kuiQp as usize].as_ptr();
     let pFF = g_kiQuantInterFF[kuiQp as usize].as_ptr();
 
-    let hadamard_skip = if let Some(func) = (*(*pEncCtx).pFuncList).pfQuantizationHadamard2x2Skip {
+    let hadamard_skip = if let Some(func) = (*ctx_func_list(pEncCtx)).pfQuantizationHadamard2x2Skip {
         func(pRes, (*pFF) << 1, (*pMF) >> 1) != 0
     } else {
         false
@@ -1038,7 +1039,7 @@ pub unsafe fn WelsTryPUVskip(
             .cast::<i16>()
             .add((((iUV - 1) << 2) * 16) as usize);
 
-        if let Some(func) = (*(*pEncCtx).pFuncList).pfQuantizationFour4x4Max {
+        if let Some(func) = (*ctx_func_list(pEncCtx)).pfQuantizationFour4x4Max {
             func(pRes, pFF, pMF, aMax.as_mut_ptr() as *mut i16);
         }
 
@@ -1046,10 +1047,10 @@ pub unsafe fn WelsTryPUVskip(
             if aMax[j] > 1 {
                 return false;
             } else if aMax[j] == 1 {
-                if let Some(func) = (*(*pEncCtx).pFuncList).pfScan4x4Ac {
+                if let Some(func) = (*ctx_func_list(pEncCtx)).pfScan4x4Ac {
                     func(pBlock, pRes);
                 }
-                if let Some(func) = (*(*pEncCtx).pFuncList).pfCalculateSingleCtr4x4 {
+                if let Some(func) = (*ctx_func_list(pEncCtx)).pfCalculateSingleCtr4x4 {
                     iSingleCtrMb += func(pBlock);
                 }
             }

@@ -14,6 +14,7 @@
 use std::ptr::null_mut;
 use std::sync::{Arc, Condvar, Mutex};
 pub use crate::encoder::encoder_context::SLogContext;
+use crate::encoder::encoder_context::ctx_func_list;
 use crate::encoder::encoder_context::ctx_param;
 pub use crate::encoder::param_svc::SWelsSvcCodingParam;
 pub use crate::encoder::svc_encode_slice::SDqLayer;
@@ -352,8 +353,8 @@ impl CWelsBaseTask {
         }
 
         let pfDeblockingFilterSlice =
-            (*(*pCtx).pFuncList).pfDeblocking.pfDeblockingFilterSlice.unwrap();
-        pfDeblockingFilterSlice(current_layer(pCtx), (*pCtx).pFuncList, self.m_pSlice);
+            (*ctx_func_list(pCtx)).pfDeblocking.pfDeblockingFilterSlice.unwrap();
+        pfDeblockingFilterSlice(current_layer(pCtx), ctx_func_list(pCtx), self.m_pSlice);
 
         ENC_RETURN_SUCCESS
     }
@@ -437,8 +438,8 @@ impl CWelsBaseTask {
                 return iReturn;
             }
             let pfDeblockingFilterSlice =
-                (*(*pCtx).pFuncList).pfDeblocking.pfDeblockingFilterSlice.unwrap();
-            pfDeblockingFilterSlice(pCurDq, (*pCtx).pFuncList, self.m_pSlice);
+                (*ctx_func_list(pCtx)).pfDeblocking.pfDeblockingFilterSlice.unwrap();
+            pfDeblockingFilterSlice(pCurDq, ctx_func_list(pCtx), self.m_pSlice);
 
             iAnyMbLeftInPartition =
                 kiEndMbIdxInPartition - (*pCurDq).LastCodedMbIdxOfPartition[kiPartitionId as usize];

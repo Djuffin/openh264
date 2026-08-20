@@ -165,8 +165,11 @@ pub type PCavlcParamCalFunc = unsafe extern "C" fn(
 /// dimensions.
 ///
 /// The discriminants are `iEntropyCodingModeFlag`'s own values, and `Cavlc = 0`
-/// makes the all-zero bit pattern a declared variant — which is what keeps
-/// `SWelsFuncPtrList`'s `mem::zeroed()` construction sound (S21).
+/// is deliberately the zero one. That used to be load-bearing: it was what kept
+/// `SWelsFuncPtrList`'s `mem::zeroed()` construction sound (S21). **T6.I1 wrote
+/// that constructor out field by field**, so the property is no longer relied on
+/// — it is kept because `Cavlc` is genuinely the C++'s default entropy coder, and
+/// `#[default]` below now states that directly instead of a memset implying it.
 #[repr(u8)]
 #[derive(Copy, Clone, PartialEq, Eq, Debug, Default)]
 pub enum EntropyCoder {
@@ -420,14 +423,87 @@ pub struct SWelsFuncPtrList {
 pub type TagWelsFuncPointerList = SWelsFuncPtrList;
 
 impl Default for SWelsFuncPtrList {
+    /// **T6.I1 — field-wise, replacing `unsafe { mem::zeroed() }`.**
+    ///
+    /// The zeroed version was sound and said so (S21): every member is a function
+    /// pointer, an array of them, a POD sub-table of them, an `EntropyCoder` /
+    /// `RCMode` whose zero discriminant is a declared variant, or an
+    /// `Option<Box<_>>` whose all-zero is `None` by the null-pointer niche. But
+    /// "sound" was a property re-argued in a comment every time a member was added,
+    /// and the argument had to be re-checked by hand on each change — the member
+    /// that would break it (any type without a valid all-zero bit pattern) is
+    /// exactly the member nobody would notice adding.
+    ///
+    /// Written out, the compiler checks it instead, and the table stops being the
+    /// last thing in the encoder context that needs an `unsafe` block to come into
+    /// existence. Field for field this produces the same image the memset did; the
+    /// three `init_fills_*` tests are unmodified across this change and are the
+    /// proof, since they assert what `InitFunctionPointers` writes on top of it.
     fn default() -> Self {
-        // All members are function pointers, small POD sub-structs of function
-        // pointers, an `EntropyCoder`/`RCMode` whose zero discriminant is a declared
-        // variant (`Cavlc` / `RC_QUALITY_MODE`), or -- since T4b.2a -- an
-        // `Option<Box<_>>`, for which all-zero is `None` by the guaranteed
-        // null-pointer niche rather than a dangling box. The C++ encoder zeroes this
-        // table before InitFunctionPointers fills it in, and `WelsMallocz` does the
-        // same on the live path; both stay sound for the same reason. (S21.)
-        unsafe { std::mem::zeroed() }
+        Self {
+            pfFillInterNeighborCache: None,
+            pfGetVarianceFromIntraVaa: None,
+            pfGetMbSignFromInterVaa: None,
+            pfUpdateMbMv: None,
+            pfFirstIntraMode: None,
+            pfIntraFineMd: None,
+            pfInterFineMd: None,
+            pfInterMd: None,
+            pfInterMdBackgroundDecision: None,
+            pfMdBackgroundInfoUpdate: None,
+            pfSCDPSkipDecision: None,
+            pfSetScrollingMv: None,
+            sMcFuncs: SMcFunc::default(),
+            sSampleDealingFuncs: SSampleDealingFunc::default(),
+            pfGetLumaI16x16Pred: [None; I16_PRED_DC_A],
+            pfGetLumaI4x4Pred: [None; I4_PRED_A],
+            pfGetChromaPred: [None; C_PRED_A],
+            pfSampleSadHor8: [None; 2],
+            pfMotionSearch: [None; BLOCK_STATIC_IDC_ALL],
+            pfSearchMethod: [None; BLOCK_SIZE_ALL],
+            pfCalculateSatd: None,
+            pfCheckDirectionalMv: None,
+            pfInitializeHashforFeature: None,
+            pfFillQpelLocationByFeatureValue: None,
+            pfCalculateBlockFeatureOfFrame: [None; 2],
+            pfCalculateSingleBlockFeature: [None; 2],
+            pfVerticalFullSearch: None,
+            pfHorizontalFullSearch: None,
+            pfUpdateFMESwitch: None,
+            pfCopy16x16Aligned: None,
+            pfCopy16x16NotAligned: None,
+            pfCopy8x8Aligned: None,
+            pfCopy16x8NotAligned: None,
+            pfCopy8x16Aligned: None,
+            pfCopy4x4: None,
+            pfCopy8x4: None,
+            pfCopy4x8: None,
+            pfDctT4: None,
+            pfDctFourT4: None,
+            pfCalculateSingleCtr4x4: None,
+            pfScan4x4: None,
+            pfScan4x4Ac: None,
+            pfQuantization4x4: None,
+            pfQuantizationFour4x4: None,
+            pfQuantizationDc4x4: None,
+            pfQuantizationFour4x4Max: None,
+            pfQuantizationHadamard2x2: None,
+            pfQuantizationHadamard2x2Skip: None,
+            pfTransformHadamard4x4Dc: None,
+            pfGetNoneZeroCount: None,
+            pfDequantization4x4: None,
+            pfDequantizationFour4x4: None,
+            pfDequantizationIHadamard4x4: None,
+            pfIDctFourT4: None,
+            pfIDctT4: None,
+            pfIDctI16x16Dc: None,
+            pfDeblocking: DeblockingFunc::default(),
+            pfSetNZCZero: None,
+            pfRc: SWelsRcFunc::default(),
+            pfAccumulateSadForRc: None,
+            pfCavlcParamCal: None,
+            eEntropyCoder: EntropyCoder::default(),
+            pParametersetStrategy: None,
+        }
     }
 }

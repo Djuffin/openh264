@@ -63,6 +63,7 @@ use crate::encoder::encoder_context::{
     ctx_sps_array, ctx_subset_array,
     SParaSetOffsetVariable, MAX_DQ_LAYER_NUM,
     MAX_PPS_COUNT, PARA_SET_TYPE,
+    ctx_func_list,
 };
 use crate::encoder::encoder_ext::{
     GetMultipleThreadIdc, WelsInitEncoderExt, WelsUninitEncoderExt,
@@ -506,7 +507,7 @@ pub unsafe fn WelsWriteParameterSets(
     if pCtx.is_null()
         || pNalLen.is_null()
         || pNumNal.is_null()
-        || (*(*pCtx).pFuncList).pParametersetStrategy.is_none()
+        || (*ctx_func_list(pCtx)).pParametersetStrategy.is_none()
     {
         return ENC_RETURN_UNEXPECTED;
     }
@@ -2112,7 +2113,7 @@ impl CWelsH264SVCEncoder {
                     // the encoder running the previous mode's callbacks.
                     let iRCMode = (*ctx_param(self.m_pEncContext)).iRCMode;
                     WelsRcInitFuncPointers(
-                        &mut (*(*self.m_pEncContext).pFuncList).pfRc,
+                        &mut (*ctx_func_list(self.m_pEncContext)).pfRc,
                         iRCMode,
                     );
                 }

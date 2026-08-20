@@ -33,6 +33,7 @@ use crate::encoder::encoder_context::{
     ctx_stride_enc_block_offset,
     ctx_subset_array,
     sWelsEncCtx, SDqIdc, SLogContext, SRefList, SStrideTables, BASE_DEPENDENCY_ID,
+    ctx_func_list,
 };
 use crate::encoder::md::INTRA_4x4_MODE_NUM;
 use crate::encoder::param_svc::{
@@ -215,11 +216,9 @@ pub unsafe fn AcquireLayersNals(
         }
     }
 
-    if (**ppCtx).pFuncList.is_null() {
-        return 1;
-    }
+    // T6.I1: a `pFuncList.is_null()` guard was here; the table is owned now.
     // count parasets
-    let Some(pStrategy) = (*(**ppCtx).pFuncList).pParametersetStrategy.as_mut() else {
+    let Some(pStrategy) = (*ctx_func_list(*ppCtx)).pParametersetStrategy.as_mut() else {
         return 1;
     };
     iCountNumNals += 1
@@ -843,14 +842,12 @@ pub unsafe fn InitDqLayers(
 
     // dynamically allocate parameter-set memory instead of the standard's maximum, to
     // reduce size (3/18/2010)
-    if (**ppCtx).pFuncList.is_null() {
-        return 1;
-    }
+    // T6.I1: a `pFuncList.is_null()` guard was here; the table is owned now.
     // The borrow is re-acquired at each use rather than held across the loop below:
     // `GenerateNewSps`/`InitPps` take `*ppCtx`, and reaching the strategy through the
     // context while a `&mut` to it is live would alias. Same reason as
     // `WelsWriteParameterSets`; T4b.2a.
-    if (*(**ppCtx).pFuncList).pParametersetStrategy.is_none() {
+    if (*ctx_func_list(*ppCtx)).pParametersetStrategy.is_none() {
         return 1;
     }
     let kiNeededSpsNum = ParasetStrategy(*ppCtx).GetNeededSpsNum() as i32;
@@ -1445,15 +1442,11 @@ pub unsafe fn WelsInitEncoderExt(
     (*pCtx).pSvcParam = Some(crate::encoder::param_svc::NewCodingParam());
     *ctx_param(pCtx) = *pCodingParam;
 
-    (*pCtx).pFuncList = (*(*pCtx).pMemAlign).WelsMallocz(
-        std::mem::size_of::<crate::encoder::wels_func_ptr_def::SWelsFuncPtrList>() as u32,
-        tag!("SWelsFuncPtrList"),
-    ) as *mut crate::encoder::wels_func_ptr_def::SWelsFuncPtrList;
-    if (*pCtx).pFuncList.is_null() {
-        let mut p = pCtx;
-        WelsUninitEncoderExt(&mut p);
-        return 1;
-    }
+    // **T6.I1**: a `WelsMallocz` of `sizeof(SWelsFuncPtrList)` and its null branch
+    // stood here. The context is born with the table (`Box`, every slot `None` —
+    // the same image the memset produced), so there is nothing to allocate and no
+    // allocation to fail; `InitFunctionPointers` writes over it exactly as before.
+    // The trade is `pSvcParam`'s at T6.H11 and `pOut`'s at T3.6: panic-on-OOM.
     iRet = crate::encoder::encoder_context::InitFunctionPointers(
         pCtx,
         ctx_param(pCtx),
@@ -1617,11 +1610,7 @@ mod tests {
         (*pCtx).pMemAlign = Box::into_raw(Box::new(CMemoryAlign::new(iCacheLineSize as u32)));
         (*pCtx).pSvcParam = Some(NewCodingParam());
         *ctx_param(pCtx) = param;
-        (*pCtx).pFuncList = (*(*pCtx).pMemAlign).WelsMallocz(
-            std::mem::size_of::<SWelsFuncPtrList>() as u32,
-            tag!("SWelsFuncPtrList"),
-        ) as *mut SWelsFuncPtrList;
-        assert!(!(*pCtx).pFuncList.is_null());
+        // T6.I1: the table comes with the context; see `WelsInitEncoderExt`.
         assert_eq!(
             InitFunctionPointers(pCtx, ctx_param(pCtx), uiCpuFeatureFlags),
             ENC_RETURN_SUCCESS
@@ -1806,17 +1795,14 @@ pub unsafe fn WelsUninitEncoderExt(ppCtx: *mut *mut sWelsEncCtx) {
         // `drop(Box::from_raw(..))`; **T6.H10** deletes that too — the context holds
         // the `Box`, so releasing the VAA block is the context's own drop.
         // **T6.H11**: `FreeCodingParam` stood here; the `Box` is the context's.
-        if !(*pCtx).pFuncList.is_null() {
-            // F19: this `take()` is `encoder_ext.cpp:1995`'s
-            // `WELS_DELETE_OP (pCtx->pFuncList->pParametersetStrategy)`, which the
-            // port had no counterpart for — the strategy object was `Box::into_raw`'d
-            // at init and the table `WelsFree`'d out from under it, leaking it on
-            // every teardown. The table is raw-allocated, so `SWelsFuncPtrList`'s own
-            // drop glue never runs and the owned field has to be taken by hand.
-            drop((*(*pCtx).pFuncList).pParametersetStrategy.take());
-            (*pMa).WelsFree((*pCtx).pFuncList as *mut c_void, tag!("SWelsFuncPtrList"));
-            (*pCtx).pFuncList = null_mut();
-        }
+        // **T6.I1**: the `WelsFree` of the table, its null guard, and the explicit
+        // `pParametersetStrategy.take()` stood here. F19 was that missing `take()`:
+        // `encoder_ext.cpp:1995` deletes the strategy object, the port did not, and
+        // because the table was raw-allocated `SWelsFuncPtrList`'s own drop glue
+        // never ran — so the strategy leaked on every teardown. With the table a
+        // `Box` the glue *does* run, the strategy's `Option<Box<_>>` drops with it,
+        // and F19 stops being a thing a hand-written line has to remember. The
+        // whole block is deleted rather than converted.
         drop(Box::from_raw(pMa));
         (*pCtx).pMemAlign = null_mut();
     }
@@ -2287,7 +2273,7 @@ pub unsafe fn SetMeMethod(uiMethod: u32, pSearchMethodFunc: *mut Option<PSearchM
 pub unsafe fn PreprocessSliceCoding(pCtx: *mut sWelsEncCtx) {
     let pCurLayer = current_layer(pCtx);
     let bFastMode = (*ctx_param(pCtx)).iComplexityMode == LOW_COMPLEXITY;
-    let pFuncList = (*pCtx).pFuncList;
+    let pFuncList = ctx_func_list(pCtx);
 
     // function pointers conditional assignment under sWelsEncCtx
     if ((*ctx_param(pCtx)).iUsageType == CAMERA_VIDEO_REAL_TIME && bFastMode)
@@ -2435,7 +2421,7 @@ pub unsafe fn WriteSavcParaset(
     // Re-acquired here and again for the PPS below rather than held across the two
     // writes: `WelsWriteOneSPS`/`WelsWriteOnePPS` reach this same object through
     // `pCtx->pFuncList`. T4b.2a.
-    if let Some(pStrategy) = (*(*pCtx).pFuncList).pParametersetStrategy.as_mut() {
+    if let Some(pStrategy) = (*ctx_func_list(pCtx)).pParametersetStrategy.as_mut() {
         pStrategy.Update(
             (*ctx_sps_array(pCtx).add(iIdx as usize)).uiSpsId,
             PARA_SET_TYPE_AVCSPS as i32,
@@ -2469,7 +2455,7 @@ pub unsafe fn WriteSavcParaset(
 
     // --- PPS ---
     iNalSize = 0;
-    if let Some(pStrategy) = (*(*pCtx).pFuncList).pParametersetStrategy.as_mut() {
+    if let Some(pStrategy) = (*ctx_func_list(pCtx)).pParametersetStrategy.as_mut() {
         pStrategy.Update(
             (*ctx_pps_array(pCtx).add(iIdx as usize)).iPpsId,
             PARA_SET_TYPE_PPS as i32,
@@ -2534,7 +2520,7 @@ pub unsafe fn PrepareEncodeFrame(
         // The `else if let Some(f)` this replaces read as a second condition but
         // was the same slot as the `if` branch's: the discriminator is
         // `bSimulcastAVC` alone, and an absent callback made both arms no-ops.
-        let pfRc = (*(*pCtx).pFuncList).pfRc;
+        let pfRc = (*ctx_func_list(pCtx)).pfRc;
         if (*pSvcParam).bSimulcastAVC {
             pfRc.WelsUpdateBufferWhenSkip(pCtx, *iCurDid as i32);
         } else {
@@ -2975,7 +2961,7 @@ pub unsafe fn WelsEncoderEncodeExt(
         return iRet;
     }
 
-    (*(*pCtx).pFuncList)
+    (*ctx_func_list(pCtx))
         .pfRc
         .WelsUpdateMaxBrWindowStatus(pCtx, iSpatialNum, (*pFbi).uiTimeStamp);
 
@@ -3204,7 +3190,7 @@ pub unsafe fn WelsEncoderEncodeExt(
         );
         // update reference picture for the current DQ layer
         PrefetchReferencePicture(pCtx, eFrameType);
-        (*(*pCtx).pFuncList)
+        (*ctx_func_list(pCtx))
             .pfRc
             .WelsRcPictureInit(pCtx, (*pFbi).uiTimeStamp);
         // MUST be called after pfWelsRcPictureInit() and WelsInitCurrentLayer()
@@ -3479,7 +3465,7 @@ pub unsafe fn WelsEncoderEncodeExt(
 
         // `None` here meant "never take this path", which is what the method's
         // empty arms return: `false`.
-        if (*(*pCtx).pFuncList)
+        if (*ctx_func_list(pCtx))
             .pfRc
             .WelsRcPostFrameSkipping(pCtx, iCurDid as i32, (*pFbi).uiTimeStamp)
         {
@@ -3489,7 +3475,7 @@ pub unsafe fn WelsEncoderEncodeExt(
             iFrameSize = 0;
             iLayerNum = 0;
 
-            (*(*pCtx).pFuncList)
+            (*ctx_func_list(pCtx))
                 .pfRc
                 .WelsUpdateBufferWhenSkip(pCtx, iSpatialNum);
 
@@ -3509,7 +3495,7 @@ pub unsafe fn WelsEncoderEncodeExt(
             crate::encoder::deblocking::PerformDeblockingFilter(pCtx);
         }
 
-        (*(*pCtx).pFuncList)
+        (*ctx_func_list(pCtx))
             .pfRc
             .WelsRcPictureInfoUpdate(pCtx, iLayerSize);
         iFrameSize += iLayerSize;
@@ -3521,7 +3507,7 @@ pub unsafe fn WelsEncoderEncodeExt(
         }
 
         // update scc related
-        if let Some(f) = (*(*pCtx).pFuncList).pfUpdateFMESwitch {
+        if let Some(f) = (*ctx_func_list(pCtx)).pfUpdateFMESwitch {
             f(current_layer(pCtx));
         }
 

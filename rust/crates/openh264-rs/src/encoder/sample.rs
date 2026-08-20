@@ -428,7 +428,7 @@ mod tests {
         // Zeroing this table is sound for the reason its own `Default` gives
         // (`wels_func_ptr_def.rs`, S21); session I converts both with the dispatch
         // tables. T6.H12 enumerated it here rather than leaving it to a grep.
-        let mut fl: SWelsFuncPtrList = unsafe { core::mem::zeroed() };
+        let mut fl = SWelsFuncPtrList::default();
         unsafe { WelsInitSampleSadFunc(&mut fl, 0) };
 
         for b in [BLOCK_16x16, BLOCK_16x8, BLOCK_8x16, BLOCK_8x8, BLOCK_4x4, BLOCK_8x4, BLOCK_4x8] {

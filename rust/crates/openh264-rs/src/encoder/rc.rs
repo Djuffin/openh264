@@ -96,7 +96,7 @@ pub use crate::encoder::svc_encode_slice::SSlice;
 pub use crate::encoder::svc_encode_slice::SDqLayer;
 pub use crate::encoder::wels_func_ptr_def::SWelsFuncPtrList;
 pub use crate::encoder::encoder_context::sWelsEncCtx;
-use crate::encoder::encoder_context::{ctx_param, ctx_rc, ctx_rc_at, ctx_vaa};
+use crate::encoder::encoder_context::{ctx_param, ctx_rc, ctx_rc_at, ctx_vaa, ctx_func_list};
 
 // ============================================================================
 // Constants and Macros
@@ -1762,7 +1762,7 @@ pub unsafe fn WelsRcCheckFrameStatus(
 
     if (*ctx_param(pEncCtx)).bSimulcastAVC {
         let iDidIdx = iCurDid;
-        (*(*pEncCtx).pFuncList)
+        (*ctx_func_list(pEncCtx))
             .pfRc
             .WelsRcPicDelayJudge(pEncCtx, uiTimeStamp, iDidIdx);
         if (*ctx_rc_at(pEncCtx, iDidIdx as usize)).bSkipFlag {
@@ -1773,7 +1773,7 @@ pub unsafe fn WelsRcCheckFrameStatus(
             && (*ctx_param(pEncCtx)).sSpatialLayers[iDidIdx as usize].iMaxSpatialBitrate
                 != UNSPECIFIED_BIT_RATE
         {
-            (*(*pEncCtx).pFuncList)
+            (*ctx_func_list(pEncCtx))
                 .pfRc
                 .WelsCheckSkipBasedMaxbr(pEncCtx, uiTimeStamp, iDidIdx);
             if (*ctx_rc_at(pEncCtx, iDidIdx as usize)).bSkipFlag {
@@ -1791,7 +1791,7 @@ pub unsafe fn WelsRcCheckFrameStatus(
     } else {
         for i in 0..iSpatialNum as usize {
             let iDidIdx = (*pEncCtx).sSpatialIndexMap[i].iDid;
-            (*(*pEncCtx).pFuncList)
+            (*ctx_func_list(pEncCtx))
                 .pfRc
                 .WelsRcPicDelayJudge(pEncCtx, uiTimeStamp, iDidIdx);
             if (*ctx_rc_at(pEncCtx, iDidIdx as usize)).bSkipFlag {
@@ -1802,7 +1802,7 @@ pub unsafe fn WelsRcCheckFrameStatus(
                 && (*ctx_param(pEncCtx)).sSpatialLayers[iDidIdx as usize].iMaxSpatialBitrate
                     != UNSPECIFIED_BIT_RATE
             {
-                (*(*pEncCtx).pFuncList)
+                (*ctx_func_list(pEncCtx))
                     .pfRc
                     .WelsCheckSkipBasedMaxbr(pEncCtx, uiTimeStamp, iDidIdx);
                 if (*ctx_rc_at(pEncCtx, iDidIdx as usize)).bSkipFlag {
@@ -2231,7 +2231,7 @@ pub unsafe extern "C" fn WelsRcMbInitGom(
     let pCurLayer = current_layer(pEncCtx);
     let kuiChromaQpIndexOffset = (*layer_pps(pEncCtx, pCurLayer)).uiChromaQpIndexOffset;
 
-    pSOverRc.iBsPosSlice = (*(*pEncCtx).pFuncList).eEntropyCoder.GetBsPosition(crate::encoder::svc_encode_slice::slice_writer(pEncCtx, pSlice), pSlice);
+    pSOverRc.iBsPosSlice = (*ctx_func_list(pEncCtx)).eEntropyCoder.GetBsPosition(crate::encoder::svc_encode_slice::slice_writer(pEncCtx, pSlice), pSlice);
 
     if (*pWelsSvcRc).bEnableGomQp != 0 {
         if (*pWelsSvcRc).iNumberMbGom != 0
@@ -2279,7 +2279,7 @@ pub unsafe extern "C" fn WelsRcMbInfoUpdateGom(
     let pSOverRc = &mut (*pSlice).sSlicingOverRc;
     let kiComplexityIndex = pSOverRc.iComplexityIndexSlice as usize;
 
-    let cur_bs = (*(*pEncCtx).pFuncList).eEntropyCoder.GetBsPosition(crate::encoder::svc_encode_slice::slice_writer(pEncCtx, pSlice), pSlice);
+    let cur_bs = (*ctx_func_list(pEncCtx)).eEntropyCoder.GetBsPosition(crate::encoder::svc_encode_slice::slice_writer(pEncCtx, pSlice), pSlice);
     let iCurMbBits = cur_bs - pSOverRc.iBsPosSlice;
     pSOverRc.iFrameBitsSlice += iCurMbBits;
     pSOverRc.iGomBitsSlice += iCurMbBits;
@@ -2605,8 +2605,9 @@ pub unsafe fn WelsRcInitFuncPointers(pRcf: &mut SWelsRcFunc, iRcMode: RCMode) {
 
 /// Top-level initialization entry point called during encoder creation.
 pub unsafe fn WelsRcInitModule(pEncCtx: *mut sWelsEncCtx, iRcMode: RCMode) {
-    if !pEncCtx.is_null() && !(*pEncCtx).pFuncList.is_null() {
-        WelsRcInitFuncPointers(&mut (*(*pEncCtx).pFuncList).pfRc, iRcMode);
+    // T6.I1: the `&& !pFuncList.is_null()` arm went with the raw table.
+    if !pEncCtx.is_null() {
+        WelsRcInitFuncPointers(&mut (*ctx_func_list(pEncCtx)).pfRc, iRcMode);
     }
     RcInitSequenceParameter(pEncCtx);
 }

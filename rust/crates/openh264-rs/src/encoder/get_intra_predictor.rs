@@ -1346,7 +1346,7 @@ mod tests {
         // Zeroing this table is sound for the reason its own `Default` gives
         // (`wels_func_ptr_def.rs`, S21); session I converts both with the dispatch
         // tables. T6.H12 enumerated it here rather than leaving it to a grep.
-        let mut fl: SWelsFuncPtrList = unsafe { core::mem::zeroed() };
+        let mut fl = SWelsFuncPtrList::default();
         unsafe { WelsInitIntraPredFuncs(&mut fl, 0) };
 
         for mode in 0..14usize {
@@ -1371,7 +1371,7 @@ mod tests {
         // Zeroing this table is sound for the reason its own `Default` gives
         // (`wels_func_ptr_def.rs`, S21); session I converts both with the dispatch
         // tables. T6.H12 enumerated it here rather than leaving it to a grep.
-        let mut fl: SWelsFuncPtrList = unsafe { core::mem::zeroed() };
+        let mut fl = SWelsFuncPtrList::default();
         unsafe { WelsInitIntraPredFuncs(&mut fl, 0) };
 
         for mode in 0..7usize {
@@ -1529,7 +1529,7 @@ mod tests {
         // Zeroing this table is sound for the reason its own `Default` gives
         // (`wels_func_ptr_def.rs`, S21); session I converts both with the dispatch
         // tables. T6.H12 enumerated it here rather than leaving it to a grep.
-        let mut fl: SWelsFuncPtrList = unsafe { core::mem::zeroed() };
+        let mut fl = SWelsFuncPtrList::default();
         unsafe { WelsInitIntraPredFuncs(&mut fl, 0) };
 
         for m in [I16_PRED_V, I16_PRED_H, I16_PRED_DC, I16_PRED_P, I16_PRED_DC_L, I16_PRED_DC_T, I16_PRED_DC_128] {
