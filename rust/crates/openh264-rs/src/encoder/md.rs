@@ -644,7 +644,7 @@ pub type PUpdateMbMvFunc = fn(pMvBuffer: &mut [SMVUnitXY; MB_BLOCK4x4_NUM], ksMv
 // had it with correctly typed pointers where this copy used *mut c_void.
 pub use crate::common::mc::SMcFunc;
 // Phase 4a: MC and the half-pel filters are called directly, not via `sMcFuncs`.
-use crate::encoder::svc_encode_slice::{layer_dec_pic, layer_dec_pic_mut, layer_ref_pic};
+use crate::encoder::svc_encode_slice::{layer_dec_pic, layer_dec_pic_mut, layer_ref_pic, layer_ref_pic_mut};
 use crate::encoder::picture::{RecPicId};
 use crate::common::mc::{McHorVer02_c, McHorVer20_c, McHorVer22_c, PixelAvg_c};
 pub use crate::encoder::encoder_context::SPicData;
@@ -1451,7 +1451,7 @@ pub unsafe extern "C" fn MeRefineFracPixel(
     let mut iHalfMvy = iMvy;
     let pCurDqLayer = (*pEncCtx).pCurDqLayer;
     let kiStrideEnc = (*pCurDqLayer).iEncStride[0];
-    let kiStrideRef = layer_ref_pic(pCurDqLayer).expect("bound").iLineSize[0];
+    let kiStrideRef = layer_ref_pic(pCurDqLayer).expect("bound").stride(0);
 
     let pEncData = (*pMe).pEncMb;
     let pRef = (*pMe).pRefMb;

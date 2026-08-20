@@ -13,7 +13,7 @@
 //! `codec/encoder/core/src/svc_mode_decision.cpp`.
 
 
-use crate::encoder::svc_encode_slice::{layer_dec_pic, layer_dec_pic_mut, layer_ref_pic};
+use crate::encoder::svc_encode_slice::{layer_dec_pic, layer_dec_pic_mut, layer_ref_pic, layer_ref_pic_mut};
 use crate::encoder::picture::{RecPicId, SrcPicId};
 use crate::encoder::md::{PredictSad, PredictSadSkip, WelsMedian};
 use crate::encoder::svc_encode_mb::WelsEncInterY;
@@ -535,8 +535,8 @@ pub unsafe extern "C" fn WelsMdBackgroundMbEnc(
     let pRefLuma = (*pMbCache).SPicData.pRefMb[0];
     let pRefCb = (*pMbCache).SPicData.pRefMb[1];
     let pRefCr = (*pMbCache).SPicData.pRefMb[2];
-    let iLineSizeY = layer_ref_pic(pCurDqLayer).expect("bound").iLineSize[0];
-    let iLineSizeUV = layer_ref_pic(pCurDqLayer).expect("bound").iLineSize[1];
+    let iLineSizeY = layer_ref_pic(pCurDqLayer).expect("bound").stride(0);
+    let iLineSizeUV = layer_ref_pic(pCurDqLayer).expect("bound").stride(1);
 
     let mut pDstLuma = crate::encoder::md::skip_mb(pMbCache);
     let mut pDstCb = crate::encoder::md::skip_mb(pMbCache).add(256);
@@ -1311,7 +1311,7 @@ pub unsafe extern "C" fn WelsMdP8x8(
     let pMbCache = std::ptr::addr_of_mut!((*pSlice).sMbCacheInfo);
     let iLineSizeEnc = (*pCurDqLayer).iEncStride[0];
     let iLineSizeRef = if let Some(p) = layer_ref_pic(pCurDqLayer) {
-        p.iLineSize[0]
+        p.stride(0)
     } else {
         iLineSizeEnc
     };
@@ -1613,7 +1613,7 @@ pub unsafe fn CheckChromaCost(
 
     let iCbEncStride = (*pCurDqLayer).iEncStride[1];
     let iCrEncStride = (*pCurDqLayer).iEncStride[2];
-    let iChromaRefStride = layer_ref_pic(pCurDqLayer).expect("bound").iLineSize[1];
+    let iChromaRefStride = layer_ref_pic(pCurDqLayer).expect("bound").stride(1);
 
     let iCbSad = GetChromaCost(pSad, pCbEnc, iCbEncStride, pCbRef, iChromaRefStride);
     let iCrSad = GetChromaCost(pSad, pCrEnc, iCrEncStride, pCrRef, iChromaRefStride);
@@ -1791,7 +1791,7 @@ pub unsafe extern "C" fn JudgeStaticSkip(
     if bTryStaticSkip {
         let pFunc = (*pEncCtx).pFuncList;
         let pRefOri = (*pCurDqLayer).pRefOri[0]
-            .and_then(|r| crate::encoder::svc_encode_slice::ctx_pic_ref(pEncCtx, r))
+            .and_then(|r| crate::encoder::svc_encode_slice::ctx_pic_ref_mut(pEncCtx, r))
             .map(|p| p.planes());
         if let Some(pRefOri) = pRefOri {
             let iStrideUV = (*pCurDqLayer).iEncStride[1];
@@ -1846,7 +1846,7 @@ pub unsafe extern "C" fn JudgeScrollSkip(
     if bTryScrollSkip {
         let pFunc = (*pEncCtx).pFuncList;
         let pRefOri = (*pCurDqLayer).pRefOri[0]
-            .and_then(|r| crate::encoder::svc_encode_slice::ctx_pic_ref(pEncCtx, r))
+            .and_then(|r| crate::encoder::svc_encode_slice::ctx_pic_ref_mut(pEncCtx, r))
             .map(|p| p.planes());
         if let Some(pRefOri) = pRefOri {
             let iScrollMvX = (*pVaaExt).sScrollDetectInfo.iScrollMvX;
@@ -1908,8 +1908,8 @@ pub unsafe extern "C" fn SvcMdSCDMbEnc(
     let pRefLuma = (*pMbCache).SPicData.pRefMb[0];
     let pRefCb = (*pMbCache).SPicData.pRefMb[1];
     let pRefCr = (*pMbCache).SPicData.pRefMb[2];
-    let iLineSizeY = layer_ref_pic(pCurDqLayer).expect("bound").iLineSize[0];
-    let iLineSizeUV = layer_ref_pic(pCurDqLayer).expect("bound").iLineSize[1];
+    let iLineSizeY = layer_ref_pic(pCurDqLayer).expect("bound").stride(0);
+    let iLineSizeUV = layer_ref_pic(pCurDqLayer).expect("bound").stride(1);
 
     let mut pDstLuma = crate::encoder::md::skip_mb(pMbCache);
     let mut pDstCb = crate::encoder::md::skip_mb(pMbCache).add(256);

@@ -14,6 +14,17 @@
 //! copies of `SPicture` and two of `SScreenBlockFeatureStorage`, most of them truncated.
 
 use crate::encoder::encoder_context::{BLOCK_SIZE_ALL, SMVUnitXY};
+pub use crate::safe::plane::PaddedPlane;
+
+/// `PADDING_LENGTH` — `codec/encoder/core/inc/wels_const.h`. The luma border
+/// `AllocPicture` puts around every picture; chroma gets half of it.
+const PADDING_LENGTH: usize = 32;
+
+/// `WELS_ALIGN(x, n)` for the two alignments this file needs, in `usize`.
+#[inline]
+const fn align_up(x: usize, n: usize) -> usize {
+    (x + n - 1) & !(n - 1)
+}
 
 /// `LTR_MARKING_RECEIVE_STATE` — `codec/encoder/core/inc/wels_const.h:150`.
 pub const RECIEVE_UNKOWN: u8 = 0;
@@ -70,10 +81,16 @@ impl Default for SScreenBlockFeatureStorage {
 /// pools swap *slots*, never values (S34, measured in session B).
 #[derive(Debug)]
 pub struct SPicture {
-    // payload data
-    pub pBuffer: *mut u8,
-    pub pData: [*mut u8; 3],
-    pub iLineSize: [i32; 3],
+    /// The three planes, **owned** since T6.F2 — Y, Cb, Cr. They were
+    /// `pBuffer: *mut u8` (one `CMemoryAlign` block), `pData: [*mut u8; 3]` (three
+    /// cursors into it, each at the plane's padded origin) and `iLineSize: [i32; 3]`.
+    ///
+    /// Each [`PaddedPlane`] owns its bytes, so `FreePicture` and the whole
+    /// allocator round trip go with them. The per-macroblock world still walks raw
+    /// cursors: [`data_ptr`](Self::data_ptr) hands them out from the **allocation
+    /// root** (S28), never through a narrowing slice, which is what makes reading
+    /// back into the top and left borders defined.
+    planes: [PaddedPlane; 3],
 
     // picture information, from pSps
     pub iWidthInPixel: i32,
@@ -138,10 +155,40 @@ impl SPicture {
             0
         };
 
+        // `picture_handle.cpp:60-74`'s geometry, unchanged — the alignment is
+        // load-bearing (`pStrideDecBlockOffset` is built from the same strides) and
+        // the port has been wrong here once already.
+        let kuiAlignedWidth = align_up(kiWidth.max(0) as usize, 16);
+        let kuiAlignedHeight = align_up(kiHeight.max(0) as usize, 16);
+        let kuiLumaStride = align_up(kuiAlignedWidth + 2 * PADDING_LENGTH, 32);
+        let kuiChromaStride = align_up((kuiAlignedWidth + 2 * PADDING_LENGTH) >> 1, 16);
+
         Box::new(SPicture {
-            pBuffer: std::ptr::null_mut(),
-            pData: [std::ptr::null_mut(); 3],
-            iLineSize: [0; 3],
+            // Zeroed, and that is **F58** a fourth time: `AnalyzeSpatialPic` hands
+            // `VaaCalculation` a reference picture nothing has written on the first
+            // frame and `VAACalcSad` reads its visible luma. `PaddedPlane::new`
+            // zeroes, which is what `WelsMallocz` gave and what makes the read
+            // defined.
+            planes: [
+                PaddedPlane::new(
+                    kuiAlignedWidth,
+                    kuiAlignedHeight,
+                    PADDING_LENGTH,
+                    kuiLumaStride,
+                ),
+                PaddedPlane::new(
+                    kuiAlignedWidth >> 1,
+                    kuiAlignedHeight >> 1,
+                    PADDING_LENGTH >> 1,
+                    kuiChromaStride,
+                ),
+                PaddedPlane::new(
+                    kuiAlignedWidth >> 1,
+                    kuiAlignedHeight >> 1,
+                    PADDING_LENGTH >> 1,
+                    kuiChromaStride,
+                ),
+            ],
 
             iWidthInPixel: kiWidth,
             iHeightInPixel: kiHeight,
@@ -192,6 +239,46 @@ impl SPicture {
         }
     }
 
+    /// Plane `i`'s **root-derived** cursor at its logical origin — the raw `pData[i]`
+    /// every per-macroblock consumer still walks.
+    ///
+    /// **S28 verbatim, and the decoder paid for the lesson.** The obvious spelling
+    /// `plane.as_mut_slice()[origin..].as_mut_ptr()` is safe code with the right
+    /// address and Undefined Behaviour at the first read into the top or left border,
+    /// because the slice index narrows provenance to `[origin..]` and the border is
+    /// exactly what this pointer exists to reach — intra prediction reads
+    /// `pRef[-iLineSize]` on the top macroblock row, and `ExpandReferencingPicture`
+    /// writes the whole frame. Deriving from the allocation root and *offsetting*
+    /// keeps the provenance of the whole plane. No byte-level gate can see the
+    /// difference; the Miri test at the bottom of this file is the instrument.
+    #[inline]
+    pub fn data_ptr(&mut self, i: usize) -> *mut u8 {
+        let plane = &mut self.planes[i];
+        if plane.is_empty() {
+            return std::ptr::null_mut();
+        }
+        let origin = plane.origin();
+        plane.as_mut_slice().as_mut_ptr().wrapping_add(origin)
+    }
+
+    /// Plane `i`'s stride — the C++'s `iLineSize[i]`.
+    #[inline]
+    pub fn stride(&self, i: usize) -> i32 {
+        self.planes[i].stride() as i32
+    }
+
+    /// Plane `i`, for a converted caller that wants the safe view.
+    #[inline]
+    pub fn plane(&self, i: usize) -> &PaddedPlane {
+        &self.planes[i]
+    }
+
+    /// Mutable form of [`plane`](Self::plane).
+    #[inline]
+    pub fn plane_mut(&mut self, i: usize) -> &mut PaddedPlane {
+        &mut self.planes[i]
+    }
+
     /// The picture's plane roots, strides and visible geometry, copied out.
     ///
     /// **S37's shape for a per-frame step**: a picture is an arena, so the
@@ -201,10 +288,10 @@ impl SPicture {
     /// behind, and both pictures of a read-one-write-another pair can be in hand at
     /// once without asking the pool for two references.
     #[inline]
-    pub fn planes(&self) -> PicPlanes {
+    pub fn planes(&mut self) -> PicPlanes {
         PicPlanes {
-            pData: self.pData,
-            iLineSize: self.iLineSize,
+            pData: [self.data_ptr(0), self.data_ptr(1), self.data_ptr(2)],
+            iLineSize: [self.stride(0), self.stride(1), self.stride(2)],
             iWidthInPixel: self.iWidthInPixel,
             iHeightInPixel: self.iHeightInPixel,
         }
@@ -382,29 +469,114 @@ macro_rules! pic_pool {
                 (&mut **x, &mut **y)
             }
 
-            /// Releases the plane buffer of every slot back to `pMa`, then empties
-            /// the pool.
-            ///
-            /// **Transitional (T6.F1), and it dies in T6.F2.** The picture owns its
-            /// side arrays and its own box, but `pBuffer` is still a `CMemoryAlign`
-            /// block, and dropping a `Box<SPicture>` would leak it. When the planes
-            /// become owned this walk is a plain `= Self::empty()`.
-            ///
-            /// # Safety
-            /// `pMa` must be the allocator every slot's `pBuffer` was taken from.
-            pub unsafe fn free_planes_and_clear(
-                &mut self,
-                pMa: *mut crate::common::memory_align::CMemoryAlign,
-            ) {
-                for i in 0..self.0.len() {
-                    let id = self.0.id(i);
-                    crate::encoder::wels_preprocess::FreePicturePlanes(pMa, self.0.get_mut(id));
-                }
-                *self = Self::empty();
-            }
         }
     };
 }
 
 pic_pool!(SrcPicId, SrcPicPool, "spatial source");
 pic_pool!(RecPicId, RecPicPool, "reconstruction");
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// **S28's mandated test for [`SPicture::data_ptr`]** — Phase 6 session F, step 2.
+    ///
+    /// The rule's own sentence is "every such accessor gets a Miri test that reads the
+    /// pointer's full legal reach in both directions", and the second direction is the
+    /// one with teeth: the samples are inside the allocation either way, so a
+    /// `data_ptr` that narrowed provenance to `[origin..]` would read the right bytes,
+    /// pass all 369 sweep configurations and both benches, and be Undefined Behaviour
+    /// at the first border read. **No byte-level gate this project owns can see the
+    /// difference. The raw reads below are the instrument.**
+    ///
+    /// Both backward reaches the *encoder* performs are exercised: one sample
+    /// diagonally behind the origin — intra prediction reading `pRef[-iLineSize - 1]`
+    /// on the top-left macroblock, and any motion vector past the picture edge — and
+    /// the whole `pad * stride + pad` walk back to the allocation base, which is what
+    /// `ExpandReferencingPicture` does to every reconstruction picture, every frame.
+    #[test]
+    #[allow(unsafe_code)]
+    fn data_ptr_reaches_the_padding_behind_the_logical_origin() {
+        // 176x144 QCIF as `SPicture::new` lays it out.
+        let mut pic = SPicture::new(176, 144, false);
+        let pad = PADDING_LENGTH;
+        let stride = pic.plane(0).stride();
+        assert_eq!(
+            stride,
+            align_up(align_up(176, 16) + 2 * PADDING_LENGTH, 32),
+            "the C's WELS_ALIGN(WELS_ALIGN(w,16) + 2*PADDING_LENGTH, 32)"
+        );
+        assert_eq!(
+            pic.plane(0).origin(),
+            (1 + stride) * pad,
+            "the C's (1 + iLineSize[0]) * PADDING_LENGTH"
+        );
+
+        pic.plane_mut(0).set(0, 0, 0x5A);
+        pic.plane_mut(0).set(-1, -1, 0xC3);
+        pic.plane_mut(0).set(-(pad as isize), -(pad as isize), 0x7E);
+
+        let base = pic.plane(0).as_slice().as_ptr();
+        let len = pic.plane(0).as_slice().len();
+        let origin = pic.plane(0).origin();
+
+        let p = pic.data_ptr(0);
+        assert_eq!(unsafe { p.offset_from(base) } as usize, origin);
+        assert_eq!(unsafe { *p }, 0x5A);
+        assert_eq!(
+            unsafe { *p.sub(stride + 1) },
+            0xC3,
+            "one sample diagonally behind the origin — intra prediction's top-left read"
+        );
+        // `ExpandReferencingPicture`'s reach: the whole padded plane from `pData[i]`.
+        let whole = unsafe { std::slice::from_raw_parts(p.sub(pad * stride + pad), len) };
+        assert_eq!(whole[0], 0x7E, "the top-left corner of the padding");
+
+        // And forward, to the last byte of the bottom-right padding.
+        let tail = len - (pad * stride + pad) - 1;
+        assert_eq!(unsafe { *p.add(tail) }, 0);
+
+        // Chroma keeps half the padding and its own aligned stride.
+        assert_eq!(
+            pic.stride(1),
+            align_up((align_up(176, 16) + 2 * PADDING_LENGTH) >> 1, 16) as i32
+        );
+        assert_eq!(pic.stride(1), pic.stride(2));
+        assert_eq!(pic.plane(1).pad(), PADDING_LENGTH / 2);
+    }
+
+    /// The four per-macroblock side arrays exist exactly when `bNeedMbInfo` says so,
+    /// and are sized as `picture_handle.cpp:105` sizes them.
+    #[test]
+    fn side_arrays_follow_need_mb_info() {
+        let with = SPicture::new(176, 144, true);
+        let n = ((176 + 15) >> 4) * ((144 + 15) >> 4);
+        assert_eq!(with.uiRefMbType.len(), n as usize);
+        assert_eq!(with.pRefMbQp.len(), n as usize);
+        assert_eq!(with.pMbSkipSad.len(), n as usize);
+        assert_eq!(with.sMvList.len(), n as usize);
+
+        let without = SPicture::new(176, 144, false);
+        assert!(without.uiRefMbType.is_empty());
+        assert!(without.sMvList.is_empty());
+    }
+
+    /// **F56 at the constructor**: a fresh picture is `WelsMallocz`'s zeroed block
+    /// plus `picture_handle.cpp`'s seven writes — *not* the unreferenced state.
+    #[test]
+    fn a_fresh_picture_is_not_an_unreferenced_one() {
+        let pic = SPicture::new(176, 144, false);
+        assert_eq!(pic.iFramePoc, 0);
+        assert_eq!(pic.uiTemporalId, 0);
+        assert_eq!(pic.uiSpatialId, 0);
+        assert_eq!(pic.uiRecieveConfirmed, RECIEVE_UNKOWN);
+        // and the seven the C++ writes
+        assert_eq!(pic.iWidthInPixel, 176);
+        assert_eq!(pic.iHeightInPixel, 144);
+        assert_eq!(pic.iFrameNum, -1);
+        assert!(!pic.bIsLongRef);
+        assert_eq!(pic.iLongTermPicNum, -1);
+        assert_eq!(pic.iMarkFrameNum, -1);
+    }
+}

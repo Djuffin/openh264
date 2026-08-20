@@ -722,7 +722,6 @@ pub unsafe fn InitDqLayers(
         loop {
             // use the actual size of the current layer
             let Some(pPic) = AllocPicture(
-                pMa,
                 kiWidth,
                 kiHeight,
                 true,
@@ -1598,10 +1597,8 @@ pub unsafe fn FreeRefList(
     // **T6.F1**: the per-picture walk is the pool's, and the list is a `Box`. What is
     // left of the C++'s loop is the plane buffers, which are still `CMemoryAlign`'s
     // until T6.F2 — after that this is one `from_raw`.
-    let mut p = Box::from_raw(*pRefList);
+    drop(Box::from_raw(*pRefList));
     *pRefList = null_mut();
-    p.pRef.free_planes_and_clear(pMa);
-    drop(p);
 }
 
 #[cfg(test)]
@@ -2187,8 +2184,8 @@ pub unsafe fn WelsInitCurrentLayer(pCtx: *mut sWelsEncCtx, _kiWidth: i32, _kiHei
     if pRefList.is_null() || (*pCtx).pVpp.is_null() {
         return;
     }
-    let pEncPic = (*(*pCtx).pVpp).src_id(idEnc).planes();
-    let pDecPic = (*pRefList).pic(idDec).planes();
+    let pEncPic = (*(*pCtx).pVpp).m_pSpatialPicPool.get_mut(idEnc).planes();
+    let pDecPic = (*pRefList).pic_mut(idDec).planes();
 
     (*pCurDq).pEncData[0] = pEncPic.pData[0];
     (*pCurDq).pEncData[1] = pEncPic.pData[1];
@@ -3182,7 +3179,7 @@ pub unsafe fn WelsEncoderEncodeExt(
             p.iPictureType = (*pCtx).eSliceType as i32;
             p.iFramePoc = (*pSvcParam).sDependencyLayers[iCurDid as usize].iPOC;
         }
-        pEncPic = (*(*pCtx).pVpp).src_id(idEncPic).planes();
+        pEncPic = (*(*pCtx).pVpp).m_pSpatialPicPool.get_mut(idEncPic).planes();
 
         iCurWidth = (*pParam).iVideoWidth;
         iCurHeight = (*pParam).iVideoHeight;

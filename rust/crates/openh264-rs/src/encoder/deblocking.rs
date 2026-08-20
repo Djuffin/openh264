@@ -1330,7 +1330,7 @@ pub unsafe fn DeblockingFilterFrameAvcbase(pCurDq: *mut SDqLayer, pFunc: *mut SW
 
     // S37: the reconstruction picture resolved once to its plane roots; the walk
     // below is raw cursors derived from them.
-    let Some(pDecPic) = crate::encoder::svc_encode_slice::layer_dec_pic(pCurDq) else {
+    let Some(pDecPic) = crate::encoder::svc_encode_slice::layer_dec_pic_mut(pCurDq) else {
         return;
     };
     let pDecPic = pDecPic.planes();
@@ -1397,7 +1397,7 @@ pub unsafe extern "C" fn DeblockingFilterSliceAvcbase(
 
     // S37: the reconstruction picture resolved once to its plane roots; the walk
     // below is raw cursors derived from them.
-    let Some(pDecPic) = crate::encoder::svc_encode_slice::layer_dec_pic(pCurDq) else {
+    let Some(pDecPic) = crate::encoder::svc_encode_slice::layer_dec_pic_mut(pCurDq) else {
         return;
     };
     let pDecPic = pDecPic.planes();

@@ -45,7 +45,7 @@
     clippy::too_many_arguments
 )]
 
-use crate::encoder::svc_encode_slice::{layer_dec_pic, layer_dec_pic_mut, layer_ref_pic};
+use crate::encoder::svc_encode_slice::{layer_dec_pic, layer_dec_pic_mut, layer_ref_pic, layer_ref_pic_mut};
 use crate::encoder::picture::{RecPicId};
 use crate::common::memory_align::CMemoryAlign;
 use std::ffi::c_char;
@@ -515,7 +515,7 @@ pub unsafe extern "C" fn WelsMotionEstimateSearch(
 ) {
     unsafe {
         let kiStrideEnc = (*pCurDqLayer).iEncStride[0];
-        let kiStrideRef = layer_ref_pic(pCurDqLayer).expect("bound").iLineSize[0];
+        let kiStrideRef = layer_ref_pic(pCurDqLayer).expect("bound").stride(0);
 
         if crate::encoder::dump_enabled(&ME_DUMP, "OH264_MEDUMP") {
             let mut mvc = String::new();
@@ -598,7 +598,7 @@ pub unsafe extern "C" fn WelsMotionEstimateSearchStatic(
 ) {
     unsafe {
         let kiStrideEnc = (*pCurDqLayer).iEncStride[0];
-        let kiStrideRef = layer_ref_pic(pCurDqLayer).expect("bound").iLineSize[0];
+        let kiStrideRef = layer_ref_pic(pCurDqLayer).expect("bound").stride(0);
         let block_size = (*pMe).uiBlockSize as usize;
 
         (*pMe).sMv.iMvX = 0;
@@ -632,7 +632,7 @@ pub unsafe extern "C" fn WelsMotionEstimateSearchScrolled(
 ) {
     unsafe {
         let kiStrideEnc = (*pCurDqLayer).iEncStride[0];
-        let kiStrideRef = layer_ref_pic(pCurDqLayer).expect("bound").iLineSize[0];
+        let kiStrideRef = layer_ref_pic(pCurDqLayer).expect("bound").stride(0);
         let block_size = (*pMe).uiBlockSize as usize;
 
         (*pMe).sMv = (*pMe).sDirectionalMv;
@@ -1246,7 +1246,7 @@ pub unsafe extern "C" fn FillQpelLocationByFeatureValue_c(
 
 pub unsafe fn CalculateFeatureOfBlock(
     pFunc: *mut SWelsFuncPtrList,
-    pRef: &SPicture,
+    pRef: &mut SPicture,
     pScreenBlockFeatureStorage: *mut SScreenBlockFeatureStorage,
 ) -> bool {
     unsafe {
@@ -1259,13 +1259,13 @@ pub unsafe fn CalculateFeatureOfBlock(
             || pTimesOfFeatureValue.is_null()
             || pLocationOfFeature.is_null()
             || pBuf.is_null()
-            || pRef.pData[0].is_null()
+            || pRef.data_ptr(0).is_null()
         {
             return false;
         }
 
-        let pRefData = pRef.pData[0];
-        let iRefStride = pRef.iLineSize[0];
+        let pRefData = pRef.data_ptr(0);
+        let iRefStride = pRef.stride(0);
         let iIs16x16 = (*pScreenBlockFeatureStorage).iIs16x16 as usize;
         let iEdgeDiscard = if iIs16x16 != 0 { 16 } else { 8 };
         let iWidth = pRef.iWidthInPixel - iEdgeDiscard;
@@ -1304,7 +1304,7 @@ pub unsafe fn CalculateFeatureOfBlock(
 // SCREEN_CONTENT(dormant: Phase 10)
 pub unsafe extern "C" fn PerformFMEPreprocess(
     pFunc: *mut SWelsFuncPtrList,
-    pRef: &SPicture,
+    pRef: &mut SPicture,
     pFeatureOfBlock: *mut u16,
     pScreenBlockFeatureStorage: *mut SScreenBlockFeatureStorage,
 ) {

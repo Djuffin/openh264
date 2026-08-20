@@ -2419,3 +2419,24 @@ adjudication owes, and here it bought the alternation. **Acquitted as F3.**
 
 Running total: **seventy-five measurements, twenty-four alternations, forty-eight
 acquittals.**
+
+---
+
+### Seventy-sixth measurement — 2026-08-20, Phase 6 session F, step 2's `family` gate: the ordinary case, and the retry rule alone
+
+```
+mt CiscoVT2people_320x192_12fps t=4 sm=3 n=600 cabac=1 rc=0 :: C++ 39981  Rust 0
+```
+
+**One** configuration, F3's signature exactly, release sweep of the same battery
+**369/369**. The retry rule applies unmodified: **re-run 5x, BYTE-IDENTICAL 5/5**.
+
+No alternation: measurement 75, run four hours earlier in this same session on this
+same signature, reads **base 5 / head 2 over 720 configurations a side**, and the tree
+has moved since only by giving the picture its own plane buffers — no threading
+machinery, no slice-list growth, and one *fewer* allocator round trip per picture.
+
+**Acquitted as F3.**
+
+Running total: **seventy-six measurements, twenty-four alternations, forty-nine
+acquittals.**
