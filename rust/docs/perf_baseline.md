@@ -2540,31 +2540,42 @@ disk, `FFMPEG` set, **7 interleaved pairs** (S1).
 **+1.52%**, zero rows over 5%. `Spatial Ramps` read -14.98 / -16.43% against itself
 and is excluded from every statistic, as always.
 
-**The span, 7 pairs:**
+**The span, 7 pairs — measured twice.** The first reading was taken at `52814bb5`,
+before the `exit` battery rejected T6.E2c's `&mut SMbCache` conversion; the second at
+`cee4b86d`, after the correction reverted it. Both are recorded, because the pair is
+itself a datapoint: a change that retypes ~350 parameters and a change that reverts 62
+of them read the same on this instrument.
 
-| | decode | encode |
-|---|---|---|
-| rows | 3 | 28 |
-| median | **-0.24%** | **+0.00%** |
-| min | -0.26% | -1.33% |
-| max | +0.18% | +1.52% |
-| rows over +5% | 0 | 0 |
+| | decode (pre) | encode (pre) | **decode (final)** | **encode (final)** |
+|---|---|---|---|---|
+| rows | 3 | 28 | 3 | 28 |
+| median | -0.24% | +0.00% | **+0.33%** | **+0.00%** |
+| min | -0.26% | -1.33% | +0.15% | -1.32% |
+| max | +0.18% | +1.52% | +0.42% | **+0.61%** |
+| rows over +5% | 0 | 0 | 0 | 0 |
 
-Both medians are inside their own null band, and the encode maximum is **exactly**
-the null's maximum: +1.52%, on `320x240 QVGA PAL 75%` — the null put it on that
-clip's 1-thread row and the span on its 4-thread row, which is the resolution this
-instrument has on a 0.066 ms row (one 0.001 ms tick is 1.5%). Worst single row +1.52%
+**The encode median is +0.00% in both readings**, and the final maximum is *lower*
+(+0.61% against +1.52%).
+
+**The final decode median (+0.33%) sits just outside its own null band (-0.27 … -0.08%),
+and that is a statement about the instrument, not the tree.** This session changed no
+decoder code at all — `git diff --stat d7af280d..HEAD -- src/decoder` is empty — so a
++0.33% decode reading is cross-binary drift by definition, and worth keeping as a
+calibration note: a 3-pair same-binary null understates the drift between two
+*different* binaries on rows this size. Worst single row +0.61%
 against D-perf-4's **+25% median** tripwire — unbreached by ~23 points. Cumulative
 encoder deficit **≈ +10…+12%, unmoved**.
 
-**What the session did, for the record**: it retyped ~350 parameters across the
+**What the session did, for the record**: it retyped ~290 parameters across the
 mode-decision, motion-estimation and syntax-writer paths (raw pointers to
-references), deleted 14 parameters that were caches of `pSlice`, and turned
-`SMeRefinePointer`'s five `*mut u8` into two offsets and a selector bit. **None of
-that was expected to move a stream**, and none of it did — which is the useful
-reading: the offsets-and-selector rewrite of the ME refinement record sits in
-`MeRefineFracPixel`, called once per partition per macroblock, and it costs nothing
-measurable. No swap landed in step 5, so there is no ledger row to open.
+references), deleted 14 that were caches of `pSlice`, turned `SMeRefinePointer`'s
+five `*mut u8` into two offsets and a selector bit, and then reverted 62 `SMbCache`
+parameters after Miri rejected them. **None of that was expected to move a stream**,
+and none of it did — which is the useful reading twice over: the offsets-and-selector
+rewrite of the ME refinement record sits in `MeRefineFracPixel`, called once per
+partition per macroblock, and costs nothing measurable; and the 62-parameter revert
+that followed cost nothing measurable either. No swap landed in step 5, so there is
+no ledger row to open.
 
 **S33 applies**: nothing here is claimed as a speed-up. Both medians are inside the
 floor, and a reading inside the floor is a non-finding in both directions.
