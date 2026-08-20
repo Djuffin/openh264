@@ -26,8 +26,8 @@ use crate::api::codec_api::{ELevelIdc, SSpatialLayerConfig};
 use crate::common::memory_align::CMemoryAlign;
 use crate::decoder::nalu::g_ksLevelLimits;
 use crate::encoder::encoder_context::{
-    ctx_dq_idc_map, ctx_frame_bs, ctx_frame_bs_at, ctx_ltr_at, ctx_mb_index_x, ctx_mb_index_y,
-    ctx_ref_list,
+    ctx_dq_idc_map, ctx_dq_layer, ctx_frame_bs, ctx_frame_bs_at, ctx_ltr_at, ctx_mb_index_x,
+    ctx_mb_index_y, ctx_ref_list,
     ctx_rc_at,
     ctx_pps_array, ctx_sps_array,
     ctx_stride_enc_block_offset,
@@ -650,7 +650,7 @@ pub unsafe fn InitMbListD(ppCtx: *mut *mut sWelsEncCtx) -> i32 {
     for i in 0..iNumDlayer as usize {
         let iMbWidth = ((*(**ppCtx).pSvcParam).sSpatialLayers[i].iVideoWidth + 15) >> 4;
         let iMbHeight = ((*(**ppCtx).pSvcParam).sSpatialLayers[i].iVideoHeight + 15) >> 4;
-        let pLayer = *(**ppCtx).ppDqLayerList.add(i);
+        let pLayer = ctx_dq_layer(*ppCtx, i);
         if pLayer.is_null() {
             return 1;
         }
@@ -787,7 +787,12 @@ pub unsafe fn InitDqLayers(
         // `Box`-built layer may own `Vec`/`MbArray` where an inline-in-a-zeroed-block
         // struct may not (S21, read the other way). `SDqLayer::new` writes every
         // field the zero block used to stand in for.
-        let pDqLayer = Box::into_raw(Box::new(SDqLayer::new(LayerIdx(iDlayerIndex as u8))));
+        // **T6.H8**: `Box::into_raw` stood here and the slot took the raw pointer.
+        // The slot owns the `Box` now; every consumer still gets the same cursor out
+        // of `ctx_dq_layer`, and this function keeps one for the rest of the loop.
+        let pDqLayerBox = Box::new(SDqLayer::new(LayerIdx(iDlayerIndex as u8)));
+        (&mut (**ppCtx).ppDqLayerList)[iDlayerIndex as usize] = Some(pDqLayerBox);
+        let pDqLayer = ctx_dq_layer(*ppCtx, iDlayerIndex as usize);
 
         (*pDqLayer).iMbWidth = kiMbW as i16;
         (*pDqLayer).iMbHeight = kiMbH as i16;
@@ -832,8 +837,6 @@ pub unsafe fn InitDqLayers(
         if kiNeedFeatureStorage != 0 && iDlayerIndex == iDlayerCount - 1 {
             return ENC_RETURN_UNSUPPORTED_PARA;
         }
-
-        *(**ppCtx).ppDqLayerList.add(iDlayerIndex as usize) = pDqLayer;
 
         iDlayerIndex += 1;
     }
@@ -939,7 +942,7 @@ pub unsafe fn InitDqLayers(
 
         // FMO is not used in SVC coding so far; come back if FMO is needed
         iResult = InitSlicePEncCtx(
-            *(**ppCtx).ppDqLayerList.add(iDlayerIndex as usize),
+            ctx_dq_layer(*ppCtx, iDlayerIndex as usize),
             (**ppCtx).pMemAlign,
             false,
             (*pSps).iMbWidth as i32,
@@ -1205,13 +1208,10 @@ pub unsafe fn RequestMemorySvc(
     // null, and the `Box` stays where it already was — it just has an owner now.
     (**ppCtx).ppRefPicListExt = (0..kiNumDependencyLayers).map(|_| None).collect();
 
-    (**ppCtx).ppDqLayerList = (*pMa).WelsMallocz(
-        (kiNumDependencyLayers as usize * std::mem::size_of::<*mut SDqLayer>()) as u32,
-        tag!("ppDqLayerList"),
-    ) as *mut *mut SDqLayer;
-    if (**ppCtx).ppDqLayerList.is_null() {
-        return 1;
-    }
+    // **T6.H8.** As `ppRefPicListExt` just above: a block of nulls that
+    // `InitDqLayers` fills with `Box`-built layers, so a `Vec` of `None`s that it
+    // fills with the `Box`es themselves.
+    (**ppCtx).ppDqLayerList = (0..kiNumDependencyLayers).map(|_| None).collect();
 
     iResult = InitDqLayers(ppCtx, pExistingParasetList);
     if iResult != 0 {
@@ -1521,25 +1521,27 @@ pub unsafe fn FreeSliceInLayer(pDq: *mut SDqLayer, pMa: *mut CMemoryAlign) {
 ///
 /// # Safety
 /// `pDq` must have come from `InitDqLayers` and must not be used afterwards.
-pub unsafe fn FreeDqLayer(pDq: *mut *mut SDqLayer, pMa: *mut CMemoryAlign) {
-    if (*pDq).is_null() {
+pub unsafe fn FreeDqLayer(p: *mut SDqLayer, pMa: *mut CMemoryAlign) {
+    if p.is_null() {
         return;
     }
-    let p = *pDq;
 
+    // **What is left of this function is Phase 7's.** `FreeSliceInLayer` releases one
+    // `CMemoryAlign` block per slice (`sSliceBs.pBs`), which the boundary list keeps
+    // with the thread machinery; everything else the C++ frees here is owned and goes
+    // with the layer.
     FreeSliceInLayer(p, pMa);
 
-    // `ppSliceInLayer` is a `Vec<SliceIdx>` since T6.D4 — the layer's own `Drop`
-    // releases it when the `Box` below goes.
-    // `pFirstMbIdxOfSlice` and `pCountMbNumInSlice` are `Vec<i32>` since T6.D6 — the
-    // layer's own `Drop` releases them with the `Box` below.
+    // `ppSliceInLayer` is a `Vec<SliceIdx>` since T6.D4, `pFirstMbIdxOfSlice` and
+    // `pCountMbNumInSlice` are `Vec<i32>` since T6.D6, and `pOverallMbMap` is a
+    // `Vec<u16>` since T6.D7 — this call releases that last one early and restamps
+    // the segment fields, all of which the layer's `Drop` would cover anyway.
     crate::encoder::svc_enc_slice_segment::UninitSlicePEncCtx(p, pMa);
     (*p).iMaxSliceNum = 0;
 
-    // The layer is `Box`-built (T6.D3), so its own storage is Rust's to release;
-    // the member frees above go one at a time as each member becomes owned.
-    drop(Box::from_raw(p));
-    *pDq = null_mut();
+    // **T6.H8**: `drop(Box::from_raw(p))` stood here, with the slot's null-out under
+    // it. The list owns the `Box`, so the layer's storage goes with the context —
+    // which is also why this takes the layer rather than the slot.
 }
 
 /// `FreeRefList` — encoder_ext.cpp:986.
@@ -1682,8 +1684,7 @@ mod tests {
         unsafe {
             let pCtx = build_gate_context();
 
-            assert!(!(*pCtx).ppDqLayerList.is_null());
-            let pDq = *(*pCtx).ppDqLayerList;
+            let pDq = ctx_dq_layer(pCtx, 0);
             assert!(!pDq.is_null());
             assert_eq!((*pDq).iMbWidth, 10);
             assert_eq!((*pDq).iMbHeight, 6);
@@ -1789,15 +1790,19 @@ pub unsafe fn WelsUninitEncoderExt(ppCtx: *mut *mut sWelsEncCtx) {
         // its five arrays, the context owns the layers, and the order is the drop
         // glue's. Both calls are deleted, and so is `WelsRcFreeMemory`.
         // **T6.H5**: `pLtr`'s `WelsFree` stood here; the `Vec` is the context's.
-        // DQ layers list
-        if !(*pCtx).ppDqLayerList.is_null() && !(*pCtx).pSvcParam.is_null() {
-            for ilayer in 0..(*(*pCtx).pSvcParam).iSpatialLayerNum as usize {
-                if !(*(*pCtx).ppDqLayerList.add(ilayer)).is_null() {
-                    FreeDqLayer((*pCtx).ppDqLayerList.add(ilayer), pMa);
-                }
+        // DQ layers list. **T6.H8**: the block's `WelsFree` and each layer's
+        // `Box::from_raw` are the context's drop now, and what is left of this entry
+        // is the residue `FreeDqLayer` still has to release by hand — `sSliceBs.pBs`,
+        // one `CMemoryAlign` block per slice, which is **Phase 7's** (the boundary
+        // list names it). It has to run *before* the layers drop, which is why the
+        // loop stays rather than disappearing with the rest. Its bound is the list's
+        // own length now, not `iSpatialLayerNum` read back out of the parameters at
+        // teardown — the silent-leak shape T6.H7 found next door.
+        for ilayer in 0..(*pCtx).ppDqLayerList.len() {
+            let pLayer = ctx_dq_layer(pCtx, ilayer);
+            if !pLayer.is_null() {
+                FreeDqLayer(pLayer, pMa);
             }
-            (*pMa).WelsFree((*pCtx).ppDqLayerList as *mut c_void, tag!("ppDqLayerList"));
-            (*pCtx).ppDqLayerList = null_mut();
         }
         // **T6.H7**: the reference-list entry stood here — a loop calling `FreeRefList`
         // over `iSpatialLayerNum` slots, then one `WelsFree` for the block. The `Vec`

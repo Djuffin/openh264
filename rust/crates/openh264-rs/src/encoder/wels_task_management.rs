@@ -1108,15 +1108,13 @@ mod tests {
             crate::SliceMode::SM_FIXEDSLCNUM_SLICE;
         coding_param.sSpatialLayers[0].sSliceArgument.uiSliceNum = 2;
 
-        let mut dq_layer = SDqLayer::default();
         // T6.G2: the context names the current layer by *position*, so the test has
         // to stand up the one-entry list the position indexes into — which is what
-        // `RequestMemorySvc` builds on the live path. The list outlives both borrows
-        // because `dq_layer` and `list` outlive `enc_ctx` in this scope.
-        let mut list: [*mut SDqLayer; 1] = [&mut dq_layer];
+        // `RequestMemorySvc` builds on the live path. **T6.H8**: the list owns the
+        // layer now, so the fixture hands it a `Box` instead of borrowing a local.
         let mut enc_ctx = sWelsEncCtx::default();
         enc_ctx.pSvcParam = &mut coding_param;
-        enc_ctx.ppDqLayerList = list.as_mut_ptr();
+        enc_ctx.ppDqLayerList = vec![Some(Box::new(SDqLayer::default()))];
         enc_ctx.iCurDqLayer = Some(LayerIdx(0));
 
         unsafe {

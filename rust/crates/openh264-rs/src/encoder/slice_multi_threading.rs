@@ -62,7 +62,9 @@ pub use crate::encoder::encoder_context::sWelsEncCtx;
 // by the context now, so the two `pFrameBs` spellings in this file become the two
 // accessors. Field spellings only — no body in this file is touched, and the
 // thread machinery is Phase 7's.
-use crate::encoder::encoder_context::{ctx_frame_bs, ctx_frame_bs_at, ctx_rc, ctx_rc_at};
+use crate::encoder::encoder_context::{
+    ctx_dq_layer, ctx_frame_bs, ctx_frame_bs_at, ctx_rc, ctx_rc_at,
+};
 
 // ============================================================================
 // Constants and Thresholds
@@ -891,11 +893,11 @@ pub fn DynamicDetectCpuCores() -> i32 {
 
 /// Evaluates load balance and dynamically adjusts slicing for the base spatial dependency layer.
 pub unsafe fn AdjustBaseLayer(pCtx: *mut sWelsEncCtx) -> i32 {
-    if pCtx.is_null() || (*pCtx).ppDqLayerList.is_null() {
+    if pCtx.is_null() || ctx_dq_layer(pCtx, 0).is_null() {
         return 0;
     }
 
-    let pCurDq = *(*pCtx).ppDqLayerList.add(0);
+    let pCurDq = ctx_dq_layer(pCtx, 0);
     if pCurDq.is_null() {
         return 0;
     }
@@ -916,7 +918,7 @@ pub unsafe fn AdjustBaseLayer(pCtx: *mut sWelsEncCtx) -> i32 {
 
 /// Evaluates load balance and dynamically adjusts slicing for spatial enhancement layers.
 pub unsafe fn AdjustEnhanceLayer(pCtx: *mut sWelsEncCtx, iCurDid: i32) -> i32 {
-    if pCtx.is_null() || (*pCtx).ppDqLayerList.is_null() || current_layer(pCtx).is_null() {
+    if pCtx.is_null() || ctx_dq_layer(pCtx, 0).is_null() || current_layer(pCtx).is_null() {
         return 0;
     }
 
@@ -935,7 +937,7 @@ pub unsafe fn AdjustEnhanceLayer(pCtx: *mut sWelsEncCtx, iCurDid: i32) -> i32 {
 
     let iNeedAdj: i32;
     if kbModelingFromSpatial {
-        let pBaseLayer = *(*pCtx).ppDqLayerList.add(iCurDid as usize - 1);
+        let pBaseLayer = ctx_dq_layer(pCtx, iCurDid as usize - 1);
         if pBaseLayer.is_null() {
             return 0;
         }
@@ -947,7 +949,7 @@ pub unsafe fn AdjustEnhanceLayer(pCtx: *mut sWelsEncCtx, iCurDid: i32) -> i32 {
             DynamicAdjustSlicing(pCtx, current_layer(pCtx), iCurDid);
         }
     } else {
-        let pCurLayer = *(*pCtx).ppDqLayerList.add(iCurDid as usize);
+        let pCurLayer = ctx_dq_layer(pCtx, iCurDid as usize);
         if pCurLayer.is_null() {
             return 0;
         }

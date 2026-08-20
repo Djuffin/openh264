@@ -608,6 +608,22 @@ pub unsafe fn ctx_mb_index_x(pCtx: *mut sWelsEncCtx, kiDid: usize) -> *mut i16 {
     }
 }
 
+/// Dependency layer `kiDid`'s **DQ layer** — `ppDqLayerList[did]`, and null where the
+/// slot's pointer was null. T6.H8; the same shape as [`ctx_ref_list`], and
+/// [`current_layer`](crate::encoder::svc_encode_slice::current_layer) resolves
+/// `iCurDqLayer` through it.
+///
+/// # Safety
+/// `pCtx` must point to a live encoder context.
+#[inline]
+pub unsafe fn ctx_dq_layer(pCtx: *mut sWelsEncCtx, kiDid: usize) -> *mut SDqLayer {
+    let arr: &mut Vec<Option<Box<SDqLayer>>> = &mut (*pCtx).ppDqLayerList;
+    match arr.get_mut(kiDid) {
+        Some(Some(b)) => &raw mut **b,
+        _ => std::ptr::null_mut(),
+    }
+}
+
 /// Dependency layer `kiDid`'s **reference list** — `ppRefPicListExt[did]`, and null
 /// where the slot's pointer was null: before `InitDqLayers` fills it, and past the
 /// layers the configuration uses. T6.H7.
@@ -869,7 +885,13 @@ pub struct sWelsEncCtx {
     /// this field is `Some(LayerIdx(0))` — the base layer — and a zeroed shell
     /// would have silently produced a context that already had one (F56/S21).
     pub iCurDqLayer: Option<crate::encoder::svc_encode_slice::LayerIdx>,
-    pub ppDqLayerList: *mut *mut SDqLayer,
+    /// **T6.H8 — owned.** One DQ layer per dependency layer. As with
+    /// [`ppRefPicListExt`](Self::ppRefPicListExt), the `SDqLayer`s have been
+    /// `Box`-built since T6.D3 and the list is simply their owner now; `None` is the
+    /// null a slot held before `InitDqLayers` filled it. Resolve a layer with
+    /// [`ctx_dq_layer`], or the *current* one with
+    /// [`current_layer`](crate::encoder::svc_encode_slice::current_layer).
+    pub ppDqLayerList: Vec<Option<Box<SDqLayer>>>,
     /// **T6.H7 — owned.** One reference list per dependency layer. The array was a
     /// `WelsMallocz`'d block of pointers; the `SRefList`s themselves have been
     /// `Box`-built since T6.F1, so the list is simply their owner now. `None` is the
@@ -1055,7 +1077,7 @@ impl sWelsEncCtx {
             // names one, which cannot happen before `ppDqLayerList` below is
             // allocated. `None`, not `Some(LayerIdx(0))` — see the field.
             iCurDqLayer: None,
-            ppDqLayerList: std::ptr::null_mut(),
+            ppDqLayerList: Vec::new(),
             ppRefPicListExt: Vec::new(),
 
             // `iNumRef0` below is the live length of this list; sixteen `None`s is the
@@ -1982,9 +2004,9 @@ mod tests {
         // the empty container, which is the null the raw pointer held, and which
         // `ctx_sps_array` and its siblings answer as null so that every downstream
         // `is_null()` guard still asks its question.
-        const OWNED: [&str; 8] = [
+        const OWNED: [&str; 9] = [
             "pSpsArray", "pSubsetArray", "pPPSArray", "pDqIdcMap", "pFrameBs", "pLtr",
-            "pWelsSvcRc", "ppRefPicListExt",
+            "pWelsSvcRc", "ppRefPicListExt", "ppDqLayerList",
         ];
         assert!(built.pSpsArray.is_empty(), "new(): no SPS array is allocated yet");
         assert!(built.pSubsetArray.is_empty(), "new(): no subset SPS array is allocated yet");
@@ -1994,6 +2016,7 @@ mod tests {
         assert!(built.pLtr.is_empty(), "new(): no LTR state array is allocated yet");
         assert!(built.pWelsSvcRc.is_empty(), "new(): no rate-control state is allocated yet");
         assert!(built.ppRefPicListExt.is_empty(), "new(): no reference lists are allocated yet");
+        assert!(built.ppDqLayerList.is_empty(), "new(): no DQ layers are allocated yet");
 
         // ---- tier 2: the F64 fields, excluded by name and asserted by value ----
         const BY_VALUE: [&str; 10] = [
