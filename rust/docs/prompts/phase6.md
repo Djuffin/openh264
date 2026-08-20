@@ -609,7 +609,8 @@ at a family boundary, and only with a written reason):
   **`Option<Box<T>>` accessors are free and `Vec` accessors are not** — the
   container's shape decides the cost, not the call count. Cost localised to
   {LTR, rc, ref lists} with the mechanism named; nothing reverted, Phase 9 owns it.
-* **I** — **the S37 inventory, then references where it is clean; the deny sweep
+* **I** — **brief written** ([`phase6_session_i.md`](phase6_session_i.md), steward,
+  2026-08-20). **The S37 inventory, then references where it is clean; the deny sweep
   module-by-module; §7's exit conditions checked line by line; the residue
   enumerated in the four lawful categories; the handoffs written (Phase 7, 8, 9,
   10); cumulative perf restated; the phase close.** `SWelsFuncPtrList` (57) and
@@ -635,9 +636,10 @@ Phase 6's close is defined now, and it is the decoder's close, transposed:
    owner. An exception is a file, never a blanket.
 2. **Every surviving `#[allow(unsafe_code)]` item under the denied modules is
    enumerated by category with an owner**, and only four categories are lawful:
-   values crossing the C ABI (Phase 8), pool/allocator machinery carrying S28's
-   mandated Miri test, an MT seam (Phase 7), and the `SCREEN_CONTENT(dormant)` tag
-   (Phase 10, D-scr-1). "The lint is on" is not the test;
+   values crossing the C ABI (Phase 8), owned-storage cursor machinery carrying
+   its mandated Miri tests (S28/S40 — the pool, the frame bitstream's writers,
+   the named neighbour-walkers), an MT seam (Phase 7), and the
+   `SCREEN_CONTENT(dormant)` tag (Phase 10, D-scr-1). "The lint is on" is not the test;
    the enumeration is.
 3. **Encoder-side `raw_ptr` residue is enumerated by category**, code split from
    prose (S16), the way 5b handed the decoder's 47+66 to Phase 8.
