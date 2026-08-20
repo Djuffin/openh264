@@ -238,7 +238,7 @@ pub unsafe extern "C" fn CavlcParamCal_c(
 
 /// Serializes transform coefficient block residuals into the CAVLC bitstream.
 pub unsafe fn WriteBlockResidualCavlc(
-    pFuncList: *mut SWelsFuncPtrList,
+    pFuncList: &SWelsFuncPtrList,
     pCoffLevel: *mut i16,
     iEndIdx: i32,
     iCalRunLevelFlag: i32,
@@ -256,8 +256,8 @@ pub unsafe fn WriteBlockResidualCavlc(
     let mut uiSign = 0u32;
 
     if iCalRunLevelFlag != 0 {
-        let func = if !pFuncList.is_null() && (*pFuncList).pfCavlcParamCal.is_some() {
-            (*pFuncList).pfCavlcParamCal.unwrap()
+        let func = if pFuncList.pfCavlcParamCal.is_some() {
+            pFuncList.pfCavlcParamCal.unwrap()
         } else {
             CavlcParamCal_c
         };
@@ -746,7 +746,7 @@ pub unsafe fn WelsSpatialWriteMbSyn(
             );
             let pMbCache = std::ptr::addr_of_mut!((*pSlice).sMbCacheInfo);
             let buf = crate::encoder::svc_encode_slice::slice_bs_buffer(pEncCtx, pSlice);
-            if WelsWriteMbResidual(ctx_func_list(pEncCtx), pMbCache, &*pCurMb, buf, pBs) != 0 {
+            if WelsWriteMbResidual(&*ctx_func_list(pEncCtx), pMbCache, &*pCurMb, buf, pBs) != 0 {
                 return ENC_RETURN_VLCOVERFLOWFOUND;
             }
         } else {
@@ -776,7 +776,7 @@ pub unsafe fn WelsSpatialWriteMbSyn(
 ///
 /// Matches `int32_t WelsWriteMbResidual (SWelsFuncPtrList* pFuncList, SMbCache* sMbCacheInfo, SMB* pCurMb, SBitStringAux* pBs)`
 pub unsafe fn WelsWriteMbResidual(
-    pFuncList: *mut SWelsFuncPtrList,
+    pFuncList: &SWelsFuncPtrList,
     sMbCacheInfo: *mut SMbCache,
     pCurMb: &SMB,
     buf: &mut [u8],

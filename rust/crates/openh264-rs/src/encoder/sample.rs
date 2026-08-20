@@ -311,8 +311,8 @@ pub unsafe extern "C" fn WelsSampleSatd16x16_c(
 ///
 /// # Safety
 /// `pFuncList` must be a valid, writable `SWelsFuncPtrList`.
-pub unsafe fn WelsInitSampleSadFunc(pFuncList: *mut SWelsFuncPtrList, _uiCpuFlag: u32) {
-    let sdf = &mut (*pFuncList).sSampleDealingFuncs;
+pub unsafe fn WelsInitSampleSadFunc(pFuncList: &mut SWelsFuncPtrList, _uiCpuFlag: u32) {
+    let sdf = &mut pFuncList.sSampleDealingFuncs;
 
     //pfSampleSad init
     sdf.pfSampleSad[BLOCK_16x16] = Some(WelsSampleSad16x16_c);

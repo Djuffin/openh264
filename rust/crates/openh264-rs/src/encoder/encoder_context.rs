@@ -1440,18 +1440,15 @@ pub unsafe fn InitPic(
 /// # Safety
 /// `pFuncList` must be non-null and point to a valid `SWelsFuncPtrList`.
 pub unsafe fn WelsInitBGDFunc(
-    pFuncList: *mut SWelsFuncPtrList,
+    pFuncList: &mut SWelsFuncPtrList,
     kbEnableBackgroundDetection: bool,
 ) {
-    if pFuncList.is_null() {
-        return;
-    }
     if kbEnableBackgroundDetection {
-        (*pFuncList).pfInterMdBackgroundDecision = Some(WelsMdInterJudgeBGDPskip);
-        (*pFuncList).pfMdBackgroundInfoUpdate = Some(WelsMdUpdateBGDInfo);
+        pFuncList.pfInterMdBackgroundDecision = Some(WelsMdInterJudgeBGDPskip);
+        pFuncList.pfMdBackgroundInfoUpdate = Some(WelsMdUpdateBGDInfo);
     } else {
-        (*pFuncList).pfInterMdBackgroundDecision = Some(WelsMdInterJudgeBGDPskipFalse);
-        (*pFuncList).pfMdBackgroundInfoUpdate = Some(WelsMdUpdateBGDInfoNULL);
+        pFuncList.pfInterMdBackgroundDecision = Some(WelsMdInterJudgeBGDPskipFalse);
+        pFuncList.pfMdBackgroundInfoUpdate = Some(WelsMdUpdateBGDInfoNULL);
     }
 }
 
@@ -1469,7 +1466,12 @@ pub unsafe fn InitFunctionPointers(
     if pEncCtx.is_null() || pParam.is_null() {
         return ENC_RETURN_SUCCESS;
     }
-    let pFuncList = ctx_func_list(pEncCtx);
+    // **T6.I2.** One `&mut` for the whole function, derived from the owner once —
+    // rule 6's shape. The alternative, a fresh `&mut *pFuncList` at each of the
+    // fourteen calls below, is the shape that compiles and is UB: each one pops
+    // the raw the next call re-uses. The survivors that still take `*mut` get a
+    // reborrow (`&mut *fl`) rather than the binding, so `fl` outlives them.
+    let fl: &mut SWelsFuncPtrList = &mut *ctx_func_list(pEncCtx);
 
     let bScreenContent = (*pParam).iUsageType == crate::api::codec_api::EUsageType::SCREEN_CONTENT_REAL_TIME;
 
@@ -1481,17 +1483,17 @@ pub unsafe fn InitFunctionPointers(
     // have and a direct call cannot.
 
     /* Intra_Prediction_fn */
-    crate::encoder::get_intra_predictor::WelsInitIntraPredFuncs(pFuncList, _uiCpuFlag);
+    crate::encoder::get_intra_predictor::WelsInitIntraPredFuncs(&mut *fl, _uiCpuFlag);
 
     /* ME func */
-    crate::encoder::svc_motion_estimate::WelsInitMeFunc(pFuncList, _uiCpuFlag, bScreenContent);
+    crate::encoder::svc_motion_estimate::WelsInitMeFunc(&mut *fl as *mut _, _uiCpuFlag, bScreenContent);
 
     /* sad, satd, average */
-    crate::encoder::sample::WelsInitSampleSadFunc(pFuncList, _uiCpuFlag);
+    crate::encoder::sample::WelsInitSampleSadFunc(&mut *fl, _uiCpuFlag);
 
-    WelsInitBGDFunc(pFuncList, (*pParam).bEnableBackgroundDetection);
+    WelsInitBGDFunc(&mut *fl, (*pParam).bEnableBackgroundDetection);
     crate::encoder::svc_mode_decision::WelsInitSCDPskipFunc(
-        pFuncList,
+        &mut *fl,
         bScreenContent
             && (*pParam).bEnableSceneChangeDetect
             && ((*ctx_param(pEncCtx)).iComplexityMode as i32)
@@ -1499,14 +1501,14 @@ pub unsafe fn InitFunctionPointers(
     );
 
     // for pfGetVarianceFromIntraVaa function ptr adaptive by CPU features
-    crate::encoder::md::InitIntraAnalysisVaaInfo(pFuncList, _uiCpuFlag);
+    crate::encoder::md::InitIntraAnalysisVaaInfo(&mut *fl, _uiCpuFlag);
 
     /* Motion compensation */
-    crate::common::mc::InitMcFunc(&mut (*pFuncList).sMcFuncs, _uiCpuFlag);
-    InitCoeffFunc(pFuncList, _uiCpuFlag, (*pParam).iEntropyCodingModeFlag);
+    crate::common::mc::InitMcFunc(&mut fl.sMcFuncs, _uiCpuFlag);
+    InitCoeffFunc(&mut *fl, _uiCpuFlag, (*pParam).iEntropyCodingModeFlag);
 
-    crate::encoder::encode_mb_aux::WelsInitEncodingFuncs(pFuncList, _uiCpuFlag);
-    crate::encoder::decode_mb_aux::WelsInitReconstructionFuncs(pFuncList, _uiCpuFlag);
+    crate::encoder::encode_mb_aux::WelsInitEncodingFuncs(&mut *fl, _uiCpuFlag);
+    crate::encoder::decode_mb_aux::WelsInitReconstructionFuncs(&mut *fl, _uiCpuFlag);
 
     // C++ does NOT set pfInterMd here. It is assigned per-slice in
     // svc_encode_slice.cpp:733/736 to WelsMdInterMbEnhancelayer or WelsMdInterMb
@@ -1517,22 +1519,22 @@ pub unsafe fn InitFunctionPointers(
     // ported yet, so the assignment belongs with that work, not here.
 
     crate::encoder::deblocking::DeblockingInit(
-        &mut (*pFuncList).pfDeblocking as *mut _,
+        &mut fl.pfDeblocking as *mut _,
         _uiCpuFlag as i32,
     );
 
     crate::encoder::rc::WelsRcInitFuncPointers(
-        &mut (*pFuncList).pfRc,
+        &mut fl.pfRc,
         (*pParam).iRCMode,
     );
 
     crate::encoder::deblocking::WelsBlockFuncInit(
-        &mut (*pFuncList).pfSetNZCZero as *mut _,
+        &mut fl.pfSetNZCZero as *mut _,
         _uiCpuFlag as i32,
     );
 
     crate::encoder::md::InitFillNeighborCacheInterFunc(
-        pFuncList,
+        &mut *fl,
         (*pParam).bEnableBackgroundDetection as i32,
     );
 
@@ -1545,13 +1547,13 @@ pub unsafe fn InitFunctionPointers(
     // can be reached twice: `WelsUninitEncoderExt` runs between two inits and takes
     // the field. **S23**: the object caches `eSpsPpsIdStrategy` as a
     // `ParasetIdKind`, and it cannot lag the live parameter — see the type's doc.
-    (*pFuncList).pParametersetStrategy =
+    fl.pParametersetStrategy =
         crate::encoder::paraset_strategy::CreateParametersetStrategy(
             (*pParam).eSpsPpsIdStrategy,
             (*pParam).bSimulcastAVC,
             (*pParam).iSpatialLayerNum,
         );
-    if (*pFuncList).pParametersetStrategy.is_none() {
+    if fl.pParametersetStrategy.is_none() {
         return ENC_RETURN_MEMALLOCERR;
     }
 
@@ -1569,12 +1571,12 @@ pub unsafe fn InitFunctionPointers(
 /// one [`EntropyCoder`] now, so the `if` *is* the assignment. What is left of the
 /// C++ shape is `pfCavlcParamCal`, which is CPU dispatch and Phase 4a's kind.
 unsafe fn InitCoeffFunc(
-    pFuncList: *mut SWelsFuncPtrList,
+    pFuncList: &mut SWelsFuncPtrList,
     _uiCpuFlag: u32,
     iEntropyCodingModeFlag: i32,
 ) {
-    (*pFuncList).pfCavlcParamCal = Some(crate::encoder::svc_set_mb_syn_cavlc::CavlcParamCal_c);
-    (*pFuncList).eEntropyCoder = EntropyCoder::from_flag(iEntropyCodingModeFlag);
+    pFuncList.pfCavlcParamCal = Some(crate::encoder::svc_set_mb_syn_cavlc::CavlcParamCal_c);
+    pFuncList.eEntropyCoder = EntropyCoder::from_flag(iEntropyCodingModeFlag);
 }
 
 /// Increments the H.264 slice header `frame_num` syntax element for spatial layer `kiDidx`.
@@ -2561,7 +2563,7 @@ mod tests {
             // `InitFunctionPointers`, which would allocate a second parameter-set
             // strategy over the first.
             assert_eq!(ctx.pFuncList.eEntropyCoder, EntropyCoder::Cavlc);
-            InitCoeffFunc(ctx_func_list(&mut ctx), 0, 1);
+            InitCoeffFunc(&mut *ctx_func_list(&mut ctx), 0, 1);
             assert_eq!(ctx.pFuncList.eEntropyCoder, EntropyCoder::Cabac);
 
             assert!(ctx.pFuncList.pfDeblocking.pfDeblockingFilterSlice.is_some());

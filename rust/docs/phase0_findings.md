@@ -2678,3 +2678,88 @@ untouched and is still **Phase 7's**.
 
 Running total: **eighty-five measurements, twenty-five alternations, fifty-eight
 acquittals.**
+
+---
+
+### Measurement 86 — Phase 6 session I's step-1 `family` battery (2026-08-20)
+
+**Two hits, one per profile**, in a battery whose every other step passed and whose
+sweeps otherwise read 368/369:
+
+```
+debug  : mt CiscoVT2people_320x192_12fps t=4 sm=3 n=600  cabac=0 rc=0 :: C++ 40992  Rust 0
+release: mt CiscoVT2people_320x192_12fps t=4 sm=3 n=1500 cabac=0 rc=0 :: C++ 39895  Rust 0
+```
+
+Signature checked before anything else: `mt`, `sm=3`, `t=4`, wrong output length,
+`CiscoVT2people_320x192_12fps`. Two hits, so the **two-hit protocol** ran rather than
+the one-hit retry.
+
+**Step 1 — the single-configuration retry, 5x per profile: 10/10 BYTE-IDENTICAL.**
+
+**Step 2 — a rate sample over the whole signature subset** (`mt`, `sm=3` at both byte
+constraints, `t` in {2,4}, all three inputs, both cabac, both rc, both profiles, three
+passes = 288 runs): **286 pass / 2 fail**. Both failures at `320x192 sm=3 n=600 t=4
+cabac=1`, and both with the Rust stream **longer** than the C++ — 40463 and 40561
+against 39981. Measurement 6 already widened the output clause to *any* wrong length
+and recorded one longer instance; this is the second and third. Worth stating plainly
+because this session's brief summarised the signature as "empty or short", and **the
+finding is broader than the summary** — a longer stream is inside the fingerprint, and
+a session that trusts the summary would escalate one of these as its own.
+
+**Step 3 — the alternation.** HEAD (the working tree, T6.I0..I2) against **control =
+`036e18c0`, this session's start commit**, interleaved run-for-run inside one loop on
+the one configuration, 12 iterations x 2 profiles x 2 cabac per arm — 48 runs each.
+Only the Rust driver differs between arms; the C++ reference, the harness and the
+looped input are the same files for both.
+
+```
+HEAD    debug   PASS=21 FAIL=3        control debug   PASS=23 FAIL=1
+HEAD    release PASS=21 FAIL=3        control release PASS=22 FAIL=2
+                 HEAD 6/48                            control 3/48
+```
+
+**The control hits, in both profiles, with both shapes** — zero-byte and short
+(37837 of 39981). 6/48 against 3/48 is not a distinguishable rate at these counts
+(a two-proportion test reads p ~ 0.3), and it is the same shapes on the same
+configuration on a commit whose diff is the function-pointer table's ownership: no
+slice bookkeeping, no thread machinery, no encoder arithmetic. **Acquitted as F3.**
+
+**A rate datapoint that is worth more than the acquittal.** `CiscoVT2people_320x192_12fps
+sm=3 n=600 t=4 cabac=1` failed **9 times in 96 alternated runs across both arms** —
+roughly **1 in 11**, against the finding's recorded ~1/800 under sustained load and
+~1/100-150 on "susceptible" configurations. That makes it **the most susceptible
+configuration on record by an order of magnitude**, and the machine was under load
+from this session's own builds throughout, which is exactly the condition F3 likes and
+which the alternation controls for by construction. **Phase 7 should open its F3
+ablation on this configuration** rather than on the `160x96 n=600` one that accounts
+for most of measurements 80-85: it reproduces roughly a hundred times faster.
+
+One negative result recorded so as not to overclaim: the *longer*-output shape appeared
+only on the HEAD arm (twice, in the 288-run subset sample) and was not drawn on the
+control arm in the 96-run alternation. That is a sample of two against a base rate this
+small, and the control drew the other two shapes freely; it is not evidence of anything,
+but the next session to see a longer stream should know the control arm has not yet
+produced one.
+
+**Session tally, recorded because the rate is the point.** Session I ran two
+batteries over its step-1 commit — one `family`, one `full` — for four sweeps of
+369 configurations, and drew **four hits**, all `mt` `sm=3` `t=4`, all wrong-length:
+
+```
+family  debug   CiscoVT2people_320x192_12fps n=600  cabac=0 rc=0  Rust 0
+family  release CiscoVT2people_320x192_12fps n=1500 cabac=0 rc=0  Rust 0
+full    debug   CiscoVT2people_160x96_6fps   n=600  cabac=0 rc=0  Rust 0
+full    release CiscoVT2people_320x192_12fps n=1500 cabac=1 rc=1  Rust 0
+```
+
+Four in 1476 configurations is ~1/370 — above the recorded ~1/800, consistent with
+a loaded machine, and all four inside the fingerprint. The alternation above is what
+adjudicates them; no further retry was run per hit, because the two-hit protocol had
+already been run to completion on the same machine in the same session and a
+per-hit retry adds no information the 96-run alternation does not already carry.
+This is stated rather than left implicit: **three of these four hits were not
+individually re-run.**
+
+Running total: **eighty-six measurements, twenty-six alternations, fifty-nine
+acquittals.**

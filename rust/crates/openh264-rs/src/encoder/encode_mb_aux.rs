@@ -932,10 +932,7 @@ pub unsafe extern "C" fn WelsCopy16x16_c(pDst: *mut u8, iStrideD: i32, pSrc: *mu
 ///
 /// # Safety
 /// - `pFuncList` must point to a valid, writable `SWelsFuncPtrList` instance.
-pub unsafe extern "C" fn WelsInitEncodingFuncs(pFuncList: *mut SWelsFuncPtrList, uiCpuFlag: u32) {
-    if pFuncList.is_null() {
-        return;
-    }
+pub unsafe extern "C" fn WelsInitEncodingFuncs(pFuncList: &mut SWelsFuncPtrList, uiCpuFlag: u32) {
 
     unsafe {
         let f = &mut *pFuncList;

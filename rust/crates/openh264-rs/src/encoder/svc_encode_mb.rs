@@ -706,15 +706,15 @@ pub unsafe fn WelsEncRecI4x4Y(
 /// # Safety
 /// All pointers in `pFuncList`, `pCurMb`, and `pMbCache` must be properly initialized and valid.
 pub unsafe fn WelsEncInterY(
-    pFuncList: *mut SWelsFuncPtrList,
+    pFuncList: &SWelsFuncPtrList,
     pCurMb: &mut SMB,
     pMbCache: *mut SMbCache,
 ) {
-    let pfQuantizationFour4x4Max = (*pFuncList).pfQuantizationFour4x4Max;
-    let pfScan4x4 = (*pFuncList).pfScan4x4;
-    let pfCalculateSingleCtr4x4 = (*pFuncList).pfCalculateSingleCtr4x4;
-    let pfGetNoneZeroCount = (*pFuncList).pfGetNoneZeroCount;
-    let pfDequantizationFour4x4 = (*pFuncList).pfDequantizationFour4x4;
+    let pfQuantizationFour4x4Max = pFuncList.pfQuantizationFour4x4Max;
+    let pfScan4x4 = pFuncList.pfScan4x4;
+    let pfCalculateSingleCtr4x4 = pFuncList.pfCalculateSingleCtr4x4;
+    let pfGetNoneZeroCount = pFuncList.pfGetNoneZeroCount;
+    let pfDequantizationFour4x4 = pFuncList.pfDequantizationFour4x4;
 
     let mut pRes = crate::encoder::md::coeff_level(pMbCache);
     let mut iSingleCtrMb = 0i32;
@@ -797,18 +797,18 @@ pub unsafe fn WelsEncInterY(
 /// # Safety
 /// All pointers in `pFuncList`, `pCurMb`, `pMbCache`, and `pRes` must be properly initialized and valid.
 pub unsafe fn WelsEncRecUV(
-    pFuncList: *mut SWelsFuncPtrList,
+    pFuncList: &SWelsFuncPtrList,
     pCurMb: &mut SMB,
     pMbCache: *mut SMbCache,
     mut pRes: *mut i16,
     iUV: i32,
 ) {
-    let pfQuantizationHadamard2x2 = (*pFuncList).pfQuantizationHadamard2x2;
-    let pfQuantizationFour4x4Max = (*pFuncList).pfQuantizationFour4x4Max;
-    let pfScan4x4Ac = (*pFuncList).pfScan4x4Ac;
-    let pfCalculateSingleCtr4x4 = (*pFuncList).pfCalculateSingleCtr4x4;
-    let pfGetNoneZeroCount = (*pFuncList).pfGetNoneZeroCount;
-    let pfDequantizationFour4x4 = (*pFuncList).pfDequantizationFour4x4;
+    let pfQuantizationHadamard2x2 = pFuncList.pfQuantizationHadamard2x2;
+    let pfQuantizationFour4x4Max = pFuncList.pfQuantizationFour4x4Max;
+    let pfScan4x4Ac = pFuncList.pfScan4x4Ac;
+    let pfCalculateSingleCtr4x4 = pFuncList.pfCalculateSingleCtr4x4;
+    let pfGetNoneZeroCount = pFuncList.pfGetNoneZeroCount;
+    let pfDequantizationFour4x4 = pFuncList.pfDequantizationFour4x4;
 
     let kiInterFlag = !IS_INTRA((*pCurMb).uiMbType);
     let kiQp = (*pCurMb).uiChromaQp;
@@ -914,17 +914,17 @@ pub unsafe fn WelsEncRecUV(
 /// All pointers in `pCurLayer`, `pFuncList`, `pCurMb`, and `pMbCache` must be valid.
 pub unsafe fn WelsRecPskip(
     pCurLayer: *mut SDqLayer,
-    pFuncList: *mut SWelsFuncPtrList,
+    pFuncList: &SWelsFuncPtrList,
     pCurMb: &mut SMB,
     pMbCache: *mut SMbCache,
 ) {
     let iRecStride = (*pCurLayer).iCsStride.as_ptr();
     let pCsMb = (*pMbCache).SPicData.pCsMb.as_ptr();
 
-    if let Some(func) = (*pFuncList).pfCopy16x16Aligned {
+    if let Some(func) = pFuncList.pfCopy16x16Aligned {
         func(*pCsMb.add(0), *iRecStride.add(0), crate::encoder::md::skip_mb(pMbCache), 16);
     }
-    if let Some(func) = (*pFuncList).pfCopy8x8Aligned {
+    if let Some(func) = pFuncList.pfCopy8x8Aligned {
         func(
             *pCsMb.add(1),
             *iRecStride.add(1),

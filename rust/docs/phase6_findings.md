@@ -487,6 +487,101 @@ are the screen-content half, fenced dormant under D-scr-1 and refused by
 
 ---
 
+## F65 — Phase 6's exit condition 2 is unreachable by construction: the deny sweep's residue belongs to Phases 7-10, and the four lawful categories do not name it
+
+**Measured 2026-08-20, session I, at `2731f465`.** Not an opinion about how much
+work is left — two counts, both reproducible in one command each.
+
+**What the deny sweep actually costs.** `#![deny(unsafe_code)]` was added to all
+**36** modules of `src/encoder` + `src/processing` (every file except the two
+enumerated MT ones), the crate built, the compiler's own diagnostics counted, and
+the experiment reverted. The lint names **894 items**:
+
+```
+612  declaration of an `unsafe` function
+177  usage of an `unsafe` block
+ 92  implementation of an `unsafe` method
+  5  declaration of a `no_mangle` function
+  4  implementation of an `unsafe` trait
+  4  declaration of an `unsafe` method
+```
+
+**894 is a lower bound.** 17 of the 36 files also failed with `expected unsuffixed
+literal, found #` — the attribute landed in a position that does not parse — so
+those files stopped before their own items were counted. Every one of the 894 needs
+an `#[allow(unsafe_code)]` and, under §7 condition 2, a category tag.
+
+**What step 2 can take off that number.** Excluding the two MT files and
+`wels_encoder_ext.rs` (Phase 8's), `src/encoder` + `src/processing` hold **709**
+`unsafe fn` declarations. **272** name `*mut sWelsEncCtx` in their signature. But
+only **117** have `sWelsEncCtx` as their *only* raw parameter type — the other 155
+also take a raw pointer that this phase is forbidden to touch. So step 2, executed
+perfectly and to the last line, converts **at most 117 of the 612** declarations
+into safe `fn`s and leaves ~780 allow items standing.
+
+The residue that survives is not miscellaneous. Counting raw parameter types across
+those same declarations:
+
+```
+177  *mut/*const u8            per-MB plane cursors, bitstream bytes   Phase 9 / cursor
+105  *mut/*const SSlice        the slice banks                         Phase 7
+ 79  *mut/*const SDqLayer      the layer records                       Phase 7 / 9
+ 77  *mut/*const i32
+ 66  *mut/*const SMbCache      the 72 kernels-take-slices sites        Phase 9 (named)
+ 51  *mut/*const i16
+ 45  *mut/*const SMB           the 48 named survivors                  Phase 9 (named)
+```
+
+Every large row is on this session's own **do-not-touch** table, assigned by name to
+Phase 7 or Phase 9.
+
+**Why that makes condition 2 unreachable rather than merely expensive.** Condition 2
+does not ask for the lint to be on; it asks that **every surviving allow item be one
+of four categories** — `C-ABI` (Phase 8), `cursor` (owned-storage machinery carrying
+its derive-twice Miri tests), `MT` (Phase 7), `SCREEN_CONTENT(dormant)` (Phase 10).
+Several hundred of the ~780 survivors are none of those. `WelsMdI16x16` taking
+`*mut SMbCache` is not a C-ABI value, not a cursor, not a thread seam and not screen
+content — it is a port-internal raw pointer whose owner phase is 9. Tagging it with
+any of the four would be false, and condition 2's own sentence is that the
+enumeration is the test.
+
+**The decoder comparison, which is the reason this was not visible earlier.** The
+decoder carries `deny(unsafe_code)` on all 22 modules with **3** allow items. It got
+there because Phase 5b had already driven its raw-pointer residue to near zero
+*first*. The encoder's residue at this commit is **2442 `raw_ptr` / 828 `unsafe_fn`**.
+The deny sweep is a **consequence** of the residue, not an instrument for reducing
+it — so its cost is set by work that Phases 7, 9 and 10 own, and Phase 6 cannot pay
+it down on their behalf without editing their files.
+
+**Two ways out, and the choice is the steward's, not a session's.**
+
+1. **A fifth lawful category** — a residue tag that names an owning phase, e.g.
+   `port-raw(Phase 9)`, with the same rule the other four carry: every item tagged,
+   every tag owned, the enumeration reviewable. Condition 2 then becomes satisfiable
+   now, and it still forbids an untagged or unowned `unsafe`. This preserves what
+   condition 2 was written for (the enumeration, not the lint) while admitting that
+   Phase 6 is not the phase that retires the encoder's raw pointers.
+2. **Defer condition 2** past Phases 7-10, which makes Phase 6 not closable until
+   they have run, and makes "Phase 6 COMPLETE" a bookkeeping event rather than a
+   milestone.
+
+Session I did not pick one. It stopped at a whole-closure boundary (step 1 complete,
+step 2 not begun), left the phase open, and recorded this so the decision is made
+with the numbers in front of it rather than discovered at a close that cannot happen.
+
+**Reproduce both counts:**
+
+```
+# the sweep's cost — add the attribute to the 36 modules, build, count, revert
+cargo build --all-targets --message-format short 2>&1 \
+  | grep -oE 'error: [a-z].*' | sort | uniq -c | sort -rn
+
+# what step 2 could remove
+grep -rn '\*mut sWelsEncCtx' --include='*.rs' src/encoder src/processing | wc -l
+```
+
+---
+
 ## F52's six — the Phase 6 close (adjudicated by reading, 2026-08-18, session B)
 
 `phase5_findings.md`'s F52 repaired `tools/find_shadowing_stubs.py` and left the

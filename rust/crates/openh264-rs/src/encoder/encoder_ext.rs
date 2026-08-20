@@ -2216,19 +2216,19 @@ pub unsafe fn WritePadding(pCtx: *mut sWelsEncCtx, iLen: i32, iSize: *mut i32) -
 }
 
 /// `encoder_ext.cpp:2624` (`static inline SetFastCodingFunc`).
-unsafe fn SetFastCodingFunc(pFuncList: *mut SWelsFuncPtrList) {
-    (*pFuncList).pfIntraFineMd =
+unsafe fn SetFastCodingFunc(pFuncList: &mut SWelsFuncPtrList) {
+    pFuncList.pfIntraFineMd =
         Some(crate::encoder::svc_base_layer_md::WelsMdIntraFinePartitionVaa);
-    let sdf = &mut (*pFuncList).sSampleDealingFuncs;
+    let sdf = &mut pFuncList.sSampleDealingFuncs;
     sdf.pfMdCost = CostFamily::Sad;
     // The C++ also aims three `pfIntra*Combined3` slots at their `*Sad` twins here;
     // both sides were NULL on every target and the fields are deleted (S18).
 }
 
 /// `encoder_ext.cpp:2630` (`static inline SetNormalCodingFunc`).
-unsafe fn SetNormalCodingFunc(pFuncList: *mut SWelsFuncPtrList) {
-    (*pFuncList).pfIntraFineMd = Some(crate::encoder::svc_base_layer_md::WelsMdIntraFinePartition);
-    let sdf = &mut (*pFuncList).sSampleDealingFuncs;
+unsafe fn SetNormalCodingFunc(pFuncList: &mut SWelsFuncPtrList) {
+    pFuncList.pfIntraFineMd = Some(crate::encoder::svc_base_layer_md::WelsMdIntraFinePartition);
+    let sdf = &mut pFuncList.sSampleDealingFuncs;
     sdf.pfMdCost = CostFamily::Satd;
     // As `SetFastCodingFunc`: the three `Combined3` aims are deleted with the fields.
 }
@@ -2273,7 +2273,11 @@ pub unsafe fn SetMeMethod(uiMethod: u32, pSearchMethodFunc: *mut Option<PSearchM
 pub unsafe fn PreprocessSliceCoding(pCtx: *mut sWelsEncCtx) {
     let pCurLayer = current_layer(pCtx);
     let bFastMode = (*ctx_param(pCtx)).iComplexityMode == LOW_COMPLEXITY;
-    let pFuncList = ctx_func_list(pCtx);
+    // **T6.I2**, as `InitFunctionPointers`: one `&mut` derived from the owner, not
+    // one per call. This is the function the whole step-1 checker is about — it is
+    // where the table is re-written *per frame*, which is why no reader may hold
+    // anything derived from it across a call that reaches it again.
+    let fl: &mut SWelsFuncPtrList = &mut *ctx_func_list(pCtx);
 
     // function pointers conditional assignment under sWelsEncCtx
     if ((*ctx_param(pCtx)).iUsageType == CAMERA_VIDEO_REAL_TIME && bFastMode)
@@ -2281,42 +2285,42 @@ pub unsafe fn PreprocessSliceCoding(pCtx: *mut sWelsEncCtx) {
             && (*pCtx).eSliceType == EWelsSliceType::P_SLICE
             && bFastMode)
     {
-        SetFastCodingFunc(pFuncList);
+        SetFastCodingFunc(fl);
     } else {
-        SetNormalCodingFunc(pFuncList);
+        SetNormalCodingFunc(fl);
     }
 
     if (*pCtx).eSliceType == EWelsSliceType::P_SLICE {
         for i in 0..EStaticBlockIdc::BLOCK_STATIC_IDC_ALL as usize {
-            (*pFuncList).pfMotionSearch[i] =
+            fl.pfMotionSearch[i] =
                 Some(crate::encoder::svc_motion_estimate::WelsMotionEstimateSearch);
         }
         for b in [
             BLOCK_16x16, BLOCK_16x8, BLOCK_8x16, BLOCK_8x8, BLOCK_4x4, BLOCK_8x4, BLOCK_4x8,
         ] {
-            (*pFuncList).pfSearchMethod[b] =
+            fl.pfSearchMethod[b] =
                 Some(crate::encoder::svc_motion_estimate::WelsDiamondSearch);
         }
-        (*pFuncList).pfFirstIntraMode =
+        fl.pfFirstIntraMode =
             Some(crate::encoder::svc_base_layer_md::WelsMdFirstIntraMode);
-        let sdf = &mut (*pFuncList).sSampleDealingFuncs;
+        let sdf = &mut fl.sSampleDealingFuncs;
         sdf.pfMeCost = CostFamily::Satd;
-        (*pFuncList).pfSetScrollingMv =
+        fl.pfSetScrollingMv =
             Some(crate::encoder::svc_mode_decision::SetScrollingMvToMdNull);
 
         if bFastMode {
-            (*pFuncList).pfCalculateSatd =
+            fl.pfCalculateSatd =
                 Some(crate::encoder::svc_motion_estimate::NotCalculateSatdCost);
-            (*pFuncList).pfInterFineMd =
+            fl.pfInterFineMd =
                 Some(crate::encoder::svc_base_layer_md::WelsMdInterFinePartitionVaa);
         } else {
-            (*pFuncList).pfCalculateSatd =
+            fl.pfCalculateSatd =
                 Some(crate::encoder::svc_motion_estimate::CalculateSatdCost);
-            (*pFuncList).pfInterFineMd =
+            fl.pfInterFineMd =
                 Some(crate::encoder::svc_base_layer_md::WelsMdInterFinePartition);
         }
     } else {
-        (*pFuncList).sSampleDealingFuncs.pfMeCost = CostFamily::Unset;
+        fl.sSampleDealingFuncs.pfMeCost = CostFamily::Unset;
     }
 
     // The SCREEN_CONTENT_REAL_TIME block of the C++ (encoder_ext.cpp:2708-2771) sets up
@@ -2325,7 +2329,7 @@ pub unsafe fn PreprocessSliceCoding(pCtx: *mut sWelsEncCtx) {
     // pfInterFineMd, so it is not translated here.
 
     // update some layer-dependent variables to save judgements at MB level
-    let sdf = &(*pFuncList).sSampleDealingFuncs;
+    let sdf = &fl.sSampleDealingFuncs;
     // Was two `ptr::eq` comparisons against `pfSampleSatd.as_ptr()` — i.e. "does
     // this interior pointer still point at the SATD array". With the pointers
     // gone the question is asked directly, and asking it directly is also what
@@ -2344,10 +2348,10 @@ pub unsafe fn PreprocessSliceCoding(pCtx: *mut sWelsEncCtx) {
         && (*pCtx).eNalPriority != EWelsNalRefIdc::NRI_PRI_LOWEST
         && (pDep.iHighestTemporalId == 0 || kiCurTid < pDep.iHighestTemporalId as i32)
     {
-        (*pFuncList).pfDeblocking.pfDeblockingFilterSlice =
+        fl.pfDeblocking.pfDeblockingFilterSlice =
             Some(crate::encoder::deblocking::DeblockingFilterSliceAvcbase);
     } else {
-        (*pFuncList).pfDeblocking.pfDeblockingFilterSlice =
+        fl.pfDeblocking.pfDeblockingFilterSlice =
             Some(crate::encoder::deblocking::DeblockingFilterSliceAvcbaseNull);
     }
 }

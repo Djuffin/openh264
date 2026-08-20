@@ -688,7 +688,7 @@ pub unsafe extern "C" fn WelsMdI4x4Fast(
 /// `pFunc`, `pCurDqLayer` and `pMbCache` must be valid, and `pMbCache->pMemPredChroma`
 /// must point at the 256-byte ping-pong buffer `WelsMdI16x16` selected.
 pub unsafe extern "C" fn WelsMdIntraChroma(
-    pFunc: *mut SWelsFuncPtrList,
+    pFunc: &SWelsFuncPtrList,
     pCurDqLayer: *mut SDqLayer,
     pMbCache: *mut SMbCache,
     iLambda: i32,
@@ -710,14 +710,14 @@ pub unsafe extern "C" fn WelsMdIntraChroma(
     let iAvailCount = g_kiIntraChromaAvailMode[iOffset][4] as i32;
     let kpAvailMode = &g_kiIntraChromaAvailMode[iOffset];
 
-    let pfMdCost8x8 = (*pFunc).sSampleDealingFuncs.md_cost(BLOCK_8x8).unwrap();
+    let pfMdCost8x8 = pFunc.sSampleDealingFuncs.md_cost(BLOCK_8x8).unwrap();
 
     let mut iBestMode = kpAvailMode[0] as i32;
     for i in 0..iAvailCount as usize {
         let iCurMode = kpAvailMode[i] as i32;
         debug_assert!((0..7).contains(&iCurMode));
 
-        let pfChromaPred = (*pFunc).pfGetChromaPred[iCurMode as usize].unwrap();
+        let pfChromaPred = pFunc.pfGetChromaPred[iCurMode as usize].unwrap();
         pfChromaPred(pDstChma, pDecCb, kiLineSizeDec); //Cb
         let mut iCurCost = pfMdCost8x8(pDstChma, 8, pEncCb, kiLineSizeEnc);
 
@@ -795,7 +795,7 @@ pub unsafe fn WelsMdIntraMb(
 ) {
     //initial prediction memory for I_16x16
     (*pWelsMd).iCostLuma = crate::encoder::svc_mode_decision::WelsMdI16x16(
-        ctx_func_list(pEncCtx),
+        &*ctx_func_list(pEncCtx),
         current_layer(pEncCtx),
         pMbCache,
         (*pWelsMd).iLambda,
@@ -2073,7 +2073,7 @@ pub unsafe extern "C" fn WelsMdFirstIntraMode(
     let pFunc = ctx_func_list(pEncCtx);
 
     let iCostI16x16 = crate::encoder::svc_mode_decision::WelsMdI16x16(
-        pFunc,
+        &*pFunc,
         current_layer(pEncCtx),
         pMbCache,
         (*pWelsMd).iLambda,
@@ -2094,7 +2094,7 @@ pub unsafe extern "C" fn WelsMdFirstIntraMode(
 
         //chroma
         (*pWelsMd).iCostChroma =
-            WelsMdIntraChroma(pFunc, current_layer(pEncCtx), pMbCache, (*pWelsMd).iLambda);
+            WelsMdIntraChroma(&*pFunc, current_layer(pEncCtx), pMbCache, (*pWelsMd).iLambda);
         crate::encoder::svc_encode_slice::WelsIMbChromaEncode(pEncCtx, pCurMb, pMbCache); //add pEnc&rec to MD--2010.3.15
         (*pCurMb).uiChromPredMode = (*pMbCache).uiChmaI8x8Mode as u32;
         (*pCurMb).iSadCost = 0;
