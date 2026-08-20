@@ -1853,6 +1853,136 @@ mod tests {
         assert!(tab.StrideEncBlockOffset(3).is_null());
     }
 
+    /// **S40 for the whole family, so that "every new root accessor has the test" is
+    /// a fact rather than an argument from shared spelling.**
+    ///
+    /// `frame_bs_cursors_are_siblings` and the two stride-table tests below cover the
+    /// two accessors whose cursors are demonstrably *held* across later derivations.
+    /// The other fifteen this session added share their spelling — `&mut` over the
+    /// container field, then the address out of the container's own header — and
+    /// sharing a spelling is exactly the assumption S40 says an accessor may not
+    /// survive on. So each of them is asked the same question here: derive twice,
+    /// then write through the **first** cursor and read it back through the second.
+    ///
+    /// Red-proofed as a family: spelling `ctx_sps_array`'s root
+    /// `arr.as_mut_slice().as_mut_ptr()` fails this test under Miri with "attempting
+    /// a write access using <548144> ... but that tag does not exist in the borrow
+    /// stack", and passes without Miri — the same failure every other arm has under
+    /// the same substitution, since they share the spelling. It is one test rather
+    /// than nineteen because the property is one property; each arm names its
+    /// accessor in the assertion message so a failure says which.
+    #[test]
+    fn every_container_accessor_hands_out_sibling_cursors() {
+        let mut ctx = Box::new(sWelsEncCtx::new());
+
+        // Everything the accessors resolve through, at its smallest live shape.
+        ctx.pSpsArray = vec![crate::encoder::param_svc::SWelsSPS::ZERO; 2];
+        ctx.pSubsetArray = vec![crate::encoder::param_svc::SSubsetSps::ZERO; 2];
+        ctx.pPPSArray = vec![crate::encoder::param_svc::SWelsPPS::ZERO; 2];
+        ctx.pDqIdcMap = vec![SDqIdc::default(); 2];
+        ctx.pLtr = vec![SLTRState::default(); 2];
+        ctx.pWelsSvcRc = vec![SWelsSvcRc::default(); 2];
+        ctx.pMvdCostTable = vec![0u16; 64];
+        ctx.iMvdCostTableSize = 8;
+        ctx.pVaa = Some(Box::new(SVAAFrameInfo::default()));
+        ctx.pSvcParam = Some(Box::new(SWelsSvcCodingParam::default()));
+        ctx.ppRefPicListExt = vec![Some(SRefList::new())];
+        ctx.ppDqLayerList = vec![Some(Box::new(
+            crate::encoder::svc_encode_slice::SDqLayer::default(),
+        ))];
+
+        let p: *mut sWelsEncCtx = &mut *ctx;
+
+        // Each arm: derive, derive again, then use the FIRST cursor. The write goes
+        // through cursor 1 and the read back through cursor 2, so a spelling that
+        // pops the first tag fails on the write and one that pops the second fails
+        // on the read.
+        macro_rules! siblings {
+            ($name:literal, $get:expr, $write:expr, $read:expr) => {{
+                let first = unsafe { $get };
+                let second = unsafe { $get };
+                assert_eq!(first, second, concat!($name, ": same slot, same address"));
+                unsafe { $write(first) };
+                assert!(unsafe { $read(second) }, concat!($name, ": the first cursor is still live"));
+            }};
+        }
+
+        siblings!("ctx_sps_array", ctx_sps_array(p),
+            |q: *mut crate::encoder::param_svc::SWelsSPS| (*q).uiSpsId = 7,
+            |q: *mut crate::encoder::param_svc::SWelsSPS| (*q).uiSpsId == 7);
+        siblings!("ctx_subset_array", ctx_subset_array(p),
+            |q: *mut crate::encoder::param_svc::SSubsetSps| (*q).pSps.uiSpsId = 5,
+            |q: *mut crate::encoder::param_svc::SSubsetSps| (*q).pSps.uiSpsId == 5);
+        siblings!("ctx_pps_array", ctx_pps_array(p),
+            |q: *mut crate::encoder::param_svc::SWelsPPS| (*q).iPpsId = 3,
+            |q: *mut crate::encoder::param_svc::SWelsPPS| (*q).iPpsId == 3);
+        siblings!("ctx_dq_idc_map", ctx_dq_idc_map(p),
+            |q: *mut SDqIdc| (*q).iPpsId = 9, |q: *mut SDqIdc| (*q).iPpsId == 9);
+        siblings!("ctx_ltr", ctx_ltr(p),
+            |q: *mut SLTRState| (*q).iCurLtrIdx = 4, |q: *mut SLTRState| (*q).iCurLtrIdx == 4);
+        siblings!("ctx_ltr_at", ctx_ltr_at(p, 1),
+            |q: *mut SLTRState| (*q).iCurLtrIdx = 6, |q: *mut SLTRState| (*q).iCurLtrIdx == 6);
+        siblings!("ctx_rc", ctx_rc(p),
+            |q: *mut SWelsSvcRc| (*q).iGomSize = 11, |q: *mut SWelsSvcRc| (*q).iGomSize == 11);
+        siblings!("ctx_rc_at", ctx_rc_at(p, 1),
+            |q: *mut SWelsSvcRc| (*q).iGomSize = 12, |q: *mut SWelsSvcRc| (*q).iGomSize == 12);
+        siblings!("ctx_mvd_cost_table", ctx_mvd_cost_table(p),
+            |q: *mut u16| *q = 0x1234, |q: *mut u16| *q == 0x1234);
+        siblings!("ctx_mvd_cost_origin", ctx_mvd_cost_origin(p),
+            |q: *mut u16| *q = 0x4321, |q: *mut u16| *q == 0x4321);
+        siblings!("ctx_vaa", ctx_vaa(p),
+            |q: *mut SVAAFrameInfo| (*q).iPicWidth = 176,
+            |q: *mut SVAAFrameInfo| (*q).iPicWidth == 176);
+        siblings!("ctx_param", ctx_param(p),
+            |q: *mut SWelsSvcCodingParam| (*q).iPicWidth = 320,
+            |q: *mut SWelsSvcCodingParam| (*q).iPicWidth == 320);
+        siblings!("ctx_ref_list", ctx_ref_list(p, 0),
+            |q: *mut SRefList| (*q).uiShortRefCount = 2,
+            |q: *mut SRefList| (*q).uiShortRefCount == 2);
+        siblings!("ctx_dq_layer", ctx_dq_layer(p, 0),
+            |q: *mut crate::encoder::svc_encode_slice::SDqLayer| (*q).iMbWidth = 11,
+            |q: *mut crate::encoder::svc_encode_slice::SDqLayer| (*q).iMbWidth == 11);
+
+        // The rate controller's own five, one level down: same spelling, same
+        // question, and they are the only accessors in the family that hang off a
+        // container the context reaches through another accessor.
+        let rc = unsafe { ctx_rc_at(p, 0) };
+        unsafe {
+            (*rc).iGomSize = 4;
+            crate::encoder::rc::RcInitLayerMemory(rc, 2);
+        }
+        siblings!("rc_temporal_over", crate::encoder::rc::rc_temporal_over(rc),
+            |q: *mut crate::encoder::rc::SRCTemporal| (*q).iMaxQp = 40,
+            |q: *mut crate::encoder::rc::SRCTemporal| (*q).iMaxQp == 40);
+        siblings!("rc_gom_complexity", crate::encoder::rc::rc_gom_complexity(rc),
+            |q: *mut f64| *q = 1.5, |q: *mut f64| *q == 1.5);
+        siblings!("rc_gom_fg_blocks", crate::encoder::rc::rc_gom_fg_blocks(rc),
+            |q: *mut i32| *q = 21, |q: *mut i32| *q == 21);
+        siblings!("rc_gom_sad", crate::encoder::rc::rc_gom_sad(rc),
+            |q: *mut i32| *q = 22, |q: *mut i32| *q == 22);
+        siblings!("rc_gom_cost", crate::encoder::rc::rc_gom_cost(rc),
+            |q: *mut i32| *q = 23, |q: *mut i32| *q == 23);
+
+        // And the whole set once more, interleaved: every cursor taken first, then
+        // every one used — which is the frame loop's actual shape, and the case a
+        // per-accessor test cannot reach.
+        let held: Vec<*mut u8> = unsafe {
+            vec![
+                ctx_sps_array(p).cast(), ctx_pps_array(p).cast(), ctx_dq_idc_map(p).cast(),
+                ctx_ltr(p).cast(), ctx_rc(p).cast(), ctx_mvd_cost_origin(p).cast(),
+                ctx_vaa(p).cast(), ctx_param(p).cast(), ctx_ref_list(p, 0).cast(),
+                ctx_dq_layer(p, 0).cast(), ctx_frame_bs(p).cast(),
+            ]
+        };
+        // `ctx_frame_bs` is null here (no bitstream in this fixture), which is itself
+        // the assertion that empty still answers null after everything above.
+        assert!(held[10].is_null(), "no frame bitstream was installed");
+        for (i, q) in held.iter().enumerate().take(10) {
+            assert!(!q.is_null(), "held cursor {i} went null");
+            unsafe { assert_eq!(*q.cast::<u8>(), *q.cast::<u8>()) };
+        }
+    }
+
     /// **S40 for the frame bitstream — the one buffer whose cursors are *stored*.**
     ///
     /// `SLayerBSInfo::pBsBuf` keeps a cursor into `pFrameBs` for the life of a
