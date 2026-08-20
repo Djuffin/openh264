@@ -24,6 +24,7 @@ pub const STR_ROOM: i32 = 1;
 // `encoder_context.rs` from `wels_const.h`. This module previously had its own copies
 // with MAX_SHORT_REF_COUNT = 16 (C++: 4) and MAX_TEMPORAL_LEVEL = 8 (C++: 4).
 pub use crate::encoder::encoder_context::{MAX_GOP_SIZE, MAX_SHORT_REF_COUNT, MAX_TEMPORAL_LEVEL};
+use crate::encoder::encoder_context::ctx_ltr_at;
 pub const MAX_REF_PIC_COUNT: usize = 16;
 pub const LONG_TERM_REF_NUM: i32 = 2;
 pub const MAX_TEMPORAL_LAYER_NUM: usize = 4;
@@ -383,7 +384,7 @@ pub unsafe fn DeleteInvalidLTR(pCtx: *mut sWelsEncCtx) {
     if pRefList.is_null() {
         return;
     }
-    let pLtr = &mut *(*pCtx).pLtr.add((uiDid) as usize);
+    let pLtr = &mut *ctx_ltr_at(pCtx, (uiDid) as usize);
     let iMaxFrameNumPlus1 = 1 << (*ctx_sps(pCtx)).uiLog2MaxFrameNum;
     let pParamInternal = std::ptr::addr_of_mut!((*(*pCtx).pSvcParam).sDependencyLayers[uiDid]);
 
@@ -435,7 +436,7 @@ pub unsafe fn HandleLTRMarkFeedback(pCtx: *mut sWelsEncCtx) {
     if pRefList.is_null() {
         return;
     }
-    let pLtr = &mut *(*pCtx).pLtr.add((uiDid) as usize);
+    let pLtr = &mut *ctx_ltr_at(pCtx, (uiDid) as usize);
     let pParamInternal = std::ptr::addr_of_mut!((*(*pCtx).pSvcParam).sDependencyLayers[uiDid]);
 
     if pLtr.uiLtrMarkState == LTR_MARKING_SUCCESS {
@@ -513,7 +514,7 @@ pub unsafe fn LTRMarkProcess(pCtx: *mut sWelsEncCtx) {
     if pRefList.is_null() {
         return;
     }
-    let pLtr = &mut *(*pCtx).pLtr.add((uiDid) as usize);
+    let pLtr = &mut *ctx_ltr_at(pCtx, (uiDid) as usize);
     let gopSize = (*(*pCtx).pSvcParam).uiGopSize;
     let iGoPFrameNumInterval = if (gopSize >> 1) > 1 {
         (gopSize >> 1) as i32
@@ -678,7 +679,7 @@ pub unsafe fn WelsUpdateRefList(pCtx: *mut sWelsEncCtx) -> bool {
         return false;
     }
 
-    let pLtr = &mut *(*pCtx).pLtr.add((uiDid) as usize);
+    let pLtr = &mut *ctx_ltr_at(pCtx, (uiDid) as usize);
     let pParamD = std::ptr::addr_of_mut!((*(*pCtx).pSvcParam).sDependencyLayers[uiDid]);
     let kuiTid = (*pCtx).uiTemporalId;
     let kuiDid = (*pCtx).uiDependencyId;
@@ -806,7 +807,7 @@ pub unsafe fn CheckCurMarkFrameNumUsed(pCtx: *mut sWelsEncCtx) -> bool {
         return false;
     }
     let uiDid = (*pCtx).uiDependencyId as usize;
-    let pLtr = &*(*pCtx).pLtr.add((uiDid) as usize);
+    let pLtr = &*ctx_ltr_at(pCtx, (uiDid) as usize);
     let pRefList = *(*pCtx).ppRefPicListExt.add((uiDid) as usize);
     if pRefList.is_null() {
         return false;
@@ -926,7 +927,7 @@ pub unsafe fn WelsMarkPic(pCtx: *mut sWelsEncCtx) {
         return;
     }
     let uiDid = (*pCtx).uiDependencyId as usize;
-    let pLtr = &mut *(*pCtx).pLtr.add((uiDid) as usize);
+    let pLtr = &mut *ctx_ltr_at(pCtx, (uiDid) as usize);
     let kiCountSliceNum = (*current_layer(pCtx)).iMaxSliceNum;
 
     if (*(*pCtx).pSvcParam).bEnableLongTermReference && pLtr.bLTRMarkEnable && (*pCtx).uiTemporalId == 0 {
@@ -975,7 +976,7 @@ pub unsafe fn FilterLTRRecoveryRequest(
             return 0;
         }
 
-        let pLtr = &mut *(*pCtx).pLtr.add((iLayerId as usize) as usize);
+        let pLtr = &mut *ctx_ltr_at(pCtx, (iLayerId as usize) as usize);
         let iMaxFrameNumPlus1 = 1 << (*ctx_sps(pCtx)).uiLog2MaxFrameNum;
         let pParamInternal = std::ptr::addr_of_mut!((*(*pCtx).pSvcParam).sDependencyLayers[iLayerId as usize]);
 
@@ -1019,7 +1020,7 @@ pub unsafe fn FilterLTRMarkingFeedback(
     if iLayerId < 0 || iLayerId >= (*(*pCtx).pSvcParam).iSpatialLayerNum {
         return;
     }
-    let pLtr = &mut *(*pCtx).pLtr.add((iLayerId as usize) as usize);
+    let pLtr = &mut *ctx_ltr_at(pCtx, (iLayerId as usize) as usize);
     if (*(*pCtx).pSvcParam).bEnableLongTermReference {
         let pParamInternal = std::ptr::addr_of_mut!((*(*pCtx).pSvcParam).sDependencyLayers[iLayerId as usize]);
         if (*pLTRMarkingFeedback).uiIDRPicId == (*pParamInternal).uiIdrPicId as u32
@@ -1046,7 +1047,7 @@ pub unsafe fn WelsBuildRefList(
     if pRefList.is_null() {
         return false;
     }
-    let pLtr = &mut *(*pCtx).pLtr.add((uiDid) as usize);
+    let pLtr = &mut *ctx_ltr_at(pCtx, (uiDid) as usize);
     let kiNumRef = (*(*pCtx).pSvcParam).iNumRefFrame;
     let kuiTid = (*pCtx).uiTemporalId;
     let pParamD = std::ptr::addr_of_mut!((*(*pCtx).pSvcParam).sDependencyLayers[uiDid]);
@@ -1085,7 +1086,7 @@ pub unsafe fn WelsBuildRefList(
         }
     } else {
         WelsResetRefList(pCtx);
-        ResetLtrState(&mut *(*pCtx).pLtr.add((uiDid) as usize));
+        ResetLtrState(&mut *ctx_ltr_at(pCtx, (uiDid) as usize));
         for k in 0..MAX_TEMPORAL_LEVEL {
             (*pCtx).bRefOfCurTidIsLtr[uiDid][k] = false;
         }
@@ -1138,7 +1139,7 @@ pub unsafe fn WelsUpdateSliceHeaderSyntax(
     }
     let kiCountSliceNum = (*current_layer(pCtx)).iMaxSliceNum;
     let uiDid = (*pCtx).uiDependencyId as usize;
-    let pLtr = &*(*pCtx).pLtr.add((uiDid) as usize);
+    let pLtr = &*ctx_ltr_at(pCtx, (uiDid) as usize);
 
     for iIdx in 0..kiCountSliceNum {
         let pSlice = crate::encoder::svc_encode_slice::slice_in_layer(pCurDq, iIdx);
@@ -1297,7 +1298,7 @@ pub unsafe fn WelsUpdateRefListScreen(pCtx: *mut sWelsEncCtx) -> bool {
     if pRefList.is_null() || (*pRefList).pRef.is_empty() {
         return false;
     }
-    let pLtr = &mut *(*pCtx).pLtr.add((uiDid) as usize);
+    let pLtr = &mut *ctx_ltr_at(pCtx, (uiDid) as usize);
     let pParamD = std::ptr::addr_of_mut!((*(*pCtx).pSvcParam).sDependencyLayers[uiDid]);
     let kuiTid = (*pCtx).uiTemporalId;
 
@@ -1418,7 +1419,7 @@ pub unsafe fn WelsBuildRefListScreen(
         }
     } else {
         WelsResetRefList(pCtx);
-        ResetLtrState(&mut *(*pCtx).pLtr.add((uiDid) as usize));
+        ResetLtrState(&mut *ctx_ltr_at(pCtx, (uiDid) as usize));
         (*pCtx).pRefList0[0] = None;
     }
 
@@ -1469,7 +1470,7 @@ pub unsafe fn WelsMarkPicScreen(pCtx: *mut sWelsEncCtx) {
         return;
     }
     let uiDid = (*pCtx).uiDependencyId as usize;
-    let pLtr = &mut *(*pCtx).pLtr.add((uiDid) as usize);
+    let pLtr = &mut *ctx_ltr_at(pCtx, (uiDid) as usize);
     let gopSize = (*(*pCtx).pSvcParam).uiGopSize;
     let iMaxTid = if gopSize > 0 { (31 - gopSize.leading_zeros()) as i32 } else { 0 };
     let mut iMaxActualLtrIdx = -1i32;
