@@ -52,6 +52,7 @@ pub use crate::encoder::encoder_context::SPicData;
 pub use crate::encoder::param_svc::SWelsPPS;
 pub use crate::encoder::encoder_context::SStrideTables;
 pub use crate::encoder::svc_encode_slice::SLayerInfo;
+use crate::encoder::svc_encode_slice::current_layer;
 pub use crate::encoder::md::SMbCache;
 pub use crate::encoder::md::SMB;
 pub use crate::encoder::svc_encode_slice::SDqLayer;
@@ -487,7 +488,7 @@ pub unsafe fn WelsEncRecI16x16Y(
 ) {
     let mut aDctT4Dc = [0i16; 16];
     let pFuncList = (*pEncCtx).pFuncList;
-    let pCurDqLayer = (*pEncCtx).pCurDqLayer;
+    let pCurDqLayer = current_layer(pEncCtx);
     let kiEncStride = (*pCurDqLayer).iEncStride[0];
     let mut pRes = crate::encoder::md::coeff_level(pMbCache);
     let pPred = (*pMbCache).SPicData.pCsMb[0];
@@ -634,7 +635,7 @@ pub unsafe fn WelsEncRecI4x4Y(
     uiI4x4Idx: u8,
 ) {
     let pFuncList = (*pEncCtx).pFuncList;
-    let pCurDqLayer = (*pEncCtx).pCurDqLayer;
+    let pCurDqLayer = current_layer(pEncCtx);
     let iEncStride = (*pCurDqLayer).iEncStride[0];
     let uiQp = (*pCurMb).uiLumaQp;
 
@@ -1006,7 +1007,7 @@ pub unsafe fn WelsTryPUVskip(
         crate::encoder::md::coeff_level(pMbCache).add(256 + 64)
     };
 
-    let pPpsP = (*(*pEncCtx).pCurDqLayer).sLayerInfo.pPpsP;
+    let pPpsP = (*current_layer(pEncCtx)).sLayerInfo.pPpsP;
     let chroma_qp_index_offset = if !pPpsP.is_null() {
         (*pPpsP).uiChromaQpIndexOffset as i32
     } else {

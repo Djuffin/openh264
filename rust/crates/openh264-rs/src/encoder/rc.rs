@@ -47,6 +47,7 @@
 use crate::common::memory_align::CMemoryAlign;
 use crate::{RCMode, SSliceArgument, SSpatialLayerConfig, EUsageType};
 pub use crate::encoder::svc_encode_slice::SSliceHeader;
+use crate::encoder::svc_encode_slice::current_layer;
 pub use crate::encoder::svc_encode_slice::SSliceHeaderExt;
 pub use crate::encoder::encoder_context::SSpatialPicIndex;
 pub use crate::encoder::wels_preprocess::SAdaptiveQuantizationParam;
@@ -1261,10 +1262,10 @@ pub unsafe fn GomRCInitForOneSlice(pSlice: *mut SSlice, kiBitsPerMb: i32) {
 
 /// Resets bit accumulators and macroblock counters across slices.
 pub unsafe fn RcInitSliceInformation(pEncCtx: *mut sWelsEncCtx) {
-    let pCurDq = (*pEncCtx).pCurDqLayer;
+    let pCurDq = current_layer(pEncCtx);
     let did = (*pEncCtx).uiDependencyId as usize;
     let pWelsSvcRc = (*pEncCtx).pWelsSvcRc.add(did);
-    let kiSliceNum = (*(*pEncCtx).pCurDqLayer).iMaxSliceNum;
+    let kiSliceNum = (*current_layer(pEncCtx)).iMaxSliceNum;
 
     (*pWelsSvcRc).iBitsPerMb = WELS_DIV_ROUND64(
         (*pWelsSvcRc).iTargetBits as i64 * INT_MULTIPLY as i64,
@@ -1396,10 +1397,10 @@ pub unsafe fn RcDecideTargetBitsTimestamp(pEncCtx: *mut sWelsEncCtx) {
 
 /// Clears GOM complexity and cost tracking arrays.
 pub unsafe fn RcInitGomParameters(pEncCtx: *mut sWelsEncCtx) {
-    let pCurDq = (*pEncCtx).pCurDqLayer;
+    let pCurDq = current_layer(pEncCtx);
     let did = (*pEncCtx).uiDependencyId as usize;
     let pWelsSvcRc = (*pEncCtx).pWelsSvcRc.add(did);
-    let kiSliceNum = (*(*pEncCtx).pCurDqLayer).iMaxSliceNum;
+    let kiSliceNum = (*current_layer(pEncCtx)).iMaxSliceNum;
     let kiGlobalQp = (*pEncCtx).iGlobalQp;
 
     (*pWelsSvcRc).iAverageFrameQp = 0;
@@ -1433,7 +1434,7 @@ pub unsafe fn RcCalculateMbQp(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSlice, pC
     let pSOverRc = &mut (*pSlice).sSlicingOverRc;
 
     let mut iLumaQp = pSOverRc.iCalculatedQpSlice;
-    let pCurLayer = (*pEncCtx).pCurDqLayer;
+    let pCurLayer = current_layer(pEncCtx);
     let kuiChromaQpIndexOffset = (*(*pCurLayer).sLayerInfo.pPpsP).uiChromaQpIndexOffset;
 
     if (*(*pEncCtx).pSvcParam).bEnableAdaptiveQuant {
@@ -1906,10 +1907,10 @@ pub unsafe fn RcTraceFrameBits(pEncCtx: *mut sWelsEncCtx, _uiTimeStamp: i64, _iF
 
 /// Computes average frame QP and updates temporal layer bit counters.
 pub unsafe fn RcUpdatePictureQpBits(pEncCtx: *mut sWelsEncCtx, iCodedBits: i32) {
-    let pCurDq = (*pEncCtx).pCurDqLayer;
+    let pCurDq = current_layer(pEncCtx);
     let did = (*pEncCtx).uiDependencyId as usize;
     let pWelsSvcRc = (*pEncCtx).pWelsSvcRc.add(did);
-    let pCurSliceCtx = &(*(*pEncCtx).pCurDqLayer).sSliceEncCtx;
+    let pCurSliceCtx = &(*current_layer(pEncCtx)).sSliceEncCtx;
     let mut iTotalQp = 0;
     let mut iTotalMb = 0;
 
@@ -2036,7 +2037,7 @@ pub unsafe fn RcCalculateCascadingQp(pEncCtx: *mut sWelsEncCtx, iQp: i32) -> i32
 pub unsafe extern "C" fn WelsRcPictureInitGom(pEncCtx: *mut sWelsEncCtx, uiTimeStamp: i64) {
     let did = (*pEncCtx).uiDependencyId as usize;
     let pWelsSvcRc = (*pEncCtx).pWelsSvcRc.add(did);
-    let kiSliceNum = (*(*pEncCtx).pCurDqLayer).iMaxSliceNum;
+    let kiSliceNum = (*current_layer(pEncCtx)).iMaxSliceNum;
     (*pWelsSvcRc).iContinualSkipFrames = 0;
 
     if (*pEncCtx).eSliceType as i32 == I_SLICE && (*pWelsSvcRc).iIdrNum == 0 {
@@ -2162,7 +2163,7 @@ pub unsafe extern "C" fn WelsRcMbInitGom(
     let did = (*pEncCtx).uiDependencyId as usize;
     let pWelsSvcRc = (*pEncCtx).pWelsSvcRc.add(did);
     let pSOverRc = &mut (*pSlice).sSlicingOverRc;
-    let pCurLayer = (*pEncCtx).pCurDqLayer;
+    let pCurLayer = current_layer(pEncCtx);
     let kuiChromaQpIndexOffset = (*(*pCurLayer).sLayerInfo.pPpsP).uiChromaQpIndexOffset;
 
     pSOverRc.iBsPosSlice = (*(*pEncCtx).pFuncList).eEntropyCoder.GetBsPosition(crate::encoder::svc_encode_slice::slice_writer(pEncCtx, pSlice), pSlice);
@@ -2263,7 +2264,7 @@ pub unsafe extern "C" fn WelsRcMbInitDisable(
     let mut iLumaQp = (*pEncCtx).iGlobalQp;
     let did = (*pEncCtx).uiDependencyId as usize;
     let pWelsSvcRc = (*pEncCtx).pWelsSvcRc.add(did);
-    let pCurLayer = (*pEncCtx).pCurDqLayer;
+    let pCurLayer = current_layer(pEncCtx);
     let kuiChromaQpIndexOffset = (*(*pCurLayer).sLayerInfo.pPpsP).uiChromaQpIndexOffset;
 
     if (*(*pEncCtx).pSvcParam).bEnableAdaptiveQuant && (*pEncCtx).eSliceType as i32 == P_SLICE {

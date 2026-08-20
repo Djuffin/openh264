@@ -16,6 +16,7 @@ use std::sync::{Arc, Condvar, Mutex};
 pub use crate::encoder::encoder_context::SLogContext;
 pub use crate::encoder::param_svc::SWelsSvcCodingParam;
 pub use crate::encoder::svc_encode_slice::SDqLayer;
+use crate::encoder::svc_encode_slice::{current_layer, LayerIdx};
 pub use crate::encoder::encoder_context::sWelsEncCtx;
 
 use crate::common::wels_common_defs::{EWelsNalRefIdc, EWelsNalUnitType};
@@ -253,7 +254,7 @@ impl CWelsBaseTask {
         self.m_pSlice = pSlice;
         self.m_pSliceBs = std::ptr::addr_of_mut!((*self.m_pSlice).sSliceBs);
 
-        iReturn = SetSliceBoundaryInfo((*pCtx).pCurDqLayer, self.m_pSlice, self.m_iSliceIdx);
+        iReturn = SetSliceBoundaryInfo(current_layer(pCtx), self.m_pSlice, self.m_iSliceIdx);
         if iReturn != ENC_RETURN_SUCCESS {
             return iReturn;
         }
@@ -351,7 +352,7 @@ impl CWelsBaseTask {
 
         let pfDeblockingFilterSlice =
             (*(*pCtx).pFuncList).pfDeblocking.pfDeblockingFilterSlice.unwrap();
-        pfDeblockingFilterSlice((*pCtx).pCurDqLayer, (*pCtx).pFuncList, self.m_pSlice);
+        pfDeblockingFilterSlice(current_layer(pCtx), (*pCtx).pFuncList, self.m_pSlice);
 
         ENC_RETURN_SUCCESS
     }
@@ -359,7 +360,7 @@ impl CWelsBaseTask {
     /// `CWelsConstrainedSizeSlicingEncodingTask::ExecuteTask`
     pub unsafe fn ExecuteTaskConstrainedSize(&mut self) -> i32 {
         let pCtx = self.m_pCtx;
-        let pCurDq = (*pCtx).pCurDqLayer;
+        let pCurDq = current_layer(pCtx);
         let kiSliceIdxStep = (*pCtx).iActiveThreadsNum as i32;
         let kiPartitionId = self.m_iSliceIdx % kiSliceIdxStep;
         let kiFirstMbInPartition = (*pCurDq).FirstMbIdxOfPartition[kiPartitionId as usize];
@@ -441,7 +442,7 @@ impl CWelsBaseTask {
             iAnyMbLeftInPartition =
                 kiEndMbIdxInPartition - (*pCurDq).LastCodedMbIdxOfPartition[kiPartitionId as usize];
             iLocalSliceIdx += kiSliceIdxStep;
-            (*(*pCtx).pCurDqLayer).sSliceBufferInfo[self.m_iThreadIdx as usize].iCodedSliceNum += 1;
+            (*current_layer(pCtx)).sSliceBufferInfo[self.m_iThreadIdx as usize].iCodedSliceNum += 1;
         }
 
         ENC_RETURN_SUCCESS
@@ -455,8 +456,8 @@ impl IWelsTask for CWelsBaseTask {
                 // CWelsUpdateMbMapTask::Execute
                 ETaskKind::UpdateMbMap => {
                     UpdateMbListNeighborParallel(
-                        (*self.m_pCtx).pCurDqLayer,
-                        crate::encoder::svc_encode_slice::mb_list_root((*self.m_pCtx).pCurDqLayer),
+                        current_layer(self.m_pCtx),
+                        crate::encoder::svc_encode_slice::mb_list_root(current_layer(self.m_pCtx)),
                         self.m_iSliceIdx,
                     );
                     ENC_RETURN_SUCCESS
@@ -932,8 +933,8 @@ impl CWelsTaskManageBase {
         self.m_iCurDid = kiCurDid;
         let mut bNeedAdjustingSlicing = false;
         unsafe {
-            if !self.m_pEncCtx.is_null() && !(*self.m_pEncCtx).pCurDqLayer.is_null() {
-                bNeedAdjustingSlicing = (*(*self.m_pEncCtx).pCurDqLayer).bNeedAdjustingSlicing;
+            if !self.m_pEncCtx.is_null() && !current_layer(self.m_pEncCtx).is_null() {
+                bNeedAdjustingSlicing = (*current_layer(self.m_pEncCtx)).bNeedAdjustingSlicing;
             }
         }
         if bNeedAdjustingSlicing {
@@ -1108,9 +1109,15 @@ mod tests {
         coding_param.sSpatialLayers[0].sSliceArgument.uiSliceNum = 2;
 
         let mut dq_layer = SDqLayer::default();
+        // T6.G2: the context names the current layer by *position*, so the test has
+        // to stand up the one-entry list the position indexes into — which is what
+        // `RequestMemorySvc` builds on the live path. The list outlives both borrows
+        // because `dq_layer` and `list` outlive `enc_ctx` in this scope.
+        let mut list: [*mut SDqLayer; 1] = [&mut dq_layer];
         let mut enc_ctx = sWelsEncCtx::default();
         enc_ctx.pSvcParam = &mut coding_param;
-        enc_ctx.pCurDqLayer = &mut dq_layer;
+        enc_ctx.ppDqLayerList = list.as_mut_ptr();
+        enc_ctx.iCurDqLayer = Some(LayerIdx(0));
 
         unsafe {
             let pMgr = CreateTaskManage(&mut enc_ctx, 1, false);

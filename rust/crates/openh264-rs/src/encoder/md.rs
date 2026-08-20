@@ -110,6 +110,7 @@ pub const REF_NOT_AVAIL: i8 = -2;
 pub use crate::encoder::encoder_ext::MB_BLOCK8x8_NUM;
 /// `MB_COEFF_LIST_SIZE` — `wels_const.h`, the width of `SMbCache::sCoeffLevel`.
 pub use crate::encoder::svc_encode_slice::MB_COEFF_LIST_SIZE;
+use crate::encoder::svc_encode_slice::current_layer;
 pub const MB_BLOCK4x4_NUM: usize = 16;
 pub const MB_LUMA_CHROMA_BLOCK4x4_NUM: usize = 24;
 /// `INTRA_4x4_MODE_NUM` — `wels_const.h:48`. **8**, not 16; this is the per-macroblock
@@ -1317,7 +1318,7 @@ pub unsafe extern "C" fn MdIntraAnalysisVaaInfo(
     pEncCtx: *mut sWelsEncCtx,
     pEncMb: *mut u8,
 ) -> bool {
-    let pCurDqLayer = (*pEncCtx).pCurDqLayer;
+    let pCurDqLayer = current_layer(pEncCtx);
     let kiLineSize = (*pCurDqLayer).iEncStride[0];
     let pfGetVariance = (*(*pEncCtx).pFuncList).pfGetVarianceFromIntraVaa.unwrap();
     let kiVariance = pfGetVariance(pEncMb, kiLineSize);
@@ -1449,7 +1450,7 @@ pub unsafe extern "C" fn MeRefineFracPixel(
 
     let mut iHalfMvx = iMvx;
     let mut iHalfMvy = iMvy;
-    let pCurDqLayer = (*pEncCtx).pCurDqLayer;
+    let pCurDqLayer = current_layer(pEncCtx);
     let kiStrideEnc = (*pCurDqLayer).iEncStride[0];
     let kiStrideRef = (*pCurDqLayer).sRefPicView.sPlanes.iLineSize[0];
 

@@ -81,6 +81,7 @@ pub use crate::encoder::picture::SPicture;
 pub use crate::encoder::picture::SScreenBlockFeatureStorage;
 pub use crate::encoder::param_svc::SWelsSPS;
 pub use crate::encoder::svc_encode_slice::SSliceHeader;
+use crate::encoder::svc_encode_slice::current_layer;
 pub use crate::encoder::svc_encode_slice::SSliceHeaderExt;
 pub use crate::encoder::encoder_context::EWelsSliceType;
 pub use crate::encoder::encoder_context::SLTRState;
@@ -667,7 +668,7 @@ pub unsafe fn PrefetchNextBuffer(pCtx: *mut sWelsEncCtx) {
 
 /// Updates reference picture list after current frame reconstruction.
 pub unsafe fn WelsUpdateRefList(pCtx: *mut sWelsEncCtx) -> bool {
-    if pCtx.is_null() || (*pCtx).pCurDqLayer.is_null() || (*pCtx).pSvcParam.is_null() {
+    if pCtx.is_null() || current_layer(pCtx).is_null() || (*pCtx).pSvcParam.is_null() {
         return false;
     }
     let uiDid = (*pCtx).uiDependencyId as usize;
@@ -920,12 +921,12 @@ pub unsafe fn WelsMarkMMCORefInfo(
 
 /// Evaluates LTR marking criteria and populates slice header MMCO commands.
 pub unsafe fn WelsMarkPic(pCtx: *mut sWelsEncCtx) {
-    if pCtx.is_null() || (*pCtx).pCurDqLayer.is_null() || (*pCtx).pSvcParam.is_null() {
+    if pCtx.is_null() || current_layer(pCtx).is_null() || (*pCtx).pSvcParam.is_null() {
         return;
     }
     let uiDid = (*pCtx).uiDependencyId as usize;
     let pLtr = &mut *(*pCtx).pLtr.add((uiDid) as usize);
-    let kiCountSliceNum = (*(*pCtx).pCurDqLayer).iMaxSliceNum;
+    let kiCountSliceNum = (*current_layer(pCtx)).iMaxSliceNum;
 
     if (*(*pCtx).pSvcParam).bEnableLongTermReference && pLtr.bLTRMarkEnable && (*pCtx).uiTemporalId == 0 {
         if !pLtr.bReceivedT0LostFlag
@@ -948,7 +949,7 @@ pub unsafe fn WelsMarkPic(pCtx: *mut sWelsEncCtx) {
     WelsMarkMMCORefInfo(
         pCtx,
         pLtr,
-        (*pCtx).pCurDqLayer,
+        current_layer(pCtx),
         kiCountSliceNum,
     );
 }
@@ -1036,7 +1037,7 @@ pub unsafe fn WelsBuildRefList(
     kiPOC: i32,
     iBestLtrRefIdx: i32,
 ) -> bool {
-    if pCtx.is_null() || (*pCtx).pSvcParam.is_null() || (*pCtx).pCurDqLayer.is_null() {
+    if pCtx.is_null() || (*pCtx).pSvcParam.is_null() || current_layer(pCtx).is_null() {
         return false;
     }
     let uiDid = (*pCtx).uiDependencyId as usize;
@@ -1060,7 +1061,7 @@ pub unsafe fn WelsBuildRefList(
                     let numRef0 = (*pCtx).iNumRef0 as usize;
                     // The camera path puts a *reconstruction* picture in `pRefOri`
                     // where the screen path puts a source picture — see `PicRef`.
-                    (*(*pCtx).pCurDqLayer).pRefOri[numRef0] = Some(PicRef::Rec(idLong));
+                    (*current_layer(pCtx)).pRefOri[numRef0] = Some(PicRef::Rec(idLong));
                     (*pCtx).pRefList0[numRef0] = Some(idLong);
                     (*pCtx).iNumRef0 += 1;
                     pLtr.iLastRecoverFrameNum = (*pParamD).iFrameNum;
@@ -1075,7 +1076,7 @@ pub unsafe fn WelsBuildRefList(
                 let pRef = (*pRefList).pic(idRef);
                 if pRef.bUsedAsRef && pRef.iFramePoc >= 0 && pRef.uiTemporalId <= kuiTid {
                     let numRef0 = (*pCtx).iNumRef0 as usize;
-                    (*(*pCtx).pCurDqLayer).pRefOri[numRef0] = Some(PicRef::Rec(idRef));
+                    (*current_layer(pCtx)).pRefOri[numRef0] = Some(PicRef::Rec(idRef));
                     (*pCtx).pRefList0[numRef0] = Some(idRef);
                     (*pCtx).iNumRef0 += 1;
                 }
@@ -1131,10 +1132,10 @@ pub unsafe fn WelsUpdateSliceHeaderSyntax(
     pCurDq: *mut SDqLayer,
     uiFrameType: i32,
 ) {
-    if pCtx.is_null() || (*pCtx).pCurDqLayer.is_null() || pCurDq.is_null() {
+    if pCtx.is_null() || current_layer(pCtx).is_null() || pCurDq.is_null() {
         return;
     }
-    let kiCountSliceNum = (*(*pCtx).pCurDqLayer).iMaxSliceNum;
+    let kiCountSliceNum = (*current_layer(pCtx)).iMaxSliceNum;
     let uiDid = (*pCtx).uiDependencyId as usize;
     let pLtr = &*(*pCtx).pLtr.add((uiDid) as usize);
 
@@ -1192,7 +1193,7 @@ pub unsafe fn WelsUpdateSliceHeaderSyntax(
 
 /// Updates reference picture syntax and picture number delta in slice headers.
 pub unsafe fn WelsUpdateRefSyntax(pCtx: *mut sWelsEncCtx, kiPOC: i32, kiFrameType: i32) {
-    if pCtx.is_null() || (*pCtx).pSvcParam.is_null() || (*pCtx).pCurDqLayer.is_null() {
+    if pCtx.is_null() || (*pCtx).pSvcParam.is_null() || current_layer(pCtx).is_null() {
         return;
     }
     let mut iAbsDiffPicNumMinus1 = -1i32;
@@ -1212,7 +1213,7 @@ pub unsafe fn WelsUpdateRefSyntax(pCtx: *mut sWelsEncCtx, kiPOC: i32, kiFrameTyp
     WelsUpdateSliceHeaderSyntax(
         pCtx,
         iAbsDiffPicNumMinus1,
-        (*pCtx).pCurDqLayer,
+        current_layer(pCtx),
         kiFrameType,
     );
 }
@@ -1287,7 +1288,7 @@ pub unsafe fn UpdateSrcPicList(pCtx: *mut sWelsEncCtx) {
 
 /// Screen content specialized reference picture list update.
 pub unsafe fn WelsUpdateRefListScreen(pCtx: *mut sWelsEncCtx) -> bool {
-    if pCtx.is_null() || (*pCtx).pCurDqLayer.is_null() || (*pCtx).pSvcParam.is_null() {
+    if pCtx.is_null() || current_layer(pCtx).is_null() || (*pCtx).pSvcParam.is_null() {
         return false;
     }
     let uiDid = (*pCtx).uiDependencyId as usize;
@@ -1353,7 +1354,7 @@ pub unsafe fn WelsBuildRefListScreen(
     iPOC: i32,
     iBestLtrRefIdx: i32,
 ) -> bool {
-    if pCtx.is_null() || (*pCtx).pSvcParam.is_null() || (*pCtx).pVaa.is_null() || (*pCtx).pCurDqLayer.is_null() {
+    if pCtx.is_null() || (*pCtx).pSvcParam.is_null() || (*pCtx).pVaa.is_null() || current_layer(pCtx).is_null() {
         return false;
     }
     let uiDid = (*pCtx).uiDependencyId as usize;
@@ -1391,7 +1392,7 @@ pub unsafe fn WelsBuildRefListScreen(
                     && (!(*pCtx).bCurFrameMarkedAsSceneLtr || pRefPic.bIsSceneLTR)
                 {
                     let num0 = (*pCtx).iNumRef0 as usize;
-                    (*(*pCtx).pCurDqLayer).pRefOri[num0] = refOri;
+                    (*current_layer(pCtx)).pRefOri[num0] = refOri;
                     (*pCtx).pRefList0[num0] = Some(idRefPic);
                     (*pCtx).iNumRef0 += 1;
                 }
@@ -1405,7 +1406,7 @@ pub unsafe fn WelsBuildRefListScreen(
                     let uiTemporalId = (*pRefList).pic(idLong).uiTemporalId;
                     if uiTemporalId == 0 || uiTemporalId < (*pCtx).uiTemporalId {
                         let num0 = (*pCtx).iNumRef0 as usize;
-                        (*(*pCtx).pCurDqLayer).pRefOri[num0] = refOri;
+                        (*current_layer(pCtx)).pRefOri[num0] = refOri;
                         (*pCtx).pRefList0[num0] = Some(idLong);
                         (*pCtx).iNumRef0 += 1;
                         break;
@@ -1463,7 +1464,7 @@ pub unsafe fn WelsMarkMMCORefInfoScreen(
 }
 
 pub unsafe fn WelsMarkPicScreen(pCtx: *mut sWelsEncCtx) {
-    if pCtx.is_null() || (*pCtx).pSvcParam.is_null() || (*pCtx).pCurDqLayer.is_null() {
+    if pCtx.is_null() || (*pCtx).pSvcParam.is_null() || current_layer(pCtx).is_null() {
         return;
     }
     let uiDid = (*pCtx).uiDependencyId as usize;
@@ -1560,11 +1561,11 @@ pub unsafe fn WelsMarkPicScreen(pCtx: *mut sWelsEncCtx) {
         }
     }
 
-    let iSliceNum = (*(*pCtx).pCurDqLayer).iMaxSliceNum;
+    let iSliceNum = (*current_layer(pCtx)).iMaxSliceNum;
     WelsMarkMMCORefInfoScreen(
         pCtx,
         pLtr,
-        (*pCtx).pCurDqLayer,
+        current_layer(pCtx),
         iSliceNum,
     );
 }

@@ -47,6 +47,7 @@ use std::ffi::{c_char, c_void};
 
 use crate::encoder::nal_encap::{WelsEncodeNal, SWelsNalRaw};
 use crate::encoder::svc_encode_slice::thread_bs_buffer;
+use crate::encoder::svc_encode_slice::{current_layer, set_current_layer, LayerIdx};
 use crate::{
     RCMode, SEncParamExt, SFrameBSInfo, SLayerBSInfo, SliceMode, MAX_SPATIAL_LAYER_NUM,
 };
@@ -763,11 +764,11 @@ pub unsafe fn AppendSliceToFrameBs(
     pLbi: *mut SLayerBSInfo,
     kiSliceCount: i32,
 ) -> i32 {
-    if pCtx.is_null() || pLbi.is_null() || (*pCtx).pCurDqLayer.is_null() {
+    if pCtx.is_null() || pLbi.is_null() || current_layer(pCtx).is_null() {
         return 0;
     }
 
-    let pCurDq = (*pCtx).pCurDqLayer;
+    let pCurDq = current_layer(pCtx);
     let mut iLayerSize = 0i32;
     let mut iNalIdxBase = 0i32;
     (*pLbi).iNalCount = 0;
@@ -830,7 +831,7 @@ pub unsafe fn WriteSliceBs(
     _iSliceIdx: i32,
     iSliceSize: &mut i32,
 ) -> i32 {
-    if pCtx.is_null() || pSlice.is_null() || (*pCtx).pCurDqLayer.is_null() {
+    if pCtx.is_null() || pSlice.is_null() || current_layer(pCtx).is_null() {
         return 0;
     }
     let pSliceBs = std::ptr::addr_of_mut!((*pSlice).sSliceBs);
@@ -839,7 +840,7 @@ pub unsafe fn WriteSliceBs(
     let mut iNalIdx = 0i32;
     let mut iReturn = ENC_RETURN_SUCCESS;
     let iTotalLeftLength = ((*pSliceBs).uiBsSize - (*pSliceBs).uiBsPos) as i32;
-    let pNalHdrExt = std::ptr::addr_of!((*(*pCtx).pCurDqLayer).sLayerInfo.sNalHeaderExt);
+    let pNalHdrExt = std::ptr::addr_of!((*current_layer(pCtx)).sLayerInfo.sNalHeaderExt);
     let mut pDst = (*pSliceBs).pBs;
 
     if kiNalCnt > 2 {
@@ -894,7 +895,10 @@ pub unsafe fn AdjustBaseLayer(pCtx: *mut sWelsEncCtx) -> i32 {
         return 0;
     }
 
-    (*pCtx).pCurDqLayer = pCurDq;
+    // T6.G2's one edit in an MT file: the field is a position now, and layer 0 is
+    // the position this function has always meant (`ppDqLayerList[0]`, two lines
+    // up). Body otherwise untouched — Phase 7 owns everything else here.
+    set_current_layer(pCtx, Some(LayerIdx(0)));
 
     let iNeedAdj = NeedDynamicAdjust(pCurDq, (*pCurDq).sSliceEncCtx.iSliceNumInFrame);
 
@@ -907,7 +911,7 @@ pub unsafe fn AdjustBaseLayer(pCtx: *mut sWelsEncCtx) -> i32 {
 
 /// Evaluates load balance and dynamically adjusts slicing for spatial enhancement layers.
 pub unsafe fn AdjustEnhanceLayer(pCtx: *mut sWelsEncCtx, iCurDid: i32) -> i32 {
-    if pCtx.is_null() || (*pCtx).ppDqLayerList.is_null() || (*pCtx).pCurDqLayer.is_null() {
+    if pCtx.is_null() || (*pCtx).ppDqLayerList.is_null() || current_layer(pCtx).is_null() {
         return 0;
     }
 
@@ -916,7 +920,7 @@ pub unsafe fn AdjustEnhanceLayer(pCtx: *mut sWelsEncCtx, iCurDid: i32) -> i32 {
         return 0;
     }
 
-    let kbModelingFromSpatial = (*(*pCtx).pCurDqLayer).pRefLayer.is_some()
+    let kbModelingFromSpatial = (*current_layer(pCtx)).pRefLayer.is_some()
         && iCurDid > 0
         && (iCurDid as usize - 1 < MAX_SPATIAL_LAYER_NUM)
         && ((*pSvcParam).sSpatialLayers[iCurDid as usize - 1].sSliceArgument.uiSliceMode
@@ -932,10 +936,10 @@ pub unsafe fn AdjustEnhanceLayer(pCtx: *mut sWelsEncCtx, iCurDid: i32) -> i32 {
         }
         iNeedAdj = NeedDynamicAdjust(
             pBaseLayer,
-            (*(*pCtx).pCurDqLayer).sSliceEncCtx.iSliceNumInFrame,
+            (*current_layer(pCtx)).sSliceEncCtx.iSliceNumInFrame,
         );
         if iNeedAdj != 0 {
-            DynamicAdjustSlicing(pCtx, (*pCtx).pCurDqLayer, iCurDid);
+            DynamicAdjustSlicing(pCtx, current_layer(pCtx), iCurDid);
         }
     } else {
         let pCurLayer = *(*pCtx).ppDqLayerList.add(iCurDid as usize);
@@ -944,10 +948,10 @@ pub unsafe fn AdjustEnhanceLayer(pCtx: *mut sWelsEncCtx, iCurDid: i32) -> i32 {
         }
         iNeedAdj = NeedDynamicAdjust(
             pCurLayer,
-            (*(*pCtx).pCurDqLayer).sSliceEncCtx.iSliceNumInFrame,
+            (*current_layer(pCtx)).sSliceEncCtx.iSliceNumInFrame,
         );
         if iNeedAdj != 0 {
-            DynamicAdjustSlicing(pCtx, (*pCtx).pCurDqLayer, iCurDid);
+            DynamicAdjustSlicing(pCtx, current_layer(pCtx), iCurDid);
         }
     }
 
