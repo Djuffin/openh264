@@ -320,7 +320,7 @@ pub unsafe extern "C" fn WelsMdInterJudgePskip(
 ) -> bool {
     let pMbCache = std::ptr::addr_of_mut!((*pSlice).sMbCacheInfo);
     let bRet;
-    if ((crate::encoder::svc_encode_slice::ctx_ref_pic(pEncCtx)
+    if ((crate::encoder::svc_encode_slice::ctx_ref_pic(&mut *pEncCtx)
         .map_or(0, |p| p.iPictureType)
         == EWelsSliceType::P_SLICE as i32)
         && ((*pMbCache).uiRefMbType == MB_TYPE_SKIP || (*pMbCache).uiRefMbType == MB_TYPE_BACKGROUND))
@@ -1802,7 +1802,7 @@ pub unsafe extern "C" fn JudgeStaticSkip(
     if bTryStaticSkip {
         let pFunc = ctx_func_list(pEncCtx);
         let pRefOri = (*pCurDqLayer).pRefOri[0]
-            .and_then(|r| crate::encoder::svc_encode_slice::ctx_pic_ref_mut(pEncCtx, r))
+            .and_then(|r| crate::encoder::svc_encode_slice::ctx_pic_ref_mut(&mut *pEncCtx, r))
             .map(|p| p.planes());
         if let Some(pRefOri) = pRefOri {
             let iStrideUV = (*pCurDqLayer).iEncStride[1];
@@ -1857,7 +1857,7 @@ pub unsafe extern "C" fn JudgeScrollSkip(
     if bTryScrollSkip {
         let pFunc = ctx_func_list(pEncCtx);
         let pRefOri = (*pCurDqLayer).pRefOri[0]
-            .and_then(|r| crate::encoder::svc_encode_slice::ctx_pic_ref_mut(pEncCtx, r))
+            .and_then(|r| crate::encoder::svc_encode_slice::ctx_pic_ref_mut(&mut *pEncCtx, r))
             .map(|p| p.planes());
         if let Some(pRefOri) = pRefOri {
             let iScrollMvX = (*pVaaExt).sScrollDetectInfo.iScrollMvX;

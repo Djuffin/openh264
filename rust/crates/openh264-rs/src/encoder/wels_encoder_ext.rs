@@ -582,7 +582,7 @@ pub unsafe fn WelsWriteParameterSets(
         iCountNal += 1;
     }
 
-    ParasetStrategy(pCtx).UpdatePpsList(pCtx);
+    ParasetStrategy(pCtx).UpdatePpsList(&mut *pCtx);
 
     iIdx = 0;
     while iIdx < (*pCtx).iPpsNum {

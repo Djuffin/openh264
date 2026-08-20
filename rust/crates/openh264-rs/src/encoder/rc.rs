@@ -544,7 +544,10 @@ impl SWelsRcFunc {
     /// # Safety
     /// As the callbacks: `pCtx` must be a live, initialized encoder context.
     #[inline]
-    pub unsafe fn WelsRcPictureInit(self, pCtx: *mut sWelsEncCtx, uiTimeStamp: i64) {
+    pub fn WelsRcPictureInit(self, pCtx: &mut sWelsEncCtx, uiTimeStamp: i64) { unsafe {
+        // **T6.J1.** Safe signature, raw body: one derivation from the
+        // caller's `&mut`, and the body below is unchanged.
+        let pCtx: *mut sWelsEncCtx = pCtx;
         match self.eInstalledMode {
             RCMode::RC_OFF_MODE => WelsRcPictureInitDisable(pCtx, uiTimeStamp),
             RCMode::RC_BUFFERBASED_MODE => WelRcPictureInitBufferBasedQp(pCtx, uiTimeStamp),
@@ -553,7 +556,7 @@ impl SWelsRcFunc {
             | RCMode::RC_TIMESTAMP_MODE
             | RCMode::RC_QUALITY_MODE => WelsRcPictureInitGom(pCtx, uiTimeStamp),
         }
-    }
+    }}
 
     /// `pfWelsRcPicDelayJudge`. Installed by `RC_TIMESTAMP_MODE` alone; every other
     /// mode left the slot `None`, and every call site guarded on that, so the other
@@ -573,7 +576,10 @@ impl SWelsRcFunc {
     /// # Safety
     /// As [`WelsRcPictureInit`](SWelsRcFunc::WelsRcPictureInit).
     #[inline]
-    pub unsafe fn WelsRcPictureInfoUpdate(self, pCtx: *mut sWelsEncCtx, iLayerSize: i32) {
+    pub fn WelsRcPictureInfoUpdate(self, pCtx: &mut sWelsEncCtx, iLayerSize: i32) { unsafe {
+        // **T6.J1.** Safe signature, raw body: one derivation from the
+        // caller's `&mut`, and the body below is unchanged.
+        let pCtx: *mut sWelsEncCtx = pCtx;
         match self.eInstalledMode {
             RCMode::RC_OFF_MODE | RCMode::RC_BUFFERBASED_MODE => {
                 WelsRcPictureInfoUpdateDisable(pCtx, iLayerSize)
@@ -583,7 +589,7 @@ impl SWelsRcFunc {
             | RCMode::RC_BITRATE_MODE_POST_SKIP
             | RCMode::RC_QUALITY_MODE => WelsRcPictureInfoUpdateGom(pCtx, iLayerSize),
         }
-    }
+    }}
 
     /// `pfWelsRcMbInit`.
     ///
@@ -652,14 +658,17 @@ impl SWelsRcFunc {
     /// # Safety
     /// As [`WelsRcPictureInit`](SWelsRcFunc::WelsRcPictureInit).
     #[inline]
-    pub unsafe fn WelsUpdateBufferWhenSkip(self, pCtx: *mut sWelsEncCtx, iSpatialNum: i32) {
+    pub fn WelsUpdateBufferWhenSkip(self, pCtx: &mut sWelsEncCtx, iSpatialNum: i32) { unsafe {
+        // **T6.J1.** Safe signature, raw body: one derivation from the
+        // caller's `&mut`, and the body below is unchanged.
+        let pCtx: *mut sWelsEncCtx = pCtx;
         match self.eInstalledMode {
             RCMode::RC_BITRATE_MODE
             | RCMode::RC_BITRATE_MODE_POST_SKIP
             | RCMode::RC_QUALITY_MODE => UpdateBufferWhenFrameSkipped(pCtx, iSpatialNum),
             RCMode::RC_OFF_MODE | RCMode::RC_BUFFERBASED_MODE | RCMode::RC_TIMESTAMP_MODE => {}
         }
-    }
+    }}
 
     /// `pfWelsUpdateMaxBrWindowStatus`. Absent for `RC_OFF`, `RC_BUFFERBASED` and
     /// `RC_TIMESTAMP`.
@@ -667,12 +676,15 @@ impl SWelsRcFunc {
     /// # Safety
     /// As [`WelsRcPictureInit`](SWelsRcFunc::WelsRcPictureInit).
     #[inline]
-    pub unsafe fn WelsUpdateMaxBrWindowStatus(
+    pub fn WelsUpdateMaxBrWindowStatus(
         self,
-        pCtx: *mut sWelsEncCtx,
+        pCtx: &mut sWelsEncCtx,
         iSpatialNum: i32,
         uiTimeStamp: i64,
-    ) {
+    ) { unsafe {
+        // **T6.J1.** Safe signature, raw body: one derivation from the
+        // caller's `&mut`, and the body below is unchanged.
+        let pCtx: *mut sWelsEncCtx = pCtx;
         match self.eInstalledMode {
             RCMode::RC_BITRATE_MODE
             | RCMode::RC_BITRATE_MODE_POST_SKIP
@@ -681,7 +693,7 @@ impl SWelsRcFunc {
             }
             RCMode::RC_OFF_MODE | RCMode::RC_BUFFERBASED_MODE | RCMode::RC_TIMESTAMP_MODE => {}
         }
-    }
+    }}
 
     /// `pfWelsRcPostFrameSkipping` — the one slot with a return value, and the one
     /// whose absence a caller reads: `if let Some(f) = …` guarded a whole
@@ -693,22 +705,25 @@ impl SWelsRcFunc {
     /// # Safety
     /// As [`WelsRcPictureInit`](SWelsRcFunc::WelsRcPictureInit).
     #[inline]
-    pub unsafe fn WelsRcPostFrameSkipping(
+    pub fn WelsRcPostFrameSkipping(
         self,
-        pCtx: *mut sWelsEncCtx,
+        pCtx: &mut sWelsEncCtx,
         iDid: i32,
         uiTimeStamp: i64,
-    ) -> bool {
+    ) -> bool { unsafe {
+        // **T6.J1.** Safe signature, raw body: one derivation from the
+        // caller's `&mut`, and the body below is unchanged.
+        let pCtx: *mut sWelsEncCtx = pCtx;
         match self.eInstalledMode {
             RCMode::RC_BITRATE_MODE | RCMode::RC_BITRATE_MODE_POST_SKIP => {
-                WelsRcPostFrameSkipping(pCtx, iDid, uiTimeStamp)
+                WelsRcPostFrameSkipping(&mut *pCtx, iDid, uiTimeStamp)
             }
             RCMode::RC_OFF_MODE
             | RCMode::RC_BUFFERBASED_MODE
             | RCMode::RC_TIMESTAMP_MODE
             | RCMode::RC_QUALITY_MODE => false,
         }
-    }
+    }}
 }
 
 
@@ -1752,12 +1767,15 @@ pub unsafe extern "C" fn CheckFrameSkipBasedMaxbr(
 }
 
 /// Evaluates frame skip status across active spatial layers.
-pub unsafe fn WelsRcCheckFrameStatus(
-    pEncCtx: *mut sWelsEncCtx,
+pub fn WelsRcCheckFrameStatus(
+    pEncCtx: &mut sWelsEncCtx,
     uiTimeStamp: i64,
     iSpatialNum: i32,
     iCurDid: i32,
-) -> bool {
+) -> bool { unsafe {
+    // **T6.J1.** Safe signature, raw body: one derivation from the
+    // caller's `&mut`, and the body below is unchanged.
+    let pEncCtx: *mut sWelsEncCtx = pEncCtx;
     let mut bSkipMustFlag = false;
 
     if (*ctx_param(pEncCtx)).bSimulcastAVC {
@@ -1826,7 +1844,7 @@ pub unsafe fn WelsRcCheckFrameStatus(
         }
     }
     false
-}
+}}
 
 /// Adjusts virtual buffer fullness and bit quotas when a frame is skipped.
 pub unsafe extern "C" fn UpdateBufferWhenFrameSkipped(pEncCtx: *mut sWelsEncCtx, iCurDid: i32) {
@@ -1924,16 +1942,19 @@ pub unsafe extern "C" fn UpdateMaxBrCheckWindowStatus(
 /// Intentional no-op callback invoked after frame skipping.
 /// Matches `WelsRcPostFrameSkipping` in `ratectl.cpp`.
 pub unsafe extern "C" fn WelsRcPostFrameSkipping(
-    _pCtx: *mut sWelsEncCtx,
+    _pCtx: &mut sWelsEncCtx,
     _iDid: i32,
     _uiTimeStamp: i64,
-) -> bool {
+) -> bool { unsafe {
+    // **T6.J1.** Safe signature, raw body: one derivation from the
+    // caller's `&mut`, and the body below is unchanged.
+    let _pCtx: *mut sWelsEncCtx = _pCtx;
     false
-}
+}}
 
 /// Intentional no-op callback invoked after frame skipped update.
 /// Matches `WelsRcPostFrameSkippedUpdate` in `ratectl.cpp`.
-pub unsafe fn WelsRcPostFrameSkippedUpdate(_pCtx: *mut sWelsEncCtx, _iDid: i32) {}
+pub fn WelsRcPostFrameSkippedUpdate(_pCtx: &mut sWelsEncCtx, _iDid: i32) {}
 
 /// Evaluates virtual buffer underflow and calculates required padding bits.
 pub unsafe fn RcVBufferCalculationPadding(pEncCtx: *mut sWelsEncCtx) {
@@ -1957,7 +1978,10 @@ pub unsafe fn RcVBufferCalculationPadding(pEncCtx: *mut sWelsEncCtx) {
 }
 
 /// Logs frame bit rate control telemetry.
-pub unsafe fn RcTraceFrameBits(pEncCtx: *mut sWelsEncCtx, _uiTimeStamp: i64, _iFrameSize: i32) {
+pub fn RcTraceFrameBits(pEncCtx: &mut sWelsEncCtx, _uiTimeStamp: i64, _iFrameSize: i32) { unsafe {
+    // **T6.J1.** Safe signature, raw body: one derivation from the
+    // caller's `&mut`, and the body below is unchanged.
+    let pEncCtx: *mut sWelsEncCtx = pEncCtx;
     let did = (*pEncCtx).uiDependencyId as usize;
     let pWelsSvcRc = ctx_rc_at(pEncCtx, did);
     if (*pWelsSvcRc).iPredFrameBit != 0 {
@@ -1968,7 +1992,7 @@ pub unsafe fn RcTraceFrameBits(pEncCtx: *mut sWelsEncCtx, _uiTimeStamp: i64, _iF
     } else {
         (*pWelsSvcRc).iPredFrameBit = (*pWelsSvcRc).iFrameDqBits;
     }
-}
+}}
 
 /// Computes average frame QP and updates temporal layer bit counters.
 pub unsafe fn RcUpdatePictureQpBits(pEncCtx: *mut sWelsEncCtx, iCodedBits: i32) {
@@ -2385,7 +2409,10 @@ pub unsafe extern "C" fn WelRcPictureInitBufferBasedQp(
     (*pWelsSvcRc).iMinFrameQp = (*pEncCtx).iGlobalQp;
 }
 
-pub unsafe extern "C" fn WelRcPictureInitScc(pEncCtx: *mut sWelsEncCtx, uiTimeStamp: i64) {
+pub unsafe extern "C" fn WelRcPictureInitScc(pEncCtx: &mut sWelsEncCtx, uiTimeStamp: i64) { unsafe {
+    // **T6.J1.** Safe signature, raw body: one derivation from the
+    // caller's `&mut`, and the body below is unchanged.
+    let pEncCtx: *mut sWelsEncCtx = pEncCtx;
     let did = (*pEncCtx).uiDependencyId as usize;
     let pWelsSvcRc = ctx_rc_at(pEncCtx, did);
     let pVaa = ctx_vaa(pEncCtx) as *mut SVAAFrameInfoExt;
@@ -2465,15 +2492,21 @@ pub unsafe extern "C" fn WelRcPictureInitScc(pEncCtx: *mut sWelsEncCtx, uiTimeSt
     }
     (*pWelsSvcRc).iAverageFrameQp = (*pEncCtx).iGlobalQp;
     (*pWelsSvcRc).uiLastTimeStamp = uiTimeStamp;
-}
+}}
 
-pub unsafe fn WelsRcDropFrameUpdate(pEncCtx: *mut sWelsEncCtx, iDropSize: u32) {
+pub fn WelsRcDropFrameUpdate(pEncCtx: &mut sWelsEncCtx, iDropSize: u32) { unsafe {
+    // **T6.J1.** Safe signature, raw body: one derivation from the
+    // caller's `&mut`, and the body below is unchanged.
+    let pEncCtx: *mut sWelsEncCtx = pEncCtx;
     let pWelsSvcRc = ctx_rc(pEncCtx);
     (*pWelsSvcRc).iBufferFullnessSkip -= iDropSize as i64;
     (*pWelsSvcRc).iBufferFullnessSkip = WELS_MAX(0, (*pWelsSvcRc).iBufferFullnessSkip);
-}
+}}
 
-pub unsafe extern "C" fn WelsRcPictureInfoUpdateScc(pEncCtx: *mut sWelsEncCtx, iNalSize: i32) {
+pub unsafe extern "C" fn WelsRcPictureInfoUpdateScc(pEncCtx: &mut sWelsEncCtx, iNalSize: i32) { unsafe {
+    // **T6.J1.** Safe signature, raw body: one derivation from the
+    // caller's `&mut`, and the body below is unchanged.
+    let pEncCtx: *mut sWelsEncCtx = pEncCtx;
     let did = (*pEncCtx).uiDependencyId as usize;
     let pWelsSvcRc = ctx_rc_at(pEncCtx, did);
     let iFrameBits = iNalSize << 3;
@@ -2499,7 +2532,7 @@ pub unsafe extern "C" fn WelsRcPictureInfoUpdateScc(pEncCtx: *mut sWelsEncCtx, i
             INT_MULTIPLY as i64,
         );
     }
-}
+}}
 
 pub unsafe extern "C" fn WelsRcMbInitScc(
     pEncCtx: *mut sWelsEncCtx,
@@ -2604,13 +2637,16 @@ pub unsafe fn WelsRcInitFuncPointers(pRcf: &mut SWelsRcFunc, iRcMode: RCMode) {
 }
 
 /// Top-level initialization entry point called during encoder creation.
-pub unsafe fn WelsRcInitModule(pEncCtx: *mut sWelsEncCtx, iRcMode: RCMode) {
+pub fn WelsRcInitModule(pEncCtx: &mut sWelsEncCtx, iRcMode: RCMode) { unsafe {
+    // **T6.J1.** Safe signature, raw body: one derivation from the
+    // caller's `&mut`, and the body below is unchanged.
+    let pEncCtx: *mut sWelsEncCtx = pEncCtx;
     // T6.I1: the `&& !pFuncList.is_null()` arm went with the raw table.
     if !pEncCtx.is_null() {
         WelsRcInitFuncPointers(&mut (*ctx_func_list(pEncCtx)).pfRc, iRcMode);
     }
     RcInitSequenceParameter(pEncCtx);
-}
+}}
 
 // **T6.H6**: `WelsRcFreeMemory` and `RcFreeLayerMemory` stood here. They walked the
 // spatial layers releasing each one's rate-control block, and `WelsUninitEncoderExt`
@@ -2671,9 +2707,21 @@ mod tests {
 
     #[test]
     fn test_rc_intentional_noop_callbacks() {
+        // **T6.J1.** The two skipping callbacks take `&mut sWelsEncCtx` since their
+        // signatures went safe, and a null reference is UB the compiler now rejects
+        // outright — `deny(deref_nullptr)` fired here the moment the raw went away.
+        // So they get a real context. That costs the test its old proof technique
+        // (a null argument cannot be read without crashing, which is why the nulls
+        // were here); what survives is the weaker, honest claim the assertions
+        // actually make: the disable-mode callbacks return the no-op answer and
+        // leave the context alone. The two still-raw callbacks below keep their
+        // nulls, and keep the original proof, until their signatures follow.
+        let mut ctx = sWelsEncCtx::new();
+        let before = ctx.iGlobalQp;
         unsafe {
-            assert!(!WelsRcPostFrameSkipping(std::ptr::null_mut(), 0, 0));
-            WelsRcPostFrameSkippedUpdate(std::ptr::null_mut(), 0);
+            assert!(!WelsRcPostFrameSkipping(&mut ctx, 0, 0));
+            WelsRcPostFrameSkippedUpdate(&mut ctx, 0);
+            assert_eq!(ctx.iGlobalQp, before, "a no-op callback wrote to the context");
             WelsRcPictureInfoUpdateDisable(std::ptr::null_mut(), 0);
             // The macroblock argument is a `&mut SMB` now, so the null goes and a
             // real record takes its place. The other three are still raw (context,
