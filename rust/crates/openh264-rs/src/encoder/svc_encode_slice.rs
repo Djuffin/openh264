@@ -1683,7 +1683,7 @@ pub unsafe fn WelsIMbChromaEncode(pEncCtx: *mut sWelsEncCtx, pCurMb: &mut SMB, p
 
     //cb
     pfDctFourT4(pCurRS, (*pMbCache).SPicData.pEncMb[1], kiEncStride, pBestPred, 8);
-    crate::encoder::svc_encode_mb::WelsEncRecUV(pFunc, pCurMb, pMbCache, pCurRS, 1);
+    crate::encoder::svc_encode_mb::WelsEncRecUV(&*pFunc, pCurMb, pMbCache, pCurRS, 1);
     pfIDctFourT4(pCsCb, kiCsStride, pBestPred, 8, pCurRS);
 
     //cr
@@ -1694,7 +1694,7 @@ pub unsafe fn WelsIMbChromaEncode(pEncCtx: *mut sWelsEncCtx, pCurMb: &mut SMB, p
         pBestPred.add(64),
         8,
     );
-    crate::encoder::svc_encode_mb::WelsEncRecUV(pFunc, pCurMb, pMbCache, pCurRS.add(64), 2);
+    crate::encoder::svc_encode_mb::WelsEncRecUV(&*pFunc, pCurMb, pMbCache, pCurRS.add(64), 2);
     pfIDctFourT4(pCsCr, kiCsStride, pBestPred.add(64), 8, pCurRS.add(64));
 }
 
@@ -1714,8 +1714,8 @@ pub unsafe fn WelsPMbChromaEncode(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSlice
     // Both calls were missing, so a P macroblock's chroma reached the reconstruction
     // holding raw DCT coefficients and never set its chroma CBP bits — the same
     // defect Phase 4.5 found in `WelsIMbChromaEncode`.
-    crate::encoder::svc_encode_mb::WelsEncRecUV(pFunc, pCurMb, pMbCache, pCurRS, 1);
-    crate::encoder::svc_encode_mb::WelsEncRecUV(pFunc, pCurMb, pMbCache, pCurRS.add(64), 2);
+    crate::encoder::svc_encode_mb::WelsEncRecUV(&*pFunc, pCurMb, pMbCache, pCurRS, 1);
+    crate::encoder::svc_encode_mb::WelsEncRecUV(&*pFunc, pCurMb, pMbCache, pCurRS.add(64), 2);
 }
 
 pub unsafe fn OutputPMbWithoutConstructCsRsNoCopy(pCtx: *mut sWelsEncCtx, pDq: *mut SDqLayer, pSlice: *mut SSlice, pMb: *mut SMB) {

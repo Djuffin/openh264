@@ -887,7 +887,7 @@ pub unsafe fn WelsCalNonZeroCount2x2Block(pBlock: *const i16) -> i32 {
 
 pub unsafe fn WelsWriteMbResidualCabac(
     buf: &mut [u8],
-    pFuncList: *mut SWelsFuncPtrList,
+    pFuncList: &SWelsFuncPtrList,
     pSlice: *mut SSlice,
     pCurMb: *mut SMB,
     iMbWidth: i16,
@@ -924,10 +924,9 @@ pub unsafe fn WelsWriteMbResidualCabac(
 
             if uiMbType == MB_TYPE_INTRA16x16 {
                 let dc_buf = (*pDct).iLumaI16x16Dc.as_mut_ptr();
-                let iNonZeroCount = if !pFuncList.is_null()
-                    && (*pFuncList).pfGetNoneZeroCount.is_some()
+                let iNonZeroCount = if pFuncList.pfGetNoneZeroCount.is_some()
                 {
-                    ((*pFuncList).pfGetNoneZeroCount.unwrap())(dc_buf)
+                    (pFuncList.pfGetNoneZeroCount.unwrap())(dc_buf)
                 } else {
                     (*pDct).iLumaI16x16Dc.iter().filter(|&&x| x != 0).count() as i32
                 };
@@ -1230,7 +1229,7 @@ pub unsafe fn WelsSpatialWriteMbSynCabac(
             let pFuncList = ctx_func_list(pEncCtx);
             iRet = WelsWriteMbResidualCabac(
                 buf,
-                pFuncList,
+                &*pFuncList,
                 pSlice,
                 pCurMb,
                 iMbWidth as i16,

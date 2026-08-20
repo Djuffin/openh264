@@ -1097,7 +1097,7 @@ pub unsafe extern "C" fn WelsDiamondCrossFeatureSearch(
 
             let mut sFeatureSearchIn = SFeatureSearchIn::default();
             if SetFeatureSearchIn(
-                pFunc,
+                &*pFunc,
                 pMe,
                 &*pSlice,
                 (*pMe).pRefFeatureStorage,
@@ -1245,7 +1245,7 @@ pub unsafe extern "C" fn FillQpelLocationByFeatureValue_c(
 }
 
 pub unsafe fn CalculateFeatureOfBlock(
-    pFunc: *mut SWelsFuncPtrList,
+    pFunc: &SWelsFuncPtrList,
     pRef: &mut SPicture,
     pScreenBlockFeatureStorage: *mut SScreenBlockFeatureStorage,
 ) -> bool {
@@ -1274,11 +1274,11 @@ pub unsafe fn CalculateFeatureOfBlock(
 
         std::ptr::write_bytes(pTimesOfFeatureValue as *mut u8, 0, (kiActualListSize as usize) * std::mem::size_of::<u32>());
 
-        if let Some(calc_frame_feature) = (*pFunc).pfCalculateBlockFeatureOfFrame[iIs16x16] {
+        if let Some(calc_frame_feature) = pFunc.pfCalculateBlockFeatureOfFrame[iIs16x16] {
             calc_frame_feature(pRefData, iWidth, kiHeight, iRefStride, pFeatureOfBlock, pTimesOfFeatureValue);
         }
 
-        if let Some(init_hash) = (*pFunc).pfInitializeHashforFeature {
+        if let Some(init_hash) = pFunc.pfInitializeHashforFeature {
             init_hash(
                 pTimesOfFeatureValue,
                 pBuf,
@@ -1288,7 +1288,7 @@ pub unsafe fn CalculateFeatureOfBlock(
             );
         }
 
-        if let Some(fill_qpel) = (*pFunc).pfFillQpelLocationByFeatureValue {
+        if let Some(fill_qpel) = pFunc.pfFillQpelLocationByFeatureValue {
             fill_qpel(
                 pFeatureOfBlock,
                 iWidth,
@@ -1303,7 +1303,7 @@ pub unsafe fn CalculateFeatureOfBlock(
 
 // SCREEN_CONTENT(dormant: Phase 10)
 pub unsafe extern "C" fn PerformFMEPreprocess(
-    pFunc: *mut SWelsFuncPtrList,
+    pFunc: &SWelsFuncPtrList,
     pRef: &mut SPicture,
     pFeatureOfBlock: *mut u16,
     pScreenBlockFeatureStorage: *mut SScreenBlockFeatureStorage,
@@ -1329,7 +1329,7 @@ pub unsafe extern "C" fn PerformFMEPreprocess(
 
 // SCREEN_CONTENT(dormant: Phase 10)
 pub unsafe fn SetFeatureSearchIn(
-    pFunc: *mut SWelsFuncPtrList,
+    pFunc: &SWelsFuncPtrList,
     sMe: &SWelsME,
     pSlice: &SSlice,
     pRefFeatureStorage: *mut SScreenBlockFeatureStorage,
@@ -1339,10 +1339,10 @@ pub unsafe fn SetFeatureSearchIn(
 ) -> bool {
     unsafe {
         let block_size = sMe.uiBlockSize as usize;
-        pFeatureSearchIn.pSad = (*pFunc).sSampleDealingFuncs.pfSampleSad[block_size];
+        pFeatureSearchIn.pSad = pFunc.sSampleDealingFuncs.pfSampleSad[block_size];
 
         let single_fn_idx = if block_size == BLOCK_16x16 { 1 } else { 0 };
-        if let Some(calc_single) = (*pFunc).pfCalculateSingleBlockFeature[single_fn_idx] {
+        if let Some(calc_single) = pFunc.pfCalculateSingleBlockFeature[single_fn_idx] {
             pFeatureSearchIn.iFeatureOfCurrent = calc_single(sMe.pEncMb, kiEncStride);
         }
 

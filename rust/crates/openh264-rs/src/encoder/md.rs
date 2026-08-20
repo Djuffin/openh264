@@ -1185,10 +1185,10 @@ pub unsafe fn FillNeighborCacheInterWithBGD(
 }
 
 pub unsafe extern "C" fn InitFillNeighborCacheInterFunc(
-    pFuncList: *mut SWelsFuncPtrList,
+    pFuncList: &mut SWelsFuncPtrList,
     kiFlag: i32,
 ) {
-    (*pFuncList).pfFillInterNeighborCache = if kiFlag != 0 {
+    pFuncList.pfFillInterNeighborCache = if kiFlag != 0 {
         Some(FillNeighborCacheInterWithBGD)
     } else {
         Some(FillNeighborCacheInterWithoutBGD)
@@ -1307,12 +1307,12 @@ pub unsafe extern "C" fn AnalysisVaaInfoIntra_c(pDataY: *mut u8, kiLineSize: i32
 }
 
 pub unsafe extern "C" fn InitIntraAnalysisVaaInfo(
-    pFuncList: *mut SWelsFuncPtrList,
+    pFuncList: &mut SWelsFuncPtrList,
     _kuiCpuFlag: u32,
 ) {
-    (*pFuncList).pfGetVarianceFromIntraVaa = Some(AnalysisVaaInfoIntra_c);
-    (*pFuncList).pfGetMbSignFromInterVaa = Some(MdInterAnalysisVaaInfo_c);
-    (*pFuncList).pfUpdateMbMv = Some(UpdateMbMv_c);
+    pFuncList.pfGetVarianceFromIntraVaa = Some(AnalysisVaaInfoIntra_c);
+    pFuncList.pfGetMbSignFromInterVaa = Some(MdInterAnalysisVaaInfo_c);
+    pFuncList.pfUpdateMbMv = Some(UpdateMbMv_c);
 }
 
 pub unsafe extern "C" fn MdIntraAnalysisVaaInfo(
@@ -1343,7 +1343,7 @@ pub fn InitMeRefinePointer(pMeRefine: &mut SMeRefinePointer, iStride: i32) {
 
 #[inline(always)]
 pub unsafe fn MeRefineQuarPixel(
-    pFunc: *mut SWelsFuncPtrList,
+    pFunc: &SWelsFuncPtrList,
     pMe: &mut SWelsME,
     pMeRefine: &mut SMeRefinePointer,
     pBufMe: *mut u8,
@@ -1354,7 +1354,7 @@ pub unsafe fn MeRefineQuarPixel(
 ) {
     let pEncMb = (*pMe).pEncMb;
     let kuiPixel = (*pMe).uiBlockSize as usize;
-    let pfMeCost = (*pFunc).sSampleDealingFuncs.me_cost(kuiPixel).unwrap();
+    let pfMeCost = pFunc.sSampleDealingFuncs.me_cost(kuiPixel).unwrap();
 
     // =========================(0, -1) [TOP] =========================
     PixelAvg_c(
@@ -1681,7 +1681,7 @@ pub unsafe extern "C" fn MeRefineFracPixel(
         sParams.iLms[3] = COST_MVD((*pMe).pMvdCost, (iHalfMvx + 1 - (*pMe).sMvp.iMvX) as i32, (iHalfMvy - (*pMe).sMvp.iMvY) as i32);
     }
 
-    MeRefineQuarPixel(pFunc, pMe, pMeRefine, pBufMe, iWidth, iHeight, &mut sParams, kiStrideEnc);
+    MeRefineQuarPixel(&*pFunc, pMe, pMeRefine, pBufMe, iWidth, iHeight, &mut sParams, kiStrideEnc);
 
     if iBestCost > sParams.iBestCost {
         pBestPredInter = pBufMe.add(pMeRefine.quar_pix_best());

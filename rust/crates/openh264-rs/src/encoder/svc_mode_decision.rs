@@ -355,7 +355,7 @@ pub unsafe extern "C" fn WelsMdInterDecidedPskip(
     let pMbCache = std::ptr::addr_of_mut!((*pSlice).sMbCacheInfo);
     let pCurDqLayer = current_layer(pEncCtx);
     (*pCurMb).uiMbType = MB_TYPE_SKIP;
-    WelsRecPskip(pCurDqLayer, ctx_func_list(pEncCtx), pCurMb, pMbCache);
+    WelsRecPskip(pCurDqLayer, &*ctx_func_list(pEncCtx), pCurMb, pMbCache);
     WelsMdInterUpdatePskip(pEncCtx, pCurDqLayer, pSlice, pCurMb);
 }
 
@@ -444,7 +444,7 @@ pub unsafe extern "C" fn WelsMdIntraSecondaryModesEnc(
 
     //chroma
     (*pWelsMd).iCostChroma = crate::encoder::svc_base_layer_md::WelsMdIntraChroma(
-        pFunc,
+        &*pFunc,
         current_layer(pEncCtx),
         pMbCache,
         (*pWelsMd).iLambda,
@@ -464,20 +464,20 @@ pub unsafe extern "C" fn WelsMdIntraSecondaryModesEnc(
 /// All pointers in `pCurLayer`, `pFuncList`, `pCurMb`, and `pMbCache` must be valid.
 pub unsafe extern "C" fn WelsRecPskip(
     pCurLayer: *mut SDqLayer,
-    pFuncList: *mut SWelsFuncPtrList,
+    pFuncList: &SWelsFuncPtrList,
     pCurMb: &mut SMB,
     pMbCache: *mut SMbCache,
 ) {
     let iRecStride = (*pCurLayer).iCsStride;
     let pCsMb = (*pMbCache).SPicData.pCsMb;
 
-    (*pFuncList).pfCopy16x16Aligned.expect("pfCopy16x16Aligned unset")(
+    pFuncList.pfCopy16x16Aligned.expect("pfCopy16x16Aligned unset")(
         pCsMb[0],
         iRecStride[0],
         crate::encoder::md::skip_mb(pMbCache),
         16,
     );
-    let copy8 = (*pFuncList).pfCopy8x8Aligned.expect("pfCopy8x8Aligned unset");
+    let copy8 = pFuncList.pfCopy8x8Aligned.expect("pfCopy8x8Aligned unset");
     copy8(pCsMb[1], iRecStride[1], crate::encoder::md::skip_mb(pMbCache).add(256), 8);
     copy8(pCsMb[2], iRecStride[2], crate::encoder::md::skip_mb(pMbCache).add(320), 8);
     // `WelsSetMemZero (pCurMb->pNonZeroCount, 24)` — the row is inline now.
@@ -491,7 +491,7 @@ pub unsafe extern "C" fn WelsRecPskip(
 /// `codec/encoder/core/src/svc_base_layer_md.cpp:1341`.
 #[inline(always)]
 unsafe fn VaaBackgroundMbDataUpdate(
-    pFunc: *mut SWelsFuncPtrList,
+    pFunc: &SWelsFuncPtrList,
     pVaaInfo: *mut crate::encoder::wels_preprocess::SVAAFrameInfo,
     pCurMb: &mut SMB,
 ) {
@@ -500,7 +500,7 @@ unsafe fn VaaBackgroundMbDataUpdate(
     let kiOffsetY = (((*pCurMb).iMbY as i32) * kiPicStride + (*pCurMb).iMbX as i32) << 4;
     let kiOffsetUV = (((*pCurMb).iMbY as i32) * kiPicStrideUV + (*pCurMb).iMbX as i32) << 3;
 
-    if let Some(copy16) = (*pFunc).pfCopy16x16Aligned {
+    if let Some(copy16) = pFunc.pfCopy16x16Aligned {
         copy16(
             (*pVaaInfo).pCurY.offset(kiOffsetY as isize),
             kiPicStride,
@@ -508,7 +508,7 @@ unsafe fn VaaBackgroundMbDataUpdate(
             kiPicStride,
         );
     }
-    if let Some(copy8) = (*pFunc).pfCopy8x8Aligned {
+    if let Some(copy8) = pFunc.pfCopy8x8Aligned {
         copy8(
             (*pVaaInfo).pCurU.offset(kiOffsetUV as isize),
             kiPicStrideUV,
@@ -593,9 +593,9 @@ pub unsafe extern "C" fn WelsMdBackgroundMbEnc(
                 (*pCurMb).uiLumaQp as i32 + (*layer_pps(pEncCtx, pCurDqLayer)).uiChromaQpIndexOffset as i32,
             )];
 
-        WelsRecPskip(pCurDqLayer, pFunc, pCurMb, pMbCache);
+        WelsRecPskip(pCurDqLayer, &*pFunc, pCurMb, pMbCache);
         VaaBackgroundMbDataUpdate(
-            pFunc,
+            &*pFunc,
             ctx_vaa(pEncCtx) as *mut crate::encoder::wels_preprocess::SVAAFrameInfo,
             pCurMb,
         );
@@ -1134,12 +1134,13 @@ pub unsafe extern "C" fn UpdateP4x8Motion2Cache(
 }
 
 pub unsafe extern "C" fn WelsMdI16x16(
-    pFunc: *mut SWelsFuncPtrList,
+    pFunc: &SWelsFuncPtrList,
     pCurDqLayer: *mut SDqLayer,
     pMbCache: *mut SMbCache,
     iLambda: i32,
 ) -> i32 {
-    if pFunc.is_null() || pCurDqLayer.is_null() || pMbCache.is_null() {
+    // T6.I2: `pFunc.is_null()` was the first arm; the table is a `&` now.
+    if pCurDqLayer.is_null() || pMbCache.is_null() {
         return i32::MAX;
     }
     // `svc_base_layer_md.cpp:369` reads pMemPredMb, not pMemPredLuma. The two are
@@ -1168,14 +1169,14 @@ pub unsafe extern "C" fn WelsMdI16x16(
     // `svc_base_layer_md.cpp:402` costs with pfMdCost, which SetFastCodingFunc points
     // at pfSampleSad and SetNormalCodingFunc at pfSampleSatd. Hardcoding pfSampleSad
     // here silently forced the fast-mode choice in normal mode.
-    let pfMdCost16x16 = (*pFunc).sSampleDealingFuncs.md_cost(BLOCK_16x16).unwrap();
+    let pfMdCost16x16 = pFunc.sSampleDealingFuncs.md_cost(BLOCK_16x16).unwrap();
 
     iBestMode = kpAvailMode[0] as i32;
     for i in 0..iAvailCount {
         let iCurMode = kpAvailMode[i] as i32;
         debug_assert!((0..7).contains(&iCurMode));
 
-        (*pFunc).pfGetLumaI16x16Pred[iCurMode as usize].unwrap()(pDst, pDec, iLineSizeDec);
+        pFunc.pfGetLumaI16x16Pred[iCurMode as usize].unwrap()(pDst, pDec, iLineSizeDec);
         let mut iCurCost = pfMdCost16x16(pDst, 16, pEnc, iLineSizeEnc);
         let mode_val = g_kiMapModeI16x16[iCurMode as usize] as u32;
         iCurCost += iLambda * (BsSizeUE(mode_val) as i32);
@@ -1387,7 +1388,8 @@ pub unsafe extern "C" fn WelsInterMbEncode(pEncCtx: *mut sWelsEncCtx, pSlice: *m
     let pMbCache = std::ptr::addr_of_mut!((*pSlice).sMbCacheInfo);
     let pCurDqLayer = current_layer(pEncCtx);
     let pFuncList = ctx_func_list(pEncCtx);
-    if pCurDqLayer.is_null() || pFuncList.is_null() {
+    // T6.I1: the `|| pFuncList.is_null()` arm went with the raw table.
+    if pCurDqLayer.is_null() {
         return;
     }
 
@@ -1405,11 +1407,7 @@ pub unsafe extern "C" fn WelsInterMbEncode(pEncCtx: *mut sWelsEncCtx, pSlice: *m
         }
     }
 
-    WelsEncInterY(
-        pFuncList as *mut crate::encoder::svc_encode_mb::SWelsFuncPtrList,
-        pCurMb,
-        pMbCache,
-    );
+    WelsEncInterY(&*pFuncList, pCurMb, pMbCache);
 }
 
 // ============================================================================
@@ -1541,7 +1539,7 @@ pub unsafe extern "C" fn WelsMdSpatialelInterMbIlfmdNoilp(
     } else {
         // Base layer is Intra (BLMODE == SVC_INTRA)
         let kiCostI16x16 = WelsMdI16x16(
-            ctx_func_list(pEncCtx),
+            &*ctx_func_list(pEncCtx),
             current_layer(pEncCtx),
             pMbCache,
             (*pWelsMd).iLambda,
@@ -1761,13 +1759,13 @@ pub unsafe fn IsMbScrolledStatic(pBlockType: *const i32) -> bool {
 
 #[inline(always)]
 pub unsafe fn CalUVSadCost(
-    pFunc: *mut SWelsFuncPtrList,
+    pFunc: &SWelsFuncPtrList,
     pEncOri: *mut u8,
     iStrideUV: i32,
     pRefOri: *mut u8,
     iRefLineSize: i32,
 ) -> i32 {
-    let f = (*pFunc).sSampleDealingFuncs.pfSampleSad[BLOCK_8x8];
+    let f = pFunc.sSampleDealingFuncs.pfSampleSad[BLOCK_8x8];
     if let Some(sad_func) = f {
         sad_func(pEncOri, iStrideUV, pRefOri, iRefLineSize)
     } else {
@@ -1811,7 +1809,7 @@ pub unsafe extern "C" fn JudgeStaticSkip(
             let iOffsetUV = (kiMbX + kiMbY * iStrideUV) << 3;
 
             let iSadCostCb = CalUVSadCost(
-                pFunc,
+                &*pFunc,
                 (*pMbCache).SPicData.pEncMb[1],
                 iStrideUV,
                 pRefOri.pData[1].offset(iOffsetUV as isize),
@@ -1819,7 +1817,7 @@ pub unsafe extern "C" fn JudgeStaticSkip(
             );
             if iSadCostCb == 0 {
                 let iSadCostCr = CalUVSadCost(
-                    pFunc,
+                    &*pFunc,
                     (*pMbCache).SPicData.pEncMb[2],
                     iStrideUV,
                     pRefOri.pData[2].offset(iOffsetUV as isize),
@@ -1873,7 +1871,7 @@ pub unsafe extern "C" fn JudgeScrollSkip(
                     + (((kiMbY << 3) + (iScrollMvY >> 1)) * iStrideUV);
 
                 let iSadCostCb = CalUVSadCost(
-                    pFunc,
+                    &*pFunc,
                     (*pMbCache).SPicData.pEncMb[1],
                     iStrideUV,
                     pRefOri.pData[1].offset(iOffsetUV as isize),
@@ -1881,7 +1879,7 @@ pub unsafe extern "C" fn JudgeScrollSkip(
                 );
                 if iSadCostCb == 0 {
                     let iSadCostCr = CalUVSadCost(
-                        pFunc,
+                        &*pFunc,
                         (*pMbCache).SPicData.pEncMb[2],
                         iStrideUV,
                         pRefOri.pData[2].offset(iOffsetUV as isize),
@@ -1991,7 +1989,7 @@ pub unsafe extern "C" fn SvcMdSCDMbEnc(
             pfUpdateMbMv(&mut (*pCurMb).sMv, sMvp);
         }
         (*pCurMb).uiMbType = MB_TYPE_SKIP;
-        WelsRecPskip(pCurDqLayer, pFunc, pCurMb, pMbCache);
+        WelsRecPskip(pCurDqLayer, &*pFunc, pCurMb, pMbCache);
         WelsMdInterUpdatePskip(pEncCtx, pCurDqLayer, pSlice, pCurMb);
         return;
     }
@@ -2159,13 +2157,13 @@ pub unsafe extern "C" fn WelsMdInterJudgeSCDPskipFalse(
 }
 
 pub unsafe extern "C" fn WelsInitSCDPskipFunc(
-    pFuncList: *mut SWelsFuncPtrList,
+    pFuncList: &mut SWelsFuncPtrList,
     bScrollingDetection: bool,
 ) {
     if bScrollingDetection {
-        (*pFuncList).pfSCDPSkipDecision = Some(WelsMdInterJudgeSCDPskip);
+        pFuncList.pfSCDPSkipDecision = Some(WelsMdInterJudgeSCDPskip);
     } else {
-        (*pFuncList).pfSCDPSkipDecision = Some(WelsMdInterJudgeSCDPskipFalse);
+        pFuncList.pfSCDPSkipDecision = Some(WelsMdInterJudgeSCDPskipFalse);
     }
 }
 
@@ -2491,7 +2489,7 @@ mod tests {
 
             let iLambda = 10;
             let cost = WelsMdI16x16(
-                &mut func_list as *mut SWelsFuncPtrList,
+                &func_list,
                 &mut dq_layer as *mut SDqLayer,
                 &mut mb_cache,
                 iLambda,

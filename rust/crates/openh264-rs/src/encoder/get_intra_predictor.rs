@@ -1198,7 +1198,7 @@ pub unsafe extern "C" fn WelsI16x16LumaPredDcNA_c(pPred: *mut u8, _pRef: *mut u8
 ///
 /// # Safety
 /// `pFuncList` must be a valid, writable `SWelsFuncPtrList`.
-pub unsafe fn WelsInitIntraPredFuncs(pFuncList: *mut SWelsFuncPtrList, _kuiCpuFlag: u32) {
+pub unsafe fn WelsInitIntraPredFuncs(pFuncList: &mut SWelsFuncPtrList, _kuiCpuFlag: u32) {
     let fl = &mut *pFuncList;
 
     fl.pfGetLumaI16x16Pred[I16_PRED_V as usize] = Some(WelsI16x16LumaPredV_c);

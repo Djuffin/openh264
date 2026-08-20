@@ -408,7 +408,7 @@ pub unsafe fn WelsIDctT4RecOnMb(
 ///
 /// # Safety
 /// `pFuncList` must be a valid, writable `SWelsFuncPtrList`.
-pub unsafe fn WelsInitReconstructionFuncs(pFuncList: *mut SWelsFuncPtrList, _uiCpuFlag: u32) {
+pub unsafe fn WelsInitReconstructionFuncs(pFuncList: &mut SWelsFuncPtrList, _uiCpuFlag: u32) {
     let fl = &mut *pFuncList;
 
     fl.pfDequantization4x4 = Some(WelsDequant4x4_c);
