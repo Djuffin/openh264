@@ -366,7 +366,7 @@ assert_size!(crate::encoder::encoder_context::SLogContext, 24);
 // `Option<PpsId>` (2 and 4 bytes against 8 apiece) and `pSubsetSps` is deleted
 // outright — the C++ declares it, nothing ever read or wrote it. Only the three pins
 // after the parameter-set block move.
-assert_size_by_profile!(sWelsEncCtx, debug 97920, release 97832);
+assert_size_by_profile!(sWelsEncCtx, debug 97936, release 97848);
 
 
 // The fifteen `sWelsEncCtx` fields the preprocessor touches, pinned at their C++
@@ -411,7 +411,7 @@ assert_ctx_offset_by_profile!(pVaa, debug 360, release 288);
 assert_ctx_offset_by_profile!(pVpp, debug 368, release 296);
 assert_ctx_offset_by_profile!(sSpatialIndexMap, debug 504, release 432);
 assert_ctx_offset_by_profile!(bRefOfCurTidIsLtr, debug 568, release 480);
-assert_ctx_offset_by_profile!(pMemAlign, debug 1792, release 1704);
+assert_ctx_offset_by_profile!(pMemAlign, debug 1808, release 1720);
 
 // encoder_context.h:198 -- the element type of `sSpatialIndexMap`. `wels_preprocess.rs`
 // carried a byte-identical copy of this under the invented name `SSpatialIndexMap`;

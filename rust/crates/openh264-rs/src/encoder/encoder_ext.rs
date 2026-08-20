@@ -26,7 +26,8 @@ use crate::api::codec_api::{ELevelIdc, SSpatialLayerConfig};
 use crate::common::memory_align::CMemoryAlign;
 use crate::decoder::nalu::g_ksLevelLimits;
 use crate::encoder::encoder_context::{
-    ctx_mb_index_x, ctx_mb_index_y, ctx_pps_array, ctx_sps_array, ctx_stride_enc_block_offset,
+    ctx_dq_idc_map, ctx_mb_index_x, ctx_mb_index_y, ctx_pps_array, ctx_sps_array,
+    ctx_stride_enc_block_offset,
     ctx_subset_array,
     sWelsEncCtx, SDqIdc, SLogContext, SRefList, SStrideTables, BASE_DEPENDENCY_ID,
 };
@@ -871,17 +872,14 @@ pub unsafe fn InitDqLayers(
         ctx_pps_array(*ppCtx),
     );
 
-    (**ppCtx).pDqIdcMap = (*pMa).WelsMallocz(
-        (iDlayerCount as usize * std::mem::size_of::<SDqIdc>()) as u32,
-        tag!("pDqIdcMap"),
-    ) as *mut SDqIdc;
-    if (**ppCtx).pDqIdcMap.is_null() {
-        return 1;
-    }
+    // **T6.H3.** `SDqIdc` is four bytes of POD and its derived `Default` is the
+    // memset image field for field, so `Default` *is* the ruled zero here — unlike
+    // `SWelsSPS`'s two lines up.
+    (**ppCtx).pDqIdcMap = vec![SDqIdc::default(); iDlayerCount as usize];
 
     iDlayerIndex = 0;
     while iDlayerIndex < iDlayerCount {
-        let pDqIdc = (**ppCtx).pDqIdcMap.add(iDlayerIndex as usize);
+        let pDqIdc = ctx_dq_idc_map(*ppCtx).add(iDlayerIndex as usize);
         let bUseSubsetSps = !(*pParam).bSimulcastAVC && (iDlayerIndex > BASE_DEPENDENCY_ID as i32);
         // S29, and the second site the encoder probe reached: `paraset_strategy.rs`
         // re-derives this same layer inside `GenerateNewSps` below, which popped
@@ -1762,10 +1760,7 @@ pub unsafe fn WelsUninitEncoderExt(ppCtx: *mut *mut sWelsEncCtx) {
         // holding its head, and then the table struct. The table owns the block and
         // the context owns the table, so both are the `drop(Box::from_raw(pCtx))` at
         // the end of this function, and the entry is deleted rather than converted.
-        if !(*pCtx).pDqIdcMap.is_null() {
-            (*pMa).WelsFree((*pCtx).pDqIdcMap as *mut c_void, tag!("pDqIdcMap"));
-            (*pCtx).pDqIdcMap = null_mut();
-        }
+        // **T6.H3**: `pDqIdcMap`'s `WelsFree` stood here; the `Vec` is the context's.
         // R4 in miniature, and the first encoder cascade entries to fall: four
         // `WelsFree` calls — `pOut->pBsBuffer`, `pOut->sNalList`,
         // `pOut->pNalLen` and the struct itself — are one `drop`. The three
@@ -2050,7 +2045,7 @@ pub unsafe fn WelsInitCurrentLayer(pCtx: *mut sWelsEncCtx, _kiWidth: i32, _kiHei
     let kiCurDid = (*pCtx).uiDependencyId;
     let kbUseSubsetSpsFlag = !(*pParam).bSimulcastAVC && (kiCurDid as i32) > BASE_DEPENDENCY_ID;
     let pNalHdExt = &mut (*pCurDq).sLayerInfo.sNalHeaderExt;
-    let pDqIdc = (*pCtx).pDqIdcMap.add(kiCurDid as usize);
+    let pDqIdc = ctx_dq_idc_map(pCtx).add(kiCurDid as usize);
     let iSliceCount = (*pCurDq).iMaxSliceNum;
     // S29 / F13's family: `addr_of_mut!` on the element, not `as_mut_ptr().add()` —
     // the latter reborrows the whole array and a second such derivation pops the first.
