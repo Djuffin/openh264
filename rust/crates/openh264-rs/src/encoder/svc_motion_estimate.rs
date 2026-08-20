@@ -167,6 +167,7 @@ pub struct SWelsME {
     pub sMvBase: SMVUnitXY,
     pub sDirectionalMv: SMVUnitXY,
 
+    // SCREEN_CONTENT(dormant: Phase 10)
     pub pRefFeatureStorage: *mut SScreenBlockFeatureStorage,
 
     pub sMv: SMVUnitXY,
@@ -197,6 +198,7 @@ impl Default for SWelsME {
 }
 
 /// Input configuration block for the hash-based feature search engine.
+// SCREEN_CONTENT(dormant: Phase 10)
 #[repr(C)]
 pub struct SFeatureSearchIn {
     pub pSad: Option<PSampleSadSatdCostFunc>,
@@ -247,6 +249,7 @@ impl Default for SFeatureSearchIn {
 }
 
 /// Output container populated during feature search passes.
+// SCREEN_CONTENT(dormant: Phase 10)
 #[repr(C)]
 #[derive(Copy, Clone)]
 pub struct SFeatureSearchOut {
@@ -437,6 +440,7 @@ pub unsafe fn SetMvWithinIntegerMvRange(
     }
 }
 
+// SCREEN_CONTENT(dormant: Phase 10)
 #[inline]
 pub fn CalcFMESwitchFlag(
     uiFMEGoodFrameCount: u8,
@@ -583,6 +587,7 @@ pub unsafe extern "C" fn WelsMotionEstimateSearch(
 }
 
 /// Shortcut motion estimation search for static macroblocks (forced MV = (0,0)).
+// SCREEN_CONTENT(dormant: Phase 10)
 pub unsafe extern "C" fn WelsMotionEstimateSearchStatic(
     pFuncList: *mut SWelsFuncPtrList,
     pCurDqLayer: *mut SDqLayer,
@@ -616,6 +621,7 @@ pub unsafe extern "C" fn WelsMotionEstimateSearchStatic(
 }
 
 /// Shortcut motion estimation search for scrolled macroblocks.
+// SCREEN_CONTENT(dormant: Phase 10)
 pub unsafe extern "C" fn WelsMotionEstimateSearchScrolled(
     pFuncList: *mut SWelsFuncPtrList,
     pCurDqLayer: *mut SDqLayer,
@@ -1073,6 +1079,7 @@ pub unsafe extern "C" fn WelsDiamondCrossSearch(
     }
 }
 
+// SCREEN_CONTENT(dormant: Phase 10)
 pub unsafe extern "C" fn WelsDiamondCrossFeatureSearch(
     pFunc: *mut SWelsFuncPtrList,
     pMe: *mut SWelsME,
@@ -1293,6 +1300,7 @@ pub unsafe fn CalculateFeatureOfBlock(
     }
 }
 
+// SCREEN_CONTENT(dormant: Phase 10)
 pub unsafe extern "C" fn PerformFMEPreprocess(
     pFunc: *mut SWelsFuncPtrList,
     pRef: *mut SPicture,
@@ -1318,6 +1326,7 @@ pub unsafe extern "C" fn PerformFMEPreprocess(
     }
 }
 
+// SCREEN_CONTENT(dormant: Phase 10)
 pub unsafe fn SetFeatureSearchIn(
     pFunc: *mut SWelsFuncPtrList,
     sMe: &SWelsME,
@@ -1367,6 +1376,7 @@ pub unsafe fn SetFeatureSearchIn(
     }
 }
 
+// SCREEN_CONTENT(dormant: Phase 10)
 pub unsafe fn SaveFeatureSearchOut(
     sBestMv: SMVUnitXY,
     uiBestSadCost: u32,
@@ -1380,6 +1390,7 @@ pub unsafe fn SaveFeatureSearchOut(
     }
 }
 
+// SCREEN_CONTENT(dormant: Phase 10)
 pub unsafe fn FeatureSearchOne(
     sFeatureSearchIn: &SFeatureSearchIn,
     iFeatureDifference: i32,
