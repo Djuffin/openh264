@@ -51,7 +51,7 @@ pub type PGetIntraPredFunc =
 /// `wels_func_ptr_def.h:106`
 pub type PIntraFineMdFunc = unsafe extern "C" fn(
     pEncCtx: *mut sWelsEncCtx,
-    pWelsMd: *mut SWelsMD,
+    pWelsMd: &mut SWelsMD,
     pCurMb: *mut SMB,
     pMbCache: *mut SMbCache,
 ) -> i32;
@@ -59,7 +59,7 @@ pub type PIntraFineMdFunc = unsafe extern "C" fn(
 /// `wels_func_ptr_def.h:107`
 pub type PInterFineMdFunc = unsafe extern "C" fn(
     pEncCtx: *mut sWelsEncCtx,
-    pWelsMd: *mut SWelsMD,
+    pWelsMd: &mut SWelsMD,
     slice: *mut SSlice,
     pCurMb: *mut SMB,
     bestCost: i32,
@@ -68,7 +68,7 @@ pub type PInterFineMdFunc = unsafe extern "C" fn(
 /// `wels_func_ptr_def.h:108`
 pub type PInterMdFirstIntraModeFunc = unsafe extern "C" fn(
     pEncCtx: *mut sWelsEncCtx,
-    pWelsMd: *mut SWelsMD,
+    pWelsMd: &mut SWelsMD,
     pCurMb: *mut SMB,
     pMbCache: *mut SMbCache,
 ) -> bool;
@@ -84,7 +84,7 @@ pub type PAccumulateSadFunc = unsafe extern "C" fn(
 /// `wels_func_ptr_def.h:116`
 pub type PInterMdBackgroundDecisionFunc = unsafe extern "C" fn(
     pEncCtx: *mut sWelsEncCtx,
-    pWelsMd: *mut SWelsMD,
+    pWelsMd: &mut SWelsMD,
     slice: *mut SSlice,
     pCurMb: *mut SMB,
     pMbCache: *mut SMbCache,
@@ -102,7 +102,7 @@ pub type PMdBackgroundInfoUpdateFunc = unsafe extern "C" fn(
 /// `wels_func_ptr_def.h:121`
 pub type PInterMdScrollingPSkipDecisionFunc = unsafe extern "C" fn(
     pEncCtx: *mut sWelsEncCtx,
-    pWelsMd: *mut SWelsMD,
+    pWelsMd: &mut SWelsMD,
     slice: *mut SSlice,
     pCurMb: *mut SMB,
     pMbCache: *mut SMbCache,
@@ -110,12 +110,12 @@ pub type PInterMdScrollingPSkipDecisionFunc = unsafe extern "C" fn(
 
 /// `wels_func_ptr_def.h:123`
 pub type PSetScrollingMv =
-    unsafe extern "C" fn(pVaa: *mut SVAAFrameInfo, pMd: *mut SWelsMD);
+    unsafe extern "C" fn(pVaa: *mut SVAAFrameInfo, pMd: &mut SWelsMD);
 
 /// `wels_func_ptr_def.h:125`
 pub type PInterMdFunc = unsafe extern "C" fn(
     pEncCtx: *mut sWelsEncCtx,
-    pWelsMd: *mut SWelsMD,
+    pWelsMd: &mut SWelsMD,
     slice: *mut SSlice,
     pCurMb: *mut SMB,
     pMbCache: *mut SMbCache,

@@ -150,7 +150,7 @@ pub type pJudgeSkipFun = unsafe extern "C" fn(
     pEncCtx: *mut sWelsEncCtx,
     pCurMb: *mut SMB,
     pMbCache: *mut SMbCache,
-    pWelsMd: *mut SWelsMD,
+    pWelsMd: &mut SWelsMD,
 ) -> bool;
 
 // ============================================================================
@@ -298,7 +298,7 @@ fn LD32_MV(pMv: &SMVUnitXY) -> u32 {
 /// All pointers must be valid; `pEncCtx->pRefPic` must be assigned.
 pub unsafe extern "C" fn WelsMdInterJudgePskip(
     pEncCtx: *mut sWelsEncCtx,
-    pWelsMd: *mut SWelsMD,
+    pWelsMd: &mut SWelsMD,
     pSlice: *mut SSlice,
     pCurMb: *mut SMB,
     pMbCache: *mut SMbCache,
@@ -354,7 +354,7 @@ pub unsafe extern "C" fn WelsMdInterDecidedPskip(
 /// `pfInterFineMd` assigned — `PreprocessSliceCoding` does this for a P slice.
 pub unsafe extern "C" fn WelsMdInterSecondaryModesEnc(
     pEncCtx: *mut sWelsEncCtx,
-    pWelsMd: *mut SWelsMD,
+    pWelsMd: &mut SWelsMD,
     pSlice: *mut SSlice,
     pCurMb: *mut SMB,
     pMbCache: *mut SMbCache,
@@ -408,7 +408,7 @@ pub unsafe extern "C" fn WelsMdInterSecondaryModesEnc(
 /// for this macroblock.
 pub unsafe extern "C" fn WelsMdIntraSecondaryModesEnc(
     pEncCtx: *mut sWelsEncCtx,
-    pWelsMd: *mut SWelsMD,
+    pWelsMd: &mut SWelsMD,
     pCurMb: *mut SMB,
     pMbCache: *mut SMbCache,
 ) {
@@ -518,7 +518,7 @@ unsafe fn VaaBackgroundMbDataUpdate(
 /// All pointers must be valid and non-null.
 pub unsafe extern "C" fn WelsMdBackgroundMbEnc(
     pEncCtx: *mut sWelsEncCtx,
-    pWelsMd: *mut SWelsMD,
+    pWelsMd: &mut SWelsMD,
     pCurMb: *mut SMB,
     pMbCache: *mut SMbCache,
     pSlice: *mut SSlice,
@@ -1227,13 +1227,10 @@ pub(crate) unsafe fn InitMe(
 pub unsafe extern "C" fn WelsMdP16x16(
     pFunc: *mut SWelsFuncPtrList,
     pCurLayer: *mut SDqLayer,
-    pWelsMd: *mut SWelsMD,
+    pWelsMd: &mut SWelsMD,
     pSlice: *mut SSlice,
     pCurMb: *mut SMB,
 ) -> i32 {
-    if pFunc.is_null() || pCurLayer.is_null() || pWelsMd.is_null() || pSlice.is_null() || pCurMb.is_null() {
-        return i32::MAX;
-    }
     let pMbCache = std::ptr::addr_of_mut!((*pSlice).sMbCacheInfo);
     let pMe16x16 = &mut (*pWelsMd).sMe.sMe16x16 as *mut SWelsME;
     let uiNeighborAvail = (*pCurMb).uiNeighborAvail as u32;
@@ -1312,12 +1309,9 @@ pub unsafe extern "C" fn WelsMdP16x16(
 pub unsafe extern "C" fn WelsMdP8x8(
     pFunc: *mut SWelsFuncPtrList,
     pCurDqLayer: *mut SDqLayer,
-    pWelsMd: *mut SWelsMD,
+    pWelsMd: &mut SWelsMD,
     pSlice: *mut SSlice,
 ) -> i32 {
-    if pFunc.is_null() || pCurDqLayer.is_null() || pWelsMd.is_null() || pSlice.is_null() {
-        return i32::MAX;
-    }
     let pMbCache = std::ptr::addr_of_mut!((*pSlice).sMbCacheInfo);
     let iLineSizeEnc = (*pCurDqLayer).iEncStride[0];
     let iLineSizeRef = if !(*pCurDqLayer).pRefPic.is_null() {
@@ -1434,7 +1428,7 @@ pub unsafe extern "C" fn GetRefMb(pEncCtx: *mut sWelsEncCtx, pCurMb: *mut SMB) -
 
 /// Scales base-layer motion vectors by 2x to initialize enhancement-layer candidates.
 pub unsafe extern "C" fn SetMvBaseEnhancelayer(
-    pMd: *mut SWelsMD,
+    pMd: &mut SWelsMD,
     pCurMb: *mut SMB,
     kpRefMb: *const SMB,
 ) {
@@ -1467,7 +1461,7 @@ pub unsafe extern "C" fn SetMvBaseEnhancelayer(
 /// Core spatial enhancement layer mode decision without Inter-Layer Prediction.
 pub unsafe extern "C" fn WelsMdSpatialelInterMbIlfmdNoilp(
     pEncCtx: *mut sWelsEncCtx,
-    pWelsMd: *mut SWelsMD,
+    pWelsMd: &mut SWelsMD,
     pSlice: *mut SSlice,
     pCurMb: *mut SMB,
     kuiRefMbType: Mb_Type,
@@ -1558,7 +1552,7 @@ pub unsafe extern "C" fn WelsMdSpatialelInterMbIlfmdNoilp(
 /// Top-level MD entry point for spatial enhancement layer inter MBs.
 pub unsafe extern "C" fn WelsMdInterMbEnhancelayer(
     pEncCtx: *mut sWelsEncCtx,
-    pMd: *mut SWelsMD,
+    pMd: &mut SWelsMD,
     pSlice: *mut SSlice,
     pCurMb: *mut SMB,
     _pMbCache: *mut SMbCache,
@@ -1609,7 +1603,7 @@ pub unsafe fn IsCostLessEqualSkipCost(
 
 pub unsafe fn CheckChromaCost(
     pEncCtx: *mut sWelsEncCtx,
-    pWelsMd: *mut SWelsMD,
+    pWelsMd: &mut SWelsMD,
     pMbCache: *mut SMbCache,
     iCurMbXy: i32,
 ) -> bool {
@@ -1653,7 +1647,7 @@ pub unsafe fn CheckChromaCost(
 
 pub unsafe extern "C" fn WelsMdInterJudgeBGDPskip(
     pEncCtx: *mut sWelsEncCtx,
-    pWelsMd: *mut SWelsMD,
+    pWelsMd: &mut SWelsMD,
     pSlice: *mut SSlice,
     pCurMb: *mut SMB,
     pMbCache: *mut SMbCache,
@@ -1690,7 +1684,7 @@ pub unsafe extern "C" fn WelsMdInterJudgeBGDPskip(
 
 pub unsafe extern "C" fn WelsMdInterJudgeBGDPskipFalse(
     _pCtx: *mut sWelsEncCtx,
-    _pMd: *mut SWelsMD,
+    _pMd: &mut SWelsMD,
     _pSlice: *mut SSlice,
     _pCurMb: *mut SMB,
     _pMbCache: *mut SMbCache,
@@ -1790,7 +1784,7 @@ pub unsafe extern "C" fn JudgeStaticSkip(
     pEncCtx: *mut sWelsEncCtx,
     pCurMb: *mut SMB,
     pMbCache: *mut SMbCache,
-    pWelsMd: *mut SWelsMD,
+    pWelsMd: &mut SWelsMD,
 ) -> bool {
     let pCurDqLayer = (*pEncCtx).pCurDqLayer;
     let kiMbX = (*pCurMb).iMbX as i32;
@@ -1834,7 +1828,7 @@ pub unsafe extern "C" fn JudgeScrollSkip(
     pEncCtx: *mut sWelsEncCtx,
     pCurMb: *mut SMB,
     pMbCache: *mut SMbCache,
-    pWelsMd: *mut SWelsMD,
+    pWelsMd: &mut SWelsMD,
 ) -> bool {
     let pCurDqLayer = (*pEncCtx).pCurDqLayer;
     let kiMbX = (*pCurMb).iMbX as i32;
@@ -1891,7 +1885,7 @@ pub unsafe extern "C" fn JudgeScrollSkip(
 
 pub unsafe extern "C" fn SvcMdSCDMbEnc(
     pEncCtx: *mut sWelsEncCtx,
-    pWelsMd: *mut SWelsMD,
+    pWelsMd: &mut SWelsMD,
     pCurMb: *mut SMB,
     pMbCache: *mut SMbCache,
     pSlice: *mut SSlice,
@@ -2046,7 +2040,7 @@ pub unsafe extern "C" fn SvcMdSCDMbEnc(
 
 pub unsafe extern "C" fn MdInterSCDPskipProcess(
     pEncCtx: *mut sWelsEncCtx,
-    pWelsMd: *mut SWelsMD,
+    pWelsMd: &mut SWelsMD,
     pSlice: *mut SSlice,
     pCurMb: *mut SMB,
     pMbCache: *mut SMbCache,
@@ -2100,7 +2094,7 @@ pub unsafe extern "C" fn MdInterSCDPskipProcess(
 
 pub unsafe extern "C" fn SetBlockStaticIdcToMd(
     pVaaExt: *mut SVAAFrameInfoExt_t,
-    pWelsMd: *mut SWelsMD,
+    pWelsMd: &mut SWelsMD,
     pCurMb: *mut SMB,
     pDqLayer: *mut SDqLayer,
 ) {
@@ -2125,7 +2119,7 @@ pub unsafe extern "C" fn SetBlockStaticIdcToMd(
 
 pub unsafe extern "C" fn WelsMdInterJudgeSCDPskip(
     pEncCtx: *mut sWelsEncCtx,
-    pWelsMd: *mut SWelsMD,
+    pWelsMd: &mut SWelsMD,
     slice: *mut SSlice,
     pCurMb: *mut SMB,
     pMbCache: *mut SMbCache,
@@ -2145,7 +2139,7 @@ pub unsafe extern "C" fn WelsMdInterJudgeSCDPskip(
 
 pub unsafe extern "C" fn WelsMdInterJudgeSCDPskipFalse(
     _pEncCtx: *mut sWelsEncCtx,
-    _pWelsMd: *mut SWelsMD,
+    _pWelsMd: &mut SWelsMD,
     _slice: *mut SSlice,
     _pCurMb: *mut SMB,
     _pMbCache: *mut SMbCache,
@@ -2182,7 +2176,7 @@ pub fn IsSameMv(sMv0: &SMVUnitXY, sMv1: &SMVUnitXY) -> bool {
 
 pub unsafe fn TryModeMerge(
     pMbCache: *mut SMbCache,
-    pWelsMd: *mut SWelsMD,
+    pWelsMd: &mut SWelsMD,
     pCurMb: *mut SMB,
 ) -> bool {
     let pMe8x8 = (*pWelsMd).sMe.sMe8x8.as_ptr();
@@ -2225,7 +2219,7 @@ pub unsafe fn TryModeMerge(
 
 pub unsafe extern "C" fn WelsMdInterFinePartitionVaaOnScreen(
     pEncCtx: *mut sWelsEncCtx,
-    pWelsMd: *mut SWelsMD,
+    pWelsMd: &mut SWelsMD,
     pSlice: *mut SSlice,
     pCurMb: *mut SMB,
     mut iBestCost: i32,
@@ -2256,7 +2250,7 @@ pub unsafe extern "C" fn WelsMdInterFinePartitionVaaOnScreen(
 // 5. Global Scrolling Motion Vector Dispatch
 // ============================================================================
 
-pub unsafe extern "C" fn SetScrollingMvToMd(pVaa: *mut SVAAFrameInfo, pWelsMd: *mut SWelsMD) {
+pub unsafe extern "C" fn SetScrollingMvToMd(pVaa: *mut SVAAFrameInfo, pWelsMd: &mut SWelsMD) {
     let pVaaExt = pVaa as *mut SVAAFrameInfoExt_t;
     let sTempMv = SMVUnitXY {
         iMvX: (*pVaaExt).sScrollDetectInfo.iScrollMvX as i16,
@@ -2272,7 +2266,7 @@ pub unsafe extern "C" fn SetScrollingMvToMd(pVaa: *mut SVAAFrameInfo, pWelsMd: *
 
 /// Intentional no-op mode decision scrolling MV callback.
 /// Matches `void SetScrollingMvToMdNull (SVAAFrameInfo* pVaa, SWelsMD* pWelsMd)` in `svc_mode_decision.cpp:689`.
-pub unsafe extern "C" fn SetScrollingMvToMdNull(_pVaa: *mut SVAAFrameInfo, _pWelsMd: *mut SWelsMD) {}
+pub unsafe extern "C" fn SetScrollingMvToMdNull(_pVaa: *mut SVAAFrameInfo, _pWelsMd: &mut SWelsMD) {}
 
 #[cfg(test)]
 mod tests {
@@ -2516,8 +2510,13 @@ mod tests {
 
     #[test]
     fn test_svc_mode_decision_noop_callback() {
+        // The MD argument used to be a null `*mut SWelsMD`; it is a `&mut` now, so
+        // the null goes and a real record takes its place. The `pVaa` argument is
+        // still raw (the preprocess family is session F's) and stays null: this
+        // callback is the no-op arm of `PSetScrollingMv` and reads neither.
+        let mut sMd = SWelsMD::default();
         unsafe {
-            SetScrollingMvToMdNull(std::ptr::null_mut(), std::ptr::null_mut());
+            SetScrollingMvToMdNull(std::ptr::null_mut(), &mut sMd);
         }
     }
 }

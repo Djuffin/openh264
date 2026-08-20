@@ -374,7 +374,7 @@ pub unsafe fn WelsMdIntraInit(
 /// caller to have allocated.
 pub unsafe extern "C" fn WelsMdI4x4(
     pEncCtx: *mut sWelsEncCtx,
-    pWelsMd: *mut SWelsMD,
+    pWelsMd: &mut SWelsMD,
     pCurMb: *mut SMB,
     pMbCache: *mut SMbCache,
 ) -> i32 {
@@ -486,7 +486,7 @@ unsafe fn StoreIntra4x4PredModeToMb(pCurMb: *mut SMB, pMbCache: *mut SMbCache) {
 /// Same as [`WelsMdI4x4`].
 pub unsafe extern "C" fn WelsMdI4x4Fast(
     pEncCtx: *mut sWelsEncCtx,
-    pWelsMd: *mut SWelsMD,
+    pWelsMd: &mut SWelsMD,
     pCurMb: *mut SMB,
     pMbCache: *mut SMbCache,
 ) -> i32 {
@@ -737,7 +737,7 @@ pub unsafe extern "C" fn WelsMdIntraChroma(
 /// Same as [`WelsMdI4x4`].
 pub unsafe extern "C" fn WelsMdIntraFinePartition(
     pEncCtx: *mut sWelsEncCtx,
-    pWelsMd: *mut SWelsMD,
+    pWelsMd: &mut SWelsMD,
     pCurMb: *mut SMB,
     pMbCache: *mut SMbCache,
 ) -> i32 {
@@ -758,7 +758,7 @@ pub unsafe extern "C" fn WelsMdIntraFinePartition(
 /// Same as [`WelsMdI4x4Fast`].
 pub unsafe extern "C" fn WelsMdIntraFinePartitionVaa(
     pEncCtx: *mut sWelsEncCtx,
-    pWelsMd: *mut SWelsMD,
+    pWelsMd: &mut SWelsMD,
     pCurMb: *mut SMB,
     pMbCache: *mut SMbCache,
 ) -> i32 {
@@ -783,7 +783,7 @@ pub unsafe extern "C" fn WelsMdIntraFinePartitionVaa(
 /// [`WelsMdIntraInit`] must have run for this macroblock.
 pub unsafe fn WelsMdIntraMb(
     pEncCtx: *mut sWelsEncCtx,
-    pWelsMd: *mut SWelsMD,
+    pWelsMd: &mut SWelsMD,
     pCurMb: *mut SMB,
     pMbCache: *mut SMbCache,
 ) {
@@ -927,7 +927,7 @@ pub unsafe fn WelsMdInterInit(
 pub unsafe extern "C" fn WelsMdP16x8(
     pFunc: *mut SWelsFuncPtrList,
     pCurDqLayer: *mut SDqLayer,
-    pWelsMd: *mut SWelsMD,
+    pWelsMd: &mut SWelsMD,
     pSlice: *mut SSlice,
 ) -> i32 {
     let pMbCache = std::ptr::addr_of_mut!((*pSlice).sMbCacheInfo);
@@ -979,7 +979,7 @@ pub unsafe extern "C" fn WelsMdP16x8(
 pub unsafe extern "C" fn WelsMdP8x16(
     pFunc: *mut SWelsFuncPtrList,
     pCurLayer: *mut SDqLayer,
-    pWelsMd: *mut SWelsMD,
+    pWelsMd: &mut SWelsMD,
     pSlice: *mut SSlice,
 ) -> i32 {
     let pMbCache = std::ptr::addr_of_mut!((*pSlice).sMbCacheInfo);
@@ -1029,7 +1029,7 @@ pub unsafe extern "C" fn WelsMdP8x16(
 pub unsafe extern "C" fn WelsMdP4x4(
     pFunc: *mut SWelsFuncPtrList,
     pCurDqLayer: *mut SDqLayer,
-    pWelsMd: *mut SWelsMD,
+    pWelsMd: &mut SWelsMD,
     pSlice: *mut SSlice,
     ki8x8Idx: i32,
 ) -> i32 {
@@ -1097,7 +1097,7 @@ pub unsafe extern "C" fn WelsMdP4x4(
 pub unsafe extern "C" fn WelsMdP8x4(
     pFunc: *mut SWelsFuncPtrList,
     pCurDqLayer: *mut SDqLayer,
-    pWelsMd: *mut SWelsMD,
+    pWelsMd: &mut SWelsMD,
     pSlice: *mut SSlice,
     ki8x8Idx: i32,
 ) -> i32 {
@@ -1165,7 +1165,7 @@ pub unsafe extern "C" fn WelsMdP8x4(
 pub unsafe extern "C" fn WelsMdP4x8(
     pFunc: *mut SWelsFuncPtrList,
     pCurDqLayer: *mut SDqLayer,
-    pWelsMd: *mut SWelsMD,
+    pWelsMd: &mut SWelsMD,
     pSlice: *mut SSlice,
     ki8x8Idx: i32,
 ) -> i32 {
@@ -1232,7 +1232,7 @@ pub unsafe extern "C" fn WelsMdP4x8(
 /// All pointers must be valid.
 pub unsafe extern "C" fn WelsMdInterFinePartition(
     pEncCtx: *mut sWelsEncCtx,
-    pWelsMd: *mut SWelsMD,
+    pWelsMd: &mut SWelsMD,
     pSlice: *mut SSlice,
     pCurMb: *mut SMB,
     iBestCost: i32,
@@ -1270,7 +1270,7 @@ pub unsafe extern "C" fn WelsMdInterFinePartition(
 /// populated and `pfGetMbSignFromInterVaa` assigned.
 pub unsafe extern "C" fn WelsMdInterFinePartitionVaa(
     pEncCtx: *mut sWelsEncCtx,
-    pWelsMd: *mut SWelsMD,
+    pWelsMd: &mut SWelsMD,
     pSlice: *mut SSlice,
     pCurMb: *mut SMB,
     iBestCostIn: i32,
@@ -1372,7 +1372,7 @@ pub unsafe extern "C" fn WelsMdInterFinePartitionVaa(
 /// `pfDctFourT4` and `pfUpdateMbMv` must be assigned.
 pub unsafe fn WelsMdPSkipEnc(
     pEncCtx: *mut sWelsEncCtx,
-    pWelsMd: *mut SWelsMD,
+    pWelsMd: &mut SWelsMD,
     pCurMb: *mut SMB,
     pMbCache: *mut SMbCache,
 ) -> bool {
@@ -1519,7 +1519,7 @@ pub unsafe fn WelsMdPSkipEnc(
 #[inline]
 unsafe fn AcceptPskip(
     pEncCtx: *mut sWelsEncCtx,
-    pWelsMd: *mut SWelsMD,
+    pWelsMd: &mut SWelsMD,
     pCurMb: *mut SMB,
     pMbCache: *mut SMbCache,
     sMvp: &SMVUnitXY,
@@ -1563,7 +1563,7 @@ unsafe fn AcceptPskip(
 /// must be assigned.
 pub unsafe fn WelsMdInterMbRefinement(
     pEncCtx: *mut sWelsEncCtx,
-    pWelsMd: *mut SWelsMD,
+    pWelsMd: &mut SWelsMD,
     pCurMb: *mut SMB,
     pMbCache: *mut SMbCache,
 ) {
@@ -2056,7 +2056,7 @@ pub unsafe fn WelsMdInterMbRefinement(
 /// All four pointers must be valid and `pfIntraFineMd` assigned.
 pub unsafe extern "C" fn WelsMdFirstIntraMode(
     pEncCtx: *mut sWelsEncCtx,
-    pWelsMd: *mut SWelsMD,
+    pWelsMd: &mut SWelsMD,
     pCurMb: *mut SMB,
     pMbCache: *mut SMbCache,
 ) -> bool {
@@ -2105,7 +2105,7 @@ pub unsafe extern "C" fn WelsMdFirstIntraMode(
 /// `pfSCDPSkipDecision` must be assigned (`WelsInitBGDFunc` / `WelsInitSCDPskipFunc`).
 pub unsafe extern "C" fn WelsMdInterMb(
     pEncCtx: *mut sWelsEncCtx,
-    pWelsMd: *mut SWelsMD,
+    pWelsMd: &mut SWelsMD,
     pSlice: *mut SSlice,
     pCurMb: *mut SMB,
     _pUnused: *mut SMbCache,
@@ -2275,7 +2275,7 @@ pub unsafe fn WelsMdInterSaveSadAndRefMbType(
     pRefMbtypeList: *mut u32,
     pMbCache: *mut SMbCache,
     pCurMb: *const SMB,
-    pMd: *const SWelsMD,
+    pMd: &SWelsMD,
 ) {
     let kmtCurMbtype = (*pCurMb).uiMbType;
 
