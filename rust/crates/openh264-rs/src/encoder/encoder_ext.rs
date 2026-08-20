@@ -26,7 +26,8 @@ use crate::api::codec_api::{ELevelIdc, SSpatialLayerConfig};
 use crate::common::memory_align::CMemoryAlign;
 use crate::decoder::nalu::g_ksLevelLimits;
 use crate::encoder::encoder_context::{
-    ctx_mb_index_x, ctx_mb_index_y, ctx_stride_enc_block_offset,
+    ctx_mb_index_x, ctx_mb_index_y, ctx_pps_array, ctx_sps_array, ctx_stride_enc_block_offset,
+    ctx_subset_array,
     sWelsEncCtx, SDqIdc, SLogContext, SRefList, SStrideTables, BASE_DEPENDENCY_ID,
 };
 use crate::encoder::md::INTRA_4x4_MODE_NUM;
@@ -845,43 +846,29 @@ pub unsafe fn InitDqLayers(
     }
     let kiNeededSpsNum = ParasetStrategy(*ppCtx).GetNeededSpsNum() as i32;
     let kiNeededSubsetSpsNum = ParasetStrategy(*ppCtx).GetNeededSubsetSpsNum() as i32;
-    (**ppCtx).pSpsArray = (*pMa).WelsMallocz(
-        (kiNeededSpsNum as usize * std::mem::size_of::<crate::encoder::param_svc::SWelsSPS>())
-            as u32,
-        tag!("pSpsArray"),
-    ) as *mut crate::encoder::param_svc::SWelsSPS;
-    if (**ppCtx).pSpsArray.is_null() {
-        return 1;
-    }
-    if kiNeededSubsetSpsNum > 0 {
-        (**ppCtx).pSubsetArray = (*pMa).WelsMallocz(
-            (kiNeededSubsetSpsNum as usize
-                * std::mem::size_of::<crate::encoder::param_svc::SSubsetSps>()) as u32,
-            tag!("pSubsetArray"),
-        ) as *mut crate::encoder::param_svc::SSubsetSps;
-        if (**ppCtx).pSubsetArray.is_null() {
-            return 1;
-        }
-    } else {
-        (**ppCtx).pSubsetArray = null_mut();
-    }
+    // **T6.H2.** Three `WelsMallocz` calls and their three null checks were here.
+    // The lengths are the strategy's own numbers, unchanged; the entries are the
+    // zeros `WelsMallocz` left, spelled as `ZERO` rather than `Default` because
+    // `SWelsSPS::default()` seeds `uiProfileIdc = PRO_BASELINE` and three VUI
+    // `*_UNDEF`s, and none of those is what a memset writes (F56: zeros are ruled).
+    (**ppCtx).pSpsArray = vec![crate::encoder::param_svc::SWelsSPS::ZERO; kiNeededSpsNum as usize];
+    // The `else` arm was `pSubsetArray = null_mut()` — no allocation at all when the
+    // configuration needs no subset SPS. An empty `Vec` is that, and `ctx_subset_array`
+    // answers the same null for it.
+    (**ppCtx).pSubsetArray = vec![
+        crate::encoder::param_svc::SSubsetSps::ZERO;
+        kiNeededSubsetSpsNum.max(0) as usize
+    ];
 
     // PPS
     let kiNeededPpsNum = ParasetStrategy(*ppCtx).GetNeededPpsNum() as i32;
-    (**ppCtx).pPPSArray = (*pMa).WelsMallocz(
-        (kiNeededPpsNum as usize * std::mem::size_of::<crate::encoder::param_svc::SWelsPPS>())
-            as u32,
-        tag!("pPPSArray"),
-    ) as *mut crate::encoder::param_svc::SWelsPPS;
-    if (**ppCtx).pPPSArray.is_null() {
-        return 1;
-    }
+    (**ppCtx).pPPSArray = vec![crate::encoder::param_svc::SWelsPPS::ZERO; kiNeededPpsNum as usize];
 
     ParasetStrategy(*ppCtx).LoadPrevious(
         pExistingParasetList,
-        (**ppCtx).pSpsArray,
-        (**ppCtx).pSubsetArray,
-        (**ppCtx).pPPSArray,
+        ctx_sps_array(*ppCtx),
+        ctx_subset_array(*ppCtx),
+        ctx_pps_array(*ppCtx),
     );
 
     (**ppCtx).pDqIdcMap = (*pMa).WelsMallocz(
@@ -924,9 +911,9 @@ pub unsafe fn InitDqLayers(
         // lines 945-946 below read and which this block did *not* previously
         // reassign.
         if !bUseSubsetSps {
-            pSps = (**ppCtx).pSpsArray.add(iSpsId as usize);
+            pSps = ctx_sps_array(*ppCtx).add(iSpsId as usize);
         } else {
-            pSubsetSps = (**ppCtx).pSubsetArray.add(iSpsId as usize);
+            pSubsetSps = ctx_subset_array(*ppCtx).add(iSpsId as usize);
             pSps = std::ptr::addr_of_mut!((*pSubsetSps).pSps);
         }
 
@@ -945,7 +932,7 @@ pub unsafe fn InitDqLayers(
             bUseSubsetSps,
             (*pParam).iEntropyCodingModeFlag != 0,
         );
-        let pPps = (**ppCtx).pPPSArray.add(iPpsId as usize);
+        let pPps = ctx_pps_array(*ppCtx).add(iPpsId as usize);
 
         // FMO is not used in SVC coding so far; come back if FMO is needed
         iResult = InitSlicePEncCtx(
@@ -1666,24 +1653,29 @@ mod tests {
         unsafe {
             let pCtx = build_gate_context();
 
-            assert!(!(*pCtx).pSpsArray.is_null(), "pSpsArray still null");
-            assert!(!(*pCtx).pPPSArray.is_null(), "pPPSArray still null");
+            assert!(!(*pCtx).pSpsArray.is_empty(), "pSpsArray still unallocated");
+            assert!(!(*pCtx).pPPSArray.is_empty(), "pPPSArray still unallocated");
+            // The configuration needs no subset SPS, and the C++ allocated nothing
+            // at all for it — an empty `Vec`, which `ctx_subset_array` reads as the
+            // null the raw field held.
+            assert!((*pCtx).pSubsetArray.is_empty(), "pSubsetArray was not needed");
+            assert!(ctx_subset_array(pCtx).is_null());
             assert_eq!((*pCtx).iSpsNum, 1);
             assert_eq!((*pCtx).iPpsNum, 1);
             assert_eq!((*pCtx).iSubsetSpsNum, 0);
-            assert_eq!(ctx_sps(pCtx), (*pCtx).pSpsArray);
-            assert_eq!(ctx_pps(pCtx), (*pCtx).pPPSArray);
+            assert_eq!(ctx_sps(pCtx), ctx_sps_array(pCtx));
+            assert_eq!(ctx_pps(pCtx), ctx_pps_array(pCtx));
 
             // The SPS the strategy generated must be the one Phase 3 proved
             // byte-exact against the C++ reference for this configuration.
-            let sps = &*(*pCtx).pSpsArray;
+            let sps = &*ctx_sps_array(pCtx);
             assert_eq!(sps.iMbWidth, 10);
             assert_eq!(sps.iMbHeight, 6);
             assert_eq!(sps.uiLog2MaxFrameNum, 15);
             assert_eq!(sps.uiPocType, 2);
             assert_eq!(sps.iLevelIdc, 13);
 
-            let pps = &*(*pCtx).pPPSArray;
+            let pps = &*ctx_pps_array(pCtx);
             assert_eq!(pps.iPicInitQp, 26);
             assert!(pps.bDeblockingFilterControlPresentFlag);
 
@@ -1796,18 +1788,8 @@ pub unsafe fn WelsUninitEncoderExt(ppCtx: *mut *mut sWelsEncCtx) {
                 *pBuf = null_mut();
             }
         }
-        if !(*pCtx).pSpsArray.is_null() {
-            (*pMa).WelsFree((*pCtx).pSpsArray as *mut c_void, tag!("pSpsArray"));
-            (*pCtx).pSpsArray = null_mut();
-        }
-        if !(*pCtx).pPPSArray.is_null() {
-            (*pMa).WelsFree((*pCtx).pPPSArray as *mut c_void, tag!("pPPSArray"));
-            (*pCtx).pPPSArray = null_mut();
-        }
-        if !(*pCtx).pSubsetArray.is_null() {
-            (*pMa).WelsFree((*pCtx).pSubsetArray as *mut c_void, tag!("pSubsetArray"));
-            (*pCtx).pSubsetArray = null_mut();
-        }
+        // **T6.H2**: three `WelsFree`s stood here, one per parameter-set array. All
+        // three are `Vec`s the context owns, so all three are its own drop.
         // The five per-macroblock arrays freed here in encoder_ext.cpp:1932-1961 are
         // inline in `SMB` since T6.C1 and go with the `SMB` list below.
         // `ppMbListD` is gone: each layer owns its own `MbArray<SMB>` (T6.D5).
@@ -2489,7 +2471,7 @@ pub unsafe fn WriteSavcParaset(
     // `pCtx->pFuncList`. T4b.2a.
     if let Some(pStrategy) = (*(*pCtx).pFuncList).pParametersetStrategy.as_mut() {
         pStrategy.Update(
-            (*(*pCtx).pSpsArray.add(iIdx as usize)).uiSpsId,
+            (*ctx_sps_array(pCtx).add(iIdx as usize)).uiSpsId,
             PARA_SET_TYPE_AVCSPS as i32,
         );
     }
@@ -2523,7 +2505,7 @@ pub unsafe fn WriteSavcParaset(
     iNalSize = 0;
     if let Some(pStrategy) = (*(*pCtx).pFuncList).pParametersetStrategy.as_mut() {
         pStrategy.Update(
-            (*(*pCtx).pPPSArray.add(iIdx as usize)).iPpsId,
+            (*ctx_pps_array(pCtx).add(iIdx as usize)).iPpsId,
             PARA_SET_TYPE_PPS as i32,
         );
     }

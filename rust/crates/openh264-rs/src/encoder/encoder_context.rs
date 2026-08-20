@@ -608,6 +608,59 @@ pub unsafe fn ctx_mb_index_x(pCtx: *mut sWelsEncCtx, kiDid: usize) -> *mut i16 {
     }
 }
 
+/// The **root** of `pCtx->pSpsArray` — T6.H2, and S40's spelling again.
+///
+/// The three parameter-set arrays were `WelsMallocz`'d blocks that every consumer
+/// indexed with `.add(id)`; they are `Vec`s now and this answers the same address
+/// the block's head had, so `.add(id)` downstream is unchanged. `Vec::as_mut_ptr`
+/// reads the pointer out of the header rather than forming a `&mut [T]` over the
+/// array, so a caller may hold an entry cursor across a second call — which
+/// `LoadPrevious` does with all three at once, and `WelsInitCurrentLayer` does per
+/// layer.
+///
+/// **Empty answers null**, which is what `pSubsetArray` held whenever the
+/// configuration needed no subset SPS, and what all three held before
+/// `RequestMemorySvc` ran. Every `is_null()` guard downstream therefore still asks
+/// the question it was written to ask — `Vec::as_mut_ptr` on an empty `Vec` answers
+/// a dangling non-null address, so this branch is load-bearing, not defensive.
+///
+/// # Safety
+/// `pCtx` must point to a live encoder context.
+#[inline]
+pub unsafe fn ctx_sps_array(pCtx: *mut sWelsEncCtx) -> *mut SWelsSPS {
+    let arr: &mut Vec<SWelsSPS> = &mut (*pCtx).pSpsArray;
+    if arr.is_empty() {
+        return std::ptr::null_mut();
+    }
+    arr.as_mut_ptr()
+}
+
+/// The **root** of `pCtx->pSubsetArray` — see [`ctx_sps_array`].
+///
+/// # Safety
+/// As [`ctx_sps_array`].
+#[inline]
+pub unsafe fn ctx_subset_array(pCtx: *mut sWelsEncCtx) -> *mut SSubsetSps {
+    let arr: &mut Vec<SSubsetSps> = &mut (*pCtx).pSubsetArray;
+    if arr.is_empty() {
+        return std::ptr::null_mut();
+    }
+    arr.as_mut_ptr()
+}
+
+/// The **root** of `pCtx->pPPSArray` — see [`ctx_sps_array`].
+///
+/// # Safety
+/// As [`ctx_sps_array`].
+#[inline]
+pub unsafe fn ctx_pps_array(pCtx: *mut sWelsEncCtx) -> *mut SWelsPPS {
+    let arr: &mut Vec<SWelsPPS> = &mut (*pCtx).pPPSArray;
+    if arr.is_empty() {
+        return std::ptr::null_mut();
+    }
+    arr.as_mut_ptr()
+}
+
 /// [`SStrideTables::MbIndexY`] reached through the context.
 ///
 /// # Safety
@@ -699,17 +752,27 @@ pub struct sWelsEncCtx {
     pub iGlobalQp: i32,
     pub pVaa: *mut SVAAFrameInfo,
     pub pVpp: *mut crate::encoder::wels_preprocess::CWelsPreProcess,
-    pub pSpsArray: *mut SWelsSPS,
+    /// **T6.H2 — owned.** `RequestMemorySvc` sized this from the strategy's
+    /// `GetNeededSpsNum` and `WelsMallocz`'d it; the length is the same number and
+    /// the entries are the same zeros. Reach its root with [`ctx_sps_array`]; the
+    /// **active** entry is [`iSps`](Self::iSps) below.
+    pub pSpsArray: Vec<SWelsSPS>,
     /// The **active** SPS, as its position in `pSpsArray` — T6.G3. It was a pointer
     /// into that array, aimed at the head by `WelsInitEncoderExt` and never re-aimed,
     /// which is what `Some(SpsId(0))` says without a second address to keep true.
     /// Resolve it with [`ctx_sps`](crate::encoder::svc_encode_slice::ctx_sps).
     pub iSps: Option<SpsId>,
-    pub pPPSArray: *mut SWelsPPS,
+    /// **T6.H2 — owned**; see [`pSpsArray`](Self::pSpsArray). Root: [`ctx_pps_array`].
+    pub pPPSArray: Vec<SWelsPPS>,
     /// The **active** PPS, as its position in `pPPSArray` — see [`iSps`](Self::iSps).
     /// Resolve it with [`ctx_pps`](crate::encoder::svc_encode_slice::ctx_pps).
     pub iPps: Option<PpsId>,
-    pub pSubsetArray: *mut SSubsetSps,
+    /// **T6.H2 — owned**; see [`pSpsArray`](Self::pSpsArray). Root: [`ctx_subset_array`].
+    ///
+    /// **Empty is the null the raw pointer held**: `RequestMemorySvc` allocated
+    /// nothing at all when `GetNeededSubsetSpsNum()` answered 0 (simulcast AVC, and
+    /// every single-layer configuration), and every consumer tests for it.
+    pub pSubsetArray: Vec<SSubsetSps>,
     // **`pSubsetSps` stood here and is deleted, not converted** (T6.G3). The C++
     // declares it (`encoder_context.h`) and this port transcribed it; neither ever
     // read it, and neither ever wrote it. `WelsInitCurrentLayer` aims
@@ -870,11 +933,11 @@ impl sWelsEncCtx {
             // ones are *aliases into them* that `WelsInitEncoderExt` aims at the
             // heads — step 3 of this session makes them ids. The three counts are
             // `InitDqLayers`'s, and zero is the honest starting length.
-            pSpsArray: std::ptr::null_mut(),
+            pSpsArray: Vec::new(),
             iSps: None,
-            pPPSArray: std::ptr::null_mut(),
+            pPPSArray: Vec::new(),
             iPps: None,
-            pSubsetArray: std::ptr::null_mut(),
+            pSubsetArray: Vec::new(),
             iSpsNum: 0,
             iSubsetSpsNum: 0,
             iPpsNum: 0,
@@ -1616,12 +1679,48 @@ mod tests {
     /// **A field added to this struct as an `Option` belongs on the `BY_VALUE` list**,
     /// and the test will say so under Miri if it is not — which is how each of these
     /// four rounds was found.
+    ///
+    /// # T6.H2: the shell stopped being a value, and the test grew a third tier
+    ///
+    /// Session H makes members of this struct **own** their memory, and the first
+    /// `Vec` field ends the sentence "`new()` reproduces the memset image" as
+    /// literally as it was written — because the memset image of a `Vec` is a null
+    /// `Unique`, which is **not a `Vec`**. `mem::zeroed::<sWelsEncCtx>()` was itself
+    /// undefined behaviour the moment `pSpsArray` changed type; it kept compiling and
+    /// kept passing, which is exactly the failure mode this test exists to catch, one
+    /// level up again. Measured, not argued — the old line under Miri reads:
+    ///
+    /// ```text
+    /// error: Undefined Behavior: constructing invalid value of type sWelsEncCtx:
+    ///   at .pSpsArray.buf.inner.ptr.pointer.pointer, encountered 0,
+    ///   but expected something greater or equal to 1
+    /// ```
+    ///
+    /// So the shell is held as **raw bytes** now — `MaybeUninit::zeroed`, never
+    /// `assume_init`ed — and there are three tiers:
+    ///
+    /// * **tier 1**, byte for byte: every field whose bytes are fully defined in both.
+    /// * **tier 2**, by value: the F64 fields, where the *shell* value is recovered
+    ///   by `ptr::read` out of the zero image (sound precisely because their all-zero
+    ///   bit pattern **is** a value of their type — an `Option`'s `None`, a zeroed
+    ///   POD) and only `new()`'s undefined bytes are the problem.
+    /// * **tier 3**, `OWNED`: the containers, where the zero image is not a value at
+    ///   all, so there is nothing to recover and nothing to compare. What is asserted
+    ///   is that `new()` builds the **empty** container — which is what the null the
+    ///   raw pointer held meant, and what every consumer's `is_null()` still reads
+    ///   through the root accessors.
+    ///
+    /// Tier 3 is the one that shrinks this test's reach, so it is named and counted
+    /// in the output rather than left to be inferred from what is missing.
     #[test]
     fn ctx_new_reproduces_the_zeroed_shell() {
         use std::mem::{offset_of, size_of, size_of_val};
 
         let built = Box::new(sWelsEncCtx::new());
-        let shell: Box<sWelsEncCtx> = Box::new(unsafe { std::mem::zeroed() });
+        // The memset image, as bytes. **Not** a zeroed *value* of the type: see the
+        // header — three fields have no valid all-zero value, so materialising one
+        // would be UB before the first comparison ran.
+        let shell = Box::new(std::mem::MaybeUninit::<sWelsEncCtx>::zeroed());
 
         // (name, offset, size) for every field, taken off a real instance so the
         // sizes are the compiler's and not a transcription.
@@ -1651,6 +1750,30 @@ mod tests {
         uiLastTimestamp, pDynamicBsBuffer,
         ];
         assert_eq!(extents.len(), 69, "a field was added or removed without updating this list");
+
+        let b = shell.as_ptr().cast::<u8>();
+
+        // One field of the memset image, read back as a value. Sound only for fields
+        // whose all-zero bit pattern is a value of their type, which is every field
+        // below and no field on `OWNED`.
+        macro_rules! shell_field {
+            ($f:ident) => {
+                // SAFETY: `b` is `size_of::<sWelsEncCtx>()` zero bytes with the
+                // struct's alignment, and the read is inside `$f`'s extent.
+                unsafe { std::ptr::read(b.add(offset_of!(sWelsEncCtx, $f)).cast()) }
+            };
+        }
+
+        // ---- tier 3: the owned containers -------------------------------------
+        // The zeroed shell has no image of these. `RequestMemorySvc` used to
+        // `WelsMallocz` each of them and `FreeMemorySvc` to free it; `new()` builds
+        // the empty container, which is the null the raw pointer held, and which
+        // `ctx_sps_array` and its siblings answer as null so that every downstream
+        // `is_null()` guard still asks its question.
+        const OWNED: [&str; 3] = ["pSpsArray", "pSubsetArray", "pPPSArray"];
+        assert!(built.pSpsArray.is_empty(), "new(): no SPS array is allocated yet");
+        assert!(built.pSubsetArray.is_empty(), "new(): no subset SPS array is allocated yet");
+        assert!(built.pPPSArray.is_empty(), "new(): no PPS array is allocated yet");
 
         // ---- tier 2: the F64 fields, excluded by name and asserted by value ----
         const BY_VALUE: [&str; 10] = [
@@ -1682,32 +1805,76 @@ mod tests {
                 && (s.iLastStatisticsBytes, s.iLastStatisticsFrameCount) == (0, 0)
         };
 
-        for (which, c) in [("new()", &built), ("shell", &shell)] {
-            assert!(c.pEncPic.is_none(), "{which}: no source picture is bound");
-            assert!(c.pDecPic.is_none(), "{which}: nothing is being reconstructed into");
-            assert!(c.pRefPic.is_none(), "{which}: no reference picture is bound");
-            assert!(c.pRefList0.iter().all(|h| h.is_none()), "{which}: list 0 is empty");
-            assert!(
-                c.sSpatialIndexMap.iter().all(|e| e.pSrc.is_none() && e.iDid == 0),
-                "{which}: the spatial index map holds no pictures"
-            );
-            assert!(c.iCurDqLayer.is_none(), "{which}: no layer is current");
-            assert!(c.iSps.is_none(), "{which}: no SPS is active");
-            assert!(c.iPps.is_none(), "{which}: no PPS is active");
-            assert!(paraset_is_zero(&c.sPSOVector), "{which}: no parameter-set id handed out");
-            assert!(
-                c.sEncoderStatistics.iter().all(stats_are_zero),
-                "{which}: nothing has been encoded"
-            );
+        // The same ten fields from both images: `new()`'s by field access, the
+        // shell's by reading its zero bytes back as a value.
+        let pairs: [(&str, bool, bool); 10] = [
+            ("pEncPic", built.pEncPic.is_none(), {
+                let v: Option<SrcPicId> = shell_field!(pEncPic);
+                v.is_none()
+            }),
+            ("pDecPic", built.pDecPic.is_none(), {
+                let v: Option<RecPicId> = shell_field!(pDecPic);
+                v.is_none()
+            }),
+            ("pRefPic", built.pRefPic.is_none(), {
+                let v: Option<RecPicId> = shell_field!(pRefPic);
+                v.is_none()
+            }),
+            ("pRefList0", built.pRefList0.iter().all(|h| h.is_none()), {
+                let v: [Option<RecPicId>; 16] = shell_field!(pRefList0);
+                v.iter().all(|h| h.is_none())
+            }),
+            (
+                "sSpatialIndexMap",
+                built.sSpatialIndexMap.iter().all(|e| e.pSrc.is_none() && e.iDid == 0),
+                {
+                    let v: [SSpatialPicIndex; MAX_DEPENDENCY_LAYER] =
+                        shell_field!(sSpatialIndexMap);
+                    v.iter().all(|e| e.pSrc.is_none() && e.iDid == 0)
+                },
+            ),
+            ("iCurDqLayer", built.iCurDqLayer.is_none(), {
+                let v: Option<crate::encoder::svc_encode_slice::LayerIdx> =
+                    shell_field!(iCurDqLayer);
+                v.is_none()
+            }),
+            ("iSps", built.iSps.is_none(), {
+                let v: Option<SpsId> = shell_field!(iSps);
+                v.is_none()
+            }),
+            ("iPps", built.iPps.is_none(), {
+                let v: Option<PpsId> = shell_field!(iPps);
+                v.is_none()
+            }),
+            ("sPSOVector", paraset_is_zero(&built.sPSOVector), {
+                let v: SParaSetOffset = shell_field!(sPSOVector);
+                paraset_is_zero(&v)
+            }),
+            (
+                "sEncoderStatistics",
+                built.sEncoderStatistics.iter().all(stats_are_zero),
+                {
+                    let v: [crate::encoder::wels_encoder_ext::TagVideoEncoderStatistics;
+                        MAX_DEPENDENCY_LAYER] = shell_field!(sEncoderStatistics);
+                    v.iter().all(stats_are_zero)
+                },
+            ),
+        ];
+        for (name, in_new, in_shell) in pairs {
+            assert!(in_new, "new(): {name} is not the value the memset image holds");
+            assert!(in_shell, "shell: {name} is not what this test claims it is");
         }
 
         let a = (&*built as *const sWelsEncCtx).cast::<u8>();
-        let b = (&*shell as *const sWelsEncCtx).cast::<u8>();
 
         // ---- tier 1: everything else, byte for byte, attributed by name -------
-        let (mut compared, mut excluded) = (0usize, 0usize);
+        let (mut compared, mut excluded, mut owned) = (0usize, 0usize, 0usize);
         let mut diffs: Vec<String> = Vec::new();
         for (name, off, len) in &extents {
+            if OWNED.contains(name) {
+                owned += len;
+                continue;
+            }
             if BY_VALUE.contains(name) {
                 excluded += len;
                 continue;
@@ -1740,14 +1907,16 @@ mod tests {
         // reported rather than asserted at a number, because both move whenever a
         // field's width does — and every step after this one moves a field's width.
         let total = size_of::<sWelsEncCtx>();
-        assert!(compared > 0 && compared + excluded <= total);
+        assert!(compared > 0 && compared + excluded + owned <= total);
         println!(
             "ctx_new_reproduces_the_zeroed_shell: {compared}/{total} bytes compared byte-wise \
-             across {} fields, {excluded} in the {} F64 fields (compared by value), {} of \
-             inter-field repr(C) padding",
-            extents.len() - BY_VALUE.len(),
+             across {} fields, {excluded} in the {} F64 fields (compared by value), {owned} in \
+             the {} owned fields (no zero image to compare against), {} of inter-field repr(C) \
+             padding",
+            extents.len() - BY_VALUE.len() - OWNED.len(),
             BY_VALUE.len(),
-            total - compared - excluded
+            OWNED.len(),
+            total - compared - excluded - owned
         );
     }
 
@@ -1769,8 +1938,7 @@ mod tests {
         // T6.G3: the context names its SPS by position, so the test stands up the
         // one-entry array the position indexes into — `RequestMemorySvc`'s job on the
         // live path. `sps` outlives `ctx` in this scope.
-        let mut sps_array = [sps];
-        ctx.pSpsArray = sps_array.as_mut_ptr();
+        ctx.pSpsArray = vec![sps];
         ctx.iSpsNum = 1;
         ctx.iSps = Some(SpsId(0));
         ctx.eLastNalPriority[0] = EWelsNalRefIdc::NRI_PRI_HIGH;

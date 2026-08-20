@@ -59,6 +59,7 @@ use crate::{
 // ============================================================================
 
 pub use crate::encoder::encoder_context::EWelsSliceType;
+use crate::encoder::encoder_context::{ctx_pps_array, ctx_sps_array, ctx_subset_array};
 
 pub const P_SLICE: i32 = 0;
 pub const B_SLICE: i32 = 1;
@@ -701,18 +702,18 @@ pub unsafe fn set_current_layer(pCtx: *mut sWelsEncCtx, kIdx: Option<LayerIdx>) 
 /// # Safety
 /// `pCtx` must point to a live encoder context and `pCurLayer` to one of its layers.
 #[inline]
-pub unsafe fn layer_sps(pCtx: *const sWelsEncCtx, pCurLayer: *const SDqLayer) -> *mut SWelsSPS {
+pub unsafe fn layer_sps(pCtx: *mut sWelsEncCtx, pCurLayer: *const SDqLayer) -> *mut SWelsSPS {
     match (*pCurLayer).sLayerInfo.eSps {
         None => std::ptr::null_mut(),
         Some(LayerSps::Avc(id)) => {
-            let arr = (*pCtx).pSpsArray;
+            let arr = ctx_sps_array(pCtx);
             if arr.is_null() {
                 return std::ptr::null_mut();
             }
             arr.add(id.get())
         }
         Some(LayerSps::Subset(id)) => {
-            let arr = (*pCtx).pSubsetArray;
+            let arr = ctx_subset_array(pCtx);
             if arr.is_null() {
                 return std::ptr::null_mut();
             }
@@ -730,12 +731,12 @@ pub unsafe fn layer_sps(pCtx: *const sWelsEncCtx, pCurLayer: *const SDqLayer) ->
 /// As [`layer_sps`].
 #[inline]
 pub unsafe fn layer_subset_sps(
-    pCtx: *const sWelsEncCtx,
+    pCtx: *mut sWelsEncCtx,
     pCurLayer: *const SDqLayer,
 ) -> *mut SSubsetSps {
     match (*pCurLayer).sLayerInfo.eSps {
         Some(LayerSps::Subset(id)) => {
-            let arr = (*pCtx).pSubsetArray;
+            let arr = ctx_subset_array(pCtx);
             if arr.is_null() {
                 return std::ptr::null_mut();
             }
@@ -751,11 +752,11 @@ pub unsafe fn layer_subset_sps(
 /// # Safety
 /// As [`layer_sps`].
 #[inline]
-pub unsafe fn layer_pps(pCtx: *const sWelsEncCtx, pCurLayer: *const SDqLayer) -> *mut SWelsPPS {
+pub unsafe fn layer_pps(pCtx: *mut sWelsEncCtx, pCurLayer: *const SDqLayer) -> *mut SWelsPPS {
     let Some(id) = (*pCurLayer).sLayerInfo.iPps else {
         return std::ptr::null_mut();
     };
-    let arr = (*pCtx).pPPSArray;
+    let arr = ctx_pps_array(pCtx);
     if arr.is_null() {
         return std::ptr::null_mut();
     }
@@ -773,11 +774,11 @@ pub unsafe fn layer_pps(pCtx: *const sWelsEncCtx, pCurLayer: *const SDqLayer) ->
 /// # Safety
 /// `pCtx` must point to a live encoder context.
 #[inline]
-pub unsafe fn ctx_sps(pCtx: *const sWelsEncCtx) -> *mut SWelsSPS {
+pub unsafe fn ctx_sps(pCtx: *mut sWelsEncCtx) -> *mut SWelsSPS {
     let Some(id) = (*pCtx).iSps else {
         return std::ptr::null_mut();
     };
-    let arr = (*pCtx).pSpsArray;
+    let arr = ctx_sps_array(pCtx);
     if arr.is_null() {
         return std::ptr::null_mut();
     }
@@ -790,11 +791,11 @@ pub unsafe fn ctx_sps(pCtx: *const sWelsEncCtx) -> *mut SWelsSPS {
 /// # Safety
 /// `pCtx` must point to a live encoder context.
 #[inline]
-pub unsafe fn ctx_pps(pCtx: *const sWelsEncCtx) -> *mut SWelsPPS {
+pub unsafe fn ctx_pps(pCtx: *mut sWelsEncCtx) -> *mut SWelsPPS {
     let Some(id) = (*pCtx).iPps else {
         return std::ptr::null_mut();
     };
-    let arr = (*pCtx).pPPSArray;
+    let arr = ctx_pps_array(pCtx);
     if arr.is_null() {
         return std::ptr::null_mut();
     }
