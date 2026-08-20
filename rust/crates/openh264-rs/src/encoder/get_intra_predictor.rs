@@ -1343,6 +1343,9 @@ mod tests {
         let mut plane = vec![137u8; stride * 24];
         let refp = unsafe { plane.as_mut_ptr().add(stride * 4 + 4) };
 
+        // Zeroing this table is sound for the reason its own `Default` gives
+        // (`wels_func_ptr_def.rs`, S21); session I converts both with the dispatch
+        // tables. T6.H12 enumerated it here rather than leaving it to a grep.
         let mut fl: SWelsFuncPtrList = unsafe { core::mem::zeroed() };
         unsafe { WelsInitIntraPredFuncs(&mut fl, 0) };
 
@@ -1365,6 +1368,9 @@ mod tests {
         let mut plane = vec![91u8; stride * 40];
         let refp = unsafe { plane.as_mut_ptr().add(stride * 17 + 17) };
 
+        // Zeroing this table is sound for the reason its own `Default` gives
+        // (`wels_func_ptr_def.rs`, S21); session I converts both with the dispatch
+        // tables. T6.H12 enumerated it here rather than leaving it to a grep.
         let mut fl: SWelsFuncPtrList = unsafe { core::mem::zeroed() };
         unsafe { WelsInitIntraPredFuncs(&mut fl, 0) };
 
@@ -1520,6 +1526,9 @@ mod tests {
     /// declared but never populated, so `WelsMdI16x16` unwrapped a `None`.
     #[test]
     fn init_fills_every_slot_the_md_layer_indexes() {
+        // Zeroing this table is sound for the reason its own `Default` gives
+        // (`wels_func_ptr_def.rs`, S21); session I converts both with the dispatch
+        // tables. T6.H12 enumerated it here rather than leaving it to a grep.
         let mut fl: SWelsFuncPtrList = unsafe { core::mem::zeroed() };
         unsafe { WelsInitIntraPredFuncs(&mut fl, 0) };
 

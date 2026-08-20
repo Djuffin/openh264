@@ -425,6 +425,9 @@ mod tests {
     /// `Combined3` slots must be left NULL — `svc_base_layer_md` asserts on that.
     #[test]
     fn init_fills_sad_and_satd_and_clears_combined3() {
+        // Zeroing this table is sound for the reason its own `Default` gives
+        // (`wels_func_ptr_def.rs`, S21); session I converts both with the dispatch
+        // tables. T6.H12 enumerated it here rather than leaving it to a grep.
         let mut fl: SWelsFuncPtrList = unsafe { core::mem::zeroed() };
         unsafe { WelsInitSampleSadFunc(&mut fl, 0) };
 
