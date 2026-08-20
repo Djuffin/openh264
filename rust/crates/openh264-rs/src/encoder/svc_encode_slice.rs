@@ -59,7 +59,9 @@ use crate::{
 // ============================================================================
 
 pub use crate::encoder::encoder_context::EWelsSliceType;
-use crate::encoder::encoder_context::{ctx_pps_array, ctx_rc_at, ctx_sps_array, ctx_subset_array};
+use crate::encoder::encoder_context::{
+    ctx_pps_array, ctx_rc_at, ctx_ref_list, ctx_sps_array, ctx_subset_array,
+};
 
 pub const P_SLICE: i32 = 0;
 pub const B_SLICE: i32 = 1;
@@ -811,7 +813,7 @@ pub unsafe fn ctx_pps(pCtx: *mut sWelsEncCtx) -> *mut SWelsPPS {
 #[inline]
 pub unsafe fn ctx_ref_pic<'a>(pCtx: *mut sWelsEncCtx) -> Option<&'a SPicture> {
     let id = (*pCtx).pRefPic?;
-    let pRefList = *(*pCtx).ppRefPicListExt.add((*pCtx).uiDependencyId as usize);
+    let pRefList = ctx_ref_list(pCtx, (*pCtx).uiDependencyId as usize);
     if pRefList.is_null() {
         return None;
     }
@@ -829,7 +831,7 @@ pub unsafe fn ctx_ref_pic<'a>(pCtx: *mut sWelsEncCtx) -> Option<&'a SPicture> {
 pub unsafe fn ctx_pic_ref_mut<'a>(pCtx: *mut sWelsEncCtx, r: PicRef) -> Option<&'a mut SPicture> {
     match r {
         PicRef::Rec(id) => {
-            let pRefList = *(*pCtx).ppRefPicListExt.add((*pCtx).uiDependencyId as usize);
+            let pRefList = ctx_ref_list(pCtx, (*pCtx).uiDependencyId as usize);
             if pRefList.is_null() {
                 None
             } else {
@@ -854,7 +856,7 @@ pub unsafe fn ctx_pic_ref_mut<'a>(pCtx: *mut sWelsEncCtx, r: PicRef) -> Option<&
 pub unsafe fn ctx_pic_ref<'a>(pCtx: *mut sWelsEncCtx, r: PicRef) -> Option<&'a SPicture> {
     match r {
         PicRef::Rec(id) => {
-            let pRefList = *(*pCtx).ppRefPicListExt.add((*pCtx).uiDependencyId as usize);
+            let pRefList = ctx_ref_list(pCtx, (*pCtx).uiDependencyId as usize);
             if pRefList.is_null() {
                 None
             } else {
