@@ -546,7 +546,7 @@ impl SWelsRcFunc {
     /// As [`WelsRcPictureInit`](SWelsRcFunc::WelsRcPictureInit); `pCurMb` and
     /// `pSlice` must be live.
     #[inline]
-    pub unsafe fn WelsRcMbInit(self, pCtx: *mut sWelsEncCtx, pCurMb: *mut SMB, pSlice: *mut SSlice) {
+    pub unsafe fn WelsRcMbInit(self, pCtx: *mut sWelsEncCtx, pCurMb: &mut SMB, pSlice: *mut SSlice) {
         match self.eInstalledMode {
             RCMode::RC_OFF_MODE | RCMode::RC_BUFFERBASED_MODE => {
                 WelsRcMbInitDisable(pCtx, pCurMb, pSlice)
@@ -566,7 +566,7 @@ impl SWelsRcFunc {
     pub unsafe fn WelsRcMbInfoUpdate(
         self,
         pCtx: *mut sWelsEncCtx,
-        pCurMb: *mut SMB,
+        pCurMb: &mut SMB,
         iCostLuma: i32,
         pSlice: *mut SSlice,
     ) {
@@ -1427,7 +1427,7 @@ pub unsafe fn RcInitGomParameters(pEncCtx: *mut sWelsEncCtx) {
 }
 
 /// Assigns final macroblock luma and chroma QPs.
-pub unsafe fn RcCalculateMbQp(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSlice, pCurMb: *mut SMB) {
+pub unsafe fn RcCalculateMbQp(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSlice, pCurMb: &mut SMB) {
     let did = (*pEncCtx).uiDependencyId as usize;
     let pWelsSvcRc = (*pEncCtx).pWelsSvcRc.add(did);
     let pSOverRc = &mut (*pSlice).sSlicingOverRc;
@@ -1524,7 +1524,7 @@ pub unsafe fn RcGomTargetBits(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSlice) {
 }
 
 /// Dynamically adjusts slice QP at GOM boundaries.
-pub unsafe fn RcCalculateGomQp(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSlice, _pCurMb: *mut SMB) {
+pub unsafe fn RcCalculateGomQp(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSlice, _pCurMb: &mut SMB) {
     let did = (*pEncCtx).uiDependencyId as usize;
     let pWelsSvcRc = (*pEncCtx).pWelsSvcRc.add(did);
     let pSOverRc = &mut (*pSlice).sSlicingOverRc;
@@ -2156,7 +2156,7 @@ pub unsafe extern "C" fn WelsRcPictureInfoUpdateGom(pEncCtx: *mut sWelsEncCtx, i
 
 pub unsafe extern "C" fn WelsRcMbInitGom(
     pEncCtx: *mut sWelsEncCtx,
-    pCurMb: *mut SMB,
+    pCurMb: &mut SMB,
     pSlice: *mut SSlice,
 ) {
     let did = (*pEncCtx).uiDependencyId as usize;
@@ -2204,7 +2204,7 @@ pub unsafe extern "C" fn WelsRcMbInitGom(
 
 pub unsafe extern "C" fn WelsRcMbInfoUpdateGom(
     pEncCtx: *mut sWelsEncCtx,
-    pCurMb: *mut SMB,
+    pCurMb: &mut SMB,
     iCostLuma: i32,
     pSlice: *mut SSlice,
 ) {
@@ -2257,7 +2257,7 @@ pub unsafe extern "C" fn WelsRcPictureInfoUpdateDisable(_pEncCtx: *mut sWelsEncC
 
 pub unsafe extern "C" fn WelsRcMbInitDisable(
     pEncCtx: *mut sWelsEncCtx,
-    pCurMb: *mut SMB,
+    pCurMb: &mut SMB,
     _pSlice: *mut SSlice,
 ) {
     let mut iLumaQp = (*pEncCtx).iGlobalQp;
@@ -2288,7 +2288,7 @@ pub unsafe extern "C" fn WelsRcMbInitDisable(
 /// Matches `WelsRcMbInfoUpdateDisable` in `ratectl.cpp:1319`.
 pub unsafe extern "C" fn WelsRcMbInfoUpdateDisable(
     _pEncCtx: *mut sWelsEncCtx,
-    _pCurMb: *mut SMB,
+    _pCurMb: &mut SMB,
     _iCostLuma: i32,
     _pSlice: *mut SSlice,
 ) {}
@@ -2437,7 +2437,7 @@ pub unsafe extern "C" fn WelsRcPictureInfoUpdateScc(pEncCtx: *mut sWelsEncCtx, i
 
 pub unsafe extern "C" fn WelsRcMbInitScc(
     pEncCtx: *mut sWelsEncCtx,
-    pCurMb: *mut SMB,
+    pCurMb: &mut SMB,
     _pSlice: *mut SSlice,
 ) {
     (*pCurMb).uiLumaQp = (*pEncCtx).iGlobalQp as u8;
@@ -2612,12 +2612,12 @@ mod tests {
             assert!(!WelsRcPostFrameSkipping(std::ptr::null_mut(), 0, 0));
             WelsRcPostFrameSkippedUpdate(std::ptr::null_mut(), 0);
             WelsRcPictureInfoUpdateDisable(std::ptr::null_mut(), 0);
-            WelsRcMbInfoUpdateDisable(
-                std::ptr::null_mut(),
-                std::ptr::null_mut(),
-                0,
-                std::ptr::null_mut(),
-            );
+            // The macroblock argument is a `&mut SMB` now, so the null goes and a
+            // real record takes its place. The other three are still raw (context,
+            // slice) and stay null: this is the no-op arm of `pfWelsRcMbInfoUpdate`
+            // and reads none of them.
+            let mut sMb = SMB::default();
+            WelsRcMbInfoUpdateDisable(std::ptr::null_mut(), &mut sMb, 0, std::ptr::null_mut());
         }
     }
 }
