@@ -249,6 +249,13 @@ pub struct SSliceHeader {
 }
 
 impl Default for SSliceHeader {
+    /// **Zeroed, and it stays zeroed** — T6.H12's rule applied: a type gets a
+    /// field-wise constructor only if it holds an owned or `Option` field, and this
+    /// one holds neither. Every member is an integer, a `bool`, or a POD sub-struct
+    /// of those (`SRefPicMarking`, `SRefPicListReorderSyntax`), plus `eSliceType`,
+    /// whose zero discriminant `P_SLICE` is a declared variant — the same audit that
+    /// keeps `sWelsEncCtx::new`'s `eSliceType: P_SLICE` honest. The C++ memsets the
+    /// slice header before `InitSliceHeadWithBase` fills it, and this is that memset.
     fn default() -> Self {
         unsafe { std::mem::zeroed() }
     }
@@ -276,6 +283,8 @@ pub struct SSliceHeaderExt {
 }
 
 impl Default for SSliceHeaderExt {
+    /// Zeroed, and it stays — see [`SSliceHeader::default`]. It is that struct plus
+    /// eleven `bool`s and two integers.
     fn default() -> Self {
         unsafe { std::mem::zeroed() }
     }
@@ -1126,19 +1135,14 @@ impl Default for SDqLayer {
 
 pub use crate::encoder::nal_encap::SWelsNalRaw;
 
-#[repr(C)]
-pub struct SWelsOut {
-    pub sBsWrite: BsWriter,
-    pub sNalList: *mut SWelsNalRaw,
-    pub pNalLen: *mut i32,
-    pub iCountNals: i32,
-}
-
-impl Default for SWelsOut {
-    fn default() -> Self {
-        unsafe { std::mem::zeroed() }
-    }
-}
+// **`SWelsOut` stood here and is deleted, not converted** (T6.H12). It was a
+// four-field struct with a `Default` that zeroed it, and the tree held exactly two
+// references to it: its own declaration and that `Default`. Nothing constructed one,
+// nothing named it as a field or a parameter, and `nal_encap.rs`'s
+// `SWelsEncoderOutput` is what the encoder actually writes NALs through. A type that
+// is only ever a declaration is not a zeroed `Default` to audit; it is a type to
+// remove — the same reading that deleted `SPicture::unref` at T5.B2 and six context
+// fields at T6.G3.
 
 pub use crate::encoder::encoder_context::{SWelsFuncPtrList, SWelsRcFunc};
 

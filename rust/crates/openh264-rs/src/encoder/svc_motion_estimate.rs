@@ -1526,6 +1526,15 @@ pub unsafe extern "C" fn UpdateFMESwitchNull(_pCurLayer: *mut SDqLayer) {}
 // with `null_mut()`, under a guard that refuses screen content two lines earlier.
 // S18 — deleted, enumerated by strip-and-build (T6.D2).
 
+// SCREEN_CONTENT(dormant: Phase 10)
+//
+// **T6.H13, the allocator census.** These two functions hold the last four
+// `WelsMallocz`/`WelsFree` pairs in `src/encoder` that are neither Phase 7's nor
+// session I's, and they are **unreachable**: the one would-be caller
+// (`wels_preprocess.rs`'s picture constructor) refuses `iNeedFeatureStorage != 0`
+// before it can get here, so no live path allocates any of this. They are fenced
+// with the rest of the screen-content family rather than deleted, because that
+// family is live upstream and Phase 10 owns porting it whole.
 pub unsafe extern "C" fn RequestScreenBlockFeatureStorage(
     pMa: *mut CMemoryAlign,
     kiFrameWidth: i32,
@@ -1595,6 +1604,7 @@ pub unsafe extern "C" fn RequestScreenBlockFeatureStorage(
     }
 }
 
+// SCREEN_CONTENT(dormant: Phase 10) — see `RequestScreenBlockFeatureStorage` above.
 pub unsafe extern "C" fn ReleaseScreenBlockFeatureStorage(
     pMa: *mut CMemoryAlign,
     pScreenBlockFeatureStorage: *mut SScreenBlockFeatureStorage,
