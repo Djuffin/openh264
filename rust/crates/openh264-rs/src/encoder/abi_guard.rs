@@ -333,7 +333,15 @@ assert_size!(crate::encoder::encoder_context::SLogContext, 24);
 // **T6.F1**: -16 debug / -112 release. `pEncPic`/`pDecPic`/`pRefPic` and
 // `pRefList0[16]` are handles now — nineteen 8-byte pointers become nineteen 8-byte
 // (debug) or 4-byte (release) handles.
-assert_size_by_profile!(sWelsEncCtx, debug 97888, release 97792);
+// **T6.G2**: **-8 debug, 0 release**, and the asymmetry is the whole story.
+// `pCurDqLayer` (an 8-byte pointer) becomes `iCurDqLayer` (`Option<LayerIdx>`, 2
+// bytes, align 1). In release it lands in the padding the following pointer-to-
+// pointer field already required, so *nothing* after it moves and the size does not
+// change; in debug the preceding handles are 8 bytes rather than 4, the hole falls
+// elsewhere, and every offset from `ppDqLayerList` on drops by 8. Both numbers are
+// measured, in the profile they name — S36, and a reminder that predicting a
+// `repr(C)` offset is not measuring it.
+assert_size_by_profile!(sWelsEncCtx, debug 97880, release 97792);
 
 
 // The fifteen `sWelsEncCtx` fields the preprocessor touches, pinned at their C++
@@ -367,18 +375,18 @@ macro_rules! assert_ctx_offset {
 assert_ctx_offset!(sLogCtx, 0);
 assert_ctx_offset!(pSvcParam, 24);
 assert_ctx_offset!(iMvRange, 32);
-assert_ctx_offset_by_profile!(ppRefPicListExt, debug 136, release 120);
-assert_ctx_offset_by_profile!(pLtr, debug 272, release 192);
-assert_ctx_offset_by_profile!(bCurFrameMarkedAsSceneLtr, debug 280, release 200);
-assert_ctx_offset_by_profile!(eSliceType, debug 284, release 204);
-assert_ctx_offset_by_profile!(uiDependencyId, debug 313, release 233);
-assert_ctx_offset_by_profile!(uiTemporalId, debug 314, release 234);
-assert_ctx_offset_by_profile!(pWelsSvcRc, debug 320, release 240);
-assert_ctx_offset_by_profile!(pVaa, debug 368, release 288);
-assert_ctx_offset_by_profile!(pVpp, debug 376, release 296);
-assert_ctx_offset_by_profile!(sSpatialIndexMap, debug 472, release 392);
-assert_ctx_offset_by_profile!(bRefOfCurTidIsLtr, debug 536, release 440);
-assert_ctx_offset_by_profile!(pMemAlign, debug 1760, release 1664);
+assert_ctx_offset_by_profile!(ppRefPicListExt, debug 128, release 120);
+assert_ctx_offset_by_profile!(pLtr, debug 264, release 192);
+assert_ctx_offset_by_profile!(bCurFrameMarkedAsSceneLtr, debug 272, release 200);
+assert_ctx_offset_by_profile!(eSliceType, debug 276, release 204);
+assert_ctx_offset_by_profile!(uiDependencyId, debug 305, release 233);
+assert_ctx_offset_by_profile!(uiTemporalId, debug 306, release 234);
+assert_ctx_offset_by_profile!(pWelsSvcRc, debug 312, release 240);
+assert_ctx_offset_by_profile!(pVaa, debug 360, release 288);
+assert_ctx_offset_by_profile!(pVpp, debug 368, release 296);
+assert_ctx_offset_by_profile!(sSpatialIndexMap, debug 464, release 392);
+assert_ctx_offset_by_profile!(bRefOfCurTidIsLtr, debug 528, release 440);
+assert_ctx_offset_by_profile!(pMemAlign, debug 1752, release 1664);
 
 // encoder_context.h:198 -- the element type of `sSpatialIndexMap`. `wels_preprocess.rs`
 // carried a byte-identical copy of this under the invented name `SSpatialIndexMap`;
@@ -390,6 +398,7 @@ const _: () = assert!(std::mem::offset_of!(SSpatialPicIndex, pSrc) == 0);
 const _: () = assert!(std::mem::offset_of!(SSpatialPicIndex, iDid) == 8);
 #[cfg(not(debug_assertions))]
 const _: () = assert!(std::mem::offset_of!(SSpatialPicIndex, iDid) == 4);
+
 
 
 

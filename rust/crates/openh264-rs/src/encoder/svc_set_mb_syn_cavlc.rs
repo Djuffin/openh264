@@ -18,6 +18,7 @@ pub use crate::encoder::encoder_context::EWelsSliceType;
 pub use crate::encoder::encoder_context::SMVUnitXY;
 pub use crate::encoder::encoder_context::SDCTCoeff;
 pub use crate::encoder::svc_encode_slice::SSliceHeader;
+use crate::encoder::svc_encode_slice::current_layer;
 pub use crate::encoder::svc_encode_slice::SSliceHeaderExt;
 pub use crate::encoder::md::SMbCache;
 pub use crate::encoder::md::SMB;
@@ -699,7 +700,7 @@ pub unsafe fn WelsSpatialWriteMbSyn(
     // Step 1 is invalidated by Step 1 and used again in Steps 2-4. This is not a
     // spelling: the borrow has to be taken after the call that pops it.
     let pBs = crate::encoder::svc_encode_slice::slice_writer(pEncCtx, pSlice);
-    let kuiChromaQpIndexOffset = (*(*(*pEncCtx).pCurDqLayer).sLayerInfo.pPpsP).uiChromaQpIndexOffset;
+    let kuiChromaQpIndexOffset = (*(*current_layer(pEncCtx)).sLayerInfo.pPpsP).uiChromaQpIndexOffset;
 
     if IS_SKIP((*pCurMb).uiMbType) {
         (*pCurMb).uiLumaQp = (*pSlice).uiLastMbQp;
@@ -750,7 +751,7 @@ pub unsafe fn WelsSpatialWriteMbSyn(
             (*pCurMb).uiLumaQp = (*pSlice).uiLastMbQp;
             let idx = CLIP3_QP_0_51(
                 ((*pCurMb).uiLumaQp as i32)
-                    + ((*(*(*pEncCtx).pCurDqLayer).sLayerInfo.pPpsP).uiChromaQpIndexOffset as i32),
+                    + ((*(*current_layer(pEncCtx)).sLayerInfo.pPpsP).uiChromaQpIndexOffset as i32),
             );
             (*pCurMb).uiChromaQp = g_kuiChromaQpTable[idx as usize];
         }

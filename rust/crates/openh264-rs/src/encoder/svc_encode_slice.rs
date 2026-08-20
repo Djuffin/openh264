@@ -82,6 +82,7 @@ pub const MB_LUMA_CHROMA_BLOCK4x4_NUM: usize = 24;
 // wels_const.h:69 says 4. This module had 8, which over-sized SDqLayer's
 // sSliceBufferInfo and its four partition arrays by 128 bytes in total.
 pub use crate::encoder::encoder_context::MAX_THREADS_NUM;
+pub use crate::encoder::encoder_context::MAX_DEPENDENCY_LAYER;
 pub const MAX_REF_PIC_COUNT: u32 = 16;
 pub const INT_MULTIPLY: i32 = 100;
 pub const SLICE_NUM_EXPAND_COEF: i32 = 2;
@@ -561,6 +562,73 @@ pub unsafe fn mb_list_root(pCurLayer: *mut SDqLayer) -> *mut SMB {
 #[inline]
 pub unsafe fn mb_at(pCurLayer: *mut SDqLayer, kiMbXY: i32) -> *mut SMB {
     mb_list_root(pCurLayer).add(kiMbXY as usize)
+}
+
+/// The layer the context is currently working on — **T6.G2's resolution accessor,
+/// and the only reader of `sWelsEncCtx::iCurDqLayer`.**
+///
+/// `pCurDqLayer` used to be a `*mut SDqLayer` alias into `ppDqLayerList`. It is now
+/// the *position*, and this resolves it back to the same raw cursor the ~150
+/// consumers were already holding: they bind it once at the top of a function
+/// (`let pCurDqLayer = current_layer(pEncCtx);`) and offset out of it exactly as
+/// before. Nothing downstream changed, which is the point — the identity moved, the
+/// idiom did not.
+///
+/// **The spelling is S40's.** `ppDqLayerList` is a raw pointer to raw pointers, so
+/// reading an element is a plain load through a raw pointer: no reference is formed
+/// over the list, and repeated calls are therefore independent loads that cannot pop
+/// each other's results. That property is what lets a caller keep the cursor across
+/// another call to this function — which is what the frame loop does, twice per
+/// spatial layer.
+///
+/// Answers **null** exactly where the old field was null: before any layer is
+/// current (`iCurDqLayer == None`), and before the list exists. Every `is_null()`
+/// guard in the tree therefore still asks the question it was written to ask.
+///
+/// # Safety
+/// `pCtx` must point to a live encoder context.
+#[inline]
+pub unsafe fn current_layer(pCtx: *const sWelsEncCtx) -> *mut SDqLayer {
+    let Some(idx) = (*pCtx).iCurDqLayer else {
+        return std::ptr::null_mut();
+    };
+    let list = (*pCtx).ppDqLayerList;
+    // A `Some` index with no list is a programming error, not a state: every writer
+    // names a layer the list already holds. It cannot arise on a live path — the
+    // field starts `None` and `FreeDqLayer` nulls the list only at teardown — so it
+    // is asserted rather than handled, and answers null in release for the same
+    // reason the field's null answered there.
+    debug_assert!(
+        !list.is_null(),
+        "iCurDqLayer = {idx:?} with no ppDqLayerList"
+    );
+    debug_assert!(
+        idx.get() < MAX_DEPENDENCY_LAYER,
+        "iCurDqLayer = {idx:?} is past the largest list InitDqLayers can build"
+    );
+    if list.is_null() {
+        return std::ptr::null_mut();
+    }
+    *list.add(idx.get())
+}
+
+/// Make `kIdx` the current layer — the setter half of [`current_layer`], and the
+/// only writer of `sWelsEncCtx::iCurDqLayer`.
+///
+/// The C++ assigns `pCtx->pCurDqLayer = pCtx->ppDqLayerList[iDid]` at each of its
+/// three sites, so each already had the index in hand and was converting it to an
+/// address; this keeps the index. `None` un-sets it, which no live path does — it
+/// exists so the field's zero has a name.
+///
+/// # Safety
+/// `pCtx` must point to a live encoder context.
+#[inline]
+pub unsafe fn set_current_layer(pCtx: *mut sWelsEncCtx, kIdx: Option<LayerIdx>) {
+    debug_assert!(
+        kIdx.is_none_or(|i| i.get() < MAX_DEPENDENCY_LAYER),
+        "{kIdx:?} is past the largest list InitDqLayers can build"
+    );
+    (*pCtx).iCurDqLayer = kIdx;
 }
 
 /// The context's current reference picture, resolved through the current dependency
@@ -1419,7 +1487,7 @@ pub unsafe fn WelsSliceHeaderExtWrite(
 // call in this file would have silently activated it.
 
 pub unsafe fn WelsIMbChromaEncode(pEncCtx: *mut sWelsEncCtx, pCurMb: &mut SMB, pMbCache: *mut SMbCache) {
-    let pCurLayer = (*pEncCtx).pCurDqLayer;
+    let pCurLayer = current_layer(pEncCtx);
     let kiEncStride = (*pCurLayer).iEncStride[1];
     let kiCsStride = (*pCurLayer).iCsStride[1];
     let pCurRS = crate::encoder::md::coeff_level(pMbCache);
@@ -1454,7 +1522,7 @@ pub unsafe fn WelsIMbChromaEncode(pEncCtx: *mut sWelsEncCtx, pCurMb: &mut SMB, p
 }
 
 pub unsafe fn WelsPMbChromaEncode(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSlice, pCurMb: &mut SMB) {
-    let pCurLayer = (*pEncCtx).pCurDqLayer;
+    let pCurLayer = current_layer(pEncCtx);
     let kiEncStride = (*pCurLayer).iEncStride[1];
     let pMbCache = std::ptr::addr_of_mut!((*pSlice).sMbCacheInfo);
     let pCurRS = crate::encoder::md::coeff_level(pMbCache).add(256);
@@ -1576,7 +1644,7 @@ pub unsafe fn WelsISliceMdEnc(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSlice) ->
     if pEncCtx.is_null() || pSlice.is_null() {
         return ENC_RETURN_INVALIDINPUT;
     }
-    let pCurLayer = (*pEncCtx).pCurDqLayer;
+    let pCurLayer = current_layer(pEncCtx);
     if pCurLayer.is_null() || (*pCurLayer).sMbDataP.dims().count() == 0 || (*pCurLayer).iMbWidth <= 0 || (*pCurLayer).iMbHeight <= 0 {
         return ENC_RETURN_SUCCESS;
     }
@@ -1689,7 +1757,7 @@ pub unsafe fn WelsISliceMdEncDynamic(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSl
         return ENC_RETURN_INVALIDINPUT;
     }
     let pBs = slice_writer(pEncCtx, pSlice);
-    let pCurLayer = (*pEncCtx).pCurDqLayer;
+    let pCurLayer = current_layer(pEncCtx);
     // S29: raw, not `&mut` — both of these are held across the macroblock loop,
     // whose callees derive their own borrows of the same fields. `sSliceEncCtx` is
     // the dynamic-slice probe's third red (session D): `WelsGetNextMbOfSlice` takes
@@ -1869,12 +1937,12 @@ pub unsafe fn WelsMdInterMbLoop(
     pWelsMd: &mut SWelsMD,
     kiSliceFirstMbXY: i32,
 ) -> i32 {
-    if pEncCtx.is_null() || pSlice.is_null() || (*pEncCtx).pCurDqLayer.is_null() || (*(*pEncCtx).pCurDqLayer).sMbDataP.dims().count() == 0 || (*(*pEncCtx).pCurDqLayer).iMbWidth <= 0 || (*(*pEncCtx).pCurDqLayer).iMbHeight <= 0 {
+    if pEncCtx.is_null() || pSlice.is_null() || current_layer(pEncCtx).is_null() || (*current_layer(pEncCtx)).sMbDataP.dims().count() == 0 || (*current_layer(pEncCtx)).iMbWidth <= 0 || (*current_layer(pEncCtx)).iMbHeight <= 0 {
         return ENC_RETURN_SUCCESS;
     }
     let pMd = pWelsMd;
     let pBs = slice_writer(pEncCtx, pSlice);
-    let pCurLayer = (*pEncCtx).pCurDqLayer;
+    let pCurLayer = current_layer(pEncCtx);
     // S29: raw, held across the MB loop (see `WelsISliceMdEnc`).
     let pMbCache = std::ptr::addr_of_mut!((*pSlice).sMbCacheInfo);
     let pMbList = mb_list_root(pCurLayer);
@@ -2035,12 +2103,12 @@ pub unsafe fn WelsMdInterMbLoopOverDynamicSlice(
     pWelsMd: &mut SWelsMD,
     kiSliceFirstMbXY: i32,
 ) -> i32 {
-    if pEncCtx.is_null() || pSlice.is_null() || (*pEncCtx).pCurDqLayer.is_null() || (*(*pEncCtx).pCurDqLayer).sMbDataP.dims().count() == 0 || (*(*pEncCtx).pCurDqLayer).iMbWidth <= 0 || (*(*pEncCtx).pCurDqLayer).iMbHeight <= 0 {
+    if pEncCtx.is_null() || pSlice.is_null() || current_layer(pEncCtx).is_null() || (*current_layer(pEncCtx)).sMbDataP.dims().count() == 0 || (*current_layer(pEncCtx)).iMbWidth <= 0 || (*current_layer(pEncCtx)).iMbHeight <= 0 {
         return ENC_RETURN_SUCCESS;
     }
     let pMd = pWelsMd;
     let pBs = slice_writer(pEncCtx, pSlice);
-    let pCurLayer = (*pEncCtx).pCurDqLayer;
+    let pCurLayer = current_layer(pEncCtx);
     // S29, both: held across the MB loop, whose callees re-derive the same fields.
     // See `WelsISliceMdEncDynamic` for `sSliceEncCtx`'s red and its invalidator.
     let pSliceCtx = std::ptr::addr_of_mut!((*pCurLayer).sSliceEncCtx);
@@ -2262,7 +2330,7 @@ pub unsafe fn WelsPSliceMdEncDynamic(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSl
 }
 
 pub unsafe fn WelsCodePSlice(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSlice) -> i32 {
-    let pCurLayer = (*pEncCtx).pCurDqLayer;
+    let pCurLayer = current_layer(pEncCtx);
     let kbBaseAvail = (*pCurLayer).bBaseLayerAvailableFlag;
     let kbHighestSpatial = if !(*pEncCtx).pSvcParam.is_null() {
         (*(*pEncCtx).pSvcParam).iSpatialLayerNum == ((*pCurLayer).sLayerInfo.sNalHeaderExt.uiDependencyId as i32 + 1)
@@ -2280,7 +2348,7 @@ pub unsafe fn WelsCodePSlice(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSlice) -> 
 }
 
 pub unsafe fn WelsCodePOverDynamicSlice(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSlice) -> i32 {
-    let pCurLayer = (*pEncCtx).pCurDqLayer;
+    let pCurLayer = current_layer(pEncCtx);
     let kbBaseAvail = (*pCurLayer).bBaseLayerAvailableFlag;
     let kbHighestSpatial = if !(*pEncCtx).pSvcParam.is_null() {
         (*(*pEncCtx).pSvcParam).iSpatialLayerNum == ((*pCurLayer).sLayerInfo.sNalHeaderExt.uiDependencyId as i32 + 1)
@@ -2431,7 +2499,7 @@ pub unsafe fn WelsCodeOneSlice(pEncCtx: *mut sWelsEncCtx, pCurSlice: *mut SSlice
     if pEncCtx.is_null() || pCurSlice.is_null() {
         return ENC_RETURN_INVALIDINPUT;
     }
-    let pCurLayer = (*pEncCtx).pCurDqLayer;
+    let pCurLayer = current_layer(pEncCtx);
     // S29: raw, not `&mut` — this is held across `g_pWelsWriteSliceHeader`, whose
     // two bodies derive `&mut` to the same field (`:816`, `:902`) and popped it
     // (the encode probe's first red on the walk, Phase 6 session B).
@@ -2559,7 +2627,7 @@ pub unsafe fn AddSliceBoundary(
     if pEncCtx.is_null() || pCurSlice.is_null() || pSliceCtx.is_null() || pCurMb.is_null() {
         return;
     }
-    let pCurLayer = (*pEncCtx).pCurDqLayer;
+    let pCurLayer = current_layer(pEncCtx);
     let buf_idx = (*pCurSlice).uiBufferIdx as usize;
     let pSliceBuffer = slice_bank_root(pCurLayer, buf_idx);
     let iCodedSliceNum = (*pCurLayer).sSliceBufferInfo[buf_idx].iCodedSliceNum;
@@ -2611,7 +2679,7 @@ pub unsafe fn DynSlcJudgeSliceBoundaryStepBack(
     let iCurMbIdx = (*pCurMb).iMbXY;
     let kiActiveThreadsNum = (*pEncCtx).iActiveThreadsNum;
     let kiPartitionId = ((*pCurSlice).iSliceIdx % (kiActiveThreadsNum as i32)) as usize;
-    let kiEndMbIdxOfPartition = (*(*pEncCtx).pCurDqLayer).EndMbIdxOfPartition[kiPartitionId];
+    let kiEndMbIdxOfPartition = (*current_layer(pEncCtx)).EndMbIdxOfPartition[kiPartitionId];
 
     let kbCurMbNotFirstMbOfCurSlice = (iCurMbIdx > 0)
         && {
@@ -2815,7 +2883,7 @@ pub unsafe fn InitSliceList(
 }
 
 pub unsafe fn InitAllSlicesInThread(pCtx: *mut sWelsEncCtx) -> i32 {
-    let pCurDqLayer = (*pCtx).pCurDqLayer;
+    let pCurDqLayer = current_layer(pCtx);
     for iSliceIdx in 0..(*pCurDqLayer).iMaxSliceNum {
         let slice_ptr = slice_in_layer(pCurDqLayer, iSliceIdx);
         if slice_ptr.is_null() {
@@ -2838,7 +2906,7 @@ pub unsafe fn InitOneSliceInThread(
     kiDlayerIdx: i32,
     kiSliceIdx: i32,
 ) -> i32 {
-    let pCurDq = (*pCtx).pCurDqLayer;
+    let pCurDq = current_layer(pCtx);
     let slc_ptr = if (*pCurDq).bThreadSlcBufferFlag {
         let kiCodedNumInThread = (*pCurDq).sSliceBufferInfo[kiSlcBuffIdx as usize].iCodedSliceNum;
         slice_in_bank(pCurDq, kiSlcBuffIdx as usize, kiCodedNumInThread)
@@ -3107,7 +3175,7 @@ pub unsafe fn CalculateNewSliceNum(
     }
 
     let iPartitionID = ((*pLastCodedSlice).iSliceIdx % ((*pCtx).iActiveThreadsNum as i32)) as usize;
-    let pCurLayer = (*pCtx).pCurDqLayer;
+    let pCurLayer = current_layer(pCtx);
     let iMBNumInPartition = (*pCurLayer).EndMbIdxOfPartition[iPartitionID] - (*pCurLayer).FirstMbIdxOfPartition[iPartitionID] + 1;
     let iLeftMBNum = (*pCurLayer).EndMbIdxOfPartition[iPartitionID] - (*pCurLayer).LastCodedMbIdxOfPartition[iPartitionID] + 1;
 
@@ -3164,7 +3232,7 @@ pub unsafe fn ExtendLayerBuffer(
     kiMaxSliceNumNew: i32,
 ) -> i32 {
     let pMA = (*pCtx).pMemAlign;
-    let pCurLayer = (*pCtx).pCurDqLayer;
+    let pCurLayer = current_layer(pCtx);
 
     // The C++ allocated a new pointer array, dropped the old one **without copying
     // it**, and left every entry to `ReallocSliceBuffer`'s fill loop below. `resize`
@@ -3192,7 +3260,7 @@ pub unsafe fn ExtendLayerBuffer(
 }
 
 pub unsafe fn ReallocSliceBuffer(pCtx: *mut sWelsEncCtx) -> i32 {
-    let pCurLayer = (*pCtx).pCurDqLayer;
+    let pCurLayer = current_layer(pCtx);
     let iMaxSliceNumOld = (*pCurLayer).sSliceBufferInfo[0].iMaxSliceNum;
     let mut iMaxSliceNumNew = 0;
     let kiCurDid = (*pCtx).uiDependencyId as usize;
@@ -3247,7 +3315,7 @@ pub unsafe fn CheckAllSliceBuffer(pCurLayer: *mut SDqLayer, kiCodedSliceNum: i32
 }
 
 pub unsafe fn ReOrderSliceInLayer(pCtx: *mut sWelsEncCtx, kuiSliceMode: SliceMode, kiThreadNum: i32) -> i32 {
-    let pCurLayer = (*pCtx).pCurDqLayer;
+    let pCurLayer = current_layer(pCtx);
     let mut iEncodeSliceNum = 0;
     let mut iUsedSliceNum = 0;
     let mut iNonUsedBufferNum = 0;
@@ -3393,15 +3461,15 @@ pub unsafe fn SliceLayerInfoUpdate(
 ) -> i32 {
     let mut iMaxSliceNum = 0;
     for iSlcBuffIdx in 0..(*pCtx).iActiveThreadsNum {
-        iMaxSliceNum += (*(*pCtx).pCurDqLayer).sSliceBufferInfo[iSlcBuffIdx as usize].iMaxSliceNum;
+        iMaxSliceNum += (*current_layer(pCtx)).sSliceBufferInfo[iSlcBuffIdx as usize].iMaxSliceNum;
     }
 
-    if iMaxSliceNum > (*(*pCtx).pCurDqLayer).iMaxSliceNum {
-        let iRet = ExtendLayerBuffer(pCtx, (*(*pCtx).pCurDqLayer).iMaxSliceNum, iMaxSliceNum);
+    if iMaxSliceNum > (*current_layer(pCtx)).iMaxSliceNum {
+        let iRet = ExtendLayerBuffer(pCtx, (*current_layer(pCtx)).iMaxSliceNum, iMaxSliceNum);
         if iRet != ENC_RETURN_SUCCESS {
             return iRet;
         }
-        (*(*pCtx).pCurDqLayer).iMaxSliceNum = iMaxSliceNum;
+        (*current_layer(pCtx)).iMaxSliceNum = iMaxSliceNum;
     }
 
     let mut iRet = ReOrderSliceInLayer(pCtx, kuiSliceMode, (*pCtx).iActiveThreadsNum as i32);
@@ -3409,12 +3477,12 @@ pub unsafe fn SliceLayerInfoUpdate(
         return iRet;
     }
 
-    let iCodedSliceNum = GetCurrentSliceNum((*pCtx).pCurDqLayer);
-    (*pLayerBsInfo).iNalCount = GetCurLayerNalCount((*pCtx).pCurDqLayer, iCodedSliceNum);
+    let iCodedSliceNum = GetCurrentSliceNum(current_layer(pCtx));
+    (*pLayerBsInfo).iNalCount = GetCurLayerNalCount(current_layer(pCtx), iCodedSliceNum);
     let iCodedNalCount = GetTotalCodedNalCount(pFrameBsInfo);
 
     if iCodedNalCount > (*(*pCtx).pOut).sNalList.len() as i32 {
-        iRet = FrameBsRealloc(pCtx, pFrameBsInfo, pLayerBsInfo, (*(*pCtx).pCurDqLayer).iMaxSliceNum);
+        iRet = FrameBsRealloc(pCtx, pFrameBsInfo, pLayerBsInfo, (*current_layer(pCtx)).iMaxSliceNum);
         if iRet != ENC_RETURN_SUCCESS {
             return iRet;
         }

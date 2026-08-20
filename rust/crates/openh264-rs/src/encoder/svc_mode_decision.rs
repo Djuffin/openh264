@@ -14,6 +14,7 @@
 
 
 use crate::encoder::svc_encode_slice::{layer_dec_pic, layer_dec_pic_mut, layer_ref_pic, layer_ref_pic_mut};
+use crate::encoder::svc_encode_slice::current_layer;
 use crate::encoder::picture::{RecPicId, SrcPicId};
 use crate::encoder::md::{PredictSad, PredictSadSkip, WelsMedian};
 use crate::encoder::svc_encode_mb::WelsEncInterY;
@@ -341,7 +342,7 @@ pub unsafe extern "C" fn WelsMdInterDecidedPskip(
     pCurMb: &mut SMB,
 ) {
     let pMbCache = std::ptr::addr_of_mut!((*pSlice).sMbCacheInfo);
-    let pCurDqLayer = (*pEncCtx).pCurDqLayer;
+    let pCurDqLayer = current_layer(pEncCtx);
     (*pCurMb).uiMbType = MB_TYPE_SKIP;
     WelsRecPskip(pCurDqLayer, (*pEncCtx).pFuncList, pCurMb, pMbCache);
     WelsMdInterUpdatePskip(pCurDqLayer, pSlice, pCurMb);
@@ -433,7 +434,7 @@ pub unsafe extern "C" fn WelsMdIntraSecondaryModesEnc(
     //chroma
     (*pWelsMd).iCostChroma = crate::encoder::svc_base_layer_md::WelsMdIntraChroma(
         pFunc,
-        (*pEncCtx).pCurDqLayer,
+        current_layer(pEncCtx),
         pMbCache,
         (*pWelsMd).iLambda,
     );
@@ -529,7 +530,7 @@ pub unsafe extern "C" fn WelsMdBackgroundMbEnc(
     bSkipMbFlag: bool,
 ) {
     let pMbCache = std::ptr::addr_of_mut!((*pSlice).sMbCacheInfo);
-    let pCurDqLayer = (*pEncCtx).pCurDqLayer;
+    let pCurDqLayer = current_layer(pEncCtx);
     let pFunc = (*pEncCtx).pFuncList;
     let sMvp = SMVUnitXY::default();
 
@@ -1373,7 +1374,7 @@ pub unsafe extern "C" fn WelsInterMbEncode(pEncCtx: *mut sWelsEncCtx, pSlice: *m
     // Port-added guard deleted with the retyping: `svc_encode_slice.cpp:458` opens at
     // `SMbCache* pMbCache = &pSlice->sMbCacheInfo;` and checks nothing.
     let pMbCache = std::ptr::addr_of_mut!((*pSlice).sMbCacheInfo);
-    let pCurDqLayer = (*pEncCtx).pCurDqLayer;
+    let pCurDqLayer = current_layer(pEncCtx);
     let pFuncList = (*pEncCtx).pFuncList;
     if pCurDqLayer.is_null() || pFuncList.is_null() {
         return;
@@ -1413,7 +1414,7 @@ pub unsafe extern "C" fn WelsInterMbEncode(pEncCtx: *mut sWelsEncCtx, pSlice: *m
 /// than through the current layer.
 #[inline(always)]
 pub unsafe extern "C" fn GetRefMb(pEncCtx: *mut sWelsEncCtx, pCurMb: &mut SMB) -> *mut SMB {
-    let kRefIdx = (*(*pEncCtx).pCurDqLayer)
+    let kRefIdx = (*current_layer(pEncCtx))
         .pRefLayer
         .expect("GetRefMb on a layer with no base layer: bBaseLayerAvailableFlag gates every caller");
     let kpRefLayer = *(*pEncCtx).ppDqLayerList.add(kRefIdx.get());
@@ -1462,7 +1463,7 @@ pub unsafe extern "C" fn WelsMdSpatialelInterMbIlfmdNoilp(
     pCurMb: *mut SMB,
     kuiRefMbType: Mb_Type,
 ) {
-    let pCurDqLayer = (*pEncCtx).pCurDqLayer;
+    let pCurDqLayer = current_layer(pEncCtx);
     let pMbCache = std::ptr::addr_of_mut!((*pSlice).sMbCacheInfo);
 
     let kuiNeighborAvail = (*pCurMb).uiNeighborAvail as u32;
@@ -1530,7 +1531,7 @@ pub unsafe extern "C" fn WelsMdSpatialelInterMbIlfmdNoilp(
         // Base layer is Intra (BLMODE == SVC_INTRA)
         let kiCostI16x16 = WelsMdI16x16(
             (*pEncCtx).pFuncList,
-            (*pEncCtx).pCurDqLayer,
+            current_layer(pEncCtx),
             pMbCache,
             (*pWelsMd).iLambda,
         );
@@ -1605,7 +1606,7 @@ pub unsafe fn CheckChromaCost(
     iCurMbXy: i32,
 ) -> bool {
     let pSad = (*(*pEncCtx).pFuncList).sSampleDealingFuncs.pfSampleSad.as_mut_ptr();
-    let pCurDqLayer = (*pEncCtx).pCurDqLayer;
+    let pCurDqLayer = current_layer(pEncCtx);
 
     let pCbEnc = (*pMbCache).SPicData.pEncMb[1];
     let pCrEnc = (*pMbCache).SPicData.pEncMb[2];
@@ -1650,7 +1651,7 @@ pub unsafe extern "C" fn WelsMdInterJudgeBGDPskip(
     bKeepSkip: *mut bool,
 ) -> bool {
     let pMbCache = std::ptr::addr_of_mut!((*pSlice).sMbCacheInfo);
-    let pCurDqLayer = (*pEncCtx).pCurDqLayer;
+    let pCurDqLayer = current_layer(pEncCtx);
 
     let kiRefMbQp = (&layer_ref_pic(pCurDqLayer).expect("bound").pRefMbQp)[(*pCurMb).iMbXY as usize] as i32;
     let kiCurMbQp = (*pCurMb).uiLumaQp as i32;
@@ -1784,7 +1785,7 @@ pub unsafe extern "C" fn JudgeStaticSkip(
     pMbCache: *mut SMbCache,
     pWelsMd: &mut SWelsMD,
 ) -> bool {
-    let pCurDqLayer = (*pEncCtx).pCurDqLayer;
+    let pCurDqLayer = current_layer(pEncCtx);
     let kiMbX = (*pCurMb).iMbX as i32;
     let kiMbY = (*pCurMb).iMbY as i32;
 
@@ -1830,7 +1831,7 @@ pub unsafe extern "C" fn JudgeScrollSkip(
     pMbCache: *mut SMbCache,
     pWelsMd: &mut SWelsMD,
 ) -> bool {
-    let pCurDqLayer = (*pEncCtx).pCurDqLayer;
+    let pCurDqLayer = current_layer(pEncCtx);
     let kiMbX = (*pCurMb).iMbX as i32;
     let kiMbY = (*pCurMb).iMbY as i32;
     let kiMbWidth: i32 = (*pCurDqLayer).iMbWidth as i32;
@@ -1896,7 +1897,7 @@ pub unsafe extern "C" fn SvcMdSCDMbEnc(
     eSkipMode: ESkipModes,
 ) {
     let pMbCache = std::ptr::addr_of_mut!((*pSlice).sMbCacheInfo);
-    let pCurDqLayer = (*pEncCtx).pCurDqLayer;
+    let pCurDqLayer = current_layer(pEncCtx);
     let pFunc = (*pEncCtx).pFuncList;
     let skip_idx = eSkipMode as usize;
     let sCandidateMv = sCurMbMv[skip_idx];
@@ -2049,7 +2050,7 @@ pub unsafe extern "C" fn MdInterSCDPskipProcess(
 ) -> bool {
     let pMbCache = std::ptr::addr_of_mut!((*pSlice).sMbCacheInfo);
     let pVaaExt = (*pEncCtx).pVaa as *mut SVAAFrameInfoExt_t;
-    let pCurDqLayer = (*pEncCtx).pCurDqLayer;
+    let pCurDqLayer = current_layer(pEncCtx);
 
     let kiRefMbQp = (&layer_ref_pic(pCurDqLayer).expect("bound").pRefMbQp)[(*pCurMb).iMbXY as usize] as i32;
     let kiCurMbQp = (*pCurMb).uiLumaQp as i32;
@@ -2124,7 +2125,7 @@ pub unsafe extern "C" fn WelsMdInterJudgeSCDPskip(
     slice: *mut SSlice,
     pCurMb: &mut SMB,
 ) -> bool {
-    let pCurDqLayer = (*pEncCtx).pCurDqLayer;
+    let pCurDqLayer = current_layer(pEncCtx);
     SetBlockStaticIdcToMd((*pEncCtx).pVaa as *mut SVAAFrameInfoExt_t, pWelsMd, pCurMb, pCurDqLayer);
 
     if MdInterSCDPskipProcess(pEncCtx, pWelsMd, slice, pCurMb, ESkipModes::STATIC) {
@@ -2226,7 +2227,7 @@ pub unsafe extern "C" fn WelsMdInterFinePartitionVaaOnScreen(
     mut iBestCost: i32,
 ) {
     let pMbCache = std::ptr::addr_of_mut!((*pSlice).sMbCacheInfo);
-    let pCurDqLayer = (*pEncCtx).pCurDqLayer;
+    let pCurDqLayer = current_layer(pEncCtx);
 
     let pSad8x8_ptr = (*(*pEncCtx).pVaa)
         .sVaaCalcInfo

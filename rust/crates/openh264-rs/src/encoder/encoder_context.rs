@@ -500,7 +500,21 @@ pub struct sWelsEncCtx {
     /// **the current dependency layer's** `SRefList` (`ppRefPicListExt[uiDependencyId]`).
     pub pDecPic: Option<RecPicId>,
     pub pRefPic: Option<RecPicId>,
-    pub pCurDqLayer: *mut SDqLayer,
+    /// The layer the encoder is working on, as a **position in `ppDqLayerList`** —
+    /// T6.G2. It was a raw `SDqLayer` alias into the list two lines down.
+    ///
+    /// The list is built once by `InitDqLayers`, freed once by `FreeDqLayer`, and
+    /// nothing permutes it (S34, re-grepped), so a position is a stable identity and
+    /// an index is faithful where the address was. Every one of the ~150 consumers
+    /// resolves it through [`current_layer`](crate::encoder::svc_encode_slice::current_layer),
+    /// which answers the same raw layer cursor this field used to hold — the
+    /// cursor idiom downstream is unchanged.
+    ///
+    /// **`None` is "no layer is current" and is why the constructor had to land
+    /// first**: `LayerIdx` is a plain `u8` with no niche, so the all-zero image of
+    /// this field is `Some(LayerIdx(0))` — the base layer — and a zeroed shell
+    /// would have silently produced a context that already had one (F56/S21).
+    pub iCurDqLayer: Option<crate::encoder::svc_encode_slice::LayerIdx>,
     pub ppDqLayerList: *mut *mut SDqLayer,
     pub ppRefPicListExt: *mut *mut SRefList,
     pub pRefList0: [Option<RecPicId>; 16],
@@ -634,10 +648,10 @@ impl sWelsEncCtx {
             pDecPic: None,
             pRefPic: None,
 
-            // The current layer. Null until `WelsInitCurrentLayer` / `WelsSwapDqLayers`
-            // aims it into `ppDqLayerList`, which cannot happen before that list is
-            // allocated two fields down.
-            pCurDqLayer: std::ptr::null_mut(),
+            // No layer is current until `WelsInitCurrentLayer` / `WelsSwapDqLayers`
+            // names one, which cannot happen before `ppDqLayerList` below is
+            // allocated. `None`, not `Some(LayerIdx(0))` — see the field.
+            iCurDqLayer: None,
             ppDqLayerList: std::ptr::null_mut(),
             ppRefPicListExt: std::ptr::null_mut(),
 
@@ -1351,7 +1365,7 @@ mod tests {
         sLogCtx, pSvcParam, iMvRange, pMvdCostTable,
         iMvdCostTableSize, iMvdCostTableStride, pStrideTab, pFuncList,
         pSliceThreading, pTaskManage, eRefStrategy, pEncPic,
-        pDecPic, pRefPic, pCurDqLayer, ppDqLayerList,
+        pDecPic, pRefPic, iCurDqLayer, ppDqLayerList,
         ppRefPicListExt, pRefList0, pLtr, bCurFrameMarkedAsSceneLtr,
         eSliceType, eNalType, eNalPriority, eLastNalPriority,
         iNumRef0, uiDependencyId, uiTemporalId, bNeedPrefixNalFlag,

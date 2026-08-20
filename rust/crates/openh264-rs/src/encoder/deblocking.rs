@@ -182,6 +182,7 @@ pub static g_kuiTableBIdx: [[u8; 8]; 2] = [
 
 /// 4-byte motion vector unit $(MV_x, MV_y)$ in quarter-pel precision.
 pub use crate::encoder::svc_encode_slice::SMVUnitXY;
+use crate::encoder::svc_encode_slice::current_layer;
 
 /// Active parameters and pointers for macroblock deblocking filtering.
 /// Matches `struct TagDeblockingFilter` in `codec/encoder/core/inc/deblocking.h`.
@@ -1443,7 +1444,7 @@ pub unsafe extern "C" fn PerformDeblockingFilter(pEnc: *mut sWelsEncCtx) {
     if pEnc.is_null() {
         return;
     }
-    let pCurLayer = (*pEnc).pCurDqLayer;
+    let pCurLayer = current_layer(pEnc);
     if pCurLayer.is_null() {
         return;
     }

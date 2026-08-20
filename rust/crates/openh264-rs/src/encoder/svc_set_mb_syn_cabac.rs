@@ -153,6 +153,7 @@ pub const g_kuiChromaQpTable: [u8; 52] = [
 
 
 pub use crate::encoder::svc_encode_slice::SSliceHeader;
+use crate::encoder::svc_encode_slice::current_layer;
 pub use crate::encoder::svc_encode_slice::SSliceHeaderExt;
 pub use crate::encoder::encoder_context::EWelsSliceType;
 pub use crate::encoder::vlc_encoder::ECtxBlockCat;
@@ -1123,9 +1124,12 @@ pub unsafe fn WelsSpatialWriteMbSynCabac(
         let pSliceHeadExt = &mut (*pSlice).sSliceHeaderExt;
         let uiNumRefIdxL0Active = (pSliceHeadExt.sSliceHeader.uiNumRefIdxL0Active as i32) - 1;
         let iSliceFirstMbXY = pSliceHeadExt.sSliceHeader.iFirstMbInSlice;
-        let iMbWidth = (*(*pEncCtx).pCurDqLayer).iMbWidth as i32;
+        // One resolution for both reads — F5's rule, and the two are adjacent with
+        // nothing between them that could pop the cursor.
+        let pCurDqLayer = current_layer(pEncCtx);
+        let iMbWidth = (*pCurDqLayer).iMbWidth as i32;
 
-        let uiChromaQpIndexOffset = (*(*(*pEncCtx).pCurDqLayer).sLayerInfo.pPpsP).uiChromaQpIndexOffset;
+        let uiChromaQpIndexOffset = (*(*pCurDqLayer).sLayerInfo.pPpsP).uiChromaQpIndexOffset;
         let mut sMvd = SMVUnitXY::default();
         let mut iRet = 0;
 
