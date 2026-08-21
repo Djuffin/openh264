@@ -139,7 +139,21 @@ it, and the two sessions were planned the other way round. Three orderings; **RE
   the raw translation. **F67 opened, and it re-scopes the phase.** No fork/join:
   session A stopped at a green, whole-mode boundary rather than write the
   `unsafe impl` the rules forbid.
-- **B** — the ordering decision above, first. Then, whichever way it goes: the
+- **B** — done, 2026-08-20, `9a392cc9..7e038545`, six commits. The fork/join
+  through the one D-mt-1 seam on every mode; **F3 CLOSED by F69** (a lock the
+  raw translation dropped; three arms: 25/3000 → 20/2000 pool-deleted →
+  0/2000 lock-restored — the pool acquitted, S45); 2,115 lines of machinery
+  deleted, F12 closed with an MT probe; F68 fixed (`BENCH_SLICE_MODE`) and the
+  first honest thread numbers read: the port scales to two threads and stops,
+  on the *old* pool; F70 fixed; F71 sixteen accessors converted, residue named;
+  F72 fenced pending ruling (**now D-mt-2: complete it**). Steps 6–7 handed
+  to C at a green boundary.
+- **C** — [`phase7_session_c.md`](phase7_session_c.md): the dropped-sync
+  census (S44 at phase scale, 16 C++ lock sites classified), F72 completed
+  (D-mt-2), the stragglers through `memory_align.rs`, F71's residue read
+  before assigned, the last deny and the 89 re-tags, the span that answers
+  the thread ceiling, the unscoped close.
+- *(original B bullet, superseded:)* the ordering decision above, first. Then, whichever way it goes: the
   F3 after-arm (2000 runs, `f3_arm.sh` verbatim — density is not comparable
   otherwise, measurement 89); `sSliceBs.pBs`/`DynamicSliceBs`/thread-bs
   ownership; `pMemAlign` + `memory_align.rs`; the F12 Miri skip when the pool
