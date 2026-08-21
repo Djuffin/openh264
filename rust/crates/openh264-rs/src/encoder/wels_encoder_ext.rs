@@ -32,13 +32,12 @@ use crate::api::codec_api::SSliceArgument;
 
 use crate::{
     EComplexityMode, EParameterSetStrategy, EUsageType, EVideoFrameType, EncoderOption,
-    ISVCEncoderVtbl, OpenH264Version, RCMode, SBitrateInfo, SEncParamBase,
+    OpenH264Version, RCMode, SBitrateInfo, SEncParamBase,
     SEncParamExt, SFrameBSInfo, SLayerBSInfo, SSourcePicture, SSpatialLayerConfig, VideoFormat,
     CM_INIT_EXPECTED, CM_INIT_PARA_ERROR, CM_MALLOC_MEM_ERROR, CM_RESULT_SUCCESS,
     CM_UNKNOWN_REASON, CM_UNSUPPORTED_DATA, MAX_LAYER_NUM_OF_FRAME, MAX_SPATIAL_LAYER_NUM,
     MAX_TEMPORAL_LAYER_NUM,
 };
-use crate::api::codec_api::ISVCEncoder as ISVCEncoderHandle;
 use crate::api::codec_api::{EProfileIdc, ELevelIdc, LAYER_NUM};
 use crate::api::codec_api::LAYER_NUM::*;
 use crate::api::codec_api::ECOMPLEXITY_MODE::*;
@@ -1574,7 +1573,6 @@ pub unsafe fn WelsEncoderApplyBitVaryRang(
 /// CWelsH264SVCEncoder class implementation
 #[repr(C)]
 pub struct CWelsH264SVCEncoder {
-    pub vptr: *const ISVCEncoderVtbl,
     pub m_pEncContext: *mut sWelsEncCtx,
     pub m_pWelsTrace: *mut welsCodecTrace,
     pub m_iMaxPicWidth: i32,
@@ -1593,7 +1591,6 @@ impl CWelsH264SVCEncoder {
     pub fn new() -> Self {
         let trace = Box::into_raw(Box::new(welsCodecTrace::new()));
         let mut encoder = Self {
-            vptr: &G_ISVCENCODER_VTBL,
             m_pEncContext: null_mut(),
             m_pWelsTrace: trace,
             m_iMaxPicWidth: 0,
@@ -2488,124 +2485,25 @@ impl Drop for CWelsH264SVCEncoder {
     }
 }
 
-// C-Vtable Thunk Callbacks for ISVCEncoder
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-unsafe extern "C" fn ext_Initialize(
-    p: *mut ISVCEncoderHandle,
-    argv: *const SEncParamBase,
-) -> i32 {
-    let enc = &mut *(p as *mut CWelsH264SVCEncoder);
-    enc.Initialize(argv)
-}
-
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-unsafe extern "C" fn ext_InitializeExt(
-    p: *mut ISVCEncoderHandle,
-    argv: *const SEncParamExt,
-) -> i32 {
-    let enc = &mut *(p as *mut CWelsH264SVCEncoder);
-    enc.InitializeExt(argv)
-}
-
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-unsafe extern "C" fn ext_GetDefaultParams(
-    p: *mut ISVCEncoderHandle,
-    argv: *mut SEncParamExt,
-) -> i32 {
-    let enc = &mut *(p as *mut CWelsH264SVCEncoder);
-    enc.GetDefaultParams(argv)
-}
-
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-unsafe extern "C" fn ext_Uninitialize(p: *mut ISVCEncoderHandle) -> i32 {
-    let enc = &mut *(p as *mut CWelsH264SVCEncoder);
-    enc.Uninitialize()
-}
-
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-unsafe extern "C" fn ext_EncodeFrame(
-    p: *mut ISVCEncoderHandle,
-    kpSrcPic: *const SSourcePicture,
-    pBsInfo: *mut SFrameBSInfo,
-) -> i32 {
-    let enc = &mut *(p as *mut CWelsH264SVCEncoder);
-    enc.EncodeFrame(kpSrcPic, pBsInfo)
-}
-
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-unsafe extern "C" fn ext_EncodeParameterSets(
-    p: *mut ISVCEncoderHandle,
-    pBsInfo: *mut SFrameBSInfo,
-) -> i32 {
-    let enc = &mut *(p as *mut CWelsH264SVCEncoder);
-    enc.EncodeParameterSets(pBsInfo)
-}
-
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-unsafe extern "C" fn ext_ForceIntraFrame(p: *mut ISVCEncoderHandle, bIDR: bool) -> i32 {
-    let enc = &mut *(p as *mut CWelsH264SVCEncoder);
-    enc.ForceIntraFrame(bIDR, -1)
-}
-
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-unsafe extern "C" fn ext_SetOption(
-    p: *mut ISVCEncoderHandle,
-    opt_id: EncoderOption,
-    option: *mut c_void,
-) -> i32 {
-    let enc = &mut *(p as *mut CWelsH264SVCEncoder);
-    enc.SetOption(opt_id, option)
-}
-
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-unsafe extern "C" fn ext_GetOption(
-    p: *mut ISVCEncoderHandle,
-    opt_id: EncoderOption,
-    option: *mut c_void,
-) -> i32 {
-    let enc = &mut *(p as *mut CWelsH264SVCEncoder);
-    enc.GetOption(opt_id, option)
-}
-
-pub static G_ISVCENCODER_VTBL: ISVCEncoderVtbl = ISVCEncoderVtbl {
-    Initialize: ext_Initialize,
-    InitializeExt: ext_InitializeExt,
-    GetDefaultParams: ext_GetDefaultParams,
-    Uninitialize: ext_Uninitialize,
-    EncodeFrame: ext_EncodeFrame,
-    EncodeParameterSets: ext_EncodeParameterSets,
-    ForceIntraFrame: ext_ForceIntraFrame,
-    SetOption: ext_SetOption,
-    GetOption: ext_GetOption,
-};
-
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe extern "C" fn WelsCreateSVCEncoderExt(ppEncoder: *mut *mut ISVCEncoderHandle) -> i32 {
-    if ppEncoder.is_null() {
-        return 1;
-    }
-    let encoder = Box::new(CWelsH264SVCEncoder::new());
-    *ppEncoder = Box::into_raw(encoder) as *mut ISVCEncoderHandle;
-    0
-}
-
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe extern "C" fn WelsDestroySVCEncoderExt(pEncoder: *mut ISVCEncoderHandle) {
-    if !pEncoder.is_null() {
-        let _ = Box::from_raw(pEncoder as *mut CWelsH264SVCEncoder);
-    }
-}
+// **T8.B4 — the second encoder boundary stood here, and it was dead.**
+//
+// `G_ISVCENCODER_VTBL`, nine `ext_*` thunks duplicating `codec_api.rs`'s nine
+// `encoder_*_c` bodies, and `WelsCreateSVCEncoderExt`/`WelsDestroySVCEncoderExt`:
+// a whole parallel C-ABI surface over `CWelsH264SVCEncoder` itself, reached by
+// casting `*mut ISVCEncoder` straight to `*mut CWelsH264SVCEncoder` because the
+// struct opened with a `vptr` slot.
+//
+// Nothing called any of it. The two factories have no caller in the crate, in the
+// tests, in the benches or in the diffharness; they are not among the seven names
+// `codec_api.h` declares (there is no `WelsCreateSVCEncoderExt` upstream); and
+// `vptr` itself was written once by the constructor and **never read** — the live
+// boundary object is `CWelsH264SVCEncoderImpl { base, pVtbl, inner }`, whose
+// vtable pointer is `base`'s and whose slots are the `*_c` thunks.
+//
+// So the encoder had two vtables, two factories and two sets of nine thunk bodies
+// under one interface type, and only one of each was reachable. Deleted rather than
+// carried into step 2's contracts, where writing a `# Safety` window for a slot
+// nothing can call would have documented a fiction. **F78.**
 
 pub static G_ST_CODEC_VERSION: OpenH264Version = OpenH264Version {
     uMajor: 2,
