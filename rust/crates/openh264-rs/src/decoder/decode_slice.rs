@@ -5416,6 +5416,34 @@ pub fn WelsDecodeSlice(
     ERR_NONE
 }
 
+/// **`DECODER_MT(incomplete: F36)` — the multi-threaded parse arm, and it is a
+/// *partial* translation, not a complete one.**
+///
+/// This is the `iThreadCount > 1` branch of `decoder_core.rs`'s slice loop, and
+/// `GetThreadCount` returns 0 unconditionally, so **nothing reaches it**. What makes
+/// it worth a fence rather than a comment is what is missing: the C++'s copy is 162
+/// lines and this is 101, and the per-macroblock loop lacks the `pSliceIdc` write
+/// (`decode_slice.cpp:1708`), the `pNzc` copy into the picture, the `SetNonZeroCount`
+/// call, the per-MB deblocking call and the border-padding block — while
+/// `decoder_core.cpp:2595`'s re-point of `pMbCorrectlyDecodedFlag` at the picture's
+/// under `pThreadCtx != NULL` has no counterpart at all. `pSliceIdc` is what every
+/// neighbour-availability predicate compares, so at its -1 reset every neighbour
+/// reads as available and prediction crosses slice boundaries.
+///
+/// **Left, not deleted — T7.C7, and the reason is that the record is the asset.**
+/// Deleting it means turning the `if/else` at the branch into an unconditional call,
+/// which is a shape change to a live decoder function in a phase whose charter names
+/// the decoder a non-goal; the body is safe Rust, so it costs no metric and blocks no
+/// deny; and the thing a future porter most needs is exactly the *list above* of which
+/// reference statements are absent, which deleting the function would delete too. The
+/// fence is the change: F36 lived in the log and in scattered comments, and it is
+/// greppable now like `SCREEN_CONTENT(dormant)` and the retired
+/// `LOAD_BALANCING(incomplete: F72)`.
+///
+/// Switching decoder threading on is already a deliberate multi-site act —
+/// `GetThreadCount`'s `0` is load-bearing (`api/codec_api.rs` branches on `<= 0` to
+/// advance `uiDecodeTimeStamp`) — and this must be finished **before** it returns
+/// anything above 1.
 pub fn WelsDecodeAndConstructSlice(pCtx: &mut SWelsDecoderContext, pCurDqLayer: &mut DqLayerState) -> i32 {
     {
         // T5b.3: `pCtx->pNalCur` is an index now, and `slice_split` resolves it in the

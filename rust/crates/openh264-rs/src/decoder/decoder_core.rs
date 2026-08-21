@@ -4262,6 +4262,11 @@ pub fn DecodeCurrentAccessUnit(
                     ComputeColocatedTemporalScaling(pCtx, dq_cur.as_deref_mut());
                 }
 
+                // `DECODER_MT(incomplete: F36)` — this arm is unreachable
+                // (`GetThreadCount` returns 0) and its callee is a partial translation
+                // of the reference. See `decode_slice::WelsDecodeAndConstructSlice` for
+                // the list of statements that are missing and what turning this on
+                // would require. T7.C7 left it and fenced it.
                 if iThreadCount > 1 {
                     iRet = WelsDecodeAndConstructSlice(pCtx, dq_cur.as_deref_mut());
                 } else {

@@ -883,7 +883,7 @@ pub const g_kiPixStrideIdx4x4: [[i32; 4]; 4] = [
 /// # Safety
 /// `pEncCtx`, `pSlice` and `pCurMb` must be valid; `pCurDqLayer->pRefPic` and
 /// `pEncCtx->pVaa->pVaaBackgroundMbFlag` must be assigned.
-// unsafe-cat: port-raw(Phase 7)
+// unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe fn WelsMdInterInit(
     pEncCtx: *mut sWelsEncCtx,
@@ -1280,7 +1280,7 @@ pub unsafe extern "C" fn WelsMdP4x8(
 ///
 /// # Safety
 /// All pointers must be valid.
-// unsafe-cat: port-raw(Phase 7)
+// unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsMdInterFinePartition(
     pEncCtx: *mut sWelsEncCtx,
@@ -1320,7 +1320,7 @@ pub unsafe extern "C" fn WelsMdInterFinePartition(
 /// # Safety
 /// All pointers must be valid; `pEncCtx->pVaa->sVaaCalcInfo.pSad8x8` must be
 /// populated and `pfGetMbSignFromInterVaa` assigned.
-// unsafe-cat: port-raw(Phase 7)
+// unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsMdInterFinePartitionVaa(
     pEncCtx: *mut sWelsEncCtx,
@@ -2157,7 +2157,7 @@ pub unsafe extern "C" fn WelsMdFirstIntraMode(
 /// # Safety
 /// All pointers except `pUnused` must be valid; `pfInterMdBackgroundDecision` and
 /// `pfSCDPSkipDecision` must be assigned (`WelsInitBGDFunc` / `WelsInitSCDPskipFunc`).
-// unsafe-cat: port-raw(Phase 7)
+// unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsMdInterMb(
     pEncCtx: *mut sWelsEncCtx,
@@ -2282,7 +2282,7 @@ fn LD32_MV_PUB(pMv: &SMVUnitXY) -> u32 {
 ///
 /// # Safety
 /// All four pointers must be valid; `pfCopy16x16Aligned`/`pfCopy8x8Aligned` assigned.
-// unsafe-cat: port-raw(Phase 7)
+// unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe fn WelsMdInterEncode(
     pEncCtx: *mut sWelsEncCtx,

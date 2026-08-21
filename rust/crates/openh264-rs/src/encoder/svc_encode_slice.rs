@@ -1397,7 +1397,7 @@ pub unsafe fn UpdateMbNeighbourInfoForNextSlice(
 // Slice Header Initialization & Serialization
 // ============================================================================
 
-// unsafe-cat: port-raw(Phase 7)
+// unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe fn WelsSliceHeaderScalExtInit(pCurLayer: *mut SDqLayer, pSlice: *mut SSlice) {
     if pCurLayer.is_null() || pSlice.is_null() {
@@ -1423,7 +1423,7 @@ pub unsafe fn WelsSliceHeaderScalExtInit(pCurLayer: *mut SDqLayer, pSlice: *mut 
     }
 }
 
-// unsafe-cat: port-raw(Phase 7)
+// unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe fn WelsSliceHeaderExtInit(pEncCtx: *mut sWelsEncCtx, pCurLayer: *mut SDqLayer, pSlice: *mut SSlice) {
     if pEncCtx.is_null() || pCurLayer.is_null() || pSlice.is_null() {
@@ -1555,7 +1555,7 @@ pub unsafe fn WriteRefPicMarking(buf: &mut [u8], pBs: *mut BsWriter, pSliceHeade
     }
 }
 
-// unsafe-cat: port-raw(Phase 7)
+// unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe fn WelsSliceHeaderWrite(
     pCtx: *mut sWelsEncCtx,
@@ -1645,7 +1645,7 @@ pub unsafe fn WelsSliceHeaderWrite(
     }
 }
 
-// unsafe-cat: port-raw(Phase 7)
+// unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe fn WelsSliceHeaderExtWrite(
     pCtx: *mut sWelsEncCtx,
@@ -1779,7 +1779,7 @@ pub unsafe fn WelsIMbChromaEncode(pEncCtx: *mut sWelsEncCtx, pCurMb: &mut SMB, p
     pfIDctFourT4(pCsCr, kiCsStride, pBestPred.add(64), 8, pCurRS.add(64));
 }
 
-// unsafe-cat: port-raw(Phase 7)
+// unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe fn WelsPMbChromaEncode(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSlice, pCurMb: &mut SMB) {
     let pCurLayer = current_layer(pEncCtx);
@@ -1801,7 +1801,7 @@ pub unsafe fn WelsPMbChromaEncode(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSlice
     crate::encoder::svc_encode_mb::WelsEncRecUV(&*pFunc, pCurMb, pMbCache, pCurRS.add(64), 2);
 }
 
-// unsafe-cat: port-raw(Phase 7)
+// unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe fn OutputPMbWithoutConstructCsRsNoCopy(pCtx: *mut sWelsEncCtx, pDq: *mut SDqLayer, pSlice: *mut SSlice, pMb: *mut SMB) {
     if pCtx.is_null() || pDq.is_null() || pSlice.is_null() || pMb.is_null() {
@@ -1908,7 +1908,7 @@ pub unsafe fn WelsInitInterMDStruc(
     (*pMd).iBlock8x8StaticIdc.fill(0);
 }
 
-// unsafe-cat: port-raw(Phase 7)
+// unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe fn WelsISliceMdEnc(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSlice) -> i32 {
     if pEncCtx.is_null() || pSlice.is_null() {
@@ -2022,7 +2022,7 @@ pub unsafe fn WelsISliceMdEnc(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSlice) ->
     ENC_RETURN_SUCCESS
 }
 
-// unsafe-cat: port-raw(Phase 7)
+// unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe fn WelsISliceMdEncDynamic(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSlice) -> i32 {
     if pEncCtx.is_null() || pSlice.is_null() {
@@ -2169,7 +2169,7 @@ pub unsafe fn WelsISliceMdEncDynamic(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSl
 ///
 /// # Safety
 /// All three pointers must be valid, with `pCurMb`'s side arrays allocated.
-// unsafe-cat: port-raw(Phase 7)
+// unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 unsafe fn mb_dump(pCurMb: &SMB, pMd: &SWelsMD, pSlice: *const SSlice) {
     if !crate::encoder::dump_enabled(&MB_DUMP, "OH264_MBDUMP") {
@@ -2205,7 +2205,7 @@ unsafe fn mb_dump(pCurMb: &SMB, pMd: &SWelsMD, pSlice: *const SSlice) {
     );
 }
 
-// unsafe-cat: port-raw(Phase 7)
+// unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe fn WelsMdInterMbLoop(
     pEncCtx: *mut sWelsEncCtx,
@@ -2369,7 +2369,7 @@ pub unsafe fn WelsMdInterMbLoop(
     ENC_RETURN_SUCCESS
 }
 
-// unsafe-cat: port-raw(Phase 7)
+// unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe fn WelsMdInterMbLoopOverDynamicSlice(
     pEncCtx: *mut sWelsEncCtx,
@@ -2566,7 +2566,7 @@ pub unsafe fn WelsMdInterMbLoopOverDynamicSlice(
     ENC_RETURN_SUCCESS
 }
 
-// unsafe-cat: port-raw(Phase 7)
+// unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe fn WelsPSliceMdEnc(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSlice, kbIsHighestDlayerFlag: bool) -> i32 {
     let kpShExt = &(*pSlice).sSliceHeaderExt;
@@ -2586,7 +2586,7 @@ pub unsafe fn WelsPSliceMdEnc(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSlice, kb
     WelsMdInterMbLoop(pEncCtx, pSlice, &mut sMd, kiSliceFirstMbXY)
 }
 
-// unsafe-cat: port-raw(Phase 7)
+// unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe fn WelsPSliceMdEncDynamic(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSlice, kbIsHighestDlayerFlag: bool) -> i32 {
     let kpShExt = &(*pSlice).sSliceHeaderExt;
@@ -2603,7 +2603,7 @@ pub unsafe fn WelsPSliceMdEncDynamic(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSl
     WelsMdInterMbLoopOverDynamicSlice(pEncCtx, pSlice, &mut sMd, kiSliceFirstMbXY)
 }
 
-// unsafe-cat: port-raw(Phase 7)
+// unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe fn WelsCodePSlice(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSlice) -> i32 {
     let pCurLayer = current_layer(pEncCtx);
@@ -2623,7 +2623,7 @@ pub unsafe fn WelsCodePSlice(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSlice) -> 
     WelsPSliceMdEnc(pEncCtx, pSlice, kbHighestSpatial)
 }
 
-// unsafe-cat: port-raw(Phase 7)
+// unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe fn WelsCodePOverDynamicSlice(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSlice) -> i32 {
     let pCurLayer = current_layer(pEncCtx);
@@ -2642,31 +2642,31 @@ pub unsafe fn WelsCodePOverDynamicSlice(pEncCtx: *mut sWelsEncCtx, pSlice: *mut 
     WelsPSliceMdEncDynamic(pEncCtx, pSlice, kbHighestSpatial)
 }
 
-// unsafe-cat: port-raw(Phase 7)
+// unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsCodePSlice_c(pCtx: *mut sWelsEncCtx, pSlice: *mut SSlice) -> i32 {
     WelsCodePSlice(pCtx, pSlice)
 }
 
-// unsafe-cat: port-raw(Phase 7)
+// unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsCodePOverDynamicSlice_c(pCtx: *mut sWelsEncCtx, pSlice: *mut SSlice) -> i32 {
     WelsCodePOverDynamicSlice(pCtx, pSlice)
 }
 
-// unsafe-cat: port-raw(Phase 7)
+// unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsISliceMdEnc_c(pCtx: *mut sWelsEncCtx, pSlice: *mut SSlice) -> i32 {
     WelsISliceMdEnc(pCtx, pSlice)
 }
 
-// unsafe-cat: port-raw(Phase 7)
+// unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsISliceMdEncDynamic_c(pCtx: *mut sWelsEncCtx, pSlice: *mut SSlice) -> i32 {
     WelsISliceMdEncDynamic(pCtx, pSlice)
 }
 
-// unsafe-cat: port-raw(Phase 7)
+// unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsSliceHeaderWrite_c(
     pCtx: *mut sWelsEncCtx,
@@ -2678,7 +2678,7 @@ pub unsafe extern "C" fn WelsSliceHeaderWrite_c(
     WelsSliceHeaderWrite(pCtx, pBs, pCurLayer, pSlice, pParametersetStrategy);
 }
 
-// unsafe-cat: port-raw(Phase 7)
+// unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsSliceHeaderExtWrite_c(
     pCtx: *mut sWelsEncCtx,
@@ -2753,7 +2753,7 @@ pub unsafe fn slice_bs_buffer<'a>(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSlice
 /// `pEncCtx`, `(*pEncCtx).pSliceThreading` and `pSlice` must be live, and the slice
 /// must have been claimed into a thread slot (`InitOneSliceInThread`).
 #[inline]
-// unsafe-cat: port-raw(Phase 7)
+// unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe fn thread_bs_buffer<'a>(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSlice) -> &'a mut [u8] {
     // **T7.C5, and the spelling is F71's.** The buffer is owned now, so the root has
@@ -2815,7 +2815,7 @@ pub unsafe fn dynamic_bs_buffer(pEncCtx: *mut sWelsEncCtx, kiPartitionId: usize)
 /// `pSlice` must be live, and `pEncCtx` and `(*pEncCtx).pOut` must be live when
 /// `pBs` is null.
 #[inline]
-// unsafe-cat: port-raw(Phase 7)
+// unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe fn slice_writer(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSlice) -> *mut BsWriter {
     if (*pSlice).sSliceBs.pBs.is_some() {
@@ -2876,7 +2876,7 @@ pub unsafe fn StampLayerIdrFlagForSliceType(pEncCtx: *mut sWelsEncCtx) {
     (*pCurLayer).sLayerInfo.sNalHeaderExt.bIdrFlag = true;
 }
 
-// unsafe-cat: port-raw(Phase 7)
+// unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe fn WelsCodeOneSlice(pEncCtx: *mut sWelsEncCtx, pCurSlice: *mut SSlice, kiNalType: i32) -> i32 {
     if pEncCtx.is_null() || pCurSlice.is_null() {
@@ -2978,7 +2978,7 @@ pub unsafe fn WelsCodeOneSlice(pEncCtx: *mut sWelsEncCtx, pCurSlice: *mut SSlice
 /// # Safety
 /// `pSlice` must be valid; `pBs` must be its writer (`slice_writer`) and `buf` the
 /// buffer that writer is positioned in (`slice_bs_buffer`).
-// unsafe-cat: port-raw(Phase 7)
+// unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe fn WelsWriteSliceEndSyn(
     buf: &mut [u8],
@@ -3006,7 +3006,7 @@ pub unsafe fn WelsWriteSliceEndSyn(
 // Dynamic Slicing & Boundary Enforcement
 // ============================================================================
 
-// unsafe-cat: port-raw(Phase 7)
+// unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe fn AddSliceBoundary(
     pEncCtx: *mut sWelsEncCtx,
@@ -3061,7 +3061,7 @@ pub unsafe fn AddSliceBoundary(
     }
 }
 
-// unsafe-cat: port-raw(Phase 7)
+// unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe fn DynSlcJudgeSliceBoundaryStepBack(
     pEncCtx: *mut sWelsEncCtx,
@@ -3149,7 +3149,7 @@ pub unsafe fn DynSlcJudgeSliceBoundaryStepBack(
 // The `+ 16` accommodation (F14) and its reasoning moved onto `SMbCache::sMemPredMb`
 // with the buffer.
 
-// unsafe-cat: port-raw(Phase 7)
+// unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe fn InitSliceBoundaryInfo(
     pCurLayer: *mut SDqLayer,
@@ -3206,7 +3206,7 @@ pub unsafe fn InitSliceBoundaryInfo(
     ENC_RETURN_SUCCESS
 }
 
-// unsafe-cat: port-raw(Phase 7)
+// unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe fn SetSliceBoundaryInfo(pCurLayer: *mut SDqLayer, pSlice: *mut SSlice, kiSliceIdx: i32) -> i32 {
     if pCurLayer.is_null()
@@ -3238,7 +3238,7 @@ pub unsafe fn SetSliceBoundaryInfo(pCurLayer: *mut SDqLayer, pSlice: *mut SSlice
 /// this replaces, zeros included, and its failure is a panic-on-OOM — the same trade
 /// every owned buffer in this port has made since T3.6. `pMa` goes with the
 /// allocation.
-// unsafe-cat: MT
+// unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe fn InitSliceBsBuffer(
     pSlice: *mut SSlice,
@@ -3268,7 +3268,7 @@ pub unsafe fn InitSliceBsBuffer(
 /// bank drops every one of them, in the same order, with nothing to null out and
 /// nothing to get wrong on an error path. `pMa` goes with the walk, and this is the
 /// last thing `FreeDqLayer` had to release by hand.
-// unsafe-cat: MT
+// unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe fn FreeSliceBuffer(pDqLayer: *mut SDqLayer, kiBank: usize) {
     let bank: &mut Vec<SSlice> = &mut (*pDqLayer).sSliceBufferInfo[kiBank].pSliceBuffer;
@@ -3276,7 +3276,7 @@ pub unsafe fn FreeSliceBuffer(pDqLayer: *mut SDqLayer, kiBank: usize) {
     bank.shrink_to_fit();
 }
 
-// unsafe-cat: MT
+// unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe fn InitSliceList(
     pDqLayer: *mut SDqLayer,
@@ -3329,7 +3329,7 @@ pub unsafe fn InitAllSlicesInThread(pCtx: *mut sWelsEncCtx) -> i32 {
     ENC_RETURN_SUCCESS
 }
 
-// unsafe-cat: port-raw(Phase 7)
+// unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe fn InitOneSliceInThread(
     pCtx: *mut sWelsEncCtx,
@@ -3362,7 +3362,7 @@ pub unsafe fn InitOneSliceInThread(
     ENC_RETURN_SUCCESS
 }
 
-// unsafe-cat: MT
+// unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe fn InitSliceThreadInfo(
     pCtx: *mut sWelsEncCtx,
@@ -3416,7 +3416,7 @@ pub unsafe fn InitSliceThreadInfo(
     ENC_RETURN_SUCCESS
 }
 
-// unsafe-cat: MT
+// unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe fn InitSliceInLayer(
     pCtx: *mut sWelsEncCtx,
@@ -3475,7 +3475,7 @@ pub unsafe fn InitSliceInLayer(
     ENC_RETURN_SUCCESS
 }
 
-// unsafe-cat: port-raw(Phase 7)
+// unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe fn InitSliceHeadWithBase(pSlice: *mut SSlice, pBaseSlice: *mut SSlice) {
     if pSlice.is_null() || pBaseSlice.is_null() {
@@ -3492,7 +3492,7 @@ pub unsafe fn InitSliceHeadWithBase(pSlice: *mut SSlice, pBaseSlice: *mut SSlice
     pSHExt.sSliceHeader.iSpsId = pBaseSHExt.sSliceHeader.iSpsId;
 }
 
-// unsafe-cat: port-raw(Phase 7)
+// unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe fn InitSliceRefInfoWithBase(pSlice: *mut SSlice, pBaseSlice: *mut SSlice, kuiRefCount: u8) {
     if pSlice.is_null() || pBaseSlice.is_null() {
@@ -3507,7 +3507,7 @@ pub unsafe fn InitSliceRefInfoWithBase(pSlice: *mut SSlice, pBaseSlice: *mut SSl
 }
 
 #[inline]
-// unsafe-cat: port-raw(Phase 7)
+// unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe fn InitSliceRC(pSlice: *mut SSlice, kiGlobalQp: i32) -> i32 {
     if pSlice.is_null() || kiGlobalQp < 0 {
@@ -3544,7 +3544,7 @@ pub unsafe fn InitSliceRC(pSlice: *mut SSlice, kiGlobalQp: i32) -> i32 {
 /// an error path the gates cannot reach — allocation failure, or a negative global
 /// QP — where this leaves the bank grown with an uninitialised tail and the C++ left
 /// a double free; both then propagate `ENC_RETURN_*` to the same caller.
-// unsafe-cat: port-raw(Phase 7)
+// unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe fn ReallocateSliceList(
     pCtx: *mut sWelsEncCtx,
@@ -3600,7 +3600,7 @@ pub unsafe fn ReallocateSliceList(
     ENC_RETURN_SUCCESS
 }
 
-// unsafe-cat: port-raw(Phase 7)
+// unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe fn CalculateNewSliceNum(
     pCtx: *mut sWelsEncCtx,
