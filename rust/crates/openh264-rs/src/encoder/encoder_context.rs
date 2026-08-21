@@ -635,10 +635,12 @@ pub unsafe fn ctx_mb_index_x(pCtx: *mut sWelsEncCtx, kiDid: usize) -> *mut i16 {
 // unsafe-cat: cursor
 #[allow(unsafe_code)]
 pub unsafe fn ctx_param(pCtx: *mut sWelsEncCtx) -> *mut SWelsSvcCodingParam {
-    match (*pCtx).pSvcParam.as_mut() {
-        Some(b) => &raw mut **b,
-        None => std::ptr::null_mut(),
-    }
+    // **F71.** `Option::as_mut` is a `Unique` retag over the slot, and every worker
+    // resolves this same field — so two of them doing it at once is a data race even
+    // though neither writes the slot. `Option<Box<T>>` is one pointer wide with
+    // `None` as null, so the slot is read as a pointer *value*: no retag, and the
+    // pointer still carries the heap block's own provenance.
+    std::ptr::read(std::ptr::addr_of!((*pCtx).pSvcParam) as *const *mut SWelsSvcCodingParam)
 }
 
 /// The encoder's **kernel dispatch table** — T6.I1, and never null: the context
@@ -657,7 +659,9 @@ pub unsafe fn ctx_param(pCtx: *mut sWelsEncCtx) -> *mut SWelsSvcCodingParam {
 // unsafe-cat: cursor
 #[allow(unsafe_code)]
 pub unsafe fn ctx_func_list(pCtx: *mut sWelsEncCtx) -> *mut SWelsFuncPtrList {
-    &raw mut *(*pCtx).pFuncList
+    // **F71**, as `ctx_param`: `Box<T>` is one pointer wide, so the slot is read as a
+    // pointer value rather than dereferenced through a retag of the context.
+    std::ptr::read(std::ptr::addr_of!((*pCtx).pFuncList) as *const *mut SWelsFuncPtrList)
 }
 
 /// The frame's **video-analysis block** — T6.H10, and null before the preprocessor
@@ -673,10 +677,12 @@ pub unsafe fn ctx_func_list(pCtx: *mut sWelsEncCtx) -> *mut SWelsFuncPtrList {
 // unsafe-cat: SCREEN_CONTENT(dormant)
 #[allow(unsafe_code)]
 pub unsafe fn ctx_vaa(pCtx: *mut sWelsEncCtx) -> *mut SVAAFrameInfo {
-    match (*pCtx).pVaa.as_mut() {
-        Some(b) => &raw mut **b,
-        None => std::ptr::null_mut(),
-    }
+    // **F71.** `Option::as_mut` is a `Unique` retag over the slot, and every worker
+    // resolves this same field — so two of them doing it at once is a data race even
+    // though neither writes the slot. `Option<Box<T>>` is one pointer wide with
+    // `None` as null, so the slot is read as a pointer *value*: no retag, and the
+    // pointer still carries the heap block's own provenance.
+    std::ptr::read(std::ptr::addr_of!((*pCtx).pVaa) as *const *mut SVAAFrameInfo)
 }
 
 /// The **root** of `pCtx->pMvdCostTable` — T6.H9; see [`ctx_sps_array`] for the
@@ -688,11 +694,12 @@ pub unsafe fn ctx_vaa(pCtx: *mut sWelsEncCtx) -> *mut SVAAFrameInfo {
 // unsafe-cat: cursor
 #[allow(unsafe_code)]
 pub unsafe fn ctx_mvd_cost_table(pCtx: *mut sWelsEncCtx) -> *mut u16 {
-    let v: &mut Vec<u16> = &mut (*pCtx).pMvdCostTable;
-    if v.is_empty() {
+    // **F71** — see `ctx_param`. Shared access to the `Vec`, buffer provenance out.
+    let v = std::ptr::addr_of!((*pCtx).pMvdCostTable);
+    if (*v).is_empty() {
         return std::ptr::null_mut();
     }
-    v.as_mut_ptr()
+    (*v).as_ptr() as *mut u16
 }
 
 /// The MVD cost table's **origin** — the entry a zero MVD indexes, which is
@@ -736,11 +743,17 @@ pub unsafe fn ctx_mvd_cost_origin(pCtx: *mut sWelsEncCtx) -> *mut u16 {
 // unsafe-cat: cursor
 #[allow(unsafe_code)]
 pub unsafe fn ctx_dq_layer(pCtx: *mut sWelsEncCtx, kiDid: usize) -> *mut SDqLayer {
-    let arr: &mut Vec<Option<Box<SDqLayer>>> = &mut (*pCtx).ppDqLayerList;
-    match arr.get_mut(kiDid) {
-        Some(Some(b)) => &raw mut **b,
-        _ => std::ptr::null_mut(),
+    // **F71.** No `&mut` to the `Vec` and no reference to the slot. See the family
+    // note above `ctx_param`.
+    let arr = std::ptr::addr_of!((*pCtx).ppDqLayerList);
+    if kiDid >= (*arr).len() {
+        return std::ptr::null_mut();
     }
+    // `Option<Box<T>>` is guaranteed to be one pointer wide with `None` as null, so
+    // the slot is *read as a pointer value* rather than borrowed as an `Option`.
+    // The value read carries the heap block's own provenance — nothing here retags
+    // the layer, which is what lets two workers resolve it at once.
+    std::ptr::read((*arr).as_ptr().add(kiDid) as *const *mut SDqLayer)
 }
 
 /// Dependency layer `kiDid`'s **reference list** — `ppRefPicListExt[did]`, and null
@@ -757,11 +770,12 @@ pub unsafe fn ctx_dq_layer(pCtx: *mut sWelsEncCtx, kiDid: usize) -> *mut SDqLaye
 // unsafe-cat: cursor
 #[allow(unsafe_code)]
 pub unsafe fn ctx_ref_list(pCtx: *mut sWelsEncCtx, kiDid: usize) -> *mut SRefList {
-    let arr: &mut Vec<Option<Box<SRefList>>> = &mut (*pCtx).ppRefPicListExt;
-    match arr.get_mut(kiDid) {
-        Some(Some(b)) => &raw mut **b,
-        _ => std::ptr::null_mut(),
+    // **F71** — the same shape as `ctx_dq_layer`.
+    let arr = std::ptr::addr_of!((*pCtx).ppRefPicListExt);
+    if kiDid >= (*arr).len() {
+        return std::ptr::null_mut();
     }
+    std::ptr::read((*arr).as_ptr().add(kiDid) as *const *mut SRefList)
 }
 
 /// The **root** of `pCtx->pWelsSvcRc` — T6.H6; see [`ctx_sps_array`] for the spelling.
@@ -772,11 +786,12 @@ pub unsafe fn ctx_ref_list(pCtx: *mut sWelsEncCtx, kiDid: usize) -> *mut SRefLis
 // unsafe-cat: cursor
 #[allow(unsafe_code)]
 pub unsafe fn ctx_rc(pCtx: *mut sWelsEncCtx) -> *mut SWelsSvcRc {
-    let arr: &mut Vec<SWelsSvcRc> = &mut (*pCtx).pWelsSvcRc;
-    if arr.is_empty() {
+    // **F71** — see `ctx_param`. Shared access to the `Vec`, buffer provenance out.
+    let v = std::ptr::addr_of!((*pCtx).pWelsSvcRc);
+    if (*v).is_empty() {
         return std::ptr::null_mut();
     }
-    arr.as_mut_ptr()
+    (*v).as_ptr() as *mut SWelsSvcRc
 }
 
 /// The rate-control state of spatial layer `kiDid` — `pWelsSvcRc[did]`, which is how
@@ -804,11 +819,12 @@ pub unsafe fn ctx_rc_at(pCtx: *mut sWelsEncCtx, kiDid: usize) -> *mut SWelsSvcRc
 // unsafe-cat: cursor
 #[allow(unsafe_code)]
 pub unsafe fn ctx_ltr(pCtx: *mut sWelsEncCtx) -> *mut SLTRState {
-    let arr: &mut Vec<SLTRState> = &mut (*pCtx).pLtr;
-    if arr.is_empty() {
+    // **F71** — see `ctx_param`. Shared access to the `Vec`, buffer provenance out.
+    let v = std::ptr::addr_of!((*pCtx).pLtr);
+    if (*v).is_empty() {
         return std::ptr::null_mut();
     }
-    arr.as_mut_ptr()
+    (*v).as_ptr() as *mut SLTRState
 }
 
 /// The long-term-reference state of dependency layer `kiDid` — `pLtr[did]`, which is
@@ -849,11 +865,12 @@ pub unsafe fn ctx_ltr_at(pCtx: *mut sWelsEncCtx, kiDid: usize) -> *mut SLTRState
 // unsafe-cat: cursor
 #[allow(unsafe_code)]
 pub unsafe fn ctx_frame_bs(pCtx: *mut sWelsEncCtx) -> *mut u8 {
-    let buf: &mut Vec<u8> = &mut (*pCtx).pFrameBs;
-    if buf.is_empty() {
+    // **F71** — see `ctx_param`. Shared access to the `Vec`, buffer provenance out.
+    let buf = std::ptr::addr_of!((*pCtx).pFrameBs);
+    if (*buf).is_empty() {
         return std::ptr::null_mut();
     }
-    buf.as_mut_ptr()
+    (*buf).as_ptr() as *mut u8
 }
 
 /// The frame bitstream's write cursor at byte `kiPos` — `pFrameBs + iPosBsBuffer`,
@@ -886,11 +903,12 @@ pub unsafe fn ctx_frame_bs_at(pCtx: *mut sWelsEncCtx, kiPos: i32) -> *mut u8 {
 // unsafe-cat: cursor
 #[allow(unsafe_code)]
 pub unsafe fn ctx_dq_idc_map(pCtx: *mut sWelsEncCtx) -> *mut SDqIdc {
-    let arr: &mut Vec<SDqIdc> = &mut (*pCtx).pDqIdcMap;
-    if arr.is_empty() {
+    // **F71** — see `ctx_param`. Shared access to the `Vec`, buffer provenance out.
+    let v = std::ptr::addr_of!((*pCtx).pDqIdcMap);
+    if (*v).is_empty() {
         return std::ptr::null_mut();
     }
-    arr.as_mut_ptr()
+    (*v).as_ptr() as *mut SDqIdc
 }
 
 /// The **root** of `pCtx->pSpsArray` — T6.H2, and S40's spelling again.
@@ -915,11 +933,12 @@ pub unsafe fn ctx_dq_idc_map(pCtx: *mut sWelsEncCtx) -> *mut SDqIdc {
 // unsafe-cat: cursor
 #[allow(unsafe_code)]
 pub unsafe fn ctx_sps_array(pCtx: *mut sWelsEncCtx) -> *mut SWelsSPS {
-    let arr: &mut Vec<SWelsSPS> = &mut (*pCtx).pSpsArray;
-    if arr.is_empty() {
+    // **F71** — see `ctx_param`. Shared access to the `Vec`, buffer provenance out.
+    let v = std::ptr::addr_of!((*pCtx).pSpsArray);
+    if (*v).is_empty() {
         return std::ptr::null_mut();
     }
-    arr.as_mut_ptr()
+    (*v).as_ptr() as *mut SWelsSPS
 }
 
 /// The **root** of `pCtx->pSubsetArray` — see [`ctx_sps_array`].
@@ -930,11 +949,12 @@ pub unsafe fn ctx_sps_array(pCtx: *mut sWelsEncCtx) -> *mut SWelsSPS {
 // unsafe-cat: cursor
 #[allow(unsafe_code)]
 pub unsafe fn ctx_subset_array(pCtx: *mut sWelsEncCtx) -> *mut SSubsetSps {
-    let arr: &mut Vec<SSubsetSps> = &mut (*pCtx).pSubsetArray;
-    if arr.is_empty() {
+    // **F71** — see `ctx_param`. Shared access to the `Vec`, buffer provenance out.
+    let v = std::ptr::addr_of!((*pCtx).pSubsetArray);
+    if (*v).is_empty() {
         return std::ptr::null_mut();
     }
-    arr.as_mut_ptr()
+    (*v).as_ptr() as *mut SSubsetSps
 }
 
 /// The **root** of `pCtx->pPPSArray` — see [`ctx_sps_array`].
@@ -945,11 +965,12 @@ pub unsafe fn ctx_subset_array(pCtx: *mut sWelsEncCtx) -> *mut SSubsetSps {
 // unsafe-cat: cursor
 #[allow(unsafe_code)]
 pub unsafe fn ctx_pps_array(pCtx: *mut sWelsEncCtx) -> *mut SWelsPPS {
-    let arr: &mut Vec<SWelsPPS> = &mut (*pCtx).pPPSArray;
-    if arr.is_empty() {
+    // **F71** — see `ctx_param`. Shared access to the `Vec`, buffer provenance out.
+    let v = std::ptr::addr_of!((*pCtx).pPPSArray);
+    if (*v).is_empty() {
         return std::ptr::null_mut();
     }
-    arr.as_mut_ptr()
+    (*v).as_ptr() as *mut SWelsPPS
 }
 
 /// [`SStrideTables::MbIndexY`] reached through the context.
@@ -1019,7 +1040,12 @@ pub struct sWelsEncCtx {
     /// stay, because the survivors still take one. Root: [`ctx_func_list`].
     pub pFuncList: Box<SWelsFuncPtrList>,
     pub pSliceThreading: *mut SSliceThreading,
-    pub pTaskManage: *mut c_void,
+    // `pTaskManage: *mut c_void` stood here — an `IWelsTaskManage*` in C++, erased to
+    // `c_void` because the port could not name the type from this module. It held the
+    // one reference to the process-wide thread pool. Deleted at T7.B4; the encoder
+    // forks with `std::thread::scope`, and a scope has no object to own.
+    // It is also one of the twelve `!Sync` reasons F67 counted, so the count is
+    // eleven now — see the finding's disposition.
     /// `IWelsReferenceStrategy*` in C++ (`encoder_context.h`); **T4b.2b** made it
     /// the strategy's *identity* instead of a pointer to an object carrying only a
     /// back-pointer to this very struct. See [`RefStrategyKind`].
@@ -1171,7 +1197,10 @@ pub struct sWelsEncCtx {
     pub iStatisticsLogInterval: i32,
     pub iLastStatisticsLogTs: i64,
     pub iEncoderError: i32,
-    pub mutexEncoderError: *mut c_void,
+    // `mutexEncoderError: *mut c_void` stood here, guarding `FinishTask`'s
+    // `iEncoderError |= m_eTaskResult` from the worker threads. Results travel back
+    // through the join now and the calling thread ORs them, so the field has no
+    // writer left. Deleted at T7.B4 — F67's twelve `!Sync` reasons are ten.
     pub bDeliveryFlag: bool,
     pub sWelsCabacContexts: [[[SStateCtx; WELS_CONTEXT_COUNT]; WELS_QP_MAX + 1]; 4],
     pub uiLastTimestamp: i64,
@@ -1239,7 +1268,6 @@ impl sWelsEncCtx {
             pStrideTab: None,
             pFuncList: Box::new(SWelsFuncPtrList::default()),
             pSliceThreading: std::ptr::null_mut(),
-            pTaskManage: std::ptr::null_mut(),
 
             // `TemporalLayer`, the zero discriminant, is the variant the old
             // `CreateReferenceStrategy` factory's `_ =>` arm produced — asserted in
@@ -1350,7 +1378,6 @@ impl sWelsEncCtx {
             iStatisticsLogInterval: 0,      // set from the param's log interval
             iLastStatisticsLogTs: 0,
             iEncoderError: 0,               // == ENC_RETURN_SUCCESS, and that matters
-            mutexEncoderError: std::ptr::null_mut(),
             bDeliveryFlag: false,
 
             // The CABAC probability tables. Zero is `{ MPS = 0, state = 0 }`, which is
@@ -2312,7 +2339,7 @@ mod tests {
         let extents: Vec<(&str, usize, usize)> = extents![
         sLogCtx, pSvcParam, iMvRange, pMvdCostTable,
         iMvdCostTableSize, iMvdCostTableStride, pStrideTab, pFuncList,
-        pSliceThreading, pTaskManage, eRefStrategy, pEncPic,
+        pSliceThreading, eRefStrategy, pEncPic,
         pDecPic, pRefPic, iCurDqLayer, ppDqLayerList,
         ppRefPicListExt, pRefList0, pLtr, bCurFrameMarkedAsSceneLtr,
         eSliceType, eNalType, eNalPriority, eLastNalPriority,
@@ -2326,10 +2353,11 @@ mod tests {
         iSliceBufferSize, bRefOfCurTidIsLtr, iMaxSliceCount, iActiveThreadsNum,
         pDqIdcMap, sPSOVector, pMemAlign,
         uiStartTimestamp, sEncoderStatistics, iStatisticsLogInterval, iLastStatisticsLogTs,
-        iEncoderError, mutexEncoderError, bDeliveryFlag, sWelsCabacContexts,
+        iEncoderError, bDeliveryFlag, sWelsCabacContexts,
         uiLastTimestamp, pDynamicBsBuffer,
         ];
-        assert_eq!(extents.len(), 68, "a field was added or removed without updating this list");
+        // 68 until T7.B4 took `pTaskManage` and `mutexEncoderError` out with the pool.
+        assert_eq!(extents.len(), 66, "a field was added or removed without updating this list");
 
         let b = shell.as_ptr().cast::<u8>();
 

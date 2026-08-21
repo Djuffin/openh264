@@ -330,8 +330,18 @@ if [ "${LEVEL_DONE:-0}" != 1 ]; then
   # line here is part of fixing the thing it names, and no skip may be added
   # without a finding.
   #
-  #   wels_thread_pool  F12  every worker takes `&mut` to the one shared pool
-  #                          (data race on the retag; Phase 7 owns it)
+  # **THE LIST IS EMPTY, and has been since T7.B4.** `wels_thread_pool` was the last
+  # one — F12, "every worker takes `&mut` to the one shared pool (data race on the
+  # retag)". It is deleted rather than fixed: `common/wels_thread_pool.rs` is gone and
+  # the encoder forks with `std::thread::scope`, so there is no pool for a worker to
+  # alias. S15's rule is honoured in the strongest available form — the line went in
+  # the same commit as the code it named.
+  #
+  # And it is not a vacuous deletion. Nothing in the library drove
+  # `iMultipleThreadIdc > 1` under Miri before, so an empty skip list would have meant
+  # only that the untested path was no longer named; the same commit adds
+  # `fork_join_encodes_a_multi_slice_frame_under_the_aliasing_checker`
+  # (`encoder/svc_encode_slice.rs`), which drives the fork/join itself.
   #
   # `encoder_ext` was here for F13's last production site — `InitDqLayers` holding
   # `&mut` into `sSpatialLayers` across an aliasing use. Phase 6 session A's
@@ -352,7 +362,7 @@ if [ "${LEVEL_DONE:-0}" != 1 ]; then
   # the three tests that took a second `&mut` to a picture the list already held
   # — which is what the skip had been hiding, and is F18's lesson again: the
   # backlog behind a skip is not confined to the code the skip was written for.
-  MIRI_SKIPS=(--skip wels_thread_pool)
+  MIRI_SKIPS=()
   # SCOPE (Phase 6 session H, decision D-gate-2). `MIRI_SCOPE=encoder` adds one
   # more skip — and it is a *scope*, not a skip in the sense above: it names no
   # finding and hides no defect, because the code it drops out is code the session
@@ -366,9 +376,9 @@ if [ "${LEVEL_DONE:-0}" != 1 ]; then
   # This is for Phase 6's encoder sessions only. Every phase exit runs unscoped.
   if [ "${MIRI_SCOPE:-}" = encoder ]; then
     MIRI_SKIPS+=(--skip 'decoder::')
-    MIRI_DESC="--lib, encoder scope (minus the F12 skip and decoder::)"
+    MIRI_DESC="--lib, encoder scope (minus decoder::)"
   else
-    MIRI_DESC="--lib (whole library, minus the F12 skip)"
+    MIRI_DESC="--lib (whole library, no skips)"
   fi
   hdr "miri ($MIRI_DESC)"
   if ! rustup toolchain list 2>/dev/null | grep -q nightly; then

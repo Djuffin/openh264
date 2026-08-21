@@ -37,15 +37,11 @@ pub mod rc;
 pub mod wels_encoder_ext;
 pub mod wels_func_ptr_def;
 pub mod wels_preprocess;
-// **T6.J6.** `#![deny(unsafe_code)]` above is an inner attribute on the `encoder`
-// module, so it reaches every file below it — including the two the phase does not
-// own. The exemption is spelled here, at the declaration, rather than by leaving the
-// deny off `mod.rs`: this way the deny really is on all 36 modules, and the two that
-// are not covered say so where a reader looking for the boundary will find it. Both
-// retire with Phase 7, and the allow retires with them.
-// unsafe-cat: MT
-#[allow(unsafe_code)]
-pub mod wels_task_management;
+// `wels_task_management` stood here — `CWelsBaseTask` and its discriminant, the four
+// wrapper types, `CWelsTaskList`, `WelsTaskBarrier`, `CWelsTaskManageBase` and
+// `CWelsTaskManageOne`, and two more `Send`/`Sync` pairs. Deleted at T7.B4 with the
+// pool it drove. Its allow retired with it; `slice_multi_threading`'s is the last one
+// left in this module, and step 7 takes that.
 
 /// Whether an `OH264_*DUMP` debugging dump is switched on, cached so the hot paths
 /// that call it pay one relaxed load rather than an environment scan.

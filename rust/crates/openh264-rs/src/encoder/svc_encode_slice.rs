@@ -603,11 +603,18 @@ pub unsafe fn slice_in_layer(pCurLayer: *mut SDqLayer, kiSliceIdx: i32) -> *mut 
 // unsafe-cat: cursor
 #[allow(unsafe_code)]
 pub unsafe fn slice_bank_root(pCurLayer: *mut SDqLayer, kiBank: usize) -> *mut SSlice {
-    let bank: &mut Vec<SSlice> = &mut (*pCurLayer).sSliceBufferInfo[kiBank].pSliceBuffer;
-    if bank.is_empty() {
+    // **F71.** `&mut Vec<SSlice>` + `as_mut_ptr()` is a `Unique` retag over the
+    // three-word `Vec`, and for every fixed slice mode **all** workers resolve bank
+    // 0 — so two of them retagging it at once is a data race even though neither
+    // writes the `Vec` itself. `addr_of!` + `as_ptr()` reads the buffer pointer out
+    // instead: the `Vec` is only ever read, and the pointer carries the buffer's own
+    // provenance, so the slices behind it stay writable. S28's rule is unchanged —
+    // this is still the bank's root, not a narrowed cursor.
+    let bank = std::ptr::addr_of!((*pCurLayer).sSliceBufferInfo[kiBank].pSliceBuffer);
+    if (*bank).is_empty() {
         return std::ptr::null_mut();
     }
-    bank.as_mut_ptr()
+    (*bank).as_ptr() as *mut SSlice
 }
 
 /// The slice at `kiOffset` in bank `kiBank`, derived from the bank's root.
@@ -637,8 +644,9 @@ pub unsafe fn slice_in_bank(pCurLayer: *mut SDqLayer, kiBank: usize, kiOffset: i
 // unsafe-cat: cursor
 #[allow(unsafe_code)]
 pub unsafe fn mb_list_root(pCurLayer: *mut SDqLayer) -> *mut SMB {
-    let mb: &mut MbArray<SMB> = &mut (*pCurLayer).sMbDataP;
-    mb.as_mut_ptr()
+    // **F71**, as `slice_bank_root`: every worker asks for this same array.
+    let mb = std::ptr::addr_of!((*pCurLayer).sMbDataP);
+    (*mb).root_ptr()
 }
 
 /// The macroblock at `kiMbXY`, derived from the array's root — see [`mb_list_root`].
@@ -3994,6 +4002,104 @@ mod tests {
             "the inter frame coded {} bytes, which is at the all-skip floor: the \
              source did not move, so motion estimation did nothing",
             frames[1].bytes
+        );
+    }
+
+    /// **The fork/join under the aliasing checker** — T7.B4, and the reason F12's
+    /// Miri skip could be deleted rather than merely renamed.
+    ///
+    /// Before this test, **no test in this crate had ever set `iMultipleThreadIdc`
+    /// above 1**: every probe hard-coded 1, the unit tests build contexts they never
+    /// dispatch through, and the multi-threaded path's only coverage was the
+    /// diffharness, which is a byte instrument and cannot see aliasing at all. So the
+    /// `--skip wels_thread_pool` line in `gates.sh` was hiding a module *and* the
+    /// path that module served, and deleting the line without adding this would only
+    /// have stopped naming the gap.
+    ///
+    /// What it drives: `SM_FIXEDSLCNUM_SLICE` with two slices at two threads, which
+    /// is `EncodeFixedSlicesForked` — two `SliceJobHandle`s moved across two
+    /// `thread::scope` spawns, each owning one bs scratch slot, both calling
+    /// `WelsCodeOneSlice` through the same raw context pointer, joined by the scope
+    /// before `AppendSliceToFrameBs` walks the slices in index order. Miri checks
+    /// what the byte gate cannot: that the two workers' derivations of the shared
+    /// context do not invalidate each other, and that the assembly reads what they
+    /// wrote.
+    ///
+    /// **112x112, and the size is forced rather than chosen.** `MIN_NUM_MB_PER_SLICE`
+    /// is 48 (`wels_encoder_ext.rs:106`), and
+    /// `SliceArgumentValidationFixedSliceMode` silently rewrites any multi-slice
+    /// request on a smaller picture to `SM_SINGLE_SLICE` — which is what the other
+    /// probes' 48x32 (a 3x2 grid, six macroblocks) gets. The first version of this
+    /// test asked for two slices at 48x32, got one VCL NAL per frame, and would have
+    /// passed every assertion that did not count NALs while driving **exactly the
+    /// single-threaded path it exists to avoid**. 7x7 = 49 macroblocks is the
+    /// smallest grid above the threshold, and Miri's clock is the reason it is the
+    /// smallest rather than a comfortable one.
+    ///
+    /// Two frames, not three: an IDR to build the slice banks and one inter frame so
+    /// the fork runs with the mode-decision and motion-estimation halves of the tree
+    /// live. `bUseLoadBalancing` is off (the probe forces it), so the slice
+    /// boundaries are a function of the input and these assertions mean something.
+    ///
+    /// **Ignored under Miri, and F71 is why — not a skip without a finding.** This
+    /// probe was written to make deleting F12's `--skip wels_thread_pool` mean
+    /// something, and it did its job on its first run: it found F70 (a dead-tag read
+    /// in `InitSliceSettings`, fixed) and then F71 (the root-accessor family taking
+    /// `&mut` to shared context state, partly fixed). What it reports *now* is the
+    /// residue F71 records as Phase 9's: shared **writes** from the workers into the
+    /// layer — `WelsCodeOneSlice` stamps `sLayerInfo.sNalHeaderExt` per slice, and
+    /// `svc_encode_slice.cpp:1649-1655` does exactly the same, so it is a shared
+    /// latent race in the reference design and not a port divergence. It cannot be
+    /// spelled away; it needs the context split that F67 makes Phase 9's precondition.
+    /// The test runs normally in both profiles and is the only coverage the fork/join
+    /// has outside the diffharness; the attribute retires with F71.
+    #[test]
+    #[cfg_attr(miri, ignore)]
+    fn fork_join_encodes_a_multi_slice_frame_under_the_aliasing_checker() {
+        let (frames, dims) = drive_encoder_over(
+            112,
+            112,
+            2,
+            EncoderProbeOptions {
+                slice_mode: SliceModeEnum::SM_FIXEDSLCNUM_SLICE,
+                slice_num: 2,
+                threads: 2,
+                ..EncoderProbeOptions::default()
+            },
+        );
+
+        assert_eq!(dims, (112, 112), "the encoder must be configured for a 7x7 grid");
+        assert_eq!(frames.len(), 2, "the encode loop did not run to the end");
+        assert!(
+            frames.iter().all(|f| f.bytes > 0),
+            "a frame produced no NAL bytes, which is what a lost slice looks like \
+             from here: {:?}",
+            frames.iter().map(|f| (f.kind, f.bytes)).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            frames[0].kind,
+            EVideoFrameType::videoFrameTypeIDR,
+            "the sequence must open on an IDR"
+        );
+        assert_eq!(
+            frames[1].kind,
+            EVideoFrameType::videoFrameTypeP,
+            "the second frame must be inter-coded, or the fork runs over an all-intra \
+             frame and the mode-decision half of the tree stays dark"
+        );
+        // The assertion that made the size matter. Two slices means two VCL NALs; one
+        // means the request was rewritten to `SM_SINGLE_SLICE` and the fork never ran.
+        // Without it this test is green on the path it was written to leave.
+
+        // Two slices means two VCL NALs per frame. One would mean the fork ran a
+        // single job and the second slice's bytes never reached the frame — exactly
+        // the failure `AppendSliceToFrameBs` exists to make impossible, and worth
+        // asserting where a thread is involved.
+        assert!(
+            frames.iter().all(|f| f.vcl_nals >= 2),
+            "a frame carried fewer than two VCL NALs, so a slice did not make it out \
+             of the fork: {:?}",
+            frames.iter().map(|f| (f.kind, f.vcl_nals)).collect::<Vec<_>>()
         );
     }
 

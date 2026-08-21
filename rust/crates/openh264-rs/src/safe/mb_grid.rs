@@ -219,6 +219,19 @@ impl<T> MbArray<T> {
         self.data.as_mut_ptr()
     }
 
+    /// The same root, reached through `&self` — **F71**.
+    ///
+    /// `as_mut_ptr` above is sound for one thread and unsound for two: `&mut self`
+    /// is a `Unique` retag over the array's own three words, and every encoder
+    /// worker asks the same layer for the same macroblock array, so two of them
+    /// retagging it at once is a data race even though neither writes *it*. This
+    /// reads the buffer pointer out instead. The pointer is identical and carries
+    /// the buffer's own provenance, so the macroblocks behind it stay writable —
+    /// only the access to the array struct narrows, from exclusive to shared.
+    pub fn root_ptr(&self) -> *mut T {
+        self.data.as_ptr() as *mut T
+    }
+
     /// Adopts `data` as the per-macroblock array of `dims`.
     ///
     /// # Panics

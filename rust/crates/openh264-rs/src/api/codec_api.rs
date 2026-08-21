@@ -2458,6 +2458,14 @@ pub(crate) mod abi_test_driver {
         pub complexity: ECOMPLEXITY_MODE,
         pub slice_mode: SliceModeEnum,
         pub slice_constraint: u32,
+        /// `iMultipleThreadIdc`. **Above 1 this is the only way any test in this
+        /// crate reaches the fork/join** — every probe before T7.B4 hard-coded 1,
+        /// which is why deleting F12's Miri skip needed a probe as well as a
+        /// deletion. `bUseLoadBalancing` is forced off below, so the path stays
+        /// byte-deterministic.
+        pub threads: u16,
+        /// `uiSliceNum` for `SM_FIXEDSLCNUM_SLICE`/`SM_RASTER_SLICE`.
+        pub slice_num: u32,
     }
 
     impl Default for EncoderProbeOptions {
@@ -2467,6 +2475,8 @@ pub(crate) mod abi_test_driver {
                 complexity: ECOMPLEXITY_MODE::LOW_COMPLEXITY,
                 slice_mode: SliceModeEnum::SM_SINGLE_SLICE,
                 slice_constraint: 0,
+                threads: 1,
+                slice_num: 1,
             }
         }
     }
@@ -2538,7 +2548,14 @@ pub(crate) mod abi_test_driver {
             param.bEnableFrameSkip = false;
             param.iMaxQp = 51;
             param.iMinQp = 0;
-            param.iMultipleThreadIdc = 1;
+            param.iMultipleThreadIdc = opts.threads;
+            // Off, always. With it on and `iMultipleThreadIdc >= uiSliceNum` the
+            // encoder takes `AdjustBaseLayer` -> `DynamicAdjustSlicing`, whose slice
+            // boundaries for frame N+1 come from frame N's measured encode *times* —
+            // so the bitstream stops being a function of the input and the probe's
+            // assertions stop meaning anything. The diffharness gates it off for the
+            // same reason (`cxx_enc.cpp:119`); the ruling is in the log.
+            param.bUseLoadBalancing = false;
             param.bEnableDenoise = false;
             param.bEnableBackgroundDetection = false;
             param.bEnableAdaptiveQuant = false;
@@ -2554,7 +2571,7 @@ pub(crate) mod abi_test_driver {
             param.sSpatialLayers[0].iSpatialBitrate = 500_000;
             param.sSpatialLayers[0].iMaxSpatialBitrate = UNSPECIFIED_BIT_RATE;
             param.sSpatialLayers[0].sSliceArgument.uiSliceMode = opts.slice_mode;
-            param.sSpatialLayers[0].sSliceArgument.uiSliceNum = 1;
+            param.sSpatialLayers[0].sSliceArgument.uiSliceNum = opts.slice_num;
             param.sSpatialLayers[0].sSliceArgument.uiSliceSizeConstraint = opts.slice_constraint;
             assert_eq!(
                 ((*vtbl).InitializeExt)(p_encoder, &param as *const SEncParamExt),

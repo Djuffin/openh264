@@ -379,7 +379,7 @@ assert_size!(crate::encoder::encoder_context::SLogContext, 24);
 // port. It sits after all but one of the pinned offsets below, so **only
 // `pMemAlign` moves**; the session brief predicted all fifteen would, and the
 // measurement says otherwise (S36 again — 14 of the 15 pins precede the field).
-assert_size_by_profile!(sWelsEncCtx, debug 98024, release 97936);
+assert_size_by_profile!(sWelsEncCtx, debug 98000, release 97912);
 
 
 // The fifteen `sWelsEncCtx` fields the preprocessor touches, pinned at their C++
@@ -393,6 +393,16 @@ assert_size_by_profile!(sWelsEncCtx, debug 98024, release 97936);
 // All fifteen are declared before `WELS_MUTEX mutexEncoderError` (encoder_context.h:230),
 // the one member this port models differently, so each number below *was* the unmodified
 // C++ `offsetof`, measured on darwin/arm64.
+//
+// **T7.B4 moved eleven of them by 8 and the size by 24.** `pTaskManage` — a pointer
+// typed as opaque, standing where C++ has `IWelsTaskManage*` — sat ahead of every pin
+// below and is deleted with the pool it pointed at, so each offset from
+// `ppRefPicListExt` on falls by exactly 8. The three that do not move (`sLogCtx`,
+// `pSvcParam`, `iMvRange`) are the three that precede it. The size falls by 24 rather
+// than the 16 the two deleted pointers occupy, because `mutexEncoderError` also went
+// and `iEncoderError`/`bDeliveryFlag` now pack where its alignment padding was.
+// This is the guard doing its job, not a failure: it fired on the first build after
+// the field went, and the numbers below are re-measured, not adjusted.
 //
 // **T6.C1 moved all fifteen and they are re-pinned to measured values; T6.D5 moved
 // thirteen of them again**, by a further 8, deleting `ppMbListD` from ahead of them.
@@ -413,18 +423,18 @@ macro_rules! assert_ctx_offset {
 assert_ctx_offset!(sLogCtx, 0);
 assert_ctx_offset!(pSvcParam, 24);
 assert_ctx_offset!(iMvRange, 32);
-assert_ctx_offset_by_profile!(ppRefPicListExt, debug 160, release 152);
-assert_ctx_offset_by_profile!(pLtr, debug 312, release 240);
-assert_ctx_offset_by_profile!(bCurFrameMarkedAsSceneLtr, debug 336, release 264);
-assert_ctx_offset_by_profile!(eSliceType, debug 340, release 268);
-assert_ctx_offset_by_profile!(uiDependencyId, debug 369, release 297);
-assert_ctx_offset_by_profile!(uiTemporalId, debug 370, release 298);
-assert_ctx_offset_by_profile!(pWelsSvcRc, debug 376, release 304);
-assert_ctx_offset_by_profile!(pVaa, debug 440, release 368);
-assert_ctx_offset_by_profile!(pVpp, debug 448, release 376);
-assert_ctx_offset_by_profile!(sSpatialIndexMap, debug 600, release 528);
-assert_ctx_offset_by_profile!(bRefOfCurTidIsLtr, debug 664, release 576);
-assert_ctx_offset_by_profile!(pMemAlign, debug 1896, release 1808);   // T6.I0: -8, the deleted pointer
+assert_ctx_offset_by_profile!(ppRefPicListExt, debug 152, release 144);
+assert_ctx_offset_by_profile!(pLtr, debug 304, release 232);
+assert_ctx_offset_by_profile!(bCurFrameMarkedAsSceneLtr, debug 328, release 256);
+assert_ctx_offset_by_profile!(eSliceType, debug 332, release 260);
+assert_ctx_offset_by_profile!(uiDependencyId, debug 361, release 289);
+assert_ctx_offset_by_profile!(uiTemporalId, debug 362, release 290);
+assert_ctx_offset_by_profile!(pWelsSvcRc, debug 368, release 296);
+assert_ctx_offset_by_profile!(pVaa, debug 432, release 360);
+assert_ctx_offset_by_profile!(pVpp, debug 440, release 368);
+assert_ctx_offset_by_profile!(sSpatialIndexMap, debug 592, release 520);
+assert_ctx_offset_by_profile!(bRefOfCurTidIsLtr, debug 656, release 568);
+assert_ctx_offset_by_profile!(pMemAlign, debug 1888, release 1800);   // T7.B4: -8 again, pTaskManage
 
 // encoder_context.h:198 -- the element type of `sSpatialIndexMap`. `wels_preprocess.rs`
 // carried a byte-identical copy of this under the invented name `SSpatialIndexMap`;

@@ -182,26 +182,11 @@ pub unsafe fn WelsSetMemMultiplebytes_c(
 // Data Structures
 // ============================================================================
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
-pub struct SSliceThreadPrivateData {
-    pub pWelsPEncCtx: *mut c_void,
-    pub pFrameBsInfo: *mut SFrameBSInfo,
-    pub iSliceIndex: i32,
-    pub iThreadIndex: i32,
-}
-
-impl Default for SSliceThreadPrivateData {
-    fn default() -> Self {
-        Self {
-            pWelsPEncCtx: std::ptr::null_mut(),
-            pFrameBsInfo: std::ptr::null_mut(),
-            iSliceIndex: 0,
-            iThreadIndex: 0,
-        }
-    }
-}
-pub type TagSliceThreadPrivateData = SSliceThreadPrivateData;
+// `SSliceThreadPrivateData` (`TagSliceThreadPrivateData`) stood here: a context
+// pointer, a frame-bitstream pointer and two indices, one entry per thread. **Zero
+// readers in the crate** — allocated by `RequestMtResource`, re-stamped by
+// `WelsEncoderEncodeExt` before every dynamic dispatch, read by nothing. Deleted at
+// T7.B4 with the same grep discipline the eight dead event fields got at T7.A1.
 
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
@@ -215,7 +200,11 @@ pub type TagSliceThreadPrivateData = SSliceThreadPrivateData;
 /// vestiges of the pre-thread-pool design. Deleted at T7.A2 with the site-by-site
 /// grep recorded in the session-A log entry; the join is `WelsTaskBarrier`.
 pub struct SSliceThreading {
-    pub pThreadPEncCtx: *mut SSliceThreadPrivateData,
+    /// The `iSliceNumInFrame` lock — **F69**. `DynSlcJudgeSliceBoundaryStepBack`
+    /// holds it across `AddSliceBoundary` and the increment, which is what the C++
+    /// does (`svc_encode_slice.cpp:1776-1791`) and what the raw translation dropped.
+    /// It was on T7.B4's delete list as dead; reading the reference is what saved it,
+    /// and restoring the lock is what closed F3 (T7.B3).
     pub mutexSliceNumUpdate: *mut c_void,
     pub pThreadBsBuffer: [*mut u8; MAX_THREADS_NUM],
     /// Length, in bytes, of every `pThreadBsBuffer` entry — the `iCountBsLen`
@@ -231,23 +220,20 @@ pub struct SSliceThreading {
     /// concurrency cap that kept its answer in range; with the pool gone the cap has
     /// to be stated, and this is where the fork reads it (`ForkWidth`).
     pub uiThreadBsBufferNum: usize,
-    pub bThreadBsBufferUsage: [bool; MAX_THREADS_NUM],
-    pub mutexThreadBsBufferUsage: *mut c_void,
-    pub mutexEvent: *mut c_void,
+    /// Serialises `ReallocateSliceInThread`. The bank it grows is the worker's own
+    /// since T7.B2, but `InitSliceBsBuffer` allocates each new slice's `sSliceBs.pBs`
+    /// through the shared `CMemoryAlign`, which carries mutable counters — so this
+    /// retires with `pMemAlign`, not with the pool.
     pub mutexThreadSlcBuffReallocate: *mut c_void,
 }
 
 impl Default for SSliceThreading {
     fn default() -> Self {
         Self {
-            pThreadPEncCtx: std::ptr::null_mut(),
             mutexSliceNumUpdate: std::ptr::null_mut(),
             pThreadBsBuffer: [std::ptr::null_mut(); MAX_THREADS_NUM],
             uiThreadBsBufferLen: 0,
             uiThreadBsBufferNum: 0,
-            bThreadBsBufferUsage: [false; MAX_THREADS_NUM],
-            mutexThreadBsBufferUsage: std::ptr::null_mut(),
-            mutexEvent: std::ptr::null_mut(),
             mutexThreadSlcBuffReallocate: std::ptr::null_mut(),
         }
     }
@@ -670,40 +656,30 @@ pub unsafe fn RequestMtResource(
     }
     (*pCtx).pSliceThreading = pSmt;
 
-    let pThreadPrivLayout =
-        std::alloc::Layout::array::<SSliceThreadPrivateData>(iThreadNum as usize).unwrap();
-    let pThreadPriv = std::alloc::alloc_zeroed(pThreadPrivLayout) as *mut SSliceThreadPrivateData;
-    if pThreadPriv.is_null() {
-        return 1;
-    }
-    (*pSmt).pThreadPEncCtx = pThreadPriv;
+    // **T7.B4.** An `SSliceThreadPrivateData` array was allocated and filled here, and
+    // `WelsEncoderEncodeExt` re-stamped two of its fields before every dynamic-mode
+    // dispatch. **It had zero readers** — grepped across the crate, the same way the
+    // eight event fields were at T7.A1. It is the pre-thread-pool design's per-thread
+    // context, carried through the raw translation and never wired to anything. Gone
+    // with the struct.
 
-    let mut iIdx = 0i32;
-    while iIdx < iThreadNum {
-        let pPriv = pThreadPriv.add(iIdx as usize);
-        (*pPriv).pWelsPEncCtx = pCtx as *mut c_void;
-        (*pPriv).iSliceIndex = iIdx;
-        (*pPriv).iThreadIndex = iIdx;
-        iIdx += 1;
-    }
-
+    // **F69's mutex.** Not dead after all: it brackets `AddSliceBoundary` and
+    // `++iSliceNumInFrame` in `DynSlcJudgeSliceBoundaryStepBack`, exactly as
+    // `svc_encode_slice.cpp:1776-1791` does. It was on this step's delete list until
+    // the C++ was read; see T7.B3.
     if WelsMutexInit(&mut (*pSmt).mutexSliceNumUpdate) != 0 {
         return 1;
     }
 
-    (*pCtx).pTaskManage = crate::encoder::wels_task_management::CreateTaskManage(
-        pCtx,
-        (*pCodingParam).iSpatialLayerNum,
-        bDynamicSlice,
-    ) as *mut c_void;
-    if (*pCtx).pTaskManage.is_null() {
-        return 1;
-    }
-
-    let pTaskManage =
-        (*pCtx).pTaskManage as *mut crate::encoder::wels_task_management::CWelsTaskManageBase;
-    let iThreadBufferNum =
-        ((*pTaskManage).GetThreadPoolThreadNum() as usize).min(MAX_THREADS_NUM);
+    // **T7.B4.** `CreateTaskManage` stood here, and the buffer count was
+    // `min(pTaskManage->GetThreadPoolThreadNum(), MAX_THREADS_NUM)` — the *pool*
+    // answering how wide the concurrency would be. There is no pool; the fork is as
+    // wide as the buffers, so the buffers are counted from the one number that ever
+    // determined either (`iMultipleThreadIdc`, already clipped to
+    // `[1, MAX_THREADS_NUM]` by `ParamValidationExt`). This is F67's bound with the
+    // indirection removed rather than reproduced.
+    let iThreadBufferNum = (iThreadNum as usize).min(MAX_THREADS_NUM);
+    let _ = bDynamicSlice;
 
     (*pSmt).uiThreadBsBufferLen = iCountBsLen as usize;
     (*pSmt).uiThreadBsBufferNum = iThreadBufferNum;
@@ -716,13 +692,12 @@ pub unsafe fn RequestMtResource(
         (*pSmt).pThreadBsBuffer[i] = buf;
     }
 
-    if WelsMutexInit(&mut (*pSmt).mutexThreadBsBufferUsage) != 0 {
-        return 1;
-    }
+    // `mutexThreadBsBufferUsage` stood here, guarding `QueryEmptyThread`'s test-and-set
+    // over `bThreadBsBufferUsage`. Both are gone: the slot is the worker's by
+    // partition, so there is nothing to claim. `mutexEncoderError` stood here too,
+    // guarding `FinishTask`'s OR into `iEncoderError`; the results come back through
+    // the join now and the calling thread ORs them.
     if WelsMutexInit(&mut (*pSmt).mutexThreadSlcBuffReallocate) != 0 {
-        return 1;
-    }
-    if WelsMutexInit(&mut (*pCtx).mutexEncoderError) != 0 {
         return 1;
     }
 
@@ -741,22 +716,7 @@ pub unsafe fn ReleaseMtResource(ppCtx: *mut *mut sWelsEncCtx) {
     }
 
     WelsMutexDestroy(&mut (*pSmt).mutexSliceNumUpdate);
-    WelsMutexDestroy(&mut (*pSmt).mutexThreadBsBufferUsage);
     WelsMutexDestroy(&mut (*pSmt).mutexThreadSlcBuffReallocate);
-    WelsMutexDestroy(&mut (*pCtx).mutexEncoderError);
-
-    if !(*pSmt).pThreadPEncCtx.is_null() {
-        let pSvcParam = ctx_param(pCtx);
-        let iThreadNum = if !pSvcParam.is_null() {
-            (*pSvcParam).iMultipleThreadIdc as usize
-        } else {
-            1
-        };
-        let pThreadPrivLayout =
-            std::alloc::Layout::array::<SSliceThreadPrivateData>(iThreadNum).unwrap();
-        std::alloc::dealloc((*pSmt).pThreadPEncCtx as *mut u8, pThreadPrivLayout);
-        (*pSmt).pThreadPEncCtx = std::ptr::null_mut();
-    }
 
     // The C++ frees here (`pMa->WelsFree (pSmt->pThreadBsBuffer[i], ...)`,
     // slice_multi_threading.cpp:426). The raw translation kept the null-out and
@@ -773,20 +733,14 @@ pub unsafe fn ReleaseMtResource(ppCtx: *mut *mut sWelsEncCtx) {
             }
             (*pSmt).pThreadBsBuffer[i] = std::ptr::null_mut();
         }
-        (*pSmt).bThreadBsBufferUsage[i] = false;
     }
     (*pSmt).uiThreadBsBufferLen = 0;
     (*pSmt).uiThreadBsBufferNum = 0;
 
-    // WELS_DELETE_OP (pTaskManage). Dropping the manager runs Uninit(), which
-    // releases this encoder's reference to the shared thread pool; the last
-    // reference out stops and joins the worker threads.
-    if !(*pCtx).pTaskManage.is_null() {
-        drop(Box::from_raw(
-            (*pCtx).pTaskManage as *mut crate::encoder::wels_task_management::CWelsTaskManageBase,
-        ));
-        (*pCtx).pTaskManage = std::ptr::null_mut();
-    }
+    // `WELS_DELETE_OP (pTaskManage)` stood here — dropping the manager released this
+    // encoder's reference to the process-wide pool, and the last reference out
+    // stopped and joined its worker threads. A scope's threads are joined by the
+    // scope, so there is no pool lifetime left to manage.
 
     let pSmtLayout = std::alloc::Layout::new::<SSliceThreading>();
     std::alloc::dealloc(pSmt as *mut u8, pSmtLayout);
@@ -1067,7 +1021,7 @@ mod tests {
 // NOT change is the access pattern: the workers call the same slice-encode tree
 // with the same raw context pointer the pool's tasks handed it, in the same order,
 // with the same per-slice state. Only the machinery around the call shrinks — the
-// task hierarchy, the C++-list ports, the `static mut` singleton, the claiming
+// task hierarchy, the C++-list ports, the mutable process-wide singleton, the claiming
 // mutex and the condvar dance all become `std::thread::scope`.
 
 /// One worker's share of a frame's slices, and the one value in this crate that
