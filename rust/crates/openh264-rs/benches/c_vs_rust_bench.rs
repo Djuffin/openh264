@@ -15,6 +15,30 @@
 //! | `BENCH_REQUIRE_FFMPEG=1` | abort rather than fall back to the synthetic pattern |
 //! | `BENCH_FRAMES=<n>` | cap every configuration's frame count at `n` |
 //! | `BENCH_THREADS=<a,b>` | `iMultipleThreadIdc` values to sweep (default `1,4`) |
+//! | `BENCH_SLICE_MODE=<m[:n],..>` | slice-mode axis (default `0`, i.e. `SM_SINGLE_SLICE`) |
+//! | `BENCH_LOAD_BALANCING=0\|1` | override `bUseLoadBalancing` (default: leave `GetDefaultParams`' value) |
+//!
+//! **F68** (`phase7_findings.md`): before the slice-mode knob existed this bench
+//! set `iMultipleThreadIdc` and nothing else, so `GetDefaultParams`' `SM_SINGLE_SLICE`
+//! survived into every row — and `SM_SINGLE_SLICE` is the first arm of the slice-mode
+//! chain in `WelsEncoderEncodeExt`, tested before any thread-count condition. Every
+//! `[4 thread]` row this bench has ever printed, on **both** sides, encoded on the
+//! calling thread. The flat 0.0-1.4% "speedup" at every resolution was the signature
+//! of a path that never ran. `BENCH_SLICE_MODE` is a knob rather than an edit so the
+//! `sm=0` rows stay comparable with every span already in `perf_baseline.md`.
+//!
+//! **`BENCH_LOAD_BALANCING`, and why it exists.** `GetDefaultParams` sets
+//! `bUseLoadBalancing = true` on both sides. With `uiSliceMode = 1` and
+//! `iMultipleThreadIdc >= uiSliceNum` that reaches `AdjustBaseLayer` →
+//! `DynamicAdjustSlicing`, whose slice boundaries for frame N+1 are computed from
+//! frame N's measured per-slice encode *times* — so the bitstream is a function of
+//! the schedule. The C++ header says so itself (`codec_app_def.h:579`: the result of
+//! each run may be different), and two consecutive runs of this bench confirm it —
+//! the **C++** side alone returns a different byte count every time. A row on that
+//! path can never be bit-identical, so `BENCH_LOAD_BALANCING=0` is what a
+//! byte-checked multi-slice span wants; it is also the configuration the diffharness
+//! gates (`cxx_enc.cpp:119` sets it false). Leaving the knob unset keeps every
+//! historical row exactly as it was.
 //!
 //! Exits non-zero if any configuration's bitstreams disagree, after running and
 //! reporting all of them — one mismatch should not cost you the other 29 rows.
@@ -165,6 +189,59 @@ impl CppLibrary {
     }
 }
 
+/// One entry of the slice-mode axis (F68).
+///
+/// `SM_SINGLE_SLICE` is the default so an unset `BENCH_SLICE_MODE` reproduces every
+/// row this bench printed before the knob existed, byte for byte and number for
+/// number. The multi-slice entries are what actually reach the threaded paths:
+/// `SM_FIXEDSLCNUM_SLICE` takes the fork/join dispatch, `SM_SIZELIMITED_SLICE` the
+/// dynamic one.
+#[derive(Clone, Copy, PartialEq)]
+struct SliceSpec {
+    mode: SliceModeEnum,
+    /// `uiSliceNum` for modes 1 and 2 (**0 means "one slice per thread"**, resolved
+    /// per row); `uiSliceSizeConstraint` in bytes for mode 3.
+    arg: u32,
+}
+
+impl SliceSpec {
+    const DEFAULT: SliceSpec = SliceSpec { mode: SliceModeEnum::SM_SINGLE_SLICE, arg: 1 };
+
+    /// `m` or `m:n` — `1:4` is four fixed slices, `1` is one per thread, `3` is
+    /// size-limited at the 1500-byte default, `3:600` at 600.
+    fn parse(spec: &str) -> Option<SliceSpec> {
+        let (m, n) = match spec.trim().split_once(':') {
+            Some((m, n)) => (m.trim(), n.trim().parse::<u32>().ok()?),
+            None => (spec.trim(), 0),
+        };
+        let mode = match m {
+            "0" => SliceModeEnum::SM_SINGLE_SLICE,
+            "1" => SliceModeEnum::SM_FIXEDSLCNUM_SLICE,
+            "2" => SliceModeEnum::SM_RASTER_SLICE,
+            "3" => SliceModeEnum::SM_SIZELIMITED_SLICE,
+            _ => return None,
+        };
+        let arg = match (mode, n) {
+            (SliceModeEnum::SM_SINGLE_SLICE, _) => 1,
+            (SliceModeEnum::SM_SIZELIMITED_SLICE, 0) => 1500,
+            (_, n) => n,
+        };
+        Some(SliceSpec { mode, arg })
+    }
+
+    fn label(&self, threads: u16) -> String {
+        match self.mode {
+            SliceModeEnum::SM_SINGLE_SLICE => "sm=0".to_string(),
+            SliceModeEnum::SM_SIZELIMITED_SLICE => format!("sm=3 c={}", self.arg),
+            _ => format!(
+                "sm={} n={}",
+                self.mode as i32,
+                if self.arg == 0 { threads.max(1) as u32 } else { self.arg }
+            ),
+        }
+    }
+}
+
 /// One measured configuration's result.
 struct RunResult {
     fps: f64,
@@ -176,7 +253,14 @@ struct RunResult {
 /// The parameter set both encoders are initialized with. Kept in one place so the
 /// two sides cannot drift: a benchmark whose halves configure differently is
 /// measuring two different questions.
-unsafe fn fill_params(enc: *mut ISVCEncoder, width: i32, height: i32, threads: u16) -> SEncParamExt {
+unsafe fn fill_params(
+    enc: *mut ISVCEncoder,
+    width: i32,
+    height: i32,
+    threads: u16,
+    slice: SliceSpec,
+    load_balancing: Option<bool>,
+) -> SEncParamExt {
     let mut param: SEncParamExt = std::mem::zeroed();
     let vtbl = &*(*enc).lpVtbl;
     (vtbl.GetDefaultParams)(enc, &mut param);
@@ -190,6 +274,31 @@ unsafe fn fill_params(enc: *mut ISVCEncoder, width: i32, height: i32, threads: u
     param.sSpatialLayers[0].iVideoHeight = height;
     param.sSpatialLayers[0].fFrameRate = 30.0;
     param.sSpatialLayers[0].iSpatialBitrate = 2_000_000;
+    // F68. `GetDefaultParams` leaves `uiSliceMode` at `SM_SINGLE_SLICE`, and until
+    // this block existed nothing here raised it — so the thread axis measured the
+    // single-threaded path at every count. The arms mirror `cxx_enc.cpp:144`, which
+    // is what the byte harness drives.
+    if let Some(lb) = load_balancing {
+        param.bUseLoadBalancing = lb;
+    }
+    let arg = &mut param.sSpatialLayers[0].sSliceArgument;
+    arg.uiSliceMode = slice.mode;
+    match slice.mode {
+        SliceModeEnum::SM_SIZELIMITED_SLICE => {
+            arg.uiSliceSizeConstraint = slice.arg;
+        }
+        SliceModeEnum::SM_SINGLE_SLICE => {
+            arg.uiSliceNum = 1;
+        }
+        _ => {
+            // 0 = "one slice per thread", which is the shape that makes the thread
+            // axis mean something; anything else is taken literally.
+            arg.uiSliceNum = if slice.arg == 0 { threads.max(1) as u32 } else { slice.arg };
+            if slice.mode == SliceModeEnum::SM_RASTER_SLICE {
+                arg.uiSliceMbNum[0] = arg.uiSliceNum;
+            }
+        }
+    }
     param
 }
 
@@ -207,12 +316,19 @@ unsafe fn run_encoder(
     width: i32,
     height: i32,
     threads: u16,
+    slice: SliceSpec,
+    load_balancing: Option<bool>,
     pics: &[SSourcePicture],
 ) -> RunResult {
     let vtbl = &*(*enc).lpVtbl;
-    let param = fill_params(enc, width, height, threads);
+    let param = fill_params(enc, width, height, threads, slice, load_balancing);
     let init_ret = (vtbl.InitializeExt)(enc, &param);
-    assert_eq!(init_ret, 0, "InitializeExt failed for {width}x{height} threads={threads}");
+    assert_eq!(
+        init_ret,
+        0,
+        "InitializeExt failed for {width}x{height} threads={threads} {}",
+        slice.label(threads)
+    );
 
     let mut bs_info = SFrameBSInfo::default();
 
@@ -253,13 +369,15 @@ fn run_c_library_encoder(
     width: i32,
     height: i32,
     threads: u16,
+    slice: SliceSpec,
+    load_balancing: Option<bool>,
     pics: &[SSourcePicture],
 ) -> RunResult {
     unsafe {
         let mut enc: *mut ISVCEncoder = ptr::null_mut();
         assert_eq!((cpp_lib.create_fn)(&mut enc), 0, "C++ WelsCreateSVCEncoder failed");
         assert!(!enc.is_null());
-        let result = run_encoder(enc, width, height, threads, pics);
+        let result = run_encoder(enc, width, height, threads, slice, load_balancing, pics);
         (cpp_lib.destroy_fn)(enc);
         result
     }
@@ -269,13 +387,15 @@ fn run_rust_library_encoder(
     width: i32,
     height: i32,
     threads: u16,
+    slice: SliceSpec,
+    load_balancing: Option<bool>,
     pics: &[SSourcePicture],
 ) -> RunResult {
     unsafe {
         let mut enc: *mut ISVCEncoder = ptr::null_mut();
         assert_eq!(WelsCreateSVCEncoder(&mut enc), CM_RESULT_SUCCESS);
         assert!(!enc.is_null());
-        let result = run_encoder(enc, width, height, threads, pics);
+        let result = run_encoder(enc, width, height, threads, slice, load_balancing, pics);
         WelsDestroySVCEncoder(enc);
         result
     }
@@ -320,11 +440,32 @@ fn main() {
         .map(|v| v.split(',').filter_map(|t| t.trim().parse().ok()).collect())
         .filter(|v: &Vec<u16>| !v.is_empty())
         .unwrap_or_else(|| vec![1, 4]);
+    // F68's knob. Unset = the one default entry, which is what every span in
+    // `perf_baseline.md` before 2026-08-20 measured.
+    let slice_specs: Vec<SliceSpec> = std::env::var("BENCH_SLICE_MODE")
+        .ok()
+        .map(|v| v.split(',').filter_map(SliceSpec::parse).collect())
+        .filter(|v: &Vec<SliceSpec>| !v.is_empty())
+        .unwrap_or_else(|| vec![SliceSpec::DEFAULT]);
+    // Only tag the rows when the axis actually has something on it, so an unset
+    // `BENCH_SLICE_MODE` prints the exact row text the ledger's history is written in.
+    let tag_rows = slice_specs.len() > 1 || slice_specs[0] != SliceSpec::DEFAULT;
+    // `None` = whatever `GetDefaultParams` set, which is `true` on both sides.
+    let load_balancing: Option<bool> = std::env::var("BENCH_LOAD_BALANCING")
+        .ok()
+        .map(|v| v.trim() != "0");
 
     if let Some(cap) = frame_cap {
         println!(" BENCH_FRAMES={cap}: every configuration capped to {cap} frames.");
     }
     println!(" Threads swept: {thread_counts:?}");
+    if tag_rows {
+        let labels: Vec<String> = slice_specs.iter().map(|s| s.label(0)).collect();
+        println!(" Slice modes swept: {}", labels.join(", "));
+    }
+    if let Some(lb) = load_balancing {
+        println!(" bUseLoadBalancing forced to {lb}");
+    }
 
     let mut mismatches: Vec<String> = Vec::new();
     let mut synthetic_used = false;
@@ -369,37 +510,46 @@ fn main() {
         );
         println!("------------------------------------------------------------------------------------------------------------------------");
 
-        for threads in &thread_counts {
-            let threads = *threads;
-            let rust = run_rust_library_encoder(w, h, threads, &src_pics);
-            let Some(ref cpp) = cpp_lib else {
-                println!(
-                    "  [{:1} thread] Rust: {:8.2} fps ({:6.3} ms) | {} bytes | SHA-1 {}",
-                    threads, rust.fps, rust.latency_ms, rust.bytes, &rust.sha1[..16]
-                );
-                continue;
-            };
-            let c = run_c_library_encoder(cpp, w, h, threads, &src_pics);
+        for spec in &slice_specs {
+            let spec = *spec;
+            for threads in &thread_counts {
+                let threads = *threads;
+                let row = if tag_rows {
+                    format!("{:1} thread {}", threads, spec.label(threads))
+                } else {
+                    format!("{threads:1} thread")
+                };
+                let rust = run_rust_library_encoder(w, h, threads, spec, load_balancing, &src_pics);
+                let Some(ref cpp) = cpp_lib else {
+                    println!(
+                        "  [{}] Rust: {:8.2} fps ({:6.3} ms) | {} bytes | SHA-1 {}",
+                        row, rust.fps, rust.latency_ms, rust.bytes, &rust.sha1[..16]
+                    );
+                    continue;
+                };
+                let c = run_c_library_encoder(cpp, w, h, threads, spec, load_balancing, &src_pics);
 
-            // A speedup over work that is not the same work is not a speedup. Report
-            // it either way, but never label a mismatched row with one.
-            let identical = c.bytes > 0 && rust.bytes > 0 && c.sha1 == rust.sha1;
-            let verdict = if identical {
-                format!("{:5.2}x [bit-identical]", rust.fps / c.fps)
-            } else {
-                mismatches.push(format!(
-                    "{label} threads={threads}: C++ {} bytes / {}, Rust {} bytes / {}",
-                    c.bytes,
-                    &c.sha1[..16],
-                    rust.bytes,
-                    &rust.sha1[..16]
-                ));
-                format!("MISMATCH ({} vs {} bytes)", c.bytes, rust.bytes)
-            };
-            println!(
-                "  [{:1} thread] C++: {:8.2} fps ({:6.3} ms) | Rust: {:8.2} fps ({:6.3} ms) | {}",
-                threads, c.fps, c.latency_ms, rust.fps, rust.latency_ms, verdict
-            );
+                // A speedup over work that is not the same work is not a speedup. Report
+                // it either way, but never label a mismatched row with one.
+                let identical = c.bytes > 0 && rust.bytes > 0 && c.sha1 == rust.sha1;
+                let verdict = if identical {
+                    format!("{:5.2}x [bit-identical]", rust.fps / c.fps)
+                } else {
+                    mismatches.push(format!(
+                        "{label} threads={threads} {}: C++ {} bytes / {}, Rust {} bytes / {}",
+                        spec.label(threads),
+                        c.bytes,
+                        &c.sha1[..16],
+                        rust.bytes,
+                        &rust.sha1[..16]
+                    ));
+                    format!("MISMATCH ({} vs {} bytes)", c.bytes, rust.bytes)
+                };
+                println!(
+                    "  [{}] C++: {:8.2} fps ({:6.3} ms) | Rust: {:8.2} fps ({:6.3} ms) | {}",
+                    row, c.fps, c.latency_ms, rust.fps, rust.latency_ms, verdict
+                );
+            }
         }
     }
     println!("========================================================================================================================");
