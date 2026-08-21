@@ -283,10 +283,10 @@ pub use crate::decoder::decoder_context::{SWelsDecoderContext, SRefPic};
 
 /// Initializes error concealment function pointer dispatch table and resets freeze output flag.
 pub extern "C" fn InitErrorCon(pCtx: &mut SWelsDecoderContext) {
-    // T5.AC4: the early return is `None` and the read is the `Some` arm.
-    let Some(ec_mode) = api_alias(&(*pCtx).pParam).map(|p| p.eEcActiveIdc) else {
-        return;
-    };
+    // T8.A5: the parameter block is the context's own field (F41), so there is no
+    // null and no early return — `decoder.cpp:1210`'s `InitErrorCon` reads
+    // `pCtx->pParam->eEcActiveIdc` straight, and so does this.
+    let ec_mode = (*pCtx).pParam.eEcActiveIdc;
     if ec_mode == ERROR_CON_IDC::ERROR_CON_SLICE_COPY
         || ec_mode == ERROR_CON_IDC::ERROR_CON_SLICE_COPY_CROSS_IDR
         || ec_mode == ERROR_CON_IDC::ERROR_CON_SLICE_MV_COPY_CROSS_IDR
@@ -362,7 +362,9 @@ pub extern "C" fn DoErrorConFrameCopy(pCtx: &mut SWelsDecoderContext, pCurDqLaye
     let iStrideUV = pDstPic.linesize(1);
     pDstPic.iMbEcedNum = (iMbWidth * iMbHeight) as i32;
 
-    if api_alias(&(*pCtx).pParam).is_some() && pCurDqLayer.is_some() {
+    // The C's `if (pCtx->pParam && pCurDqLayer)`: its first conjunct was a null test
+    // on a block the context now owns (T8.A5, F41), so only the layer is testable.
+    if pCurDqLayer.is_some() {
         if ec_active_idc(&(*pCtx).pParam) == ERROR_CON_IDC::ERROR_CON_FRAME_COPY
             && pCurDqLayer.as_ref().unwrap().sLayerInfo.sNalHeaderExt.bIdrFlag
         {
@@ -432,12 +434,12 @@ pub extern "C" fn DoErrorConSliceCopy(pCtx: &mut SWelsDecoderContext, pCurDqLaye
     // picture once the source arrives as an `&SPicture` out of the rest.
     let mut pSrcPic = pRefs.classify(prev);
 
-    if api_alias(&(*pCtx).pParam).is_some() {
-        if ec_active_idc(&(*pCtx).pParam) == ERROR_CON_IDC::ERROR_CON_SLICE_COPY
-            && (*pCurDqLayer).sLayerInfo.sNalHeaderExt.bIdrFlag
-        {
-            pSrcPic = RefSlot::Empty;
-        }
+    // The C's `if (pCtx->pParam)` — a null test on the context's own block, which
+    // it owns as a field since T8.A5 (F41). The guard is structurally true.
+    if ec_active_idc(&(*pCtx).pParam) == ERROR_CON_IDC::ERROR_CON_SLICE_COPY
+        && (*pCurDqLayer).sLayerInfo.sNalHeaderExt.bIdrFlag
+    {
+        pSrcPic = RefSlot::Empty;
     }
 
     // The self-copy arm returns **before the loop**, so it never reaches
@@ -940,10 +942,10 @@ pub extern "C" fn MarkECFrameAsRef(pCtx: &mut SWelsDecoderContext, pCurDqLayer: 
 
 /// Top-level error concealment dispatcher.
 pub extern "C" fn ImplementErrorCon(pCtx: &mut SWelsDecoderContext, mut pCurDqLayer: Option<&mut DqLayerState>) {
-    // T5.AC4: the early return is `None` and the read is the `Some` arm.
-    let Some(ec_mode) = api_alias(&(*pCtx).pParam).map(|p| p.eEcActiveIdc) else {
-        return;
-    };
+    // T8.A5: the parameter block is the context's own field (F41) — no null, no
+    // early return, just `pCtx->pParam->eEcActiveIdc` as `decoder_core.cpp:1220`
+    // spells it.
+    let ec_mode = (*pCtx).pParam.eEcActiveIdc;
 
     if ec_mode == ERROR_CON_IDC::ERROR_CON_DISABLE {
         (*pCtx).iErrorCode |= dsBitstreamError;
@@ -1213,7 +1215,7 @@ mod tests {
             ..Default::default()
         };
         let mut ctx = SWelsDecoderContext::new_boxed();
-        ctx.pParam = &mut param as *mut _;
+        ctx.pParam = param;
 
         {
             ImplementErrorCon(&mut *ctx, None);
