@@ -2763,3 +2763,41 @@ individually re-run.**
 
 Running total: **eighty-six measurements, twenty-six alternations, fifty-nine
 acquittals.**
+
+### Measurement 87 — Phase 6 session J, three hits across three batteries, and the tree that drew them no longer exists (2026-08-20)
+
+Session J ran five batteries over its commits. **Three hits**, each matching the
+fingerprint — `mt`, `sm=3`, `t` ∈ {2, 4}, wrong output length:
+
+```
+step-1 `full`     debug    CiscoVT2people_320x192_12fps t=4 n=600 cabac=1 rc=0   C++ 39981 / Rust 37837   short
+step-1 `full`     release  CiscoVT2people_160x96_6fps   t=4 n=600 cabac=0 rc=0   C++ 42538 / Rust     0   empty
+step-2 `family`   release  CiscoVT2people_160x96_6fps   t=2 n=600 cabac=0 rc=1   C++ 41938 / Rust 40124   short
+```
+
+**The first two were drawn on a tree that has since been reverted** (T6.J1–J4, the
+context-parameter conversion, reverted at T6.J5 for reasons that have nothing to do
+with F3 — see `phase6_findings.md` F66). They are recorded because they happened, not
+because they bear on the shipping tree.
+
+**Two things make this measurement unusually clean as an acquittal, and both are
+structural rather than statistical.**
+
+1. **The shipping tree's encoder code is byte-identical to the session's start
+   commit.** T6.J5 reverted step 1 in full — `git diff 2bcf0743 -- '*.rs'` over the
+   code was empty — and the only change since is T6.J6's `#![deny(unsafe_code)]` and
+   775 `#[allow(unsafe_code)]` attributes. Attributes are compile-time; the lint they
+   suppress emits no code. So an alternation of HEAD against control on this tree is
+   a **null run by construction**, and the arms were built and run anyway rather than
+   argued from: **40/40 clean on both arms**, 10 iterations per arm on both failing configurations, interleaved run-for-run.
+2. **The `exit` battery read 369/369 in BOTH profiles** — the shipping tree drew
+   *zero* hits on the run that decides the phase, across 738 configurations. That is
+   the first clean double-profile sweep pair recorded in several sessions.
+
+`t=2` is worth a line of its own. The fingerprint has always read `t` ∈ {2, 4}, but
+measurements 80–86 were all `t=4`; hit 3 is the first `t=2` reproduction in this
+phase, which is a small argument against the drift towards treating `t=4` as the
+signature.
+
+Running total: **eighty-seven measurements, twenty-seven alternations, sixty
+acquittals.**

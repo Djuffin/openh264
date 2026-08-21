@@ -2830,3 +2830,45 @@ median**; it is unbreached by roughly 8-10 points. D-perf-6's parked recovery is
 untouched and still **Phase 9's**, now with session H's measured target
 (`WelsRcMbInitGom` / `ctx_rc_at`, the per-macroblock accessor cost) beside it.
 
+
+---
+
+## Phase 6, session J — 2026-08-20 (`2bcf0743` → `e69a0984`), the phase's closing span
+
+One span for the session, measured at the close per S1/S2: `perfpair.py run
+J_base J_head --pairs 7`, then `null J_head --pairs 7` for this run's floor.
+`Spatial Ramps` excluded per S2.
+
+| | span | null floor |
+|---|---|---|
+| decode, 3 rows | median **−0.04%** (−0.21 … +0.18%) | median −0.11% (−0.19 … −0.07%) |
+| encode, 28 rows | median **+0.00%** (−0.55 … +1.70%) | median +0.00% (−0.72 … +1.35%) |
+
+Rows over +5%: **0**, both benches, both directions.
+
+**No median breach, so no bisection** — D-perf's rule is to bisect on a median
+breach, and the encode median is +0.00%, identical to the null run's own. Stated
+plainly rather than rounded away: the encode span's **maximum** is +1.70% against
+the floor's +1.35%, so the span's spread is 0.35 points wider at the top than the
+null's. That is one row of 28, with the median and the minimum both inside the
+floor and nothing above +5%. It is not a signal, and it is recorded rather than
+omitted because "inside the floor on every statistic" was true of session I's span
+and is not quite true of this one.
+
+**Why near-zero is the expected answer here rather than a lucky one.** The span
+contains exactly three things: 775 `#[allow(unsafe_code)]` attributes and their
+comment lines, 36 `#![deny(unsafe_code)]` inner attributes, and the **full revert**
+of the step-1 context conversion. Attributes are compile-time only and the lint
+they suppress emits no code. The revert restores `2bcf0743`'s machine code exactly
+— `git diff 2bcf0743 -- '*.rs'` over the code was empty at T6.J5. So the only
+opportunity for movement was codegen noise, and the measurement found codegen
+noise.
+
+**Cumulative position, restated as D-perf-4 requires.** Cumulative encoder deficit
+stands at ≈ **+15…+17%**, unmoved by this session and unmoved across Phase 6's
+last four sessions. D-perf-4's tripwire is **+25% median**; it is unbreached by
+roughly 8–10 points. **D-perf-6's parked recovery is untouched and remains Phase
+9's**, now with two measured targets beside it: session H's per-macroblock accessor
+cost (`WelsRcMbInitGom` / `ctx_rc_at`) and session J's F66, which says the context
+conversion — and whatever it is worth — cannot be attempted until Phase 9's own
+cursors retire.

@@ -651,21 +651,58 @@ at a family boundary, and only with a written reason):
   **Handoffs to Phases 7/8/9/10 were written anyway** (plan §5), since they are
   verified facts about the tree and do not depend on the phase closing.
 
-* **J** — **needed, and its first item is not code.** (1) The **condition-2
-  decision** (F65) — steward's, and everything else is cheaper once it is made.
-  (2) **Step 2**, the context parameters, root-down from `WelsInitEncoderExt` /
-  `WelsEncoderEncodeExt`: ~270 lines, 272 functions, 117 of which can become safe
-  `fn`. (3) **Step 3**, the deny sweep, scoped by whatever (1) decides. (4) **Steps
-  4 and 5**, the exit conditions and the close, including the one unscoped `exit`
-  battery (349 tests, ≈1411 s) that D-gate-2 reserves for the phase exit.
-
-* **J** — **brief written** ([`phase6_session_j.md`](phase6_session_j.md),
-  steward, 2026-08-20). Executes **D-exit-1** (§7's fifth category,
-  `port-raw(<phase>)`): the 117 root-down context-parameter conversions, the 17
-  attribute-position fixes, the deny sweep over all 36 non-MT modules with the
-  five-way tag table (F65's census as the assignment map), the condition-3
-  residue table, §7 checked line by line, and the close on the one unscoped
-  exit battery D-gate-2 reserves.
+* **J** — **SPENT** (2026-08-20). **The phase closes.** `2bcf0743` → ``e69a0984``,
+  seven commits (four of them reverted by the fifth), tree clean.
+  **Step 2, the deny sweep, landed in full** (T6.J6): `#![deny(unsafe_code)]` on all
+  **36** non-MT modules, **775** allow items, **every one tagged** and **zero
+  untagged** — `port-raw(Phase 9)` 595, `port-raw(Phase 7)` 89, `cursor` 60, `MT` 16,
+  `SCREEN_CONTENT(dormant)` 10, `C-ABI` 5. **Three modules carry no allow at all**:
+  `abi_guard.rs`, `param_svc.rs`, `processing/mod.rs`.
+  **Two rulings the brief's assignment table did not cover.** `extern "C"` alone is
+  **not** the C ABI — the first pass tagged 210 items on calling convention and would
+  have handed Phase 8 the whole rate controller; only `#[no_mangle]` is an export, and
+  there are 5. And a **context-only signature had no row**, because the table assumed
+  step 1 had removed them all; F66 says they stay, so they are `port-raw(Phase 9)`.
+  **The MT exemption moved.** An inner attribute on `encoder/mod.rs` reaches every
+  file below it, so a deny there covers the thread machinery whether or not it is
+  written there. The exemption is spelled `#[allow(unsafe_code)]` at the two `pub mod`
+  lines instead — the deny is then honestly on all 36, and the boundary sits where a
+  reader looks for it.
+  **Step 1 was done, gated, Miri'd and reverted — F66, and it is the session's main
+  result.** 109 signatures converted (not 117: of 113 ctx-only non-MT, four take
+  `*mut *mut sWelsEncCtx`), root-down in five depth levels from the call graph, four
+  commits each green at 496/490 with sweeps 368/369. Then: a `&mut sWelsEncCtx`
+  function-entry retag invalidates the **whole** context — `[0x0..0x17ee8]`, Miri's own
+  range — where a raw write pops only the offsets it touches. **64 of the 109 have a
+  call site holding a context-derived cursor across the call**, 93 sites in 28 callers,
+  worst `WelsEncoderEncodeExt` at 68; three of the 64 are cursor accessors, where the
+  problem is sharpest. Miri found **2** of the 93 (coverage, not defect rate); rustc
+  reports none at any optimisation level. Not fixable by reordering — several of these
+  calls reallocate the container the cursor points into — nor by keeping the clean 45,
+  nor **by ordering at all**: this is a *caller-side* property and the root-down rule is
+  orthogonal to it. Reverted in full; the tree is byte-identical to `2bcf0743` over
+  `*.rs`. Handed to **Phase 9** with its detector.
+  **By-caught:** two no-op-callback tests proved their claim with
+  `std::ptr::null_mut()`, which `deny(deref_nullptr)` rejects outright against `&mut` —
+  the safe signature takes that proof technique away; four `CWelsParametersetIdStrategyObj`
+  methods are **Q2 survivors a signature census cannot see** (`self` is reached
+  *through* `pCtx`); and `&mut T` coerces to `*mut T` at a call site, so reverting a
+  callee's parameter does not by itself remove the caller's retag.
+  **Anchors that disagreed with the brief** (hard rule 4, trusting the grep): the
+  convertible set is 109 not 117; the screen-content census is **23** tagged items by
+  `SCREEN_CONTENT(dormant:` plus one prose mention, not 24; the deny sweep names
+  **1,999** diagnostics but **775** items, because an allow belongs on the item, not
+  the block.
+  **Gates:** `commit` green on all seven commits. `family` at step 2's end: 369/369
+  debug, 368/369 release. **The close ran `gates.sh exit` with no `MIRI_SCOPE` — the
+  one unscoped battery D-gate-2 reserves — `OVERALL: PASS`, 13 passed / 0 failed / 1
+  skipped**: Miri `--lib` **353/0** over the whole library, the three differential
+  suites 20/7/3, sweeps **369/369 in BOTH profiles**, both benches bit-identical, and
+  **all seven aliasing probes green by name** (4 encoder + 3 decoder). Three F3 hits
+  across the session's five batteries, adjudicated by an interleaved alternation at
+  **40/40 clean on both arms** (measurement 87); the `exit` battery drew none.
+  **Perf:** one span, encode median **+0.00%**, decode **−0.04%**; no median breach, so
+  no bisection. Cumulative ≈ **+15…+17%** against D-perf-4's **+25%** tripwire.
 
 **Seven sessions is the estimate, not the contract**; Phase 5 ran fourteen against
 a plan of nine to twelve, and the difference was discovery, which this phase has
