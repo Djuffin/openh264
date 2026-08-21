@@ -2985,8 +2985,43 @@ pub unsafe fn DynSlcJudgeSliceBoundaryStepBack(
         && JUMPPACKETSIZE_JUDGE(uiLen, iCurMbIdx, (*pSliceCtx).uiSliceSizeConstraint)
         && kbCurMbNotLastMbOfCurPartition
     {
-        AddSliceBoundary(pEncCtx, pCurSlice, pSliceCtx, pCurMb, iCurMbIdx, kiEndMbIdxOfPartition);
-        (*pSliceCtx).iSliceNumInFrame += 1;
+        // **F69 — the lock the raw translation dropped, restored.**
+        // `svc_encode_slice.cpp:1776-1791` brackets exactly these two statements in
+        // `WelsMutexLock(&pSliceThreading->mutexSliceNumUpdate)` when
+        // `iMultipleThreadIdc > 1`, with the C++'s own comment on the lock line
+        // saying what it is for: "lock the acessing to this variable:
+        // pSliceCtx->iSliceNumInFrame". `68c4f6a5 "Raw translation"` kept the two
+        // statements and neither lock, and nothing has locked
+        // `mutexSliceNumUpdate` in this crate since — the field was initialised in
+        // `RequestMtResource`, destroyed in `ReleaseMtResource`, and never used.
+        //
+        // `pSliceCtx` is `addr_of_mut!((*pCurLayer).sSliceEncCtx)` — the **layer's**
+        // slice context, shared by every worker on the dynamic path — so the `+= 1`
+        // is a read-modify-write racing across threads, and `AddSliceBoundary`
+        // writes `pOverallMbMap` and the next slice's header through the same
+        // shared parent (the C++ calls it "complex memory operation" on the line
+        // above the lock). A lost increment leaves
+        // `iEncodeSliceNum != iSliceNumInFrame` in `ReOrderSliceInLayer`, which
+        // answers `ENC_RETURN_UNEXPECTED` and the frame comes back **empty** —
+        // F3's shape in 18 of the 25 hits of its before-arm.
+        //
+        // The null-mutex arm of `with_wels_mutex` runs the closure unlocked, which
+        // is the C++'s `iMultipleThreadIdc <= 1` path: `pSliceThreading` is null
+        // there, because `RequestMtResource` only runs above 1.
+        let pSmtMutex = {
+            let bMt = !ctx_param(pEncCtx).is_null()
+                && (*ctx_param(pEncCtx)).iMultipleThreadIdc > 1
+                && !(*pEncCtx).pSliceThreading.is_null();
+            if bMt {
+                (*(*pEncCtx).pSliceThreading).mutexSliceNumUpdate
+            } else {
+                std::ptr::null_mut()
+            }
+        };
+        crate::encoder::slice_multi_threading::with_wels_mutex(pSmtMutex, || {
+            AddSliceBoundary(pEncCtx, pCurSlice, pSliceCtx, pCurMb, iCurMbIdx, kiEndMbIdxOfPartition);
+            (*pSliceCtx).iSliceNumInFrame += 1;
+        });
         return true;
     }
 
