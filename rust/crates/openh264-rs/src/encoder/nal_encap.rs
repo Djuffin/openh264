@@ -225,16 +225,24 @@ impl SWelsEncoderOutput {
 /// `idx` `InitOneSliceInThread` stores in `SSlice.uiBufferIdx`, so the slot is
 /// already named and `thread_bs_buffer` resolves it at each use — nothing aliases
 /// the pool's allocation from inside this struct any more. What is still raw here
-/// is `pBs`, the slice's *own* output buffer (`WelsMallocz`'d by
-/// `InitSliceBsBuffer` when the slice writes independently, null when it shares
-/// the frame's; its nullness is the one bit `slice_writer`/`slice_bs_buffer` read),
-/// and the pool's buffers themselves, which are **Phase 7's** (F12/P10) with the
-/// claiming discipline. `uiSize` is the thread buffer's length and stays beside
-/// the writer that is positioned in it.
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
+/// **`pBs` is owned since T7.C4** — an `Option<Vec<u8>>` where the C++ has a
+/// `CMemoryAlign` block. `InitSliceBsBuffer` fills it when the slice writes
+/// independently and leaves it `None` when the slice shares the frame's buffer, and
+/// **`is_some()` is the one bit `slice_writer`/`slice_bs_buffer` read** — the same
+/// discriminator the raw pointer's nullness carried, which is why the conversion moves
+/// nothing else. `Option<Vec<u8>>` rather than a bare `Vec<u8>`: an empty `Vec` and an
+/// allocated one are the same thing to `is_empty()` if a caller ever asks for a
+/// zero-length buffer, and the choice this field records must not be able to collapse.
+/// The slice's own drop is what `FreeSliceBuffer`'s walk used to be.
+///
+/// `repr(C)` and `Copy` come off with the pointer: an `Option<Vec<u8>>` has no C shape
+/// and owns its storage. Nothing copied this struct by value — the compiler's answer,
+/// not an argument. `uiSize` is the *thread* buffer's length and stays beside the
+/// writer that is positioned in it; the pool's buffers are `pThreadBsBuffer`'s, owned
+/// at T7.C5.
+#[derive(Debug)]
 pub struct SWelsSliceBs {
-    pub pBs: *mut u8,
+    pub pBs: Option<Vec<u8>>,
     pub uiBsSize: u32,
     pub uiBsPos: u32,
     pub uiSize: u32,
@@ -247,7 +255,7 @@ pub struct SWelsSliceBs {
 impl Default for SWelsSliceBs {
     fn default() -> Self {
         Self {
-            pBs: core::ptr::null_mut(),
+            pBs: None,
             uiBsSize: 0,
             uiBsPos: 0,
             uiSize: 0,

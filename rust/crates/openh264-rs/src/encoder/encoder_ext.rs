@@ -819,7 +819,7 @@ pub unsafe fn InitDqLayers(
         }
         (*pDqLayer).iMaxSliceNum = iMaxSliceNum;
 
-        iResult = InitSliceInLayer(*ppCtx, pDqLayer, iDlayerIndex, pMa);
+        iResult = InitSliceInLayer(*ppCtx, pDqLayer, iDlayerIndex);
         if iResult != 0 {
             return iResult;
         }
@@ -1537,12 +1537,12 @@ pub const STATISTICS_LOG_INTERVAL_MS: i32 = 5000;
 /// `FreeSliceInLayer` — encoder_ext.cpp:942.
 ///
 /// # Safety
-/// `pDq` and `pMa` must be non-null.
+/// `pDq` must be non-null.
 // unsafe-cat: MT
 #[allow(unsafe_code)]
-pub unsafe fn FreeSliceInLayer(pDq: *mut SDqLayer, pMa: *mut CMemoryAlign) {
+pub unsafe fn FreeSliceInLayer(pDq: *mut SDqLayer) {
     for iIdx in 0..MAX_THREADS_NUM {
-        crate::encoder::svc_encode_slice::FreeSliceBuffer(pDq, iIdx, pMa);
+        crate::encoder::svc_encode_slice::FreeSliceBuffer(pDq, iIdx);
     }
 }
 
@@ -1557,11 +1557,12 @@ pub unsafe fn FreeDqLayer(p: *mut SDqLayer, pMa: *mut CMemoryAlign) {
         return;
     }
 
-    // **What is left of this function is Phase 7's.** `FreeSliceInLayer` releases one
-    // `CMemoryAlign` block per slice (`sSliceBs.pBs`), which the boundary list keeps
-    // with the thread machinery; everything else the C++ frees here is owned and goes
-    // with the layer.
-    FreeSliceInLayer(p, pMa);
+    // **T7.C4 finished this function.** `FreeSliceInLayer` used to release one
+    // `CMemoryAlign` block per slice (`sSliceBs.pBs`) — the last allocation the layer
+    // held by raw pointer. The slice owns its bitstream now, so this call empties the
+    // banks and their buffers go with them; everything else the C++ frees here has
+    // been owned since Phase 6.
+    FreeSliceInLayer(p);
 
     // `ppSliceInLayer` is a `Vec<SliceIdx>` since T6.D4, `pFirstMbIdxOfSlice` and
     // `pCountMbNumInSlice` are `Vec<i32>` since T6.D6, and `pOverallMbMap` is a
