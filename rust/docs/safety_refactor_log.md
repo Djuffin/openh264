@@ -13208,3 +13208,16 @@ session is **one file, +31/−26**.
    not to "simplify" it during a conversion nothing can check. **Owner: session B,
    with the `SM_SIZELIMITED` work**, since the load-balancing task is the one
    `ConstrainedSizeSlicing` derives from.
+
+**The exit battery** (`MIRI_SCOPE=encoder bash rust/tools/gates.sh exit`, at
+`0db3e4aa`): **`OVERALL: PASS`, 13 passed / 0 failed / 1 skipped.** Sweeps
+**369/369 in both profiles** — a clean double, the first of this session, and
+**zero F3 hits** in 738 configurations. Miri `--lib` encoder-scope **252 passed /
+0 failed**; the three differential Miri suites 20 / 7 / 3; both benches
+bit-identical every row. The one skip is the fuzz corpus, which has never existed
+(Phase 0 T7).
+
+That battery also handed F68 its confirmation, unprompted: its bench rows print
+the C++ reference beside the Rust port at both thread counts, and **the reference
+does not scale either** — 1080p `[1t]` 336.10 fps against `[4t]` 338.83, QVGA
+7556.76 against 7557.98. Both columns flat means the parameters, not the port.
