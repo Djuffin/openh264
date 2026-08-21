@@ -1427,7 +1427,7 @@ pub unsafe fn GetMultipleThreadIdc(
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe fn WelsInitEncoderExt(
-    ppCtx: *mut *mut sWelsEncCtx,
+    ppCtx: &mut Option<Box<sWelsEncCtx>>,
     pCodingParam: *mut SWelsSvcCodingParam,
     pLogCtx: *mut SLogContext,
     pExistingParasetList: *mut SExistingParasetList,
@@ -1435,7 +1435,7 @@ pub unsafe fn WelsInitEncoderExt(
     let mut iSliceNum: i16 = 1; // number of slices used
     let mut iCacheLineSize: i32 = 16; // on-chip cache line size in bytes
     let mut uiCpuFeatureFlags: u32 = 0;
-    if ppCtx.is_null() || pCodingParam.is_null() {
+    if pCodingParam.is_null() {
         return 1;
     }
 
@@ -1458,7 +1458,14 @@ pub unsafe fn WelsInitEncoderExt(
         return iRet;
     }
 
-    *ppCtx = null_mut();
+    // **T8.B5 — the out-parameter is the owner's slot.** `encoder_ext.cpp:1615`
+    // nulls `*ppCtx` before it allocates, so a failed init leaves the caller
+    // holding nothing; here the caller holds an `Option<Box<sWelsEncCtx>>` and
+    // this is the same statement. The context below is raw for the whole of the
+    // construction and becomes a `Box` again at the one place it is handed back —
+    // S42's allocation root, and the only place in `src/encoder` where a
+    // `&mut sWelsEncCtx` is born.
+    *ppCtx = None;
 
     // C++ mallocs and memsets sWelsEncCtx; Box::new of a Default context is the
     // equivalent, and Default is the all-zero/null state for every member.
@@ -1492,8 +1499,7 @@ pub unsafe fn WelsInitEncoderExt(
         uiCpuFeatureFlags,
     );
     if iRet != ENC_RETURN_SUCCESS {
-        let mut p = pCtx;
-        WelsUninitEncoderExt(&mut p);
+        WelsUninitEncoderExt(Some(Box::from_raw(pCtx)));
         return iRet;
     }
 
@@ -1502,8 +1508,7 @@ pub unsafe fn WelsInitEncoderExt(
     let mut pCtxTmp = pCtx;
     iRet = RequestMemorySvc(&mut pCtxTmp, pExistingParasetList);
     if iRet != 0 {
-        let mut p = pCtx;
-        WelsUninitEncoderExt(&mut p);
+        WelsUninitEncoderExt(Some(Box::from_raw(pCtx)));
         return iRet;
     }
 
@@ -1514,21 +1519,19 @@ pub unsafe fn WelsInitEncoderExt(
 
     (*pCtx).pVpp = crate::encoder::wels_preprocess::CWelsPreProcess::CreatePreProcess(pCtx);
     if (*pCtx).pVpp.is_null() {
-        let mut p = pCtx;
-        WelsUninitEncoderExt(&mut p);
+        WelsUninitEncoderExt(Some(Box::from_raw(pCtx)));
         return 1;
     }
     iRet = (*(*pCtx).pVpp).AllocSpatialPictures(pCtx, ctx_param(pCtx));
     if iRet != 0 {
-        let mut p = pCtx;
-        WelsUninitEncoderExt(&mut p);
+        WelsUninitEncoderExt(Some(Box::from_raw(pCtx)));
         return iRet;
     }
 
     (*pCtx).iStatisticsLogInterval = STATISTICS_LOG_INTERVAL_MS;
     (*pCtx).uiLastTimestamp = -1;
     (*pCtx).bDeliveryFlag = true;
-    *ppCtx = pCtx;
+    *ppCtx = Some(Box::from_raw(pCtx));
 
     0
 }
@@ -1702,8 +1705,7 @@ mod tests {
             assert_eq!(pps.iPicInitQp, 26);
             assert!(pps.bDeblockingFilterControlPresentFlag);
 
-            let mut p = pCtx;
-            WelsUninitEncoderExt(&mut p);
+            WelsUninitEncoderExt(Some(Box::from_raw(pCtx)));
         }
     }
 
@@ -1755,8 +1757,7 @@ mod tests {
                 "the gate configuration is camera content without LTR"
             );
 
-            let mut p = pCtx;
-            WelsUninitEncoderExt(&mut p);
+            WelsUninitEncoderExt(Some(Box::from_raw(pCtx)));
         }
     }
 }
@@ -1769,11 +1770,17 @@ mod tests {
 /// null.
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
-pub unsafe fn WelsUninitEncoderExt(ppCtx: *mut *mut sWelsEncCtx) {
-    if ppCtx.is_null() || (*ppCtx).is_null() {
+pub unsafe fn WelsUninitEncoderExt(pEncContext: Option<Box<sWelsEncCtx>>) {
+    // **T8.B5 — the teardown takes the context by value**, which is what
+    // `encoder_ext.cpp:1878`'s `*ppCtx = NULL` at the end was expressing: after
+    // this call the caller has no context, and now that is a fact about the type
+    // rather than a store the function has to remember. The body below is
+    // unchanged and still raw — the free cascade walks the whole context — so the
+    // `Box` is opened here and closed at the end, in one function.
+    let Some(pEncContext) = pEncContext else {
         return;
-    }
-    let pCtx = *ppCtx;
+    };
+    let pCtx = Box::into_raw(pEncContext);
 
     if !(*pCtx).pVpp.is_null() {
         (*(*pCtx).pVpp).FreeSpatialPictures(pCtx);
@@ -1857,7 +1864,6 @@ pub unsafe fn WelsUninitEncoderExt(ppCtx: *mut *mut sWelsEncCtx) {
     }
 
     drop(Box::from_raw(pCtx));
-    *ppCtx = null_mut();
 }
 
 // ============================================================================
