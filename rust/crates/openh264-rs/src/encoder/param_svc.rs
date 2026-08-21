@@ -14,7 +14,6 @@
 #![deny(unsafe_code)]
 
 use std::ffi::{c_char, c_void};
-use crate::common::memory_align::CMemoryAlign;
 use crate::{
     EComplexityMode, EParameterSetStrategy, EUsageType, RCMode, SEncParamBase, SEncParamExt,
     SSliceArgument, SSpatialLayerConfig, SliceMode, VideoFormat,

@@ -386,7 +386,11 @@ assert_size!(crate::encoder::encoder_context::SLogContext, 24);
 // profile they name (S36). The field sits after all fifteen pinned offsets below, so
 // **none of them moves** — which is the same thing T6.I0's note says about
 // `pPSOVector`, and the reason to measure rather than predict.
-assert_size_by_profile!(sWelsEncCtx, debug 98064, release 97976);
+// **T7.C6**: **-8 both profiles.** `pMemAlign` — one pointer — is deleted with the
+// allocator it named. It sits after all fourteen surviving pins and before
+// `pDynamicBsBuffer`, so nothing pinned moves and the size falls by exactly the
+// pointer. Measured, in the profile it names (S36).
+assert_size_by_profile!(sWelsEncCtx, debug 98056, release 97968);
 
 
 // The fifteen `sWelsEncCtx` fields the preprocessor touches, pinned at their C++
@@ -441,7 +445,14 @@ assert_ctx_offset_by_profile!(pVaa, debug 432, release 360);
 assert_ctx_offset_by_profile!(pVpp, debug 440, release 368);
 assert_ctx_offset_by_profile!(sSpatialIndexMap, debug 592, release 520);
 assert_ctx_offset_by_profile!(bRefOfCurTidIsLtr, debug 656, release 568);
-assert_ctx_offset_by_profile!(pMemAlign, debug 1888, release 1800);   // T7.B4: -8 again, pTaskManage
+// **T7.C6 deleted the fifteenth pin with its field.** `pMemAlign` was pinned here
+// because `wels_preprocess.rs` reads it — and by this session it did not: both of its
+// `let pMa = (*pCtx).pMemAlign;` lines were dead bindings, and the whole allocator has
+// retired from `src/encoder`. A pin over a field that does not exist guards nothing;
+// **fourteen remain**, and the property the block was written for is unchanged, since
+// what it catches is a *second declaration* of this context reading fields at the
+// wrong offsets. The other fourteen all precede the deleted field, so none of them
+// moves.
 
 // encoder_context.h:198 -- the element type of `sSpatialIndexMap`. `wels_preprocess.rs`
 // carried a byte-identical copy of this under the invented name `SSpatialIndexMap`;

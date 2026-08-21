@@ -25,7 +25,6 @@ use crate::api::codec_api::SliceModeEnum;
 use crate::api::codec_api::SliceModeEnum::{SM_SINGLE_SLICE, SM_SIZELIMITED_SLICE};
 use crate::api::codec_api::RC_MODES::RC_OFF_MODE;
 use crate::api::codec_api::{ELevelIdc, SSpatialLayerConfig};
-use crate::common::memory_align::CMemoryAlign;
 use crate::decoder::nalu::g_ksLevelLimits;
 use crate::encoder::encoder_context::{
     ctx_dq_idc_map, ctx_dq_layer, ctx_frame_bs, ctx_frame_bs_at, ctx_ltr_at, ctx_mb_index_x,
@@ -254,7 +253,6 @@ pub unsafe fn AcquireLayersNals(
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe fn AllocStrideTables(ppCtx: *mut *mut sWelsEncCtx, kiNumSpatialLayers: i32) -> i32 {
-    let pMa = (**ppCtx).pMemAlign;
     let pParam = ctx_param(*ppCtx);
 
     // The C++ local `sMbSizeMap` is an array of a small anonymous struct.
@@ -707,7 +705,6 @@ pub unsafe fn InitDqLayers(
         return 1;
     }
 
-    let pMa = (**ppCtx).pMemAlign;
     let pParam = ctx_param(*ppCtx);
     let iDlayerCount = (*pParam).iSpatialLayerNum;
     let iNumRef = (*pParam).iMaxNumRefFrame as u32;
@@ -956,7 +953,6 @@ pub unsafe fn InitDqLayers(
         // FMO is not used in SVC coding so far; come back if FMO is needed
         iResult = InitSlicePEncCtx(
             ctx_dq_layer(*ppCtx, iDlayerIndex as usize),
-            (**ppCtx).pMemAlign,
             false,
             (*pSps).iMbWidth as i32,
             (*pSps).iMbHeight as i32,
@@ -1008,7 +1004,6 @@ pub unsafe fn RequestMemorySvc(
     pExistingParasetList: *mut SExistingParasetList,
 ) -> i32 {
     let pParam = ctx_param(*ppCtx);
-    let pMa = (**ppCtx).pMemAlign;
     let mut iCountNals: i32 = 0;
     let mut iCountLayers: i32 = 0;
     let mut iResult: i32;
@@ -1473,7 +1468,12 @@ pub unsafe fn WelsInitEncoderExt(
         (*pCtx).sLogCtx = *pLogCtx;
     }
 
-    (*pCtx).pMemAlign = Box::into_raw(Box::new(CMemoryAlign::new(iCacheLineSize as u32)));
+    // **T7.C6**: `pCtx->pMemAlign = new CMemoryAlign(iCacheLineSize)` stood here
+    // (`encoder_ext.cpp:1631`), the encoder's first allocation. Nothing in
+    // `src/encoder` allocates through it any more, so the object, the field and the
+    // teardown entry below are gone together. `iCacheLineSize` is still validated and
+    // still reaches `InitFunctionPointers`; only the allocator it used to size is
+    // gone.
 
     // **T6.H11**: `AllocCodingParam` and its failure branch were here. The context
     // owns the parameters, so the allocation is a `Box` and failure is panic-on-OOM
@@ -1554,7 +1554,7 @@ pub unsafe fn FreeSliceInLayer(pDq: *mut SDqLayer) {
 /// `pDq` must have come from `InitDqLayers` and must not be used afterwards.
 // unsafe-cat: MT
 #[allow(unsafe_code)]
-pub unsafe fn FreeDqLayer(p: *mut SDqLayer, pMa: *mut CMemoryAlign) {
+pub unsafe fn FreeDqLayer(p: *mut SDqLayer) {
     if p.is_null() {
         return;
     }
@@ -1570,7 +1570,7 @@ pub unsafe fn FreeDqLayer(p: *mut SDqLayer, pMa: *mut CMemoryAlign) {
     // `pCountMbNumInSlice` are `Vec<i32>` since T6.D6, and `pOverallMbMap` is a
     // `Vec<u16>` since T6.D7 — this call releases that last one early and restamps
     // the segment fields, all of which the layer's `Drop` would cover anyway.
-    crate::encoder::svc_enc_slice_segment::UninitSlicePEncCtx(p, pMa);
+    crate::encoder::svc_enc_slice_segment::UninitSlicePEncCtx(p);
     (*p).iMaxSliceNum = 0;
 
     // **T6.H8**: `drop(Box::from_raw(p))` stood here, with the slot's null-out under
@@ -1653,7 +1653,6 @@ mod tests {
         );
 
         let pCtx = Box::into_raw(Box::new(sWelsEncCtx::default()));
-        (*pCtx).pMemAlign = Box::into_raw(Box::new(CMemoryAlign::new(iCacheLineSize as u32)));
         (*pCtx).pSvcParam = Some(NewCodingParam());
         *ctx_param(pCtx) = param;
         // T6.I1: the table comes with the context; see `WelsInitEncoderExt`.
@@ -1782,8 +1781,7 @@ pub unsafe fn WelsUninitEncoderExt(ppCtx: *mut *mut sWelsEncCtx) {
         (*pCtx).pVpp = null_mut();
     }
 
-    let pMa = (*pCtx).pMemAlign;
-    if !pMa.is_null() {
+    {
         // **T6.H1**: two `WelsFree`s stood here — the one block, reached as
         // `pStrideDecBlockOffset[0][1]` because that was the only field still
         // holding its head, and then the table struct. The table owns the block and
@@ -1831,7 +1829,7 @@ pub unsafe fn WelsUninitEncoderExt(ppCtx: *mut *mut sWelsEncCtx) {
         for ilayer in 0..(*pCtx).ppDqLayerList.len() {
             let pLayer = ctx_dq_layer(pCtx, ilayer);
             if !pLayer.is_null() {
-                FreeDqLayer(pLayer, pMa);
+                FreeDqLayer(pLayer);
             }
         }
         // **T6.H7**: the reference-list entry stood here — a loop calling `FreeRefList`
@@ -1852,8 +1850,10 @@ pub unsafe fn WelsUninitEncoderExt(ppCtx: *mut *mut sWelsEncCtx) {
         // `Box` the glue *does* run, the strategy's `Option<Box<_>>` drops with it,
         // and F19 stops being a thing a hand-written line has to remember. The
         // whole block is deleted rather than converted.
-        drop(Box::from_raw(pMa));
-        (*pCtx).pMemAlign = null_mut();
+        // **T7.C6**: `WELS_DELETE_OP (pCtx->pMemAlign)` stood here — the cascade's
+        // last entry, and the reason this whole block was wrapped in a null test on
+        // the allocator. Every free above it had already become a drop; this is the
+        // last one, and the block below it is now just the context's own.
     }
 
     drop(Box::from_raw(pCtx));

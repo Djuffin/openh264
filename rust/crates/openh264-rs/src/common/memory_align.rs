@@ -1,6 +1,35 @@
 //! SIMD-aligned memory allocator and active memory monitor.
 //!
 //! Translated from `codec/common/inc/memory_align.h` and `codec/common/src/memory_align.cpp`.
+//!
+//! # Who still uses this — T7.C6's census, and the file's own retirement note
+//!
+//! **The encoder does not, as of Phase 7.** `src/encoder` and `src/processing` hold
+//! **zero** `WelsMalloc`/`WelsMallocz`/`WelsFree` call sites: Phase 6 took 45 to 15,
+//! and this phase took the last 15 to none — T7.C4 the per-slice bitstreams, T7.C5 the
+//! two MT buffer arrays (`pThreadBsBuffer`, `pDynamicBsBuffer`), T7.C6 the two
+//! unreachable screen-content storage functions. `sWelsEncCtx::pMemAlign` is deleted
+//! with them, along with the parameter chain that threaded it through twelve
+//! signatures.
+//!
+//! **The blocker for deleting this file is the decoder**, and it is named here rather
+//! than guessed at. Two things still reach it:
+//!
+//! * `SWelsDecoderContext::pMemAlign`, whose remaining job is a **null sentinel** —
+//!   `GetTempPredPlanes` and `SyncPictureResolutionExt` test it for "this context has
+//!   been initialised". Its three `let pMa = (*pCtx).pMemAlign;` bindings in
+//!   `decoder_core.rs` are dead, exactly as the encoder's two in `wels_preprocess.rs`
+//!   were before this session deleted them.
+//! * `CWelsDecoderImpl::align` (`api/codec_api.rs`), the object that field points at,
+//!   and `pic_queue.rs`'s tests, which assert `WelsGetMemoryUsage() == 0` — i.e. that
+//!   the decoder allocates nothing through it either.
+//!
+//! So the allocator is structurally dead on **both** sides and survives as a sentinel.
+//! Retiring it is a decoder-side change: delete the field, replace the sentinel with
+//! whatever actually answers "initialised", and this file goes. That is not Phase 7's
+//! — the decoder was completed at Phase 5 session AC and all 30 of its modules carry
+//! `#![deny(unsafe_code)]` with **zero** exemptions, which moving this file into
+//! `src/decoder/` would break. Handed on with the finding rather than forced.
 
 #![allow(
     non_snake_case,
