@@ -392,6 +392,23 @@ pub unsafe fn UpdateMbListNeighborParallel(
 
 /// Calculates the normalized computational complexity ratio (`iSliceComplexRatio`)
 /// for each slice in a spatial layer based on measured CPU consumption time.
+///
+/// **`LOAD_BALANCING(incomplete: F72)` — this function has no live caller in the
+/// port, and that is the load-balancing path's whole defect.** The C++ calls it at
+/// `encoder_ext.cpp:4069`, at the end of the per-layer encode loop, under exactly
+/// the guard `encoder_ext.rs:3196` already reproduces for
+/// `AdjustBaseLayer`/`AdjustEnhanceLayer`. The port has the *consumer* half of the
+/// loop and not the *producer* half: `iSliceComplexRatio` is initialised to 0 and
+/// nothing on a live path ever writes it, so `DynamicAdjustSlicing` computes
+/// `WelsDivRound(kiCountNumMb * 0, 100) = 0` for every slice, clamps each to
+/// `iMinimalMbNum`, and hands the remainder to the last one. The balance is
+/// degenerate rather than absent, which is why it is worth a finding: nothing
+/// crashes and nothing warns.
+///
+/// **Not completed here, deliberately** — the phase brief's ruling for an
+/// incomplete path is to fence it and say which, not to finish it. Completing it is
+/// the one call at the site named above; the owner is whoever takes the
+/// load-balancing path, and F72 records what the byte evidence says about gating it.
 pub unsafe fn CalcSliceComplexRatio(pCurDq: *mut SDqLayer) {
     if pCurDq.is_null() {
         return;

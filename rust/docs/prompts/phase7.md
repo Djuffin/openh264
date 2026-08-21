@@ -145,9 +145,60 @@ it, and the two sessions were planned the other way round. Three orderings; **RE
   ownership; `pMemAlign` + `memory_align.rs`; the F12 Miri skip when the pool
   goes; F61 by construction or by ablation.
 
+- **B** — done, 2026-08-20, `9a392cc9..`. Built D-mt-1's seam and the fork/join on
+  **every** slice mode, deleted the machinery (2,115 lines; `unsafe_impl` 12 → 2),
+  and **closed F3** — by a mutex the raw translation dropped, not by any of that.
+  Steps 0-5 landed; **steps 6 and 7 hand to C** at a green boundary (hard rule 7).
+  Findings: **F69** (F3's cause, fixed), **F68** (fixed), **F70** (fixed), **F71**
+  (partly fixed, residue → Phase 9), **F72** (open, fenced). See §3.1.
+
 **Two sessions was the estimate and it was wrong** — the same way Phase 6 session
 I was wrong: a phase's own precondition gets measured only when a session tries
-to build against it.
+to build against it. **Three was also wrong, for a better reason**: session B spent
+its second half on four defects the conversion *exposed*, none of which were on any
+plan.
+
+### 3.1 What session B found, and what session C inherits
+
+**The ablation's verdict is the headline, and it is not the one the charter
+expected.** §2 fixes the experiment in advance as a test of "the deleted
+claiming/pool machinery". Session B ran **three arms with one variable each**
+because a candidate cause appeared mid-phase:
+
+| arm | tree | runs | hits | rate |
+|---|---|---|---|---|
+| before (m. 88) | untouched | 3000 | 25 | 1/120 |
+| **A** (m. 91) | pool machinery deleted, lock still missing | 2000 | 20 | 1/100 |
+| **B** (m. 92) | the lock restored | 2000 | **0** | — |
+
+Arm A against the before-arm is **z = 0.61, p ≈ 0.54** — deleting the pool did not
+move F3. Arm B is **P ≈ 2e-9**. **F3's cause is F69**, a `WelsMutexLock` the raw
+translation dropped from around `++iSliceNumInFrame`. The machinery was worth
+deleting for five other reasons and **was not the defect**; a single after-arm on a
+tree carrying both changes would have credited it anyway. *One variable per arm is
+why the answer is usable.*
+
+**The method that found it, three times over.** F69, T7.A3's leak, and
+`SSliceThreadPrivateData`'s zero readers all came from the same question, asked
+while listing what to delete: **"which of these fields is dead?"** A field that
+looks dead in the port and is live in the reference is a dropped statement by
+definition — and no gate this project owns can see one.
+
+**Steps 6 and 7 are C's**, unchanged as written, plus:
+
+1. **F71's residue** — the accessor family is fixed; the shared *writes* from
+   workers (`sLayerInfo.sNalHeaderExt`) need F67's context split and go to Phase 9.
+   The MT Miri probe is `#[cfg_attr(miri, ignore)]` with F71 cited; **that attribute
+   is step 7's business** — it retires when F71 does, and it is the only skip in the
+   battery (F12's is gone with the module it named).
+2. **F72** — the load-balancing path is fenced, not completed. Completing it is one
+   call at `encoder_ext.cpp:4069`'s site; it can never be byte-gated, so it joins
+   `CABA2_SVA_B` as the second expected-divergent class when someone does.
+3. **The span is now meaningful** (F68 fixed) and says something C should read
+   before touching the pool decision: **the port scales 1→2 threads and then stops**
+   (1080p `sm=1 n=4`: C++ 1.65x/2.56x, Rust 1.65x/1.65x). That was the *old* pool's
+   ceiling; whether `thread::scope` still has it is the first thing step 7's span
+   should answer, and it is the input the charter's conditional pool rebuild wanted.
 
 ---
 

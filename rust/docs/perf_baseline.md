@@ -2942,3 +2942,49 @@ cheapest item on B's list.
 **Cumulative position, as D-perf-4 requires.** Unmoved: encoder deficit ≈
 **+15…+17%** against the **+25%** tripwire, unbreached by 8–10 points. D-perf-6's
 parked recovery remains Phase 9's.
+
+---
+
+## Phase 7 session B — F68 fixed, and the first honest thread-scaling numbers
+
+`BENCH_SLICE_MODE` landed at T7.B0 (`9a392cc9`) exactly as the note above asked
+for, as a knob rather than an edit so every historical row stays comparable. A
+second knob, `BENCH_LOAD_BALANCING`, came with it — see below for why it had to.
+
+**30 frames per configuration, `BENCH_LOAD_BALANCING=0`, threads 1/2/4:**
+
+| row | 1t | 2t | 4t |
+|---|---|---|---|
+| 1080p Mandelbrot `sm=1 n=4` C++ | 188 | 311 (1.65x) | 481 (2.56x) |
+| 1080p Mandelbrot `sm=1 n=4` Rust | 111 | 183 (1.65x) | **183 (1.65x)** |
+| 1080p Mandelbrot `sm=3` C++ | 190 | 328 (1.73x) | 524 (2.76x) |
+| 1080p Mandelbrot `sm=3` Rust | 112 | 197 (1.75x) | **197 (1.75x)** |
+| 720p Mandelbrot `sm=1 n=4` C++ | 379 | 635 (1.67x) | 909 (2.40x) |
+| 720p Mandelbrot `sm=1 n=4` Rust | 216 | 366 (1.69x) | **365 (1.69x)** |
+| 1080p SMPTE `sm=1 n=4` C++ | 483 | 737 (1.53x) | 963 (1.99x) |
+| 1080p SMPTE `sm=1 n=4` Rust | 332 | 504 (1.52x) | **478 (1.44x)** |
+
+**The port scales to two threads and then stops** — at every HD resolution, in both
+multi-slice modes, where the reference keeps scaling to four. The `sm=0` rows are
+flat on both sides at every count, which is F68 restated: with a single slice there
+is nothing to parallelise, and that is what the bench measured for its whole life.
+
+That ceiling is the **old** pool's, measured at `9a392cc9` before any conversion. Whether
+`std::thread::scope` still has it is the first question step 7's span should answer,
+and it is the input the charter's conditional pool rebuild always wanted.
+
+**Why `BENCH_LOAD_BALANCING` had to exist.** `GetDefaultParams` sets
+`bUseLoadBalancing = true` on both sides. With `sm=1` and
+`iMultipleThreadIdc >= uiSliceNum` that reaches `AdjustBaseLayer` ->
+`DynamicAdjustSlicing`, and two consecutive runs of the bench show **the C++
+reference alone** returning a different byte count every time (22834/22660,
+144438/144340, 233477/233251). A row on that path can never be bit-identical, so a
+byte-checked multi-slice span wants the flag off — which is also what the
+diffharness gates (`cxx_enc.cpp:119`). See F72: the port's copy of that path is
+half-translated as well.
+
+**Cumulative position, as D-perf-4 requires.** No span was run against the
+conversion this session — the fork/join's own numbers are step 7's, and are C's.
+The recorded position is unmoved: encoder deficit ≈ **+15…+17%** against the
+**+25%** tripwire. D-perf-6's parked recovery remains Phase 9's.
+
