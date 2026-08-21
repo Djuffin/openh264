@@ -197,6 +197,21 @@ behind a knob beside the existing `BENCH_THREADS` (say `BENCH_SLICE_MODE`), so t
 `perf_baseline.md`. Adding rows rather than changing them keeps the ledger's history
 readable, which is why a knob and not an edit.
 
+**The C++ reference shows the same flat line, which is the confirmation.** The
+`exit` battery's own bench rows, C++ and Rust side by side at 1 and 4 threads:
+
+```
+1080p    [1 thread] C++   336.10 fps (2.975 ms) | Rust   222.01 fps (4.504 ms)
+1080p    [4 thread] C++   338.83 fps (2.951 ms) | Rust   221.85 fps (4.507 ms)
+QVGA     [1 thread] C++  7556.76 fps (0.132 ms) | Rust  4679.71 fps (0.214 ms)
+QVGA     [4 thread] C++  7557.98 fps (0.132 ms) | Rust  4766.73 fps (0.210 ms)
+```
+
+The **reference encoder** does not scale with thread count on this bench either —
+0.8% and 0.02%. If this were a port defect the two columns would disagree; they
+agree exactly. It is the parameters, on both sides, and that is what makes the fix
+a bench change rather than an investigation.
+
 **One thing this does *not* mean.** The MT path is not untested — the diffharness
 `mt` preset drives all four slice modes at `t ∈ {2,4}` and 120 configurations a
 sweep, and that is where F3 lives. It is untested *for speed*. The byte instrument
