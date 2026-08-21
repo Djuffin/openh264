@@ -215,6 +215,11 @@ fn test_set_get_option_matches_cxx_for_every_option() {
                 ENCODER_OPTION_DELIVERY_STATUS,
                 SDeliveryStatus {
                     bDeliveryFlag: true,
+                    // F81 (T8.C4): the header's other two fields, "reserved" upstream
+                    // and read by nothing. They are here because the struct a caller
+                    // passes is 12 bytes, not 1.
+                    iDropFrameType: 0,
+                    iDropFrameSize: 0,
                 }
             ),
             0
