@@ -678,7 +678,7 @@ pub fn GetThreadCount(_pCtx: &SWelsDecoderContext) -> i32 {
     0
 }
 
-fn ResetDecStatNums(pDecStat: &mut SDecoderStatistics) {
+pub fn ResetDecStatNums(pDecStat: &mut SDecoderStatistics) {
     let width = (*pDecStat).uiWidth;
     let height = (*pDecStat).uiHeight;
     let avg_luma_qp = (*pDecStat).iAvgLumaQp;
@@ -2094,6 +2094,63 @@ pub fn ResetReorderingPictureBuffers(
 /// set once by the context constructor and never again, so its one reader (the
 /// key-frame-loss arm of `DecodeFrame2`'s error block) would have fired on every
 /// stream rather than on AVC ones.
+/// `void CWelsDecoder::OutputStatisticsLog (SDecoderStatistics&)` —
+/// `welsDecoderExt.cpp:947`.
+///
+/// **F76, T8.B3.** One line every `iStatisticsLogInterval` decoded frames (1000 by
+/// default, `WelsDecoderDefaults`), and the reason `uiDecodedFrameCount` has to be
+/// counted on *both* of `DecodeFrame2`'s tails rather than only the error one: the
+/// interval is a modulus over it, and a counter that never moves prints nothing and
+/// divides by zero in `DECODER_OPTION_GET_STATISTICS`'s two speed fields.
+pub fn OutputStatisticsLog(pCtx: &mut SWelsDecoderContext) {
+    let s = pCtx.pDecoderStatistics;
+    if s.uiDecodedFrameCount == 0
+        || s.iStatisticsLogInterval == 0
+        || s.uiDecodedFrameCount % s.iStatisticsLogInterval != 0
+    {
+        return;
+    }
+    WelsLog(
+        std::ptr::addr_of_mut!(pCtx.sLogCtx),
+        WELS_LOG_INFO,
+        &format!(
+            "DecoderStatistics: uiWidth={}, uiHeight={}, fAverageFrameSpeedInMs={:.1}, \
+             fActualAverageFrameSpeedInMs={:.1}, uiDecodedFrameCount={}, \
+             uiResolutionChangeTimes={}, uiIDRCorrectNum={}, uiAvgEcRatio={}, \
+             uiAvgEcPropRatio={}, uiEcIDRNum={}, uiEcFrameNum={}, uiIDRLostNum={}, \
+             uiFreezingIDRNum={}, uiFreezingNonIDRNum={}, iAvgLumaQp={}, \
+             iSpsReportErrorNum={}, iSubSpsReportErrorNum={}, iPpsReportErrorNum={}, \
+             iSpsNoExistNalNum={}, iSubSpsNoExistNalNum={}, iPpsNoExistNalNum={}, \
+             uiProfile={}, uiLevel={}, iCurrentActiveSpsId={}, iCurrentActivePpsId={},",
+            s.uiWidth,
+            s.uiHeight,
+            s.fAverageFrameSpeedInMs,
+            s.fActualAverageFrameSpeedInMs,
+            s.uiDecodedFrameCount,
+            s.uiResolutionChangeTimes,
+            s.uiIDRCorrectNum,
+            s.uiAvgEcRatio,
+            s.uiAvgEcPropRatio,
+            s.uiEcIDRNum,
+            s.uiEcFrameNum,
+            s.uiIDRLostNum,
+            s.uiFreezingIDRNum,
+            s.uiFreezingNonIDRNum,
+            s.iAvgLumaQp,
+            s.iSpsReportErrorNum,
+            s.iSubSpsReportErrorNum,
+            s.iPpsReportErrorNum,
+            s.iSpsNoExistNalNum,
+            s.iSubSpsNoExistNalNum,
+            s.iPpsNoExistNalNum,
+            s.uiProfile,
+            s.uiLevel,
+            s.iCurrentActiveSpsId,
+            s.iCurrentActivePpsId,
+        ),
+    );
+}
+
 pub fn DecoderConfigParam(pCtx: &mut SWelsDecoderContext, kpParam: &SDecodingParam) {
     pCtx.pParam = *kpParam;
     // `decoder.cpp:663` — parse-only decoding disables concealment. Inert on output
