@@ -57,7 +57,6 @@
 // avoids spelling the two words the ratchet counts, for the reason the seam's own
 // note gives.
 
-use std::ffi::c_void;
 
 use crate::encoder::nal_encap::{
     WelsEncodeNal, WelsLoadNalForSlice, WelsUnloadNalForSlice, WelsWriteSVCPrefixNal, SWelsNalRaw,
@@ -223,7 +222,13 @@ pub struct SSliceThreading {
     /// does (`svc_encode_slice.cpp:1776-1791`) and what the raw translation dropped.
     /// It was on T7.B4's delete list as dead; reading the reference is what saved it,
     /// and restoring the lock is what closed F3 (T7.B3).
-    pub mutexSliceNumUpdate: *mut c_void,
+    /// **T8.B10 — the handle names its type.** It was `*mut c_void`: the port
+    /// erases nothing the C++ does not (`mt_defs.h` has `WELS_MUTEX`, a
+    /// `pthread_mutex_t`), but the value on the other end of this pointer is a
+    /// `std::sync::Mutex<()>` and nothing outside this crate ever sees it, so the
+    /// erasure bought nothing and cost the reader a hop. The plumbing is unchanged
+    /// — same allocation, same lock, same critical section.
+    pub mutexSliceNumUpdate: *mut std::sync::Mutex<()>,
     /// One bs scratch buffer per worker slot, **owned since T7.C5**. It was
     /// `[*mut u8; MAX_THREADS_NUM]` over `alloc_zeroed` blocks, and the leak T7.A3
     /// fixed was in the walk that freed them; the array drops with the struct now, so
@@ -344,18 +349,18 @@ pub fn WelsDivRound64(x: i64, y: i64) -> i64 {
 /// Allocates a mutex and returns its opaque handle (`WelsMutexInit`).
 // unsafe-cat: MT
 #[allow(unsafe_code)]
-pub unsafe fn WelsMutexInit(pMutex: *mut *mut c_void) -> i32 {
+pub unsafe fn WelsMutexInit(pMutex: *mut *mut std::sync::Mutex<()>) -> i32 {
     let m: Box<std::sync::Mutex<()>> = Box::new(std::sync::Mutex::new(()));
-    *pMutex = Box::into_raw(m) as *mut c_void;
+    *pMutex = Box::into_raw(m);
     0 // WELS_THREAD_ERROR_OK
 }
 
 /// Frees a mutex allocated by [`WelsMutexInit`] (`WelsMutexDestroy`).
 // unsafe-cat: MT
 #[allow(unsafe_code)]
-pub unsafe fn WelsMutexDestroy(pMutex: *mut *mut c_void) {
+pub unsafe fn WelsMutexDestroy(pMutex: *mut *mut std::sync::Mutex<()>) {
     if !(*pMutex).is_null() {
-        drop(Box::from_raw(*pMutex as *mut std::sync::Mutex<()>));
+        drop(Box::from_raw(*pMutex));
         *pMutex = std::ptr::null_mut();
     }
 }
@@ -367,11 +372,11 @@ pub unsafe fn WelsMutexDestroy(pMutex: *mut *mut c_void) {
 /// never contend.
 // unsafe-cat: MT
 #[allow(unsafe_code)]
-pub unsafe fn with_wels_mutex<R>(pMutex: *mut c_void, f: impl FnOnce() -> R) -> R {
+pub unsafe fn with_wels_mutex<R>(pMutex: *mut std::sync::Mutex<()>, f: impl FnOnce() -> R) -> R {
     if pMutex.is_null() {
         return f();
     }
-    let m = &*(pMutex as *const std::sync::Mutex<()>);
+    let m = &*pMutex;
     // A worker that panicked mid-slice leaves the mutex poisoned; the encoder
     // has no recovery path for that, so take the guard either way.
     let _guard = m.lock().unwrap_or_else(|e| e.into_inner());

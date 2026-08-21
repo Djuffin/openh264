@@ -5,7 +5,7 @@ pub const MAX_DEPENDENCY_LAYER: usize = 4;
 /// Translated from `codec/encoder/core/inc/encoder_context.h` and
 /// `codec/encoder/core/src/encoder.cpp`.
 
-use std::ffi::{c_char, c_void};
+use std::ffi::c_char;
 use crate::api::codec_api::ECOMPLEXITY_MODE::*;
 use crate::{
     EUsageType, RCMode, SEncParamExt, SEncoderStatistics, SSliceArgument,
@@ -1247,9 +1247,13 @@ impl sWelsEncCtx {
     #[allow(clippy::new_without_default)]
     pub fn new() -> Self {
         Self {
-            // The caller's log sink. `WelsInitEncoderExt` copies it in from
-            // `SExistingParasetList`'s neighbourhood before anything can log; three
-            // null `c_void`s mean "no sink installed", which is what the C tests for.
+            // The caller's log sink, stamped in by `WelsInitEncoderExt` before
+            // anything can log. **T8.B6/T8.B10**: this used to be three `*mut
+            // c_void`s and "no sink installed" was three nulls; it is typed now —
+            // `pfLog: WelsTraceCallback`, `None` when nothing is installed — and
+            // the level travels with it. The one member that is still a pointer is
+            // `pLogCtx`, which is the *caller's* opaque context and C-ABI by
+            // definition.
             sLogCtx: SLogContext::default(),
 
             // ---- allocated by RequestMemorySvc; null == not allocated yet -------

@@ -17,7 +17,7 @@
 #![deny(unsafe_code)]
 use crate::encoder::picture::{RecPicId, RecPicPool, SRefPicView, SrcPicId, SrcPicPool};
 use crate::encoder::md::CostFamily;
-use std::ffi::{c_char, c_void};
+use std::ffi::c_char;
 use std::ptr::{null, null_mut};
 
 use crate::api::codec_api::EUsageType::{CAMERA_VIDEO_REAL_TIME, SCREEN_CONTENT_REAL_TIME};
