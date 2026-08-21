@@ -14488,6 +14488,37 @@ is to leave it unwritten.
    establishes it (2707 golden rows, 62 assets × 4 modes × 2 declarations, union
    `0x36`) rather than the adjective.
 
+### The close — `exit` unscoped, at `e0f6c03d`
+
+**`OVERALL: PASS`, 13 passed / 0 failed / 1 skipped**, run unscoped as the phase
+requires (both codecs were touched, so D-gate-2's encoder scoping does not apply).
+
+| step | result |
+|---|---|
+| `cargo test` debug / release | **502 / 496**, 0 failed, **20 ignored** (the permanent fixture set, unmoved) |
+| unsafe ratchet | flat on every metric against the session's regenerated baseline |
+| duplicate census | **58** allowlisted, nothing new (60 at the session's start; T8.B6 retired two) |
+| diffharness sweeps, both profiles | **369/369 each**, **no F3 hit in either** |
+| `decode_1080p_bench` | all streams **bit-identical** |
+| `c_vs_rust_bench` | all rows **bit-identical** |
+| Miri `--lib`, whole library, no skips | **347 passed / 0 failed**, 1594.6s |
+| Miri differential targets | **20 / 7 / 3**, 0 failed |
+| fuzz corpus replay | SKIP — the crate was never built (§0's standing absence) |
+
+**It failed once first, and the failure was worth having.** The first unscoped run
+went `FAIL  miri --lib` on `ctx_new_reproduces_the_zeroed_shell`:
+`reading memory at [0x1c..0x1d] … memory is uninitialized`. T8.B6 had grown
+`SLogContext` from three pointers to four members, and the alignment gave it four
+bytes of *trailing* padding — inside a struct that is a field of `sWelsEncCtx`, whose
+whole byte image that test compares against a `memset` shell on the stated premise
+that no field outside its by-value list has interior or trailing padding. The premise
+is restored rather than the test weakened: `SLogContext` carries a named
+`_reserved: u32`, always zero (`e0f6c03d`). Size unchanged at 32, so no pin moves.
+
+That is the **second** thing Phase 5b's shell test caught in this one step, and both
+were the same class — a struct's byte image is an invariant that a size assertion
+cannot see.
+
 ### What session C inherits, exactly
 
 Measured at `72fe2e7e`, so C starts from numbers rather than from the charter's.
