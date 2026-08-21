@@ -93,6 +93,66 @@ std::thread::scope(|s| {
 
 ## 3. Session plan
 
+**Revised at session A's close, 2026-08-20, by F67** (`phase7_findings.md`). The
+plan below the rule is what was written; what follows here is what the tree
+supports.
+
+### The decision session B opens with
+
+**F67: the design has a third premise and it does not hold.** Premises 1 and 2
+(§1) are about *scheduling* and both were verified. The target shape also needs
+`shared` to cross the spawn, which is a property of the type, not the schedule:
+`Scope::spawn` wants `Send`, a captured `&T` wants `T: Sync`, and `sWelsEncCtx`
+is `!Sync` for **12 distinct reasons** (compiler output in the finding), five of
+them nested inside types Phases 8 and 10 own. And the **105 tagged items this
+phase was given to retire are, item for item, the slice-encode call tree's raw
+signatures** — `svc_encode_slice` 40, `svc_mode_decision` 15,
+`svc_enc_slice_segment` 11, `rc` 11, and **zero in the three seam files**. The
+inventory and the blocker are the same object seen twice.
+
+So the context split is a **precondition** of the fork/join, not a consequence of
+it, and the two sessions were planned the other way round. Three orderings; the
+owner picks before B starts, because B's whole shape follows from it:
+
+1. **Split first, fork later.** The design's own logic, honestly costed: several
+   sessions, and it pulls work from Phases 8 and 10 forward into 7.
+2. **One named `unsafe impl` at one seam.** Delete the pool, the `static mut`
+   singleton, both C++-list ports, `CWelsTaskThread`, the claiming mutex and the
+   condvar dance; keep a single documented `Send` job type at the spawn. Net
+   **5 `unsafe impl` pairs → 1**, and F3's surface shrinks to what the ablation
+   wants to measure. **The standing rule forbids this**, so it needs a ruling,
+   not an inference.
+3. **Defer the fork/join to Phase 9.** Phase 7 then does what is reachable
+   without crossing the spawn seam: the dead machinery (done, T7.A2), the leak
+   (done, T7.A3), the `SM_SIZELIMITED` work queue, and the F3 after-arm.
+
+### Sessions as run
+
+- **A** — done, 2026-08-20, `b08d6c47..` . The F3 before-arm at **3000 runs,
+  25 hits, ≈1/120** — *not* the ~1/11 §2 carries forward, which was a 9-in-96
+  sample; §2's "P(0/500) ≈ e⁻⁴⁵" arithmetic goes with it, and **B's after-arm
+  should be 2000 runs, not 500** (e⁻¹⁶·⁷). Premises 1 and 2 verified in writing,
+  with a bound on premise 1 nobody had written down: concurrency must be capped
+  at the *allocated buffer* count, not at the slot count, or a fixed mode with
+  more slices than threads hands out a slot with a null buffer behind it. The
+  eight dead event fields deleted; a leak fixed that has been in the tree since
+  the raw translation. **F67 opened, and it re-scopes the phase.** No fork/join:
+  session A stopped at a green, whole-mode boundary rather than write the
+  `unsafe impl` the rules forbid.
+- **B** — the ordering decision above, first. Then, whichever way it goes: the
+  F3 after-arm (2000 runs, `f3_arm.sh` verbatim — density is not comparable
+  otherwise, measurement 89); `sSliceBs.pBs`/`DynamicSliceBs`/thread-bs
+  ownership; `pMemAlign` + `memory_align.rs`; the F12 Miri skip when the pool
+  goes; F61 by construction or by ablation.
+
+**Two sessions was the estimate and it was wrong** — the same way Phase 6 session
+I was wrong: a phase's own precondition gets measured only when a session tries
+to build against it.
+
+---
+
+*Original plan, superseded above, kept as written:*
+
 - **A** — the before-arm F3 baseline; the fork/join skeleton on the fixed
   slice modes; the pool path deleted for those modes; first denies where
   files empty of unsafe. Drop-from-the-end boundary: the `SM_SIZELIMITED`
