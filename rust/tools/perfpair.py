@@ -80,7 +80,15 @@ def git(*args: str, check: bool = True) -> str:
 _DECODE_NAME = re.compile(r"^ ([A-Z].*?)\s*$")
 _DECODE_MS = re.compile(r"Rust\s*:.*?([0-9]+\.[0-9]+)\s*ms/frame")
 _ENCODE_NAME = re.compile(r"^ (\d+x\d+ \(.*?\))")
-_ENCODE_MS = re.compile(r"\[(\d+) thread\].*?Rust:\s*[0-9.]+\s*fps\s*\(\s*([0-9]+\.[0-9]+)\s*ms\)")
+# **F74, T7.C9.** This was `\[(\d+) thread\]` — a literal `]` straight after the
+# count — and `BENCH_SLICE_MODE` (T7.B0, F68's knob) makes the bench print
+# `[1 thread sm=1 n=4]`. So from the moment the slice-mode axis existed, this parser
+# matched **nothing** on any multi-slice run and `report()` printed an empty encode
+# table without a word. The axis label is captured now and travels into the row key,
+# which is also what makes `sm=1 n=4` and `sm=3` separate rows rather than one.
+_ENCODE_MS = re.compile(
+    r"\[(\d+) thread([^\]]*)\].*?Rust:\s*[0-9.]+\s*fps\s*\(\s*([0-9]+\.[0-9]+)\s*ms\)"
+)
 
 
 def parse_decode(text: str) -> dict[str, float]:
@@ -109,7 +117,20 @@ def parse_encode(text: str) -> dict[str, float]:
             continue
         m = _ENCODE_MS.search(line)
         if m and name:
-            rows[f"{name} [{m.group(1)}t]"] = float(m.group(2))
+            axis = m.group(2).strip()
+            label = f"{m.group(1)}t {axis}" if axis else f"{m.group(1)}t"
+            rows[f"{name} [{label}]"] = float(m.group(3))
+    if not rows:
+        # A parser that matches nothing must be loud — the same rule S17 applies to a
+        # missing ffmpeg and gates.sh applies to a Miri step that runs zero tests. An
+        # empty encode table is indistinguishable from a green one in the report, and
+        # F74 is what that cost: every span since the slice-mode axis landed would
+        # have measured the decoder only.
+        die(
+            "the encoder bench produced no parseable rows — the bench ran but "
+            "`_ENCODE_MS` matched nothing. The encoder is UNMEASURED; fix the parser "
+            "rather than reading the decode table alone (F74)."
+        )
     return rows
 
 
