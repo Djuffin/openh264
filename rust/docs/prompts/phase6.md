@@ -723,7 +723,10 @@ Phase 6's close is defined now, and it is the decoder's close, transposed:
    owner. An exception is a file, never a blanket.
 2. **Every surviving `#[allow(unsafe_code)]` item under the denied modules is
    enumerated by category with an owner**, and only five categories are lawful:
-   values crossing the C ABI (Phase 8), owned-storage cursor machinery carrying
+   values crossing the C ABI (Phase 8 — and `extern "C"` alone is *not* the C
+   ABI: a first pass tagged 210 items that way and would have handed Phase 8
+   the rate controller; only a `#[no_mangle]` export is, and there are 5 —
+   session J's ruling), owned-storage cursor machinery carrying
    its mandated Miri tests (S28/S40 — the pool, the frame bitstream's writers,
    the named neighbour-walkers), an MT seam (Phase 7), the
    `SCREEN_CONTENT(dormant)` tag (Phase 10, D-scr-1), and **`port-raw(<phase>)`
