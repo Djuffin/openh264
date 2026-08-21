@@ -947,6 +947,39 @@ pub fn SyncPictureResolutionExt(pCtx: &mut SWelsDecoderContext, iWidth: u32, iHe
         let iPicBufSize = GetTargetRefListSize(pCtx);
         (*pCtx).iPicQueueNumber = iPicBufSize;
 
+        // **F77 (T8.C1): the resolution-change arm.** `WelsRequestMem`
+        // (`decoder.cpp:464–545`) is what this function's first half is; the port had
+        // only its *first-allocation* case, so the pool built for the opening sequence
+        // survived every later one. `InitialDqLayersContext` below re-sizes the layer
+        // from the new SPS unconditionally, so a mid-stream resolution change left the
+        // **layer** at the new macroblock count and the **pictures** at the old one —
+        // `res/Error_I_P.264` goes 352x288 → 640x480 → 352x288, and the first switch
+        // put `WelsActualDecodeMbCavlcISlice` at `iMbXy` 396 in a 396-entry
+        // `pDec.pMbType`. Through an `extern "C"` thunk that panic is a process abort,
+        // which is plan §P13's line. The C++ logs the three transitions it makes here
+        // ("memory re-alloc for resolution change, size change from 352 * 288 to
+        // 640 * 480") and emits five frames; the port emitted two and died.
+        //
+        // The C's early return is `bHaveGotMemory && same size && !bNeedChangePicQueue`;
+        // its `bNeedChangePicQueue` half needs `IncreasePicBuff`/`DecreasePicBuff`,
+        // which this port has never had (**F80**, Phase 9) — so the same-size case keeps
+        // the pool and reports its real capacity, exactly as before this commit, and
+        // only the size test is new. `WelsResetRefPic` is the caller's
+        // (`AllocPicBuffOnNewSeqBegin`, matching `decoder.cpp:489`'s placement relative
+        // to this work), so the reference lists are already clear of the pool being
+        // dropped here.
+        let size_changed = (*pCtx).bHaveGotMemory
+            && (iPicWidth != (*pCtx).iImgWidthInPixel || iPicHeight != (*pCtx).iImgHeightInPixel);
+        if size_changed {
+            // `decoder.cpp:518–528`: destroy, forget the DPB back-reference into the
+            // pool being freed, rebuild at the new size. `.take()` is the C's
+            // `ppPicBuf` out-parameter — it reads the pool and nulls the field in one
+            // expression, the form `WelsFreeDynamicMemory` already uses.
+            let pool = (*pCtx).pPicBuff.take();
+            crate::decoder::pic_queue::DestroyPicBuff(pCtx, pool);
+            (*pCtx).pLastDecPicInfo.pPreviousDecodedPictureInDpb = None;
+        }
+
         if (*pCtx).pPicBuff.is_none() {
             // **T8.A8: the `pMemAlign` guard is gone with the allocator.** `CreatePicBuff`'s
             // C++ opens `if (NULL == pCtx || NULL == pCtx->pMemAlign) return 1;` — a
@@ -963,6 +996,14 @@ pub fn SyncPictureResolutionExt(pCtx: &mut SWelsDecoderContext, iWidth: u32, iHe
                 return 1;
             };
             (*pCtx).pPicBuff = Some(pool);
+            // `decoder.cpp:534–540`, and only on the arm that actually allocated:
+            // the size the pictures were built at, and `pDec = NULL` because "need
+            // prefetch a new pic due to spatial size changed" — the id the field holds
+            // names a slot of the pool that was just dropped.
+            (*pCtx).iImgWidthInPixel = iPicWidth;
+            (*pCtx).iImgHeightInPixel = iPicHeight;
+            (*pCtx).bHaveGotMemory = true;
+            (*pCtx).pDec = None;
         } else {
             // The buffer is not reallocated here, so report its real capacity. The `0` is
             // unreachable — this arm *is* the pool being present — and the borrow ends

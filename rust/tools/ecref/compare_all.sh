@@ -28,6 +28,7 @@ BA_MW_D_P_LOST:res/BA_MW_D_P_LOST.264
 CABA2_SVA_B:res/CABA2_SVA_B.264
 CABA3_SVA_B:res/CABA3_SVA_B.264
 Cisco_Men_whisper_640x320_CABAC_Bframe_9:res/Cisco_Men_whisper_640x320_CABAC_Bframe_9.264
+Error_I_P:res/Error_I_P.264
 QCIF_2P_I_allIPCM:res/QCIF_2P_I_allIPCM.264
 SVA_NL1_B:res/SVA_NL1_B.264
 SarVui:res/SarVui.264
