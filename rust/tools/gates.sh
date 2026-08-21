@@ -6,7 +6,9 @@
 #     commit   build --all-targets + cargo test (debug + release) + ratchet (~2 min)
 #     family   commit + diffharness sweeps st/mt/def/sl in BOTH profiles  (~5 min)
 #     full     family + decode bench + encoder bench + Miri --lib         (default)
-#     exit     full + Miri over the differential integration tests        (phase exits)
+#     exit     full + Miri over the differential integration tests
+#              + the two C-ABI boundary gates: the cdylib's export list and the
+#                external dlopen harness (T8.C3/T8.C5)                 (phase exits)
 #
 #   env:
 #     FFMPEG=/path/to/ffmpeg   required for the encoder bench; without it that
@@ -445,6 +447,48 @@ if [ "${LEVEL_DONE:-0}" != 1 ]; then
 fi
 
 # ---------------------------------------------------------------------------
+# 6b. The C-ABI boundary gates (plan §7.2 gate 7, Phase 8 session C).
+#
+# Both of these look at the thing a consumer actually gets — the **cdylib** — and
+# neither can be seen from inside the process that `cargo test` runs. The rlib the
+# in-process battery links has no dynamic symbol table and no `dlopen` path, so a
+# broken export list, a wrong struct size, or a thunk that only works when the caller
+# was compiled by the same rustc all pass every step above.
+#
+# They are at `exit` rather than `commit` because each one builds a native artefact
+# and the harness decodes the conformance 60 again through it (~1 min together), and
+# because the surface they guard — the ABI — is exactly the surface a phase exit is
+# for. `abi_exports.sh` alone is cheap enough to run by hand at any time.
+# ---------------------------------------------------------------------------
+# F17's rule applies to both: the verdict is `${PIPESTATUS[0]}`, never the `if`'s,
+# and it is corroborated by a summary line that only a completed run prints.
+if [ "${LEVEL_DONE:-0}" != 1 ]; then
+  hdr "abi exports (cdylib == upstream's 7)"
+  bash "$HERE/abi_exports.sh" release 2>&1 | tee "$LOGS/abi_exports.log" | tail -6
+  rc=${PIPESTATUS[0]}
+  tally=$(grep -E '^exports: ' "$LOGS/abi_exports.log" | tail -1)
+  if [ "$rc" -ne 0 ]; then
+    fail "abi exports: the cdylib's export list is not exactly the seven (rc=$rc) — see $LOGS/abi_exports.log"
+  elif [ -z "$tally" ]; then
+    fail "abi exports: exit 0 but no 'exports: n/n' line — the script died before its verdict; see $LOGS/abi_exports.log"
+  else
+    pass "abi exports: $tally"
+  fi
+
+  hdr "external-ABI harness (dlopen the cdylib)"
+  bash "$HERE/abi_harness/run.sh" 2>&1 | tee "$LOGS/abi_harness.log" | tail -14
+  rc=${PIPESTATUS[0]}
+  tally=$(grep -E '^TALLY ' "$LOGS/abi_harness.log" | tail -1 | sed 's/^TALLY //')
+  if [ "$rc" -ne 0 ]; then
+    fail "abi harness: a part failed (rc=$rc) — see $LOGS/abi_harness.log"
+  elif [ -z "$tally" ]; then
+    fail "abi harness: exit 0 but no TALLY line — the harness died before finishing; see $LOGS/abi_harness.log"
+  else
+    pass "abi harness: $tally"
+  fi
+fi
+
+# ---------------------------------------------------------------------------
 # 7. Fuzz (plan §7.2 gate 6) — T7 is deferred by direction; there is no
 #    corpus-replay net. Said out loud every run so the absence stays visible.
 # ---------------------------------------------------------------------------
@@ -463,6 +507,12 @@ skip "fuzz corpus replay: the fuzz crate (Phase 0 T7) was never built — no cor
 #   sweep_gate           PIPESTATUS[0] + tally corroboration (fixed here)  sound
 #   decode / encode bench PIPESTATUS[0] + [2] + MISMATCH/DIFFER (fixed)    sound
 #   run_miri (both steps) PIPESTATUS[0] + totals + zero-test (fixed here)  sound
+#   abi_exports.sh       PIPESTATUS[0] + the `exports: n/n` line             sound
+#   abi_harness/run.sh   PIPESTATUS[0] + the `TALLY` line                    sound
+#                        (both written as PIPESTATUS from the start; the `if
+#                        pipeline; then` shape F17 names would have made each of
+#                        them a reporter, and a green ABI gate that never checked
+#                        anything is the worst possible one)
 #   `rustup toolchain list | grep -q nightly`   grep's status IS the question
 #   `command -v ffmpeg`, `grep -q` on logs      status is the question
 #   `tally=$(grep … | tail -1)`                 substitution, value used, not status

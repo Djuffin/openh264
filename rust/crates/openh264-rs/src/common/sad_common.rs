@@ -41,6 +41,21 @@ pub fn WELS_ABS(iX: i32) -> i32 {
     iX.abs()
 }
 
+// **T8.C3 — the fourteen `#[unsafe(no_mangle)]` attributes in this file are deleted.**
+//
+// They were transliteration residue: the C++ has these names because it links one
+// object file per translation unit, and nothing in this crate ever reached them by
+// symbol. Every caller is a Rust path (`sad::WelsSampleSad4x4_c` in
+// `tests/kernels_differential_phase2.rs` and `benches/sad_bodies_bench.rs`), and the
+// dispatch tables hold function *items*.
+//
+// With `crate-type = ["cdylib", ...]` they stopped being harmless: a Rust cdylib
+// exports exactly its `#[no_mangle] pub extern` items, so these fourteen plus
+// `set_mb_syn_cabac.rs`'s three appeared in `nm -gU` beside the seven upstream names
+// — **and they are the same names `libopenh264` exports**, so a consumer that loaded
+// both libraries would have had one interpose on the other. `tools/abi_exports.sh` is
+// the gate that will not let them come back.
+
 //=================== Single-Block SAD Functions =====================//
 
 /// Computes the Sum of Absolute Differences for a 4x4 block.
@@ -51,7 +66,6 @@ pub fn WELS_ABS(iX: i32) -> i32 {
 /// # Safety
 /// `pSample1` and `pSample2` must point to valid readable pixel buffers of at least 4 rows with
 /// the specified strides.
-#[unsafe(no_mangle)]
 pub unsafe extern "C" fn WelsSampleSad4x4_c(
     pSample1: *mut u8,
     iStride1: i32,
@@ -84,7 +98,6 @@ pub unsafe extern "C" fn WelsSampleSad4x4_c(
 ///
 /// # Safety
 /// Requires valid readable pointers for `pSample1` and `pSample2`.
-#[unsafe(no_mangle)]
 pub unsafe extern "C" fn WelsSampleSad8x4_c(
     pSample1: *mut u8,
     iStride1: i32,
@@ -106,7 +119,6 @@ pub unsafe extern "C" fn WelsSampleSad8x4_c(
 ///
 /// # Safety
 /// Requires valid readable pointers for `pSample1` and `pSample2`.
-#[unsafe(no_mangle)]
 pub unsafe extern "C" fn WelsSampleSad4x8_c(
     pSample1: *mut u8,
     iStride1: i32,
@@ -133,7 +145,6 @@ pub unsafe extern "C" fn WelsSampleSad4x8_c(
 ///
 /// # Safety
 /// Requires valid readable pointers for `pSample1` and `pSample2`.
-#[unsafe(no_mangle)]
 pub unsafe extern "C" fn WelsSampleSad8x8_c(
     pSample1: *mut u8,
     iStride1: i32,
@@ -170,7 +181,6 @@ pub unsafe extern "C" fn WelsSampleSad8x8_c(
 ///
 /// # Safety
 /// Requires valid readable pointers for `pSample1` and `pSample2`.
-#[unsafe(no_mangle)]
 pub unsafe extern "C" fn WelsSampleSad16x8_c(
     pSample1: *mut u8,
     iStride1: i32,
@@ -192,7 +202,6 @@ pub unsafe extern "C" fn WelsSampleSad16x8_c(
 ///
 /// # Safety
 /// Requires valid readable pointers for `pSample1` and `pSample2`.
-#[unsafe(no_mangle)]
 pub unsafe extern "C" fn WelsSampleSad8x16_c(
     pSample1: *mut u8,
     iStride1: i32,
@@ -219,7 +228,6 @@ pub unsafe extern "C" fn WelsSampleSad8x16_c(
 ///
 /// # Safety
 /// Requires valid readable pointers for `pSample1` and `pSample2`.
-#[unsafe(no_mangle)]
 pub unsafe extern "C" fn WelsSampleSad16x16_c(
     pSample1: *mut u8,
     iStride1: i32,
@@ -255,7 +263,6 @@ pub unsafe extern "C" fn WelsSampleSad16x16_c(
 ///
 /// # Safety
 /// `iSample1`, `iSample2`, and `pSad` (must have at least 4 elements) must be valid pointers.
-#[unsafe(no_mangle)]
 pub unsafe extern "C" fn WelsSampleSadFour16x16_c(
     iSample1: *mut u8,
     iStride1: i32,
@@ -278,7 +285,6 @@ pub unsafe extern "C" fn WelsSampleSadFour16x16_c(
 ///
 /// # Safety
 /// Requires valid pointers for `iSample1`, `iSample2`, and `pSad`.
-#[unsafe(no_mangle)]
 pub unsafe extern "C" fn WelsSampleSadFour16x8_c(
     iSample1: *mut u8,
     iStride1: i32,
@@ -301,7 +307,6 @@ pub unsafe extern "C" fn WelsSampleSadFour16x8_c(
 ///
 /// # Safety
 /// Requires valid pointers for `iSample1`, `iSample2`, and `pSad`.
-#[unsafe(no_mangle)]
 pub unsafe extern "C" fn WelsSampleSadFour8x16_c(
     iSample1: *mut u8,
     iStride1: i32,
@@ -324,7 +329,6 @@ pub unsafe extern "C" fn WelsSampleSadFour8x16_c(
 ///
 /// # Safety
 /// Requires valid pointers for `iSample1`, `iSample2`, and `pSad`.
-#[unsafe(no_mangle)]
 pub unsafe extern "C" fn WelsSampleSadFour8x8_c(
     iSample1: *mut u8,
     iStride1: i32,
@@ -347,7 +351,6 @@ pub unsafe extern "C" fn WelsSampleSadFour8x8_c(
 ///
 /// # Safety
 /// Requires valid pointers for `iSample1`, `iSample2`, and `pSad`.
-#[unsafe(no_mangle)]
 pub unsafe extern "C" fn WelsSampleSadFour4x4_c(
     iSample1: *mut u8,
     iStride1: i32,
@@ -370,7 +373,6 @@ pub unsafe extern "C" fn WelsSampleSadFour4x4_c(
 ///
 /// # Safety
 /// Requires valid pointers for `iSample1`, `iSample2`, and `pSad`.
-#[unsafe(no_mangle)]
 pub unsafe extern "C" fn WelsSampleSadFour8x4_c(
     iSample1: *mut u8,
     iStride1: i32,
@@ -393,7 +395,6 @@ pub unsafe extern "C" fn WelsSampleSadFour8x4_c(
 ///
 /// # Safety
 /// Requires valid pointers for `iSample1`, `iSample2`, and `pSad`.
-#[unsafe(no_mangle)]
 pub unsafe extern "C" fn WelsSampleSadFour4x8_c(
     iSample1: *mut u8,
     iStride1: i32,

@@ -818,7 +818,9 @@ pub fn WelsCabacInitContexts(
 ///
 /// # Safety
 /// - `pEncCtx` must point to a valid `sWelsEncCtx`.
-#[unsafe(no_mangle)]
+// **T8.C3: `#[unsafe(no_mangle)]` deleted here and on the two below** — see the note
+// in `common/sad_common.rs`. Internal names that a cdylib would have exported beside
+// upstream's seven, colliding with `libopenh264`'s own.
 // unsafe-cat: C-ABI
 #[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsCabacInit(pEncCtx: *mut crate::encoder::encoder_context::sWelsEncCtx) {
@@ -866,7 +868,6 @@ pub unsafe fn WelsCabacContextInitFromContexts(
 /// # Safety
 /// - `pCtx` must point to a valid `sWelsEncCtx`.
 /// - `pCbCtx` must point to a valid, writable `SCabacCtx` instance.
-#[unsafe(no_mangle)]
 // unsafe-cat: C-ABI
 #[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsCabacContextInit(
@@ -895,7 +896,6 @@ pub unsafe extern "C" fn WelsCabacContextInit(
 ///
 /// # Safety
 /// - `pCbCtx` must point to a valid, writable `SCabacCtx` instance.
-#[unsafe(no_mangle)]
 // unsafe-cat: C-ABI
 #[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsCabacEncodeInit(pCbCtx: &mut SCabacCtx, iStart: usize, iEnd: usize) {

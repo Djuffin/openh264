@@ -3,6 +3,15 @@ name = "openh264-rs"
 version = "0.1.0"
 edition = "2024"
 
+# **The drop-in, made real** (T8.C3). `rlib` is what the tests, benches, examples and
+# `rust_enc` link; `cdylib` is what a C consumer `dlopen`s and what
+# `tools/abi_exports.sh` checks exports exactly upstream's seven symbols; `staticlib`
+# is the same object set for a consumer that links rather than loads. Adding the two
+# native targets does not change the rlib the in-process gates use — it adds link
+# steps, which is why `cargo build --all-targets` got slower and nothing else moved.
+[lib]
+crate-type = ["rlib", "cdylib", "staticlib"]
+
 [dependencies]
 libc = "0.2"
 
