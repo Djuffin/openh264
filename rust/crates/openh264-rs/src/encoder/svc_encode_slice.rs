@@ -2058,7 +2058,7 @@ pub unsafe fn WelsISliceMdEncDynamic(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSl
     let mut sDss = SDynamicSlicingStack::default();
     if (*ctx_param(pEncCtx)).iEntropyCodingModeFlag != 0 {
         crate::encoder::svc_set_mb_syn_cabac::WelsInitSliceCabac(pEncCtx, pSlice);
-        sDss.pRestoreBuffer = (*pEncCtx).pDynamicBsBuffer[kiPartitionId];
+        sDss.pRestoreBuffer = dynamic_bs_buffer(pEncCtx, kiPartitionId);
         sDss.iStartPos = 0;
         sDss.iCurrentPos = 0;
     } else {
@@ -2408,7 +2408,7 @@ pub unsafe fn WelsMdInterMbLoopOverDynamicSlice(
         crate::encoder::svc_set_mb_syn_cabac::WelsInitSliceCabac(pEncCtx, pSlice);
         sDss.iStartPos = 0;
         sDss.iCurrentPos = 0;
-        sDss.pRestoreBuffer = (*pEncCtx).pDynamicBsBuffer[kiPartitionId];
+        sDss.pRestoreBuffer = dynamic_bs_buffer(pEncCtx, kiPartitionId);
     } else {
         sDss.iStartPos = (*pBs).bits_pos();
     }
@@ -2757,10 +2757,44 @@ pub unsafe fn slice_bs_buffer<'a>(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSlice
 // unsafe-cat: port-raw(Phase 7)
 #[allow(unsafe_code)]
 pub unsafe fn thread_bs_buffer<'a>(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSlice) -> &'a mut [u8] {
-    bs_buffer(
-        (*(*pEncCtx).pSliceThreading).pThreadBsBuffer[(*pSlice).uiBufferIdx as usize],
-        (*pSlice).sSliceBs.uiSize,
-    )
+    // **T7.C5, and the spelling is F71's.** The buffer is owned now, so the root has
+    // to come out of a `Vec` — and it comes out through `addr_of!` on *this worker's
+    // element*, never through a reborrow of the array or the struct that every worker
+    // shares. `as_ptr() as *mut u8` returns the buffer's own provenance without a
+    // `Unique` retag on the three-word header, which is the difference between a
+    // read two workers can make at once and a race.
+    let slot = (*pSlice).uiBufferIdx as usize;
+    let v = std::ptr::addr_of!((*(*pEncCtx).pSliceThreading).pThreadBsBuffer[slot]);
+    bs_buffer((*v).as_ptr() as *mut u8, (*pSlice).sSliceBs.uiSize)
+}
+
+/// The CABAC restore buffer for one picture partition —
+/// `sWelsEncCtx::pDynamicBsBuffer[kiPartitionId]`, **owned since T7.C5**.
+///
+/// Under `SM_SIZELIMITED_SLICE` with CABAC, renormalisation can rewrite bytes already
+/// emitted, so stepping back over a slice boundary has to restore the bytes as well as
+/// the coder state; this is the scratch it restores from
+/// (`SDynamicSlicingStack::pRestoreBuffer`). One per partition, and a partition is a
+/// worker, so the buffers are disjoint by the same static partition the bs slots are.
+///
+/// Null when the encoder was not built for that combination — which is what the raw
+/// array's null entry meant, and `svc_set_mb_syn_cavlc.rs` tests for it at both ends
+/// of the stash/restore pair.
+///
+/// The derivation is `thread_bs_buffer`'s and for the same reason: `addr_of!` on this
+/// worker's element, never a reborrow of the array every worker shares (F71).
+///
+/// # Safety
+/// `pEncCtx` must be live, and `kiPartitionId` within `MAX_THREADS_NUM`.
+#[inline]
+// unsafe-cat: cursor
+#[allow(unsafe_code)]
+pub unsafe fn dynamic_bs_buffer(pEncCtx: *mut sWelsEncCtx, kiPartitionId: usize) -> *mut u8 {
+    let v = std::ptr::addr_of!((*pEncCtx).pDynamicBsBuffer[kiPartitionId]);
+    if (*v).is_empty() {
+        return std::ptr::null_mut();
+    }
+    (*v).as_ptr() as *mut u8
 }
 
 /// The writer a slice's bitstream is positioned by — the other half of
@@ -3615,7 +3649,15 @@ pub unsafe fn ReallocateSliceInThread(
     let iCodedSliceNum = (*pDqLayer).sSliceBufferInfo[KiSlcBuffIdx as usize].iCodedSliceNum;
     let mut iMaxSliceNumNew = 0;
     let pLastCodedSlice = slice_in_bank(pDqLayer, KiSlcBuffIdx as usize, iCodedSliceNum - 1);
-    let pSliceArgument = &mut (*ctx_param(pCtx)).sSpatialLayers[kiDlayerIdx as usize].sSliceArgument;
+    // **T7.C5, F71's idiom at the one site the workers still reached it from.**
+    // `&mut` here is a `Unique` retag over *shared* parameter state — this function
+    // runs on a worker (`EncodeOnePartitionSizeLimited`), every worker resolves the
+    // same layer's slice argument, and `ReallocateSliceList` only ever reads it.
+    // `addr_of_mut!` creates no reference, so two workers growing their own banks at
+    // the same instant no longer race on this borrow.
+    let pSliceArgument = std::ptr::addr_of_mut!(
+        (*ctx_param(pCtx)).sSpatialLayers[kiDlayerIdx as usize].sSliceArgument
+    );
 
     let mut iRet = CalculateNewSliceNum(pCtx, pLastCodedSlice, iMaxSliceNum, &mut iMaxSliceNumNew);
     if iRet != ENC_RETURN_SUCCESS {
