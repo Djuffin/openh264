@@ -362,6 +362,19 @@ if [ "${LEVEL_DONE:-0}" != 1 ]; then
   # the three tests that took a second `&mut` to a picture the list already held
   # — which is what the skip had been hiding, and is F18's lesson again: the
   # backlog behind a skip is not confined to the code the skip was written for.
+  # **F75 (T7.C10): this array is empty now, and that broke the step that matters
+  # most.** macOS ships bash 3.2, where `"${arr[@]}"` on an *empty* array is an
+  # unbound-variable error under `set -u` — which this script sets, deliberately. Every
+  # phase exit before this one ran with at least one entry here, so the expansion was
+  # never empty and the bug never fired. **T7.B4 deleted the last skip** (F12's
+  # `--skip wels_thread_pool`, with the module it named), and the very next unscoped
+  # run — this phase's exit — died on line 403 instead of running Miri.
+  #
+  # So the gate's own success condition disabled the gate. That is the third sighting
+  # of this project's recurring shape (F17's `tail` exit status, F68's thread axis,
+  # F74's parser): **an instrument whose empty case is untested**. Fixed at the
+  # expansion below with the bash 3.2 idiom rather than by keeping a dummy entry here,
+  # because an empty skip list is the correct state and should stay expressible.
   MIRI_SKIPS=()
   # SCOPE (Phase 6 session H, decision D-gate-2). `MIRI_SCOPE=encoder` adds one
   # more skip — and it is a *scope*, not a skip in the sense above: it names no
@@ -400,7 +413,8 @@ if [ "${LEVEL_DONE:-0}" != 1 ]; then
     # what they were. The forbidden list stands — `-Zmiri-disable-stacked-borrows`,
     # `-Zmiri-disable-validation`, and anything else that weakens the checker.
     run_miri lib "$MIRI_DESC" \
-      "-Zmiri-ignore-leaks -Zmiri-disable-isolation" --lib -- "${MIRI_SKIPS[@]}"
+      "-Zmiri-ignore-leaks -Zmiri-disable-isolation" --lib -- \
+      ${MIRI_SKIPS[@]+"${MIRI_SKIPS[@]}"}   # F75: bash 3.2 + set -u, empty array
   fi
 fi
 
