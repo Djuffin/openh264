@@ -108,8 +108,8 @@ on the impl objects.
   Miri instruments, with no production item left. Crate `raw_ptr` −57,
   `unsafe_block` −23, `unsafe_fn` −5. Span: no measurable movement on either
   bench. **F76 opened**, owner B.
-- **B — DONE** (2026-08-21, `51a0956a..72fe2e7e`, ten commits plus the docs
-  close). The whole brief landed, and the session's shape is worth stating: **every
+- **B — DONE** (2026-08-21, `51a0956a..e0f6c03d`, ten commits plus a
+  three-commit close, **`exit` unscoped `OVERALL: PASS` 13/0/1**). The whole brief landed, and the session's shape is worth stating: **every
   step was nominally an ownership change, and every one of them surfaced a parity
   defect the byte gates could not see.** **F76 CLOSED** in three commits (the two
   `DecoderConfigParam` statements plus both clamps; the live re-init rebuild;
