@@ -1405,11 +1405,15 @@ pub unsafe fn WelsSliceHeaderScalExtInit(pCurLayer: *mut SDqLayer, pSlice: *mut 
         return;
     }
     let pSliceHeadExt = &mut (*pSlice).sSliceHeaderExt;
-    let pNalHeadExt = &mut (*pCurLayer).sLayerInfo.sNalHeaderExt;
+    // **T7.C3.** `addr_of_mut!`, not `&mut`: this is *layer* state and every worker
+    // runs this function, so a `&mut` retag here is a write as far as the data-race
+    // checker is concerned — and it is only ever read. See
+    // `StampLayerIdrFlagForSliceType` for the family and why it is the last of it.
+    let pNalHeadExt = std::ptr::addr_of!((*pCurLayer).sLayerInfo.sNalHeaderExt);
 
     pSliceHeadExt.bSliceSkipFlag = false;
 
-    if pNalHeadExt.uiDependencyId > 0 {
+    if (*pNalHeadExt).uiDependencyId > 0 {
         pSliceHeadExt.bAdaptiveBaseModeFlag = false;
         pSliceHeadExt.bAdaptiveMotionPredFlag = false;
         pSliceHeadExt.bAdaptiveResidualPredFlag = false;
@@ -1572,7 +1576,9 @@ pub unsafe fn WelsSliceHeaderWrite(
     let pSps = layer_sps(pCtx, pCurLayer);
     let pPps = layer_pps(pCtx, pCurLayer);
     let pSliceHeader = &mut (*pSlice).sSliceHeaderExt.sSliceHeader;
-    let pNalHead = &mut (*pCurLayer).sLayerInfo.sNalHeaderExt;
+    // T7.C3: `addr_of_mut!`, not `&mut` — layer state, read-only here, and every
+    // worker runs this. `WriteRefPicMarking` takes the raw pointer unchanged.
+    let pNalHead = std::ptr::addr_of_mut!((*pCurLayer).sLayerInfo.sNalHeaderExt);
 
     BsWriteUE(buf, &mut *pBs, (*pSliceHeader).iFirstMbInSlice as u32);
     BsWriteUE(buf, &mut *pBs, (*pSliceHeader).eSliceType as u32);
@@ -1662,7 +1668,9 @@ pub unsafe fn WelsSliceHeaderExtWrite(
     let pSubSps = layer_subset_sps(pCtx, pCurLayer);
     let pSliceHeadExt = &mut (*pSlice).sSliceHeaderExt;
     let pSliceHeader = &mut pSliceHeadExt.sSliceHeader;
-    let pNalHead = &mut (*pCurLayer).sLayerInfo.sNalHeaderExt;
+    // T7.C3: `addr_of_mut!`, not `&mut` — layer state, read-only here, and every
+    // worker runs this. `WriteRefPicMarking` takes the raw pointer unchanged.
+    let pNalHead = std::ptr::addr_of_mut!((*pCurLayer).sLayerInfo.sNalHeaderExt);
 
     BsWriteUE(buf, &mut *pBs, (*pSliceHeader).iFirstMbInSlice as u32);
     BsWriteUE(buf, &mut *pBs, (*pSliceHeader).eSliceType as u32);
@@ -2784,6 +2792,57 @@ pub unsafe fn slice_writer(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSlice) -> *m
     }
 }
 
+/// **F71's residue, closed — T7.C3.** The one write `WelsCodeOneSlice` made into
+/// *layer* state rather than slice state, lifted out of the slice encode to the
+/// thread that owns the frame.
+///
+/// `svc_encode_slice.cpp:1655` sets `pNalHeadExt->bIdrFlag = 1` inside
+/// `WelsCodeOneSlice`, which every worker runs once per slice — so N workers write
+/// the same layer byte concurrently. The C++ makes that write too and brackets it in
+/// nothing, so it was never a port divergence; it was the last shared write the
+/// fork/join carried, the reason the MT Miri probe was `#[cfg_attr(miri, ignore)]`,
+/// and the thing F71 handed to Phase 9.
+///
+/// **It did not need Phase 9, because the write is loop-invariant across the fork**,
+/// and that is checkable rather than plausible:
+///
+/// * the condition is `pEncCtx->eSliceType == I_SLICE`, a **frame**-level value fixed
+///   before the fork — every worker takes the same arm;
+/// * the value written is the constant `true` — no worker can observe a different one;
+/// * **no worker reads `bIdrFlag` before its own write.** The only code a worker runs
+///   ahead of `WelsCodeOneSlice` is `InitOneSliceInThread`, `SetSliceBoundaryInfo` and
+///   `WritePrefixNalForSlice`, and none of the three touches the layer header — the
+///   prefix NAL's own idr argument is derived from `eNalType`, not from this field
+///   (`nal_encap.rs`, `_kbIdrFlag`, unused). Every read that matters —
+///   `WelsSliceHeaderExtInit`, both `g_pWelsWriteSliceHeader` bodies, the
+///   `g_pWelsSliceCoding` index — is downstream of the write **in the same worker**,
+///   and `AppendSliceToFrameBs`'s read is after the join.
+///
+/// So running it once on the calling thread immediately before the fork produces
+/// byte-for-byte what N workers racing to write the same constant produced, and the
+/// race is gone rather than serialised. Placed *at the fork*, deliberately, and not
+/// merged into `WelsInitCurrentLayer`'s frame-level stamp
+/// (`encoder_ext.rs`, `pNalHdExt.bIdrFlag = ...`): that stamp is hundreds of lines
+/// upstream, the two disagree whenever `eSliceType == I_SLICE` with `iFrameNum != 0`,
+/// and moving the write across everything in between would be a behaviour change
+/// rather than a hoist. Each single-threaded caller keeps it exactly where the
+/// statement stood, one line above its own `WelsCodeOneSlice`.
+///
+/// # Safety
+/// `pEncCtx` must be a live context whose current layer is set for this frame.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
+pub unsafe fn StampLayerIdrFlagForSliceType(pEncCtx: *mut sWelsEncCtx) {
+    if pEncCtx.is_null() || (*pEncCtx).eSliceType != EWelsSliceType::I_SLICE {
+        return;
+    }
+    let pCurLayer = current_layer(pEncCtx);
+    if pCurLayer.is_null() {
+        return;
+    }
+    (*pCurLayer).sLayerInfo.sNalHeaderExt.bIdrFlag = true;
+}
+
 // unsafe-cat: port-raw(Phase 7)
 #[allow(unsafe_code)]
 pub unsafe fn WelsCodeOneSlice(pEncCtx: *mut sWelsEncCtx, pCurSlice: *mut SSlice, kiNalType: i32) -> i32 {
@@ -2809,7 +2868,15 @@ pub unsafe fn WelsCodeOneSlice(pEncCtx: *mut sWelsEncCtx, pCurSlice: *mut SSlice
     };
 
     if (*pEncCtx).eSliceType == EWelsSliceType::I_SLICE {
-        (*pNalHeadExt).bIdrFlag = true;
+        // The `pNalHeadExt->bIdrFlag = 1` of `svc_encode_slice.cpp:1655` is not here:
+        // it is layer state, every caller runs it one line above this call, and
+        // T7.C3 explains why moving it is byte-neutral. `sScaleShift` is the slice's
+        // own and stays. The assert is the hoist's contract, checked where the
+        // statement used to be.
+        debug_assert!(
+            (*pNalHeadExt).bIdrFlag,
+            "StampLayerIdrFlagForSliceType was not run before WelsCodeOneSlice on an I_SLICE"
+        );
         (*pCurSlice).sScaleShift = 0;
     } else {
         let kuiTemporalId = (*pNalHeadExt).uiTemporalId;
@@ -4041,18 +4108,29 @@ mod tests {
     /// live. `bUseLoadBalancing` is off (the probe forces it), so the slice
     /// boundaries are a function of the input and these assertions mean something.
     ///
-    /// **Ignored under Miri, and F71 is why — not a skip without a finding.** This
+    /// **Ignored under Miri, and F73 is why — not a skip without a finding.** This
     /// probe was written to make deleting F12's `--skip wels_thread_pool` mean
-    /// something, and it did its job on its first run: it found F70 (a dead-tag read
-    /// in `InitSliceSettings`, fixed) and then F71 (the root-accessor family taking
-    /// `&mut` to shared context state, partly fixed). What it reports *now* is the
-    /// residue F71 records as Phase 9's: shared **writes** from the workers into the
-    /// layer — `WelsCodeOneSlice` stamps `sLayerInfo.sNalHeaderExt` per slice, and
-    /// `svc_encode_slice.cpp:1649-1655` does exactly the same, so it is a shared
-    /// latent race in the reference design and not a port divergence. It cannot be
-    /// spelled away; it needs the context split that F67 makes Phase 9's precondition.
+    /// something, and it has now found four things by being run: F70 (a dead-tag read
+    /// in `InitSliceSettings`, fixed), F71 (the root-accessor family taking `&mut` to
+    /// shared context state — sixteen accessors at T7.B5, **the last of it at T7.C3**,
+    /// closed), and F73.
+    ///
+    /// **F71 is closed and this attribute outlived it**, which is worth saying
+    /// plainly. F71's named residue was one shared *write* —
+    /// `WelsCodeOneSlice` stamping `sLayerInfo.sNalHeaderExt` per slice per worker.
+    /// T7.C3 hoisted it out of the fork (`StampLayerIdrFlagForSliceType`) and made the
+    /// two remaining layer-header derivations raw, and Miri's next answer was a
+    /// **different class**: `&mut` retags over the *reconstruction picture*
+    /// (`layer_dec_pic_mut` -> `SRefList::pic_mut` -> `&mut SPicture`, and
+    /// `SPicture::planes`' `&mut self`), taken by every worker while each writes its
+    /// own disjoint macroblock rows. The aliasing is in how the port **reaches** the
+    /// picture, not in what it writes, and unpicking it is 32 `planes()` sites and 68
+    /// `_mut` picture-accessor calls across the preprocessor, the reference-list
+    /// manager and the encode tree — F67's context split, i.e. Phase 9's, not a site.
+    /// That is F73, and the attribute retires with it.
+    ///
     /// The test runs normally in both profiles and is the only coverage the fork/join
-    /// has outside the diffharness; the attribute retires with F71.
+    /// has outside the diffharness.
     #[test]
     #[cfg_attr(miri, ignore)]
     fn fork_join_encodes_a_multi_slice_frame_under_the_aliasing_checker() {

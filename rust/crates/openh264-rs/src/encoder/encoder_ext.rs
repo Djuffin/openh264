@@ -2958,6 +2958,11 @@ pub unsafe fn WelsCodeOnePicPartition(
         let pCurSlice = crate::encoder::svc_encode_slice::slice_in_bank(current_layer(pCtx), uSlcBuffIdx, iSliceIdx);
         (*pCurSlice).iSliceIdx = iSliceIdx;
 
+        // T7.C3: the layer-level half of `WelsCodeOneSlice`'s I_SLICE arm, one line
+        // above the call it was lifted out of — this path is single-threaded, so the
+        // sequence is unchanged.
+        crate::encoder::svc_encode_slice::StampLayerIdrFlagForSliceType(pCtx);
+
         iReturn = crate::encoder::svc_encode_slice::WelsCodeOneSlice(
             pCtx,
             pCurSlice,
@@ -3358,6 +3363,8 @@ pub unsafe fn WelsEncoderEncodeExt(
                 return (*pCtx).iEncoderError;
             }
 
+            // T7.C3, as above.
+            crate::encoder::svc_encode_slice::StampLayerIdrFlagForSliceType(pCtx);
             (*pCtx).iEncoderError =
                 crate::encoder::svc_encode_slice::WelsCodeOneSlice(pCtx, pCurSlice, eNalType as i32);
             if (*pCtx).iEncoderError != ENC_RETURN_SUCCESS {
@@ -3561,6 +3568,8 @@ pub unsafe fn WelsEncoderEncodeExt(
                     iSliceIdx,
                 );
 
+                // T7.C3, as above.
+                crate::encoder::svc_encode_slice::StampLayerIdrFlagForSliceType(pCtx);
                 (*pCtx).iEncoderError = crate::encoder::svc_encode_slice::WelsCodeOneSlice(
                     pCtx,
                     pCurSlice,
