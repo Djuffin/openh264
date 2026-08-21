@@ -379,7 +379,14 @@ assert_size!(crate::encoder::encoder_context::SLogContext, 24);
 // port. It sits after all but one of the pinned offsets below, so **only
 // `pMemAlign` moves**; the session brief predicted all fifteen would, and the
 // measurement says otherwise (S36 again — 14 of the 15 pins precede the field).
-assert_size_by_profile!(sWelsEncCtx, debug 98000, release 97912);
+// **T7.C5**: **+64 both profiles**, and it is one field. `pDynamicBsBuffer` was an
+// array of four raw pointers into `CMemoryAlign` blocks and is `[Vec<u8>; 4]` now —
+// four one-word pointers become four three-word `Vec`s, +16 apiece, and the array's
+// alignment does not move so nothing else shifts. Both numbers measured, in the
+// profile they name (S36). The field sits after all fifteen pinned offsets below, so
+// **none of them moves** — which is the same thing T6.I0's note says about
+// `pPSOVector`, and the reason to measure rather than predict.
+assert_size_by_profile!(sWelsEncCtx, debug 98064, release 97976);
 
 
 // The fifteen `sWelsEncCtx` fields the preprocessor touches, pinned at their C++

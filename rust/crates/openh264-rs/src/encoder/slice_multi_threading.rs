@@ -188,8 +188,10 @@ pub unsafe fn WelsSetMemMultiplebytes_c(
 // `WelsEncoderEncodeExt` before every dynamic dispatch, read by nothing. Deleted at
 // T7.B4 with the same grep discipline the eight dead event fields got at T7.A1.
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
+// Not `repr(C)` and not `Copy` since **T7.C5**: `pThreadBsBuffer` is an array of
+// `Vec`s, which has no C shape and owns its storage. Nothing copied this struct by
+// value — the compiler's answer, not an argument.
+#[derive(Debug)]
 /// The C++ `SSliceThreading` carries, besides these fields, four per-thread
 /// `WELS_EVENT` arrays (`pSliceCodedEvent`, `pReadySliceCodingEvent`,
 /// `pUpdateMbListEvent`, `pFinUpdateMbListEvent`), `pSliceCodedMasterEvent`,
@@ -206,35 +208,35 @@ pub struct SSliceThreading {
     /// It was on T7.B4's delete list as dead; reading the reference is what saved it,
     /// and restoring the lock is what closed F3 (T7.B3).
     pub mutexSliceNumUpdate: *mut c_void,
-    pub pThreadBsBuffer: [*mut u8; MAX_THREADS_NUM],
-    /// Length, in bytes, of every `pThreadBsBuffer` entry — the `iCountBsLen`
-    /// `RequestMtResource` was called with. Kept because `ReleaseMtResource` needs
-    /// the allocation's `Layout` back to free it, and the C++ did not: its
-    /// allocator carries its own size table (`pMa->WelsFree`). Without this the
-    /// buffers could only be nulled, which is what the raw translation did — see
-    /// T7.A3.
-    pub uiThreadBsBufferLen: usize,
+    /// One bs scratch buffer per worker slot, **owned since T7.C5**. It was
+    /// `[*mut u8; MAX_THREADS_NUM]` over `alloc_zeroed` blocks, and the leak T7.A3
+    /// fixed was in the walk that freed them; the array drops with the struct now, so
+    /// there is no walk and nothing to leak.
+    ///
+    /// An **array of `Vec`s, not a `Vec<Vec<u8>>`**, and that is an aliasing choice
+    /// rather than a stylistic one: `addr_of!((*pSmt).pThreadBsBuffer[i])` names one
+    /// worker's element directly, where indexing an outer `Vec` would have to reborrow
+    /// the outer container that *every* worker shares — which is F71's class exactly.
+    /// `thread_bs_buffer` derives its slice that way.
+    pub pThreadBsBuffer: [Vec<u8>; MAX_THREADS_NUM],
     /// How many of the `MAX_THREADS_NUM` slots actually have a buffer behind them:
     /// `min(iMultipleThreadIdc, MAX_THREADS_NUM)`. **F67's bound, made readable.**
     /// `QueryEmptyThread` scanned all `MAX_THREADS_NUM` slots and it was the pool's
     /// concurrency cap that kept its answer in range; with the pool gone the cap has
     /// to be stated, and this is where the fork reads it (`ForkWidth`).
+    ///
+    /// `uiThreadBsBufferLen` stood beside it and is gone: it existed only because a
+    /// Rust `dealloc` needs the `Layout` back, and a `Vec` already knows its length —
+    /// the T3.3 standard, that extents are `buf.len()` and not fields.
     pub uiThreadBsBufferNum: usize,
-    /// Serialises `ReallocateSliceInThread`. The bank it grows is the worker's own
-    /// since T7.B2, but `InitSliceBsBuffer` allocates each new slice's `sSliceBs.pBs`
-    /// through the shared `CMemoryAlign`, which carries mutable counters — so this
-    /// retires with `pMemAlign`, not with the pool.
-    pub mutexThreadSlcBuffReallocate: *mut c_void,
 }
 
 impl Default for SSliceThreading {
     fn default() -> Self {
         Self {
             mutexSliceNumUpdate: std::ptr::null_mut(),
-            pThreadBsBuffer: [std::ptr::null_mut(); MAX_THREADS_NUM],
-            uiThreadBsBufferLen: 0,
+            pThreadBsBuffer: std::array::from_fn(|_| Vec::new()),
             uiThreadBsBufferNum: 0,
-            mutexThreadSlcBuffReallocate: std::ptr::null_mut(),
         }
     }
 }
@@ -671,11 +673,11 @@ pub unsafe fn RequestMtResource(
         return 1;
     }
 
-    let pSmtLayout = std::alloc::Layout::new::<SSliceThreading>();
-    let pSmt = std::alloc::alloc_zeroed(pSmtLayout) as *mut SSliceThreading;
-    if pSmt.is_null() {
-        return 1;
-    }
+    // **T7.C5: `Box`, not `alloc_zeroed`.** The struct owns `Vec`s now, and a `Vec`
+    // field inside a zeroed block is UB at its first drop — S21, the same reason
+    // every other member of this port's context is constructed rather than
+    // zero-filled. `Default` writes what the zeroing stood for.
+    let pSmt = Box::into_raw(Box::new(SSliceThreading::default()));
     (*pCtx).pSliceThreading = pSmt;
 
     // **T7.B4.** An `SSliceThreadPrivateData` array was allocated and filled here, and
@@ -703,15 +705,9 @@ pub unsafe fn RequestMtResource(
     let iThreadBufferNum = (iThreadNum as usize).min(MAX_THREADS_NUM);
     let _ = bDynamicSlice;
 
-    (*pSmt).uiThreadBsBufferLen = iCountBsLen as usize;
     (*pSmt).uiThreadBsBufferNum = iThreadBufferNum;
     for i in 0..iThreadBufferNum {
-        let buf_layout = std::alloc::Layout::array::<u8>(iCountBsLen as usize).unwrap();
-        let buf = std::alloc::alloc_zeroed(buf_layout);
-        if buf.is_null() {
-            return 1;
-        }
-        (*pSmt).pThreadBsBuffer[i] = buf;
+        (*pSmt).pThreadBsBuffer[i] = vec![0u8; iCountBsLen as usize];
     }
 
     // `mutexThreadBsBufferUsage` stood here, guarding `QueryEmptyThread`'s test-and-set
@@ -719,9 +715,15 @@ pub unsafe fn RequestMtResource(
     // partition, so there is nothing to claim. `mutexEncoderError` stood here too,
     // guarding `FinishTask`'s OR into `iEncoderError`; the results come back through
     // the join now and the calling thread ORs them.
-    if WelsMutexInit(&mut (*pSmt).mutexThreadSlcBuffReallocate) != 0 {
-        return 1;
-    }
+    //
+    // **And `mutexThreadSlcBuffReallocate` stood here until T7.C5**, which is the third
+    // of the four the C++ holds. Its own note said it "retires with `pMemAlign`, not
+    // with the pool", and that is what happened: it serialised
+    // `ReallocateSliceInThread`, whose bank has been the worker's own since T7.B2 and
+    // whose one remaining shared object was the `CMemoryAlign` that allocated each new
+    // slice's `sSliceBs.pBs`. T7.C4 made that buffer the slice's own, so the whole call
+    // is worker-local writes over shared *reads* — see the census row and the deletion
+    // note at its call site. **One mutex is left in this crate: F69's.**
 
     0
 }
@@ -738,34 +740,21 @@ pub unsafe fn ReleaseMtResource(ppCtx: *mut *mut sWelsEncCtx) {
     }
 
     WelsMutexDestroy(&mut (*pSmt).mutexSliceNumUpdate);
-    WelsMutexDestroy(&mut (*pSmt).mutexThreadSlcBuffReallocate);
 
-    // The C++ frees here (`pMa->WelsFree (pSmt->pThreadBsBuffer[i], ...)`,
-    // slice_multi_threading.cpp:426). The raw translation kept the null-out and
+    // The C++ frees the thread buffers here (`pMa->WelsFree (pSmt->pThreadBsBuffer[i],
+    // ...)`, slice_multi_threading.cpp:426). The raw translation kept the null-out and
     // dropped the free, so every encoder instance with iMultipleThreadIdc > 1 leaked
-    // `iCountBsLen` bytes per worker for the process's life — T7.A3. The length is
-    // `uiThreadBsBufferLen` because a Rust `dealloc` needs the `Layout` back and the
-    // C++ allocator's size table has no counterpart here.
-    let buf_len = (*pSmt).uiThreadBsBufferLen;
-    for i in 0..MAX_THREADS_NUM {
-        if !(*pSmt).pThreadBsBuffer[i].is_null() {
-            if buf_len > 0 {
-                let buf_layout = std::alloc::Layout::array::<u8>(buf_len).unwrap();
-                std::alloc::dealloc((*pSmt).pThreadBsBuffer[i], buf_layout);
-            }
-            (*pSmt).pThreadBsBuffer[i] = std::ptr::null_mut();
-        }
-    }
-    (*pSmt).uiThreadBsBufferLen = 0;
-    (*pSmt).uiThreadBsBufferNum = 0;
+    // `iCountBsLen` bytes per worker for the process's life — T7.A3, which restored the
+    // walk. **T7.C5 deletes the walk instead**: the buffers are the struct's own, so the
+    // `Box` drop below releases every one of them and the class of defect T7.A3 fixed
+    // cannot be written again here.
 
     // `WELS_DELETE_OP (pTaskManage)` stood here — dropping the manager released this
     // encoder's reference to the process-wide pool, and the last reference out
     // stopped and joined its worker threads. A scope's threads are joined by the
     // scope, so there is no pool lifetime left to manage.
 
-    let pSmtLayout = std::alloc::Layout::new::<SSliceThreading>();
-    std::alloc::dealloc(pSmt as *mut u8, pSmtLayout);
+    drop(Box::from_raw(pSmt));
     (*pCtx).pSliceThreading = std::ptr::null_mut();
 }
 
@@ -1230,8 +1219,8 @@ impl SliceJobHandle {
             (*(*pCtx).pSliceThreading).uiThreadBsBufferNum
         );
         debug_assert!(
-            !(*(*pCtx).pSliceThreading).pThreadBsBuffer[iBsSlot as usize].is_null(),
-            "job slot {iBsSlot} has a null buffer behind it"
+            !(*(*pCtx).pSliceThreading).pThreadBsBuffer[iBsSlot as usize].is_empty(),
+            "job slot {iBsSlot} has no buffer behind it"
         );
         Self { pCtx, iBsSlot, iFirstSlice, iSliceStep, iSliceCount, bRecordsTime }
     }
@@ -1555,20 +1544,22 @@ unsafe fn EncodeOnePartitionSizeLimited(
             let bNeedReallocate = (*pCurDq).sSliceBufferInfo[iBsSlot as usize].iCodedSliceNum
                 >= (*pCurDq).sSliceBufferInfo[iBsSlot as usize].iMaxSliceNum - 1;
             if bNeedReallocate {
-                // `mutexThreadSlcBuffReallocate` STAYS. The bank being grown is this
-                // worker's alone now, but `InitSliceBsBuffer` allocates each new
-                // slice's `sSliceBs.pBs` through the shared `CMemoryAlign`, which
-                // carries mutable counters. It retires with `pMemAlign` at step 6,
-                // not here.
-                let pSmt = (*pCtx).pSliceThreading;
-                let iRet = with_wels_mutex((*pSmt).mutexThreadSlcBuffReallocate, || {
-                    ReallocateSliceInThread(
-                        pCtx,
-                        pCurDq,
-                        (*pCtx).uiDependencyId as i32,
-                        iBsSlot,
-                    )
-                });
+                // **`mutexThreadSlcBuffReallocate` is gone — T7.C5**, and the C++ site
+                // it came from is `wels_task_encoder.cpp:258-261`. T7.B2 made the bank
+                // being grown this worker's alone; the one shared object left in the
+                // call was the `CMemoryAlign` behind `InitSliceBsBuffer`, and **T7.C4
+                // made that buffer the slice's own**. What remains is worker-local
+                // writes over shared *reads* (`iSliceBufferSize`, `iNumRef0`,
+                // `iGlobalQp`, the partition bounds — all frame-level and fixed before
+                // the fork), so there is nothing left to serialise. The lock's own note
+                // said it "retires with `pMemAlign`, not with the pool", and this is
+                // that.
+                let iRet = ReallocateSliceInThread(
+                    pCtx,
+                    pCurDq,
+                    (*pCtx).uiDependencyId as i32,
+                    iBsSlot,
+                );
                 if ENC_RETURN_SUCCESS != iRet {
                     return iRet;
                 }

@@ -1133,11 +1133,13 @@ pub unsafe fn RequestMemorySvc(
     // slice boundary has to restore the bytes as well as the coder state.
     if bDynamicSlice && (*pParam).iEntropyCodingModeFlag != 0 {
         for iIdx in 0..MAX_THREADS_NUM {
-            (**ppCtx).pDynamicBsBuffer[iIdx] =
-                (*pMa).WelsMalloc(iMaxSliceBufferSize as u32, tag!("DynamicSliceBs")) as *mut u8;
-            if (**ppCtx).pDynamicBsBuffer[iIdx].is_null() {
-                return 1;
-            }
+            // **T7.C5 — owned.** The last live allocator call sites in `src/encoder`
+            // were this one and its free below. `WelsMalloc` here was *uninitialized*
+            // (not `WelsMallocz`), so `vec![0; n]` writes zeros the C++ does not — the
+            // same recorded deviation `pFrameBs` above carries, and sound for the same
+            // reason: every read of this buffer sits behind a write cursor, since
+            // `StashPopMBStatus` only reads back the bytes `StashMBStatus` just wrote.
+            (**ppCtx).pDynamicBsBuffer[iIdx] = vec![0u8; iMaxSliceBufferSize.max(0) as usize];
         }
     }
     // for pSlice bs buffers
@@ -1801,12 +1803,9 @@ pub unsafe fn WelsUninitEncoderExt(ppCtx: *mut *mut sWelsEncCtx) {
         // With the strategy an enum there is no allocation, so this free-cascade entry
         // is deleted rather than converted.
         // **T6.H4**: `pFrameBs`'s `WelsFree` stood here; the `Vec` is the context's.
-        for pBuf in (*pCtx).pDynamicBsBuffer.iter_mut() {
-            if !pBuf.is_null() {
-                (*pMa).WelsFree(*pBuf as *mut c_void, tag!("DynamicSliceBs"));
-                *pBuf = null_mut();
-            }
-        }
+        // **T7.C5**: the `DynamicSliceBs` free walk stood here — the last `WelsFree` in
+        // `src/encoder`. The buffers are the context's own and go with its drop.
+
         // **T6.H2**: three `WelsFree`s stood here, one per parameter-set array. All
         // three are `Vec`s the context owns, so all three are its own drop.
         // The five per-macroblock arrays freed here in encoder_ext.cpp:1932-1961 are

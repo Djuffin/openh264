@@ -1204,7 +1204,7 @@ pub struct sWelsEncCtx {
     pub bDeliveryFlag: bool,
     pub sWelsCabacContexts: [[[SStateCtx; WELS_CONTEXT_COUNT]; WELS_QP_MAX + 1]; 4],
     pub uiLastTimestamp: i64,
-    pub pDynamicBsBuffer: [*mut u8; MAX_THREADS_NUM],
+    pub pDynamicBsBuffer: [Vec<u8>; MAX_THREADS_NUM],
 }
 
 impl sWelsEncCtx {
@@ -1389,7 +1389,7 @@ impl sWelsEncCtx {
 
             // Phase 7's. One dynamic bitstream buffer per thread, allocated on the
             // first slice that needs one.
-            pDynamicBsBuffer: [std::ptr::null_mut(); MAX_THREADS_NUM],
+            pDynamicBsBuffer: std::array::from_fn(|_| Vec::new()),
         }
     }
 }
@@ -2378,9 +2378,16 @@ mod tests {
         // the empty container, which is the null the raw pointer held, and which
         // `ctx_sps_array` and its siblings answer as null so that every downstream
         // `is_null()` guard still asks its question.
-        const OWNED: [&str; 11] = [
+        const OWNED: [&str; 12] = [
             "pSpsArray", "pSubsetArray", "pPPSArray", "pDqIdcMap", "pFrameBs", "pLtr",
             "pWelsSvcRc", "ppRefPicListExt", "ppDqLayerList", "pMvdCostTable",
+            // **T7.C5.** `pDynamicBsBuffer` joined this tier when it became
+            // `[Vec<u8>; MAX_THREADS_NUM]`. It is the only member here that is an
+            // *array* of owned containers, so the claim below is per element: four
+            // empty `Vec`s, which is what the four null pointers held and what
+            // `RequestMemorySvc` still leaves when the encoder is not built for
+            // dynamic slicing under CABAC.
+            "pDynamicBsBuffer",
             // **T6.I1.** `pFuncList` joined this tier when it became a `Box`. It is
             // the one owned field whose empty state is not "no elements" — a `Box`
             // is always inhabited — so what tier 3 asserts for it is the *content*:
@@ -2401,6 +2408,10 @@ mod tests {
         assert!(built.ppRefPicListExt.is_empty(), "new(): no reference lists are allocated yet");
         assert!(built.ppDqLayerList.is_empty(), "new(): no DQ layers are allocated yet");
         assert!(built.pMvdCostTable.is_empty(), "new(): no MVD cost table is allocated yet");
+        assert!(
+            built.pDynamicBsBuffer.iter().all(Vec::is_empty),
+            "new(): no dynamic-slice CABAC restore buffers are allocated yet"
+        );
 
         // `pFuncList`: not "empty" — uninstalled. One assertion per *kind* of member
         // the table has, which is what makes this a statement about the whole struct
