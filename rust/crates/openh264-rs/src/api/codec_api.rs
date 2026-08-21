@@ -2662,3 +2662,103 @@ pub(crate) mod abi_test_driver {
         }
     }
 }
+
+// ============================================================================
+// F23's covering test
+// ============================================================================
+
+#[cfg(test)]
+mod f23_boundary_provenance {
+    use super::*;
+
+    /// **F23, and its encoder twin, as a probe.**
+    ///
+    /// The consumer conveniences on `ISVCDecoder`/`ISVCEncoder` used to take `&mut
+    /// self`. Those two structs are **one pointer wide** — they are the C++ classes'
+    /// vtable slot and nothing else — while the thunk behind every slot immediately
+    /// casts `this` to a pointer to `CWelsDecoderImpl` / `CWelsH264SVCEncoderImpl`
+    /// and writes the implementation object *past* those eight bytes.
+    ///
+    /// A `&mut ISVCDecoder` carries provenance for eight bytes. `decoder_init_c`
+    /// writes `CWelsDecoderImpl::param` at offset `0x20`. That is out of bounds for
+    /// the borrow the call was made through, on the public API path, in a library
+    /// whose whole purpose is to be called that way — and `abi_test_driver` has
+    /// carried a comment saying so since Phase 5, because its first draft tripped
+    /// over it and was rewritten to call through the raw vtable instead.
+    ///
+    /// So this is the shape the finding describes, kept. Written at **T8.A2** it was
+    /// **red**, and the message is the finding in one line:
+    ///
+    /// ```text
+    /// error: Undefined Behavior: attempting a write access using <584081> at
+    ///        alloc288026[0x20], but that tag does not exist in the borrow stack
+    ///   help: <584081> was created by a SharedReadWrite retag at offsets [0x0..0x8]
+    /// ```
+    ///
+    /// It is **green from T8.A3**, where the twelve conveniences became associated
+    /// functions taking `this` as a raw pointer. It asserts nothing — Miri is the
+    /// assertion. What it must keep doing is *calling a convenience*, on both codecs,
+    /// so that a re-introduced `&mut self` receiver is caught by the checker rather
+    /// than by a reader.
+    ///
+    /// Deliberately cheap: no frame is encoded and no stream decoded, because the
+    /// defect is at `Initialize` and the `--lib` Miri step already costs 1651s.
+    #[test]
+    fn conveniences_call_through_the_whole_impl_allocation() {
+        unsafe {
+            // --- the decoder half -------------------------------------------
+            let mut p_decoder = ptr::null_mut();
+            assert_eq!(
+                i64::from(WelsCreateDecoder(&mut p_decoder)),
+                CM_RESULT_SUCCESS as i64
+            );
+            assert!(!p_decoder.is_null());
+
+            let mut dec_param = SDecodingParam::default();
+            dec_param.uiTargetDqLayer = u8::MAX;
+            dec_param.eEcActiveIdc = ERROR_CON_IDC::ERROR_CON_SLICE_COPY;
+            dec_param.sVideoProperty.eVideoBsType = VIDEO_BITSTREAM_DEFAULT;
+            // The write that is out of bounds for an eight-byte borrow: this call
+            // stores `*pParam` into `CWelsDecoderImpl::param`.
+            assert_eq!(
+                i64::from((*p_decoder).Initialize(&dec_param)),
+                CM_RESULT_SUCCESS as i64
+            );
+
+            // `bEndOfStream` lives further out still, and this pair writes then reads
+            // it — so the probe covers a round trip and not only the init.
+            let mut eos = 1i32;
+            (*p_decoder).SetOption(
+                DECODER_OPTION::DECODER_OPTION_END_OF_STREAM,
+                ptr::from_mut(&mut eos).cast(),
+            );
+            let mut eos_back = 0i32;
+            (*p_decoder).GetOption(
+                DECODER_OPTION::DECODER_OPTION_END_OF_STREAM,
+                ptr::from_mut(&mut eos_back).cast(),
+            );
+            assert_eq!(eos_back, 1, "END_OF_STREAM did not round-trip");
+
+            assert_eq!(
+                i64::from((*p_decoder).Uninitialize()),
+                CM_RESULT_SUCCESS as i64
+            );
+            WelsDestroyDecoder(p_decoder);
+
+            // --- the encoder half -------------------------------------------
+            let mut p_encoder = ptr::null_mut();
+            assert_eq!(WelsCreateSVCEncoder(&mut p_encoder), CM_RESULT_SUCCESS);
+            assert!(!p_encoder.is_null());
+
+            let mut enc_param = SEncParamBase::default();
+            enc_param.iUsageType = EUsageType::CAMERA_VIDEO_REAL_TIME;
+            enc_param.iPicWidth = 64;
+            enc_param.iPicHeight = 64;
+            enc_param.fMaxFrameRate = 30.0;
+            enc_param.iTargetBitrate = 64000;
+            assert_eq!((*p_encoder).Initialize(&enc_param), CM_RESULT_SUCCESS);
+            assert_eq!((*p_encoder).Uninitialize(), CM_RESULT_SUCCESS);
+            WelsDestroySVCEncoder(p_encoder);
+        }
+    }
+}
