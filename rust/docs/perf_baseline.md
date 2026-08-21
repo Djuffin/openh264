@@ -3072,3 +3072,43 @@ F68's thread axis).
 parked recovery remains Phase 9's — and Phase 9 now inherits a *scaling* port rather
 than one that stops at two threads, which changes what a recovery target means at
 `t=4`.
+
+## Phase 8 session A — the api boundary's ownership, and the instrument reads nothing
+
+### The span — `a8_base` (`b2e2c9d7`) vs `a8_head` (`01926eb6`)
+
+7 interleaved pairs (S1), both benches, FFMPEG set (S17). The window covers the whole
+session: F23's re-spelling of nineteen boundary receivers and 122 call sites, F41's
+ownership move, the twelve api-owned decoder-context fields, and the deletion of
+`common/memory_align.rs`.
+
+| | rows | median | min | max | over +5% |
+|---|---|---|---|---|---|
+| decode | 3 | **−0.34%** | −0.37% | −0.22% | **0** |
+| encode | 28 | **+0.00%** | −0.48% | +0.96% | **0** |
+| decode **null** (S2 floor) | 3 | −0.18% | −0.23% | +0.07% | 0 |
+| encode **null** | 28 | +0.00% | −1.25% | +1.27% | 0 |
+
+**No measurable movement, and the encode half needs no argument**: every one of its 28
+rows is inside the null band, whose own spread this session is 2.5 points wide.
+
+**The decode half is the one worth being careful about.** All three rows are negative
+and the median is 0.16 points below the null's own median — the direction the change
+predicts, because 69 sites that read an api-owned field through `api_alias`'s null test
+and dereference now read a field of the context directly, and the reordering path lost
+a second pointer indirection with it. But 0.16 points is **below this harness's
+resolution**: session K measured one span three times and got +0.03%, +0.27% and −0.13%
+— disagreeing in sign — against null bands at least that wide (S2b). The rows also
+overlap the null's negative edge (−0.22…−0.37 against a null floor reaching −0.23).
+
+So it is recorded as **unmoved**. A decode improvement of this size is not claimable
+with this instrument at any reachable pair count, and claiming it would be the third
+time this project mistook its floor for a result.
+
+**Cumulative position, as D-perf-4 requires.** Unmoved: encoder deficit ≈
+**+15…+17%** against the **+25%** tripwire. No median breach on either bench, so no
+bisect. D-perf-6's parked recovery remains Phase 9's.
+
+**One instrument note.** `Spatial Ramps` read −8.6% on the span and −19.1% on the null,
+in the same session — the eleventh reading confirming why it is `EXCLUDED` from every
+summary statistic (S2). It is printed and ignored, as designed.

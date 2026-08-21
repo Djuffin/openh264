@@ -93,3 +93,33 @@ which is a new function on the api side (`WelsEndDecoder` + `WelsInitStaticMemor
 against the same context) and carries a behaviour change on OOM and null-ref-list
 streams — so it wants its own covering test and its own byte gate, not a passing fix
 inside another session's family.
+
+### Two more of the same shape, found at T8.A5 while giving `DecoderConfigParam` its name
+
+`DecoderConfigParam` exists in the port from T8.A5 (`decoder_core.rs`), doing the
+copy and `InitErrorCon`. **Three statements of `decoder.cpp:649`'s version are not
+in it**, and they are deliberately absent rather than overlooked — each is a
+behaviour change on a path no byte gate drives, so each wants its own commit:
+
+| `decoder.cpp` | statement | what its absence costs |
+|---|---|---|
+| `:654–661` | clamp `eEcActiveIdc` into `[ERROR_CON_DISABLE, …CROSS_IDR_FREEZE_RES_CHANGE]`, warn, and use the top value | an out-of-range `eEcActiveIdc` from a caller reaches `InitErrorCon` and every concealment test unchanged. `SetOption` carries the same clamp at `welsDecoderExt.cpp:528` (`WELS_CLIP3`) and the port has neither. |
+| `:663–664` | `if (pParam->bParseOnly) eEcActiveIdc = ERROR_CON_DISABLE` | parse-only decoding would run concealment. Inert today only because `DecodeParser` is a stub. |
+| `:667–671` | `pCtx->eVideoType = …` | the finding above. |
+
+### And a third, in the same function's caller
+
+**A second `Initialize` on a live decoder does not rebuild the context in this port;
+in the reference it does.** `CWelsDecoder::InitDecoder` calls `InitDecoderCtx` for
+every context, and `InitDecoderCtx` opens with `UninitDecoderCtx (pCtx)` and then
+`WelsMallocz`es a fresh one (`welsDecoderExt.cpp:407–409`). `decoder_init_c` guards
+the whole construction with `if (*dec_impl).pCtx.is_null()`, so a second call
+re-copies the parameters into the *existing* context and returns.
+
+The transition is reachable through the public API and nothing in the tree drives it.
+`test_decoder_reinit_does_not_inherit_reordering_slots` (T8.A4) drives
+Initialize → Uninitialize → Initialize, where the port's guard does the right thing
+because `Uninitialize` nulls `pCtx`; **two `Initialize`s in a row** is the case that
+diverges, and after T8.A6/A7 it is also the case that keeps the previous session's
+statistics, last-picture record and decode timestamps where the reference `memset`s
+all three. Owner: **session B**, with the thunk bodies.
