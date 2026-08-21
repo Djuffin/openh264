@@ -711,7 +711,7 @@ pub fn UpdateDecStatNoFreezingInfo(pCtx: &mut SWelsDecoderContext, pCurDq: Optio
     // `pDecoderStatistics`, and reading them out is cheaper than proving it at four
     // interleaved sites.
     let bEcDisabled =
-        api_alias(&pCtx.pParam).is_some_and(|p| p.eEcActiveIdc == ERROR_CON_DISABLE);
+        pCtx.pParam.eEcActiveIdc == ERROR_CON_DISABLE;
     if pCtx.pDec.is_none() {
         return;
     }
@@ -1107,7 +1107,7 @@ pub fn DecodeFrameConstruction(
     let kiActualWidth = kiWidth - ((*pCtx).sFrameCrop.iLeftOffset + (*pCtx).sFrameCrop.iRightOffset) * 2;
     let kiActualHeight = kiHeight - ((*pCtx).sFrameCrop.iTopOffset + (*pCtx).sFrameCrop.iBottomOffset) * 2;
 
-    if api_alias(&(*pCtx).pParam).is_some_and(|p| p.eEcActiveIdc == ERROR_CON_DISABLE) {
+    if (*pCtx).pParam.eEcActiveIdc == ERROR_CON_DISABLE {
         if let Some(stat) = api_alias_mut(&mut (*pCtx).pDecoderStatistics) {
             if stat.uiWidth != kiActualWidth as u32
                 || stat.uiHeight != kiActualHeight as u32
@@ -1120,7 +1120,7 @@ pub fn DecodeFrameConstruction(
         UpdateDecStatNoFreezingInfo(pCtx, Some(pCurDq));
     }
 
-    if api_alias(&(*pCtx).pParam).is_some_and(|p| p.bParseOnly) {
+    if (*pCtx).pParam.bParseOnly {
         if (*pCtx).iErrorCode == dsErrorFree {
             // The cropped dimensions as values, above the descriptor's borrow: the
             // parse-only descriptor is the context's own `Box` and the SPS is the
@@ -1258,12 +1258,10 @@ pub fn DecodeFrameConstruction(
     (*pCtx).iLastImgWidthInPixel = pDstInfo.UsrData.sys().iWidth;
     (*pCtx).iLastImgHeightInPixel = pDstInfo.UsrData.sys().iHeight;
 
-    if api_alias(&(*pCtx).pParam).is_some_and(|p| p.eEcActiveIdc == ERROR_CON_DISABLE) {
+    if (*pCtx).pParam.eEcActiveIdc == ERROR_CON_DISABLE {
         pDstInfo.iBufferStatus = (bFrameCompleteFlag && pic!().bIsComplete) as i32;
-    } else if api_alias(&(*pCtx).pParam).is_some_and(|p| {
-        p.eEcActiveIdc == ERROR_CON_SLICE_COPY_CROSS_IDR_FREEZE_RES_CHANGE
-            || p.eEcActiveIdc == ERROR_CON_SLICE_MV_COPY_CROSS_IDR_FREEZE_RES_CHANGE
-    })
+    } else if (*pCtx).pParam.eEcActiveIdc == ERROR_CON_SLICE_COPY_CROSS_IDR_FREEZE_RES_CHANGE
+        || (*pCtx).pParam.eEcActiveIdc == ERROR_CON_SLICE_MV_COPY_CROSS_IDR_FREEZE_RES_CHANGE
         && (*pCtx).iErrorCode != dsErrorFree
         && bOutResChange
     {
@@ -1285,7 +1283,7 @@ pub fn DecodeFrameConstruction(
     (*pCtx).iMbNum = pic!().iMbNum;
     (*pCtx).iMbEcedPropNum = pic!().iMbEcedPropNum;
 
-    if api_alias(&(*pCtx).pParam).is_some_and(|p| p.eEcActiveIdc != ERROR_CON_DISABLE) {
+    if (*pCtx).pParam.eEcActiveIdc != ERROR_CON_DISABLE {
         if pDstInfo.iBufferStatus != 0 {
             if let Some(stat) = api_alias_mut(&mut (*pCtx).pDecoderStatistics) {
                 if stat.uiWidth != kiActualWidth as u32 || stat.uiHeight != kiActualHeight as u32 {
@@ -1307,10 +1305,11 @@ pub fn CheckSliceNeedReconstruct(uiLayerDqId: u8, uiTargetDqId: u8) -> bool {
 }
 
 #[inline]
-pub fn GetTargetDqId(uiTargetDqId: u8, psParam: &*mut SDecodingParam) -> u8 {
-    // T5.AC4: the field, and the `Option`'s default is the 255 the null arm had.
-    let uiRequiredDqId = api_alias(psParam).map_or(255, |p| p.uiTargetDqLayer);
-    WELS_MIN(uiTargetDqId, uiRequiredDqId)
+pub fn GetTargetDqId(uiTargetDqId: u8, psParam: &SDecodingParam) -> u8 {
+    // T8.A5: the parameter block is the context's own field (F41), so the `Option`
+    // and its 255 null-default are gone — the C's `pCtx->pParam->uiTargetDqLayer`
+    // is a field read, exactly as `decoder_core.cpp:1049` spells it.
+    WELS_MIN(uiTargetDqId, psParam.uiTargetDqLayer)
 }
 
 /// The header of NAL `i` of the access unit under construction, or `None` — the
@@ -1804,7 +1803,7 @@ pub fn InitBsBuffer(pCtx: &mut SWelsDecoderContext) -> i32 {
         Err(()) => return ERR_INFO_OUT_OF_MEMORY,
     }
 
-    if api_alias(&(*pCtx).pParam).is_some_and(|p| p.bParseOnly) {
+    if (*pCtx).pParam.bParseOnly {
         // T5.R4: three `WelsMallocz` blocks — the descriptor and its two buffers —
         // become one owned value. The `ERR_INFO_OUT_OF_MEMORY` arms go with the null
         // returns they tested for; `RawDataBuffer::try_new_zeroed` beside them keeps
@@ -2065,6 +2064,32 @@ pub fn ResetReorderingPictureBuffers(
     pPictReoderingStatus.bHasBSlice = false;
 }
 
+/// Matches `int32_t DecoderConfigParam (PWelsDecoderContext pCtx, const SDecodingParam* kpParam)`
+/// in `decoder.cpp:649`.
+///
+/// **The C++'s own name for "the caller's parameters become the context's"**, and
+/// T8.A5 gives the port the function rather than the two lines it had scattered
+/// across the boundary. The copy is `decoder.cpp:653`'s `memcpy` — into the block
+/// the context owns, which is the whole of **F41**: the port used to point
+/// `pCtx->pParam` at `CWelsDecoderImpl::param` and overwrite *that* on every
+/// `Initialize`, so a field the teardown reads lived in an object with its own
+/// lifetime and its own writers.
+///
+/// `InitErrorCon` is the C++'s next statement and F44's first call site: the mode
+/// just copied selects which kernels `sCopyFunc` holds, and it also clears
+/// `bFreezeOutput`, which `WelsDecoderDefaults` sets **true**.
+///
+/// **Three statements of `decoder.cpp`'s version are deliberately not here**, and
+/// they are enumerated in **F76** rather than smuggled in behind a refactor: the
+/// `eEcActiveIdc` range clamp (`:654`), the parse-only EC disable (`:663`), and the
+/// `pCtx->eVideoType` assignment (`:667`) — the last of which is why `eVideoType`
+/// is write-only in this port. Each is a behaviour change on a path no byte gate
+/// drives, so each wants its own covering test and its own commit.
+pub fn DecoderConfigParam(pCtx: &mut SWelsDecoderContext, kpParam: &SDecodingParam) {
+    pCtx.pParam = *kpParam;
+    crate::decoder::error_concealment::InitErrorCon(pCtx);
+}
+
 pub fn WelsOpenDecoder(pCtx: &mut SWelsDecoderContext, _pLogCtx: *mut c_void) -> i32 {
     let mut cpu_cores = 0i32;
     (*pCtx).uiCpuFlag = { WelsCPUFeatureDetect(&mut cpu_cores) } as u32;
@@ -2155,7 +2180,7 @@ pub fn WelsFreeStaticMemory(pCtx: &mut SWelsDecoderContext) {
     // free-cascade entries for sRawData/sSavedData died with the pointers).
     (*pCtx).sRawData.reset();
 
-    if api_alias(&(*pCtx).pParam).is_some_and(|p| p.bParseOnly) {
+    if (*pCtx).pParam.bParseOnly {
         (*pCtx).sSavedData.reset();
     }
     // **Outside the `bParseOnly` arm on purpose (T5.R4, and it is half of F41).** The
@@ -2928,7 +2953,7 @@ pub fn UpdateAccessUnit(pCtx: &mut SWelsDecoderContext) -> i32 {
                     );
                 }
                 (*pCtx).iErrorCode |= dsRefLost;
-                if api_alias(&(*pCtx).pParam).is_some_and(|p| p.eEcActiveIdc == ERROR_CON_DISABLE) {
+                if (*pCtx).pParam.eEcActiveIdc == ERROR_CON_DISABLE {
                     (*pCtx).iErrorCode |= dsNoParamSets;
                     return dsNoParamSets;
                 }
@@ -3488,7 +3513,7 @@ pub fn WelsDecodeInitAccessUnitStart(
         if let Some(au) = cur_au(access_unit) {
             ForceResetCurrentAccessUnit(au, nal_cur, slice_hdr_nal);
         }
-        if api_alias(&pCtx.pParam).is_some_and(|p| !p.bParseOnly) {
+        if !pCtx.pParam.bParseOnly {
             pDstInfo.iBufferStatus = 0;
         }
         (*pCtx).bNewSeqBegin = (*pCtx).bNewSeqBegin || (*pCtx).bNextNewSeqBegin;
@@ -3671,7 +3696,7 @@ pub fn WelsDecodeBs(
                         (*pCtx).iErrorCode |= dsOutOfMemory;
                         return (*pCtx).iErrorCode;
                     }
-                    if api_alias(&(*pCtx).pParam).is_some_and(|p| p.bParseOnly)
+                    if (*pCtx).pParam.bParseOnly
                         && (*pCtx).sSavedData.grow_to((*pCtx).sRawData.len()).is_err()
                     {
                         (*pCtx).iErrorCode |= dsOutOfMemory;
@@ -4204,7 +4229,7 @@ pub fn DecodeCurrentAccessUnit(
                         );
                         bAllRefComplete = false;
                         (*pCtx).iErrorCode |= dsRefLost;
-                        if api_alias(&(*pCtx).pParam).is_some_and(|p| p.eEcActiveIdc == ERROR_CON_DISABLE)
+                        if (*pCtx).pParam.eEcActiveIdc == ERROR_CON_DISABLE
                         {
                             (*pCtx).bParamSetsLostFlag = true;
                             break 'au GENERATE_ERROR_NO(
@@ -4227,7 +4252,7 @@ pub fn DecodeCurrentAccessUnit(
                         bAllRefComplete = false;
                         let h = nal_hdr(pCtx, pNalCur).copied();
                         HandleReferenceLost(pCtx, h.as_ref());
-                        if api_alias(&(*pCtx).pParam).is_some_and(|p| p.eEcActiveIdc == ERROR_CON_DISABLE) {
+                        if (*pCtx).pParam.eEcActiveIdc == ERROR_CON_DISABLE {
                             if (*pCtx).iTotalNumMbRec == 0 {
                                 (*pCtx).pDec = None;
                             }
@@ -4255,7 +4280,7 @@ pub fn DecodeCurrentAccessUnit(
                     bAllRefComplete = false;
                     let h = nal_hdr(pCtx, pNalCur).copied();
                     HandleReferenceLostL0(pCtx, h.as_ref());
-                    if api_alias(&(*pCtx).pParam).is_some_and(|p| p.eEcActiveIdc == ERROR_CON_DISABLE) {
+                    if (*pCtx).pParam.eEcActiveIdc == ERROR_CON_DISABLE {
                         if (*pCtx).iTotalNumMbRec == 0 {
                             (*pCtx).pDec = None;
                         }
@@ -4315,7 +4340,7 @@ pub fn DecodeCurrentAccessUnit(
 
         if dq_cur.as_deref().is_some_and(|dq| dq.uiLayerDqId == kuiTargetLayerDqId) {
             if !(*pCtx).bInstantDecFlag {
-                if api_alias(&(*pCtx).pParam).is_some_and(|p| !p.bParseOnly) {
+                if !(*pCtx).pParam.bParseOnly {
                     if NeedErrorCon(pCtx, dq_cur.as_deref_mut())
                         && ec_active_idc(&(*pCtx).pParam) != ERROR_CON_DISABLE
                     {
@@ -4380,12 +4405,12 @@ pub fn DecodeCurrentAccessUnit(
                         if iRet == ERR_INFO_DUPLICATE_FRAME_NUM {
                             (*pCtx).iErrorCode |= dsBitstreamError;
                         }
-                        if api_alias(&(*pCtx).pParam).is_some_and(|p| p.eEcActiveIdc == ERROR_CON_DISABLE) {
+                        if (*pCtx).pParam.eEcActiveIdc == ERROR_CON_DISABLE {
                             (*pCtx).pDec = None;
                             break 'au iRet;
                         }
                     }
-                    if api_alias(&(*pCtx).pParam).is_some_and(|p| !p.bParseOnly) && (*pCtx).pDec.is_some() {
+                    if !(*pCtx).pParam.bParseOnly && (*pCtx).pDec.is_some() {
                         if let Some(pDec) = dec_pic(&mut (*pCtx).pPicBuff, (*pCtx).pDec) {
                             pDec.expand_as_reference();
                         }
@@ -4490,7 +4515,7 @@ pub fn CheckAndFinishLastPic(
     let mut dq_cur = owned_layer.as_deref_mut();
     let bRet = 'ec: {
     if bAuBoundaryFlag && (*pCtx).iTotalNumMbRec != 0 && NeedErrorCon(pCtx, dq_cur.as_deref_mut()) {
-        if api_alias(&(*pCtx).pParam).is_some_and(|p| p.eEcActiveIdc != ERROR_CON_DISABLE) {
+        if (*pCtx).pParam.eEcActiveIdc != ERROR_CON_DISABLE {
             ImplementErrorCon(pCtx, dq_cur.as_deref_mut());
             // Values first, then the picture — see `ConstructAccessUnit` (T5.Z1).
             let sps_dims_id = active_sps(&(*pCtx).sSpsPpsCtx, (*pCtx).active_sps)
@@ -4518,7 +4543,7 @@ pub fn CheckAndFinishLastPic(
                     }
                 }
             }
-        } else if api_alias(&(*pCtx).pParam).is_some_and(|p| p.bParseOnly) {
+        } else if (*pCtx).pParam.bParseOnly {
             let pParser = parser_bs(&mut (*pCtx).pParserBsInfo);
             if let Some(pParser) = pParser {
                 pParser.iNalNum = 0;

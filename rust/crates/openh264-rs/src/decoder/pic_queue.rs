@@ -950,7 +950,7 @@ mod tests {
         let mut param = SDecodingParam::default();
         let mut ctx = SWelsDecoderContext::new_boxed();
         ctx.pMemAlign = &mut ma as *mut CMemoryAlign;
-        ctx.pParam = &mut param as *mut SDecodingParam;
+        ctx.pParam = param;
 
         {
             // T5.Q3: `AllocPicture`'s raw pair is gone, so the fixture holds the
@@ -1001,7 +1001,7 @@ mod tests {
         let mut param = SDecodingParam { bParseOnly: true, ..Default::default() };
         let mut ctx = SWelsDecoderContext::new_boxed();
         ctx.pMemAlign = &mut ma as *mut CMemoryAlign;
-        ctx.pParam = &mut param as *mut SDecodingParam;
+        ctx.pParam = param;
 
         {
             let pCtx = &mut *ctx;
@@ -1032,7 +1032,7 @@ mod tests {
         let mut param = SDecodingParam::default();
         let mut ctx = SWelsDecoderContext::new_boxed();
         ctx.pMemAlign = &mut ma as *mut CMemoryAlign;
-        ctx.pParam = &mut param as *mut SDecodingParam;
+        ctx.pParam = param;
 
         {
             let pCtx = &mut *ctx;
@@ -1083,7 +1083,7 @@ mod tests {
         let mut param = SDecodingParam::default();
         let mut ctx = SWelsDecoderContext::new_boxed();
         ctx.pMemAlign = &mut ma;
-        ctx.pParam = &mut param;
+        ctx.pParam = param;
 
         let mut pool = CreatePicBuff(false, 3, 64, 64).expect("pool");
         let (cur, other) = (pool.id(1), pool.id(2));
@@ -1143,7 +1143,7 @@ mod tests {
         // counts types written, and a test that writes casts it does not need
         // inflates it — including in a comment).
         ctx.pMemAlign = &mut ma;
-        ctx.pParam = &mut param;
+        ctx.pParam = param;
 
         // The decoder object's own members, and a decode's leavings in them: two
         // buffered pictures naming pool slots 2 and 3.
@@ -1202,7 +1202,7 @@ mod tests {
         let mut param = SDecodingParam::default();
         let mut ctx = SWelsDecoderContext::new_boxed();
         ctx.pMemAlign = &mut ma as *mut CMemoryAlign;
-        ctx.pParam = &mut param as *mut SDecodingParam;
+        ctx.pParam = param;
 
         {
             let mut pool = CreatePicBuff(false, 2, 64, 64)
@@ -1261,7 +1261,7 @@ mod tests {
         let mut param = SDecodingParam::default();
         let mut ctx = SWelsDecoderContext::new_boxed();
         ctx.pMemAlign = &mut ma as *mut CMemoryAlign;
-        ctx.pParam = &mut param as *mut SDecodingParam;
+        ctx.pParam = param;
 
         {
             let mut pool = CreatePicBuff(false, 3, 64, 64)
@@ -1302,7 +1302,7 @@ mod tests {
         let mut param = SDecodingParam::default();
         let mut ctx = SWelsDecoderContext::new_boxed();
         ctx.pMemAlign = &mut ma as *mut CMemoryAlign;
-        ctx.pParam = &mut param as *mut SDecodingParam;
+        ctx.pParam = param;
 
         {
             let mut pool = CreatePicBuff(false, 3, 64, 64)

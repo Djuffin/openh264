@@ -1453,7 +1453,13 @@ pub struct CWelsDecoderImpl {
     pub pVtbl: Box<ISVCDecoderVtbl>,
     pub pCtx: *mut crate::decoder::decoder_core::SWelsDecoderContext,
     pub align: crate::common::CMemoryAlign,
-    pub param: crate::SDecodingParam,
+    // **T8.A5: `param` stood here and is deleted — F41.** It was the port's own
+    // invention: `CWelsDecoder` has no parameter member in the reference, and the
+    // block the decoder reads is the *context's*, allocated by `InitDecoderCtx`
+    // (`welsDecoderExt.cpp:426`) and filled by `DecoderConfigParam`. Holding a copy
+    // here and pointing `pCtx->pParam` at it gave the teardown's `bParseOnly` arm a
+    // field that a second `Initialize` could rewrite without the context knowing,
+    // and gave `SetOption` a block the C++ writes one level down.
     pub bEndOfStream: bool,
     // Members owned by CWelsDecoder in C++ (welsDecoderExt.h) and wired into the
     // decoder context by InitDecoderCtx.
@@ -1571,8 +1577,6 @@ unsafe extern "C" fn decoder_init_c(this: *mut ISVCDecoder, pParam: *const SDeco
     }
     let dec_impl = this as *mut CWelsDecoderImpl;
     unsafe {
-        (*dec_impl).param = *pParam;
-
         if (*dec_impl).pCtx.is_null() {
             // In-place heap construction: the context is several MiB, and since T3.3
             // it owns `Vec`s, so neither `Box::default()` (stack round-trip) nor
@@ -1592,7 +1596,12 @@ unsafe extern "C" fn decoder_init_c(this: *mut ISVCDecoder, pParam: *const SDeco
             // so the derived pointer carries `dec_impl`'s provenance and the two
             // spellings of "the same field" stop fighting.
             ctx_box.pMemAlign = ptr::addr_of_mut!((*dec_impl).align);
-            ctx_box.pParam = ptr::addr_of_mut!((*dec_impl).param);
+            // The caller's parameters, before `WelsDecoderDefaults` — the position
+            // the stamped alias put them in, kept because everything built below
+            // this line may read them. `DecoderConfigParam` writes the same block
+            // again at the tail of this function, which is where the C++ has the
+            // one copy; the two are the same store.
+            ctx_box.pParam = *pParam;
             ctx_box.pLastDecPicInfo = ptr::addr_of_mut!((*dec_impl).sLastDecPicInfo);
             ctx_box.pDecoderStatistics = ptr::addr_of_mut!((*dec_impl).sDecoderStatistics);
             ctx_box.pVlcTable = ptr::addr_of_mut!((*dec_impl).sVlcTable);
@@ -1626,7 +1635,7 @@ unsafe extern "C" fn decoder_init_c(this: *mut ISVCDecoder, pParam: *const SDeco
         // It is placed outside the `pCtx.is_null()` block on purpose: the C++ runs it
         // on every `Initialize`, and the parameters it reads are re-copied above.
         if !(*dec_impl).pCtx.is_null() {
-            crate::decoder::error_concealment::InitErrorCon(&mut *(*dec_impl).pCtx);
+            crate::decoder::decoder_core::DecoderConfigParam(&mut *(*dec_impl).pCtx, &*pParam);
         }
     }
     CM_RESULT_SUCCESS as c_long
@@ -2110,7 +2119,10 @@ unsafe extern "C" fn decoder_set_opt_c(this: *mut ISVCDecoder, eOptionId: DECODE
             DECODER_OPTION::DECODER_OPTION_ERROR_CON_IDC => {
                 if !pOption.is_null() && !(*dec_impl).pCtx.is_null() {
                     let val = *(pOption as *const ERROR_CON_IDC);
-                    (*dec_impl).param.eEcActiveIdc = val;
+                    // **The context's own copy** (T8.A5, F41) — and it is where the
+                    // C++ writes it too: `pDecContext->pParam->eEcActiveIdc = iVal`
+                    // at `welsDecoderExt.cpp:535`, one level below the api object.
+                    (*(*dec_impl).pCtx).pParam.eEcActiveIdc = val;
                     // F44's second call site (`welsDecoderExt.cpp:536`): the mode
                     // selects which kernels `sCopyFunc` holds, so changing it without
                     // re-running the init leaves the previous mode's table in place.
@@ -2225,7 +2237,6 @@ pub unsafe extern "C" fn WelsCreateDecoder(ppDecoder: *mut *mut ISVCDecoder) -> 
         pVtbl: vtbl,
         pCtx: ptr::null_mut(),
         align: crate::common::CMemoryAlign::new(16),
-        param: crate::SDecodingParam::default(),
         bEndOfStream: false,
         sLastDecPicInfo: Default::default(),
         sDecoderStatistics: unsafe { std::mem::zeroed() },

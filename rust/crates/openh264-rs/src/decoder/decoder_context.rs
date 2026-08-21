@@ -958,24 +958,28 @@ pub fn active_pps(ps: &SWelsDecoderSpsPpsCTX, active: Option<i32>) -> Option<&SP
 /// conversion needed the answer without the context: `alloc_picture` reached two
 /// pointers deep for one `bool`, and the callers that hold `pCtx` read it for it now.
 ///
-/// **T5.AC4: safe, and it takes the field.** The body is [`api_alias`]'s
-/// `Option` with the same null default the five hand-written copies had.
+/// **T8.A5: the parameter block is the context's own, so this is a field read.**
+/// It was `api_alias(..).is_some_and(..)` over a raw alias into `CWelsDecoderImpl`
+/// — F41 — and the `Option` it produced was the C's null test on a block the
+/// context in fact owns (`welsDecoderExt.cpp:426` allocates it, `DecoderConfigParam`
+/// fills it). There is no null to test any more, and no unsafe read to argue.
 #[inline]
-pub fn parse_only(pParam: &*mut SDecodingParam) -> bool {
-    api_alias(pParam).is_some_and(|p| p.bParseOnly)
+pub fn parse_only(pParam: &SDecodingParam) -> bool {
+    pParam.bParseOnly
 }
 
-/// `pCtx->pParam->eEcActiveIdc`, with the **null-is-disabled** default that 12 of
-/// the decoder's hand-written copies of this chain carry (T5.AC4).
+/// `pCtx->pParam->eEcActiveIdc`.
 ///
-/// The other shape — `!pParam.is_null() && eEcActiveIdc == X`, where a null
-/// `pParam` makes the whole test *false* rather than "disabled" — is **not** this
-/// function and is spelled at its sites as `api_alias(..).is_some_and(..)`. The
-/// two defaults disagree, so unifying them would be a behaviour change on a path
-/// no gate drives (S6's never-widen default); each site keeps the one it had.
+/// **T8.A5 folded the two spellings into one, and it is not S6's never-widen case.**
+/// This used to carry a *null-is-disabled* default while a dozen sites spelled the
+/// other shape — `!pParam.is_null() && eEcActiveIdc == X`, where a null block makes
+/// the whole test **false** rather than "disabled" — and the note here said the two
+/// defaults disagree so no site may be moved between them. They disagreed only about
+/// a null, and F41's fix is that the block is the context's own field: there is no
+/// null, both shapes are the same read, and the divergence retires with the pointer.
 #[inline]
-pub fn ec_active_idc(pParam: &*mut SDecodingParam) -> ERROR_CON_IDC {
-    api_alias(pParam).map_or(ERROR_CON_IDC::ERROR_CON_DISABLE, |p| p.eEcActiveIdc)
+pub fn ec_active_idc(pParam: &SDecodingParam) -> ERROR_CON_IDC {
+    pParam.eEcActiveIdc
 }
 
 // **T5.Z3: `slice_bit_reader` stood here and is deleted.** It reached the slice's
@@ -1682,7 +1686,21 @@ pub struct SWelsDecoderContext {
     pub pArgDec: *mut c_void,
     pub sRawData: RawDataBuffer,
     pub sSavedData: RawDataBuffer,
-    pub pParam: *mut SDecodingParam,
+    /// The decoding parameters, **owned** (T8.A5, F41).
+    ///
+    /// The C++ context owns this block too — `InitDecoderCtx` allocates it
+    /// (`welsDecoderExt.cpp:426`) and `DecoderConfigParam` `memcpy`s the caller's
+    /// values into it — and `CWelsDecoder` has no parameter member of its own. The
+    /// port had invented one, `CWelsDecoderImpl::param`, and pointed this field at
+    /// it: an alias into another object, overwritten on every `Initialize` before
+    /// the existing-context test, and read by the teardown's `bParseOnly` arm. That
+    /// is **F41**, and the fix is the C++'s own arrangement rather than a guard.
+    ///
+    /// Its one writer is [`DecoderConfigParam`](crate::decoder::decoder_core::DecoderConfigParam),
+    /// from `Initialize`; `SetOption(DECODER_OPTION_ERROR_CON_IDC)` writes the one
+    /// field the C++ lets it write, in the same place the C++ writes it
+    /// (`welsDecoderExt.cpp:535`).
+    pub pParam: SDecodingParam,
     pub uiCpuFlag: u32,
     pub eVideoType: VIDEO_BITSTREAM_TYPE,
     pub bHaveGotMemory: bool,
@@ -1984,7 +2002,7 @@ impl Default for SWelsDecoderContext {
             // to write, and the whole of what it could not express as a value.
             sRawData: RawDataBuffer::default(),
             sSavedData: RawDataBuffer::default(),
-            pParam: std::ptr::null_mut(),
+            pParam: SDecodingParam::default(),
             uiCpuFlag: 0,
             eVideoType: VIDEO_BITSTREAM_TYPE::VIDEO_BITSTREAM_AVC,
             bHaveGotMemory: false,
