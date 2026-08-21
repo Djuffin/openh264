@@ -49,8 +49,6 @@
 
 use crate::encoder::svc_encode_slice::{layer_dec_pic, layer_dec_pic_mut, layer_ref_pic, layer_ref_pic_mut};
 use crate::encoder::picture::{RecPicId};
-use crate::common::memory_align::CMemoryAlign;
-use std::ffi::c_char;
 pub use crate::encoder::encoder_context::SMVUnitXY;
 pub use crate::encoder::picture::SPicture;
 pub use crate::encoder::picture::SScreenBlockFeatureStorage;
@@ -1596,118 +1594,29 @@ pub unsafe extern "C" fn UpdateFMESwitchNull(_pCurLayer: *mut SDqLayer) {}
 
 // SCREEN_CONTENT(dormant: Phase 10)
 //
-// **T6.H13, the allocator census.** These two functions hold the last four
-// `WelsMallocz`/`WelsFree` pairs in `src/encoder` that are neither Phase 7's nor
-// session I's, and they are **unreachable**: the one would-be caller
-// (`wels_preprocess.rs`'s picture constructor) refuses `iNeedFeatureStorage != 0`
-// before it can get here, so no live path allocates any of this. They are fenced
-// with the rest of the screen-content family rather than deleted, because that
-// family is live upstream and Phase 10 owns porting it whole.
-// unsafe-cat: SCREEN_CONTENT(dormant)
-#[allow(unsafe_code)]
-pub unsafe extern "C" fn RequestScreenBlockFeatureStorage(
-    pMa: *mut CMemoryAlign,
-    kiFrameWidth: i32,
-    kiFrameHeight: i32,
-    iNeedFeatureStorage: i32,
-    pScreenBlockFeatureStorage: *mut SScreenBlockFeatureStorage,
-) -> i32 {
-    if pMa.is_null() || pScreenBlockFeatureStorage.is_null() {
-        return ENC_RETURN_UNEXPECTED;
-    }
-    unsafe {
-        let kiFeatureStrategyIndex = iNeedFeatureStorage >> 16;
-        let kiMe8x8FME = iNeedFeatureStorage & 0x0000FF & (ME_FME as i32);
-        let kiMe16x16FME = ((iNeedFeatureStorage & 0x00FF00) >> 8) & (ME_FME as i32);
-        if (kiMe8x8FME == (ME_FME as i32)) && (kiMe16x16FME == (ME_FME as i32)) {
-            return ENC_RETURN_UNSUPPORTED_PARA;
-        }
-
-        let bIsBlock8x8 = kiMe8x8FME == (ME_FME as i32);
-        let kiMarginSize = if bIsBlock8x8 { 8 } else { 16 };
-        let kiFrameSize = (kiFrameWidth - kiMarginSize) * (kiFrameHeight - kiMarginSize);
-        let kiListSize = if kiFeatureStrategyIndex == 0 {
-            if bIsBlock8x8 { LIST_SIZE_SUM_8x8 } else { LIST_SIZE_SUM_16x16 }
-        } else {
-            256
-        };
-
-        let tag1 = b"pScreenBlockFeatureStorage->pTimesOfFeatureValue\0".as_ptr() as *const c_char;
-        let pTimes = (*pMa).WelsMallocz((kiListSize * std::mem::size_of::<u32>()) as u32, tag1) as *mut u32;
-        if pTimes.is_null() {
-            return ENC_RETURN_MEMALLOCERR;
-        }
-        (*pScreenBlockFeatureStorage).pTimesOfFeatureValue = pTimes;
-
-        let tag2 = b"pScreenBlockFeatureStorage->pLocationOfFeature\0".as_ptr() as *const c_char;
-        let pLocOfFeat = (*pMa).WelsMallocz((kiListSize * std::mem::size_of::<*mut u16>()) as u32, tag2) as *mut *mut u16;
-        if pLocOfFeat.is_null() {
-            return ENC_RETURN_MEMALLOCERR;
-        }
-        (*pScreenBlockFeatureStorage).pLocationOfFeature = pLocOfFeat;
-
-        let tag3 = b"pScreenBlockFeatureStorage->pLocationPointer\0".as_ptr() as *const c_char;
-        let pLocPtr = (*pMa).WelsMallocz((2 * (kiFrameSize as usize) * std::mem::size_of::<u16>()) as u32, tag3) as *mut u16;
-        if pLocPtr.is_null() {
-            return ENC_RETURN_MEMALLOCERR;
-        }
-        (*pScreenBlockFeatureStorage).pLocationPointer = pLocPtr;
-
-        let max_list_size = LIST_SIZE_SUM_16x16.max(LIST_SIZE_MSE_16x16);
-        let tag4 = b"pScreenBlockFeatureStorage->pFeatureValuePointerList\0".as_ptr() as *const c_char;
-        let pFeatValPtrList = (*pMa).WelsMallocz((max_list_size * std::mem::size_of::<*mut u16>()) as u32, tag4) as *mut *mut u16;
-        if pFeatValPtrList.is_null() {
-            return ENC_RETURN_MEMALLOCERR;
-        }
-        (*pScreenBlockFeatureStorage).pFeatureValuePointerList = pFeatValPtrList;
-
-        (*pScreenBlockFeatureStorage).pFeatureOfBlockPointer = std::ptr::null_mut();
-        (*pScreenBlockFeatureStorage).iIs16x16 = if bIsBlock8x8 { 0 } else { 1 };
-        (*pScreenBlockFeatureStorage).uiFeatureStrategyIndex = kiFeatureStrategyIndex as u8;
-        (*pScreenBlockFeatureStorage).iActualListSize = kiListSize as i32;
-        for i in 0..BLOCK_SIZE_ALL {
-            (*pScreenBlockFeatureStorage).uiSadCostThreshold[i] = u32::MAX;
-        }
-        (*pScreenBlockFeatureStorage).bRefBlockFeatureCalculated = false;
-
-        ENC_RETURN_SUCCESS
-    }
-}
-
-// SCREEN_CONTENT(dormant: Phase 10) — see `RequestScreenBlockFeatureStorage` above.
-// unsafe-cat: SCREEN_CONTENT(dormant)
-#[allow(unsafe_code)]
-pub unsafe extern "C" fn ReleaseScreenBlockFeatureStorage(
-    pMa: *mut CMemoryAlign,
-    pScreenBlockFeatureStorage: *mut SScreenBlockFeatureStorage,
-) -> i32 {
-    if !pMa.is_null() && !pScreenBlockFeatureStorage.is_null() {
-        unsafe {
-            if !(*pScreenBlockFeatureStorage).pTimesOfFeatureValue.is_null() {
-                let tag = b"pScreenBlockFeatureStorage->pTimesOfFeatureValue\0".as_ptr() as *const c_char;
-                (*pMa).WelsFree((*pScreenBlockFeatureStorage).pTimesOfFeatureValue as *mut std::ffi::c_void, tag);
-                (*pScreenBlockFeatureStorage).pTimesOfFeatureValue = std::ptr::null_mut();
-            }
-            if !(*pScreenBlockFeatureStorage).pLocationOfFeature.is_null() {
-                let tag = b"pScreenBlockFeatureStorage->pLocationOfFeature\0".as_ptr() as *const c_char;
-                (*pMa).WelsFree((*pScreenBlockFeatureStorage).pLocationOfFeature as *mut std::ffi::c_void, tag);
-                (*pScreenBlockFeatureStorage).pLocationOfFeature = std::ptr::null_mut();
-            }
-            if !(*pScreenBlockFeatureStorage).pLocationPointer.is_null() {
-                let tag = b"pScreenBlockFeatureStorage->pLocationPointer\0".as_ptr() as *const c_char;
-                (*pMa).WelsFree((*pScreenBlockFeatureStorage).pLocationPointer as *mut std::ffi::c_void, tag);
-                (*pScreenBlockFeatureStorage).pLocationPointer = std::ptr::null_mut();
-            }
-            if !(*pScreenBlockFeatureStorage).pFeatureValuePointerList.is_null() {
-                let tag = b"pScreenBlockFeatureStorage->pFeatureValuePointerList\0".as_ptr() as *const c_char;
-                (*pMa).WelsFree((*pScreenBlockFeatureStorage).pFeatureValuePointerList as *mut std::ffi::c_void, tag);
-                (*pScreenBlockFeatureStorage).pFeatureValuePointerList = std::ptr::null_mut();
-            }
-            return ENC_RETURN_SUCCESS;
-        }
-    }
-    ENC_RETURN_UNEXPECTED
-}
+// **`RequestScreenBlockFeatureStorage` and `ReleaseScreenBlockFeatureStorage` stood
+// here, and T7.C6 deleted them.** They were the last eight `WelsMallocz`/`WelsFree`
+// call sites in `src/encoder` — four allocations
+// (`pTimesOfFeatureValue`, `pLocationOfFeature`, `pLocationPointer`,
+// `pFeatureValuePointerList`) and their four frees, transliterated from
+// `svc_motion_estimate.cpp:683` and `:727`.
+//
+// **They had no caller, on either side of the port's own boundary.** The C++ calls
+// them from the picture constructor (`picture_handle.cpp:115` and `:173`); the port's
+// picture constructor refuses `iNeedFeatureStorage != 0` before it can reach them
+// (`wels_preprocess.rs`, the `SCREEN_CONTENT(dormant)` note there), so no live path
+// allocated any of this and none ever has. T6.H13's census recorded that and fenced
+// them; this session's step 2 asks the allocator itself to retire from the encoder,
+// and two unreachable functions are not a reason to keep a whole allocator wired into
+// the context.
+//
+// **Deleted rather than converted, and the difference matters.** Converting them
+// would have produced four owned buffers behind a struct whose *fields*
+// (`SScreenBlockFeatureStorage`'s raw pointers) are Phase 10's to design — a shape
+// nobody has decided, on a path nobody runs. Phase 10 ports this family whole, from
+// the reference, where both functions are eleven and thirty lines of plain
+// allocate-and-null. The struct and its fields are untouched, so the only thing gone
+// is a transliteration of an allocation nothing performs.
 
 // ============================================================================
 // Unit Tests

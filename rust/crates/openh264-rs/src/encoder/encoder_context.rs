@@ -6,7 +6,6 @@ pub const MAX_DEPENDENCY_LAYER: usize = 4;
 /// `codec/encoder/core/src/encoder.cpp`.
 
 use std::ffi::{c_char, c_void};
-use crate::common::memory_align::CMemoryAlign;
 use crate::api::codec_api::ECOMPLEXITY_MODE::*;
 use crate::{
     EUsageType, RCMode, SEncParamExt, SEncoderStatistics, SSliceArgument,
@@ -1191,7 +1190,15 @@ pub struct sWelsEncCtx {
     /// equality instrument — never read, never assigned anywhere. This field,
     /// held by value, is the vector.
     pub sPSOVector: SParaSetOffset,
-    pub pMemAlign: *mut CMemoryAlign,
+    // **`pMemAlign: *mut CMemoryAlign` stood here — T7.C6.** The C++'s aligned
+    // allocator, `WelsInitEncoderExt`'s first allocation and `WelsUninitEncoderExt`'s
+    // last free. Phase 6 took 45 of its call sites to 15 and Phase 7 took the last
+    // 15 to zero (T7.C4 the slice bitstreams, T7.C5 the two MT buffer arrays, T7.C6
+    // the two unreachable screen-content functions), so what was left was a heap
+    // object the encoder constructed, carried through every allocation signature in
+    // the crate, and destroyed — with **no reader anywhere**, including the two dead
+    // `let pMa = (*pCtx).pMemAlign;` bindings the preprocessor still had. Deleted with
+    // the field, the constructor, the free and the parameter chain.
     pub uiStartTimestamp: i64,
     pub sEncoderStatistics: [crate::encoder::wels_encoder_ext::TagVideoEncoderStatistics; MAX_DEPENDENCY_LAYER],
     pub iStatisticsLogInterval: i32,
@@ -1367,7 +1374,6 @@ impl sWelsEncCtx {
             // out yet".
             sPSOVector: SParaSetOffset::default(),
 
-            pMemAlign: std::ptr::null_mut(),
 
             // ---- statistics and timestamps ---------------------------------------
             // Timestamps are absolute and in the caller's clock, so zero is a real
@@ -2351,13 +2357,14 @@ mod tests {
         iSubsetSpsNum, iPpsNum, pOut,
         pFrameBs, iFrameBsSize, iPosBsBuffer, sSpatialIndexMap,
         iSliceBufferSize, bRefOfCurTidIsLtr, iMaxSliceCount, iActiveThreadsNum,
-        pDqIdcMap, sPSOVector, pMemAlign,
+        pDqIdcMap, sPSOVector,
         uiStartTimestamp, sEncoderStatistics, iStatisticsLogInterval, iLastStatisticsLogTs,
         iEncoderError, bDeliveryFlag, sWelsCabacContexts,
         uiLastTimestamp, pDynamicBsBuffer,
         ];
-        // 68 until T7.B4 took `pTaskManage` and `mutexEncoderError` out with the pool.
-        assert_eq!(extents.len(), 66, "a field was added or removed without updating this list");
+        // 68 until T7.B4 took `pTaskManage` and `mutexEncoderError` out with the pool,
+        // 66 until T7.C6 took `pMemAlign`.
+        assert_eq!(extents.len(), 65, "a field was added or removed without updating this list");
 
         let b = shell.as_ptr().cast::<u8>();
 

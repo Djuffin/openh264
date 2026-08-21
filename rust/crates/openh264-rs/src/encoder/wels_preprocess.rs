@@ -1059,7 +1059,6 @@ impl CWelsPreProcess {
         pCtx: *mut sWelsEncCtx,
         pParam: *mut SWelsSvcCodingParam,
     ) -> i32 {
-        let pMa = (*pCtx).pMemAlign;
         let kiDlayerCount = (*pParam).iSpatialLayerNum;
         let mut iDlayerIndex = 0;
         // The pool takes its slots in one piece and never grows, so the pictures are
@@ -1115,7 +1114,6 @@ impl CWelsPreProcess {
         if pCtx.is_null() || ctx_param(pCtx).is_null() {
             return;
         }
-        let pMa = (*pCtx).pMemAlign;
         let mut j = 0;
         while j < (*ctx_param(pCtx)).iSpatialLayerNum {
             let jIdx = j as usize;

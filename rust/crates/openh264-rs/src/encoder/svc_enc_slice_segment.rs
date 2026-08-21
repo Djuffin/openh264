@@ -36,7 +36,6 @@ use crate::api::codec_api::SliceModeEnum::{
 };
 use crate::api::codec_api::RC_MODES::RC_OFF_MODE;
 use crate::api::codec_api::{RC_MODES, SSliceArgument};
-use crate::common::memory_align::CMemoryAlign;
 use crate::encoder::encoder_context::SLogContext;
 use crate::encoder::slice_multi_threading::{
     SSliceCtx, WelsSetMemMultiplebytes_c, DEFAULT_MAXPACKETSIZE_CONSTRAINT,
@@ -506,12 +505,11 @@ pub unsafe fn GetInitialSliceNum(pSliceArgument: *const SSliceArgument) -> i32 {
 /// `InitSliceSegment` — svc_enc_slice_segment.cpp:358.
 ///
 /// # Safety
-/// `pCurDq`, `pMa` and `pSliceArgument` must be non-null.
+/// `pCurDq` and `pSliceArgument` must be non-null.
 // unsafe-cat: MT
 #[allow(unsafe_code)]
 pub unsafe fn InitSliceSegment(
     pCurDq: *mut SDqLayer,
-    pMa: *mut CMemoryAlign,
     pSliceArgument: *mut SSliceArgument,
     kiMbWidth: i32,
     kiMbHeight: i32,
@@ -599,7 +597,7 @@ pub unsafe fn InitSliceSegment(
 /// `pCurDq` and `pMa` must be non-null.
 // unsafe-cat: MT
 #[allow(unsafe_code)]
-pub unsafe fn UninitSliceSegment(pCurDq: *mut SDqLayer, pMa: *mut CMemoryAlign) {
+pub unsafe fn UninitSliceSegment(pCurDq: *mut SDqLayer) {
     let pSliceSeg = &mut (*pCurDq).sSliceEncCtx as *mut SSliceCtx;
     // The map is a `Vec<u16>` since T6.D7 — clearing it releases the storage the
     // explicit `WelsFree` used to, and the layer's `Drop` covers the paths that never
@@ -626,7 +624,6 @@ pub unsafe fn UninitSliceSegment(pCurDq: *mut SDqLayer, pMa: *mut CMemoryAlign) 
 #[allow(unsafe_code)]
 pub unsafe fn InitSlicePEncCtx(
     pCurDq: *mut SDqLayer,
-    pMa: *mut CMemoryAlign,
     _bFmoUseFlag: bool,
     iMbWidth: i32,
     iMbHeight: i32,
@@ -636,7 +633,7 @@ pub unsafe fn InitSlicePEncCtx(
         return 1;
     }
 
-    InitSliceSegment(pCurDq, pMa, pSliceArgument, iMbWidth, iMbHeight);
+    InitSliceSegment(pCurDq, pSliceArgument, iMbWidth, iMbHeight);
     0
 }
 
@@ -646,9 +643,9 @@ pub unsafe fn InitSlicePEncCtx(
 /// `pMa` must be non-null when `pCurDq` is.
 // unsafe-cat: MT
 #[allow(unsafe_code)]
-pub unsafe fn UninitSlicePEncCtx(pCurDq: *mut SDqLayer, pMa: *mut CMemoryAlign) {
+pub unsafe fn UninitSlicePEncCtx(pCurDq: *mut SDqLayer) {
     if !pCurDq.is_null() {
-        UninitSliceSegment(pCurDq, pMa);
+        UninitSliceSegment(pCurDq);
     }
 }
 

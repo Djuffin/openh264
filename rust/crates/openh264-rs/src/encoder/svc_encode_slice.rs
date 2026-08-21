@@ -50,7 +50,6 @@
 
 use crate::encoder::picture::{PicRef, RecPicId, SPicture, SRefPicView, SrcPicId};
 use std::ffi::{c_char, c_void};
-use crate::common::memory_align::CMemoryAlign;
 use crate::{
     SliceMode, SFrameBSInfo, SLayerBSInfo, SSliceArgument,
     MAX_LAYER_NUM_OF_FRAME, MAX_SPATIAL_LAYER_NUM, MAX_QUALITY_LAYER_NUM, MAX_NAL_UNITS_IN_LAYER,
