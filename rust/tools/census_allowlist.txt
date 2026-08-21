@@ -48,7 +48,8 @@ type SParserBsInfo x2               # NOT one entity: `codec_api.rs`'s is the AB
 # ---------------------------------------------------------------------------
 # (b) within-codec duplicates still standing, each with the step that owns it
 # ---------------------------------------------------------------------------
-type SLogContext x2                 # common/utils.h:57 declares one; 6.6 folds the encoder's
+# T8.B6: `type SLogContext x2` retired. One declaration, `common/wels_trace.rs`,
+# where `utils.h:53` puts it; both codec contexts re-export it.
 type EWelsNalUnitType x2            # wels_common_defs.h:83; decoder/nalu.rs uses the
                                     # commented-out alternative names (RESV_16/RESV_21) and
                                     # spells FILLER "FILER". Values identical at every
@@ -77,11 +78,8 @@ alias PGetIntraPredFunc x3          # decoder_context, common/intra_pred_common,
                                     # (x4 until T5.X8 deleted get_intra_predictor's, which described
                                     #  the deleted Phase-2 wrappers and had no use of its own)
 alias PGetIntraPred8x8Func x2       # Owner: 5.6 decoder-side, 6.3 encoder-side.
-alias WelsTraceCallback x2          # `codec_api.rs:1074` and `wels_encoder_ext.rs:240`,
-                                    # identical modulo parameter names. It is the raw C
-                                    # trace pair's own type, which Phase 8 **session B**
-                                    # dissolves at the boundary; the alias collapses with
-                                    # it. Owner: **8.B**.
+# T8.B6: `alias WelsTraceCallback x2` retired. `codec_api.rs` is the declaration —
+# `codec_api.h` is where the C declares it — and `wels_encoder_ext.rs` re-exports.
 
 # encoder-side only — Phase 6 owns every line below
 alias PCalculateSingleCtrFunc x2    # 6.3

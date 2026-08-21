@@ -658,21 +658,12 @@ pub struct SParserBsInfo {
 // re-export.
 pub use crate::api::codec_api::SDecoderStatistics;
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
-pub struct SLogContext {
-    pub pfLog: Option<unsafe extern "C" fn(pCtx: *mut c_void, iLevel: i32, szFmt: *const c_char)>,
-    pub pLogCtx: *mut c_void,
-}
-
-impl Default for SLogContext {
-    fn default() -> Self {
-        Self {
-            pfLog: None,
-            pLogCtx: std::ptr::null_mut(),
-        }
-    }
-}
+// **T8.B6: the decoder's own `SLogContext` stood here** — the second of the
+// census's `type SLogContext x2`, and the one that had already typed `pfLog` as a
+// function rather than a `*mut c_void`. One declaration now, in
+// `common::wels_trace`, with the instance address and the level travelling beside
+// the callback (see that module for why).
+pub use crate::common::wels_trace::SLogContext;
 
 // **T8.A1 — and this pair had *diverged*.** Both names were declared here and in
 // `api/codec_api.rs`, and the two `VIDEO_BITSTREAM_TYPE`s carry their `#[default]`

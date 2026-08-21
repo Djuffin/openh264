@@ -627,7 +627,11 @@ pub use crate::decoder::decoder_context::{Picture, SPicture, SPicBuff};
 /// The C++'s logging entry point, stubbed. It keeps `unsafe` although the body is
 /// empty: the parameter is a raw log context and any real implementation
 /// dereferences it, so the contract is the signature's, not today's body's.
-pub fn WelsLog(_pLogCtx: *mut SLogContext, _iLevel: i32, _fmt: &str) {}
+// **T8.B6: the decoder's `WelsLog` stub stood here**, the twin of the encoder's,
+// and this side already had seventeen call sites feeding it — every one of them
+// dropped on the floor. One implementation now, in `common::wels_trace`, and it
+// delivers.
+pub use crate::common::wels_trace::WelsLog;
 
 #[inline]
 pub fn BsGetBits(buf: &[u8], pBs: &mut BsCursor, n: u32, pOut: &mut u32) -> i32 {
@@ -1960,7 +1964,14 @@ pub fn WelsCPUFeatureDetect(pCpuCores: &mut i32) -> u32 {
 /// Matches `int32_t WelsOpenDecoder (PWelsDecoderContext pCtx, SLogContext* pLogCtx)` in `decoder.cpp:52`.
 /// Fill data fields in default for decoder context.
 /// Matches `void WelsDecoderDefaults (PWelsDecoderContext pCtx, SLogContext* pLogCtx)` in `decoder.cpp`.
-pub fn WelsDecoderDefaults(pCtx: &mut SWelsDecoderContext, _pLogCtx: *mut c_void) {
+pub fn WelsDecoderDefaults(pCtx: &mut SWelsDecoderContext, pLogCtx: Option<&SLogContext>) {
+    // `decoder.cpp:340` — `pCtx->sLogCtx = *pLogCtx`. The parameter was `_pLogCtx:
+    // *mut c_void` and ignored until T8.B6, which is one half of why the decoder's
+    // seventeen `WelsLog` call sites delivered nothing: the context they log
+    // through had never been given a destination.
+    if let Some(pLogCtx) = pLogCtx {
+        pCtx.sLogCtx = *pLogCtx;
+    }
     let mut iCpuCores = 1i32;
     (*pCtx).pArgDec = std::ptr::null_mut();
     (*pCtx).bHaveGotMemory = false;

@@ -351,7 +351,15 @@ assert_size!(SWelsFuncPtrList, 1072);
 // bytes -- is a faithful match, which is what makes this assertion worth having.
 assert_size!(crate::encoder::encoder_context::SParaSetOffset, 1180);
 assert_size!(crate::encoder::wels_encoder_ext::TagVideoEncoderStatistics, 88);
-assert_size!(crate::encoder::encoder_context::SLogContext, 24);
+// **T8.B6: 24 -> 32.** `SLogContext` is `common/utils.h:53`'s three `void*`s in
+// the reference, and this port's is four members: the callback, the caller's
+// context, the instance *address* and the trace level. The last two are what the
+// reference reaches through `pfLog`'s back-pointer into the `welsCodecTrace` — a
+// route that cannot be written here without the F38 hazard (see
+// `common::wels_trace`), so the values travel instead of a pointer to them. Every
+// `sWelsEncCtx` offset below `sLogCtx` moves by 8 and the context grows by 8;
+// re-measured, as at T6.C1/T6.D5/T7.B4/T7.C6, not adjusted.
+assert_size!(crate::encoder::encoder_context::SLogContext, 32);
 // **T6.C1**: -40, the five per-macroblock scratch pointers deleted with `SMB`'s
 // conversion (see `assert_size!(SMB, …)` above). Was `98008 - 64 + 8` = 97952, the
 // C++ size with this port's 8-byte mutex handle in place of `pthread_mutex_t`.
@@ -390,7 +398,7 @@ assert_size!(crate::encoder::encoder_context::SLogContext, 24);
 // allocator it named. It sits after all fourteen surviving pins and before
 // `pDynamicBsBuffer`, so nothing pinned moves and the size falls by exactly the
 // pointer. Measured, in the profile it names (S36).
-assert_size_by_profile!(sWelsEncCtx, debug 98056, release 97968);
+assert_size_by_profile!(sWelsEncCtx, debug 98064, release 97976);
 
 
 // The fifteen `sWelsEncCtx` fields the preprocessor touches, pinned at their C++
@@ -432,19 +440,19 @@ macro_rules! assert_ctx_offset {
     };
 }
 assert_ctx_offset!(sLogCtx, 0);
-assert_ctx_offset!(pSvcParam, 24);
-assert_ctx_offset!(iMvRange, 32);
-assert_ctx_offset_by_profile!(ppRefPicListExt, debug 152, release 144);
-assert_ctx_offset_by_profile!(pLtr, debug 304, release 232);
-assert_ctx_offset_by_profile!(bCurFrameMarkedAsSceneLtr, debug 328, release 256);
-assert_ctx_offset_by_profile!(eSliceType, debug 332, release 260);
-assert_ctx_offset_by_profile!(uiDependencyId, debug 361, release 289);
-assert_ctx_offset_by_profile!(uiTemporalId, debug 362, release 290);
-assert_ctx_offset_by_profile!(pWelsSvcRc, debug 368, release 296);
-assert_ctx_offset_by_profile!(pVaa, debug 432, release 360);
-assert_ctx_offset_by_profile!(pVpp, debug 440, release 368);
-assert_ctx_offset_by_profile!(sSpatialIndexMap, debug 592, release 520);
-assert_ctx_offset_by_profile!(bRefOfCurTidIsLtr, debug 656, release 568);
+assert_ctx_offset!(pSvcParam, 32);
+assert_ctx_offset!(iMvRange, 40);
+assert_ctx_offset_by_profile!(ppRefPicListExt, debug 160, release 152);
+assert_ctx_offset_by_profile!(pLtr, debug 312, release 240);
+assert_ctx_offset_by_profile!(bCurFrameMarkedAsSceneLtr, debug 336, release 264);
+assert_ctx_offset_by_profile!(eSliceType, debug 340, release 268);
+assert_ctx_offset_by_profile!(uiDependencyId, debug 369, release 297);
+assert_ctx_offset_by_profile!(uiTemporalId, debug 370, release 298);
+assert_ctx_offset_by_profile!(pWelsSvcRc, debug 376, release 304);
+assert_ctx_offset_by_profile!(pVaa, debug 440, release 368);
+assert_ctx_offset_by_profile!(pVpp, debug 448, release 376);
+assert_ctx_offset_by_profile!(sSpatialIndexMap, debug 600, release 528);
+assert_ctx_offset_by_profile!(bRefOfCurTidIsLtr, debug 664, release 576);
 // **T7.C6 deleted the fifteenth pin with its field.** `pMemAlign` was pinned here
 // because `wels_preprocess.rs` reads it — and by this session it did not: both of its
 // `let pMa = (*pCtx).pMemAlign;` lines were dead bindings, and the whole allocator has

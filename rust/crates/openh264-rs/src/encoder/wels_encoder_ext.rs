@@ -147,12 +147,12 @@ pub const ENC_RETURN_VLCOVERFLOWFOUND: i32 = 0x40;
 pub const ENC_RETURN_KNOWN_ISSUE: i32 = 0x80;
 
 // Log levels matching WELS_LOG_LEVEL
-pub const WELS_LOG_QUIET: i32 = 0;
-pub const WELS_LOG_ERROR: i32 = 1;
-pub const WELS_LOG_WARNING: i32 = 2;
-pub const WELS_LOG_INFO: i32 = 3;
-pub const WELS_LOG_DEBUG: i32 = 4;
-pub const WELS_LOG_DETAIL: i32 = 5;
+// T8.B6: the six levels are `codec_app_def.h:323`'s and are declared once, beside
+// the `WelsLog` that filters on them.
+pub use crate::common::wels_trace::{
+    WELS_LOG_DEBUG, WELS_LOG_DEFAULT, WELS_LOG_DETAIL, WELS_LOG_ERROR, WELS_LOG_INFO,
+    WELS_LOG_QUIET, WELS_LOG_WARNING,
+};
 
 #[inline(always)]
 pub fn WELS_LOG2(mut v: u32) -> i32 {
@@ -236,65 +236,16 @@ pub fn WelsTime() -> i64 {
     }
 }
 
-pub type WelsTraceCallback =
-    Option<unsafe extern "C" fn(pCtx: *mut c_void, iLevel: i32, pStr: *const c_char)>;
-
-
-
-#[repr(C)]
-#[derive(Debug)]
-pub struct welsCodecTrace {
-    pub m_iTraceLevel: i32,
-    pub m_fpTrace: WelsTraceCallback,
-    pub m_pTraceCtx: *mut c_void,
-    pub m_sLogCtx: SLogContext,
-    pub m_pCodecInstance: *mut c_void,
-}
-
-impl Default for welsCodecTrace {
-    fn default() -> Self {
-        Self {
-            m_iTraceLevel: WELS_LOG_ERROR,
-            m_fpTrace: None,
-            m_pTraceCtx: null_mut(),
-            m_sLogCtx: SLogContext::default(),
-            m_pCodecInstance: null_mut(),
-        }
-    }
-}
-
-impl welsCodecTrace {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    pub fn SetCodecInstance(&mut self, pCodecInstance: *mut c_void) {
-        self.m_pCodecInstance = pCodecInstance;
-    }
-
-    pub fn SetTraceLevel(&mut self, kiLevel: u32) {
-        self.m_iTraceLevel = kiLevel as i32;
-    }
-
-    pub fn GetTraceLevel(&self) -> i32 {
-        self.m_iTraceLevel
-    }
-
-    pub fn SetTraceCallback(&mut self, func: WelsTraceCallback) {
-        self.m_fpTrace = func;
-    }
-
-    pub fn SetTraceCallbackContext(&mut self, pCtx: *mut c_void) {
-        self.m_pTraceCtx = pCtx;
-    }
-}
-
-pub fn WelsLog(pLogCtx: *mut SLogContext, iLevel: i32, msg: &str) {
-    // Basic diagnostic logging helper matching OpenH264 trace logging
-    let _ = (pLogCtx, iLevel, msg);
-}
-
-
+// **T8.B6: `WelsTraceCallback`, `welsCodecTrace` and `WelsLog` stood here.**
+//
+// The first was a second declaration of `codec_api.h`'s callback type (the census
+// carried it as `alias WelsTraceCallback x2`); the second had a fifth member,
+// `m_pCodecInstance`, that `welsCodecTrace.h` does not have and nothing read; and
+// the third was a stub — `let _ = (pLogCtx, iLevel, msg);` — so a caller who
+// installed a trace callback through `ENCODER_OPTION_TRACE_CALLBACK` was handed
+// silence. All three are `common::wels_trace`'s now, one copy for both codecs, and
+// `WelsLog` delivers.
+pub use crate::common::wels_trace::{WelsLog, WelsTraceCallback, welsCodecTrace};
 
 #[repr(C)]
 #[derive(Debug, Copy, Clone, Default)]
@@ -1634,6 +1585,34 @@ impl CWelsH264SVCEncoder {
         }
     }
 
+    /// `VERSION_NUMBER` — the string `welsEncoderExt.cpp` puts in its trace lines,
+    /// built from the version this crate reports through `WelsGetCodecVersion`.
+    fn version_number() -> String {
+        format!(
+            "{}.{}.{}",
+            G_ST_CODEC_VERSION.uMajor, G_ST_CODEC_VERSION.uMinor, G_ST_CODEC_VERSION.uRevision
+        )
+    }
+
+    /// The trace destination for this encoder's own messages.
+    #[inline]
+    fn log_ctx(&mut self) -> *mut SLogContext {
+        std::ptr::addr_of_mut!(self.m_pWelsTrace.m_sLogCtx)
+    }
+
+    /// **T8.B6 — the write-through that replaces the reference's back-pointer.**
+    ///
+    /// `WelsInitEncoderExt` copies the log context into `sWelsEncCtx::sLogCtx`, and
+    /// in C++ that copy stays current because it holds a route to the trace object
+    /// rather than the settings. Here it holds the settings, so a `SetOption` that
+    /// changes them re-stamps the copy. One line per trace option arm.
+    fn sync_log_ctx(&mut self) {
+        let CWelsH264SVCEncoder { m_pWelsTrace, m_pEncContext, .. } = self;
+        if let Some(pEncContext) = m_pEncContext.as_mut() {
+            pEncContext.sLogCtx = m_pWelsTrace.log_context();
+        }
+    }
+
     pub fn new() -> Self {
         let mut encoder = Self {
             m_pEncContext: None,
@@ -1648,7 +1627,10 @@ impl CWelsH264SVCEncoder {
     }
 
     pub fn InitEncoder(&mut self) {
-        let instance = std::ptr::from_mut(self) as *mut c_void;
+        // `welsEncoderExt.cpp:180` — `m_pWelsTrace->SetCodecInstance (this)`, which
+        // writes `m_sLogCtx.pCodecInstance`. It is the value `WelsLog` prints in the
+        // message tag and nothing else, so it travels as an address (T8.B6).
+        let instance = std::ptr::from_mut(self) as usize;
         self.m_pWelsTrace.SetCodecInstance(instance);
     }
 
@@ -1671,7 +1653,22 @@ impl CWelsH264SVCEncoder {
         // stood here on both entry points. It guards a `new welsCodecTrace` that can
         // return null in C++; `Box::new` cannot, and T8.B5 makes the member owned,
         // so the arm is unreachable rather than untaken and is deleted.
+        // `welsEncoderExt.cpp:188` (T8.B6).
+        WelsLog(
+            self.log_ctx(),
+            WELS_LOG_INFO,
+            &format!(
+                "CWelsH264SVCEncoder::InitEncoder(), openh264 codec version = {}",
+                Self::version_number()
+            ),
+        );
         if argv.is_null() {
+            // `welsEncoderExt.cpp:192`.
+            WelsLog(
+                self.log_ctx(),
+                WELS_LOG_ERROR,
+                "CWelsH264SVCEncoder::Initialize(), invalid argv= 0x0",
+            );
             return cmInitParaError;
         }
         let mut sConfig = SWelsSvcCodingParam::default();
@@ -1689,7 +1686,22 @@ impl CWelsH264SVCEncoder {
     #[allow(unsafe_code)]
     pub fn InitializeExt(&mut self, argv: *const SEncParamExt) -> i32 {
         // See `Initialize`: the trace's null guard is unreachable since T8.B5.
+        // `welsEncoderExt.cpp:215` (T8.B6).
+        WelsLog(
+            self.log_ctx(),
+            WELS_LOG_INFO,
+            &format!(
+                "CWelsH264SVCEncoder::InitEncoder(), openh264 codec version = {}",
+                Self::version_number()
+            ),
+        );
         if argv.is_null() {
+            // `welsEncoderExt.cpp:219`.
+            WelsLog(
+                self.log_ctx(),
+                WELS_LOG_ERROR,
+                "CWelsH264SVCEncoder::InitializeExt(), invalid argv= 0x0",
+            );
             return cmInitParaError;
         }
         let mut sConfig = SWelsSvcCodingParam::default();
@@ -1821,6 +1833,15 @@ impl CWelsH264SVCEncoder {
         if !self.m_bInitialFlag {
             return 0;
         }
+        // `welsEncoderExt.cpp:358` (T8.B6).
+        WelsLog(
+            self.log_ctx(),
+            WELS_LOG_INFO,
+            &format!(
+                "CWelsH264SVCEncoder::Uninitialize(), openh264 codec version = {}.",
+                Self::version_number()
+            ),
+        );
         // T8.B5: `if !is_null { Uninit(&mut p); p = null }` was three statements
         // saying what `take()` says in one, and the null store is the type's now.
         // The obligation this block carries is the tree below the root, not the
@@ -2376,14 +2397,17 @@ impl CWelsH264SVCEncoder {
                 EncoderOption::ENCODER_OPTION_TRACE_LEVEL => {
                     let level = pOption.cast::<u32>().read();
                     self.m_pWelsTrace.SetTraceLevel(level);
+                    self.sync_log_ctx();
                 }
                 EncoderOption::ENCODER_OPTION_TRACE_CALLBACK => {
                     let callback = pOption.cast::<WelsTraceCallback>().read();
                     self.m_pWelsTrace.SetTraceCallback(callback);
+                    self.sync_log_ctx();
                 }
                 EncoderOption::ENCODER_OPTION_TRACE_CALLBACK_CONTEXT => {
                     let ctx = pOption.cast::<*mut c_void>().read();
                     self.m_pWelsTrace.SetTraceCallbackContext(ctx);
+                    self.sync_log_ctx();
                 }
                 // C++ ends with `default: return cmInitParaError`. There is no
                 // wildcard arm here on purpose: `SetOption` takes a typed
