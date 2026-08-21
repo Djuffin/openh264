@@ -3398,10 +3398,17 @@ pub unsafe fn WelsEncoderEncodeExt(
             (*pLayerBsInfo).eFrameType = eFrameType;
             (*pLayerBsInfo).iSubSeqId = GetSubSequenceId(pCtx, eFrameType);
 
-            let pTaskManage = (*pCtx).pTaskManage
-                as *mut crate::encoder::wels_task_management::CWelsTaskManageBase;
-            (*pTaskManage)
-                .ExecuteTasks(crate::encoder::wels_task_management::WELS_ENC_TASK_ENCODING);
+            // **T7.B1 — the fork/join.** This was
+            // `pTaskManage->ExecuteTasks(WELS_ENC_TASK_ENCODING)`: `iSliceCount`
+            // heap tasks pushed through the shared pool, each claiming a bs slot
+            // under a mutex, joined by a `Mutex<i32>` + `Condvar` barrier. It is now
+            // `std::thread::scope` over one job per bs slot; the join is the
+            // barrier and the slot claim is the partition. `FinishTask` ORed each
+            // task's result into `iEncoderError` under `mutexEncoderError`; the
+            // results come back through the join instead and are ORed here, in the
+            // same field, one line above the same check.
+            (*pCtx).iEncoderError |=
+                crate::encoder::slice_multi_threading::EncodeFixedSlicesForked(pCtx, iSliceCount);
             if (*pCtx).iEncoderError != 0 {
                 return (*pCtx).iEncoderError;
             }

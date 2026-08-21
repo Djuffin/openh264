@@ -49,7 +49,17 @@
 
 use std::ffi::c_void;
 
-use crate::encoder::nal_encap::{WelsEncodeNal, SWelsNalRaw};
+use crate::encoder::nal_encap::{
+    WelsEncodeNal, WelsLoadNalForSlice, WelsUnloadNalForSlice, WelsWriteSVCPrefixNal, SWelsNalRaw,
+};
+use crate::common::wels_common_defs::{EWelsNalRefIdc, EWelsNalUnitType};
+use crate::encoder::encoder_context::ctx_func_list;
+use crate::encoder::svc_encode_slice::{
+    InitOneSliceInThread, SetSliceBoundaryInfo, WelsCodeOneSlice,
+};
+use crate::encoder::vlc_encoder::BsWriter;
+use crate::encoder::wels_encoder_ext::WelsTime;
+pub const ENC_RETURN_UNEXPECTED: i32 = 0x04;
 use crate::encoder::svc_encode_slice::thread_bs_buffer;
 use crate::encoder::svc_encode_slice::{current_layer, set_current_layer, LayerIdx};
 use crate::{
@@ -215,6 +225,12 @@ pub struct SSliceThreading {
     /// buffers could only be nulled, which is what the raw translation did — see
     /// T7.A3.
     pub uiThreadBsBufferLen: usize,
+    /// How many of the `MAX_THREADS_NUM` slots actually have a buffer behind them:
+    /// `min(iMultipleThreadIdc, MAX_THREADS_NUM)`. **F67's bound, made readable.**
+    /// `QueryEmptyThread` scanned all `MAX_THREADS_NUM` slots and it was the pool's
+    /// concurrency cap that kept its answer in range; with the pool gone the cap has
+    /// to be stated, and this is where the fork reads it (`ForkWidth`).
+    pub uiThreadBsBufferNum: usize,
     pub bThreadBsBufferUsage: [bool; MAX_THREADS_NUM],
     pub mutexThreadBsBufferUsage: *mut c_void,
     pub mutexEvent: *mut c_void,
@@ -228,6 +244,7 @@ impl Default for SSliceThreading {
             mutexSliceNumUpdate: std::ptr::null_mut(),
             pThreadBsBuffer: [std::ptr::null_mut(); MAX_THREADS_NUM],
             uiThreadBsBufferLen: 0,
+            uiThreadBsBufferNum: 0,
             bThreadBsBufferUsage: [false; MAX_THREADS_NUM],
             mutexThreadBsBufferUsage: std::ptr::null_mut(),
             mutexEvent: std::ptr::null_mut(),
@@ -689,6 +706,7 @@ pub unsafe fn RequestMtResource(
         ((*pTaskManage).GetThreadPoolThreadNum() as usize).min(MAX_THREADS_NUM);
 
     (*pSmt).uiThreadBsBufferLen = iCountBsLen as usize;
+    (*pSmt).uiThreadBsBufferNum = iThreadBufferNum;
     for i in 0..iThreadBufferNum {
         let buf_layout = std::alloc::Layout::array::<u8>(iCountBsLen as usize).unwrap();
         let buf = std::alloc::alloc_zeroed(buf_layout);
@@ -758,6 +776,7 @@ pub unsafe fn ReleaseMtResource(ppCtx: *mut *mut sWelsEncCtx) {
         (*pSmt).bThreadBsBufferUsage[i] = false;
     }
     (*pSmt).uiThreadBsBufferLen = 0;
+    (*pSmt).uiThreadBsBufferNum = 0;
 
     // WELS_DELETE_OP (pTaskManage). Dropping the manager runs Uninit(), which
     // releases this encoder's reference to the shared thread pool; the last
@@ -1038,4 +1057,336 @@ mod tests {
         assert_eq!(dq_layer.sSliceBufferInfo[0].pSliceBuffer[0].iSliceComplexRatio, 50);
         assert_eq!(dq_layer.sSliceBufferInfo[0].pSliceBuffer[1].iSliceComplexRatio, 50);
     }
+}
+
+// ============================================================================
+// The spawn seam — D-mt-1 (plan §7.4), and the fork/join it carries
+// ============================================================================
+//
+// This section replaces the pool dispatch for the fixed slice modes. What it does
+// NOT change is the access pattern: the workers call the same slice-encode tree
+// with the same raw context pointer the pool's tasks handed it, in the same order,
+// with the same per-slice state. Only the machinery around the call shrinks — the
+// task hierarchy, the C++-list ports, the `static mut` singleton, the claiming
+// mutex and the condvar dance all become `std::thread::scope`.
+
+/// One worker's share of a frame's slices, and the one value in this crate that
+/// crosses a spawn.
+///
+/// The worker owns bs scratch slot `iBsSlot` for the whole scope and encodes the
+/// slices `iFirstSlice`, `iFirstSlice + iSliceStep`, ... below `iSliceCount` — a
+/// static partition where the pool did a dynamic claim, which is strictly more
+/// deterministic and is why the claiming mutex can go.
+pub struct SliceJobHandle {
+    /// The encoder context, held raw exactly as `CWelsBaseTask::m_pCtx` held it.
+    pCtx: *mut sWelsEncCtx,
+    /// This worker's bs scratch slot: `pSliceThreading->pThreadBsBuffer[iBsSlot]`,
+    /// reached from the slice through `SSlice::uiBufferIdx`.
+    iBsSlot: i32,
+    iFirstSlice: i32,
+    iSliceStep: i32,
+    iSliceCount: i32,
+    /// `CWelsLoadBalancingSlicingEncodingTask`'s two extra stamps — the start time
+    /// in `InitTask`, the elapsed time in `FinishTask`. False is
+    /// `CWelsSliceEncodingTask`, which is what `bUseLoadBalancing = false` builds.
+    bRecordsTime: bool,
+}
+
+// unsafe-cat: send-seam(Phase 9)
+//
+// **The one hand-written `Send` this phase permits** (decision D-mt-1, plan §7.4)
+// — and the ratchet's `unsafe_impl` metric is an occurrence count, so this comment
+// deliberately does not spell the two words it would otherwise double. It retires
+// when Phase 9's context split makes this handle naturally `Send`:
+// `sWelsEncCtx` is `!Sync` for twelve distinct reasons (F67), five of them inside
+// types Phases 8 and 10 own, so the split is a precondition of the fork/join and
+// not a consequence of it. Until then the soundness argument is three parts, each
+// verified rather than asserted:
+//
+// **1 — disjointness is index-based, and the index is now static** (session A's
+// premise-1 proof, T7.A1). The only per-thread mutable state the encode reaches
+// through the context is the bs scratch buffer, named by `iBsSlot` and reached by
+// exactly one route: `iBsSlot` -> `InitOneSliceInThread(kiSlcBuffIdx)` ->
+// `SSlice::uiBufferIdx` -> `thread_bs_buffer()` = `pThreadBsBuffer[uiBufferIdx]`.
+// One handle per slot is constructed, the slots are `0..worker_count`, and the
+// handle is moved into its spawn — so no two live workers can name the same slot.
+// The pool proved the same property with a test-and-set under
+// `mutexThreadBsBufferUsage`; a partition proves it by construction.
+// Everything else the slices touch is per-slice: for a fixed mode
+// `bThreadSlcBufferFlag` is false, so slice `i` is `slice_in_bank(layer, 0, i)` —
+// a pure function of the slice index, never of the schedule — and each slice
+// writes only its own `sSliceBs` (`pBs`, `iNalLen[]`, `uiBsPos`).
+//
+// **2 — assembly is order-based** (premise 2, same proof). `AppendSliceToFrameBs`
+// runs after the join, on the calling thread, and walks slice index 0..N stitching
+// each slice's bytes in that order. Completion order is not observable, which is
+// why MT output is byte-deterministic today and why the slot a slice borrows is
+// byte-neutral. Today's slot assignment is already a race the output does not see;
+// this makes it a partition the output still does not see.
+//
+// **3 — concurrency is capped at the allocated buffer count, not the slot count**
+// (F67's independent consequence, the bound nobody had written down).
+// `RequestMtResource` allocates `uiThreadBsBufferNum` buffers, which is
+// `min(iMultipleThreadIdc, MAX_THREADS_NUM)` — fewer than `MAX_THREADS_NUM` slots
+// whenever the encoder was asked for fewer threads. It was the *pool's* concurrency
+// cap that kept `QueryEmptyThread`'s answer below that; a spawn-per-slice would
+// hand out a slot with a null buffer behind it the first time a fixed mode asked
+// for more slices than threads, which the sweep does routinely (`t=2`, `sm=1 n=4`).
+// The worker count here is `min(slices, uiThreadBsBufferNum)` and
+// `SliceJobHandle::new` `debug_assert!`s the bound at construction.
+unsafe impl Send for SliceJobHandle {}
+
+impl SliceJobHandle {
+    /// # Safety
+    /// `pCtx` must be a live context whose `pSliceThreading` has been built by
+    /// `RequestMtResource`, and `iBsSlot` must be a slot that call allocated.
+    unsafe fn new(
+        pCtx: *mut sWelsEncCtx,
+        iBsSlot: i32,
+        iFirstSlice: i32,
+        iSliceStep: i32,
+        iSliceCount: i32,
+        bRecordsTime: bool,
+    ) -> Self {
+        // Part 3 of the safety argument, checked where the handle is made rather
+        // than trusted where it is used. Both entry points refuse a null
+        // `pSliceThreading` before they get here, so the deref is the same one the
+        // workers will do.
+        debug_assert!(
+            iBsSlot >= 0 && (iBsSlot as usize) < (*(*pCtx).pSliceThreading).uiThreadBsBufferNum,
+            "job slot {} is outside the {} allocated bs buffers — F67's bound",
+            iBsSlot,
+            (*(*pCtx).pSliceThreading).uiThreadBsBufferNum
+        );
+        debug_assert!(
+            !(*(*pCtx).pSliceThreading).pThreadBsBuffer[iBsSlot as usize].is_null(),
+            "job slot {iBsSlot} has a null buffer behind it"
+        );
+        Self { pCtx, iBsSlot, iFirstSlice, iSliceStep, iSliceCount, bRecordsTime }
+    }
+}
+
+/// The prefix-NAL pair both encode bodies open with
+/// (`CWelsBaseTask::WritePrefixNal`).
+unsafe fn WritePrefixNalForSlice(
+    pCtx: *mut sWelsEncCtx,
+    pSlice: *mut SSlice,
+    pSliceBs: *mut SWelsSliceBs,
+    eNalRefIdc: EWelsNalRefIdc,
+    eNalType: EWelsNalUnitType,
+) {
+    if eNalRefIdc != EWelsNalRefIdc::NRI_PRI_LOWEST {
+        WelsLoadNalForSlice(pSliceBs, EWelsNalUnitType::NAL_UNIT_PREFIX as i32, eNalRefIdc as i32);
+        WelsWriteSVCPrefixNal(
+            thread_bs_buffer(pCtx, pSlice),
+            std::ptr::addr_of_mut!((*pSliceBs).sBsWrite),
+            eNalRefIdc as i32,
+            EWelsNalUnitType::NAL_UNIT_CODED_SLICE_IDR == eNalType,
+        );
+        WelsUnloadNalForSlice(pSliceBs);
+    } else {
+        // No Prefix NAL Unit RBSP syntax here, but need add NAL Unit Header extension
+        WelsLoadNalForSlice(pSliceBs, EWelsNalUnitType::NAL_UNIT_PREFIX as i32, eNalRefIdc as i32);
+        WelsUnloadNalForSlice(pSliceBs);
+    }
+}
+
+/// What one slice's encode reports back through the join.
+///
+/// `bInitFailed` is not decoration. `CWelsSliceEncodingTask::Execute` returns
+/// early when `InitTask` fails — **before** `FinishTask`, which is the only place
+/// the task's result is ORed into `pCtx->iEncoderError`. So a failed init is
+/// swallowed on both sides today, and reproducing that is hard rule 6: the frame
+/// comes back short rather than as an error, and changing which one the caller
+/// sees is a behaviour change. Carried here so the calling thread can OR exactly
+/// what `FinishTask` would have.
+struct SliceJobResult {
+    iResult: i32,
+    bInitFailed: bool,
+}
+
+/// One slice, start to finish, on a worker thread: the `InitTask` / `ExecuteTask`
+/// / `FinishTask` triple of `CWelsSliceEncodingTask`, minus the two mutexes.
+///
+/// The slot claim is gone because the slot is the worker's for the whole scope
+/// (part 1 of the seam's argument); the error mutex is gone because the result
+/// travels back through the join instead of being ORed from the worker.
+unsafe fn EncodeOneSliceInJob(
+    pCtx: *mut sWelsEncCtx,
+    iSliceIdx: i32,
+    iBsSlot: i32,
+    bRecordsTime: bool,
+) -> SliceJobResult {
+    // ---- CWelsSliceEncodingTask::InitTask
+    let eNalType = (*pCtx).eNalType;
+    let eNalRefIdc = (*pCtx).eNalPriority;
+    let bNeedPrefix = (*pCtx).bNeedPrefixNalFlag;
+
+    let mut pSlice: *mut SSlice = std::ptr::null_mut();
+    let mut iReturn = InitOneSliceInThread(
+        pCtx,
+        &mut pSlice,
+        iBsSlot,
+        (*pCtx).uiDependencyId as i32,
+        iSliceIdx,
+    );
+    if iReturn != ENC_RETURN_SUCCESS {
+        return SliceJobResult { iResult: iReturn, bInitFailed: true };
+    }
+    let pSliceBs = std::ptr::addr_of_mut!((*pSlice).sSliceBs);
+
+    iReturn = SetSliceBoundaryInfo(current_layer(pCtx), pSlice, iSliceIdx);
+    if iReturn != ENC_RETURN_SUCCESS {
+        return SliceJobResult { iResult: iReturn, bInitFailed: true };
+    }
+    (*pSliceBs).sBsWrite = BsWriter::new();
+    let iSliceStart = if bRecordsTime { WelsTime() } else { 0 };
+
+    // ---- CWelsSliceEncodingTask::ExecuteTask
+    let iResult = (|| {
+        if bNeedPrefix {
+            WritePrefixNalForSlice(pCtx, pSlice, pSliceBs, eNalRefIdc, eNalType);
+        }
+        WelsLoadNalForSlice(pSliceBs, eNalType as i32, eNalRefIdc as i32);
+        debug_assert_eq!(iSliceIdx, (*pSlice).iSliceIdx);
+        let mut iReturn = WelsCodeOneSlice(pCtx, pSlice, eNalType as i32);
+        if ENC_RETURN_SUCCESS != iReturn {
+            return iReturn;
+        }
+        WelsUnloadNalForSlice(pSliceBs);
+
+        let mut iSliceSize = 0i32;
+        iReturn = WriteSliceBs(pCtx, pSlice, iSliceIdx, &mut iSliceSize);
+        if ENC_RETURN_SUCCESS != iReturn {
+            return iReturn;
+        }
+
+        let pfDeblockingFilterSlice =
+            (*ctx_func_list(pCtx)).pfDeblocking.pfDeblockingFilterSlice.unwrap();
+        pfDeblockingFilterSlice(current_layer(pCtx), ctx_func_list(pCtx), pSlice);
+        ENC_RETURN_SUCCESS
+    })();
+
+    // ---- CWelsSliceEncodingTask::FinishTask (the load-balancing override's half;
+    //      the base half was the slot release and the error OR, both now gone)
+    if bRecordsTime && !pSlice.is_null() {
+        (*pSlice).uiSliceConsumeTime = (WelsTime() - iSliceStart) as u32;
+    }
+
+    SliceJobResult { iResult, bInitFailed: false }
+}
+
+/// How many workers a fork gets: never more than there are slices to encode, and
+/// never more than there are bs scratch buffers behind the slots (F67's bound).
+unsafe fn ForkWidth(pCtx: *mut sWelsEncCtx, iItemCount: i32) -> i32 {
+    let pSmt = (*pCtx).pSliceThreading;
+    let iBuffers = if pSmt.is_null() { 1 } else { (*pSmt).uiThreadBsBufferNum as i32 };
+    iItemCount.min(iBuffers.max(1)).max(1)
+}
+
+/// **The fork/join for every fixed slice mode** — what
+/// `pTaskManage->ExecuteTasks(WELS_ENC_TASK_ENCODING)` did for
+/// `uiSliceMode != SM_SIZELIMITED_SLICE`.
+///
+/// Returns the value `FinishTask` would have ORed into `pCtx->iEncoderError`; the
+/// caller ORs it, exactly where it read the field before.
+///
+/// # Safety
+/// `pCtx` must be a live context with `pSliceThreading` built and the layer's
+/// slice bank sized for `kiSliceCount` slices.
+pub unsafe fn EncodeFixedSlicesForked(pCtx: *mut sWelsEncCtx, kiSliceCount: i32) -> i32 {
+    if pCtx.is_null() || kiSliceCount <= 0 || (*pCtx).pSliceThreading.is_null() {
+        return ENC_RETURN_SUCCESS;
+    }
+    let bRecordsTime = !ctx_param(pCtx).is_null() && (*ctx_param(pCtx)).bUseLoadBalancing;
+    let iWidth = ForkWidth(pCtx, kiSliceCount);
+
+    // One handle per worker, each carrying its own slot — constructed here, on the
+    // calling thread, so the slot bound is checked before anything spawns.
+    let mut jobs: Vec<SliceJobHandle> = Vec::with_capacity(iWidth as usize);
+    for k in 0..iWidth {
+        jobs.push(SliceJobHandle::new(pCtx, k, k, iWidth, kiSliceCount, bRecordsTime));
+    }
+
+    let mut iErr = ENC_RETURN_SUCCESS;
+    std::thread::scope(|s| {
+        let mut handles = Vec::with_capacity(jobs.len());
+        for job in jobs {
+            handles.push(s.spawn(move || {
+                // `job` is the whole capture: the seam is this one move, and
+                // nothing else crosses.
+                let job = job;
+                let mut iWorkerErr = ENC_RETURN_SUCCESS;
+                let mut iSliceIdx = job.iFirstSlice;
+                while iSliceIdx < job.iSliceCount {
+                    let r = EncodeOneSliceInJob(
+                        job.pCtx,
+                        iSliceIdx,
+                        job.iBsSlot,
+                        job.bRecordsTime,
+                    );
+                    if !r.bInitFailed && r.iResult != ENC_RETURN_SUCCESS {
+                        iWorkerErr |= r.iResult;
+                    }
+                    if r.bInitFailed {
+                        // `Execute`'s early return: this task is over, and it
+                        // reports nothing. The remaining slices of this worker
+                        // were separate tasks and still run, as they would have.
+                    }
+                    iSliceIdx += job.iSliceStep;
+                }
+                iWorkerErr
+            }));
+        }
+        // The join IS the barrier `WelsTaskBarrier` was.
+        for h in handles {
+            iErr |= h.join().unwrap_or(ENC_RETURN_UNEXPECTED);
+        }
+    });
+
+    iErr
+}
+
+/// **The fork/join for the macroblock-map update** — what
+/// `pTaskManage->InitFrame` dispatched as `WELS_ENC_TASK_UPDATEMBMAP`.
+///
+/// Ordering, and it is the C++'s: this is a *separate* fork/join that fully joins
+/// before the encoding one starts. `InitFrame` runs at the top of
+/// `WelsInitCurrentLayer`, hundreds of lines above the encode dispatch, and its
+/// task list is drained by the same barrier before it returns. The two are not
+/// fused here because fusing them would let a slice encode against a neighbour map
+/// another worker had not finished writing.
+///
+/// It fires only when `bNeedAdjustingSlicing` is set, which only
+/// `DynamicAdjustSlicing` does — so this path is reachable only with
+/// `bUseLoadBalancing` on. See the step-5 ruling in the log.
+///
+/// # Safety
+/// As [`EncodeFixedSlicesForked`].
+pub unsafe fn UpdateMbMapForked(pCtx: *mut sWelsEncCtx, kiTaskCount: i32) {
+    if pCtx.is_null() || kiTaskCount <= 0 || current_layer(pCtx).is_null()
+        || (*pCtx).pSliceThreading.is_null()
+    {
+        return;
+    }
+    let iWidth = ForkWidth(pCtx, kiTaskCount);
+    let mut jobs: Vec<SliceJobHandle> = Vec::with_capacity(iWidth as usize);
+    for k in 0..iWidth {
+        jobs.push(SliceJobHandle::new(pCtx, k, k, iWidth, kiTaskCount, false));
+    }
+
+    std::thread::scope(|s| {
+        for job in jobs {
+            s.spawn(move || {
+                let job = job;
+                let pCurDq = current_layer(job.pCtx);
+                let pMbList = crate::encoder::svc_encode_slice::mb_list_root(pCurDq);
+                let mut iSliceIdc = job.iFirstSlice;
+                while iSliceIdc < job.iSliceCount {
+                    UpdateMbListNeighborParallel(pCurDq, pMbList, iSliceIdc);
+                    iSliceIdc += job.iSliceStep;
+                }
+            });
+        }
+    });
 }

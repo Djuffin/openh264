@@ -944,8 +944,16 @@ impl CWelsTaskManageBase {
             }
         }
         if bNeedAdjustingSlicing {
+            // **T7.B1.** Was `ExecuteTaskList(m_pcAllTaskList[UPDATEMBMAP])` — the
+            // pre-encoding task list through the pool. Same count, same barrier
+            // position, now a scope: this fork fully joins before it returns, and
+            // `WelsInitCurrentLayer` returns long before the encode dispatch, which
+            // is the order the C++ has and the reason the two forks are not fused.
             unsafe {
-                self.ExecuteTaskList(self.m_pcAllTaskList[WELS_ENC_TASK_UPDATEMBMAP].as_ptr());
+                crate::encoder::slice_multi_threading::UpdateMbMapForked(
+                    self.m_pEncCtx,
+                    self.m_iTaskNum[kiCurDid.max(0) as usize % MAX_DEPENDENCY_LAYER],
+                );
             }
         }
     }
