@@ -2873,3 +2873,66 @@ reproduced in the session-A log entry (`safety_refactor_log.md`, T7.A0).
 
 Running total: **eighty-eight measurements, twenty-seven alternations, sixty
 acquittals** — measurement 88 is an arm, not an acquittal.
+
+---
+
+### Measurement 89 — Phase 7 session A, T7.A2's two `family` batteries: **the retry rule did not acquit it, the alternation did** (2026-08-20)
+
+Two `family` batteries over the same commit (`1daf8741`), one hit each, both the
+signature, both the same configuration family — and the same one measurement 88 had
+just characterised over 3000 runs:
+
+```
+battery 1  debug    mt CiscoVT2people_320x192_12fps t=4 sm=3 n=600 cabac=1 rc=0 :: C++ 39981  Rust 0
+battery 2  release  mt CiscoVT2people_320x192_12fps t=4 sm=3 n=600 cabac=1 rc=1 :: C++ 39981  Rust 0
+```
+
+Each battery read **369/369 in the other profile** — battery 1 release, battery 2
+debug. Everything else in both was green.
+
+**The one-hit retry ran first and came back 4/5, not 5/5**, on the battery-1
+configuration in its own profile, harness rebuilt for debug, three seconds between
+runs. Under the standing rule that is not an acquittal, so the alternation ran —
+which is the right instrument here anyway, because the commit under test **changes
+`SSliceThreading`'s layout**: T7.A2 deletes eight dead fields, so the struct shrinks
+and every surviving field's offset moves. Nothing reads the deleted fields, but a
+layout change can move a race's window without touching a line of its logic, and
+that is precisely what an alternation is for.
+
+**The alternation.** HEAD (`1daf8741`) against **control = `b08d6c47`, the session's
+start commit**, built in a `git worktree` so both trees exist at once, interleaved
+run-for-run inside one loop, **250 iterations x 2 profiles per arm = 500 runs each**,
+under the four-stream compile load measurement 88 describes. Only the Rust driver
+differs: the C++ reference stream is generated **once** and both arms are compared
+against that same file, so the reference side is literally identical bytes.
+
+```
+HEAD  debug   FAIL=2/250        CTRL  debug   FAIL=2/250
+HEAD  release FAIL=7/250        CTRL  release FAIL=5/250
+              HEAD 9/500                      CTRL 7/500
+```
+
+9 against 7 in 500 is not a distinguishable rate (two-proportion p ≈ 0.6), and the
+**control drew every shape the head arm did** — empty, short (38240), and it drew
+them in both profiles. The head arm's shapes were empty, short (37837, 38240) and
+**longer (40463, twice)**; measurement 88 drew the same longer value on the same
+configuration. The release-over-debug asymmetry measurement 88 reported (3x) shows
+again here on both arms: 12 release against 4 debug across the two arms.
+
+**Acquitted as F3.**
+
+**A rate note.** 16 hits in 1000 alternated runs is ≈1/63, against measurement 88's
+≈1/120 on the same configuration and the same machine hours earlier. The difference
+is density: the alternation runs four encodes back to back per iteration with no
+profile switch between them, where the arm loop interleaved profiles and rc values.
+Same finding, same day, same box, **1/63 against 1/120 purely from how tightly the
+runs are packed** — which is worth having on the record next to every rate this file
+quotes, because it says the second digit of any of them is not real.
+
+**And one thing this measurement settles for the ablation.** The after-arm must be
+run at the *same* density as the before-arm or the comparison is worthless. Session B
+should re-run `f3_arm.sh` verbatim (the script is in the session-A log entry), not a
+loop of its own shape.
+
+Running total: **eighty-nine measurements, twenty-eight alternations, sixty-one
+acquittals.**
