@@ -2084,15 +2084,34 @@ pub fn ResetReorderingPictureBuffers(
 /// just copied selects which kernels `sCopyFunc` holds, and it also clears
 /// `bFreezeOutput`, which `WelsDecoderDefaults` sets **true**.
 ///
-/// **Three statements of `decoder.cpp`'s version are deliberately not here**, and
-/// they are enumerated in **F76** rather than smuggled in behind a refactor: the
-/// `eEcActiveIdc` range clamp (`:654`), the parse-only EC disable (`:663`), and the
-/// `pCtx->eVideoType` assignment (`:667`) — the last of which is why `eVideoType`
-/// is write-only in this port. Each is a behaviour change on a path no byte gate
-/// drives, so each wants its own covering test and its own commit.
+/// **F76, T8.B1 — the three statements this function used to be missing are here.**
+/// The range clamp (`:654`) is not: it has to run on the `int` the caller wrote,
+/// before the value is an `ERROR_CON_IDC` at all, so it lives at the boundary in
+/// `api::codec_api::read_decoding_param` and the block that arrives here is already
+/// in range. The other two — the parse-only concealment disable (`:663`) and the
+/// `pCtx->eVideoType` assignment (`:667`) — are written below in the reference's
+/// order, and the second is what makes `eVideoType` a field with a writer: it was
+/// set once by the context constructor and never again, so its one reader (the
+/// key-frame-loss arm of `DecodeFrame2`'s error block) would have fired on every
+/// stream rather than on AVC ones.
 pub fn DecoderConfigParam(pCtx: &mut SWelsDecoderContext, kpParam: &SDecodingParam) {
     pCtx.pParam = *kpParam;
+    // `decoder.cpp:663` — parse-only decoding disables concealment. Inert on output
+    // today only because `DecodeParser` is a stub; not inert as configuration,
+    // because the mode selects `sCopyFunc`'s kernels one line below.
+    if pCtx.pParam.bParseOnly {
+        pCtx.pParam.eEcActiveIdc = ERROR_CON_DISABLE;
+    }
     crate::decoder::error_concealment::InitErrorCon(pCtx);
+    // `decoder.cpp:667–671`. The out-of-range `else` is `read_decoding_param`'s, for
+    // the same reason the clamp is: `VIDEO_BITSTREAM_TYPE` has two variants and the
+    // wire has 2^32 values.
+    pCtx.eVideoType = pCtx.pParam.sVideoProperty.eVideoBsType;
+    WelsLog(
+        std::ptr::addr_of_mut!(pCtx.sLogCtx),
+        WELS_LOG_INFO,
+        &format!("eVideoType: {}", pCtx.eVideoType as i32),
+    );
 }
 
 pub fn WelsOpenDecoder(pCtx: &mut SWelsDecoderContext, _pLogCtx: *mut c_void) -> i32 {

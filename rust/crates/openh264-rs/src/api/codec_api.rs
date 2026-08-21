@@ -1565,12 +1565,81 @@ unsafe extern "C" fn encoder_get_opt_c(this: *mut ISVCEncoder, eOptionId: ENCODE
     }
 }
 
+/// `WELS_CLIP3 (iVal, ERROR_CON_DISABLE, ERROR_CON_SLICE_MV_COPY_CROSS_IDR_FREEZE_RES_CHANGE)`
+/// — `decoder.cpp:654` and `welsDecoderExt.cpp:528`, one function.
+///
+/// **F76, T8.B1.** The clamp is the reference's answer to a field that is an `int`
+/// on the wire and an eight-variant enum in this port. It has to run on the integer:
+/// once the value is an `ERROR_CON_IDC` the question is already settled, badly.
+fn ec_idc_from_raw(raw: i32) -> ERROR_CON_IDC {
+    match raw.clamp(
+        ERROR_CON_IDC::ERROR_CON_DISABLE as i32,
+        ERROR_CON_IDC::ERROR_CON_SLICE_MV_COPY_CROSS_IDR_FREEZE_RES_CHANGE as i32,
+    ) {
+        0 => ERROR_CON_IDC::ERROR_CON_DISABLE,
+        1 => ERROR_CON_IDC::ERROR_CON_FRAME_COPY,
+        2 => ERROR_CON_IDC::ERROR_CON_SLICE_COPY,
+        3 => ERROR_CON_IDC::ERROR_CON_FRAME_COPY_CROSS_IDR,
+        4 => ERROR_CON_IDC::ERROR_CON_SLICE_COPY_CROSS_IDR,
+        5 => ERROR_CON_IDC::ERROR_CON_SLICE_COPY_CROSS_IDR_FREEZE_RES_CHANGE,
+        6 => ERROR_CON_IDC::ERROR_CON_SLICE_MV_COPY_CROSS_IDR,
+        _ => ERROR_CON_IDC::ERROR_CON_SLICE_MV_COPY_CROSS_IDR_FREEZE_RES_CHANGE,
+    }
+}
+
+/// `VIDEO_BITSTREAM_SVC`/`VIDEO_BITSTREAM_AVC` pass; anything else is
+/// `VIDEO_BITSTREAM_DEFAULT` — `decoder.cpp:667–671`'s `else`.
+///
+/// The reference normalises on the way into `pCtx->eVideoType` and leaves the
+/// caller's block alone. Here it is the caller's block that is normalised, which is
+/// the same store because `sVideoProperty.eVideoBsType` has exactly one reader in
+/// this tree — the `eVideoType` assignment itself (`DecoderConfigParam`).
+fn video_bs_type_from_raw(raw: i32) -> VIDEO_BITSTREAM_TYPE {
+    match raw {
+        0 => VIDEO_BITSTREAM_TYPE::VIDEO_BITSTREAM_AVC,
+        1 => VIDEO_BITSTREAM_TYPE::VIDEO_BITSTREAM_SVC,
+        _ => VIDEO_BITSTREAM_DEFAULT,
+    }
+}
+
 unsafe extern "C" fn decoder_init_c(this: *mut ISVCDecoder, pParam: *const SDecodingParam) -> c_long {
     if this.is_null() || pParam.is_null() {
         return CM_INIT_PARA_ERROR as c_long;
     }
     let dec_impl = this as *mut CWelsDecoderImpl;
     unsafe {
+        // **F76, T8.B1 — the caller's block, read as a C caller may have written
+        // it, and why this is eight lines rather than `*pParam`.**
+        //
+        // `SDecodingParam` has two enum-typed fields, `eEcActiveIdc` and
+        // `sVideoProperty.eVideoBsType`. On the C side both are plain `int`s, and
+        // the reference sanitises them *after* the copy: `decoder.cpp:654` clamps
+        // the first into `[ERROR_CON_DISABLE, …FREEZE_RES_CHANGE]` and `:667`
+        // normalises the second to `VIDEO_BITSTREAM_DEFAULT`. In Rust each has a
+        // closed set of variants, so `*pParam` — which is what this boundary did —
+        // is undefined for exactly the inputs the sanitising exists to handle: the
+        // read assumed the property the clamp was there to establish.
+        //
+        // So the block is copied as bytes, the two fields are read and written at
+        // their own offsets as the `i32`s they are on the wire, and only then does
+        // it become an `SDecodingParam`. Every other field is a pointer, an integer
+        // or a `bool`, and a `bool` holding something other than 0/1 is the caller's
+        // own undefined behaviour in both trees.
+        let param = {
+            let mut buf = std::mem::MaybeUninit::<SDecodingParam>::uninit();
+            ptr::copy_nonoverlapping(
+                pParam.cast::<u8>(),
+                buf.as_mut_ptr().cast::<u8>(),
+                std::mem::size_of::<SDecodingParam>(),
+            );
+            let ec = ptr::addr_of_mut!((*buf.as_mut_ptr()).eEcActiveIdc).cast::<i32>();
+            ec.write(ec_idc_from_raw(ec.read()) as i32);
+            let bs =
+                ptr::addr_of_mut!((*buf.as_mut_ptr()).sVideoProperty.eVideoBsType).cast::<i32>();
+            bs.write(video_bs_type_from_raw(bs.read()) as i32);
+            buf.assume_init()
+        };
+        let pParam = &param;
         if (*dec_impl).pCtx.is_null() {
             // In-place heap construction: the context is several MiB, and since T3.3
             // it owns `Vec`s, so neither `Box::default()` (stack round-trip) nor
@@ -1592,7 +1661,7 @@ unsafe extern "C" fn decoder_init_c(this: *mut ISVCDecoder, pParam: *const SDeco
             // this line may read them. `DecoderConfigParam` writes the same block
             // again at the tail of this function, which is where the C++ has its
             // one copy; the two are the same store.
-            ctx_box.pParam = *pParam;
+            ctx_box.pParam = param;
             let p_ctx = Box::into_raw(ctx_box);
             // `CWelsDecoder::InitDecoder` runs this over `m_sLastDecPicInfo` just
             // before it calls `InitDecoderCtx` (`welsDecoderExt.cpp:386`); the field
@@ -1640,7 +1709,7 @@ unsafe extern "C" fn decoder_init_c(this: *mut ISVCDecoder, pParam: *const SDeco
         // It is placed outside the `pCtx.is_null()` block on purpose: the C++ runs it
         // on every `Initialize`, and the parameters it reads are re-copied above.
         if !(*dec_impl).pCtx.is_null() {
-            crate::decoder::decoder_core::DecoderConfigParam(&mut *(*dec_impl).pCtx, &*pParam);
+            crate::decoder::decoder_core::DecoderConfigParam(&mut *(*dec_impl).pCtx, pParam);
         }
     }
     CM_RESULT_SUCCESS as c_long
@@ -2131,17 +2200,37 @@ unsafe extern "C" fn decoder_set_opt_c(this: *mut ISVCDecoder, eOptionId: DECODE
                 }
             }
             DECODER_OPTION::DECODER_OPTION_ERROR_CON_IDC => {
-                if !pOption.is_null() && !(*dec_impl).pCtx.is_null() {
-                    let val = *(pOption as *const ERROR_CON_IDC);
-                    // **The context's own copy** (T8.A5, F41) — and it is where the
-                    // C++ writes it too: `pDecContext->pParam->eEcActiveIdc = iVal`
-                    // at `welsDecoderExt.cpp:535`, one level below the api object.
-                    (*(*dec_impl).pCtx).pParam.eEcActiveIdc = val;
-                    // F44's second call site (`welsDecoderExt.cpp:536`): the mode
-                    // selects which kernels `sCopyFunc` holds, so changing it without
-                    // re-running the init leaves the previous mode's table in place.
-                    crate::decoder::error_concealment::InitErrorCon(&mut *(*dec_impl).pCtx);
+                if pOption.is_null() {
+                    return CM_INIT_PARA_ERROR as c_long;
                 }
+                if (*dec_impl).pCtx.is_null() {
+                    return DECODING_STATE::dsInitialOptExpected.0 as c_long;
+                }
+                // **F76, T8.B1 — the blob is an `int` and the clamp is the C++'s.**
+                // `welsDecoderExt.cpp:528` reads `* ((int*)pOption)` and runs it
+                // through `WELS_CLIP3 (iVal, ERROR_CON_DISABLE,
+                // ERROR_CON_SLICE_MV_COPY_CROSS_IDR_FREEZE_RES_CHANGE)` before the
+                // store. This port read the blob as `*const ERROR_CON_IDC`, which is
+                // undefined the moment a caller passes anything outside 0..=7 — and
+                // 0..=7 is exactly the range the clamp exists to enforce, so reading
+                // the option at the enum's type assumed the property it was there to
+                // establish. It is an `i32` here and becomes an `ERROR_CON_IDC` only
+                // once it is in range.
+                let val = ec_idc_from_raw(pOption.cast::<i32>().read());
+                // `welsDecoderExt.cpp:529–533`: parse-only decoding may not turn
+                // concealment back on, and the rejection is a return code, not a
+                // silent drop.
+                if (*(*dec_impl).pCtx).pParam.bParseOnly && val != ERROR_CON_IDC::ERROR_CON_DISABLE {
+                    return CM_INIT_PARA_ERROR as c_long;
+                }
+                // **The context's own copy** (T8.A5, F41) — and it is where the
+                // C++ writes it too: `pDecContext->pParam->eEcActiveIdc = iVal`
+                // at `welsDecoderExt.cpp:535`, one level below the api object.
+                (*(*dec_impl).pCtx).pParam.eEcActiveIdc = val;
+                // F44's second call site (`welsDecoderExt.cpp:536`): the mode
+                // selects which kernels `sCopyFunc` holds, so changing it without
+                // re-running the init leaves the previous mode's table in place.
+                crate::decoder::error_concealment::InitErrorCon(&mut *(*dec_impl).pCtx);
             }
             _ => {}
         }
@@ -2168,6 +2257,15 @@ unsafe extern "C" fn decoder_get_opt_c(this: *mut ISVCDecoder, eOptionId: DECODE
             }
             DECODER_OPTION::DECODER_OPTION_END_OF_STREAM => {
                 *(pOption as *mut i32) = if (*dec_impl).bEndOfStream { 1 } else { 0 };
+            }
+            // `welsDecoderExt.cpp:634–637`. Unwired until T8.B1, which is why F76's
+            // two `DecoderConfigParam` statements had no observable: the mode the
+            // decoder actually runs with is only visible through this option.
+            DECODER_OPTION::DECODER_OPTION_ERROR_CON_IDC => {
+                if (*dec_impl).pCtx.is_null() {
+                    return CM_INIT_EXPECTED as c_long;
+                }
+                pOption.cast::<i32>().write((*(*dec_impl).pCtx).pParam.eEcActiveIdc as i32);
             }
             _ => {}
         }
