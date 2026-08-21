@@ -357,3 +357,14 @@ fn test_decoder_reinit_does_not_inherit_reordering_slots() {
         WelsDestroyDecoder(p_decoder);
     }
 }
+
+/// **T8.B9** — the safe cores are part of the crate's public surface, not an
+/// internal detail of the shells. If this stops compiling the carve has regressed.
+#[test]
+fn test_safe_core_types_are_exported() {
+    let _d: openh264_rs::api::Decoder = openh264_rs::api::Decoder::new();
+    let _e: openh264_rs::api::Encoder = openh264_rs::api::Encoder::new();
+    // And through the flat re-export the rest of this file uses.
+    let _d2: Decoder = Decoder::default();
+    let _e2: Encoder = Encoder::default();
+}
