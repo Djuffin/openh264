@@ -13860,3 +13860,327 @@ both were fixed rather than waived.
 - **The decoder** — `memory_align.rs` is structurally dead on both sides and survives
   as a null sentinel on `SWelsDecoderContext`; deleting it is a decoder-side change
   and the file says so. **F36** is fenced at its site.
+
+## Phase 8, session A — the api inventory, F23, and the decoder's boundary ownership (2026-08-21)
+
+`82e1e54f..01926eb6`, eight commits, every one green on `gates.sh commit` or `family`
+before it landed. Steps 0–3 of [`phase8_session_a.md`](prompts/phase8_session_a.md) as
+briefed. **Three of the brief's five load-bearing counts did not survive a re-grep**,
+and one of its three findings turned out to have been fixed three phases ago — S24's
+rule earning its place four times in one session.
+
+### T8.A1 — the api inventory: five instruments, and four duplicate boundary types
+
+S22's clause was right about the hole. `src/api/` is 2,788 lines, it is the drop-in ABI
+itself, and it was **the one module the project's instruments had never read**: its
+`deny(unsafe_code)` exemption had propagated into every sweep's directory list.
+
+Two of the five name their directories and gained `src/api` by name
+(`find_dup_types.sh`'s `DIRS`, `find_stub_bodies.py`'s `RUST_DIRS`). The other two —
+`find_shadowing_stubs.py` and `find_elem_byte_confusion.py` — walk the whole `src` and
+always could; what they lacked was anyone having *checked*, so each now carries the
+scope claim and the verdict its first api run produced, in its own docstring, where the
+next audit can test it rather than re-derive it. `census.sh` records the same at its
+head. That is the permanence the accept criterion asks for: a directory list can be
+edited back, a written verdict is falsifiable.
+
+**The backlog, every hit triaged:**
+
+| instrument | api hits | verdict |
+|---|---|---|
+| `find_dup_types.sh` | 6 duplicate declarations | **4 fixed here**, 2 enumerated — below |
+| `find_stub_bodies.py --dups` | 12 groups naming `codec_api.rs` | **F23's surface** — the twelve `&mut self` conveniences against their real implementations. Retired at T8.A3. |
+| `find_shadowing_stubs.py` | 11 items, all `default`/`fmt` | trait impls; **no F43 shape**, no free function among them |
+| `find_elem_byte_confusion.py` | 0 SUSPECT, 0 byte-sized | `src/api` has no element-counting primitive at all |
+| `census.sh` (double casts) | 1 named-target, budget 25 | pre-existing, allowlisted |
+
+The four fixed, and two of them had **diverged**:
+
+| duplicate | verdict |
+|---|---|
+| `SDecoderStatistics` x2 (`codec_api.rs` + `decoder_context.rs`) | field-for-field identical. It is one of the twelve fields the api *stamps into the decoder context*, so the two copies met at `pDecoderStatistics` and agreed by luck. Unified onto the ABI's declaration. |
+| `SSysMEMBuffer` x2 (+ a second `SUsrData`) | `decoder_core.rs`'s copy had **no consumer but its own dead union**, and its hand-written `Default` set `iFormat` to `videoFormatI420` where the ABI's derives **0**. Both deleted. |
+| `SVideoProperty` x2 | identical, decoder copy dead. Deleted. |
+| `VIDEO_BITSTREAM_TYPE` x2 | **`#[default]` on different variants** — AVC in the decoder, SVC in the api, and SVC is what `VIDEO_BITSTREAM_DEFAULT` is (`codec_app_def.h`). Deleted. |
+
+Two enumerated with owners, both in `census_allowlist.txt` with the reason:
+**`SParserBsInfo` x2 is not one entity** — the ABI struct's `*mut i32`/`*mut u8`
+against the decoder's private owned `Vec<i32>`/`Vec<u8>`, different layouts, nothing
+bridging them (`DecodeParser` is a stub and `WelsDecodeBs`'s `_pDstBsInfo` is an unused
+`*mut c_void`). Unpicking it is a **rename**, which is Phase 8's explicit non-goal, so
+**D5 / Phase 9**. **`WelsTraceCallback` x2** is the raw C trace pair's own type, which
+**session B** dissolves at the boundary.
+
+The twelve `DECODING_STATE` names (`dsErrorFree` … `dsDstBufNeedExpan`) began printing
+as value-divergent when api entered scope. They are not: `codec_api.rs` spells them as
+associated consts of the newtype (`Self(0x04)`) and the decoder spells the numbers bare
+(`0x04`), so the instrument's textual comparison sees two strings. **All twelve were
+checked by value** and agree at every copy; reported, never gated (S6).
+
+**And the census produced a finding — F76**, because unifying `VIDEO_BITSTREAM_TYPE`
+was behaviour-neutral *only because the field it types is never read*. Following that
+led to a whole missing block: the port never assigns `eVideoType` from the caller's
+parameter, and the C++ block containing its one reader
+(`welsDecoderExt.cpp:813–900` — `ResetDecoder`, the key-frame-loss notification, the
+trace throttle, the four EC statistics counters) has **no counterpart in
+`decoder_decode_frame2_c` at all**. None of it moves a decoded byte, which is exactly
+why sixty conformance streams and a 2707-stream corpus have never mentioned it.
+
+### T8.A2/A3 — F23, and the count that was wrong twice
+
+**The twelve conveniences are nineteen.** `impl ISVCEncoder` has 9 and `impl
+ISVCDecoder` has 10; the charter's "8 and 4" and the brief's "12" are surface counts.
+Each took `&mut self` over a struct that is one pointer wide.
+
+The covering test was written first and run first, and its output is the finding:
+
+```
+error: Undefined Behavior: attempting a write access using <584081> at
+       alloc288026[0x20], but that tag does not exist in the borrow stack
+    --> src/api/codec_api.rs:1511:9
+1511 |         (*dec_impl).param = *pParam;
+  help: <584081> was created by a SharedReadWrite retag at offsets [0x0..0x8]
+```
+
+`[0x0..0x8]` against a write at `0x20`, on the library's public entry point, reached by
+the ordinary spelling. It landed as its own commit, **red under Miri and green under
+`cargo test` in both profiles** — which is the honest record and also the reason the
+per-commit battery stayed green.
+
+**Option (a), and it was decided by reading the callers.** Associated functions taking
+`this` as a raw pointer: `ISVCDecoder::DecodeFrame2(p, ..)`. Option (b) — methods on
+`CWelsDecoderImpl`/`CWelsH264SVCEncoderImpl` taking `&mut self` of the whole object —
+is equally sound and lost because **every caller holds an interface pointer**, that
+being what the factories return and what the ABI names; (b) would have made all of them
+cast to an implementation type the public header does not mention, to call a method on
+a struct they have no business naming. Neither form can be `&self` either: eight bytes
+is the whole of a reference's provenance whichever way it is spelled.
+
+**115 call sites, not 55, and then 122.** The brief's grep counted four method names;
+the shape `(*recv).Method(` counts **109** across `tests/`, `benches/` and `examples/`
+— `examples/portref.rs` was in no earlier tally, and five in `decode_1080p_bench.rs`
+are `(*self.dec).…`, a dotted receiver the first pass did not match and the compiler
+caught. Plus the probe's six: 115.
+
+**The last seven arrived at the `family` gate**, and they are the interesting ones:
+`rust/tools/diffharness/rust_enc/main.rs` is a **separate cargo project** that depends
+on the crate by path, so `cargo build --all-targets` in the crate never compiles it and
+no grep of `src/` + `tests/` + `benches/` reaches it. The sweep is the only gate that
+builds the harness. **122 in total.**
+
+`abi_test_driver` is untouched, as required — but its two prose blocks are rewritten:
+both said they call the raw vtable *to route around F23*. They still call it, now
+because it exercises the slot table itself, which the conveniences resolve through and
+do not prove.
+
+### T8.A4 — F37 was fixed three phases ago; what was missing is the probe
+
+The brief says the port calls `ResetReorderingPictureBuffers` in exactly one place
+(`WelsCreateDecoder`), so `DestroyPicBuff` never resets. It calls it in **two**, and
+the second is at the head of `DestroyPicBuff` before the early returns, exactly where
+`decoder.cpp:260` has it. **F37 was fixed at Phase 5 session O (T5.O1)** and
+`phase5_findings.md` says so under its own heading; the brief's paragraph is the
+finding's *pre-fix* description carried forward.
+
+What was genuinely missing is coverage of the transition through the **public API**.
+T5.O1's test works at the `DestroyPicBuff` level; nothing in the tree drove
+Initialize → decode → Uninitialize → Initialize → decode, which is the only way a
+caller can reach the state. `test_decoder_reinit_does_not_inherit_reordering_slots`
+does, and two details are the test rather than decoration: it **interrupts** a B-slice
+stream (`CABA2_SVA_B.264`) after twelve access units *while pictures are still
+buffered* — a drained decoder cannot distinguish the fix from its absence, `iNumOfPicts`
+being 0 either way — and it compares against a **fresh decoder over the same stream**,
+so an inherited slot must survive both `remaining == 0` and the frame count. It asserts
+`buffered > 0` at the interruption, so it fails rather than passes vacuously the day it
+stops reaching the state.
+
+Measured red under a revert of T5.O1:
+`the re-initialised decoder inherited 1 buffered picture(s) from the previous session`.
+
+### T8.A5 — F41, and what the reference actually does
+
+**`CWelsDecoderImpl::param` had no counterpart in the C++ at all.** `CWelsDecoder`
+carries no parameter member; `InitDecoderCtx` allocates the block from the context's own
+allocator (`welsDecoderExt.cpp:426`) and `DecoderConfigParam` `memcpy`s the caller's
+values into it (`decoder.cpp:653`). The port invented a member on the api object and
+pointed `pCtx->pParam` at it — so a field the teardown reads (`bParseOnly`) lived in an
+object with its own lifetime, was rewritten by every `Initialize` before the
+existing-context test, and was writable by `SetOption` without the context.
+
+The field is owned now and the invented member is deleted. With it go the `Option` and
+the null default that 28 call sites carried — **including a standing note from T5.AC4**
+saying two spellings of "is EC disabled" must never be unified because their null
+defaults disagree. They disagreed only about a null, and a field has none.
+
+`DecoderConfigParam` exists now, with the C++'s name, doing what the port already did.
+**Three statements of the reference's version are deliberately absent and enumerated in
+F76** rather than smuggled in behind a refactor: the `eEcActiveIdc` range clamp, the
+parse-only EC disable, and the `eVideoType` assignment.
+
+**The covering test is the property the move could break.** After the move there are
+two candidate blocks a careless option write could reach and only one the decoder
+reads, so the test switches concealment **off after `Initialize`** on a stream that
+conceals and asserts `dsDataErrorConcealed` disappears from the OR'd decode states —
+asserting first that the un-switched run *does* conceal. Measured red by making
+`SetOption` write a scratch copy of the context's block.
+
+### T8.A6/A7/A8 — the twelve fields, and `memory_align.rs`
+
+**Ten `addr_of_mut!` stamps → 0. `api_alias`/`api_alias_mut` → deleted (69 call sites).
+`src/common/memory_align.rs` → gone.**
+
+They are `CWelsDecoder` members in the reference for a reason that does not apply here:
+a **threaded** decoder shares one reordering buffer, one statistics block and one vlc
+table across N contexts, and `InitDecoderCtx` stamps all N (`welsDecoderExt.cpp:415–422`).
+With one context per decoder the context owns them, and the stamps have nothing to do.
+
+The reordering family moved as one because that was forced: five members
+(`sPictInfoList`, `sReoderingStatus`, `bIsBaseline`, `iLastBufferedIdx`,
+`uiDecodeTimeStamp`) are read together by the five api-side reordering helpers, and a
+function reading the buffers out of the context and the scalars out of the api object
+would need both pointers to say one thing.
+
+**`m_pPicBuff` is deleted rather than moved, and the argument is a grep.** Its only
+writers in the reference are `ThreadDecodeFrameInternal`'s (`:1312`, `:1333`) — the
+threaded frame loop this port does not have — so `CWelsDecoderImpl::pPicBuff` was
+written exactly once, `null_mut()` in the factory, and read at two sites. What the C's
+`pCtx ? pCtx->pPicBuff : m_pPicBuff` carries is **one bit**: `FlushFrame` passes a null
+context to mean *do not touch the live pool*. That bit is `bUsePool` now, and spelling
+it as a flag is what **allows** the state to move — a null context argument cannot
+carry state the callee reads out of it.
+
+**Three initialisers changed where they run, and none of them sets zeros**:
+`InitVlcTable` into `WelsOpenDecoder` (`decoder.cpp:606`),
+`WelsDecoderLastDecPicInfoDefaults` and the reordering full reset into the context
+construction block (`welsDecoderExt.cpp:386`, `:169`). Consequence, stated because it
+is a behaviour change on the re-init path: a decoder that is `Uninitialize`d and
+`Initialize`d again now gets fresh statistics, a fresh last-picture record and a fresh
+decode-timestamp counter, which is what `CWelsDecoder::InitDecoder`'s three `memset`s
+do on **every** call and what this port has never done. F37's probe covers that path
+and is unmoved. (Two `Initialize`s *in a row* still diverge — F76.)
+
+**`memory_align.rs`'s own retirement note named the decoder as its last blocker and it
+was right**: `SWelsDecoderContext::pMemAlign` surviving as a null sentinel, and
+`CWelsDecoderImpl::align`, the object it pointed at. Each live reader of the sentinel
+was a C null test on the aligned allocator about to be called — `CreatePicBuff`'s
+`if (NULL == pCtx->pMemAlign) return 1`, and `AllocPicture`'s guard reached through
+`SliceCtx::bHasMemAlign` — and this port's pool and pictures are `Vec`s whose only
+failure is the `None` the `else` arm already takes. Three dead `let pMa = …` bindings
+and eight test fixtures went with them. **The crate no longer allocates through the C's
+allocator anywhere.**
+
+### Numbers
+
+| | at `b2e2c9d7` | at `01926eb6` |
+|---|---|---|
+| `src/api/` lines | 2,788 | 2,973 |
+| `codec_api.rs` raw-pointer tokens | 246 | 257 |
+| `codec_api.rs` `unsafe fn` | 48 | 49 |
+| `addr_of_mut!` stamps in `codec_api.rs` | 10 | **0** |
+| `api_alias`/`api_alias_mut` call sites | 69 | **0** |
+| `#[allow(unsafe_code)]` items in `src/decoder/` | 4 (two accessors + two Miri tests) | **2, both `data_ptr`'s Miri instruments** |
+| crate `raw_ptr` | 2,334 | **2,277** |
+| crate `unsafe_block` | 440 | **417** |
+| crate `unsafe_fn` | 814 | **809** |
+| `src/common/memory_align.rs` | 358 lines | **deleted** |
+
+`codec_api.rs` rises on two metrics and both are F23's fix: nineteen receivers that
+were references are pointers, which is what the finding was. The baseline was
+regenerated three times, each per §7.2 P2's protocol — `check` first, increases
+confined to the file being converted, then `generate` — and each diff moves exactly the
+numbers named above.
+
+### The span — 7 pairs, both benches, `b2e2c9d7` → `01926eb6`
+
+| bench | rows | median | min | max | this session's null band |
+|---|---|---|---|---|---|
+| decode | 3 | **−0.34%** | −0.37% | −0.22% | median −0.18%, −0.23%…+0.07% |
+| encode | 28 | **+0.00%** | −0.48% | +0.96% | median +0.00%, −1.25%…+1.27% |
+
+**No measurable movement on either bench.** Encode sits wholly inside the null band.
+Decode's three rows are all negative and its median is 0.16 points below the null's,
+which is the direction 87 pointer dereferences becoming field reads would push it — and
+0.16 points is below this harness's resolution (session K's lesson, S2b). Recorded as
+*unmoved*, not as a win. Cumulative position against the +25% tripwire is unchanged.
+
+### The method, and the four counts that did not survive it
+
+S24 says re-grep every shape-deciding count, and the brief's hard rule 5 says
+*anchors, not surfaces*. Four separate numbers moved this session, and each one
+changed the work rather than the prose:
+
+1. **12 conveniences → 19.** Had it been 12, the re-spelling would have missed seven
+   methods and the accept grep would have caught it — but only after the callers were
+   done twice.
+2. **55 callers → 122.** The brief's grep named four method names; the *shape*
+   `(*recv).Method(` finds 109, and the compiler and the sweep found the other 13 in
+   two places no grep of `src/`+`tests/`+`benches/` reaches (a dotted receiver, and a
+   separate cargo project).
+3. **F37 "not fixed" → fixed at T5.O1.** Reading the code before writing the fix is
+   the only reason the session did not re-fix it, and what it produced instead —
+   the public-API probe — is the thing that was actually missing.
+4. **18 thunks → 19; 27 `c_void` → 41.** Both are session B's inheritance, corrected
+   here so B does not inherit a number it has to disprove first.
+
+The pattern is not that briefs are careless — three of the four numbers are correct
+descriptions of an *earlier* tree. It is that a count written down in one session is
+a measurement, and a measurement quoted in the next is a claim.
+
+### What session B inherits, exactly
+
+Re-grepped at `01926eb6`, not copied forward:
+
+| item | measured |
+|---|---|
+| `m_pEncContext` (`*mut sWelsEncCtx`, raw) | **83** mentions in `wels_encoder_ext.rs`; **8** `*mut sWelsEncCtx` boundary lines |
+| the trace pair | `m_pWelsTrace` **31** mentions; `welsCodecTrace` holds `m_fpTrace` + `m_pTraceCtx: *mut c_void` |
+| `m_pCodecInstance` (F38's class — a back-pointer to the encoder object) | **3** |
+| the thunks | **19**, not 18: 9 `encoder_*_c` + 10 `decoder_*_c`, all in `codec_api.rs` |
+| `wels_encoder_ext.rs` raw tokens | **136** |
+| `c_void` in `src/encoder` | **41** occurrences across 13 files, **12** in `wels_encoder_ext.rs`. The charter's "27" does not reproduce. |
+| `alias WelsTraceCallback x2` | allowlisted with owner **8.B** — it retires when the pair is dissolved |
+| **F76** | opened here, owner **8.B**: the missing `DecodeFrame2` error block, the three missing `DecoderConfigParam` statements, and the second-`Initialize` divergence |
+
+And what B does **not** inherit: the decoder half of the boundary is done. The ten
+`addr_of_mut!` stamps, `api_alias`/`api_alias_mut`, `CWelsDecoderImpl::param`,
+`::align`, `::pPicBuff`, and `common/memory_align.rs` are all gone; `CWelsDecoderImpl`
+is `base`, `pVtbl`, `pCtx` and `bEndOfStream`.
+
+### The exit battery — `gates.sh exit`, **unscoped**, at `01926eb6`
+
+| step | verdict |
+|---|---|
+| `cargo build --all-targets` | PASS |
+| `cargo test` debug / release | **491 / 485 passed, 0 failed, 20 ignored** |
+| unsafe ratchet | PASS, no per-file increase |
+| duplicate census | PASS, **60 allowlisted** |
+| diffharness sweep, **debug** | **PASS=369 FAIL=0** |
+| diffharness sweep, **release** | **PASS=369 FAIL=0** |
+| `decode_1080p_bench` | all streams **bit-identical** |
+| `c_vs_rust_bench` | all rows **bit-identical** |
+| **Miri `--lib`, whole library, no skips** | **346 passed / 0 failed / 4 ignored**, 1601.75s |
+| Miri `--test kernels_differential_phase2` | 20 passed / 0 failed |
+| Miri `--test safe_bits_differential` | 7 passed / 0 failed |
+| Miri `--test safe_plane_differential` | 3 passed / 0 failed |
+| **OVERALL** | **PASS — 13 passed, 0 failed, 1 skipped** |
+
+**No `MIRI_SCOPE`** — the phase touches both codecs, so D-gate-2's encoder scoping is
+off and the three decoder probes ran in every Miri step. All seven aliasing probes ran
+**by name** and passed: `decode_slice_loop_…`, `error_concealment_…`,
+`fmo_slice_group_walk_…` (decoder); `encoder_initialisation_…`,
+`encode_loop_runs_over_a_macroblock_grid_…`,
+`encode_loop_runs_with_cavlc_and_fine_mode_decision_…`,
+`encode_loop_runs_over_size_limited_dynamic_slices_…` (encoder). **F23's covering test
+ran by name and passed**:
+`api::codec_api::f23_boundary_provenance::conveniences_call_through_the_whole_impl_allocation`.
+
+The four `ignored` are the inherited set, unchanged and none of them new: the two
+`*_ignores_the_cpu_flag` dispatch tests, and the two the MT work parked —
+`fork_join_encodes_a_multi_slice_frame_under_the_aliasing_checker` (**F73**, the MT
+probe) and `load_balancing_completes_frames_with_sane_slice_counts` (cost). Both run
+normally in both profiles.
+
+Conformance **60/60** and the corpus are unmoved at every commit of the session, which
+matters more here than usual: **F41 and the twelve-field move are ownership changes on
+the decode path**, and the byte referee is what says an ownership change was only an
+ownership change.

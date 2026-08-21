@@ -94,16 +94,29 @@ on the impl objects.
 
 ## 3. Session plan
 
-- **A** — the api inventory; F23 + its twin (12 conveniences, 55 callers);
-  F37 and F41 fixed; the decoder's twelve api-owned fields owned by the
-  context (the 10 stamps and `api_alias` retire); `memory_align.rs` retired
-  (the `align` stamp and the 17-site sentinel).
+- **A — DONE** (2026-08-21, `82e1e54f..01926eb6`, eight commits, `exit`
+  unscoped green). The whole brief landed, and three of its counts did not
+  survive a re-grep: the conveniences are **19**, their callers **122**
+  (seven in the diffharness's own cargo project, which only the sweep
+  builds), and **F37 was already fixed at T5.O1** — what was missing was its
+  public-API probe. The inventory found **six duplicate boundary
+  declarations, two divergent**; four unified, `SParserBsInfo` (two entities
+  under one name — a rename) → D5/Phase 9, `WelsTraceCallback` → B.
+  **F23 and F41 closed**, each with a covering test measured red. **10 stamps
+  → 0, 69 `api_alias` call sites → 0, both accessors deleted, `memory_align.rs`
+  deleted**; `src/decoder/` is down to two allow items, both `data_ptr`'s
+  Miri instruments, with no production item left. Crate `raw_ptr` −57,
+  `unsafe_block` −23, `unsafe_fn` −5. Span: no measurable movement on either
+  bench. **F76 opened**, owner B.
 - **B** — the encoder boundary: `CWelsH264SVCEncoder` owns `Box<sWelsEncCtx>`
   and its trace; the trace-callback plumbing (raw C pair stored once at the
   boundary, wrapped as the internal logger sink; `m_pCodecInstance`
-  dissolved); the 18 thunks as translators with `# Safety` contracts; the
+  dissolved); the **19** thunks (re-grepped at T8.A1: 9 encoder + 10
+  decoder) as translators with `# Safety` contracts; the
   safe core `Decoder`/`Encoder` types carved and exported with `Send`
-  compile tests; the `c_void` line (27) attributed or deleted.
+  compile tests; the `c_void` line — **41** occurrences across
+  `src/encoder`, 12 in `wels_encoder_ext.rs`; the charter's 27 does not
+  reproduce — attributed or deleted.
 - **C** — `crate-type`, the 7 exports (two `#[no_mangle]`s added), every
   boundary struct pinned, the external-ABI harness (+ the gtest stretch),
   the scoped-lint endgame for `api/`, the phase close.

@@ -1032,11 +1032,10 @@ pub fn parser_bs(bs: &mut Option<Box<SParserBsInfo>>) -> Option<&mut SParserBsIn
 /// The pool for the api layer's two release paths, **from the field** (T5.Z3).
 ///
 /// `CWelsDecoder::ReleaseBufferedReadyPicture*` evaluate `pCtx ? pCtx->pPicBuff :
-/// m_pPicBuff` into one local and pass it on, and `m_pPicBuff` is a raw field of
-/// `CWelsDecoderImpl` that Phase 8 owns — so the *local* is a pointer or it is two
-/// shapes at once. That is the api layer's problem, not this accessor's: it hands
-/// back the borrow and the api site casts once, at the line where the two sources
-/// meet, with the Phase 8 pointer on it.
+/// m_pPicBuff` into one local and pass it on. This accessor hands back the borrow and
+/// the api site turns it into a pointer at the one line where the two sources meet —
+/// `pool_for`, which since T8.A7 is also where the C's ternary lives, its
+/// `m_pPicBuff` arm having been shown to be provably null in this port.
 #[inline]
 pub fn pic_pool_ptr(pool: &mut Option<Box<SPicBuff>>) -> Option<&mut SPicBuff> {
     pool.as_deref_mut()

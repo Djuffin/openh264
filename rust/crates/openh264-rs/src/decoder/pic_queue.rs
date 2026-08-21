@@ -136,9 +136,10 @@ pub type PicSlot = Option<Box<SPicture>>;
 /// `PDqLayer` keeps its own (T5.M1): it is a pointer *to* the pool, and Phase 5's
 /// remaining steps delete it rather than convert it.
 pub type SPicBuff = PicPool;
-/// **Phase 8's** (T5b.9). Nothing in `src/decoder/` names this type; its two uses
-/// are `api/codec_api.rs`'s `pCtx ? pCtx->pPicBuff : m_pPicBuff` pair, which is the
-/// C++'s own expression at the boundary F23 owns. It retires with the boundary.
+/// **Phase 8's** (T5b.9). Nothing in `src/decoder/` names this type; its one use is
+/// `api/codec_api.rs`'s `pool_for`, which is what the C++'s
+/// `pCtx ? pCtx->pPicBuff : m_pPicBuff` became at T8.A7 once `m_pPicBuff` was shown
+/// to be provably null here. It retires with the boundary.
 pub type PPicBuff = *mut PicPool;
 
 /// **A decode bracket's view of the pool** (T5.P″2): `PicId` → picture, with the
@@ -873,14 +874,19 @@ pub fn CreatePicBuff(
 /// C++ `decoder.cpp:260` opens this function with
 /// `ResetReorderingPictureBuffers (pCtx->pPictReoderingStatus, pCtx->pPictInfoList,
 /// false)` and the port did not, calling it in exactly one place — decoder *creation*.
-/// The two buffers are `CWelsDecoderImpl`'s members, wired into the context by
-/// `decoder_init_c`, so they **outlive the context**: across an
+/// The two buffers were `CWelsDecoderImpl`'s members, wired into the context by
+/// `decoder_init_c`, so they **outlived the context**: across an
 /// Initialize/Uninitialize/Initialize cycle `sPictInfoList` kept POCs and
 /// `iPicBuffIdx` values naming slots of a pool that had been freed and rebuilt, and
 /// `EmitBufferedPicture` indexed the new pool with the old picture's index. Restored
 /// here as parity, not as invention — the reset runs before the early returns, exactly
-/// where the C++ has it, and the `pCtx` null-guard is the port's own (the C++
-/// dereferences unconditionally).
+/// where the C++ has it.
+///
+/// **T8.A7 moved both buffers into the context**, so they no longer outlive it and
+/// the cycle above is closed twice over: `Uninitialize` drops them with the context
+/// *and* this reset runs first. The reset stays because the C++ has it and because
+/// `DestroyPicBuff` also runs on a pool rebuild inside one session
+/// (`WelsFreeDynamicMemory`), where nothing is dropped.
 ///
 /// **T5.P″1: it takes the pool by value.** `ppPicBuf` was the address of
 /// `pCtx->pPicBuff` and its two jobs were to read the pool and to null the field;
@@ -1116,9 +1122,11 @@ mod tests {
     /// F37: destroying the pool resets the reordering buffers, because they outlive it.
     ///
     /// The cycle this pins is the public one — Initialize, decode, Uninitialize,
-    /// Initialize — where the context is rebuilt but `CWelsDecoderImpl`'s
-    /// `sPictInfoList` and `sReoderingStatus` are not. Without the reset, the second
-    /// life starts with `iPicBuffIdx` values naming slots of the first life's pool.
+    /// Initialize — and since T8.A7 the buffers are the context's own, so the
+    /// pool-rebuild *inside* one session is what the reset still guards:
+    /// `WelsFreeDynamicMemory` destroys and re-creates the pool without touching the
+    /// context, and without the reset the new pool is indexed with the old one's
+    /// `iPicBuffIdx`. `api_lifecycle_test`'s re-init probe covers the public cycle.
     #[test]
     fn destroying_the_pool_resets_the_reordering_buffers() {
         use crate::decoder::decoder_context::{IMinInt32, SPictInfo, SPictReoderingStatus};

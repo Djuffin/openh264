@@ -2041,10 +2041,11 @@ pub fn WelsDecoderLastDecPicInfoDefaults(sLastDecPicInfo: &mut crate::decoder::d
 
 /// Reset picture reordering buffer list.
 /// Matches `void ResetReorderingPictureBuffers (...)` in `decoder.cpp`.
-/// The list is the api's `[SPictInfo; 16]` (`CWelsDecoderImpl::sPictInfoList`), so
-/// the parameter is that array: the `16` the `fullReset` arm writes was the C's
-/// `sizeof` and is now the type's own length, and the `pPictInfo.add(i)` walk is an
-/// index. `iLargestBufferedPicIndex + 1` is clamped to it — the C++ trusts the field.
+/// The list is the context's own `[SPictInfo; 16]` since T8.A7 (it was
+/// `CWelsDecoderImpl::sPictInfoList`, reached through a stamped pointer), so the
+/// parameter is that array: the `16` the `fullReset` arm writes was the C's `sizeof`
+/// and is now the type's own length, and the `pPictInfo.add(i)` walk is an index.
+/// `iLargestBufferedPicIndex + 1` is clamped to it — the C++ trusts the field.
 pub fn ResetReorderingPictureBuffers(
     pPictReoderingStatus: &mut crate::decoder::decoder_context::SPictReoderingStatus,
     pPictInfo: &mut [crate::decoder::decoder_context::SPictInfo; 16],
