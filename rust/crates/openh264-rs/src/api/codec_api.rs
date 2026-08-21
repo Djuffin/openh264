@@ -2466,6 +2466,16 @@ pub(crate) mod abi_test_driver {
         pub threads: u16,
         /// `uiSliceNum` for `SM_FIXEDSLCNUM_SLICE`/`SM_RASTER_SLICE`.
         pub slice_num: u32,
+        /// `bUseLoadBalancing`. **Default `false`, and every byte-asserting probe
+        /// must leave it there** — with it on, and `iMultipleThreadIdc >= uiSliceNum`,
+        /// frame N+1's slice boundaries are a function of frame N's measured encode
+        /// *times*, so the bitstream stops being a function of the input. `GetDefaultParams`
+        /// sets it **on**, which is why the field is forced here rather than inherited.
+        ///
+        /// The one probe that turns it on is `load_balancing_completes_frames_with_sane_slice_counts`
+        /// (T7.C1), which asserts structure and never bytes — F72's expected-divergent
+        /// class, the project's second after `CABA2_SVA_B`.
+        pub load_balancing: bool,
     }
 
     impl Default for EncoderProbeOptions {
@@ -2477,6 +2487,7 @@ pub(crate) mod abi_test_driver {
                 slice_constraint: 0,
                 threads: 1,
                 slice_num: 1,
+                load_balancing: false,
             }
         }
     }
@@ -2549,13 +2560,15 @@ pub(crate) mod abi_test_driver {
             param.iMaxQp = 51;
             param.iMinQp = 0;
             param.iMultipleThreadIdc = opts.threads;
-            // Off, always. With it on and `iMultipleThreadIdc >= uiSliceNum` the
-            // encoder takes `AdjustBaseLayer` -> `DynamicAdjustSlicing`, whose slice
-            // boundaries for frame N+1 come from frame N's measured encode *times* —
-            // so the bitstream stops being a function of the input and the probe's
-            // assertions stop meaning anything. The diffharness gates it off for the
-            // same reason (`cxx_enc.cpp:119`); the ruling is in the log.
-            param.bUseLoadBalancing = false;
+            // Off unless a probe asks for it, and only one does. With it on and
+            // `iMultipleThreadIdc >= uiSliceNum` the encoder takes `AdjustBaseLayer`
+            // -> `DynamicAdjustSlicing`, whose slice boundaries for frame N+1 come
+            // from frame N's measured encode *times* — so the bitstream stops being a
+            // function of the input and any byte assertion stops meaning anything.
+            // The diffharness gates it off for the same reason (`cxx_enc.cpp:119`);
+            // `GetDefaultParams` turns it **on**, so this line is a force, not a
+            // default. See `EncoderProbeOptions::load_balancing`.
+            param.bUseLoadBalancing = opts.load_balancing;
             param.bEnableDenoise = false;
             param.bEnableBackgroundDetection = false;
             param.bEnableAdaptiveQuant = false;
