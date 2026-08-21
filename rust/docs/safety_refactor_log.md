@@ -14184,3 +14184,307 @@ Conformance **60/60** and the corpus are unmoved at every commit of the session,
 matters more here than usual: **F41 and the twelve-field move are ownership changes on
 the decode path**, and the byte referee is what says an ownership change was only an
 ownership change.
+
+---
+
+## Phase 8, session B — F76 closed, the encoder boundary owns, and the trace finally delivers (2026-08-21)
+
+`51a0956a..72fe2e7e`, ten commits plus this docs close, every one green on
+`gates.sh commit` before it landed. `family` (sweeps, both profiles) ran at the end
+of step 0, step 1 and step 3 — **369/369 each time, no F3 hit** — and step 4's own
+verification is the unscoped `exit` battery at the close. Steps 0–4 of
+[`phase8_session_b.md`](prompts/phase8_session_b.md) as briefed, plus **three
+findings the session found for itself** — one closed in place (F78), one closed as
+the step's whole point (F79), one filed with an owner because fixing it here would
+have broken the session's own rule (F77).
+
+**The session's shape in one line**: every step but the last was an *ownership*
+change, and every ownership change made a **parity** defect visible that the byte
+gates had been silent about for the whole port.
+
+### Step 0 — F76: the block `DecodeFrame2` never had
+
+`welsDecoderExt.cpp:815–905` had no counterpart in this port. The thunk called
+`WelsDecodeBs`, reordered, and returned the accumulator. Everything in the block is a
+*status code, a recovery action or a statistic* — the one class the byte referees
+cannot see — which is why conformance 60/60 and the 2707-row corpus were silent about
+its absence for the whole port, and why F76 is the finding it is.
+
+Three commits, because the three pieces have three different arguments:
+
+**T8.B1** (`6d5645cf`) — the two `DecoderConfigParam` statements, and the clamp that
+**could not be written where the reference writes it**. `decoder.cpp:654` clamps
+`eEcActiveIdc` into range *after* the memcpy, because in C the field is an `int`
+holding whatever the caller put there. In this port it is an eight-variant enum, so
+`ctx_box.pParam = *pParam` — the read the boundary did — is undefined for exactly the
+inputs the clamp exists to handle: **it assumed the property the clamp was there to
+establish**. The block is copied as bytes at `decoder_init_c`, `eEcActiveIdc` and
+`sVideoProperty.eVideoBsType` are read and written at their offsets as the `i32`s
+they are on the wire, and only then does it become an `SDecodingParam`.
+`welsDecoderExt.cpp:528`'s `SetOption` path had the same read and now has the same
+clamp, plus `:529–533`'s parse-only rejection. `DecoderConfigParam` gains the
+parse-only concealment disable and the `eVideoType` assignment.
+
+`DECODER_OPTION_ERROR_CON_IDC` is wired at `GetOption`, and **that is what made any
+of it observable**: the mode the decoder actually runs with had no reader outside the
+decoder, so two of F76's statements had no way to be tested at all.
+
+**T8.B2** (`8007dfc7`) — a second `Initialize` on a live decoder rebuilds. The port
+guarded the whole construction with `if pCtx.is_null()`, so a second call re-copied
+the parameters into the *existing* context. Initialize → Uninitialize → Initialize
+was already right (T8.A4's probe drives it); **two `Initialize`s in a row** is the
+transition that diverged, and nothing in the tree drove it.
+
+**T8.B3** (`dfafc008`) — the block, in the reference's order: the two reset arms, the
+key-frame-loss notification, the trace throttle, `dsDataErrorConcealed` and the four
+EC statistics, `dDecTime`, `OutputStatisticsLog`, the reordering branch, the
+accumulator — **and the error-free tail's own frame count**, without which
+`uiDecodedFrameCount` stays zero and the statistics divide by it.
+`DECODER_OPTION_GET_STATISTICS` is wired, computing both speed fields at read time as
+the reference does; it had fallen through `GetOption`'s catch-all and returned success
+without touching the caller's buffer, which is why nobody noticed the counters had no
+writer.
+
+**Six covering tests, each measured red against the tree that precedes its fix**
+(`tests/decoder_error_reporting_parity.rs`). The one worth reading is the AVC arm's,
+because writing it is what made the finding precise:
+
+> `bParamSetsLostFlag` is already true whenever a frame failed to construct, so the
+> notification only adds something when an error arrives on a call that *did*
+> construct a frame. Measured across `res/`: **no whole asset differs between the two
+> bitstream declarations at all**; one truncated slice in `BA_MW_D.264` produces the
+> coincidence from the fourth unit on, and it moves `uiIDRLostNum` by exactly one
+> while the emitted frame count does not move.
+
+So the test asserts the counter and asserts the frame count *does not* move — which
+is the reference's own description of the arm ("notify upper layer key frame loss")
+turned into an assertion.
+
+**Two arms are ported but uncovered, and that is measured rather than assumed.**
+`dsOutOfMemory` (`0x4000`) and `dsRefListNullPtrs` (`0x40`) appear in **zero of the
+2707 corpus golden rows**, and a sweep of all 62 `res/*.264` streams × 4 concealment
+modes × both bitstream declarations returns a state union of `0x36` — neither bit.
+Unreachable from every stream this project owns; transcribed by inspection and said
+so at the site. **That sweep is also what found F77** (below).
+
+`family` at step 0: 369/369 both profiles, corpus **2707/0 codes** and conformance
+**60/60** unmoved at all three commits — the referee's answer that none of it moved a
+gated code.
+
+### Step 1 — the encoder boundary owns, and the second boundary that did not exist
+
+**T8.B4** (`4de80895`) — **F78**, found while taking step 2's thunk inventory:
+`wels_encoder_ext.rs` carried a whole *second* C-ABI surface over
+`CWelsH264SVCEncoder` — `G_ISVCENCODER_VTBL`, nine `ext_*` thunks duplicating the
+nine `encoder_*_c` bodies, and `WelsCreateSVCEncoderExt`/`WelsDestroySVCEncoderExt`
+— reached by casting `*mut ISVCEncoder` straight to `*mut CWelsH264SVCEncoder`
+because the struct opened with a `vptr` slot. **Nothing called any of it**, and
+`vptr` was written once and never read. Deleted rather than carried into step 2,
+where writing a `# Safety` window for a slot nothing can call would have documented a
+fiction. `raw_ptr −30`, `unsafe_fn −11`.
+
+The method note is rule 6's: the charter's inventory counted `unsafe extern "C" fn
+*_c` **in `src/api`**, and this set is neither. Re-counting over what the *interface
+type* reaches, rather than over the pattern the previous count used, is what turned
+it up.
+
+**T8.B5** (`638e1436`) — `m_pEncContext: Option<Box<sWelsEncCtx>>` and
+`m_pWelsTrace: Box<welsCodecTrace>`. `WelsInitEncoderExt` takes `&mut Option<Box<_>>`
+and fills it; `WelsUninitEncoderExt` takes the context **by value**, which is what its
+trailing `*ppCtx = NULL` was expressing — now a fact about the type rather than a
+store the function has to remember. Ten `if !m_pWelsTrace.is_null()` guards go, and
+the two `if (m_pWelsTrace == NULL) return cmMallocMemeError` arms are deleted as
+*unreachable*: they guard a `new` that can fail in C++ and a `Box::new` that cannot.
+
+**S42, and why the root is one line.** `CWelsH264SVCEncoder::ctx_ptr` is the only
+place in `src/encoder` where a pointer to the context is born from ownership. It
+takes the **slot**, not `&mut self`, deliberately: `&mut self` would retag the whole
+encoder object and invalidate the `log_ctx` pointers the call sites hold, which are
+derived from a *sibling* field. Each method derives once at the top;
+`SetOption`'s three `WelsEncoderParamAdjust` arms re-derive after the call, because
+that function runs the uninit/init pair and **the context below the line is a
+different allocation from the one above it** — a fact `*ppCtx` used to hide. The two
+arms that read nothing afterwards say so instead of re-deriving.
+
+**T8.B6** (`3fdf563f`) — **F79, the trace**. The brief asked the session to verify
+whether *any* encoder path reaches the user's trace callback. None did, and the grep
+that answered it found that none could:
+
+* `WelsLog` was a stub in **two** places, each `let _ = (pLogCtx, iLevel, msg);`;
+* the encoder had **zero** `WelsLog` call sites (the reference's boundary class has
+  87), and the decoder's seventeen had no destination — `WelsDecoderDefaults`' log
+  parameter was `_pLogCtx: *mut c_void` and ignored, and `CWelsDecoderImpl` had no
+  trace object at all.
+
+`common/wels_trace.rs` is now the one declaration of `SLogContext`, `WelsLog`,
+`welsCodecTrace` and the six levels, retiring **two census entries** (60 → 58).
+`welsCodecTrace::m_pCodecInstance` is deleted — `welsCodecTrace.h` has no such
+member, and nothing read the port's.
+
+**The one structural departure, and it is not optional.** In C++
+`SLogContext::pfLog` is `StaticCodecTrace` and `pLogCtx` is the `welsCodecTrace`
+*itself* — a back-pointer, which is what lets a `SetOption` after `Initialize` reach
+the copy of `SLogContext` inside the codec context. That cannot be written here: the
+trace object is a member of the boundary object, every entry point reaches the
+boundary object through `&mut`, and a `&mut` retag of the owner invalidates a pointer
+previously derived from the member. **F38's class, taken on the logging path, where
+nothing would ever observe it going wrong.** So `SLogContext` carries the settings
+instead of a route to them, and the six option arms re-stamp the context's copy.
+`SLogContext` 24 → 32 bytes, and `sWelsEncCtx`'s offsets below `sLogCtx` are
+**re-measured** in `encoder/abi_guard.rs`, as at T6.C1/T6.D5/T7.B4/T7.C6 — the guard
+doing its job, not failing.
+
+**A stated divergence, recorded rather than dropped**: the reference's default sink
+is `welsStderrTrace` with `WELS_LOG_DEFAULT = WELS_LOG_WARNING`, so upstream writes
+every warning and error to the process's stderr. This port defaults to `None`.
+Turning it on is a library-behaviour decision with a measurable cost on this
+project's own instruments — the malformed corpus alone would emit a line per damaged
+access unit across 2707 rows — and what the enumerated parity fix owed was the
+*installed-callback* path.
+
+Three covering tests, all red before. The decoder's also measures **T8.B3's throttle
+from outside**: strictly fewer `decode failed, failure type:` lines than erroring
+calls. And `SLogContext::default()` is all zeros with the level set in
+`welsCodecTrace`'s constructor — where the reference sets it — because **Phase 5b's
+zeroed-shell equivalence test caught the first draft**, which had put
+`WELS_LOG_DEFAULT` in the struct's `Default` and moved a byte of `sWelsEncCtx`'s zero
+image.
+
+### Step 2 — the nineteen thunks
+
+**T8.B7** (`656d2e9c`). Nineteen thunks, **nineteen `# Safety` contracts**, each
+naming the null contract, the length contract and the window — and three of them name
+what *cannot* be translated and why: `decoder_init_c`'s `pParam` (T8.B1's reason),
+the two `pOption` blobs, and the `TRACE_CALLBACK_CONTEXT` pointer, which is the one
+value on either interface whose window **outlives the call**.
+
+Translated where the window permits: parameter blocks and picture/bitstream blocks to
+references, `kpSrc, kiSrcLen` to `Option<&[u8]>` built once at the top,
+`ppDst` to `&mut [*mut u8; 3]` and `pDstInfo` to `&mut SBufferInfo` once per call,
+`pStride` to the two-element slice its contract describes. The impl methods carry the
+same facts in their signatures and four of them drop `#[allow(unsafe_code)]`.
+
+`unsafe fn` in `wels_encoder_ext.rs` is **16, and that is the enumerated remainder**:
+all sixteen are the parameter/slice-encode tree's free functions, tagged
+`port-raw(Phase 9)` and named in this phase's do-not-touch list. (The brief's 15 was
+pre-F78; the file went 27 → 16 across the session.)
+
+`decoder_decode_frame_nodelay_c`'s contract records the known ordering divergence
+(plan §2): the reference calls `DecodeFrame2` twice and ORs, this port forwards once.
+Named at the slot rather than left in the reference.
+
+### Step 3 — the safe cores
+
+**T8.B8** (`848f90c2`) — `CWelsDecoderImpl::pCtx` is `Option<Box<_>>`; four teardown
+sites become `take()` and the construction path never leaves Rust's ownership.
+
+**T8.B9** (`17ba9168`) — `Decoder` and `Encoder`. `Decoder` owns the context, the
+trace and the end-of-stream flag and carries `initialize`, `uninitialize`, `decode`,
+`flush`, `frames_remaining`, `end_of_stream`, `set_end_of_stream`,
+`error_concealment`, `set_error_concealment`, `statistics` and three trace setters —
+all safe, all in references and slices. `Encoder` wraps the port's
+`CWelsH264SVCEncoder` the same way. The shells hold one each and the nineteen thunks
+translate and call.
+
+Naming: the reference's class names stay on the transliteration; `Decoder`/`Encoder`
+are what a Rust consumer sees, and they are **newtypes rather than re-exports** so
+the C-ABI-shaped members do not join the safe surface by accident. The two blob calls
+survive as `unsafe fn …_raw` and the trace-context setter is `unsafe` — the honest
+spelling of obligations no Rust type states.
+
+**The `Send` verdict, and how it is recorded.** A `fn assert_send<T: Send>()` states a
+verdict only when the answer is *yes*; when it is no the file stops compiling and the
+fact has nowhere to live. So the test uses an inherent-method-beats-trait-method
+probe — **a macro, because inside a generic function the method resolves at
+definition time and would answer `false` for everything**, which is exactly the trap
+the first draft fell into and the `u32` self-check now catches. Today's answer is
+asserted in both directions. Then `assert_send` was written out once and its errors
+read: **14 `E0277`s, 3 for `Decoder` and 11 for `Encoder`**, every one a raw pointer
+inside the context tree, enumerated in the test's doc comment. Ten of the eleven
+encoder entries and two of the three decoder entries are the `port-raw(Phase 9)`
+tree. Nothing is forced.
+
+### Step 4 — the `c_void` line
+
+**T8.B10** (`72fe2e7e`). The charter said 58, session A's re-grep 56, and at this
+step's start it read 56 — **of which 21 are prose**, epitaphs in comments for fields
+earlier sessions deleted. The unit matters as much as the number (rule 6), and this
+project's own reporting has always split code from prose.
+
+| what | verdict |
+|---|---|
+| `pOption` — 4 vtable slots, 4 convenience declarations, 4 thunks, `CWelsH264SVCEncoder::Set/GetOption`, `Encoder::set/get_option_raw` | **C-ABI, tagged.** Type is a function of the option id over 32 ids; no Rust type states that. |
+| `WelsTraceCallback`'s `ctx`, three `set_trace_callback_context` | **C-ABI, tagged.** The caller's opaque context, never dereferenced here. |
+| three `as *mut c_void` casts in `abi_test_driver` | **C-ABI**: option blobs at the call side. |
+| two live imports | for the above. |
+| `SSliceThreading::mutexSliceNumUpdate` + the three mutex helpers | **typed** `*mut Mutex<()>`. The value is a `std::sync::Mutex<()>` and nothing outside the crate sees it, so the erasure bought nothing. Plumbing unchanged — F69's bracket untouched. |
+| six `use std::ffi::{c_char, c_void}` with no `c_void` in the file | **deleted**, dead since the fields they served went. |
+| `SLogContext`'s trio, `welsCodecTrace::m_pCodecInstance` | **already gone at T8.B6**; the stale "three null `c_void`s" comment in `encoder_context.rs` is corrected. |
+
+**26 code occurrences, all C-ABI, each tagged at its site**, and 21 prose. Nothing in
+this crate erases a type it could name.
+
+### F77 — the finding that was not fixed, and why
+
+The reset-arm reachability sweep aborted on the ninth stream:
+
+```text
+thread panicked at src/safe/mb_grid.rs:277:23:
+index out of bounds: the len is 396 but the index is 396
+  … WelsActualDecodeMbCavlcISlice → WelsDecodeMbCavlcISlice → WelsDecodeSlice
+  → DecodeCurrentAccessUnit → WelsDecodeBs → decoder_decode_frame2_c
+thread caused non-unwinding panic. aborting.
+```
+
+396 is the macroblock count, so the index is exactly one past the end. The entry point
+is an `extern "C"` thunk, so the unwind is a `panic in a function that cannot unwind`
+and **the process aborts**: a C consumer handing this library `res/Error_I_P.264`
+gets `SIGABRT`, not `dsBitstreamError`. That is plan §P13's line, and the class §0's
+"absent instrument" row tracks.
+
+**Pre-existing, and measured to be.** The session's first instinct was that its own
+`DecodeFrame2` edits had caused it; they had not. The same probe against `51a0956a`
+with `src/` checked out at that revision and the crate rebuilt panics at the same line
+with the same message.
+
+**Not fixed here, on purpose.** `Error_I_P.264` is in `res/` but in no gate — not the
+conformance 60, not the corpus's eleven base streams, not the sweeps. Fixing it means
+changing a decode-path bound on damaged input: a behaviour change on an ungated path,
+which is exactly what this session's rule 4 forbids taking in passing. It wants its
+own commit, its own covering test and a corpus row. The one thing that would be wrong
+is to leave it unwritten.
+
+### What the session is worth carrying forward
+
+1. **An ownership change is how you find a parity defect.** Every step here was
+   nominally about who owns what, and every one of them surfaced something the byte
+   gates could not see: the clamp that could not be written (B1), the rebuild that
+   never happened (B2), the block that was never ported (B3), the boundary that was
+   never reachable (B4), the callback that never fired (B6). The mechanism is
+   consistent — *to give a field an owner you have to read every one of its writers,
+   and the reference beside them.*
+2. **"Verify whether X happens" is a better instruction than "port X".** Step 1's
+   clause — *verify whether any encoder path reaches the user's trace callback* — is
+   what produced F79. A brief that had said "make `WelsLog` work" would have got a
+   working `WelsLog` with no call sites.
+3. **A verdict that only compiles when it is `yes` is not a verdict.** The `Send`
+   probe is the general shape: when a property may legitimately be false, the test has
+   to be able to *say so*, and to fail if the answer changes in either direction.
+4. **Reachability is measurable, and unreachable code should say which.** The two
+   reset arms are transcribed but uncovered, and the session states the sweep that
+   establishes it (2707 golden rows, 62 assets × 4 modes × 2 declarations, union
+   `0x36`) rather than the adjective.
+
+### What session C inherits, exactly
+
+Measured at `72fe2e7e`, so C starts from numbers rather than from the charter's.
+
+| item | state at B's close |
+|---|---|
+| `crate-type` | **unset** — rlib only. `Cargo.toml` untouched all session. |
+| the seven exports | **five** are `#[no_mangle]` (`WelsCreateSVCEncoder`, `WelsDestroySVCEncoder`, `WelsCreateDecoder`, `WelsDestroyDecoder`, `WelsGetDecoderCapability`, all in `api/codec_api.rs`). The two version functions are `extern "C"` and **not exported**: `WelsGetCodecVersion` at `encoder/wels_encoder_ext.rs:2567` and `WelsGetCodecVersionEx` at `:2574` — moved from the charter's `:2620`/`:2627` by T8.B4's deletion, so re-grep rather than trust the line numbers. Crate `no_mangle` metric **24**, unchanged all session. |
+| `api/abi_guard.rs` | **63 assertions, 11 of `codec_api.rs`'s 27 `pub struct`s pinned by size.** The sixteen unpinned: `SBufferInfo`, `SDecoderCapability`, `SDecoderStatistics`, `SParserBsInfo`, `SSysMEMBuffer`, `SVideoProperty`, `SVuiSarInfo`, the four vtable/handle types, `DECODING_STATE`, the two impl shells, and `Decoder`/`Encoder` (which are **not** boundary types and should not be pinned). Seven of those sixteen are genuine boundary structs and are C's list. |
+| the external-ABI harness | not started. Template is `tools/diffharness/cxx_enc.cpp`; the gtest tree at `test/api` is built once (`.o` files present). |
+| the `api/` allow endgame | `api/codec_api.rs` carries **two** `#[allow(unsafe_code)]` items, both on `SBufferInfo`'s ABI union accessors ("one arm, so every read is the arm last written"); `api/abi_guard.rs` carries none. The module has no `#![deny(unsafe_code)]` yet — that is C's, and the crate-root flip is Phase 9's. |
+| `SParserBsInfo` | still **two entities under one name** (the ABI struct's raw pointers against the decoder's owned `Vec`s). Untouched here; the rename is **D5/Phase 9**, and `decoder_decode_parser_c`'s contract says so at the slot. |
+| F77 | **open**, and it is a decoder defect rather than a boundary one — but it *manifests* as a process abort through a boundary thunk, so C should decide whether the phase exit says anything about panic-safety at the ABI surface. |

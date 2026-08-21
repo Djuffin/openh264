@@ -3112,3 +3112,52 @@ bisect. D-perf-6's parked recovery remains Phase 9's.
 **One instrument note.** `Spatial Ramps` read −8.6% on the span and −19.1% on the null,
 in the same session — the eleventh reading confirming why it is `EXCLUDED` from every
 summary statistic (S2). It is printed and ignored, as designed.
+
+---
+
+## Phase 8 session B — the boundary owns, and both benches are inside a wide null
+
+### The span — `B_base` (`51a0956a`) vs `B_head` (`72fe2e7e`)
+
+7 interleaved pairs (S1), both benches, FFMPEG set (S17). The window covers the whole
+session: F76's error-reporting block on the decode path, the encoder boundary's
+ownership move (`m_pEncContext`, `m_pWelsTrace`), the deletion of the encoder's dead
+second C-ABI surface, the trace plumbing, the nineteen thunks' translate-in/out, the
+`Decoder`/`Encoder` carve, and the `c_void` attribution.
+
+| | rows | median | min | max | over +5% |
+|---|---|---|---|---|---|
+| decode | 3 | **+0.18%** | +0.11% | +0.30% | **0** |
+| encode | 28 | **+0.00%** | −0.83% | +1.41% | **0** |
+| decode **null** (S2 floor) | 3 | +0.54% | −0.18% | +4.47% | 0 |
+| encode **null** | 28 | −1.37% | −4.65% | +6.05% | 2 |
+
+**No measurable movement, and this session the null makes the argument by itself.**
+The floor is unusually wide — the encode null spans **10.7 points** and puts two rows
+over +5% with the *same binary in both slots*, and the decode null's max is +4.47%.
+Against that, the span's decode rows sit in a 0.19-point band whose median is **0.36
+points below the null's own median**, and every one of the 28 encode rows is inside
+the null's range with a median of exactly 0.00%.
+
+So both halves read **unmoved**, and the reasoning is the one S2 exists for: a
+reading is a result only when it is outside the floor measured in the same session on
+the same machine. Nothing here is.
+
+**What the span could plausibly have moved, and did not.** The decode path gained
+real work at T8.B3 — an `Instant::now()` per `DecodeFrame2` call, a branch on
+`iErrorCode`, and on the error path four statistics updates and a `format!` that only
+runs when a trace callback is installed. Three rows at +0.11…+0.30% is what "a
+timestamp and a predictable branch per access unit" looks like when the frame itself
+costs milliseconds, and it is under the null. The encode path lost a pointer
+indirection at every context access (`ctx_ptr` derives from the `Box` instead of
+loading a raw field) and lost nine dead thunk bodies; neither shows.
+
+**Cumulative position, as D-perf-4 requires.** Unmoved: encoder deficit ≈
+**+15…+17%** against the **+25%** tripwire. No median breach on either bench, so no
+bisect (rule 7's condition was not met). D-perf-6's parked recovery remains Phase 9's.
+
+**Instrument note.** `Spatial Ramps` read +2.15%/+5.46% on the span — the twelfth
+reading confirming why it is `EXCLUDED` from every summary statistic (S2). Printed
+and ignored, as designed. The wide encode null is worth remembering as the second
+half of the same lesson: **this harness's floor is a per-session measurement, not a
+constant**, and a session that skips the null has no way to read its own span.

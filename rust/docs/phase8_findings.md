@@ -15,7 +15,32 @@ finds for itself.
 `src/api` entered its scope — the enum's two declarations disagreed about their
 default, which is what sent someone to read the field.*
 
-**Status: OPEN. Owner: session B** (the 18 thunks' bodies are B's, charter §3).
+**Status: CLOSED at Phase 8 session B, 2026-08-21** — `6d5645cf` (T8.B1, the two
+parameter statements and the two clamps), `8007dfc7` (T8.B2, the live re-init
+rebuild), `dfafc008` (T8.B3, the error block whole). Six covering tests in
+`tests/decoder_error_reporting_parity.rs`, each measured red against the tree that
+precedes its fix, plus the throttle's observable in
+`tests/trace_callback_test.rs` at T8.B6. Corpus **2707/0 codes** and conformance
+**60/60** unmoved at every one of the three commits, which is the referee's answer
+that none of it moved a gated code.
+
+**Two arms are ported but uncovered, and that is measured rather than assumed**: the
+`dsOutOfMemory` and `dsRefListNullPtrs` reset arms. `0x4000` and `0x40` appear in
+**zero** of the 2707 corpus golden rows, and a sweep of all 62 `res/*.264` streams x
+4 concealment modes x both bitstream declarations returns a state union of `0x36` —
+neither bit. They are unreachable from every stream this project owns; the transcription
+is by inspection against `welsDecoderExt.cpp:820-831` and says so at the site.
+
+**One statement of the finding could not be written where the reference writes it.**
+The `eEcActiveIdc` range clamp is `decoder.cpp:654`, *after* the memcpy, because in C
+the field is an `int` holding whatever the caller put there. In this port it is an
+eight-variant enum, so `ctx_box.pParam = *pParam` — the read the boundary did — is
+undefined for exactly the inputs the clamp exists to handle: it assumed the property
+the clamp was there to establish. The clamp is at the boundary (`decoder_init_c`),
+on the bytes, before the block becomes an `SDecodingParam`. Same for
+`sVideoProperty.eVideoBsType`, whose only reader is the `eVideoType` assignment.
+
+*(Original brief below.)*
 
 ### How it surfaced
 
@@ -123,3 +148,154 @@ because `Uninitialize` nulls `pCtx`; **two `Initialize`s in a row** is the case 
 diverges, and after T8.A6/A7 it is also the case that keeps the previous session's
 statistics, last-picture record and decode timestamps where the reference `memset`s
 all three. Owner: **session B**, with the thunk bodies.
+
+---
+
+## F77 — a decoder panic on `res/Error_I_P.264`: a bitstream-derived macroblock index one past the end
+
+*Phase 8 session B, 2026-08-21, found at T8.B3 by the reset-arm reachability sweep —
+a probe that decoded all 62 `res/*.264` streams under four concealment modes looking
+for `dsOutOfMemory`/`dsRefListNullPtrs`, and aborted on the ninth stream.*
+
+**Status: OPEN. Owner: the decoder (Phase 9), not this session — see below.**
+
+```text
+thread panicked at src/safe/mb_grid.rs:277:23:
+index out of bounds: the len is 396 but the index is 396
+   3: openh264_rs::decoder::decode_slice::WelsActualDecodeMbCavlcISlice
+   4: openh264_rs::decoder::decode_slice::WelsDecodeMbCavlcISlice
+   5: openh264_rs::decoder::decode_slice::WelsDecodeSlice
+   6: openh264_rs::decoder::decoder_core::DecodeCurrentAccessUnit
+   7: openh264_rs::decoder::decoder_core::WelsDecodeBs
+   8: openh264_rs::api::codec_api::decoder_decode_frame2_c
+thread caused non-unwinding panic. aborting.
+```
+
+**396 is the macroblock count**, so the index is exactly one past the end — the
+classic `iMbXy == kiTotalNumMbInCurLayer` off-by-one on a damaged CAVLC I-slice.
+
+### Why it matters more than an ordinary panic
+
+The entry point is an `extern "C"` thunk, so the unwind is a
+`panic in a function that cannot unwind` and **the process aborts**. A C consumer
+handing this library a damaged stream gets `SIGABRT`, not `dsBitstreamError`. That is
+plan §P13's line — *"bitstream-derived values must reach error codes, never panics"* —
+and it is the exact class the absent fuzzer (§0's "absent instrument" row) would have
+found first. The tally in that row gains an entry.
+
+### Provenance: pre-existing, and measured to be
+
+The session's first instinct was that its own `DecodeFrame2` edits had caused it. They
+had not: the same probe run against **`51a0956a`**, the session's start commit, with
+`src/` checked out at that revision and the crate rebuilt, panics at the same line
+with the same message. Nothing in T8.B1–B3 touches CAVLC macroblock decoding.
+
+### Why it is not fixed here
+
+`Error_I_P.264` is in `res/` but in **no** gate: not in the conformance 60, not among
+the malformed corpus's eleven base streams, not in the sweeps. Fixing it means
+changing a decode-path bound on damaged input — a behaviour change on an ungated
+path, which is precisely the class this session's rule 4 forbids taking in passing.
+It wants its own commit, its own covering test (the asset is the test), and a corpus
+row so the code it *should* return is pinned. The one thing that would be wrong is to
+leave it unwritten.
+
+---
+
+## F78 — the encoder had a second C-ABI surface, and it was dead
+
+*Phase 8 session B, 2026-08-21, found at T8.B4 while taking step 2's thunk
+inventory.*
+
+**Status: CLOSED in the session that found it** — `4de80895`.
+
+`wels_encoder_ext.rs` carried `G_ISVCENCODER_VTBL`, nine `ext_*` thunks duplicating
+`codec_api.rs`'s nine `encoder_*_c` bodies, and
+`WelsCreateSVCEncoderExt`/`WelsDestroySVCEncoderExt` — a whole parallel boundary over
+`CWelsH264SVCEncoder` itself, reached by casting `*mut ISVCEncoder` straight to
+`*mut CWelsH264SVCEncoder` because the struct opened with a `vptr` slot.
+
+**Nothing called any of it.** The two factories have no caller in the crate, the
+tests, the benches or the diffharness; they are not among the seven names
+`codec_api.h` declares (there is no `WelsCreateSVCEncoderExt` upstream); and `vptr`
+was written once by the constructor and never read. The live boundary object is
+`CWelsH264SVCEncoderImpl { base, pVtbl, inner }`.
+
+So the encoder had **two vtables, two factories and two sets of nine thunk bodies
+under one interface type**, with one of each reachable. Deleted rather than carried
+into step 2, where writing a `# Safety` window for a slot nothing can call would have
+documented a fiction. `wels_encoder_ext.rs` raw_ptr −30, unsafe_fn −11.
+
+**The method note.** The charter's thunk inventory counted `unsafe extern "C" fn
+*_c` in `src/api`, and this set is neither `*_c` nor in `src/api`. Rule 6 —
+*anchors, not surfaces; re-grep first* — is what turned it up: the count was taken
+again over what the *interface type* reaches rather than over the pattern the
+previous count had used.
+
+---
+
+## F79 — the trace callback never fired, on either codec, and the encoder had no call sites at all
+
+*Phase 8 session B, 2026-08-21, found at step 1 where the brief told the session to
+verify whether any encoder path reaches the user's trace callback. None did — and the
+grep that answered it also found that none could.*
+
+**Status: CLOSED at T8.B6** — `3fdf563f`. Three covering tests in
+`tests/trace_callback_test.rs`, all three measured red against T8.B5's tree.
+
+### What was wrong, in two independent halves
+
+1. **`WelsLog` was a stub, twice.** `encoder/wels_encoder_ext.rs:293` and
+   `decoder/decoder_core.rs:630`, each of them `let _ = (pLogCtx, iLevel, msg);`.
+   Nothing in the crate read `welsCodecTrace::m_fpTrace` or `SLogContext::pfLog` —
+   `grep -rn 'm_fpTrace\|pfLog' src/` returned declarations, defaults and setters,
+   and no call.
+2. **The encoder had zero `WelsLog` call sites.** Not a stub reached by dead
+   argument, but a function with no callers on that side: `welsEncoderExt.cpp` has
+   **87**. The decoder had seventeen, and they were dropped on the floor for reason
+   1 plus a third: `WelsDecoderDefaults`' log-context parameter was
+   `_pLogCtx: *mut c_void` and ignored, and `CWelsDecoderImpl` had no trace object to
+   pass — `CWelsDecoder::m_pWelsTrace` has no counterpart in this port at all.
+
+So `ENCODER_OPTION_TRACE_CALLBACK` and `DECODER_OPTION_TRACE_CALLBACK` — documented
+options on a documented interface — were accepted, stored, and never used. The
+decoder's three trace options were not even wired.
+
+### The fix, and the one structural departure it forced
+
+`common/wels_trace.rs` is one declaration of `SLogContext`, `WelsLog`,
+`welsCodecTrace` and the six levels, retiring the census's `type SLogContext x2` and
+`alias WelsTraceCallback x2`. `welsCodecTrace::m_pCodecInstance` is deleted:
+`welsCodecTrace.h` has no such member (the reference's `SetCodecInstance` writes
+`m_sLogCtx.pCodecInstance`) and nothing read the port's.
+
+**The back-pointer could not be transliterated.** In C++ `SLogContext::pfLog` is
+`StaticCodecTrace` and `pLogCtx` is *the `welsCodecTrace` object*, which is what lets
+a `SetOption` after `Initialize` reach the copy of `SLogContext` inside the codec
+context. Writing that here would store a pointer into a `Box` field of a struct every
+entry point reaches through `&mut` — F38's class, and a `&mut` retag of the owner
+invalidates it. It would be taken on the *logging* path, where nothing would ever
+observe it going wrong. So `SLogContext` carries the settings instead of a route to
+them (callback, caller's context, instance *address* as a `usize`, level), and the
+six option arms re-stamp the context's copy. `SLogContext` 24 → 32 bytes; the encoder
+context's offsets are re-measured, as at T6.C1/T6.D5/T7.B4/T7.C6.
+
+### A stated divergence, not an oversight
+
+**The reference's default sink is `welsStderrTrace`** (`welsCodecTrace.cpp:55`), with
+`WELS_LOG_DEFAULT = WELS_LOG_WARNING`, so upstream writes every warning and error to
+the process's stderr. **This port defaults to `None`.** Turning it on is a
+library-behaviour decision with a measurable cost on this project's own instruments —
+the malformed corpus alone would emit a trace line per damaged access unit across
+2707 rows — and what the enumerated parity fix owed was the *installed-callback*
+path, which is the one `codec_api.h` documents and a consumer can observe. A consumer
+who wants the upstream behaviour installs a callback that writes to stderr.
+
+### What is left, with an owner
+
+The encoder now logs at `Initialize`, `InitializeExt` (the version line and the
+`invalid argv` error) and `Uninitialize` — **four of the reference's 87 call sites**.
+The rest, including `TraceParamInfo`'s parameter dump and `LogStatistics`, are still
+stubs. They are message text on a path no gate reads, and porting 83 format strings
+is not this session's work. **Owner: Phase 9**, with the rest of the encoder's
+`port-raw` tree.

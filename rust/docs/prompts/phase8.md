@@ -108,15 +108,33 @@ on the impl objects.
   Miri instruments, with no production item left. Crate `raw_ptr` −57,
   `unsafe_block` −23, `unsafe_fn` −5. Span: no measurable movement on either
   bench. **F76 opened**, owner B.
-- **B** — the encoder boundary: `CWelsH264SVCEncoder` owns `Box<sWelsEncCtx>`
-  and its trace; the trace-callback plumbing (raw C pair stored once at the
-  boundary, wrapped as the internal logger sink; `m_pCodecInstance`
-  dissolved); the **19** thunks (re-grepped at T8.A1: 9 encoder + 10
-  decoder) as translators with `# Safety` contracts; the
-  safe core `Decoder`/`Encoder` types carved and exported with `Send`
-  compile tests; the `c_void` line — **41** occurrences across
-  `src/encoder`, 12 in `wels_encoder_ext.rs`; the charter's 27 does not
-  reproduce — attributed or deleted.
+- **B — DONE** (2026-08-21, `51a0956a..72fe2e7e`, ten commits plus the docs
+  close). The whole brief landed, and the session's shape is worth stating: **every
+  step was nominally an ownership change, and every one of them surfaced a parity
+  defect the byte gates could not see.** **F76 CLOSED** in three commits (the two
+  `DecoderConfigParam` statements plus both clamps; the live re-init rebuild;
+  `welsDecoderExt.cpp:815–905` whole), six covering tests each measured red, corpus
+  **2707/0** and conformance **60/60** unmoved at all three. The `eEcActiveIdc` clamp
+  had to move **up** to the boundary and run on the wire bytes: in Rust `*pParam` is
+  undefined for exactly the inputs the clamp exists to handle. Two reset arms are
+  transcribed but **measurably unreachable** (0 of 2707 golden rows; 62 assets × 4
+  modes × 2 declarations → state union `0x36`). **F78 NEW/CLOSED** — the encoder had
+  a *second*, entirely dead C-ABI surface (nine `ext_*` thunks, two factories
+  upstream does not declare, a `vptr` never read); rule 6 found it because the
+  charter's inventory counted `*_c` in `src/api` and this set is neither. **F79
+  NEW/CLOSED** — the trace callback never fired on either codec: `WelsLog` was a stub
+  twice, the encoder had **zero** call sites against the reference's 87, and the
+  decoder's seventeen had no destination. The reference's `SLogContext`
+  back-pointer **cannot be transliterated** (F38's class, on the logging path), so
+  the struct carries the settings and the option arms re-stamp the copy. **F77 NEW,
+  OPEN, Phase 9** — `res/Error_I_P.264` aborts the process through an `extern "C"`
+  thunk; pre-existing, in no gate, deliberately not fixed under rule 4. Ownership:
+  `m_pEncContext`/`m_pWelsTrace`/`pCtx` all owned, two S42 roots taking the *slot*.
+  **19 thunks / 19 contracts**; `Decoder` and `Encoder` carved with the **`Send`
+  verdict measured** (neither; 14 `E0277`s enumerated). `c_void`: **26 code, all
+  C-ABI and tagged**, 21 prose. Ratchet `raw_ptr` 2277 → 2225, `unsafe_fn` 809 → 802.
+  Span: no measurable movement on either bench.
+
 - **C** — `crate-type`, the 7 exports (two `#[no_mangle]`s added), every
   boundary struct pinned, the external-ABI harness (+ the gtest stretch),
   the scoped-lint endgame for `api/`, the phase close.
