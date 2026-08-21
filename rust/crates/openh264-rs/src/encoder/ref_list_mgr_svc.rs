@@ -868,7 +868,7 @@ pub unsafe fn CheckCurMarkFrameNumUsed(pCtx: *mut sWelsEncCtx) -> bool {
 }
 
 /// Replicates base slice header reference marking syntax across all slices.
-// unsafe-cat: port-raw(Phase 7)
+// unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe fn WelsMarkMMCORefInfoWithBase(
     pCurDq: *mut SDqLayer,

@@ -1,3 +1,4 @@
+#![deny(unsafe_code)]
 // Copyright (c) 2010-2013, Cisco Systems
 // All rights reserved.
 //
@@ -43,9 +44,18 @@
     unused_unsafe
 )]
 
-// deny(unsafe_code) lands with Phase 7; this file is the thread machinery.
-// The exemption itself is the `#[allow(unsafe_code)]` on this file's `pub mod`
-// line in `encoder/mod.rs`, where the module-level deny reaches from.
+// **The deny landed — T7.C8, and this file was the last one in `src/encoder` without
+// it.** The module-level exemption on this file's `pub mod` line in `encoder/mod.rs`
+// is retired; the deny is the inner attribute at the top of this file, and every
+// unsafe item below carries its own allow with a category. 16 are `MT` — the fork
+// bodies, the fork/join entry points, the resource pair, the one surviving mutex's
+// helpers and the order-based assembly, none of which exists at
+// `iMultipleThreadIdc == 1`, which is the rule the re-tag used. 9 are
+// `port-raw(Phase 9)`: the three `macros.h` memory helpers and the six
+// load-balancing functions, all of which run on the calling thread. The one
+// hand-written `Send` is `send-seam(Phase 9)`, D-mt-1's seam — and this sentence
+// avoids spelling the two words the ratchet counts, for the reason the seam's own
+// note gives.
 
 use std::ffi::c_void;
 
@@ -105,6 +115,8 @@ pub const DEFAULT_MAXPACKETSIZE_CONSTRAINT: u32 = 1200;
 ///
 /// # Safety
 /// `pDst` must point to at least `iSizeOfData` writable `u16`s.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn WelsSetMemUint16_c(pDst: *mut u16, iValue: u16, iSizeOfData: i32) {
     for i in 0..iSizeOfData as usize {
         *pDst.add(i) = iValue;
@@ -115,6 +127,8 @@ pub unsafe fn WelsSetMemUint16_c(pDst: *mut u16, iValue: u16, iSizeOfData: i32) 
 ///
 /// # Safety
 /// `pDst` must point to at least `iSizeOfData` writable `u32`s.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn WelsSetMemUint32_c(pDst: *mut u32, iValue: u32, iSizeOfData: i32) {
     for i in 0..iSizeOfData as usize {
         *pDst.add(i) = iValue;
@@ -153,6 +167,8 @@ pub fn fill_mb_map(map: &mut [u16], kiFirstMb: i32, kiCount: i32, uiValue: u16) 
     }
 }
 
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn WelsSetMemMultiplebytes_c(
     pDst: *mut u16,
     iValue: u32,
@@ -326,6 +342,8 @@ pub fn WelsDivRound64(x: i64, y: i64) -> i64 {
 // the critical sections are identical; only the spelling differs.
 
 /// Allocates a mutex and returns its opaque handle (`WelsMutexInit`).
+// unsafe-cat: MT
+#[allow(unsafe_code)]
 pub unsafe fn WelsMutexInit(pMutex: *mut *mut c_void) -> i32 {
     let m: Box<std::sync::Mutex<()>> = Box::new(std::sync::Mutex::new(()));
     *pMutex = Box::into_raw(m) as *mut c_void;
@@ -333,6 +351,8 @@ pub unsafe fn WelsMutexInit(pMutex: *mut *mut c_void) -> i32 {
 }
 
 /// Frees a mutex allocated by [`WelsMutexInit`] (`WelsMutexDestroy`).
+// unsafe-cat: MT
+#[allow(unsafe_code)]
 pub unsafe fn WelsMutexDestroy(pMutex: *mut *mut c_void) {
     if !(*pMutex).is_null() {
         drop(Box::from_raw(*pMutex as *mut std::sync::Mutex<()>));
@@ -345,6 +365,8 @@ pub unsafe fn WelsMutexDestroy(pMutex: *mut *mut c_void) {
 /// A null handle runs `f` unlocked; that mirrors the C++ behaviour on an
 /// uninitialised mutex closely enough for the single-threaded paths, which
 /// never contend.
+// unsafe-cat: MT
+#[allow(unsafe_code)]
 pub unsafe fn with_wels_mutex<R>(pMutex: *mut c_void, f: impl FnOnce() -> R) -> R {
     if pMutex.is_null() {
         return f();
@@ -371,6 +393,8 @@ pub fn WelsEmms() {
 
 /// Updates macroblock spatial neighbor availability bitmasks for all macroblocks
 /// belonging to a specific slice partition in parallel.
+// unsafe-cat: MT
+#[allow(unsafe_code)]
 pub unsafe fn UpdateMbListNeighborParallel(
     pCurDq: *mut SDqLayer,
     pMbList: *mut SMB,
@@ -416,6 +440,8 @@ pub unsafe fn UpdateMbListNeighborParallel(
 /// `bUseLoadBalancing = false`, as does the encode probe; the structural probe is
 /// `load_balancing_completes_frames_with_sane_slice_counts`. It is the project's
 /// second expected-divergent class after `CABA2_SVA_B` — see plan §1.5 and F72.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn CalcSliceComplexRatio(pCurDq: *mut SDqLayer) {
     if pCurDq.is_null() {
         return;
@@ -454,6 +480,8 @@ pub unsafe fn CalcSliceComplexRatio(pCurDq: *mut SDqLayer) {
 
 /// Statistical decision engine that evaluates whether the timing variance across
 /// slices exceeds the core-dependent threshold to justify dynamic slicing.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn NeedDynamicAdjust(pCurDq: *mut SDqLayer, iSliceNum: i32) -> i32 {
     if pCurDq.is_null() || iSliceNum <= 0 {
         return 0;
@@ -513,6 +541,8 @@ pub unsafe fn NeedDynamicAdjust(pCurDq: *mut SDqLayer, iSliceNum: i32) -> i32 {
 }
 
 /// Dynamically recalculates macroblock run-lengths assigned to each slice in a spatial layer.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn DynamicAdjustSlicing(
     pCtx: *mut sWelsEncCtx,
     pCurDqLayer: *mut SDqLayer,
@@ -609,6 +639,8 @@ pub unsafe fn DynamicAdjustSlicing(
 }
 
 /// Applies newly calculated macroblock run-lengths to slice context structures.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn DynamicAdjustSlicePEncCtxAll(pCurDq: *mut SDqLayer, pRunLength: *mut i32) -> i32 {
     if pCurDq.is_null() || pRunLength.is_null() {
         return 1;
@@ -655,6 +687,8 @@ pub unsafe fn DynamicAdjustSlicePEncCtxAll(pCurDq: *mut SDqLayer, pRunLength: *m
 }
 
 /// Allocates and initializes multithreading synchronization resources and thread-local bitstream buffers.
+// unsafe-cat: MT
+#[allow(unsafe_code)]
 pub unsafe fn RequestMtResource(
     ppCtx: *mut *mut sWelsEncCtx,
     pCodingParam: *mut crate::encoder::param_svc::SWelsSvcCodingParam,
@@ -729,6 +763,8 @@ pub unsafe fn RequestMtResource(
 }
 
 /// Tears down and frees all multithreading objects and bitstream buffers.
+// unsafe-cat: MT
+#[allow(unsafe_code)]
 pub unsafe fn ReleaseMtResource(ppCtx: *mut *mut sWelsEncCtx) {
     if ppCtx.is_null() || (*ppCtx).is_null() {
         return;
@@ -759,6 +795,8 @@ pub unsafe fn ReleaseMtResource(ppCtx: *mut *mut sWelsEncCtx) {
 }
 
 /// Aggregates individual thread-local slice bitstream buffers into the contiguous frame bitstream buffer.
+// unsafe-cat: MT
+#[allow(unsafe_code)]
 pub unsafe fn AppendSliceToFrameBs(
     pCtx: *mut sWelsEncCtx,
     pLbi: *mut SLayerBSInfo,
@@ -830,6 +868,8 @@ pub unsafe fn AppendSliceToFrameBs(
 /// the NAL list is offsets into the thread buffer the slice was claimed into, and
 /// that buffer is `pThreadBsBuffer[pSlice->uiBufferIdx]` — the field that used to
 /// cache it is gone (Phase 6 session B).
+// unsafe-cat: MT
+#[allow(unsafe_code)]
 pub unsafe fn WriteSliceBs(
     pCtx: *mut sWelsEncCtx,
     pSlice: *mut SSlice,
@@ -896,6 +936,8 @@ pub fn DynamicDetectCpuCores() -> i32 {
 }
 
 /// Evaluates load balance and dynamically adjusts slicing for the base spatial dependency layer.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn AdjustBaseLayer(pCtx: *mut sWelsEncCtx) -> i32 {
     if pCtx.is_null() || ctx_dq_layer(pCtx, 0).is_null() {
         return 0;
@@ -921,6 +963,8 @@ pub unsafe fn AdjustBaseLayer(pCtx: *mut sWelsEncCtx) -> i32 {
 }
 
 /// Evaluates load balance and dynamically adjusts slicing for spatial enhancement layers.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn AdjustEnhanceLayer(pCtx: *mut sWelsEncCtx, iCurDid: i32) -> i32 {
     if pCtx.is_null() || ctx_dq_layer(pCtx, 0).is_null() || current_layer(pCtx).is_null() {
         return 0;
@@ -1011,6 +1055,8 @@ mod tests {
     }
 
     #[test]
+    // unsafe-cat: MT
+    #[allow(unsafe_code)]
     fn test_need_dynamic_adjust_zero_consume() {
         let mut dq_layer = layer_with_bank(2);
         let ret = unsafe { NeedDynamicAdjust(&mut dq_layer, 2) };
@@ -1018,6 +1064,8 @@ mod tests {
     }
 
     #[test]
+    // unsafe-cat: MT
+    #[allow(unsafe_code)]
     fn test_calc_slice_complex_ratio() {
         let mut dq_layer = layer_with_bank(2);
         for slice in dq_layer.sSliceBufferInfo[0].pSliceBuffer.iter_mut() {
@@ -1194,12 +1242,15 @@ pub struct SliceJobHandle {
 // for more slices than threads, which the sweep does routinely (`t=2`, `sm=1 n=4`).
 // The worker count here is `min(slices, uiThreadBsBufferNum)` and
 // `SliceJobHandle::new` `debug_assert!`s the bound at construction.
+#[allow(unsafe_code)]
 unsafe impl Send for SliceJobHandle {}
 
 impl SliceJobHandle {
     /// # Safety
     /// `pCtx` must be a live context whose `pSliceThreading` has been built by
     /// `RequestMtResource`, and `iBsSlot` must be a slot that call allocated.
+    // unsafe-cat: MT
+    #[allow(unsafe_code)]
     unsafe fn new(
         pCtx: *mut sWelsEncCtx,
         iBsSlot: i32,
@@ -1228,6 +1279,8 @@ impl SliceJobHandle {
 
 /// The prefix-NAL pair both encode bodies open with
 /// (`CWelsBaseTask::WritePrefixNal`).
+// unsafe-cat: MT
+#[allow(unsafe_code)]
 unsafe fn WritePrefixNalForSlice(
     pCtx: *mut sWelsEncCtx,
     pSlice: *mut SSlice,
@@ -1271,6 +1324,8 @@ struct SliceJobResult {
 /// The slot claim is gone because the slot is the worker's for the whole scope
 /// (part 1 of the seam's argument); the error mutex is gone because the result
 /// travels back through the join instead of being ORed from the worker.
+// unsafe-cat: MT
+#[allow(unsafe_code)]
 unsafe fn EncodeOneSliceInJob(
     pCtx: *mut sWelsEncCtx,
     iSliceIdx: i32,
@@ -1338,6 +1393,8 @@ unsafe fn EncodeOneSliceInJob(
 
 /// How many workers a fork gets: never more than there are slices to encode, and
 /// never more than there are bs scratch buffers behind the slots (F67's bound).
+// unsafe-cat: MT
+#[allow(unsafe_code)]
 unsafe fn ForkWidth(pCtx: *mut sWelsEncCtx, iItemCount: i32) -> i32 {
     let pSmt = (*pCtx).pSliceThreading;
     let iBuffers = if pSmt.is_null() { 1 } else { (*pSmt).uiThreadBsBufferNum as i32 };
@@ -1354,6 +1411,8 @@ unsafe fn ForkWidth(pCtx: *mut sWelsEncCtx, iItemCount: i32) -> i32 {
 /// # Safety
 /// `pCtx` must be a live context with `pSliceThreading` built and the layer's
 /// slice bank sized for `kiSliceCount` slices.
+// unsafe-cat: MT
+#[allow(unsafe_code)]
 pub unsafe fn EncodeFixedSlicesForked(pCtx: *mut sWelsEncCtx, kiSliceCount: i32) -> i32 {
     if pCtx.is_null() || kiSliceCount <= 0 || (*pCtx).pSliceThreading.is_null() {
         return ENC_RETURN_SUCCESS;
@@ -1430,6 +1489,8 @@ pub unsafe fn EncodeFixedSlicesForked(pCtx: *mut sWelsEncCtx, kiSliceCount: i32)
 ///
 /// # Safety
 /// As [`EncodeFixedSlicesForked`].
+// unsafe-cat: MT
+#[allow(unsafe_code)]
 pub unsafe fn UpdateMbMapForked(pCtx: *mut sWelsEncCtx, kiTaskCount: i32) {
     if pCtx.is_null() || kiTaskCount <= 0 || current_layer(pCtx).is_null()
         || (*pCtx).pSliceThreading.is_null()
@@ -1484,6 +1545,8 @@ pub unsafe fn UpdateMbMapForked(pCtx: *mut sWelsEncCtx, kiTaskCount: i32) {
 /// and bs slot `p`, which also makes `NumSliceCodedOfPartition[p]` and
 /// `LastCodedMbIdxOfPartition[p]` — written from inside the encode — disjoint by
 /// construction rather than by the claim.
+// unsafe-cat: MT
+#[allow(unsafe_code)]
 unsafe fn EncodeOnePartitionSizeLimited(
     pCtx: *mut sWelsEncCtx,
     iPartitionIdx: i32,
@@ -1627,6 +1690,8 @@ unsafe fn EncodeOnePartitionSizeLimited(
 /// # Safety
 /// As [`EncodeFixedSlicesForked`], and `iActiveThreadsNum` must be within the
 /// per-thread slice banks `InitSliceThreadInfo` sized.
+// unsafe-cat: MT
+#[allow(unsafe_code)]
 pub unsafe fn EncodeSizeLimitedSlicesForked(pCtx: *mut sWelsEncCtx, kiPartitionCnt: i32) -> i32 {
     if pCtx.is_null() || kiPartitionCnt <= 0 || (*pCtx).pSliceThreading.is_null() {
         return ENC_RETURN_SUCCESS;

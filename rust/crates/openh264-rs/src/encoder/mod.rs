@@ -12,14 +12,15 @@ pub mod param_svc;
 pub mod paraset_strategy;
 pub mod picture;
 pub mod set_mb_syn_cabac;
-// **T6.J6.** `#![deny(unsafe_code)]` above is an inner attribute on the `encoder`
-// module, so it reaches every file below it — including the two the phase does not
-// own. The exemption is spelled here, at the declaration, rather than by leaving the
-// deny off `mod.rs`: this way the deny really is on all 36 modules, and the two that
-// are not covered say so where a reader looking for the boundary will find it. Both
-// retire with Phase 7, and the allow retires with them.
-// unsafe-cat: MT
-#[allow(unsafe_code)]
+// **T6.J6's exemption retired at T7.C8, on schedule.** `#![deny(unsafe_code)]` above
+// is an inner attribute on the `encoder` module, so it reaches every file below it —
+// and until this session two of them were exempted here, at the declaration rather
+// than by leaving the deny off `mod.rs`, so that the boundary was visible where a
+// reader would look for it. `wels_task_management` was the first and it no longer
+// exists (T7.B4); `slice_multi_threading` was the second and it carries its own
+// `#![deny(unsafe_code)]` now, with every one of its 26 unsafe items allowed and
+// tagged. **The declaration list below has no exemptions left**, which is what Phase 6
+// promised for this phase's close.
 pub mod slice_multi_threading;
 pub mod encoder_ext;
 pub mod svc_base_layer_md;

@@ -1540,7 +1540,7 @@ pub const STATISTICS_LOG_INTERVAL_MS: i32 = 5000;
 ///
 /// # Safety
 /// `pDq` must be non-null.
-// unsafe-cat: MT
+// unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe fn FreeSliceInLayer(pDq: *mut SDqLayer) {
     for iIdx in 0..MAX_THREADS_NUM {
@@ -1552,7 +1552,7 @@ pub unsafe fn FreeSliceInLayer(pDq: *mut SDqLayer) {
 ///
 /// # Safety
 /// `pDq` must have come from `InitDqLayers` and must not be used afterwards.
-// unsafe-cat: MT
+// unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe fn FreeDqLayer(p: *mut SDqLayer) {
     if p.is_null() {

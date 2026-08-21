@@ -281,7 +281,7 @@ pub fn WELS_CLIP3(iX: i32, iMin: i32, iMax: i32) -> i32 {
 ///
 /// # Safety
 /// All pointers must be valid and the layer's PPS position assigned.
-// unsafe-cat: port-raw(Phase 7)
+// unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsMdInterUpdatePskip(
     pEncCtx: *mut sWelsEncCtx,
@@ -315,7 +315,7 @@ fn LD32_MV(pMv: &SMVUnitXY) -> u32 {
 ///
 /// # Safety
 /// All pointers must be valid; `pEncCtx->pRefPic` must be assigned.
-// unsafe-cat: port-raw(Phase 7)
+// unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsMdInterJudgePskip(
     pEncCtx: *mut sWelsEncCtx,
@@ -353,7 +353,7 @@ pub unsafe extern "C" fn WelsMdInterJudgePskip(
 ///
 /// # Safety
 /// All four pointers must be valid.
-// unsafe-cat: port-raw(Phase 7)
+// unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsMdInterDecidedPskip(
     pEncCtx: *mut sWelsEncCtx,
@@ -377,7 +377,7 @@ pub unsafe extern "C" fn WelsMdInterDecidedPskip(
 /// # Safety
 /// All pointers must be valid and `pfFirstIntraMode`, `pfSetScrollingMv` and
 /// `pfInterFineMd` assigned — `PreprocessSliceCoding` does this for a P slice.
-// unsafe-cat: port-raw(Phase 7)
+// unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsMdInterSecondaryModesEnc(
     pEncCtx: *mut sWelsEncCtx,
@@ -549,7 +549,7 @@ unsafe fn VaaBackgroundMbDataUpdate(
 ///
 /// # Safety
 /// All pointers must be valid and non-null.
-// unsafe-cat: port-raw(Phase 7)
+// unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsMdBackgroundMbEnc(
     pEncCtx: *mut sWelsEncCtx,
@@ -1444,7 +1444,7 @@ pub unsafe extern "C" fn WelsMdP8x8(
     iCostP8x8
 }
 
-// unsafe-cat: port-raw(Phase 7)
+// unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsInterMbEncode(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSlice, pCurMb: &mut SMB) {
     // Port-added guard deleted with the retyping: `svc_encode_slice.cpp:458` opens at
@@ -1533,7 +1533,7 @@ pub unsafe extern "C" fn SetMvBaseEnhancelayer(
 }
 
 /// Core spatial enhancement layer mode decision without Inter-Layer Prediction.
-// unsafe-cat: port-raw(Phase 7)
+// unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsMdSpatialelInterMbIlfmdNoilp(
     pEncCtx: *mut sWelsEncCtx,
@@ -1626,7 +1626,7 @@ pub unsafe extern "C" fn WelsMdSpatialelInterMbIlfmdNoilp(
 }
 
 /// Top-level MD entry point for spatial enhancement layer inter MBs.
-// unsafe-cat: port-raw(Phase 7)
+// unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsMdInterMbEnhancelayer(
     pEncCtx: *mut sWelsEncCtx,
@@ -1730,7 +1730,7 @@ pub unsafe fn CheckChromaCost(
     !bChromaCostCannotSkip && !bChromaTooLarge
 }
 
-// unsafe-cat: port-raw(Phase 7)
+// unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsMdInterJudgeBGDPskip(
     pEncCtx: *mut sWelsEncCtx,
@@ -1769,7 +1769,7 @@ pub unsafe extern "C" fn WelsMdInterJudgeBGDPskip(
     false
 }
 
-// unsafe-cat: port-raw(Phase 7)
+// unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsMdInterJudgeBGDPskipFalse(
     _pCtx: *mut sWelsEncCtx,
@@ -1993,7 +1993,7 @@ pub unsafe extern "C" fn JudgeScrollSkip(
     bTryScrollSkip
 }
 
-// unsafe-cat: port-raw(Phase 7)
+// unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe extern "C" fn SvcMdSCDMbEnc(
     pEncCtx: *mut sWelsEncCtx,
@@ -2150,7 +2150,7 @@ pub unsafe extern "C" fn SvcMdSCDMbEnc(
     }
 }
 
-// unsafe-cat: port-raw(Phase 7)
+// unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe extern "C" fn MdInterSCDPskipProcess(
     pEncCtx: *mut sWelsEncCtx,
@@ -2232,7 +2232,7 @@ pub unsafe extern "C" fn SetBlockStaticIdcToMd(
         *(*pVaaExt).pVaaBestBlockStaticIdc.offset((kiBlockIndexLow + 1) as isize) as i32;
 }
 
-// unsafe-cat: port-raw(Phase 7)
+// unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsMdInterJudgeSCDPskip(
     pEncCtx: *mut sWelsEncCtx,
@@ -2253,7 +2253,7 @@ pub unsafe extern "C" fn WelsMdInterJudgeSCDPskip(
     false
 }
 
-// unsafe-cat: port-raw(Phase 7)
+// unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsMdInterJudgeSCDPskipFalse(
     _pEncCtx: *mut sWelsEncCtx,
@@ -2340,7 +2340,7 @@ pub unsafe fn TryModeMerge(
     (*pCurMb).uiMbType != MB_TYPE_8x8
 }
 
-// unsafe-cat: port-raw(Phase 7)
+// unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsMdInterFinePartitionVaaOnScreen(
     pEncCtx: *mut sWelsEncCtx,

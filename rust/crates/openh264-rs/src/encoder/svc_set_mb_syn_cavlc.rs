@@ -401,7 +401,7 @@ pub unsafe fn WriteBlockResidualCavlc(
 /// Encodes macroblock prediction headers (macroblock type, intra modes, MVDs) for CAVLC.
 ///
 /// Matches `void WelsSpatialWriteMbPred (sWelsEncCtx* pEncCtx, SSlice* pSlice, SMB* pCurMb)`
-// unsafe-cat: port-raw(Phase 7)
+// unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe fn WelsSpatialWriteMbPred(
     pEncCtx: *mut sWelsEncCtx,
@@ -523,7 +523,7 @@ pub unsafe fn WelsSpatialWriteMbPred(
 /// Encodes 8x8 sub-macroblock prediction headers for CAVLC.
 ///
 /// Matches `void WelsSpatialWriteSubMbPred (sWelsEncCtx* pEncCtx, SSlice* pSlice, SMB* pCurMb)`
-// unsafe-cat: port-raw(Phase 7)
+// unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe fn WelsSpatialWriteSubMbPred(
     pEncCtx: *mut sWelsEncCtx,
@@ -699,7 +699,7 @@ pub fn CheckBitstreamBuffer(
 ///
 /// `extern "C"` came off at T4b.1 with the slot that required it — and with the
 /// thunk its CABAC twin needed to reach the same slot.
-// unsafe-cat: port-raw(Phase 7)
+// unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe fn WelsSpatialWriteMbSyn(
     pEncCtx: *mut sWelsEncCtx,
@@ -1035,7 +1035,7 @@ pub unsafe fn WelsWriteMbResidual(
 /// a trait object.
 ///
 /// [`EntropyCoder`]: crate::encoder::wels_func_ptr_def::EntropyCoder
-// unsafe-cat: port-raw(Phase 7)
+// unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe fn StashMBStatusCavlc(
     pBs: *mut BsWriter,
@@ -1060,7 +1060,7 @@ pub unsafe fn StashMBStatusCavlc(
 }
 
 /// See [`StashMBStatusCavlc`] for why this takes no buffer.
-// unsafe-cat: port-raw(Phase 7)
+// unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe fn StashPopMBStatusCavlc(
     pBs: *mut BsWriter,
@@ -1084,7 +1084,7 @@ pub unsafe fn StashPopMBStatusCavlc(
 /// only has to remember three bitstream cursor fields — copies out the bytes
 /// already emitted, because CABAC renormalisation can rewrite them via
 /// `PropagateCarry`.
-// unsafe-cat: port-raw(Phase 7)
+// unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe fn StashMBStatusCabac(
     buf: &mut [u8],
@@ -1121,7 +1121,7 @@ pub unsafe fn StashMBStatusCabac(
 ///
 /// Note the offset is recomputed from the *restored* context, so
 /// `GetBsPosCabac` is called after `sStoredCabac` has been copied back.
-// unsafe-cat: port-raw(Phase 7)
+// unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe fn StashPopMBStatusCabac(
     buf: &mut [u8],
@@ -1162,7 +1162,7 @@ pub unsafe fn StashPopMBStatusCabac(
 /// `extern "C"` came off at T4b.1 with the slot that required it.
 ///
 /// [`EntropyCoder::GetBsPosition`]: crate::encoder::wels_func_ptr_def::EntropyCoder::GetBsPosition
-// unsafe-cat: port-raw(Phase 7)
+// unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe fn GetBsPosCabac(pSlice: *mut SSlice) -> i32 {
     if pSlice.is_null() {

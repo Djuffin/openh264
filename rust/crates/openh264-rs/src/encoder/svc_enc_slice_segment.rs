@@ -86,7 +86,7 @@ fn GomSizeForMbWidth(kiMbWidth: i32) -> i32 {
 /// # Safety
 /// `pSliceArg` must be non-null, and `uiSliceNum` must be non-zero and no greater than
 /// `uiSliceMbNum`'s length.
-// unsafe-cat: port-raw(Phase 7)
+// unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe fn CheckFixedSliceNumMultiSliceSetting(
     kiMbNumInFrame: i32,
@@ -123,7 +123,7 @@ pub unsafe fn CheckFixedSliceNumMultiSliceSetting(
 /// # Safety
 /// `pSliceArg` must be non-null and `uiSliceNum` no greater than `uiSliceMbNum`'s
 /// length.
-// unsafe-cat: port-raw(Phase 7)
+// unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe fn CheckRowMbMultiSliceSetting(kiMbWidth: i32, pSliceArg: *mut SSliceArgument) -> bool {
     let pSlicesAssignList = (*pSliceArg).uiSliceMbNum.as_mut_ptr() as *mut i32;
@@ -145,7 +145,7 @@ pub unsafe fn CheckRowMbMultiSliceSetting(kiMbWidth: i32, pSliceArg: *mut SSlice
 ///
 /// # Safety
 /// `pSliceArg` must be non-null.
-// unsafe-cat: port-raw(Phase 7)
+// unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe fn CheckRasterMultiSliceSetting(
     kiMbNumInFrame: i32,
@@ -238,7 +238,7 @@ pub unsafe fn GomValidCheckSliceNum(
 /// # Safety
 /// `pSliceArg` must be non-null with a non-zero `uiSliceNum` no greater than
 /// `uiSliceMbNum`'s length.
-// unsafe-cat: port-raw(Phase 7)
+// unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe fn GomValidCheckSliceMbNum(
     kiMbWidth: i32,
@@ -309,7 +309,7 @@ pub unsafe fn GomValidCheckSliceMbNum(
 ///
 /// # Safety
 /// `pSliceArgument` must be non-null and writable.
-// unsafe-cat: port-raw(Phase 7)
+// unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe fn SliceArgumentValidationFixedSliceMode(
     _pLogCtx: *mut SLogContext,
@@ -410,7 +410,7 @@ pub fn AssignMbMapSingleSlice(pMbMap: &mut [u16], kiCountMbNum: i32) -> i32 {
 ///
 /// # Safety
 /// `pCurDq` must be non-null with `sSliceEncCtx.pOverallMbMap` allocated.
-// unsafe-cat: port-raw(Phase 7)
+// unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe fn AssignMbMapMultipleSlices(
     pCurDq: *mut SDqLayer,
@@ -485,7 +485,7 @@ pub unsafe fn AssignMbMapMultipleSlices(
 ///
 /// # Safety
 /// `pSliceArgument` may be null, which returns -1 as in C++.
-// unsafe-cat: port-raw(Phase 7)
+// unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe fn GetInitialSliceNum(pSliceArgument: *const SSliceArgument) -> i32 {
     if pSliceArgument.is_null() {
@@ -506,7 +506,7 @@ pub unsafe fn GetInitialSliceNum(pSliceArgument: *const SSliceArgument) -> i32 {
 ///
 /// # Safety
 /// `pCurDq` and `pSliceArgument` must be non-null.
-// unsafe-cat: MT
+// unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe fn InitSliceSegment(
     pCurDq: *mut SDqLayer,
@@ -595,7 +595,7 @@ pub unsafe fn InitSliceSegment(
 ///
 /// # Safety
 /// `pCurDq` and `pMa` must be non-null.
-// unsafe-cat: MT
+// unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe fn UninitSliceSegment(pCurDq: *mut SDqLayer) {
     let pSliceSeg = &mut (*pCurDq).sSliceEncCtx as *mut SSliceCtx;
@@ -620,7 +620,7 @@ pub unsafe fn UninitSliceSegment(pCurDq: *mut SDqLayer) {
 ///
 /// # Safety
 /// `pCurDq` may be null, which returns 1 as in C++.
-// unsafe-cat: MT
+// unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe fn InitSlicePEncCtx(
     pCurDq: *mut SDqLayer,
@@ -641,7 +641,7 @@ pub unsafe fn InitSlicePEncCtx(
 ///
 /// # Safety
 /// `pMa` must be non-null when `pCurDq` is.
-// unsafe-cat: MT
+// unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe fn UninitSlicePEncCtx(pCurDq: *mut SDqLayer) {
     if !pCurDq.is_null() {

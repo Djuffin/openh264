@@ -599,7 +599,7 @@ impl SWelsRcFunc {
     /// As [`WelsRcPictureInit`](SWelsRcFunc::WelsRcPictureInit); `pCurMb` and
     /// `pSlice` must be live.
     #[inline]
-    // unsafe-cat: port-raw(Phase 7)
+    // unsafe-cat: port-raw(Phase 9)
     #[allow(unsafe_code)]
     pub unsafe fn WelsRcMbInit(self, pCtx: *mut sWelsEncCtx, pCurMb: &mut SMB, pSlice: *mut SSlice) {
         match self.eInstalledMode {
@@ -618,7 +618,7 @@ impl SWelsRcFunc {
     /// # Safety
     /// As [`WelsRcMbInit`](SWelsRcFunc::WelsRcMbInit).
     #[inline]
-    // unsafe-cat: port-raw(Phase 7)
+    // unsafe-cat: port-raw(Phase 9)
     #[allow(unsafe_code)]
     pub unsafe fn WelsRcMbInfoUpdate(
         self,
@@ -1375,7 +1375,7 @@ pub unsafe fn RcCalculatePictureQp(pEncCtx: *mut sWelsEncCtx) {
 }
 
 /// Initializes slice-level GOM rate control parameters.
-// unsafe-cat: port-raw(Phase 7)
+// unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe fn GomRCInitForOneSlice(pSlice: *mut SSlice, kiBitsPerMb: i32) {
     if pSlice.is_null() {
@@ -1554,7 +1554,7 @@ pub unsafe fn RcInitGomParameters(pEncCtx: *mut sWelsEncCtx) {
 }
 
 /// Assigns final macroblock luma and chroma QPs.
-// unsafe-cat: port-raw(Phase 7)
+// unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe fn RcCalculateMbQp(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSlice, pCurMb: &mut SMB) {
     let did = (*pEncCtx).uiDependencyId as usize;
@@ -1610,7 +1610,7 @@ pub unsafe fn RcJudgeBaseUsability(pEncCtx: *mut sWelsEncCtx) -> *mut SWelsSvcRc
 }
 
 /// Distributes slice bit budget to the upcoming GOM unit.
-// unsafe-cat: port-raw(Phase 7)
+// unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe fn RcGomTargetBits(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSlice) {
     let did = (*pEncCtx).uiDependencyId as usize;
@@ -1656,7 +1656,7 @@ pub unsafe fn RcGomTargetBits(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSlice) {
 }
 
 /// Dynamically adjusts slice QP at GOM boundaries.
-// unsafe-cat: port-raw(Phase 7)
+// unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe fn RcCalculateGomQp(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSlice, _pCurMb: &mut SMB) {
     let did = (*pEncCtx).uiDependencyId as usize;
@@ -2318,7 +2318,7 @@ pub unsafe extern "C" fn WelsRcPictureInfoUpdateGom(pEncCtx: *mut sWelsEncCtx, i
     }
 }
 
-// unsafe-cat: port-raw(Phase 7)
+// unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsRcMbInitGom(
     pEncCtx: *mut sWelsEncCtx,
@@ -2368,7 +2368,7 @@ pub unsafe extern "C" fn WelsRcMbInitGom(
     }
 }
 
-// unsafe-cat: port-raw(Phase 7)
+// unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsRcMbInfoUpdateGom(
     pEncCtx: *mut sWelsEncCtx,
@@ -2427,7 +2427,7 @@ pub unsafe extern "C" fn WelsRcPictureInitDisable(pEncCtx: *mut sWelsEncCtx, _ui
 #[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsRcPictureInfoUpdateDisable(_pEncCtx: *mut sWelsEncCtx, _iLayerSize: i32) {}
 
-// unsafe-cat: port-raw(Phase 7)
+// unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsRcMbInitDisable(
     pEncCtx: *mut sWelsEncCtx,
@@ -2460,7 +2460,7 @@ pub unsafe extern "C" fn WelsRcMbInitDisable(
 
 /// Intentional no-op macroblock-level RC update callback when rate control is disabled.
 /// Matches `WelsRcMbInfoUpdateDisable` in `ratectl.cpp:1319`.
-// unsafe-cat: port-raw(Phase 7)
+// unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsRcMbInfoUpdateDisable(
     _pEncCtx: *mut sWelsEncCtx,
@@ -2619,7 +2619,7 @@ pub unsafe extern "C" fn WelsRcPictureInfoUpdateScc(pEncCtx: *mut sWelsEncCtx, i
     }
 }
 
-// unsafe-cat: port-raw(Phase 7)
+// unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsRcMbInitScc(
     pEncCtx: *mut sWelsEncCtx,

@@ -915,7 +915,7 @@ pub unsafe fn WelsCalNonZeroCount2x2Block(pBlock: *const i16) -> i32 {
     }
 }
 
-// unsafe-cat: port-raw(Phase 7)
+// unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe fn WelsWriteMbResidualCabac(
     buf: &mut [u8],
@@ -1112,7 +1112,7 @@ pub unsafe fn WelsWriteMbResidualCabac(
 // Top-Level Slice & Macroblock CABAC Entry Points
 // ============================================================================
 
-// unsafe-cat: port-raw(Phase 7)
+// unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe fn WelsInitSliceCabac(
     pEncCtx: *mut crate::encoder::encoder_context::sWelsEncCtx,
@@ -1141,7 +1141,7 @@ pub unsafe fn WelsInitSliceCabac(
     }
 }
 
-// unsafe-cat: port-raw(Phase 7)
+// unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe fn WelsSpatialWriteMbSynCabac(
     pEncCtx: *mut crate::encoder::encoder_context::sWelsEncCtx,
