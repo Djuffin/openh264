@@ -1,9 +1,9 @@
 {
-  "commit": "638e1436",
+  "commit": "848f90c2",
   "metrics": ["unsafe_fn", "unsafe_block", "raw_ptr", "transmute", "unsafe_impl", "mem_zeroed", "no_mangle", "shim"],
   "files": {
     "api/abi_guard.rs": { "unsafe_fn": 0, "unsafe_block": 0, "raw_ptr": 0, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 0, "no_mangle": 0, "shim": 0 },
-    "api/codec_api.rs": { "unsafe_fn": 49, "unsafe_block": 44, "raw_ptr": 259, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 0, "no_mangle": 5, "shim": 0 },
+    "api/codec_api.rs": { "unsafe_fn": 53, "unsafe_block": 47, "raw_ptr": 263, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 0, "no_mangle": 5, "shim": 0 },
     "api/mod.rs": { "unsafe_fn": 0, "unsafe_block": 0, "raw_ptr": 0, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 0, "no_mangle": 0, "shim": 0 },
     "common/copy_mb.rs": { "unsafe_fn": 1, "unsafe_block": 2, "raw_ptr": 2, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 0, "no_mangle": 0, "shim": 0 },
     "common/cpu_core.rs": { "unsafe_fn": 0, "unsafe_block": 0, "raw_ptr": 0, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 0, "no_mangle": 0, "shim": 0 },
@@ -65,7 +65,7 @@
     "encoder/svc_set_mb_syn_cabac.rs": { "unsafe_fn": 17, "unsafe_block": 22, "raw_ptr": 25, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 0, "no_mangle": 0, "shim": 0 },
     "encoder/svc_set_mb_syn_cavlc.rs": { "unsafe_fn": 12, "unsafe_block": 1, "raw_ptr": 31, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 0, "no_mangle": 0, "shim": 0 },
     "encoder/vlc_encoder.rs": { "unsafe_fn": 1, "unsafe_block": 1, "raw_ptr": 6, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 0, "no_mangle": 0, "shim": 0 },
-    "encoder/wels_encoder_ext.rs": { "unsafe_fn": 16, "unsafe_block": 12, "raw_ptr": 93, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 0, "no_mangle": 2, "shim": 0 },
+    "encoder/wels_encoder_ext.rs": { "unsafe_fn": 16, "unsafe_block": 8, "raw_ptr": 85, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 0, "no_mangle": 2, "shim": 0 },
     "encoder/wels_func_ptr_def.rs": { "unsafe_fn": 4, "unsafe_block": 1, "raw_ptr": 39, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 2, "no_mangle": 0, "shim": 0 },
     "encoder/wels_preprocess.rs": { "unsafe_fn": 46, "unsafe_block": 0, "raw_ptr": 86, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 0, "no_mangle": 0, "shim": 0 },
     "lib.rs": { "unsafe_fn": 0, "unsafe_block": 0, "raw_ptr": 0, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 0, "no_mangle": 0, "shim": 0 },
