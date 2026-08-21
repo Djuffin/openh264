@@ -149,3 +149,56 @@ one thread per slice — the charter's literal shape — hands out a slot index 
 null buffer behind it as soon as a fixed mode asks for more slices than threads, and
 the sweep asks for that routinely (`t=2` with `sm=1 n=4`). **Cap the concurrency at
 the buffer count, or allocate one buffer per slice.**
+
+---
+
+## F68 — the encoder bench's thread axis does not exercise threading: every `[4t]` row runs the single-threaded path
+
+**Status: OPEN, one line to fix, and it blocks a decision the charter delegates to
+the span.** Found by session A while reading the T7.A span rather than by the span
+failing.
+
+`benches/c_vs_rust_bench.rs` sweeps `iMultipleThreadIdc` over `BENCH_THREADS`
+(default `1,4`) and reports a row per stream per thread count. It builds its
+parameters with `GetDefaultParams` and then sets width, height, frame rate,
+bitrate, `iSpatialLayerNum` and `iMultipleThreadIdc` — **and nothing else**
+(`:179`). In particular it never sets
+`sSpatialLayers[0].sSliceArgument.uiSliceMode`, which `GetDefaultParams` leaves at
+**`SM_SINGLE_SLICE`** (`param_svc.rs:385` and `:473`, `encoder_ext.rs:1613`).
+
+Parameter validation never raises the slice mode to match a thread count; it only
+ever forces it *down* to `SM_SINGLE_SLICE` (`encoder_ext.cpp:543`, `:601`, `:609`,
+and the Rust mirror). And `SM_SINGLE_SLICE` is the **first** arm of the slice-mode
+chain in `WelsEncoderEncodeExt` (`encoder_ext.rs:3290`), tested before any
+`iMultipleThreadIdc > 1` condition in the chain: it calls `WelsCodeOneSlice` on the
+calling thread and returns.
+
+So a `[4t]` row creates a thread pool, takes a reference to it, allocates
+`iCountBsLen` bytes per worker — and hands it no task. The measured speedup is
+**0.0% to 1.4% at every resolution from QVGA to 1080p** (numbers in
+`perf_baseline.md`, Phase 7 session A). That is the signature of a path that never
+runs, and it has been read as noise in every prior span.
+
+**What it blocks.** `prompts/phase7.md` §1 makes the persistent pool conditional:
+"rebuilt safely **only if** the span shows spawn cost". With this bench the span
+cannot show spawn cost in either direction, so the condition can be neither met nor
+refuted — and a pool decision taken from these numbers would be taken from nothing.
+
+**The fix**, and it is byte-neutral to the codec because it only changes what the
+bench asks for:
+
+```rust
+param.sSpatialLayers[0].sSliceArgument.uiSliceMode = SM_FIXEDSLCNUM_SLICE;
+param.sSpatialLayers[0].sSliceArgument.uiSliceNum  = threads.max(1);
+```
+
+behind a knob beside the existing `BENCH_THREADS` (say `BENCH_SLICE_MODE`), so the
+`SM_SINGLE_SLICE` rows stay comparable with every span already in
+`perf_baseline.md`. Adding rows rather than changing them keeps the ledger's history
+readable, which is why a knob and not an edit.
+
+**One thing this does *not* mean.** The MT path is not untested — the diffharness
+`mt` preset drives all four slice modes at `t ∈ {2,4}` and 120 configurations a
+sweep, and that is where F3 lives. It is untested *for speed*. The byte instrument
+and the perf instrument disagree about which paths they cover, and only the byte one
+was ever checked.

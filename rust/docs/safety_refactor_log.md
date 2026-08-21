@@ -13049,3 +13049,162 @@ Deleted at T7.A2.
 `WelsTaskBarrier` (`wels_task_management.rs:637`) — a `Mutex<i32>` + `Condvar`,
 `set_count` before dispatch, `decrement_and_signal` from `OnTaskExecuted`,
 `wait_for_completion` after. That is the join, and it is already safe Rust.
+
+### T7.A2 / T7.A3 — the dead machinery out, and a leak that has been there since the raw translation
+
+`1daf8741`. Eight fields deleted from `SSliceThreading`, every one proved dead in
+T7.A1: `eventNamespace`, `pThreadHandles`, `pSliceCodedEvent`,
+`pSliceCodedMasterEvent`, `pReadySliceCodingEvent`, `pUpdateMbListEvent`,
+`pFinUpdateMbListEvent`, `mutexEvent`. Byte-neutral by construction — the deleted
+fields had **zero readers**; the only references outside the struct and its `Default`
+were the comments describing them. `c_char`'s import followed `eventNamespace` out.
+
+**T7.A3, the leak.** `ReleaseMtResource` nulled `pThreadBsBuffer[i]` and never freed
+it. The C++ frees (`slice_multi_threading.cpp:426`); `git log -S` puts the omission in
+`68c4f6a5 "Raw translation"`, so **every encoder instance with
+`iMultipleThreadIdc > 1` has leaked `iCountBsLen` bytes per worker for the life of the
+process, in every build this project has ever shipped**. Nothing caught it: it is not
+a byte question, the Miri `--lib` gate skips the pool (F12), and the encoder tests
+never take the `> 1` path. Found by reading for T7.A1's premise-1 proof, which is the
+argument for that step existing.
+
+The fix needs one new field. Rust's `dealloc` wants the `Layout` back and the C++
+allocator carried its own size table (`pMa->WelsFree`), so `uiThreadBsBufferLen`
+records the `iCountBsLen` the buffers were allocated with. Zero-safe: the struct is
+still `alloc_zeroed`, and a zero length skips the free.
+
+### T7.A4 — **F67**, and why there is no fork/join in this session
+
+Full finding: `phase7_findings.md`. The short form, because it re-scopes the phase:
+
+The charter's two premises are about **scheduling** and both hold (T7.A1). The target
+shape needs a third thing nobody wrote down — `shared` must be able to cross the
+spawn — and that is a property of the *type*: `Scope::spawn` wants `Send`, a captured
+`&T` wants `T: Sync`. Session A asked the compiler instead of arguing:
+
+```rust
+fn _probe_assert_sync<T: Sync>() {}
+fn _probe_ctx_sync() { _probe_assert_sync::<sWelsEncCtx>(); }   // probe, reverted
+```
+
+**12 `E0277`s, 12 distinct blocking raw-pointer types**, five reached through types
+other phases own (`SWelsSvcCodingParam` → Phase 8, `SScreenBlockFeatureStorage` →
+Phase 10, `CMemoryAlign` → session B, `SVAAFrameInfo`/`CWelsPreProcess` → the
+preprocessor). Every workaround is either forbidden by the standing rules or is the
+thing the phase exists to delete: `unsafe impl Sync` (adds a sixth pair to delete
+five), a `Send` newtype (that is `TaskPtr`), a `usize` laundering (on the delete
+list), and the charter's own `mpsc::Sender<Box<dyn FnOnce + Send>>` fallback, which
+has the identical hole because a closure capturing the context is not `Send` either.
+
+**The measurement that makes this more than an obstacle.** The 105 tagged items this
+phase was handed — 89 `port-raw(Phase 7)` + 16 `MT` — are distributed
+`svc_encode_slice` 40, `svc_mode_decision` 15, `svc_enc_slice_segment` 11, `rc` 11,
+`svc_set_mb_syn_cavlc` 8, `svc_base_layer_md` 5, `wels_func_ptr_def` 4,
+`svc_set_mb_syn_cabac` 3, `nal_encap` 3, and **zero in `slice_multi_threading.rs`,
+`wels_task_management.rs` or `common/wels_thread_pool.rs`**. They are the slice-encode
+call tree's raw signatures — which is exactly the set that would have to become
+`&`/`&mut` splits for `encode_slice(job, shared)` to compile. **The tag inventory and
+the blocker are the same object.** The context split is a precondition of the
+fork/join, not a consequence, and the session plan had them the other way round.
+
+Session A did not resolve this on its own authority. Rule 7 of the brief says a design
+corner that seems to need an `unsafe impl` means stop and re-read the target shape;
+the target shape was re-read, and the compiler says the corner is real rather than
+apparent. So the session stopped at a green, whole-mode boundary — the phase's own
+drop rule — and put three orderings in front of the phase owner (`phase7.md` §3).
+**Nothing was half-converted; the tree at the close is `b08d6c47` plus two deletions
+and a leak fix.**
+
+### The close — session A
+
+**Gates.** `gates.sh commit` green on every commit (496 debug / 490 release tests,
+ratchet no per-file increase, census 58). Two `family` batteries over `1daf8741`:
+
+```
+battery 1   sweep debug   368/369      sweep release 369/369
+battery 2   sweep debug   369/369      sweep release 368/369
+```
+
+Each profile read **369/369 once**, neither battery was clean in both at once, and
+**both misses are the same F3 configuration family** — `mt
+CiscoVT2people_320x192_12fps t=4 sm=3 n=600 cabac=1`, at rc=0 and rc=1, Rust 0 bytes
+both times. This is stated as it happened rather than as "369/369 both profiles":
+the configuration those two batteries missed on is the one measurement 88 had just
+characterised at ≈1/120 on this machine, the `mt` preset runs it four times per
+battery, and one hit per battery is the expected count, not an anomaly. Adjudicated
+as **measurement 89** — the one-hit retry read 4/5, so the alternation ran, HEAD
+`9/500` against control `b08d6c47` `7/500`, interleaved, control drawing every shape.
+
+**Perf.** The span (`perf_baseline.md`, this session): decode median **−0.13%**,
+encode median **+0.00%**, 0 rows over +5%, against a null floor of +0.07% / +0.00%.
+No median breach. Cumulative encoder deficit unmoved at ≈ **+15…+17%** against
+D-perf-4's **+25%** tripwire.
+
+**The spawn-cost question the brief asked the span to answer is not answerable, and
+that is F68.** `c_vs_rust_bench` never sets `uiSliceMode`, `GetDefaultParams` leaves
+it `SM_SINGLE_SLICE`, and `SM_SINGLE_SLICE` is the first arm of the slice-mode chain
+— taken before any `iMultipleThreadIdc > 1` test. Every `[4t]` row in the encoder
+bench therefore runs the single-threaded path, which is why four threads buys 0.0% to
+1.4% at every resolution from QVGA to 1080p. **So the charter's condition for
+rebuilding the persistent pool — "only if the span shows spawn cost" — can currently
+be neither met nor refuted**, and B should fix the bench (one knob beside
+`BENCH_THREADS`) before it treats the pool question as decided by anything.
+
+**What the session spent, honestly.** Two of the four steps landed as briefed
+(step 0, step 1). Step 2 did not: it produced **F67** instead of a fork/join, and the
+finding is the deliverable. Step 3 (first denies) was not reachable — none of the
+three seam files came close to empty of unsafe, and their module-level allows stand.
+
+**Numbers at the close** (re-grepped, not carried):
+
+| | at `b08d6c47` | at close |
+|---|---|---|
+| `port-raw(Phase 7)` tags | 89 | **89** |
+| `MT` tags | 16 | **16** |
+| `unsafe impl` (census) | 11 | **11** |
+| `static mut` | 1 | **1** |
+| `TaskPtr` references | 14 | **14** |
+| modules denied | 36 of 38 | **36 of 38** |
+| new `unsafe` written | — | **0** |
+
+**Zero of the 105 tagged items retired**, and the reason is F67's measurement: they
+are not the pool's, they are the slice-encode call tree's, and they retire with the
+context split rather than with the threading rewrite. The `.rs` diff for the whole
+session is **one file, +31/−26**.
+
+### What session B inherits, exactly
+
+1. **The ordering decision** (`phase7.md` §3, three options). Everything else in B's
+   shape follows from it. This is not a judgement call B can defer into its work.
+2. **The F3 before-arm**: 3000 runs, 25 hits, ≈1/120, `phase0_findings.md`
+   measurement 88, scripts in T7.A0 above. The after-arm must be **2000 runs** (500
+   gives e⁻⁴·² ≈ 1.5%, not a verdict) and must run `f3_arm.sh` **verbatim** —
+   measurement 89 shows density alone moves the rate 1/120 → 1/63.
+3. **Premise 1's unwritten bound**: cap concurrency at the allocated buffer count
+   (`min(GetThreadPoolThreadNum(), MAX_THREADS_NUM)`), not at `MAX_THREADS_NUM`.
+   `QueryEmptyThread` scans all slots; only that many buffers exist; today it is the
+   pool's cap that keeps the claim in range. A fixed mode with more slices than
+   threads (`t=2`, `sm=1 n=4` — in the sweep) breaks a naive one-thread-per-slice
+   fork/join immediately.
+4. **F68**: fix the bench before reading any pool decision out of a span.
+5. **Untouched and still B's**, exactly as the brief left them: the whole
+   `SM_SIZELIMITED` / `ConstrainedSizeSlicing` path, `DynamicSliceBs`,
+   `sSliceBs.pBs`, `AppendSliceToFrameBs`/`WriteSliceBs` ordering, the F12 Miri skip,
+   the decoder threading stubs (F36).
+6. **Two things that are done and need no revisiting**: the eight dead event fields
+   (gone, with the site-by-site grep), and `pThreadBsBuffer`'s free (present, with
+   `uiThreadBsBufferLen` carrying the layout). Both are inside `SSliceThreading`,
+   which B will rewrite — the record is here so B does not re-derive them.
+7. **One thing found and not fixed, owner named.** `bUseLoadBalancing` is `false` in
+   both diffharness drivers (`cxx_enc.cpp:119`) and false in `SEncParamExt::default`,
+   so `CWelsLoadBalancingSlicingEncodingTask`, `AdjustBaseLayer`,
+   `AdjustEnhanceLayer`, `DynamicAdjustSlicing`, `NeedDynamicAdjust` and
+   `UpdateMbListNeighborParallel` (which `InitFrame` only fires when
+   `bNeedAdjustingSlicing`) have **no byte coverage in any gate this project owns**.
+   They are reachable through the public API. Worth saying plainly: that path's
+   output is *inherently* nondeterministic — `NeedDynamicAdjust` reads
+   `uiSliceConsumeTime`, so slice boundaries on frame N+1 depend on how long frame N's
+   slices took — which is presumably why the harness disables it, and is a good reason
+   not to "simplify" it during a conversion nothing can check. **Owner: session B,
+   with the `SM_SIZELIMITED` work**, since the load-balancing task is the one
+   `ConstrainedSizeSlicing` derives from.

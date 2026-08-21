@@ -2872,3 +2872,73 @@ roughly 8–10 points. **D-perf-6's parked recovery is untouched and remains Pha
 cost (`WelsRcMbInitGom` / `ctx_rc_at`) and session J's F66, which says the context
 conversion — and whatever it is worth — cannot be attempted until Phase 9's own
 cursors retire.
+
+---
+
+## Phase 7 session A — the span, and the discovery that the encoder bench has no thread axis
+
+`perfpair.py` at **A = `b08d6c47`** (Phase 6's close) against **B = `08ce7775`**
+(session A's head), `--pairs 7`, plus a `null head --pairs 7` floor on the same
+machine minutes later. `FFMPEG=/opt/homebrew/bin/ffmpeg BENCH_REQUIRE_FFMPEG=1`.
+
+| bench | span (B vs A) | null floor |
+|---|---|---|
+| decode, 3 rows | median **−0.13%** (−0.61 … −0.06%) | median +0.07% (−0.03 … +0.12%) |
+| encode, 28 rows | median **+0.00%** (−0.95 … +1.37%) | median +0.00% (−0.36 … +0.68%) |
+
+Rows over +5%: **0**, both benches, both directions. `Spatial Ramps` excluded as
+always (+41%/+40% here, against its recorded ±38%/+226% range on one binary).
+
+**No median breach, so no bisection.** The span is a null by construction and reads
+like one: it contains two field deletions from a struct nothing read, one `dealloc`
+call at teardown, and documentation. No threading was changed, no spawn was
+introduced, and no code on any encode path moved.
+
+### The spawn-cost question, answered — and not the way the brief expected
+
+The session brief asks the span to answer whether spawn cost is real, "rows per
+thread-count compared". **It cannot, and neither can any future span, until the
+bench is changed. This is F68.**
+
+`c_vs_rust_bench` builds its parameters with `GetDefaultParams` and then sets only
+width, height, frame rate, bitrate, layer count and `iMultipleThreadIdc`
+(`benches/c_vs_rust_bench.rs:179`). It never sets
+`sSpatialLayers[0].sSliceArgument.uiSliceMode`, and `GetDefaultParams` leaves it
+**`SM_SINGLE_SLICE`** (`param_svc.rs:385`, `:473`; `encoder_ext.rs:1613`). Validation
+only ever forces the slice mode *down* to `SM_SINGLE_SLICE` — it never raises it for
+a thread count (`encoder_ext.cpp:543`, `:601`, `:609`, and the Rust mirror).
+
+And `SM_SINGLE_SLICE` is the **first** branch of the slice-mode chain in
+`WelsEncoderEncodeExt` (`encoder_ext.rs:3290`), taken before any
+`iMultipleThreadIdc > 1` test is reached: it calls `WelsCodeOneSlice` directly on
+the calling thread. **So every `[4t]` row in this bench runs the same
+single-threaded path as its `[1t]` row**, and `iMultipleThreadIdc` buys a thread
+pool that is created, referenced and never given a task.
+
+The numbers say exactly that, and they always did — this is the first time anyone
+read them as a measurement rather than as noise. Base arm, `[1t]` against `[4t]`:
+
+```
+QVGA SMPTE Bars      0.0740 / 0.0740      1080p Mandelbrot   10.3180 / 10.2200  (0.95%)
+QVGA RGB Test        0.0820 / 0.0820      1080p SMPTE Bars    3.1570 /  3.1550  (0.06%)
+QVGA Mandelbrot      0.9190 / 0.9170      1080p Testsrc       4.4950 /  4.4840  (0.24%)
+720p Mandelbrot      5.1800 / 5.1400      VGA Mandelbrot      2.3530 /  2.3340  (0.81%)
+```
+
+**Four threads buys between 0.0% and 1.4% at every resolution up to 1080p.** For a
+bench whose thread axis is its whole point, that is not a small speedup — it is the
+signature of a path that never runs.
+
+**Consequence for session B and for the pool decision.** The charter says the
+persistent pool is rebuilt "only if the span shows spawn cost". As things stand the
+span *cannot* show spawn cost in either direction, so **that condition can neither be
+met nor refuted, and a decision taken from these numbers would be taken from nothing.**
+Before the pool question is answerable, the bench needs one line —
+`param.sSpatialLayers[0].sSliceArgument.uiSliceMode = SM_FIXEDSLCNUM_SLICE` with
+`uiSliceNum = threads` — or a `BENCH_SLICE_MODE` knob beside the existing
+`BENCH_THREADS`. That is a bench change, byte-neutral to the codec, and it is the
+cheapest item on B's list.
+
+**Cumulative position, as D-perf-4 requires.** Unmoved: encoder deficit ≈
+**+15…+17%** against the **+25%** tripwire, unbreached by 8–10 points. D-perf-6's
+parked recovery remains Phase 9's.
