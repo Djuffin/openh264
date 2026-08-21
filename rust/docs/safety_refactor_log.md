@@ -12566,3 +12566,390 @@ median — unbreached by roughly 8-10 points.**
 3. **Step 3**, the deny sweep — 894+ items, scoped by whatever (1) decides.
 4. **Steps 4 and 5**, the exit conditions and the close, including the one unscoped
    `exit` battery (349 tests, ~1411 s) that D-gate-2 reserves for the phase exit.
+
+---
+
+## 2026-08-20 — Phase 6, session J (the deny sweep lands under D-exit-1; step 1 is measured and reverted; the phase closes)
+
+**Goal:** [`prompts/phase6_session_j.md`](prompts/phase6_session_j.md) — execute
+D-exit-1's five-way tagging, convert the ~117 context parameters root-down, and
+close Phase 6.
+
+**Started at** `2bcf0743`, **ended at** ``e69a0984``. Working tree clean at both ends.
+
+### What landed
+
+| commit | what |
+|---|---|
+| `c593e428` | T6.J1 — depth 0, 45 context signatures to `&mut` *(reverted)* |
+| `0f23f0e5` | T6.J2 — depth 1, 29 more *(reverted)* |
+| `ee2b2d68` | T6.J3 — depth 2, 26 more *(reverted)* |
+| `b21b2e74` | T6.J4 — depths 3 and 4, 9 more; step 1 at 109 *(reverted)* |
+| `78ff9035` | T6.J5 — **step 1 reverted in full**, and F66 records why |
+| `e69a0984` | T6.J6 — **the deny sweep**: 36 modules denied, 775 allow items, all five-way tagged |
+| *(this entry)* | T6.J-close — the phase-close record |
+
+### Step 1: converted, gated, Miri'd, reverted — F66
+
+Step 1 was done, not skipped. The convertible set is **109**, not the brief's 117:
+re-running the split (hard rule 4) gives 113 ctx-only non-MT signatures, and four
+of those take `*mut *mut sWelsEncCtx` — an out-parameter, where `&mut &mut` is a
+different type. All 109 converted, root-down in five depth levels computed from the
+call graph (max depth 4, no cycles), one level per commit, each green on
+`gates.sh commit` at 496/490, sweeps 368/369 both profiles.
+
+The transform was signature-only plus one derivation, with `{ unsafe {` on the
+signature line and `}}` at the close so the body kept its indentation and the diff
+stayed three lines per function. **Zero `unused_unsafe` warnings**: all 109 bodies
+genuinely needed the raw, so none was a candidate for a fully safe body.
+
+**Then the aliasing checker refused it, and the reason generalises.** A
+`&mut sWelsEncCtx` function-entry retag invalidates the **whole** context —
+Miri prints the range, `[0x0..0x17ee8]` — where a raw write through the parent pops
+only the offsets it touches. That asymmetry is why the port's dominant idiom (derive
+a cursor from the context, call something, use the cursor) has been sound for five
+phases and stops being sound the moment a context parameter becomes a reference.
+
+Measured before deciding: **64 of the 109 have at least one call site holding a
+context-derived pointer across the call** — 93 sites in 28 callers, worst
+`WelsEncoderEncodeExt` at 68, which is the frame loop and whose job is to hold
+cursors. Three of the 64 are cursor accessors themselves (`ctx_pic_ref_mut`,
+`ctx_ref_pic`, `set_current_layer`), where the problem is sharpest: taking `&mut`
+makes an accessor invalidate what it exists to hand out.
+
+Miri found **two** of the 93, one per run, aborting at the first. That ratio is
+coverage, not defect rate: the rest are on LTR, screen-content and timestamp-RC
+paths the encoder probe does not drive. **rustc reports none of them, at any
+optimisation level.**
+
+Reverted rather than patched, for three reasons, in order:
+
+1. Several of the calls involved reallocate the container the held cursor points
+   into (`ExtendLayerBuffer`, `ReallocSliceBuffer`, `RequestMemorySvc`), so
+   reordering a derivation past one is a behaviour change — hard rule 8's line.
+2. Keeping the 45 with no detected hazard rests on a heuristic detector; a false
+   negative is silent UB with no gate behind it, and the set is unstable — the next
+   session to add a cursor at one of those sites reintroduces it.
+3. **Ordering is irrelevant to this class.** It is a *caller-side* property. The
+   root-down rule prevents a converted callee under a raw caller; it does nothing
+   about a caller holding a cursor. Converting deeper first would not have helped.
+
+**It cost the phase nothing.** The context conversion is not one of §7's five exit
+conditions. F66 carries the detector and the recommendation into Phase 9's brief:
+do this conversion *after* the plane and macroblock cursors retire, and run the
+detector as the precondition rather than as the post-mortem.
+
+Three findings by-caught on the way, each recorded in F66:
+
+- `test_rc_intentional_noop_callbacks` and `test_ref_list_mgr_noop_callback` proved
+  their callbacks read nothing by passing `std::ptr::null_mut()`. Against `&mut`
+  that is UB and `deny(deref_nullptr)` **rejects it at compile time** — the safe
+  signature took the tests' proof technique away, which is worth knowing about any
+  no-op-callback test in this tree.
+- Four methods on `CWelsParametersetIdStrategyObj` (`GenerateNewSps`, `InitPps`,
+  `UpdatePpsList`, `UpdateParaSetNum`) are **Q2 survivors** the signature scan
+  cannot see: `self` is reached *through* `pCtx`, so `ParasetStrategy(&mut *pCtx)
+  .Method(&mut *pCtx)` derives two `&mut` over one object. A signature-only census
+  will always miss this shape.
+- `&mut T` coerces to `*mut T` at a call site, so reverting a callee's parameter to
+  raw does **not** by itself remove the retag at the caller. The call site has to be
+  respelled too, and the build stays green either way.
+
+### Step 2: the deny sweep
+
+`#![deny(unsafe_code)]` on all **36** non-MT modules; **775** allow items, every one
+carrying `// unsafe-cat: <tag>` on the line above it; **zero untagged**.
+
+| category | items | owner |
+|---|---:|---|
+| `port-raw(Phase 9)` | 595 | Phase 9 |
+| `port-raw(Phase 7)` | 89 | Phase 7 |
+| `cursor` | 60 | Phase 9's de-virtualization / the accessor family |
+| `MT` | 16 | Phase 7 |
+| `SCREEN_CONTENT(dormant)` | 10 | Phase 10 |
+| `C-ABI` | 5 | Phase 8 |
+
+**Three modules carry no allow at all** — `abi_guard.rs`, `param_svc.rs`,
+`processing/mod.rs` — the encoder's first fully safe files.
+
+The two MT files are exempted at their `pub mod` line in `encoder/mod.rs`, not by
+leaving the deny off `mod.rs`. An inner attribute on a module file reaches every
+file below it, so a deny in `encoder/mod.rs` covers the thread machinery whether or
+not it is written there. Spelling the exemption at the declaration keeps the deny
+honestly on all 36 and puts the boundary where a reader looks for it; both allows
+retire with Phase 7.
+
+Two rulings the brief's assignment table does not cover:
+
+- **`extern "C"` alone is not the C ABI.** The first tagging pass produced
+  `C-ABI = 210` on calling convention alone and would have handed Phase 8 the entire
+  rate controller. The port declares its dispatch callbacks `extern "C"` because the
+  slot types say so; nothing outside the crate calls them. Only `#[no_mangle]` is an
+  export, and there are **5**.
+- **A context-only signature had no row**, because the table assumed step 1 had
+  removed every one. F66 says they stay, and names the phase that unblocks them, so
+  they are `port-raw(Phase 9)`.
+
+`SCREEN_CONTENT(dormant)` reads 10, not the census's 24: 24 is how many tagged items
+are in the tree, 10 is how many of them the sweep names. The other 14 sit inside
+items already covered by an enclosing allow, or need no unsafe at all.
+
+Allows are attached per **item**, not per diagnostic — an allow on a fn covers every
+`unsafe {}` inside it. Per-block would have been **1,999** diagnostics and no more
+information; per-item is the granularity a reader can act on, and it is why 894
+(session I's diagnostic count, a lower bound) became 775 items.
+
+### Step 3: the residue table
+
+`raw_ptr` in `src/encoder` + `src/processing`, by pointee family, code split from
+prose (S16). **1,741 code + 61 prose = 1,802 spellings** across 90 families; the top
+20 are 82% of it.
+
+| pointee family | code | prose | category | owner |
+|---|---:|---:|---|---|
+| `sWelsEncCtx` | 306 | 0 | `port-raw(Phase 9)` | Phase 9 — **F66** |
+| `u8` | 282 | 15 | `port-raw(Phase 9)` | Phase 9 (plane and byte cursors) |
+| `SSlice` | 119 | 2 | `port-raw(Phase 7)` | Phase 7 |
+| `i32` | 112 | 6 | `port-raw(Phase 9)` | Phase 9 (coefficient cursors) |
+| `i16` | 105 | 1 | `port-raw(Phase 9)` | Phase 9 (coefficient cursors) |
+| `SDqLayer` | 88 | 2 | `port-raw(Phase 9)` | Phase 9 (non-MT share) |
+| `SMbCache` | 70 | 1 | `port-raw(Phase 9)` | Phase 9 |
+| `u16` | 51 | 2 | `port-raw(Phase 9)` | Phase 9 (the `pMvdCost*` tables) |
+| `SMB` | 48 | 3 | `port-raw(Phase 9)` | Phase 9 |
+| `c_void` | 38 | 12 | `C-ABI` / `port-raw` | Phase 8 (the boundary line) |
+| `SWelsSvcCodingParam` | 31 | 0 | `port-raw(Phase 9)` | Phase 9 |
+| `SWelsFuncPtrList` | 28 | 0 | `cursor` | Phase 9 — the 22 dispatch survivors |
+| `BsWriter` | 23 | 1 | `port-raw(Phase 9)` | Phase 9 |
+| `_` (inferred) | 20 | 0 | `port-raw(Phase 9)` | Phase 9 |
+| `SLogContext` | 18 | 0 | `port-raw(Phase 9)` | Phase 9 |
+| `u32` | 18 | 0 | `port-raw(Phase 9)` | Phase 9 |
+| `i8` | 15 | 0 | `port-raw(Phase 9)` | Phase 9 |
+| `SFrameBSInfo` | 15 | 0 | `port-raw(Phase 9)` | Phase 9 |
+| `DeblockingFunc` | 14 | 0 | `port-raw(Phase 9)` | Phase 9 |
+| `CMemoryAlign` | 14 | 0 | `MT` | Phase 7 — `pMemAlign` |
+| *(70 further families)* | 326 | 16 | mixed | mixed |
+| **total** | **1741** | **61** | | |
+
+**`sWelsEncCtx` is the largest family and it grew this session** — 301 at the start,
+306 now — which is the honest consequence of F66: the 109 signatures went back. It is
+also the family with the clearest exit, and F66 names it: Phase 9, after the plane and
+macroblock cursors above it retire.
+
+Two counting notes, both of which will bite a future reader who greps naively:
+
+* The line-level grep the briefs use (`grep -rn '\*mut sWelsEncCtx'`) is a **line**
+  count, not a signature count, and the two diverge sharply as soon as any function
+  keeps a raw shim. Step 1 moved signatures 280 → 171 while the line grep moved only
+  298 → 293. Where the two disagree, the signature count is the one that means
+  something.
+* **The deny sweep shifted every line number in these two directories** by two lines
+  per allow item. Every `file.rs:NNN` anchor written before `e69a0984` — in the plan's
+  §5 handoffs, in earlier findings, in earlier log entries — is stale. The *names* and
+  the *counts* in those handoffs were all re-verified against the tree at the close and
+  every one of them holds; only the line numbers moved.
+
+### Step 4: §7's five conditions
+
+Checked line by line against §7 as written (steward, 2026-08-19, amended by
+D-exit-1, 2026-08-20).
+
+| # | condition | verdict | evidence |
+|---|---|---|---|
+| 1 | `#![deny(unsafe_code)]` on every module of `src/encoder` + `src/processing` except an enumerated MT set, each exception named with Phase 7 as owner | **MET** | `grep -rlx '#!\[deny(unsafe_code)\]'` = **36**, of 38 files. The two exceptions are `slice_multi_threading.rs` and `wels_task_management.rs`, named in this entry and in the plan's Phase 7 block, exempted by a tagged `#[allow(unsafe_code)]` at their `pub mod` line. An exception is a file, never a blanket — and here it is two files, spelled at two lines. |
+| 2 | every surviving allow item enumerated by category with an owner; only five categories lawful; untagged or unowned `unsafe` is a build error | **MET** | **775 allow items, 775 tagged, 0 untagged.** Five categories, no sixth: `port-raw(Phase 9)` 595, `port-raw(Phase 7)` 89, `cursor` 60, `MT` 16, `SCREEN_CONTENT(dormant)` 10, `C-ABI` 5. Enforced by the lint, auditable by `grep -c 'unsafe-cat:'`, and the two counts agree. |
+| 3 | encoder-side `raw_ptr` residue enumerated by category, code split from prose (S16) | **MET** | The table above: 1,741 code + 61 prose = 1,802 across 90 families, each of the top 20 with a category and an owning phase. |
+| 4 | `exit` battery PASS, cumulative perf restated against D-perf-4 and D-perf-6 | **MET** | `gates.sh exit`, **no `MIRI_SCOPE`** -- `OVERALL: PASS`, **13 passed / 0 failed / 1 skipped**; Miri `--lib` unscoped **353/0**, three differential suites 20/7/3, sweeps **369/369 both profiles**, both benches bit-identical, all seven aliasing probes green by name. Perf: encode median +0.00%, decode -0.04%, no median breach; cumulative about **+15-17%** vs D-perf-4's **+25%**; D-perf-6 still Phase 9's. |
+| 5 | the handoffs are written | **MET** | Plan §5, four "Inherited from Phase 6" blocks, written by session I and **re-verified against the tree at this close**: `wels_encoder_ext.rs` 8 `*mut sWelsEncCtx` params, `c_void` 58, `pSvcParam` still `Option<Box<…>>`, `SMbCache` named at 113 places, `*mut SWelsFuncPtrList` 28, the 12 allocator sites splitting 4 Phase-7 / 8 dormant, `pMemAlign` still `*mut CMemoryAlign`. Every count holds; only the line anchors moved (see above). One correction: the screen-content census is **23** tagged items by `SCREEN_CONTENT(dormant:`, not 24 — the 24th is a prose mention in `rc.rs`'s module table. |
+
+### Gates
+
+`commit` green on every commit of the session, including each of the four that were
+later reverted. `family` at the end of step 2: **369/369 debug**, 368/369 release
+(one F3 hit, below).
+
+**The close, `gates.sh exit` with no `MIRI_SCOPE` — the one unscoped battery D-gate-2
+reserves for a phase exit:**
+
+```
+OVERALL: PASS      13 passed, 0 failed, 1 skipped
+  cargo test          496 debug / 490 release / 20 ignored
+  unsafe ratchet      no per-file increase
+  duplicate census    58 allowlisted, nothing new
+  sweep (debug)       PASS=369 FAIL=0
+  sweep (release)     PASS=369 FAIL=0
+  decode_1080p_bench  all streams bit-identical
+  c_vs_rust_bench     all rows bit-identical
+  miri --lib          353 passed / 0 failed          (unscoped: the whole library)
+  miri kernels_differential_phase2   20 passed / 0 failed
+  miri safe_bits_differential         7 passed / 0 failed
+  miri safe_plane_differential        3 passed / 0 failed
+  fuzz corpus replay  SKIP (Phase 0 T7 never built)
+```
+
+**All seven aliasing probes green by name**, four encoder and three decoder:
+`encode_loop_runs_over_a_macroblock_grid_...`,
+`encode_loop_runs_over_size_limited_dynamic_slices_...`,
+`encode_loop_runs_with_cavlc_and_fine_mode_decision_...`,
+`encoder_initialisation_runs_...`; `decode_slice_loop_runs_over_a_macroblock_grid_...`,
+`error_concealment_runs_...`, `fmo_slice_group_walk_runs_...`.
+
+**369/369 in both profiles is the first clean double-profile sweep pair in several
+sessions**, and it is the run that decides the phase.
+
+### F3
+
+Three hits across the session's five batteries, each matching the fingerprint --
+`mt`, `sm=3`, `t` in {2, 4}, wrong output length. Two were drawn on the step-1 tree,
+which no longer exists; the third on the shipping tree:
+
+```
+step-1 `full`    debug    320x192_12fps t=4 n=600 cabac=1 rc=0   C++ 39981 / Rust 37837  short
+step-1 `full`    release  160x96_6fps   t=4 n=600 cabac=0 rc=0   C++ 42538 / Rust     0  empty
+step-2 `family`  release  160x96_6fps   t=2 n=600 cabac=0 rc=1   C++ 41938 / Rust 40124  short
+```
+
+More than one hit, so the alternation rather than the per-hit retry: HEAD against
+`2bcf0743`, **interleaved run-for-run in one loop**, 10 iterations per arm on both
+failing configurations. **40/40 clean on both arms.**
+
+A first run of that alternation was thrown away and re-run: it pointed at
+`CiscoVT2people_320x192_12fps_loop20.yuv`, and the asset for that clip is `loop18`, so
+*both* arms produced `C++ 0 bytes / Rust -1 bytes` on all 20 debug runs. That is a
+harness error wearing an F3 costume, and it is the trap measurement 38 already records.
+**A "hit" where the C++ reference also produced nothing is never F3** -- the
+fingerprint needs a reference stream to differ from. The valid release arm of that
+discarded run is worth keeping: **HEAD 9/1, control 9/1**, the same rate on both arms.
+
+`t=2` is worth a line. The fingerprint has always read `t` in {2, 4}, but measurements
+80-86 were all `t=4`; hit 3 is this phase's first `t=2` reproduction, and an argument
+against letting `t=4` harden into the signature.
+
+Recorded as **measurement 87** in `phase0_findings.md`; running total **87 / 27 / 60**.
+
+### Perf
+
+One span, `2bcf0743` -> `e69a0984`, 7 pairs each way plus a 7-pair null floor
+(`perf_baseline.md`, this session's section):
+
+| | span | null floor |
+|---|---|---|
+| decode, 3 rows | median **-0.04%** (-0.21 ... +0.18%) | median -0.11% (-0.19 ... -0.07%) |
+| encode, 28 rows | median **+0.00%** (-0.55 ... +1.70%) | median +0.00% (-0.72 ... +1.35%) |
+
+**No median breach, so no bisection.** Stated rather than rounded away: the encode
+span's *maximum* is +1.70% against the floor's +1.35%, so the span is 0.35 points wider
+at the top. One row of 28, with median and minimum both inside the floor and nothing
+over +5%. Recorded because "inside the floor on every statistic" was true of session
+I's span and is not quite true of this one.
+
+Near-zero is the structurally expected answer here, not a lucky one: the span contains
+775 allow attributes, 36 deny attributes, and the **full revert** of step 1. Attributes
+are compile-time and the lint emits no code; the revert restored `2bcf0743`'s machine
+code exactly. The only thing that could have moved is codegen noise, and codegen noise
+is what the measurement found.
+
+**Cumulative encoder deficit is about +15-17%, unmoved.** D-perf-4's tripwire is **+25%
+median** -- unbreached by roughly 8-10 points. **D-perf-6's parked recovery is Phase
+9's**, now with F66 beside session H's accessor-cost target.
+
+---
+
+## 2026-08-20 — **Phase 6 COMPLETE** (sessions A–J, ten sessions)
+
+**`src/encoder/` and `src/processing/` carry `#![deny(unsafe_code)]` on every
+module the phase owns, and every one of the 775 exemptions names the phase that
+retires it.** That is the phase's deliverable and the thing that was not true of
+the encoder before: the unsafe surface is no longer a number, it is a list with
+owners.
+
+### The arc
+
+| | phase open | phase close |
+|---|---:|---:|
+| encoder+processing `raw_ptr` | 2669 | **1849** (−31%) |
+| encoder+processing `unsafe_fn` | 710 | **709** (−1) |
+| encoder+processing `unsafe_block` | 313 | **313** |
+| modules with `#![deny(unsafe_code)]` | 0 | **36 of 36** |
+| allow items, tagged | — | **775** |
+| modules with no allow at all | 0 | **3** |
+| sweep configurations | 341 | **369** |
+
+**The two rows that matter are the two that disagree.** `raw_ptr` fell 31% while
+`unsafe_fn` fell by one. The phase took raw pointers out of struct **fields** —
+owned `Vec`s, `Box`es, `Option<LayerIdx>` where a pointer used to be — and
+`deny(unsafe_code)` counts **signatures**. That asymmetry is not a shortfall; it
+is the finding the phase produced twice, as F65 and again as F66, and it is why
+the exit condition had to be re-stated (D-exit-1) rather than met as written.
+
+### The findings
+
+| | disposition |
+|---|---|
+| **F57** MVD cost table overrun | FIXED, session A |
+| **F58** never-written reference luma | FIXED, session A |
+| **F59** two references over one IDCT span | FIXED, session B, by an in-place kernel |
+| **F60** `FrameBsRealloc` never re-aims the NAL-length array | FIXED, session D |
+| **F61** MT slice-bank growth never re-stamps the slice list | **OPEN → Phase 7** (`iMultipleThreadIdc > 1`) |
+| **F62** `ParamTranscode` drops `iLTRRefNum` | FIXED, session F — no gate could see it; found by reading |
+| **F63** a plane root through `as_mut_slice()` invalidates the last | FIXED, session F, `PaddedPlane::root_ptr` |
+| **F64** a field-wise constructor is not byte-equal to a memset image | understood and instrumented, session G; not a defect |
+| **F65** exit condition 2 unreachable by construction | **RULED — D-exit-1**, executed session J |
+| **F66** a `&mut` context parameter invalidates every context cursor | **OPEN → Phase 9**, with its detector |
+
+Four of the eight defects were found by the `exit` battery's Miri step or the
+encoder aliasing probe, and **none of them by a byte-level gate**. F62 was found by
+reading. The instrument that earns its keep in this phase is Miri; the sweep and the
+benches confirm, they do not discover.
+
+### What each later phase inherits
+
+- **Phase 7** — `slice_multi_threading.rs` and `wels_task_management.rs`, still
+  undenied, exempted at their `pub mod` line; **89** `port-raw(Phase 7)` items plus
+  **16** `MT` items; F61; F3, whose fastest-reproducing configuration this phase
+  measured at **~1 in 11** against the recorded ~1/800.
+- **Phase 8** — the **5** `C-ABI` items, which are the whole of the crate's export
+  surface in these two directories.
+- **Phase 9** — **595** `port-raw(Phase 9)` items and **60** `cursor` items; the 22
+  dispatch-table survivors whose five slot types name the raw table in their own
+  signatures; and **F66's conversion**, which is Phase 9's to make *after* the plane
+  and macroblock cursors retire, using session J's detector as the precondition.
+- **Phase 10** — the **10** `SCREEN_CONTENT(dormant)` items the sweep names, of the
+  24 tagged in the tree.
+
+### The sessions
+
+| session | span | what closed |
+|---|---|---|
+| A | 2026-08-18 | the encoder Miri probe first — F13's last site, F57, F58 |
+| B | 2026-08-18 | the `IWelsVP` vtable dissolved; F59 |
+| C | 2026-08-19 | the layer records |
+| D | 2026-08-19 | the slice lists and the mb list; F60, F61 |
+| E | 2026-08-19 | the records become references, the neighbour walk |
+| F | 2026-08-20 | the pictures; F62, F63 |
+| G | 2026-08-20 | the zeroed shells; F64, the equality instrument |
+| H | 2026-08-20 | the members own; the allocator census, S40 for the family |
+| I | 2026-08-20 | `pPSOVector`, `pFuncList` becomes a `Box`, the table's parameters; **F65** |
+| J | 2026-08-20 | **the deny sweep**; step 1 measured and reverted; **F66**; the close |
+
+Ten sessions against a plan of seven, and the difference was discovery — the same
+shape Phase 5 had (fourteen against nine to twelve). Sessions I and J between them
+produced no converted family at all and are still the two that decided how the phase
+ends: I measured that condition 2 could not be met as written, J measured that the
+conversion behind it cannot be made yet. Both results are negative and both are load-
+bearing.
+
+### The close
+
+`gates.sh exit`, unscoped, at `e69a0984` -- **`OVERALL: PASS`, 13 passed / 0 failed /
+1 skipped**. Miri `--lib` over the whole library **353 passed / 0 failed**; the three
+differential Miri suites 20 / 7 / 3; sweeps **369/369 in both profiles**; both benches
+bit-identical; **all seven aliasing probes green by name**, four encoder and three
+decoder. The one skip is the fuzz corpus, which has never existed (Phase 0 T7).
+
+Perf at the close: encode median **+0.00%**, decode **-0.04%**, no median breach.
+**Cumulative encoder deficit about +15-17%** against D-perf-4's **+25%** tripwire --
+unbreached by roughly 8-10 points. **D-perf-6's parked recovery stays Phase 9's.**
+
+F3 drew three hits across the session's five batteries, all inside the fingerprint,
+adjudicated by an interleaved alternation at **40/40 clean on both arms** and recorded
+as measurement 87. The `exit` battery itself drew none.
