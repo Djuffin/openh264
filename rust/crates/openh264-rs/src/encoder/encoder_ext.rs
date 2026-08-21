@@ -3193,15 +3193,16 @@ pub unsafe fn WelsEncoderEncodeExt(
         iCurHeight = (*pParam).iVideoHeight;
 
         match (*pParam).sSliceArgument.uiSliceMode {
-            // **`LOAD_BALANCING(incomplete: F72)`.** This arm is the consumer half of
-            // a two-halved loop and the port only has this half: the producer,
-            // `CalcSliceComplexRatio` (`encoder_ext.cpp:4069`, same guard as below),
-            // was never called, so the ratios these adjusters read are permanently
-            // zero. Reachable by default — `GetDefaultParams` sets
-            // `bUseLoadBalancing = true` on both sides — and un-gateable by
-            // construction even once completed, because the boundaries are a
-            // function of measured per-slice *times*. See F72; the diffharness pins
-            // the flag off (`cxx_enc.cpp:119`) and so does the encoder probe.
+            // **The consumer half of the load-balancing loop.** The producer,
+            // `CalcSliceComplexRatio`, runs at the end of this same layer body under
+            // the same four-term guard — added at T7.C1, which is what closed F72;
+            // before that the ratios these adjusters read were permanently zero and
+            // the balance was degenerate. Reachable by default, since
+            // `GetDefaultParams` sets `bUseLoadBalancing = true` on both sides, and
+            // **un-gateable by construction**: the boundaries are a function of
+            // measured per-slice times, so two C++ runs differ. The diffharness pins
+            // the flag off (`cxx_enc.cpp:119`) and so does the encoder probe; the
+            // path's coverage is structural (F72's expected-divergent class).
             SliceModeEnum::SM_FIXEDSLCNUM_SLICE => {
                 if (*pSvcParam).iMultipleThreadIdc > 1
                     && (*pSvcParam).bUseLoadBalancing
@@ -3756,6 +3757,29 @@ pub unsafe fn WelsEncoderEncodeExt(
             iLayerNum += 1;
 
             iFrameSize += iPaddingNalSize;
+        }
+
+        // **F72 completed — T7.C1, decision D-mt-2 (plan §7.4).** The producer half
+        // of the load-balancing loop, at the C++'s own site: `encoder_ext.cpp:4064-4073`,
+        // end of the per-layer body, after the padding block and immediately above the
+        // `eLastNalPriority` stamp — and under the C++'s own four-term guard, which is
+        // the same one the consumer arm above already reproduces. The workers stamped
+        // `uiSliceConsumeTime` on their way through `EncodeOneSliceInJob`
+        // (`bRecordsTime`, which is `bUseLoadBalancing`); this turns those times into
+        // the `iSliceComplexRatio` that next frame's `DynamicAdjustSlicing` reads. It
+        // was never called in this port, so every ratio was permanently zero and the
+        // balance was degenerate rather than absent — nothing crashed and nothing
+        // warned, which is what made it worth a finding rather than a bug report.
+        //
+        // The `MT_DEBUG`-only `TrackSliceComplexities` that follows it in the C++ has
+        // no counterpart here and needs none: `MT_DEBUG` is off in every build either
+        // project makes.
+        if (*pParam).sSliceArgument.uiSliceMode == SliceModeEnum::SM_FIXEDSLCNUM_SLICE
+            && (*pSvcParam).bUseLoadBalancing
+            && (*pSvcParam).iMultipleThreadIdc > 1
+            && (*pSvcParam).iMultipleThreadIdc >= (*pParam).sSliceArgument.uiSliceNum as u16
+        {
+            crate::encoder::slice_multi_threading::CalcSliceComplexRatio(current_layer(pCtx));
         }
 
         (*pCtx).eLastNalPriority[iCurDid as usize] = eNalRefIdc;

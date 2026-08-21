@@ -393,22 +393,27 @@ pub unsafe fn UpdateMbListNeighborParallel(
 /// Calculates the normalized computational complexity ratio (`iSliceComplexRatio`)
 /// for each slice in a spatial layer based on measured CPU consumption time.
 ///
-/// **`LOAD_BALANCING(incomplete: F72)` — this function has no live caller in the
-/// port, and that is the load-balancing path's whole defect.** The C++ calls it at
-/// `encoder_ext.cpp:4069`, at the end of the per-layer encode loop, under exactly
-/// the guard `encoder_ext.rs:3196` already reproduces for
-/// `AdjustBaseLayer`/`AdjustEnhanceLayer`. The port has the *consumer* half of the
-/// loop and not the *producer* half: `iSliceComplexRatio` is initialised to 0 and
-/// nothing on a live path ever writes it, so `DynamicAdjustSlicing` computes
-/// `WelsDivRound(kiCountNumMb * 0, 100) = 0` for every slice, clamps each to
-/// `iMinimalMbNum`, and hands the remainder to the last one. The balance is
-/// degenerate rather than absent, which is why it is worth a finding: nothing
-/// crashes and nothing warns.
+/// **The producer half of the load-balancing loop — F72, completed at T7.C1**
+/// (decision D-mt-2, plan §7.4). It is called from `WelsEncoderEncodeExt`, at the end
+/// of the per-layer body, under the C++'s own four-term guard — the site is
+/// `encoder_ext.cpp:4064-4073` and the port's call sits at the same place in the same
+/// loop.
 ///
-/// **Not completed here, deliberately** — the phase brief's ruling for an
-/// incomplete path is to fence it and say which, not to finish it. Completing it is
-/// the one call at the site named above; the owner is whoever takes the
-/// load-balancing path, and F72 records what the byte evidence says about gating it.
+/// Until then the port had the *consumer* half of the loop and not the *producer*
+/// half: nothing on a live path wrote `iSliceComplexRatio`, so `DynamicAdjustSlicing`
+/// computed `WelsDivRound(kiCountNumMb * 0, 100) = 0` for every slice, clamped each to
+/// `iMinimalMbNum` and handed the remainder to the last one. The balance was
+/// **degenerate rather than absent** — nothing crashed and nothing warned, which is
+/// why it took reading the C++ to find, and why a default-on feature must not be left
+/// in that state.
+///
+/// **This path is expected-divergent and can never be byte-gated**, which is why its
+/// coverage is structural rather than differential: the boundaries it produces for
+/// frame N+1 are a function of frame N's measured per-slice *times*, so two runs of
+/// the **C++** differ from each other. Both diffharness drivers pin
+/// `bUseLoadBalancing = false`, as does the encode probe; the structural probe is
+/// `load_balancing_completes_frames_with_sane_slice_counts`. It is the project's
+/// second expected-divergent class after `CABA2_SVA_B` — see plan §1.5 and F72.
 pub unsafe fn CalcSliceComplexRatio(pCurDq: *mut SDqLayer) {
     if pCurDq.is_null() {
         return;
@@ -1027,6 +1032,90 @@ mod tests {
 
         assert_eq!(dq_layer.sSliceBufferInfo[0].pSliceBuffer[0].iSliceComplexRatio, 50);
         assert_eq!(dq_layer.sSliceBufferInfo[0].pSliceBuffer[1].iSliceComplexRatio, 50);
+    }
+
+    /// **The load-balancing path's only coverage — F72, T7.C1** (decision D-mt-2).
+    ///
+    /// The two tests above drive `CalcSliceComplexRatio` and `NeedDynamicAdjust` on
+    /// hand-built layers, which is why F72 could sit in the tree with both of them
+    /// green: they prove the *functions* compute, not that anything **calls** them.
+    /// This one runs the whole encoder with `bUseLoadBalancing` on, four threads and
+    /// four slices — the exact four-term guard `WelsEncoderEncodeExt` tests before it
+    /// calls the producer — for enough frames that frame N+1's boundaries are
+    /// computed from frame N's measured times. Before T7.C1 the ratios were
+    /// permanently zero and this test would have passed anyway, which is the point:
+    /// it is the *shape* of the path that is now covered, and the ratios' correctness
+    /// belongs to `test_calc_slice_complex_ratio` above.
+    ///
+    /// **It asserts structure and never bytes, and it cannot do otherwise.** The
+    /// boundaries this path produces are a function of wall-clock encode times, so
+    /// two runs of the **C++** disagree with each other; there is no reference to
+    /// compare against. That makes the path the project's **second
+    /// expected-divergent class** after `CABA2_SVA_B` (plan §1.5) — both diffharness
+    /// drivers pin the flag off, so no sweep row reaches it, and this is the only
+    /// thing that does.
+    ///
+    /// **256x192 is forced, not chosen.** `MIN_NUM_MB_PER_SLICE` is 48, and
+    /// `SliceArgumentValidationFixedSliceMode` silently rewrites a request it cannot
+    /// honour down to a mode that needs no threads — so four slices need at least
+    /// 4 x 48 = 192 macroblocks, and a 16x12 grid is exactly 192. The
+    /// `vcl_nals == 4` assertion is what would catch the rewrite: on a smaller
+    /// picture every other assertion here passes while the encoder runs
+    /// single-slice, single-threaded, and the load-balancing path stays dark.
+    ///
+    /// Ignored under Miri: 192 macroblocks x 4 frames x 4 threads is roughly eight
+    /// times the work of the fork/join probe in `svc_encode_slice.rs`, which is
+    /// itself the most expensive test in the battery. The aliasing question this
+    /// path raises is the fork/join's, and that probe answers it.
+    #[test]
+    #[cfg_attr(miri, ignore)]
+    fn load_balancing_completes_frames_with_sane_slice_counts() {
+        use crate::api::codec_api::abi_test_driver::{EncoderProbeOptions, drive_encoder_over};
+
+        let (frames, dims) = drive_encoder_over(
+            256,
+            192,
+            4,
+            EncoderProbeOptions {
+                slice_mode: crate::api::codec_api::SliceModeEnum::SM_FIXEDSLCNUM_SLICE,
+                slice_num: 4,
+                threads: 4,
+                load_balancing: true,
+                ..EncoderProbeOptions::default()
+            },
+        );
+
+        assert_eq!(dims, (256, 192), "the encoder must be configured for a 16x12 grid");
+        assert_eq!(frames.len(), 4, "the encode loop did not run to the end");
+        assert!(
+            frames.iter().all(|f| f.bytes > 0),
+            "a frame produced no NAL bytes, which is what a lost slice looks like from \
+             here: {:?}",
+            frames.iter().map(|f| (f.kind, f.bytes)).collect::<Vec<_>>()
+        );
+        // The assertion that keeps the test on the path it names. `DynamicAdjustSlicing`
+        // redistributes macroblocks *across* the slices; it never changes how many there
+        // are. Four every frame, or either the request was rewritten or a rebalance lost
+        // one.
+        assert!(
+            frames.iter().all(|f| f.vcl_nals == 4),
+            "a frame did not carry four VCL NALs, so the slice count moved under the \
+             rebalance or the mode was rewritten: {:?}",
+            frames.iter().map(|f| (f.kind, f.vcl_nals)).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            frames[0].kind,
+            crate::api::codec_api::EVideoFrameType::videoFrameTypeIDR,
+            "the sequence must open on an IDR"
+        );
+        assert!(
+            frames[1..]
+                .iter()
+                .all(|f| f.kind == crate::api::codec_api::EVideoFrameType::videoFrameTypeP),
+            "frames 1..4 must be inter-coded, or the rebalance never sees a second \
+             frame's times: {:?}",
+            frames.iter().map(|f| f.kind).collect::<Vec<_>>()
+        );
     }
 }
 
