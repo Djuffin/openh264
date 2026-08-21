@@ -148,11 +148,25 @@ it, and the two sessions were planned the other way round. Three orderings; **RE
   on the *old* pool; F70 fixed; F71 sixteen accessors converted, residue named;
   F72 fenced pending ruling (**now D-mt-2: complete it**). Steps 6–7 handed
   to C at a green boundary.
-- **C** — [`phase7_session_c.md`](phase7_session_c.md): the dropped-sync
-  census (S44 at phase scale, 16 C++ lock sites classified), F72 completed
-  (D-mt-2), the stragglers through `memory_align.rs`, F71's residue read
-  before assigned, the last deny and the 89 re-tags, the span that answers
-  the thread ceiling, the unscoped close.
+- **C** — done, 2026-08-21, `c5f458d2..`, nine commits.
+  [`phase7_session_c.md`](phase7_session_c.md). **The phase closes.** The census ran
+  and found **no dropped statement in either direction** — 16 C++ sites, 10 class (a),
+  6 class (b) each with a named counterpart, and the inverse list run under **Miri
+  rather than grep**, because a grep cannot see a race. **F72 completed** under D-mt-2
+  and recorded as the project's second expected-divergent class. **F71 closed**: its
+  residue was a *scheduling* question and not an ownership one, so the shared write is
+  hoisted out of the fork and the race is gone rather than serialised. The stragglers
+  went the whole way — `sSliceBs.pBs`, `pThreadBsBuffer` and `pDynamicBsBuffer` owned,
+  `SSliceThreading` boxed, the third mutex retired, **`pMemAlign` deleted**, live
+  allocator sites in `src/encoder` **→ 0**. **F61 closed by construction**; **F36 left
+  and fenced** as `DECODER_MT(incomplete: F36)`. The last deny landed (**37/37**, zero
+  exemptions at a declaration) and the **89** re-tagged. **The thread ceiling was the
+  pool's**: `1.65x → 2.47x` at four threads, and where the port still stops the
+  reference stops with it — the conditional pool rebuild is not wanted.
+  **Three findings the work produced**: **F73** (the picture-accessor family, 32 + 68
+  sites, → Phase 9), **F74** (perfpair blind to every multi-slice row since the axis
+  existed), **F75** (the unscoped Miri gate unrunnable the moment the skip list
+  emptied — it fired on this phase's own exit battery).
 - *(original B bullet, superseded:)* the ordering decision above, first. Then, whichever way it goes: the
   F3 after-arm (2000 runs, `f3_arm.sh` verbatim — density is not comparable
   otherwise, measurement 89); `sSliceBs.pBs`/`DynamicSliceBs`/thread-bs
@@ -231,6 +245,10 @@ definition — and no gate this project owns can see one.
 
 Two sessions is the estimate. If A lands its drop boundary early it may take
 B's head; if B overflows, C closes — the exit gate does not bend.
+
+*(As run: three sessions, C closed the phase, and the exit gate did not bend — it
+failed twice on the way, once on a ratchet increase and once on **F75**, and both were
+fixed rather than waived.)*
 
 ## 4. Non-goals
 

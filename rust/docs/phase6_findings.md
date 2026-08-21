@@ -269,6 +269,40 @@ may name a slice the other thread has not written yet. **The index spelling remo
 the memory-safety half of the class and leaves the synchronisation half**, which is
 the half Phase 7 is for.
 
+### How it closed — Phase 7 session C, by construction
+
+The charter asked for "verify by construction that the class cannot recur, or record
+exactly what remains". It cannot recur, and the verification is three facts about the
+tree as Phase 7 leaves it, each checked rather than argued:
+
+**1 — the layer's slice list has exactly one reader, and no worker is among them.**
+`ppSliceInLayer` is read only through `slice_in_layer`, and all 21 of its call sites
+run on the **calling thread**: before the fork (`InitAllSlicesInThread`, the RC GOM
+setup, `WelsInitCurrentLayer`) or after the join (`AppendSliceToFrameBs`,
+`PerformDeblockingFilter`, `ReOrderSliceInLayer`, the load-balancing pair). The
+per-slice deblocking call inside a worker takes the `*mut SSlice` it already holds, not
+a list lookup. **The window this finding describes is real and unobservable**, which is
+a stronger statement than "the window is short".
+
+**2 — a worker resolves slices by bank position, never through the list.** Growth is
+only reachable on the size-limited path, where `bThreadSlcBufferFlag` is set, and there
+`InitOneSliceInThread` resolves `slice_in_bank(layer, kiSlcBuffIdx, iCodedSliceNum)` —
+a function of the worker's own slot and its own coded count. The single-threaded growth
+path (`DynSliceRealloc` -> `ReallocSliceBuffer` -> `ExtendLayerBuffer`) is guarded on
+`iMultipleThreadIdc <= 1` and does re-fill the list, exactly as the finding says.
+
+**3 — the bank being grown belongs to the worker growing it.** T7.B2 made partition,
+bank and bs slot all equal to the worker index by static partition, so no other worker
+can reach bank `p` at all while worker `p` grows it. Under the pool this was a property
+of `QueryEmptyThread`'s dynamic claim — true, but asserted; it is true by construction
+now, and `ReallocateSliceInThread`'s serialising mutex was deleted at T7.C5 once T7.C4
+removed the last shared object inside it.
+
+Memory safety went at T6.D4 (positions, not pointers); synchronisation goes here. **The
+C++ divergence note is unchanged**: the reference has the same shape and the same
+window, and it is byte-neutral on both sides for the same reason — nothing reads the
+list between the grow and the reorder.
+
 ---
 
 ## F63 — a plane root taken through `as_mut_slice()` invalidates the last one, and the encoder asks twice a frame
