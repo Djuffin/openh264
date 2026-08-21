@@ -29,6 +29,8 @@
 
 #![allow(non_snake_case, non_upper_case_globals, dead_code)]
 
+#![deny(unsafe_code)]
+
 use crate::common::intra_pred_common::{WelsI16x16LumaPredH_c, WelsI16x16LumaPredV_c};
 use crate::safe::plane::PlaneCursor;
 use crate::encoder::svc_base_layer_md::{
@@ -833,6 +835,8 @@ pub fn i16x16_luma_pred_dc_na(pred: &mut [u8; 256]) {
 /// # Safety
 /// `pPred` must be writable for `N` bytes.
 #[inline(always)]
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 unsafe fn pred<'a, const N: usize>(pPred: *mut u8) -> &'a mut [u8; N] {
     unsafe { std::slice::from_raw_parts_mut(pPred, N) }.try_into().unwrap()
 }
@@ -843,6 +847,8 @@ unsafe fn pred<'a, const N: usize>(pPred: *mut u8) -> &'a mut [u8; N] {
 /// # Safety
 /// `pRef.offset(-kiStride) .. + N` must be readable.
 #[inline(always)]
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 unsafe fn top_row<'a, const N: usize>(pRef: *const u8, kiStride: i32) -> &'a [u8; N] {
     unsafe { std::slice::from_raw_parts(pRef.offset(-(kiStride as isize)), N) }
         .try_into()
@@ -856,6 +862,8 @@ unsafe fn top_row<'a, const N: usize>(pRef: *const u8, kiStride: i32) -> &'a [u8
 /// The `ref_span(kiStride as usize, reach)` bytes below `pRef` must be readable,
 /// and `kiStride` must be positive.
 #[inline(always)]
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 unsafe fn reference<'a>(pRef: *const u8, kiStride: i32, reach: Reach) -> PlaneCursor<'a> {
     let stride = kiStride as usize;
     let (len, center) = ref_span(stride, reach);
@@ -871,6 +879,8 @@ unsafe fn reference<'a>(pRef: *const u8, kiStride: i32, reach: Reach) -> PlaneCu
 /// * `pRef` has the four samples `[-kiStride, -kiStride + 4)` readable — the row
 ///   above the block, and nothing else. This kernel never reads to the left.
 /// * `kiStride > 0`, and the two regions do not overlap.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsI4x4LumaPredV_c(pPred: *mut u8, pRef: *mut u8, kiStride: i32) {
     // SHIM(phase2) -> i4x4_luma_pred_v
     unsafe { i4x4_luma_pred_v(pred::<16>(pPred), top_row::<4>(pRef, kiStride)) }
@@ -884,6 +894,8 @@ pub unsafe extern "C" fn WelsI4x4LumaPredV_c(pPred: *mut u8, pRef: *mut u8, kiSt
 ///   `y` in `0..4`, i.e. the bytes `[-1, 3 * kiStride)`. This kernel never reads
 ///   the row above.
 /// * `kiStride > 0`, and the two regions do not overlap.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsI4x4LumaPredH_c(pPred: *mut u8, pRef: *mut u8, kiStride: i32) {
     // SHIM(phase2) -> i4x4_luma_pred_h
     unsafe { i4x4_luma_pred_h(pred::<16>(pPred), &reference(pRef, kiStride, REACH_I4X4_LEFT)) }
@@ -896,6 +908,8 @@ pub unsafe extern "C" fn WelsI4x4LumaPredH_c(pPred: *mut u8, pRef: *mut u8, kiSt
 /// * `pRef` has [`REACH_I4X4_DC`] readable: four samples above and four to the
 ///   left, i.e. the bytes `[-kiStride, 3 * kiStride)`.
 /// * `kiStride > 0`, and the two regions do not overlap.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsI4x4LumaPredDc_c(pPred: *mut u8, pRef: *mut u8, kiStride: i32) {
     // SHIM(phase2) -> i4x4_luma_pred_dc
     unsafe { i4x4_luma_pred_dc(pred::<16>(pPred), &reference(pRef, kiStride, REACH_I4X4_DC)) }
@@ -909,6 +923,8 @@ pub unsafe extern "C" fn WelsI4x4LumaPredDc_c(pPred: *mut u8, pRef: *mut u8, kiS
 ///   is the mode decision picks when the row above is *unavailable*, and the
 ///   signature is why it cannot read one.
 /// * `kiStride > 0`, and the two regions do not overlap.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsI4x4LumaPredDcLeft_c(pPred: *mut u8, pRef: *mut u8, kiStride: i32) {
     // SHIM(phase2) -> i4x4_luma_pred_dc_left
     unsafe { i4x4_luma_pred_dc_left(pred::<16>(pPred), &reference(pRef, kiStride, REACH_I4X4_LEFT)) }
@@ -922,6 +938,8 @@ pub unsafe extern "C" fn WelsI4x4LumaPredDcLeft_c(pPred: *mut u8, pRef: *mut u8,
 ///   mirror of [`WelsI4x4LumaPredDcLeft_c`], offered when the left column is
 ///   unavailable, and correspondingly unable to read one.
 /// * `kiStride > 0`, and the two regions do not overlap.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsI4x4LumaPredDcTop_c(pPred: *mut u8, pRef: *mut u8, kiStride: i32) {
     // SHIM(phase2) -> i4x4_luma_pred_dc_top
     unsafe { i4x4_luma_pred_dc_top(pred::<16>(pPred), top_row::<4>(pRef, kiStride)) }
@@ -933,6 +951,8 @@ pub unsafe extern "C" fn WelsI4x4LumaPredDcTop_c(pPred: *mut u8, pRef: *mut u8, 
 /// * `pPred` is writable for **16** bytes (packed 4x4, stride 4).
 /// * `pRef` and `kiStride` are unread; the C++ takes them to fit the table's
 ///   signature and this shim keeps them for the same reason. `pRef` may be null.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsI4x4LumaPredDcNA_c(pPred: *mut u8, _pRef: *mut u8, _kiStride: i32) {
     // SHIM(phase2) -> i4x4_luma_pred_dc_na
     unsafe { i4x4_luma_pred_dc_na(pred::<16>(pPred)) }
@@ -946,6 +966,8 @@ pub unsafe extern "C" fn WelsI4x4LumaPredDcNA_c(pPred: *mut u8, _pRef: *mut u8, 
 ///   past the block's right edge, which is why `g_kiIntra4AvailMode` offers this
 ///   mode only at offsets whose top-right bit is set.
 /// * `kiStride > 0`, and the two regions do not overlap.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsI4x4LumaPredDDL_c(pPred: *mut u8, pRef: *mut u8, kiStride: i32) {
     // SHIM(phase2) -> i4x4_luma_pred_ddl
     unsafe { i4x4_luma_pred_ddl(pred::<16>(pPred), top_row::<8>(pRef, kiStride)) }
@@ -962,6 +984,8 @@ pub unsafe extern "C" fn WelsI4x4LumaPredDDL_c(pPred: *mut u8, pRef: *mut u8, ki
 /// No availability offset offers this mode (see
 /// `reach_table_agrees_with_the_availability_tables`); it is installed, so it is
 /// converted and proven, but nothing reaches it through the table.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsI4x4LumaPredDDLTop_c(pPred: *mut u8, pRef: *mut u8, kiStride: i32) {
     // SHIM(phase2) -> i4x4_luma_pred_ddl_top
     unsafe { i4x4_luma_pred_ddl_top(pred::<16>(pPred), top_row::<4>(pRef, kiStride)) }
@@ -974,6 +998,8 @@ pub unsafe extern "C" fn WelsI4x4LumaPredDDLTop_c(pPred: *mut u8, pRef: *mut u8,
 /// * `pRef` has [`REACH_I4X4_DDR`] readable: the corner at `(-1, -1)`, four
 ///   samples above and four to the left — the bytes `[-kiStride - 1, 3 * kiStride)`.
 /// * `kiStride > 0`, and the two regions do not overlap.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsI4x4LumaPredDDR_c(pPred: *mut u8, pRef: *mut u8, kiStride: i32) {
     // SHIM(phase2) -> i4x4_luma_pred_ddr
     unsafe { i4x4_luma_pred_ddr(pred::<16>(pPred), &reference(pRef, kiStride, REACH_I4X4_DDR)) }
@@ -986,6 +1012,8 @@ pub unsafe extern "C" fn WelsI4x4LumaPredDDR_c(pPred: *mut u8, pRef: *mut u8, ki
 /// * `pRef` has the **seven** samples `[-kiStride, -kiStride + 7)` readable —
 ///   three past the block's right edge, not four: `kuiVL9`'s last tap is `T6`.
 /// * `kiStride > 0`, and the two regions do not overlap.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsI4x4LumaPredVL_c(pPred: *mut u8, pRef: *mut u8, kiStride: i32) {
     // SHIM(phase2) -> i4x4_luma_pred_vl
     unsafe { i4x4_luma_pred_vl(pred::<16>(pPred), top_row::<7>(pRef, kiStride)) }
@@ -1004,6 +1032,8 @@ pub unsafe extern "C" fn WelsI4x4LumaPredVL_c(pPred: *mut u8, pRef: *mut u8, kiS
 /// through — out-of-allocation arithmetic on an exactly-sized top row, F10's class.
 /// The shim's span starts at the top row, so the pointer ceases to exist; like
 /// `DDL_TOP`, no availability offset offers this mode.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsI4x4LumaPredVLTop_c(pPred: *mut u8, pRef: *mut u8, kiStride: i32) {
     // SHIM(phase2) -> i4x4_luma_pred_vl_top
     unsafe { i4x4_luma_pred_vl_top(pred::<16>(pPred), top_row::<4>(pRef, kiStride)) }
@@ -1017,6 +1047,8 @@ pub unsafe extern "C" fn WelsI4x4LumaPredVLTop_c(pPred: *mut u8, pRef: *mut u8, 
 ///   **three** to the left — `L3` is never read, so the span stops at
 ///   `2 * kiStride`.
 /// * `kiStride > 0`, and the two regions do not overlap.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsI4x4LumaPredVR_c(pPred: *mut u8, pRef: *mut u8, kiStride: i32) {
     // SHIM(phase2) -> i4x4_luma_pred_vr
     unsafe { i4x4_luma_pred_vr(pred::<16>(pPred), &reference(pRef, kiStride, REACH_I4X4_VR)) }
@@ -1029,6 +1061,8 @@ pub unsafe extern "C" fn WelsI4x4LumaPredVR_c(pPred: *mut u8, pRef: *mut u8, kiS
 /// * `pRef` has [`REACH_I4X4_LEFT`] readable — four samples at `x = -1`, nothing
 ///   above.
 /// * `kiStride > 0`, and the two regions do not overlap.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsI4x4LumaPredHU_c(pPred: *mut u8, pRef: *mut u8, kiStride: i32) {
     // SHIM(phase2) -> i4x4_luma_pred_hu
     unsafe { i4x4_luma_pred_hu(pred::<16>(pPred), &reference(pRef, kiStride, REACH_I4X4_LEFT)) }
@@ -1041,6 +1075,8 @@ pub unsafe extern "C" fn WelsI4x4LumaPredHU_c(pPred: *mut u8, pRef: *mut u8, kiS
 /// * `pRef` has [`REACH_I4X4_HD`] readable: the corner, **three** samples above
 ///   (`T3` is never read) and four to the left.
 /// * `kiStride > 0`, and the two regions do not overlap.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsI4x4LumaPredHD_c(pPred: *mut u8, pRef: *mut u8, kiStride: i32) {
     // SHIM(phase2) -> i4x4_luma_pred_hd
     unsafe { i4x4_luma_pred_hd(pred::<16>(pPred), &reference(pRef, kiStride, REACH_I4X4_HD)) }
@@ -1054,6 +1090,8 @@ pub unsafe extern "C" fn WelsI4x4LumaPredHD_c(pPred: *mut u8, pRef: *mut u8, kiS
 /// * `pPred` is writable for **64** bytes (packed 8x8, stride 8).
 /// * `pRef` has the eight samples `[-kiStride, -kiStride + 8)` readable.
 /// * `kiStride > 0`, and the two regions do not overlap.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsIChromaPredV_c(pPred: *mut u8, pRef: *mut u8, kiStride: i32) {
     // SHIM(phase2) -> chroma_pred_v
     unsafe { chroma_pred_v(pred::<64>(pPred), top_row::<8>(pRef, kiStride)) }
@@ -1066,6 +1104,8 @@ pub unsafe extern "C" fn WelsIChromaPredV_c(pPred: *mut u8, pRef: *mut u8, kiStr
 /// * `pRef` has [`REACH_CHROMA_LEFT`] readable: eight samples at `x = -1`, i.e.
 ///   the bytes `[-1, 7 * kiStride)`.
 /// * `kiStride > 0`, and the two regions do not overlap.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsIChromaPredH_c(pPred: *mut u8, pRef: *mut u8, kiStride: i32) {
     // SHIM(phase2) -> chroma_pred_h
     unsafe { chroma_pred_h(pred::<64>(pPred), &reference(pRef, kiStride, REACH_CHROMA_LEFT)) }
@@ -1080,6 +1120,8 @@ pub unsafe extern "C" fn WelsIChromaPredH_c(pPred: *mut u8, pRef: *mut u8, kiStr
 ///   `[-kiStride - 1, 7 * kiStride)`. The corner is reached by the `pTop[2 - i]`
 ///   and `pLeft[(2 - i) * kiStride]` arms at `i == 3`.
 /// * `kiStride > 0`, and the two regions do not overlap.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsIChromaPredPlane_c(pPred: *mut u8, pRef: *mut u8, kiStride: i32) {
     // SHIM(phase2) -> chroma_pred_plane
     unsafe { chroma_pred_plane(pred::<64>(pPred), &reference(pRef, kiStride, REACH_CHROMA_PLANE)) }
@@ -1092,6 +1134,8 @@ pub unsafe extern "C" fn WelsIChromaPredPlane_c(pPred: *mut u8, pRef: *mut u8, k
 /// * `pRef` has [`REACH_CHROMA_DC`] readable: eight samples above and eight to
 ///   the left, i.e. the bytes `[-kiStride, 7 * kiStride)`.
 /// * `kiStride > 0`, and the two regions do not overlap.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsIChromaPredDc_c(pPred: *mut u8, pRef: *mut u8, kiStride: i32) {
     // SHIM(phase2) -> chroma_pred_dc
     unsafe { chroma_pred_dc(pred::<64>(pPred), &reference(pRef, kiStride, REACH_CHROMA_DC)) }
@@ -1104,6 +1148,8 @@ pub unsafe extern "C" fn WelsIChromaPredDc_c(pPred: *mut u8, pRef: *mut u8, kiSt
 /// * `pRef` has [`REACH_CHROMA_LEFT`] readable — eight samples at `x = -1`,
 ///   nothing above.
 /// * `kiStride > 0`, and the two regions do not overlap.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsIChromaPredDcLeft_c(pPred: *mut u8, pRef: *mut u8, kiStride: i32) {
     // SHIM(phase2) -> chroma_pred_dc_left
     unsafe { chroma_pred_dc_left(pred::<64>(pPred), &reference(pRef, kiStride, REACH_CHROMA_LEFT)) }
@@ -1116,6 +1162,8 @@ pub unsafe extern "C" fn WelsIChromaPredDcLeft_c(pPred: *mut u8, pRef: *mut u8, 
 /// * `pRef` has the eight samples `[-kiStride, -kiStride + 8)` readable, and
 ///   nothing to the left.
 /// * `kiStride > 0`, and the two regions do not overlap.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsIChromaPredDcTop_c(pPred: *mut u8, pRef: *mut u8, kiStride: i32) {
     // SHIM(phase2) -> chroma_pred_dc_top
     unsafe { chroma_pred_dc_top(pred::<64>(pPred), top_row::<8>(pRef, kiStride)) }
@@ -1126,6 +1174,8 @@ pub unsafe extern "C" fn WelsIChromaPredDcTop_c(pPred: *mut u8, pRef: *mut u8, k
 /// # Safety
 /// * `pPred` is writable for **64** bytes (packed 8x8, stride 8).
 /// * `pRef` and `kiStride` are unread; `pRef` may be null.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsIChromaPredDcNA_c(pPred: *mut u8, _pRef: *mut u8, _kiStride: i32) {
     // SHIM(phase2) -> chroma_pred_dc_na
     unsafe { chroma_pred_dc_na(pred::<64>(pPred)) }
@@ -1141,6 +1191,8 @@ pub unsafe extern "C" fn WelsIChromaPredDcNA_c(pPred: *mut u8, _pRef: *mut u8, _
 ///   sixteen samples above and sixteen to the left — the bytes
 ///   `[-kiStride - 1, 15 * kiStride)`.
 /// * `kiStride > 0`, and the two regions do not overlap.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsI16x16LumaPredPlane_c(pPred: *mut u8, pRef: *mut u8, kiStride: i32) {
     // SHIM(phase2) -> i16x16_luma_pred_plane
     unsafe { i16x16_luma_pred_plane(pred::<256>(pPred), &reference(pRef, kiStride, REACH_I16X16_PLANE)) }
@@ -1153,6 +1205,8 @@ pub unsafe extern "C" fn WelsI16x16LumaPredPlane_c(pPred: *mut u8, pRef: *mut u8
 /// * `pRef` has [`REACH_I16X16_DC`] readable: sixteen samples above and sixteen
 ///   to the left, i.e. the bytes `[-kiStride, 15 * kiStride)`.
 /// * `kiStride > 0`, and the two regions do not overlap.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsI16x16LumaPredDc_c(pPred: *mut u8, pRef: *mut u8, kiStride: i32) {
     // SHIM(phase2) -> i16x16_luma_pred_dc
     unsafe { i16x16_luma_pred_dc(pred::<256>(pPred), &reference(pRef, kiStride, REACH_I16X16_DC)) }
@@ -1165,6 +1219,8 @@ pub unsafe extern "C" fn WelsI16x16LumaPredDc_c(pPred: *mut u8, pRef: *mut u8, k
 /// * `pRef` has the sixteen samples `[-kiStride, -kiStride + 16)` readable, and
 ///   nothing to the left.
 /// * `kiStride > 0`, and the two regions do not overlap.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsI16x16LumaPredDcTop_c(pPred: *mut u8, pRef: *mut u8, kiStride: i32) {
     // SHIM(phase2) -> i16x16_luma_pred_dc_top
     unsafe { i16x16_luma_pred_dc_top(pred::<256>(pPred), top_row::<16>(pRef, kiStride)) }
@@ -1177,6 +1233,8 @@ pub unsafe extern "C" fn WelsI16x16LumaPredDcTop_c(pPred: *mut u8, pRef: *mut u8
 /// * `pRef` has [`REACH_I16X16_LEFT`] readable — sixteen samples at `x = -1`,
 ///   nothing above.
 /// * `kiStride > 0`, and the two regions do not overlap.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsI16x16LumaPredDcLeft_c(pPred: *mut u8, pRef: *mut u8, kiStride: i32) {
     // SHIM(phase2) -> i16x16_luma_pred_dc_left
     unsafe { i16x16_luma_pred_dc_left(pred::<256>(pPred), &reference(pRef, kiStride, REACH_I16X16_LEFT)) }
@@ -1187,6 +1245,8 @@ pub unsafe extern "C" fn WelsI16x16LumaPredDcLeft_c(pPred: *mut u8, pRef: *mut u
 /// # Safety
 /// * `pPred` is writable for **256** bytes (packed 16x16, stride 16).
 /// * `pRef` and `kiStride` are unread; `pRef` may be null.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsI16x16LumaPredDcNA_c(pPred: *mut u8, _pRef: *mut u8, _kiStride: i32) {
     // SHIM(phase2) -> i16x16_luma_pred_dc_na
     unsafe { i16x16_luma_pred_dc_na(pred::<256>(pPred)) }
@@ -1198,6 +1258,8 @@ pub unsafe extern "C" fn WelsI16x16LumaPredDcNA_c(pPred: *mut u8, _pRef: *mut u8
 ///
 /// # Safety
 /// `pFuncList` must be a valid, writable `SWelsFuncPtrList`.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn WelsInitIntraPredFuncs(pFuncList: &mut SWelsFuncPtrList, _kuiCpuFlag: u32) {
     let fl = &mut *pFuncList;
 
@@ -1246,6 +1308,8 @@ mod tests {
     }
 
     #[test]
+    // unsafe-cat: port-raw(Phase 9)
+    #[allow(unsafe_code)]
     fn i4x4_dc_na_fills_0x80() {
         let mut pred = [0u8; 16];
         unsafe { WelsI4x4LumaPredDcNA_c(pred.as_mut_ptr(), core::ptr::null_mut(), 0) };
@@ -1253,6 +1317,8 @@ mod tests {
     }
 
     #[test]
+    // unsafe-cat: port-raw(Phase 9)
+    #[allow(unsafe_code)]
     fn i16x16_dc_na_fills_0x80() {
         let mut pred = [0u8; 256];
         unsafe { WelsI16x16LumaPredDcNA_c(pred.as_mut_ptr(), core::ptr::null_mut(), 0) };
@@ -1260,6 +1326,8 @@ mod tests {
     }
 
     #[test]
+    // unsafe-cat: port-raw(Phase 9)
+    #[allow(unsafe_code)]
     fn chroma_dc_na_fills_0x80() {
         let mut pred = [0u8; 64];
         unsafe { WelsIChromaPredDcNA_c(pred.as_mut_ptr(), core::ptr::null_mut(), 0) };
@@ -1269,6 +1337,8 @@ mod tests {
     /// I4x4 vertical replicates the four top samples down all four rows; horizontal
     /// replicates each left sample across its row.
     #[test]
+    // unsafe-cat: port-raw(Phase 9)
+    #[allow(unsafe_code)]
     fn i4x4_v_and_h_replicate_their_edge() {
         let stride = 32usize;
         let mut plane = ramp_plane(stride, 24);
@@ -1293,6 +1363,8 @@ mod tests {
     /// I16x16 DC is the rounded mean of the 16 top and 16 left samples; DcTop and
     /// DcLeft use only one edge with a different rounding shift.
     #[test]
+    // unsafe-cat: port-raw(Phase 9)
+    #[allow(unsafe_code)]
     fn i16x16_dc_variants_match_their_definitions() {
         let stride = 48usize;
         let mut plane = ramp_plane(stride, 40);
@@ -1316,6 +1388,8 @@ mod tests {
     /// Chroma vertical writes the same eight top samples into all eight rows of the
     /// stride-8 prediction block; horizontal broadcasts each left sample.
     #[test]
+    // unsafe-cat: port-raw(Phase 9)
+    #[allow(unsafe_code)]
     fn chroma_v_and_h_replicate_their_edge() {
         let stride = 32usize;
         let mut plane = ramp_plane(stride, 24);
@@ -1338,6 +1412,8 @@ mod tests {
     /// A flat reference plane must produce a flat prediction for every mode — the
     /// cheapest check that the DDL/DDR/VL/VR/HU/HD tap patterns cover all 16 samples.
     #[test]
+    // unsafe-cat: port-raw(Phase 9)
+    #[allow(unsafe_code)]
     fn all_i4x4_modes_are_flat_on_a_flat_plane() {
         let stride = 32usize;
         let mut plane = vec![137u8; stride * 24];
@@ -1363,6 +1439,8 @@ mod tests {
 
     /// Same for chroma and I16x16.
     #[test]
+    // unsafe-cat: port-raw(Phase 9)
+    #[allow(unsafe_code)]
     fn all_chroma_and_i16x16_modes_are_flat_on_a_flat_plane() {
         let stride = 48usize;
         let mut plane = vec![91u8; stride * 40];
@@ -1525,6 +1603,8 @@ mod tests {
     /// regression test for the defect that motivated the module: the three tables were
     /// declared but never populated, so `WelsMdI16x16` unwrapped a `None`.
     #[test]
+    // unsafe-cat: port-raw(Phase 9)
+    #[allow(unsafe_code)]
     fn init_fills_every_slot_the_md_layer_indexes() {
         // Zeroing this table is sound for the reason its own `Default` gives
         // (`wels_func_ptr_def.rs`, S21); session I converts both with the dispatch

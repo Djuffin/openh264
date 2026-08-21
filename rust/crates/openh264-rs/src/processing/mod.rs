@@ -41,6 +41,8 @@
 //! Every one is off in the gate configuration, and 341/341 holds with all five
 //! unsupported.
 
+#![deny(unsafe_code)]
+
 pub mod adaptive_quantization;
 pub mod background_detection;
 pub mod complexity_analysis;

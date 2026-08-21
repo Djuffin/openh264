@@ -41,6 +41,8 @@
 //! Translated from `codec/encoder/core/src/svc_set_mb_syn_cabac.cpp`,
 //! `codec/encoder/core/inc/svc_set_mb_syn.h`, and `codec/encoder/core/inc/set_mb_syn_cabac.h`.
 
+#![deny(unsafe_code)]
+
 pub use crate::encoder::encoder_context::SMVUnitXY;
 use crate::encoder::encoder_context::ctx_func_list;
 pub use crate::encoder::encoder_context::SDCTCoeff;
@@ -215,6 +217,8 @@ pub use crate::encoder::vlc_encoder::BsAlign;
 // Macroblock Header & Mode Serialization
 // ============================================================================
 
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn WelsCabacMbType(
     buf: &mut [u8],
     pCabacCtx: &mut SCabacCtx,
@@ -312,6 +316,8 @@ pub unsafe fn WelsCabacMbType(
     }
 }
 
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn WelsCabacMbIntra4x4PredMode(buf: &mut [u8], pCabacCtx: &mut SCabacCtx, pMbCache: *mut SMbCache) {
     unsafe {
         for iMode in 0..16 {
@@ -330,6 +336,8 @@ pub unsafe fn WelsCabacMbIntra4x4PredMode(buf: &mut [u8], pCabacCtx: &mut SCabac
     }
 }
 
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn WelsCabacMbIntraChromaPredMode(
     buf: &mut [u8],
     pCabacCtx: &mut SCabacCtx,
@@ -373,6 +381,8 @@ pub unsafe fn WelsCabacMbIntraChromaPredMode(
     }
 }
 
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn WelsCabacMbCbp(buf: &mut [u8], pCurMb: *mut SMB, iMbWidth: i32, pCabacCtx: &mut SCabacCtx) {
     unsafe {
         let cbp = (*pCurMb).uiCbp as i32;
@@ -453,6 +463,8 @@ pub unsafe fn WelsCabacMbCbp(buf: &mut [u8], pCurMb: *mut SMB, iMbWidth: i32, pC
     }
 }
 
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn WelsCabacMbDeltaQp(
     buf: &mut [u8],
     pCurMb: *mut SMB,
@@ -503,6 +515,8 @@ pub unsafe fn WelsCabacMbDeltaQp(
     }
 }
 
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn WelsMbSkipCabac(
     buf: &mut [u8],
     pCabacCtx: &mut SCabacCtx,
@@ -539,6 +553,8 @@ pub unsafe fn WelsMbSkipCabac(
     }
 }
 
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn WelsCabacMbRef(
     buf: &mut [u8],
     pCabacCtx: &mut SCabacCtx,
@@ -569,6 +585,8 @@ pub unsafe fn WelsCabacMbRef(
 }
 
 #[inline]
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn WelsCabacMbMvdLx(
     buf: &mut [u8],
     pCabacCtx: &mut SCabacCtx,
@@ -617,6 +635,8 @@ pub unsafe fn WelsCabacMbMvdLx(
     }
 }
 
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn WelsCabacMbMvd(
     buf: &mut [u8],
     pCabacCtx: &mut SCabacCtx,
@@ -658,6 +678,8 @@ pub unsafe fn WelsCabacMbMvd(
     }
 }
 
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn WelsCabacSubMbType(buf: &mut [u8], pCabacCtx: &mut SCabacCtx, pCurMb: &SMB) {
     unsafe {
         for i8x8Idx in 0..4 {
@@ -681,6 +703,8 @@ pub unsafe fn WelsCabacSubMbType(buf: &mut [u8], pCabacCtx: &mut SCabacCtx, pCur
     }
 }
 
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn WelsCabacSubMbMvd(
     buf: &mut [u8],
     pCabacCtx: &mut SCabacCtx,
@@ -738,6 +762,8 @@ pub unsafe fn WelsCabacSubMbMvd(
     }
 }
 
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn WelsGetMbCtxCabac(
     pMbCache: *mut SMbCache,
     pCurMb: *mut SMB,
@@ -778,6 +804,8 @@ pub unsafe fn WelsGetMbCtxCabac(
     }
 }
 
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn WelsWriteBlockResidualCabac(
     buf: &mut [u8],
     pMbCache: *mut SMbCache,
@@ -876,6 +904,8 @@ pub unsafe fn WelsWriteBlockResidualCabac(
 }
 
 #[inline]
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn WelsCalNonZeroCount2x2Block(pBlock: *const i16) -> i32 {
     unsafe {
         ((*pBlock != 0) as i32)
@@ -885,6 +915,8 @@ pub unsafe fn WelsCalNonZeroCount2x2Block(pBlock: *const i16) -> i32 {
     }
 }
 
+// unsafe-cat: port-raw(Phase 7)
+#[allow(unsafe_code)]
 pub unsafe fn WelsWriteMbResidualCabac(
     buf: &mut [u8],
     pFuncList: &SWelsFuncPtrList,
@@ -1080,6 +1112,8 @@ pub unsafe fn WelsWriteMbResidualCabac(
 // Top-Level Slice & Macroblock CABAC Entry Points
 // ============================================================================
 
+// unsafe-cat: port-raw(Phase 7)
+#[allow(unsafe_code)]
 pub unsafe fn WelsInitSliceCabac(
     pEncCtx: *mut crate::encoder::encoder_context::sWelsEncCtx,
     pSlice: *mut SSlice,
@@ -1107,6 +1141,8 @@ pub unsafe fn WelsInitSliceCabac(
     }
 }
 
+// unsafe-cat: port-raw(Phase 7)
+#[allow(unsafe_code)]
 pub unsafe fn WelsSpatialWriteMbSynCabac(
     pEncCtx: *mut crate::encoder::encoder_context::sWelsEncCtx,
     pSlice: *mut SSlice,
@@ -1254,6 +1290,8 @@ mod tests {
     use super::*;
     
     #[test]
+    // unsafe-cat: port-raw(Phase 9)
+    #[allow(unsafe_code)]
     fn test_cal_nonzero_count_2x2() {
         let block_zero = [0i16, 0, 0, 0];
         assert_eq!(unsafe { WelsCalNonZeroCount2x2Block(block_zero.as_ptr()) }, 0);
@@ -1278,6 +1316,8 @@ mod tests {
     }
 
     #[test]
+    // unsafe-cat: port-raw(Phase 9)
+    #[allow(unsafe_code)]
     fn test_cabac_encode_init_and_terminate() {
         let mut buffer = vec![0u8; 128];
         let mut cabac_ctx = SCabacCtx::default();
@@ -1293,6 +1333,8 @@ mod tests {
     }
 
     #[test]
+    // unsafe-cat: port-raw(Phase 9)
+    #[allow(unsafe_code)]
     fn test_cabac_mb_skip_logic() {
         let mut buffer = vec![0u8; 128];
         let mut cabac_ctx = SCabacCtx::default();

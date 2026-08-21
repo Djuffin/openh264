@@ -11,6 +11,8 @@
 //!
 //! Translated from `codec/encoder/plus/inc/welsEncoderExt.h` and `codec/encoder/plus/src/welsEncoderExt.cpp`.
 
+#![deny(unsafe_code)]
+
 use std::ffi::{c_char, c_void};
 use std::ptr::{null, null_mut};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -413,6 +415,8 @@ pub use crate::encoder::rc::SWelsSvcRc;
 // WelsInitEncoderExt, that mismatch corrupted the heap at Uninitialize (SIGTRAP in
 // libsystem_malloc), which is how it was found.
 
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn WelsWriteOneSPS(pCtx: *mut sWelsEncCtx, kiSpsIdx: i32, iNalSize: *mut i32) -> i32 {
     let pOut = (*pCtx).pOut;
     let iNal = (*pOut).iNalIndex;
@@ -448,6 +452,8 @@ pub unsafe fn WelsWriteOneSPS(pCtx: *mut sWelsEncCtx, kiSpsIdx: i32, iNalSize: *
 }
 
 /// `WelsWriteOnePPS` — encoder_ext.cpp:2849.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn WelsWriteOnePPS(pCtx: *mut sWelsEncCtx, kiPpsIdx: i32, iNalSize: *mut i32) -> i32 {
     let pOut = (*pCtx).pOut;
     let iNal = (*pOut).iNalIndex;
@@ -490,6 +496,8 @@ pub unsafe fn WelsWriteOnePPS(pCtx: *mut sWelsEncCtx, kiPpsIdx: i32, iNalSize: *
 /// the parameter-set arrays. The previous version of this function substituted a count
 /// of 1 when those were zero and swallowed each writer's return value; that turned
 /// blocker C into a silent success.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn WelsWriteParameterSets(
     pCtx: *mut sWelsEncCtx,
     pNalLen: *mut i32,
@@ -609,6 +617,8 @@ pub unsafe fn WelsWriteParameterSets(
 
 
 
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn WelsEncoderEncodeParameterSetsRust(
     pCtx: *mut sWelsEncCtx,
     pBsInfo: *mut SFrameBSInfo,
@@ -645,6 +655,8 @@ pub unsafe fn WelsEncoderEncodeParameterSetsRust(
     ENC_RETURN_SUCCESS
 }
 
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn ForceCodingIDR(pCtx: *mut sWelsEncCtx, _iLayerId: i32) -> i32 {
     if pCtx.is_null() {
         return 1;
@@ -658,6 +670,8 @@ pub unsafe fn ForceCodingIDR(pCtx: *mut sWelsEncCtx, _iLayerId: i32) -> i32 {
 /// or needs a full uninit/init cycle, and does whichever it decides. `pNewParam`
 /// is `SWelsSvcCodingParam*` (non-const) in C++ and really is written back — the
 /// clip block in the no-reset arm mutates the caller's copy.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn WelsEncoderParamAdjust(
     ppCtx: *mut *mut sWelsEncCtx,
     pNewParam: *mut SWelsSvcCodingParam,
@@ -966,6 +980,8 @@ pub unsafe fn WelsEncoderParamAdjust(
 /// output/input ratio. The clip to [`MIN_FRAME_RATE`, `MAX_FRAME_RATE`] is the
 /// *caller's* job in C++ (`SetOption` does it before calling); this function does
 /// not clip.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn WelsEncoderApplyFrameRate(pParam: *mut SWelsSvcCodingParam) {
     const kfEpsn: f32 = 0.000001;
     let kiNumLayer = (*pParam).iSpatialLayerNum;
@@ -995,6 +1011,8 @@ pub unsafe fn WelsEncoderApplyFrameRate(pParam: *mut SWelsSvcCodingParam) {
 ///
 /// `SPATIAL_LAYER_ALL` re-splits `iTargetBitrate` across the layers in the ratio
 /// they already held; a single layer id only re-verifies that layer.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn WelsEncoderApplyBitRate(
     pLogCtx: *mut SLogContext,
     pParam: *mut SWelsSvcCodingParam,
@@ -1031,6 +1049,8 @@ pub unsafe fn WelsEncoderApplyBitRate(
 ///
 /// Derives the reference-frame count the requested LTR setting needs, raises
 /// `iMaxNumRefFrame`/`iNumRefFrame` to reach it, and re-adjusts the encoder.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn WelsEncoderApplyLTR(
     pLogCtx: *mut SLogContext,
     ppCtx: *mut *mut sWelsEncCtx,
@@ -1079,6 +1099,8 @@ pub unsafe fn WelsEncoderApplyLTR(
 /// `ParamValidation` — codec/encoder/core/src/encoder_ext.cpp:264.
 ///
 /// Complete port, including the RC-on bitrate loop and QP-range correction.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn ParamValidation(pLogCtx: *mut SLogContext, pCfg: *mut SWelsSvcCodingParam) -> i32 {
     const fEpsn: f32 = 0.000001;
     debug_assert!(!pCfg.is_null());
@@ -1213,6 +1235,8 @@ pub unsafe fn ParamValidation(pLogCtx: *mut SLogContext, pCfg: *mut SWelsSvcCodi
 /// The `WelsLog` calls that accompany each rejection in C++ have no counterpart here,
 /// as elsewhere in this port — only the control flow and the returned code are
 /// reproduced.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn ParamValidationExt(
     pLogCtx: *mut SLogContext,
     pCodingParam: *mut SWelsSvcCodingParam,
@@ -1453,6 +1477,8 @@ pub unsafe fn ParamValidationExt(
 }
 
 /// `CheckProfileSetting` — codec/encoder/core/src/encoder_ext.cpp:126.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn CheckProfileSetting(
     _pLogCtx: *mut SLogContext,
     pParam: *mut SWelsSvcCodingParam,
@@ -1477,6 +1503,8 @@ pub unsafe fn CheckProfileSetting(
 /// `CheckLevelSetting` — codec/encoder/core/src/encoder_ext.cpp:151.
 /// Accepts `uiLevelIdc` only if it appears in the shared level-limits table,
 /// otherwise leaves the layer at `LEVEL_UNKNOWN`.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn CheckLevelSetting(
     _pLogCtx: *mut SLogContext,
     pParam: *mut SWelsSvcCodingParam,
@@ -1499,6 +1527,8 @@ pub unsafe fn CheckLevelSetting(
 ///
 /// Out-of-range counts fall back to `AUTO_REF_PIC_COUNT`, not to the clamped
 /// value.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn CheckReferenceNumSetting(
     _pLogCtx: *mut SLogContext,
     pParam: *mut SWelsSvcCodingParam,
@@ -1520,6 +1550,8 @@ pub unsafe fn CheckReferenceNumSetting(
 /// Lowers each layer's `iMaxSpatialBitrate` to at most `iSpatialBitrate * (1 +
 /// iRang/100)`. It does **not** write `iBitsVaryPercentage`; `SetOption` does
 /// that (with the clip) before calling.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn WelsEncoderApplyBitVaryRang(
     pLogCtx: *mut SLogContext,
     pParam: *mut SWelsSvcCodingParam,
@@ -1573,6 +1605,8 @@ impl CWelsH264SVCEncoder {
         encoder
     }
 
+    // unsafe-cat: port-raw(Phase 9)
+    #[allow(unsafe_code)]
     pub fn InitEncoder(&mut self) {
         if !self.m_pWelsTrace.is_null() {
             unsafe {
@@ -1581,6 +1615,8 @@ impl CWelsH264SVCEncoder {
         }
     }
 
+    // unsafe-cat: port-raw(Phase 9)
+    #[allow(unsafe_code)]
     pub fn GetDefaultParams(&mut self, argv: *mut SEncParamExt) -> i32 {
         if argv.is_null() {
             return cmInitParaError;
@@ -1591,6 +1627,8 @@ impl CWelsH264SVCEncoder {
         cmResultSuccess
     }
 
+    // unsafe-cat: port-raw(Phase 9)
+    #[allow(unsafe_code)]
     pub fn Initialize(&mut self, argv: *const SEncParamBase) -> i32 {
         if self.m_pWelsTrace.is_null() {
             return cmMallocMemeError;
@@ -1609,6 +1647,8 @@ impl CWelsH264SVCEncoder {
         self.InitializeInternal(&mut sConfig)
     }
 
+    // unsafe-cat: port-raw(Phase 9)
+    #[allow(unsafe_code)]
     pub fn InitializeExt(&mut self, argv: *const SEncParamExt) -> i32 {
         if self.m_pWelsTrace.is_null() {
             return cmMallocMemeError;
@@ -1627,6 +1667,8 @@ impl CWelsH264SVCEncoder {
         self.InitializeInternal(&mut sConfig)
     }
 
+    // unsafe-cat: port-raw(Phase 9)
+    #[allow(unsafe_code)]
     pub fn InitializeInternal(&mut self, pCfg: *mut SWelsSvcCodingParam) -> i32 {
         if pCfg.is_null() {
             return cmInitParaError;
@@ -1741,6 +1783,8 @@ impl CWelsH264SVCEncoder {
         cmResultSuccess
     }
 
+    // unsafe-cat: port-raw(Phase 9)
+    #[allow(unsafe_code)]
     pub fn Uninitialize(&mut self) -> i32 {
         if !self.m_bInitialFlag {
             return 0;
@@ -1755,6 +1799,8 @@ impl CWelsH264SVCEncoder {
         0
     }
 
+    // unsafe-cat: port-raw(Phase 9)
+    #[allow(unsafe_code)]
     pub fn EncodeFrame(
         &mut self,
         kpSrcPic: *const SSourcePicture,
@@ -1775,6 +1821,8 @@ impl CWelsH264SVCEncoder {
         kiEncoderReturn
     }
 
+    // unsafe-cat: port-raw(Phase 9)
+    #[allow(unsafe_code)]
     pub fn EncodeFrameInternal(
         &mut self,
         pSrcPic: *const SSourcePicture,
@@ -1810,6 +1858,8 @@ impl CWelsH264SVCEncoder {
         cmResultSuccess
     }
 
+    // unsafe-cat: port-raw(Phase 9)
+    #[allow(unsafe_code)]
     pub fn EncodeParameterSets(&mut self, pBsInfo: *mut SFrameBSInfo) -> i32 {
         if self.m_pEncContext.is_null() || !self.m_bInitialFlag || pBsInfo.is_null() {
             return cmInitParaError;
@@ -1817,6 +1867,8 @@ impl CWelsH264SVCEncoder {
         unsafe { WelsEncoderEncodeParameterSetsRust(self.m_pEncContext, pBsInfo) }
     }
 
+    // unsafe-cat: port-raw(Phase 9)
+    #[allow(unsafe_code)]
     pub fn ForceIntraFrame(&mut self, bIDR: bool, iLayerId: i32) -> i32 {
         if bIDR {
             if self.m_pEncContext.is_null() || !self.m_bInitialFlag {
@@ -1833,6 +1885,8 @@ impl CWelsH264SVCEncoder {
 
     pub fn LogStatistics(&mut self, _kiCurrentFrameTs: i64, _iMaxDid: i32) {}
 
+    // unsafe-cat: port-raw(Phase 9)
+    #[allow(unsafe_code)]
     pub fn UpdateStatistics(&mut self, pBsInfo: *mut SFrameBSInfo, kiCurrentFrameMs: i64) {
         unsafe {
             if self.m_pEncContext.is_null() || ctx_param(self.m_pEncContext).is_null() || pBsInfo.is_null() {
@@ -1945,6 +1999,8 @@ impl CWelsH264SVCEncoder {
         }
     }
 
+    // unsafe-cat: port-raw(Phase 9)
+    #[allow(unsafe_code)]
     pub fn SetOption(&mut self, eOptionId: EncoderOption, pOption: *mut c_void) -> i32 {
         if pOption.is_null() {
             return cmInitParaError;
@@ -2318,6 +2374,8 @@ impl CWelsH264SVCEncoder {
         0
     }
 
+    // unsafe-cat: port-raw(Phase 9)
+    #[allow(unsafe_code)]
     pub fn GetOption(&mut self, eOptionId: EncoderOption, pOption: *mut c_void) -> i32 {
         if pOption.is_null() {
             return cmInitParaError;
@@ -2417,6 +2475,8 @@ impl CWelsH264SVCEncoder {
 }
 
 impl Drop for CWelsH264SVCEncoder {
+    // unsafe-cat: port-raw(Phase 9)
+    #[allow(unsafe_code)]
     fn drop(&mut self) {
         self.Uninitialize();
         if !self.m_pWelsTrace.is_null() {
@@ -2429,6 +2489,8 @@ impl Drop for CWelsH264SVCEncoder {
 }
 
 // C-Vtable Thunk Callbacks for ISVCEncoder
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 unsafe extern "C" fn ext_Initialize(
     p: *mut ISVCEncoderHandle,
     argv: *const SEncParamBase,
@@ -2437,6 +2499,8 @@ unsafe extern "C" fn ext_Initialize(
     enc.Initialize(argv)
 }
 
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 unsafe extern "C" fn ext_InitializeExt(
     p: *mut ISVCEncoderHandle,
     argv: *const SEncParamExt,
@@ -2445,6 +2509,8 @@ unsafe extern "C" fn ext_InitializeExt(
     enc.InitializeExt(argv)
 }
 
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 unsafe extern "C" fn ext_GetDefaultParams(
     p: *mut ISVCEncoderHandle,
     argv: *mut SEncParamExt,
@@ -2453,11 +2519,15 @@ unsafe extern "C" fn ext_GetDefaultParams(
     enc.GetDefaultParams(argv)
 }
 
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 unsafe extern "C" fn ext_Uninitialize(p: *mut ISVCEncoderHandle) -> i32 {
     let enc = &mut *(p as *mut CWelsH264SVCEncoder);
     enc.Uninitialize()
 }
 
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 unsafe extern "C" fn ext_EncodeFrame(
     p: *mut ISVCEncoderHandle,
     kpSrcPic: *const SSourcePicture,
@@ -2467,6 +2537,8 @@ unsafe extern "C" fn ext_EncodeFrame(
     enc.EncodeFrame(kpSrcPic, pBsInfo)
 }
 
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 unsafe extern "C" fn ext_EncodeParameterSets(
     p: *mut ISVCEncoderHandle,
     pBsInfo: *mut SFrameBSInfo,
@@ -2475,11 +2547,15 @@ unsafe extern "C" fn ext_EncodeParameterSets(
     enc.EncodeParameterSets(pBsInfo)
 }
 
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 unsafe extern "C" fn ext_ForceIntraFrame(p: *mut ISVCEncoderHandle, bIDR: bool) -> i32 {
     let enc = &mut *(p as *mut CWelsH264SVCEncoder);
     enc.ForceIntraFrame(bIDR, -1)
 }
 
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 unsafe extern "C" fn ext_SetOption(
     p: *mut ISVCEncoderHandle,
     opt_id: EncoderOption,
@@ -2489,6 +2565,8 @@ unsafe extern "C" fn ext_SetOption(
     enc.SetOption(opt_id, option)
 }
 
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 unsafe extern "C" fn ext_GetOption(
     p: *mut ISVCEncoderHandle,
     opt_id: EncoderOption,
@@ -2510,6 +2588,8 @@ pub static G_ISVCENCODER_VTBL: ISVCEncoderVtbl = ISVCEncoderVtbl {
     GetOption: ext_GetOption,
 };
 
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsCreateSVCEncoderExt(ppEncoder: *mut *mut ISVCEncoderHandle) -> i32 {
     if ppEncoder.is_null() {
         return 1;
@@ -2519,6 +2599,8 @@ pub unsafe extern "C" fn WelsCreateSVCEncoderExt(ppEncoder: *mut *mut ISVCEncode
     0
 }
 
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsDestroySVCEncoderExt(pEncoder: *mut ISVCEncoderHandle) {
     if !pEncoder.is_null() {
         let _ = Box::from_raw(pEncoder as *mut CWelsH264SVCEncoder);
@@ -2533,11 +2615,15 @@ pub static G_ST_CODEC_VERSION: OpenH264Version = OpenH264Version {
 };
 
 #[unsafe(no_mangle)]
+// unsafe-cat: C-ABI
+#[allow(unsafe_code)]
 pub extern "C" fn WelsGetCodecVersion() -> OpenH264Version {
     G_ST_CODEC_VERSION
 }
 
 #[unsafe(no_mangle)]
+// unsafe-cat: C-ABI
+#[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsGetCodecVersionEx(pVersion: *mut OpenH264Version) {
     if !pVersion.is_null() {
         *pVersion = G_ST_CODEC_VERSION;

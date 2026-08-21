@@ -47,6 +47,8 @@
     unused_unsafe
 )]
 
+#![deny(unsafe_code)]
+
 pub use crate::encoder::wels_func_ptr_def::SWelsFuncPtrList;
 
 // ============================================================================
@@ -581,6 +583,8 @@ pub fn get_none_zero_count(level: &[i16; 16]) -> i32 {
 /// macroblock cursor and a 16- or 8-stride prediction scratch
 /// (`svc_encode_mb.rs:684`, `svc_encode_slice.rs`).
 #[inline]
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsDctT4_c(
     pDct: *mut i16,
     pPixel1: *mut u8,
@@ -607,6 +611,8 @@ pub unsafe extern "C" fn WelsDctT4_c(
 ///   the bytes `[0, 7*stride + 8)` from each pointer must be readable
 ///   (forward reach only). Both strides `>= 8` and positive. Only read.
 #[inline]
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsDctFourT4_c(
     pDct: *mut i16,
     pPixel1: *mut u8,
@@ -635,6 +641,8 @@ pub unsafe extern "C" fn WelsDctFourT4_c(
 /// * `pFF` and `pMF` point at 8 readable `i16` each (one QP row of
 ///   `g_kiQuantInterFF` / `g_kiQuantMF`), disjoint from `pDct`.
 #[inline]
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsQuant4x4_c(pDct: *mut i16, pFF: *const i16, pMF: *const i16) {
     // SHIM(phase2) -> quant_4x4
     let dct: &mut [i16; 16] = unsafe { std::slice::from_raw_parts_mut(pDct, 16) }
@@ -650,6 +658,8 @@ pub unsafe extern "C" fn WelsQuant4x4_c(pDct: *mut i16, pFF: *const i16, pMF: *c
 /// # Safety
 /// `pDct` points at 16 writable, `i16`-aligned `i16`.
 #[inline]
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsQuant4x4Dc_c(pDct: *mut i16, iFF: i16, iMF: i16) {
     // SHIM(phase2) -> quant_4x4_dc
     let dct: &mut [i16; 16] = unsafe { std::slice::from_raw_parts_mut(pDct, 16) }
@@ -664,6 +674,8 @@ pub unsafe extern "C" fn WelsQuant4x4Dc_c(pDct: *mut i16, iFF: i16, iMF: i16) {
 /// * `pDct` points at 64 writable, `i16`-aligned `i16`.
 /// * `pFF` and `pMF` point at 8 readable `i16` each, disjoint from `pDct`.
 #[inline]
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsQuantFour4x4_c(pDct: *mut i16, pFF: *const i16, pMF: *const i16) {
     // SHIM(phase2) -> quant_four_4x4
     let dct: &mut [i16; 64] = unsafe { std::slice::from_raw_parts_mut(pDct, 64) }
@@ -684,6 +696,8 @@ pub unsafe extern "C" fn WelsQuantFour4x4_c(pDct: *mut i16, pFF: *const i16, pMF
 ///   array for `pMax` and table rows for the factors,
 ///   `svc_encode_mb.rs:868-870`).
 #[inline]
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsQuantFour4x4Max_c(
     pDct: *mut i16,
     pFF: *const i16,
@@ -717,6 +731,8 @@ pub unsafe extern "C" fn WelsQuantFour4x4Max_c(
 ///   offsets), so 49 always exists.
 /// * `iMF != 0` (the callers' `mf >> 1` table values are all >= 14).
 #[inline]
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsHadamardQuant2x2Skip_c(pRs: *mut i16, iFF: i16, iMF: i16) -> i32 {
     // SHIM(phase2) -> hadamard_quant_2x2_skip
     let rs: &[i16; 49] = unsafe { std::slice::from_raw_parts(pRs, 49) }.try_into().unwrap();
@@ -735,6 +751,8 @@ pub unsafe extern "C" fn WelsHadamardQuant2x2Skip_c(pRs: *mut i16, iFF: i16, iMF
 ///   `pMbCache->pDct.iChromaDc` (`svc_encode_mb.rs:862-866`) — three
 ///   distinct allocations.
 #[inline]
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsHadamardQuant2x2_c(
     pRs: *mut i16,
     kiFF: i16,
@@ -765,6 +783,8 @@ pub unsafe extern "C" fn WelsHadamardQuant2x2_c(
 ///   (`svc_encode_mb.rs:537-539`). Nothing is written through it.
 /// * The two regions are disjoint (the caller's `aDctT4Dc` is a stack array).
 #[inline]
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsHadamardT4Dc_c(pLumaDc: *mut i16, pDct: *mut i16) {
     // SHIM(phase2) -> hadamard_t4_dc
     let luma_dc: &mut [i16; 16] = unsafe { std::slice::from_raw_parts_mut(pLumaDc, 16) }
@@ -788,6 +808,8 @@ pub unsafe extern "C" fn WelsHadamardT4Dc_c(pLumaDc: *mut i16, pDct: *mut i16) {
 /// with a separate coefficient buffer, `svc_encode_mb.rs:543-548`). `pDct`
 /// is only read.
 #[inline]
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsScan4x4DcAc_c(pLevel: *mut i16, pDct: *mut i16) {
     // SHIM(phase2) -> scan_4x4_dc_ac
     let level: &mut [i16; 16] = unsafe { std::slice::from_raw_parts_mut(pLevel, 16) }
@@ -803,6 +825,8 @@ pub unsafe extern "C" fn WelsScan4x4DcAc_c(pLevel: *mut i16, pDct: *mut i16) {
 /// Same contract as [`WelsScan4x4DcAc_c`]: 16 writable / 16 readable
 /// disjoint `i16` regions.
 #[inline]
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsScan4x4Ac_c(pLevel: *mut i16, pDct: *mut i16) {
     // SHIM(phase2) -> scan_4x4_ac
     let level: &mut [i16; 16] = unsafe { std::slice::from_raw_parts_mut(pLevel, 16) }
@@ -817,6 +841,8 @@ pub unsafe extern "C" fn WelsScan4x4Ac_c(pLevel: *mut i16, pDct: *mut i16) {
 /// # Safety
 /// Same contract as [`WelsScan4x4DcAc_c`].
 #[inline]
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsScan4x4Dc(pLevel: *mut i16, pDct: *mut i16) {
     // SHIM(phase2) -> scan_4x4_dc_ac
     let level: &mut [i16; 16] = unsafe { std::slice::from_raw_parts_mut(pLevel, 16) }
@@ -835,6 +861,8 @@ pub unsafe extern "C" fn WelsScan4x4Dc(pLevel: *mut i16, pDct: *mut i16) {
 /// # Safety
 /// `pDct` points at 16 readable, `i16`-aligned `i16`. Nothing is written.
 #[inline]
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsCalculateSingleCtr4x4_c(pDct: *mut i16) -> i32 {
     // SHIM(phase2) -> calculate_single_ctr_4x4
     let dct: &[i16; 16] = unsafe { std::slice::from_raw_parts(pDct, 16) }.try_into().unwrap();
@@ -846,6 +874,8 @@ pub unsafe extern "C" fn WelsCalculateSingleCtr4x4_c(pDct: *mut i16) -> i32 {
 /// # Safety
 /// `pLevel` points at 16 readable, `i16`-aligned `i16`. Nothing is written.
 #[inline]
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsGetNoneZeroCount_c(pLevel: *mut i16) -> i32 {
     // SHIM(phase2) -> get_none_zero_count
     let level: &[i16; 16] = unsafe { std::slice::from_raw_parts(pLevel, 16) }
@@ -861,6 +891,8 @@ pub unsafe extern "C" fn WelsGetNoneZeroCount_c(pLevel: *mut i16) -> i32 {
 /// # Safety
 /// See [`copy_shim`] with `W = 4`, `H = 4`.
 #[inline]
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsCopy4x4_c(pDst: *mut u8, iStrideD: i32, pSrc: *mut u8, iStrideS: i32) {
     // SHIM(phase2) -> copy_4x4
     unsafe { copy_shim::<4, 4>(pDst, iStrideD, pSrc, iStrideS, copy_4x4) }
@@ -869,6 +901,8 @@ pub unsafe extern "C" fn WelsCopy4x4_c(pDst: *mut u8, iStrideD: i32, pSrc: *mut 
 /// # Safety
 /// See [`copy_shim`] with `W = 8`, `H = 4`.
 #[inline]
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsCopy8x4_c(pDst: *mut u8, iStrideD: i32, pSrc: *mut u8, iStrideS: i32) {
     // SHIM(phase2) -> copy_8x4
     unsafe { copy_shim::<8, 4>(pDst, iStrideD, pSrc, iStrideS, copy_8x4) }
@@ -877,6 +911,8 @@ pub unsafe extern "C" fn WelsCopy8x4_c(pDst: *mut u8, iStrideD: i32, pSrc: *mut 
 /// # Safety
 /// See [`copy_shim`] with `W = 4`, `H = 8`.
 #[inline]
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsCopy4x8_c(pDst: *mut u8, iStrideD: i32, pSrc: *mut u8, iStrideS: i32) {
     // SHIM(phase2) -> copy_4x8
     unsafe { copy_shim::<4, 8>(pDst, iStrideD, pSrc, iStrideS, copy_4x8) }
@@ -886,6 +922,8 @@ pub unsafe extern "C" fn WelsCopy4x8_c(pDst: *mut u8, iStrideD: i32, pSrc: *mut 
 /// See [`copy_shim`] with `W = 8`, `H = 8`. (The decoder's error-concealment
 /// module has its own same-named kernel — different function, never unify.)
 #[inline]
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsCopy8x8_c(pDst: *mut u8, iStrideD: i32, pSrc: *mut u8, iStrideS: i32) {
     // SHIM(phase2) -> copy_8x8
     unsafe { copy_shim::<8, 8>(pDst, iStrideD, pSrc, iStrideS, copy_8x8) }
@@ -894,6 +932,8 @@ pub unsafe extern "C" fn WelsCopy8x8_c(pDst: *mut u8, iStrideD: i32, pSrc: *mut 
 /// # Safety
 /// See [`copy_shim`] with `W = 16`, `H = 8`.
 #[inline]
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsCopy16x8_c(pDst: *mut u8, iStrideD: i32, pSrc: *mut u8, iStrideS: i32) {
     // SHIM(phase2) -> copy_16x8
     unsafe { copy_shim::<16, 8>(pDst, iStrideD, pSrc, iStrideS, copy_16x8) }
@@ -902,6 +942,8 @@ pub unsafe extern "C" fn WelsCopy16x8_c(pDst: *mut u8, iStrideD: i32, pSrc: *mut
 /// # Safety
 /// See [`copy_shim`] with `W = 8`, `H = 16`.
 #[inline]
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsCopy8x16_c(pDst: *mut u8, iStrideD: i32, pSrc: *mut u8, iStrideS: i32) {
     // SHIM(phase2) -> copy_8x16
     unsafe { copy_shim::<8, 16>(pDst, iStrideD, pSrc, iStrideS, copy_8x16) }
@@ -911,6 +953,8 @@ pub unsafe extern "C" fn WelsCopy8x16_c(pDst: *mut u8, iStrideD: i32, pSrc: *mut
 /// See [`copy_shim`] with `W = 16`, `H = 16`. (Same name-collision note as
 /// [`WelsCopy8x8_c`].)
 #[inline]
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsCopy16x16_c(pDst: *mut u8, iStrideD: i32, pSrc: *mut u8, iStrideS: i32) {
     // SHIM(phase2) -> copy_16x16
     unsafe { copy_shim::<16, 16>(pDst, iStrideD, pSrc, iStrideS, copy_16x16) }
@@ -932,6 +976,8 @@ pub unsafe extern "C" fn WelsCopy16x16_c(pDst: *mut u8, iStrideD: i32, pSrc: *mu
 ///
 /// # Safety
 /// - `pFuncList` must point to a valid, writable `SWelsFuncPtrList` instance.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsInitEncodingFuncs(pFuncList: &mut SWelsFuncPtrList, uiCpuFlag: u32) {
 
     unsafe {
@@ -977,6 +1023,8 @@ mod tests {
     use super::*;
     
     #[test]
+    // unsafe-cat: port-raw(Phase 9)
+    #[allow(unsafe_code)]
     fn test_fdct_t4() {
         let mut p1 = [
             10u8, 20, 30, 40,
@@ -995,6 +1043,8 @@ mod tests {
     }
 
     #[test]
+    // unsafe-cat: port-raw(Phase 9)
+    #[allow(unsafe_code)]
     fn test_quant_4x4() {
         let mut dct = [100i16; 16];
         let qp = 26usize;
@@ -1011,6 +1061,8 @@ mod tests {
     }
 
     #[test]
+    // unsafe-cat: port-raw(Phase 9)
+    #[allow(unsafe_code)]
     fn test_hadamard_quant_2x2() {
         let mut res = [0i16; 64];
         res[0] = 30;
@@ -1037,6 +1089,8 @@ mod tests {
     }
 
     #[test]
+    // unsafe-cat: port-raw(Phase 9)
+    #[allow(unsafe_code)]
     fn test_zigzag_scan() {
         let mut dct = [0i16; 16];
         for i in 0..16 {
@@ -1054,6 +1108,8 @@ mod tests {
     }
 
     #[test]
+    // unsafe-cat: port-raw(Phase 9)
+    #[allow(unsafe_code)]
     fn test_nonzero_count() {
         let mut level = [0i16; 16];
         level[0] = 5;
@@ -1065,6 +1121,8 @@ mod tests {
     }
 
     #[test]
+    // unsafe-cat: port-raw(Phase 9)
+    #[allow(unsafe_code)]
     fn test_init_encoding_funcs() {
         let mut func_list = SWelsFuncPtrList::default();
         unsafe {

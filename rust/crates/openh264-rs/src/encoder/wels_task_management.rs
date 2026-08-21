@@ -11,6 +11,10 @@
     unused_unsafe
 )]
 
+// deny(unsafe_code) lands with Phase 7; this file is the thread machinery.
+// The exemption itself is the `#[allow(unsafe_code)]` on this file's `pub mod`
+// line in `encoder/mod.rs`, where the module-level deny reaches from.
+
 use std::ptr::null_mut;
 use std::sync::{Arc, Condvar, Mutex};
 pub use crate::encoder::encoder_context::SLogContext;

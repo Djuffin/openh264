@@ -45,6 +45,8 @@
     unused_unsafe
 )]
 
+#![deny(unsafe_code)]
+
 use crate::safe::plane::{PlaneCursor, PlaneCursorMut};
 pub use crate::encoder::encoder_context::SMVUnitXY;
 use crate::encoder::encoder_context::ctx_func_list;
@@ -334,6 +336,8 @@ fn WelsClip1(val: i32) -> u8 {
 /// * `pDct` points at 16 readable, `i16`-aligned `i16`, disjoint from both.
 /// * Any argument may be null, in which case nothing happens (the C++'s own
 ///   guard, kept).
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsIDctT4Rec_c(
     pRec: *mut u8,
     iStride: i32,
@@ -368,6 +372,8 @@ pub unsafe extern "C" fn WelsIDctT4Rec_c(
 /// As [`WelsIDctT4Rec_c`] with 8x8 spans: `[0, 7*iStride + 8)` writable from
 /// `pRec`, `[0, 7*iPredStride + 8)` readable from `pPred`, 64 `i16` from
 /// `pDct`; strides `>= 8`; nulls tolerated.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsIDctFourT4Rec_c(
     pRec: *mut u8,
     iStride: i32,
@@ -409,6 +415,8 @@ pub unsafe extern "C" fn WelsIDctFourT4Rec_c(
 /// overflow the kernel's plain `i16` intermediates — a debug panic where the
 /// C++ wraps (finding F11); the in-contract DC levels stay far below it.
 #[inline]
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn WelsIHadamard4x4Dc(pRes: *mut i16) {
     // SHIM(phase2) -> crate::encoder::decode_mb_aux::ihadamard_4x4_dc
     let res: &mut [i16; 16] = std::slice::from_raw_parts_mut(pRes, 16).try_into().unwrap();
@@ -422,6 +430,8 @@ pub unsafe fn WelsIHadamard4x4Dc(pRes: *mut i16) {
 /// 12+ the shift count goes negative — debug panic, the raw port's own
 /// behaviour; the one caller is gated on `uiQp < 12`).
 #[inline]
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn WelsDequantLumaDc4x4(pRes: *mut i16, kiQp: i32) {
     // SHIM(phase2) -> crate::encoder::decode_mb_aux::dequant_luma_dc_4x4
     let res: &mut [i16; 16] = std::slice::from_raw_parts_mut(pRes, 16).try_into().unwrap();
@@ -433,6 +443,8 @@ pub unsafe fn WelsDequantLumaDc4x4(pRes: *mut i16, kiQp: i32) {
 /// # Safety
 /// `pDct` points at 4 writable, `i16`-aligned `i16`.
 #[inline]
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn WelsDequantIHadamard2x2Dc(pDct: *mut i16, kuiMF: u16) {
     // SHIM(phase2) -> crate::encoder::decode_mb_aux::dequant_ihadamard_2x2_dc
     let dct: &mut [i16; 4] = std::slice::from_raw_parts_mut(pDct, 4).try_into().unwrap();
@@ -451,6 +463,8 @@ pub unsafe fn WelsDequantIHadamard2x2Dc(pDct: *mut i16, kuiMF: u16) {
 /// - `pRes` must point to a writable `int16_t` buffer of at least 256 elements.
 /// - `pEncMb` and `pBestPred` must point to valid image and prediction sample buffers.
 #[inline]
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn WelsDctMb(
     pRes: *mut i16,
     pEncMb: *mut u8,
@@ -483,6 +497,8 @@ pub unsafe fn WelsDctMb(
 ///
 /// # Safety
 /// All pointers in `pEncCtx`, `pCurMb`, and `pMbCache` must be properly initialized and valid.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn WelsEncRecI16x16Y(
     pEncCtx: *mut sWelsEncCtx,
     pCurMb: &mut SMB,
@@ -630,6 +646,8 @@ pub unsafe fn WelsEncRecI16x16Y(
 ///
 /// # Safety
 /// All pointers in `pEncCtx`, `pCurMb`, and `pMbCache` must be properly initialized and valid.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn WelsEncRecI4x4Y(
     pEncCtx: *mut sWelsEncCtx,
     pCurMb: &mut SMB,
@@ -705,6 +723,8 @@ pub unsafe fn WelsEncRecI4x4Y(
 ///
 /// # Safety
 /// All pointers in `pFuncList`, `pCurMb`, and `pMbCache` must be properly initialized and valid.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn WelsEncInterY(
     pFuncList: &SWelsFuncPtrList,
     pCurMb: &mut SMB,
@@ -796,6 +816,8 @@ pub unsafe fn WelsEncInterY(
 ///
 /// # Safety
 /// All pointers in `pFuncList`, `pCurMb`, `pMbCache`, and `pRes` must be properly initialized and valid.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn WelsEncRecUV(
     pFuncList: &SWelsFuncPtrList,
     pCurMb: &mut SMB,
@@ -912,6 +934,8 @@ pub unsafe fn WelsEncRecUV(
 ///
 /// # Safety
 /// All pointers in `pCurLayer`, `pFuncList`, `pCurMb`, and `pMbCache` must be valid.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn WelsRecPskip(
     pCurLayer: *mut SDqLayer,
     pFuncList: &SWelsFuncPtrList,
@@ -950,6 +974,8 @@ pub unsafe fn WelsRecPskip(
 ///
 /// # Safety
 /// All pointers in `pEncCtx`, `pCurMb`, and `pMbCache` must be valid.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn WelsTryPYskip(
     pEncCtx: *mut sWelsEncCtx,
     pCurMb: &mut SMB,
@@ -999,6 +1025,8 @@ pub unsafe fn WelsTryPYskip(
 ///
 /// # Safety
 /// All pointers in `pEncCtx`, `pCurMb`, and `pMbCache` must be valid.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn WelsTryPUVskip(
     pEncCtx: *mut sWelsEncCtx,
     pCurMb: &mut SMB,
@@ -1073,6 +1101,8 @@ mod tests {
     use super::*;
     
     #[test]
+    // unsafe-cat: port-raw(Phase 9)
+    #[allow(unsafe_code)]
     fn test_hadamard_4x4_dc_identity() {
         let mut dc_buf = [0i16; 16];
         dc_buf[0] = 16;
@@ -1087,6 +1117,8 @@ mod tests {
     }
 
     #[test]
+    // unsafe-cat: port-raw(Phase 9)
+    #[allow(unsafe_code)]
     fn test_dequant_ihadamard_2x2_dc() {
         let mut dct2x2 = [2i16, 0, 0, 0];
         let mf: u16 = 10;

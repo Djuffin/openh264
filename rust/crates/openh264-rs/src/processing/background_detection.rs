@@ -14,6 +14,8 @@
 //! the OU grid and the macroblock grid coincide for the sizes this encoder builds.
 //! The code is transcribed as written rather than specialised to that.
 
+#![deny(unsafe_code)]
+
 use crate::encoder::wels_preprocess::{SBGDInterface, SPixMap, SVAACalcResult};
 
 use super::vaacalc::{RET_INVALIDPARAM, RET_SUCCESS};
@@ -119,6 +121,8 @@ impl CBackgroundDetection {
     /// Both pixel maps must describe readable Y/U/V planes, the pointer stored by
     /// the preceding [`Set`](Self::Set) must still be valid, and `calc`'s arrays must
     /// cover the picture's macroblocks.
+    // unsafe-cat: port-raw(Phase 9)
+    #[allow(unsafe_code)]
     pub unsafe fn Process(&mut self, pSrcPixMap: &SPixMap, pRefPixMap: &SPixMap, calc: &SVAACalcResult) -> i32 {
         for i in 0..3 {
             self.m_BgdParam.pCur[i] = pSrcPixMap.pPixel[i];
@@ -173,6 +177,8 @@ impl CBackgroundDetection {
     }
 
     /// `CBackgroundDetection::ForegroundBackgroundDivision` — `BackgroundDetection.cpp:157`.
+    // unsafe-cat: port-raw(Phase 9)
+    #[allow(unsafe_code)]
     unsafe fn ForegroundBackgroundDivision(&mut self, calc: &SVAACalcResult) {
         let iPicWidthInOU = self.m_BgdParam.iBgdWidth >> LOG2_BGD_OU_SIZE;
         let iPicHeightInOU = self.m_BgdParam.iBgdHeight >> LOG2_BGD_OU_SIZE;
@@ -213,6 +219,8 @@ impl CBackgroundDetection {
     }
 
     /// `CBackgroundDetection::CalculateAsdChromaEdge` — `BackgroundDetection.cpp:189`.
+    // unsafe-cat: port-raw(Phase 9)
+    #[allow(unsafe_code)]
     unsafe fn CalculateAsdChromaEdge(pOriRef: *const u8, pOriCur: *const u8, iStride: i32) -> i32 {
         let mut ASD: i32 = 0;
         let mut pRef = pOriRef;
@@ -263,6 +271,8 @@ impl CBackgroundDetection {
     }
 
     /// `CBackgroundDetection::ForegroundDilation23Chroma` — `BackgroundDetection.cpp:232`.
+    // unsafe-cat: port-raw(Phase 9)
+    #[allow(unsafe_code)]
     unsafe fn ForegroundDilation23Chroma(
         &self,
         iNeighbourForegroundFlags: i8,
@@ -295,6 +305,8 @@ impl CBackgroundDetection {
     }
 
     /// `CBackgroundDetection::ForegroundDilation` — `BackgroundDetection.cpp:263`.
+    // unsafe-cat: port-raw(Phase 9)
+    #[allow(unsafe_code)]
     unsafe fn ForegroundDilation(
         &self,
         pBackgroundOU: &mut SBackgroundOU,
@@ -366,6 +378,8 @@ impl CBackgroundDetection {
     /// mutating. Rust's aliasing rules make that awkward, so each iteration copies
     /// the four neighbours by value before touching the current OU — every callee
     /// reads them and none writes them, so the values are the same.
+    // unsafe-cat: port-raw(Phase 9)
+    #[allow(unsafe_code)]
     unsafe fn ForegroundDilationAndBackgroundErosion(&mut self) {
         let iPicStrideUV = self.m_BgdParam.iStride[1];
         let iPicWidthInOU = self.m_BgdParam.iBgdWidth >> LOG2_BGD_OU_SIZE;

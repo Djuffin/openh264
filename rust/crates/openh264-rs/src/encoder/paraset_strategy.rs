@@ -31,6 +31,8 @@
 //! recorded as F19.
 #![allow(non_snake_case, non_camel_case_types, non_upper_case_globals, dead_code)]
 
+#![deny(unsafe_code)]
+
 use std::ptr::null_mut;
 
 use crate::api::codec_api::EParameterSetStrategy;
@@ -183,6 +185,8 @@ impl CWelsParametersetIdStrategyObj {
     /// # Safety
     /// On an `Increasing` object, `pParaSetOffsetVariable` must be writable for
     /// `PARA_SET_TYPE` elements.
+    // unsafe-cat: port-raw(Phase 9)
+    #[allow(unsafe_code)]
     pub unsafe fn OutputCurrentStructure(
         &mut self,
         pParaSetOffsetVariable: *mut SParaSetOffsetVariable,
@@ -212,6 +216,8 @@ impl CWelsParametersetIdStrategyObj {
     /// # Safety
     /// On an `Increasing` object, `pParaSetOffsetVariable` must be readable for
     /// `PARA_SET_TYPE` elements.
+    // unsafe-cat: port-raw(Phase 9)
+    #[allow(unsafe_code)]
     pub unsafe fn LoadPreviousStructure(
         &mut self,
         pParaSetOffsetVariable: *mut SParaSetOffsetVariable,
@@ -320,6 +326,8 @@ impl CWelsParametersetIdStrategyObj {
     ///
     /// # Safety
     /// `pCtx` must satisfy [`WelsGenerateNewSps`]'s contract.
+    // unsafe-cat: port-raw(Phase 9)
+    #[allow(unsafe_code)]
     pub unsafe fn GenerateNewSps(
         &mut self,
         pCtx: *mut sWelsEncCtx,
@@ -350,6 +358,8 @@ impl CWelsParametersetIdStrategyObj {
     ///
     /// # Safety
     /// `pCtx->pPPSArray` must hold at least `kuiPpsId + 1` entries.
+    // unsafe-cat: port-raw(Phase 9)
+    #[allow(unsafe_code)]
     pub unsafe fn InitPps(
         &mut self,
         pCtx: *mut sWelsEncCtx,
@@ -402,6 +412,8 @@ impl CWelsParametersetIdStrategyObj {
 /// # Safety
 /// `pCtx` must have `pSvcParam` set and `pSpsArray`/`pSubsetArray` allocated to at
 /// least `kiSpsId + 1` entries.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn WelsGenerateNewSps(
     pCtx: *mut sWelsEncCtx,
     kbUseSubsetSps: bool,
@@ -513,6 +525,8 @@ fn ParasetIdAdditionIdAdjust(
 /// call sites that run before that point test the field first. Panics rather than
 /// dereferencing null if the invariant is broken; the vtable version was UB there.
 #[inline]
+// unsafe-cat: cursor
+#[allow(unsafe_code)]
 pub unsafe fn ParasetStrategy<'a>(
     pCtx: *mut sWelsEncCtx,
 ) -> &'a mut CWelsParametersetIdStrategyObj {
@@ -558,6 +572,8 @@ pub fn CreateParametersetStrategy(
 ///
 /// # Safety
 /// Both pointers must reference initialised `SWelsSPS` values.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn CheckMatchedSps(pSps1: *const SWelsSPS, pSps2: *const SWelsSPS) -> bool {
     if (*pSps1).iMbWidth != (*pSps2).iMbWidth || (*pSps1).iMbHeight != (*pSps2).iMbHeight {
         return false;
@@ -599,6 +615,8 @@ pub unsafe fn CheckMatchedSps(pSps1: *const SWelsSPS, pSps2: *const SWelsSPS) ->
 ///
 /// # Safety
 /// Both pointers must reference initialised `SSubsetSps` values.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn CheckMatchedSubsetSps(
     pSubsetSps1: *const SSubsetSps,
     pSubsetSps2: *const SSubsetSps,
@@ -630,6 +648,8 @@ pub unsafe fn CheckMatchedSubsetSps(
 /// # Safety
 /// `pParam` must be initialised; `pSpsArray`/`pSubsetArray` must hold at least
 /// `iSpsNumInUse` entries.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn FindExistingSps(
     pParam: *mut SWelsSvcCodingParam,
     kbUseSubsetSps: bool,

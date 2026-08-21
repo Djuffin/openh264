@@ -37,6 +37,8 @@
 // mirrored below).
 // ---------------------------------------------------------------------------
 
+#![deny(unsafe_code)]
+
 use crate::safe::plane::PlaneCursor;
 
 /// Hadamard 4x4 sum of absolute transformed differences of two 4x4 blocks.
@@ -127,6 +129,8 @@ use crate::encoder::wels_func_ptr_def::SWelsFuncPtrList;
 ///
 /// # Safety
 /// Both sample pointers must be readable for 4 rows at their respective strides.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsSampleSatd4x4_c(
     pSample1: *mut u8,
     iStride1: i32,
@@ -187,6 +191,8 @@ pub unsafe extern "C" fn WelsSampleSatd4x4_c(
 ///
 /// # Safety
 /// See [`WelsSampleSatd4x4_c`].
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsSampleSatd8x4_c(
     pSample1: *mut u8,
     iStride1: i32,
@@ -201,6 +207,8 @@ pub unsafe extern "C" fn WelsSampleSatd8x4_c(
 ///
 /// # Safety
 /// See [`WelsSampleSatd4x4_c`].
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsSampleSatd4x8_c(
     pSample1: *mut u8,
     iStride1: i32,
@@ -220,6 +228,8 @@ pub unsafe extern "C" fn WelsSampleSatd4x8_c(
 ///
 /// # Safety
 /// See [`WelsSampleSatd4x4_c`].
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsSampleSatd8x8_c(
     pSample1: *mut u8,
     iStride1: i32,
@@ -248,6 +258,8 @@ pub unsafe extern "C" fn WelsSampleSatd8x8_c(
 ///
 /// # Safety
 /// See [`WelsSampleSatd4x4_c`].
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsSampleSatd16x8_c(
     pSample1: *mut u8,
     iStride1: i32,
@@ -262,6 +274,8 @@ pub unsafe extern "C" fn WelsSampleSatd16x8_c(
 ///
 /// # Safety
 /// See [`WelsSampleSatd4x4_c`].
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsSampleSatd8x16_c(
     pSample1: *mut u8,
     iStride1: i32,
@@ -281,6 +295,8 @@ pub unsafe extern "C" fn WelsSampleSatd8x16_c(
 ///
 /// # Safety
 /// See [`WelsSampleSatd4x4_c`].
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsSampleSatd16x16_c(
     pSample1: *mut u8,
     iStride1: i32,
@@ -311,6 +327,8 @@ pub unsafe extern "C" fn WelsSampleSatd16x16_c(
 ///
 /// # Safety
 /// `pFuncList` must be a valid, writable `SWelsFuncPtrList`.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn WelsInitSampleSadFunc(pFuncList: &mut SWelsFuncPtrList, _uiCpuFlag: u32) {
     let sdf = &mut pFuncList.sSampleDealingFuncs;
 
@@ -351,6 +369,8 @@ mod tests {
 
     /// SATD of a block against itself is zero for every size.
     #[test]
+    // unsafe-cat: port-raw(Phase 9)
+    #[allow(unsafe_code)]
     fn satd_of_identical_blocks_is_zero() {
         let stride = 24usize;
         let mut a: Vec<u8> = (0..stride * 20).map(|i| ((i * 37) % 256) as u8).collect();
@@ -371,6 +391,8 @@ mod tests {
     /// A constant offset between the two blocks concentrates all the energy in the DC
     /// coefficient: SATD4x4 = |16 * d| / 2 = 8 * |d| after the `(sum + 1) >> 1`.
     #[test]
+    // unsafe-cat: port-raw(Phase 9)
+    #[allow(unsafe_code)]
     fn satd4x4_of_constant_offset_is_dc_only() {
         let stride = 16usize;
         let mut a = vec![100u8; stride * 8];
@@ -389,6 +411,8 @@ mod tests {
 
     /// The larger SATDs are exactly the sum of their 4x4 sub-blocks.
     #[test]
+    // unsafe-cat: port-raw(Phase 9)
+    #[allow(unsafe_code)]
     fn satd_composes_from_4x4_subblocks() {
         let stride = 32usize;
         let mut a: Vec<u8> = (0..stride * 20).map(|i| ((i * 91 + 13) % 256) as u8).collect();
@@ -424,6 +448,8 @@ mod tests {
     /// Every slot the mode-decision layer indexes must be filled, and the five
     /// `Combined3` slots must be left NULL — `svc_base_layer_md` asserts on that.
     #[test]
+    // unsafe-cat: port-raw(Phase 9)
+    #[allow(unsafe_code)]
     fn init_fills_sad_and_satd_and_clears_combined3() {
         // Zeroing this table is sound for the reason its own `Default` gives
         // (`wels_func_ptr_def.rs`, S21); session I converts both with the dispatch

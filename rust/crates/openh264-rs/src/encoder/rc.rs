@@ -75,6 +75,8 @@
     unused_unsafe
 )]
 
+#![deny(unsafe_code)]
+
 use crate::{RCMode, SSliceArgument, SSpatialLayerConfig, EUsageType};
 pub use crate::encoder::svc_encode_slice::SSliceHeader;
 use crate::encoder::svc_encode_slice::layer_pps;
@@ -544,6 +546,8 @@ impl SWelsRcFunc {
     /// # Safety
     /// As the callbacks: `pCtx` must be a live, initialized encoder context.
     #[inline]
+    // unsafe-cat: port-raw(Phase 9)
+    #[allow(unsafe_code)]
     pub unsafe fn WelsRcPictureInit(self, pCtx: *mut sWelsEncCtx, uiTimeStamp: i64) {
         match self.eInstalledMode {
             RCMode::RC_OFF_MODE => WelsRcPictureInitDisable(pCtx, uiTimeStamp),
@@ -562,6 +566,8 @@ impl SWelsRcFunc {
     /// # Safety
     /// As [`WelsRcPictureInit`](SWelsRcFunc::WelsRcPictureInit).
     #[inline]
+    // unsafe-cat: port-raw(Phase 9)
+    #[allow(unsafe_code)]
     pub unsafe fn WelsRcPicDelayJudge(self, pCtx: *mut sWelsEncCtx, uiTimeStamp: i64, iDidIdx: i32) {
         if self.eInstalledMode == RCMode::RC_TIMESTAMP_MODE {
             WelsRcFrameDelayJudgeTimeStamp(pCtx, uiTimeStamp, iDidIdx);
@@ -573,6 +579,8 @@ impl SWelsRcFunc {
     /// # Safety
     /// As [`WelsRcPictureInit`](SWelsRcFunc::WelsRcPictureInit).
     #[inline]
+    // unsafe-cat: port-raw(Phase 9)
+    #[allow(unsafe_code)]
     pub unsafe fn WelsRcPictureInfoUpdate(self, pCtx: *mut sWelsEncCtx, iLayerSize: i32) {
         match self.eInstalledMode {
             RCMode::RC_OFF_MODE | RCMode::RC_BUFFERBASED_MODE => {
@@ -591,6 +599,8 @@ impl SWelsRcFunc {
     /// As [`WelsRcPictureInit`](SWelsRcFunc::WelsRcPictureInit); `pCurMb` and
     /// `pSlice` must be live.
     #[inline]
+    // unsafe-cat: port-raw(Phase 7)
+    #[allow(unsafe_code)]
     pub unsafe fn WelsRcMbInit(self, pCtx: *mut sWelsEncCtx, pCurMb: &mut SMB, pSlice: *mut SSlice) {
         match self.eInstalledMode {
             RCMode::RC_OFF_MODE | RCMode::RC_BUFFERBASED_MODE => {
@@ -608,6 +618,8 @@ impl SWelsRcFunc {
     /// # Safety
     /// As [`WelsRcMbInit`](SWelsRcFunc::WelsRcMbInit).
     #[inline]
+    // unsafe-cat: port-raw(Phase 7)
+    #[allow(unsafe_code)]
     pub unsafe fn WelsRcMbInfoUpdate(
         self,
         pCtx: *mut sWelsEncCtx,
@@ -632,6 +644,8 @@ impl SWelsRcFunc {
     /// # Safety
     /// As [`WelsRcPictureInit`](SWelsRcFunc::WelsRcPictureInit).
     #[inline]
+    // unsafe-cat: port-raw(Phase 9)
+    #[allow(unsafe_code)]
     pub unsafe fn WelsCheckSkipBasedMaxbr(
         self,
         pCtx: *mut sWelsEncCtx,
@@ -652,6 +666,8 @@ impl SWelsRcFunc {
     /// # Safety
     /// As [`WelsRcPictureInit`](SWelsRcFunc::WelsRcPictureInit).
     #[inline]
+    // unsafe-cat: port-raw(Phase 9)
+    #[allow(unsafe_code)]
     pub unsafe fn WelsUpdateBufferWhenSkip(self, pCtx: *mut sWelsEncCtx, iSpatialNum: i32) {
         match self.eInstalledMode {
             RCMode::RC_BITRATE_MODE
@@ -667,6 +683,8 @@ impl SWelsRcFunc {
     /// # Safety
     /// As [`WelsRcPictureInit`](SWelsRcFunc::WelsRcPictureInit).
     #[inline]
+    // unsafe-cat: port-raw(Phase 9)
+    #[allow(unsafe_code)]
     pub unsafe fn WelsUpdateMaxBrWindowStatus(
         self,
         pCtx: *mut sWelsEncCtx,
@@ -693,6 +711,8 @@ impl SWelsRcFunc {
     /// # Safety
     /// As [`WelsRcPictureInit`](SWelsRcFunc::WelsRcPictureInit).
     #[inline]
+    // unsafe-cat: port-raw(Phase 9)
+    #[allow(unsafe_code)]
     pub unsafe fn WelsRcPostFrameSkipping(
         self,
         pCtx: *mut sWelsEncCtx,
@@ -734,6 +754,8 @@ impl SWelsRcFunc {
 /// The C++ takes the block with `WelsMalloc` (uninitialized) and every consumer
 /// either writes before reading or is guarded by `bGomRC`; the containers are
 /// zero-filled, which the port's own fallback path already did.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn RcInitLayerMemory(pWelsSvcRc: *mut SWelsSvcRc, kiMaxTl: i32) {
     if pWelsSvcRc.is_null() {
         return;
@@ -754,6 +776,8 @@ pub unsafe fn RcInitLayerMemory(pWelsSvcRc: *mut SWelsSvcRc, kiMaxTl: i32) {
 /// # Safety
 /// `pRc` must point to a live `SWelsSvcRc`.
 #[inline]
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn rc_temporal_over(pRc: *mut SWelsSvcRc) -> *mut SRCTemporal {
     let v: &mut Vec<SRCTemporal> = &mut (*pRc).pTemporalOverRc;
     if v.is_empty() {
@@ -767,6 +791,8 @@ pub unsafe fn rc_temporal_over(pRc: *mut SWelsSvcRc) -> *mut SRCTemporal {
 /// # Safety
 /// As [`rc_temporal_over`].
 #[inline]
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn rc_gom_complexity(pRc: *mut SWelsSvcRc) -> *mut f64 {
     let v: &mut Vec<f64> = &mut (*pRc).pGomComplexity;
     if v.is_empty() {
@@ -780,6 +806,8 @@ pub unsafe fn rc_gom_complexity(pRc: *mut SWelsSvcRc) -> *mut f64 {
 /// # Safety
 /// As [`rc_temporal_over`].
 #[inline]
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn rc_gom_fg_blocks(pRc: *mut SWelsSvcRc) -> *mut i32 {
     let v: &mut Vec<i32> = &mut (*pRc).pGomForegroundBlockNum;
     if v.is_empty() {
@@ -793,6 +821,8 @@ pub unsafe fn rc_gom_fg_blocks(pRc: *mut SWelsSvcRc) -> *mut i32 {
 /// # Safety
 /// As [`rc_temporal_over`].
 #[inline]
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn rc_gom_sad(pRc: *mut SWelsSvcRc) -> *mut i32 {
     let v: &mut Vec<i32> = &mut (*pRc).pCurrentFrameGomSad;
     if v.is_empty() {
@@ -806,6 +836,8 @@ pub unsafe fn rc_gom_sad(pRc: *mut SWelsSvcRc) -> *mut i32 {
 /// # Safety
 /// As [`rc_temporal_over`].
 #[inline]
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn rc_gom_cost(pRc: *mut SWelsSvcRc) -> *mut i32 {
     let v: &mut Vec<i32> = &mut (*pRc).pGomCost;
     if v.is_empty() {
@@ -832,6 +864,8 @@ pub fn RcConvertQStep2Qp(iQpStep: i32) -> i32 {
 }
 
 /// Initializes sequence-level rate control parameters for all spatial layers.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn RcInitSequenceParameter(pEncCtx: *mut sWelsEncCtx) {
     let pSvcParam = ctx_param(pEncCtx);
     let spatial_layer_num = (*pSvcParam).iSpatialLayerNum;
@@ -916,6 +950,8 @@ pub unsafe fn RcInitSequenceParameter(pEncCtx: *mut sWelsEncCtx) {
 }
 
 /// Initializes temporal layer weighting matrices for Virtual GOP bit allocation.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn RcInitTlWeight(pEncCtx: *mut sWelsEncCtx) {
     let did = (*pEncCtx).uiDependencyId as usize;
     let pWelsSvcRc = ctx_rc_at(pEncCtx, did);
@@ -961,6 +997,8 @@ pub unsafe fn RcInitTlWeight(pEncCtx: *mut sWelsEncCtx) {
 }
 
 /// Updates frame and temporal bit quotas whenever user bitrate or framerate changes.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn RcUpdateBitrateFps(pEncCtx: *mut sWelsEncCtx) {
     let did = (*pEncCtx).uiDependencyId as usize;
     let pWelsSvcRc = ctx_rc_at(pEncCtx, did);
@@ -1022,6 +1060,8 @@ pub unsafe fn RcUpdateBitrateFps(pEncCtx: *mut sWelsEncCtx) {
 }
 
 /// Resets the bit budget accumulator at the start of a Virtual GOP.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn RcInitVGop(pEncCtx: *mut sWelsEncCtx) {
     let kiDid = (*pEncCtx).uiDependencyId as usize;
     let pWelsSvcRc = ctx_rc_at(pEncCtx, kiDid);
@@ -1057,6 +1097,8 @@ pub unsafe fn RcInitVGop(pEncCtx: *mut sWelsEncCtx) {
 }
 
 /// Full reset of the rate control state machine upon encoder initialization or IDR insertion.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn RcInitRefreshParameter(pEncCtx: *mut sWelsEncCtx) {
     let kiDid = (*pEncCtx).uiDependencyId as usize;
     let pWelsSvcRc = ctx_rc_at(pEncCtx, kiDid);
@@ -1103,6 +1145,8 @@ pub unsafe fn RcInitRefreshParameter(pEncCtx: *mut sWelsEncCtx) {
 }
 
 /// Checks whether user bitrate or framerate settings have changed at runtime.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn RcJudgeBitrateFpsUpdate(pEncCtx: *mut sWelsEncCtx) -> bool {
     let iCurDid = (*pEncCtx).uiDependencyId as usize;
     let pWelsSvcRc = ctx_rc_at(pEncCtx, iCurDid);
@@ -1120,6 +1164,8 @@ pub unsafe fn RcJudgeBitrateFpsUpdate(pEncCtx: *mut sWelsEncCtx) -> bool {
 }
 
 /// Updates base temporal layer boundaries (`uiTemporalId == 0`).
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn RcUpdateTemporalZero(pEncCtx: *mut sWelsEncCtx) {
     let kiDid = (*pEncCtx).uiDependencyId as usize;
     let pWelsSvcRc = ctx_rc_at(pEncCtx, kiDid);
@@ -1138,6 +1184,8 @@ pub unsafe fn RcUpdateTemporalZero(pEncCtx: *mut sWelsEncCtx) {
 }
 
 /// Calculates the quantization parameter for IDR keyframes.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn RcCalculateIdrQp(pEncCtx: *mut sWelsEncCtx) {
     let dBpp: f64;
     let dBppArray: [[f64; 4]; 4] = [
@@ -1240,6 +1288,8 @@ pub unsafe fn RcCalculateIdrQp(pEncCtx: *mut sWelsEncCtx) {
 }
 
 /// Calculates the base quantization parameter for Inter P-frames.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn RcCalculatePictureQp(pEncCtx: *mut sWelsEncCtx) {
     let did = (*pEncCtx).uiDependencyId as usize;
     let pWelsSvcRc = ctx_rc_at(pEncCtx, did);
@@ -1325,6 +1375,8 @@ pub unsafe fn RcCalculatePictureQp(pEncCtx: *mut sWelsEncCtx) {
 }
 
 /// Initializes slice-level GOM rate control parameters.
+// unsafe-cat: port-raw(Phase 7)
+#[allow(unsafe_code)]
 pub unsafe fn GomRCInitForOneSlice(pSlice: *mut SSlice, kiBitsPerMb: i32) {
     if pSlice.is_null() {
         return;
@@ -1339,6 +1391,8 @@ pub unsafe fn GomRCInitForOneSlice(pSlice: *mut SSlice, kiBitsPerMb: i32) {
 }
 
 /// Resets bit accumulators and macroblock counters across slices.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn RcInitSliceInformation(pEncCtx: *mut sWelsEncCtx) {
     let pCurDq = current_layer(pEncCtx);
     let did = (*pEncCtx).uiDependencyId as usize;
@@ -1367,6 +1421,8 @@ pub unsafe fn RcInitSliceInformation(pEncCtx: *mut sWelsEncCtx) {
 }
 
 /// Allocates the target bit budget `iTargetBits` for the current frame.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn RcDecideTargetBits(pEncCtx: *mut sWelsEncCtx) {
     let did = (*pEncCtx).uiDependencyId as usize;
     let pWelsSvcRc = ctx_rc_at(pEncCtx, did);
@@ -1412,6 +1468,8 @@ pub unsafe fn RcDecideTargetBits(pEncCtx: *mut sWelsEncCtx) {
 }
 
 /// Target bit allocation routine used under `RC_TIMESTAMP_MODE`.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn RcDecideTargetBitsTimestamp(pEncCtx: *mut sWelsEncCtx) {
     let did = (*pEncCtx).uiDependencyId as usize;
     let pWelsSvcRc = ctx_rc_at(pEncCtx, did);
@@ -1474,6 +1532,8 @@ pub unsafe fn RcDecideTargetBitsTimestamp(pEncCtx: *mut sWelsEncCtx) {
 }
 
 /// Clears GOM complexity and cost tracking arrays.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn RcInitGomParameters(pEncCtx: *mut sWelsEncCtx) {
     let pCurDq = current_layer(pEncCtx);
     let did = (*pEncCtx).uiDependencyId as usize;
@@ -1494,6 +1554,8 @@ pub unsafe fn RcInitGomParameters(pEncCtx: *mut sWelsEncCtx) {
 }
 
 /// Assigns final macroblock luma and chroma QPs.
+// unsafe-cat: port-raw(Phase 7)
+#[allow(unsafe_code)]
 pub unsafe fn RcCalculateMbQp(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSlice, pCurMb: &mut SMB) {
     let did = (*pEncCtx).uiDependencyId as usize;
     let pWelsSvcRc = ctx_rc_at(pEncCtx, did);
@@ -1520,6 +1582,8 @@ pub unsafe fn RcCalculateMbQp(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSlice, pC
 }
 
 /// Evaluates if base layer GOM statistics can be reused for inter-layer prediction.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn RcJudgeBaseUsability(pEncCtx: *mut sWelsEncCtx) -> *mut SWelsSvcRc {
     let did = (*pEncCtx).uiDependencyId as usize;
     if did == 0 {
@@ -1546,6 +1610,8 @@ pub unsafe fn RcJudgeBaseUsability(pEncCtx: *mut sWelsEncCtx) -> *mut SWelsSvcRc
 }
 
 /// Distributes slice bit budget to the upcoming GOM unit.
+// unsafe-cat: port-raw(Phase 7)
+#[allow(unsafe_code)]
 pub unsafe fn RcGomTargetBits(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSlice) {
     let did = (*pEncCtx).uiDependencyId as usize;
     let pWelsSvcRc = ctx_rc_at(pEncCtx, did);
@@ -1590,6 +1656,8 @@ pub unsafe fn RcGomTargetBits(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSlice) {
 }
 
 /// Dynamically adjusts slice QP at GOM boundaries.
+// unsafe-cat: port-raw(Phase 7)
+#[allow(unsafe_code)]
 pub unsafe fn RcCalculateGomQp(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSlice, _pCurMb: &mut SMB) {
     let did = (*pEncCtx).uiDependencyId as usize;
     let pWelsSvcRc = ctx_rc_at(pEncCtx, did);
@@ -1629,6 +1697,8 @@ pub unsafe fn RcCalculateGomQp(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSlice, _
 }
 
 /// Updates virtual buffer fullness after encoding a frame.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn RcVBufferCalculationSkip(pEncCtx: *mut sWelsEncCtx) {
     let did = (*pEncCtx).uiDependencyId as usize;
     let pWelsSvcRc = ctx_rc_at(pEncCtx, did);
@@ -1666,6 +1736,8 @@ pub unsafe fn RcVBufferCalculationSkip(pEncCtx: *mut sWelsEncCtx) {
 }
 
 /// Enforces maximum bitrate constraints over dual sliding time windows.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe extern "C" fn CheckFrameSkipBasedMaxbr(
     pEncCtx: *mut sWelsEncCtx,
     _uiTimeStamp: i64,
@@ -1752,6 +1824,8 @@ pub unsafe extern "C" fn CheckFrameSkipBasedMaxbr(
 }
 
 /// Evaluates frame skip status across active spatial layers.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn WelsRcCheckFrameStatus(
     pEncCtx: *mut sWelsEncCtx,
     uiTimeStamp: i64,
@@ -1829,6 +1903,8 @@ pub unsafe fn WelsRcCheckFrameStatus(
 }
 
 /// Adjusts virtual buffer fullness and bit quotas when a frame is skipped.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe extern "C" fn UpdateBufferWhenFrameSkipped(pEncCtx: *mut sWelsEncCtx, iCurDid: i32) {
     let pWelsSvcRc = ctx_rc_at(pEncCtx, iCurDid as usize);
     let kiOutputBits = (*pWelsSvcRc).iBitsPerFrame;
@@ -1853,6 +1929,8 @@ pub unsafe extern "C" fn UpdateBufferWhenFrameSkipped(pEncCtx: *mut sWelsEncCtx,
 }
 
 /// Advances the 5000 ms sliding check window for maximum bitrate monitoring.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe extern "C" fn UpdateMaxBrCheckWindowStatus(
     pEncCtx: *mut sWelsEncCtx,
     iSpatialNum: i32,
@@ -1923,6 +2001,8 @@ pub unsafe extern "C" fn UpdateMaxBrCheckWindowStatus(
 
 /// Intentional no-op callback invoked after frame skipping.
 /// Matches `WelsRcPostFrameSkipping` in `ratectl.cpp`.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsRcPostFrameSkipping(
     _pCtx: *mut sWelsEncCtx,
     _iDid: i32,
@@ -1933,9 +2013,13 @@ pub unsafe extern "C" fn WelsRcPostFrameSkipping(
 
 /// Intentional no-op callback invoked after frame skipped update.
 /// Matches `WelsRcPostFrameSkippedUpdate` in `ratectl.cpp`.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn WelsRcPostFrameSkippedUpdate(_pCtx: *mut sWelsEncCtx, _iDid: i32) {}
 
 /// Evaluates virtual buffer underflow and calculates required padding bits.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn RcVBufferCalculationPadding(pEncCtx: *mut sWelsEncCtx) {
     let did = (*pEncCtx).uiDependencyId as usize;
     let pWelsSvcRc = ctx_rc_at(pEncCtx, did);
@@ -1957,6 +2041,8 @@ pub unsafe fn RcVBufferCalculationPadding(pEncCtx: *mut sWelsEncCtx) {
 }
 
 /// Logs frame bit rate control telemetry.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn RcTraceFrameBits(pEncCtx: *mut sWelsEncCtx, _uiTimeStamp: i64, _iFrameSize: i32) {
     let did = (*pEncCtx).uiDependencyId as usize;
     let pWelsSvcRc = ctx_rc_at(pEncCtx, did);
@@ -1971,6 +2057,8 @@ pub unsafe fn RcTraceFrameBits(pEncCtx: *mut sWelsEncCtx, _uiTimeStamp: i64, _iF
 }
 
 /// Computes average frame QP and updates temporal layer bit counters.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn RcUpdatePictureQpBits(pEncCtx: *mut sWelsEncCtx, iCodedBits: i32) {
     let pCurDq = current_layer(pEncCtx);
     let did = (*pEncCtx).uiDependencyId as usize;
@@ -2006,6 +2094,8 @@ pub unsafe fn RcUpdatePictureQpBits(pEncCtx: *mut sWelsEncCtx, iCodedBits: i32) 
 }
 
 /// Updates the exponential moving average of Intra frame complexity.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn RcUpdateIntraComplexity(pEncCtx: *mut sWelsEncCtx) {
     let did = (*pEncCtx).uiDependencyId as usize;
     let pWelsSvcRc = ctx_rc_at(pEncCtx, did);
@@ -2041,6 +2131,8 @@ pub unsafe fn RcUpdateIntraComplexity(pEncCtx: *mut sWelsEncCtx) {
 }
 
 /// Updates the exponential moving average of Inter P-frame linear complexity.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn RcUpdateFrameComplexity(pEncCtx: *mut sWelsEncCtx) {
     let did = (*pEncCtx).uiDependencyId as usize;
     let pWelsSvcRc = ctx_rc_at(pEncCtx, did);
@@ -2079,6 +2171,8 @@ pub unsafe fn RcUpdateFrameComplexity(pEncCtx: *mut sWelsEncCtx) {
 }
 
 /// Derives cascaded temporal layer QPs when rate control is disabled (`RC_OFF_MODE`).
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn RcCalculateCascadingQp(pEncCtx: *mut sWelsEncCtx, iQp: i32) -> i32 {
     let decomp = (*ctx_param(pEncCtx)).iDecompStages;
     if decomp != 0 {
@@ -2099,6 +2193,8 @@ pub unsafe fn RcCalculateCascadingQp(pEncCtx: *mut sWelsEncCtx, iQp: i32) -> i32
 // Function Pointer Target Callbacks
 // ============================================================================
 
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsRcPictureInitGom(pEncCtx: *mut sWelsEncCtx, uiTimeStamp: i64) {
     let did = (*pEncCtx).uiDependencyId as usize;
     let pWelsSvcRc = ctx_rc_at(pEncCtx, did);
@@ -2182,6 +2278,8 @@ static RC_DUMP: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
 /// Gate for the differential-bisection dump; see `encoder::dump_enabled`.
 static RC_MB_DUMP: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
 
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsRcPictureInfoUpdateGom(pEncCtx: *mut sWelsEncCtx, iLayerSize: i32) {
     let did = (*pEncCtx).uiDependencyId as usize;
     let pWelsSvcRc = ctx_rc_at(pEncCtx, did);
@@ -2220,6 +2318,8 @@ pub unsafe extern "C" fn WelsRcPictureInfoUpdateGom(pEncCtx: *mut sWelsEncCtx, i
     }
 }
 
+// unsafe-cat: port-raw(Phase 7)
+#[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsRcMbInitGom(
     pEncCtx: *mut sWelsEncCtx,
     pCurMb: &mut SMB,
@@ -2268,6 +2368,8 @@ pub unsafe extern "C" fn WelsRcMbInitGom(
     }
 }
 
+// unsafe-cat: port-raw(Phase 7)
+#[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsRcMbInfoUpdateGom(
     pEncCtx: *mut sWelsEncCtx,
     pCurMb: &mut SMB,
@@ -2293,6 +2395,8 @@ pub unsafe extern "C" fn WelsRcMbInfoUpdateGom(
     }
 }
 
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsRcPictureInitDisable(pEncCtx: *mut sWelsEncCtx, _uiTimeStamp: i64) {
     let did = (*pEncCtx).uiDependencyId as usize;
     let pWelsSvcRc = ctx_rc_at(pEncCtx, did);
@@ -2319,8 +2423,12 @@ pub unsafe extern "C" fn WelsRcPictureInitDisable(pEncCtx: *mut sWelsEncCtx, _ui
 
 /// Intentional no-op picture-level RC update callback when rate control is disabled.
 /// Matches `WelsRcPictureInfoUpdateDisable` in `ratectl.cpp:1298`.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsRcPictureInfoUpdateDisable(_pEncCtx: *mut sWelsEncCtx, _iLayerSize: i32) {}
 
+// unsafe-cat: port-raw(Phase 7)
+#[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsRcMbInitDisable(
     pEncCtx: *mut sWelsEncCtx,
     pCurMb: &mut SMB,
@@ -2352,6 +2460,8 @@ pub unsafe extern "C" fn WelsRcMbInitDisable(
 
 /// Intentional no-op macroblock-level RC update callback when rate control is disabled.
 /// Matches `WelsRcMbInfoUpdateDisable` in `ratectl.cpp:1319`.
+// unsafe-cat: port-raw(Phase 7)
+#[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsRcMbInfoUpdateDisable(
     _pEncCtx: *mut sWelsEncCtx,
     _pCurMb: &mut SMB,
@@ -2359,6 +2469,8 @@ pub unsafe extern "C" fn WelsRcMbInfoUpdateDisable(
     _pSlice: *mut SSlice,
 ) {}
 
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe extern "C" fn WelRcPictureInitBufferBasedQp(
     pEncCtx: *mut sWelsEncCtx,
     _uiTimeStamp: i64,
@@ -2385,6 +2497,8 @@ pub unsafe extern "C" fn WelRcPictureInitBufferBasedQp(
     (*pWelsSvcRc).iMinFrameQp = (*pEncCtx).iGlobalQp;
 }
 
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe extern "C" fn WelRcPictureInitScc(pEncCtx: *mut sWelsEncCtx, uiTimeStamp: i64) {
     let did = (*pEncCtx).uiDependencyId as usize;
     let pWelsSvcRc = ctx_rc_at(pEncCtx, did);
@@ -2467,12 +2581,16 @@ pub unsafe extern "C" fn WelRcPictureInitScc(pEncCtx: *mut sWelsEncCtx, uiTimeSt
     (*pWelsSvcRc).uiLastTimeStamp = uiTimeStamp;
 }
 
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn WelsRcDropFrameUpdate(pEncCtx: *mut sWelsEncCtx, iDropSize: u32) {
     let pWelsSvcRc = ctx_rc(pEncCtx);
     (*pWelsSvcRc).iBufferFullnessSkip -= iDropSize as i64;
     (*pWelsSvcRc).iBufferFullnessSkip = WELS_MAX(0, (*pWelsSvcRc).iBufferFullnessSkip);
 }
 
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsRcPictureInfoUpdateScc(pEncCtx: *mut sWelsEncCtx, iNalSize: i32) {
     let did = (*pEncCtx).uiDependencyId as usize;
     let pWelsSvcRc = ctx_rc_at(pEncCtx, did);
@@ -2501,6 +2619,8 @@ pub unsafe extern "C" fn WelsRcPictureInfoUpdateScc(pEncCtx: *mut sWelsEncCtx, i
     }
 }
 
+// unsafe-cat: port-raw(Phase 7)
+#[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsRcMbInitScc(
     pEncCtx: *mut sWelsEncCtx,
     pCurMb: &mut SMB,
@@ -2511,6 +2631,8 @@ pub unsafe extern "C" fn WelsRcMbInitScc(
     (*pCurMb).uiChromaQp = g_kuiChromaQpTable[CLIP3_QP_0_51((*pCurMb).uiLumaQp as i32 + offset)];
 }
 
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsRcFrameDelayJudgeTimeStamp(
     pEncCtx: *mut sWelsEncCtx,
     uiTimeStamp: i64,
@@ -2563,6 +2685,8 @@ pub unsafe extern "C" fn WelsRcFrameDelayJudgeTimeStamp(
     }
 }
 
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsRcPictureInfoUpdateGomTimeStamp(
     pEncCtx: *mut sWelsEncCtx,
     iLayerSize: i32,
@@ -2599,11 +2723,15 @@ pub unsafe extern "C" fn WelsRcPictureInfoUpdateGomTimeStamp(
 /// `SetOption(ENCODER_OPTION_RC_MODE)` — keep their shape; those two are the
 /// **only** places the installed mode may change, which is the property the type
 /// note depends on.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn WelsRcInitFuncPointers(pRcf: &mut SWelsRcFunc, iRcMode: RCMode) {
     pRcf.eInstalledMode = iRcMode;
 }
 
 /// Top-level initialization entry point called during encoder creation.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn WelsRcInitModule(pEncCtx: *mut sWelsEncCtx, iRcMode: RCMode) {
     // T6.I1: the `&& !pFuncList.is_null()` arm went with the raw table.
     if !pEncCtx.is_null() {
@@ -2670,6 +2798,8 @@ mod tests {
     }
 
     #[test]
+    // unsafe-cat: port-raw(Phase 9)
+    #[allow(unsafe_code)]
     fn test_rc_intentional_noop_callbacks() {
         unsafe {
             assert!(!WelsRcPostFrameSkipping(std::ptr::null_mut(), 0, 0));

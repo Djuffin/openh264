@@ -8,6 +8,8 @@
 //! practice.
 #![allow(non_snake_case, non_camel_case_types, non_upper_case_globals)]
 
+#![deny(unsafe_code)]
+
 use crate::api::codec_api::ELevelIdc::LEVEL_UNKNOWN;
 use crate::api::codec_api::ESampleAspectRatio::ASP_EXT_SAR;
 use crate::api::codec_api::EProfileIdc::*;
@@ -155,6 +157,8 @@ fn level_idc_from_raw(uiLevelIdc: u8) -> ELevelIdc {
 ///
 /// Declared in au_set.h, defined in encoder_ext.cpp; kept here with the rest of
 /// the parameter-set helpers.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn WelsBitRateVerification(
     _pLogCtx: *mut SLogContext,
     pLayerParam: *mut SSpatialLayerConfig,
@@ -206,6 +210,8 @@ pub unsafe fn WelsBitRateVerification(
 /// Reconciles `iLTRRefNum` / `iNumRefFrame` / `iMaxNumRefFrame` against the GOP
 /// size and LTR settings. With `bStrictCheck` an under-sized `iNumRefFrame` is an
 /// error; otherwise it is corrected in place.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn WelsCheckNumRefSetting(
     _pLogCtx: *mut SLogContext,
     pParam: *mut SWelsSvcCodingParam,
@@ -270,6 +276,8 @@ pub unsafe fn WelsCheckNumRefSetting(
 }
 
 /// `WelsCheckRefFrameLimitationNumRefFirst` — au_set.cpp:135.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn WelsCheckRefFrameLimitationNumRefFirst(
     pLogCtx: *mut SLogContext,
     pParam: *mut SWelsSvcCodingParam,
@@ -282,6 +290,8 @@ pub unsafe fn WelsCheckRefFrameLimitationNumRefFirst(
 }
 
 /// `WelsCheckRefFrameLimitationLevelIdcFirst` — au_set.cpp:144.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn WelsCheckRefFrameLimitationLevelIdcFirst(
     pLogCtx: *mut SLogContext,
     pParam: *mut SWelsSvcCodingParam,
@@ -325,6 +335,8 @@ pub unsafe fn WelsCheckRefFrameLimitationLevelIdcFirst(
 ///
 /// # Safety
 /// Both pointers must be non-null and `pBsWriter` must have room for the VUI.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn WelsWriteVUI(
     buf: &mut [u8],
     pSps: &SWelsSPS,
@@ -390,6 +402,8 @@ pub unsafe fn WelsWriteVUI(
 /// # Safety
 /// `pSps` and `pBsWriter` must be non-null; `pSpsIdDelta` must point to an array
 /// indexable by `pSps->uiSpsId`.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn WelsWriteSpsSyntax(
     buf: &mut [u8],
     pSps: &SWelsSPS,
@@ -483,6 +497,8 @@ pub unsafe fn WelsWriteSpsSyntax(
 ///
 /// # Safety
 /// See [`WelsWriteSpsSyntax`].
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn WelsWriteSpsNal(
     buf: &mut [u8],
     pSps: &SWelsSPS,
@@ -500,6 +516,8 @@ pub unsafe fn WelsWriteSpsNal(
 ///
 /// # Safety
 /// See [`WelsWriteSpsSyntax`].
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn WelsWriteSubsetSpsSyntax(
     buf: &mut [u8],
     pSubsetSps: &SSubsetSps,
@@ -551,6 +569,8 @@ pub unsafe fn WelsWriteSubsetSpsSyntax(
 /// # Safety
 /// `pPps` and `pBsWriter` must be non-null. The strategy is borrowed by reference,
 /// so unlike C++ there is no null case to consider here.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn WelsWritePpsSyntax(
     buf: &mut [u8],
     pPps: &SWelsPPS,
@@ -632,6 +652,8 @@ pub fn WelsGetPaddingOffset(
 ///
 /// # Safety
 /// All three pointers must be non-null and point to writable values.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn WelsInitSps(
     pSps: &mut SWelsSPS,
     pLayerParam: *mut SSpatialLayerConfig,
@@ -743,6 +765,8 @@ pub unsafe fn WelsInitSps(
 /// # Safety
 /// All three pointers must be non-null and point to writable values.
 #[allow(clippy::too_many_arguments)]
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn WelsInitSubsetSps(
     pSubsetSps: &mut SSubsetSps,
     pLayerParam: *mut SSpatialLayerConfig,
@@ -859,6 +883,8 @@ mod tests {
     /// gaps=0 crop=0 cs0=1 cs1=1 cs2=0 cs3=0
     /// ```
     #[test]
+    // unsafe-cat: port-raw(Phase 9)
+    #[allow(unsafe_code)]
     fn init_sps_matches_cxx_for_the_gate_configuration() {
         let (mut lp, mut li) = gate_layer();
         let mut sps = SWelsSPS::default();
@@ -891,6 +917,8 @@ mod tests {
     /// check that would have caught the missing VUI: the ad-hoc writer this replaced
     /// stopped after `vui_parameters_present_flag = 0` and emitted 8 bytes.
     #[test]
+    // unsafe-cat: port-raw(Phase 9)
+    #[allow(unsafe_code)]
     fn write_sps_nal_is_byte_exact_with_cxx() {
         let (mut lp, mut li) = gate_layer();
         let mut sps = SWelsSPS::default();
@@ -918,6 +946,8 @@ mod tests {
 
     /// Against the C++ `WelsInitPps`: `ppsid=0 spsid=0 qp=26 qs=26 cqpo=0 ecm=0 dfcp=1`.
     #[test]
+    // unsafe-cat: port-raw(Phase 9)
+    #[allow(unsafe_code)]
     fn init_pps_matches_cxx() {
         let (mut lp, mut li) = gate_layer();
         let mut sps = SWelsSPS::default();
@@ -942,6 +972,8 @@ mod tests {
     /// `CWelsParametersetIdConstant`, which is what makes this a test of the id
     /// offsets too rather than only of the fixed syntax elements.
     #[test]
+    // unsafe-cat: port-raw(Phase 9)
+    #[allow(unsafe_code)]
     fn write_pps_syntax_is_byte_exact_with_cxx() {
         use crate::api::codec_api::EParameterSetStrategy;
         use crate::encoder::paraset_strategy::CreateParametersetStrategy;
@@ -973,6 +1005,8 @@ mod tests {
 
     /// `WelsInitPps` rejects the combination C++ rejects: no SPS of either kind.
     #[test]
+    // unsafe-cat: port-raw(Phase 9)
+    #[allow(unsafe_code)]
     fn init_pps_rejects_missing_sps() {
         let mut pps = SWelsPPS::default();
         unsafe {

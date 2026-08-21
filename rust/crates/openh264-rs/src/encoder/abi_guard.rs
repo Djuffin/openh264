@@ -16,6 +16,8 @@
 //! unconditionally, so they are not in the struct the C++ encoder actually compiles.
 //! A size assertion catches that class of mistake the moment it is written.
 
+#![deny(unsafe_code)]
+
 use std::mem::size_of;
 
 use crate::common::wels_common_defs::{SNalUnitHeader, SNalUnitHeaderExt};

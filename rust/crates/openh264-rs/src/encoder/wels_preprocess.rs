@@ -1,3 +1,4 @@
+#![deny(unsafe_code)]
 pub const MAX_DEPENDENCY_LAYER: usize = 4;
 /// `EComplexityAnalysisMode` — `codec/processing/interface/IWelsVP.h:215`.
 /// The two GOM modes are **negative**; the port had them as `1`/`2` until Phase 5.1,
@@ -634,6 +635,8 @@ pub use crate::common::wels_common_defs::EWelsSliceType;
 
 /// Zeroes out the line stride padding area `[iWidth .. iStride)` for all lines.
 #[inline]
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn ClearEndOfLinePadding(pData: *mut u8, iStride: i32, iWidth: i32, iHeight: i32) {
     if !pData.is_null() && iWidth < iStride {
         let diff = (iStride - iWidth) as usize;
@@ -646,6 +649,8 @@ pub unsafe fn ClearEndOfLinePadding(pData: *mut u8, iStride: i32, iWidth: i32, i
 
 /// Row-by-row planar memory copy for I420 YUV buffers.
 #[inline]
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn WelsMoveMemory_c(
     mut pDstY: *mut u8,
     mut pDstU: *mut u8,
@@ -684,6 +689,8 @@ pub unsafe fn WelsMoveMemory_c(
 
 /// Updates the spatial index map pointer for a dependency layer.
 #[inline]
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn WelsUpdateSpatialIdxMap(
     pEncCtx: *mut sWelsEncCtx,
     iPos: i32,
@@ -698,6 +705,8 @@ pub unsafe fn WelsUpdateSpatialIdxMap(
 }
 
 /// Evaluates whether the input picture requires aspect-ratio preserving scaling.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn JudgeNeedOfScaling(
     pParam: *mut SWelsSvcCodingParam,
     pScaledPicture: *mut Scaled_Picture,
@@ -794,6 +803,8 @@ pub fn AllocPicture(
 }
 
 /// Initializes scaled intermediate picture buffers if aspect-ratio scaling is required.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn WelsInitScaledPic(
     pParam: *mut SWelsSvcCodingParam,
     pScaledPicture: *mut Scaled_Picture,
@@ -839,6 +850,8 @@ pub unsafe fn WelsInitScaledPic(
 
 /// Releases the scaled picture. **Since T6.F2 that is a drop** — the picture owns
 /// every byte it has, so `CMemoryAlign` is not involved and neither is a free walk.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn FreeScaledPic(pScaledPicture: *mut Scaled_Picture) {
     if pScaledPicture.is_null() {
         return;
@@ -974,6 +987,8 @@ impl CWelsPreProcess {
     }
 
     /// Factory constructor instantiating the preprocessing subsystem.
+    // unsafe-cat: port-raw(Phase 9)
+    #[allow(unsafe_code)]
     pub unsafe fn CreatePreProcess(pEncCtx: *mut sWelsEncCtx) -> *mut CWelsPreProcess {
         if pEncCtx.is_null() || ctx_param(pEncCtx).is_null() {
             return std::ptr::null_mut();
@@ -991,6 +1006,8 @@ impl CWelsPreProcess {
     }
 
     /// Destructor releasing allocated picture buffers and plugin interfaces.
+    // unsafe-cat: port-raw(Phase 9)
+    #[allow(unsafe_code)]
     pub unsafe fn Destroy(pPreProcess: *mut CWelsPreProcess) {
         if !pPreProcess.is_null() {
             FreeScaledPic(&mut (*pPreProcess).m_sScaledPicture);
@@ -1008,6 +1025,8 @@ impl CWelsPreProcess {
     // stop, leaving every method `None` and the whole video-analysis stage
     // silently producing zeros — see `crate::processing`.
 
+    // unsafe-cat: port-raw(Phase 9)
+    #[allow(unsafe_code)]
     pub unsafe fn WelsPreprocessReset(
         &mut self,
         pCtx: *mut sWelsEncCtx,
@@ -1033,6 +1052,8 @@ impl CWelsPreProcess {
         WelsInitScaledPic(ctx_param(pCtx), &mut self.m_sScaledPicture)
     }
 
+    // unsafe-cat: port-raw(Phase 9)
+    #[allow(unsafe_code)]
     pub unsafe fn AllocSpatialPictures(
         &mut self,
         pCtx: *mut sWelsEncCtx,
@@ -1088,6 +1109,8 @@ impl CWelsPreProcess {
         0
     }
 
+    // unsafe-cat: port-raw(Phase 9)
+    #[allow(unsafe_code)]
     pub unsafe fn FreeSpatialPictures(&mut self, pCtx: *mut sWelsEncCtx) {
         if pCtx.is_null() || ctx_param(pCtx).is_null() {
             return;
@@ -1111,6 +1134,8 @@ impl CWelsPreProcess {
         self.m_pSpatialPicPool = SrcPicPool::empty();
     }
 
+    // unsafe-cat: port-raw(Phase 9)
+    #[allow(unsafe_code)]
     pub unsafe fn BuildSpatialPicList(
         &mut self,
         pCtx: *mut sWelsEncCtx,
@@ -1156,6 +1181,8 @@ impl CWelsPreProcess {
         ENC_RETURN_SUCCESS
     }
 
+    // unsafe-cat: port-raw(Phase 9)
+    #[allow(unsafe_code)]
     pub unsafe fn SingleLayerPreprocess(
         &mut self,
         pCtx: *mut sWelsEncCtx,
@@ -1326,6 +1353,8 @@ impl CWelsPreProcess {
         ENC_RETURN_SUCCESS
     }
 
+    // unsafe-cat: port-raw(Phase 9)
+    #[allow(unsafe_code)]
     pub unsafe fn AnalyzeSpatialPic(&mut self, pCtx: *mut sWelsEncCtx, kiDidx: i32) -> i32 {
         let pSvcParam = ctx_param(pCtx);
         let bNeededMbAq = (*pSvcParam).bEnableAdaptiveQuant && ((*pCtx).eSliceType == EWelsSliceType::P_SLICE);
@@ -1468,10 +1497,14 @@ impl CWelsPreProcess {
         }
     }
 
+    // unsafe-cat: port-raw(Phase 9)
+    #[allow(unsafe_code)]
     pub unsafe fn GetCurPicPosition(&self, kiDidx: i32) -> i32 {
         self.m_uiSpatialLayersInTemporal[kiDidx as usize] as i32 - 1
     }
 
+    // unsafe-cat: port-raw(Phase 9)
+    #[allow(unsafe_code)]
     pub unsafe fn GetCurrentOrigFrame(&mut self, iDIdx: i32) -> Option<SrcPicId> {
         if self.m_eUsageType == EUsageType::SCREEN_CONTENT_REAL_TIME {
             self.m_pSpatialPic[iDIdx as usize][0]
@@ -1481,10 +1514,14 @@ impl CWelsPreProcess {
         }
     }
 
+    // unsafe-cat: port-raw(Phase 9)
+    #[allow(unsafe_code)]
     pub unsafe fn GetBestRefPic(&self, kiDidx: i32, iRefTemporalIdx: i32) -> Option<SrcPicId> {
         self.m_pSpatialPic[kiDidx as usize][iRefTemporalIdx as usize]
     }
 
+    // unsafe-cat: port-raw(Phase 9)
+    #[allow(unsafe_code)]
     pub unsafe fn GetBestRefPicScreen(
         &self,
         _iUsageType: EUsageType,
@@ -1502,6 +1539,8 @@ impl CWelsPreProcess {
         self.m_pSpatialPic[0][pBest.iSrcListIdx as usize]
     }
 
+    // unsafe-cat: port-raw(Phase 9)
+    #[allow(unsafe_code)]
     pub unsafe fn UpdateSpatialPictures(
         &mut self,
         pCtx: *mut sWelsEncCtx,
@@ -1548,10 +1587,14 @@ impl CWelsPreProcess {
     /// denoise plugin in place here; the port's dispatch returned
     /// `RET_NOTSUPPORTED`, which this caller never read, so nothing happened and
     /// nothing happens. Gated by `bEnableDenoise`, off in every gate configuration.
+    // unsafe-cat: port-raw(Phase 9)
+    #[allow(unsafe_code)]
     pub unsafe fn BilateralDenoising(&mut self, _pSrc: SrcPicRef, _kiWidth: i32, _kiHeight: i32) {
         // METHOD_DENOISE: untranslated — no plugin runs (S18: no stub is invented).
     }
 
+    // unsafe-cat: port-raw(Phase 9)
+    #[allow(unsafe_code)]
     pub unsafe fn DownsamplePadding(
         &mut self,
         srcRef: SrcPicRef,
@@ -1643,6 +1686,8 @@ impl CWelsPreProcess {
         iRet
     }
 
+    // unsafe-cat: port-raw(Phase 9)
+    #[allow(unsafe_code)]
     pub unsafe fn VaaCalculation(
         &mut self,
         pVaaInfo: *mut SVAAFrameInfo,
@@ -1693,6 +1738,8 @@ impl CWelsPreProcess {
         self.m_vp.sVaaCalc.Process(&sCurPixMap, &sRefPixMap, &mut (*pVaaInfo).sVaaCalcInfo);
     }
 
+    // unsafe-cat: port-raw(Phase 9)
+    #[allow(unsafe_code)]
     pub unsafe fn BackgroundDetection(
         &mut self,
         pVaaInfo: *mut SVAAFrameInfo,
@@ -1761,6 +1808,8 @@ impl CWelsPreProcess {
         }
     }
 
+    // unsafe-cat: port-raw(Phase 9)
+    #[allow(unsafe_code)]
     pub unsafe fn AdaptiveQuantCalculation(
         &mut self,
         pVaaInfo: *mut SVAAFrameInfo,
@@ -1807,6 +1856,8 @@ impl CWelsPreProcess {
         }
     }
 
+    // unsafe-cat: port-raw(Phase 9)
+    #[allow(unsafe_code)]
     pub unsafe fn Padding(
         &self,
         pSrcY: *mut u8,
@@ -1862,6 +1913,8 @@ impl CWelsPreProcess {
         }
     }
 
+    // unsafe-cat: port-raw(Phase 9)
+    #[allow(unsafe_code)]
     pub unsafe fn WelsExchangeSpatialPictures(
         ppPic1: *mut Option<SrcPicId>,
         ppPic2: *mut Option<SrcPicId>,
@@ -1873,6 +1926,8 @@ impl CWelsPreProcess {
         }
     }
 
+    // unsafe-cat: port-raw(Phase 9)
+    #[allow(unsafe_code)]
     pub unsafe fn InitLastSpatialPictures(&mut self, pCtx: *mut sWelsEncCtx) -> i32 {
         let pParam = ctx_param(pCtx);
         let kiDlayerCount = (*pParam).iSpatialLayerNum;
@@ -1902,6 +1957,8 @@ impl CWelsPreProcess {
         0
     }
 
+    // unsafe-cat: port-raw(Phase 9)
+    #[allow(unsafe_code)]
     pub unsafe fn WelsMoveMemoryWrapper(
         &mut self,
         pSvcParam: *mut SWelsSvcCodingParam,
@@ -2044,10 +2101,14 @@ impl CWelsPreProcess {
         ENC_RETURN_SUCCESS
     }
 
+    // unsafe-cat: port-raw(Phase 9)
+    #[allow(unsafe_code)]
     pub unsafe fn GetSceneChangeFlag(&self, eSceneChangeIdc: ESceneChangeIdc) -> bool {
         eSceneChangeIdc == ESceneChangeIdc::LARGE_CHANGED_SCENE
     }
 
+    // unsafe-cat: port-raw(Phase 9)
+    #[allow(unsafe_code)]
     pub unsafe fn DetectSceneChange(
         &mut self,
         pCurPicture: SrcPicRef,
@@ -2060,6 +2121,8 @@ impl CWelsPreProcess {
         }
     }
 
+    // unsafe-cat: port-raw(Phase 9)
+    #[allow(unsafe_code)]
     unsafe fn DetectSceneChangeVideo(
         &mut self,
         pCurPicture: SrcPicRef,
@@ -2098,6 +2161,8 @@ impl CWelsPreProcess {
         sSceneChangeDetectResult.eSceneChangeIdc
     }
 
+    // unsafe-cat: port-raw(Phase 9)
+    #[allow(unsafe_code)]
     unsafe fn DetectSceneChangeScreen(
         &mut self,
         pCurPicture: SrcPicRef,
@@ -2280,6 +2345,8 @@ impl CWelsPreProcess {
         iVaaFrameSceneChangeIdc
     }
 
+    // unsafe-cat: port-raw(Phase 9)
+    #[allow(unsafe_code)]
     unsafe fn InitPixMap(pPicture: &PicPlanes, pPixMap: *mut SPixMap) {
         if !pPixMap.is_null() {
             (*pPixMap).pPixel[0] = pPicture.pData[0];
@@ -2294,6 +2361,8 @@ impl CWelsPreProcess {
         }
     }
 
+    // unsafe-cat: port-raw(Phase 9)
+    #[allow(unsafe_code)]
     unsafe fn InitRefJudgement(&self, pRefJudgement: *mut SRefJudgement) {
         if !pRefJudgement.is_null() {
             (*pRefJudgement).iMinFrameComplexity = i32::MAX as i64;
@@ -2304,6 +2373,8 @@ impl CWelsPreProcess {
         }
     }
 
+    // unsafe-cat: port-raw(Phase 9)
+    #[allow(unsafe_code)]
     unsafe fn JudgeBestRef(
         &self,
         idRefPic: SrcPicId,
@@ -2320,6 +2391,8 @@ impl CWelsPreProcess {
         }
     }
 
+    // unsafe-cat: port-raw(Phase 9)
+    #[allow(unsafe_code)]
     unsafe fn SaveBestRefToJudgement(
         &self,
         iRefPictureAvQP: i32,
@@ -2334,6 +2407,8 @@ impl CWelsPreProcess {
         }
     }
 
+    // unsafe-cat: port-raw(Phase 9)
+    #[allow(unsafe_code)]
     unsafe fn SaveBestRefToLocal(
         &self,
         pRefPicInfo: *mut SRefInfoParam,
@@ -2346,12 +2421,16 @@ impl CWelsPreProcess {
         }
     }
 
+    // unsafe-cat: port-raw(Phase 9)
+    #[allow(unsafe_code)]
     unsafe fn SaveBestRefToVaa(&self, sRefSaved: &SRefInfoParam, pVaaBestRef: *mut SRefInfoParam) {
         if !pVaaBestRef.is_null() {
             *pVaaBestRef = *sRefSaved;
         }
     }
 
+    // unsafe-cat: port-raw(Phase 9)
+    #[allow(unsafe_code)]
     unsafe fn GetAvailableRefListLosslessScreenRefSelection(
         &self,
         pRefPicList: &[Option<SrcPicId>],
@@ -2425,6 +2504,8 @@ impl CWelsPreProcess {
         }
     }
 
+    // unsafe-cat: port-raw(Phase 9)
+    #[allow(unsafe_code)]
     unsafe fn GetAvailableRefList(
         &self,
         pSrcPicList: &[Option<SrcPicId>],
@@ -2471,6 +2552,8 @@ impl CWelsPreProcess {
     /// array feeds the complexity analyser: the first confirmed long-term reference
     /// when LTR is on and a T0 frame was lost, otherwise the first usable short-term
     /// reference at or below the current temporal id.
+    // unsafe-cat: port-raw(Phase 9)
+    #[allow(unsafe_code)]
     pub unsafe fn SetRefMbType(&self, pCtx: *mut sWelsEncCtx, pRefMbTypeArray: *mut *mut u32, _iRefPicType: i32) {
         let uiTid = (*pCtx).uiTemporalId;
         let uiDid = (*pCtx).uiDependencyId;
@@ -2504,6 +2587,8 @@ impl CWelsPreProcess {
         }
     }
 
+    // unsafe-cat: port-raw(Phase 9)
+    #[allow(unsafe_code)]
     pub unsafe fn AnalyzePictureComplexity(
         &mut self,
         pCtx: *mut sWelsEncCtx,
@@ -2645,6 +2730,8 @@ impl CWelsPreProcess {
     /// # Safety
     /// `m_pEncCtx`, its `pSvcParam`/`pVaa`, and the selected `m_pSpatialPic` entry
     /// must be valid, as in C++ where all three are dereferenced unconditionally.
+    // unsafe-cat: port-raw(Phase 9)
+    #[allow(unsafe_code)]
     pub unsafe fn GetRefFrameInfo(
         &mut self,
         iRefIdx: i32,
@@ -2665,6 +2752,8 @@ impl CWelsPreProcess {
             .iLongTermPicNum
     }
 
+    // unsafe-cat: port-raw(Phase 9)
+    #[allow(unsafe_code)]
     pub unsafe fn UpdateBlockIdcForScreen(
         &self,
         pCurBlockStaticPointer: *mut u8,
@@ -2690,6 +2779,8 @@ impl CWelsPreProcess {
     /// C++ passes the reference list and uses only its *count*. Deleted with the
     /// flip rather than converted, because converting it would have meant handing
     /// the preprocessor a handle type it has no pool for.
+    // unsafe-cat: port-raw(Phase 9)
+    #[allow(unsafe_code)]
     pub unsafe fn UpdateSrcList(
         &mut self,
         pCurPicture: Option<SrcPicId>,
@@ -2733,6 +2824,8 @@ impl CWelsPreProcess {
         }
     }
 
+    // unsafe-cat: port-raw(Phase 9)
+    #[allow(unsafe_code)]
     pub unsafe fn UpdateSrcListLosslessScreenRefSelectionWithLtr(
         &mut self,
         _pCurPicture: Option<SrcPicId>,

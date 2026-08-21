@@ -48,6 +48,8 @@
 // Constants & Return Codes
 // ============================================================================
 
+#![deny(unsafe_code)]
+
 /// Size in bytes of the Annex B 4-byte start code prefix (`0x00 0x00 0x00 0x01`).
 pub const NAL_HEADER_SIZE: usize = 4;
 
@@ -130,6 +132,8 @@ impl Default for SWelsNalRaw {
 /// plus the slice's `uiSize` is, and what the task-claiming invariant gives per
 /// thread.
 #[inline]
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn bs_buffer<'a>(ptr: *mut u8, len: u32) -> &'a mut [u8] {
     debug_assert!(!ptr.is_null(), "a writer's buffer must be allocated first");
     unsafe { core::slice::from_raw_parts_mut(ptr, len as usize) }
@@ -288,6 +292,8 @@ pub use crate::encoder::vlc_encoder::{
 /// - `pEncoderOuput` must point to a valid and properly initialized `SWelsEncoderOutput` structure.
 /// - `pEncoderOuput.sNalList` must have enough capacity for `iNalIndex`.
 #[inline]
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsLoadNal(
     pEncoderOuput: *mut SWelsEncoderOutput,
     kiType: i32,
@@ -315,6 +321,8 @@ pub unsafe extern "C" fn WelsLoadNal(
 /// # Safety
 /// - `pEncoderOuput` must point to a valid `SWelsEncoderOutput` structure.
 #[inline]
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsUnloadNal(pEncoderOuput: *mut SWelsEncoderOutput) {
     if pEncoderOuput.is_null() || (*pEncoderOuput).sNalList.is_empty() {
         return;
@@ -335,6 +343,8 @@ pub unsafe extern "C" fn WelsUnloadNal(pEncoderOuput: *mut SWelsEncoderOutput) {
 /// # Safety
 /// - `pSliceBs` must point to a valid `SWelsSliceBs` structure.
 #[inline]
+// unsafe-cat: MT
+#[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsLoadNalForSlice(
     pSliceBs: *mut SWelsSliceBs,
     kiType: i32,
@@ -358,6 +368,8 @@ pub unsafe extern "C" fn WelsLoadNalForSlice(
 /// # Safety
 /// - `pSliceBs` must point to a valid `SWelsSliceBs` structure.
 #[inline]
+// unsafe-cat: MT
+#[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsUnloadNalForSlice(pSliceBs: *mut SWelsSliceBs) {
     let pSlice = &mut *pSliceBs;
     let pIdx = &mut pSlice.iNalIndex;
@@ -386,6 +398,8 @@ pub unsafe extern "C" fn WelsUnloadNalForSlice(pSliceBs: *mut SWelsSliceBs) {
 /// `dst` must be null (rejected with `ENC_RETURN_INVALIDINPUT`, as the C++ did) or
 /// point to `dst_len` writable bytes that do not overlap `src`.
 #[inline]
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn WelsEncodeNal(
     raw: &SWelsNalRaw,
     src: &[u8],
@@ -480,6 +494,8 @@ pub unsafe fn WelsEncodeNal(
 /// - `pBsWriter` must point to a valid `BsWriter`, and `buf` must be the
 ///   buffer that writer is positioned in.
 #[inline]
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn WelsWriteSVCPrefixNal(
     buf: &mut [u8],
     pBsWriter: *mut BsWriter,
@@ -504,6 +520,8 @@ mod tests {
     use super::*;
     
     #[test]
+    // unsafe-cat: port-raw(Phase 9)
+    #[allow(unsafe_code)]
     fn test_wels_encode_nal_standard_avc() {
         let raw_payload = [0x00, 0x00, 0x01, 0xAA, 0x00, 0x00, 0x00, 0xBB];
         let mut raw_nal = SWelsNalRaw::default();
@@ -545,6 +563,8 @@ mod tests {
     }
 
     #[test]
+    // unsafe-cat: port-raw(Phase 9)
+    #[allow(unsafe_code)]
     fn test_wels_encode_nal_svc_extension() {
         let raw_payload = [0x12, 0x34];
         let mut raw_nal = SWelsNalRaw::default();
@@ -595,6 +615,8 @@ mod tests {
     }
 
     #[test]
+    // unsafe-cat: port-raw(Phase 9)
+    #[allow(unsafe_code)]
     fn test_wels_encode_nal_buffer_too_small() {
         let raw_payload = [0x00; 100];
         let mut raw_nal = SWelsNalRaw::default();
@@ -619,6 +641,8 @@ mod tests {
     }
 
     #[test]
+    // unsafe-cat: MT
+    #[allow(unsafe_code)]
     fn test_wels_load_and_unload_nal_slice() {
         let mut bs_buf = vec![0u8; 1024];
         let mut slice_bs = SWelsSliceBs::default();

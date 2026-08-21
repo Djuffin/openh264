@@ -13,6 +13,8 @@
 //! belongs to `METHOD_SCENE_CHANGE_DETECTION_SCREEN`, which stays unsupported —
 //! it also needs the scroll detector, which is unported.
 
+#![deny(unsafe_code)]
+
 use crate::common::sad_common::WelsSampleSad8x8_c;
 use crate::encoder::wels_preprocess::{ESceneChangeIdc, SPixMap, SSceneChangeResult};
 
@@ -51,6 +53,8 @@ impl CSceneChangeDetection {
     ///
     /// # Safety
     /// Both pixel maps must describe readable luma planes of the stated size.
+    // unsafe-cat: port-raw(Phase 9)
+    #[allow(unsafe_code)]
     pub unsafe fn Process(&mut self, pSrcPixMap: &SPixMap, pRefPixMap: &SPixMap) -> i32 {
         let iWidth = pSrcPixMap.sRect.iRectWidth;
         let iHeight = pSrcPixMap.sRect.iRectHeight;
