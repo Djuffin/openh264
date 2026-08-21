@@ -224,3 +224,95 @@ fn test_parse_only_disables_error_concealment() {
         assert_eq!(dec.get_ec_idc(), 0, "a rejected SetOption still stored");
     }
 }
+
+// ---------------------------------------------------------------------------
+// T8.B2 — a second `Initialize` on a live decoder rebuilds the context
+// ---------------------------------------------------------------------------
+
+/// **F76's third companion** — `welsDecoderExt.cpp:407–409`.
+///
+/// `CWelsDecoder::InitDecoder` calls `InitDecoderCtx` for every context, and
+/// `InitDecoderCtx` opens with `UninitDecoderCtx (pCtx)` and then allocates a fresh
+/// one. So in the reference a second `Initialize` on a live decoder is a rebuild.
+/// This port guarded the whole construction with `if (*dec_impl).pCtx.is_null()`,
+/// so a second call re-copied the parameters into the *existing* context and
+/// returned — keeping the previous session's reordering buffer, statistics, last
+/// decoded-picture record and decode timestamps, all of which the reference
+/// `memset`s.
+///
+/// The observable is the reordering buffer: a B-frame stream stopped mid-GOP leaves
+/// pictures buffered, `DECODER_OPTION_NUM_OF_FRAMES_REMAINING_IN_BUFFER` counts
+/// them, and after a rebuild there is nothing to count.
+///
+/// Red before T8.B2:
+///
+/// ```text
+/// assertion `left == right` failed: a second Initialize kept the previous
+/// session's reordering buffer
+///   left: 1
+///  right: 0
+/// ```
+#[test]
+fn test_second_initialize_rebuilds_the_context() {
+    let data = asset("Cisco_Men_whisper_640x320_CABAC_Bframe_9.264");
+    let mut param = SDecodingParam::default();
+    param.uiTargetDqLayer = u8::MAX;
+    param.eEcActiveIdc = ERROR_CON_IDC::ERROR_CON_SLICE_COPY;
+    param.sVideoProperty.eVideoBsType = VIDEO_BITSTREAM_DEFAULT;
+
+    unsafe {
+        let dec = Dec::new(&param, None);
+
+        // Feed units until the reordering buffer is holding something.
+        let mut buffered = 0i32;
+        for unit in split_annexb_units(&data) {
+            let mut p_dst: [*mut u8; 3] = [std::ptr::null_mut(); 3];
+            let mut buf_info = SBufferInfo::default();
+            ISVCDecoder::DecodeFrame2(
+                dec.0,
+                unit.as_ptr(),
+                unit.len() as i32,
+                p_dst.as_mut_ptr(),
+                &mut buf_info,
+            );
+            buffered = remaining_in_buffer(&dec);
+            if buffered > 0 {
+                break;
+            }
+        }
+        assert!(
+            buffered > 0,
+            "the asset never buffered a picture — this test no longer covers the rebuild"
+        );
+
+        // The transition the reference rebuilds through, and this port did not.
+        let mut buf = std::mem::MaybeUninit::<SDecodingParam>::uninit();
+        std::ptr::copy_nonoverlapping(
+            std::ptr::from_ref(&param).cast::<u8>(),
+            buf.as_mut_ptr().cast::<u8>(),
+            std::mem::size_of::<SDecodingParam>(),
+        );
+        assert_eq!(
+            i64::from(ISVCDecoder::Initialize(dec.0, buf.as_ptr())),
+            CM_RESULT_SUCCESS as i64
+        );
+
+        assert_eq!(
+            remaining_in_buffer(&dec),
+            0,
+            "a second Initialize kept the previous session's reordering buffer"
+        );
+    }
+}
+
+unsafe fn remaining_in_buffer(dec: &Dec) -> i32 {
+    unsafe {
+        let mut v = 0i32;
+        ISVCDecoder::GetOption(
+            dec.0,
+            DECODER_OPTION::DECODER_OPTION_NUM_OF_FRAMES_REMAINING_IN_BUFFER,
+            std::ptr::from_mut(&mut v).cast::<c_void>(),
+        );
+        v
+    }
+}

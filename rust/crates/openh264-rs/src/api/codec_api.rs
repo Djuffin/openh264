@@ -1640,7 +1640,28 @@ unsafe extern "C" fn decoder_init_c(this: *mut ISVCDecoder, pParam: *const SDeco
             buf.assume_init()
         };
         let pParam = &param;
-        if (*dec_impl).pCtx.is_null() {
+        // **F76, T8.B2 — a second `Initialize` on a live decoder rebuilds.**
+        //
+        // `CWelsDecoder::InitDecoder` (`welsDecoderExt.cpp:373`) calls
+        // `InitDecoderCtx` for every context, and `InitDecoderCtx` opens with
+        // `UninitDecoderCtx (pCtx)` and then `WelsMallocz`es a fresh one
+        // (`:407–409`). The whole construction below used to be guarded by
+        // `if (*dec_impl).pCtx.is_null()`, so a second call re-copied the parameters
+        // into the *existing* context and returned — keeping the previous session's
+        // reordering buffer, statistics, last decoded-picture record and decode
+        // timestamps, three of which the reference `memset`s at `:382–384` and the
+        // fourth of which the rebuild discards with the context.
+        //
+        // Initialize → Uninitialize → Initialize was already right, because
+        // `Uninitialize` nulls the pointer; two `Initialize`s in a row is the case
+        // that diverged. This is `decoder_uninit_c`'s body, and it is the same
+        // teardown for the same reason.
+        if !(*dec_impl).pCtx.is_null() {
+            crate::decoder::decoder_core::WelsEndDecoder(&mut *(*dec_impl).pCtx);
+            drop(Box::from_raw((*dec_impl).pCtx));
+            (*dec_impl).pCtx = ptr::null_mut();
+        }
+        {
             // In-place heap construction: the context is several MiB, and since T3.3
             // it owns `Vec`s, so neither `Box::default()` (stack round-trip) nor
             // `new_zeroed().assume_init()` (invalid zeroed `Vec`) is usable.
