@@ -1306,9 +1306,22 @@ pub unsafe fn InitSliceSettings(
     loop {
         let pDlp = &mut (*pCodingParam).sSpatialLayers[iSpatialIdx as usize]
             as *mut SSpatialLayerConfig;
-        let pSliceArgument = &mut (*pDlp).sSliceArgument;
+        // **F70, and S29 again.** This was `&mut (*pDlp).sSliceArgument` — a `Unique`
+        // retag over the whole slice-argument struct, held across the
+        // `SM_FIXEDSLCNUM_SLICE` arm below, which takes a **second** `&mut` to the
+        // same field for the validator and pops the first. The read at the bottom of
+        // that arm then goes through a dead tag. `addr_of_mut!` creates no reference,
+        // so there is no tag to pop and every read below is through the parameter
+        // struct's own provenance.
+        //
+        // Found by the T7.B4 fork/join probe on its **first** Miri run — not because
+        // the probe threads, but because it is the first test in this crate ever to
+        // ask for `SM_FIXEDSLCNUM_SLICE`. This arm is what the diffharness drives on
+        // 369 rows a sweep and what any multi-slice caller reaches; it has been UB
+        // since the parameter validation was written, and no byte gate could see it.
+        let pSliceArgument = std::ptr::addr_of_mut!((*pDlp).sSliceArgument);
 
-        match pSliceArgument.uiSliceMode {
+        match (*pSliceArgument).uiSliceMode {
             SM_SIZELIMITED_SLICE => {
                 iMaxSliceCount = crate::encoder::svc_enc_slice_segment::AVERSLICENUM_CONSTRAINT
                     as u16;
@@ -1326,13 +1339,13 @@ pub unsafe fn InitSliceSettings(
                     return ENC_RETURN_UNSUPPORTED_PARA;
                 }
 
-                if pSliceArgument.uiSliceNum as u16 > iMaxSliceCount {
-                    iMaxSliceCount = pSliceArgument.uiSliceNum as u16;
+                if (*pSliceArgument).uiSliceNum as u16 > iMaxSliceCount {
+                    iMaxSliceCount = (*pSliceArgument).uiSliceNum as u16;
                 }
             }
             SM_SINGLE_SLICE | crate::api::codec_api::SliceModeEnum::SM_RASTER_SLICE => {
-                if pSliceArgument.uiSliceNum as u16 > iMaxSliceCount {
-                    iMaxSliceCount = pSliceArgument.uiSliceNum as u16;
+                if (*pSliceArgument).uiSliceNum as u16 > iMaxSliceCount {
+                    iMaxSliceCount = (*pSliceArgument).uiSliceNum as u16;
                 }
             }
             _ => {}
@@ -2148,10 +2161,22 @@ pub unsafe fn WelsInitCurrentLayer(pCtx: *mut sWelsEncCtx, _kiWidth: i32, _kiHei
 
     (*pCurDq).bBaseLayerAvailableFlag = (*pCurDq).pRefLayer.is_some();
 
-    if !(*pCtx).pTaskManage.is_null() {
-        let pTaskManage =
-            (*pCtx).pTaskManage as *mut crate::encoder::wels_task_management::CWelsTaskManageBase;
-        (*pTaskManage).InitFrame(kiCurDid as i32);
+    // **T7.B4.** Was `pTaskManage->InitFrame(kiCurDid)`, whose whole body was "if the
+    // layer wants re-slicing, dispatch the pre-encoding task list and wait". The task
+    // list is gone; the condition and the barrier position are not. The count is the
+    // one `CreateTasks` computed for `WELS_ENC_TASK_UPDATEMBMAP`
+    // (`sSliceArgument.uiSliceNum` for every non-`SM_SIZELIMITED_SLICE` mode), and
+    // only the fixed modes can reach here: `bNeedAdjustingSlicing` is written by
+    // `DynamicAdjustSlicing` alone, which only `AdjustBaseLayer`/`AdjustEnhanceLayer`
+    // call, and only on the `SM_FIXEDSLCNUM_SLICE` arm.
+    if !(*pCtx).pSliceThreading.is_null()
+        && !current_layer(pCtx).is_null()
+        && (*current_layer(pCtx)).bNeedAdjustingSlicing
+    {
+        let kiTaskCount = (*ctx_param(pCtx)).sSpatialLayers[kiCurDid as usize]
+            .sSliceArgument
+            .uiSliceNum as i32;
+        crate::encoder::slice_multi_threading::UpdateMbMapForked(pCtx, kiTaskCount);
     }
 }
 
@@ -3439,13 +3464,9 @@ pub unsafe fn WelsEncoderEncodeExt(
             (*pLbi).iSubSeqId = GetSubSequenceId(pCtx, eFrameType);
             (*pLbi).iNalCount = 0;
 
-            let mut iIdx = 0i32;
-            while iIdx < kiPartitionCnt {
-                let pPriv = (*(*pCtx).pSliceThreading).pThreadPEncCtx.add(iIdx as usize);
-                (*pPriv).pFrameBsInfo = pFbi;
-                (*pPriv).iSliceIndex = iIdx;
-                iIdx += 1;
-            }
+            // A loop stamping `pFrameBsInfo` and `iSliceIndex` into
+            // `pSliceThreading->pThreadPEncCtx[iIdx]` stood here. Nothing has ever
+            // read either field — see the note where the struct was (T7.B4).
 
             let mut iRet = crate::encoder::svc_encode_slice::InitAllSlicesInThread(pCtx);
             if iRet != 0 {
