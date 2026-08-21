@@ -13,6 +13,13 @@
 # instruments match on, so the allowlist keys on `<kind> <name> x<count>` — a *new*
 # copy of an already-allowed name fails, which is the case that matters.
 #
+# **Scope, T8.A1**: `src/api` is inside every instrument this drives. `find_dup_types.sh`
+# and `find_stub_bodies.py` gained it by name in that commit (their scopes are directory
+# lists); the double-cast grep below has always run over `$SRC`, which is the whole tree.
+# Before that commit the api layer — 2,788 lines and the only module the project's
+# instruments had never read — was outside all three, and it was hiding four duplicate
+# declarations of boundary types, two of which had *diverged*.
+#
 # Written as bash on purpose, like gates.sh and the diffharness: zsh does not
 # word-split unquoted expansions.
 set -u

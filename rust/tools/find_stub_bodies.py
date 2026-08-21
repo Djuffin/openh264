@@ -40,6 +40,7 @@ RUST_DIRS = [
     ROOT / "rust/crates/openh264-rs/src/decoder",
     ROOT / "rust/crates/openh264-rs/src/processing",
     ROOT / "rust/crates/openh264-rs/src/common",
+    ROOT / "rust/crates/openh264-rs/src/api",
 ]
 
 IDENT = re.compile(r"\b([A-Za-z_][A-Za-z0-9_]*)\s*\(")

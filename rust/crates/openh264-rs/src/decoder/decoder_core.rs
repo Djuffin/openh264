@@ -565,40 +565,18 @@ impl DqLayerState {
 
 pub use crate::decoder::decoder_context::SRefPic;
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
-pub struct SSysMEMBuffer {
-    pub iWidth: i32,
-    pub iHeight: i32,
-    pub iFormat: i32,
-    pub iStride: [i32; 2],
-}
-
-impl Default for SSysMEMBuffer {
-    fn default() -> Self {
-        Self {
-            iWidth: 0,
-            iHeight: 0,
-            iFormat: videoFormatI420,
-            iStride: [0; 2],
-        }
-    }
-}
-
-#[repr(C)]
-#[derive(Copy, Clone)]
-pub union SUsrData {
-    pub sSystemBuffer: SSysMEMBuffer,
-}
-
-impl Default for SUsrData {
-    fn default() -> Self {
-        Self {
-            sSystemBuffer: SSysMEMBuffer::default(),
-        }
-    }
-}
-
+// **T8.A1 — a second `SSysMEMBuffer` and a second `SUsrData` stood here, and the
+// first of them disagreed with the ABI's.** Neither had a consumer: `SUsrData` had
+// none at all, and `SSysMEMBuffer` had exactly one — `SUsrData`'s member. The live
+// union is `api/codec_api.rs`'s `SBufferInfoUsrData`, re-exported with `SBufferInfo`
+// just below, and the live `SSysMEMBuffer` is the api's, re-exported through
+// `decoder_context.rs`.
+//
+// The divergence they carried is worth naming, because it is the reason a dead
+// duplicate is still a defect: this copy's `Default` set `iFormat` to
+// `videoFormatI420` (23) where the api's derives it to **0**. One `use` line
+// resolving the other way — the shape F43 turned on — and every `SBufferInfo`
+// default in the port would have announced a colour format the C++ leaves zero.
 pub use crate::api::codec_api::SBufferInfo;
 
 pub use crate::decoder::decoder_context::SDecoderStatistics;

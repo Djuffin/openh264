@@ -647,36 +647,15 @@ pub struct SParserBsInfo {
     pub uiOutBsTimeStamp: u64,
 }
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone, Default)]
-pub struct SDecoderStatistics {
-    pub uiWidth: u32,
-    pub uiHeight: u32,
-    pub fAverageFrameSpeedInMs: f32,
-    pub fActualAverageFrameSpeedInMs: f32,
-    pub uiDecodedFrameCount: u32,
-    pub uiResolutionChangeTimes: u32,
-    pub uiIDRCorrectNum: u32,
-    pub uiAvgEcRatio: u32,
-    pub uiAvgEcPropRatio: u32,
-    pub uiEcIDRNum: u32,
-    pub uiEcFrameNum: u32,
-    pub uiIDRLostNum: u32,
-    pub uiFreezingIDRNum: u32,
-    pub uiFreezingNonIDRNum: u32,
-    pub iAvgLumaQp: i32,
-    pub iSpsReportErrorNum: i32,
-    pub iSubSpsReportErrorNum: i32,
-    pub iPpsReportErrorNum: i32,
-    pub iSpsNoExistNalNum: i32,
-    pub iSubSpsNoExistNalNum: i32,
-    pub iPpsNoExistNalNum: i32,
-    pub uiProfile: u32,
-    pub uiLevel: u32,
-    pub iCurrentActiveSpsId: i32,
-    pub iCurrentActivePpsId: i32,
-    pub iStatisticsLogInterval: u32,
-}
+// **T8.A1 — one declaration, and it is the ABI's.** `SDecoderStatistics` stood
+// declared here *and* in `api/codec_api.rs`, field-for-field identical: F21/F22's
+// exact shape, invisible for seven phases because no instrument read `src/api`.
+// It is one of the twelve fields the api layer stamps into this context, so the
+// two copies met at `pDecoderStatistics` and agreed only by luck. The public
+// header owns the layout (`codec_api.h`'s `SDecoderStatistics`, handed out by
+// `DECODER_OPTION_GET_STATISTICS`), so the api's is the declaration and this is a
+// re-export.
+pub use crate::api::codec_api::SDecoderStatistics;
 
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
@@ -694,20 +673,19 @@ impl Default for SLogContext {
     }
 }
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Default)]
-pub enum VIDEO_BITSTREAM_TYPE {
-    #[default]
-    VIDEO_BITSTREAM_AVC = 0,
-    VIDEO_BITSTREAM_SVC = 1,
-}
-
-#[repr(C)]
-#[derive(Debug, Copy, Clone, Default)]
-pub struct SVideoProperty {
-    pub size: u32,
-    pub eVideoBsType: VIDEO_BITSTREAM_TYPE,
-}
+// **T8.A1 — and this pair had *diverged*.** Both names were declared here and in
+// `api/codec_api.rs`, and the two `VIDEO_BITSTREAM_TYPE`s carry their `#[default]`
+// on **different variants**: AVC here, SVC there — where the C++'s
+// `VIDEO_BITSTREAM_DEFAULT` is SVC (`codec_app_def.h`). `SVideoProperty::default()`
+// derives from it, so a `SDecodingParam` built through this copy would have named a
+// different bitstream type than one built through the api's, under one name, with
+// nothing to say so. The api's is the declaration; both are re-exported.
+//
+// Nothing moves today: this copy's only live consumer is the context's own
+// `eVideoType`, whose one write names its variant explicitly (see the field). That
+// the unification is behaviour-neutral is a fact about *this* tree, not about the
+// shape — see F76 for what `eVideoType` is still missing.
+pub use crate::api::codec_api::{SVideoProperty, VIDEO_BITSTREAM_TYPE};
 
 // The decoder context points at the caller's `SDecodingParam`, so it must be
 // the very same type as the public API struct (`codec_app_def.h`).
