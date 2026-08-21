@@ -672,7 +672,7 @@ pub unsafe fn ForceCodingIDR(pCtx: *mut sWelsEncCtx, _iLayerId: i32) -> i32 {
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe fn WelsEncoderParamAdjust(
-    ppCtx: *mut *mut sWelsEncCtx,
+    ppCtx: &mut Option<Box<sWelsEncCtx>>,
     pNewParam: *mut SWelsSvcCodingParam,
 ) -> i32 {
     const EPSN: f32 = 0.000001;
@@ -683,18 +683,25 @@ pub unsafe fn WelsEncoderParamAdjust(
     let mut iCacheLineSize: i32 = 16; // on chip cache line size in byte
     let mut uiCpuFeatureFlags: u32 = 0;
 
-    if ppCtx.is_null() || (*ppCtx).is_null() || pNewParam.is_null() {
+    if pNewParam.is_null() {
         return 1;
     }
+    // **T8.B5 (S42): derived once, from the owner's `Box`.** Everything below that
+    // used to spell `*ppCtx` reads through this; the re-initialisation branch
+    // re-derives it, because the box it came from is gone by then.
+    let mut pCtx: *mut sWelsEncCtx = match ppCtx.as_mut() {
+        Some(pEncContext) => std::ptr::addr_of_mut!(**pEncContext),
+        None => return 1,
+    };
 
     /* Check validation in new parameters */
-    iReturn = ParamValidationExt(&mut (**ppCtx).sLogCtx, pNewParam);
+    iReturn = ParamValidationExt(&mut (*pCtx).sLogCtx, pNewParam);
     if iReturn != ENC_RETURN_SUCCESS {
         return iReturn;
     }
 
     iReturn = GetMultipleThreadIdc(
-        &mut (**ppCtx).sLogCtx,
+        &mut (*pCtx).sLogCtx,
         pNewParam,
         &mut iSliceNum,
         &mut iCacheLineSize,
@@ -704,7 +711,7 @@ pub unsafe fn WelsEncoderParamAdjust(
         return iReturn;
     }
 
-    let pOldParam: *mut SWelsSvcCodingParam = ctx_param(*ppCtx);
+    let pOldParam: *mut SWelsSvcCodingParam = ctx_param(pCtx);
 
     if (*pOldParam).iUsageType != (*pNewParam).iUsageType {
         return ENC_RETURN_UNSUPPORTED_PARA;
@@ -800,7 +807,7 @@ pub unsafe fn WelsEncoderParamAdjust(
     }
 
     if bNeedReset {
-        let mut sLogCtx = (**ppCtx).sLogCtx;
+        let mut sLogCtx = (*pCtx).sLogCtx;
 
         let iOldSpsPpsIdStrategy = (*pOldParam).eSpsPpsIdStrategy;
         let mut sTmpPsoVariable: [SParaSetOffsetVariable; PARA_SET_TYPE] = Default::default();
@@ -817,20 +824,20 @@ pub unsafe fn WelsEncoderParamAdjust(
         }
 
         // for sEncoderStatistics
-        let sTempEncoderStatistics = (**ppCtx).sEncoderStatistics;
-        let uiStartTimestamp = (**ppCtx).uiStartTimestamp;
-        let iStatisticsLogInterval = (**ppCtx).iStatisticsLogInterval;
-        let iLastStatisticsLogTs = (**ppCtx).iLastStatisticsLogTs;
+        let sTempEncoderStatistics = (*pCtx).sEncoderStatistics;
+        let uiStartTimestamp = (*pCtx).uiStartTimestamp;
+        let iStatisticsLogInterval = (*pCtx).iStatisticsLogInterval;
+        let iLastStatisticsLogTs = (*pCtx).iLastStatisticsLogTs;
         // for sEncoderStatistics
 
         let mut sExistingParasetList = SExistingParasetList::default();
         let mut pExistingParasetList: *mut SExistingParasetList = null_mut();
 
         if iOldSpsPpsIdStrategy != CONSTANT_ID && (*pNewParam).eSpsPpsIdStrategy != CONSTANT_ID {
-            ParasetStrategy(*ppCtx).OutputCurrentStructure(
+            ParasetStrategy(pCtx).OutputCurrentStructure(
                 sTmpPsoVariable.as_mut_ptr(),
                 iTmpPpsIdList.as_mut_ptr(),
-                *ppCtx,
+                pCtx,
                 &mut sExistingParasetList,
             );
 
@@ -841,25 +848,31 @@ pub unsafe fn WelsEncoderParamAdjust(
             }
         }
 
-        WelsUninitEncoderExt(ppCtx);
+        WelsUninitEncoderExt(ppCtx.take());
 
         /* Update new parameters */
         if WelsInitEncoderExt(ppCtx, pNewParam, &mut sLogCtx, pExistingParasetList) != 0 {
             return 1;
         }
+        // The context below this line is a different allocation from the one above
+        // it. `encoder_ext.cpp` hides that behind `*ppCtx`; here it is a statement.
+        pCtx = match ppCtx.as_mut() {
+            Some(pEncContext) => std::ptr::addr_of_mut!(**pEncContext),
+            None => return 1,
+        };
         // if WelsInitEncoderExt succeed
         // for LTR or SPS,PPS ID update
         iIndexD = 0;
         while iIndexD < (*pNewParam).iSpatialLayerNum {
-            (*ctx_param(*ppCtx)).sDependencyLayers[iIndexD as usize].uiIdrPicId = uiMaxIdrPicId;
+            (*ctx_param(pCtx)).sDependencyLayers[iIndexD as usize].uiIdrPicId = uiMaxIdrPicId;
             iIndexD += 1;
         }
 
         // for sEncoderStatistics
-        (**ppCtx).sEncoderStatistics = sTempEncoderStatistics;
-        (**ppCtx).uiStartTimestamp = uiStartTimestamp;
-        (**ppCtx).iStatisticsLogInterval = iStatisticsLogInterval;
-        (**ppCtx).iLastStatisticsLogTs = iLastStatisticsLogTs;
+        (*pCtx).sEncoderStatistics = sTempEncoderStatistics;
+        (*pCtx).uiStartTimestamp = uiStartTimestamp;
+        (*pCtx).iStatisticsLogInterval = iStatisticsLogInterval;
+        (*pCtx).iLastStatisticsLogTs = iLastStatisticsLogTs;
         // for sEncoderStatistics
 
         // load back the needed structure for eSpsPpsIdStrategy
@@ -867,7 +880,7 @@ pub unsafe fn WelsEncoderParamAdjust(
             || (iOldSpsPpsIdStrategy == SPS_PPS_LISTING
                 && (*pNewParam).eSpsPpsIdStrategy == SPS_PPS_LISTING)
         {
-            ParasetStrategy(*ppCtx).LoadPreviousStructure(
+            ParasetStrategy(pCtx).LoadPreviousStructure(
                 sTmpPsoVariable.as_mut_ptr(),
                 iTmpPpsIdList.as_mut_ptr(),
             );
@@ -1052,10 +1065,13 @@ pub unsafe fn WelsEncoderApplyBitRate(
 #[allow(unsafe_code)]
 pub unsafe fn WelsEncoderApplyLTR(
     pLogCtx: *mut SLogContext,
-    ppCtx: *mut *mut sWelsEncCtx,
+    ppCtx: &mut Option<Box<sWelsEncCtx>>,
     pLTRValue: *mut SLTRConfig,
 ) -> i32 {
-    let mut sConfig: SWelsSvcCodingParam = (*ctx_param(*ppCtx)).clone();
+    let mut sConfig: SWelsSvcCodingParam = match ppCtx.as_mut() {
+        Some(pEncContext) => (*ctx_param(std::ptr::addr_of_mut!(**pEncContext))).clone(),
+        None => return 1,
+    };
     let mut iNumRefFrame;
     sConfig.bEnableLongTermReference = (*pLTRValue).bEnableLongTermReference;
     sConfig.iLTRRefNum = (*pLTRValue).iLTRRefNum;
@@ -1573,8 +1589,21 @@ pub unsafe fn WelsEncoderApplyBitVaryRang(
 /// CWelsH264SVCEncoder class implementation
 #[repr(C)]
 pub struct CWelsH264SVCEncoder {
-    pub m_pEncContext: *mut sWelsEncCtx,
-    pub m_pWelsTrace: *mut welsCodecTrace,
+    /// **T8.B5 — the boundary object owns the encoder context (S42).**
+    ///
+    /// `CWelsH264SVCEncoder::m_pEncContext` is a `sWelsEncCtx*` in the reference
+    /// because C has no other way to say "mine, or nothing". This is the
+    /// allocation root: `WelsInitEncoderExt` fills the slot, `WelsUninitEncoderExt`
+    /// takes it by value, and every `*mut sWelsEncCtx` in the tree below is derived
+    /// from this `Box` for the duration of one call. The tree itself stays raw and
+    /// stays tagged `port-raw(Phase 9)` — what moves here is the *root*, which is
+    /// the only place the question "who frees this" was ever open.
+    pub m_pEncContext: Option<Box<sWelsEncCtx>>,
+    /// The trace object, owned outright. It was a `Box::into_raw` in the
+    /// constructor and a `Box::from_raw` in `Drop` with a null test at every use
+    /// between them; the reference's `m_pWelsTrace` is a `new`ed object with the
+    /// same lifetime as the encoder and no null state after construction.
+    pub m_pWelsTrace: Box<welsCodecTrace>,
     pub m_iMaxPicWidth: i32,
     pub m_iMaxPicHeight: i32,
     pub m_iCspInternal: i32,
@@ -1588,11 +1617,27 @@ impl Default for CWelsH264SVCEncoder {
 }
 
 impl CWelsH264SVCEncoder {
+    /// **S42's root, read out.** The one expression in this file that turns the
+    /// boundary object's ownership back into the `*mut sWelsEncCtx` the tree below
+    /// still speaks — derived from the `Box` for the duration of one call, never
+    /// stored. It takes the slot rather than `&mut self` on purpose: a `&mut self`
+    /// here would retag the whole encoder object, and the log-context pointers the
+    /// call sites hold are derived from a *sibling* field.
+    ///
+    /// Null exactly when the encoder has no context, which is the state
+    /// `m_pEncContext == NULL` used to mean.
+    #[inline]
+    fn ctx_ptr(slot: &mut Option<Box<sWelsEncCtx>>) -> *mut sWelsEncCtx {
+        match slot {
+            Some(pEncContext) => std::ptr::addr_of_mut!(**pEncContext),
+            None => null_mut(),
+        }
+    }
+
     pub fn new() -> Self {
-        let trace = Box::into_raw(Box::new(welsCodecTrace::new()));
         let mut encoder = Self {
-            m_pEncContext: null_mut(),
-            m_pWelsTrace: trace,
+            m_pEncContext: None,
+            m_pWelsTrace: Box::new(welsCodecTrace::new()),
             m_iMaxPicWidth: 0,
             m_iMaxPicHeight: 0,
             m_iCspInternal: 0,
@@ -1602,14 +1647,9 @@ impl CWelsH264SVCEncoder {
         encoder
     }
 
-    // unsafe-cat: port-raw(Phase 9)
-    #[allow(unsafe_code)]
     pub fn InitEncoder(&mut self) {
-        if !self.m_pWelsTrace.is_null() {
-            unsafe {
-                (*self.m_pWelsTrace).SetCodecInstance(self as *mut Self as *mut c_void);
-            }
-        }
+        let instance = std::ptr::from_mut(self) as *mut c_void;
+        self.m_pWelsTrace.SetCodecInstance(instance);
     }
 
     // unsafe-cat: port-raw(Phase 9)
@@ -1627,9 +1667,10 @@ impl CWelsH264SVCEncoder {
     // unsafe-cat: port-raw(Phase 9)
     #[allow(unsafe_code)]
     pub fn Initialize(&mut self, argv: *const SEncParamBase) -> i32 {
-        if self.m_pWelsTrace.is_null() {
-            return cmMallocMemeError;
-        }
+        // `welsEncoderExt.cpp`'s `if (m_pWelsTrace == NULL) return cmMallocMemeError`
+        // stood here on both entry points. It guards a `new welsCodecTrace` that can
+        // return null in C++; `Box::new` cannot, and T8.B5 makes the member owned,
+        // so the arm is unreachable rather than untaken and is deleted.
         if argv.is_null() {
             return cmInitParaError;
         }
@@ -1647,9 +1688,7 @@ impl CWelsH264SVCEncoder {
     // unsafe-cat: port-raw(Phase 9)
     #[allow(unsafe_code)]
     pub fn InitializeExt(&mut self, argv: *const SEncParamExt) -> i32 {
-        if self.m_pWelsTrace.is_null() {
-            return cmMallocMemeError;
-        }
+        // See `Initialize`: the trace's null guard is unreachable since T8.B5.
         if argv.is_null() {
             return cmInitParaError;
         }
@@ -1757,11 +1796,7 @@ impl CWelsH264SVCEncoder {
             self.m_iMaxPicHeight = (*pCfg).iPicHeight;
 
             self.TraceParamInfo(&mut (*pCfg).to_param_ext());
-            let log_ctx = if !self.m_pWelsTrace.is_null() {
-                &mut (*self.m_pWelsTrace).m_sLogCtx
-            } else {
-                null_mut()
-            };
+            let log_ctx = std::ptr::addr_of_mut!(self.m_pWelsTrace.m_sLogCtx);
 
             if crate::encoder::encoder_ext::WelsInitEncoderExt(
                 &mut self.m_pEncContext,
@@ -1786,12 +1821,13 @@ impl CWelsH264SVCEncoder {
         if !self.m_bInitialFlag {
             return 0;
         }
-        unsafe {
-            if !self.m_pEncContext.is_null() {
-                crate::encoder::encoder_ext::WelsUninitEncoderExt(&mut self.m_pEncContext);
-                self.m_pEncContext = null_mut();
-            }
-        }
+        // T8.B5: `if !is_null { Uninit(&mut p); p = null }` was three statements
+        // saying what `take()` says in one, and the null store is the type's now.
+        // The obligation this block carries is the tree below the root, not the
+        // root: `WelsUninitEncoderExt` takes the context *by value* since T8.B5, so
+        // there is no aliasing question left at this call — only the free cascade's
+        // own raw walk, which is `port-raw(Phase 9)`.
+        unsafe { crate::encoder::encoder_ext::WelsUninitEncoderExt(self.m_pEncContext.take()) };
         self.m_bInitialFlag = false;
         0
     }
@@ -1825,6 +1861,7 @@ impl CWelsH264SVCEncoder {
         pSrcPic: *const SSourcePicture,
         pBsInfo: *mut SFrameBSInfo,
     ) -> i32 {
+        let pCtx = Self::ctx_ptr(&mut self.m_pEncContext);
         unsafe {
             if (*pSrcPic).iPicWidth < 16 || (*pSrcPic).iPicHeight < 16 {
                 return cmUnsupportedData;
@@ -1832,14 +1869,14 @@ impl CWelsH264SVCEncoder {
 
             let kiBeforeFrameUs = WelsTime();
             let kiEncoderReturn =
-                crate::encoder::encoder_ext::WelsEncoderEncodeExt(self.m_pEncContext, pBsInfo, pSrcPic);
+                crate::encoder::encoder_ext::WelsEncoderEncodeExt(pCtx, pBsInfo, pSrcPic);
             let kiCurrentFrameMs = (WelsTime() - kiBeforeFrameUs) / 1000;
 
             if kiEncoderReturn == ENC_RETURN_MEMALLOCERR
                 || kiEncoderReturn == ENC_RETURN_MEMOVERFLOWFOUND
                 || kiEncoderReturn == ENC_RETURN_VLCOVERFLOWFOUND
             {
-                crate::encoder::encoder_ext::WelsUninitEncoderExt(&mut self.m_pEncContext);
+                crate::encoder::encoder_ext::WelsUninitEncoderExt(self.m_pEncContext.take());
                 return cmMallocMemeError;
             } else if kiEncoderReturn == ENC_RETURN_INVALIDINPUT {
                 return cmUnsupportedData;
@@ -1858,21 +1895,23 @@ impl CWelsH264SVCEncoder {
     // unsafe-cat: port-raw(Phase 9)
     #[allow(unsafe_code)]
     pub fn EncodeParameterSets(&mut self, pBsInfo: *mut SFrameBSInfo) -> i32 {
-        if self.m_pEncContext.is_null() || !self.m_bInitialFlag || pBsInfo.is_null() {
+        let pCtx = Self::ctx_ptr(&mut self.m_pEncContext);
+        if pCtx.is_null() || !self.m_bInitialFlag || pBsInfo.is_null() {
             return cmInitParaError;
         }
-        unsafe { WelsEncoderEncodeParameterSetsRust(self.m_pEncContext, pBsInfo) }
+        unsafe { WelsEncoderEncodeParameterSetsRust(pCtx, pBsInfo) }
     }
 
     // unsafe-cat: port-raw(Phase 9)
     #[allow(unsafe_code)]
     pub fn ForceIntraFrame(&mut self, bIDR: bool, iLayerId: i32) -> i32 {
+        let pCtx = Self::ctx_ptr(&mut self.m_pEncContext);
         if bIDR {
-            if self.m_pEncContext.is_null() || !self.m_bInitialFlag {
+            if pCtx.is_null() || !self.m_bInitialFlag {
                 return 1;
             }
             unsafe {
-                ForceCodingIDR(self.m_pEncContext, iLayerId);
+                ForceCodingIDR(pCtx, iLayerId);
             }
         }
         0
@@ -1885,15 +1924,16 @@ impl CWelsH264SVCEncoder {
     // unsafe-cat: port-raw(Phase 9)
     #[allow(unsafe_code)]
     pub fn UpdateStatistics(&mut self, pBsInfo: *mut SFrameBSInfo, kiCurrentFrameMs: i64) {
+        let pCtx = Self::ctx_ptr(&mut self.m_pEncContext);
         unsafe {
-            if self.m_pEncContext.is_null() || ctx_param(self.m_pEncContext).is_null() || pBsInfo.is_null() {
+            if pCtx.is_null() || ctx_param(pCtx).is_null() || pBsInfo.is_null() {
                 return;
             }
             let kiCurrentFrameTs = (*pBsInfo).uiTimeStamp;
-            (*self.m_pEncContext).uiLastTimestamp = kiCurrentFrameTs;
-            let kiTimeDiff = kiCurrentFrameTs - (*self.m_pEncContext).iLastStatisticsLogTs;
+            (*pCtx).uiLastTimestamp = kiCurrentFrameTs;
+            let kiTimeDiff = kiCurrentFrameTs - (*pCtx).iLastStatisticsLogTs;
 
-            let iMaxDid = (*ctx_param(self.m_pEncContext)).iSpatialLayerNum - 1;
+            let iMaxDid = (*ctx_param(pCtx)).iSpatialLayerNum - 1;
             for iDid in 0..=iMaxDid {
                 let mut eFrameType = EVideoFrameType::videoFrameTypeSkip;
                 let mut kiCurrentFrameSize = 0;
@@ -1912,9 +1952,9 @@ impl CWelsH264SVCEncoder {
                 }
 
                 let pStatistics =
-                    &mut (*self.m_pEncContext).sEncoderStatistics[iDid as usize];
+                    &mut (*pCtx).sEncoderStatistics[iDid as usize];
                 let pSpatialLayerInternalParam =
-                    &(*ctx_param(self.m_pEncContext)).sDependencyLayers[iDid as usize];
+                    &(*ctx_param(pCtx)).sDependencyLayers[iDid as usize];
 
                 if pStatistics.uiWidth != 0
                     && pStatistics.uiHeight != 0
@@ -1940,18 +1980,18 @@ impl CWelsH264SVCEncoder {
                         / (iProcessedFrameCount as f32);
                 }
 
-                if (*self.m_pEncContext).uiStartTimestamp != 0 {
-                    if kiCurrentFrameTs > (*self.m_pEncContext).uiStartTimestamp + 800 {
+                if (*pCtx).uiStartTimestamp != 0 {
+                    if kiCurrentFrameTs > (*pCtx).uiStartTimestamp + 800 {
                         pStatistics.fAverageFrameRate = (pStatistics.uiInputFrameCount as f32
                             * 1000.0)
-                            / ((kiCurrentFrameTs - (*self.m_pEncContext).uiStartTimestamp) as f32);
+                            / ((kiCurrentFrameTs - (*pCtx).uiStartTimestamp) as f32);
                     }
                 } else {
-                    (*self.m_pEncContext).uiStartTimestamp = kiCurrentFrameTs;
+                    (*pCtx).uiStartTimestamp = kiCurrentFrameTs;
                 }
 
-                pStatistics.uiAverageFrameQP = if !ctx_rc(self.m_pEncContext).is_null() {
-                    (*ctx_rc_at(self.m_pEncContext, iDid as usize)).iAverageFrameQp as u32
+                pStatistics.uiAverageFrameQP = if !ctx_rc(pCtx).is_null() {
+                    (*ctx_rc_at(pCtx, iDid as usize)).iAverageFrameQp as u32
                 } else {
                     26
                 };
@@ -1961,7 +2001,7 @@ impl CWelsH264SVCEncoder {
                 {
                     pStatistics.uiIDRSentNum += 1;
                 }
-                let pLtr = ctx_ltr(self.m_pEncContext);
+                let pLtr = ctx_ltr(pCtx);
                 if !pLtr.is_null() && (*pLtr).bLTRMarkingFlag {
                     pStatistics.uiLTRSentNum += 1;
                 }
@@ -1972,9 +2012,9 @@ impl CWelsH264SVCEncoder {
                     - pStatistics.iLastStatisticsFrameCount)
                     as i32;
                 if kiDeltaFrames as f32
-                    > (*ctx_param(self.m_pEncContext)).fMaxFrameRate * 2.0
+                    > (*ctx_param(pCtx)).fMaxFrameRate * 2.0
                 {
-                    if kiTimeDiff >= (*self.m_pEncContext).iStatisticsLogInterval as i64 {
+                    if kiTimeDiff >= (*pCtx).iStatisticsLogInterval as i64 {
                         let fTimeDiffSec = kiTimeDiff as f32 / 1000.0;
                         if fTimeDiffSec > 0.0 {
                             pStatistics.fLatestFrameRate = (pStatistics.uiInputFrameCount
@@ -1987,7 +2027,7 @@ impl CWelsH264SVCEncoder {
                         }
                         pStatistics.iLastStatisticsBytes = pStatistics.iTotalEncodedBytes;
                         pStatistics.iLastStatisticsFrameCount = pStatistics.uiInputFrameCount;
-                        (*self.m_pEncContext).iLastStatisticsLogTs = kiCurrentFrameTs;
+                        (*pCtx).iLastStatisticsLogTs = kiCurrentFrameTs;
                         self.LogStatistics(kiCurrentFrameTs, iMaxDid);
                         pStatistics.iTotalEncodedBytes = 0;
                     }
@@ -2002,7 +2042,10 @@ impl CWelsH264SVCEncoder {
         if pOption.is_null() {
             return cmInitParaError;
         }
-        if (self.m_pEncContext.is_null() || !self.m_bInitialFlag)
+        // Re-derived after every arm that replaces the context — the three
+        // `WelsEncoderParamAdjust` arms and `ENCODER_OPTION_LTR`.
+        let mut pCtx = Self::ctx_ptr(&mut self.m_pEncContext);
+        if (pCtx.is_null() || !self.m_bInitialFlag)
             && eOptionId != EncoderOption::ENCODER_OPTION_TRACE_LEVEL
             && eOptionId != EncoderOption::ENCODER_OPTION_TRACE_CALLBACK
             && eOptionId != EncoderOption::ENCODER_OPTION_TRACE_CALLBACK_CONTEXT
@@ -2028,10 +2071,10 @@ impl CWelsH264SVCEncoder {
                     if iValue <= -1 {
                         iValue = 0;
                     }
-                    if iValue == (*ctx_param(self.m_pEncContext)).uiIntraPeriod as i32 {
+                    if iValue == (*ctx_param(pCtx)).uiIntraPeriod as i32 {
                         return cmResultSuccess;
                     }
-                    (*ctx_param(self.m_pEncContext)).uiIntraPeriod = iValue as u32;
+                    (*ctx_param(pCtx)).uiIntraPeriod = iValue as u32;
                 }
                 EncoderOption::ENCODER_OPTION_SVC_ENCODE_PARAM_BASE => {
                     let sEncodingParam = *(pOption as *const SEncParamBase);
@@ -2053,8 +2096,13 @@ impl CWelsH264SVCEncoder {
                     if WelsEncoderParamAdjust(&mut self.m_pEncContext, &mut sConfig) != 0 {
                         return cmInitParaError;
                     }
+                    // T8.B5: `WelsEncoderParamAdjust` may replace the context
+                    // (`encoder_ext.cpp`'s uninit/init pair), so the pointer derived
+                    // at the top of `SetOption` no longer names this encoder's
+                    // context. Re-derived from the slot the adjust just filled.
+                    pCtx = Self::ctx_ptr(&mut self.m_pEncContext);
                     // LogStatistics
-                    let ts = (*self.m_pEncContext).iLastStatisticsLogTs;
+                    let ts = (*pCtx).iLastStatisticsLogTs;
                     self.LogStatistics(ts, 0);
                 }
                 EncoderOption::ENCODER_OPTION_SVC_ENCODE_PARAM_EXT => {
@@ -2087,8 +2135,13 @@ impl CWelsH264SVCEncoder {
                     if WelsEncoderParamAdjust(&mut self.m_pEncContext, &mut sConfig) != 0 {
                         return cmInitParaError;
                     }
+                    // T8.B5: `WelsEncoderParamAdjust` may replace the context
+                    // (`encoder_ext.cpp`'s uninit/init pair), so the pointer derived
+                    // at the top of `SetOption` no longer names this encoder's
+                    // context. Re-derived from the slot the adjust just filled.
+                    pCtx = Self::ctx_ptr(&mut self.m_pEncContext);
                     // LogStatistics
-                    let ts = (*self.m_pEncContext).iLastStatisticsLogTs;
+                    let ts = (*pCtx).iLastStatisticsLogTs;
                     self.LogStatistics(ts, sEncodingParam.iSpatialLayerNum - 1);
                 }
                 EncoderOption::ENCODER_OPTION_FRAME_RATE => {
@@ -2096,9 +2149,9 @@ impl CWelsH264SVCEncoder {
                     if iValue <= 0.0 {
                         return cmInitParaError;
                     }
-                    (*ctx_param(self.m_pEncContext)).fMaxFrameRate =
+                    (*ctx_param(pCtx)).fMaxFrameRate =
                         WELS_CLIP3(iValue, MIN_FRAME_RATE, MAX_FRAME_RATE);
-                    WelsEncoderApplyFrameRate(ctx_param(self.m_pEncContext));
+                    WelsEncoderApplyFrameRate(ctx_param(pCtx));
                 }
                 EncoderOption::ENCODER_OPTION_BITRATE => {
                     let pInfo = &*(pOption as *const SBitrateInfo);
@@ -2109,21 +2162,17 @@ impl CWelsH264SVCEncoder {
                     iBitrate = WELS_CLIP3(iBitrate, MIN_BIT_RATE, MAX_BIT_RATE);
                     match pInfo.iLayer {
                         SPATIAL_LAYER_ALL => {
-                            (*ctx_param(self.m_pEncContext)).iTargetBitrate = iBitrate;
+                            (*ctx_param(pCtx)).iTargetBitrate = iBitrate;
                         }
                         SPATIAL_LAYER_0 | SPATIAL_LAYER_1 | SPATIAL_LAYER_2
                         | SPATIAL_LAYER_3 => {
-                            (*ctx_param(self.m_pEncContext)).sSpatialLayers[pInfo.iLayer as usize]
+                            (*ctx_param(pCtx)).sSpatialLayers[pInfo.iLayer as usize]
                                 .iSpatialBitrate = iBitrate;
                         }
                         _ => return cmInitParaError,
                     }
-                    let log_ctx = if !self.m_pWelsTrace.is_null() {
-                        &mut (*self.m_pWelsTrace).m_sLogCtx
-                    } else {
-                        null_mut()
-                    };
-                    if WelsEncoderApplyBitRate(log_ctx, ctx_param(self.m_pEncContext), pInfo.iLayer as i32)
+                    let log_ctx = std::ptr::addr_of_mut!(self.m_pWelsTrace.m_sLogCtx);
+                    if WelsEncoderApplyBitRate(log_ctx, ctx_param(pCtx), pInfo.iLayer as i32)
                         != 0
                     {
                         return cmInitParaError;
@@ -2138,21 +2187,17 @@ impl CWelsH264SVCEncoder {
                     iBitrate = WELS_CLIP3(iBitrate, MIN_BIT_RATE, MAX_BIT_RATE);
                     match pInfo.iLayer {
                         SPATIAL_LAYER_ALL => {
-                            (*ctx_param(self.m_pEncContext)).iMaxBitrate = iBitrate;
+                            (*ctx_param(pCtx)).iMaxBitrate = iBitrate;
                         }
                         SPATIAL_LAYER_0 | SPATIAL_LAYER_1 | SPATIAL_LAYER_2
                         | SPATIAL_LAYER_3 => {
-                            (*ctx_param(self.m_pEncContext)).sSpatialLayers[pInfo.iLayer as usize]
+                            (*ctx_param(pCtx)).sSpatialLayers[pInfo.iLayer as usize]
                                 .iMaxSpatialBitrate = iBitrate;
                         }
                         _ => return cmInitParaError,
                     }
-                    let log_ctx = if !self.m_pWelsTrace.is_null() {
-                        &mut (*self.m_pWelsTrace).m_sLogCtx
-                    } else {
-                        null_mut()
-                    };
-                    if WelsEncoderApplyBitRate(log_ctx, ctx_param(self.m_pEncContext), pInfo.iLayer as i32)
+                    let log_ctx = std::ptr::addr_of_mut!(self.m_pWelsTrace.m_sLogCtx);
+                    if WelsEncoderApplyBitRate(log_ctx, ctx_param(pCtx), pInfo.iLayer as i32)
                         != 0
                     {
                         return cmInitParaError;
@@ -2161,58 +2206,58 @@ impl CWelsH264SVCEncoder {
                 EncoderOption::ENCODER_OPTION_RC_MODE => {
                     // 0:quality mode;1:bit-rate mode;2:bitrate limited mode
                     let iValue = *(pOption as *const i32);
-                    (*ctx_param(self.m_pEncContext)).iRCMode = rc_mode_from_raw(iValue);
+                    (*ctx_param(pCtx)).iRCMode = rc_mode_from_raw(iValue);
                     // Re-point the dispatch table. Setting the field alone leaves
                     // the encoder running the previous mode's callbacks.
-                    let iRCMode = (*ctx_param(self.m_pEncContext)).iRCMode;
+                    let iRCMode = (*ctx_param(pCtx)).iRCMode;
                     WelsRcInitFuncPointers(
-                        &mut (*ctx_func_list(self.m_pEncContext)).pfRc,
+                        &mut (*ctx_func_list(pCtx)).pfRc,
                         iRCMode,
                     );
                 }
                 EncoderOption::ENCODER_OPTION_RC_FRAME_SKIP => {
                     // 0:FRAME-SKIP disabled;1:FRAME-SKIP enabled
                     let bValue = *(pOption as *const bool);
-                    if (*ctx_param(self.m_pEncContext)).iRCMode != RC_OFF_MODE {
-                        (*ctx_param(self.m_pEncContext)).bEnableFrameSkip = bValue;
+                    if (*ctx_param(pCtx)).iRCMode != RC_OFF_MODE {
+                        (*ctx_param(pCtx)).bEnableFrameSkip = bValue;
                     }
                     // rc off: the setting is accepted and ignored, as in C++.
                 }
                 EncoderOption::ENCODER_PADDING_PADDING => {
                     // 0:disable padding;1:padding
                     let iValue = *(pOption as *const i32);
-                    (*ctx_param(self.m_pEncContext)).iPaddingFlag = iValue;
+                    (*ctx_param(pCtx)).iPaddingFlag = iValue;
                 }
                 EncoderOption::ENCODER_LTR_RECOVERY_REQUEST => {
                     let pLTR_Recover_Request = pOption as *mut SLTRRecoverRequest;
-                    FilterLTRRecoveryRequest(self.m_pEncContext, pLTR_Recover_Request);
+                    FilterLTRRecoveryRequest(pCtx, pLTR_Recover_Request);
                 }
                 EncoderOption::ENCODER_LTR_MARKING_FEEDBACK => {
                     let fb = pOption as *mut SLTRMarkingFeedback;
-                    FilterLTRMarkingFeedback(self.m_pEncContext, fb);
+                    FilterLTRMarkingFeedback(pCtx, fb);
                 }
                 EncoderOption::ENCODER_LTR_MARKING_PERIOD => {
                     let iValue = *(pOption as *const u32);
-                    (*ctx_param(self.m_pEncContext)).iLtrMarkPeriod = iValue;
+                    (*ctx_param(pCtx)).iLtrMarkPeriod = iValue;
                 }
                 EncoderOption::ENCODER_OPTION_LTR => {
                     let pLTRValue = pOption as *mut SLTRConfig;
-                    let log_ctx = if !self.m_pWelsTrace.is_null() {
-                        &mut (*self.m_pWelsTrace).m_sLogCtx
-                    } else {
-                        null_mut()
-                    };
+                    let log_ctx = std::ptr::addr_of_mut!(self.m_pWelsTrace.m_sLogCtx);
                     if WelsEncoderApplyLTR(log_ctx, &mut self.m_pEncContext, pLTRValue) != 0 {
                         return cmInitParaError;
                     }
+                    // T8.B5: the context may be a different allocation from here
+                    // on — `WelsEncoderApplyLTR` runs the uninit/init pair — and
+                    // this arm reads nothing after it, so there is nothing to
+                    // re-derive. The stale pointer is unreachable, not tolerated.
                 }
                 EncoderOption::ENCODER_OPTION_ENABLE_SSEI => {
                     let iValue = *(pOption as *const bool);
-                    (*ctx_param(self.m_pEncContext)).bEnableSSEI = iValue;
+                    (*ctx_param(pCtx)).bEnableSSEI = iValue;
                 }
                 EncoderOption::ENCODER_OPTION_ENABLE_PREFIX_NAL_ADDING => {
                     let iValue = *(pOption as *const bool);
-                    (*ctx_param(self.m_pEncContext)).bPrefixNalAddingCtrl = iValue;
+                    (*ctx_param(pCtx)).bPrefixNalAddingCtrl = iValue;
                 }
                 EncoderOption::ENCODER_OPTION_SPS_PPS_ID_STRATEGY => {
                     let iValue = *(pOption as *const i32);
@@ -2228,7 +2273,7 @@ impl CWelsH264SVCEncoder {
                         _ => {}
                     }
 
-                    let eOld = (*ctx_param(self.m_pEncContext)).eSpsPpsIdStrategy;
+                    let eOld = (*ctx_param(pCtx)).eSpsPpsIdStrategy;
                     if ((eNewStrategy as i32 & SPS_LISTING as i32) != 0
                         || (eOld as i32 & SPS_LISTING as i32) != 0)
                         && eOld != eNewStrategy
@@ -2238,17 +2283,19 @@ impl CWelsH264SVCEncoder {
                         return cmInitParaError;
                     }
                     let mut sConfig: SWelsSvcCodingParam =
-                        *ctx_param(self.m_pEncContext);
+                        *ctx_param(pCtx);
                     sConfig.eSpsPpsIdStrategy = eNewStrategy;
 
                     if WelsEncoderParamAdjust(&mut self.m_pEncContext, &mut sConfig) != 0 {
                         return cmInitParaError;
                     }
+                    // T8.B5: as in `ENCODER_OPTION_LTR` — nothing below reads the
+                    // context in this arm, so there is nothing to re-derive.
                 }
                 EncoderOption::ENCODER_OPTION_CURRENT_PATH => {
-                    if !ctx_param(self.m_pEncContext).is_null() {
+                    if !ctx_param(pCtx).is_null() {
                         let path = pOption as *mut c_char;
-                        (*ctx_param(self.m_pEncContext)).pCurPath = path;
+                        (*ctx_param(pCtx)).pCurPath = path;
                     }
                 }
                 EncoderOption::ENCODER_OPTION_DUMP_FILE => {
@@ -2263,14 +2310,10 @@ impl CWelsH264SVCEncoder {
                     {
                         return cmInitParaError;
                     }
-                    let log_ctx = if !self.m_pWelsTrace.is_null() {
-                        &mut (*self.m_pWelsTrace).m_sLogCtx
-                    } else {
-                        null_mut()
-                    };
+                    let log_ctx = std::ptr::addr_of_mut!(self.m_pWelsTrace.m_sLogCtx);
                     CheckProfileSetting(
                         log_ctx,
-                        ctx_param(self.m_pEncContext),
+                        ctx_param(pCtx),
                         pProfileInfo.iLayer as i32,
                         pProfileInfo.uiProfileIdc,
                     );
@@ -2282,34 +2325,26 @@ impl CWelsH264SVCEncoder {
                     {
                         return cmInitParaError;
                     }
-                    let log_ctx = if !self.m_pWelsTrace.is_null() {
-                        &mut (*self.m_pWelsTrace).m_sLogCtx
-                    } else {
-                        null_mut()
-                    };
+                    let log_ctx = std::ptr::addr_of_mut!(self.m_pWelsTrace.m_sLogCtx);
                     CheckLevelSetting(
                         log_ctx,
-                        ctx_param(self.m_pEncContext),
+                        ctx_param(pCtx),
                         pLevelInfo.iLayer as i32,
                         pLevelInfo.uiLevelIdc,
                     );
                 }
                 EncoderOption::ENCODER_OPTION_NUMBER_REF => {
                     let iValue = *(pOption as *const i32);
-                    let log_ctx = if !self.m_pWelsTrace.is_null() {
-                        &mut (*self.m_pWelsTrace).m_sLogCtx
-                    } else {
-                        null_mut()
-                    };
-                    CheckReferenceNumSetting(log_ctx, ctx_param(self.m_pEncContext), iValue);
+                    let log_ctx = std::ptr::addr_of_mut!(self.m_pWelsTrace.m_sLogCtx);
+                    CheckReferenceNumSetting(log_ctx, ctx_param(pCtx), iValue);
                 }
                 EncoderOption::ENCODER_OPTION_DELIVERY_STATUS => {
                     let pValue = &*(pOption as *const SDeliveryStatus);
-                    (*self.m_pEncContext).bDeliveryFlag = pValue.bDeliveryFlag;
+                    (*pCtx).bDeliveryFlag = pValue.bDeliveryFlag;
                 }
                 EncoderOption::ENCODER_OPTION_COMPLEXITY => {
                     let iValue = *(pOption as *const i32);
-                    (*ctx_param(self.m_pEncContext)).iComplexityMode = match iValue {
+                    (*ctx_param(pCtx)).iComplexityMode = match iValue {
                         0 => EComplexityMode::LOW_COMPLEXITY,
                         1 => EComplexityMode::MEDIUM_COMPLEXITY,
                         _ => EComplexityMode::HIGH_COMPLEXITY,
@@ -2320,45 +2355,35 @@ impl CWelsH264SVCEncoder {
                 }
                 EncoderOption::ENCODER_OPTION_STATISTICS_LOG_INTERVAL => {
                     let iValue = *(pOption as *const i32);
-                    (*self.m_pEncContext).iStatisticsLogInterval = iValue;
+                    (*pCtx).iStatisticsLogInterval = iValue;
                 }
                 EncoderOption::ENCODER_OPTION_IS_LOSSLESS_LINK => {
                     let bValue = *(pOption as *const bool);
-                    (*ctx_param(self.m_pEncContext)).bIsLosslessLink = bValue;
+                    (*ctx_param(pCtx)).bIsLosslessLink = bValue;
                 }
                 EncoderOption::ENCODER_OPTION_BITS_VARY_PERCENTAGE => {
                     let iValue = *(pOption as *const i32);
-                    (*ctx_param(self.m_pEncContext)).iBitsVaryPercentage =
+                    (*ctx_param(pCtx)).iBitsVaryPercentage =
                         WELS_CLIP3(iValue, 0, 100);
-                    let log_ctx = if !self.m_pWelsTrace.is_null() {
-                        &mut (*self.m_pWelsTrace).m_sLogCtx
-                    } else {
-                        null_mut()
-                    };
-                    let iRang = (*ctx_param(self.m_pEncContext)).iBitsVaryPercentage;
+                    let log_ctx = std::ptr::addr_of_mut!(self.m_pWelsTrace.m_sLogCtx);
+                    let iRang = (*ctx_param(pCtx)).iBitsVaryPercentage;
                     WelsEncoderApplyBitVaryRang(
                         log_ctx,
-                        ctx_param(self.m_pEncContext),
+                        ctx_param(pCtx),
                         iRang,
                     );
                 }
                 EncoderOption::ENCODER_OPTION_TRACE_LEVEL => {
-                    if !self.m_pWelsTrace.is_null() {
-                        let level = *(pOption as *const u32);
-                        (*self.m_pWelsTrace).SetTraceLevel(level);
-                    }
+                    let level = pOption.cast::<u32>().read();
+                    self.m_pWelsTrace.SetTraceLevel(level);
                 }
                 EncoderOption::ENCODER_OPTION_TRACE_CALLBACK => {
-                    if !self.m_pWelsTrace.is_null() {
-                        let callback = *(pOption as *const WelsTraceCallback);
-                        (*self.m_pWelsTrace).SetTraceCallback(callback);
-                    }
+                    let callback = pOption.cast::<WelsTraceCallback>().read();
+                    self.m_pWelsTrace.SetTraceCallback(callback);
                 }
                 EncoderOption::ENCODER_OPTION_TRACE_CALLBACK_CONTEXT => {
-                    if !self.m_pWelsTrace.is_null() {
-                        let ctx = *(pOption as *const *mut c_void);
-                        (*self.m_pWelsTrace).SetTraceCallbackContext(ctx);
-                    }
+                    let ctx = pOption.cast::<*mut c_void>().read();
+                    self.m_pWelsTrace.SetTraceCallbackContext(ctx);
                 }
                 // C++ ends with `default: return cmInitParaError`. There is no
                 // wildcard arm here on purpose: `SetOption` takes a typed
@@ -2377,7 +2402,8 @@ impl CWelsH264SVCEncoder {
         if pOption.is_null() {
             return cmInitParaError;
         }
-        if self.m_pEncContext.is_null() || !self.m_bInitialFlag {
+        let pCtx = Self::ctx_ptr(&mut self.m_pEncContext);
+        if pCtx.is_null() || !self.m_bInitialFlag {
             return cmInitExpected;
         }
 
@@ -2392,25 +2418,25 @@ impl CWelsH264SVCEncoder {
                 }
                 EncoderOption::ENCODER_OPTION_IDR_INTERVAL => {
                     *(pOption as *mut i32) =
-                        (*ctx_param(self.m_pEncContext)).uiIntraPeriod as i32;
+                        (*ctx_param(pCtx)).uiIntraPeriod as i32;
                 }
                 EncoderOption::ENCODER_OPTION_SVC_ENCODE_PARAM_EXT => {
-                    let param_ext = (*ctx_param(self.m_pEncContext)).to_param_ext();
+                    let param_ext = (*ctx_param(pCtx)).to_param_ext();
                     *(pOption as *mut SEncParamExt) = param_ext;
                 }
                 EncoderOption::ENCODER_OPTION_SVC_ENCODE_PARAM_BASE => {
-                    (*ctx_param(self.m_pEncContext))
+                    (*ctx_param(pCtx))
                         .GetBaseParams(&mut *(pOption as *mut SEncParamBase));
                 }
                 EncoderOption::ENCODER_OPTION_FRAME_RATE => {
-                    *(pOption as *mut f32) = (*ctx_param(self.m_pEncContext)).fMaxFrameRate;
+                    *(pOption as *mut f32) = (*ctx_param(pCtx)).fMaxFrameRate;
                 }
                 EncoderOption::ENCODER_OPTION_BITRATE => {
                     let pInfo = &mut *(pOption as *mut SBitrateInfo);
                     if pInfo.iLayer == SPATIAL_LAYER_ALL {
-                        pInfo.iBitrate = (*ctx_param(self.m_pEncContext)).iTargetBitrate;
+                        pInfo.iBitrate = (*ctx_param(pCtx)).iTargetBitrate;
                     } else if (pInfo.iLayer as i32) >= 0 && (pInfo.iLayer as i32) < MAX_DEPENDENCY_LAYER {
-                        pInfo.iBitrate = (*ctx_param(self.m_pEncContext)).sSpatialLayers
+                        pInfo.iBitrate = (*ctx_param(pCtx)).sSpatialLayers
                             [pInfo.iLayer as usize]
                             .iSpatialBitrate;
                     } else {
@@ -2420,9 +2446,9 @@ impl CWelsH264SVCEncoder {
                 EncoderOption::ENCODER_OPTION_MAX_BITRATE => {
                     let pInfo = &mut *(pOption as *mut SBitrateInfo);
                     if pInfo.iLayer == SPATIAL_LAYER_ALL {
-                        pInfo.iBitrate = (*ctx_param(self.m_pEncContext)).iMaxBitrate;
+                        pInfo.iBitrate = (*ctx_param(pCtx)).iMaxBitrate;
                     } else if (pInfo.iLayer as i32) >= 0 && (pInfo.iLayer as i32) < MAX_DEPENDENCY_LAYER {
-                        pInfo.iBitrate = (*ctx_param(self.m_pEncContext)).sSpatialLayers
+                        pInfo.iBitrate = (*ctx_param(pCtx)).sSpatialLayers
                             [pInfo.iLayer as usize]
                             .iMaxSpatialBitrate;
                     } else {
@@ -2432,8 +2458,8 @@ impl CWelsH264SVCEncoder {
                 EncoderOption::ENCODER_OPTION_GET_STATISTICS => {
                     let pStatistics = &mut *(pOption as *mut crate::SEncoderStatistics);
                     let iLayerIdx =
-                        ((*ctx_param(self.m_pEncContext)).iSpatialLayerNum - 1) as usize;
-                    let pEncStats = &(*self.m_pEncContext).sEncoderStatistics[iLayerIdx];
+                        ((*ctx_param(pCtx)).iSpatialLayerNum - 1) as usize;
+                    let pEncStats = &(*pCtx).sEncoderStatistics[iLayerIdx];
 
                     pStatistics.uiWidth = pEncStats.uiWidth;
                     pStatistics.uiHeight = pEncStats.uiHeight;
@@ -2454,11 +2480,11 @@ impl CWelsH264SVCEncoder {
                     pStatistics.uiLTRSentNum = pEncStats.uiLTRSentNum;
                 }
                 EncoderOption::ENCODER_OPTION_STATISTICS_LOG_INTERVAL => {
-                    *(pOption as *mut i32) = (*self.m_pEncContext).iStatisticsLogInterval;
+                    *(pOption as *mut i32) = (*pCtx).iStatisticsLogInterval;
                 }
                 EncoderOption::ENCODER_OPTION_COMPLEXITY => {
                     *(pOption as *mut i32) =
-                        (*ctx_param(self.m_pEncContext)).iComplexityMode as i32;
+                        (*ctx_param(pCtx)).iComplexityMode as i32;
                 }
                 // NOTE: C++'s GetOption has **no** ENCODER_OPTION_TRACE_LEVEL case —
                 // it is set-only, and a get falls to `default: return cmInitParaError`.
@@ -2472,16 +2498,11 @@ impl CWelsH264SVCEncoder {
 }
 
 impl Drop for CWelsH264SVCEncoder {
-    // unsafe-cat: port-raw(Phase 9)
-    #[allow(unsafe_code)]
     fn drop(&mut self) {
+        // T8.B5: the trace's `Box::from_raw` stood here. Both members are owned, so
+        // this is the drop glue's work and the body is `Uninitialize`'s alone —
+        // which the reference's destructor also calls (`welsEncoderExt.cpp`).
         self.Uninitialize();
-        if !self.m_pWelsTrace.is_null() {
-            unsafe {
-                let _ = Box::from_raw(self.m_pWelsTrace);
-                self.m_pWelsTrace = null_mut();
-            }
-        }
     }
 }
 
