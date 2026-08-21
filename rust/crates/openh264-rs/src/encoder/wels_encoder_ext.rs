@@ -1634,21 +1634,17 @@ impl CWelsH264SVCEncoder {
         self.m_pWelsTrace.SetCodecInstance(instance);
     }
 
-    // unsafe-cat: port-raw(Phase 9)
-    #[allow(unsafe_code)]
-    pub fn GetDefaultParams(&mut self, argv: *mut SEncParamExt) -> i32 {
-        if argv.is_null() {
-            return cmInitParaError;
-        }
-        unsafe {
-            SWelsSvcCodingParam::FillDefaultExt(&mut *argv);
-        }
+    /// T8.B7: the caller's block, for the duration of the call. The thunk owns the
+    /// null check and the alignment claim; from here in it is a place.
+    pub fn GetDefaultParams(&mut self, argv: &mut SEncParamExt) -> i32 {
+        SWelsSvcCodingParam::FillDefaultExt(argv);
         cmResultSuccess
     }
 
-    // unsafe-cat: port-raw(Phase 9)
-    #[allow(unsafe_code)]
-    pub fn Initialize(&mut self, argv: *const SEncParamBase) -> i32 {
+    /// T8.B7: `None` is the reference's `NULL argv`, which is a *reported* error
+    /// (`welsEncoderExt.cpp:192`) and not a caller contract, so it survives the
+    /// translation as an `Option` rather than being rejected at the thunk.
+    pub fn Initialize(&mut self, argv: Option<&SEncParamBase>) -> i32 {
         // `welsEncoderExt.cpp`'s `if (m_pWelsTrace == NULL) return cmMallocMemeError`
         // stood here on both entry points. It guards a `new welsCodecTrace` that can
         // return null in C++; `Box::new` cannot, and T8.B5 makes the member owned,
@@ -1662,7 +1658,7 @@ impl CWelsH264SVCEncoder {
                 Self::version_number()
             ),
         );
-        if argv.is_null() {
+        let Some(argv) = argv else {
             // `welsEncoderExt.cpp:192`.
             WelsLog(
                 self.log_ctx(),
@@ -1670,21 +1666,18 @@ impl CWelsH264SVCEncoder {
                 "CWelsH264SVCEncoder::Initialize(), invalid argv= 0x0",
             );
             return cmInitParaError;
-        }
+        };
         let mut sConfig = SWelsSvcCodingParam::default();
-        unsafe {
-            if sConfig.ParamBaseTranscode(&*argv) != 0 {
-                self.TraceParamInfo(&sConfig.to_param_ext());
-                self.Uninitialize();
-                return cmInitParaError;
-            }
+        if sConfig.ParamBaseTranscode(argv) != 0 {
+            self.TraceParamInfo(&sConfig.to_param_ext());
+            self.Uninitialize();
+            return cmInitParaError;
         }
         self.InitializeInternal(&mut sConfig)
     }
 
-    // unsafe-cat: port-raw(Phase 9)
-    #[allow(unsafe_code)]
-    pub fn InitializeExt(&mut self, argv: *const SEncParamExt) -> i32 {
+    /// See [`Self::Initialize`] for why `argv` is an `Option` and not a contract.
+    pub fn InitializeExt(&mut self, argv: Option<&SEncParamExt>) -> i32 {
         // See `Initialize`: the trace's null guard is unreachable since T8.B5.
         // `welsEncoderExt.cpp:215` (T8.B6).
         WelsLog(
@@ -1695,7 +1688,7 @@ impl CWelsH264SVCEncoder {
                 Self::version_number()
             ),
         );
-        if argv.is_null() {
+        let Some(argv) = argv else {
             // `welsEncoderExt.cpp:219`.
             WelsLog(
                 self.log_ctx(),
@@ -1703,14 +1696,12 @@ impl CWelsH264SVCEncoder {
                 "CWelsH264SVCEncoder::InitializeExt(), invalid argv= 0x0",
             );
             return cmInitParaError;
-        }
+        };
         let mut sConfig = SWelsSvcCodingParam::default();
-        unsafe {
-            if sConfig.ParamTranscode(&*argv) != 0 {
-                self.TraceParamInfo(argv);
-                self.Uninitialize();
-                return cmInitParaError;
-            }
+        if sConfig.ParamTranscode(argv) != 0 {
+            self.TraceParamInfo(argv);
+            self.Uninitialize();
+            return cmInitParaError;
         }
         self.InitializeInternal(&mut sConfig)
     }
@@ -1857,16 +1848,14 @@ impl CWelsH264SVCEncoder {
     #[allow(unsafe_code)]
     pub fn EncodeFrame(
         &mut self,
-        kpSrcPic: *const SSourcePicture,
-        pBsInfo: *mut SFrameBSInfo,
+        kpSrcPic: &SSourcePicture,
+        pBsInfo: &mut SFrameBSInfo,
     ) -> i32 {
-        if kpSrcPic.is_null() || !self.m_bInitialFlag || pBsInfo.is_null() {
+        if !self.m_bInitialFlag {
             return cmInitParaError;
         }
-        unsafe {
-            if (*kpSrcPic).iColorFormat != VideoFormat::videoFormatI420 as i32 {
-                return cmInitParaError;
-            }
+        if kpSrcPic.iColorFormat != VideoFormat::videoFormatI420 as i32 {
+            return cmInitParaError;
         }
         let kiEncoderReturn = self.EncodeFrameInternal(kpSrcPic, pBsInfo);
         if kiEncoderReturn != cmResultSuccess {
@@ -1879,14 +1868,18 @@ impl CWelsH264SVCEncoder {
     #[allow(unsafe_code)]
     pub fn EncodeFrameInternal(
         &mut self,
-        pSrcPic: *const SSourcePicture,
-        pBsInfo: *mut SFrameBSInfo,
+        pSrcPic: &SSourcePicture,
+        pBsInfo: &mut SFrameBSInfo,
     ) -> i32 {
+        if pSrcPic.iPicWidth < 16 || pSrcPic.iPicHeight < 16 {
+            return cmUnsupportedData;
+        }
         let pCtx = Self::ctx_ptr(&mut self.m_pEncContext);
         unsafe {
-            if (*pSrcPic).iPicWidth < 16 || (*pSrcPic).iPicHeight < 16 {
-                return cmUnsupportedData;
-            }
+            // Back to raw for the tree below the boundary, which is
+            // `port-raw(Phase 9)` and takes both blocks as pointers.
+            let pSrcPic: *const SSourcePicture = pSrcPic;
+            let pBsInfo: *mut SFrameBSInfo = pBsInfo;
 
             let kiBeforeFrameUs = WelsTime();
             let kiEncoderReturn =
@@ -1907,7 +1900,7 @@ impl CWelsH264SVCEncoder {
                 return cmUnknownReason;
             }
 
-            self.UpdateStatistics(pBsInfo, kiCurrentFrameMs);
+            self.UpdateStatistics(&*pBsInfo, kiCurrentFrameMs);
         }
 
         cmResultSuccess
@@ -1915,9 +1908,9 @@ impl CWelsH264SVCEncoder {
 
     // unsafe-cat: port-raw(Phase 9)
     #[allow(unsafe_code)]
-    pub fn EncodeParameterSets(&mut self, pBsInfo: *mut SFrameBSInfo) -> i32 {
+    pub fn EncodeParameterSets(&mut self, pBsInfo: &mut SFrameBSInfo) -> i32 {
         let pCtx = Self::ctx_ptr(&mut self.m_pEncContext);
-        if pCtx.is_null() || !self.m_bInitialFlag || pBsInfo.is_null() {
+        if pCtx.is_null() || !self.m_bInitialFlag {
             return cmInitParaError;
         }
         unsafe { WelsEncoderEncodeParameterSetsRust(pCtx, pBsInfo) }
@@ -1938,19 +1931,22 @@ impl CWelsH264SVCEncoder {
         0
     }
 
-    pub fn TraceParamInfo(&mut self, _pParam: *const SEncParamExt) {}
+    /// `welsEncoderExt.cpp:1197` dumps the whole parameter block at
+    /// `WELS_LOG_INFO`. Still a stub here; the encoder's remaining trace call
+    /// sites are enumerated in the session log (T8.B6) and owned by Phase 9.
+    pub fn TraceParamInfo(&mut self, _pParam: &SEncParamExt) {}
 
     pub fn LogStatistics(&mut self, _kiCurrentFrameTs: i64, _iMaxDid: i32) {}
 
     // unsafe-cat: port-raw(Phase 9)
     #[allow(unsafe_code)]
-    pub fn UpdateStatistics(&mut self, pBsInfo: *mut SFrameBSInfo, kiCurrentFrameMs: i64) {
+    pub fn UpdateStatistics(&mut self, pBsInfo: &SFrameBSInfo, kiCurrentFrameMs: i64) {
         let pCtx = Self::ctx_ptr(&mut self.m_pEncContext);
         unsafe {
-            if pCtx.is_null() || ctx_param(pCtx).is_null() || pBsInfo.is_null() {
+            if pCtx.is_null() || ctx_param(pCtx).is_null() {
                 return;
             }
-            let kiCurrentFrameTs = (*pBsInfo).uiTimeStamp;
+            let kiCurrentFrameTs = pBsInfo.uiTimeStamp;
             (*pCtx).uiLastTimestamp = kiCurrentFrameTs;
             let kiTimeDiff = kiCurrentFrameTs - (*pCtx).iLastStatisticsLogTs;
 
