@@ -47,7 +47,7 @@
 // The exemption itself is the `#[allow(unsafe_code)]` on this file's `pub mod`
 // line in `encoder/mod.rs`, where the module-level deny reaches from.
 
-use std::ffi::{c_char, c_void};
+use std::ffi::c_void;
 
 use crate::encoder::nal_encap::{WelsEncodeNal, SWelsNalRaw};
 use crate::encoder::svc_encode_slice::thread_bs_buffer;
@@ -195,17 +195,26 @@ pub type TagSliceThreadPrivateData = SSliceThreadPrivateData;
 
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
+/// The C++ `SSliceThreading` carries, besides these fields, four per-thread
+/// `WELS_EVENT` arrays (`pSliceCodedEvent`, `pReadySliceCodingEvent`,
+/// `pUpdateMbListEvent`, `pFinUpdateMbListEvent`), `pSliceCodedMasterEvent`,
+/// `mutexEvent`, the `eventNamespace` that names them, and `pThreadHandles`.
+/// **Every one of them is dead on both sides** — the C++ opens and closes the
+/// events and never signals or waits on one, never locks `mutexEvent`, and never
+/// spawns into `pThreadHandles`; the port never reproduced any of it. They are
+/// vestiges of the pre-thread-pool design. Deleted at T7.A2 with the site-by-site
+/// grep recorded in the session-A log entry; the join is `WelsTaskBarrier`.
 pub struct SSliceThreading {
     pub pThreadPEncCtx: *mut SSliceThreadPrivateData,
-    pub eventNamespace: [c_char; 100],
-    pub pThreadHandles: [*mut c_void; MAX_THREADS_NUM],
-    pub pSliceCodedEvent: [*mut c_void; MAX_THREADS_NUM],
-    pub pSliceCodedMasterEvent: *mut c_void,
-    pub pReadySliceCodingEvent: [*mut c_void; MAX_THREADS_NUM],
-    pub pUpdateMbListEvent: [*mut c_void; MAX_THREADS_NUM],
-    pub pFinUpdateMbListEvent: [*mut c_void; MAX_THREADS_NUM],
     pub mutexSliceNumUpdate: *mut c_void,
     pub pThreadBsBuffer: [*mut u8; MAX_THREADS_NUM],
+    /// Length, in bytes, of every `pThreadBsBuffer` entry — the `iCountBsLen`
+    /// `RequestMtResource` was called with. Kept because `ReleaseMtResource` needs
+    /// the allocation's `Layout` back to free it, and the C++ did not: its
+    /// allocator carries its own size table (`pMa->WelsFree`). Without this the
+    /// buffers could only be nulled, which is what the raw translation did — see
+    /// T7.A3.
+    pub uiThreadBsBufferLen: usize,
     pub bThreadBsBufferUsage: [bool; MAX_THREADS_NUM],
     pub mutexThreadBsBufferUsage: *mut c_void,
     pub mutexEvent: *mut c_void,
@@ -216,15 +225,9 @@ impl Default for SSliceThreading {
     fn default() -> Self {
         Self {
             pThreadPEncCtx: std::ptr::null_mut(),
-            eventNamespace: [0; 100],
-            pThreadHandles: [std::ptr::null_mut(); MAX_THREADS_NUM],
-            pSliceCodedEvent: [std::ptr::null_mut(); MAX_THREADS_NUM],
-            pSliceCodedMasterEvent: std::ptr::null_mut(),
-            pReadySliceCodingEvent: [std::ptr::null_mut(); MAX_THREADS_NUM],
-            pUpdateMbListEvent: [std::ptr::null_mut(); MAX_THREADS_NUM],
-            pFinUpdateMbListEvent: [std::ptr::null_mut(); MAX_THREADS_NUM],
             mutexSliceNumUpdate: std::ptr::null_mut(),
             pThreadBsBuffer: [std::ptr::null_mut(); MAX_THREADS_NUM],
+            uiThreadBsBufferLen: 0,
             bThreadBsBufferUsage: [false; MAX_THREADS_NUM],
             mutexThreadBsBufferUsage: std::ptr::null_mut(),
             mutexEvent: std::ptr::null_mut(),
@@ -664,19 +667,8 @@ pub unsafe fn RequestMtResource(
         (*pPriv).pWelsPEncCtx = pCtx as *mut c_void;
         (*pPriv).iSliceIndex = iIdx;
         (*pPriv).iThreadIndex = iIdx;
-        // The C++ zeroes the handle here and never spawns a thread of its own;
-        // all worker threads come from the shared CWelsThreadPool that
-        // CreateTaskManage acquires below. pThreadHandles is only ever read
-        // back by WelsUninitEncoderExt.
-        (*pSmt).pThreadHandles[iIdx as usize] = std::ptr::null_mut();
         iIdx += 1;
     }
-
-    // The four per-thread event sets (pUpdateMbListEvent, pFinUpdateMbListEvent,
-    // pSliceCodedEvent, pReadySliceCodingEvent), pSliceCodedMasterEvent and
-    // mutexEvent are opened and closed by the C++ but never signalled or waited
-    // on anywhere in codec/ — they are vestiges of the pre-thread-pool design.
-    // They are deliberately not reproduced.
 
     if WelsMutexInit(&mut (*pSmt).mutexSliceNumUpdate) != 0 {
         return 1;
@@ -696,6 +688,7 @@ pub unsafe fn RequestMtResource(
     let iThreadBufferNum =
         ((*pTaskManage).GetThreadPoolThreadNum() as usize).min(MAX_THREADS_NUM);
 
+    (*pSmt).uiThreadBsBufferLen = iCountBsLen as usize;
     for i in 0..iThreadBufferNum {
         let buf_layout = std::alloc::Layout::array::<u8>(iCountBsLen as usize).unwrap();
         let buf = std::alloc::alloc_zeroed(buf_layout);
@@ -747,12 +740,24 @@ pub unsafe fn ReleaseMtResource(ppCtx: *mut *mut sWelsEncCtx) {
         (*pSmt).pThreadPEncCtx = std::ptr::null_mut();
     }
 
+    // The C++ frees here (`pMa->WelsFree (pSmt->pThreadBsBuffer[i], ...)`,
+    // slice_multi_threading.cpp:426). The raw translation kept the null-out and
+    // dropped the free, so every encoder instance with iMultipleThreadIdc > 1 leaked
+    // `iCountBsLen` bytes per worker for the process's life — T7.A3. The length is
+    // `uiThreadBsBufferLen` because a Rust `dealloc` needs the `Layout` back and the
+    // C++ allocator's size table has no counterpart here.
+    let buf_len = (*pSmt).uiThreadBsBufferLen;
     for i in 0..MAX_THREADS_NUM {
         if !(*pSmt).pThreadBsBuffer[i].is_null() {
+            if buf_len > 0 {
+                let buf_layout = std::alloc::Layout::array::<u8>(buf_len).unwrap();
+                std::alloc::dealloc((*pSmt).pThreadBsBuffer[i], buf_layout);
+            }
             (*pSmt).pThreadBsBuffer[i] = std::ptr::null_mut();
         }
         (*pSmt).bThreadBsBufferUsage[i] = false;
     }
+    (*pSmt).uiThreadBsBufferLen = 0;
 
     // WELS_DELETE_OP (pTaskManage). Dropping the manager runs Uninit(), which
     // releases this encoder's reference to the shared thread pool; the last
