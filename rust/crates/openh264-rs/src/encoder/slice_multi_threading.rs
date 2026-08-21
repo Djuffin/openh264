@@ -55,7 +55,7 @@ use crate::encoder::nal_encap::{
 use crate::common::wels_common_defs::{EWelsNalRefIdc, EWelsNalUnitType};
 use crate::encoder::encoder_context::ctx_func_list;
 use crate::encoder::svc_encode_slice::{
-    InitOneSliceInThread, SetSliceBoundaryInfo, WelsCodeOneSlice,
+    InitOneSliceInThread, ReallocateSliceInThread, SetSliceBoundaryInfo, WelsCodeOneSlice,
 };
 use crate::encoder::vlc_encoder::BsWriter;
 use crate::encoder::wels_encoder_ext::WelsTime;
@@ -1389,4 +1389,212 @@ pub unsafe fn UpdateMbMapForked(pCtx: *mut sWelsEncCtx, kiTaskCount: i32) {
             });
         }
     });
+}
+
+/// One partition's slices under `SM_SIZELIMITED_SLICE` —
+/// `CWelsConstrainedSizeSlicingEncodingTask`'s `InitTask` / `ExecuteTask` /
+/// `FinishTask`, with the two mutexes the fork/join makes unnecessary removed and
+/// nothing else moved.
+///
+/// **The order argument** (step 2's prerequisite, written down before the shape was
+/// chosen). The claiming here was never a queue:
+///
+/// * there are exactly `iActiveThreadsNum` tasks, and task `t` works partition
+///   `t % iActiveThreadsNum` — which is `t`. Partition is a **static** function of
+///   the task index;
+/// * the slice indices a partition produces are `t`, `t + N`, `t + 2N`, ... with
+///   `N = iActiveThreadsNum` — a **static** arithmetic progression, stamped into
+///   `SSlice::iSliceIdx`;
+/// * `ReOrderSliceInLayer` (after the join, on the calling thread) recovers the
+///   layer position from that stamp alone — `iSliceIdx % N` gives the partition and
+///   `iSliceIdx / N` the position within it — never from which bank held the slice.
+///
+/// So the *only* schedule-dependent quantity today is which bank/bs-slot a partition
+/// borrows, and `ReOrderSliceInLayer` is blind to it. Neither an `AtomicUsize`
+/// counter nor an `mpsc` of indices is needed to reproduce the order: **a static
+/// partition reproduces it exactly and removes the last nondeterminism**, where a
+/// queue would reintroduce one. Worker `p` therefore owns partition `p`, bank `p`
+/// and bs slot `p`, which also makes `NumSliceCodedOfPartition[p]` and
+/// `LastCodedMbIdxOfPartition[p]` — written from inside the encode — disjoint by
+/// construction rather than by the claim.
+unsafe fn EncodeOnePartitionSizeLimited(
+    pCtx: *mut sWelsEncCtx,
+    iPartitionIdx: i32,
+    iBsSlot: i32,
+) -> SliceJobResult {
+    // ---- InitTask (base), minus the slot claim
+    let eNalType = (*pCtx).eNalType;
+    let eNalRefIdc = (*pCtx).eNalPriority;
+    let bNeedPrefix = (*pCtx).bNeedPrefixNalFlag;
+
+    let mut pSlice: *mut SSlice = std::ptr::null_mut();
+    let mut iReturn = InitOneSliceInThread(
+        pCtx,
+        &mut pSlice,
+        iBsSlot,
+        (*pCtx).uiDependencyId as i32,
+        iPartitionIdx,
+    );
+    if iReturn != ENC_RETURN_SUCCESS {
+        return SliceJobResult { iResult: iReturn, bInitFailed: true };
+    }
+    let mut pSliceBs = std::ptr::addr_of_mut!((*pSlice).sSliceBs);
+    iReturn = SetSliceBoundaryInfo(current_layer(pCtx), pSlice, iPartitionIdx);
+    if iReturn != ENC_RETURN_SUCCESS {
+        return SliceJobResult { iResult: iReturn, bInitFailed: true };
+    }
+    (*pSliceBs).sBsWrite = BsWriter::new();
+    // `CWelsConstrainedSizeSlicingEncodingTask` derives from the load-balancing task,
+    // not from `CWelsSliceEncodingTask`, so it stamps the slice time *unconditionally*
+    // — `bUseLoadBalancing` does not gate this one (`wels_task_encoder.h:110`).
+    let iSliceStart = WelsTime();
+
+    // ---- ExecuteTaskConstrainedSize
+    let iResult = (|| {
+        let pCurDq = current_layer(pCtx);
+        let kiSliceIdxStep = (*pCtx).iActiveThreadsNum as i32;
+        let kiPartitionId = iPartitionIdx % kiSliceIdxStep;
+        let kiFirstMbInPartition = (*pCurDq).FirstMbIdxOfPartition[kiPartitionId as usize];
+        let kiEndMbIdxInPartition = (*pCurDq).EndMbIdxOfPartition[kiPartitionId as usize];
+        let kiCodedSliceNumByThread =
+            (*pCurDq).sSliceBufferInfo[iBsSlot as usize].iCodedSliceNum;
+        pSlice = crate::encoder::svc_encode_slice::slice_in_bank(
+            pCurDq,
+            iBsSlot as usize,
+            kiCodedSliceNumByThread,
+        );
+        (*pSlice).sSliceHeaderExt.sSliceHeader.iFirstMbInSlice = kiFirstMbInPartition;
+
+        let iDiffMbIdx = kiEndMbIdxInPartition - kiFirstMbInPartition;
+        if 0 == iDiffMbIdx {
+            (*pSlice).iSliceIdx = -1;
+            return ENC_RETURN_SUCCESS;
+        }
+
+        let mut iAnyMbLeftInPartition = iDiffMbIdx + 1;
+        let mut iLocalSliceIdx = iPartitionIdx;
+        while iAnyMbLeftInPartition > 0 {
+            let bNeedReallocate = (*pCurDq).sSliceBufferInfo[iBsSlot as usize].iCodedSliceNum
+                >= (*pCurDq).sSliceBufferInfo[iBsSlot as usize].iMaxSliceNum - 1;
+            if bNeedReallocate {
+                // `mutexThreadSlcBuffReallocate` STAYS. The bank being grown is this
+                // worker's alone now, but `InitSliceBsBuffer` allocates each new
+                // slice's `sSliceBs.pBs` through the shared `CMemoryAlign`, which
+                // carries mutable counters. It retires with `pMemAlign` at step 6,
+                // not here.
+                let pSmt = (*pCtx).pSliceThreading;
+                let iRet = with_wels_mutex((*pSmt).mutexThreadSlcBuffReallocate, || {
+                    ReallocateSliceInThread(
+                        pCtx,
+                        pCurDq,
+                        (*pCtx).uiDependencyId as i32,
+                        iBsSlot,
+                    )
+                });
+                if ENC_RETURN_SUCCESS != iRet {
+                    return iRet;
+                }
+            }
+
+            let mut pNext: *mut SSlice = std::ptr::null_mut();
+            let mut iRet = InitOneSliceInThread(
+                pCtx,
+                &mut pNext,
+                iBsSlot,
+                (*pCtx).uiDependencyId as i32,
+                iLocalSliceIdx,
+            );
+            if iRet != ENC_RETURN_SUCCESS {
+                return iRet;
+            }
+            pSlice = pNext;
+            pSliceBs = std::ptr::addr_of_mut!((*pSlice).sSliceBs);
+            (*pSliceBs).sBsWrite = BsWriter::new();
+
+            if bNeedPrefix {
+                WritePrefixNalForSlice(pCtx, pSlice, pSliceBs, eNalRefIdc, eNalType);
+            }
+            WelsLoadNalForSlice(pSliceBs, eNalType as i32, eNalRefIdc as i32);
+
+            debug_assert_eq!(iLocalSliceIdx, (*pSlice).iSliceIdx);
+            iRet = WelsCodeOneSlice(pCtx, pSlice, eNalType as i32);
+            if ENC_RETURN_SUCCESS != iRet {
+                return iRet;
+            }
+            WelsUnloadNalForSlice(pSliceBs);
+
+            let mut iSliceSize = 0i32;
+            iRet = WriteSliceBs(pCtx, pSlice, iLocalSliceIdx, &mut iSliceSize);
+            if ENC_RETURN_SUCCESS != iRet {
+                return iRet;
+            }
+            let pfDeblockingFilterSlice =
+                (*ctx_func_list(pCtx)).pfDeblocking.pfDeblockingFilterSlice.unwrap();
+            pfDeblockingFilterSlice(pCurDq, ctx_func_list(pCtx), pSlice);
+
+            iAnyMbLeftInPartition = kiEndMbIdxInPartition
+                - (*pCurDq).LastCodedMbIdxOfPartition[kiPartitionId as usize];
+            iLocalSliceIdx += kiSliceIdxStep;
+            (*current_layer(pCtx)).sSliceBufferInfo[iBsSlot as usize].iCodedSliceNum += 1;
+        }
+        ENC_RETURN_SUCCESS
+    })();
+
+    // ---- FinishTask
+    if !pSlice.is_null() {
+        (*pSlice).uiSliceConsumeTime = (WelsTime() - iSliceStart) as u32;
+    }
+
+    SliceJobResult { iResult, bInitFailed: false }
+}
+
+/// **The fork/join for `SM_SIZELIMITED_SLICE`** — what
+/// `pTaskManage->ExecuteTasks(WELS_ENC_TASK_ENCODING)` did on the dynamic path.
+///
+/// One worker per picture partition, which is what the task count already was
+/// (`kiTaskCount = iActiveThreadsNum`, `wels_task_management.rs` `CreateTasks`).
+/// Returns the value `FinishTask` would have ORed into `pCtx->iEncoderError`.
+///
+/// # Safety
+/// As [`EncodeFixedSlicesForked`], and `iActiveThreadsNum` must be within the
+/// per-thread slice banks `InitSliceThreadInfo` sized.
+pub unsafe fn EncodeSizeLimitedSlicesForked(pCtx: *mut sWelsEncCtx, kiPartitionCnt: i32) -> i32 {
+    if pCtx.is_null() || kiPartitionCnt <= 0 || (*pCtx).pSliceThreading.is_null() {
+        return ENC_RETURN_SUCCESS;
+    }
+    // Every partition is its own worker: the partition count is bounded by
+    // `iMultipleThreadIdc` (`PicPartitionNumDecision`), which is also the bs-buffer
+    // count, so the F67 bound is met with equality rather than by clamping. The
+    // `min` is kept as the enforcement, not as an expectation.
+    let iWidth = ForkWidth(pCtx, kiPartitionCnt);
+    debug_assert_eq!(
+        iWidth, kiPartitionCnt,
+        "a size-limited partition would go unencoded: {kiPartitionCnt} partitions, {iWidth} buffers"
+    );
+
+    let mut jobs: Vec<SliceJobHandle> = Vec::with_capacity(iWidth as usize);
+    for k in 0..iWidth {
+        jobs.push(SliceJobHandle::new(pCtx, k, k, iWidth, kiPartitionCnt, true));
+    }
+
+    let mut iErr = ENC_RETURN_SUCCESS;
+    std::thread::scope(|s| {
+        let mut handles = Vec::with_capacity(jobs.len());
+        for job in jobs {
+            handles.push(s.spawn(move || {
+                let job = job;
+                let r = EncodeOnePartitionSizeLimited(job.pCtx, job.iFirstSlice, job.iBsSlot);
+                if !r.bInitFailed && r.iResult != ENC_RETURN_SUCCESS {
+                    r.iResult
+                } else {
+                    ENC_RETURN_SUCCESS
+                }
+            }));
+        }
+        for h in handles {
+            iErr |= h.join().unwrap_or(ENC_RETURN_UNEXPECTED);
+        }
+    });
+
+    iErr
 }

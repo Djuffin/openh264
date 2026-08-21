@@ -3451,10 +3451,20 @@ pub unsafe fn WelsEncoderEncodeExt(
             if iRet != 0 {
                 return ENC_RETURN_UNEXPECTED;
             }
-            let pTaskManage = (*pCtx).pTaskManage
-                as *mut crate::encoder::wels_task_management::CWelsTaskManageBase;
-            (*pTaskManage)
-                .ExecuteTasks(crate::encoder::wels_task_management::WELS_ENC_TASK_ENCODING);
+            // **T7.B2 — the dynamic path onto the same seam.** Was
+            // `pTaskManage->ExecuteTasks(WELS_ENC_TASK_ENCODING)` over
+            // `iActiveThreadsNum` `CWelsConstrainedSizeSlicingEncodingTask`s. The
+            // claiming here was never a queue — partition is a static modulo of the
+            // task index and the slice indices are an arithmetic progression, with
+            // `ReOrderSliceInLayer` recovering the layer position from the stamped
+            // index alone — so a static partition reproduces the order exactly and
+            // removes the one thing that was schedule-dependent (which bank a
+            // partition borrowed). See `EncodeSizeLimitedSlicesForked`.
+            (*pCtx).iEncoderError |=
+                crate::encoder::slice_multi_threading::EncodeSizeLimitedSlicesForked(
+                    pCtx,
+                    kiPartitionCnt,
+                );
 
             if (*pCtx).iEncoderError != 0 {
                 return (*pCtx).iEncoderError;
