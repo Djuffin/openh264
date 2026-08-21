@@ -2801,3 +2801,75 @@ signature.
 
 Running total: **eighty-seven measurements, twenty-seven alternations, sixty
 acquittals.**
+
+---
+
+### Measurement 88 — **the ablation's before-arm**, Phase 7 session A, on the untouched tree (2026-08-20)
+
+This is not an adjudication. It is the **first arm of the ablation** the phase-7
+charter fixes in §2: the rate of the fastest reproducer on record, measured on
+`b08d6c47` with no code change of any kind in the tree, so that session B's
+after-arm has something to be compared against.
+
+**The configuration** (measurement 86 nominated it — "roughly a hundred times
+faster" than the `160x96 n=600` family):
+
+```
+mt CiscoVT2people_320x192_12fps sm=3 n=600 t=4 cabac=1
+= compare.sh out/CiscoVT2people_320x192_12fps_loop18.yuv 320 192 18 26 1 -1 <rc> 0 3 600 4
+```
+
+Balanced over the two profiles and the two `rc` values the `mt` preset runs for
+this label (`rc` ∈ {0, 1}), interleaved run-for-run so no cell sits in one phase
+of the background load. Serial by construction — the two profiles share `out/`
+file names, so two runs must never overlap. The runner is bash (measurement 78's
+trap).
+
+**The load method, and it is the part that moved the number.** Session H's
+discipline is "a parallel compile", and the first arm took that literally: one
+`touch src/lib.rs; cargo build --release -j8` loop on a separate target dir.
+That is *not* a saturating load — one crate's rebuild is largely a serial
+frontend, and the box sat at load average ~5.7 of 8 with a single `rustc` alive.
+Arms 2 and 3 ran **four independent rebuild loops, each on its own target dir**
+(load average 12–15, 6+ concurrent `rustc`). Nothing any arm runs writes anything
+the diffharness reads or executes.
+
+| arm | load | runs | hits | wall | rate |
+|---|---|---|---|---|---|
+| 1 | 1 compile stream (la ≈ 5.7) | 500 | 5 | 48 s | 1/100 |
+| 2 | 4 compile streams (la ≈ 12–15) | 500 | 5 | 80 s | 1/100 |
+| 3 | 4 compile streams (la ≈ 12–15) | 2000 | 15 | 321 s | 1/133 |
+| **pooled** | | **3000** | **25** | **449 s** | **≈ 1/120** |
+
+**The recorded ~1/11 did not reproduce, and the gap is the headline.** Measurement
+86's rate came from 9 events in 96 alternated runs — a sample small enough that its
+95% interval reaches past 1/40, and it was drawn on an alternation whose two arms
+were being rebuilt between rounds. 25 events in 3000 is a rate with an interval of
+roughly 1/80–1/180, and it does not overlap 1/11. **1/120 is the number the
+after-arm must be judged against**, and it is inside the finding's own long-standing
+"~1/100–150 on susceptible configurations" band rather than an order below it.
+Quadrupling the compile load moved the rate not at all (arm 1 vs arm 2, 5 and 5),
+which is itself a small negative result: past the point where the cores are busy,
+*more* busy does not widen the window further.
+
+**Consequence for session B's after-arm, stated now so it is not decided after the
+fact.** At 1/120, a 500-run after-arm has P(0 hits | unchanged) = e^−4.2 ≈ 1.5% —
+suggestive, not the "conclusive" the charter wrote when it assumed 1/11. **B should
+run 2000**, which gives e^−16.7 ≈ 6e−8. The arm costs 321 s; there is no reason to
+buy the weaker version.
+
+**Shapes, 25 hits.** 18 empty, 6 short, **1 longer** (40463 against 39981). The
+longer shape has now been drawn on this exact configuration three times across
+measurements 86 and 88; it is inside the fingerprint and a session that reads the
+summary "empty or short" will misclassify it.
+
+**Susceptibility is not equal across the profiles.** 19 of 25 hits are release
+(19/1500 ≈ 1/79) against 6 debug (6/1500 ≈ 1/250) — a 3x split on interleaved runs
+that saw identical load by construction. Every prior measurement that named a
+profile named release more often; this is the first count that says how much more.
+
+Scripts, kept verbatim for B to re-run: the arm and its load generator are
+reproduced in the session-A log entry (`safety_refactor_log.md`, T7.A0).
+
+Running total: **eighty-eight measurements, twenty-seven alternations, sixty
+acquittals** — measurement 88 is an arm, not an acquittal.
