@@ -90,6 +90,16 @@ pub struct SLogContext {
     /// trace object and reaches it through the back-pointer; here it travels with
     /// the rest.
     pub iTraceLevel: i32,
+    /// **Explicit tail padding, and it has to be explicit.** This struct is a field
+    /// of `sWelsEncCtx`, whose whole byte image is pinned against a `memset`-zero
+    /// shell by `encoder_context.rs`'s equivalence test — a test that reads each
+    /// field's extent byte for byte and whose safety argument is that *no field
+    /// outside its by-value list has interior or trailing padding*. `iTraceLevel`
+    /// took the size to 28 and the alignment took it back to 32, so four bytes of
+    /// the context's image became uninitialised and Miri said so at the phase exit.
+    /// Naming the four bytes restores the premise rather than weakening the test.
+    /// Always zero.
+    pub _reserved: u32,
 }
 
 impl Default for SLogContext {
@@ -106,6 +116,7 @@ impl Default for SLogContext {
             pLogCtx: std::ptr::null_mut(),
             pCodecInstance: 0,
             iTraceLevel: WELS_LOG_QUIET,
+            _reserved: 0,
         }
     }
 }
