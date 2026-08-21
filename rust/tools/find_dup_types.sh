@@ -4,7 +4,7 @@
 #
 # Usage: rust/tools/find_dup_types.sh [repo-root]
 #
-# Scope: `src/encoder`, `src/common`, `src/decoder` and `src/processing`. It used
+# Scope: `src/encoder`, `src/common`, `src/decoder`, `src/processing` and `src/api`. It used
 # to read `src/encoder` only, and both of the other directories had already hidden
 # real bugs (`SBitStringAux` x4; `PSampleSadSatdCostFunc` x5, one with the wrong
 # constness; `g_kuiGolombUELength` x3, two with wrong values, one short enough to
@@ -41,7 +41,7 @@
 
 ROOT="${1:-$(dirname "$0")/../..}"
 SRC="$ROOT/rust/crates/openh264-rs/src"
-DIRS="$SRC/encoder $SRC/common $SRC/decoder $SRC/processing"
+DIRS="$SRC/encoder $SRC/common $SRC/decoder $SRC/processing $SRC/api"
 
 files() {
     for d in $DIRS; do

@@ -36,6 +36,11 @@ no cast to classify. The shape worth finding is exactly the shape carrying no
 annotation. This tool narrows the reading list; it does not adjudicate, and S24's
 clause applies to it as to any other instrument — the hand count arbitrates.
 
+**Scope: `DEFAULT_ROOTS` is the whole of `src`, `src/api` included** (T8.A1) — it
+rglobs one root rather than naming directories, so the api layer has always been in
+it. Verified by running, not by reading: 0 SUSPECT and 0 byte-sized hits under
+`src/api`, which has no element-counting primitive at all.
+
     usage: rust/tools/find_elem_byte_confusion.py [--all] [path ...]
              --all   also list the byte-sized (benign) hits, not just the summary
 

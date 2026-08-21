@@ -35,6 +35,12 @@ which this sweep had scored as an empty body), `WelsRcPostFrameSkipping` is a
 faithful `return false` (`ratectl.cpp:1015`) beside its `RCMode` dispatcher, and
 `push_back` is two methods on two types. The last two still print, by design.
 
+**Scope: the whole of `rust/crates/openh264-rs/src`, `src/api` included** (T8.A1).
+It walks `ROOT` rather than a directory list, so `api/` has always been in reach —
+which the Phase 8 inventory verified by reading the output rather than the code: the
+api hits are `default` and `fmt` trait impls, and no free function among them. That
+sentence is here so the next scope audit can check the claim without re-deriving it.
+
     usage: rust/tools/find_shadowing_stubs.py [--self-test]
 
 `--self-test` runs the sweep over a two-file fixture that holds the *original* F52
