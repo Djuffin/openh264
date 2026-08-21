@@ -316,3 +316,176 @@ unsafe fn remaining_in_buffer(dec: &Dec) -> i32 {
         v
     }
 }
+/// **`decoder.cpp:667–671`, `eVideoType`, and `welsDecoderExt.cpp:833–842`, its
+/// one reader.**
+///
+/// The field was write-only in this port: set once by the context constructor to
+/// `VIDEO_BITSTREAM_AVC` and never again. Its reader is the key-frame-loss
+/// notification inside the `DecodeFrame2` error block — *"for AVC bitstream, as long
+/// as error occur, SHOULD notify upper layer key frame loss"* — which raises
+/// `bParamSetsLostFlag` when concealment is off. `UpdateAccessUnit`'s
+/// mosaic-avoidance block then counts one `uiIDRLostNum` for the next access unit
+/// that arrives without an IDR.
+///
+/// **The observable is that counter and not the frame count**, and the difference
+/// between the two is the finding stated precisely. `bParamSetsLostFlag` is already
+/// true whenever a frame failed to construct, so the arm only adds something when
+/// an error arrives on a call that *did* construct a frame — one truncated slice in
+/// an otherwise clean stream. Measured across `res/` at T8.B3: whole streams never
+/// produce that coincidence (no asset differs between the two declarations at all),
+/// one truncated slice in `BA_MW_D.264` produces it on every unit from the fourth
+/// on, and it moves `uiIDRLostNum` by exactly one while the emitted frame count
+/// does not move at all. That is the notification the reference documents: an
+/// accounting event for the upper layer, not a change of output.
+///
+/// Red before T8.B3, where neither the assignment nor the reader existed:
+///
+/// ```text
+/// assertion `left == right` failed: declaring the stream AVC changed nothing
+///   left: 27
+///  right: 28
+/// ```
+#[test]
+fn test_avc_bitstream_type_notifies_key_frame_loss_when_ec_is_off() {
+    let data = asset("BA_MW_D.264");
+    // One slice NAL cut in half, deep enough into the stream that the frames around
+    // it construct cleanly — which is what clears `bParamSetsLostFlag` and leaves
+    // the arm something to do.
+    let mut units: Vec<Vec<u8>> = split_annexb_units(&data)
+        .iter()
+        .map(|u| u.to_vec())
+        .collect();
+    assert!(units.len() > 8, "asset is too short to corrupt a settled slice");
+    let half = units[3].len() / 2;
+    assert!(half > 6, "unit 3 is too short to corrupt");
+    units[3].truncate(half);
+
+    let mut param = SDecodingParam::default();
+    param.uiTargetDqLayer = u8::MAX;
+    param.eEcActiveIdc = ERROR_CON_IDC::ERROR_CON_DISABLE;
+
+    unsafe {
+        param.sVideoProperty.eVideoBsType = VIDEO_BITSTREAM_TYPE::VIDEO_BITSTREAM_AVC;
+        let avc = Dec::new(&param, None);
+        let (avc_states, avc_frames) = decode_units(&avc, &units);
+        let avc_stats = statistics(&avc);
+
+        param.sVideoProperty.eVideoBsType = VIDEO_BITSTREAM_TYPE::VIDEO_BITSTREAM_SVC;
+        let svc = Dec::new(&param, None);
+        let (svc_states, svc_frames) = decode_units(&svc, &units);
+        let svc_stats = statistics(&svc);
+
+        assert_ne!(
+            avc_states & DECODING_STATE::dsBitstreamError.0,
+            0,
+            "the corrupted unit did not produce an error — this test covers nothing"
+        );
+        assert_eq!(
+            avc_stats.uiIDRLostNum,
+            svc_stats.uiIDRLostNum + 1,
+            "declaring the stream AVC changed nothing (avc states {avc_states:#x}, \
+             svc states {svc_states:#x})"
+        );
+        assert_eq!(
+            avc_frames, svc_frames,
+            "the notification changed the emitted frame count, which it must not"
+        );
+    }
+}
+
+/// The same feed as [`decode_all`], over units the caller has already cut up.
+unsafe fn decode_units(dec: &Dec, units: &[Vec<u8>]) -> (i32, u32) {
+    unsafe {
+        let mut states = 0i32;
+        let mut frames = 0u32;
+        for unit in units {
+            let mut p_dst: [*mut u8; 3] = [std::ptr::null_mut(); 3];
+            let mut buf_info = SBufferInfo::default();
+            let ret = ISVCDecoder::DecodeFrame2(
+                dec.0,
+                unit.as_ptr(),
+                unit.len() as i32,
+                p_dst.as_mut_ptr(),
+                &mut buf_info,
+            );
+            states |= ret.0;
+            if buf_info.iBufferStatus == 1 {
+                frames += 1;
+            }
+        }
+        (states, frames)
+    }
+}
+
+/// **`welsDecoderExt.cpp:856–882`, the four concealment statistics.**
+///
+/// The port sets `dsDataErrorConcealed` from three sites inside the decoder, so the
+/// *return code* was not lost — but `uiDecodedFrameCount`, `uiAvgEcRatio`,
+/// `uiAvgEcPropRatio` and `uiEcFrameNum` had **no writer anywhere in the tree**, and
+/// `DECODER_OPTION_GET_STATISTICS` is a public option. Nor was the option itself
+/// wired: it fell through `GetOption`'s catch-all and returned success without
+/// touching the caller's buffer, which is why nothing noticed.
+///
+/// Red before T8.B3 — the caller's buffer comes back exactly as it went in:
+///
+/// ```text
+/// assertion failed: after.uiDecodedFrameCount > 0
+/// ```
+#[test]
+fn test_concealment_statistics_reach_get_statistics() {
+    let data = asset("BA_MW_D_IDR_LOST.264");
+    let mut param = SDecodingParam::default();
+    param.uiTargetDqLayer = u8::MAX;
+    param.eEcActiveIdc = ERROR_CON_IDC::ERROR_CON_SLICE_COPY;
+    param.sVideoProperty.eVideoBsType = VIDEO_BITSTREAM_DEFAULT;
+
+    unsafe {
+        let dec = Dec::new(&param, None);
+        let before = statistics(&dec);
+        assert_eq!(before.uiDecodedFrameCount, 0, "a fresh decoder had a frame count");
+        assert_eq!(before.uiEcFrameNum, 0, "a fresh decoder had concealed frames");
+
+        let (states, frames) = decode_all(&dec, &data);
+        assert!(frames > 0, "the asset decoded nothing");
+        assert_ne!(
+            states & DECODING_STATE::dsDataErrorConcealed.0,
+            0,
+            "the asset did not conceal — this test no longer covers the statistics"
+        );
+
+        let after = statistics(&dec);
+        assert!(
+            after.uiDecodedFrameCount > 0,
+            "uiDecodedFrameCount never moved: {after:?}"
+        );
+        assert_eq!(
+            after.uiDecodedFrameCount, frames,
+            "uiDecodedFrameCount disagrees with the frames the caller saw"
+        );
+        assert!(
+            after.uiEcFrameNum > 0,
+            "uiEcFrameNum never moved on a stream that concealed: {after:?}"
+        );
+        // `:645–649` — both speeds are derived from `dDecTime` at read time, so a
+        // decoder that has decoded anything reports a positive one.
+        assert!(
+            after.fAverageFrameSpeedInMs > 0.0,
+            "fAverageFrameSpeedInMs is not positive: {after:?}"
+        );
+    }
+}
+
+unsafe fn statistics(dec: &Dec) -> SDecoderStatistics {
+    unsafe {
+        let mut s = SDecoderStatistics::default();
+        assert_eq!(
+            i64::from(ISVCDecoder::GetOption(
+                dec.0,
+                DECODER_OPTION::DECODER_OPTION_GET_STATISTICS,
+                std::ptr::from_mut(&mut s).cast::<c_void>(),
+            )),
+            CM_RESULT_SUCCESS as i64
+        );
+        s
+    }
+}
