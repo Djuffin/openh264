@@ -13,7 +13,7 @@
 
 #![deny(unsafe_code)]
 
-use std::ffi::{c_char, c_void};
+use std::ffi::c_char;
 use crate::{
     EComplexityMode, EParameterSetStrategy, EUsageType, RCMode, SEncParamBase, SEncParamExt,
     SSliceArgument, SSpatialLayerConfig, SliceMode, VideoFormat,

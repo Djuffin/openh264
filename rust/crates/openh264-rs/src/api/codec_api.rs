@@ -1071,6 +1071,13 @@ pub struct SBitrateInfo {
 }
 
 /// Logging trace callback prototype (`WelsTraceCallback`).
+/// `WelsTraceCallback` — `codec_api.h:129`, and the **one declaration** since
+/// T8.B6.
+///
+/// `ctx` is **C-ABI**: the caller's own opaque context, whatever it installed
+/// through `ENCODER_OPTION_TRACE_CALLBACK_CONTEXT` / the decoder's equivalent,
+/// handed back untouched. This crate never dereferences it, which is exactly why
+/// it stays a `c_void` (T8.B10).
 pub type WelsTraceCallback =
     Option<unsafe extern "C" fn(ctx: *mut c_void, level: i32, string: *const c_char)>;
 
@@ -1109,6 +1116,9 @@ pub struct ISVCEncoderVtbl {
         pThis: *mut ISVCEncoder,
         bIDR: bool,
     ) -> i32,
+    /// **C-ABI**: `pOption`'s type is a function of `eOptionId`, over thirty-two
+    /// ids, and no Rust type states that — the slot is `codec_api.h:245`'s, byte
+    /// for byte. See [`encoder_set_opt_c`]'s contract. (T8.B10, the `c_void` line.)
     pub SetOption: unsafe extern "C" fn(
         pThis: *mut ISVCEncoder,
         eOptionId: ENCODER_OPTION,
@@ -1207,7 +1217,7 @@ impl ISVCEncoder {
         unsafe { ((*(*this).lpVtbl).ForceIntraFrame)(this, bIDR) }
     }
 
-    /// Sets runtime encoder option.
+    /// Sets runtime encoder option. `pOption` is **C-ABI** — see the vtable slot.
     #[inline]
     pub unsafe fn SetOption(
         this: *mut ISVCEncoder,
@@ -1217,7 +1227,7 @@ impl ISVCEncoder {
         unsafe { ((*(*this).lpVtbl).SetOption)(this, eOptionId, pOption) }
     }
 
-    /// Queries runtime encoder option.
+    /// Queries runtime encoder option. `pOption` is **C-ABI**.
     #[inline]
     pub unsafe fn GetOption(
         this: *mut ISVCEncoder,
@@ -1283,6 +1293,8 @@ pub struct ISVCDecoderVtbl {
         iHeight: *mut i32,
         iColorFormat: *mut i32,
     ) -> DECODING_STATE,
+    /// **C-ABI**, as `ISVCEncoderVtbl::SetOption` — `codec_api.h:518`'s slot.
+    /// (T8.B10, the `c_void` line.)
     pub SetOption: unsafe extern "C" fn(
         pThis: *mut ISVCDecoder,
         eOptionId: DECODER_OPTION,
@@ -1415,7 +1427,7 @@ impl ISVCDecoder {
         }
     }
 
-    /// Sets runtime decoder option.
+    /// Sets runtime decoder option. `pOption` is **C-ABI** — see the vtable slot.
     #[inline]
     pub unsafe fn SetOption(
         this: *mut ISVCDecoder,
@@ -1425,7 +1437,7 @@ impl ISVCDecoder {
         unsafe { ((*(*this).lpVtbl).SetOption)(this, eOptionId, pOption) }
     }
 
-    /// Queries runtime decoder option.
+    /// Queries runtime decoder option. `pOption` is **C-ABI**.
     #[inline]
     pub unsafe fn GetOption(
         this: *mut ISVCDecoder,
@@ -3762,37 +3774,37 @@ mod f23_boundary_provenance {
 // The cores' `Send` verdict (T8.B9).
 // ===========================================================================
 
-/// `true` iff the named type is `Send`, decided at compile time and **reported**
-/// rather than enforced.
-///
-/// A plain `fn assert_send<T: Send>() {}` states a verdict only when the verdict is
-/// *yes*: when it is no, the file stops compiling and the fact has nowhere to live.
-/// This is the inherent-method-beats-trait-method trick, and it has to be a macro
-/// rather than a generic function — inside `fn is_send<T>()` the method is resolved
-/// at *definition* time, where `T` is not known to be `Send`, so the answer would
-/// be `false` for everything. Expanded at a concrete type it resolves at the use
-/// site and both answers are values.
-macro_rules! is_send {
-    ($t:ty) => {{
-        struct Probe<T>(std::marker::PhantomData<T>);
-        trait NotSend {
-            fn probe(&self) -> bool {
-                false
-            }
-        }
-        impl<T> NotSend for Probe<T> {}
-        impl<T: Send> Probe<T> {
-            fn probe(&self) -> bool {
-                true
-            }
-        }
-        Probe::<$t>(std::marker::PhantomData).probe()
-    }};
-}
-
 #[cfg(test)]
 mod send_verdict {
     use super::*;
+
+    /// `true` iff the named type is `Send`, decided at compile time and **reported**
+    /// rather than enforced.
+    ///
+    /// A plain `fn assert_send<T: Send>() {}` states a verdict only when the verdict is
+    /// *yes*: when it is no, the file stops compiling and the fact has nowhere to live.
+    /// This is the inherent-method-beats-trait-method trick, and it has to be a macro
+    /// rather than a generic function — inside `fn is_send<T>()` the method is resolved
+    /// at *definition* time, where `T` is not known to be `Send`, so the answer would
+    /// be `false` for everything. Expanded at a concrete type it resolves at the use
+    /// site and both answers are values.
+    macro_rules! is_send {
+        ($t:ty) => {{
+            struct Probe<T>(std::marker::PhantomData<T>);
+            trait NotSend {
+                fn probe(&self) -> bool {
+                    false
+                }
+            }
+            impl<T> NotSend for Probe<T> {}
+            impl<T: Send> Probe<T> {
+                fn probe(&self) -> bool {
+                    true
+                }
+            }
+            Probe::<$t>(std::marker::PhantomData).probe()
+        }};
+    }
 
     /// **The verdict, recorded: neither core is `Send` today, and the reason is the
     /// same for both — the context tree still holds raw pointers.**

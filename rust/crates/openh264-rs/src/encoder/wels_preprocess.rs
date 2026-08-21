@@ -51,7 +51,7 @@ pub use crate::processing::complexity_analysis::{FRAME_SAD, GOM_SAD, GOM_VAR};
 )]
 
 use crate::encoder::picture::{PicPlanes, RecPicId, RecPicPool, SrcPicId, SrcPicPool};
-use std::ffi::{c_char, c_void};
+use std::ffi::c_char;
 use std::mem::size_of;
 use crate::{
     EUsageType, SEncParamExt, SSourcePicture, SSpatialLayerConfig, VideoFormat,

@@ -2055,6 +2055,10 @@ impl CWelsH264SVCEncoder {
 
     // unsafe-cat: port-raw(Phase 9)
     #[allow(unsafe_code)]
+    /// `pOption` is **C-ABI** and stays a `c_void` (T8.B10): its type is a function
+    /// of `eOptionId` and of nothing else, over thirty-two ids, and no Rust type
+    /// states that. `Encoder::set_option_raw` is the safe surface's `unsafe`
+    /// spelling of the same obligation.
     pub fn SetOption(&mut self, eOptionId: EncoderOption, pOption: *mut c_void) -> i32 {
         if pOption.is_null() {
             return cmInitParaError;
@@ -2401,6 +2405,9 @@ impl CWelsH264SVCEncoder {
                     self.sync_log_ctx();
                 }
                 EncoderOption::ENCODER_OPTION_TRACE_CALLBACK_CONTEXT => {
+                    // **C-ABI**: the caller's opaque trace context, kept until it
+                    // is replaced and handed back to the callback untouched. Never
+                    // dereferenced by this crate.
                     let ctx = pOption.cast::<*mut c_void>().read();
                     self.m_pWelsTrace.SetTraceCallbackContext(ctx);
                     self.sync_log_ctx();
@@ -2418,6 +2425,7 @@ impl CWelsH264SVCEncoder {
 
     // unsafe-cat: port-raw(Phase 9)
     #[allow(unsafe_code)]
+    /// `pOption` is **C-ABI**, as in [`Self::SetOption`], with the blob written.
     pub fn GetOption(&mut self, eOptionId: EncoderOption, pOption: *mut c_void) -> i32 {
         if pOption.is_null() {
             return cmInitParaError;

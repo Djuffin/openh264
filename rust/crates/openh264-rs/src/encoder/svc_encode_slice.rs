@@ -49,7 +49,7 @@
 #![deny(unsafe_code)]
 
 use crate::encoder::picture::{PicRef, RecPicId, SPicture, SRefPicView, SrcPicId};
-use std::ffi::{c_char, c_void};
+use std::ffi::c_char;
 use crate::{
     SliceMode, SFrameBSInfo, SLayerBSInfo, SSliceArgument,
     MAX_LAYER_NUM_OF_FRAME, MAX_SPATIAL_LAYER_NUM, MAX_QUALITY_LAYER_NUM, MAX_NAL_UNITS_IN_LAYER,

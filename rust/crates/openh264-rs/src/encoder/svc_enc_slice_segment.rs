@@ -29,7 +29,7 @@
 
 #![deny(unsafe_code)]
 
-use std::ffi::{c_char, c_void};
+use std::ffi::c_char;
 
 use crate::api::codec_api::SliceModeEnum::{
     SM_FIXEDSLCNUM_SLICE, SM_RASTER_SLICE, SM_SINGLE_SLICE, SM_SIZELIMITED_SLICE,
