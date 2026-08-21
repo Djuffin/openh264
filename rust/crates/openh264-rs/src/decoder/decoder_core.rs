@@ -46,18 +46,17 @@
 // (the arm became an identity), `sMCRefMember` with it, `parse tree` at T5b.3 (the
 // access unit's slots own; F55/S34 is what that cost), the two zeroed shells at
 // T5b.5, and `api boundary` here: `ppDst`, `pDstInfo` and `kpBsBuf` are a plane
-// array, a struct and a slice, the api-owned context fields are reached through
-// `api_alias`/`api_alias_mut`, and the reordering buffers are the api's own
-// `[SPictInfo; 16]`.
+// array, a struct and a slice, and **the api-owned context fields are the context's
+// own** since T8.A5–A8 — including the reordering buffers, which were
+// `CWelsDecoderImpl`'s `[SPictInfo; 16]` reached through a stamped pointer.
 //
-// `src/decoder/` carries **three** `#[allow(unsafe_code)]` items in total, none of
-// them here: `decoder_context.rs`'s two api aliases and `picture.rs`'s one Miri
-// provenance test for `data_ptr` (T5b.7 retired the second with `data_ptr_ref`). What is still owed is Phase 8's — the twelve
-// api-owned fields stop being pointers when `CWelsDecoderImpl` hands the context
-// borrows at construction (F23/F41), and `data_ptr` retires with them.
+// `src/decoder/` carries **two** `#[allow(unsafe_code)]` items in total, neither of
+// them here: `picture.rs`'s pair of Miri provenance tests for `data_ptr`. What is
+// still owed is `data_ptr` itself — its one production use is
+// `DecodeFrameConstruction`'s three `ppDst[i]` writes across the C ABI, which is a
+// boundary write and belongs with the boundary.
 
 use std::ffi::{c_char, c_void};
-use crate::common::memory_align::CMemoryAlign;
 
 // Constants
 pub const MIN_ACCESS_UNIT_CAPACITY: usize = 262144;
@@ -247,7 +246,7 @@ pub use crate::decoder::nalu::EWelsNalUnitType::*;
 // Data Structures Matching C/C++ Layout
 
 pub use crate::decoder::decoder_context::SPosOffset;
-use crate::decoder::decoder_context::{api_alias, api_alias_mut, ec_active_idc};
+use crate::decoder::decoder_context::ec_active_idc;
 
 
 pub use crate::decoder::decoder_context::SParserBsInfo;
@@ -945,12 +944,12 @@ pub fn SyncPictureResolutionExt(pCtx: &mut SWelsDecoderContext, iWidth: u32, iHe
         (*pCtx).iPicQueueNumber = iPicBufSize;
 
         if (*pCtx).pPicBuff.is_none() {
-            // T5.W3: `CreatePicBuff`'s two guards — a null context and a null
-            // `pMemAlign` — are tested here now, at the caller that holds the context.
-            // Both took the `return 1` arm before by way of the callee's `None`.
-            if (*pCtx).pMemAlign.is_null() {
-                return 1;
-            }
+            // **T8.A8: the `pMemAlign` guard is gone with the allocator.** `CreatePicBuff`'s
+            // C++ opens `if (NULL == pCtx || NULL == pCtx->pMemAlign) return 1;` — a
+            // null test on the aligned allocator it is about to call. This port's pool
+            // is a `Vec` and the only failure it can report is the `None` the `else`
+            // arm below already takes, so the guard tested a field whose one remaining
+            // job was to be non-null.
             let Some(pool) = crate::decoder::pic_queue::CreatePicBuff(
                 crate::decoder::decoder_context::parse_only(&pCtx.pParam),
                 iPicBufSize,
@@ -1795,7 +1794,6 @@ pub fn FillDefaultSliceHeaderExt(
 }
 
 pub fn InitBsBuffer(pCtx: &mut SWelsDecoderContext) -> i32 {
-    let pMa = (*pCtx).pMemAlign;
     // `WelsMalloczHelper`'s zeroed allocation, owned: the allocation size *is*
     // `sRawData.len()` — the `iMaxBsBufferSizeInByte` field died with the pointers,
     // since a stored copy of the buffer's length is exactly the kind of extent F16
@@ -2117,7 +2115,6 @@ pub fn WelsOpenDecoder(pCtx: &mut SWelsDecoderContext, _pLogCtx: *mut c_void) ->
 /// pictures, picture buffer, CABAC engine).
 /// Matches `void WelsFreeDynamicMemory (PWelsDecoderContext pCtx)` in `decoder.cpp`.
 pub fn WelsFreeDynamicMemory(pCtx: &mut SWelsDecoderContext) {
-    let pMa = (*pCtx).pMemAlign;
 
     UninitialDqLayersContext(pCtx);
     crate::decoder::nalu::ResetFmoList(pCtx);
@@ -2179,7 +2176,6 @@ pub fn WelsInitStaticMemory(pCtx: &mut SWelsDecoderContext) -> i32 {
 }
 
 pub fn WelsFreeStaticMemory(pCtx: &mut SWelsDecoderContext) {
-    let pMa = (*pCtx).pMemAlign;
     // R4, first entry: the access unit's free is `Option::take`'s drop, and it happens
     // here rather than in the context's own `Drop` only because this function still
     // exists. Both of its callers run `drop(Box::from_raw(pCtx))` on the next line, so
@@ -4490,8 +4486,8 @@ pub fn CheckAndFinishLastPic(
             .as_deref()
             .and_then(|au| au.node(au.uiEndPos as usize))
             .copied();
-        // The last-picture halves are copied out first: `api_alias` borrows the field
-        // and `sps_of` borrows `sSpsPpsCtx`, and both are arguments to one call.
+        // The last-picture halves are copied out first: the field borrow and
+        // `sps_of`'s borrow of `sSpsPpsCtx` are both arguments to one call.
         let last = Some((pCtx.pLastDecPicInfo.sLastNalHdrExt, pCtx.pLastDecPicInfo.sLastSliceHeader));
         if let (Some(pCurNal), Some((last_hdr, last_sh))) = (cur_nal.as_ref(), last) {
             bAuBoundaryFlag = (*pCtx).iTotalNumMbRec != 0

@@ -28,10 +28,11 @@
 
 #![deny(unsafe_code)]
 // **Phase 5b, T5b.6: this file's `unsafe` is gone and no exception is enumerated.**
-// `src/decoder/` carries **three** `#[allow(unsafe_code)]` items in total, and they
-// are all in `decoder_context.rs` (`api_alias`/`api_alias_mut`) and `picture.rs` (the
-// one Miri provenance test S28 mandates for `data_ptr` — T5b.7 retired the second
-// with `data_ptr_ref`). Nothing here is one of them.
+// `src/decoder/` carries **two** `#[allow(unsafe_code)]` items in total (T8.A8), and
+// both are `picture.rs`'s Miri provenance tests for `data_ptr` — the instruments S28
+// mandates for that accessor, not production code. The two that used to sit beside
+// them, `decoder_context.rs`'s `api_alias`/`api_alias_mut`, retired with the api-owned
+// fields they dereferenced. Nothing here is one of them.
 
 //! # Decoded Picture Buffer Pool & Recycled Picture Queue (`pic_queue.rs`)
 //!
@@ -50,9 +51,7 @@
 )]
 
 use std::ffi::{c_char, c_void};
-use crate::common::memory_align::CMemoryAlign;
 use crate::decoder::decoder_context::SDecodingParam;
-use crate::decoder::decoder_context::api_alias_mut;
 
 // ============================================================================
 // Constants & Geometry Macro Definitions
@@ -896,15 +895,16 @@ pub fn CreatePicBuff(
 /// `&mut ma` casts at the call sites keeping it fed. The signature says what
 /// the body does now.
 pub fn DestroyPicBuff(pCtx: &mut SWelsDecoderContext, pool: Option<Box<PicPool>>) {
-    // Both reordering buffers are `CWelsDecoderImpl`'s; the C++'s two null tests are
-    // the two `Option`s, and the pair is disjoint so one `if let` chain serves.
+    // F37's reset, at the head of the function and before the early returns, where
+    // `decoder.cpp:260` has it. Both reordering buffers are the context's own fields
+    // since T8.A7, so the C's two null tests — which were two `Option`s here — have
+    // nothing left to test and the pair is destructured for disjointness alone.
     let SWelsDecoderContext { pPictReoderingStatus, pPictInfoList, .. } = &mut *pCtx;
-    if let (Some(status), Some(list)) = (
-        api_alias_mut(pPictReoderingStatus),
-        api_alias_mut(pPictInfoList),
-    ) {
-        crate::decoder::decoder_core::ResetReorderingPictureBuffers(status, list, false);
-    }
+    crate::decoder::decoder_core::ResetReorderingPictureBuffers(
+        pPictReoderingStatus,
+        pPictInfoList,
+        false,
+    );
 
     // **T5.Q2: the release is the `Box` going out of scope.** The `FreePicture` loop
     // that stood here — and with it the `pMa.is_null()` early return that used to
@@ -946,10 +946,8 @@ mod tests {
 
     #[test]
     fn test_alloc_and_free_picture() {
-        let mut ma = CMemoryAlign::new(32);
         let mut param = SDecodingParam::default();
         let mut ctx = SWelsDecoderContext::new_boxed();
-        ctx.pMemAlign = &mut ma as *mut CMemoryAlign;
         ctx.pParam = param;
 
         {
@@ -985,7 +983,6 @@ mod tests {
 
             drop(pic);
         }
-        assert_eq!(ma.WelsGetMemoryUsage(), 0);
     }
 
     /// The `bParseOnly` arm: strides from the geometry, no sample memory, and a null
@@ -993,14 +990,12 @@ mod tests {
     /// `iLinesize[i]` encoded, which every caller still tests with `.is_null()`.
     #[test]
     fn test_alloc_picture_parse_only_carries_strides_and_no_bytes() {
-        let mut ma = CMemoryAlign::new(32);
         // T5.W3: the fixture context stays, because `parse_only(&pCtx.pParam)` is what a
         // production caller passes and this asserts the two agree — the mechanical
         // pass through this file set the argument to `false` here and the test caught
         // it, which is the whole reason the flag is read back rather than written in.
         let mut param = SDecodingParam { bParseOnly: true, ..Default::default() };
         let mut ctx = SWelsDecoderContext::new_boxed();
-        ctx.pMemAlign = &mut ma as *mut CMemoryAlign;
         ctx.pParam = param;
 
         {
@@ -1023,15 +1018,12 @@ mod tests {
             assert!((*p_pic).data_ptr(2).is_null());
             drop(pic);
         }
-        assert_eq!(ma.WelsGetMemoryUsage(), 0);
     }
 
     #[test]
     fn test_prefetch_pic_circular_scan() {
-        let mut ma = CMemoryAlign::new(32);
         let mut param = SDecodingParam::default();
         let mut ctx = SWelsDecoderContext::new_boxed();
-        ctx.pMemAlign = &mut ma as *mut CMemoryAlign;
         ctx.pParam = param;
 
         {
@@ -1053,7 +1045,6 @@ mod tests {
 
             DestroyPicBuff(pCtx, Some(pool));
         }
-        assert_eq!(ma.WelsGetMemoryUsage(), 0);
     }
 
     /// **F42 — the current slot resolves through the mutable half, and must.**
@@ -1079,10 +1070,8 @@ mod tests {
     /// checks rather than the thing Miri had to be asked about.
     #[test]
     fn f42_a_reference_list_entry_naming_the_current_picture_resolves_not_panics() {
-        let mut ma = CMemoryAlign::new(32);
         let mut param = SDecodingParam::default();
         let mut ctx = SWelsDecoderContext::new_boxed();
-        ctx.pMemAlign = &mut ma;
         ctx.pParam = param;
 
         let mut pool = CreatePicBuff(false, 3, 64, 64).expect("pool");
@@ -1122,7 +1111,6 @@ mod tests {
         {
             DestroyPicBuff(&mut *ctx, Some(pool));
         }
-        assert_eq!(ma.WelsGetMemoryUsage(), 0);
     }
 
     /// F37: destroying the pool resets the reordering buffers, because they outlive it.
@@ -1135,58 +1123,47 @@ mod tests {
     fn destroying_the_pool_resets_the_reordering_buffers() {
         use crate::decoder::decoder_context::{IMinInt32, SPictInfo, SPictReoderingStatus};
 
-        let mut ma = CMemoryAlign::new(32);
         let mut param = SDecodingParam::default();
         let mut ctx = SWelsDecoderContext::new_boxed();
         // A mutable reference coerces to a raw pointer at an assignment or an
         // argument, so this fixture spells no pointer type at all (S16: the metric
         // counts types written, and a test that writes casts it does not need
         // inflates it — including in a comment).
-        ctx.pMemAlign = &mut ma;
         ctx.pParam = param;
 
         // The decoder object's own members, and a decode's leavings in them: two
         // buffered pictures naming pool slots 2 and 3.
-        let mut pict_info: [SPictInfo; 16] = [SPictInfo::default(); 16];
-        let mut status = SPictReoderingStatus::default();
-        status.iLargestBufferedPicIndex = 1;
-        status.iNumOfPicts = 2;
-        status.bHasBSlice = true;
-        pict_info[0].iPOC = 4;
-        pict_info[0].iPicBuffIdx = 2;
-        pict_info[1].iPOC = 8;
-        pict_info[1].iPicBuffIdx = 3;
-
-        // Wired **after** the fixture is dirtied, and that ordering is the test's own
-        // brush with F38. Written the other way round, the stores retag `status` and
-        // `pict_info`, the writes above go through the *locals* and pop those retags,
-        // and `DestroyPicBuff`'s reset reads a dead tag. Miri convicted exactly that
-        // on the closing battery — in the test written to prove F37, by the session
-        // that had just found and fixed F38 in production. `addr_of_mut!` is **not**
-        // the fix at this site: it is what saves the production stores, where the
-        // invalidating write goes through the raw `dec_impl` rather than through a
-        // local, and a raw sibling does not pop a raw derivation. Here the write is
-        // through the local itself, so nothing but ordering helps. S13's law reaches
-        // the code you write while applying it.
-        ctx.pPictInfoList = &mut pict_info;
-        ctx.pPictReoderingStatus = &mut status;
+        // **The fixture is the context, and T8.A7 is why.** It used to be two locals
+        // wired in afterwards, and the ordering carried a paragraph: written the
+        // other way round the stores retagged the locals, the writes went through the
+        // locals and popped those retags, and `DestroyPicBuff`'s reset read a dead
+        // tag — Miri convicted exactly that, on the closing battery, in the test
+        // written to prove F37, by the session that had just found F38. Both buffers
+        // are the context's own fields now; there is no alias to order against and no
+        // hazard to write a paragraph about.
+        ctx.pPictReoderingStatus.iLargestBufferedPicIndex = 1;
+        ctx.pPictReoderingStatus.iNumOfPicts = 2;
+        ctx.pPictReoderingStatus.bHasBSlice = true;
+        ctx.pPictInfoList[0].iPOC = 4;
+        ctx.pPictInfoList[0].iPicBuffIdx = 2;
+        ctx.pPictInfoList[1].iPOC = 8;
+        ctx.pPictInfoList[1].iPicBuffIdx = 3;
 
         {
             let pool = CreatePicBuff(false, 4, 64, 64);
             assert!(pool.is_some());
             DestroyPicBuff(&mut *ctx, pool);
         }
-        assert_eq!(ma.WelsGetMemoryUsage(), 0);
 
         // `fullReset = false`, so the loop covers `iLargestBufferedPicIndex + 1` entries
         // — the two that were written — and leaves the untouched tail alone.
-        assert_eq!(status.iNumOfPicts, 0);
-        assert_eq!(status.iLargestBufferedPicIndex, 0);
-        assert!(!status.bHasBSlice);
-        assert_eq!(status.iMinPOC, IMinInt32);
+        assert_eq!(ctx.pPictReoderingStatus.iNumOfPicts, 0);
+        assert_eq!(ctx.pPictReoderingStatus.iLargestBufferedPicIndex, 0);
+        assert!(!ctx.pPictReoderingStatus.bHasBSlice);
+        assert_eq!(ctx.pPictReoderingStatus.iMinPOC, IMinInt32);
         for i in 0..2 {
-            assert_eq!(pict_info[i].iPicBuffIdx, -1, "slot {i} still names the freed pool");
-            assert_eq!(pict_info[i].iPOC, IMinInt32, "slot {i}");
+            assert_eq!(ctx.pPictInfoList[i].iPicBuffIdx, -1, "slot {i} still names the freed pool");
+            assert_eq!(ctx.pPictInfoList[i].iPOC, IMinInt32, "slot {i}");
         }
     }
 
@@ -1198,10 +1175,8 @@ mod tests {
     fn pooled_pictures_are_identified_by_slot_not_by_poc() {
         use crate::decoder::picture::same_picture;
 
-        let mut ma = CMemoryAlign::new(32);
         let mut param = SDecodingParam::default();
         let mut ctx = SWelsDecoderContext::new_boxed();
-        ctx.pMemAlign = &mut ma as *mut CMemoryAlign;
         ctx.pParam = param;
 
         {
@@ -1245,7 +1220,6 @@ mod tests {
 
             DestroyPicBuff(&mut *ctx, Some(pool));
         }
-        assert_eq!(ma.WelsGetMemoryUsage(), 0);
     }
 
     /// Pass 2 and the cursor's exhausted state — the part of `PrefetchPic` that has
@@ -1257,10 +1231,8 @@ mod tests {
     /// Releasing a slot then has to be found by the wrap, since the cursor is past it.
     #[test]
     fn prefetch_wraps_and_survives_an_exhausted_pool() {
-        let mut ma = CMemoryAlign::new(32);
         let mut param = SDecodingParam::default();
         let mut ctx = SWelsDecoderContext::new_boxed();
-        ctx.pMemAlign = &mut ma as *mut CMemoryAlign;
         ctx.pParam = param;
 
         {
@@ -1293,15 +1265,12 @@ mod tests {
 
             DestroyPicBuff(&mut *ctx, Some(pool));
         }
-        assert_eq!(ma.WelsGetMemoryUsage(), 0);
     }
 
     #[test]
     fn test_prefetch_pic_for_thread() {
-        let mut ma = CMemoryAlign::new(32);
         let mut param = SDecodingParam::default();
         let mut ctx = SWelsDecoderContext::new_boxed();
-        ctx.pMemAlign = &mut ma as *mut CMemoryAlign;
         ctx.pParam = param;
 
         {
@@ -1333,6 +1302,5 @@ mod tests {
 
             DestroyPicBuff(&mut *ctx, Some(pool));
         }
-        assert_eq!(ma.WelsGetMemoryUsage(), 0);
     }
 }

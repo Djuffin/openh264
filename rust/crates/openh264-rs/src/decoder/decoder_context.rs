@@ -17,24 +17,25 @@
 //   * **The twelve api-owned context fields** — `pParam`, `pLastDecPicInfo`,
 //     `pDecoderStatistics`, `pMemAlign`, `pVlcTable`, `pSliceHeader`, `pNalCur`,
 //     `pStreamSeqNum`, `pPictInfoList`, `pPictReoderingStatus`, `pTraceHandle`,
-//     `pArgDec`. They are declarations of a boundary this phase does not own; the
-//     whole decoder reaches them through `api_alias`/`api_alias_mut` (T5.AC4), and
-//     the fields themselves are **Phase 8's** with the `api/` inventory.
+//     `pArgDec`. They were declarations of a boundary Phase 5 did not own, reached
+//     through `api_alias`/`api_alias_mut` (T5.AC4). **Phase 8 session A owns them
+//     now and they are the context's own fields** (T8.A5–A8); `pMemAlign` is
+//     deleted with the allocator, `pSliceHeader`/`pNalCur` became indices at T5b.3,
+//     and `pTraceHandle`/`pArgDec` are `void*`s this port never reads.
 //   * **The four exceptions below**: the three per-slice view constructors, which
 //     W6's settlement named as the enumerated exception before they were written,
 //     and the zeroed shell, which is session O's standing constraint.
 //
-// **All four are gone** (T5b.5/T5b.6): the views take borrows, the shell is a
-// field-wise constructor, and what this file allows now is `api_alias` and
-// `api_alias_mut` — two of the decoder's three remaining items, the third being
-// `picture.rs`'s Miri test for `data_ptr`.
+// **All four are gone** (T5b.5/T5b.6): the views take borrows and the shell is a
+// field-wise constructor. `api_alias`/`api_alias_mut` stood as this file's two
+// enumerated items until T8.A8; **this file now allows nothing**, and the whole of
+// `src/decoder/` is `picture.rs`'s two Miri tests for `data_ptr`.
 
 //! Master decoder execution context, function dispatch tables, DPB memory pool management,
 //! bitstream demuxing, and statistics aggregation.
 //!
 //! Translated from `codec/decoder/core/inc/decoder_context.h` and `codec/decoder/core/src/decoder.cpp`.
 
-use crate::common::memory_align::CMemoryAlign;
 use crate::decoder::bit_stream::BsReader;
 use crate::safe::plane::PlaneCursorMut;
 use crate::decoder::fmo::{SFmo};
@@ -1169,68 +1170,32 @@ pub fn long_ref_pic<'a>(
 }
 
 // ============================================================================
-// The api-owned aliases — the decoder's last raw field class (T5.AC4)
+// The api-owned aliases — retired (T8.A4–A7)
 // ============================================================================
 //
-// **The context holds nine pointers to objects it does not own.** `pParam`,
+// **This section held `api_alias` and `api_alias_mut`, and the argument for them.**
+// The context used to hold nine pointers to objects it did not own — `pParam`,
 // `pLastDecPicInfo`, `pDecoderStatistics`, `pStreamSeqNum`, `pMemAlign`,
-// `pVlcTable`, `pPictInfoList`, `pPictReoderingStatus` and `pArgDec` are all
-// stamped in `api/codec_api.rs` from fields of `CWelsDecoderImpl`, which
-// outlives the context — the C++'s own arrangement (`welsDecoderExt.cpp`
-// assigns each in `InitDecoder`). They are the reason `deny(unsafe_code)`
-// could not go on eight decoder modules: not one of the ~200 use sites owns a
-// pointer, they all *dereference the context's*, and a dereference is what the
-// lint forbids.
+// `pVlcTable`, `pPictInfoList`, `pPictReoderingStatus` and `pArgDec` — every one
+// stamped in `api/codec_api.rs` from a field of `CWelsDecoderImpl`. They were the
+// reason `deny(unsafe_code)` could not go on eight decoder modules: not one of the
+// ~200 use sites owned a pointer, they all *dereferenced the context's*, and a
+// dereference is what the lint forbids. Two accessors concentrated that into two
+// `unsafe` items with one written obligation, and the note ended by saying whose
+// the fields were: **Phase 8's**, "the fix is for `CWelsDecoderImpl` to hand the
+// context borrows or owned values at construction".
 //
-// **The two functions below are the whole of it, and they are the enumerated
-// exception.** Everything else in the decoder reaches these objects through a
-// safe `Option<&_>` and never writes `unsafe` again. The obligation is stated
-// once, here:
+// That is what happened. Eight of the nine are the context's own fields; `pMemAlign`
+// is deleted with the allocator it named; `pArgDec` is a `void*` the port never
+// reads. The `Option`s the accessors returned were the C's null tests on blocks the
+// context in fact owns, so they retire with the pointers rather than being kept as
+// guards — the one place that cost a decision is `WelsDecodeInitAccessUnitStart`'s
+// `else` arm for a null `pStreamSeqNum` (`decoder_core.cpp:2265`), which is
+// unreachable code once the counter is a field.
 //
-//   SAFETY. A non-null value in one of these fields was written by
-//   `api/codec_api.rs` from `addr_of_mut!` of a field of the `CWelsDecoderImpl`
-//   that owns this context, or (in tests) from a stack local that outlives the
-//   call. The impl owns the context by `Box`, so the referent outlives every
-//   borrow the context can hand out. Uniqueness holds field-by-field because the
-//   accessor takes **the field**, not the context (session Z's rule): two
-//   different fields cannot produce two borrows of one object, because no two
-//   of the nine are ever stamped from one address — the one pair that *does*
-//   overlap, `pSliceHeader` inside `pNalCur`'s NAL, is shared-only below and
-//   has no `_mut` form.
-//
-// **Whose it is**: the fields themselves are **Phase 8's**, with the `api/`
-// inventory (F23/F41) — the fix is for `CWelsDecoderImpl` to hand the context
-// borrows or owned values at construction, which is api-shaped work this phase
-// puts outside its own scope (F12/P10's sibling clause). What this phase owes is
-// that the raw dereference exists at exactly two items and is argued at both.
-
-/// One api-owned alias, as a shared borrow. `None` is the null the C++ tests for.
-///
-/// See the section note above for the safety argument; the parameter is the
-/// **field**, so the borrow is field-precise and cannot conflict with a
-/// disjoint one taken beside it.
-#[allow(unsafe_code)]
-#[inline]
-pub fn api_alias<T>(field: &*mut T) -> Option<&T> {
-    if field.is_null() {
-        return None;
-    }
-    // SAFETY: the section note above, discharged at the stamp sites in `api/`.
-    unsafe { Some(&**field) }
-}
-
-/// [`api_alias`]'s mutable form, for the four fields the decoder writes back
-/// through (`pLastDecPicInfo`, `pDecoderStatistics`, `pStreamSeqNum` and the
-/// reordering status).
-#[allow(unsafe_code)]
-#[inline]
-pub fn api_alias_mut<T>(field: &mut *mut T) -> Option<&mut T> {
-    if field.is_null() {
-        return None;
-    }
-    // SAFETY: the section note above, discharged at the stamp sites in `api/`.
-    unsafe { Some(&mut **field) }
-}
+// `src/decoder/` is down to **one** `#[allow(unsafe_code)]` item — `SPicture`'s
+// `data_ptr` in `picture.rs`, whose one production use writes `ppDst` across the
+// ABI.
 
 /// The previous decoded picture's **handle**, without touching the pool — the
 /// `ref_id`-shaped half of [`prev_dpb_pic`], for the error-concealment brackets that
@@ -1375,9 +1340,6 @@ pub struct SliceCtx<'a> {
     /// this keeps, and five dereferenced without the test, which this makes safe.
     pub bParseOnly: bool,
     pub bEcActive: bool,
-    /// `pMemAlign != null` — the whole of what `GetTempPredPlanes` asks it, since
-    /// `alloc_picture` stopped taking the aligner at T5.W3.
-    pub bHasMemAlign: bool,
     pub iCurSeqIntervalMaxPicWidth: i32,
     /// `GetThreadCount`, which is 0 and cannot change mid-slice.
     pub iThreadCount: i32,
@@ -1540,7 +1502,6 @@ macro_rules! slice_view {
             bParseOnly: parse_only(&$ctx.pParam),
             bEcActive: ec_active_idc(&$ctx.pParam)
                 != crate::decoder::error_concealment::ERROR_CON_IDC::ERROR_CON_DISABLE,
-            bHasMemAlign: !$ctx.pMemAlign.is_null(),
             iCurSeqIntervalMaxPicWidth: $ctx.iCurSeqIntervalMaxPicWidth,
             iThreadCount: $threads,
             active_sps: $ctx.active_sps,
@@ -1759,10 +1720,6 @@ pub struct SWelsDecoderContext {
     pub pTempDec: Option<Box<Picture>>,
     pub sRefPic: SRefPic,
     pub sTmpRefPic: SRefPic,
-    /// `CWelsDecoderImpl::sVlcTable`, aliased. The C++ declares it `void*`; the
-    /// port names the type, because the erasure bought nothing and cost every
-    /// reader a cast — and with the type named, `api_alias` resolves it like the
-    /// other eight api-owned fields (T5b.2). Layout is unchanged: one pointer.
     /// `CWelsDecoderImpl::sVlcTable`, **owned** (T8.A6). The C++ declares the
     /// context's slot `void*` and points it at a `CWelsDecoder` member; the port
     /// named the type at T5b.2 and owns the value now — every entry is a
@@ -1971,15 +1928,29 @@ pub struct SWelsDecoderContext {
     pub iDequantCoeffPpsid: i32,
     pub bDequantCoeff4x4Init: bool,
     pub bUseScalingList: bool,
-    pub pMemAlign: *mut CMemoryAlign,
     pub lastReadyHeightOffset: [[i16; MAX_REF_PIC_COUNT]; LIST_A],
-    /// The api's `CWelsDecoderImpl::sPictInfoList`, **as the array it points at**
-    /// (T5b.6). The field held `*mut SPictInfo` — the C's decayed first-element
-    /// pointer — and its one decoder-side reader walked it with `.add(i)` against a
-    /// `16` spelled at the call site. The api stamps it with `addr_of_mut!` over the
-    /// whole array, so the array type is what the address already was.
-    pub pPictInfoList: *mut [SPictInfo; 16],
-    pub pPictReoderingStatus: *mut SPictReoderingStatus,
+    /// `CWelsDecoderImpl::sPictInfoList`, **owned** (T8.A7).
+    ///
+    /// It held `*mut SPictInfo` — the C's decayed first-element pointer — until
+    /// T5b.6 named the array, and the array until now was `CWelsDecoderImpl`'s with
+    /// this field pointing at it. In the reference it is a `CWelsDecoder` member
+    /// because a *threaded* decoder shares one reordering buffer across N contexts;
+    /// with one context per decoder the context is where it belongs.
+    pub pPictInfoList: [SPictInfo; 16],
+    /// `CWelsDecoderImpl::sReoderingStatus`, **owned** (T8.A7).
+    pub pPictReoderingStatus: SPictReoderingStatus,
+    /// `CWelsDecoder::m_bIsBaseline` — reordering is bypassed entirely for baseline
+    /// profiles. One of the three `CWelsDecoderImpl` scalars the reordering path
+    /// carried beside the two buffers; they moved together at T8.A7, because a
+    /// function that reads the buffers out of the context and the scalars out of the
+    /// api object would need both pointers to say one thing.
+    pub bIsBaseline: bool,
+    /// `CWelsDecoder::m_iLastBufferedIdx`.
+    pub iLastBufferedIdx: i32,
+    /// `CWelsDecoder::m_uiDecodeTimeStamp` — the monotonic counter stamped onto each
+    /// decoded picture as [`uiDecodingTimeStamp`](Self::uiDecodingTimeStamp); the
+    /// no-reorder release path orders buffered pictures by it.
+    pub uiDecodeTimeStamp: u32,
 }
 // **T5b.9: `PWelsDecoderContext` deleted (S18).** Every use in `src/decoder/` was
 // a re-export chain or a doc comment quoting the C++'s signature; the one code use
@@ -2152,10 +2123,12 @@ impl Default for SWelsDecoderContext {
             // block; the flag is the initialized test the null test used to be.
             bDequantCoeff4x4Init: false,
             bUseScalingList: false,
-            pMemAlign: std::ptr::null_mut(),
             lastReadyHeightOffset: [[0; MAX_REF_PIC_COUNT]; LIST_A],
-            pPictInfoList: std::ptr::null_mut(),
-            pPictReoderingStatus: std::ptr::null_mut(),
+            pPictInfoList: [SPictInfo::default(); 16],
+            pPictReoderingStatus: SPictReoderingStatus::default(),
+            bIsBaseline: false,
+            iLastBufferedIdx: 0,
+            uiDecodeTimeStamp: 0,
         }
     }
 }
@@ -2244,12 +2217,10 @@ mod tests {
 
     #[test]
     fn test_pic_buff_creation_and_destruction() {
-        let mut mem_align = CMemoryAlign::new(16);
         // `new_zeroed().assume_init()` stopped being legal at T3.3: the context now
         // owns `Vec`s, and a zeroed `Vec` is an invalid value. `Default` constructs
         // the same zeroed context with those fields written properly.
         let mut ctx = SWelsDecoderContext::new_boxed();
-        ctx.pMemAlign = &mut mem_align;
 
         {
             let pCtx = &mut *ctx;
