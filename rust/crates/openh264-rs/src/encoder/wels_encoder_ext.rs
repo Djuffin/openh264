@@ -1606,7 +1606,7 @@ impl CWelsH264SVCEncoder {
     /// in C++ that copy stays current because it holds a route to the trace object
     /// rather than the settings. Here it holds the settings, so a `SetOption` that
     /// changes them re-stamps the copy. One line per trace option arm.
-    fn sync_log_ctx(&mut self) {
+    pub(crate) fn sync_log_ctx(&mut self) {
         let CWelsH264SVCEncoder { m_pWelsTrace, m_pEncContext, .. } = self;
         if let Some(pEncContext) = m_pEncContext.as_mut() {
             pEncContext.sLogCtx = m_pWelsTrace.log_context();
