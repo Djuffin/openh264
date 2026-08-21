@@ -1,9 +1,9 @@
 {
-  "commit": "d172460f",
+  "commit": "dea8e9cb",
   "metrics": ["unsafe_fn", "unsafe_block", "raw_ptr", "transmute", "unsafe_impl", "mem_zeroed", "no_mangle", "shim"],
   "files": {
     "api/abi_guard.rs": { "unsafe_fn": 0, "unsafe_block": 0, "raw_ptr": 0, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 0, "no_mangle": 0, "shim": 0 },
-    "api/codec_api.rs": { "unsafe_fn": 48, "unsafe_block": 45, "raw_ptr": 246, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 2, "no_mangle": 5, "shim": 0 },
+    "api/codec_api.rs": { "unsafe_fn": 48, "unsafe_block": 46, "raw_ptr": 246, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 2, "no_mangle": 5, "shim": 0 },
     "api/mod.rs": { "unsafe_fn": 0, "unsafe_block": 0, "raw_ptr": 0, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 0, "no_mangle": 0, "shim": 0 },
     "common/copy_mb.rs": { "unsafe_fn": 1, "unsafe_block": 2, "raw_ptr": 2, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 0, "no_mangle": 0, "shim": 0 },
     "common/cpu_core.rs": { "unsafe_fn": 0, "unsafe_block": 0, "raw_ptr": 0, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 0, "no_mangle": 0, "shim": 0 },
