@@ -723,7 +723,8 @@ pub fn ParseNalHeader(
         || IS_AU_DELIMITER_NAL(eType)
         || (*pCtx).sSpsPpsCtx.bSpsExistAheadFlag)
     {
-        if let Some(stat) = api_alias_mut(&mut (*pCtx).pDecoderStatistics) {
+        {
+            let stat = &mut (*pCtx).pDecoderStatistics;
             stat.iSpsNoExistNalNum += 1;
         }
         (*pCtx).iErrorCode |= dsNoParamSets;
@@ -735,7 +736,8 @@ pub fn ParseNalHeader(
         || IS_AU_DELIMITER_NAL(eType)
         || (*pCtx).sSpsPpsCtx.bPpsExistAheadFlag)
     {
-        if let Some(stat) = api_alias_mut(&mut (*pCtx).pDecoderStatistics) {
+        {
+            let stat = &mut (*pCtx).pDecoderStatistics;
             stat.iPpsNoExistNalNum += 1;
         }
         (*pCtx).iErrorCode |= dsNoParamSets;
@@ -749,7 +751,8 @@ pub fn ParseNalHeader(
                 || (*pCtx).sSpsPpsCtx.bSubspsExistAheadFlag
                 || (*pCtx).sSpsPpsCtx.bPpsExistAheadFlag))
     {
-        if let Some(stat) = api_alias_mut(&mut (*pCtx).pDecoderStatistics) {
+        {
+            let stat = &mut (*pCtx).pDecoderStatistics;
             stat.iSubSpsNoExistNalNum += 1;
         }
         (*pCtx).iErrorCode |= dsNoParamSets;

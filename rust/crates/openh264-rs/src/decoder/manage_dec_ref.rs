@@ -862,7 +862,8 @@ pub fn MMCOProcess(
         }
         MMCO_RESET => {
             WelsResetRefPic(pCtx);
-            if let Some(last) = api_alias_mut(&mut (*pCtx).pLastDecPicInfo) {
+            {
+                let last = &mut (*pCtx).pLastDecPicInfo;
                 last.bLastHasMmco5 = true;
             }
         }
@@ -1485,7 +1486,7 @@ pub fn WelsMarkAsRef(
                     return iRet;
                 }
             }
-            if api_alias(&(*pCtx).pLastDecPicInfo).is_some_and(|l| l.bLastHasMmco5) {
+            if (*pCtx).pLastDecPicInfo.bLastHasMmco5 {
                 if let Some(pDec) = dec!() {
                     pDec.iFrameNum = 0;
                     pDec.iFramePoc = 0;

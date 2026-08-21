@@ -719,9 +719,7 @@ pub fn UpdateDecStatNoFreezingInfo(pCtx: &mut SWelsDecoderContext, pCurDq: Optio
         return;
     };
     // The C++'s `if (NULL == pCtx->pDecoderStatistics) return;`.
-    let Some(pDecStat) = api_alias_mut(&mut pCtx.pDecoderStatistics) else {
-        return;
-    };
+    let pDecStat = &mut pCtx.pDecoderStatistics;
 
     if pDecStat.iAvgLumaQp == -1 {
         pDecStat.iAvgLumaQp = 0;
@@ -777,7 +775,8 @@ pub fn UpdateDecStat(pCtx: &mut SWelsDecoderContext, pCurDq: Option<&DqLayerStat
     {
         if (*pCtx).bFreezeOutput {
             if let Some(pCurDq) = pCurDq {
-                if let Some(stat) = api_alias_mut(&mut (*pCtx).pDecoderStatistics) {
+                {
+                    let stat = &mut (*pCtx).pDecoderStatistics;
                     UpdateDecStatFreezingInfo(pCurDq.sLayerInfo.sNalHeaderExt.bIdrFlag, stat);
                 }
             }
@@ -1108,7 +1107,8 @@ pub fn DecodeFrameConstruction(
     let kiActualHeight = kiHeight - ((*pCtx).sFrameCrop.iTopOffset + (*pCtx).sFrameCrop.iBottomOffset) * 2;
 
     if (*pCtx).pParam.eEcActiveIdc == ERROR_CON_DISABLE {
-        if let Some(stat) = api_alias_mut(&mut (*pCtx).pDecoderStatistics) {
+        {
+            let stat = &mut (*pCtx).pDecoderStatistics;
             if stat.uiWidth != kiActualWidth as u32
                 || stat.uiHeight != kiActualHeight as u32
             {
@@ -1285,7 +1285,8 @@ pub fn DecodeFrameConstruction(
 
     if (*pCtx).pParam.eEcActiveIdc != ERROR_CON_DISABLE {
         if pDstInfo.iBufferStatus != 0 {
-            if let Some(stat) = api_alias_mut(&mut (*pCtx).pDecoderStatistics) {
+            {
+                let stat = &mut (*pCtx).pDecoderStatistics;
                 if stat.uiWidth != kiActualWidth as u32 || stat.uiHeight != kiActualHeight as u32 {
                     stat.uiResolutionChangeTimes += 1;
                     stat.uiWidth = kiActualWidth as u32;
@@ -1730,7 +1731,8 @@ pub fn ParseDecRefPicMarking(
                             return -1;
                         }
                         bMmco5Exist = true;
-                        if let Some(info) = api_alias_mut(&mut pCtx.pLastDecPicInfo) {
+                        {
+                            let info = &mut pCtx.pLastDecPicInfo;
                             info.iPrevPicOrderCntLsb = 0;
                             info.iPrevPicOrderCntMsb = 0;
                         }
@@ -1974,7 +1976,8 @@ pub fn WelsDecoderDefaults(pCtx: &mut SWelsDecoderContext, _pLogCtx: *mut c_void
     (*pCtx).iLastImgHeightInPixel = 0;
     (*pCtx).bFreezeOutput = true;
     (*pCtx).iFrameNum = -1;
-    if let Some(info) = api_alias_mut(&mut pCtx.pLastDecPicInfo) {
+    {
+        let info = &mut pCtx.pLastDecPicInfo;
         info.iPrevFrameNum = -1;
     }
     (*pCtx).iErrorCode = ERR_NONE;
@@ -1990,16 +1993,19 @@ pub fn WelsDecoderDefaults(pCtx: &mut SWelsDecoderContext, _pLogCtx: *mut c_void
     WelsResetRefPic(pCtx);
     (*pCtx).iActiveFmoNum = 0;
     (*pCtx).pPicBuff = None;
-    if let Some(info) = api_alias_mut(&mut pCtx.pLastDecPicInfo) {
+    {
+        let info = &mut pCtx.pLastDecPicInfo;
         info.pPreviousDecodedPictureInDpb = None;
     }
-    if let Some(stat) = api_alias_mut(&mut (*pCtx).pDecoderStatistics) {
+    {
+        let stat = &mut (*pCtx).pDecoderStatistics;
         stat.iAvgLumaQp = -1;
         stat.iStatisticsLogInterval = 1000;
     }
     (*pCtx).bUseScalingList = false;
     (*pCtx).iFeedbackNalRefIdc = -1;
-    if let Some(info) = api_alias_mut(&mut pCtx.pLastDecPicInfo) {
+    {
+        let info = &mut pCtx.pLastDecPicInfo;
         info.iPrevPicOrderCntMsb = 0;
         info.iPrevPicOrderCntLsb = 0;
     }
@@ -2094,6 +2100,10 @@ pub fn WelsOpenDecoder(pCtx: &mut SWelsDecoderContext, _pLogCtx: *mut c_void) ->
     let mut cpu_cores = 0i32;
     (*pCtx).uiCpuFlag = { WelsCPUFeatureDetect(&mut cpu_cores) } as u32;
     { WelsInitDecoderFuncs(pCtx) };
+    // `decoder.cpp:606` — the vlc tables, right after the function pointers. T8.A6
+    // moved this here from `WelsCreateDecoder`, which had it because the table was a
+    // `CWelsDecoderImpl` member rather than the context's field.
+    crate::decoder::parse_mb_syn_cavlc::InitVlcTable(&mut pCtx.pVlcTable);
     (*pCtx).bParamSetsLostFlag = true;
     (*pCtx).bNewSeqBegin = true;
     (*pCtx).bPrintFrameErrorTraceFlag = true;
@@ -2319,7 +2329,8 @@ fn parse_slice_header_into(
         let iPpsId = uiCode as i32;
 
         if !(*pCtx).sSpsPpsCtx.bPpsAvailFlags[iPpsId as usize] {
-            if let Some(stat) = api_alias_mut(&mut (*pCtx).pDecoderStatistics) {
+            {
+                let stat = &mut (*pCtx).pDecoderStatistics;
                 stat.iPpsReportErrorNum += 1;
             }
             (*pCtx).iErrorCode |= dsNoParamSets;
@@ -2438,8 +2449,8 @@ fn parse_slice_header_into(
                 pSliceHeadExt.sSliceHeader.iDeltaPicOrderCntBottom = iCode;
             }
             // The api-owned alias family, through its accessor (T5.AC4).
-            let prevLsb = api_alias(&pCtx.pLastDecPicInfo).map_or(0, |i| i.iPrevPicOrderCntLsb);
-            let prevMsb = api_alias(&pCtx.pLastDecPicInfo).map_or(0, |i| i.iPrevPicOrderCntMsb);
+            let prevLsb = pCtx.pLastDecPicInfo.iPrevPicOrderCntLsb;
+            let prevMsb = pCtx.pLastDecPicInfo.iPrevPicOrderCntMsb;
             let pocMsb = if pocLsb < prevLsb && (prevLsb - pocLsb) >= (iMaxPocLsb / 2) {
                 prevMsb + iMaxPocLsb
             } else if pocLsb > prevLsb && (pocLsb - prevLsb) > (iMaxPocLsb / 2) {
@@ -2452,7 +2463,8 @@ fn parse_slice_header_into(
                 pSliceHeadExt.sSliceHeader.iPicOrderCntLsb += pSliceHeadExt.sSliceHeader.iDeltaPicOrderCntBottom;
             }
             if pNalHeaderExt.sNalUnitHeader.uiNalRefIdc != 0 {
-                if let Some(info) = api_alias_mut(&mut pCtx.pLastDecPicInfo) {
+                {
+                    let info = &mut pCtx.pLastDecPicInfo;
                     info.iPrevPicOrderCntLsb = pocLsb;
                     info.iPrevPicOrderCntMsb = pocMsb;
                 }
@@ -2942,7 +2954,8 @@ pub fn UpdateAccessUnit(pCtx: &mut SWelsDecoderContext) -> i32 {
             }
             if uiActualIdx == pCurAu.uiActualUnitsNum {
                 // No IDR in this access unit.
-                if let Some(stat) = api_alias_mut(&mut (*pCtx).pDecoderStatistics) {
+                {
+                    let stat = &mut (*pCtx).pDecoderStatistics;
                     stat.uiIDRLostNum += 1;
                 }
                 if !(*pCtx).bParamSetsLostFlag {
@@ -3383,7 +3396,8 @@ pub fn WelsDecodeAccessUnitEnd(pCtx: &mut SWelsDecoderContext) {
                 pCurNal.sNalHeaderExt,
                 pCurNal.sNalData.sVclNal.sSliceHeaderExt.sSliceHeader,
             );
-            if let Some(info) = api_alias_mut(&mut pCtx.pLastDecPicInfo) {
+            {
+                let info = &mut pCtx.pLastDecPicInfo;
                 info.sLastNalHdrExt = last.0;
                 info.sLastSliceHeader = last.1;
             }
@@ -3490,21 +3504,20 @@ pub fn WelsDecodeInitAccessUnitStart(
     pDstInfo: &mut SBufferInfo,
 ) -> i32 {
     (*pCtx).bAuReadyFlag = false;
-    if let Some(info) = api_alias_mut(&mut pCtx.pLastDecPicInfo) {
+    {
+        let info = &mut pCtx.pLastDecPicInfo;
         info.bLastHasMmco5 = false;
     }
     let bTmpNewSeqBegin = CheckNewSeqBeginAndUpdateActiveLayerSps(pCtx);
     if bTmpNewSeqBegin {
-        if let Some(seq) = api_alias_mut(&mut pCtx.pStreamSeqNum) {
-            *seq += 1;
-        } else {
-            (*pCtx).iSeqNum += 1;
-        }
+        // `decoder_core.cpp:2265`'s `if (pCtx->pStreamSeqNum) (*pCtx->pStreamSeqNum)++;
+        // else pCtx->iSeqNum++;`. **T8.A6 retires the else arm with the pointer**: the
+        // counter is the context's own field now, so the null the C tested for cannot
+        // occur and the arm it guarded is unreachable code, not a fallback.
+        pCtx.pStreamSeqNum += 1;
     }
     (*pCtx).bNewSeqBegin = (*pCtx).bNewSeqBegin || bTmpNewSeqBegin;
-    if let Some(&seq) = api_alias(&pCtx.pStreamSeqNum) {
-        (*pCtx).iSeqNum = seq;
-    }
+    (*pCtx).iSeqNum = pCtx.pStreamSeqNum;
     let iErr = WelsDecodeAccessUnitStart(pCtx);
     GetVclNalTemporalId(pCtx);
 
@@ -3876,11 +3889,11 @@ pub fn WelsDqLayerDecodeStart(
     pCtx.iFrameNum = iFrameNum;
     // `pCtx->pSliceHeader = pSh`'s replacement: the node, by index.
     pCtx.slice_hdr_nal = Some(nal_idx);
-    // The three arguments are three disjoint fields of the context: the api-owned
-    // statistics through `api_alias_mut`, and both parameter sets out of `sSpsPpsCtx`.
+    // The three arguments are three disjoint fields of the context: the statistics,
+    // owned since T8.A6, and both parameter sets out of `sSpsPpsCtx`.
     let SWelsDecoderContext { pDecoderStatistics, sSpsPpsCtx, .. } = &mut *pCtx;
     UpdateDecoderStatisticsForActiveParaset(
-        api_alias_mut(pDecoderStatistics),
+        Some(pDecoderStatistics),
         sps_of(sSpsPpsCtx, sps_ref),
         pps_of(sSpsPpsCtx, pps_id),
     );
@@ -4216,7 +4229,7 @@ pub fn DecodeCurrentAccessUnit(
                     // threading gap), so the C++'s single-threaded read is the whole
                     // of it.
                     let iPrevFrameNum =
-                        api_alias(&pCtx.pLastDecPicInfo).map_or(-1, |i| i.iPrevFrameNum);
+                        pCtx.pLastDecPicInfo.iPrevFrameNum;
                     let wrap = (1i32 << uiLog2MaxFrameNum) - 1;
                     if !kbIdrFlag
                         && pSh.iFrameNum != iPrevFrameNum
@@ -4372,7 +4385,8 @@ pub fn DecodeCurrentAccessUnit(
             }
 
             let dec = pCtx.pDec;
-            if let Some(info) = api_alias_mut(&mut pCtx.pLastDecPicInfo) {
+            {
+                let info = &mut pCtx.pLastDecPicInfo;
                 info.pPreviousDecodedPictureInDpb = dec;
             }
             (*pCtx).bUsedAsRef = (*pCtx).uiNalRefIdc > 0;
@@ -4431,11 +4445,13 @@ pub fn DecodeCurrentAccessUnit(
                 .and_then(|au| au.node(au.uiStartPos as usize))
                 .is_some_and(|nal| nal.sNalHeaderExt.sNalUnitHeader.uiNalRefIdc > 0);
             if bStartNalIsRef {
-                if let Some(info) = api_alias_mut(&mut pCtx.pLastDecPicInfo) {
+                {
+                    let info = &mut pCtx.pLastDecPicInfo;
                     info.iPrevFrameNum = iLastSliceFrameNum;
                 }
             }
-            if let Some(info) = api_alias_mut(&mut pCtx.pLastDecPicInfo) {
+            {
+                let info = &mut pCtx.pLastDecPicInfo;
                 if info.bLastHasMmco5 {
                     info.iPrevFrameNum = 0;
                 }
@@ -4476,7 +4492,7 @@ pub fn CheckAndFinishLastPic(
             .copied();
         // The last-picture halves are copied out first: `api_alias` borrows the field
         // and `sps_of` borrows `sSpsPpsCtx`, and both are arguments to one call.
-        let last = api_alias(&pCtx.pLastDecPicInfo).map(|i| (i.sLastNalHdrExt, i.sLastSliceHeader));
+        let last = Some((pCtx.pLastDecPicInfo.sLastNalHdrExt, pCtx.pLastDecPicInfo.sLastSliceHeader));
         if let (Some(pCurNal), Some((last_hdr, last_sh))) = (cur_nal.as_ref(), last) {
             bAuBoundaryFlag = (*pCtx).iTotalNumMbRec != 0
                 && crate::decoder::nalu::CheckAccessUnitBoundaryExt(
@@ -4534,7 +4550,8 @@ pub fn CheckAndFinishLastPic(
             }
             DecodeFrameConstruction(pCtx, dq_cur.as_deref(), ppDst, pDstInfo);
             let dec = pCtx.pDec;
-            if let Some(info) = api_alias_mut(&mut pCtx.pLastDecPicInfo) {
+            {
+                let info = &mut pCtx.pLastDecPicInfo;
                 info.pPreviousDecodedPictureInDpb = dec;
                 if info.sLastNalHdrExt.sNalUnitHeader.uiNalRefIdc > 0 {
                     if MarkECFrameAsRef(pCtx, dq_cur.as_deref_mut()) == ERR_INFO_INVALID_PTR {
@@ -4551,10 +4568,10 @@ pub fn CheckAndFinishLastPic(
             (*pCtx).bFrameFinish = true;
         } else {
             if DecodeFrameConstruction(pCtx, dq_cur.as_deref(), ppDst, pDstInfo) != ERR_NONE {
-                if api_alias(&pCtx.pLastDecPicInfo).is_some_and(|i| {
-                    i.sLastNalHdrExt.sNalUnitHeader.uiNalRefIdc > 0
-                        && i.sLastNalHdrExt.uiTemporalId == 0
-                })
+                if {
+                    pCtx.pLastDecPicInfo.sLastNalHdrExt.sNalUnitHeader.uiNalRefIdc > 0
+                        && pCtx.pLastDecPicInfo.sLastNalHdrExt.uiTemporalId == 0
+                }
                 {
                     (*pCtx).iErrorCode |= dsNoParamSets;
                 } else {
@@ -4570,11 +4587,13 @@ pub fn CheckAndFinishLastPic(
             .and_then(|au| au.node(au.uiStartPos as usize))
             .is_some_and(|nal| nal.sNalHeaderExt.sNalUnitHeader.uiNalRefIdc > 0);
         if bStartNalIsRef {
-            if let Some(info) = api_alias_mut(&mut pCtx.pLastDecPicInfo) {
+            {
+                let info = &mut pCtx.pLastDecPicInfo;
                 info.iPrevFrameNum = info.sLastSliceHeader.iFrameNum;
             }
         }
-        if let Some(info) = api_alias_mut(&mut pCtx.pLastDecPicInfo) {
+        {
+            let info = &mut pCtx.pLastDecPicInfo;
             if info.bLastHasMmco5 {
                 info.iPrevFrameNum = 0;
             }

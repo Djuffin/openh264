@@ -1463,12 +1463,8 @@ pub struct CWelsDecoderImpl {
     pub bEndOfStream: bool,
     // Members owned by CWelsDecoder in C++ (welsDecoderExt.h) and wired into the
     // decoder context by InitDecoderCtx.
-    pub sLastDecPicInfo: crate::decoder::decoder_context::SWelsLastDecPicInfo,
-    pub sDecoderStatistics: crate::decoder::decoder_context::SDecoderStatistics,
     pub sPictInfoList: [crate::decoder::decoder_context::SPictInfo; 16],
     pub sReoderingStatus: crate::decoder::decoder_context::SPictReoderingStatus,
-    pub iStreamSeqNum: i32,
-    pub sVlcTable: crate::decoder::parse_mb_syn_cavlc::SVlcTable,
     /// `m_bIsBaseline` — reordering is bypassed entirely for baseline profiles.
     pub bIsBaseline: bool,
     /// `m_iLastBufferedIdx`
@@ -1602,13 +1598,16 @@ unsafe extern "C" fn decoder_init_c(this: *mut ISVCDecoder, pParam: *const SDeco
             // again at the tail of this function, which is where the C++ has the
             // one copy; the two are the same store.
             ctx_box.pParam = *pParam;
-            ctx_box.pLastDecPicInfo = ptr::addr_of_mut!((*dec_impl).sLastDecPicInfo);
-            ctx_box.pDecoderStatistics = ptr::addr_of_mut!((*dec_impl).sDecoderStatistics);
-            ctx_box.pVlcTable = ptr::addr_of_mut!((*dec_impl).sVlcTable);
             ctx_box.pPictInfoList = ptr::addr_of_mut!((*dec_impl).sPictInfoList) as *mut _;
             ctx_box.pPictReoderingStatus = ptr::addr_of_mut!((*dec_impl).sReoderingStatus);
-            ctx_box.pStreamSeqNum = ptr::addr_of_mut!((*dec_impl).iStreamSeqNum);
             let p_ctx = Box::into_raw(ctx_box);
+            // `CWelsDecoder::InitDecoder` runs this over `m_sLastDecPicInfo` just
+            // before it calls `InitDecoderCtx` (`welsDecoderExt.cpp:386`); the field
+            // is the context's since T8.A6, so its defaults are set where the context
+            // is built. They are **not** zeros — `iPrevFrameNum` starts at -1.
+            crate::decoder::decoder_core::WelsDecoderLastDecPicInfoDefaults(
+                &mut (*p_ctx).pLastDecPicInfo,
+            );
             crate::decoder::decoder_core::WelsDecoderDefaults(&mut *p_ctx, ptr::null_mut());
             crate::decoder::decoder_core::WelsDecoderSpsPpsDefaults(&mut (*p_ctx).sSpsPpsCtx);
             let ret = crate::decoder::decoder_core::WelsInitStaticMemory(&mut *p_ctx);
@@ -2238,28 +2237,21 @@ pub unsafe extern "C" fn WelsCreateDecoder(ppDecoder: *mut *mut ISVCDecoder) -> 
         pCtx: ptr::null_mut(),
         align: crate::common::CMemoryAlign::new(16),
         bEndOfStream: false,
-        sLastDecPicInfo: Default::default(),
-        sDecoderStatistics: unsafe { std::mem::zeroed() },
         sPictInfoList: unsafe { std::mem::zeroed() },
         sReoderingStatus: Default::default(),
-        iStreamSeqNum: 0,
-        // T5.AC7: `SVlcTable`'s sub-tables are `&'static` slices now, so a zeroed
-        // shell is an invalid value rather than a null-pointer one — the empty
-        // slice is what "not yet initialised" spells, and `InitVlcTable` below
-        // overwrites every field either way.
-        sVlcTable: crate::decoder::parse_mb_syn_cavlc::SVlcTable {
-            kpCoeffTokenVlcTable: [[&[]; 8]; 4],
-            kpChromaCoeffTokenVlcTable: &[],
-            kpZeroTable: [&[]; 7],
-            kpTotalZerosTable: [[&[]; 15]; 2],
-        },
         bIsBaseline: false,
         iLastBufferedIdx: 0,
         pPicBuff: ptr::null_mut(),
         uiDecodeTimeStamp: 0,
     });
-    crate::decoder::parse_mb_syn_cavlc::InitVlcTable(&mut dec.sVlcTable);
-    crate::decoder::decoder_core::WelsDecoderLastDecPicInfoDefaults(&mut dec.sLastDecPicInfo);
+    // **T8.A6: `InitVlcTable` and `WelsDecoderLastDecPicInfoDefaults` moved out of
+    // this factory.** Both used to run over `CWelsDecoderImpl` members here, at
+    // decoder *creation*; both tables are the context's fields now and are filled
+    // where the reference fills them — `InitVlcTable` inside `WelsOpenDecoder`
+    // (`decoder.cpp:606`) and the last-decoded-picture defaults in `decoder_init_c`'s
+    // construction block, which is `CWelsDecoder::InitDecoder`'s position
+    // (`welsDecoderExt.cpp:386`). Their defaults are not zeros, so where they run
+    // is a fact and not a formality.
     crate::decoder::decoder_core::ResetReorderingPictureBuffers(
         &mut dec.sReoderingStatus,
         &mut dec.sPictInfoList,

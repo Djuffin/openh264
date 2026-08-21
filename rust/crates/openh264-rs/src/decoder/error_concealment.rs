@@ -1102,7 +1102,7 @@ mod tests {
         ctx.active_sps = Some(SpsRef { id: 0, subset: false });
                 ctx.pPicBuff = Some(pool);
                 ctx.pDec = Some(dst_id);
-                ctx.pLastDecPicInfo = &mut last as *mut _;
+                ctx.pLastDecPicInfo = last;
                 // The copy itself goes through the context's copy-function pair;
                 // `new_boxed()` leaves it zeroed, which would make both arms write
                 // nothing and the test vacuous.
@@ -1183,7 +1183,7 @@ mod tests {
                 ctx.sCopyFunc.bInstalled = true;
                 ctx.pPicBuff = Some(pool);
                 ctx.pDec = Some(dst_id);
-                ctx.pLastDecPicInfo = &mut last as *mut _;
+                ctx.pLastDecPicInfo = last;
                 dst_id
             };
 
@@ -1196,7 +1196,7 @@ mod tests {
                 .expect("the fixture's slot")
                 .plane(0)
                 .at(0, 0);
-            ctx.pLastDecPicInfo = std::ptr::null_mut();
+            ctx.pLastDecPicInfo = Default::default();
             out
         };
 
