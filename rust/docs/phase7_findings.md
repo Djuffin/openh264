@@ -217,3 +217,283 @@ a bench change rather than an investigation.
 sweep, and that is where F3 lives. It is untested *for speed*. The byte instrument
 and the perf instrument disagree about which paths they cover, and only the byte one
 was ever checked.
+
+---
+
+## F69 — F3's cause: the raw translation dropped `mutexSliceNumUpdate`, and the variable it guards is the one whose corruption empties the frame
+
+**Status: FIXED at T7.B3, closed by a three-arm ablation.** Found by reading, at
+step 3, while answering a bookkeeping question — "is `mutexSliceNumUpdate` dead?"
+The answer is that it is dead **in the port** and live **in the C++**.
+
+### The divergence
+
+`codec/encoder/core/src/svc_encode_slice.cpp:1776-1791`, inside
+`DynSlcJudgeSliceBoundaryStepBack`:
+
+```cpp
+if (pEncCtx->pSvcParam->iMultipleThreadIdc > 1) {
+  WelsMutexLock (&pEncCtx->pSliceThreading->mutexSliceNumUpdate);
+  //lock the acessing to this variable: pSliceCtx->iSliceNumInFrame
+}
+//tmp choice to avoid complex memory operation, 100520, to be modify
+AddSliceBoundary (pEncCtx, pCurSlice, pSliceCtx, pCurMb, iCurMbIdx, kiEndMbIdxOfPartition);
+++ pSliceCtx->iSliceNumInFrame;
+if (pEncCtx->pSvcParam->iMultipleThreadIdc > 1) {
+  WelsMutexUnlock (&pEncCtx->pSliceThreading->mutexSliceNumUpdate);
+}
+```
+
+The port had the two statements and neither lock. `git log -S mutexSliceNumUpdate`
+puts the omission in **`68c4f6a5 "Raw translation"`** — the same commit that
+dropped `pThreadBsBuffer`'s free (T7.A3). The field survived the translation into
+`SSliceThreading`, is initialised in `RequestMtResource` and destroyed in
+`ReleaseMtResource`, and **has never been locked anywhere in this crate**. It was
+on session B's step-3 delete list as "dead", which is how it was found.
+
+### Why it produces exactly F3
+
+`pSliceCtx` is `addr_of_mut!((*pCurLayer).sSliceEncCtx)` — the **layer's** slice
+context, one per layer, shared by every worker on the dynamic path. So:
+
+* `++iSliceNumInFrame` is an unsynchronised read-modify-write across threads. A
+  lost increment leaves `iEncodeSliceNum != pCurLayer->sSliceEncCtx.iSliceNumInFrame`
+  at `ReOrderSliceInLayer` (`svc_encode_slice.rs:3659`), which answers
+  `ENC_RETURN_UNEXPECTED`; `SliceLayerInfoUpdate` propagates it and
+  `WelsEncoderEncodeExt` returns it, so **the frame is emitted empty**. That is
+  F3's shape in **18 of the 25** hits of its before-arm.
+* `AddSliceBoundary` writes `pSliceCtx->pOverallMbMap` over the next slice's
+  macroblock range and copies the slice header into the next slice — the C++'s own
+  comment one line above the lock calls it "complex memory operation". Interleaved,
+  it produces a boundary that is wrong rather than absent: **short** (6 of 25) or
+  **longer** (1 of 25) output.
+
+The fingerprint follows from the code: `iMultipleThreadIdc > 1` and the dynamic
+path only, which is `mt` + `sm=3` + `t in {2,4}` — F3's signature, unchanged since
+its first measurement.
+
+### The ablation — three arms, one variable each
+
+| arm | tree | runs | hits | rate |
+|---|---|---|---|---|
+| before (measurement 88) | `b08d6c47`, untouched | 3000 | 25 | 1/120 |
+| **A** (measurement 91) | `46a66023` — pool dispatch deleted from both paths, claiming mutex gone, `mutexSliceNumUpdate` still missing | 2000 | 20 | 1/100 |
+| **B** (measurement 92) | `T7.B3` — the lock restored | 2000 | **0** | — |
+
+**Arm A settles what the charter could not assume.** The phase's ablation was
+designed to test "the deleted claiming/pool machinery" as F3's cause. Against the
+before-arm, arm A is 20/2000 vs 25/3000 — z = 0.61, p ≈ 0.54, **not a
+distinguishable rate.** The machinery was not the cause; deleting it neither fixed
+F3 nor moved it. Without arm A, a clean arm B would have been evidence for two
+changes at once and for neither in particular.
+
+
+**Arm B closes it.** 0 hits in 2000 runs at the same density and the same load.
+Against arm A's measured 1/100 that is P = e^-20 = 2e-9; against the before-arm's
+1/120, e^-16.7 = 6e-8. **F3 is closed as F69**, and the two facts that make the
+verdict attributable rather than merely favourable are that arm A held the lock
+constant while removing the machinery (no change) and arm B held the machinery
+constant while restoring the lock (total).
+
+### What this says about the phase's design
+
+The charter fixed the ablation in advance as a test of "the deleted claiming/pool
+machinery" (`prompts/phase7.md` §2). That hypothesis is now measured and **false**.
+The machinery was worth deleting for every other reason the phase gives — five
+`unsafe impl` pairs, a `static mut`, two C++-list ports, a `usize` laundering — but
+it was not the defect, and a single after-arm run on a tree that had both changes
+would have credited it anyway. **One variable per arm is the whole reason the
+answer is usable.**
+
+### The general lesson, and it is the third of its kind in this phase
+
+F69 is the third defect this project has found by asking a *bookkeeping* question
+rather than a behavioural one — T7.A3's leak (found while proving premise 1),
+`SSliceThreadPrivateData`'s zero readers (found while listing what to delete), and
+now this. All three were invisible to every gate the project owns: byte parity
+cannot see a lock that is missing when the race does not fire, Miri never ran the
+MT path (F12's skip), and the unit tests never take `iMultipleThreadIdc > 1`.
+**"Which of these fields is dead?" is a question that finds live bugs**, because a
+field that looks dead in the port and is live in the reference is a dropped
+statement by definition.
+
+---
+
+## F70 — `InitSliceSettings` reads a slice-argument through a tag its own callee popped, on the multi-slice arm
+
+**Status: FIXED at T7.B4.** Found by the fork/join Miri probe on its **first run**,
+and not because the probe threads: because it is the first test in this crate ever
+to ask for `SM_FIXEDSLCNUM_SLICE`.
+
+`encoder_ext.rs:1309` bound `let pSliceArgument = &mut (*pDlp).sSliceArgument;` — a
+`Unique` retag over the whole slice-argument struct — and held it across the
+`SM_FIXEDSLCNUM_SLICE` arm, which passes **a second `&mut` to the same field**
+(`:1320`) to `SliceArgumentValidationFixedSliceMode`. The second retag pops the
+first, and `:1329` then reads `pSliceArgument.uiSliceNum` through the dead tag.
+Miri's report names all three lines.
+
+This is **F13's family and S29's clause**, in the one place the project had never
+looked: parameter validation. The fix is the same one that family always takes —
+`addr_of_mut!`, which creates no reference, so there is no tag to pop.
+
+**What it cost to not know.** The arm is reached by every multi-slice
+configuration: 369 diffharness rows a sweep include `sm=1` and `sm=2`, and every
+one of them ran this UB. No byte gate can see it — the read returns the right value
+on every compiler this project has used — and Miri had never executed the arm
+because all four encoder probes were `SM_SINGLE_SLICE`. **Two instruments, and the
+configuration axis that would have crossed them was missing from both.**
+
+---
+
+## F71 — the root-accessor idiom is sound for one thread and unsound for two
+
+**Status: PARTLY FIXED at T7.B4; the residue is Phase 9's.** Found by the same
+probe, immediately after F70, and it is the class F12's Miri skip had been hiding
+for five phases.
+
+### The mechanism
+
+S28 established the project's root-accessor idiom: a raw cursor must carry the
+*whole* allocation's provenance, so accessors derive from the root —
+
+```rust
+pub unsafe fn slice_bank_root(pCurLayer: *mut SDqLayer, kiBank: usize) -> *mut SSlice {
+    let bank: &mut Vec<SSlice> = &mut (*pCurLayer).sSliceBufferInfo[kiBank].pSliceBuffer;
+    bank.as_mut_ptr()
+}
+```
+
+That is correct about provenance and correct for one thread. Under two it is a
+**data race**: `&mut` is a `Unique` retag over the `Vec`'s own three words, and
+Miri counts a retag as an access ("retags permit optimizations that insert
+speculative reads or writes"). Every encoder worker resolves the *same* layer, the
+*same* parameter block, the *same* function table — for every fixed slice mode all
+workers resolve **bank 0** — so two workers calling the same accessor at the same
+instant race on the accessor's own borrow, while neither writes anything.
+
+**Nothing in the crate had ever run two threads under Miri**, so the whole family
+was unaudited: `--skip wels_thread_pool` (F12) named the pool, and no test drove
+`iMultipleThreadIdc > 1`.
+
+### The fix, and it is mechanical
+
+Narrow the access to the *container* from exclusive to shared, and take the buffer
+pointer as a value rather than through a reborrow:
+
+```rust
+let bank = std::ptr::addr_of!((*pCurLayer).sSliceBufferInfo[kiBank].pSliceBuffer);
+(*bank).as_ptr() as *mut SSlice
+```
+
+The returned pointer is bit-identical and carries the buffer's own provenance, so
+what is behind it stays writable; only the access to the three-word header narrows.
+For `Option<Box<T>>` and `Box<T>` slots the same idea is spelled as a pointer-sized
+`ptr::read` — the layout is guaranteed, `None` is null, and reading a pointer value
+retags nothing.
+
+**Fixed here:** `ctx_dq_layer`, `ctx_ref_list`, `ctx_param`, `ctx_func_list`,
+`ctx_vaa`, `ctx_mvd_cost_table`, `ctx_rc`, `ctx_ltr`, `ctx_frame_bs`,
+`ctx_dq_idc_map`, `ctx_sps_array`, `ctx_subset_array`, `ctx_pps_array`;
+`slice_bank_root`, `mb_list_root`, and `MbArray::root_ptr` (new, beside the
+`as_mut_ptr` it does not replace — single-threaded callers keep the old one).
+
+### Where it stops, and why the boundary is principled
+
+The next report after those fixes is not a retag conflict but a **real shared
+write**: `WelsCodeOneSlice` stamps `(*pCurLayer).sLayerInfo.sNalHeaderExt` per
+slice (`svc_encode_slice.rs:2812`), from every worker. **The C++ does the same
+thing** — `svc_encode_slice.cpp:1649-1655` — so it is a shared latent race in the
+reference design, not a port divergence, and it is benign in practice only because
+every worker writes the same value.
+
+That cannot be spelled away. Making the layer header per-slice is a change to what
+a slice *owns*, which is the context split **F67** already establishes as Phase 9's
+precondition. So F71 is the third sighting of the same object: F67 found it as a
+`!Sync` count, T7.B2 found it as an ordering argument, and Miri finds it here as a
+race. The accessor half is fixed; the ownership half travels with F67.
+
+**The probe is `#[cfg_attr(miri, ignore)]` with this finding cited** — gates.sh's
+own rule that no skip may exist without a finding, applied to a test rather than a
+module. It runs in both profiles normally.
+
+---
+
+## F72 — the load-balancing path is half-translated: the port has the consumer of the feedback loop and not the producer
+
+**Status: OPEN, fenced, owner unassigned.** This is step 5's ruling, and the read
+changed the answer the brief expected.
+
+### What the read found
+
+The load-balancing path is a **feedback loop across frames**: frame N's per-slice
+encode *times* become frame N+1's slice boundaries.
+
+| stage | C++ | port |
+|---|---|---|
+| stamp `uiSliceConsumeTime` per slice | `wels_task_encoder.h` FinishTask | present (T7.B1/B2 carry it) |
+| **`CalcSliceComplexRatio`** — times -> `iSliceComplexRatio` | called at `encoder_ext.cpp:4069` | **function present, never called** |
+| `AdjustBaseLayer`/`AdjustEnhanceLayer` -> `NeedDynamicAdjust` | `encoder_ext.cpp:3573` | present (`encoder_ext.rs:3196`) |
+| `DynamicAdjustSlicing` — ratios -> run lengths | present | present |
+| `UpdateMbListNeighborParallel` re-slice | present | present (T7.B1's fork) |
+
+**Four of the five stages are there.** The missing one is the producer of the only
+input the fourth consumes. `iSliceComplexRatio` is initialised to 0 and no live path
+writes it — the sole caller of `CalcSliceComplexRatio` in the crate is a unit test.
+
+So `DynamicAdjustSlicing` computes `WelsDivRound(kiCountNumMb * 0, INT_MULTIPLY) = 0`
+for every slice, clamps each to `iMinimalMbNum`, and gives the remainder to the last.
+**The balance is degenerate, not absent** — nothing crashes, nothing warns, and the
+encoder happily produces a bitstream with a worse slice distribution than the
+reference's.
+
+### Why nothing caught it
+
+`bUseLoadBalancing` is `false` in both diffharness drivers (`cxx_enc.cpp:119`) and
+so has **no byte coverage in any gate** — session A's brief already recorded that.
+What it did not record is that the flag is **`true` by default through the public
+API**: `GetDefaultParams` sets it on both sides (`param_svc.h:146`,
+`param_svc.rs:294`). Any ordinary caller with `uiSliceMode = 1` and
+`iMultipleThreadIdc >= uiSliceNum` takes this path.
+
+### The byte evidence, which is what makes the ruling
+
+T7.B0's bench knob reached the path for the first time. Two consecutive runs of the
+**C++ reference alone**, same input, same parameters:
+
+```
+run 1   22834   144438   233477   5624    122715
+run 2   22660   144340   233251   11357   120687
+```
+
+**The reference is not deterministic on this path**, which is what
+`codec_app_def.h:579` says in words: "will change slicing of a picture during the
+run-time of multi-thread encoding, so the result of each run may be different."
+With `BENCH_LOAD_BALANCING=0` every row is bit-identical, `sm=1 n=4` at four threads
+included.
+
+### The ruling
+
+**Both halves of the brief's dichotomy apply, and that is the finding.**
+
+* The path is **incomplete in the port**, so the brief's fence applies: tagged
+  `LOAD_BALANCING(incomplete: F72)` at the missing call
+  (`slice_multi_threading.rs`, `CalcSliceComplexRatio`) and at the consumer
+  (`encoder_ext.rs`, the `SM_FIXEDSLCNUM_SLICE` arm), with the guard cited and this
+  finding named at both.
+* And it **cannot be byte-gated even once completed**, because the boundaries are a
+  function of measured time. So when someone does complete it, it joins the
+  `CABA2_SVA_B` precedent as the project's **second expected-divergent class** — a
+  recorded position, not a defect — and gets structural coverage only.
+
+**Not completed here, deliberately.** The brief's instruction for an incomplete path
+is to fence it and say which. Completing it is one call at the C++'s own site under
+the guard the port already reproduces, and it is a behaviour change on a path with
+no coverage; that is a decision for whoever owns the path, made with this finding in
+front of them.
+
+### One thing this does *not* mean
+
+The rest of the multi-threaded encoder is unaffected. `bUseLoadBalancing` gates only
+which task class `CreateTasks` built (now: whether `EncodeFixedSlicesForked` stamps
+`uiSliceConsumeTime`) and whether the adjusters run. Every gated configuration in
+this project runs with it off, and 369/369 in both profiles says so.

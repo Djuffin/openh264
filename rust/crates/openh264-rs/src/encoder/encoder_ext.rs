@@ -3193,6 +3193,15 @@ pub unsafe fn WelsEncoderEncodeExt(
         iCurHeight = (*pParam).iVideoHeight;
 
         match (*pParam).sSliceArgument.uiSliceMode {
+            // **`LOAD_BALANCING(incomplete: F72)`.** This arm is the consumer half of
+            // a two-halved loop and the port only has this half: the producer,
+            // `CalcSliceComplexRatio` (`encoder_ext.cpp:4069`, same guard as below),
+            // was never called, so the ratios these adjusters read are permanently
+            // zero. Reachable by default — `GetDefaultParams` sets
+            // `bUseLoadBalancing = true` on both sides — and un-gateable by
+            // construction even once completed, because the boundaries are a
+            // function of measured per-slice *times*. See F72; the diffharness pins
+            // the flag off (`cxx_enc.cpp:119`) and so does the encoder probe.
             SliceModeEnum::SM_FIXEDSLCNUM_SLICE => {
                 if (*pSvcParam).iMultipleThreadIdc > 1
                     && (*pSvcParam).bUseLoadBalancing

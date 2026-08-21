@@ -2936,3 +2936,107 @@ loop of its own shape.
 
 Running total: **eighty-nine measurements, twenty-eight alternations, sixty-one
 acquittals.**
+
+---
+
+### Measurement 90 — Phase 7 session B, T7.B1's alternation: the fork/join does not move F3's rate (2026-08-20)
+
+The fixed-mode fork/join (`EncodeFixedSlicesForked`) landed, and the first `mt`
+sweep over it drew one hit — the signature exactly:
+
+```
+debug   mt CiscoVT2people_320x192_12fps t=4 sm=3 n=600 cabac=0 rc=0 :: C++ 40992  Rust 0
+```
+
+The one-hit retry came back **4/5**, which under the standing rule is not an
+acquittal, so the alternation ran. **And there is a structural argument beside the
+statistical one this time**: `sm=3` is `SM_SIZELIMITED_SLICE`, which at T7.B1 still
+went through `ExecuteTaskConstrainedSize` and the pool — the commit under test does
+not touch that path at all. What it *does* touch is `SSliceThreading`'s layout (a
+new `uiThreadBsBufferNum` field), which is measurement 89's reason for alternating
+rather than arguing: a layout change can move a race's window without touching a
+line of its logic.
+
+**The alternation.** HEAD (`T7.B1`) against **control = `9a392cc9`**, the session's
+step-0 commit, which contains no production change of any kind. Built in a
+`git worktree` so both trees exist at once, interleaved run-for-run inside one loop,
+**250 iterations x 2 profiles per arm = 500 runs each**, under the four-stream
+compile load (`f3_arm.sh`'s generator, load average 9.8 at the start of the run).
+
+```
+HEAD  debug 2/250   release 8/250    => 10/500
+CTRL  debug 1/250   release 5/250    =>  6/500
+```
+
+10 against 6 in 500 is not a distinguishable rate (two-proportion z = 1.01,
+p ≈ 0.31), and the release-over-debug asymmetry shows on both arms again — 13
+release against 3 debug across the two. **Acquitted as F3.**
+
+**The rate is 16/1000 ≈ 1/63**, the same number measurement 89 drew on the same
+box at the same density, against `f3_arm.sh`'s 1/100-1/120 at the arm's interleaved
+density. Third independent confirmation that F3's rate is a function of packing and
+that the second digit of any quoted rate is not real.
+
+**Two further F3-protocol events in the same step, both acquitted by the 5x retry**
+(5/5 byte-identical each), both on `sm=3`, the path the step does not touch:
+
+```
+family run 1  debug    mt CiscoVT2people_160x96_6fps  t=4 sm=3 n=600 cabac=0 rc=0
+family run 2  release  mt CiscoVT2people_320x192_12fps t=2 sm=3 n=600 cabac=0 rc=1
+```
+
+Running total: **ninety measurements, twenty-nine alternations, sixty-two
+acquittals.**
+
+---
+
+### Measurements 91 and 92 — **the ablation's after-arms, and F3 is closed** (Phase 7 session B, 2026-08-20)
+
+The charter fixed this ablation in advance (`prompts/phase7.md` §2) as a test of one
+hypothesis: that F3 was **the claiming/pool machinery** the phase deletes. Session B
+ran it as **three arms with one variable each** instead of the single after-arm the
+charter specifies, because a candidate cause turned up mid-phase and a one-arm
+result could not have told the two apart.
+
+| arm | tree | runs | hits | rate |
+|---|---|---|---|---|
+| before (m. 88) | `b08d6c47`, untouched | 3000 | 25 | 1/120 |
+| **A** (m. 91) | `46a66023` — pool dispatch deleted from **both** paths, claiming mutex gone, `mutexSliceNumUpdate` still missing | 2000 | **20** | **1/100** |
+| **B** (m. 92) | `T7.B3` — the `mutexSliceNumUpdate` lock restored | 2000 | **0** | — |
+
+`f3_arm.sh 2000` for both, verbatim, same four-stream load, same interleaved
+density. Arm A: 271 s wall. Arm B: 275 s.
+
+**Arm A is the measurement that makes the verdict usable.** Against the before-arm,
+20/2000 vs 25/3000 is a two-proportion z of **0.61, p ≈ 0.54** — the rate did not
+move. Deleting the thread pool, the task hierarchy, the `static mut` singleton, the
+claiming mutex and both C++-list ports neither fixed F3 nor disturbed it. **The
+hypothesis the charter fixed in advance is false**, and it took an arm the charter
+did not plan to establish that.
+
+**Arm B closes it.** 0 in 2000 against arm A's own measured 1/100 is P = e⁻²⁰ ≈
+**2 × 10⁻⁹**; against the before-arm's 1/120, e⁻¹⁶·⁷ ≈ 6 × 10⁻⁸.
+
+**F3's cause is F69** (`phase7_findings.md`): `68c4f6a5 "Raw translation"` kept
+`AddSliceBoundary(...)` and `++pSliceCtx->iSliceNumInFrame` and dropped the
+`WelsMutexLock(&mutexSliceNumUpdate)` that brackets them in
+`svc_encode_slice.cpp:1776-1791`. `pSliceCtx` is the *layer's* slice context, shared
+by every worker on the dynamic path, so the increment was a racing read-modify-write;
+a lost increment makes `iEncodeSliceNum != iSliceNumInFrame` in
+`ReOrderSliceInLayer`, which returns `ENC_RETURN_UNEXPECTED` and **emits an empty
+frame** — 18 of the before-arm's 25 hits. The interleaved-`AddSliceBoundary` half
+accounts for the 6 short and 1 long.
+
+**What the ninety-two measurements say about the method.** F3 was open for seven
+phases and drew twenty-nine alternations, every one of which asked "did *this
+commit* change the rate?" — the right question for a regression and the wrong one
+for a defect. It was closed in an afternoon by asking a different question, in the
+opposite direction: not "what did we change?" but **"which of these fields is
+dead?"** — a bookkeeping question, asked while listing what to delete, answered by
+reading the reference. The same question found T7.A3's leak and
+`SSliceThreadPrivateData`'s zero readers in the same phase. A field that looks dead
+in the port and is live in the reference **is a dropped statement by definition**.
+
+Running total: **ninety-two measurements, twenty-nine alternations, sixty-two
+acquittals — and F3 closed.**
+

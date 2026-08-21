@@ -13221,3 +13221,204 @@ That battery also handed F68 its confirmation, unprompted: its bench rows print
 the C++ reference beside the Rust port at both thread counts, and **the reference
 does not scale either** — 1080p `[1t]` 336.10 fps against `[4t]` 338.83, QVGA
 7556.76 against 7557.98. Both columns flat means the parameters, not the port.
+
+### T7.B0 — the two instruments, before any conversion
+
+`9a392cc9`. No production code moved.
+
+**F68 closed.** `benches/c_vs_rust_bench` built its parameters with
+`GetDefaultParams` and then set width, height, frame rate, bitrate,
+`iSpatialLayerNum` and `iMultipleThreadIdc` — and nothing else, so
+`SM_SINGLE_SLICE` survived into every row, and `SM_SINGLE_SLICE` is the first
+arm of the slice-mode chain in `WelsEncoderEncodeExt`, tested before any
+thread-count condition. Every `[4 thread]` row this bench has ever printed, on
+**both** sides, encoded on the calling thread. `BENCH_SLICE_MODE=<m[:n],..>`
+adds the axis; unset reproduces every historical row exactly, which is why it
+is a knob and not an edit (F68's own argument: adding rows rather than changing
+them keeps the ledger readable).
+
+**The first honest thread-scaling numbers** (30 frames, `BENCH_LOAD_BALANCING=0`):
+
+| row | 1t | 2t | 4t |
+|---|---|---|---|
+| 1080p Mandelbrot `sm=1 n=4` C++ | 188 | 311 (1.65x) | 481 (2.56x) |
+| 1080p Mandelbrot `sm=1 n=4` Rust | 111 | 183 (1.65x) | **183 (1.65x)** |
+| 1080p Mandelbrot `sm=3` C++ | 190 | 328 (1.73x) | 524 (2.76x) |
+| 1080p Mandelbrot `sm=3` Rust | 112 | 197 (1.75x) | **197 (1.75x)** |
+| 720p Mandelbrot `sm=1 n=4` C++ | 379 | 635 (1.67x) | 909 (2.40x) |
+| 720p Mandelbrot `sm=1 n=4` Rust | 216 | 366 (1.69x) | **365 (1.69x)** |
+
+**The port scales to two threads and then stops**, at every HD resolution and
+in both multi-slice modes, where the reference keeps scaling to four. It is the
+pool's ceiling and it had never been visible, because the instrument that would
+have shown it was asking for a single slice.
+
+**`BENCH_LOAD_BALANCING`, and the second thing F68's fix uncovered.**
+`GetDefaultParams` sets `bUseLoadBalancing = true` on both sides
+(`param_svc.h:146`, `param_svc.rs:294`). With `uiSliceMode = 1` and
+`iMultipleThreadIdc >= uiSliceNum` that reaches `AdjustBaseLayer` ->
+`DynamicAdjustSlicing`, whose slice boundaries for frame N+1 are computed from
+frame N's measured per-slice encode *times*. Two consecutive bench runs settle
+what that means: the **C++ side alone** returns a different byte count every
+run — 22834/22660, 144438/144340, 233477/233251, 5624/11357 — on the same input
+with the same parameters. With `BENCH_LOAD_BALANCING=0` every row is
+bit-identical, `sm=1 n=4` at 4 threads included. That is the step-5 ruling's
+evidence, arrived at by measurement rather than by reading.
+
+**`rust/tools/f3_arm.sh`** — the ablation's arm, reconstructed verbatim from
+measurement 88's record with the four-stream load generator folded in, because
+measurement 89 showed the same box the same day yielding 1/63 and 1/120 for the
+same defect purely from how tightly the runs were packed. Density and load now
+travel with the script. Smoke: 2 hits in 200 (1/100) and 1 in 80 (1/80), both
+inside measurement 88's interval; load average 9.1 mid-run.
+
+### T7.B1 — the seam, and fork/join on the fixed slice modes
+
+**The seam.** `SliceJobHandle` in `encoder/slice_multi_threading.rs`, carrying
+the context pointer, the bs slot it owns, and the arithmetic progression of
+slice indices it encodes. It is the **only** value in the crate that crosses a
+spawn, and it carries the phase's one hand-written `Send`, tagged
+`send-seam(Phase 9)` and argued in three parts:
+
+1. **disjointness is index-based, and now static.** The only per-thread mutable
+   state the encode reaches through the context is `pThreadBsBuffer[uiBufferIdx]`,
+   and the index reaches it by one route (`iBsSlot` -> `InitOneSliceInThread`
+   -> `SSlice::uiBufferIdx` -> `thread_bs_buffer`). One handle per slot, handles
+   moved into their spawns, so no two live workers can name a slot. For a fixed
+   mode `bThreadSlcBufferFlag` is false, so slice `i` is
+   `slice_in_bank(layer, 0, i)` — a pure function of the index — and each slice
+   writes only its own `sSliceBs`.
+2. **assembly is order-based.** `AppendSliceToFrameBs` runs after the join and
+   walks 0..N. Completion order is not observable, which is why the slot a slice
+   borrows is byte-neutral — today's dynamic claim is already a race the output
+   does not see, and this turns it into a partition the output still does not see.
+3. **concurrency is capped at the allocated buffer count.** F67's independent
+   consequence. `uiThreadBsBufferNum` is new — `min(iMultipleThreadIdc,
+   MAX_THREADS_NUM)`, stamped where the buffers are allocated and read by
+   `ForkWidth`; `SliceJobHandle::new` `debug_assert!`s it. Without it, `t=2` with
+   `sm=1 n=4` — a row the sweep runs — would hand out a slot with a null buffer.
+
+**What changed at the call sites.** Two lines. The fixed-mode arm of
+`WelsEncoderEncodeExt` calls `EncodeFixedSlicesForked(pCtx, iSliceCount)` and
+ORs the result into `iEncoderError` one line above the check that already read
+it; `CWelsTaskManageBase::InitFrame` calls `UpdateMbMapForked`. The two forks
+stay separate and in the C++'s order — `InitFrame` fully joins inside
+`WelsInitCurrentLayer`, hundreds of lines above the encode dispatch, and fusing
+them would let a slice encode against a neighbour map another worker had not
+finished writing.
+
+**One behaviour deliberately reproduced.** `CWelsSliceEncodingTask::Execute`
+returns early when `InitTask` fails — before `FinishTask`, which is the only
+place a task's result is ORed into `iEncoderError`. A failed init is therefore
+swallowed on both sides, and `SliceJobResult::bInitFailed` carries that through
+the join so the calling thread ORs exactly what `FinishTask` would have.
+
+### T7.B2 — `SM_SIZELIMITED` onto the same seam, and the order was never a queue
+
+The step asked for the claiming order to be written down before the shape was
+chosen. Reading `ExecuteTaskConstrainedSize` end to end says it is not a queue:
+partition is a **static** modulo of the task index, the slice indices a partition
+emits are a **static** arithmetic progression stamped into `SSlice::iSliceIdx`, and
+`ReOrderSliceInLayer` — after the join, on the calling thread — recovers the layer
+position from that stamp alone, never from which bank held the slice. The only
+schedule-dependent quantity was which bank and bs slot a partition borrowed, and
+the reorder is blind to it.
+
+So **neither an `AtomicUsize` counter nor an `mpsc` of indices reproduces the order
+better than a static partition does**; a queue would put back a nondeterminism the
+code does not have. Worker `p` owns partition `p`, bank `p`, slot `p`, which also
+makes `NumSliceCodedOfPartition[p]` and `LastCodedMbIdxOfPartition[p]` — written
+from inside the encode — disjoint by construction rather than by claim.
+
+`mutexThreadSlcBuffReallocate` stays: the bank is the worker's, but
+`InitSliceBsBuffer` allocates through the shared `CMemoryAlign`. It retires with
+`pMemAlign`.
+
+Determinism: a 32-configuration `sm=3` scan byte-identical, then `family` with
+**369/369 in both profiles and no F3 event at all** — the first battery of the
+session with both arms clean in one run.
+
+### T7.B3 — **F69**: F3's cause, and why the ablation needed three arms
+
+Full finding: `phase7_findings.md` F69; arms: `phase0_findings.md` measurements
+91-92. The short form:
+
+`svc_encode_slice.cpp:1776-1791` brackets `AddSliceBoundary(...)` and
+`++pSliceCtx->iSliceNumInFrame` in `WelsMutexLock(&mutexSliceNumUpdate)` when
+`iMultipleThreadIdc > 1`, with the C++'s own comment on the lock line saying what
+it guards. `68c4f6a5 "Raw translation"` kept both statements and neither lock, and
+**nothing has locked `mutexSliceNumUpdate` in this crate since**. The field was on
+*this session's delete list as dead code*, which is how it was found.
+
+`pSliceCtx` is the layer's, shared by every worker on the dynamic path, so the
+increment raced; a lost increment leaves `iEncodeSliceNum != iSliceNumInFrame` at
+`ReOrderSliceInLayer`, which answers `ENC_RETURN_UNEXPECTED` and **emits an empty
+frame** — F3's shape in 18 of its before-arm's 25 hits.
+
+**Why three arms.** The charter fixed the ablation in advance as a test of the
+deleted pool machinery. With a candidate cause in hand, a single after-arm on a tree
+carrying *both* changes would have credited whichever one the reader preferred. So:
+arm A held the lock constant and removed the machinery (**20/2000, z = 0.61 vs the
+before-arm — no change**), and arm B held the machinery constant and restored the
+lock (**0/2000, P ≈ 2e-9**). The phase's headline deliverable was worth doing for
+five other reasons and was **not** the defect; that is now measured rather than
+assumed.
+
+### T7.B4 — the machinery dies, and the probe that made it mean something
+
+2,115 lines in two files, plus the claiming mutex, `bThreadBsBufferUsage`,
+`mutexEncoderError`, `pTaskManage`, and `SSliceThreadPrivateData` (**zero readers**,
+allocated every `RequestMtResource` since the raw translation). `unsafe_impl`
+12 → 2; `raw_ptr` −76; `unsafe_fn` −22; `unsafe_block` −44.
+
+**F12 closes by deleting what it named — and not vacuously.** No test in this crate
+had ever set `iMultipleThreadIdc > 1` under Miri, so an empty skip list would only
+have stopped *naming* the gap. The same commit adds a two-thread, two-slice probe.
+
+**It failed on its first run and the failure was the point.** Written at 48x32 to
+match the other probes, it produced one VCL NAL per frame:
+`SliceArgumentValidationFixedSliceMode` silently rewrites any multi-slice request
+below `MIN_NUM_MB_PER_SLICE` (48) to `SM_SINGLE_SLICE`, and 48x32 is six
+macroblocks. The probe was driving the single-threaded path it exists to avoid, and
+every assertion but the NAL count would have passed.
+
+Then it found two defects on its first real execution:
+
+* **F70** — `InitSliceSettings` held `&mut (*pDlp).sSliceArgument` across a callee
+  that takes a second `&mut` to the same field, and read through the popped tag.
+  F13's family in the one place nobody had looked: parameter validation. **Every
+  multi-slice configuration runs it**, 369 rows a sweep, and no byte gate can see it.
+* **F71** — S28's root-accessor idiom (`&mut vec` + `as_mut_ptr()`) is a `Unique`
+  retag over the container, and every worker resolves the same layer, the same
+  parameter block, the same bank 0. Sixteen accessors converted to shared access
+  with the buffer pointer taken as a value. **Sweeps 369/369 both profiles
+  afterwards**, which is the check that mattered.
+
+F71 stops at a principled boundary: the next report is a real shared write
+(`sLayerInfo.sNalHeaderExt`, per slice, from every worker) that
+`svc_encode_slice.cpp:1649-1655` makes too. Fixing it changes what a slice *owns* —
+F67's context split, Phase 9's. The probe is `#[cfg_attr(miri, ignore)]` **with F71
+cited**, which is gates.sh's own "no skip without a finding" applied to a test.
+
+### T7.B5 — the load-balancing ruling: **F72**, and it is a third answer
+
+The brief offered two: complete-and-expected-divergent, or incomplete-and-fenced.
+The read says **both**, and that is the finding.
+
+Four of the five stages of the load-balancing feedback loop are in the port. The
+missing one is `CalcSliceComplexRatio`, the *producer* of the only input the fourth
+stage consumes — the C++ calls it at `encoder_ext.cpp:4069` under exactly the guard
+`encoder_ext.rs:3196` already reproduces, and the port's only caller is a unit test.
+So `iSliceComplexRatio` is permanently 0, `DynamicAdjustSlicing` clamps every slice
+to `iMinimalMbNum` and dumps the rest on the last, and **the balance is degenerate
+rather than absent** — nothing crashes, nothing warns.
+
+Reachable by default: `GetDefaultParams` sets `bUseLoadBalancing = true` on both
+sides. Un-gateable even once completed: T7.B0's bench shows the **C++ reference
+alone** returning a different byte count on consecutive identical runs, which is
+what `codec_app_def.h:579` says in words.
+
+Fenced as screen content was — `LOAD_BALANCING(incomplete: F72)` at the missing
+call and at the consumer, guard cited, finding named at both. **Not completed**: the
+brief's instruction for an incomplete path is to fence it and say which, and
+finishing it is a behaviour change on a path with no coverage.
