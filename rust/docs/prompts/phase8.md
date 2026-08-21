@@ -135,9 +135,19 @@ on the impl objects.
   C-ABI and tagged**, 21 prose. Ratchet `raw_ptr` 2277 → 2225, `unsafe_fn` 809 → 802.
   Span: no measurable movement on either bench.
 
-- **C** — `crate-type`, the 7 exports (two `#[no_mangle]`s added), every
-  boundary struct pinned, the external-ABI harness (+ the gtest stretch),
-  the scoped-lint endgame for `api/`, the phase close.
+- **A — done** (2026-08-21, nine commits): the inventory (four dup boundary
+  types fixed), F23 closed on both codecs (19 conveniences, 116 callers), F41
+  closed, F37 proved, the twelve fields owned, `memory_align.rs` deleted.
+- **B — done** (2026-08-21, fourteen commits): F76 closed (seven arms), F78
+  and F79 closed (the trace delivers), both boundary objects own their
+  contexts and traces, 19 `# Safety` contracts, `Decoder`/`Encoder` carved
+  with the `Send` verdict measured (no: 14 `E0277`s, all Phase 9's), the
+  `c_void` line attributed; F77 filed.
+- **C** — [`phase8_session_c.md`](phase8_session_c.md): P13 and F77, `crate-type`,
+  the 7 exports with a gate, every boundary type pinned to sizes dumped from the
+  C++ headers, the external dlopen harness (+ the gtest stretch as a number),
+  D-api-1's default sink, the `api/` deny with tagged allows, the internal
+  `SParserBsInfo` rename, the phase close with Phase 9's inheritance.
 
 Three sessions is the estimate (plan: 3–4). The exit gate does not bend.
 
