@@ -208,3 +208,152 @@ fn test_encoder_create_and_destroy_lifecycle() {
         WelsDestroySVCEncoder(p_encoder);
     }
 }
+
+// ============================================================================
+// F37's re-init probe
+// ============================================================================
+
+/// One decode pass over `units`, stopping after `limit` access units.
+///
+/// Returns `(frames emitted, frames the decoder says are still buffered)`. The
+/// second number is the one F37 is about: it is `sReoderingStatus.iNumOfPicts`,
+/// read back through the public `DECODER_OPTION_NUM_OF_FRAMES_REMAINING_IN_BUFFER`.
+unsafe fn decode_pass(
+    p_decoder: *mut ISVCDecoder,
+    units: &[&[u8]],
+    limit: usize,
+) -> (usize, i32) {
+    unsafe {
+    let mut frames = 0usize;
+    for unit in units.iter().take(limit) {
+        let mut p_dst: [*mut u8; 3] = [std::ptr::null_mut(); 3];
+        let mut buf_info = SBufferInfo::default();
+        ISVCDecoder::DecodeFrame2(
+            p_decoder,
+            unit.as_ptr(),
+            unit.len() as i32,
+            p_dst.as_mut_ptr(),
+            &mut buf_info,
+        );
+        if buf_info.iBufferStatus == 1 {
+            frames += 1;
+        }
+    }
+    let mut remaining = 0i32;
+    ISVCDecoder::GetOption(
+        p_decoder,
+        DECODER_OPTION::DECODER_OPTION_NUM_OF_FRAMES_REMAINING_IN_BUFFER,
+        &mut remaining as *mut i32 as *mut std::ffi::c_void,
+    );
+    (frames, remaining)
+    }
+}
+
+/// **F37 — a re-initialised decoder must not inherit the previous session's
+/// reordering slots.**
+///
+/// `CWelsDecoderImpl`'s reordering pair (`sPictInfoList`, `sReoderingStatus`) is
+/// api-owned state that outlives the decoder *context*: `Uninitialize` frees the
+/// context and its picture pool, and a second `Initialize` builds new ones — but
+/// the slot list is not the context's to clear. C++ clears it from the one place
+/// that knows the pool is going away, at the head of `DestroyPicBuff`
+/// (`decoder.cpp:260`), and the port did not until Phase 5 session O (T5.O1). A
+/// surviving non-sentinel `iPOC` makes a stale slot look occupied, and its
+/// `iPicBuffIdx` then indexes the **new** pool with the **old** pool's index.
+///
+/// **The transition is what no other test in this tree performs.** Every decode
+/// gate — conformance, corpus, the sweeps, the loopback — creates a decoder,
+/// decodes, destroys. This one interrupts a B-slice stream *while pictures are
+/// still buffered*, which is the only state the defect can be observed from, then
+/// re-initialises and decodes the same stream whole.
+///
+/// The assertion is `remaining == 0` immediately after the second `Initialize`,
+/// plus the second pass matching a decoder that never saw the first. Measured red
+/// at T8.A4 against a revert of T5.O1 — the reset deleted from `DestroyPicBuff`,
+/// nothing else changed:
+///
+/// ```text
+/// assertion `left == right` failed: the re-initialised decoder inherited 1
+/// buffered picture(s) from the previous session — F37: DestroyPicBuff did not
+/// reset the reordering buffers
+/// ```
+#[test]
+fn test_decoder_reinit_does_not_inherit_reordering_slots() {
+    let mut repo_root = std::path::PathBuf::from("../../../");
+    if !repo_root.join("res").exists() {
+        repo_root = std::path::PathBuf::from("../../");
+    }
+    let path = repo_root.join("res/CABA2_SVA_B.264");
+    assert!(path.exists(), "asset missing: {:?}", path);
+    let data = std::fs::read(&path).expect("read asset");
+    let units = openh264_rs::split_annexb_units(&data);
+    assert!(units.len() > 12, "asset too short to interrupt mid-stream");
+
+    unsafe {
+        let mut param = SDecodingParam::default();
+        param.uiTargetDqLayer = u8::MAX;
+        param.eEcActiveIdc = ERROR_CON_IDC::ERROR_CON_SLICE_COPY;
+        param.sVideoProperty.eVideoBsType = VIDEO_BITSTREAM_DEFAULT;
+
+        // --- the reference: a decoder that has only ever seen one session ------
+        let mut p_fresh: *mut ISVCDecoder = std::ptr::null_mut();
+        assert_eq!(i64::from(WelsCreateDecoder(&mut p_fresh)), CM_RESULT_SUCCESS as i64);
+        assert_eq!(
+            i64::from(ISVCDecoder::Initialize(p_fresh, &param)),
+            CM_RESULT_SUCCESS as i64
+        );
+        let (fresh_frames, _) = decode_pass(p_fresh, &units, units.len());
+        ISVCDecoder::Uninitialize(p_fresh);
+        WelsDestroyDecoder(p_fresh);
+        assert!(fresh_frames > 0, "the asset decoded nothing at all");
+
+        // --- the subject: interrupted mid-stream, then re-initialised ---------
+        let mut p_decoder: *mut ISVCDecoder = std::ptr::null_mut();
+        assert_eq!(i64::from(WelsCreateDecoder(&mut p_decoder)), CM_RESULT_SUCCESS as i64);
+        assert_eq!(
+            i64::from(ISVCDecoder::Initialize(p_decoder, &param)),
+            CM_RESULT_SUCCESS as i64
+        );
+        // Stop while the reordering buffer still holds pictures. A B-slice stream
+        // buffers by construction; if this ever reads 0 the probe has stopped
+        // covering the finding and the assertion says so.
+        let (_, buffered) = decode_pass(p_decoder, &units, 12);
+        assert!(
+            buffered > 0,
+            "nothing was buffered at the interruption — this probe no longer reaches F37's state"
+        );
+
+        assert_eq!(
+            i64::from(ISVCDecoder::Uninitialize(p_decoder)),
+            CM_RESULT_SUCCESS as i64
+        );
+        assert_eq!(
+            i64::from(ISVCDecoder::Initialize(p_decoder, &param)),
+            CM_RESULT_SUCCESS as i64
+        );
+
+        // The claim: the new session starts empty.
+        let mut remaining = 0i32;
+        ISVCDecoder::GetOption(
+            p_decoder,
+            DECODER_OPTION::DECODER_OPTION_NUM_OF_FRAMES_REMAINING_IN_BUFFER,
+            &mut remaining as *mut i32 as *mut std::ffi::c_void,
+        );
+        assert_eq!(
+            remaining, 0,
+            "the re-initialised decoder inherited {remaining} buffered picture(s) from the \
+             previous session — F37: DestroyPicBuff did not reset the reordering buffers"
+        );
+
+        // …and decodes the stream exactly as a decoder that never saw the first pass.
+        let (reinit_frames, _) = decode_pass(p_decoder, &units, units.len());
+        assert_eq!(
+            reinit_frames, fresh_frames,
+            "a re-initialised decoder emitted {reinit_frames} frames where a fresh one emits \
+             {fresh_frames}"
+        );
+
+        ISVCDecoder::Uninitialize(p_decoder);
+        WelsDestroyDecoder(p_decoder);
+    }
+}
