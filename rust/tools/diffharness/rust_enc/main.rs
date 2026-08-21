@@ -58,7 +58,7 @@ fn main() {
         assert!(!pEnc.is_null());
 
         let mut p = SEncParamExt::default();
-        (*pEnc).GetDefaultParams(&mut p);
+        ISVCEncoder::GetDefaultParams(pEnc, &mut p);
 
         if baseinit == 2 {
             // ---- defaults mode: exactly what c_vs_rust_bench's fill_params sets ----
@@ -163,10 +163,10 @@ fn main() {
             b.iPicWidth = w;
             b.iPicHeight = h;
             b.iTargetBitrate = 5000000;
-            let ret = (*pEnc).Initialize(&b);
+            let ret = ISVCEncoder::Initialize(pEnc, &b);
             assert_eq!(ret, 0, "Initialize returned {}", ret);
         } else {
-            let ret = (*pEnc).InitializeExt(&p);
+            let ret = ISVCEncoder::InitializeExt(pEnc, &p);
             assert_eq!(ret, 0, "InitializeExt returned {}", ret);
         }
 
@@ -199,7 +199,7 @@ fn main() {
             pic.uiTimeStamp = (f as f64 * (1000.0 / 30.0)) as i64;
 
             let mut info = SFrameBSInfo::default();
-            let ret = (*pEnc).EncodeFrame(&pic, &mut info);
+            let ret = ISVCEncoder::EncodeFrame(pEnc, &pic, &mut info);
             if ret != 0 {
                 eprintln!("EncodeFrame failed at {}: {}", f, ret);
                 break;
@@ -236,7 +236,8 @@ fn main() {
                     iLTRFrameNum: f - 1,
                     iLayerId: 0,
                 };
-                (*pEnc).SetOption(
+                ISVCEncoder::SetOption(
+                    pEnc,
                     EncoderOption::ENCODER_LTR_MARKING_FEEDBACK,
                     &mut fb as *mut _ as *mut std::ffi::c_void,
                 );
@@ -249,14 +250,15 @@ fn main() {
                     iCurrentFrameNum: f,
                     iLayerId: 0,
                 };
-                (*pEnc).SetOption(
+                ISVCEncoder::SetOption(
+                    pEnc,
                     EncoderOption::ENCODER_LTR_RECOVERY_REQUEST,
                     &mut rq as *mut _ as *mut std::ffi::c_void,
                 );
             }
         }
         eprintln!("coded {} frames", coded);
-        (*pEnc).Uninitialize();
+        ISVCEncoder::Uninitialize(pEnc);
         WelsDestroySVCEncoder(pEnc);
     }
 }
