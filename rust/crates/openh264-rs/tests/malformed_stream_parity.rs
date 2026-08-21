@@ -113,6 +113,12 @@ const BASE_STREAMS: &[&str] = &[
     "BA_MW_D.264",
     "BA_MW_D_IDR_LOST.264",
     "BA_MW_D_P_LOST.264",
+    // **F77 (T8.C1).** The only stream in `res/` that changes resolution mid-stream
+    // (352x288 -> 640x480 -> 352x288), and the reason it is here: until T8.C1 the port
+    // aborted the process on it through an `extern "C"` thunk, because the pool built
+    // for the opening sequence was never rebuilt at the new size. It was in **no** gate
+    // — not the conformance 60, not this corpus, not the sweeps — so nothing said so.
+    "Error_I_P.264",
 ];
 
 // ---------------------------------------------------------------------------
@@ -986,6 +992,8 @@ stream_case!(malformed_qcif_2p_i_allipcm, "QCIF_2P_I_allIPCM.264");
 stream_case!(malformed_ba_mw_d, "BA_MW_D.264");
 stream_case!(malformed_ba_mw_d_idr_lost, "BA_MW_D_IDR_LOST.264");
 stream_case!(malformed_ba_mw_d_p_lost, "BA_MW_D_P_LOST.264");
+// Phase 8 session C, F77. The resolution-change stream — see BASE_STREAMS.
+stream_case!(malformed_error_i_p, "Error_I_P.264");
 // Phase 5 session S. Every stream above is 176x144 or wider, and this corpus
 // "inherits the conformance streams' SPS dimensions" (F21's note) — so the narrow
 // class F21 exists for had no malformed coverage at all, and F34 is what one blind
