@@ -728,7 +728,7 @@ Phase 6's close is defined now, and it is the decoder's close, transposed:
    the rate controller; only a `#[no_mangle]` export is, and there are 5 —
    session J's ruling), owned-storage cursor machinery carrying
    its mandated Miri tests (S28/S40 — the pool, the frame bitstream's writers,
-   the named neighbour-walkers), an MT seam (Phase 7), the
+   the named neighbour-walkers), an MT seam (Phase 7 — **kept iff the item would not exist at `iMultipleThreadIdc == 1`**, Phase 7 session C's rule), the
    `SCREEN_CONTENT(dormant)` tag (Phase 10, D-scr-1), and **`port-raw(<phase>)`
    (added by D-exit-1, 2026-08-20, ruling F65)** — a port-internal raw-pointer
    signature whose parameter family is owned by Phase 7 or Phase 9; the tag dies

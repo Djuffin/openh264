@@ -1,0 +1,117 @@
+# Phase 8 — the C-ABI boundary: safe cores, thunks as translators, the drop-in made real
+
+The charter. Session briefs cite it; standing rules are plan §7.6; the plan's
+§4 Phase 8 section carries the five steps and the inheritance blocks.
+
+## 0. Starting position (Phase 7's close, `b2e2c9d7`; measured 2026-08-20)
+
+- `src/api/` is **2,788 lines** in three files and is the only module outside
+  the thread seam never scanned by the project's instruments (S22's clause —
+  its `deny(unsafe_code)` exemption propagated into every sweep's scope).
+  `codec_api.rs` 2,664 lines: **246** raw-pointer tokens, **25** `unsafe fn`,
+  **44** `extern "C"` functions, **18** vtable thunks (`*_c`: 9 encoder, 9
+  decoder), **12** `&mut self` convenience methods on the 8-byte vtable base
+  structs (8 on `ISVCEncoder` at `:1130–:1191`, 4 on `ISVCDecoder` at
+  `:1263–:1380`) called from **55** sites across api/tests/benches — **F23**
+  and its encoder twin: each is UB today, the borrow eight bytes wide while
+  the thunk writes the impl object past it.
+- **Exports: 5 of upstream's 7.** `WelsCreateSVCEncoder`,
+  `WelsDestroySVCEncoder`, `WelsCreateDecoder`, `WelsGetDecoderCapability`,
+  `WelsDestroyDecoder` are `#[no_mangle]`; `WelsGetCodecVersion` /
+  `WelsGetCodecVersionEx` (`encoder/wels_encoder_ext.rs:2620`/`:2627`) are
+  `extern "C"` but **not exported**. No `crate-type` is set (rlib only).
+  `api/abi_guard.rs` pins 45 asserts.
+- **The impl objects.** `CWelsDecoderImpl` (`codec_api.rs:1388`): `base`,
+  `pVtbl: Box<_>`, `pCtx: *mut SWelsDecoderContext`, `align: CMemoryAlign`,
+  `param: SDecodingParam`, `bEndOfStream`, and ten C++-member fields
+  (`sLastDecPicInfo`, `sDecoderStatistics`, `sPictInfoList[16]`,
+  `sReoderingStatus`, `iStreamSeqNum`, `sVlcTable`, `bIsBaseline`,
+  `iLastBufferedIdx`, `pPicBuff`, `uiDecodeTimeStamp`) that are **stamped
+  into the context by `addr_of_mut!` at 10 sites** — the decoder's twelve
+  api-owned fields, read back through `api_alias`/`api_alias_mut`
+  (`decoder/decoder_context.rs:1232`/`:1245`, two of the decoder's three
+  allow items). `CWelsH264SVCEncoderImpl` (`:1381`): `base`, `pVtbl`,
+  `inner: CWelsH264SVCEncoder` — which (`encoder/wels_encoder_ext.rs:1576`)
+  holds `m_pEncContext: *mut sWelsEncCtx` (raw), `m_pWelsTrace: *mut
+  welsCodecTrace` (a `Box::into_raw`), and `welsCodecTrace` holds the raw C
+  trace pair (`m_fpTrace`, `m_pTraceCtx: *mut c_void`) plus
+  `m_pCodecInstance: *mut c_void` — a back-pointer to the encoder object
+  (F38's class).
+- **`wels_encoder_ext.rs`**: 136 raw tokens, 15 `unsafe fn`, 14 `extern "C"`,
+  the 8 `*mut sWelsEncCtx` boundary lines, 12 of the encoder's 27 remaining
+  `c_void` occurrences.
+- **`common/memory_align.rs` is alive by two threads**: the stamp
+  `ctx_box.pMemAlign = addr_of_mut!((*dec_impl).align)` (`codec_api.rs:1531`)
+  and `SWelsDecoderContext::pMemAlign` as a null sentinel at 17 sites. The
+  allocator is structurally dead on both sides (Phase 7 measured it).
+- **Open findings owned here**: F23 (+ twin), F37 (`DestroyPicBuff` never
+  resets the reordering buffers; one C++ call at `decoder.cpp:260`), F41
+  (`pCtx->pParam` aliases `CWelsDecoderImpl::param`, overwritten on every
+  `Initialize`), the F38-class back-pointer inventory over `api/`.
+- **Assets**: `test/api/` is upstream's gtest API suite, already built once
+  (`.o` files present); `tools/diffharness/cxx_enc.cpp` is a C++ driver
+  compiled against `codec/api/wels` headers — the template for the external
+  dlopen driver. Every in-process gate (conformance 60/60, corpus 2707,
+  sweeps 369/369, Miri with all seven probes, benches) stays exactly as is.
+
+## 1. The design (plan §2.2.8, unchanged) — and the one rule this phase adds
+
+The externally visible API does not change at all. The safety line moves up
+to it: `CWelsDecoderImpl`/`CWelsH264SVCEncoderImpl` own the safe cores; each
+thunk becomes translate-in → safe call → translate-out with a written
+`# Safety` contract; the vtable structs, slot order (incl. the
+`DecodeParser`/`DecodeFrameEx` stubs), factories and version functions are
+untouched; the crate ships `rlib + cdylib + staticlib`; the cdylib exports
+exactly upstream's 7; an external C++ driver `dlopen`s it and reproduces the
+in-process hashes; `api/` ends as the crate's one `#[allow(unsafe_code)]`
+module (crate-root `deny` flips in Phase 9).
+
+**The rule (S28 at the ABI layer, from F23)**: the pointer a thunk receives as
+`this` must derive from the **whole impl allocation**, never from a borrow of
+the 8-byte base struct. Consequently no `&mut self` method may live on
+`ISVCDecoder`/`ISVCEncoder`; consumer conveniences take `this: *mut _` or live
+on the impl objects.
+
+## 2. The referee
+
+- In-process battery unchanged; **Miri runs unscoped in this phase** (both
+  codecs are touched; D-gate-2 was an encoder-phase scoping) — the three
+  decoder probes, the four encoder probes, the MT probe, and the
+  `abi_test_driver` paths all by name.
+- **The api inventory first** (S22): every instrument extended to `src/api`
+  and run before anything is rewired; its backlog is session A's first table.
+- **New gates this phase builds**: (i) exported-symbol list of the cdylib ==
+  upstream's 7; (ii) `api/abi_guard.rs` pins every boundary-crossing struct
+  (`SParserBsInfo`, `OpenH264Version`, `SDecoderCapability`, …); (iii) the
+  external-ABI harness — conformance + encode-loopback through the dylib,
+  hashes == in-process; stretch: upstream's `test/api` gtest suite against
+  the dylib.
+- F23's covering test: the existing Miri-visible reproducer (decoder init
+  through a convenience method), red before, green after, kept.
+- The caveat the plan records: `DecodeFrame2` vs `DecodeFrameNoDelay` ordering
+  is a known divergence class; the boundary preserves exact call-sequence
+  semantics.
+
+## 3. Session plan
+
+- **A** — the api inventory; F23 + its twin (12 conveniences, 55 callers);
+  F37 and F41 fixed; the decoder's twelve api-owned fields owned by the
+  context (the 10 stamps and `api_alias` retire); `memory_align.rs` retired
+  (the `align` stamp and the 17-site sentinel).
+- **B** — the encoder boundary: `CWelsH264SVCEncoder` owns `Box<sWelsEncCtx>`
+  and its trace; the trace-callback plumbing (raw C pair stored once at the
+  boundary, wrapped as the internal logger sink; `m_pCodecInstance`
+  dissolved); the 18 thunks as translators with `# Safety` contracts; the
+  safe core `Decoder`/`Encoder` types carved and exported with `Send`
+  compile tests; the `c_void` line (27) attributed or deleted.
+- **C** — `crate-type`, the 7 exports (two `#[no_mangle]`s added), every
+  boundary struct pinned, the external-ABI harness (+ the gtest stretch),
+  the scoped-lint endgame for `api/`, the phase close.
+
+Three sessions is the estimate (plan: 3–4). The exit gate does not bend.
+
+## 4. Non-goals
+
+Any public-ABI change; renames (D5, Phase 9); the workspace split (D4,
+post-Phase 9); perf recovery (Phase 9, D-perf-6); the parked families and
+Phase 9's `port-raw` inventory; everything `SCREEN_CONTENT(dormant)`.
