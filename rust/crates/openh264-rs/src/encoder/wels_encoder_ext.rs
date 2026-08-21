@@ -272,10 +272,29 @@ pub struct SLevelInfo {
     pub uiLevelIdc: ELevelIdc,
 }
 
+/// `TagDeliveryStatus` — `codec_app_def.h:708`, the payload of
+/// `ENCODER_OPTION_DELIVERY_STATUS`.
+///
+/// **F81 (T8.C4): the two `int` fields were missing.** This struct had one field
+/// where the header has three, so it was **1 byte against the ABI's 12** — a
+/// truncated declaration of a type a caller passes by pointer. Nothing misread
+/// memory, because the one field the option arm reads is at offset 0 in both; what
+/// was missing was the *rest of the caller's struct*, so any later read of
+/// `iDropFrameType` would have been out of bounds and any by-value copy short. Found
+/// by `api/abi_guard.rs`'s new pin, which is the whole reason to pin a size rather
+/// than an offset.
+///
+/// Both are marked "reserved" upstream and neither is read by
+/// `welsEncoderExt.cpp:1150-1155`, which takes `bDeliveryFlag` and logs it. They are
+/// declared here for the layout, not for a reader.
 #[repr(C)]
 #[derive(Debug, Copy, Clone, Default)]
 pub struct SDeliveryStatus {
     pub bDeliveryFlag: bool,
+    /// `iDropFrameType` — the frame type that is dropped; reserved upstream.
+    pub iDropFrameType: i32,
+    /// `iDropFrameSize` — the frame size that is dropped; reserved upstream.
+    pub iDropFrameSize: i32,
 }
 
 #[repr(C)]
