@@ -42,7 +42,7 @@ fn test_loopback_encode_and_decode_pipeline() {
             enc_param.iTargetBitrate = 250000;
             enc_param.iUsageType = EUsageType::CAMERA_VIDEO_REAL_TIME;
 
-            let enc_init = (*p_encoder).Initialize(&enc_param as *const SEncParamBase);
+            let enc_init = ISVCEncoder::Initialize(p_encoder, &enc_param as *const SEncParamBase);
             assert_eq!(enc_init, CM_RESULT_SUCCESS);
 
             let mut p_decoder: *mut ISVCDecoder = std::ptr::null_mut();
@@ -53,11 +53,11 @@ fn test_loopback_encode_and_decode_pipeline() {
             let mut dec_param = SDecodingParam::default();
             dec_param.uiTargetDqLayer = u8::MAX;
 
-            let dec_init = (*p_decoder).Initialize(&dec_param as *const SDecodingParam);
+            let dec_init = ISVCDecoder::Initialize(p_decoder, &dec_param as *const SDecodingParam);
             assert_eq!(i64::from(dec_init), CM_RESULT_SUCCESS as i64);
 
             let mut bs_info = SFrameBSInfo::default();
-            let ps_ret = (*p_encoder).EncodeParameterSets(&mut bs_info);
+            let ps_ret = ISVCEncoder::EncodeParameterSets(p_encoder, &mut bs_info);
             assert_eq!(ps_ret, CM_RESULT_SUCCESS);
 
             let frame_size = (width * height * 3 / 2) as usize;
@@ -79,7 +79,7 @@ fn test_loopback_encode_and_decode_pipeline() {
             src_pic.pData[1] = yuv_input.as_mut_ptr().add((width * height) as usize);
             src_pic.pData[2] = yuv_input.as_mut_ptr().add((width * height * 5 / 4) as usize);
 
-            let enc_frame_ret = (*p_encoder).EncodeFrame(&src_pic, &mut bs_info);
+            let enc_frame_ret = ISVCEncoder::EncodeFrame(p_encoder, &src_pic, &mut bs_info);
             assert_eq!(enc_frame_ret, CM_RESULT_SUCCESS);
 
             // 4. Decode encoded stream
@@ -97,7 +97,8 @@ fn test_loopback_encode_and_decode_pipeline() {
                     if layer_len > 0 && !layer.pBsBuf.is_null() {
                         let mut p_dst: [*mut u8; 3] = [std::ptr::null_mut(); 3];
                         let mut dst_info = SBufferInfo::default();
-                        let dec_ret = (*p_decoder).DecodeFrame2(
+                        let dec_ret = ISVCDecoder::DecodeFrame2(
+                            p_decoder,
                             layer.pBsBuf,
                             layer_len,
                             p_dst.as_mut_ptr(),
@@ -109,8 +110,8 @@ fn test_loopback_encode_and_decode_pipeline() {
             }
 
             // 5. Uninitialize and destroy safely
-            assert_eq!((*p_encoder).Uninitialize(), CM_RESULT_SUCCESS);
-            assert_eq!(i64::from((*p_decoder).Uninitialize()), CM_RESULT_SUCCESS as i64);
+            assert_eq!(ISVCEncoder::Uninitialize(p_encoder), CM_RESULT_SUCCESS);
+            assert_eq!(i64::from(ISVCDecoder::Uninitialize(p_decoder)), CM_RESULT_SUCCESS as i64);
 
             WelsDestroySVCEncoder(p_encoder);
             WelsDestroyDecoder(p_decoder);
@@ -188,7 +189,7 @@ fn test_decode_encode_full_cycle_sha1_parity() {
             dec_param.eEcActiveIdc = ERROR_CON_IDC::ERROR_CON_SLICE_COPY;
             dec_param.sVideoProperty.eVideoBsType = VIDEO_BITSTREAM_DEFAULT;
 
-            let dec_init = (*p_decoder).Initialize(&dec_param as *const SDecodingParam);
+            let dec_init = ISVCDecoder::Initialize(p_decoder, &dec_param as *const SDecodingParam);
             assert_eq!(i64::from(dec_init), CM_RESULT_SUCCESS as i64);
 
             // 2. Create encoder
@@ -216,7 +217,7 @@ fn test_decode_encode_full_cycle_sha1_parity() {
             enc_param.iPicHeight = param.height;
             enc_param.iTargetBitrate = 5_000_000;
 
-            let enc_init = (*p_encoder).Initialize(&enc_param as *const SEncParamBase);
+            let enc_init = ISVCEncoder::Initialize(p_encoder, &enc_param as *const SEncParamBase);
             assert_eq!(enc_init, CM_RESULT_SUCCESS);
 
             let mut hasher = Sha1Hasher::new();
@@ -241,7 +242,7 @@ fn test_decode_encode_full_cycle_sha1_parity() {
                     src_pic.pData[2] = p_dst[2];
 
                     let mut bs_info = SFrameBSInfo::default();
-                    let enc_ret = (*p_encoder).EncodeFrame(&src_pic, &mut bs_info);
+                    let enc_ret = ISVCEncoder::EncodeFrame(p_encoder, &src_pic, &mut bs_info);
                     if enc_ret == CM_RESULT_SUCCESS {
                         update_hash_from_encoded_frame(hasher, &bs_info);
                     }
@@ -254,7 +255,8 @@ fn test_decode_encode_full_cycle_sha1_parity() {
                 let mut buf_info = SBufferInfo::default();
                 timestamp += 1;
                 buf_info.uiInBsTimeStamp = timestamp;
-                let dec_ret = (*p_decoder).DecodeFrameNoDelay(
+                let dec_ret = ISVCDecoder::DecodeFrameNoDelay(
+                    p_decoder,
                     unit.as_ptr(),
                     unit.len() as i32,
                     p_dst.as_mut_ptr(),
@@ -267,7 +269,8 @@ fn test_decode_encode_full_cycle_sha1_parity() {
                 let mut null_dst: [*mut u8; 3] = [std::ptr::null_mut(); 3];
                 let mut null_buf_info = SBufferInfo::default();
                 null_buf_info.uiInBsTimeStamp = timestamp;
-                let recon_ret = (*p_decoder).DecodeFrame2(
+                let recon_ret = ISVCDecoder::DecodeFrame2(
+                    p_decoder,
                     std::ptr::null(),
                     0,
                     null_dst.as_mut_ptr(),
@@ -280,14 +283,16 @@ fn test_decode_encode_full_cycle_sha1_parity() {
 
             // Flush remaining frames in decoder buffer
             let mut eos_flag = 1i32;
-            (*p_decoder).SetOption(
+            ISVCDecoder::SetOption(
+                p_decoder,
                 DECODER_OPTION::DECODER_OPTION_END_OF_STREAM,
                 &mut eos_flag as *mut i32 as *mut std::ffi::c_void,
             );
 
             let mut p_dst: [*mut u8; 3] = [std::ptr::null_mut(); 3];
             let mut buf_info = SBufferInfo::default();
-            let dec_ret = (*p_decoder).DecodeFrame2(
+            let dec_ret = ISVCDecoder::DecodeFrame2(
+                p_decoder,
                 std::ptr::null(),
                 0,
                 p_dst.as_mut_ptr(),
@@ -298,7 +303,8 @@ fn test_decode_encode_full_cycle_sha1_parity() {
             }
 
             let mut remaining_frames = 0i32;
-            (*p_decoder).GetOption(
+            ISVCDecoder::GetOption(
+                p_decoder,
                 DECODER_OPTION::DECODER_OPTION_NUM_OF_FRAMES_REMAINING_IN_BUFFER,
                 &mut remaining_frames as *mut i32 as *mut std::ffi::c_void,
             );
@@ -306,7 +312,7 @@ fn test_decode_encode_full_cycle_sha1_parity() {
             for _ in 0..remaining_frames {
                 let mut p_dst: [*mut u8; 3] = [std::ptr::null_mut(); 3];
                 let mut buf_info = SBufferInfo::default();
-                let flush_ret = (*p_decoder).FlushFrame(p_dst.as_mut_ptr(), &mut buf_info);
+                let flush_ret = ISVCDecoder::FlushFrame(p_decoder, p_dst.as_mut_ptr(), &mut buf_info);
                 if flush_ret == DECODING_STATE::dsErrorFree {
                     encode_picture_frame(p_dst, &buf_info, &mut hasher);
                 }
@@ -319,9 +325,9 @@ fn test_decode_encode_full_cycle_sha1_parity() {
                 param.file_name
             );
 
-            (*p_encoder).Uninitialize();
+            ISVCEncoder::Uninitialize(p_encoder);
             WelsDestroySVCEncoder(p_encoder);
-            (*p_decoder).Uninitialize();
+            ISVCDecoder::Uninitialize(p_decoder);
             WelsDestroyDecoder(p_decoder);
         }
     }

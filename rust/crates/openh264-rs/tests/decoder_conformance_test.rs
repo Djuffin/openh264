@@ -99,7 +99,7 @@ fn test_single_bitstream_asset_ex(file_name: &str, expected_hash: &str, hash_con
         dec_param.eEcActiveIdc = ERROR_CON_IDC::ERROR_CON_SLICE_COPY;
         dec_param.sVideoProperty.eVideoBsType = VIDEO_BITSTREAM_DEFAULT;
 
-        let init_ret = (*p_decoder).Initialize(&dec_param as *const SDecodingParam);
+        let init_ret = ISVCDecoder::Initialize(p_decoder, &dec_param as *const SDecodingParam);
         assert_eq!(i64::from(init_ret), CM_RESULT_SUCCESS as i64, "Failed to initialize decoder for {}", file_name);
 
         let mut hasher = Sha1Hasher::new();
@@ -109,7 +109,8 @@ fn test_single_bitstream_asset_ex(file_name: &str, expected_hash: &str, hash_con
         for (_idx, unit) in units.iter().enumerate() {
             let mut p_dst: [*mut u8; 3] = [std::ptr::null_mut(); 3];
             let mut buf_info = SBufferInfo::default();
-            let dec_ret = (*p_decoder).DecodeFrame2(
+            let dec_ret = ISVCDecoder::DecodeFrame2(
+                p_decoder,
                 unit.as_ptr(),
                 unit.len() as i32,
                 p_dst.as_mut_ptr(),
@@ -123,14 +124,16 @@ fn test_single_bitstream_asset_ex(file_name: &str, expected_hash: &str, hash_con
 
         // Flush remaining frames in decoder buffer
         let mut eos_flag = 1i32;
-        (*p_decoder).SetOption(
+        ISVCDecoder::SetOption(
+            p_decoder,
             DECODER_OPTION::DECODER_OPTION_END_OF_STREAM,
             &mut eos_flag as *mut i32 as *mut std::ffi::c_void,
         );
 
         let mut p_dst: [*mut u8; 3] = [std::ptr::null_mut(); 3];
         let mut buf_info = SBufferInfo::default();
-        let dec_ret = (*p_decoder).DecodeFrame2(
+        let dec_ret = ISVCDecoder::DecodeFrame2(
+            p_decoder,
             std::ptr::null(),
             0,
             p_dst.as_mut_ptr(),
@@ -142,7 +145,8 @@ fn test_single_bitstream_asset_ex(file_name: &str, expected_hash: &str, hash_con
         }
 
         let mut remaining_frames = 0i32;
-        (*p_decoder).GetOption(
+        ISVCDecoder::GetOption(
+            p_decoder,
             DECODER_OPTION::DECODER_OPTION_NUM_OF_FRAMES_REMAINING_IN_BUFFER,
             &mut remaining_frames as *mut i32 as *mut std::ffi::c_void,
         );
@@ -150,7 +154,7 @@ fn test_single_bitstream_asset_ex(file_name: &str, expected_hash: &str, hash_con
         for _f in 0..remaining_frames {
             let mut p_dst: [*mut u8; 3] = [std::ptr::null_mut(); 3];
             let mut buf_info = SBufferInfo::default();
-            let flush_ret = (*p_decoder).FlushFrame(p_dst.as_mut_ptr(), &mut buf_info);
+            let flush_ret = ISVCDecoder::FlushFrame(p_decoder, p_dst.as_mut_ptr(), &mut buf_info);
             if (hash_concealed || flush_ret == DECODING_STATE::dsErrorFree) && buf_info.iBufferStatus == 1 {
                 update_hash_from_frame(&mut hasher, p_dst, &buf_info);
                 decoded_frames += 1;
@@ -168,7 +172,7 @@ fn test_single_bitstream_asset_ex(file_name: &str, expected_hash: &str, hash_con
             file_name
         );
 
-        (*p_decoder).Uninitialize();
+        ISVCDecoder::Uninitialize(p_decoder);
         WelsDestroyDecoder(p_decoder);
     }
 }

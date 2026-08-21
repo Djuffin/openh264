@@ -185,7 +185,7 @@ impl RustDecoder {
             assert_eq!(ret as i64, CM_RESULT_SUCCESS as i64, "WelsCreateDecoder failed");
             assert!(!dec.is_null());
             let param = decoding_param();
-            let init = (*dec).Initialize(&param);
+            let init = ISVCDecoder::Initialize(dec, &param);
             assert_eq!(init as i64, CM_RESULT_SUCCESS as i64, "Rust decoder Initialize failed");
             Self { dec }
         }
@@ -194,15 +194,16 @@ impl RustDecoder {
 
 impl Decoder for RustDecoder {
     unsafe fn decode(&mut self, src: *const u8, len: i32, dst: *mut *mut u8, info: *mut SBufferInfo) -> i32 {
-        unsafe { (*self.dec).DecodeFrame2(src, len, dst, info).0 }
+        unsafe { ISVCDecoder::DecodeFrame2(self.dec, src, len, dst, info).0 }
     }
     unsafe fn flush(&mut self, dst: *mut *mut u8, info: *mut SBufferInfo) -> i32 {
-        unsafe { (*self.dec).FlushFrame(dst, info).0 }
+        unsafe { ISVCDecoder::FlushFrame(self.dec, dst, info).0 }
     }
     unsafe fn signal_end_of_stream(&mut self) {
         unsafe {
             let mut eos = 1i32;
-            (*self.dec).SetOption(
+            ISVCDecoder::SetOption(
+                self.dec,
                 DECODER_OPTION::DECODER_OPTION_END_OF_STREAM,
                 &mut eos as *mut i32 as *mut c_void,
             );
@@ -211,7 +212,8 @@ impl Decoder for RustDecoder {
     unsafe fn frames_remaining(&mut self) -> i32 {
         unsafe {
             let mut remaining = 0i32;
-            (*self.dec).GetOption(
+            ISVCDecoder::GetOption(
+                self.dec,
                 DECODER_OPTION::DECODER_OPTION_NUM_OF_FRAMES_REMAINING_IN_BUFFER,
                 &mut remaining as *mut i32 as *mut c_void,
             );
@@ -223,7 +225,7 @@ impl Decoder for RustDecoder {
 impl Drop for RustDecoder {
     fn drop(&mut self) {
         unsafe {
-            (*self.dec).Uninitialize();
+            ISVCDecoder::Uninitialize(self.dec);
             WelsDestroyDecoder(self.dec);
         }
     }

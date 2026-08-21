@@ -20,10 +20,10 @@ fn test_ltr_encoder_configuration() {
         param.bEnableLongTermReference = true;
         param.iLtrMarkPeriod = 30;
 
-        let init_ret = (*p_encoder).InitializeExt(&param as *const SEncParamExt);
+        let init_ret = ISVCEncoder::InitializeExt(p_encoder, &param as *const SEncParamExt);
         assert_eq!(init_ret, CM_RESULT_SUCCESS);
 
-        let uninit_ret = (*p_encoder).Uninitialize();
+        let uninit_ret = ISVCEncoder::Uninitialize(p_encoder);
         assert_eq!(uninit_ret, CM_RESULT_SUCCESS);
 
         WelsDestroySVCEncoder(p_encoder);

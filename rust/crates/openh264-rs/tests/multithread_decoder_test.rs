@@ -15,10 +15,10 @@ fn test_multithread_decoder_initialization() {
         param.uiTargetDqLayer = u8::MAX;
         param.uiCpuLoad = 2; // Request 2 worker threads
 
-        let init_ret = (*p_decoder).Initialize(&param as *const SDecodingParam);
+        let init_ret = ISVCDecoder::Initialize(p_decoder, &param as *const SDecodingParam);
         assert_eq!(i64::from(init_ret), CM_RESULT_SUCCESS as i64);
 
-        let uninit_ret = (*p_decoder).Uninitialize();
+        let uninit_ret = ISVCDecoder::Uninitialize(p_decoder);
         assert_eq!(i64::from(uninit_ret), CM_RESULT_SUCCESS as i64);
 
         WelsDestroyDecoder(p_decoder);
