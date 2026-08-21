@@ -1236,8 +1236,8 @@ pub fn api_alias_mut<T>(field: &mut *mut T) -> Option<&mut T> {
 /// `ref_id`-shaped half of [`prev_dpb_pic`], for the error-concealment brackets that
 /// resolve it through their own [`PicRefs`].
 #[inline]
-pub fn prev_dpb_id(pLastDecPicInfo: &*mut SWelsLastDecPicInfo) -> Option<PicId> {
-    api_alias(pLastDecPicInfo)?.pPreviousDecodedPictureInDpb
+pub fn prev_dpb_id(pLastDecPicInfo: &SWelsLastDecPicInfo) -> Option<PicId> {
+    pLastDecPicInfo.pPreviousDecodedPictureInDpb
 }
 
 /// [`prev_dpb_pic`]'s mutable form — the api layer's buffering path, which takes a
@@ -1517,14 +1517,12 @@ macro_rules! slice_view {
             sSpsPpsCtx: &$ctx.sSpsPpsCtx,
             sFmoList: &$ctx.sFmoList,
             sRefPic: &$ctx.sRefPic,
-            // The one api-owned field the view resolves eagerly, through the
-            // boundary accessor like the other eight. `Initialize` installs it
-            // before any slice reaches a bracket and nothing clears it, so `None`
-            // is unreachable — and the C++ dereferences the same `void*` with no
-            // test at all, so a named panic is strictly more defined than what it
-            // translates.
-            pVlcTable: api_alias(&$ctx.pVlcTable)
-                .expect("pVlcTable is installed by Initialize before any slice is decoded"),
+            // **T8.A6: a field, so there is nothing to resolve and nothing to
+            // panic about.** This was `api_alias(..).expect(..)` over a raw alias
+            // into `CWelsDecoderImpl::sVlcTable`, and the `expect` argued that
+            // `Initialize` installs it before any slice reaches a bracket.
+            // `WelsOpenDecoder` fills it now, where `decoder.cpp:606` fills it.
+            pVlcTable: &$ctx.pVlcTable,
             pDequant_coeff_buffer4x4: &$ctx.pDequant_coeff_buffer4x4,
             pDequant_coeff_buffer8x8: &$ctx.pDequant_coeff_buffer8x8,
             pGetI16x16LumaPredFunc: &$ctx.pGetI16x16LumaPredFunc,
@@ -1663,16 +1661,16 @@ pub fn ref_set(pCtx: &mut SWelsDecoderContext, tmp: bool) -> &mut SRefPic {
 
 /// A view over a test context, wired the way `Initialize` wires the real one.
 ///
-/// The only wiring [`slice_ctx`] needs and a zeroed context does not have is the VLC
-/// table, which lives in `CWelsDecoderImpl` and is installed at
-/// `api/codec_api.rs:1509`; the fixture installs it from the caller's own table so
-/// the borrow the view hands out has a real owner.
+/// The only wiring [`slice_ctx`] needs and a fresh context does not have is the VLC
+/// table, which `WelsOpenDecoder` fills in production (`decoder.cpp:606`); the
+/// fixture copies the caller's own table into the context's field. It took the
+/// table by `&mut` and stamped a pointer until T8.A6 made the field owned.
 #[cfg(test)]
 pub(crate) fn test_slice_ctx<'a>(
     ctx: &'a mut SWelsDecoderContext,
-    vlc: &'a mut SVlcTable,
+    vlc: &SVlcTable,
 ) -> SliceCtx<'a> {
-    ctx.pVlcTable = vlc;
+    ctx.pVlcTable = *vlc;
     slice_ctx(ctx, None)
 }
 
@@ -1765,7 +1763,13 @@ pub struct SWelsDecoderContext {
     /// port names the type, because the erasure bought nothing and cost every
     /// reader a cast — and with the type named, `api_alias` resolves it like the
     /// other eight api-owned fields (T5b.2). Layout is unchanged: one pointer.
-    pub pVlcTable: *mut SVlcTable,
+    /// `CWelsDecoderImpl::sVlcTable`, **owned** (T8.A6). The C++ declares the
+    /// context's slot `void*` and points it at a `CWelsDecoder` member; the port
+    /// named the type at T5b.2 and owns the value now — every entry is a
+    /// `&'static` table, so the struct is four fat pointers and the aliasing the C
+    /// used to avoid copying it bought nothing. `WelsOpenDecoder` fills it, where
+    /// `decoder.cpp:606` calls `InitVlcTable (pCtx->pVlcTable)`.
+    pub pVlcTable: SVlcTable,
     pub sBs: BsReader,
     pub sSpsPpsCtx: SWelsDecoderSpsPpsCTX,
     pub bHasNewSps: bool,
@@ -1858,7 +1862,8 @@ pub struct SWelsDecoderContext {
     pub uiCurIdrPicId: u16,
     pub bNewSeqBegin: bool,
     pub bNextNewSeqBegin: bool,
-    pub pStreamSeqNum: *mut i32,
+    /// `CWelsDecoderImpl::iStreamSeqNum`, **owned** (T8.A6).
+    pub pStreamSeqNum: i32,
     pub iSeqNum: i32,
     pub bFramePending: bool,
     pub bFrameFinish: bool,
@@ -1905,7 +1910,11 @@ pub struct SWelsDecoderContext {
     pub bPrintFrameErrorTraceFlag: bool,
     pub iIgnoredErrorInfoPacketCount: i32,
     pub pTraceHandle: *mut c_void,
-    pub pLastDecPicInfo: *mut SWelsLastDecPicInfo,
+    /// `CWelsDecoderImpl::sLastDecPicInfo`, **owned** (T8.A6). `decoder_init_c`
+    /// runs `WelsDecoderLastDecPicInfoDefaults` over it at context construction,
+    /// where `CWelsDecoder::InitDecoder` runs it (`welsDecoderExt.cpp:386`) — the
+    /// defaults are not zeros.
+    pub pLastDecPicInfo: SWelsLastDecPicInfo,
     pub sWelsCabacContexts: [[[SWelsCabacCtx; WELS_CONTEXT_COUNT]; WELS_QP_MAX + 1]; 4],
     pub bCabacInited: bool,
     pub pCabacCtx: [SWelsCabacCtx; WELS_CONTEXT_COUNT],
@@ -1931,7 +1940,10 @@ pub struct SWelsDecoderContext {
     /// the prose floor, and the third in this session.)
     pub sCabacDecEngine: SWelsCabacDecEngine,
     pub dDecTime: f64,
-    pub pDecoderStatistics: *mut SDecoderStatistics,
+    /// `CWelsDecoderImpl::sDecoderStatistics`, **owned** (T8.A6). Handed out whole
+    /// by `DECODER_OPTION_GET_STATISTICS`, which is why its one declaration is the
+    /// ABI's (T8.A1).
+    pub pDecoderStatistics: SDecoderStatistics,
     pub iMbEcedNum: i32,
     pub iMbEcedPropNum: i32,
     pub iMbNum: i32,
@@ -2029,7 +2041,15 @@ impl Default for SWelsDecoderContext {
             // `WelsResetRefPic`'s `-1` belongs to `Default`, not to the zeroing.
             sRefPic: SRefPic::memset_zero(),
             sTmpRefPic: SRefPic::memset_zero(),
-            pVlcTable: std::ptr::null_mut(),
+            // The shell `WelsCreateDecoder` used to build: `SVlcTable`'s sub-tables
+            // are `&'static` slices, so a zeroed value is invalid and the empty slice
+            // is what "not yet initialised" spells. `WelsOpenDecoder` overwrites it.
+            pVlcTable: SVlcTable {
+                kpCoeffTokenVlcTable: [[&[]; 8]; 4],
+                kpChromaCoeffTokenVlcTable: &[],
+                kpZeroTable: [&[]; 7],
+                kpTotalZerosTable: [[&[]; 15]; 2],
+            },
             sBs: BsReader::default(),
             sSpsPpsCtx: SWelsDecoderSpsPpsCTX::memset_zero(),
             bHasNewSps: false,
@@ -2071,7 +2091,7 @@ impl Default for SWelsDecoderContext {
             uiCurIdrPicId: 0,
             bNewSeqBegin: false,
             bNextNewSeqBegin: false,
-            pStreamSeqNum: std::ptr::null_mut(),
+            pStreamSeqNum: 0,
             iSeqNum: 0,
             bFramePending: false,
             bFrameFinish: false,
@@ -2105,7 +2125,7 @@ impl Default for SWelsDecoderContext {
             bPrintFrameErrorTraceFlag: false,
             iIgnoredErrorInfoPacketCount: 0,
             pTraceHandle: std::ptr::null_mut(),
-            pLastDecPicInfo: std::ptr::null_mut(),
+            pLastDecPicInfo: SWelsLastDecPicInfo::default(),
             // 191,360 bytes of it, and `WelsCabacGlobalInit` overwrites every entry on
             // the first CABAC access unit — `bCabacInited` below is the guard.
             sWelsCabacContexts: [[[SWelsCabacCtx::default(); WELS_CONTEXT_COUNT]; WELS_QP_MAX + 1]; 4],
@@ -2115,7 +2135,7 @@ impl Default for SWelsDecoderContext {
             // empty window takes the ladder's error arm (T5.O2).
             sCabacDecEngine: SWelsCabacDecEngine::default(),
             dDecTime: 0.0,
-            pDecoderStatistics: std::ptr::null_mut(),
+            pDecoderStatistics: SDecoderStatistics::default(),
             iMbEcedNum: 0,
             iMbEcedPropNum: 0,
             iMbNum: 0,
