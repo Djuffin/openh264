@@ -188,7 +188,7 @@ pub use crate::common::mc::SMcFunc;
 
 pub use crate::decoder::decoder_context::{Picture, SPicture, SDecodingParam};
 pub use crate::decoder::decoder_context::pic_and_refs_mut;
-use crate::decoder::decoder_context::{api_alias, api_alias_mut, ec_active_idc};
+use crate::decoder::decoder_context::ec_active_idc;
 pub use crate::decoder::pic_queue::{PicId, RefSlot};
 pub use crate::decoder::picture::{same_picture, pic_slot};
 pub use crate::safe::plane::PaddedPlane;

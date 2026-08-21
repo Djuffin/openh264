@@ -8,10 +8,11 @@
 
 #![deny(unsafe_code)]
 // **Phase 5b, T5b.6: this file's `unsafe` is gone and no exception is enumerated.**
-// `src/decoder/` carries **three** `#[allow(unsafe_code)]` items in total, and they
-// are all in `decoder_context.rs` (`api_alias`/`api_alias_mut`) and `picture.rs` (the
-// one Miri provenance test S28 mandates for `data_ptr` — T5b.7 retired the second
-// with `data_ptr_ref`). Nothing here is one of them.
+// `src/decoder/` carries **two** `#[allow(unsafe_code)]` items in total (T8.A8), and
+// both are `picture.rs`'s Miri provenance tests for `data_ptr` — the instruments S28
+// mandates for that accessor, not production code. The two that used to sit beside
+// them, `decoder_context.rs`'s `api_alias`/`api_alias_mut`, retired with the api-owned
+// fields they dereferenced. Nothing here is one of them.
 
 //! # H.264 / AVC and SVC NAL Unit and Access Unit Parser (`nalu.h` & `au_parser.cpp`)
 //!
@@ -50,7 +51,6 @@ use crate::decoder::parse_mb_syn_cavlc::*;
 use crate::decoder::pic_queue::*;
 use crate::decoder::picture::*;
 use crate::decoder::slice::*;
-use crate::common::memory_align::*;
 
 // Explicit imports to resolve glob ambiguities
 use crate::decoder::bit_stream::{BsReader, ERR_NONE, ERR_INVALID_PARAMETERS, ERR_INFO_OUT_OF_MEMORY};

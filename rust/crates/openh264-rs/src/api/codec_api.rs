@@ -1452,7 +1452,6 @@ pub struct CWelsDecoderImpl {
     pub base: ISVCDecoder,
     pub pVtbl: Box<ISVCDecoderVtbl>,
     pub pCtx: *mut crate::decoder::decoder_core::SWelsDecoderContext,
-    pub align: crate::common::CMemoryAlign,
     // **T8.A5: `param` stood here and is deleted — F41.** It was the port's own
     // invention: `CWelsDecoder` has no parameter member in the reference, and the
     // block the decoder reads is the *context's*, allocated by `InitDecoderCtx`
@@ -1461,20 +1460,19 @@ pub struct CWelsDecoderImpl {
     // field that a second `Initialize` could rewrite without the context knowing,
     // and gave `SetOption` a block the C++ writes one level down.
     pub bEndOfStream: bool,
-    // Members owned by CWelsDecoder in C++ (welsDecoderExt.h) and wired into the
-    // decoder context by InitDecoderCtx.
-    pub sPictInfoList: [crate::decoder::decoder_context::SPictInfo; 16],
-    pub sReoderingStatus: crate::decoder::decoder_context::SPictReoderingStatus,
-    /// `m_bIsBaseline` — reordering is bypassed entirely for baseline profiles.
-    pub bIsBaseline: bool,
-    /// `m_iLastBufferedIdx`
-    pub iLastBufferedIdx: i32,
-    /// `m_pPicBuff` — only ever set in the threaded path in C++, so it stays null
-    /// here; kept so the release helpers can mirror `pCtx ? pCtx->pPicBuff : m_pPicBuff`.
-    pub pPicBuff: *mut crate::decoder::pic_queue::SPicBuff,
-    /// `m_uiDecodeTimeStamp` — monotonic counter stamped onto each decoded picture;
-    /// the no-reorder release path orders buffered pictures by it.
-    pub uiDecodeTimeStamp: u32,
+    // **T8.A7: the ten `CWelsDecoder` members stood here and are the context's now.**
+    // They were wired into it by ten `addr_of_mut!` stamps mirroring
+    // `InitDecoderCtx`, and read back through `api_alias`/`api_alias_mut` — F38's
+    // discipline holding up an arrangement the port did not need. In the reference
+    // they are `CWelsDecoder`'s because a **threaded** decoder shares one reordering
+    // buffer, one statistics block and one vlc table across N contexts
+    // (`welsDecoderExt.cpp:415-422` stamps all N); with one context per decoder,
+    // which is what this port has, the context owns them and the stamps have nothing
+    // to do. `m_pPicBuff` went with them by deletion rather than by moving — see
+    // [`pool_for`] for why it is provably null here.
+    //
+    // What is left is what the api layer genuinely owns: the vtable it hands out,
+    // the context pointer, and the end-of-stream flag `GetOption` reports.
 }
 
 unsafe extern "C" fn encoder_init_c(this: *mut ISVCEncoder, pParam: *const SEncParamBase) -> i32 {
@@ -1581,25 +1579,20 @@ unsafe extern "C" fn decoder_init_c(this: *mut ISVCDecoder, pParam: *const SDeco
             // Mirror CWelsDecoder::InitDecoderCtx (welsDecoderExt.cpp): wire the
             // decoder-owned members into the context, then fill in defaults.
             //
-            // **Every one of these is `addr_of_mut!`, and F38 is why** (S29). These
-            // eight pointers are derived from `CWelsDecoderImpl`'s own fields and
-            // stored into another struct that outlives the expression — S29's worst
-            // class. Spelled `&mut (*dec_impl).field`, each store retags that field's
-            // range, and the *next write through `dec_impl` itself* — this file makes
-            // several, e.g. `sReoderingStatus.iLastWrittenSeqNum` in
-            // `ReleaseBufferedReadyPictureNoReorder` — pops the stored pointer's tag.
-            // The decoder then reads through it. `addr_of_mut!` creates no reference,
-            // so the derived pointer carries `dec_impl`'s provenance and the two
-            // spellings of "the same field" stop fighting.
-            ctx_box.pMemAlign = ptr::addr_of_mut!((*dec_impl).align);
+            // **T8.A5–A8: the ten `addr_of_mut!` stamps stood here, and F38 was
+            // why they were spelled that way.** Each derived a pointer from a
+            // `CWelsDecoderImpl` field and stored it into a struct that outlives
+            // the expression — S29's worst class, where `&mut (*dec_impl).field`
+            // retags the field's range and the next write through `dec_impl`
+            // itself pops the stored tag. `addr_of_mut!` was the fix; owning the
+            // fields is the answer, and there is nothing left to stamp.
+            //
             // The caller's parameters, before `WelsDecoderDefaults` — the position
             // the stamped alias put them in, kept because everything built below
             // this line may read them. `DecoderConfigParam` writes the same block
-            // again at the tail of this function, which is where the C++ has the
+            // again at the tail of this function, which is where the C++ has its
             // one copy; the two are the same store.
             ctx_box.pParam = *pParam;
-            ctx_box.pPictInfoList = ptr::addr_of_mut!((*dec_impl).sPictInfoList) as *mut _;
-            ctx_box.pPictReoderingStatus = ptr::addr_of_mut!((*dec_impl).sReoderingStatus);
             let p_ctx = Box::into_raw(ctx_box);
             // `CWelsDecoder::InitDecoder` runs this over `m_sLastDecPicInfo` just
             // before it calls `InitDecoderCtx` (`welsDecoderExt.cpp:386`); the field
@@ -1607,6 +1600,19 @@ unsafe extern "C" fn decoder_init_c(this: *mut ISVCDecoder, pParam: *const SDeco
             // is built. They are **not** zeros — `iPrevFrameNum` starts at -1.
             crate::decoder::decoder_core::WelsDecoderLastDecPicInfoDefaults(
                 &mut (*p_ctx).pLastDecPicInfo,
+            );
+            // `ResetReorderingPictureBuffers (&m_sReoderingStatus, m_sPictInfoList,
+            // true)` — the `CWelsDecoder` constructor's full reset
+            // (`welsDecoderExt.cpp:169`), which is where a fresh reordering buffer
+            // comes from. `IMinInt32` in every slot's `iPOC` is what "empty" is;
+            // zeroes are a valid POC.
+            let crate::decoder::decoder_core::SWelsDecoderContext {
+                pPictReoderingStatus, pPictInfoList, ..
+            } = &mut *p_ctx;
+            crate::decoder::decoder_core::ResetReorderingPictureBuffers(
+                pPictReoderingStatus,
+                pPictInfoList,
+                true,
             );
             crate::decoder::decoder_core::WelsDecoderDefaults(&mut *p_ctx, ptr::null_mut());
             crate::decoder::decoder_core::WelsDecoderSpsPpsDefaults(&mut (*p_ctx).sSpsPpsCtx);
@@ -1699,8 +1705,34 @@ unsafe extern "C" fn decoder_decode_frame_nodelay_c(
 /// Moves a just-decoded picture out of `pDstInfo` and into the reordering slot
 /// list, clearing `iBufferStatus` so nothing is emitted until a release call
 /// picks the picture back up in display order.
+/// `pCtx ? pCtx->pPicBuff : m_pPicBuff` — the C++'s pool selection, as a flag.
+///
+/// **`m_pPicBuff` is provably null in this port** and the field is deleted with it
+/// (T8.A7). Its only writers in the reference are in `ThreadDecodeFrameInternal`
+/// (`welsDecoderExt.cpp:1312`, `:1333`), the threaded decoder's frame loop, which
+/// this port does not have — `GetThreadCount` returns 0 and the partial MT arm is
+/// fenced as `DECODER_MT(incomplete: F36)`. `CWelsDecoderImpl::pPicBuff` was
+/// therefore written exactly once, `null_mut()` in the factory, and read at these
+/// two sites.
+///
+/// So the C's ternary carries exactly one bit: **`FlushFrame` passes a null context
+/// to say "do not touch the live pool"** (`welsDecoderExt.cpp:1103`), and every
+/// other caller passes the real one. That bit is `bUsePool`, and spelling it as a
+/// bool is what lets the reordering state move into the context — a null context
+/// argument cannot carry the state the callee now reads out of it.
+#[inline]
+unsafe fn pool_for(
+    pCtx: *mut crate::decoder::decoder_core::SWelsDecoderContext,
+    bUsePool: bool,
+) -> crate::decoder::pic_queue::PPicBuff {
+    if !bUsePool || pCtx.is_null() {
+        return ptr::null_mut();
+    }
+    crate::decoder::decoder_context::pic_pool_ptr(&mut (*pCtx).pPicBuff)
+        .map_or(ptr::null_mut(), |pool| pool)
+}
+
 unsafe fn BufferingReadyPicture(
-    dec_impl: *mut CWelsDecoderImpl,
     pCtx: *mut crate::decoder::decoder_core::SWelsDecoderContext,
     _ppDst: *mut *mut u8,
     pDstInfo: *mut SBufferInfo,
@@ -1714,25 +1746,25 @@ unsafe fn BufferingReadyPicture(
         if let Some(sps) =
             crate::decoder::decoder_context::active_sps(&(*pCtx).sSpsPpsCtx, (*pCtx).active_sps)
         {
-            (*dec_impl).bIsBaseline = sps.uiProfileIdc == 66 || sps.uiProfileIdc == 83;
+            (*pCtx).bIsBaseline = sps.uiProfileIdc == 66 || sps.uiProfileIdc == 83;
         }
     }
-    if !(*dec_impl).bIsBaseline {
+    if !(*pCtx).bIsBaseline {
         // T5b.3: `pCtx->pSliceHeader` was a raw alias into a NAL node; the node is an
         // index now (`slice_hdr_nal`) and this resolves it.
         if slice_header_of(&*pCtx)
             .is_some_and(|sh| sh.eSliceType == crate::decoder::slice::EWelsSliceType::B_SLICE)
         {
-            (*dec_impl).sReoderingStatus.bHasBSlice = true;
+            (*pCtx).pPictReoderingStatus.bHasBSlice = true;
         }
     }
     for i in 0..16usize {
-        if (*dec_impl).sPictInfoList[i].iPOC == crate::decoder::decoder_context::IMinInt32 {
-            (*dec_impl).sPictInfoList[i].sBufferInfo = *pDstInfo;
-            (*dec_impl).sPictInfoList[i].iPOC =
+        if (*pCtx).pPictInfoList[i].iPOC == crate::decoder::decoder_context::IMinInt32 {
+            (*pCtx).pPictInfoList[i].sBufferInfo = *pDstInfo;
+            (*pCtx).pPictInfoList[i].iPOC =
                 slice_header_of(&*pCtx).map_or(0, |sh| sh.iPicOrderCntLsb);
-            (*dec_impl).sPictInfoList[i].iSeqNum = (*pCtx).iSeqNum;
-            (*dec_impl).sPictInfoList[i].uiDecodingTimeStamp = (*pCtx).uiDecodingTimeStamp;
+            (*pCtx).pPictInfoList[i].iSeqNum = (*pCtx).iSeqNum;
+            (*pCtx).pPictInfoList[i].uiDecodingTimeStamp = (*pCtx).uiDecodingTimeStamp;
             // T5.P′2: the DPB's "previous picture" is a slot handle now, so the
             // resolve happens here rather than the pointer being stored. `api/` is
             // Phase 8's; this is the field's type change reaching its one consumer
@@ -1748,13 +1780,13 @@ unsafe fn BufferingReadyPicture(
                 if bSingleThreaded {
                     prev.iRefCount += 1;
                 }
-                (*dec_impl).sPictInfoList[i].iPicBuffIdx = iPicBuffIdx;
+                (*pCtx).pPictInfoList[i].iPicBuffIdx = iPicBuffIdx;
             }
-            (*dec_impl).iLastBufferedIdx = i as i32;
+            (*pCtx).iLastBufferedIdx = i as i32;
             (*pDstInfo).iBufferStatus = 0;
-            (*dec_impl).sReoderingStatus.iNumOfPicts += 1;
-            if i as i32 > (*dec_impl).sReoderingStatus.iLargestBufferedPicIndex {
-                (*dec_impl).sReoderingStatus.iLargestBufferedPicIndex = i as i32;
+            (*pCtx).pPictReoderingStatus.iNumOfPicts += 1;
+            if i as i32 > (*pCtx).pPictReoderingStatus.iLargestBufferedPicIndex {
+                (*pCtx).pPictReoderingStatus.iLargestBufferedPicIndex = i as i32;
             }
             break;
         }
@@ -1765,18 +1797,18 @@ unsafe fn BufferingReadyPicture(
 /// dropping the DPB reference taken in [`BufferingReadyPicture`]. Shared tail of
 /// both `ReleaseBufferedReadyPicture*` functions in `welsDecoderExt.cpp`.
 unsafe fn EmitBufferedPicture(
-    dec_impl: *mut CWelsDecoderImpl,
+    pCtx: *mut crate::decoder::decoder_core::SWelsDecoderContext,
     pPicBuff: *mut crate::decoder::pic_queue::SPicBuff,
     ppDst: *mut *mut u8,
     pDstInfo: *mut SBufferInfo,
 ) {
-    let idx = (*dec_impl).sReoderingStatus.iPictInfoIndex as usize;
-    *pDstInfo = (*dec_impl).sPictInfoList[idx].sBufferInfo;
+    let idx = (*pCtx).pPictReoderingStatus.iPictInfoIndex as usize;
+    *pDstInfo = (*pCtx).pPictInfoList[idx].sBufferInfo;
     *ppDst.add(0) = (*pDstInfo).pDst[0];
     *ppDst.add(1) = (*pDstInfo).pDst[1];
     *ppDst.add(2) = (*pDstInfo).pDst[2];
-    (*dec_impl).sPictInfoList[idx].iPOC = crate::decoder::decoder_context::IMinInt32;
-    let iPicBuffIdx = (*dec_impl).sPictInfoList[idx].iPicBuffIdx;
+    (*pCtx).pPictInfoList[idx].iPOC = crate::decoder::decoder_context::IMinInt32;
+    let iPicBuffIdx = (*pCtx).pPictInfoList[idx].iPicBuffIdx;
     if !pPicBuff.is_null() {
         // `slot_at_mut` carries the C's `>= 0 && < iCapacity` test, so the range check
         // and the indexing are one expression instead of two that could disagree.
@@ -1799,7 +1831,7 @@ unsafe fn EmitBufferedPicture(
             }
         }
     }
-    (*dec_impl).sReoderingStatus.iNumOfPicts -= 1;
+    (*pCtx).pPictReoderingStatus.iNumOfPicts -= 1;
 }
 
 /// Matches `void CWelsDecoder::ReleaseBufferedReadyPictureNoReorder (...)`.
@@ -1822,20 +1854,20 @@ unsafe fn EmitBufferedPicture(
 /// order key, so it is the correct tiebreaker; this engages on an exact tie
 /// only, and non-tied ordering is bit-identical to C++.
 unsafe fn ReleaseBufferedReadyPictureNoReorder(
-    dec_impl: *mut CWelsDecoderImpl,
     pCtx: *mut crate::decoder::decoder_core::SWelsDecoderContext,
+    bUsePool: bool,
     ppDst: *mut *mut u8,
     pDstInfo: *mut SBufferInfo,
 ) {
     let mut firstValidIdx: i32 = -1;
     let mut uiDecodingTimeStamp: u32 = 0;
     let mut iChosenPOC: i32 = 0;
-    let largest = (*dec_impl).sReoderingStatus.iLargestBufferedPicIndex;
+    let largest = (*pCtx).pPictReoderingStatus.iLargestBufferedPicIndex;
     for i in 0..=largest {
-        if (*dec_impl).sPictInfoList[i as usize].iPOC != crate::decoder::decoder_context::IMinInt32 {
-            uiDecodingTimeStamp = (*dec_impl).sPictInfoList[i as usize].uiDecodingTimeStamp;
-            iChosenPOC = (*dec_impl).sPictInfoList[i as usize].iPOC;
-            (*dec_impl).sReoderingStatus.iPictInfoIndex = i;
+        if (*pCtx).pPictInfoList[i as usize].iPOC != crate::decoder::decoder_context::IMinInt32 {
+            uiDecodingTimeStamp = (*pCtx).pPictInfoList[i as usize].uiDecodingTimeStamp;
+            iChosenPOC = (*pCtx).pPictInfoList[i as usize].iPOC;
+            (*pCtx).pPictReoderingStatus.iPictInfoIndex = i;
             firstValidIdx = i;
             break;
         }
@@ -1844,33 +1876,24 @@ unsafe fn ReleaseBufferedReadyPictureNoReorder(
         if i == firstValidIdx {
             continue;
         }
-        let info = (*dec_impl).sPictInfoList[i as usize];
+        let info = (*pCtx).pPictInfoList[i as usize];
         if info.iPOC != crate::decoder::decoder_context::IMinInt32
             && (info.uiDecodingTimeStamp < uiDecodingTimeStamp
                 || (info.uiDecodingTimeStamp == uiDecodingTimeStamp && info.iPOC < iChosenPOC))
         {
             uiDecodingTimeStamp = info.uiDecodingTimeStamp;
             iChosenPOC = info.iPOC;
-            (*dec_impl).sReoderingStatus.iPictInfoIndex = i;
+            (*pCtx).pPictReoderingStatus.iPictInfoIndex = i;
         }
     }
     if uiDecodingTimeStamp > 0 {
-        let idx = (*dec_impl).sReoderingStatus.iPictInfoIndex as usize;
-        (*dec_impl).sReoderingStatus.iLastWrittenPOC = (*dec_impl).sPictInfoList[idx].iPOC;
-        (*dec_impl).sReoderingStatus.iLastWrittenSeqNum = (*dec_impl).sPictInfoList[idx].iSeqNum;
-        // `if (pCtx || m_pPicBuff)` in C++: with no context and no cached pool
-        // there is nothing whose refcount could be dropped.
-        // The cast is **here**, where the two sources meet: `m_pPicBuff` is a raw
-        // field of `CWelsDecoderImpl` that Phase 8 owns, so the local is a pointer
-        // or it is two shapes at once. The accessor hands back the borrow (T5.Z3);
-        // this line is the api boundary's, and it carries the Phase 8 pointer.
-        let pPicBuff: crate::decoder::pic_queue::PPicBuff = if !pCtx.is_null() {
-            crate::decoder::decoder_context::pic_pool_ptr(&mut (*pCtx).pPicBuff)
-                .map_or(std::ptr::null_mut(), |pool| pool)
-        } else {
-            (*dec_impl).pPicBuff
-        };
-        EmitBufferedPicture(dec_impl, pPicBuff, ppDst, pDstInfo);
+        let idx = (*pCtx).pPictReoderingStatus.iPictInfoIndex as usize;
+        (*pCtx).pPictReoderingStatus.iLastWrittenPOC = (*pCtx).pPictInfoList[idx].iPOC;
+        (*pCtx).pPictReoderingStatus.iLastWrittenSeqNum = (*pCtx).pPictInfoList[idx].iSeqNum;
+        // `PPicBuff pPicBuff = pCtx ? pCtx->pPicBuff : m_pPicBuff;`
+        // (`welsDecoderExt.cpp:1026`), as a flag — see [`pool_for`].
+        let pPicBuff = pool_for(pCtx, bUsePool);
+        EmitBufferedPicture(pCtx, pPicBuff, ppDst, pDstInfo);
     }
 }
 
@@ -1880,36 +1903,29 @@ unsafe fn ReleaseBufferedReadyPictureNoReorder(
 /// once it is safe to do so — either it directly follows the last written POC,
 /// or the decoder has moved past it. `isFlush` forces the emit.
 unsafe fn ReleaseBufferedReadyPictureReorder(
-    dec_impl: *mut CWelsDecoderImpl,
-    mut pCtx: *mut crate::decoder::decoder_core::SWelsDecoderContext,
+    pCtx: *mut crate::decoder::decoder_core::SWelsDecoderContext,
+    bUsePool: bool,
     ppDst: *mut *mut u8,
     pDstInfo: *mut SBufferInfo,
     isFlush: bool,
 ) {
     let IMinInt32 = crate::decoder::decoder_context::IMinInt32;
-    // `PPicBuff pPicBuff = pCtx ? pCtx->pPicBuff : m_pPicBuff;` is evaluated
-    // *before* the null context is replaced by the single-thread context.
-    let pPicBuff: crate::decoder::pic_queue::PPicBuff = if !pCtx.is_null() {
-        // The api boundary's cast — see `ReleaseBufferedReadyPicture` (T5.Z3).
-        crate::decoder::decoder_context::pic_pool_ptr(&mut (*pCtx).pPicBuff)
-            .map_or(std::ptr::null_mut(), |pool| pool)
-    } else {
-        (*dec_impl).pPicBuff
-    };
-    if pCtx.is_null() {
-        pCtx = (*dec_impl).pCtx;
-    }
+    // `PPicBuff pPicBuff = pCtx ? pCtx->pPicBuff : m_pPicBuff;` (`:1128`), which in
+    // the C++ is evaluated *before* `if (!pCtx) pCtx = m_pDecContext;` restores the
+    // live context for everything below. Both halves are `bUsePool` now — see
+    // [`pool_for`] — and the restore is what makes the flag the whole difference.
+    let pPicBuff = pool_for(pCtx, bUsePool);
 
-    if (*dec_impl).sReoderingStatus.iNumOfPicts > 0 {
-        (*dec_impl).sReoderingStatus.iMinPOC = IMinInt32;
+    if (*pCtx).pPictReoderingStatus.iNumOfPicts > 0 {
+        (*pCtx).pPictReoderingStatus.iMinPOC = IMinInt32;
         let mut firstValidIdx: i32 = -1;
-        let largest = (*dec_impl).sReoderingStatus.iLargestBufferedPicIndex;
+        let largest = (*pCtx).pPictReoderingStatus.iLargestBufferedPicIndex;
         for i in 0..=largest {
-            let info = (*dec_impl).sPictInfoList[i as usize];
-            if (*dec_impl).sReoderingStatus.iMinPOC == IMinInt32 && info.iPOC > IMinInt32 {
-                (*dec_impl).sReoderingStatus.iMinPOC = info.iPOC;
-                (*dec_impl).sReoderingStatus.iMinSeqNum = info.iSeqNum;
-                (*dec_impl).sReoderingStatus.iPictInfoIndex = i;
+            let info = (*pCtx).pPictInfoList[i as usize];
+            if (*pCtx).pPictReoderingStatus.iMinPOC == IMinInt32 && info.iPOC > IMinInt32 {
+                (*pCtx).pPictReoderingStatus.iMinPOC = info.iPOC;
+                (*pCtx).pPictReoderingStatus.iMinSeqNum = info.iSeqNum;
+                (*pCtx).pPictReoderingStatus.iPictInfoIndex = i;
                 firstValidIdx = i;
                 break;
             }
@@ -1918,9 +1934,9 @@ unsafe fn ReleaseBufferedReadyPictureReorder(
             if i == firstValidIdx {
                 continue;
             }
-            let info = (*dec_impl).sPictInfoList[i as usize];
-            let min_seq = (*dec_impl).sReoderingStatus.iMinSeqNum;
-            let min_poc = (*dec_impl).sReoderingStatus.iMinPOC;
+            let info = (*pCtx).pPictInfoList[i as usize];
+            let min_seq = (*pCtx).pPictReoderingStatus.iMinSeqNum;
+            let min_poc = (*pCtx).pPictReoderingStatus.iMinPOC;
             if info.iPOC > IMinInt32
                 && (if info.iSeqNum == min_seq {
                     info.iPOC < min_poc
@@ -1928,37 +1944,37 @@ unsafe fn ReleaseBufferedReadyPictureReorder(
                     info.iSeqNum.wrapping_sub(min_seq) < 0
                 })
             {
-                (*dec_impl).sReoderingStatus.iMinPOC = info.iPOC;
-                (*dec_impl).sReoderingStatus.iMinSeqNum = info.iSeqNum;
-                (*dec_impl).sReoderingStatus.iPictInfoIndex = i;
+                (*pCtx).pPictReoderingStatus.iMinPOC = info.iPOC;
+                (*pCtx).pPictReoderingStatus.iMinSeqNum = info.iSeqNum;
+                (*pCtx).pPictReoderingStatus.iPictInfoIndex = i;
             }
         }
     }
 
-    if (*dec_impl).sReoderingStatus.iMinPOC > IMinInt32 {
+    if (*pCtx).pPictReoderingStatus.iMinPOC > IMinInt32 {
         let mut isReady = true;
         if !isFlush {
-            let last_idx = (*dec_impl).iLastBufferedIdx as usize;
+            let last_idx = (*pCtx).iLastBufferedIdx as usize;
             let iLastPOC = match if pCtx.is_null() { None } else { slice_header_of(&*pCtx) } {
                 Some(sh) => sh.iPicOrderCntLsb,
-                None => (*dec_impl).sPictInfoList[last_idx].iPOC,
+                None => (*pCtx).pPictInfoList[last_idx].iPOC,
             };
             let iLastSeqNum = if !pCtx.is_null() {
                 (*pCtx).iSeqNum
             } else {
-                (*dec_impl).sPictInfoList[last_idx].iSeqNum
+                (*pCtx).pPictInfoList[last_idx].iSeqNum
             };
-            let st = (*dec_impl).sReoderingStatus;
+            let st = (*pCtx).pPictReoderingStatus;
             isReady = (st.iLastWrittenPOC > IMinInt32 && st.iMinPOC - st.iLastWrittenPOC <= 1)
                 || st.iMinPOC < iLastPOC
                 || st.iMinSeqNum.wrapping_sub(iLastSeqNum) < 0;
         }
         if isReady {
-            (*dec_impl).sReoderingStatus.iLastWrittenPOC = (*dec_impl).sReoderingStatus.iMinPOC;
-            (*dec_impl).sReoderingStatus.iLastWrittenSeqNum =
-                (*dec_impl).sReoderingStatus.iMinSeqNum;
-            EmitBufferedPicture(dec_impl, pPicBuff, ppDst, pDstInfo);
-            (*dec_impl).sReoderingStatus.iMinPOC = IMinInt32;
+            (*pCtx).pPictReoderingStatus.iLastWrittenPOC = (*pCtx).pPictReoderingStatus.iMinPOC;
+            (*pCtx).pPictReoderingStatus.iLastWrittenSeqNum =
+                (*pCtx).pPictReoderingStatus.iMinSeqNum;
+            EmitBufferedPicture(pCtx, pPicBuff, ppDst, pDstInfo);
+            (*pCtx).pPictReoderingStatus.iMinPOC = IMinInt32;
         }
     }
 }
@@ -1968,7 +1984,6 @@ unsafe fn ReleaseBufferedReadyPictureReorder(
 /// Baseline streams never reorder, so the picture passes straight through and
 /// the buffer stays empty.
 unsafe fn ReorderPicturesInDisplay(
-    dec_impl: *mut CWelsDecoderImpl,
     pCtx: *mut crate::decoder::decoder_core::SWelsDecoderContext,
     ppDst: *mut *mut u8,
     pDstInfo: *mut SBufferInfo,
@@ -1986,15 +2001,15 @@ unsafe fn ReorderPicturesInDisplay(
     else {
         return;
     };
-    (*dec_impl).bIsBaseline = profile == 66 || profile == 83;
-    if (*dec_impl).bIsBaseline || (*pDstInfo).iBufferStatus != 1 {
+    (*pCtx).bIsBaseline = profile == 66 || profile == 83;
+    if (*pCtx).bIsBaseline || (*pDstInfo).iBufferStatus != 1 {
         return;
     }
     let sh_poc = slice_header_of(&*pCtx)
         .filter(|sh| sh.eSliceType == crate::decoder::slice::EWelsSliceType::B_SLICE)
         .map(|sh| sh.iPicOrderCntLsb);
     if let Some(sh_poc) = sh_poc {
-        let st = (*dec_impl).sReoderingStatus;
+        let st = (*pCtx).pPictReoderingStatus;
         let follows = if (*pCtx).iSeqNum == st.iLastWrittenSeqNum {
             sh_poc <= st.iLastWrittenPOC + 2
         } else {
@@ -2002,19 +2017,19 @@ unsafe fn ReorderPicturesInDisplay(
         };
         if follows {
             // issue #3478: B-slice type is a more reliable ordering signal than POC.
-            (*dec_impl).sReoderingStatus.iLastWrittenPOC = sh_poc;
-            (*dec_impl).sReoderingStatus.iLastWrittenSeqNum = (*pCtx).iSeqNum;
+            (*pCtx).pPictReoderingStatus.iLastWrittenPOC = sh_poc;
+            (*pCtx).pPictReoderingStatus.iLastWrittenSeqNum = (*pCtx).iSeqNum;
             *ppDst.add(0) = (*pDstInfo).pDst[0];
             *ppDst.add(1) = (*pDstInfo).pDst[1];
             *ppDst.add(2) = (*pDstInfo).pDst[2];
             return;
         }
     }
-    BufferingReadyPicture(dec_impl, pCtx, ppDst, pDstInfo);
-    if !(*dec_impl).sReoderingStatus.bHasBSlice && (*dec_impl).sReoderingStatus.iNumOfPicts > 1 {
-        ReleaseBufferedReadyPictureNoReorder(dec_impl, pCtx, ppDst, pDstInfo);
+    BufferingReadyPicture(pCtx, ppDst, pDstInfo);
+    if !(*pCtx).pPictReoderingStatus.bHasBSlice && (*pCtx).pPictReoderingStatus.iNumOfPicts > 1 {
+        ReleaseBufferedReadyPictureNoReorder(pCtx, true, ppDst, pDstInfo);
     } else {
-        ReleaseBufferedReadyPictureReorder(dec_impl, pCtx, ppDst, pDstInfo, false);
+        ReleaseBufferedReadyPictureReorder(pCtx, true, ppDst, pDstInfo, false);
     }
 }
 
@@ -2039,8 +2054,8 @@ unsafe extern "C" fn decoder_decode_frame2_c(
         if !kpSrc.is_null() && kiSrcLen > 0 {
             (*p_ctx).bEndOfStreamFlag = false;
             if crate::decoder::decoder_core::GetThreadCount(&mut *p_ctx) <= 0 {
-                (*dec_impl).uiDecodeTimeStamp += 1;
-                (*p_ctx).uiDecodingTimeStamp = (*dec_impl).uiDecodeTimeStamp as _;
+                (*p_ctx).uiDecodeTimeStamp += 1;
+                (*p_ctx).uiDecodingTimeStamp = (*p_ctx).uiDecodeTimeStamp;
             }
             crate::decoder::decoder_core::WelsDecodeBs(
                 &mut *p_ctx,
@@ -2079,7 +2094,7 @@ unsafe extern "C" fn decoder_decode_frame2_c(
             (*p_ctx).bInstantDecFlag = false; // reset no-delay flag
         }
         // `ReorderPicturesInDisplay` at the tail of DecodeFrame2WithCtx.
-        ReorderPicturesInDisplay(dec_impl, p_ctx, ppDst, pDstInfo);
+        ReorderPicturesInDisplay(p_ctx, ppDst, pDstInfo);
         // **F46, T5.T1.** `welsDecoderExt.cpp:892` — the accumulator, whole.
         DECODING_STATE((*p_ctx).iErrorCode)
     }
@@ -2142,7 +2157,14 @@ unsafe extern "C" fn decoder_get_opt_c(this: *mut ISVCDecoder, eOptionId: DECODE
     unsafe {
         match eOptionId {
             DECODER_OPTION::DECODER_OPTION_NUM_OF_FRAMES_REMAINING_IN_BUFFER => {
-                *(pOption as *mut i32) = (*dec_impl).sReoderingStatus.iNumOfPicts;
+                // No context, no reordering state, and the count the C++ reads out of
+                // `m_sReoderingStatus` with no context is zero for the same reason
+                // (T8.A7; see `decoder_flush_frame_c`).
+                *(pOption as *mut i32) = if (*dec_impl).pCtx.is_null() {
+                    0
+                } else {
+                    (*(*dec_impl).pCtx).pPictReoderingStatus.iNumOfPicts
+                };
             }
             DECODER_OPTION::DECODER_OPTION_END_OF_STREAM => {
                 *(pOption as *mut i32) = if (*dec_impl).bEndOfStream { 1 } else { 0 };
@@ -2198,12 +2220,21 @@ unsafe extern "C" fn decoder_flush_frame_c(this: *mut ISVCDecoder, ppDst: *mut *
     let dec_impl = this as *mut CWelsDecoderImpl;
     unsafe {
         let p_ctx = (*dec_impl).pCtx;
-        let bEndOfStreamFlag = p_ctx.is_null() || (*p_ctx).bEndOfStreamFlag;
-        if bEndOfStreamFlag && (*dec_impl).sReoderingStatus.iNumOfPicts > 0 {
-            if !(*dec_impl).sReoderingStatus.bHasBSlice {
-                ReleaseBufferedReadyPictureNoReorder(dec_impl, ptr::null_mut(), ppDst, pDstInfo);
+        // With no context there is no reordering state to drain — the buffers are
+        // the context's own fields since T8.A7. The C++ reaches `CWelsDecoder`'s
+        // copies here and finds `iNumOfPicts == 0` for the same two reasons: the
+        // constructor full-resets them (`welsDecoderExt.cpp:169`) and `DestroyPicBuff`
+        // resets them on the way out (F37).
+        if p_ctx.is_null() {
+            return DECODING_STATE::dsErrorFree;
+        }
+        if (*p_ctx).bEndOfStreamFlag && (*p_ctx).pPictReoderingStatus.iNumOfPicts > 0 {
+            // `false` is the C's `NULL` context argument (`welsDecoderExt.cpp:1103`):
+            // drain the slot list without touching the live pool. See `pool_for`.
+            if !(*p_ctx).pPictReoderingStatus.bHasBSlice {
+                ReleaseBufferedReadyPictureNoReorder(p_ctx, false, ppDst, pDstInfo);
             } else {
-                ReleaseBufferedReadyPictureReorder(dec_impl, ptr::null_mut(), ppDst, pDstInfo, true);
+                ReleaseBufferedReadyPictureReorder(p_ctx, false, ppDst, pDstInfo, true);
             }
         }
     }
@@ -2235,28 +2266,17 @@ pub unsafe extern "C" fn WelsCreateDecoder(ppDecoder: *mut *mut ISVCDecoder) -> 
         base: ISVCDecoder { lpVtbl: ptr::null() },
         pVtbl: vtbl,
         pCtx: ptr::null_mut(),
-        align: crate::common::CMemoryAlign::new(16),
         bEndOfStream: false,
-        sPictInfoList: unsafe { std::mem::zeroed() },
-        sReoderingStatus: Default::default(),
-        bIsBaseline: false,
-        iLastBufferedIdx: 0,
-        pPicBuff: ptr::null_mut(),
-        uiDecodeTimeStamp: 0,
     });
-    // **T8.A6: `InitVlcTable` and `WelsDecoderLastDecPicInfoDefaults` moved out of
-    // this factory.** Both used to run over `CWelsDecoderImpl` members here, at
-    // decoder *creation*; both tables are the context's fields now and are filled
-    // where the reference fills them — `InitVlcTable` inside `WelsOpenDecoder`
-    // (`decoder.cpp:606`) and the last-decoded-picture defaults in `decoder_init_c`'s
-    // construction block, which is `CWelsDecoder::InitDecoder`'s position
-    // (`welsDecoderExt.cpp:386`). Their defaults are not zeros, so where they run
-    // is a fact and not a formality.
-    crate::decoder::decoder_core::ResetReorderingPictureBuffers(
-        &mut dec.sReoderingStatus,
-        &mut dec.sPictInfoList,
-        true,
-    );
+    // **T8.A6/A7: three initialisers stood here and all three moved.** They ran over
+    // `CWelsDecoderImpl` members at decoder *creation*; the members are the context's
+    // fields now, so each runs where the reference runs it — `InitVlcTable` inside
+    // `WelsOpenDecoder` (`decoder.cpp:606`), `WelsDecoderLastDecPicInfoDefaults` in
+    // `decoder_init_c`'s construction block (`welsDecoderExt.cpp:386`), and the
+    // reordering full reset with them. None of the three sets zeros, so *where* they
+    // run is a fact and not a formality; what changes is that a re-`Initialize`d
+    // decoder now gets them again, which is what `CWelsDecoder::InitDecoder`'s three
+    // `memset`s do on every call and what this port never did.
     dec.base.lpVtbl = &*dec.pVtbl as *const ISVCDecoderVtbl;
     *ppDecoder = Box::into_raw(dec) as *mut ISVCDecoder;
     CM_RESULT_SUCCESS as c_long

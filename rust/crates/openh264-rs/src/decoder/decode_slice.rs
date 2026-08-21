@@ -9,10 +9,11 @@
 
 #![deny(unsafe_code)]
 // **Phase 5b, T5b.6: this file's `unsafe` is gone and no exception is enumerated.**
-// `src/decoder/` carries **three** `#[allow(unsafe_code)]` items in total, and they
-// are all in `decoder_context.rs` (`api_alias`/`api_alias_mut`) and `picture.rs` (the
-// one Miri provenance test S28 mandates for `data_ptr` — T5b.7 retired the second
-// with `data_ptr_ref`). Nothing here is one of them.
+// `src/decoder/` carries **two** `#[allow(unsafe_code)]` items in total (T8.A8), and
+// both are `picture.rs`'s Miri provenance tests for `data_ptr` — the instruments S28
+// mandates for that accessor, not production code. The two that used to sit beside
+// them, `decoder_context.rs`'s `api_alias`/`api_alias_mut`, retired with the api-owned
+// fields they dereferenced. Nothing here is one of them.
 
 use crate::decoder::decoder_context::{
     PicRefs, SRefPic, SliceCtx, SpsRef, active_fmo, active_pps, active_sps, cur_au, pps_of,
@@ -1936,18 +1937,14 @@ fn temp_pred_pic<'v>(pCtx: &'v mut SliceCtx<'_>) -> Option<&'v mut SPicture> {
         // T5.P″1: `alloc_picture` hands back the owner, and the field keeps it. The
         // lazy arm's two null tests are the same two states — "not allocated yet" and
         // "the allocation failed" — with `Option` spelling them.
-        // T5.W3: `alloc_picture` stopped taking the context, so its `pMemAlign`
-        // guard is tested here — the same `None`, from the same condition, at the one
-        // caller that holds a context to test it with.
-        *pCtx.pTempDec = if !pCtx.bHasMemAlign {
-            None
-        } else {
-            crate::decoder::pic_queue::alloc_picture(
-                pCtx.bParseOnly,
-                (iMbWidth << 4) as i32,
-                (iMbHeight << 4) as i32,
-            )
-        };
+        // T8.A8: the `pMemAlign` guard `alloc_picture` used to carry — `if
+        // (pCtx->pMemAlign)` around the C's `AllocPicture` — went with the allocator;
+        // the picture's planes are `Vec`s and `None` is still the failure.
+        *pCtx.pTempDec = crate::decoder::pic_queue::alloc_picture(
+            pCtx.bParseOnly,
+            (iMbWidth << 4) as i32,
+            (iMbHeight << 4) as i32,
+        );
     }
     pCtx.pTempDec.as_deref_mut()
 }
