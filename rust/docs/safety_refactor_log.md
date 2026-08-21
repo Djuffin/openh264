@@ -13422,3 +13422,441 @@ Fenced as screen content was — `LOAD_BALANCING(incomplete: F72)` at the missin
 call and at the consumer, guard cited, finding named at both. **Not completed**: the
 brief's instruction for an incomplete path is to fence it and say which, and
 finishing it is a behaviour change on a path with no coverage.
+
+## Phase 7, session C — the dropped-sync census, the allocator's retirement, and the phase closes (2026-08-21)
+
+`c5f458d2..` , eight commits, every one green on `gates.sh commit` or `family` before
+it landed. Steps 0–6 of [`phase7_session_c.md`](prompts/phase7_session_c.md) as
+briefed, plus two findings the work produced (**F73**, **F74**) and one the brief
+predicted would need a decision and did (**F36**).
+
+### T7.C0 — the dropped-sync census, at phase scale
+
+**The method is F69's, and F69 is why it exists.** A field that looks dead in the port
+and is live in the reference is a dropped statement by definition, and no gate this
+project owns can see one: the byte sweep only reports that *some* run produced the
+wrong bytes, and F3 spent 87 measurements and four sessions saying exactly that. So
+every synchronisation site in the C++ encoder's MT paths is classified here against its
+port counterpart, and then the same question is asked backwards.
+
+Grep, verbatim from the brief:
+`WelsMutexLock|WelsMutexUnlock|WelsEventSignal|WelsEventWait|WelsAtomic|InterlockedIncrement`
+over `codec/encoder/core/src/*.cpp`. **16 hits.** Two classes: **(a)** guards machinery
+the port deleted, **(b)** guards shared encoder *state* two workers reach.
+
+| # | C++ site | what it brackets | class | port counterpart |
+|---|---|---|---|---|
+| 1 | `svc_encode_slice.cpp:1777` lock | `AddSliceBoundary` + `++pSliceCtx->iSliceNumInFrame` — the **layer's** slice context, shared by every worker on the dynamic path | **(b)** | `with_wels_mutex(mutexSliceNumUpdate, …)` in `DynSlcJudgeSliceBoundaryStepBack` — **restored at T7.B3**; this is F69, and F3's cause |
+| 2 | `:1790` unlock | same pair | **(b)** | same |
+| 3 | `wels_task_encoder.cpp:102` lock | `QueryEmptyThread`'s test-and-set over `bThreadBsBufferUsage` in `InitTask` | (a) | none needed — both deleted at T7.B4; the slot is the worker's by static partition (`SliceJobHandle::iBsSlot`, one handle per slot, moved into its spawn) |
+| 4 | `:104` unlock | same | (a) | same |
+| 5 | `:132` lock | `FinishTask`'s slot release `bThreadBsBufferUsage[m_iThreadIdx] = false` | (a) | same deletion — there is no release because there is no claim |
+| 6 | `:134` unlock | same | (a) | same |
+| 7 | `:141` lock | `pCtx->iEncoderError \|= m_eTaskResult` in `FinishTask` | **(b)** | **structural**: `SliceJobResult` carries the value back through the join and the calling thread ORs it into the same field, one line above the same check. `mutexEncoderError` deleted with the field at T7.B4 |
+| 8 | `:145` unlock | same | **(b)** | same |
+| 9 | `:258` lock | `ReallocateSliceInThread` — the worker's **own** bank, grown through the **shared** `CMemoryAlign` | **(b)** | was `with_wels_mutex(mutexThreadSlcBuffReallocate, …)`; **deleted at T7.C5** once T7.C4 removed the shared allocator from the call — see the straggler section |
+| 10 | `:261` unlock | same | **(b)** | same |
+| 11 | `wels_task_management.cpp:204` `WelsEventSignal(&m_hTaskEvent, &m_hEventMutex, &m_iWaitTaskNum)` | the pool's completion counter and the barrier's wake | (a) | none — `CWelsTaskManageBase` deleted at T7.B4; the join is `thread::scope`'s |
+| 12 | `:205` `WelsMutexLock(&m_hEventMutex)` | **inside a `/* … */` block in the reference** — dead in the C++ itself | (a) | none, and none in the C++ either |
+| 13 | `:207` `WelsMutexUnlock` | same comment block | (a) | same |
+| 14 | `:210` `WelsEventSignal` | same comment block | (a) | same |
+| 15 | `:211` `fprintf(… "WelsEventSignal" …)` | a **string literal** in the same comment block — the grep's one false positive | (a) | n/a |
+| 16 | `:241` `WelsEventWait(&m_hTaskEvent, &m_hEventMutex, m_iWaitTaskNum)` in `ExecuteTaskList` | the barrier: block until every queued task has reported | (a) | `for h in handles { iErr \|= h.join()… }` in both fork functions — `thread::scope`'s join **is** this wait |
+
+**Rows per class: (a) 10, (b) 6.** Every (b) row has a named counterpart, and **no
+dropped statement remains in this direction**. The one that had been dropped is rows
+1–2, found one session earlier by asking this same question about one field.
+
+**The grep's own coverage, checked rather than assumed.** The brief's pattern misses
+`CWelsAutoLock` and the `WelsEventOpen`/`WelsEventClose` family; adding them finds 14
+more sites and **all 14 are class (a)**: `wels_task_management.cpp:203`
+(`CWelsAutoLock` over `m_iWaitTaskNum`) and `:87`/`:139` (open/close of `m_hTaskEvent`)
+die with the manager, and the eleven in `slice_multi_threading.cpp:331–348, 401–412`
+are the four per-thread event arrays and the master event — **dead on both sides**,
+which is T7.A1's finding restated: the C++ opens and closes them and never signals or
+waits on one. So the census's 16 is 16 of 30, and the 14 it does not name change no row.
+
+#### The inverse: every shared write the port's workers make
+
+Asked the other way, because a counterpart that exists is not the same as a write that
+is guarded. The instrument for this half was **Miri on the MT probe**, run in a loop
+until it stopped reporting — a grep cannot see a race and this is what the probe is for.
+
+| what a worker writes | shared? | C++ brackets it? | disposition |
+|---|---|---|---|
+| `sLayerInfo.sNalHeaderExt.bIdrFlag` (`WelsCodeOneSlice`) | yes — layer state, once per slice per worker | **no** (`svc_encode_slice.cpp:1655`) | would have been a shared C++ race (F61's class); **fixed anyway at T7.C3** — the write is loop-invariant across the fork, so it is hoisted to the calling thread and the race is gone rather than argued away. **F71 closed** |
+| `sSliceEncCtx.iSliceNumInFrame` + `AddSliceBoundary`'s writes through the same parent | yes — the layer's slice context, dynamic path | **yes** | **F69** — the port had dropped it; restored T7.B3 |
+| `pWelsSvcRc->pGomCost[kiComplexityIndex] += iCostLuma` (`WelsRcMbInfoUpdateGom`) | yes — the layer's RC array, a read-modify-write, and two slices' GOM 0 are the same index | **no** (`ratectl.cpp:1273`) | **shared C++ race, F61's class — and byte-neutral for a reason stronger than the usual one: `pGomCost` has zero readers on either side.** In `codec/` it is allocated (`ratectl.cpp:79`), zeroed (`:669`), written (`:1273`) and **read nowhere**; the port matches exactly. A write-only accumulator cannot change a byte, however it races |
+| `sSliceBufferInfo[slot].iCodedSliceNum`, `NumSliceCodedOfPartition[p]`, `LastCodedMbIdxOfPartition[p]` | **no** — indexed by the worker's own slot / partition | n/a | disjoint by construction; part 1 of the seam's argument |
+| `pCtx->iEncoderError` | **no longer** | yes, and the port's counterpart is structural | census row 7 |
+| the slice's own state (`sSliceBs`, `iSliceIdx`, `uiBufferIdx`, `uiSliceConsumeTime`, `sSlicingOverRc`) | **no** — a fixed mode's slice `i` is `slice_in_bank(layer, 0, i)`, a pure function of the index and never of the schedule | n/a | per-slice |
+| the reconstruction picture's macroblock rows | **no** — each worker writes its own rows | n/a | but the port *reaches* them through `&mut SPicture` — a retag over the shared arena, not a write to shared data. **F73**, opened here, Phase 9's |
+
+### T7.C1 — F72 completed (D-mt-2)
+
+Session B ruled the load-balancing path fenced-and-open; the phase plan overruled that
+with one sentence — **a default-on feature must not ship degenerate** — and this
+session completed it.
+
+One call, at the C++'s own site: `encoder_ext.cpp:4064-4073`, the end of the per-layer
+body, after the padding block and immediately above the `eLastNalPriority` stamp, under
+the C++'s own four-term guard, which is the same guard the consumer arm a thousand
+lines up already reproduced. Both `LOAD_BALANCING(incomplete: F72)` fences retire.
+
+The path is the project's **second expected-divergent class** after `CABA2_SVA_B`, and
+it can never be anything else: frame N+1's boundaries are a function of frame N's
+measured times, so two runs of the **C++** disagree with each other. Coverage is
+therefore structural — `load_balancing_completes_frames_with_sane_slice_counts`, flag
+on, four threads, four slices, four frames, asserting shape and never bytes, at 256x192
+because `MIN_NUM_MB_PER_SLICE` forces exactly 192 macroblocks for four slices and
+anything smaller is silently rewritten to a mode with no threads. Hard rule 6 holds:
+nothing gated runs the flag, and 369/369 stayed 369/369 across the commit.
+
+### T7.C3 — F71 closed, and the first read of it was wrong in an instructive way
+
+F71 recorded its residue as "cannot be spelled away; it needs the context split". That
+framing treated the shared `bIdrFlag` write as an **ownership** question — *which object
+should hold the layer header* — and framed that way it really does need F67. Read as a
+**scheduling** question it dissolves:
+
+* the condition is `eSliceType == I_SLICE`, a **frame**-level value fixed before the
+  fork, so every worker takes the same arm;
+* the value is the constant `true`;
+* **no worker reads the field before its own write** — the three functions a worker
+  runs ahead of `WelsCodeOneSlice` do not touch the layer header, and the prefix NAL's
+  own idr argument comes from `eNalType`.
+
+A write that is the same constant on every worker and that no worker observes before
+making it is **loop-invariant across the fork**. Hoisting it to the calling thread
+immediately before the spawn is byte-for-byte what the race produced.
+`StampLayerIdrFlagForSliceType` is that hoist; each single-threaded caller keeps the
+statement one line above its own `WelsCodeOneSlice`, and a `debug_assert!` where the
+write stood is the contract. Placed at the fork and **not** merged into
+`WelsInitCurrentLayer`'s frame-level stamp, because the two disagree when
+`eSliceType == I_SLICE` with `iFrameNum != 0`.
+
+Three read-only `&mut …sNalHeaderExt` derivations went with it. Miri counts a `&mut`
+retag as a *write* for data-race purposes, so a read-only borrow of shared layer state
+taken by every worker races with anything; `addr_of!` and no signature moved.
+
+**The lesson, because the first read cost a session's worth of deferral:** a shared
+write is not automatically an ownership problem. Ask first whether it is invariant
+across the fork.
+
+**F73 opened.** With the write gone, Miri's next answer was a different class: `&mut`
+retags over the *reconstruction picture* (`layer_dec_pic_mut` -> `SRefList::pic_mut` ->
+`&mut SPicture`, and `SPicture::planes`' `&mut self`), taken by every worker while each
+writes its own disjoint macroblock rows. Measured, not guessed: **32 `planes()` sites,
+68 `_mut` picture-accessor calls** across seven modules. A raw twin for the six
+worker-tree sites would move the report one call deeper, not close it. That is F67's
+context split — Phase 9's — and the probe's `#[cfg_attr(miri, ignore)]` cites F73 now.
+
+### T7.C4–C6 — the stragglers, and the allocator retires from the encoder
+
+Three commits, and the arc they finish is three phases long: Phase 6 took
+`src/encoder`'s `CMemoryAlign` call sites from 45 to 15, and these take the last 15 to
+**zero**.
+
+**T7.C4 — `sSliceBs.pBs` owned.** An `Option<Vec<u8>>`, not a bare `Vec<u8>`, and the
+reason is that the field is not only a buffer: it is the encoder's **one record of a
+one-bit choice**, read by both `slice_writer` and `slice_bs_buffer` to decide whether a
+slice writes into its own output buffer or shares the frame's. `SSlice.pSliceBsa` was
+deleted in Phase 6 precisely because it was a second copy of that bit; `is_empty()`
+cannot distinguish "shares" from "was given a zero-length buffer", and `is_some()`
+reads exactly what nullness read. **The free walk is deleted rather than converted** —
+dropping the bank drops every buffer, with nothing to null and nothing to get wrong on
+an error path — and seven signatures lose a `pMa` that no longer names anything.
+
+**T7.C5 — the MT context members own, and the third mutex retires.**
+`pThreadBsBuffer` and `pDynamicBsBuffer` become `[Vec<u8>; MAX_THREADS_NUM]`: an
+**array** of `Vec`s rather than a `Vec<Vec<u8>>`, which is an aliasing choice —
+`addr_of!(…[i])` names one worker's element directly where indexing an outer `Vec`
+would reborrow the container every worker shares, which is F71's class exactly.
+`SSliceThreading` becomes a `Box` rather than an `alloc_zeroed` block, mandatorily: a
+`Vec` field inside a zeroed block is UB at its first drop (S21). **T7.A3's leak class
+is closed at this site by deleting the walk it restored.**
+
+And `mutexThreadSlcBuffReallocate` goes — the third of the C++'s four. Its own note
+said it "retires with `pMemAlign`, not with the pool", and that is what happened: T7.B2
+made the bank it guards the growing worker's own, T7.C4 made the slice's bitstream the
+slice's own, and what is left inside `ReallocateSliceInThread` is worker-local writes
+over frame-level reads. **One mutex is left in this crate: F69's.**
+
+**T7.C6 — `pMemAlign` deleted.** The eight `SCREEN_CONTENT(dormant)` allocator sites
+are deleted rather than converted: `RequestScreenBlockFeatureStorage` and its release
+twin **had no caller on either side of the port's boundary**, since the port's picture
+constructor refuses `iNeedFeatureStorage != 0` before it can reach them. Converting
+them would have produced four owned buffers behind a struct whose fields are Phase 10's
+to design — a shape nobody has decided, on a path nobody runs — and Phase 10 ports the
+family whole from the reference either way. The struct and its fields are untouched.
+
+The field itself, its constructor, its `WELS_DELETE_OP` and a parameter chain through
+eight more signatures go with them. **It had no reader anywhere**, including two dead
+`let pMa = (*pCtx).pMemAlign;` bindings still sitting in `wels_preprocess.rs` — the
+same shape as the fields T7.A1 and T7.B4 deleted, found the same way.
+
+**`common/memory_align.rs` stays, and its blocker is named in the file.** The
+acceptance grep is met where it is asked — `src/encoder` and `src/processing` hold
+**zero** live allocator call sites — and the module's remaining users are all
+decoder-side: `SWelsDecoderContext::pMemAlign`, surviving as a **null sentinel** for
+"this context is initialised" with its own three dead bindings, plus
+`CWelsDecoderImpl::align` and `pic_queue.rs`'s tests, which assert
+`WelsGetMemoryUsage() == 0` — i.e. that the decoder allocates nothing through it
+either. The allocator is structurally dead on **both** sides and survives as a
+sentinel. Moving the file into `src/decoder/` was tried and reverted: that tree carries
+`#![deny(unsafe_code)]` on all 30 modules with **zero** exemptions, and a raw allocator
+would be the first. Handed on with the finding rather than forced.
+
+**F61 closed by redesign**, verified by construction and written up in
+`phase6_findings.md`: the layer's slice list has exactly one reader (`slice_in_layer`)
+and **no worker is among its 21 call sites**; a worker resolves slices by bank position
+(`slice_in_bank(layer, slot, coded)`); and the bank being grown belongs to the worker
+growing it, by static partition since T7.B2. The window the finding describes is real
+and **unobservable**, which is stronger than "short". The C++ divergence note is
+unchanged.
+
+### T7.C7 — F36: left, and fenced
+
+The decoder's `iThreadCount > 1` parse arm is a *partial* translation — 101 lines
+against the reference's 162, missing the `pSliceIdc` write (which every
+neighbour-availability predicate compares, so at its `-1` reset prediction crosses
+slice boundaries), the `pNzc` copy, `SetNonZeroCount`, the per-MB deblocking call and
+the border padding, with `decoder_core.cpp:2595`'s `pMbCorrectlyDecodedFlag` re-point
+having no counterpart at all. It is unreachable: `GetThreadCount` returns 0
+unconditionally.
+
+**Left, one line why:** deleting it turns the branch into an unconditional call — a
+shape change to a live decoder function in a phase whose charter names the decoder a
+non-goal — and deletes the one thing a future porter actually needs, which is the list
+above of *which reference statements are absent*. The body is safe Rust, so it costs no
+metric and blocks no deny. What changed is that F36 is **greppable**:
+`DECODER_MT(incomplete: F36)` at the function and at the branch, the same shape as
+`SCREEN_CONTENT(dormant)`.
+
+### T7.C8 — the last deny, and the re-tags
+
+`slice_multi_threading.rs` carries `#![deny(unsafe_code)]`; the `#[allow(unsafe_code)]`
+on its `pub mod` line retires, and `wels_task_management`'s went with the file at
+T7.B4. **37 of 37 modules in `src/encoder` + `src/processing` deny, with no exemption
+left at any declaration** — which is what Phase 6 promised for this phase's close.
+
+The 89 `port-raw(Phase 7)` items are **0**: F67 established that they are, item for
+item, the slice-encode call tree's raw signatures, and Phase 9's context split is what
+retires them. The 16 `MT` items were re-examined against a **stated rule** rather than
+by feel — *an item keeps `MT` iff it would not exist at `iMultipleThreadIdc == 1`*.
+Ten fail it and become `port-raw(Phase 9)`; three pass and stay
+(`WelsLoadNalForSlice`, `WelsUnloadNalForSlice`, their test — checked: the only callers
+are the two fork bodies); the 18 new ones in `slice_multi_threading.rs` pass by
+construction, and its other 9 (the `macros.h` memory helpers, the load-balancing
+functions) are `port-raw(Phase 9)`.
+
+Tag census, `src/encoder` + `src/processing`: `port-raw(Phase 9)` **705**, `cursor`
+**61**, `MT` **21**, `SCREEN_CONTENT(dormant)` **8**, `C-ABI` **5**,
+`send-seam(Phase 9)` **1**, `port-raw(Phase 7)` **0**, untagged **0**.
+
+### T7.C9 and step 5 — the span, and the thread-ceiling answer
+
+**F74**, found by running the span: perfpair's null printed an empty encode table and
+exited 0. `_ENCODE_MS` required a literal `]` after the thread count, and the bench has
+printed `[1 thread sm=1 n=4]` since `BENCH_SLICE_MODE` landed at T7.B0 — so every span
+since that knob existed would have measured the decoder only. Fixed with the rule that
+makes it findable: **a parser that matches nothing must refuse, not report.** Third
+sighting of that class, after gates.sh's Miri step taking `tail`'s exit status and F68's
+thread axis.
+
+**The ceiling was the pool's.** Session B measured the port flat past two threads on
+the old pool; on `thread::scope`, same protocol, 1080p Mandelbrot `sm=1 n=4` goes
+**1.65x → 2.47x** at four threads, 720p `sm=1 n=4` **1.69x → 2.48x**, `sm=3`
+**1.75x → 2.36x**. And where the port still stops, **the reference stops with it** —
+1080p SMPTE at 1.66x against the C++'s 1.66x, 1080p Testsrc at 1.41x against 1.40x —
+so those rows are the content's parallelism and not the port's. No mechanism to name
+and no target to hand on; the charter's conditional pool rebuild is now definitively
+**not wanted**. Full table in `perf_baseline.md`.
+
+The span itself, `b_close` (7e038545) vs `c_close` (4e5bf975), 7 pairs: **encode 84
+rows, median -0.46%, 0 rows over +5%**, inside the null's own floor. No breach, no
+bisect.
+
+### Numbers
+
+| metric | session entry (`7e038545`) | exit (`5470f357`) |
+|---|---|---|
+| tests (debug / release / ignored) | 492 / 486 / 20 | **493 / 487 / 20** |
+| sweeps (both profiles) | 369 / 369 | **369 / 369** |
+| `raw_ptr` (crate) | 2372 | **2334** |
+| `raw_ptr` (encoder+processing) | 1811 | **1773** |
+| `unsafe_block` (enc+pr) | 285 | **283** |
+| `unsafe_fn` (enc+pr) | 697 | **697** |
+| `unsafe_impl` (crate) | 2 | **2** (one of them prose — the tree has exactly **one**) |
+| live allocator call sites, `src/encoder` | 4 + 8 dormant | **0** |
+| mutexes held in the crate | 2 | **1** (F69's) |
+| `deny(unsafe_code)` exemptions at a declaration | 1 | **0** |
+| `port-raw(Phase 7)` tags | 89 | **0** |
+
+## 2026-08-21 — **Phase 7 COMPLETE** (sessions A–C, three sessions)
+
+**The encoder forks and joins with `std::thread::scope` over one documented seam, and
+there is nothing left in `src/encoder` that the phase was given to remove.** That is
+the deliverable. The phase also closed a defect that had outlasted four sessions and
+87 measurements, and the way it closed is the phase's real result.
+
+### The arc
+
+| | phase open (`b08d6c47`) | phase close (`5470f357`) |
+|---|---:|---:|
+| files the phase owned | 3 (`slice_multi_threading` 1036, `wels_task_management` 1174, `wels_thread_pool` 933) | **1** (`slice_multi_threading`, 1741) |
+| lines in those files | **3,143** | **1,741** |
+| `unsafe impl` in the crate | **11** occurrences (5 `Send`/`Sync` pairs + prose) | **1** — the seam, `send-seam(Phase 9)` |
+| `static mut` process-wide singletons | 1 (the pool) | **0** |
+| `usize` launderings across a spawn | 1 | **0** |
+| mutexes held in the crate | 4 C++ sites | **1** (F69's `mutexSliceNumUpdate`) |
+| live allocator call sites, `src/encoder` | 15 (4 + 8 dormant + 3) | **0** |
+| `pMemAlign` on `sWelsEncCtx` | present | **deleted** |
+| encoder+processing `raw_ptr` | 1849 | **1773** |
+| encoder+processing `unsafe_block` | 313 | **283** |
+| `deny(unsafe_code)` exemptions at a declaration | 2 | **0** — 37 of 37 modules |
+| `port-raw(Phase 7)` tags | 89 | **0** |
+| Miri `--lib` skips | 1 (F12) | **0** |
+| sweeps, both profiles | 369 / 369 | **369 / 369**, every commit |
+
+### F3 closed — and not by the thing the charter expected
+
+The charter fixed the experiment in advance as a test of the deleted claiming/pool
+machinery. Session B ran **three arms with one variable each**, because a candidate
+cause appeared mid-phase:
+
+| arm | tree | runs | hits | rate |
+|---|---|---|---|---|
+| before | untouched | 3000 | 25 | 1/120 |
+| **A** | pool machinery deleted, lock still missing | 2000 | 20 | 1/100 |
+| **B** | the lock restored | 2000 | **0** | — |
+
+Arm A against the before-arm is **z = 0.61, p ≈ 0.54** — deleting the pool did not move
+F3. Arm B is **P ≈ 2e-9**. **F3's cause is F69**: a `WelsMutexLock` the raw translation
+dropped from around `AddSliceBoundary` + `++iSliceNumInFrame`. The machinery was worth
+deleting for five other reasons and **was not the defect** — and a single after-arm on
+a tree carrying both changes would have credited it anyway.
+
+**One variable per arm is why the answer is usable.** That is the phase's most portable
+result and it belongs in every future ablation's brief.
+
+### The method that produced F69, and then produced the census
+
+F69, T7.A3's leak and `SSliceThreadPrivateData`'s zero readers all came from one
+question asked while listing what to delete: **"which of these fields is dead?"** A
+field that looks dead in the port and is live in the reference is a dropped statement
+by definition, and **no gate this project owns can see one**.
+
+Session C ran that question at phase scale as the **dropped-sync census**: all 16 C++
+synchronisation sites in the encoder's MT paths classified against their port
+counterparts — 10 guard machinery the port deleted, 6 guard shared state and every one
+has a named counterpart — plus the inverse list of every shared write the port's
+workers make, with Miri on the MT probe as the instrument for that half. **No dropped
+statement remains in either direction.** The one shared C++ race that survives
+(`pGomCost`, unbracketed on both sides) is byte-neutral for a reason stronger than the
+usual one: it has **zero readers on either side**.
+
+### The findings
+
+| | disposition |
+|---|---|
+| **F3** MT `sm=3` wrong-length output, open since Phase 1 | **CLOSED** by F69, session B, three arms |
+| **F12** `wels_thread_pool` Miri skip | **CLOSED** session B — the skip deleted with the module, and an MT probe added so the deletion means something |
+| **F36** decoder MT parse arm is a partial translation | **LEFT AND FENCED**, session C — `DECODER_MT(incomplete: F36)`, with the list of absent reference statements at the site |
+| **F61** MT bank growth never re-stamps the slice list | **CLOSED BY REDESIGN**, session C, verified by construction |
+| **F67** the fork/join design's unstated third premise | **RULED — D-mt-1**, session A opened it, session B executed it |
+| **F68** the encoder bench's thread axis never exercised threading | FIXED session B (`BENCH_SLICE_MODE`) |
+| **F69** the dropped `mutexSliceNumUpdate` | **FIXED** session B — F3's cause |
+| **F70** dead-tag read in `InitSliceSettings` | FIXED session B |
+| **F71** the root-accessor idiom is unsound for two threads | **CLOSED** — 16 accessors session B, the residue session C, and the first read of that residue was wrong in an instructive way |
+| **F72** load balancing half-translated | **CLOSED** session C — **D-mt-2**, completed rather than fenced, and recorded as the project's second expected-divergent class |
+| **F73** workers reach the reconstruction picture through `&mut` | **OPEN → Phase 9**, 32 + 68 sites measured |
+| **F74** perfpair's encode parser blind to every multi-slice row | FIXED session C |
+| **F75** the unscoped Miri gate unrunnable once the skip list emptied | FIXED session C |
+
+**Ten of the thirteen were found by reading the reference or by Miri; none by a
+byte-level gate.** The sweep proved 369/369 through every commit of the phase and
+discovered nothing — which is what it is for, and worth stating plainly so nobody
+mistakes a green sweep for an audit.
+
+**Four of them are one shape** — F17 (a prior phase), F68, F74, F75 — and the phase
+earns the right to state it as a rule: **an instrument's empty case is a case, and it
+is the one nobody tests.** Three of the four were in the measuring apparatus rather
+than in the code.
+
+### The thread ceiling, answered
+
+Session B's honest numbers had the port scaling 1→2 threads and stopping, on the old
+pool. On `thread::scope`: 1080p Mandelbrot `sm=1 n=4` **1.65x → 2.47x** at four
+threads, 720p **1.69x → 2.48x**, `sm=3` **1.75x → 2.36x** — and where the port still
+stops, **the reference stops with it** (1080p SMPTE 1.66x vs the C++'s 1.66x). The
+ceiling was the pool's dispatch and it went with the pool. **The charter's conditional
+pool rebuild is definitively not wanted.**
+
+Cumulative encode position unmoved: **≈ +15…+17%** against the **+25%** tripwire.
+D-perf-6's parked recovery remains Phase 9's — inheriting a port that now scales at
+`t=4`, which changes what a recovery target means there.
+
+### Two sessions was the estimate, and it was wrong twice over
+
+Three was also wrong, for a better reason. Session A spent itself discovering that the
+phase's own precondition did not hold (**F67**), which is only measurable when a
+session tries to build against it — the same shape as Phase 6 session I. Session B
+spent its second half on four defects the conversion *exposed*, none of which were on
+any plan. Session C spent a third of itself on two instrument bugs (**F74**, **F75**)
+that only a phase exit could surface.
+
+**The estimate is not the lesson; the shape is.** A phase that converts a subsystem
+finds the subsystem's defects, and a phase that closes finds its instruments'. Neither
+is schedulable in advance, and both are worth more than the conversion.
+
+### The exit battery — `gates.sh exit`, unscoped, `5470f357` + the F75 fix
+
+| step | verdict |
+|---|---|
+| `cargo build --all-targets` | PASS |
+| `cargo test` debug / release | **493 / 487 passed, 0 failed, 20 ignored** |
+| unsafe ratchet | PASS, no per-file increase |
+| duplicate census | PASS, 58 allowlisted |
+| diffharness sweep, **debug** | **PASS=369 FAIL=0** |
+| diffharness sweep, **release** | **PASS=369 FAIL=0** |
+| `decode_1080p_bench` | all streams **bit-identical** |
+| `c_vs_rust_bench` | all rows **bit-identical** |
+| **Miri `--lib`, whole library, no skips** | **350 passed / 0 failed**, 1651s |
+| Miri `--test kernels_differential_phase2` | 20 passed / 0 failed |
+| Miri `--test safe_bits_differential` | 7 passed / 0 failed |
+| Miri `--test safe_plane_differential` | 3 passed / 0 failed |
+| **OVERALL** | **PASS** |
+
+All seven aliasing probes ran by name and passed: `decode_slice_loop_…`,
+`error_concealment_…`, `fmo_slice_group_walk_…` (decoder);
+`encoder_initialisation_…`, `encode_loop_runs_over_a_macroblock_grid_…`,
+`encode_loop_runs_with_cavlc_and_fine_mode_decision_…`,
+`encode_loop_runs_over_size_limited_dynamic_slices_…` (encoder). Two are `ignored`
+under Miri and both say why at the site: `fork_join_encodes_a_multi_slice_frame_…`
+cites **F73**, and `load_balancing_completes_frames_with_sane_slice_counts` cites its
+cost (~8x the fork/join probe, whose aliasing question it shares). Both run normally in
+both profiles.
+
+**This is the first time the unscoped step has run since the skip list emptied**, and
+it took F75's fix to make it possible — see the finding, and note that the battery
+failed twice on the way to this table (once on a ratchet increase, once on F75) and
+both were fixed rather than waived.
+
+### What each later phase inherits
+
+- **Phase 8** (`src/api/`, the C ABI boundary) — next. Unchanged by this phase except
+  that `CWelsDecoderImpl::align` is now one of the two things keeping
+  `common/memory_align.rs` alive; **F23**'s encoder twin is still Phase 8's, and the
+  `abi_test_driver` in `codec_api.rs` gained a `load_balancing` knob.
+- **Phase 9** (the context split) — the whole inheritance is now one object seen four
+  ways: **F67** (`sWelsEncCtx` is `!Sync` for twelve reasons), **F66** (a `&mut`
+  context parameter invalidates every context cursor, with its detector), **F73** (the
+  picture-accessor family), and the **705 `port-raw(Phase 9)` + 1 `send-seam(Phase 9)`**
+  tags that retire when it lands. D-perf-6's parked recovery is here too.
+- **Phase 10** (screen content) — `SScreenBlockFeatureStorage` and its fields are
+  untouched; the two unreachable allocator functions that fronted them are deleted, and
+  the reference is eleven and thirty lines of plain allocate-and-null.
+- **The decoder** — `memory_align.rs` is structurally dead on both sides and survives
+  as a null sentinel on `SWelsDecoderContext`; deleting it is a decoder-side change
+  and the file says so. **F36** is fenced at its site.

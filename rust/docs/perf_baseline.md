@@ -2988,3 +2988,87 @@ conversion this session — the fork/join's own numbers are step 7's, and are C'
 The recorded position is unmoved: encoder deficit ≈ **+15…+17%** against the
 **+25%** tripwire. D-perf-6's parked recovery remains Phase 9's.
 
+
+---
+
+## Phase 7 session C — the thread ceiling was the pool's, and `thread::scope` does not have it
+
+**The question, restated.** Session B measured the port scaling 1→2 threads and then
+stopping, at every HD resolution, in both multi-slice modes, where the reference kept
+scaling to four. That was the **old pool's** ceiling, measured at `9a392cc9` before any
+conversion. Whether `std::thread::scope` still had it was left as this session's first
+perf question, and it is the input the charter's conditional pool rebuild always
+wanted.
+
+**It does not.** Same protocol as session B — 30 frames, `BENCH_LOAD_BALANCING=0`,
+threads 1/2/4, `BENCH_SLICE_MODE=1:4,3` — at `4e5bf975`:
+
+| row | C++ 1t | 2t | 4t | Rust 1t | 2t | 4t |
+|---|---|---|---|---|---|---|
+| 1080p Mandelbrot `sm=1 n=4` | 194 | 324 (1.67x) | 381 (1.96x) | 114 | 191 (1.68x) | **282 (2.47x)** |
+| 1080p Mandelbrot `sm=3` | 180 | 316 (1.75x) | 416 (2.31x) | 109 | 189 (1.73x) | **258 (2.36x)** |
+| 720p Mandelbrot `sm=1 n=4` | 385 | 643 (1.67x) | 939 (2.44x) | 218 | 377 (1.73x) | **542 (2.48x)** |
+| 720p Mandelbrot `sm=3` | 372 | 637 (1.71x) | 1017 (2.73x) | 214 | 371 (1.73x) | **599 (2.79x)** |
+| 720p SMPTE `sm=1 n=4` | 1206 | 1726 (1.43x) | 2334 (1.94x) | 791 | 1079 (1.37x) | 1567 (1.98x) |
+| 720p SMPTE `sm=3` | 1167 | 1777 (1.52x) | 2296 (1.97x) | 762 | 1123 (1.47x) | 1400 (1.84x) |
+| 1080p SMPTE `sm=1 n=4` | 474 | 727 (1.53x) | 785 (1.66x) | 330 | 497 (1.51x) | 547 (1.66x) |
+| 1080p SMPTE `sm=3` | 448 | 725 (1.62x) | 785 (1.75x) | 311 | 484 (1.56x) | 560 (1.80x) |
+| 1080p Testsrc `sm=1 n=4` | 330 | 423 (1.28x) | 461 (1.40x) | 216 | 272 (1.26x) | 304 (1.41x) |
+| 1080p Testsrc `sm=3` | 313 | 421 (1.34x) | 498 (1.59x) | 201 | 262 (1.31x) | 323 (1.61x) |
+
+fps; the multiplier is against that side's own 1-thread row. Every row bit-identical.
+
+**Read against session B's four comparable rows**, which is the whole point:
+
+| row | Rust 4t/1t on the pool (B) | Rust 4t/1t on `thread::scope` (C) |
+|---|---|---|
+| 1080p Mandelbrot `sm=1 n=4` | **1.65x** (flat vs 2t) | **2.47x** |
+| 1080p Mandelbrot `sm=3` | **1.75x** (flat vs 2t) | **2.36x** |
+| 720p Mandelbrot `sm=1 n=4` | **1.69x** (flat vs 2t) | **2.48x** |
+| 1080p SMPTE `sm=1 n=4` | **1.44x** (*below* its own 2t) | **1.66x** |
+
+**Where the port still stops, the reference stops with it**, and that is the part that
+turns "the ceiling is gone" from a hopeful reading into a checked one. 1080p SMPTE
+tops out at 1.66x — and the C++ tops out at 1.66x. 1080p Testsrc at 1.41x against the
+C++'s 1.40x. On both of those the port's curve is now the *content's* parallelism, not
+the port's, which is exactly what session B's rows could not say. Across the whole
+table there is no row where the Rust 4t/1t ratio falls meaningfully below the C++'s.
+
+**No mechanism to name and no target to hand on.** The brief's fallback — "name the
+mechanism (profile one run) or hand Phase 9 a measured target" — is not needed: the
+ceiling was the pool's dispatch, it went with the pool, and the conditional pool
+rebuild the charter left open is now definitively **not wanted**. `thread::scope`
+scales, and a rebuilt pool would be re-introducing the thing that did not.
+
+### The span — `b_close` (7e038545) vs `c_close` (4e5bf975)
+
+7 interleaved pairs (S1), 30 frames, `BENCH_SLICE_MODE=1:4,3`, `BENCH_THREADS=1,2,4`,
+`BENCH_LOAD_BALANCING=0`, FFMPEG set (S17):
+
+| | rows | median | min | max | over +5% |
+|---|---|---|---|---|---|
+| encode | 84 | **-0.46%** | -4.45% | +2.15% | **0** |
+| decode | 3 | +0.08% | -0.10% | +0.11% | 0 |
+| encode **null** (S2 floor) | 84 | +0.00% | -4.95% | +3.13% | 0 |
+| decode **null** | 3 | +0.01% | +0.00% | +0.16% | 0 |
+
+Every deviation is inside the session's own floor and the median is on the faster
+side. The four owned-buffer conversions (`sSliceBs.pBs`, `pThreadBsBuffer`,
+`pDynamicBsBuffer`, and the `Box`ed `SSliceThreading`) and the deleted
+`mutexThreadSlcBuffReallocate` cost nothing measurable. **No median breach, so no
+bisect.**
+
+**This span exists only because F74 was fixed first.** The null run's first attempt
+printed a *completely empty encode table* and exited 0: perfpair's `_ENCODE_MS` regex
+required a literal `]` after the thread count, and the bench has printed
+`[1 thread sm=1 n=4]` since `BENCH_SLICE_MODE` landed at T7.B0. Every span run since
+that knob existed would have measured the decoder only. Fixed at T7.C9, together with
+the rule that made it findable at all — **a parser that matches nothing must refuse,
+not report** (F74; the third sighting of that class after gates.sh's Miri step and
+F68's thread axis).
+
+**Cumulative position, as D-perf-4 requires.** Unmoved: encoder deficit ≈
+**+15…+17%** against the **+25%** tripwire, unbreached by 8–10 points. D-perf-6's
+parked recovery remains Phase 9's — and Phase 9 now inherits a *scaling* port rather
+than one that stops at two threads, which changes what a recovery target means at
+`t=4`.

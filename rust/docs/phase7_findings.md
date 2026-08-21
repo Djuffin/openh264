@@ -347,9 +347,11 @@ configuration axis that would have crossed them was missing from both.**
 
 ## F71 — the root-accessor idiom is sound for one thread and unsound for two
 
-**Status: PARTLY FIXED at T7.B4; the residue is Phase 9's.** Found by the same
-probe, immediately after F70, and it is the class F12's Miri skip had been hiding
-for five phases.
+**Status: CLOSED at T7.C3.** The accessor half was fixed at T7.B4; the residue this
+finding handed to Phase 9 turned out not to need it, and the section "Where it stops"
+below is superseded by "How it actually closed" at the end. Found by the MT Miri
+probe, immediately after F70, and it is the class F12's Miri skip had been hiding for
+five phases.
 
 ### The mechanism
 
@@ -416,12 +418,54 @@ race. The accessor half is fixed; the ownership half travels with F67.
 own rule that no skip may exist without a finding, applied to a test rather than a
 module. It runs in both profiles normally.
 
+### How it actually closed — T7.C3, and the section above was wrong about why
+
+"That cannot be spelled away" was the wrong conclusion, and the reason it was wrong is
+worth more than the fix. The residue was read as an **ownership** question — *which
+object should hold the layer header* — and framed that way it really does need F67's
+context split. Read as a **scheduling** question it is trivial, and the port already
+had every fact needed to see that:
+
+* the write's condition, `eSliceType == I_SLICE`, is a **frame**-level value fixed
+  before the fork, so every worker takes the same arm;
+* the value written is the constant `true`;
+* **no worker reads the field before its own write.** Ahead of `WelsCodeOneSlice` a
+  worker runs `InitOneSliceInThread`, `SetSliceBoundaryInfo` and
+  `WritePrefixNalForSlice`, and none of the three touches the layer header — the
+  prefix NAL's own idr argument comes from `eNalType`, not from here.
+
+A write that is the same constant on every worker, that no worker observes before
+making it, is **loop-invariant across the fork**. Hoisting it to the calling thread
+immediately before the spawn is byte-for-byte what the race produced, and the race is
+*gone* rather than serialised. `StampLayerIdrFlagForSliceType` is that hoist; every
+single-threaded caller keeps the statement exactly where it stood, one line above its
+own `WelsCodeOneSlice`, and a `debug_assert!` where the write used to be is the
+contract.
+
+Placed at the fork, deliberately, and **not** merged into `WelsInitCurrentLayer`'s
+frame-level `bIdrFlag` stamp: the two disagree whenever `eSliceType == I_SLICE` with
+`iFrameNum != 0`, so moving the write across the hundreds of lines between them would
+be a behaviour change rather than a hoist.
+
+Three `&mut (*pCurLayer).sLayerInfo.sNalHeaderExt` derivations went with it —
+`WelsSliceHeaderScalExtInit` and both `g_pWelsWriteSliceHeader` bodies, all three
+read-only — because Miri counts a `&mut` retag as a *write* for data-race purposes, so
+a read-only borrow of shared layer state taken by every worker races with anything.
+Same `addr_of!` idiom as the sixteen accessors, no signature moved.
+
+**The lesson, stated because the first read cost a session's worth of deferral:** a
+shared write is not automatically an ownership problem. Ask first whether it is
+invariant across the fork; if it is, it belongs on the calling thread and the whole
+question dissolves. What survived the hoist is a *different* class — see **F73**.
+
 ---
 
 ## F72 — the load-balancing path is half-translated: the port has the consumer of the feedback loop and not the producer
 
-**Status: OPEN, fenced, owner unassigned.** This is step 5's ruling, and the read
-changed the answer the brief expected.
+**Status: CLOSED at T7.C1** by decision **D-mt-2** (plan §7.4). Session B ruled it
+fenced-and-open; the phase plan overruled that for one reason — *a default-on feature
+must not ship degenerate* — and session C completed it. The ruling section below is
+kept as written; "The ruling, revised" at the end is what was done.
 
 ### What the read found
 
@@ -497,3 +541,181 @@ The rest of the multi-threaded encoder is unaffected. `bUseLoadBalancing` gates 
 which task class `CreateTasks` built (now: whether `EncodeFixedSlicesForked` stamps
 `uiSliceConsumeTime`) and whether the adjusters run. Every gated configuration in
 this project runs with it off, and 369/369 in both profiles says so.
+
+### The ruling, revised — D-mt-2, executed at T7.C1
+
+The phase plan's answer to "fence or complete" is **complete**, and the argument is
+one sentence: *a feature that is on by default must not be left degenerate.* Fencing
+is right for a path that is absent; this one is present, reachable through the public
+API with no flag to set, and quietly producing a worse slice distribution than the
+reference — the failure mode a fence does nothing about.
+
+**What landed.** One call, at the C++'s own site: `encoder_ext.cpp:4064-4073`, the end
+of the per-layer body in `WelsEncoderEncodeExt`, after the padding block and
+immediately above the `eLastNalPriority` stamp, under the C++'s own four-term guard —
+which is the same guard the consumer arm a thousand lines up already reproduced. Both
+`LOAD_BALANCING(incomplete: F72)` fences retire, and their comments now say what the
+path *is* rather than what it is missing.
+
+**The expected-divergent class is recorded, and it is the project's second.** The
+evidence above (two C++ runs, five differing byte counts) is not going to change:
+frame N+1's boundaries are a function of frame N's measured times, so there is no
+reference to compare against and there never will be. The class joins `CABA2_SVA_B`
+in plan §1.5 so a regenerated annotation set cannot lose it.
+
+**Coverage is structural, because differential is impossible.**
+`load_balancing_completes_frames_with_sane_slice_counts` drives the real encoder with
+the flag **on**, four threads, four slices, four frames — the guard's own
+configuration — and asserts shape and never bytes: four frames out, none empty, an IDR
+then three inter frames, and `vcl_nals == 4` every frame, since `DynamicAdjustSlicing`
+moves macroblocks *between* slices and never changes how many there are. 256x192 is
+forced rather than chosen: `MIN_NUM_MB_PER_SLICE` is 48, four slices need 192
+macroblocks, and below that `SliceArgumentValidationFixedSliceMode` silently rewrites
+the request while every other assertion still passes — which is exactly how a probe
+ends up green on the path it was written to leave.
+
+**Hard rule 6 holds.** Behaviour changes only where `bUseLoadBalancing` is on, and no
+gated configuration runs it: both diffharness drivers pin it off, every byte-asserting
+probe pins it off, and the sweeps stayed 369/369 in both profiles across the commit.
+
+---
+
+## F73 — the workers reach the reconstruction picture through `&mut`, and that is a family, not a site
+
+*Phase 7 session C, 2026-08-21, found by the MT Miri probe on the run immediately
+after **F71** closed — the fourth defect that probe has produced by being run.*
+
+**Status: OPEN, owned by Phase 9 (F67's context split).** The MT probe's
+`#[cfg_attr(miri, ignore)]` cites this finding now; it retires with it.
+
+### What it is
+
+With F71's shared write hoisted out of the fork (T7.C3), Miri's next answer on the
+same probe is a different class:
+
+```
+Data race detected between (1) retag write on thread `unnamed-2`
+                       and (2) non-atomic write on thread `unnamed-3`
+  encoder::encoder_context::SRefList::pic_mut       encoder_context.rs
+  encoder::svc_encode_slice::layer_dec_pic_mut      svc_encode_slice.rs
+  encoder::svc_base_layer_md::WelsMdIntraInit       svc_base_layer_md.rs
+```
+
+Every worker resolves the layer's **reconstruction picture** to stamp its macroblock
+cursors, and resolves it the only way the port has: `layer_dec_pic_mut` ->
+`SRefList::pic_mut` -> `&mut SPicture`, then `SPicture::planes(&mut self)` for the
+plane roots. Two workers doing that at the same instant race on the *accessor's own
+borrow* — the `Unique` retag over the picture's header — while what they go on to
+write, their own disjoint macroblock rows, does not overlap at all.
+
+**The aliasing is in how the port reaches the picture, not in what it writes.** That
+is F71's mechanism exactly, one level down, and it is why F71's fix does not reach it:
+F71's sixteen conversions were accessors that hand back a *pointer*, and this family
+hands back a `&mut SPicture` whose `planes()` needs `&mut self` because `data_ptr`
+must produce `*mut u8` out of an owned plane.
+
+### Why it is a family and not a site
+
+Measured, not estimated: **32 `planes()` call sites** and **68 `_mut` picture-accessor
+calls** across `wels_preprocess.rs`, `ref_list_mgr_svc.rs`, `svc_mode_decision.rs`,
+`svc_base_layer_md.rs`, `deblocking.rs`, `encoder_ext.rs` and `picture.rs`. Six of
+those sites are inside the fork; the rest are not, and the shared ones cannot be
+converted without deciding what a `&self` `planes()` hands back — which is a change to
+what a picture *owns* and how a caller names a writable plane.
+
+A raw twin used only by the six worker-tree sites would move the report one call
+deeper on the next Miri run, not close it. That is the shape of every accessor family
+this project has converted, and the ones that went well went **root-down and whole**.
+
+### Why Phase 9
+
+`SPicture`'s ownership is exactly what F67 names as the context split's content, and
+F66 (Phase 6 session J) already established that the conversion has to be run as a
+*precondition* with its detector rather than as a post-mortem. This is the same object
+a fourth time: F67 saw it as a `!Sync` count, T7.B2 as an ordering argument, F71 as a
+retag on the layer, and Miri sees it here as a retag on the picture.
+
+### What it does not mean
+
+No byte moves and no gate is affected. The workers' writes are disjoint by
+construction — this is the seam's part 1, and 369/369 in both profiles across every
+commit of this phase says the output does not see it. What is unaudited is the
+*aliasing model*, which is what the MT probe exists to check and why the skip has a
+finding attached rather than a shrug.
+
+---
+
+## F74 — perfpair's encode parser has been blind to every multi-slice row since the axis existed
+
+*Phase 7 session C, 2026-08-21, found by running step 5's span: the null run printed
+an empty encode table and exited 0.*
+
+**Status: FIXED at T7.C9.**
+
+`_ENCODE_MS` was `\[(\d+) thread\]` — a literal `]` straight after the count.
+`BENCH_SLICE_MODE` (T7.B0, F68's knob) makes the bench print `[1 thread sm=1 n=4]`, so
+from the moment the slice-mode axis existed the parser matched **nothing** on any
+multi-slice run, and `report()` printed a header with no rows under it.
+
+**It is F68's own shape, one instrument further out.** F68 was a bench axis that
+silently measured the wrong path; this is a parser that silently measures no path. Both
+are invisible unless someone reads a table for the rows it does *not* have, and this
+one cost nothing only because session B ran no span and this is the first span since
+the axis landed.
+
+Fixed twice over, because the parse bug is the smaller half:
+
+* the axis label is captured into the row key, so `sm=1 n=4` and `sm=3` are separate
+  rows rather than colliding on one;
+* **a parser that matches nothing is now a refusal.** S17 already requires a missing
+  ffmpeg to be loud rather than a quiet skip, and gates.sh's Miri step already refuses
+  a run of zero tests. An empty encode table is indistinguishable from a green one in
+  the report, so it gets the same rule.
+
+The general form is the one this project keeps re-learning and should stop paying for:
+**an instrument that can produce an empty result must refuse, not report.** Three
+sightings now — gates.sh's Miri step taking `tail`'s exit status (Phase 3), F68's
+thread axis, and this.
+
+---
+
+## F75 — the unscoped Miri gate became unrunnable at the exact moment the project earned zero skips
+
+*Phase 7 session C, 2026-08-21, found by running the phase's own `exit` battery — it
+died on the Miri step after 25 minutes of green gates.*
+
+**Status: FIXED at T7.C10.**
+
+```
+=== miri (--lib (whole library, no skips))
+rust/tools/gates.sh: line 402: MIRI_SKIPS[@]: unbound variable
+```
+
+macOS ships **bash 3.2**, where `"${arr[@]}"` on an *empty* array is an
+unbound-variable error under `set -u` — which `gates.sh` sets, deliberately and with a
+comment saying why. `MIRI_SKIPS` is the list of `--skip` arguments the Miri `--lib`
+step passes, and it is empty exactly when the project has **no Miri skips left**.
+
+**Every phase exit before this one ran with at least one entry in it**, so the
+expansion was never empty and the bug never fired. T7.B4 deleted the last skip — F12's
+`--skip wels_thread_pool`, with the module it named — and the very next unscoped run,
+this phase's exit, died instead of running Miri.
+
+So the gate's own success condition disabled the gate. Had this landed without the
+`exit` battery being run, the phase would have closed on a Miri step that never
+executed, and the next session to run it would have inherited an unbounded backlog —
+which is F18's lesson ("the backlog behind a skip is not confined to the code the skip
+was written for") arriving through a door nobody was watching.
+
+**Fixed at the expansion**, with the bash 3.2 idiom
+`${MIRI_SKIPS[@]+"${MIRI_SKIPS[@]}"}`, and **not** by keeping a dummy entry in the
+array: an empty skip list is the correct state and must stay expressible.
+
+**This is the fourth sighting of one shape**, and the pattern is now explicit enough to
+state as a rule: *an instrument's empty case is a case, and it is the one nobody
+tests.* F17 — `gates.sh` taking `tail`'s exit status, so every `PASS miri` for two
+phases was unconditional. F68 — a bench thread axis that silently drove the
+single-threaded path. F74 — a parser that matched no encode row and printed an empty
+table. F75 — an argument list that was correct only while non-empty. Three of the four
+were in the *measuring* apparatus rather than the code, and all four were invisible
+until someone looked at a result for the part that was missing.
