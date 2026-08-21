@@ -1451,6 +1451,16 @@ pub struct CWelsH264SVCEncoderImpl {
 pub struct CWelsDecoderImpl {
     pub base: ISVCDecoder,
     pub pVtbl: Box<ISVCDecoderVtbl>,
+    /// **T8.B6 — the decoder had no trace object at all.**
+    ///
+    /// `CWelsDecoder::m_pWelsTrace` is `new`ed in the reference's constructor
+    /// (`welsDecoderExt.cpp:161`), handed to `SetCodecInstance (this)` at `:163`,
+    /// and passed to `WelsDecoderDefaults` so that the context's own `sLogCtx`
+    /// names it. This port had the seventeen `WelsLog` call sites inside the
+    /// decoder and nothing on this side to deliver to, so
+    /// `DECODER_OPTION_TRACE_CALLBACK` — a documented option — had no
+    /// implementation and no effect.
+    pub m_pWelsTrace: Box<crate::common::wels_trace::welsCodecTrace>,
     pub pCtx: *mut crate::decoder::decoder_core::SWelsDecoderContext,
     // **T8.A5: `param` stood here and is deleted — F41.** It was the port's own
     // invention: `CWelsDecoder` has no parameter member in the reference, and the
@@ -1476,7 +1486,14 @@ pub struct CWelsDecoderImpl {
 }
 
 unsafe extern "C" fn encoder_init_c(this: *mut ISVCEncoder, pParam: *const SEncParamBase) -> i32 {
-    if this.is_null() || pParam.is_null() {
+    // **T8.B6: `|| pParam.is_null()` stood here.** In C++ there is no thunk — the
+    // vtable slot *is* `CWelsH264SVCEncoder::Initialize`, which logs
+    // `"invalid argv= 0x%p"` at `WELS_LOG_ERROR` (`welsEncoderExt.cpp:192`) before
+    // returning `cmInitParaError`. Short-circuiting here returned the same code and
+    // swallowed the message, which is invisible until the message has somewhere to
+    // go. The impl checks the pointer; only `this` has to be checked before the
+    // cast.
+    if this.is_null() {
         return CM_INIT_PARA_ERROR;
     }
     unsafe {
@@ -1486,7 +1503,8 @@ unsafe extern "C" fn encoder_init_c(this: *mut ISVCEncoder, pParam: *const SEncP
 }
 
 unsafe extern "C" fn encoder_init_ext_c(this: *mut ISVCEncoder, pParam: *const SEncParamExt) -> i32 {
-    if this.is_null() || pParam.is_null() {
+    // See `encoder_init_c`: `welsEncoderExt.cpp:219` is this slot's error line.
+    if this.is_null() {
         return CM_INIT_PARA_ERROR;
     }
     unsafe {
@@ -1704,7 +1722,13 @@ unsafe extern "C" fn decoder_init_c(this: *mut ISVCDecoder, pParam: *const SDeco
                 pPictInfoList,
                 true,
             );
-            crate::decoder::decoder_core::WelsDecoderDefaults(&mut *p_ctx, ptr::null_mut());
+            // `welsDecoderExt.cpp:415` — `WelsDecoderDefaults (pCtx,
+            // &m_pWelsTrace->m_sLogCtx)`. T8.B6: the second argument was a null
+            // `*mut c_void` and the callee ignored it.
+            crate::decoder::decoder_core::WelsDecoderDefaults(
+                &mut *p_ctx,
+                Some(&(*dec_impl).m_pWelsTrace.log_context()),
+            );
             crate::decoder::decoder_core::WelsDecoderSpsPpsDefaults(&mut (*p_ctx).sSpsPpsCtx);
             let ret = crate::decoder::decoder_core::WelsInitStaticMemory(&mut *p_ctx);
             if ret != 0 {
@@ -2433,6 +2457,48 @@ unsafe extern "C" fn decoder_set_opt_c(this: *mut ISVCDecoder, eOptionId: DECODE
                 // re-running the init leaves the previous mode's table in place.
                 crate::decoder::error_concealment::InitErrorCon(&mut *(*dec_impl).pCtx);
             }
+            // **T8.B6 — the three trace options, which this port did not implement.**
+            // `welsDecoderExt.cpp:541–561`. One arm for all three because they share
+            // the write-through: the reference's copy of `SLogContext` inside the
+            // context holds a route back to the trace object, this one holds the
+            // settings (see `common::wels_trace`), so a setting changed after
+            // `Initialize` has to be pushed down.
+            DECODER_OPTION::DECODER_OPTION_TRACE_LEVEL
+            | DECODER_OPTION::DECODER_OPTION_TRACE_CALLBACK
+            | DECODER_OPTION::DECODER_OPTION_TRACE_CALLBACK_CONTEXT => {
+                if pOption.is_null() {
+                    return CM_INIT_PARA_ERROR as c_long;
+                }
+                let trace = &mut (*dec_impl).m_pWelsTrace;
+                match eOptionId {
+                    DECODER_OPTION::DECODER_OPTION_TRACE_LEVEL => {
+                        trace.SetTraceLevel(pOption.cast::<u32>().read());
+                    }
+                    DECODER_OPTION::DECODER_OPTION_TRACE_CALLBACK => {
+                        trace.SetTraceCallback(pOption.cast::<WelsTraceCallback>().read());
+                    }
+                    _ => {
+                        trace.SetTraceCallbackContext(pOption.cast::<*mut c_void>().read());
+                    }
+                }
+                let log_ctx = trace.log_context();
+                if !(*dec_impl).pCtx.is_null() {
+                    (*(*dec_impl).pCtx).sLogCtx = log_ctx;
+                }
+                if eOptionId == DECODER_OPTION::DECODER_OPTION_TRACE_CALLBACK {
+                    // `welsDecoderExt.cpp:550` logs the installation through the
+                    // callback it has just installed.
+                    crate::common::wels_trace::WelsLog(
+                        ptr::addr_of_mut!((*dec_impl).m_pWelsTrace.m_sLogCtx),
+                        crate::common::wels_trace::WELS_LOG_INFO,
+                        "CWelsDecoder::SetOption():DECODER_OPTION_TRACE_CALLBACK callback set.",
+                    );
+                }
+            }
+            // `welsDecoderExt.cpp:562` — get-only, and it says so.
+            DECODER_OPTION::DECODER_OPTION_GET_STATISTICS => {
+                return CM_INIT_PARA_ERROR as c_long;
+            }
             _ => {}
         }
     }
@@ -2585,6 +2651,7 @@ pub unsafe extern "C" fn WelsCreateDecoder(ppDecoder: *mut *mut ISVCDecoder) -> 
     let mut dec = Box::new(CWelsDecoderImpl {
         base: ISVCDecoder { lpVtbl: ptr::null() },
         pVtbl: vtbl,
+        m_pWelsTrace: Box::new(crate::common::wels_trace::welsCodecTrace::new()),
         pCtx: ptr::null_mut(),
         bEndOfStream: false,
     });
@@ -2598,7 +2665,12 @@ pub unsafe extern "C" fn WelsCreateDecoder(ppDecoder: *mut *mut ISVCDecoder) -> 
     // decoder now gets them again, which is what `CWelsDecoder::InitDecoder`'s three
     // `memset`s do on every call and what this port never did.
     dec.base.lpVtbl = &*dec.pVtbl as *const ISVCDecoderVtbl;
-    *ppDecoder = Box::into_raw(dec) as *mut ISVCDecoder;
+    let dec = Box::into_raw(dec);
+    // `welsDecoderExt.cpp:163` — `m_pWelsTrace->SetCodecInstance (this)`, taken
+    // after the object has its final address. It is the `this = 0x…` of every
+    // trace line and nothing else, which is why it travels as an address.
+    (*dec).m_pWelsTrace.SetCodecInstance(dec as usize);
+    *ppDecoder = dec as *mut ISVCDecoder;
     CM_RESULT_SUCCESS as c_long
 }
 

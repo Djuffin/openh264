@@ -83,23 +83,12 @@ pub use crate::EVideoFrameType;
 // Core Supporting Structures
 // ============================================================================
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
-pub struct SLogContext {
-    pub pfLog: *mut c_void,
-    pub pLogCtx: *mut c_void,
-    pub pCodecInstance: *mut c_void,
-}
-
-impl Default for SLogContext {
-    fn default() -> Self {
-        Self {
-            pfLog: std::ptr::null_mut(),
-            pLogCtx: std::ptr::null_mut(),
-            pCodecInstance: std::ptr::null_mut(),
-        }
-    }
-}
+// **T8.B6: `SLogContext` was declared here and in `decoder/decoder_context.rs`**
+// — the census's `type SLogContext x2` — and this copy typed all three of its
+// members `*mut c_void`, so the callback the encoder was supposed to reach was an
+// erased pointer nothing could have called even if something had tried. One
+// declaration now, in `common::wels_trace`, where `utils.h` puts it.
+pub use crate::common::wels_trace::SLogContext;
 
 /// `SMVUnitXY` — codec/encoder/core/inc/wels_common_basis.h:50. 4 bytes.
 #[repr(C)]
