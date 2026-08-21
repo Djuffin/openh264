@@ -2388,6 +2388,26 @@ impl Decoder {
     }
 }
 
+impl Decoder {
+    /// **S42's root on the decoder side** — the one expression that turns the
+    /// boundary object's ownership back into the `*mut SWelsDecoderContext` the
+    /// decoder's own helpers still take. Derived from the `Box` for the duration of
+    /// one call and never stored; the slot rather than `&mut self`, so that a
+    /// derivation here does not retag the trace object next door.
+    ///
+    /// Null exactly when the decoder is not initialised, which is what
+    /// `pCtx == NULL` meant.
+    #[inline]
+    fn ctx_ptr(
+        slot: &mut Option<Box<crate::decoder::decoder_core::SWelsDecoderContext>>,
+    ) -> *mut crate::decoder::decoder_core::SWelsDecoderContext {
+        match slot {
+            Some(pCtx) => ptr::addr_of_mut!(**pCtx),
+            None => ptr::null_mut(),
+        }
+    }
+}
+
 // ===========================================================================
 // The decoder's ten vtable slots. See the encoder block above for what a `# Safety`
 // contract on a thunk is for; the windows below are the decoder's own, and the one
@@ -2411,25 +2431,6 @@ impl Decoder {
 /// read as bytes and sanitised field-wise before it becomes an `SDecodingParam` —
 /// see the block at the head of the body. A `&SDecodingParam` here would be a
 /// safety claim the C ABI does not make.
-impl Decoder {
-    /// **S42's root on the decoder side** — the one expression that turns the
-    /// boundary object's ownership back into the `*mut SWelsDecoderContext` the
-    /// decoder's own helpers still take. Derived from the `Box` for the duration of
-    /// one call and never stored; the slot rather than `&mut self`, so that a
-    /// derivation here does not retag the trace object next door.
-    ///
-    /// Null exactly when the decoder is not initialised, which is what
-    /// `pCtx == NULL` meant.
-    #[inline]
-    fn ctx_ptr(
-        slot: &mut Option<Box<crate::decoder::decoder_core::SWelsDecoderContext>>,
-    ) -> *mut crate::decoder::decoder_core::SWelsDecoderContext {
-        match slot {
-            Some(pCtx) => ptr::addr_of_mut!(**pCtx),
-            None => ptr::null_mut(),
-        }
-    }
-}
 
 unsafe extern "C" fn decoder_init_c(this: *mut ISVCDecoder, pParam: *const SDecodingParam) -> c_long {
     if this.is_null() || pParam.is_null() {
