@@ -111,8 +111,8 @@ signatures** — `svc_encode_slice` 40, `svc_mode_decision` 15,
 inventory and the blocker are the same object seen twice.
 
 So the context split is a **precondition** of the fork/join, not a consequence of
-it, and the two sessions were planned the other way round. Three orderings; the
-owner picks before B starts, because B's whole shape follows from it:
+it, and the two sessions were planned the other way round. Three orderings; **RESOLVED 2026-08-20 — D-mt-1 (plan §7.4) picks ordering 2**, and
+[`phase7_session_b.md`](phase7_session_b.md) is its execution brief:
 
 1. **Split first, fork later.** The design's own logic, honestly costed: several
    sessions, and it pulls work from Phases 8 and 10 forward into 7.
