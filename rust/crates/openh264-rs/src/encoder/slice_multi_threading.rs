@@ -1368,6 +1368,13 @@ pub unsafe fn EncodeFixedSlicesForked(pCtx: *mut sWelsEncCtx, kiSliceCount: i32)
         jobs.push(SliceJobHandle::new(pCtx, k, k, iWidth, kiSliceCount, bRecordsTime));
     }
 
+    // **T7.C3 — F71's residue, hoisted out of the fork.** `WelsCodeOneSlice` wrote
+    // `sLayerInfo.sNalHeaderExt.bIdrFlag` once per slice per worker; the write is the
+    // same constant on every worker and no worker reads the field before its own
+    // write, so running it once here, on the calling thread, before anything spawns,
+    // is byte-for-byte what the race produced. See `StampLayerIdrFlagForSliceType`.
+    crate::encoder::svc_encode_slice::StampLayerIdrFlagForSliceType(pCtx);
+
     let mut iErr = ENC_RETURN_SUCCESS;
     std::thread::scope(|s| {
         let mut handles = Vec::with_capacity(jobs.len());
@@ -1636,6 +1643,13 @@ pub unsafe fn EncodeSizeLimitedSlicesForked(pCtx: *mut sWelsEncCtx, kiPartitionC
     for k in 0..iWidth {
         jobs.push(SliceJobHandle::new(pCtx, k, k, iWidth, kiPartitionCnt, true));
     }
+
+    // **T7.C3 — F71's residue, hoisted out of the fork.** `WelsCodeOneSlice` wrote
+    // `sLayerInfo.sNalHeaderExt.bIdrFlag` once per slice per worker; the write is the
+    // same constant on every worker and no worker reads the field before its own
+    // write, so running it once here, on the calling thread, before anything spawns,
+    // is byte-for-byte what the race produced. See `StampLayerIdrFlagForSliceType`.
+    crate::encoder::svc_encode_slice::StampLayerIdrFlagForSliceType(pCtx);
 
     let mut iErr = ENC_RETURN_SUCCESS;
     std::thread::scope(|s| {
