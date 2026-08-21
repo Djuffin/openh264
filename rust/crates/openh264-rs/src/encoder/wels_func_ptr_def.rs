@@ -12,6 +12,8 @@
 //! members; it is 1280 bytes and every entry is dispatched through at encode time, so
 //! a missing member silently shifts every later one.
 
+#![deny(unsafe_code)]
+
 
 use crate::common::mc::SMcFunc;
 use crate::encoder::deblocking::{DeblockingFunc, PSetNoneZeroCountZeroFunc};
@@ -203,6 +205,8 @@ impl EntropyCoder {
     /// As the two implementations: `pEncCtx`, `pSlice` and `pCurMb` must be live
     /// and the slice's writer positioned in the buffer `slice_bs_buffer` returns.
     #[inline]
+    // unsafe-cat: port-raw(Phase 7)
+    #[allow(unsafe_code)]
     pub unsafe fn WelsSpatialWriteMbSyn(
         self,
         pEncCtx: *mut sWelsEncCtx,
@@ -232,6 +236,8 @@ impl EntropyCoder {
     /// `pDss` and `pSlice` must be live, `pBs` must be `pSlice`'s writer and `buf`
     /// the buffer that writer is positioned in.
     #[inline]
+    // unsafe-cat: port-raw(Phase 7)
+    #[allow(unsafe_code)]
     pub unsafe fn StashMBStatus(
         self,
         buf: &mut [u8],
@@ -258,6 +264,8 @@ impl EntropyCoder {
     ///
     /// [`StashMBStatus`]: EntropyCoder::StashMBStatus
     #[inline]
+    // unsafe-cat: port-raw(Phase 7)
+    #[allow(unsafe_code)]
     pub unsafe fn StashPopMBStatus(
         self,
         buf: &mut [u8],
@@ -283,6 +291,8 @@ impl EntropyCoder {
     /// # Safety
     /// `pSlice` must be live and `pBs` must be its writer.
     #[inline]
+    // unsafe-cat: port-raw(Phase 7)
+    #[allow(unsafe_code)]
     pub unsafe fn GetBsPosition(self, pBs: *mut BsWriter, pSlice: *mut SSlice) -> i32 {
         match self {
             EntropyCoder::Cavlc => crate::encoder::svc_set_mb_syn_cavlc::GetBsPosCavlc(pBs),

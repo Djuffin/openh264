@@ -1,3 +1,4 @@
+#![deny(unsafe_code)]
 pub const MAX_DEPENDENCY_LAYER: usize = 4;
 /// OpenH264 Video Encoder Core Context and State Machine
 ///
@@ -514,6 +515,8 @@ impl SStrideTables {
     }
 
     #[inline]
+    // unsafe-cat: port-raw(Phase 9)
+    #[allow(unsafe_code)]
     fn at_i32(&mut self, kiByteOffset: Option<u32>) -> *mut i32 {
         match kiByteOffset {
             // SAFETY: every offset stored here was produced by `AllocStrideTables`
@@ -524,6 +527,8 @@ impl SStrideTables {
     }
 
     #[inline]
+    // unsafe-cat: port-raw(Phase 9)
+    #[allow(unsafe_code)]
     fn at_i16(&mut self, kiByteOffset: Option<u32>) -> *mut i16 {
         match kiByteOffset {
             // SAFETY: as `at_i32`; the two coordinate regions are even-aligned.
@@ -573,6 +578,8 @@ impl SStrideTables {
 /// # Safety
 /// `pCtx` must point to a live encoder context.
 #[inline]
+// unsafe-cat: cursor
+#[allow(unsafe_code)]
 pub unsafe fn ctx_stride_dec_block_offset(
     pCtx: *mut sWelsEncCtx,
     kiDid: usize,
@@ -589,6 +596,8 @@ pub unsafe fn ctx_stride_dec_block_offset(
 /// # Safety
 /// As [`ctx_stride_dec_block_offset`].
 #[inline]
+// unsafe-cat: cursor
+#[allow(unsafe_code)]
 pub unsafe fn ctx_stride_enc_block_offset(pCtx: *mut sWelsEncCtx, kiDid: usize) -> *mut i32 {
     match (*pCtx).pStrideTab.as_mut() {
         Some(tab) => tab.StrideEncBlockOffset(kiDid),
@@ -601,6 +610,8 @@ pub unsafe fn ctx_stride_enc_block_offset(pCtx: *mut sWelsEncCtx, kiDid: usize) 
 /// # Safety
 /// As [`ctx_stride_dec_block_offset`].
 #[inline]
+// unsafe-cat: cursor
+#[allow(unsafe_code)]
 pub unsafe fn ctx_mb_index_x(pCtx: *mut sWelsEncCtx, kiDid: usize) -> *mut i16 {
     match (*pCtx).pStrideTab.as_mut() {
         Some(tab) => tab.MbIndexX(kiDid),
@@ -621,6 +632,8 @@ pub unsafe fn ctx_mb_index_x(pCtx: *mut sWelsEncCtx, kiDid: usize) -> *mut i16 {
 /// # Safety
 /// `pCtx` must point to a live encoder context.
 #[inline]
+// unsafe-cat: cursor
+#[allow(unsafe_code)]
 pub unsafe fn ctx_param(pCtx: *mut sWelsEncCtx) -> *mut SWelsSvcCodingParam {
     match (*pCtx).pSvcParam.as_mut() {
         Some(b) => &raw mut **b,
@@ -641,6 +654,8 @@ pub unsafe fn ctx_param(pCtx: *mut sWelsEncCtx) -> *mut SWelsSvcCodingParam {
 /// # Safety
 /// `pCtx` must point to a live encoder context.
 #[inline]
+// unsafe-cat: cursor
+#[allow(unsafe_code)]
 pub unsafe fn ctx_func_list(pCtx: *mut sWelsEncCtx) -> *mut SWelsFuncPtrList {
     &raw mut *(*pCtx).pFuncList
 }
@@ -655,6 +670,8 @@ pub unsafe fn ctx_func_list(pCtx: *mut sWelsEncCtx) -> *mut SWelsFuncPtrList {
 /// # Safety
 /// `pCtx` must point to a live encoder context.
 #[inline]
+// unsafe-cat: SCREEN_CONTENT(dormant)
+#[allow(unsafe_code)]
 pub unsafe fn ctx_vaa(pCtx: *mut sWelsEncCtx) -> *mut SVAAFrameInfo {
     match (*pCtx).pVaa.as_mut() {
         Some(b) => &raw mut **b,
@@ -668,6 +685,8 @@ pub unsafe fn ctx_vaa(pCtx: *mut sWelsEncCtx) -> *mut SVAAFrameInfo {
 /// # Safety
 /// `pCtx` must point to a live encoder context.
 #[inline]
+// unsafe-cat: cursor
+#[allow(unsafe_code)]
 pub unsafe fn ctx_mvd_cost_table(pCtx: *mut sWelsEncCtx) -> *mut u16 {
     let v: &mut Vec<u16> = &mut (*pCtx).pMvdCostTable;
     if v.is_empty() {
@@ -692,6 +711,8 @@ pub unsafe fn ctx_mvd_cost_table(pCtx: *mut sWelsEncCtx) -> *mut u16 {
 /// # Safety
 /// As [`ctx_mvd_cost_table`].
 #[inline]
+// unsafe-cat: cursor
+#[allow(unsafe_code)]
 pub unsafe fn ctx_mvd_cost_origin(pCtx: *mut sWelsEncCtx) -> *mut u16 {
     let root = ctx_mvd_cost_table(pCtx);
     if root.is_null() {
@@ -712,6 +733,8 @@ pub unsafe fn ctx_mvd_cost_origin(pCtx: *mut sWelsEncCtx) -> *mut u16 {
 /// # Safety
 /// `pCtx` must point to a live encoder context.
 #[inline]
+// unsafe-cat: cursor
+#[allow(unsafe_code)]
 pub unsafe fn ctx_dq_layer(pCtx: *mut sWelsEncCtx, kiDid: usize) -> *mut SDqLayer {
     let arr: &mut Vec<Option<Box<SDqLayer>>> = &mut (*pCtx).ppDqLayerList;
     match arr.get_mut(kiDid) {
@@ -731,6 +754,8 @@ pub unsafe fn ctx_dq_layer(pCtx: *mut sWelsEncCtx, kiDid: usize) -> *mut SDqLaye
 /// # Safety
 /// `pCtx` must point to a live encoder context.
 #[inline]
+// unsafe-cat: cursor
+#[allow(unsafe_code)]
 pub unsafe fn ctx_ref_list(pCtx: *mut sWelsEncCtx, kiDid: usize) -> *mut SRefList {
     let arr: &mut Vec<Option<Box<SRefList>>> = &mut (*pCtx).ppRefPicListExt;
     match arr.get_mut(kiDid) {
@@ -744,6 +769,8 @@ pub unsafe fn ctx_ref_list(pCtx: *mut sWelsEncCtx, kiDid: usize) -> *mut SRefLis
 /// # Safety
 /// `pCtx` must point to a live encoder context.
 #[inline]
+// unsafe-cat: cursor
+#[allow(unsafe_code)]
 pub unsafe fn ctx_rc(pCtx: *mut sWelsEncCtx) -> *mut SWelsSvcRc {
     let arr: &mut Vec<SWelsSvcRc> = &mut (*pCtx).pWelsSvcRc;
     if arr.is_empty() {
@@ -758,6 +785,8 @@ pub unsafe fn ctx_rc(pCtx: *mut sWelsEncCtx) -> *mut SWelsSvcRc {
 /// # Safety
 /// As [`ctx_rc`], and `kiDid` must be a layer the array holds.
 #[inline]
+// unsafe-cat: cursor
+#[allow(unsafe_code)]
 pub unsafe fn ctx_rc_at(pCtx: *mut sWelsEncCtx, kiDid: usize) -> *mut SWelsSvcRc {
     let root = ctx_rc(pCtx);
     if root.is_null() {
@@ -772,6 +801,8 @@ pub unsafe fn ctx_rc_at(pCtx: *mut sWelsEncCtx, kiDid: usize) -> *mut SWelsSvcRc
 /// # Safety
 /// `pCtx` must point to a live encoder context.
 #[inline]
+// unsafe-cat: cursor
+#[allow(unsafe_code)]
 pub unsafe fn ctx_ltr(pCtx: *mut sWelsEncCtx) -> *mut SLTRState {
     let arr: &mut Vec<SLTRState> = &mut (*pCtx).pLtr;
     if arr.is_empty() {
@@ -786,6 +817,8 @@ pub unsafe fn ctx_ltr(pCtx: *mut sWelsEncCtx) -> *mut SLTRState {
 /// # Safety
 /// As [`ctx_ltr`], and `kiDid` must be a layer the array holds.
 #[inline]
+// unsafe-cat: cursor
+#[allow(unsafe_code)]
 pub unsafe fn ctx_ltr_at(pCtx: *mut sWelsEncCtx, kiDid: usize) -> *mut SLTRState {
     let root = ctx_ltr(pCtx);
     if root.is_null() {
@@ -813,6 +846,8 @@ pub unsafe fn ctx_ltr_at(pCtx: *mut sWelsEncCtx, kiDid: usize) -> *mut SLTRState
 /// # Safety
 /// `pCtx` must point to a live encoder context.
 #[inline]
+// unsafe-cat: cursor
+#[allow(unsafe_code)]
 pub unsafe fn ctx_frame_bs(pCtx: *mut sWelsEncCtx) -> *mut u8 {
     let buf: &mut Vec<u8> = &mut (*pCtx).pFrameBs;
     if buf.is_empty() {
@@ -828,6 +863,8 @@ pub unsafe fn ctx_frame_bs(pCtx: *mut sWelsEncCtx) -> *mut u8 {
 /// # Safety
 /// As [`ctx_frame_bs`], and `kiPos` must be within the buffer.
 #[inline]
+// unsafe-cat: cursor
+#[allow(unsafe_code)]
 pub unsafe fn ctx_frame_bs_at(pCtx: *mut sWelsEncCtx, kiPos: i32) -> *mut u8 {
     let root = ctx_frame_bs(pCtx);
     if root.is_null() {
@@ -846,6 +883,8 @@ pub unsafe fn ctx_frame_bs_at(pCtx: *mut sWelsEncCtx, kiPos: i32) -> *mut u8 {
 /// # Safety
 /// `pCtx` must point to a live encoder context.
 #[inline]
+// unsafe-cat: cursor
+#[allow(unsafe_code)]
 pub unsafe fn ctx_dq_idc_map(pCtx: *mut sWelsEncCtx) -> *mut SDqIdc {
     let arr: &mut Vec<SDqIdc> = &mut (*pCtx).pDqIdcMap;
     if arr.is_empty() {
@@ -873,6 +912,8 @@ pub unsafe fn ctx_dq_idc_map(pCtx: *mut sWelsEncCtx) -> *mut SDqIdc {
 /// # Safety
 /// `pCtx` must point to a live encoder context.
 #[inline]
+// unsafe-cat: cursor
+#[allow(unsafe_code)]
 pub unsafe fn ctx_sps_array(pCtx: *mut sWelsEncCtx) -> *mut SWelsSPS {
     let arr: &mut Vec<SWelsSPS> = &mut (*pCtx).pSpsArray;
     if arr.is_empty() {
@@ -886,6 +927,8 @@ pub unsafe fn ctx_sps_array(pCtx: *mut sWelsEncCtx) -> *mut SWelsSPS {
 /// # Safety
 /// As [`ctx_sps_array`].
 #[inline]
+// unsafe-cat: cursor
+#[allow(unsafe_code)]
 pub unsafe fn ctx_subset_array(pCtx: *mut sWelsEncCtx) -> *mut SSubsetSps {
     let arr: &mut Vec<SSubsetSps> = &mut (*pCtx).pSubsetArray;
     if arr.is_empty() {
@@ -899,6 +942,8 @@ pub unsafe fn ctx_subset_array(pCtx: *mut sWelsEncCtx) -> *mut SSubsetSps {
 /// # Safety
 /// As [`ctx_sps_array`].
 #[inline]
+// unsafe-cat: cursor
+#[allow(unsafe_code)]
 pub unsafe fn ctx_pps_array(pCtx: *mut sWelsEncCtx) -> *mut SWelsPPS {
     let arr: &mut Vec<SWelsPPS> = &mut (*pCtx).pPPSArray;
     if arr.is_empty() {
@@ -912,6 +957,8 @@ pub unsafe fn ctx_pps_array(pCtx: *mut sWelsEncCtx) -> *mut SWelsPPS {
 /// # Safety
 /// As [`ctx_stride_dec_block_offset`].
 #[inline]
+// unsafe-cat: cursor
+#[allow(unsafe_code)]
 pub unsafe fn ctx_mb_index_y(pCtx: *mut sWelsEncCtx, kiDid: usize) -> *mut i16 {
     match (*pCtx).pStrideTab.as_mut() {
         Some(tab) => tab.MbIndexY(kiDid),
@@ -1345,6 +1392,8 @@ impl Default for sWelsEncCtx {
 /// costs in Rust: the unit test passed `&src_pic`, a *shared* reference, and the
 /// first write through the cast pointer is UB — "that tag only grants
 /// SharedReadOnly permission". A function that writes says `*mut`.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn InitPic(
     pSrcPic: *mut SSourcePicture,
     kiColorspace: i32,
@@ -1439,6 +1488,8 @@ pub unsafe fn InitPic(
 ///
 /// # Safety
 /// `pFuncList` must be non-null and point to a valid `SWelsFuncPtrList`.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn WelsInitBGDFunc(
     pFuncList: &mut SWelsFuncPtrList,
     kbEnableBackgroundDetection: bool,
@@ -1456,6 +1507,8 @@ pub unsafe fn WelsInitBGDFunc(
 ///
 /// # Safety
 /// `pEncCtx` and `pParam` must be valid non-null pointers.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn InitFunctionPointers(
     pEncCtx: *mut sWelsEncCtx,
     pParam: *mut SWelsSvcCodingParam,
@@ -1570,6 +1623,8 @@ pub unsafe fn InitFunctionPointers(
 /// **T4b.1**: the four entropy slots this function used to fill from one `if` are
 /// one [`EntropyCoder`] now, so the `if` *is* the assignment. What is left of the
 /// C++ shape is `pfCavlcParamCal`, which is CPU dispatch and Phase 4a's kind.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 unsafe fn InitCoeffFunc(
     pFuncList: &mut SWelsFuncPtrList,
     _uiCpuFlag: u32,
@@ -1583,6 +1638,8 @@ unsafe fn InitCoeffFunc(
 ///
 /// # Safety
 /// `pEncCtx` must be non-null and initialized.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn UpdateFrameNum(pEncCtx: *mut sWelsEncCtx, kiDidx: i32) {
     if pEncCtx.is_null() || ctx_param(pEncCtx).is_null() || ctx_sps(pEncCtx).is_null() {
         return;
@@ -1610,6 +1667,8 @@ pub unsafe fn UpdateFrameNum(pEncCtx: *mut sWelsEncCtx, kiDidx: i32) {
 ///
 /// # Safety
 /// `pEncCtx` must be non-null and initialized.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn LoadBackFrameNum(pEncCtx: *mut sWelsEncCtx, kiDidx: i32) {
     if pEncCtx.is_null() || ctx_param(pEncCtx).is_null() || ctx_sps(pEncCtx).is_null() {
         return;
@@ -1634,6 +1693,8 @@ pub unsafe fn LoadBackFrameNum(pEncCtx: *mut sWelsEncCtx, kiDidx: i32) {
 ///
 /// # Safety
 /// `pEncCtx` must be non-null and contain a valid `pOut`.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn InitBitStream(pEncCtx: *mut sWelsEncCtx) {
     if pEncCtx.is_null() || (*pEncCtx).pOut.is_null() {
         return;
@@ -1654,6 +1715,8 @@ pub unsafe fn InitBitStream(pEncCtx: *mut sWelsEncCtx) {
 ///
 /// # Safety
 /// `pEncCtx` must be non-null and properly initialized.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn InitFrameCoding(
     pEncCtx: *mut sWelsEncCtx,
     keFrameType: EVideoFrameType,
@@ -1710,6 +1773,8 @@ pub unsafe fn InitFrameCoding(
 ///
 /// # Safety
 /// `pEncCtx` must be non-null and initialized.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn DecideFrameType(
     pEncCtx: *mut sWelsEncCtx,
     kiSpatialNum: i8,
@@ -1819,6 +1884,8 @@ pub unsafe fn DecideFrameType(
 ///
 /// # Safety
 /// `pDst` must point to valid writable memory of at least `iSize` bytes.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn WelsSetMemZero_c(pDst: *mut u8, iSize: i32) {
     if !pDst.is_null() && iSize > 0 {
         std::ptr::write_bytes(pDst, 0, iSize as usize);
@@ -1847,6 +1914,8 @@ mod tests {
     /// "attempting a write access using <tag> but that tag does not exist in the
     /// borrow stack" at the first write below, and passes without Miri.
     #[test]
+    // unsafe-cat: port-raw(Phase 9)
+    #[allow(unsafe_code)]
     fn stride_table_accessors_leave_the_first_cursor_usable() {
         // Two 96-byte block-offset regions, then two 64-byte coordinate ones — the
         // shape `AllocStrideTables` carves, at its smallest.
@@ -1907,6 +1976,8 @@ mod tests {
     /// than nineteen because the property is one property; each arm names its
     /// accessor in the assertion message so a failure says which.
     #[test]
+    // unsafe-cat: port-raw(Phase 9)
+    #[allow(unsafe_code)]
     fn every_container_accessor_hands_out_sibling_cursors() {
         let mut ctx = Box::new(sWelsEncCtx::new());
 
@@ -2032,6 +2103,8 @@ mod tests {
     /// access using <565587> ... but that tag does not exist in the borrow stack",
     /// and without Miri it passes.
     #[test]
+    // unsafe-cat: port-raw(Phase 9)
+    #[allow(unsafe_code)]
     fn frame_bs_cursors_are_siblings() {
         let mut ctx = Box::new(sWelsEncCtx::new());
         let p: *mut sWelsEncCtx = &mut *ctx;
@@ -2066,6 +2139,8 @@ mod tests {
     /// The same property through the context's four accessors, which is how every
     /// consumer outside `AllocStrideTables` reaches the tables.
     #[test]
+    // unsafe-cat: cursor
+    #[allow(unsafe_code)]
     fn ctx_stride_accessors_are_sibling_derivations() {
         let mut ctx = Box::new(sWelsEncCtx::new());
         let p: *mut sWelsEncCtx = &mut *ctx;
@@ -2100,6 +2175,8 @@ mod tests {
     }
 
     #[test]
+    // unsafe-cat: port-raw(Phase 9)
+    #[allow(unsafe_code)]
     fn test_init_pic() {
         let mut src_pic = SSourcePicture::default();
         let ret = unsafe {
@@ -2214,6 +2291,8 @@ mod tests {
     /// Tier 3 is the one that shrinks this test's reach, so it is named and counted
     /// in the output rather than left to be inferred from what is missing.
     #[test]
+    // unsafe-cat: cursor
+    #[allow(unsafe_code)]
     fn ctx_new_reproduces_the_zeroed_shell() {
         use std::mem::{offset_of, size_of, size_of_val};
 
@@ -2479,6 +2558,8 @@ mod tests {
     }
 
     #[test]
+    // unsafe-cat: port-raw(Phase 9)
+    #[allow(unsafe_code)]
     fn test_update_and_loadback_framenum() {
         let mut param = SWelsSvcCodingParam::default();
         // Only the fields this test exercises; SWelsSPS is now the full
@@ -2519,6 +2600,8 @@ mod tests {
     }
 
     #[test]
+    // unsafe-cat: port-raw(Phase 9)
+    #[allow(unsafe_code)]
     fn test_decide_frame_type() {
         let mut param = SWelsSvcCodingParam::default();
         let mut ctx = sWelsEncCtx::new();
@@ -2534,6 +2617,8 @@ mod tests {
     }
 
     #[test]
+    // unsafe-cat: cursor
+    #[allow(unsafe_code)]
     fn test_init_function_pointers() {
         unsafe {
             let mut param = SWelsSvcCodingParam::default();

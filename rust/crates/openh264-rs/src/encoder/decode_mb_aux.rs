@@ -12,6 +12,8 @@
 
 #![allow(non_snake_case, dead_code)]
 
+#![deny(unsafe_code)]
+
 use crate::encoder::svc_encode_mb::PIDctFunc;
 use crate::encoder::wels_func_ptr_def::SWelsFuncPtrList;
 
@@ -303,6 +305,8 @@ pub fn dequant_ihadamard_2x2_dc(dct: &mut [i16; 4], mf: u16) {
 ///
 /// # Safety
 /// `pRes` points at 16 writable, `i16`-aligned `i16`.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsDequantIHadamard4x4_c(pRes: *mut i16, kuiMF: u16) {
     // SHIM(phase2) -> dequant_ihadamard_4x4
     let res: &mut [i16; 16] = unsafe { std::slice::from_raw_parts_mut(pRes, 16) }
@@ -316,6 +320,8 @@ pub unsafe extern "C" fn WelsDequantIHadamard4x4_c(pRes: *mut i16, kuiMF: u16) {
 /// # Safety
 /// `pRes` points at 16 writable, `i16`-aligned `i16`; `kpMF` at 8 readable
 /// `u16` (a `g_kuiDequantCoeff` row), disjoint from `pRes`.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsDequant4x4_c(pRes: *mut i16, kpMF: *const u16) {
     // SHIM(phase2) -> dequant_4x4
     let res: &mut [i16; 16] = unsafe { std::slice::from_raw_parts_mut(pRes, 16) }
@@ -330,6 +336,8 @@ pub unsafe extern "C" fn WelsDequant4x4_c(pRes: *mut i16, kpMF: *const u16) {
 /// # Safety
 /// `pRes` points at 64 writable, `i16`-aligned `i16`; `kpMF` at 8 readable
 /// `u16`, disjoint from `pRes`.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsDequantFour4x4_c(pRes: *mut i16, kpMF: *const u16) {
     // SHIM(phase2) -> dequant_four_4x4
     let res: &mut [i16; 64] = unsafe { std::slice::from_raw_parts_mut(pRes, 64) }
@@ -351,6 +359,8 @@ pub unsafe extern "C" fn WelsDequantFour4x4_c(pRes: *mut i16, kpMF: *const u16) 
 ///   are disjoint (the callers hand a recon-plane cursor and a prediction
 ///   scratch, `svc_encode_mb.rs:640-651`).
 /// * `pDctDc` points at 16 readable, `i16`-aligned `i16`, disjoint from both.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsIDctRecI16x16Dc_c(
     pRec: *mut u8,
     iStride: i32,
@@ -375,6 +385,8 @@ pub unsafe extern "C" fn WelsIDctRecI16x16Dc_c(
 ///
 /// # Safety
 /// `pDst`/`pPred` must address 16 rows at their strides; `pDct` 256 readable `i16`.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn WelsIDctT4RecOnMb(
     pDst: *mut u8,
     iDstStride: i32,
@@ -408,6 +420,8 @@ pub unsafe fn WelsIDctT4RecOnMb(
 ///
 /// # Safety
 /// `pFuncList` must be a valid, writable `SWelsFuncPtrList`.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn WelsInitReconstructionFuncs(pFuncList: &mut SWelsFuncPtrList, _uiCpuFlag: u32) {
     let fl = &mut *pFuncList;
 
@@ -427,6 +441,8 @@ mod tests {
     /// Dequantisation is an elementwise multiply by the eight-entry MF row, applied to
     /// both halves of the 4x4 block.
     #[test]
+    // unsafe-cat: port-raw(Phase 9)
+    #[allow(unsafe_code)]
     fn dequant4x4_multiplies_by_the_mf_row() {
         let mut res: [i16; 16] = core::array::from_fn(|i| (i as i16) + 1);
         let mf: [u16; 8] = [2, 3, 4, 5, 6, 7, 8, 9];
@@ -439,6 +455,8 @@ mod tests {
 
     /// The four-block variant applies the same row to all eight 8-coefficient groups.
     #[test]
+    // unsafe-cat: port-raw(Phase 9)
+    #[allow(unsafe_code)]
     fn dequant_four4x4_covers_all_64_coefficients() {
         let mut res = [1i16; 64];
         let mf: [u16; 8] = [1, 2, 3, 4, 5, 6, 7, 8];
@@ -453,6 +471,8 @@ mod tests {
     /// A DC-only inverse Hadamard with MF 1 spreads `pRes[0]` evenly over all 16
     /// positions (gain 16 across the two passes).
     #[test]
+    // unsafe-cat: port-raw(Phase 9)
+    #[allow(unsafe_code)]
     fn dequant_ihadamard4x4_spreads_dc() {
         let mut res = [0i16; 16];
         res[0] = 5;
@@ -463,6 +483,8 @@ mod tests {
     /// `WelsIDctRecI16x16Dc_c` adds a rounded DC per 4x4 block: block (i>>2, j>>2)
     /// takes `pDctDc[(i & 0x0C) + (j >> 2)]`.
     #[test]
+    // unsafe-cat: port-raw(Phase 9)
+    #[allow(unsafe_code)]
     fn idct_reci16x16dc_adds_per_block_dc() {
         let stride = 32usize;
         let mut rec = vec![0u8; stride * 20];
@@ -491,6 +513,8 @@ mod tests {
 
     /// Every slot the reconstruction path dereferences must be filled.
     #[test]
+    // unsafe-cat: port-raw(Phase 9)
+    #[allow(unsafe_code)]
     fn init_fills_every_reconstruction_slot() {
         // Zeroing this table is sound for the reason its own `Default` gives
         // (`wels_func_ptr_def.rs`, S21); session I converts both with the dispatch

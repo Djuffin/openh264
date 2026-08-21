@@ -27,6 +27,8 @@
 //! promotion of `uint16_t`), and the result is stored back into a `uint16_t` field,
 //! so the truncation happens at the store.
 
+#![deny(unsafe_code)]
+
 use crate::encoder::wels_preprocess::{SAdaptiveQuantizationParam, SMotionTextureUnit, SPixMap, SVAACalcResult};
 
 use super::vaacalc::{RET_INVALIDPARAM, RET_SUCCESS};
@@ -73,6 +75,8 @@ fn WELS_DIV_ROUND64(x: i64, y: i64) -> i64 {
 ///   `SPixMap`s, and they are not equal in general; each plane's span is computed
 ///   from its own.
 /// * `pMotionTexture` is writable.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn SampleVariance16x16_c(
     pRefY: *const u8,
     iRefStride: i32,
@@ -192,6 +196,8 @@ impl CAdaptiveQuantization {
     /// The pointers stored by the preceding [`Set`](Self::Set) must still be valid,
     /// both pixel maps must describe readable luma planes, and `calc`'s arrays must
     /// cover the picture's macroblocks.
+    // unsafe-cat: port-raw(Phase 9)
+    #[allow(unsafe_code)]
     pub unsafe fn Process(&mut self, pSrcPixMap: &SPixMap, pRefPixMap: &SPixMap, calc: &SVAACalcResult) -> i32 {
         let iWidth = pSrcPixMap.sRect.iRectWidth;
         let iHeight = pSrcPixMap.sRect.iRectHeight;

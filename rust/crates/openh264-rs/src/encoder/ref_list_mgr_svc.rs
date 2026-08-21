@@ -12,6 +12,8 @@
 //! Translated from `codec/encoder/core/inc/ref_list_mgr_svc.h` and
 //! `codec/encoder/core/src/ref_list_mgr_svc.cpp`.
 
+#![deny(unsafe_code)]
+
 use crate::encoder::picture::{PicRef, RecPicId, SrcPicId};
 use crate::*;
 
@@ -195,6 +197,8 @@ pub struct SLTRMarkingFeedback {
 // ============================================================================
 
 /// Reset LTR marking, recovery, and feedback state to defaults.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn ResetLtrState(pLtr: *mut SLTRState) {
     if pLtr.is_null() {
         return;
@@ -219,6 +223,8 @@ pub unsafe fn ResetLtrState(pLtr: *mut SLTRState) {
 }
 
 /// Reset active reference picture lists for current spatial layer.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn WelsResetRefList(pCtx: *mut sWelsEncCtx) {
     if pCtx.is_null() {
         return;
@@ -264,6 +270,8 @@ pub unsafe fn WelsResetRefList(pCtx: *mut sWelsEncCtx) {
 }
 
 /// Remove a long-term reference entry by index from pLongRefList.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn DeleteLTRFromLongList(pCtx: *mut sWelsEncCtx, iIdx: i32) {
     if pCtx.is_null() {
         return;
@@ -287,6 +295,8 @@ pub unsafe fn DeleteLTRFromLongList(pCtx: *mut sWelsEncCtx, iIdx: i32) {
 }
 
 /// Remove a short-term reference entry by index from pShortRefList.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn DeleteSTRFromShortList(pCtx: *mut sWelsEncCtx, iIdx: i32) {
     if pCtx.is_null() {
         return;
@@ -310,6 +320,8 @@ pub unsafe fn DeleteSTRFromShortList(pCtx: *mut sWelsEncCtx, iIdx: i32) {
 }
 
 /// Unreferences non-scene LTR frames when current frame is marked as Scene LTR.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn DeleteNonSceneLTR(pCtx: *mut sWelsEncCtx) {
     if pCtx.is_null() || ctx_param(pCtx).is_null() {
         return;
@@ -375,6 +387,8 @@ pub fn CompareFrameNum(iFrameNumA: i32, iFrameNumB: i32, iMaxFrameNumPlus1: i32)
 }
 
 /// Purges unacknowledged or invalid LTR frames based on decoder feedback.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn DeleteInvalidLTR(pCtx: *mut sWelsEncCtx) {
     if pCtx.is_null() || ctx_sps(pCtx).is_null() || ctx_param(pCtx).is_null() {
         return;
@@ -427,6 +441,8 @@ pub unsafe fn DeleteInvalidLTR(pCtx: *mut sWelsEncCtx) {
 }
 
 /// Handles asynchronous decoder confirmation or failure feedback for LTR marking.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn HandleLTRMarkFeedback(pCtx: *mut sWelsEncCtx) {
     if pCtx.is_null() || ctx_param(pCtx).is_null() {
         return;
@@ -505,6 +521,8 @@ pub unsafe fn HandleLTRMarkFeedback(pCtx: *mut sWelsEncCtx) {
 }
 
 /// Executes promotion and movement of frames from short-term to long-term lists.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn LTRMarkProcess(pCtx: *mut sWelsEncCtx) {
     if pCtx.is_null() || ctx_param(pCtx).is_null() || ctx_sps(pCtx).is_null() {
         return;
@@ -608,6 +626,8 @@ pub unsafe fn LTRMarkProcess(pCtx: *mut sWelsEncCtx) {
 }
 
 /// Executes promotion of screen content references to long-term reference slots.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn LTRMarkProcessScreen(pCtx: *mut sWelsEncCtx) {
     if pCtx.is_null() {
         return;
@@ -635,6 +655,8 @@ pub unsafe fn LTRMarkProcessScreen(pCtx: *mut sWelsEncCtx) {
 }
 
 /// Pre-allocates destination frame buffer pointer pDecPic for upcoming reconstruction.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn PrefetchNextBuffer(pCtx: *mut sWelsEncCtx) {
     if pCtx.is_null() || ctx_param(pCtx).is_null() {
         return;
@@ -669,6 +691,8 @@ pub unsafe fn PrefetchNextBuffer(pCtx: *mut sWelsEncCtx) {
 }
 
 /// Updates reference picture list after current frame reconstruction.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn WelsUpdateRefList(pCtx: *mut sWelsEncCtx) -> bool {
     if pCtx.is_null() || current_layer(pCtx).is_null() || ctx_param(pCtx).is_null() {
         return false;
@@ -802,6 +826,8 @@ pub unsafe fn WelsUpdateRefList(pCtx: *mut sWelsEncCtx) -> bool {
 }
 
 /// Checks whether candidate frame number is already occupied in LTR list.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn CheckCurMarkFrameNumUsed(pCtx: *mut sWelsEncCtx) -> bool {
     if pCtx.is_null() || ctx_param(pCtx).is_null() || ctx_sps(pCtx).is_null() {
         return false;
@@ -842,6 +868,8 @@ pub unsafe fn CheckCurMarkFrameNumUsed(pCtx: *mut sWelsEncCtx) -> bool {
 }
 
 /// Replicates base slice header reference marking syntax across all slices.
+// unsafe-cat: port-raw(Phase 7)
+#[allow(unsafe_code)]
 pub unsafe fn WelsMarkMMCORefInfoWithBase(
     pCurDq: *mut SDqLayer,
     pBaseSlice: *mut SSlice,
@@ -870,6 +898,8 @@ pub unsafe fn WelsMarkMMCORefInfoWithBase(
 }
 
 /// Constructs MMCO reference marking commands for slice headers.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn WelsMarkMMCORefInfo(
     pCtx: *mut sWelsEncCtx,
     pLtr: *mut SLTRState,
@@ -922,6 +952,8 @@ pub unsafe fn WelsMarkMMCORefInfo(
 }
 
 /// Evaluates LTR marking criteria and populates slice header MMCO commands.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn WelsMarkPic(pCtx: *mut sWelsEncCtx) {
     if pCtx.is_null() || current_layer(pCtx).is_null() || ctx_param(pCtx).is_null() {
         return;
@@ -957,6 +989,8 @@ pub unsafe fn WelsMarkPic(pCtx: *mut sWelsEncCtx) {
 }
 
 /// Evaluates LTR recovery request feedback packets from decoder.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn FilterLTRRecoveryRequest(
     pCtx: *mut sWelsEncCtx,
     pLTRRecoverRequest: *mut SLTRRecoverRequest,
@@ -1009,6 +1043,8 @@ pub unsafe fn FilterLTRRecoveryRequest(
 }
 
 /// Updates LTR marking confirmation or failure feedback from decoder.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn FilterLTRMarkingFeedback(
     pCtx: *mut sWelsEncCtx,
     pLTRMarkingFeedback: *mut SLTRMarkingFeedback,
@@ -1034,6 +1070,8 @@ pub unsafe fn FilterLTRMarkingFeedback(
 }
 
 /// Builds active reference picture list pRefList0 for motion estimation.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn WelsBuildRefList(
     pCtx: *mut sWelsEncCtx,
     kiPOC: i32,
@@ -1100,6 +1138,8 @@ pub unsafe fn WelsBuildRefList(
 }
 
 /// Invokes VPP UpdateBlockIdcForScreen to update static block map.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn UpdateBlockStatic(pCtx: *mut sWelsEncCtx) {
     if pCtx.is_null() || ctx_vaa(pCtx).is_null() || (*pCtx).pVpp.is_null() {
         return;
@@ -1128,6 +1168,8 @@ pub unsafe fn UpdateBlockStatic(pCtx: *mut sWelsEncCtx) {
 }
 
 /// Serializes slice header reference picture reordering syntax and marking flags.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn WelsUpdateSliceHeaderSyntax(
     pCtx: *mut sWelsEncCtx,
     iAbsDiffPicNumMinus1: i32,
@@ -1194,6 +1236,8 @@ pub unsafe fn WelsUpdateSliceHeaderSyntax(
 }
 
 /// Updates reference picture syntax and picture number delta in slice headers.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn WelsUpdateRefSyntax(pCtx: *mut sWelsEncCtx, kiPOC: i32, kiFrameType: i32) {
     if pCtx.is_null() || ctx_param(pCtx).is_null() || current_layer(pCtx).is_null() {
         return;
@@ -1240,6 +1284,8 @@ pub fn UpdateOriginalPicInfo(pOrigPic: &mut SPicture, pReconPic: &SPicture) {
 
 /// `UpdateOriginalPicInfo` over the context's current pair, resolving each handle in
 /// its own pool. A no-op if either is unset, as the C++'s null tests are.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 unsafe fn UpdateOriginalPicInfoFromCtx(pCtx: *mut sWelsEncCtx) {
     let (Some(idEnc), Some(idDec)) = ((*pCtx).pEncPic, (*pCtx).pDecPic) else {
         return;
@@ -1255,6 +1301,8 @@ unsafe fn UpdateOriginalPicInfoFromCtx(pCtx: *mut sWelsEncCtx) {
     UpdateOriginalPicInfo(pOrig, pRecon);
 }
 
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn UpdateSrcPicListLosslessScreenRefSelectionWithLtr(pCtx: *mut sWelsEncCtx) {
     if pCtx.is_null() {
         return;
@@ -1274,6 +1322,8 @@ pub unsafe fn UpdateSrcPicListLosslessScreenRefSelectionWithLtr(pCtx: *mut sWels
     }
 }
 
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn UpdateSrcPicList(pCtx: *mut sWelsEncCtx) {
     if pCtx.is_null() {
         return;
@@ -1289,6 +1339,8 @@ pub unsafe fn UpdateSrcPicList(pCtx: *mut sWelsEncCtx) {
 }
 
 /// Screen content specialized reference picture list update.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn WelsUpdateRefListScreen(pCtx: *mut sWelsEncCtx) -> bool {
     if pCtx.is_null() || current_layer(pCtx).is_null() || ctx_param(pCtx).is_null() {
         return false;
@@ -1351,6 +1403,8 @@ pub unsafe fn WelsUpdateRefListScreen(pCtx: *mut sWelsEncCtx) -> bool {
 }
 
 /// Screen content specialized reference picture list builder.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn WelsBuildRefListScreen(
     pCtx: *mut sWelsEncCtx,
     iPOC: i32,
@@ -1433,6 +1487,8 @@ pub fn IsValidFrameNum(kiFrameNum: i32) -> bool {
     kiFrameNum < (1 << 30)
 }
 
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn WelsMarkMMCORefInfoScreen(
     pCtx: *mut sWelsEncCtx,
     pLtr: *mut SLTRState,
@@ -1465,6 +1521,8 @@ pub unsafe fn WelsMarkMMCORefInfoScreen(
     WelsMarkMMCORefInfoWithBase(pCurDq, pBaseSlice, kiCountSliceNum);
 }
 
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn WelsMarkPicScreen(pCtx: *mut sWelsEncCtx) {
     if pCtx.is_null() || ctx_param(pCtx).is_null() || current_layer(pCtx).is_null() {
         return;
@@ -1574,6 +1632,8 @@ pub unsafe fn WelsMarkPicScreen(pCtx: *mut sWelsEncCtx) {
 
 /// Intentional no-op reference list manager callback.
 /// Matches `void DoNothing (sWelsEncCtx* pointer)` in `ref_list_mgr_svc.cpp:996`.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn DoNothing(_pCtx: *mut sWelsEncCtx) {}
 
 // ============================================================================
@@ -1644,6 +1704,8 @@ impl RefStrategyKind {
     /// # Safety
     /// `pCtx` must be a live encoder context.
     #[inline]
+    // unsafe-cat: port-raw(Phase 9)
+    #[allow(unsafe_code)]
     pub unsafe fn BuildRefList(self, pCtx: *mut sWelsEncCtx, iPOC: i32, iBestLtrRefIdx: i32) -> bool {
         match self {
             RefStrategyKind::TemporalLayer | RefStrategyKind::Screen => {
@@ -1658,6 +1720,8 @@ impl RefStrategyKind {
     /// # Safety
     /// `pCtx` must be a live encoder context.
     #[inline]
+    // unsafe-cat: port-raw(Phase 9)
+    #[allow(unsafe_code)]
     pub unsafe fn MarkPic(self, pCtx: *mut sWelsEncCtx) {
         match self {
             RefStrategyKind::TemporalLayer | RefStrategyKind::Screen => WelsMarkPic(pCtx),
@@ -1670,6 +1734,8 @@ impl RefStrategyKind {
     /// # Safety
     /// `pCtx` must be a live encoder context.
     #[inline]
+    // unsafe-cat: port-raw(Phase 9)
+    #[allow(unsafe_code)]
     pub unsafe fn UpdateRefList(self, pCtx: *mut sWelsEncCtx) -> bool {
         match self {
             RefStrategyKind::TemporalLayer | RefStrategyKind::Screen => WelsUpdateRefList(pCtx),
@@ -1683,6 +1749,8 @@ impl RefStrategyKind {
     /// # Safety
     /// `pCtx` must be a live encoder context.
     #[inline]
+    // unsafe-cat: port-raw(Phase 9)
+    #[allow(unsafe_code)]
     pub unsafe fn EndofUpdateRefList(self, pCtx: *mut sWelsEncCtx) {
         match self {
             RefStrategyKind::TemporalLayer => PrefetchNextBuffer(pCtx),
@@ -1699,6 +1767,8 @@ impl RefStrategyKind {
     /// # Safety
     /// `pCtx` must be a live encoder context.
     #[inline]
+    // unsafe-cat: port-raw(Phase 9)
+    #[allow(unsafe_code)]
     pub unsafe fn AfterBuildRefList(self, pCtx: *mut sWelsEncCtx) {
         match self {
             RefStrategyKind::TemporalLayer => DoNothing(pCtx),
@@ -1712,6 +1782,8 @@ mod tests {
     use super::*;
 
     #[test]
+    // unsafe-cat: port-raw(Phase 9)
+    #[allow(unsafe_code)]
     fn test_ref_list_mgr_noop_callback() {
         unsafe {
             DoNothing(std::ptr::null_mut());
@@ -1746,6 +1818,8 @@ mod tests {
     /// be the variant the old factory's `_ =>` arm produced. S21, as an assertion
     /// rather than a sentence.
     #[test]
+    // unsafe-cat: port-raw(Phase 9)
+    #[allow(unsafe_code)]
     fn ref_strategy_zero_is_the_default_arm() {
         assert_eq!(RefStrategyKind::default(), RefStrategyKind::TemporalLayer);
         assert_eq!(RefStrategyKind::TemporalLayer as u8, 0);

@@ -45,6 +45,8 @@
     clippy::too_many_arguments
 )]
 
+#![deny(unsafe_code)]
+
 use crate::encoder::svc_encode_slice::{layer_dec_pic, layer_dec_pic_mut, layer_ref_pic, layer_ref_pic_mut};
 use crate::encoder::picture::{RecPicId};
 use crate::common::memory_align::CMemoryAlign;
@@ -386,11 +388,15 @@ pub type PUpdateFMESwitch = unsafe extern "C" fn(pCurLayer: *mut SDqLayer);
 
 /// Calculates MVD rate cost: `table[mx] + table[my]`.
 #[inline(always)]
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn COST_MVD(table: *const u16, mx: i32, my: i32) -> u32 {
     unsafe { (*table.offset(mx as isize) as u32) + (*table.offset(my as isize) as u32) }
 }
 
 #[inline]
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn UpdateMeResults(
     ksBestMv: SMVUnitXY,
     kiBestSadCost: u32,
@@ -405,6 +411,8 @@ pub unsafe fn UpdateMeResults(
 }
 
 #[inline]
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn MeEndIntepelSearch(pMe: &mut SWelsME) {
     unsafe {
         (*pMe).sMv.iMvX *= 1 << 2;
@@ -425,6 +433,8 @@ pub fn CheckMvInRange(ksCurrentMv: SMVUnitXY, ksMinMv: SMVUnitXY, ksMaxMv: SMVUn
 }
 
 #[inline]
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn SetMvWithinIntegerMvRange(
     kiMbWidth: i32,
     kiMbHeight: i32,
@@ -454,6 +464,8 @@ pub fn CalcFMESwitchFlag(
 }
 
 #[inline]
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn GetCurrentSliceNum(pCurDq: *const SDqLayer) -> i32 {
     if pCurDq.is_null() {
         -1
@@ -467,6 +479,8 @@ pub unsafe fn GetCurrentSliceNum(pCurDq: *const SDqLayer) -> i32 {
 // ============================================================================
 
 /// Populates motion estimation function pointer table based on CPU capabilities and content type.
+// unsafe-cat: cursor
+#[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsInitMeFunc(
     pFuncList: *mut SWelsFuncPtrList,
     uiCpuFlag: u32,
@@ -507,6 +521,8 @@ pub unsafe extern "C" fn WelsInitMeFunc(
 // ============================================================================
 
 /// Top-level motion estimation search for a macroblock or sub-partition.
+// unsafe-cat: cursor
+#[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsMotionEstimateSearch(
     pFuncList: *mut SWelsFuncPtrList,
     pCurDqLayer: *mut SDqLayer,
@@ -590,6 +606,8 @@ pub unsafe extern "C" fn WelsMotionEstimateSearch(
 
 /// Shortcut motion estimation search for static macroblocks (forced MV = (0,0)).
 // SCREEN_CONTENT(dormant: Phase 10)
+// unsafe-cat: SCREEN_CONTENT(dormant)
+#[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsMotionEstimateSearchStatic(
     pFuncList: *mut SWelsFuncPtrList,
     pCurDqLayer: *mut SDqLayer,
@@ -624,6 +642,8 @@ pub unsafe extern "C" fn WelsMotionEstimateSearchStatic(
 
 /// Shortcut motion estimation search for scrolled macroblocks.
 // SCREEN_CONTENT(dormant: Phase 10)
+// unsafe-cat: SCREEN_CONTENT(dormant)
+#[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsMotionEstimateSearchScrolled(
     pFuncList: *mut SWelsFuncPtrList,
     pCurDqLayer: *mut SDqLayer,
@@ -669,6 +689,8 @@ pub unsafe extern "C" fn WelsMotionEstimateSearchScrolled(
 // ============================================================================
 
 /// Evaluates spatial MVP, MVC candidate list, and directional scrolling vectors.
+// unsafe-cat: cursor
+#[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsMotionEstimateInitialPoint(
     pFuncList: *mut SWelsFuncPtrList,
     pMe: &mut SWelsME,
@@ -753,6 +775,8 @@ pub unsafe extern "C" fn WelsMotionEstimateInitialPoint(
 // SATD Cost Calculation
 // ============================================================================
 
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe extern "C" fn CalculateSatdCost(
     pSatd: Option<PSampleSadSatdCostFunc>,
     pMe: &mut SWelsME,
@@ -772,6 +796,8 @@ pub unsafe extern "C" fn CalculateSatdCost(
     }
 }
 
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe extern "C" fn NotCalculateSatdCost(
     _pSatd: Option<PSampleSadSatdCostFunc>,
     _pMe: &mut SWelsME,
@@ -784,6 +810,8 @@ pub unsafe extern "C" fn NotCalculateSatdCost(
 // Small Diamond Search (ME_DIA)
 // ============================================================================
 
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsMeSadCostSelect(
     iSadCost: *mut i32,
     kpMvdCost: *const u16,
@@ -826,6 +854,8 @@ pub unsafe extern "C" fn WelsMeSadCostSelect(
     }
 }
 
+// unsafe-cat: cursor
+#[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsDiamondSearch(
     pFuncList: *mut SWelsFuncPtrList,
     pMe: &mut SWelsME,
@@ -903,6 +933,8 @@ pub unsafe extern "C" fn WelsDiamondSearch(
 // Directional Scrolling Search
 // ============================================================================
 
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe extern "C" fn CheckDirectionalMv(
     pSad: Option<PSampleSadSatdCostFunc>,
     pMe: &mut SWelsME,
@@ -939,6 +971,8 @@ pub unsafe extern "C" fn CheckDirectionalMv(
     }
 }
 
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe extern "C" fn CheckDirectionalMvFalse(
     _pSad: Option<PSampleSadSatdCostFunc>,
     _pMe: &mut SWelsME,
@@ -955,6 +989,8 @@ pub unsafe extern "C" fn CheckDirectionalMvFalse(
 // 1D Orthogonal Cross Search (ME_CROSS)
 // ============================================================================
 
+// unsafe-cat: cursor
+#[allow(unsafe_code)]
 pub unsafe extern "C" fn LineFullSearch_c(
     pFuncList: *mut SWelsFuncPtrList,
     pMe: &mut SWelsME,
@@ -1023,6 +1059,8 @@ pub unsafe extern "C" fn LineFullSearch_c(
     }
 }
 
+// unsafe-cat: cursor
+#[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsMotionCrossSearch(
     pFuncList: *mut SWelsFuncPtrList,
     pMe: &mut SWelsME,
@@ -1061,6 +1099,8 @@ pub unsafe extern "C" fn WelsMotionCrossSearch(
     }
 }
 
+// unsafe-cat: cursor
+#[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsDiamondCrossSearch(
     pFunc: *mut SWelsFuncPtrList,
     pMe: &mut SWelsME,
@@ -1082,6 +1122,8 @@ pub unsafe extern "C" fn WelsDiamondCrossSearch(
 }
 
 // SCREEN_CONTENT(dormant: Phase 10)
+// unsafe-cat: SCREEN_CONTENT(dormant)
+#[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsDiamondCrossFeatureSearch(
     pFunc: *mut SWelsFuncPtrList,
     pMe: &mut SWelsME,
@@ -1116,6 +1158,8 @@ pub unsafe extern "C" fn WelsDiamondCrossFeatureSearch(
 // Feature Search (FME / Screen Content Coding)
 // ============================================================================
 
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe extern "C" fn SumOf8x8SingleBlock_c(pRef: *mut u8, kiRefStride: i32) -> i32 {
     let mut iSum = 0i32;
     let mut ptr = pRef;
@@ -1135,6 +1179,8 @@ pub unsafe extern "C" fn SumOf8x8SingleBlock_c(pRef: *mut u8, kiRefStride: i32) 
     iSum
 }
 
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe extern "C" fn SumOf16x16SingleBlock_c(pRef: *mut u8, kiRefStride: i32) -> i32 {
     let mut iSum = 0i32;
     let mut ptr = pRef;
@@ -1162,6 +1208,8 @@ pub unsafe extern "C" fn SumOf16x16SingleBlock_c(pRef: *mut u8, kiRefStride: i32
     iSum
 }
 
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe extern "C" fn SumOf8x8BlockOfFrame_c(
     pRefPicture: *mut u8,
     kiWidth: i32,
@@ -1183,6 +1231,8 @@ pub unsafe extern "C" fn SumOf8x8BlockOfFrame_c(
     }
 }
 
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe extern "C" fn SumOf16x16BlockOfFrame_c(
     pRefPicture: *mut u8,
     kiWidth: i32,
@@ -1204,6 +1254,8 @@ pub unsafe extern "C" fn SumOf16x16BlockOfFrame_c(
     }
 }
 
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe extern "C" fn InitializeHashforFeature_c(
     pTimesOfFeatureValue: *mut u32,
     pBuf: *mut u16,
@@ -1221,6 +1273,8 @@ pub unsafe extern "C" fn InitializeHashforFeature_c(
     }
 }
 
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe extern "C" fn FillQpelLocationByFeatureValue_c(
     pFeatureOfBlock: *mut u16,
     kiWidth: i32,
@@ -1244,6 +1298,8 @@ pub unsafe extern "C" fn FillQpelLocationByFeatureValue_c(
     }
 }
 
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn CalculateFeatureOfBlock(
     pFunc: &SWelsFuncPtrList,
     pRef: &mut SPicture,
@@ -1302,6 +1358,8 @@ pub unsafe fn CalculateFeatureOfBlock(
 }
 
 // SCREEN_CONTENT(dormant: Phase 10)
+// unsafe-cat: SCREEN_CONTENT(dormant)
+#[allow(unsafe_code)]
 pub unsafe extern "C" fn PerformFMEPreprocess(
     pFunc: &SWelsFuncPtrList,
     pRef: &mut SPicture,
@@ -1328,6 +1386,8 @@ pub unsafe extern "C" fn PerformFMEPreprocess(
 }
 
 // SCREEN_CONTENT(dormant: Phase 10)
+// unsafe-cat: SCREEN_CONTENT(dormant)
+#[allow(unsafe_code)]
 pub unsafe fn SetFeatureSearchIn(
     pFunc: &SWelsFuncPtrList,
     sMe: &SWelsME,
@@ -1378,6 +1438,8 @@ pub unsafe fn SetFeatureSearchIn(
 }
 
 // SCREEN_CONTENT(dormant: Phase 10)
+// unsafe-cat: SCREEN_CONTENT(dormant)
+#[allow(unsafe_code)]
 pub unsafe fn SaveFeatureSearchOut(
     sBestMv: SMVUnitXY,
     uiBestSadCost: u32,
@@ -1392,6 +1454,8 @@ pub unsafe fn SaveFeatureSearchOut(
 }
 
 // SCREEN_CONTENT(dormant: Phase 10)
+// unsafe-cat: SCREEN_CONTENT(dormant)
+#[allow(unsafe_code)]
 pub unsafe fn FeatureSearchOne(
     sFeatureSearchIn: &SFeatureSearchIn,
     iFeatureDifference: i32,
@@ -1480,6 +1544,8 @@ pub unsafe fn FeatureSearchOne(
     }
 }
 
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe extern "C" fn MotionEstimateFeatureFullSearch(
     sFeatureSearchIn: SFeatureSearchIn,
     kuiMaxSearchPoint: u32,
@@ -1512,6 +1578,8 @@ pub unsafe extern "C" fn MotionEstimateFeatureFullSearch(
 
 /// Intentional no-op motion estimation FME switch callback.
 /// Matches `void UpdateFMESwitchNull (SDqLayer* pCurLayer)` in `svc_motion_estimate.cpp:1059`.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe extern "C" fn UpdateFMESwitchNull(_pCurLayer: *mut SDqLayer) {}
 
 // ============================================================================
@@ -1535,6 +1603,8 @@ pub unsafe extern "C" fn UpdateFMESwitchNull(_pCurLayer: *mut SDqLayer) {}
 // before it can get here, so no live path allocates any of this. They are fenced
 // with the rest of the screen-content family rather than deleted, because that
 // family is live upstream and Phase 10 owns porting it whole.
+// unsafe-cat: SCREEN_CONTENT(dormant)
+#[allow(unsafe_code)]
 pub unsafe extern "C" fn RequestScreenBlockFeatureStorage(
     pMa: *mut CMemoryAlign,
     kiFrameWidth: i32,
@@ -1605,6 +1675,8 @@ pub unsafe extern "C" fn RequestScreenBlockFeatureStorage(
 }
 
 // SCREEN_CONTENT(dormant: Phase 10) — see `RequestScreenBlockFeatureStorage` above.
+// unsafe-cat: SCREEN_CONTENT(dormant)
+#[allow(unsafe_code)]
 pub unsafe extern "C" fn ReleaseScreenBlockFeatureStorage(
     pMa: *mut CMemoryAlign,
     pScreenBlockFeatureStorage: *mut SScreenBlockFeatureStorage,
@@ -1670,6 +1742,8 @@ mod tests {
     }
 
     #[test]
+    // unsafe-cat: port-raw(Phase 9)
+    #[allow(unsafe_code)]
     fn test_cost_mvd_computation() {
         let table_data = [10u16, 20, 30, 40, 50, 60, 70, 80];
         let base_ptr = table_data.as_ptr();
@@ -1680,6 +1754,8 @@ mod tests {
     }
 
     #[test]
+    // unsafe-cat: port-raw(Phase 9)
+    #[allow(unsafe_code)]
     fn test_single_block_sums() {
         let mut buf8 = [0u8; 64];
         for i in 0..64 {
@@ -1701,6 +1777,8 @@ mod tests {
     }
 
     #[test]
+    // unsafe-cat: port-raw(Phase 9)
+    #[allow(unsafe_code)]
     fn test_me_sad_cost_select() {
         let mut sad_costs = [100i32, 50, 120, 80];
         let mvd_cost_table = vec![0u16; 512];
@@ -1733,6 +1811,8 @@ mod tests {
     }
 
     #[test]
+    // unsafe-cat: port-raw(Phase 9)
+    #[allow(unsafe_code)]
     fn test_fme_noop_callback() {
         unsafe {
             UpdateFMESwitchNull(std::ptr::null_mut());

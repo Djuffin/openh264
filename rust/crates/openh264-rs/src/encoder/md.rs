@@ -41,6 +41,8 @@
     unused_unsafe
 )]
 
+#![deny(unsafe_code)]
+
 pub use crate::encoder::encoder_context::SMVUnitXY;
 use crate::encoder::encoder_context::ctx_func_list;
 pub use crate::encoder::encoder_context::SMVComponentUnit;
@@ -565,60 +567,80 @@ impl Default for SMbCache {
 /// arena from the slice it already has. **A reference is the wrong tool for an
 /// arena; deleting the second path is the right one.**
 #[inline]
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn coeff_level(pMbCache: *mut SMbCache) -> *mut i16 {
     std::ptr::addr_of_mut!((*pMbCache).sCoeffLevel).cast::<i16>()
 }
 
 /// `pMbCache->pSkipMb` — 256 luma + 2x64 chroma bytes of the P_SKIP reconstruction.
 #[inline]
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn skip_mb(pMbCache: *mut SMbCache) -> *mut u8 {
     std::ptr::addr_of_mut!((*pMbCache).sSkipMb).cast::<u8>()
 }
 
 /// `pMbCache->pMemPredMb` — the base of the I16x16 ping-pong, half 0.
 #[inline]
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn mem_pred_mb(pMbCache: *mut SMbCache) -> *mut u8 {
     std::ptr::addr_of_mut!((*pMbCache).sMemPredMb).cast::<u8>()
 }
 
 /// `pMbCache->pMemPredLuma` — the ping-pong half holding the luma prediction.
 #[inline]
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn mem_pred_luma(pMbCache: *mut SMbCache) -> *mut u8 {
     mem_pred_mb(pMbCache).add(256 * (*pMbCache).uiMemPredLumaHalf as usize)
 }
 
 /// `pMbCache->pMemPredChroma` — the other half, by construction.
 #[inline]
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn mem_pred_chroma(pMbCache: *mut SMbCache) -> *mut u8 {
     mem_pred_mb(pMbCache).add(256 * ((*pMbCache).uiMemPredLumaHalf ^ 0x01) as usize)
 }
 
 /// `pMbCache->pBestPredIntraChroma` — one of the chroma half's two 128-byte halves.
 #[inline]
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn best_pred_intra_chroma(pMbCache: *mut SMbCache) -> *mut u8 {
     mem_pred_chroma(pMbCache).add(128 * (*pMbCache).uiBestPredIntraChromaHalf as usize)
 }
 
 /// `pMbCache->pMemPredBlk4` — the base of the I4x4 block ping-pong, half 0.
 #[inline]
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn mem_pred_blk4(pMbCache: *mut SMbCache) -> *mut u8 {
     std::ptr::addr_of_mut!((*pMbCache).sMemPredBlk4).cast::<u8>()
 }
 
 /// `pMbCache->pBestPredI4x4Blk4` — whichever 16-byte half won.
 #[inline]
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn best_pred_i4x4_blk4(pMbCache: *mut SMbCache) -> *mut u8 {
     mem_pred_blk4(pMbCache).add(16 * (*pMbCache).uiBestPredI4x4Blk4Half as usize)
 }
 
 /// `pMbCache->pBufferInterPredMe` — four 640-byte planes for the ME refinement.
 #[inline]
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn buffer_inter_pred_me(pMbCache: *mut SMbCache) -> *mut u8 {
     std::ptr::addr_of_mut!((*pMbCache).sBufferInterPredMe).cast::<u8>()
 }
 
 /// `pMbCache->pDct` — the macroblock's transform coefficients.
 #[inline]
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn dct(pMbCache: *mut SMbCache) -> *mut SDCTCoeff {
     std::ptr::addr_of_mut!((*pMbCache).sDct)
 }
@@ -790,6 +812,8 @@ pub fn BsSizeSE(kiValue: i32) -> u32 {
 }
 
 #[inline(always)]
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn COST_MVD(pMvdCost: *const u16, iMvdX: i32, iMvdY: i32) -> i32 {
     let x = *pMvdCost.offset(iMvdX as isize) as i32;
     let y = *pMvdCost.offset(iMvdY as isize) as i32;
@@ -826,6 +850,8 @@ pub fn IS_SVC_INTER(uiMbType: u32) -> bool {
 }
 
 // Function Implementations
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe extern "C" fn FillNeighborCacheIntra(
     pMbCache: *mut SMbCache,
     pCurMb: *mut SMB,
@@ -918,6 +944,8 @@ pub unsafe extern "C" fn FillNeighborCacheIntra(
     (*pMbCache).uiNeighborIntra = uiNeighborIntra as u8;
 }
 
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn FillNeighborCacheInterWithoutBGD(
     pMbCache: *mut SMbCache,
     pCurMb: *mut SMB,
@@ -1051,6 +1079,8 @@ pub unsafe fn FillNeighborCacheInterWithoutBGD(
     pMvComp.iRefIndexCache[23] = REF_NOT_AVAIL;
 }
 
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn FillNeighborCacheInterWithBGD(
     pMbCache: *mut SMbCache,
     pCurMb: *mut SMB,
@@ -1184,6 +1214,8 @@ pub unsafe fn FillNeighborCacheInterWithBGD(
     pMvComp.iRefIndexCache[23] = REF_NOT_AVAIL;
 }
 
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe extern "C" fn InitFillNeighborCacheInterFunc(
     pFuncList: &mut SWelsFuncPtrList,
     kiFlag: i32,
@@ -1204,6 +1236,8 @@ pub fn UpdateMbMv_c(pMvBuffer: &mut [SMVUnitXY; MB_BLOCK4x4_NUM], ksMv: SMVUnitX
     }
 }
 
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe extern "C" fn MdInterAnalysisVaaInfo_c(pSad8x8: *mut i32) -> u8 {
     let mut iSadBlock = [0i32; 4];
     let mut iAverageSadBlock = [0i32; 4];
@@ -1254,6 +1288,8 @@ pub unsafe extern "C" fn MdInterAnalysisVaaInfo_c(pSad8x8: *mut i32) -> u8 {
     uiMbSign
 }
 
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe extern "C" fn AnalysisVaaInfoIntra_c(pDataY: *mut u8, kiLineSize: i32) -> i32 {
     let mut uiAvgBlock = [0u16; 16];
     let mut pEncData = pDataY;
@@ -1306,6 +1342,8 @@ pub unsafe extern "C" fn AnalysisVaaInfoIntra_c(pDataY: *mut u8, kiLineSize: i32
     iSumSqr - ((iSumAvg * iSumAvg) >> 4)
 }
 
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe extern "C" fn InitIntraAnalysisVaaInfo(
     pFuncList: &mut SWelsFuncPtrList,
     _kuiCpuFlag: u32,
@@ -1315,6 +1353,8 @@ pub unsafe extern "C" fn InitIntraAnalysisVaaInfo(
     pFuncList.pfUpdateMbMv = Some(UpdateMbMv_c);
 }
 
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe extern "C" fn MdIntraAnalysisVaaInfo(
     pEncCtx: *mut sWelsEncCtx,
     pEncMb: *mut u8,
@@ -1342,6 +1382,8 @@ pub fn InitMeRefinePointer(pMeRefine: &mut SMeRefinePointer, iStride: i32) {
 }
 
 #[inline(always)]
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn MeRefineQuarPixel(
     pFunc: &SWelsFuncPtrList,
     pMe: &mut SWelsME,
@@ -1433,6 +1475,8 @@ pub unsafe fn MeRefineQuarPixel(
     }
 }
 
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe extern "C" fn MeRefineFracPixel(
     pEncCtx: *mut sWelsEncCtx,
     pMemPredInterMb: *mut u8,
@@ -1702,6 +1746,8 @@ pub unsafe extern "C" fn MeRefineFracPixel(
     pfCopyBlockByMode(pMemPredInterMb, MB_WIDTH_LUMA, pBestPredInter, iInterBlk4Stride);
 }
 
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe extern "C" fn InitBlkStrideWithRef(pBlkStride: *mut i32, kiStrideRef: i32) {
     const KUI_STRIDE_X: [u8; 16] = [
         0, 4, 0, 4,
@@ -1724,6 +1770,8 @@ pub unsafe extern "C" fn InitBlkStrideWithRef(pBlkStride: *mut i32, kiStrideRef:
     }
 }
 
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe extern "C" fn MvdCostInit(pMvdCostInter: *mut u16, kiMvdSz: i32) {
     let kiSz = kiMvdSz >> 1;
     let mut pNegMvd = pMvdCostInter;
@@ -1778,6 +1826,8 @@ pub unsafe extern "C" fn MvdCostInit(pMvdCostInter: *mut u16, kiMvdSz: i32) {
     }
 }
 
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe extern "C" fn PredictSad(
     pRefIndexCache: *mut i8,
     pSadCostCache: *mut i32,
@@ -1822,6 +1872,8 @@ pub unsafe extern "C" fn PredictSad(
     *pSadPred = (REPLACE_SAD_MULTIPLY(iCount) + 32) >> 6;
 }
 
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe extern "C" fn PredictSadSkip(
     pRefIndexCache: *mut i8,
     pMbSkipCache: *mut bool,

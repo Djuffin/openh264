@@ -46,6 +46,8 @@
 // Constants and Dimension Definitions
 // ============================================================================
 
+#![deny(unsafe_code)]
+
 pub const MB_WIDTH_LUMA: usize = 16;
 pub const MB_WIDTH_CHROMA: usize = 8;
 
@@ -528,6 +530,8 @@ pub fn DeblockingBSMarginalMBAvcbase(pCurMb: &SMB, pNeighMb: &SMB, iEdge: usize)
 /// `pCurMb` must be a valid MB pointer with in-bounds left/top neighbours for
 /// whichever of `iLeftFlag`/`iTopFlag` is set, `pFunc` null or valid, and
 /// `uiBS` must point at a writable `[2][4][4]` boundary-strength array.
+// unsafe-cat: cursor
+#[allow(unsafe_code)]
 pub unsafe extern "C" fn DeblockingBSCalc_c(
     pFunc: *mut SWelsFuncPtrList,
     pCurMb: *mut SMB,
@@ -627,6 +631,8 @@ pub fn WelsNonZeroCount_c(pNonZeroCount: &mut [i8; MB_LUMA_CHROMA_BLOCK4x4_NUM])
 // Directional Filtering Dispatchers
 // ============================================================================
 
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn FilteringEdgeLumaH(
     pfDeblocking: *const DeblockingFunc,
     pFilter: *mut SDeblockingFilter,
@@ -657,6 +663,8 @@ pub unsafe fn FilteringEdgeLumaH(
     }
 }
 
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn FilteringEdgeLumaV(
     pfDeblocking: *const DeblockingFunc,
     pFilter: *mut SDeblockingFilter,
@@ -687,6 +695,8 @@ pub unsafe fn FilteringEdgeLumaV(
     }
 }
 
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn FilteringEdgeLumaIntraH(
     pfDeblocking: *const DeblockingFunc,
     pFilter: *mut SDeblockingFilter,
@@ -714,6 +724,8 @@ pub unsafe fn FilteringEdgeLumaIntraH(
     }
 }
 
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn FilteringEdgeLumaIntraV(
     pfDeblocking: *const DeblockingFunc,
     pFilter: *mut SDeblockingFilter,
@@ -741,6 +753,8 @@ pub unsafe fn FilteringEdgeLumaIntraV(
     }
 }
 
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn FilteringEdgeChromaH(
     pfDeblocking: *const DeblockingFunc,
     pFilter: *mut SDeblockingFilter,
@@ -772,6 +786,8 @@ pub unsafe fn FilteringEdgeChromaH(
     }
 }
 
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn FilteringEdgeChromaV(
     pfDeblocking: *const DeblockingFunc,
     pFilter: *mut SDeblockingFilter,
@@ -803,6 +819,8 @@ pub unsafe fn FilteringEdgeChromaV(
     }
 }
 
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn FilteringEdgeChromaIntraH(
     pfDeblocking: *const DeblockingFunc,
     pFilter: *mut SDeblockingFilter,
@@ -831,6 +849,8 @@ pub unsafe fn FilteringEdgeChromaIntraH(
     }
 }
 
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn FilteringEdgeChromaIntraV(
     pfDeblocking: *const DeblockingFunc,
     pFilter: *mut SDeblockingFilter,
@@ -863,6 +883,8 @@ pub unsafe fn FilteringEdgeChromaIntraV(
 // Macroblock Deblocking Execution
 // ============================================================================
 
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn DeblockingInterMb(
     pfDeblocking: *const DeblockingFunc,
     pCurMb: *mut SMB,
@@ -1047,6 +1069,8 @@ pub unsafe fn DeblockingInterMb(
     }
 }
 
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn FilteringEdgeLumaHV(
     pfDeblocking: *const DeblockingFunc,
     pCurMb: *mut SMB,
@@ -1140,6 +1164,8 @@ pub unsafe fn FilteringEdgeLumaHV(
     }
 }
 
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn FilteringEdgeChromaHV(
     pfDeblocking: *const DeblockingFunc,
     pCurMb: *mut SMB,
@@ -1241,6 +1267,8 @@ pub unsafe fn FilteringEdgeChromaHV(
 }
 
 #[inline(always)]
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn DeblockingIntraMb(
     pfDeblocking: *const DeblockingFunc,
     pCurMb: *mut SMB,
@@ -1250,6 +1278,8 @@ pub unsafe fn DeblockingIntraMb(
     FilteringEdgeChromaHV(pfDeblocking, pCurMb, pFilter);
 }
 
+// unsafe-cat: cursor
+#[allow(unsafe_code)]
 pub unsafe fn DeblockingMbAvcbase(
     pFunc: *mut SWelsFuncPtrList,
     pCurMb: *mut SMB,
@@ -1305,6 +1335,8 @@ pub unsafe fn DeblockingMbAvcbase(
 // Frame and Slice Level Traversal
 // ============================================================================
 
+// unsafe-cat: cursor
+#[allow(unsafe_code)]
 pub unsafe fn DeblockingFilterFrameAvcbase(pCurDq: *mut SDqLayer, pFunc: *mut SWelsFuncPtrList) {
     if pCurDq.is_null() || (*pCurDq).pDecPic.is_none() {
         return;
@@ -1373,6 +1405,8 @@ pub use crate::encoder::svc_encode_slice::GetCurrentSliceNum;
 // walks straight across slice boundaries for every other slice mode.
 pub use crate::encoder::svc_encode_slice::WelsGetNextMbOfSlice;
 
+// unsafe-cat: cursor
+#[allow(unsafe_code)]
 pub unsafe extern "C" fn DeblockingFilterSliceAvcbase(
     pCurDq: *mut SDqLayer,
     pFunc: *mut SWelsFuncPtrList,
@@ -1434,6 +1468,8 @@ pub unsafe extern "C" fn DeblockingFilterSliceAvcbase(
     }
 }
 
+// unsafe-cat: cursor
+#[allow(unsafe_code)]
 pub unsafe extern "C" fn DeblockingFilterSliceAvcbaseNull(
     _pCurDq: *mut SDqLayer,
     _pFunc: *mut SWelsFuncPtrList,
@@ -1441,6 +1477,8 @@ pub unsafe extern "C" fn DeblockingFilterSliceAvcbaseNull(
 ) {
 }
 
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe extern "C" fn PerformDeblockingFilter(pEnc: *mut sWelsEncCtx) {
     if pEnc.is_null() {
         return;
@@ -1467,6 +1505,8 @@ pub unsafe extern "C" fn PerformDeblockingFilter(pEnc: *mut sWelsEncCtx) {
 // Architecture and Dispatch Table Initialization
 // ============================================================================
 
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsBlockFuncInit(
     pfSetNZCZero: *mut Option<PSetNoneZeroCountZeroFunc>,
     _iCpu: i32,
@@ -1476,6 +1516,8 @@ pub unsafe extern "C" fn WelsBlockFuncInit(
     }
 }
 
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe extern "C" fn DeblockingInit(pFunc: *mut DeblockingFunc, _iCpu: i32) {
     if pFunc.is_null() {
         return;
@@ -1532,6 +1574,8 @@ mod tests {
     }
 
     #[test]
+    // unsafe-cat: port-raw(Phase 9)
+    #[allow(unsafe_code)]
     fn test_non_zero_count_c() {
         let mut nzc: [i8; 24] = [
             0, 5, 0, 12, -3, 0, 0, 1, 0, 0, 0, 4,

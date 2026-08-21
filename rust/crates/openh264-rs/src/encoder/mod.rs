@@ -1,3 +1,4 @@
+#![deny(unsafe_code)]
 pub mod abi_guard;
 pub mod au_set;
 pub mod deblocking;
@@ -11,6 +12,14 @@ pub mod param_svc;
 pub mod paraset_strategy;
 pub mod picture;
 pub mod set_mb_syn_cabac;
+// **T6.J6.** `#![deny(unsafe_code)]` above is an inner attribute on the `encoder`
+// module, so it reaches every file below it — including the two the phase does not
+// own. The exemption is spelled here, at the declaration, rather than by leaving the
+// deny off `mod.rs`: this way the deny really is on all 36 modules, and the two that
+// are not covered say so where a reader looking for the boundary will find it. Both
+// retire with Phase 7, and the allow retires with them.
+// unsafe-cat: MT
+#[allow(unsafe_code)]
 pub mod slice_multi_threading;
 pub mod encoder_ext;
 pub mod svc_base_layer_md;
@@ -28,6 +37,14 @@ pub mod rc;
 pub mod wels_encoder_ext;
 pub mod wels_func_ptr_def;
 pub mod wels_preprocess;
+// **T6.J6.** `#![deny(unsafe_code)]` above is an inner attribute on the `encoder`
+// module, so it reaches every file below it — including the two the phase does not
+// own. The exemption is spelled here, at the declaration, rather than by leaving the
+// deny off `mod.rs`: this way the deny really is on all 36 modules, and the two that
+// are not covered say so where a reader looking for the boundary will find it. Both
+// retire with Phase 7, and the allow retires with them.
+// unsafe-cat: MT
+#[allow(unsafe_code)]
 pub mod wels_task_management;
 
 /// Whether an `OH264_*DUMP` debugging dump is switched on, cached so the hot paths

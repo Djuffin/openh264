@@ -15,6 +15,8 @@
 //! never true of the file and would have sent a straggler sweep looking for four
 //! kernels that were already here.)
 
+#![deny(unsafe_code)]
+
 use crate::encoder::wels_preprocess::{SPixMap, SVAACalcParam, SVAACalcResult};
 
 /// `EResult` — `codec/processing/interface/IWelsVP.h:54`.
@@ -55,6 +57,8 @@ fn shim_extent(pic_width: i32, pic_height: i32, pic_stride: i32) -> (usize, usiz
 ///   actually declares, and the cast below undoes the caller's own cast to `*mut i32`.
 /// * `pFrameSad` is writable. See F9: it is an `i32` accumulated over the whole
 ///   picture and overflows above 32 896 macroblocks, exactly as the C++ does.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn VAACalcSad_c(
     pCurData: *const u8,
     pRefData: *const u8,
@@ -96,6 +100,8 @@ pub struct CVAACalculation {
 /// # Safety
 /// As [`VAACalcSad_c`], and `pSum16x16`/`psqsum16x16` must each have room for
 /// `(iPicWidth >> 4) * (iPicHeight >> 4)` `i32`s.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn VAACalcSadVar_c(
     pCurData: *const u8,
     pRefData: *const u8,
@@ -130,6 +136,8 @@ pub unsafe fn VAACalcSadVar_c(
 ///
 /// # Safety
 /// As [`VAACalcSadVar_c`], plus `psqdiff16x16`.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn VAACalcSadSsd_c(
     pCurData: *const u8,
     pRefData: *const u8,
@@ -167,6 +175,8 @@ pub unsafe fn VAACalcSadSsd_c(
 /// # Safety
 /// As [`VAACalcSad_c`], plus `pSd8x8` (4 `i32`s per macroblock) and `pMad8x8`
 /// (4 `u8`s per macroblock).
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn VAACalcSadBgd_c(
     pCurData: *const u8,
     pRefData: *const u8,
@@ -203,6 +213,8 @@ pub unsafe fn VAACalcSadBgd_c(
 /// # Safety
 /// The union of [`VAACalcSadSsd_c`]'s and [`VAACalcSadBgd_c`]'s requirements.
 #[allow(clippy::too_many_arguments)]
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn VAACalcSadSsdBgd_c(
     pCurData: *const u8,
     pRefData: *const u8,
@@ -642,6 +654,8 @@ impl CVAACalculation {
     /// # Safety
     /// The pixel maps must describe readable luma planes of the stated geometry, and
     /// `result`'s arrays (`pSad8x8`, ...) must have room for the picture.
+    // unsafe-cat: port-raw(Phase 9)
+    #[allow(unsafe_code)]
     pub unsafe fn Process(&mut self, src: &SPixMap, ref_pic: &SPixMap, result: &mut SVAACalcResult) -> i32 {
         let pCurData = src.pPixel[0];
         let pRefData = ref_pic.pPixel[0];
@@ -718,6 +732,8 @@ mod tests {
     /// their sum. Values checked against the C++ arithmetic by construction — a
     /// constant difference of `d` over an 8x8 block gives `64 * d`.
     #[test]
+    // unsafe-cat: port-raw(Phase 9)
+    #[allow(unsafe_code)]
     fn calc_sad_one_macroblock() {
         let stride = 16i32;
         let cur = vec![100u8; 16 * 16];
@@ -754,6 +770,8 @@ mod tests {
     /// macroblock rows, so a picture whose stride exceeds its width still lands each
     /// macroblock's four sums at the right index.
     #[test]
+    // unsafe-cat: port-raw(Phase 9)
+    #[allow(unsafe_code)]
     fn calc_sad_honours_stride_step() {
         let w = 32i32;
         let h = 32i32;
@@ -801,6 +819,8 @@ mod tests {
     /// macroblock row eight bytes later and read a different block, which is exactly
     /// what this asserts against.
     #[test]
+    // unsafe-cat: port-raw(Phase 9)
+    #[allow(unsafe_code)]
     fn calc_sad_reproduces_the_step_quirk_at_a_width_that_is_not_a_multiple_of_16() {
         let (w, h, stride) = (40i32, 32i32, 64i32);
         let refp = vec![0u8; (h * stride) as usize];

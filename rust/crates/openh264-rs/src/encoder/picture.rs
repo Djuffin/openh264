@@ -13,6 +13,8 @@
 //! of `SPicture` and `SScreenBlockFeatureStorage`; before this module the port had six
 //! copies of `SPicture` and two of `SScreenBlockFeatureStorage`, most of them truncated.
 
+#![deny(unsafe_code)]
+
 use crate::encoder::encoder_context::{BLOCK_SIZE_ALL, SMVUnitXY};
 pub use crate::safe::plane::PaddedPlane;
 
@@ -353,6 +355,8 @@ impl SPicture {
     ///
     /// # Safety
     /// `pScreenBlockFeatureStorage` must be null or point to a valid storage block.
+    // unsafe-cat: port-raw(Phase 9)
+    #[allow(unsafe_code)]
     pub unsafe fn SetUnref(&mut self) {
         self.iFramePoc = -1;
         self.iFrameNum = -1;
@@ -601,6 +605,7 @@ mod tests {
     /// the whole `pad * stride + pad` walk back to the allocation base, which is what
     /// `ExpandReferencingPicture` does to every reconstruction picture, every frame.
     #[test]
+    // unsafe-cat: cursor
     #[allow(unsafe_code)]
     fn data_ptr_reaches_the_padding_behind_the_logical_origin() {
         // 176x144 QCIF as `SPicture::new` lays it out.

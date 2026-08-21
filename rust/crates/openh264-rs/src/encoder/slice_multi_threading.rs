@@ -43,6 +43,10 @@
     unused_unsafe
 )]
 
+// deny(unsafe_code) lands with Phase 7; this file is the thread machinery.
+// The exemption itself is the `#[allow(unsafe_code)]` on this file's `pub mod`
+// line in `encoder/mod.rs`, where the module-level deny reaches from.
+
 use std::ffi::{c_char, c_void};
 
 use crate::encoder::nal_encap::{WelsEncodeNal, SWelsNalRaw};

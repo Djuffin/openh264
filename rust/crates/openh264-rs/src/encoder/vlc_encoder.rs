@@ -19,6 +19,8 @@
 // died with the writer dedupe, which is what makes duplicates findable: routing
 // the callers here is what showed nothing had ever routed to these.
 
+#![deny(unsafe_code)]
+
 /// Residual transform block category.
 /// Matches `ECtxBlockCat` in `codec/encoder/core/inc/set_mb_syn_cavlc.h`.
 #[repr(C)]
@@ -549,6 +551,8 @@ pub fn WriteRunBefore(
 
 /// C-reference parameter extraction kernel for CAVLC.
 /// Scans quantized coefficients in reverse zigzag order, isolating non-zero levels and zero runs.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe extern "C" fn CavlcParamCal_c(
     pCoffLevel: *const i16,
     pRun: *mut u8,

@@ -13,6 +13,8 @@
 #![allow(non_snake_case, non_camel_case_types, non_upper_case_globals)]
 
 // Phase 4a: `pfMdCost`/`pfMeCost` are enum selectors, not interior pointers (F13).
+
+#![deny(unsafe_code)]
 use crate::encoder::picture::{RecPicId, RecPicPool, SRefPicView, SrcPicId, SrcPicPool};
 use crate::encoder::md::CostFamily;
 use std::ffi::{c_char, c_void};
@@ -131,6 +133,8 @@ macro_rules! tag {
 ///
 /// # Safety
 /// `pBlock` must point to at least 24 writable `i32`s.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn WelsGetEncBlockStrideOffset(pBlock: *mut i32, kiStrideY: i32, kiStrideUV: i32) {
     for j in 0..4i32 {
         let i = (j << 2) as usize;
@@ -155,6 +159,8 @@ pub unsafe fn WelsGetEncBlockStrideOffset(pBlock: *mut i32, kiStrideY: i32, kiSt
 /// # Safety
 /// `ppCtx` must point to a live context whose `pFuncList->pParametersetStrategy` is
 /// already set.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn AcquireLayersNals(
     ppCtx: *mut *mut sWelsEncCtx,
     pParam: *mut SWelsSvcCodingParam,
@@ -245,6 +251,8 @@ pub unsafe fn AcquireLayersNals(
 ///
 /// # Safety
 /// `ppCtx` must point to a live context with `pMemAlign` and `pSvcParam` set.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn AllocStrideTables(ppCtx: *mut *mut sWelsEncCtx, kiNumSpatialLayers: i32) -> i32 {
     let pMa = (**ppCtx).pMemAlign;
     let pParam = ctx_param(*ppCtx);
@@ -515,6 +523,8 @@ pub unsafe fn AllocStrideTables(ppCtx: *mut *mut sWelsEncCtx, kiNumSpatialLayers
 ///
 /// # Safety
 /// `pParam` must be initialised.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn GetMvMvdRange(
     pParam: *mut SWelsSvcCodingParam,
     iMvRange: *mut i32,
@@ -571,6 +581,8 @@ pub unsafe fn GetMvMvdRange(
 /// # Safety
 /// `pEnc` must have `pStrideTab` allocated; `pList` must hold at least
 /// `iMbWidth * iMbHeight` entries.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 unsafe fn InitMbInfo(
     pEnc: *mut sWelsEncCtx,
     pList: *mut SMB,
@@ -630,6 +642,8 @@ unsafe fn InitMbInfo(
 ///
 /// # Safety
 /// `ppCtx` must point to a live context with `ppDqLayerList` populated.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn InitMbListD(ppCtx: *mut *mut sWelsEncCtx) -> i32 {
     let iNumDlayer = (*ctx_param(*ppCtx)).iSpatialLayerNum;
 
@@ -677,6 +691,8 @@ pub unsafe fn InitMbListD(ppCtx: *mut *mut sWelsEncCtx) -> i32 {
 /// # Safety
 /// `ppCtx` must point to a live context with `pMemAlign`, `pSvcParam`, `pStrideTab`,
 /// `ppRefPicListExt`, `ppDqLayerList` and `pFuncList->pParametersetStrategy` set.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn InitDqLayers(
     ppCtx: *mut *mut sWelsEncCtx,
     pExistingParasetList: *mut SExistingParasetList,
@@ -985,6 +1001,8 @@ pub unsafe fn InitDqLayers(
 /// # Safety
 /// `ppCtx` must point to a live context with `pMemAlign`, `pSvcParam` and
 /// `pFuncList->pParametersetStrategy` set.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn RequestMemorySvc(
     ppCtx: *mut *mut sWelsEncCtx,
     pExistingParasetList: *mut SExistingParasetList,
@@ -1273,6 +1291,8 @@ pub unsafe fn RequestMemorySvc(
 ///
 /// # Safety
 /// `pCodingParam` and `pMaxSliceCount` must be non-null.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn InitSliceSettings(
     pLogCtx: *mut SLogContext,
     pCodingParam: *mut SWelsSvcCodingParam,
@@ -1342,6 +1362,8 @@ pub unsafe fn InitSliceSettings(
 ///
 /// # Safety
 /// All three out-pointers must be writable and `pCodingParam` initialised.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn GetMultipleThreadIdc(
     pLogCtx: *mut SLogContext,
     pCodingParam: *mut SWelsSvcCodingParam,
@@ -1392,6 +1414,8 @@ pub unsafe fn GetMultipleThreadIdc(
 /// # Safety
 /// `ppCtx` and `pCodingParam` must be non-null; the context returned in `*ppCtx` is
 /// owned by the caller and must be released with [`WelsUninitEncoderExt`].
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn WelsInitEncoderExt(
     ppCtx: *mut *mut sWelsEncCtx,
     pCodingParam: *mut SWelsSvcCodingParam,
@@ -1501,6 +1525,8 @@ pub const STATISTICS_LOG_INTERVAL_MS: i32 = 5000;
 ///
 /// # Safety
 /// `pDq` and `pMa` must be non-null.
+// unsafe-cat: MT
+#[allow(unsafe_code)]
 pub unsafe fn FreeSliceInLayer(pDq: *mut SDqLayer, pMa: *mut CMemoryAlign) {
     for iIdx in 0..MAX_THREADS_NUM {
         crate::encoder::svc_encode_slice::FreeSliceBuffer(pDq, iIdx, pMa);
@@ -1511,6 +1537,8 @@ pub unsafe fn FreeSliceInLayer(pDq: *mut SDqLayer, pMa: *mut CMemoryAlign) {
 ///
 /// # Safety
 /// `pDq` must have come from `InitDqLayers` and must not be used afterwards.
+// unsafe-cat: MT
+#[allow(unsafe_code)]
 pub unsafe fn FreeDqLayer(p: *mut SDqLayer, pMa: *mut CMemoryAlign) {
     if p.is_null() {
         return;
@@ -1554,6 +1582,8 @@ mod tests {
     /// `WelsInitEncoderExt` does before the preprocessor. This is the direct test of
     /// baseline blocker C: before this phase `pSpsArray`/`pPPSArray` were never
     /// allocated, `iSpsNum`/`iPpsNum` never assigned and `ppDqLayerList` never filled.
+    // unsafe-cat: port-raw(Phase 9)
+    #[allow(unsafe_code)]
     unsafe fn build_gate_context() -> *mut sWelsEncCtx {
         // Drive the same path the public API does: build an SEncParamExt and let
         // ParamTranscode fill sDependencyLayers, which ParamValidationExt then checks.
@@ -1625,6 +1655,8 @@ mod tests {
 
     /// Blocker C: the parameter-set arrays are allocated and populated.
     #[test]
+    // unsafe-cat: cursor
+    #[allow(unsafe_code)]
     fn request_memory_svc_builds_the_parameter_sets() {
         unsafe {
             let pCtx = build_gate_context();
@@ -1663,6 +1695,8 @@ mod tests {
     /// Blocker C, second half: the DQ layers, reference lists and macroblock list
     /// exist, which is what `pCurDqLayer` is selected from.
     #[test]
+    // unsafe-cat: cursor
+    #[allow(unsafe_code)]
     fn request_memory_svc_builds_the_dq_layers() {
         unsafe {
             let pCtx = build_gate_context();
@@ -1718,6 +1752,8 @@ mod tests {
 /// # Safety
 /// `ppCtx` must point to a context from [`WelsInitEncoderExt`], or be null/point to
 /// null.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn WelsUninitEncoderExt(ppCtx: *mut *mut sWelsEncCtx) {
     if ppCtx.is_null() || (*ppCtx).is_null() {
         return;
@@ -1819,6 +1855,8 @@ pub unsafe fn WelsUninitEncoderExt(ppCtx: *mut *mut sWelsEncCtx) {
 // ============================================================================
 
 /// `encoder_ext.cpp:2393`.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn GetTemporalLevel(
     fDlp: *mut SSpatialLayerInternal,
     kiFrameNum: i32,
@@ -1829,6 +1867,8 @@ pub unsafe fn GetTemporalLevel(
 }
 
 /// `encoder_ext.cpp:3114`.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn GetSubSequenceId(pCtx: *mut sWelsEncCtx, eFrameType: EVideoFrameType) -> i32 {
     if eFrameType == EVideoFrameType::videoFrameTypeIDR {
         0
@@ -1848,6 +1888,8 @@ pub unsafe fn GetSubSequenceId(pCtx: *mut sWelsEncCtx, eFrameType: EVideoFrameTy
 
 /// `encoder_ext.cpp:2797`. Swap the current DQ layer with the next one and make the
 /// outgoing layer the reference.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn WelsSwapDqLayers(pCtx: *mut sWelsEncCtx, kiNextDqIdx: i32) {
     // The outgoing layer's *position*, not its address — T6.D3, and since T6.G2 the
     // context holds nothing else: `iCurDqLayer` **is** the index, so the round trip
@@ -1869,6 +1911,8 @@ pub unsafe fn WelsSwapDqLayers(pCtx: *mut sWelsEncCtx, kiNextDqIdx: i32) {
 ///
 /// # Safety
 /// `pCtx->pCurDqLayer` must be live and stamped with its reference list.
+// unsafe-cat: cursor
+#[allow(unsafe_code)]
 pub unsafe fn StampLayerPictureViews(pCtx: *mut sWelsEncCtx) {
     let pCurDq = current_layer(pCtx);
     if pCurDq.is_null() {
@@ -1891,6 +1935,8 @@ pub unsafe fn StampLayerPictureViews(pCtx: *mut sWelsEncCtx) {
 }
 
 /// `encoder_ext.cpp:2808`. Prefetch the reference picture after `WelsBuildRefList`.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn PrefetchReferencePicture(pCtx: *mut sWelsEncCtx, keFrameType: EVideoFrameType) {
     let kiSliceCount = (*current_layer(pCtx)).iMaxSliceNum;
     // C++ declares `uint8_t uiRefIdx = -1;`, which wraps to 255.
@@ -1921,6 +1967,8 @@ pub unsafe fn PrefetchReferencePicture(pCtx: *mut sWelsEncCtx, keFrameType: EVid
 }
 
 /// `encoder_ext.cpp:3376`.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn ClearFrameBsInfo(pCtx: *mut sWelsEncCtx, pFbi: *mut SFrameBSInfo) {
     (*pFbi).sLayerInfo[0].pBsBuf = ctx_frame_bs(pCtx);
     (*pFbi).sLayerInfo[0].pNalLengthInByte = (*(*pCtx).pOut).sNalLen.as_mut_ptr();
@@ -1935,6 +1983,8 @@ pub unsafe fn ClearFrameBsInfo(pCtx: *mut sWelsEncCtx, pFbi: *mut SFrameBSInfo) 
 
 /// `encoder_ext.cpp:3341`. Roll the encoder state back one frame after the rate
 /// controller decides to drop it.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn StackBackEncoderStatus(pEncCtx: *mut sWelsEncCtx, keFrameType: EVideoFrameType) {
     let pParamInternal = (*ctx_param(pEncCtx))
         .sDependencyLayers
@@ -1984,6 +2034,8 @@ pub unsafe fn StackBackEncoderStatus(pEncCtx: *mut sWelsEncCtx, keFrameType: EVi
 
 /// `encoder_ext.cpp:2534`. Bind the current DQ layer to this frame's parameter sets,
 /// NAL header and picture buffers.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn WelsInitCurrentLayer(pCtx: *mut sWelsEncCtx, _kiWidth: i32, _kiHeight: i32) {
     let pParam = ctx_param(pCtx);
     let pCurDq = current_layer(pCtx);
@@ -2105,6 +2157,8 @@ pub unsafe fn WelsInitCurrentLayer(pCtx: *mut sWelsEncCtx, _kiWidth: i32, _kiHei
 
 /// `encoder_ext.cpp:2954`. Emit the SVC prefix NAL that precedes each VCL NAL when
 /// `bNeedPrefixNalFlag` is set.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn AddPrefixNal(
     pCtx: *mut sWelsEncCtx,
     _pLayerBsInfo: *mut SLayerBSInfo,
@@ -2166,6 +2220,8 @@ pub unsafe fn AddPrefixNal(
 }
 
 /// `encoder_ext.cpp:3003`. Emit a filler-data NAL of `iLen` bytes.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn WritePadding(pCtx: *mut sWelsEncCtx, iLen: i32, iSize: *mut i32) -> i32 {
     let mut iNalLen = 0i32;
 
@@ -2216,6 +2272,8 @@ pub unsafe fn WritePadding(pCtx: *mut sWelsEncCtx, iLen: i32, iSize: *mut i32) -
 }
 
 /// `encoder_ext.cpp:2624` (`static inline SetFastCodingFunc`).
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 unsafe fn SetFastCodingFunc(pFuncList: &mut SWelsFuncPtrList) {
     pFuncList.pfIntraFineMd =
         Some(crate::encoder::svc_base_layer_md::WelsMdIntraFinePartitionVaa);
@@ -2226,6 +2284,8 @@ unsafe fn SetFastCodingFunc(pFuncList: &mut SWelsFuncPtrList) {
 }
 
 /// `encoder_ext.cpp:2630` (`static inline SetNormalCodingFunc`).
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 unsafe fn SetNormalCodingFunc(pFuncList: &mut SWelsFuncPtrList) {
     pFuncList.pfIntraFineMd = Some(crate::encoder::svc_base_layer_md::WelsMdIntraFinePartition);
     let sdf = &mut pFuncList.sSampleDealingFuncs;
@@ -2235,6 +2295,8 @@ unsafe fn SetNormalCodingFunc(pFuncList: &mut SWelsFuncPtrList) {
 
 /// `encoder_ext.cpp:2643`. Returns false when the requested method has no dedicated
 /// search and the caller falls back to the diamond search.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn SetMeMethod(uiMethod: u32, pSearchMethodFunc: *mut Option<PSearchMethodFunc>) -> bool {
     match uiMethod {
         ME_DIA => {
@@ -2270,6 +2332,8 @@ pub unsafe fn SetMeMethod(uiMethod: u32, pSearchMethodFunc: *mut Option<PSearchM
 ///
 /// The `SCREEN_CONTENT_REAL_TIME` block (`encoder_ext.cpp:2708-2771`) is the only part
 /// not translated; see the comment at its position below.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn PreprocessSliceCoding(pCtx: *mut sWelsEncCtx) {
     let pCurLayer = current_layer(pCtx);
     let bFastMode = (*ctx_param(pCtx)).iComplexityMode == LOW_COMPLEXITY;
@@ -2357,6 +2421,8 @@ pub unsafe fn PreprocessSliceCoding(pCtx: *mut sWelsEncCtx) {
 }
 
 /// `encoder_ext.cpp:3131`. Write the parameter sets for (simulcast) SVC.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn WriteSsvcParaset(
     pCtx: *mut sWelsEncCtx,
     kiSpatialNum: i32,
@@ -2409,6 +2475,8 @@ pub unsafe fn WriteSsvcParaset(
 }
 
 /// `encoder_ext.cpp:3163`. Write the parameter sets for simulcast AVC.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn WriteSavcParaset(
     pCtx: *mut sWelsEncCtx,
     iIdx: i32,
@@ -2494,6 +2562,8 @@ pub unsafe fn WriteSavcParaset(
 
 /// `encoder_ext.cpp:3387`. Decide this frame's type, and for an IDR write the
 /// parameter sets ahead of the slice data.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn PrepareEncodeFrame(
     pCtx: *mut sWelsEncCtx,
     ppLayerBsInfo: *mut *mut SLayerBSInfo,
@@ -2578,6 +2648,8 @@ pub unsafe fn PrepareEncodeFrame(
 
 /// `encoder_ext.cpp:2415`. TUNE back if a picture-partition decision algorithm based
 /// on past behaviour becomes available.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn PicPartitionNumDecision(pCtx: *mut sWelsEncCtx) -> i32 {
     let mut iPartitionNum = 1;
     if (*ctx_param(pCtx)).iMultipleThreadIdc > 1 {
@@ -2590,6 +2662,8 @@ pub unsafe fn PicPartitionNumDecision(pCtx: *mut sWelsEncCtx) -> i32 {
 ///
 /// # Safety
 /// `pCurDq` must be live with `sMbDataP` allocated.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn DynslcUpdateMbNeighbourInfoListForAllSlices(pCurDq: *mut SDqLayer, pMbList: *mut SMB) {
     let pSliceCtx = &mut (*pCurDq).sSliceEncCtx;
     let kiMbWidth = pSliceCtx.iMbWidth as i32;
@@ -2612,6 +2686,8 @@ pub unsafe fn DynslcUpdateMbNeighbourInfoListForAllSlices(pCurDq: *mut SDqLayer,
 ///
 /// # Safety
 /// `pCtx` must be a context built by [`WelsInitEncoderExt`].
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn WelsInitCurrentQBLayerMltslc(pCtx: *mut sWelsEncCtx) {
     // pData init
     let pCurDq = current_layer(pCtx);
@@ -2628,6 +2704,8 @@ pub unsafe fn WelsInitCurrentQBLayerMltslc(pCtx: *mut sWelsEncCtx) {
 ///
 /// # Safety
 /// `pCurDq` must be live with `sSliceEncCtx.pOverallMbMap` allocated.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn UpdateSlicepEncCtxWithPartition(pCurDq: *mut SDqLayer, mut iPartitionNum: i32) {
     let pSliceCtx = &mut (*pCurDq).sSliceEncCtx;
     let kiMbNumInFrame = pSliceCtx.iMbNumInFrame;
@@ -2699,6 +2777,8 @@ pub unsafe fn UpdateSlicepEncCtxWithPartition(pCurDq: *mut SDqLayer, mut iPartit
 ///
 /// # Safety
 /// `pCtx` must be a context built by [`WelsInitEncoderExt`].
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn WelsInitCurrentDlayerMltslc(pCtx: *mut sWelsEncCtx, iPartitionNum: i32) {
     /// `#define byte_complexIMBat26 (60)`, local to this function in the C++.
     const byte_complexIMBat26: u32 = 60;
@@ -2745,6 +2825,8 @@ pub unsafe fn WelsInitCurrentDlayerMltslc(pCtx: *mut sWelsEncCtx, iPartitionNum:
 ///
 /// # Safety
 /// `pCtx` must be a context built by [`WelsInitEncoderExt`].
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn DynSliceRealloc(
     pCtx: *mut sWelsEncCtx,
     pFrameBsInfo: *mut SFrameBSInfo,
@@ -2779,6 +2861,8 @@ pub unsafe fn DynSliceRealloc(
 /// # Safety
 /// `pCtx` must be a context built by [`WelsInitEncoderExt`]; `pLayerBsInfo` must
 /// have `pNalLengthInByte` installed.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn WelsCodeOnePicPartition(
     pCtx: *mut sWelsEncCtx,
     pFrameBSInfo: *mut SFrameBSInfo,
@@ -2909,6 +2993,8 @@ pub unsafe fn WelsCodeOnePicPartition(
 ///
 /// # Safety
 /// `pCtx` must be a context built by [`WelsInitEncoderExt`].
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn WelsEncoderEncodeExt(
     pCtx: *mut sWelsEncCtx,
     pFbi: *mut SFrameBSInfo,
