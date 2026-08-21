@@ -12953,3 +12953,99 @@ unbreached by roughly 8-10 points. **D-perf-6's parked recovery stays Phase 9's.
 F3 drew three hits across the session's five batteries, all inside the fingerprint,
 adjudicated by an interleaved alternation at **40/40 clean on both arms** and recorded
 as measurement 87. The `exit` battery itself drew none.
+
+---
+
+# Phase 7 — the threading rework
+
+## Session A — 2026-08-20 — the before-arm, the two premises, and the third one nobody wrote down
+
+Charter: `rust/docs/prompts/phase7.md`. Start `b08d6c47`, tree clean.
+
+### T7.A0 — the F3 ablation before-arm (no code moved)
+
+3000 runs of `mt CiscoVT2people_320x192_12fps sm=3 n=600 t=4 cabac=1`, **25 hits,
+≈1/120** — not the ~1/11 the charter carried forward from measurement 86's 9-in-96.
+Full write-up, shapes, per-profile split and the consequence for B's after-arm:
+`phase0_findings.md` measurement 88. The two scripts, kept so B can re-run the
+after-arm identically:
+
+```bash
+# load.sh — four independent rustc streams, each on its own target dir.
+# One stream is NOT a saturating load: a single crate's rebuild is largely a
+# serial frontend and leaves most of an 8-core box idle (arm 1 sat at la 5.7).
+N=4; for i in $(seq $N); do (
+  export CARGO_TARGET_DIR=/tmp/loadtarget$i
+  while true; do touch src/lib.rs; cargo build --release -j 4 --quiet 2>/dev/null; done
+) & done; wait
+
+# f3_arm.sh — balanced over {debug,release} x rc{0,1}, interleaved, SERIAL
+# (the two profiles share out/ file names), bash not zsh (measurement 78).
+for i in $(seq "$REPS"); do for prof in debug release; do for rc in 0 1; do
+  RUST_ENC_PROFILE=$prof rust/tools/diffharness/compare.sh \
+    rust/tools/diffharness/out/CiscoVT2people_320x192_12fps_loop18.yuv \
+    320 192 18 26 1 -1 "$rc" 0 3 600 4
+done; done; done
+```
+
+### T7.A1 — the two premises, verified in writing
+
+**Premise 1 — slot disjointness. HOLDS.** `bThreadBsBufferUsage[k]` has exactly two
+live writers, and both hold `mutexThreadBsBufferUsage`: `QueryEmptyThread`
+(`wels_task_management.rs:223`), reached only from `InitTask` (`:242`), scans for the
+first `false`, sets it `true` and returns `k` — test and set inside one critical
+section, so the claim is atomic; and `FinishTask` (`:294`), which sets it back to
+`false`. Nothing else in the crate writes the array except `RequestMtResource`'s
+`alloc_zeroed` and `ReleaseMtResource`'s reset loop, neither of which runs while a
+task does. Therefore slot `k` reads `true` for exactly the interval between one
+task's `InitTask` and its `FinishTask`, and no other `QueryEmptyThread` can return it:
+**no two live tasks share a slot index.** The index reaches data through exactly one
+route — `m_iThreadIdx` → `InitOneSliceInThread(kiSlcBuffIdx)` → `SSlice.uiBufferIdx` →
+`thread_bs_buffer()` = `pThreadBsBuffer[uiBufferIdx]` — so the per-thread scratch NAL
+buffer is exclusive to a live task too.
+**One bound the proof depends on, and it is not written anywhere else:** only
+`iThreadBufferNum = min(GetThreadPoolThreadNum(), MAX_THREADS_NUM)` buffers are ever
+allocated (`slice_multi_threading.rs:698-706`), while `QueryEmptyThread` scans the
+full `0..MAX_THREADS_NUM`. It is the *pool* that keeps the first free index below
+`iThreadBufferNum`, by never running more than `GetThreadPoolThreadNum()` tasks at
+once. A fork/join that spawns one thread per slice — the charter's shape — would
+break that the moment a fixed mode asks for more slices than threads, which the
+sweep does routinely (`t=2` with `sm=1 n=4`). **Any replacement must cap concurrency
+at `iThreadBufferNum`, or allocate a buffer per slice.**
+
+**Premise 2 — order-based assembly. HOLDS.** `AppendSliceToFrameBs`
+(`slice_multi_threading.rs:773`) walks `iSliceIdx` from 0 to `kiSliceCount`,
+resolving each slice through `slice_in_layer(pCurDq, iSliceIdx)` and copying
+`sSliceBs.pBs[0..uiBsPos]` to `ctx_frame_bs_at(pCtx, iPosBsBuffer)`, advancing
+`iPosBsBuffer` by that slice's length and appending its NAL lengths in the same
+order. It runs **after** the join, on the calling thread — the barrier in
+`ExecuteTaskList` (`wels_task_management.rs:930`) has already drained. So the frame's
+byte order is a pure function of slice index; completion order is not observable.
+`WriteSliceBs` (`:839`), which runs *on* the worker, writes only into that slice's own
+`sSliceBs.pBs`, `iNalLen[]` and `uiBsPos` — per-slice state, no shared cursor. **This
+is why MT output is byte-deterministic today, and it is the property a redesign must
+not restructure.**
+
+**The dead events. ALL DEAD, on both sides.** Grepped every site of each array in
+`codec/` and in the crate:
+
+| field | C++ | port |
+|---|---|---|
+| `pSliceCodedEvent[]` | `WelsEventOpen` `slice_multi_threading.cpp:338`, `WelsEventClose` `:401` — **no signal, no wait** | never reproduced; null, no reader |
+| `pSliceCodedMasterEvent` | open `:348`, close `:412` — **no signal, no wait** | null, no reader |
+| `pReadySliceCodingEvent[]` | open `:341`, close `:403` — **no signal, no wait** | null, no reader |
+| `pUpdateMbListEvent[]` | open `:331`, close `:405` — **no signal, no wait** | null, no reader |
+| `pFinUpdateMbListEvent[]` | open `:334`, close `:407` — **no signal, no wait** | null, no reader |
+| `mutexEvent` | `WelsMutexInit :366`, destroy `:418` — **never locked** | never initialised, no reader |
+| `eventNamespace` | builds the event names above | zero references at all |
+| `pThreadHandles[]` | zeroed, never spawned into | written null in a loop, **zero readers** |
+
+Nothing is live, so nothing needs reproducing or replacing. The eighth row corrects a
+stale comment in the port (`slice_multi_threading.rs:669` claimed
+`WelsUninitEncoderExt` reads `pThreadHandles`; it does not — the grep is empty).
+Deleted at T7.A2.
+
+**The barrier's real synchronisation, for the record**, since the events are not it:
+`WelsTaskBarrier` (`wels_task_management.rs:637`) — a `Mutex<i32>` + `Condvar`,
+`set_count` before dispatch, `decrement_and_signal` from `OnTaskExecuted`,
+`wait_for_completion` after. That is the join, and it is already safe Rust.
