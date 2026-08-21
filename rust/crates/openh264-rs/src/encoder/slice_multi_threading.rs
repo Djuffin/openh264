@@ -799,12 +799,17 @@ pub unsafe fn AppendSliceToFrameBs(
                     return 0;
                 }
 
-                if !ctx_frame_bs(pCtx).is_null() && !pSliceBs.pBs.is_null() {
-                    std::ptr::copy(
-                        pSliceBs.pBs,
-                        ctx_frame_bs_at(pCtx, (*pCtx).iPosBsBuffer),
-                        pSliceBs.uiBsPos as usize,
-                    );
+                // T7.C4: the slice owns its bitstream, so the source is the `Vec`'s
+                // root rather than a `CMemoryAlign` block. Same bytes, same length,
+                // same destination.
+                if !ctx_frame_bs(pCtx).is_null() {
+                    if let Some(src) = pSliceBs.pBs.as_ref() {
+                        std::ptr::copy(
+                            src.as_ptr(),
+                            ctx_frame_bs_at(pCtx, (*pCtx).iPosBsBuffer),
+                            pSliceBs.uiBsPos as usize,
+                        );
+                    }
                 }
 
                 (*pCtx).iPosBsBuffer += pSliceBs.uiBsPos as i32;
@@ -852,7 +857,13 @@ pub unsafe fn WriteSliceBs(
     let mut iReturn = ENC_RETURN_SUCCESS;
     let iTotalLeftLength = ((*pSliceBs).uiBsSize - (*pSliceBs).uiBsPos) as i32;
     let pNalHdrExt = std::ptr::addr_of!((*current_layer(pCtx)).sLayerInfo.sNalHeaderExt);
-    let mut pDst = (*pSliceBs).pBs;
+    // T7.C4: the write cursor is the slice's own buffer root, null when the slice
+    // shares the frame's — which is what the raw `pBs` was, and `WelsEncodeNal`
+    // rejects a null `dst` exactly as the C++ did.
+    let mut pDst = match (*pSliceBs).pBs.as_mut() {
+        Some(v) => v.as_mut_ptr(),
+        None => std::ptr::null_mut(),
+    };
 
     if kiNalCnt > 2 {
         return 0;

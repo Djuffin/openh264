@@ -2733,7 +2733,7 @@ pub static g_pWelsWriteSliceHeader: [PWelsSliceHeaderWriteFunc; 2] = [
 // unsafe-cat: cursor
 #[allow(unsafe_code)]
 pub unsafe fn slice_bs_buffer<'a>(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSlice) -> &'a mut [u8] {
-    if !(*pSlice).sSliceBs.pBs.is_null() {
+    if (*pSlice).sSliceBs.pBs.is_some() {
         thread_bs_buffer(pEncCtx, pSlice)
     } else {
         &mut (&mut *(*pEncCtx).pOut).sBsBuffer[..]
@@ -2785,7 +2785,7 @@ pub unsafe fn thread_bs_buffer<'a>(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSlic
 // unsafe-cat: port-raw(Phase 7)
 #[allow(unsafe_code)]
 pub unsafe fn slice_writer(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSlice) -> *mut BsWriter {
-    if !(*pSlice).sSliceBs.pBs.is_null() {
+    if (*pSlice).sSliceBs.pBs.is_some() {
         std::ptr::addr_of_mut!((*pSlice).sSliceBs.sBsWrite)
     } else {
         std::ptr::addr_of_mut!((*(*pEncCtx).pOut).sBsWrite)
@@ -3200,54 +3200,44 @@ pub unsafe fn SetSliceBoundaryInfo(pCurLayer: *mut SDqLayer, pSlice: *mut SSlice
 /// else — `slice_writer` and `slice_bs_buffer` read it back from there. The C++'s
 /// `pBsWrite` parameter (the frame writer this stamped into `pSliceBsa` in the
 /// shared arm) is gone with the field.
+/// **T7.C4 — the slice owns its bitstream.** The `CMemoryAlign` block and the
+/// `ENC_RETURN_MEMALLOCERR` arm behind it are gone: `vec![0; n]` is the `WelsMallocz`
+/// this replaces, zeros included, and its failure is a panic-on-OOM — the same trade
+/// every owned buffer in this port has made since T3.6. `pMa` goes with the
+/// allocation.
 // unsafe-cat: MT
 #[allow(unsafe_code)]
 pub unsafe fn InitSliceBsBuffer(
     pSlice: *mut SSlice,
     bIndependenceBsBuffer: bool,
     iMaxSliceBufferSize: i32,
-    pMa: *mut CMemoryAlign,
 ) -> i32 {
     (*pSlice).sSliceBs.uiSize = iMaxSliceBufferSize as u32;
     (*pSlice).sSliceBs.uiBsPos = 0;
 
     if bIndependenceBsBuffer {
-        let tag = c"sSliceBs.pBs".as_ptr();
-        (*pSlice).sSliceBs.pBs = (*pMa).WelsMallocz(iMaxSliceBufferSize as u32, tag) as *mut u8;
-        if (*pSlice).sSliceBs.pBs.is_null() {
-            (*pSlice).sSliceBs.uiBsSize = 0;
-            return ENC_RETURN_MEMALLOCERR;
-        }
+        (*pSlice).sSliceBs.pBs = Some(vec![0u8; iMaxSliceBufferSize.max(0) as usize]);
         (*pSlice).sSliceBs.uiBsSize = iMaxSliceBufferSize as u32;
     } else {
-        (*pSlice).sSliceBs.pBs = std::ptr::null_mut();
+        (*pSlice).sSliceBs.pBs = None;
         (*pSlice).sSliceBs.uiBsSize = 0;
     }
 
     ENC_RETURN_SUCCESS
 }
 
-/// Releases one slice bank — **T6.D8**.
+/// Releases one slice bank — **T6.D8, finished at T7.C4.**
 ///
-/// The bank itself is a `Vec<SSlice>` now, so `clear()` is the old
-/// `WelsFree(slice_array)`. What still needs walking is `sSliceBs.pBs`: each slice's
-/// independent bitstream buffer is a `WelsMallocz` the slice holds by raw pointer,
-/// and that family is Phase 7's (`pThreadBsBuffer` and the thread-buffer redesign),
-/// so it is freed here exactly as before.
+/// The bank has been a `Vec<SSlice>` since T6.D8, so `clear()` was already the old
+/// `WelsFree(slice_array)`. What still needed walking was `sSliceBs.pBs`, one
+/// `CMemoryAlign` block per slice held by raw pointer — and **that walk is gone with
+/// the pointer**: the buffer is the slice's own `Option<Vec<u8>>`, so dropping the
+/// bank drops every one of them, in the same order, with nothing to null out and
+/// nothing to get wrong on an error path. `pMa` goes with the walk, and this is the
+/// last thing `FreeDqLayer` had to release by hand.
 // unsafe-cat: MT
 #[allow(unsafe_code)]
-pub unsafe fn FreeSliceBuffer(pDqLayer: *mut SDqLayer, kiBank: usize, pMa: *mut CMemoryAlign) {
-    let n = {
-        let bank: &Vec<SSlice> = &(*pDqLayer).sSliceBufferInfo[kiBank].pSliceBuffer;
-        bank.len()
-    };
-    for iSliceIdx in 0..n {
-        let pSlice = slice_in_bank(pDqLayer, kiBank, iSliceIdx as i32);
-        if !pSlice.is_null() && !(*pSlice).sSliceBs.pBs.is_null() {
-            (*pMa).WelsFree((*pSlice).sSliceBs.pBs as *mut c_void, c"sSliceBs.pBs".as_ptr());
-            (*pSlice).sSliceBs.pBs = std::ptr::null_mut();
-        }
-    }
+pub unsafe fn FreeSliceBuffer(pDqLayer: *mut SDqLayer, kiBank: usize) {
     let bank: &mut Vec<SSlice> = &mut (*pDqLayer).sSliceBufferInfo[kiBank].pSliceBuffer;
     bank.clear();
     bank.shrink_to_fit();
@@ -3261,7 +3251,6 @@ pub unsafe fn InitSliceList(
     kiMaxSliceNum: i32,
     kiMaxSliceBufferSize: i32,
     bIndependenceBsBuffer: bool,
-    pMa: *mut CMemoryAlign,
 ) -> i32 {
     if kiMaxSliceBufferSize <= 0 {
         return ENC_RETURN_UNEXPECTED;
@@ -3278,7 +3267,7 @@ pub unsafe fn InitSliceList(
         (*pSlice).iCountMbNumInSlice = 0;
         (*pSlice).sSliceHeaderExt.sSliceHeader.iFirstMbInSlice = 0;
 
-        let iRet = InitSliceBsBuffer(pSlice, bIndependenceBsBuffer, kiMaxSliceBufferSize, pMa);
+        let iRet = InitSliceBsBuffer(pSlice, bIndependenceBsBuffer, kiMaxSliceBufferSize);
         if iRet != ENC_RETURN_SUCCESS {
             return iRet;
         }
@@ -3346,7 +3335,6 @@ pub unsafe fn InitSliceThreadInfo(
     pCtx: *mut sWelsEncCtx,
     pDqLayer: *mut SDqLayer,
     kiDlayerIndex: i32,
-    pMa: *mut CMemoryAlign,
 ) -> i32 {
     let iThreadNum = if !ctx_param(pCtx).is_null() {
         (*ctx_param(pCtx)).iMultipleThreadIdc as i32
@@ -3378,7 +3366,6 @@ pub unsafe fn InitSliceThreadInfo(
             iMaxSliceNum,
             (*pCtx).iSliceBufferSize[kiDlayerIndex as usize],
             (*pDqLayer).bSliceBsBufferFlag,
-            pMa,
         );
         if iRet != ENC_RETURN_SUCCESS {
             return iRet;
@@ -3402,7 +3389,6 @@ pub unsafe fn InitSliceInLayer(
     pCtx: *mut sWelsEncCtx,
     pDqLayer: *mut SDqLayer,
     kiDlayerIndex: i32,
-    pMa: *mut CMemoryAlign,
 ) -> i32 {
     // S29, and F13's remaining production site. This was `&mut ...sSliceArgument`,
     // whose Unique retag popped the tag of `InitDqLayers`'s `pDlayer` — a pointer
@@ -3421,7 +3407,7 @@ pub unsafe fn InitSliceInLayer(
     (*pDqLayer).bThreadSlcBufferFlag = (*ctx_param(pCtx)).iMultipleThreadIdc > 1
         && (*pSliceArgument).uiSliceMode == SliceMode::SM_SIZELIMITED_SLICE;
 
-    let iRet = InitSliceThreadInfo(pCtx, pDqLayer, kiDlayerIndex, pMa);
+    let iRet = InitSliceThreadInfo(pCtx, pDqLayer, kiDlayerIndex);
     if iRet != ENC_RETURN_SUCCESS {
         return ENC_RETURN_MEMALLOCERR;
     }
@@ -3535,7 +3521,6 @@ pub unsafe fn ReallocateSliceList(
     kiMaxSliceNumOld: i32,
     kiMaxSliceNumNew: i32,
 ) -> i32 {
-    let pMA = (*pCtx).pMemAlign;
     if pDqLayer.is_null() || pSliceArgument.is_null() || kiMaxSliceNumNew < kiMaxSliceNumOld {
         return ENC_RETURN_INVALIDINPUT;
     }
@@ -3565,7 +3550,7 @@ pub unsafe fn ReallocateSliceList(
         (*pSlice).iCountMbNumInSlice = 0;
         (*pSlice).sSliceHeaderExt.sSliceHeader.iFirstMbInSlice = 0;
 
-        let mut iRet = InitSliceBsBuffer(pSlice, bIndependenceBsBuffer, iMaxSliceBufferSize, pMA);
+        let mut iRet = InitSliceBsBuffer(pSlice, bIndependenceBsBuffer, iMaxSliceBufferSize);
         if iRet != ENC_RETURN_SUCCESS {
             return iRet;
         }
@@ -3660,7 +3645,6 @@ pub unsafe fn ExtendLayerBuffer(
     kiMaxSliceNumOld: i32,
     kiMaxSliceNumNew: i32,
 ) -> i32 {
-    let pMA = (*pCtx).pMemAlign;
     let pCurLayer = current_layer(pCtx);
 
     // The C++ allocated a new pointer array, dropped the old one **without copying
@@ -3683,7 +3667,7 @@ pub unsafe fn ExtendLayerBuffer(
         let count: &mut Vec<i32> = &mut (*pCurLayer).pCountMbNumInSlice;
         count.resize(kiMaxSliceNumNew as usize, 0);
     }
-    let _ = (pMA, kiMaxSliceNumOld);
+    let _ = kiMaxSliceNumOld;
 
     ENC_RETURN_SUCCESS
 }
