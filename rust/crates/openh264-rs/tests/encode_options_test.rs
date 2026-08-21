@@ -18,12 +18,13 @@ fn test_encoder_set_and_get_options() {
         param.iTargetBitrate = 500000;
         param.iUsageType = EUsageType::CAMERA_VIDEO_REAL_TIME;
 
-        let init_ret = (*p_encoder).Initialize(&param as *const SEncParamBase);
+        let init_ret = ISVCEncoder::Initialize(p_encoder, &param as *const SEncParamBase);
         assert_eq!(init_ret, CM_RESULT_SUCCESS);
 
         // 1. Test frame rate option modification
         let mut f_fps: f32 = 15.0;
-        let opt_ret = (*p_encoder).SetOption(
+        let opt_ret = ISVCEncoder::SetOption(
+            p_encoder,
             ENCODER_OPTION::ENCODER_OPTION_FRAME_RATE,
             &mut f_fps as *mut f32 as *mut std::ffi::c_void,
         );
@@ -32,7 +33,8 @@ fn test_encoder_set_and_get_options() {
         // 2. Test bitrate option modification
         let mut bitrate_info = SBitrateInfo::default();
         bitrate_info.iBitrate = 300000;
-        let opt_br_ret = (*p_encoder).SetOption(
+        let opt_br_ret = ISVCEncoder::SetOption(
+            p_encoder,
             ENCODER_OPTION::ENCODER_OPTION_BITRATE,
             &mut bitrate_info as *mut SBitrateInfo as *mut std::ffi::c_void,
         );
@@ -40,7 +42,8 @@ fn test_encoder_set_and_get_options() {
 
         // 3. Test IDR interval option modification
         let mut idr_interval: i32 = 60;
-        let opt_idr_ret = (*p_encoder).SetOption(
+        let opt_idr_ret = ISVCEncoder::SetOption(
+            p_encoder,
             ENCODER_OPTION::ENCODER_OPTION_IDR_INTERVAL,
             &mut idr_interval as *mut i32 as *mut std::ffi::c_void,
         );
@@ -48,7 +51,8 @@ fn test_encoder_set_and_get_options() {
 
         // 4. Test SEncParamBase query and set
         let mut base_param = SEncParamBase::default();
-        let get_base_ret = (*p_encoder).GetOption(
+        let get_base_ret = ISVCEncoder::GetOption(
+            p_encoder,
             ENCODER_OPTION::ENCODER_OPTION_SVC_ENCODE_PARAM_BASE,
             &mut base_param as *mut SEncParamBase as *mut std::ffi::c_void,
         );
@@ -56,7 +60,8 @@ fn test_encoder_set_and_get_options() {
 
         // 5. Test SEncParamExt query and set
         let mut ext_param = SEncParamExt::default();
-        let get_ext_ret = (*p_encoder).GetOption(
+        let get_ext_ret = ISVCEncoder::GetOption(
+            p_encoder,
             ENCODER_OPTION::ENCODER_OPTION_SVC_ENCODE_PARAM_EXT,
             &mut ext_param as *mut SEncParamExt as *mut std::ffi::c_void,
         );
@@ -64,13 +69,14 @@ fn test_encoder_set_and_get_options() {
 
         // 6. Test statistics option query
         let mut stats = SEncoderStatistics::default();
-        let get_stats_ret = (*p_encoder).GetOption(
+        let get_stats_ret = ISVCEncoder::GetOption(
+            p_encoder,
             ENCODER_OPTION::ENCODER_OPTION_GET_STATISTICS,
             &mut stats as *mut SEncoderStatistics as *mut std::ffi::c_void,
         );
         assert_eq!(get_stats_ret, CM_RESULT_SUCCESS);
 
-        let uninit_ret = (*p_encoder).Uninitialize();
+        let uninit_ret = ISVCEncoder::Uninitialize(p_encoder);
         assert_eq!(uninit_ret, CM_RESULT_SUCCESS);
 
         WelsDestroySVCEncoder(p_encoder);
@@ -107,7 +113,7 @@ fn test_set_get_option_matches_cxx_for_every_option() {
         param.iRCMode = RC_MODES::RC_QUALITY_MODE;
         param.fMaxFrameRate = 6.0;
         assert_eq!(
-            (*p_encoder).Initialize(&param as *const SEncParamBase),
+            ISVCEncoder::Initialize(p_encoder, &param as *const SEncParamBase),
             CM_RESULT_SUCCESS
         );
 
@@ -131,7 +137,7 @@ fn test_set_get_option_matches_cxx_for_every_option() {
                 (*bi).iLayer = LAYER_NUM::SPATIAL_LAYER_ALL;
             }
             let e: ENCODER_OPTION = std::mem::transmute(id);
-            let got = (*p_encoder).GetOption(e, buf.as_mut_ptr() as *mut std::ffi::c_void);
+            let got = ISVCEncoder::GetOption(p_encoder, e, buf.as_mut_ptr() as *mut std::ffi::c_void);
             assert_eq!(
                 got, GET_EXPECTED[id as usize],
                 "GetOption(id={id}) returned {got}, C++ returns {}",
@@ -140,7 +146,7 @@ fn test_set_get_option_matches_cxx_for_every_option() {
         }
 
         // ---- SetOption: the 20 options the port used to swallow ---------------
-        let set = |e: ENCODER_OPTION, p: *mut std::ffi::c_void| (*p_encoder).SetOption(e, p);
+        let set = |e: ENCODER_OPTION, p: *mut std::ffi::c_void| ISVCEncoder::SetOption(p_encoder, e, p);
         macro_rules! setopt {
             ($id:ident, $val:expr) => {{
                 let mut v = $val;
@@ -260,7 +266,8 @@ fn test_set_get_option_matches_cxx_for_every_option() {
         // ---- read back what those options wrote ------------------------------
         let mut ext = SEncParamExt::default();
         assert_eq!(
-            (*p_encoder).GetOption(
+            ISVCEncoder::GetOption(
+                p_encoder,
                 ENCODER_OPTION::ENCODER_OPTION_SVC_ENCODE_PARAM_EXT,
                 &mut ext as *mut SEncParamExt as *mut std::ffi::c_void,
             ),
@@ -294,7 +301,8 @@ fn test_set_get_option_matches_cxx_for_every_option() {
 
         let mut interval = -1i32;
         assert_eq!(
-            (*p_encoder).GetOption(
+            ISVCEncoder::GetOption(
+                p_encoder,
                 ENCODER_OPTION::ENCODER_OPTION_STATISTICS_LOG_INTERVAL,
                 &mut interval as *mut i32 as *mut std::ffi::c_void,
             ),
@@ -302,7 +310,7 @@ fn test_set_get_option_matches_cxx_for_every_option() {
         );
         assert_eq!(interval, 500, "iStatisticsLogInterval");
 
-        assert_eq!((*p_encoder).Uninitialize(), CM_RESULT_SUCCESS);
+        assert_eq!(ISVCEncoder::Uninitialize(p_encoder), CM_RESULT_SUCCESS);
         WelsDestroySVCEncoder(p_encoder);
     }
 }

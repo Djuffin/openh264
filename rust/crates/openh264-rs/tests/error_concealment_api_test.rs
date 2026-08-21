@@ -27,17 +27,18 @@ fn test_decoder_error_concealment_modes() {
             param.uiTargetDqLayer = u8::MAX;
             param.eEcActiveIdc = ec_mode;
 
-            let init_ret = (*p_decoder).Initialize(&param as *const SDecodingParam);
+            let init_ret = ISVCDecoder::Initialize(p_decoder, &param as *const SDecodingParam);
             assert_eq!(i64::from(init_ret), CM_RESULT_SUCCESS as i64);
 
             let mut current_ec: i32 = 0;
-            let get_opt_ret = (*p_decoder).GetOption(
+            let get_opt_ret = ISVCDecoder::GetOption(
+                p_decoder,
                 DECODER_OPTION::DECODER_OPTION_ERROR_CON_IDC,
                 &mut current_ec as *mut i32 as *mut std::ffi::c_void,
             );
             assert_eq!(i64::from(get_opt_ret), CM_RESULT_SUCCESS as i64);
 
-            let uninit_ret = (*p_decoder).Uninitialize();
+            let uninit_ret = ISVCDecoder::Uninitialize(p_decoder);
             assert_eq!(i64::from(uninit_ret), CM_RESULT_SUCCESS as i64);
 
             WelsDestroyDecoder(p_decoder);

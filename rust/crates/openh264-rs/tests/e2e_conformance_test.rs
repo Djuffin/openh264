@@ -64,7 +64,7 @@ fn decode_to_y4m(encoded_video_buffer: &[u8]) -> Result<Vec<u8>, String> {
         dec_param.eEcActiveIdc = ERROR_CON_IDC::ERROR_CON_SLICE_COPY;
         dec_param.sVideoProperty.eVideoBsType = VIDEO_BITSTREAM_DEFAULT;
 
-        if i64::from((*p_decoder).Initialize(&dec_param as *const SDecodingParam)) != CM_RESULT_SUCCESS as i64 {
+        if i64::from(ISVCDecoder::Initialize(p_decoder, &dec_param as *const SDecodingParam)) != CM_RESULT_SUCCESS as i64 {
             WelsDestroyDecoder(p_decoder);
             return Err("Failed to initialize decoder".into());
         }
@@ -110,7 +110,8 @@ fn decode_to_y4m(encoded_video_buffer: &[u8]) -> Result<Vec<u8>, String> {
         for unit in units {
             let mut p_dst: [*mut u8; 3] = [std::ptr::null_mut(); 3];
             let mut buf_info = SBufferInfo::default();
-            let _ = (*p_decoder).DecodeFrame2(
+            let _ = ISVCDecoder::DecodeFrame2(
+                p_decoder,
                 unit.as_ptr(),
                 unit.len() as i32,
                 p_dst.as_mut_ptr(),
@@ -121,14 +122,16 @@ fn decode_to_y4m(encoded_video_buffer: &[u8]) -> Result<Vec<u8>, String> {
 
         // Flush remaining frames
         let mut eos_flag = 1i32;
-        (*p_decoder).SetOption(
+        ISVCDecoder::SetOption(
+            p_decoder,
             DECODER_OPTION::DECODER_OPTION_END_OF_STREAM,
             &mut eos_flag as *mut i32 as *mut std::ffi::c_void,
         );
 
         let mut p_dst: [*mut u8; 3] = [std::ptr::null_mut(); 3];
         let mut buf_info = SBufferInfo::default();
-        let _ = (*p_decoder).DecodeFrame2(
+        let _ = ISVCDecoder::DecodeFrame2(
+            p_decoder,
             std::ptr::null(),
             0,
             p_dst.as_mut_ptr(),
@@ -137,7 +140,8 @@ fn decode_to_y4m(encoded_video_buffer: &[u8]) -> Result<Vec<u8>, String> {
         process_frame(p_dst, &buf_info);
 
         let mut remaining_frames = 0i32;
-        (*p_decoder).GetOption(
+        ISVCDecoder::GetOption(
+            p_decoder,
             DECODER_OPTION::DECODER_OPTION_NUM_OF_FRAMES_REMAINING_IN_BUFFER,
             &mut remaining_frames as *mut i32 as *mut std::ffi::c_void,
         );
@@ -145,11 +149,11 @@ fn decode_to_y4m(encoded_video_buffer: &[u8]) -> Result<Vec<u8>, String> {
         for _ in 0..remaining_frames {
             let mut p_dst: [*mut u8; 3] = [std::ptr::null_mut(); 3];
             let mut buf_info = SBufferInfo::default();
-            let _ = (*p_decoder).FlushFrame(p_dst.as_mut_ptr(), &mut buf_info);
+            let _ = ISVCDecoder::FlushFrame(p_decoder, p_dst.as_mut_ptr(), &mut buf_info);
             process_frame(p_dst, &buf_info);
         }
 
-        (*p_decoder).Uninitialize();
+        ISVCDecoder::Uninitialize(p_decoder);
         WelsDestroyDecoder(p_decoder);
     }
 

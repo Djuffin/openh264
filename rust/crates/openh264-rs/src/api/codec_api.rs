@@ -1127,63 +1127,104 @@ pub struct ISVCEncoder {
     pub lpVtbl: *const ISVCEncoderVtbl,
 }
 
+// **F23 — the receiver is a pointer, and it has to be** (T8.A3; the rule is
+// `prompts/phase8.md` §1, S28 at the ABI layer).
+//
+// Every function in this block used to take `&mut self`. `ISVC{Enc,Dec}oder` is the
+// C++ class's vtable slot and **nothing else** — eight bytes — while the thunk
+// behind each slot casts `this` to the implementation object and writes fields far
+// past those eight bytes. A reference receiver therefore hands the thunk a tag whose
+// range is `[0x0..0x8]`, and the first write in `decoder_init_c` is at `0x20`: out
+// of bounds for the borrow the call was made through, on the library's public entry
+// point. `f23_boundary_provenance` is that six-line Miri report, kept as a test.
+//
+// So these are **associated functions taking `this` as a raw pointer**, not methods.
+// The alternative the brief offered — methods on `CWelsDecoderImpl` /
+// `CWelsH264SVCEncoderImpl` taking `&mut self` of the *whole* object — is equally
+// sound and was rejected on what the callers read: all 104 of them hold a pointer
+// to `ISVCDecoder` or to `ISVCEncoder` (that is what the factories hand out and what
+// the ABI names), so option (b) would have made every one of them cast to
+// an implementation type the public header does not mention, to call a method, on a
+// struct they have no business naming. `ISVCDecoder::DecodeFrame2(p, ..)` needs no
+// cast and no new type in the caller's line of sight.
+//
+// This is not a smaller borrow that could be widened: it is the difference between a
+// reference and a pointer. Nothing here may take `&self` either — the eight bytes
+// are the whole of the reference's provenance whichever way it is spelled.
+//
+// # Safety — the contract every function below shares
+//
+// `this` must be a pointer the matching factory returned (`WelsCreateSVCEncoder` /
+// `WelsCreateDecoder`), not yet passed to its destroyer, and derived from the whole
+// implementation allocation — which is what the factory's `Box::into_raw(..)`, cast
+// to the interface type, produces. It must be non-null and unaliased for the call.
+// Every pointer
+// argument carries the C header's own contract (`codec_api.h`), unchanged.
 impl ISVCEncoder {
     /// Initializes the encoder with basic parameters.
     #[inline]
-    pub unsafe fn Initialize(&mut self, pParam: *const SEncParamBase) -> i32 {
-        unsafe { ((*self.lpVtbl).Initialize)(self, pParam) }
+    pub unsafe fn Initialize(this: *mut ISVCEncoder, pParam: *const SEncParamBase) -> i32 {
+        unsafe { ((*(*this).lpVtbl).Initialize)(this, pParam) }
     }
 
     /// Initializes the encoder with extended SVC parameters.
     #[inline]
-    pub unsafe fn InitializeExt(&mut self, pParam: *const SEncParamExt) -> i32 {
-        unsafe { ((*self.lpVtbl).InitializeExt)(self, pParam) }
+    pub unsafe fn InitializeExt(this: *mut ISVCEncoder, pParam: *const SEncParamExt) -> i32 {
+        unsafe { ((*(*this).lpVtbl).InitializeExt)(this, pParam) }
     }
 
     /// Retrieves default extension encoding parameters.
     #[inline]
-    pub unsafe fn GetDefaultParams(&mut self, pParam: *mut SEncParamExt) -> i32 {
-        unsafe { ((*self.lpVtbl).GetDefaultParams)(self, pParam) }
+    pub unsafe fn GetDefaultParams(this: *mut ISVCEncoder, pParam: *mut SEncParamExt) -> i32 {
+        unsafe { ((*(*this).lpVtbl).GetDefaultParams)(this, pParam) }
     }
 
     /// Uninitializes and frees encoder session resources.
     #[inline]
-    pub unsafe fn Uninitialize(&mut self) -> i32 {
-        unsafe { ((*self.lpVtbl).Uninitialize)(self) }
+    pub unsafe fn Uninitialize(this: *mut ISVCEncoder) -> i32 {
+        unsafe { ((*(*this).lpVtbl).Uninitialize)(this) }
     }
 
     /// Encodes a single uncompressed frame.
     #[inline]
     pub unsafe fn EncodeFrame(
-        &mut self,
+        this: *mut ISVCEncoder,
         kpSrcPic: *const SSourcePicture,
         pBsInfo: *mut SFrameBSInfo,
     ) -> i32 {
-        unsafe { ((*self.lpVtbl).EncodeFrame)(self, kpSrcPic, pBsInfo) }
+        unsafe { ((*(*this).lpVtbl).EncodeFrame)(this, kpSrcPic, pBsInfo) }
     }
 
     /// Serializes out-of-band parameter sets (SPS/PPS).
     #[inline]
-    pub unsafe fn EncodeParameterSets(&mut self, pBsInfo: *mut SFrameBSInfo) -> i32 {
-        unsafe { ((*self.lpVtbl).EncodeParameterSets)(self, pBsInfo) }
+    pub unsafe fn EncodeParameterSets(this: *mut ISVCEncoder, pBsInfo: *mut SFrameBSInfo) -> i32 {
+        unsafe { ((*(*this).lpVtbl).EncodeParameterSets)(this, pBsInfo) }
     }
 
     /// Forces the next frame to be encoded as an IDR keyframe.
     #[inline]
-    pub unsafe fn ForceIntraFrame(&mut self, bIDR: bool) -> i32 {
-        unsafe { ((*self.lpVtbl).ForceIntraFrame)(self, bIDR) }
+    pub unsafe fn ForceIntraFrame(this: *mut ISVCEncoder, bIDR: bool) -> i32 {
+        unsafe { ((*(*this).lpVtbl).ForceIntraFrame)(this, bIDR) }
     }
 
     /// Sets runtime encoder option.
     #[inline]
-    pub unsafe fn SetOption(&mut self, eOptionId: ENCODER_OPTION, pOption: *mut c_void) -> i32 {
-        unsafe { ((*self.lpVtbl).SetOption)(self, eOptionId, pOption) }
+    pub unsafe fn SetOption(
+        this: *mut ISVCEncoder,
+        eOptionId: ENCODER_OPTION,
+        pOption: *mut c_void,
+    ) -> i32 {
+        unsafe { ((*(*this).lpVtbl).SetOption)(this, eOptionId, pOption) }
     }
 
     /// Queries runtime encoder option.
     #[inline]
-    pub unsafe fn GetOption(&mut self, eOptionId: ENCODER_OPTION, pOption: *mut c_void) -> i32 {
-        unsafe { ((*self.lpVtbl).GetOption)(self, eOptionId, pOption) }
+    pub unsafe fn GetOption(
+        this: *mut ISVCEncoder,
+        eOptionId: ENCODER_OPTION,
+        pOption: *mut c_void,
+    ) -> i32 {
+        unsafe { ((*(*this).lpVtbl).GetOption)(this, eOptionId, pOption) }
     }
 }
 
@@ -1261,22 +1302,26 @@ pub struct ISVCDecoder {
 }
 
 impl ISVCDecoder {
+    // F23's rule, its `# Safety` contract and why option (a) was chosen: the note
+    // above `impl ISVCEncoder`. Both interfaces are the same eight bytes and the
+    // same defect; the argument is written once.
+
     /// Initializes the decoder context.
     #[inline]
-    pub unsafe fn Initialize(&mut self, pParam: *const SDecodingParam) -> c_long {
-        unsafe { ((*self.lpVtbl).Initialize)(self, pParam) }
+    pub unsafe fn Initialize(this: *mut ISVCDecoder, pParam: *const SDecodingParam) -> c_long {
+        unsafe { ((*(*this).lpVtbl).Initialize)(this, pParam) }
     }
 
     /// Uninitializes the decoder context.
     #[inline]
-    pub unsafe fn Uninitialize(&mut self) -> c_long {
-        unsafe { ((*self.lpVtbl).Uninitialize)(self) }
+    pub unsafe fn Uninitialize(this: *mut ISVCDecoder) -> c_long {
+        unsafe { ((*(*this).lpVtbl).Uninitialize)(this) }
     }
 
     /// Decodes a single frame.
     #[inline]
     pub unsafe fn DecodeFrame(
-        &mut self,
+        this: *mut ISVCDecoder,
         pSrc: *const u8,
         iSrcLen: i32,
         ppDst: *mut *mut u8,
@@ -1284,58 +1329,68 @@ impl ISVCDecoder {
         iWidth: *mut i32,
         iHeight: *mut i32,
     ) -> DECODING_STATE {
-        unsafe { ((*self.lpVtbl).DecodeFrame)(self, pSrc, iSrcLen, ppDst, pStride, iWidth, iHeight) }
+        unsafe {
+            ((*(*this).lpVtbl).DecodeFrame)(
+                this,
+                pSrc,
+                iSrcLen,
+                ppDst,
+                pStride,
+                iWidth,
+                iHeight,
+            )
+        }
     }
 
     /// Zero-latency frame decoding (recommended real-time decoder API).
     #[inline]
     pub unsafe fn DecodeFrameNoDelay(
-        &mut self,
+        this: *mut ISVCDecoder,
         pSrc: *const u8,
         iSrcLen: i32,
         ppDst: *mut *mut u8,
         pDstInfo: *mut SBufferInfo,
     ) -> DECODING_STATE {
-        unsafe { ((*self.lpVtbl).DecodeFrameNoDelay)(self, pSrc, iSrcLen, ppDst, pDstInfo) }
+        unsafe { ((*(*this).lpVtbl).DecodeFrameNoDelay)(this, pSrc, iSrcLen, ppDst, pDstInfo) }
     }
 
     /// Multi-slice frame assembly decoding entry point.
     #[inline]
     pub unsafe fn DecodeFrame2(
-        &mut self,
+        this: *mut ISVCDecoder,
         pSrc: *const u8,
         iSrcLen: i32,
         ppDst: *mut *mut u8,
         pDstInfo: *mut SBufferInfo,
     ) -> DECODING_STATE {
-        unsafe { ((*self.lpVtbl).DecodeFrame2)(self, pSrc, iSrcLen, ppDst, pDstInfo) }
+        unsafe { ((*(*this).lpVtbl).DecodeFrame2)(this, pSrc, iSrcLen, ppDst, pDstInfo) }
     }
 
     /// Flushes remaining decoded reference frames from the DPB.
     #[inline]
     pub unsafe fn FlushFrame(
-        &mut self,
+        this: *mut ISVCDecoder,
         ppDst: *mut *mut u8,
         pDstInfo: *mut SBufferInfo,
     ) -> DECODING_STATE {
-        unsafe { ((*self.lpVtbl).FlushFrame)(self, ppDst, pDstInfo) }
+        unsafe { ((*(*this).lpVtbl).FlushFrame)(this, ppDst, pDstInfo) }
     }
 
     /// Parses input bitstream headers only without pixel reconstruction.
     #[inline]
     pub unsafe fn DecodeParser(
-        &mut self,
+        this: *mut ISVCDecoder,
         pSrc: *const u8,
         iSrcLen: i32,
         pDstInfo: *mut SParserBsInfo,
     ) -> DECODING_STATE {
-        unsafe { ((*self.lpVtbl).DecodeParser)(self, pSrc, iSrcLen, pDstInfo) }
+        unsafe { ((*(*this).lpVtbl).DecodeParser)(this, pSrc, iSrcLen, pDstInfo) }
     }
 
     /// Decodes to arbitrary destination format buffer.
     #[inline]
     pub unsafe fn DecodeFrameEx(
-        &mut self,
+        this: *mut ISVCDecoder,
         pSrc: *const u8,
         iSrcLen: i32,
         pDst: *mut u8,
@@ -1346,8 +1401,8 @@ impl ISVCDecoder {
         iColorFormat: *mut i32,
     ) -> DECODING_STATE {
         unsafe {
-            ((*self.lpVtbl).DecodeFrameEx)(
-                self,
+            ((*(*this).lpVtbl).DecodeFrameEx)(
+                this,
                 pSrc,
                 iSrcLen,
                 pDst,
@@ -1362,14 +1417,22 @@ impl ISVCDecoder {
 
     /// Sets runtime decoder option.
     #[inline]
-    pub unsafe fn SetOption(&mut self, eOptionId: DECODER_OPTION, pOption: *mut c_void) -> c_long {
-        unsafe { ((*self.lpVtbl).SetOption)(self, eOptionId, pOption) }
+    pub unsafe fn SetOption(
+        this: *mut ISVCDecoder,
+        eOptionId: DECODER_OPTION,
+        pOption: *mut c_void,
+    ) -> c_long {
+        unsafe { ((*(*this).lpVtbl).SetOption)(this, eOptionId, pOption) }
     }
 
     /// Queries runtime decoder option.
     #[inline]
-    pub unsafe fn GetOption(&mut self, eOptionId: DECODER_OPTION, pOption: *mut c_void) -> c_long {
-        unsafe { ((*self.lpVtbl).GetOption)(self, eOptionId, pOption) }
+    pub unsafe fn GetOption(
+        this: *mut ISVCDecoder,
+        eOptionId: DECODER_OPTION,
+        pOption: *mut c_void,
+    ) -> c_long {
+        unsafe { ((*(*this).lpVtbl).GetOption)(this, eOptionId, pOption) }
     }
 }
 
@@ -2238,18 +2301,18 @@ pub(crate) mod abi_test_driver {
     /// Decodes `stream` through the C ABI and returns `(frames out, last frame's
     /// dimensions)`.
     ///
-    /// **It calls the vtable thunks through the raw pointer, not the `&mut self`
-    /// convenience methods, and that is deliberate — see F23.** The first draft
-    /// used `(*p_decoder).Initialize(&param)`, and Miri rejected it before the
-    /// decoder was even initialized: `ISVCDecoder::Initialize` takes `&mut self`
-    /// over a struct that is **one pointer wide**, and the thunk immediately casts
-    /// that to `*mut CWelsDecoderImpl` and writes at offset `0x20` — outside the
-    /// eight bytes the borrow covers. That is a real defect on the public API path
-    /// and it is not this phase's (`api/codec_api.rs` is T10/§2.2.8, Phase 8's);
-    /// spelling the call the way a C caller does keeps these tests measuring the
-    /// decoder instead of the ABI shim. `WelsCreateDecoder` hands out
-    /// `Box::into_raw(dec) as *mut ISVCDecoder`, which carries provenance for the
-    /// whole implementation object, so the raw-pointer spelling is sound.
+    /// **It calls the vtable thunks directly rather than the conveniences, and that
+    /// is now a choice rather than a workaround.** The first draft used the
+    /// convenience methods, and Miri rejected the call before the decoder was even
+    /// initialized — the receiver was `&mut self` over a struct one pointer wide and
+    /// the thunk wrote at offset `0x20`. That defect is **F23, fixed at T8.A3**: the
+    /// conveniences take `this` as a raw pointer now and either spelling is sound.
+    /// This driver keeps the vtable spelling because it is what a C caller compiles
+    /// to and because it exercises the slot *table*, which the conveniences resolve
+    /// through but do not prove. `f23_boundary_provenance` is the probe that covers
+    /// the other spelling. `WelsCreateDecoder` hands out `Box::into_raw(dec)` cast to
+    /// the interface type, which carries provenance for the whole implementation
+    /// object, so both are calls on the same allocation.
     /// Returns `(frames, dims, states)`, where `states` is the bitwise OR of every
     /// `DecodeFrame2` return. The third element exists for T5.S1's probes: a
     /// concealment path that does not run looks exactly like one that runs and
@@ -2496,15 +2559,12 @@ pub(crate) mod abi_test_driver {
     /// C ABI, and returns what came out frame by frame together with the encoder's
     /// **own** report of the resolution it is configured for.
     ///
-    /// **It calls the vtable thunks through the raw pointer, not the `&mut self`
-    /// convenience methods, and that is deliberate — F23 has an encoder twin.**
-    /// `ISVCEncoder` is one pointer wide, exactly as `ISVCDecoder` is, and every
-    /// encoder thunk casts `this` to `*mut CWelsH264SVCEncoderImpl` and reaches
-    /// `inner` past the `base`/`pVtbl` pair at offset 0x10 — so
-    /// `(*p_encoder).InitializeExt(&param)` would hand Miri a `&mut` covering eight
-    /// bytes and then write far outside it, and Miri would reject the call before
-    /// any encoding began. The twin is Phase 8's with F23 itself; this driver
-    /// spells the calls the way a C caller does and routes around it.
+    /// **It calls the vtable thunks directly rather than the conveniences**, for the
+    /// reason [`drive_decoder_over`] gives. `ISVCEncoder` is one pointer wide exactly
+    /// as `ISVCDecoder` is, and every encoder thunk casts `this` to the
+    /// implementation type and reaches `inner` past the `base`/`pVtbl` pair at offset
+    /// `0x10` — so the old `&mut self` conveniences were F23's encoder twin, and it
+    /// is fixed with F23 itself at T8.A3.
     ///
     /// The configuration is `rust_enc`'s — the driver the 341-configuration
     /// diffharness sweeps run — with three deliberate departures, each for
@@ -2721,26 +2781,28 @@ mod f23_boundary_provenance {
             // The write that is out of bounds for an eight-byte borrow: this call
             // stores `*pParam` into `CWelsDecoderImpl::param`.
             assert_eq!(
-                i64::from((*p_decoder).Initialize(&dec_param)),
+                i64::from(ISVCDecoder::Initialize(p_decoder, &dec_param)),
                 CM_RESULT_SUCCESS as i64
             );
 
             // `bEndOfStream` lives further out still, and this pair writes then reads
             // it — so the probe covers a round trip and not only the init.
             let mut eos = 1i32;
-            (*p_decoder).SetOption(
+            ISVCDecoder::SetOption(
+                p_decoder,
                 DECODER_OPTION::DECODER_OPTION_END_OF_STREAM,
                 ptr::from_mut(&mut eos).cast(),
             );
             let mut eos_back = 0i32;
-            (*p_decoder).GetOption(
+            ISVCDecoder::GetOption(
+                p_decoder,
                 DECODER_OPTION::DECODER_OPTION_END_OF_STREAM,
                 ptr::from_mut(&mut eos_back).cast(),
             );
             assert_eq!(eos_back, 1, "END_OF_STREAM did not round-trip");
 
             assert_eq!(
-                i64::from((*p_decoder).Uninitialize()),
+                i64::from(ISVCDecoder::Uninitialize(p_decoder)),
                 CM_RESULT_SUCCESS as i64
             );
             WelsDestroyDecoder(p_decoder);
@@ -2756,8 +2818,8 @@ mod f23_boundary_provenance {
             enc_param.iPicHeight = 64;
             enc_param.fMaxFrameRate = 30.0;
             enc_param.iTargetBitrate = 64000;
-            assert_eq!((*p_encoder).Initialize(&enc_param), CM_RESULT_SUCCESS);
-            assert_eq!((*p_encoder).Uninitialize(), CM_RESULT_SUCCESS);
+            assert_eq!(ISVCEncoder::Initialize(p_encoder, &enc_param), CM_RESULT_SUCCESS);
+            assert_eq!(ISVCEncoder::Uninitialize(p_encoder), CM_RESULT_SUCCESS);
             WelsDestroySVCEncoder(p_encoder);
         }
     }

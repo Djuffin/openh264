@@ -414,7 +414,8 @@ unsafe fn feed(
         } else {
             unit.as_ptr()
         };
-        let ret = (*decoder).DecodeFrame2(
+        let ret = ISVCDecoder::DecodeFrame2(
+            decoder,
             src,
             unit.len() as i32,
             p_dst.as_mut_ptr(),
@@ -482,7 +483,7 @@ fn decode_case(case: &Case) -> (Run, String) {
         dec_param.uiTargetDqLayer = u8::MAX;
         dec_param.eEcActiveIdc = ERROR_CON_IDC::ERROR_CON_SLICE_COPY;
         dec_param.sVideoProperty.eVideoBsType = VIDEO_BITSTREAM_DEFAULT;
-        let init_ret = (*decoder).Initialize(&dec_param as *const SDecodingParam);
+        let init_ret = ISVCDecoder::Initialize(decoder, &dec_param as *const SDecodingParam);
         assert_eq!(i64::from(init_ret), CM_RESULT_SUCCESS as i64, "Initialize");
 
         let mut run = Run::default();
@@ -499,14 +500,16 @@ fn decode_case(case: &Case) -> (Run, String) {
 
         // End of stream, then the null/zero-length call that flushes it.
         let mut eos_flag = 1i32;
-        (*decoder).SetOption(
+        ISVCDecoder::SetOption(
+            decoder,
             DECODER_OPTION::DECODER_OPTION_END_OF_STREAM,
             &mut eos_flag as *mut i32 as *mut std::ffi::c_void,
         );
         feed(decoder, &[], &mut run, &mut hasher);
 
         let mut remaining = 0i32;
-        (*decoder).GetOption(
+        ISVCDecoder::GetOption(
+            decoder,
             DECODER_OPTION::DECODER_OPTION_NUM_OF_FRAMES_REMAINING_IN_BUFFER,
             &mut remaining as *mut i32 as *mut std::ffi::c_void,
         );
@@ -514,11 +517,11 @@ fn decode_case(case: &Case) -> (Run, String) {
         for _ in 0..remaining.clamp(0, MAX_DRAIN) {
             let mut p_dst: [*mut u8; 3] = [std::ptr::null_mut(); 3];
             let mut buf_info = SBufferInfo::default();
-            let flush_ret = (*decoder).FlushFrame(p_dst.as_mut_ptr(), &mut buf_info);
+            let flush_ret = ISVCDecoder::FlushFrame(decoder, p_dst.as_mut_ptr(), &mut buf_info);
             record(flush_ret.0, &buf_info, p_dst, &mut run, &mut hasher);
         }
 
-        (*decoder).Uninitialize();
+        ISVCDecoder::Uninitialize(decoder);
         WelsDestroyDecoder(decoder);
 
         let digest = if run.frames == 0 {

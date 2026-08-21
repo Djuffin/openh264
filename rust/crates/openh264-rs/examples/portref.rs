@@ -66,7 +66,7 @@ fn decode(label: &str, data: &[u8], raw: bool) {
         dec_param.uiTargetDqLayer = u8::MAX;
         dec_param.eEcActiveIdc = ERROR_CON_IDC::ERROR_CON_SLICE_COPY;
         dec_param.sVideoProperty.eVideoBsType = VIDEO_BITSTREAM_DEFAULT;
-        (*decoder).Initialize(&dec_param as *const SDecodingParam);
+        ISVCDecoder::Initialize(decoder, &dec_param as *const SDecodingParam);
 
         let mut codes = Vec::new();
         let mut bufs = Vec::new();
@@ -79,7 +79,7 @@ fn decode(label: &str, data: &[u8], raw: bool) {
             } else {
                 unit.as_ptr()
             };
-            let ret = (*decoder).DecodeFrame2(src, unit.len() as i32, p_dst.as_mut_ptr(), &mut buf_info);
+            let ret = ISVCDecoder::DecodeFrame2(decoder, src, unit.len() as i32, p_dst.as_mut_ptr(), &mut buf_info);
             eprintln!("--- call len={} -> 0x{:x} bufstatus={}", unit.len(), ret.0, buf_info.iBufferStatus);
             codes.push(ret.0);
             bufs.push(buf_info.iBufferStatus);
@@ -93,27 +93,29 @@ fn decode(label: &str, data: &[u8], raw: bool) {
             }
         }
         let mut eos_flag = 1i32;
-        (*decoder).SetOption(
+        ISVCDecoder::SetOption(
+            decoder,
             DECODER_OPTION::DECODER_OPTION_END_OF_STREAM,
             &mut eos_flag as *mut i32 as *mut std::ffi::c_void,
         );
         feed(&[]);
 
         let mut remaining = 0i32;
-        (*decoder).GetOption(
+        ISVCDecoder::GetOption(
+            decoder,
             DECODER_OPTION::DECODER_OPTION_NUM_OF_FRAMES_REMAINING_IN_BUFFER,
             &mut remaining as *mut i32 as *mut std::ffi::c_void,
         );
         for _ in 0..remaining.clamp(0, 24) {
             let mut p_dst: [*mut u8; 3] = [std::ptr::null_mut(); 3];
             let mut buf_info = SBufferInfo::default();
-            let ret = (*decoder).FlushFrame(p_dst.as_mut_ptr(), &mut buf_info);
+            let ret = ISVCDecoder::FlushFrame(decoder, p_dst.as_mut_ptr(), &mut buf_info);
             eprintln!("--- flush -> 0x{:x} bufstatus={}", ret.0, buf_info.iBufferStatus);
             codes.push(ret.0);
             bufs.push(buf_info.iBufferStatus);
             if buf_info.iBufferStatus == 1 { frame_hashes.push(format!("{} (flush)", hash_frame(&buf_info, p_dst))); }
         }
-        (*decoder).Uninitialize();
+        ISVCDecoder::Uninitialize(decoder);
         WelsDestroyDecoder(decoder);
         for (i, h) in frame_hashes.iter().enumerate() {
             eprintln!("PORTFRAME {i} {h}");

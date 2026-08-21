@@ -18,14 +18,14 @@ fn test_simple_encode_init_and_encode_param_sets() {
         param.iTargetBitrate = 250000;
         param.iUsageType = EUsageType::CAMERA_VIDEO_REAL_TIME;
 
-        let init_ret = (*p_encoder).Initialize(&param as *const SEncParamBase);
+        let init_ret = ISVCEncoder::Initialize(p_encoder, &param as *const SEncParamBase);
         assert_eq!(init_ret, CM_RESULT_SUCCESS);
 
         let mut bs_info = SFrameBSInfo::default();
-        let enc_param_ret = (*p_encoder).EncodeParameterSets(&mut bs_info as *mut SFrameBSInfo);
+        let enc_param_ret = ISVCEncoder::EncodeParameterSets(p_encoder, &mut bs_info as *mut SFrameBSInfo);
         assert_eq!(enc_param_ret, CM_RESULT_SUCCESS);
 
-        let uninit_ret = (*p_encoder).Uninitialize();
+        let uninit_ret = ISVCEncoder::Uninitialize(p_encoder);
         assert_eq!(uninit_ret, CM_RESULT_SUCCESS);
 
         WelsDestroySVCEncoder(p_encoder);

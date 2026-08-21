@@ -28,7 +28,7 @@ fn test_decoder_create_and_destroy_lifecycle() {
         param.uiTargetDqLayer = u8::MAX;
 
         // 1. Initialize
-        let init_ret = (*p_decoder).Initialize(&param as *const SDecodingParam);
+        let init_ret = ISVCDecoder::Initialize(p_decoder, &param as *const SDecodingParam);
         assert_eq!(i64::from(init_ret), CM_RESULT_SUCCESS as i64);
 
         // 2. DecodeFrame
@@ -36,7 +36,8 @@ fn test_decoder_create_and_destroy_lifecycle() {
         let mut stride: [i32; 2] = [0; 2];
         let mut width: i32 = 0;
         let mut height: i32 = 0;
-        let dec_state = (*p_decoder).DecodeFrame(
+        let dec_state = ISVCDecoder::DecodeFrame(
+            p_decoder,
             std::ptr::null(),
             0,
             p_dst.as_mut_ptr(),
@@ -48,7 +49,8 @@ fn test_decoder_create_and_destroy_lifecycle() {
 
         // 3. DecodeFrameNoDelay
         let mut buf_info = SBufferInfo::default();
-        let dec_nodelay_state = (*p_decoder).DecodeFrameNoDelay(
+        let dec_nodelay_state = ISVCDecoder::DecodeFrameNoDelay(
+            p_decoder,
             std::ptr::null(),
             0,
             p_dst.as_mut_ptr(),
@@ -57,7 +59,8 @@ fn test_decoder_create_and_destroy_lifecycle() {
         assert_eq!(dec_nodelay_state, DECODING_STATE::dsErrorFree);
 
         // 4. DecodeFrame2
-        let dec2_state = (*p_decoder).DecodeFrame2(
+        let dec2_state = ISVCDecoder::DecodeFrame2(
+            p_decoder,
             std::ptr::null(),
             0,
             p_dst.as_mut_ptr(),
@@ -66,18 +69,19 @@ fn test_decoder_create_and_destroy_lifecycle() {
         assert_eq!(dec2_state, DECODING_STATE::dsErrorFree);
 
         // 5. FlushFrame
-        let flush_state = (*p_decoder).FlushFrame(p_dst.as_mut_ptr(), &mut buf_info);
+        let flush_state = ISVCDecoder::FlushFrame(p_decoder, p_dst.as_mut_ptr(), &mut buf_info);
         assert_eq!(flush_state, DECODING_STATE::dsErrorFree);
 
         // 6. DecodeParser
         let mut parser_info = SParserBsInfo::default();
-        let parse_state = (*p_decoder).DecodeParser(std::ptr::null(), 0, &mut parser_info);
+        let parse_state = ISVCDecoder::DecodeParser(p_decoder, std::ptr::null(), 0, &mut parser_info);
         assert_eq!(parse_state, DECODING_STATE::dsErrorFree);
 
         // 7. DecodeFrameEx
         let mut dst_len: i32 = 0;
         let mut color_fmt: i32 = 0;
-        let dec_ex_state = (*p_decoder).DecodeFrameEx(
+        let dec_ex_state = ISVCDecoder::DecodeFrameEx(
+            p_decoder,
             std::ptr::null(),
             0,
             std::ptr::null_mut(),
@@ -91,20 +95,22 @@ fn test_decoder_create_and_destroy_lifecycle() {
 
         // 8. SetOption & GetOption
         let mut trace_level = 0i32;
-        let set_opt_ret = (*p_decoder).SetOption(
+        let set_opt_ret = ISVCDecoder::SetOption(
+            p_decoder,
             DECODER_OPTION::DECODER_OPTION_TRACE_LEVEL,
             &mut trace_level as *mut i32 as *mut std::ffi::c_void,
         );
         assert_eq!(i64::from(set_opt_ret), CM_RESULT_SUCCESS as i64);
 
-        let get_opt_ret = (*p_decoder).GetOption(
+        let get_opt_ret = ISVCDecoder::GetOption(
+            p_decoder,
             DECODER_OPTION::DECODER_OPTION_TRACE_LEVEL,
             &mut trace_level as *mut i32 as *mut std::ffi::c_void,
         );
         assert_eq!(i64::from(get_opt_ret), CM_RESULT_SUCCESS as i64);
 
         // 9. Uninitialize
-        let uninit_ret = (*p_decoder).Uninitialize();
+        let uninit_ret = ISVCDecoder::Uninitialize(p_decoder);
         assert_eq!(i64::from(uninit_ret), CM_RESULT_SUCCESS as i64);
 
         WelsDestroyDecoder(p_decoder);
@@ -127,7 +133,7 @@ fn test_encoder_create_and_destroy_lifecycle() {
         param.iTargetBitrate = 500000;
         param.iUsageType = EUsageType::CAMERA_VIDEO_REAL_TIME;
 
-        let init_ret = (*p_encoder).Initialize(&param as *const SEncParamBase);
+        let init_ret = ISVCEncoder::Initialize(p_encoder, &param as *const SEncParamBase);
         assert_eq!(init_ret, CM_RESULT_SUCCESS);
 
         // 2. InitializeExt
@@ -137,12 +143,12 @@ fn test_encoder_create_and_destroy_lifecycle() {
         param_ext.fMaxFrameRate = 30.0;
         param_ext.iTargetBitrate = 500000;
         param_ext.iUsageType = EUsageType::CAMERA_VIDEO_REAL_TIME;
-        let init_ext_ret = (*p_encoder).InitializeExt(&param_ext as *const SEncParamExt);
+        let init_ext_ret = ISVCEncoder::InitializeExt(p_encoder, &param_ext as *const SEncParamExt);
         assert_eq!(init_ext_ret, CM_RESULT_SUCCESS);
 
         // 3. GetDefaultParams
         let mut default_param = SEncParamExt::default();
-        let get_def_ret = (*p_encoder).GetDefaultParams(&mut default_param as *mut SEncParamExt);
+        let get_def_ret = ISVCEncoder::GetDefaultParams(p_encoder, &mut default_param as *mut SEncParamExt);
         assert_eq!(get_def_ret, CM_RESULT_SUCCESS);
 
         // 4. EncodeFrame
@@ -156,20 +162,21 @@ fn test_encoder_create_and_destroy_lifecycle() {
         // against libopenh264.a: EncodeFrame returns 5 (cmUnsupportedData). This
         // previously asserted CM_RESULT_SUCCESS, which passed only because
         // WelsEncoderEncodeExtRust was a sketch that validated nothing.
-        let enc_frame_ret = (*p_encoder).EncodeFrame(&src_pic, &mut bs_info);
+        let enc_frame_ret = ISVCEncoder::EncodeFrame(p_encoder, &src_pic, &mut bs_info);
         assert_eq!(enc_frame_ret, CM_UNSUPPORTED_DATA);
 
         // 5. EncodeParameterSets
-        let enc_ps_ret = (*p_encoder).EncodeParameterSets(&mut bs_info);
+        let enc_ps_ret = ISVCEncoder::EncodeParameterSets(p_encoder, &mut bs_info);
         assert_eq!(enc_ps_ret, CM_RESULT_SUCCESS);
 
         // 6. ForceIntraFrame
-        let force_idr_ret = (*p_encoder).ForceIntraFrame(true);
+        let force_idr_ret = ISVCEncoder::ForceIntraFrame(p_encoder, true);
         assert_eq!(force_idr_ret, CM_RESULT_SUCCESS);
 
         // 7. SetOption & GetOption
         let mut trace_level = 0i32;
-        let set_opt_ret = (*p_encoder).SetOption(
+        let set_opt_ret = ISVCEncoder::SetOption(
+            p_encoder,
             ENCODER_OPTION::ENCODER_OPTION_TRACE_LEVEL,
             &mut trace_level as *mut i32 as *mut std::ffi::c_void,
         );
@@ -178,7 +185,8 @@ fn test_encoder_create_and_destroy_lifecycle() {
         // ENCODER_OPTION_TRACE_LEVEL is set-only: `CWelsH264SVCEncoder::GetOption`
         // has no case for it and falls to `default: return cmInitParaError`.
         // Measured against libopenh264.a, not derived from reading.
-        let get_opt_ret = (*p_encoder).GetOption(
+        let get_opt_ret = ISVCEncoder::GetOption(
+            p_encoder,
             ENCODER_OPTION::ENCODER_OPTION_TRACE_LEVEL,
             &mut trace_level as *mut i32 as *mut std::ffi::c_void,
         );
@@ -186,14 +194,15 @@ fn test_encoder_create_and_destroy_lifecycle() {
 
         // A readable one, to prove GetOption still works at all.
         let mut idr_interval = 0i32;
-        let get_opt_ret = (*p_encoder).GetOption(
+        let get_opt_ret = ISVCEncoder::GetOption(
+            p_encoder,
             ENCODER_OPTION::ENCODER_OPTION_IDR_INTERVAL,
             &mut idr_interval as *mut i32 as *mut std::ffi::c_void,
         );
         assert_eq!(get_opt_ret, CM_RESULT_SUCCESS);
 
         // 8. Uninitialize
-        let uninit_ret = (*p_encoder).Uninitialize();
+        let uninit_ret = ISVCEncoder::Uninitialize(p_encoder);
         assert_eq!(uninit_ret, CM_RESULT_SUCCESS);
 
         WelsDestroySVCEncoder(p_encoder);
