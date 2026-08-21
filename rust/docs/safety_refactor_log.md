@@ -14342,6 +14342,17 @@ project's own instruments — the malformed corpus alone would emit a line per d
 access unit across 2707 rows — and what the enumerated parity fix owed was the
 *installed-callback* path.
 
+**And the exit battery found the second half of the same premise.** Growing
+`SLogContext` to 32 bytes left it with four bytes of *trailing* padding, and
+`sWelsEncCtx`'s zeroed-shell equivalence test reads every field's extent byte for
+byte on the argument that **no field outside its by-value list has interior or
+trailing padding**. Under Miri that read is `reading memory at [0x1c..0x1d] … memory
+is uninitialized`. The fix is to restore the premise, not to weaken the test:
+`SLogContext` carries a named `_reserved: u32`, always zero. Twice in one step, then,
+Phase 5b's shell test caught something a byte gate could not — first the non-zero
+default, then the padding — which is a better argument for that test than anything
+written when it was built.
+
 Three covering tests, all red before. The decoder's also measures **T8.B3's throttle
 from outside**: strictly fewer `decode failed, failure type:` lines than erroring
 calls. And `SLogContext::default()` is all zeros with the level set in
@@ -14421,8 +14432,10 @@ project's own reporting has always split code from prose.
 | six `use std::ffi::{c_char, c_void}` with no `c_void` in the file | **deleted**, dead since the fields they served went. |
 | `SLogContext`'s trio, `welsCodecTrace::m_pCodecInstance` | **already gone at T8.B6**; the stale "three null `c_void`s" comment in `encoder_context.rs` is corrected. |
 
-**26 code occurrences, all C-ABI, each tagged at its site**, and 21 prose. Nothing in
-this crate erases a type it could name.
+**26 code occurrences, all C-ABI, each tagged at its site**, and 21 prose — measured
+at `72fe2e7e`, the step's own commit; the close's explanatory comments take the prose
+count to 23 without touching the code half, which is the half the verdict is about.
+Nothing in this crate erases a type it could name.
 
 ### F77 — the finding that was not fixed, and why
 
