@@ -15128,3 +15128,53 @@ that seed passes, and 8 further runs of an LTR-heavy filter are clean.
 **Numbers.** gtest **176 → 179**; the four LTR rows deleted from the allowlist
 (`GetOptionLTR_ALLIDR/0,1,2` and `Engine_SVC_Switch_P`, whose first failure T8b.A3 had
 moved from the TEMPORAL_ID read at `decoder_ec_test.cpp:789` to the LTR one at `:746`).
+
+### T8b.A5 — S48 for the silent pair, and what it cost
+
+`METHOD_DENOISE` and `METHOD_DOWNSAMPLE` are untranslated. Asking for either
+**succeeded**: `BilateralDenoising` is an empty body behind `bEnableDenoise`, and
+`DownsamplePadding` returns `RET_NOTSUPPORTED` when the sizes differ while **both
+callers drop the return** — so a lower spatial layer is encoded from whatever the
+picture pool last held. Not "different bytes": *stale* bytes, reported as success.
+
+`ParamValidationExt` now returns `ENC_RETURN_UNSUPPORTED_PARA` for `bEnableDenoise`
+and for any spatial layer smaller than `SUsedPicRect`; `WelsInitEncoderExt` passes it
+on and `InitializeInternal` maps it to **`cmInitParaError` (1)**, which is what a
+consumer sees from `InitializeExt`. (`cmUnsupportedData` is not on this path; only
+`EncodeFrame` returns it.) Covering test
+`tests/encoder_unsupported_preprocess_test.rs`, red before (both requests returned
+`cmResultSuccess`, 0), green after — **with two control rows** so the refusals cannot
+be passing because everything fails.
+
+**The predicate is `JudgeNeedOfScaling`'s own, and the obvious one is wrong.**
+Comparing `iPicWidth` against the top layer looks equivalent and is not:
+`ParamTranscode` rounds layer dimensions up to a multiple of 16 and leaves
+`iPicWidth` alone, so 140x96 legitimately becomes a 144x96 layer. The first version
+of the check refused every non-multiple-of-16 width, and T8b.A4's own 140x96 test row
+caught it. The rule that ships is the reference's: a layer **smaller** than the input
+rect is downsampled; a larger one is left alone.
+
+**It cost 14 rows that were passing** — `SimulcastAVC`, `SimulcastSVC`,
+`SimulcastAVCDiffFps`, `SimulcastAVC_SPS_PPS_LISTING`, `DiffSlicingInDlayer(Mixed)`,
+`AVCSVCExtensionCheck`, `SetOptionEncParam{Ext,Base}`, `Engine_SVC_Switch_{I,P}`,
+`GetOptionTid_SVC_L1_NOLOSS/0..2` — and they were passing **by not looking**: every
+one asserts on codes, frame counts and layer ids, none on bytes, so the
+un-downsampled lower layers went unnoticed. The two rows that *do* hash
+(`EncoderOutputTest/5`, `/7`) failed before and after.
+
+**179/199 → 165/199, allowlist 20 → 34.** Both numbers are true and they measure
+different things: 179 is "how much of the reference does the port implement", 165 is
+"how much does it implement *without lying about it*". The charter's S48 chooses the
+second, and the user confirmed it when the trade-off was put to them. All 17
+downsample/denoise rows come back together when session C ports the two plugins.
+
+No gate configuration moves: `cxx_enc.cpp:85/101` and `rust_enc/main.rs:69/84` both
+hard-code `iSpatialLayerNum = 1` with `sSpatialLayers[0]` at the source size, and
+`cxx_enc.cpp:123` / `rust_enc/main.rs:110` both set `bEnableDenoise = false`.
+
+**`METHOD_IMAGE_ROTATE`, checked while there.** `grep -rn 'METHOD_IMAGE_ROTATE' codec/`
+gives three hits: the interface enum (`IWelsVP.h:133`), the plugin's own constructor
+(`imagerotate.cpp:41`) and the factory switch (`WelsFrameWork.cpp:292`). **Nothing in
+the encoder ever requests it** — it is reachable only by a consumer driving the
+processing library directly, not through `ISVCEncoder`. Noted for Phase 10 and
+recorded in the census.

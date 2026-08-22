@@ -24,15 +24,48 @@ EncodeDecodeTestAPI.ParameterSetStrategy_SPS_PPS_LISTING2 | 8b.B | SPS_PPS_LISTI
 EncodeDecodeTestAPI.ParameterSetStrategy_SPS_PPS_LISTING3 | 8b.B | SPS_PPS_LISTING strategy not ported; InitializeExt refuses
 
 # --- decode_api_test.cpp:923/1001/1048 — parse-only DecodeParser -------------
-DecodeParseAPI.ParseOnly_General | 8b.B | DecodeParser is a stub: returns dsErrorFree, writes nothing (iNalNum stays 0)
+DecodeParseAPI.ParseOnly_General | 8b.C then 8b.B | since T8b.A5 it fails earlier, at decode_api_test.cpp:888 — its encoder asks for 2 spatial layers, which now refuses; behind that, DecodeParser is still a stub
 DecodeParseAPI.ParseOnly_SpecSliceLoss | 8b.B | DecodeParser is a stub: returns dsErrorFree, writes nothing (iNalNum stays 0)
 DecodeParseAPI.ParseOnly_SpecStatistics | 8b.B | DecodeParser is a stub: returns dsErrorFree, writes nothing (iNalNum stays 0)
 
-# --- HashFunctions.h:31 — denoise / multi-layer encodes hash differently -----
-# METHOD_DENOISE and METHOD_DOWNSAMPLE are untranslated (processing/mod.rs:29).
-EncodeFile/EncoderOutputTest.CompareOutput/4 | 8b.C | denoise not ported (BilateralDenoising is an empty body)
-EncodeFile/EncoderOutputTest.CompareOutput/5 | 8b.C | downsample not ported (2 spatial layers; DownsamplePadding returns RET_NOTSUPPORTED, callers drop it)
-EncodeFile/EncoderOutputTest.CompareOutput/7 | 8b.C | downsample not ported (4 spatial layers; DownsamplePadding returns RET_NOTSUPPORTED, callers drop it)
+# --- BaseEncoderTest.cpp:92 and friends — denoise / downsample REFUSE at init
+# --- (S48, T8b.A5) ----------------------------------------------------------
+# `METHOD_DENOISE` and `METHOD_DOWNSAMPLE` are untranslated
+# (`processing/mod.rs:29-39`). Until T8b.A5 asking for either **succeeded** and
+# produced wrong output: `BilateralDenoising` is an empty body, and
+# `DownsamplePadding` returns `RET_NOTSUPPORTED` while both callers drop it, so a
+# lower spatial layer is encoded from whatever the picture pool last held. S48 says
+# a feature this phase cannot finish refuses at the entry point, so
+# `ParamValidationExt` now returns `ENC_RETURN_UNSUPPORTED_PARA` and `InitializeExt`
+# answers `cmInitParaError`.
+#
+# **That cost 14 rows that were passing**, and they were passing by not looking:
+# every one asserts on API behaviour (codes, frame counts, layer ids) and none on
+# bytes, so the un-downsampled lower layers went unnoticed. `EncoderOutputTest/5`
+# and `/7` are the two that *do* hash, and they failed before and after. All 17 of
+# these rows come back together when session C ports the two plugins.
+#
+# The tally before this refusal was **179/199** (T8b.A4); it is the honest number
+# for "how much of the reference does the port implement", and 165/199 is the
+# honest number for "how much of the reference does the port implement *without
+# lying about it*". The charter's S48 chooses the second.
+EncodeFile/EncoderOutputTest.CompareOutput/4 | 8b.C | denoise refuses at init (S48, T8b.A5); port METHOD_DENOISE
+EncodeFile/EncoderOutputTest.CompareOutput/5 | 8b.C | downsample refuses at init (S48, T8b.A5); 2 spatial layers
+EncodeFile/EncoderOutputTest.CompareOutput/7 | 8b.C | downsample refuses at init (S48, T8b.A5); 4 spatial layers
+EncodeDecodeTestAPI.SimulcastAVC | 8b.C | multi-layer: refuses at init (S48, T8b.A5) — passed before by never checking bytes
+EncodeDecodeTestAPI.SimulcastAVCDiffFps | 8b.C | multi-layer: refuses at init (S48, T8b.A5) — passed before by never checking bytes
+EncodeDecodeTestAPI.SimulcastAVC_SPS_PPS_LISTING | 8b.C | multi-layer: refuses at init (S48, T8b.A5) — passed before by never checking bytes
+EncodeDecodeTestAPI.SimulcastSVC | 8b.C | multi-layer: refuses at init (S48, T8b.A5) — passed before by never checking bytes
+EncodeDecodeTestAPI.DiffSlicingInDlayer | 8b.C | multi-layer: refuses at init (S48, T8b.A5) — passed before by never checking bytes
+EncodeDecodeTestAPI.DiffSlicingInDlayerMixed | 8b.C | multi-layer: refuses at init (S48, T8b.A5) — passed before by never checking bytes
+EncodeDecodeTestAPI.AVCSVCExtensionCheck | 8b.C | multi-layer: refuses at init (S48, T8b.A5) — passed before by never checking bytes
+EncodeDecodeTestAPI.SetOptionEncParamExt | 8b.C | multi-layer: refuses at init (S48, T8b.A5) — passed before by never checking bytes
+EncodeDecodeTestAPI.SetOptionEncParamBase | 8b.C | multi-layer: refuses at init (S48, T8b.A5) — passed before by never checking bytes
+EncodeDecodeTestAPI.Engine_SVC_Switch_I | 8b.C | multi-layer: refuses at init (S48, T8b.A5) — passed after T8b.A3/A4, refuses now
+EncodeDecodeTestAPI.Engine_SVC_Switch_P | 8b.C | multi-layer: refuses at init (S48, T8b.A5) — passed after T8b.A3/A4, refuses now
+EncodeDecodeTestAPIBase/EncodeDecodeTestAPI.GetOptionTid_SVC_L1_NOLOSS/0 | 8b.C | multi-layer: refuses at init (S48, T8b.A5) — passed after T8b.A3, refuses now
+EncodeDecodeTestAPIBase/EncodeDecodeTestAPI.GetOptionTid_SVC_L1_NOLOSS/1 | 8b.C | multi-layer: refuses at init (S48, T8b.A5) — passed after T8b.A3, refuses now
+EncodeDecodeTestAPIBase/EncodeDecodeTestAPI.GetOptionTid_SVC_L1_NOLOSS/2 | 8b.C | multi-layer: refuses at init (S48, T8b.A5) — passed after T8b.A3, refuses now
 
 # --- BaseEncoderTest.cpp:92 / encode_options_test.cpp:2195 / encoder_test.cpp:323
 # --- screen content ----------------------------------------------------------
