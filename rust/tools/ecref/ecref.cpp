@@ -111,6 +111,118 @@ int main(int argc, char** argv) {
     return 2;
   }
 
+  // --- `--sps`: every SPS in the stream, by its own syntax (F80, T8b.A6) -----
+  //
+  // The question F80 asks is whether `WelsRequestMem`'s third arm — same picture
+  // size, *changed* `num_ref_frames` — is reachable at all, and no `GetOption`
+  // reports `num_ref_frames`. So the bits are read here rather than asked for.
+  // Annex E's SPS syntax, up to `max_num_ref_frames`; scaling lists are skipped
+  // properly because `test_scalinglist_jm.264` has them and a wrong skip would
+  // silently misreport every field after.
+  //
+  // Subset SPS (NAL 15) is not read: it carries the SVC extension and this port's
+  // corpus reaches the third arm, if at all, through the base layer.
+  if (want_sps) {
+    auto ue = [](const std::vector<uint8_t>& b, size_t& bit) -> uint32_t {
+      int lead = 0;
+      while (bit < b.size() * 8) {
+        int v = (b[bit >> 3] >> (7 - (bit & 7))) & 1;
+        bit++;
+        if (v) break;
+        lead++;
+        if (lead > 31) return 0;
+      }
+      uint32_t val = 0;
+      for (int i = 0; i < lead; i++) {
+        if (bit >= b.size() * 8) return 0;
+        val = (val << 1) | ((b[bit >> 3] >> (7 - (bit & 7))) & 1);
+        bit++;
+      }
+      return (1u << lead) - 1 + val;
+    };
+    auto u1 = [](const std::vector<uint8_t>& b, size_t& bit) -> int {
+      if (bit >= b.size() * 8) return 0;
+      int v = (b[bit >> 3] >> (7 - (bit & 7))) & 1;
+      bit++;
+      return v;
+    };
+    auto se = [&](const std::vector<uint8_t>& b, size_t& bit) -> int32_t {
+      uint32_t k = ue(b, bit);
+      return (k & 1) ? int32_t((k + 1) >> 1) : -int32_t(k >> 1);
+    };
+    int nsps = 0;
+    for (auto& u : split_annexb(data)) {
+      const uint8_t* nal = data.data() + u.first;
+      size_t len = u.second - u.first;
+      // Skip the start code, then the NAL header byte.
+      size_t off = 0;
+      while (off + 2 < len && !(nal[off] == 0 && nal[off + 1] == 0 && nal[off + 2] == 1)) off++;
+      if (off + 3 >= len) continue;
+      off += 3;
+      if ((nal[off] & 0x1f) != 7) continue;          // SPS only
+      // De-emulate.
+      std::vector<uint8_t> rbsp;
+      int zeros = 0;
+      for (size_t i = off + 1; i < len; i++) {
+        if (zeros == 2 && nal[i] == 3) { zeros = 0; continue; }
+        rbsp.push_back(nal[i]);
+        zeros = (nal[i] == 0) ? zeros + 1 : 0;
+      }
+      if (rbsp.size() < 4) continue;
+      size_t bit = 0;
+      uint32_t profile_idc = 0;
+      for (int i = 0; i < 8; i++) profile_idc = (profile_idc << 1) | u1(rbsp, bit);
+      bit += 8;                                       // constraint flags + reserved
+      uint32_t level_idc = 0;
+      for (int i = 0; i < 8; i++) level_idc = (level_idc << 1) | u1(rbsp, bit);
+      uint32_t sps_id = ue(rbsp, bit);
+      uint32_t chroma_format_idc = 1;
+      if (profile_idc == 100 || profile_idc == 110 || profile_idc == 122 || profile_idc == 244 ||
+          profile_idc == 44  || profile_idc == 83  || profile_idc == 86  || profile_idc == 118 ||
+          profile_idc == 128 || profile_idc == 138 || profile_idc == 139 || profile_idc == 134 ||
+          profile_idc == 135) {
+        chroma_format_idc = ue(rbsp, bit);
+        if (chroma_format_idc == 3) u1(rbsp, bit);    // separate_colour_plane_flag
+        ue(rbsp, bit);                                // bit_depth_luma_minus8
+        ue(rbsp, bit);                                // bit_depth_chroma_minus8
+        u1(rbsp, bit);                                // qpprime_y_zero_transform_bypass
+        if (u1(rbsp, bit)) {                          // seq_scaling_matrix_present
+          int lists = (chroma_format_idc != 3) ? 8 : 12;
+          for (int i = 0; i < lists; i++) {
+            if (!u1(rbsp, bit)) continue;
+            int size = (i < 6) ? 16 : 64;
+            int last = 8, next = 8;
+            for (int j = 0; j < size; j++) {
+              if (next != 0) { int d = se(rbsp, bit); next = (last + d + 256) % 256; }
+              last = (next == 0) ? last : next;
+            }
+          }
+        }
+      }
+      ue(rbsp, bit);                                  // log2_max_frame_num_minus4
+      uint32_t poc_type = ue(rbsp, bit);
+      if (poc_type == 0) {
+        ue(rbsp, bit);                                // log2_max_poc_lsb_minus4
+      } else if (poc_type == 1) {
+        u1(rbsp, bit);                                // delta_pic_order_always_zero
+        se(rbsp, bit);                                // offset_for_non_ref_pic
+        se(rbsp, bit);                                // offset_for_top_to_bottom_field
+        uint32_t n = ue(rbsp, bit);
+        for (uint32_t i = 0; i < n && i < 256; i++) se(rbsp, bit);
+      }
+      uint32_t num_ref_frames = ue(rbsp, bit);
+      u1(rbsp, bit);                                  // gaps_in_frame_num_allowed
+      uint32_t w_mbs = ue(rbsp, bit) + 1;
+      uint32_t h_map = ue(rbsp, bit) + 1;
+      int frame_mbs_only = u1(rbsp, bit);
+      printf("SPS %d id=%u profile=%u level=%u %ux%u num_ref_frames=%u\n",
+             nsps++, sps_id, profile_idc, level_idc,
+             w_mbs * 16, h_map * 16 * (frame_mbs_only ? 1 : 2), num_ref_frames);
+    }
+    if (nsps == 0) printf("SPS none\n");
+    return 0;
+  }
+
   ISVCDecoder* dec = nullptr;
   if (WelsCreateDecoder(&dec) != 0 || !dec) { fprintf(stderr, "WelsCreateDecoder\n"); return 2; }
 
