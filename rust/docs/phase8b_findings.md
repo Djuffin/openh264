@@ -641,3 +641,64 @@ reference archive agrees — the only denoise symbols it exports are
 `BilateralLumaFilter8_c`, `WaverageChromaFilter8_c` and `Gauss3x3Filter`. On this host
 the reference runs the same scalar filters the port will, so `EncoderOutputTest/4`
 needs no kernel-selection decision at all.
+
+## F80 / F87 — closed: the decoder's third pool arm, and what it cost `safe::Pool`'s oldest invariant
+
+`WelsRequestMem` (`decoder.cpp:464-545`) has three arms. The port had two: first
+allocation, and resolution change (F77, T8.C1). The third — **same resolution,
+different picture-queue size** (`:493-509`) — is what a stream takes when it changes
+`num_ref_frames` alone, and the port answered `dsOutOfMemory` and stopped.
+
+Measured on `res/num_ref_change_320x192.264` (24 frames at `iNumRefFrame = 1`, then 24
+at 4, 320x192 throughout), `ecref` vs `ecref_rs`, the same program against the two
+libraries:
+
+```text
+reference   48 320x192 20c1d2ea…  every code 0x0
+port        34 320x192 28f75c50…  0x4000 at call 34, then 0x10 x12
+```
+
+`0x4000` is `dsOutOfMemory`. **Closed by T8b.C3**, and the port now returns the
+reference's line exactly — 48 frames, the same stream hash, the same 57 return codes
+and the same 57 `iBufferStatus` values.
+
+**What this cost.** `safe::Pool` documented itself as "never grows or shrinks"
+(`pool.rs:97`) and that sentence is now false by one commit. It gains
+[`grow`](Pool::grow) and `reorder_and_shrink`, and the interesting part is the
+generation contract, because the port's picture *identity is the slot index* where the
+C++'s is the `SPicture*`:
+
+* `IncreasePicBuff` `memcpy`s the old pointer array into the front of the new one, so
+  every picture keeps its position. `grow` appends and touches no existing index or
+  generation — outstanding `PicId`s stay valid, which is the same statement.
+* `DecreasePicBuff` is **not** a truncation: when the DPB's previously-decoded picture
+  sits beyond the new size it moves to slot 0 and the rest shift up. In the C++ a
+  pointer held elsewhere follows its picture across that for free. Here it does not, so
+  `reorder_and_shrink` bumps the generation of every slot that receives a *different*
+  value, and the one id the C++ deliberately preserves —
+  `pPreviousDecodedPictureInDpb` — is re-derived rather than carried.
+
+The rest of what could name a slot is cleared, and that list is the C++'s own: the
+three reference lists (`WelsResetRefPic`, run by `AllocPicBuffOnNewSeqBegin` before
+this), every picture's `pRefPic` graph (cleared here — oss-fuzz 14423), the reordering
+buffers, `pDec` (nulled, as `decoder.cpp:537` does for every arm that gets this far),
+and `pECRefPic`, which is rebuilt from `pRefList` at each use.
+
+**A hole the obvious contract leaves, found by writing the test rather than the code.**
+The first version of `grow` stamped fresh slots at generation 0. After a shrink that
+dropped index 3 and a grow that re-created it, a `PicId` taken *before* the shrink —
+index 3, generation 0 — matched the new slot exactly, and the generation check waved it
+through. `grow` now stamps past every generation the pool has live.
+`a_dropped_slot_reused_by_a_later_grow_rejects_the_old_handle` is that case, and it
+failed before it passed.
+
+The counter is **derived, not stored**: `Pool` sits inside structs whose per-profile
+sizes `abi_guard.rs` pins, and the field version tripped
+`assert_size_by_profile!(SRefList, debug 240, release 120)`.
+
+**Coverage, stated honestly.** The asset exercises `IncreasePicBuff` (3 → 6). Nothing
+in `res/` lowers a reference count, so `DecreasePicBuff` has no byte-level referee; what
+stands behind it is `safe/pool.rs`'s `shrink_can_reorder_the_slots_it_keeps` and the
+three generation rows beside it, which pin the permutation and the staleness contract
+directly. Building a decreasing asset is a `make_numref_asset.cpp` variant and is left
+for whoever needs the arm.

@@ -961,14 +961,13 @@ pub fn SyncPictureResolutionExt(pCtx: &mut SWelsDecoderContext, iWidth: u32, iHe
         // ("memory re-alloc for resolution change, size change from 352 * 288 to
         // 640 * 480") and emits five frames; the port emitted two and died.
         //
-        // The C's early return is `bHaveGotMemory && same size && !bNeedChangePicQueue`;
-        // its `bNeedChangePicQueue` half needs `IncreasePicBuff`/`DecreasePicBuff`,
-        // which this port has never had (**F80**, Phase 9) — so the same-size case keeps
-        // the pool and reports its real capacity, exactly as before this commit, and
-        // only the size test is new. `WelsResetRefPic` is the caller's
+        // The C's early return is `bHaveGotMemory && same size && !bNeedChangePicQueue`.
+        // **T8b.C3 supplies its `bNeedChangePicQueue` half** —
+        // `IncreasePicBuff`/`DecreasePicBuff`, F80/F87 — so all three of
+        // `WelsRequestMem`'s arms are here now. `WelsResetRefPic` is the caller's
         // (`AllocPicBuffOnNewSeqBegin`, matching `decoder.cpp:489`'s placement relative
         // to this work), so the reference lists are already clear of the pool being
-        // dropped here.
+        // dropped or reordered here.
         let size_changed = (*pCtx).bHaveGotMemory
             && (iPicWidth != (*pCtx).iImgWidthInPixel || iPicHeight != (*pCtx).iImgHeightInPixel);
         if size_changed {
@@ -1006,10 +1005,62 @@ pub fn SyncPictureResolutionExt(pCtx: &mut SWelsDecoderContext, iWidth: u32, iHe
             (*pCtx).bHaveGotMemory = true;
             (*pCtx).pDec = None;
         } else {
-            // The buffer is not reallocated here, so report its real capacity. The `0` is
-            // unreachable — this arm *is* the pool being present — and the borrow ends
-            // before the field write, which is the discipline every `pic_pool_mut` call
-            // site keeps.
+            // **The third arm (F80/F87): same resolution, different queue size.**
+            // `decoder.cpp:493-509`. A stream that changes `num_ref_frames` without
+            // changing resolution lands here; the port had no branch for it and
+            // returned `dsOutOfMemory` from the switch onward —
+            // `tests/data/f80/num_ref_change_320x192.264` decoded 34 of 48 frames.
+            //
+            // The reference logs the transition, and that log line is ported with the
+            // behaviour it describes rather than ahead of it.
+            let capacity = pic_pool_mut(pCtx).map_or(0, |pool| pool.capacity());
+            if capacity != iPicBufSize {
+                WelsLog(
+                    &mut (*pCtx).sLogCtx,
+                    WELS_LOG_INFO,
+                    &format!(
+                        "WelsRequestMem(): memory re-alloc for no resolution change (size = {} * {}), ref list size change from {} to {}",
+                        iPicWidth, iPicHeight, capacity, iPicBufSize
+                    ),
+                );
+                let iErr = if capacity < iPicBufSize {
+                    let parse_only =
+                        crate::decoder::decoder_context::parse_only(&pCtx.pParam);
+                    let Some(pool) = pCtx.pPicBuff.as_deref_mut() else {
+                        return ERR_INFO_INVALID_PARAM;
+                    };
+                    crate::decoder::pic_queue::IncreasePicBuff(
+                        pool,
+                        parse_only,
+                        capacity,
+                        iPicWidth,
+                        iPicHeight,
+                        iPicBufSize,
+                    )
+                } else {
+                    crate::decoder::pic_queue::DecreasePicBuff(
+                        pCtx,
+                        capacity,
+                        iPicWidth,
+                        iPicHeight,
+                        iPicBufSize,
+                    )
+                };
+                if iErr != ERR_NONE {
+                    return iErr;
+                }
+                // `decoder.cpp:534-540`, which the C++ reaches from this arm as well
+                // as from the reallocating one: the pool's pictures were built at
+                // this size, and `pDec` names a slot whose occupant the resize may
+                // have moved or dropped.
+                (*pCtx).iImgWidthInPixel = iPicWidth;
+                (*pCtx).iImgHeightInPixel = iPicHeight;
+                (*pCtx).bHaveGotMemory = true;
+                (*pCtx).pDec = None;
+            }
+            // Report the pool's real capacity, resized or not. The borrow ends before
+            // the field write, which is the discipline every `pic_pool_mut` call site
+            // keeps.
             let capacity = pic_pool_mut(pCtx).map_or(0, |pool| pool.capacity());
             (*pCtx).iPicQueueNumber = capacity;
         }

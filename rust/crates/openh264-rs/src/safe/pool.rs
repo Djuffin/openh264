@@ -243,6 +243,109 @@ impl<T> Pool<T> {
         )
     }
 
+    /// Appends slots to the end of the pool.
+    ///
+    /// **This is the one place the "never grows or shrinks" contract above is
+    /// relaxed** (Phase 8b session C, T8b.C3). `WelsRequestMem`'s third arm resizes
+    /// the decoder's picture pool in place when a stream changes its reference-frame
+    /// count without changing resolution (`decoder.cpp:493-509`), and the port
+    /// answered `dsOutOfMemory` and stopped decoding — F80/F87.
+    ///
+    /// Existing slots keep their index **and their generation**, so every outstanding
+    /// handle stays valid. That is the faithful reading of `IncreasePicBuff`
+    /// (`decoder.cpp:143`), which `memcpy`s the old `PPicture` array into the front of
+    /// the new one: a picture keeps its position, so a handle keeps its meaning. New
+    /// slots start at generation 0 and no handle to them can exist yet.
+    pub fn grow(&mut self, extra: Vec<T>) {
+        #[cfg(debug_assertions)]
+        {
+            // Past every generation now live. `grow` after `reorder_and_shrink`
+            // **reuses indices the shrink dropped**, and a slot dropped at generation
+            // 0 and re-created at generation 0 would accept a handle taken before the
+            // shrink — the one confusion the counter exists to prevent.
+            // `a_dropped_slot_reused_by_a_later_grow_rejects_the_old_handle` is that
+            // case. Derived rather than stored: `Pool` sits inside structs whose size
+            // `abi_guard.rs` pins per profile, and a pool of sixteen slots makes this
+            // a sixteen-element max on a path that runs once per sequence.
+            let fresh = self
+                .generations
+                .iter()
+                .copied()
+                .max()
+                .unwrap_or(0)
+                .wrapping_add(1);
+            self.generations.resize(self.slots.len() + extra.len(), fresh);
+        }
+        self.slots.extend(extra);
+    }
+
+    /// Rebuilds the pool as `order.len()` slots, new slot `i` taking the value that
+    /// was at old index `order[i]`. Returns every value no index in `order` named, in
+    /// old-index order.
+    ///
+    /// This is `DecreasePicBuff` (`decoder.cpp:170`), which is not a truncation: when
+    /// the DPB's previously-decoded picture sits beyond the new size it is moved to
+    /// slot 0 and the rest shift up by one. The returned values are what the C++
+    /// `FreePicture`s — by construction rather than by its `if (iPrevPicIdx !=
+    /// iPicIdx)` guard, since a value can only be moved out once.
+    ///
+    /// # Generations
+    ///
+    /// A slot that receives a *different* value has its generation bumped, so a
+    /// handle made before the reorder faults on access in a debug build instead of
+    /// silently naming another picture. A slot that keeps its own value
+    /// (`order[i] == i`) keeps its generation and its handles.
+    ///
+    /// **This is stricter than the C++ and deliberately so.** There, identity is the
+    /// `SPicture*`, so a pointer held elsewhere follows its picture across the
+    /// reorder for free — and points into freed memory if the picture was dropped.
+    /// Here identity is the slot, so a caller that keeps an [`Id`] across this call
+    /// must re-derive it; the generation check is what turns "silently the wrong
+    /// picture" into a test failure. `DecreasePicBuff` re-derives the one id the C++
+    /// deliberately preserves and clears the rest, which is why nothing faults.
+    ///
+    /// # Panics
+    /// If `order` is longer than the pool, names an index out of range, or names one
+    /// twice — each would mean a slot had to be duplicated or invented, which is a
+    /// caller bug and not a state to recover from.
+    pub fn reorder_and_shrink(&mut self, order: &[usize]) -> Vec<T> {
+        let old_len = self.slots.len();
+        assert!(
+            order.len() <= old_len,
+            "reorder_and_shrink to {} slots from a pool of {old_len}",
+            order.len()
+        );
+        let mut seen = vec![false; old_len];
+        for &i in order {
+            assert!(i < old_len, "index {i} outside a pool of {old_len}");
+            assert!(!std::mem::replace(&mut seen[i], true), "index {i} named twice");
+        }
+
+        #[cfg(debug_assertions)]
+        {
+            let gens: Vec<u32> = order
+                .iter()
+                .enumerate()
+                .map(|(new_i, &old_i)| {
+                    if new_i == old_i {
+                        self.generations[old_i]
+                    } else {
+                        self.generations[old_i].wrapping_add(1)
+                    }
+                })
+                .collect();
+            self.generations = gens;
+        }
+
+        let mut old: Vec<Option<T>> = self.slots.drain(..).map(Some).collect();
+        let mut kept = Vec::with_capacity(order.len());
+        for &i in order {
+            kept.push(old[i].take().expect("each index is named at most once"));
+        }
+        self.slots = kept;
+        old.into_iter().flatten().collect()
+    }
+
     /// Replaces a slot's contents, invalidating every outstanding handle to it in
     /// debug builds.
     ///
@@ -442,6 +545,102 @@ mod tests {
     fn id_rejects_an_out_of_range_slot() {
         let p = pool_of(2);
         p.id(2);
+    }
+
+    // --- grow / reorder_and_shrink (T8b.C3) --------------------------------
+    //
+    // The generation contract across a resize, which is what `safe/pool.rs`'s
+    // "never grows or shrinks" doc used to make unnecessary. `replace`'s analogue.
+
+    #[test]
+    fn grow_appends_and_keeps_every_old_handle() {
+        let mut p = pool_of(3);
+        let old: Vec<Id> = p.ids().collect();
+        p.grow(vec![30, 40, 50]);
+        assert_eq!(p.len(), 6);
+        // the old handles still name the same values — `IncreasePicBuff` memcpy's the
+        // old array into the front, so a picture keeps its position
+        for (i, id) in old.iter().enumerate() {
+            assert_eq!(*p.get(*id), i as i32 * 10);
+        }
+        assert_eq!(*p.get(p.id(5)), 50);
+    }
+
+    #[test]
+    fn shrink_keeps_the_named_slots_and_returns_the_rest() {
+        let mut p = pool_of(5); // 0 10 20 30 40
+        let dropped = p.reorder_and_shrink(&[0, 1, 2]);
+        assert_eq!(p.len(), 3);
+        assert_eq!(dropped, vec![30, 40], "returned in old-index order");
+        assert_eq!(*p.get(p.id(0)), 0);
+        assert_eq!(*p.get(p.id(2)), 20);
+    }
+
+    #[test]
+    fn shrink_can_reorder_the_slots_it_keeps() {
+        // `DecreasePicBuff`'s first arm: the previously-decoded picture sits beyond
+        // the new size, so it moves to slot 0 and the rest shift up by one.
+        let mut p = pool_of(5); // 0 10 20 30 40
+        let dropped = p.reorder_and_shrink(&[4, 0, 1]);
+        assert_eq!(p.len(), 3);
+        assert_eq!(*p.get(p.id(0)), 40);
+        assert_eq!(*p.get(p.id(1)), 0);
+        assert_eq!(*p.get(p.id(2)), 10);
+        assert_eq!(dropped, vec![20, 30]);
+    }
+
+    /// A slot that keeps its own value keeps its handles; a slot that receives a
+    /// different value does not. Without this, a `PicId` taken before the resize
+    /// would silently name another picture — the failure `DecreasePicBuff` has to
+    /// re-derive around, and the reason it clears every `pRefPic` entry.
+    // `#[cfg]` rather than `#[ignore]`, matching
+    // `debug_builds_catch_a_handle_to_a_recycled_slot` below: generations do not
+    // exist in a release build, and plan §1.4 pins the ignored set at 20.
+    #[cfg(debug_assertions)]
+    #[test]
+    #[should_panic(expected = "stale handle")]
+    fn a_handle_to_a_reordered_slot_is_stale() {
+        let mut p = pool_of(5);
+        let slot0 = p.id(0);
+        p.reorder_and_shrink(&[4, 0, 1]); // slot 0 now holds what was at 4
+        let _ = p.get(slot0);
+    }
+
+    #[test]
+    fn a_handle_to_a_slot_that_did_not_move_survives_the_shrink() {
+        let mut p = pool_of(5);
+        let slot1 = p.id(1);
+        p.reorder_and_shrink(&[0, 1, 2]);
+        assert_eq!(*p.get(slot1), 10, "order[1] == 1, so the handle is still good");
+    }
+
+    /// Growing after a shrink must not resurrect a handle to a slot the shrink
+    /// dropped: the new occupant of that index is a different value, and the old
+    /// handle carries the pre-shrink generation.
+    #[cfg(debug_assertions)]
+    #[test]
+    #[should_panic(expected = "stale handle")]
+    fn a_dropped_slot_reused_by_a_later_grow_rejects_the_old_handle() {
+        let mut p = pool_of(4); // 0 10 20 30
+        let slot3 = p.id(3);
+        p.reorder_and_shrink(&[3, 0]); // slot 0 <- 30, slot 1 <- 0; index 3 is gone
+        p.grow(vec![70, 80]); // indices 2 and 3 exist again, holding 70 and 80
+        assert_eq!(p.len(), 4);
+        // `slot3` names index 3 at generation 0; `grow` stamps fresh slots past every
+        // generation the shrink left live, so slot 3 is not at 0 any more.
+        let _ = p.get(slot3);
+    }
+
+    #[test]
+    #[should_panic(expected = "named twice")]
+    fn shrink_rejects_a_duplicated_index() {
+        pool_of(4).reorder_and_shrink(&[1, 1]);
+    }
+
+    #[test]
+    #[should_panic(expected = "outside a pool")]
+    fn shrink_rejects_an_out_of_range_index() {
+        pool_of(4).reorder_and_shrink(&[0, 9]);
     }
 
     #[test]
