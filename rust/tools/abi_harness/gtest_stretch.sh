@@ -4,6 +4,7 @@
 # stretch; made a gate in Phase 8b session A, T8b.A1).
 #
 #   usage: rust/tools/abi_harness/gtest_stretch.sh [--check] [--filter=<gtest pattern>]
+#                                                  [--seeds=<A>..<B>]
 #
 #     (no flags)      build + link both binaries, run both, print the two tallies and
 #                     the Rust failures **by assertion site** (S47: a fixture name is
@@ -20,6 +21,23 @@
 #                     "listed test did not run" check is suppressed (the filter is
 #                     why it did not run); the other two still apply, so a
 #                     per-family run is a real red/green.
+#     --seeds=A..B    **the finder, not a gate.** Runs the whole suite once per seed
+#                     in [A,B] on *both* links and prints, per seed, the rows each
+#                     link failed and — the reason it exists — the rows the Rust link
+#                     failed that the C++ link did not. Roughly 80 s per seed (two
+#                     full suites). Ignores `--check`.
+#
+# **S49 — the seed is pinned (Phase 8b session B, T8b.B1).** `test/api`'s own `main`
+# (`test/api/simple_test.cpp:20-24`) seeds `rand()` from `time(NULL)` unless its first
+# non-gtest argument is `--seed=N`; a dozen encoder tests build their input from
+# `rand()`, so before this every run was a different suite and the ratchet's tally was
+# a sample rather than a measurement. `EncodeDecodeTestAPI.SetOptionECIDC_SpecificFrameChange`
+# was red **once in seven** unseeded runs at `5478ae7e` and green the other six (F88) —
+# a gate that flips on its own is a gate that gets ignored. `SEED` below is passed to
+# every run of both binaries, so `--check` is reproducible and the two links are
+# compared on the *same* streams. Changing it re-samples the suite and will move rows:
+# treat it as a baseline, and if it must move, move it in a commit that says why and
+# re-owns whatever the new sample turns red.
 #
 # **Before T8b.A1 this was a number, not a gate**, because 199 tests the port failed
 # 44 of would have been red on day one and a gate nobody can make green gets ignored.
@@ -44,13 +62,18 @@ LIST="$HERE/gtest_known_failures.txt"
 mkdir -p "$OUT"
 cd "$ROOT" || exit 1
 
+# The pinned suite seed (S49). One constant, both links, every mode. See the header.
+SEED=20260822
+
 CHECK=0
 FILTER=""
+SEEDS=""
 for arg in "$@"; do
   case "$arg" in
     --check)    CHECK=1 ;;
     --filter=*) FILTER="${arg#--filter=}" ;;
-    *) sed -n '2,30p' "$0"; exit 2 ;;
+    --seeds=*)  SEEDS="${arg#--seeds=}" ;;
+    *) sed -n '2,46p' "$0"; exit 2 ;;
   esac
 done
 
@@ -71,17 +94,23 @@ DYL="$CRATE/target/release/libopenh264_rs.dylib"
 echo "=== linking test/api against the Rust cdylib"
 c++ -std=c++11 -o "$OUT/api_gtest_rust" test/api/*.o "$OUT/common_tables.o" "$OUT/crt_util_safe_x.o" \
     "$ROOT/libgtest.a" "$DYL" -lpthread -Wl,-rpath,"$(dirname "$DYL")" || exit 1
-if [ "$CHECK" -eq 0 ]; then
+# `--seeds` compares the two links, so it needs the reference binary even though it
+# is not the `--check` path.
+if [ "$CHECK" -eq 0 ] || [ -n "$SEEDS" ]; then
   echo "=== linking test/api against libopenh264.a (the reference)"
   c++ -std=c++11 -o "$OUT/api_gtest_cxx" test/api/*.o "$OUT/common_tables.o" "$OUT/crt_util_safe_x.o" \
       "$ROOT/libgtest.a" "$ROOT/libopenh264.a" -lpthread || exit 1
 fi
 
 # Every number below is parsed out of one of these logs; nothing is counted twice.
-run_one() {  # $1 = binary, $2 = label  -> writes $OUT/$2.log
-  local args=()
+run_one() {  # $1 = binary, $2 = label, [$3 = seed]  -> writes $OUT/$2.log
+  # `--seed=` first: `simple_test.cpp:21` reads it out of **argv[1]**, and it only
+  # gets there because `InitGoogleTest` has already removed `--gtest_filter` from in
+  # front of it. Putting it first means the read is right whether or not gtest
+  # recognises whatever else is on the line.
+  local args=("--seed=${3:-$SEED}")
   [ -n "$FILTER" ] && args+=("--gtest_filter=$FILTER")
-  "$1" "${args[@]+"${args[@]}"}" > "$OUT/$2.log" 2>&1
+  "$1" "${args[@]}" > "$OUT/$2.log" 2>&1
 }
 
 tally_line() {  # $1 = label
@@ -111,6 +140,44 @@ ran_tests() { awk '/^\[ RUN      \]/ { print $4 }' "$1"; }
 
 # The allowlist, name-only, comments and blanks dropped.
 list_names() { grep -vE '^[[:space:]]*(#|$)' "$LIST" | sed 's/[[:space:]]*|.*//'; }
+
+# ---------------------------------------------------------------------------
+# --seeds=A..B: the finder. Not a gate — it prints evidence.
+#
+# A `--gtest_filter` changes the `rand()` call sequence, so a per-test repro of a
+# seed-dependent failure does not exist: the seed pins the **suite**, and the row
+# only fails inside the whole run. That is why this mode runs the full suite per
+# seed rather than the family.
+# ---------------------------------------------------------------------------
+if [ -n "$SEEDS" ]; then
+  lo=${SEEDS%%..*}; hi=${SEEDS##*..}
+  case "$lo$hi" in *[!0-9]*|"") echo "--seeds wants A..B, both integers"; exit 2 ;; esac
+  [ "$hi" -ge "$lo" ] || { echo "--seeds: A must be <= B"; exit 2; }
+  work=$(mktemp -d); trap 'rm -rf "$work"' EXIT
+  # A `while` and not `seq`: BSD `seq` prints a seed of this magnitude as
+  # `2.02608e+07`, which `atoi` then reads as **2** — every run would silently use
+  # the same wrong seed. The `Random seed:` echo-back below is what caught it, and it
+  # stays for the next such trap.
+  seed=$lo
+  while [ "$seed" -le "$hi" ]; do
+    echo
+    echo "=== seed $seed"
+    run_one "$OUT/api_gtest_rust" "rust_$seed" "$seed"
+    run_one "$OUT/api_gtest_cxx"  "cxx_$seed"  "$seed"
+    for lbl in rust cxx; do
+      grep -q "^Random seed: $seed\$" "$OUT/${lbl}_$seed.log" \
+        || echo "  !! $lbl did not report 'Random seed: $seed' — the seed did not reach main()"
+      tally_line "${lbl}_$seed"
+      sites "$OUT/${lbl}_$seed.log" | cut -f1 | sort -u > "$work/$lbl"
+    done
+    echo "  --- rust failures the C++ link does not share (the port's, at this seed):"
+    comm -23 "$work/rust" "$work/cxx" | sed 's/^/    /'
+    echo "  --- failures both links share (upstream's, at this seed):"
+    comm -12 "$work/rust" "$work/cxx" | wc -l | sed 's/^/    /;s/$/ rows/'
+    seed=$((seed + 1))
+  done
+  exit 0
+fi
 
 if [ "$CHECK" -eq 0 ]; then
   echo
