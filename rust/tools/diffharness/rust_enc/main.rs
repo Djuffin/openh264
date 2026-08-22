@@ -172,16 +172,18 @@ fn main() {
 
         p.bEnableDenoise = denoise != 0;
         if dlayers > 1 {
+            let template = p.sSpatialLayers[0];
             p.iSpatialLayerNum = dlayers;
-            p.iTargetBitrate *= dlayers;
             for i in 0..dlayers as usize {
-                p.sSpatialLayers[i] = p.sSpatialLayers[0];
+                p.sSpatialLayers[i] = template;
                 p.sSpatialLayers[i].iVideoWidth = w >> (dlayers - 1 - i as i32);
                 p.sSpatialLayers[i].iVideoHeight = h >> (dlayers - 1 - i as i32);
                 p.sSpatialLayers[i].fFrameRate = 30.0;
                 p.sSpatialLayers[i].iSpatialBitrate = p.iTargetBitrate;
                 p.sSpatialLayers[i].iMaxSpatialBitrate = UNSPECIFIED_BIT_RATE;
             }
+            // See cxx_enc.cpp: the multiply comes after, as BaseEncoderTest does it.
+            p.iTargetBitrate *= dlayers;
         }
         }
 

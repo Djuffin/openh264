@@ -28,54 +28,36 @@
 # tests in `paraset_strategy.rs` that pin the class-tree asymmetries — the ones a
 # tidier `match` would quietly erase.
 
-# --- decode_api_test.cpp:888 — parse-only, what is left of it ----------------
-# **T8b.B2 ported `DecodeParser` and its two siblings left.** `SpecSliceLoss` and
-# `SpecStatistics` pass and their rows are gone; what remains is `ParseOnly_General`,
-# and it no longer fails for a parse-only reason at all — its encoder asks for three
-# spatial layers and `InitializeExt` refuses under S48 (T8b.A5), which is 8b.C's
-# downsample. The parse-only machinery behind it is in place: the referee is
+# --- decode_api_test.cpp:888 — parse-only: nothing left ----------------------
+# T8b.B2 ported `DecodeParser` and its two siblings; `ParseOnly_General` was the last
+# row here and it was never a parse-only failure — its encoder asks for three spatial
+# layers, which `InitializeExt` refused under S48. **T8b.C2 ported
+# `METHOD_DOWNSAMPLE` and it passes.** The parse-only referees stand:
 # `tests/decoder_parseonly_parity_test.rs` against `ecref --parse-only` goldens, and
-# `abi_harness parseonly` runs the same rows through the dylib.
-DecodeParseAPI.ParseOnly_General | 8b.C | 3 spatial layers: InitializeExt refuses at decode_api_test.cpp:888 (S48, T8b.A5). No longer a parse-only row — DecodeParser is ported (T8b.B2)
+# `abi_harness parseonly` through the dylib.
 
-# --- BaseEncoderTest.cpp:92 and friends — downsample REFUSES at init
-# --- (S48, T8b.A5) ----------------------------------------------------------
-# **T8b.C1 ported `METHOD_DENOISE`** (`processing/denoise.rs`), so `/4` is gone and
-# `bEnableDenoise` no longer refuses. `METHOD_DOWNSAMPLE` is still untranslated
-# (`processing/mod.rs`). Until T8b.A5 asking for either **succeeded** and
-# produced wrong output: `BilateralDenoising` is an empty body, and
-# `DownsamplePadding` returns `RET_NOTSUPPORTED` while both callers drop it, so a
-# lower spatial layer is encoded from whatever the picture pool last held. S48 says
-# a feature this phase cannot finish refuses at the entry point, so
-# `ParamValidationExt` now returns `ENC_RETURN_UNSUPPORTED_PARA` and `InitializeExt`
-# answers `cmInitParaError`.
+# --- denoise / downsample: all seventeen rows gone (T8b.C1, T8b.C2) ----------
+# `METHOD_DENOISE` (`processing/denoise.rs`) and `METHOD_DOWNSAMPLE`
+# (`processing/downsample.rs`) are ported, so S48's two refusals in
+# `ParamValidationExt` are gone and every row that sat behind them passes:
+# `EncoderOutputTest/4` (denoise), `/5` and `/7` (2 and 4 spatial layers, the two
+# rows that hash), the twelve `EncodeDecodeTestAPI` multi-layer rows, the three
+# `GetOptionTid_SVC_L1_NOLOSS` instances and `ParseOnly_General`.
 #
-# **That cost 14 rows that were passing**, and they were passing by not looking:
-# every one asserts on API behaviour (codes, frame counts, layer ids) and none on
-# bytes, so the un-downsampled lower layers went unnoticed. `EncoderOutputTest/5`
-# and `/7` are the two that *do* hash, and they failed before and after. All 17 of
-# these rows come back together when session C ports the two plugins.
+# **Those fourteen API rows had been passing before T8b.A5 by never looking**: they
+# assert on codes, frame counts and layer ids, none on bytes, so lower layers built
+# from whatever the picture pool last held went unnoticed. They pass now for the
+# right reason — the referees are five targeted `cxx_enc`/`rust_enc` pairs, all
+# byte-identical: 2 layers at 320x192, 3 layers at 320x192, **4 layers at 1280x720**,
+# 2 layers + denoise, and denoise alone. Plus the `dl` sweep preset, which is the
+# only preset that runs the downsampler at all.
 #
-# The tally before this refusal was **179/199** (T8b.A4); it is the honest number
-# for "how much of the reference does the port implement", and 165/199 is the
-# honest number for "how much of the reference does the port implement *without
-# lying about it*". The charter's S48 chooses the second.
-EncodeFile/EncoderOutputTest.CompareOutput/5 | 8b.C | downsample refuses at init (S48, T8b.A5); 2 spatial layers
-EncodeFile/EncoderOutputTest.CompareOutput/7 | 8b.C | downsample refuses at init (S48, T8b.A5); 4 spatial layers
-EncodeDecodeTestAPI.SimulcastAVC | 8b.C | multi-layer: refuses at init (S48, T8b.A5) — passed before by never checking bytes
-EncodeDecodeTestAPI.SimulcastAVCDiffFps | 8b.C | multi-layer: refuses at init (S48, T8b.A5) — passed before by never checking bytes
-EncodeDecodeTestAPI.SimulcastAVC_SPS_PPS_LISTING | 8b.C | multi-layer: refuses at init (S48, T8b.A5) — passed before by never checking bytes
-EncodeDecodeTestAPI.SimulcastSVC | 8b.C | multi-layer: refuses at init (S48, T8b.A5) — passed before by never checking bytes
-EncodeDecodeTestAPI.DiffSlicingInDlayer | 8b.C | multi-layer: refuses at init (S48, T8b.A5) — passed before by never checking bytes
-EncodeDecodeTestAPI.DiffSlicingInDlayerMixed | 8b.C | multi-layer: refuses at init (S48, T8b.A5) — passed before by never checking bytes
-EncodeDecodeTestAPI.AVCSVCExtensionCheck | 8b.C | multi-layer: refuses at init (S48, T8b.A5) — passed before by never checking bytes
-EncodeDecodeTestAPI.SetOptionEncParamExt | 8b.C | multi-layer: refuses at init (S48, T8b.A5) — passed before by never checking bytes
-EncodeDecodeTestAPI.SetOptionEncParamBase | 8b.C | multi-layer: refuses at init (S48, T8b.A5) — passed before by never checking bytes
-EncodeDecodeTestAPI.Engine_SVC_Switch_I | 8b.C | multi-layer: refuses at init (S48, T8b.A5) — passed after T8b.A3/A4, refuses now
-EncodeDecodeTestAPI.Engine_SVC_Switch_P | 8b.C | multi-layer: refuses at init (S48, T8b.A5) — passed after T8b.A3/A4, refuses now
-EncodeDecodeTestAPIBase/EncodeDecodeTestAPI.GetOptionTid_SVC_L1_NOLOSS/0 | 8b.C | multi-layer: refuses at init (S48, T8b.A5) — passed after T8b.A3, refuses now
-EncodeDecodeTestAPIBase/EncodeDecodeTestAPI.GetOptionTid_SVC_L1_NOLOSS/1 | 8b.C | multi-layer: refuses at init (S48, T8b.A5) — passed after T8b.A3, refuses now
-EncodeDecodeTestAPIBase/EncodeDecodeTestAPI.GetOptionTid_SVC_L1_NOLOSS/2 | 8b.C | multi-layer: refuses at init (S48, T8b.A5) — passed after T8b.A3, refuses now
+# `/5` and `/7` carry *two* golden hashes each, upstream's hedge against
+# vertical-vs-horizontal averaging order. The port needs neither indulgence: it is
+# byte-identical to the reference, so it matches whichever of the two the reference
+# produces. See F97 — the `_c` and NEON kernels agree bit for bit, and the real trap
+# was the aarch64 dispatch *table*, which binds general-ratio luma to the accurate
+# downsampler where the scalar table binds the fast one.
 
 # --- BaseEncoderTest.cpp:92 / encode_options_test.cpp:2195 / encoder_test.cpp:323
 # --- screen content ----------------------------------------------------------

@@ -1673,12 +1673,55 @@ impl CWelsPreProcess {
             sDstPicMap.eFormat = VideoFormat::videoFormatI420;
 
             if iSrcWidth != iShrinkWidth || iSrcHeight != iShrinkHeight {
-                // METHOD_DOWNSAMPLE: untranslated (`crate::processing`). The C++
-                // runs the downsampler here; the port's dispatch returned
-                // `RET_NOTSUPPORTED`, which is what `iRet` carries to the caller.
-                // Reached only with more than one spatial layer or a resized
-                // layer, off in every gate configuration (S18: no stub).
-                iRet = crate::processing::vaacalc::RET_NOTSUPPORTED;
+                // **`METHOD_DOWNSAMPLE`, ported in Phase 8b session C (T8b.C2).**
+                // This was `iRet = RET_NOTSUPPORTED` — and *both* callers dropped
+                // `iRet`, so a lower spatial layer was encoded from whatever the
+                // picture pool last held. Every multi-layer row in the gtest
+                // allowlist was this one line.
+                //
+                // The scratch is moved out of the plugin first: the two pictures
+                // and `m_vp` are all behind this `&mut self`, and the borrows are
+                // disjoint in fact but not in what a method call can express (the
+                // same shape `BilateralDenoising` has). `src_pair_mut` is safe to
+                // use here because this arm runs only when the two differ in size,
+                // so they cannot be the same picture.
+                let mut scratch =
+                    std::mem::take(&mut self.m_vp.sDownsample.m_pSampleBuffer);
+                let (srcPic, dstPic) = self.src_pair_mut(srcRef, dstRef);
+                {
+                    let [sy, su, sv] = srcPic.planes_mut3();
+                    let srcStride = [sy.stride(), su.stride(), sv.stride()];
+                    let (soy, sou, sov) = (sy.origin(), su.origin(), sv.origin());
+                    let src = crate::processing::downsample::DownsampleSrc {
+                        planes: [
+                            &sy.as_slice()[soy..],
+                            &su.as_slice()[sou..],
+                            &sv.as_slice()[sov..],
+                        ],
+                        stride: srcStride,
+                        width: iSrcWidth,
+                        height: iSrcHeight,
+                    };
+                    let [dy, du, dv] = dstPic.planes_mut3();
+                    let dstStride = [dy.stride(), du.stride(), dv.stride()];
+                    let (doy, dou, dov) = (dy.origin(), du.origin(), dv.origin());
+                    let mut dst = crate::processing::downsample::DownsampleDst {
+                        planes: [
+                            &mut dy.as_mut_slice()[doy..],
+                            &mut du.as_mut_slice()[dou..],
+                            &mut dv.as_mut_slice()[dov..],
+                        ],
+                        stride: dstStride,
+                        width: iShrinkWidth,
+                        height: iShrinkHeight,
+                    };
+                    iRet = crate::processing::downsample::Downsample(
+                        &mut scratch,
+                        &src,
+                        &mut dst,
+                    );
+                }
+                self.m_vp.sDownsample.m_pSampleBuffer = scratch;
             } else {
                 WelsMoveMemory_c(
                     pDstPic.pData[0],

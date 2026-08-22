@@ -16,6 +16,9 @@
 #             ltr   bEnableLongTermReference on, x LTR feedback bitmask
 #                   x intra period                                        (16 configs)
 #             ps    all 5 eSpsPpsIdStrategy values x cabac x GOP x input  (60 configs)
+#             dl    iSpatialLayerNum 2/3/4 x denoise on/off x GOP x cabac x
+#                   input, plus 720p x layers 2/4 x denoise                (76 configs)
+#                   -- the only preset that runs METHOD_DOWNSAMPLE at all
 #             all   every preset above
 #
 # st and mt encode SWEEP_FRAMES (default 16, rounded up to 18-20 by looping) frames
@@ -297,6 +300,53 @@ sweep_ps() {
   done
 }
 
+sweep_dl() {
+  echo "-- preset: dl"
+  local YUV W H n dn gop cabac name
+  # **Dependency layers — the preset that exercises `METHOD_DOWNSAMPLE`, and with
+  # `dn=1` `METHOD_DENOISE` alongside it (Phase 8b session C, T8b.C2).** Until that
+  # session the port refused both at `InitializeExt` (S48), so neither had a single
+  # byte of coverage; 17 gtest rows were allowlisted behind the pair.
+  #
+  # Layer geometry is `BaseEncoderTest`'s own (`test/api/BaseEncoderTest.cpp:43`):
+  # layer i is the input halved `n - 1 - i` times. So `n` here is also the number of
+  # cascaded halvings the downsampler performs, and `n=4` at 1280x720 is the case
+  # that distinguishes a correct port from an obvious-but-wrong one — see F98: the
+  # reference reaches 4:1 by halving *twice through a scratch buffer*, not by the
+  # quarter kernel a reading of `Process`'s first arm would suggest.
+  #
+  # **No CPU-flag forcing here, and that is a measured decision, not an oversight.**
+  # `libopenh264.a` dispatches to AArch64 NEON downsamplers and the port translates
+  # the `_c` ones; `rust/tools/vp_kernel_probe/` shows the two are bit-identical on
+  # every kernel with a sibling (F97), so `cxx_enc` is a fair referee as it stands.
+  # What is *not* interchangeable is the table: aarch64 binds general-ratio luma to
+  # the accurate wrapper where the scalar table binds the fast one, and the port
+  # follows aarch64.
+  for spec in "${INPUTS[@]}"; do
+    read -r YUV W H <<< "$spec"
+    name=$(basename "$YUV" .yuv)
+    loopfile "$YUV" "$W" "$H" "$ST_FRAMES"
+    for n in 2 3 4; do
+      for dn in 0 1; do
+        for gop in -1 4; do
+          for cabac in 0 1; do
+            check "dl $name layers=$n denoise=$dn gop=$gop cabac=$cabac" \
+                  "$LOOP_PATH" "$W" "$H" "$LOOP_FRAMES" 26 "$cabac" "$gop" 0 0 0 1 1 0 0 30 0 0 "$n" "$dn"
+          done
+        done
+      done
+    done
+  done
+  # 720p, where the halvings actually cascade: 1280 -> 640 -> 320 -> 160.
+  loopfile "res/Cisco_Absolute_Power_1280x720_30fps.yuv" 1280 720 6
+  for n in 2 4; do
+    for dn in 0 1; do
+      check "dl 720p layers=$n denoise=$dn" \
+            "$LOOP_PATH" 1280 720 "$LOOP_FRAMES" 26 0 -1 0 0 0 1 1 0 0 30 0 0 "$n" "$dn"
+    done
+  done
+}
+
 sweep_qp() {
   echo "-- preset: qp"
   local YUV W H qp cabac
@@ -322,7 +372,8 @@ for preset in "$@"; do
     sl)  sweep_sl ;;
     ltr) sweep_ltr ;;
     ps)  sweep_ps ;;
-    all) sweep_st; sweep_mt; sweep_qp; sweep_def; sweep_sl; sweep_ltr; sweep_ps ;;
+    dl)  sweep_dl ;;
+    all) sweep_st; sweep_mt; sweep_qp; sweep_def; sweep_sl; sweep_ltr; sweep_ps; sweep_dl ;;
     *)   echo "unknown preset: $preset" >&2; exit 2 ;;
   esac
 done
