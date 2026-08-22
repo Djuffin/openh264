@@ -204,13 +204,19 @@ fi
 # ---------------------------------------------------------------------------
 sweep_gate() {  # $1 = profile
   local prof=$1 log="$LOGS/sweep_$1.log" rc t0 t1
-  hdr "diffharness sweep st mt def sl ltr ($prof)"
+  hdr "diffharness sweep st mt def sl ltr ps dl ($prof)"
   if ! RUST_ENC_PROFILE="$prof" bash "$DIFF/build.sh" > "$LOGS/build_$prof.log" 2>&1; then
     fail "sweep ($prof): harness build failed — see $LOGS/build_$prof.log"
     return
   fi
   t0=$(date +%s)
-  RUST_ENC_PROFILE="$prof" bash "$DIFF/sweep.sh" st mt def sl ltr 2>&1 | tee "$log" | tail -20
+  # **`ps` and `dl` joined the exit list in Phase 8b (T8b.B3 and T8b.C2).** Both
+  # cover axes the port *refused at `InitializeExt`* until this phase, so neither
+  # had a byte of coverage and neither could have been in this list before:
+  # `ps` is the five `eSpsPpsIdStrategy` values, `dl` is `iSpatialLayerNum` 2/3/4 x
+  # denoise on/off — the only preset that runs `METHOD_DOWNSAMPLE` or
+  # `METHOD_DENOISE` at all. 369 -> 505 configurations per profile.
+  RUST_ENC_PROFILE="$prof" bash "$DIFF/sweep.sh" st mt def sl ltr ps dl 2>&1 | tee "$log" | tail -20
   rc=${PIPESTATUS[0]}
   t1=$(date +%s)
   local tally wall=$((t1 - t0))
