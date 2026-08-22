@@ -81,4 +81,4 @@ EncoderInitTest.ScreenContentScrollMotionVectorBounds | 10 | screen content: the
 # Deliberate divergence, argued at decoder_conformance_test.rs:238 and corroborated
 # by the JVT gold for CABA2_SVA_B, which upstream itself fails. D-poc-1 is the
 # user's call: keep (JVT-correct) or match upstream (bug-compatible drop-in).
-DecodeFile/DecoderOutputTest.CompareOutput/39 | D-poc-1 | deliberate POC tiebreak divergence, pending the user's ruling
+DecodeFile/DecoderOutputTest.CompareOutput/39 | D-poc-1 | decided 2026-08-22: the port keeps the JVT-correct POC tiebreak (decoder_conformance_test.rs:238) — permanent row, by design
