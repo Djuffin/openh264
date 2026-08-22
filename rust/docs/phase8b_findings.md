@@ -788,3 +788,60 @@ stays identical, and `compare_all.sh` is unchanged at **2902/17 output, 2919/0 c
 `decoder_core.cpp:2713`'s trace line — *"reference picture introduced by this frame is
 lost during transmission!"* — is ported in the same commit, as the brief asked: it is
 the line that named the arm, and it belongs with the fix rather than ahead of it.
+
+## F95 — corrected: `find_stub_bodies.py` was blind to the C-ABI thunks, but not because of `abi_guard!`
+
+F95 read the symptom right and the cause wrong. The symptom:
+
+```text
+DecodeParser         [0 Rust statements vs 37 C++]
+DecodeFrame          [0 Rust statements vs 13 C++]
+DecodeFrameNoDelay   [0 Rust statements vs 12 C++]
+FlushFrame           [0 Rust statements vs  7 C++]
+```
+
+— all four with full bodies, all four reading as stubs, so the tool's signal on the
+port's twenty C-ABI entry points was zero in both directions.
+
+F95 attributed that to the statement count "seeing a macro call" through
+`abi_guard!`. **Measured, that is not it.** `decoder_decode_parser_c`'s body strips to
+*five* semicolons and the counter counts them correctly; the macro is transparent to a
+`;` count because its block is inside the same braces.
+
+The actual cause is `rust_for`'s lookup order:
+
+```python
+if name in rust:
+    return rust[name]
+alias = ALIASES.get(name)
+return rust.get(alias) if alias else None
+```
+
+Each of the twenty slots has **two** Rust functions — the thunk that does the work
+(`decoder_decode_parser_c`) and an inline vtable trampoline named for the slot
+(`ISVCDecoder::DecodeParser`, one expression, no semicolons). The name-first lookup
+found the trampoline every time and the `ALIASES` table, added at T8b.A2 for exactly
+this, was **never consulted for any of them**. That is F85's shape one level up: a
+same-named thing shadowing the real one, in the instrument built to find same-named
+things shadowing real ones.
+
+**Fixed at T8b.C5** — the alias wins when there is one. The four rows above now read
+`DecodeParser [5 vs 37]`, `DecodeFrameNoDelay [2 vs 12]`, and `DecodeFrame` and
+`FlushFrame` leave the short list entirely, correctly measured as not short. The
+empty-body section drops from 9 rows to 3 for the same reason.
+
+## F100 — two encoder trace surfaces are empty bodies
+
+With F95's lookup fixed, the empty-body rule reports three rows and two of them are
+real. `CWelsH264SVCEncoder::LogStatistics` (`welsEncoderExt.cpp`, 4 statements) and
+`CWelsH264SVCEncoder::TraceParamInfo` (44 statements) are `{}` in
+`wels_encoder_ext.rs`.
+
+Both are **pure logging** — read and verified: `LogStatistics` is one `WelsLog` per
+dependency layer over `sEncoderStatistics`, and `TraceParamInfo` is two `WelsLog`s
+spelling out an `SEncParamExt`. Neither writes a field, so no byte gate can see them
+and none has. They belong with the rest of the trace-surface work (the port emits 4 of
+the reference's 24 lines on `Error_I_P.264` at `--trace=8`, F96's note).
+
+**Owner: Phase 9.** The third row, `GetCPUCount` returning `1`, is D3 — the port is
+single-threaded by decision — and is not a gap.
