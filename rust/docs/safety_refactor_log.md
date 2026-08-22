@@ -14956,3 +14956,67 @@ Wired into `gates.sh` as gate **6c**, beside the two ABI gates and in their shap
 script's own "prerequisites missing" code and SKIPs loudly with the remedy rather
 than reporting a codec failure that was never measured. The exit battery's gate list
 grows by one: `PASS  gtest test/api: 155/199, allowlist 44`.
+
+### T8b.A2 — the census: what the reference has and this port does not
+
+Two instruments, one question each. `find_stub_bodies.py` asks "does the Rust body do
+less than the C++ one" and can only ask it about functions the port already *has*;
+nothing asked **what is not there at all**. F80, the listing strategies, the two
+plugins and the two option feeders were each found by accident, one at a time, over
+four phases.
+
+**The widened stub finder.** `codec/{decoder,encoder}/plus/src` joined `CPP_DIRS` —
+the whole public entry-point layer had never been compared against anything. An
+**empty-body rule** (a Rust body that is empty or one bare literal, opposite a C++
+body of ≥ 2 statements) reports S46's case in its own section. And the **alias table**,
+shared with `port_census.py`, maps upstream's C++ methods to the port's vtable thunks:
+without it the C++ `DecodeParser` was diffed against a Rust *vtable trampoline* of the
+same name and came out clean, while the real `decoder_decode_parser_c` returns
+`dsErrorFree` and writes nothing.
+
+**The instrument's own blind spot, found in it.** `if len(body) > len(bodies.get(…))`
+means `len("") > len("")` — false — so **an empty body was never stored at all**.
+`GetVclNalTemporalId` vanished from the map before any rule could look at it. The
+empty-body rule found nothing until that line changed. 223 flagged → **241**, and 9
+empty/constant bodies.
+
+**`port_census.py`** is new: every C++ definition under
+`codec/{decoder,encoder,processing,common}/**/src` checked for a same-name Rust one,
+SIMD directories *and* SIMD-suffixed names excluded (`mc.cpp` alone holds 168 of the
+latter). Two mechanical renames are applied as a fallback — the `_c` scalar-kernel
+suffix and the `Wels`/`CWels` prefix with CamelCase (`WelsI8x8LumaPredDDR_c` →
+`i8x8_luma_pred_ddr`); 29 rows match only that way and each was spot-read.
+
+**1351 definitions · 1064 present · 287 missing by name → 153 dead, 92 renamed, 42
+missing, 0 unclassified.** All judgement lives in
+`tools/port_census_classification.txt` (a rule per name or per file, each with its
+evidence), and `--classify` prints what no rule covers — so the *next* unported
+function shows up as `UNCLASSIFIED` on the next run rather than as an accident four
+phases later.
+
+The 42 real gaps are owned: **8b.B 9** (listing strategies, `ParseAccessUnit`),
+**8b.C 12** (downsample 594 C++ lines, denoise 250), **Phase 10 19** (scroll
+detection, screen complexity analysis, feature-search storage, VAA screen buffers,
+`imagerotate`), **F80 2**. Session A owns none of them — its own work was all
+present-but-wrong, which is the other tool's column.
+
+`dead` is 101 threaded (T7.B4/D-mt-1 and D3) · 23 runtime and allocator · 17 SIMD
+dispatch · 12 debug and trace. Worth stating: the 18 `MBPad*_c`/`PadMB*_c` kernels
+*look* like a live decode path (`decode_slice.cpp:1731`) and are not — their caller
+`WelsDecodeAndConstructSlice` is reached only under `iThreadCount > 1`
+(`decoder_core.cpp:2727`).
+
+**Red-proof**: all six things the brief required the census to contain are in it —
+`IncreasePicBuff`, `DecreasePicBuff` (missing, with sizes), `GetVclNalTemporalId`
+(empty-body section), `DecodeParser`'s body (flagged, naming the seven C++ calls it
+does not make), the three listing-strategy classes' methods (split across both
+sections), and the denoise/downsample plugins (12 missing rows). Written up in
+`docs/phase8b_port_census.md`.
+
+Two findings filed while classifying: **F84** — the port's own
+`WelsDecodeAndConstructSlice` and `WelsDeblockingFilterMB` have zero callers (the
+threaded path, transliterated then orphaned; S18 candidates). **F85** — the stub
+finder keys the C++ map by bare name and keeps the longest body, so
+`CWelsDecoder::GetOption` (53 statements) is invisible behind
+`CWelsH264SVCEncoder::GetOption` (230); same-named methods on two classes are
+un-diffable by that tool.

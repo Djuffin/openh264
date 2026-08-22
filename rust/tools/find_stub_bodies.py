@@ -21,9 +21,17 @@ calls made through a local binding or a function pointer, and anything Rust
 spells as an operator or method. False negatives are what matter: a name in the
 C++ body that is absent from the Rust body is worth a look every time.
 
+**Known limitation (F85).** The C++ map is keyed by bare function name and keeps the
+*longest* body when a name is defined more than once, so two classes with a method of
+the same name collapse into one row: `CWelsDecoder::GetOption` (53 statements) is
+invisible behind `CWelsH264SVCEncoder::GetOption` (230). Anything the decoder's
+version calls and the encoder's does not is therefore un-diffable by this tool. Read
+`port_census.py --classify` and the reference beside it when the name is a method.
+
 Exit status is always 0; this is a reading aid, not a gate.
 """
 
+import importlib.util
 import re
 import sys
 from pathlib import Path
@@ -34,6 +42,14 @@ CPP_DIRS = [
     ROOT / "codec/decoder/core/src",
     ROOT / "codec/common/src",
     ROOT / "codec/processing/src",
+    # **T8b.A2.** The two `plus` directories were missing, so the whole public
+    # entry-point layer — `CWelsDecoder::GetOption`/`SetOption`/`DecodeParser`,
+    # `CWelsH264SVCEncoder::ForceIntraFrame` and their neighbours — was never
+    # compared against anything. F80 and the 21 `GetOption` gtest rows were both
+    # in this blind spot. The matching Rust files are `api/codec_api.rs` and
+    # `encoder/wels_encoder_ext.rs`, already inside RUST_DIRS.
+    ROOT / "codec/decoder/plus/src",
+    ROOT / "codec/encoder/plus/src",
 ]
 RUST_DIRS = [
     ROOT / "rust/crates/openh264-rs/src/encoder",
@@ -99,7 +115,12 @@ def cpp_bodies(files):
                 continue
             body = brace_body(text, text.index("{", m.end() - 1))
             # Prefer the longest definition when a name appears more than once.
-            if len(body) > len(bodies.get(name, ("", ""))[0]):
+            # `name not in bodies` is not redundant: `len("") > len("")` is false,
+            # so without it an **empty body is never stored at all** — the name
+            # simply vanishes from the map. That is how `GetVclNalTemporalId`'s
+            # `{}` stayed invisible to this tool even after the empty-body rule
+            # was added (T8b.A2). The instrument had S46's own blind spot.
+            if name not in bodies or len(body) > len(bodies[name][0]):
                 bodies[name] = (body, path)
     return bodies
 
@@ -114,13 +135,63 @@ def rust_bodies(files):
             if brace < 0:
                 continue
             body = brace_body(text, brace)
-            if len(body) > len(bodies.get(name, ("", ""))[0]):
+            if name not in bodies or len(body) > len(bodies[name][0]):  # see cpp_bodies
                 bodies[name] = (body, path)
     return bodies
 
 
+# **T8b.A2: the plus layer is named differently on the two sides.** Upstream's
+# entry points are C++ methods (`CWelsDecoder::DecodeParser`); the port's are
+# `extern "C"` thunks named for the vtable slot (`decoder_decode_parser_c`). Without
+# this, a name-keyed comparison either found nothing (no Rust `DecodeParser`) or —
+# worse — matched a *different* Rust function that happened to share the name, which
+# is what happened here: the C++ `DecodeParser` was compared against a vtable
+# trampoline and came out clean while the real thunk returned `dsErrorFree` and
+# wrote nothing. One table, shared with `port_census.py`, so the two tools cannot
+# disagree about what corresponds to what.
+_census = importlib.util.spec_from_file_location(
+    "port_census", Path(__file__).resolve().parent / "port_census.py"
+)
+_mod = importlib.util.module_from_spec(_census)
+_census.loader.exec_module(_mod)
+ALIASES = _mod.ALIASES
+
+
 def calls(body):
     return {i for i in IDENT.findall(body) if i not in IGNORE}
+
+
+# --- T8b.A2: the empty case, which the call-set diff cannot see ---------------
+#
+# S46. This tool diffs *call sets*, so a C++ body that only assigns is a
+# zero-call body and a Rust `{}` calls zero things — equal, and not flagged.
+# `GetVclNalTemporalId` (`decoder.cpp:716`: three assignments, no calls) sat in
+# that hole for four phases as `pub fn GetVclNalTemporalId(pCtx) {}`, and the 21
+# decoder-option gtest rows sat behind it.
+#
+# The rule: a Rust body that is empty, or one bare literal/path with an optional
+# `return`, opposite a C++ body of two or more statements. Both halves are crude
+# on purpose — the statement count is a `;` count, which over-counts `for` heads
+# and under-counts braces-only bodies, and both errors are safe here because the
+# only claim made is "read this one".
+
+COMMENT = re.compile(r"//[^\n]*|/\*.*?\*/", re.S)
+TRIVIAL = re.compile(r"^(?:return\s+)?[A-Za-z0-9_:.\-]*\s*;?$")
+
+
+def strip_comments(body):
+    return COMMENT.sub(" ", body)
+
+
+def trivial_rust_body(body):
+    """Empty, or a single literal / path / `return <literal>`."""
+    stripped = " ".join(strip_comments(body).split())
+    return bool(TRIVIAL.match(stripped))
+
+
+def cpp_statements(body):
+    """Crude statement count: semicolons outside comments."""
+    return strip_comments(body).count(";")
 
 
 def duplicate_fns():
@@ -164,25 +235,54 @@ def main():
     cpp = cpp_bodies(read_all(CPP_DIRS, [".cpp"]))
     rust = rust_bodies(read_all(RUST_DIRS, [".rs"]))
 
+    def rust_for(name):
+        """The Rust body that corresponds to this C++ name, or None."""
+        if name in rust:
+            return rust[name]
+        alias = ALIASES.get(name)
+        return rust.get(alias) if alias else None
+
     flagged = 0
-    for name in sorted(rust):
+    for name in sorted(set(rust) | set(cpp)):
         if wanted and name not in wanted:
             continue
         if name not in cpp:
             continue
-        missing = calls(cpp[name][0]) - calls(rust[name][0])
+        r = rust_for(name)
+        if r is None:
+            continue
+        missing = calls(cpp[name][0]) - calls(r[0])
         # Only report identifiers the port knows about somewhere; a name that
         # exists in neither tree is a macro or a C-library call.
         missing = {m for m in missing if m in rust or m in cpp}
         if missing:
             flagged += 1
-            print(f"{name}")
+            print(f"{name}" + ("" if name in rust else f"  (as {ALIASES[name]})"))
             print(f"    C++  {cpp[name][1].relative_to(ROOT)}")
-            print(f"    Rust {rust[name][1].relative_to(ROOT)}")
+            print(f"    Rust {r[1].relative_to(ROOT)}")
             print(f"    not called on the Rust side: {', '.join(sorted(missing))}")
     scope = f"{len(wanted)} named" if wanted else f"{len(rust)} Rust"
     print(f"\n{flagged} flagged out of {scope} functions "
           f"({len(set(rust) & set(cpp))} have a C++ counterpart).")
+
+    # The empty case, in its own section — see the note above `trivial_rust_body`.
+    print("\n=== empty or constant Rust bodies opposite a C++ body of >= 2 statements")
+    empty = 0
+    for name in sorted(cpp):
+        if wanted and name not in wanted:
+            continue
+        r = rust_for(name)
+        if r is None or not trivial_rust_body(r[0]):
+            continue
+        n = cpp_statements(cpp[name][0])
+        if n < 2:
+            continue
+        empty += 1
+        shown = " ".join(strip_comments(r[0]).split()) or "(empty)"
+        print(f"{name}   [Rust body: {shown}]")
+        print(f"    C++  {cpp[name][1].relative_to(ROOT)}  ({n} statements)")
+        print(f"    Rust {r[1].relative_to(ROOT)}")
+    print(f"\n{empty} empty/constant Rust bodies opposite a non-trivial C++ one.")
 
 
 if __name__ == "__main__":

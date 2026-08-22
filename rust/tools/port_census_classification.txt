@@ -1,0 +1,260 @@
+# What `port_census.py` finds missing, and why — Phase 8b session A (T8b.A2).
+#
+#   format:  <key> | <class> | <evidence>
+#     key    `name <CppName>`   one function, by name (wins over a file rule)
+#            `file <path>`      every missing row in that C++ file
+#     class  dead | renamed | missing
+#
+#     dead     the reference itself cannot reach it in the configuration this port
+#              ships: no caller, SIMD-only, `#ifdef`-debug-only, or on the threaded
+#              detour the plan deletes (D3/D-mt-1). Nothing to port.
+#     renamed  ported under another name, or folded into a neighbour. The evidence
+#              names the Rust site.
+#     missing  a real gap. The evidence names the owner and the size.
+#
+# `port_census.py --classify` re-runs the census against this file and prints every
+# missing row that has no rule — which is the point: the next unported function
+# shows up as "unclassified", not as a surprise four phases later. The classes are
+# summed into `docs/phase8b_port_census.md`.
+
+# =============================================================================
+# dead — the threaded detour (D3 for the decoder, D-mt-1/T7.B4 for the encoder)
+# =============================================================================
+# `common/mod.rs:10-13`: `wels_thread_pool` stood there — 933 lines of
+# `CWelsThreadPool`, `CWelsTaskThread`, `CWelsTaskList`, `WelsTaskBarrier`,
+# `CWelsTaskManageBase` and `CWelsTaskManageOne` — deleted at T7.B4. The encoder
+# forks with `std::thread::scope` and joins on the scope; there is no object to own,
+# so there is nothing for these to be.
+file codec/common/src/WelsThreadPool.cpp | dead | T7.B4/D-mt-1: the pool was deleted; the encoder forks with std::thread::scope (common/mod.rs:10-13)
+file codec/common/src/WelsThread.cpp | dead | T7.B4/D-mt-1: std::thread::scope replaces CWelsThread
+file codec/common/src/WelsTaskThread.cpp | dead | T7.B4/D-mt-1: std::thread::scope replaces CWelsTaskThread
+file codec/common/src/WelsThreadLib.cpp | dead | the pthread/Win32 shim; Rust std::thread and std::sync are the port's
+file codec/encoder/core/src/wels_task_management.cpp | dead | T7.B4/D-mt-1: CWelsTaskManage* deleted (encoder/mod.rs:42-43)
+file codec/encoder/core/src/wels_task_encoder.cpp | dead | T7.B4/D-mt-1: CWelsSliceEncodingTask deleted with the task classes
+file codec/decoder/core/src/wels_decoder_thread.cpp | dead | the threaded decoder; this port is single-threaded (D3), GetThreadCount() is 0
+
+# The decoder's `plus` layer, threaded half.
+name OpenDecoderThreads | dead | threaded decoder (D3)
+name CloseDecoderThreads | dead | threaded decoder (D3)
+name ThreadDecodeFrameInternal | dead | threaded decoder (D3)
+name ThreadResetDecoder | dead | threaded decoder (D3)
+
+# `decode_slice.cpp:1731`'s per-macroblock padding — its only caller is
+# `WelsDecodeAndConstructSlice`, and `decoder_core.cpp:2727` reaches that only under
+# `iThreadCount > 1`. (The port has its own `WelsDecodeAndConstructSlice` at
+# `decode_slice.rs:5444` and `WelsDeblockingFilterMB` at `deblocking.rs:2295`, both
+# with zero callers — S18 candidates for a later session; filed as F84.)
+name PadMBLuma_c | dead | only caller decode_slice.cpp:1731, reached only when iThreadCount > 1
+name PadMBChroma_c | dead | only caller decode_slice.cpp:1731, reached only when iThreadCount > 1
+name MBPadTopLeftLuma_c | dead | PadMBLuma_c's helper; threaded-decoder-only
+name MBPadTopLuma_c | dead | PadMBLuma_c's helper; threaded-decoder-only
+name MBPadBottomLuma_c | dead | PadMBLuma_c's helper; threaded-decoder-only
+name MBPadTopRightLuma_c | dead | PadMBLuma_c's helper; threaded-decoder-only
+name MBPadBottomLeftLuma_c | dead | PadMBLuma_c's helper; threaded-decoder-only
+name MBPadBottomRightLuma_c | dead | PadMBLuma_c's helper; threaded-decoder-only
+name MBPadLeftLuma_c | dead | PadMBLuma_c's helper; threaded-decoder-only
+name MBPadRightLuma_c | dead | PadMBLuma_c's helper; threaded-decoder-only
+name MBPadTopChroma_c | dead | PadMBChroma_c's helper; threaded-decoder-only
+name MBPadBottomChroma_c | dead | PadMBChroma_c's helper; threaded-decoder-only
+name MBPadTopLeftChroma_c | dead | PadMBChroma_c's helper; threaded-decoder-only
+name MBPadTopRightChroma_c | dead | PadMBChroma_c's helper; threaded-decoder-only
+name MBPadBottomLeftChroma_c | dead | PadMBChroma_c's helper; threaded-decoder-only
+name MBPadBottomRightChroma_c | dead | PadMBChroma_c's helper; threaded-decoder-only
+name MBPadLeftChroma_c | dead | PadMBChroma_c's helper; threaded-decoder-only
+name MBPadRightChroma_c | dead | PadMBChroma_c's helper; threaded-decoder-only
+
+name CopySpsPps | dead | T5b.9: deleted, called only from decoder_core.cpp:2875 / welsDecoderExt.cpp:1308, both threaded
+name TrackSliceConsumeTime | dead | encoder_ext.cpp:4119, inside the iMultipleThreadIdc > 1 arm
+name TrackSliceComplexities | dead | TrackSliceConsumeTime's helper, same arm
+name SetOneSliceBsBufferUnderMultithread | dead | slice_multi_threading.rs:1021 records the port's scope-based replacement
+
+# =============================================================================
+# dead — the C runtime, the allocator and the trace object
+# =============================================================================
+file codec/common/src/crt_util_safe_x.cpp | dead | snprintf/fopen/time wrappers; Rust std is the port's
+file codec/common/src/memory_align.cpp | dead | the aligned allocator; the port uses Vec/Box and slices
+file codec/processing/src/common/memory.cpp | dead | the processing allocator; same
+name WelsMemcpy | dead | a memcpy wrapper (wels_preprocess.cpp:1376)
+name WelsMemset | dead | a memset wrapper (wels_preprocess.cpp:1379)
+file codec/common/src/welsCodecTrace.cpp | dead | the trace *object*; common/wels_trace.rs carries the settings, D5
+name DllEntryPoint | dead | the Win32 DLL entry (encoder/plus/src/DllEntry.cpp), #if defined(_WIN32)
+
+# =============================================================================
+# dead — debug and statistics builds
+# =============================================================================
+name WelsCountMbType | dead | all four call sites are #if defined(MB_TYPES_CHECK) (svc_encode_slice.cpp:584/669/1882/2002)
+name StatOverallEncodingExt | dead | #if defined(STAT_OUTPUT) (encoder_ext.cpp:2121); its one caller is too
+name OutputCpuFeaturesLog | dead | a WelsLog block over the CPU flags; trace-only
+name DumpRecFrame | dead | #ifdef ENABLE_FRAME_DUMP (encoder.cpp:484)
+name DumpSrcPicture | dead | #ifdef ENABLE_FRAME_DUMP (welsEncoderExt.cpp:1315)
+name RcTraceVGopBitrate | dead | a WelsLog block over the VGOP bitrate; trace-only
+name DebugSpsPps | dead | a WelsLog block (paraset_strategy.cpp:310); trace-only
+name DebugPps | dead | a WelsLog block (paraset_strategy.cpp:327); trace-only
+name welsCodecTrace | dead | the trace object's constructor
+name CodecTrace | dead | the trace object's method
+name StaticCodecTrace | dead | the trace object's static hook
+
+# =============================================================================
+# dead — SIMD selection in a scalar file, and per-arch CPU probing
+# =============================================================================
+name VerticalFullSearchUsingSSE41 | dead | #if defined(X86_ASM) (svc_motion_estimate.cpp:425); the port is scalar
+name HorizontalFullSearchUsingSSE41 | dead | #if defined(X86_ASM) (svc_motion_estimate.cpp:508); the port is scalar
+name WelsCPURestore | dead | an emms; no SIMD state to restore
+name get_cpu_flags_from_cpuinfo | dead | the Linux /proc/cpuinfo probe for ARM; the port is scalar
+name InitVaaFuncs | dead | a CPU-flag dispatch table; the port calls the scalar kernels directly
+name InitGomSadFunc | renamed | complexity_analysis.rs:65 — selected per call rather than installed
+name InitDownsampleFuncs | dead | a CPU-flag dispatch table for kernels the port does not have yet (see the downsample rows)
+name InitDenoiseFunc | dead | a CPU-flag dispatch table for kernels the port does not have yet (see the denoise rows)
+name InitImageRotateFuncs | dead | a CPU-flag dispatch table; see the imagerotate rows
+name WelsInitVarFunc | dead | a CPU-flag dispatch table (AdaptiveQuantization.cpp:225)
+name InitExpandPictureFunc | renamed | common/expand_pic.rs:88 — the port names the scalar kernels directly
+name InitPredFunc | renamed | decoder_core.rs:1910-1930+ installs the same tables inline
+name InitDecFuncs | renamed | decoder_core.rs:1910, folded with InitPredFunc
+name pfIdctResAddPred | dead | a one-line dispatch helper inside InitDecFuncs
+name InitSampleSadFunc | dead | a CPU-flag dispatch table
+name WelsSampleSatdIntra4x4Combined3_c | dead | no caller: declared in sample.h, installed only by the SIMD dispatch
+name WelsSampleSatdIntra8x8Combined3_c | dead | no caller: declared in sample.h, installed only by the SIMD dispatch
+name WelsSampleSatdIntra16x16Combined3_c | dead | no caller: declared in sample.h, installed only by the SIMD dispatch
+name WelsSampleSadIntra8x8Combined3_c | dead | no caller: declared in sample.h, installed only by the SIMD dispatch
+name WelsSampleSadIntra16x16Combined3_c | dead | no caller: declared in sample.h, installed only by the SIMD dispatch
+
+# =============================================================================
+# renamed — ported under another name, or folded into a neighbour
+# =============================================================================
+name DecodeFrame2WithCtx | renamed | Decoder::decode (codec_api.rs:2334) is the single-threaded body
+name InitDecoder | renamed | Decoder::initialize (codec_api.rs)
+name InitDecoderCtx | renamed | Decoder::initialize + WelsDecoderDefaults (decoder_core.rs:2008)
+name UninitDecoder | renamed | Decoder::uninitialize (codec_api.rs:2216)
+name UninitDecoderCtx | renamed | Decoder::uninitialize + WelsEndDecoder (decoder_core.rs:2279)
+name ResetDecoder | renamed | decoder_core.rs's reset path; the threaded variant is dead
+name CWelsDecoder | renamed | CWelsDecoderImpl::new (codec_api.rs)
+name CWelsH264SVCEncoder | renamed | CWelsH264SVCEncoderImpl::new (codec_api.rs)
+name WelsInitDecoder | renamed | folded into Decoder::initialize; decoder_context.rs:2075 notes the table install
+name WelsCloseDecoder | renamed | WelsEndDecoder (decoder_core.rs:2279); upstream's WelsEndDecoder is a one-line forwarder
+name WelsRequestMem | renamed | decoder_core.rs:950 carries the first two arms inline; the third is F80's (see below)
+name ExpandReferencingPicture | renamed | common/expand_pic.rs::expand_picture, one copy of what the port had three of (T4b.3b)
+name RBSP2EBSP | renamed | safe/bits.rs:17 — not a cursor operation; the emulation-prevention write lives with the writer
+name GetValue4Bytes | renamed | safe/bits.rs:187
+name MemInitNalList | renamed | decoder/nalu.rs:431 — one list, allocated by the type
+name MemFreeNalList | renamed | decoder_context.rs:1760 — the drop does it
+name SetRectBlock | renamed | decoder/mv_pred.rs:218 — slice writes instead of byte-pointer blocks
+name CopyRectBlock4Cols | renamed | decoder/mv_pred.rs:218
+name PrefetchPic | renamed | decoder/pic_queue.rs:439
+name DetectStartCodePrefix | renamed | decoder/nalu.rs:27 — the transliteration was deleted dead
+name GetRefPic | renamed | decoder/picture.rs:620
+name GetI4LumaIChromaAddrTable | renamed | decoder_core.rs:4192 — the table is computed where it is read
+name WelsBlockInit | renamed | decode_slice.rs:980
+name WelsBlockZero16x16_c | renamed | decode_slice.rs:980
+name WelsBlockZero8x8_c | renamed | decode_slice.rs:980
+name ExpandBsBuffer | renamed | safe/bits.rs:10 — the pointer-rebasing block is a slice reborrow
+name CheckBsBuffer | renamed | decoder_core.rs:1877 — the hazard is unrepresentable
+name InitCurDqLayerData | renamed | decoder_core.rs:3136
+name WelsGetPrevMbOfSlice | renamed | svc_enc_slice_segment.rs:18
+name WelsGetNumMbInSlice | renamed | svc_enc_slice_segment.rs:18
+name DynamicMaxSliceNumConstraint | renamed | svc_enc_slice_segment.rs:18
+name AllocMbCacheAligned | renamed | svc_encode_slice.rs:3143 — the cache is a typed field
+name FreeMbCache | renamed | svc_encode_slice.rs:3143
+name AllocateSliceMBBuffer | renamed | the buffer is owned by the slice type
+name FreeMemorySvc | renamed | encoder_ext.rs:1765 (WelsUninitEncoderExt) — Drop does most of it
+name FreeRefList | renamed | encoder_ext.rs:1584
+name FreePicture | renamed | picture.rs / pic_queue.rs — Drop
+name FreeSampleBuffer | renamed | Drop
+name AllocateSampleBuffer | renamed | the buffer is owned by the type
+name AllocateOUArrayMemory | renamed | the OU array is a Vec field
+name RcFreeLayerMemory | renamed | rc.rs:347 — Drop
+name WelsRcFreeMemory | renamed | encoder_ext.rs:1822 — Drop
+name BsStartCavlc | renamed | safe/bits.rs:427
+name BsEndCavlc | renamed | safe/bits.rs:427's pair
+name WelsCabacEncodeGetPtr | renamed | set_mb_syn_cabac.rs:1137
+name CreateReferenceStrategy | renamed | ref_list_mgr_svc.rs:1662 — a match, not a factory
+name WelsEncoderEncodeParameterSets | renamed | wels_encoder_ext.rs:591 WelsEncoderEncodeParameterSetsRust
+name ReleaseFeatureSearchPreparation | renamed | svc_encode_slice.rs:1083 — screen-content-only allocation, see below
+name UpdateFMESwitch | renamed | svc_motion_estimate.rs:377 (PUpdateFMESwitch) — the table entry exists
+name WelsFillingPred1to16_c | renamed | a 4-byte store; the port writes the slice
+name WelsFillingPred8to16_c | renamed | a store; the port writes the slice
+name WelsFillingPred8x2to16_c | renamed | a store; the port writes the slice
+name CalcMvdCostx8_c | renamed | folded into the two full-search bodies that call it
+name GomSampleSad | renamed | complexity_analysis.rs:186
+name GomSampleSadExceptBackground | renamed | complexity_analysis.rs:186's sibling
+name SpecialFeature | renamed | processing/mod.rs:8 — the plugin vtable is an enum dispatch
+name Uninit | renamed | Drop
+name CVpFrameWork | renamed | processing/mod.rs — the plugin framework is an enum, not a class tree
+name CreateStrategy | renamed | processing/mod.rs
+name CheckValid | renamed | processing/mod.rs
+name CreateSpecificVpInterface | renamed | processing/mod.rs
+name DestroySpecificVpInterface | renamed | processing/mod.rs
+name WelsCreateVpInterface | renamed | processing/mod.rs
+name WelsDestroyVpInterface | renamed | processing/mod.rs
+name CWelsPreProcess | renamed | wels_preprocess.rs's type
+name WelsPreprocessCreate | renamed | processing/mod.rs:17 — the allocation is the type's
+name WelsPreprocessDestroy | renamed | Drop
+name ColorspaceConvert | renamed | wels_preprocess.rs's conversion path
+name CDenoiser | renamed | the denoise plugin's type; the *kernels* are the gap (below)
+name CDownsampling | renamed | the downsample plugin's type; the *kernels* are the gap (below)
+name CComplexityAnalysis | renamed | processing/complexity_analysis.rs
+name CBackgroundDetection | renamed | processing/background_detection.rs
+name CAdaptiveQuantization | renamed | processing/adaptive_quantization.rs
+name CVAACalculation | renamed | processing/vaa_calculation.rs
+name CScrollDetection | renamed | the scroll-detection plugin's type; the *kernels* are Phase 10's
+name CComplexityAnalysisScreen | renamed | the screen variant's type; its two methods are Phase 10's
+name CImageRotating | renamed | the imagerotate plugin's type; its kernels are below
+name CWelsSliceEncodingTask | dead | T7.B4/D-mt-1
+name CWelsUpdateMbMapTask | dead | T7.B4/D-mt-1
+name CWelsThreadPool | dead | T7.B4/D-mt-1
+name CWelsThread | dead | T7.B4/D-mt-1
+name CWelsTaskThread | dead | T7.B4/D-mt-1
+name GetInitLock | dead | T7.B4/D-mt-1
+name CWelsParametersetIdConstant | renamed | paraset_strategy.rs — the constant strategy is ported
+name SetBackgroundMbFlag | renamed | background_detection.rs — a flag store
+name UpperOUForegroundCheck | renamed | background_detection.rs's neighbour scan
+name BuildSceneChangeDetection | renamed | processing/mod.rs's plugin construction
+name RequestMemoryVaaScreen | missing | screen content (Phase 10): the VAA screen buffers, encoder_ext.cpp:1478, 7 statements
+name ReleaseMemoryVaaScreen | missing | screen content (Phase 10): encoder_ext.cpp:1493, 5 statements
+
+# =============================================================================
+# missing — the real gaps, by owner
+# =============================================================================
+# F80 — the decoder picture buffer resize. `WelsRequestMem`'s third arm (same
+# resolution, changed num_ref_frames) needs these two.
+name IncreasePicBuff | missing | F80, 8b.A/C: decoder.cpp:107, 36 statements / 60 lines
+name DecreasePicBuff | missing | F80, 8b.A/C: decoder.cpp:170, 50 statements / 87 lines
+
+# 8b.B — the parameter-set listing strategies (~310 C++ lines) and parse-only.
+file codec/encoder/core/src/paraset_strategy.cpp | missing | 8b.B: the SPS_LISTING / SPS_PPS_LISTING strategies; InitializeExt refuses today
+name WriteSavcParaset_Listing | missing | 8b.B: encoder_ext.cpp:3251, 54 statements / 87 lines — the listing strategies' bitstream writer
+name ParseAccessUnit | missing | 8b.B: welsDecoderExt.cpp:1301, 23 statements — parse-only's AU walk
+
+# 8b.C — the two preprocessing plugins the encoder silently skips today (S48).
+file codec/processing/src/downsample/downsamplefuncs.cpp | missing | 8b.C: the downsample kernels (594 C++ lines with downsample.cpp)
+name DownsampleHalfAverage | missing | 8b.C: downsample.cpp:279
+file codec/processing/src/denoise/denoise_filter.cpp | missing | 8b.C: the denoise kernels (250 C++ lines with denoise.cpp)
+name BilateralDenoiseLuma | missing | 8b.C: denoise.cpp:92
+name WaverageDenoiseChroma | missing | 8b.C: denoise.cpp:107
+
+# Phase 10 — screen content.
+name GomComplexityAnalysisInter | missing | Phase 10: ComplexityAnalysis.cpp:413, 46 statements
+name GomComplexityAnalysisIntra | missing | Phase 10: ComplexityAnalysis.cpp:357, 32 statements
+name ScrollDetectionCore | missing | Phase 10: ScrollDetectionFuncs.cpp:110, 57 statements
+name CheckLine | missing | Phase 10: ScrollDetectionFuncs.cpp:37, 21 statements
+name SelectTestLine | missing | Phase 10: ScrollDetectionFuncs.cpp:70, 15 statements
+name CompareLine | missing | Phase 10: ScrollDetectionFuncs.cpp:99, 6 statements
+name ScrollDetectionWithoutMask | missing | Phase 10: ScrollDetection.cpp:91, 15 statements
+name ScrollDetectionWithMask | missing | Phase 10: ScrollDetection.cpp:71, 11 statements
+name RequestScreenBlockFeatureStorage | missing | Phase 10: svc_motion_estimate.cpp:683, 20 statements (svc_motion_estimate.rs:1597 records the refusal)
+name ReleaseScreenBlockFeatureStorage | missing | Phase 10: svc_motion_estimate.cpp:727, 10 statements
+name RequestFeatureSearchPreparation | missing | Phase 10: svc_motion_estimate.cpp:648, 13 statements
+name CountFMECostDown | missing | Phase 10: svc_motion_estimate.cpp:1027, 8 statements (svc_motion_estimate.rs:1589)
+name UpdateFMEGoodFrameCount | missing | Phase 10: svc_motion_estimate.cpp:1043, 2 statements
+name GetReferenceSrcPicList | missing | Phase 10: CWelsPreProcessScreen, wels_preprocess.cpp:974
+
+# imagerotate — reachable only through METHOD_IMAGE_ROTATE, which nothing in the
+# encoder ever requests (T8b.A5's grep). Kept as `missing` rather than `dead`
+# because it is a shipped plugin of the reference's processing library, and a
+# consumer that drives the processing interface directly can ask for it.
+file codec/processing/src/imagerotate/imagerotate.cpp | missing | Phase 10 hand-off: METHOD_IMAGE_ROTATE has no caller in the encoder
+file codec/processing/src/imagerotate/imagerotatefuncs.cpp | missing | Phase 10 hand-off: the three rotate kernels, 7 statements each
+
+# Small residue, each read and each genuinely absent.
+name FindExistingPps | missing | 8b.B: paraset_strategy.cpp:608, 8 statements — the listing strategies' PPS lookup
+name GeneralBilinearDownsamplerWrap | missing | 8b.C: downsamplefuncs.cpp:251
+name Gauss3x3Filter | missing | 8b.C: denoise_filter.cpp:114
