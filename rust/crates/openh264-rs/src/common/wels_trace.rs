@@ -37,15 +37,16 @@
 //! that copy when the option is set, which is one line at each of the six option
 //! arms and is checked by the covering tests.
 //!
-//! **The default sink is `None`, and the reference's is `welsStderrTrace`.** That
-//! is a stated divergence rather than an oversight: upstream's default writes every
-//! warning and error to the process's stderr (`WELS_LOG_DEFAULT` is
-//! `WELS_LOG_WARNING`), this port has never done it, and turning it on is a
-//! library-behaviour decision with a measurable cost on this project's own
-//! instruments — the malformed corpus alone would emit a trace line per damaged
-//! access unit across 2707 rows. What T8.B6 delivers is the *installed callback*
-//! path, which is the one `codec_api.h` documents and a consumer can observe. A
-//! consumer who wants the stderr behaviour installs a callback that writes to it.
+//! **The default sink is `welsStderrTrace` at `WELS_LOG_WARNING`, which is
+//! upstream's** (decision **D-api-1**, 2026-08-21; T8.C6).
+//!
+//! T8.B6 left the default at `None` and recorded it as a stated divergence, on the
+//! grounds that the malformed corpus alone would emit a line per damaged access unit.
+//! That reasoning is about the *project's instruments*, not about the library, and
+//! D-api-1 rules the other way: **a drop-in that is silent where the reference speaks
+//! is a divergence**, and one a consumer cannot detect by reading the header. A
+//! caller who wants silence installs a quiet callback — which is exactly what a C
+//! consumer does, and what this tree's high-volume harnesses now do.
 
 use std::ffi::{CString, c_char, c_void};
 
@@ -191,14 +192,43 @@ pub struct welsCodecTrace {
     pub m_sLogCtx: SLogContext,
 }
 
+/// `welsStderrTrace` — `welsCodecTrace.cpp:49`, which is one `fprintf`.
+///
+/// The default sink, installed by the constructor below. It is an `extern "C" fn`
+/// because it occupies the same slot a caller's own callback does: `SetTraceCallback`
+/// replaces it, and `GetOption(*_TRACE_CALLBACK)` hands its address back, so it has
+/// to be the same type as anything a consumer could install.
+///
+/// # Safety
+///
+/// `string` is the NUL-terminated buffer [`WelsLog`] just formatted; `ctx` is
+/// whatever was installed beside the callback and is not read here, as it is not read
+/// in the reference.
+// unsafe-cat: C-ABI
+#[allow(unsafe_code)]
+pub unsafe extern "C" fn welsStderrTrace(_ctx: *mut c_void, _level: i32, string: *const c_char) {
+    if string.is_null() {
+        return;
+    }
+    // `fprintf(stderr, "%s\n", string)`. Written through `std::io::stderr()` rather
+    // than `libc::fprintf` so it interleaves correctly with the rest of this process's
+    // stderr; the reference's C `stderr` and Rust's are the same fd either way.
+    let bytes = unsafe { std::ffi::CStr::from_ptr(string) }.to_bytes();
+    use std::io::Write as _;
+    let out = std::io::stderr();
+    let mut lock = out.lock();
+    let _ = lock.write_all(bytes);
+    let _ = lock.write_all(b"\n");
+}
+
 impl Default for welsCodecTrace {
-    /// `welsCodecTrace::welsCodecTrace()` — `welsCodecTrace.cpp:53`. The level is
-    /// the constructor's business in both trees; the reference also installs
-    /// `welsStderrTrace` here, and this port does not (module comment).
+    /// `welsCodecTrace::welsCodecTrace()` — `welsCodecTrace.cpp:53`, both statements:
+    /// the level is `WELS_LOG_DEFAULT` and the sink is [`welsStderrTrace`] (D-api-1).
     fn default() -> Self {
         Self {
             m_sLogCtx: SLogContext {
                 iTraceLevel: WELS_LOG_DEFAULT,
+                pfLog: Some(welsStderrTrace),
                 ..SLogContext::default()
             },
         }
