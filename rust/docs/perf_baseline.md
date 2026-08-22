@@ -3205,3 +3205,31 @@ one of its targets** — this measurement is what says so.
 and is `EXCLUDED` from every summary statistic above (S2). That is the largest single
 reading it has produced since the +226% in Phase 4a, on a session that touched no
 encode kernel at all; printed, excluded, and not interpreted.
+
+### The span, re-measured after F82 — `C_base` (`19937662`) vs `C_head2` (`4d79895c`)
+
+T8.C8 landed after the phase close and it changes a **decode entry point**, so the
+span was taken again rather than carried forward. Same 7 pairs, same benches, same
+machine; the null above is the floor for both readings.
+
+| | rows | median | min | max | over +5% |
+|---|---|---|---|---|---|
+| decode | 3 | **+0.07%** | −0.04% | +0.09% | **0** |
+| encode | 28 | **+0.00%** | −0.60% | +1.25% | **0** |
+
+Unmoved, and within 0.03 points of the pre-F82 reading on decode and identical on
+encode. The encode max (+1.25%) is the one value outside the null's range (+0.26%);
+the median is exactly 0.00% and this session changed no encoder code at all, so it is
+cross-binary drift of the kind session B's much wider null documents.
+
+**What this span does *not* say, and it matters.** `decode_1080p_bench` drives
+`DecodeFrame2` — `grep -c DecodeFrameNoDelay benches/decode_1080p_bench.rs` is **0**.
+So the reading covers F82's *second* half (the unguarded null-input arm, one extra
+reconstruction attempt per stream at flush) and says **nothing** about the cost of the
+first half — the extra `DecodeFrame2(NULL, 0)` that `DecodeFrameNoDelay` now makes on
+every call. That entry point has no bench, which is the same gap that let the defect
+live: **the instrument follows the entry point, and this project's decode instruments
+all point at one of two.** A `DecodeFrameNoDelay` bench row is Phase 9's if anyone
+wants the number; the correctness referee for it exists now
+(`tests/decoder_nodelay_parity_test.rs` and the harness's fifth part), which is the
+part that was actually missing.
