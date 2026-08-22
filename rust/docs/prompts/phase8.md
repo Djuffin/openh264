@@ -153,8 +153,8 @@ on the impl objects.
   contexts and traces, 19 `# Safety` contracts, `Decoder`/`Encoder` carved
   with the `Send` verdict measured (no: 14 `E0277`s, all Phase 9's), the
   `c_void` line attributed; F77 filed.
-- **C — DONE** (2026-08-21, `eb939c34..`, nine commits; **`exit` unscoped with both
-  new gates in it**). The whole brief landed, and **three of its premises did not
+- **C — DONE** (2026-08-21, `eb939c34..`, eleven commits; **`exit` unscoped
+  `OVERALL: PASS` 15/0/1 with both new gates in it**, plus T8.C8 after the close). The whole brief landed, and **three of its premises did not
   survive a re-grep** — each was worth more than the step it belonged to.
   **F77 was not an off-by-one**: `WelsDecodeSlice`'s bound is ported faithfully, and
   `res/Error_I_P.264` changes resolution three times (352x288 → 640x480 → 352x288)
@@ -176,9 +176,12 @@ on the impl objects.
   loopback through `dlopen`, both profiles, plus the version pair, the capability
   block and F77's stream returning a code with the process alive — and it settles
   that the C++ abstract-class call path agrees with the Rust `#[repr(C)]` vtable.
-  **The gtest stretch is a number**: 118/199 against the reference's 199/199, with
-  50 of 51 decoder-output rows passing and 77 of the 81 failures encoder-side API
-  surface. **D-api-1** executed, and found that `welsDecoderExt.cpp:164`'s
+  **The gtest stretch is a number, and it moved the same day it was written**:
+  118/199 against the reference's 199/199 — then a challenge to how the failures had
+  been tallied (by *fixture name*, when the fixtures are encode->decode round trips)
+  found **F82**, `DecodeFrameNoDelay` forwarding once where the reference calls
+  `DecodeFrame2` twice, on top of a null-input arm this port guarded and the reference
+  does not. **155/199** after T8.C8, 50 of 51 decoder-output rows passing throughout. **D-api-1** executed, and found that `welsDecoderExt.cpp:164`'s
   `SetTraceLevel (WELS_LOG_ERROR)` was never ported; session B's predicted flood is
   **4 lines in the whole suite**. **`api/` denies** with 44 tagged allow items, and
   the internal `SParserBsInfo` is `ParseOnlyBsBuffers`. Span: no measurable movement

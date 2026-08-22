@@ -455,3 +455,113 @@ those headers.
 **One disagreement in 51 types and 140 offsets** is the score, and it is the argument
 for the instrument: a layout defect is not visible to any test that only ever talks to
 itself.
+
+---
+
+## F82 — `DecodeFrameNoDelay` had no referee, so neither half of it was ported
+
+*Phase 8 session C, 2026-08-21, T8.C8 — found **after the phase close**, by a challenge
+to how T8.C5b's gtest tally had been read.*
+
+**Status: FIXED in the commit that found it** — `4dc32c23`.
+
+### The two halves
+
+**1. The slot forwards once; the reference calls twice.** `welsDecoderExt.cpp:720–725`
+is the whole single-threaded body:
+
+```c
+iRet  = DecodeFrame2 (kpSrc, kiSrcLen, ppDst, pDstInfo);
+iRet |= DecodeFrame2 (NULL, 0, ppDst, pDstInfo);
+```
+
+The second call is what the slot is *named for*: it forces reconstruction so the caller
+gets its frame on the call that fed the access unit rather than on the next one. The
+port's `decoder_decode_frame_nodelay_c` was one forward to `decoder_decode_frame2_c`.
+**This half was known**: T8.B7 wrote it at the slot as a stated divergence and deferred
+it, which was defensible while nothing measured what it cost.
+
+**2. The null-input arm was guarded, and the reference does not guard it.**
+`Decoder::decode`'s else-branch read
+
+```rust
+} else if self.end_of_stream || (*p_ctx).bEndOfStreamFlag {
+```
+
+`welsDecoderExt.cpp:758–778` is one `if/else` **on the arguments**, and `WelsDecodeBs`
+at `:814` runs on both paths. So in the reference `DecodeFrame2 (NULL, 0, …)` *always*
+reconstructs; here it did nothing at all until the caller had set
+`DECODER_OPTION_END_OF_STREAM`. **This half was not known, and it is the one that
+mattered.**
+
+Half 2 is why half 1 could not land alone. `DecodeFrameNoDelay`'s second call is
+exactly a null call made *before* end of stream, so adding it to the guarded tree
+**loses** a frame per stream instead of gaining one: the second call emits nothing and
+still zeroes the caller's `SBufferInfo`. Measured that way before the guard came off —
+`QCIF_2P_I_allIPCM.264` went from two emitted frames to one.
+
+### Why no gate saw it
+
+Every gate this project owns drives `DecodeFrame2`: the conformance 58, the 2919
+corpus rows, the 504-decode reachability sweep, and the four parts of the ABI harness.
+The two tests that *do* call `DecodeFrameNoDelay` cannot see it:
+
+- `api_lifecycle_test.rs:52` calls it with `(null, 0)` — a lifecycle probe that
+  constrains nothing about emission;
+- `loopback_sha1_test.rs:258` follows every call with **its own explicit
+  `DecodeFrame2(NULL, 0, …)`** — by hand, exactly the statement that was missing. A
+  test that compensates for a defect cannot detect it.
+
+**An entry point with no referee is how this survived seven phases.** The lesson is
+S22's, one level down: it is not enough for a *module* to be in every instrument's
+scope; each *entry point* needs an instrument that drives it.
+
+### What must not be "fixed"
+
+When the first call emits a picture and the second does not, the second call's
+`iBufferStatus = 0` overwrites it and the frame is lost to that caller —
+`Error_I_P.264` emits **one** frame through `DecodeFrameNoDelay` against
+`DecodeFrame2`'s five. The reference has the restore for exactly this written out and
+**commented out** (`welsDecoderExt.cpp:726–732`), so it is upstream's considered
+behaviour, not an oversight. The rows in `tests/decoder_nodelay_parity_test.rs` pin it
+so that nobody repairs the port into a divergence.
+
+### The referees, which did not exist
+
+- `ecref --nodelay` and `portref --nodelay` — two entry points, two referees.
+- `tests/decoder_nodelay_parity_test.rs` — five assets (CAVLC, CABAC with B-frames, a
+  one-macroblock frame, all-IPCM, and the resolution-change stream), pinning frames,
+  first dimensions, whole-run SHA-1, **and every per-call return code and
+  `iBufferStatus` in call order**, all from `ecref --nodelay`. Measured red.
+- The ABI harness's **fifth part**: the same five rows through `dlopen`, extracted from
+  that test at run time so the in-process and external answers cannot drift.
+  `TALLY 12 passed / 0 failed`.
+
+### The method error that hid it for a day
+
+T8.C5b tallied the 81 gtest failures **by test name** and reported "77 of the 81 are
+encoder-side API surface". The fixtures are named `EncodeDecodeTestAPIBase/…` and
+`EncodeTestAPI` because of what *builds* the case — they are encode→decode round trips
+— and the assertion that fires is usually the **decoder's**. By assertion location, at
+least 30 of the 81 were decoder assertions, and 21 of them were one line.
+
+**Tally by where the assertion lives, not by what the test is called.** One `awk` over
+the `Failure` lines is the whole instrument:
+
+```sh
+awk '/^\[ RUN /{n=$4; loc=""} /Failure$/{if(!loc){split($0,a,":"); loc=a[1]}} \
+     /^\[  FAILED  \]/{if(n){print loc; n=""}} /^\[       OK \]/{n=""}' rust.log \
+  | sort | uniq -c | sort -rn
+```
+
+This is rule 6 again — *anchors, not surfaces* — on a surface nobody had thought of as
+one: a test's **name** is a surface, and its assertion is the anchor.
+
+### The number
+
+**118/199 → 155/199.** Thirty-seven tests moved, not the 21 the first reading
+attributed, because the null-call guard was also behind the error-concealment, LTR,
+simulcast and parameter-set clusters. The 44 that remain, by assertion file:
+`decode_api_test.cpp` 21, `encode_options_test.cpp` 8, `BaseEncoderTest.cpp` 5,
+`HashFunctions.h` 4, `ltr_test.cpp` 3, `decoder_ec_test.cpp` 2, `encoder_test.cpp` 1,
+plus `DecodeParser`'s 3 stubs.

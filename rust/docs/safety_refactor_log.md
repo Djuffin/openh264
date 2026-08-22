@@ -14665,15 +14665,22 @@ same assets:
     cxx    199 ran, 199 passed,  0 failed
     rust   199 ran, 118 passed, 81 failed
 
-and the shape of the 81 is the useful part. **Decoder output: 50 of 51**, the one
-failure being `test_scalinglist_jm.264` — the port's *documented, deliberate* POC
-tiebreak, argued in `decoder_conformance_test.rs:238` and corroborated by the JVT gold
-for `CABA2_SVA_B`, which upstream itself fails. **`DecodeParser`: 3, by construction**
-(the slot is a stub). The remaining **77 are all encoder-side API surface the
-diffharness cannot express** — `SetEncOptionSize` (21), `EncoderOutputTest` (8), the
-multi-spatial-layer and simulcast family, and the ten `GetOption*` rows that read
-decoder options back after an encode. Not a gate: a tally that moves, for Phase 9 to
-run before and after.
+**and the shape of the 81 was read wrong, which is worth more than the number.**
+The first reading tallied by *fixture name* — `EncodeDecodeTestAPIBase/…`,
+`EncodeTestAPI` — and concluded "77 of the 81 are encoder-side API surface". Those
+fixtures are **encode->decode round trips**, and the assertion that fires is usually
+the *decoder's*. Tallied by where the failing assertion lives, at least **30 of the 81
+were decoder assertions**, and the largest single cluster — 21 at
+`encode_options_test.cpp:1410`, every one `ASSERT_EQ (dstBufInfo_.iBufferStatus, 1)`
+reading 0 — had one cause. That is **F82**, fixed at T8.C8 (below), and it moved the
+tally to **155/199**.
+
+The stable parts of the reading survive: **decoder output 50 of 51**, the one failure
+being `test_scalinglist_jm.264`'s *documented, deliberate* POC tiebreak (argued at
+`decoder_conformance_test.rs:238`, corroborated by the JVT gold for `CABA2_SVA_B`,
+which upstream itself fails), and **`DecodeParser`: 3, by construction** — the slot is
+a stub. Not a gate: a tally that moves, for Phase 9 to run before and after. It moved
+the same afternoon.
 
 ### Step 4 — D-api-1, the deny, the rename
 
@@ -14812,11 +14819,17 @@ panic message carries one length. Two — the layer's and the picture's — woul
 ## The exit, and what Phase 9 gets
 
 `gates.sh exit`, unscoped, with the two gates this phase built in it. The gtest stretch
-reports **118/199** against the reference's 199/199 and is deliberately *not* a gate:
-50 of 51 decoder-output rows pass (the one failure is the documented POC tiebreak),
-three are `DecodeParser`'s stub, and **77 of the 81 are encoder-side API surface the
-diffharness cannot express**. That is Phase 9's to-do list with a number attached, and
-it is the first time this project has had one.
+is deliberately *not* a gate, and within a day of being written it had already earned
+its keep twice: it reported **118/199**, a first reading of that number was wrong, and
+correcting the reading found **F82** — after which it reports **155/199**. 50 of 51
+decoder-output rows pass (the one failure is the documented POC tiebreak) and three are
+`DecodeParser`'s stub, throughout. The remaining 44 are Phase 9's to-do list with a
+number attached, and it is the first time this project has had one.
+
+**The lesson is the third shape above, in its sharpest form.** "77 encoder-side" came
+from reading test *names*; the tests are round trips and the names say which fixture
+built them, not which subsystem failed. One `awk` over the assertion locations said
+something different, and the difference was a defect in this phase's own module.
 
 Full inheritance in plan §4 under *Inherited from Phase 8* — 830 tagged allow items by
 category, the 67-of-80 deny coverage with `src/common/` named as the remainder, F66/S42
