@@ -194,6 +194,41 @@ def cpp_statements(body):
     return strip_comments(body).count(";")
 
 
+# --- T8b.A4: the *short* case, which is neither empty nor call-diffable ---------
+#
+# `ForceCodingIDR` (`encoder_ext.cpp:3046`) resets five fields per dependency layer,
+# bumps a counter and clears a flag — about twenty statements and, apart from a
+# `WelsLog`, **no calls**. The port's body was
+#
+#     if pCtx.is_null() { return 1; }
+#     0
+#
+# which the call-set diff cannot see (both bodies call nothing this tool tracks) and
+# the empty-body rule cannot see (it has an `if`). It reported success and did
+# nothing, and `ISVCEncoder::ForceIntraFrame` was a no-op for seven phases.
+#
+# The rule: a Rust body under a quarter of the C++'s statement count, where the C++
+# has at least six. Both counts are `;` counts and both are crude; the ratio is what
+# carries, and the only claim is "read this one".
+#
+# It is the noisiest of the three sections — 90 rows at T8b.A4 against 8 from the
+# empty rule — because a Rust rewrite that replaces a pointer loop with a slice
+# iterator legitimately has a fraction of the statements. Read it as a worklist,
+# not as a defect list.
+SHORT_RATIO = 4
+SHORT_MIN_CPP_STATEMENTS = 6
+
+
+def suspiciously_short(rust_body, cpp_body):
+    n_cpp = cpp_statements(cpp_body)
+    if n_cpp < SHORT_MIN_CPP_STATEMENTS:
+        return None
+    n_rust = strip_comments(rust_body).count(";")
+    if n_rust * SHORT_RATIO > n_cpp:
+        return None
+    return (n_rust, n_cpp)
+
+
 def duplicate_fns():
     """Report Rust functions defined more than once, worst size disparity first.
 
@@ -283,6 +318,24 @@ def main():
         print(f"    C++  {cpp[name][1].relative_to(ROOT)}  ({n} statements)")
         print(f"    Rust {r[1].relative_to(ROOT)}")
     print(f"\n{empty} empty/constant Rust bodies opposite a non-trivial C++ one.")
+
+    # The short case — see the note above `suspiciously_short`.
+    print(f"\n=== Rust bodies under 1/{SHORT_RATIO} the C++'s statement count")
+    short = 0
+    for name in sorted(cpp):
+        if wanted and name not in wanted:
+            continue
+        r = rust_for(name)
+        if r is None or trivial_rust_body(r[0]):
+            continue          # already reported by the empty rule
+        counts = suspiciously_short(r[0], cpp[name][0])
+        if counts is None:
+            continue
+        short += 1
+        print(f"{name}   [{counts[0]} Rust statements vs {counts[1]} C++]")
+        print(f"    C++  {cpp[name][1].relative_to(ROOT)}")
+        print(f"    Rust {r[1].relative_to(ROOT)}")
+    print(f"\n{short} Rust bodies under 1/{SHORT_RATIO} the C++'s statement count.")
 
 
 if __name__ == "__main__":

@@ -15020,3 +15020,111 @@ finder keys the C++ map by bare name and keeps the longest body, so
 `CWelsDecoder::GetOption` (53 statements) is invisible behind
 `CWelsH264SVCEncoder::GetOption` (230); same-named methods on two classes are
 un-diffable by that tool.
+
+### T8b.A3 — the decoder option arms, and the referee that was missing
+
+**The defect, in one line.** `decoder_get_opt_c` handled 4 of `CWelsDecoder::GetOption`'s
+16 arms and fell through `_ => {}` to `cmResultSuccess` for the other 12 — *success,
+with nothing written* — so the caller read back whatever was already in its own `int`.
+`test/api`'s `DecoderVclNal` reported `-2034226216`. `decoder_set_opt_c` did the same
+for 3 of 9, so the two get-only ids reported success and did nothing.
+
+**Why nothing saw it for seven phases.** The corpus reads frames and codes, the
+conformance suite reads bytes, the ABI harness reads exports and layouts. **No
+instrument read an option value back.** S22's T8.C8 form again: a module in every
+instrument's scope is not enough; each *entry point* needs an instrument that drives
+it.
+
+**The referee.** `ecref --options` prints all eleven get-able scalar options after
+every decode call, with **both** the return code and the value — half the reference's
+arms answer `cmInitExpected` rather than writing, and a code-only or value-only
+reading would miss half the contract. The caller's `int` is pre-set to `0x5EED5EED`,
+so "did not write" is visible and reproducible rather than stack noise.
+`tests/decoder_options_parity_test.rs` replays the same flow through the cdylib and
+compares against `tests/data/decoder_options/*.txt`, the C++'s literal output, over
+six assets: `BA_MW_D` (100 frames of frame-num counting), `Error_I_P` (two resolution
+changes, so `PROFILE`/`LEVEL` move mid-stream), `MR2_TANDBERG_E` (the only asset shape
+in `res/` that marks an LTR — found by scanning all 63 for `LTRF=1`),
+`Cisco_Men_whisper…CABAC_Bframe_9`, `QCIF_2P_I_allIPCM`, `narrow_16x16`. 474 golden
+lines.
+
+**Red, then green.** With `src/` stashed: `0 passed; 2 failed`, diverging at call 0 of
+the first asset —
+`VCL=0/1592614637 TID=0/1592614637 FN=0/1592614637 …` against the C++'s
+`VCL=0/2 TID=0/-1 FN=0/-1 …`: rc 0 with the sentinel untouched, eight ids at once.
+Restored: `2 passed; 0 failed`.
+
+**What landed.** Both switches transliterated whole, including the reference's head
+clauses in its order — `NUM_OF_THREADS` before the context test, then
+`pDecContext == NULL → cmInitExpected`, then `pOption == NULL → cmInitParaError`.
+That order is not obvious and this port had it inverted. The two feeders:
+`GetVclNalTemporalId`'s body (`decoder.cpp:716`, three assignments from the AU's
+**first** NAL — `uiStartPos`, not the last) and `uiCurIdrPicId`'s write at the
+slice-header parse (`decoder_core.cpp:1061`). And the **whole per-call reset block**
+(`welsDecoderExt.cpp:784–811`), which had no counterpart here at all: without
+`iFeedbackVclNalInAu = FEEDBACK_UNKNOWN_NAL` on entry, `decode_api_test.cpp:45` cannot
+pass however many arms exist. `GetPrevFrameNum` deleted dead (S18).
+
+**A test that was pinning the defect.** `api_lifecycle_test.rs:110` asserted
+`GetOption(DECODER_OPTION_TRACE_LEVEL) == cmResultSuccess`. `TRACE_LEVEL` is settable
+and **not** gettable — the two switches are not the same set. Measured against the
+reference rather than argued: `Initialize → 0`, `SetOption(TRACE_LEVEL) → 0`,
+`GetOption(TRACE_LEVEL) → 1` on `libopenh264.dylib`.
+
+**Numbers.** gtest **155 → 176**; 20 allowlist rows deleted. Corpus re-refereed after a
+decode-path change: **2902 / 17 output, 2919 / 0 codes**, identical. Conformance 60/60.
+
+**Brief facts corrected.** The brief said `GetOption` has 17 arms and `SetOption` 10,
+both including a `DATAFORMAT`. `grep -n 'DATAFORMAT' codec/api/wels/codec_app_def.h`
+gives one hit — `ENCODER_OPTION_DATAFORMAT` at `:107`; there is no
+`DECODER_OPTION_DATAFORMAT`, and the two switches have **16** and **9** arms
+(`sed -n '580,700p' … | grep -oE 'DECODER_OPTION_[A-Z_]+' | sort -u`). And
+`GetVclNalTemporalId` reads the AU's **first** NAL (`uiStartPos`), not its last.
+
+### T8b.A4 — `ForceCodingIDR` was a stub, and what that cost
+
+```rust
+pub unsafe fn ForceCodingIDR(pCtx: *mut sWelsEncCtx, _iLayerId: i32) -> i32 {
+    if pCtx.is_null() { return 1; }
+    0
+}
+```
+
+`encoder_ext.cpp:3046` resets five fields per dependency layer — `iCodingIndex`,
+`iFrameIndex`, `iFrameNum`, `iPOC`, and `bEncCurFrmAsIdrFlag = true` — bumps
+`uiIDRReqNum`, and clears `bCheckWindowStatusRefreshFlag`. The port did none of it and
+returned success, so `ISVCEncoder::ForceIntraFrame(true)` was a no-op that reported
+having worked.
+
+**Why no byte referee saw it.** With the default IDR interval the next frame is
+usually an IDR anyway, so the reference and the port agree on the frames where nothing
+was forced. The in-tree test measured the shape exactly: at IDR interval **1** every
+frame is IDR and the stub is invisible; at interval **2** frame 1 comes back
+`videoFrameTypeI` (3) where the reference gives `videoFrameTypeIDR` (1).
+`tests/encoder_force_idr_ltr_test.rs` re-states `ltr_test.cpp:14–42` over the
+fixture's three parameter rows × all five IDR intervals the test can draw.
+
+**It was also aborting the process.** While running the option family under a gtest
+filter, `GetOptionTid_AVC_NOPREFIX` aborted: `index out of bounds: the len is 5 but
+the index is 5` at `ref_list_mgr_svc.rs:684`, then a second panic at
+`svc_base_layer_md.rs:344` inside an `extern "C"` frame → `panic in a function that
+cannot unwind` → `abort`. `pShortRefList` is `[_; 1 + MAX_SHORT_REF_COUNT]` and
+`MAX_SHORT_REF_COUNT` is `MAX_GOP_SIZE >> 1 = 4`, so `uiShortRefCount` had reached 6 —
+the short-reference list grew past its bound because the IDRs that would have cleared
+it were never coded. **The C++ writes `pShortRefList[iRefIdx + 1]` with no bound check
+at `ref_list_mgr_svc.cpp:387–391`**, so the same state corrupts memory there and
+panics here.
+
+Reachable only after T8b.A3, and that is the point: the test drives
+`LTRRecoveryRequest`, which reads the decoder's `LTR_MARKING_FLAG` / `IDR_PIC_ID` /
+`FRAME_NUM` and feeds them back into the encoder. While `GetOption` returned garbage
+the recovery path was never entered. One parity fix made a second one reachable, and
+the second one was an abort — **D-prio-1's thesis, measured**. Filed as **F86**.
+
+`test/api` seeds `rand()` from `time(NULL)` (`simple_test.cpp:20–24`), so the abort
+was 1 run in 6; `--seed=1787387872` with the option filter pinned it. After the port:
+that seed passes, and 8 further runs of an LTR-heavy filter are clean.
+
+**Numbers.** gtest **176 → 179**; the four LTR rows deleted from the allowlist
+(`GetOptionLTR_ALLIDR/0,1,2` and `Engine_SVC_Switch_P`, whose first failure T8b.A3 had
+moved from the TEMPORAL_ID read at `decoder_ec_test.cpp:789` to the LTR one at `:746`).

@@ -624,12 +624,61 @@ pub unsafe fn WelsEncoderEncodeParameterSetsRust(
     ENC_RETURN_SUCCESS
 }
 
+/// `ForceCodingIDR` — `encoder_ext.cpp:3046`.
+///
+/// **T8b.A4: this was a stub.** It checked `pCtx` for null and returned 0, so
+/// `ISVCEncoder::ForceIntraFrame(true)` reported success and *did nothing*. What the
+/// caller got instead of an IDR was whatever the normal GOP logic produced next —
+/// with the default `iIdrInterval` that is often an IDR anyway, which is why the
+/// diffharness, the sweeps and `EncoderOutputTest`'s hashes never saw it: the
+/// reference and the port agree on the frames where nothing was forced. `ltr_test.cpp:39`
+/// is the assertion that does not agree, and it is about the *frame type reported*,
+/// which no byte referee reads.
+///
+/// The measured shape (`tests/encoder_force_idr_ltr_test.rs`, red before this
+/// commit): at IDR interval 1 every frame was IDR and the stub was invisible; at
+/// interval 2 frame 1 came back `videoFrameTypeI` (3) instead of
+/// `videoFrameTypeIDR` (1).
+///
+/// The reference's two arms differ only in *which* dependency layers they reset:
+/// all of them unless simulcast-AVC is on and the caller named a valid one. Both
+/// reset the same five fields and bump the same counter, so the loop below is
+/// written once over the layer range each arm selects.
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
-pub unsafe fn ForceCodingIDR(pCtx: *mut sWelsEncCtx, _iLayerId: i32) -> i32 {
+pub unsafe fn ForceCodingIDR(pCtx: *mut sWelsEncCtx, iLayerId: i32) -> i32 {
     if pCtx.is_null() {
         return 1;
     }
+    let pParam = crate::encoder::encoder_context::ctx_param(pCtx);
+    if pParam.is_null() {
+        return 1;
+    }
+    let all_layers = iLayerId < 0
+        || iLayerId >= crate::encoder::param_svc::MAX_SPATIAL_LAYER_NUM as i32
+        || !(*pParam).bSimulcastAVC;
+    let (first, last) = if all_layers {
+        (0, (*pParam).iSpatialLayerNum)
+    } else {
+        (iLayerId, iLayerId + 1)
+    };
+    for iDid in first..last {
+        let pParamInternal = std::ptr::addr_of_mut!((*pParam).sDependencyLayers[iDid as usize]);
+        (*pParamInternal).iCodingIndex = 0;
+        (*pParamInternal).iFrameIndex = 0;
+        (*pParamInternal).iFrameNum = 0;
+        (*pParamInternal).iPOC = 0;
+        (*pParamInternal).bEncCurFrmAsIdrFlag = true;
+        // The reference counts the request against layer **0** in the all-layers arm
+        // and against `iLayerId` in the other — `sEncoderStatistics[0]` inside the
+        // loop, not `sEncoderStatistics[iDid]`. Kept as it is: it is a statistic, and
+        // a "fix" here would diverge from what a consumer reading
+        // `ENCODER_OPTION_GET_STATISTICS` sees.
+        let stat_idx = if all_layers { 0 } else { iLayerId as usize };
+        (*pCtx).sEncoderStatistics[stat_idx].uiIDRReqNum =
+            (*pCtx).sEncoderStatistics[stat_idx].uiIDRReqNum.wrapping_add(1);
+    }
+    (*pCtx).bCheckWindowStatusRefreshFlag = false;
     0
 }
 
