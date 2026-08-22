@@ -510,3 +510,134 @@ concealment-mode output, measured above.
 `--ec=` axis is one flag away from being swept and would have caught this whenever it
 appeared. Adding a second concealment mode to `compare_all.sh` is the obvious next
 instrument and is not this session's (D-gate-3 puts sweeps at the phase close).
+
+## F97 — the `_c` downsamplers *are* the NEON downsamplers, byte for byte; the divergence is in the dispatch **table**, not the kernels
+
+Session C's brief named one risk that could sink the session: the tests link
+`libopenh264.a`, built with assembly, so on this arm64 host `CDownsampling`
+dispatches to NEON, while the port would naturally translate the `_c` kernels — and
+upstream itself hedges, giving `EncoderOutputTest` rows 5 and 7 *two* golden hashes
+each with the comment about "whether averaging is done vertically or horizontally
+first when downsampling" (`test/api/encoder_test.cpp:163,174`).
+
+**Measured, not reasoned.** `rust/tools/vp_kernel_probe/kernel_parity.cpp` links the
+reference archive and calls each `_c` kernel and its NEON sibling over identical
+input, diffing the destination window. 40 comparisons — eight frame sizes × the
+`x16`/`x32` stride branches for the half-average, eight for quarter, eight for
+one-third, four general-ratio:
+
+```text
+half 320x192 … 1280x720 … (both stride branches)   IDENTICAL   (16/16)
+quarter 320x192 … 1280x720                          IDENTICAL   (8/8)
+onethird 320x192 … 1280x720                         IDENTICAL   (8/8)
+general ACC 320x192->208x128 … 1280x720->848x480    IDENTICAL   (4/4)
+==> ALL COMPARED KERNELS IDENTICAL
+```
+
+So the headline risk **does not exist**: no `WELSCPUFLAG=0`, no `USE_ASM=No`
+reference build, no choosing between two goldens. Port the `_c` kernels and parity
+against `cxx_enc` holds as it always has.
+
+**But the probe found the real trap one line away.** The divergence is not between a
+kernel and its sibling, it is between the two *tables*. `InitDownsampleFuncs`
+(`downsample.cpp:85–141`) binds the scalar table
+
+```c
+sDownsampleFunc.pfGeneralRatioChroma  = GeneralBilinearAccurateDownsampler_c;
+sDownsampleFunc.pfGeneralRatioLuma    = GeneralBilinearFastDownsampler_c;      // Fast
+```
+
+and then the aarch64 arm **rebinds luma to the accurate wrapper**:
+
+```c
+sDownsampleFunc.pfGeneralRatioChroma = GeneralBilinearAccurateDownsamplerWrap_AArch64_neon;
+sDownsampleFunc.pfGeneralRatioLuma   = GeneralBilinearAccurateDownsamplerWrap_AArch64_neon;  // *not* Fast
+```
+
+There is no NEON "fast" general downsampler at all, so the aarch64 table quietly
+substitutes the accurate one for luma. Fast and Accurate are **not** the same
+function — the same probe measures the gap:
+
+```text
+general FAST_c vs ACC_c 320x192->208x128    DIFFER (3366/26624 px)
+general FAST_c vs ACC_c 1280x720->848x480   DIFFER (1485/407040 px)
+general FAST_c vs ACC_c 640x360->424x240    DIFFER ( 361/101760 px)
+```
+
+A port that transliterated `InitDownsampleFuncs`'s *scalar* table — which is the
+obvious thing to do, and what the brief describes — would use Fast for luma and
+diverge on every non-dyadic ratio, while matching on every dyadic one. That is the
+worst shape a bug can have: invisible in the gate configuration, wrong later.
+
+**Decision (step 0): port the `_c` kernels, bind them the way the aarch64 table binds
+them.** Recorded at `processing/downsample.rs` and in the `dl` preset's comment.
+
+## F98 — the arm of `CDownsampling::Process` that actually runs is the *other* one, and it makes two of the five kernels dead code
+
+`Process` (`downsample.cpp:144`) has two arms:
+
+```c
+if ((iSrcWidthY >> 1) > MAX_SAMPLE_WIDTH || (iSrcHeightY >> 1) > MAX_SAMPLE_HEIGHT || m_bNoSampleBuffer) {
+    // arm 1: single pass — half / quarter / onethird / general, picked by ratio
+} else {
+    // arm 2: a do-while that halves repeatedly through m_pSampleBuffer
+}
+```
+
+`m_bNoSampleBuffer` reads like "this object has no sample buffer", and the brief took
+it that way. It is the opposite: it is `AllocateSampleBuffer()`'s return value, and
+that function returns `false` on **success** and `true` only when a `WelsMalloc`
+failed (`downsample.cpp:49,56–72`). So on any host where the four allocations
+succeed, `m_bNoSampleBuffer == false`, and with `MAX_SAMPLE_WIDTH = 1920` the size
+test needs a source wider than 3840 to fire. **Arm 2 is the normal path. Arm 1 is the
+out-of-memory fallback.**
+
+The consequence is not cosmetic. Arm 2 never calls `pfQuarterDownsampler` or
+`pfOneThirdDownsampler`; it reaches the target by repeated halving and finishes with
+either an exact half-average or the general-ratio kernel. Measured against the real
+class (`rust/tools/vp_kernel_probe/dispatch_model.cpp`, which constructs a
+`CDownsampling` and diffs `Process`'s output against candidate kernels):
+
+```text
+4:1   640x384 -> 160x96    single-pass quarter = no    two cascaded half-averages = MATCH
+4:1  1280x720 -> 320x180   single-pass quarter = no    two cascaded half-averages = MATCH
+gen   320x192 -> 208x128   general-Fast        = no    general-Accurate           = MATCH
+3:1   960x576 -> 320x192   single-pass onethird= no    (halve to 480x288, then general)
+```
+
+So `DyadicBilinearQuarterDownsampler_c` and `DyadicBilinearOneThirdDownsampler_c` are
+**unreachable** in the configuration the tests run, and a port that dispatched 4:1 to
+the quarter kernel — as the brief instructs — would be wrong on exactly the ratio row
+7 exercises.
+
+**The validated model.** `dispatch_model.cpp` carries a plain-C++ transcription of arm
+2 plus the two kernels it can reach (`DyadicBilinearDownsampler_c` and
+`GeneralBilinearAccurateDownsampler_c`), and diffs it against `CDownsampling::Process`
+over 19 source→destination pairs covering 2:1, 4:1, 8:1, 3:1 and four general ratios,
+all three planes:
+
+```text
+==> MODEL MATCHES THE REFERENCE ON EVERY CASE   (19/19, Y+U+V)
+```
+
+That model — not the source reading — is what `processing::downsample` is ported from.
+
+Two details in it that a transcription drops silently and the probe would have caught:
+
+* `DownsampleHalfAverage` (`downsample.cpp:279`) does **not** pass the source width.
+  It passes `WELS_ALIGN(iSrcWidth & ~1, 32)` when the source stride is 32-aligned and
+  `WELS_ALIGN(…, 16)` otherwise, so the kernel writes *past* the destination's nominal
+  width into the padding, and how far depends on the stride. Both branches land on the
+  same `_c` kernel; only the width differs.
+* The intermediate strides inside the loop are `WELS_ALIGN(iHalfSrcWidth, 32)` for
+  luma and `WELS_ALIGN(iHalfSrcWidth >> 1, 32)` for chroma — recomputed each pass, not
+  inherited from the destination.
+
+## F99 — denoise has no NEON on aarch64, so it carries none of F97's risk
+
+`CDenoiser::InitDenoiseFunc` (`denoise.cpp:55–65`) has exactly one non-scalar arm and
+it is `#if defined(X86_ASM)`. There is no NEON denoise in the tree, and `nm` on the
+reference archive agrees — the only denoise symbols it exports are
+`BilateralLumaFilter8_c`, `WaverageChromaFilter8_c` and `Gauss3x3Filter`. On this host
+the reference runs the same scalar filters the port will, so `EncoderOutputTest/4`
+needs no kernel-selection decision at all.
