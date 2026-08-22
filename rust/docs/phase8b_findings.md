@@ -319,6 +319,29 @@ messenger. F93's remaining rows — the emitted frame at row 9 that the port doe
 produce, and the `dsFramePending` at row 7 — are what parse-only adds *on top* of
 that, and they should be re-measured once F96 is fixed. Owner: unassigned, after F96.
 
+**Re-measured after F96's fix (T8b.C4): five rows became four, and the split the
+experiment was designed to make has landed.** The ordinary `DecodeFrame2` path over
+this asset at `ERROR_CON_DISABLE` is now code-identical to the reference, so what
+remains here is parse-only's own:
+
+```text
+  row  7   ref rv=0x0                        port rv=0x1 (dsFramePending)
+  row  9   ref nal=5 [13,8,5601,8827,10956]  port rv=0x4, nothing emitted
+  row 13   ref rv=0x1                        port rv=0x2 (dsRefLost)
+  row 14   ref rv=0x1                        port rv=0x4
+  row 16   —  gone, this was F96 —
+  total    ref 1 frame emitted               port 0
+```
+
+The next place to look is therefore the parse-only arm of `DecodeFrameConstruction`
+and not the shared error path — the branch that decides whether an access unit
+produces `SParserBsInfo` output. **Owner: Phase 9**, with this table and the two
+`ecref --parse-only --ec=0` transcripts as the repro.
+
+One column that differs and is *not* one of the four: `in=`, the input timestamp.
+Upstream's `DecodeParser` destroys the caller's `uiInBsTimeStamp` (**F90**) and the
+port does not, so the reference prints 0 where the port prints what it was handed.
+
 ## F94 — the SPS_PPS_LISTING structure export reads one PPS and copies 57
 
 `CWelsParametersetSpsPpsListing::OutputCurrentStructure` (`paraset_strategy.cpp:688`):
@@ -702,3 +725,66 @@ stands behind it is `safe/pool.rs`'s `shrink_can_reorder_the_slots_it_keeps` and
 three generation rows beside it, which pin the permutation and the staleness contract
 directly. Building a decreasing asset is a `make_numref_asset.cpp` variant and is left
 for whoever needs the arm.
+
+## F96 — closed: `isNewFrame` was missing the `iThreadCount > 1` that guards it
+
+The narrowing handed to this session said the divergence was "inside `InitRefPicList`
+or one of `WelsInitRefList` / `WelsReorderRefList` / `WelsReorderRefList2` beneath it",
+with two candidates already eliminated. It was in **none** of them. It was one line
+above the call.
+
+`decoder_core.cpp:2538-2541`:
+
+```c
+bool isNewFrame = true;
+if (iThreadCount > 1) {
+  isNewFrame = pCtx->pDec == NULL;
+}
+```
+
+The port had the assignment without its guard — `let isNewFrame = pCtx.pDec.is_none();`
+— so on a **continuing** frame it read `false` where the reference reads `true`, and
+the one thing the flag gates is `InitRefPicList` (`decoder_core.rs:4627`). The port
+skipped the call. `InitRefPicList` never "returned `ERR_NONE`"; it never ran.
+
+**How it was found, after two wrong readings.** Reading did not converge — the port's
+`WelsReorderRefList` has all four of the reference's failure returns, including the
+bare `i < 0` one. A probe did, in two steps: an `eprintln` at each return of
+`WelsReorderRefList` showed it entered **twice** in a seventeen-call decode, both times
+succeeding; an `eprintln` at the `InitRefPicList` call site then showed two access
+units with `isNewFrame=false sliceType=P_SLICE shortRef=0 longRef=0` — two, matching
+the two divergent calls exactly.
+
+**The reference's path, for the record**, since it is the arm the whole finding is
+about. On those two access units the reference calls `InitRefPicList` on a P slice
+whose reference list is empty; `WelsInitRefList` memsets `pRefList` and copies nothing
+in; `WelsReorderRefList`'s search runs `i` down to −1 and falls out at
+
+```c
+if (i < 0) {
+  return ERR_INFO_REFERENCE_PIC_LOST;   // manage_dec_ref.cpp:462
+}
+```
+
+which is **the one of its four failure returns that sets no `iErrorCode`** — hence the
+bare `dsRefLost` (0x2) the reference reports, rather than the `0x12` the other three
+would give. The prompt's narrowing had this backwards ("`WelsReorderRefList`'s three
+failure returns all *assign* `iErrorCode` first"): there are four, and the fourth is
+the one that fires.
+
+**Measured.** `ecref --ec=0` vs `ecref_rs --ec=0` on `res/Error_I_P.264`, before and
+after:
+
+```text
+before  ref  …0x4,0x0,0x0,0x2,0x0,…,0x4,0x4,0x0,0x2
+        port …0x4,0x0,0x0,0x4,0x0,…,0x4,0x4,0x0,0x4     (calls 6 and 16)
+after   identical, all 17 codes and all 17 iBufferStatus values
+```
+
+The default `ERROR_CON_SLICE_COPY` path over the same asset was identical before and
+stays identical, and `compare_all.sh` is unchanged at **2902/17 output, 2919/0 codes**
+— the same numbers as sessions A and B closed on.
+
+`decoder_core.cpp:2713`'s trace line — *"reference picture introduced by this frame is
+lost during transmission!"* — is ported in the same commit, as the brief asked: it is
+the line that named the arm, and it belongs with the fix rather than ahead of it.

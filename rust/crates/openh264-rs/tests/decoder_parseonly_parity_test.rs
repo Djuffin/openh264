@@ -71,30 +71,39 @@ const ASSETS: &[&str] = &[
 /// concealment **disabled** — a combination nothing in this project had ever
 /// refereed: the malformed corpus runs every one of its 2707 rows with
 /// `ERROR_CON_SLICE_COPY` (`malformed_stream_parity.rs:490`) and the conformance
-/// assets are undamaged. Six of its seventeen rows disagree with the reference:
+/// assets are undamaged. **Four of its seventeen rows disagree with the reference**,
+/// re-measured after T8b.C4 fixed F96:
 ///
 /// ```text
-///   row  7   ref rv=0x0                     port rv=0x1 (dsFramePending)
+///   row  7   ref rv=0x0                        port rv=0x1 (dsFramePending)
 ///   row  9   ref nal=5 [13,8,5601,8827,10956]  port rv=0x4, nothing emitted
-///   row 13   ref rv=0x1                     port rv=0x2 (dsRefLost)
-///   row 14   ref rv=0x1                     port rv=0x4
-///   row 16   ref rv=0x2                     port rv=0x4
-///   total    ref 1 frame emitted            port 0
+///   row 13   ref rv=0x1                        port rv=0x2 (dsRefLost)
+///   row 14   ref rv=0x1                        port rv=0x4
+///   total    ref 1 frame emitted               port 0
 /// ```
+///
+/// **Row 16 is gone**: it was F96 — `isNewFrame` was computed without the
+/// `iThreadCount > 1` guard the reference puts on it, so `InitRefPicList` was skipped
+/// on a continuing frame and the port failed the slice decode where the reference
+/// returned early with `dsRefLost`. Closed in T8b.C4, and the ordinary
+/// `DecodeFrame2` path over this asset at `ERROR_CON_DISABLE` is byte- and
+/// code-identical now (`ecref --ec=0` vs `ecref_rs --ec=0`).
+///
+/// **So what is left here is what parse-only adds on top**, which is the split the
+/// F93 experiment was designed to make: the ordinary path agrees and this one does
+/// not, so the four rows above are in the parse-only arm of
+/// `DecodeFrameConstruction`, not in the shared error path.
 ///
 /// **Not T8b.B2's.** Every write that commit adds is behind `pParam.bParseOnly`, and
 /// the only codes it can raise are `dsOutOfMemory` (the two `MAX_ACCESS_UNIT_CAPACITY`
 /// checks) and `dsBitstreamError` from the `SPS_PPS_BS_SIZE - 4` guard — which needs a
-/// parameter set of 124 bytes or more, where this stream's are 13 and 8. What the new
-/// entry point did was make an existing error-path divergence *visible*: the codes
-/// above are `dsFramePending`, `dsRefLost` and `dsBitstreamError`, all raised by
-/// pre-existing decoder paths under `ERROR_CON_DISABLE`.
+/// parameter set of 124 bytes or more, where this stream's are 13 and 8.
 ///
-/// The next experiment is named rather than guessed: drive the **ordinary**
-/// `DecodeFrame2` path over this asset with `ERROR_CON_DISABLE` on both links
-/// (`ecref` needs an `--ec=` flag) and see whether it diverges there too. If it does,
-/// the defect is the decoder's error path and parse-only is only the messenger; if it
-/// does not, it is in the parse-only arm of `DecodeFrameConstruction`.
+/// One column that is *expected* to differ and is not counted above: `in=`, the
+/// input timestamp. Upstream's `DecodeParser` overwrites the caller's
+/// `uiInBsTimeStamp` on its way out (**F90**); the port does not, so the reference
+/// reports 0 where the port reports what it was handed. That is a divergence in the
+/// port's favour and is recorded as one.
 const DIVERGING: &[&str] = &["Error_I_P"];
 
 /// One `PARSE` row, rendered exactly as `ecref --parse-only` prints it.
