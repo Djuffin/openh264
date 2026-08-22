@@ -15552,3 +15552,77 @@ means) and the border and degenerate-size behaviour.
 
 `EncodeFile/EncoderOutputTest.CompareOutput/4` passes and leaves the allowlist:
 **26 → 25 rows, 173 → 174/199.**
+
+---
+
+## T8b.C2 — `METHOD_DOWNSAMPLE`, and the allowlist reaches its floor
+
+`processing/downsample.rs`: `DyadicBilinearDownsampler`, its quarter and one-third
+siblings, `GeneralBilinearAccurateDownsampler`, `DownsampleHalfAverage` and both arms
+of `Process` — safe over slices, no `unsafe`, no raw pointer.
+`DownsamplePadding`'s dead branch (`wels_preprocess.rs:1675`) calls it;
+`ParamValidationExt`'s per-layer S48 refusal is gone.
+
+**Measured red first**, three configurations, before the port:
+
+```text
+2 layers  320x192    C++  38673 bytes / Rust -1  (rust_enc exited 101 at InitializeExt)
+3 layers  320x192    C++  42137 bytes / Rust -1
+4 layers 1280x720    C++ 132090 bytes / Rust -1
+```
+
+After — and these are the session's referees, all **byte-identical**: denoise alone,
+2 layers, 3 layers, **4 layers at 1280x720**, 2 layers + denoise, and one row under a
+rate-control mode rather than RC_OFF.
+
+**What this port is not a transliteration of, and why (F97, F98).** Step 0's probe
+found the source reads backwards in two places, and both would have produced a port
+that is right on every dyadic ratio and wrong elsewhere — the shape of bug that
+survives a gate:
+
+* the aarch64 table rebinds general-ratio **luma to the accurate downsampler**, where
+  the scalar table binds the fast one, and the two differ on up to 3366 of 26624
+  pixels. There is no NEON fast downsampler, so `GeneralBilinearFastDownsampler_c` is
+  unreachable on this target and is deliberately **not ported** — a kernel with no
+  caller and no referee is worse than an absent one;
+* `m_bNoSampleBuffer` is `AllocateSampleBuffer()`'s return, `false` on success, so
+  the **multi-pass arm is the normal path**. A 4:1 step is two cascaded half-averages
+  through a scratch buffer, not `pfQuarterDownsampler`. Row 7 is exactly that case.
+
+The first arm is still ported and still reachable: `ParamValidationExt` admits
+9437184 samples, so a source wider than 3840 takes it.
+
+`DownsampleHalfAverage` rounds the source width up to a multiple of 32 or 16
+depending on the source stride's alignment, so the kernel writes past the
+destination's nominal width into the padding.
+`half_average_rounds_the_width_up_by_stride_alignment` pins both branches; four more
+in-module tests pin the two-stage rounding, the general kernel's nearest-neighbour
+last row and column, the `RET_INVALIDPARAM` guard, and scratch reuse across frames.
+
+**`encoder_unsupported_preprocess_test.rs` is now
+`encoder_preprocess_plugins_test.rs`,** and its assertions inverted — but into
+something stronger than "it initializes". Deleting a guard also makes `InitializeExt`
+succeed, which is the exact bug S48 was written against, so each row asserts the
+plugin **changed the output**: denoise on ≠ denoise off, two layers ≠ one layer,
+four layers at 720p bigger than one. A port that dropped the guard and left the
+kernel absent passes an init-only test and fails these.
+
+One thing the inverted test taught, and it was the port's referee that was wrong
+rather than the port: a two-layer block with each layer at `n x` the base bitrate is
+refused by `WelsBitRateVerification` under any rc mode but RC_OFF. `BaseEncoderTest`
+gives each layer the *base* rate and multiplies only the overall target
+(`BaseEncoderTest.cpp:46,64`); the diffharness drivers now do the same, so the `dl`
+preset measures something under RC instead of failing on both sides.
+
+**`dl`**, the new sweep preset — layers 2/3/4 × denoise on/off × GOP × cabac × input,
+plus 720p × layers 2/4 × denoise (76 configs). It is the only preset that runs the
+downsampler at all. Not run here: D-gate-3 puts sweeps at the phase close.
+
+**The allowlist reaches its floor.** All seventeen `8b.C` rows pass and are gone —
+`EncoderOutputTest/5` and `/7`, the twelve `EncodeDecodeTestAPI` multi-layer rows,
+the three `GetOptionTid_SVC_L1_NOLOSS` instances and `ParseOnly_General`.
+**173 → 191/199, allowlist 26 → 8: the 7 Phase 10 screen-content rows and D-poc-1.**
+
+`/5` and `/7` carry two golden hashes each — upstream's hedge about averaging order.
+The port needs neither indulgence: it is byte-identical to the reference, so it
+matches whichever of the two the reference produces.

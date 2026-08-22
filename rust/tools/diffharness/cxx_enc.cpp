@@ -181,16 +181,22 @@ int main (int argc, char** argv) {
 
   sParam.bEnableDenoise = (kiDenoise != 0);
   if (kiDLayers > 1) {
+    const SSpatialLayerConfig kTemplate = sParam.sSpatialLayers[0];
     sParam.iSpatialLayerNum = kiDLayers;
-    sParam.iTargetBitrate  *= kiDLayers;
     for (int i = 0; i < kiDLayers; i++) {
-      sParam.sSpatialLayers[i] = sParam.sSpatialLayers[0];
+      sParam.sSpatialLayers[i] = kTemplate;
       sParam.sSpatialLayers[i].iVideoWidth  = kiWidth  >> (kiDLayers - 1 - i);
       sParam.sSpatialLayers[i].iVideoHeight = kiHeight >> (kiDLayers - 1 - i);
       sParam.sSpatialLayers[i].fFrameRate   = 30.0f;
       sParam.sSpatialLayers[i].iSpatialBitrate    = sParam.iTargetBitrate;
       sParam.sSpatialLayers[i].iMaxSpatialBitrate = UNSPECIFIED_BIT_RATE;
     }
+    // *After* the per-layer assignment, as `BaseEncoderTest` does it: each layer
+    // carries the base rate and only the overall target scales. The other order
+    // (each layer at n x base) is refused by `WelsBitRateVerification` under any
+    // rc mode but RC_OFF, which would make the `dl` preset fail on both sides and
+    // measure nothing.
+    sParam.iTargetBitrate *= kiDLayers;
   }
   }
 
