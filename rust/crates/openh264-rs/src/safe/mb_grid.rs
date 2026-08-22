@@ -265,22 +265,56 @@ impl<T> MbArray<T> {
         &mut self.data
     }
 
+    /// **F77's instrument (T8b.A7).** A correct index into a *stale* allocation is
+    /// the shape this port's worst decoder defect took: `WelsRequestMem`'s
+    /// resolution-change arm was missing, so `InitialDqLayersContext` re-sized the
+    /// layer from the new SPS while the pictures kept the old macroblock count, and
+    /// `WelsActualDecodeMbCavlcISlice` addressed `iMbXy` 396 in a 396-entry grid.
+    /// What the panic said was `index out of bounds: the len is 396 but the index is
+    /// 396` at `mb_grid.rs:277` — a line that is inside *every* grid read in the
+    /// decoder, so it named neither the caller nor the picture.
+    ///
+    /// `#[track_caller]` moves the location to the reader, and the message carries
+    /// both grid dimensions, which is what turns "off by one" into "this grid is
+    /// 22x18 and the caller thinks it is bigger". The bounds check itself is not
+    /// new — `self.data[mb_xy]` already had one — so this costs a panic path, not a
+    /// branch on the hot path.
+    #[inline]
+    #[track_caller]
+    fn check(&self, mb_xy: usize) {
+        assert!(
+            mb_xy < self.data.len(),
+            "mb_xy {} >= {} (grid {}x{})",
+            mb_xy,
+            self.data.len(),
+            self.dims.mb_width(),
+            self.dims.mb_height()
+        );
+    }
+
     /// The entry at raster address `mb_xy`.
     #[inline]
+    #[track_caller]
     pub fn get(&self, mb_xy: usize) -> &T {
+        self.check(mb_xy);
         &self.data[mb_xy]
     }
 
     /// Mutable form of [`get`](Self::get).
     #[inline]
+    #[track_caller]
     pub fn get_mut(&mut self, mb_xy: usize) -> &mut T {
+        self.check(mb_xy);
         &mut self.data[mb_xy]
     }
 
     /// The entry at grid coordinates `(x, y)`.
     #[inline]
+    #[track_caller]
     pub fn at(&self, x: usize, y: usize) -> &T {
-        &self.data[self.dims.mb_xy(x, y)]
+        let mb_xy = self.dims.mb_xy(x, y);
+        self.check(mb_xy);
+        &self.data[mb_xy]
     }
 
     /// The left neighbour's entry, if the grid has one.
@@ -430,6 +464,34 @@ impl MbGrid {
     #[inline]
     pub fn dims(&self) -> MbDims {
         self.dims
+    }
+}
+
+/// F77's instrument, pinned: the message names the index, the length **and** both
+/// grid dimensions, so a stale-allocation read says which grid it was reading.
+#[cfg(test)]
+mod f77_instrument_tests {
+    use super::*;
+
+    #[test]
+    #[should_panic(expected = "grid ")]
+    fn an_out_of_range_read_names_the_grid() {
+        let grid: MbArray<u8> = MbArray::new(MbDims::new(22, 18), 0u8);
+        let _ = grid.get(22 * 18);
+    }
+
+    #[test]
+    fn the_message_carries_the_index_the_length_and_both_dimensions() {
+        let grid: MbArray<u8> = MbArray::new(MbDims::new(22, 18), 0u8);
+        let msg = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = grid.get(400);
+        }))
+        .unwrap_err();
+        let text = msg
+            .downcast_ref::<String>()
+            .cloned()
+            .unwrap_or_else(|| String::from("<not a String>"));
+        assert_eq!(text, "mb_xy 400 >= 396 (grid 22x18)");
     }
 }
 

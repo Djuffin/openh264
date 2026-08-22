@@ -15178,3 +15178,78 @@ gives three hits: the interface enum (`IWelsVP.h:133`), the plugin's own constru
 the encoder ever requests it** — it is reachable only by a consumer driving the
 processing library directly, not through `ISVCEncoder`. Noted for Phase 10 and
 recorded in the census.
+
+### T8b.A6 — F80: reachable, with an asset, and worse than expected (F87)
+
+**Instrument.** `ecref --sps` reads every SPS in a stream by its own syntax — dims,
+profile, level, `num_ref_frames` — rather than asking the decoder, because no
+`GetOption` reports `num_ref_frames`. Annex E up to `max_num_ref_frames`, with the
+scaling-list skip written out properly (`test_scalinglist_jm.264` has them, and a
+wrong skip would silently misreport every field after it; it reads
+`profile=100 level=40 320x192 num_ref_frames=5` there).
+
+**No `res/` asset reaches the arm.** Over all 63: every multi-SPS stream repeats one
+`num_ref_frames`, and the only one that changes anything — `Error_I_P.264`, at
+352x288 → 640x480 → 352x288 — changes the *resolution*, which is the **second** arm
+(F77/T8.C1's).
+
+**So one was made with the reference encoder.**
+`rust/tools/make_numref_asset.cpp` against `libopenh264.dylib`: 24 frames at
+`iNumRefFrame = 1`, then `Uninitialize` + `InitializeExt` at the same 320x192 with
+`iNumRefFrame = 4`, 24 more.
+
+> `SetOption(ENCODER_OPTION_NUMBER_REF)` **cannot** make this stream, which is worth
+> recording: `welsEncoderExt.cpp:1142` calls `CheckReferenceNumSetting` on the live
+> parameter block and nothing regenerates the SPS, so the bitstream keeps the value
+> it was initialised with. The first attempt did exactly that and produced one SPS
+> with `num_ref_frames=1`.
+
+`ecref --sps` on the result gives `320x192 num_ref_frames=1` twice then
+`320x192 num_ref_frames=4` twice, and the reference decoder says the rest itself,
+with its trace at `WELS_LOG_INFO`:
+
+```text
+WelsRequestMem(): memory alloc size = 320 * 192, ref list size = 3
+WelsRequestMem(): memory re-alloc for no resolution change (size = 320 * 192),
+                  ref list size change from 3 to 6
+```
+
+`GetTargetRefListSize` is `pSps->iNumRefFrames + 2`, so 1 → 3 and 4 → 6.
+**F80's arm is reachable.** Verdict recorded; the port is session C's.
+
+**What the port does on it — F87.** Not a latent gap. Against the C++'s
+`48 320x192 20c1d2ea23e46f101a9806be1bb046246f7bb9d9`, the port emits nothing for 16
+consecutive calls in the second half. And `decoder_reachability_sweep.rs` — which
+globs `res/` — refused the asset outright:
+
+```text
+an arm documented as unreachable was reached — that is a fact worth a finding:
+  num_ref_change_320x192.264 ec=ERROR_CON_DISABLE bs=VIDEO_BITSTREAM_AVC -> dsOutOfMemory
+  ... (every concealment mode, both bitstream types)
+```
+
+The port reports **`dsOutOfMemory`** to the consumer on a stream the reference decodes
+in full. Filed as **F87**.
+
+The asset lives at `tests/data/f80/num_ref_change_320x192.264` and *not* in `res/`, on
+purpose: moving it into `res/` makes the sweep red for a defect nobody has fixed yet,
+so the move belongs to the commit that ports `IncreasePicBuff`/`DecreasePicBuff`.
+Session C inherits the asset, the generator, the C++'s row and the sweep's verdict.
+
+**Not ported here.** The two functions are 36 and 50 C++ statements, but the port's
+`PicPool` is a `safe::Pool` whose contract says it never grows or shrinks and whose
+`PicId`s carry debug generations; growing and shrinking it is a change to a
+safety-critical invariant in `src/safe/`, and the brief lists step 6 as the first to
+drop. Doing it at the end of a session is how a port acquires a subtle defect. The
+referee is built and the evidence is measured; the port is not.
+
+### T8b.A7 — the F77 instrument
+
+`MbGrid::get`/`get_mut`/`at` indexed `self.data[mb_xy]` bare, so F77's panic read
+`index out of bounds: the len is 396 but the index is 396` at `mb_grid.rs:277` — a
+line inside *every* grid read in the decoder, naming neither the caller nor the
+picture. `#[track_caller]` plus an explicit assert now gives
+`mb_xy 400 >= 396 (grid 22x18)` at the reader's own line. Two tests pin it: a
+`#[should_panic(expected = "grid ")]` and one that asserts the whole message, so a
+future edit cannot quietly drop a field. The bounds check already existed — this
+replaces it, and costs a panic path rather than a branch.
