@@ -15,9 +15,11 @@
 #                   iMaxSliceNum and drive the slice-realloc path         (12 configs)
 #             ltr   bEnableLongTermReference on, x LTR feedback bitmask
 #                   x intra period                                        (16 configs)
-#             ps    all 5 eSpsPpsIdStrategy values x cabac x GOP x input  (60 configs)
+#             ps    all 5 eSpsPpsIdStrategy values x cabac x GOP x input  (90 configs)
 #             dl    iSpatialLayerNum 2/3/4 x denoise on/off x GOP x cabac x
 #                   input, plus 720p x layers 2/4 x denoise                (76 configs)
+#                   -- measured 76/76 at T8b.C2; ps measured 90/90 the same day,
+#                      the first time it had ever been run
 #                   -- the only preset that runs METHOD_DOWNSAMPLE at all
 #             all   every preset above
 #

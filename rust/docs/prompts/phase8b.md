@@ -82,10 +82,17 @@ slicing are unported, and Phase 7 ported both.
    `DecodeFrameNoDelay` (`ecref --nodelay`, T8.C8), `FlushFrame` (the reordering
    tests); `GetOption` gets `ecref --options` (per-call values of every get-able
    scalar option, from the C++) and `DecodeParser` gets one when parse-only lands.
-3. **A diffharness `sp` preset** — `iSpatialLayerNum` 2/4 × denoise on/off × two rc
-   modes, 720p and CIF — lands *with* the downsample + denoise port and is red
-   before it (`rust_enc/main.rs:69/84` and `cxx_enc.cpp:85/101/123` hard-code 1 layer
-   and denoise off today; both sides gain the knobs).
+3. **A diffharness spatial-layer preset** — `iSpatialLayerNum` 2/4 × denoise on/off
+   × two rc modes, 720p and CIF — lands *with* the downsample + denoise port and is
+   red before it (`rust_enc/main.rs:69/84` and `cxx_enc.cpp:85/101/123` hard-code 1
+   layer and denoise off today; both sides gain the knobs).
+
+   **Named `dl` (dependency layers), landed at T8b.C2.** This charter called it `sp`
+   while it was still a plan, and session B independently added a *different* preset
+   called **`ps`** (the five `eSpsPpsIdStrategy` values). The two were read as one
+   name spelled two ways when session C's brief was written; they are two presets.
+   `dl` is the multi-layer one and the only one that runs the downsampler; `ps` is
+   the parameter-set one. Both are in `sweep.sh` and both run at the phase close.
 4. **The census** (§2) — widened `find_stub_bodies.py` + `tools/port_census.py`.
 
 ## 4. Rules for this phase (standing rules apply; these are the phase's own)
@@ -124,7 +131,7 @@ slicing are unported, and Phase 7 ported both.
 |---|---|---|
 | **A** (Phase 8 session C continuing) — **done**, `925ac828`..`5478ae7e` | the gate + allowlist (T8b.A1); the census instruments + `port_census.py` + the classification file (A2); the decoder option arms whole, the two stub feeders and the per-call reset block (A3, 21 rows); `ForceCodingIDR` — a stub, and an abort behind it (A4, 3 rows + F86); S48 refusals for denoise/downsample (A5); F80 reachable, asset built, **F87** (A6); the F77 assert (A7) | 155 → **179**, then → **165** by S48 |
 | **B** — **done**, `b2c5cd7e`..`9d2c5e50`; brief [`phase8b_session_b.md`](phase8b_session_b.md) | the seed pin (S49) + `--seeds` (B1) — which found **F89**, a seventh listing-strategy row hidden by the clock; parse-only whole, with four missing pieces not three: the `sSavedData` capture as well (B2), `ecref --parse-only`, seven goldens, the parity test, the harness part; the three listing strategies + `FindExistingPps` + `WriteSavcParaset_Listing` + the three validation traces (B3), five byte-identical strategy pairs; the census reclass and two stale comment blocks (B4); `ecref --ec`/`--trace` + `ecref_rs`, F88 to seed 5 and F96 to a function (B5) | **164 → 173** (the honest pinned baseline is 164, not 165 — F89); the 17 init-refusal rows stay C's |
-| **C** — brief [`phase8b_session_c.md`](phase8b_session_c.md) | downsample + denoise + the `sp` preset (**17** rows; `ParseOnly_General` and `SimulcastAVC_SPS_PPS_LISTING` return with them). **Headline risk**: the reference library links the **NEON** downsamplers (`nm libopenh264.a` → `*_AArch64_neon`), the port would translate the `_c` kernels, and upstream's own dual-hash `EncoderOutputTest` rows say the two average in a different order — byte parity against `cxx_enc`/the gtest goldens is **not** guaranteed by a faithful `_c` port. Measure `_c`-vs-NEON identity first (step 0); if they differ, the decision ladder in the brief. Then then the census's missing list, smallest first; **F80's port, which A found reachable and measured as F87** — `IncreasePicBuff`/`DecreasePicBuff` plus grow/shrink on `safe::Pool`, and the asset moves into `res/` in the same commit | → **191** |
+| **C** — brief [`phase8b_session_c.md`](phase8b_session_c.md) | downsample + denoise + the `dl` preset (**17** rows; `ParseOnly_General` and `SimulcastAVC_SPS_PPS_LISTING` return with them). **Headline risk**: the reference library links the **NEON** downsamplers (`nm libopenh264.a` → `*_AArch64_neon`), the port would translate the `_c` kernels, and upstream's own dual-hash `EncoderOutputTest` rows say the two average in a different order — byte parity against `cxx_enc`/the gtest goldens is **not** guaranteed by a faithful `_c` port. Measure `_c`-vs-NEON identity first (step 0); if they differ, the decision ladder in the brief. Then then the census's missing list, smallest first; **F80's port, which A found reachable and measured as F87** — `IncreasePicBuff`/`DecreasePicBuff` plus grow/shrink on `safe::Pool`, and the asset moves into `res/` in the same commit | → **191** |
 | **D** (if needed) | census residue; the close | — |
 
 *Session A's tally, read twice.* T8b.A4 closed at **179/199**, the brief's target.
@@ -155,7 +162,7 @@ The exit target is unchanged.
 *Exit gate:* `gtest --check` green with an allowlist of **exactly** the 7 Phase 10
 rows and D-poc-1's one (decided 2026-08-22: keep the JVT-correct tiebreak; the row is
 permanent); the census's
-missing list empty or every entry owned by name; `sp` in the sweep, byte-identical
+missing list empty or every entry owned by name; `dl` in the sweep, byte-identical
 both profiles **against whichever downsampler the reference actually runs** (the NEON
 question, resolved in C step 0); every decoder slot with a named referee; `exit` battery PASS unscoped
 **(the phase's only sweep + Miri + bench run, D-gate-3)**; the perf span stated
