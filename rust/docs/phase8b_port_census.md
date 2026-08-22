@@ -24,41 +24,56 @@ it is what makes the exit claim honest.
 
 ## 2. The numbers
 
-`port_census.py`, at `b9599b96`:
+`port_census.py`, **re-run at T8b.B4** (session A's numbers, at `b9599b96`, are in
+the second column):
 
 ```
 1351 C++ definitions (name × file) under codec/{decoder,encoder,processing,common}/**/src,
      SIMD directories and SIMD-suffixed names excluded
-1064 present by name in rust/crates/openh264-rs/src
- 287 with no same-name Rust definition, of which
-     153 dead     — the reference cannot reach it in the configuration this port ships
-      92 renamed  — ported under another name, or folded into a neighbour
-      42 missing  — a real gap
+ 283 with no same-name Rust definition (was 287), of which
+     154 dead     — the reference cannot reach it in the configuration this port ships   (was 153)
+      96 renamed  — ported under another name, or folded into a neighbour                (was  92)
+      33 missing  — a real gap                                                           (was  42)
        0 unclassified
 ```
 
-`find_stub_bodies.py`, same commit: **241 flagged** of 1898 Rust functions (956 have
+`find_stub_bodies.py`, at `b9599b96`: **241 flagged** of 1898 Rust functions (956 have
 a C++ counterpart) by the call-set diff, and **9** by the new empty-body rule.
 
-The 42 `missing`, by owner:
+The 33 `missing`, by owner:
 
 | owner | rows | what |
 |---|---|---|
-| **8b.B** | 9 | the parameter-set listing strategies (`paraset_strategy.cpp` + `WriteSavcParaset_Listing`), parse-only's `ParseAccessUnit` |
+| **8b.B** | **0** | ported at T8b.B2/T8b.B3 — see below |
 | **8b.C** | 12 | the downsample kernels (594 C++ lines) and the denoise kernels (250) |
 | **Phase 10** | 19 | screen content: scroll detection (4 + 2), the screen complexity analysis (2), the feature-search storage (5), the VAA screen buffers (2), `imagerotate` (4) |
 | **F80** | 2 | `IncreasePicBuff` / `DecreasePicBuff` |
+
+**Session B's nine rows are gone, and one of them was never 8b.B's.**
+
+* The `paraset_strategy.cpp` family and `WriteSavcParaset_Listing` are ported
+  (T8b.B3). Four names stay in the census as **renamed**, not missing:
+  `LoadPreviousSps`, `LoadPreviousPps`, `CheckPpsGenerating` and `SpsReset` are
+  per-class C++ methods that collapse onto one method each on the merged
+  `CWelsParametersetIdStrategyObj`, which is the shape T4b.2a chose and T8b.B3
+  extended.
+* `CWelsDecoder::ParseAccessUnit` is **dead, not missing** — session A filed it under
+  8b.B as "parse-only's AU walk", and its only caller is `welsDecoderExt.cpp:1384`,
+  inside `ThreadDecodeFrameInternal`, the threaded decoder D3 deletes. Parse-only's
+  real work went in at T8b.B2 and never touches it. Reclassified by rule in
+  `port_census_classification.txt`, not by hand here.
 
 Nothing in the `missing` column is unowned. **8b.A owns none of it** — the session's
 own work (the decoder option arms, the two feeders, LTR) was all *present-but-wrong*,
 which is the other tool's column.
 
-### The top of the `missing` list, by size — session B and C's input
+### The top of the `missing` list, by size — session C's and Phase 10's input
+(the two 8b.B rows that stood here, `WriteSavcParaset_Listing` at 54 statements and
+`CWelsDecoder::ParseAccessUnit` at 23, are ported and reclassified respectively)
 
 | C++ | stmts / lines | owner |
 |---|---|---|
 | `ScrollDetectionCore` (`ScrollDetectionFuncs.cpp:110`) | 57 / 87 | Phase 10 |
-| `WriteSavcParaset_Listing` (`encoder_ext.cpp:3251`) | 54 / 87 | 8b.B |
 | `DecreasePicBuff` (`decoder.cpp:170`) | 50 / 87 | F80 |
 | `GeneralBilinearFastDownsampler_c` (`downsamplefuncs.cpp:118`) | 49 / 65 | 8b.C |
 | `CComplexityAnalysisScreen::GomComplexityAnalysisInter` (`ComplexityAnalysis.cpp:413`) | 46 / 81 | Phase 10 |
@@ -66,7 +81,6 @@ which is the other tool's column.
 | `IncreasePicBuff` (`decoder.cpp:107`) | 36 / 60 | F80 |
 | `CComplexityAnalysisScreen::GomComplexityAnalysisIntra` (`ComplexityAnalysis.cpp:357`) | 32 / 53 | Phase 10 |
 | `BilateralLumaFilter8_c` (`denoise_filter.cpp:41`) | 30 / 32 | 8b.C |
-| `CWelsDecoder::ParseAccessUnit` (`welsDecoderExt.cpp:1301`) | 23 / 42 | 8b.B |
 
 The full list, with the evidence for every row, is the tool's output:
 

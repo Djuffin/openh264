@@ -1,7 +1,7 @@
 #!/bin/bash
 # Differential comparison: C++ reference encoder vs the Rust port, byte for byte.
 #
-#   usage: rust/tools/diffharness/compare.sh <yuv> <w> <h> <frames> <qp> <cabac> <gop> [rcmode] [baseinit] [slicemode] [slicenum] [threads] [complexity] [ltr] [ltrperiod] [ltrfb]
+#   usage: rust/tools/diffharness/compare.sh <yuv> <w> <h> <frames> <qp> <cabac> <gop> [rcmode] [baseinit] [slicemode] [slicenum] [threads] [complexity] [ltr] [ltrperiod] [ltrfb] [psstrategy]
 #
 #   slicemode: 0 SM_SINGLE_SLICE (default), 1 SM_FIXEDSLCNUM_SLICE,
 #              2 SM_RASTER_SLICE, 3 SM_SIZELIMITED_SLICE.
@@ -48,12 +48,18 @@ CPX=${13:-}
 # `LTRMarkProcess`, `DeleteLTRFromLongList` and every `pLongRefList` shift had no
 # byte coverage at all. See the `ltr` preset in sweep.sh.
 LTR=${14:-}; LTRP=${15:-}; LTRFB=${16:-}
-TAG=$(basename "$YUV" .yuv)_${W}x${H}_qp${QP}_cabac${CABAC}_gop${GOP}${RC:+_rc$RC}${BASE:+_base$BASE}${SLM:+_sm$SLM}${SLN:+n$SLN}${THR:+_t$THR}${CPX:+_cx$CPX}${LTR:+_ltr$LTR}${LTRP:+p$LTRP}${LTRFB:+f$LTRFB}
+# 17th: eSpsPpsIdStrategy (Phase 8b session B, T8b.B3). 0 CONSTANT_ID,
+# 1 INCREASING_ID, 2 SPS_LISTING, 3 SPS_LISTING_AND_PPS_INCREASING,
+# 6 SPS_PPS_LISTING — the enum's own values, not a dense range. The three listing
+# strategies refused at `InitializeExt` in the port until that session, so this axis
+# had no byte coverage at all. See the `ps` preset in sweep.sh.
+PS=${17:-}
+TAG=$(basename "$YUV" .yuv)_${W}x${H}_qp${QP}_cabac${CABAC}_gop${GOP}${RC:+_rc$RC}${BASE:+_base$BASE}${SLM:+_sm$SLM}${SLN:+n$SLN}${THR:+_t$THR}${CPX:+_cx$CPX}${LTR:+_ltr$LTR}${LTRP:+p$LTRP}${LTRFB:+f$LTRFB}${PS:+_ps$PS}
 
 cd "$ROOT" || exit 1
-"$HERE/cxx_enc"                        "$YUV" "$W" "$H" "$N" "$QP" "$CABAC" "$GOP" "$OUT/c_$TAG.264"  $RC $BASE $SLM $SLN $THR $CPX $LTR $LTRP $LTRFB 2>"$OUT/c_$TAG.log"
+"$HERE/cxx_enc"                        "$YUV" "$W" "$H" "$N" "$QP" "$CABAC" "$GOP" "$OUT/c_$TAG.264"  $RC $BASE $SLM $SLN $THR $CPX $LTR $LTRP $LTRFB $PS 2>"$OUT/c_$TAG.log"
 cxx_rc=$?
-"$RUST_ENC"                            "$YUV" "$W" "$H" "$N" "$QP" "$CABAC" "$GOP" "$OUT/r_$TAG.264" $RC $BASE $SLM $SLN $THR $CPX $LTR $LTRP $LTRFB 2>"$OUT/r_$TAG.log"
+"$RUST_ENC"                            "$YUV" "$W" "$H" "$N" "$QP" "$CABAC" "$GOP" "$OUT/r_$TAG.264" $RC $BASE $SLM $SLN $THR $CPX $LTR $LTRP $LTRFB $PS 2>"$OUT/r_$TAG.log"
 rust_rc=$?
 
 # A driver that aborts leaves a short file, which otherwise reads as an ordinary

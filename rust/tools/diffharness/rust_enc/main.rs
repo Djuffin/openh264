@@ -51,6 +51,9 @@ fn main() {
     // Optional 17th: LTR feedback bitmask. 1 = marking feedback, 2 = recovery
     // request. See cxx_enc.cpp — the schedule is fixed and identical on both sides.
     let ltrfb: i32 = if a.len() > 17 { a[17].parse().unwrap() } else { 0 };
+    // Optional 18th: eSpsPpsIdStrategy, as the enum's own value (T8b.B3). See
+    // cxx_enc.cpp — 0/1/2/3/6, and not a dense range.
+    let psstrategy: i32 = if a.len() > 18 { a[18].parse().unwrap() } else { 0 };
 
     unsafe {
         let mut pEnc: *mut ISVCEncoder = std::ptr::null_mut();
@@ -89,7 +92,13 @@ fn main() {
         };
         p.uiIntraPeriod = gop as u32;
         p.iNumRefFrame = AUTO_REF_PIC_COUNT;
-        p.eSpsPpsIdStrategy = EParameterSetStrategy::CONSTANT_ID;
+        p.eSpsPpsIdStrategy = match psstrategy {
+            1 => EParameterSetStrategy::INCREASING_ID,
+            2 => EParameterSetStrategy::SPS_LISTING,
+            3 => EParameterSetStrategy::SPS_LISTING_AND_PPS_INCREASING,
+            6 => EParameterSetStrategy::SPS_PPS_LISTING,
+            _ => EParameterSetStrategy::CONSTANT_ID,
+        };
         p.bPrefixNalAddingCtrl = false;
         p.bEnableSSEI = false;
         p.bSimulcastAVC = false;

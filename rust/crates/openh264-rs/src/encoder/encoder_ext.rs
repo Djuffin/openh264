@@ -987,12 +987,18 @@ pub unsafe fn InitDqLayers(
 /// Sizes and allocates everything the encoder needs for a frame, then calls
 /// [`InitDqLayers`] and [`InitMbListD`].
 ///
-/// **Deviations, all explicit:** the screen-content VAA extension
-/// (`RequestMemoryVaaScreen`), the adaptive-quantisation buffers, the
-/// background-detection buffers and the dynamic-slice CABAC buffers are guarded by
-/// parameters the Phase-5 gate configuration does not use, and are not ported; each
-/// returns `ENC_RETURN_UNSUPPORTED_PARA` rather than allocating nothing and carrying
-/// on. `RequestMtResource` is likewise only reached with `iMultipleThreadIdc > 1`.
+/// **Deviations, all explicit** — and the list is shorter than it was (T8b.B4):
+/// * the screen-content VAA extension (`RequestMemoryVaaScreen`) returns
+///   `ENC_RETURN_UNSUPPORTED_PARA` (`:1199`). Phase 10.
+/// * the adaptive-quantisation buffers return it too (`:1210`). The *plugin* is
+///   ported (`processing/adaptive_quantization.rs`); these are the encoder-side
+///   `sAdaptiveQuantParam` blocks, which are not.
+/// * **the background-detection buffers are ported** — the sentence that said they
+///   were not has been wrong since T6.F3, and the statement ten lines below it says
+///   so: `SVAAFrameInfo::new` takes `bEnableBackgroundDetection` and builds the pair
+///   exactly when the C++ allocates it.
+/// * `RequestMtResource` is reached with `iMultipleThreadIdc > 1` and is ported
+///   (Phase 7); it is a branch, not a refusal.
 ///
 /// # Safety
 /// `ppCtx` must point to a live context with `pMemAlign`, `pSvcParam` and
@@ -2591,6 +2597,135 @@ pub unsafe fn WriteSavcParaset(
     ENC_RETURN_SUCCESS
 }
 
+/// `encoder_ext.cpp:3251` — the parameter-set writer for the three **listing**
+/// strategies (T8b.B3).
+///
+/// Its comment upstream says "cover the logic of simulcast avc + sps_pps_listing",
+/// which understates it: the caller's test is `! (SPS_LISTING & eSpsPpsIdStrategy)`
+/// (`:3424`), a **bitmask** over `codec_app_def.h`'s 0x02 / 0x03 / 0x06, so all three
+/// listing strategies route here regardless of `bSimulcastAVC`.
+///
+/// What makes it different from [`WriteSavcParaset`] is that it writes *lists*: every
+/// one of `iSpsNum` SPSs and, after `UpdatePpsList` has expanded the array, every one
+/// of `iPpsNum` PPSs — per spatial layer, each list one `SLayerBSInfo`. That is the
+/// point of a listing strategy: the decoder is given the whole set up front, so a
+/// mid-stream re-initialisation can go back to an id it has already seen without
+/// re-sending anything.
+///
+/// It does **not** call `Update`: under a listing strategy the ids are the list's, not
+/// a rotation, and `Update` on those kinds is the inherited `CWelsParametersetIdConstant`
+/// body that memsets the whole offset block (see `ParasetIdKind`'s note on `Update`).
+///
+/// # Safety
+/// `pCtx` must be a live encoder context with its parameter-set arrays allocated to
+/// the counts `GetNeededSpsNum`/`GetNeededPpsNum` asked `RequestMemorySvc` for, and
+/// `ppLayerBsInfo` must name a slot with room for `2 * kiSpatialNum` more layers.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
+pub unsafe fn WriteSavcParaset_Listing(
+    pCtx: *mut sWelsEncCtx,
+    kiSpatialNum: i32,
+    ppLayerBsInfo: *mut *mut SLayerBSInfo,
+    iLayerNum: *mut i32,
+    iFrameSize: *mut i32,
+) -> i32 {
+    let mut iNonVclSize = 0i32;
+    let mut iReturn = ENC_RETURN_SUCCESS;
+    let mut pLayerBsInfo = *ppLayerBsInfo;
+
+    // --- SPS list, per spatial layer ---
+    for iSpatialId in 0..kiSpatialNum {
+        let pParamInternal =
+            std::ptr::addr_of_mut!((*ctx_param(pCtx)).sDependencyLayers[iSpatialId as usize]);
+        if (*pParamInternal).uiIdrPicId < 65535 {
+            (*pParamInternal).uiIdrPicId += 1;
+        } else {
+            (*pParamInternal).uiIdrPicId = 0;
+        }
+
+        let mut iCountNal = 0i32;
+        for iIdx in 0..(*pCtx).iSpsNum {
+            let mut iNalSize = 0i32;
+            iReturn = crate::encoder::wels_encoder_ext::WelsWriteOneSPS(pCtx, iIdx, &mut iNalSize);
+            if iReturn != ENC_RETURN_SUCCESS {
+                return iReturn;
+            }
+            *(*pLayerBsInfo).pNalLengthInByte.add(iCountNal as usize) = iNalSize;
+            iNonVclSize += iNalSize;
+            iCountNal += 1;
+        }
+
+        (*pLayerBsInfo).uiSpatialId = iSpatialId as u8;
+        (*pLayerBsInfo).uiTemporalId = 0;
+        (*pLayerBsInfo).uiQualityId = 0;
+        (*pLayerBsInfo).uiLayerType = NON_VIDEO_CODING_LAYER;
+        (*pLayerBsInfo).iNalCount = iCountNal;
+        (*pLayerBsInfo).eFrameType = EVideoFrameType::videoFrameTypeIDR;
+        (*pLayerBsInfo).iSubSeqId = GetSubSequenceId(pCtx, EVideoFrameType::videoFrameTypeIDR);
+
+        let pNext = pLayerBsInfo.add(1);
+        (*(*pCtx).pOut).iLayerBsIndex += 1;
+        (*pNext).pBsBuf = ctx_frame_bs_at(pCtx, (*pCtx).iPosBsBuffer);
+        (*pNext).pNalLengthInByte = (*pLayerBsInfo).pNalLengthInByte.add(iCountNal as usize);
+        *iLayerNum += 1;
+        pLayerBsInfo = pNext;
+    }
+
+    // --- PPS list, per spatial layer ---
+    //
+    // `encoder_ext.cpp:3297` — the one `UpdatePpsList` call site the port did not
+    // have, because this function did not exist. It is a no-op for four of the five
+    // kinds and the whole point of `SPS_PPS_LISTING`.
+    ParasetStrategy(pCtx).UpdatePpsList(pCtx);
+
+    for iSpatialId in 0..kiSpatialNum {
+        let mut iCountNal = 0i32;
+        for iIdx in 0..(*pCtx).iPpsNum {
+            let mut iNalSize = 0i32;
+            iReturn = crate::encoder::wels_encoder_ext::WelsWriteOnePPS(pCtx, iIdx, &mut iNalSize);
+            if iReturn != ENC_RETURN_SUCCESS {
+                return iReturn;
+            }
+            *(*pLayerBsInfo).pNalLengthInByte.add(iCountNal as usize) = iNalSize;
+            iNonVclSize += iNalSize;
+            iCountNal += 1;
+        }
+
+        (*pLayerBsInfo).uiSpatialId = iSpatialId as u8;
+        (*pLayerBsInfo).uiTemporalId = 0;
+        (*pLayerBsInfo).uiQualityId = 0;
+        (*pLayerBsInfo).uiLayerType = NON_VIDEO_CODING_LAYER;
+        (*pLayerBsInfo).iNalCount = iCountNal;
+        (*pLayerBsInfo).eFrameType = EVideoFrameType::videoFrameTypeIDR;
+        (*pLayerBsInfo).iSubSeqId = GetSubSequenceId(pCtx, EVideoFrameType::videoFrameTypeIDR);
+
+        let pNext = pLayerBsInfo.add(1);
+        (*(*pCtx).pOut).iLayerBsIndex += 1;
+        (*pNext).pBsBuf = ctx_frame_bs_at(pCtx, (*pCtx).iPosBsBuffer);
+        (*pNext).pNalLengthInByte = (*pLayerBsInfo).pNalLengthInByte.add(iCountNal as usize);
+        *iLayerNum += 1;
+        pLayerBsInfo = pNext;
+    }
+
+    *ppLayerBsInfo = pLayerBsInfo;
+
+    // to check number of layers / nals / slices dependencies
+    if *iLayerNum > MAX_LAYER_NUM_OF_FRAME {
+        crate::common::wels_trace::WelsLog(
+            std::ptr::addr_of_mut!((*pCtx).sLogCtx),
+            crate::common::wels_trace::WELS_LOG_ERROR,
+            &format!(
+                "WriteSavcParaset(), iLayerNum({}) > MAX_LAYER_NUM_OF_FRAME({})!",
+                *iLayerNum, MAX_LAYER_NUM_OF_FRAME
+            ),
+        );
+        return ENC_RETURN_UNEXPECTED;
+    }
+
+    *iFrameSize += iNonVclSize;
+    iReturn
+}
+
 /// `encoder_ext.cpp:3387`. Decide this frame's type, and for an IDR write the
 /// parameter sets ahead of the slice data.
 // unsafe-cat: port-raw(Phase 9)
@@ -2666,11 +2801,17 @@ pub unsafe fn PrepareEncodeFrame(
                         WriteSsvcParaset(pCtx, iSpatialNum, ppLayerBsInfo, iLayerNum, iFrameSize);
                 }
             } else {
-                // WriteSavcParaset_Listing covers the three SPS_LISTING strategies, which
-                // CreateParametersetStrategy deliberately does not construct (it returns
-                // null rather than falling through to CONSTANT_ID). Reaching here means a
-                // listing strategy was configured, which this port does not support.
-                (*pCtx).iEncoderError = ENC_RETURN_UNSUPPORTED_PARA;
+                // The three listing strategies, all of them: the C's test is
+                // `! (SPS_LISTING & eSpsPpsIdStrategy)`, a bitmask over 0x02/0x03/0x06.
+                // This arm was `ENC_RETURN_UNSUPPORTED_PARA` until T8b.B3 (the S48
+                // shape, while the strategies were unported).
+                (*pCtx).iEncoderError = WriteSavcParaset_Listing(
+                    pCtx,
+                    iSpatialNum,
+                    ppLayerBsInfo,
+                    iLayerNum,
+                    iFrameSize,
+                );
             }
         }
     }
@@ -3019,13 +3160,18 @@ pub unsafe fn WelsCodeOnePicPartition(
 /// slice, and skipped the frame-type/GOP decision, rate control, reference lists,
 /// preprocessing and padding entirely.
 ///
-/// # Unported branches
+/// # Unported branches — **none left; this list was stale** (T8b.B4)
 ///
-/// Each of these returns an explicit error rather than falling through:
-/// * `iMultipleThreadIdc > 1` — every multi-threaded slice path needs `pTaskManage`,
-///   `InitAllSlicesInThread` and `SliceLayerInfoUpdate`, none of which are ported.
-/// * `SM_SIZELIMITED_SLICE` — needs `WelsCodeOnePicPartition` and
-///   `WelsInitCurrentDlayerMltslc`.
+/// It named two, and Phase 7 ported both. `iMultipleThreadIdc > 1` runs through
+/// `RequestMtResource` (`:1141`), `InitAllSlicesInThread`
+/// (`svc_encode_slice.rs:3315`) and `SliceLayerInfoUpdate` (`:3926`);
+/// `SM_SIZELIMITED_SLICE` runs through `WelsCodeOnePicPartition` (`:3032`) and
+/// `WelsInitCurrentDlayerMltslc` (`:2948`). Every function the paragraph called
+/// unported has been a live definition since then, and both configurations are swept
+/// (`sweep.sh`'s `mt` and `sl` presets).
+///
+/// The `ENC_RETURN_UNSUPPORTED_PARA` returns that remain in this function are the
+/// layer-count bounds (`iLayerNum >= MAX_LAYER_NUM_OF_FRAME`), not feature refusals.
 ///
 /// # Safety
 /// `pCtx` must be a context built by [`WelsInitEncoderExt`].

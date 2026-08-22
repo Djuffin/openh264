@@ -1318,22 +1318,57 @@ pub unsafe fn ParamValidationExt(
     // single thread => no parallel deblocking
     (*pCodingParam).bDeblockingParallelFlag = (*pCodingParam).iMultipleThreadIdc != 1;
 
-    // eSpsPpsIdStrategy checkings
+    // eSpsPpsIdStrategy checkings — `encoder_ext.cpp:466-491`.
+    //
+    // **The three traces were missing until T8b.B3.** The adjustments themselves were
+    // ported; the `WelsLog` beside each was not, so an application that asked for a
+    // listing strategy in a configuration that does not support one had it silently
+    // replaced. The reference tells it. The messages are the reference's, argument for
+    // argument — including the third one's, which prints `eSpsPpsIdStrategy` where it
+    // says `bSimulcastAVC` and vice versa (`encoder_ext.cpp:487-489`); reproduced
+    // rather than repaired, because a consumer grepping its logs matches on text.
     let sps_listing = SPS_LISTING as i32;
     if (*pCodingParam).iSpatialLayerNum > 1
         && !(*pCodingParam).bSimulcastAVC
         && (sps_listing & (*pCodingParam).eSpsPpsIdStrategy as i32) != 0
     {
+        WelsLog(
+            pLogCtx,
+            WELS_LOG_WARNING,
+            &format!(
+                "ParamValidationExt(), eSpsPpsIdStrategy setting ({}) with multiple svc SpatialLayers ({}) not supported! eSpsPpsIdStrategy adjusted to CONSTANT_ID",
+                (*pCodingParam).eSpsPpsIdStrategy as i32,
+                (*pCodingParam).iSpatialLayerNum
+            ),
+        );
         (*pCodingParam).eSpsPpsIdStrategy = CONSTANT_ID;
     }
     if (*pCodingParam).iUsageType == SCREEN_CONTENT_REAL_TIME
         && (sps_listing & (*pCodingParam).eSpsPpsIdStrategy as i32) != 0
     {
+        WelsLog(
+            pLogCtx,
+            WELS_LOG_WARNING,
+            &format!(
+                "ParamValidationExt(), eSpsPpsIdStrategy setting ({}) with iUsageType ({}) not supported! eSpsPpsIdStrategy adjusted to CONSTANT_ID",
+                (*pCodingParam).eSpsPpsIdStrategy as i32,
+                (*pCodingParam).iUsageType as i32
+            ),
+        );
         (*pCodingParam).eSpsPpsIdStrategy = CONSTANT_ID;
     }
     if (*pCodingParam).bSimulcastAVC
         && (sps_listing & (*pCodingParam).eSpsPpsIdStrategy as i32) != 0
     {
+        WelsLog(
+            pLogCtx,
+            WELS_LOG_INFO,
+            &format!(
+                "ParamValidationExt(), eSpsPpsIdStrategy({}) under bSimulcastAVC({}) not supported yet, adjusted to INCREASING_ID",
+                (*pCodingParam).eSpsPpsIdStrategy as i32,
+                (*pCodingParam).bSimulcastAVC as i32
+            ),
+        );
         (*pCodingParam).eSpsPpsIdStrategy = INCREASING_ID;
     }
     if (*pCodingParam).bSimulcastAVC && (*pCodingParam).bPrefixNalAddingCtrl {

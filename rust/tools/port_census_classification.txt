@@ -219,10 +219,25 @@ name ReleaseMemoryVaaScreen | missing | screen content (Phase 10): encoder_ext.c
 name IncreasePicBuff | missing | F80, 8b.A/C: decoder.cpp:107, 36 statements / 60 lines
 name DecreasePicBuff | missing | F80, 8b.A/C: decoder.cpp:170, 50 statements / 87 lines
 
-# 8b.B — the parameter-set listing strategies (~310 C++ lines) and parse-only.
-file codec/encoder/core/src/paraset_strategy.cpp | missing | 8b.B: the SPS_LISTING / SPS_PPS_LISTING strategies; InitializeExt refuses today
-name WriteSavcParaset_Listing | missing | 8b.B: encoder_ext.cpp:3251, 54 statements / 87 lines — the listing strategies' bitstream writer
-name ParseAccessUnit | missing | 8b.B: welsDecoderExt.cpp:1301, 23 statements — parse-only's AU walk
+# 8b.B — ported (T8b.B2/T8b.B3). What is left here is `renamed`, not `missing`.
+#
+# The five strategies are one `CWelsParametersetIdStrategyObj` with a
+# `ParasetIdKind` discriminant (T4b.2a's shape, extended at T8b.B3), so the C++'s
+# per-class method names collapse onto one method each — which is what the census
+# sees as a missing name.
+file codec/encoder/core/src/paraset_strategy.cpp | renamed | T8b.B3: the five strategies are one object with a ParasetIdKind discriminant (paraset_strategy.rs); per-class methods collapse onto one method each
+name LoadPreviousSps | renamed | T8b.B3: folded into CWelsParametersetIdStrategyObj::LoadPrevious (paraset_strategy.rs)
+name LoadPreviousPps | renamed | T8b.B3: folded into CWelsParametersetIdStrategyObj::LoadPrevious (paraset_strategy.rs)
+name CheckPpsGenerating | renamed | T8b.B3: a private method on the merged object (paraset_strategy.rs)
+name SpsReset | renamed | T8b.B3: a private method on the merged object (paraset_strategy.rs)
+
+# `ParseAccessUnit` is **dead, not missing** — corrected at T8b.B4. Session A filed
+# it under 8b.B as "parse-only's AU walk"; its only caller is
+# `welsDecoderExt.cpp:1384`, inside `ThreadDecodeFrameInternal`, which is the
+# threaded decoder D3 deletes. Parse-only's real work — `DecodeParser`, the
+# `sSavedData` capture, the three parameter-set caches and
+# `DecodeFrameConstruction`'s byte copies — went in at T8b.B2 and never touches it.
+name ParseAccessUnit | dead | D3: welsDecoderExt.cpp:1301, called only from ThreadDecodeFrameInternal (:1384), the threaded decoder this port does not have
 
 # 8b.C — the two preprocessing plugins the encoder silently skips today (S48).
 file codec/processing/src/downsample/downsamplefuncs.cpp | missing | 8b.C: the downsample kernels (594 C++ lines with downsample.cpp)

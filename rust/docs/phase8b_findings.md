@@ -309,3 +309,67 @@ and drive the *ordinary* `DecodeFrame2` path over this asset with `ERROR_CON_DIS
 both links. If that diverges too, the defect is in the decoder's error path and the
 corpus needs a second concealment mode; if it does not, it is in the parse-only arm of
 `DecodeFrameConstruction`. Owner: unassigned.
+
+## F94 — the SPS_PPS_LISTING structure export reads one PPS and copies 57
+
+`CWelsParametersetSpsPpsListing::OutputCurrentStructure` (`paraset_strategy.cpp:688`):
+
+```c
+memcpy (pExistingParasetList->sPps, pCtx->pPps, MAX_PPS_COUNT * sizeof (SWelsPPS));
+```
+
+`pCtx->pPps` is **`SWelsPPS*`, a pointer to the one active PPS** — the encoder's array
+is `pCtx->pPPSArray`, and every other statement in this family uses that
+(`LoadPreviousPps` at `:553` writes `pPpsArray`, `UpdatePpsList` at `:576` writes
+`pCtx->pPPSArray[iPpsId]`). So the copy reads `MAX_PPS_COUNT * sizeof (SWelsPPS)` bytes
+starting at a single struct: 56 structs past its end.
+
+The port copies `ctx_pps_array(pCtx)`, which is what the sentence means and what the
+matching `LoadPreviousStructure` reads back. Reproducing the over-read is not an
+option — there is nothing behind `pPps` to read — and it is not observable in a
+correct program: what lands in `sPps[1..]` is whatever followed the active PPS, and
+the only reader is `LoadPreviousPps` on the *next* `InitializeExt`, which copies it
+into `pPpsArray` before `FindExistingPps` compares against `uiInUsePpsNum` entries
+of it.
+
+**Reachability of the difference is not established.** It needs an
+`InitializeExt` → `OutputCurrentStructure` → `InitializeExt` → `LoadPreviousPps` round
+trip under `SPS_PPS_LISTING` with more than one PPS in use, which is what a
+`--reinit-at` knob in the diffharness drivers would build. T8b.B3 dropped that knob
+(the brief's step 5) and left the six `ParameterSetStrategy_*` gtest rows as the
+referee; they pass, but they do not hash bytes across the re-init.
+
+## F95 — `find_stub_bodies.py` cannot see through `abi_guard!`, so every C-ABI thunk reads as a stub
+
+Re-running the stub finder over T8b.B2's work (the brief's step 4) reports:
+
+```text
+DecodeParser   [0 Rust statements vs 37 C++]
+    Rust rust/crates/openh264-rs/src/api/codec_api.rs
+```
+
+which is exactly what it said when `decoder_decode_parser_c` really *was* a stub. The
+reading did not change, because the tool cannot count through the macro: every sibling
+thunk answers the same way at the same commit —
+
+```text
+DecodeFrame          [0 Rust statements vs 13 C++]
+DecodeFrameNoDelay   [0 Rust statements vs 12 C++]
+FlushFrame           [0 Rust statements vs  7 C++]
+```
+
+— and all four have full bodies. The thunk's body is one `abi_guard!(...)`
+invocation, and the tool's statement count sees a macro call.
+
+**What this costs.** T8b.A2's alias table was added so that the C++ `DecodeParser`
+would be compared against the real thunk rather than a same-named trampoline (F85's
+shape). It succeeded at that and the count is still blind, so the instrument's signal
+on the **twenty C-ABI entry points** — the port's whole outward surface — is zero in
+both directions: it cannot see a stub there, and it cannot see a stub being fixed.
+Every one of those slots needs a behavioural referee, which is the S47 rule and is why
+T8b.B2 built one.
+
+The fix is small and mechanical — count statements inside a leading `abi_guard!` /
+`panic_probe!` block rather than treating the invocation as one — and it is not this
+session's, because changing what the instrument reports is a measurement change and
+wants its own commit. Owner: unassigned; the phase close is the natural place.
