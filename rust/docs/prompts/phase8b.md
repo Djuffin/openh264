@@ -123,7 +123,7 @@ slicing are unported, and Phase 7 ported both.
 | session | work | tally expected |
 |---|---|---|
 | **A** (Phase 8 session C continuing) — **done**, `925ac828`..`5478ae7e` | the gate + allowlist (T8b.A1); the census instruments + `port_census.py` + the classification file (A2); the decoder option arms whole, the two stub feeders and the per-call reset block (A3, 21 rows); `ForceCodingIDR` — a stub, and an abort behind it (A4, 3 rows + F86); S48 refusals for denoise/downsample (A5); F80 reachable, asset built, **F87** (A6); the F77 assert (A7) | 155 → **179**, then → **165** by S48 |
-| **B** — brief [`phase8b_session_b.md`](phase8b_session_b.md) | the seed pin (S49) + `--seeds`; parse-only: the three missing pieces under the stub thunk, `ecref --parse-only`, the parity test, the harness part (2 rows now; `ParseOnly_General` needs C's layers); the three listing strategies + `WriteSavcParaset_Listing` + the validation adjustments (6); F88 to a seed and a cause; census reclass of `ParseAccessUnit` (threaded path, dead) | → **173** (165 + 2 + 6); the 17 init-refusal rows stay C's |
+| **B** — **done**, `b2c5cd7e`..`9d2c5e50`; brief [`phase8b_session_b.md`](phase8b_session_b.md) | the seed pin (S49) + `--seeds` (B1) — which found **F89**, a seventh listing-strategy row hidden by the clock; parse-only whole, with four missing pieces not three: the `sSavedData` capture as well (B2), `ecref --parse-only`, seven goldens, the parity test, the harness part; the three listing strategies + `FindExistingPps` + `WriteSavcParaset_Listing` + the three validation traces (B3), five byte-identical strategy pairs; the census reclass and two stale comment blocks (B4); `ecref --ec`/`--trace` + `ecref_rs`, F88 to seed 5 and F96 to a function (B5) | **164 → 173** (the honest pinned baseline is 164, not 165 — F89); the 17 init-refusal rows stay C's |
 | **C** | downsample + denoise + the `sp` preset (**17** rows, not 3 — see session A's note; `ParseOnly_General` and `SimulcastAVC_SPS_PPS_LISTING` return with them); then the census's missing list, smallest first; **F80's port, which A found reachable and measured as F87** — `IncreasePicBuff`/`DecreasePicBuff` plus grow/shrink on `safe::Pool`, and the asset moves into `res/` in the same commit | → **191** |
 | **D** (if needed) | census residue; the close | — |
 
@@ -139,6 +139,18 @@ downsample/denoise rows return together in session C.
 **Session C inherits, beyond its own listing:** F87 (`dsOutOfMemory` where the
 reference decodes cleanly) with its asset at `tests/data/f80/`, its generator
 (`tools/make_numref_asset.cpp`) and the C++'s row; and the census's 12 `8b.C` rows.
+From session B: **F96** (`InitRefPicList` returns `ERR_NONE` where the reference
+returns `ERR_INFO_REFERENCE_PIC_LOST` under `ERROR_CON_DISABLE` — narrowed to one
+function, with `ecref_rs --ec=0` as the referee), **F88** (a concealment divergence
+under `ERROR_CON_SLICE_COPY`, reproducing at `--seeds=5..5`) and **F93** (parse-only
+on a damaged stream, to be re-measured after F96). None is session C's *listing* work;
+they are the queue behind it.
+
+**Session B's tally note.** The pinned-seed baseline is **164/199, 35 rows**, not
+165/34: `DecodeCrashTestAPI.DecoderCrashTest` draws its parameter-set strategy from
+`rand() % 7` and takes a listing one on three draws of seven, so before S49 it flipped
+between runs and was never allowlisted (**F89**). It left with the other six at T8b.B3.
+The exit target is unchanged.
 
 *Exit gate:* `gtest --check` green with an allowlist of **exactly** the 7 Phase 10
 rows and D-poc-1's one (decided 2026-08-22: keep the JVT-correct tiebreak; the row is

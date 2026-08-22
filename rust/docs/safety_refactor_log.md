@@ -15447,3 +15447,67 @@ instrument: it counts a thunk's `abi_guard!(...)` as one statement, so
 the thunk really was a stub, and the same reading `DecodeFrame`, `DecodeFrameNoDelay`
 and `FlushFrame` give with full bodies. The tool's signal on the twenty C-ABI entry
 points is zero in both directions.
+
+### T8b.B5 — one program, two libraries
+
+`ecref` grew `--ec=<idc>` and `--trace=<level>`, and `build.sh` now builds the same
+source a second time against the port's cdylib as **`ecref_rs`**. The seven exported
+symbols are all it links, so this is one extra link line and no extra code — and it
+gives the port a referee for decode configurations no in-tree test drives. Skipped
+rather than fatal when no cdylib is built, so `compare_all.sh` cannot start failing
+because a cargo profile is missing.
+
+It was built to chase F88 and found **F96** on the way: `ERROR_CON_DISABLE` had no
+referee anywhere — the malformed corpus runs all 2707 of its rows with
+`ERROR_CON_SLICE_COPY`, the conformance assets are undamaged, and `ecref` hardcoded
+slice copy. Over all 63 `res/` assets at `--ec=0`, three differ; two are D-poc-1's by
+design and the third, `Error_I_P.264`, differs **only** at `--ec=0` and only in codes.
+The reference's own trace named the arm, which is what `--trace` is for.
+
+**F88 is reproduced and re-read.** Seed 5 of ten (the C++ link is 199/199 on all ten),
+and `decoder_ec_test.cpp:302` is `EXPECT_EQ (dstBufInfo_.iBufferStatus, 1)`, not the
+`EXPECT_TRUE (rv != 0)` one line above that session A recorded. The port reports the
+construction error correctly and then does not emit the concealed frame — a
+concealment divergence under `SLICE_COPY`, and not F96.
+
+### Session B's close (the fast set, D-gate-3)
+
+| gate | result |
+|---|---|
+| `gates.sh commit` | PASS — 528 debug / 523 release / 20 ignored; unsafe ratchet flat against its two deliberate rebaselines; duplicate census 57 allowlisted, nothing new |
+| `gtest_stretch.sh --check` | rc 0, **173/199, allowlist 26** (from 164/35 at the pinned seed) |
+| `abi_exports.sh release` | `exports: 7/7 — exactly upstream's seven` |
+| `abi_harness/run.sh` | `TALLY 14 passed / 0 failed` (58 conformance assets, 5 nodelay rows, **6 parse-only assets**, 14 encode configs × 2 profiles) — 12 → 14 is the new parse-only part in both profiles |
+| `ecref/compare_all.sh` | **2902 / 17 output, 2919 / 0 codes** over 2919 rows — identical to session A's close and to Phase 8's |
+| five targeted diffharness pairs | byte-identical, one per `eSpsPpsIdStrategy` |
+
+No sweeps, no Miri, no benches, no span: D-gate-3 puts those at the phase close.
+
+**The tally, honestly.** The brief said 165/199 with 34 rows; the pinned seed says
+**164/199 with 35**, and the difference is F89 — a row that fails three runs in seven
+and had never been allowlisted because nothing pinned `rand()`. 164 → 173 is what this
+session moved: two parse-only rows and seven listing-strategy ones.
+
+**Ratchet deltas, both deliberate and both rebaselined in the commit that caused them.**
+T8b.B2: `api/codec_api.rs` +2 `raw_ptr` +2 `unsafe_block` (a vtable cast and a
+`[*mut u8; 3]` local `WelsDecodeBs`'s own signature demands). T8b.B3:
+`encoder_ext.rs` +5/+1 and `paraset_strategy.rs` +5/+6 (`sWelsEncCtx`,
+`SExistingParasetList` and the three parameter-set arrays all arrive as `*mut` from
+`RequestMemorySvc`). Every one carries `// unsafe-cat: port-raw(Phase 9)` or
+`// unsafe-cat: C-ABI`; converting them is Phase 9's.
+
+**Handed on.** To session C: its own listing, plus **F96** (narrowed to
+`InitRefPicList` and the three functions beneath it, with `ecref_rs --ec=0` as the
+referee and two candidates already eliminated), **F88** (concealment under
+`SLICE_COPY`, `--seeds=5..5`), **F93** (parse-only on a damaged stream, re-measure
+after F96), and `ParseOnly_General`, which is now a pure downsample row. To the phase
+close: the `ps` sweep preset (defined, not run), a second concealment mode for
+`compare_all.sh`, **F95** (`find_stub_bodies.py` cannot count through `abi_guard!`, so
+its signal on all twenty C-ABI entry points is zero), and the drivers' `--reinit-at`
+knob, which is what would make F94 and the `SPS_LISTING` pairs reachable. To Phase 9:
+**F91** (upstream writes into the caller's `const` bitstream in parse-only mode — the
+port does not, and the divergence is that the input survives) and **F92**'s bounds.
+
+**S47's ledger.** `DecodeParser` was the last decoder slot with no referee. It has
+three now — `ecref --parse-only` goldens, `decoder_parseonly_parity_test.rs`, and
+`abi_harness parseonly` through `dlopen` — and the brief's clause is discharged.
