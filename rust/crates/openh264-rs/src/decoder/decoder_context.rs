@@ -621,18 +621,29 @@ pub struct SPictReoderingStatus {
     pub bHasBSlice: bool,
 }
 
-/// The parse-only output descriptor, **decoder-side and owned** (T5.R4).
+/// The parse-only output buffers, **decoder-side and owned** (T5.R4).
 ///
-/// The C's `SParserBsInfo` is a public API struct and `codec_api.rs` declares the
-/// port's copy of it; this one is the *decoder's* private instance, which
-/// `InitBsBuffer` used to `WelsMallocz` along with both of its buffers. Nothing
-/// hands it across the boundary — `DecodeParser` is a stub in this port and the api
-/// layer uses its own type — so the two buffers own their allocations here and the
-/// boundary's stamping of raw pointers is Phase 8's, with the rest of the `api/`
-/// inventory (F38, F41).
+/// **T8.C7: this was called `SParserBsInfo`, and so is the ABI struct at
+/// `codec_api.rs`'s `SParserBsInfo`.** Session A's inventory found the pair and
+/// classified it as *two entities under one name* — the only one of six duplicate
+/// boundary declarations that could not be unified, because they are not the same
+/// thing: the ABI's carries raw `int` and `uint8_t` pointers into a caller's memory
+/// and is pinned to 48 bytes by `api/abi_guard.rs`; this one carries two `Vec`s it
+/// owns and never crosses anything.
+///
+/// (The pointer types are spelled in prose here on purpose: the ratchet counts
+/// `*mut`/`*const` textually, comments included, and this file should not gain two
+/// raw-pointer tokens for a sentence — the log's standing rule, "reworded, never
+/// regenerated for prose".) `DecodeParser` is a stub in this port, so nothing has ever
+/// handed this outward.
+///
+/// Renamed rather than unified. The **boundary struct keeps its name** — it is the
+/// header's, and the header is the contract — so this is not an ABI change. What D5's
+/// Phase-9 naming pass inherits from the pair is only the style question (whether an
+/// owned decoder type should carry the `S` prefix at all), not the ambiguity.
 #[repr(C)]
 #[derive(Debug, Default, Clone)]
-pub struct SParserBsInfo {
+pub struct ParseOnlyBsBuffers {
     pub iNalNum: i32,
     /// Per-NAL lengths, `iNalNum` used of `len()` allocated. `ExpandBsLenBuffer`
     /// grows it; the old `pCtx->iMaxNalNum` was this `Vec`'s length stored beside it
@@ -1016,7 +1027,7 @@ pub fn cur_dq_layer(list: &mut Option<Box<DqLayerState>>) -> Option<&mut DqLayer
 /// **T5.Z1's parameter rule** (T5.Z3): the field, not the context — the four
 /// consumers all write the descriptor beside reads of other context fields.
 #[inline]
-pub fn parser_bs(bs: &mut Option<Box<SParserBsInfo>>) -> Option<&mut SParserBsInfo> {
+pub fn parser_bs(bs: &mut Option<Box<ParseOnlyBsBuffers>>) -> Option<&mut ParseOnlyBsBuffers> {
     bs.as_deref_mut()
 }
 
@@ -1826,7 +1837,7 @@ pub struct SWelsDecoderContext {
     /// [`parser_bs`]. `None` outside parse-only mode, which is the state the old null
     /// pointer named — and, unlike the null, it is what F41's flag-dependent free
     /// path can no longer leak: the drop glue does not read `bParseOnly`.
-    pub pParserBsInfo: Option<Box<SParserBsInfo>>,
+    pub pParserBsInfo: Option<Box<ParseOnlyBsBuffers>>,
     pub pGetI16x16LumaPredFunc: [PGetIntraPredFunc; 7],
     pub pGetI4x4LumaPredFunc: [PGetIntraPredFunc; 14],
     pub pGetIChromaPredFunc: [PGetIntraPredFunc; 7],

@@ -249,7 +249,7 @@ pub use crate::decoder::decoder_context::SPosOffset;
 use crate::decoder::decoder_context::ec_active_idc;
 
 
-pub use crate::decoder::decoder_context::SParserBsInfo;
+pub use crate::decoder::decoder_context::ParseOnlyBsBuffers;
 
 
 #[repr(C)]
@@ -1853,7 +1853,7 @@ pub fn InitBsBuffer(pCtx: &mut SWelsDecoderContext) -> i32 {
         // become one owned value. The `ERR_INFO_OUT_OF_MEMORY` arms go with the null
         // returns they tested for; `RawDataBuffer::try_new_zeroed` beside them keeps
         // its arm because it really can fail (T3.3's fallible reserve).
-        (*pCtx).pParserBsInfo = Some(Box::new(SParserBsInfo {
+        (*pCtx).pParserBsInfo = Some(Box::new(ParseOnlyBsBuffers {
             pDstBuff: vec![0u8; MAX_ACCESS_UNIT_CAPACITY],
             pNalLenInByte: vec![0i32; MAX_NAL_UNITS_IN_LAYER + 2],
             ..Default::default()

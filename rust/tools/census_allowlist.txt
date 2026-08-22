@@ -33,17 +33,16 @@ type Reach x2                       # port-local shim helper, private per module
 # --- Phase 8 session A: `src/api` enters every instrument's scope (S22) -------
 # Four duplicates fell to unification in the same commit and are NOT listed:
 # `SDecoderStatistics`, `SSysMEMBuffer`, `SVideoProperty` and `VIDEO_BITSTREAM_TYPE`
-# each now has one declaration (the api's) and a re-export. The two that remain:
-type SParserBsInfo x2               # NOT one entity: `codec_api.rs`'s is the ABI struct
-                                    # (`pNalLenInByte: *mut i32`, `pDstBuff: *mut u8`),
-                                    # `decoder_context.rs`'s is the decoder's private,
-                                    # owned instance (`Vec<i32>`, `Vec<u8>`) — different
-                                    # layouts, and nothing hands one to the other
-                                    # (`DecodeParser` is a stub; `WelsDecodeBs`'s
-                                    # `_pDstBsInfo` is `*mut c_void` and unused). Two
-                                    # entities under one name: a **rename**, so
-                                    # **Owner: D5 / Phase 9** (renames are Phase 8's
-                                    # explicit non-goal, charter §4).
+# each now has one declaration (the api's) and a re-export.
+#
+# **`type SParserBsInfo x2` is retired at T8.C7** rather than carried to D5. It was
+# never a duplicate: `codec_api.rs`'s is the ABI struct (`pNalLenInByte: *mut i32`,
+# `pDstBuff: *mut u8`, 48 bytes, pinned) and `decoder_context.rs`'s was the decoder's
+# private owned instance (`Vec<i32>`, `Vec<u8>`), with nothing handing one to the other
+# — two entities under one name. The decoder-side one is `ParseOnlyBsBuffers` now; the
+# **boundary struct keeps its name**, which is why this is not an ABI change and why it
+# could land in Phase 8 at all. D5 inherits only the style question (whether an owned
+# decoder type should carry the `S` prefix), not the ambiguity.
 
 # ---------------------------------------------------------------------------
 # (b) within-codec duplicates still standing, each with the step that owns it
