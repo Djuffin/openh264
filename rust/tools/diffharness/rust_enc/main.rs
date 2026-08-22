@@ -54,6 +54,12 @@ fn main() {
     // Optional 18th: eSpsPpsIdStrategy, as the enum's own value (T8b.B3). See
     // cxx_enc.cpp — 0/1/2/3/6, and not a dense range.
     let psstrategy: i32 = if a.len() > 18 { a[18].parse().unwrap() } else { 0 };
+    // Optional 19th/20th: iSpatialLayerNum and bEnableDenoise (T8b.C1/C2). The two
+    // axes `METHOD_DOWNSAMPLE` and `METHOD_DENOISE` sit behind; both refused at
+    // `InitializeExt` under S48 until this session, so neither had byte coverage.
+    // Layer geometry is `BaseEncoderTest`'s (`test/api/BaseEncoderTest.cpp:43`).
+    let dlayers: i32 = if a.len() > 19 { a[19].parse().unwrap() } else { 1 };
+    let denoise: i32 = if a.len() > 20 { a[20].parse().unwrap() } else { 0 };
 
     unsafe {
         let mut pEnc: *mut ISVCEncoder = std::ptr::null_mut();
@@ -161,6 +167,20 @@ fn main() {
             _ => {
                 p.sSpatialLayers[0].sSliceArgument.uiSliceMode = SliceModeEnum::SM_SINGLE_SLICE;
                 p.sSpatialLayers[0].sSliceArgument.uiSliceNum = 1;
+            }
+        }
+
+        p.bEnableDenoise = denoise != 0;
+        if dlayers > 1 {
+            p.iSpatialLayerNum = dlayers;
+            p.iTargetBitrate *= dlayers;
+            for i in 0..dlayers as usize {
+                p.sSpatialLayers[i] = p.sSpatialLayers[0];
+                p.sSpatialLayers[i].iVideoWidth = w >> (dlayers - 1 - i as i32);
+                p.sSpatialLayers[i].iVideoHeight = h >> (dlayers - 1 - i as i32);
+                p.sSpatialLayers[i].fFrameRate = 30.0;
+                p.sSpatialLayers[i].iSpatialBitrate = p.iTargetBitrate;
+                p.sSpatialLayers[i].iMaxSpatialBitrate = UNSPECIFIED_BIT_RATE;
             }
         }
         }

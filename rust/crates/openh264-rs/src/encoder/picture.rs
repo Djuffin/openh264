@@ -292,6 +292,19 @@ impl SPicture {
         &mut self.planes[i]
     }
 
+    /// All three planes mutably at once.
+    ///
+    /// [`plane_mut`](Self::plane_mut) borrows the whole picture, so a step that
+    /// writes Y, U and V in one pass — `METHOD_DENOISE` and `METHOD_DOWNSAMPLE`,
+    /// both of which take the three planes as slices rather than the `SPixMap` of
+    /// raw pointers the C++ hands them — cannot hold three of them. Array
+    /// destructuring can, and stays safe.
+    #[inline]
+    pub fn planes_mut3(&mut self) -> [&mut PaddedPlane; 3] {
+        let [y, u, v] = &mut self.planes;
+        [y, u, v]
+    }
+
     /// `ExpandReferencingPicture` for a picture that owns its planes — **T6.F4**, and
     /// it is the sentence `decoder/picture.rs::expand_as_reference` left for this
     /// phase ("the encoder's two call sites keep the raw entry point: converting them

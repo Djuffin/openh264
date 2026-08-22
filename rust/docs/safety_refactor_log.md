@@ -15511,3 +15511,44 @@ port does not, and the divergence is that the input survives) and **F92**'s boun
 **S47's ledger.** `DecodeParser` was the last decoder slot with no referee. It has
 three now — `ecref --parse-only` goldens, `decoder_parseonly_parity_test.rs`, and
 `abi_harness parseonly` through `dlopen` — and the brief's clause is discharged.
+
+---
+
+## T8b.C1 — `METHOD_DENOISE`, and the first plugin ported against a measured referee
+
+`processing/denoise.rs`: `BilateralLumaFilter8_c`, `WaverageChromaFilter8_c`,
+`Gauss3x3Filter`, `BilateralDenoiseLuma`, `WaverageDenoiseChroma` and
+`CDenoiser::Process`, all safe over slices — no `unsafe`, no raw pointer, the
+charter's bar for a processing kernel. `CWelsPreProcess::BilateralDenoising`
+(`wels_preprocess.rs:1583`) was an empty `unsafe fn`; it is a safe fn now, resolving
+the three planes through the new `SPicture::planes_mut3()` and running the filters in
+place. `ParamValidationExt`'s `bEnableDenoise` refusal (S48, T8b.A5) is gone.
+
+**Measured red first.** `compare.sh … dl=1 dn=1` on the row-4 configuration, before
+the port: `C++ 25113 bytes / Rust -1 bytes — rust_enc exited 101` (the S48 refusal at
+`InitializeExt`). After: **BYTE-IDENTICAL**, and three more configurations with it —
+160x96 qp30 cabac1 gop4, 152x100 qp26, 320x192 qp40 cabac1 gop8, all byte-identical.
+
+The referee needed two new driver axes, added to `cxx_enc`, `rust_enc` and
+`compare.sh` in this commit: **`dlayers`** (19th) and **`denoise`** (20th). Neither
+`METHOD_DENOISE` nor `METHOD_DOWNSAMPLE` had *any* byte coverage before, because no
+configuration the harness could express turned either on.
+
+**The one thing that is not a transliteration, and why.** `CDenoiser::Process` is
+split into the plugin method and a free `Denoise(m_uiType, …)`. The caller holds the
+picture and the plugin through the same `&mut CWelsPreProcess`; the two borrows are
+disjoint in fact and not in what a method call can say, so the caller copies
+`m_uiType` out (a `u16`) and calls the free function. The plugin method stays, so
+`SWelsVpContext`'s five fields still look alike.
+
+**The group of eight is semantics, not an optimisation.** Each filter computes eight
+pixels into a local array and writes them back together, so pixel `i`'s window sees
+pixel `i-1`'s *original* value while the row above it is already filtered.
+`group_of_eight_reads_pre_filter_values` runs the same eight pixels both ways and
+asserts they differ — a later tidy-up that drops the buffer fails there rather than in
+a golden hash. Four more in-module tests pin the kernels' fixed points (a flat field
+survives all three filters exactly, which is what "weights sum to 16 / 64 / 256"
+means) and the border and degenerate-size behaviour.
+
+`EncodeFile/EncoderOutputTest.CompareOutput/4` passes and leaves the allowlist:
+**26 → 25 rows, 173 → 174/199.**

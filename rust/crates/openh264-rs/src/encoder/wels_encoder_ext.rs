@@ -1376,18 +1376,17 @@ pub unsafe fn ParamValidationExt(
     }
 
     // -----------------------------------------------------------------------
-    // **S48, until Phase 8b session C — the two preprocessing plugins this port
-    // does not have yet refuse here instead of being skipped silently.**
+    // **S48 — the preprocessing plugin this port does not have yet refuses here
+    // instead of being skipped silently.**
     //
-    // `METHOD_DENOISE` and `METHOD_DOWNSAMPLE` are untranslated
-    // (`processing/mod.rs:29-39`). `CWelsPreProcess::BilateralDenoising`
-    // (`wels_preprocess.rs`) is an empty body behind `bEnableDenoise`, and
-    // `DownsamplePadding` returns `RET_NOTSUPPORTED` when the sizes differ while
-    // **both callers drop the return**. So the encode *succeeded* and produced
-    // un-denoised, un-downsampled layers: `EncoderOutputTest/4` (denoise), `/5`
-    // (2 spatial layers) and `/7` (4 layers) are the three gtest rows that catch
-    // it, and they catch it as a *hash difference* — a consumer gets bytes that
-    // look fine and are not what it asked for.
+    // `METHOD_DENOISE` was the other half of this block and is **ported**
+    // (T8b.C1, `processing/denoise.rs`), so `bEnableDenoise` no longer refuses.
+    // `METHOD_DOWNSAMPLE` is still untranslated: `DownsamplePadding` returns
+    // `RET_NOTSUPPORTED` when the sizes differ while **both callers drop the
+    // return**, so the encode *succeeded* and produced un-downsampled layers.
+    // `EncoderOutputTest/5` (2 spatial layers) and `/7` (4 layers) are the gtest
+    // rows that catch it, and they catch it as a *hash difference* — a consumer
+    // gets bytes that look fine and are not what it asked for.
     //
     // The code is the reference's own for an unsupported parameter:
     // `ENC_RETURN_UNSUPPORTED_PARA` here -> `WelsInitEncoderExt` returns nonzero ->
@@ -1405,9 +1404,6 @@ pub unsafe fn ParamValidationExt(
     // non-multiple-of-16 width would have been refused. Measured, not reasoned:
     // `tests/encoder_force_idr_ltr_test.rs`'s 140x96 row failed at `InitializeExt`
     // against the first version of this check.
-    if (*pCodingParam).bEnableDenoise {
-        return ENC_RETURN_UNSUPPORTED_PARA;
-    }
     for i in 0..(*pCodingParam).iSpatialLayerNum {
         let idx = i as usize;
         if (*pCodingParam).sSpatialLayers[idx].iVideoWidth < (*pCodingParam).SUsedPicRect.iWidth

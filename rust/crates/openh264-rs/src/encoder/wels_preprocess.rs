@@ -1580,15 +1580,49 @@ impl CWelsPreProcess {
         0
     }
 
-    /// `CWelsPreProcess::BilateralDenoising`. **`METHOD_DENOISE` is not translated**
-    /// (`crate::processing`): the C++ builds the source pixel map and runs the
-    /// denoise plugin in place here; the port's dispatch returned
-    /// `RET_NOTSUPPORTED`, which this caller never read, so nothing happened and
-    /// nothing happens. Gated by `bEnableDenoise`, off in every gate configuration.
-    // unsafe-cat: port-raw(Phase 9)
-    #[allow(unsafe_code)]
-    pub unsafe fn BilateralDenoising(&mut self, _pSrc: SrcPicRef, _kiWidth: i32, _kiHeight: i32) {
-        // METHOD_DENOISE: untranslated — no plugin runs (S18: no stub is invented).
+    /// `CWelsPreProcess::BilateralDenoising` — `wels_preprocess.cpp:620`.
+    ///
+    /// **Ported in Phase 8b session C (T8b.C1).** This was an empty body: the C++
+    /// built the source pixel map and ran the denoise plugin in place, the port's
+    /// dispatch returned `RET_NOTSUPPORTED`, and *this caller never read it*, so
+    /// asking for denoise silently produced un-denoised output. That is the exact
+    /// class of lie S48 refuses, and it is why `ParamValidationExt` rejected
+    /// `bEnableDenoise` until this session.
+    ///
+    /// The C++ hands `CDenoiser::Process` an `SPixMap` of three raw plane pointers
+    /// and a `NULL` destination (denoising is in place). The kernels here take
+    /// slices, so the `SPixMap` survives only as the geometry carrier that
+    /// `Process` reads `sRect` from, and the planes are resolved through
+    /// `planes_mut3()` — safe, no pointer crosses the boundary.
+    pub fn BilateralDenoising(&mut self, pSrc: SrcPicRef, kiWidth: i32, kiHeight: i32) {
+        let mut sSrcPixMap = SPixMap {
+            sRect: SRect {
+                iRectWidth: kiWidth,
+                iRectHeight: kiHeight,
+                ..SRect::default()
+            },
+            ..SPixMap::default()
+        };
+        // `m_uiType` copied out first: the picture and the plugin are both behind
+        // this `&mut self`, and only the method call makes those borrows look like
+        // they overlap. See `denoise::Denoise`.
+        let uiType = self.m_vp.sDenoise.m_uiType;
+        let pic = self.src_mut(pSrc);
+        sSrcPixMap.iStride = [pic.stride(0), pic.stride(1), pic.stride(2)];
+
+        let [py, pu, pv] = pic.planes_mut3();
+        let stride = [py.stride(), pu.stride(), pv.stride()];
+        let (oy, ou, ov) = (py.origin(), pu.origin(), pv.origin());
+        let mut planes = crate::processing::denoise::DenoisePlanes {
+            y: &mut py.as_mut_slice()[oy..],
+            u: &mut pu.as_mut_slice()[ou..],
+            v: &mut pv.as_mut_slice()[ov..],
+            stride,
+        };
+        // The C++ drops this return too (`m_pInterfaceVp->Process(...)` as a
+        // statement); the only failure it can report is a null/empty plane, which
+        // for an owned picture is the parse-only shape and never reaches here.
+        let _ = crate::processing::denoise::Denoise(uiType, &sSrcPixMap, &mut planes);
     }
 
     // unsafe-cat: port-raw(Phase 9)
