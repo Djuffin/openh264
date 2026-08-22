@@ -122,10 +122,23 @@ slicing are unported, and Phase 7 ported both.
 
 | session | work | tally expected |
 |---|---|---|
-| **A** (Phase 8 session C continuing) | the gate + filter; the census instruments; decoder option arms + the two stub feeders (21 rows); LTR/`ForceIntraFrame` (3); S48 refusals for downsample/denoise; F80 reachability; the F77 instrument | 155 → **≥ 179** |
+| **A** (Phase 8 session C continuing) — **done**, `925ac828`..`5478ae7e` | the gate + allowlist (T8b.A1); the census instruments + `port_census.py` + the classification file (A2); the decoder option arms whole, the two stub feeders and the per-call reset block (A3, 21 rows); `ForceCodingIDR` — a stub, and an abort behind it (A4, 3 rows + F86); S48 refusals for denoise/downsample (A5); F80 reachable, asset built, **F87** (A6); the F77 assert (A7) | 155 → **179**, then → **165** by S48 |
 | **B** | parameter-set listing strategies (6); parse-only `DecodeParser` with its referee (3) | → **188** |
-| **C** | downsample + denoise + the `sp` preset (3); then the census's missing list, smallest first; F80's port if A found it reachable | → **191** |
+| **C** | downsample + denoise + the `sp` preset (**17** rows, not 3 — see session A's note); then the census's missing list, smallest first; **F80's port, which A found reachable and measured as F87** — `IncreasePicBuff`/`DecreasePicBuff` plus grow/shrink on `safe::Pool`, and the asset moves into `res/` in the same commit | → **191** |
 | **D** (if needed) | census residue; the close | — |
+
+*Session A's tally, read twice.* T8b.A4 closed at **179/199**, the brief's target.
+T8b.A5's S48 refusal then took it to **165/199**: 14 rows that were passing *by never
+checking bytes* now refuse at `InitializeExt`, because the port cannot downsample and
+was silently encoding lower spatial layers from stale pool content. Both numbers are
+true and they measure different things — how much of the reference the port
+implements, and how much it implements without lying about it. The charter's S48
+picks the second; put to the user as a fork at the time, and confirmed. All 17
+downsample/denoise rows return together in session C.
+
+**Session C inherits, beyond its own listing:** F87 (`dsOutOfMemory` where the
+reference decodes cleanly) with its asset at `tests/data/f80/`, its generator
+(`tools/make_numref_asset.cpp`) and the C++'s row; and the census's 12 `8b.C` rows.
 
 *Exit gate:* `gtest --check` green with an allowlist of **exactly** the 7 Phase 10
 rows and D-poc-1's one (or zero, if the user rules to match upstream); the census's
