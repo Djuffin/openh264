@@ -15355,3 +15355,95 @@ are observable: **F90** (the copy-out destroys the caller's `uiInBsTimeStamp`; t
 `memset` counts bytes for an `int32_t` array), **F91** (parse-only rewrites a NAL type
 byte inside the caller's `const` bitstream), **F92** (two unbounded writes and an
 RBSP-vs-EBSP length bug in the subset-SPS rewrite).
+
+### T8b.B3 — the three listing strategies, and what a `_` arm would have hidden
+
+`CreateParametersetStrategy` returned `None` for `SPS_LISTING`,
+`SPS_LISTING_AND_PPS_INCREASING` and `SPS_PPS_LISTING`, and `InitializeExt` refused.
+All three are ported: three more `ParasetIdKind` variants on the merged strategy
+object (T4b.2a's shape), one per C++ class, with their overrides as kind-matched arms,
+plus the free `FindExistingPps` and `WriteSavcParaset_Listing`.
+
+**Every arm is written out; no `_` catch-all.** Where an arm is missing from a C++
+class the compiler inherits the base's, and two of those inheritances are load-bearing
+and counter-intuitive:
+
+* `CWelsParametersetSpsListingPpsIncreasing` overrides **exactly** `GetPpsIdOffset` and
+  `Update`. So its PPS id rotates and its **SPS id offset does not** — it is the
+  Constant zero. A `rotates_ids()` test on `GetSpsIdOffset` would read better and be
+  wrong; `sps_listing_pps_increasing_rotates_only_the_pps_id` is the test that says so.
+* `SpsListing` and `SpsPpsListing` inherit `CWelsParametersetIdConstant::Update`, which
+  **memsets the whole offset block** — `uiInUseSpsNum`, `iPpsIdList`, the listing state
+  itself. That is destructive and it never runs: every `Update` call site is inside
+  `WriteSsvcParaset` or `WriteSavcParaset`, and a listing strategy routes to
+  `WriteSavcParaset_Listing`, which calls only `UpdatePpsList`. Written as the
+  reference has it, with the reason at the method.
+
+**The hook-call map, by reading and not by grep.** Seventeen distinct
+`pParametersetStrategy->` hooks over twenty-seven upstream call sites; each is now
+named against its port site. The one that had no port site was
+`encoder_ext.cpp:3297`'s `UpdatePpsList`, inside `WriteSavcParaset_Listing` — which is
+exactly the F76/F77 signature the brief warned about: a hook whose body is empty for
+four of five kinds is invisible until the fifth kind exists and something calls it.
+
+**`ParamValidationExt`'s three adjustments had no traces.** The port applied all three
+(multi-layer → `CONSTANT_ID`, screen content → `CONSTANT_ID`, simulcast AVC →
+`INCREASING_ID`) and logged none of them, so an application whose strategy was
+silently replaced had no way to find out. The reference's messages are back, argument
+for argument — including the third's, which prints `eSpsPpsIdStrategy` where its format
+string says `bSimulcastAVC` (`encoder_ext.cpp:487-489`); a consumer greps on text.
+
+**Referees.** The seven gtest rows pass and leave the allowlist (**173/199, allowlist
+26**). Byte parity against the reference encoder, one targeted pair per strategy
+through the drivers' new 18th argument — `320x192`, 24 frames, qp 26, CABAC, GOP 4 —
+all five byte-identical: 33127 / 33129 / 33127 / 33127 / 34599 bytes for strategies
+0/1/2/3/6. Strategies 2 and 3 matching 0 is correct and *weak*: with no mid-stream
+re-initialisation the SPS list never grows, so `FindExistingSps` matches the only entry
+every time. What would make it bite is a `--reinit-at` knob, dropped under the brief's
+step 5; the six `ParameterSetStrategy_*` gtest rows re-initialise exactly that way and
+are the referee instead. The five configurations are recorded as `sweep.sh`'s new `ps`
+preset (60 configurations), defined and not run — D-gate-3 puts sweeps at the phase
+close.
+
+**Ratchet rebaselined, deliberately:** `encoder_ext.rs` +5 `raw_ptr` +1 `unsafe_fn`,
+`paraset_strategy.rs` +5 `raw_ptr` +6 `unsafe_fn`. Every new signature is forced by a
+raw caller — `sWelsEncCtx`, `SExistingParasetList` and the three parameter-set arrays
+all arrive as `*mut` from `RequestMemorySvc` — and each carries
+`// unsafe-cat: port-raw(Phase 9)`.
+
+**F94** came out of the transliteration: `CWelsParametersetSpsPpsListing::OutputCurrentStructure`
+copies `MAX_PPS_COUNT` PPSs out of `pCtx->pPps`, which is one struct, not the array.
+
+### T8b.B4 — the census, and two sentences that had been wrong for two phases
+
+Landed inside T8b.B3's commit rather than its own; the work is separable and the
+gate covered both.
+
+`ParseAccessUnit` is **`dead`, not `missing`** — reclassified by rule in
+`port_census_classification.txt`, not by hand in the table. Session A filed it under
+8b.B as "parse-only's AU walk"; its only caller is `welsDecoderExt.cpp:1384`, inside
+`ThreadDecodeFrameInternal`, the threaded decoder D3 deletes. The strategy family
+becomes `renamed` (four per-class C++ methods collapse onto one method each on the
+merged object). **The census's 8b.B column is 0**, and the totals move 287 → 283
+missing-by-name, 42 → 33 `missing`, 92 → 96 `renamed`, 153 → 154 `dead`.
+
+Two stale comment blocks, both provable by grep and both fixed:
+
+* `encoder_ext.rs`'s "Unported branches" named `iMultipleThreadIdc > 1` and
+  `SM_SIZELIMITED_SLICE`, "none of which are ported" — Phase 7 ported every function
+  the paragraph listed (`RequestMtResource`, `InitAllSlicesInThread`,
+  `SliceLayerInfoUpdate`, `WelsCodeOnePicPartition`, `WelsInitCurrentDlayerMltslc`),
+  and both configurations are swept.
+* `RequestMemorySvc`'s deviation list said the **background-detection** buffers were
+  not ported. The statement ten lines below it has built them since T6.F3:
+  `SVAAFrameInfo::new` takes `bEnableBackgroundDetection`. The adaptive-quantisation
+  entry stays, with the distinction the old sentence blurred — the *plugin* is ported
+  (`processing/adaptive_quantization.rs`); the encoder-side `sAdaptiveQuantParam`
+  blocks are not, and that is what `:1210` refuses.
+
+`find_stub_bodies.py` over the new work reports **F95**, which is about the
+instrument: it counts a thunk's `abi_guard!(...)` as one statement, so
+`DecodeParser` reads `[0 Rust statements vs 37 C++]` — the same reading it gave when
+the thunk really was a stub, and the same reading `DecodeFrame`, `DecodeFrameNoDelay`
+and `FlushFrame` give with full bodies. The tool's signal on the twenty C-ABI entry
+points is zero in both directions.
