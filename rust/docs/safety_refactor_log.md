@@ -14532,3 +14532,331 @@ Measured at `72fe2e7e`, so C starts from numbers rather than from the charter's.
 | the `api/` allow endgame | `api/codec_api.rs` carries **two** `#[allow(unsafe_code)]` items, both on `SBufferInfo`'s ABI union accessors ("one arm, so every read is the arm last written"); `api/abi_guard.rs` carries none. The module has no `#![deny(unsafe_code)]` yet — that is C's, and the crate-root flip is Phase 9's. |
 | `SParserBsInfo` | still **two entities under one name** (the ABI struct's raw pointers against the decoder's owned `Vec`s). Untouched here; the rename is **D5/Phase 9**, and `decoder_decode_parser_c`'s contract says so at the slot. |
 | F77 | **open**, and it is a decoder defect rather than a boundary one — but it *manifests* as a process abort through a boundary thunk, so C should decide whether the phase exit says anything about panic-safety at the ABI surface. |
+
+---
+
+## Phase 8 session C — the drop-in made real, and the phase closes
+
+**2026-08-21, `19937662..` (nine commits).** The brief's five steps all landed. Three
+of its premises did not survive a re-grep, and each one was worth more than the step
+it belonged to.
+
+### Step 0 — P13 and F77
+
+**F77's diagnosis was wrong, and the way it was wrong is the finding.** Session B read
+`index out of bounds: the len is 396 but the index is 396` inside
+`WelsActualDecodeMbCavlcISlice` as "the classic `iMbXy == kiTotalNumMbInCurLayer`
+off-by-one on a damaged CAVLC I-slice", and the brief told this session to port
+`decode_slice.cpp`'s bound. **That bound is already ported, faithfully**, and the index
+that panicked was in range for the layer. It was out of range for the *picture*.
+
+`res/Error_I_P.264` changes resolution three times — 352x288 → 640x480 → 352x288 —
+and **this port has never handled a mid-stream resolution change at all.**
+`SyncPictureResolutionExt` is `WelsRequestMem` + `InitialDqLayersContext`, and it had
+only `WelsRequestMem`'s first-allocation case; `InitialDqLayersContext` re-sizes the
+*layer* from the new SPS unconditionally. So the layer went to 40x30 (1200 macroblocks)
+with the pictures still 22x18 (396). `iImgWidthInPixel`, `iImgHeightInPixel` and
+`bHaveGotMemory` — the three fields the C's size test reads — were declared, reset, and
+**never set by anything in the tree**.
+
+Fixed at **T8.C1** by porting the C's `else` branch whole (`decoder.cpp:518–540`), and
+refereed against `libopenh264.dylib` rather than against the port's own previous
+output: **five frames, `352x288 352x288 640x480 640x480 352x288`, five plane hashes,
+seventeen return codes, seventeen buffer statuses — every one bit-identical**.
+`Error_I_P.264` joins the malformed corpus (**+212 rows**; corpus now **2902/17
+output, 2919/0 codes**, all C++-refereed) and `compare_all.sh`'s tables; regenerating
+the goldens **rewrote no existing table**, which is the strongest available statement
+that the change moved nothing else. Covering test measured red: not a failing
+assertion, a **SIGABRT** that takes the whole test binary with it.
+
+**The method note, and it generalises.** The cause was found in one step by making
+`MbGrid::get_mut` `#[track_caller]` with an explicit `assert!(idx < len)` — which
+names the *call site* instead of `mb_grid.rs:277` — and then printing the layer's and
+the picture's dimensions at the same macroblock. Two lengths in one message would have
+said "these two structures disagree" immediately. **A correct index into a stale
+allocation looks exactly like an off-by-one**, and the port has no instrument that
+distinguishes them. Owner: Phase 9, with F73.
+
+**P13's guard, T8.C2.** All **24** `extern "C"` entry points in `api/codec_api.rs` run
+their bodies inside `catch_unwind(AssertUnwindSafe(..))`; a caught panic is reported
+at `WELS_LOG_ERROR` through the object's own trace and returned as that slot's failure
+code. The profile verdict was **read, not assumed**: no `[profile]` in either manifest
+sets `panic`, so every profile this project builds — including the cdylib — inherits
+`panic = "unwind"` and the window catches. A consumer who rebuilds with
+`panic = "abort"` gets no window, and P13 rests there on line one; said at the site.
+Three covering tests, measured red by replacing the macro's window with a
+pass-through: `thread caused non-unwinding panic. aborting.`
+
+**The probe that found F77 is a test now.** `tests/decoder_reachability_sweep.rs`:
+every `res/*.264` under four concealment modes under both bitstream declarations,
+**63 × 4 × 2 = 504 whole-stream decodes**, state union pinned at **`0x36`** in both
+directions, `dsOutOfMemory`/`dsRefListNullPtrs` asserted still unreached. Session B's
+number, reproduced, now including the five frames it used to abort on. Release-only
+and forked across the asset list: 87s serial, **23s** here.
+
+### Step 1 — the cdylib and the seven exports
+
+**"Exports are 5 of 7" was wrong in both halves.** The two version functions have
+carried `#[unsafe(no_mangle)]` since before this session (`git show 19937662:` has
+them). The export count was never 5: with `crate-type` set it was **24**. `no_mangle`
+occurs in **four** files — the five factories, the two version functions, and
+**fourteen `WelsSampleSad*_c` plus three `WelsCabac*`**. All seventeen are names
+`libopenh264` also exports, so a consumer with both libraries loaded would have had
+one interpose on the other. Deleted.
+
+`tools/abi_exports.sh` diffs the cdylib's `nm` export list against the seven, in both
+directions, platform-aware. **7/7.** Red-proof by exit code: remove one attribute →
+`exported 6`, `MISSING WelsGetCodecVersion`, rc=1; restore → rc=0. Wired into
+`gates.sh exit` with `${PIPESTATUS[0]}` and a corroborating tally line — F17's rule
+applied when the step was written rather than after a phase ran green on a reporter.
+
+### Step 2 — 51 types pinned, and F81
+
+`api/abi_guard.rs` said its numbers came from "a sizeof/offsetof dump on darwin/arm64".
+That dump was not in the tree. `tools/abi_sizes.c` is it, committed, with its output
+in `abi_sizes.txt` and `abi_sizes.sh [--check]` to regenerate or verify — compiled
+**twice**, as C and as C++, with the two front ends' answers diffed (170 lines agree).
+
+**"27 boundary types from the two headers" is 51 from three.** `SBufferInfo`,
+`SSysMEMBuffer`, `EVideoFormatType`, `EVideoFrameType` and `CM_RETURN` are all in
+`codec_def.h`, which both of the others include. The three headers declare **53**
+named typedefs; 51 are pinned. The two left out are `SliceInfo` and `SRateThresholds`
+— declared in a public header and named by **nothing at all**, in no signature, no
+field and no option payload, and not declared by the port either.
+
+Before: 11 sizes, 9 enums, **one** alignment pin in the whole file. After: **51 sizes,
+51 alignments, 140 field offsets**, every number from the dump. Alignment was the gap
+that mattered least and cost nothing to close; a struct can keep its size, change its
+alignment, and walk a caller's array off its stride with every size pin still passing.
+
+**F81, found by the first build under the new pins.** `SDeliveryStatus` had **one**
+field where the header has three — 1 byte against the ABI's 12. Nothing misread
+memory, because the one field the option arm reads is at offset 0 in both, which is
+precisely why sixty conformance streams, 2919 corpus rows and 738 sweep runs had
+nothing to say about it and never would have. **One disagreement in 51 types and 140
+offsets** is the score.
+
+### Step 3 — the external-ABI harness, and the gtest number
+
+`tools/abi_harness/` `dlopen`s the cdylib, `dlsym`s the seven, and drives the library
+through nothing else. **It also settles a claim**: the driver calls through the C++
+*abstract classes*, which is what every real consumer compiles to, and whether the
+Itanium ABI's vtable layout agrees with the Rust side's ten-slot `#[repr(C)]` table was
+an assumption until it ran. **They agree.**
+
+| part | result |
+|---|---|
+| decoder conformance through the dylib | **58/58** bit-identical to the in-process goldens, both profiles |
+| encode loopback vs `rust_enc` | **14/14** configurations byte-identical, both profiles |
+| version + `WelsGetDecoderCapability` | 2.6.0 against `codec_ver.h`; the capability block value for value |
+| `Error_I_P.264` through the dylib | 5 frames, `dsDataErrorConcealed`, **process alive** |
+
+`TALLY 10 passed / 0 failed`, ~70s, wired into `gates.sh exit`. The golden list is
+extracted from `decoder_conformance_test.rs` **at run time**, so the two cannot drift,
+and the run fails loudly if fewer than 50 rows come out — a vacuous gate being the
+failure mode that matters. `wels_ref_common.h` holds the SHA-1, the annex-B split and
+the plane hashing that `ecref.cpp` grew in Phase 5, so there is one referee and not
+two that can drift while both pass.
+
+**The stretch produced a number.** Upstream's `test/api` — 199 tests, 17 suites —
+linked against `libopenh264.a` and against the Rust cdylib, same objects, same gtest,
+same assets:
+
+    cxx    199 ran, 199 passed,  0 failed
+    rust   199 ran, 118 passed, 81 failed
+
+and the shape of the 81 is the useful part. **Decoder output: 50 of 51**, the one
+failure being `test_scalinglist_jm.264` — the port's *documented, deliberate* POC
+tiebreak, argued in `decoder_conformance_test.rs:238` and corroborated by the JVT gold
+for `CABA2_SVA_B`, which upstream itself fails. **`DecodeParser`: 3, by construction**
+(the slot is a stub). The remaining **77 are all encoder-side API surface the
+diffharness cannot express** — `SetEncOptionSize` (21), `EncoderOutputTest` (8), the
+multi-spatial-layer and simulcast family, and the ten `GetOption*` rows that read
+decoder options back after an encode. Not a gate: a tally that moves, for Phase 9 to
+run before and after.
+
+### Step 4 — D-api-1, the deny, the rename
+
+**D-api-1 executed, and it found a second thing.** The default sink is
+`welsStderrTrace` at the trace object's `WELS_LOG_DEFAULT`, as
+`welsCodecTrace.cpp:53–57` has it. **And the reference's two constructors do not
+agree**: `CWelsDecoder::CWelsDecoder()` calls `SetTraceLevel (WELS_LOG_ERROR)`
+(`welsDecoderExt.cpp:164`) and the encoder does not. That line was never ported, so
+the decoder was a level more talkative than the reference — invisible while the sink
+was `None`, and one line per `BA_MW_D_IDR_LOST`-class stream the moment it was turned
+on. Both are fixed, and a third with them: `decoder_init_c` swallowed
+`welsDecoderExt.cpp:266`'s `"invalid input argument."` exactly as the encoder's thunk
+swallowed its own before T8.B6.
+
+**Session B's stated reason for the divergence did not survive measurement.** The
+prediction was "a trace line per damaged access unit across 2707 rows". The whole
+release suite emits **4** lines, all from tests that provoke an error on purpose; the
+malformed corpus emits **0** and the conformance **0**. No harness in this tree needs
+a quiet callback. Five covering tests, three measured red, capturing stderr by
+re-executing the test binary as a child — `welsStderrTrace` writes to fd 2 exactly as
+`fprintf` does, so libtest's capture cannot see it and in-process `dup2` would race
+every other test in the binary.
+
+**The deny.** `#![deny(unsafe_code)]` on both `api/` modules — **44 allow attributes,
+44 tags**, covering 131 spans: **39 `C-ABI`** and **5 `C-ABI(test)`**, the latter being
+the Miri driver and P13's probes, named as test instruments rather than counted with
+production code. S22's exemption is gone, and so is the plan's "module-wide allow",
+which would have been one blanket permission over 2,700 lines saying nothing about any
+particular line.
+
+**The rename.** `decoder_context.rs`'s `SParserBsInfo` is `ParseOnlyBsBuffers`; the
+boundary struct keeps its name, so this is not an ABI change and did not have to wait
+for D5. `type SParserBsInfo x2` retires from the census allowlist (**58 → 57**).
+
+### The span
+
+7 pairs against `19937662`, both benches, plus a 3-pair null (`perf_baseline.md`):
+decode median **+0.04%** (min −0.09%, max +0.11%) against a null of median **−0.12%**
+(−0.15…−0.07%); encode median **+0.00%** (min −0.75%, max +0.30%) against a null of
+median **−0.04%** (−1.10…+0.26%). **Zero rows over 5% on either bench.** No measurable
+movement — which for a session that added a `catch_unwind` window to every decode call
+is the number that had to be checked.
+
+---
+
+# Phase 8 CLOSED — the C-ABI boundary
+
+**2026-08-21, sessions A–C, `b2e2c9d7..` (three sessions; the plan estimated 3–4).**
+
+## What the phase was for, and whether it did it
+
+The charter's sentence: *the externally visible API does not change at all, and the
+safety line moves up to it.* Both halves hold.
+
+**The API did not change.** No name, no slot, no slot order, no layout. `abi_guard.rs`
+only gained pins — **53 assertions over 20 types** at the open (11 sizes, 32 offsets,
+9 enum sizes and one lone alignment), **242 over 51** at the close — and the one type that had to move (`SDeliveryStatus`, F81) moved **toward** the
+header, not away from it.
+
+**The line moved.** `src/api/` was the only module tree in the crate outside every
+instrument's scope, exempted by S22's clause; it is now scanned by all five, denies
+`unsafe_code` in both of its code modules, and carries **44 individually tagged allow
+items** where the plan had budgeted one module-wide allow.
+
+| | at open (`b2e2c9d7`) | at close |
+|---|---|---|
+| `src/api/` | 2,788 lines, **0** modules with a deny | 4,690 lines, **2 of 2** denying |
+| allow items in `api/` | 2 (untagged) | **44, all tagged** — 39 `C-ABI`, 5 `C-ABI(test)` |
+| `crate-type` | unset (rlib only) | **`["rlib", "cdylib", "staticlib"]`** |
+| exported symbols | n/a — no cdylib to export from | **7/7**, gated, red-proved |
+| `abi_guard.rs` | 20 types (11 sizes, 9 enums, **1** alignment) | **51 types: 51 sizes, 51 alignments, 140 offsets** |
+| the boundary's numbers | a comment saying a dump existed | **`tools/abi_sizes.c`**, committed, compiled as C *and* C++ and diffed |
+| external ABI testing | none | **`tools/abi_harness/`** — 4 parts, 2 profiles, in `gates.sh exit` |
+| thunks with a `# Safety` contract | 0 of 18 (18 was also wrong: it is 19) | **19 of 19** |
+| `&mut self` on the vtable base structs | 12 (F23: UB, and it was 19) | **0** |
+| panic crossing the ABI | aborts the process | **caught, mapped to the slot's code, logged** |
+
+## The findings, and where they came from
+
+**Nine, of which the phase closed or fixed eight and hands one on.**
+
+| | disposition |
+|---|---|
+| **F23** (+ encoder twin) `&mut self` eight bytes wide over a thunk that writes past it | **CLOSED** session A — 19 conveniences, 122 call sites, Miri-red before |
+| **F37** `DestroyPicBuff` never resets the reordering buffers | **already fixed at T5.O1**; session A supplied the public-API probe that was missing |
+| **F41** `CWelsDecoderImpl::param` aliases the context's block | **CLOSED** session A — the member had no counterpart in the reference at all |
+| **F76** `eVideoType` write-only, and the whole error-reporting block absent | **CLOSED** session B, three commits, six covering tests |
+| **F77** `res/Error_I_P.264` aborts the process | **FIXED** session C — **and its diagnosis was wrong**; the cause is a missing resolution-change rebuild |
+| **F78** the encoder had a second, entirely dead C-ABI surface | **CLOSED** session B in place |
+| **F79** the trace callback never fired, on either codec | **CLOSED** session B |
+| **F80** `IncreasePicBuff`/`DecreasePicBuff` have never been ported | **OPEN → Phase 9**, found by reading `WelsRequestMem` whole |
+| **F81** `SDeliveryStatus` 1 byte against the ABI's 12 | **FIXED** session C, by the pin that found it on its first build |
+
+**Not one of them was found by a byte-level gate.** Conformance ran 60/60 and the
+sweeps 369/369 through every commit of the phase and discovered nothing, which is what
+they are for. What found things: the duplicate census the moment `src/api` entered its
+scope (F76), Miri (F23), reading the reference beside the port (F37, F41, F78, F79,
+F80), a throwaway reachability probe (F77), and **a new instrument's first build**
+(F81).
+
+## The three shapes worth carrying
+
+**1. A brief's premise is a hypothesis.** Every session found at least one count in its
+own brief that did not survive a re-grep, and in each case the corrected number was the
+more interesting one:
+
+| brief said | tree said |
+|---|---|
+| 12 convenience methods, 55 callers | **19** and **122** (seven in a cargo project no source grep reaches) |
+| 18 thunks | **19** — and a whole *second* vtable of nine more that nothing called (F78) |
+| exports are 5 of 7 | the version functions already had `#[no_mangle]`; with a cdylib the export list was **24**, seventeen of them names `libopenh264` also exports |
+| 27 boundary types in two headers | **53 declared in three**, 51 of them passable or receivable |
+| F77 is an off-by-one in a damaged slice | the bound is ported correctly; the port had **never handled a resolution change** |
+| the default stderr sink would flood the corpus | **4 lines in the whole release suite**, 0 from the corpus |
+
+Rule 6 — *anchors, not surfaces; re-grep and state units* — earned its place three
+times over, and the pattern is specific enough to name: **a count taken over a pattern
+(`*_c`, "in `src/api`", "the two headers") measures the pattern, not the thing.** F78
+was found by counting what the *interface type* reaches instead.
+
+**2. The instruments that found defects were the ones that talked to something other
+than the port.** The in-process battery compiles the caller and the callee from the
+same declarations, so a struct whose Rust layout disagrees with the C header agrees
+with itself. The three new instruments all break that symmetry — the export gate reads
+`nm`, the pins read a dump from a C compiler, the harness `dlopen`s the artefact and
+calls it from C++ — and two of the three found something on their first run (17
+escaping exports; F81). **The harness also settled a claim nobody had tested**: that
+the Itanium C++ abstract-class call path agrees with the Rust `#[repr(C)]` vtable. It
+does; 58/58 conformance assets say so.
+
+**3. A correct index into a stale allocation looks exactly like an off-by-one.** F77
+cost one session a wrong diagnosis and the next a detour, and the reason is that the
+panic message carries one length. Two — the layer's and the picture's — would have said
+"these structures disagree" immediately. Phase 9 inherits that instrument.
+
+## The exit, and what Phase 9 gets
+
+`gates.sh exit`, unscoped, with the two gates this phase built in it. The gtest stretch
+reports **118/199** against the reference's 199/199 and is deliberately *not* a gate:
+50 of 51 decoder-output rows pass (the one failure is the documented POC tiebreak),
+three are `DecodeParser`'s stub, and **77 of the 81 are encoder-side API surface the
+diffharness cannot express**. That is Phase 9's to-do list with a number attached, and
+it is the first time this project has had one.
+
+Full inheritance in plan §4 under *Inherited from Phase 8* — 830 tagged allow items by
+category, the 67-of-80 deny coverage with `src/common/` named as the remainder, F66/S42
+and F73 with their measured surfaces, the `Send` verdict's 14 `E0277`s, F80, D4 made
+mechanical by the boundary being precise, and D5 one question smaller.
+
+### The exit verdict — `gates.sh exit` unscoped, at `0c9c6a21`
+
+**`OVERALL: PASS`, 15 passed / 0 failed / 1 skipped**, run unscoped as every phase exit
+must be, **with the two gates this phase built in it**.
+
+| step | result |
+|---|---|
+| `cargo build --all-targets` | benches and examples compile |
+| `cargo test` debug / release | **513 / 508**, 0 failed, **20 ignored** (the permanent fixture set, unmoved) |
+| unsafe ratchet | flat on every metric against the session's regenerated baseline |
+| duplicate census | **57** allowlisted (58 at the session's start; T8.C7 retired `SParserBsInfo`) |
+| diffharness sweeps, both profiles | **369/369 each**, no F3 hit in either |
+| `decode_1080p_bench` | all streams **bit-identical** |
+| `c_vs_rust_bench` | all rows **bit-identical** |
+| Miri `--lib`, whole library, no skips | **351 passed / 0 failed**, 4 Miri-ignored, 1793.8s |
+| Miri differential targets | **20 / 7 / 3**, 0 failed |
+| **abi exports** (new) | **7/7 — exactly upstream's seven** |
+| **abi harness** (new) | **10 passed / 0 failed** — 58 conformance assets, 14 encode configs, × 2 profiles |
+| fuzz corpus replay | SKIP — the crate was never built (§0's standing absence) |
+
+**It passed first time.** Sessions A and B each had an unscoped run fail once before
+passing; this one did not, which is worth recording only because the two new steps
+were both exercised by hand and red-proved *before* being wired in — the export gate by
+removing an attribute and reading the exit code, the harness by watching its first run
+report 0/14 on a mis-ordered argument list.
+
+**The four Miri-ignored tests are named, and none is new.** `deblocking_init_ignores_
+the_cpu_flag` and `init_mc_func_ignores_the_cpu_flag` (dispatch probes that read
+`__builtin_cpu_supports`, which Miri does not model), `load_balancing_completes_frames_
+with_sane_slice_counts` and `fork_join_encodes_a_multi_slice_frame_under_the_aliasing_
+checker` — the MT pair, whose `#[cfg_attr(miri, ignore)]` cites **F73** and retires
+with it in Phase 9. The `--lib` step's *skip list* is still empty, which is the
+property T7.B4 earned and F75 nearly cost.
+
+**Corpus at the close**, re-refereed after every behaviour change of the session:
+**2902 / 17 output, 2919 / 0 codes** across 2919 rows, all C++-refereed. The 17 are
+`CABA2_SVA_B`'s, unchanged since Phase 5. Conformance **60/60**.

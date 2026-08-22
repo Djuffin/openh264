@@ -157,7 +157,10 @@ all three. Owner: **session B**, with the thunk bodies.
 a probe that decoded all 62 `res/*.264` streams under four concealment modes looking
 for `dsOutOfMemory`/`dsRefListNullPtrs`, and aborted on the ninth stream.*
 
-**Status: OPEN. Owner: the decoder (Phase 9), not this session — see below.**
+**Status: FIXED at Phase 8 session C, 2026-08-21** — `eb939c34` (T8.C1, the cause)
+and `98e53555` (T8.C2, P13's guard so the *class* cannot abort a process again).
+**And the diagnosis below is wrong**; it is kept as written because the way it was
+wrong is the finding's most useful part. See "What it actually was" at the end.
 
 ```text
 thread panicked at src/safe/mb_grid.rs:277:23:
@@ -299,3 +302,156 @@ The rest, including `TraceParamInfo`'s parameter dump and `LogStatistics`, are s
 stubs. They are message text on a path no gate reads, and porting 83 format strings
 is not this session's work. **Owner: Phase 9**, with the rest of the encoder's
 `port-raw` tree.
+
+
+---
+
+## What F77 actually was, and why the first reading was wrong
+
+*Phase 8 session C, 2026-08-21, T8.C1.*
+
+The panic is real, the backtrace is real, and **"the classic `iMbXy ==
+kiTotalNumMbInCurLayer` off-by-one on a damaged CAVLC I-slice" is not what happened.**
+`WelsDecodeSlice`'s bound is ported faithfully — `if iNextMbXyIndex < 0 ||
+iNextMbXyIndex >= kiCountNumMb { break }`, exactly `decode_slice.cpp:1587`'s `do`-loop
+guard — and the index that panicked was **in range for the layer**. What it was out of
+range for was the *picture*.
+
+`res/Error_I_P.264` **changes resolution three times**: 352x288 → 640x480 → 352x288.
+The reference says so in its own trace (`SetOption (DECODER_OPTION_TRACE_LEVEL, 8)`):
+
+```text
+Info:WelsRequestMem(): memory alloc size = 352 * 288, ref list size = 3
+Info:WelsRequestMem(): memory re-alloc for resolution change, size change from 352 * 288 to 640 * 480, ...
+Info:WelsRequestMem(): memory re-alloc for resolution change, size change from 640 * 480 to 352 * 288, ...
+```
+
+and emits five frames. The port emitted two and aborted.
+
+**The port has never handled a mid-stream resolution change.**
+`SyncPictureResolutionExt` (`decoder_core.rs:943`) is `WelsRequestMem` +
+`InitialDqLayersContext`, and it had only `WelsRequestMem`'s *first-allocation* case:
+
+```rust
+if (*pCtx).pPicBuff.is_none() { CreatePicBuff(...) } else { /* keep it */ }
+```
+
+`InitialDqLayersContext` below it re-sizes the **layer** from the new SPS
+unconditionally. So on the first switch the layer went to 40x30 (1200 macroblocks)
+with the pictures still 22x18 (396), and `WelsActualDecodeMbCavlcISlice` wrote
+`pDec.pMbType[396]` of 396. `iImgWidthInPixel`, `iImgHeightInPixel` and
+`bHaveGotMemory` — the three fields `WelsRequestMem`'s size test reads — were
+**declared and reset but never set** by anything in the tree.
+
+### The fix
+
+The C's `else` branch, `decoder.cpp:518–540`: destroy the pool, drop
+`pPreviousDecodedPictureInDpb` (it names a slot of the pool being freed), rebuild at
+the new size, then set the three bookkeeping fields and `pDec = NULL` ("need prefetch
+a new pic due to spatial size changed"). `WelsResetRefPic` is already the caller's,
+matching the C's placement.
+
+Refereed against the C++ rather than against the port's own previous output: **five
+frames, `352x288 352x288 640x480 640x480 352x288`, five plane hashes, seventeen
+return codes, seventeen buffer statuses — all bit-identical to `libopenh264.dylib`**
+(`rust/tools/ecref/ecref res/Error_I_P.264 61251 --frames`).
+`tests/decoder_resolution_change_test.rs` states every one of them by hand;
+`Error_I_P.264` joins the malformed corpus (**+212 rows**, corpus **2902/17 output,
+2919/0 codes**) and `compare_all.sh`'s tables. Regenerating the goldens rewrote **no
+existing table**, and conformance stayed 60/60.
+
+### Why the first reading was wrong, and what that costs
+
+The backtrace named `WelsActualDecodeMbCavlcISlice` and the numbers were `396` and
+`396`. Both facts are true and neither is the cause: the macroblock index was the
+*layer's*, correctly derived, and the array it indexed was the *picture's*. The
+reading that produced "off-by-one on a damaged slice" came from the two numbers being
+equal — which is exactly what a correct index into a stale allocation looks like.
+
+**Two grid lengths in one panic message would have said so immediately.** The session
+that fixed it found the cause in one step by making `MbGrid::get_mut` `#[track_caller]`
+with an explicit `assert!(idx < len)`, which named the *call site* rather than
+`mb_grid.rs:277` — and then by printing both the layer's and the picture's dimensions
+at the same macroblock. That is a cheap, permanent instrument this port does not have.
+**Owner: Phase 9**, with the picture-accessor family (F73).
+
+### The class this belongs to
+
+Not "an off-by-one on damaged input" but **"the port re-sizes one of two structures
+that must agree"**. The sibling question — which *other* `WelsRequestMem` arm is
+missing — has an answer, and it is F80.
+
+---
+
+## F80 — `IncreasePicBuff` / `DecreasePicBuff` have never been ported
+
+*Phase 8 session C, 2026-08-21, found at T8.C1 while reading `WelsRequestMem` whole
+to fix F77.*
+
+**Status: OPEN. Owner: Phase 9 (the decoder), not this session.**
+
+`WelsRequestMem` (`decoder.cpp:464–545`) has three arms, and the port now has two:
+
+| arm | condition | port |
+|---|---|---|
+| no memory yet | `!bHaveGotMemory` | `CreatePicBuff` — always had it |
+| **resolution change** | size differs | **T8.C1** — destroy + create |
+| **ref-list size change** | same size, `pPicBuff->iCapacity != iPicQueueSize` | **absent** |
+
+The third arm calls `IncreasePicBuff` / `DecreasePicBuff` (`decoder.cpp:495–508`),
+which grow or shrink the pool *in place* and preserve its live pictures.
+`grep -rn 'IncreasePicBuff\|DecreasePicBuff' src/` returns **nothing**: neither
+function exists in this port, and neither does the branch that would call them. The
+port's same-size path keeps the pool it has and reports its real capacity, so
+`iPicQueueNumber` is honest and nothing indexes past anything — the divergence is that
+a stream whose `num_ref_frames` changes across an IDR keeps a pool sized for the
+previous value.
+
+**Deliberately not fixed at T8.C1.** F77's fix is one enumerated behaviour change with
+a covering test and a corpus row; adding a second on the same afternoon is what this
+session's rule 4 forbids, and this one needs two functions written from the reference
+plus an asset that drives them — and **no asset in `res/` is known to**. That last
+clause is the first thing Phase 9 should measure: the arm may be as unreachable as
+`dsOutOfMemory` turned out to be, and if it is, it should say so at the site the way
+those two do.
+
+---
+
+## F81 — `SDeliveryStatus` was one byte where the ABI's is twelve
+
+*Phase 8 session C, 2026-08-21, found at T8.C4 by `api/abi_guard.rs`'s new size pin —
+the first run of it, on the first build.*
+
+**Status: FIXED in the commit that found it** — `c802813e`.
+
+`codec_app_def.h:708` declares three fields; `encoder/wels_encoder_ext.rs:277`
+declared one:
+
+```c
+typedef struct TagDeliveryStatus {
+  bool bDeliveryFlag;
+  int  iDropFrameType;   // reserved
+  int  iDropFrameSize;   // reserved
+} SDeliveryStatus;       // 12 bytes, align 4
+```
+
+A caller passes a pointer to this through
+`SetOption (ENCODER_OPTION_DELIVERY_STATUS, &s)`.
+
+**Nothing misread memory**, and that is the point. The one field the option arm reads
+is `bDeliveryFlag`, at offset 0 in both declarations, so sixty conformance streams,
+2919 corpus rows and 369 sweeps in two profiles had nothing to say about it — and
+never would have. What was missing was the *rest of the caller's struct*: any later
+read of `iDropFrameType` would have been out of bounds, and any by-value copy short.
+
+**Why the pins found it and seven phases of instruments did not.** Before T8.C4 the
+guard pinned **11** structs by size, **9** enums inline, and **one** alignment in the
+whole file; `SDeliveryStatus` was in none of them. It is one of 51 types the three
+public headers declare that a C caller can pass or receive, and after T8.C4 all 51
+are pinned by size *and* alignment, with 140 field offsets, every number copied from
+`rust/tools/abi_sizes.txt` — the committed output of a C program compiled against
+those headers.
+
+**One disagreement in 51 types and 140 offsets** is the score, and it is the argument
+for the instrument: a layout defect is not visible to any test that only ever talks to
+itself.

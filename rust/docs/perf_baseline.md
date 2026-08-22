@@ -3161,3 +3161,47 @@ reading confirming why it is `EXCLUDED` from every summary statistic (S2). Print
 and ignored, as designed. The wide encode null is worth remembering as the second
 half of the same lesson: **this harness's floor is a per-session measurement, not a
 constant**, and a session that skips the null has no way to read its own span.
+
+---
+
+## Phase 8 session C — a `catch_unwind` window on every ABI entry, and the instrument does not see it
+
+### The span — `C_base` (`19937662`) vs `C_head` (`0c9c6a21`)
+
+7 interleaved pairs (S1), both benches, FFMPEG set (S17), followed by a 3-pair null
+(S2). The window covers the whole session: F77's resolution-change rebuild on the
+decode path, **P13's `catch_unwind` guard around all 24 `extern "C"` entry points**,
+D-api-1's default stderr sink, the 51 layout pins, the `api/` deny, and the rename.
+
+| | rows | median | min | max | over +5% |
+|---|---|---|---|---|---|
+| decode | 3 | **+0.04%** | −0.09% | +0.11% | **0** |
+| encode | 28 | **+0.00%** | −0.75% | +0.30% | **0** |
+| decode **null** (S2 floor) | 3 | −0.12% | −0.15% | −0.07% | 0 |
+| encode **null** | 28 | −0.04% | −1.10% | +0.26% | 0 |
+
+**The floor was narrow this time, and the reading is still flat.** Session B's null
+spanned 10.7 points on encode; this one spans 1.36. Against that tighter floor the
+encode span's median is **+0.00%** with every row inside the null's range, and the
+decode span's three rows sit in a 0.20-point band whose median is 0.16 points above
+the null's — a sixth of the encode null's own width, on an instrument whose decode
+rows are milliseconds. Both halves read **unmoved**.
+
+**The reading that had to be taken.** P13 puts a `std::panic::catch_unwind` around
+the body of every `DecodeFrame2`, `EncodeFrame` and option call. `catch_unwind` on
+a no-panic path is a landing-pad entry and a discriminant test — nothing at run time
+until something unwinds — but "nothing at run time" is exactly the kind of claim this
+project measures instead of asserting, especially on a per-frame entry point. It does
+not register. The same is true of the eager `SLogContext` read the guard takes before
+each body (a 32-byte `Copy` of settings) and of the resolution-change size test added
+to `SyncPictureResolutionExt`, which runs once per new sequence.
+
+**Cumulative position, as D-perf-4 requires.** Unmoved: encoder deficit ≈
+**+15…+17%** against the **+25%** median tripwire. No median breach on either bench,
+so no bisect. D-perf-6's parked recovery remains Phase 9's, and **P13's guard is not
+one of its targets** — this measurement is what says so.
+
+**Instrument note.** `Spatial Ramps` read +29.73% on both thread counts of the span
+and is `EXCLUDED` from every summary statistic above (S2). That is the largest single
+reading it has produced since the +226% in Phase 4a, on a session that touched no
+encode kernel at all; printed, excluded, and not interpreted.

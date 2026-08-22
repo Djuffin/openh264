@@ -15,12 +15,17 @@ The charter. Session briefs cite it; standing rules are plan §7.6; the plan's
   `:1263–:1380`) called from **55** sites across api/tests/benches — **F23**
   and its encoder twin: each is UB today, the borrow eight bytes wide while
   the thunk writes the impl object past it.
-- **Exports: 5 of upstream's 7.** `WelsCreateSVCEncoder`,
-  `WelsDestroySVCEncoder`, `WelsCreateDecoder`, `WelsGetDecoderCapability`,
-  `WelsDestroyDecoder` are `#[no_mangle]`; `WelsGetCodecVersion` /
-  `WelsGetCodecVersionEx` (`encoder/wels_encoder_ext.rs:2620`/`:2627`) are
-  `extern "C"` but **not exported**. No `crate-type` is set (rlib only).
-  `api/abi_guard.rs` pins 45 asserts.
+- ~~**Exports: 5 of upstream's 7.**~~ **Wrong, corrected at T8.C3 and left visible.**
+  `WelsGetCodecVersion` and `WelsGetCodecVersionEx` have carried
+  `#[unsafe(no_mangle)]` throughout — `git show b2e2c9d7:` has both — so the *seven*
+  were always attributed. What the count missed is that `no_mangle` occurs in **four**
+  files, not two: fourteen `WelsSampleSad*_c` in `common/sad_common.rs` and three
+  `WelsCabac*` in `encoder/set_mb_syn_cabac.rs`, every one of them also a symbol
+  `libopenh264` exports. **With `crate-type` set the export list is 24, not 5**, and
+  the real gate is "exactly seven, no more and no fewer" rather than "add the two
+  missing". No `crate-type` is set at the open (rlib only), which is why nothing had
+  ever looked. `api/abi_guard.rs` pins **53 assertions over 20 types** (the "45" is
+  also a miscount).
 - **The impl objects.** `CWelsDecoderImpl` (`codec_api.rs:1388`): `base`,
   `pVtbl: Box<_>`, `pCtx: *mut SWelsDecoderContext`, `align: CMemoryAlign`,
   `param: SDecodingParam`, `bEndOfStream`, and ten C++-member fields
@@ -86,6 +91,11 @@ on the impl objects.
   external-ABI harness — conformance + encode-loopback through the dylib,
   hashes == in-process; stretch: upstream's `test/api` gtest suite against
   the dylib.
+  **All three built (T8.C3/C4/C5); (i) and (iii) are steps of `gates.sh exit`.**
+  (ii) is a compile-time guard rather than a gate step — 242 assertions over 51
+  types, and "every boundary-crossing struct" turned out to mean **three** headers,
+  not two: `SBufferInfo`, `SSysMEMBuffer`, `EVideoFormatType`, `EVideoFrameType` and
+  `CM_RETURN` all live in `codec_def.h`, which the other two include.
 - F23's covering test: the existing Miri-visible reproducer (decoder init
   through a convenience method), red before, green after, kept.
 - The caveat the plan records: `DecodeFrame2` vs `DecodeFrameNoDelay` ordering
@@ -143,13 +153,39 @@ on the impl objects.
   contexts and traces, 19 `# Safety` contracts, `Decoder`/`Encoder` carved
   with the `Send` verdict measured (no: 14 `E0277`s, all Phase 9's), the
   `c_void` line attributed; F77 filed.
-- **C** — [`phase8_session_c.md`](phase8_session_c.md): P13 and F77, `crate-type`,
-  the 7 exports with a gate, every boundary type pinned to sizes dumped from the
-  C++ headers, the external dlopen harness (+ the gtest stretch as a number),
-  D-api-1's default sink, the `api/` deny with tagged allows, the internal
-  `SParserBsInfo` rename, the phase close with Phase 9's inheritance.
+- **C — DONE** (2026-08-21, `eb939c34..`, nine commits; **`exit` unscoped with both
+  new gates in it**). The whole brief landed, and **three of its premises did not
+  survive a re-grep** — each was worth more than the step it belonged to.
+  **F77 was not an off-by-one**: `WelsDecodeSlice`'s bound is ported faithfully, and
+  `res/Error_I_P.264` changes resolution three times (352x288 → 640x480 → 352x288)
+  against a port that had **never handled a resolution change at all** —
+  `SyncPictureResolutionExt` had only `WelsRequestMem`'s first-allocation case while
+  `InitialDqLayersContext` re-sized the layer unconditionally, so the layer went to
+  1200 macroblocks with the pictures still at 396. Fixed against the C++'s own
+  output (five frames, seventeen codes, all identical); the asset joins the corpus
+  (**2919 rows, 0 code divergences**) and regenerating the goldens rewrote **no
+  existing table**. **P13**: all 24 `extern "C"` entry points inside `catch_unwind`,
+  profile verdict read rather than assumed, three covering tests measured red as a
+  SIGABRT. **Exports were 24, not 5** — the version functions already had
+  `#[no_mangle]`, and fourteen `WelsSampleSad*_c` plus three `WelsCabac*` were
+  escaping, every one a name `libopenh264` also exports; **7/7** with a gate,
+  red-proved by exit code. **51 boundary types from three headers, not 27 from two**
+  — 51 sizes, 51 alignments, 140 offsets, from a committed C dump compiled as C and
+  C++ and diffed; **F81** (a 1-byte `SDeliveryStatus` against the ABI's 12) fell out
+  of the first build under it. **The harness**: 58/58 conformance and 14/14 encode
+  loopback through `dlopen`, both profiles, plus the version pair, the capability
+  block and F77's stream returning a code with the process alive — and it settles
+  that the C++ abstract-class call path agrees with the Rust `#[repr(C)]` vtable.
+  **The gtest stretch is a number**: 118/199 against the reference's 199/199, with
+  50 of 51 decoder-output rows passing and 77 of the 81 failures encoder-side API
+  surface. **D-api-1** executed, and found that `welsDecoderExt.cpp:164`'s
+  `SetTraceLevel (WELS_LOG_ERROR)` was never ported; session B's predicted flood is
+  **4 lines in the whole suite**. **`api/` denies** with 44 tagged allow items, and
+  the internal `SParserBsInfo` is `ParseOnlyBsBuffers`. Span: no measurable movement
+  on either bench.
 
-Three sessions is the estimate (plan: 3–4). The exit gate does not bend.
+Three sessions was the estimate and three is what it took. The exit gate did not
+bend.
 
 ## 4. Non-goals
 
