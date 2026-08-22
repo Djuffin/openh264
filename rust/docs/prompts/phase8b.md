@@ -106,8 +106,15 @@ slicing are unported, and Phase 7 ported both.
    raw neighbour is tagged `port-raw(Phase 9)`; `unsafe_ratchet.sh check` stays green
    per commit, and a deliberate increase is rebaselined in the same commit with the
    reason in the message.
-6. **No perf work** (D-gate-1); one 7-pair span at the close. **Miri unscoped once,
-   at the close** (D-gate-2's phase-exit rule; both codecs are touched).
+6. **D-gate-3 — the sweeps, Miri, the benches and the perf span run once, at the
+   phase close; everything between is fast.** Per commit `gates.sh commit` (+ the
+   commit's own in-tree parity test). Per session close: `gates.sh commit`,
+   `gtest_stretch.sh --check`, `abi_exports.sh`, `abi_harness/run.sh`, and
+   `compare_all.sh` when the decoder was touched — no sweeps, no Miri, no benches, no
+   span. A family that could move bytes on a sweep configuration runs *one* targeted
+   diffharness pair (seconds), never a preset. `gates.sh exit` unscoped + the 7-pair
+   span with its null, once, at the close of the phase (D-gate-1/D-gate-2 still say
+   no perf work and phase-exit Miri; D-gate-3 moves the sweeps there too).
 7. **"Not ported" is re-measured before it is believed** — grep the named function;
    the stale `encoder_ext.rs:3022` block is the cautionary case.
 
@@ -123,8 +130,9 @@ slicing are unported, and Phase 7 ported both.
 *Exit gate:* `gtest --check` green with an allowlist of **exactly** the 7 Phase 10
 rows and D-poc-1's one (or zero, if the user rules to match upstream); the census's
 missing list empty or every entry owned by name; `sp` in the sweep, byte-identical
-both profiles; every decoder slot with a named referee; `exit` battery PASS unscoped;
-the perf span stated against D-perf-4's tripwire, unchanged by this phase.
+both profiles; every decoder slot with a named referee; `exit` battery PASS unscoped
+**(the phase's only sweep + Miri + bench run, D-gate-3)**; the perf span stated
+against D-perf-4's tripwire, unchanged by this phase.
 
 ## 6. Hand-offs
 
