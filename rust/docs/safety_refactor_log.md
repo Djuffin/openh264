@@ -14914,3 +14914,45 @@ which is the instrument the phase should have had on its last afternoon.
 **The rule it adds to S22.** It is not enough for a *module* to be in every
 instrument's scope; each *entry point* needs an instrument that drives it. `src/api/`
 was fully scanned all phase, and one of its ten decoder slots had no referee.
+
+---
+
+## Phase 8b session A — the parity plumbing, the gate, and the census
+
+*Start `925ac828` (code identical to `863eaec7`). Charter `prompts/phase8b.md`;
+D-prio-1 — correctness and feature parity before safety and performance.*
+
+**Open.** `gates.sh commit` PASS (5 passed / 0 failed / 1 skipped; 514 debug, 509
+release, 20 ignored, ratchet flat). `gtest_stretch.sh` **155/199** — the
+before-number, matching what T8.C8 measured.
+
+### T8b.A1 — the gtest tally becomes a ratchet
+
+`gtest_known_failures.txt` lists the 44 failing rows, one per line, spelled out to
+the parametrized instance, each with an owner (`8b.A` 24, `8b.B` 9, `8b.C` 3, `10` 7,
+`D-poc-1` 1) and a reason. `gtest_stretch.sh --check` runs the Rust link only and
+fails three ways:
+
+* a **failing test not in the list** — a regression, or a failure with no owner;
+* a **listed test that passes** — a stale row, which is a lie about coverage;
+* a **listed test that never ran** (suppressed under `--filter`, whose whole job is
+  to not run things) — a misspelled or deleted name, the same lie from the other side.
+
+`--filter=<pat>` passes `--gtest_filter` through, so a family can be run in seconds
+instead of forty. The closing display is now **by assertion site**, not by fixture
+name: S47, and the reading that cost F82 a day is gone from the tool that produced it.
+
+**Red-proofs, by exit code** (each an independent run of the suite):
+
+| edit | rc | what it printed |
+|---|---|---|
+| deleted `DecoderVclNal/1`'s row | **1** | `FAILING BUT NOT IN … DecoderVclNal/1  test/api/decode_api_test.cpp:45` |
+| added a passing row (`InOutTimeStamp/0`) | **1** | `LISTED BUT PASSING … InOutTimeStamp/0` |
+| added a name no test has | **1** | `LISTED BUT NEVER RAN … ThisTestDoesNotExist` |
+| restored | **0** | `gtest: 155/199, allowlist 44` |
+
+Wired into `gates.sh` as gate **6c**, beside the two ABI gates and in their shape
+(`PIPESTATUS[0]` **and** the verdict line, both required — F17's rule). rc 2 is the
+script's own "prerequisites missing" code and SKIPs loudly with the remedy rather
+than reporting a codec failure that was never measured. The exit battery's gate list
+grows by one: `PASS  gtest test/api: 155/199, allowlist 44`.
