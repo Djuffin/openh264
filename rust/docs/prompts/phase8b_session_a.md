@@ -25,7 +25,9 @@ owner.
    measured red before and green after: an in-tree test pinning the C++'s values (via
    `rust/tools/ecref/ecref`, `cxx_enc`, or the reference test's own logic re-stated),
    plus the gtest rows flipping and their allowlist rows deleted in the same commit.
-   `gates.sh commit` green per commit; `exit` once at the close, unscoped Miri.
+   `gates.sh commit` green per commit. **D-gate-3: no sweeps, no Miri, no benches, no
+   span in this session** — the session close runs the fast set only (step 8); the
+   phase close runs `gates.sh exit` unscoped once.
 2. **Tally by assertion site, never by fixture name** (S47). Before claiming what a
    row needs, read the failing assertion and the test lines around it.
 3. **S48**: anything unported that this session does not port must refuse at the entry
@@ -36,8 +38,8 @@ owner.
 5. **Stop and report** (do not decide) on: a divergence where the port looks more
    correct than the reference (D-poc-1's class); any fix that needs a raw signature
    *and* a borrow the context tree cannot express (that is Phase 9's F66 class).
-6. No perf work (D-gate-1): measure one 7-pair span at the close, no mid-session
-   pairs. No conversions of the `port-raw(Phase 9)` tree; a new raw signature forced
+6. No perf work and no perf measurement (D-gate-1, D-gate-3): the span is the phase
+   close's. No conversions of the `port-raw(Phase 9)` tree; a new raw signature forced
    by a raw neighbour is tagged `port-raw(Phase 9)`; `unsafe_ratchet.sh check` green
    per commit, rebaselined only with the reason in the message.
 7. "Not ported" in a comment is a claim: grep the named function before believing it
@@ -230,7 +232,9 @@ LTR marking/recovery code that touches the IDR request; `eFrameType` filling in
 cause turns out to be in the port's `eFrameType` reporting only, say so — the byte
 stream may already be right and the diffharness would not have seen a reporting gap.
 Commit `T8b.A4`.
-**Accept:** 3 rows pass; the in-tree test green; the `ltr` sweep preset unchanged.
+**Accept:** 3 rows pass; the in-tree test green; **one** targeted `ltr`-family
+diffharness pair (`rust_enc` vs `cxx_enc`, one configuration, seconds) byte-identical
+— not the preset (D-gate-3).
 
 ### Step 5 — S48 for the silent pair
 **Goal:** until session C ports them, asking for denoise or a downsampled layer gets
@@ -245,8 +249,10 @@ the `def` preset untouched — grep the harness sources. Covering test: asks for
 asserts the code. Re-reason the three allowlist rows (`refuses at init; port in 8b.C`).
 Check `METHOD_IMAGE_ROTATE`'s reachability while there (who sets it?); if only
 screen content can reach it, note it for Phase 10. Commit `T8b.A5`.
-**Accept:** the two requests return an error; tests pin it; sweeps 369/369 unmoved;
-gtest rows 4/5/7 fail at `BaseEncoderTest.cpp:92` now (init), listed as such.
+**Accept:** the two requests return an error; tests pin it; the harness sources
+(`cxx_enc.cpp:85/101/123`, `rust_enc/main.rs:69/84`, `sweep.sh`) shown by grep to
+never request either, so no gate configuration moves; gtest rows 4/5/7 fail at
+`BaseEncoderTest.cpp:92` now (init), listed as such.
 
 ### Step 6 — F80 reachability
 **Goal:** know whether `WelsRequestMem`'s third arm is reachable, and port it if it
@@ -269,10 +275,12 @@ helpers) with an explicit `assert!(mb_xy < len, "mb_xy {} >= {} (grid {}x{})", �
 a `#[should_panic(expected = "grid ")]` test. No measurement mid-session (D-gate-1);
 the bounds check already existed, the assert replaces it. Commit `T8b.A7`.
 
-### Step 8 — close
-`gates.sh exit` unscoped (Miri once, whole library); `gtest_stretch.sh --check`;
-the span: 7 pairs both benches against the start commit (+ a 3-pair null); the log
-entry; update `phase8b.md` §5's session A row with what landed; report.
+### Step 8 — close (the fast set, D-gate-3)
+`gates.sh commit`; `gtest_stretch.sh --check` (the verdict line and the allowlist);
+`tools/abi_exports.sh release`; `tools/abi_harness/run.sh`; `tools/ecref/compare_all.sh`
+(the decoder was touched). **No sweeps, no Miri, no benches, no span** — those run once
+at the phase close (`gates.sh exit` unscoped + the 7-pair span). The log entry; update
+`phase8b.md` §5's session A row with what landed; report.
 
 ## Do not touch
 
@@ -294,6 +302,7 @@ entry; update `phase8b.md` §5's session A row with what landed; report.
 3. The census: `missing`/`dead`/`renamed` counts, the red-proof list, and the top of
    the `missing` list by size — this is session B/C's input.
 4. F80's verdict with evidence; the LTR cause in one sentence.
-5. Exit battery line, Miri line, span table (decode/encode, median/min/max, rows over
-   5%), ratchet deltas (with reasons for any rebaseline).
+5. The session-close lines: `gates.sh commit`, `gtest --check` verdict, `abi exports`,
+   `abi harness` TALLY, `compare_all` output/codes counts; ratchet deltas (with reasons
+   for any rebaseline). No span, no sweep, no Miri (D-gate-3).
 6. Findings filed (number, one line each); decisions needed (D-poc-1 and any other).
