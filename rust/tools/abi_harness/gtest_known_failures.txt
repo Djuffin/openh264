@@ -38,10 +38,11 @@
 # `abi_harness parseonly` runs the same rows through the dylib.
 DecodeParseAPI.ParseOnly_General | 8b.C | 3 spatial layers: InitializeExt refuses at decode_api_test.cpp:888 (S48, T8b.A5). No longer a parse-only row — DecodeParser is ported (T8b.B2)
 
-# --- BaseEncoderTest.cpp:92 and friends — denoise / downsample REFUSE at init
+# --- BaseEncoderTest.cpp:92 and friends — downsample REFUSES at init
 # --- (S48, T8b.A5) ----------------------------------------------------------
-# `METHOD_DENOISE` and `METHOD_DOWNSAMPLE` are untranslated
-# (`processing/mod.rs:29-39`). Until T8b.A5 asking for either **succeeded** and
+# **T8b.C1 ported `METHOD_DENOISE`** (`processing/denoise.rs`), so `/4` is gone and
+# `bEnableDenoise` no longer refuses. `METHOD_DOWNSAMPLE` is still untranslated
+# (`processing/mod.rs`). Until T8b.A5 asking for either **succeeded** and
 # produced wrong output: `BilateralDenoising` is an empty body, and
 # `DownsamplePadding` returns `RET_NOTSUPPORTED` while both callers drop it, so a
 # lower spatial layer is encoded from whatever the picture pool last held. S48 says
@@ -59,7 +60,6 @@ DecodeParseAPI.ParseOnly_General | 8b.C | 3 spatial layers: InitializeExt refuse
 # for "how much of the reference does the port implement", and 165/199 is the
 # honest number for "how much of the reference does the port implement *without
 # lying about it*". The charter's S48 chooses the second.
-EncodeFile/EncoderOutputTest.CompareOutput/4 | 8b.C | denoise refuses at init (S48, T8b.A5); port METHOD_DENOISE
 EncodeFile/EncoderOutputTest.CompareOutput/5 | 8b.C | downsample refuses at init (S48, T8b.A5); 2 spatial layers
 EncodeFile/EncoderOutputTest.CompareOutput/7 | 8b.C | downsample refuses at init (S48, T8b.A5); 4 spatial layers
 EncodeDecodeTestAPI.SimulcastAVC | 8b.C | multi-layer: refuses at init (S48, T8b.A5) — passed before by never checking bytes

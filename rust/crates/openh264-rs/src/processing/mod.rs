@@ -24,7 +24,8 @@
 //!
 //! Implemented: `METHOD_VAA_STATISTICS` (all five SAD kernels),
 //! `METHOD_COMPLEXITY_ANALYSIS`, `METHOD_ADAPTIVE_QUANT`,
-//! `METHOD_BACKGROUND_DETECTION` and `METHOD_SCENE_CHANGE_DETECTION_VIDEO`.
+//! `METHOD_BACKGROUND_DETECTION`, `METHOD_SCENE_CHANGE_DETECTION_VIDEO` and —
+//! Phase 8b session C — `METHOD_DENOISE`.
 //!
 //! **Not translated**, and each caller in `wels_preprocess.rs` says so at the
 //! site and skips the follow-up exactly as it did when the dispatch returned
@@ -32,7 +33,6 @@
 //!
 //! | method | gated by |
 //! |---|---|
-//! | `METHOD_DENOISE` | `bEnableDenoise` |
 //! | `METHOD_SCENE_CHANGE_DETECTION_SCREEN` | `SCREEN_CONTENT_REAL_TIME` |
 //! | `METHOD_DOWNSAMPLE` | more than one spatial layer, or a resized layer |
 //! | `METHOD_COMPLEXITY_ANALYSIS_SCREEN` | `SCREEN_CONTENT_REAL_TIME` |
@@ -44,6 +44,7 @@
 #![deny(unsafe_code)]
 
 pub mod adaptive_quantization;
+pub mod denoise;
 pub mod background_detection;
 pub mod complexity_analysis;
 pub mod scene_change_detection;
@@ -52,6 +53,7 @@ pub mod vaacalc;
 use adaptive_quantization::CAdaptiveQuantization;
 use background_detection::CBackgroundDetection;
 use complexity_analysis::CComplexityAnalysis;
+use denoise::CDenoiser;
 use scene_change_detection::CSceneChangeDetection;
 
 use vaacalc::CVAACalculation;
@@ -65,6 +67,7 @@ pub struct SWelsVpContext {
     pub sAdaptiveQuant: CAdaptiveQuantization,
     pub sBackgroundDetection: CBackgroundDetection,
     pub sSceneChangeDetection: CSceneChangeDetection,
+    pub sDenoise: CDenoiser,
 }
 
 impl Default for SWelsVpContext {
@@ -75,6 +78,7 @@ impl Default for SWelsVpContext {
             sAdaptiveQuant: CAdaptiveQuantization::default(),
             sBackgroundDetection: CBackgroundDetection::default(),
             sSceneChangeDetection: CSceneChangeDetection::default(),
+            sDenoise: CDenoiser::default(),
         }
     }
 }

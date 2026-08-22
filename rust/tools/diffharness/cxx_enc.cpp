@@ -15,7 +15,7 @@
 
 int main (int argc, char** argv) {
   if (argc < 9) {
-    fprintf (stderr, "usage: %s <src.yuv> <w> <h> <frames> <qp> <cabac> <gop> <out.264> [rcmode] [baseinit 0|1|2] [slicemode] [slicenum] [threads] [complexity] [ltr] [ltrperiod] [ltrfb] [psstrategy]\n", argv[0]);
+    fprintf (stderr, "usage: %s <src.yuv> <w> <h> <frames> <qp> <cabac> <gop> <out.264> [rcmode] [baseinit 0|1|2] [slicemode] [slicenum] [threads] [complexity] [ltr] [ltrperiod] [ltrfb] [psstrategy] [dlayers] [denoise]\n", argv[0]);
     return 1;
   }
   const char* kpSrc    = argv[1];
@@ -72,6 +72,16 @@ int main (int argc, char** argv) {
   // is what refereed them: it is the only way to ask the two encoders for the same
   // listing configuration and compare the bytes.
   const int   kiPsStrategy = (argc > 18) ? atoi (argv[18]) : (int) CONSTANT_ID;
+
+  // 19th/20th: iSpatialLayerNum and bEnableDenoise (Phase 8b session C, T8b.C1/C2).
+  // These are the two axes `METHOD_DOWNSAMPLE` and `METHOD_DENOISE` sit behind, and
+  // until this session the port refused both at `InitializeExt` (S48), so neither
+  // had any byte coverage. Layer geometry follows `BaseEncoderTest`'s own rule
+  // (`test/api/BaseEncoderTest.cpp:43`): layer i is the input halved
+  // `iSpatialLayerNum - 1 - i` times, and the target bitrate is multiplied by the
+  // layer count. See the `dl` preset in sweep.sh.
+  const int   kiDLayers = (argc > 19) ? atoi (argv[19]) : 1;
+  const int   kiDenoise = (argc > 20) ? atoi (argv[20]) : 0;
 
   ISVCEncoder* pEnc = NULL;
   if (WelsCreateSVCEncoder (&pEnc) != 0 || pEnc == NULL) {
@@ -167,6 +177,20 @@ int main (int argc, char** argv) {
     sParam.sSpatialLayers[0].sSliceArgument.uiSliceMode = SM_SINGLE_SLICE;
     sParam.sSpatialLayers[0].sSliceArgument.uiSliceNum  = 1;
     break;
+  }
+
+  sParam.bEnableDenoise = (kiDenoise != 0);
+  if (kiDLayers > 1) {
+    sParam.iSpatialLayerNum = kiDLayers;
+    sParam.iTargetBitrate  *= kiDLayers;
+    for (int i = 0; i < kiDLayers; i++) {
+      sParam.sSpatialLayers[i] = sParam.sSpatialLayers[0];
+      sParam.sSpatialLayers[i].iVideoWidth  = kiWidth  >> (kiDLayers - 1 - i);
+      sParam.sSpatialLayers[i].iVideoHeight = kiHeight >> (kiDLayers - 1 - i);
+      sParam.sSpatialLayers[i].fFrameRate   = 30.0f;
+      sParam.sSpatialLayers[i].iSpatialBitrate    = sParam.iTargetBitrate;
+      sParam.sSpatialLayers[i].iMaxSpatialBitrate = UNSPECIFIED_BIT_RATE;
+    }
   }
   }
 
