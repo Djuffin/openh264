@@ -174,7 +174,13 @@ pub const C_PRED_DC_L: usize = 4;
 pub const C_PRED_DC_T: usize = 5;
 pub const C_PRED_DC_128: usize = 6;
 
+// `FEEDBACK_VCL_NAL_IN_AU` — `codec_app_def.h:190-194`, the three values
+// `DECODER_OPTION_VCL_NAL` reports. `codec_api.rs` carries the same three as the
+// public `enum FEEDBACK_VCL_NAL_IN_AU`; these are the context-side spellings, which
+// is the type the field actually has (`int32_t`).
+pub const FEEDBACK_NON_VCL_NAL: i32 = 0;
 pub const FEEDBACK_VCL_NAL: i32 = 1;
+pub const FEEDBACK_UNKNOWN_NAL: i32 = 2;
 
 // ---------------------------------------------------------------------------
 // CABAC & Bitstream Data Structures

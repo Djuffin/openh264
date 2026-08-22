@@ -2297,6 +2297,125 @@ impl Decoder {
         );
     }
 
+    // -----------------------------------------------------------------------
+    // **T8b.A3 — the rest of `CWelsDecoder::GetOption`'s 16 arms.**
+    //
+    // `welsDecoderExt.cpp:584-695`. Before this the thunk handled four ids and fell
+    // through `_ => {}` to `cmResultSuccess` for the other twelve — *success, with
+    // nothing written*, so the caller read back whatever was in its own `int`. That
+    // is 21 of the 44 remaining `test/api` rows, and the reason `DecoderVclNal`
+    // reported `-2034226216`.
+    //
+    // Each of these is the reference's expression and nothing else; the option-id
+    // dispatch, the pointer types and the error codes stay in the thunk, which is
+    // where the C interface's rules live.
+    //
+    // The brief's count said 17 get arms and 10 set arms including a `DATAFORMAT`;
+    // there is no `DECODER_OPTION_DATAFORMAT` — `codec_app_def.h:107` has only
+    // `ENCODER_OPTION_DATAFORMAT`, and the decoder's two switches have **16** and
+    // **9** arms.
+    // -----------------------------------------------------------------------
+
+    /// Whether the context exists yet. `GetOption` answers `cmInitExpected` for
+    /// every id but `NUM_OF_THREADS` when it does not (`welsDecoderExt.cpp:589`).
+    pub fn has_ctx(&self) -> bool {
+        self.ctx.is_some()
+    }
+
+    /// `DECODER_OPTION_VCL_NAL` — `:621-624`.
+    pub fn feedback_vcl_nal(&self) -> Option<i32> {
+        self.ctx.as_ref().map(|pCtx| pCtx.iFeedbackVclNalInAu)
+    }
+
+    /// `DECODER_OPTION_TEMPORAL_ID` — `:625-628`.
+    pub fn feedback_temporal_id(&self) -> Option<i32> {
+        self.ctx.as_ref().map(|pCtx| pCtx.iFeedbackTidInAu)
+    }
+
+    /// `DECODER_OPTION_IS_REF_PIC` — `:629-634`. The reference clamps the stored
+    /// `nal_ref_idc` to 0/1 on the way out but leaves −1 alone, which is what
+    /// `decode_api_test.cpp:204` asserts before any decode.
+    pub fn feedback_is_ref_pic(&self) -> Option<i32> {
+        self.ctx.as_ref().map(|pCtx| {
+            let iVal = pCtx.iFeedbackNalRefIdc;
+            if iVal > 0 { 1 } else { iVal }
+        })
+    }
+
+    /// `DECODER_OPTION_FRAME_NUM` — `:608-611`, under `LONG_TERM_REF`.
+    pub fn frame_num(&self) -> Option<i32> {
+        self.ctx.as_ref().map(|pCtx| pCtx.iFrameNum)
+    }
+
+    /// `DECODER_OPTION_IDR_PIC_ID` — `:603-607`, under `LONG_TERM_REF`. The field is
+    /// a `uint16_t` in both trees and crosses as the `int` the option id names.
+    pub fn cur_idr_pic_id(&self) -> Option<i32> {
+        self.ctx.as_ref().map(|pCtx| i32::from(pCtx.uiCurIdrPicId))
+    }
+
+    /// `DECODER_OPTION_LTR_MARKING_FLAG` — `:612-615`.
+    pub fn ltr_marking_flag(&self) -> Option<i32> {
+        self.ctx
+            .as_ref()
+            .map(|pCtx| i32::from(pCtx.bCurAuContainLtrMarkSeFlag))
+    }
+
+    /// `DECODER_OPTION_LTR_MARKED_FRAME_NUM` — `:616-619`.
+    pub fn ltr_marked_frame_num(&self) -> Option<i32> {
+        self.ctx.as_ref().map(|pCtx| pCtx.iFrameNumOfAuMarkedLtr)
+    }
+
+    /// `DECODER_OPTION_PROFILE` / `DECODER_OPTION_LEVEL` — `:673-687`. Both return
+    /// `cmInitExpected` when no SPS has been activated yet, which the outer `Option`
+    /// carries; the inner one is the context.
+    pub fn active_sps_profile(&self) -> Option<Option<i32>> {
+        self.ctx.as_ref().map(|pCtx| {
+            crate::decoder::decoder_context::active_sps(&pCtx.sSpsPpsCtx, pCtx.active_sps)
+                .map(|sps| i32::from(sps.uiProfileIdc))
+        })
+    }
+
+    pub fn active_sps_level(&self) -> Option<Option<i32>> {
+        self.ctx.as_ref().map(|pCtx| {
+            crate::decoder::decoder_context::active_sps(&pCtx.sSpsPpsCtx, pCtx.active_sps)
+                .map(|sps| i32::from(sps.uiLevelIdc))
+        })
+    }
+
+    /// `DECODER_OPTION_GET_SAR_INFO` — `:664-672`. The reference zeroes the caller's
+    /// struct first and then fills it from the active SPS's VUI, so a stream whose
+    /// VUI carries no aspect ratio reads back zeros rather than the previous
+    /// stream's.
+    pub fn sar_info(&self) -> Option<Option<SVuiSarInfo>> {
+        self.ctx.as_ref().map(|pCtx| {
+            crate::decoder::decoder_context::active_sps(&pCtx.sSpsPpsCtx, pCtx.active_sps).map(|sps| {
+                SVuiSarInfo {
+                    uiSarWidth: sps.sVui.uiSarWidth,
+                    uiSarHeight: sps.sVui.uiSarHeight,
+                    bOverscanAppropriateFlag: sps.sVui.bOverscanAppropriateFlag,
+                }
+            })
+        })
+    }
+
+    /// `DECODER_OPTION_STATISTICS_LOG_INTERVAL`, both ways — `:653-659` and
+    /// `:571-577`.
+    pub fn statistics_log_interval(&self) -> Option<u32> {
+        self.ctx
+            .as_ref()
+            .map(|pCtx| pCtx.pDecoderStatistics.iStatisticsLogInterval)
+    }
+
+    pub fn set_statistics_log_interval(&mut self, interval: u32) -> bool {
+        match self.ctx.as_mut() {
+            Some(pCtx) => {
+                pCtx.pDecoderStatistics.iStatisticsLogInterval = interval;
+                true
+            }
+            None => false,
+        }
+    }
+
     /// `CWelsDecoder::Initialize`'s null-parameter arm — `welsDecoderExt.cpp:266-268`.
     ///
     /// On the impl and not in the thunk because the message needs the trace object,
@@ -2348,6 +2467,43 @@ impl Decoder {
         // `Instant` is the same accumulator and cannot run backwards. Its one
         // reader is `DECODER_OPTION_GET_STATISTICS`'s two speed fields.
         let dec_started = std::time::Instant::now();
+
+        // ------------------------------------------------------------------
+        // **T8b.A3 — `welsDecoderExt.cpp:784-811`, the per-call reset block, which
+        // had no counterpart in this port at all.**
+        //
+        // Every field here is read back through `GetOption`, and every one of them
+        // was reading either the caller's stack garbage or a value from some earlier
+        // call. `decode_api_test.cpp:45` is the plainest case: the first
+        // `DecodeFrame2` with data must leave `DECODER_OPTION_VCL_NAL` at
+        // `FEEDBACK_UNKNOWN_NAL`, and it can only do that if something sets it to
+        // `FEEDBACK_UNKNOWN_NAL` on entry. The reference's order is kept.
+        //
+        // `GetThreadCount` is 0 in this port (D3), so the reference's two
+        // `GetThreadCount(...) <= 1` guards are both taken and are not written out.
+        ppDst[0] = ptr::null_mut();
+        ppDst[1] = ptr::null_mut();
+        ppDst[2] = ptr::null_mut();
+        (*p_ctx).iFeedbackVclNalInAu = crate::decoder::decoder_core::FEEDBACK_UNKNOWN_NAL;
+        // `:789-793`: the whole `SBufferInfo` is zeroed and only `uiInBsTimeStamp`
+        // survives, because it is the caller's *input* on this slot.
+        let uiInBsTimeStamp = pDstInfo.uiInBsTimeStamp;
+        *pDstInfo = SBufferInfo::default();
+        pDstInfo.uiInBsTimeStamp = uiInBsTimeStamp;
+        // `:795-800`, under `LONG_TERM_REF`.
+        (*p_ctx).bReferenceLostAtT0Flag = false;
+        (*p_ctx).bCurAuContainLtrMarkSeFlag = false;
+        (*p_ctx).iFrameNumOfAuMarkedLtr = 0;
+        (*p_ctx).iFrameNum = -1;
+        // `:804-805`.
+        (*p_ctx).iFeedbackTidInAu = -1;
+        (*p_ctx).iFeedbackNalRefIdc = -1;
+        // `:807-811`. `pDstInfo` is a reference here, so the reference's null arm
+        // (`uiTimeStamp = 0`) is unreachable — `decoder_decode_frame2_c` has already
+        // returned `dsInitialOptExpected` for a null.
+        pDstInfo.uiOutYuvTimeStamp = 0;
+        (*p_ctx).uiTimeStamp = uiInBsTimeStamp;
+
         if let Some(src) = src {
             (*p_ctx).bEndOfStreamFlag = false;
             if crate::decoder::decoder_core::GetThreadCount(&mut *p_ctx) <= 0 {
@@ -3306,14 +3462,48 @@ unsafe extern "C" fn decoder_set_opt_c(this: *mut ISVCDecoder, eOptionId: DECODE
         // sees a `c_void`.
         unsafe {
             let core = &mut (*(this as *mut CWelsDecoderImpl)).core;
+
+            // **`welsDecoderExt.cpp:479-584`, whole (T8b.A3).** Nine arms, and the
+            // reference's two head clauses:
+            //
+            //   1. `NUM_OF_THREADS` first, and it succeeds whether or not the decoder
+            //      has a context — it is the object's field;
+            //   2. then, for every other id except the three trace ones, a missing
+            //      context is `dsInitialOptExpected`.
+            //
+            // What used to be here handled six ids and fell through `_ => {}` to
+            // `cmResultSuccess`, so an unknown id and the two get-only ids reported
+            // success and did nothing.
+            if eOptionId == DECODER_OPTION::DECODER_OPTION_NUM_OF_THREADS {
+                // `:481-501`. The reference clamps the request to
+                // `min(m_iCpuCount, 3)` and rebuilds its context array; this port is
+                // single-threaded (D3), so the clamp is to 0 and there is no array.
+                // It still returns success on any input, including a null, which is
+                // what the reference does.
+                return CM_RESULT_SUCCESS as c_long;
+            }
+            let ctx_needed = !matches!(
+                eOptionId,
+                DECODER_OPTION::DECODER_OPTION_TRACE_LEVEL
+                    | DECODER_OPTION::DECODER_OPTION_TRACE_CALLBACK
+                    | DECODER_OPTION::DECODER_OPTION_TRACE_CALLBACK_CONTEXT
+            );
+            if ctx_needed && !core.has_ctx() {
+                return DECODING_STATE::dsInitialOptExpected.0 as c_long;
+            }
+
             match eOptionId {
                 // The reference tests `pOption` per arm rather than once at the head
                 // (`welsDecoderExt.cpp:479`), and the arms disagree about what a null
-                // means: this one ignores it, the ones below reject it. Kept as it is.
+                // means: `END_OF_STREAM` and `ERROR_CON_IDC` reject it, the trace ones
+                // dereference it, `STATISTICS_LOG_INTERVAL` falls through to the
+                // function's trailing `cmInitParaError`. Kept as it is.
                 DECODER_OPTION::DECODER_OPTION_END_OF_STREAM => {
-                    if !pOption.is_null() {
-                        core.set_end_of_stream(pOption.cast::<i32>().read() != 0);
+                    if pOption.is_null() {
+                        return CM_INIT_PARA_ERROR as c_long;
                     }
+                    core.set_end_of_stream(pOption.cast::<i32>().read() != 0);
+                    CM_RESULT_SUCCESS as c_long
                 }
                 DECODER_OPTION::DECODER_OPTION_ERROR_CON_IDC => {
                     if pOption.is_null() {
@@ -3328,11 +3518,13 @@ unsafe extern "C" fn decoder_set_opt_c(this: *mut ISVCDecoder, eOptionId: DECODE
                     // clamp exists to enforce, so reading the option at the enum's type
                     // assumed the property it was there to establish. It crosses as an
                     // `i32` and becomes an `ERROR_CON_IDC` only once
-                    // `Decoder::set_error_concealment` has clamped it.
-                    return core.set_error_concealment(pOption.cast::<i32>().read());
+                    // `Decoder::set_error_concealment` has clamped it — which is also
+                    // where the parse-only refusal (`:531-536`) lives.
+                    core.set_error_concealment(pOption.cast::<i32>().read())
                 }
                 // **T8.B6 — the three trace options, which this port did not
-                // implement.** `welsDecoderExt.cpp:541–561`.
+                // implement.** `welsDecoderExt.cpp:541-561`. These are the three ids
+                // that work without a context.
                 DECODER_OPTION::DECODER_OPTION_TRACE_LEVEL
                 | DECODER_OPTION::DECODER_OPTION_TRACE_CALLBACK
                 | DECODER_OPTION::DECODER_OPTION_TRACE_CALLBACK_CONTEXT => {
@@ -3350,15 +3542,30 @@ unsafe extern "C" fn decoder_set_opt_c(this: *mut ISVCDecoder, eOptionId: DECODE
                         // contract.
                         _ => core.set_trace_callback_context(pOption.cast::<*mut c_void>().read()),
                     }
+                    CM_RESULT_SUCCESS as c_long
                 }
-                // `welsDecoderExt.cpp:562` — get-only, and it says so.
-                DECODER_OPTION::DECODER_OPTION_GET_STATISTICS => {
-                    return CM_INIT_PARA_ERROR as c_long;
+                // `welsDecoderExt.cpp:562` and `:578` — get-only, and both say so.
+                DECODER_OPTION::DECODER_OPTION_GET_STATISTICS
+                | DECODER_OPTION::DECODER_OPTION_GET_SAR_INFO => CM_INIT_PARA_ERROR as c_long,
+                // `:571-577`. A null `pOption` here does *not* return early: it falls
+                // out of the reference's `else if` chain to the trailing
+                // `return cmInitParaError`, which is the same code by a different
+                // route and is written as one here.
+                DECODER_OPTION::DECODER_OPTION_STATISTICS_LOG_INTERVAL => {
+                    if pOption.is_null() {
+                        return CM_INIT_PARA_ERROR as c_long;
+                    }
+                    if core.set_statistics_log_interval(pOption.cast::<u32>().read()) {
+                        CM_RESULT_SUCCESS as c_long
+                    } else {
+                        DECODING_STATE::dsInitialOptExpected.0 as c_long
+                    }
                 }
-                _ => {}
+                // `:583` — the reference's fall-through. An id with no arm is an
+                // error; this was `_ => {}` and reported success.
+                _ => CM_INIT_PARA_ERROR as c_long,
             }
         }
-        CM_RESULT_SUCCESS as c_long
     })
 }
 
@@ -3374,44 +3581,135 @@ unsafe extern "C" fn decoder_set_opt_c(this: *mut ISVCDecoder, eOptionId: DECODE
 /// object of the type `eOptionId` names, for the duration of this call.
 unsafe extern "C" fn decoder_get_opt_c(this: *mut ISVCDecoder, eOptionId: DECODER_OPTION, pOption: *mut c_void) -> c_long {
     abi_guard!("ISVCDecoder::GetOption", unsafe { decoder_log(this) }, CM_INIT_PARA_ERROR as c_long, {
-        if this.is_null() || pOption.is_null() {
+        if this.is_null() {
             return CM_INIT_PARA_ERROR as c_long;
         }
         // Translate-out: each arm asks the core for a value and writes it at the type
         // the option id names.
         unsafe {
             let core = &(*(this as *mut CWelsDecoderImpl)).core;
+
+            // **`welsDecoderExt.cpp:584-695`, whole (T8b.A3).** The reference's own
+            // order and its own three head clauses:
+            //
+            //   1. `NUM_OF_THREADS` is answered *before* the context is looked at —
+            //      it is the object's field, not the context's, and it is the one id
+            //      that works on an uninitialized decoder;
+            //   2. then `pDecContext == NULL` -> `cmInitExpected`;
+            //   3. then `pOption == NULL` -> `cmInitParaError`.
+            //
+            // **The order of 2 and 3 is the reference's and is not obvious**: a null
+            // `pOption` on an uninitialized decoder reports `cmInitExpected`, not
+            // `cmInitParaError`. This port had them the other way round, and
+            // `NUM_OF_FRAMES_REMAINING_IN_BUFFER` answered 0 on a decoder that had
+            // never been initialized where the reference refuses.
+            if eOptionId == DECODER_OPTION::DECODER_OPTION_NUM_OF_THREADS {
+                if pOption.is_null() {
+                    return CM_INIT_PARA_ERROR as c_long;
+                }
+                // `m_iThreadCount`. This port is single-threaded (D3) and
+                // `SetOption`'s arm clamps every request to it, so the value the
+                // reference would report after any sequence of `SetOption` calls is
+                // the one it reports here.
+                pOption.cast::<i32>().write(0);
+                return CM_RESULT_SUCCESS as c_long;
+            }
+            if !core.has_ctx() {
+                return CM_INIT_EXPECTED as c_long;
+            }
+            if pOption.is_null() {
+                return CM_INIT_PARA_ERROR as c_long;
+            }
+
+            // Past the head clauses every arm below has a context, so each accessor's
+            // `Option` is `Some`; `else` arms that cannot be reached are written as
+            // the reference's fall-through (`cmInitParaError`) rather than as a
+            // branch on a constant.
+            macro_rules! write_i32 {
+                ($v:expr) => {{
+                    let Some(v) = $v else { return CM_INIT_EXPECTED as c_long };
+                    pOption.cast::<i32>().write(v);
+                    return CM_RESULT_SUCCESS as c_long;
+                }};
+            }
+
             match eOptionId {
-                DECODER_OPTION::DECODER_OPTION_NUM_OF_FRAMES_REMAINING_IN_BUFFER => {
-                    // No context, no reordering state, and the count the C++ reads out
-                    // of `m_sReoderingStatus` with no context is zero for the same
-                    // reason (T8.A7; see `decoder_flush_frame_c`).
-                    pOption.cast::<i32>().write(core.frames_remaining());
-                }
                 DECODER_OPTION::DECODER_OPTION_END_OF_STREAM => {
-                    pOption.cast::<i32>().write(i32::from(core.end_of_stream()));
+                    write_i32!(Some(i32::from(core.end_of_stream())))
                 }
-                // `welsDecoderExt.cpp:634–637`. Unwired until T8.B1, which is why F76's
+                // `:603-619`, the four `LONG_TERM_REF` arms — the macro is defined in
+                // `decoder_context.h:67`, so it is on in every reference build.
+                DECODER_OPTION::DECODER_OPTION_IDR_PIC_ID => write_i32!(core.cur_idr_pic_id()),
+                DECODER_OPTION::DECODER_OPTION_FRAME_NUM => write_i32!(core.frame_num()),
+                DECODER_OPTION::DECODER_OPTION_LTR_MARKING_FLAG => write_i32!(core.ltr_marking_flag()),
+                DECODER_OPTION::DECODER_OPTION_LTR_MARKED_FRAME_NUM => {
+                    write_i32!(core.ltr_marked_frame_num())
+                }
+                DECODER_OPTION::DECODER_OPTION_VCL_NAL => write_i32!(core.feedback_vcl_nal()),
+                DECODER_OPTION::DECODER_OPTION_TEMPORAL_ID => write_i32!(core.feedback_temporal_id()),
+                DECODER_OPTION::DECODER_OPTION_IS_REF_PIC => write_i32!(core.feedback_is_ref_pic()),
+                // `welsDecoderExt.cpp:634-637`. Unwired until T8.B1, which is why F76's
                 // two `DecoderConfigParam` statements had no observable: the mode the
                 // decoder actually runs with is only visible through this option.
                 DECODER_OPTION::DECODER_OPTION_ERROR_CON_IDC => {
-                    let Some(idc) = core.error_concealment() else {
-                        return CM_INIT_EXPECTED as c_long;
-                    };
-                    pOption.cast::<i32>().write(idc as i32);
+                    write_i32!(core.error_concealment().map(|idc| idc as i32))
                 }
-                // `welsDecoderExt.cpp:639–651`. **F76, T8.B3** — unwired until the block
+                // `welsDecoderExt.cpp:639-651`. **F76, T8.B3** — unwired until the block
                 // that fills the counters existed.
                 DECODER_OPTION::DECODER_OPTION_GET_STATISTICS => {
                     let Some(stats) = core.statistics() else {
                         return CM_INIT_EXPECTED as c_long;
                     };
                     pOption.cast::<SDecoderStatistics>().write(stats);
+                    return CM_RESULT_SUCCESS as c_long;
                 }
-                _ => {}
+                // `:653-659`. An `unsigned int` on this id, in both directions.
+                DECODER_OPTION::DECODER_OPTION_STATISTICS_LOG_INTERVAL => {
+                    let Some(v) = core.statistics_log_interval() else {
+                        return CM_INIT_EXPECTED as c_long;
+                    };
+                    pOption.cast::<u32>().write(v);
+                    return CM_RESULT_SUCCESS as c_long;
+                }
+                // `:664-672`. The reference `memset`s the caller's struct before it
+                // decides whether it has an SPS, so a refusal still leaves zeros
+                // rather than the caller's stack.
+                DECODER_OPTION::DECODER_OPTION_GET_SAR_INFO => {
+                    pOption.cast::<SVuiSarInfo>().write(SVuiSarInfo::default());
+                    let Some(sar) = core.sar_info() else {
+                        return CM_INIT_EXPECTED as c_long;
+                    };
+                    let Some(sar) = sar else {
+                        return CM_INIT_EXPECTED as c_long;
+                    };
+                    pOption.cast::<SVuiSarInfo>().write(sar);
+                    return CM_RESULT_SUCCESS as c_long;
+                }
+                DECODER_OPTION::DECODER_OPTION_PROFILE => {
+                    let Some(v) = core.active_sps_profile() else {
+                        return CM_INIT_EXPECTED as c_long;
+                    };
+                    write_i32!(v)
+                }
+                DECODER_OPTION::DECODER_OPTION_LEVEL => {
+                    let Some(v) = core.active_sps_level() else {
+                        return CM_INIT_EXPECTED as c_long;
+                    };
+                    write_i32!(v)
+                }
+                DECODER_OPTION::DECODER_OPTION_NUM_OF_FRAMES_REMAINING_IN_BUFFER => {
+                    // `:688-694`. The reference waits on every active decoding thread
+                    // before reading `m_sReoderingStatus`; with no threads there is
+                    // nothing to wait for, and the count is the context's own.
+                    pOption.cast::<i32>().write(core.frames_remaining());
+                    return CM_RESULT_SUCCESS as c_long;
+                }
+                // `:696` — the reference's fall-through. An id with no arm is an
+                // error, not a silent success; this is the `_ => {}` that cost 21
+                // gtest rows.
+                _ => return CM_INIT_PARA_ERROR as c_long,
             }
         }
-        CM_RESULT_SUCCESS as c_long
     })
 }
 

@@ -102,12 +102,23 @@ fn test_decoder_create_and_destroy_lifecycle() {
         );
         assert_eq!(i64::from(set_opt_ret), CM_RESULT_SUCCESS as i64);
 
+        // **T8b.A3 — this asserted `cmResultSuccess` and was pinning a defect.**
+        // `DECODER_OPTION_TRACE_LEVEL` is settable and **not gettable**: the two
+        // switches in `welsDecoderExt.cpp` are not the same set, and `GetOption`
+        // (`:584-695`) has no `TRACE_LEVEL` arm, so it falls out to `:696`'s
+        // `return cmInitParaError`. The port used to have `_ => {}` there and
+        // reported success for twelve ids, this one included; the test wrote down
+        // what the port did rather than what the reference does.
+        //
+        // Measured against the reference rather than argued from the source:
+        // `Initialize -> 0`, `SetOption(TRACE_LEVEL) -> 0`,
+        // `GetOption(TRACE_LEVEL) -> 1` (`cmInitParaError`) on `libopenh264.dylib`.
         let get_opt_ret = ISVCDecoder::GetOption(
             p_decoder,
             DECODER_OPTION::DECODER_OPTION_TRACE_LEVEL,
             &mut trace_level as *mut i32 as *mut std::ffi::c_void,
         );
-        assert_eq!(i64::from(get_opt_ret), CM_RESULT_SUCCESS as i64);
+        assert_eq!(i64::from(get_opt_ret), CM_INIT_PARA_ERROR as i64);
 
         // 9. Uninitialize
         let uninit_ret = ISVCDecoder::Uninitialize(p_decoder);

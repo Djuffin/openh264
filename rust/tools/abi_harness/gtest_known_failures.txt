@@ -13,49 +13,21 @@
 # *assertion site* they fail at (S47: a fixture name is a surface), which is stated
 # in each group's header and re-measured by `--check`'s own by-site tally.
 
-# --- decode_api_test.cpp:45 — GetOption(DECODER_OPTION_VCL_NAL) ---------------
-# `iFeedbackVclNalInAu` is never written (`GetVclNalTemporalId` is an empty body at
-# decoder_core.rs:1061) and `decoder_get_opt_c` has no VCL_NAL arm, so the caller's
-# `int` keeps its stack garbage.
-EncodeDecodeTestAPIBase/EncodeDecodeTestAPI.DecoderVclNal/0 | 8b.A | decoder GetOption: no VCL_NAL arm, GetVclNalTemporalId is a stub
-EncodeDecodeTestAPIBase/EncodeDecodeTestAPI.DecoderVclNal/1 | 8b.A | decoder GetOption: no VCL_NAL arm, GetVclNalTemporalId is a stub
-EncodeDecodeTestAPIBase/EncodeDecodeTestAPI.DecoderVclNal/2 | 8b.A | decoder GetOption: no VCL_NAL arm, GetVclNalTemporalId is a stub
-
-# --- decode_api_test.cpp:81 — GetOption(DECODER_OPTION_FRAME_NUM) ------------
-EncodeDecodeTestAPIBase/EncodeDecodeTestAPI.GetOptionFramenum/0 | 8b.A | decoder GetOption: no FRAME_NUM arm
-EncodeDecodeTestAPIBase/EncodeDecodeTestAPI.GetOptionFramenum/1 | 8b.A | decoder GetOption: no FRAME_NUM arm
-EncodeDecodeTestAPIBase/EncodeDecodeTestAPI.GetOptionFramenum/2 | 8b.A | decoder GetOption: no FRAME_NUM arm
-
-# --- decode_api_test.cpp:132 — GetOption(DECODER_OPTION_IDR_PIC_ID) ----------
-# No arm, and `uiCurIdrPicId` is declared and reset but never written.
-EncodeDecodeTestAPIBase/EncodeDecodeTestAPI.GetOptionIDR/0 | 8b.A | decoder GetOption: no IDR_PIC_ID arm, uiCurIdrPicId never written
-EncodeDecodeTestAPIBase/EncodeDecodeTestAPI.GetOptionIDR/1 | 8b.A | decoder GetOption: no IDR_PIC_ID arm, uiCurIdrPicId never written
-EncodeDecodeTestAPIBase/EncodeDecodeTestAPI.GetOptionIDR/2 | 8b.A | decoder GetOption: no IDR_PIC_ID arm, uiCurIdrPicId never written
-
-# --- decode_api_test.cpp:204 — GetOption(DECODER_OPTION_IS_REF_PIC) ----------
-EncodeDecodeTestAPIBase/EncodeDecodeTestAPI.GetOptionIsRefPic/0 | 8b.A | decoder GetOption: no IS_REF_PIC arm
-EncodeDecodeTestAPIBase/EncodeDecodeTestAPI.GetOptionIsRefPic/1 | 8b.A | decoder GetOption: no IS_REF_PIC arm
-EncodeDecodeTestAPIBase/EncodeDecodeTestAPI.GetOptionIsRefPic/2 | 8b.A | decoder GetOption: no IS_REF_PIC arm
-
-# --- decode_api_test.cpp:348 / :404 — GetOption(DECODER_OPTION_TEMPORAL_ID) --
-EncodeDecodeTestAPIBase/EncodeDecodeTestAPI.GetOptionTid_AVC_WITH_PREFIX_NOLOSS/0 | 8b.A | decoder GetOption: no TEMPORAL_ID arm, iFeedbackTidInAu never written
-EncodeDecodeTestAPIBase/EncodeDecodeTestAPI.GetOptionTid_AVC_WITH_PREFIX_NOLOSS/1 | 8b.A | decoder GetOption: no TEMPORAL_ID arm, iFeedbackTidInAu never written
-EncodeDecodeTestAPIBase/EncodeDecodeTestAPI.GetOptionTid_AVC_WITH_PREFIX_NOLOSS/2 | 8b.A | decoder GetOption: no TEMPORAL_ID arm, iFeedbackTidInAu never written
-EncodeDecodeTestAPIBase/EncodeDecodeTestAPI.GetOptionTid_SVC_L1_NOLOSS/0 | 8b.A | decoder GetOption: no TEMPORAL_ID arm, iFeedbackTidInAu never written
-EncodeDecodeTestAPIBase/EncodeDecodeTestAPI.GetOptionTid_SVC_L1_NOLOSS/1 | 8b.A | decoder GetOption: no TEMPORAL_ID arm, iFeedbackTidInAu never written
-EncodeDecodeTestAPIBase/EncodeDecodeTestAPI.GetOptionTid_SVC_L1_NOLOSS/2 | 8b.A | decoder GetOption: no TEMPORAL_ID arm, iFeedbackTidInAu never written
-
-# --- decoder_ec_test.cpp:701 / :789 — the same TEMPORAL_ID read ---------------
-EncodeDecodeTestAPI.Engine_SVC_Switch_I | 8b.A | decoder GetOption: no TEMPORAL_ID arm
-EncodeDecodeTestAPI.Engine_SVC_Switch_P | 8b.A | decoder GetOption: no TEMPORAL_ID arm
-
-# --- encode_options_test.cpp:1990 — GetOption(DECODER_OPTION_PROFILE) --------
-EncodeDecodeTestAPI.ProfileLevelSetting | 8b.A | decoder GetOption: no PROFILE/LEVEL arm
+# --- decoder_ec_test.cpp:746 — LTR recovery must yield an IDR ----------------
+# T8b.A3 fixed `Engine_SVC_Switch_I` and moved `_P`'s first failure from the
+# TEMPORAL_ID read at `:789` to the LTR one at `:746`
+# (`ASSERT_TRUE (info.eFrameType == videoFrameTypeIDR)` under
+# `IDR_RECOVERY_REQUEST`) — the same assertion as `ltr_test.cpp:39` below.
+EncodeDecodeTestAPI.Engine_SVC_Switch_P | 8b.A | LTR recovery request does not produce an IDR (decoder_ec_test.cpp:746)
 
 # --- ltr_test.cpp:39 — ForceIntraFrame with LTR on must give an IDR ----------
-EncodeDecodeTestAPIBase/EncodeDecodeTestAPI.GetOptionLTR_ALLIDR/0 | 8b.A | LTR + ForceIntraFrame: the next frame is not reported IDR
-EncodeDecodeTestAPIBase/EncodeDecodeTestAPI.GetOptionLTR_ALLIDR/1 | 8b.A | LTR + ForceIntraFrame: the next frame is not reported IDR
-EncodeDecodeTestAPIBase/EncodeDecodeTestAPI.GetOptionLTR_ALLIDR/2 | 8b.A | LTR + ForceIntraFrame: the next frame is not reported IDR
+# **These three are non-deterministic.** `test/api`'s main seeds `rand()` from
+# `time(NULL)` (`simple_test.cpp:20-24`) and this fixture draws its temporal-layer
+# count and IDR interval from it, so which instances fail moves run to run; the
+# family fails, the instance does not. Re-run with `--seed=N` to pin one.
+EncodeDecodeTestAPIBase/EncodeDecodeTestAPI.GetOptionLTR_ALLIDR/0 | 8b.A | LTR + ForceIntraFrame: the next frame is not reported IDR (rand-dependent instance)
+EncodeDecodeTestAPIBase/EncodeDecodeTestAPI.GetOptionLTR_ALLIDR/1 | 8b.A | LTR + ForceIntraFrame: the next frame is not reported IDR (rand-dependent instance)
+EncodeDecodeTestAPIBase/EncodeDecodeTestAPI.GetOptionLTR_ALLIDR/2 | 8b.A | LTR + ForceIntraFrame: the next frame is not reported IDR (rand-dependent instance)
 
 # --- encode_options_test.cpp:556/656/705/772/844/911 — listing strategies ----
 # `CreateParametersetStrategy` returns None for the three listing modes and
