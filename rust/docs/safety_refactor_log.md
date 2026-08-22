@@ -15253,3 +15253,36 @@ picture. `#[track_caller]` plus an explicit assert now gives
 `#[should_panic(expected = "grid ")]` and one that asserts the whole message, so a
 future edit cannot quietly drop a field. The bounds check already existed — this
 replaces it, and costs a panic path rather than a branch.
+
+### Session A's close (the fast set, D-gate-3)
+
+| gate | result |
+|---|---|
+| `gates.sh commit` | PASS — 523 debug / 518 release / 20 ignored; unsafe ratchet flat (no per-file increase); duplicate census 57 allowlisted, nothing new |
+| `gtest_stretch.sh --check` | rc 0, **165/199, allowlist 34** |
+| `abi_exports.sh release` | `exports: 7/7 — exactly upstream's seven` |
+| `abi_harness/run.sh` | `TALLY 12 passed / 0 failed` (58 conformance assets, 5 nodelay rows, 14 encode configs × 2 profiles) |
+| `ecref/compare_all.sh` | **2902 / 17 output, 2919 / 0 codes** over 2919 rows — identical to the Phase 8 close |
+| one targeted `ltr` diffharness pair | byte-identical, 7833 bytes both sides |
+
+No sweeps, no Miri, no benches, no span: D-gate-3 puts those at the phase close.
+
+**Stability of the ratchet.** Seven full runs of the Rust link at `5478ae7e` gave
+165 six times and 164 once — `SetOptionECIDC_SpecificFrameChange`, which the C++ link
+passes in 199/199 across four runs. Filed as **F88** and deliberately *not*
+allowlisted: a row that passes six runs in seven would make `--check` red as a stale
+row, which is the lie the gate exists to catch.
+
+**Handed on.** To session B: the census's 9 `8b.B` rows. To session C: the 17
+downsample/denoise rows that return together, the census's 12 `8b.C` rows, and
+**F87** with its asset (`tests/data/f80/`), its generator
+(`tools/make_numref_asset.cpp`) and the C++'s row. To Phase 10: the 7 screen-content
+rows and the census's 19, `METHOD_IMAGE_ROTATE` noted unreachable from `ISVCEncoder`.
+To Phase 9: **F84** (two orphaned threaded-decoder functions), **F85** (the stub
+finder's same-name collapse), and F86's open half — the unchecked `pShortRefList`
+write, in both trees.
+
+**Still the user's call: D-poc-1.** `DecodeFile/DecoderOutputTest.CompareOutput/39`
+(`test_scalinglist_jm.264`) is the last allowlist row that is not owned by a session.
+Keep the port's JVT-correct POC tiebreak, or match upstream bug-for-bug as a drop-in.
+Unchanged and un-argued this session, as the brief directs.
