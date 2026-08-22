@@ -845,3 +845,37 @@ the reference's 24 lines on `Error_I_P.264` at `--trace=8`, F96's note).
 
 **Owner: Phase 9.** The third row, `GetCPUCount` returning `1`, is D3 — the port is
 single-threaded by decision — and is not a gap.
+
+## F88 — closed by F96's fix: 0 of 10 seeds, including its own
+
+`EncodeDecodeTestAPI.SetOptionECIDC_SpecificFrameChange` failed on the Rust link at
+`decoder_ec_test.cpp:302` — `EXPECT_EQ(dstBufInfo_.iBufferStatus, 1)` — on **one seed
+in ten**, reproducing at `--seeds=5..5`, where the C++ link passed all ten. It is a
+concealment divergence: on a frame decoded after an earlier frame was dropped, the
+reference conceals and emits a frame where the port emits nothing.
+
+**It was not investigated on its own terms, and did not need to be.** After T8b.C4
+fixed F96, the ten-seed finder reads:
+
+```text
+seed  1..10   rust 191/199, 8 failed   cxx 199/199
+              one distinct failure set across all ten seeds:
+                the 7 Phase 10 screen-content rows + DecoderOutputTest/39 (D-poc-1)
+```
+
+`SetOptionECIDC_SpecificFrameChange` appears **nowhere** in the ten logs — including
+seed 5, the seed it was found at.
+
+**The mechanism is F96's, and it is the same sentence.** F96 was the port computing
+`isNewFrame` without the `iThreadCount > 1` guard, so on a **continuing** frame it
+skipped `InitRefPicList` entirely and then failed the slice decode. A slice that fails
+to decode is a frame that does not get emitted — which is exactly F88's assertion,
+`iBufferStatus == 0` where the reference has 1. F88 is F96 seen through a
+concealment-mode test instead of through a return code, in the same way F93 was F96
+seen through parse-only.
+
+**Stated honestly:** the evidence is 0/10 at the seeds where it was 1/10, plus a named
+mechanism that predicts exactly the observed assertion. It is not a direct
+repro-instrument-fix, because the fix landed first for a different reason. If it
+returns, the seed and the assertion are recorded here and `--seeds=1..10` is the
+finder.
