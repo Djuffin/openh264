@@ -3233,3 +3233,63 @@ all point at one of two.** A `DecodeFrameNoDelay` bench row is Phase 9's if anyo
 wants the number; the correctness referee for it exists now
 (`tests/decoder_nodelay_parity_test.rs` and the harness's fifth part), which is the
 part that was actually missing.
+
+---
+
+## Phase 8b's span — `C_head2` (`4d79895c`, Phase 8's close) vs `8b_head` (`1b921d7f`)
+
+D-gate-3 puts the phase's only span at its close. Same 7 pairs, same two benches, same
+machine; the 3-pair null was taken on the head binary immediately before.
+
+**The null (`8b_head` against itself, 3 pairs) — this session's floor:**
+
+| | rows | median | min | max |
+|---|---|---|---|---|
+| decode | 3 | −0.03% | −0.15% | **+0.17%** |
+| encode | 28 | +0.00% | −1.55% | **+1.06%** |
+
+**The span (7 pairs):**
+
+| | rows | median | min | max | over +5% |
+|---|---|---|---|---|---|
+| decode | 3 | **+0.87%** | +0.57% | +0.89% | **0** |
+| encode | 28 | **+0.96%** | −0.26% | +3.45% | **0** |
+
+Against D-perf-4's **+25% median tripwire**, both are two orders of magnitude clear.
+No swap, no ledger row.
+
+**Encode is floor.** Its median (+0.96%) is inside the null's band, and every row
+above +2% is a sub-0.3 ms stream — `QVGA SMPTE Bars` at 0.070 → 0.072 ms, `VGA SMPTE
+Bars` at 0.261 → 0.270 ms. Those readings quantize in 0.002 ms steps, so one step *is*
+3%. The rows big enough to carry a percentage — 1080p Mandelbrot at 9.7 ms (+0.32% /
++0.16%), 1080p Testsrc at 4.2 ms (+0.34% / +1.35%), 720p Mandelbrot at 5.0 ms (−0.16%
+/ +0.06%) — are all at or inside the floor.
+
+**Decode moved, slightly, and it is not session C's.** +0.87% median sits *outside*
+the null's +0.17% ceiling on all three rows, so it is real rather than drift. A second
+7-pair span isolates the session — `8b_c_start` (`b5e495ff`, session C's first parent)
+vs `8b_head`:
+
+| | rows | median | min | max |
+|---|---|---|---|---|
+| decode | 3 | **+0.11%** | +0.04% | +0.12% |
+| encode | 28 | **+0.26%** | −0.65% | +1.41% |
+
+Both inside the null. **Session C is at the floor on both codecs**, which is what its
+work predicts: the downsample and denoise kernels run only for multi-layer or
+denoising encodes and neither bench asks for one; its decoder changes are a capacity
+comparison once per sequence (T8b.C3) and the *removal* of a per-slice `pDec.is_none()`
+test (T8b.C4).
+
+So the phase's decode +0.87% belongs to sessions A and B. The candidate is session A's
+F76 work — the `DecodeFrame2` error-reporting block, which is per-call — but that is
+named, not measured: isolating A from B would need a third span and the number is 29×
+under the tripwire. Recorded here so that whoever next sees decode move knows this
+0.87% is already in the baseline and where it came from.
+
+**What this span does not cover.** The downsampler and the denoiser have **no bench
+row at all** — `decode_1080p_bench` is a decoder and `c_vs_rust_bench` encodes one
+spatial layer with denoise off. Their cost is unmeasured, by construction: the same
+gap that made them invisible for eight phases. If multi-layer encoding ever becomes a
+performance concern, the instrument to build is a `dl` bench row, and the correctness
+referee for it already exists (the `dl` sweep preset, 76 configurations).
