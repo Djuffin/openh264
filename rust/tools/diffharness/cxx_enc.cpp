@@ -15,7 +15,7 @@
 
 int main (int argc, char** argv) {
   if (argc < 9) {
-    fprintf (stderr, "usage: %s <src.yuv> <w> <h> <frames> <qp> <cabac> <gop> <out.264> [rcmode] [baseinit 0|1|2] [slicemode] [slicenum] [threads] [complexity] [ltr] [ltrperiod] [ltrfb]\n", argv[0]);
+    fprintf (stderr, "usage: %s <src.yuv> <w> <h> <frames> <qp> <cabac> <gop> <out.264> [rcmode] [baseinit 0|1|2] [slicemode] [slicenum] [threads] [complexity] [ltr] [ltrperiod] [ltrfb] [psstrategy]\n", argv[0]);
     return 1;
   }
   const char* kpSrc    = argv[1];
@@ -65,6 +65,13 @@ int main (int argc, char** argv) {
   // unreachable. The values below are a fixed schedule, identical on both sides,
   // which is all a differential test needs.
   const int   kiLtrFb     = (argc > 17) ? atoi (argv[17]) : 0;
+  // 18th: eSpsPpsIdStrategy, as the enum's own value (Phase 8b session B, T8b.B3).
+  //   0 CONSTANT_ID, 1 INCREASING_ID, 2 SPS_LISTING, 3 SPS_LISTING_AND_PPS_INCREASING,
+  //   6 SPS_PPS_LISTING — `codec_app_def.h:514-518`, and not a dense range.
+  // Before T8b.B3 the last three refused at `InitializeExt` in the port, so this knob
+  // is what refereed them: it is the only way to ask the two encoders for the same
+  // listing configuration and compare the bytes.
+  const int   kiPsStrategy = (argc > 18) ? atoi (argv[18]) : (int) CONSTANT_ID;
 
   ISVCEncoder* pEnc = NULL;
   if (WelsCreateSVCEncoder (&pEnc) != 0 || pEnc == NULL) {
@@ -102,7 +109,7 @@ int main (int argc, char** argv) {
   sParam.iComplexityMode            = (ECOMPLEXITY_MODE) kiComplexity;
   sParam.uiIntraPeriod              = (unsigned int) kiGop;
   sParam.iNumRefFrame               = AUTO_REF_PIC_COUNT;
-  sParam.eSpsPpsIdStrategy          = CONSTANT_ID;
+  sParam.eSpsPpsIdStrategy          = (EParameterSetStrategy) kiPsStrategy;
   sParam.bPrefixNalAddingCtrl       = false;
   sParam.bEnableSSEI                = false;
   sParam.bSimulcastAVC              = false;

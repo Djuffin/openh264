@@ -15,6 +15,7 @@
 #                   iMaxSliceNum and drive the slice-realloc path         (12 configs)
 #             ltr   bEnableLongTermReference on, x LTR feedback bitmask
 #                   x intra period                                        (16 configs)
+#             ps    all 5 eSpsPpsIdStrategy values x cabac x GOP x input  (60 configs)
 #             all   every preset above
 #
 # st and mt encode SWEEP_FRAMES (default 16, rounded up to 18-20 by looping) frames
@@ -260,6 +261,42 @@ sweep_ltr() {
   done
 }
 
+# The five `eSpsPpsIdStrategy` values (Phase 8b session B, T8b.B3). The three
+# listing strategies refused at `InitializeExt` until that session, so this axis had
+# never been swept at all; the five pairs run by hand there are its first four rows.
+#
+# The GOP axis is what makes it bite: `uiIntraPeriod` is how often an IDR — and so a
+# parameter-set write — happens, and the strategies differ only at those writes. A
+# single-IDR configuration makes `SPS_LISTING` and `CONSTANT_ID` produce identical
+# bytes, which is correct and proves nothing.
+#
+# **What this preset still cannot reach**: a mid-stream `InitializeExt` with changed
+# parameters, which is where `SPS_LISTING` actually re-uses a stored SPS rather than
+# matching the only one there is. That needs a `--reinit-at` knob in both drivers;
+# T8b.B3 dropped it under the brief's step 5 and left the six
+# `EncodeDecodeTestAPI.ParameterSetStrategy_*` gtest rows as its referee, since their
+# bodies re-initialise exactly that way.
+sweep_ps() {
+  echo "-- preset: ps"
+  local YUV W H st gop cabac name
+  for spec in "${INPUTS[@]}"; do
+    read -r YUV W H <<< "$spec"
+    name=$(basename "$YUV" .yuv)
+    loopfile "$YUV" "$W" "$H" "$ST_FRAMES"
+    # 0 CONSTANT_ID, 1 INCREASING_ID, 2 SPS_LISTING,
+    # 3 SPS_LISTING_AND_PPS_INCREASING, 6 SPS_PPS_LISTING — the enum's own values,
+    # which are not a dense range (`codec_app_def.h:514-518`).
+    for st in 0 1 2 3 6; do
+      for gop in -1 4 1; do
+        for cabac in 0 1; do
+          check "ps $name strategy=$st gop=$gop cabac=$cabac" \
+                "$LOOP_PATH" "$W" "$H" "$LOOP_FRAMES" 26 "$cabac" "$gop" 0 0 0 1 1 0 0 30 0 "$st"
+        done
+      done
+    done
+  done
+}
+
 sweep_qp() {
   echo "-- preset: qp"
   local YUV W H qp cabac
@@ -274,7 +311,7 @@ sweep_qp() {
   done
 }
 
-[ $# -eq 0 ] && { sed -n '2,14p' "$0"; exit 2; }
+[ $# -eq 0 ] && { sed -n '2,19p' "$0"; exit 2; }
 
 for preset in "$@"; do
   case "$preset" in
@@ -284,7 +321,8 @@ for preset in "$@"; do
     def) sweep_def ;;
     sl)  sweep_sl ;;
     ltr) sweep_ltr ;;
-    all) sweep_st; sweep_mt; sweep_qp; sweep_def; sweep_sl; sweep_ltr ;;
+    ps)  sweep_ps ;;
+    all) sweep_st; sweep_mt; sweep_qp; sweep_def; sweep_sl; sweep_ltr; sweep_ps ;;
     *)   echo "unknown preset: $preset" >&2; exit 2 ;;
   esac
 done
