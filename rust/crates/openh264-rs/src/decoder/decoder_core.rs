@@ -4356,7 +4356,35 @@ pub fn DecodeCurrentAccessUnit(
 
     while iIdx <= iEndIdx {
         let mut pLayerInfo = SLayerInfo::default();
-        let isNewFrame = (*pCtx).pDec.is_none();
+        // **F96.** `decoder_core.cpp:2538-2541`:
+        //
+        // ```c
+        // bool isNewFrame = true;
+        // if (iThreadCount > 1) {
+        //   isNewFrame = pCtx->pDec == NULL;
+        // }
+        // ```
+        //
+        // The port had only the assignment, without the `iThreadCount > 1` that
+        // guards it — so on a continuing frame (`pDec` already prefetched) it read
+        // `false` where the reference reads `true`, and the one thing this flag
+        // gates, `InitRefPicList` at `:4627`, was **skipped**.
+        //
+        // That is the whole of F96. On `res/Error_I_P.264` under `ERROR_CON_DISABLE`
+        // the reference calls `InitRefPicList` on two P-slice access units whose
+        // reference list is empty; `WelsReorderRefList`'s search finds nothing,
+        // falls out at `i < 0` and returns `ERR_INFO_REFERENCE_PIC_LOST`
+        // (`manage_dec_ref.cpp:462`) — the one of its four failure returns that sets
+        // no `iErrorCode`, which is why the reference reports a bare `dsRefLost`
+        // (0x2) there. The arm below then returns early under DISABLE. The port
+        // never entered it, decoded the slice instead, and failed it with
+        // `dsBitstreamError` (0x4).
+        //
+        // `GetThreadCount` returns 0 here (F36 fences the threaded decoder), so this
+        // reads `true` in every configuration the port can be in today. It is
+        // written as the C++ writes it because the condition is the fact, and a
+        // `true` literal would lose why.
+        let isNewFrame = if iThreadCount > 1 { (*pCtx).pDec.is_none() } else { true };
 
         if (*pCtx).pDec.is_none() {
             // The prefetch hands back the slot it landed on, which is what this field
@@ -4634,6 +4662,18 @@ pub fn DecodeCurrentAccessUnit(
                         bAllRefComplete = false;
                         let h = nal_hdr(pCtx, pNalCur).copied();
                         HandleReferenceLost(pCtx, h.as_ref());
+                        // `decoder_core.cpp:2713`, ported with the fix it explains
+                        // rather than ahead of it (F96): it is a behaviour change on
+                        // the trace surface, and it is the line that named this arm
+                        // when the reference was run at `--trace=8`.
+                        WelsLog(
+                            std::ptr::addr_of_mut!((*pCtx).sLogCtx),
+                            WELS_LOG_DEBUG,
+                            &format!(
+                                "reference picture introduced by this frame is lost during transmission! uiTId: {}",
+                                h.map_or(0, |hdr| hdr.uiTemporalId)
+                            ),
+                        );
                         if (*pCtx).pParam.eEcActiveIdc == ERROR_CON_DISABLE {
                             if (*pCtx).iTotalNumMbRec == 0 {
                                 (*pCtx).pDec = None;
