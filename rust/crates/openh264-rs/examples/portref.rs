@@ -58,6 +58,13 @@ fn run_stdin(raw: bool) {
     decode("<stdin>", &data, raw);
 }
 
+/// `--nodelay` feeds each unit through `DecodeFrameNoDelay` instead of `DecodeFrame2`
+/// — the counterpart of `ecref --nodelay` (T8.C8, F82). Two entry points, two
+/// referees.
+fn nodelay_wanted() -> bool {
+    std::env::args().any(|a| a == "--nodelay")
+}
+
 fn decode(label: &str, data: &[u8], raw: bool) {
     unsafe {
         let mut decoder: *mut ISVCDecoder = std::ptr::null_mut();
@@ -79,7 +86,11 @@ fn decode(label: &str, data: &[u8], raw: bool) {
             } else {
                 unit.as_ptr()
             };
-            let ret = ISVCDecoder::DecodeFrame2(decoder, src, unit.len() as i32, p_dst.as_mut_ptr(), &mut buf_info);
+            let ret = if nodelay_wanted() {
+                ISVCDecoder::DecodeFrameNoDelay(decoder, src, unit.len() as i32, p_dst.as_mut_ptr(), &mut buf_info)
+            } else {
+                ISVCDecoder::DecodeFrame2(decoder, src, unit.len() as i32, p_dst.as_mut_ptr(), &mut buf_info)
+            };
             eprintln!("--- call len={} -> 0x{:x} bufstatus={}", unit.len(), ret.0, buf_info.iBufferStatus);
             codes.push(ret.0);
             bufs.push(buf_info.iBufferStatus);

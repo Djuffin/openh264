@@ -17,6 +17,9 @@
 #           `welsDecoderExt.cpp`.
 #   part 4  `res/Error_I_P.264` — F77's stream — returns an error code through the
 #           dylib with the process alive.
+#   part 5  `DecodeFrameNoDelay` — the *other* decode entry point (F82), whose
+#           emission timing differs from `DecodeFrame2`'s and which every other gate
+#           in this project misses because they all drive `DecodeFrame2`.
 #
 # Prints one `TALLY` line; `gates.sh` parses it and corroborates the exit status
 # against it.
@@ -53,6 +56,22 @@ awk '
   if (n >= 5) printf "%s %s %d\n", a[2], a[4], c
 }' "$CRATE/tests/decoder_conformance_test.rs" > "$OUT/goldens.txt"
 NGOLD=$(grep -c . "$OUT/goldens.txt")
+
+# The F82 rows, from `tests/decoder_nodelay_parity_test.rs`'s own table -> `<asset>
+# <sha1> <frames>`. Extracted at run time for the same reason the goldens are: the
+# in-process test and the through-the-dylib check must not be able to drift, and both
+# carry the C++ decoder's numbers rather than the port's.
+awk '
+/^        asset: "/ { split($0, a, "\""); asset = a[2] }
+/^        frames: /  { fr = $2; sub(/,$/, "", fr) }
+/^        sha1: "/  { split($0, b, "\""); printf "%s %s %s\n", asset, b[2], fr }
+' "$CRATE/tests/decoder_nodelay_parity_test.rs" > "$OUT/nodelay.txt"
+NNODELAY=$(grep -c . "$OUT/nodelay.txt")
+if [ "$NNODELAY" -lt 3 ]; then
+  echo "FAIL  only $NNODELAY nodelay rows extracted from decoder_nodelay_parity_test.rs — the extractor is broken"
+  echo "TALLY nodelay extraction failed"
+  exit 1
+fi
 if [ "$NGOLD" -lt 50 ]; then
   echo "FAIL  only $NGOLD goldens extracted from decoder_conformance_test.rs — the extractor is broken, which would make part 1 vacuous"
   echo "TALLY goldens extraction failed"
@@ -136,6 +155,14 @@ for PROFILE in debug release; do
     bad "conformance ($PROFILE): $(grep -o '[0-9]*/[0-9]* assets' "$OUT/conformance_$PROFILE.log" | head -1) — see $OUT/conformance_$PROFILE.log"
   fi
 
+  # -- part 5: DecodeFrameNoDelay, the other decode entry point (F82)
+  if "$HERE/abi_harness" nodelay "$OUT/nodelay.txt" > "$OUT/nodelay_$PROFILE.log" 2>&1; then
+    ok "nodelay ($PROFILE): $(grep -o '[0-9]*/[0-9]* assets match the reference'"'"'s rows' "$OUT/nodelay_$PROFILE.log")"
+  else
+    grep '  FAIL' "$OUT/nodelay_$PROFILE.log" | head -6
+    bad "nodelay ($PROFILE) — see $OUT/nodelay_$PROFILE.log"
+  fi
+
   # -- part 2: encode loopback
   enc_pass=0; enc_fail=0
   i=0
@@ -178,6 +205,6 @@ for PROFILE in debug release; do
 done
 
 echo
-printf 'TALLY %d passed / %d failed  (%d conformance assets, %d encode configs x 2 profiles)\n' \
-  "$PASS" "$FAIL" "$NGOLD" "${#CONFIGS[@]}"
+printf 'TALLY %d passed / %d failed  (%d conformance assets, %d nodelay rows, %d encode configs x 2 profiles)\n' \
+  "$PASS" "$FAIL" "$NGOLD" "$NNODELAY" "${#CONFIGS[@]}"
 [ "$FAIL" -eq 0 ] || exit 1

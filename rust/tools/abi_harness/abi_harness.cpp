@@ -26,6 +26,7 @@
 //     selftest                    resolve the seven, run the SHA-1 known-answer test
 //     version                     part 3 — the version pair and the capability block
 //     conformance <list>          part 1 — <asset> <hash> <concealed> per line
+//     nodelay <list>              part 5 — <asset> <hash> <frames> per line (F82)
 //     error <asset>               part 4 — the F77 stream returns a code, alive
 //     enc <cxx_enc argv...>       part 2 — cxx_enc's driver, through the dylib
 //
@@ -205,6 +206,124 @@ static bool decode_asset (const std::string& path, bool hash_concealed,
   *digest = sha.digest();
   *frames_out = frames;
   return true;
+}
+
+// ---------------------------------------------------------------------------
+// Part 5 — `DecodeFrameNoDelay` through the dylib (T8.C8, F82).
+//
+// A *different entry point* from `DecodeFrame2`, with different emission timing:
+// `welsDecoderExt.cpp:720-725` is `DecodeFrame2` twice, and the second call is the
+// whole meaning of "no delay". The port implemented it as a single forward and
+// guarded `DecodeFrame2(NULL, 0)` behind end-of-stream, so it emitted one call late
+// and dropped the tail frame — invisible to every other gate here, all of which
+// drive `DecodeFrame2`.
+//
+// The flow is `ecref --nodelay`'s and `tests/decoder_nodelay_parity_test.rs`'s:
+// annex-B split, ERROR_CON_SLICE_COPY, one NAL per `DecodeFrameNoDelay`, EOS, one
+// `DecodeFrameNoDelay(NULL, 0)`, then `FlushFrame` for what `GetOption` reports,
+// capped at 24. The expected rows come from that Rust test at run time, so the
+// in-process and through-the-dylib answers cannot drift apart, and both are the C++
+// decoder's numbers rather than the port's.
+// ---------------------------------------------------------------------------
+static bool nodelay_asset (const std::string& path, std::string* digest, int* frames_out) {
+  bool ok = false;
+  std::vector<uint8_t> data = read_file (path, &ok);
+  if (!ok || data.empty()) { fprintf (stderr, "cannot read %s\n", path.c_str()); return false; }
+
+  ISVCDecoder* dec = NULL;
+  if (g_CreateDec (&dec) != 0 || !dec) return false;
+  SDecodingParam p;
+  memset (&p, 0, sizeof (p));
+  p.uiTargetDqLayer = UCHAR_MAX;
+  p.eEcActiveIdc    = ERROR_CON_SLICE_COPY;
+  p.sVideoProperty.eVideoBsType = VIDEO_BITSTREAM_DEFAULT;
+  if (dec->Initialize (&p) != 0) { g_DestroyDec (dec); return false; }
+
+  Sha1 sha;
+  int frames = 0;
+  // Every emitted frame counts here, whatever the state — this row is about
+  // *timing*, so filtering by `dsErrorFree` would hide the thing under test.
+  struct Take {
+    static void go (Sha1& sha, int& frames, uint8_t* const dst[3], const SBufferInfo& info) {
+      if (info.iBufferStatus != 1) return;
+      const SSysMEMBuffer& s = info.UsrData.sSystemBuffer;
+      hash_plane (sha, dst[0], s.iWidth, s.iHeight, s.iStride[0]);
+      hash_plane (sha, dst[1], s.iWidth / 2, s.iHeight / 2, s.iStride[1]);
+      hash_plane (sha, dst[2], s.iWidth / 2, s.iHeight / 2, s.iStride[1]);
+      ++frames;
+    }
+  };
+
+  std::vector<std::pair<size_t, size_t> > units = split_annexb (data);
+  for (size_t u = 0; u < units.size(); ++u) {
+    uint8_t* dst[3] = {NULL, NULL, NULL};
+    SBufferInfo info;
+    memset (&info, 0, sizeof (info));
+    dec->DecodeFrameNoDelay (data.data() + units[u].first,
+                             (int) (units[u].second - units[u].first), dst, &info);
+    Take::go (sha, frames, dst, info);
+  }
+  int eos = 1;
+  dec->SetOption (DECODER_OPTION_END_OF_STREAM, &eos);
+  {
+    uint8_t* dst[3] = {NULL, NULL, NULL};
+    SBufferInfo info;
+    memset (&info, 0, sizeof (info));
+    dec->DecodeFrameNoDelay (NULL, 0, dst, &info);
+    Take::go (sha, frames, dst, info);
+  }
+  int remaining = 0;
+  dec->GetOption (DECODER_OPTION_NUM_OF_FRAMES_REMAINING_IN_BUFFER, &remaining);
+  if (remaining > 24) remaining = 24;
+  for (int i = 0; i < remaining; ++i) {
+    uint8_t* dst[3] = {NULL, NULL, NULL};
+    SBufferInfo info;
+    memset (&info, 0, sizeof (info));
+    dec->FlushFrame (dst, &info);
+    Take::go (sha, frames, dst, info);
+  }
+
+  dec->Uninitialize();
+  g_DestroyDec (dec);
+  *digest = sha.digest();
+  *frames_out = frames;
+  return true;
+}
+
+static int mode_nodelay (const char* list_path) {
+  bool ok = false;
+  std::vector<uint8_t> raw = read_file (list_path, &ok);
+  if (!ok) { fprintf (stderr, "cannot read %s\n", list_path); return 2; }
+  std::string text ((const char*) raw.data(), raw.size());
+
+  int pass = 0, fail = 0;
+  size_t pos = 0;
+  while (pos <= text.size()) {
+    size_t nl = text.find ('\n', pos);
+    if (nl == std::string::npos) nl = text.size();
+    std::string line = text.substr (pos, nl - pos);
+    bool last = (nl == text.size());
+    pos = nl + 1;
+    if (line.empty() || line[0] == '#') { if (last) break; continue; }
+    char asset[512] = {0}, hash[128] = {0};
+    int want_frames = 0;
+    if (sscanf (line.c_str(), "%511s %127s %d", asset, hash, &want_frames) != 3) { if (last) break; continue; }
+    std::string digest;
+    int frames = 0;
+    if (!nodelay_asset (res_root() + "/res/" + asset, &digest, &frames)) {
+      printf ("  FAIL  %-48s decode failed\n", asset);
+      ++fail;
+    } else if (frames != want_frames || digest != hash) {
+      printf ("  FAIL  %-48s %d frames (want %d), %s != %s\n", asset, frames, want_frames, digest.c_str(), hash);
+      ++fail;
+    } else {
+      ++pass;
+    }
+    if (last) break;
+  }
+  printf ("DecodeFrameNoDelay through the dylib: %d/%d assets match the reference's rows\n",
+          pass, pass + fail);
+  return fail == 0 ? 0 : 1;
 }
 
 static int mode_conformance (const char* list_path) {
@@ -556,6 +675,7 @@ int main (int argc, char** argv) {
   if (!strcmp (mode, "selftest"))    return mode_selftest();
   if (!strcmp (mode, "version"))     return mode_version();
   if (!strcmp (mode, "conformance")) return argc >= 3 ? mode_conformance (argv[2]) : 2;
+  if (!strcmp (mode, "nodelay"))     return argc >= 3 ? mode_nodelay (argv[2]) : 2;
   if (!strcmp (mode, "error"))       return argc >= 3 ? mode_error (argv[2]) : 2;
   if (!strcmp (mode, "enc"))         return mode_enc (argc - 1, argv + 1);
   fprintf (stderr, "unknown mode %s\n", mode);
