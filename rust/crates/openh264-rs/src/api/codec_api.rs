@@ -2362,7 +2362,25 @@ impl Decoder {
                 pDstInfo,
                 ptr::null_mut(),
             );
-        } else if self.end_of_stream || (*p_ctx).bEndOfStreamFlag {
+        } else {
+            // **F82, T8.C8 — this arm was guarded by
+            // `self.end_of_stream || (*p_ctx).bEndOfStreamFlag` and the reference does
+            // not guard it at all.** `welsDecoderExt.cpp:758-778` is one `if/else` on
+            // *the arguments*, and `WelsDecodeBs` at `:814` runs on **both** paths:
+            //
+            //     if (kiSrcLen > 0 && kpSrc != NULL) { bEndOfStreamFlag = false; ... }
+            //     else { bEndOfStreamFlag = true; bInstantDecFlag = true; }
+            //     ...
+            //     WelsDecodeBs (pDecContext, kpSrc, kiSrcLen, ppDst, pDstInfo, NULL);
+            //
+            // So in the reference `DecodeFrame2 (NULL, 0, …)` *always* reconstructs;
+            // in this port it did nothing at all until the caller had set
+            // `DECODER_OPTION_END_OF_STREAM`. Every gate this project owns sets that
+            // option before its one flush call, which is why nothing said so — and it
+            // is the half of F82 that matters, because `DecodeFrameNoDelay`'s second
+            // call is exactly a null call made *before* end of stream. Without this,
+            // adding that call loses a frame per stream instead of gaining one: the
+            // second call emits nothing and still zeroes the caller's `SBufferInfo`.
             (*p_ctx).bEndOfStreamFlag = true;
             // **F45, T5.S1.** The C++ sets this on exactly this arm
             // (`welsDecoderExt.cpp:777`) and clears it right after `WelsDecodeBs`
@@ -2789,14 +2807,34 @@ unsafe extern "C" fn decoder_decode_frame_c(
 ///
 /// # Safety
 ///
-/// As [`decoder_decode_frame2_c`], whose body this is.
+/// As [`decoder_decode_frame2_c`], which this calls twice. Both calls write `ppDst`
+/// and `pDstInfo`; the **second** call's values are the ones the caller sees, which
+/// is the reference's behaviour and not an accident of ordering — see below.
 ///
-/// **A known divergence, recorded rather than repaired here** (plan §2, the
-/// `DecodeFrame2`/`DecodeFrameNoDelay` ordering class): the reference calls
-/// `DecodeFrame2` *twice* — once with the caller's access unit and once with
-/// `(NULL, 0)` — and ORs the two states (`welsDecoderExt.cpp:720–725`). This port
-/// forwards once. It is not F76's and not this session's; it is named at the slot
-/// so the next reader finds it here rather than in the reference.
+/// # What "no delay" is, and F82
+///
+/// `welsDecoderExt.cpp:720–725`, the whole single-threaded body:
+///
+/// ```c
+/// iRet  = DecodeFrame2 (kpSrc, kiSrcLen, ppDst, pDstInfo);
+/// iRet |= DecodeFrame2 (NULL, 0, ppDst, pDstInfo);
+/// ```
+///
+/// The second call is what the slot is *named for*: it forces reconstruction so a
+/// caller gets the frame on the call that fed the access unit rather than on the
+/// next one. **This port forwarded once** — T8.B7 recorded that at this slot as a
+/// known divergence and deferred it, and the deferral was reasonable at the time
+/// because nothing measured what it cost. T8.C5b's gtest run measured it:
+/// **21 of upstream's 81 `test/api` failures are this one missing statement**, every
+/// one of them `ASSERT_EQ (dstBufInfo_.iBufferStatus, 1)` failing with 0 on a frame
+/// the encoder had just produced. Ported at T8.C8 (**F82**).
+///
+/// **The out-parameters are deliberately not restored.** If the first call emits a
+/// picture and the second does not, the second call's `iBufferStatus = 0` overwrites
+/// it and the frame is lost to that caller. The reference has the restore written
+/// out and **commented out** (`welsDecoderExt.cpp:726–732`), so the behaviour is
+/// upstream's considered one; a port that "fixed" it here would diverge from every
+/// consumer's expectations. Transcribed as it stands, comment and all.
 unsafe extern "C" fn decoder_decode_frame_nodelay_c(
     this: *mut ISVCDecoder,
     kpSrc: *const u8,
@@ -2805,7 +2843,11 @@ unsafe extern "C" fn decoder_decode_frame_nodelay_c(
     pDstInfo: *mut SBufferInfo,
 ) -> DECODING_STATE {
     abi_guard!("ISVCDecoder::DecodeFrameNoDelay", unsafe { decoder_log(this) }, DECODING_STATE::dsBitstreamError, {
-        decoder_decode_frame2_c(this, kpSrc, kiSrcLen, ppDst, pDstInfo)
+        // `iRet |=` on `DECODING_STATE`, which is a bitset of `ds*` flags — the two
+        // calls' states are ORed, not replaced, so an error in either half survives.
+        let first = decoder_decode_frame2_c(this, kpSrc, kiSrcLen, ppDst, pDstInfo);
+        let second = decoder_decode_frame2_c(this, ptr::null(), 0, ppDst, pDstInfo);
+        DECODING_STATE(first.0 | second.0)
     })
 }
 

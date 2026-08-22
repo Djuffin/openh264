@@ -15,6 +15,7 @@
 //   build: rust/tools/ecref/build.sh
 //   usage: ecref <stream.264> <truncate-to-bytes>   file, truncated, annex-B fed
 //          ecref --stdin [--raw]                    bytes on stdin
+//          ... [--nodelay]                          feed via DecodeFrameNoDelay
 //   out:   <frames> <WxH|-> <sha1|-> <calls> <bufstatus>
 //
 // **The stdin form is what gives every corpus row a referee** (Phase 5 session
@@ -53,12 +54,20 @@ int main(int argc, char** argv) {
   bool raw_feed = false;
   bool want_frames = false;
   for (int i = 1; i < argc; i++) if (strcmp(argv[i], "--frames") == 0) want_frames = true;
+  // `--nodelay` feeds each unit through `DecodeFrameNoDelay` instead of
+  // `DecodeFrame2` (T8.C8, F82). The two are different entry points with different
+  // emission timing — the reference's `DecodeFrameNoDelay` is `DecodeFrame2` twice —
+  // so a port that implements one in terms of the other needs a referee for the
+  // other, and this is it.
+  bool nodelay = false;
+  for (int i = 1; i < argc; i++) if (strcmp(argv[i], "--nodelay") == 0) nodelay = true;
 
   if (argc >= 2 && strcmp(argv[1], "--stdin") == 0) {
     for (int i = 2; i < argc; i++) {
       if (strcmp(argv[i], "--raw") == 0) raw_feed = true;
       else if (strcmp(argv[i], "--annexb") == 0) raw_feed = false;
       else if (strcmp(argv[i], "--frames") == 0) { /* handled above */ }
+      else if (strcmp(argv[i], "--nodelay") == 0) { /* handled above */ }
       else { fprintf(stderr, "unknown flag %s\n", argv[i]); return 2; }
     }
     // Read to EOF. An empty blob is a legal corpus entry (`raw.empty`), so a
@@ -106,7 +115,8 @@ int main(int argc, char** argv) {
     uint8_t* dst[3] = {nullptr, nullptr, nullptr};
     SBufferInfo info;
     memset(&info, 0, sizeof(info));
-    int ret = int(dec->DecodeFrame2(buf, len, dst, &info));
+    int ret = nodelay ? int(dec->DecodeFrameNoDelay(buf, len, dst, &info))
+                      : int(dec->DecodeFrame2(buf, len, dst, &info));
     char tmp[32];
     sprintf(tmp, "%s0x%x", calls.empty() ? "" : ",", ret);
     calls += tmp;
