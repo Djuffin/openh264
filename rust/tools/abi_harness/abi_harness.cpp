@@ -27,6 +27,7 @@
 //     version                     part 3 — the version pair and the capability block
 //     conformance <list>          part 1 — <asset> <hash> <concealed> per line
 //     nodelay <list>              part 5 — <asset> <hash> <frames> per line (F82)
+//     parseonly <list>            part 6 — one asset stem per line (T8b.B2)
 //     error <asset>               part 4 — the F77 stream returns a code, alive
 //     enc <cxx_enc argv...>       part 2 — cxx_enc's driver, through the dylib
 //
@@ -322,6 +323,151 @@ static int mode_nodelay (const char* list_path) {
     if (last) break;
   }
   printf ("DecodeFrameNoDelay through the dylib: %d/%d assets match the reference's rows\n",
+          pass, pass + fail);
+  return fail == 0 ? 0 : 1;
+}
+
+// ---------------------------------------------------------------------------
+// Part 6 — `DecodeParser` through the dylib (T8b.B2).
+//
+// The third decode entry point, and the one whose output is not planes: a caller
+// gets back an annex-B bitstream through two raw pointers into the decoder's own
+// buffers. That is a *layout* contract as much as a behavioural one —
+// `SParserBsInfo` is 48 bytes with two pointers in it (`api/abi_guard.rs` pins the
+// size), and a drop-in that got the field order wrong would still agree with itself
+// in every in-process gate. This is the experiment that settles it.
+//
+// The flow is `ecref --parse-only`'s and `tests/decoder_parseonly_parity_test.rs`'s,
+// and the expected rows are read from the **same golden files that test reads**, so
+// the in-process and through-the-dylib answers cannot drift apart and both are the
+// C++ decoder's.
+// ---------------------------------------------------------------------------
+static bool parseonly_rows (const std::string& path, std::vector<std::string>* rows) {
+  bool ok = false;
+  std::vector<uint8_t> data = read_file (path, &ok);
+  if (!ok || data.empty()) { fprintf (stderr, "cannot read %s\n", path.c_str()); return false; }
+
+  ISVCDecoder* dec = NULL;
+  if (g_CreateDec (&dec) != 0 || !dec) return false;
+  SDecodingParam p;
+  memset (&p, 0, sizeof (p));
+  p.uiTargetDqLayer = UCHAR_MAX;
+  p.eEcActiveIdc    = ERROR_CON_SLICE_COPY;
+  p.bParseOnly      = true;
+  p.sVideoProperty.eVideoBsType = VIDEO_BITSTREAM_DEFAULT;
+  if (dec->Initialize (&p) != 0) { g_DestroyDec (dec); return false; }
+
+  SParserBsInfo bs;
+  memset (&bs, 0, sizeof (bs));
+  Sha1 all;
+  int call = 0, emitted = 0;
+
+  struct One {
+    static void go (ISVCDecoder* dec, SParserBsInfo& bs, Sha1& all, int& call, int& emitted,
+                    std::vector<std::string>* rows, const uint8_t* buf, int len) {
+      bs.uiInBsTimeStamp = (uint64_t) call + 1;
+      int rv = (int) dec->DecodeParser (buf, len, &bs);
+      std::string lens;
+      long total = 0;
+      char tmp[64];
+      for (int i = 0; i < bs.iNalNum; ++i) {
+        sprintf (tmp, "%s%d", i ? "," : "", bs.pNalLenInByte[i]);
+        lens += tmp;
+        total += bs.pNalLenInByte[i];
+      }
+      std::string sha = "-";
+      if (bs.iNalNum > 0 && bs.pDstBuff) {
+        Sha1 one;
+        one.update (bs.pDstBuff, (size_t) total);
+        all.update (bs.pDstBuff, (size_t) total);
+        sha = one.digest();
+        ++emitted;
+      }
+      char head[256];
+      sprintf (head, "PARSE %d rv=0x%x nal=%d lens=[", call, rv, bs.iNalNum);
+      char tail[256];
+      sprintf (tail, "] sps=%dx%d in=%llu out=%llu sha1=",
+               bs.iSpsWidthInPixel, bs.iSpsHeightInPixel,
+               (unsigned long long) bs.uiInBsTimeStamp,
+               (unsigned long long) bs.uiOutBsTimeStamp);
+      rows->push_back (std::string (head) + lens + tail + sha);
+      ++call;
+    }
+  };
+
+  std::vector<std::pair<size_t, size_t> > units = split_annexb (data);
+  for (size_t u = 0; u < units.size(); ++u)
+    One::go (dec, bs, all, call, emitted, rows,
+             data.data() + units[u].first, (int) (units[u].second - units[u].first));
+  One::go (dec, bs, all, call, emitted, rows, NULL, 0);
+
+  char tail[128];
+  sprintf (tail, "PARSEONLY %d %d ", call, emitted);
+  rows->push_back (std::string (tail) + (emitted ? all.digest() : std::string ("-")));
+
+  dec->Uninitialize();
+  g_DestroyDec (dec);
+  return true;
+}
+
+static int mode_parseonly (const char* list_path) {
+  bool ok = false;
+  std::vector<uint8_t> raw = read_file (list_path, &ok);
+  if (!ok) { fprintf (stderr, "cannot read %s\n", list_path); return 2; }
+  std::string text ((const char*) raw.data(), raw.size());
+
+  int pass = 0, fail = 0;
+  size_t pos = 0;
+  while (pos <= text.size()) {
+    size_t nl = text.find ('\n', pos);
+    if (nl == std::string::npos) nl = text.size();
+    std::string line = text.substr (pos, nl - pos);
+    bool last = (nl == text.size());
+    pos = nl + 1;
+    if (line.empty() || line[0] == '#') { if (last) break; continue; }
+    char asset[512] = {0};
+    if (sscanf (line.c_str(), "%511s", asset) != 1) { if (last) break; continue; }
+
+    std::string gold_path = res_root() +
+      "/rust/crates/openh264-rs/tests/data/decoder_parseonly/" + asset + ".txt";
+    bool gok = false;
+    std::vector<uint8_t> gold_raw = read_file (gold_path, &gok);
+    if (!gok) { printf ("  FAIL  %-40s no golden at %s\n", asset, gold_path.c_str()); ++fail; if (last) break; continue; }
+    std::vector<std::string> want;
+    {
+      std::string g ((const char*) gold_raw.data(), gold_raw.size());
+      size_t q = 0;
+      while (q <= g.size()) {
+        size_t e = g.find ('\n', q);
+        if (e == std::string::npos) e = g.size();
+        std::string l = g.substr (q, e - q);
+        if (!l.empty()) want.push_back (l);
+        if (e == g.size()) break;
+        q = e + 1;
+      }
+    }
+
+    std::vector<std::string> got;
+    if (!parseonly_rows (res_root() + "/res/" + asset + ".264", &got)) {
+      printf ("  FAIL  %-40s parse failed\n", asset);
+      ++fail;
+    } else if (got.size() != want.size()) {
+      printf ("  FAIL  %-40s %d rows, the reference has %d\n", asset, (int) got.size(), (int) want.size());
+      ++fail;
+    } else {
+      size_t bad_at = want.size();
+      for (size_t i = 0; i < want.size(); ++i) if (got[i] != want[i]) { bad_at = i; break; }
+      if (bad_at != want.size()) {
+        printf ("  FAIL  %-40s row %d\n    ref:  %s\n    dyl:  %s\n",
+                asset, (int) bad_at, want[bad_at].c_str(), got[bad_at].c_str());
+        ++fail;
+      } else {
+        ++pass;
+      }
+    }
+    if (last) break;
+  }
+  printf ("DecodeParser through the dylib: %d/%d assets match the reference's rows\n",
           pass, pass + fail);
   return fail == 0 ? 0 : 1;
 }
@@ -676,6 +822,7 @@ int main (int argc, char** argv) {
   if (!strcmp (mode, "version"))     return mode_version();
   if (!strcmp (mode, "conformance")) return argc >= 3 ? mode_conformance (argv[2]) : 2;
   if (!strcmp (mode, "nodelay"))     return argc >= 3 ? mode_nodelay (argv[2]) : 2;
+  if (!strcmp (mode, "parseonly"))   return argc >= 3 ? mode_parseonly (argv[2]) : 2;
   if (!strcmp (mode, "error"))       return argc >= 3 ? mode_error (argv[2]) : 2;
   if (!strcmp (mode, "enc"))         return mode_enc (argc - 1, argv + 1);
   fprintf (stderr, "unknown mode %s\n", mode);

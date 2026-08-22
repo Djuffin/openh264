@@ -20,6 +20,10 @@
 #   part 5  `DecodeFrameNoDelay` — the *other* decode entry point (F82), whose
 #           emission timing differs from `DecodeFrame2`'s and which every other gate
 #           in this project misses because they all drive `DecodeFrame2`.
+#   part 6  `DecodeParser` — the *third* decode entry point (T8b.B2), whose output is
+#           an annex-B bitstream through two raw pointers rather than planes. The
+#           asset list comes from `decoder_parseonly_parity_test.rs`'s own `ASSETS`
+#           and the expected rows from the golden files that test reads.
 #
 # Prints one `TALLY` line; `gates.sh` parses it and corroborates the exit status
 # against it.
@@ -70,6 +74,18 @@ NNODELAY=$(grep -c . "$OUT/nodelay.txt")
 if [ "$NNODELAY" -lt 3 ]; then
   echo "FAIL  only $NNODELAY nodelay rows extracted from decoder_nodelay_parity_test.rs — the extractor is broken"
   echo "TALLY nodelay extraction failed"
+  exit 1
+fi
+# The parse-only assets, from `tests/decoder_parseonly_parity_test.rs`'s `ASSETS`
+# const. Only that array — `DIVERGING` sits below it in the same file and names
+# F91's asset, which must *not* be driven here; the `sed` range ends at the array's
+# closing bracket for exactly that reason.
+sed -n '/^const ASSETS: &\[&str\] = &\[/,/^\];/p' "$CRATE/tests/decoder_parseonly_parity_test.rs" \
+  | sed -n 's/^ *"\(.*\)",$/\1/p' > "$OUT/parseonly.txt"
+NPARSE=$(grep -c . "$OUT/parseonly.txt")
+if [ "$NPARSE" -lt 4 ]; then
+  echo "FAIL  only $NPARSE parse-only assets extracted from decoder_parseonly_parity_test.rs — the extractor is broken"
+  echo "TALLY parse-only extraction failed"
   exit 1
 fi
 if [ "$NGOLD" -lt 50 ]; then
@@ -163,6 +179,14 @@ for PROFILE in debug release; do
     bad "nodelay ($PROFILE) — see $OUT/nodelay_$PROFILE.log"
   fi
 
+  # -- part 6: DecodeParser, the third decode entry point (T8b.B2)
+  if "$HERE/abi_harness" parseonly "$OUT/parseonly.txt" > "$OUT/parseonly_$PROFILE.log" 2>&1; then
+    ok "parse-only ($PROFILE): $(grep -o '[0-9]*/[0-9]* assets match the reference'"'"'s rows' "$OUT/parseonly_$PROFILE.log")"
+  else
+    grep -A 2 '  FAIL' "$OUT/parseonly_$PROFILE.log" | head -9
+    bad "parse-only ($PROFILE) — see $OUT/parseonly_$PROFILE.log"
+  fi
+
   # -- part 2: encode loopback
   enc_pass=0; enc_fail=0
   i=0
@@ -205,6 +229,6 @@ for PROFILE in debug release; do
 done
 
 echo
-printf 'TALLY %d passed / %d failed  (%d conformance assets, %d nodelay rows, %d encode configs x 2 profiles)\n' \
-  "$PASS" "$FAIL" "$NGOLD" "$NNODELAY" "${#CONFIGS[@]}"
+printf 'TALLY %d passed / %d failed  (%d conformance assets, %d nodelay rows, %d parse-only assets, %d encode configs x 2 profiles)\n' \
+  "$PASS" "$FAIL" "$NGOLD" "$NNODELAY" "$NPARSE" "${#CONFIGS[@]}"
 [ "$FAIL" -eq 0 ] || exit 1

@@ -277,16 +277,23 @@ pub type SNalUnitHeaderExt = TagNalUnitHeaderExt;
 /// Video Coding Layer (VCL) slice payload representation.
 ///
 /// The payload's identity is [`sSliceBitsRead`](Self::sSliceBitsRead)'s `start`
-/// offset into the decoder's `sRawData` since T3.3. `pNalPos: *mut u8` was deleted
-/// dead there (S18): nothing in this port ever wrote it — the upstream parse-only
-/// output path that fills it was never carried — and its one read sat behind an
-/// always-true null guard. `iNalLength` stays: the parse-only NAL-length
-/// bookkeeping does execute (with its perpetual default of 0).
+/// offset into the decoder's `sRawData` since T3.3 — the **RBSP**, which is what the
+/// slice reader wants. [`iNalPos`](Self::iNalPos) is the other one: the offset into
+/// `sSavedData` of this NAL's **EBSP**, which is what parse-only hands out.
+///
+/// `pNalPos: *mut u8` was deleted dead at T3.3 (S18), correctly for that tree —
+/// nothing wrote it, because the upstream parse-only output path that fills it had
+/// not been carried. T8b.B2 carries that path, so the field comes back as an offset
+/// rather than a pointer, and `iNalLength` stops being a perpetual 0.
 #[repr(C)]
 #[derive(Copy, Clone, Default)]
 pub struct SVclNal {
     pub sSliceHeaderExt: SSliceHeaderExt,
     pub sSliceBitsRead: BsReader,
+    /// `pNalPos` (`nalu.h:54`) as an offset into `sSavedData`, written by
+    /// [`ParseNalHeader`]'s parse-only arm and read by `DecodeFrameConstruction`'s.
+    /// Meaningless outside parse-only mode, where nothing writes `sSavedData`.
+    pub iNalPos: usize,
     pub iNalLength: i32,
     pub bSliceHeaderExtFlag: bool,
 }
@@ -650,6 +657,232 @@ fn rbsp_bit_size(bytes: &[u8], start: usize, size: i32) -> i32 {
     (size << 3) - crate::safe::bits::trailing_bits(bytes[start + size as usize - 1])
 }
 
+
+
+/// **Parse-only's SPS cache** (`au_parser.cpp:1173-1190`, T8b.B2) — the escaped SPS
+/// NAL, verbatim, with the start code normalised to the four-byte form.
+///
+/// `sSpsBsInfo` and its two siblings existed on this context from the day it was
+/// written and `grep` found nothing but the declarations: this is their first
+/// writer. The reader is `DecodeFrameConstruction`'s IDR prepend, which is why the
+/// cache exists at all — a parse-only consumer gets the parameter sets in front of
+/// every IDR whether or not the source stream repeated them.
+fn parse_only_write_sps(pSpsBs: &mut SSpsBsInfo, iSpsId: i32, kpSrcNal: &[u8]) {
+    pSpsBs.iSpsId = iSpsId;
+    let iActualLen = actual_len_without_trailing_zeros(kpSrcNal);
+    let mut uiLen = iActualLen;
+    // "unify start code as 0x0001": the caller's window starts `00 00 01`, so the
+    // leading zero that makes it `00 00 00 01` is prepended here.
+    let iStartDeltaByte =
+        usize::from(kpSrcNal.len() >= 3 && kpSrcNal[0] == 0 && kpSrcNal[1] == 0 && kpSrcNal[2] == 1);
+    if iStartDeltaByte == 1 {
+        pSpsBs.pSpsBsBuf[0] = 0x0;
+        uiLen += 1;
+    }
+    pSpsBs.pSpsBsBuf[iStartDeltaByte..iStartDeltaByte + iActualLen]
+        .copy_from_slice(&kpSrcNal[..iActualLen]);
+    pSpsBs.uiSpsBsLen = uiLen as u16;
+}
+
+/// **Parse-only's subset-SPS rewrite** (`au_parser.cpp:1191-1256`, T8b.B2) — a
+/// subset SPS re-encoded as a *plain* Main-profile SPS, because what parse-only hands
+/// out is an AVC bitstream and a plain decoder cannot read NAL type 15.
+///
+/// It pairs with the slice-extension arm of [`parse_only_capture_vcl`], which strips
+/// the SVC header off the slices; between them an SVC access unit comes out as AVC.
+/// The reference forces `profile_idc` to 77 and drops the VUI, the scaling lists and
+/// the SVC extension; only the syntax elements written below survive.
+///
+/// **One bound the reference does not have.** It sizes the RBSP writer with
+/// `pBs->pEndBuf - pBs->pStartBuf` — the length of the *source* SPS's bitstream —
+/// while the buffer it hands the writer is `SPS_PPS_BS_SIZE + 4` bytes, so a source
+/// SPS longer than 132 bytes lets the writer run off the allocation. Here the writer
+/// is bounded by the buffer it writes into, and a rewrite that does not fit is
+/// refused (`false`) rather than truncated. See F92.
+fn parse_only_write_subset_sps(pSpsBs: &mut SSpsBsInfo, pSps: &SSps) -> bool {
+    use crate::encoder::vlc_encoder::{
+        BsRbspTrailingBits, BsWriteBits, BsWriteOneBit, BsWriteSE, BsWriteUE,
+    };
+    pSpsBs.iSpsId = pSps.iSpsId;
+    pSpsBs.pSpsBsBuf[0] = 0x00;
+    pSpsBs.pSpsBsBuf[1] = 0x00;
+    pSpsBs.pSpsBsBuf[2] = 0x00;
+    pSpsBs.pSpsBsBuf[3] = 0x01;
+    pSpsBs.pSpsBsBuf[4] = 0x67; // nal_ref_idc 3, nal_unit_type 7 (SPS)
+
+    // `WelsMallocz (SPS_PPS_BS_SIZE + 4, "Temp buffer for parse only usage.")` — the
+    // four bytes are the writer's flush headroom, and it is a stack array here
+    // because its lifetime is this function.
+    let mut rbsp = [0u8; SPS_PPS_BS_SIZE + 4];
+    let mut bs = crate::safe::bits::BsWriter::new();
+    let buf = &mut rbsp[..];
+
+    BsWriteBits(buf, &mut bs, 8, 77); // profile_idc, forced to Main
+    BsWriteOneBit(buf, &mut bs, u32::from(pSps.bConstraintSet0Flag));
+    BsWriteOneBit(buf, &mut bs, u32::from(pSps.bConstraintSet1Flag));
+    BsWriteOneBit(buf, &mut bs, u32::from(pSps.bConstraintSet2Flag));
+    BsWriteOneBit(buf, &mut bs, u32::from(pSps.bConstraintSet3Flag));
+    BsWriteBits(buf, &mut bs, 4, 0); // constraint_set4/5, reserved_zero_2bits
+    BsWriteBits(buf, &mut bs, 8, pSps.uiLevelIdc as u32);
+    BsWriteUE(buf, &mut bs, pSps.iSpsId as u32);
+    BsWriteUE(buf, &mut bs, pSps.uiLog2MaxFrameNum.wrapping_sub(4));
+    BsWriteUE(buf, &mut bs, pSps.uiPocType);
+    if pSps.uiPocType == 0 {
+        BsWriteUE(buf, &mut bs, (pSps.iLog2MaxPocLsb - 4) as u32);
+    } else if pSps.uiPocType == 1 {
+        BsWriteOneBit(buf, &mut bs, u32::from(pSps.bDeltaPicOrderAlwaysZeroFlag));
+        BsWriteSE(buf, &mut bs, pSps.iOffsetForNonRefPic);
+        BsWriteSE(buf, &mut bs, pSps.iOffsetForTopToBottomField);
+        BsWriteUE(buf, &mut bs, pSps.iNumRefFramesInPocCycle as u32);
+        for i in 0..pSps.iNumRefFramesInPocCycle as usize {
+            BsWriteSE(buf, &mut bs, pSps.iOffsetForRefFrame[i] as i32);
+        }
+    }
+    BsWriteUE(buf, &mut bs, pSps.iNumRefFrames as u32);
+    BsWriteOneBit(buf, &mut bs, u32::from(pSps.bGapsInFrameNumValueAllowedFlag));
+    // `int32_t - 1` in the C, on a value the SPS parse has already refused to leave
+    // at zero; `wrapping_sub` is the same bit pattern for the same input.
+    BsWriteUE(buf, &mut bs, pSps.iMbWidth.wrapping_sub(1));
+    BsWriteUE(buf, &mut bs, pSps.iMbHeight.wrapping_sub(1));
+    BsWriteOneBit(buf, &mut bs, u32::from(pSps.bFrameMbsOnlyFlag));
+    if !pSps.bFrameMbsOnlyFlag {
+        BsWriteOneBit(buf, &mut bs, u32::from(pSps.bMbaffFlag));
+    }
+    BsWriteOneBit(buf, &mut bs, u32::from(pSps.bDirect8x8InferenceFlag));
+    BsWriteOneBit(buf, &mut bs, u32::from(pSps.bFrameCroppingFlag));
+    if pSps.bFrameCroppingFlag {
+        BsWriteUE(buf, &mut bs, pSps.sFrameCrop.iLeftOffset as u32);
+        BsWriteUE(buf, &mut bs, pSps.sFrameCrop.iRightOffset as u32);
+        BsWriteUE(buf, &mut bs, pSps.sFrameCrop.iTopOffset as u32);
+        BsWriteUE(buf, &mut bs, pSps.sFrameCrop.iBottomOffset as u32);
+    }
+    BsWriteOneBit(buf, &mut bs, 0); // vui_parameters_present_flag
+    BsRbspTrailingBits(buf, &mut bs);
+
+    let iRbspSize = bs.pos();
+    let dst = &mut pSpsBs.pSpsBsBuf[5..];
+    let written = crate::decoder::bit_stream::rbsp_to_ebsp(&rbsp[..iRbspSize], dst);
+    // `rbsp_to_ebsp` stops at the end of its destination, so a full destination is
+    // indistinguishable from a truncated one and both are refused. The reference has
+    // no check here at all.
+    if written >= dst.len() {
+        return false;
+    }
+    // The reference stores `pCurBuf - pStartBuf + 5` — the **RBSP** size, not the
+    // escaped one. It is a defect the port does not inherit: `uiSpsBsLen` is what
+    // `DecodeFrameConstruction` copies out, so an escaped subset SPS would be handed
+    // to the caller one byte short per inserted `0x03`. See F92.
+    pSpsBs.uiSpsBsLen = (written + 5) as u16;
+    true
+}
+
+/// **Parse-only's PPS cache** (`au_parser.cpp:1478-1493`, T8b.B2). The plain SPS
+/// arm's twin; a PPS needs no rewriting, because its syntax is the same in AVC and
+/// SVC.
+fn parse_only_write_pps(pPpsBs: &mut SPpsBsInfo, uiPpsId: i32, kpSrcNal: &[u8]) {
+    pPpsBs.iPpsId = uiPpsId;
+    let iActualLen = actual_len_without_trailing_zeros(kpSrcNal);
+    let mut uiLen = iActualLen;
+    let iStartDeltaByte =
+        usize::from(kpSrcNal.len() >= 3 && kpSrcNal[0] == 0 && kpSrcNal[1] == 0 && kpSrcNal[2] == 1);
+    if iStartDeltaByte == 1 {
+        pPpsBs.pPpsBsBuf[0] = 0x0;
+        uiLen += 1;
+    }
+    pPpsBs.pPpsBsBuf[iStartDeltaByte..iStartDeltaByte + iActualLen]
+        .copy_from_slice(&kpSrcNal[..iActualLen]);
+    pPpsBs.uiPpsBsLen = uiLen as u16;
+}
+
+/// The reference's "remove final trailing 0 bytes" loop (`au_parser.cpp:325-328`,
+/// `:361-364`, `:1176-1179`, `:1482-1485` — four copies, one behaviour), bounded.
+///
+/// The C walks backwards from the last byte with no floor, so an all-zero NAL reads
+/// off the front of the caller's buffer. The bound is the only difference; on every
+/// input the C survives, the answer is the same.
+fn actual_len_without_trailing_zeros(src: &[u8]) -> usize {
+    let mut n = src.len();
+    while n > 0 && src[n - 1] == 0 {
+        n -= 1;
+    }
+    n
+}
+
+/// **Parse-only's VCL capture** (T8b.B2) — `au_parser.cpp:324-357` (the
+/// slice-extension arm) and `:359-382` (the plain arm), which had no counterpart in
+/// this port: `pNalPos` was deleted dead at T3.3 precisely because this is what
+/// would have written it.
+///
+/// What it produces is the NAL the *caller* gets back: escaped bytes, a four-byte
+/// start code, and — for a slice-extension NAL — the SVC three-byte header removed
+/// and the NAL type rewritten to 1 or 5, so an SVC slice comes out as the AVC slice
+/// a plain decoder can read. Returns `(offset into sSavedData, iNalLength)`.
+///
+/// **One deliberate divergence, and it is not a behaviour change.** The reference
+/// rewrites the NAL type byte **inside the caller's input buffer**
+/// (`*(pSrcNal + iCurrStartByte) &= 0xE0` at `:346-351`, through a `const_cast` the
+/// decoder made at `decoder.cpp:766`) and then copies that byte out. The port
+/// computes the same byte and copies it; the caller's bitstream is left as it was
+/// handed in. Nothing downstream reads those bytes again — `sRawData` already holds
+/// the de-escaped copy this NAL will be decoded from — so the only thing the C's
+/// version changes is the application's buffer. See F91.
+fn parse_only_capture_vcl(
+    saved: &mut crate::decoder::bit_stream::RawDataBuffer,
+    kpSrcNal: &[u8],
+    bExtensionFlag: bool,
+    bIdrFlag: bool,
+) -> Option<(usize, i32)> {
+    let iActualLen = actual_len_without_trailing_zeros(kpSrcNal);
+
+    if bExtensionFlag {
+        // `iCurrStartByte` indexes the NAL header byte: 4 behind `00 00 00 01`, 3
+        // behind `00 00 01`. The caller normalises to the three-byte form, so the C's
+        // `if` is always taken; it is written out because the C writes it out.
+        let iCurrStartByte =
+            if kpSrcNal.len() >= 3 && kpSrcNal[0] == 0 && kpSrcNal[1] == 0 && kpSrcNal[2] == 1 {
+                3usize
+            } else {
+                4usize
+            };
+        let iOffset = iCurrStartByte + 1 + NAL_UNIT_HEADER_EXT_SIZE;
+        if iActualLen <= iOffset {
+            // Degenerate NAL: the C indexes past `iActualLen` here and copies a
+            // negative length. There is nothing to capture.
+            return None;
+        }
+        let mut iNalLength = (iActualLen - NAL_UNIT_HEADER_EXT_SIZE) as i32;
+        if iCurrStartByte == 3 {
+            iNalLength += 1;
+        }
+        // `:346-351` — the AVC-ification, computed rather than written back.
+        let hdr = (kpSrcNal[iCurrStartByte] & 0xE0) | if bIdrFlag { 0x05 } else { 0x01 };
+        let iWriteLen = 5 + (iActualLen - iOffset);
+        if !saved.wrap_for(iWriteLen) {
+            return None;
+        }
+        let pos = saved.append_raw(&[0x00, 0x00, 0x00, 0x01, hdr]);
+        saved.append_raw(&kpSrcNal[iOffset..iActualLen]);
+        Some((pos, iNalLength))
+    } else {
+        let iStartDeltaByte =
+            usize::from(kpSrcNal.len() >= 3 && kpSrcNal[0] == 0 && kpSrcNal[1] == 0 && kpSrcNal[2] == 1);
+        if iActualLen == 0 {
+            return None;
+        }
+        let iWriteLen = iStartDeltaByte + iActualLen;
+        if !saved.wrap_for(iWriteLen) {
+            return None;
+        }
+        let iNalLength = (iActualLen + iStartDeltaByte) as i32;
+        let pos = saved.cur();
+        if iStartDeltaByte == 1 {
+            saved.append_raw(&[0x00]);
+        }
+        saved.append_raw(&kpSrcNal[..iActualLen]);
+        Some((pos, iNalLength))
+    }
+}
+
 /// Parses the NAL unit header byte, checks parameter set existence, and routes
 /// the NAL unit to the appropriate syntactic decoder.
 ///
@@ -658,11 +891,20 @@ fn rbsp_bit_size(bytes: &[u8], start: usize, size: i32) -> i32 {
 /// past the consumed headers — `Some(offset)` where the C returned an advanced
 /// pointer, `None` where it returned null. Every read below is an index into the
 /// owning buffer.
+///
+/// `kpSrcNal` is the reference's `kpSrcNal`/`kSrcNalLen` pair (`au_parser.cpp:265`):
+/// this NAL's **escaped** bytes, start code included and normalised to the three-byte
+/// form the C's caller hands it (`pSrcNal - 3`, `decoder.cpp:815`). It is read only
+/// by the parse-only capture below — the RBSP in `sRawData` is what everything else
+/// reads — and it is a separate borrow from `pCtx` because it is the caller's input
+/// buffer, not the decoder's copy. T8b.B2 added it: the parameter had been dropped
+/// at T3.3 along with the capture it exists for.
 pub fn ParseNalHeader(
     pCtx: &mut SWelsDecoderContext,
     pNalUnitHeader: &mut SNalUnitHeader,
     kiRbspStart: usize,
     iSrcRbspLen: i32,
+    kpSrcNal: &[u8],
     pConsumedBytes: &mut i32,
 ) -> Option<usize> {
     let mut iNal = kiRbspStart;
@@ -883,7 +1125,45 @@ pub fn ParseNalHeader(
                 iNal += NAL_UNIT_HEADER_EXT_SIZE;
                 iNalSize -= NAL_UNIT_HEADER_EXT_SIZE as i32;
                 *pConsumedBytes += NAL_UNIT_HEADER_EXT_SIZE as i32;
+
+                // `au_parser.cpp:324-357` — the parse-only capture, T8b.B2. The
+                // buffer and the node are two fields of one context, so the write
+                // happens first and the node is re-acquired for the two scalars it
+                // gets (T5b.3's rule, the same one the header-ext copy above obeys).
+                if (*pCtx).pParam.bParseOnly {
+                    let captured = parse_only_capture_vcl(
+                        &mut pCtx.sSavedData,
+                        kpSrcNal,
+                        true,
+                        cur_au(&mut pCtx.access_unit)
+                            .and_then(|au| au.node(cur_idx))
+                            .is_some_and(|nal| nal.sNalHeaderExt.bIdrFlag),
+                    );
+                    if let Some((iNalPos, iNalLength)) = captured {
+                        if let Some(nal) =
+                            cur_au(&mut pCtx.access_unit).and_then(|au| au.node_mut(cur_idx))
+                        {
+                            nal.sNalData.sVclNal.iNalPos = iNalPos;
+                            nal.sNalData.sVclNal.iNalLength = iNalLength;
+                        }
+                    }
+                }
             } else {
+                // `au_parser.cpp:359-382` — the plain arm's capture, before the
+                // prefix-NAL prefetch, as in the reference.
+                if (*pCtx).pParam.bParseOnly {
+                    let captured =
+                        parse_only_capture_vcl(&mut pCtx.sSavedData, kpSrcNal, false, false);
+                    if let Some((iNalPos, iNalLength)) = captured {
+                        if let Some(nal) =
+                            cur_au(&mut pCtx.access_unit).and_then(|au| au.node_mut(cur_idx))
+                        {
+                            nal.sNalData.sVclNal.iNalPos = iNalPos;
+                            nal.sNalData.sVclNal.iNalLength = iNalLength;
+                        }
+                    }
+                }
+
                 if (*pCtx).sSpsPpsCtx.sPrefixNal.sNalHeaderExt.sNalUnitHeader.eNalUnitType
                     == EWelsNalUnitType::NAL_UNIT_PREFIX
                 {
@@ -1199,11 +1479,21 @@ pub fn CheckNextAuNewSeq(
 
 /// Dispatches non-VCL NAL units (SPS, Subset SPS, PPS, SEI) to syntax parsers.
 ///
-/// T3.3: `kiRbspStart` is the payload's offset into `sRawData` (was `pRbsp`); the
-/// dead `pSrcNal`/`kSrcNalLen` pair — unused in this port, upstream's parse-only
-/// SPS/PPS caching was never carried — is deleted (S18). The trailing-bits read is
-/// an index, in bounds because the `kiSrcLen <= 0` guard has always preceded it.
-pub fn ParseNonVclNal(pCtx: &mut SWelsDecoderContext, kiRbspStart: usize, kiSrcLen: i32) -> i32 {
+/// T3.3: `kiRbspStart` is the payload's offset into `sRawData` (was `pRbsp`). The
+/// trailing-bits read is an index, in bounds because the `kiSrcLen <= 0` guard has
+/// always preceded it.
+///
+/// **`kpSrcNal` is back** (T8b.B2). T3.3 deleted the reference's `pSrcNal`/`kSrcNalLen`
+/// pair as dead, correctly for that tree — their only readers are the parse-only
+/// SPS/PPS bitstream caches (`au_parser.cpp:1168-1200`, `:1480-1492`), and those had
+/// not been carried, so the parameter really did reach nothing. Carrying them is what
+/// gives `sSpsBsInfo`/`sSubsetSpsBsInfo`/`sPpsBsInfo` their first writer.
+pub fn ParseNonVclNal(
+    pCtx: &mut SWelsDecoderContext,
+    kiRbspStart: usize,
+    kiSrcLen: i32,
+    kpSrcNal: &[u8],
+) -> i32 {
     if kiSrcLen <= 0 {
         return ERR_NONE;
     }
@@ -1237,7 +1527,7 @@ pub fn ParseNonVclNal(pCtx: &mut SWelsDecoderContext, kiRbspStart: usize, kiSrcL
             // The parse-tree exception's caller side — the argument is at the
             // callee's item (T5.AC9).
             {
-                iErr = ParseSps(pCtx, start, &mut cursor, &mut iPicWidth, &mut iPicHeight);
+                iErr = ParseSps(pCtx, start, &mut cursor, kpSrcNal, &mut iPicWidth, &mut iPicHeight);
             }
             (*pCtx).sBs.cursor = cursor;
             if iErr != ERR_NONE {
@@ -1267,7 +1557,7 @@ pub fn ParseNonVclNal(pCtx: &mut SWelsDecoderContext, kiRbspStart: usize, kiSrcL
             }
             let (start, mut cursor) = (pBs.start, pBs.cursor);
             {
-                iErr = ParsePps(pCtx, start, &mut cursor);
+                iErr = ParsePps(pCtx, start, &mut cursor, kpSrcNal);
             }
             (*pCtx).sBs.cursor = cursor;
             if iErr != ERR_NONE {
@@ -1546,6 +1836,7 @@ pub fn ParseSps(
     pCtx: &mut SWelsDecoderContext,
     kiRbspStart: usize,
     pBsAux: &mut BsCursor,
+    kpSrcNal: &[u8],
     pPicWidth: &mut i32,
     pPicHeight: &mut i32,
 ) -> i32 {
@@ -1802,6 +2093,50 @@ pub fn ParseSps(
         }
     }
 
+    // ------------------------------------------------------------------
+    // `au_parser.cpp:1168-1257` — the parse-only SPS caches (T8b.B2), between the VUI
+    // and the SVC extension exactly as in the reference: the rewrite below is a
+    // *plain* SPS, so it must be built from the syntax elements parsed so far and
+    // not from the extension that follows.
+    // ------------------------------------------------------------------
+    if (*pCtx).pParam.bParseOnly {
+        if kpSrcNal.len() >= SPS_PPS_BS_SIZE - 4 {
+            crate::decoder::decoder_core::WelsLog(
+                std::ptr::addr_of_mut!((*pCtx).sLogCtx),
+                crate::decoder::decoder_core::WELS_LOG_WARNING,
+                &format!(
+                    "sps payload size ({}) too large for parse only ({}), not supported!",
+                    kpSrcNal.len(),
+                    SPS_PPS_BS_SIZE - 4
+                ),
+            );
+            (*pCtx).iErrorCode |= dsBitstreamError;
+            return GENERATE_ERROR_NO(ERR_LEVEL_PARAM_SETS, ERR_INFO_OUT_OF_MEMORY);
+        }
+        if !kbUseSubsetFlag {
+            if let Some(row) = (*pCtx).sSpsBsInfo.get_mut(iSpsId as usize) {
+                parse_only_write_sps(row, iSpsId, kpSrcNal);
+            }
+        } else {
+            // The rewrite reads the SPS being parsed — a local — and writes the
+            // context's cache row, so the two borrows are disjoint by construction.
+            let sps = pSubsetSps.sSps;
+            let ok = match (*pCtx).sSubsetSpsBsInfo.get_mut(iSpsId as usize) {
+                Some(row) => parse_only_write_subset_sps(row, &sps),
+                None => true,
+            };
+            if !ok {
+                crate::decoder::decoder_core::WelsLog(
+                    std::ptr::addr_of_mut!((*pCtx).sLogCtx),
+                    crate::decoder::decoder_core::WELS_LOG_ERROR,
+                    "subset sps rewrite does not fit the parse-only buffer",
+                );
+                (*pCtx).iErrorCode |= dsOutOfMemory;
+                return GENERATE_ERROR_NO(ERR_LEVEL_PARAM_SETS, ERR_INFO_OUT_OF_MEMORY);
+            }
+        }
+    }
+
     if kbUseSubsetFlag && (uiProfileIdc == PRO_SCALABLE_BASELINE || uiProfileIdc == PRO_SCALABLE_HIGH) {
         let iRet = DecodeSpsSvcExt(pSubsetSps, buf, pBsAux);
         if iRet != ERR_NONE {
@@ -1870,6 +2205,7 @@ pub fn ParsePps(
     pCtx: &mut SWelsDecoderContext,
     kiRbspStart: usize,
     pBsAux: &mut BsCursor,
+    kpSrcNal: &[u8],
 ) -> i32 {
     // **T5.Z4: the offset travels, not the slice.** The caller cannot hand a window
     // out of `sRawData` *and* the context, because both are the same object once the
@@ -2032,6 +2368,27 @@ pub fn ParsePps(
     } else {
         bytes_copy(&mut (*pCtx).sSpsPpsCtx.sPpsBuffer[pps_idx], pPps);
         (*pCtx).sSpsPpsCtx.bPpsAvailFlags[pps_idx] = true;
+    }
+
+    // `au_parser.cpp:1471-1493` — the parse-only PPS cache (T8b.B2), last thing in
+    // the function as in the reference.
+    if (*pCtx).pParam.bParseOnly {
+        if kpSrcNal.len() >= SPS_PPS_BS_SIZE - 4 {
+            crate::decoder::decoder_core::WelsLog(
+                std::ptr::addr_of_mut!((*pCtx).sLogCtx),
+                crate::decoder::decoder_core::WELS_LOG_WARNING,
+                &format!(
+                    "pps payload size ({}) too large for parse only ({}), not supported!",
+                    kpSrcNal.len(),
+                    SPS_PPS_BS_SIZE - 4
+                ),
+            );
+            (*pCtx).iErrorCode |= dsBitstreamError;
+            return GENERATE_ERROR_NO(ERR_LEVEL_PARAM_SETS, ERR_INFO_OUT_OF_MEMORY);
+        }
+        if let Some(row) = (*pCtx).sPpsBsInfo.get_mut(pps_idx) {
+            parse_only_write_pps(row, uiPpsId as i32, kpSrcNal);
+        }
     }
 
     ERR_NONE
