@@ -14836,15 +14836,22 @@ category, the 67-of-80 deny coverage with `src/common/` named as the remainder, 
 and F73 with their measured surfaces, the `Send` verdict's 14 `E0277`s, F80, D4 made
 mechanical by the boundary being precise, and D5 one question smaller.
 
-### The exit verdict — `gates.sh exit` unscoped, at `0c9c6a21`
+### The exit verdict — `gates.sh exit` unscoped, **run twice**
 
-**`OVERALL: PASS`, 15 passed / 0 failed / 1 skipped**, run unscoped as every phase exit
-must be, **with the two gates this phase built in it**.
+The phase closed at `0c9c6a21` with **`OVERALL: PASS`, 15 passed / 0 failed /
+1 skipped**, unscoped, with the two gates this phase built in it. **F82 (T8.C8) then
+landed after the close**, so the battery was run again at `4d79895c` and passed
+identically — 15/0/1, with the harness up from 10/0 to **12/0** because the F82 rows
+are a fifth part of it. The table below is the second run; the first differs only in
+the test totals (513/508) and the harness tally.
+
+A phase close that is re-run rather than asserted is the point of having the battery
+be one command.
 
 | step | result |
 |---|---|
 | `cargo build --all-targets` | benches and examples compile |
-| `cargo test` debug / release | **513 / 508**, 0 failed, **20 ignored** (the permanent fixture set, unmoved) |
+| `cargo test` debug / release | **514 / 509**, 0 failed, **20 ignored** (the permanent fixture set, unmoved) |
 | unsafe ratchet | flat on every metric against the session's regenerated baseline |
 | duplicate census | **57** allowlisted (58 at the session's start; T8.C7 retired `SParserBsInfo`) |
 | diffharness sweeps, both profiles | **369/369 each**, no F3 hit in either |
@@ -14853,7 +14860,7 @@ must be, **with the two gates this phase built in it**.
 | Miri `--lib`, whole library, no skips | **351 passed / 0 failed**, 4 Miri-ignored, 1793.8s |
 | Miri differential targets | **20 / 7 / 3**, 0 failed |
 | **abi exports** (new) | **7/7 — exactly upstream's seven** |
-| **abi harness** (new) | **10 passed / 0 failed** — 58 conformance assets, 14 encode configs, × 2 profiles |
+| **abi harness** (new) | **12 passed / 0 failed** — 58 conformance assets, **5 `DecodeFrameNoDelay` rows (F82)**, 14 encode configs, × 2 profiles |
 | fuzz corpus replay | SKIP — the crate was never built (§0's standing absence) |
 
 **It passed first time.** Sessions A and B each had an unscoped run fail once before
@@ -14870,6 +14877,40 @@ checker` — the MT pair, whose `#[cfg_attr(miri, ignore)]` cites **F73** and re
 with it in Phase 9. The `--lib` step's *skip list* is still empty, which is the
 property T7.B4 earned and F75 nearly cost.
 
-**Corpus at the close**, re-refereed after every behaviour change of the session:
-**2902 / 17 output, 2919 / 0 codes** across 2919 rows, all C++-refereed. The 17 are
+**Corpus at the close**, re-refereed after every behaviour change of the session —
+including F82's, which changes a decode entry point: **2902 / 17 output, 2919 / 0
+codes** across 2919 rows, all C++-refereed, identical before and after. The 17 are
 `CABA2_SVA_B`'s, unchanged since Phase 5. Conformance **60/60**.
+
+### T8.C8 — F82, after the close, and why it is in this entry rather than Phase 9's
+
+The gtest stretch was written on the last afternoon of the phase as *a number, not a
+gate*. Within a day it had earned that framing twice: it produced **118/199**, a first
+reading of that number was wrong, and correcting the reading found a defect in this
+phase's own module.
+
+The wrong reading tallied the 81 failures **by test name** and called 77 of them
+"encoder-side API surface". The fixtures are `EncodeDecodeTestAPIBase/…` and
+`EncodeTestAPI` because of what *builds* the case — they are encode→decode round trips
+— and the assertion that fires is usually the **decoder's**. By assertion location at
+least 30 were decoder assertions, and 21 of those were one cause: **F82**.
+
+`DecodeFrameNoDelay` forwarded once where `welsDecoderExt.cpp:720–725` calls
+`DecodeFrame2` twice — known and deferred at T8.B7 — **on top of** a null-input arm
+this port guarded behind end-of-stream and the reference does not guard at all
+(`:758–778`, one `if/else` on the arguments, `WelsDecodeBs` on both paths). The second
+half was not known, and it is why the first could not land alone: adding the second
+call to the guarded tree *loses* a frame per stream. **Every gate this project owns
+drives `DecodeFrame2`**, and the two tests that call `DecodeFrameNoDelay` are blind to
+it — one passes `(null, 0)`, and `loopback_sha1_test.rs:258` follows every call with
+its own explicit `DecodeFrame2(NULL, 0, …)`, which is by hand the missing statement.
+*A test that compensates for a defect cannot detect it.*
+
+**118/199 → 155/199**, 37 tests, because the guard was also behind the
+error-concealment, LTR, simulcast and parameter-set clusters. Full write-up in
+`phase8_findings.md` **F82**, including the `awk` that tallies by assertion location —
+which is the instrument the phase should have had on its last afternoon.
+
+**The rule it adds to S22.** It is not enough for a *module* to be in every
+instrument's scope; each *entry point* needs an instrument that drives it. `src/api/`
+was fully scanned all phase, and one of its ten decoder slots had no referee.
