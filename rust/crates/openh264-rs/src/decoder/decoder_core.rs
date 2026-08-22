@@ -1205,11 +1205,104 @@ pub fn DecodeFrameConstruction(
                         - ((sps.sFrameCrop.iTopOffset + sps.sFrameCrop.iBottomOffset) << 1),
                 )
             });
-            // Two field borrows, disjoint: the access unit is `access_unit`'s own
-            // allocation and the descriptor is `pParserBsInfo`'s (T5.Z3). Nothing in
-            // this block calls back into the context, so one derivation of each
-            // covers it — the borrow's extent is the check, not a style choice.
-            let SWelsDecoderContext { access_unit, pParserBsInfo, .. } = &mut *pCtx;
+            // ------------------------------------------------------------------
+            // **T8b.B2 — the byte copies.** Until now this arm kept the reference's
+            // length bookkeeping and *none* of its `memcpy`s: T3.3 deleted them with
+            // `pNalPos`, correctly for that tree (nothing wrote the field), and the
+            // note that stood here said the next writer of `pDstBuff` would need the
+            // running total. This is that writer. `decoder_core.cpp:88-175`, whole:
+            // the IDR SPS/PPS prepend, the two capacity checks, `ExpandBsLenBuffer`,
+            // and the per-NAL copy out of `sSavedData`.
+            // ------------------------------------------------------------------
+
+            // Everything `ExpandBsLenBuffer` needs is read here, *above* the
+            // destructure: it takes the whole context, and the copies below hold
+            // three of its fields at once. The reference interleaves the two checks
+            // with the copies; hoisting them is the same growth on the same inputs,
+            // because both are functions of `iNalNum` and the access unit's index
+            // range and neither copy changes those.
+            let (iIdx0, iEndIdx0) = match cur_au(&mut pCtx.access_unit) {
+                Some(au) => (au.uiStartPos as i32, au.uiEndPos as i32),
+                None => (0, -1),
+            };
+            let (bIdrFlag, bSubSps) = match cur_au(&mut pCtx.access_unit)
+                .and_then(|au| au.node(iIdx0 as usize))
+            {
+                Some(nal) => (
+                    nal.sNalHeaderExt.bIdrFlag,
+                    nal.sNalHeaderExt.sNalUnitHeader.eNalUnitType
+                        == crate::decoder::nalu::EWelsNalUnitType::NAL_UNIT_CODED_SLICE_EXT,
+                ),
+                None => (false, false),
+            };
+            let bDoPrepend = bIdrFlag && (*pCtx).bFrameFinish;
+            let iSpsId = active_sps(&(*pCtx).sSpsPpsCtx, (*pCtx).active_sps)
+                .map(|sps| sps.iSpsId)
+                .unwrap_or(-1);
+            let iPpsId = active_pps(&(*pCtx).sSpsPpsCtx, (*pCtx).active_pps)
+                .map(|pps| pps.iPpsId)
+                .unwrap_or(-1);
+            let mut iNalNumAfter = parser_bs(&mut (*pCtx).pParserBsInfo)
+                .map(|p| p.iNalNum)
+                .unwrap_or(0);
+            let iMaxNalNum = |pCtx: &SWelsDecoderContext| -> i32 {
+                pCtx.pParserBsInfo
+                    .as_deref()
+                    .map(|p| p.pNalLenInByte.len() as i32)
+                    .unwrap_or(0)
+            };
+            if bDoPrepend {
+                // "2 reserved for sps+pps" — `decoder_core.cpp:113`.
+                if iNalNumAfter > iMaxNalNum(pCtx) - 2 {
+                    WelsLog(
+                        std::ptr::addr_of_mut!((*pCtx).sLogCtx),
+                        WELS_LOG_INFO,
+                        &format!(
+                            "DecodeFrameConstruction(): current NAL num ({}) plus sps & pps exceeds permitted num ({}). Will expand",
+                            iNalNumAfter,
+                            iMaxNalNum(pCtx)
+                        ),
+                    );
+                    if ExpandBsLenBuffer(pCtx, iNalNumAfter + 2) != ERR_NONE {
+                        return ERR_INFO_OUT_OF_MEMORY;
+                    }
+                }
+                iNalNumAfter += 2;
+            }
+            let iNalTotal = iNalNumAfter + iEndIdx0 - iIdx0 + 1;
+            if iNalTotal > iMaxNalNum(pCtx) {
+                WelsLog(
+                    std::ptr::addr_of_mut!((*pCtx).sLogCtx),
+                    WELS_LOG_INFO,
+                    &format!(
+                        "DecodeFrameConstruction(): current NAL num ({}) exceeds permitted num ({}). Will expand",
+                        iNalTotal,
+                        iMaxNalNum(pCtx)
+                    ),
+                );
+                if ExpandBsLenBuffer(pCtx, iNalTotal) != ERR_NONE {
+                    return ERR_INFO_OUT_OF_MEMORY;
+                }
+            }
+
+            // Five field borrows, disjoint: the access unit is `access_unit`'s own
+            // allocation, the descriptor is `pParserBsInfo`'s (T5.Z3), and the three
+            // sources — the saved EBSP and the two parameter-set caches — are their
+            // own arrays. Nothing in this block calls back into the context, so one
+            // derivation of each covers it; the borrow's extent is the check, not a
+            // style choice.
+            let SWelsDecoderContext {
+                access_unit,
+                pParserBsInfo,
+                sSavedData,
+                sSpsBsInfo,
+                sSubsetSpsBsInfo,
+                sPpsBsInfo,
+                bFrameFinish,
+                bParamSetsLostFlag,
+                iErrorCode,
+                ..
+            } = &mut *pCtx;
             if let (Some(pCurAu), Some(pParser)) =
                 (access_unit.as_deref_mut(), parser_bs(pParserBsInfo))
             {
@@ -1219,10 +1312,8 @@ pub fn DecodeFrameConstruction(
                         iTotalNalLen += *len;
                     }
                 }
-                // The `pDstBuff` cursor `iTotalNalLen` was computed for stood here and
-                // had no reader: the one `pNalPos`-guarded copy that advanced it died
-                // at T3.3. The sum survives because it is the C's, and because the
-                // next writer of this buffer (Phase 8's `DecodeParser`) needs it.
+                // `uint8_t* pDstBuf = pParser->pDstBuff + iTotalNalLen;` as an offset.
+                let mut iDstPos = iTotalNalLen.max(0) as usize;
                 let mut iIdx = pCurAu.uiStartPos as i32;
                 let iEndIdx = pCurAu.uiEndPos as i32;
                 if let Some(nal) = pCurAu.node(iIdx as usize) {
@@ -1233,20 +1324,74 @@ pub fn DecodeFrameConstruction(
                     (*pParser).iSpsHeightInPixel = h;
                 }
 
+                // `decoder_core.cpp:110-140` — an IDR that opens a frame gets the
+                // active SPS and PPS written in front of it, from the caches
+                // `ParseSps`/`ParsePps` fill, whether or not the source stream
+                // repeated them. This is what makes the parse-only output
+                // independently decodable.
+                if bDoPrepend {
+                    *bParamSetsLostFlag = false;
+                    let sps_row = if bSubSps {
+                        sSubsetSpsBsInfo.get(iSpsId.max(0) as usize)
+                    } else {
+                        sSpsBsInfo.get(iSpsId.max(0) as usize)
+                    };
+                    let pps_row = sPpsBsInfo.get(iPpsId.max(0) as usize);
+                    if let (Some(sps_row), Some(pps_row)) = (sps_row, pps_row) {
+                        let kSpsLen = sps_row.uiSpsBsLen as usize;
+                        let kPpsLen = pps_row.uiPpsBsLen as usize;
+                        if iDstPos + kSpsLen + kPpsLen >= MAX_ACCESS_UNIT_CAPACITY {
+                            *iErrorCode |= dsOutOfMemory;
+                            (*pParser).iNalNum = 0;
+                            return ERR_INFO_OUT_OF_MEMORY;
+                        }
+                        (*pParser).pDstBuff[iDstPos..iDstPos + kSpsLen]
+                            .copy_from_slice(&sps_row.pSpsBsBuf[..kSpsLen]);
+                        let iSlot = (*pParser).iNalNum as usize;
+                        if let Some(slot) = (*pParser).pNalLenInByte.get_mut(iSlot) {
+                            *slot = kSpsLen as i32;
+                            (*pParser).iNalNum += 1;
+                        }
+                        iDstPos += kSpsLen;
+                        (*pParser).pDstBuff[iDstPos..iDstPos + kPpsLen]
+                            .copy_from_slice(&pps_row.pPpsBsBuf[..kPpsLen]);
+                        let iSlot = (*pParser).iNalNum as usize;
+                        if let Some(slot) = (*pParser).pNalLenInByte.get_mut(iSlot) {
+                            *slot = kPpsLen as i32;
+                            (*pParser).iNalNum += 1;
+                        }
+                        iDstPos += kPpsLen;
+                    }
+                    *bFrameFinish = false;
+                }
+
                 while iIdx <= iEndIdx {
                     let pCurNal = pCurAu.node(iIdx as usize);
                     if let Some(pCurNal) = pCurNal {
                         let iNalLen = pCurNal.sNalData.sVclNal.iNalLength;
+                        let iNalPos = pCurNal.sNalData.sVclNal.iNalPos;
                         let iSlot = (*pParser).iNalNum as usize;
                         let lens = (*pParser).pNalLenInByte.as_mut_slice();
                         if let Some(slot) = lens.get_mut(iSlot) {
                             *slot = iNalLen;
                             (*pParser).iNalNum += 1;
                         }
-                        // The `pNalPos`-guarded copy that sat here never executed:
-                        // nothing in this port wrote `pNalPos`, so the guard was
-                        // always false. Deleted dead with the field at T3.3 (S18);
-                        // the length bookkeeping above is the part that does run.
+                        // `decoder_core.cpp:155-172` — the copy the port has been
+                        // missing. The source is `sSavedData`, the **EBSP** copy
+                        // `ParseNalHeader` made; `sRawData` holds the de-escaped RBSP
+                        // and is the wrong bytes to hand out.
+                        if iDstPos + iNalLen.max(0) as usize >= MAX_ACCESS_UNIT_CAPACITY {
+                            *iErrorCode |= dsOutOfMemory;
+                            (*pParser).iNalNum = 0;
+                            return ERR_INFO_OUT_OF_MEMORY;
+                        }
+                        if iNalLen > 0 {
+                            let kLen = iNalLen as usize;
+                            if let Some(src) = sSavedData.bytes().get(iNalPos..iNalPos + kLen) {
+                                (*pParser).pDstBuff[iDstPos..iDstPos + kLen].copy_from_slice(src);
+                                iDstPos += kLen;
+                            }
+                        }
                     }
                     iIdx += 1;
                 }
@@ -3841,6 +3986,15 @@ pub fn WelsDecodeBs(
             } else if payload_slice.starts_with(&[0, 0, 1]) {
                 payload_slice = &payload_slice[3..];
             }
+            // **`kpSrcNal`, T8b.B2** — the *escaped* NAL, start code included, which
+            // is what parse-only hands back to its caller and the one thing
+            // `sRawData` cannot supply (it holds the RBSP). The reference passes
+            // `pSrcNal - 3` with length `iSrcIdx + 3` (`decoder.cpp:815`, `:877`):
+            // the three-byte start-code form, whichever form the stream used, which
+            // is why both parse-only writers open by prepending the missing `0x00`.
+            // Trailing zeros belonging to the next start code are inside this window
+            // in the reference too, and both trees trim them the same way.
+            let src_nal: &[u8] = if unit.starts_with(&[0, 0, 0, 1]) { &unit[1..] } else { unit };
             // **F46, T5.T3 — an empty NAL is a NAL.** This used to `continue`. The C++
             // has no such skip: a start code with nothing behind it reaches
             // `ParseNalHeader` with `iSrcRbspLen == 0`, whose header byte then reads
@@ -3890,6 +4044,7 @@ pub fn WelsDecodeBs(
                 &mut nal_header,
                 payload_start,
                 payload_len as i32,
+                src_nal,
                 &mut consumed_bytes,
             );
 
@@ -3900,6 +4055,7 @@ pub fn WelsDecodeBs(
                         pCtx,
                         nal_start,
                         (payload_len as i32) - consumed_bytes,
+                        src_nal,
                     );
                 }
                 CheckAndFinishLastPic(pCtx, ppDst, pDstInfo);

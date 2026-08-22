@@ -153,3 +153,159 @@ this row as `FAILING BUT NOT IN`. That is the gate working; re-run before treati
 as a regression, and record the seed (`--seed=N`, printed as `Random seed:`) if it
 recurs so the divergence can be pinned. Owner: unassigned — it needs a seed that
 reproduces before it can be chased.
+
+---
+
+# Session B (T8b.B1–…)
+
+## F89 — a seventh listing-strategy row, invisible four runs in seven
+
+`DecodeCrashTestAPI.DecoderCrashTest` (`decode_api_test.cpp:600`) opens with
+
+```c
+EParameterSetStrategy eCurStrategy = CONSTANT_ID;
+switch (rand() % 7) {
+  case 1: eCurStrategy = INCREASING_ID; break;
+  case 2: eCurStrategy = SPS_LISTING; break;
+  case 3: eCurStrategy = SPS_LISTING_AND_PPS_INCREASING; break;
+  case 6: eCurStrategy = SPS_PPS_LISTING; break;
+  default: break;                        // the initial value
+}
+```
+
+Three of the seven draws select a strategy `CreateParametersetStrategy` returns `None`
+for, and the test's first `InitializeExt` then fails at `decode_api_test.cpp:666`. On
+the other four it passes. Nothing pinned `rand()` before T8b.B1, so the row flipped
+between runs and was never allowlisted: **session A's 165/199 was an unseeded sample
+that happened to draw a non-listing strategy.**
+
+With `SEED=20260822` the first `rand()` of the run — this test is the fourth to run and
+the three before it draw nothing — is `3`, i.e. `SPS_LISTING_AND_PPS_INCREASING`. The
+honest tally at the pinned seed is **164/199, 35 allowlisted**, and this row leaves with
+the other six when the listing strategies land.
+
+The general point is the one S49 was written for: a suite that seeds itself from the
+clock does not have a tally, it has a distribution, and a ratchet cannot be built on a
+distribution.
+
+## F90 — `DecodeParser`'s copy-out overwrites the caller's input timestamp, and its `memset` counts bytes for an `int32_t` array
+
+Two defects in `CWelsDecoder::DecodeParser` (`welsDecoderExt.cpp:1180–1262`), both
+found by transliterating it and both reproduced rather than repaired.
+
+**1. The input timestamp is destroyed.** The copy-out is one `memcpy`:
+
+```c
+if (!pDecContext->bFramePending && pDecContext->pParserBsInfo->iNalNum) {
+  memcpy (pDstInfo, pDecContext->pParserBsInfo, sizeof (SParserBsInfo));
+```
+
+`SParserBsInfo::uiInBsTimeStamp` is an **input** field — `:1226` reads it out of the
+caller's struct into `pDecContext->uiTimeStamp` — and nothing anywhere writes the
+decoder-side copy (`grep -rn 'pParserBsInfo->uiInBsTimeStamp' codec/` finds nothing).
+So every call that completes a frame hands the caller back `uiInBsTimeStamp = 0`. It is
+visible in the goldens as the `in=0` column on exactly the emitting rows:
+
+```text
+PARSE 2 rv=0x0 nal=0 lens=[]              sps=0x0     in=3 out=0
+PARSE 3 rv=0x0 nal=3 lens=[13,8,2363]     sps=176x144 in=0 out=3    <-- overwritten
+```
+
+The port does the same, field by field, with a comment at the assignment. It is
+observable behaviour on a documented out-parameter; a drop-in that "fixed" it would
+diverge from every consumer written against the reference.
+
+**2. `memset (pDecContext->pParserBsInfo->pNalLenInByte, 0, MAX_NAL_UNITS_IN_LAYER)`**
+(`:1220`) clears `MAX_NAL_UNITS_IN_LAYER` **bytes** of an array of that many `int32_t`
+— the first 32 of 130 elements. This is `find_elem_byte_confusion.py`'s exact shape, in
+the reference rather than the port. It is unobservable in either tree: every slot is
+written by `pNalLenInByte[iNalNum++] = …` before anything reads it, and the only reader
+sums `0..iNalNum`. The port clears the whole `Vec`, which is what the statement means.
+
+## F91 — parse-only writes into the caller's bitstream
+
+`ParseNalHeader`'s slice-extension arm rewrites the NAL type byte **in the application's
+input buffer** before copying it out (`au_parser.cpp:346–351`):
+
+```c
+if (pCurNal->sNalHeaderExt.bIdrFlag) {
+  * (pSrcNal + iCurrStartByte) &= 0xE0;
+  * (pSrcNal + iCurrStartByte) |= 0x05;
+} else { … |= 0x01; }
+pSavedData->pCurPos[4] = * (pSrcNal + iCurrStartByte);
+```
+
+`pSrcNal` traces back to `WelsDecodeBs`'s `const_cast<uint8_t*> (kpBsBuf)`
+(`decoder.cpp:766`) — the buffer the caller passed to `DecodeParser`, declared `const`
+on the public interface. So decoding an SVC stream in parse-only mode silently modifies
+the caller's memory, and a caller that feeds the same buffer twice gets different
+results the second time.
+
+The port computes the byte and copies it (`parse_only_capture_vcl`); the caller's
+bitstream is untouched. Nothing downstream reads those bytes again — `sRawData` already
+holds this NAL's de-escaped copy by the time `ParseNalHeader` runs — so the two trees
+agree on every output and differ only in whether the input survives.
+
+## F92 — two unbounded writes and a length bug in the subset-SPS rewrite
+
+`au_parser.cpp:1191–1256` re-encodes a subset SPS as a plain Main-profile SPS so that
+parse-only output stays AVC-decodable. Three things in it:
+
+1. **The writer is sized by the wrong buffer.**
+   `InitBits (&sSubsetSpsBs, pBsBuf, (int32_t) (pBs->pEndBuf - pBs->pStartBuf))` gives
+   the writer the length of the *source SPS's bitstream* while `pBsBuf` is a
+   `SPS_PPS_BS_SIZE + 4` = 132-byte allocation. A subset SPS longer than 132 bytes —
+   a long `offset_for_ref_frame` list will do it — lets the writer run past the
+   allocation.
+2. **`RBSP2EBSP` has no destination bound.** It writes to `pSpsBsBuf + 5` inside a
+   `SPS_PPS_BS_SIZE` = 128-byte array, and escaping only ever makes the payload longer.
+3. **`uiSpsBsLen` is set from the RBSP size, not the EBSP size**:
+   `pSpsBs->uiSpsBsLen = (uint16_t) (sSubsetSpsBs.pCurBuf - sSubsetSpsBs.pStartBuf + 5)`
+   — measured *before* the escape. A subset SPS whose rewrite needs an emulation-
+   prevention byte is therefore handed to the caller one byte short per inserted
+   `0x03`, i.e. truncated.
+
+The port's `parse_only_write_subset_sps` bounds the writer by the array it writes into,
+refuses a rewrite that does not fit (`dsOutOfMemory`, the reference's own code for a
+parse-only allocation failure), and takes `uiSpsBsLen` from `rbsp_to_ebsp`'s return —
+the escaped length, which is what the copy-out reads.
+
+**Reachability is not established.** No `res/` asset produces a subset SPS whose rewrite
+needs an escape, so (3) is a divergence the goldens do not currently exercise; it is
+written the correct way because writing the truncation deliberately would need its own
+justification. Owner for a reachability probe: whoever ports SVC parse-only
+(`ParseOnly_General`, 8b.C then this).
+
+## F93 — parse-only + `ERROR_CON_DISABLE` on a damaged stream: six rows disagree
+
+`res/Error_I_P.264` is refereed by `ecref --parse-only` and its golden is checked in at
+`tests/data/decoder_parseonly/Error_I_P.txt`, but it is **not** in
+`decoder_parseonly_parity_test.rs`'s `ASSETS` — it is in `DIVERGING`, with the table:
+
+```text
+  row  7   ref rv=0x0                        port rv=0x1 (dsFramePending)
+  row  9   ref nal=5 [13,8,5601,8827,10956]  port rv=0x4, nothing emitted
+  row 13   ref rv=0x1                        port rv=0x2 (dsRefLost)
+  row 14   ref rv=0x1                        port rv=0x4
+  row 16   ref rv=0x2                        port rv=0x4
+  total    ref 1 frame emitted               port 0
+```
+
+**Why nothing saw it before.** `DecodeParser` forces
+`pParam->eEcActiveIdc = ERROR_CON_DISABLE` on every call (`welsDecoderExt.cpp:1217`).
+The malformed corpus runs all 2707 of its rows with `ERROR_CON_SLICE_COPY`
+(`malformed_stream_parity.rs:490`) and the conformance assets are undamaged, so
+**"damaged stream, concealment disabled" had no referee at all** — in either decode
+entry point. Parse-only is the messenger, not necessarily the defect.
+
+**Not T8b.B2's.** Every write that commit adds is behind `pParam.bParseOnly`, and the
+only codes it can raise are `dsOutOfMemory` (the two `MAX_ACCESS_UNIT_CAPACITY` checks)
+and `dsBitstreamError` from the `SPS_PPS_BS_SIZE - 4` guard, which needs a parameter set
+of 124 bytes or more where this stream's are 13 and 8. The codes above are
+`dsFramePending`, `dsRefLost` and `dsBitstreamError` from pre-existing paths.
+
+**The next experiment, named rather than guessed:** give `ecref` an `--ec=<idc>` flag
+and drive the *ordinary* `DecodeFrame2` path over this asset with `ERROR_CON_DISABLE` on
+both links. If that diverges too, the defect is in the decoder's error path and the
+corpus needs a second concealment mode; if it does not, it is in the parse-only arm of
+`DecodeFrameConstruction`. Owner: unassigned.

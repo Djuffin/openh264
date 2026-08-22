@@ -74,6 +74,14 @@ int main(int argc, char** argv) {
   // (F80: is `WelsRequestMem`'s third arm reachable at all?).
   bool want_sps = false;
   for (int i = 1; i < argc; i++) if (strcmp(argv[i], "--sps") == 0) want_sps = true;
+  // `--parse-only` drives `ISVCDecoder::DecodeParser` instead of `DecodeFrame2`
+  // (Phase 8b session B, T8b.B2). It is a different entry point with a different
+  // output — an annex-B bitstream, not planes — and it had no referee at all: the
+  // port's slot was a stub that returned `dsErrorFree` and wrote nothing, which is
+  // exactly what an unrefereed entry point looks like from every gate this project
+  // owns. Prints one row per call, and a per-frame SHA-1 over the composed bytes.
+  bool parse_only = false;
+  for (int i = 1; i < argc; i++) if (strcmp(argv[i], "--parse-only") == 0) parse_only = true;
 
   if (argc >= 2 && strcmp(argv[1], "--stdin") == 0) {
     for (int i = 2; i < argc; i++) {
@@ -83,6 +91,7 @@ int main(int argc, char** argv) {
       else if (strcmp(argv[i], "--nodelay") == 0) { /* handled above */ }
       else if (strcmp(argv[i], "--options") == 0) { /* handled above */ }
       else if (strcmp(argv[i], "--sps") == 0) { /* handled above */ }
+      else if (strcmp(argv[i], "--parse-only") == 0) { /* handled above */ }
       else { fprintf(stderr, "unknown flag %s\n", argv[i]); return 2; }
     }
     // Read to EOF. An empty blob is a legal corpus entry (`raw.empty`), so a
@@ -220,6 +229,68 @@ int main(int argc, char** argv) {
              w_mbs * 16, h_map * 16 * (frame_mbs_only ? 1 : 2), num_ref_frames);
     }
     if (nsps == 0) printf("SPS none\n");
+    return 0;
+  }
+
+  // --- `--parse-only`: the `DecodeParser` referee (T8b.B2) -------------------
+  //
+  // One annex-B NAL per call, the way the corpus harness feeds `DecodeFrame2`, then
+  // the trailing `(NULL, 0)` that `welsDecoderExt.cpp:1210` treats as end of stream.
+  // The access unit closes when the parser sees the first NAL of the next one, so
+  // output appears on the call *after* a frame's last slice — which is a fact about
+  // the reference and therefore part of what the goldens pin.
+  //
+  // `uiInBsTimeStamp` is the call index plus one rather than zero, so the timestamp
+  // plumbing is visible in the rows: `uiOutBsTimeStamp` should come back as the
+  // timestamp of the *first NAL of the emitted access unit*, and `uiInBsTimeStamp`
+  // comes back **zero** on every emitting call, because the reference's copy-out is
+  // one `memcpy` of a struct whose input timestamp nothing ever writes.
+  if (parse_only) {
+    ISVCDecoder* pdec = nullptr;
+    if (WelsCreateDecoder(&pdec) != 0 || !pdec) { fprintf(stderr, "WelsCreateDecoder\n"); return 2; }
+    SDecodingParam pp;
+    memset(&pp, 0, sizeof(pp));
+    pp.uiTargetDqLayer = UCHAR_MAX;
+    pp.eEcActiveIdc = ERROR_CON_SLICE_COPY;
+    pp.bParseOnly = true;
+    pp.sVideoProperty.eVideoBsType = VIDEO_BITSTREAM_DEFAULT;
+    if (pdec->Initialize(&pp) != 0) { fprintf(stderr, "Initialize\n"); return 2; }
+
+    SParserBsInfo bs;
+    memset(&bs, 0, sizeof(bs));
+    Sha1 all;
+    int call = 0, emitted = 0;
+    auto one = [&](const uint8_t* buf, int len) {
+      bs.uiInBsTimeStamp = uint64_t(call) + 1;
+      int rv = int(pdec->DecodeParser(buf, len, &bs));
+      printf("PARSE %d rv=0x%x nal=%d lens=[", call, rv, bs.iNalNum);
+      int total = 0;
+      for (int i = 0; i < bs.iNalNum; i++) {
+        printf("%s%d", i ? "," : "", bs.pNalLenInByte[i]);
+        total += bs.pNalLenInByte[i];
+      }
+      Sha1 one_sha;
+      if (bs.iNalNum > 0 && bs.pDstBuff) {
+        one_sha.update(bs.pDstBuff, size_t(total));
+        all.update(bs.pDstBuff, size_t(total));
+        emitted++;
+      }
+      printf("] sps=%dx%d in=%llu out=%llu sha1=%s\n",
+             bs.iSpsWidthInPixel, bs.iSpsHeightInPixel,
+             (unsigned long long) bs.uiInBsTimeStamp,
+             (unsigned long long) bs.uiOutBsTimeStamp,
+             bs.iNalNum > 0 ? one_sha.digest().c_str() : "-");
+      call++;
+    };
+    if (raw_feed) {
+      one(data.empty() ? nullptr : data.data(), int(data.size()));
+    } else {
+      for (auto& u : split_annexb(data)) one(data.data() + u.first, int(u.second - u.first));
+    }
+    one(nullptr, 0);
+    printf("PARSEONLY %d %d %s\n", call, emitted, emitted ? all.digest().c_str() : "-");
+    pdec->Uninitialize();
+    WelsDestroyDecoder(pdec);
     return 0;
   }
 

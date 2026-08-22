@@ -228,6 +228,43 @@ impl RawDataBuffer {
         }
     }
 
+    /// **Parse-only's raw append** (Phase 8b session B, T8b.B2) — `sSavedData`'s
+    /// half of `WelsDecodeBs`'s two-buffer copy, and the one thing
+    /// [`append_ebsp_stripped`](Self::append_ebsp_stripped) must *not* do.
+    ///
+    /// `sRawData` holds the **RBSP**: emulation-prevention bytes are gone, which is
+    /// what every syntax reader below wants and what makes those bytes useless as
+    /// output. Parse-only hands its caller a bitstream to feed to another decoder, so
+    /// it must hand back the **EBSP** — the escaped bytes as they arrived. Upstream
+    /// keeps the second copy in `pSavedData` for exactly this
+    /// (`decoder.cpp:773-778`, `au_parser.cpp:340`/`:375`), and it is the reason
+    /// `sSavedData` exists in this port at all: until now it was allocated, grown
+    /// alongside `sRawData`, and never written.
+    ///
+    /// Returns the start offset of the appended bytes — `pNalPos` as an offset, which
+    /// is what T3.3 deleted the pointer in favour of.
+    pub fn append_raw(&mut self, bytes: &[u8]) -> usize {
+        let start = self.cur;
+        self.buf[start..start + bytes.len()].copy_from_slice(bytes);
+        self.cur = start + bytes.len();
+        start
+    }
+
+    /// `if (pSavedData->pCurPos + iWriteLen > pSavedData->pEnd) pSavedData->pCurPos =
+    /// pSavedData->pHead;` — `au_parser.cpp:337`/`:372`, the wrap that keeps a write
+    /// inside the allocation by starting over at the head.
+    ///
+    /// Answers whether `need` bytes now fit: `false` means the buffer is smaller than
+    /// one NAL and the caller must refuse rather than write. Upstream has no such
+    /// answer — it wraps and writes anyway — so this is the one place the two differ,
+    /// and it differs by not corrupting memory.
+    pub fn wrap_for(&mut self, need: usize) -> bool {
+        if self.cur + need > self.buf.len() {
+            self.cur = 0;
+        }
+        need <= self.buf.len()
+    }
+
     /// The whole backing store.
     #[inline]
     pub fn bytes(&self) -> &[u8] {

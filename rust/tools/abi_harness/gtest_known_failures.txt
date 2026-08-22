@@ -13,20 +13,38 @@
 # *assertion site* they fail at (S47: a fixture name is a surface), which is stated
 # in each group's header and re-measured by `--check`'s own by-site tally.
 
-# --- encode_options_test.cpp:556/656/705/772/844/911 — listing strategies ----
+# --- encode_options_test.cpp:556/656/705/772/844/911 + decode_api_test.cpp:666
+# --- listing strategies ------------------------------------------------------
 # `CreateParametersetStrategy` returns None for the three listing modes and
 # `InitializeExt` refuses (the S48 shape, already right); ~310 C++ lines to port.
+#
+# **F89, T8b.B1 — the seventh row is `DecodeCrashTestAPI.DecoderCrashTest`, and it
+# was invisible because it only fails three runs in seven.** That test opens with
+# `switch (rand() % 7)` (`decode_api_test.cpp:615-633`) and takes a *listing*
+# strategy on 2, 3 and 6; on the other four draws it takes `CONSTANT_ID` or
+# `INCREASING_ID` and passes. Nothing pinned `rand()` before T8b.B1, so which of
+# the two it was changed every run and the row was never allowlisted — the brief's
+# 165/199 was an unseeded sample that happened to draw a non-listing strategy.
+# With `SEED=20260822` the draw is 3 = `SPS_LISTING_AND_PPS_INCREASING`, the
+# refusal fires at the test's first `InitializeExt` (0 ms), and the honest tally
+# is 164/199. All seven rows leave together when 8b.B ports the strategies.
 EncodeDecodeTestAPI.ParameterSetStrategy_SPS_LISTING_AND_PPS_INCREASING1 | 8b.B | SPS_LISTING_AND_PPS_INCREASING strategy not ported; InitializeExt refuses
 EncodeDecodeTestAPI.ParameterSetStrategy_SPS_LISTING_AND_PPS_INCREASING2 | 8b.B | SPS_LISTING_AND_PPS_INCREASING strategy not ported; InitializeExt refuses
 EncodeDecodeTestAPI.ParameterSetStrategy_SPS_LISTING_AND_PPS_INCREASING3 | 8b.B | SPS_LISTING_AND_PPS_INCREASING strategy not ported; InitializeExt refuses
 EncodeDecodeTestAPI.ParameterSetStrategy_SPS_PPS_LISTING1 | 8b.B | SPS_PPS_LISTING strategy not ported; InitializeExt refuses
 EncodeDecodeTestAPI.ParameterSetStrategy_SPS_PPS_LISTING2 | 8b.B | SPS_PPS_LISTING strategy not ported; InitializeExt refuses
 EncodeDecodeTestAPI.ParameterSetStrategy_SPS_PPS_LISTING3 | 8b.B | SPS_PPS_LISTING strategy not ported; InitializeExt refuses
+DecodeCrashTestAPI.DecoderCrashTest | 8b.B | F89: rand()%7 picks a listing strategy on 3 of 7 draws; at the pinned seed it picks SPS_LISTING_AND_PPS_INCREASING and InitializeExt refuses
 
-# --- decode_api_test.cpp:923/1001/1048 — parse-only DecodeParser -------------
-DecodeParseAPI.ParseOnly_General | 8b.C then 8b.B | since T8b.A5 it fails earlier, at decode_api_test.cpp:888 — its encoder asks for 2 spatial layers, which now refuses; behind that, DecodeParser is still a stub
-DecodeParseAPI.ParseOnly_SpecSliceLoss | 8b.B | DecodeParser is a stub: returns dsErrorFree, writes nothing (iNalNum stays 0)
-DecodeParseAPI.ParseOnly_SpecStatistics | 8b.B | DecodeParser is a stub: returns dsErrorFree, writes nothing (iNalNum stays 0)
+# --- decode_api_test.cpp:888 — parse-only, what is left of it ----------------
+# **T8b.B2 ported `DecodeParser` and its two siblings left.** `SpecSliceLoss` and
+# `SpecStatistics` pass and their rows are gone; what remains is `ParseOnly_General`,
+# and it no longer fails for a parse-only reason at all — its encoder asks for three
+# spatial layers and `InitializeExt` refuses under S48 (T8b.A5), which is 8b.C's
+# downsample. The parse-only machinery behind it is in place: the referee is
+# `tests/decoder_parseonly_parity_test.rs` against `ecref --parse-only` goldens, and
+# `abi_harness parseonly` runs the same rows through the dylib.
+DecodeParseAPI.ParseOnly_General | 8b.C | 3 spatial layers: InitializeExt refuses at decode_api_test.cpp:888 (S48, T8b.A5). No longer a parse-only row — DecodeParser is ported (T8b.B2)
 
 # --- BaseEncoderTest.cpp:92 and friends — denoise / downsample REFUSE at init
 # --- (S48, T8b.A5) ----------------------------------------------------------

@@ -73,9 +73,19 @@ fn test_decoder_create_and_destroy_lifecycle() {
         assert_eq!(flush_state, DECODING_STATE::dsErrorFree);
 
         // 6. DecodeParser
+        //
+        // **`dsInvalidArgument`, and it used to say `dsErrorFree`** (T8b.B2). This
+        // decoder was initialised without `bParseOnly`, and the reference refuses
+        // that call outright — `welsDecoderExt.cpp:1189-1193` logs "bParseOnly should
+        // be true for this API calling!", ors `dsInvalidArgument` into the context's
+        // error code and returns it. Measured against `libopenh264.dylib` rather than
+        // read: the same call on the same non-parse-only decoder answers `0x1000`.
+        // The old expectation was the stub's, which answered `dsErrorFree` to
+        // everything; the port's refusal is what the reference does, so the row moves
+        // with the port.
         let mut parser_info = SParserBsInfo::default();
         let parse_state = ISVCDecoder::DecodeParser(p_decoder, std::ptr::null(), 0, &mut parser_info);
-        assert_eq!(parse_state, DECODING_STATE::dsErrorFree);
+        assert_eq!(parse_state, DECODING_STATE::dsInvalidArgument);
 
         // 7. DecodeFrameEx
         let mut dst_len: i32 = 0;

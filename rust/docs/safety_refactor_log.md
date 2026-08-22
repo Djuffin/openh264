@@ -15286,3 +15286,72 @@ write, in both trees.
 (`test_scalinglist_jm.264`) is the last allowlist row that is not owned by a session.
 Keep the port's JVT-correct POC tiebreak, or match upstream bug-for-bug as a drop-in.
 Unchanged and un-argued this session, as the brief directs.
+
+---
+
+## Phase 8b, session B — parse-only, the listing strategies, and the seed
+
+### T8b.B1 — the seed is pinned (S49), and it cost a row
+
+`gtest_stretch.sh` now passes `--seed=$SEED` (20260822, one constant at the top of
+the file) to every run of both links, and grew `--seeds=A..B` — the finder, which runs
+the whole suite per seed on *both* links and prints the rows the Rust link fails that
+the C++ link does not.
+
+Two red-proofs. `--check` twice: identical, `164/199, allowlist 35` both times. And
+the finder caught its own bug on the first run: BSD `seq 20260820 20260824` prints
+`2.02608e+07`, which `atoi` reads as **2**, so every seed in the range was silently the
+same wrong one. The `Random seed:` echo-back check printed `!! the seed did not reach
+main()` five times; the loop is integer arithmetic now and the check stays.
+
+**165/199 was a sample, not a measurement (F89).** `DecodeCrashTestAPI.DecoderCrashTest`
+picks its parameter-set strategy with `rand() % 7` and takes a *listing* one on three
+of the seven draws, so it failed three runs in seven and was never allowlisted. At the
+pinned seed the draw is 3 (`SPS_LISTING_AND_PPS_INCREASING`) and the honest tally is
+**164/199, 35 rows**. It is the seventh row the listing strategies own.
+
+### T8b.B2 — `DecodeParser`, whole, with three referees
+
+The stub is gone, and so are the three holes behind it:
+
+* **`ParseNalHeader` captures the escaped NAL** into `sSavedData` — a buffer this port
+  allocated, grew alongside `sRawData`, and had never written. `sRawData` holds the
+  **RBSP**; parse-only must hand back the **EBSP**, which is why T3.3's deletion of
+  `pNalPos` was right for that tree and wrong for this one. The field is back as an
+  offset (`SVclNal::iNalPos`), and `iNalLength` stops being a perpetual 0.
+* **`ParseSps`/`ParsePps` fill the three parameter-set caches.** `sSpsBsInfo`,
+  `sSubsetSpsBsInfo` and `sPpsBsInfo` were declared on the context and matched by
+  `grep` nowhere else; the subset-SPS arm re-encodes an SVC SPS as a plain Main-profile
+  one so the output stays AVC-decodable. Their one reader is the next item.
+* **`DecodeFrameConstruction`'s parse-only arm copies bytes.** It kept the reference's
+  length bookkeeping and none of its `memcpy`s. Now: the IDR SPS/PPS prepend, both
+  `MAX_ACCESS_UNIT_CAPACITY` checks, `ExpandBsLenBuffer`, and the per-NAL copy.
+
+`kpSrcNal` — the escaped source NAL, deleted as dead at T3.3 because the only thing
+that read it had not been carried — is threaded back through `ParseNalHeader`,
+`ParseNonVclNal`, `ParseSps` and `ParsePps`.
+
+**Three referees, and the first one was measured red.** `ecref --parse-only` prints one
+row per call — `rv`, NAL count, per-NAL lengths, SPS dimensions, both timestamps and a
+SHA-1 over the composed bytes; seven goldens under `tests/data/decoder_parseonly/`;
+`tests/decoder_parseonly_parity_test.rs` drives the C ABI the same way. Against the
+stub it failed on **all seven assets** (`nal=0 lens=[] sha1=-` where the reference
+emits bytes); after, six agree row for row and the seventh is F93, refereed, divergent
+and owned. `abi_harness parseonly` runs the same rows through `dlopen`, 6/6, with the
+asset list extracted from the test's own `ASSETS` at run time so the two cannot drift.
+
+`api_lifecycle_test.rs:78` moved with the port: that decoder is not in parse-only mode,
+and the reference answers `dsInvalidArgument` there — measured against
+`libopenh264.dylib`, not read. The old `dsErrorFree` was the stub's.
+
+**Ratchet rebaselined, deliberately:** `api/codec_api.rs` +2 `raw_ptr`, +2
+`unsafe_block`. One `as *mut CWelsDecoderImpl` in the vtable thunk and one
+`[*mut u8; 3]` local that `WelsDecodeBs`'s own signature demands, plus the two
+`unsafe` blocks that hold them — the same shape as `decoder_decode_frame2_c` and
+`Decoder::decode` next door. Both are Phase 9's to convert, not this session's.
+
+Four findings from the transliteration, all reproduced rather than repaired where they
+are observable: **F90** (the copy-out destroys the caller's `uiInBsTimeStamp`; the
+`memset` counts bytes for an `int32_t` array), **F91** (parse-only rewrites a NAL type
+byte inside the caller's `const` bitstream), **F92** (two unbounded writes and an
+RBSP-vs-EBSP length bug in the subset-SPS rewrite).
