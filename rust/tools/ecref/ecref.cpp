@@ -61,6 +61,19 @@ int main(int argc, char** argv) {
   // other, and this is it.
   bool nodelay = false;
   for (int i = 1; i < argc; i++) if (strcmp(argv[i], "--nodelay") == 0) nodelay = true;
+  // `--options` prints every get-able scalar `DECODER_OPTION` after every decode
+  // call — the referee for `GetOption` (Phase 8b session A, T8b.A3). Before it the
+  // decoder had *no* instrument that read an option value back: the corpus reads
+  // frames and codes, the conformance suite reads bytes, and `GetOption` returned
+  // `cmResultSuccess` with nothing written for twelve of its sixteen ids while every
+  // gate stayed green. Both the return code and the value are printed, because half
+  // the reference's arms answer `cmInitExpected` rather than writing.
+  bool want_options = false;
+  for (int i = 1; i < argc; i++) if (strcmp(argv[i], "--options") == 0) want_options = true;
+  // `--sps` prints the activated SPS's dimensions and `num_ref_frames` per call
+  // (F80: is `WelsRequestMem`'s third arm reachable at all?).
+  bool want_sps = false;
+  for (int i = 1; i < argc; i++) if (strcmp(argv[i], "--sps") == 0) want_sps = true;
 
   if (argc >= 2 && strcmp(argv[1], "--stdin") == 0) {
     for (int i = 2; i < argc; i++) {
@@ -68,6 +81,8 @@ int main(int argc, char** argv) {
       else if (strcmp(argv[i], "--annexb") == 0) raw_feed = false;
       else if (strcmp(argv[i], "--frames") == 0) { /* handled above */ }
       else if (strcmp(argv[i], "--nodelay") == 0) { /* handled above */ }
+      else if (strcmp(argv[i], "--options") == 0) { /* handled above */ }
+      else if (strcmp(argv[i], "--sps") == 0) { /* handled above */ }
       else { fprintf(stderr, "unknown flag %s\n", argv[i]); return 2; }
     }
     // Read to EOF. An empty blob is a legal corpus entry (`raw.empty`), so a
@@ -106,6 +121,39 @@ int main(int argc, char** argv) {
   p.sVideoProperty.eVideoBsType = VIDEO_BITSTREAM_DEFAULT;
   if (dec->Initialize(&p) != 0) { fprintf(stderr, "Initialize\n"); return 2; }
 
+  // The eleven get-able scalar options, in `codec_app_def.h` order. `GET_STATISTICS`
+  // and `GET_SAR_INFO` are struct-valued and are not here; `NUM_OF_THREADS` is the
+  // object's field and does not change per call.
+  struct OptId { const char* name; DECODER_OPTION id; };
+  static const OptId kOpts[] = {
+    {"EOS",   DECODER_OPTION_END_OF_STREAM},
+    {"VCL",   DECODER_OPTION_VCL_NAL},
+    {"TID",   DECODER_OPTION_TEMPORAL_ID},
+    {"FN",    DECODER_OPTION_FRAME_NUM},
+    {"IDR",   DECODER_OPTION_IDR_PIC_ID},
+    {"LTRF",  DECODER_OPTION_LTR_MARKING_FLAG},
+    {"LTRN",  DECODER_OPTION_LTR_MARKED_FRAME_NUM},
+    {"EC",    DECODER_OPTION_ERROR_CON_IDC},
+    {"PROF",  DECODER_OPTION_PROFILE},
+    {"LEVEL", DECODER_OPTION_LEVEL},
+    {"REF",   DECODER_OPTION_IS_REF_PIC},
+    {"REM",   DECODER_OPTION_NUM_OF_FRAMES_REMAINING_IN_BUFFER},
+  };
+  int opt_call = 0;
+  auto dump_options = [&](const char* what) {
+    if (!want_options) return;
+    printf("OPT %d %s", opt_call++, what);
+    for (size_t i = 0; i < sizeof(kOpts) / sizeof(kOpts[0]); i++) {
+      // Deliberately *not* initialized: the caller's garbage is exactly what a
+      // silent no-write arm hands back, and pinning that would pin noise. A
+      // sentinel makes "did not write" visible and reproducible instead.
+      int v = 0x5EED5EED;
+      long rc = dec->GetOption(kOpts[i].id, &v);
+      printf(" %s=%ld/%d", kOpts[i].name, rc, v);
+    }
+    printf("\n");
+  };
+
   Sha1 sha;
   int frames = 0, w0 = 0, h0 = 0;
   std::string calls, bufs;
@@ -122,6 +170,7 @@ int main(int argc, char** argv) {
     calls += tmp;
     sprintf(tmp, "%s%d", bufs.empty() ? "" : ",", info.iBufferStatus);
     bufs += tmp;
+    dump_options("decode");
     if (info.iBufferStatus != 1) return;
     int w = info.UsrData.sSystemBuffer.iWidth, h = info.UsrData.sSystemBuffer.iHeight;
     int sy = info.UsrData.sSystemBuffer.iStride[0], suv = info.UsrData.sSystemBuffer.iStride[1];
@@ -161,6 +210,7 @@ int main(int argc, char** argv) {
     calls += tmp;
     sprintf(tmp, ",%d", info.iBufferStatus);
     bufs += tmp;
+    dump_options("flush");
     if (info.iBufferStatus != 1) continue;
     int w = info.UsrData.sSystemBuffer.iWidth, h = info.UsrData.sSystemBuffer.iHeight;
     int sy = info.UsrData.sSystemBuffer.iStride[0], suv = info.UsrData.sSystemBuffer.iStride[1];

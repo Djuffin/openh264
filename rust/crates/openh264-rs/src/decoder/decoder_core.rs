@@ -308,6 +308,7 @@ pub use crate::decoder::bit_stream::{BsReader, RawDataBuffer};
 use crate::safe::bits::BsCursor;
 pub use crate::safe::mb_grid::{MbArray, MbDims, MbGrid, LIST_COUNT};
 pub use crate::decoder::decoder_context::{SNalUnitHeader, SNalUnitHeaderExt};
+pub use crate::decoder::decoder_context::{FEEDBACK_NON_VCL_NAL, FEEDBACK_UNKNOWN_NAL, FEEDBACK_VCL_NAL};
 pub use crate::decoder::slice::{SSliceHeader, SSliceHeaderExt, SSlice};
 
 
@@ -1057,13 +1058,39 @@ pub fn ResetActiveSPSForEachLayer(pCtx: &mut SWelsDecoderContext) {
     }
 }
 
-#[inline]
-pub fn GetVclNalTemporalId(pCtx: &mut SWelsDecoderContext) {}
-
-#[inline]
-pub fn GetPrevFrameNum(pCtx: &mut SWelsDecoderContext) -> i32 {
-    0
+/// `decoder.cpp:716-724`. The three feedback fields `DECODER_OPTION_VCL_NAL`,
+/// `DECODER_OPTION_TEMPORAL_ID` and `DECODER_OPTION_IS_REF_PIC` read, taken from the
+/// access unit's **first** NAL (`uiStartPos`, not the last — the AU is ordered and the
+/// base layer leads it).
+///
+/// **T8b.A3: this was `{}`.** Four phases of an empty body, and 21 of the 44 remaining
+/// `test/api` rows behind it — `iFeedbackVclNalInAu` never left the caller's stack
+/// garbage, `iFeedbackTidInAu` never left −1. `find_stub_bodies.py` could not see it
+/// because it diffs *call sets* and this C++ body makes no calls (S46, closed in
+/// T8b.A2's empty-body rule).
+///
+/// The reference has no null guard here — `pAccessUnitList` and its `pNalUnitsList`
+/// entry are both live at the one call site (`decoder_core.cpp:2274`, right after
+/// `WelsDecodeAccessUnitStart`). The port's accessors return `Option`, and a `None`
+/// leaves the three fields at their per-call reset, which is what a caller reading
+/// them before any AU already sees.
+pub fn GetVclNalTemporalId(pCtx: &mut SWelsDecoderContext) {
+    let Some(pAccessUnit) = cur_au(&mut pCtx.access_unit) else { return };
+    let idx = pAccessUnit.uiStartPos as usize;
+    let Some(nal) = pAccessUnit.node(idx) else { return };
+    let uiTemporalId = nal.sNalHeaderExt.uiTemporalId;
+    let uiNalRefIdc = nal.sNalHeaderExt.sNalUnitHeader.uiNalRefIdc;
+    (*pCtx).iFeedbackVclNalInAu = FEEDBACK_VCL_NAL;
+    (*pCtx).iFeedbackTidInAu = i32::from(uiTemporalId);
+    (*pCtx).iFeedbackNalRefIdc = i32::from(uiNalRefIdc);
 }
+
+// **T8b.A3: `GetPrevFrameNum` deleted dead (S18).** It returned 0 — a stub of the
+// multi-threaded detour's helper, which walks the other decoding contexts for the
+// most recent frame number. This port's single call site reads
+// `pLastDecPicInfo.iPrevFrameNum` directly (`:4356`), which is exactly what the
+// reference's single-threaded path does. Fixing it would have been porting the
+// threaded decoder; deleting it is what the plan says (D3).
 
 // **T5b.9: `CopySpsPps` deleted dead (S18, D3).** The C++ calls it only from the
 // threaded decoder (`decoder_core.cpp:2875`, `welsDecoderExt.cpp:1308`) — the
@@ -2555,6 +2582,16 @@ fn parse_slice_header_into(
                 return GENERATE_ERROR_NO(ERR_LEVEL_SLICE_HEADER, ERR_INFO_INVALID_IDR_PIC_ID);
             }
             pSliceHeadExt.sSliceHeader.uiIdrPicId = uiCode as u16;
+            // `decoder_core.cpp:1060-1062`, under `LONG_TERM_REF` (which
+            // `decoder_context.h:67` defines, so it is on in every reference build).
+            //
+            // **T8b.A3: `uiCurIdrPicId` was declared, reset, and never written.**
+            // F77's signature exactly — and it is the only feeder for
+            // `DECODER_OPTION_IDR_PIC_ID`, so `decode_api_test.cpp:132`'s three rows
+            // read a field that could only ever be 0. Written here, at the reference's
+            // point: the *parse* of the IDR's slice header, not its reconstruction,
+            // which is why the test reads the same value on both `DecodeFrame2` calls.
+            pCtx.uiCurIdrPicId = uiCode as u16;
         }
 
         pSliceHeadExt.sSliceHeader.iDeltaPicOrderCntBottom = 0;
