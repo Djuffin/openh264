@@ -1340,6 +1340,47 @@ pub unsafe fn ParamValidationExt(
         (*pCodingParam).bPrefixNalAddingCtrl = false;
     }
 
+    // -----------------------------------------------------------------------
+    // **S48, until Phase 8b session C — the two preprocessing plugins this port
+    // does not have yet refuse here instead of being skipped silently.**
+    //
+    // `METHOD_DENOISE` and `METHOD_DOWNSAMPLE` are untranslated
+    // (`processing/mod.rs:29-39`). `CWelsPreProcess::BilateralDenoising`
+    // (`wels_preprocess.rs`) is an empty body behind `bEnableDenoise`, and
+    // `DownsamplePadding` returns `RET_NOTSUPPORTED` when the sizes differ while
+    // **both callers drop the return**. So the encode *succeeded* and produced
+    // un-denoised, un-downsampled layers: `EncoderOutputTest/4` (denoise), `/5`
+    // (2 spatial layers) and `/7` (4 layers) are the three gtest rows that catch
+    // it, and they catch it as a *hash difference* — a consumer gets bytes that
+    // look fine and are not what it asked for.
+    //
+    // The code is the reference's own for an unsupported parameter:
+    // `ENC_RETURN_UNSUPPORTED_PARA` here -> `WelsInitEncoderExt` returns nonzero ->
+    // `InitializeInternal` returns **`cmInitParaError` (1)**, which is what a
+    // consumer sees from `InitializeExt`. (`cmUnsupportedData` is not reachable
+    // from this path; only `EncodeFrame` returns it.)
+    //
+    // **The downsample test is `JudgeNeedOfScaling`'s own, per layer.** That
+    // function (`wels_preprocess.rs:710`) compares each layer's size against
+    // `SUsedPicRect` — the *input rect* — and only a layer **smaller** than the
+    // input is downsampled; a layer that is larger is left alone. Testing
+    // `iPicWidth != <top layer>` instead looks equivalent and is not: layer
+    // dimensions are rounded up to a multiple of 16 by `ParamTranscode` while
+    // `iPicWidth` is not, so 140x96 legitimately becomes a 144x96 layer and every
+    // non-multiple-of-16 width would have been refused. Measured, not reasoned:
+    // `tests/encoder_force_idr_ltr_test.rs`'s 140x96 row failed at `InitializeExt`
+    // against the first version of this check.
+    if (*pCodingParam).bEnableDenoise {
+        return ENC_RETURN_UNSUPPORTED_PARA;
+    }
+    for i in 0..(*pCodingParam).iSpatialLayerNum {
+        let idx = i as usize;
+        if (*pCodingParam).sSpatialLayers[idx].iVideoWidth < (*pCodingParam).SUsedPicRect.iWidth
+            || (*pCodingParam).sSpatialLayers[idx].iVideoHeight < (*pCodingParam).SUsedPicRect.iHeight
+        {
+            return ENC_RETURN_UNSUPPORTED_PARA;
+        }
+    }
     for i in 0..(*pCodingParam).iSpatialLayerNum {
         let idx = i as usize;
         let mut kiPicWidth = (*pCodingParam).sSpatialLayers[idx].iVideoWidth;
