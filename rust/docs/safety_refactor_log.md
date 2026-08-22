@@ -15714,3 +15714,100 @@ failure returns, not three).
 
 No sweeps beyond the two new presets' single verification run, no Miri, no benches, no
 span here: those are the phase close, next.
+
+---
+
+# Phase 8b — **CLOSED** (2026-08-22, `1b921d7f`..)
+
+*Correctness and feature parity before safety (D-prio-1). Three sessions, A/B/C.*
+
+## The tally's arc
+
+```
+155   Phase 8 session C's close, unseeded
+179   T8b.A4 — the decoder option arms, ForceCodingIDR
+165   T8b.A5 — S48: denoise and downsample refuse at InitializeExt (-14 rows)
+164   T8b.B1 — the pinned seed (S49); A's 165 was a sample, not a measurement (F89)
+173   T8b.B3 — parse-only and the five parameter-set strategies
+174   T8b.C1 — denoise
+191   T8b.C2 — downsample: seventeen rows in one commit
+```
+
+**The exit allowlist is 8 rows: the 7 Phase 10 screen-content rows and D-poc-1.**
+Nothing else. Every row that was ever owned by 8b.A, 8b.B or 8b.C is gone.
+
+The dip from 179 to 165 is the phase's most useful number. Fourteen rows were
+*passing* while the encoder silently produced lower spatial layers from stale picture
+content — they assert on codes, frame counts and layer ids, and none on bytes. S48
+made the port refuse instead, which cost the rows and bought the honesty; T8b.C2
+returned all seventeen at once, and they pass now against byte-level referees.
+
+## The exit gate, item by item (charter §5)
+
+| condition | result |
+|---|---|
+| `gtest --check` green, allowlist **exactly** 7 Phase 10 + D-poc-1 | **191/199, allowlist 8** — rc 0 |
+| the same across seeds | `--seeds=1..10`: 191/199 on all ten, **one distinct failure set** |
+| census missing list empty or every entry owned by name | **19 missing, every one Phase 10's**; 8b.A/8b.B/8b.C/F80 all zero |
+| the spatial-layer preset in the sweep, byte-identical both profiles, against the downsampler the reference **actually runs** | `dl` 76/76; sweeps **535/535 in both profiles** (369 → 535 with `ps` and `dl`); the NEON question settled by measurement (F97) |
+| every decoder slot with a named referee | held from session B; C adds `decoder_numref_change_test.rs` |
+| `gates.sh exit` unscoped | **OVERALL PASS** |
+| the perf span against D-perf-4's +25% tripwire | decode **+0.87%**, encode **+0.96%** — two orders clear |
+
+`gates.sh exit`, in full: build all targets · `cargo test` 548 debug / 541 release ·
+ratchet no increase · duplicate census 57 · **sweeps 535/535 both profiles** · both
+benches bit-identical · **Miri `--lib` whole library 375/0** plus the three
+differential tests (20/7/3) · exports 7/7 · abi harness 14/0 · gtest 191/199.
+
+## The findings ledger
+
+**Opened and closed inside the phase:** F86 (A), F89, F90, F94 (B), F97, F98, F99,
+F100 (C, F100 handed on), and the corrections to F95.
+**Inherited and closed:** F77 (A), F80/F87 (C), F96 (C), F88 (C, by F96), F76/F78/F79
+(carried in from Phase 8's close).
+**Open, each owned by name:** F91, F92 (Phase 9 — upstream writes into the caller's
+`const` bitstream in parse-only SVC, and the subset-SPS rewrite's bounds), F93 (Phase
+9, re-measured to four rows and narrowed to parse-only's own arm), F100 (Phase 9, two
+empty trace surfaces), F84, F86's open half (Phase 9).
+
+**The phase's method, stated once because it kept paying.** Four times a
+handed-down narrowing was wrong in a way reading could not correct and a *probe*
+could:
+
+* the `_c`-vs-NEON risk that was going to sink session C does not exist — 40 kernel
+  comparisons, all identical — while the real trap was one line away in the dispatch
+  **table** (F97);
+* `m_bNoSampleBuffer` selects the opposite arm from the one it reads like, making 4:1
+  downsampling a cascade rather than the quarter kernel (F98);
+* F96 was not in `InitRefPicList` or anything beneath it; it was the line above the
+  call, and two `eprintln`s found in minutes what two careful readings had not;
+* F95's cause was not the macro it named but the lookup order in the tool itself.
+
+Each of those would have shipped as a defect that no gate in this project could see,
+because each is invisible in the configuration the gates run. **Measure the thing, do
+not read about it.**
+
+## What Phases 9 and 10 inherit
+
+**Phase 9** (safety endgame): the ~689 `port-raw(Phase 9)` signatures — session C added
+none and removed one (`BilateralDenoising`); F73, F66/S42's context split, the `Send`
+verdict, the crate-root deny flip, `SParserBsInfo`'s two entities (D5), `libc`'s
+removal. Newly its: **F93**'s four parse-only rows with both transcripts as the repro,
+**F100**'s two empty trace surfaces, and the rest of the trace surface (the port emits
+4 of the reference's 24 lines on `Error_I_P.264` at `--trace=8`). The referees it was
+promised are all built and green: the seeded gtest ratchet, the census with a
+classification rule per row, `ecref`'s `--ec`/`--trace`/`--parse-only`/`--nodelay`
+axes and `ecref_rs` beside it, and a sweep that now covers 535 configurations
+including the two axes that had none.
+
+**Phase 10** (screen content): its 7 gtest rows are the whole remaining allowlist, and
+the census's 19 remaining `missing` rows are all its — scroll detection (6), the
+screen complexity analysis (2), the feature-search storage (5), the VAA screen buffers
+(2), `imagerotate` (4). `processing/downsample.rs` and `processing/denoise.rs` are the
+shape its own plugins should take: safe kernels over slices, a free function beside
+the plugin method where the caller's borrows need it, and a probe against the
+reference archive before the first kernel is written.
+
+**A standing note for both.** `res/` gained an asset (`num_ref_change_320x192.264`)
+and `safe::Pool` lost its "never grows or shrinks" contract — deliberately, in safe
+code, with the generation semantics tested rather than assumed (F80/F87).
