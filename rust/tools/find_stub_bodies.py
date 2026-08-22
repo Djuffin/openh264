@@ -271,11 +271,31 @@ def main():
     rust = rust_bodies(read_all(RUST_DIRS, [".rs"]))
 
     def rust_for(name):
-        """The Rust body that corresponds to this C++ name, or None."""
-        if name in rust:
-            return rust[name]
+        """The Rust body that corresponds to this C++ name, or None.
+
+        **The alias wins over a same-named Rust function (F95, T8b.C5).** This used
+        to try `rust[name]` first and fall back to the alias, which put the table
+        exactly where it could not help. Every one of the twenty C-ABI entry points
+        has *two* Rust functions: the thunk that does the work
+        (`decoder_decode_parser_c`) and an inline vtable trampoline named for the
+        slot (`ISVCDecoder::DecodeParser`, one expression, no semicolons). The
+        name-first lookup found the trampoline and reported
+
+            DecodeParser   [0 Rust statements vs 37 C++]
+
+        which is what it also said when the thunk really was a stub — so the
+        instrument's signal on the port's whole outward surface was zero in both
+        directions.
+
+        F95 blamed `abi_guard!` for this and that reading does not survive
+        measurement: the macro's body strips to five semicolons, counted correctly.
+        The table was simply never consulted, which is the same shape as the defect
+        it was added for (F85) one level up.
+        """
         alias = ALIASES.get(name)
-        return rust.get(alias) if alias else None
+        if alias is not None and alias in rust:
+            return rust[alias]
+        return rust.get(name)
 
     flagged = 0
     for name in sorted(set(rust) | set(cpp)):

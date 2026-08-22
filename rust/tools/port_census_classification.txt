@@ -239,12 +239,21 @@ name SpsReset | renamed | T8b.B3: a private method on the merged object (paraset
 # `DecodeFrameConstruction`'s byte copies — went in at T8b.B2 and never touches it.
 name ParseAccessUnit | dead | D3: welsDecoderExt.cpp:1301, called only from ThreadDecodeFrameInternal (:1384), the threaded decoder this port does not have
 
-# 8b.C — the two preprocessing plugins the encoder silently skips today (S48).
-file codec/processing/src/downsample/downsamplefuncs.cpp | missing | 8b.C: the downsample kernels (594 C++ lines with downsample.cpp)
-name DownsampleHalfAverage | missing | 8b.C: downsample.cpp:279
-file codec/processing/src/denoise/denoise_filter.cpp | missing | 8b.C: the denoise kernels (250 C++ lines with denoise.cpp)
-name BilateralDenoiseLuma | missing | 8b.C: denoise.cpp:92
-name WaverageDenoiseChroma | missing | 8b.C: denoise.cpp:107
+# 8b.C — the two preprocessing plugins, **ported** (T8b.C1, T8b.C2).
+# `processing/denoise.rs` and `processing/downsample.rs`. The rows that stood here —
+# the two kernel files, `DownsampleHalfAverage`, `BilateralDenoiseLuma`,
+# `WaverageDenoiseChroma`, `Gauss3x3Filter` — are all present now and the census finds
+# them by name. What is left of the pair is two functions that are `dead` on this
+# target, and both are dead for the same measured reason (**F97**):
+#
+#   `InitDownsampleFuncs` binds `pfGeneralRatioLuma` to `GeneralBilinearFastDownsampler_c`
+#   in its scalar table and then rebinds it to the *accurate* wrapper on aarch64,
+#   because there is no NEON fast downsampler. So on the target this port ships for,
+#   nothing can reach the fast kernel, and `rust/tools/vp_kernel_probe/` measures the
+#   two as different functions — porting it would add a kernel with no caller and no
+#   referee.
+name GeneralBilinearFastDownsampler_c | dead | F97: the aarch64 table rebinds general-ratio luma to the accurate downsampler; nothing on this target reaches the fast one
+name GeneralBilinearDownsamplerWrap | dead | the SIMD wrapper (downsamplefuncs.cpp:251) — `static`, compiled only under X86_ASM/HAVE_NEON, and it exists to compute the fixed-point scales for an assembly kernel the port does not have
 
 # Phase 10 — screen content.
 name GomComplexityAnalysisInter | missing | Phase 10: ComplexityAnalysis.cpp:413, 46 statements
@@ -271,5 +280,3 @@ file codec/processing/src/imagerotate/imagerotatefuncs.cpp | missing | Phase 10 
 
 # Small residue, each read and each genuinely absent.
 name FindExistingPps | missing | 8b.B: paraset_strategy.cpp:608, 8 statements — the listing strategies' PPS lookup
-name GeneralBilinearDownsamplerWrap | missing | 8b.C: downsamplefuncs.cpp:251
-name Gauss3x3Filter | missing | 8b.C: denoise_filter.cpp:114

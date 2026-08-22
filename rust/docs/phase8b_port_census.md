@@ -1,6 +1,6 @@
 # The port census — what the reference has and this port does not
 
-*Phase 8b session A, T8b.A2, measured at `b9599b96` (code identical to `863eaec7`).
+*Phase 8b session A, T8b.A2; **re-measured at session C's close (T8b.C5)**.
 Regenerate with `rust/tools/port_census.py --classify` and
 `rust/tools/find_stub_bodies.py`; the classification lives in
 `rust/tools/port_census_classification.txt`, not here.*
@@ -24,30 +24,41 @@ it is what makes the exit claim honest.
 
 ## 2. The numbers
 
-`port_census.py`, **re-run at T8b.B4** (session A's numbers, at `b9599b96`, are in
-the second column):
+`port_census.py`, **re-run at T8b.C5** (T8b.B4's numbers are in the second column):
 
 ```
 1351 C++ definitions (name × file) under codec/{decoder,encoder,processing,common}/**/src,
      SIMD directories and SIMD-suffixed names excluded
- 283 with no same-name Rust definition (was 287), of which
-     154 dead     — the reference cannot reach it in the configuration this port ships   (was 153)
-      96 renamed  — ported under another name, or folded into a neighbour                (was  92)
-      33 missing  — a real gap                                                           (was  42)
+ 271 with no same-name Rust definition (was 283), of which
+     156 dead     — the reference cannot reach it in the configuration this port ships   (was 154)
+      96 renamed  — ported under another name, or folded into a neighbour                (was  96)
+      19 missing  — a real gap                                                           (was  33)
        0 unclassified
 ```
+
+**33 → 19.** Session C ported the denoise and downsample kernels (T8b.C1/T8b.C2) and
+`IncreasePicBuff`/`DecreasePicBuff` (T8b.C3), which is twelve of the fourteen; the
+other two moved to `dead` and did **not** move because nobody wanted to port them.
+`GeneralBilinearFastDownsampler_c` and `GeneralBilinearDownsamplerWrap` are
+unreachable on this target, measured rather than assumed — the aarch64 dispatch table
+rebinds general-ratio *luma* to the accurate downsampler because there is no NEON fast
+kernel, so nothing can call the fast one, and `rust/tools/vp_kernel_probe/` shows the
+two are genuinely different functions. Porting it would add a kernel with no caller
+and no referee. See **F97**.
 
 `find_stub_bodies.py`, at `b9599b96`: **241 flagged** of 1898 Rust functions (956 have
 a C++ counterpart) by the call-set diff, and **9** by the new empty-body rule.
 
-The 33 `missing`, by owner:
+The 19 `missing`, by owner:
 
 | owner | rows | what |
 |---|---|---|
 | **8b.B** | **0** | ported at T8b.B2/T8b.B3 — see below |
-| **8b.C** | 12 | the downsample kernels (594 C++ lines) and the denoise kernels (250) |
+| **8b.C** | **0** | ported at T8b.C1/T8b.C2; the two residual kernels are `dead` (F97) |
+| **F80** | **0** | ported at T8b.C3 |
 | **Phase 10** | 19 | screen content: scroll detection (4 + 2), the screen complexity analysis (2), the feature-search storage (5), the VAA screen buffers (2), `imagerotate` (4) |
-| **F80** | 2 | `IncreasePicBuff` / `DecreasePicBuff` |
+
+**Every remaining row is Phase 10's.** Phase 8b's own inventory is empty.
 
 **Session B's nine rows are gone, and one of them was never 8b.B's.**
 
@@ -67,20 +78,19 @@ Nothing in the `missing` column is unowned. **8b.A owns none of it** — the ses
 own work (the decoder option arms, the two feeders, LTR) was all *present-but-wrong*,
 which is the other tool's column.
 
-### The top of the `missing` list, by size — session C's and Phase 10's input
-(the two 8b.B rows that stood here, `WriteSavcParaset_Listing` at 54 statements and
-`CWelsDecoder::ParseAccessUnit` at 23, are ported and reclassified respectively)
+### The top of the `missing` list, by size — **Phase 10's, all of it**
+(the six 8b.C and F80 rows that stood here — `DecreasePicBuff` at 50 statements,
+`GeneralBilinearAccurateDownsampler_c` at 42, `IncreasePicBuff` at 36,
+`BilateralLumaFilter8_c` at 30 and the two kernel files — are ported;
+`GeneralBilinearFastDownsampler_c` at 49 is reclassified `dead`)
 
 | C++ | stmts / lines | owner |
 |---|---|---|
 | `ScrollDetectionCore` (`ScrollDetectionFuncs.cpp:110`) | 57 / 87 | Phase 10 |
-| `DecreasePicBuff` (`decoder.cpp:170`) | 50 / 87 | F80 |
-| `GeneralBilinearFastDownsampler_c` (`downsamplefuncs.cpp:118`) | 49 / 65 | 8b.C |
 | `CComplexityAnalysisScreen::GomComplexityAnalysisInter` (`ComplexityAnalysis.cpp:413`) | 46 / 81 | Phase 10 |
-| `GeneralBilinearAccurateDownsampler_c` (`downsamplefuncs.cpp:187`) | 42 / 59 | 8b.C |
-| `IncreasePicBuff` (`decoder.cpp:107`) | 36 / 60 | F80 |
 | `CComplexityAnalysisScreen::GomComplexityAnalysisIntra` (`ComplexityAnalysis.cpp:357`) | 32 / 53 | Phase 10 |
-| `BilateralLumaFilter8_c` (`denoise_filter.cpp:41`) | 30 / 32 | 8b.C |
+| `CheckLine` (`ScrollDetectionFuncs.cpp:37`) | 21 / 33 | Phase 10 |
+| `RequestScreenBlockFeatureStorage` (`svc_motion_estimate.cpp:683`) | 20 / 44 | Phase 10 |
 
 The full list, with the evidence for every row, is the tool's output:
 
@@ -90,10 +100,11 @@ python3 rust/tools/port_census.py --classify
 
 ## 3. What `dead` rests on
 
-153 rows, and they are not a shrug — each has a rule with evidence in
+156 rows, and they are not a shrug — each has a rule with evidence in
 `port_census_classification.txt`. Four families, counted by which marker the rule's
 evidence carries (threaded first, then debug/trace, then the runtime, then the rest):
-**101 threaded · 23 runtime and allocator · 17 SIMD dispatch · 12 debug and trace**.
+**101 threaded · 23 runtime and allocator · 19 SIMD dispatch · 12 debug and trace**
+(SIMD dispatch gained the two general-ratio downsample rows at T8b.C5, F97).
 
 * **The threaded detour, 101 rows.** `CWelsThreadPool` and the task classes were
   deleted at T7.B4 (`common/mod.rs:10–13`, `encoder/mod.rs:42–43`): the encoder forks
@@ -139,7 +150,7 @@ The 9 empty/constant bodies it now reports:
 | Rust | body | C++ |
 |---|---|---|
 | `GetVclNalTemporalId` | *(empty)* | `decoder.cpp:716`, 5 stmts — **fixed in T8b.A3** |
-| `BilateralDenoising` | *(empty)* | `wels_preprocess.cpp`, 14 stmts — 8b.C (refuses since T8b.A5) |
+| ~~`BilateralDenoising`~~ | *(was empty)* | **ported at T8b.C1** — `wels_preprocess.rs:1583` runs the filters in place |
 | `UpdatePpsList` | *(empty)* | `paraset_strategy.cpp`, 15 stmts — 8b.B |
 | `LoadPrevious` | *(empty)* | `paraset_strategy.cpp`, 3 stmts — 8b.B |
 | `UpdateParaSetNum` | *(empty)* | `paraset_strategy.cpp`, 2 stmts — 8b.B |
