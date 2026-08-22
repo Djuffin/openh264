@@ -123,8 +123,8 @@ slicing are unported, and Phase 7 ported both.
 | session | work | tally expected |
 |---|---|---|
 | **A** (Phase 8 session C continuing) — **done**, `925ac828`..`5478ae7e` | the gate + allowlist (T8b.A1); the census instruments + `port_census.py` + the classification file (A2); the decoder option arms whole, the two stub feeders and the per-call reset block (A3, 21 rows); `ForceCodingIDR` — a stub, and an abort behind it (A4, 3 rows + F86); S48 refusals for denoise/downsample (A5); F80 reachable, asset built, **F87** (A6); the F77 assert (A7) | 155 → **179**, then → **165** by S48 |
-| **B** | parameter-set listing strategies (6); parse-only `DecodeParser` with its referee (3) | → **188** |
-| **C** | downsample + denoise + the `sp` preset (**17** rows, not 3 — see session A's note); then the census's missing list, smallest first; **F80's port, which A found reachable and measured as F87** — `IncreasePicBuff`/`DecreasePicBuff` plus grow/shrink on `safe::Pool`, and the asset moves into `res/` in the same commit | → **191** |
+| **B** — brief [`phase8b_session_b.md`](phase8b_session_b.md) | the seed pin (S49) + `--seeds`; parse-only: the three missing pieces under the stub thunk, `ecref --parse-only`, the parity test, the harness part (2 rows now; `ParseOnly_General` needs C's layers); the three listing strategies + `WriteSavcParaset_Listing` + the validation adjustments (6); F88 to a seed and a cause; census reclass of `ParseAccessUnit` (threaded path, dead) | → **173** (165 + 2 + 6); the 17 init-refusal rows stay C's |
+| **C** | downsample + denoise + the `sp` preset (**17** rows, not 3 — see session A's note; `ParseOnly_General` and `SimulcastAVC_SPS_PPS_LISTING` return with them); then the census's missing list, smallest first; **F80's port, which A found reachable and measured as F87** — `IncreasePicBuff`/`DecreasePicBuff` plus grow/shrink on `safe::Pool`, and the asset moves into `res/` in the same commit | → **191** |
 | **D** (if needed) | census residue; the close | — |
 
 *Session A's tally, read twice.* T8b.A4 closed at **179/199**, the brief's target.
@@ -145,7 +145,10 @@ rows and D-poc-1's one (or zero, if the user rules to match upstream); the censu
 missing list empty or every entry owned by name; `sp` in the sweep, byte-identical
 both profiles; every decoder slot with a named referee; `exit` battery PASS unscoped
 **(the phase's only sweep + Miri + bench run, D-gate-3)**; the perf span stated
-against D-perf-4's tripwire, unchanged by this phase.
+against D-perf-4's tripwire, unchanged by this phase. **On the 165 reading**: session A's S48
+refusal took 14 multi-layer rows from passing-for-the-wrong-reason to failing-at-init, so
+the headline number fell while the port got more honest; the exit allowlist is still the
+7 + 1 above, which is why C's downsample port must return all 17 at once.
 
 ## 6. Hand-offs
 
@@ -153,4 +156,9 @@ To **Phase 10**: the 7 screen-content rows by name; `METHOD_SCROLL_DETECTION`,
 `METHOD_SCENE_CHANGE_DETECTION_SCREEN`, `METHOD_COMPLEXITY_ANALYSIS_SCREEN`
 (`processing/mod.rs` table) and `imagerotate` if the census finds it reachable only
 there. To **Phase 9**: everything in the plan's *Inherited from Phase 8* block,
-unchanged, plus whatever raw signatures this phase had to add under tag.
+unchanged, plus whatever raw signatures this phase had to add under tag; and from
+session A: **F84** (two orphaned threaded-decoder functions and the 18 pad kernels only
+they reach — S18 deletions), **F85** (recorded as S22's clause; the tool's docstring
+says it), and **F86's open half** — the unchecked `pShortRefList[iRefIdx + 1]` write
+(`ref_list_mgr_svc.cpp:387–391`; the port panics at `ref_list_mgr_svc.rs:684`), a bound
+to assert in the port's terms.
