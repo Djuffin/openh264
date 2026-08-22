@@ -1,0 +1,95 @@
+# The `test/api` rows the Rust cdylib is known to fail — the allowlist behind
+# `gtest_stretch.sh --check` (Phase 8b session A, T8b.A1).
+#
+#   format:  <gtest full test name> | <owner> | <reason>
+#   blank lines and `#` comments ignored; the name must be the *full* name gtest
+#   prints, parametrized instances spelled out one per row (`.../0`, `/1`, `/2`).
+#
+# `--check` fails when a failing test is NOT here (a regression, or a new failure
+# nobody owns) and when a listed test PASSES (a stale row — a lie about coverage).
+# The tally therefore moves only by editing this file in the same commit as the fix.
+#
+# Owners are the phase/session that will make the row pass. Rows are grouped by the
+# *assertion site* they fail at (S47: a fixture name is a surface), which is stated
+# in each group's header and re-measured by `--check`'s own by-site tally.
+
+# --- decode_api_test.cpp:45 — GetOption(DECODER_OPTION_VCL_NAL) ---------------
+# `iFeedbackVclNalInAu` is never written (`GetVclNalTemporalId` is an empty body at
+# decoder_core.rs:1061) and `decoder_get_opt_c` has no VCL_NAL arm, so the caller's
+# `int` keeps its stack garbage.
+EncodeDecodeTestAPIBase/EncodeDecodeTestAPI.DecoderVclNal/0 | 8b.A | decoder GetOption: no VCL_NAL arm, GetVclNalTemporalId is a stub
+EncodeDecodeTestAPIBase/EncodeDecodeTestAPI.DecoderVclNal/1 | 8b.A | decoder GetOption: no VCL_NAL arm, GetVclNalTemporalId is a stub
+EncodeDecodeTestAPIBase/EncodeDecodeTestAPI.DecoderVclNal/2 | 8b.A | decoder GetOption: no VCL_NAL arm, GetVclNalTemporalId is a stub
+
+# --- decode_api_test.cpp:81 — GetOption(DECODER_OPTION_FRAME_NUM) ------------
+EncodeDecodeTestAPIBase/EncodeDecodeTestAPI.GetOptionFramenum/0 | 8b.A | decoder GetOption: no FRAME_NUM arm
+EncodeDecodeTestAPIBase/EncodeDecodeTestAPI.GetOptionFramenum/1 | 8b.A | decoder GetOption: no FRAME_NUM arm
+EncodeDecodeTestAPIBase/EncodeDecodeTestAPI.GetOptionFramenum/2 | 8b.A | decoder GetOption: no FRAME_NUM arm
+
+# --- decode_api_test.cpp:132 — GetOption(DECODER_OPTION_IDR_PIC_ID) ----------
+# No arm, and `uiCurIdrPicId` is declared and reset but never written.
+EncodeDecodeTestAPIBase/EncodeDecodeTestAPI.GetOptionIDR/0 | 8b.A | decoder GetOption: no IDR_PIC_ID arm, uiCurIdrPicId never written
+EncodeDecodeTestAPIBase/EncodeDecodeTestAPI.GetOptionIDR/1 | 8b.A | decoder GetOption: no IDR_PIC_ID arm, uiCurIdrPicId never written
+EncodeDecodeTestAPIBase/EncodeDecodeTestAPI.GetOptionIDR/2 | 8b.A | decoder GetOption: no IDR_PIC_ID arm, uiCurIdrPicId never written
+
+# --- decode_api_test.cpp:204 — GetOption(DECODER_OPTION_IS_REF_PIC) ----------
+EncodeDecodeTestAPIBase/EncodeDecodeTestAPI.GetOptionIsRefPic/0 | 8b.A | decoder GetOption: no IS_REF_PIC arm
+EncodeDecodeTestAPIBase/EncodeDecodeTestAPI.GetOptionIsRefPic/1 | 8b.A | decoder GetOption: no IS_REF_PIC arm
+EncodeDecodeTestAPIBase/EncodeDecodeTestAPI.GetOptionIsRefPic/2 | 8b.A | decoder GetOption: no IS_REF_PIC arm
+
+# --- decode_api_test.cpp:348 / :404 — GetOption(DECODER_OPTION_TEMPORAL_ID) --
+EncodeDecodeTestAPIBase/EncodeDecodeTestAPI.GetOptionTid_AVC_WITH_PREFIX_NOLOSS/0 | 8b.A | decoder GetOption: no TEMPORAL_ID arm, iFeedbackTidInAu never written
+EncodeDecodeTestAPIBase/EncodeDecodeTestAPI.GetOptionTid_AVC_WITH_PREFIX_NOLOSS/1 | 8b.A | decoder GetOption: no TEMPORAL_ID arm, iFeedbackTidInAu never written
+EncodeDecodeTestAPIBase/EncodeDecodeTestAPI.GetOptionTid_AVC_WITH_PREFIX_NOLOSS/2 | 8b.A | decoder GetOption: no TEMPORAL_ID arm, iFeedbackTidInAu never written
+EncodeDecodeTestAPIBase/EncodeDecodeTestAPI.GetOptionTid_SVC_L1_NOLOSS/0 | 8b.A | decoder GetOption: no TEMPORAL_ID arm, iFeedbackTidInAu never written
+EncodeDecodeTestAPIBase/EncodeDecodeTestAPI.GetOptionTid_SVC_L1_NOLOSS/1 | 8b.A | decoder GetOption: no TEMPORAL_ID arm, iFeedbackTidInAu never written
+EncodeDecodeTestAPIBase/EncodeDecodeTestAPI.GetOptionTid_SVC_L1_NOLOSS/2 | 8b.A | decoder GetOption: no TEMPORAL_ID arm, iFeedbackTidInAu never written
+
+# --- decoder_ec_test.cpp:701 / :789 — the same TEMPORAL_ID read ---------------
+EncodeDecodeTestAPI.Engine_SVC_Switch_I | 8b.A | decoder GetOption: no TEMPORAL_ID arm
+EncodeDecodeTestAPI.Engine_SVC_Switch_P | 8b.A | decoder GetOption: no TEMPORAL_ID arm
+
+# --- encode_options_test.cpp:1990 — GetOption(DECODER_OPTION_PROFILE) --------
+EncodeDecodeTestAPI.ProfileLevelSetting | 8b.A | decoder GetOption: no PROFILE/LEVEL arm
+
+# --- ltr_test.cpp:39 — ForceIntraFrame with LTR on must give an IDR ----------
+EncodeDecodeTestAPIBase/EncodeDecodeTestAPI.GetOptionLTR_ALLIDR/0 | 8b.A | LTR + ForceIntraFrame: the next frame is not reported IDR
+EncodeDecodeTestAPIBase/EncodeDecodeTestAPI.GetOptionLTR_ALLIDR/1 | 8b.A | LTR + ForceIntraFrame: the next frame is not reported IDR
+EncodeDecodeTestAPIBase/EncodeDecodeTestAPI.GetOptionLTR_ALLIDR/2 | 8b.A | LTR + ForceIntraFrame: the next frame is not reported IDR
+
+# --- encode_options_test.cpp:556/656/705/772/844/911 — listing strategies ----
+# `CreateParametersetStrategy` returns None for the three listing modes and
+# `InitializeExt` refuses (the S48 shape, already right); ~310 C++ lines to port.
+EncodeDecodeTestAPI.ParameterSetStrategy_SPS_LISTING_AND_PPS_INCREASING1 | 8b.B | SPS_LISTING_AND_PPS_INCREASING strategy not ported; InitializeExt refuses
+EncodeDecodeTestAPI.ParameterSetStrategy_SPS_LISTING_AND_PPS_INCREASING2 | 8b.B | SPS_LISTING_AND_PPS_INCREASING strategy not ported; InitializeExt refuses
+EncodeDecodeTestAPI.ParameterSetStrategy_SPS_LISTING_AND_PPS_INCREASING3 | 8b.B | SPS_LISTING_AND_PPS_INCREASING strategy not ported; InitializeExt refuses
+EncodeDecodeTestAPI.ParameterSetStrategy_SPS_PPS_LISTING1 | 8b.B | SPS_PPS_LISTING strategy not ported; InitializeExt refuses
+EncodeDecodeTestAPI.ParameterSetStrategy_SPS_PPS_LISTING2 | 8b.B | SPS_PPS_LISTING strategy not ported; InitializeExt refuses
+EncodeDecodeTestAPI.ParameterSetStrategy_SPS_PPS_LISTING3 | 8b.B | SPS_PPS_LISTING strategy not ported; InitializeExt refuses
+
+# --- decode_api_test.cpp:923/1001/1048 — parse-only DecodeParser -------------
+DecodeParseAPI.ParseOnly_General | 8b.B | DecodeParser is a stub: returns dsErrorFree, writes nothing (iNalNum stays 0)
+DecodeParseAPI.ParseOnly_SpecSliceLoss | 8b.B | DecodeParser is a stub: returns dsErrorFree, writes nothing (iNalNum stays 0)
+DecodeParseAPI.ParseOnly_SpecStatistics | 8b.B | DecodeParser is a stub: returns dsErrorFree, writes nothing (iNalNum stays 0)
+
+# --- HashFunctions.h:31 — denoise / multi-layer encodes hash differently -----
+# METHOD_DENOISE and METHOD_DOWNSAMPLE are untranslated (processing/mod.rs:29).
+EncodeFile/EncoderOutputTest.CompareOutput/4 | 8b.C | denoise not ported (BilateralDenoising is an empty body)
+EncodeFile/EncoderOutputTest.CompareOutput/5 | 8b.C | downsample not ported (2 spatial layers; DownsamplePadding returns RET_NOTSUPPORTED, callers drop it)
+EncodeFile/EncoderOutputTest.CompareOutput/7 | 8b.C | downsample not ported (4 spatial layers; DownsamplePadding returns RET_NOTSUPPORTED, callers drop it)
+
+# --- BaseEncoderTest.cpp:92 / encode_options_test.cpp:2195 / encoder_test.cpp:323
+# --- screen content ----------------------------------------------------------
+EncodeFile/EncoderOutputTest.CompareOutput/8 | 10 | screen content: the D-scr-1 guard (encoder_ext.rs:817)
+EncodeFile/EncoderOutputTest.CompareOutput/9 | 10 | screen content: the D-scr-1 guard (encoder_ext.rs:817)
+EncodeFile/EncoderOutputTest.CompareOutput/10 | 10 | screen content: the D-scr-1 guard (encoder_ext.rs:817)
+EncodeFile/EncoderOutputTest.CompareOutput/11 | 10 | screen content: the D-scr-1 guard (encoder_ext.rs:817)
+EncodeFile/EncoderOutputTest.CompareOutput/12 | 10 | screen content: the D-scr-1 guard (encoder_ext.rs:817)
+EncodeDecodeTestAPI.ScreenContent_LosslessLink0_EnableLongTermReference | 10 | screen content: the D-scr-1 guard (encoder_ext.rs:817)
+EncoderInitTest.ScreenContentScrollMotionVectorBounds | 10 | screen content: the D-scr-1 guard (encoder_ext.rs:817)
+
+# --- HashFunctions.h:20 — the POC tiebreak ----------------------------------
+# Deliberate divergence, argued at decoder_conformance_test.rs:238 and corroborated
+# by the JVT gold for CABA2_SVA_B, which upstream itself fails. D-poc-1 is the
+# user's call: keep (JVT-correct) or match upstream (bug-compatible drop-in).
+DecodeFile/DecoderOutputTest.CompareOutput/39 | D-poc-1 | deliberate POC tiebreak divergence, pending the user's ruling

@@ -7,8 +7,10 @@
 #     family   commit + diffharness sweeps st/mt/def/sl in BOTH profiles  (~5 min)
 #     full     family + decode bench + encoder bench + Miri --lib         (default)
 #     exit     full + Miri over the differential integration tests
-#              + the two C-ABI boundary gates: the cdylib's export list and the
-#                external dlopen harness (T8.C3/T8.C5)                 (phase exits)
+#              + the three C-ABI boundary gates: the cdylib's export list, the
+#                external dlopen harness (T8.C3/T8.C5), and upstream's own
+#                `test/api` gtest suite against the cdylib, ratcheted against
+#                `abi_harness/gtest_known_failures.txt` (T8b.A1)       (phase exits)
 #
 #   env:
 #     FFMPEG=/path/to/ffmpeg   required for the encoder bench; without it that
@@ -447,9 +449,10 @@ if [ "${LEVEL_DONE:-0}" != 1 ]; then
 fi
 
 # ---------------------------------------------------------------------------
-# 6b. The C-ABI boundary gates (plan §7.2 gate 7, Phase 8 session C).
+# 6b. The C-ABI boundary gates (plan §7.2 gate 7, Phase 8 session C; the gtest
+#     ratchet joined them in Phase 8b session A, as 6c below).
 #
-# Both of these look at the thing a consumer actually gets — the **cdylib** — and
+# All of these look at the thing a consumer actually gets — the **cdylib** — and
 # neither can be seen from inside the process that `cargo test` runs. The rlib the
 # in-process battery links has no dynamic symbol table and no `dlopen` path, so a
 # broken export list, a wrong struct size, or a thunk that only works when the caller
@@ -459,6 +462,9 @@ fi
 # and the harness decodes the conformance 60 again through it (~1 min together), and
 # because the surface they guard — the ABI — is exactly the surface a phase exit is
 # for. `abi_exports.sh` alone is cheap enough to run by hand at any time.
+#
+# D-gate-3 keeps the sweeps, Miri and the benches at the phase close; these three are
+# what a *session* close runs by hand (charter §4.6), and `exit` runs them again.
 # ---------------------------------------------------------------------------
 # F17's rule applies to both: the verdict is `${PIPESTATUS[0]}`, never the `if`'s,
 # and it is corroborated by a summary line that only a completed run prints.
@@ -486,6 +492,34 @@ if [ "${LEVEL_DONE:-0}" != 1 ]; then
   else
     pass "abi harness: $tally"
   fi
+
+  # -------------------------------------------------------------------------
+  # 6c. Upstream's own `test/api` suite against the cdylib, ratcheted against a
+  # named allowlist (Phase 8b session A, T8b.A1).
+  #
+  # Same shape as the two above — `PIPESTATUS[0]` plus a verdict line only a
+  # completed comparison prints — and here for the same reason: it looks at the
+  # cdylib from outside the process, and it is ~40 s.
+  #
+  # rc 2 is the script's own "prerequisites missing" code (`test/api/*.o`,
+  # `libgtest.a`, `libopenh264.a` — the `make -j8 libraries binaries` products).
+  # That is an environment gap, not a port defect, so it SKIPs loudly with the
+  # remedy rather than reporting a codec failure that was never measured; every
+  # other nonzero is the ratchet firing and fails.
+  # -------------------------------------------------------------------------
+  hdr "gtest test/api against the cdylib (allowlist ratchet)"
+  bash "$HERE/abi_harness/gtest_stretch.sh" --check 2>&1 | tee "$LOGS/gtest_check.log" | grep -vE '^(warning|note|help|error)|^ +[0-9]* *\||^ +\||^ +[-^=]' | tail -20
+  rc=${PIPESTATUS[0]}
+  tally=$(grep -E '^gtest: ' "$LOGS/gtest_check.log" | tail -1 | sed 's/^gtest: //')
+  if [ "$rc" -eq 2 ]; then
+    skip "gtest test/api: prerequisites missing — run 'make -j8 libraries binaries' at the repo root; see $LOGS/gtest_check.log"
+  elif [ "$rc" -ne 0 ]; then
+    fail "gtest test/api: a failure is unlisted, or a listed row passed (rc=$rc) — see $LOGS/gtest_check.log"
+  elif [ -z "$tally" ]; then
+    fail "gtest test/api: exit 0 but no 'gtest: n/n' line — the script died before its verdict; see $LOGS/gtest_check.log"
+  else
+    pass "gtest test/api: $tally"
+  fi
 fi
 
 # ---------------------------------------------------------------------------
@@ -509,6 +543,9 @@ skip "fuzz corpus replay: the fuzz crate (Phase 0 T7) was never built — no cor
 #   run_miri (both steps) PIPESTATUS[0] + totals + zero-test (fixed here)  sound
 #   abi_exports.sh       PIPESTATUS[0] + the `exports: n/n` line             sound
 #   abi_harness/run.sh   PIPESTATUS[0] + the `TALLY` line                    sound
+#   gtest_stretch.sh --check  PIPESTATUS[0] + the `gtest: n/n` line; rc 2 is
+#                        the script's documented "prerequisites missing" and
+#                        SKIPs rather than failing                      sound
 #                        (both written as PIPESTATUS from the start; the `if
 #                        pipeline; then` shape F17 names would have made each of
 #                        them a reporter, and a green ABI gate that never checked
