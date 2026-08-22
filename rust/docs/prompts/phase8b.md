@@ -41,7 +41,7 @@ slicing are unported, and Phase 7 ported both.
 | parse-only `DecodeParser` | **3** | `decode_api_test.cpp:923/1001/1048` — `iNalNum` stays 0 | `decoder_decode_parser_c` (`codec_api.rs:3500`) returns `dsErrorFree` and writes nothing; the decoder core already carries 12 + 7 `bParseOnly` sites (`decoder_core.rs`, `decode_slice.rs`) and `ParseOnlyBsBuffers` (`decoder_context.rs:646`) | `welsDecoderExt.cpp:1180–1262` `DecodeParser`, `:1301–1348` `ParseAccessUnit`; parse-only branches in `decoder_core.cpp` (8), `au_parser.cpp` (4), `decode_slice.cpp` (5), `pic_queue.cpp` (1), `parse_mb_syn_cabac.cpp` (1) |
 | downsample + denoise | **3** | `HashFunctions.h:31` — `EncoderOutputTest` rows 4 (denoise on), 5 (2 spatial layers), 7 (4 layers): hashes differ | `METHOD_DOWNSAMPLE`/`METHOD_DENOISE` untranslated (`processing/mod.rs:29–39`); `BilateralDenoising` is an empty body (`wels_preprocess.rs:1590`); `DownsamplePadding` returns `RET_NOTSUPPORTED` at `:1647` **and both callers drop it (`:1240`, `:1327`)** — a two-layer encode reports success with un-downsampled layers. **Silent** (S48) | `codec/processing/src/denoise/*.cpp` 250 lines, `downsample/*.cpp` 594 lines |
 | screen content | **7** | `BaseEncoderTest.cpp:92` ×5 (`EncoderOutputTest` rows 8–12, all `SCREEN_CONTENT_REAL_TIME`), `encode_options_test.cpp:2195`, `encoder_test.cpp:323` | the D-scr-1 guard (`encoder_ext.rs:817`) | **Phase 10's** |
-| POC tiebreak | **1** | `HashFunctions.h:20` (`DecoderOutputTest.CompareOutput/39`, `test_scalinglist_jm.264`) | deliberate, argued at `decoder_conformance_test.rs:238`, corroborated by the JVT gold for `CABA2_SVA_B` which upstream itself fails | **D-poc-1**: keep (JVT-correct) or match upstream (bug-compatible drop-in) — the user's call; allowlisted with the reason meanwhile |
+| POC tiebreak | **1** | `HashFunctions.h:20` (`DecoderOutputTest.CompareOutput/39`, `test_scalinglist_jm.264`) | deliberate, argued at `decoder_conformance_test.rs:238`, corroborated by the JVT gold for `CABA2_SVA_B` which upstream itself fails | **D-poc-1**: keep (JVT-correct) or match upstream (bug-compatible drop-in) — **decided 2026-08-22: keep** — the row is permanent, with the reason |
 
 **Off the gtest list:**
 
@@ -141,7 +141,8 @@ reference decodes cleanly) with its asset at `tests/data/f80/`, its generator
 (`tools/make_numref_asset.cpp`) and the C++'s row; and the census's 12 `8b.C` rows.
 
 *Exit gate:* `gtest --check` green with an allowlist of **exactly** the 7 Phase 10
-rows and D-poc-1's one (or zero, if the user rules to match upstream); the census's
+rows and D-poc-1's one (decided 2026-08-22: keep the JVT-correct tiebreak; the row is
+permanent); the census's
 missing list empty or every entry owned by name; `sp` in the sweep, byte-identical
 both profiles; every decoder slot with a named referee; `exit` battery PASS unscoped
 **(the phase's only sweep + Miri + bench run, D-gate-3)**; the perf span stated

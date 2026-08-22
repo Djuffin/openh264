@@ -33,7 +33,7 @@ the gate's seed.
    by a raw caller carries `// unsafe-cat: port-raw(Phase 9)` + `#[allow(unsafe_code)]`.
    `unsafe_ratchet.sh check` stays green per commit; a deliberate increase is
    rebaselined in the same commit with the reason in the message.
-6. **Do not touch** D-poc-1 (`CompareOutput/39`), the downsample/denoise family (C's),
+6. **Do not touch** `CompareOutput/39` (D-poc-1 is decided: keep; the row is permanent), the downsample/denoise family (C's),
    screen content (Phase 10), any `port-raw` conversion (Phase 9), perf.
 7. Commit rhythm `T8b.B<n>`; breadcrumbs to `safety_refactor_log.md` as you go (S31);
    findings to `phase8b_findings.md` numbered from **F89**.
@@ -217,7 +217,7 @@ report.
 
 | item | owner |
 |---|---|
-| `CompareOutput/39` (POC tiebreak) | D-poc-1, the user |
+| `CompareOutput/39` (POC tiebreak) | D-poc-1 — decided 2026-08-22: keep; permanent row |
 | downsample/denoise, the 17 init-refusal rows, `ParseOnly_General`'s layers | 8b.C |
 | F80/F87 (`Increase`/`DecreasePicBuff`, `safe::Pool` growth) | 8b.C |
 | screen content (7 rows, census 19) | Phase 10 |
