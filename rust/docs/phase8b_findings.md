@@ -308,7 +308,16 @@ of 124 bytes or more where this stream's are 13 and 8. The codes above are
 and drive the *ordinary* `DecodeFrame2` path over this asset with `ERROR_CON_DISABLE` on
 both links. If that diverges too, the defect is in the decoder's error path and the
 corpus needs a second concealment mode; if it does not, it is in the parse-only arm of
-`DecodeFrameConstruction`. Owner: unassigned.
+`DecodeFrameConstruction`.
+
+**Answered, same session — see F96.** It diverges there too: on the ordinary
+`DecodeFrame2` path with `ERROR_CON_DISABLE` this asset reports `dsBitstreamError`
+where the reference reports `dsRefLost`, at two calls of seventeen, because
+`InitRefPicList` returns `ERR_NONE` in the port and `ERR_INFO_REFERENCE_PIC_LOST` in
+the reference. So the defect is in the decoder's error path and parse-only is the
+messenger. F93's remaining rows — the emitted frame at row 9 that the port does not
+produce, and the `dsFramePending` at row 7 — are what parse-only adds *on top* of
+that, and they should be re-measured once F96 is fixed. Owner: unassigned, after F96.
 
 ## F94 — the SPS_PPS_LISTING structure export reads one PPS and copies 57
 
@@ -373,3 +382,131 @@ The fix is small and mechanical — count statements inside a leading `abi_guard
 `panic_probe!` block rather than treating the invocation as one — and it is not this
 session's, because changing what the instrument reports is a measurement change and
 wants its own commit. Owner: unassigned; the phase close is the natural place.
+
+## F88 — **reproduced at seed 5**, and the assertion is not the one session A recorded
+
+`gtest_stretch.sh --seeds=1..10` (T8b.B1's finder, both links per seed):
+
+```text
+seed 1  rust 173/199   cxx 199/199    rust-only failures: the 26 allowlisted
+seed 2  rust 173/199   cxx 199/199    ditto
+seed 3  rust 173/199   cxx 199/199    ditto
+seed 4  rust 173/199   cxx 199/199    ditto
+seed 5  rust 172/199   cxx 199/199    + EncodeDecodeTestAPI.SetOptionECIDC_SpecificFrameChange
+seed 6  rust 173/199   cxx 199/199    the 26
+seed 7  rust 173/199   cxx 199/199    the 26
+seed 8  rust 173/199   cxx 199/199    the 26
+seed 9  rust 173/199   cxx 199/199    the 26
+seed 10 rust 173/199   cxx 199/199    the 26
+```
+
+**One seed in ten**, against session A's one run in seven unseeded — the same rate,
+and now a name for the case rather than a rate. The C++ link is 199/199 on all ten,
+which is what makes it the port's and not the suite's.
+
+**Seed 5 is the repro**, and it is a whole-suite one: the row only fails inside the
+full run, because a `--gtest_filter` changes the `rand()` sequence the fixtures draw
+their content from.
+
+**The assertion is `decoder_ec_test.cpp:302`, and that line is
+`EXPECT_EQ (dstBufInfo_.iBufferStatus, 1)` — not `EXPECT_TRUE (rv != 0)`.** Session A
+recorded the neighbour one line up. What the row actually reports at seed 5 is
+
+```text
+test/api/decoder_ec_test.cpp:302: Failure
+Expected equality of these values:
+  dstBufInfo_.iBufferStatus
+    Which is: 0
+  1
+```
+
+which changes what the defect is. The context (`decoder_ec_test.cpp:286-302`) is
+**Frame 3, `ERROR_CON_SLICE_COPY`, no loss of its own, decoded after Frame 1 was
+dropped entirely**: `rv != 0` passes — the port does report the construction error —
+and then the reference *conceals and emits a frame* where the port emits nothing.
+
+So F88 is a **concealment** divergence, not an error-reporting one: with slice copy
+enabled and a damaged reference chain, `iBufferStatus` comes back 0 from this port and
+1 from the reference. That it is intermittent follows from the fixture's content being
+`rand()`-derived — whether Frame 3's slices are damaged *enough* to reach the arm
+varies with the encode.
+
+**Owner: unassigned, with the repro attached.** `gtest_stretch.sh --seeds=5..5` and
+read `out/gtest/rust_5.log`. The next step is to instrument `DecodeFrameConstruction`'s
+output decision on that access unit and compare the two links; F96's `ecref_rs` is the
+shape that comparison should take, though this row needs the encoder in the loop and so
+needs the gtest binary rather than a `res/` asset.
+
+## F96 — `ERROR_CON_DISABLE` had no referee in any decode entry point, and the port diverges
+
+F93 named an experiment. It has been run.
+
+`ecref` grew `--ec=<idc>` and `--trace=<level>`, and `build.sh` now builds the same
+program a second time against the **port's** cdylib (`ecref_rs`) — the seven exported
+symbols are all it links, so this is one extra link line and no extra code. Two
+programs, one source, one question each.
+
+**The measurement**, over every one of `res/`'s 63 assets:
+
+```text
+--ec=2  (ERROR_CON_SLICE_COPY, the mode every existing referee runs)
+        60 agree, 3 differ  — CABA2_SVA_B, test_scalinglist_jm (both D-poc-1, by
+                              design) and Error_I_P
+--ec=0  (ERROR_CON_DISABLE, the mode nothing runs)
+        60 agree, 3 differ  — the same three
+```
+
+`Error_I_P.264` is the one whose disagreement is *new at `--ec=0`*, and it is codes
+only — same frame count, same bytes, same `iBufferStatus` on every call, and every
+`GetOption` scalar equal on every call:
+
+```text
+ref   … 0x0,0x0,0x0,0x4,0x0,0x0,0x2,0x0,…,0x4,0x4,0x0,0x2
+port  … 0x0,0x0,0x0,0x4,0x0,0x0,0x4,0x0,…,0x4,0x4,0x0,0x4
+                                ^^^                   ^^^
+```
+
+`0x2` is `dsRefLost`, `0x4` is `dsBitstreamError`, at calls 6 and 16 of 17.
+
+**The arm, from the reference's own trace** (`--trace=8`, which is why that flag
+exists — the default sink prints `WELS_LOG_ERROR` and above, so every `WELS_LOG_WARNING`
+naming an error arm was invisible):
+
+```text
+Debug:reference picture introduced by this frame is lost during transmission! uiTId: 0
+Debug:returned error from decoding:[0x433]
+```
+
+That is `decoder_core.cpp:2708-2718`: `InitRefPicList` returns
+`ERR_INFO_REFERENCE_PIC_LOST`, `HandleReferenceLost` ors `dsRefLost`, and under
+`ERROR_CON_DISABLE` the arm returns immediately — so `WelsDecodeSlice` never runs and
+`HandleReferenceLostL0`'s `dsBitstreamError` is never reached. **In the port
+`InitRefPicList` returns `ERR_NONE`**, the arm is skipped, and the slice decode fails
+instead.
+
+**The narrowing is done; the fix is not.** The divergence is inside `InitRefPicList`
+(`decoder_core.rs:4220`) or one of `WelsInitRefList` / `WelsReorderRefList` /
+`WelsReorderRefList2` beneath it. Two facts for whoever takes it:
+
+* `WelsCheckAndRecoverForFutureDecoding` cannot be it: under `ERROR_CON_DISABLE` its
+  whole body is skipped and it returns `ERR_NONE` in both trees.
+* `WelsReorderRefList`'s three failure returns all *assign* `iErrorCode = dsNoParamSets`
+  first, so a failure there would report `0x12`, not the `0x2` observed. Whatever
+  returns `0x433` here does not touch `iErrorCode`.
+
+**A second, smaller gap found on the way**: the port emits **4 of the reference's 24**
+trace lines on this stream at `--trace=8`, and one of the missing ones is the
+`"reference picture introduced by this frame is lost during transmission!"` at
+`decoder_core.cpp:2713` — the very line that named the arm. Adding it is one statement
+and it is deliberately *not* in this session's commits: it is a behaviour change on the
+trace surface, and it belongs with the fix it helps find, not ahead of it.
+
+**Relationship to F93 and F88.** F93 (parse-only on `Error_I_P`) is the same mode —
+`DecodeParser` forces `ERROR_CON_DISABLE` — and its divergence is larger, so it is
+this plus whatever parse-only adds. F88 is **not** this: its assertion is a
+concealment-mode output, measured above.
+
+**What this says about the corpus.** 2707 rows, all `ERROR_CON_SLICE_COPY`. The
+`--ec=` axis is one flag away from being swept and would have caught this whenever it
+appeared. Adding a second concealment mode to `compare_all.sh` is the obvious next
+instrument and is not this session's (D-gate-3 puts sweeps at the phase close).

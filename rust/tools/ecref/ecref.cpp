@@ -82,6 +82,24 @@ int main(int argc, char** argv) {
   // owns. Prints one row per call, and a per-frame SHA-1 over the composed bytes.
   bool parse_only = false;
   for (int i = 1; i < argc; i++) if (strcmp(argv[i], "--parse-only") == 0) parse_only = true;
+  // `--ec=<idc>` picks `SDecodingParam::eEcActiveIdc` (Phase 8b session B, T8b.B5).
+  // Every referee this project owns runs `ERROR_CON_SLICE_COPY`: the malformed corpus
+  // hardcodes it (`malformed_stream_parity.rs:490`), so does the conformance suite,
+  // so does this tool. **`ERROR_CON_DISABLE` on a damaged stream therefore had no
+  // referee at all**, in any decode entry point — which is what F93 ran into and what
+  // F88's gtest row asserts on. This is the knob that measures it.
+  //   0 ERROR_CON_DISABLE, 1 ERROR_CON_FRAME_COPY, 2 ERROR_CON_SLICE_COPY (default),
+  //   3 ERROR_CON_FRAME_COPY_CROSS_IDR, 4 …_SLICE_COPY_CROSS_IDR, and the rest of
+  //   `codec_app_def.h`'s ERROR_CON_IDC.
+  int ec_idc = (int) ERROR_CON_SLICE_COPY;
+  for (int i = 1; i < argc; i++) if (strncmp(argv[i], "--ec=", 5) == 0) ec_idc = atoi(argv[i] + 5);
+  // `--trace=<level>` raises `DECODER_OPTION_TRACE_LEVEL` (T8b.B5). The default sink
+  // prints `WELS_LOG_ERROR` and above, so every `WELS_LOG_WARNING` the decoder emits —
+  // including the ones that name *which* error arm it took — is invisible without
+  // this. Levels are `codec_app_def.h`'s: 0 QUIET, 1 ERROR, 2 WARNING, 4 INFO,
+  // 8 DEBUG, 16 DETAIL. -1 (the default) leaves the option alone.
+  int trace_level = -1;
+  for (int i = 1; i < argc; i++) if (strncmp(argv[i], "--trace=", 8) == 0) trace_level = atoi(argv[i] + 8);
 
   if (argc >= 2 && strcmp(argv[1], "--stdin") == 0) {
     for (int i = 2; i < argc; i++) {
@@ -92,6 +110,8 @@ int main(int argc, char** argv) {
       else if (strcmp(argv[i], "--options") == 0) { /* handled above */ }
       else if (strcmp(argv[i], "--sps") == 0) { /* handled above */ }
       else if (strcmp(argv[i], "--parse-only") == 0) { /* handled above */ }
+      else if (strncmp(argv[i], "--ec=", 5) == 0) { /* handled above */ }
+      else if (strncmp(argv[i], "--trace=", 8) == 0) { /* handled above */ }
       else { fprintf(stderr, "unknown flag %s\n", argv[i]); return 2; }
     }
     // Read to EOF. An empty blob is a legal corpus entry (`raw.empty`), so a
@@ -255,6 +275,7 @@ int main(int argc, char** argv) {
     pp.bParseOnly = true;
     pp.sVideoProperty.eVideoBsType = VIDEO_BITSTREAM_DEFAULT;
     if (pdec->Initialize(&pp) != 0) { fprintf(stderr, "Initialize\n"); return 2; }
+    if (trace_level >= 0) pdec->SetOption(DECODER_OPTION_TRACE_LEVEL, &trace_level);
 
     SParserBsInfo bs;
     memset(&bs, 0, sizeof(bs));
@@ -300,9 +321,10 @@ int main(int argc, char** argv) {
   SDecodingParam p;
   memset(&p, 0, sizeof(p));
   p.uiTargetDqLayer = UCHAR_MAX;
-  p.eEcActiveIdc = ERROR_CON_SLICE_COPY;
+  p.eEcActiveIdc = (ERROR_CON_IDC) ec_idc;
   p.sVideoProperty.eVideoBsType = VIDEO_BITSTREAM_DEFAULT;
   if (dec->Initialize(&p) != 0) { fprintf(stderr, "Initialize\n"); return 2; }
+  if (trace_level >= 0) dec->SetOption(DECODER_OPTION_TRACE_LEVEL, &trace_level);
 
   // The eleven get-able scalar options, in `codec_app_def.h` order. `GET_STATISTICS`
   // and `GET_SAR_INFO` are struct-valued and are not here; `NUM_OF_THREADS` is the
