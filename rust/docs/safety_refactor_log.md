@@ -15669,3 +15669,48 @@ Two things the tree corrected on the way:
 
 **`res/` gains an asset**, so `ecref/compare_all.sh`'s row count moves at the phase
 close; the new rows are this stream's and are refereed by the test above.
+
+---
+
+## Phase 8b session C — the close (D-gate-3's fast set)
+
+**191/199, allowlist 8: the exit target, reached.** The allowlist is exactly the 7
+Phase 10 screen-content rows and D-poc-1 — every 8b.C row is gone, and every row that
+remains is owned by a later phase or is permanent by design.
+
+| gate | result |
+|---|---|
+| `gates.sh commit` | **OVERALL PASS** — 548 debug / 541 release / 20 ignored, ratchet no per-file increase, duplicate census 57 |
+| `gtest_stretch.sh --check` (SEED=20260822) | rc 0, **`gtest: 191/199, allowlist 8`** |
+| `gtest_stretch.sh --seeds=1..10` | rust **191/199 on all ten**, one distinct failure set; cxx 199/199 |
+| `abi_exports.sh release` | `exports: 7/7 — exactly upstream's seven` |
+| `abi_harness/run.sh` | `TALLY 14 passed / 0 failed` (58 conformance, 5 nodelay, 6 parse-only, 14 encode × 2 profiles) |
+| `ecref/compare_all.sh` | **2902 / 17 output, 2919 / 0 codes** — unchanged from sessions A and B |
+| `ecref_rs` parity | `Error_I_P` and `num_ref_change_320x192`, both concealment modes: identical |
+| targeted diffharness pairs | six, all byte-identical (denoise; 2, 3, 4 layers; 2 layers + denoise; one under RC) |
+| `sweep.sh dl` / `sweep.sh ps` | **76/76** and **90/90** — run once each before adding them to the exit list |
+
+The ratchet moved **down**: `unsafe_fn` 812 → 811, because `BilateralDenoising` stopped
+being an `unsafe fn`. No rebaseline was needed anywhere this session.
+
+**The tally's arc, and what each number measures.** 173 at session B's close → 174
+(T8b.C1, denoise) → **191** (T8b.C2, downsample, seventeen rows at once). The
+seventeen had to return together: fourteen of them were *passing* before T8b.A5 by
+never checking bytes, and S48's refusal is what made them honest. They pass for the
+right reason now, and the referees are byte-level rather than API-level.
+
+**Findings F97–F100**, and three of the brief's inherited ones closed: F80/F87
+(T8b.C3), F96 (T8b.C4) and F88 (by F96, measured across ten seeds). F93 is re-measured
+and narrowed to parse-only's own arm — four rows, owner Phase 9. F95 is corrected: the
+cause was not `abi_guard!`.
+
+**What did not survive contact with the tree**, all four recorded in the findings: the
+brief's headline `_c`-vs-NEON risk (they are bit-identical — F97); the dispatch table
+it described (aarch64 rebinds general-ratio luma — F97); which arm of
+`CDownsampling::Process` runs (`m_bNoSampleBuffer` is `false` on success, so 4:1 is
+cascaded halving, not the quarter kernel — F98); and F96's own narrowing (the
+divergence was one line *above* `InitRefPicList`, and `WelsReorderRefList` has four
+failure returns, not three).
+
+No sweeps beyond the two new presets' single verification run, no Miri, no benches, no
+span here: those are the phase close, next.
