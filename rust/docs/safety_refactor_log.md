@@ -15626,3 +15626,46 @@ the three `GetOptionTid_SVC_L1_NOLOSS` instances and `ParseOnly_General`.
 `/5` and `/7` carry two golden hashes each — upstream's hedge about averaging order.
 The port needs neither indulgence: it is byte-identical to the reference, so it
 matches whichever of the two the reference produces.
+
+---
+
+## T8b.C3 — the decoder's third pool arm (F80/F87), and `safe::Pool`'s first resize
+
+`WelsRequestMem`'s same-resolution-different-queue-size arm, which the port never had:
+`IncreasePicBuff` and `DecreasePicBuff` in `pic_queue.rs`, `Pool::grow` and
+`Pool::reorder_and_shrink` under them, and the branch in `SyncPictureResolutionExt`
+that chooses between them — plus the reference's own log line for the transition,
+ported with the behaviour it describes rather than ahead of it.
+
+**Measured red, twice.** `ecref_rs` on the asset: 34 frames of 48, `dsOutOfMemory` at
+call 34. And the new `tests/decoder_numref_change_test.rs` with the arm reverted:
+`emitted frame count … left: 34, right: 48`. Green after: 48 frames, the reference's
+stream hash, its 57 return codes and its 57 `iBufferStatus` values.
+
+The asset moves from `tests/data/f80/` into **`res/`** in this commit, which is where
+T8b.A6 said it would go — `decoder_reachability_sweep.rs` globs `res/` and would have
+been red on an un-decodable stream until the fix existed.
+
+**`safe/pool.rs`'s "never grows or shrinks" is retired**, and the generation contract
+across a resize is the part that needed deciding rather than transcribing. It is
+written up in full at F80/F87; the short version is that the C++'s identity is the
+pointer and the port's is the slot, so `grow` (which never moves anything) preserves
+handles and `reorder_and_shrink` (which does) invalidates exactly the slots that
+changed occupant. Six new rows in `pool.rs` pin it, and one of them —
+`a_dropped_slot_reused_by_a_later_grow_rejects_the_old_handle` — **failed against the
+first version of `grow`** and is why fresh slots are stamped past every live
+generation rather than at zero.
+
+Two things the tree corrected on the way:
+
+* the generation counter had to be **derived rather than stored**: adding a field to
+  `Pool` changed a debug-profile struct size and tripped
+  `assert_size_by_profile!(SRefList, debug 240, release 120)` in `abi_guard.rs`;
+* the two debug-only rows are `#[cfg(debug_assertions)]`, not
+  `#[cfg_attr(…, ignore)]` — plan §1.4 pins the ignored set at 20 and `ignore` made it
+  22.
+
+`gates.sh commit`: OVERALL PASS, 548 debug / 541 release, ratchet no increase.
+
+**`res/` gains an asset**, so `ecref/compare_all.sh`'s row count moves at the phase
+close; the new rows are this stream's and are refereed by the test above.

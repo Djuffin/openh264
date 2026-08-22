@@ -52,6 +52,7 @@
 
 use std::ffi::{c_char, c_void};
 use crate::decoder::decoder_context::SDecodingParam;
+use crate::decoder::decoder_core::{ERR_INFO_INVALID_PARAM, ERR_INFO_OUT_OF_MEMORY, ERR_NONE};
 
 // ============================================================================
 // Constants & Geometry Macro Definitions
@@ -864,6 +865,158 @@ pub fn CreatePicBuff(
         }
 
         Some(PicPool::over(slots))
+    }
+}
+
+/// `IncreasePicBuff` — `decoder.cpp:107`. **F80/F87.**
+///
+/// A stream that raises its reference-frame count without changing resolution takes
+/// `WelsRequestMem`'s third arm (`decoder.cpp:493-509`), which resizes the pool in
+/// place and keeps decoding. The port had only two of the three arms and answered
+/// `dsOutOfMemory` from the switch onward — `tests/data/f80/num_ref_change_320x192.264`
+/// decoded 34 of its 48 frames.
+///
+/// **Handles survive this.** The C++ `memcpy`s the old `PPicture` array into the front
+/// of the new one, so a picture keeps its position; [`Pool::grow`] appends and leaves
+/// every existing index and generation alone, which is the same statement in the
+/// port's terms. `iCurrentIdx` is carried over for the same reason — it names a slot
+/// that has not moved.
+///
+/// The C++'s partial-failure arm (`iCapacity = iPicIdx`, then `DestroyPicBuff`) is the
+/// `Vec` going out of scope on the early return, exactly as in [`CreatePicBuff`].
+pub fn IncreasePicBuff(
+    pool: &mut PicPool,
+    bParseOnly: bool,
+    kiOldSize: i32,
+    kiPicWidth: i32,
+    kiPicHeight: i32,
+    kiNewSize: i32,
+) -> i32 {
+    if kiOldSize <= 0 || kiNewSize <= 0 || kiPicWidth <= 0 || kiPicHeight <= 0 {
+        return ERR_INFO_INVALID_PARAM;
+    }
+
+    let mut extra: Vec<PicSlot> = Vec::new();
+    for _ in kiOldSize..kiNewSize {
+        let Some(pic) = alloc_picture(bParseOnly, kiPicWidth, kiPicHeight) else {
+            return ERR_INFO_OUT_OF_MEMORY;
+        };
+        extra.push(Some(pic));
+    }
+    pool.slots.grow(extra);
+
+    ResetPoolPictureFlags(pool);
+    ERR_NONE
+}
+
+/// `DecreasePicBuff` — `decoder.cpp:170`. The shrinking half of the same arm.
+///
+/// Not a truncation: when the DPB's previously-decoded picture sits beyond the new
+/// size the C++ moves it to slot 0 and shifts the first `newSize - 1` slots up by one,
+/// so `order` below is a permutation and [`Pool::reorder_and_shrink`] takes it as one.
+/// The pictures no index names are dropped, which is the C++'s `FreePicture` loop and
+/// its `if (iPrevPicIdx != iPicIdx)` guard — the guard is unnecessary here because a
+/// value can only be moved out of the old vector once.
+///
+/// `prev` is the caller's `pPreviousDecodedPictureInDpb`; the returned `Option<PicId>`
+/// is where it now lives and the caller **must** store it back. In the C++ that
+/// re-derivation is free — the `PPicture` follows its picture — and here it is not,
+/// because identity is the slot. Everything else that could name a slot across this
+/// call is cleared rather than remapped, and that is the C++'s own list:
+///
+/// * the three reference lists — `WelsResetRefPic`, which `AllocPicBuffOnNewSeqBegin`
+///   runs before `SyncPictureResolutionExt` (`decoder.cpp:489`);
+/// * every picture's own `pRefPic` graph — cleared below, oss-fuzz 14423;
+/// * the reordering buffers — [`ResetReorderingPictureBuffers`], called below;
+/// * `pDec` — the caller nulls it, as `decoder.cpp:537` does for every arm that got
+///   this far;
+/// * `pECRefPic` — rebuilt from `pRefList` at each use (`error_concealment.rs:691`
+///   clears all sixteen before filling them), and `pRefList` is one of the three above.
+///
+/// A slot that keeps its own value keeps its handles, so the common shrink — no
+/// reorder — invalidates nothing at all.
+///
+/// [`ResetReorderingPictureBuffers`]: crate::decoder::decoder_core::ResetReorderingPictureBuffers
+pub fn DecreasePicBuff(
+    pCtx: &mut SWelsDecoderContext,
+    kiOldSize: i32,
+    kiPicWidth: i32,
+    kiPicHeight: i32,
+    kiNewSize: i32,
+) -> i32 {
+    if kiOldSize <= 0 || kiNewSize <= 0 || kiPicWidth <= 0 || kiPicHeight <= 0 {
+        return ERR_INFO_INVALID_PARAM;
+    }
+
+    {
+        let SWelsDecoderContext { pPictReoderingStatus, pPictInfoList, .. } = &mut *pCtx;
+        crate::decoder::decoder_core::ResetReorderingPictureBuffers(
+            pPictReoderingStatus,
+            pPictInfoList,
+            false,
+        );
+    }
+
+    let old_size = kiOldSize as usize;
+    let new_size = kiNewSize as usize;
+    // The C++ searches the old array for the pointer and leaves `iPrevPicIdx ==
+    // kiOldSize` when it is not there; here the id *is* the index, and `None` is the
+    // "not found" the search reported.
+    let prev = pCtx.pLastDecPicInfo.pPreviousDecodedPictureInDpb;
+    let iPrevPicIdx = prev.map_or(old_size, |id| id.index());
+
+    let (order, cursor, prev_moved_to_front): (Vec<usize>, i32, bool) =
+        if iPrevPicIdx < old_size && iPrevPicIdx >= new_size {
+            // found, and beyond the new size: it becomes slot 0 and the rest shift up
+            let mut order = Vec::with_capacity(new_size);
+            order.push(iPrevPicIdx);
+            order.extend(0..new_size - 1);
+            (order, 0, true)
+        } else {
+            // either not found, or already inside the new size and staying put
+            let cursor = if iPrevPicIdx < new_size { iPrevPicIdx as i32 } else { 0 };
+            ((0..new_size).collect(), cursor, false)
+        };
+
+    let Some(pool) = pCtx.pPicBuff.as_deref_mut() else {
+        return ERR_INFO_INVALID_PARAM;
+    };
+    // The dropped pictures are the C++'s `FreePicture` set.
+    drop(pool.slots.reorder_and_shrink(&order));
+    pool.cursor = cursor;
+
+    // "all references' references have to be reset" — oss-fuzz 14423. The C++ walks
+    // each list until the first null; clearing the whole array is the same state and
+    // does not depend on the array being null-terminated.
+    for id in pool.slots.ids().collect::<Vec<_>>() {
+        if let Some(pic) = pool.slots.get_mut(id).as_deref_mut() {
+            pic.pRefPic = [[None; 17]; LIST_A];
+        }
+    }
+    ResetPoolPictureFlags(pool);
+
+    if prev_moved_to_front {
+        // Re-derived, not carried: the picture moved, so its old id names another
+        // slot now (and would fault the generation check in a debug build).
+        let front = pool.id(0);
+        pCtx.pLastDecPicInfo.pPreviousDecodedPictureInDpb = Some(front);
+    }
+    ERR_NONE
+}
+
+/// The five per-picture fields both resize paths reset over the *whole* new pool —
+/// `decoder.cpp:150-157` and `:240-246`, character for character the same loop in
+/// both, including that it touches the pictures that were kept and not only the ones
+/// that were just allocated.
+fn ResetPoolPictureFlags(pool: &mut PicPool) {
+    for id in pool.slots.ids().collect::<Vec<_>>() {
+        if let Some(pic) = pool.slots.get_mut(id).as_deref_mut() {
+            pic.bUsedAsRef = false;
+            pic.bIsLongRef = false;
+            pic.iRefCount = 0;
+            pic.pSetUnRef = None;
+            pic.bIsComplete = false;
+        }
     }
 }
 

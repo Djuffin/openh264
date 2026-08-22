@@ -4,7 +4,7 @@
 //
 //   build: c++ -std=c++11 -I codec/api/wels -o mk rust/tools/make_numref_asset.cpp \
 //              "$PWD/libopenh264.dylib"
-//   run:   DYLD_LIBRARY_PATH=$PWD ./mk rust/crates/openh264-rs/tests/data/f80/num_ref_change_320x192.264
+//   run:   DYLD_LIBRARY_PATH=$PWD ./mk res/num_ref_change_320x192.264
 //   check: DYLD_LIBRARY_PATH=$PWD rust/tools/ecref/ecref <asset> 99999999 --sps
 //
 // **`SetOption(ENCODER_OPTION_NUMBER_REF)` cannot make this stream.**
@@ -18,11 +18,11 @@
 // multi-SPS stream repeating one `num_ref_frames`, and the only one that changes
 // anything (`Error_I_P.264`) changes the *resolution*, which is the second arm.
 //
-// The asset lives under `tests/data/f80/` and **not** in `res/` on purpose:
-// `decoder_reachability_sweep.rs` globs `res/` and this stream makes the port
-// return `dsOutOfMemory` — an arm that sweep documents as unreachable. Moving it
-// into `res/` is part of the commit that ports `IncreasePicBuff`/`DecreasePicBuff`;
-// until then the sweep would be red for a defect nobody had fixed yet. See F87.
+// **The asset lives in `res/` since T8b.C3**, the commit that ported
+// `IncreasePicBuff`/`DecreasePicBuff`. It was held under `tests/data/f80/` until then
+// because `decoder_reachability_sweep.rs` globs `res/` and this stream made the port
+// return `dsOutOfMemory`, so the sweep would have been red for a defect nobody had
+// fixed yet. Its referee is `tests/decoder_numref_change_test.rs`. See F80/F87.
 #include <cstdio>
 #include <cstring>
 #include <climits>
