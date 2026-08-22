@@ -2248,6 +2248,19 @@ impl Decoder {
         );
     }
 
+    /// `CWelsDecoder::Initialize`'s null-parameter arm — `welsDecoderExt.cpp:266-268`.
+    ///
+    /// On the impl and not in the thunk because the message needs the trace object,
+    /// which is the impl's; the thunk's job is to notice the null.
+    pub(crate) fn report_init_null_param(&mut self) -> c_long {
+        crate::common::wels_trace::WelsLog(
+            ptr::addr_of_mut!(self.trace.m_sLogCtx),
+            crate::common::wels_trace::WELS_LOG_ERROR,
+            "CWelsDecoder::Initialize(), invalid input argument.",
+        );
+        CM_INIT_PARA_ERROR as c_long
+    }
+
     /// # Safety
     ///
     /// `ctx` is handed back to the trace callback on every message until it is
@@ -2598,10 +2611,19 @@ impl Decoder {
 
 unsafe extern "C" fn decoder_init_c(this: *mut ISVCDecoder, pParam: *const SDecodingParam) -> c_long {
     abi_guard!("ISVCDecoder::Initialize", unsafe { decoder_log(this) }, CM_INIT_PARA_ERROR as c_long, {
-        if this.is_null() || pParam.is_null() {
+        if this.is_null() {
             return CM_INIT_PARA_ERROR as c_long;
         }
         let dec_impl = this as *mut CWelsDecoderImpl;
+        // **T8.C6 — `|| pParam.is_null()` stood here**, and this is T8.B6's encoder
+        // note applied to the decoder: `welsDecoderExt.cpp:266-268` logs
+        // `"invalid input argument."` at `WELS_LOG_ERROR` before returning
+        // `cmInitParaError`. Short-circuiting returned the same code and swallowed
+        // the message, which was invisible while the default sink was `None` and is
+        // observable now that D-api-1 makes it upstream's stderr writer.
+        if pParam.is_null() {
+            return unsafe { (*dec_impl).core.report_init_null_param() };
+        }
         unsafe {
             // **F76, T8.B1 — the caller's block, read as a C caller may have written
             // it, and why this is eight lines rather than `*pParam`.**
@@ -3392,6 +3414,13 @@ pub unsafe extern "C" fn WelsCreateDecoder(ppDecoder: *mut *mut ISVCDecoder) -> 
         // after the object has its final address. It is the `this = 0x…` of every
         // trace line and nothing else, which is why it travels as an address.
         (*dec).core.trace.SetCodecInstance(dec as usize);
+        // **`welsDecoderExt.cpp:164`, and it was not ported** (T8.C6). The trace
+        // object's constructor sets `WELS_LOG_WARNING`, which is the *encoder's*
+        // default and stays so; `CWelsDecoder`'s constructor then lowers this one to
+        // `WELS_LOG_ERROR`. Missing it left the decoder a level more talkative than
+        // the reference — invisible while the default sink was `None`, and one line
+        // per `BA_MW_D_IDR_LOST`-class stream once D-api-1 turned the sink on.
+        (*dec).core.trace.SetTraceLevel(crate::common::wels_trace::WELS_LOG_ERROR as u32);
         *ppDecoder = dec as *mut ISVCDecoder;
         CM_RESULT_SUCCESS as c_long
     })
