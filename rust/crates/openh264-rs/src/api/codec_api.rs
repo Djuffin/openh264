@@ -13,6 +13,21 @@
     unused_unsafe
 )]
 
+// **T8.C7 — the C-ABI module is denied like every other module.**
+//
+// S22's clause exempted `src/api/` from `deny(unsafe_code)` on the grounds that it is
+// the boundary and everything in it is unsafe by definition. That exemption is what
+// kept this file out of every instrument's scope until Phase 8 opened, and the plan's
+// own answer to it — "api/ gets a module-wide allow" — has the same shape: one blanket
+// permission over 2,700 lines, which says nothing about any particular line.
+//
+// D-exit-1's regime instead: the module denies, and **every surviving item carries its
+// own `#[allow(unsafe_code)]` with a category tag**. The category here is `C-ABI` by
+// construction — a thunk, an export, a `*_raw` convenience, a vtable accessor or a
+// union accessor — and anything that is not gets named with its own reason. The
+// count is what a later session compares against.
+#![deny(unsafe_code)]
+
 use std::ffi::{c_char, c_long, c_void};
 use std::ptr;
 use crate::decoder::decoder_context::slice_header_of;
@@ -905,6 +920,7 @@ impl SBufferInfoUsrData {
     /// discriminant question and never was. Reading a union field is `unsafe` wherever
     /// it is spelled, though, so the two spellings live here rather than in
     /// `src/decoder/`, which is the whole of what this accessor is for.
+    // unsafe-cat: C-ABI
     #[allow(unsafe_code)] // the ABI union — one arm, so every read is the arm last written
     #[inline]
     pub fn sys(&self) -> &SSysMEMBuffer {
@@ -913,6 +929,7 @@ impl SBufferInfoUsrData {
     }
 
     /// [`sys`](Self::sys)'s mutable form.
+    // unsafe-cat: C-ABI
     #[allow(unsafe_code)] // the ABI union — one arm, so every read is the arm last written
     #[inline]
     pub fn sys_mut(&mut self) -> &mut SSysMEMBuffer {
@@ -921,6 +938,8 @@ impl SBufferInfoUsrData {
     }
 }
 
+// unsafe-cat: C-ABI
+#[allow(unsafe_code)]
 impl std::fmt::Debug for SBufferInfoUsrData {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         unsafe { write!(f, "SBufferInfoUsrData({:?})", self.sSystemBuffer) }
@@ -1137,6 +1156,8 @@ pub struct ISVCEncoder {
     pub lpVtbl: *const ISVCEncoderVtbl,
 }
 
+// unsafe-cat: C-ABI
+#[allow(unsafe_code)]
 // **F23 — the receiver is a pointer, and it has to be** (T8.A3; the rule is
 // `prompts/phase8.md` §1, S28 at the ABI layer).
 //
@@ -1313,6 +1334,8 @@ pub struct ISVCDecoder {
     pub lpVtbl: *const ISVCDecoderVtbl,
 }
 
+// unsafe-cat: C-ABI
+#[allow(unsafe_code)]
 impl ISVCDecoder {
     // F23's rule, its `# Safety` contract and why option (a) was chosen: the note
     // above `impl ISVCEncoder`. Both interfaces are the same eight bytes and the
@@ -1487,6 +1510,8 @@ impl Default for Encoder {
     }
 }
 
+// unsafe-cat: C-ABI
+#[allow(unsafe_code)]
 impl Encoder {
     pub fn new() -> Self {
         Self(crate::encoder::wels_encoder_ext::CWelsH264SVCEncoder::new())
@@ -1676,6 +1701,8 @@ pub struct CWelsDecoderImpl {
 // any hard error.
 // ===========================================================================
 
+// unsafe-cat: C-ABI
+#[allow(unsafe_code)]
 /// The trace settings to report a caught panic through, read from the impl object
 /// **before** the guarded body runs.
 ///
@@ -1694,6 +1721,8 @@ unsafe fn decoder_log(this: *mut ISVCDecoder) -> Option<crate::common::wels_trac
     unsafe { Some((*(this as *mut CWelsDecoderImpl)).core.trace.log_context()) }
 }
 
+// unsafe-cat: C-ABI
+#[allow(unsafe_code)]
 /// [`decoder_log`] for the encoder side.
 ///
 /// # Safety
@@ -1802,6 +1831,8 @@ macro_rules! panic_probe {
 // allocation and never borrowed as `ISVCEncoder`, which is one pointer wide.
 // ===========================================================================
 
+// unsafe-cat: C-ABI
+#[allow(unsafe_code)]
 /// `ISVCEncoder::Initialize` — `codec_api.h:196`.
 ///
 /// # Safety
@@ -1832,6 +1863,8 @@ unsafe extern "C" fn encoder_init_c(this: *mut ISVCEncoder, pParam: *const SEncP
     })
 }
 
+// unsafe-cat: C-ABI
+#[allow(unsafe_code)]
 /// `ISVCEncoder::InitializeExt` — `codec_api.h:203`.
 ///
 /// # Safety
@@ -1850,6 +1883,8 @@ unsafe extern "C" fn encoder_init_ext_c(this: *mut ISVCEncoder, pParam: *const S
     })
 }
 
+// unsafe-cat: C-ABI
+#[allow(unsafe_code)]
 /// `ISVCEncoder::GetDefaultParams` — `codec_api.h:210`.
 ///
 /// # Safety
@@ -1874,6 +1909,8 @@ unsafe extern "C" fn encoder_get_default_c(this: *mut ISVCEncoder, pParam: *mut 
     })
 }
 
+// unsafe-cat: C-ABI
+#[allow(unsafe_code)]
 /// `ISVCEncoder::Uninitialize` — `codec_api.h:216`.
 ///
 /// # Safety
@@ -1891,6 +1928,8 @@ unsafe extern "C" fn encoder_uninit_c(this: *mut ISVCEncoder) -> i32 {
     })
 }
 
+// unsafe-cat: C-ABI
+#[allow(unsafe_code)]
 /// `ISVCEncoder::EncodeFrame` — `codec_api.h:224`.
 ///
 /// # Safety
@@ -1923,6 +1962,8 @@ unsafe extern "C" fn encoder_encode_frame_c(this: *mut ISVCEncoder, kpSrcPic: *c
     })
 }
 
+// unsafe-cat: C-ABI
+#[allow(unsafe_code)]
 /// `ISVCEncoder::EncodeParameterSets` — `codec_api.h:231`.
 ///
 /// # Safety
@@ -1945,6 +1986,8 @@ unsafe extern "C" fn encoder_encode_param_c(this: *mut ISVCEncoder, pBsInfo: *mu
     })
 }
 
+// unsafe-cat: C-ABI
+#[allow(unsafe_code)]
 /// `ISVCEncoder::ForceIntraFrame` — `codec_api.h:238`.
 ///
 /// # Safety
@@ -1963,6 +2006,8 @@ unsafe extern "C" fn encoder_force_intra_c(this: *mut ISVCEncoder, bIDR: bool) -
     })
 }
 
+// unsafe-cat: C-ABI
+#[allow(unsafe_code)]
 /// `ISVCEncoder::SetOption` — `codec_api.h:245`.
 ///
 /// # Safety
@@ -1988,6 +2033,8 @@ unsafe extern "C" fn encoder_set_opt_c(this: *mut ISVCEncoder, eOptionId: ENCODE
     })
 }
 
+// unsafe-cat: C-ABI
+#[allow(unsafe_code)]
 /// `ISVCEncoder::GetOption` — `codec_api.h:252`.
 ///
 /// # Safety
@@ -2044,6 +2091,8 @@ fn video_bs_type_from_raw(raw: i32) -> VIDEO_BITSTREAM_TYPE {
     }
 }
 
+// unsafe-cat: C-ABI
+#[allow(unsafe_code)]
 impl Decoder {
     /// `CWelsDecoder`'s constructor (`welsDecoderExt.cpp:155`), minus the members
     /// that are the context's since T8.A7.
@@ -2609,6 +2658,8 @@ impl Decoder {
 /// see the block at the head of the body. A `&SDecodingParam` here would be a
 /// safety claim the C ABI does not make.
 
+// unsafe-cat: C-ABI
+#[allow(unsafe_code)]
 unsafe extern "C" fn decoder_init_c(this: *mut ISVCDecoder, pParam: *const SDecodingParam) -> c_long {
     abi_guard!("ISVCDecoder::Initialize", unsafe { decoder_log(this) }, CM_INIT_PARA_ERROR as c_long, {
         if this.is_null() {
@@ -2661,6 +2712,8 @@ unsafe extern "C" fn decoder_init_c(this: *mut ISVCDecoder, pParam: *const SDeco
     })
 }
 
+// unsafe-cat: C-ABI
+#[allow(unsafe_code)]
 /// `ISVCDecoder::Uninitialize` — `codec_api.h:458`.
 ///
 /// # Safety
@@ -2677,6 +2730,8 @@ unsafe extern "C" fn decoder_uninit_c(this: *mut ISVCDecoder) -> c_long {
     })
 }
 
+// unsafe-cat: C-ABI
+#[allow(unsafe_code)]
 /// `ISVCDecoder::DecodeFrame` — `codec_api.h:466`. Deprecated upstream; kept
 /// because the slot is.
 ///
@@ -2728,6 +2783,8 @@ unsafe extern "C" fn decoder_decode_frame_c(
     })
 }
 
+// unsafe-cat: C-ABI
+#[allow(unsafe_code)]
 /// `ISVCDecoder::DecodeFrameNoDelay` — `codec_api.h:479`.
 ///
 /// # Safety
@@ -2753,6 +2810,8 @@ unsafe extern "C" fn decoder_decode_frame_nodelay_c(
 }
 
 
+// unsafe-cat: C-ABI
+#[allow(unsafe_code)]
 /// Matches `void CWelsDecoder::BufferingReadyPicture (...)` in `welsDecoderExt.cpp`.
 ///
 /// Moves a just-decoded picture out of `pDstInfo` and into the reordering slot
@@ -2785,6 +2844,8 @@ unsafe fn pool_for(
         .map_or(ptr::null_mut(), |pool| pool)
 }
 
+// unsafe-cat: C-ABI
+#[allow(unsafe_code)]
 unsafe fn BufferingReadyPicture(
     pCtx: *mut crate::decoder::decoder_core::SWelsDecoderContext,
     _ppDst: *mut *mut u8,
@@ -2846,6 +2907,8 @@ unsafe fn BufferingReadyPicture(
     }
 }
 
+// unsafe-cat: C-ABI
+#[allow(unsafe_code)]
 /// Releases the buffered picture whose slot is referenced by `iPictInfoIndex`,
 /// dropping the DPB reference taken in [`BufferingReadyPicture`]. Shared tail of
 /// both `ReleaseBufferedReadyPicture*` functions in `welsDecoderExt.cpp`.
@@ -2887,6 +2950,8 @@ unsafe fn EmitBufferedPicture(
     (*pCtx).pPictReoderingStatus.iNumOfPicts -= 1;
 }
 
+// unsafe-cat: C-ABI
+#[allow(unsafe_code)]
 /// Matches `void CWelsDecoder::ReleaseBufferedReadyPictureNoReorder (...)`.
 ///
 /// Picks the buffered picture with the smallest decoding timestamp, i.e. plain
@@ -2950,6 +3015,8 @@ unsafe fn ReleaseBufferedReadyPictureNoReorder(
     }
 }
 
+// unsafe-cat: C-ABI
+#[allow(unsafe_code)]
 /// Matches `void CWelsDecoder::ReleaseBufferedReadyPictureReorder (...)`.
 ///
 /// Picks the buffered picture with the smallest (seqNum, POC) and emits it only
@@ -3032,6 +3099,8 @@ unsafe fn ReleaseBufferedReadyPictureReorder(
     }
 }
 
+// unsafe-cat: C-ABI
+#[allow(unsafe_code)]
 /// Matches `DECODING_STATE CWelsDecoder::ReorderPicturesInDisplay (...)`.
 ///
 /// Baseline streams never reorder, so the picture passes straight through and
@@ -3086,6 +3155,8 @@ unsafe fn ReorderPicturesInDisplay(
     }
 }
 
+// unsafe-cat: C-ABI
+#[allow(unsafe_code)]
 /// `ISVCDecoder::DecodeFrame2` — `codec_api.h:490`.
 ///
 /// # Safety
@@ -3137,6 +3208,8 @@ unsafe extern "C" fn decoder_decode_frame2_c(
     })
 }
 
+// unsafe-cat: C-ABI
+#[allow(unsafe_code)]
 /// `ISVCDecoder::DecodeFrameEx` — `codec_api.h:503`.
 ///
 /// # Safety
@@ -3164,6 +3237,8 @@ unsafe extern "C" fn decoder_decode_frame_ex_c(
     })
 }
 
+// unsafe-cat: C-ABI
+#[allow(unsafe_code)]
 /// `ISVCDecoder::SetOption` — `codec_api.h:518`.
 ///
 /// # Safety
@@ -3245,6 +3320,8 @@ unsafe extern "C" fn decoder_set_opt_c(this: *mut ISVCDecoder, eOptionId: DECODE
     })
 }
 
+// unsafe-cat: C-ABI
+#[allow(unsafe_code)]
 /// `ISVCDecoder::GetOption` — `codec_api.h:525`.
 ///
 /// # Safety
@@ -3296,6 +3373,8 @@ unsafe extern "C" fn decoder_get_opt_c(this: *mut ISVCDecoder, eOptionId: DECODE
     })
 }
 
+// unsafe-cat: C-ABI
+#[allow(unsafe_code)]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn WelsCreateSVCEncoder(ppEncoder: *mut *mut ISVCEncoder) -> i32 {
     abi_guard!("WelsCreateSVCEncoder", None, CM_MALLOC_MEM_ERROR, {
@@ -3324,6 +3403,8 @@ pub unsafe extern "C" fn WelsCreateSVCEncoder(ppEncoder: *mut *mut ISVCEncoder) 
     })
 }
 
+// unsafe-cat: C-ABI
+#[allow(unsafe_code)]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn WelsDestroySVCEncoder(pEncoder: *mut ISVCEncoder) {
     abi_guard!("WelsDestroySVCEncoder", unsafe { encoder_log(pEncoder) }, (), {
@@ -3335,6 +3416,8 @@ pub unsafe extern "C" fn WelsDestroySVCEncoder(pEncoder: *mut ISVCEncoder) {
     })
 }
 
+// unsafe-cat: C-ABI
+#[allow(unsafe_code)]
 /// # Safety
 ///
 /// * `this` as in [`decoder_init_c`].
@@ -3360,6 +3443,8 @@ unsafe extern "C" fn decoder_flush_frame_c(this: *mut ISVCDecoder, ppDst: *mut *
     })
 }
 
+// unsafe-cat: C-ABI
+#[allow(unsafe_code)]
 /// `ISVCDecoder::DecodeParser` — `codec_api.h:511`.
 ///
 /// # Safety
@@ -3376,6 +3461,8 @@ unsafe extern "C" fn decoder_decode_parser_c(_this: *mut ISVCDecoder, _pSrc: *co
     })
 }
 
+// unsafe-cat: C-ABI
+#[allow(unsafe_code)]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn WelsCreateDecoder(ppDecoder: *mut *mut ISVCDecoder) -> c_long {
     abi_guard!("WelsCreateDecoder", None, CM_MALLOC_MEM_ERROR as c_long, {
@@ -3426,6 +3513,8 @@ pub unsafe extern "C" fn WelsCreateDecoder(ppDecoder: *mut *mut ISVCDecoder) -> 
     })
 }
 
+// unsafe-cat: C-ABI
+#[allow(unsafe_code)]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn WelsGetDecoderCapability(pDecCapability: *mut SDecoderCapability) -> i32 {
     abi_guard!("WelsGetDecoderCapability", None, CM_INIT_PARA_ERROR, {
@@ -3447,6 +3536,8 @@ pub unsafe extern "C" fn WelsGetDecoderCapability(pDecCapability: *mut SDecoderC
     })
 }
 
+// unsafe-cat: C-ABI
+#[allow(unsafe_code)]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn WelsDestroyDecoder(pDecoder: *mut ISVCDecoder) {
     abi_guard!("WelsDestroyDecoder", unsafe { decoder_log(pDecoder) }, (), {
@@ -3469,6 +3560,8 @@ pub unsafe extern "C" fn WelsDestroyDecoder(pDecoder: *mut ISVCDecoder) {
 pub(crate) mod abi_test_driver {
     use super::*;
 
+    // unsafe-cat: C-ABI(test)
+    #[allow(unsafe_code)]
     /// Decodes `stream` through the C ABI and returns `(frames out, last frame's
     /// dimensions)`.
     ///
@@ -3726,6 +3819,8 @@ pub(crate) mod abi_test_driver {
         }
     }
 
+    // unsafe-cat: C-ABI(test)
+    #[allow(unsafe_code)]
     /// Encodes `frames` frames of [`moving_i420`] at `width` x `height` through the
     /// C ABI, and returns what came out frame by frame together with the encoder's
     /// **own** report of the resolution it is configured for.
@@ -3902,6 +3997,8 @@ pub(crate) mod abi_test_driver {
 mod f23_boundary_provenance {
     use super::*;
 
+    // unsafe-cat: C-ABI(test)
+    #[allow(unsafe_code)]
     /// **F23, and its encoder twin, as a probe.**
     ///
     /// The consumer conveniences on `ISVCDecoder`/`ISVCEncoder` used to take `&mut
@@ -4078,6 +4175,8 @@ mod send_verdict {
 mod abi_panic_guard {
     use super::*;
 
+    // unsafe-cat: C-ABI(test)
+    #[allow(unsafe_code)]
     /// A panic inside a decoder entry comes back as that entry's failure code, and
     /// the process is still here to assert it.
     ///
@@ -4123,6 +4222,8 @@ mod abi_panic_guard {
         }
     }
 
+    // unsafe-cat: C-ABI(test)
+    #[allow(unsafe_code)]
     /// The encoder half: `cmUnknownReason`, which is what an encode entry has for
     /// "something went wrong and it was not your parameters".
     #[test]
