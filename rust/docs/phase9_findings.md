@@ -196,3 +196,102 @@ Two smaller facts found the same way:
   in `kernels_differential_phase2.rs`. `cargo test` alone builds integration tests,
   so it would have caught these — but the same change class reaches benches, which
   it does not build. The gate's own header documents that trap from Phase 5.
+
+## F104 — the plane family's cost tables are gated on **two** families, not one; the caller census says so
+
+Session B's step 0 built the plane family's **caller** census
+(`rust/tools/phase9_plane_callers.py`, `rust/docs/phase9_plane_census.md`): every
+call site of a raw plane entry point, with each pointer operand classified by the
+surface it names. 99 call sites (plus 60 kernel-internal composition calls that
+die with their shims). The verdict distribution is the session's scope:
+
+| verdict | sites | meaning |
+|---|---:|---|
+| `safe-now` | 64 | every plane operand is source / reference / owned scratch |
+| `blocked` | 22 | an operand is the **reconstruction** picture (F107) |
+| `coeff` | 13 | an operand is a coefficient block — family 3's (F103) |
+
+The headline is not the distribution, it is the **pairing**:
+
+* **Every one of the 37 cost-table call sites** (`pfSampleSad`, `pfSampleSatd`,
+  `pfSample4Sad`, and the `md_cost`/`me_cost` selectors) is `safe-now` on its
+  plane operands — and **25 of the 37 pair a source/reference operand with an
+  `SMbCache` prediction buffer** reached through `md::mem_pred_*`. A table has one
+  type, so re-typing the three slots to safe function pointers is atomic across
+  all 37 sites, and it cannot happen until *both* the plane roots (source and
+  reference, through the pools) *and* the `SMbCache` buffers (family 3, session D)
+  are safe. Twelve sites are source x reference only
+  (`svc_motion_estimate.rs` x10, `CalUVSadCost`, `scene_change_detection.rs:87`)
+  and would convert on the plane roots alone; they cannot go first because the slot
+  type is shared with the other 25.
+* The same double gate holds for **`mc`** (23 sites, all reference x cache) and for
+  **`dct`** (13 sites, all coefficient).
+
+Two consequences the brief and the charter do not carry:
+
+1. **`common/sad_common.rs`, `common/mc.rs` and `encoder/sample.rs` cannot reach
+   `#![deny(unsafe_code)]` before family 3.** The charter's §4 has `common/` going
+   `deny` "as the encoder callers that reach their shims convert", and session B's
+   brief lists `sad_common.rs` under `deny` as an acceptance criterion. Neither is
+   available while the second operand of every cost call is an SMbCache buffer.
+2. **The DCT table is coefficient-gated, all 13 sites.** Session B's brief scopes it
+   as "DCT operands are source picture (safe) + prediction buffer (owned) -> safe
+   now"; the `pDct` parameter is neither. It is `md::coeff_level(pMbCache)` or
+   `md::dct(pMbCache)` at every call site — the SMbCache walking cursor F103
+   describes, in the same file and the same loop shape:
+
+   ```rust
+   // svc_encode_mb.rs:494-511, WelsEncRecI16x16Y
+   let mut pRes = crate::encoder::md::coeff_level(pMbCache);
+   ...
+   WelsDctMb(pRes, (*pMbCache).SPicData.pEncMb[0], kiEncStride, pBestPred,
+             (*pFuncList).pfDctFourT4);
+   ```
+
+   `PDctFunc` therefore follows its coefficient operand into family 3, exactly as
+   the fourteen `PQuant*`/`PScan*` slots did.
+
+**What is left for the plane family alone**: the intra-prediction table (5 sites,
+all reconstruction-gated) and 17 of the 21 copy sites (reconstruction
+destination) — i.e. the *whole* remainder is F107's, and it is session C's.
+The plane family, read from the callers, is not "convert the plane roots and the
+shims fall out". It is: **plane roots first (they unblock nothing on their own),
+then family 3, then the tables flip in one commit each.**
+
+Method note, and it is the same one F103 made from the other side: a signature
+census answers "what could this family convert if nothing else were in the way",
+and the answer to the question a session actually needs — "what can I convert
+now" — is only in the callers. Both tools now exist and
+`phase9_census.py`'s header points at the second.
+
+## F105 — 20 of `common/mc.rs`'s 29 raw kernels have no production caller
+
+`mc_luma`'s `match` (`mc.rs:733-760`) replaced the module-internal
+`pWelsMcFunc_c: [[fn; 4]; 4]` table in Phase 2, and `mc_chroma` did the same for
+its own. The per-fractional-position raw shims the table used to hold were kept as
+"strangler shims ... the raw-pointer entry points `SMcFunc` still holds"
+(`mc.rs:1079`) — but `SMcFunc` holds only three slots (`pMcLumaFunc`,
+`pMcChromaFunc`, `pfSampleAveraging`, `InitMcFunc` at `:2219`), and the twenty
+below have no reference in `src/` at all except their own definitions:
+
+```bash
+grep -rn '\bMcHorVer13_c\b' rust/crates/openh264-rs/src
+#   src/common/mc.rs:1767:pub unsafe extern "C" fn McHorVer13_c(     <- the definition
+```
+
+The twenty: `McCopy_c`, `McCopyWidthEq2/4/8/16_c`, `McHorVer01/03/10/11/12/13/21/23/30/31/32/33_c`,
+`McChromaWithFragMv_c`, `FilterInput8bitWithStride_c`, `HorFilterInput16bit_c`.
+Their only other references are `tests/kernels_differential_phase2.rs` and
+`benches/`. Live are `McLuma_c`, `McChroma_c`, `PixelAvg_c` (the three `SMcFunc`
+slots) and `McHorVer02_c`/`McHorVer20_c`/`McHorVer22_c` (called directly by
+`md.rs`'s `MeRefineFracPixel`).
+
+This is an S18 deletion of **20 `unsafe fn`s of the 29 in `mc.rs`**, and it
+resizes session C: the charter counts `mc.rs` at 36 unsafe sites and treats them
+as conversions. Most are deletions. The differential tests that name them go with
+them — they compare each shim against the safe kernel the shim itself calls, so
+they are tautological in the F103 sense, and the live path (`mc_luma`/`mc_chroma`
+through the three slots) keeps its own coverage.
+
+Not acted on here: `mc.rs` is session C's file and the deletion should land with
+the conversion of its three live slots, not ahead of it.

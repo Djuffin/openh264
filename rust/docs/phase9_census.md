@@ -4,6 +4,12 @@
 
 **748 Phase-9 tags**: 687 `port-raw(Phase 9)` + 61 `cursor`.
 
+**This census reads signatures.** For the plane family a signature census is
+not enough to scope against (F103, and F104 which measures it), so the
+companion `phase9_plane_census.md` — `rust/tools/phase9_plane_callers.py` —
+reads the **call sites** instead and classifies each operand by the surface it
+names (source / reference / reconstruction / SMbCache / coefficient). Read both.
+
 ## 1. The correction this census makes
 
 The charter (`prompts/phase9.md` §2) reports **419 body-only** sites that
@@ -216,8 +222,8 @@ family assignment in `FAMILY_OF_TYPE`.
 | SSpatialLayerConfig        | 3          | other    | paramset  |
 | SSpatialLayerInternal      | 3          | other    | paramset  |
 | bool                       | 3          | other    | scalar    |
-| SWelsSPS                   | 3          | other    | paramset  |
 | SSubsetSps                 | 3          | other    | paramset  |
+| SWelsSPS                   | 3          | other    | paramset  |
 | SLTRState                  | 3          | other    | ltr       |
 | Scaled_Picture             | 3          | layer    |           |
 | SWelsEncoderOutput         | 2          | other    | bitstream |
