@@ -53,6 +53,27 @@ So each site gets two numbers, and they answer different questions:
 
 `pure + blocked` is the family's total workload; `pure` is what it can start with.
 
+## What `pure` does and does not promise (T9.A3)
+
+`pure` is a property of the **signature**, not of the call sites. A kernel can have
+a coefficient-only signature and still be unconvertible, because what its callers
+*pass* comes from somewhere else. The coefficient family is the worked example:
+19 sites are coeff-pure, but only 4 could be converted in session A.
+
+  * **4 are called directly** with an owned `[i16; N]` on the caller's stack, so
+    the raw pointer is a pure `as_mut_ptr()` round-trip that deletes cleanly.
+  * **15 are installed in an `SWelsFuncPtrList` slot** and have no direct caller
+    at all outside their own unit tests. Production reaches them through the
+    table, and the 59 call-through sites pass **SMbCache-derived walking cursors**
+    — `pRes = md::coeff_level(pMbCache)` then `pRes.add(64)` once per quadrant, and
+    `pBlock` likewise (`svc_encode_mb.rs:511-517`, whose S28 comment says the
+    cursor is deliberately derived from the whole array because it walks every 4x4
+    block). Converting the slot types therefore waits on family 3, not on family 5.
+
+So a family's real start-set is `pure` intersected with "the callers already hold
+the safe type". Sessions B-E should expect the same gap and check their call sites
+before scoping, which `--family <name>` and a grep of the call sites will show.
+
 A tag that sits above a *statement* rather than an item (an `#[allow]` on a `let`
 or a `match` inside a body) has no signature to read and is reported separately as
 `stmt` — those retire with the code around them, not by a signature conversion.
@@ -305,6 +326,17 @@ def report(sites):
     add("convert the site unaided. `blocked` = the site's *latest* family is this one but")
     add("it also carries earlier families, so it converts here only after those land.")
     add("`pure + blocked` is the family's real workload.\n")
+    add("**`pure` is a property of the signature, not of the call sites.** A kernel can")
+    add("have a single-family signature and still be unconvertible, because what its")
+    add("callers *pass* comes from elsewhere. The coefficient family is the worked")
+    add("example (T9.A3): 19 sites are coeff-pure, but only 4 are called directly with an")
+    add("owned `[i16; N]`. The other 15 sit in `SWelsFuncPtrList` slots with no direct")
+    add("caller outside their own unit tests, and the 59 call-through sites pass")
+    add("**SMbCache-derived walking cursors** (`pRes = md::coeff_level(pMbCache)`, then")
+    add("`pRes.add(64)` per quadrant). Those slots wait on family 3, not family 5.")
+    add("Sessions B-E should expect the same gap and read their call sites before")
+    add("scoping — `--family <name>` lists the signatures, but only a grep of the callers")
+    add("says what is actually reachable.\n")
     rows = []
     for fam in ORDER:
         inf = [s for s in pr if s.blocking == fam]

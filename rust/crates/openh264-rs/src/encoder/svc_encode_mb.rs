@@ -410,45 +410,29 @@ pub unsafe extern "C" fn WelsIDctFourT4Rec_c(
 
 /// 4x4 Inverse Hadamard transform for Intra 16x16 Luma DC
 ///
-/// # Safety
-/// `pRes` points at 16 writable, `i16`-aligned `i16`. Inputs above ±2047 can
-/// overflow the kernel's plain `i16` intermediates — a debug panic where the
-/// C++ wraps (finding F11); the in-contract DC levels stay far below it.
+/// Inputs above ±2047 can overflow the kernel's plain `i16` intermediates — a
+/// debug panic where the C++ wraps (finding F11); the in-contract DC levels stay
+/// far below it.
 #[inline]
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn WelsIHadamard4x4Dc(pRes: *mut i16) {
-    // SHIM(phase2) -> crate::encoder::decode_mb_aux::ihadamard_4x4_dc
-    let res: &mut [i16; 16] = std::slice::from_raw_parts_mut(pRes, 16).try_into().unwrap();
-    crate::encoder::decode_mb_aux::ihadamard_4x4_dc(res);
+pub fn WelsIHadamard4x4Dc(pRes: &mut [i16; 16]) {
+    crate::encoder::decode_mb_aux::ihadamard_4x4_dc(pRes);
 }
 
 /// Dequantization of 4x4 Luma DC coefficients for QP < 12
 ///
-/// # Safety
-/// `pRes` points at 16 writable, `i16`-aligned `i16`; `kiQp` in `0..12` (at
-/// 12+ the shift count goes negative — debug panic, the raw port's own
-/// behaviour; the one caller is gated on `uiQp < 12`).
+/// `kiQp` must be in `0..12`: at 12+ the shift count goes negative, which is a
+/// debug panic and the raw port's own behaviour. The one caller is gated on
+/// `uiQp < 12`. Not expressible in the type, so it stays a prose contract.
 #[inline]
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn WelsDequantLumaDc4x4(pRes: *mut i16, kiQp: i32) {
-    // SHIM(phase2) -> crate::encoder::decode_mb_aux::dequant_luma_dc_4x4
-    let res: &mut [i16; 16] = std::slice::from_raw_parts_mut(pRes, 16).try_into().unwrap();
-    crate::encoder::decode_mb_aux::dequant_luma_dc_4x4(res, kiQp);
+pub fn WelsDequantLumaDc4x4(pRes: &mut [i16; 16], kiQp: i32) {
+    crate::encoder::decode_mb_aux::dequant_luma_dc_4x4(pRes, kiQp);
 }
 
 /// 2x2 Inverse Hadamard and dequantization for Chroma DC
 ///
-/// # Safety
-/// `pDct` points at 4 writable, `i16`-aligned `i16`.
 #[inline]
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn WelsDequantIHadamard2x2Dc(pDct: *mut i16, kuiMF: u16) {
-    // SHIM(phase2) -> crate::encoder::decode_mb_aux::dequant_ihadamard_2x2_dc
-    let dct: &mut [i16; 4] = std::slice::from_raw_parts_mut(pDct, 4).try_into().unwrap();
-    crate::encoder::decode_mb_aux::dequant_ihadamard_2x2_dc(dct, kuiMF);
+pub fn WelsDequantIHadamard2x2Dc(pDct: &mut [i16; 4], kuiMF: u16) {
+    crate::encoder::decode_mb_aux::dequant_ihadamard_2x2_dc(pDct, kuiMF);
 }
 
 // ============================================================================
@@ -580,8 +564,8 @@ pub unsafe fn WelsEncRecI16x16Y(
 
     if uiCountI16x16Dc > 0 {
         if uiQp < 12 {
-            WelsIHadamard4x4Dc(aDctT4Dc.as_mut_ptr());
-            WelsDequantLumaDc4x4(aDctT4Dc.as_mut_ptr(), uiQp as i32);
+            WelsIHadamard4x4Dc(&mut aDctT4Dc);
+            WelsDequantLumaDc4x4(&mut aDctT4Dc, uiQp as i32);
         } else if let Some(func) = (*pFuncList).pfDequantizationIHadamard4x4 {
             func(aDctT4Dc.as_mut_ptr(), g_kuiDequantCoeff[uiQp as usize][0] >> 2);
         }
@@ -918,7 +902,7 @@ pub unsafe fn WelsEncRecUV(
     }
 
     if uiNoneZeroCountMbDc > 0 {
-        WelsDequantIHadamard2x2Dc(aDct2x2.as_mut_ptr(), g_kuiDequantCoeff[kiQp as usize][0]);
+        WelsDequantIHadamard2x2Dc(&mut aDct2x2, g_kuiDequantCoeff[kiQp as usize][0]);
         if 2 != ((*pCurMb).uiCbp >> 4) {
             (*pCurMb).uiCbp |= 0x01 << 4;
         }
@@ -1101,14 +1085,10 @@ mod tests {
     use super::*;
     
     #[test]
-    // unsafe-cat: port-raw(Phase 9)
-    #[allow(unsafe_code)]
     fn test_hadamard_4x4_dc_identity() {
         let mut dc_buf = [0i16; 16];
         dc_buf[0] = 16;
-        unsafe {
-            WelsIHadamard4x4Dc(dc_buf.as_mut_ptr());
-        }
+        WelsIHadamard4x4Dc(&mut dc_buf);
         // Since forward Hadamard on a DC impulse distributes energy across all 16 cells,
         // all 16 cells should equal 16.
         for val in dc_buf.iter() {
@@ -1117,14 +1097,10 @@ mod tests {
     }
 
     #[test]
-    // unsafe-cat: port-raw(Phase 9)
-    #[allow(unsafe_code)]
     fn test_dequant_ihadamard_2x2_dc() {
         let mut dct2x2 = [2i16, 0, 0, 0];
         let mf: u16 = 10;
-        unsafe {
-            WelsDequantIHadamard2x2Dc(dct2x2.as_mut_ptr(), mf);
-        }
+        WelsDequantIHadamard2x2Dc(&mut dct2x2, mf);
         // kiSumU = 2 + 0 = 2, kiDelU = 2 - 0 = 2, kiSumD = 0, kiDelD = 0
         // pDct[0] = ((2 + 0) * 10) >> 1 = 10
         // pDct[1] = ((2 - 0) * 10) >> 1 = 10

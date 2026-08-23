@@ -1611,20 +1611,20 @@ fn encoder_recon_shims_stay_inside_the_spans_they_declare() {
 
         let mut a4: [i16; 4] = coeffs(&mut rng);
         let mut g4 = a4;
-        unsafe { eda::WelsDequantIHadamard2x2Dc(a4.as_mut_ptr(), mf_row[0]) };
+        eda::WelsDequantIHadamard2x2Dc(&mut a4, mf_row[0]);
         eda::dequant_ihadamard_2x2_dc(&mut g4, mf_row[0]);
         assert_eq!(a4, g4, "DequantIHadamard2x2Dc shim vs direct");
 
         let qp = rng.below(12) as i32;
         let mut a = *sub;
         let mut g = *sub;
-        unsafe { eda::WelsDequantLumaDc4x4(a.as_mut_ptr(), qp) };
+        eda::WelsDequantLumaDc4x4(&mut a, qp);
         eda::dequant_luma_dc_4x4(&mut g, qp);
         assert_eq!(a, g, "DequantLumaDc4x4 shim vs direct qp={qp}");
 
         let mut a: [i16; 16] = bounded_coeffs(&mut rng, 2047);
         let mut g = a;
-        unsafe { eda::WelsIHadamard4x4Dc(a.as_mut_ptr()) };
+        eda::WelsIHadamard4x4Dc(&mut a);
         eda::ihadamard_4x4_dc(&mut g);
         assert_eq!(a, g, "IHadamard4x4Dc shim vs direct");
     }
