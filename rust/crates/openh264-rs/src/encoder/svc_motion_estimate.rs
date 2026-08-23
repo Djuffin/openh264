@@ -49,6 +49,7 @@
 
 use crate::encoder::svc_encode_slice::{layer_dec_pic, layer_dec_pic_mut, layer_ref_pic};
 use crate::encoder::picture::{RecPicId};
+use crate::safe::plane::PlaneCursor;
 pub use crate::encoder::encoder_context::SMVUnitXY;
 pub use crate::encoder::picture::SPicture;
 pub use crate::encoder::picture::SScreenBlockFeatureStorage;
@@ -203,7 +204,7 @@ impl Default for SWelsME {
 // SCREEN_CONTENT(dormant: Phase 10)
 #[repr(C)]
 pub struct SFeatureSearchIn {
-    pub pSad: Option<PSampleSadSatdCostFunc>,
+    pub pSad: Option<PSampleSadSatdCostFuncRaw>,
     pub pTimesOfFeature: *mut u32,
     pub pQpelLocationOfFeature: *mut *mut u16,
     pub pMvdCostX: *mut u16,
@@ -284,10 +285,24 @@ impl Default for SFeatureSearchOut {
 // Function Pointer Types
 // ============================================================================
 
-pub type PSampleSadSatdCostFunc =
-    unsafe extern "C" fn(pEnc: *mut u8, iEncStride: i32, pRef: *mut u8, iRefStride: i32) -> i32;
+// `PSampleSadSatdCostFunc` was declared here a second time (`md.rs` is the other),
+// and `census_allowlist.txt` carried the pair as `alias PSampleSadSatdCostFunc x2`.
+// **T9.B25**: one declaration, in `md.rs`, re-exported here — the slot type is
+// safe now and a second spelling of it is exactly the divergence the census exists
+// to catch (the allowlist entry retires with the duplicate).
+pub use crate::encoder::md::{PSampleSadSatdCostFunc, PSampleSadSatdCostFuncRaw};
 
-pub type PSample4SadCostFunc = unsafe extern "C" fn(
+/// `PSample4SadCostFunc` — the four-candidate SAD the diamond search steps with:
+/// `sample1`'s block against `sample2`'s at each whole-sample neighbour, written to
+/// `sad[0..4]` in the order **up, down, left, right**
+/// (`common/sad_common.rs::sample_sad_four::<W, H>`).
+///
+/// Safe since T9.B25; see [`PSampleSadSatdCostFunc`] for the rule and
+/// [`PSample4SadCostFuncRaw`] for the shape this replaces.
+pub type PSample4SadCostFunc = fn(&PlaneCursor<'_>, &PlaneCursor<'_>, &mut [i32; 4]);
+
+/// The raw four-candidate shape — transitional, as [`PSampleSadSatdCostFuncRaw`].
+pub type PSample4SadCostFuncRaw = unsafe extern "C" fn(
     pEnc: *mut u8,
     iEncStride: i32,
     pRef: *mut u8,
@@ -320,14 +335,14 @@ pub type PSearchMethodFunc = unsafe extern "C" fn(
 );
 
 pub type PCalculateSatdFunc = unsafe extern "C" fn(
-    pSatd: Option<PSampleSadSatdCostFunc>,
+    pSatd: Option<PSampleSadSatdCostFuncRaw>,
     pMe: &mut SWelsME,
     kiEncStride: i32,
     kiRefStride: i32,
 );
 
 pub type PCheckDirectionalMv = unsafe extern "C" fn(
-    pSad: Option<PSampleSadSatdCostFunc>,
+    pSad: Option<PSampleSadSatdCostFuncRaw>,
     pMe: &mut SWelsME,
     ksMinMv: SMVUnitXY,
     ksMaxMv: SMVUnitXY,
@@ -584,7 +599,7 @@ pub unsafe extern "C" fn WelsMotionEstimateSearch(
         let block_size = (*pMe).uiBlockSize as usize;
         if let Some(calc_satd) = (*pFuncList).pfCalculateSatd {
             calc_satd(
-                (*pFuncList).sSampleDealingFuncs.pfSampleSatd[block_size],
+                (*pFuncList).sSampleDealingFuncs.pfSampleSatdRaw[block_size],
                 pMe,
                 kiStrideEnc,
                 kiStrideRef,
@@ -620,7 +635,7 @@ pub unsafe extern "C" fn WelsMotionEstimateSearchStatic(
         (*pMe).sMv.iMvX = 0;
         (*pMe).sMv.iMvY = 0;
 
-        if let Some(sad_fn) = (*pFuncList).sSampleDealingFuncs.pfSampleSad[block_size] {
+        if let Some(sad_fn) = (*pFuncList).sSampleDealingFuncs.pfSampleSadRaw[block_size] {
             (*pMe).uiSadCost = sad_fn((*pMe).pEncMb, kiStrideEnc, (*pMe).pRefMb, kiStrideRef) as u32;
         }
         (*pMe).uiSadCost += COST_MVD((*pMe).pMvdCost, -((*pMe).sMvp.iMvX as i32), -((*pMe).sMvp.iMvY as i32));
@@ -629,7 +644,7 @@ pub unsafe extern "C" fn WelsMotionEstimateSearchStatic(
 
         if let Some(calc_satd) = (*pFuncList).pfCalculateSatd {
             calc_satd(
-                (*pFuncList).sSampleDealingFuncs.pfSampleSatd[block_size],
+                (*pFuncList).sSampleDealingFuncs.pfSampleSatdRaw[block_size],
                 pMe,
                 kiStrideEnc,
                 kiStrideRef,
@@ -659,7 +674,7 @@ pub unsafe extern "C" fn WelsMotionEstimateSearchScrolled(
         (*pMe).pRefMb = (*pMe).pColoRefMb.offset((mv_y * kiStrideRef + mv_x) as isize);
 
         let mut sad_cost = 0u32;
-        if let Some(sad_fn) = (*pFuncList).sSampleDealingFuncs.pfSampleSad[block_size] {
+        if let Some(sad_fn) = (*pFuncList).sSampleDealingFuncs.pfSampleSadRaw[block_size] {
             sad_cost = sad_fn((*pMe).pEncMb, kiStrideEnc, (*pMe).pRefMb, kiStrideRef) as u32;
         }
         sad_cost += COST_MVD(
@@ -673,7 +688,7 @@ pub unsafe extern "C" fn WelsMotionEstimateSearchScrolled(
 
         if let Some(calc_satd) = (*pFuncList).pfCalculateSatd {
             calc_satd(
-                (*pFuncList).sSampleDealingFuncs.pfSampleSatd[block_size],
+                (*pFuncList).sSampleDealingFuncs.pfSampleSatdRaw[block_size],
                 pMe,
                 kiStrideEnc,
                 kiStrideRef,
@@ -698,7 +713,7 @@ pub unsafe extern "C" fn WelsMotionEstimateInitialPoint(
 ) -> bool {
     unsafe {
         let block_size = (*pMe).uiBlockSize as usize;
-        let pSad = (*pFuncList).sSampleDealingFuncs.pfSampleSad[block_size];
+        let pSad = (*pFuncList).sSampleDealingFuncs.pfSampleSadRaw[block_size];
         let kpMvdCost = (*pMe).pMvdCost;
         let kpEncMb = (*pMe).pEncMb;
 
@@ -776,7 +791,7 @@ pub unsafe extern "C" fn WelsMotionEstimateInitialPoint(
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe extern "C" fn CalculateSatdCost(
-    pSatd: Option<PSampleSadSatdCostFunc>,
+    pSatd: Option<PSampleSadSatdCostFuncRaw>,
     pMe: &mut SWelsME,
     kiEncStride: i32,
     kiRefStride: i32,
@@ -797,7 +812,7 @@ pub unsafe extern "C" fn CalculateSatdCost(
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe extern "C" fn NotCalculateSatdCost(
-    _pSatd: Option<PSampleSadSatdCostFunc>,
+    _pSatd: Option<PSampleSadSatdCostFuncRaw>,
     _pMe: &mut SWelsME,
     _kiEncStride: i32,
     _kiRefStride: i32,
@@ -863,8 +878,8 @@ pub unsafe extern "C" fn WelsDiamondSearch(
 ) {
     unsafe {
         let block_size = (*pMe).uiBlockSize as usize;
-        let pSad4 = (*pFuncList).sSampleDealingFuncs.pfSample4Sad[block_size];
-        let pSadSingle = (*pFuncList).sSampleDealingFuncs.pfSampleSad[block_size];
+        let pSad4 = (*pFuncList).sSampleDealingFuncs.pfSample4SadRaw[block_size];
+        let pSadSingle = (*pFuncList).sSampleDealingFuncs.pfSampleSadRaw[block_size];
 
         let pFref = (*pMe).pRefMb;
         let kpEncMb = (*pMe).pEncMb;
@@ -934,7 +949,7 @@ pub unsafe extern "C" fn WelsDiamondSearch(
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe extern "C" fn CheckDirectionalMv(
-    pSad: Option<PSampleSadSatdCostFunc>,
+    pSad: Option<PSampleSadSatdCostFuncRaw>,
     pMe: &mut SWelsME,
     ksMinMv: SMVUnitXY,
     ksMaxMv: SMVUnitXY,
@@ -972,7 +987,7 @@ pub unsafe extern "C" fn CheckDirectionalMv(
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe extern "C" fn CheckDirectionalMvFalse(
-    _pSad: Option<PSampleSadSatdCostFunc>,
+    _pSad: Option<PSampleSadSatdCostFuncRaw>,
     _pMe: &mut SWelsME,
     _ksMinMv: SMVUnitXY,
     _ksMaxMv: SMVUnitXY,
@@ -1001,7 +1016,7 @@ pub unsafe extern "C" fn LineFullSearch_c(
 ) {
     unsafe {
         let block_size = (*pMe).uiBlockSize as usize;
-        let pSad = (*pFuncList).sSampleDealingFuncs.pfSampleSad[block_size];
+        let pSad = (*pFuncList).sSampleDealingFuncs.pfSampleSadRaw[block_size];
         let kiCurMeBlockPixX = (*pMe).iCurMeBlockPixX;
         let kiCurMeBlockPixY = (*pMe).iCurMeBlockPixY;
 
@@ -1397,7 +1412,7 @@ pub unsafe fn SetFeatureSearchIn(
 ) -> bool {
     unsafe {
         let block_size = sMe.uiBlockSize as usize;
-        pFeatureSearchIn.pSad = pFunc.sSampleDealingFuncs.pfSampleSad[block_size];
+        pFeatureSearchIn.pSad = pFunc.sSampleDealingFuncs.pfSampleSadRaw[block_size];
 
         let single_fn_idx = if block_size == BLOCK_16x16 { 1 } else { 0 };
         if let Some(calc_single) = pFunc.pfCalculateSingleBlockFeature[single_fn_idx] {

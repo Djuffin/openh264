@@ -251,7 +251,26 @@ pub type PWelsLumaHalfpelMcFunc = unsafe extern "C" fn(
     iWidth: i32,
     iHeight: i32,
 );
-pub type PSampleSadSatdCostFunc = unsafe extern "C" fn(
+/// `PSampleSadSatdCostFunc` (`wels_func_ptr_def.h:127`) — one SAD or SATD of two
+/// equal-shaped blocks, the cost-table slot type of `SSampleDealingFunc::pfSampleSad`
+/// and `pfSampleSatd`.
+///
+/// **Safe since T9.B25 (session B3, step 3):** the two operands are plane cursors
+/// anchored at sample `(0, 0)` of each block — the source macroblock, a reference
+/// block displaced by a candidate vector, or a prediction buffer in the arena — and
+/// each kernel (`common/sad_common.rs::sample_sad::<W, H>`, `encoder/sample.rs::
+/// satd_WxH`) reads `W` x `H` samples from both and nothing else. The block shape is
+/// the slot's index (`BLOCK_16x16` ..), exactly as it was for the raw kernels.
+pub type PSampleSadSatdCostFunc = fn(&PlaneCursor<'_>, &PlaneCursor<'_>) -> i32;
+
+/// The **raw** shape the slot had before T9.B25 — `(pSample1, iStride1, pSample2,
+/// iStride2)`, `uint8_t*` in the C++. **Transitional** (S20's F118 clause): a
+/// `PlaneCursor` cannot feed a raw slot and a raw pointer cannot feed a safe one, so
+/// while the plane-family campaign converts the callers function by function the
+/// table carries both shapes, installed from the same `WelsInitSampleSadFunc` — the
+/// `*Raw` arrays, `md_cost_raw`/`me_cost_raw`, and this alias are deleted the commit
+/// the last raw reader converts, and `SSampleDealingFunc` goes back to 176 bytes.
+pub type PSampleSadSatdCostFuncRaw = unsafe extern "C" fn(
     pSample1: *mut u8,
     iStride1: i32,
     pSample2: *mut u8,
@@ -612,7 +631,8 @@ use crate::common::mc::{McHorVer02_c, McHorVer20_c, McHorVer22_c, PixelAvg_c};
 pub use crate::encoder::encoder_context::SPicData;
 pub use crate::encoder::encoder_context::SDCTCoeff;
 pub use crate::encoder::encoder_context::BLOCK_SIZE_ALL;
-pub use crate::encoder::svc_motion_estimate::PSample4SadCostFunc;
+pub use crate::encoder::svc_motion_estimate::{PSample4SadCostFunc, PSample4SadCostFuncRaw};
+use crate::safe::plane::PlaneCursor;
 pub use crate::encoder::svc_encode_slice::SDqLayer;
 pub use crate::encoder::wels_func_ptr_def::SWelsFuncPtrList;
 pub use crate::encoder::encoder_context::sWelsEncCtx;
@@ -644,9 +664,20 @@ pub enum CostFamily {
 pub struct SSampleDealingFunc {
     // wels_func_ptr_def.h:163 — these are [MAX_BLOCK_TYPE], and MAX_BLOCK_TYPE is
     // BLOCK_SIZE_ALL = 7 (wels_func_ptr_def.h:161, wels_const.h:147). They were [_; 8].
+    //
+    // **Safe since T9.B25**: the three tables hold the safe kernels and take plane
+    // cursors (see `PSampleSadSatdCostFunc`). The `*Raw` triple below is the shape
+    // they had until then, kept alive only while the plane-family campaign converts
+    // the last raw readers — see the alias's doc for the rule and the deletion point.
     pub pfSampleSad: [Option<PSampleSadSatdCostFunc>; BLOCK_SIZE_ALL],
     pub pfSampleSatd: [Option<PSampleSadSatdCostFunc>; BLOCK_SIZE_ALL],
     pub pfSample4Sad: [Option<PSample4SadCostFunc>; BLOCK_SIZE_ALL],
+    /// Transitional (T9.B25) — the raw `(ptr, stride, ptr, stride)` SAD table.
+    pub pfSampleSadRaw: [Option<PSampleSadSatdCostFuncRaw>; BLOCK_SIZE_ALL],
+    /// Transitional (T9.B25) — the raw SATD table.
+    pub pfSampleSatdRaw: [Option<PSampleSadSatdCostFuncRaw>; BLOCK_SIZE_ALL],
+    /// Transitional (T9.B25) — the raw four-candidate SAD table.
+    pub pfSample4SadRaw: [Option<PSample4SadCostFuncRaw>; BLOCK_SIZE_ALL],
     // The five `pfIntra*Combined3*Satd`/`Sad` slots and the three
     // `pfIntra*Combined3` they were copied into were here, all eight
     // `*mut c_void`. The C++ leaves them NULL on every target this port builds
@@ -674,6 +705,9 @@ impl Default for SSampleDealingFunc {
             pfSampleSad: [None; BLOCK_SIZE_ALL],
             pfSampleSatd: [None; BLOCK_SIZE_ALL],
             pfSample4Sad: [None; BLOCK_SIZE_ALL],
+            pfSampleSadRaw: [None; BLOCK_SIZE_ALL],
+            pfSampleSatdRaw: [None; BLOCK_SIZE_ALL],
+            pfSample4SadRaw: [None; BLOCK_SIZE_ALL],
             pfMdCost: CostFamily::Unset,
             pfMeCost: CostFamily::Unset,
         }
@@ -707,6 +741,28 @@ impl SSampleDealingFunc {
         match self.pfMeCost {
             CostFamily::Sad => self.pfSampleSad[block],
             CostFamily::Satd => self.pfSampleSatd[block],
+            CostFamily::Unset => None,
+        }
+    }
+
+    /// [`md_cost`](Self::md_cost) over the transitional raw tables (T9.B25). Deleted
+    /// with them.
+    #[inline(always)]
+    pub fn md_cost_raw(&self, block: usize) -> Option<PSampleSadSatdCostFuncRaw> {
+        match self.pfMdCost {
+            CostFamily::Sad => self.pfSampleSadRaw[block],
+            CostFamily::Satd => self.pfSampleSatdRaw[block],
+            CostFamily::Unset => None,
+        }
+    }
+
+    /// [`me_cost`](Self::me_cost) over the transitional raw tables (T9.B25). Deleted
+    /// with them.
+    #[inline(always)]
+    pub fn me_cost_raw(&self, block: usize) -> Option<PSampleSadSatdCostFuncRaw> {
+        match self.pfMeCost {
+            CostFamily::Sad => self.pfSampleSadRaw[block],
+            CostFamily::Satd => self.pfSampleSatdRaw[block],
             CostFamily::Unset => None,
         }
     }
@@ -1334,7 +1390,7 @@ pub unsafe fn MeRefineQuarPixel(
 ) {
     let pEncMb = (*pMe).pEncMb;
     let kuiPixel = (*pMe).uiBlockSize as usize;
-    let pfMeCost = pFunc.sSampleDealingFuncs.me_cost(kuiPixel).unwrap();
+    let pfMeCost = pFunc.sSampleDealingFuncs.me_cost_raw(kuiPixel).unwrap();
 
     // =========================(0, -1) [TOP] =========================
     PixelAvg_c(
@@ -1461,7 +1517,7 @@ pub unsafe extern "C" fn MeRefineFracPixel(
     let mut iCurCost: i32;
     let mut iBestHalfPix: i32;
 
-    let pfMeCost = (*pFunc).sSampleDealingFuncs.me_cost((*pMe).uiBlockSize as usize).unwrap();
+    let pfMeCost = (*pFunc).sSampleDealingFuncs.me_cost_raw((*pMe).uiBlockSize as usize).unwrap();
 
     if (*pCurDqLayer).bSatdInMdFlag {
         iBestCost = (*pMe).uSadPredISatd.uiSatd as i32
