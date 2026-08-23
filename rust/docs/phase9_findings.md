@@ -124,7 +124,7 @@ ctx-taking callees** (225 shape A over 42 distinct cursors, 62 shape B); 184 of 
 hazard found", **not** "proved safe" — F66 rejected converting the clean subset for
 precisely that reason, and this tool's docstring repeats the warning.
 
-## F103 — the coefficient family is 4 kernels, not 25: the other 15 are gated on SMbCache
+## F103 — the coefficient family is 5 kernels, not 25: the other 14 are gated on SMbCache
 
 Session A's brief scopes the coefficient conversion as "the `WelsQuant*`/`WelsScan*`/
 `WelsCalculateSingleCtr`/`WelsGetNoneZeroCount` shims", on the premise that
@@ -136,8 +136,8 @@ Of the 19 coeff-pure signatures the census finds:
 
 | | kernels | why |
 |---|---|---|
-| **directly called** | 4 | caller passes an owned `[i16; N]`; converts cleanly |
-| **`SWelsFuncPtrList` slot** | 15 | no direct caller at all outside their own unit tests |
+| **directly called** | 5 | caller passes an owned `[i16; N]`; converts cleanly |
+| **`SWelsFuncPtrList` slot** | 14 | no direct caller at all outside their own unit tests |
 
 ```bash
 grep -rn 'Some(WelsQuant4x4_c)\|WelsQuant4x4_c *(' rust/crates/openh264-rs/src
@@ -145,7 +145,7 @@ grep -rn 'Some(WelsQuant4x4_c)\|WelsQuant4x4_c *(' rust/crates/openh264-rs/src
 #   encode_mb_aux.rs:1055  (a unit test)                                    real ref
 ```
 
-The fifteen are reached only through the table, and **the 59 call-through sites do
+The fourteen are reached only through the table, and **the 59 call-through sites do
 not pass owned arrays**. They pass SMbCache-derived walking cursors
 (`svc_encode_mb.rs:511`, in `WelsEncRecI16x16Y`):
 

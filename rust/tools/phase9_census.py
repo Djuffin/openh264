@@ -317,9 +317,14 @@ def report(sites):
     add("signatures past 100 columns, so a multi-line signature's first line is bare")
     add("(`pub unsafe fn WelsDctMb(`) and the site was filed as having no raw parameter.\n")
     body = [s for s in pr if s.blocking == "body"]
-    add(f"Read whole, the body-only set is **{len(body)}**, not 419. The other **{419 - len(body)}**")
-    add("carry raw parameters and need a signature conversion in some family's session.")
-    add("This is F101, and it is the number the phase estimate rests on.\n")
+    add("Measured at the charter's own commit `aabd0da5` (695 tags), reading the whole")
+    add("parameter list gives **147** body-only, not 419 — **272 sites** carry raw")
+    add("parameters and need a signature conversion in some family's session. That is")
+    add("F101, and it is the number the phase estimate rests on. For comparison, forcing")
+    add("this tool to look at the first line only reproduces the charter's table almost")
+    add("exactly: 420/121/51/36/39/19/9 against its 419/120/51/33/31/25/15.\n")
+    add(f"At **this** commit the body-only set is **{len(body)}** of **{len(pr)}** "
+        f"`port-raw(Phase 9)` tags; the two figures differ as conversions land.\n")
 
     add("## 2. Families, in dependency order\n")
     add("`pure` = every raw parameter is of this family, so this family's session can")
@@ -329,8 +334,9 @@ def report(sites):
     add("**`pure` is a property of the signature, not of the call sites.** A kernel can")
     add("have a single-family signature and still be unconvertible, because what its")
     add("callers *pass* comes from elsewhere. The coefficient family is the worked")
-    add("example (T9.A3): 19 sites are coeff-pure, but only 4 are called directly with an")
-    add("owned `[i16; N]`. The other 15 sit in `SWelsFuncPtrList` slots with no direct")
+    add("example (F103): at `aabd0da5` 19 sites were coeff-pure, but only 5 had a direct")
+    add("caller passing an owned `[i16; N]` — those 5 converted in T9.A3/A4 and are gone")
+    add("from the table above. The other 14 sit in `SWelsFuncPtrList` slots with no direct")
     add("caller outside their own unit tests, and the 59 call-through sites pass")
     add("**SMbCache-derived walking cursors** (`pRes = md::coeff_level(pMbCache)`, then")
     add("`pRes.add(64)` per quadrant). Those slots wait on family 3, not family 5.")
@@ -410,9 +416,9 @@ def report(sites):
     add("scoped off the first-line numbers and is superseded by this one.\n")
     rows = []
     for fam, sess, note in [
-        ("coeff", "A", "done this session"),
+        ("coeff", "A -> D", "session A converted the 5 with a direct caller; the 14 left are table slots that follow their data into family 3 (F103)"),
         ("plane", "B-C", "largest cursor family; pulls `common/`'s mc/sad/intra-pred shims with it"),
-        ("mbcache", "D", "45 pure — 3x the charter's 15; `svc_mode_decision.rs` 19, `svc_set_mb_syn_cabac.rs` 11, `md.rs` 11"),
+        ("mbcache", "D", "45 pure — 3x the charter's 15 — **plus the 14 coefficient slot types and their 59 call-throughs**; `svc_mode_decision.rs` 19, `svc_set_mb_syn_cabac.rs` 11, `md.rs` 11"),
         ("layer", "E", "47 pure — `svc_encode_slice.rs` 21, `svc_enc_slice_segment.rs` 11"),
         ("dispatch", "F", "the 5 signature sites plus the 22 `cursor` survivors"),
         ("other", "?", "**unscoped in the charter** — 123 sites, 7 unrelated sub-groups; needs its own split"),
