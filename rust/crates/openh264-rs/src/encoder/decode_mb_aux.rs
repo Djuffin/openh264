@@ -300,52 +300,8 @@ pub fn dequant_ihadamard_2x2_dc(dct: &mut [i16; 4], mf: u16) {
     dct[3] = (((del_u - del_d) * m) >> 1) as i16;
 }
 
-/// `decode_mb_aux.cpp:98`. Inverse Hadamard on the luma DC block, then scale by the
-/// dequantisation multiplier. For qp >= 12.
-///
-/// # Safety
-/// `pRes` points at 16 writable, `i16`-aligned `i16`.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe extern "C" fn WelsDequantIHadamard4x4_c(pRes: *mut i16, kuiMF: u16) {
-    // SHIM(phase2) -> dequant_ihadamard_4x4
-    let res: &mut [i16; 16] = unsafe { std::slice::from_raw_parts_mut(pRes, 16) }
-        .try_into()
-        .unwrap();
-    dequant_ihadamard_4x4(res, kuiMF);
-}
 
-/// `decode_mb_aux.cpp:139`. Scales one 4x4 coefficient block in place.
-///
-/// # Safety
-/// `pRes` points at 16 writable, `i16`-aligned `i16`; `kpMF` at 8 readable
-/// `u16` (a `g_kuiDequantCoeff` row), disjoint from `pRes`.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe extern "C" fn WelsDequant4x4_c(pRes: *mut i16, kpMF: *const u16) {
-    // SHIM(phase2) -> dequant_4x4
-    let res: &mut [i16; 16] = unsafe { std::slice::from_raw_parts_mut(pRes, 16) }
-        .try_into()
-        .unwrap();
-    let mf: &[u16; 8] = unsafe { std::slice::from_raw_parts(kpMF, 8) }.try_into().unwrap();
-    dequant_4x4(res, mf);
-}
 
-/// `decode_mb_aux.cpp:147`. Scales four 4x4 coefficient blocks in place.
-///
-/// # Safety
-/// `pRes` points at 64 writable, `i16`-aligned `i16`; `kpMF` at 8 readable
-/// `u16`, disjoint from `pRes`.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe extern "C" fn WelsDequantFour4x4_c(pRes: *mut i16, kpMF: *const u16) {
-    // SHIM(phase2) -> dequant_four_4x4
-    let res: &mut [i16; 64] = unsafe { std::slice::from_raw_parts_mut(pRes, 64) }
-        .try_into()
-        .unwrap();
-    let mf: &[u16; 8] = unsafe { std::slice::from_raw_parts(kpMF, 8) }.try_into().unwrap();
-    dequant_four_4x4(res, mf);
-}
 
 /// `decode_mb_aux.cpp:223`. Luma IDCT of an I16x16 macroblock when only the DC
 /// coefficients are non-zero.
@@ -425,9 +381,9 @@ pub unsafe fn WelsIDctT4RecOnMb(
 pub unsafe fn WelsInitReconstructionFuncs(pFuncList: &mut SWelsFuncPtrList, _uiCpuFlag: u32) {
     let fl = &mut *pFuncList;
 
-    fl.pfDequantization4x4 = Some(WelsDequant4x4_c);
-    fl.pfDequantizationFour4x4 = Some(WelsDequantFour4x4_c);
-    fl.pfDequantizationIHadamard4x4 = Some(WelsDequantIHadamard4x4_c);
+    fl.pfDequantization4x4 = Some(dequant_4x4);
+    fl.pfDequantizationFour4x4 = Some(dequant_four_4x4);
+    fl.pfDequantizationIHadamard4x4 = Some(dequant_ihadamard_4x4);
 
     fl.pfIDctT4 = Some(WelsIDctT4Rec_c);
     fl.pfIDctFourT4 = Some(WelsIDctFourT4Rec_c);
@@ -441,12 +397,10 @@ mod tests {
     /// Dequantisation is an elementwise multiply by the eight-entry MF row, applied to
     /// both halves of the 4x4 block.
     #[test]
-    // unsafe-cat: port-raw(Phase 9)
-    #[allow(unsafe_code)]
     fn dequant4x4_multiplies_by_the_mf_row() {
         let mut res: [i16; 16] = core::array::from_fn(|i| (i as i16) + 1);
         let mf: [u16; 8] = [2, 3, 4, 5, 6, 7, 8, 9];
-        unsafe { WelsDequant4x4_c(res.as_mut_ptr(), mf.as_ptr()) };
+        dequant_4x4(&mut res, &mf);
         for i in 0..8 {
             assert_eq!(res[i], (i as i16 + 1) * mf[i] as i16, "low half {i}");
             assert_eq!(res[i + 8], (i as i16 + 9) * mf[i] as i16, "high half {i}");
@@ -455,12 +409,10 @@ mod tests {
 
     /// The four-block variant applies the same row to all eight 8-coefficient groups.
     #[test]
-    // unsafe-cat: port-raw(Phase 9)
-    #[allow(unsafe_code)]
     fn dequant_four4x4_covers_all_64_coefficients() {
         let mut res = [1i16; 64];
         let mf: [u16; 8] = [1, 2, 3, 4, 5, 6, 7, 8];
-        unsafe { WelsDequantFour4x4_c(res.as_mut_ptr(), mf.as_ptr()) };
+        dequant_four_4x4(&mut res, &mf);
         for k in 0..8usize {
             for i in 0..8usize {
                 assert_eq!(res[i + (k << 3)], mf[i] as i16, "group {k} lane {i}");
@@ -471,12 +423,10 @@ mod tests {
     /// A DC-only inverse Hadamard with MF 1 spreads `pRes[0]` evenly over all 16
     /// positions (gain 16 across the two passes).
     #[test]
-    // unsafe-cat: port-raw(Phase 9)
-    #[allow(unsafe_code)]
     fn dequant_ihadamard4x4_spreads_dc() {
         let mut res = [0i16; 16];
         res[0] = 5;
-        unsafe { WelsDequantIHadamard4x4_c(res.as_mut_ptr(), 1) };
+        dequant_ihadamard_4x4(&mut res, 1);
         assert!(res.iter().all(|&v| v == 5), "{res:?}");
     }
 
