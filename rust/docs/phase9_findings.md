@@ -1045,3 +1045,166 @@ the 22 is `#[no_mangle]` or otherwise ABI-exported, and `McLuma_c` does **not**
 dispatch to the sixteen `McHorVer**_c` — it calls the safe `mc_luma` through
 `shim_wh`, so the "inside=3..7" occurrence counts are doc comments plus the
 definition. The brief's reachability claim was right; only its search path was short.
+
+## F120 — the plane census had never counted `md.rs`'s ten motion-compensation sites, and the brief and the charter disagreed about the number without either being right
+
+Session B3's brief says the plane family has **30** motion-compensation call sites
+(33 minus T9.B22's three); the charter's B3 row says **20**; `phase9_plane_callers.py`
+printed 20. All three numbers came from the same instrument in different states, and
+the tree has 30.
+
+`SHIMS` knew two `common/mc.rs` entry points — `McLuma_c` and `McChroma_c` — and
+nothing else, so the ten direct calls the fractional refinement makes were invisible
+to it: `MeRefineFracPixel`'s `McHorVer02_c`, `McHorVer20_c` and four `McHorVer22_c`,
+and `MeRefineQuarPixel`'s four `PixelAvg_c` (`encoder/md.rs`). Those are not table
+slots (Phase 4a made MC direct) and not composition calls inside a kernel — they are
+exactly the caller-side sites the census exists to enumerate.
+
+Teaching it the four names (T9.B24) moved the total 20 → 30 and `md.rs` 10 → 20; a
+`PARAM_CLASS`-style pair of classifier arms went in with them for
+`SQuarRefineParams::pSrcA`/`pSrcB`, which an alias walk cannot follow because they are
+fields of a parameter.
+
+**The lesson is S58's, one turn further on.** F116 made the tool fail on an operand it
+cannot classify. That does not cover an operand it never looks at: a *missing entry
+point* is silent by construction, because there is no site to leave unclassified.
+`SHIMS`/`SLOTS` are as load-bearing as the classifiers, and the check that finds a
+hole in them is not a run of the tool — it is a grep for the kernel's name over
+`src/`, compared against the census's own row count, done when the family is scoped.
+
+## F121 — `CalUVSadCost` and its two callers are dark, and so are the two `planes()` retags session B2 flagged as live
+
+Session B3's brief lists `CalUVSadCost` + `JudgeStaticSkip`/`JudgeScrollSkip` as step
+1 item 3, and names their `ctx_pic_ref_mut(..).planes()` calls as "F73's retag already
+in the tree" (session B2's trap (c)). **No gate runs any of it.**
+
+`CalUVSadCost` has exactly two callers, both reached only through
+`pfSCDPSkipDecision`, which `WelsInitSCDPskipFunc` points at the judging arm only when
+
+    bScreenContent && bEnableSceneChangeDetect && iComplexityMode < HIGH_COMPLEXITY
+
+(`encoder_context.rs:1574`). The diffharness driver encodes as
+`CAMERA_VIDEO_REAL_TIME`, so `bScreenContent` is false in every preset in both
+profiles and the slot is `WelsMdInterJudgeSCDPskipFalse`.
+
+Measured with a probe that prints once per entry, **against a calibration probe in
+`WelsMdI16x16`** — a zero from an uncalibrated instrument is not a zero (S46/S55),
+and the first run of this probe read zero for *everything* because `compare.sh` sends
+the driver's stderr to a log file rather than to its own output:
+
+| configuration | `WelsMdI16x16` | `WelsMdBackgroundMbEnc` | `SvcMdSCDMbEnc` | `JudgeStaticSkip` | `JudgeScrollSkip` |
+|---|---:|---:|---:|---:|---:|
+| 320x192 CAVLC qp26 | 2008 | 0 | 0 | 0 | 0 |
+| 320x192 CABAC complexity HIGH | 1882 | 0 | 0 | 0 | 0 |
+| 160x96 gop4 rc1 | 300 | 0 | 0 | 0 | 0 |
+| Static_152_100 rc0 | 377 | 0 | 0 | 0 | 0 |
+| 320x192 `sm=1 t=4` | 2136 | 0 | 0 | 0 | 0 |
+
+So the four bodies stay raw under S57 and each carries the measurement in its doc
+comment (T9.B27), which is what S57 asks for — the answer beside the site, so the next
+session does not re-derive it.
+
+**The part worth generalising** is not that these are dark; F117 already established
+the shape. It is that **a hazard in dark code is not a hazard**. Session B2's brief
+raised the two `planes()` sites as a live F73 retag needing repair; they are live as
+*code* and unreachable as *behaviour*, and repairing them would have been the same
+trade S57 forbids for conversions — work whose correctness nothing can check. The
+question "which gate runs this" belongs to hazard triage as much as to conversion
+scoping.
+
+## F122 — three of `WelsMdInterMbRefinement`'s seven arms are unreachable: D-dead-1 deleted the producers and left the consumers
+
+`WelsMdInterMbRefinement` dispatches on `uiSubMbType[i]` into four sub-8x8 arms —
+`SUB_MB_TYPE_8x8`, `SUB_MB_TYPE_4x4`, `SUB_MB_TYPE_8x4`, `SUB_MB_TYPE_4x8` — and the
+last three cannot be reached. Every writer of `uiSubMbType` in the port sets
+`SUB_MB_TYPE_8x8` (`svc_base_layer_md.rs:1120`, `:1205`, `:1218`,
+`svc_mode_decision.rs:2361`), because the sub-8x8 *search* is the `#if 0` block
+D-dead-1 deleted `WelsMdP4x4`/`WelsMdP8x4`/`WelsMdP4x8` for.
+
+Grepped, then probed — one print per arm entry, three configurations:
+
+| arm | 320x192 CAVLC | 160x96 gop4 | 320x192 `t=4` |
+|---|---:|---:|---:|
+| `MB_TYPE_16x16` | 1005 | 127 | 681 |
+| `MB_TYPE_16x8` | 144 | 12 | 120 |
+| `MB_TYPE_8x16` | 202 | 24 | 138 |
+| `SUB_MB_TYPE_8x8` | 264 | 68 | 540 |
+| `SUB_MB_TYPE_4x4` | **0** | **0** | **0** |
+| `SUB_MB_TYPE_8x4` | **0** | **0** | **0** |
+| `SUB_MB_TYPE_4x8` | **0** | **0** | **0** |
+
+T9.B28 converted all seven arms — four with a byte gate behind them and three
+without. Recorded rather than reverted: the three are byte-for-byte the same
+transformation as the four beside them, and re-raising them would leave a raw
+spelling in the middle of a converted body for no gain. **What is recorded is that
+their evidence is weaker than the commit's headline**, and that the same is true of
+`UpdateP4x4MotionInfo`/`UpdateP8x4MotionInfo`/`UpdateP4x8MotionInfo`, the
+`sMe4x4`/`sMe8x4`/`sMe4x8` members of `SWelsMD`, and the `SUB_MB_TYPE_*` arms of the
+CAVLC and CABAC writers.
+
+**The generalisation for S18**: a dead-code deletion is a *closure* question, not a
+name question. D-dead-1 asked "does anything call these three functions"; the
+question that would have found the rest is "what becomes unreachable when they go" —
+the consumers of the values only they produced. The straggler sweep S18 runs at a
+phase exit is the same computation done late; running it *with* the deletion is
+cheaper than discovering the remainder two sessions later.
+
+## F123 — `q1c.py`'s shape C reported shared borrows as hazards, and the fix is the same calibration that introduced it
+
+`safe_borrows_of_field` matched `&(mut)? (*root).field` — both spellings — and shape C
+labelled every hit `&mut (*root).field`. So the scanner flagged `WelsMdI16x16`'s
+
+    &(*pMbCache).sMemPredMb[kiDstOff..][..256]
+
+beside the raw `pPredI16x16` derived from the same field, and called it F114a.
+
+It is not. Shape C models a `Unique` retag popping a sibling `SharedReadWrite` raw.
+A **shared** reborrow of the field is a *read* through the parent, and a read access
+does not remove `SharedReadWrite` items above the tag it reaches through — the raw
+survives, the `SharedReadOnly` is pushed above it, and the next write through the raw
+pops that in turn. F114a's own site was `blk4x4_mut(&mut (*pMbCache).sCoeffLevel, k)`,
+a `&mut`, and the rule as written in S29's clause says `&mut`.
+
+Narrowed to `&mut` in T9.B30, and **calibrated exactly as the shape was when it was
+added** — against `0bfc7687^`, the tree that carried F114a's two live defects. It
+still reports precisely four sites, `WelsEncRecI16x16Y` / `WelsEncRecI4x4Y` /
+`WelsEncInterY` / `WelsEncRecUV`, with the Miri-reported one line-for-line (derive
+`svc_encode_mb.rs:650`, borrow `:684`, use `:710`).
+
+**S55, from the other side.** Its clause is about believing a zero from a blind
+instrument. The mirror is believing nothing from a noisy one: a scanner that fires on
+a sound spelling trains the session to argue with it, and the next real hit gets the
+same argument. The remedy is identical — a change to a detector, in either direction,
+is re-fired against the tree it was calibrated on before it is trusted.
+
+## F124 — the D-cov-1 correction is right about the C++ and wrong about the count: **two** mc tests survive, and the second is Phase 4a's, not Phase 2's
+
+Session B3's brief re-opened D-cov-1 and corrected it: the phase-2 kernel harness has
+no C++ side, the mc equivalences were proven at `46053993` and deleted by the file's
+own doctrine, and "the **only** surviving mc test is
+`mc_shims_stay_inside_the_spans_they_declare` … a contract test of the shims' own span
+arithmetic, which tests nothing once the shims are gone."
+
+The first half holds and is confirmed here: `tests/kernels_differential_phase2.rs`
+links nothing (`[dependencies]` is `libc` alone, there is no `build.rs` and no
+`links` key), its every comparison is Rust-against-Rust, and its header states the
+delete-on-shim doctrine in its own words.
+
+The count does not. **`mc_table_slots_match_the_direct_calls`
+(`tests/kernels_differential_phase2.rs:2343`) is a second surviving mc test**, and it
+is a different kind of evidence: Phase 4a's dispatch assert-map, driving `SMcFunc`'s
+six installed slots — `pMcLumaFunc`, `pMcChromaFunc`, `pfLumaHalfpelHor`/`Ver`/`Cen`,
+`pfSampleAveraging` — against the symbols the de-virtualized call sites name, over
+every quarter-pel and eighth-pel selector. Its own comment explains why it must be
+behavioural rather than an address comparison (`#[inline(always)]` shims are
+instantiated per codegen unit). It dies with the shims too, but deleting it spends
+Phase 4a's mitigation, not Phase 2's span discipline, and the two should be retired
+with their own reasons.
+
+**And step 5 cannot complete as scoped, for a reason neither version of D-cov-1
+names.** `common/mc.rs` reaches `#![deny(unsafe_code)]` only when *no* raw entry point
+has a caller. After T9.B29 the four half-pel/average shims have no `src/` caller left,
+but `McLuma_c` and `McChroma_c` still have six — the three in `WelsMdBackgroundMbEnc`
+and the three in `SvcMdSCDMbEnc`, which F121 measures as dark and S57 keeps raw. So
+the deletion splits: **22 dead shims + the two tests can go now; `deny` waits on a
+background/screen-content referee**, which is step 6's preset and session C's problem.

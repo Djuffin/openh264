@@ -16565,3 +16565,142 @@ that pattern also matches prose mentions of the tag name inside comments
 `:1967`, `:2006`). The tag is `// unsafe-cat: port-raw(Phase 9)`, `phase9_census.py`
 counts it correctly, and 638 — the number the brief and the census both state — is the
 true one.
+
+## 2026-08-23 — Phase 9, session B3 (the campaign B2 measured: seven conversions, four functions that must not be converted, and two instruments that were lying in opposite directions)
+
+**Eight commits, `d4e930d4`..`15b20607`, every one byte-identical.** The session
+executed both of the user's rulings, converted the lit half of the plane family's
+mode-decision surface, and refused the dark half on measurement.
+
+### what landed
+
+| commit | what moved |
+|---|---|
+| `d4e930d4` T9.B23 | **D-dead-1**: `WelsMdP4x4`/`WelsMdP8x4`/`WelsMdP4x8` deleted, upstream's `#if 0` quoted. −209 lines, **−3 tags (all `cursor`, not the 4 `port-raw` F115 predicted)**, `SPicData` reads 68 → 62 |
+| `b04793e4` T9.B24 | the plane census learns `md.rs`'s four direct MC entry points — the family is **30** sites, not 20 (F120) |
+| `f6b96082` T9.B25 | the three cost-table slots go **safe**, beside a transitional raw triple — F118's "no compiling middle" solved by carrying both shapes for the length of the campaign |
+| `53c51e59` T9.B26 | `WelsMdPSkipEnc`'s three SADs and `AcceptPskip`'s SATD call the kernels **direct** (constant indices, F118's order); `AcceptPskip` loses its `&SPicData`/`*mut u8` pair |
+| `9b9971fc` T9.B27/B28 | `WelsMdInterMbRefinement`'s **twelve** chroma MCs and three SADs take cursors; the four dark bodies are probed and keep their raws (F121, F122) |
+| `f270440a` T9.B29 | `MeRefineFracPixel`/`MeRefineQuarPixel` run on cursors — **`md.rs` leaves the plane census entirely** |
+| `b26deab4` T9.B30 | `SPicData` gains `iMbX`/`iMbY`; the four intra cost sites read the source through the layer; `q1c.py`'s shape C narrowed and recalibrated (F123) |
+| `15b20607` T9.B31 | the four source bindings B30 orphaned, and their strides |
+
+### the shape of the answer
+
+The brief's step ordering was right about *what* and wrong about *how much*, in
+both directions. The cost tables did not have to flip in one commit and did not
+have to wait for the ME struct: **carrying the raw tables beside the safe ones**
+(`pfSampleSadRaw`/`SatdRaw`/`4SadRaw`, `md_cost_raw`/`me_cost_raw`, both filled by
+the one `WelsInitSampleSadFunc`) gives the campaign a compiling middle at the cost
+of 168 bytes in a struct nothing ABI-shares, and every later commit moves one
+function from the raw triple to the safe one. That is F118's constraint met rather
+than argued with, and it is the piece worth carrying into session C.
+
+The other half is subtraction. Of the plane family's **25** remaining `safe-now`
+sites, **18 are dark** — `WelsMdBackgroundMbEnc` (5), `SvcMdSCDMbEnc` (5),
+`CalUVSadCost`'s two callers (4), `VaaBackgroundMbDataUpdate` (3, F117), and
+`scene_change_detection::Process` (1) — and **6 more wait on the ME struct's three
+raw fields**. So the lit, unblocked surface this session was scoped against was
+smaller than the brief's list by more than half, and most of what remains is not
+work but a *referee*.
+
+### three things the session measured that the brief did not have
+
+* **F120** — the census had never counted `md.rs`'s ten MC sites. The brief said
+  30, the charter said 20, the tool printed 20, and 30 was right. A missing entry
+  in `SHIMS` is silent in a way F116's unclassified operand is not: there is no
+  site to leave unclassified.
+* **F121/F122** — `CalUVSadCost` and its two callers are dark (probe: 0 entries
+  against a calibration probe reading 300–2136 in the same runs), which means the
+  two `ctx_pic_ref_mut(..).planes()` retags session B2 raised as live hazards are
+  **live as code and unreachable as behaviour**. And three of the seven arms of
+  `WelsMdInterMbRefinement` are unreachable for D-dead-1's own reason — the
+  deletion took the producers and left the consumers.
+* **F124** — the brief's D-cov-1 correction is right that the kernel harness has no
+  C++ side (`[dependencies]` is `libc` alone; no `build.rs`, no `links`) and wrong
+  that one mc test survives: `mc_table_slots_match_the_direct_calls` is a second,
+  and it is **Phase 4a's dispatch assert-map**, not Phase 2's span discipline.
+  Step 5 also cannot finish as scoped — `mc.rs` reaches `deny` only when
+  `McLuma_c`/`McChroma_c` lose their last six callers, and those six are the dark
+  ones S57 keeps.
+
+### the instruments, both directions
+
+`q1c.py` earned its place twice in one session and in opposite ways.
+
+It **caught a real defect the byte gates could not**: giving `MeRefineFracPixel` a
+`&mut SMbCache` while `pMemPredInterMb` was still a raw derived from that arena is
+F66's **shape B** — arguments evaluate left to right, so the reference's retag pops
+the raw before the callee writes through it — and the scanner reported all seven
+call sites immediately. The fix removes the pointer (S54): the parameter is a
+`usize` offset.
+
+It also **over-reported**, and that is F123: `safe_borrows_of_field` matched `&`
+as well as `&mut`, so a *shared* reborrow beside a raw read as shape C. A shared
+reborrow is a read through the parent and does not remove `SharedReadWrite` items
+above the tag it reaches through. Narrowed, and re-fired against `0bfc7687^` — the
+tree that carried F114a — where it still reports exactly the four bodies, the
+Miri-reported one line-for-line. **S55 has a second edge**: a scanner that fires on
+a sound spelling trains the reader to argue with it, and the next true hit gets the
+same argument.
+
+`phase9_plane_callers.py` moved three times: the four missing MC entry points
+(F120), the five transitional `*Raw` cost names, and then — once those existed —
+the **removal** of the five safe names, so that a converted site *leaves* the
+census rather than being re-spelled inside it. That last one is the property that
+makes the number mean something across a campaign.
+
+### calibration
+
+Seven planted faults, one per new conversion shape, each reverted (S55's clause):
+
+| shape | fault | result |
+|---|---|---|
+| direct SAD (`WelsMdPSkipEnc`) | `+1` on the luma source cursor | DIFFER char **9244** |
+| direct SATD (`AcceptPskip`) | `+1` on the source cursor | identical at complexity LOW (`bMdUsingSad`), DIFFER char **7549** at MEDIUM/HIGH |
+| chroma MC by coordinate | `+1` on the 16x16 arm's Cb source | DIFFER char **9208** |
+| partition-offset MC | `+1` on the SUB_8x8 arm's Cr source | DIFFER char **9580** |
+| ME reference cursor | `+1` on `MeRefineFracPixel`'s `cRef` x | DIFFER char **9201** |
+| ME scratch offset | `+1` on the quarter-pixel destination | DIFFER char **9201** |
+| intra cost (chroma / I4x4) | `+1` on the source cursor | DIFFER char **424** / char **58** (HIGH) |
+
+The SATD row is the one worth keeping: byte-identical at LOW is the *selector*
+working, not a dark site, and a session that had not swept complexity would have
+read it as the second.
+
+The rebuilt `test_wels_md_i16x16_cost` fixture is calibrated the same way — it
+builds a real `SPicture` and `SrcPicPool`, leaves `pEncMb` **null** so a fallback
+would fault, and goes red (2570 expected, 10 read) when the carrier's `iMbX` is
+moved one macroblock off the block it filled.
+
+### gates
+
+**`MIRI_SCOPE=encoder bash rust/tools/gates.sh session` — OVERALL PASS**, 8 passed /
+0 failed / 2 skipped: 548 debug and 541 release tests, sweeps **535/535 in both
+profiles** (42s and 34s), ratchet no per-file increase, duplicate census 56
+allowlisted, and **Miri `--lib` encoder scope 274 passed / 0 failed**. D-gate-4's
+third green run, and the first over a session that converted *picture* operands at
+scale — which is the run that mattered, because `q1c.py`'s shape-B report during
+T9.B29 was a defect Miri would otherwise have found here for the third time in three
+sessions (F66's shape, F114's method).
+
+Eight `gates.sh commit` runs, all PASS. Byte identity was additionally
+checked outside the battery on `compare.sh` after every edit, over a six-row set
+spanning CAVLC/CABAC, complexity LOW/MEDIUM/HIGH, rc modes 0/1/2, a threaded
+configuration and the static stream.
+
+### counts at close
+
+`port-raw(Phase 9)` **638** + `cursor` **58** = 696 (the three `cursor` tags are
+D-dead-1's). **The tag count is the wrong instrument for this session** and says so:
+every function converted here keeps its tag for a *different* raw — an intra-pred
+slot, a DCT operand, a reconstruction pointer — so the progress is in the ratchet:
+raw_ptr **−181** (was −163 at B2's close), unsafe_fn −55, unsafe_block −47, shim −20.
+
+`SPicData` source/reference reads **68 → 50**: `pEncMb` 32, `pRefMb` 18, and they
+decompose exactly — 12 in the two `*Init` stamps (the roots), **18 in the five dark
+bodies**, 8 feeding `InitMe` (the ME struct's), 10 DCT operands (step 4's), 2 in
+the intra-pred pairs (session C's).
+
+Plane census **70 sites**: 25 safe-now (18 dark + 6 ME + 1 preprocess), 13 coeff,
+32 blocked, **0 unclassified**.
