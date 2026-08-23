@@ -602,3 +602,191 @@ Two things worth carrying forward:
    (contrast F106) — and by the fact that the two handles are the same two the raw
    roots were derived from. It is not defended by a byte gate, and that is worth
    saying plainly rather than letting "gates PASS" imply it.
+
+## F110 — `WelsEncRecUV`'s `pRes` is **not** a function of `iUV`: the two callers use different bases
+
+Session D's brief names `WelsEncRecUV` as the clearest case of "delete the second
+path" and says why:
+
+> its `pRes` is `coeff_level + 256 + (iUV - 1) * 64`, a pure function of the `iUV`
+> argument it already receives, so the parameter is redundant.
+
+It is not. The two callers pass **different bases**, and the C++ they were ported from
+does the same:
+
+```cpp
+void WelsIMbChromaEncode (...) {                    // svc_encode_slice.cpp:469
+  int16_t* pCurRS = pMbCache->pCoeffLevel;          // :475   — base 0
+  ...
+  WelsEncRecUV (pFunc, pCurMb, pMbCache, pCurRS,      1);
+  WelsEncRecUV (pFunc, pCurMb, pMbCache, pCurRS + 64, 2);
+}
+void WelsPMbChromaEncode (...) {                    // :493
+  int16_t* pCurRS = pMbCache->pCoeffLevel + 256;    // :499   — base 256
+  ...
+  WelsEncRecUV (pFunc, pCurMb, pMbCache, pCurRS,      1);
+  WelsEncRecUV (pFunc, pCurMb, pMbCache, pCurRS + 64, 2);
+}
+```
+
+Deriving `+ 256` inside the callee would have moved **every intra macroblock's chroma
+residual by 512 bytes**, and the two paths are independent enough that a P-only sweep
+would not have caught it.
+
+**The generalisation is the useful part.** "Delete the second path" is right, and it
+is about the *pointer*, not the information the pointer happened to carry. The
+parameter here carries caller state — which half of `sCoeffLevel` this call works in —
+and that state has to survive. It survives as a `usize` index, which no retag can
+invalidate:
+
+```rust
+pub unsafe fn WelsEncRecUV(pFuncList: &SWelsFuncPtrList, pCurMb: &mut SMB,
+                           pMbCache: &mut SMbCache, kiResOff: usize, iUV: i32)
+```
+
+**Before deleting a redundant-looking cursor parameter, check every caller's base, not
+one caller's arithmetic.** Two of this family's callee parameters were genuinely
+redundant (`WelsMdInterInit`'s and `AcceptPskip`'s arena, both derivable); this one
+was not, and it looked identical from the callee's side.
+
+## F111 — `q1c.py` was blind to `addr_of_mut!` and to a root minted from an owned field: 22 `SMbCache` sites and 20 context sites
+
+The detector was rebuilt in T9.A2 from F66's written specification and has been the
+phase's precondition instrument since. Aimed at `SMbCache` and run against the tree it
+was about to gate, it had **two** false-negative classes, and each one hid live sites.
+
+**(a) `DERIV_HINT` did not match `addr_of_mut!`.** It recognised `as_mut_ptr()`,
+`.add()`, `&mut` and a pointer cast — but not the spelling this codebase *mandates*
+for a cursor into an inline array. S28/S29 exist precisely to force
+
+```rust
+let pRes = std::ptr::addr_of_mut!((*pMbCache).sCoeffLevel).cast::<i16>();
+```
+
+and the detector scored that as "not a derivation". The effect was masked while the
+ten accessors stood (their call sites read `md::coeff_level(pMbCache)`, which the hint
+also missed, for a *different* reason — a bare call). T9.D4 replaced the accessors
+with the mandated spelling, and the report went to **0 with nine live sites in it**.
+
+**(b) A root can be an owned field, not just a parameter.** `body_roots` grew a local
+into a root from an explicit `*mut T` type or cast, `Box::into_raw`, a `**T` deref, or
+an alias. `SMbCache` is one owned field of `SSlice` and **32 bodies** mint their root
+as `let pMbCache = std::ptr::addr_of_mut!((*pSlice).sMbCacheInfo);`, whose type appears
+nowhere on the line — so all 32 were invisible *as callers*. Reading the field's
+declaration out of the tree (`pub sMbCacheInfo: SMbCache,`) supplies the type.
+`WelsWriteMbResidualCabac` alone held 12 of the sites this uncovered.
+
+Together: `--type SMbCache` went **0 -> 22 sites in 4 callers**, and the default
+`sWelsEncCtx` scan went **288 -> 308 sites, 68 -> 71 callers, 84 -> 86 callees** (all
+twenty from (a); the context is a parameter everywhere, so (b) adds nothing there).
+
+**Family 6's precondition number moves with this.** The charter §4.6 and §8 both quote
+"287 sites, 68 callers"; the tree at session D's close reports **308 / 71**, and the
+figure was 288 before this fix — so the charter was also one behind on the old
+measure.
+
+Three limits remain, and they are in the tool's docstring rather than only here:
+
+* a bare `let p = accessor(pArena);` is still not a derivation to the hint. Widening
+  it to "any call taking a root" was measured and not taken: on the context struct it
+  matches `let pCurLayer = current_layer(pCtx);` and every sibling accessor and would
+  swamp the signal. **The mitigation is structural** — session D's conversion deleted
+  every such accessor, so the shape has no instances left in this family.
+* calls made **through a dispatch slot** are not attributed to any callee, because the
+  scan matches call sites by name. Session D's three arena-taking slots were checked by
+  hand. This is the same blind spot F111's sibling finding hits from the other side —
+  see the `SMB` note in T9.D9.
+* it models exactly one conversion, "the parameter becomes `&mut T`". A callee
+  *narrowed* to the field it touches never had the hazard the report attributes to it;
+  ten of session D's first twenty-one sites were of that kind.
+
+`--kind ref` was added for the other half of the instrument's life: once a family has
+converted, the same scan answers "is a cursor held across one of these calls **today**",
+and without it a converted family reads as "nothing to find" and exits 2.
+
+## F112 — the arena's roots must stay raw: a `&mut` to an owned field is popped by the callee that re-derives it
+
+T9.D7 converted all 41 `*mut SMbCache` parameters to `&mut SMbCache`. The obvious
+companion change — the 32 roots —
+
+```rust
+let pMbCache = &mut (*pSlice).sMbCacheInfo;      // instead of addr_of_mut!
+```
+
+was written, gated green, and **reverted**, because the tree already carries the
+counterexample. T6.C2 found it with a Miri encode probe and wrote it into
+`WelsSpatialWriteMbSyn`:
+
+> `WelsSpatialWriteMbPred` and `WelsSpatialWriteSubMbPred` re-derive both the frame
+> buffer and the slice's `sMbCacheInfo` for themselves, so a `&mut` of either taken
+> before Step 1 is invalidated by Step 1 and used again in Steps 2-4. **This is not a
+> spelling: the borrow has to be taken after the call that pops it.**
+
+The reason generalises past that one function. Stacked Borrows is **per byte**, so:
+
+* a field read or write *through* `pMbCache` touches only that field's bytes and
+  leaves cursors into other fields alone — which is why a `&mut SMbCache` parameter is
+  affordable at all, and why the four half-selectors can read their flag while the
+  arrays are under cursors;
+* **entering** a function that takes `&mut SMbCache` retags every byte of the arena
+  and kills every outstanding cursor — F66's rule, and what `q1c.py` measures;
+* and a **sibling** derivation from the shared parent pops whatever sits above that
+  parent for those bytes. Two raw siblings coexist; a `&mut` sibling does not. These
+  functions nest — `WelsMdInterMbLoop` -> ... -> `WelsSpatialWriteMbSyn` -> the two
+  writers — so with `&mut` roots the inner body's root pops the outer body's, and the
+  outer uses it afterwards.
+
+Measured, with the detector aimed at the slice: `q1c.py --type SSlice` reports **68
+hazardous sites in 22 callers** both before session D and after it — unchanged,
+because the roots are unchanged. That number is what a `&mut` root would have had to
+answer for.
+
+**So the arena is a reference at every *parameter* and a raw at every *root*, and the
+40 call sites in between spell `&mut *pMbCache`** — a Unique that lives for the call
+and dies there. The root conversion is not this family's: it belongs to whoever
+converts `*mut SSlice`, where it is one step rather than thirty-two.
+
+## F113 — the residual slots' raw types were hiding three things, and one of them served two lengths
+
+T9.D8 re-typed eleven `SWelsFuncPtrList` slots from `unsafe extern "C" fn(*mut i16, ..)`
+to safe function pointers over exact arrays. Three facts the raw types had been
+concealing, each of which had to be resolved before the type could be written:
+
+1. **One `PQuantizationFunc` served two different spans.** `pfQuantization4x4` quantises
+   one 4x4 block and `pfQuantizationFour4x4` quantises four, and both had the same
+   type, because `*mut i16` says nothing about length. They are `PQuantization4x4Func`
+   over `[i16; 16]` and `PQuantizationFunc` over `[i16; 64]` now. A raw pointer that
+   serves two lengths is a type that was not saying what it meant.
+2. **The odd array lengths are the *reach*, not the block.** `hadamard_quant_2x2` and
+   its `Skip` twin read `rs[0]`, `rs[16]`, `rs[32]`, `rs[48]` — span **49**, not 64 —
+   and `hadamard_t4_dc` reads block 15's DC at index 240 — span **241**. Both numbers
+   were already pinned by the T7 differential test's allocations; they are in the
+   signatures now, where a caller can see them.
+3. **`aMax` was `[u16; 4]` cast to `*mut i16` at two call sites.** The kernel's
+   `max_abs` starts at 0 and only ever grows, so every entry is non-negative and the
+   `u16` and `i16` readings of those bits agree — but nothing in the raw signature said
+   so, and the two spellings would have diverged on the first negative value. The array
+   is `i16`, which is what was always stored in it.
+
+**S28 does not object to the index helpers.** The rule is about a *raw* cursor taken
+through a sub-slice, whose tag dies the moment the kernel walks past the slice — and
+these kernels used to walk. A safe borrow of `sCoeffLevel[off .. off + 16]` is taken
+afresh per block, lives exactly as long as the call it is made for, and the kernel's
+own signature says it cannot read outside it.
+
+**And the T7 differential test's quant/scan/Hadamard rows became tautological** the
+moment the shims were deleted: both sides are the same code. Per F106 they are deleted
+rather than re-pinned, and replaced by relations that were never tautological —
+`quant_four_4x4` is `quant_4x4` per quadrant, `quant_four_4x4_max` is `quant_four_4x4`
+plus a per-quadrant maximum, `scan_4x4_ac` is `scan_4x4_dc_ac` shifted by one, a scan
+is a permutation of its input, the 2x2 Hadamard zeroes its four DC slots and touches
+nothing else.
+
+One replacement assertion was **wrong** and is worth keeping as the counterexample:
+"`skip` says nothing survives **iff** the full kernel counted zero" failed on the first
+random input. `hadamard_quant_2x2_skip` thresholds on `(1<<16 - 1) / mf - ff` in `i32`
+while `hadamard_quant_2x2` truncates each butterfly output to `i16` before quantising,
+so the two predicates agree on every input the encoder produces and are not the same
+predicate. **A replacement for a deleted tautology is a new claim about the code and
+needs the same evidence as any other** — it is out, with the reason recorded where it
+stood.
