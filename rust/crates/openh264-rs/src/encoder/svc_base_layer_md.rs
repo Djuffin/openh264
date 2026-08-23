@@ -415,9 +415,11 @@ pub unsafe extern "C" fn WelsMdI4x4(
     let pCurDqLayer = current_layer(pEncCtx);
     let iLambda = (*pWelsMd).iLambda;
     let iBestCostLuma = (*pWelsMd).iCostLuma;
-    let pEncMb = (*pMbCache).SPicData.pEncMb[0];
+    // `pEncMb` and `kiLineSizeEnc` stood here — the source block as an address and
+    // its stride. **T9.B30** reads the source through the layer at the carrier's
+    // coordinates instead; `pDecMb` is the reconstruction plane and stays raw with
+    // the intra predictors that read it (session C).
     let pDecMb = (*pMbCache).SPicData.pCsMb[0];
-    let kiLineSizeEnc = (*pCurDqLayer).iEncStride[0];
     let kiLineSizeDec = (*pCurDqLayer).iCsStride[0];
 
     let lambda: [i32; 2] = [iLambda << 2, iLambda];
@@ -436,8 +438,6 @@ pub unsafe extern "C" fn WelsMdI4x4(
         let iCoordinateX = g_kiCoordinateIdx4x4X[i] as i32;
         let iCoordinateY = g_kiCoordinateIdx4x4Y[i] as i32;
 
-        let iIdxStrideEnc = iCoordinateY * kiLineSizeEnc + iCoordinateX;
-        let pCurEnc = pEncMb.offset(iIdxStrideEnc as isize);
         let iIdxStrideDec = iCoordinateY * kiLineSizeDec + iCoordinateX;
         let pCurDec = pDecMb.offset(iIdxStrideDec as isize);
 
@@ -544,9 +544,11 @@ pub unsafe extern "C" fn WelsMdI4x4Fast(
     let pCurDqLayer = current_layer(pEncCtx);
     let iLambda = (*pWelsMd).iLambda;
     let iBestCostLuma = (*pWelsMd).iCostLuma;
-    let pEncMb = (*pMbCache).SPicData.pEncMb[0];
+    // `pEncMb` and `kiLineSizeEnc` stood here — the source block as an address and
+    // its stride. **T9.B30** reads the source through the layer at the carrier's
+    // coordinates instead; `pDecMb` is the reconstruction plane and stays raw with
+    // the intra predictors that read it (session C).
     let pDecMb = (*pMbCache).SPicData.pCsMb[0];
-    let kiLineSizeEnc = (*pCurDqLayer).iEncStride[0];
     let kiLineSizeDec = (*pCurDqLayer).iCsStride[0];
 
     let lambda: [i32; 2] = [iLambda << 2, iLambda];
@@ -565,8 +567,6 @@ pub unsafe extern "C" fn WelsMdI4x4Fast(
         let iCoordinateX = g_kiCoordinateIdx4x4X[i] as i32;
         let iCoordinateY = g_kiCoordinateIdx4x4Y[i] as i32;
 
-        let iIdxStrideEnc = iCoordinateY * kiLineSizeEnc + iCoordinateX;
-        let pCurEnc = pEncMb.offset(iIdxStrideEnc as isize);
         let iIdxStrideDec = iCoordinateY * kiLineSizeDec + iCoordinateX;
         let pCurDec = pDecMb.offset(iIdxStrideDec as isize);
 
@@ -760,11 +760,9 @@ pub unsafe extern "C" fn WelsMdIntraChroma(
         .add(mem_pred_chroma_off((*pMbCache).uiMemPredLumaHalf));
     let pPredIntraChma: [*mut u8; 2] = [pMemPredChroma, pMemPredChroma.add(128)];
     let mut pDstChma = pPredIntraChma[0];
-    let pEncCb = (*pMbCache).SPicData.pEncMb[1];
-    let pEncCr = (*pMbCache).SPicData.pEncMb[2];
+    // `pEncCb`/`pEncCr` stood here; T9.B30's cost sites read the source picture.
     let pDecCb = (*pMbCache).SPicData.pCsMb[1];
     let pDecCr = (*pMbCache).SPicData.pCsMb[2];
-    let kiLineSizeEnc = (*pCurDqLayer).iEncStride[1];
     let kiLineSizeDec = (*pCurDqLayer).iCsStride[1];
 
     let mut iBestCost = i32::MAX;
