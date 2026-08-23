@@ -113,6 +113,18 @@ SHIMS = {
     "WelsIDctT4RecOnMb":          ("idct", (0, 2, 4)),
     "McLuma_c":                   ("mc", (0, 2)),
     "McChroma_c":                 ("mc", (0, 2)),
+    # **T9.B24 (session B3).** The four `mc.rs` entry points the encoder's fractional
+    # refinement calls directly (`md.rs`, `MeRefineFracPixel`/`MeRefineQuarPixel`):
+    # the three half-pel filters and the two-source average. They were never in this
+    # table, so the census read 20 MC sites where the tree has 30 — the charter's B3
+    # row says "20" and session B3's brief says "30" for that reason (F120). Same
+    # group as `McLuma_c`: a plane source and an arena destination, no table slot
+    # (Phase 4a made MC direct), so they retire caller by caller.
+    "McHorVer20_c":               ("mc", (0, 2)),
+    "McHorVer02_c":               ("mc", (0, 2)),
+    "McHorVer22_c":               ("mc", (0, 2)),
+    # `(pDst, iDstStride, pSrcA, iSrcAStride, pSrcB, iSrcBStride, w, h)`.
+    "PixelAvg_c":                 ("mc", (0, 2, 4)),
     "ExpandReferencingPicture":   ("expand", (0, 1, 2)),
 }
 # The intra predictors all share `(pPred, pRef, kiStride)`.
@@ -196,6 +208,14 @@ CLASSIFIERS = [
     # (`svc_base_layer_md.rs:560-563`), which no textual walk of the macro body
     # can see.
     ("cache", r"^\$dst$"),
+    # `MeRefineQuarPixel`'s four averages read `pParams.pSrcA[i]` / `pSrcB[i]`, stamped
+    # by `MeRefineFracPixel` per half-pel arm (`md.rs:1539-1660`): `pSrcA` is a
+    # `pBufMe` offset in every arm; `pSrcB` is the reference block in the no-best arm
+    # and a `pBufMe`/reference mix in the four others. Classed by the surface that
+    # *can* appear — the verdict (`safe-now`) is the same either way, and the
+    # alias walk cannot follow a field of a parameter.
+    ("cache", r"\bpParams\s*\.\s*pSrcA\b"),
+    ("ref",   r"\bpParams\s*\.\s*pSrcB\b"),
     # `SWelsME`'s own plane cursors — the motion search's source block and the
     # reference block it walks with the candidate vector.
     ("src",   r"pMe\s*\)?\s*\.\s*pEncMb"),
