@@ -1384,42 +1384,49 @@ fn encode_mb_aux_shims_stay_inside_the_spans_they_declare() {
         assert_eq!((b1, b2), (k1, k2), "DctFourT4 shim moved a source byte");
     }
 
-    // --- Quantizers: exact fixed arrays, golden direct run. One mid-table QP
-    // is enough here — the exhaustive sweep proved kernel arithmetic at
-    // commit A, and these shims add only the array views.
+    // --- Quantizers. **T9.D8 deleted the shims these rows used to compare
+    // against**: the slots hold the safe kernels directly now, so a
+    // "shim vs direct" assertion has nothing on its left-hand side. What is kept
+    // is what was never tautological — the relations *between* the kernels, which
+    // the walking cursors used to hide: `quant_four_4x4` is `quant_4x4` on each
+    // quadrant, and `quant_four_4x4_max` is `quant_four_4x4` plus a per-quadrant
+    // maximum. (F106's rule: a differential test whose two sides became the same
+    // code is deleted, not re-pinned.)
     let ff = &ema::g_kiQuantInterFF[26];
     let mf = &ema::g_kiQuantMF[26];
     for _ in 0..scale(20) {
         let base: [i16; 64] = coeffs(&mut rng);
-        let sub: &[i16; 16] = (&base[..16]).try_into().unwrap();
 
-        let mut a = *sub;
-        let mut g = *sub;
-        unsafe { ema::WelsQuant4x4_c(a.as_mut_ptr(), ff.as_ptr(), mf.as_ptr()) };
-        ema::quant_4x4(&mut g, ff, mf);
-        assert_eq!(a, g, "Quant4x4 shim vs direct");
+        let mut four = base;
+        ema::quant_four_4x4(&mut four, ff, mf);
+        for k in 0..4 {
+            let mut one: [i16; 16] = base[k * 16..k * 16 + 16].try_into().unwrap();
+            ema::quant_4x4(&mut one, ff, mf);
+            assert_eq!(&four[k * 16..k * 16 + 16], &one[..], "QuantFour4x4 quadrant {k}");
+        }
 
-        let mut a = *sub;
-        let mut g = *sub;
-        unsafe { ema::WelsQuant4x4Dc_c(a.as_mut_ptr(), ff[0] << 1, mf[0] >> 1) };
-        ema::quant_4x4_dc(&mut g, ff[0] << 1, mf[0] >> 1);
-        assert_eq!(a, g, "Quant4x4Dc shim vs direct");
-
-        let mut a = base;
-        let mut g = base;
-        unsafe { ema::WelsQuantFour4x4_c(a.as_mut_ptr(), ff.as_ptr(), mf.as_ptr()) };
-        ema::quant_four_4x4(&mut g, ff, mf);
-        assert_eq!(a, g, "QuantFour4x4 shim vs direct");
-
-        let mut a = base;
-        let mut g = base;
-        let mut a_max = [0i16; 4];
+        let mut with_max = base;
         let mut g_max = [0i16; 4];
-        unsafe {
-            ema::WelsQuantFour4x4Max_c(a.as_mut_ptr(), ff.as_ptr(), mf.as_ptr(), a_max.as_mut_ptr())
-        };
-        ema::quant_four_4x4_max(&mut g, ff, mf, &mut g_max);
-        assert_eq!((a, a_max), (g, g_max), "QuantFour4x4Max shim vs direct");
+        ema::quant_four_4x4_max(&mut with_max, ff, mf, &mut g_max);
+        assert_eq!(with_max, four, "QuantFour4x4Max wrote different coefficients");
+        for k in 0..4 {
+            let want = four[k * 16..k * 16 + 16].iter().map(|v| v.abs()).max().unwrap();
+            assert_eq!(g_max[k], want, "QuantFour4x4Max quadrant {k} maximum");
+            assert!(g_max[k] >= 0, "a max magnitude is never negative");
+        }
+
+        // The DC quantizer is the same dead zone with scalar factors.
+        let sub: [i16; 16] = base[..16].try_into().unwrap();
+        let mut dc = sub;
+        ema::quant_4x4_dc(&mut dc, ff[0] << 1, mf[0] >> 1);
+        let mut byhand = sub;
+        for v in byhand.iter_mut() {
+            let s = (*v as i32) >> 31;
+            let abs = (s ^ (*v as i32)) - s;
+            let q = ((((ff[0] << 1) as i32 + abs) * (mf[0] >> 1) as i32) >> 16) as i32;
+            *v = ((s ^ q) - s) as i16;
+        }
+        assert_eq!(dc, byhand, "Quant4x4Dc dead zone");
     }
 
     // --- The 2x2 Hadamard pair: allocations of exactly 49 i16 (the declared
@@ -1429,23 +1436,30 @@ fn encode_mb_aux_shims_stay_inside_the_spans_they_declare() {
         let base: [i16; 49] = coeffs(&mut rng);
         let (ff, mf) = (ema::g_kiQuantInterFF[30][0] << 1, ema::g_kiQuantMF[30][0] >> 1);
 
-        let mut a = base;
-        let ra = unsafe { ema::WelsHadamardQuant2x2Skip_c(a.as_mut_ptr(), ff, mf) };
-        let rg = ema::hadamard_quant_2x2_skip(&base, ff, mf);
-        assert_eq!(ra, rg, "HadamardQuant2x2Skip shim vs direct");
-        assert_eq!(a, base, "HadamardQuant2x2Skip wrote through a read-only contract");
+        // The skip variant's read-only contract is now the `&[i16; 49]` parameter's
+        // job rather than an assertion's. **The two kernels are deliberately not
+        // cross-asserted**: `skip` thresholds on `(1<<16 - 1) / mf - ff` in `i32`
+        // while the full kernel truncates each butterfly output to `i16` before
+        // quantising, so "skip says nothing survives" and "the full kernel counted
+        // zero" agree on every input the encoder produces but are not the same
+        // predicate. An assertion that they are is a test asserting its author's
+        // guess — this one did, and failed on the first random input.
+        let _ = ema::hadamard_quant_2x2_skip(&base, ff, mf);
 
-        let mut a = base;
         let mut g = base;
-        let (mut a_dct, mut a_blk) = ([0i16; 4], [0i16; 4]);
         let (mut g_dct, mut g_blk) = ([0i16; 4], [0i16; 4]);
-        let ra = unsafe {
-            ema::WelsHadamardQuant2x2_c(a.as_mut_ptr(), ff, mf, a_dct.as_mut_ptr(), a_blk.as_mut_ptr())
-        };
-        let rg = ema::hadamard_quant_2x2(&mut g, ff, mf, &mut g_dct, &mut g_blk);
-        assert_eq!((ra, a, a_dct, a_blk), (rg, g, g_dct, g_blk), "HadamardQuant2x2 shim vs direct");
-        for (i, (&now, &was)) in a.iter().zip(base.iter()).enumerate() {
-            if !matches!(i, 0 | 16 | 32 | 48) {
+        let nnz = ema::hadamard_quant_2x2(&mut g, ff, mf, &mut g_dct, &mut g_blk);
+        assert_eq!(g_dct, g_blk, "HadamardQuant2x2 writes the same four values twice");
+        assert_eq!(
+            nnz,
+            g_dct.iter().filter(|&&v| v != 0).count() as i32,
+            "the returned count is the non-zero count of what was written"
+        );
+        assert!((0..=4).contains(&nnz), "the 2x2 DC non-zero count is 0..=4");
+        for (i, (&now, &was)) in g.iter().zip(base.iter()).enumerate() {
+            if matches!(i, 0 | 16 | 32 | 48) {
+                assert_eq!(now, 0, "HadamardQuant2x2 must zero its four DC slots");
+            } else {
                 assert_eq!(now, was, "HadamardQuant2x2 touched index {i}, outside its touch set");
             }
         }
@@ -1455,13 +1469,17 @@ fn encode_mb_aux_shims_stay_inside_the_spans_they_declare() {
     // DC at index 240 is the declared reach), source untouched.
     for _ in 0..scale(20) {
         let base: [i16; 241] = coeffs(&mut rng);
-        let mut src = base;
-        let mut a = [0i16; 16];
-        unsafe { ema::WelsHadamardT4Dc_c(a.as_mut_ptr(), src.as_mut_ptr()) };
         let mut g = [0i16; 16];
         ema::hadamard_t4_dc(&mut g, &base);
-        assert_eq!(a, g, "HadamardT4Dc shim vs direct");
-        assert_eq!(src, base, "HadamardT4Dc wrote through a read-only contract");
+        // The transform reads exactly the sixteen block DCs and nothing else:
+        // zeroing every non-DC element must not change the result.
+        let mut only_dc = [0i16; 241];
+        for k in 0..16 {
+            only_dc[k * 16] = base[k * 16];
+        }
+        let mut g2 = [0i16; 16];
+        ema::hadamard_t4_dc(&mut g2, &only_dc);
+        assert_eq!(g, g2, "HadamardT4Dc read outside the sixteen block DCs");
     }
 
     // --- Scans and scorers: exact 16-element views, sources untouched.
@@ -1469,29 +1487,31 @@ fn encode_mb_aux_shims_stay_inside_the_spans_they_declare() {
         let dct: [i16; 16] = coeffs(&mut rng);
         let mut src = dct;
 
-        let mut a = [0i16; 16];
         let mut g = [0i16; 16];
-        unsafe { ema::WelsScan4x4DcAc_c(a.as_mut_ptr(), src.as_mut_ptr()) };
         ema::scan_4x4_dc_ac(&mut g, &dct);
-        assert_eq!(a, g, "Scan4x4DcAc shim vs direct");
-
         let mut a = [0i16; 16];
         ema::WelsScan4x4Dc(&mut a, &src);
-        assert_eq!(a, g, "Scan4x4Dc shim vs direct");
+        assert_eq!(a, g, "Scan4x4Dc and Scan4x4DcAc disagree");
 
-        let mut a = [0i16; 16];
-        let mut g = [0i16; 16];
-        unsafe { ema::WelsScan4x4Ac_c(a.as_mut_ptr(), src.as_mut_ptr()) };
-        ema::scan_4x4_ac(&mut g, &dct);
-        assert_eq!(a, g, "Scan4x4Ac shim vs direct");
+        // The AC scan is the DC/AC scan shifted by one zigzag position.
+        let mut ac = [0i16; 16];
+        ema::scan_4x4_ac(&mut ac, &dct);
+        assert_eq!(&ac[..15], &g[1..], "Scan4x4Ac is not Scan4x4DcAc without the DC");
 
-        let ra = unsafe { ema::WelsCalculateSingleCtr4x4_c(src.as_mut_ptr()) };
-        assert_eq!(ra, ema::calculate_single_ctr_4x4(&dct), "CalculateSingleCtr shim vs direct");
+        // A scan is a permutation: the multiset of coefficients is preserved.
+        let (mut sa, mut sb) = (g, dct);
+        sa.sort_unstable();
+        sb.sort_unstable();
+        assert_eq!(sa, sb, "the zigzag scan is not a permutation");
 
-        let ra = unsafe { ema::WelsGetNoneZeroCount_c(src.as_mut_ptr()) };
-        assert_eq!(ra, ema::get_none_zero_count(&dct), "GetNoneZeroCount shim vs direct");
+        assert_eq!(
+            ema::get_none_zero_count(&dct),
+            dct.iter().filter(|&&v| v != 0).count() as i32,
+            "GetNoneZeroCount"
+        );
+        let _ = ema::calculate_single_ctr_4x4(&dct);
 
-        assert_eq!(src, dct, "a scan shim wrote through a read-only contract");
+        assert_eq!(src, dct, "a scan wrote through a read-only contract");
     }
 
     // --- The seven copies: exact spans both sides ((H-1)*stride + W), every

@@ -201,15 +201,91 @@ pub const KI_TRUN_TABLE: [i32; 16] = [3, 2, 2, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 
 
 pub type PCopyFunc = unsafe extern "C" fn(pDst: *mut u8, iStrideD: i32, pSrc: *mut u8, iStrideS: i32);
 pub type PDctFunc = unsafe extern "C" fn(pDct: *mut i16, pSample1: *mut u8, iStride1: i32, pSample2: *mut u8, iStride2: i32);
-pub type PCalculateSingleCtrFunc = unsafe extern "C" fn(pDct: *mut i16) -> i32;
-pub type PScanFunc = unsafe extern "C" fn(pLevel: *mut i16, pDct: *mut i16);
-pub type PQuantizationFunc = unsafe extern "C" fn(pDct: *mut i16, pFF: *const i16, pMF: *const i16);
-pub type PQuantizationMaxFunc = unsafe extern "C" fn(pDct: *mut i16, pFF: *const i16, pMF: *const i16, pMax: *mut i16);
-pub type PQuantizationDcFunc = unsafe extern "C" fn(pDct: *mut i16, iFF: i16, iMF: i16);
-pub type PQuantizationSkipFunc = unsafe extern "C" fn(pDct: *mut i16, iFF: i16, iMF: i16) -> i32;
-pub type PQuantizationHadamardFunc = unsafe extern "C" fn(pRes: *mut i16, kiFF: i16, iMF: i16, pDct: *mut i16, pBlock: *mut i16) -> i32;
-pub type PTransformHadamard4x4Func = unsafe extern "C" fn(pLumaDc: *mut i16, pDct: *mut i16);
-pub type PGetNoneZeroCountFunc = unsafe extern "C" fn(pLevel: *mut i16) -> i32;
+
+// ---------------------------------------------------------------------------
+// **T9.D8 — the residual family's slots hold safe function pointers.**
+//
+// F103 split the coefficient family: five kernels had a direct caller and went
+// safe in T9.A3/A4; these eleven were reached *only* through `SWelsFuncPtrList`,
+// and every call-through passed a walking `SMbCache` cursor (`pRes.add(64)`,
+// `pBlock.add(16)`), so they were handed to this family. With the arena behind
+// `&mut SMbCache` the call sites index it instead, and the slot can hold the
+// safe kernel with no shim under it.
+//
+// Two consequences of taking exact arrays that the raw types hid:
+//
+//   * **`PQuantizationFunc` had to split.** One raw type served both
+//     `pfQuantization4x4` (one block) and `pfQuantizationFour4x4` (four), because
+//     `*mut i16` says nothing about length. The kernels are `quant_4x4` over
+//     `[i16; 16]` and `quant_four_4x4` over `[i16; 64]`, so the slots get one type
+//     each. A raw pointer that serves two lengths is a type that was not saying
+//     what it meant.
+//   * **The odd lengths are the reach, not the block.** `hadamard_quant_2x2` and
+//     its `Skip` twin read `rs[0]`, `rs[16]`, `rs[32]`, `rs[48]` — so their span is
+//     49, not 64 — and `hadamard_t4_dc` reads block 15's DC at index 240, so its
+//     span is 241. Those are the numbers the T7 differential test already pinned.
+//
+// The plane-taking slots (`PDctFunc` above, and the IDCT/copy slots) stay raw:
+// they pair an `SMbCache` operand with a *picture* one, which is F104's double
+// gate and the plane family's half.
+// ---------------------------------------------------------------------------
+pub type PCalculateSingleCtrFunc = fn(pDct: &[i16; 16]) -> i32;
+pub type PScanFunc = fn(pLevel: &mut [i16; 16], pDct: &[i16; 16]);
+pub type PQuantization4x4Func = fn(pDct: &mut [i16; 16], pFF: &[i16; 8], pMF: &[i16; 8]);
+pub type PQuantizationFunc = fn(pDct: &mut [i16; 64], pFF: &[i16; 8], pMF: &[i16; 8]);
+pub type PQuantizationMaxFunc =
+    fn(pDct: &mut [i16; 64], pFF: &[i16; 8], pMF: &[i16; 8], pMax: &mut [i16; 4]);
+pub type PQuantizationDcFunc = fn(pDct: &mut [i16; 16], iFF: i16, iMF: i16);
+pub type PQuantizationSkipFunc = fn(pDct: &[i16; 49], iFF: i16, iMF: i16) -> i32;
+pub type PQuantizationHadamardFunc =
+    fn(pRes: &mut [i16; 49], kiFF: i16, iMF: i16, pDct: &mut [i16; 4], pBlock: &mut [i16; 4]) -> i32;
+pub type PTransformHadamard4x4Func = fn(pLumaDc: &mut [i16; 16], pDct: &[i16; 241]);
+pub type PGetNoneZeroCountFunc = fn(pLevel: &[i16; 16]) -> i32;
+
+/// The 4x4 block at coefficient offset `off` — the safe form of `pRes.add(off)`
+/// where the callee reads one block.
+///
+/// **S28 does not object.** The rule is about *raw* cursors: a raw taken through a
+/// sub-slice carries a tag that dies the moment the kernel walks past the slice, and
+/// these kernels used to walk. A safe borrow is taken afresh per block and lives
+/// exactly as long as the call it is made for, and the kernel's own signature says
+/// it never reads outside.
+#[inline]
+pub fn blk4x4(a: &[i16], off: usize) -> &[i16; 16] {
+    a[off..off + 16].try_into().expect("a 4x4 block is 16 coefficients")
+}
+
+/// [`blk4x4`], mutably.
+#[inline]
+pub fn blk4x4_mut(a: &mut [i16], off: usize) -> &mut [i16; 16] {
+    (&mut a[off..off + 16]).try_into().expect("a 4x4 block is 16 coefficients")
+}
+
+/// The four 4x4 blocks at coefficient offset `off` — `pRes.add(off)` where the
+/// callee reads a quadrant.
+#[inline]
+pub fn blk_four4x4_mut(a: &mut [i16], off: usize) -> &mut [i16; 64] {
+    (&mut a[off..off + 64]).try_into().expect("four 4x4 blocks are 64 coefficients")
+}
+
+/// The 2x2-Hadamard span at `off`: `rs[0]`, `rs[16]`, `rs[32]`, `rs[48]` and nothing
+/// past index 48.
+#[inline]
+pub fn hadamard2x2_span(a: &[i16], off: usize) -> &[i16; 49] {
+    a[off..off + 49].try_into().expect("the 2x2 Hadamard reaches index 48")
+}
+
+/// [`hadamard2x2_span`], mutably.
+#[inline]
+pub fn hadamard2x2_span_mut(a: &mut [i16], off: usize) -> &mut [i16; 49] {
+    (&mut a[off..off + 49]).try_into().expect("the 2x2 Hadamard reaches index 48")
+}
+
+/// The luma-DC Hadamard's span from `off`: block 15's DC sits at index 240.
+#[inline]
+pub fn hadamard_dc_span(a: &[i16], off: usize) -> &[i16; 241] {
+    a[off..off + 241].try_into().expect("the luma DC Hadamard reaches index 240")
+}
 
 // ============================================================================
 // Encoder Function Pointer Table (SWelsFuncPtrList)
@@ -634,207 +710,22 @@ pub unsafe extern "C" fn WelsDctFourT4_c(
 // Forward Quantization Functions
 // ============================================================================
 
-/// In-place dead-zone forward quantization on a single 4x4 block (16 coefficients).
-///
-/// # Safety
-/// * `pDct` points at 16 writable, `i16`-aligned `i16`.
-/// * `pFF` and `pMF` point at 8 readable `i16` each (one QP row of
-///   `g_kiQuantInterFF` / `g_kiQuantMF`), disjoint from `pDct`.
-#[inline]
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe extern "C" fn WelsQuant4x4_c(pDct: *mut i16, pFF: *const i16, pMF: *const i16) {
-    // SHIM(phase2) -> quant_4x4
-    let dct: &mut [i16; 16] = unsafe { std::slice::from_raw_parts_mut(pDct, 16) }
-        .try_into()
-        .unwrap();
-    let ff: &[i16; 8] = unsafe { std::slice::from_raw_parts(pFF, 8) }.try_into().unwrap();
-    let mf: &[i16; 8] = unsafe { std::slice::from_raw_parts(pMF, 8) }.try_into().unwrap();
-    quant_4x4(dct, ff, mf);
-}
 
-/// In-place forward quantization of 16 Hadamard-transformed Luma DC coefficients.
-///
-/// # Safety
-/// `pDct` points at 16 writable, `i16`-aligned `i16`.
-#[inline]
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe extern "C" fn WelsQuant4x4Dc_c(pDct: *mut i16, iFF: i16, iMF: i16) {
-    // SHIM(phase2) -> quant_4x4_dc
-    let dct: &mut [i16; 16] = unsafe { std::slice::from_raw_parts_mut(pDct, 16) }
-        .try_into()
-        .unwrap();
-    quant_4x4_dc(dct, iFF, iMF);
-}
 
-/// In-place forward quantization across 4 blocks (64 coefficients).
-///
-/// # Safety
-/// * `pDct` points at 64 writable, `i16`-aligned `i16`.
-/// * `pFF` and `pMF` point at 8 readable `i16` each, disjoint from `pDct`.
-#[inline]
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe extern "C" fn WelsQuantFour4x4_c(pDct: *mut i16, pFF: *const i16, pMF: *const i16) {
-    // SHIM(phase2) -> quant_four_4x4
-    let dct: &mut [i16; 64] = unsafe { std::slice::from_raw_parts_mut(pDct, 64) }
-        .try_into()
-        .unwrap();
-    let ff: &[i16; 8] = unsafe { std::slice::from_raw_parts(pFF, 8) }.try_into().unwrap();
-    let mf: &[i16; 8] = unsafe { std::slice::from_raw_parts(pMF, 8) }.try_into().unwrap();
-    quant_four_4x4(dct, ff, mf);
-}
 
-/// In-place forward quantization across 4 blocks while computing max absolute levels `pMax[0..3]`.
-///
-/// # Safety
-/// * `pDct` points at 64 writable, `i16`-aligned `i16`.
-/// * `pFF` and `pMF` point at 8 readable `i16` each.
-/// * `pMax` points at 4 writable `i16`.
-/// * All four regions are mutually disjoint (the one caller passes a stack
-///   array for `pMax` and table rows for the factors,
-///   `svc_encode_mb.rs:868-870`).
-#[inline]
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe extern "C" fn WelsQuantFour4x4Max_c(
-    pDct: *mut i16,
-    pFF: *const i16,
-    pMF: *const i16,
-    pMax: *mut i16,
-) {
-    // SHIM(phase2) -> quant_four_4x4_max
-    let dct: &mut [i16; 64] = unsafe { std::slice::from_raw_parts_mut(pDct, 64) }
-        .try_into()
-        .unwrap();
-    let ff: &[i16; 8] = unsafe { std::slice::from_raw_parts(pFF, 8) }.try_into().unwrap();
-    let mf: &[i16; 8] = unsafe { std::slice::from_raw_parts(pMF, 8) }.try_into().unwrap();
-    let max: &mut [i16; 4] = unsafe { std::slice::from_raw_parts_mut(pMax, 4) }
-        .try_into()
-        .unwrap();
-    quant_four_4x4_max(dct, ff, mf, max);
-}
 
 // ============================================================================
 // Forward Hadamard Transforms
 // ============================================================================
 
-/// Fast early-termination skip check for 2x2 Chroma DC Hadamard transform and quantization.
-/// Returns 1 if any transformed Chroma DC coefficient exceeds the zero-quantization threshold.
-///
-/// # Safety
-/// * `pRs` points at 49 readable, `i16`-aligned `i16` — the exact reach: the
-///   kernel reads the chroma DC raster positions 0, 16, 32 and 48, and 48 is
-///   the last. Nothing is written. Every caller hands a >= 64-coefficient
-///   chroma group (`svc_encode_mb.rs:1067`, `pMbCache->pCoeffLevel` chroma
-///   offsets), so 49 always exists.
-/// * `iMF != 0` (the callers' `mf >> 1` table values are all >= 14).
-#[inline]
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe extern "C" fn WelsHadamardQuant2x2Skip_c(pRs: *mut i16, iFF: i16, iMF: i16) -> i32 {
-    // SHIM(phase2) -> hadamard_quant_2x2_skip
-    let rs: &[i16; 49] = unsafe { std::slice::from_raw_parts(pRs, 49) }.try_into().unwrap();
-    hadamard_quant_2x2_skip(rs, iFF, iMF)
-}
 
-/// 2x2 Forward Hadamard transform and quantization for Chroma DC coefficients.
-/// Returns the count of non-zero quantized DC coefficients (`iDcNzc`).
-///
-/// # Safety
-/// * `pRs` points at 49 writable, `i16`-aligned `i16` (the exact reach — DC
-///   raster positions 0, 16, 32, 48 are read and cleared, 48 is the last).
-/// * `pDct` and `pBlock` point at 4 writable `i16` each.
-/// * The three regions are mutually disjoint. The one caller passes the
-///   chroma residual group, a stack `aDct2x2`, and
-///   `pMbCache->pDct.iChromaDc` (`svc_encode_mb.rs:862-866`) — three
-///   distinct allocations.
-#[inline]
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe extern "C" fn WelsHadamardQuant2x2_c(
-    pRs: *mut i16,
-    kiFF: i16,
-    iMF: i16,
-    pDct: *mut i16,
-    pBlock: *mut i16,
-) -> i32 {
-    // SHIM(phase2) -> hadamard_quant_2x2
-    let rs: &mut [i16; 49] = unsafe { std::slice::from_raw_parts_mut(pRs, 49) }
-        .try_into()
-        .unwrap();
-    let dct: &mut [i16; 4] = unsafe { std::slice::from_raw_parts_mut(pDct, 4) }
-        .try_into()
-        .unwrap();
-    let block: &mut [i16; 4] = unsafe { std::slice::from_raw_parts_mut(pBlock, 4) }
-        .try_into()
-        .unwrap();
-    hadamard_quant_2x2(rs, kiFF, iMF, dct, block)
-}
 
-/// 4x4 Forward Hadamard Transform on the 16 Luma DC coefficients of an Intra 16x16 macroblock.
-///
-/// # Safety
-/// * `pLumaDc` points at 16 writable, `i16`-aligned `i16`.
-/// * `pDct` points at 241 readable `i16` — the exact reach: the DC of raster
-///   block `k` sits at `k * 16` and block 15's DC at index 240 is the last
-///   read. Every caller hands the 256-coefficient luma buffer
-///   (`svc_encode_mb.rs:537-539`). Nothing is written through it.
-/// * The two regions are disjoint (the caller's `aDctT4Dc` is a stack array).
-#[inline]
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe extern "C" fn WelsHadamardT4Dc_c(pLumaDc: *mut i16, pDct: *mut i16) {
-    // SHIM(phase2) -> hadamard_t4_dc
-    let luma_dc: &mut [i16; 16] = unsafe { std::slice::from_raw_parts_mut(pLumaDc, 16) }
-        .try_into()
-        .unwrap();
-    let dct: &[i16; 241] = unsafe { std::slice::from_raw_parts(pDct, 241) }
-        .try_into()
-        .unwrap();
-    hadamard_t4_dc(luma_dc, dct);
-}
 
 // ============================================================================
 // Zigzag Scanning Functions
 // ============================================================================
 
-/// Reorders all 16 transform coefficients from 2D raster order in `pDct` to 1D zigzag scan order in `pLevel`.
-///
-/// # Safety
-/// `pLevel` points at 16 writable, `pDct` at 16 readable, `i16`-aligned
-/// `i16`; the two regions are disjoint (every caller pairs a level buffer
-/// with a separate coefficient buffer, `svc_encode_mb.rs:543-548`). `pDct`
-/// is only read.
-#[inline]
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe extern "C" fn WelsScan4x4DcAc_c(pLevel: *mut i16, pDct: *mut i16) {
-    // SHIM(phase2) -> scan_4x4_dc_ac
-    let level: &mut [i16; 16] = unsafe { std::slice::from_raw_parts_mut(pLevel, 16) }
-        .try_into()
-        .unwrap();
-    let dct: &[i16; 16] = unsafe { std::slice::from_raw_parts(pDct, 16) }.try_into().unwrap();
-    scan_4x4_dc_ac(level, dct);
-}
 
-/// Reorders 15 AC coefficients into `pLevel[0..14]` (omitting DC at `pDct[0]`) and sets `pLevel[15] = 0`.
-///
-/// # Safety
-/// Same contract as [`WelsScan4x4DcAc_c`]: 16 writable / 16 readable
-/// disjoint `i16` regions.
-#[inline]
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe extern "C" fn WelsScan4x4Ac_c(pLevel: *mut i16, pDct: *mut i16) {
-    // SHIM(phase2) -> scan_4x4_ac
-    let level: &mut [i16; 16] = unsafe { std::slice::from_raw_parts_mut(pLevel, 16) }
-        .try_into()
-        .unwrap();
-    let dct: &[i16; 16] = unsafe { std::slice::from_raw_parts(pDct, 16) }.try_into().unwrap();
-    scan_4x4_ac(level, dct);
-}
 
 /// Reorders 16 DC coefficients into 1D zigzag scan order (identical to `WelsScan4x4DcAc_c`).
 ///
@@ -850,33 +741,7 @@ pub fn WelsScan4x4Dc(pLevel: &mut [i16; 16], pDct: &[i16; 16]) {
 // Non-Zero Count and CAVLC Bit Scoring
 // ============================================================================
 
-/// Fast rate-distortion CAVLC bit-cost approximation for a 4x4 block based on JVT-O079.
-///
-/// # Safety
-/// `pDct` points at 16 readable, `i16`-aligned `i16`. Nothing is written.
-#[inline]
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe extern "C" fn WelsCalculateSingleCtr4x4_c(pDct: *mut i16) -> i32 {
-    // SHIM(phase2) -> calculate_single_ctr_4x4
-    let dct: &[i16; 16] = unsafe { std::slice::from_raw_parts(pDct, 16) }.try_into().unwrap();
-    calculate_single_ctr_4x4(dct)
-}
 
-/// Counts the number of non-zero coefficients in a 16-element array `pLevel`.
-///
-/// # Safety
-/// `pLevel` points at 16 readable, `i16`-aligned `i16`. Nothing is written.
-#[inline]
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe extern "C" fn WelsGetNoneZeroCount_c(pLevel: *mut i16) -> i32 {
-    // SHIM(phase2) -> get_none_zero_count
-    let level: &[i16; 16] = unsafe { std::slice::from_raw_parts(pLevel, 16) }
-        .try_into()
-        .unwrap();
-    get_none_zero_count(level)
-}
 
 // ============================================================================
 // Pixel Block Copy Fallbacks (matching copy_mb.h)
@@ -987,23 +852,23 @@ pub unsafe extern "C" fn WelsInitEncodingFuncs(pFuncList: &mut SWelsFuncPtrList,
         f.pfCopy8x4 = Some(WelsCopy8x4_c);
         f.pfCopy4x8 = Some(WelsCopy4x8_c);
 
-        f.pfQuantizationHadamard2x2 = Some(WelsHadamardQuant2x2_c);
-        f.pfQuantizationHadamard2x2Skip = Some(WelsHadamardQuant2x2Skip_c);
-        f.pfTransformHadamard4x4Dc = Some(WelsHadamardT4Dc_c);
+        f.pfQuantizationHadamard2x2 = Some(hadamard_quant_2x2);
+        f.pfQuantizationHadamard2x2Skip = Some(hadamard_quant_2x2_skip);
+        f.pfTransformHadamard4x4Dc = Some(hadamard_t4_dc);
 
         f.pfDctT4 = Some(WelsDctT4_c);
         f.pfDctFourT4 = Some(WelsDctFourT4_c);
 
-        f.pfScan4x4 = Some(WelsScan4x4DcAc_c);
-        f.pfScan4x4Ac = Some(WelsScan4x4Ac_c);
-        f.pfCalculateSingleCtr4x4 = Some(WelsCalculateSingleCtr4x4_c);
+        f.pfScan4x4 = Some(scan_4x4_dc_ac);
+        f.pfScan4x4Ac = Some(scan_4x4_ac);
+        f.pfCalculateSingleCtr4x4 = Some(calculate_single_ctr_4x4);
 
-        f.pfGetNoneZeroCount = Some(WelsGetNoneZeroCount_c);
+        f.pfGetNoneZeroCount = Some(get_none_zero_count);
 
-        f.pfQuantization4x4 = Some(WelsQuant4x4_c);
-        f.pfQuantizationDc4x4 = Some(WelsQuant4x4Dc_c);
-        f.pfQuantizationFour4x4 = Some(WelsQuantFour4x4_c);
-        f.pfQuantizationFour4x4Max = Some(WelsQuantFour4x4Max_c);
+        f.pfQuantization4x4 = Some(quant_4x4);
+        f.pfQuantizationDc4x4 = Some(quant_4x4_dc);
+        f.pfQuantizationFour4x4 = Some(quant_four_4x4);
+        f.pfQuantizationFour4x4Max = Some(quant_four_4x4_max);
 
     }
 }
@@ -1037,17 +902,13 @@ mod tests {
     }
 
     #[test]
-    // unsafe-cat: port-raw(Phase 9)
-    #[allow(unsafe_code)]
     fn test_quant_4x4() {
         let mut dct = [100i16; 16];
         let qp = 26usize;
         let ff = &g_kiQuantInterFF[qp];
         let mf = &g_kiQuantMF[qp];
 
-        unsafe {
-            WelsQuant4x4_c(dct.as_mut_ptr(), ff.as_ptr(), mf.as_ptr());
-        }
+        quant_4x4(&mut dct, ff, mf);
 
         for &val in &dct {
             assert!(val >= 0);
@@ -1055,8 +916,6 @@ mod tests {
     }
 
     #[test]
-    // unsafe-cat: port-raw(Phase 9)
-    #[allow(unsafe_code)]
     fn test_hadamard_quant_2x2() {
         let mut res = [0i16; 64];
         res[0] = 30;
@@ -1071,9 +930,8 @@ mod tests {
         let ff = g_kiQuantInterFF[qp][0];
         let mf = g_kiQuantMF[qp][0];
 
-        let nnz = unsafe {
-            WelsHadamardQuant2x2_c(res.as_mut_ptr(), ff, mf, dct.as_mut_ptr(), block.as_mut_ptr())
-        };
+        let span: &mut [i16; 49] = (&mut res[..49]).try_into().unwrap();
+        let nnz = hadamard_quant_2x2(span, ff, mf, &mut dct, &mut block);
 
         assert_eq!(res[0], 0);
         assert_eq!(res[16], 0);
@@ -1083,8 +941,6 @@ mod tests {
     }
 
     #[test]
-    // unsafe-cat: port-raw(Phase 9)
-    #[allow(unsafe_code)]
     fn test_zigzag_scan() {
         let mut dct = [0i16; 16];
         for i in 0..16 {
@@ -1092,9 +948,7 @@ mod tests {
         }
 
         let mut level = [0i16; 16];
-        unsafe {
-            WelsScan4x4DcAc_c(level.as_mut_ptr(), dct.as_mut_ptr());
-        }
+        scan_4x4_dc_ac(&mut level, &dct);
 
         assert_eq!(level[0], dct[0]);
         assert_eq!(level[1], dct[1]);
@@ -1102,15 +956,13 @@ mod tests {
     }
 
     #[test]
-    // unsafe-cat: port-raw(Phase 9)
-    #[allow(unsafe_code)]
     fn test_nonzero_count() {
         let mut level = [0i16; 16];
         level[0] = 5;
         level[3] = -2;
         level[7] = 1;
 
-        let count = unsafe { WelsGetNoneZeroCount_c(level.as_mut_ptr()) };
+        let count = get_none_zero_count(&level);
         assert_eq!(count, 3);
     }
 

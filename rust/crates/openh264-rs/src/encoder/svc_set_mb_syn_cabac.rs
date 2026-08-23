@@ -953,7 +953,7 @@ pub unsafe fn WelsWriteMbResidualCabac(
                 let dc_buf = (*pDct).iLumaI16x16Dc.as_mut_ptr();
                 let iNonZeroCount = if pFuncList.pfGetNoneZeroCount.is_some()
                 {
-                    (pFuncList.pfGetNoneZeroCount.unwrap())(dc_buf)
+                    (pFuncList.pfGetNoneZeroCount.unwrap())(&(*pDct).iLumaI16x16Dc)
                 } else {
                     (*pDct).iLumaI16x16Dc.iter().filter(|&&x| x != 0).count() as i32
                 };
