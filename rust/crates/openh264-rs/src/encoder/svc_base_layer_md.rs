@@ -33,7 +33,9 @@
 // Phase 4a: MC is called directly, not via `sMcFuncs`.
 
 #![deny(unsafe_code)]
-use crate::encoder::svc_encode_slice::{layer_dec_pic, layer_dec_pic_mut, layer_ref_pic, layer_ref_pic_mut};
+use crate::encoder::svc_encode_slice::{
+    layer_dec_pic, layer_dec_pic_mut, layer_enc_pic, layer_ref_pic,
+};
 use crate::encoder::svc_encode_slice::current_layer;
 use crate::encoder::picture::{RecPicId, SrcPicId};
 use crate::common::mc::{McChroma_c, McLuma_c};
@@ -325,8 +327,15 @@ pub unsafe fn WelsMdIntraInit(
     // step 3. locating current pEnc and pDec
     // unroll loops here
     if 0 == kiMbX || iSliceFirstMbXY == kiMbXY {
-        let mut iStrideY = (*pCurLayer).iEncStride[0];
-        let mut iStrideUV = (*pCurLayer).iEncStride[1];
+        // **The source picture's first reader through its handle** (T9.B21). The two
+        // strides are the same numbers `iEncStride` holds — `WelsInitCurrentLayer`
+        // stamps that array from `planes().iLineSize`, and `planes()` fills it from
+        // `SPicture::stride(i)`, which is what `plane(i).stride()` returns — so this
+        // is byte-identical by construction, not by measurement. The borrow is taken
+        // and dropped inside the statement (S37, and `layer_ref_pic`'s doc says why).
+        let pEncPicture = layer_enc_pic(pCurLayer).expect("the layer's source picture is bound");
+        let mut iStrideY = pEncPicture.stride(0);
+        let mut iStrideUV = pEncPicture.stride(1);
         let mut iOffsetY = (kiMbX + kiMbY * iStrideY) << 4;
         let mut iOffsetUV = (kiMbX + kiMbY * iStrideUV) << 3;
         (*pMbCache).SPicData.pEncMb[0] = (*pCurLayer).pEncData[0].offset(iOffsetY as isize);

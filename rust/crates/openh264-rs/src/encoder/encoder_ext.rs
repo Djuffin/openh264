@@ -2154,7 +2154,23 @@ pub unsafe fn WelsInitCurrentLayer(pCtx: *mut sWelsEncCtx, _kiWidth: i32, _kiHei
     if pRefList.is_null() || (*pCtx).pVpp.is_null() {
         return;
     }
-    let pEncPic = (*(*pCtx).pVpp).m_pSpatialPicPool.get_mut(idEnc).planes();
+    // The handle and its pool, beside the roots they stand for (T9.B21). `idEnc` is
+    // already resolved above and the pool is the one it indexes, so this is the same
+    // fact written twice — the point of a strangler step: both spellings live until
+    // the last reader of the raw one is gone.
+    //
+    // **The pool pointer is taken first and every access below goes through it**,
+    // which is `pRefList`'s shape one picture over (`:2074`, then `(*pRefList)
+    // .pic_mut(..)` on the next line) and is the ordering that keeps it valid. Taken
+    // the other way round — `get_mut` on the field, then `addr_of_mut!` of the same
+    // field — the two are competing paths into one place rather than parent and
+    // child, and whichever is written second pops the first. S29's boundary clause,
+    // and F114a is what it costs to get wrong.
+    let pSrcPool = std::ptr::addr_of_mut!((*(*pCtx).pVpp).m_pSpatialPicPool);
+    (*pCurDq).pEncPic = Some(idEnc);
+    (*pCurDq).pSrcPool = pSrcPool;
+
+    let pEncPic = (*pSrcPool).get_mut(idEnc).planes();
     let pDecPic = (*pRefList).pic_mut(idDec).planes();
 
     (*pCurDq).pEncData[0] = pEncPic.pData[0];

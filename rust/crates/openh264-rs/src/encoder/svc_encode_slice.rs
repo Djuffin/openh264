@@ -947,22 +947,36 @@ pub unsafe fn layer_ref_pic<'a>(pLayer: *mut SDqLayer) -> Option<&'a SPicture> {
     Some((*pRefList).pic(id))
 }
 
-/// Mutable form of [`layer_ref_pic`] — for the plane roots, which are handed out from
-/// the owning buffer and so need `&mut` (S28, [`SPicture::data_ptr`]).
+/// The **source** picture this layer encodes from, resolved through the spatial pool
+/// the layer was stamped with — the [`layer_ref_pic`] of the source half (T9.B21).
+///
+/// Shared only, and deliberately so. The source picture is read by every consumer and
+/// written by none of them on any path a gate runs, so a shared borrow handed out
+/// twice is **two siblings, not a stack** — which is what makes it safe to call this
+/// per macroblock where `SPicture::planes()` (a `&mut self` accessor, so a fresh
+/// exclusive borrow of the whole picture every time) is F73's retag. There is no
+/// `layer_enc_pic_mut` for that reason; if one is ever needed, read the `src` caveat
+/// in `phase9_plane_census.md` first.
 ///
 /// # Safety
-/// As [`layer_ref_pic`], and no other borrow of the same pool may be live.
+/// `pLayer` must be a live layer stamped by `WelsInitCurrentLayer`.
 #[inline]
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
-pub unsafe fn layer_ref_pic_mut<'a>(pLayer: *mut SDqLayer) -> Option<&'a mut SPicture> {
-    let id = (*pLayer).pRefPic?;
-    let pRefList = (*pLayer).pRefList;
-    if pRefList.is_null() {
+pub unsafe fn layer_enc_pic<'a>(pLayer: *mut SDqLayer) -> Option<&'a SPicture> {
+    let id = (*pLayer).pEncPic?;
+    let pSrcPool = (*pLayer).pSrcPool;
+    if pSrcPool.is_null() {
         return None;
     }
-    Some((*pRefList).pic_mut(id))
+    Some((*pSrcPool).get(id))
 }
+
+// `layer_ref_pic_mut` stood here — the `&mut` form of [`layer_ref_pic`], for handing
+// out plane roots from the owning buffer. **S18, deleted in T9.B21**: it had no caller
+// anywhere in the tree, only four stale imports. It is also the wrong shape for this
+// family now — the exclusive borrow it hands out is a fresh whole-picture retag at
+// every call (F73), which is precisely what [`layer_enc_pic`] exists to avoid.
 
 /// The reconstruction picture this layer is **decoding into** — see [`layer_ref_pic`].
 ///
@@ -1052,6 +1066,24 @@ pub struct SDqLayer {
 
     pub pRefPic: Option<RecPicId>,
     pub pDecPic: Option<RecPicId>,
+    /// The **source** picture this frame encodes from, and the pool it is a slot
+    /// of — `pEncData`'s three raw roots said as a handle (T9.B21).
+    ///
+    /// The pair exists for exactly the reason [`pRefList`](Self::pRefList) does,
+    /// one picture over: ten mode-decision consumers reach the source through
+    /// `pCurDqLayer` and take no context (`WelsMdI16x16`, `WelsMdIntraChroma`,
+    /// `WelsMdP16x16`, `WelsMdP16x8`, `WelsMdP8x16`, `WelsMdP8x8`,
+    /// `WelsRecPskip`, and the three F115 names dead in the port), so a handle
+    /// here without the pool beside it would name a pool nothing in scope could
+    /// open. The reference half solves this with `pRefList`; this is the same
+    /// solution for the spatial pool, which lives in `pCtx->pVpp` and is
+    /// otherwise unreachable from a layer.
+    ///
+    /// Raw for `pRefList`'s reason as well: the pointee owns, the pointer does
+    /// not. Both are stamped by `WelsInitCurrentLayer` in the same statement
+    /// that stamps `pEncData`, from the same already-resolved `idEnc`.
+    pub pEncPic: Option<SrcPicId>,
+    pub pSrcPool: *mut crate::encoder::picture::SrcPicPool,
     /// The two pictures above **as this frame sees them** — plane roots, strides and
     /// picture type, stamped once by `WelsInitCurrentLayer` (T6.F5). The handles are
     /// still the truth; these are the per-macroblock world's read path, and they are
@@ -1148,6 +1180,8 @@ impl SDqLayer {
             pRefList: std::ptr::null_mut(),
             pRefPic: None,
             pDecPic: None,
+            pEncPic: None,
+            pSrcPool: std::ptr::null_mut(),
             sRefPicView: SRefPicView::default(),
             sDecPicView: SRefPicView::default(),
             pRefOri: [None; MAX_REF_PIC_COUNT as usize],
