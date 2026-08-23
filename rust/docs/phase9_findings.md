@@ -343,3 +343,204 @@ green test on top of it.** The tests that survive a strangler conversion are the
 ones whose golden is the *reference implementation*; when the reference side is
 retired, the surviving assertions have to be re-pointed at the safe kernel or
 they mean nothing.
+
+## F107 — the reconstruction write: the measurement, and why the write view cannot be `&mut [u8]`
+
+Session B's step 5. The question the plane family's second half turns on: the
+encoder's workers all write into **one** reconstruction picture, so what shape can
+that write take in safe Rust? Everything below is read out of the tree, with the
+anchor for each fact.
+
+### 1. Is any multi-threaded slice mode row-aligned?
+
+A slice is a run of consecutive macroblock indices. If the run is a whole number
+of macroblock **rows** and starts on a row boundary, the bytes it writes are a
+contiguous band of the plane and `split_at_mut` can hand one band to each worker.
+Otherwise two workers write into the same row of the plane at different columns,
+and no split of one `&mut [u8]` expresses that.
+
+Two multi-threaded entry points exist, both in `WelsEncoderEncodeExt`:
+
+* `uiSliceMode != SM_SIZELIMITED_SLICE && iMultipleThreadIdc > 1` ->
+  `EncodeFixedSlicesForked`, one job per **slice** (`encoder_ext.rs:3571-3606`);
+* `uiSliceMode == SM_SIZELIMITED_SLICE && iMultipleThreadIdc > 1` ->
+  `EncodeDynamicSlicesForked`, one job per **partition**
+  (`encoder_ext.rs:3618-3660`).
+
+| mode | forks? | run lengths come from | row-aligned? |
+|---|---|---|---|
+| `SM_SINGLE_SLICE` | no — `iSliceCount <= 1` returns `ENC_RETURN_UNEXPECTED` (`encoder_ext.rs:3580`) | whole frame | trivially |
+| `SM_FIXEDSLCNUM_SLICE`, RC **on** (the default, and every diffharness row) | yes | `GomValidCheckSliceMbNum` (`svc_enc_slice_segment.rs:243-301`) | **YES** |
+| `SM_FIXEDSLCNUM_SLICE`, `RC_OFF_MODE` | yes | `CheckFixedSliceNumMultiSliceSetting` (`:91-118`) | **no** |
+| `SM_RASTER_SLICE` | yes | the caller's `uiSliceMbNum[]` (`:150-193`, `AssignMbMapMultipleSlices:415-480`) | **no** |
+| `SM_SIZELIMITED_SLICE` | yes | `UpdateSlicepEncCtxWithPartition` (`encoder_ext.rs:2881-2934`) | **no** |
+
+The one `YES` is worth its own paragraph, because it is not obvious.
+`GomValidCheckSliceMbNum` assigns every slice but the last a multiple of
+`iGomSize`, and `iGomSize = kiMbWidth * GOM_ROW_MODE0_*P` where the four
+constants are **2 or 4** (`rc.rs:146-149`) — a GOM is two or four *macroblock
+rows*. Every branch of the assignment stays on that grid (`iNumMbAssigning` is
+`WELS_DIV_ROUND(..) * iGomSize`, the floor is `iMinimalMbNum = iGomSize`, the cap
+is `(iMaximalMbNum / iGomSize) * iGomSize`), and the last slice takes
+`kiMbNumInFrame` minus a sum of multiples of `kiMbWidth`, which is again a
+multiple of `kiMbWidth`. The runtime re-slicer keeps the property:
+`DynamicAdjustSlicing` rounds to `iNumberMbGom = iMbWidth * iGomRowMode0`
+(`rc.rs:920`) in every RC mode, and its clamps are `kiCountNumMb` minus multiples
+of `iMbWidth` (`slice_multi_threading.rs:617-635`). In `RC_OFF_MODE` it rounds to
+nothing and `iMinimalMbNum` falls to `iMbWidth` or to **1**.
+
+**So option (a) — "split the plane into per-worker row bands before the fork" —
+is available for one of the four multi-threaded configurations and not for the
+other three.** It cannot be the mechanism. It could be a fast path, but a second
+code path for the same output is a divergence risk with nothing to gain.
+
+### 2. What does a worker read of the reconstruction picture?
+
+Only what it wrote itself, and this is enforced rather than incidental:
+
+* **Intra prediction's reference pixels.** `UpdateMbNeighbor` sets `LEFT_MB_POS` /
+  `TOP_MB_POS` / `TOPLEFT` / `TOPRIGHT` in `SMB::uiNeighborAvail` only when the
+  neighbour's `uiSliceIdc` equals the current macroblock's
+  (`svc_encode_slice.rs:1343-1346`). `FillNeighborCacheIntra` turns that into
+  `SMbCache::uiNeighborIntra` (`md.rs:855-944`), which indexes the availability
+  tables that choose the DC-128 / DC-left / DC-top variants — so an unavailable
+  side is never read.
+* **Deblocking.** `bLeftBsValid`/`bTopBsValid` are indexed by
+  `SDeblockingFilter::uiFilterIdc`, and index 1 is
+  `uiSliceIdc == neighbour's uiSliceIdc` (`deblocking.rs:903-913`). Under
+  multi-threading `InitSliceSettings` forces `iLoopFilterDisableIdc = 2`
+  (`encoder_ext.rs:1366`), which is `uiFilterIdc = 1`.
+* **Motion compensation reads the *reference* picture, which is a different
+  slot.** `PrefetchNextBuffer` picks `pDecPic` from the slots with
+  `bUsedAsRef == false`, and `SetUnref()`s the one it takes in the fallback arm
+  (`ref_list_mgr_svc.rs:660-691`); `WelsBuildRefList` admits only pictures with
+  `bUsedAsRef == true` (`:1112-1121`). It runs from `EndofUpdateRefList` at the
+  *end* of the previous frame (`:1756`), so `pDecPic ∉ pRefList0` by construction.
+  (Measured on the `TemporalLayer` strategy — the camera path. The two `Screen`
+  strategies are `SCREEN_CONTENT(dormant)`, Phase 10's.)
+
+So **every byte of the reconstruction plane a worker touches belongs to one of its
+own macroblocks**, and the byte sets of two workers are disjoint. That is the
+premise any design has to discharge, and it is now measured.
+
+### 3. Why `&mut [u8]` cannot express it — and this is the finding
+
+Disjointness is not enough. The plane is one allocation, and under Stacked
+Borrows a `&mut [u8]` is a `Unique` retag over its **whole range**, whether or not
+the writes touch all of it. Three shapes all fail for that one reason:
+
+* **`&mut SPicture` per worker** — what the port does today through
+  `layer_dec_pic_mut` -> `SRefList::pic_mut` and `SPicture::planes`' `&mut self`.
+  That is F73, and it is why the fork/join Miri probe carries
+  `#[cfg_attr(miri, ignore)]` (`svc_encode_slice.rs:4160`).
+* **A per-macroblock `PlaneCursorMut`.** `PlaneCursorMut::new(buf, center, stride)`
+  takes a sub-slice, so the obvious narrowing is "the contiguous span from the
+  macroblock's first row to its last". **That span is the full width of those
+  rows**, because rows are contiguous in the buffer — so two workers on the same
+  macroblock row hold overlapping `&mut [u8]`, and the second retag pops the
+  first. Narrowing does not help; it is the same bug at a smaller radius.
+* **`split_at_mut` bands** — sound, but only where the slices are row-aligned,
+  which §1 measured at one mode of four.
+
+The write view therefore **must not hand out `&mut [u8]` over anything wider than
+one macroblock's columns**. Two shapes do satisfy that:
+
+**(A) A shared, interior-mutable plane view — the recommendation.** One seam type
+built once per plane on the calling thread from `&mut PaddedPlane` *before* the
+fork (so the plane is exclusively borrowed for the fork's whole scope, which is
+what removes F73), holding the buffer in an `UnsafeCell` and carrying one tagged
+`unsafe impl Sync`. Workers share `&SharedPlane` and write through `&self`:
+`set(x, y, v)`, `write_row(x, y, &[u8])`, `copy_row_from(..)`. Reads keep working
+(`at`, `row`) because a shared view can read. The properties this buys:
+
+* the `unsafe` is **one `impl`, in one file**, and its contract is exactly what §2
+  measured — no two live write views overlap, because the slice partition makes
+  the macroblock sets disjoint;
+* every consumer stays in safe code, with the bounds checks intact;
+* it is mode-independent: no row-alignment precondition, so all four multi-threaded
+  configurations use the same path, and so does the single-threaded one;
+* Miri's data-race detector then reports an *actual* overlapping access rather
+  than a retag, which is the check that means something.
+
+Its cost is real and should be stated: the kernels that write the reconstruction
+plane take `&mut PlaneCursorMut` and use `row_mut`, and `row_mut` cannot exist on
+a shared view. Three families need a write-through-`&self` flavour —
+`common/copy_mb.rs`'s seven `copy_WxH`, the IDCT-and-add family in
+`encoder/decode_mb_aux.rs`, and `common/deblocking_common.rs`'s edge filters.
+The census (`phase9_plane_census.md` §1) puts the consumer count at **32 blocked
+call sites** — 17 copy, 10 idct, 5 intra-pred — plus deblocking's own walk.
+
+**(B) A per-row block view.** `MbBlockMut { rows: [&mut [u8]; 16] }`, each row
+slice exactly the macroblock's columns plus the deblocking skirt, derived per row
+from a raw base. Those ranges *are* disjoint across workers, so no interior
+mutability is needed and the `unsafe` is one constructor. It costs the same kernel
+churn as (A) and loses the negative-offset reads, which intra prediction needs, so
+(A) is the better shape unless (A)'s `unsafe impl Sync` is judged unacceptable.
+
+**(C) Declare the reconstruction write a lawful boundary.** Keep the raw seam,
+give it its own `unsafe-cat` category alongside `C-ABI`, and stop. This changes
+the charter's exit condition 1 and is a decision for the steward, not for a
+session — but it is the cheapest option and it should be named rather than
+discovered late.
+
+### 4. What session C inherits
+
+Blocked consumers, by route (`phase9_plane_census.md` §6):
+
+| route | sites |
+|---|---:|
+| `SPicData.pCsMb` / `pDecMb` | 42 |
+| `SDqLayer.pCsData[..]` | 24 |
+| `layer_dec_pic_mut` / `layer_dec_pic` | 14 |
+| `SPicture::planes()` | 38 |
+| blocked kernel call sites | 32 (17 copy, 10 idct, 5 intra-pred) |
+| `deblocking.rs` / `common/deblocking_common.rs` | 20 + 13 `unsafe fn` |
+
+**Acceptance**: the Miri probe
+`fork_join_encodes_a_multi_slice_frame_under_the_aliasing_checker`
+(`svc_encode_slice.rs:4160`) loses its `#[cfg_attr(miri, ignore)]` and passes.
+
+**And that probe is not sufficient on its own.** It drives
+`SM_FIXEDSLCNUM_SLICE` with `slice_num: 2` and RC on — which §1 measured as the
+one **row-aligned** configuration, i.e. the easy case. A design that only works on
+row-aligned slices would pass it. A second probe on a mid-row boundary is
+required: `EncoderProbeOptions` already carries `slice_mode`, `slice_num` and
+`slice_constraint` (`api/codec_api.rs:4305-4327`), so either
+`SM_RASTER_SLICE` with an uneven `uiSliceMbNum[]` or `SM_SIZELIMITED_SLICE` with
+`threads: 2` reaches it.
+
+## F108 — deblocking runs **inside** the fork under multi-threading, not after the join
+
+Session B's brief states, in the sentence that scopes the reconstruction-write
+question: "Deblocking runs after the join." That is true of one of the two paths
+and false of the one that matters.
+
+The frame-level filter is guarded by `!bDeblockingParallelFlag`
+(`encoder_ext.rs:3789-3795`), and `bDeblockingParallelFlag` is
+`iMultipleThreadIdc != 1` (`wels_encoder_ext.rs:1319`). So under multi-threading
+`PerformDeblockingFilter` **never runs**. Instead each worker deblocks its own
+slice, inside the job body, immediately after `WriteSliceBs`:
+
+```rust
+// slice_multi_threading.rs:1384-1386, in EncodeOneSliceInJob
+let pfDeblockingFilterSlice =
+    (*ctx_func_list(pCtx)).pfDeblocking.pfDeblockingFilterSlice.unwrap();
+pfDeblockingFilterSlice(current_layer(pCtx), ctx_func_list(pCtx), pSlice);
+```
+
+and the same three lines again in `EncodeOnePartitionSizeLimited`
+(`:1668-1670`). `DeblockingFilterSliceAvcbase` resolves the reconstruction picture
+with `layer_dec_pic_mut` and takes `planes()` off it (`deblocking.rs:1436-1442`)
+— i.e. it is **one of the workers taking the `&mut SPicture` that F73 is about**,
+not a single-threaded step that could be left alone.
+
+Two consequences for F107's design:
+
+1. Deblocking is a reconstruction **writer** inside the fork, so its 33 `unsafe fn`
+   (20 in `encoder/deblocking.rs`, 13 in `common/deblocking_common.rs`) are part of
+   the write-view conversion, not after it.
+2. Its writes stay inside the worker's own macroblocks for the reason §2 gives —
+   `uiFilterIdc = 1` suppresses both cross-slice edges — so it does not weaken the
+   disjointness premise. It does mean the write view's rectangle is the macroblock
+   **plus the deblocking skirt** (up to 4 samples back across the left and top
+   edges), which shape (B) above has to size for and shape (A) does not.

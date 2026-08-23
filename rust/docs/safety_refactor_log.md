@@ -16013,3 +16013,178 @@ should be treated as a claim, and the first thing a session does with an inherit
 claim is try to reproduce it. Reproducing the charter's table *exactly* by
 deliberately crippling the new tool is what turned "these numbers look off" into
 "here is the bug that produced them".
+
+## 2026-08-22 — Phase 9, session B (the plane family read from the callers: the census says the tables are double-gated, and the reconstruction write cannot be a `&mut [u8]`)
+
+Session B was briefed to convert the plane family's first half — `SPicData` to
+handles, the SAD/SATD/4-SAD, copy and DCT tables to safe function pointers, three
+`common/` files to `deny` — and to measure the reconstruction write for session C.
+**The measurement came first, and it cancelled most of the conversion.** What
+landed is the map, the design, and the deletions the map exposed.
+
+### T9.B1 — the caller census
+
+`phase9_census.py` classifies tagged sites by their **signature**. F103's lesson
+from session A is that this cannot answer the question a session actually has:
+`pure` is a property of the signature, and what a caller *passes* comes from
+somewhere else. So this session built the other instrument —
+`rust/tools/phase9_plane_callers.py` — which walks every call site of a raw plane
+entry point, splits its argument list, and classifies each pointer operand by the
+**surface** it names: source picture, reference picture, reconstruction picture,
+`SMbCache` scratch, coefficient block, stack array. Sites are also marked in-fork
+or ST-only by reachability from the three thread bodies, following direct calls,
+`SWelsFuncPtrList` slot installs and file-scope function tables (the last matters:
+the whole per-macroblock encode tree hangs off `g_pWelsSliceCoding`, and a
+call-graph that misses it reads the entire mode-decision family as single-threaded).
+
+**109 call sites: 64 safe-now, 32 blocked on the reconstruction write, 13 gated on
+the coefficient family, 0 unclassified.** 64 kernel-internal composition calls
+excluded — the composite shims build big shapes from small ones and those calls die
+with the shims.
+
+**F104 is what the table says, and it is a pairing, not a distribution.** Every one
+of the 37 cost-table sites is `safe-now` on its plane operands — and 25 of the 37
+pair that operand with an `SMbCache` prediction buffer reached through
+`md::mem_pred_*`. A table has one type, so re-typing `pfSampleSad`/`pfSampleSatd`/
+`pfSample4Sad` is atomic across all 37, and it needs *both* the plane roots and
+family 3. Same double gate on `mc` (23 sites, `ref` x `cache`) and on `dct` (13
+sites, **all** coefficient-gated: the `pDct` operand is `md::coeff_level(pMbCache)`,
+F103's walking cursor in F103's own file). Consequences:
+
+* **`common/sad_common.rs`, `common/mc.rs` and `encoder/sample.rs` cannot reach
+  `deny` before family 3** — the charter's §4 and this session's brief both put
+  them here.
+* **The DCT table is not this family's.** The brief scoped it as "source picture
+  (safe) + prediction buffer (owned) -> safe now" and did not count `pDct`.
+* Twelve cost sites are `src` x `ref` only (`svc_motion_estimate.rs` x10,
+  `CalUVSadCost`, `scene_change_detection.rs:87`) and would convert on the plane
+  roots alone — but cannot go first, because the slot type is shared with the other
+  25.
+
+So the order is **plane roots -> family 3 -> each table flips in one commit**, and
+the plane roots unblock nothing on their own. That is why this session did not
+convert them: `SPicData` carrying handles is only useful once there is a safe-typed
+kernel to hand the cursor to, and there will not be one until family 3 lands. The
+strangler first commit (handles beside the raw fields) would have been dead fields
+in the meantime, and the design note that replaces it is worth more.
+
+### T9.B2 — S18: the dead border-expansion shims
+
+The census turned up `ExpandPictureLuma_c`, `ExpandPictureChroma_c` and
+`expand_shim_span` with **no reference in `src/` at all**. Both codecs'
+`SPicture::expand_as_reference` hand `expand_picture` the plane's own allocation,
+so `ExpandReferencingPicture` was deleted at T6.F4 and these three were kept as
+"the C-shaped subjects the differential test runs against the reference".
+
+They were not run against the reference. The probe's golden was `expand_picture` —
+the function each shim calls two lines in — so the equivalence was between a
+function and its own callee (**F106**). What it *did* still test was the shim's own
+backwards walk, plus two properties that belong to the kernel. Those two moved onto
+`expand_picture` directly, keeping the same seed, sizes and strides; the three items
+were deleted; `common/expand_pic.rs` and `common/cpu_core.rs` now carry
+`#![deny(unsafe_code)]`.
+
+**Two of `common/`'s nine files are denied, and the other seven are further off than
+the charter reads**: `sad_common.rs`, `mc.rs` and `intra_pred_common.rs` wait on
+family 3 and on the reconstruction write, `deblocking_common.rs` on the
+reconstruction write, and `wels_common_defs.rs`/`wels_trace.rs` belong to the
+`other` family. `common/mod.rs` can never carry the attribute — an inner attribute
+there applies to every submodule.
+
+**F105**, found the same way: **20 of `mc.rs`'s 29 raw kernels have no caller in
+`src/`**. `mc_luma`'s `match` replaced the table that held them in Phase 2 and
+`SMcFunc` keeps only three slots. Not acted on — `mc.rs` is session C's file — but
+it resizes session C, which the charter counts at 36 conversions and is mostly
+deletions.
+
+### T9.B3 — the reconstruction-write design (F107)
+
+**Is any multi-threaded slice mode row-aligned?** One of four.
+`SM_FIXEDSLCNUM_SLICE` with RC on is, and for a reason worth stating: every slice
+gets a multiple of `iGomSize = kiMbWidth * GOM_ROW_MODE0_*P`, and those constants
+are 2 or 4 — a GOM is two or four **macroblock rows**. `DynamicAdjustSlicing`
+keeps the property (it rounds to `iNumberMbGom = iMbWidth * iGomRowMode0`). The
+other three — `SM_FIXEDSLCNUM_SLICE` under `RC_OFF_MODE`, `SM_RASTER_SLICE`, and
+`SM_SIZELIMITED_SLICE`'s partitions — divide by slice count and land mid-row. So
+pre-fork `split_at_mut` bands cannot be the mechanism.
+
+**What does a worker read of the reconstruction?** Only what it wrote, and it is
+enforced: `uiNeighborAvail` is set only for same-slice neighbours, `uiNeighborIntra`
+derives from it, and deblocking's `bLeftBsValid`/`bTopBsValid` are indexed by
+`uiFilterIdc`, which multi-threading forces to 1 (`iLoopFilterDisableIdc = 2`).
+Motion compensation reads the *reference* picture, which is a different pool slot:
+`PrefetchNextBuffer` takes `pDecPic` from the unreferenced slots and `WelsBuildRefList`
+admits only referenced ones.
+
+**And the finding.** Disjointness is not enough, because a `&mut [u8]` is a `Unique`
+retag over its **whole range** whether or not the writes reach it. The obvious
+narrowing — a `PlaneCursorMut` over the macroblock's contiguous span — does not
+help: rows are contiguous in the buffer, so that span is the full width of those
+rows, and two workers on the same macroblock row overlap. **The write view cannot
+be `&mut [u8]` over anything wider than one macroblock's columns.** The
+recommendation is a shared interior-mutable plane view, built once on the calling
+thread before the fork (which is what removes F73's per-worker `&mut SPicture`) and
+shared under one tagged `unsafe impl Sync`, with writes through `&self`. F107 §3
+carries the two alternatives and their costs, including the option of declaring the
+seam a lawful boundary category — a charter change, so the steward's call.
+
+**F108** corrects the brief in passing: under multi-threading, deblocking runs
+*inside* each worker (`EncodeOneSliceInJob` calls `pfDeblockingFilterSlice` after
+`WriteSliceBs`), not after the join — the frame-level `PerformDeblockingFilter` is
+guarded by `!bDeblockingParallelFlag`, which is false whenever `iMultipleThreadIdc > 1`.
+So deblocking's 33 `unsafe fn` (20 + 13) are part of the write-view conversion,
+not after it.
+
+And the acceptance test needs a second probe: the existing Miri fork/join probe
+drives `SM_FIXEDSLCNUM_SLICE` with RC on — the one **row-aligned** mode, i.e. the
+easy case. A design that only worked on row-aligned slices would pass it.
+
+### The tally
+
+| metric | session start | now | delta |
+|---|---:|---:|---:|
+| `port-raw(Phase 9)` tags | 687 | 687 | 0 |
+| `cursor` tags | 61 | 61 | 0 |
+| `unsafe_fn` | 806 | **803** | **−3** |
+| `unsafe_block` | 437 | **435** | **−2** |
+| `raw_ptr` | 2243 | **2240** | **−3** |
+| `shim` | 107 | **105** | **−2** |
+| `common/` files under `deny` | 0 | **2** | **+2** |
+
+The tag count does not move because the three deleted items were **untagged**:
+`common/` carries no `#![deny(unsafe_code)]`, so its `unsafe` needs no `#[allow]`
+and never entered the tag census. That is worth remembering when reading progress
+off the tag total alone — the ~80 untagged `common/` sites are real work that the
+748 does not count.
+
+### What this session did not do, and why
+
+* **`SPicData` was not converted.** Not for lack of time: F104 says the handles buy
+  nothing until family 3 lands, and dead fields carried across two sessions are a
+  liability. Session B2 in the charter's §8 now owns it, with the structural note it
+  needs (ten consumers take the layer and no context; the layer can reach the
+  *reference* picture today and the *source* picture not at all — it needs
+  `pEncPic: Option<SrcPicId>` beside `pEncData`).
+* **No table was re-typed.** All three cost tables, `mc` and `dct` are
+  double-gated; flipping one would have meant building cursors from raw pointers at
+  25–37 call sites, which moves the shim from the kernel to the caller and reduces
+  nothing.
+* **`sample.rs`'s and `sad_common.rs`'s composite shims were left alone** even
+  though they could be collapsed onto the already-proven safe kernels. That
+  collapse is D-perf-2/D-perf-4's parked decision, and reversing a parked *perf*
+  decision in a session forbidden to measure performance is not a trade this session
+  had the instrument for.
+* **No Miri.** D-gate-2 puts it at the phase exit, and the brief repeats it. Every
+  aliasing claim above is read out of the code with its anchor, and F107 names the
+  probe that has to confirm it.
+
+### The methodological note
+
+Session A's was "a prose number with no re-runnable tool behind it is a claim".
+This session's is the same lesson one level down: **a signature census answers
+"what could this family convert if nothing else were in the way", and every session
+so far has needed the other question.** F103 found it for the coefficient family
+from the callers of fourteen slots; F104 finds it for the plane family across 109
+call sites; F105 and F106 are both the same instrument turning up *dead* code that
+a signature census renders as work. Sessions D–H should build the caller view of
+their own family before scoping, and the charter now says so.

@@ -105,17 +105,38 @@ the shims, retire the tags, Miri-verify. **Sizes below are session A's census
    they move to family 3. The `PQuant*`/`PScan*` typedefs go with them, not here.
 2. **Plane cursors** (57 pure / 64 total `*mut u8`, + F73's picture-accessor family) and with
    them `common/`'s mc/sad/deblocking_common/intra_pred_common shims. The largest; the
-   reconstruction and source planes reached through the pool. ~2–3 sessions. **Split by
-   what is safe now vs what needs a design**: source/reference pictures are read-only while a
-   frame encodes, so any number of shared `PlaneCursor`s across threads is sound — session B
-   converts those plus the owned-buffer operands (prediction scratch, coefficients). The
-   **reconstruction** picture is *written* by every worker of the MT fork, disjoint at
+   reconstruction and source planes reached through the pool.
+
+   > **Re-scoped by session B's caller census (F104 — `phase9_plane_census.md`).** The
+   > split this section describes — "source/reference are read-only, so session B converts
+   > those plus the owned-buffer operands" — is right about the *surfaces* and wrong about
+   > what that makes convertible. Every cost-table call site is safe on its plane operands,
+   > and **25 of the 37 pair that operand with an `SMbCache` prediction buffer**; a table
+   > has one type, so `pfSampleSad`/`pfSampleSatd`/`pfSample4Sad` flip only after *both*
+   > the plane roots and family 3. The same double gate holds for `mc` (23 sites) and for
+   > `dct` (13 sites, **all coefficient-gated** — the `pDct` operand is
+   > `md::coeff_level(pMbCache)`, F103's shape). So **`common/sad_common.rs`,
+   > `common/mc.rs` and `encoder/sample.rs` reach `deny` after family 3, not with this
+   > family**, and the plane family's own remainder is the reconstruction write:
+   > intra-pred (5 sites), idct (10) and 17 of the 21 copy sites.
+   >
+   > Order, therefore: **plane roots (they unblock nothing on their own) -> family 3 ->
+   > each table flips in one commit.**
+
+   The **reconstruction** picture is *written* by every worker of the MT fork, disjoint at
    macroblock granularity but **not row-contiguous** (a slice can start mid-row), so it cannot
    be split into one `&mut [u8]` per worker — F73 is exactly that retag race. Session B
-   measures (is any MT slice mode row-aligned? what does a worker read of the recon?) and
-   writes the decision — row-aligned `split_at_mut`, or a raw-backed per-worker cursor built
-   at the fork seam (one tagged site per job per plane, safe methods), or other — and session
-   C converts the reconstruction consumers and un-ignores the MT Miri probe against it.
+   measured it (**F107**): of the four MT configurations only `SM_FIXEDSLCNUM_SLICE` with RC
+   on is row-aligned, so `split_at_mut` bands cannot be the mechanism; a worker reads only
+   what it wrote (slice-scoped `uiNeighborAvail` and `uiFilterIdc`); and **no narrowing of a
+   `&mut [u8]` expresses the disjointness**, because a macroblock's contiguous span is the
+   full width of its rows. The recommendation is a shared interior-mutable plane view built
+   once before the fork under one tagged `unsafe impl Sync`, with the alternatives and their
+   costs in F107 §3. Session C converts the 32 blocked call sites plus deblocking against it
+   and un-ignores the MT Miri probe — **and adds a second probe on a mid-row boundary**,
+   because the existing one drives the row-aligned mode.
+
+   ~2–3 sessions (B spent on the census and the design; C and D2 carry the conversions).
 3. **SMbCache / SMB** (45 pure / 48 total, **+ the 14 coefficient slot types and their 59
    call-through sites**, + Phase 6's 72 kernels-take-slices note) — per-macroblock metadata;
    the encoder's `MbGrid` analogue. Bigger than the charter first read: ~2 sessions.
@@ -212,9 +233,10 @@ unaided, `total` its workload once the earlier families have landed.
 | session | scope | size | brief |
 |---|---|---|---|
 | **A** ✅ | census + the `q1c.py` detector rebuilt; the coefficient family converted | **19 → 5 done, 14 moved to D** | [`phase9_session_a.md`](phase9_session_a.md) |
-| **B** — brief [`phase9_session_b.md`](phase9_session_b.md) | plane family, part one: the caller census; `SPicData` becomes handles + coordinates; every **source/reference** plane read goes through `PlaneCursor`; SAD/SATD/4SAD, copy and DCT tables become safe fn-pointer tables and their shims die; `sad_common.rs`/`copy_mb.rs`/`cpu_core.rs` under `deny`; **the reconstruction-write design measured and written** (is any MT slice mode row-aligned? what do workers read?) — the decision the next session converts against | 57 pure / 64 (+ ~80 untagged `common/` sites) | — |
-| C | plane family, part two: the **reconstruction** consumers (intra-pred reference side, encode-MB recon, deblocking, MC, expand), the MT fork's plane access per B's design, the `planes()`/`PicPlanes`/`.pData[` roots (32 + 94 sites, `wels_preprocess.rs` 49), the 44 `&mut` picture accessors (F73), and the MT Miri probe un-ignored; `mc.rs`/`deblocking_common.rs`/`expand_pic.rs`/`intra_pred_common.rs` under `deny` | the remainder, sized by B's census | — |
-| D–D2 | SMbCache/SMB **+ the 14 coefficient slot types and their 59 call-throughs** | 45 pure / 48 (+14 slots) | — |
+| **B** ✅ brief [`phase9_session_b.md`](phase9_session_b.md) | plane family, part one. **The caller census (F104) and the reconstruction-write design (F107) landed; the conversions did not, and the census is why** — every cost-table site pairs a plane operand with an SMbCache one, so the tables wait on family 3 (see §4.2). Also: `expand_pic.rs`'s three dead shims deleted (F106), `expand_pic.rs` + `cpu_core.rs` under `deny`, F105 (20 dead `mc.rs` kernels), F108 (deblocking runs *inside* the fork) | census + design; 2 files denied, 3 items deleted | — |
+| **B2** | plane family, part 1b — the part B could not reach: `SPicData` becomes handles + coordinates, `SDqLayer` gains a source-picture handle so the ten layer-only consumers can reach the spatial pool (`phase9_plane_census.md` §5), and the 12 `src` x `ref` cost sites are made ready. **No table flips here** — they need family 3 | 120 `SPicData` uses; 49 `pEncMb` / 29 `pRefMb` | — |
+| C | plane family, part two: the **reconstruction** consumers against F107's design — 32 blocked call sites (17 copy, 10 idct, 5 intra-pred), deblocking (in-fork, F108), the MT fork's plane access, the `planes()`/`.pData[` roots (38 + 94 sites, `wels_preprocess.rs` 49), the 44 `&mut` picture accessors (F73); the MT Miri probe un-ignored **plus a second probe on a mid-row slice boundary**; `mc.rs`'s 20 dead kernels deleted (F105) | the remainder, sized by B's census | — |
+| D–D2 | SMbCache/SMB **+ the 14 coefficient slot types and their 59 call-throughs**, and with them the plane family's tables: the cost tables (37 sites), `mc` (23), `dct` (13). `sad_common.rs`/`mc.rs`/`sample.rs` reach `deny` **here**, not in B or C (F104) | 45 pure / 48 (+14 slots + the plane tables) | — |
 | E | layer/picture/slice + the cursor accessors | 47 pure / 55 (+61 cursor) | — |
 | F | the 22 dispatch survivors | 4 pure / 5 (+17 cursor) | — |
 | **X1–X2** | **`other`: bitstream, paramsets, RC, LTR, VAA, deblock, trace, scalars.** New — the charter had no session for it. Independent of the cursor spine, so it can run in parallel with B–E | 80 pure / 123 | — |
@@ -227,3 +249,17 @@ unaided, `total` its workload once the earlier families have landed.
 (regenerate it; `--family <name>` lists a family's sites), `rust/tools/q1c.py`
 (family 6's precondition, exit 1 on any hazard), `rust/docs/phase9_findings.md`
 (F101 the census correction, F102 the detector, F103 the coefficient family's real shape).
+
+**Session B's products:** `rust/docs/phase9_plane_census.md` (the plane family read
+from the **callers** — every call site, every operand classified by the surface it
+names, in-fork or not), `rust/tools/phase9_plane_callers.py` (regenerate it;
+`--sites`, `--unknown`, `--internal`, `--handoff`), and in `phase9_findings.md`:
+**F104** (the double gate — the census's headline, and what re-scoped §4.2 and §8),
+**F105** (20 dead `mc.rs` kernels), **F106** (the dead expand shims, deleted),
+**F107** (the reconstruction-write measurement and design — read this before
+starting session C), **F108** (deblocking is in-fork under MT).
+
+**The generalisation these three sessions have now made twice** (F103, F104):
+`pure` and `safe-now` are properties of *signatures*, and a session's real start
+set is the intersection with what its callers already hold. Sessions D–H should
+build the caller view of their own family before scoping, not after.
