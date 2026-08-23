@@ -16597,10 +16597,12 @@ function from the raw triple to the safe one. That is F118's constraint met rath
 than argued with, and it is the piece worth carrying into session C.
 
 The other half is subtraction. Of the plane family's **25** remaining `safe-now`
-sites, **18 are dark** — `WelsMdBackgroundMbEnc` (5), `SvcMdSCDMbEnc` (5),
-`CalUVSadCost`'s two callers (4), `VaaBackgroundMbDataUpdate` (3, F117), and
-`scene_change_detection::Process` (1) — and **6 more wait on the ME struct's three
-raw fields**. So the lit, unblocked surface this session was scoped against was
+sites, **17 are dark** — `WelsMdBackgroundMbEnc` (5), `SvcMdSCDMbEnc` (5),
+`VaaBackgroundMbDataUpdate` (3, F117), and one each in `CalUVSadCost`,
+`WelsMotionEstimateSearchStatic`, `WelsMotionEstimateSearchScrolled` and
+`LineFullSearch_c` (the last three `SCREEN_CONTENT(dormant)`) — **7 wait on the ME
+struct's three raw fields** (`WelsDiamondSearch` 5, `WelsMotionEstimateInitialPoint`
+2), and **1** is `scene_change_detection::Process`. So the lit, unblocked surface this session was scoped against was
 smaller than the brief's list by more than half, and most of what remains is not
 work but a *referee*.
 
@@ -16677,8 +16679,15 @@ moved one macroblock off the block it filled.
 
 **`MIRI_SCOPE=encoder bash rust/tools/gates.sh session` — OVERALL PASS**, 8 passed /
 0 failed / 2 skipped: 548 debug and 541 release tests, sweeps **535/535 in both
-profiles** (42s and 34s), ratchet no per-file increase, duplicate census 56
-allowlisted, and **Miri `--lib` encoder scope 274 passed / 0 failed**. D-gate-4's
+profiles** (40s and 34s), ratchet no per-file increase, duplicate census 56
+allowlisted, and **Miri `--lib` encoder scope 274 passed / 0 failed**.
+
+**Run twice, and the second one is the verdict.** The first close ran while
+T9.B31's dead-binding deletion was still uncommitted, so its sweeps covered the
+tree one commit back; the re-run at `16a18859` covers HEAD and is the number above.
+The rule the second run enforces is the obvious one and it is easy to skip: **a
+close gate certifies the tree it ran on, not the tree you push** — if anything lands
+after it starts, it runs again. D-gate-4's
 third green run, and the first over a session that converted *picture* operands at
 scale — which is the run that mattered, because `q1c.py`'s shape-B report during
 T9.B29 was a defect Miri would otherwise have found here for the third time in three
@@ -16702,5 +16711,40 @@ decompose exactly — 12 in the two `*Init` stamps (the roots), **18 in the five
 bodies**, 8 feeding `InitMe` (the ME struct's), 10 DCT operands (step 4's), 2 in
 the intra-pred pairs (session C's).
 
-Plane census **70 sites**: 25 safe-now (18 dark + 6 ME + 1 preprocess), 13 coeff,
-32 blocked, **0 unclassified**.
+Plane census **70 sites**: 25 safe-now — **17 dark + 7 ME + 1 preprocess**, counted
+per *kernel call site* as the tool does (`CalUVSadCost` is one row and four
+invocations) — 13 coeff, 32 blocked, **0 unclassified**.
+
+### what C and E inherit, re-measured at the close
+
+**Session C** gets the reconstruction surface unchanged — 32 blocked sites (17 copy,
+10 idct, 5 intra-pred) plus the 13 coefficient-gated DCT operands — and, from this
+session, three things that are new:
+
+* **The referee is the work.** Ten sites in
+  `WelsMdBackgroundMbEnc`/`SvcMdSCDMbEnc`, one in `CalUVSadCost` (four invocations)
+  and F117's three copies are all waiting on the same thing: a diffharness preset with
+  `bEnableBackgroundDetection = true` in both drivers, and a second with
+  `SCREEN_CONTENT_REAL_TIME` for `pfSCDPSkipDecision`'s judging arm. Step 6 of B3's
+  brief scoped the first; F121 shows the second is needed for the same family. Expect
+  parity work when they first run — that is the referee working (S47).
+* **D-cov-1, re-scoped (F124).** The 22 dead `mc.rs` shims and *two* tests can go
+  whenever; **`common/mc.rs` reaches `deny` only after the six dark
+  `McLuma_c`/`McChroma_c` sites convert behind that referee.** The second test is
+  Phase 4a's dispatch assert-map, not Phase 2's span discipline, and deleting it
+  spends a different mitigation.
+* **The transitional raw cost triple** (`pfSampleSadRaw`/`SatdRaw`/`4SadRaw`,
+  `md_cost_raw`/`me_cost_raw`, two re-pinned ABI asserts) retires when the last raw
+  reader converts. Today those readers are exactly the dark bodies and the ME search,
+  so the triple dies with C's referee and E's ME conversion, not before.
+
+**Session E** gets, measured at `16a18859`: `q1c.py --type SDqLayer` **14 hazardous
+sites in 5 callers** (11 shape A, 3 shape B) and `--type SSlice` **68 in 22** (66 A,
+2 B) — the second is F112's price for the arena's roots, of which **26** remain
+(`addr_of_mut!((*pSlice).sMbCacheInfo)`), and **35** `*mut SMB` parameters. It also
+gets a conversion whose design is already measured: **`SWelsME`'s three raw fields are
+each a function of `(iCurMeBlockPixX, iCurMeBlockPixY)` and `sMv`**, verified over
+three streams at 3271/438/5924 agreements and zero disagreements (T9.B29), so
+deleting them is arithmetic — the work is threading the two pictures into
+`PSearchMethodFunc`/`PCalculateSatdFunc`/`PCheckDirectionalMv`/`PLineFullSearchFunc`,
+which is session F's dispatch family and the reason B3 stopped in front of it.

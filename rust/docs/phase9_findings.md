@@ -1208,3 +1208,26 @@ but `McLuma_c` and `McChroma_c` still have six — the three in `WelsMdBackgroun
 and the three in `SvcMdSCDMbEnc`, which F121 measures as dark and S57 keeps raw. So
 the deletion splits: **22 dead shims + the two tests can go now; `deny` waits on a
 background/screen-content referee**, which is step 6's preset and session C's problem.
+
+### F121's postscript — the split, counted the tool's way
+
+The first draft of this session's log put the 25 remaining `safe-now` sites at
+"18 dark + 6 ME + 1 preprocess". Re-derived from `--sites` rather than from memory
+it is **17 + 7 + 1**, and the two errors are worth naming because they are the two
+mistakes this whole session was about.
+
+* `CalUVSadCost` is **one** census row and **four** invocations — its two callers
+  each call it twice. The census's unit is the *kernel call site*, so counting
+  invocations inflates it. (S24: a count that decides anything comes from the
+  instrument, in the instrument's own unit.)
+* `WelsMotionEstimateSearchStatic`, `WelsMotionEstimateSearchScrolled` and
+  `LineFullSearch_c` are **dark**, not ME-blocked: all three are behind
+  `bScreenContent` (`WelsInitMeFunc` installs `pfVerticalFullSearch`/
+  `pfHorizontalFullSearch` only there, and the first two are already tagged
+  `SCREEN_CONTENT(dormant)`). The genuinely lit, ME-blocked sites are
+  `WelsDiamondSearch`'s five and `WelsMotionEstimateInitialPoint`'s two.
+
+So the ME struct's conversion (session E) unblocks **7** sites, and the
+background/screen-content referee (session C) unblocks **17** — a ratio that is the
+opposite way round from the draft, and it changes which of the two is worth doing
+first.
