@@ -15,7 +15,7 @@
 #![deny(unsafe_code)]
 
 
-use crate::encoder::svc_encode_slice::{layer_dec_pic, layer_dec_pic_mut, layer_ref_pic};
+use crate::encoder::svc_encode_slice::{layer_dec_pic, layer_dec_pic_mut, layer_enc_pic, layer_ref_pic};
 use crate::encoder::svc_encode_slice::layer_pps;
 use crate::encoder::svc_encode_slice::current_layer;
 use crate::encoder::picture::{RecPicId, SrcPicId};
@@ -35,8 +35,10 @@ pub use crate::encoder::param_svc::SWelsPPS;
 pub use crate::encoder::wels_preprocess::EStaticBlockIdc;
 pub use crate::encoder::md::SMcFunc;
 // Phase 4a: MC is called directly, not via `sMcFuncs`.
-use crate::common::mc::{McChroma_c, McLuma_c};
-use crate::safe::plane::PlaneCursor;
+use crate::common::mc::{mc_chroma, mc_luma, McChroma_c, McLuma_c};
+use crate::common::sad_common::sample_sad;
+use crate::encoder::sample::satd_16x16;
+use crate::safe::plane::{PlaneCursor, PlaneCursorMut};
 pub use crate::encoder::wels_preprocess::SVAACalcResult;
 pub use crate::encoder::wels_preprocess::SScrollDetectionParam;
 pub use crate::encoder::svc_motion_estimate::SWelsME;
@@ -551,14 +553,20 @@ unsafe fn VaaBackgroundMbDataUpdate(
 ///
 /// # Safety
 /// All pointers must be valid and non-null.
-/// **Dark — S57, F117 measured it and T9.B27 re-measured it here.** Reached only
-/// through `pfInterMdBackgroundDecision` = `WelsMdInterJudgeBGDPskip`, which
-/// `WelsInitBGDFunc` installs only when `bEnableBackgroundDetection`; the
-/// diffharness driver sets that `false` (`rust_enc/main.rs:126`). A probe read **0**
-/// entries across five sweep configurations in which `WelsMdI16x16`'s calibration
-/// probe read 300-2136. The three motion compensations and the two cost calls below
-/// therefore stay raw: a byte-identical result on a path no gate enters is not
-/// evidence. Step 6's `bg` preset is the referee that would change this.
+/// **Lit as of T9.B4 — the `bg` preset is this body's referee (D-ref-1, F126).** It
+/// is reached only through `pfInterMdBackgroundDecision` = `WelsMdInterJudgeBGDPskip`,
+/// which `WelsInitBGDFunc` installs only behind `bEnableBackgroundDetection`, and both
+/// diffharness drivers pinned that `false` until B4 — which is what F117/T9.B27
+/// measured as **0** entries across five sweep configurations. The new axis turns it
+/// on: 1159-5771 entries per `bg` row, 0 in the same row with the flag off. A planted
+/// one-sample fault after the luma motion compensation below fails **32 of the 48**
+/// rows, so the conversions here are refereed rather than merely re-read.
+///
+/// The 16 rows it does *not* fail are `Static_152_100`'s, and they stay inert at
+/// `+128` too: on that clip every background macroblock is `MB_TYPE_BACKGROUND`
+/// P_SKIP with no residual, and `WelsMdInterJudgeBGDPskip`'s decision inputs come
+/// from the analyzer's source-domain VAA planes, so the prediction never reaches the
+/// bitstream *or* a decision. Quote 32, not 48, when this body's coverage is cited.
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsMdBackgroundMbEnc(
@@ -573,43 +581,90 @@ pub unsafe extern "C" fn WelsMdBackgroundMbEnc(
     let pFunc = ctx_func_list(pEncCtx);
     let sMvp = SMVUnitXY::default();
 
-    let pRefLuma = (*pMbCache).SPicData.pRefMb[0];
-    let pRefCb = (*pMbCache).SPicData.pRefMb[1];
-    let pRefCr = (*pMbCache).SPicData.pRefMb[2];
-    let iLineSizeY = (*pCurDqLayer).sRefPicView.sPlanes.iLineSize[0];
-    let iLineSizeUV = (*pCurDqLayer).sRefPicView.sPlanes.iLineSize[1];
+    // T9.B22's shape, at zero motion. The C++ addressed the reference through
+    // `SPicData.pRefMb[i]`, which `WelsMdInterInit` (`:945`) stamps as
+    // `sRefPicView.pData[i] + ((mbX + mbY * stride) << 4)` for luma and `<< 3` for
+    // chroma — the macroblock's own origin. The motion vector here is
+    // `SMVUnitXY::default()`, so there is no excursion to add: the cursor is the same
+    // sample the pointer named, said in samples instead of bytes, and
+    // `sRefPicView.sPlanes.iLineSize[..]` is the stride the plane already carries.
+    let kiMbXLuma = ((*pCurMb).iMbX as isize) << 4;
+    let kiMbYLuma = ((*pCurMb).iMbY as isize) << 4;
+    let kiMbXChroma = ((*pCurMb).iMbX as isize) << 3;
+    let kiMbYChroma = ((*pCurMb).iMbY as isize) << 3;
 
-    let mut pDstLuma = std::ptr::addr_of_mut!((*pMbCache).sSkipMb).cast::<u8>();
-    let mut pDstCb = std::ptr::addr_of_mut!((*pMbCache).sSkipMb).cast::<u8>().add(256);
-    let mut pDstCr = std::ptr::addr_of_mut!((*pMbCache).sSkipMb).cast::<u8>().add(256 + 64);
-
-    if !bSkipMbFlag {
-        pDstLuma = std::ptr::addr_of_mut!((*pMbCache).sMemPredMb)
-            .cast::<u8>()
-            .add(mem_pred_luma_off((*pMbCache).uiMemPredLumaHalf));
-        pDstCb = std::ptr::addr_of_mut!((*pMbCache).sMemPredMb)
-            .cast::<u8>()
-            .add(mem_pred_chroma_off((*pMbCache).uiMemPredLumaHalf));
-        pDstCr = std::ptr::addr_of_mut!((*pMbCache).sMemPredMb)
-            .cast::<u8>()
-            .add(mem_pred_chroma_off((*pMbCache).uiMemPredLumaHalf))
-            .add(64);
-    }
+    // The destination is one of two disjoint cache regions, chosen by the same flag
+    // the C++ chose it by: `sSkipMb`'s three panes when the macroblock will be coded
+    // as a background skip, `sMemPredMb`'s luma/chroma halves when it falls through to
+    // the 16x16 inter encode. Both are plain arrays on `SMbCache`, so each is a slice,
+    // and the halves' offsets are `md.rs`'s own `mem_pred_*_off` — unchanged
+    // arithmetic, now bounds-checked.
+    //
+    // **Each cursor is built at its call and dropped at the end of that call's block**
+    // (S29/F114a). That is not tidiness: the skip arm below runs
+    // `VaaBackgroundMbDataUpdate`, which stays raw (F117, session C's) and writes the
+    // *current source picture* through raw roots. A cursor into that picture held
+    // across the call would be a live tag when a raw write lands under it; built and
+    // dropped per kernel call, there is none. The reference-picture cursors here are
+    // a different plane again, and read-only.
 
     // MC
-    McLuma_c(pRefLuma, iLineSizeY, pDstLuma, 16, 0, 0, 16, 16);
-    McChroma_c(pRefCb, iLineSizeUV, pDstCb, 8, sMvp.iMvX, sMvp.iMvY, 8, 8); // Cb
-    McChroma_c(pRefCr, iLineSizeUV, pDstCr, 8, sMvp.iMvX, sMvp.iMvY, 8, 8); // Cr
+    {
+        let pRefPicture = layer_ref_pic(pCurDqLayer).expect("the layer's reference picture is bound");
+        let cRefLuma = pRefPicture.plane(0).cursor(kiMbXLuma, kiMbYLuma);
+        let mut cDstLuma = if bSkipMbFlag {
+            let pSkipMb = &mut *std::ptr::addr_of_mut!((*pMbCache).sSkipMb);
+            PlaneCursorMut::new(&mut pSkipMb[..256], 0, 16)
+        } else {
+            let kiOff = mem_pred_luma_off((*pMbCache).uiMemPredLumaHalf);
+            let pMemPredMb = &mut *std::ptr::addr_of_mut!((*pMbCache).sMemPredMb);
+            PlaneCursorMut::new(&mut pMemPredMb[kiOff..kiOff + 256], 0, 16)
+        };
+        mc_luma(&cRefLuma, &mut cDstLuma, 0, 0, 16, 16);
+    }
+    {
+        let pRefPicture = layer_ref_pic(pCurDqLayer).expect("the layer's reference picture is bound");
+        let cRefCb = pRefPicture.plane(1).cursor(kiMbXChroma, kiMbYChroma);
+        let mut cDstCb = if bSkipMbFlag {
+            let pSkipMb = &mut *std::ptr::addr_of_mut!((*pMbCache).sSkipMb);
+            PlaneCursorMut::new(&mut pSkipMb[256..320], 0, 8)
+        } else {
+            let kiOff = mem_pred_chroma_off((*pMbCache).uiMemPredLumaHalf);
+            let pMemPredMb = &mut *std::ptr::addr_of_mut!((*pMbCache).sMemPredMb);
+            PlaneCursorMut::new(&mut pMemPredMb[kiOff..kiOff + 64], 0, 8)
+        };
+        mc_chroma(&cRefCb, &mut cDstCb, sMvp.iMvX, sMvp.iMvY, 8, 8); // Cb
+    }
+    {
+        let pRefPicture = layer_ref_pic(pCurDqLayer).expect("the layer's reference picture is bound");
+        let cRefCr = pRefPicture.plane(2).cursor(kiMbXChroma, kiMbYChroma);
+        let mut cDstCr = if bSkipMbFlag {
+            let pSkipMb = &mut *std::ptr::addr_of_mut!((*pMbCache).sSkipMb);
+            PlaneCursorMut::new(&mut pSkipMb[320..384], 0, 8)
+        } else {
+            let kiOff = mem_pred_chroma_off((*pMbCache).uiMemPredLumaHalf) + 64;
+            let pMemPredMb = &mut *std::ptr::addr_of_mut!((*pMbCache).sMemPredMb);
+            PlaneCursorMut::new(&mut pMemPredMb[kiOff..kiOff + 64], 0, 8)
+        };
+        mc_chroma(&cRefCr, &mut cDstCr, sMvp.iMvX, sMvp.iMvY, 8, 8); // Cr
+    }
 
     (*pCurMb).uiCbp = 0;
     (*pMbCache).bCollocatedPredFlag = true;
     (*pWelsMd).iCostLuma = 0; // BGD&RC integration
-    (*pCurMb).iSadCost = (*pFunc).sSampleDealingFuncs.pfSampleSadRaw[BLOCK_16x16].unwrap()(
-        (*pMbCache).SPicData.pEncMb[0],
-        (*pCurDqLayer).iEncStride[0],
-        pRefLuma,
-        iLineSizeY,
-    );
+    // `pfSampleSadRaw[BLOCK_16x16]` is a compile-time index into a table with one
+    // writer and no CPU flag (`WelsInitSampleSadFunc`), so the slot is constant from
+    // the first frame on and `sample_sad::<16, 16>` *is* what it held — F118's order,
+    // with no table on the path. Both operands are pictures the layer already holds:
+    // the source through `layer_enc_pic` (the sample `SPicData.pEncMb[0]` named) and
+    // the reference through `layer_ref_pic`, both at the macroblock's own origin.
+    (*pCurMb).iSadCost = {
+        let pEncPicture = layer_enc_pic(pCurDqLayer).expect("the layer's source picture is bound");
+        let pRefPicture = layer_ref_pic(pCurDqLayer).expect("the layer's reference picture is bound");
+        let cEncLuma = pEncPicture.plane(0).cursor(kiMbXLuma, kiMbYLuma);
+        let cRefLuma = pRefPicture.plane(0).cursor(kiMbXLuma, kiMbYLuma);
+        sample_sad::<16, 16>(&cEncLuma, &cRefLuma)
+    };
     (*pCurMb).sP16x16Mv = SMVUnitXY::default();
     (&mut layer_dec_pic_mut(pCurDqLayer).expect("bound").sMvList)[(*pCurMb).iMbXY as usize] = SMVUnitXY::default();
 
@@ -659,12 +714,13 @@ pub unsafe extern "C" fn WelsMdBackgroundMbEnc(
     if (*pWelsMd).bMdUsingSad {
         (*pWelsMd).iCostLuma = (*pCurMb).iSadCost;
     } else {
-        (*pWelsMd).iCostLuma = (*pFunc).sSampleDealingFuncs.pfSampleSatdRaw[BLOCK_16x16].unwrap()(
-            (*pMbCache).SPicData.pEncMb[0],
-            (*pCurDqLayer).iEncStride[0],
-            pRefLuma,
-            iLineSizeY,
-        );
+        // `pfSampleSatd[BLOCK_16x16]`, constant after init (F118) — called direct, on
+        // the same two picture cursors the SAD above used.
+        let pEncPicture = layer_enc_pic(pCurDqLayer).expect("the layer's source picture is bound");
+        let pRefPicture = layer_ref_pic(pCurDqLayer).expect("the layer's reference picture is bound");
+        let cEncLuma = pEncPicture.plane(0).cursor(kiMbXLuma, kiMbYLuma);
+        let cRefLuma = pRefPicture.plane(0).cursor(kiMbXLuma, kiMbYLuma);
+        (*pWelsMd).iCostLuma = satd_16x16(&cEncLuma, &cRefLuma);
     }
 
     WelsInterMbEncode(pEncCtx, pSlice, pCurMb);
