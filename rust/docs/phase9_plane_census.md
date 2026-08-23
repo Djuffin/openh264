@@ -62,7 +62,7 @@ this family that is genuinely hard, is the wrong trade at any price.
 ## 1. The tables
 
 <!-- BEGIN phase9_plane_callers -->
-116 plane call sites (64 kernel-internal composition calls excluded — they die with their shims); 71 safe-now, 32 blocked on the reconstruction write, 13 gated on the coefficient family (F103), 0 unclassified.
+95 plane call sites (64 kernel-internal composition calls excluded — they die with their shims); 50 safe-now, 32 blocked on the reconstruction write, 13 gated on the coefficient family (F103), 0 unclassified.
 
 ### By kernel group
 
@@ -72,25 +72,25 @@ this family that is genuinely hard, is the wrong trade at any price.
 | dct       | 0        | 13    | 0       | 0 | 0   | 13   | 0  |
 | idct      | 0        | 0     | 10      | 0 | 0   | 10   | 0  |
 | intrapred | 0        | 0     | 5       | 0 | 0   | 5    | 0  |
-| mc        | 30       | 0     | 0       | 0 | 0   | 30   | 0  |
-| sad       | 20       | 0     | 0       | 0 | 0   | 17   | 3  |
+| mc        | 16       | 0     | 0       | 0 | 0   | 16   | 0  |
+| sad       | 14       | 0     | 0       | 0 | 0   | 11   | 3  |
 | sad4      | 1        | 0     | 0       | 0 | 0   | 1    | 0  |
 | sad|satd  | 13       | 0     | 0       | 0 | 0   | 13   | 0  |
-| satd      | 3        | 0     | 0       | 0 | 0   | 3    | 0  |
-| **total** | 71       | 13    | 32      | 0 | 0   | 113  | 3  |
+| satd      | 2        | 0     | 0       | 0 | 0   | 2    | 0  |
+| **total** | 50       | 13    | 32      | 0 | 0   | 92   | 3  |
 
 ### By file
 
 | file                                 | safe-now | coeff | blocked | ? | n/a | fork | st |
 |--------------------------------------|----------|-------|---------|---|-----|------|----|
 | encoder/md.rs                        | 20       | 0     | 0       | 0 | 0   | 20   | 0  |
-| encoder/svc_base_layer_md.rs         | 25       | 3     | 7       | 0 | 0   | 35   | 0  |
+| encoder/svc_base_layer_md.rs         | 4        | 3     | 7       | 0 | 0   | 14   | 0  |
 | encoder/svc_encode_mb.rs             | 0        | 2     | 10      | 0 | 0   | 12   | 0  |
 | encoder/svc_encode_slice.rs          | 0        | 4     | 5       | 0 | 0   | 9    | 0  |
 | encoder/svc_mode_decision.rs         | 15       | 4     | 10      | 0 | 0   | 28   | 1  |
 | encoder/svc_motion_estimate.rs       | 10       | 0     | 0       | 0 | 0   | 8    | 2  |
 | processing/scene_change_detection.rs | 1        | 0     | 0       | 0 | 0   | 1    | 0  |
-| **total**                            | 71       | 13    | 32      | 0 | 0   | 113  | 3  |
+| **total**                            | 50       | 13    | 32      | 0 | 0   | 92   | 3  |
 
 <!-- END phase9_plane_callers -->
 

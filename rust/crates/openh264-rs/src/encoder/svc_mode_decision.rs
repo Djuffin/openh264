@@ -550,6 +550,14 @@ unsafe fn VaaBackgroundMbDataUpdate(
 ///
 /// # Safety
 /// All pointers must be valid and non-null.
+/// **Dark — S57, F117 measured it and T9.B27 re-measured it here.** Reached only
+/// through `pfInterMdBackgroundDecision` = `WelsMdInterJudgeBGDPskip`, which
+/// `WelsInitBGDFunc` installs only when `bEnableBackgroundDetection`; the
+/// diffharness driver sets that `false` (`rust_enc/main.rs:126`). A probe read **0**
+/// entries across five sweep configurations in which `WelsMdI16x16`'s calibration
+/// probe read 300-2136. The three motion compensations and the two cost calls below
+/// therefore stay raw: a byte-identical result on a path no gate enters is not
+/// evidence. Step 6's `bg` preset is the referee that would change this.
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsMdBackgroundMbEnc(
@@ -1790,6 +1798,21 @@ pub unsafe fn IsMbScrolledStatic(pBlockType: *const i32) -> bool {
     IsMbStatic(pBlockType, EStaticBlockIdc::SCROLLED_STATIC)
 }
 
+/// **Dark — S57, measured (F121, T9.B27).** This function's only two callers are
+/// [`JudgeStaticSkip`] and [`JudgeScrollSkip`], and both are reached only through
+/// `pfSCDPSkipDecision`, which `WelsInitSCDPskipFunc` sets to the *judging* arm only
+/// when `bScreenContent && bEnableSceneChangeDetect && complexity < HIGH`
+/// (`encoder_context.rs:1574`). The diffharness driver encodes as
+/// `CAMERA_VIDEO_REAL_TIME`, so `bScreenContent` is false in every sweep preset in
+/// both profiles and the slot is `WelsMdInterJudgeSCDPskipFalse`. A probe printing
+/// once per entry read **0** across five configurations (CAVLC/CABAC, complexity
+/// LOW/HIGH, two streams, `sm=1 t=4` multi-threaded) against a calibration probe in
+/// `WelsMdI16x16` that read 2008/1882/300/377/2136 in the same runs.
+///
+/// So this stays raw and tagged, with its two callers: session B3's brief listed it
+/// as step 1 item 3 and the reachability answer says otherwise. It converts behind a
+/// referee — the screen-content preset Phase 10 owns, or step 6's background preset
+/// extended to `SCREEN_CONTENT_REAL_TIME`.
 #[inline(always)]
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
@@ -1823,6 +1846,12 @@ pub fn CheckBorder(
         || (iMbY << 4) + iScrollMvY > ((iMbHeight - 1) << 4)
 }
 
+/// **Dark — S57**: see [`CalUVSadCost`] for the measurement. The
+/// `ctx_pic_ref_mut(..).planes()` below is a whole-picture `&mut` retag taken inside
+/// the macroblock loop (F73), which session B2's brief flagged as a live hazard in
+/// the tree — it is live as *code* and unreachable as *behaviour*, on every path any
+/// gate runs. It converts to the shared route with the rest of this function, behind
+/// a referee.
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe extern "C" fn JudgeStaticSkip(
@@ -1871,6 +1900,9 @@ pub unsafe extern "C" fn JudgeStaticSkip(
     bTryStaticSkip
 }
 
+/// **Dark — S57**: as [`JudgeStaticSkip`], and doubly so — it returns early unless
+/// `sScrollDetectInfo.bScrollDetectFlag`, which only the screen-content preprocessor
+/// sets.
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe extern "C" fn JudgeScrollSkip(
@@ -1934,6 +1966,9 @@ pub unsafe extern "C" fn JudgeScrollSkip(
     bTryScrollSkip
 }
 
+/// **Dark — S57**: as [`CalUVSadCost`] (the same `pfSCDPSkipDecision` gate), probe
+/// **0** across five configurations. Its three motion compensations and two SAD
+/// calls stay raw.
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe extern "C" fn SvcMdSCDMbEnc(
