@@ -39,7 +39,9 @@ use crate::encoder::svc_encode_slice::{
 use crate::encoder::svc_encode_slice::current_layer;
 use crate::encoder::picture::{RecPicId, SrcPicId};
 use crate::common::mc::{mc_chroma, mc_luma, McChroma_c, McLuma_c};
-use crate::safe::plane::PlaneCursorMut;
+use crate::common::sad_common::sample_sad;
+use crate::encoder::sample::satd_16x16;
+use crate::safe::plane::{PlaneCursor, PlaneCursorMut};
 use crate::encoder::encoder_context::{sWelsEncCtx, SMVComponentUnit, SMVUnitXY, SPicData, ctx_func_list};
 use crate::encoder::encoder_context::ctx_vaa;
 use crate::encoder::md::{mem_pred_chroma_off, mem_pred_luma_off};
@@ -1322,18 +1324,23 @@ pub unsafe fn WelsMdPSkipEnc(
         let mut cDstLuma = PlaneCursorMut::new(&mut (*pMbCache).sSkipMb[..256], 0, 16);
         mc_luma(&cRefLuma, &mut cDstLuma, sMvp.iMvX, sMvp.iMvY, 16, 16);
     }
-    // Re-derived **after** the borrow above ended, never carried across it (F114a).
-    let pDstLuma = std::ptr::addr_of_mut!((*pMbCache).sSkipMb).cast::<u8>();
-    iSadCostLuma = (*pFunc).sSampleDealingFuncs.pfSampleSadRaw[BLOCK_16x16]
-        .expect("pfSampleSad[BLOCK_16x16] unset")(
-        (*pMbCache).SPicData.pEncMb[0],
-        (*pCurLayer).iEncStride[0],
-        pDstLuma,
-        16,
-    );
+    // **T9.B26 — the three SAD sites call the kernel directly.** `pfSampleSad
+    // [BLOCK_16x16]` is a compile-time index into a table with one writer and no CPU
+    // flag (`WelsInitSampleSadFunc`), so the slot is a constant from the first frame
+    // on and `sample_sad::<16, 16>` *is* what it held — byte-identical by the F118
+    // argument, with no table on the path. The source operand is the same sample
+    // `SPicData.pEncMb[0]` named: the source picture through the layer's handle
+    // (`layer_enc_pic`, T9.B21), anchored at the macroblock's own origin; the
+    // prediction is the `sSkipMb` region the motion compensation above just wrote,
+    // borrowed **shared** — which does not pop the raw `pDstLuma` below the way a
+    // `&mut` borrow would (F114a), and the raw is re-derived after it anyway.
+    iSadCostLuma = {
+        let pEncPicture = layer_enc_pic(pCurLayer).expect("the layer's source picture is bound");
+        let cEncLuma = pEncPicture.plane(0).cursor(kiMbXLuma, kiMbYLuma);
+        let cSkipLuma = PlaneCursor::new(&(*pMbCache).sSkipMb[..256], 0, 16);
+        sample_sad::<16, 16>(&cEncLuma, &cSkipLuma)
+    };
 
-    let pfSad8x8 = (*pFunc).sSampleDealingFuncs.pfSampleSadRaw[BLOCK_8x8]
-        .expect("pfSampleSad[BLOCK_8x8] unset");
     // `iStrideUV` was `(mvY >> 1) * strideUV + (mvX >> 1)` off the chroma macroblock
     // origin; in samples that is `(mvX >> 1, mvY >> 1)` from the same origin, and
     // `sQpelMvp` is already `sMvp >> 2`, so both are `sMvp >> 3`.
@@ -1346,13 +1353,12 @@ pub unsafe fn WelsMdPSkipEnc(
         let mut cDstCb = PlaneCursorMut::new(&mut (*pMbCache).sSkipMb[256..320], 0, 8);
         mc_chroma(&cRefCb, &mut cDstCb, sMvp.iMvX, sMvp.iMvY, 8, 8); //Cb
     }
-    let pDstCb = std::ptr::addr_of_mut!((*pMbCache).sSkipMb).cast::<u8>().add(256);
-    iSadCostChroma = pfSad8x8(
-        (*pMbCache).SPicData.pEncMb[1],
-        (*pCurLayer).iEncStride[1],
-        pDstCb,
-        8,
-    );
+    iSadCostChroma = {
+        let pEncPicture = layer_enc_pic(pCurLayer).expect("the layer's source picture is bound");
+        let cEncCb = pEncPicture.plane(1).cursor(kiMbXChroma, kiMbYChroma);
+        let cSkipCb = PlaneCursor::new(&(*pMbCache).sSkipMb[256..320], 0, 8);
+        sample_sad::<8, 8>(&cEncCb, &cSkipCb)
+    };
 
     {
         let pRefPicture = layer_ref_pic(pCurLayer).expect("the layer's reference picture is bound");
@@ -1363,13 +1369,12 @@ pub unsafe fn WelsMdPSkipEnc(
         let mut cDstCr = PlaneCursorMut::new(&mut (*pMbCache).sSkipMb[320..384], 0, 8);
         mc_chroma(&cRefCr, &mut cDstCr, sMvp.iMvX, sMvp.iMvY, 8, 8); //Cr
     }
-    let pDstCr = std::ptr::addr_of_mut!((*pMbCache).sSkipMb).cast::<u8>().add(256 + 64);
-    iSadCostChroma += pfSad8x8(
-        (*pMbCache).SPicData.pEncMb[2],
-        (*pCurLayer).iEncStride[2],
-        pDstCr,
-        8,
-    );
+    iSadCostChroma += {
+        let pEncPicture = layer_enc_pic(pCurLayer).expect("the layer's source picture is bound");
+        let cEncCr = pEncPicture.plane(2).cursor(kiMbXChroma, kiMbYChroma);
+        let cSkipCr = PlaneCursor::new(&(*pMbCache).sSkipMb[320..384], 0, 8);
+        sample_sad::<8, 8>(&cEncCr, &cSkipCr)
+    };
 
     iSadCostMb = iSadCostLuma + iSadCostChroma;
 
@@ -1380,10 +1385,14 @@ pub unsafe fn WelsMdPSkipEnc(
             && iSadCostMb < (&layer_ref_pic(pCurLayer).expect("bound").pMbSkipSad)[(*pCurMb).iMbXY as usize])
     {
         //update motion info to current MB
-        AcceptPskip(pEncCtx, pWelsMd, pCurMb, &(*pMbCache).SPicData, &sMvp, iSadCostLuma, iSadCostMb, pDstLuma);
+        AcceptPskip(pEncCtx, pWelsMd, pCurMb, pMbCache, &sMvp, iSadCostLuma, iSadCostMb);
         return true;
     }
 
+    // The residual path below is the forward DCT's, which still takes raw operands
+    // (step 4 of session B3 flips it); `pDstLuma` is derived here, at the call, after
+    // every borrow above has ended (F114a).
+    let pDstLuma = std::ptr::addr_of_mut!((*pMbCache).sSkipMb).cast::<u8>();
     WelsDctMb(
         std::ptr::addr_of_mut!((*pMbCache).sCoeffLevel).cast::<i16>(),
         pEncMb,
@@ -1415,16 +1424,11 @@ pub unsafe fn WelsMdPSkipEnc(
             );
             if WelsTryPUVskip(pEncCtx, pCurMb, pMbCache, 2) {
                 //update motion info to current MB
-                // **T9.D6**: `pDstLuma` is re-derived here rather than carried down
-                // from the top of the function. Three arena-taking calls sit in
-                // between (`WelsTryPYskip`, `WelsTryPUVskip` twice) and each one
-                // retags the whole arena once its parameter is a reference. The
-                // address is unconditional — `sSkipMb` is a field, not a ping-pong
-                // half — so the re-derivation names the same bytes.
-                AcceptPskip(
-                    pEncCtx, pWelsMd, pCurMb, &(*pMbCache).SPicData, &sMvp, iSadCostLuma,
-                    iSadCostMb, std::ptr::addr_of_mut!((*pMbCache).sSkipMb).cast::<u8>(),
-                );
+                // (T9.D6 re-derived a raw `pDstLuma` here because three arena-taking
+                // calls sit between the top of the function and this point; since
+                // T9.B26 `AcceptPskip` borrows the prediction from the arena itself,
+                // so there is no raw to re-derive.)
+                AcceptPskip(pEncCtx, pWelsMd, pCurMb, pMbCache, &sMvp, iSadCostLuma, iSadCostMb);
                 return true;
             }
         }
@@ -1435,6 +1439,16 @@ pub unsafe fn WelsMdPSkipEnc(
 /// The block `WelsMdPSkipEnc` runs verbatim at both of its `return true` sites
 /// (`svc_base_layer_md.cpp:1489` and `:1521`).
 ///
+/// **T9.B26**: the `kpPicData: &SPicData` / `pDstLuma: *mut u8` pair is gone. The
+/// one thing it read from the carrier was `pEncMb[0]`, the source macroblock, which
+/// the layer's handle names (`layer_enc_pic` + the macroblock's origin); the
+/// prediction is the arena's own `sSkipMb`, borrowed here for the SATD and for
+/// nothing else. `pMbCache` comes in as `&SMbCache` rather than `&mut` because this
+/// body only reads it — and it is a protector for the call (F114b, S56): nothing
+/// below touches the arena through another path (`pfUpdateMbMv` writes the
+/// macroblock's own MV row, `layer_dec_pic_mut` the reconstruction pool), which is
+/// the walk that licenses the shared reference.
+///
 /// # Safety
 /// As [`WelsMdPSkipEnc`].
 #[inline]
@@ -1444,11 +1458,10 @@ unsafe fn AcceptPskip(
     pEncCtx: *mut sWelsEncCtx,
     pWelsMd: &mut SWelsMD,
     pCurMb: &mut SMB,
-    kpPicData: &SPicData,
+    pMbCache: &SMbCache,
     sMvp: &SMVUnitXY,
     iSadCostLuma: i32,
     iSadCostMb: i32,
-    pDstLuma: *mut u8,
 ) {
     let pCurLayer = current_layer(pEncCtx);
     let pFunc = ctx_func_list(pEncCtx);
@@ -1461,13 +1474,13 @@ unsafe fn AcceptPskip(
         (*pCurMb).iSadCost = iSadCostLuma;
         (*pWelsMd).iCostLuma = (*pCurMb).iSadCost;
     } else {
-        (*pWelsMd).iCostLuma = (*pFunc).sSampleDealingFuncs.pfSampleSatdRaw[BLOCK_16x16]
-            .expect("pfSampleSatd[BLOCK_16x16] unset")(
-            kpPicData.pEncMb[0],
-            (*pCurLayer).iEncStride[0],
-            pDstLuma,
-            16,
-        );
+        // `pfSampleSatd[BLOCK_16x16]`, constant after init (F118) — called direct.
+        let pEncPicture = layer_enc_pic(pCurLayer).expect("the layer's source picture is bound");
+        let cEncLuma = pEncPicture
+            .plane(0)
+            .cursor(((*pCurMb).iMbX as isize) << 4, ((*pCurMb).iMbY as isize) << 4);
+        let cSkipLuma = PlaneCursor::new(&pMbCache.sSkipMb[..256], 0, 16);
+        (*pWelsMd).iCostLuma = satd_16x16(&cEncLuma, &cSkipLuma);
     }
 
     (*pWelsMd).iCostSkipMb = iSadCostMb;
