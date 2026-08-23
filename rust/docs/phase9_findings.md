@@ -1374,3 +1374,61 @@ quotes only the flattering one would be.
 `WelsMdInterJudgeSCDPskipFalse` and `WelsInitSCDPskipFunc` keep their Phase 9 tags:
 the `False` arm is the slot camera content actually runs, and the installer runs on
 every configuration.
+
+## F129 — D-dead-2's closure is bigger than F122 listed, and the reason nothing found it is that the compiler cannot
+
+Re-derived with the deletion (S18's F122 clause) rather than from F122's list. What
+went, encoder-side only:
+
+| item | where | why it is dead |
+|---|---|---|
+| `SUB_MB_TYPE_4x4`/`_8x4`/`_4x8` refinement arms | `svc_base_layer_md.rs:1815-1952` | F122's probe: 0 entries, 3 configurations |
+| `UpdateP4x4MotionInfo`/`UpdateP8x4MotionInfo`/`UpdateP4x8MotionInfo` | `svc_mode_decision.rs` | 3 call sites, all inside those arms |
+| `UpdateP4x4Motion2Cache`/`UpdateP8x4Motion2Cache`/`UpdateP4x8Motion2Cache` | `svc_mode_decision.rs` | **0 call sites** — they survived on an unused `use` line |
+| `sMe4x4`/`sMe8x4`/`sMe4x8` | `md.rs:191-193` | 32 `SWelsME`, 3072 of `SWelsMD`'s 4000 bytes |
+| **`SWelsMeContainers`** | `svc_mode_decision.rs:175` | **a whole second declaration of `SWelsMD_sMe`, 0 references anywhere** |
+| `g_kiPixStrideIdx4x4` | `svc_base_layer_md.rs:910` | its only reader was the `_4x4` arm |
+| `SUB_MB_TYPE_8x4`/`_4x8`/`_4x4` consts (u8) | `svc_mode_decision.rs:125-127` | no encoder path assigns them |
+| the same three consts (u32) + their `sub_mb_type` and mvd arms | `svc_set_mb_syn_cavlc.rs`, `svc_set_mb_syn_cabac.rs` | 17 mentions, exactly |
+
+**394 lines deleted, 114 added, net −280**, and `assert_size!(SWelsMD, 4000)` re-pinned
+to **928**.
+
+**Two items F122 did not have.** `SWelsMeContainers` is the one worth stopping on: a
+`#[repr(C)] #[derive(Copy, Clone, Default)]` struct field-identical to `SWelsMD_sMe`,
+never constructed, never named in a signature, never re-exported. `UpdateP*Motion2Cache`
+is the same shape one level down — three public functions whose only trace in the crate
+was an unused import.
+
+**Why neither the compiler nor a warning found them, which is the generalisable part.**
+Two independent blindfolds, either of which alone would be enough:
+
+1. Every encoder module carries `#![allow(non_snake_case, non_upper_case_globals,
+   non_camel_case_types, **dead_code**)]` — a blanket the naming lints needed, with
+   `dead_code` riding along.
+2. **Even with that allow removed, rustc reports none of these.** Measured: the allow
+   was stripped from every module in `src/` and the crate rebuilt — 14 dead items
+   crate-wide, not one of them in this closure. Every item here is `pub` in a `pub mod`
+   of a library crate, so rustc considers it reachable by definition. A line-by-line
+   port makes almost everything `pub`; dead-code analysis is structurally blind to it.
+
+So a straggler sweep in this crate **cannot** be a compiler pass. It is a grep for each
+symbol's reference count with definitions excluded, and that is how this closure was
+derived. Recommend S18 say so in those words — "run the compiler's dead-code pass" is
+advice that returns 14 items and a false sense of completeness.
+
+**The deleted syntax-writer arms are `unreachable!`, not a silent fall-through.** Both
+writers previously ended their sub-8x8 chains in `_ => {}` / a dropped `else`. Keeping
+that shape would mean an unexpected `uiSubMbType` writes *nothing* — which in CAVLC
+desynchronises the rest of the slice and in CABAC desynchronises the arithmetic coder,
+i.e. silent corruption of every macroblock after it. A panic is the better failure, and
+it is also the marker a future sub-8x8 re-port will trip over immediately.
+
+**Not touched: the decoder.** `SUB_MB_TYPE_4x4`/`_8x4`/`_4x8` keep 50 references across
+`decode_slice.rs`, `parse_mb_syn_cavlc.rs`, `parse_mb_syn_cabac.rs`, `mv_pred.rs` and
+`error_concealment.rs`. A decoder must parse any conforming stream whatever partitions
+its encoder chose; only the encoder's own inability to produce them is at issue here.
+
+Gates: **583/583 in both profiles** — the full exit list including the 48 new `bg` rows.
+A deletion inside the two bitstream writers gets the byte gate at family scale, not the
+commit gate's word for it.

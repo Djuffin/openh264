@@ -218,7 +218,18 @@ assert_size!(SRCSlicing, 44);
 // offsets — it just no longer claims correspondence with a C++ `sizeof`.
 assert_size!(SStrideTables, 184);
 assert_size!(SWelsME, 96);
-assert_size!(SWelsMD, 4000);
+// **928 in the port, 4000 in the C++, and the gap is D-dead-2 (F122).** The struct
+// carried `sMe4x4`/`sMe8x4`/`sMe4x8` — 32 `SWelsME` at 96 bytes, 3072 of the 4000 —
+// whose only readers were `WelsMdInterMbRefinement`'s three sub-8x8 arms. Nothing in
+// either encoder ever produced those partitions: upstream's sub-8x8 search is inside
+// `#if 0 //Disable for sub8x8 modes for now` (`svc_mode_decision.cpp:634-661`), the
+// same block D-dead-1 deleted `WelsMdP4x4`/`WelsMdP8x4`/`WelsMdP4x8` for. The pin
+// stays, for the reason `SStrideTables`'s does: what it catches is a field added,
+// dropped or mis-widened and a second declaration read at the wrong offsets — it just
+// no longer claims correspondence with a C++ `sizeof`. `SWelsMD` is encoder-internal
+// and crosses no ABI, so no header, no caller and no byte of output depends on the
+// old number.
+assert_size!(SWelsMD, 928);
 // `SVAAFrameInfo`: 264 in the C++. Phase 6 session B dissolved the `IWelsVP`
 // vtable and deleted the stored `pCalcResult` pointer from the two parameter
 // blocks this embeds (`sAdaptiveQuantParam`, `sComplexityAnalysisParam` — the

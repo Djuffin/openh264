@@ -39,7 +39,7 @@ use crate::encoder::svc_encode_slice::{
 use crate::encoder::svc_encode_slice::current_layer;
 use crate::encoder::picture::{RecPicId, SrcPicId};
 use crate::common::mc::{mc_chroma, mc_luma, McChroma_c, McLuma_c};
-use crate::common::copy_mb::{copy_16x16, copy_16x8, copy_4x4, copy_4x8, copy_8x16, copy_8x4, copy_8x8};
+use crate::common::copy_mb::{copy_16x16, copy_16x8, copy_8x16, copy_8x8};
 use crate::common::sad_common::sample_sad;
 use crate::encoder::sample::{satd_16x16, satd_4x4};
 use crate::safe::plane::{PlaneCursor, PlaneCursorMut};
@@ -58,12 +58,11 @@ use crate::encoder::svc_encode_slice::{SDqLayer, SSlice};
 use crate::encoder::svc_mode_decision::{
     g_kiIntra16AvaliMode, g_kiMapModeI16x16, g_kuiMbCountScan4Idx, update_P8x16_motion_info,
     InitMe, PredInter16x8Mv, PredInter8x16Mv, PredMv, PredSkipMv, UpdateP16x16MotionInfo,
-    UpdateP16x8Motion2Cache, UpdateP16x8MotionInfo, UpdateP4x4Motion2Cache, UpdateP4x4MotionInfo,
-    UpdateP4x8Motion2Cache, UpdateP4x8MotionInfo, UpdateP8x16Motion2Cache, UpdateP8x4Motion2Cache,
-    UpdateP8x4MotionInfo, UpdateP8x8MotionInfo, WelsMdInterDecidedPskip, WelsMdInterJudgePskip,
+    UpdateP16x8Motion2Cache, UpdateP16x8MotionInfo, UpdateP8x16Motion2Cache,
+    UpdateP8x8MotionInfo, WelsMdInterDecidedPskip, WelsMdInterJudgePskip,
     WelsMdInterSecondaryModesEnc, WelsMdIntraSecondaryModesEnc, BLOCK_16x16, BLOCK_16x8,
     BLOCK_4x4, BLOCK_4x8, BLOCK_8x16, BLOCK_8x4, BLOCK_8x8, IS_SKIP, MB_TYPE_BACKGROUND,
-    REF_NOT_AVAIL, SUB_MB_TYPE_4x4, SUB_MB_TYPE_4x8, SUB_MB_TYPE_8x4, SUB_MB_TYPE_8x8,
+    REF_NOT_AVAIL, SUB_MB_TYPE_8x8,
 };
 use crate::encoder::svc_motion_estimate::{SetMvWithinIntegerMvRange, SWelsME};
 use crate::encoder::svc_set_mb_syn_cavlc::{g_kuiCache48CountScan4Idx, IS_INTRA16x16};
@@ -907,36 +906,10 @@ pub const g_kiPixStrideIdx8x8: [i32; 4] = [
     ME_REFINE_BUF_STRIDE_BLK8 + ME_REFINE_BUF_WIDTH_BLK8,
 ];
 
-/// `svc_base_layer_md.cpp:1546`.
-pub const g_kiPixStrideIdx4x4: [[i32; 4]; 4] = [
-    [
-        0,
-        ME_REFINE_BUF_WIDTH_BLK4,
-        ME_REFINE_BUF_STRIDE_BLK4,
-        ME_REFINE_BUF_WIDTH_BLK4 + ME_REFINE_BUF_STRIDE_BLK4,
-    ],
-    [
-        ME_REFINE_BUF_WIDTH_BLK8,
-        ME_REFINE_BUF_WIDTH_BLK8 + ME_REFINE_BUF_WIDTH_BLK4,
-        ME_REFINE_BUF_WIDTH_BLK8 + ME_REFINE_BUF_STRIDE_BLK4,
-        ME_REFINE_BUF_WIDTH_BLK8 + ME_REFINE_BUF_WIDTH_BLK4 + ME_REFINE_BUF_STRIDE_BLK4,
-    ],
-    [
-        ME_REFINE_BUF_STRIDE_BLK8,
-        ME_REFINE_BUF_STRIDE_BLK8 + ME_REFINE_BUF_WIDTH_BLK4,
-        ME_REFINE_BUF_STRIDE_BLK8 + ME_REFINE_BUF_STRIDE_BLK4,
-        ME_REFINE_BUF_STRIDE_BLK8 + ME_REFINE_BUF_WIDTH_BLK4 + ME_REFINE_BUF_STRIDE_BLK4,
-    ],
-    [
-        ME_REFINE_BUF_STRIDE_BLK8 + ME_REFINE_BUF_WIDTH_BLK8,
-        ME_REFINE_BUF_STRIDE_BLK8 + ME_REFINE_BUF_WIDTH_BLK8 + ME_REFINE_BUF_WIDTH_BLK4,
-        ME_REFINE_BUF_STRIDE_BLK8 + ME_REFINE_BUF_WIDTH_BLK8 + ME_REFINE_BUF_STRIDE_BLK4,
-        ME_REFINE_BUF_STRIDE_BLK8
-            + ME_REFINE_BUF_WIDTH_BLK8
-            + ME_REFINE_BUF_WIDTH_BLK4
-            + ME_REFINE_BUF_STRIDE_BLK4,
-    ],
-];
+// D-dead-2 / F122: `g_kiPixStrideIdx4x4` (the 4x4 refinement's pixel-stride table)
+// deleted with its only reader, `WelsMdInterMbRefinement`'s `SUB_MB_TYPE_4x4` arm.
+// `g_kiPixStrideIdx8x8` above stays — the 8x8 arm is the one partition this encoder
+// actually produces.
 
 /// `svc_base_layer_md.cpp:321`. Per-macroblock inter setup: neighbour cache, the
 /// reference-plane pointers, and the integer MV clamp for this macroblock position.
@@ -1812,145 +1785,28 @@ pub unsafe fn WelsMdInterMbRefinement(
                         mc_chroma_at!(1, kiOffCb + iDstOff, dx, dy, sMv, 4, 4); //Cb
                         mc_chroma_at!(2, kiOffCr + iDstOff, dx, dy, sMv, 4, 4); //Cr
                     }
-                    SUB_MB_TYPE_4x4 => {
-                        sMeRefine.pfCopyBlockByMode = Some(copy_4x4); // was `(*pFunc).pfCopy4x4` (T9.B29)
-                        //luma
-                        for j in 0..4usize {
-                            let iBlk4x4Idx = iBlk8Idx + j as i32;
-                            InitMeRefinePointer(&mut sMeRefine, g_kiPixStrideIdx4x4[i][j]);
-                            PredMv(
-                                &(*pMbCache).sMvComponents,
-                                iBlk4x4Idx as i8,
-                                1,
-                                (*pWelsMd).uiRef as i32,
-                                &mut (*pWelsMd).sMe.sMe4x4[i][j].sMvp,
-                            );
-                            MeRefineFracPixel(
-                                pEncCtx,
-                                kiOffLuma + g_kuiSmb4AddrIn256[iBlk4x4Idx as usize] as usize,
-                                &mut (*pWelsMd).sMe.sMe4x4[i][j],
-                                &mut sMeRefine,
-                pMbCache,
-                                4,
-                                4,
-                            );
-                            UpdateP4x4MotionInfo(
-                                &mut (*pMbCache).sMvComponents,
-                                pCurMb,
-                                iBlk4x4Idx,
-                                (*pWelsMd).uiRef as i8,
-                                &mut (*pWelsMd).sMe.sMe4x4[i][j].sMv,
-                            );
-                            (*pMbCache).sMbMvp
-                                [g_kuiMbCountScan4Idx[iBlk4x4Idx as usize] as usize] =
-                                (*pWelsMd).sMe.sMe4x4[i][j].sMvp;
-                            iBestSadCost += (*pWelsMd).sMe.sMe4x4[i][j].uiSadCost as i32;
-                            iBestSatdCost += (*pWelsMd).sMe.sMe4x4[i][j].uiSatdCost as i32;
-
-                            //chroma
-                            let sMv = (*pWelsMd).sMe.sMe4x4[i][j].sMv;
-                            let iBlk4X = (((((i as i32) & 1) << 1) + (j as i32 & 1)) as i32) << 1;
-                            let iBlk4Y = (((((i as i32) >> 1) << 1) + (j as i32 >> 1)) as i32) << 1;
-                            let dx = iBlk4X + (sMv.iMvX as i32 >> 3);
-                            let dy = iBlk4Y + (sMv.iMvY as i32 >> 3);
-                            let iDstOff = ((iBlk4Y << 3) + iBlk4X) as usize;
-                            mc_chroma_at!(1, kiOffCb + iDstOff, dx, dy, sMv, 2, 2); //Cb
-                            mc_chroma_at!(2, kiOffCr + iDstOff, dx, dy, sMv, 2, 2); //Cr
-                        }
-                    }
-                    SUB_MB_TYPE_8x4 => {
-                        sMeRefine.pfCopyBlockByMode = Some(copy_8x4); // was `(*pFunc).pfCopy8x4` (T9.B29)
-                        //luma
-                        for j in 0..2usize {
-                            let iBlk4x4Idx = iBlk8Idx + ((j as i32) << 1);
-                            InitMeRefinePointer(&mut sMeRefine, g_kiPixStrideIdx4x4[i][j << 1]);
-                            PredMv(
-                                &(*pMbCache).sMvComponents,
-                                iBlk4x4Idx as i8,
-                                2,
-                                (*pWelsMd).uiRef as i32,
-                                &mut (*pWelsMd).sMe.sMe8x4[i][j].sMvp,
-                            );
-                            MeRefineFracPixel(
-                                pEncCtx,
-                                kiOffLuma + g_kuiSmb4AddrIn256[iBlk4x4Idx as usize] as usize,
-                                &mut (*pWelsMd).sMe.sMe8x4[i][j],
-                                &mut sMeRefine,
-                pMbCache,
-                                8,
-                                4,
-                            );
-                            UpdateP8x4MotionInfo(
-                                &mut (*pMbCache).sMvComponents,
-                                pCurMb,
-                                iBlk4x4Idx,
-                                (*pWelsMd).uiRef as i8,
-                                &mut (*pWelsMd).sMe.sMe8x4[i][j].sMv,
-                            );
-                            (*pMbCache).sMbMvp
-                                [g_kuiMbCountScan4Idx[iBlk4x4Idx as usize] as usize] =
-                                (*pWelsMd).sMe.sMe8x4[i][j].sMvp;
-                            iBestSadCost += (*pWelsMd).sMe.sMe8x4[i][j].uiSadCost as i32;
-                            iBestSatdCost += (*pWelsMd).sMe.sMe8x4[i][j].uiSatdCost as i32;
-
-                            //chroma
-                            let sMv = (*pWelsMd).sMe.sMe8x4[i][j].sMv;
-                            let iBlk4X = ((((i as i32) & 1) << 1) as i32) << 1;
-                            let iBlk4Y = (((((i as i32) >> 1) << 1) + j as i32) as i32) << 1;
-                            let dx = iBlk4X + (sMv.iMvX as i32 >> 3);
-                            let dy = iBlk4Y + (sMv.iMvY as i32 >> 3);
-                            let iDstOff = ((iBlk4Y << 3) + iBlk4X) as usize;
-                            mc_chroma_at!(1, kiOffCb + iDstOff, dx, dy, sMv, 4, 2); //Cb
-                            mc_chroma_at!(2, kiOffCr + iDstOff, dx, dy, sMv, 4, 2); //Cr
-                        }
-                    }
-                    SUB_MB_TYPE_4x8 => {
-                        sMeRefine.pfCopyBlockByMode = Some(copy_4x8); // was `(*pFunc).pfCopy4x8` (T9.B29)
-                        //luma
-                        for j in 0..2usize {
-                            let iBlk4x4Idx = iBlk8Idx + j as i32;
-                            InitMeRefinePointer(&mut sMeRefine, g_kiPixStrideIdx4x4[i][j]);
-                            PredMv(
-                                &(*pMbCache).sMvComponents,
-                                iBlk4x4Idx as i8,
-                                1,
-                                (*pWelsMd).uiRef as i32,
-                                &mut (*pWelsMd).sMe.sMe4x8[i][j].sMvp,
-                            );
-                            MeRefineFracPixel(
-                                pEncCtx,
-                                kiOffLuma + g_kuiSmb4AddrIn256[iBlk4x4Idx as usize] as usize,
-                                &mut (*pWelsMd).sMe.sMe4x8[i][j],
-                                &mut sMeRefine,
-                pMbCache,
-                                4,
-                                8,
-                            );
-                            UpdateP4x8MotionInfo(
-                                &mut (*pMbCache).sMvComponents,
-                                pCurMb,
-                                iBlk4x4Idx,
-                                (*pWelsMd).uiRef as i8,
-                                &mut (*pWelsMd).sMe.sMe4x8[i][j].sMv,
-                            );
-                            (*pMbCache).sMbMvp
-                                [g_kuiMbCountScan4Idx[iBlk4x4Idx as usize] as usize] =
-                                (*pWelsMd).sMe.sMe4x8[i][j].sMvp;
-                            iBestSadCost += (*pWelsMd).sMe.sMe4x8[i][j].uiSadCost as i32;
-                            iBestSatdCost += (*pWelsMd).sMe.sMe4x8[i][j].uiSatdCost as i32;
-
-                            //chroma
-                            let sMv = (*pWelsMd).sMe.sMe4x8[i][j].sMv;
-                            let iBlk4X = (((((i as i32) & 1) << 1) + j as i32) as i32) << 1;
-                            let iBlk4Y = ((((i as i32) >> 1) << 1) as i32) << 1;
-                            let dx = iBlk4X + (sMv.iMvX as i32 >> 3);
-                            let dy = iBlk4Y + (sMv.iMvY as i32 >> 3);
-                            let iDstOff = ((iBlk4Y << 3) + iBlk4X) as usize;
-                            mc_chroma_at!(1, kiOffCb + iDstOff, dx, dy, sMv, 2, 4); //Cb
-                            mc_chroma_at!(2, kiOffCr + iDstOff, dx, dy, sMv, 2, 4); //Cr
-                        }
-                    }
-                    _ => {}
+                    // **D-dead-2 / F122 — `SUB_MB_TYPE_4x4`, `_8x4` and `_4x8` deleted here.**
+                    // Nothing in either encoder produces those values. In the port,
+                    // every writer of `uiSubMbType` sets `SUB_MB_TYPE_8x8`
+                    // (`:1164`, `:1249`, `:1262`, `svc_mode_decision.rs:2495`); in
+                    // upstream the only writers are inside
+                    // `WelsMdInterFinePartitionVaaOnScreen`'s
+                    // `#if 0 //Disable for sub8x8 modes for now`
+                    // (`svc_mode_decision.cpp:634-661`), the same block D-dead-1
+                    // deleted `WelsMdP4x4`/`WelsMdP8x4`/`WelsMdP4x8` for. F122's probe
+                    // read 0 entries in all three arms across three configurations
+                    // while `SUB_MB_TYPE_8x8` read 264/68/540.
+                    //
+                    // The arm is `unreachable!` rather than a silent `{}` on purpose:
+                    // if Phase 10 or a later re-port revives the sub-8x8 search, this
+                    // is the refinement it must bring back with it, and a fall-through
+                    // would emit a macroblock refined at the wrong partition size
+                    // instead of saying so.
+                    _ => unreachable!(
+                        "sub-8x8 partition {:#x} — the sub-8x8 search is #if 0 upstream \
+                         and unwritten here (D-dead-2/F122)",
+                        (*pCurMb).uiSubMbType[i]
+                    ),
                 }
             }
         }

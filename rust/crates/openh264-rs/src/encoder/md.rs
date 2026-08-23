@@ -188,9 +188,13 @@ pub struct SWelsMD_sMe {
     pub sMe8x8: [SWelsME; 4],
     pub sMe16x8: [SWelsME; 2],
     pub sMe8x16: [SWelsME; 2],
-    pub sMe4x4: [[SWelsME; 4]; 4],
-    pub sMe8x4: [[SWelsME; 2]; 4],
-    pub sMe4x8: [[SWelsME; 2]; 4],
+    // **D-dead-2 / F122 — `sMe4x4`, `sMe8x4` and `sMe4x8` deleted.** Thirty-two
+    // `SWelsME` between them (16 + 8 + 8 at 96 bytes each = 3072), and their only
+    // readers and writers in the whole port were `WelsMdInterMbRefinement`'s
+    // `SUB_MB_TYPE_4x4`/`_8x4`/`_4x8` arms, which this commit deletes: nothing ever
+    // produced those partitions (upstream's sub-8x8 search is `#if 0`,
+    // `svc_mode_decision.cpp:634-661`). `SWelsMD` 4000 -> 928 bytes; the
+    // `assert_size!` in `abi_guard.rs` is re-pinned with this reason.
 }
 
 #[repr(C)]
