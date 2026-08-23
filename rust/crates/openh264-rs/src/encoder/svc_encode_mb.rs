@@ -820,9 +820,13 @@ pub unsafe fn WelsEncRecUV(
     let kiQp = (*pCurMb).uiChromaQp;
     let uiNoneZeroCountOffset = ((iUV - 1) << 1) as usize;
     let uiSubMbIdx = (16 + ((iUV - 1) << 2)) as usize;
-    let iChromaDc = (*crate::encoder::md::dct(pMbCache)).iChromaDc[(iUV - 1) as usize].as_mut_ptr();
+    // **T9.D3**: one `dct()` derivation, not two. Both cursors named the same
+    // `sDct` and the second call sat *between* the first cursor and its use, which
+    // is the hazard shape exactly — `q1c.py --type SMbCache` flagged it here.
+    let pDct = crate::encoder::md::dct(pMbCache);
+    let iChromaDc = (*pDct).iChromaDc[(iUV - 1) as usize].as_mut_ptr();
     // S28: derived from the whole array (see `iLumaBlock` above); walks four blocks.
-    let mut pBlock = std::ptr::addr_of_mut!((*crate::encoder::md::dct(pMbCache)).iChromaBlock)
+    let mut pBlock = std::ptr::addr_of_mut!((*pDct).iChromaBlock)
         .cast::<i16>()
         .add((((iUV - 1) << 2) * 16) as usize);
     let mut aDct2x2 = [0i16; 4];

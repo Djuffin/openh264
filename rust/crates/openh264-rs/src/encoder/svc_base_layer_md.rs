@@ -1439,9 +1439,13 @@ pub unsafe fn WelsMdPSkipEnc(
     let iLineSizeY = (*pCurLayer).sRefPicView.sPlanes.iLineSize[0];
     let iLineSizeUV = (*pCurLayer).sRefPicView.sPlanes.iLineSize[1];
 
+    // **T9.D3**: one `skip_mb()` derivation, not three. The 256/320 cursors are
+    // offsets of the luma one and carry the same whole-array provenance (S28);
+    // deriving them through two further calls put those calls *between* the first
+    // cursor and its use, which is what `q1c.py --type SMbCache` flagged.
     let pDstLuma = crate::encoder::md::skip_mb(pMbCache);
-    let pDstCb = crate::encoder::md::skip_mb(pMbCache).add(256);
-    let pDstCr = crate::encoder::md::skip_mb(pMbCache).add(256 + 64);
+    let pDstCb = pDstLuma.add(256);
+    let pDstCr = pDstLuma.add(256 + 64);
 
     let mut sMvp = SMVUnitXY { iMvX: 0, iMvY: 0 };
     let mut n: i32;
@@ -1635,12 +1639,15 @@ pub unsafe fn WelsMdInterMbRefinement(
 
     let pRefCb = (*pMbCache).SPicData.pRefMb[1];
     let pRefCr = (*pMbCache).SPicData.pRefMb[2];
-    let pDstCb = crate::encoder::md::mem_pred_chroma(pMbCache);
-    let pDstCr = crate::encoder::md::mem_pred_chroma(pMbCache).add(64);
     let pDstLuma = crate::encoder::md::mem_pred_luma(pMbCache);
     // The one cursor every `sMeRefine` offset is measured from — derived once here,
     // from the cache root, and handed to each `MeRefineFracPixel` call below (S28).
     let pBufMe = crate::encoder::md::buffer_inter_pred_me(pMbCache);
+    // **T9.D3**: the chroma pair comes last, and `pDstCr` off `pDstCb` rather than
+    // off a second `mem_pred_chroma()` — so no accessor call sits between any of
+    // these four cursors and its first use. Same addresses, same provenance.
+    let pDstCb = crate::encoder::md::mem_pred_chroma(pMbCache);
+    let pDstCr = pDstCb.add(64);
 
     let iLineSizeRefUV = (*pCurDqLayer).sRefPicView.sPlanes.iLineSize[1];
 
