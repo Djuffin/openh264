@@ -1344,3 +1344,33 @@ tally *as a number*: `sweep_gate` corroborates `PASS=n FAIL=n` against the exit 
 the row count would make every new preset a gate edit — but it means the only defence
 against a stale quote is quoting the measurement, which is what the corrected comment
 now does.
+
+## F128 — the SCD retag is reclassification, and the two censuses disagree about it on purpose
+
+Step 4 moved eight bodies from `port-raw(Phase 9)` / `cursor` to
+`SCREEN_CONTENT(dormant)`: `SvcMdSCDMbEnc`, `CalUVSadCost`, `JudgeStaticSkip`,
+`JudgeScrollSkip`, `MdInterSCDPskipProcess`, `SetBlockStaticIdcToMd`,
+`WelsMdInterJudgeSCDPskip` (`svc_mode_decision.rs`) and `LineFullSearch_c`
+(`svc_motion_estimate.rs`). Between them they own **7** of the 9 screen-content census
+sites; the other two (`WelsMotionEstimateSearchStatic`, `..Scrolled`) were already
+carrying the tag, which is what made F121 notice the family in the first place.
+
+**Nothing was converted and no unsafe code was removed.** The tag census falls
+**696 → 688** (`port-raw` 638 → 631, `cursor` 58 → 57) and
+`SCREEN_CONTENT(dormant)` rises 8 → 16 — the same eight items, re-owned. A report that
+adds this −8 to B4's conversion count is counting one session's work twice.
+
+**The plane census does not move at all, and that is correct.**
+`phase9_plane_callers.py` classifies a site by *operand shape* — `safe-now` means every
+operand is `src`/`ref`/`cache`/`local`, i.e. convertible — and it has no notion of
+reachability. The nine SCD sites remain `safe-now` after the retag because they still
+*are* convertible; S57 says they must not be, which is a different question and a
+different instrument's. So the honest pair of numbers at B4's close is
+**`safe-now` 25 → 20** (five conversions, F126's referee behind them) with **9 of the
+remaining 20 tagged dormant**, and a reader who wants Phase 9's real backlog must
+subtract by hand. Two censuses that disagree are not a defect here; a session that
+quotes only the flattering one would be.
+
+`WelsMdInterJudgeSCDPskipFalse` and `WelsInitSCDPskipFunc` keep their Phase 9 tags:
+the `False` arm is the slot camera content actually runs, and the installer runs on
+every configuration.
