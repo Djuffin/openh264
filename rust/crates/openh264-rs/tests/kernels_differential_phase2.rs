@@ -1497,7 +1497,7 @@ fn encode_mb_aux_shims_stay_inside_the_spans_they_declare() {
         assert_eq!(a, g, "Scan4x4DcAc shim vs direct");
 
         let mut a = [0i16; 16];
-        unsafe { ema::WelsScan4x4Dc(a.as_mut_ptr(), src.as_mut_ptr()) };
+        ema::WelsScan4x4Dc(&mut a, &src);
         assert_eq!(a, g, "Scan4x4Dc shim vs direct");
 
         let mut a = [0i16; 16];

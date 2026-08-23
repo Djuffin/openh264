@@ -838,18 +838,12 @@ pub unsafe extern "C" fn WelsScan4x4Ac_c(pLevel: *mut i16, pDct: *mut i16) {
 
 /// Reorders 16 DC coefficients into 1D zigzag scan order (identical to `WelsScan4x4DcAc_c`).
 ///
-/// # Safety
-/// Same contract as [`WelsScan4x4DcAc_c`].
+/// Unlike its two neighbours this one is **not** installed in an `SWelsFuncPtrList`
+/// slot and the encoder never calls it; its only caller in the workspace is
+/// `tests/kernels_differential_phase2.rs` (F103).
 #[inline]
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe extern "C" fn WelsScan4x4Dc(pLevel: *mut i16, pDct: *mut i16) {
-    // SHIM(phase2) -> scan_4x4_dc_ac
-    let level: &mut [i16; 16] = unsafe { std::slice::from_raw_parts_mut(pLevel, 16) }
-        .try_into()
-        .unwrap();
-    let dct: &[i16; 16] = unsafe { std::slice::from_raw_parts(pDct, 16) }.try_into().unwrap();
-    scan_4x4_dc_ac(level, dct);
+pub fn WelsScan4x4Dc(pLevel: &mut [i16; 16], pDct: &[i16; 16]) {
+    scan_4x4_dc_ac(pLevel, pDct);
 }
 
 // ============================================================================
