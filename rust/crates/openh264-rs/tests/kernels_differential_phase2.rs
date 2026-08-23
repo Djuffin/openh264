@@ -1590,23 +1590,28 @@ fn encoder_recon_shims_stay_inside_the_spans_they_declare() {
         let base: [i16; 64] = coeffs(&mut rng);
         let sub: &[i16; 16] = (&base[..16]).try_into().unwrap();
 
-        let mut a = *sub;
-        let mut g = *sub;
-        unsafe { eda::WelsDequantIHadamard4x4_c(a.as_mut_ptr(), mf_row[0] >> 2) };
-        eda::dequant_ihadamard_4x4(&mut g, mf_row[0] >> 2);
-        assert_eq!(a, g, "DequantIHadamard4x4 shim vs direct");
-
-        let mut a = *sub;
-        let mut g = *sub;
-        unsafe { eda::WelsDequant4x4_c(a.as_mut_ptr(), mf_row.as_ptr()) };
-        eda::dequant_4x4(&mut g, mf_row);
-        assert_eq!(a, g, "Dequant4x4 shim vs direct");
-
-        let mut a = base;
+        // **T9.D10 deleted the three dequantisation shims** these rows compared
+        // against; what is left is the relation between the two survivors, which was
+        // never tautological — `dequant_four_4x4` is `dequant_4x4` on each of the four
+        // blocks. (F106's rule, as in T9.D8.)
         let mut g = base;
-        unsafe { eda::WelsDequantFour4x4_c(a.as_mut_ptr(), mf_row.as_ptr()) };
         eda::dequant_four_4x4(&mut g, mf_row);
-        assert_eq!(a, g, "DequantFour4x4 shim vs direct");
+        for k in 0..4 {
+            let mut one: [i16; 16] = base[k * 16..k * 16 + 16].try_into().unwrap();
+            eda::dequant_4x4(&mut one, mf_row);
+            assert_eq!(&g[k * 16..k * 16 + 16], &one[..], "DequantFour4x4 block {k}");
+        }
+
+        // The inverse Hadamard with MF 1 spreads a lone DC evenly (gain 16 over the
+        // two passes) and leaves an all-zero block alone.
+        let mut dc = [0i16; 16];
+        dc[0] = 5;
+        eda::dequant_ihadamard_4x4(&mut dc, 1);
+        assert!(dc.iter().all(|&v| v == 5), "{dc:?}");
+        let mut zero = [0i16; 16];
+        eda::dequant_ihadamard_4x4(&mut zero, mf_row[0] >> 2);
+        assert_eq!(zero, [0i16; 16], "the inverse Hadamard of zero is zero");
+        let _ = sub;
 
         let mut a4: [i16; 4] = coeffs(&mut rng);
         let mut g4 = a4;

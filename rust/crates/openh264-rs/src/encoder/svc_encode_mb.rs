@@ -300,7 +300,11 @@ pub type PQuantizationHadamardSkipFunc = unsafe extern "C" fn(*mut i16, i16, i16
 pub type PScanFunc = unsafe extern "C" fn(*mut i16, *mut i16);
 pub type PCalculateSingleCtrFunc = unsafe extern "C" fn(*mut i16) -> i32;
 pub type PGetNoneZeroCountFunc = unsafe extern "C" fn(*mut i16) -> i32;
-pub type PDeQuantizationFunc = unsafe extern "C" fn(*mut i16, *const u16);
+/// **T9.D10**: F103's fourteenth, thirteenth and twelfth — the dequantisers were the
+/// rest of the coefficient family's slot half, and they take no plane either. One raw
+/// type served both spans here too, so it splits the way `PQuantizationFunc` did.
+pub type PDeQuantizationFunc = fn(pRes: &mut [i16; 64], kpMF: &[u16; 8]);
+pub type PDeQuantization4x4Func = fn(pRes: &mut [i16; 16], kpMF: &[u16; 8]);
 pub type PDeQuantizationIHadamard4x4Func = unsafe extern "C" fn(*mut i16, u16);
 pub type PIDctFunc = unsafe extern "C" fn(*mut u8, i32, *mut u8, i32, *mut i16);
 pub type PIDctI16x16DcFunc = unsafe extern "C" fn(*mut u8, i32, *mut u8, i32, *mut i16);
@@ -568,18 +572,17 @@ pub unsafe fn WelsEncRecI16x16Y(
             WelsIHadamard4x4Dc(&mut aDctT4Dc);
             WelsDequantLumaDc4x4(&mut aDctT4Dc, uiQp as i32);
         } else if let Some(func) = (*pFuncList).pfDequantizationIHadamard4x4 {
-            func(aDctT4Dc.as_mut_ptr(), g_kuiDequantCoeff[uiQp as usize][0] >> 2);
+            func(&mut aDctT4Dc, g_kuiDequantCoeff[uiQp as usize][0] >> 2);
         }
     }
 
     if uiNoneZeroCountMbAc > 0 {
         (*pCurMb).uiCbp = 15;
         if let Some(func) = (*pFuncList).pfDequantizationFour4x4 {
-            let qp_table = g_kuiDequantCoeff[uiQp as usize].as_ptr();
-            func(pRes, qp_table);
-            func(pRes.add(64), qp_table);
-            func(pRes.add(128), qp_table);
-            func(pRes.add(192), qp_table);
+            let qp_table = &g_kuiDequantCoeff[uiQp as usize];
+            for i in 0..4 {
+                func(blk_four4x4_mut(&mut (*pMbCache).sCoeffLevel, i << 6), qp_table);
+            }
         }
 
         *pRes.add(0) = aDctT4Dc[0];
@@ -698,7 +701,10 @@ pub unsafe fn WelsEncRecI4x4Y(
     if iNoneZeroCount > 0 {
         (*pCurMb).uiCbp |= 1 << (uiI4x4Idx >> 2);
         if let Some(func) = (*pFuncList).pfDequantization4x4 {
-            func(pResI4x4, g_kuiDequantCoeff[uiQp as usize].as_ptr());
+            func(
+                blk4x4_mut(&mut (*pMbCache).sCoeffLevel, 0),
+                &g_kuiDequantCoeff[uiQp as usize],
+            );
         }
         if let Some(func) = (*pFuncList).pfIDctT4 {
             func(pPredI4x4, iRecStride, pBestPred, 4, pResI4x4);
@@ -788,7 +794,10 @@ pub unsafe fn WelsEncInterY(
                     (*pCurMb).iNonZeroCount[offset] = iNoneZeroCount as i8;
                 }
                 if let Some(func) = pfDequantizationFour4x4 {
-                    func(pRes.add(i << 6), g_kuiDequantCoeff[uiQp as usize].as_ptr());
+                    func(
+                        blk_four4x4_mut(&mut (*pMbCache).sCoeffLevel, i << 6),
+                        &g_kuiDequantCoeff[uiQp as usize],
+                    );
                 }
                 (*pCurMb).uiCbp |= 1 << i;
             } else {
@@ -918,8 +927,8 @@ pub unsafe fn WelsEncRecUV(
         }
         if let Some(func) = pfDequantizationFour4x4 {
             func(
-                pRes,
-                g_kuiDequantCoeff[(*pCurMb).uiChromaQp as usize].as_ptr(),
+                blk_four4x4_mut(&mut (*pMbCache).sCoeffLevel, kiResOff),
+                &g_kuiDequantCoeff[(*pCurMb).uiChromaQp as usize],
             );
         }
         (*pCurMb).uiCbp &= 0x0F;

@@ -32,7 +32,7 @@ use crate::encoder::md::{
 };
 use crate::encoder::md::SMbCache;
 use crate::encoder::rc::SWelsRcFunc;
-use crate::encoder::svc_encode_mb::{PDeQuantizationFunc, PIDctFunc};
+use crate::encoder::svc_encode_mb::{PDeQuantization4x4Func, PDeQuantizationFunc, PIDctFunc};
 use crate::encoder::svc_encode_slice::{BsWriter, SDqLayer, SDynamicSlicingStack, SSlice};
 use crate::encoder::svc_motion_estimate::{
     PCalculateBlockFeatureOfFrame, PCalculateSatdFunc, PCalculateSingleBlockFeature,
@@ -122,7 +122,7 @@ pub type PInterMdFunc = unsafe extern "C" fn(
 );
 
 /// `wels_func_ptr_def.h:64`
-pub type PDeQuantizationHadamardFunc = unsafe extern "C" fn(pRes: *mut i16, kuiMF: u16);
+pub type PDeQuantizationHadamardFunc = fn(pRes: &mut [i16; 16], kuiMF: u16);
 
 /// `wels_func_ptr_def.h:190`
 pub type PCavlcParamCalFunc = unsafe extern "C" fn(
@@ -388,7 +388,7 @@ pub struct SWelsFuncPtrList {
 
     pub pfGetNoneZeroCount: Option<PGetNoneZeroCountFunc>,
 
-    pub pfDequantization4x4: Option<PDeQuantizationFunc>,
+    pub pfDequantization4x4: Option<PDeQuantization4x4Func>,
     pub pfDequantizationFour4x4: Option<PDeQuantizationFunc>,
     pub pfDequantizationIHadamard4x4: Option<PDeQuantizationHadamardFunc>,
     pub pfIDctFourT4: Option<PIDctFunc>,
