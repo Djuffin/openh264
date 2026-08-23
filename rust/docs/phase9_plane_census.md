@@ -62,7 +62,7 @@ this family that is genuinely hard, is the wrong trade at any price.
 ## 1. The tables
 
 <!-- BEGIN phase9_plane_callers -->
-106 plane call sites (64 kernel-internal composition calls excluded — they die with their shims); 61 safe-now, 32 blocked on the reconstruction write, 13 gated on the coefficient family (F103), 0 unclassified.
+116 plane call sites (64 kernel-internal composition calls excluded — they die with their shims); 71 safe-now, 32 blocked on the reconstruction write, 13 gated on the coefficient family (F103), 0 unclassified.
 
 ### By kernel group
 
@@ -72,25 +72,26 @@ this family that is genuinely hard, is the wrong trade at any price.
 | dct       | 0        | 13    | 0       | 0 | 0   | 13   | 0  |
 | idct      | 0        | 0     | 10      | 0 | 0   | 10   | 0  |
 | intrapred | 0        | 0     | 5       | 0 | 0   | 5    | 0  |
-| mc        | 20       | 0     | 0       | 0 | 0   | 20   | 0  |
+| mc        | 30       | 0     | 0       | 0 | 0   | 30   | 0  |
 | sad       | 20       | 0     | 0       | 0 | 0   | 17   | 3  |
 | sad4      | 1        | 0     | 0       | 0 | 0   | 1    | 0  |
 | sad|satd  | 13       | 0     | 0       | 0 | 0   | 13   | 0  |
 | satd      | 3        | 0     | 0       | 0 | 0   | 3    | 0  |
-| **total** | 61       | 13    | 32      | 0 | 0   | 103  | 3  |
+| **total** | 71       | 13    | 32      | 0 | 0   | 113  | 3  |
 
 ### By file
 
 | file                                 | safe-now | coeff | blocked | ? | n/a | fork | st |
 |--------------------------------------|----------|-------|---------|---|-----|------|----|
-| encoder/md.rs                        | 10       | 0     | 0       | 0 | 0   | 10   | 0  |
+| encoder/md.rs                        | 20       | 0     | 0       | 0 | 0   | 20   | 0  |
 | encoder/svc_base_layer_md.rs         | 25       | 3     | 7       | 0 | 0   | 35   | 0  |
 | encoder/svc_encode_mb.rs             | 0        | 2     | 10      | 0 | 0   | 12   | 0  |
 | encoder/svc_encode_slice.rs          | 0        | 4     | 5       | 0 | 0   | 9    | 0  |
 | encoder/svc_mode_decision.rs         | 15       | 4     | 10      | 0 | 0   | 28   | 1  |
 | encoder/svc_motion_estimate.rs       | 10       | 0     | 0       | 0 | 0   | 8    | 2  |
 | processing/scene_change_detection.rs | 1        | 0     | 0       | 0 | 0   | 1    | 0  |
-| **total**                            | 61       | 13    | 32      | 0 | 0   | 103  | 3  |
+| **total**                            | 71       | 13    | 32      | 0 | 0   | 113  | 3  |
+
 <!-- END phase9_plane_callers -->
 
 The kernel-internal composition calls are excluded from the counts: the composite
@@ -109,7 +110,7 @@ shares a slot with the encode tree reads as `in-fork`
 | group | sites | verdict | what gates it |
 |---|---:|---|---|
 | **sad / sad4 / satd / md_cost / me_cost** | **37** | `safe-now` **on plane operands only** | but 25 of the 37 pair a `src`/`ref` operand with a **`cache`** one, so the table cannot flip until family 3 lands — see §3 |
-| **mc** (`McLuma_c` / `McChroma_c`) | 23 | `safe-now` | `ref` x `cache`; same family-3 gate |
+| **mc** (`McLuma_c` / `McChroma_c`, and since T9.B24 the four fractional-refinement entry points `McHorVer20_c`/`McHorVer02_c`/`McHorVer22_c`/`PixelAvg_c`) | 30 *(was 23 at session B; 20 after T9.B22's three — and the census had never counted `md.rs`'s ten, F120)* | `safe-now` | `ref` x `cache`; same family-3 gate |
 | **dct** (`PDctFunc`) | 13 | `coeff` — **all of them** | the `pDct` operand is `md::coeff_level(pMbCache)` / `md::dct(pMbCache)`, an SMbCache walking cursor. **F103's shape exactly**, and it corrects session B's brief, which scoped the DCT table as "source picture (safe) + prediction buffer (owned) -> safe now" and did not count the coefficient parameter |
 | **idct** (`PIDctFunc`) | 10 | `blocked` — **all of them** | the destination is the reconstruction plane; the coefficient operand gates them a second time |
 | **copy** (`PCopyFunc`) | 21 | 17 `blocked`, 4 `safe-now` | the destination is the **reconstruction** plane at every reconstruction site; the four exceptions are `VaaBackgroundMbDataUpdate` (x3, `src` -> `ref`) and `MeRefineFracPixel`'s `pfCopyBlockByMode` |
