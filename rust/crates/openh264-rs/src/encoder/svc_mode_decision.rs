@@ -36,6 +36,7 @@ pub use crate::encoder::wels_preprocess::EStaticBlockIdc;
 pub use crate::encoder::md::SMcFunc;
 // Phase 4a: MC is called directly, not via `sMcFuncs`.
 use crate::common::mc::{McChroma_c, McLuma_c};
+use crate::safe::plane::PlaneCursor;
 pub use crate::encoder::wels_preprocess::SVAACalcResult;
 pub use crate::encoder::wels_preprocess::SScrollDetectionParam;
 pub use crate::encoder::svc_motion_estimate::SWelsME;
@@ -1172,7 +1173,13 @@ pub unsafe extern "C" fn WelsMdI16x16(
     // `svc_base_layer_md.cpp:402` costs with pfMdCost, which SetFastCodingFunc points
     // at pfSampleSad and SetNormalCodingFunc at pfSampleSatd. Hardcoding pfSampleSad
     // here silently forced the fast-mode choice in normal mode.
-    let pfMdCost16x16 = pFunc.sSampleDealingFuncs.md_cost_raw(BLOCK_16x16).unwrap();
+    let pfMdCost16x16 = pFunc.sSampleDealingFuncs.md_cost(BLOCK_16x16).unwrap();
+    // **T9.B30**: the source macroblock by coordinate — this function has neither an
+    // `SMB` nor a slice in scope, which is what the carrier's `iMbX`/`iMbY` are for.
+    let pEncPicture = crate::encoder::svc_encode_slice::layer_enc_pic(pCurDqLayer)
+        .expect("the layer's source picture is bound");
+    let (kiMbOrgX, kiMbOrgY) = (*pMbCache).SPicData.luma_origin();
+    let kiPredBase = std::ptr::addr_of!((*pMbCache).sMemPredMb).cast::<u8>();
 
     iBestMode = kpAvailMode[0] as i32;
     for i in 0..iAvailCount {
@@ -1180,7 +1187,15 @@ pub unsafe extern "C" fn WelsMdI16x16(
         debug_assert!((0..7).contains(&iCurMode));
 
         pFunc.pfGetLumaI16x16Pred[iCurMode as usize].unwrap()(pDst, pDec, iLineSizeDec);
-        let mut iCurCost = pfMdCost16x16(pDst, 16, pEnc, iLineSizeEnc);
+        // `pDst` is one of the two 256-byte halves of `sMemPredMb`; as an offset that
+        // is `iIdx * 256`. The prediction slot is still raw (it reads the
+        // reconstruction plane — session C's), so the raw is used at that call and the
+        // cost takes a shared borrow of the same field afterwards (F114a's boundary).
+        let kiDstOff = pDst.offset_from(kiPredBase) as usize;
+        let mut iCurCost = pfMdCost16x16(
+            &PlaneCursor::new(&(*pMbCache).sMemPredMb[kiDstOff..][..256], 0, 16),
+            &pEncPicture.plane(0).cursor(kiMbOrgX, kiMbOrgY),
+        );
         let mode_val = g_kiMapModeI16x16[iCurMode as usize] as u32;
         iCurCost += iLambda * (BsSizeUE(mode_val) as i32);
         if iCurCost < iBestCost {
@@ -2560,18 +2575,33 @@ mod tests {
             crate::encoder::sample::WelsInitSampleSadFunc(&mut func_list, 0);
             func_list.sSampleDealingFuncs.pfMdCost = crate::encoder::md::CostFamily::Sad;
 
-            // Reconstruction and source planes need a real border: the V/H/DC
-            // predictors read pRef[-stride] and pRef[-1].
+            // Reconstruction plane: still reached raw through `SPicData.pCsMb[0]`
+            // (intra prediction reads it — session C's), and it needs a real border,
+            // because the V/H/DC predictors read `pRef[-stride]` and `pRef[-1]`.
             const STRIDE: usize = 48;
             let mut cs_plane = vec![128u8; STRIDE * 40];
-            let mut enc_plane = vec![128u8; STRIDE * 40];
-            // Give the source a constant offset from the reconstruction so the SAD is
-            // a known non-zero number: 16*16 pixels differing by 10.
-            for y in 0..16 {
-                for x in 0..16 {
-                    enc_plane[(y + 16) * STRIDE + (x + 16)] = 138;
+
+            // **The source comes through the layer since T9.B30**, so the fixture
+            // builds a real picture and a pool rather than a bare `Vec` and a pointer.
+            // The macroblock under test is (1, 1) and its 16x16 luma block is set 10
+            // above the neighbours, which is what makes the SAD a known number.
+            const MB_X: i32 = 1;
+            const MB_Y: i32 = 1;
+            let mut src_pic = crate::encoder::picture::SPicture::new(160, 160, false);
+            {
+                let plane = src_pic.plane_mut(0);
+                let (w, h) = (plane.width() as isize, plane.height() as isize);
+                for y in -1..h {
+                    plane.row_mut(y, -1, (w + 2) as usize).fill(128);
+                }
+                for y in 0..16 {
+                    plane
+                        .row_mut((MB_Y as isize) * 16 + y, (MB_X as isize) * 16, 16)
+                        .fill(138);
                 }
             }
+            let mut src_pool = crate::encoder::picture::SrcPicPool::new(vec![src_pic]);
+            let src_id = src_pool.at(0);
             // The prediction ping-pong is `SMbCache::sMemPredMb` since T6.C3 —
             // `[u8; 2 * 256 + 16]`, and the `+ 16` is F14's accommodation, documented
             // on the field. **This test is the instrument that keeps it**: delete the
@@ -2579,11 +2609,12 @@ mod tests {
             // red under Miri.
             let mut mb_cache = SMbCache {
                 SPicData: SPicData {
-                    pEncMb: [
-                        enc_plane.as_mut_ptr().add(16 * STRIDE + 16),
-                        std::ptr::null_mut(),
-                        std::ptr::null_mut(),
-                    ],
+                    // `pEncMb` is null on purpose: this function reads the source
+                    // through the layer's handle and the carrier's coordinates now,
+                    // and a null here is the assertion that it does not fall back.
+                    pEncMb: [std::ptr::null_mut(); 3],
+                    iMbX: MB_X,
+                    iMbY: MB_Y,
                     pDecMb: [std::ptr::null_mut(); 3],
                     pRefMb: [std::ptr::null_mut(); 3],
                     pCsMb: [
@@ -2591,6 +2622,7 @@ mod tests {
                         std::ptr::null_mut(),
                         std::ptr::null_mut(),
                     ],
+                    ..Default::default()
                 },
                 uiNeighborIntra: 0x07, // left + top + top-left available
                 ..Default::default()
@@ -2602,6 +2634,8 @@ mod tests {
                 iEncStride: [STRIDE as i32; 3],
                 iCsStride: [STRIDE as i32; 3],
                 sLayerInfo: SLayerInfo::default(),
+                pEncPic: Some(src_id),
+                pSrcPool: &mut src_pool,
                 ..Default::default()
             };
 
