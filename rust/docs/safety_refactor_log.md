@@ -15811,3 +15811,205 @@ reference archive before the first kernel is written.
 **A standing note for both.** `res/` gained an asset (`num_ref_change_320x192.264`)
 and `safe::Pool` lost its "never grows or shrinks" contract — deliberately, in safe
 code, with the generation semantics tested rather than assumed (F80/F87).
+
+---
+
+## 2026-08-22 — Phase 9, session A (the census corrects the charter; the detector is rebuilt from nothing; the coefficient family converts and turns out to be four)
+
+**Goal:** [`prompts/phase9_session_a.md`](prompts/phase9_session_a.md) — build the
+family map Phase 9 executes against, wire F66's aliasing detector, and convert the
+coefficient-cursor family as the proof of cadence.
+
+**Started at** `aabd0da5`. Working tree clean at both ends.
+
+| commit | what |
+|---|---|
+| `b0eea990` | T9.A1 — `phase9_census.py` + `phase9_census.md`; **F101**, the charter's family table is a first-line artefact |
+| `b50d2bbe` | T9.A2 — `q1c.py` rebuilt from F66's spec; **F102**, it was never committed |
+| `a1eb1566` | T9.A3 — the three directly-called coefficient kernels take array slices |
+| `77a6e46a` | T9.A4 — `WelsCalNonZeroCount2x2Block` and `WelsScan4x4Dc`; **F103**, the family is five, not twenty-five |
+
+### Both numbers the session was given to check were wrong
+
+That is the session's actual result, and it is worth stating plainly because the
+brief and the charter were confident about both.
+
+**The 695/61 tag split reproduces exactly.** Everything downstream of it does not.
+
+**F101 — "419 body-only" is 147.** The charter classifies the 695 `port-raw` tags by
+"the signature each tag sits above" and reports 419 whose signature is already safe,
+which convert for free when their callees do. That is 60% of the phase declared free
+and it is the load-bearing assumption behind the 10–14 session estimate. It was
+produced by reading only the **first line** of each tagged item. The port wraps
+signatures past ~100 columns, so `pub unsafe fn WelsDctMb(` — with five raw
+parameters on the lines below it — reads as having none.
+
+The diagnosis is not inference: restricting `phase9_census.py` to the first line
+reproduces the charter's table almost exactly (420/121/51/36/39/19/9 against its
+419/120/51/33/31/25/15, whose own column sums to 694 rather than 695). Reading the
+whole parameter list moves **272 sites** out of "free" and into a family that has to
+convert their signature. Two of those matter for scoping: `other` is 123 sites rather
+than 31 and the charter's session table gives it to **nobody**, and `ctx` is 234
+rather than 120 (111 ctx-only, matching F66's 109 convertible plus the two
+`*mut *mut` out-parameters, and 123 that carry a cursor as well).
+
+**F102 — `q1c.py` did not exist.** F66 and the charter both send Phase 9 to run
+session J's aliasing detector before the context conversion, and both locate it the
+same way: "reproduced in the session J log". It is not there, in that log or any
+other, and it was never committed. The four forward references that promise it are
+the only occurrences of the string in the tree.
+
+### The detector, rebuilt against the only thing that could validate it
+
+Session J's numbers cannot be a target: F66 reports "93 sites in 28 callers" directly
+above a per-file table that sums to **165**. So the rebuild was validated against the
+two sites **Miri actually confirmed**, which F66 quotes in full — and they turned out
+to be two different shapes, which is the finding:
+
+* **A, a cursor held across the call.** `let pSpatialIndexMap = (*pCtx)...as_ptr();`
+  then `InitBitStream(pCtx)` then the cursor read. The remedy is to retire the
+  cursor's family first — reordering is unavailable in general because several of
+  these callees reallocate the container the cursor points into.
+* **B, argument evaluation order.** `WelsRcInitModule(pCtx, (*ctx_param(pCtx)).iRCMode)`.
+  Arguments evaluate left to right, so once parameter 1 is `&mut` it takes the Unique
+  retag and argument 2 reads through a raw that is already dead. The remedy is local —
+  hoist the argument — and session J did exactly that.
+
+**A triple-pattern detector alone finds only shape A**, so a rebuild that stopped at
+F66's prose description would have read green on one of the two sites Miri had
+already caught. Shape B is 62 of the 287 sites now reported.
+
+One thing the specification omits, found by chasing shape B's own site: **the context
+root is not always a parameter.** `WelsInitEncoderExt` already takes an owned
+`&mut Option<Box<sWelsEncCtx>>` and makes the raw context a *local*
+(`let pCtx = Box::into_raw(...)`, `encoder_ext.rs:1478`) — and that function holds the
+confirmed site. A parameter-only root scan sees no context in it at all.
+
+Current reading: **287 sites in 68 callers across 84 ctx-taking callees** (225 shape A
+over 42 distinct cursors, 62 shape B); 184 of 268 callees clean. Exit 1 on any hazard,
+so session G–H can gate on it. Not run against any conversion here — family 6 is
+blocked until the cursors retire.
+
+### F103 — the coefficient family is five kernels, and the other fourteen belong to session D
+
+The brief scopes the conversion off a premise: "every input to the coefficient-only
+kernels is already an owned `[i16; N]` on the caller side; the raw pointer is a
+round-trip that deletes cleanly." True for five of the nineteen.
+
+The other fourteen are `SWelsFuncPtrList` slots with **no direct caller at all** outside
+their own unit tests, and the 59 call-through sites do not pass owned arrays — they
+pass SMbCache-derived **walking** cursors:
+
+```rust
+let mut pRes = crate::encoder::md::coeff_level(pMbCache);
+for _ in 0..4 {
+    if let Some(func) = (*pFuncList).pfQuantizationFour4x4 { func(pRes, pFF, pMF); }
+    ...
+    pRes = pRes.add(64);
+}
+pRes = pRes.sub(256);
+```
+
+So the slot conversion needs the SMbCache cursors owned first and the walk turned into
+a `chunks_mut` — **family 3, not family 5**. The brief's fallback ("leave a thin shim
+for the table slot, tagged as family 5") points at the wrong owner: family 5 is the
+five *self-referential* slot types that de-virtualize independently; the coefficient
+slots are ordinary dispatch and follow their data.
+
+**The general lesson, now written into the census tool: `pure` is a property of the
+signature, not of the call sites.** Sessions B–E should grep their callers before
+scoping, not just their signatures. The plane family will show the same gap.
+
+### What converted
+
+`WelsIHadamard4x4Dc`, `WelsDequantLumaDc4x4`, `WelsDequantIHadamard2x2Dc`
+(`svc_encode_mb.rs`), `WelsCalNonZeroCount2x2Block` (`svc_set_mb_syn_cabac.rs`) and
+`WelsScan4x4Dc` (`encode_mb_aux.rs`) take `&mut [i16; N]` / `&[i16; N]`. Each was a
+shim that rebuilt the array slice from a raw pointer and called an already-safe
+kernel; every caller passed `local.as_mut_ptr()` on an owned array.
+
+Two call sites needed more than a spelling change. In `WelsWriteMbResidualCabac` the
+chroma DC buffer is both counted and then written through a raw, so the count moved
+*above* the raw derivation — taking the shared borrow first and deriving the mutable
+raw after it, rather than the other way round. Both functions involved are pure, so
+the swap is behaviour-identical, and the sweeps are what say so.
+
+The `# Safety` clauses the type now enforces are deleted; the two it does not are kept
+as prose — F11's ±2047 overflow, and `WelsDequantLumaDc4x4`'s `kiQp < 12`.
+
+`WelsScan4x4Dc` has **no production caller**: not in any dispatch slot, and its only
+reference in the workspace is the differential test that asserts it agrees with the
+kernel it forwards to. An `src/`-only grep calls it dead; it is not, which is why the
+grep has to cover `tests/`. Converted, and flagged as an S18 pair for a later session
+since the test is now tautological.
+
+**`cargo build --all-targets` earned its keep again.** The three-kernel conversion
+compiled clean as a library and broke three call sites in
+`kernels_differential_phase2.rs`.
+
+### The close
+
+`gates.sh family` **OVERALL PASS** at `77a6e46a`: 548 debug / 541 release tests
+(unchanged from the baseline — no test was added or removed, only their `unsafe`
+blocks), ratchet no per-file increase, duplicate census 57 allowlisted, and the
+sweeps **535/535 FAIL=0 in both profiles** across all seven presets
+(`st mt def sl ltr ps dl`). **Zero moved bytes**, which is what the reorder in
+`WelsWriteMbResidualCabac` needed and is why this session ran `family` rather than
+`commit` on the conversion.
+
+| metric | `aabd0da5` | now | delta |
+|---|---:|---:|---:|
+| `port-raw(Phase 9)` tags | 695 | **687** | **−8** |
+| `cursor` tags | 61 | 61 | 0 |
+| `unsafe_fn` | 812 | **806** | **−6** |
+| `unsafe_block` | 445 | **437** | **−8** |
+| `raw_ptr` | 2249 | **2243** | **−6** |
+| `shim` | 111 | **107** | **−4** |
+
+Eight tags: five kernels and the three unit tests whose `unsafe {}` went with them.
+No rebaseline — every metric fell.
+
+### What sessions B–J get
+
+* **`rust/docs/phase9_census.md`** — the map. Family × file, the dependency order, the
+  `other` sub-groups, the pointee-type inventory the family assignment rests on, and
+  a per-session scoping table that supersedes the charter's §8. **Read it first.**
+* **`rust/tools/phase9_census.py`** — regenerate with `--write`; `--family <name>`
+  lists one family's sites with their signatures, `--types` the pointee inventory.
+* **`rust/tools/q1c.py`** — family 6's precondition. Exit 1 on any hazard, `--sites`
+  for the detail, `--callee NAME` to ask whether one specific conversion is clear.
+* **`rust/docs/phase9_findings.md`** — F101 (the census correction), F102 (the
+  detector's provenance and its two shapes), F103 (the coefficient family's real
+  shape, and the `pure`-is-not-callable lesson).
+
+The charter's §2, §4, §5 and §8 and the plan's Phase 9 row are updated to the census
+numbers, with the first-line artefact left visible beside them rather than quietly
+overwritten — the estimate moves **10–14 → 12–17 sessions**, and `other` (123 sites,
+80 of them pure and independent of the cursor spine) gains sessions X1–X2 that the
+charter did not have.
+
+### What this session did not do
+
+* **Nothing was converted outside the coefficient family**, and family 6 was not
+  touched: `q1c.py` was built and read, not acted on. The 287 sites it reports are a
+  measurement of the tree as it stands, not a work list for this session.
+* **No Miri, no benches, no spans** — D-gate-1/2 put those at the phase exit.
+* **`WelsScan4x4Dc` and its differential test** are left in place as an S18 pair
+  rather than deleted; the deletion is a hygiene call, not a safety one.
+* **The 14 coefficient slot types** keep their `unsafe extern "C"` signatures and
+  their tags. Leaving them is the brief's own rule — do not expand the unsafe surface
+  to keep a table alive — and they now have a named owner (session D) instead of the
+  wrong one (session F).
+
+### The methodological note worth keeping
+
+Both of the numbers this session was handed to build on were wrong, and neither was
+wrong at random: **the family table came from a script that read one line where the
+data spanned six, and the detector was cited from a log that never contained it.**
+Both survived into three documents — the charter, the plan and the session brief —
+because each cited the previous one. S24 says re-grep before quoting; the sharper
+form after this session is that a prose number with no re-runnable tool behind it
+should be treated as a claim, and the first thing a session does with an inherited
+claim is try to reproduce it. Reproducing the charter's table *exactly* by
+deliberately crippling the new tool is what turned "these numbers look off" into
+"here is the bug that produced them".
