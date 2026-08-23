@@ -315,7 +315,10 @@ assert_size!(SSliceBufferInfo, 32);
 // added — 712 debug / 640 release. **T6.F5**: +128 for the two `SRefPicView`s the
 // macroblock loop reads instead of resolving a handle per access — **840 debug /
 // 768 release**, measured. **T6.G3**: -16, the `SLayerInfo` it embeds — **824 / 752**.
-assert_size_by_profile!(SDqLayer, debug 824, release 752);
+// **T9.B21**: +16, `pEncPic` (`Option<SrcPicId>`) and `pSrcPool` — the source
+// picture said as a handle plus the pool that opens it, which is `pRefPic`/`pRefList`
+// one picture over. **840 debug / 768 release**, measured.
+assert_size_by_profile!(SDqLayer, debug 840, release 768);
 
 // codec/encoder/core/inc/wels_func_ptr_def.h
 // 1280 before Phase 4a; -8 for `SSampleDealingFunc`'s shrink above; -24 at T4b.1,
