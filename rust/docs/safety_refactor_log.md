@@ -16844,6 +16844,23 @@ after each of the two deletions — a change inside the CAVLC and CABAC writers 
 family-scale byte gate, not the commit gate's word for it. Commit gate green at all
 five commits.
 
+**Close, at `6233e202` + this docs commit** — `MIRI_SCOPE=encoder bash
+rust/tools/gates.sh session`, **OVERALL: PASS**, 8 passed / 0 failed / 2 skipped:
+
+```
+PASS  cargo test (debug):   545 passed / 0 failed / 20 ignored
+PASS  cargo test (release): 538 passed / 0 failed / 20 ignored
+PASS  unsafe ratchet: no per-file increase
+PASS  duplicate census: 56 allowlisted, nothing new
+PASS  sweep (debug):   PASS=583 FAIL=0, 45s wall
+PASS  sweep (release): PASS=583 FAIL=0, 38s wall
+PASS  miri --lib, encoder scope (minus decoder::): 273 passed / 0 failed (978 s)
+```
+
+545/538 rather than B3's 548/541 is the three deleted mc tests, exactly. Per B3's rule
+the verdict names the commit it ran at: nothing lands after it but this log entry and
+the charter row.
+
 ### counts at close
 
 Ratchet against baseline: `raw_ptr` **−181 → −245**, `shim` **−20 → −46** (26 of that
@@ -16855,10 +16872,25 @@ Tags **696 → 688** (`port-raw` 638 → 631, `cursor` 58 → 57); `SCREEN_CONTE
 **8 → 19** (8 SCD-family, 3 in `mc.rs`). `SPicData` code reads **97 → 92**. q1c
 unchanged in all three calibrated shapes.
 
-**The conversion moved the census and not the ratchet, and that is the honest reading.**
-`raw_ptr` counts `*mut`/`*const` type spellings; T9.B4's five conversions deleted eight
-raw locals whose types were all inferred. The ratchet's −64 this session is the two
-deletions, not the conversions. Quote the census for this family's progress.
+**Three of the five commits moved the ratchet by exactly zero, and that is the honest
+reading.** Measured per commit (`raw_ptr` / `unsafe_fn` / `unsafe_block` / `shim`):
+
+| commit | what it did | ratchet |
+|---|---|---|
+| `fa5a51f3` | the `bg` preset | 2068 / 757 / 398 / 91 — unchanged |
+| `3d086536` | five conversions | **unchanged** |
+| `b316330a` | eight retags | **unchanged** |
+| `48d35182` | D-dead-2, −280 lines | **unchanged** |
+| `6233e202` | D-cov-1, 26 shims | 2004 / 731 / 369 / 65 |
+
+So the session's entire ratchet delta — `raw_ptr` −64, `unsafe_fn` −26, `unsafe_block`
+−29, `shim` −26 — is **D-cov-1 alone**. The metric counts `*mut`/`*const` *spellings*:
+the five conversions deleted eight raw locals whose types were all inferred; D-dead-2
+deleted 280 lines of `pub extern "C" fn` and match arms with no raw pointer in them.
+Neither is invisible work, and neither is measured by this instrument. **Quote the plane
+census for the conversions and the line count for the deletions**; the ratchet answers a
+third question, which is how much raw *surface* is spelled, and only D-cov-1 changed
+that.
 
 ### what C, E and F inherit, re-measured at the close
 

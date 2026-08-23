@@ -1322,7 +1322,13 @@ to convert) fails **all three clips** — Static 102666/103615, VT2people-160x96
 including Static, where the MD sites are not. Two sites in one function body, one
 gate, two different answers to "can it see me".
 
-Cost: 48 rows, ~8 s wall in either profile on a ~40 s eight-preset sweep.
+Cost, measured rather than estimated: 48 rows, **6.2 s release / 8.5 s debug** standalone,
+inside a full eight-preset sweep that runs 38 s release / 45 s debug at the session gate.
+D-ref-1's brief priced it at "~1 s on a ~40 s sweep" — the real figure is about eight
+times that, and about a fifth of the sweep rather than a fortieth. It is still cheap
+enough that the preset belongs on the exit list, but a future session pricing another
+axis against that sentence would be reading a number nobody measured. Row totals both
+ways, at this commit: `st mt def sl ltr ps dl` = **535**, `+ bg` = **583**.
 
 ## F127 — `gates.sh`'s sweep row count had been wrong since `dl` landed: 505 quoted, 535 measured
 
