@@ -799,7 +799,13 @@ pub unsafe fn WelsWriteMbResidual(
     let uiMbType = pCurMb.uiMbType;
     let kiCbpChroma = (pCurMb.uiCbp >> 4) as i32;
     let kiCbpLuma = (pCurMb.uiCbp & 0x0F) as i32;
-    let pNonZeroCoeffCount = (*sMbCacheInfo).iNonZeroCoeffCount.as_mut_ptr();
+    // **T9.D3**: the neighbour non-zero counts are read out of the array at each
+    // use, not through a cursor held across the six `dct(sMbCacheInfo)` calls
+    // below. `iNonZeroCoeffCount` and `sDct` are different fields, so the hold was
+    // never unsound — but it is the shape `q1c.py --type SMbCache` reports, and
+    // indexing the root is what S28 asks for anyway. Every index below comes from
+    // `g_kuiCache48CountScan4Idx` (max 47) or that table's 16.. tail plus 24 (max
+    // 47), against `[i8; 48]`; the lowest is `9 - 8`.
 
     let mut pBlock: *mut i16;
     let mut iA: i8;
@@ -808,8 +814,8 @@ pub unsafe fn WelsWriteMbResidual(
 
     if IS_INTRA16x16(uiMbType) {
         // DC luma
-        iA = *pNonZeroCoeffCount.add(8);
-        iB = *pNonZeroCoeffCount.add(1);
+        iA = (*sMbCacheInfo).iNonZeroCoeffCount[8];
+        iB = (*sMbCacheInfo).iNonZeroCoeffCount[1];
         iC = wels_non_zero_count_average(iA, iB);
         if WriteBlockResidualCavlc(
             pFuncList,
@@ -832,14 +838,14 @@ pub unsafe fn WelsWriteMbResidual(
 
             for i in 0..16 {
                 let iIdx = g_kuiCache48CountScan4Idx[i] as usize;
-                iA = *pNonZeroCoeffCount.add(iIdx - 1);
-                iB = *pNonZeroCoeffCount.add(iIdx - 8);
+                iA = (*sMbCacheInfo).iNonZeroCoeffCount[iIdx - 1];
+                iB = (*sMbCacheInfo).iNonZeroCoeffCount[iIdx - 8];
                 iC = wels_non_zero_count_average(iA, iB);
                 if WriteBlockResidualCavlc(
                     pFuncList,
                     pBlock,
                     14,
-                    if *pNonZeroCoeffCount.add(iIdx) > 0 { 1 } else { 0 },
+                    if (*sMbCacheInfo).iNonZeroCoeffCount[iIdx] > 0 { 1 } else { 0 },
                     LUMA_AC,
                     iC,
                     buf, pBs,
@@ -860,13 +866,13 @@ pub unsafe fn WelsWriteMbResidual(
             while i < 16 {
                 if (kiCbpLuma & (1 << (i >> 2))) != 0 {
                     let iIdx = g_kuiCache48CountScan4Idx[i] as usize;
-                    let kiA = *pNonZeroCoeffCount.add(iIdx);
-                    let kiB = *pNonZeroCoeffCount.add(iIdx + 1);
-                    let kiC_val = *pNonZeroCoeffCount.add(iIdx + 8);
-                    let kiD = *pNonZeroCoeffCount.add(iIdx + 9);
+                    let kiA = (*sMbCacheInfo).iNonZeroCoeffCount[iIdx];
+                    let kiB = (*sMbCacheInfo).iNonZeroCoeffCount[iIdx + 1];
+                    let kiC_val = (*sMbCacheInfo).iNonZeroCoeffCount[iIdx + 8];
+                    let kiD = (*sMbCacheInfo).iNonZeroCoeffCount[iIdx + 9];
 
-                    iA = *pNonZeroCoeffCount.add(iIdx - 1);
-                    iB = *pNonZeroCoeffCount.add(iIdx - 8);
+                    iA = (*sMbCacheInfo).iNonZeroCoeffCount[iIdx - 1];
+                    iB = (*sMbCacheInfo).iNonZeroCoeffCount[iIdx - 8];
                     iC = wels_non_zero_count_average(iA, iB);
                     if WriteBlockResidualCavlc(
                         pFuncList,
@@ -882,7 +888,7 @@ pub unsafe fn WelsWriteMbResidual(
                     }
 
                     iA = kiA;
-                    iB = *pNonZeroCoeffCount.add(iIdx - 7);
+                    iB = (*sMbCacheInfo).iNonZeroCoeffCount[iIdx - 7];
                     iC = wels_non_zero_count_average(iA, iB);
                     if WriteBlockResidualCavlc(
                         pFuncList,
@@ -897,7 +903,7 @@ pub unsafe fn WelsWriteMbResidual(
                         return ENC_RETURN_VLCOVERFLOWFOUND;
                     }
 
-                    iA = *pNonZeroCoeffCount.add(iIdx + 7);
+                    iA = (*sMbCacheInfo).iNonZeroCoeffCount[iIdx + 7];
                     iB = kiA;
                     iC = wels_non_zero_count_average(iA, iB);
                     if WriteBlockResidualCavlc(
@@ -974,14 +980,14 @@ pub unsafe fn WelsWriteMbResidual(
 
             for i in 0..4 {
                 let iIdx = kCache48CountScan4Idx16base[i] as usize;
-                iA = *pNonZeroCoeffCount.add(iIdx - 1);
-                iB = *pNonZeroCoeffCount.add(iIdx - 8);
+                iA = (*sMbCacheInfo).iNonZeroCoeffCount[iIdx - 1];
+                iB = (*sMbCacheInfo).iNonZeroCoeffCount[iIdx - 8];
                 iC = wels_non_zero_count_average(iA, iB);
                 if WriteBlockResidualCavlc(
                     pFuncList,
                     pBlock,
                     14,
-                    if *pNonZeroCoeffCount.add(iIdx) > 0 { 1 } else { 0 },
+                    if (*sMbCacheInfo).iNonZeroCoeffCount[iIdx] > 0 { 1 } else { 0 },
                     CHROMA_AC,
                     iC,
                     buf, pBs,
@@ -1003,14 +1009,14 @@ pub unsafe fn WelsWriteMbResidual(
 
             for i in 0..4 {
                 let iIdx = 24 + (kCache48CountScan4Idx16base[i] as usize);
-                iA = *pNonZeroCoeffCount.add(iIdx - 1);
-                iB = *pNonZeroCoeffCount.add(iIdx - 8);
+                iA = (*sMbCacheInfo).iNonZeroCoeffCount[iIdx - 1];
+                iB = (*sMbCacheInfo).iNonZeroCoeffCount[iIdx - 8];
                 iC = wels_non_zero_count_average(iA, iB);
                 if WriteBlockResidualCavlc(
                     pFuncList,
                     pBlock,
                     14,
-                    if *pNonZeroCoeffCount.add(iIdx) > 0 { 1 } else { 0 },
+                    if (*sMbCacheInfo).iNonZeroCoeffCount[iIdx] > 0 { 1 } else { 0 },
                     CHROMA_AC,
                     iC,
                     buf, pBs,
