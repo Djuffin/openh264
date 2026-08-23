@@ -398,7 +398,8 @@ def report(sites):
         for t in s.types:
             if family_of(t, s.types) == "other":
                 og[OTHER_GROUP.get(t, "misc")] += 1
-    add(tbl([(k, v) for k, v in og.most_common()], ["`other` sub-group", "type occurrences"]))
+    add(tbl(sorted(og.items(), key=lambda kv: (-kv[1], kv[0])),
+            ["`other` sub-group", "type occurrences"]))
     add("")
 
     add("## 5. The `cursor` tags\n")
@@ -455,7 +456,7 @@ def report(sites):
         for t in set(s.types):
             tc[t] += 1
     rows = [(t, n, family_of(t), OTHER_GROUP.get(t, "") if family_of(t) == "other" else "")
-            for t, n in tc.most_common()]
+            for t, n in sorted(tc.items(), key=lambda kv: (-kv[1], kv[0]))]
     # `u16`'s row shows its default family; the contextual rule above moves the two
     # dequant kernels to `coeff` and is noted there, not here.
     add(tbl(rows, ["pointee", "signatures", "family", "sub-group"]))
@@ -485,7 +486,7 @@ def main():
         for s in sites:
             for t in set(s.types):
                 tc[t] += 1
-        for t, n in tc.most_common():
+        for t, n in sorted(tc.items(), key=lambda kv: (-kv[1], kv[0])):
             print(f"{n:5d}  {t:32s} {family_of(t)}")
         return
 
