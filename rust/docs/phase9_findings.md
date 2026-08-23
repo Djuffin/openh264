@@ -295,3 +295,50 @@ through the three slots) keeps its own coverage.
 
 Not acted on here: `mc.rs` is session C's file and the deletion should land with
 the conversion of its three live slots, not ahead of it.
+
+## F106 — `common/expand_pic.rs`'s three raw items were dead, and their differential test was tautological
+
+The census (F104) turned up no reference in `src/` to either border-expansion
+shim:
+
+```bash
+grep -rn '\bExpandPictureLuma_c\b' rust/crates/openh264-rs/src
+#   src/common/expand_pic.rs:153:pub unsafe extern "C" fn ExpandPictureLuma_c(   <- the definition
+```
+
+Both codecs' pictures own their planes since T5.AC5 / T6.F4, and each
+`SPicture::expand_as_reference` hands `expand_picture` the plane's own
+allocation. `ExpandReferencingPicture` — the dispatcher — was deleted then; the
+two `_c` kernels and `expand_shim_span` were kept with the reason "they are the
+C-shaped subjects `tests/kernels_differential_phase2.rs` runs against the
+reference" (`expand_pic.rs:187-195`).
+
+They were not run against the reference. The probe's golden was
+`exp::expand_picture` — the function each shim calls two lines in — so the
+equivalence it asserted was between a function and its own callee. What the probe
+*did* still test was `expand_shim_span`'s backwards walk, which is the code being
+deleted, plus two properties that belong to the kernel:
+
+* every padding byte is written and none is read;
+* slack columns of a wider-than-minimal stride stay untouched.
+
+T9.B2 deletes all three items, moves those two properties onto `expand_picture`
+itself (`expand_picture_writes_every_padding_byte_and_reads_none`), and puts
+`common/expand_pic.rs` under `#![deny(unsafe_code)]`. `common/cpu_core.rs`, which
+has no `unsafe` at all, goes under `deny` in the same commit. Byte-identical: the
+deleted code had no caller.
+
+Two files of `common/`'s nine are now denied. **The other seven are further away
+than the charter reads**: `sad_common.rs`, `mc.rs` and `intra_pred_common.rs`
+wait on family 3 and on the reconstruction write (F104), `deblocking_common.rs`
+on the reconstruction write, and `wels_common_defs.rs` / `wels_trace.rs` are the
+`other` family's, not this one's. `common/mod.rs` cannot carry the attribute at
+all — an inner attribute there applies to every submodule.
+
+Note the shape, because it recurs: F103 found it in `WelsScan4x4Dc`, F105 in
+`mc.rs`'s twenty, and this is the third. **A shim kept alive only by a
+differential test whose golden is the shim's own callee is dead code with a
+green test on top of it.** The tests that survive a strangler conversion are the
+ones whose golden is the *reference implementation*; when the reference side is
+retired, the surviving assertions have to be re-pointed at the safe kernel or
+they mean nothing.

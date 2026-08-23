@@ -1,4 +1,5 @@
 #![allow(non_snake_case, non_camel_case_types, non_upper_case_globals, dead_code)]
+#![deny(unsafe_code)]
 
 //! Picture-border expansion, shared by encoder and decoder.
 //!
@@ -79,117 +80,42 @@ pub fn expand_picture(buf: &mut [u8], stride: usize, pic_w: usize, pic_h: usize,
     }
 }
 
-/// `ExpandReferencingPicture` — `codec/common/src/expand_pic.cpp:388`, and the
-/// **only** copy. Both codecs call this one function, as they do in the C++.
-///
-/// # What used to be here, and why it is gone (T4b.3b)
-///
-/// The C++ reaches the two kernels through `SExpandPicFunc`, a three-slot table
-/// (`expand_pic.h:88`) filled by `InitExpandPictureFunc` (`expand_pic.cpp:351`)
-/// from the CPU flag — `_sse2`/`_neon`/`_mmi` variants of the same result. This
-/// port has no SIMD, so every install in both codecs set the same three
-/// constants: `ExpandPictureLuma_c` and `ExpandPictureChroma_c` **twice**, so the
-/// alignment index selected between two identical functions. The table, its
-/// installer, its four `PExpandPictureFunc` typedefs and the two `SWelsFuncPtrList`
-/// / `SWelsDecoderContext` members it occupied are all deleted; the kernels are
-/// named directly.
-///
-/// # The three copies this replaces
-///
-/// The port had translated one C++ function three times, and two copies had
-/// drifted apart in the `kiWidthUV < 16` case — chroma planes of a frame narrower
-/// than 32 pixels:
-///
-/// | copy | sub-16 chroma |
-/// |---|---|
-/// | C++ `expand_pic.cpp:388` | `ExpandPictureChroma_c` on both planes |
-/// | `encoder/ref_list_mgr_svc.rs` | same — correct |
-/// | `decoder/error_concealment.rs` | `pExpChrom[0]`, which *happens* to be the same function here |
-/// | `decoder/manage_dec_ref.rs` | **nothing at all** — the `else` was never written |
-///
-/// This body is the C++'s. See `phase4b_findings.md` F21 for the reachability
-/// analysis: the corpus is 176x144 and wider, so no gate could have caught it.
-///
-/// # Divergence kept on purpose
-///
-/// The per-plane null guards are the union of what the three copies did (only
-/// `manage_dec_ref`'s had them). The C++ dereferences unconditionally. Keeping
-/// them cannot change output where the pointers are valid, and this runs once per
-/// plane per reference picture, so the branches are free.
-///
-/// # Safety
-/// `pData[0..=2]` are the plane origins of a picture allocated with
-/// `PADDING_LENGTH` luma / `PADDING_LENGTH >> 1` chroma borders, with matching
-/// `iStride[0..=2]`; see [`expand_picture`] for the geometry each kernel asserts.
-/// Slices shorter than three entries panic rather than read out of bounds — the
-/// C++ parameter is `uint8_t* pData[3]` decayed to a pointer and checks nothing.
-/// The one place a mid-plane `pDst` becomes the full allocation slice
-/// (R-c: nothing else does this arithmetic). Every caller of the expand
-/// functions hands `pData[i]`, which both codecs' `AllocPicture`s place at
-/// `pBuffer + (1 + stride) * pad` — i.e. `pad` rows plus `pad` bytes into the
-/// allocation (`decoder/pic_queue.rs:177-330`, `encoder/wels_preprocess.rs:
-/// 764-806`; chroma divides the same expression by two, which is the same
-/// layout at `pad = 16`). The reconstructed span is the padded plane:
-/// `(h + 2*pad)` rows of `stride`. The real allocation may be taller (row
-/// counts are aligned up); claiming the prefix is exactly what the kernel may
-/// touch.
-///
-/// # Safety
-/// `pDst` must point at `(0, 0)` of a picture plane laid out as above, `pad`
-/// rows and `pad` bytes into a live allocation of at least
-/// `(kiPicH + 2*pad) * kiStride` bytes, with no other live reference to it.
-unsafe fn expand_shim_span<'a>(pDst: *mut u8, kiStride: i32, kiPicH: i32, pad: usize) -> &'a mut [u8] {
-    let stride = kiStride as usize;
-    let h = kiPicH as usize;
-    std::slice::from_raw_parts_mut(pDst.sub(pad * stride + pad), (h + 2 * pad) * stride)
-}
-
-/// Matches `ExpandPictureLuma_c` in `codec/common/src/expand_pic.cpp`.
-///
-/// # Safety
-/// `pDst`, `kiStride`, `kiPicH` as [`expand_shim_span`] with `pad = 32`
-/// (`crate::decoder::decoder_core::PADDING_LENGTH` — the luma border); `kiPicW + 64 <= kiStride`; positive
-/// width and height.
-pub unsafe extern "C" fn ExpandPictureLuma_c(pDst: *mut u8, kiStride: i32, kiPicW: i32, kiPicH: i32) {
-    // SHIM(phase2) -> expand_picture
-    unsafe {
-        let buf = expand_shim_span(pDst, kiStride, kiPicH, crate::decoder::decoder_core::PADDING_LENGTH);
-        crate::common::expand_pic::expand_picture(
-            buf,
-            kiStride as usize,
-            kiPicW as usize,
-            kiPicH as usize,
-            crate::decoder::decoder_core::PADDING_LENGTH,
-        );
-    }
-}
-
-/// Matches `ExpandPictureChroma_c` in `codec/common/src/expand_pic.cpp`.
-///
-/// # Safety
-/// `pDst`, `kiStride`, `kiPicH` as [`expand_shim_span`] with `pad = 16`
-/// (`crate::decoder::decoder_core::PADDING_LENGTH >> 1` — the chroma border); `kiPicW + 32 <= kiStride`;
-/// positive width and height.
-pub unsafe extern "C" fn ExpandPictureChroma_c(pDst: *mut u8, kiStride: i32, kiPicW: i32, kiPicH: i32) {
-    // SHIM(phase2) -> expand_picture
-    unsafe {
-        let buf = expand_shim_span(pDst, kiStride, kiPicH, crate::decoder::decoder_core::PADDING_LENGTH >> 1);
-        crate::common::expand_pic::expand_picture(
-            buf,
-            kiStride as usize,
-            kiPicW as usize,
-            kiPicH as usize,
-            crate::decoder::decoder_core::PADDING_LENGTH >> 1,
-        );
-    }
-}
-
-// **`ExpandReferencingPicture` stood here and has no caller left (T6.F4, S18).**
-// It was the dispatcher over `ExpandPictureLuma_c`/`ExpandPictureChroma_c`, taking
-// three raw plane origins because it was shared by two codecs whose pictures did not
-// own their planes. Both do now — `decoder::picture::SPicture::expand_as_reference`
-// (T5.AC5) and `encoder::picture::SPicture::expand_as_reference` (T6.F4) each hand
-// `expand_picture` the plane's own allocation, so nothing rebuilds an allocation out
-// of a mid-plane pointer any more. The two `_c` kernels stay: they are the C-shaped
-// subjects `tests/kernels_differential_phase2.rs` runs against the reference, and
-// `expand_shim_span` with them.
+// `ExpandReferencingPicture` and the two `_c` kernels stood here; all three are
+// gone (T9.B2, S18).
+//
+// # What was here, and the two reasons it went
+//
+// The C++ reaches the border-expansion kernels through `SExpandPicFunc`, a
+// three-slot table (`expand_pic.h:88`) filled by `InitExpandPictureFunc`
+// (`expand_pic.cpp:351`) from the CPU flag. This port has no SIMD, so every
+// install in both codecs set the same three constants and the alignment index
+// selected between two identical functions. T4b.3b deleted the table, its
+// installer, its four `PExpandPictureFunc` typedefs and the two
+// `SWelsFuncPtrList` / `SWelsDecoderContext` members it occupied, leaving one
+// `ExpandReferencingPicture` over `ExpandPictureLuma_c` / `ExpandPictureChroma_c`
+// — three raw plane origins, because the two codecs' pictures did not own their
+// planes. (That consolidation also fixed a real divergence: of the port's three
+// copies of the C++ function, `decoder/manage_dec_ref.rs`'s had never written the
+// `kiWidthUV < 16` arm at all — chroma planes of a frame narrower than 32 pixels.
+// `phase4b_findings.md` F21 has the reachability analysis; the corpus is 176x144
+// and wider, so no gate could have caught it.)
+//
+// Then both codecs' pictures came to own their planes —
+// `decoder::picture::SPicture::expand_as_reference` (T5.AC5) and
+// `encoder::picture::SPicture::expand_as_reference` (T6.F4) — and each hands
+// [`expand_picture`] the plane's own allocation. `ExpandReferencingPicture` lost
+// its last caller there and was deleted; the two `_c` kernels and
+// `expand_shim_span` (the one place a mid-plane `pDst` was rebuilt into a whole
+// allocation) were kept "as the C-shaped subjects
+// `tests/kernels_differential_phase2.rs` runs against the reference".
+//
+// They were not run against the reference. The test's golden was
+// [`expand_picture`] — the function the shim itself calls — so the equivalence it
+// asserted was tautological, and the only live code under it was
+// `expand_shim_span`'s own arithmetic. The two properties that are about the
+// *kernel* (every padding byte written and none read; slack columns untouched)
+// moved onto [`expand_picture`] directly in the same commit, and this file is now
+// `#![deny(unsafe_code)]`.
+//
+// Session B's plane census (F104) is what made the deletion visible: nothing in
+// `src/` named either kernel.

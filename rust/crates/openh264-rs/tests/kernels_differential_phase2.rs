@@ -1227,45 +1227,37 @@ fn nonzero_count_shim_stays_inside_its_span_and_normalises() {
 }
 
 // ===========================================================================
-// T6 — border expansion (`common/expand_pic.rs` + `decoder_core.rs`'s shims)
+// T6 — border expansion (`common/expand_pic.rs`)
 // ===========================================================================
 //
 // `2fe283e4` proved `expand_picture` against both raw variants over full
 // allocations — every byte compared, minimum-legal and slack strides, exact
 // and over-tall row counts, odd sizes; corner-swap and first-row-skip
 // mutations died. The shim commit deleted that equivalence, because both
-// sides now run the same code.
+// sides now ran the same code.
 //
-// What survives is what the shims add, and it is the trickiest span in the
-// phase: the caller hands a **mid-allocation** pointer (`pData[i]`, `pad`
-// rows plus `pad` bytes in) and the shim walks *backwards* to the allocation
-// start with the per-variant pad constant (32 luma, 16 chroma) before
-// claiming `(h + 2*pad) * stride` bytes. The probes below hand each shim an
-// allocation of exactly that size (an over-claim or a wrong-direction
-// reconstruction is UB Miri reports; an under-claim asserts in the safe
-// kernel), and three assertions pin the rest:
+// What stood here after that was a probe of `ExpandPictureLuma_c` /
+// `ExpandPictureChroma_c`, which took a **mid-allocation** pointer and walked
+// backwards to the allocation start (`expand_shim_span`). Those three items had
+// no caller anywhere in `src/` — both codecs' pictures own their planes and hand
+// `expand_picture` the allocation directly — and the probe's golden was
+// `expand_picture` itself, so the equivalence it asserted was between a function
+// and its own callee. T9.B2 deleted all three (S18, F104's census found them) and
+// this is what the probe was really pinning, run against the kernel:
 //
-// * **Every padding byte is written and none is read**: two runs whose
-//   inputs differ only in the padding bytes must produce identical
-//   allocations.
-// * **The anchor is where the contract says**: the shim's result must equal
-//   `expand_picture` run directly on the same input — a reconstruction of
-//   `pad*stride` instead of `pad*stride + pad` would land every write one
-//   pad short.
+// * **Every padding byte is written and none is read**: two allocations whose
+//   inputs differ only outside the picture rectangle must converge byte for byte.
 // * **Slack columns stay untouched** at a wider-than-minimal stride, which is
 //   what an aligned real allocation has.
 
 use openh264_rs::common::expand_pic as exp;
 
 #[test]
-fn expand_shims_stay_inside_the_spans_they_declare() {
+fn expand_picture_writes_every_padding_byte_and_reads_none() {
     let mut rng = Prng::new(0xE8_9A2D_0016);
-    type RawExpand = unsafe extern "C" fn(*mut u8, i32, i32, i32);
-    let variants: &[(usize, RawExpand, &str)] = &[
-        (32, exp::ExpandPictureLuma_c as RawExpand, "luma"),
-        (16, exp::ExpandPictureChroma_c as RawExpand, "chroma"),
-    ];
-    for &(pad, shim, name) in variants {
+    // The two border widths both codecs allocate: `PADDING_LENGTH` for luma and
+    // `PADDING_LENGTH >> 1` for chroma.
+    for &(pad, name) in &[(32usize, "luma"), (16usize, "chroma")] {
         for &(w, h) in &[(16usize, 16usize), (9, 11)] {
             for &slack in &[0usize, 13] {
                 let stride = w + 2 * pad + slack;
@@ -1283,21 +1275,8 @@ fn expand_shims_stay_inside_the_spans_they_declare() {
                     }
                     let mut a = before_a.clone();
                     let mut b = before_b.clone();
-                    unsafe {
-                        shim(a.as_mut_ptr().add(pad * stride + pad), stride as i32, w as i32, h as i32);
-                        shim(b.as_mut_ptr().add(pad * stride + pad), stride as i32, w as i32, h as i32);
-                    }
-
-                    // The anchor: the shim must equal the safe kernel run at
-                    // the geometry the contract names.
-                    let mut golden = before_a.clone();
-                    exp::expand_picture(&mut golden, stride, w, h, pad);
-                    assert_eq!(
-                        a, golden,
-                        "{name} {w}x{h} stride {stride}: shim disagrees with the safe \
-                         kernel at the contract's geometry (seed {:#x})",
-                        rng.seed()
-                    );
+                    exp::expand_picture(&mut a, stride, w, h, pad);
+                    exp::expand_picture(&mut b, stride, w, h, pad);
 
                     // Slack columns (an aligned allocation's tail) untouched.
                     if slack > 0 {
