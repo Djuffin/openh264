@@ -124,7 +124,7 @@ the shims, retire the tags, Miri-verify. **Sizes below are session A's census
    > Order, therefore: **plane roots (they unblock nothing on their own) -> family 3 ->
    > each table flips in one commit.** **Family 3 landed in session D**, so every one of
    > those tables now waits on the plane half *alone*: `pfSampleSad`, `pfSampleSatd`,
-   > `pfSample4Sad`, `mc`, and the encoder's `pfDct*`/`pfIDct*` slots. The eleven
+   > `pfSample4Sad`, `mc`, and the encoder's `pfDct*`/`pfIDct*` slots. The
    > fourteen coefficient slots that had *no* plane operand flipped with family 3
    > (T9.D8, T9.D10) — so **F103's split is fully closed**: 5 direct + 14 slot = 19.
 
@@ -141,7 +141,7 @@ the shims, retire the tags, Miri-verify. **Sizes below are session A's census
    and un-ignores the MT Miri probe — **and adds a second probe on a mid-row boundary**,
    because the existing one drives the row-aligned mode.
 
-   ~2–3 sessions (B spent on the census and the design; C and D2 carry the conversions).
+   ~2–3 sessions (B spent on the census and the design; **B2** carries the source/reference roots *and the table flips*, now that family 3 has landed; **C** the reconstruction consumers).
 3. **SMbCache / SMB** (45 pure / 48 total, **+ the 14 coefficient slot types and their 59
    call-through sites**, + Phase 6's 72 kernels-take-slices note) — per-macroblock metadata;
    the encoder's `MbGrid` analogue. Bigger than the charter first read: ~2 sessions.
@@ -155,8 +155,10 @@ the shims, retire the tags, Miri-verify. **Sizes below are session A's census
    slot types (`PDeblockingBSCalc`, `PDeblockingFilterSlice`, `PMotionSearchFunc`,
    `PSearchMethodFunc`, `PLineFullSearchFunc`), the way Phase 4a de-virtualized `pfMdCost`.
    Independent of the cursor spine. ~1 session.
-6. **The `*mut sWelsEncCtx` conversion** (120) — unblocked once 1–4 land. Run session J's
-   `q1c.py` aliasing-hazard detector as the **precondition** (F66's instruction), and split
+6. **The `*mut sWelsEncCtx` conversion** (111 pure / 234 total) — unblocked once 1–4 land. Run
+   `q1c.py` (rebuilt T9.A2 — session J's never existed, F102; widened T9.D5, F111) as the
+   **precondition** (F66's instruction) — **308 sites / 71 callers at session D's close**, and
+   calibrate it first (S55) — and split
    the context into sub-borrows (section 2.2.6) only where a caller must hold a sub-borrow
    across a call. The MT `send-seam` and the 21 MT tags retire here (D-mt-1). ~2–3 sessions.
 7. **Crate-root cleanup** — `#![deny(unsafe_code)]` at the root (api keeps its tagged
@@ -215,7 +217,17 @@ to be wrong.
   cursor's root must be retag-stable, with the Miri test), **D-exit-1** (any *new* raw
   signature is tagged; the count only goes down), **the ratchet decreases or is rebaselined
   with a reason in the same commit**.
-- **Run `q1c.py` (the F66 detector) before any `*mut ctx` conversion**, not after.
+- **Run `q1c.py` (the F66 detector) before any `*mut ctx` conversion**, not after — and
+  **before scoping any family, aim it at that family's own root type** (`--type NAME`) and
+  **calibrate it on a site known to be hazardous in the house spelling** before believing a
+  zero (S55, F111: it read 0 with nine live sites in it because `addr_of_mut!` was not a
+  derivation to it). After a conversion, `--kind ref` is the audit.
+- **At session close, regenerate the census** (`python3 rust/tools/phase9_census.py --write`,
+  and `phase9_plane_callers.py` if the plane family moved) and commit it with the log entry —
+  it is the map the next brief is scoped from, and session D closed with it 49 tags stale.
+- **Measured cost of the per-session gate** (session D's close, this machine): `gates.sh
+  family` ≈ 2 min, the sweep ≈ 40 s per profile — cheap enough to run per *risky* commit,
+  which D did five times; do not budget an hour for it.
 
 ## 7. Exit conditions
 
@@ -243,10 +255,10 @@ unaided, `total` its workload once the earlier families have landed.
 |---|---|---|---|
 | **A** ✅ | census + the `q1c.py` detector rebuilt; the coefficient family converted | **19 → 5 done, 14 moved to D** | [`phase9_session_a.md`](phase9_session_a.md) |
 | **B** ✅ brief [`phase9_session_b.md`](phase9_session_b.md) | plane family, part one. **The caller census (F104) and the reconstruction-write design (F107) landed; the conversions did not, and the census is why** — every cost-table site pairs a plane operand with an SMbCache one, so the tables wait on family 3 (see §4.2). Also: `WelsCalcPsnr` takes plane cursors (the one site with no second gate — F109, the snapshot is load-bearing), `expand_pic.rs`'s three dead shims deleted (F106); `cpu_core.rs` / `expand_pic.rs` / `wels_common_defs.rs` under `deny`; F105 (20 dead `mc.rs` kernels), F108 (deblocking runs *inside* the fork) | census + design; 3 files denied, 4 items deleted | — |
-| **B2** | plane family, part 1b — the part B could not reach: `SPicData` becomes handles + coordinates, `SDqLayer` gains a source-picture handle so the ten layer-only consumers can reach the spatial pool (`phase9_plane_census.md` §5), and the 12 `src` x `ref` cost sites are made ready. **No table flips here** — they need family 3 | 120 `SPicData` uses; 49 `pEncMb` / 29 `pRefMb` | — |
+| **B2** ▶ **next** | plane family, part 1b — the part B could not reach: `SPicData`'s source/reference halves become handles + coordinates, `SDqLayer` gains a source-picture handle so the ten layer-only consumers can reach the spatial pool (`phase9_plane_census.md` §5), the 12 `src` x `ref` cost sites are made ready — **and, family 3 having landed, the double-gated tables flip here, one commit each** (F104 has one gate left): `pfSampleSad`/`pfSampleSatd`/`pfSample4Sad` (37 sites), `mc` (23), the encoder's `pfDctT4`/`pfDctFourT4`; `common/sad_common.rs`, `common/mc.rs`, `encoder/sample.rs` reach `deny`. `pfIDctT4`/`pfIDctFourT4` write the reconstruction plane and are C's. **Re-aim `q1c.py` at the plane roots' owners first (S55)**; the reconstruction halves of `SPicData` (`pCsMb`/`pDecMb`, 42 uses) are C's, not B2's. Likely two sessions (B2/B3) | 120 `SPicData` uses; 49 `pEncMb` / 29 `pRefMb`; 37 + 23 + 2 table sites | — |
 | C | plane family, part two: the **reconstruction** consumers against F107's design — 32 blocked call sites (17 copy, 10 idct, 5 intra-pred), deblocking (in-fork, F108), the MT fork's plane access, the `planes()`/`.pData[` roots (38 + 94 sites, `wels_preprocess.rs` 49), the 44 `&mut` picture accessors (F73); the MT Miri probe un-ignored **plus a second probe on a mid-row slice boundary**; `mc.rs`'s 20 dead kernels deleted (F105) | the remainder, sized by B's census | — |
 | **D** ✅ brief [`phase9_session_d.md`](phase9_session_d.md) | SMbCache/SMB, **the arena — landed whole**. The ten raw accessors are deleted (six spelled at the site, four ping-pong halves are `const fn`s over the flag); **all 41 `*mut SMbCache` parameters are `&mut SMbCache`** (`grep ': \*mut SMbCache' src/encoder` = 0); **all 14 of F103's slot-only coefficient kernels hold safe function pointers** and their shims are gone (T9.D8 eleven, T9.D10 the three dequantisers T9.D8 had wrongly written off as decoder-shared). 6 of 42 `*mut SMB` converted; the other 31 are neighbour-bound and belong to the layer. **The detector was wrong twice** (F111): it could not see `addr_of_mut!` derivations, nor a root minted from an owned field — 22 `SMbCache` sites and **20 context sites** were hidden, so §4.6's "287/68" is stale twice over (**308 sites / 71 callers** today). Also F110 (the brief's `WelsEncRecUV` claim was false — the two callers use different bases), F112 (the arena's *roots* must stay raw; a `&mut` to the field is popped by any callee that re-derives it — T6.C2's Miri verdict, generalised), F113 (the residual slots' raw types hid three things, one of them a single type serving two lengths) | 41 params + 10 accessors + 14 slots + 6 SMB; raw_ptr -162, unsafe_fn -52, shim -20 | — |
-| E ▶ **next for this spine** | layer/picture/slice + the cursor accessors. **Inherits two things from D**: the 32 `SMbCache` roots (`addr_of_mut!((*pSlice).sMbCacheInfo)`) convert in one step once `*mut SSlice` does — F112, and `q1c.py --type SSlice` prices the hazard at **68 sites in 22 callers**; and the 31 neighbour-bound `*mut SMB` parameters unblock when `mb_at`/`*mut SDqLayer` hands a callee a row rather than a cursor | 47 pure / 55 (+61 cursor) + D's 32 roots + 31 SMB | — |
+| E (after B2/C — the layer holds the plane roots B2 converts) | layer/picture/slice + the cursor accessors. **Inherits two things from D**: the 32 `SMbCache` roots (`addr_of_mut!((*pSlice).sMbCacheInfo)`) convert in one step once `*mut SSlice` does — F112, and `q1c.py --type SSlice` prices the hazard at **68 sites in 22 callers**; and the 31 neighbour-bound `*mut SMB` parameters unblock when `mb_at`/`*mut SDqLayer` hands a callee a row rather than a cursor | 47 pure / 55 (+61 cursor) + D's 32 roots + 31 SMB | — |
 | F | the 22 dispatch survivors | 4 pure / 5 (+17 cursor) | — |
 | **X1–X2** | **`other`: bitstream, paramsets, RC, LTR, VAA, deblock, trace, scalars.** New — the charter had no session for it. Independent of the cursor spine, so it can run in parallel with B–E | 80 pure / 123 | — |
 | G–H | the `*mut ctx` conversion (**run `q1c.py` first** — **308 sites, 71 callers** as of session D; the older 287/288 figures predate F111's two fixes to the detector) + the MT seam/Send flip | 111 pure / 234 | — |
