@@ -123,3 +123,76 @@ ctx-taking callees** (225 shape A over 42 distinct cursors, 62 shape B); 184 of 
 268 ctx-taking callees have no detected hazard. Per F66 a clean callee means "no
 hazard found", **not** "proved safe" — F66 rejected converting the clean subset for
 precisely that reason, and this tool's docstring repeats the warning.
+
+## F103 — the coefficient family is 4 kernels, not 25: the other 15 are gated on SMbCache
+
+Session A's brief scopes the coefficient conversion as "the `WelsQuant*`/`WelsScan*`/
+`WelsCalculateSingleCtr`/`WelsGetNoneZeroCount` shims", on the premise that
+"every input to the coefficient-only kernels is already an owned `[i16; N]` on the
+caller side; the raw pointer is a `as_mut_ptr()`/`from_raw_parts` round-trip that
+deletes cleanly". That premise holds for four kernels and fails for fifteen.
+
+Of the 19 coeff-pure signatures the census finds:
+
+| | kernels | why |
+|---|---|---|
+| **directly called** | 4 | caller passes an owned `[i16; N]`; converts cleanly |
+| **`SWelsFuncPtrList` slot** | 15 | no direct caller at all outside their own unit tests |
+
+```bash
+grep -rn 'Some(WelsQuant4x4_c)\|WelsQuant4x4_c *(' rust/crates/openh264-rs/src
+#   encode_mb_aux.rs:1009  f.pfQuantization4x4 = Some(WelsQuant4x4_c);   <- the only
+#   encode_mb_aux.rs:1055  (a unit test)                                    real ref
+```
+
+The fifteen are reached only through the table, and **the 59 call-through sites do
+not pass owned arrays**. They pass SMbCache-derived walking cursors
+(`svc_encode_mb.rs:511`, in `WelsEncRecI16x16Y`):
+
+```rust
+let mut pRes = crate::encoder::md::coeff_level(pMbCache);
+// S28: derived from the whole array, not `[0].as_mut_ptr()` — this cursor walks
+// every 4x4 block, and a tag narrowed to one block dies at the second.
+let mut pBlock = std::ptr::addr_of_mut!((*md::dct(pMbCache)).iLumaBlock).cast::<i16>();
+...
+for _ in 0..4 {
+    if let Some(func) = (*pFuncList).pfQuantizationFour4x4 { func(pRes, pFF, pMF); }
+    if let Some(func) = (*pFuncList).pfScan4x4Ac {
+        func(pBlock, pRes);
+        func(pBlock.add(16), pRes.add(16));      // <- the walk
+        ...
+    }
+    pRes = pRes.add(64);
+    pBlock = pBlock.add(64);
+}
+pRes = pRes.sub(256);
+```
+
+So converting the fourteen coefficient slot types to `&mut [i16; N]` requires the
+`SMbCache` cursors to be owned first, and requires the walking cursor to become a
+`chunks_mut` walk. **That is family 3 (session D), not family 5.** The brief's
+caution — "if it is still dispatched through a table this session does not retire,
+convert the direct calls and leave a thin `unsafe` shim for the table slot, tagged
+as family 5" — points at the wrong owner: family 5 is the *five self-referential*
+slot types (`PDeblockingBSCalc`, `PMotionSearchFunc`, …) that de-virtualize
+independently. The coefficient slots are ordinary dispatch and follow their data.
+
+The general lesson, now written into `phase9_census.py`: **`pure` is a property of
+the signature, not of the call sites.** A single-family signature is convertible
+only if its callers already hold the safe type. Sessions B–E should grep their call
+sites before scoping, not just the signatures — the same gap will appear in the
+plane family, where the shims are called with picture-pool cursors.
+
+Two smaller facts found the same way:
+
+* **`WelsScan4x4Dc` has no production caller.** Its only reference in the whole
+  workspace is `tests/kernels_differential_phase2.rs:1500`, which asserts the shim
+  agrees with `scan_4x4_dc_ac` — the kernel it forwards to. It is not in any
+  dispatch slot. (`src/`-only greps say it is dead; it is not, and that is why the
+  grep has to cover `tests/` too.) Converted here; the test it serves becomes
+  tautological and the pair is an S18 deletion candidate for a later session.
+* **`cargo build --all-targets` earned its place again.** Converting the three
+  `svc_encode_mb.rs` kernels compiled clean as a library and broke three call sites
+  in `kernels_differential_phase2.rs`. `cargo test` alone builds integration tests,
+  so it would have caught these — but the same change class reaches benches, which
+  it does not build. The gate's own header documents that trap from Phase 5.
