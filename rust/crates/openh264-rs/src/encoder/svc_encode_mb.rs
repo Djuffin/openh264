@@ -57,6 +57,8 @@ pub use crate::encoder::encoder_context::SStrideTables;
 pub use crate::encoder::svc_encode_slice::SLayerInfo;
 use crate::encoder::svc_encode_slice::layer_pps;
 use crate::encoder::svc_encode_slice::current_layer;
+use crate::encoder::encode_mb_aux::{blk4x4, blk4x4_mut, blk_four4x4_mut, hadamard2x2_span,
+    hadamard2x2_span_mut, hadamard_dc_span};
 pub use crate::encoder::md::SMbCache;
 use crate::encoder::md::{best_pred_i4x4_blk4_off, mem_pred_luma_off};
 pub use crate::encoder::md::SMB;
@@ -493,12 +495,13 @@ pub unsafe fn WelsEncRecI16x16Y(
     let pFuncList = ctx_func_list(pEncCtx);
     let pCurDqLayer = current_layer(pEncCtx);
     let kiEncStride = (*pCurDqLayer).iEncStride[0];
-    let mut pRes = std::ptr::addr_of_mut!((*pMbCache).sCoeffLevel).cast::<i16>();
+    // **T9.D8**: the raw `pRes` survives only for the plane-taking slots below
+    // (`WelsDctMb`, `pfDequantizationFour4x4`, `pfIDctFourT4`) and the DC write-back.
+    // The residual slots index `sCoeffLevel` instead, and the walking `pBlock`
+    // cursor is gone: `iLumaBlock` is `[[i16; 16]; 16]`, so a block is `[k]`.
+    let pRes = std::ptr::addr_of_mut!((*pMbCache).sCoeffLevel).cast::<i16>();
     let pPred = (*pMbCache).SPicData.pCsMb[0];
     let kiRecStride = (*pCurDqLayer).iCsStride[0];
-    // S28: derived from the whole array, not `[0].as_mut_ptr()` — this cursor walks
-    // every 4x4 block, and a tag narrowed to one block dies at the second.
-    let mut pBlock = std::ptr::addr_of_mut!((*pMbCache).sDct.iLumaBlock).cast::<i16>();
     let pBestPred = std::ptr::addr_of_mut!((*pMbCache).sMemPredMb)
         .cast::<u8>()
         .add(mem_pred_luma_off((*pMbCache).uiMemPredLumaHalf));
@@ -506,8 +509,8 @@ pub unsafe fn WelsEncRecI16x16Y(
     let uiQp = (*pCurMb).uiLumaQp;
     let mut uiNoneZeroCountMbAc = 0u32;
 
-    let pMF = g_kiQuantMF[uiQp as usize].as_ptr();
-    let pFF = get_quant_intra_ff(uiQp as usize).as_ptr();
+    let pMF = &g_kiQuantMF[uiQp as usize];
+    let pFF = get_quant_intra_ff(uiQp as usize);
 
     WelsDctMb(
         pRes,
@@ -518,43 +521,39 @@ pub unsafe fn WelsEncRecI16x16Y(
     );
 
     if let Some(func) = (*pFuncList).pfTransformHadamard4x4Dc {
-        func(aDctT4Dc.as_mut_ptr(), pRes);
+        func(&mut aDctT4Dc, hadamard_dc_span(&(*pMbCache).sCoeffLevel, 0));
     }
     if let Some(func) = (*pFuncList).pfQuantizationDc4x4 {
-        func(aDctT4Dc.as_mut_ptr(), (*pFF) << 1, (*pMF) >> 1);
+        func(&mut aDctT4Dc, pFF[0] << 1, pMF[0] >> 1);
     }
     if let Some(func) = (*pFuncList).pfScan4x4 {
-        func(
-            (*pMbCache).sDct.iLumaI16x16Dc.as_mut_ptr(),
-            aDctT4Dc.as_mut_ptr(),
-        );
+        func(&mut (*pMbCache).sDct.iLumaI16x16Dc, &aDctT4Dc);
     }
 
     let uiCountI16x16Dc = if let Some(func) = (*pFuncList).pfGetNoneZeroCount {
-        func((*pMbCache).sDct.iLumaI16x16Dc.as_mut_ptr()) as u32
+        func(&(*pMbCache).sDct.iLumaI16x16Dc) as u32
     } else {
         0
     };
 
-    for _ in 0..4 {
+    for i in 0..4 {
         if let Some(func) = (*pFuncList).pfQuantizationFour4x4 {
-            func(pRes, pFF, pMF);
+            func(blk_four4x4_mut(&mut (*pMbCache).sCoeffLevel, i << 6), pFF, pMF);
         }
         if let Some(func) = (*pFuncList).pfScan4x4Ac {
-            func(pBlock, pRes);
-            func(pBlock.add(16), pRes.add(16));
-            func(pBlock.add(32), pRes.add(32));
-            func(pBlock.add(48), pRes.add(48));
+            for j in 0..4 {
+                let k = (i << 2) + j;
+                func(
+                    &mut (*pMbCache).sDct.iLumaBlock[k],
+                    blk4x4(&(*pMbCache).sCoeffLevel, k << 4),
+                );
+            }
         }
-        pRes = pRes.add(64);
-        pBlock = pBlock.add(64);
     }
-    pRes = pRes.sub(256);
-    pBlock = pBlock.sub(256);
 
-    for _ in 0..16 {
+    for k in 0..16 {
         let uiNoneZeroCount = if let Some(func) = (*pFuncList).pfGetNoneZeroCount {
-            func(pBlock) as u32
+            func(&(*pMbCache).sDct.iLumaBlock[k]) as u32
         } else {
             0
         };
@@ -562,7 +561,6 @@ pub unsafe fn WelsEncRecI16x16Y(
         kpNoneZeroCountIdx += 1;
         (*pCurMb).iNonZeroCount[offset] = uiNoneZeroCount as i8;
         uiNoneZeroCountMbAc += uiNoneZeroCount;
-        pBlock = pBlock.add(16);
     }
 
     if uiCountI16x16Dc > 0 {
@@ -655,10 +653,10 @@ pub unsafe fn WelsEncRecI4x4Y(
     let pBestPred = std::ptr::addr_of_mut!((*pMbCache).sMemPredBlk4)
         .cast::<u8>()
         .add(best_pred_i4x4_blk4_off((*pMbCache).uiBestPredI4x4Blk4Half));
-    let pBlock = (*pMbCache).sDct.iLumaBlock[uiI4x4Idx as usize].as_mut_ptr();
+    let kiBlk = uiI4x4Idx as usize;
 
-    let pMF = g_kiQuantMF[uiQp as usize].as_ptr();
-    let pFF = get_quant_intra_ff(uiQp as usize).as_ptr();
+    let pMF = &g_kiQuantMF[uiQp as usize];
+    let pFF = get_quant_intra_ff(uiQp as usize);
 
     let did = (*pEncCtx).uiDependencyId as usize;
     let tid_is_zero = if (*pEncCtx).uiTemporalId == 0 { 1 } else { 0 };
@@ -680,14 +678,17 @@ pub unsafe fn WelsEncRecI4x4Y(
         );
     }
     if let Some(func) = (*pFuncList).pfQuantization4x4 {
-        func(pResI4x4, pFF, pMF);
+        func(blk4x4_mut(&mut (*pMbCache).sCoeffLevel, 0), pFF, pMF);
     }
     if let Some(func) = (*pFuncList).pfScan4x4 {
-        func(pBlock, pResI4x4);
+        func(
+            &mut (*pMbCache).sDct.iLumaBlock[kiBlk],
+            blk4x4(&(*pMbCache).sCoeffLevel, 0),
+        );
     }
 
     let iNoneZeroCount = if let Some(func) = (*pFuncList).pfGetNoneZeroCount {
-        func(pBlock)
+        func(&(*pMbCache).sDct.iLumaBlock[kiBlk])
     } else {
         0
     };
@@ -725,45 +726,46 @@ pub unsafe fn WelsEncInterY(
     let pfGetNoneZeroCount = pFuncList.pfGetNoneZeroCount;
     let pfDequantizationFour4x4 = pFuncList.pfDequantizationFour4x4;
 
-    let mut pRes = std::ptr::addr_of_mut!((*pMbCache).sCoeffLevel).cast::<i16>();
+    // **T9.D8**: `pRes` is raw only for the two memsets and the plane-free dequant
+    // slot, which is not this family's. The residual slots index the arena.
+    let pRes = std::ptr::addr_of_mut!((*pMbCache).sCoeffLevel).cast::<i16>();
     let mut iSingleCtrMb = 0i32;
     let mut iSingleCtr8x8 = [0i32; 4];
-    // S28: derived from the whole array, not `[0].as_mut_ptr()` — this cursor walks
-    // every 4x4 block, and a tag narrowed to one block dies at the second.
-    let mut pBlock = std::ptr::addr_of_mut!((*pMbCache).sDct.iLumaBlock).cast::<i16>();
     let uiQp = (*pCurMb).uiLumaQp;
-    let pMF = g_kiQuantMF[uiQp as usize].as_ptr();
-    let pFF = g_kiQuantInterFF[uiQp as usize].as_ptr();
+    let pMF = &g_kiQuantMF[uiQp as usize];
+    let pFF = &g_kiQuantInterFF[uiQp as usize];
     let mut aMax = [0i16; 16];
 
     for i in 0..4 {
         if let Some(func) = pfQuantizationFour4x4Max {
-            func(pRes, pFF, pMF, aMax.as_mut_ptr().add(i << 2));
+            let max4: &mut [i16; 4] = (&mut aMax[i << 2..(i << 2) + 4]).try_into().expect("4");
+            func(blk_four4x4_mut(&mut (*pMbCache).sCoeffLevel, i << 6), pFF, pMF, max4);
         }
         iSingleCtr8x8[i] = 0;
         for j in 0..4 {
-            let max_val = aMax[(i << 2) + j];
+            let k = (i << 2) + j;
+            let max_val = aMax[k];
             if max_val == 0 {
-                crate::encoder::encoder_context::WelsSetMemZero_c(pBlock as *mut u8, 32);
+                // `WelsSetMemZero_c(pBlock, 32)` — 32 bytes is one 4x4 block of i16.
+                (*pMbCache).sDct.iLumaBlock[k].fill(0);
             } else {
                 if let Some(func) = pfScan4x4 {
-                    func(pBlock, pRes);
+                    func(
+                        &mut (*pMbCache).sDct.iLumaBlock[k],
+                        blk4x4(&(*pMbCache).sCoeffLevel, k << 4),
+                    );
                 }
                 if max_val > 1 {
                     iSingleCtr8x8[i] += 9;
                 } else if iSingleCtr8x8[i] < 6 {
                     if let Some(func) = pfCalculateSingleCtr4x4 {
-                        iSingleCtr8x8[i] += func(pBlock);
+                        iSingleCtr8x8[i] += func(&(*pMbCache).sDct.iLumaBlock[k]);
                     }
                 }
             }
-            pRes = pRes.add(16);
-            pBlock = pBlock.add(16);
         }
         iSingleCtrMb += iSingleCtr8x8[i];
     }
-    pBlock = pBlock.sub(256);
-    pRes = pRes.sub(256);
 
     // `WelsSetMemZero (pCurMb->pNonZeroCount, 16)` — the 16 luma entries only.
     (&mut (*pCurMb).iNonZeroCount)[0..16].fill(0);
@@ -775,27 +777,24 @@ pub unsafe fn WelsEncInterY(
         let mut kpNoneZeroCountIdx = 0usize;
         for i in 0..4 {
             if iSingleCtr8x8[i] >= 4 {
-                for _ in 0..4 {
+                for j in 0..4 {
                     let iNoneZeroCount = if let Some(func) = pfGetNoneZeroCount {
-                        func(pBlock)
+                        func(&(*pMbCache).sDct.iLumaBlock[(i << 2) + j])
                     } else {
                         0
                     };
                     let offset = g_kuiMbCountScan4Idx[kpNoneZeroCountIdx] as usize;
                     kpNoneZeroCountIdx += 1;
                     (*pCurMb).iNonZeroCount[offset] = iNoneZeroCount as i8;
-                    pBlock = pBlock.add(16);
                 }
                 if let Some(func) = pfDequantizationFour4x4 {
-                    func(pRes, g_kuiDequantCoeff[uiQp as usize].as_ptr());
+                    func(pRes.add(i << 6), g_kuiDequantCoeff[uiQp as usize].as_ptr());
                 }
                 (*pCurMb).uiCbp |= 1 << i;
             } else {
-                crate::encoder::encoder_context::WelsSetMemZero_c(pRes as *mut u8, 128);
+                crate::encoder::encoder_context::WelsSetMemZero_c(pRes.add(i << 6) as *mut u8, 128);
                 kpNoneZeroCountIdx += 4;
-                pBlock = pBlock.add(64);
             }
-            pRes = pRes.add(64);
         }
     }
 }
@@ -826,7 +825,7 @@ pub unsafe fn WelsEncRecUV(
     kiResOff: usize,
     iUV: i32,
 ) {
-    let mut pRes = std::ptr::addr_of_mut!((*pMbCache).sCoeffLevel)
+    let pRes = std::ptr::addr_of_mut!((*pMbCache).sCoeffLevel)
         .cast::<i16>()
         .add(kiResOff);
     let pfQuantizationHadamard2x2 = pFuncList.pfQuantizationHadamard2x2;
@@ -843,57 +842,61 @@ pub unsafe fn WelsEncRecUV(
     // **T9.D3**: one `dct()` derivation, not two. Both cursors named the same
     // `sDct` and the second call sat *between* the first cursor and its use, which
     // is the hazard shape exactly — `q1c.py --type SMbCache` flagged it here.
-    let pDct = std::ptr::addr_of_mut!((*pMbCache).sDct);
-    let iChromaDc = (*pDct).iChromaDc[(iUV - 1) as usize].as_mut_ptr();
-    // S28: derived from the whole array (see `iLumaBlock` above); walks four blocks.
-    let mut pBlock = std::ptr::addr_of_mut!((*pDct).iChromaBlock)
-        .cast::<i16>()
-        .add((((iUV - 1) << 2) * 16) as usize);
+    // **T9.D8**: `iChromaBlock` is `[[i16; 16]; 8]`, so this plane's four blocks are
+    // `[kiChromaBlk ..][0..4]` — the walking `pBlock` cursor is an index now.
+    let kiChromaBlk = ((iUV - 1) << 2) as usize;
     let mut aDct2x2 = [0i16; 4];
     let mut aMax = [0i16; 4];
     let mut iSingleCtr8x8 = 0i32;
 
-    let pMF = g_kiQuantMF[kiQp as usize].as_ptr();
+    let pMF = &g_kiQuantMF[kiQp as usize];
     let ff_idx = if !kiInterFlag {
         6 + kiQp as usize
     } else {
         kiQp as usize
     };
-    let pFF = g_kiQuantInterFF[ff_idx].as_ptr();
+    let pFF = &g_kiQuantInterFF[ff_idx];
 
     let uiNoneZeroCountMbDc = if let Some(func) = pfQuantizationHadamard2x2 {
-        func(pRes, (*pFF) << 1, (*pMF) >> 1, aDct2x2.as_mut_ptr(), iChromaDc)
+        func(
+            hadamard2x2_span_mut(&mut (*pMbCache).sCoeffLevel, kiResOff),
+            pFF[0] << 1,
+            pMF[0] >> 1,
+            &mut aDct2x2,
+            &mut (*pMbCache).sDct.iChromaDc[(iUV - 1) as usize],
+        )
     } else {
         0
     };
 
     if let Some(func) = pfQuantizationFour4x4Max {
-        func(pRes, pFF, pMF, aMax.as_mut_ptr());
+        func(blk_four4x4_mut(&mut (*pMbCache).sCoeffLevel, kiResOff), pFF, pMF, &mut aMax);
     }
 
     for j in 0..4 {
+        let k = kiChromaBlk + j;
         if aMax[j] == 0 {
-            crate::encoder::encoder_context::WelsSetMemZero_c(pBlock as *mut u8, 32);
+            (*pMbCache).sDct.iChromaBlock[k].fill(0);
         } else {
             if let Some(func) = pfScan4x4Ac {
-                func(pBlock, pRes);
+                func(
+                    &mut (*pMbCache).sDct.iChromaBlock[k],
+                    blk4x4(&(*pMbCache).sCoeffLevel, kiResOff + (j << 4)),
+                );
             }
             if kiInterFlag {
                 if aMax[j] > 1 {
                     iSingleCtr8x8 += 9;
                 } else if iSingleCtr8x8 < 7 {
                     if let Some(func) = pfCalculateSingleCtr4x4 {
-                        iSingleCtr8x8 += func(pBlock);
+                        iSingleCtr8x8 += func(&(*pMbCache).sDct.iChromaBlock[k]);
                     }
                 }
             } else {
                 iSingleCtr8x8 = i32::MAX;
             }
         }
-        pRes = pRes.add(16);
-        pBlock = pBlock.add(16);
     }
-    pRes = pRes.sub(64);
 
     if iSingleCtr8x8 < 7 {
         crate::encoder::encoder_context::WelsSetMemZero_c(pRes as *mut u8, 128);
@@ -903,17 +906,15 @@ pub unsafe fn WelsEncRecUV(
         (*pCurMb).iNonZeroCount[20 + uiNoneZeroCountOffset + 1] = 0;
     } else {
         let mut kpNoneZeroCountIdx = uiSubMbIdx;
-        pBlock = pBlock.sub(64);
-        for _ in 0..4 {
+        for j in 0..4 {
             let uiNoneZeroCount = if let Some(func) = pfGetNoneZeroCount {
-                func(pBlock)
+                func(&(*pMbCache).sDct.iChromaBlock[kiChromaBlk + j])
             } else {
                 0
             };
             let offset = g_kuiMbCountScan4Idx[kpNoneZeroCountIdx] as usize;
             kpNoneZeroCountIdx += 1;
             (*pCurMb).iNonZeroCount[offset] = uiNoneZeroCount as i8;
-            pBlock = pBlock.add(16);
         }
         if let Some(func) = pfDequantizationFour4x4 {
             func(
@@ -990,36 +991,38 @@ pub unsafe fn WelsTryPYskip(
     pMbCache: &mut SMbCache,
 ) -> bool {
     let mut iSingleCtrMb = 0i32;
-    let mut pRes = std::ptr::addr_of_mut!((*pMbCache).sCoeffLevel).cast::<i16>();
     let kuiQp = (*pCurMb).uiLumaQp;
-    // S28: derived from the whole array, not `[0].as_mut_ptr()` — this cursor walks
-    // every 4x4 block, and a tag narrowed to one block dies at the second.
-    let mut pBlock = std::ptr::addr_of_mut!((*pMbCache).sDct.iLumaBlock).cast::<i16>();
-    let mut aMax = [0u16; 4];
-    let pMF = g_kiQuantMF[kuiQp as usize].as_ptr();
-    let pFF = g_kiQuantInterFF[kuiQp as usize].as_ptr();
+    // **T9.D8**: `aMax` was `[u16; 4]` cast to `*mut i16` at the call. The kernel
+    // writes `max_abs`, which starts at 0 and only grows, so every entry is
+    // non-negative and the two spellings compare identically — the array is `i16`
+    // now, which is what was always stored in it.
+    let mut aMax = [0i16; 4];
+    let pMF = &g_kiQuantMF[kuiQp as usize];
+    let pFF = &g_kiQuantInterFF[kuiQp as usize];
 
-    for _ in 0..4 {
+    for i in 0..4 {
         if let Some(func) = (*ctx_func_list(pEncCtx)).pfQuantizationFour4x4Max {
-            func(pRes, pFF, pMF, aMax.as_mut_ptr() as *mut i16);
+            func(blk_four4x4_mut(&mut (*pMbCache).sCoeffLevel, i << 6), pFF, pMF, &mut aMax);
         }
 
         for j in 0..4 {
+            let k = (i << 2) + j;
             if aMax[j] > 1 {
                 return false;
             } else if aMax[j] == 1 {
                 if let Some(func) = (*ctx_func_list(pEncCtx)).pfScan4x4 {
-                    func(pBlock, pRes);
+                    func(
+                        &mut (*pMbCache).sDct.iLumaBlock[k],
+                        blk4x4(&(*pMbCache).sCoeffLevel, k << 4),
+                    );
                 }
                 if let Some(func) = (*ctx_func_list(pEncCtx)).pfCalculateSingleCtr4x4 {
-                    iSingleCtrMb += func(pBlock);
+                    iSingleCtrMb += func(&(*pMbCache).sDct.iLumaBlock[k]);
                 }
             }
             if iSingleCtrMb >= 6 {
                 return false;
             }
-            pRes = pRes.add(16);
-            pBlock = pBlock.add(16);
         }
     }
     true
@@ -1041,11 +1044,8 @@ pub unsafe fn WelsTryPUVskip(
     pMbCache: &mut SMbCache,
     iUV: i32,
 ) -> bool {
-    let mut pRes = if iUV == 1 {
-        std::ptr::addr_of_mut!((*pMbCache).sCoeffLevel).cast::<i16>().add(256)
-    } else {
-        std::ptr::addr_of_mut!((*pMbCache).sCoeffLevel).cast::<i16>().add(256 + 64)
-    };
+    // **T9.D8**: the base is an offset now, not a cursor.
+    let kiResOff = if iUV == 1 { 256usize } else { 256 + 64 };
 
     let pPpsP = layer_pps(pEncCtx, current_layer(pEncCtx));
     let chroma_qp_index_offset = if !pPpsP.is_null() {
@@ -1056,11 +1056,15 @@ pub unsafe fn WelsTryPUVskip(
     let clipped_qp = ((*pCurMb).uiLumaQp as i32 + chroma_qp_index_offset).clamp(0, 51);
     let kuiQp = g_kuiChromaQpTable[clipped_qp as usize];
 
-    let pMF = g_kiQuantMF[kuiQp as usize].as_ptr();
-    let pFF = g_kiQuantInterFF[kuiQp as usize].as_ptr();
+    let pMF = &g_kiQuantMF[kuiQp as usize];
+    let pFF = &g_kiQuantInterFF[kuiQp as usize];
 
     let hadamard_skip = if let Some(func) = (*ctx_func_list(pEncCtx)).pfQuantizationHadamard2x2Skip {
-        func(pRes, (*pFF) << 1, (*pMF) >> 1) != 0
+        func(
+            hadamard2x2_span(&(*pMbCache).sCoeffLevel, kiResOff),
+            pFF[0] << 1,
+            pMF[0] >> 1,
+        ) != 0
     } else {
         false
     };
@@ -1068,33 +1072,32 @@ pub unsafe fn WelsTryPUVskip(
     if hadamard_skip {
         false
     } else {
-        let mut aMax = [0u16; 4];
+        let mut aMax = [0i16; 4];
         let mut iSingleCtrMb = 0i32;
-        // S28: derived from the whole array; walks four blocks.
-        let mut pBlock = std::ptr::addr_of_mut!((*pMbCache).sDct.iChromaBlock)
-            .cast::<i16>()
-            .add((((iUV - 1) << 2) * 16) as usize);
+        let kiChromaBlk = ((iUV - 1) << 2) as usize;
 
         if let Some(func) = (*ctx_func_list(pEncCtx)).pfQuantizationFour4x4Max {
-            func(pRes, pFF, pMF, aMax.as_mut_ptr() as *mut i16);
+            func(blk_four4x4_mut(&mut (*pMbCache).sCoeffLevel, kiResOff), pFF, pMF, &mut aMax);
         }
 
         for j in 0..4 {
+            let k = kiChromaBlk + j;
             if aMax[j] > 1 {
                 return false;
             } else if aMax[j] == 1 {
                 if let Some(func) = (*ctx_func_list(pEncCtx)).pfScan4x4Ac {
-                    func(pBlock, pRes);
+                    func(
+                        &mut (*pMbCache).sDct.iChromaBlock[k],
+                        blk4x4(&(*pMbCache).sCoeffLevel, kiResOff + (j << 4)),
+                    );
                 }
                 if let Some(func) = (*ctx_func_list(pEncCtx)).pfCalculateSingleCtr4x4 {
-                    iSingleCtrMb += func(pBlock);
+                    iSingleCtrMb += func(&(*pMbCache).sDct.iChromaBlock[k]);
                 }
             }
             if iSingleCtrMb >= 7 {
                 return false;
             }
-            pRes = pRes.add(16);
-            pBlock = pBlock.add(16);
         }
         true
     }

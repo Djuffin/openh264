@@ -22,7 +22,8 @@ use crate::encoder::encoder_context::{
 };
 use crate::encoder::encode_mb_aux::{
     PCalculateSingleCtrFunc, PCopyFunc, PDctFunc, PGetNoneZeroCountFunc, PQuantizationDcFunc,
-    PQuantizationFunc, PQuantizationHadamardFunc, PQuantizationMaxFunc, PQuantizationSkipFunc,
+    PQuantization4x4Func, PQuantizationFunc, PQuantizationHadamardFunc, PQuantizationMaxFunc,
+    PQuantizationSkipFunc,
     PScanFunc, PTransformHadamard4x4Func,
 };
 use crate::encoder::md::{
@@ -376,7 +377,7 @@ pub struct SWelsFuncPtrList {
     pub pfScan4x4: Option<PScanFunc>,
     pub pfScan4x4Ac: Option<PScanFunc>,
 
-    pub pfQuantization4x4: Option<PQuantizationFunc>,
+    pub pfQuantization4x4: Option<PQuantization4x4Func>,
     pub pfQuantizationFour4x4: Option<PQuantizationFunc>,
     pub pfQuantizationDc4x4: Option<PQuantizationDcFunc>,
     pub pfQuantizationFour4x4Max: Option<PQuantizationMaxFunc>,
