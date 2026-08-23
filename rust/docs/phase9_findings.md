@@ -748,10 +748,18 @@ converts `*mut SSlice`, where it is one step rather than thirty-two.
 
 ## F113 — the residual slots' raw types were hiding three things, and one of them served two lengths
 
-T9.D8 re-typed eleven `SWelsFuncPtrList` slots from `unsafe extern "C" fn(*mut i16, ..)`
-to safe function pointers over exact arrays. Three facts the raw types had been
+T9.D8 and T9.D10 re-typed **all fourteen** of F103's slot-only coefficient kernels from
+`unsafe extern "C" fn(*mut i16, ..)` to safe function pointers over exact arrays. Three facts the raw types had been
 concealing, each of which had to be resolved before the type could be written:
 
+0. **T9.D8 got the boundary wrong, and the fix is the finding's other half.** It
+   flipped eleven and left the three dequantisers, calling them "a different typedef
+   family shared with the decoder side". They are not:
+   `encoder/decode_mb_aux.rs` is the *encoder's* reconstruction-side dequantisation,
+   `grep pfDequantization src/decoder` is empty, and the three take a coefficient span
+   and a `g_kuiDequantCoeff` row with no plane operand. T9.D10 flipped them.
+   **A "shared with the other codec" claim is a grep, not an inference from a
+   directory name** — and `decode_mb_aux.rs` sits under `src/encoder/`.
 1. **One `PQuantizationFunc` served two different spans.** `pfQuantization4x4` quantises
    one 4x4 block and `pfQuantizationFour4x4` quantises four, and both had the same
    type, because `*mut i16` says nothing about length. They are `PQuantization4x4Func`

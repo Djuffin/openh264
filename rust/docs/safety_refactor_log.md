@@ -16244,16 +16244,16 @@ of the field between the capture and the use — and the family's next session d
 ten hazards), `a232e01e` (T9.D4, the ten accessors deleted), `14b84328` (T9.D5, the
 detector's two blind spots), `dab004d7` (T9.D6, the 22 that surfaced), `cb044070`
 (T9.D7, all 41 parameters), `66a978d2` (T9.D8, eleven residual slots flipped),
-`ab6aa545` (T9.D9, six `SMB` parameters).
+`ab6aa545` (T9.D9, six `SMB` parameters), `083ac7dc` (T9.D10, the last three slots).
 
 **Gates:** `gates.sh family` PASS in both profiles at T9.D7, T9.D8, T9.D9 and at the
 close — **sweeps 535/535 debug and 535/535 release every time, zero moved bytes**.
 548 debug / 541 release tests. The sweep costs 40 seconds on this machine, not the
 hour the brief budgeted, which is why it was run per risky commit rather than once.
 
-**Ratchet, session baseline -> close:** raw_ptr 2249 -> **2095** (-154), unsafe_fn
-812 -> **763** (-49), unsafe_block 445 -> **406** (-39), shim 111 -> **94** (-17). No
-per-file increase; no rebaseline needed. Tags: `port-raw(Phase 9)` 687 -> **644**;
+**Ratchet, session baseline -> close:** raw_ptr 2249 -> **2087** (-162), unsafe_fn
+812 -> **760** (-52), unsafe_block 445 -> **398** (-47), shim 111 -> **91** (-20). No
+per-file increase; no rebaseline needed. Tags: `port-raw(Phase 9)` 687 -> **638**;
 every other category unchanged.
 
 ### The detector was the session's biggest single finding, and it was wrong twice
@@ -16349,11 +16349,15 @@ that converts `*mut SSlice`, where it is one step instead of thirty-two.
   `addr_of_mut!` yields raw siblings, and raw siblings coexist. S28/S29 as a
   consequence rather than as a style rule.
 * **41 parameters** (T9.D7). `grep -rn ': \*mut SMbCache' src/encoder` is zero.
-* **Eleven of the fourteen residual slots** hold safe function pointers and their
-  shims are deleted (T9.D8, **F113**). The three that do not are the DCT/IDCT pair —
-  they carry a *picture plane* operand, which is F104's double gate and the plane
-  family's half. Seven call-site bodies were rewritten from walking cursors to indices;
-  `iLumaBlock` is `[[i16; 16]; 16]`, so most of the walks became `[k]`.
+* **All fourteen of F103's slot-only coefficient kernels** hold safe function pointers
+  and their shims are deleted (T9.D8 eleven, T9.D10 the last three, **F113**). T9.D8
+  had written the last three off as "shared with the decoder side"; they are not —
+  `encoder/decode_mb_aux.rs` is the encoder's own reconstruction dequantisation and
+  `grep pfDequantization src/decoder` is empty. **A "shared with the other codec"
+  claim is a grep, not an inference from a directory name.** Seven call-site bodies
+  were rewritten from walking cursors to indices; `iLumaBlock` is `[[i16; 16]; 16]`,
+  so most of the walks became `[k]`. The DCT/IDCT slots stay raw and were never part of
+  F103's fourteen — they carry a picture operand, which is F104's double gate.
 * **Six `*mut SMB` parameters** (T9.D9): 42 -> 36. The other 31 are neighbour-bound —
   they read `pCurMb.offset(-1)` or `-iMbWidth` and need the MB array's provenance,
   which is the layer's.
