@@ -130,9 +130,9 @@ the shims, retire the tags, Miri-verify. **Sizes below are session A's census
    on is row-aligned, so `split_at_mut` bands cannot be the mechanism; a worker reads only
    what it wrote (slice-scoped `uiNeighborAvail` and `uiFilterIdc`); and **no narrowing of a
    `&mut [u8]` expresses the disjointness**, because a macroblock's contiguous span is the
-   full width of its rows. The recommendation is a shared interior-mutable plane view built
-   once before the fork under one tagged `unsafe impl Sync`, with the alternatives and their
-   costs in F107 §3. Session C converts the 32 blocked call sites plus deblocking against it
+   full width of its rows. **Decided: D-mt-3 (option A)** — a shared interior-mutable plane view built once before the
+   fork under one tagged `unsafe impl Sync` (a lawful `recon-seam` category, D-mt-1's shape), safe
+   consumers, a Miri data-race probe; option (C), the raw-boundary scope reduction, was named and not taken. Session C converts the 32 blocked call sites plus deblocking against it
    and un-ignores the MT Miri probe — **and adds a second probe on a mid-row boundary**,
    because the existing one drives the row-aligned mode.
 
