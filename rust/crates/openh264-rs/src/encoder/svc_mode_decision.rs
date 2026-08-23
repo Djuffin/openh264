@@ -220,7 +220,7 @@ pub struct SVAAFrameInfoExt_t {
 // wels_func_ptr_def.h:127 takes uint8_t*, not const uint8_t*; this module's own
 // alias had it const, which made it a distinct function type from the one the
 // SSampleDealingFunc tables actually hold.
-pub use crate::encoder::md::PSampleSadSatdCostFunc;
+pub use crate::encoder::md::{PSampleSadSatdCostFunc, PSampleSadSatdCostFuncRaw};
 
 // `SSampleDealingFuncs` (trailing `s`) used to be declared here: a dead, truncated
 // rename of the canonical `md::SSampleDealingFunc`. Removed — the canonical type is
@@ -595,7 +595,7 @@ pub unsafe extern "C" fn WelsMdBackgroundMbEnc(
     (*pCurMb).uiCbp = 0;
     (*pMbCache).bCollocatedPredFlag = true;
     (*pWelsMd).iCostLuma = 0; // BGD&RC integration
-    (*pCurMb).iSadCost = (*pFunc).sSampleDealingFuncs.pfSampleSad[BLOCK_16x16].unwrap()(
+    (*pCurMb).iSadCost = (*pFunc).sSampleDealingFuncs.pfSampleSadRaw[BLOCK_16x16].unwrap()(
         (*pMbCache).SPicData.pEncMb[0],
         (*pCurDqLayer).iEncStride[0],
         pRefLuma,
@@ -650,7 +650,7 @@ pub unsafe extern "C" fn WelsMdBackgroundMbEnc(
     if (*pWelsMd).bMdUsingSad {
         (*pWelsMd).iCostLuma = (*pCurMb).iSadCost;
     } else {
-        (*pWelsMd).iCostLuma = (*pFunc).sSampleDealingFuncs.pfSampleSatd[BLOCK_16x16].unwrap()(
+        (*pWelsMd).iCostLuma = (*pFunc).sSampleDealingFuncs.pfSampleSatdRaw[BLOCK_16x16].unwrap()(
             (*pMbCache).SPicData.pEncMb[0],
             (*pCurDqLayer).iEncStride[0],
             pRefLuma,
@@ -1164,7 +1164,7 @@ pub unsafe extern "C" fn WelsMdI16x16(
     // `svc_base_layer_md.cpp:402` costs with pfMdCost, which SetFastCodingFunc points
     // at pfSampleSad and SetNormalCodingFunc at pfSampleSatd. Hardcoding pfSampleSad
     // here silently forced the fast-mode choice in normal mode.
-    let pfMdCost16x16 = pFunc.sSampleDealingFuncs.md_cost(BLOCK_16x16).unwrap();
+    let pfMdCost16x16 = pFunc.sSampleDealingFuncs.md_cost_raw(BLOCK_16x16).unwrap();
 
     iBestMode = kpAvailMode[0] as i32;
     for i in 0..iAvailCount {
@@ -1591,7 +1591,7 @@ pub unsafe extern "C" fn WelsMdInterMbEnhancelayer(
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe fn GetChromaCost(
-    pCalculateFunc: *mut Option<PSampleSadSatdCostFunc>,
+    pCalculateFunc: *mut Option<PSampleSadSatdCostFuncRaw>,
     pSrcChroma: *mut u8,
     iSrcStride: i32,
     pRefChroma: *mut u8,
@@ -1633,7 +1633,7 @@ pub unsafe fn CheckChromaCost(
     pMbCache: &mut SMbCache,
     iCurMbXy: i32,
 ) -> bool {
-    let pSad = (*ctx_func_list(pEncCtx)).sSampleDealingFuncs.pfSampleSad.as_mut_ptr();
+    let pSad = (*ctx_func_list(pEncCtx)).sSampleDealingFuncs.pfSampleSadRaw.as_mut_ptr();
     let pCurDqLayer = current_layer(pEncCtx);
 
     let pCbEnc = (*pMbCache).SPicData.pEncMb[1];
@@ -1800,7 +1800,7 @@ pub unsafe fn CalUVSadCost(
     pRefOri: *mut u8,
     iRefLineSize: i32,
 ) -> i32 {
-    let f = pFunc.sSampleDealingFuncs.pfSampleSad[BLOCK_8x8];
+    let f = pFunc.sSampleDealingFuncs.pfSampleSadRaw[BLOCK_8x8];
     if let Some(sad_func) = f {
         sad_func(pEncOri, iStrideUV, pRefOri, iRefLineSize)
     } else {
@@ -2018,7 +2018,7 @@ pub unsafe extern "C" fn SvcMdSCDMbEnc(
     (*pCurMb).uiCbp = 0;
     (*pWelsMd).iCostLuma = 0;
 
-    let sad_16x16 = (*pFunc).sSampleDealingFuncs.pfSampleSad[BLOCK_16x16].unwrap();
+    let sad_16x16 = (*pFunc).sSampleDealingFuncs.pfSampleSadRaw[BLOCK_16x16].unwrap();
     let sad_cost = sad_16x16(
         (*pMbCache).SPicData.pEncMb[0],
         (*pCurDqLayer).iEncStride[0],

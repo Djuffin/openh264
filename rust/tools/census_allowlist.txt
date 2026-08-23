@@ -90,7 +90,9 @@ alias PQuantizationMaxFunc x2       # 6.3
 alias PQuantizationHadamardFunc x2  # 6.3
 alias PScanFunc x2                  # 6.3
 alias PTransformHadamard4x4Func x2  # 6.3
-alias PSampleSadSatdCostFunc x2     # 6.3 — one copy had the wrong constness once; watch it
+# T9.B25: `alias PSampleSadSatdCostFunc x2` retired — `svc_motion_estimate.rs`'s copy is a
+# re-export of `md.rs`'s now that the slot type is safe (the one that once had the
+# wrong constness is the one that went).
 alias PWelsLumaHalfpelMcFunc x2     # 6.3
 alias PWelsSampleAveragingFunc x2   # 6.3
 alias PLumaDeblockingLT4Func x2     # encoder/deblocking.rs is non-`Option`, common's is

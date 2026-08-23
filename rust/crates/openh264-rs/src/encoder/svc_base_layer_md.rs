@@ -417,7 +417,7 @@ pub unsafe extern "C" fn WelsMdI4x4(
     let mut iBestPredBufferNum: i32 = 0;
     let mut iCosti4x4: i32 = 0;
 
-    let pfSatd4x4 = (*pFunc).sSampleDealingFuncs.pfSampleSatd[BLOCK_4x4].unwrap();
+    let pfSatd4x4 = (*pFunc).sSampleDealingFuncs.pfSampleSatdRaw[BLOCK_4x4].unwrap();
 
     for i in 0..16usize {
         let kiOffset = kpNeighborIntraToI4x4[i] as usize;
@@ -535,7 +535,7 @@ pub unsafe extern "C" fn WelsMdI4x4Fast(
     let mut iBestPredBufferNum: i32 = 0;
     let mut iCosti4x4: i32 = 0;
 
-    let pfMdCost4x4 = (*pFunc).sSampleDealingFuncs.md_cost(BLOCK_4x4).unwrap();
+    let pfMdCost4x4 = (*pFunc).sSampleDealingFuncs.md_cost_raw(BLOCK_4x4).unwrap();
 
     for i in 0..16usize {
         let kiOffset = kpNeighborIntraToI4x4[i] as usize;
@@ -743,7 +743,7 @@ pub unsafe extern "C" fn WelsMdIntraChroma(
     let iAvailCount = g_kiIntraChromaAvailMode[iOffset][4] as i32;
     let kpAvailMode = &g_kiIntraChromaAvailMode[iOffset];
 
-    let pfMdCost8x8 = pFunc.sSampleDealingFuncs.md_cost(BLOCK_8x8).unwrap();
+    let pfMdCost8x8 = pFunc.sSampleDealingFuncs.md_cost_raw(BLOCK_8x8).unwrap();
 
     let mut iBestMode = kpAvailMode[0] as i32;
     for i in 0..iAvailCount as usize {
@@ -1324,7 +1324,7 @@ pub unsafe fn WelsMdPSkipEnc(
     }
     // Re-derived **after** the borrow above ended, never carried across it (F114a).
     let pDstLuma = std::ptr::addr_of_mut!((*pMbCache).sSkipMb).cast::<u8>();
-    iSadCostLuma = (*pFunc).sSampleDealingFuncs.pfSampleSad[BLOCK_16x16]
+    iSadCostLuma = (*pFunc).sSampleDealingFuncs.pfSampleSadRaw[BLOCK_16x16]
         .expect("pfSampleSad[BLOCK_16x16] unset")(
         (*pMbCache).SPicData.pEncMb[0],
         (*pCurLayer).iEncStride[0],
@@ -1332,7 +1332,7 @@ pub unsafe fn WelsMdPSkipEnc(
         16,
     );
 
-    let pfSad8x8 = (*pFunc).sSampleDealingFuncs.pfSampleSad[BLOCK_8x8]
+    let pfSad8x8 = (*pFunc).sSampleDealingFuncs.pfSampleSadRaw[BLOCK_8x8]
         .expect("pfSampleSad[BLOCK_8x8] unset");
     // `iStrideUV` was `(mvY >> 1) * strideUV + (mvX >> 1)` off the chroma macroblock
     // origin; in samples that is `(mvX >> 1, mvY >> 1)` from the same origin, and
@@ -1461,7 +1461,7 @@ unsafe fn AcceptPskip(
         (*pCurMb).iSadCost = iSadCostLuma;
         (*pWelsMd).iCostLuma = (*pCurMb).iSadCost;
     } else {
-        (*pWelsMd).iCostLuma = (*pFunc).sSampleDealingFuncs.pfSampleSatd[BLOCK_16x16]
+        (*pWelsMd).iCostLuma = (*pFunc).sSampleDealingFuncs.pfSampleSatdRaw[BLOCK_16x16]
             .expect("pfSampleSatd[BLOCK_16x16] unset")(
             kpPicData.pEncMb[0],
             (*pCurLayer).iEncStride[0],
@@ -1552,19 +1552,19 @@ pub unsafe fn WelsMdInterMbRefinement(
             McChroma_c(pTmpRefCr, iLineSizeRefUV, pDstCr, 8, (*pMv).iMvX, (*pMv).iMvY, 8, 8); //Cr
 
             let sdf = &(*pFunc).sSampleDealingFuncs;
-            (*pWelsMd).iCostSkipMb = sdf.pfSampleSad[BLOCK_16x16].expect("pfSampleSad unset")(
+            (*pWelsMd).iCostSkipMb = sdf.pfSampleSadRaw[BLOCK_16x16].expect("pfSampleSad unset")(
                 (*pMbCache).SPicData.pEncMb[0],
                 (*pCurDqLayer).iEncStride[0],
                 pDstLuma,
                 16,
             );
-            (*pWelsMd).iCostSkipMb += sdf.pfSampleSad[BLOCK_8x8].expect("pfSampleSad unset")(
+            (*pWelsMd).iCostSkipMb += sdf.pfSampleSadRaw[BLOCK_8x8].expect("pfSampleSad unset")(
                 (*pMbCache).SPicData.pEncMb[1],
                 (*pCurDqLayer).iEncStride[1],
                 pDstCb,
                 8,
             );
-            (*pWelsMd).iCostSkipMb += sdf.pfSampleSad[BLOCK_8x8].expect("pfSampleSad unset")(
+            (*pWelsMd).iCostSkipMb += sdf.pfSampleSadRaw[BLOCK_8x8].expect("pfSampleSad unset")(
                 (*pMbCache).SPicData.pEncMb[2],
                 (*pCurDqLayer).iEncStride[2],
                 pDstCr,

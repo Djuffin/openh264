@@ -115,6 +115,7 @@ pub fn satd_16x16(c1: &PlaneCursor<'_>, c2: &PlaneCursor<'_>) -> i32 {
 }
 
 use crate::common::sad_common::{
+    sample_sad, sample_sad_four,
     WelsSampleSad16x16_c, WelsSampleSad16x8_c, WelsSampleSad4x4_c, WelsSampleSad4x8_c,
     WelsSampleSad8x16_c, WelsSampleSad8x4_c, WelsSampleSad8x8_c, WelsSampleSadFour16x16_c,
     WelsSampleSadFour16x8_c, WelsSampleSadFour4x4_c, WelsSampleSadFour4x8_c,
@@ -325,6 +326,19 @@ pub unsafe extern "C" fn WelsSampleSatd16x16_c(
 /// `Combined3` slots. The SIMD overrides that follow in the C++ are all behind
 /// `uiCpuFlag` tests that do not fire here.
 ///
+/// **This is the only writer of the three tables, and `_uiCpuFlag` is unused** —
+/// so every slot is a compile-time constant from the first frame on, and a call
+/// site whose block index is itself a constant may call the kernel directly,
+/// byte-identically, without going through the table at all. That fact (F118) is
+/// what lets session B3 convert the cost sites function by function instead of in
+/// one commit; the table exists for the runtime-indexed readers (the motion search
+/// hoists `[block_size]`, and `md_cost`/`me_cost`'s family selection).
+///
+/// **T9.B25**: the safe tables hold the safe kernels — `sample_sad::<W, H>` /
+/// `sample_sad_four::<W, H>` (`common/sad_common.rs`) and `satd_WxH` (above). The
+/// `*Raw` tables are the transitional raw bodies; they and the raw kernels go when
+/// the last raw reader converts (`PSampleSadSatdCostFuncRaw`'s doc).
+///
 /// # Safety
 /// `pFuncList` must be a valid, writable `SWelsFuncPtrList`.
 // unsafe-cat: port-raw(Phase 9)
@@ -333,30 +347,56 @@ pub unsafe fn WelsInitSampleSadFunc(pFuncList: &mut SWelsFuncPtrList, _uiCpuFlag
     let sdf = &mut pFuncList.sSampleDealingFuncs;
 
     //pfSampleSad init
-    sdf.pfSampleSad[BLOCK_16x16] = Some(WelsSampleSad16x16_c);
-    sdf.pfSampleSad[BLOCK_16x8] = Some(WelsSampleSad16x8_c);
-    sdf.pfSampleSad[BLOCK_8x16] = Some(WelsSampleSad8x16_c);
-    sdf.pfSampleSad[BLOCK_8x8] = Some(WelsSampleSad8x8_c);
-    sdf.pfSampleSad[BLOCK_4x4] = Some(WelsSampleSad4x4_c);
-    sdf.pfSampleSad[BLOCK_8x4] = Some(WelsSampleSad8x4_c);
-    sdf.pfSampleSad[BLOCK_4x8] = Some(WelsSampleSad4x8_c);
+    sdf.pfSampleSad[BLOCK_16x16] = Some(sample_sad::<16, 16>);
+    sdf.pfSampleSad[BLOCK_16x8] = Some(sample_sad::<16, 8>);
+    sdf.pfSampleSad[BLOCK_8x16] = Some(sample_sad::<8, 16>);
+    sdf.pfSampleSad[BLOCK_8x8] = Some(sample_sad::<8, 8>);
+    sdf.pfSampleSad[BLOCK_4x4] = Some(sample_sad::<4, 4>);
+    sdf.pfSampleSad[BLOCK_8x4] = Some(sample_sad::<8, 4>);
+    sdf.pfSampleSad[BLOCK_4x8] = Some(sample_sad::<4, 8>);
 
     //pfSampleSatd init
-    sdf.pfSampleSatd[BLOCK_16x16] = Some(WelsSampleSatd16x16_c);
-    sdf.pfSampleSatd[BLOCK_16x8] = Some(WelsSampleSatd16x8_c);
-    sdf.pfSampleSatd[BLOCK_8x16] = Some(WelsSampleSatd8x16_c);
-    sdf.pfSampleSatd[BLOCK_8x8] = Some(WelsSampleSatd8x8_c);
-    sdf.pfSampleSatd[BLOCK_4x4] = Some(WelsSampleSatd4x4_c);
-    sdf.pfSampleSatd[BLOCK_8x4] = Some(WelsSampleSatd8x4_c);
-    sdf.pfSampleSatd[BLOCK_4x8] = Some(WelsSampleSatd4x8_c);
+    sdf.pfSampleSatd[BLOCK_16x16] = Some(satd_16x16);
+    sdf.pfSampleSatd[BLOCK_16x8] = Some(satd_16x8);
+    sdf.pfSampleSatd[BLOCK_8x16] = Some(satd_8x16);
+    sdf.pfSampleSatd[BLOCK_8x8] = Some(satd_8x8);
+    sdf.pfSampleSatd[BLOCK_4x4] = Some(satd_4x4);
+    sdf.pfSampleSatd[BLOCK_8x4] = Some(satd_8x4);
+    sdf.pfSampleSatd[BLOCK_4x8] = Some(satd_4x8);
 
-    sdf.pfSample4Sad[BLOCK_16x16] = Some(WelsSampleSadFour16x16_c);
-    sdf.pfSample4Sad[BLOCK_16x8] = Some(WelsSampleSadFour16x8_c);
-    sdf.pfSample4Sad[BLOCK_8x16] = Some(WelsSampleSadFour8x16_c);
-    sdf.pfSample4Sad[BLOCK_8x8] = Some(WelsSampleSadFour8x8_c);
-    sdf.pfSample4Sad[BLOCK_4x4] = Some(WelsSampleSadFour4x4_c);
-    sdf.pfSample4Sad[BLOCK_8x4] = Some(WelsSampleSadFour8x4_c);
-    sdf.pfSample4Sad[BLOCK_4x8] = Some(WelsSampleSadFour4x8_c);
+    sdf.pfSample4Sad[BLOCK_16x16] = Some(sample_sad_four::<16, 16>);
+    sdf.pfSample4Sad[BLOCK_16x8] = Some(sample_sad_four::<16, 8>);
+    sdf.pfSample4Sad[BLOCK_8x16] = Some(sample_sad_four::<8, 16>);
+    sdf.pfSample4Sad[BLOCK_8x8] = Some(sample_sad_four::<8, 8>);
+    sdf.pfSample4Sad[BLOCK_4x4] = Some(sample_sad_four::<4, 4>);
+    sdf.pfSample4Sad[BLOCK_8x4] = Some(sample_sad_four::<8, 4>);
+    sdf.pfSample4Sad[BLOCK_4x8] = Some(sample_sad_four::<4, 8>);
+
+    // The transitional raw tables (T9.B25) — the same kernels the tables held
+    // until session B3, for the readers not yet converted.
+    sdf.pfSampleSadRaw[BLOCK_16x16] = Some(WelsSampleSad16x16_c);
+    sdf.pfSampleSadRaw[BLOCK_16x8] = Some(WelsSampleSad16x8_c);
+    sdf.pfSampleSadRaw[BLOCK_8x16] = Some(WelsSampleSad8x16_c);
+    sdf.pfSampleSadRaw[BLOCK_8x8] = Some(WelsSampleSad8x8_c);
+    sdf.pfSampleSadRaw[BLOCK_4x4] = Some(WelsSampleSad4x4_c);
+    sdf.pfSampleSadRaw[BLOCK_8x4] = Some(WelsSampleSad8x4_c);
+    sdf.pfSampleSadRaw[BLOCK_4x8] = Some(WelsSampleSad4x8_c);
+
+    sdf.pfSampleSatdRaw[BLOCK_16x16] = Some(WelsSampleSatd16x16_c);
+    sdf.pfSampleSatdRaw[BLOCK_16x8] = Some(WelsSampleSatd16x8_c);
+    sdf.pfSampleSatdRaw[BLOCK_8x16] = Some(WelsSampleSatd8x16_c);
+    sdf.pfSampleSatdRaw[BLOCK_8x8] = Some(WelsSampleSatd8x8_c);
+    sdf.pfSampleSatdRaw[BLOCK_4x4] = Some(WelsSampleSatd4x4_c);
+    sdf.pfSampleSatdRaw[BLOCK_8x4] = Some(WelsSampleSatd8x4_c);
+    sdf.pfSampleSatdRaw[BLOCK_4x8] = Some(WelsSampleSatd4x8_c);
+
+    sdf.pfSample4SadRaw[BLOCK_16x16] = Some(WelsSampleSadFour16x16_c);
+    sdf.pfSample4SadRaw[BLOCK_16x8] = Some(WelsSampleSadFour16x8_c);
+    sdf.pfSample4SadRaw[BLOCK_8x16] = Some(WelsSampleSadFour8x16_c);
+    sdf.pfSample4SadRaw[BLOCK_8x8] = Some(WelsSampleSadFour8x8_c);
+    sdf.pfSample4SadRaw[BLOCK_4x4] = Some(WelsSampleSadFour4x4_c);
+    sdf.pfSample4SadRaw[BLOCK_8x4] = Some(WelsSampleSadFour8x4_c);
+    sdf.pfSample4SadRaw[BLOCK_4x8] = Some(WelsSampleSadFour4x8_c);
 
     // The five `pfIntra*Combined3*` slots were nulled here, as the C++ does. They
     // were never anything else on any target this port builds for, and the fields
@@ -461,6 +501,9 @@ mod tests {
             assert!(fl.sSampleDealingFuncs.pfSampleSad[b].is_some(), "sad[{b}]");
             assert!(fl.sSampleDealingFuncs.pfSampleSatd[b].is_some(), "satd[{b}]");
             assert!(fl.sSampleDealingFuncs.pfSample4Sad[b].is_some(), "sad4[{b}]");
+            assert!(fl.sSampleDealingFuncs.pfSampleSadRaw[b].is_some(), "sad raw[{b}]");
+            assert!(fl.sSampleDealingFuncs.pfSampleSatdRaw[b].is_some(), "satd raw[{b}]");
+            assert!(fl.sSampleDealingFuncs.pfSample4SadRaw[b].is_some(), "sad4 raw[{b}]");
         }
     }
 }

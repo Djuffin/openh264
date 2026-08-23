@@ -199,7 +199,15 @@ assert_size!(SMcFunc, 48);
 // Phase 6 session B took the eight `pfIntra*Combined3*` slots (`*mut c_void`,
 // never assigned on any target, guarded by `assert_no_combined3`) out with the
 // guard: -64, measured 176.
-assert_size!(SSampleDealingFunc, 176);
+//
+// **T9.B25 (Phase 9 session B3): 176 -> 344, temporarily.** The three cost tables
+// hold the *safe* kernels now (`fn(&PlaneCursor, &PlaneCursor) -> i32`, still one
+// pointer per slot) and the struct carries a second, raw triple
+// (`pfSampleSad/Satd/4SadRaw`, +168) for the readers the plane-family campaign
+// has not converted yet — a compiling middle for a flip that F118 says cannot be
+// sequenced any other way. The raw triple is deleted with the last raw reader
+// and this pin returns to 176 in that commit.
+assert_size!(SSampleDealingFunc, 344);
 assert_size!(SRCSlicing, 44);
 // **160 in the C++, and 184 is the port's own number since T6.H1** — the same
 // move `SPicture` made at T6.F0. The struct held sixteen raw pointers into one
@@ -344,7 +352,9 @@ assert_size_by_profile!(SDqLayer, debug 840, release 768);
 // -64 at Phase 6 session B for `SSampleDealingFunc`'s eight deleted slots (above),
 // and -24 more for the three `pfSetMemZeroSize*` slots deleted in the same face:
 // 1072, measured.
-assert_size!(SWelsFuncPtrList, 1072);
+// **+168 at T9.B25, temporarily**: `SSampleDealingFunc`'s transitional raw triple
+// (see that pin above). Back to 1072 when it goes.
+assert_size!(SWelsFuncPtrList, 1240);
 
 // codec/encoder/core/inc/encoder_context.h:116. C++ is 98008 bytes, but that number
 // embeds WELS_MUTEX (pthread_mutex_t, 64 B on darwin) by value where this port models
