@@ -1231,3 +1231,116 @@ So the ME struct's conversion (session E) unblocks **7** sites, and the
 background/screen-content referee (session C) unblocks **17** — a ratio that is the
 opposite way round from the draft, and it changes which of the two is worth doing
 first.
+
+## F125 — the 17 dark sites are two families, not one: the `bg` preset can light 8 and can never light 9, because `bScreenContent` is in the SCD conjunction
+
+B3's close said its unfinished referee "unblocks 17 sites". Re-derived here from
+`python3 rust/tools/phase9_plane_callers.py --sites` at `0bf9e0c9`, the 25 remaining
+`safe-now` census rows split by *which flag* installs their dispatcher, and the two
+flags are not the same flag:
+
+| owner | sites | installed by | `bg` preset |
+|---|---:|---|---|
+| `WelsMdBackgroundMbEnc` | 5 (`svc_mode_decision.rs:600,601,602,607,662`) | `WelsInitBGDFunc(&mut *fl, (*pParam).bEnableBackgroundDetection)` | **lit** |
+| `VaaBackgroundMbDataUpdate` | 3 (`:522,530,536`) | same | **lit** |
+| `SvcMdSCDMbEnc` | 5 (`:2037,2047,2057,2072,2112`) | `WelsInitSCDPskipFunc` | never |
+| `CalUVSadCost` | 1 (`:1843`) | same, via `JudgeStaticSkip`/`JudgeScrollSkip` | never |
+| `WelsMotionEstimateSearchStatic` / `..Scrolled` / `LineFullSearch_c` | 3 (`svc_motion_estimate.rs:639,678,1054`) | `WelsInitMeFunc(..., bScreenContent)` | never |
+| `WelsDiamondSearch` + `WelsMotionEstimateInitialPoint` | 7 (`:909,911-914,734,751`) | always installed | lit, ME-blocked |
+| `Process` (`processing/scene_change_detection.rs:87`) | 1 | preprocess | out of scope |
+
+The sentence that decides it is `encoder_context.rs:1607-1612`:
+
+```rust
+crate::encoder::svc_mode_decision::WelsInitSCDPskipFunc(
+    &mut *fl,
+    bScreenContent
+        && (*pParam).bEnableSceneChangeDetect
+        && ((*ctx_param(pEncCtx)).iComplexityMode as i32)
+            < (crate::api::codec_api::ECOMPLEXITY_MODE::HIGH_COMPLEXITY as i32),
+);
+```
+
+`bScreenContent` is a conjunct, and it is `iUsageType == SCREEN_CONTENT_REAL_TIME` —
+an axis neither diffharness driver expresses. So **no camera-usage preset can ever
+reach the SCD family**, however many background flags it sets. The referee unblocks
+**8**, not 17; the other **9 are Phase 10's family mis-filed in Phase 9's plate**, and
+their correct treatment here is a retag to `SCREEN_CONTENT(dormant)`, not a
+conversion. `bEnableSceneChangeDetect` was not the missing knob and adding it would
+have proved nothing.
+
+**Measured, not argued.** With the `bg` preset finished and a probe in
+`SvcMdSCDMbEnc`'s body, every `bg` row — including the ones where
+`WelsMdBackgroundMbEnc` enters 5771 times — reads **`SvcMdSCDMbEnc` = 0**. See F126's
+table.
+
+## F126 — the `bg` preset's calibration, and the clip that lights the family without refereeing it
+
+D-ref-1's preset (`sweep.sh:sweep_bg`, 48 rows: 3 clips x rc{-1,2} x gop{-1,4} x
+cabac{0,1} x threads{1,4}, 72-80 frames each) calibrated per S55 before any of its
+verdicts were used.
+
+**Entry (probe 1 — `eprintln!` at each entry, counted in `compare.sh`'s captured
+stderr; reverted):**
+
+| row | `BackgroundDetection` | of those `bDetectFlag=true` | `WelsMdBackgroundMbEnc` | `SvcMdSCDMbEnc` |
+|---|---:|---:|---:|---:|
+| Static 152x100 rc=-1 gop=-1 t=1 | 80 | 78 | 4524 | 0 |
+| Static 152x100 rc=2 gop=-1 t=1 | 80 | 78 | 4754 | 0 |
+| Static 152x100 rc=2 gop=4 t=4 | 80 | 40 | 2417 | 0 |
+| VT2people 160x96 rc=2 gop=-1 t=1 | 75 | 73 | 1159 | 0 |
+| VT2people 320x192 rc=2 gop=-1 t=4 | 72 | 70 | 5771 | 0 |
+| **Static 152x100 bg=0 (dark control)** | **0** | **0** | **0** | **0** |
+
+The control is the load-bearing row: it is the same configuration with the new
+argument off, and it reproduces exactly the zero F117/T9.B27 measured. The axis is
+what lights the family, and nothing else in the preset does.
+
+**Teeth (probe 2 — one planted sample, reverted).** `*pDstLuma =
+(*pDstLuma).wrapping_add(1)` immediately after `WelsMdBackgroundMbEnc`'s `McLuma_c`
+failed **32 of 48** `bg` rows, while the `sl` preset (`bg` unset) stayed 12/12 — so
+the fault is reachable only through the new axis, which is what a planted fault has to
+show. Character of the failure: byte counts moved by 3-4272 bytes, e.g. VT2people
+320x192 rc=2 gop=-1 cabac=1 C++ 1031358 / Rust 1032946.
+
+**The 16 rows that did not fail are a finding, not a rounding.** Every
+`Static_152_100` row passed — and still passed when the planted fault was escalated
+from `+1` to `+128`. On that clip the background prediction is genuinely **byte-inert**:
+its background macroblocks all take `bSkipMbFlag`, so they code as `MB_TYPE_BACKGROUND`
+P_SKIP with no residual, and `WelsMdInterJudgeBGDPskip`'s decision inputs
+(`pVaaBackgroundMbFlag`, `CheckChromaCost`) come from the analyzer's *source-domain*
+VAA planes rather than from the reconstruction, so the corrupted prediction never
+feeds back into a decision either. **4524 entries per row and zero byte sensitivity in
+the same row** is the exact shape S55 exists to catch: an entry count is evidence that
+a path *runs*, never that a gate can *see* it. The MD family's teeth in this preset are
+the two `CiscoVT2people` clips' 32 rows, and the report should say 32, not 48.
+
+**The Static rows are still worth their runtime**, for a different consumer. A planted
+one-sample fault in `VaaBackgroundMbDataUpdate`'s luma copy (F117's site, session C's
+to convert) fails **all three clips** — Static 102666/103615, VT2people-160x96
+347582/351854. So the three sites session C inherits are refereed by the whole preset
+including Static, where the MD sites are not. Two sites in one function body, one
+gate, two different answers to "can it see me".
+
+Cost: 48 rows, ~8 s wall in either profile on a ~40 s eight-preset sweep.
+
+## F127 — `gates.sh`'s sweep row count had been wrong since `dl` landed: 505 quoted, 535 measured
+
+`sweep_gate`'s comment claimed the exit list ran "369 -> 505 configurations per
+profile". The findings file quotes **535** in three places (`:599`, `:808`, `:897`) and
+is right. Measured directly at `0bf9e0c9` by running the list and reading the tally
+rather than by re-adding the presets:
+
+```
+RUST_ENC_PROFILE=release bash rust/tools/diffharness/sweep.sh st mt def sl ltr ps dl bg
+PASS=583 FAIL=0
+```
+
+583 with `bg`'s 48, so **535** without — the number the prose had all along. The
+comment is corrected in place with its own provenance line. Two documents disagreed
+about a gate's size for a whole phase and nothing caught it, because nothing reads the
+tally *as a number*: `sweep_gate` corroborates `PASS=n FAIL=n` against the exit code
+(`:231-237`) and never against an expected count. That is a deliberate choice — pinning
+the row count would make every new preset a gate edit — but it means the only defence
+against a stale quote is quoting the measurement, which is what the corrected comment
+now does.

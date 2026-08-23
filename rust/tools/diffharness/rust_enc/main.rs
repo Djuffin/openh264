@@ -60,6 +60,12 @@ fn main() {
     // Layer geometry is `BaseEncoderTest`'s (`test/api/BaseEncoderTest.cpp:43`).
     let dlayers: i32 = if a.len() > 19 { a[19].parse().unwrap() } else { 1 };
     let denoise: i32 = if a.len() > 20 { a[20].parse().unwrap() } else { 0 };
+    // Optional 21st: bEnableBackgroundDetection (Phase 9 session B4, D-ref-1). See
+    // cxx_enc.cpp — pinned `false` by every driver before this session, which is what
+    // left the background family dark. It does NOT reach the scene-change family:
+    // `WelsInitSCDPskipFunc` also requires `bScreenContent`, an axis neither driver
+    // expresses (F125).
+    let bgd: i32 = if a.len() > 21 { a[21].parse().unwrap() } else { 0 };
 
     unsafe {
         let mut pEnc: *mut ISVCEncoder = std::ptr::null_mut();
@@ -171,6 +177,7 @@ fn main() {
         }
 
         p.bEnableDenoise = denoise != 0;
+        p.bEnableBackgroundDetection = bgd != 0;
         if dlayers > 1 {
             let template = p.sSpatialLayers[0];
             p.iSpatialLayerNum = dlayers;

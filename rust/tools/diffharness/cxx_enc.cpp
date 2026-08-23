@@ -83,6 +83,14 @@ int main (int argc, char** argv) {
   const int   kiDLayers = (argc > 19) ? atoi (argv[19]) : 1;
   const int   kiDenoise = (argc > 20) ? atoi (argv[20]) : 0;
 
+  // 21st: bEnableBackgroundDetection (Phase 9 session B4, D-ref-1). Off in every
+  // driver before this session, which is why `WelsMdBackgroundMbEnc`,
+  // `VaaBackgroundMbDataUpdate` and the analyzer's `BackgroundDetection` had no byte
+  // coverage at all — a probe read 0 entries across five sweep configurations
+  // (F117/T9.B27). `FillDefault` leaves the flag ON, so an ordinary application runs
+  // this family and the harness never did. See the `bg` preset in sweep.sh.
+  const int   kiBgd = (argc > 21) ? atoi (argv[21]) : 0;
+
   ISVCEncoder* pEnc = NULL;
   if (WelsCreateSVCEncoder (&pEnc) != 0 || pEnc == NULL) {
     fprintf (stderr, "WelsCreateSVCEncoder failed\n");
@@ -180,6 +188,7 @@ int main (int argc, char** argv) {
   }
 
   sParam.bEnableDenoise = (kiDenoise != 0);
+  sParam.bEnableBackgroundDetection = (kiBgd != 0);
   if (kiDLayers > 1) {
     const SSpatialLayerConfig kTemplate = sParam.sSpatialLayers[0];
     sParam.iSpatialLayerNum = kiDLayers;
