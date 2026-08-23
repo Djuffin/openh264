@@ -16236,3 +16236,169 @@ sitting between the two points, six hundred lines apart, on a path no gate in th
 project exercises. The instrument for that is not a tool; it is reading the writers
 of the field between the capture and the use — and the family's next session does it
 120 times.
+
+## 2026-08-22 — Phase 9, session D (the SMbCache arena: the detector was wrong twice, the brief was wrong once, and the roots do not convert)
+
+**Commits:** `982b87ef` (T9.D1, the detector aimable + loud + keyed by file),
+`78ba1a50` (T9.D2, sixteen MV callees take the field), `b8420f2e` (T9.D3, the last
+ten hazards), `a232e01e` (T9.D4, the ten accessors deleted), `14b84328` (T9.D5, the
+detector's two blind spots), `dab004d7` (T9.D6, the 22 that surfaced), `cb044070`
+(T9.D7, all 41 parameters), `66a978d2` (T9.D8, eleven residual slots flipped),
+`ab6aa545` (T9.D9, six `SMB` parameters).
+
+**Gates:** `gates.sh family` PASS in both profiles at T9.D7, T9.D8, T9.D9 and at the
+close — **sweeps 535/535 debug and 535/535 release every time, zero moved bytes**.
+548 debug / 541 release tests. The sweep costs 40 seconds on this machine, not the
+hour the brief budgeted, which is why it was run per risky commit rather than once.
+
+**Ratchet, session baseline -> close:** raw_ptr 2249 -> **2095** (-154), unsafe_fn
+812 -> **763** (-49), unsafe_block 445 -> **406** (-39), shim 111 -> **94** (-17). No
+per-file increase; no rebaseline needed. Tags: `port-raw(Phase 9)` 687 -> **644**;
+every other category unchanged.
+
+### The detector was the session's biggest single finding, and it was wrong twice
+
+The brief scoped session D off one number: `q1c.py` re-aimed at `SMbCache` reports 21
+hazardous sites in 4 callers. That number reproduces exactly, and it was **not the
+work list**.
+
+T9.D1 did what the brief asked — `--type NAME`, a loud exit 2 on both empty cases
+(no sources, no function taking the named type), and a callee table keyed by
+`(name, file)` so `WelsRecPskip`'s two definitions stop collapsing. The `SMbCache`
+denominator went 65 -> 66 with that; `WelsRecPskip`'s *attribution* did not move,
+because it is implicated in no hazard. The same fix found two more collapsed names on
+the context side (`WelsRcPostFrameSkipping`, `WelsSpatialWriteMbSyn`).
+
+Then the 21 were fixed (T9.D2/T9.D3) and the report read zero — and it was **wrong**,
+in two independent ways that only showed up because the session kept running the
+instrument against the tree it was gating rather than against the tree it was written
+for (**F111**):
+
+* `DERIV_HINT` never matched `addr_of_mut!` — the one spelling S28/S29 *mandate* for a
+  cursor into an inline array. T9.D4 replaced the ten accessors with exactly that
+  spelling, so the tool went to zero while nine live sites stood.
+* a root can be an owned **field**. 32 bodies mint theirs as
+  `addr_of_mut!((*pSlice).sMbCacheInfo)`, whose type is nowhere on the line, so all 32
+  were invisible as callers. `WelsWriteMbResidualCabac` alone held 12 sites.
+
+Fixed: **0 -> 22 sites in 4 callers**. And on the default aim, **288 -> 308 sites, 68
+-> 71 callers** — so family 6's precondition number in the charter is stale twice over
+(it says 287; the tree said 288 before this fix).
+
+`--kind ref` was added for the other half of the instrument's life. Once a family has
+converted there are no `*mut T` parameters left, and the tool exits 2 saying "nothing
+to find" — correct, and useless. Aimed at `&mut T` it answers the question that
+actually matters after a conversion: is a cursor held across one of these calls today.
+Session D's close: **0 hazardous sites across all 37 bodies**.
+
+### Two shapes of "hazard", and only one of them was real
+
+Of the first 21, **ten were artefacts of the tool's model**. It assumes one conversion —
+"the `*mut T` parameter becomes `&mut T`" — and against that model, a cursor held
+across `dct(pMbCache)` is a hazard. But `dct` is one of the arena's own *accessors*, and
+this session turned those into field projections, which retag one field. Ten of the
+21 named an accessor as the retagging callee.
+
+Of the other eleven, none needed the caller restructured either. All sixteen MV-cache
+callees open with `let pMvComp = &mut (*pMbCache).sMvComponents;` and touch nothing
+else; the parameter is the arena because `mv_pred.cpp` spells it that way. Narrowed to
+`&mut SMVComponentUnit`, the retag covers one field and the caller's three cursors into
+other fields are untouched — the hazard is gone **at the definition** rather than
+worked around at the call, and 450 lines of `WelsMdInterMbRefinement` did not have to
+move. The same move retired `WelsGetMbCtxCabac` and `WelsWriteBlockResidualCabac` to
+`&[i16; 48]` (12 sites) and `AcceptPskip` to `&SPicData`.
+
+**The rule this session would add if it were adding one:** before restructuring a
+caller to survive a retag, ask what the callee actually touches. A parameter that names
+an arena because the C++ named an arena is a hazard the port invented.
+
+### The brief was wrong about `WelsEncRecUV` (F110)
+
+> "its `pRes` is `coeff_level + 256 + (iUV - 1) * 64`, a pure function of the `iUV`
+> argument it already receives, so the parameter is redundant."
+
+The two callers pass different bases — `WelsIMbChromaEncode` passes `pCoeffLevel + 0`
+(`svc_encode_slice.cpp:475`), `WelsPMbChromaEncode` passes `+ 256` (`:499`). Deriving
+`+ 256` in the callee moves every **intra** macroblock's chroma residual by 512 bytes,
+and the P-heavy half of the sweep would not have caught it. The parameter stays,
+as a `usize` index — "delete the second path" is about the *pointer*, not the
+information it carried.
+
+### The roots do not convert, and the tree said so before the session did (F112)
+
+T9.D7 converted all 41 `*mut SMbCache` parameters in one pass — one compile error, a
+`pMbCache.is_null()` guard. The companion change, the 32 roots to
+`&mut (*pSlice).sMbCacheInfo`, was written and **reverted**: T6.C2 had already found,
+with a Miri encode probe, that a `&mut` to that field is popped by any callee that
+re-derives it, and these functions nest four deep. Aimed at the slice, the detector
+prices it: `q1c.py --type SSlice` reads **68 sites in 22 callers** before the session
+and after it, unchanged, because the roots are unchanged.
+
+So the arena is a reference at every parameter, a raw at every root, and `&mut
+*pMbCache` at the 40 calls between them. The root conversion belongs to the session
+that converts `*mut SSlice`, where it is one step instead of thirty-two.
+
+### What converted
+
+* **The ten accessors are gone** (T9.D4). Six were pure projection and are spelled at
+  the 75 call sites; the four ping-pong halves became `const fn`s taking the **flag by
+  value**, so the caller reads the flag and then derives the cursor. The tempting
+  tidy-up — a helper taking `&mut [u8; N]` — is wrong here and the reason is now in
+  the file: `sMemPredMb` carries three live cursors at once, and each `&mut` to that
+  field is a fresh Unique over the same bytes, so the second kills the first.
+  `addr_of_mut!` yields raw siblings, and raw siblings coexist. S28/S29 as a
+  consequence rather than as a style rule.
+* **41 parameters** (T9.D7). `grep -rn ': \*mut SMbCache' src/encoder` is zero.
+* **Eleven of the fourteen residual slots** hold safe function pointers and their
+  shims are deleted (T9.D8, **F113**). The three that do not are the DCT/IDCT pair —
+  they carry a *picture plane* operand, which is F104's double gate and the plane
+  family's half. Seven call-site bodies were rewritten from walking cursors to indices;
+  `iLumaBlock` is `[[i16; 16]; 16]`, so most of the walks became `[k]`.
+* **Six `*mut SMB` parameters** (T9.D9): 42 -> 36. The other 31 are neighbour-bound —
+  they read `pCurMb.offset(-1)` or `-iMbWidth` and need the MB array's provenance,
+  which is the layer's.
+
+### Two classification mistakes this session made and caught
+
+Both are about *how you decide a pointer is safe to convert*, and both were caught by
+the tree rather than by a gate:
+
+1. **`wrapping_offset` is a walk.** `FillNeighborCacheInter{WithBGD,WithoutBGD}` form
+   their four neighbour cursors with `pCurMb.wrapping_offset(-1)` — F14's shape, defined
+   arithmetic off the edge of the array — and a classifier grepping `.offset(`/`.add(`/
+   `.sub(` scores both bodies as *plain*.
+2. **A slot call is invisible to name-based propagation.** `WelsMdInterInit` hands
+   `pCurMb` to `pfFillInterNeighborCache`, whose two implementations are exactly those
+   two. The comment at `svc_base_layer_md.rs:900` says so, having been written after
+   Miri's encode probe found it in session E — and this session's classifier reproduced
+   the same miss on its first run. **When a census propagates a property through call
+   edges, the dispatch table is a call edge.**
+
+### What this session did not do
+
+* **No plane table flipped**, as the brief instructed: `pfSampleSad`, `pfSampleSatd`,
+  `pfSample4Sad`, `mc`, and the DCT/IDCT slots all pair an `SMbCache` operand with a
+  picture one (F104). **They are now waiting on the plane half alone** — this session
+  was the other gate.
+* **No Miri, no benches, no perf** (hard rule 3). The soundness arguments in F112 are
+  reasoned from Stacked Borrows and from T6.C2's *recorded* Miri verdict, not from a
+  fresh run; the phase-exit Miri is where they are tested. The one place that matters
+  most is the 40 `&mut *pMbCache` reborrows.
+* **The dequantisation slots** (`pfDequantization4x4`, `pfDequantizationFour4x4`,
+  `pfDequantizationIHadamard4x4/2x2`) were not touched: a different typedef family,
+  shared with the decoder side.
+
+### The methodological note
+
+Three of this session's four findings are about **instruments, not code**: the detector
+could not see the spelling the codebase mandates (F111a), could not see the root shape
+this family actually uses (F111b), and the session's own `SMB` classifier could not see
+`wrapping_offset` or a dispatch edge. The brief warned about two tool defects and both
+were real; the two it did not warn about were larger.
+
+The generalisation, for D–H: **before scoping a family off an instrument's number, run
+the instrument against the family's own idioms and check that it can see them.** Session
+A's rule was "build the caller view of your family before scoping". This session adds
+the half underneath it: build the *instrument's* view of your family's spelling first,
+because a green report from a detector that cannot see your code reads exactly like a
+green report from one that can.
