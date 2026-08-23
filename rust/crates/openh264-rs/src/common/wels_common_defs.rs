@@ -4,12 +4,15 @@
     non_upper_case_globals,
     dead_code
 )]
+#![deny(unsafe_code)]
 
 //! Types shared by the encoder and the decoder.
 //!
 //! Translated from `codec/common/inc/wels_common_defs.h`. Both codecs include that
 //! header in C++, so these types have exactly one definition here rather than one
 //! copy per module.
+
+use crate::safe::plane::PlaneCursor;
 
 
 // `TagBitStringAux` / `SBitStringAux` / `PBitStringAux` were declared here — the
@@ -253,35 +256,33 @@ pub fn CALC_PSNR(w: i32, h: i32, s: i64) -> f32 {
     (CONST_FACTOR_PSNR * (65025.0f64 * w as f64 * h as f64 / s as f64).ln()) as f32
 }
 
-/// `WelsCalcPsnr` — `codec/common/src/utils.cpp:101`.
+/// `WelsCalcPsnr` — `codec/common/src/utils.cpp:101`. The mean-square error of
+/// `tar` against `refc` over a `kiWidth` x `kiHeight` rectangle, as a PSNR in dB.
 ///
-/// Returns `-1.0` for a null plane and the saturating `99.99` for an exact match,
-/// both of which are the reference's own sentinels rather than errors. `iSqe`
-/// accumulates in `int64_t`; the per-pixel difference is `int32_t`.
+/// Returns the saturating `99.99` for an exact match, which is the reference's own
+/// sentinel rather than an error. `iSqe` accumulates in `i64` and the per-pixel
+/// difference is `i32`, exactly as the C++ (`int64_t` / `int32_t`); the widths are
+/// part of the contract, not an implementation choice.
 ///
-/// # Safety
-/// Both planes must be readable for `kiHeight` rows of `kiWidth` bytes at the
-/// given strides.
-pub unsafe fn WelsCalcPsnr(
-    kpTarPic: *const u8,
-    kiTarStride: i32,
-    kpRefPic: *const u8,
-    kiRefStride: i32,
+/// **The null-plane sentinel moved to the caller (T9.B3).** The raw form took two
+/// `*const u8` and returned `-1.0` when either was null — the C++'s "no picture
+/// bound". A plane cursor cannot be null, so the caller answers that question
+/// where it already has the handle: `encoder_ext.rs`'s `LayerPlanePsnr` returns
+/// `-1.0` for an unresolved picture or an empty plane, which is the same value at
+/// the same times.
+pub fn calc_psnr(
+    tar: &PlaneCursor<'_>,
+    refc: &PlaneCursor<'_>,
     kiWidth: i32,
     kiHeight: i32,
 ) -> f32 {
     let mut iSqe: i64 = 0;
-    let pTar = kpTarPic;
-    let pRef = kpRefPic;
-
-    if pTar.is_null() || pRef.is_null() {
-        return -1.0;
-    }
 
     for y in 0..kiHeight {
-        for x in 0..kiWidth {
-            let kiT = *pTar.add((y * kiTarStride + x) as usize) as i32
-                - *pRef.add((y * kiRefStride + x) as usize) as i32;
+        let t = tar.row(y as isize, 0, kiWidth as usize);
+        let r = refc.row(y as isize, 0, kiWidth as usize);
+        for (a, b) in t.iter().zip(r.iter()) {
+            let kiT = *a as i32 - *b as i32;
             iSqe += (kiT * kiT) as i64;
         }
     }
@@ -296,8 +297,10 @@ mod psnr_tests {
     use super::*;
 
     /// Expectations **measured** against `libopenh264.a`, not derived: a probe
-    /// called `WelsCalcPsnr` on the same six inputs and printed these values.
-    /// See `rust/docs/encoder_port_status.md`, Phase 5.3.
+    /// called `WelsCalcPsnr` on the same inputs and printed these values.
+    /// See `rust/docs/encoder_port_status.md`, Phase 5.3. The golden is the
+    /// reference implementation, so this survives the shim's deletion intact —
+    /// contrast F106.
     #[test]
     fn test_wels_calc_psnr_matches_cxx() {
         const W: i32 = 32;
@@ -306,12 +309,10 @@ mod psnr_tests {
         let a: Vec<u8> = (0..n).map(|i| (i * 7) as u8).collect();
         let mut b: Vec<u8> = a.clone();
 
-        let call = |t: &[u8], ts: i32, r: &[u8], rs: i32, w: i32, h: i32| unsafe {
-            WelsCalcPsnr(
-                t.as_ptr(),
-                ts,
-                r.as_ptr(),
-                rs,
+        let call = |t: &[u8], ts: i32, r: &[u8], rs: i32, w: i32, h: i32| {
+            calc_psnr(
+                &PlaneCursor::new(t, 0, ts as usize),
+                &PlaneCursor::new(r, 0, rs as usize),
                 w,
                 h,
             )
@@ -336,19 +337,6 @@ mod psnr_tests {
             b[i] = ((s >> 16) & 0xff) as u8;
         }
         assert!((call(&a, W, &b, W, W, H) - 8.052674).abs() < 1e-4);
-
-        // A null plane is a sentinel in the reference, not an error.
-        let got = unsafe {
-            WelsCalcPsnr(
-                std::ptr::null(),
-                W,
-                b.as_ptr(),
-                W,
-                W,
-                H,
-            )
-        };
-        assert_eq!(got, -1.0);
 
         // Distinct target and reference strides.
         assert!((call(&a, 40, &b, 48, 20, 8) - 7.720985).abs() < 1e-4);

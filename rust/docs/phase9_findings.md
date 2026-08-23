@@ -544,3 +544,61 @@ Two consequences for F107's design:
    disjointness premise. It does mean the write view's rectangle is the macroblock
    **plus the deblocking skirt** (up to 4 samples back across the left and top
    edges), which shape (B) above has to size for and shape (A) does not.
+
+## F109 — "resolve the handle at the point of use" is not always sound: `pDecPic` moves under the PSNR block
+
+The plane family's whole design is *carry a handle, resolve it where you read the
+pixels* — that is what replaces the raw cursor. T9.B3 converted the first site to
+it (`WelsCalcPsnr`, the layer's PSNR against its source) and the conversion was
+wrong on the first attempt, in a way no gate in this project would have reported.
+
+The port carried the two pictures as `PicPlanes` copied out at the top of the
+layer body:
+
+```rust
+let mut fsnr: Option<PicPlanes>;            // encoder_ext.rs:3193, was
+...
+    (*pCtx).pDecPic = (*pRefListCur).pNextBuffer;      // :3481
+    fsnr = match (*pCtx).pDecPic { Some(id) => Some((*pRefListCur).pic_mut(id).planes()), .. };
+...
+    fSnrY = WelsCalcPsnr(sFsnr.pData[0], .., pEncPic.pData[0], .., w, h);   // :3885
+```
+
+The obvious conversion drops `fsnr` entirely and reads `(*pCtx).pDecPic` at the
+PSNR block. **It names a different picture there.** Between the two lines sits
+
+```rust
+if eNalRefIdc != NRI_PRI_LOWEST && !eRefStrategy.UpdateRefList(pCtx) { .. }   // :3864
+```
+
+and `WelsUpdateRefList` ends with `eRefStrategy.EndofUpdateRefList(pCtx)`
+(`ref_list_mgr_svc.rs:824`), which on the camera strategy is `PrefetchNextBuffer`
+— whose last line is `(*pCtx).pDecPic = (*pRefList).pNextBuffer` (`:690`), i.e.
+**the slot the *next* frame will decode into**. The PSNR would have measured an
+unrelated picture.
+
+The fix is to keep the snapshot and change only what is snapshotted: `fsnr` is now
+`Option<RecPicId>` rather than `Option<PicPlanes>`. The handle is captured at the
+same line, for the same reason, and the *picture* is resolved at the read.
+
+Two things worth carrying forward:
+
+1. **S37's rule needs a second half.** "A picture is an arena, so resolve it once,
+   copy the geometry out, and do not hold a borrow across the calls" was written
+   about *borrows*. What this site needed copying out was the **value** — which
+   picture — and that is true whether the port holds a borrow, a raw root or a
+   handle. Session B2 converts 120 `SPicData` reads to exactly this shape, so
+   before each one: **is the field the handle comes from still the same field at
+   the point of use?** `SPicData` is stamped per macroblock from the layer, and the
+   layer's `pDecPic`/`pRefPic` are stable across a frame — but `(*pCtx).pDecPic` is
+   not stable across a *layer body*, and that is the kind of difference a
+   handle conversion silently eats.
+2. **No gate covers this path.** Both diffharness drivers set
+   `bPsnrY = bPsnrU = bPsnrV = false` (`cxx_enc.cpp:148`,
+   `rust_enc/main.rs:133-135`) and no unit or integration test asks for PSNR, so
+   the 535-configuration sweep is blind to the whole block. The conversion is
+   defended by the kernel's own differential test — whose goldens are **measured
+   against `libopenh264.a`**, so it survives the shim's deletion with meaning
+   (contrast F106) — and by the fact that the two handles are the same two the raw
+   roots were derived from. It is not defended by a byte gate, and that is worth
+   saying plainly rather than letting "gates PASS" imply it.

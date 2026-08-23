@@ -77,6 +77,14 @@ shares a slot with the encode tree reads as `in-fork`
 | **copy** (`PCopyFunc`) | 21 | 17 `blocked`, 4 `safe-now` | the destination is the **reconstruction** plane at every reconstruction site; the four exceptions are `VaaBackgroundMbDataUpdate` (x3, `src` -> `ref`) and `MeRefineFracPixel`'s `pfCopyBlockByMode` |
 | **intrapred** (`PGetIntraPredFunc`) | 5 | `blocked` — **all of them** | `pRef` is the reconstruction picture at every call site |
 
+Outside the tables, because it is not a per-macroblock kernel: **`WelsCalcPsnr`**
+was the plane family's one `safe-now` site with no second gate on it — both
+operands are whole pictures named by a handle, and it runs after the join. T9.B3
+converted it (`calc_psnr` takes two `PlaneCursor`s, `common/wels_common_defs.rs`
+is under `deny`), and it produced F109: the handle it reads **cannot** be re-read
+from the context at the point of use, because `UpdateRefList` reassigns
+`(*pCtx).pDecPic` in between.
+
 ## 3. The finding that scopes the session (F104)
 
 **Every cost-table call site is safe on its plane operands and 25 of 37 are not
