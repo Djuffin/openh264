@@ -904,15 +904,11 @@ pub unsafe fn WelsWriteBlockResidualCabac(
 }
 
 #[inline]
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn WelsCalNonZeroCount2x2Block(pBlock: *const i16) -> i32 {
-    unsafe {
-        ((*pBlock != 0) as i32)
-            + ((*pBlock.add(1) != 0) as i32)
-            + ((*pBlock.add(2) != 0) as i32)
-            + ((*pBlock.add(3) != 0) as i32)
-    }
+pub fn WelsCalNonZeroCount2x2Block(pBlock: &[i16; 4]) -> i32 {
+    ((pBlock[0] != 0) as i32)
+        + ((pBlock[1] != 0) as i32)
+        + ((pBlock[2] != 0) as i32)
+        + ((pBlock[3] != 0) as i32)
 }
 
 // unsafe-cat: port-raw(Phase 9)
@@ -1021,8 +1017,8 @@ pub unsafe fn WelsWriteMbResidualCabac(
             }
 
             if iCbpChroma != 0 {
+                let mut iNonZeroCount = WelsCalNonZeroCount2x2Block(&(*pDct).iChromaDc[0]);
                 let cb_dc_buf = (*pDct).iChromaDc[0].as_mut_ptr();
-                let mut iNonZeroCount = WelsCalNonZeroCount2x2Block(cb_dc_buf);
                 if iNonZeroCount != 0 {
                     (*pCurMb).iCbpDc |= 0x2;
                 }
@@ -1038,8 +1034,8 @@ pub unsafe fn WelsWriteMbResidualCabac(
                     3,
                 );
 
+                iNonZeroCount = WelsCalNonZeroCount2x2Block(&(*pDct).iChromaDc[1]);
                 let cr_dc_buf = (*pDct).iChromaDc[1].as_mut_ptr();
-                iNonZeroCount = WelsCalNonZeroCount2x2Block(cr_dc_buf);
                 if iNonZeroCount != 0 {
                     (*pCurMb).iCbpDc |= 0x4;
                 }
@@ -1290,17 +1286,15 @@ mod tests {
     use super::*;
     
     #[test]
-    // unsafe-cat: port-raw(Phase 9)
-    #[allow(unsafe_code)]
     fn test_cal_nonzero_count_2x2() {
         let block_zero = [0i16, 0, 0, 0];
-        assert_eq!(unsafe { WelsCalNonZeroCount2x2Block(block_zero.as_ptr()) }, 0);
+        assert_eq!(WelsCalNonZeroCount2x2Block(&block_zero), 0);
 
         let block_mixed = [1i16, 0, -3, 0];
-        assert_eq!(unsafe { WelsCalNonZeroCount2x2Block(block_mixed.as_ptr()) }, 2);
+        assert_eq!(WelsCalNonZeroCount2x2Block(&block_mixed), 2);
 
         let block_full = [4i16, -2, 5, 1];
-        assert_eq!(unsafe { WelsCalNonZeroCount2x2Block(block_full.as_ptr()) }, 4);
+        assert_eq!(WelsCalNonZeroCount2x2Block(&block_full), 4);
     }
 
     #[test]
