@@ -11,15 +11,53 @@ argument classified by **which surface it names**:
 
 | class | surface | why it is or is not convertible now |
 |---|---|---|
-| `src` | the spatial **source** picture | read-only for the whole frame — any number of shared `PlaneCursor`s, on any number of threads, is sound |
+| `src` | the spatial **source** picture | read-only for the whole frame **on every path the gates run** — see the caveat below, which is not academic |
 | `ref` | a **reference** picture | same |
 | `rec` | the **reconstruction** picture | **written by every worker of the fork**, at macroblock granularity that is not row-contiguous (F107) |
-| `cache` | an `SMbCache`-owned buffer | single-owner scratch, but reached through the `md::mem_pred_*` raw accessors — **family 3's** (session D) |
+| `cache` | an `SMbCache`-owned buffer | single-owner scratch; **converted by session D** — the buffers are plain owned arrays and every `*mut SMbCache` parameter is a `&mut SMbCache` |
 | `coeff` | a DCT/quant coefficient block | **family 3's** as well (F103) |
 | `local` | a caller stack array | single-owner |
 
 A site's verdict is the latest family any of its operands waits on:
 `blocked` (reconstruction) > `coeff` > `safe-now`.
+
+### The `src` caveat — one path writes the source picture (T9.B20)
+
+`src` is read-only *almost* everywhere, and the exception matters to whoever
+converts `pEncMb`. `VaaBackgroundMbDataUpdate` (`svc_mode_decision.rs:510`,
+called from `WelsMdBackgroundMbEnc` at `:623`, inside the macroblock loop and
+in-fork) issues three copies whose **destination is `pVaaInfo->pCurY/U/V`**:
+
+```rust
+copy16((*pVaaInfo).pCurY.offset(kiOffsetY), kiPicStride,     // dst — PCopyFunc
+       (*pVaaInfo).pRefY.offset(kiOffsetY), kiPicStride);    // src   is (dst, sd, src, ss)
+```
+
+Measured, not inferred, three ways:
+
+* `PCopyFunc = fn(pDst, iStrideD, pSrc, iStrideS)` (`md.rs:235`) — **the first
+  argument is the destination**, so the copy runs *previous source* → *current
+  source*, and the C++ is the same call in the same order
+  (`svc_base_layer_md.cpp:1347`).
+* `pCurY` is stamped from `m_pSpatialPicPool.get_mut(idCur)`
+  (`wels_preprocess.rs:1839`) and **`idCur` is the picture the layer encodes
+  from**: a probe comparing `(*pCtx).pEncPic` with `GetCurrentOrigFrame(did)` at
+  `WelsInitCurrentLayer` reported `same:true` on 18 frames of 18.
+
+So the destination is not merely another element of the same pool — it is *the
+picture `SPicData.pEncMb` reads*. A shared `&SPicture` for the source cannot be
+held across this call, and no index-disjoint pool accessor helps, because the
+conflict is read-vs-write on one element rather than between two.
+
+**And no gate can see it.** The diffharness driver sets
+`p.bEnableBackgroundDetection = false` (`tools/diffharness/rust_enc/main.rs:126`),
+so `BackgroundDetection` is never called in any sweep preset in either profile —
+a probe inside it printed nothing across a full run — which puts
+`VaaBackgroundMbDataUpdate` outside the reach of the 535 sweep rows *and* of the
+encoder-scoped Miri step. **T9.B20's decision: these three copy sites stay raw
+and tagged**, for session C to take with the rest of the write-under-shared-view
+problem (D-mt-3). Converting code no gate exercises, on the one aliasing shape in
+this family that is genuinely hard, is the wrong trade at any price.
 
 ## 1. The tables
 

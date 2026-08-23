@@ -62,7 +62,22 @@ a cursor from the context, call something, use the cursor) has been sound throug
 six phases. A **`&mut` retag** pops every cursor into the context regardless of
 what the callee goes near.
 
-There are two shapes, and F66's two Miri-confirmed sites are one of each.
+There are **four** shapes. F66's two Miri-confirmed sites are one each of A and
+B; F114's two are one each of C and D, and those two were added in T9.B20 after
+session D shipped one of each past ten green byte gates *and* a clean run of this
+tool. A and B are hazards a conversion **exposes** — they are latent in the tree
+before it. C and D are hazards a conversion **creates**: both are sound while the
+parent is a raw pointer, so no amount of pre-conversion Miri finds them, and the
+only instrument that does is this scan plus the post-conversion Miri step.
+
+Both C and D are calibrated against the tree at `0bfc7687^` — the tree that
+carried F114's two live defects. Shape C reports exactly the four bodies F114a
+named (`WelsEncRecI4x4Y`, `WelsEncRecI16x16Y`, `WelsEncInterY`, `WelsEncRecUV`),
+with the Miri-reported one line-for-line: derive `svc_encode_mb.rs:650`, borrow
+`:684`. Shape D reports `AddSliceBoundary` and `DynSlcJudgeSliceBoundaryStepBack`,
+the two functions T9.D9 converted. Both are clean at HEAD, where T9.D11 fixed
+them. **Re-run that calibration before trusting a change to either scanner** — a
+detector that has never been shown to fire is not a detector (S55).
 
 **Shape A — a cursor held across the call.** Three parts inside one body:
 
@@ -154,7 +169,21 @@ def aim(ctx_type, kind="raw"):
     nothing (see `main`, which now refuses to report that as a clean run).
     """
     global CTX_TYPE, CTX_PARAM_RE, CTX_PARAM_PP_RE, LOCAL_ROOT_RE, PARAM_KIND
+    global REF_PARAM_RE, MUT_REF_PARAM_RE, RAW_LOCAL_RE
     CTX_TYPE, PARAM_KIND = ctx_type, kind
+    # Shape D needs **both** reference spellings whatever `--kind` is: F114b's
+    # protector was a *shared* `&SMB`. A shared reference retags harmlessly and
+    # still protects, so `&T` and `&mut T` are equally the subject there.
+    REF_PARAM_RE = re.compile(
+        r"([A-Za-z_][A-Za-z0-9_]*)\s*:\s*&\s*(?:'[a-z_]+\s+)?(mut\s+)?"
+        + ctx_type + r"\b")
+    MUT_REF_PARAM_RE = re.compile(
+        r":\s*&\s*(?:'[a-z_]+\s+)?mut\s+" + ctx_type + r"\b")
+    # A local or parameter holding a `*mut T` — shape D's re-borrow is spelled
+    # `&mut *that`.
+    RAW_LOCAL_RE = re.compile(
+        r"([A-Za-z_][A-Za-z0-9_]*)\s*(?::\s*\*\s*(?:mut|const)\s+" + ctx_type
+        + r"\b|\s*=\s*[^;]*as\s+\*\s*mut\s+" + ctx_type + r"\b)")
     if kind == "ref":
         CTX_PARAM_RE = re.compile(
             r"([A-Za-z_][A-Za-z0-9_]*)\s*:\s*&\s*(?:'[a-z_]+\s+)?mut\s+" + ctx_type + r"\b")
@@ -406,6 +435,265 @@ def n_bodies(callees):
     return sum(len(v) for v in callees.values())
 
 
+
+# --------------------------------------------------------------------------
+# Shape C and shape D — F114's two mechanisms, neither of which shapes A and B
+# model. Added in T9.B20 after session D shipped one of each past ten green byte
+# gates and a clean `q1c` run.
+# --------------------------------------------------------------------------
+
+# `let p = addr_of_mut!((*root).field)...` — a raw cursor into one named field.
+# The `.cast::<i16>()` / `.add(n)` tail is deliberately not required.
+ADDR_OF_FIELD_RE = re.compile(
+    r"addr_of(?:_mut)?\s*!\s*\(\s*\(\s*\*\s*([A-Za-z_][A-Za-z0-9_]*)\s*\)"
+    r"\s*\.\s*([A-Za-z_][A-Za-z0-9_]*)")
+
+
+def safe_borrows_of_field(line):
+    """Every `&(mut) (*root).field` / `&(mut) root.field` in one line.
+
+    Shape C's invalidating half. The borrow is usually not a statement of its
+    own — F114a's was an argument three calls deep,
+    `func(blk4x4_mut(&mut (*pMbCache).sCoeffLevel, 0), pFF, pMF)` — so this
+    matches anywhere in the line rather than only at a binding.
+    """
+    out = set()
+    for m in re.finditer(
+            r"&\s*(?:mut\s+)?\(\s*\*\s*([A-Za-z_][A-Za-z0-9_]*)\s*\)"
+            r"\s*\.\s*([A-Za-z_][A-Za-z0-9_]*)", line):
+        out.add((m.group(1), m.group(2)))
+    for m in re.finditer(
+            r"&\s*(?:mut\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*\.\s*([A-Za-z_][A-Za-z0-9_]*)",
+            line):
+        out.add((m.group(1), m.group(2)))
+    return out
+
+
+def signature(lines, name, b):
+    """The whole parameter list of the body `split_bodies` reports at line `b`.
+
+    **`b` is the opening brace, not the `fn` head.** For a signature that wraps
+    across lines — which every one of the port's longer ones does — the
+    parameters sit *above* `b`, so a window that reads forward from `b` sees the
+    body and none of the types. That is not a hypothetical: written the naive
+    way, shape D matched eleven `&mut SMB` parameters that happened to fit on one
+    line and silently missed `AddSliceBoundary(pCurMb: &SMB)` at
+    `svc_encode_slice.rs:3056` — F114b itself, the site the shape exists to
+    catch. Walk back to the `fn` head and take everything between.
+    """
+    start = b
+    for k in range(b, max(-1, b - 40), -1):
+        m = FN_HEAD_RE.match(lines[k])
+        if m and m.group(1) == name:
+            start = k
+            break
+    return " ".join(strip_comment(x) for x in lines[start:b + 1]), start
+
+
+def scan_shape_c(rel, lines, caller, b, end, roots):
+    """A raw cursor into `root.field`, held across a **safe borrow of that same
+    field**, and used after it — F114a.
+
+    While `root` is `*mut T` this is sound and has been for six phases: the
+    `addr_of_mut!` reuses the parent's `SharedReadWrite` item, and a sibling
+    `&mut` pushes above it without popping it (T5.O8's rule, F70's site). The
+    moment `root` becomes `&mut T` the same spelling gets its **own** item above
+    the parent's `Unique`, and the sibling borrow pops it. So this is not a
+    hazard the conversion *exposes* — it is one the conversion *creates*, which
+    is why no amount of pre-conversion Miri would have found it.
+
+    The borrow covers the **whole field**, not the sub-range the cursor uses:
+    `blk4x4_mut` takes `&mut [i16]`, so the caller borrows all 384 coefficients
+    before indexing. Narrowing the callee's parameter does not help.
+    """
+    out = []
+    derived = {}                     # name -> (line, root, field)
+    for j in range(b, end + 1):
+        m = LET_RE.match(strip_comment(lines[j]))
+        if not m or m.group(1) == "_":
+            continue
+        am = ADDR_OF_FIELD_RE.search(m.group(2))
+        if am and am.group(1) in roots:
+            derived[m.group(1)] = (j, am.group(1), am.group(2))
+    if not derived:
+        return out
+    for nm, (dj, root, field) in derived.items():
+        use_re = re.compile(r"\b" + re.escape(nm) + r"\b")
+        for j in range(dj + 1, end + 1):
+            s_ = strip_comment(lines[j])
+            if COMMENT_RE.match(lines[j]):
+                continue
+            if (root, field) not in safe_borrows_of_field(s_):
+                continue
+            # the derivation's own line re-appearing is not a use
+            for k in range(j + 1, end + 1):
+                s2 = strip_comment(lines[k])
+                if COMMENT_RE.match(lines[k]):
+                    continue
+                if LET_RE.match(s2) and LET_RE.match(s2).group(1) == nm:
+                    break                      # rebound; the old cursor is dead
+                if use_re.search(s2):
+                    out.append(Hazard("C", rel, caller, nm, dj + 1, j + 1, k + 1,
+                                      f"&mut (*{root}).{field}",
+                                      lines[dj].strip()))
+                    break
+            break
+    return out
+
+
+def split_top(text):
+    """Split on commas that are not inside (), [], <> or a string."""
+    out, depth, cur = [], 0, ""
+    for ch in text:
+        if ch in "([<":
+            depth += 1
+        elif ch in ")]>":
+            depth -= 1
+        if ch == "," and depth <= 0:
+            out.append(cur)
+            cur = ""
+        else:
+            cur += ch
+    out.append(cur)
+    return [x.strip() for x in out]
+
+
+def mut_ref_positions(head):
+    """Indices of the parameters typed `&mut CTX_TYPE` in a signature.
+
+    Needed because the argument has to be matched to the **parameter position**,
+    not merely to the call. Without it, `ParseInterBInfo` reads as a minter of
+    `&mut SPicture` on the strength of `... (pCtx, &mut *pCurDqLayer, ..)` — the
+    callee does take a `&mut SPicture` somewhere in its list, and a positionless
+    scan happily types the `SDqLayer` argument as one. That single confusion was
+    the whole of `SPicture`'s 12 reported sites, all of them in decoder code that
+    is not even in this phase's scope.
+    """
+    i = head.find("(")
+    if i < 0:
+        return set()
+    depth, j = 0, i
+    for j in range(i, len(head)):
+        if head[j] == "(":
+            depth += 1
+        elif head[j] == ")":
+            depth -= 1
+            if depth == 0:
+                break
+    return {k for k, ptxt in enumerate(split_top(head[i + 1:j]))
+            if MUT_REF_PARAM_RE.search(ptxt)}
+
+
+def reborrow_closure(files):
+    """Functions that can mint a `&mut CTX_TYPE` — directly or through a callee.
+
+    Shape D's other half, and the reason it has to be a closure rather than a
+    one-level look: F114b's protector was on `AddSliceBoundary`'s frame and the
+    conflicting `&mut` was minted by `UpdateMbNeighbourInfoForNextSlice`, which
+    `AddSliceBoundary` calls. A one-level scan of the annotated function's own
+    body sees nothing.
+
+    **Minting is not the same as taking.** A body that re-borrows *its own*
+    `&(mut) T` parameter is sound — that is one borrow path, not two. The
+    conflict needs a **second, independent path** to the same object. So a
+    signature taking `&mut T` does not make a body hazardous (that rule is
+    self-referential and turned `SMB`'s 2 real sites into 69); forming a `&mut T`
+    from something that is *not* one of the body's own reference parameters does.
+
+    The port never spells the raw's type at the mint — `UpdateMbNeighbourInfo\
+    ForNextSlice` writes `let pMb = ...` off the layer's macroblock list with no
+    annotation — so the type is taken from the **callee's** signature instead:
+    `UpdateMbNeighbor(pCurDq, &mut *pMb, ..)` mints a `&mut SMB` because
+    `UpdateMbNeighbor`'s second parameter is one. That is the only inference in
+    this tool and it is a cheap one.
+
+    Still an over-approximation, the same trade the plane census makes with
+    `in-fork`: a false positive costs a read, a false negative is silent UB with
+    no gate behind it.
+    """
+    names, mut_takers, own_refs, mut_pos = set(), set(), {}, {}
+    for rel, lines in files:
+        for name, b, end, _roots, _pp in split_bodies(lines):
+            names.add(name)
+            head, _ = signature(lines, name, b)
+            pos = mut_ref_positions(head)
+            if pos:
+                mut_takers.add(name)
+                mut_pos[name] = mut_pos.get(name, set()) | pos
+            own_refs[name] = {m.group(1)
+                              for m in REF_PARAM_RE.finditer(head)}
+    direct, calls = set(), {}
+    for rel, lines in files:
+        for name, b, end, _roots, _pp in split_bodies(lines):
+            mine = own_refs.get(name, set())
+            raws = set()
+            for j in range(b, end + 1):
+                mm = RAW_LOCAL_RE.search(strip_comment(lines[j]))
+                if mm:
+                    raws.add(mm.group(1))
+            hit, out_calls = False, set()
+            for j in range(b, end + 1):
+                s_ = strip_comment(lines[j])
+                for mm in re.finditer(r"\b([A-Za-z_][A-Za-z0-9_]*)\s*\(", s_):
+                    g = mm.group(1)
+                    if g == name or g not in names:
+                        continue
+                    out_calls.add(g)
+                    if g not in mut_takers:
+                        continue
+                    # the callee's signature types the argument: a `&mut *x`
+                    # handed to a `&mut T` parameter is a `&mut T`.
+                    args = split_top(call_args(lines, j, end, g, mm.end() - 1))
+                    for k in mut_pos.get(g, ()):
+                        if k >= len(args):
+                            continue
+                        am = re.search(
+                            r"&\s*mut\s*\(?\s*\*\s*([A-Za-z_][A-Za-z0-9_]*)", args[k])
+                        if am and am.group(1) not in mine:
+                            hit = True
+                # a mint with no call around it, where the raw *is* annotated
+                for mm in re.finditer(
+                        r"&\s*mut\s*\(?\s*\*\s*([A-Za-z_][A-Za-z0-9_]*)", s_):
+                    if mm.group(1) in raws and mm.group(1) not in mine:
+                        hit = True
+            calls[name] = calls.get(name, set()) | out_calls
+            if hit:
+                direct.add(name)
+    closure = set(direct)
+    changed = True
+    while changed:
+        changed = False
+        for f, gs in calls.items():
+            if f not in closure and (gs & closure):
+                closure.add(f)
+                changed = True
+    return closure, direct
+
+
+def scan_shape_d(files, closure):
+    """A `&(mut) CTX_TYPE` **argument** is strongly protected for the whole call;
+    if anything the callee reaches re-borrows the same object, that is UB — F114b.
+
+    The raw parameter never had a protector and neither does the C++, so, like
+    shape C, the conversion *creates* this rather than exposing it. `&T` counts:
+    a shared reference retags harmlessly and still protects, which is precisely
+    what made `AddSliceBoundary(pCurMb: &SMB)` — "it only reads" — unsound.
+    """
+    out = []
+    for rel, lines in files:
+        for name, b, end, _roots, _pp in split_bodies(lines):
+            head, start = signature(lines, name, b)
+            m = REF_PARAM_RE.search(head)
+            if not m:
+                continue
+            if name not in closure:
+                continue
+            out.append(Hazard("D", rel, name, m.group(1), start + 1, start + 1,
+                              start + 1,
+                              ("&mut " if m.group(2) else "&") + CTX_TYPE,
+                              lines[start].strip()))
+    return out
+
 def scan():
     callees = ctx_taking_callees()
     if not callees:
@@ -413,13 +701,16 @@ def scan():
     fields = owning_fields()
     callee_re = re.compile(r"\b(" + "|".join(sorted(map(re.escape, callees))) + r")\s*\(")
     hazards = []
-    for path in sorted(SRC.rglob("*.rs")):
-        rel = str(path.relative_to(SRC))
-        lines = path.read_text().splitlines()
+    files = [(str(path.relative_to(SRC)), path.read_text().splitlines())
+             for path in sorted(SRC.rglob("*.rs"))]
+    closure, _direct = reborrow_closure(files)
+    hazards += scan_shape_d(files, closure)
+    for rel, lines in files:
         for caller, b, end, roots, pp in split_bodies(lines):
             roots = body_roots(lines, b, end, roots, pp, fields)
             if not roots:
                 continue
+            hazards += scan_shape_c(rel, lines, caller, b, end, roots)
             body = range(b, end + 1)
 
             # --- shape B: argument evaluation order ---------------------------
@@ -565,6 +856,8 @@ def main():
 
     A = [h for h in hazards if h.shape == "A"]
     B = [h for h in hazards if h.shape == "B"]
+    C = [h for h in hazards if h.shape == "C"]
+    D = [h for h in hazards if h.shape == "D"]
 
     if a.sites:
         for h in sorted(hazards, key=lambda x: (x.file, x.derive_ln)):
@@ -573,11 +866,23 @@ def main():
                 print(f"     derive {h.derive_ln:5d}  {h.text[:96]}")
                 print(f"     call   {h.call_ln:5d}  {h.callee}(...)  <-- retags the whole context")
                 print(f"     use    {h.use_ln:5d}  `{h.binding}` read after the call")
-            else:
+            elif h.shape == "B":
                 print(f"B  {h.file}:{h.call_ln}  in {h.caller}()")
                 print(f"     call   {h.call_ln:5d}  {h.text[:96]}")
                 print(f"            argument order: `{h.callee}` takes the retag, a later "
                       f"argument still reads through the raw")
+            elif h.shape == "C":
+                print(f"C  {h.file}:{h.derive_ln}  in {h.caller}()")
+                print(f"     derive {h.derive_ln:5d}  {h.text[:96]}")
+                print(f"     borrow {h.call_ln:5d}  {h.callee}  <-- safe borrow of the "
+                      f"same field pops the raw")
+                print(f"     use    {h.use_ln:5d}  `{h.binding}` read after the borrow")
+            else:
+                print(f"D  {h.file}:{h.derive_ln}  in {h.caller}()")
+                print(f"     param  {h.derive_ln:5d}  {h.binding}: {h.callee}  "
+                      f"<-- strongly protected for the whole call")
+                print(f"            and {h.caller} can reach a `&mut {CTX_TYPE}` "
+                      f"re-borrow of what it names")
         print()
 
     byfile = collections.Counter(h.file for h in hazards)
@@ -585,16 +890,23 @@ def main():
     bycallee = collections.Counter(h.callee for h in hazards)
 
     w = max([len(f) for f in byfile] + [12])
-    print(f"{'file':<{w}}  sites   (A=held cursor, B=argument order)")
+    print(f"{'file':<{w}}  sites   (A=held cursor, B=arg order, "
+          f"C=safe-borrow pop, D=protector)")
     for f, n in byfile.most_common():
-        na = sum(1 for h in A if h.file == f)
-        print(f"{f:<{w}}  {n:5d}   A={na} B={n - na}")
+        c = collections.Counter(h.shape for h in hazards if h.file == f)
+        print(f"{f:<{w}}  {n:5d}   A={c['A']} B={c['B']} C={c['C']} D={c['D']}")
     bindings = {(h.file, h.caller, h.binding) for h in A}
     print(f"\n{len(hazards)} hazardous sites in {len(bycaller)} callers, "
           f"across {len(bycallee)} distinct ctx-taking callees.")
     print(f"  shape A (a cursor held across the call): {len(A)} sites, "
           f"{len(bindings)} distinct cursors at risk")
     print(f"  shape B (argument evaluation order):     {len(B)} sites")
+    print(f"  shape C (raw popped by a safe borrow):   {len(C)} sites   [F114a]")
+    print(f"  shape D (a reference argument protects): {len(D)} sites   [F114b]")
+    if C or D:
+        print("  C and D are hazards the conversion *creates*, not ones it exposes:"
+              "\n  both are sound while the parent is raw. Pre-conversion Miri cannot "
+              "find them.")
     if bycaller:
         print("\nworst callers:")
         for c, n in bycaller.most_common(8):
