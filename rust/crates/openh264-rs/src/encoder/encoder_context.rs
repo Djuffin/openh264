@@ -159,6 +159,37 @@ pub struct SPicData {
     pub pDecMb: [*mut u8; 3],
     pub pRefMb: [*mut u8; 3],
     pub pCsMb: [*mut u8; 3],
+    /// The macroblock these four point at, in macroblocks — **T9.B30, and the port's
+    /// own field**, not the C++'s.
+    ///
+    /// Every one of the twelve pointers above is the same function of this pair and a
+    /// picture: `plane(i) + ((iMbX + iMbY * stride) << (4 for luma, 3 for chroma))`,
+    /// which is exactly how `WelsMdIntraInit`/`WelsMdInterInit` stamp them. A reader
+    /// that has the pair and the picture does not need the pointer, and a coordinate
+    /// is the one form of this information no retag can invalidate (S54's value half,
+    /// F112's rule for the arena's roots).
+    ///
+    /// It is carried here rather than fetched from `SMB` because three of the readers
+    /// have neither an `SMB` nor a slice in scope — `WelsMdI16x16`, `WelsMdIntraChroma`
+    /// and (for its chroma half) `WelsMdIntraSecondaryModesEnc` — and threading a
+    /// fourth parameter through their dispatch slots would be a bigger change than
+    /// the eight bytes this costs.
+    pub iMbX: i32,
+    pub iMbY: i32,
+}
+
+impl SPicData {
+    /// The macroblock's origin in luma samples — `(iMbX << 4, iMbY << 4)`.
+    #[inline]
+    pub fn luma_origin(&self) -> (isize, isize) {
+        ((self.iMbX as isize) << 4, (self.iMbY as isize) << 4)
+    }
+
+    /// The macroblock's origin in chroma samples — `(iMbX << 3, iMbY << 3)`.
+    #[inline]
+    pub fn chroma_origin(&self) -> (isize, isize) {
+        ((self.iMbX as isize) << 3, (self.iMbY as isize) << 3)
+    }
 }
 
 impl Default for SPicData {
@@ -168,6 +199,8 @@ impl Default for SPicData {
             pDecMb: [std::ptr::null_mut(); 3],
             pRefMb: [std::ptr::null_mut(); 3],
             pCsMb: [std::ptr::null_mut(); 3],
+            iMbX: 0,
+            iMbY: 0,
         }
     }
 }

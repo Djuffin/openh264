@@ -273,7 +273,12 @@ assert_size!(SSliceCtx, 48);
 // `SSlice`, which embeds it, is **6544** (was 1520).
 // **5584 since T6.F0**: `pEncSad`, the last alias into an `SPicture`, is deleted —
 // one pointer plus the 8 bytes of padding its removal let the compiler reclaim.
-assert_size!(SMbCache, 5584);
+// **+16 at T9.B30**: `SPicData` gains `iMbX`/`iMbY` (8 bytes), and `SMbCache` is
+// `repr(C, align(16))`, so the struct rounds to the next multiple of 16. The pair is
+// the port's own field — the coordinate the twelve plane pointers are a function of —
+// and it is what lets a reader with no `SMB` in scope build a cursor. See the field's
+// doc in `encoder_context.rs`.
+assert_size!(SMbCache, 5600);
 // 152 in the C++ and in this port until **T6.C1**, which moved the five
 // per-macroblock scratch arrays the C++ reaches by pointer (`sMv`, `pRefIndex`,
 // `pSadCost`, `pIntra4x4PredMode`, `pNonZeroCount`) into the struct as inline

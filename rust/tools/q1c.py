@@ -450,20 +450,36 @@ ADDR_OF_FIELD_RE = re.compile(
 
 
 def safe_borrows_of_field(line):
-    """Every `&(mut) (*root).field` / `&(mut) root.field` in one line.
+    """Every **`&mut`** `(*root).field` / `root.field` in one line.
 
     Shape C's invalidating half. The borrow is usually not a statement of its
     own — F114a's was an argument three calls deep,
     `func(blk4x4_mut(&mut (*pMbCache).sCoeffLevel, 0), pFF, pMF)` — so this
     matches anywhere in the line rather than only at a binding.
+
+    **`&mut` only, since T9.B30 — this used to match `&` as well and over-reported.**
+    The invalidation shape C models is a `Unique` retag popping a sibling
+    `SharedReadWrite` raw. A **shared** reborrow of the same field is a *read*
+    through the parent, and a read access does not remove `SharedReadWrite` items
+    above the tag it reaches through: the raw survives, the `SharedReadOnly` is
+    pushed on top of it, and the next write through the raw pops that in turn. So
+    `&(*p).field` beside a raw into the same field is sound, and reporting it as a
+    hazard teaches sessions to ignore the scanner — the failure mode S55 is about,
+    arriving from the over-report side rather than the zero side.
+
+    Calibrated the same way it was introduced: with this narrowing, `q1c.py --type
+    SMbCache --kind ref` at `0bfc7687^` still reports F114a's four bodies —
+    `WelsEncRecI4x4Y`, `WelsEncRecI16x16Y`, `WelsEncInterY`, `WelsEncRecUV` — with
+    the Miri-reported one line-for-line (derive `svc_encode_mb.rs:650`, borrow
+    `:684`), because every one of those borrows is a `&mut`.
     """
     out = set()
     for m in re.finditer(
-            r"&\s*(?:mut\s+)?\(\s*\*\s*([A-Za-z_][A-Za-z0-9_]*)\s*\)"
+            r"&\s*mut\s+\(\s*\*\s*([A-Za-z_][A-Za-z0-9_]*)\s*\)"
             r"\s*\.\s*([A-Za-z_][A-Za-z0-9_]*)", line):
         out.add((m.group(1), m.group(2)))
     for m in re.finditer(
-            r"&\s*(?:mut\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*\.\s*([A-Za-z_][A-Za-z0-9_]*)",
+            r"&\s*mut\s+([A-Za-z_][A-Za-z0-9_]*)\s*\.\s*([A-Za-z_][A-Za-z0-9_]*)",
             line):
         out.add((m.group(1), m.group(2)))
     return out

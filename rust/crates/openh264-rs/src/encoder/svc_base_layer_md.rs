@@ -41,7 +41,7 @@ use crate::encoder::picture::{RecPicId, SrcPicId};
 use crate::common::mc::{mc_chroma, mc_luma, McChroma_c, McLuma_c};
 use crate::common::copy_mb::{copy_16x16, copy_16x8, copy_4x4, copy_4x8, copy_8x16, copy_8x4, copy_8x8};
 use crate::common::sad_common::sample_sad;
-use crate::encoder::sample::satd_16x16;
+use crate::encoder::sample::{satd_16x16, satd_4x4};
 use crate::safe::plane::{PlaneCursor, PlaneCursorMut};
 use crate::encoder::encoder_context::{sWelsEncCtx, SMVComponentUnit, SMVUnitXY, SPicData, ctx_func_list};
 use crate::encoder::encoder_context::ctx_vaa;
@@ -342,6 +342,9 @@ pub unsafe fn WelsMdIntraInit(
         let mut iStrideUV = pEncPicture.stride(1);
         let mut iOffsetY = (kiMbX + kiMbY * iStrideY) << 4;
         let mut iOffsetUV = (kiMbX + kiMbY * iStrideUV) << 3;
+        // T9.B30: the pair the twelve pointers are a function of, stamped beside them.
+        (*pMbCache).SPicData.iMbX = kiMbX;
+        (*pMbCache).SPicData.iMbY = kiMbY;
         (*pMbCache).SPicData.pEncMb[0] = (*pCurLayer).pEncData[0].offset(iOffsetY as isize);
         (*pMbCache).SPicData.pEncMb[1] = (*pCurLayer).pEncData[1].offset(iOffsetUV as isize);
         (*pMbCache).SPicData.pEncMb[2] = (*pCurLayer).pEncData[2].offset(iOffsetUV as isize);
@@ -365,6 +368,8 @@ pub unsafe fn WelsMdIntraInit(
         (*pMbCache).SPicData.pDecMb[1] = pDecPic.pData[1].offset(iOffsetUV as isize);
         (*pMbCache).SPicData.pDecMb[2] = pDecPic.pData[2].offset(iOffsetUV as isize);
     } else {
+        (*pMbCache).SPicData.iMbX = kiMbX;
+        (*pMbCache).SPicData.iMbY = kiMbY;
         (*pMbCache).SPicData.pEncMb[0] = (*pMbCache).SPicData.pEncMb[0].add(MB_WIDTH_LUMA);
         (*pMbCache).SPicData.pEncMb[1] = (*pMbCache).SPicData.pEncMb[1].add(MB_WIDTH_CHROMA);
         (*pMbCache).SPicData.pEncMb[2] = (*pMbCache).SPicData.pEncMb[2].add(MB_WIDTH_CHROMA);
@@ -420,7 +425,9 @@ pub unsafe extern "C" fn WelsMdI4x4(
     let mut iBestPredBufferNum: i32 = 0;
     let mut iCosti4x4: i32 = 0;
 
-    let pfSatd4x4 = (*pFunc).sSampleDealingFuncs.pfSampleSatdRaw[BLOCK_4x4].unwrap();
+    // `pfSampleSatd[BLOCK_4x4]`, a constant index — called direct (F118).
+    let pEncPicture = layer_enc_pic(pCurDqLayer).expect("the layer's source picture is bound");
+    let (kiMbOrgX, kiMbOrgY) = (*pMbCache).SPicData.luma_origin();
 
     for i in 0..16usize {
         let kiOffset = kpNeighborIntraToI4x4[i] as usize;
@@ -457,8 +464,17 @@ pub unsafe extern "C" fn WelsMdI4x4(
                 .offset(((1 - iBestPredBufferNum) << 4) as isize);
 
             (*pFunc).pfGetLumaI4x4Pred[iCurMode as usize].unwrap()(pDst, pCurDec, kiLineSizeDec);
-            let iCurCost = pfSatd4x4(pDst, 4, pCurEnc, kiLineSizeEnc)
-                + lambda[(iPredMode == g_kiMapModeI4x4[iCurMode as usize] as i32) as usize];
+            let iCurCost = {
+                let cPred = PlaneCursor::new(
+                    &(*pMbCache).sMemPredBlk4[((1 - iBestPredBufferNum) << 4) as usize..][..16],
+                    0,
+                    4,
+                );
+                let cEnc = pEncPicture
+                    .plane(0)
+                    .cursor(kiMbOrgX + iCoordinateX as isize, kiMbOrgY + iCoordinateY as isize);
+                satd_4x4(&cPred, &cEnc)
+            } + lambda[(iPredMode == g_kiMapModeI4x4[iCurMode as usize] as i32) as usize];
 
             if iCurCost < iBestCost {
                 iBestMode = iCurMode;
@@ -538,7 +554,9 @@ pub unsafe extern "C" fn WelsMdI4x4Fast(
     let mut iBestPredBufferNum: i32 = 0;
     let mut iCosti4x4: i32 = 0;
 
-    let pfMdCost4x4 = (*pFunc).sSampleDealingFuncs.md_cost_raw(BLOCK_4x4).unwrap();
+    let pfMdCost4x4 = (*pFunc).sSampleDealingFuncs.md_cost(BLOCK_4x4).unwrap();
+    let pEncPicture = layer_enc_pic(pCurDqLayer).expect("the layer's source picture is bound");
+    let (kiMbOrgX, kiMbOrgY) = (*pMbCache).SPicData.luma_origin();
 
     for i in 0..16usize {
         let kiOffset = kpNeighborIntraToI4x4[i] as usize;
@@ -566,19 +584,31 @@ pub unsafe extern "C" fn WelsMdI4x4Fast(
 
         // `lambda[iPredMode == g_kiMapModeI4x4[iCurMode]]`, hoisted so the mode-scoring
         // below reads like the C++ one-liner it is translating.
+        // **T9.B30**: the macro takes the prediction buffer's *offset* rather than a
+        // pointer. `pfGetLumaI4x4Pred` is still a raw slot (intra prediction reads the
+        // reconstruction plane — session C's), so the raw is derived inside, at that
+        // call and nowhere else; the cost then takes a **shared** borrow of the same
+        // field, which does not pop it the way a `&mut` would (F114a's boundary).
         macro_rules! score {
-            ($mode:expr, $dst:expr) => {{
+            ($mode:expr, $dst_off:expr) => {{
                 let m: i8 = $mode;
-                (*pFunc).pfGetLumaI4x4Pred[m as usize].unwrap()($dst, pCurDec, kiLineSizeDec);
-                pfMdCost4x4($dst, 4, pCurEnc, kiLineSizeEnc)
-                    + lambda[(iPredMode == g_kiMapModeI4x4[m as usize]) as usize]
+                let off: usize = $dst_off;
+                (*pFunc).pfGetLumaI4x4Pred[m as usize].unwrap()(
+                    std::ptr::addr_of_mut!((*pMbCache).sMemPredBlk4).cast::<u8>().add(off),
+                    pCurDec,
+                    kiLineSizeDec,
+                );
+                pfMdCost4x4(
+                    &PlaneCursor::new(&(*pMbCache).sMemPredBlk4[off..][..16], 0, 4),
+                    &pEncPicture
+                        .plane(0)
+                        .cursor(kiMbOrgX + iCoordinateX as isize, kiMbOrgY + iCoordinateY as isize),
+                ) + lambda[(iPredMode == g_kiMapModeI4x4[m as usize]) as usize]
             }};
         }
         macro_rules! alt_buf {
             () => {
-                std::ptr::addr_of_mut!((*pMbCache).sMemPredBlk4)
-                    .cast::<u8>()
-                    .offset(((1 - iBestPredBufferNum) << 4) as isize)
+                ((1 - iBestPredBufferNum) << 4) as usize
             };
         }
         // `if (iCurCost < iBestCost) { best = cur; iBestPredBufferNum = 1 - …; }`
@@ -595,10 +625,7 @@ pub unsafe extern "C" fn WelsMdI4x4Fast(
         if iAvailCount == 9 || iAvailCount == 7 {
             //I4_PRED_DC(2)
             iBestMode = I4_PRED_DC;
-            let pDst = std::ptr::addr_of_mut!((*pMbCache).sMemPredBlk4)
-                .cast::<u8>()
-                .offset((iBestPredBufferNum << 4) as isize);
-            iBestCost = score!(I4_PRED_DC, pDst);
+            iBestCost = score!(I4_PRED_DC, (iBestPredBufferNum << 4) as usize);
 
             //I4_PRED_H(1)
             let iCostH = score!(I4_PRED_H, alt_buf!());
@@ -746,7 +773,13 @@ pub unsafe extern "C" fn WelsMdIntraChroma(
     let iAvailCount = g_kiIntraChromaAvailMode[iOffset][4] as i32;
     let kpAvailMode = &g_kiIntraChromaAvailMode[iOffset];
 
-    let pfMdCost8x8 = pFunc.sSampleDealingFuncs.md_cost_raw(BLOCK_8x8).unwrap();
+    let pfMdCost8x8 = pFunc.sSampleDealingFuncs.md_cost(BLOCK_8x8).unwrap();
+    // **T9.B30**: the two source blocks by coordinate. This function has neither an
+    // `SMB` nor a slice in scope — it is one of the three readers the carrier's
+    // `iMbX`/`iMbY` exist for.
+    let pEncPicture = layer_enc_pic(pCurDqLayer).expect("the layer's source picture is bound");
+    let (kiChrOrgX, kiChrOrgY) = (*pMbCache).SPicData.chroma_origin();
+    let kiPredOff = mem_pred_chroma_off((*pMbCache).uiMemPredLumaHalf);
 
     let mut iBestMode = kpAvailMode[0] as i32;
     for i in 0..iAvailCount as usize {
@@ -754,12 +787,20 @@ pub unsafe extern "C" fn WelsMdIntraChroma(
         debug_assert!((0..7).contains(&iCurMode));
 
         let pfChromaPred = pFunc.pfGetChromaPred[iCurMode as usize].unwrap();
+        // `pDstChma` is `sMemPredMb` at the chroma half's `iChmaIdx` 128-byte side;
+        // as an offset it is that side's start, and the Cr block sits 64 beyond it.
+        let kiDstOff = kiPredOff + 128 * iChmaIdx;
         pfChromaPred(pDstChma, pDecCb, kiLineSizeDec); //Cb
-        let mut iCurCost = pfMdCost8x8(pDstChma, 8, pEncCb, kiLineSizeEnc);
+        let mut iCurCost = pfMdCost8x8(
+            &PlaneCursor::new(&(*pMbCache).sMemPredMb[kiDstOff..][..64], 0, 8),
+            &pEncPicture.plane(1).cursor(kiChrOrgX, kiChrOrgY),
+        );
 
         pfChromaPred(pDstChma.add(64), pDecCr, kiLineSizeDec); //Cr
-        iCurCost += pfMdCost8x8(pDstChma.add(64), 8, pEncCr, kiLineSizeEnc)
-            + iLambda * BsSizeUE(crate::encoder::md::g_kiMapModeIntraChroma[iCurMode as usize] as u32) as i32;
+        iCurCost += pfMdCost8x8(
+            &PlaneCursor::new(&(*pMbCache).sMemPredMb[kiDstOff + 64..][..64], 0, 8),
+            &pEncPicture.plane(2).cursor(kiChrOrgX, kiChrOrgY),
+        ) + iLambda * BsSizeUE(crate::encoder::md::g_kiMapModeIntraChroma[iCurMode as usize] as u32) as i32;
         if iCurCost < iBestCost {
             iBestMode = iCurMode;
             iBestCost = iCurCost;
@@ -952,6 +993,8 @@ pub unsafe fn WelsMdInterInit(
         let kiRefStrideUV = (*pCurLayer).sRefPicView.sPlanes.iLineSize[1];
         let kiCurStrideY = (kiMbX + kiMbY * kiRefStrideY) << 4;
         let kiCurStrideUV = (kiMbX + kiMbY * kiRefStrideUV) << 3;
+        (*pMbCache).SPicData.iMbX = kiMbX;
+        (*pMbCache).SPicData.iMbY = kiMbY;
         (*pMbCache).SPicData.pRefMb[0] =
             (*pCurLayer).sRefPicView.sPlanes.pData[0].offset(kiCurStrideY as isize);
         (*pMbCache).SPicData.pRefMb[1] =
@@ -959,6 +1002,8 @@ pub unsafe fn WelsMdInterInit(
         (*pMbCache).SPicData.pRefMb[2] =
             (*pCurLayer).sRefPicView.sPlanes.pData[2].offset(kiCurStrideUV as isize);
     } else {
+        (*pMbCache).SPicData.iMbX = kiMbX;
+        (*pMbCache).SPicData.iMbY = kiMbY;
         (*pMbCache).SPicData.pRefMb[0] = (*pMbCache).SPicData.pRefMb[0].add(MB_WIDTH_LUMA);
         (*pMbCache).SPicData.pRefMb[1] = (*pMbCache).SPicData.pRefMb[1].add(MB_WIDTH_CHROMA);
         (*pMbCache).SPicData.pRefMb[2] = (*pMbCache).SPicData.pRefMb[2].add(MB_WIDTH_CHROMA);
