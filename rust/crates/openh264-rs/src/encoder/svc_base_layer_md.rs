@@ -996,7 +996,7 @@ pub unsafe extern "C" fn WelsMdP16x8(
         (*pSlice).sMvc[0] = (*sMe16x8).sMvBase;
         (*pSlice).uiMvcNum = 1;
 
-        PredInter16x8Mv(pMbCache, i << 3, 0, &mut (*sMe16x8).sMvp);
+        PredInter16x8Mv(&(*pMbCache).sMvComponents, i << 3, 0, &mut (*sMe16x8).sMvp);
         (*pFunc).pfMotionSearch[0].expect("pfMotionSearch[0] unset")(
             pFunc,
             pCurDqLayer,
@@ -1004,7 +1004,7 @@ pub unsafe extern "C" fn WelsMdP16x8(
             pSlice,
         );
         UpdateP16x8Motion2Cache(
-            pMbCache,
+            &mut (*pMbCache).sMvComponents,
             i << 3,
             (*pWelsMd).uiRef as i8,
             &mut (*sMe16x8).sMv,
@@ -1048,7 +1048,7 @@ pub unsafe extern "C" fn WelsMdP8x16(
         (*pSlice).sMvc[0] = (*sMe8x16).sMvBase;
         (*pSlice).uiMvcNum = 1;
 
-        PredInter8x16Mv(pMbCache, i << 2, 0, &mut (*sMe8x16).sMvp);
+        PredInter8x16Mv(&(*pMbCache).sMvComponents, i << 2, 0, &mut (*sMe8x16).sMvp);
         (*pFunc).pfMotionSearch[0].expect("pfMotionSearch[0] unset")(
             pFunc,
             pCurLayer,
@@ -1056,7 +1056,7 @@ pub unsafe extern "C" fn WelsMdP8x16(
             pSlice,
         );
         UpdateP8x16Motion2Cache(
-            pMbCache,
+            &mut (*pMbCache).sMvComponents,
             i << 2,
             (*pWelsMd).uiRef as i8,
             &mut (*sMe8x16).sMv,
@@ -1113,7 +1113,7 @@ pub unsafe extern "C" fn WelsMdP4x4(
         (*pSlice).uiMvcNum = 1;
 
         PredMv(
-            &(*pMbCache).sMvComponents as *const SMVComponentUnit,
+            &(*pMbCache).sMvComponents,
             iPartIdx as i8,
             1,
             (*pWelsMd).uiRef as i32,
@@ -1126,7 +1126,7 @@ pub unsafe extern "C" fn WelsMdP4x4(
             pSlice,
         );
         UpdateP4x4Motion2Cache(
-            pMbCache,
+            &mut (*pMbCache).sMvComponents,
             iPartIdx,
             (*pWelsMd).uiRef as i8,
             &mut (*sMe4x4).sMv,
@@ -1183,7 +1183,7 @@ pub unsafe extern "C" fn WelsMdP8x4(
         (*pSlice).uiMvcNum = 1;
 
         PredMv(
-            &(*pMbCache).sMvComponents as *const SMVComponentUnit,
+            &(*pMbCache).sMvComponents,
             iPartIdx as i8,
             2,
             (*pWelsMd).uiRef as i32,
@@ -1196,7 +1196,7 @@ pub unsafe extern "C" fn WelsMdP8x4(
             pSlice,
         );
         UpdateP8x4Motion2Cache(
-            pMbCache,
+            &mut (*pMbCache).sMvComponents,
             iPartIdx,
             (*pWelsMd).uiRef as i8,
             &mut (*sMe8x4).sMv,
@@ -1253,7 +1253,7 @@ pub unsafe extern "C" fn WelsMdP4x8(
         (*pSlice).uiMvcNum = 1;
 
         PredMv(
-            &(*pMbCache).sMvComponents as *const SMVComponentUnit,
+            &(*pMbCache).sMvComponents,
             iPartIdx as i8,
             1,
             (*pWelsMd).uiRef as i32,
@@ -1266,7 +1266,7 @@ pub unsafe extern "C" fn WelsMdP4x8(
             pSlice,
         );
         UpdateP4x8Motion2Cache(
-            pMbCache,
+            &mut (*pMbCache).sMvComponents,
             iPartIdx,
             (*pWelsMd).uiRef as i8,
             &mut (*sMe4x8).sMv,
@@ -1458,7 +1458,7 @@ pub unsafe fn WelsMdPSkipEnc(
     let mut iSadCostChroma: i32;
     let iSadCostMb: i32;
 
-    PredSkipMv(pMbCache, &mut sMvp);
+    PredSkipMv(&(*pMbCache).sMvComponents, &mut sMvp);
 
     // Special case, need to clip the vector //
     let sQpelMvp = SMVUnitXY {
@@ -1659,7 +1659,7 @@ pub unsafe fn WelsMdInterMbRefinement(
                 16,
             );
             UpdateP16x16MotionInfo(
-                pMbCache,
+                &mut (*pMbCache).sMvComponents,
                 pCurMb,
                 (*pWelsMd).uiRef as i8,
                 &mut (*pWelsMd).sMe.sMe16x16.sMv,
@@ -1709,7 +1709,7 @@ pub unsafe fn WelsMdInterMbRefinement(
                 InitMeRefinePointer(&mut sMeRefine, iPixStride);
                 iPixStride += ME_REFINE_BUF_STRIDE_BLK8;
                 PredInter16x8Mv(
-                    pMbCache,
+                    &(*pMbCache).sMvComponents,
                     iIdx,
                     (*pWelsMd).uiRef as i8,
                     &mut (*pWelsMd).sMe.sMe16x8[i].sMvp,
@@ -1724,7 +1724,7 @@ pub unsafe fn WelsMdInterMbRefinement(
                     8,
                 );
                 UpdateP16x8MotionInfo(
-                    pMbCache,
+                    &mut (*pMbCache).sMvComponents,
                     pCurMb,
                     iIdx,
                     (*pWelsMd).uiRef as i8,
@@ -1759,7 +1759,7 @@ pub unsafe fn WelsMdInterMbRefinement(
                 InitMeRefinePointer(&mut sMeRefine, iPixStride);
                 iPixStride += ME_REFINE_BUF_WIDTH_BLK8;
                 PredInter8x16Mv(
-                    pMbCache,
+                    &(*pMbCache).sMvComponents,
                     iIdx,
                     (*pWelsMd).uiRef as i8,
                     &mut (*pWelsMd).sMe.sMe8x16[i].sMvp,
@@ -1774,7 +1774,7 @@ pub unsafe fn WelsMdInterMbRefinement(
                     16,
                 );
                 update_P8x16_motion_info(
-                    pMbCache,
+                    &mut (*pMbCache).sMvComponents,
                     pCurMb,
                     iIdx,
                     (*pWelsMd).uiRef as i8,
@@ -1812,7 +1812,7 @@ pub unsafe fn WelsMdInterMbRefinement(
                         //luma
                         InitMeRefinePointer(&mut sMeRefine, g_kiPixStrideIdx8x8[i]);
                         PredMv(
-                            &(*pMbCache).sMvComponents as *const SMVComponentUnit,
+                            &(*pMbCache).sMvComponents,
                             iBlk8Idx as i8,
                             2,
                             (*pWelsMd).uiRef as i32,
@@ -1828,7 +1828,7 @@ pub unsafe fn WelsMdInterMbRefinement(
                             8,
                         );
                         UpdateP8x8MotionInfo(
-                            pMbCache,
+                            &mut (*pMbCache).sMvComponents,
                             pCurMb,
                             iBlk8Idx,
                             (*pWelsMd).uiRef as i8,
@@ -1881,7 +1881,7 @@ pub unsafe fn WelsMdInterMbRefinement(
                             let iBlk4x4Idx = iBlk8Idx + j as i32;
                             InitMeRefinePointer(&mut sMeRefine, g_kiPixStrideIdx4x4[i][j]);
                             PredMv(
-                                &(*pMbCache).sMvComponents as *const SMVComponentUnit,
+                                &(*pMbCache).sMvComponents,
                                 iBlk4x4Idx as i8,
                                 1,
                                 (*pWelsMd).uiRef as i32,
@@ -1897,7 +1897,7 @@ pub unsafe fn WelsMdInterMbRefinement(
                                 4,
                             );
                             UpdateP4x4MotionInfo(
-                                pMbCache,
+                                &mut (*pMbCache).sMvComponents,
                                 pCurMb,
                                 iBlk4x4Idx,
                                 (*pWelsMd).uiRef as i8,
@@ -1952,7 +1952,7 @@ pub unsafe fn WelsMdInterMbRefinement(
                             let iBlk4x4Idx = iBlk8Idx + ((j as i32) << 1);
                             InitMeRefinePointer(&mut sMeRefine, g_kiPixStrideIdx4x4[i][j << 1]);
                             PredMv(
-                                &(*pMbCache).sMvComponents as *const SMVComponentUnit,
+                                &(*pMbCache).sMvComponents,
                                 iBlk4x4Idx as i8,
                                 2,
                                 (*pWelsMd).uiRef as i32,
@@ -1968,7 +1968,7 @@ pub unsafe fn WelsMdInterMbRefinement(
                                 4,
                             );
                             UpdateP8x4MotionInfo(
-                                pMbCache,
+                                &mut (*pMbCache).sMvComponents,
                                 pCurMb,
                                 iBlk4x4Idx,
                                 (*pWelsMd).uiRef as i8,
@@ -2023,7 +2023,7 @@ pub unsafe fn WelsMdInterMbRefinement(
                             let iBlk4x4Idx = iBlk8Idx + j as i32;
                             InitMeRefinePointer(&mut sMeRefine, g_kiPixStrideIdx4x4[i][j]);
                             PredMv(
-                                &(*pMbCache).sMvComponents as *const SMVComponentUnit,
+                                &(*pMbCache).sMvComponents,
                                 iBlk4x4Idx as i8,
                                 1,
                                 (*pWelsMd).uiRef as i32,
@@ -2039,7 +2039,7 @@ pub unsafe fn WelsMdInterMbRefinement(
                                 8,
                             );
                             UpdateP4x8MotionInfo(
-                                pMbCache,
+                                &mut (*pMbCache).sMvComponents,
                                 pCurMb,
                                 iBlk4x4Idx,
                                 (*pWelsMd).uiRef as i8,
@@ -2259,7 +2259,7 @@ pub unsafe fn WelsMdInterDoubleCheckPskip(pCurMb: &mut SMB, pMbCache: *mut SMbCa
         if 0 == (*pCurMb).iRefIndex[0] {
             let mut sMvp = SMVUnitXY { iMvX: 0, iMvY: 0 };
 
-            PredSkipMv(pMbCache, &mut sMvp);
+            PredSkipMv(&(*pMbCache).sMvComponents, &mut sMvp);
             if LD32_MV_PUB(&sMvp) == LD32_MV_PUB(&(*pCurMb).sMv[0]) {
                 (*pCurMb).uiMbType = MB_TYPE_SKIP;
             }

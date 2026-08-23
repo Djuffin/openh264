@@ -633,7 +633,7 @@ pub unsafe extern "C" fn WelsMdBackgroundMbEnc(
     (*pMbCache).sMbMvp[0] = (*pWelsMd).sMe.sMe16x16.sMvp;
 
     UpdateP16x16MotionInfo(
-        pMbCache,
+        &mut (*pMbCache).sMvComponents,
         pCurMb,
         (*pWelsMd).uiRef as i8,
         &mut (*pWelsMd).sMe.sMe16x16.sMv,
@@ -685,10 +685,8 @@ pub unsafe extern "C" fn WelsMdBackgroundMbEnc(
 // Native Mode Decision & Motion Prediction Implementations
 // ============================================================================
 
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe extern "C" fn PredMv(
-    kpMvComp: *const SMVComponentUnit,
+pub extern "C" fn PredMv(
+    kpMvComp: &SMVComponentUnit,
     iPartIdx: i8,
     iPartW: i8,
     iRef: i32,
@@ -697,21 +695,21 @@ pub unsafe extern "C" fn PredMv(
     let kuiLeftIdx = g_kuiCache30ScanIdx[iPartIdx as usize] as usize - 1;
     let kuiTopIdx = g_kuiCache30ScanIdx[iPartIdx as usize] as usize - 6;
 
-    let iLeftRef = (*kpMvComp).iRefIndexCache[kuiLeftIdx] as i32;
-    let iTopRef = (*kpMvComp).iRefIndexCache[kuiTopIdx] as i32;
-    let iRightTopRef = (*kpMvComp).iRefIndexCache[kuiTopIdx + iPartW as usize] as i32;
+    let iLeftRef = kpMvComp.iRefIndexCache[kuiLeftIdx] as i32;
+    let iTopRef = kpMvComp.iRefIndexCache[kuiTopIdx] as i32;
+    let iRightTopRef = kpMvComp.iRefIndexCache[kuiTopIdx + iPartW as usize] as i32;
     let iDiagonalRef: i32;
 
-    let sMvA = (*kpMvComp).sMotionVectorCache[kuiLeftIdx];
-    let sMvB = (*kpMvComp).sMotionVectorCache[kuiTopIdx];
+    let sMvA = kpMvComp.sMotionVectorCache[kuiLeftIdx];
+    let sMvB = kpMvComp.sMotionVectorCache[kuiTopIdx];
     let sMvC: SMVUnitXY;
 
     if REF_NOT_AVAIL as i32 == iRightTopRef {
-        iDiagonalRef = (*kpMvComp).iRefIndexCache[kuiTopIdx - 1] as i32;
-        sMvC = (*kpMvComp).sMotionVectorCache[kuiTopIdx - 1];
+        iDiagonalRef = kpMvComp.iRefIndexCache[kuiTopIdx - 1] as i32;
+        sMvC = kpMvComp.sMotionVectorCache[kuiTopIdx - 1];
     } else {
         iDiagonalRef = iRightTopRef;
-        sMvC = (*kpMvComp).sMotionVectorCache[kuiTopIdx + iPartW as usize];
+        sMvC = kpMvComp.sMotionVectorCache[kuiTopIdx + iPartW as usize];
     }
 
     if (REF_NOT_AVAIL as i32 == iTopRef) && (REF_NOT_AVAIL as i32 == iDiagonalRef) && iLeftRef != REF_NOT_AVAIL as i32 {
@@ -734,10 +732,7 @@ pub unsafe extern "C" fn PredMv(
     }
 }
 
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe extern "C" fn PredSkipMv(pMbCache: *mut SMbCache, sMvp: &mut SMVUnitXY) {
-    let kpMvComp = &(*pMbCache).sMvComponents;
+pub extern "C" fn PredSkipMv(kpMvComp: &SMVComponentUnit, sMvp: &mut SMVUnitXY) {
     let kiLeftRef = kpMvComp.iRefIndexCache[6] as i32;
     let kiTopRef = kpMvComp.iRefIndexCache[1] as i32;
 
@@ -753,10 +748,7 @@ pub unsafe extern "C" fn PredSkipMv(pMbCache: *mut SMbCache, sMvp: &mut SMVUnitX
     PredMv(kpMvComp, 0, 4, 0, sMvp);
 }
 
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe extern "C" fn PredInter16x8Mv(pMbCache: *mut SMbCache, iPartIdx: i32, iRef: i8, sMvp: &mut SMVUnitXY) {
-    let kpMvComp = &(*pMbCache).sMvComponents;
+pub extern "C" fn PredInter16x8Mv(kpMvComp: &SMVComponentUnit, iPartIdx: i32, iRef: i8, sMvp: &mut SMVUnitXY) {
     if 0 == iPartIdx {
         let kiTopRef = kpMvComp.iRefIndexCache[1];
         if iRef == kiTopRef {
@@ -773,10 +765,7 @@ pub unsafe extern "C" fn PredInter16x8Mv(pMbCache: *mut SMbCache, iPartIdx: i32,
     PredMv(kpMvComp, iPartIdx as i8, 4, iRef as i32, sMvp);
 }
 
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe extern "C" fn PredInter8x16Mv(pMbCache: *mut SMbCache, iPartIdx: i32, iRef: i8, sMvp: &mut SMVUnitXY) {
-    let kpMvComp = &(*pMbCache).sMvComponents;
+pub extern "C" fn PredInter8x16Mv(kpMvComp: &SMVComponentUnit, iPartIdx: i32, iRef: i8, sMvp: &mut SMVUnitXY) {
     if 0 == iPartIdx {
         let kiLeftRef = kpMvComp.iRefIndexCache[6];
         if iRef == kiLeftRef {
@@ -798,10 +787,8 @@ pub unsafe extern "C" fn PredInter8x16Mv(pMbCache: *mut SMbCache, iPartIdx: i32,
     PredMv(kpMvComp, iPartIdx as i8, 2, iRef as i32, sMvp);
 }
 
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe extern "C" fn UpdateP16x16MotionInfo(
-    pMbCache: *mut SMbCache,
+pub extern "C" fn UpdateP16x16MotionInfo(
+    pMvComp: &mut SMVComponentUnit,
     pCurMb: &mut SMB,
     kiRef: i8,
     pMv: &mut SMVUnitXY,
@@ -810,7 +797,6 @@ pub unsafe extern "C" fn UpdateP16x16MotionInfo(
     // straight at `SMVComponentUnit* pMvComp = &pMbCache->sMvComponents;`. Two of its
     // three clauses were about parameters that are references now and cannot be null;
     // the third named `pMv`, which every caller spells `&mut …sMe.sMe16x16.sMv`.
-    let pMvComp = &mut (*pMbCache).sMvComponents;
     for i in 0..16 {
         pMvComp.iRefIndexCache[g_kuiCache30ScanIdx[i] as usize] = kiRef;
         pMvComp.sMotionVectorCache[g_kuiCache30ScanIdx[i] as usize] = *pMv;
@@ -843,12 +829,16 @@ fn butterfly1x2_ref(kiRef: i8) -> u16 {
     (((kiRef as i32) << 8) | (kiRef as i32)) as u16
 }
 
-/// `ST16 (&pMvComp->iRefIndexCache[k], kuiRef16)`.
+/// `ST16 (&pMvComp->iRefIndexCache[k], kuiRef16)` — the same two bytes, written as
+/// two bytes. **T9.D2**: the unaligned `u16` store was the transliteration, and the
+/// sign extension `BUTTERFLY1x2` puts in the high byte is what it exists to carry;
+/// `to_ne_bytes` carries it identically, and the neighbouring `pCurMb->pRefIndex`
+/// store in `UpdateP16x8MotionInfo` was already spelled this way.
 #[inline]
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-unsafe fn st16_ref_cache(pCache: *mut i8, k: usize, kuiRef16: u16) {
-    (pCache.add(k) as *mut u16).write_unaligned(kuiRef16);
+fn st16_ref_cache(pCache: &mut [i8; 30], k: usize, kuiRef16: u16) {
+    let kaRef16 = kuiRef16.to_ne_bytes();
+    pCache[k] = kaRef16[0] as i8;
+    pCache[k + 1] = kaRef16[1] as i8;
 }
 
 /// `ST64 (&pMvComp->sMotionVectorCache[k], kuiMv64)`. `BUTTERFLY4x8` zero-extends the
@@ -868,19 +858,14 @@ fn st64_mv_mb(sMv: &mut [SMVUnitXY; MB_BLOCK4x4_NUM], k: usize, mv: SMVUnitXY) {
 
 /// `mv_pred.cpp:195`. Updates ref index and MV in both `SMB` and the MB cache, P16x8.
 ///
-/// # Safety
-/// `pMbCache`, `pCurMb` (with `sMv`/`pRefIndex` allocated) and `pMv` must be valid;
 /// `kiPartIdx` must be 0 or 8.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe extern "C" fn UpdateP16x8MotionInfo(
-    pMbCache: *mut SMbCache,
+pub extern "C" fn UpdateP16x8MotionInfo(
+    pMvComp: &mut SMVComponentUnit,
     pCurMb: &mut SMB,
     kiPartIdx: i32,
     kiRef: i8,
     pMv: &mut SMVUnitXY,
 ) {
-    let pMvComp = &mut (*pMbCache).sMvComponents;
     let kiScan4Idx = g_kuiMbCountScan4Idx[kiPartIdx as usize] as usize;
     let kiCacheIdx = g_kuiCache30ScanIdx[kiPartIdx as usize] as usize;
     let kuiRef16 = butterfly1x2_ref(kiRef);
@@ -895,13 +880,13 @@ pub unsafe extern "C" fn UpdateP16x8MotionInfo(
         (*pCurMb).sMv[kiScan4Idx + i] = *pMv;
     }
 
-    let pRefCache = pMvComp.iRefIndexCache.as_mut_ptr();
-    *pRefCache.add(kiCacheIdx) = kiRef;
+    let pRefCache = &mut pMvComp.iRefIndexCache;
+    pRefCache[kiCacheIdx] = kiRef;
     st16_ref_cache(pRefCache, kiCacheIdx + 1, kuiRef16);
-    *pRefCache.add(kiCacheIdx + 3) = kiRef;
-    *pRefCache.add(kiCacheIdx + 6) = kiRef;
+    pRefCache[kiCacheIdx + 3] = kiRef;
+    pRefCache[kiCacheIdx + 6] = kiRef;
     st16_ref_cache(pRefCache, kiCacheIdx + 7, kuiRef16);
-    *pRefCache.add(kiCacheIdx + 9) = kiRef;
+    pRefCache[kiCacheIdx + 9] = kiRef;
 
     let pMvCache = &mut pMvComp.sMotionVectorCache;
     pMvCache[kiCacheIdx] = *pMv;
@@ -914,19 +899,14 @@ pub unsafe extern "C" fn UpdateP16x8MotionInfo(
 
 /// `mv_pred.cpp:235`. The C++ really does spell this one in snake case; the name is
 /// kept verbatim.
-///
-/// # Safety
-/// As [`UpdateP16x8MotionInfo`]; `kiPartIdx` must be 0 or 4.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe extern "C" fn update_P8x16_motion_info(
-    pMbCache: *mut SMbCache,
+/// `kiPartIdx` must be 0 or 4.
+pub extern "C" fn update_P8x16_motion_info(
+    pMvComp: &mut SMVComponentUnit,
     pCurMb: &mut SMB,
     kiPartIdx: i32,
     kiRef: i8,
     pMv: &mut SMVUnitXY,
 ) {
-    let pMvComp = &mut (*pMbCache).sMvComponents;
     let kiScan4Idx = g_kuiMbCountScan4Idx[kiPartIdx as usize] as usize;
     let kiCacheIdx = g_kuiCache30ScanIdx[kiPartIdx as usize] as usize;
     let kiBlkIdx = (kiPartIdx >> 2) as usize;
@@ -940,13 +920,13 @@ pub unsafe extern "C" fn update_P8x16_motion_info(
     st64_mv_mb(pMbMv, 8 + kiScan4Idx, *pMv);
     st64_mv_mb(pMbMv, 12 + kiScan4Idx, *pMv);
 
-    let pRefCache = pMvComp.iRefIndexCache.as_mut_ptr();
-    *pRefCache.add(kiCacheIdx) = kiRef;
+    let pRefCache = &mut pMvComp.iRefIndexCache;
+    pRefCache[kiCacheIdx] = kiRef;
     st16_ref_cache(pRefCache, kiCacheIdx + 1, kuiRef16);
-    *pRefCache.add(kiCacheIdx + 3) = kiRef;
-    *pRefCache.add(kiCacheIdx + 12) = kiRef;
+    pRefCache[kiCacheIdx + 3] = kiRef;
+    pRefCache[kiCacheIdx + 12] = kiRef;
     st16_ref_cache(pRefCache, kiCacheIdx + 13, kuiRef16);
-    *pRefCache.add(kiCacheIdx + 15) = kiRef;
+    pRefCache[kiCacheIdx + 15] = kiRef;
 
     let pMvCache = &mut pMvComp.sMotionVectorCache;
     pMvCache[kiCacheIdx] = *pMv;
@@ -958,19 +938,13 @@ pub unsafe extern "C" fn update_P8x16_motion_info(
 }
 
 /// `mv_pred.cpp:279`. P8x8.
-///
-/// # Safety
-/// As [`UpdateP16x8MotionInfo`].
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe extern "C" fn UpdateP8x8MotionInfo(
-    pMbCache: *mut SMbCache,
+pub extern "C" fn UpdateP8x8MotionInfo(
+    pMvComp: &mut SMVComponentUnit,
     pCurMb: &mut SMB,
     kiPartIdx: i32,
     kiRef: i8,
     pMv: &mut SMVUnitXY,
 ) {
-    let pMvComp = &mut (*pMbCache).sMvComponents;
     let kiScan4Idx = g_kuiMbCountScan4Idx[kiPartIdx as usize] as usize;
     let kiCacheIdx = g_kuiCache30ScanIdx[kiPartIdx as usize] as usize;
 
@@ -978,11 +952,11 @@ pub unsafe extern "C" fn UpdateP8x8MotionInfo(
     st64_mv_mb(pMbMv, kiScan4Idx, *pMv);
     st64_mv_mb(pMbMv, 4 + kiScan4Idx, *pMv);
 
-    let pRefCache = pMvComp.iRefIndexCache.as_mut_ptr();
-    *pRefCache.add(kiCacheIdx) = kiRef;
-    *pRefCache.add(kiCacheIdx + 1) = kiRef;
-    *pRefCache.add(kiCacheIdx + 6) = kiRef;
-    *pRefCache.add(kiCacheIdx + 7) = kiRef;
+    let pRefCache = &mut pMvComp.iRefIndexCache;
+    pRefCache[kiCacheIdx] = kiRef;
+    pRefCache[kiCacheIdx + 1] = kiRef;
+    pRefCache[kiCacheIdx + 6] = kiRef;
+    pRefCache[kiCacheIdx + 7] = kiRef;
 
     let pMvCache = &mut pMvComp.sMotionVectorCache;
     pMvCache[kiCacheIdx] = *pMv;
@@ -992,19 +966,13 @@ pub unsafe extern "C" fn UpdateP8x8MotionInfo(
 }
 
 /// `mv_pred.cpp:305`. P4x4.
-///
-/// # Safety
-/// As [`UpdateP16x8MotionInfo`].
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe extern "C" fn UpdateP4x4MotionInfo(
-    pMbCache: *mut SMbCache,
+pub extern "C" fn UpdateP4x4MotionInfo(
+    pMvComp: &mut SMVComponentUnit,
     pCurMb: &mut SMB,
     kiPartIdx: i32,
     kiRef: i8,
     pMv: &mut SMVUnitXY,
 ) {
-    let pMvComp = &mut (*pMbCache).sMvComponents;
     let kiScan4Idx = g_kuiMbCountScan4Idx[kiPartIdx as usize] as usize;
     let kiCacheIdx = g_kuiCache30ScanIdx[kiPartIdx as usize] as usize;
 
@@ -1014,19 +982,13 @@ pub unsafe extern "C" fn UpdateP4x4MotionInfo(
 }
 
 /// `mv_pred.cpp:318`. P8x4.
-///
-/// # Safety
-/// As [`UpdateP16x8MotionInfo`].
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe extern "C" fn UpdateP8x4MotionInfo(
-    pMbCache: *mut SMbCache,
+pub extern "C" fn UpdateP8x4MotionInfo(
+    pMvComp: &mut SMVComponentUnit,
     pCurMb: &mut SMB,
     kiPartIdx: i32,
     kiRef: i8,
     pMv: &mut SMVUnitXY,
 ) {
-    let pMvComp = &mut (*pMbCache).sMvComponents;
     let kiScan4Idx = g_kuiMbCountScan4Idx[kiPartIdx as usize] as usize;
     let kiCacheIdx = g_kuiCache30ScanIdx[kiPartIdx as usize] as usize;
 
@@ -1039,19 +1001,13 @@ pub unsafe extern "C" fn UpdateP8x4MotionInfo(
 }
 
 /// `mv_pred.cpp:334`. P4x8.
-///
-/// # Safety
-/// As [`UpdateP16x8MotionInfo`].
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe extern "C" fn UpdateP4x8MotionInfo(
-    pMbCache: *mut SMbCache,
+pub extern "C" fn UpdateP4x8MotionInfo(
+    pMvComp: &mut SMVComponentUnit,
     pCurMb: &mut SMB,
     kiPartIdx: i32,
     kiRef: i8,
     pMv: &mut SMVUnitXY,
 ) {
-    let pMvComp = &mut (*pMbCache).sMvComponents;
     let kiScan4Idx = g_kuiMbCountScan4Idx[kiPartIdx as usize] as usize;
     let kiCacheIdx = g_kuiCache30ScanIdx[kiPartIdx as usize] as usize;
 
@@ -1064,18 +1020,12 @@ pub unsafe extern "C" fn UpdateP4x8MotionInfo(
 }
 
 /// `mv_pred.cpp:353`. Cache-only update for P16x8.
-///
-/// # Safety
-/// `pMbCache` and `pMv` must be valid.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe extern "C" fn UpdateP16x8Motion2Cache(
-    pMbCache: *mut SMbCache,
+pub extern "C" fn UpdateP16x8Motion2Cache(
+    pMvComp: &mut SMVComponentUnit,
     mut iPartIdx: i32,
     iRef: i8,
     pMv: &mut SMVUnitXY,
 ) {
-    let pMvComp = &mut (*pMbCache).sMvComponents;
     for _ in 0..2 {
         let kuiCacheIdx = g_kuiCache30ScanIdx[iPartIdx as usize] as usize;
         for k in [0usize, 1, 6, 7] {
@@ -1087,18 +1037,12 @@ pub unsafe extern "C" fn UpdateP16x8Motion2Cache(
 }
 
 /// `mv_pred.cpp:372`. Cache-only update for P8x16.
-///
-/// # Safety
-/// `pMbCache` and `pMv` must be valid.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe extern "C" fn UpdateP8x16Motion2Cache(
-    pMbCache: *mut SMbCache,
+pub extern "C" fn UpdateP8x16Motion2Cache(
+    pMvComp: &mut SMVComponentUnit,
     mut iPartIdx: i32,
     iRef: i8,
     pMv: &mut SMVUnitXY,
 ) {
-    let pMvComp = &mut (*pMbCache).sMvComponents;
     for _ in 0..2 {
         let kuiCacheIdx = g_kuiCache30ScanIdx[iPartIdx as usize] as usize;
         for k in [0usize, 1, 6, 7] {
@@ -1110,18 +1054,12 @@ pub unsafe extern "C" fn UpdateP8x16Motion2Cache(
 }
 
 /// `mv_pred.cpp:392`. Cache-only update for P8x8.
-///
-/// # Safety
-/// `pMbCache` and `pMv` must be valid.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe extern "C" fn UpdateP8x8Motion2Cache(
-    pMbCache: *mut SMbCache,
+pub extern "C" fn UpdateP8x8Motion2Cache(
+    pMvComp: &mut SMVComponentUnit,
     iPartIdx: i32,
     pRef: i8,
     pMv: &mut SMVUnitXY,
 ) {
-    let pMvComp = &mut (*pMbCache).sMvComponents;
     let kuiCacheIdx = g_kuiCache30ScanIdx[iPartIdx as usize] as usize;
     for k in [0usize, 1, 6, 7] {
         pMvComp.iRefIndexCache[kuiCacheIdx + k] = pRef;
@@ -1130,36 +1068,24 @@ pub unsafe extern "C" fn UpdateP8x8Motion2Cache(
 }
 
 /// `mv_pred.cpp:407`. Cache-only update for P4x4.
-///
-/// # Safety
-/// `pMbCache` and `pMv` must be valid.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe extern "C" fn UpdateP4x4Motion2Cache(
-    pMbCache: *mut SMbCache,
+pub extern "C" fn UpdateP4x4Motion2Cache(
+    pMvComp: &mut SMVComponentUnit,
     iPartIdx: i32,
     pRef: i8,
     pMv: &mut SMVUnitXY,
 ) {
-    let pMvComp = &mut (*pMbCache).sMvComponents;
     let kuiCacheIdx = g_kuiCache30ScanIdx[iPartIdx as usize] as usize;
     pMvComp.iRefIndexCache[kuiCacheIdx] = pRef;
     pMvComp.sMotionVectorCache[kuiCacheIdx] = *pMv;
 }
 
 /// `mv_pred.cpp:416`. Cache-only update for P8x4.
-///
-/// # Safety
-/// `pMbCache` and `pMv` must be valid.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe extern "C" fn UpdateP8x4Motion2Cache(
-    pMbCache: *mut SMbCache,
+pub extern "C" fn UpdateP8x4Motion2Cache(
+    pMvComp: &mut SMVComponentUnit,
     iPartIdx: i32,
     pRef: i8,
     pMv: &mut SMVUnitXY,
 ) {
-    let pMvComp = &mut (*pMbCache).sMvComponents;
     let kuiCacheIdx = g_kuiCache30ScanIdx[iPartIdx as usize] as usize;
     pMvComp.iRefIndexCache[kuiCacheIdx] = pRef;
     pMvComp.iRefIndexCache[1 + kuiCacheIdx] = pRef;
@@ -1168,18 +1094,12 @@ pub unsafe extern "C" fn UpdateP8x4Motion2Cache(
 }
 
 /// `mv_pred.cpp:427`. Cache-only update for P4x8.
-///
-/// # Safety
-/// `pMbCache` and `pMv` must be valid.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe extern "C" fn UpdateP4x8Motion2Cache(
-    pMbCache: *mut SMbCache,
+pub extern "C" fn UpdateP4x8Motion2Cache(
+    pMvComp: &mut SMVComponentUnit,
     iPartIdx: i32,
     pRef: i8,
     pMv: &mut SMVUnitXY,
 ) {
-    let pMvComp = &mut (*pMbCache).sMvComponents;
     let kuiCacheIdx = g_kuiCache30ScanIdx[iPartIdx as usize] as usize;
     pMvComp.iRefIndexCache[kuiCacheIdx] = pRef;
     pMvComp.iRefIndexCache[6 + kuiCacheIdx] = pRef;
@@ -1355,7 +1275,7 @@ pub unsafe extern "C" fn WelsMdP16x16(
     }
 
     PredMv(
-        &(*pMbCache).sMvComponents as *const SMVComponentUnit,
+        &(*pMbCache).sMvComponents,
         0,
         4,
         0,
@@ -1424,7 +1344,7 @@ pub unsafe extern "C" fn WelsMdP8x8(
         (*pSlice).uiMvcNum = 1;
 
         PredMv(
-            &(*pMbCache).sMvComponents as *const SMVComponentUnit,
+            &(*pMbCache).sMvComponents,
             (i << 2) as i8,
             2,
             (*pWelsMd).uiRef as i32,
@@ -1434,7 +1354,7 @@ pub unsafe extern "C" fn WelsMdP8x8(
         (*pFunc).pfMotionSearch[(*pWelsMd).iBlock8x8StaticIdc[i as usize] as usize]
             .expect("pfMotionSearch unset")(pFunc, pCurDqLayer, sMe8x8, pSlice);
         UpdateP8x8Motion2Cache(
-            pMbCache,
+            &mut (*pMbCache).sMvComponents,
             i << 2,
             (*pWelsMd).uiRef as i8,
             &mut (*sMe8x8).sMv,
@@ -1759,7 +1679,7 @@ pub unsafe extern "C" fn WelsMdInterJudgeBGDPskip(
     {
         if CheckChromaCost(pEncCtx, pWelsMd, pMbCache, (*pCurMb).iMbXY) {
             let mut sVaaPredSkipMv = SMVUnitXY::default();
-            PredSkipMv(pMbCache, &mut sVaaPredSkipMv);
+            PredSkipMv(&(*pMbCache).sMvComponents, &mut sVaaPredSkipMv);
             let bZeroMv = sVaaPredSkipMv.iMvX == 0 && sVaaPredSkipMv.iMvY == 0;
             WelsMdBackgroundMbEnc(pEncCtx, pWelsMd, pCurMb, pSlice, bZeroMv);
             return true;
@@ -2106,7 +2026,7 @@ pub unsafe extern "C" fn SvcMdSCDMbEnc(
     );
     (*pMbCache).sMbMvp[0] = (*pWelsMd).sMe.sMe16x16.sMvp;
 
-    UpdateP16x16MotionInfo(pMbCache, pCurMb, 0, &mut (*pWelsMd).sMe.sMe16x16.sMv);
+    UpdateP16x16MotionInfo(&mut (*pMbCache).sMvComponents, pCurMb, 0, &mut (*pWelsMd).sMe.sMe16x16.sMv);
 
     if (*pWelsMd).bMdUsingSad {
         (*pWelsMd).iCostLuma = (*pCurMb).iSadCost;
@@ -2173,7 +2093,7 @@ pub unsafe extern "C" fn MdInterSCDPskipProcess(
         let bQpSimilarFlag = (kiRefMbQp - kiCurMbQp <= DELTA_QP_SCD_THD) || (kiRefMbQp <= 26);
         let mut sVaaPredSkipMv = SMVUnitXY::default();
         let mut sCurMbMv: [SMVUnitXY; 2] = [SMVUnitXY::default(), SMVUnitXY::default()];
-        PredSkipMv(pMbCache, &mut sVaaPredSkipMv);
+        PredSkipMv(&(*pMbCache).sMvComponents, &mut sVaaPredSkipMv);
 
         if eSkipMode == ESkipModes::SCROLLED {
             sCurMbMv[1].iMvX = (WELS_CLIP3(
@@ -2324,15 +2244,15 @@ pub unsafe fn TryModeMerge(
             (*pCurMb).uiMbType = MB_TYPE_16x8;
             MergeSub16Me(&*pMe8x8.add(0), &*pMe8x8.add(1), &mut (*pWelsMd).sMe.sMe16x8[0]);
             MergeSub16Me(&*pMe8x8.add(2), &*pMe8x8.add(3), &mut (*pWelsMd).sMe.sMe16x8[1]);
-            PredInter16x8Mv(pMbCache, 0, 0, &mut (*pWelsMd).sMe.sMe16x8[0].sMvp);
-            PredInter16x8Mv(pMbCache, 8, 0, &mut (*pWelsMd).sMe.sMe16x8[1].sMvp);
+            PredInter16x8Mv(&(*pMbCache).sMvComponents, 0, 0, &mut (*pWelsMd).sMe.sMe16x8[0].sMvp);
+            PredInter16x8Mv(&(*pMbCache).sMvComponents, 8, 0, &mut (*pWelsMd).sMe.sMe16x8[1].sMvp);
         }
         1 => {
             (*pCurMb).uiMbType = MB_TYPE_8x16;
             MergeSub16Me(&*pMe8x8.add(0), &*pMe8x8.add(2), &mut (*pWelsMd).sMe.sMe8x16[0]);
             MergeSub16Me(&*pMe8x8.add(1), &*pMe8x8.add(3), &mut (*pWelsMd).sMe.sMe8x16[1]);
-            PredInter8x16Mv(pMbCache, 0, 0, &mut (*pWelsMd).sMe.sMe8x16[0].sMvp);
-            PredInter8x16Mv(pMbCache, 4, 0, &mut (*pWelsMd).sMe.sMe8x16[1].sMvp);
+            PredInter8x16Mv(&(*pMbCache).sMvComponents, 0, 0, &mut (*pWelsMd).sMe.sMe8x16[0].sMvp);
+            PredInter8x16Mv(&(*pMbCache).sMvComponents, 4, 0, &mut (*pWelsMd).sMe.sMe8x16[1].sMvp);
         }
         _ => {}
     }
@@ -2420,7 +2340,7 @@ mod tests {
             mv_comp.sMotionVectorCache[5] = SMVUnitXY { iMvX: 20, iMvY: 30 };
 
             let mut sMvp = SMVUnitXY::default();
-            PredMv(&mv_comp as *const SMVComponentUnit, 0, 4, 0, &mut sMvp);
+            PredMv(&mv_comp, 0, 4, 0, &mut sMvp);
 
             // Median of (10, 30, 20) is 20; Median of (20, 40, 30) is 30
             assert_eq!(sMvp.iMvX, 20);
@@ -2453,7 +2373,7 @@ mod tests {
             mb_cache.sMvComponents.sMotionVectorCache[1] = SMVUnitXY { iMvX: 0, iMvY: 0 };
 
             let mut sMvp = SMVUnitXY { iMvX: 99, iMvY: 99 };
-            PredSkipMv(&mut mb_cache, &mut sMvp);
+            PredSkipMv(&mb_cache.sMvComponents, &mut sMvp);
 
             assert_eq!(sMvp.iMvX, 0);
             assert_eq!(sMvp.iMvY, 0);
@@ -2482,7 +2402,7 @@ mod tests {
             mb_cache.sMvComponents.sMotionVectorCache[1] = SMVUnitXY { iMvX: 12, iMvY: 34 };
 
             let mut sMvp = SMVUnitXY::default();
-            PredInter16x8Mv(&mut mb_cache, 0, 0, &mut sMvp);
+            PredInter16x8Mv(&mb_cache.sMvComponents, 0, 0, &mut sMvp);
             assert_eq!(sMvp.iMvX, 12);
             assert_eq!(sMvp.iMvY, 34);
 
@@ -2490,7 +2410,7 @@ mod tests {
             mb_cache.sMvComponents.sMotionVectorCache[6] = SMVUnitXY { iMvX: 56, iMvY: 78 };
 
             let mut sMvp8x16 = SMVUnitXY::default();
-            PredInter8x16Mv(&mut mb_cache, 0, 0, &mut sMvp8x16);
+            PredInter8x16Mv(&mb_cache.sMvComponents, 0, 0, &mut sMvp8x16);
             assert_eq!(sMvp8x16.iMvX, 56);
             assert_eq!(sMvp8x16.iMvY, 78);
         }
@@ -2539,7 +2459,7 @@ mod tests {
 
             let mut target_mv = SMVUnitXY { iMvX: 42, iMvY: -15 };
             UpdateP16x16MotionInfo(
-                &mut mb_cache,
+                &mut mb_cache.sMvComponents,
                 &mut cur_mb,
                 0,
                 &mut target_mv,
