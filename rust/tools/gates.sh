@@ -5,6 +5,11 @@
 #
 #     commit   build --all-targets + cargo test (debug + release) + ratchet (~2 min)
 #     family   commit + diffharness sweeps st/mt/def/sl in BOTH profiles  (~5 min)
+#     session  family + Miri --lib, NO benches — the Phase 9 session close
+#              (D-gate-4, 2026-08-22): run it as
+#                  MIRI_SCOPE=encoder bash rust/tools/gates.sh session
+#              ~2 min family + ~3 min Miri with the decoder probes skipped. The
+#              benches stay at the phase close (D-gate-1: no mid-phase perf).
 #     full     family + decode bench + encoder bench + Miri --lib         (default)
 #     exit     full + Miri over the differential integration tests
 #              + the three C-ABI boundary gates: the cdylib's export list, the
@@ -27,7 +32,9 @@
 #                              buys nothing from re-running them, and the phase runs the
 #                              full unscoped step at its own exit. Unset (or any other
 #                              value) = the whole library, which is the default and what
-#                              every phase exit must use.
+#                              every phase exit must use. Phase 9 (D-gate-4) pairs it with
+#                              the `session` level at every session close: F114 was a
+#                              retag the byte gates passed 535/535 and only Miri saw.
 #
 # Written as bash on purpose, like the diffharness: the interactive shell here is
 # zsh, which does not word-split unquoted expansions, and the sweep scripts rely
@@ -42,7 +49,7 @@ LOGS="$ROOT/.gates"                # scratch; gitignored
 LEVEL=${1:-full}
 
 case "$LEVEL" in
-  commit|family|full|exit) ;;
+  commit|family|session|full|exit) ;;
   *) sed -n '2,20p' "$0"; exit 2 ;;
 esac
 
@@ -269,6 +276,12 @@ fi
 #   the log's own MISMATCH/DIFFER marker, which was already checked.
 # ---------------------------------------------------------------------------
 if [ "${LEVEL_DONE:-0}" != 1 ]; then
+ if [ "$LEVEL" = session ]; then
+  # D-gate-4: the session close runs Miri but not the benches — D-gate-1 keeps every
+  # perf measurement at the phase close, and the benches' bit-identity half is
+  # already covered by the sweeps above. Said out loud in the summary, not omitted.
+  skip "benches: not run at the session level (D-gate-4; the phase close runs them)"
+ else
   hdr "decode_1080p_bench"
   (cd "$CRATE" && BENCH_ITERS="${BENCH_ITERS:-3}" cargo bench --bench decode_1080p_bench 2>&1) \
     | tee "$LOGS/decode_bench.log" | grep -E 'Rust :|C\+\+  :|ratio:|MISMATCH|frames'
@@ -320,6 +333,7 @@ if [ "${LEVEL_DONE:-0}" != 1 ]; then
       pass "c_vs_rust_bench: all rows bit-identical"
     fi
   fi
+ fi  # session-level bench skip (D-gate-4)
 
   # -------------------------------------------------------------------------
   # 5. Miri. `--lib safe::` on every full run: it is 20 seconds and it covers
@@ -396,7 +410,8 @@ if [ "${LEVEL_DONE:-0}" != 1 ]; then
   # `encoder::svc_encode_slice::tests::*` and are unaffected — the check that this
   # knob is honest is that they still appear by name in the run's test list.
   #
-  # This is for Phase 6's encoder sessions only. Every phase exit runs unscoped.
+  # Written for Phase 6's encoder sessions; Phase 9 runs it at every session close
+  # through the `session` level (D-gate-4). Every phase exit runs unscoped.
   if [ "${MIRI_SCOPE:-}" = encoder ]; then
     MIRI_SKIPS+=(--skip 'decoder::')
     MIRI_DESC="--lib, encoder scope (minus decoder::)"
@@ -428,7 +443,7 @@ if [ "${LEVEL_DONE:-0}" != 1 ]; then
   fi
 fi
 
-[ "$LEVEL" = full ] && LEVEL_DONE=1
+case "$LEVEL" in session|full) LEVEL_DONE=1 ;; esac
 
 # ---------------------------------------------------------------------------
 # 6. Phase-exit Miri: the differential tests, which drive the raw-pointer

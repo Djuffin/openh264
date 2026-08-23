@@ -798,3 +798,116 @@ so the two predicates agree on every input the encoder produces and are not the 
 predicate. **A replacement for a deleted tautology is a new claim about the code and
 needs the same evidence as any other** — it is out, with the reason recorded where it
 stood.
+
+## F114 — the arena conversion introduced two aliasing defects no byte gate could see, and each one changed a rule's precondition rather than breaking it
+
+Session D's brief forbade Miri (hard rule 3: it "runs once at the end of the whole
+phase"). Run at the user's direction over the finished session, the encoder-scoped
+`--lib` step found **two** Undefined Behaviour reports, in two different mechanisms,
+both introduced *by this session*. Neither was visible to anything the brief did
+allow: at the moment they were found the tree had **535/535 diffharness sweeps in both
+profiles, both benches bit-identical, 1089 tests green and a ratchet down on every
+metric**.
+
+Recording them together because the pair makes one point: **converting a raw parameter
+to a reference does not only retag — it changes what every other derivation under that
+parameter means, and it adds a protector that the raw never had.**
+
+### (a) `addr_of_mut!` stops rescuing a derivation when the parent stops being raw
+
+```
+error: Undefined Behavior: trying to retag from <84500493> for SharedReadOnly
+  permission at alloc16772982[0x150], but that tag does not exist in the borrow stack
+  --> src/encoder/svc_encode_mb.rs:360        (inside WelsIDctT4Rec_c)
+help: <84500493> was created by a SharedReadWrite retag at offsets [0x150..0x450]
+  --> src/encoder/svc_encode_mb.rs:650
+      let pResI4x4 = std::ptr::addr_of_mut!((*pMbCache).sCoeffLevel).cast::<i16>();
+help: <84500493> was later invalidated at offsets [0x150..0x450] by a Unique retag
+  --> src/encoder/svc_encode_mb.rs:684
+      func(blk4x4_mut(&mut (*pMbCache).sCoeffLevel, 0), pFF, pMF);
+```
+
+reached through the real encode loop: `WelsEncRecI4x4Y` <- `WelsMdI4x4Fast` <-
+`WelsMdIntraFinePartitionVaa` <- ... <- `WelsEncoderEncodeExt`.
+
+**The rule that moved.** T5.O8 already wrote the general form (`safety_refactor_log.md`):
+
+> `addr_of_mut!` **is not a charm** ... It rescues a derivation whose invalidating
+> write goes through a *raw* parent — a raw sibling does not pop a raw derivation.
+
+That is exactly right and it is exactly why F70's `InitSliceSettings` site is sound:
+its parent `pDlp` is a `*mut SSpatialLayerConfig`, so `addr_of_mut!` on a field reuses
+the parent's `SharedReadWrite` item and a sibling `&mut` pushes above it without
+popping it. **T9.D7 removed that precondition without noticing**: once `pMbCache` is
+`&mut SMbCache`, the same `addr_of_mut!` gets *its own* item above the parent's
+`Unique` — Miri says so in as many words, "created by a SharedReadWrite retag" — and a
+sibling `&mut` derived from that same `Unique` pops it. T9.D8 then introduced the
+sibling, by giving the residual slots safe array parameters.
+
+Two details worth carrying:
+
+* **The `&mut` covers the whole field, not the sub-range.** `blk4x4_mut` takes
+  `&mut [i16]`, so the caller borrows all 384 coefficients before indexing —
+  `[0x150..0x450]` in the report. Narrowing the *helper's* parameter would not help;
+  the borrow is taken at the call site.
+* **Four bodies had the shape, and only one was reported**, because Miri aborts on the
+  first error. `WelsEncRecI4x4Y` (the one reported), `WelsEncRecI16x16Y` (sixteen DC
+  stores plus `pfIDctFourT4`), `WelsEncInterY` (two `WelsSetMemZero_c` calls) and
+  `WelsEncRecUV` (one memset plus four DC stores). A grep for the shape — a body
+  holding a bound `addr_of_mut!((*root).field)` across a `&(mut) (*root).field` and
+  using it after — found those four and nothing else in `src/encoder`.
+
+**Fix:** within a body, the field is reached one way. The DC write-backs and the three
+memsets became indexed writes and `fill(0)`; the raw that the still-raw plane-taking
+slots (`pfDctT4`, `pfIDctT4`, `pfIDctFourT4`, `WelsDctMb`) require is derived **at the
+call** rather than held across the borrows. That removes raw pointers rather than
+adding any.
+
+### (b) a reference *argument* is a protector; a raw parameter never was
+
+```
+error: Undefined Behavior: not granting access to tag <90263396> because that would
+  remove [SharedReadOnly for <93029106>] which is strongly protected
+  --> src/encoder/svc_encode_slice.rs:1390
+      UpdateMbNeighbor(pCurDq, &mut *pMb, kiMbWidth, ...);
+help: <93029106> is this argument
+  --> src/encoder/svc_encode_slice.rs:3056        pCurMb: &SMB,   (AddSliceBoundary)
+```
+
+T9.D9 converted `AddSliceBoundary` and `DynSlcJudgeSliceBoundaryStepBack` from
+`*mut SMB` to `&SMB` on the grounds that they only *read* the macroblock — which is
+true, and beside the point. A `&`/`&mut` passed as a **function argument** is
+*strongly protected* for the duration of that call: nothing may invalidate it, even
+transiently. `AddSliceBoundary` calls `UpdateMbNeighbourInfoForNextSlice`, which walks
+the macroblock list and takes `&mut` to each element — including the one the protected
+argument names.
+
+**The conversion created this. It did not expose it.** With `*mut SMB` there is no
+protector and no conflict; the C++ has neither. This is the counterpart to F66's rule
+(a `&mut` parameter *retags*) and it is not the same rule: a **shared** reference
+retags harmlessly and still protects.
+
+**Fix:** both functions read exactly one field, `(*pCurMb).iMbXY`. The parameter is an
+`i32` now — two pointer parameters deleted rather than reverted, and no protector to
+conflict with.
+
+### What this says about the session's gates, and about the next one
+
+* **A byte gate cannot see aliasing, and this is the sharpest instance the project has
+  produced.** 535 sweep rows twice, two bit-identical benches and 1089 tests all passed
+  over both defects. **This is what D-gate-4 was written on** (`prompts/phase9.md` §6,
+  2026-08-22): every Phase 9 session now closes on `MIRI_SCOPE=encoder gates.sh
+  session`, a level that adds the encoder-scoped Miri `--lib` step to the sweeps and
+  leaves the benches at the phase close. `q1c.py` could not see either: (a) is a raw invalidated by a
+  *safe* borrow, which the detector does not model at all, and (b) is a protector,
+  which it does not model either.
+* **The detector's model needs a third shape.** It knows shape A (a cursor held across
+  a call that retags) and shape B (argument evaluation order). These are shape C — a
+  raw held across a *safe borrow of the same field* — and shape D — a reference
+  argument protected across a call that re-borrows what it names. Both are cheap to
+  scan for; neither is implemented.
+* **The precondition audit generalises.** Both defects are a rule whose *precondition*
+  a conversion silently removed. Before converting a parameter to a reference, the
+  question is not only "does anything hold a cursor across a call to it" (F66) but
+  **"what did every derivation under this parameter mean while it was raw, and does it
+  still mean that?"**

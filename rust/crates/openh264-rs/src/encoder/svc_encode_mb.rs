@@ -499,11 +499,10 @@ pub unsafe fn WelsEncRecI16x16Y(
     let pFuncList = ctx_func_list(pEncCtx);
     let pCurDqLayer = current_layer(pEncCtx);
     let kiEncStride = (*pCurDqLayer).iEncStride[0];
-    // **T9.D8**: the raw `pRes` survives only for the plane-taking slots below
-    // (`WelsDctMb`, `pfDequantizationFour4x4`, `pfIDctFourT4`) and the DC write-back.
-    // The residual slots index `sCoeffLevel` instead, and the walking `pBlock`
-    // cursor is gone: `iLumaBlock` is `[[i16; 16]; 16]`, so a block is `[k]`.
-    let pRes = std::ptr::addr_of_mut!((*pMbCache).sCoeffLevel).cast::<i16>();
+    // **T9.D11**: no long-lived raw into `sCoeffLevel`. The DC write-back below is
+    // indexed, and the two plane-taking slots derive their cursor where they use it —
+    // a `&mut` to this field (`blk_four4x4_mut`) is a Unique retag over the whole
+    // array and kills any raw held across it (F114).
     let pPred = (*pMbCache).SPicData.pCsMb[0];
     let kiRecStride = (*pCurDqLayer).iCsStride[0];
     let pBestPred = std::ptr::addr_of_mut!((*pMbCache).sMemPredMb)
@@ -517,7 +516,7 @@ pub unsafe fn WelsEncRecI16x16Y(
     let pFF = get_quant_intra_ff(uiQp as usize);
 
     WelsDctMb(
-        pRes,
+        std::ptr::addr_of_mut!((*pMbCache).sCoeffLevel).cast::<i16>(),
         (*pMbCache).SPicData.pEncMb[0],
         kiEncStride,
         pBestPred,
@@ -585,24 +584,16 @@ pub unsafe fn WelsEncRecI16x16Y(
             }
         }
 
-        *pRes.add(0) = aDctT4Dc[0];
-        *pRes.add(16) = aDctT4Dc[1];
-        *pRes.add(32) = aDctT4Dc[4];
-        *pRes.add(48) = aDctT4Dc[5];
-        *pRes.add(64) = aDctT4Dc[2];
-        *pRes.add(80) = aDctT4Dc[3];
-        *pRes.add(96) = aDctT4Dc[6];
-        *pRes.add(112) = aDctT4Dc[7];
-        *pRes.add(128) = aDctT4Dc[8];
-        *pRes.add(144) = aDctT4Dc[9];
-        *pRes.add(160) = aDctT4Dc[12];
-        *pRes.add(176) = aDctT4Dc[13];
-        *pRes.add(192) = aDctT4Dc[10];
-        *pRes.add(208) = aDctT4Dc[11];
-        *pRes.add(224) = aDctT4Dc[14];
-        *pRes.add(240) = aDctT4Dc[15];
+        // The scanned luma DC returns to block `k`'s DC slot, `sCoeffLevel[k * 16]`,
+        // in the C++'s raster-to-zigzag order. Sixteen raw stores through a held
+        // cursor before T9.D11; sixteen indexed stores now, same addresses.
+        const KI_DC_SCAN: [usize; 16] = [0, 1, 4, 5, 2, 3, 6, 7, 8, 9, 12, 13, 10, 11, 14, 15];
+        for (k, &src) in KI_DC_SCAN.iter().enumerate() {
+            (*pMbCache).sCoeffLevel[k << 4] = aDctT4Dc[src];
+        }
 
         if let Some(func) = (*pFuncList).pfIDctFourT4 {
+            let pRes = std::ptr::addr_of_mut!((*pMbCache).sCoeffLevel).cast::<i16>();
             func(pPred, kiRecStride, pBestPred, 16, pRes);
             func(pPred.add(8), kiRecStride, pBestPred.add(8), 16, pRes.add(64));
             func(
@@ -647,7 +638,12 @@ pub unsafe fn WelsEncRecI4x4Y(
     let iEncStride = (*pCurDqLayer).iEncStride[0];
     let uiQp = (*pCurMb).uiLumaQp;
 
-    let pResI4x4 = std::ptr::addr_of_mut!((*pMbCache).sCoeffLevel).cast::<i16>();
+    // **T9.D11**: derived at each use, never held. The two slots below that still
+    // take a plane (`pfDctT4`, `pfIDctT4`) need a raw into `sCoeffLevel`; the two
+    // that do not take one now borrow the field safely, and a `&mut` to it is a
+    // Unique retag over **the whole array** — `blk4x4_mut` takes `&mut [i16]`, so
+    // the caller borrows all 384 coefficients before indexing. A raw held across
+    // that call is dead, which is what Miri reported here (F114).
     let pPred = (*pMbCache).SPicData.pCsMb[0];
     let iRecStride = (*pCurDqLayer).iCsStride[0];
 
@@ -673,7 +669,7 @@ pub unsafe fn WelsEncRecI4x4Y(
 
     if let Some(func) = (*pFuncList).pfDctT4 {
         func(
-            pResI4x4,
+            std::ptr::addr_of_mut!((*pMbCache).sCoeffLevel).cast::<i16>(),
             pEncMb.offset(enc_block_offset),
             iEncStride,
             pBestPred,
@@ -707,7 +703,7 @@ pub unsafe fn WelsEncRecI4x4Y(
             );
         }
         if let Some(func) = (*pFuncList).pfIDctT4 {
-            func(pPredI4x4, iRecStride, pBestPred, 4, pResI4x4);
+            func(pPredI4x4, iRecStride, pBestPred, 4, std::ptr::addr_of_mut!((*pMbCache).sCoeffLevel).cast::<i16>());
         }
     } else if let Some(func) = (*pFuncList).pfCopy4x4 {
         func(pPredI4x4, iRecStride, pBestPred, 4);
@@ -732,9 +728,9 @@ pub unsafe fn WelsEncInterY(
     let pfGetNoneZeroCount = pFuncList.pfGetNoneZeroCount;
     let pfDequantizationFour4x4 = pFuncList.pfDequantizationFour4x4;
 
-    // **T9.D8**: `pRes` is raw only for the two memsets and the plane-free dequant
-    // slot, which is not this family's. The residual slots index the arena.
-    let pRes = std::ptr::addr_of_mut!((*pMbCache).sCoeffLevel).cast::<i16>();
+    // **T9.D11**: the two `WelsSetMemZero_c` calls are `fill(0)` now — this body has
+    // no raw into `sCoeffLevel` at all, and cannot have one, because the residual
+    // slots take `&mut [i16]` of the whole field (F114).
     let mut iSingleCtrMb = 0i32;
     let mut iSingleCtr8x8 = [0i32; 4];
     let uiQp = (*pCurMb).uiLumaQp;
@@ -778,7 +774,8 @@ pub unsafe fn WelsEncInterY(
 
     if iSingleCtrMb < 6 {
         // JVT-O079 zero-residual early cutoff
-        crate::encoder::encoder_context::WelsSetMemZero_c(pRes as *mut u8, 768);
+        // `WelsSetMemZero_c(pRes, 768)` — 768 bytes is all 384 coefficients.
+        (*pMbCache).sCoeffLevel.fill(0);
     } else {
         let mut kpNoneZeroCountIdx = 0usize;
         for i in 0..4 {
@@ -801,7 +798,8 @@ pub unsafe fn WelsEncInterY(
                 }
                 (*pCurMb).uiCbp |= 1 << i;
             } else {
-                crate::encoder::encoder_context::WelsSetMemZero_c(pRes.add(i << 6) as *mut u8, 128);
+                // `WelsSetMemZero_c(pRes + i*64, 128)` — 128 bytes is one 64-coefficient quadrant.
+                (*pMbCache).sCoeffLevel[i << 6..(i << 6) + 64].fill(0);
                 kpNoneZeroCountIdx += 4;
             }
         }
@@ -834,9 +832,6 @@ pub unsafe fn WelsEncRecUV(
     kiResOff: usize,
     iUV: i32,
 ) {
-    let pRes = std::ptr::addr_of_mut!((*pMbCache).sCoeffLevel)
-        .cast::<i16>()
-        .add(kiResOff);
     let pfQuantizationHadamard2x2 = pFuncList.pfQuantizationHadamard2x2;
     let pfQuantizationFour4x4Max = pFuncList.pfQuantizationFour4x4Max;
     let pfScan4x4Ac = pFuncList.pfScan4x4Ac;
@@ -908,7 +903,8 @@ pub unsafe fn WelsEncRecUV(
     }
 
     if iSingleCtr8x8 < 7 {
-        crate::encoder::encoder_context::WelsSetMemZero_c(pRes as *mut u8, 128);
+        // `WelsSetMemZero_c(pRes, 128)` — one 64-coefficient chroma group (T9.D11).
+        (*pMbCache).sCoeffLevel[kiResOff..kiResOff + 64].fill(0);
         (*pCurMb).iNonZeroCount[16 + uiNoneZeroCountOffset] = 0;
         (*pCurMb).iNonZeroCount[16 + uiNoneZeroCountOffset + 1] = 0;
         (*pCurMb).iNonZeroCount[20 + uiNoneZeroCountOffset] = 0;
@@ -940,10 +936,9 @@ pub unsafe fn WelsEncRecUV(
         if 2 != ((*pCurMb).uiCbp >> 4) {
             (*pCurMb).uiCbp |= 0x01 << 4;
         }
-        *pRes.add(0) = aDct2x2[0];
-        *pRes.add(16) = aDct2x2[1];
-        *pRes.add(32) = aDct2x2[2];
-        *pRes.add(48) = aDct2x2[3];
+        for (k, &v) in aDct2x2.iter().enumerate() {
+            (*pMbCache).sCoeffLevel[kiResOff + (k << 4)] = v;
+        }
     }
 }
 
