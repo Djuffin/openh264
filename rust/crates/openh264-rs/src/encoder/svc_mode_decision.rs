@@ -1885,7 +1885,16 @@ pub unsafe fn IsMbScrolledStatic(pBlockType: *const i32) -> bool {
 /// referee — the screen-content preset Phase 10 owns, or step 6's background preset
 /// extended to `SCREEN_CONTENT_REAL_TIME`.
 #[inline(always)]
-// unsafe-cat: port-raw(Phase 9)
+// SCREEN_CONTENT(dormant: Phase 10) — F125. `WelsInitSCDPskipFunc`
+// (`encoder_context.rs:1607-1612`) installs `pfSCDPSkipDecision`'s judging arm only
+// when `bScreenContent && bEnableSceneChangeDetect && iComplexityMode < HIGH`, and
+// `bScreenContent` is `iUsageType == SCREEN_CONTENT_REAL_TIME` — an axis neither
+// diffharness driver expresses. So no camera-usage preset can reach this body, and
+// B4's `bg` preset does not either: a probe in `SvcMdSCDMbEnc` read **0** in every
+// one of the 48 `bg` rows, including the row where `WelsMdBackgroundMbEnc` entered
+// 5771 times. This is Phase 10's family, and the retag says so rather than leaving it
+// filed under Phase 9's port-raw backlog where it reads as pending work.
+// unsafe-cat: SCREEN_CONTENT(dormant)
 #[allow(unsafe_code)]
 pub unsafe fn CalUVSadCost(
     pFunc: &SWelsFuncPtrList,
@@ -1923,7 +1932,16 @@ pub fn CheckBorder(
 /// the tree — it is live as *code* and unreachable as *behaviour*, on every path any
 /// gate runs. It converts to the shared route with the rest of this function, behind
 /// a referee.
-// unsafe-cat: port-raw(Phase 9)
+// SCREEN_CONTENT(dormant: Phase 10) — F125. `WelsInitSCDPskipFunc`
+// (`encoder_context.rs:1607-1612`) installs `pfSCDPSkipDecision`'s judging arm only
+// when `bScreenContent && bEnableSceneChangeDetect && iComplexityMode < HIGH`, and
+// `bScreenContent` is `iUsageType == SCREEN_CONTENT_REAL_TIME` — an axis neither
+// diffharness driver expresses. So no camera-usage preset can reach this body, and
+// B4's `bg` preset does not either: a probe in `SvcMdSCDMbEnc` read **0** in every
+// one of the 48 `bg` rows, including the row where `WelsMdBackgroundMbEnc` entered
+// 5771 times. This is Phase 10's family, and the retag says so rather than leaving it
+// filed under Phase 9's port-raw backlog where it reads as pending work.
+// unsafe-cat: SCREEN_CONTENT(dormant)
 #[allow(unsafe_code)]
 pub unsafe extern "C" fn JudgeStaticSkip(
     pEncCtx: *mut sWelsEncCtx,
@@ -1974,7 +1992,16 @@ pub unsafe extern "C" fn JudgeStaticSkip(
 /// **Dark — S57**: as [`JudgeStaticSkip`], and doubly so — it returns early unless
 /// `sScrollDetectInfo.bScrollDetectFlag`, which only the screen-content preprocessor
 /// sets.
-// unsafe-cat: port-raw(Phase 9)
+// SCREEN_CONTENT(dormant: Phase 10) — F125. `WelsInitSCDPskipFunc`
+// (`encoder_context.rs:1607-1612`) installs `pfSCDPSkipDecision`'s judging arm only
+// when `bScreenContent && bEnableSceneChangeDetect && iComplexityMode < HIGH`, and
+// `bScreenContent` is `iUsageType == SCREEN_CONTENT_REAL_TIME` — an axis neither
+// diffharness driver expresses. So no camera-usage preset can reach this body, and
+// B4's `bg` preset does not either: a probe in `SvcMdSCDMbEnc` read **0** in every
+// one of the 48 `bg` rows, including the row where `WelsMdBackgroundMbEnc` entered
+// 5771 times. This is Phase 10's family, and the retag says so rather than leaving it
+// filed under Phase 9's port-raw backlog where it reads as pending work.
+// unsafe-cat: SCREEN_CONTENT(dormant)
 #[allow(unsafe_code)]
 pub unsafe extern "C" fn JudgeScrollSkip(
     pEncCtx: *mut sWelsEncCtx,
@@ -2040,7 +2067,16 @@ pub unsafe extern "C" fn JudgeScrollSkip(
 /// **Dark — S57**: as [`CalUVSadCost`] (the same `pfSCDPSkipDecision` gate), probe
 /// **0** across five configurations. Its three motion compensations and two SAD
 /// calls stay raw.
-// unsafe-cat: port-raw(Phase 9)
+// SCREEN_CONTENT(dormant: Phase 10) — F125. `WelsInitSCDPskipFunc`
+// (`encoder_context.rs:1607-1612`) installs `pfSCDPSkipDecision`'s judging arm only
+// when `bScreenContent && bEnableSceneChangeDetect && iComplexityMode < HIGH`, and
+// `bScreenContent` is `iUsageType == SCREEN_CONTENT_REAL_TIME` — an axis neither
+// diffharness driver expresses. So no camera-usage preset can reach this body, and
+// B4's `bg` preset does not either: a probe in `SvcMdSCDMbEnc` read **0** in every
+// one of the 48 `bg` rows, including the row where `WelsMdBackgroundMbEnc` entered
+// 5771 times. This is Phase 10's family, and the retag says so rather than leaving it
+// filed under Phase 9's port-raw backlog where it reads as pending work.
+// unsafe-cat: SCREEN_CONTENT(dormant)
 #[allow(unsafe_code)]
 pub unsafe extern "C" fn SvcMdSCDMbEnc(
     pEncCtx: *mut sWelsEncCtx,
@@ -2211,7 +2247,16 @@ pub unsafe extern "C" fn SvcMdSCDMbEnc(
     }
 }
 
-// unsafe-cat: port-raw(Phase 9)
+// SCREEN_CONTENT(dormant: Phase 10) — F125. `WelsInitSCDPskipFunc`
+// (`encoder_context.rs:1607-1612`) installs `pfSCDPSkipDecision`'s judging arm only
+// when `bScreenContent && bEnableSceneChangeDetect && iComplexityMode < HIGH`, and
+// `bScreenContent` is `iUsageType == SCREEN_CONTENT_REAL_TIME` — an axis neither
+// diffharness driver expresses. So no camera-usage preset can reach this body, and
+// B4's `bg` preset does not either: a probe in `SvcMdSCDMbEnc` read **0** in every
+// one of the 48 `bg` rows, including the row where `WelsMdBackgroundMbEnc` entered
+// 5771 times. This is Phase 10's family, and the retag says so rather than leaving it
+// filed under Phase 9's port-raw backlog where it reads as pending work.
+// unsafe-cat: SCREEN_CONTENT(dormant)
 #[allow(unsafe_code)]
 pub unsafe extern "C" fn MdInterSCDPskipProcess(
     pEncCtx: *mut sWelsEncCtx,
@@ -2266,7 +2311,16 @@ pub unsafe extern "C" fn MdInterSCDPskipProcess(
     false
 }
 
-// unsafe-cat: port-raw(Phase 9)
+// SCREEN_CONTENT(dormant: Phase 10) — F125. `WelsInitSCDPskipFunc`
+// (`encoder_context.rs:1607-1612`) installs `pfSCDPSkipDecision`'s judging arm only
+// when `bScreenContent && bEnableSceneChangeDetect && iComplexityMode < HIGH`, and
+// `bScreenContent` is `iUsageType == SCREEN_CONTENT_REAL_TIME` — an axis neither
+// diffharness driver expresses. So no camera-usage preset can reach this body, and
+// B4's `bg` preset does not either: a probe in `SvcMdSCDMbEnc` read **0** in every
+// one of the 48 `bg` rows, including the row where `WelsMdBackgroundMbEnc` entered
+// 5771 times. This is Phase 10's family, and the retag says so rather than leaving it
+// filed under Phase 9's port-raw backlog where it reads as pending work.
+// unsafe-cat: SCREEN_CONTENT(dormant)
 #[allow(unsafe_code)]
 pub unsafe extern "C" fn SetBlockStaticIdcToMd(
     pVaaExt: *mut SVAAFrameInfoExt_t,
@@ -2293,7 +2347,16 @@ pub unsafe extern "C" fn SetBlockStaticIdcToMd(
         *(*pVaaExt).pVaaBestBlockStaticIdc.offset((kiBlockIndexLow + 1) as isize) as i32;
 }
 
-// unsafe-cat: port-raw(Phase 9)
+// SCREEN_CONTENT(dormant: Phase 10) — F125. `WelsInitSCDPskipFunc`
+// (`encoder_context.rs:1607-1612`) installs `pfSCDPSkipDecision`'s judging arm only
+// when `bScreenContent && bEnableSceneChangeDetect && iComplexityMode < HIGH`, and
+// `bScreenContent` is `iUsageType == SCREEN_CONTENT_REAL_TIME` — an axis neither
+// diffharness driver expresses. So no camera-usage preset can reach this body, and
+// B4's `bg` preset does not either: a probe in `SvcMdSCDMbEnc` read **0** in every
+// one of the 48 `bg` rows, including the row where `WelsMdBackgroundMbEnc` entered
+// 5771 times. This is Phase 10's family, and the retag says so rather than leaving it
+// filed under Phase 9's port-raw backlog where it reads as pending work.
+// unsafe-cat: SCREEN_CONTENT(dormant)
 #[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsMdInterJudgeSCDPskip(
     pEncCtx: *mut sWelsEncCtx,

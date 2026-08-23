@@ -659,17 +659,26 @@ against the tree at the phase close, not carried from a brief).**
   `deblocking_common`, `intra_pred_common`, `cpu_core`, `wels_common_defs`,
   `wels_trace`). **`src/common/` is the crate-root flip's remaining work**, and it is
   the only module tree no phase has owned.
-* **830 tagged allow items, by category** — the queue, and each tag is greppable:
+* **776 tagged allow items, by category** — the queue, and each tag is greppable.
+  Re-measured 2026-08-23 at Phase 9 session B4; the previous row (830, written at
+  Phase 6's exit) is what "re-grep before quoting" was warning about.
 
   | tag | count | what it is |
   |---|---|---|
-  | `port-raw(Phase 9)` | **689** | the raw-parameter tree. Not 705; re-grep before quoting. |
-  | `cursor` | **61** | the context-cursor family, incl. the 22 dispatch survivors |
+  | `port-raw(Phase 9)` | **631** | the raw-parameter tree. Was 689 at Phase 6's exit; re-grep before quoting. |
+  | `cursor` | **57** | the context-cursor family, incl. the dispatch survivors |
   | `C-ABI` | **45** | 39 in `api/codec_api.rs`, 6 elsewhere — the boundary, and it stays |
   | `MT` | **21** | the fork/join seam's neighbourhood |
-  | `SCREEN_CONTENT(dormant)` | **8** | **Phase 10's**, not Phase 9's |
+  | `SCREEN_CONTENT(dormant)` | **16** | **Phase 10's**, not Phase 9's. Was 8; B4 reclassified 8 more (F125) |
   | `C-ABI(test)` | **5** | the Miri driver and P13's probes |
   | `send-seam(Phase 9)` | **1** | D-mt-1's one `unsafe impl Send`, retiring with the context split |
+
+  **The dormant row is the one to read carefully.** Its growth is *not* new unsafe
+  code and *not* work undone: B4 moved 8 bodies out of `port-raw(Phase 9)` and
+  `cursor` because they are unreachable without `iUsageType ==
+  SCREEN_CONTENT_REAL_TIME` and so cannot be verified in this phase at all (S57).
+  The Phase 9 queue shrinks by 8 without a single conversion behind it. Any report
+  that adds B4's tag delta to its conversion count is double-counting.
 
 * **F66 / S42 — the context-parameter split.** Session J *made* the ~109-function
   conversion, gated it, and reverted it: a `&mut sWelsEncCtx` function-entry retag

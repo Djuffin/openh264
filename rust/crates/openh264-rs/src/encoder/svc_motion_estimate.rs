@@ -1002,7 +1002,14 @@ pub unsafe extern "C" fn CheckDirectionalMvFalse(
 // 1D Orthogonal Cross Search (ME_CROSS)
 // ============================================================================
 
-// unsafe-cat: cursor
+// SCREEN_CONTENT(dormant: Phase 10) — F125. `WelsInitMeFunc` (`:508-528`) installs
+// this body into `pfVerticalFullSearch`/`pfHorizontalFullSearch` **only** in its
+// `bScreenContent` arm, and both slots default to `None` (`wels_func_ptr_def.rs:481`),
+// so the two call sites (`:1085`, `:1099`) take their `if let Some(..)` never for
+// camera content. Its sibling shortcuts `WelsMotionEstimateSearchStatic` and
+// `..Scrolled` were already carrying this tag; this one was still filed as `cursor`,
+// which read as a Phase 9 conversion still owed. It is not — it is Phase 10's.
+// unsafe-cat: SCREEN_CONTENT(dormant)
 #[allow(unsafe_code)]
 pub unsafe extern "C" fn LineFullSearch_c(
     pFuncList: *mut SWelsFuncPtrList,
