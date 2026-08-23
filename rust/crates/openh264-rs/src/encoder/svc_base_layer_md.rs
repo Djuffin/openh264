@@ -38,7 +38,8 @@ use crate::encoder::svc_encode_slice::{
 };
 use crate::encoder::svc_encode_slice::current_layer;
 use crate::encoder::picture::{RecPicId, SrcPicId};
-use crate::common::mc::{McChroma_c, McLuma_c};
+use crate::common::mc::{mc_chroma, mc_luma, McChroma_c, McLuma_c};
+use crate::safe::plane::PlaneCursorMut;
 use crate::encoder::encoder_context::{sWelsEncCtx, SMVComponentUnit, SMVUnitXY, SPicData, ctx_func_list};
 use crate::encoder::encoder_context::ctx_vaa;
 use crate::encoder::md::{mem_pred_chroma_off, mem_pred_luma_off};
@@ -1451,20 +1452,22 @@ pub unsafe fn WelsMdPSkipEnc(
     let pCurLayer = current_layer(pEncCtx);
     let pFunc = ctx_func_list(pEncCtx);
 
-    let mut pRefLuma = (*pMbCache).SPicData.pRefMb[0];
-    let mut pRefCb = (*pMbCache).SPicData.pRefMb[1];
-    let mut pRefCr = (*pMbCache).SPicData.pRefMb[2];
-    let iLineSizeY = (*pCurLayer).sRefPicView.sPlanes.iLineSize[0];
-    let iLineSizeUV = (*pCurLayer).sRefPicView.sPlanes.iLineSize[1];
-
-    // **T9.D3**: one `skip_mb()` derivation, not three. The 256/320 cursors are
-    // offsets of the luma one and carry the same whole-array provenance (S28);
-    // deriving them through two further calls put those calls *between* the first
-    // cursor and its use, which is what `q1c.py --type SMbCache` flagged.
-    let pDstLuma = std::ptr::addr_of_mut!((*pMbCache).sSkipMb).cast::<u8>();
-    let pDstCb = pDstLuma.add(256);
-    let pDstCr = pDstLuma.add(256 + 64);
-
+    // **T9.B22 — the three reference cursors are gone.** `SPicData.pRefMb[i]` was
+    // read here and offset by the clipped motion vector at each of the three motion
+    // compensations below; each is now a `PlaneCursor` anchored straight at the
+    // sample the C++ arithmetic lands on. The reference picture resolves through
+    // `layer_ref_pic`, which names the same picture `sRefPicView` is a copy of —
+    // `WelsInitCurrentLayer` stamps that view as `(*pRefList).pic_mut(pRefPic)
+    // .view()` (`encoder_ext.rs:1952`), so the strides this drops were the same
+    // numbers `plane(i).stride()` returns.
+    //
+    // `pDstLuma`/`pDstCb`/`pDstCr` are **not** bound here any more, and that is the
+    // point rather than tidying: each motion compensation now takes `&mut` to its
+    // own slice of `sSkipMb`, and a raw into that field held across such a borrow is
+    // F114a's shape C exactly. They are re-derived below, after the last of those
+    // borrows has ended — T9.D11's rule, "derive at the call, never hold across".
+    // (T9.D3's note about one derivation rather than three applied to a raw that was
+    // live across the whole body; there is no such raw here now.)
     let mut sMvp = SMVUnitXY { iMvX: 0, iMvY: 0 };
     let mut n: i32;
 
@@ -1501,11 +1504,29 @@ pub unsafe fn WelsMdPSkipEnc(
         return false;
     }
 
+    // The macroblock's own position, which is what `SPicData.pRefMb` encoded as an
+    // address: it is stamped as `sRefPicView.pData[i] + ((mbX + mbY * stride) << 4)`
+    // for luma and `<< 3` for chroma (`WelsMdInterInit`, `:945`). A cursor says the
+    // same thing in samples, and the plane's padding is what makes the clipped
+    // vector's excursion outside the visible picture addressable rather than merely
+    // survivable.
+    let kiMbXLuma = ((*pCurMb).iMbX as isize) << 4;
+    let kiMbYLuma = ((*pCurMb).iMbY as isize) << 4;
+    let kiMbXChroma = ((*pCurMb).iMbX as isize) << 3;
+    let kiMbYChroma = ((*pCurMb).iMbY as isize) << 3;
+
     //luma
-    pRefLuma = pRefLuma.offset((sQpelMvp.iMvY as i32 * iLineSizeY + sQpelMvp.iMvX as i32) as isize);
-    McLuma_c(
-        pRefLuma, iLineSizeY, pDstLuma, 16, sMvp.iMvX, sMvp.iMvY, 16, 16,
-    );
+    {
+        let pRefPicture = layer_ref_pic(pCurLayer).expect("the layer's reference picture is bound");
+        let cRefLuma = pRefPicture.plane(0).cursor(
+            kiMbXLuma + sQpelMvp.iMvX as isize,
+            kiMbYLuma + sQpelMvp.iMvY as isize,
+        );
+        let mut cDstLuma = PlaneCursorMut::new(&mut (*pMbCache).sSkipMb[..256], 0, 16);
+        mc_luma(&cRefLuma, &mut cDstLuma, sMvp.iMvX, sMvp.iMvY, 16, 16);
+    }
+    // Re-derived **after** the borrow above ended, never carried across it (F114a).
+    let pDstLuma = std::ptr::addr_of_mut!((*pMbCache).sSkipMb).cast::<u8>();
     iSadCostLuma = (*pFunc).sSampleDealingFuncs.pfSampleSad[BLOCK_16x16]
         .expect("pfSampleSad[BLOCK_16x16] unset")(
         (*pMbCache).SPicData.pEncMb[0],
@@ -1514,11 +1535,21 @@ pub unsafe fn WelsMdPSkipEnc(
         16,
     );
 
-    let iStrideUV = (sQpelMvp.iMvY as i32 >> 1) * iLineSizeUV + (sQpelMvp.iMvX as i32 >> 1);
     let pfSad8x8 = (*pFunc).sSampleDealingFuncs.pfSampleSad[BLOCK_8x8]
         .expect("pfSampleSad[BLOCK_8x8] unset");
-    pRefCb = pRefCb.offset(iStrideUV as isize);
-    McChroma_c(pRefCb, iLineSizeUV, pDstCb, 8, sMvp.iMvX, sMvp.iMvY, 8, 8); //Cb
+    // `iStrideUV` was `(mvY >> 1) * strideUV + (mvX >> 1)` off the chroma macroblock
+    // origin; in samples that is `(mvX >> 1, mvY >> 1)` from the same origin, and
+    // `sQpelMvp` is already `sMvp >> 2`, so both are `sMvp >> 3`.
+    {
+        let pRefPicture = layer_ref_pic(pCurLayer).expect("the layer's reference picture is bound");
+        let cRefCb = pRefPicture.plane(1).cursor(
+            kiMbXChroma + (sQpelMvp.iMvX as isize >> 1),
+            kiMbYChroma + (sQpelMvp.iMvY as isize >> 1),
+        );
+        let mut cDstCb = PlaneCursorMut::new(&mut (*pMbCache).sSkipMb[256..320], 0, 8);
+        mc_chroma(&cRefCb, &mut cDstCb, sMvp.iMvX, sMvp.iMvY, 8, 8); //Cb
+    }
+    let pDstCb = std::ptr::addr_of_mut!((*pMbCache).sSkipMb).cast::<u8>().add(256);
     iSadCostChroma = pfSad8x8(
         (*pMbCache).SPicData.pEncMb[1],
         (*pCurLayer).iEncStride[1],
@@ -1526,8 +1557,16 @@ pub unsafe fn WelsMdPSkipEnc(
         8,
     );
 
-    pRefCr = pRefCr.offset(iStrideUV as isize);
-    McChroma_c(pRefCr, iLineSizeUV, pDstCr, 8, sMvp.iMvX, sMvp.iMvY, 8, 8); //Cr
+    {
+        let pRefPicture = layer_ref_pic(pCurLayer).expect("the layer's reference picture is bound");
+        let cRefCr = pRefPicture.plane(2).cursor(
+            kiMbXChroma + (sQpelMvp.iMvX as isize >> 1),
+            kiMbYChroma + (sQpelMvp.iMvY as isize >> 1),
+        );
+        let mut cDstCr = PlaneCursorMut::new(&mut (*pMbCache).sSkipMb[320..384], 0, 8);
+        mc_chroma(&cRefCr, &mut cDstCr, sMvp.iMvX, sMvp.iMvY, 8, 8); //Cr
+    }
+    let pDstCr = std::ptr::addr_of_mut!((*pMbCache).sSkipMb).cast::<u8>().add(256 + 64);
     iSadCostChroma += pfSad8x8(
         (*pMbCache).SPicData.pEncMb[2],
         (*pCurLayer).iEncStride[2],
