@@ -6,6 +6,35 @@
     rust/tools/q1c.py --sites         # every hazardous site, one per line
     rust/tools/q1c.py --callee NAME   # only sites whose call is to NAME
     rust/tools/q1c.py --caller NAME   # only sites inside caller NAME
+    rust/tools/q1c.py --type SMbCache # aim it at a different arena (T9.D1)
+
+**Run it from `rust/tools/`.** The source tree is resolved from this file's own
+path, so a copy elsewhere scans nothing; both empty cases (no sources, no
+function taking the named type) now exit 2 with a message rather than printing a
+clean run.
+
+## What it is not
+
+Two limits, both of which cost a reader time if they are not stated up front.
+
+1. **It is a heuristic on both sides.** A *derivation* is recognised by the shape
+   of its right-hand side (`DERIV_HINT`), so `let p = accessor(pArena);` — a bare
+   call returning a raw pointer, with no `.add()`, `as_mut_ptr()` or `&mut` on it
+   — is **not** seen as a cursor. Session D found three such bindings alongside
+   the one the tool did flag, in the same four lines of the same function
+   (`WelsMdInterMbRefinement`: `pDstCb`, `pDstLuma`, `pBufMe` beside `pDstCr`).
+   Widening the hint to "any call taking a root" was not done, because on the
+   context struct it matches `let pCurLayer = current_layer(pCtx);` and every
+   sibling accessor, and would swamp the signal it exists to raise. **Zero
+   reported is a scoping result, not a proof.** The proof of a conversion is the
+   borrow checker: once the arena is behind `&mut`, a cursor held across a
+   whole-arena call does not compile.
+2. **It models one conversion — "the parameter becomes `&mut T`".** Where a
+   callee is instead *narrowed* to the one field it touches, the retag covers
+   that field only and the report's hazard was never real. Ten of session D's
+   twenty-one `SMbCache` sites were of that kind: the "callee" was one of the
+   arena's own accessors, which became a field projection rather than a
+   whole-arena borrow.
 
 Exit status is 0 when clean, 1 when any hazard is found, so a future session can
 gate the conversion on it. It is a **heuristic**: a green site is "no hazard
@@ -96,14 +125,44 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 SRC = ROOT / "rust/crates/openh264-rs/src"
 
-CTX_TYPE = "sWelsEncCtx"
+DEFAULT_CTX_TYPE = "sWelsEncCtx"
 
-# A parameter of type `*mut sWelsEncCtx` (not `*mut *mut`, which would become
-# `&mut &mut` — a different type, and the four out-parameters F66 excluded).
-CTX_PARAM_RE = re.compile(
-    r"([A-Za-z_][A-Za-z0-9_]*)\s*:\s*\*\s*(?:mut|const)\s+" + CTX_TYPE + r"\b")
-CTX_PARAM_PP_RE = re.compile(
-    r"([A-Za-z_][A-Za-z0-9_]*)\s*:\s*\*\s*(?:mut|const)\s+\*\s*(?:mut|const)\s+" + CTX_TYPE + r"\b")
+# The type currently aimed at, and the three regexes derived from it. `aim()`
+# rebuilds all four; everything below reads the module globals, so a caller that
+# only ever wants the default gets exactly the behaviour this file always had.
+CTX_TYPE = DEFAULT_CTX_TYPE
+CTX_PARAM_RE = CTX_PARAM_PP_RE = LOCAL_ROOT_RE = None
+
+
+def aim(ctx_type):
+    """Point the detector at `ctx_type` — **T9.D1**.
+
+    The tool was written around one hard-coded constant, and session D needed it
+    aimed at `SMbCache`. Re-aiming by `sed`ing the constant into a copy works
+    exactly once and then bites: the copy has to sit in `rust/tools/` or `ROOT`
+    resolves somewhere with no source tree under it, and the scan silently finds
+    nothing (see `main`, which now refuses to report that as a clean run).
+    """
+    global CTX_TYPE, CTX_PARAM_RE, CTX_PARAM_PP_RE, LOCAL_ROOT_RE
+    CTX_TYPE = ctx_type
+    # A parameter of type `*mut T` (not `*mut *mut`, which would become
+    # `&mut &mut` — a different type, and the four out-parameters F66 excluded).
+    CTX_PARAM_RE = re.compile(
+        r"([A-Za-z_][A-Za-z0-9_]*)\s*:\s*\*\s*(?:mut|const)\s+" + ctx_type + r"\b")
+    CTX_PARAM_PP_RE = re.compile(
+        r"([A-Za-z_][A-Za-z0-9_]*)\s*:\s*\*\s*(?:mut|const)\s+\*\s*(?:mut|const)\s+"
+        + ctx_type + r"\b")
+    # A local that holds a raw root. `WelsInitEncoderExt` is the case that forces
+    # this: its own parameter is already owned (`&mut Option<Box<sWelsEncCtx>>`)
+    # and the raw context is a *local* — `let pCtx = Box::into_raw(...)` — so a
+    # parameter-only root scan sees no context in the function that holds F66's
+    # first Miri-confirmed site.
+    LOCAL_ROOT_RE = re.compile(
+        r":\s*\*\s*mut\s+" + ctx_type + r"\b|"          # let x: *mut T = ...
+        r"as\s+\*\s*mut\s+" + ctx_type + r"\b|"         # ... as *mut T
+        r"Box\s*::\s*into_raw\s*\(")                     # Box::into_raw(Box::new(ctx))
+
+aim(DEFAULT_CTX_TYPE)
 
 FN_HEAD_RE = re.compile(
     r"^\s*(?:pub(?:\([a-z]+\))?\s+)?(?:default\s+)?(?:const\s+)?(?:unsafe\s+)?"
@@ -232,17 +291,6 @@ def split_bodies(lines):
         i = end + 1
 
 
-# A local that holds a raw context pointer. `WelsInitEncoderExt` is the case that
-# forces this: its own parameter is already owned (`&mut Option<Box<sWelsEncCtx>>`)
-# and the raw context is a *local* — `let pCtx = Box::into_raw(...)` — so a
-# parameter-only root scan sees no context in the function that holds F66's first
-# Miri-confirmed site.
-LOCAL_ROOT_RE = re.compile(
-    r":\s*\*\s*mut\s+" + CTX_TYPE + r"\b|"          # let x: *mut sWelsEncCtx = ...
-    r"as\s+\*\s*mut\s+" + CTX_TYPE + r"\b|"         # ... as *mut sWelsEncCtx
-    r"Box\s*::\s*into_raw\s*\(")                     # Box::into_raw(Box::new(ctx))
-
-
 def body_roots(lines, b, end, roots, pp):
     """`roots` grown with every local in the body that also holds a raw context.
 
@@ -269,16 +317,27 @@ def body_roots(lines, b, end, roots, pp):
 
 
 def ctx_taking_callees():
-    """Every function in the tree with a `*mut sWelsEncCtx` parameter.
+    """Every function **body** in the tree with a `*mut CTX_TYPE` parameter.
 
-    These are the calls that become a `&mut` retag when family 6 converts them.
+    These are the calls that become a `&mut` retag when the family converts them.
+
+    **T9.D1 — keyed by `(name, file)`, not by name.** This table used to be
+    `name -> "file:line"`, so a second definition of the same name overwrote the
+    first and the tool reported one body where there were two. `WelsRecPskip` is
+    defined at both `svc_encode_mb.rs:928` and `svc_mode_decision.rs:484`, and
+    that is F85's shape in a second tool: `find_stub_bodies.py` hid the decoder's
+    `GetOption` behind the encoder's same-named one the same way. A call site
+    still resolves by bare name (this is a text scan, not a resolver), so a
+    *hazard* can still only be attributed to a name — but the report now prints
+    **every** definition that name has, so an ambiguous attribution is visible
+    instead of silently picking the last one scanned.
     """
     out = {}
     for path in sorted(SRC.rglob("*.rs")):
         lines = path.read_text().splitlines()
         for name, b, end, roots, _pp in split_bodies(lines):
             if roots:
-                out[name] = f"{path.relative_to(SRC)}:{b + 1}"
+                out.setdefault(name, []).append(f"{path.relative_to(SRC)}:{b + 1}")
     return out
 
 
@@ -293,8 +352,21 @@ class Hazard:
         self.callee, self.text = callee, text
 
 
+def defs_of(callees, name):
+    """Every definition site of `name`, rendered for the report."""
+    where = callees.get(name) or ["?"]
+    return ", ".join(where)
+
+
+def n_bodies(callees):
+    """Definitions, not names — the two differ wherever a name is defined twice."""
+    return sum(len(v) for v in callees.values())
+
+
 def scan():
     callees = ctx_taking_callees()
+    if not callees:
+        return [], callees
     callee_re = re.compile(r"\b(" + "|".join(sorted(map(re.escape, callees))) + r")\s*\(")
     hazards = []
     for path in sorted(SRC.rglob("*.rs")):
@@ -392,19 +464,56 @@ def scan():
 
 def main():
     ap = argparse.ArgumentParser()
+    ap.add_argument("--type", default=DEFAULT_CTX_TYPE, metavar="NAME",
+                    help=f"the struct to aim at (default: {DEFAULT_CTX_TYPE})")
     ap.add_argument("--sites", action="store_true", help="every hazardous site")
     ap.add_argument("--callee", help="only sites whose call is to this callee")
     ap.add_argument("--caller", help="only sites inside this caller")
     a = ap.parse_args()
 
+    aim(a.type)
+
+    # ------------------------------------------------------------------
+    # T9.D1 — "nothing to find" and "nothing found" must not print the same.
+    #
+    # `ROOT` is resolved from this file's own path, so a copy of the tool run
+    # from anywhere but `rust/tools/` points `SRC` at a directory with no Rust
+    # in it, scans zero files, finds zero hazards and exits 0 — a confident,
+    # wrong all-clear. That cost session D a wrong reading while scoping. Both
+    # empty cases are now a loud exit 2.
+    # ------------------------------------------------------------------
+    n_files = sum(1 for _ in SRC.rglob("*.rs")) if SRC.is_dir() else 0
+    if n_files == 0:
+        print(f"q1c: FATAL — no Rust sources under {SRC}", file=sys.stderr)
+        print("q1c: the source tree is resolved from this file's own path "
+              "(ROOT = parents[2]),\n     so a copy of the tool outside "
+              "`rust/tools/` scans nothing. Run it in place.", file=sys.stderr)
+        return 2
+
     hazards, callees = scan()
+    if not callees:
+        print(f"q1c: FATAL — scanned {n_files} files under {SRC} and found no function "
+              f"taking a\n     `*mut {CTX_TYPE}` parameter.", file=sys.stderr)
+        print(f"q1c: that is 'nothing to find', not 'nothing found'. Check the spelling "
+              f"of --type\n     against the tree: "
+              f"grep -rn 'struct {CTX_TYPE}' {SRC}", file=sys.stderr)
+        return 2
     if a.callee:
         hazards = [h for h in hazards if h.callee == a.callee]
     if a.caller:
         hazards = [h for h in hazards if h.caller == a.caller]
 
     print(f"q1c — F66 aliasing-hazard detector (heuristic; see the module docstring)")
-    print(f"{len(callees)} functions take a `*mut {CTX_TYPE}` parameter and would retag on conversion.\n")
+    print(f"{n_bodies(callees)} function bodies ({len(callees)} distinct names) take a "
+          f"`*mut {CTX_TYPE}` parameter\nand would retag on conversion.\n")
+    dupes = {k: v for k, v in callees.items() if len(v) > 1}
+    if dupes:
+        print(f"{len(dupes)} of those names is defined more than once — a hazard reported "
+              f"against one\ncould belong to either body (this is a text scan, not a "
+              f"resolver):")
+        for k, v in sorted(dupes.items()):
+            print(f"  {k}   {', '.join(v)}")
+        print()
 
     A = [h for h in hazards if h.shape == "A"]
     B = [h for h in hazards if h.shape == "B"]
@@ -444,11 +553,12 @@ def main():
             print(f"  {n:4d}  {c}")
         print("\nmost-implicated callees (these are the conversions that stay blocked):")
         for c, n in bycallee.most_common(8):
-            print(f"  {n:4d}  {c}   ({callees.get(c, '?')})")
+            print(f"  {n:4d}  {c}   ({defs_of(callees, c)})")
 
     clean = sorted(set(callees) - set(bycallee))
-    print(f"\n{len(clean)} of the {len(callees)} ctx-taking callees have no detected hazard "
-          f"at any call site.")
+    n_clean = sum(len(callees[c]) for c in clean)
+    print(f"\n{n_clean} of the {n_bodies(callees)} {CTX_TYPE}-taking bodies have no detected "
+          f"hazard at any call site.")
     print("A clean callee is 'no hazard found', not 'proved safe' — F66 rejected "
           "converting\nthe clean subset for exactly that reason.")
     return 1 if hazards else 0
