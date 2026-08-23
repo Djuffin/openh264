@@ -39,6 +39,7 @@ use crate::encoder::svc_encode_slice::{
 use crate::encoder::svc_encode_slice::current_layer;
 use crate::encoder::picture::{RecPicId, SrcPicId};
 use crate::common::mc::{mc_chroma, mc_luma, McChroma_c, McLuma_c};
+use crate::common::copy_mb::{copy_16x16, copy_16x8, copy_4x4, copy_4x8, copy_8x16, copy_8x4, copy_8x8};
 use crate::common::sad_common::sample_sad;
 use crate::encoder::sample::satd_16x16;
 use crate::safe::plane::{PlaneCursor, PlaneCursorMut};
@@ -1523,12 +1524,9 @@ pub unsafe fn WelsMdInterMbRefinement(
     let kiMbXChroma = ((*pCurMb).iMbX as isize) << 3;
     let kiMbYChroma = ((*pCurMb).iMbY as isize) << 3;
 
-    // The one cursor every `sMeRefine` offset is measured from — derived once here,
-    // from the cache root, and handed to each `MeRefineFracPixel` call below (S28).
-    // `sBufferInterPredMe` is a *different field* from `sMemPredMb`, which the chroma
-    // destinations below borrow, so no borrow here pops it (F114a is about a raw and
-    // a safe borrow of the **same** field).
-    let pBufMe = std::ptr::addr_of_mut!((*pMbCache).sBufferInterPredMe).cast::<u8>();
+    // `pBufMe` stood here — one raw derivation of `sBufferInterPredMe` handed to every
+    // `MeRefineFracPixel` call. **T9.B29** deleted it: the refinement borrows the
+    // field itself through the `&mut SMbCache` it now takes.
 
     // Byte offsets of the three prediction regions inside `sMemPredMb`, not pointers:
     // an index cannot be invalidated by a retag, and the twelve chroma motion
@@ -1569,15 +1567,13 @@ pub unsafe fn WelsMdInterMbRefinement(
         MB_TYPE_16x16 => {
             //luma
             InitMeRefinePointer(&mut sMeRefine, 0);
-            sMeRefine.pfCopyBlockByMode = (*pFunc).pfCopy16x16NotAligned;
+            sMeRefine.pfCopyBlockByMode = Some(copy_16x16); // was `(*pFunc).pfCopy16x16NotAligned` (T9.B29)
             MeRefineFracPixel(
                 pEncCtx,
-                // Derived at the call, after every chroma borrow of `sMemPredMb`
-                // above has ended — never bound at the top and carried (F114a).
-                std::ptr::addr_of_mut!((*pMbCache).sMemPredMb).cast::<u8>().add(kiOffLuma),
+                kiOffLuma,
                 &mut (*pWelsMd).sMe.sMe16x16,
                 &mut sMeRefine,
-                pBufMe,
+                pMbCache,
                 16,
                 16,
             );
@@ -1625,7 +1621,7 @@ pub unsafe fn WelsMdInterMbRefinement(
 
         MB_TYPE_16x8 => {
             let mut iPixStride = 0i32;
-            sMeRefine.pfCopyBlockByMode = (*pFunc).pfCopy16x8NotAligned;
+            sMeRefine.pfCopyBlockByMode = Some(copy_16x8); // was `(*pFunc).pfCopy16x8NotAligned` (T9.B29)
             for i in 0..2usize {
                 //luma
                 let iIdx = (i as i32) << 3;
@@ -1639,10 +1635,10 @@ pub unsafe fn WelsMdInterMbRefinement(
                 );
                 MeRefineFracPixel(
                     pEncCtx,
-                    std::ptr::addr_of_mut!((*pMbCache).sMemPredMb).cast::<u8>().add(kiOffLuma).add(g_kuiSmb4AddrIn256[iIdx as usize] as usize),
+                    kiOffLuma + g_kuiSmb4AddrIn256[iIdx as usize] as usize,
                     &mut (*pWelsMd).sMe.sMe16x8[i],
                     &mut sMeRefine,
-                pBufMe,
+                pMbCache,
                     16,
                     8,
                 );
@@ -1674,7 +1670,7 @@ pub unsafe fn WelsMdInterMbRefinement(
 
         MB_TYPE_8x16 => {
             let mut iPixStride = 0i32;
-            sMeRefine.pfCopyBlockByMode = (*pFunc).pfCopy8x16Aligned;
+            sMeRefine.pfCopyBlockByMode = Some(copy_8x16); // was `(*pFunc).pfCopy8x16Aligned` (T9.B29)
             for i in 0..2usize {
                 //luma
                 let iIdx = (i as i32) << 2;
@@ -1688,10 +1684,10 @@ pub unsafe fn WelsMdInterMbRefinement(
                 );
                 MeRefineFracPixel(
                     pEncCtx,
-                    std::ptr::addr_of_mut!((*pMbCache).sMemPredMb).cast::<u8>().add(kiOffLuma).add(g_kuiSmb4AddrIn256[iIdx as usize] as usize),
+                    kiOffLuma + g_kuiSmb4AddrIn256[iIdx as usize] as usize,
                     &mut (*pWelsMd).sMe.sMe8x16[i],
                     &mut sMeRefine,
-                pBufMe,
+                pMbCache,
                     8,
                     16,
                 );
@@ -1730,7 +1726,7 @@ pub unsafe fn WelsMdInterMbRefinement(
                 (*pCurMb).iRefIndex[i] = (*pWelsMd).uiRef as i8;
                 match (*pCurMb).uiSubMbType[i] {
                     SUB_MB_TYPE_8x8 => {
-                        sMeRefine.pfCopyBlockByMode = (*pFunc).pfCopy8x8Aligned;
+                        sMeRefine.pfCopyBlockByMode = Some(copy_8x8); // was `(*pFunc).pfCopy8x8Aligned` (T9.B29)
                         //luma
                         InitMeRefinePointer(&mut sMeRefine, g_kiPixStrideIdx8x8[i]);
                         PredMv(
@@ -1742,10 +1738,10 @@ pub unsafe fn WelsMdInterMbRefinement(
                         );
                         MeRefineFracPixel(
                             pEncCtx,
-                            std::ptr::addr_of_mut!((*pMbCache).sMemPredMb).cast::<u8>().add(kiOffLuma).add(g_kuiSmb4AddrIn256[iBlk8Idx as usize] as usize),
+                            kiOffLuma + g_kuiSmb4AddrIn256[iBlk8Idx as usize] as usize,
                             &mut (*pWelsMd).sMe.sMe8x8[i],
                             &mut sMeRefine,
-                pBufMe,
+                pMbCache,
                             8,
                             8,
                         );
@@ -1774,7 +1770,7 @@ pub unsafe fn WelsMdInterMbRefinement(
                         mc_chroma_at!(2, kiOffCr + iDstOff, dx, dy, sMv, 4, 4); //Cr
                     }
                     SUB_MB_TYPE_4x4 => {
-                        sMeRefine.pfCopyBlockByMode = (*pFunc).pfCopy4x4;
+                        sMeRefine.pfCopyBlockByMode = Some(copy_4x4); // was `(*pFunc).pfCopy4x4` (T9.B29)
                         //luma
                         for j in 0..4usize {
                             let iBlk4x4Idx = iBlk8Idx + j as i32;
@@ -1788,10 +1784,10 @@ pub unsafe fn WelsMdInterMbRefinement(
                             );
                             MeRefineFracPixel(
                                 pEncCtx,
-                                std::ptr::addr_of_mut!((*pMbCache).sMemPredMb).cast::<u8>().add(kiOffLuma).add(g_kuiSmb4AddrIn256[iBlk4x4Idx as usize] as usize),
+                                kiOffLuma + g_kuiSmb4AddrIn256[iBlk4x4Idx as usize] as usize,
                                 &mut (*pWelsMd).sMe.sMe4x4[i][j],
                                 &mut sMeRefine,
-                pBufMe,
+                pMbCache,
                                 4,
                                 4,
                             );
@@ -1820,7 +1816,7 @@ pub unsafe fn WelsMdInterMbRefinement(
                         }
                     }
                     SUB_MB_TYPE_8x4 => {
-                        sMeRefine.pfCopyBlockByMode = (*pFunc).pfCopy8x4;
+                        sMeRefine.pfCopyBlockByMode = Some(copy_8x4); // was `(*pFunc).pfCopy8x4` (T9.B29)
                         //luma
                         for j in 0..2usize {
                             let iBlk4x4Idx = iBlk8Idx + ((j as i32) << 1);
@@ -1834,10 +1830,10 @@ pub unsafe fn WelsMdInterMbRefinement(
                             );
                             MeRefineFracPixel(
                                 pEncCtx,
-                                std::ptr::addr_of_mut!((*pMbCache).sMemPredMb).cast::<u8>().add(kiOffLuma).add(g_kuiSmb4AddrIn256[iBlk4x4Idx as usize] as usize),
+                                kiOffLuma + g_kuiSmb4AddrIn256[iBlk4x4Idx as usize] as usize,
                                 &mut (*pWelsMd).sMe.sMe8x4[i][j],
                                 &mut sMeRefine,
-                pBufMe,
+                pMbCache,
                                 8,
                                 4,
                             );
@@ -1866,7 +1862,7 @@ pub unsafe fn WelsMdInterMbRefinement(
                         }
                     }
                     SUB_MB_TYPE_4x8 => {
-                        sMeRefine.pfCopyBlockByMode = (*pFunc).pfCopy4x8;
+                        sMeRefine.pfCopyBlockByMode = Some(copy_4x8); // was `(*pFunc).pfCopy4x8` (T9.B29)
                         //luma
                         for j in 0..2usize {
                             let iBlk4x4Idx = iBlk8Idx + j as i32;
@@ -1880,10 +1876,10 @@ pub unsafe fn WelsMdInterMbRefinement(
                             );
                             MeRefineFracPixel(
                                 pEncCtx,
-                                std::ptr::addr_of_mut!((*pMbCache).sMemPredMb).cast::<u8>().add(kiOffLuma).add(g_kuiSmb4AddrIn256[iBlk4x4Idx as usize] as usize),
+                                kiOffLuma + g_kuiSmb4AddrIn256[iBlk4x4Idx as usize] as usize,
                                 &mut (*pWelsMd).sMe.sMe4x8[i][j],
                                 &mut sMeRefine,
-                pBufMe,
+                pMbCache,
                                 4,
                                 8,
                             );

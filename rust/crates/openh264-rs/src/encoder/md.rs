@@ -314,7 +314,18 @@ pub struct SMeRefinePointer {
     pub iHalfPixHV: usize,
     /// `false`: best is plane 2 (1280), tmp is plane 3 (1920). `true`: swapped.
     pub bQuarPixSwapped: bool,
-    pub pfCopyBlockByMode: Option<PCopyFunc>,
+    /// The fixed-shape copy that moves the winning prediction into the macroblock's
+    /// inter-prediction buffer, chosen by partition shape.
+    ///
+    /// **Safe since T9.B29.** This is *not* `SWelsFuncPtrList`'s `pfCopy*` table —
+    /// it is a per-partition selection out of it, made in `WelsMdInterMbRefinement`
+    /// and consumed once at the end of `MeRefineFracPixel`. That table's own 17
+    /// reconstruction sites are session C's; this field's seven assignments name the
+    /// safe kernels (`common/copy_mb.rs`) directly, which is byte-identical for the
+    /// same reason the cost sites are (F118): `WelsInitEncodingFuncs`
+    /// (`encode_mb_aux.rs:846`) is the only writer of `pfCopy*` and installs the
+    /// shims onto exactly these kernels unconditionally.
+    pub pfCopyBlockByMode: Option<fn(&PlaneCursor<'_>, &mut PlaneCursorMut<'_>)>,
 }
 
 /// Plane bases inside `SMbCache.sBufferInterPredMe`, in bytes.
@@ -354,13 +365,77 @@ impl SMeRefinePointer {
 pub struct SQuarRefineParams {
     pub iBestCost: i32,
     pub iBestHalfPix: i32,
-    pub iStrideA: i32,
-    pub iStrideB: i32,
-    pub pRef: *mut u8,
-    pub pSrcB: [*mut u8; 4],
-    pub pSrcA: [*mut u8; 4],
+    pub pSrcB: [MeQuarSource; 4],
+    pub pSrcA: [MeQuarSource; 4],
     pub iLms: [i32; 4],
     pub iBestQuarPix: i32,
+}
+
+/// One of the two surfaces a quarter-pixel candidate averages — **T9.B29**, in place
+/// of the raw `*mut u8` the record used to carry.
+///
+/// There are exactly two, and the raw form could not tell them apart: a plane of the
+/// half-pixel scratch inside `SMbCache::sBufferInterPredMe` (always at
+/// `ME_REFINE_BUF_STRIDE`), or the reference block the integer search settled on,
+/// displaced by whole samples (always at the reference picture's stride). The pair of
+/// strides `iStrideA`/`iStrideB` carried exactly this distinction and is deleted with
+/// the pointers: each arm now says which surface it means.
+#[derive(Copy, Clone, Debug)]
+pub enum MeQuarSource {
+    /// Byte offset into `SMbCache::sBufferInterPredMe`, stride `ME_REFINE_BUF_STRIDE`.
+    Buf(usize),
+    /// The reference block displaced by `(dx, dy)` samples.
+    Ref(isize, isize),
+}
+
+impl Default for MeQuarSource {
+    fn default() -> Self {
+        Self::Buf(0)
+    }
+}
+
+/// One quarter-pixel candidate: average the two surfaces into
+/// `sBufferInterPredMe[dst..][..span]`.
+///
+/// Written as a free function rather than inline in [`MeRefineQuarPixel`] because the
+/// destination and a `Buf` source are two disjoint regions of **one** field, and a
+/// `&mut` to the whole field plus a `&` to part of it does not borrow-check; taking
+/// `split_at_mut` at the one place that needs it keeps the disjointness a fact the
+/// compiler checks rather than a comment. `Buf` sources are always the half-pixel
+/// planes (offsets 0 and 640 plus the partition stride) and the destination is always
+/// a quarter-pixel plane (1280 or 1920 plus it), so `dst` is above every `Buf` source
+/// this is ever called with — asserted, not assumed.
+#[inline(always)]
+fn quar_candidate(
+    pMbCache: &mut SMbCache,
+    dst: usize,
+    span: usize,
+    a: &MeQuarSource,
+    b: &MeQuarSource,
+    cRef: &PlaneCursor<'_>,
+    w: usize,
+    h: usize,
+) {
+    let stride = ME_REFINE_BUF_STRIDE as usize;
+    // `a` is a `Buf` in every arm of `MeRefineFracPixel` (the C++ builds `pSrcA` out
+    // of `pHalfPixH`/`pHalfPixV` unconditionally); `b` is either.
+    let MeQuarSource::Buf(a_off) = *a else {
+        unreachable!("pSrcA is a scratch plane in every half-pixel arm")
+    };
+    assert!(a_off + span <= dst, "quarter-pixel destination overlaps its source");
+    let (lo, hi) = pMbCache.sBufferInterPredMe.split_at_mut(dst);
+    let cA = PlaneCursor::new(&lo[a_off..][..span], 0, stride);
+    let mut cDst = PlaneCursorMut::new(&mut hi[..span], 0, stride);
+    match *b {
+        MeQuarSource::Buf(b_off) => {
+            assert!(b_off + span <= dst, "quarter-pixel destination overlaps its source");
+            let cB = PlaneCursor::new(&lo[b_off..][..span], 0, stride);
+            pixel_avg(&mut cDst, &cA, &cB, w, h);
+        }
+        MeQuarSource::Ref(dx, dy) => {
+            pixel_avg(&mut cDst, &cA, &cRef.advance(dx, dy), w, h);
+        }
+    }
 }
 
 #[repr(C)]
@@ -625,14 +700,14 @@ pub type PUpdateMbMvFunc = fn(pMvBuffer: &mut [SMVUnitXY; MB_BLOCK4x4_NUM], ksMv
 // had it with correctly typed pointers where this copy used *mut c_void.
 pub use crate::common::mc::SMcFunc;
 // Phase 4a: MC and the half-pel filters are called directly, not via `sMcFuncs`.
-use crate::encoder::svc_encode_slice::{layer_dec_pic, layer_dec_pic_mut, layer_ref_pic};
+use crate::encoder::svc_encode_slice::{layer_dec_pic, layer_dec_pic_mut, layer_enc_pic, layer_ref_pic};
 use crate::encoder::picture::{RecPicId};
-use crate::common::mc::{McHorVer02_c, McHorVer20_c, McHorVer22_c, PixelAvg_c};
+use crate::common::mc::{mc_hor_ver02, mc_hor_ver20, mc_hor_ver22, pixel_avg};
 pub use crate::encoder::encoder_context::SPicData;
 pub use crate::encoder::encoder_context::SDCTCoeff;
 pub use crate::encoder::encoder_context::BLOCK_SIZE_ALL;
 pub use crate::encoder::svc_motion_estimate::{PSample4SadCostFunc, PSample4SadCostFuncRaw};
-use crate::safe::plane::PlaneCursor;
+use crate::safe::plane::{PlaneCursor, PlaneCursorMut};
 pub use crate::encoder::svc_encode_slice::SDqLayer;
 pub use crate::encoder::wels_func_ptr_def::SWelsFuncPtrList;
 pub use crate::encoder::encoder_context::sWelsEncCtx;
@@ -1375,6 +1450,16 @@ pub fn InitMeRefinePointer(pMeRefine: &mut SMeRefinePointer, iStride: i32) {
     pMeRefine.bQuarPixSwapped = false;
 }
 
+/// **T9.B29**: the four candidate averages and their costs run over cursors.
+///
+/// `pBufMe` is gone: `sBufferInterPredMe` is borrowed here, one candidate at a time,
+/// through the `pMbCache` the caller passes. `cEnc` is the source block — the same
+/// sample `SWelsME::pEncMb` names, resolved from the picture at the search block's
+/// own coordinates (`iCurMeBlockPixX/Y`), which is the identity T9.B29 measured
+/// across three streams before relying on it. The candidate sources arrive as
+/// `MeQuarSource`, each either a `sBufferInterPredMe` offset or a displacement of the
+/// reference block — the two things `SQuarRefineParams::pSrcA`/`pSrcB` held as raw
+/// addresses.
 #[inline(always)]
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
@@ -1382,29 +1467,37 @@ pub unsafe fn MeRefineQuarPixel(
     pFunc: &SWelsFuncPtrList,
     pMe: &mut SWelsME,
     pMeRefine: &mut SMeRefinePointer,
-    pBufMe: *mut u8,
+    pMbCache: &mut SMbCache,
+    cEnc: &PlaneCursor<'_>,
+    cRef: &PlaneCursor<'_>,
     kiWidth: i32,
     kiHeight: i32,
     pParams: &mut SQuarRefineParams,
-    iStrideEnc: i32,
 ) {
-    let pEncMb = (*pMe).pEncMb;
     let kuiPixel = (*pMe).uiBlockSize as usize;
-    let pfMeCost = pFunc.sSampleDealingFuncs.me_cost_raw(kuiPixel).unwrap();
+    let pfMeCost = pFunc.sSampleDealingFuncs.me_cost(kuiPixel).unwrap();
+    let (w, h) = (kiWidth as usize, kiHeight as usize);
+    let span = (h - 1) * ME_REFINE_BUF_STRIDE as usize + w;
 
     // =========================(0, -1) [TOP] =========================
-    PixelAvg_c(
-        pBufMe.add(pMeRefine.quar_pix_tmp()),
-        ME_REFINE_BUF_STRIDE,
-        pParams.pSrcA[0],
-        ME_REFINE_BUF_STRIDE,
-        pParams.pSrcB[0],
-        pParams.iStrideA,
-        kiWidth,
-        kiHeight,
+    quar_candidate(
+        pMbCache,
+        pMeRefine.quar_pix_tmp(),
+        span,
+        &pParams.pSrcA[0],
+        &pParams.pSrcB[0],
+        cRef,
+        w,
+        h,
     );
-
-    let mut iCurCost = pfMeCost(pEncMb, iStrideEnc, pBufMe.add(pMeRefine.quar_pix_tmp()), ME_REFINE_BUF_STRIDE) + pParams.iLms[0];
+    let mut iCurCost = {
+        let cTmp = PlaneCursor::new(
+            &pMbCache.sBufferInterPredMe[pMeRefine.quar_pix_tmp()..][..span],
+            0,
+            ME_REFINE_BUF_STRIDE as usize,
+        );
+        pfMeCost(cEnc, &cTmp) + pParams.iLms[0]
+    };
     if iCurCost < pParams.iBestCost {
         pParams.iBestCost = iCurCost;
         pParams.iBestQuarPix = ME_QUAR_PIXEL_TOP;
@@ -1412,18 +1505,24 @@ pub unsafe fn MeRefineQuarPixel(
     }
 
     // =========================(0, 1) [BOTTOM] =======================
-    PixelAvg_c(
-        pBufMe.add(pMeRefine.quar_pix_tmp()),
-        ME_REFINE_BUF_STRIDE,
-        pParams.pSrcA[1],
-        ME_REFINE_BUF_STRIDE,
-        pParams.pSrcB[1],
-        pParams.iStrideA,
-        kiWidth,
-        kiHeight,
+    quar_candidate(
+        pMbCache,
+        pMeRefine.quar_pix_tmp(),
+        span,
+        &pParams.pSrcA[1],
+        &pParams.pSrcB[1],
+        cRef,
+        w,
+        h,
     );
-
-    iCurCost = pfMeCost(pEncMb, iStrideEnc, pBufMe.add(pMeRefine.quar_pix_tmp()), ME_REFINE_BUF_STRIDE) + pParams.iLms[1];
+    iCurCost = {
+        let cTmp = PlaneCursor::new(
+            &pMbCache.sBufferInterPredMe[pMeRefine.quar_pix_tmp()..][..span],
+            0,
+            ME_REFINE_BUF_STRIDE as usize,
+        );
+        pfMeCost(cEnc, &cTmp) + pParams.iLms[1]
+    };
     if iCurCost < pParams.iBestCost {
         pParams.iBestCost = iCurCost;
         pParams.iBestQuarPix = ME_QUAR_PIXEL_BOTTOM;
@@ -1431,18 +1530,24 @@ pub unsafe fn MeRefineQuarPixel(
     }
 
     // =========================(-1, 0) [LEFT] ========================
-    PixelAvg_c(
-        pBufMe.add(pMeRefine.quar_pix_tmp()),
-        ME_REFINE_BUF_STRIDE,
-        pParams.pSrcA[2],
-        ME_REFINE_BUF_STRIDE,
-        pParams.pSrcB[2],
-        pParams.iStrideB,
-        kiWidth,
-        kiHeight,
+    quar_candidate(
+        pMbCache,
+        pMeRefine.quar_pix_tmp(),
+        span,
+        &pParams.pSrcA[2],
+        &pParams.pSrcB[2],
+        cRef,
+        w,
+        h,
     );
-
-    iCurCost = pfMeCost(pEncMb, iStrideEnc, pBufMe.add(pMeRefine.quar_pix_tmp()), ME_REFINE_BUF_STRIDE) + pParams.iLms[2];
+    iCurCost = {
+        let cTmp = PlaneCursor::new(
+            &pMbCache.sBufferInterPredMe[pMeRefine.quar_pix_tmp()..][..span],
+            0,
+            ME_REFINE_BUF_STRIDE as usize,
+        );
+        pfMeCost(cEnc, &cTmp) + pParams.iLms[2]
+    };
     if iCurCost < pParams.iBestCost {
         pParams.iBestCost = iCurCost;
         pParams.iBestQuarPix = ME_QUAR_PIXEL_LEFT;
@@ -1450,18 +1555,24 @@ pub unsafe fn MeRefineQuarPixel(
     }
 
     // =========================(1, 0) [RIGHT] ========================
-    PixelAvg_c(
-        pBufMe.add(pMeRefine.quar_pix_tmp()),
-        ME_REFINE_BUF_STRIDE,
-        pParams.pSrcA[3],
-        ME_REFINE_BUF_STRIDE,
-        pParams.pSrcB[3],
-        pParams.iStrideB,
-        kiWidth,
-        kiHeight,
+    quar_candidate(
+        pMbCache,
+        pMeRefine.quar_pix_tmp(),
+        span,
+        &pParams.pSrcA[3],
+        &pParams.pSrcB[3],
+        cRef,
+        w,
+        h,
     );
-
-    iCurCost = pfMeCost(pEncMb, iStrideEnc, pBufMe.add(pMeRefine.quar_pix_tmp()), ME_REFINE_BUF_STRIDE) + pParams.iLms[3];
+    iCurCost = {
+        let cTmp = PlaneCursor::new(
+            &pMbCache.sBufferInterPredMe[pMeRefine.quar_pix_tmp()..][..span],
+            0,
+            ME_REFINE_BUF_STRIDE as usize,
+        );
+        pfMeCost(cEnc, &cTmp) + pParams.iLms[3]
+    };
     if iCurCost < pParams.iBestCost {
         pParams.iBestCost = iCurCost;
         pParams.iBestQuarPix = ME_QUAR_PIXEL_RIGHT;
@@ -1469,17 +1580,37 @@ pub unsafe fn MeRefineQuarPixel(
     }
 }
 
+/// **T9.B29 — the fractional refinement takes cursors.**
+///
+/// Three raw operands are gone. `pEncData`/`pRef` were `SWelsME::pEncMb`/`pRefMb`;
+/// both are now resolved from the pictures the layer names, at the search block's own
+/// coordinates — `(iCurMeBlockPixX, iCurMeBlockPixY)` for the source and that plus the
+/// whole-sample part of `sMv` for the reference. **That identity is a measurement, not
+/// an assumption**: a probe comparing all three fields against the coordinates ran
+/// over three streams (320x192 CAVLC, 160x96 gop4, 320x192 sm=1 t=4) and reported
+/// 3271 / 438 / 5924 agreements with zero disagreements at the point this function
+/// reads them. It is what lets session E delete the three fields.
+///
+/// `pBufMe` is gone too: the half- and quarter-pixel scratch is `SMbCache`'s own
+/// `sBufferInterPredMe`, borrowed per use through the `pMbCache` parameter — one
+/// `&mut` at a time, never a raw held across a borrow (F114a).
+///
+/// `pMemPredInterMb`, the destination of the final copy, is a `usize` **offset** into
+/// `sMemPredMb` rather than a pointer, and that is not tidying: passing a raw derived
+/// from the arena *beside* a `&mut SMbCache` is F66's shape B — arguments evaluate
+/// left to right, so the reference's whole-arena retag pops the raw before the callee
+/// writes through it. `q1c.py --type SMbCache --kind ref` reported all seven call
+/// sites the moment the parameter went in; the fix removes the pointer (S54: the
+/// information it carried is caller state, and an index no retag can invalidate says
+/// it).
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe extern "C" fn MeRefineFracPixel(
     pEncCtx: *mut sWelsEncCtx,
-    pMemPredInterMb: *mut u8,
+    kiMemPredInterOff: usize,
     pMe: &mut SWelsME,
     pMeRefine: &mut SMeRefinePointer,
-    // The one cursor every plane offset in `pMeRefine` is measured from: the caller
-    // derives it once with `md::buffer_inter_pred_me`, so it carries the whole
-    // buffer's provenance (S28) and the cache keeps a single live path.
-    pBufMe: *mut u8,
+    pMbCache: &mut SMbCache,
     iWidth: i32,
     iHeight: i32,
 ) {
@@ -1490,127 +1621,166 @@ pub unsafe extern "C" fn MeRefineFracPixel(
     let mut iHalfMvx = iMvx;
     let mut iHalfMvy = iMvy;
     let pCurDqLayer = current_layer(pEncCtx);
-    let kiStrideEnc = (*pCurDqLayer).iEncStride[0];
-    let kiStrideRef = (*pCurDqLayer).sRefPicView.sPlanes.iLineSize[0];
 
-    let pEncData = (*pMe).pEncMb;
-    let pRef = (*pMe).pRefMb;
+    // The two blocks, by coordinate. `sMv` is quarter-pel here and the integer search
+    // left `pRefMb` at its whole-sample part, so `>> 2` is the displacement.
+    let kiBlockX = (*pMe).iCurMeBlockPixX as isize;
+    let kiBlockY = (*pMe).iCurMeBlockPixY as isize;
+    let pEncPicture = layer_enc_pic(pCurDqLayer).expect("the layer's source picture is bound");
+    let cEnc = pEncPicture.plane(0).cursor(kiBlockX, kiBlockY);
+    let pRefPicture = layer_ref_pic(pCurDqLayer).expect("the layer's reference picture is bound");
+    let cRef = pRefPicture.plane(0).cursor(
+        kiBlockX + ((iMvx as isize) >> 2),
+        kiBlockY + ((iMvy as isize) >> 2),
+    );
 
     let mut sParams = SQuarRefineParams {
         iBestCost: 0,
         iBestHalfPix: 0,
-        iStrideA: 0,
-        iStrideB: 0,
-        pRef: std::ptr::null_mut(),
-        pSrcB: [std::ptr::null_mut(); 4],
-        pSrcA: [std::ptr::null_mut(); 4],
+        pSrcB: [MeQuarSource::default(); 4],
+        pSrcA: [MeQuarSource::default(); 4],
         iLms: [0; 4],
         iBestQuarPix: ME_NO_BEST_QUAR_PIXEL,
     };
 
     let iMvQuarAddX: [i32; 10] = [0, 0, -1, 1, 0, 0, 0, -1, 1, 0];
     let pMvQuarAddY = &iMvQuarAddX[3..];
-    let mut pBestPredInter = pRef;
-    let mut iInterBlk4Stride = ME_REFINE_BUF_STRIDE;
+    /// Where the winning prediction lives when the copy at the end runs: either the
+    /// reference block itself (no fractional part won) or a plane of the scratch.
+    enum BestPred {
+        Ref,
+        Buf(usize),
+    }
+    let mut pBestPredInter = BestPred::Ref;
 
     let mut iBestCost: i32;
     let mut iCurCost: i32;
     let mut iBestHalfPix: i32;
 
-    let pfMeCost = (*pFunc).sSampleDealingFuncs.me_cost_raw((*pMe).uiBlockSize as usize).unwrap();
+    let (kiW, kiH) = (iWidth as usize, iHeight as usize);
+    let kiBufStride = ME_REFINE_BUF_STRIDE as usize;
+    // The span of one candidate block in the scratch, and of the two half-pixel
+    // filters, which write one extra row or column.
+    let span_wh = |w: usize, h: usize| (h - 1) * kiBufStride + w;
+
+    let pfMeCost = (*pFunc).sSampleDealingFuncs.me_cost((*pMe).uiBlockSize as usize).unwrap();
 
     if (*pCurDqLayer).bSatdInMdFlag {
         iBestCost = (*pMe).uSadPredISatd.uiSatd as i32
             + COST_MVD((*pMe).pMvdCost, (iMvx - (*pMe).sMvp.iMvX) as i32, (iMvy - (*pMe).sMvp.iMvY) as i32);
     } else {
-        iBestCost = pfMeCost(pEncData, kiStrideEnc, pRef, kiStrideRef)
+        iBestCost = pfMeCost(&cEnc, &cRef)
             + COST_MVD((*pMe).pMvdCost, (iMvx - (*pMe).sMvp.iMvX) as i32, (iMvy - (*pMe).sMvp.iMvY) as i32);
     }
 
     iBestHalfPix = REFINE_ME_NO_BEST_HALF_PIXEL;
 
-    McHorVer02_c(
-        pRef.offset(-(kiStrideRef as isize)),
-        kiStrideRef,
-        pBufMe.add(pMeRefine.half_pix_v()),
-        ME_REFINE_BUF_STRIDE,
-        iWidth,
-        iHeight + 1,
-    );
+    // The vertical half-pel filter writes one extra row (`iHeight + 1`), which is the
+    // `(0, 2)` candidate's block one row down.
+    {
+        let off = pMeRefine.half_pix_v();
+        let mut cDst = PlaneCursorMut::new(
+            &mut pMbCache.sBufferInterPredMe[off..][..span_wh(kiW, kiH + 1)],
+            0,
+            kiBufStride,
+        );
+        mc_hor_ver02(&cRef.advance(0, -1), &mut cDst, kiW, kiH + 1);
+    }
 
     // step 1: vertical filter
     // (0, -2) [TOP]
-    iCurCost = pfMeCost(pEncData, kiStrideEnc, pBufMe.add(pMeRefine.half_pix_v()), ME_REFINE_BUF_STRIDE)
+    iCurCost = {
+        let off = pMeRefine.half_pix_v();
+        let cTmp = PlaneCursor::new(
+            &pMbCache.sBufferInterPredMe[off..][..span_wh(kiW, kiH)],
+            0,
+            kiBufStride,
+        );
+        pfMeCost(&cEnc, &cTmp)
+    }
         + COST_MVD((*pMe).pMvdCost, (iMvx - (*pMe).sMvp.iMvX) as i32, (iMvy - 2 - (*pMe).sMvp.iMvY) as i32);
     if iCurCost < iBestCost {
         iBestCost = iCurCost;
         iBestHalfPix = REFINE_ME_HALF_PIXEL_TOP;
-        pBestPredInter = pBufMe.add(pMeRefine.half_pix_v());
+        pBestPredInter = BestPred::Buf(pMeRefine.half_pix_v());
     }
 
     // (0, 2) [BOTTOM]
-    iCurCost = pfMeCost(
-        pEncData,
-        kiStrideEnc,
-        pBufMe.add(pMeRefine.half_pix_v() + ME_REFINE_BUF_STRIDE as usize),
-        ME_REFINE_BUF_STRIDE,
-    ) + COST_MVD((*pMe).pMvdCost, (iMvx - (*pMe).sMvp.iMvX) as i32, (iMvy + 2 - (*pMe).sMvp.iMvY) as i32);
+    iCurCost = {
+        let off = pMeRefine.half_pix_v() + kiBufStride;
+        let cTmp = PlaneCursor::new(
+            &pMbCache.sBufferInterPredMe[off..][..span_wh(kiW, kiH)],
+            0,
+            kiBufStride,
+        );
+        pfMeCost(&cEnc, &cTmp)
+    } + COST_MVD((*pMe).pMvdCost, (iMvx - (*pMe).sMvp.iMvX) as i32, (iMvy + 2 - (*pMe).sMvp.iMvY) as i32);
     if iCurCost < iBestCost {
         iBestCost = iCurCost;
         iBestHalfPix = REFINE_ME_HALF_PIXEL_BOTTOM;
-        pBestPredInter = pBufMe.add(pMeRefine.half_pix_v() + ME_REFINE_BUF_STRIDE as usize);
+        pBestPredInter = BestPred::Buf(pMeRefine.half_pix_v() + kiBufStride);
     }
 
-    McHorVer20_c(
-        pRef.offset(-1),
-        kiStrideRef,
-        pBufMe.add(pMeRefine.half_pix_h()),
-        ME_REFINE_BUF_STRIDE,
-        iWidth + 1,
-        iHeight,
-    );
+    // The horizontal filter writes one extra column, which is `(2, 0)`'s block.
+    {
+        let off = pMeRefine.half_pix_h();
+        let mut cDst = PlaneCursorMut::new(
+            &mut pMbCache.sBufferInterPredMe[off..][..span_wh(kiW + 1, kiH)],
+            0,
+            kiBufStride,
+        );
+        mc_hor_ver20(&cRef.advance(-1, 0), &mut cDst, kiW + 1, kiH);
+    }
 
     // step 2: horizontal filter
     // (-2, 0) [LEFT]
-    iCurCost = pfMeCost(pEncData, kiStrideEnc, pBufMe.add(pMeRefine.half_pix_h()), ME_REFINE_BUF_STRIDE)
+    iCurCost = {
+        let off = pMeRefine.half_pix_h();
+        let cTmp = PlaneCursor::new(
+            &pMbCache.sBufferInterPredMe[off..][..span_wh(kiW, kiH)],
+            0,
+            kiBufStride,
+        );
+        pfMeCost(&cEnc, &cTmp)
+    }
         + COST_MVD((*pMe).pMvdCost, (iMvx - 2 - (*pMe).sMvp.iMvX) as i32, (iMvy - (*pMe).sMvp.iMvY) as i32);
     if iCurCost < iBestCost {
         iBestCost = iCurCost;
         iBestHalfPix = REFINE_ME_HALF_PIXEL_LEFT;
-        pBestPredInter = pBufMe.add(pMeRefine.half_pix_h());
+        pBestPredInter = BestPred::Buf(pMeRefine.half_pix_h());
     }
 
     // (2, 0) [RIGHT]
-    iCurCost = pfMeCost(
-        pEncData,
-        kiStrideEnc,
-        pBufMe.add(pMeRefine.half_pix_h() + 1),
-        ME_REFINE_BUF_STRIDE,
-    ) + COST_MVD((*pMe).pMvdCost, (iMvx + 2 - (*pMe).sMvp.iMvX) as i32, (iMvy - (*pMe).sMvp.iMvY) as i32);
+    iCurCost = {
+        let off = pMeRefine.half_pix_h() + 1;
+        let cTmp = PlaneCursor::new(
+            &pMbCache.sBufferInterPredMe[off..][..span_wh(kiW, kiH)],
+            0,
+            kiBufStride,
+        );
+        pfMeCost(&cEnc, &cTmp)
+    } + COST_MVD((*pMe).pMvdCost, (iMvx + 2 - (*pMe).sMvp.iMvX) as i32, (iMvy - (*pMe).sMvp.iMvY) as i32);
     if iCurCost < iBestCost {
         iBestCost = iCurCost;
         iBestHalfPix = REFINE_ME_HALF_PIXEL_RIGHT;
-        pBestPredInter = pBufMe.add(pMeRefine.half_pix_h() + 1);
+        pBestPredInter = BestPred::Buf(pMeRefine.half_pix_h() + 1);
     }
 
     sParams.iBestCost = iBestCost;
     sParams.iBestHalfPix = iBestHalfPix;
-    sParams.pRef = pRef;
     sParams.iBestQuarPix = ME_NO_BEST_QUAR_PIXEL;
 
 
     if REFINE_ME_NO_BEST_HALF_PIXEL == iBestHalfPix {
-        sParams.iStrideA = kiStrideRef;
-        sParams.iStrideB = kiStrideRef;
-        sParams.pSrcA[0] = pBufMe.add(pMeRefine.half_pix_v());
-        sParams.pSrcA[1] = pBufMe.add(pMeRefine.half_pix_v() + ME_REFINE_BUF_STRIDE as usize);
-        sParams.pSrcA[2] = pBufMe.add(pMeRefine.half_pix_h());
-        sParams.pSrcA[3] = pBufMe.add(pMeRefine.half_pix_h() + 1);
+        sParams.pSrcA[0] = MeQuarSource::Buf(pMeRefine.half_pix_v());
+        sParams.pSrcA[1] = MeQuarSource::Buf(pMeRefine.half_pix_v() + kiBufStride);
+        sParams.pSrcA[2] = MeQuarSource::Buf(pMeRefine.half_pix_h());
+        sParams.pSrcA[3] = MeQuarSource::Buf(pMeRefine.half_pix_h() + 1);
 
-        sParams.pSrcB[0] = pRef;
-        sParams.pSrcB[1] = pRef;
-        sParams.pSrcB[2] = pRef;
-        sParams.pSrcB[3] = pRef;
+        sParams.pSrcB[0] = MeQuarSource::Ref(0, 0);
+        sParams.pSrcB[1] = MeQuarSource::Ref(0, 0);
+        sParams.pSrcB[2] = MeQuarSource::Ref(0, 0);
+        sParams.pSrcB[3] = MeQuarSource::Ref(0, 0);
 
         sParams.iLms[0] = COST_MVD((*pMe).pMvdCost, (iHalfMvx - (*pMe).sMvp.iMvX) as i32, (iHalfMvy - 1 - (*pMe).sMvp.iMvY) as i32);
         sParams.iLms[1] = COST_MVD((*pMe).pMvdCost, (iHalfMvx - (*pMe).sMvp.iMvX) as i32, (iHalfMvy + 1 - (*pMe).sMvp.iMvY) as i32);
@@ -1620,95 +1790,91 @@ pub unsafe extern "C" fn MeRefineFracPixel(
         match iBestHalfPix {
             REFINE_ME_HALF_PIXEL_LEFT => {
                 pMeRefine.iHalfPixHV = pMeRefine.half_pix_v();
-                McHorVer22_c(
-                    pRef.offset(-1 - kiStrideRef as isize),
-                    kiStrideRef,
-                    pBufMe.add(pMeRefine.iHalfPixHV),
-                    ME_REFINE_BUF_STRIDE,
-                    iWidth + 1,
-                    iHeight + 1,
-                );
+                {
+                    let off = pMeRefine.iHalfPixHV;
+                    let mut cDst = PlaneCursorMut::new(
+                        &mut pMbCache.sBufferInterPredMe[off..][..span_wh(kiW + 1, kiH + 1)],
+                        0,
+                        kiBufStride,
+                    );
+                    mc_hor_ver22(&cRef.advance(-1, -1), &mut cDst, kiW + 1, kiH + 1);
+                }
 
                 iHalfMvx -= 2;
-                sParams.iStrideA = ME_REFINE_BUF_STRIDE;
-                sParams.iStrideB = kiStrideRef;
-                sParams.pSrcA[0] = pBufMe.add(pMeRefine.half_pix_h());
-                sParams.pSrcA[1] = pBufMe.add(pMeRefine.half_pix_h());
-                sParams.pSrcA[2] = pBufMe.add(pMeRefine.half_pix_h());
-                sParams.pSrcA[3] = pBufMe.add(pMeRefine.half_pix_h());
-                sParams.pSrcB[0] = pBufMe.add(pMeRefine.iHalfPixHV);
-                sParams.pSrcB[1] = pBufMe.add(pMeRefine.iHalfPixHV + ME_REFINE_BUF_STRIDE as usize);
-                sParams.pSrcB[2] = pRef.offset(-1);
-                sParams.pSrcB[3] = pRef;
+                sParams.pSrcA[0] = MeQuarSource::Buf(pMeRefine.half_pix_h());
+                sParams.pSrcA[1] = MeQuarSource::Buf(pMeRefine.half_pix_h());
+                sParams.pSrcA[2] = MeQuarSource::Buf(pMeRefine.half_pix_h());
+                sParams.pSrcA[3] = MeQuarSource::Buf(pMeRefine.half_pix_h());
+                sParams.pSrcB[0] = MeQuarSource::Buf(pMeRefine.iHalfPixHV);
+                sParams.pSrcB[1] = MeQuarSource::Buf(pMeRefine.iHalfPixHV + kiBufStride);
+                sParams.pSrcB[2] = MeQuarSource::Ref(-1, 0);
+                sParams.pSrcB[3] = MeQuarSource::Ref(0, 0);
             }
             REFINE_ME_HALF_PIXEL_RIGHT => {
                 pMeRefine.iHalfPixHV = pMeRefine.half_pix_v();
-                McHorVer22_c(
-                    pRef.offset(-1 - kiStrideRef as isize),
-                    kiStrideRef,
-                    pBufMe.add(pMeRefine.iHalfPixHV),
-                    ME_REFINE_BUF_STRIDE,
-                    iWidth + 1,
-                    iHeight + 1,
-                );
+                {
+                    let off = pMeRefine.iHalfPixHV;
+                    let mut cDst = PlaneCursorMut::new(
+                        &mut pMbCache.sBufferInterPredMe[off..][..span_wh(kiW + 1, kiH + 1)],
+                        0,
+                        kiBufStride,
+                    );
+                    mc_hor_ver22(&cRef.advance(-1, -1), &mut cDst, kiW + 1, kiH + 1);
+                }
 
                 iHalfMvx += 2;
-                sParams.iStrideA = ME_REFINE_BUF_STRIDE;
-                sParams.iStrideB = kiStrideRef;
-                sParams.pSrcA[0] = pBufMe.add(pMeRefine.half_pix_h() + 1);
-                sParams.pSrcA[1] = pBufMe.add(pMeRefine.half_pix_h() + 1);
-                sParams.pSrcA[2] = pBufMe.add(pMeRefine.half_pix_h() + 1);
-                sParams.pSrcA[3] = pBufMe.add(pMeRefine.half_pix_h() + 1);
-                sParams.pSrcB[0] = pBufMe.add(pMeRefine.iHalfPixHV + 1);
-                sParams.pSrcB[1] = pBufMe.add(pMeRefine.iHalfPixHV + 1 + ME_REFINE_BUF_STRIDE as usize);
-                sParams.pSrcB[2] = pRef;
-                sParams.pSrcB[3] = pRef.add(1);
+                sParams.pSrcA[0] = MeQuarSource::Buf(pMeRefine.half_pix_h() + 1);
+                sParams.pSrcA[1] = MeQuarSource::Buf(pMeRefine.half_pix_h() + 1);
+                sParams.pSrcA[2] = MeQuarSource::Buf(pMeRefine.half_pix_h() + 1);
+                sParams.pSrcA[3] = MeQuarSource::Buf(pMeRefine.half_pix_h() + 1);
+                sParams.pSrcB[0] = MeQuarSource::Buf(pMeRefine.iHalfPixHV + 1);
+                sParams.pSrcB[1] = MeQuarSource::Buf(pMeRefine.iHalfPixHV + 1 + kiBufStride);
+                sParams.pSrcB[2] = MeQuarSource::Ref(0, 0);
+                sParams.pSrcB[3] = MeQuarSource::Ref(1, 0);
             }
             REFINE_ME_HALF_PIXEL_TOP => {
                 pMeRefine.iHalfPixHV = pMeRefine.half_pix_h();
-                McHorVer22_c(
-                    pRef.offset(-1 - kiStrideRef as isize),
-                    kiStrideRef,
-                    pBufMe.add(pMeRefine.iHalfPixHV),
-                    ME_REFINE_BUF_STRIDE,
-                    iWidth + 1,
-                    iHeight + 1,
-                );
+                {
+                    let off = pMeRefine.iHalfPixHV;
+                    let mut cDst = PlaneCursorMut::new(
+                        &mut pMbCache.sBufferInterPredMe[off..][..span_wh(kiW + 1, kiH + 1)],
+                        0,
+                        kiBufStride,
+                    );
+                    mc_hor_ver22(&cRef.advance(-1, -1), &mut cDst, kiW + 1, kiH + 1);
+                }
 
                 iHalfMvy -= 2;
-                sParams.iStrideA = kiStrideRef;
-                sParams.iStrideB = ME_REFINE_BUF_STRIDE;
-                sParams.pSrcA[0] = pBufMe.add(pMeRefine.half_pix_v());
-                sParams.pSrcA[1] = pBufMe.add(pMeRefine.half_pix_v());
-                sParams.pSrcA[2] = pBufMe.add(pMeRefine.half_pix_v());
-                sParams.pSrcA[3] = pBufMe.add(pMeRefine.half_pix_v());
-                sParams.pSrcB[0] = pRef.offset(-(kiStrideRef as isize));
-                sParams.pSrcB[1] = pRef;
-                sParams.pSrcB[2] = pBufMe.add(pMeRefine.iHalfPixHV);
-                sParams.pSrcB[3] = pBufMe.add(pMeRefine.iHalfPixHV + 1);
+                sParams.pSrcA[0] = MeQuarSource::Buf(pMeRefine.half_pix_v());
+                sParams.pSrcA[1] = MeQuarSource::Buf(pMeRefine.half_pix_v());
+                sParams.pSrcA[2] = MeQuarSource::Buf(pMeRefine.half_pix_v());
+                sParams.pSrcA[3] = MeQuarSource::Buf(pMeRefine.half_pix_v());
+                sParams.pSrcB[0] = MeQuarSource::Ref(0, -1);
+                sParams.pSrcB[1] = MeQuarSource::Ref(0, 0);
+                sParams.pSrcB[2] = MeQuarSource::Buf(pMeRefine.iHalfPixHV);
+                sParams.pSrcB[3] = MeQuarSource::Buf(pMeRefine.iHalfPixHV + 1);
             }
             REFINE_ME_HALF_PIXEL_BOTTOM => {
                 pMeRefine.iHalfPixHV = pMeRefine.half_pix_h();
-                McHorVer22_c(
-                    pRef.offset(-1 - kiStrideRef as isize),
-                    kiStrideRef,
-                    pBufMe.add(pMeRefine.iHalfPixHV),
-                    ME_REFINE_BUF_STRIDE,
-                    iWidth + 1,
-                    iHeight + 1,
-                );
+                {
+                    let off = pMeRefine.iHalfPixHV;
+                    let mut cDst = PlaneCursorMut::new(
+                        &mut pMbCache.sBufferInterPredMe[off..][..span_wh(kiW + 1, kiH + 1)],
+                        0,
+                        kiBufStride,
+                    );
+                    mc_hor_ver22(&cRef.advance(-1, -1), &mut cDst, kiW + 1, kiH + 1);
+                }
 
                 iHalfMvy += 2;
-                sParams.iStrideA = kiStrideRef;
-                sParams.iStrideB = ME_REFINE_BUF_STRIDE;
-                sParams.pSrcA[0] = pBufMe.add(pMeRefine.half_pix_v() + ME_REFINE_BUF_STRIDE as usize);
-                sParams.pSrcA[1] = pBufMe.add(pMeRefine.half_pix_v() + ME_REFINE_BUF_STRIDE as usize);
-                sParams.pSrcA[2] = pBufMe.add(pMeRefine.half_pix_v() + ME_REFINE_BUF_STRIDE as usize);
-                sParams.pSrcA[3] = pBufMe.add(pMeRefine.half_pix_v() + ME_REFINE_BUF_STRIDE as usize);
-                sParams.pSrcB[0] = pRef;
-                sParams.pSrcB[1] = pRef.offset(kiStrideRef as isize);
-                sParams.pSrcB[2] = pBufMe.add(pMeRefine.iHalfPixHV + ME_REFINE_BUF_STRIDE as usize);
-                sParams.pSrcB[3] = pBufMe.add(pMeRefine.iHalfPixHV + ME_REFINE_BUF_STRIDE as usize + 1);
+                sParams.pSrcA[0] = MeQuarSource::Buf(pMeRefine.half_pix_v() + kiBufStride);
+                sParams.pSrcA[1] = MeQuarSource::Buf(pMeRefine.half_pix_v() + kiBufStride);
+                sParams.pSrcA[2] = MeQuarSource::Buf(pMeRefine.half_pix_v() + kiBufStride);
+                sParams.pSrcA[3] = MeQuarSource::Buf(pMeRefine.half_pix_v() + kiBufStride);
+                sParams.pSrcB[0] = MeQuarSource::Ref(0, 0);
+                sParams.pSrcB[1] = MeQuarSource::Ref(0, 1);
+                sParams.pSrcB[2] = MeQuarSource::Buf(pMeRefine.iHalfPixHV + kiBufStride);
+                sParams.pSrcB[3] = MeQuarSource::Buf(pMeRefine.iHalfPixHV + kiBufStride + 1);
             }
             _ => {}
         }
@@ -1719,10 +1885,12 @@ pub unsafe extern "C" fn MeRefineFracPixel(
         sParams.iLms[3] = COST_MVD((*pMe).pMvdCost, (iHalfMvx + 1 - (*pMe).sMvp.iMvX) as i32, (iHalfMvy - (*pMe).sMvp.iMvY) as i32);
     }
 
-    MeRefineQuarPixel(&*pFunc, pMe, pMeRefine, pBufMe, iWidth, iHeight, &mut sParams, kiStrideEnc);
+    MeRefineQuarPixel(
+        &*pFunc, pMe, pMeRefine, pMbCache, &cEnc, &cRef, iWidth, iHeight, &mut sParams,
+    );
 
     if iBestCost > sParams.iBestCost {
-        pBestPredInter = pBufMe.add(pMeRefine.quar_pix_best());
+        pBestPredInter = BestPred::Buf(pMeRefine.quar_pix_best());
         iBestCost = sParams.iBestCost;
     }
     let iBestQuarPix = sParams.iBestQuarPix;
@@ -1732,12 +1900,39 @@ pub unsafe extern "C" fn MeRefineFracPixel(
     (*pMe).uiSatdCost = iBestCost as u32;
 
     if iBestHalfPix + iBestQuarPix == NO_BEST_FRAC_PIX {
-        pBestPredInter = pRef;
-        iInterBlk4Stride = kiStrideRef;
+        pBestPredInter = BestPred::Ref;
     }
 
+    // The final copy. `pMemPredInterMb` is still raw — it is a region of `sMemPredMb`
+    // the *caller* owns, and it retires with the reconstruction-side copy work — so
+    // the destination is materialised here, at the call, from a pointer the caller
+    // derived and nothing above borrowed (F114a: `sBufferInterPredMe` and
+    // `sMemPredMb` are different fields).
     let pfCopyBlockByMode = pMeRefine.pfCopyBlockByMode.unwrap();
-    pfCopyBlockByMode(pMemPredInterMb, MB_WIDTH_LUMA, pBestPredInter, iInterBlk4Stride);
+    let kiDstSpan = (kiH - 1) * MB_WIDTH_LUMA as usize + kiW;
+    match pBestPredInter {
+        BestPred::Ref => {
+            let mut cDst = PlaneCursorMut::new(
+                &mut pMbCache.sMemPredMb[kiMemPredInterOff..][..kiDstSpan],
+                0,
+                MB_WIDTH_LUMA as usize,
+            );
+            pfCopyBlockByMode(&cRef, &mut cDst)
+        }
+        BestPred::Buf(off) => {
+            // Two *different* fields of the arena, so the compiler grants both
+            // borrows at once and no `split_at_mut` is needed.
+            let SMbCache { sMemPredMb, sBufferInterPredMe, .. } = &mut *pMbCache;
+            let cSrc =
+                PlaneCursor::new(&sBufferInterPredMe[off..][..span_wh(kiW, kiH)], 0, kiBufStride);
+            let mut cDst = PlaneCursorMut::new(
+                &mut sMemPredMb[kiMemPredInterOff..][..kiDstSpan],
+                0,
+                MB_WIDTH_LUMA as usize,
+            );
+            pfCopyBlockByMode(&cSrc, &mut cDst)
+        }
+    }
 }
 
 // unsafe-cat: port-raw(Phase 9)
