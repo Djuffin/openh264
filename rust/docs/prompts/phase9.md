@@ -105,7 +105,17 @@ the shims, retire the tags, Miri-verify. **Sizes below are session A's census
    they move to family 3. The `PQuant*`/`PScan*` typedefs go with them, not here.
 2. **Plane cursors** (57 pure / 64 total `*mut u8`, + F73's picture-accessor family) and with
    them `common/`'s mc/sad/deblocking_common/intra_pred_common shims. The largest; the
-   reconstruction and source planes reached through the pool. ~2–3 sessions.
+   reconstruction and source planes reached through the pool. ~2–3 sessions. **Split by
+   what is safe now vs what needs a design**: source/reference pictures are read-only while a
+   frame encodes, so any number of shared `PlaneCursor`s across threads is sound — session B
+   converts those plus the owned-buffer operands (prediction scratch, coefficients). The
+   **reconstruction** picture is *written* by every worker of the MT fork, disjoint at
+   macroblock granularity but **not row-contiguous** (a slice can start mid-row), so it cannot
+   be split into one `&mut [u8]` per worker — F73 is exactly that retag race. Session B
+   measures (is any MT slice mode row-aligned? what does a worker read of the recon?) and
+   writes the decision — row-aligned `split_at_mut`, or a raw-backed per-worker cursor built
+   at the fork seam (one tagged site per job per plane, safe methods), or other — and session
+   C converts the reconstruction consumers and un-ignores the MT Miri probe against it.
 3. **SMbCache / SMB** (45 pure / 48 total, **+ the 14 coefficient slot types and their 59
    call-through sites**, + Phase 6's 72 kernels-take-slices note) — per-macroblock metadata;
    the encoder's `MbGrid` analogue. Bigger than the charter first read: ~2 sessions.
@@ -202,7 +212,8 @@ unaided, `total` its workload once the earlier families have landed.
 | session | scope | size | brief |
 |---|---|---|---|
 | **A** ✅ | census + the `q1c.py` detector rebuilt; the coefficient family converted | **19 → 5 done, 14 moved to D** | [`phase9_session_a.md`](phase9_session_a.md) |
-| B–C | the plane-cursor family + `common/`'s plane shims | 57 pure / 64 | — |
+| **B** — brief [`phase9_session_b.md`](phase9_session_b.md) | plane family, part one: the caller census; `SPicData` becomes handles + coordinates; every **source/reference** plane read goes through `PlaneCursor`; SAD/SATD/4SAD, copy and DCT tables become safe fn-pointer tables and their shims die; `sad_common.rs`/`copy_mb.rs`/`cpu_core.rs` under `deny`; **the reconstruction-write design measured and written** (is any MT slice mode row-aligned? what do workers read?) — the decision the next session converts against | 57 pure / 64 (+ ~80 untagged `common/` sites) | — |
+| C | plane family, part two: the **reconstruction** consumers (intra-pred reference side, encode-MB recon, deblocking, MC, expand), the MT fork's plane access per B's design, the `planes()`/`PicPlanes`/`.pData[` roots (32 + 94 sites, `wels_preprocess.rs` 49), the 44 `&mut` picture accessors (F73), and the MT Miri probe un-ignored; `mc.rs`/`deblocking_common.rs`/`expand_pic.rs`/`intra_pred_common.rs` under `deny` | the remainder, sized by B's census | — |
 | D–D2 | SMbCache/SMB **+ the 14 coefficient slot types and their 59 call-throughs** | 45 pure / 48 (+14 slots) | — |
 | E | layer/picture/slice + the cursor accessors | 47 pure / 55 (+61 cursor) | — |
 | F | the 22 dispatch survivors | 4 pure / 5 (+17 cursor) | — |
