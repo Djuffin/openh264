@@ -37,7 +37,7 @@ use crate::encoder::svc_encode_slice::{layer_dec_pic, layer_dec_pic_mut, layer_r
 use crate::encoder::svc_encode_slice::current_layer;
 use crate::encoder::picture::{RecPicId, SrcPicId};
 use crate::common::mc::{McChroma_c, McLuma_c};
-use crate::encoder::encoder_context::{sWelsEncCtx, SMVComponentUnit, SMVUnitXY, ctx_func_list};
+use crate::encoder::encoder_context::{sWelsEncCtx, SMVComponentUnit, SMVUnitXY, SPicData, ctx_func_list};
 use crate::encoder::encoder_context::ctx_vaa;
 use crate::encoder::md::{mem_pred_chroma_off, mem_pred_luma_off};
 use crate::encoder::md::{
@@ -1535,7 +1535,7 @@ pub unsafe fn WelsMdPSkipEnc(
             && iSadCostMb < (&layer_ref_pic(pCurLayer).expect("bound").pMbSkipSad)[(*pCurMb).iMbXY as usize])
     {
         //update motion info to current MB
-        AcceptPskip(pEncCtx, pWelsMd, pCurMb, pMbCache, &sMvp, iSadCostLuma, iSadCostMb, pDstLuma);
+        AcceptPskip(pEncCtx, pWelsMd, pCurMb, &(*pMbCache).SPicData, &sMvp, iSadCostLuma, iSadCostMb, pDstLuma);
         return true;
     }
 
@@ -1570,8 +1570,15 @@ pub unsafe fn WelsMdPSkipEnc(
             );
             if WelsTryPUVskip(pEncCtx, pCurMb, pMbCache, 2) {
                 //update motion info to current MB
+                // **T9.D6**: `pDstLuma` is re-derived here rather than carried down
+                // from the top of the function. Three arena-taking calls sit in
+                // between (`WelsTryPYskip`, `WelsTryPUVskip` twice) and each one
+                // retags the whole arena once its parameter is a reference. The
+                // address is unconditional — `sSkipMb` is a field, not a ping-pong
+                // half — so the re-derivation names the same bytes.
                 AcceptPskip(
-                    pEncCtx, pWelsMd, pCurMb, pMbCache, &sMvp, iSadCostLuma, iSadCostMb, pDstLuma,
+                    pEncCtx, pWelsMd, pCurMb, &(*pMbCache).SPicData, &sMvp, iSadCostLuma,
+                    iSadCostMb, std::ptr::addr_of_mut!((*pMbCache).sSkipMb).cast::<u8>(),
                 );
                 return true;
             }
@@ -1592,7 +1599,7 @@ unsafe fn AcceptPskip(
     pEncCtx: *mut sWelsEncCtx,
     pWelsMd: &mut SWelsMD,
     pCurMb: &mut SMB,
-    pMbCache: *mut SMbCache,
+    kpPicData: &SPicData,
     sMvp: &SMVUnitXY,
     iSadCostLuma: i32,
     iSadCostMb: i32,
@@ -1611,7 +1618,7 @@ unsafe fn AcceptPskip(
     } else {
         (*pWelsMd).iCostLuma = (*pFunc).sSampleDealingFuncs.pfSampleSatd[BLOCK_16x16]
             .expect("pfSampleSatd[BLOCK_16x16] unset")(
-            (*pMbCache).SPicData.pEncMb[0],
+            kpPicData.pEncMb[0],
             (*pCurLayer).iEncStride[0],
             pDstLuma,
             16,

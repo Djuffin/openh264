@@ -1749,10 +1749,13 @@ pub unsafe fn WelsIMbChromaEncode(pEncCtx: *mut sWelsEncCtx, pCurMb: &mut SMB, p
     let pCurLayer = current_layer(pEncCtx);
     let kiEncStride = (*pCurLayer).iEncStride[1];
     let kiCsStride = (*pCurLayer).iCsStride[1];
-    let pCurRS = std::ptr::addr_of_mut!((*pMbCache).sCoeffLevel).cast::<i16>();
-    let pBestPred = std::ptr::addr_of_mut!((*pMbCache).sMemPredMb)
-        .cast::<u8>()
-        .add(best_pred_intra_chroma_off((*pMbCache).uiMemPredLumaHalf, (*pMbCache).uiBestPredIntraChromaHalf));
+    // **T9.D6**: both cursors are re-derived at each use rather than held across the
+    // two `WelsEncRecUV` calls, which retag the whole arena once their parameter is a
+    // reference (F66). The chroma prediction's *half* is snapshotted here instead —
+    // S53: what has to survive the call is the flag's value, not a pointer — and
+    // nothing between here and the last use writes either half flag.
+    let kiBestPredOff =
+        best_pred_intra_chroma_off((*pMbCache).uiMemPredLumaHalf, (*pMbCache).uiBestPredIntraChromaHalf);
     let pCsCb = (*pMbCache).SPicData.pCsMb[1];
     let pCsCr = (*pMbCache).SPicData.pCsMb[2];
 
@@ -1766,20 +1769,38 @@ pub unsafe fn WelsIMbChromaEncode(pEncCtx: *mut sWelsEncCtx, pCurMb: &mut SMB, p
     let pfIDctFourT4 = (*pFunc).pfIDctFourT4.expect("pfIDctFourT4 unset");
 
     //cb
-    pfDctFourT4(pCurRS, (*pMbCache).SPicData.pEncMb[1], kiEncStride, pBestPred, 8);
-    crate::encoder::svc_encode_mb::WelsEncRecUV(&*pFunc, pCurMb, pMbCache, pCurRS, 1);
-    pfIDctFourT4(pCsCb, kiCsStride, pBestPred, 8, pCurRS);
+    pfDctFourT4(
+        std::ptr::addr_of_mut!((*pMbCache).sCoeffLevel).cast::<i16>(),
+        (*pMbCache).SPicData.pEncMb[1],
+        kiEncStride,
+        std::ptr::addr_of_mut!((*pMbCache).sMemPredMb).cast::<u8>().add(kiBestPredOff),
+        8,
+    );
+    crate::encoder::svc_encode_mb::WelsEncRecUV(&*pFunc, pCurMb, pMbCache, 0, 1);
+    pfIDctFourT4(
+        pCsCb,
+        kiCsStride,
+        std::ptr::addr_of_mut!((*pMbCache).sMemPredMb).cast::<u8>().add(kiBestPredOff),
+        8,
+        std::ptr::addr_of_mut!((*pMbCache).sCoeffLevel).cast::<i16>(),
+    );
 
     //cr
     pfDctFourT4(
-        pCurRS.add(64),
+        std::ptr::addr_of_mut!((*pMbCache).sCoeffLevel).cast::<i16>().add(64),
         (*pMbCache).SPicData.pEncMb[2],
         kiEncStride,
-        pBestPred.add(64),
+        std::ptr::addr_of_mut!((*pMbCache).sMemPredMb).cast::<u8>().add(kiBestPredOff + 64),
         8,
     );
-    crate::encoder::svc_encode_mb::WelsEncRecUV(&*pFunc, pCurMb, pMbCache, pCurRS.add(64), 2);
-    pfIDctFourT4(pCsCr, kiCsStride, pBestPred.add(64), 8, pCurRS.add(64));
+    crate::encoder::svc_encode_mb::WelsEncRecUV(&*pFunc, pCurMb, pMbCache, 64, 2);
+    pfIDctFourT4(
+        pCsCr,
+        kiCsStride,
+        std::ptr::addr_of_mut!((*pMbCache).sMemPredMb).cast::<u8>().add(kiBestPredOff + 64),
+        8,
+        std::ptr::addr_of_mut!((*pMbCache).sCoeffLevel).cast::<i16>().add(64),
+    );
 }
 
 // unsafe-cat: port-raw(Phase 9)
@@ -1788,22 +1809,35 @@ pub unsafe fn WelsPMbChromaEncode(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSlice
     let pCurLayer = current_layer(pEncCtx);
     let kiEncStride = (*pCurLayer).iEncStride[1];
     let pMbCache = std::ptr::addr_of_mut!((*pSlice).sMbCacheInfo);
-    let pCurRS = std::ptr::addr_of_mut!((*pMbCache).sCoeffLevel).cast::<i16>().add(256);
-    let pBestPred = std::ptr::addr_of_mut!((*pMbCache).sMemPredMb)
-        .cast::<u8>()
-        .add(mem_pred_chroma_off((*pMbCache).uiMemPredLumaHalf));
+    // **T9.D6**, as in `WelsIMbChromaEncode` — but note the base: this one starts at
+    // `pCoeffLevel + 256` (`svc_encode_slice.cpp:499`) where the intra path starts at
+    // 0, which is why `WelsEncRecUV` takes the offset as a parameter rather than
+    // deriving it from `iUV`.
+    let kiBestPredOff = mem_pred_chroma_off((*pMbCache).uiMemPredLumaHalf);
 
     let pFunc = ctx_func_list(pEncCtx);
     let dct = (*pFunc).pfDctFourT4.expect("pfDctFourT4 unset");
-    dct(pCurRS, (*pMbCache).SPicData.pEncMb[1], kiEncStride, pBestPred, 8);
-    dct(pCurRS.add(64), (*pMbCache).SPicData.pEncMb[2], kiEncStride, pBestPred.add(64), 8);
+    dct(
+        std::ptr::addr_of_mut!((*pMbCache).sCoeffLevel).cast::<i16>().add(256),
+        (*pMbCache).SPicData.pEncMb[1],
+        kiEncStride,
+        std::ptr::addr_of_mut!((*pMbCache).sMemPredMb).cast::<u8>().add(kiBestPredOff),
+        8,
+    );
+    dct(
+        std::ptr::addr_of_mut!((*pMbCache).sCoeffLevel).cast::<i16>().add(320),
+        (*pMbCache).SPicData.pEncMb[2],
+        kiEncStride,
+        std::ptr::addr_of_mut!((*pMbCache).sMemPredMb).cast::<u8>().add(kiBestPredOff + 64),
+        8,
+    );
 
     // `svc_encode_slice.cpp:WelsPMbChromaEncode` quantises both chroma planes here.
     // Both calls were missing, so a P macroblock's chroma reached the reconstruction
     // holding raw DCT coefficients and never set its chroma CBP bits — the same
     // defect Phase 4.5 found in `WelsIMbChromaEncode`.
-    crate::encoder::svc_encode_mb::WelsEncRecUV(&*pFunc, pCurMb, pMbCache, pCurRS, 1);
-    crate::encoder::svc_encode_mb::WelsEncRecUV(&*pFunc, pCurMb, pMbCache, pCurRS.add(64), 2);
+    crate::encoder::svc_encode_mb::WelsEncRecUV(&*pFunc, pCurMb, pMbCache, 256, 1);
+    crate::encoder::svc_encode_mb::WelsEncRecUV(&*pFunc, pCurMb, pMbCache, 320, 2);
 }
 
 // unsafe-cat: port-raw(Phase 9)

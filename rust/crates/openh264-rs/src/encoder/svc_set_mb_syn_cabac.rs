@@ -765,7 +765,7 @@ pub unsafe fn WelsCabacSubMbMvd(
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe fn WelsGetMbCtxCabac(
-    pMbCache: *mut SMbCache,
+    kpNonZeroCoeffCount: &[i8; 48],
     pCurMb: *mut SMB,
     iMbWidth: u32,
     eCtxBlockCat: ECtxBlockCat,
@@ -774,14 +774,13 @@ pub unsafe fn WelsGetMbCtxCabac(
     unsafe {
         let mut iNzA: i16 = -1;
         let mut iNzB: i16 = -1;
-        let pNonZeroCoeffCount = (*pMbCache).iNonZeroCoeffCount.as_ptr();
         let bIntra = IS_INTRA((*pCurMb).uiMbType);
         let mut iCtxInc = 0;
 
         match eCtxBlockCat {
             ECtxBlockCat::LUMA_AC | ECtxBlockCat::CHROMA_AC | ECtxBlockCat::LUMA_4x4 => {
-                iNzA = *pNonZeroCoeffCount.offset((iIdx - 1) as isize) as i16;
-                iNzB = *pNonZeroCoeffCount.offset((iIdx - 8) as isize) as i16;
+                iNzA = kpNonZeroCoeffCount[(iIdx - 1) as usize] as i16;
+                iNzB = kpNonZeroCoeffCount[(iIdx - 8) as usize] as i16;
             }
             ECtxBlockCat::LUMA_DC | ECtxBlockCat::CHROMA_DC => {
                 if ((*pCurMb).uiNeighborAvail & LEFT_MB_POS) != 0 {
@@ -808,7 +807,7 @@ pub unsafe fn WelsGetMbCtxCabac(
 #[allow(unsafe_code)]
 pub unsafe fn WelsWriteBlockResidualCabac(
     buf: &mut [u8],
-    pMbCache: *mut SMbCache,
+    kpNonZeroCoeffCount: &[i8; 48],
     pCurMb: *mut SMB,
     iMbWidth: u32,
     pCabacCtx: &mut SCabacCtx,
@@ -819,7 +818,7 @@ pub unsafe fn WelsWriteBlockResidualCabac(
     iEndIdx: i16,
 ) {
     unsafe {
-        let mut iCtx = WelsGetMbCtxCabac(pMbCache, pCurMb, iMbWidth, eCtxBlockCat, iIdx) as i32;
+        let mut iCtx = WelsGetMbCtxCabac(kpNonZeroCoeffCount, pCurMb, iMbWidth, eCtxBlockCat, iIdx) as i32;
 
         if iNonZeroCount != 0 {
             let mut iLevel = [0i16; 16];
@@ -933,7 +932,7 @@ pub unsafe fn WelsWriteMbResidualCabac(
         // `pMbCache` from `pSlice` and never read the argument.
         let pMbCache = std::ptr::addr_of_mut!((*pSlice).sMbCacheInfo);
         let pCabacCtx = std::ptr::addr_of_mut!((*pSlice).sCabacCtx);
-        let pNonZeroCoeffCount = (*pMbCache).iNonZeroCoeffCount.as_ptr();
+        let kpNonZeroCoeffCount = &(*pMbCache).iNonZeroCoeffCount;
         let pSliceHeadExt = &mut (*pSlice).sSliceHeaderExt;
         let iSliceFirstMbXY = pSliceHeadExt.sSliceHeader.iFirstMbInSlice;
 
@@ -960,7 +959,7 @@ pub unsafe fn WelsWriteMbResidualCabac(
                 };
 
                 WelsWriteBlockResidualCabac(buf, 
-                    pMbCache,
+                    kpNonZeroCoeffCount,
                     pCurMb,
                     iMbWidth as u32,
                     &mut *pCabacCtx,
@@ -978,11 +977,11 @@ pub unsafe fn WelsWriteMbResidualCabac(
                 if iCbpLuma != 0 {
                     for i in 0..16 {
                         let iIdx = g_kuiCache48CountScan4Idx[i] as i16;
-                        let nz = *pNonZeroCoeffCount.offset(iIdx as isize) as i16;
+                        let nz = kpNonZeroCoeffCount[iIdx as usize] as i16;
                         let block_buf = (*pDct).iLumaBlock[i].as_mut_ptr();
 
                         WelsWriteBlockResidualCabac(buf, 
-                            pMbCache,
+                            kpNonZeroCoeffCount,
                             pCurMb,
                             iMbWidth as u32,
                             &mut *pCabacCtx,
@@ -998,11 +997,11 @@ pub unsafe fn WelsWriteMbResidualCabac(
                 for i in 0..16 {
                     if (iCbpLuma & (1 << (i >> 2))) != 0 {
                         let iIdx = g_kuiCache48CountScan4Idx[i] as i16;
-                        let nz = *pNonZeroCoeffCount.offset(iIdx as isize) as i16;
+                        let nz = kpNonZeroCoeffCount[iIdx as usize] as i16;
                         let block_buf = (*pDct).iLumaBlock[i].as_mut_ptr();
 
                         WelsWriteBlockResidualCabac(buf, 
-                            pMbCache,
+                            kpNonZeroCoeffCount,
                             pCurMb,
                             iMbWidth as u32,
                             &mut *pCabacCtx,
@@ -1023,7 +1022,7 @@ pub unsafe fn WelsWriteMbResidualCabac(
                     (*pCurMb).iCbpDc |= 0x2;
                 }
                 WelsWriteBlockResidualCabac(buf, 
-                    pMbCache,
+                    kpNonZeroCoeffCount,
                     pCurMb,
                     iMbWidth as u32,
                     &mut *pCabacCtx,
@@ -1040,7 +1039,7 @@ pub unsafe fn WelsWriteMbResidualCabac(
                     (*pCurMb).iCbpDc |= 0x4;
                 }
                 WelsWriteBlockResidualCabac(buf, 
-                    pMbCache,
+                    kpNonZeroCoeffCount,
                     pCurMb,
                     iMbWidth as u32,
                     &mut *pCabacCtx,
@@ -1057,11 +1056,11 @@ pub unsafe fn WelsWriteMbResidualCabac(
                     // Cb AC
                     for i in 0..4 {
                         let iIdx = g_kuiCache48CountScan4Idx_16base[i] as i16;
-                        let nz = *pNonZeroCoeffCount.offset(iIdx as isize) as i16;
+                        let nz = kpNonZeroCoeffCount[iIdx as usize] as i16;
                         let block_buf = (*pDct).iChromaBlock[i].as_mut_ptr();
 
                         WelsWriteBlockResidualCabac(buf, 
-                            pMbCache,
+                            kpNonZeroCoeffCount,
                             pCurMb,
                             iMbWidth as u32,
                             &mut *pCabacCtx,
@@ -1076,11 +1075,11 @@ pub unsafe fn WelsWriteMbResidualCabac(
                     // Cr AC
                     for i in 0..4 {
                         let iIdx = (24 + g_kuiCache48CountScan4Idx_16base[i]) as i16;
-                        let nz = *pNonZeroCoeffCount.offset(iIdx as isize) as i16;
+                        let nz = kpNonZeroCoeffCount[iIdx as usize] as i16;
                         let block_buf = (*pDct).iChromaBlock[4 + i].as_mut_ptr();
 
                         WelsWriteBlockResidualCabac(buf, 
-                            pMbCache,
+                            kpNonZeroCoeffCount,
                             pCurMb,
                             iMbWidth as u32,
                             &mut *pCabacCtx,

@@ -803,17 +803,32 @@ pub unsafe fn WelsEncInterY(
 /// 2x2 Chroma DC Hadamard transform, 4x4 AC quantization, JVT-O079 thresholding,
 /// and inverse dequantization for Chroma planes (`iUV = 1` for Cb, `iUV = 2` for Cr).
 ///
+/// **T9.D6 — `pRes` was a `*mut i16` into `pMbCache->sCoeffLevel`, and it is a
+/// `usize` index into that array now.** The C++ hands this function the arena *and* a
+/// cursor into it, which is the one shape a `&mut SMbCache` parameter cannot survive:
+/// whichever argument is evaluated second invalidates the first, and no ordering
+/// helps. So the second path is deleted and the callee derives the cursor.
+///
+/// **It is not `(iUV - 1) * 64` off a fixed base, and that matters.** The two callers
+/// use *different* bases: `WelsIMbChromaEncode` passes `pCoeffLevel + 0`
+/// (`svc_encode_slice.cpp:475`) and `WelsPMbChromaEncode` passes `pCoeffLevel + 256`
+/// (`:499`). The offset is caller state, not a function of `iUV`, so it stays a
+/// parameter — as an index, which a retag cannot invalidate.
+///
 /// # Safety
-/// All pointers in `pFuncList`, `pCurMb`, `pMbCache`, and `pRes` must be properly initialized and valid.
+/// `kiResOff .. kiResOff + 128` must be in bounds of `pMbCache->sCoeffLevel`.
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe fn WelsEncRecUV(
     pFuncList: &SWelsFuncPtrList,
     pCurMb: &mut SMB,
     pMbCache: *mut SMbCache,
-    mut pRes: *mut i16,
+    kiResOff: usize,
     iUV: i32,
 ) {
+    let mut pRes = std::ptr::addr_of_mut!((*pMbCache).sCoeffLevel)
+        .cast::<i16>()
+        .add(kiResOff);
     let pfQuantizationHadamard2x2 = pFuncList.pfQuantizationHadamard2x2;
     let pfQuantizationFour4x4Max = pFuncList.pfQuantizationFour4x4Max;
     let pfScan4x4Ac = pFuncList.pfScan4x4Ac;
