@@ -948,7 +948,7 @@ pub unsafe fn WelsWriteMbResidualCabac(
             WelsCabacMbDeltaQp(buf, pCurMb, &mut *pCabacCtx, (*pCurMb).iMbXY == iSliceFirstMbXY);
             (*pSlice).uiLastMbQp = (*pCurMb).uiLumaQp;
 
-            let pDct = crate::encoder::md::dct(pMbCache);
+            let pDct = std::ptr::addr_of_mut!((*pMbCache).sDct);
 
             if uiMbType == MB_TYPE_INTRA16x16 {
                 let dc_buf = (*pDct).iLumaI16x16Dc.as_mut_ptr();

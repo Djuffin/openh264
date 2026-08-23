@@ -58,6 +58,7 @@ pub use crate::encoder::svc_encode_slice::SLayerInfo;
 use crate::encoder::svc_encode_slice::layer_pps;
 use crate::encoder::svc_encode_slice::current_layer;
 pub use crate::encoder::md::SMbCache;
+use crate::encoder::md::{best_pred_i4x4_blk4_off, mem_pred_luma_off};
 pub use crate::encoder::md::SMB;
 pub use crate::encoder::svc_encode_slice::SDqLayer;
 pub use crate::encoder::wels_func_ptr_def::SWelsFuncPtrList;
@@ -492,13 +493,15 @@ pub unsafe fn WelsEncRecI16x16Y(
     let pFuncList = ctx_func_list(pEncCtx);
     let pCurDqLayer = current_layer(pEncCtx);
     let kiEncStride = (*pCurDqLayer).iEncStride[0];
-    let mut pRes = crate::encoder::md::coeff_level(pMbCache);
+    let mut pRes = std::ptr::addr_of_mut!((*pMbCache).sCoeffLevel).cast::<i16>();
     let pPred = (*pMbCache).SPicData.pCsMb[0];
     let kiRecStride = (*pCurDqLayer).iCsStride[0];
     // S28: derived from the whole array, not `[0].as_mut_ptr()` — this cursor walks
     // every 4x4 block, and a tag narrowed to one block dies at the second.
-    let mut pBlock = std::ptr::addr_of_mut!((*crate::encoder::md::dct(pMbCache)).iLumaBlock).cast::<i16>();
-    let pBestPred = crate::encoder::md::mem_pred_luma(pMbCache);
+    let mut pBlock = std::ptr::addr_of_mut!((*pMbCache).sDct.iLumaBlock).cast::<i16>();
+    let pBestPred = std::ptr::addr_of_mut!((*pMbCache).sMemPredMb)
+        .cast::<u8>()
+        .add(mem_pred_luma_off((*pMbCache).uiMemPredLumaHalf));
     let mut kpNoneZeroCountIdx = 0usize;
     let uiQp = (*pCurMb).uiLumaQp;
     let mut uiNoneZeroCountMbAc = 0u32;
@@ -522,13 +525,13 @@ pub unsafe fn WelsEncRecI16x16Y(
     }
     if let Some(func) = (*pFuncList).pfScan4x4 {
         func(
-            (*crate::encoder::md::dct(pMbCache)).iLumaI16x16Dc.as_mut_ptr(),
+            (*pMbCache).sDct.iLumaI16x16Dc.as_mut_ptr(),
             aDctT4Dc.as_mut_ptr(),
         );
     }
 
     let uiCountI16x16Dc = if let Some(func) = (*pFuncList).pfGetNoneZeroCount {
-        func((*crate::encoder::md::dct(pMbCache)).iLumaI16x16Dc.as_mut_ptr()) as u32
+        func((*pMbCache).sDct.iLumaI16x16Dc.as_mut_ptr()) as u32
     } else {
         0
     };
@@ -643,14 +646,16 @@ pub unsafe fn WelsEncRecI4x4Y(
     let iEncStride = (*pCurDqLayer).iEncStride[0];
     let uiQp = (*pCurMb).uiLumaQp;
 
-    let pResI4x4 = crate::encoder::md::coeff_level(pMbCache);
+    let pResI4x4 = std::ptr::addr_of_mut!((*pMbCache).sCoeffLevel).cast::<i16>();
     let pPred = (*pMbCache).SPicData.pCsMb[0];
     let iRecStride = (*pCurDqLayer).iCsStride[0];
 
     let uiOffset = g_kuiMbCountScan4Idx[uiI4x4Idx as usize] as usize;
     let pEncMb = (*pMbCache).SPicData.pEncMb[0];
-    let pBestPred = crate::encoder::md::best_pred_i4x4_blk4(pMbCache);
-    let pBlock = (*crate::encoder::md::dct(pMbCache)).iLumaBlock[uiI4x4Idx as usize].as_mut_ptr();
+    let pBestPred = std::ptr::addr_of_mut!((*pMbCache).sMemPredBlk4)
+        .cast::<u8>()
+        .add(best_pred_i4x4_blk4_off((*pMbCache).uiBestPredI4x4Blk4Half));
+    let pBlock = (*pMbCache).sDct.iLumaBlock[uiI4x4Idx as usize].as_mut_ptr();
 
     let pMF = g_kiQuantMF[uiQp as usize].as_ptr();
     let pFF = get_quant_intra_ff(uiQp as usize).as_ptr();
@@ -720,12 +725,12 @@ pub unsafe fn WelsEncInterY(
     let pfGetNoneZeroCount = pFuncList.pfGetNoneZeroCount;
     let pfDequantizationFour4x4 = pFuncList.pfDequantizationFour4x4;
 
-    let mut pRes = crate::encoder::md::coeff_level(pMbCache);
+    let mut pRes = std::ptr::addr_of_mut!((*pMbCache).sCoeffLevel).cast::<i16>();
     let mut iSingleCtrMb = 0i32;
     let mut iSingleCtr8x8 = [0i32; 4];
     // S28: derived from the whole array, not `[0].as_mut_ptr()` — this cursor walks
     // every 4x4 block, and a tag narrowed to one block dies at the second.
-    let mut pBlock = std::ptr::addr_of_mut!((*crate::encoder::md::dct(pMbCache)).iLumaBlock).cast::<i16>();
+    let mut pBlock = std::ptr::addr_of_mut!((*pMbCache).sDct.iLumaBlock).cast::<i16>();
     let uiQp = (*pCurMb).uiLumaQp;
     let pMF = g_kiQuantMF[uiQp as usize].as_ptr();
     let pFF = g_kiQuantInterFF[uiQp as usize].as_ptr();
@@ -823,7 +828,7 @@ pub unsafe fn WelsEncRecUV(
     // **T9.D3**: one `dct()` derivation, not two. Both cursors named the same
     // `sDct` and the second call sat *between* the first cursor and its use, which
     // is the hazard shape exactly — `q1c.py --type SMbCache` flagged it here.
-    let pDct = crate::encoder::md::dct(pMbCache);
+    let pDct = std::ptr::addr_of_mut!((*pMbCache).sDct);
     let iChromaDc = (*pDct).iChromaDc[(iUV - 1) as usize].as_mut_ptr();
     // S28: derived from the whole array (see `iLumaBlock` above); walks four blocks.
     let mut pBlock = std::ptr::addr_of_mut!((*pDct).iChromaBlock)
@@ -934,19 +939,19 @@ pub unsafe fn WelsRecPskip(
     let pCsMb = (*pMbCache).SPicData.pCsMb.as_ptr();
 
     if let Some(func) = pFuncList.pfCopy16x16Aligned {
-        func(*pCsMb.add(0), *iRecStride.add(0), crate::encoder::md::skip_mb(pMbCache), 16);
+        func(*pCsMb.add(0), *iRecStride.add(0), std::ptr::addr_of_mut!((*pMbCache).sSkipMb).cast::<u8>(), 16);
     }
     if let Some(func) = pFuncList.pfCopy8x8Aligned {
         func(
             *pCsMb.add(1),
             *iRecStride.add(1),
-            crate::encoder::md::skip_mb(pMbCache).add(256),
+            std::ptr::addr_of_mut!((*pMbCache).sSkipMb).cast::<u8>().add(256),
             8,
         );
         func(
             *pCsMb.add(2),
             *iRecStride.add(2),
-            crate::encoder::md::skip_mb(pMbCache).add(320),
+            std::ptr::addr_of_mut!((*pMbCache).sSkipMb).cast::<u8>().add(320),
             8,
         );
     }
@@ -970,11 +975,11 @@ pub unsafe fn WelsTryPYskip(
     pMbCache: *mut SMbCache,
 ) -> bool {
     let mut iSingleCtrMb = 0i32;
-    let mut pRes = crate::encoder::md::coeff_level(pMbCache);
+    let mut pRes = std::ptr::addr_of_mut!((*pMbCache).sCoeffLevel).cast::<i16>();
     let kuiQp = (*pCurMb).uiLumaQp;
     // S28: derived from the whole array, not `[0].as_mut_ptr()` — this cursor walks
     // every 4x4 block, and a tag narrowed to one block dies at the second.
-    let mut pBlock = std::ptr::addr_of_mut!((*crate::encoder::md::dct(pMbCache)).iLumaBlock).cast::<i16>();
+    let mut pBlock = std::ptr::addr_of_mut!((*pMbCache).sDct.iLumaBlock).cast::<i16>();
     let mut aMax = [0u16; 4];
     let pMF = g_kiQuantMF[kuiQp as usize].as_ptr();
     let pFF = g_kiQuantInterFF[kuiQp as usize].as_ptr();
@@ -1022,9 +1027,9 @@ pub unsafe fn WelsTryPUVskip(
     iUV: i32,
 ) -> bool {
     let mut pRes = if iUV == 1 {
-        crate::encoder::md::coeff_level(pMbCache).add(256)
+        std::ptr::addr_of_mut!((*pMbCache).sCoeffLevel).cast::<i16>().add(256)
     } else {
-        crate::encoder::md::coeff_level(pMbCache).add(256 + 64)
+        std::ptr::addr_of_mut!((*pMbCache).sCoeffLevel).cast::<i16>().add(256 + 64)
     };
 
     let pPpsP = layer_pps(pEncCtx, current_layer(pEncCtx));
@@ -1051,7 +1056,7 @@ pub unsafe fn WelsTryPUVskip(
         let mut aMax = [0u16; 4];
         let mut iSingleCtrMb = 0i32;
         // S28: derived from the whole array; walks four blocks.
-        let mut pBlock = std::ptr::addr_of_mut!((*crate::encoder::md::dct(pMbCache)).iChromaBlock)
+        let mut pBlock = std::ptr::addr_of_mut!((*pMbCache).sDct.iChromaBlock)
             .cast::<i16>()
             .add((((iUV - 1) << 2) * 16) as usize);
 

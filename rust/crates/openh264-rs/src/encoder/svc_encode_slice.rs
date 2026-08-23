@@ -1222,6 +1222,7 @@ pub use crate::encoder::ref_list_mgr_svc::SRefPicMarking;
 pub use crate::encoder::ref_list_mgr_svc::SRefPicListReorderSyntax;
 pub use crate::encoder::rc::SRCSlicing;
 pub use crate::encoder::md::SWelsMD;
+use crate::encoder::md::{best_pred_intra_chroma_off, mem_pred_chroma_off};
 pub use crate::encoder::slice_multi_threading::SSliceThreading;
 pub use crate::encoder::slice_multi_threading::SSliceCtx;
 pub use crate::encoder::md::SMbCache;
@@ -1748,8 +1749,10 @@ pub unsafe fn WelsIMbChromaEncode(pEncCtx: *mut sWelsEncCtx, pCurMb: &mut SMB, p
     let pCurLayer = current_layer(pEncCtx);
     let kiEncStride = (*pCurLayer).iEncStride[1];
     let kiCsStride = (*pCurLayer).iCsStride[1];
-    let pCurRS = crate::encoder::md::coeff_level(pMbCache);
-    let pBestPred = crate::encoder::md::best_pred_intra_chroma(pMbCache);
+    let pCurRS = std::ptr::addr_of_mut!((*pMbCache).sCoeffLevel).cast::<i16>();
+    let pBestPred = std::ptr::addr_of_mut!((*pMbCache).sMemPredMb)
+        .cast::<u8>()
+        .add(best_pred_intra_chroma_off((*pMbCache).uiMemPredLumaHalf, (*pMbCache).uiBestPredIntraChromaHalf));
     let pCsCb = (*pMbCache).SPicData.pCsMb[1];
     let pCsCr = (*pMbCache).SPicData.pCsMb[2];
 
@@ -1785,8 +1788,10 @@ pub unsafe fn WelsPMbChromaEncode(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSlice
     let pCurLayer = current_layer(pEncCtx);
     let kiEncStride = (*pCurLayer).iEncStride[1];
     let pMbCache = std::ptr::addr_of_mut!((*pSlice).sMbCacheInfo);
-    let pCurRS = crate::encoder::md::coeff_level(pMbCache).add(256);
-    let pBestPred = crate::encoder::md::mem_pred_chroma(pMbCache);
+    let pCurRS = std::ptr::addr_of_mut!((*pMbCache).sCoeffLevel).cast::<i16>().add(256);
+    let pBestPred = std::ptr::addr_of_mut!((*pMbCache).sMemPredMb)
+        .cast::<u8>()
+        .add(mem_pred_chroma_off((*pMbCache).uiMemPredLumaHalf));
 
     let pFunc = ctx_func_list(pEncCtx);
     let dct = (*pFunc).pfDctFourT4.expect("pfDctFourT4 unset");
@@ -1814,7 +1819,7 @@ pub unsafe fn OutputPMbWithoutConstructCsRsNoCopy(pCtx: *mut sWelsEncCtx, pDq: *
         let pDecY = (*pMbCache).SPicData.pDecMb[0];
         let pDecU = (*pMbCache).SPicData.pDecMb[1];
         let pDecV = (*pMbCache).SPicData.pDecMb[2];
-        let pScaledTcoeff = crate::encoder::md::coeff_level(pMbCache);
+        let pScaledTcoeff = std::ptr::addr_of_mut!((*pMbCache).sCoeffLevel).cast::<i16>();
         let sDec = layer_dec_pic_mut(pDq)
             .expect("the layer's reconstruction picture is bound for this frame")
             .planes();

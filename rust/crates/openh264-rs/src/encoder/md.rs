@@ -523,126 +523,64 @@ impl Default for SMbCache {
     }
 }
 
-/// The scratch accessors — **T6.C3**, and the one rule they exist to enforce.
-///
-/// Each of the eight buffers below is an inline array of [`SMbCache`], which callers
-/// reach through a `*mut SMbCache`. A raw pointer into such an array must be derived
-/// from the array *root* with [`std::ptr::addr_of_mut!`]: taking it through a slice
-/// (`sMemPredMb[256..].as_mut_ptr()`) narrows the tag to that slice, and the very
-/// first read the kernel makes outside it is UB that no byte-level gate can see —
-/// **S28**, nine sites in Phase 6 session B and a tenth in session C's face 1. Taking
-/// it through `&mut` (`(*p).field.as_mut_ptr()`) is the same defect one step earlier —
-/// **S29**.
-///
-/// The prediction, copy and DCT kernels take `*mut u8` / `*mut i16` and keep doing so
-/// (that family is session E's and F's), so these hand them exactly what they took
-/// before: the same address, with the whole array's provenance.
-///
-/// **T6.E — and why `SMbCache` is passed as `*mut`, at every parameter, on purpose.**
-/// Session E converted this family to a reference and the exit battery's Miri step
-/// rejected it, at `WelsEncRecUV` and 57 other call sites. The reason generalises
-/// and is worth stating here rather than rediscovering:
-///
-/// **`SMbCache` is an arena, and a `&mut` to it covers all 5600 bytes.** Its
-/// consumers hold *several* cursors into different parts of it at once — `pCurRS`
-/// into `sCoeffLevel`, `pBestPred` into `sMemPredMb`, `pBlock` into `sDct`,
-/// `pBufMe` into `sBufferInterPredMe` — and they hold them across calls, because the
-/// arena is how a macroblock's DCT / quantise / reconstruct steps hand work to each
-/// other. Creating a `&mut SMbCache` from the shared parent pointer retags the whole
-/// arena and **invalidates every one of those cursors**, including the ones the
-/// *caller* is still holding. Two shapes make that unfixable rather than merely
-/// awkward:
-///
-/// - `WelsEncRecUV(pFunc, pCurMb, pMbCache, pRes, iUV)` takes the arena **and** a
-///   cursor into it in one call. Whichever argument is evaluated second invalidates
-///   the first; no ordering works.
-/// - `WelsIMbChromaEncode` uses `pCurRS` *before and after* the call, because the
-///   sequence is DCT into the buffer, quantise it, IDCT it back out.
-///
-/// So the parameter stays raw, these ten accessors stay raw with it, and every
-/// cursor they return carries the whole array's provenance (S28/S29). What *did*
-/// convert is the other half of the same problem: fourteen callees took `pSlice`
-/// **and** a pointer to `(*pSlice).sMbCacheInfo` — two live paths to one slice — and
-/// those parameters are **deleted** rather than retyped, the callee deriving the
-/// arena from the slice it already has. **A reference is the wrong tool for an
-/// arena; deleting the second path is the right one.**
-#[inline]
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn coeff_level(pMbCache: *mut SMbCache) -> *mut i16 {
-    std::ptr::addr_of_mut!((*pMbCache).sCoeffLevel).cast::<i16>()
-}
+// The scratch arena's half-selectors — **T9.D4**, and what replaced the ten
+// accessors that used to stand here.
+//
+// Each of the eight buffers of [`SMbCache`] is an inline array, and a raw cursor into
+// one must be derived from the array **root** with [`std::ptr::addr_of_mut!`]:
+//
+//     let pRes = std::ptr::addr_of_mut!((*pMbCache).sCoeffLevel).cast::<i16>();
+//
+// Taking it through a slice (`sMemPredMb[256..].as_mut_ptr()`) narrows the tag to
+// that slice, and the first read the kernel makes outside it is UB no byte-level gate
+// can see — **S28**, nine sites in Phase 6 session B and a tenth in session C's face 1.
+//
+// **And it must be `addr_of_mut!`, not `&mut …field.as_mut_ptr()` — S29, and T9.D4 is
+// where that stopped being a style rule.** The obvious tidy-up for the sites below is
+// a helper taking the field, `f(pMemPredMb: &mut [u8; N], …) -> *mut u8`. It is wrong
+// here for a reason the arena makes concrete: `sMemPredMb` holds *three* live cursors
+// at once (`pDstLuma`, `pDstCb`, `pDstCr` in `WelsMdInterMbRefinement`), and each
+// `&mut` to that field is a fresh Unique retag over the same bytes, so taking the
+// second **invalidates the first**. `addr_of_mut!` produces a raw sibling instead, and
+// raw siblings coexist. That is the whole reason these derivations look the way they do.
+//
+// **What a `&mut SMbCache` parameter does and does not cost.** Stacked Borrows is
+// per-byte, so a field read or write *through* `pMbCache` touches only that field's
+// bytes and leaves cursors into other fields alone — which is why the four
+// half-selectors below can read their flag while the arrays are under cursors.
+// **Entering a function that takes `&mut SMbCache` is different**: it retags every
+// byte of the arena and kills every outstanding cursor, which is F66's rule and the
+// reason `WelsEncRecUV` takes an *offset* into `sCoeffLevel` rather than a pointer
+// into it (T9.D4).
+//
+// The four functions here are the only part of the old accessors that was not pure
+// projection: the ping-pong halves, whose selection is a flag on the same struct. They
+// take the flag by value, so the caller reads the flag first and derives the cursor
+// second, and neither step can narrow the other.
 
-/// `pMbCache->pSkipMb` — 256 luma + 2x64 chroma bytes of the P_SKIP reconstruction.
+/// `pMbCache->pMemPredLuma` — the `sMemPredMb` offset of the half holding the luma
+/// prediction.
 #[inline]
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn skip_mb(pMbCache: *mut SMbCache) -> *mut u8 {
-    std::ptr::addr_of_mut!((*pMbCache).sSkipMb).cast::<u8>()
-}
-
-/// `pMbCache->pMemPredMb` — the base of the I16x16 ping-pong, half 0.
-#[inline]
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn mem_pred_mb(pMbCache: *mut SMbCache) -> *mut u8 {
-    std::ptr::addr_of_mut!((*pMbCache).sMemPredMb).cast::<u8>()
-}
-
-/// `pMbCache->pMemPredLuma` — the ping-pong half holding the luma prediction.
-#[inline]
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn mem_pred_luma(pMbCache: *mut SMbCache) -> *mut u8 {
-    mem_pred_mb(pMbCache).add(256 * (*pMbCache).uiMemPredLumaHalf as usize)
+pub const fn mem_pred_luma_off(uiMemPredLumaHalf: u8) -> usize {
+    256 * uiMemPredLumaHalf as usize
 }
 
 /// `pMbCache->pMemPredChroma` — the other half, by construction.
 #[inline]
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn mem_pred_chroma(pMbCache: *mut SMbCache) -> *mut u8 {
-    mem_pred_mb(pMbCache).add(256 * ((*pMbCache).uiMemPredLumaHalf ^ 0x01) as usize)
+pub const fn mem_pred_chroma_off(uiMemPredLumaHalf: u8) -> usize {
+    256 * (uiMemPredLumaHalf ^ 0x01) as usize
 }
 
 /// `pMbCache->pBestPredIntraChroma` — one of the chroma half's two 128-byte halves.
 #[inline]
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn best_pred_intra_chroma(pMbCache: *mut SMbCache) -> *mut u8 {
-    mem_pred_chroma(pMbCache).add(128 * (*pMbCache).uiBestPredIntraChromaHalf as usize)
+pub const fn best_pred_intra_chroma_off(uiMemPredLumaHalf: u8, uiBestPredIntraChromaHalf: u8) -> usize {
+    mem_pred_chroma_off(uiMemPredLumaHalf) + 128 * uiBestPredIntraChromaHalf as usize
 }
 
-/// `pMbCache->pMemPredBlk4` — the base of the I4x4 block ping-pong, half 0.
+/// `pMbCache->pBestPredI4x4Blk4` — the `sMemPredBlk4` offset of whichever 16-byte half won.
 #[inline]
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn mem_pred_blk4(pMbCache: *mut SMbCache) -> *mut u8 {
-    std::ptr::addr_of_mut!((*pMbCache).sMemPredBlk4).cast::<u8>()
-}
-
-/// `pMbCache->pBestPredI4x4Blk4` — whichever 16-byte half won.
-#[inline]
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn best_pred_i4x4_blk4(pMbCache: *mut SMbCache) -> *mut u8 {
-    mem_pred_blk4(pMbCache).add(16 * (*pMbCache).uiBestPredI4x4Blk4Half as usize)
-}
-
-/// `pMbCache->pBufferInterPredMe` — four 640-byte planes for the ME refinement.
-#[inline]
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn buffer_inter_pred_me(pMbCache: *mut SMbCache) -> *mut u8 {
-    std::ptr::addr_of_mut!((*pMbCache).sBufferInterPredMe).cast::<u8>()
-}
-
-/// `pMbCache->pDct` — the macroblock's transform coefficients.
-#[inline]
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn dct(pMbCache: *mut SMbCache) -> *mut SDCTCoeff {
-    std::ptr::addr_of_mut!((*pMbCache).sDct)
+pub const fn best_pred_i4x4_blk4_off(uiBestPredI4x4Blk4Half: u8) -> usize {
+    16 * uiBestPredI4x4Blk4Half as usize
 }
 
 /// **T6.F0**: `kpMbSkipSad` is the reconstruction picture's whole `pMbSkipSad` array,
