@@ -72,9 +72,6 @@ pub const MB_TYPE_SKIP: u32 = 0x00000100;
 pub const MB_TYPE_INTRA_PCM: u32 = 0x00000200;
 
 pub const SUB_MB_TYPE_8x8: u32 = 0x00000001;
-pub const SUB_MB_TYPE_8x4: u32 = 0x00000002;
-pub const SUB_MB_TYPE_4x8: u32 = 0x00000004;
-pub const SUB_MB_TYPE_4x4: u32 = 0x00000008;
 
 pub const MB_TYPE_INTRA: u32 =
     MB_TYPE_INTRA4x4 | MB_TYPE_INTRA16x16 | MB_TYPE_INTRA8x8 | MB_TYPE_INTRA_PCM;
@@ -688,17 +685,19 @@ pub unsafe fn WelsCabacSubMbType(buf: &mut [u8], pCabacCtx: &mut SCabacCtx, pCur
                 WelsCabacEncodeDecision(buf, pCabacCtx, 21, 1);
                 continue;
             }
-            WelsCabacEncodeDecision(buf, pCabacCtx, 21, 0);
-            if SUB_MB_TYPE_8x4 == uiSubMbType {
-                WelsCabacEncodeDecision(buf, pCabacCtx, 22, 0);
-            } else {
-                WelsCabacEncodeDecision(buf, pCabacCtx, 22, 1);
-                WelsCabacEncodeDecision(buf, 
-                    pCabacCtx,
-                    23,
-                    if SUB_MB_TYPE_4x8 == uiSubMbType { 1 } else { 0 },
-                );
-            }
+            // D-dead-2 / F122 — the `_8x4`/`_4x8`/`_4x4` bins (contexts 22 and 23)
+            // are gone with the sub-8x8 search that produced their partitions. Every
+            // writer of `uiSubMbType` in this encoder sets `SUB_MB_TYPE_8x8`
+            // (`svc_base_layer_md.rs:1164`/`:1249`/`:1262`,
+            // `svc_mode_decision.rs:2495`); upstream's only other writers are inside
+            // `#if 0 //Disable for sub8x8 modes for now`
+            // (`svc_mode_decision.cpp:634-661`). A wrong bin here desynchronises the
+            // arithmetic coder for the rest of the slice, so this fails loudly.
+            unreachable!(
+                "sub_mb_type {:#x} — the sub-8x8 search is #if 0 upstream and \
+                 unwritten here (D-dead-2/F122)",
+                uiSubMbType
+            );
         }
     }
 }
@@ -726,37 +725,15 @@ pub unsafe fn WelsCabacSubMbMvd(
                 (*pCurMb).sMvd[1 + idx].sAssignMv(sMvd);
                 (*pCurMb).sMvd[4 + idx].sAssignMv(sMvd);
                 (*pCurMb).sMvd[5 + idx].sAssignMv(sMvd);
-            } else if SUB_MB_TYPE_4x4 == uiSubMbType {
-                for i4x4Idx in 0..4 {
-                    let i4x4ScanIdx = g_kuiMbCountScan4Idx[(i8x8Idx << 2) + i4x4Idx] as i16;
-                    let cur_mv = (*pCurMb).sMv[i4x4ScanIdx as usize];
-                    let pred_mv = (*pMbCache).sMbMvp[i4x4ScanIdx as usize];
-                    let sMvd = WelsCabacMbMvd(buf, pCabacCtx, pCurMb, kiMbWidth as u32, cur_mv, pred_mv, i4x4ScanIdx);
-
-                    (*pCurMb).sMvd[i4x4ScanIdx as usize].sAssignMv(sMvd);
-                }
-            } else if SUB_MB_TYPE_8x4 == uiSubMbType {
-                for i8x4Idx in 0..2 {
-                    let i4x4ScanIdx = g_kuiMbCountScan4Idx[(i8x8Idx << 2) + (i8x4Idx << 1)] as i16;
-                    let cur_mv = (*pCurMb).sMv[i4x4ScanIdx as usize];
-                    let pred_mv = (*pMbCache).sMbMvp[i4x4ScanIdx as usize];
-                    let sMvd = WelsCabacMbMvd(buf, pCabacCtx, pCurMb, kiMbWidth as u32, cur_mv, pred_mv, i4x4ScanIdx);
-
-                    let idx = i4x4ScanIdx as usize;
-                    (*pCurMb).sMvd[idx].sAssignMv(sMvd);
-                    (*pCurMb).sMvd[1 + idx].sAssignMv(sMvd);
-                }
-            } else if SUB_MB_TYPE_4x8 == uiSubMbType {
-                for i4x8Idx in 0..2 {
-                    let i4x4ScanIdx = g_kuiMbCountScan4Idx[(i8x8Idx << 2) + i4x8Idx] as i16;
-                    let cur_mv = (*pCurMb).sMv[i4x4ScanIdx as usize];
-                    let pred_mv = (*pMbCache).sMbMvp[i4x4ScanIdx as usize];
-                    let sMvd = WelsCabacMbMvd(buf, pCabacCtx, pCurMb, kiMbWidth as u32, cur_mv, pred_mv, i4x4ScanIdx);
-
-                    let idx = i4x4ScanIdx as usize;
-                    (*pCurMb).sMvd[idx].sAssignMv(sMvd);
-                    (*pCurMb).sMvd[4 + idx].sAssignMv(sMvd);
-                }
+            } else {
+                // D-dead-2 / F122 — the `_4x4`/`_8x4`/`_4x8` motion-vector-difference
+                // arms go with the partitions. See `WelsCabacSubMbType` above for the
+                // reachability argument.
+                unreachable!(
+                    "sub_mb_type {:#x} — the sub-8x8 search is #if 0 upstream and \
+                     unwritten here (D-dead-2/F122)",
+                    uiSubMbType
+                );
             }
         }
     }

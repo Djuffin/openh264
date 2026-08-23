@@ -122,9 +122,10 @@ pub const MB_TYPE_INTRA: Mb_Type =
 
 // Sub-MB Types
 pub const SUB_MB_TYPE_8x8: u8 = 0x01;
-pub const SUB_MB_TYPE_8x4: u8 = 0x02;
-pub const SUB_MB_TYPE_4x8: u8 = 0x04;
-pub const SUB_MB_TYPE_4x4: u8 = 0x08;
+// D-dead-2 / F122: `SUB_MB_TYPE_8x4` (0x02), `_4x8` (0x04) and `_4x4` (0x08) are
+// gone from the *encoder*. No encoder path ever assigned them. The decoder keeps its
+// own copies — it must parse any conforming stream, whatever partitions the stream's
+// encoder chose, and 50 references there say so.
 
 // Slice Types
 pub const P_SLICE: i32 = 0;
@@ -170,17 +171,12 @@ pub type pJudgeSkipFun = unsafe extern "C" fn(
 
 
 
-#[repr(C)]
-#[derive(Copy, Clone, Default)]
-pub struct SWelsMeContainers {
-    pub sMe16x16: SWelsME,
-    pub sMe8x8: [SWelsME; 4],
-    pub sMe16x8: [SWelsME; 2],
-    pub sMe8x16: [SWelsME; 2],
-    pub sMe4x4: [[SWelsME; 4]; 4],
-    pub sMe8x4: [[SWelsME; 2]; 4],
-    pub sMe4x8: [[SWelsME; 2]; 4],
-}
+// **D-dead-2's straggler — `SWelsMeContainers` deleted.** A second, field-identical
+// declaration of `md.rs`'s `SWelsMD_sMe` with **zero references anywhere in the
+// crate**: not constructed, not named in a signature, not re-exported. It survived
+// because every encoder module carries `#![allow(dead_code)]` and every item is
+// `pub`, so neither rustc's dead-code pass nor a warning could see it — which is the
+// same blindfold that let F122's closure sit unnoticed for two sessions.
 
 
 
@@ -1045,60 +1041,18 @@ pub extern "C" fn UpdateP8x8MotionInfo(
     pMvCache[kiCacheIdx + 7] = *pMv;
 }
 
-/// `mv_pred.cpp:305`. P4x4.
-pub extern "C" fn UpdateP4x4MotionInfo(
-    pMvComp: &mut SMVComponentUnit,
-    pCurMb: &mut SMB,
-    kiPartIdx: i32,
-    kiRef: i8,
-    pMv: &mut SMVUnitXY,
-) {
-    let kiScan4Idx = g_kuiMbCountScan4Idx[kiPartIdx as usize] as usize;
-    let kiCacheIdx = g_kuiCache30ScanIdx[kiPartIdx as usize] as usize;
-
-    (*pCurMb).sMv[kiScan4Idx] = *pMv;
-    pMvComp.iRefIndexCache[kiCacheIdx] = kiRef;
-    pMvComp.sMotionVectorCache[kiCacheIdx] = *pMv;
-}
-
-/// `mv_pred.cpp:318`. P8x4.
-pub extern "C" fn UpdateP8x4MotionInfo(
-    pMvComp: &mut SMVComponentUnit,
-    pCurMb: &mut SMB,
-    kiPartIdx: i32,
-    kiRef: i8,
-    pMv: &mut SMVUnitXY,
-) {
-    let kiScan4Idx = g_kuiMbCountScan4Idx[kiPartIdx as usize] as usize;
-    let kiCacheIdx = g_kuiCache30ScanIdx[kiPartIdx as usize] as usize;
-
-    (*pCurMb).sMv[kiScan4Idx] = *pMv;
-    (*pCurMb).sMv[1 + kiScan4Idx] = *pMv;
-    pMvComp.iRefIndexCache[kiCacheIdx] = kiRef;
-    pMvComp.iRefIndexCache[1 + kiCacheIdx] = kiRef;
-    pMvComp.sMotionVectorCache[kiCacheIdx] = *pMv;
-    pMvComp.sMotionVectorCache[1 + kiCacheIdx] = *pMv;
-}
-
-/// `mv_pred.cpp:334`. P4x8.
-pub extern "C" fn UpdateP4x8MotionInfo(
-    pMvComp: &mut SMVComponentUnit,
-    pCurMb: &mut SMB,
-    kiPartIdx: i32,
-    kiRef: i8,
-    pMv: &mut SMVUnitXY,
-) {
-    let kiScan4Idx = g_kuiMbCountScan4Idx[kiPartIdx as usize] as usize;
-    let kiCacheIdx = g_kuiCache30ScanIdx[kiPartIdx as usize] as usize;
-
-    (*pCurMb).sMv[kiScan4Idx] = *pMv;
-    (*pCurMb).sMv[4 + kiScan4Idx] = *pMv;
-    pMvComp.iRefIndexCache[kiCacheIdx] = kiRef;
-    pMvComp.iRefIndexCache[6 + kiCacheIdx] = kiRef;
-    pMvComp.sMotionVectorCache[kiCacheIdx] = *pMv;
-    pMvComp.sMotionVectorCache[6 + kiCacheIdx] = *pMv;
-}
-
+// **D-dead-2 / F122 — the sub-8x8 motion-info updaters are gone.**
+// `UpdateP4x4MotionInfo` / `UpdateP8x4MotionInfo` / `UpdateP4x8MotionInfo`
+// (`mv_pred.cpp:305`/`:318`/`:334`) and their cache-only siblings
+// `UpdateP4x4Motion2Cache` / `UpdateP8x4Motion2Cache` / `UpdateP4x8Motion2Cache`
+// (`:407`/`:416`/`:427`) had, between them, three call sites in the port — all three
+// inside `WelsMdInterMbRefinement`'s `SUB_MB_TYPE_4x4`/`_8x4`/`_4x8` arms, which this
+// same commit deletes. The `Motion2Cache` trio had **none at all**: it survived on an
+// unused `use` line. Upstream reaches the whole family only through
+// `WelsMdInterFinePartitionVaaOnScreen`'s `#if 0 //Disable for sub8x8 modes for now`
+// (`svc_mode_decision.cpp:634-661`) — the same block D-dead-1 deleted
+// `WelsMdP4x4`/`WelsMdP8x4`/`WelsMdP4x8` for. Their 16x8/8x16/8x8 siblings above and
+// below stay: those have live callers.
 /// `mv_pred.cpp:353`. Cache-only update for P16x8.
 pub extern "C" fn UpdateP16x8Motion2Cache(
     pMvComp: &mut SMVComponentUnit,
@@ -1145,46 +1099,6 @@ pub extern "C" fn UpdateP8x8Motion2Cache(
         pMvComp.iRefIndexCache[kuiCacheIdx + k] = pRef;
         pMvComp.sMotionVectorCache[kuiCacheIdx + k] = *pMv;
     }
-}
-
-/// `mv_pred.cpp:407`. Cache-only update for P4x4.
-pub extern "C" fn UpdateP4x4Motion2Cache(
-    pMvComp: &mut SMVComponentUnit,
-    iPartIdx: i32,
-    pRef: i8,
-    pMv: &mut SMVUnitXY,
-) {
-    let kuiCacheIdx = g_kuiCache30ScanIdx[iPartIdx as usize] as usize;
-    pMvComp.iRefIndexCache[kuiCacheIdx] = pRef;
-    pMvComp.sMotionVectorCache[kuiCacheIdx] = *pMv;
-}
-
-/// `mv_pred.cpp:416`. Cache-only update for P8x4.
-pub extern "C" fn UpdateP8x4Motion2Cache(
-    pMvComp: &mut SMVComponentUnit,
-    iPartIdx: i32,
-    pRef: i8,
-    pMv: &mut SMVUnitXY,
-) {
-    let kuiCacheIdx = g_kuiCache30ScanIdx[iPartIdx as usize] as usize;
-    pMvComp.iRefIndexCache[kuiCacheIdx] = pRef;
-    pMvComp.iRefIndexCache[1 + kuiCacheIdx] = pRef;
-    pMvComp.sMotionVectorCache[kuiCacheIdx] = *pMv;
-    pMvComp.sMotionVectorCache[1 + kuiCacheIdx] = *pMv;
-}
-
-/// `mv_pred.cpp:427`. Cache-only update for P4x8.
-pub extern "C" fn UpdateP4x8Motion2Cache(
-    pMvComp: &mut SMVComponentUnit,
-    iPartIdx: i32,
-    pRef: i8,
-    pMv: &mut SMVUnitXY,
-) {
-    let kuiCacheIdx = g_kuiCache30ScanIdx[iPartIdx as usize] as usize;
-    pMvComp.iRefIndexCache[kuiCacheIdx] = pRef;
-    pMvComp.iRefIndexCache[6 + kuiCacheIdx] = pRef;
-    pMvComp.sMotionVectorCache[kuiCacheIdx] = *pMv;
-    pMvComp.sMotionVectorCache[6 + kuiCacheIdx] = *pMv;
 }
 
 // unsafe-cat: port-raw(Phase 9)

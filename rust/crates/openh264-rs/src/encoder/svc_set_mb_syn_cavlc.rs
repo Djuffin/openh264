@@ -50,9 +50,6 @@ pub const MB_TYPE_SKIP: u32 = 0x00000100;
 pub use crate::encoder::deblocking::MB_TYPE_DIRECT;
 
 pub const SUB_MB_TYPE_8x8: u32 = 0x00000001;
-pub const SUB_MB_TYPE_8x4: u32 = 0x00000002;
-pub const SUB_MB_TYPE_4x8: u32 = 0x00000004;
-pub const SUB_MB_TYPE_4x4: u32 = 0x00000008;
 
 
 pub const LUMA_DC: i32 = 0;
@@ -556,16 +553,19 @@ pub unsafe fn WelsSpatialWriteSubMbPred(
             SUB_MB_TYPE_8x8 => {
                 BsWriteUE(buf, &mut *pBs, 0);
             }
-            SUB_MB_TYPE_8x4 => {
-                BsWriteUE(buf, &mut *pBs, 1);
-            }
-            SUB_MB_TYPE_4x8 => {
-                BsWriteUE(buf, &mut *pBs, 2);
-            }
-            SUB_MB_TYPE_4x4 => {
-                BsWriteUE(buf, &mut *pBs, 3);
-            }
-            _ => {}
+            // D-dead-2 / F122: `sub_mb_type` 1/2/3 (`SUB_MB_TYPE_8x4`/`_4x8`/`_4x4`)
+            // deleted. Every writer of `uiSubMbType` in this encoder sets
+            // `SUB_MB_TYPE_8x8` (`svc_base_layer_md.rs:1164`/`:1249`/`:1262`,
+            // `svc_mode_decision.rs:2495`), and upstream's only other writers are
+            // inside `#if 0 //Disable for sub8x8 modes for now`
+            // (`svc_mode_decision.cpp:634-661`). Loud rather than silent: emitting
+            // nothing for an unexpected partition would desynchronise the whole
+            // slice, which is a far worse failure than a panic.
+            _ => unreachable!(
+                "sub_mb_type {:#x} — the sub-8x8 search is #if 0 upstream and \
+                 unwritten here (D-dead-2/F122)",
+                (*pCurMb).uiSubMbType[i]
+            ),
         }
     }
 
@@ -606,56 +606,14 @@ pub unsafe fn WelsSpatialWriteSubMbPred(
             BsWriteSE(buf, &mut *pBs,
                 (cur_mv[s0].iMvY - pMbCache.sMbMvp[s0].iMvY) as i32,
             );
-        } else if SUB_MB_TYPE_4x4 == uiSubMbType {
-            BsWriteSE(buf, &mut *pBs,
-                (cur_mv[s0].iMvX - pMbCache.sMbMvp[s0].iMvX) as i32,
-            );
-            BsWriteSE(buf, &mut *pBs,
-                (cur_mv[s0].iMvY - pMbCache.sMbMvp[s0].iMvY) as i32,
-            );
-            BsWriteSE(buf, &mut *pBs,
-                (cur_mv[s1].iMvX - pMbCache.sMbMvp[s1].iMvX) as i32,
-            );
-            BsWriteSE(buf, &mut *pBs,
-                (cur_mv[s1].iMvY - pMbCache.sMbMvp[s1].iMvY) as i32,
-            );
-            BsWriteSE(buf, &mut *pBs,
-                (cur_mv[s2].iMvX - pMbCache.sMbMvp[s2].iMvX) as i32,
-            );
-            BsWriteSE(buf, &mut *pBs,
-                (cur_mv[s2].iMvY - pMbCache.sMbMvp[s2].iMvY) as i32,
-            );
-            BsWriteSE(buf, &mut *pBs,
-                (cur_mv[s3].iMvX - pMbCache.sMbMvp[s3].iMvX) as i32,
-            );
-            BsWriteSE(buf, &mut *pBs,
-                (cur_mv[s3].iMvY - pMbCache.sMbMvp[s3].iMvY) as i32,
-            );
-        } else if SUB_MB_TYPE_8x4 == uiSubMbType {
-            BsWriteSE(buf, &mut *pBs,
-                (cur_mv[s0].iMvX - pMbCache.sMbMvp[s0].iMvX) as i32,
-            );
-            BsWriteSE(buf, &mut *pBs,
-                (cur_mv[s0].iMvY - pMbCache.sMbMvp[s0].iMvY) as i32,
-            );
-            BsWriteSE(buf, &mut *pBs,
-                (cur_mv[s2].iMvX - pMbCache.sMbMvp[s2].iMvX) as i32,
-            );
-            BsWriteSE(buf, &mut *pBs,
-                (cur_mv[s2].iMvY - pMbCache.sMbMvp[s2].iMvY) as i32,
-            );
-        } else if SUB_MB_TYPE_4x8 == uiSubMbType {
-            BsWriteSE(buf, &mut *pBs,
-                (cur_mv[s0].iMvX - pMbCache.sMbMvp[s0].iMvX) as i32,
-            );
-            BsWriteSE(buf, &mut *pBs,
-                (cur_mv[s0].iMvY - pMbCache.sMbMvp[s0].iMvY) as i32,
-            );
-            BsWriteSE(buf, &mut *pBs,
-                (cur_mv[s1].iMvX - pMbCache.sMbMvp[s1].iMvX) as i32,
-            );
-            BsWriteSE(buf, &mut *pBs,
-                (cur_mv[s1].iMvY - pMbCache.sMbMvp[s1].iMvY) as i32,
+        } else {
+            // D-dead-2 / F122 — the `_4x4`/`_8x4`/`_4x8` motion-vector-difference
+            // arms are gone with the sub-8x8 search that produced them. See the
+            // `sub_mb_type` match above for the reachability argument.
+            unreachable!(
+                "sub_mb_type {:#x} — the sub-8x8 search is #if 0 upstream and \
+                 unwritten here (D-dead-2/F122)",
+                uiSubMbType
             );
         }
         kpScan4_idx += 4;
