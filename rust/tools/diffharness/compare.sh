@@ -1,7 +1,7 @@
 #!/bin/bash
 # Differential comparison: C++ reference encoder vs the Rust port, byte for byte.
 #
-#   usage: rust/tools/diffharness/compare.sh <yuv> <w> <h> <frames> <qp> <cabac> <gop> [rcmode] [baseinit] [slicemode] [slicenum] [threads] [complexity] [ltr] [ltrperiod] [ltrfb] [psstrategy] [dlayers] [denoise]
+#   usage: rust/tools/diffharness/compare.sh <yuv> <w> <h> <frames> <qp> <cabac> <gop> [rcmode] [baseinit] [slicemode] [slicenum] [threads] [complexity] [ltr] [ltrperiod] [ltrfb] [psstrategy] [dlayers] [denoise] [bgd]
 #
 #   slicemode: 0 SM_SINGLE_SLICE (default), 1 SM_FIXEDSLCNUM_SLICE,
 #              2 SM_RASTER_SLICE, 3 SM_SIZELIMITED_SLICE.
@@ -60,12 +60,27 @@ PS=${17:-}
 # that session, so this is the first byte coverage either has had. See the `dl`
 # preset in sweep.sh, and F97/F98 for which downsampler the reference actually runs.
 DL=${18:-}; DN=${19:-}
-TAG=$(basename "$YUV" .yuv)_${W}x${H}_qp${QP}_cabac${CABAC}_gop${GOP}${RC:+_rc$RC}${BASE:+_base$BASE}${SLM:+_sm$SLM}${SLN:+n$SLN}${THR:+_t$THR}${CPX:+_cx$CPX}${LTR:+_ltr$LTR}${LTRP:+p$LTRP}${LTRFB:+f$LTRFB}${PS:+_ps$PS}${DL:+_dl$DL}${DN:+_dn$DN}
+# 20th: bEnableBackgroundDetection (Phase 9 session B4, D-ref-1). `WelsInitBGDFunc`
+# installs `pfInterMdBackgroundDecision` = `WelsMdInterJudgeBGDPskip` (and so the whole
+# `WelsMdBackgroundMbEnc` / `VaaBackgroundMbDataUpdate` family, plus the analyzer's
+# `BackgroundDetection`) only behind this flag, and every driver before this session
+# pinned it `false`. The flag defaults ON in `FillDefault`, so an ordinary application
+# runs these paths and this harness never did: the `bg` preset is their first byte
+# referee. See the `bg` preset in sweep.sh.
+#
+# What this axis still cannot reach is the *scene-change* skip family
+# (`SvcMdSCDMbEnc`, `CalUVSadCost`, `JudgeStaticSkip`/`JudgeScrollSkip`).
+# `WelsInitSCDPskipFunc` (`encoder_context.rs:1607-1612`) takes
+# `bScreenContent && bEnableSceneChangeDetect && iComplexityMode < HIGH_COMPLEXITY`,
+# and `bScreenContent` is `iUsageType == SCREEN_CONTENT_REAL_TIME` — an axis neither
+# driver expresses. That family is Phase 10's, not this one's (F125).
+BG=${20:-}
+TAG=$(basename "$YUV" .yuv)_${W}x${H}_qp${QP}_cabac${CABAC}_gop${GOP}${RC:+_rc$RC}${BASE:+_base$BASE}${SLM:+_sm$SLM}${SLN:+n$SLN}${THR:+_t$THR}${CPX:+_cx$CPX}${LTR:+_ltr$LTR}${LTRP:+p$LTRP}${LTRFB:+f$LTRFB}${PS:+_ps$PS}${DL:+_dl$DL}${DN:+_dn$DN}${BG:+_bg$BG}
 
 cd "$ROOT" || exit 1
-"$HERE/cxx_enc"                        "$YUV" "$W" "$H" "$N" "$QP" "$CABAC" "$GOP" "$OUT/c_$TAG.264"  $RC $BASE $SLM $SLN $THR $CPX $LTR $LTRP $LTRFB $PS $DL $DN 2>"$OUT/c_$TAG.log"
+"$HERE/cxx_enc"                        "$YUV" "$W" "$H" "$N" "$QP" "$CABAC" "$GOP" "$OUT/c_$TAG.264"  $RC $BASE $SLM $SLN $THR $CPX $LTR $LTRP $LTRFB $PS $DL $DN $BG 2>"$OUT/c_$TAG.log"
 cxx_rc=$?
-"$RUST_ENC"                            "$YUV" "$W" "$H" "$N" "$QP" "$CABAC" "$GOP" "$OUT/r_$TAG.264" $RC $BASE $SLM $SLN $THR $CPX $LTR $LTRP $LTRFB $PS $DL $DN 2>"$OUT/r_$TAG.log"
+"$RUST_ENC"                            "$YUV" "$W" "$H" "$N" "$QP" "$CABAC" "$GOP" "$OUT/r_$TAG.264" $RC $BASE $SLM $SLN $THR $CPX $LTR $LTRP $LTRFB $PS $DL $DN $BG 2>"$OUT/r_$TAG.log"
 rust_rc=$?
 
 # A driver that aborts leaves a short file, which otherwise reads as an ordinary

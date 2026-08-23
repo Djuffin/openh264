@@ -212,7 +212,7 @@ fi
 # ---------------------------------------------------------------------------
 sweep_gate() {  # $1 = profile
   local prof=$1 log="$LOGS/sweep_$1.log" rc t0 t1
-  hdr "diffharness sweep st mt def sl ltr ps dl ($prof)"
+  hdr "diffharness sweep st mt def sl ltr ps dl bg ($prof)"
   if ! RUST_ENC_PROFILE="$prof" bash "$DIFF/build.sh" > "$LOGS/build_$prof.log" 2>&1; then
     fail "sweep ($prof): harness build failed — see $LOGS/build_$prof.log"
     return
@@ -223,8 +223,20 @@ sweep_gate() {  # $1 = profile
   # had a byte of coverage and neither could have been in this list before:
   # `ps` is the five `eSpsPpsIdStrategy` values, `dl` is `iSpatialLayerNum` 2/3/4 x
   # denoise on/off — the only preset that runs `METHOD_DOWNSAMPLE` or
-  # `METHOD_DENOISE` at all. 369 -> 505 configurations per profile.
-  RUST_ENC_PROFILE="$prof" bash "$DIFF/sweep.sh" st mt def sl ltr ps dl 2>&1 | tee "$log" | tail -20
+  # `METHOD_DENOISE` at all. 369 -> 535 configurations per profile.
+  #
+  # **`bg` joined in Phase 9 session B4 (D-ref-1), for the same reason.**
+  # `bEnableBackgroundDetection` was pinned `false` in both drivers, so the whole
+  # background family — `WelsMdBackgroundMbEnc`, `VaaBackgroundMbDataUpdate`,
+  # `WelsMdUpdateBGDInfo`, the analyzer's `BackgroundDetection` — had never been
+  # compared against the reference on a single byte, while `FillDefault` leaves the
+  # flag ON for every ordinary application. 535 -> 583 configurations per profile.
+  #
+  # The "505" this comment carried from Phase 8b until B4 was wrong and had been
+  # wrong since `dl` landed: the list has measured **535** at every commit since,
+  # which is the number the findings file quotes throughout. Corrected here by
+  # running the list and reading the tally rather than by re-adding the presets.
+  RUST_ENC_PROFILE="$prof" bash "$DIFF/sweep.sh" st mt def sl ltr ps dl bg 2>&1 | tee "$log" | tail -20
   rc=${PIPESTATUS[0]}
   t1=$(date +%s)
   local tally wall=$((t1 - t0))

@@ -349,6 +349,59 @@ sweep_dl() {
   done
 }
 
+sweep_bg() {
+  echo "-- preset: bg"
+  local YUV W H rc thr gop cabac name
+  # **Background detection — the family that had no byte referee at all (Phase 9
+  # session B4, D-ref-1).** `WelsInitBGDFunc` (`encoder_context.rs:1606`) installs
+  # `pfInterMdBackgroundDecision` = `WelsMdInterJudgeBGDPskip` only behind
+  # `bEnableBackgroundDetection`, and every driver before this session pinned that
+  # flag `false`. `FillDefault` leaves it ON, so ordinary applications run
+  # `WelsMdBackgroundMbEnc`, `VaaBackgroundMbDataUpdate`, `WelsMdUpdateBGDInfo` and
+  # the analyzer's `BackgroundDetection` on every P slice and this harness ran none
+  # of them: a probe read 0 entries across five sweep configurations (F117/T9.B27).
+  #
+  # **What the rows have to satisfy for the axis to be real.** Two gates sit between
+  # the flag and `WelsMdBackgroundMbEnc`:
+  #   * `AnalyzeSpatialPic` computes `bCalculateBGD` as `eSliceType == P_SLICE &&
+  #     bEnableBackgroundDetection` (`wels_preprocess.rs:1359`), so an all-IDR
+  #     configuration marks nothing. Every row below leaves `gop` at -1 or 4, never 0.
+  #   * `WelsMdInterJudgeBGDPskip` enters the encode only where
+  #     `pVaaBackgroundMbFlag != 0` for that macroblock, which the analyzer sets only
+  #     for genuinely static blocks. The content therefore has to *have* a
+  #     background: `Static_152_100` is the strongest case and the two `CiscoVT2people`
+  #     talking-head clips are the realistic one. A clip with no static region would
+  #     pass every row while entering nothing, which is the failure mode this comment
+  #     exists to prevent — calibrate with a probe (S55) before trusting a PASS here.
+  #
+  # 72 frames, not `ST_FRAMES`: `pVaaBackgroundMbFlag` is a per-frame decision fed by
+  # the *previous* frame's reconstruction, and the collocated-QP arm
+  # (`kiRefMbQp - kiCurMbQp <= DELTA_QP_BGD_THD`) only starts discriminating once rate
+  # control has moved the QP around, which takes several VGOPs.
+  #
+  # `t=4` is not optional. `WelsMdBackgroundMbEnc` runs *in-fork* (the census marks it
+  # so), and `VaaBackgroundMbDataUpdate` writes the current source picture through raw
+  # roots from inside a slice thread; a single-threaded-only preset would referee the
+  # arithmetic and none of the threading.
+  for spec in "res/Static_152_100.yuv 152 100" \
+              "res/CiscoVT2people_160x96_6fps.yuv 160 96" \
+              "res/CiscoVT2people_320x192_12fps.yuv 320 192"; do
+    read -r YUV W H <<< "$spec"
+    name=$(basename "$YUV" .yuv)
+    loopfile "$YUV" "$W" "$H" 72
+    for rc in -1 2; do
+      for gop in -1 4; do
+        for cabac in 0 1; do
+          for thr in 1 4; do
+            check "bg $name rc=$rc gop=$gop cabac=$cabac t=$thr" \
+                  "$LOOP_PATH" "$W" "$H" "$LOOP_FRAMES" 26 "$cabac" "$gop" "$rc" 0 0 1 "$thr" 0 0 30 0 0 1 0 1
+          done
+        done
+      done
+    done
+  done
+}
+
 sweep_qp() {
   echo "-- preset: qp"
   local YUV W H qp cabac
@@ -375,7 +428,8 @@ for preset in "$@"; do
     ltr) sweep_ltr ;;
     ps)  sweep_ps ;;
     dl)  sweep_dl ;;
-    all) sweep_st; sweep_mt; sweep_qp; sweep_def; sweep_sl; sweep_ltr; sweep_ps; sweep_dl ;;
+    bg)  sweep_bg ;;
+    all) sweep_st; sweep_mt; sweep_qp; sweep_def; sweep_sl; sweep_ltr; sweep_ps; sweep_dl; sweep_bg ;;
     *)   echo "unknown preset: $preset" >&2; exit 2 ;;
   esac
 done
