@@ -487,7 +487,7 @@ pub unsafe fn WelsDctMb(
 pub unsafe fn WelsEncRecI16x16Y(
     pEncCtx: *mut sWelsEncCtx,
     pCurMb: &mut SMB,
-    pMbCache: *mut SMbCache,
+    pMbCache: &mut SMbCache,
 ) {
     let mut aDctT4Dc = [0i16; 16];
     let pFuncList = ctx_func_list(pEncCtx);
@@ -638,7 +638,7 @@ pub unsafe fn WelsEncRecI16x16Y(
 pub unsafe fn WelsEncRecI4x4Y(
     pEncCtx: *mut sWelsEncCtx,
     pCurMb: &mut SMB,
-    pMbCache: *mut SMbCache,
+    pMbCache: &mut SMbCache,
     uiI4x4Idx: u8,
 ) {
     let pFuncList = ctx_func_list(pEncCtx);
@@ -717,7 +717,7 @@ pub unsafe fn WelsEncRecI4x4Y(
 pub unsafe fn WelsEncInterY(
     pFuncList: &SWelsFuncPtrList,
     pCurMb: &mut SMB,
-    pMbCache: *mut SMbCache,
+    pMbCache: &mut SMbCache,
 ) {
     let pfQuantizationFour4x4Max = pFuncList.pfQuantizationFour4x4Max;
     let pfScan4x4 = pFuncList.pfScan4x4;
@@ -822,7 +822,7 @@ pub unsafe fn WelsEncInterY(
 pub unsafe fn WelsEncRecUV(
     pFuncList: &SWelsFuncPtrList,
     pCurMb: &mut SMB,
-    pMbCache: *mut SMbCache,
+    pMbCache: &mut SMbCache,
     kiResOff: usize,
     iUV: i32,
 ) {
@@ -948,7 +948,7 @@ pub unsafe fn WelsRecPskip(
     pCurLayer: *mut SDqLayer,
     pFuncList: &SWelsFuncPtrList,
     pCurMb: &mut SMB,
-    pMbCache: *mut SMbCache,
+    pMbCache: &mut SMbCache,
 ) {
     let iRecStride = (*pCurLayer).iCsStride.as_ptr();
     let pCsMb = (*pMbCache).SPicData.pCsMb.as_ptr();
@@ -987,7 +987,7 @@ pub unsafe fn WelsRecPskip(
 pub unsafe fn WelsTryPYskip(
     pEncCtx: *mut sWelsEncCtx,
     pCurMb: &mut SMB,
-    pMbCache: *mut SMbCache,
+    pMbCache: &mut SMbCache,
 ) -> bool {
     let mut iSingleCtrMb = 0i32;
     let mut pRes = std::ptr::addr_of_mut!((*pMbCache).sCoeffLevel).cast::<i16>();
@@ -1038,7 +1038,7 @@ pub unsafe fn WelsTryPYskip(
 pub unsafe fn WelsTryPUVskip(
     pEncCtx: *mut sWelsEncCtx,
     pCurMb: &mut SMB,
-    pMbCache: *mut SMbCache,
+    pMbCache: &mut SMbCache,
     iUV: i32,
 ) -> bool {
     let mut pRes = if iUV == 1 {

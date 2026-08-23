@@ -758,7 +758,7 @@ pub unsafe fn WelsSpatialWriteMbSyn(
             );
             let pMbCache = std::ptr::addr_of_mut!((*pSlice).sMbCacheInfo);
             let buf = crate::encoder::svc_encode_slice::slice_bs_buffer(pEncCtx, pSlice);
-            if WelsWriteMbResidual(&*ctx_func_list(pEncCtx), pMbCache, &*pCurMb, buf, pBs) != 0 {
+            if WelsWriteMbResidual(&*ctx_func_list(pEncCtx), &mut *pMbCache, &*pCurMb, buf, pBs) != 0 {
                 return ENC_RETURN_VLCOVERFLOWFOUND;
             }
         } else {
@@ -791,7 +791,7 @@ pub unsafe fn WelsSpatialWriteMbSyn(
 #[allow(unsafe_code)]
 pub unsafe fn WelsWriteMbResidual(
     pFuncList: &SWelsFuncPtrList,
-    sMbCacheInfo: *mut SMbCache,
+    sMbCacheInfo: &mut SMbCache,
     pCurMb: &SMB,
     buf: &mut [u8],
     pBs: *mut BsWriter,

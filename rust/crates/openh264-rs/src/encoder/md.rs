@@ -589,7 +589,7 @@ pub const fn best_pred_i4x4_blk4_off(uiBestPredI4x4Blk4Half: u8) -> usize {
 /// The slot drops `extern "C"` to take the slice — the precedent is `PUpdateMbMvFunc`
 /// and `PSetNoneZeroCountZeroFunc`, both plain `fn` over references since session C.
 pub type PFillInterNeighborCacheFunc = unsafe fn(
-    pMbCache: *mut SMbCache,
+    pMbCache: &mut SMbCache,
     pCurMb: *mut SMB,
     iMbWidth: i32,
     pVaaBgMbFlag: *mut i8,
@@ -791,7 +791,7 @@ pub fn IS_SVC_INTER(uiMbType: u32) -> bool {
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe extern "C" fn FillNeighborCacheIntra(
-    pMbCache: *mut SMbCache,
+    pMbCache: &mut SMbCache,
     pCurMb: *mut SMB,
     iMbWidth: i32,
 ) {
@@ -885,7 +885,7 @@ pub unsafe extern "C" fn FillNeighborCacheIntra(
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe fn FillNeighborCacheInterWithoutBGD(
-    pMbCache: *mut SMbCache,
+    pMbCache: &mut SMbCache,
     pCurMb: *mut SMB,
     iMbWidth: i32,
     _pVaaBgMbFlag: *mut i8,
@@ -1020,7 +1020,7 @@ pub unsafe fn FillNeighborCacheInterWithoutBGD(
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe fn FillNeighborCacheInterWithBGD(
-    pMbCache: *mut SMbCache,
+    pMbCache: &mut SMbCache,
     pCurMb: *mut SMB,
     iMbWidth: i32,
     pVaaBgMbFlag: *mut i8,
