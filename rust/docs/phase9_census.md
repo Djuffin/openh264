@@ -197,50 +197,50 @@ family assignment in `FAMILY_OF_TYPE`.
 | u8                         | 87         | plane    |           |
 | SDqLayer                   | 74         | layer    |           |
 | SMbCache                   | 66         | mbcache  |           |
-| i32                        | 40         | other    | scalar    |
 | SMB                        | 40         | mbcache  |           |
+| i32                        | 40         | other    | scalar    |
 | i16                        | 28         | coeff    |           |
 | SWelsSvcCodingParam        | 26         | other    | paramset  |
 | BsWriter                   | 21         | other    | bitstream |
 | SWelsFuncPtrList           | 19         | dispatch |           |
 | SLogContext                | 17         | other    | trace     |
 | u16                        | 15         | other    | scalar    |
-| SDeblockingFilter          | 13         | other    | deblock   |
 | DeblockingFunc             | 13         | dispatch |           |
+| SDeblockingFilter          | 13         | other    | deblock   |
 | SSliceArgument             | 11         | layer    |           |
 | SLayerBSInfo               | 9          | other    | bitstream |
 | SFrameBSInfo               | 8          | other    | bitstream |
-| u32                        | 7          | other    | scalar    |
-| i8                         | 7          | other    | scalar    |
 | SDynamicSlicingStack       | 7          | layer    |           |
-| SWelsSvcRc                 | 6          | other    | rc        |
+| i8                         | 7          | other    | scalar    |
+| u32                        | 7          | other    | scalar    |
 | SVAAFrameInfo              | 6          | other    | vaa       |
-| SSourcePicture             | 5          | layer    |           |
+| SWelsSvcRc                 | 6          | other    | rc        |
 | SExistingParasetList       | 5          | other    | paramset  |
+| SSourcePicture             | 5          | layer    |           |
 | Option                     | 4          | dispatch |           |
 | SRefInfoParam              | 4          | other    | ltr       |
+| SLTRState                  | 3          | other    | ltr       |
 | SSpatialLayerConfig        | 3          | other    | paramset  |
 | SSpatialLayerInternal      | 3          | other    | paramset  |
-| bool                       | 3          | other    | scalar    |
 | SSubsetSps                 | 3          | other    | paramset  |
 | SWelsSPS                   | 3          | other    | paramset  |
-| SLTRState                  | 3          | other    | ltr       |
 | Scaled_Picture             | 3          | layer    |           |
-| SWelsEncoderOutput         | 2          | other    | bitstream |
+| bool                       | 3          | other    | scalar    |
 | SParaSetOffsetVariable     | 2          | other    | paramset  |
-| SWelsPPS                   | 2          | other    | paramset  |
-| SSliceHeader               | 2          | layer    |           |
-| SSliceCtx                  | 2          | layer    |           |
-| SScreenBlockFeatureStorage | 2          | other    | vaa       |
-| c_void                     | 2          | other    | scalar    |
 | SRefJudgement              | 2          | other    | ltr       |
-| SLTRRecoverRequest         | 1          | other    | ltr       |
-| SLTRMarkingFeedback        | 1          | other    | ltr       |
-| SNalUnitHeaderExt          | 1          | other    | paramset  |
-| SMVComponentUnit           | 1          | mbcache  |           |
-| SVAAFrameInfoExt_t         | 1          | other    | vaa       |
-| SLTRConfig                 | 1          | other    | ltr       |
+| SScreenBlockFeatureStorage | 2          | other    | vaa       |
+| SSliceCtx                  | 2          | layer    |           |
+| SSliceHeader               | 2          | layer    |           |
+| SWelsEncoderOutput         | 2          | other    | bitstream |
+| SWelsPPS                   | 2          | other    | paramset  |
+| c_void                     | 2          | other    | scalar    |
 | CWelsPreProcess            | 1          | other    | vaa       |
-| SPixMap                    | 1          | layer    |           |
+| SLTRConfig                 | 1          | other    | ltr       |
+| SLTRMarkingFeedback        | 1          | other    | ltr       |
+| SLTRRecoverRequest         | 1          | other    | ltr       |
+| SMVComponentUnit           | 1          | mbcache  |           |
 | SMotionTextureUnit         | 1          | mbcache  |           |
+| SNalUnitHeaderExt          | 1          | other    | paramset  |
+| SPixMap                    | 1          | layer    |           |
+| SVAAFrameInfoExt_t         | 1          | other    | vaa       |
 
