@@ -2167,7 +2167,7 @@ pub unsafe fn WelsISliceMdEncDynamic(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSl
             pEncCtx,
             pSlice,
             pSliceCtx,
-            &*pCurMb,
+            (*pCurMb).iMbXY,
             &mut sDss,
         ) {
             if let Some(func_list) = ctx_func_list(pEncCtx).as_ref() {
@@ -2562,7 +2562,7 @@ pub unsafe fn WelsMdInterMbLoopOverDynamicSlice(
             pEncCtx,
             pSlice,
             pSliceCtx,
-            &*pCurMb,
+            (*pCurMb).iMbXY,
             &mut sDss,
         ) {
             if let Some(func_list) = ctx_func_list(pEncCtx).as_ref() {
@@ -3053,7 +3053,14 @@ pub unsafe fn AddSliceBoundary(
     pEncCtx: *mut sWelsEncCtx,
     pCurSlice: *mut SSlice,
     pSliceCtx: *mut SSliceCtx,
-    pCurMb: &SMB,
+    // **T9.D11**: this was `pCurMb: &SMB`, and the reference — not the read — was the
+    // defect. A `&`/`&mut` *argument* is **strongly protected** for the whole call, and
+    // this one covers a macroblock that `UpdateMbNeighbourInfoForNextSlice` re-borrows
+    // mutably while walking the MB list one frame below (`UpdateMbNeighbor(.., &mut
+    // *pMb, ..)`). A `*mut SMB` parameter carried no protector, so the conversion in
+    // T9.D9 created the conflict rather than exposing one. The body wanted a single
+    // `i32`; it takes the `i32` (F114).
+    kiCurMbIdx: i32,
     iFirstMbIdxOfNextSlice: i32,
     kiLastMbIdxInPartition: i32,
 ) {
@@ -3064,7 +3071,7 @@ pub unsafe fn AddSliceBoundary(
     let buf_idx = (*pCurSlice).uiBufferIdx as usize;
     let pSliceBuffer = slice_bank_root(pCurLayer, buf_idx);
     let iCodedSliceNum = (*pCurLayer).sSliceBufferInfo[buf_idx].iCodedSliceNum;
-    let iCurMbIdx = (*pCurMb).iMbXY;
+    let iCurMbIdx = kiCurMbIdx;
     let iCurSliceIdc = {
         let map: &[u16] = &(*pSliceCtx).pOverallMbMap;
         map[iCurMbIdx as usize]
@@ -3108,10 +3115,13 @@ pub unsafe fn DynSlcJudgeSliceBoundaryStepBack(
     pEncCtx: *mut sWelsEncCtx,
     pCurSlice: *mut SSlice,
     pSliceCtx: *mut SSliceCtx,
-    pCurMb: &SMB,
+    // **T9.D11**, as `AddSliceBoundary` above: the body reads one field of the
+    // macroblock, and a reference parameter would protect it across the
+    // `AddSliceBoundary` call below.
+    kiCurMbIdx: i32,
     pDss: *mut SDynamicSlicingStack,
 ) -> bool {
-    let iCurMbIdx = (*pCurMb).iMbXY;
+    let iCurMbIdx = kiCurMbIdx;
     let kiActiveThreadsNum = (*pEncCtx).iActiveThreadsNum;
     let kiPartitionId = ((*pCurSlice).iSliceIdx % (kiActiveThreadsNum as i32)) as usize;
     let kiEndMbIdxOfPartition = (*current_layer(pEncCtx)).EndMbIdxOfPartition[kiPartitionId];
@@ -3168,7 +3178,7 @@ pub unsafe fn DynSlcJudgeSliceBoundaryStepBack(
             }
         };
         crate::encoder::slice_multi_threading::with_wels_mutex(pSmtMutex, || {
-            AddSliceBoundary(pEncCtx, pCurSlice, pSliceCtx, pCurMb, iCurMbIdx, kiEndMbIdxOfPartition);
+            AddSliceBoundary(pEncCtx, pCurSlice, pSliceCtx, iCurMbIdx, iCurMbIdx, kiEndMbIdxOfPartition);
             (*pSliceCtx).iSliceNumInFrame += 1;
         });
         return true;

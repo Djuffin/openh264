@@ -204,12 +204,20 @@ to be wrong.
 ## 6. Standing rules that bind every session
 
 - **D-gate-1 / D-gate-2**: no mid-phase perf measurement; one battery at the phase close;
-  Miri once at the phase exit, unscoped (both codecs' modules move here).
+  the *unscoped* Miri once at the phase exit (both codecs' modules) — **amended by D-gate-4
+  below**: the encoder-scoped `--lib` step also runs at every session close.
 - **D-gate-3 does not apply** — that was Phase 8b's parity-gating. Phase 9 changes code that
-  byte gates and Miri both watch, so it runs `gates.sh family` (sweeps) per session close and
-  `gates.sh commit` per commit; Miri at the phase exit. *(A session that only deletes shims
-  and converts callers byte-for-byte may justify commit-level gating and say so — but the
-  sweep is cheap insurance against a cursor conversion that moves a byte.)*
+  byte gates and Miri both watch, so it runs `gates.sh commit` per commit and, **at every
+  session close, `MIRI_SCOPE=encoder bash rust/tools/gates.sh session`** — the sweeps in both
+  profiles *and* the encoder-scoped Miri `--lib` step, no benches (**D-gate-4**, 2026-08-22,
+  the user, on F114: session D's ten commits were byte-identical five times over and an
+  encoder-scoped Miri run afterwards found a retag the session had introduced — a slot that
+  now takes `&mut [i16]` of the whole `sCoeffLevel` kills every raw cursor held across the
+  call; only Miri sees the class). ≈5 min. A session that touches decoder code drops the
+  scope. The unscoped Miri, the differential Miri and the benches stay at the phase exit.
+  *(A session that only deletes shims and converts callers byte-for-byte may justify
+  commit-level gating between closes and say so — but the sweep is cheap insurance against
+  a cursor conversion that moves a byte, and the Miri step at the close is not optional.)*
 - **The referee is the tree, not the reference**: these are safety conversions with no
   intended behaviour change, so **every commit is byte-identical** on the goldens, the
   corpus, and both benches. A moved byte is a defect, bisected across the session's commits.

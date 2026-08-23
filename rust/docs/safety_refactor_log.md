@@ -16392,6 +16392,43 @@ the tree rather than by a gate:
   `pfDequantizationIHadamard4x4/2x2`) were not touched: a different typedef family,
   shared with the decoder side.
 
+### T9.D11 — Miri, run at the user's direction, found two defects the session had shipped
+
+Hard rule 3 forbade Miri this session ("once at the end of the whole phase"). Run
+anyway, `MIRI_SCOPE=encoder gates.sh full` **failed**, twice, on two different
+mechanisms — and both were this session's own work (**F114**):
+
+1. **`WelsEncRecI4x4Y`** — a raw `addr_of_mut!((*pMbCache).sCoeffLevel)` invalidated
+   over `[0x150..0x450]` by the `Unique` retag of `blk4x4_mut(&mut …)`, then used by
+   `pfIDctT4`. T9.D8's doing. The precondition that changed is the interesting part:
+   T5.O8's rule says `addr_of_mut!` rescues a derivation *when the parent is raw* —
+   and T9.D7 had just made the parent `&mut SMbCache`. Four bodies had the shape; Miri
+   reports one at a time, and a grep for the shape found the other three.
+2. **`AddSliceBoundary`** — its new `&SMB` argument is **strongly protected** for the
+   whole call, and `UpdateMbNeighbourInfoForNextSlice` re-borrows that same macroblock
+   mutably while walking the list. T9.D9's doing, and note that the conversion
+   *created* this: a `*mut SMB` parameter carries no protector.
+
+Both fixes remove pointers rather than restoring them — three memsets and twenty DC
+stores became indexed writes and `fill(0)`, and two `&SMB` parameters became the one
+`i32` their bodies actually read. Miri after: **274 passed / 0 failed / 4 ignored,
+zero UB** (893s), all four runnable encoder probes green.
+
+**The number that matters for the phase's process.** At the moment those two defects
+were live the tree had 535/535 sweeps in *both* profiles, both benches bit-identical,
+1089 tests green and a ratchet down on every metric. **No byte gate can see aliasing**,
+and this session is the project's sharpest instance of that. A phase that defers Miri
+to its exit is buying a debugging problem: the two reports here named the exact line,
+the exact tag and the exact invalidating retag, one session after the change — at the
+phase exit they would have arrived with eight sessions of conversions under them.
+
+**Decided, by the user, on this evidence: D-gate-4** (`prompts/phase9.md` §6). Every
+Phase 9 session now closes on `MIRI_SCOPE=encoder bash rust/tools/gates.sh session` —
+a new gate level that is `family` plus the encoder-scoped Miri `--lib` step and *no*
+benches, so D-gate-1 keeps every perf measurement at the phase close. The level is
+implemented in `gates.sh`; the unscoped Miri, the differential Miri and the benches
+stay where they were.
+
 ### The methodological note
 
 Three of this session's four findings are about **instruments, not code**: the detector
@@ -16399,6 +16436,11 @@ could not see the spelling the codebase mandates (F111a), could not see the root
 this family actually uses (F111b), and the session's own `SMB` classifier could not see
 `wrapping_offset` or a dispatch edge. The brief warned about two tool defects and both
 were real; the two it did not warn about were larger.
+
+And the fifth finding, F114, is about instruments too — the *gates*. Every byte gate
+in the battery passed over two live UB defects; only Miri saw them, and `q1c.py` models
+neither shape (a raw invalidated by a **safe** borrow, and a reference argument's
+**protector**). Both are cheap to scan for and neither is implemented.
 
 The generalisation, for D–H: **before scoping a family off an instrument's number, run
 the instrument against the family's own idioms and check that it can see them.** Session
