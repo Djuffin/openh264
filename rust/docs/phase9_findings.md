@@ -911,3 +911,137 @@ conflict with.
   question is not only "does anything hold a cursor across a call to it" (F66) but
   **"what did every derivation under this parameter mean while it was raw, and does it
   still mean that?"**
+
+## F115 — three mode-decision functions are dead in the port and `#if 0` upstream, and deleting them is a decision rather than a sweep
+
+`WelsMdP4x4`, `WelsMdP8x4` and `WelsMdP4x8` (`svc_base_layer_md.rs:1084`, `:1154`,
+`:1224`) have **no caller anywhere in the port** — roughly 210 lines, 4 tagged
+`#[allow(unsafe_code)]` items, and 6 `SPicData` reads between them (3 `pEncMb`, 3
+`pRefMb`). Upstream calls them only from inside
+
+    #if 0 //Disable for sub8x8 modes for now
+
+(`codec/encoder/core/src/svc_mode_decision.cpp:635-655`).
+
+Recorded rather than acted on, and the reason is the one the session brief gives:
+"dead in the port" and "dead upstream" are different claims. The first is a grep and
+this session ran it; the second is a statement about what the codec is *for*, and a
+future session that wants sub-8x8 partitions back would find the port had quietly
+decided against it. **Deleting them is the user's call.** If taken, it removes 6 of
+the 71 `pEncMb`/`pRefMb` reads that session C would otherwise convert, which is the
+only reason it is worth raising at all.
+
+## F116 — the plane census had drifted 40 sites into `?` and exited 0, and the document it feeds was right the whole time
+
+Session D (T9.D7) deleted the ten `md::mem_pred_*` / `skip_mb` / `coeff_level`
+accessors in favour of reaching the field directly. `phase9_plane_callers.py`
+classifies an operand by **how it is spelled**, so nothing failed: 40 call sites
+moved from `src`/`cache`/`coeff` into `?`, the coefficient column went from 13 to 0,
+the tool printed the new numbers without comment and **exited 0**. Session B2's own
+brief scoped against those numbers and inherited them as fact.
+
+Four repairs, all in T9.B20 — the field spellings (`sCoeffLevel` alone was 23 of the
+40), receiver-agnostic `SPicData` rules (`AcceptPskip` takes the bundle as
+`kpPicData: &SPicData`, so its one `.pEncMb[0]` operand was unclassifiable for that
+reason alone), a `[` added to `root_ident`'s strip set (the alias walk dead-ended on
+the array literal `[pMemPredChroma, ..]`, one hop short of what classifies it), and
+**a non-zero unclassified count now exits 1** with a stderr banner.
+
+**The check that makes this a finding rather than a fix.** The regenerated §1 tables
+are *byte-identical* to the census session B committed. The document was correct
+throughout; only the instrument had drifted, and the drift was invisible precisely
+because the tool reported it as a clean run. S46 (an empty scan must be loud) and S55
+(calibrate a detector on a known positive) are the same lesson; this is the third,
+and the new rule is the general one: **a reading aid that sessions scope against is a
+gate whether or not anyone calls it one.**
+
+## F117 — the source picture *is* written during the macroblock loop, in the opposite direction from the one scoped, and no gate can see the path
+
+`phase9_plane_census.md` claimed `src` is "read-only for the whole frame — any number
+of shared `PlaneCursor`s, on any number of threads, is sound". Session B2's brief
+disputed that and named `VaaBackgroundMbDataUpdate` (`svc_mode_decision.rs:510`,
+called from `WelsMdBackgroundMbEnc` inside the macroblock loop and in-fork), reading
+the three copies as writing the *previous* source picture:
+
+    copy16((*pVaaInfo).pCurY.offset(kiOffsetY), kiPicStride,
+           (*pVaaInfo).pRefY.offset(kiOffsetY), kiPicStride);   // "dst is pRefY"
+
+**The direction is backwards.** `PCopyFunc` is `(pDst, iStrideD, pSrc, iStrideS)`
+(`md.rs:235`), so the first argument is the destination: the copy runs *previous
+source* → *current source*, and the C++ is the same call in the same order
+(`svc_base_layer_md.cpp:1347`).
+
+That makes the aliasing **worse than scoped, not better**. The brief framed it as two
+elements of one pool needing index-disjoint access. Measured, the destination is the
+picture the encoder is reading: a probe at `WelsInitCurrentLayer` comparing
+`(*pCtx).pEncPic` against `GetCurrentOrigFrame(did)` reported `same:true` on **18
+frames of 18**. So the write target is *the picture `SPicData.pEncMb` reads*. No
+`pair_mut`-style pool accessor helps — the conflict is read-vs-write on one element,
+not between two.
+
+**And nothing in the gate battery can see it.** The diffharness driver sets
+`p.bEnableBackgroundDetection = false` (`tools/diffharness/rust_enc/main.rs:126`), so
+`BackgroundDetection` is never called in any sweep preset in either profile — a probe
+inside it printed nothing across a full 18-frame run, and `pVaaInfo->pCurY` is still
+null when the layer is stamped. The path is outside the 535 sweep rows *and* outside
+the encoder-scoped Miri step.
+
+**Decision (T9.B20): the three copy sites stay raw and tagged**, for session C to take
+with the rest of the write-under-shared-view problem (D-mt-3). Converting code that no
+gate exercises, on the one aliasing shape in this family that is genuinely hard, is
+the wrong trade at any price. The general rule this yields is **S57**: before
+converting a site, ask whether any gate runs it — and if none does, that is an
+argument for leaving it raw, not for converting it carefully.
+
+## F118 — a `PlaneCursor` cannot feed a raw slot, so the carrier conversion and the table flip are one commit, not two phases
+
+Session B2's plan had step 2 (every source and reference reader builds a
+`PlaneCursor`) preceding step 4 (the cost tables flip). **The two cannot be
+sequential**, and the reason is a missing method rather than a policy: `PlaneCursor`
+exposes no `as_ptr`, and `PaddedPlane::root_ptr` — the only raw escape in
+`safe/plane.rs` — takes `&mut self`, so calling it per macroblock is F73's
+whole-picture retag. A converted reader therefore has nothing to hand a
+`unsafe extern "C" fn(*mut u8, i32, *mut u8, i32)` slot, and an unconverted one has
+nothing to hand a safe one. For any given call site the operand and the slot move
+together or not at all — which is S20's closure, stated for this family.
+
+The consequence is not that the work is bigger; it is that **the unit is different**.
+Two facts make it tractable:
+
+* **Motion compensation needs no slot at all.** Phase 4a made `McLuma_c`/`McChroma_c`
+  direct calls, so MC converts *caller by caller* with no table involved. T9.B22 is
+  the first one and the shape it proves is reusable.
+* **The cost tables are constant after init.** `WelsInitSampleSadFunc`
+  (`sample.rs:332`) is the only writer of `pfSampleSad`/`pfSampleSatd`/`pfSample4Sad`
+  — its `_uiCpuFlag` parameter is unused and every other mention in the tree is a
+  read. So a call site whose block index is a **compile-time constant** may call
+  `sample_sad::<16,16>` directly and byte-identically, bypassing the slot entirely,
+  exactly as MC does. That decouples most of the 37 sad/satd sites from the one
+  type-change that `md_cost`/`me_cost` and the 42 handoff signatures would otherwise
+  force into a single commit. The runtime-selected sites (`md_cost`/`me_cost` choose
+  by `CostFamily`) still need a safe table, but they are 13 of 37, not all of them.
+
+## F119 — the 22 "dead" `mc.rs` shims are not dead: a differential test is their caller, and the grep that found them excluded it
+
+Session B2's step 5 lists 22 `mc.rs` shims to delete under S18, on the evidence of
+`grep -rn '\bMcHorVer01_c\b' src/encoder src/decoder src/processing src/api` per name.
+Every one of those greps is correct and every one of them scopes out `tests/`.
+
+`tests/kernels_differential_phase2.rs` names **13** of them — `McCopy_c`,
+`McHorizLuma_c`, `McVertLuma_c`, `McHorVer01_c`, the four `McCopyWidthEq*_c` and
+`McChromaWithFragMv_c` among them — as the raw entry points of the phase-2 kernel
+differential harness, which drives each shim against the C++ reference across a size
+and reach matrix. They are dead to the *encoder*; they are live as the port's
+kernel-level parity evidence.
+
+So deleting them is not a sweep. It trades ~22 tagged raw signatures for the
+differential coverage that proves those kernels match C++ — and the harness compares
+through a raw-pointer ABI, so the safe kernels cannot simply be substituted. Recorded
+undone for the same reason as F115: the cost is coverage, and what coverage is worth
+keeping is not a decision a conversion session should make silently.
+
+Two things confirmed while checking, so the next session need not re-do them: none of
+the 22 is `#[no_mangle]` or otherwise ABI-exported, and `McLuma_c` does **not**
+dispatch to the sixteen `McHorVer**_c` — it calls the safe `mc_luma` through
+`shim_wh`, so the "inside=3..7" occurrence counts are doc comments plus the
+definition. The brief's reachability claim was right; only its search path was short.

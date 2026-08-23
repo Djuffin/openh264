@@ -16448,3 +16448,120 @@ A's rule was "build the caller view of your family before scoping". This session
 the half underneath it: build the *instrument's* view of your family's spelling first,
 because a green report from a detector that cannot see your code reads exactly like a
 green report from one that can.
+
+## 2026-08-23 — Phase 9, session B2 (the instruments told the truth again; the picture becomes a name; and the brief's plan turns out not to be sequential)
+
+Three commits, all byte-identical, all gated. Session B2's brief laid out eight steps —
+repair the instruments, give the layer a source-picture handle, turn the per-macroblock
+carrier into names, convert the ME cursors, flip three cost tables, delete the MC shims,
+flip the forward DCT. Steps 0 and 1 landed as written. Step 2 landed for one function.
+The rest did not, and the reason is the session's main result rather than a shortfall:
+**the plan's step 2 and step 4 cannot be sequential**, and three of the brief's
+load-bearing measurements were wrong in ways that changed what the work is.
+
+### What landed
+
+* **T9.B20 `59a2b4c1`** — both instruments repaired. `phase9_plane_callers.py` was
+  silently misreporting 40 sites as unclassified and 0 as coefficient-gated (F116);
+  `q1c.py` gained F114's shapes C and D, calibrated against the tree that carried the
+  two live defects.
+* **T9.B21 `a79a9379`** — `SDqLayer` gains `pEncPic: Option<SrcPicId>` and
+  `pSrcPool: *mut SrcPicPool`, plus `layer_enc_pic`. `layer_ref_pic_mut` deleted (S18,
+  zero callers). Size pin 824/752 → 840/768.
+* **T9.B22 `7917aa0b`** — `WelsMdPSkipEnc`'s three motion compensations take
+  `PlaneCursor`s; three `SPicData.pRefMb` reads gone.
+
+### The three corrections
+
+**The copy runs the other way, and nothing watches it (F117).** The brief read
+`VaaBackgroundMbDataUpdate` as writing the *previous* source picture, making it an
+index-disjointness problem on the pool. `PCopyFunc` is `(pDst, iStrideD, pSrc,
+iStrideS)`, so the destination is `pCurY` — and a probe proved `pCurY`'s picture is the
+one the layer encodes from, 18 frames of 18. The write target is the picture
+`SPicData.pEncMb` reads, which is strictly harder, not easier. It is also unreachable
+in every sweep preset: the harness driver disables background detection outright. That
+pair — hardest shape, zero coverage — is what **S57** is written on.
+
+**A `PlaneCursor` cannot feed a raw slot (F118).** There is no `as_ptr`, and
+`root_ptr` is `&mut self` and therefore F73's retag per call. So a converted reader has
+nothing to hand an `extern "C"` slot and an unconverted one has nothing to hand a safe
+one: for any call site, operand and slot move together. The brief's ordering — convert
+all 71 carrier reads, *then* flip the tables — has no intermediate state that compiles.
+Two facts rescue it: MC needs no slot at all (Phase 4a made it direct), and the cost
+tables are provably constant after `WelsInitSampleSadFunc`, so a call site with a
+constant block index can bypass the table and call `sample_sad::<W,H>` directly and
+byte-identically. That reduces the forced-single-commit set from all 37 sad/satd sites
+to the 13 that select at runtime through `md_cost`/`me_cost`.
+
+**The 22 dead shims have a caller (F119).** The brief's per-name greps covered
+`src/encoder src/decoder src/processing src/api` and were each correct; all of them
+scope out `tests/`. `kernels_differential_phase2.rs` drives 13 of the 22 against the C++
+reference. Deleting them buys ~22 tags and spends the port's kernel-level parity
+evidence — a trade, not a sweep, and left undone for F115's reason.
+
+### The instrument work is the part that compounds
+
+`q1c.py`'s new shapes took three corrections to get right, and each had made the scan
+silently wrong in the way the shape exists to prevent:
+
+1. `split_bodies` reports the **opening brace**, not the `fn` head. A window reading
+   forward from it sees the body and no parameters, so shape D matched eleven one-line
+   `&mut SMB` signatures and missed `AddSliceBoundary(pCurMb: &SMB)` — F114b itself.
+2. "a signature taking `&mut T` re-borrows by definition" is self-referential; on `SMB`
+   it turned 2 real sites into 69. A body re-borrowing its *own* reference parameter is
+   sound — the conflict needs a second, independent path.
+3. The argument must be matched to the **parameter position**. Without that,
+   `ParseInterBInfo(pCtx, &mut *pCurDqLayer, ..)` reads as minting a `&mut SPicture`
+   because the callee takes one somewhere in its list — the whole of `SPicture`'s 12
+   reported sites, all in decoder code out of scope.
+
+After all three: shape C reports F114a's four bodies exactly, shape D reports F114b's
+two and nothing else, and both are clean at HEAD. A detector that has never been shown
+to fire is not a detector; one that has been shown to fire on the wrong thing is worse.
+
+### What the next session inherits
+
+The keystone is unchanged: **the carrier is still `pEncMb` 45 / `pRefMb` 23**, and the
+picture half of F104's double gate is still the thing between this phase and the cost
+tables. But the route is now known and one function's worth of it is proven in the
+tree — resolve through `layer_enc_pic`/`layer_ref_pic`, anchor a cursor by macroblock
+coordinate, and re-derive any raw *after* the safe borrow rather than holding it across
+(T9.D11's fix pattern used as a construction rule). The layer can name its source
+picture, which the ten context-free consumers needed and did not have.
+
+Session C inherits F117: the reconstruction write is not the only write-under-shared-view
+problem in the family, and the source-picture one is dark to every gate. Session E
+inherits `SDqLayer` at 14 hazards in 5 callers (11 shape A, 3 shape B, 0 C, 0 D),
+unchanged by this session.
+
+### Close
+
+`MIRI_SCOPE=encoder bash rust/tools/gates.sh session` — **OVERALL PASS**, 8 passed /
+0 failed / 2 skipped: 548 debug and 541 release tests, sweeps **535/535 in both
+profiles** (37s and 31s), ratchet no per-file increase, and **Miri `--lib` encoder
+scope 274 passed / 0 failed**. D-gate-4's second green run, and the first over a
+session that converted plane operands rather than arena ones.
+
+Three `gates.sh commit` runs, all PASS; one of them failed first on the ratchet
+(`svc_encode_slice.rs unsafe_fn 84 → 85`, the new `layer_enc_pic`) and was fixed by
+deleting `layer_ref_pic_mut` rather than by rebaselining — S18 paying for the accessor
+it made obsolete. Byte-identity was also checked outside the battery, twice, on
+`compare.sh` directly, and **the conversion was calibrated against a known positive**:
+a deliberate one-sample offset in the converted `mc_luma` call makes the 320x192
+stream differ at char 9223, so T9.B22's byte-identical result is coverage rather than
+a path the harness never enters. That check is cheap and should be routine — S55 says
+it of detectors, and it is just as true of a conversion.
+
+Counts at close: `port-raw(Phase 9)` **638** + `cursor` 61 = 699, unchanged (one
+accessor added, one deleted). `SPicData` code reads 103: `pEncMb` **45**, `pRefMb`
+**23**, `pCsMb` 27, `pDecMb` 8. Plane census 106 sites — 61 safe-now, 13 coeff, 32
+blocked, **0 unclassified**. Ratchet vs the phase baseline: raw_ptr −163, unsafe_fn
+−52, unsafe_block −47, shim −20.
+
+One correction for anyone re-measuring: the brief asks for the tag count as
+`grep -rn 'port-raw(Phase 9)' src | wc -l`, which returns **643** and is wrong by 5 —
+that pattern also matches prose mentions of the tag name inside comments
+(`codec_api.rs:4659`, `slice_multi_threading.rs:54`, `wels_encoder_ext.rs:1676`,
+`:1967`, `:2006`). The tag is `// unsafe-cat: port-raw(Phase 9)`, `phase9_census.py`
+counts it correctly, and 638 — the number the brief and the census both state — is the
+true one.
