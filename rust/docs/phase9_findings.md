@@ -1432,3 +1432,57 @@ its encoder chose; only the encoder's own inability to produce them is at issue 
 Gates: **583/583 in both profiles** — the full exit list including the 48 new `bg` rows.
 A deletion inside the two bitstream writers gets the byte gate at family scale, not the
 commit gate's word for it.
+
+## F130 — D-cov-1's inventory: three mc tests die, not two, and `common/mc.rs` needs three allows, not two
+
+Two corrections to B4's brief, both found by executing it.
+
+**The tests.** The brief says "**both** surviving tests together —
+`mc_shims_stay_inside_the_spans_they_declare` (`tests/kernels_differential_phase2.rs:251`)
+and the Phase 4a dispatch assert-map **inside `mc.rs`'s test module** (F124's count)".
+Two errors in one sentence:
+
+* The dispatch assert-map is `mc_table_slots_match_the_direct_calls` and it is in
+  `tests/kernels_differential_phase2.rs:2343`, not in `mc.rs`. F124 has it right; the
+  brief mislocated it while citing F124 for the count.
+* There is a **third**: `test_mc_horiz_and_vert_luma_aliases`, in `mc.rs`'s own test
+  module, proving `McHorizLuma_c == McHorVer20_c` and `McVertLuma_c == McHorVer02_c`.
+  All four of those are among the 26 deleted, so it fails to compile the moment they
+  go — which is how it was found. It is not rewritten against the safe kernels: the
+  aliasing it pinned is a property of the C header, and `mc_hor_ver20`/`mc_hor_ver02`
+  have no aliases to disagree with.
+
+Two `InitMcFunc` tests **stay** and were not on anyone's list either:
+`init_mc_func_ignores_the_cpu_flag` and
+`mc_table_is_all_none_before_init_and_all_some_after`. Both are still real properties
+of the installer, and `encoder_context.rs:2464`'s construction assertion leans on the
+second.
+
+**The allows.** The brief says `common/mc.rs` reaches `#![deny(unsafe_code)]` "with
+exactly the two dormant-tagged allows". It needs **three**. `McLuma_c` and `McChroma_c`
+survive as the brief says, but both go through `shim_wh` — the `unsafe fn` that
+materialises the caller's pointer pair as the two slices the safe kernels take, sized
+to the declared reach. It is not screen-content code, but it has exactly their lifetime;
+it is tagged `SCREEN_CONTENT(dormant)` with that said in the comment, and all three
+retire together in Phase 10.
+
+**One item nobody's list had at all**: `PMcChromaWidthExtFunc`,
+`PWelsSampleWidthAveragingFunc` and `PWelsMcWidthHeightFunc` — three `unsafe extern "C"
+fn` type aliases with zero references anywhere in the crate. `mc.h`'s width-specialised
+dispatch shapes, which this port never dispatched through. `deny(unsafe_code)` does not
+fire on a type alias, so they would have survived the flip silently and left three raw
+spellings in a module whose whole point is no longer having any. Deleted; found by
+grepping every `unsafe` in the file after the flip rather than by trusting the flip.
+
+**What `SMcFunc` is now.** The six slots hold the safe kernels — `mc_luma`, `mc_chroma`,
+`mc_hor_ver20`/`_02`/`_22`, `pixel_avg` — and the three slot *types* name those
+signatures. `assert_size!(SMcFunc, 48)` holds unchanged: six `Option<fn>` at 8 bytes by
+null-pointer optimisation, checked rather than assumed. Worth stating plainly:
+**nothing in `src/` reads these slots.** Phase 4a de-virtualized both codecs' motion
+compensation and `BaseMC` names the kernels directly (`decode_slice.rs:1081`); the
+readers are `encoder_context.rs:2464`'s `is_none()` assertion and, until this commit,
+one test. The table is kept, filled and pinned because it is upstream's
+(`codec/common/inc/mc.h:46`) and the ABI guard's — not because anything dispatches
+through it. The retype is therefore cheap and the deleted dispatch test genuinely
+spent: "slot equals direct call" has become "`mc_luma == mc_luma`", and the mistake it
+guarded against is now a type error at `InitMcFunc`.

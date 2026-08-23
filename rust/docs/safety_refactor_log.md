@@ -16748,3 +16748,156 @@ three streams at 3271/438/5924 agreements and zero disagreements (T9.B29), so
 deleting them is arithmetic — the work is threading the two pictures into
 `PSearchMethodFunc`/`PCalculateSatdFunc`/`PCheckDirectionalMv`/`PLineFullSearchFunc`,
 which is session F's dispatch family and the reason B3 stopped in front of it.
+
+## 2026-08-23 — Phase 9, session B4 (the referee first: a family that had never been compared, five conversions behind it, nine sites re-owned, and two deletions)
+
+### what landed
+
+Five commits, `fa5a51f3`..HEAD, every one byte-identical.
+
+* **`fa5a51f3` — the `bg` preset (D-ref-1).** A 20th positional argument through
+  `compare.sh` into both drivers, a 48-row preset in `sweep.sh`, and `bg` on the exit
+  list in `gates.sh`. `bEnableBackgroundDetection` had been pinned `false` in both
+  drivers since the harness existed, so `WelsMdBackgroundMbEnc`,
+  `VaaBackgroundMbDataUpdate`, `WelsMdUpdateBGDInfo` and the analyzer's
+  `BackgroundDetection` had never been compared against the reference on one byte —
+  while `FillDefault` leaves the flag ON for every ordinary application.
+* **`3d086536` — `WelsMdBackgroundMbEnc`'s five census sites** convert on T9.B22's
+  route, the first conversion this referee has ever refereed.
+* **`b316330a` — the SCD family reclassified**, eight bodies to
+  `SCREEN_CONTENT(dormant)`.
+* **`48d35182` — D-dead-2**, F122's closure, two items larger than F122 listed.
+* **D-cov-1** — 26 dead `mc.rs` shims, three tests and three dead typedefs go;
+  `SMcFunc`'s six slots are retyped to the safe kernels' signatures;
+  `common/mc.rs` reaches `#![deny(unsafe_code)]`.
+
+### the referee, and the part of it worth keeping
+
+Calibration cost more than the plumbing and earned it (S55). Entry: 72-80
+`BackgroundDetection` calls per row, **1159-5771** `WelsMdBackgroundMbEnc` entries — and
+**0/0** on the same configuration with the argument off, reproducing exactly the zero
+F117/T9.B27 measured. Teeth: one planted sample after `McLuma_c` failed **32 of 48**
+rows while `sl` stayed 12/12.
+
+**The 16 rows it did not fail are the finding (F126).** Every `Static_152_100` row
+passed the planted fault — and still passed when it was escalated from `+1` to `+128`.
+On that clip the background prediction is byte-inert: its background macroblocks all
+take `bSkipMbFlag`, code as `MB_TYPE_BACKGROUND` P_SKIP with no residual, and
+`WelsMdInterJudgeBGDPskip`'s decision inputs come from the analyzer's source-domain VAA
+planes, so a corrupted prediction reaches neither the bitstream nor a decision. **4524
+entries and zero byte sensitivity in the same row.** An entry count is evidence that a
+path runs, never that a gate can see it, and this session's own preset would have said
+"48 rows cover this" while a third of them covered nothing.
+
+Those rows still earn their runtime for **session C**: a planted fault in
+`VaaBackgroundMbDataUpdate`'s copy fails all three clips. Two sites in one function
+body, one gate, two different answers to "can it see me".
+
+**Parity work found: none.** 48/48 in both profiles, unplanted, first run.
+
+### the correction the session was scoped around
+
+B3 closed saying the referee "unblocks 17 sites". It unblocks **8** (F125).
+`WelsInitSCDPskipFunc` (`encoder_context.rs:1607-1612`) takes `bScreenContent && ...` as
+a conjunction, and `bScreenContent` is `iUsageType == SCREEN_CONTENT_REAL_TIME` — an
+axis neither driver expresses. Nine of the seventeen are Phase 10's family mis-filed in
+Phase 9's plate. Measured, not argued: a probe in `SvcMdSCDMbEnc` reads **0** in every
+`bg` row, including the one where `WelsMdBackgroundMbEnc` enters 5771 times.
+
+Their fix here is a retag, and **the report has to say reclassification, not progress**:
+tags fall 696 → 688 with `SCREEN_CONTENT(dormant)` rising 8 → 16, the same items
+re-owned, no conversion behind any of it.
+
+### two deletions, and why nothing had found them
+
+D-dead-2's closure is **two items larger than F122's list** — `SWelsMeContainers`, a
+whole second declaration of `SWelsMD_sMe` with zero references anywhere, and the
+`UpdateP*Motion2Cache` trio, which had no call sites and survived on an unused `use`
+line. F129's real content is *why*: two independent blindfolds. Every encoder module
+carries `#![allow(..., dead_code)]` — and, measured by stripping that allow from every
+module in `src/` and rebuilding, **rustc reports none of this closure anyway**, because
+every item is `pub` in a `pub mod` of a library crate. 14 dead items crate-wide, not one
+of them here. **A straggler sweep in this crate cannot be a compiler pass.** It is a
+per-symbol reference grep, and S18 should say so in those words.
+
+D-cov-1 found the same shape one level down (F130): three `unsafe extern "C" fn` type
+aliases with zero references, which `deny(unsafe_code)` does *not* fire on, so they
+would have survived the flip silently and left three raw spellings in a module whose
+whole point is no longer having any.
+
+### where the brief was wrong
+
+Four places, all in its own inventory. `gates.sh` claimed 505 sweep rows against the
+prose's 535 — running the list says 583 with `bg`, so **535** (F127). The brief located
+the Phase 4a dispatch assert-map "inside `mc.rs`'s test module"; it is in
+`tests/kernels_differential_phase2.rs:2343`, and there is a **third** mc test,
+`test_mc_horiz_and_vert_luma_aliases`, that neither the brief nor F124 had. The brief
+said `common/mc.rs` denies with "exactly the two dormant-tagged allows"; it needs
+**three** — `shim_wh` is the machinery both survivors go through. And "17 mentions
+across the three files" is the right count in the wrong places: `svc_encode_mb.rs` has
+**zero** `SUB_MB_TYPE` mentions, and 9 + 8 = 17 are all in the two syntax writers.
+
+### gates
+
+`bg` 48/48 both profiles at every commit. Full exit list **583/583 in both profiles**
+after each of the two deletions — a change inside the CAVLC and CABAC writers earns the
+family-scale byte gate, not the commit gate's word for it. Commit gate green at all
+five commits.
+
+### counts at close
+
+Ratchet against baseline: `raw_ptr` **−181 → −245**, `shim` **−20 → −46** (26 of that
+is D-cov-1's shims exactly), `unsafe_block` **−47 → −76**, `unsafe_fn` **−55 → −81**,
+no per-file increase. Plane census **70 sites**: `safe-now` **25 → 20**, coeff 13,
+blocked 32, 0 unclassified — **and 9 of the remaining 20 are tagged dormant**, which the
+census does not know, because it classifies by operand shape and not by reachability.
+Tags **696 → 688** (`port-raw` 638 → 631, `cursor` 58 → 57); `SCREEN_CONTENT(dormant)`
+**8 → 19** (8 SCD-family, 3 in `mc.rs`). `SPicData` code reads **97 → 92**. q1c
+unchanged in all three calibrated shapes.
+
+**The conversion moved the census and not the ratchet, and that is the honest reading.**
+`raw_ptr` counts `*mut`/`*const` type spellings; T9.B4's five conversions deleted eight
+raw locals whose types were all inferred. The ratchet's −64 this session is the two
+deletions, not the conversions. Quote the census for this family's progress.
+
+### what C, E and F inherit, re-measured at the close
+
+**Session C.** The reconstruction surface is unchanged — 32 blocked sites (17 copy, 10
+idct, 5 intra-pred) plus 13 coefficient-gated DCT operands. What is new:
+
+* **F117's three copies are now lit, and refereed.** `VaaBackgroundMbDataUpdate`'s
+  luma and two chroma copies run 48 rows per profile under the `bg` preset, and a
+  planted one-sample fault in the luma copy fails **all three clips** — including
+  `Static_152_100`, where the neighbouring MD sites are byte-inert. C converts them
+  under a gate that can see them; B4 deliberately did not (D-mt-3 is C's).
+* **The aliasing fact B4 learned, and did not resolve.** The copies' destination is the
+  *current source picture*, written through raw roots from inside a slice thread, while
+  `WelsMdBackgroundMbEnc` in the same call chain now holds source-picture cursors. B4's
+  conversions are sound beside them only because every cursor is built at its kernel
+  call and dropped at the end of that call's block — never held across
+  `VaaBackgroundMbDataUpdate`. **C cannot make the source pool a shared `&SrcPicPool`
+  across the loop while that write is raw**; the conversion has to move the write, not
+  borrow around it.
+* **The `bg` preset is C's referee too**, at no extra cost: 48 rows, ~8 s wall, already
+  on the exit list.
+
+**Session E.** Unchanged: `q1c.py --type SDqLayer` **14 hazardous sites in 5 callers**
+(11 shape A, 3 shape B), re-measured at this session's close and identical to B3's.
+Nothing B4 did touches the layer.
+
+**Session F.** Gets the seven genuinely lit, ME-blocked sites — `WelsDiamondSearch`'s
+five (`svc_motion_estimate.rs:909`, `:911`-`:914`) and `WelsMotionEstimateInitialPoint`'s
+two (`:734`, `:751`) — plus the transitional raw cost triple
+(`pfSampleSadRaw`/`SatdRaw`/`4SadRaw`, `md_cost_raw`/`me_cost_raw`, two re-pinned ABI
+asserts) and therefore `common/sad_common.rs`'s `deny`. **That inheritance got cleaner
+this session**: B4's conversions took `WelsMdBackgroundMbEnc` off the raw tables, and
+the reclassification means the *only* remaining raw-table readers are F's seven and the
+dormant screen-content bodies. The triple now dies with F's conversion and Phase 10's,
+not with C's.
+
+**Phase 10** gets the family this session re-owned rather than converted: 19
+`SCREEN_CONTENT(dormant)` tags, of which 11 are new here — the seven SCD bodies,
+`LineFullSearch_c`, and `common/mc.rs`'s `McLuma_c`/`McChroma_c`/`shim_wh`. Nine plane
+census sites sit behind them. **`common/mc.rs` retires its last three unsafe items the
+day `SvcMdSCDMbEnc` converts**, which needs a `SCREEN_CONTENT_REAL_TIME` axis in both
+drivers — the one thing B4 proved the `bg` preset can never be.

@@ -121,7 +121,9 @@ fn idct_four_res_add_pred_transforms_a_dc_only_block_with_zero_nzc() {
 // derivation as the caller's obligation. The test below is the assertion that the
 // contract is neither too small nor too large.
 
-use openh264_rs::common::mc;
+// `openh264_rs::common::mc` is no longer imported here: D-cov-1 (T9.B4) deleted both
+// tests that named it. The module's two surviving raw entry points are dormant
+// screen-content shims and its safe kernels are exercised by `mc.rs`'s own tests.
 
 /// `(left, top, right, bottom)`: the kernel reads `x` in `-left .. width + right`
 /// and `y` in `-top .. height + bottom`, relative to `pSrc`. An independent
@@ -244,132 +246,20 @@ fn probe_span(
     }
 }
 
-/// Every `common/mc.rs` shim, against allocations sized to exactly the span it
-/// declares. See [`probe_span`] for what each call proves; run this file under Miri
-/// for the over-reach half of it.
-#[test]
-fn mc_shims_stay_inside_the_spans_they_declare() {
-    type Wh = unsafe extern "C" fn(*const u8, i32, *mut u8, i32, i32, i32);
-    let wh: &[(&str, Wh, Reach, &[(usize, usize)])] = &[
-        ("McCopy_c", mc::McCopy_c, R_COPY, COPY_SIZES),
-        ("McHorVer20_c", mc::McHorVer20_c, R_HOR, HALFPEL_SIZES),
-        ("McHorVer02_c", mc::McHorVer02_c, R_VER, HALFPEL_SIZES),
-        ("McHorVer22_c", mc::McHorVer22_c, R_CEN, HALFPEL_SIZES),
-        ("McHorizLuma_c", mc::McHorizLuma_c, R_HOR, HALFPEL_SIZES),
-        ("McVertLuma_c", mc::McVertLuma_c, R_VER, HALFPEL_SIZES),
-        ("McHorVer01_c", mc::McHorVer01_c, R_VER, QPEL_SIZES),
-        ("McHorVer03_c", mc::McHorVer03_c, R_VER, QPEL_SIZES),
-        ("McHorVer10_c", mc::McHorVer10_c, R_HOR, QPEL_SIZES),
-        ("McHorVer11_c", mc::McHorVer11_c, R_CEN, QPEL_SIZES),
-        ("McHorVer12_c", mc::McHorVer12_c, R_CEN, QPEL_SIZES),
-        ("McHorVer13_c", mc::McHorVer13_c, R_CEN, QPEL_SIZES),
-        ("McHorVer21_c", mc::McHorVer21_c, R_CEN, QPEL_SIZES),
-        ("McHorVer23_c", mc::McHorVer23_c, R_CEN, QPEL_SIZES),
-        ("McHorVer30_c", mc::McHorVer30_c, R_HOR, QPEL_SIZES),
-        ("McHorVer31_c", mc::McHorVer31_c, R_CEN, QPEL_SIZES),
-        ("McHorVer32_c", mc::McHorVer32_c, R_CEN, QPEL_SIZES),
-        ("McHorVer33_c", mc::McHorVer33_c, R_CEN, QPEL_SIZES),
-    ];
-    let mut rng = Prng::new(0x4C40_0500);
-    for &(name, f, reach, sizes_of) in wh {
-        for &(w, h) in sizes(sizes_of) {
-            // Only the copy path narrows; everything else spans its nominal width.
-            let sw = if name == "McCopy_c" { copy_width(w) } else { w };
-            for &ss in &strides(reach.0 + sw + reach.2) {
-                for &ds in &strides(sw) {
-                    probe_span(name, &mut rng, reach, sw, h, ss, ds, |s, ssz, d, dsz| unsafe {
-                        f(s, ssz, d, dsz, w as i32, h as i32)
-                    });
-                }
-            }
-        }
-    }
-
-    type Fixed = unsafe extern "C" fn(*const u8, i32, *mut u8, i32, i32);
-    let fixed: &[(&str, Fixed, usize)] = &[
-        ("McCopyWidthEq2_c", mc::McCopyWidthEq2_c, 2),
-        ("McCopyWidthEq4_c", mc::McCopyWidthEq4_c, 4),
-        ("McCopyWidthEq8_c", mc::McCopyWidthEq8_c, 8),
-        ("McCopyWidthEq16_c", mc::McCopyWidthEq16_c, 16),
-    ];
-    for &(name, f, w) in fixed {
-        for &h in &[1usize, 4, 16, 17] {
-            for &ss in &strides(w) {
-                for &ds in &strides(w) {
-                    probe_span(name, &mut rng, R_COPY, w, h, ss, ds, |s, ssz, d, dsz| unsafe {
-                        f(s, ssz, d, dsz, h as i32)
-                    });
-                }
-            }
-        }
-    }
-
-    // Both MV-dispatching entry points, over every selector value: the reach — and so
-    // the span — is chosen by the vector, which is what makes an exhaustive sweep the
-    // only honest one here.
-    for &(w, h) in sizes(QPEL_SIZES) {
-        for phase in 0..16i16 {
-            let (mvx, mvy) = (phase & 3, phase >> 2);
-            let reach = match (mvx, mvy) {
-                (0, 0) => R_COPY,
-                (0, _) => R_VER,
-                (_, 0) => R_HOR,
-                _ => R_CEN,
-            };
-            let sw = if (mvx, mvy) == (0, 0) { copy_width(w) } else { w };
-            for &ss in &strides(reach.0 + sw + reach.2) {
-                for &ds in &strides(sw) {
-                    probe_span("McLuma_c", &mut rng, reach, sw, h, ss, ds, |s, ssz, d, dsz| unsafe {
-                        mc::McLuma_c(s, ssz, d, dsz, mvx, mvy, w as i32, h as i32)
-                    });
-                }
-            }
-        }
-    }
-
-    for &(w, h) in sizes(CHROMA_SIZES) {
-        for phase in 0..64i16 {
-            let (mvx, mvy) = (phase & 7, phase >> 3);
-            let frag = mvx != 0 || mvy != 0;
-            let (reach, sw) = if frag { (R_CHROMA, w) } else { (R_COPY, copy_width(w)) };
-            for &ss in &strides(sw + reach.2) {
-                for &ds in &strides(sw) {
-                    probe_span("McChroma_c", &mut rng, reach, sw, h, ss, ds, |s, ssz, d, dsz| unsafe {
-                        mc::McChroma_c(s, ssz, d, dsz, mvx, mvy, w as i32, h as i32)
-                    });
-                    probe_span(
-                        "McChromaWithFragMv_c",
-                        &mut rng,
-                        R_CHROMA,
-                        w,
-                        h,
-                        ss.max(w + 1),
-                        ds,
-                        |s, ssz, d, dsz| unsafe {
-                            mc::McChromaWithFragMv_c(s, ssz, d, dsz, mvx, mvy, w as i32, h as i32)
-                        },
-                    );
-                }
-            }
-        }
-    }
-
-    // Three surfaces, three independent strides — the encoder averages a
-    // `ME_REFINE_BUF_STRIDE` scratch against the reference picture, so the strides
-    // really do differ at a live call site (`encoder/md.rs:1059`).
-    for &(w, h) in sizes(HALFPEL_SIZES) {
-        for &sa in &strides(w) {
-            for &sb in &strides(w) {
-                for &ds in &strides(w) {
-                    let other = rng.bytes(block_span(sb, w, h));
-                    probe_span("PixelAvg_c", &mut rng, R_COPY, w, h, sa, ds, |s, ssz, d, dsz| unsafe {
-                        mc::PixelAvg_c(d, dsz, s, ssz, other.as_ptr(), sb as i32, w as i32, h as i32)
-                    });
-                }
-            }
-        }
-    }
-}
+// **D-cov-1 (T9.B4): `mc_shims_stay_inside_the_spans_they_declare` deleted with its
+// subjects.** It drove every `common/mc.rs` shim against allocations sized to exactly
+// the span the shim declares — a contract test of the shims' own span arithmetic, and
+// nothing else. The 26 shims it drove have no `src/` caller (the last four lost theirs
+// at T9.B29) and are gone; the safe kernels underneath carry their bounds in
+// `PlaneCursor`, so there is no span arithmetic left to pin. This file's own header
+// states the doctrine: a shim test dies with the shim.
+//
+// `McLuma_c` and `McChroma_c` survive as `SCREEN_CONTENT(dormant)` — their only
+// callers are `SvcMdSCDMbEnc`'s three, unreachable without
+// `iUsageType == SCREEN_CONTENT_REAL_TIME` (F125) — and they retire in Phase 10 with
+// the rest of that family. The helpers this test shared with the sad / intra-pred /
+// vaa span tests below (`copy_width`, `strides`, `sizes`, `src_span`, `block_span`,
+// `probe_span`, the `Reach` constants) all stay: they have other callers.
 
 
 // ===========================================================================
@@ -2330,128 +2220,21 @@ fn nonzero_count_duplicates_agree() {
 // both sides over the same inputs and comparing every written byte is immune to
 // that, and it is the property the call sites actually depend on.
 
-/// Every `SMcFunc` slot computes exactly what the function the direct call
-/// sites name computes — over the same inputs, compared across the whole
-/// destination surface.
-///
-/// The two sides are called through *different* mechanisms on purpose: `t.pMcLumaFunc.unwrap()`
-/// is the pointer the installer stored, `mc::McLuma_c` is the symbol the
-/// de-virtualized call site names. If a later edit re-points a slot at a
-/// different-but-plausible function — the exact mistake that produced Phase 2's
-/// straggler — the outputs diverge here.
-#[test]
-fn mc_table_slots_match_the_direct_calls() {
-    let mut rng = Prng::new(0x04A0_0001);
-    let mut t = mc::SMcFunc::default();
-    unsafe { mc::InitMcFunc(&mut t, 0) };
-
-    let luma_slot = t.pMcLumaFunc.unwrap();
-    let chroma_slot = t.pMcChromaFunc.unwrap();
-    let hor_slot = t.pfLumaHalfpelHor.unwrap();
-    let ver_slot = t.pfLumaHalfpelVer.unwrap();
-    let cen_slot = t.pfLumaHalfpelCen.unwrap();
-    let avg_slot = t.pfSampleAveraging.unwrap();
-
-    // Run one (kernel, direct) pair over a padded source and compare the whole
-    // destination. `reach` is the kernel's own read reach, so the source is
-    // sized exactly as its contract declares.
-    macro_rules! cmp_wh {
-        ($slot:expr, $direct:expr, $sizes:expr, $reach:expr, $mvx:expr, $mvy:expr) => {
-            for &(w, h) in sizes($sizes) {
-                for stride in strides(w + $reach.0 + $reach.2) {
-                    let (len, center) = src_span(stride, w, h, $reach);
-                    let src: Vec<u8> = (0..len).map(|_| rng.range_i32(0, 255) as u8).collect();
-                    let dst_stride = stride.max(w);
-                    let dspan = block_span(dst_stride, w, h);
-                    // Two differently-noised destinations: a byte the kernel
-                    // fails to write shows up as a difference, not as a
-                    // coincidentally-equal zero.
-                    let mut a: Vec<u8> = (0..dspan).map(|_| rng.range_i32(0, 255) as u8).collect();
-                    let mut b = a.clone();
-                    unsafe {
-                        $slot(
-                            src.as_ptr().add(center), stride as i32,
-                            a.as_mut_ptr(), dst_stride as i32,
-                            $mvx, $mvy, w as i32, h as i32,
-                        );
-                        $direct(
-                            src.as_ptr().add(center), stride as i32,
-                            b.as_mut_ptr(), dst_stride as i32,
-                            $mvx, $mvy, w as i32, h as i32,
-                        );
-                    }
-                    assert_eq!(a, b, "slot vs direct disagree at {w}x{h} stride {stride} mv ({}, {})", $mvx, $mvy);
-                }
-            }
-        };
-    }
-
-    // Luma: sweep every quarter-pel selector exhaustively (S10 — a selector
-    // sweep is never sampled), since the MV is what picks the kernel *and* its
-    // reach behind `McLuma_c`.
-    for mvx in 0..4i16 {
-        for mvy in 0..4i16 {
-            let reach = match (mvx, mvy) {
-                (0, 0) => R_COPY,
-                (_, 0) => R_HOR,
-                (0, _) => R_VER,
-                _ => R_CEN,
-            };
-            cmp_wh!(luma_slot, mc::McLuma_c, QPEL_SIZES, reach, mvx, mvy);
-        }
-    }
-
-    // Chroma: the (0,0) eighth-pel case takes the copy path and narrows its
-    // width, every other case is bilinear — both selectors matter.
-    for &(mvx, mvy) in &[(0i16, 0i16), (1, 0), (0, 1), (3, 5), (7, 7)] {
-        let (reach, sz): (Reach, &'static [(usize, usize)]) = if mvx & 7 != 0 || mvy & 7 != 0 {
-            (R_CHROMA, CHROMA_SIZES)
-        } else {
-            (R_COPY, COPY_SIZES)
-        };
-        cmp_wh!(chroma_slot, mc::McChroma_c, sz, reach, mvx, mvy);
-    }
-
-    // The three half-pel slots take (src, srcStride, dst, dstStride, w, h).
-    macro_rules! cmp_halfpel {
-        ($slot:expr, $direct:expr, $reach:expr) => {
-            for &(w, h) in sizes(HALFPEL_SIZES) {
-                for stride in strides(w + $reach.0 + $reach.2) {
-                    let (len, center) = src_span(stride, w, h, $reach);
-                    let src: Vec<u8> = (0..len).map(|_| rng.range_i32(0, 255) as u8).collect();
-                    let dst_stride = stride.max(w);
-                    let dspan = block_span(dst_stride, w, h);
-                    let mut a: Vec<u8> = (0..dspan).map(|_| rng.range_i32(0, 255) as u8).collect();
-                    let mut b = a.clone();
-                    unsafe {
-                        $slot(src.as_ptr().add(center), stride as i32, a.as_mut_ptr(), dst_stride as i32, w as i32, h as i32);
-                        $direct(src.as_ptr().add(center), stride as i32, b.as_mut_ptr(), dst_stride as i32, w as i32, h as i32);
-                    }
-                    assert_eq!(a, b, "half-pel slot vs direct disagree at {w}x{h} stride {stride}");
-                }
-            }
-        };
-    }
-    cmp_halfpel!(hor_slot, mc::McHorVer20_c, R_HOR);
-    cmp_halfpel!(ver_slot, mc::McHorVer02_c, R_VER);
-    cmp_halfpel!(cen_slot, mc::McHorVer22_c, R_CEN);
-
-    // `pfSampleAveraging` has its own shape: (dst, dstStride, srcA, strideA, srcB, strideB, width, height).
-    for &(w, h) in sizes(&[(16, 16), (8, 8), (4, 4), (2, 2)]) {
-        for stride in strides(w) {
-            let span = block_span(stride, w, h);
-            let sa: Vec<u8> = (0..span).map(|_| rng.range_i32(0, 255) as u8).collect();
-            let sb: Vec<u8> = (0..span).map(|_| rng.range_i32(0, 255) as u8).collect();
-            let mut a: Vec<u8> = (0..span).map(|_| rng.range_i32(0, 255) as u8).collect();
-            let mut b = a.clone();
-            unsafe {
-                avg_slot(a.as_mut_ptr(), stride as i32, sa.as_ptr(), stride as i32, sb.as_ptr(), stride as i32, w as i32, h as i32);
-                mc::PixelAvg_c(b.as_mut_ptr(), stride as i32, sa.as_ptr(), stride as i32, sb.as_ptr(), stride as i32, w as i32, h as i32);
-            }
-            assert_eq!(a, b, "pfSampleAveraging slot vs direct disagree at {w}x{h} stride {stride}");
-        }
-    }
-}
+// **D-cov-1 (T9.B4): `mc_table_slots_match_the_direct_calls` deleted.** Phase 4a's
+// dispatch assert-map, driving `SMcFunc`'s six installed slots against the symbols the
+// de-virtualized call sites name. It is spent, not merely stale: the slots hold the
+// safe kernels themselves now (`mc_luma`, `mc_chroma`, `mc_hor_ver20`/`_02`/`_22`,
+// `pixel_avg`), so "the slot and the direct call agree" has become "`mc_luma ==
+// mc_luma`". The mistake it existed to catch — a slot re-pointed at a
+// different-but-plausible function — is now a type error at `InitMcFunc`, because the
+// three slot types name the safe signatures and nothing else has them.
+//
+// `init_mc_func_ignores_the_cpu_flag` and
+// `mc_table_is_all_none_before_init_and_all_some_after` (both in `common/mc.rs`) stay:
+// the flag-invariance and all-None-then-all-Some halves are still real properties of
+// `InitMcFunc`, and they are what `encoder_context.rs:2464`'s construction assertion
+// leans on. F124 was right that this test is Phase 4a's mitigation rather than Phase
+// 2's span discipline, and it is retired here with its own reason.
 
 /// Every `SDeblockingFunc` slot computes exactly what the function the direct
 /// call sites name computes.
