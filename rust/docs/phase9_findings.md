@@ -202,13 +202,13 @@ Two smaller facts found the same way:
 Session B's step 0 built the plane family's **caller** census
 (`rust/tools/phase9_plane_callers.py`, `rust/docs/phase9_plane_census.md`): every
 call site of a raw plane entry point, with each pointer operand classified by the
-surface it names. 99 call sites (plus 60 kernel-internal composition calls that
+surface it names. 109 call sites (plus 64 kernel-internal composition calls that
 die with their shims). The verdict distribution is the session's scope:
 
 | verdict | sites | meaning |
 |---|---:|---|
 | `safe-now` | 64 | every plane operand is source / reference / owned scratch |
-| `blocked` | 22 | an operand is the **reconstruction** picture (F107) |
+| `blocked` | 32 | an operand is the **reconstruction** picture (F107) |
 | `coeff` | 13 | an operand is a coefficient block — family 3's (F103) |
 
 The headline is not the distribution, it is the **pairing**:
@@ -252,8 +252,9 @@ Two consequences the brief and the charter do not carry:
    the fourteen `PQuant*`/`PScan*` slots did.
 
 **What is left for the plane family alone**: the intra-prediction table (5 sites,
-all reconstruction-gated) and 17 of the 21 copy sites (reconstruction
-destination) — i.e. the *whole* remainder is F107's, and it is session C's.
+all reconstruction-gated), the inverse-DCT table (10 sites, reconstruction
+destination *and* a coefficient operand) and 17 of the 21 copy sites — i.e. the
+*whole* remainder is F107's, and it is session C's.
 The plane family, read from the callers, is not "convert the plane roots and the
 shims fall out". It is: **plane roots first (they unblock nothing on their own),
 then family 3, then the tables flip in one commit each.**

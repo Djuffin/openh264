@@ -96,6 +96,9 @@ SHIMS = {
     "WelsDctT4_c":                ("dct", (0, 1, 3)),
     "WelsDctFourT4_c":            ("dct", (0, 1, 3)),
     "WelsDctMb":                  ("dct", (0, 1, 3)),
+    "WelsIDctT4Rec_c":            ("idct", (0, 2, 4)),
+    "WelsIDctFourT4Rec_c":        ("idct", (0, 2, 4)),
+    "WelsIDctT4RecOnMb":          ("idct", (0, 2, 4)),
     "McLuma_c":                   ("mc", (0, 2)),
     "McChroma_c":                 ("mc", (0, 2)),
     "ExpandReferencingPicture":   ("expand", (0, 1, 2)),
@@ -132,6 +135,8 @@ SLOTS = {
     "pfCopy8x4":          ("copy", (0, 2)),
     "pfCopy4x8":          ("copy", (0, 2)),
     "pfCopyBlockByMode":  ("copy", (0, 2)),
+    "pfIDctT4":           ("idct", (0, 2, 4)),
+    "pfIDctFourT4":       ("idct", (0, 2, 4)),
     "pfDctT4":            ("dct", (0, 1, 3)),
     "pfDctFourT4":        ("dct", (0, 1, 3)),
 }
