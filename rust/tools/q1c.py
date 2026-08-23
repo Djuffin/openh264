@@ -175,6 +175,7 @@ LET_RE = re.compile(r"^\s*let\s+(?:mut\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*(?::[^=]+)
 # produces something pointer-like: a raw pointer, a reference, or a slice.
 DERIV_HINT = re.compile(
     r"as_mut_ptr\(\)|as_ptr\(\)|\.as_mut\(\)|&\s*mut\b|&\s*[a-zA-Z_(*]|"
+    r"addr_of(?:_mut)?!\(|"
     r"\.add\(|\.offset\(|_mut\(|_ptr\b|as\s+\*\s*(?:mut|const)\b")
 
 # Lines that cannot use a binding even if the name appears (the derivation itself,
@@ -291,7 +292,29 @@ def split_bodies(lines):
         i = end + 1
 
 
-def body_roots(lines, b, end, roots, pp):
+def owning_fields():
+    """Struct fields whose declared type **is** `CTX_TYPE`, owned inline.
+
+    **T9.D5.** A root does not have to be a parameter. `SMbCache` lives as one owned
+    field of `SSlice`, and 32 bodies mint their root with
+
+        let pMbCache = std::ptr::addr_of_mut!((*pSlice).sMbCacheInfo);
+
+    which `LOCAL_ROOT_RE` cannot see: the type is nowhere in the line. Reading the
+    field's *declaration* out of the tree supplies it, so those 32 bodies stop being
+    invisible as callers. The context struct has no such field and is unaffected.
+    """
+    out = set()
+    pat = re.compile(r"^\s*(?:pub\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*:\s*" + CTX_TYPE + r"\s*,")
+    for path in sorted(SRC.rglob("*.rs")):
+        for line in path.read_text().splitlines():
+            m = pat.match(strip_comment(line))
+            if m:
+                out.add(m.group(1))
+    return out
+
+
+def body_roots(lines, b, end, roots, pp, fields=()):
     """`roots` grown with every local in the body that also holds a raw context.
 
     Three ways a local becomes one: an explicit `*mut sWelsEncCtx` type or cast,
@@ -313,6 +336,9 @@ def body_roots(lines, b, end, roots, pp):
             out.add(nm)
         elif rhs.strip().rstrip(";").strip() in out:
             out.add(nm)
+        elif any(re.search(r"(addr_of(?:_mut)?!|&\s*mut)\s*\(?[^;]*\.\s*"
+                           + re.escape(f) + r"\b", rhs) for f in fields):
+            out.add(nm)          # `let p = addr_of_mut!((*pSlice).sMbCacheInfo);`
     return out
 
 
@@ -367,13 +393,14 @@ def scan():
     callees = ctx_taking_callees()
     if not callees:
         return [], callees
+    fields = owning_fields()
     callee_re = re.compile(r"\b(" + "|".join(sorted(map(re.escape, callees))) + r")\s*\(")
     hazards = []
     for path in sorted(SRC.rglob("*.rs")):
         rel = str(path.relative_to(SRC))
         lines = path.read_text().splitlines()
         for caller, b, end, roots, pp in split_bodies(lines):
-            roots = body_roots(lines, b, end, roots, pp)
+            roots = body_roots(lines, b, end, roots, pp, fields)
             if not roots:
                 continue
             body = range(b, end + 1)
