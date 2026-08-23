@@ -2846,7 +2846,7 @@ pub unsafe fn DynslcUpdateMbNeighbourInfoListForAllSlices(pCurDq: *mut SDqLayer,
         let pMb = pMbList.add(iIdx as usize);
         let uiSliceIdc =
             crate::encoder::svc_encode_slice::WelsMbToSliceIdc(pCurDq, (*pMb).iMbXY as i32);
-        crate::encoder::svc_encode_slice::UpdateMbNeighbor(pCurDq, pMb, kiMbWidth, uiSliceIdc);
+        crate::encoder::svc_encode_slice::UpdateMbNeighbor(pCurDq, &mut *pMb, kiMbWidth, uiSliceIdc);
         iIdx += 1;
         if iIdx > kiEndMbInSlice {
             break;

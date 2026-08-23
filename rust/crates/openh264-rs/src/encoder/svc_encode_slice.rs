@@ -1326,8 +1326,10 @@ pub unsafe fn WelsMbToSliceIdc(pCurDq: *mut SDqLayer, kiMbXY: i32) -> u16 {
 /// Evaluates spatial neighbor availability masks for intra prediction and motion vector prediction.
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
-pub unsafe fn UpdateMbNeighbor(pCurDq: *mut SDqLayer, pMb: *mut SMB, kiMbWidth: i32, uiSliceIdc: u16) {
-    if pCurDq.is_null() || pMb.is_null() {
+pub unsafe fn UpdateMbNeighbor(pCurDq: *mut SDqLayer, pMb: &mut SMB, kiMbWidth: i32, uiSliceIdc: u16) {
+    // **T9.D9**: `pMb.is_null()` went with the parameter — a reference cannot be
+    // absent. `pCurDq` stays raw until the layer family.
+    if pCurDq.is_null() {
         return;
     }
     let mut uiNeighborAvailFlag: u32 = 0;
@@ -1385,7 +1387,7 @@ pub unsafe fn UpdateMbNeighbourInfoForNextSlice(
     // boundary lands on the last macroblock of a partition. A `while` skips it.
     let mut pMb = pMbList.add(iIdx as usize);
     loop {
-        UpdateMbNeighbor(pCurDq, pMb, kiMbWidth, WelsMbToSliceIdc(pCurDq, (*pMb).iMbXY));
+        UpdateMbNeighbor(pCurDq, &mut *pMb, kiMbWidth, WelsMbToSliceIdc(pCurDq, (*pMb).iMbXY));
         pMb = pMb.add(1);
         iIdx += 1;
         if !((iIdx < kiEndMbNeedUpdate) && (iIdx <= kiLastMbIdxInPartition)) {
@@ -1842,8 +1844,8 @@ pub unsafe fn WelsPMbChromaEncode(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSlice
 
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
-pub unsafe fn OutputPMbWithoutConstructCsRsNoCopy(pCtx: *mut sWelsEncCtx, pDq: *mut SDqLayer, pSlice: *mut SSlice, pMb: *mut SMB) {
-    if pCtx.is_null() || pDq.is_null() || pSlice.is_null() || pMb.is_null() {
+pub unsafe fn OutputPMbWithoutConstructCsRsNoCopy(pCtx: *mut sWelsEncCtx, pDq: *mut SDqLayer, pSlice: *mut SSlice, pMb: &SMB) {
+    if pCtx.is_null() || pDq.is_null() || pSlice.is_null() {
         return;
     }
     let mb_type = (*pMb).uiMbType;
@@ -2165,7 +2167,7 @@ pub unsafe fn WelsISliceMdEncDynamic(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSl
             pEncCtx,
             pSlice,
             pSliceCtx,
-            pCurMb,
+            &*pCurMb,
             &mut sDss,
         ) {
             if let Some(func_list) = ctx_func_list(pEncCtx).as_ref() {
@@ -2382,7 +2384,7 @@ pub unsafe fn WelsMdInterMbLoop(
         }
 
         (*pCurMb).uiSliceIdc = kiSliceIdx as u16;
-        OutputPMbWithoutConstructCsRsNoCopy(pEncCtx, pCurLayer, pSlice, pCurMb);
+        OutputPMbWithoutConstructCsRsNoCopy(pEncCtx, pCurLayer, pSlice, &*pCurMb);
 
         if let Some(func_list) = ctx_func_list(pEncCtx).as_ref() {
             func_list.pfRc.WelsRcMbInfoUpdate(
@@ -2560,7 +2562,7 @@ pub unsafe fn WelsMdInterMbLoopOverDynamicSlice(
             pEncCtx,
             pSlice,
             pSliceCtx,
-            pCurMb,
+            &*pCurMb,
             &mut sDss,
         ) {
             if let Some(func_list) = ctx_func_list(pEncCtx).as_ref() {
@@ -2577,7 +2579,7 @@ pub unsafe fn WelsMdInterMbLoopOverDynamicSlice(
         }
 
         (*pCurMb).uiSliceIdc = kiSliceIdx as u16;
-        OutputPMbWithoutConstructCsRsNoCopy(pEncCtx, pCurLayer, pSlice, pCurMb);
+        OutputPMbWithoutConstructCsRsNoCopy(pEncCtx, pCurLayer, pSlice, &*pCurMb);
 
         if let Some(func_list) = ctx_func_list(pEncCtx).as_ref() {
             func_list.pfRc.WelsRcMbInfoUpdate(
@@ -3051,11 +3053,11 @@ pub unsafe fn AddSliceBoundary(
     pEncCtx: *mut sWelsEncCtx,
     pCurSlice: *mut SSlice,
     pSliceCtx: *mut SSliceCtx,
-    pCurMb: *mut SMB,
+    pCurMb: &SMB,
     iFirstMbIdxOfNextSlice: i32,
     kiLastMbIdxInPartition: i32,
 ) {
-    if pEncCtx.is_null() || pCurSlice.is_null() || pSliceCtx.is_null() || pCurMb.is_null() {
+    if pEncCtx.is_null() || pCurSlice.is_null() || pSliceCtx.is_null() {
         return;
     }
     let pCurLayer = current_layer(pEncCtx);
@@ -3106,7 +3108,7 @@ pub unsafe fn DynSlcJudgeSliceBoundaryStepBack(
     pEncCtx: *mut sWelsEncCtx,
     pCurSlice: *mut SSlice,
     pSliceCtx: *mut SSliceCtx,
-    pCurMb: *mut SMB,
+    pCurMb: &SMB,
     pDss: *mut SDynamicSlicingStack,
 ) -> bool {
     let iCurMbIdx = (*pCurMb).iMbXY;

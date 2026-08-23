@@ -406,7 +406,7 @@ pub unsafe fn WriteBlockResidualCavlc(
 pub unsafe fn WelsSpatialWriteMbPred(
     pEncCtx: *mut sWelsEncCtx,
     pSlice: *mut SSlice,
-    pCurMb: *mut SMB,
+    pCurMb: &mut SMB,
 ) {
     let pMbCache = &mut (*pSlice).sMbCacheInfo;
     let pBs = crate::encoder::svc_encode_slice::slice_writer(pEncCtx, pSlice);
@@ -528,7 +528,7 @@ pub unsafe fn WelsSpatialWriteMbPred(
 pub unsafe fn WelsSpatialWriteSubMbPred(
     pEncCtx: *mut sWelsEncCtx,
     pSlice: *mut SSlice,
-    pCurMb: *mut SMB,
+    pCurMb: &mut SMB,
 ) {
     let pMbCache = &mut (*pSlice).sMbCacheInfo;
     let pBs = crate::encoder::svc_encode_slice::slice_writer(pEncCtx, pSlice);
@@ -732,9 +732,9 @@ pub unsafe fn WelsSpatialWriteMbSyn(
 
         // Step 1: write mb type and pred
         if IS_Inter_8x8((*pCurMb).uiMbType) {
-            WelsSpatialWriteSubMbPred(pEncCtx, pSlice, pCurMb);
+            WelsSpatialWriteSubMbPred(pEncCtx, pSlice, &mut *pCurMb);
         } else {
-            WelsSpatialWriteMbPred(pEncCtx, pSlice, pCurMb);
+            WelsSpatialWriteMbPred(pEncCtx, pSlice, &mut *pCurMb);
         }
 
         // Step 2: write coded block pattern
