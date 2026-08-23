@@ -313,7 +313,7 @@ pub unsafe fn PredIntra4x4Mode(pIntraPredMode: *const i8, iIdx4: i32) -> i32 {
 pub unsafe fn WelsMdIntraInit(
     pEncCtx: *mut sWelsEncCtx,
     pCurMb: *mut SMB,
-    pMbCache: *mut SMbCache,
+    pMbCache: &mut SMbCache,
     iSliceFirstMbXY: i32,
 ) {
     let pCurLayer = current_layer(pEncCtx);
@@ -391,7 +391,7 @@ pub unsafe extern "C" fn WelsMdI4x4(
     pEncCtx: *mut sWelsEncCtx,
     pWelsMd: &mut SWelsMD,
     pCurMb: &mut SMB,
-    pMbCache: *mut SMbCache,
+    pMbCache: &mut SMbCache,
 ) -> i32 {
     let pFunc = ctx_func_list(pEncCtx);
     let pCurDqLayer = current_layer(pEncCtx);
@@ -487,7 +487,7 @@ pub unsafe extern "C" fn WelsMdI4x4(
 #[inline]
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
-unsafe fn StoreIntra4x4PredModeToMb(pCurMb: &mut SMB, pMbCache: *mut SMbCache) {
+unsafe fn StoreIntra4x4PredModeToMb(pCurMb: &mut SMB, pMbCache: &mut SMbCache) {
     // ST32 (pCurMb->pIntra4x4PredMode, LD32 (&pMbCache->iIntraPredMode[33]));
     let pMbMode = &mut (*pCurMb).iIntra4x4PredMode;
     let pCacheMode = &(*pMbCache).iIntraPredMode;
@@ -509,7 +509,7 @@ pub unsafe extern "C" fn WelsMdI4x4Fast(
     pEncCtx: *mut sWelsEncCtx,
     pWelsMd: &mut SWelsMD,
     pCurMb: &mut SMB,
-    pMbCache: *mut SMbCache,
+    pMbCache: &mut SMbCache,
 ) -> i32 {
     let pFunc = ctx_func_list(pEncCtx);
     let pCurDqLayer = current_layer(pEncCtx);
@@ -711,7 +711,7 @@ pub unsafe extern "C" fn WelsMdI4x4Fast(
 pub unsafe extern "C" fn WelsMdIntraChroma(
     pFunc: &SWelsFuncPtrList,
     pCurDqLayer: *mut SDqLayer,
-    pMbCache: *mut SMbCache,
+    pMbCache: &mut SMbCache,
     iLambda: i32,
 ) -> i32 {
     let mut iChmaIdx: usize = 0;
@@ -770,7 +770,7 @@ pub unsafe extern "C" fn WelsMdIntraFinePartition(
     pEncCtx: *mut sWelsEncCtx,
     pWelsMd: &mut SWelsMD,
     pCurMb: &mut SMB,
-    pMbCache: *mut SMbCache,
+    pMbCache: &mut SMbCache,
 ) -> i32 {
     let iCosti4x4 = WelsMdI4x4(pEncCtx, pWelsMd, pCurMb, pMbCache);
 
@@ -793,7 +793,7 @@ pub unsafe extern "C" fn WelsMdIntraFinePartitionVaa(
     pEncCtx: *mut sWelsEncCtx,
     pWelsMd: &mut SWelsMD,
     pCurMb: &mut SMB,
-    pMbCache: *mut SMbCache,
+    pMbCache: &mut SMbCache,
 ) -> i32 {
     if MdIntraAnalysisVaaInfo(pEncCtx, (*pMbCache).SPicData.pEncMb[0]) {
         let iCosti4x4 = WelsMdI4x4Fast(pEncCtx, pWelsMd, pCurMb, pMbCache);
@@ -820,7 +820,7 @@ pub unsafe fn WelsMdIntraMb(
     pEncCtx: *mut sWelsEncCtx,
     pWelsMd: &mut SWelsMD,
     pCurMb: &mut SMB,
-    pMbCache: *mut SMbCache,
+    pMbCache: &mut SMbCache,
 ) {
     //initial prediction memory for I_16x16
     (*pWelsMd).iCostLuma = crate::encoder::svc_mode_decision::WelsMdI16x16(
@@ -923,7 +923,7 @@ pub unsafe fn WelsMdInterInit(
     (*ctx_func_list(pEncCtx))
         .pfFillInterNeighborCache
         .expect("pfFillInterNeighborCache unset")(
-        pMbCache,
+        &mut *pMbCache,
         pCurMb,
         kiMbWidth,
         (*ctx_vaa(pEncCtx)).pVaaBackgroundMbFlag.as_mut_ptr().add(kiMbXY as usize),
@@ -1437,7 +1437,7 @@ pub unsafe fn WelsMdPSkipEnc(
     pEncCtx: *mut sWelsEncCtx,
     pWelsMd: &mut SWelsMD,
     pCurMb: &mut SMB,
-    pMbCache: *mut SMbCache,
+    pMbCache: &mut SMbCache,
 ) -> bool {
     let pCurLayer = current_layer(pEncCtx);
     let pFunc = ctx_func_list(pEncCtx);
@@ -1643,7 +1643,7 @@ pub unsafe fn WelsMdInterMbRefinement(
     pEncCtx: *mut sWelsEncCtx,
     pWelsMd: &mut SWelsMD,
     pCurMb: &mut SMB,
-    pMbCache: *mut SMbCache,
+    pMbCache: &mut SMbCache,
 ) {
     let pCurDqLayer = current_layer(pEncCtx);
     let pFunc = ctx_func_list(pEncCtx);
@@ -2139,7 +2139,7 @@ pub unsafe extern "C" fn WelsMdFirstIntraMode(
     pEncCtx: *mut sWelsEncCtx,
     pWelsMd: &mut SWelsMD,
     pCurMb: &mut SMB,
-    pMbCache: *mut SMbCache,
+    pMbCache: &mut SMbCache,
 ) -> bool {
     let pFunc = ctx_func_list(pEncCtx);
 
@@ -2281,7 +2281,7 @@ pub unsafe extern "C" fn WelsMdInterMb(
 /// `pCurMb` and `pMbCache` must be valid.
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
-pub unsafe fn WelsMdInterDoubleCheckPskip(pCurMb: &mut SMB, pMbCache: *mut SMbCache) {
+pub unsafe fn WelsMdInterDoubleCheckPskip(pCurMb: &mut SMB, pMbCache: &mut SMbCache) {
     if MB_TYPE_16x16 == (*pCurMb).uiMbType && 0 == (*pCurMb).uiCbp {
         if 0 == (*pCurMb).iRefIndex[0] {
             let mut sMvp = SMVUnitXY { iMvX: 0, iMvY: 0 };

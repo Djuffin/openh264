@@ -134,7 +134,17 @@ CTX_TYPE = DEFAULT_CTX_TYPE
 CTX_PARAM_RE = CTX_PARAM_PP_RE = LOCAL_ROOT_RE = None
 
 
-def aim(ctx_type):
+# Which parameter spelling counts as "this function retags the type on entry".
+# `raw` is the pre-conversion question — *which* `*mut T` parameters would retag if
+# they became references — and is the default, because that is what the detector is
+# for. `ref` is the **post**-conversion audit: once the parameters *are* `&mut T`,
+# every one of them retags on every call, and the same scan answers "is a cursor held
+# across one of those calls today". T9.D7 needed the second, and without it the tool
+# reports a converted family as "nothing to find" and exits 2.
+PARAM_KIND = "raw"
+
+
+def aim(ctx_type, kind="raw"):
     """Point the detector at `ctx_type` — **T9.D1**.
 
     The tool was written around one hard-coded constant, and session D needed it
@@ -143,8 +153,15 @@ def aim(ctx_type):
     resolves somewhere with no source tree under it, and the scan silently finds
     nothing (see `main`, which now refuses to report that as a clean run).
     """
-    global CTX_TYPE, CTX_PARAM_RE, CTX_PARAM_PP_RE, LOCAL_ROOT_RE
-    CTX_TYPE = ctx_type
+    global CTX_TYPE, CTX_PARAM_RE, CTX_PARAM_PP_RE, LOCAL_ROOT_RE, PARAM_KIND
+    CTX_TYPE, PARAM_KIND = ctx_type, kind
+    if kind == "ref":
+        CTX_PARAM_RE = re.compile(
+            r"([A-Za-z_][A-Za-z0-9_]*)\s*:\s*&\s*(?:'[a-z_]+\s+)?mut\s+" + ctx_type + r"\b")
+        CTX_PARAM_PP_RE = re.compile(r"(?!)")          # never matches
+        LOCAL_ROOT_RE = re.compile(
+            r":\s*&\s*mut\s+" + ctx_type + r"\b|Box\s*::\s*into_raw\s*\(")
+        return
     # A parameter of type `*mut T` (not `*mut *mut`, which would become
     # `&mut &mut` — a different type, and the four out-parameters F66 excluded).
     CTX_PARAM_RE = re.compile(
@@ -493,12 +510,15 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--type", default=DEFAULT_CTX_TYPE, metavar="NAME",
                     help=f"the struct to aim at (default: {DEFAULT_CTX_TYPE})")
+    ap.add_argument("--kind", choices=("raw", "ref"), default="raw",
+                    help="parameter spelling that retags: `*mut T` (default, the "
+                         "pre-conversion question) or `&mut T` (the post-conversion audit)")
     ap.add_argument("--sites", action="store_true", help="every hazardous site")
     ap.add_argument("--callee", help="only sites whose call is to this callee")
     ap.add_argument("--caller", help="only sites inside this caller")
     a = ap.parse_args()
 
-    aim(a.type)
+    aim(a.type, a.kind)
 
     # ------------------------------------------------------------------
     # T9.D1 — "nothing to find" and "nothing found" must not print the same.
@@ -532,7 +552,8 @@ def main():
 
     print(f"q1c — F66 aliasing-hazard detector (heuristic; see the module docstring)")
     print(f"{n_bodies(callees)} function bodies ({len(callees)} distinct names) take a "
-          f"`*mut {CTX_TYPE}` parameter\nand would retag on conversion.\n")
+          f"`{'&mut' if PARAM_KIND == 'ref' else '*mut'} {CTX_TYPE}` parameter\n"
+          f"and {'retag on every call' if PARAM_KIND == 'ref' else 'would retag on conversion'}.\n")
     dupes = {k: v for k, v in callees.items() if len(v) > 1}
     if dupes:
         print(f"{len(dupes)} of those names is defined more than once — a hazard reported "

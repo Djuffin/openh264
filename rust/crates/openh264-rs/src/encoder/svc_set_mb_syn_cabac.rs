@@ -223,7 +223,7 @@ pub unsafe fn WelsCabacMbType(
     buf: &mut [u8],
     pCabacCtx: &mut SCabacCtx,
     pCurMb: *mut SMB,
-    pMbCache: *mut SMbCache,
+    pMbCache: &mut SMbCache,
     iMbWidth: i32,
     eSliceType: EWelsSliceType,
 ) {
@@ -318,7 +318,7 @@ pub unsafe fn WelsCabacMbType(
 
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
-pub unsafe fn WelsCabacMbIntra4x4PredMode(buf: &mut [u8], pCabacCtx: &mut SCabacCtx, pMbCache: *mut SMbCache) {
+pub unsafe fn WelsCabacMbIntra4x4PredMode(buf: &mut [u8], pCabacCtx: &mut SCabacCtx, pMbCache: &mut SMbCache) {
     unsafe {
         for iMode in 0..16 {
             let bPredFlag = (*pMbCache).bPrevIntra4x4PredModeFlag[iMode];
@@ -342,7 +342,7 @@ pub unsafe fn WelsCabacMbIntraChromaPredMode(
     buf: &mut [u8],
     pCabacCtx: &mut SCabacCtx,
     pCurMb: *mut SMB,
-    pMbCache: *mut SMbCache,
+    pMbCache: &mut SMbCache,
     iMbWidth: i32,
 ) {
     unsafe {
@@ -558,7 +558,7 @@ pub unsafe fn WelsMbSkipCabac(
 pub unsafe fn WelsCabacMbRef(
     buf: &mut [u8],
     pCabacCtx: &mut SCabacCtx,
-    pMbCache: *mut SMbCache,
+    pMbCache: &mut SMbCache,
     iIdx: i16,
 ) {
     unsafe {
@@ -709,7 +709,7 @@ pub unsafe fn WelsCabacSubMbMvd(
     buf: &mut [u8],
     pCabacCtx: &mut SCabacCtx,
     pCurMb: *mut SMB,
-    pMbCache: *mut SMbCache,
+    pMbCache: &mut SMbCache,
     kiMbWidth: i32,
 ) {
     unsafe {
@@ -1179,13 +1179,13 @@ pub unsafe fn WelsSpatialWriteMbSynCabac(
                 WelsMbSkipCabac(buf, &mut *pCabacCtx, pCurMb, iMbWidth, (*pEncCtx).eSliceType, 0);
             }
 
-            WelsCabacMbType(buf, &mut *pCabacCtx, pCurMb, pMbCache, iMbWidth, (*pEncCtx).eSliceType);
+            WelsCabacMbType(buf, &mut *pCabacCtx, pCurMb, &mut *pMbCache, iMbWidth, (*pEncCtx).eSliceType);
 
             if IS_INTRA(uiMbType) {
                 if uiMbType == MB_TYPE_INTRA4x4 {
-                    WelsCabacMbIntra4x4PredMode(buf, &mut *pCabacCtx, pMbCache);
+                    WelsCabacMbIntra4x4PredMode(buf, &mut *pCabacCtx, &mut *pMbCache);
                 }
-                WelsCabacMbIntraChromaPredMode(buf, &mut *pCabacCtx, pCurMb, pMbCache, iMbWidth);
+                WelsCabacMbIntraChromaPredMode(buf, &mut *pCabacCtx, pCurMb, &mut *pMbCache, iMbWidth);
                 sMvd.iMvX = 0;
                 sMvd.iMvY = 0;
                 for i in 0..16 {
@@ -1193,7 +1193,7 @@ pub unsafe fn WelsSpatialWriteMbSynCabac(
                 }
             } else if uiMbType == MB_TYPE_16x16 {
                 if uiNumRefIdxL0Active > 0 {
-                    WelsCabacMbRef(buf, &mut *pCabacCtx, pMbCache, 0);
+                    WelsCabacMbRef(buf, &mut *pCabacCtx, &mut *pMbCache, 0);
                 }
                 let cur_mv = (*pCurMb).sMv[0];
                 let pred_mv = (*pMbCache).sMbMvp[0];
@@ -1204,8 +1204,8 @@ pub unsafe fn WelsSpatialWriteMbSynCabac(
                 }
             } else if uiMbType == MB_TYPE_16x8 {
                 if uiNumRefIdxL0Active > 0 {
-                    WelsCabacMbRef(buf, &mut *pCabacCtx, pMbCache, 0);
-                    WelsCabacMbRef(buf, &mut *pCabacCtx, pMbCache, 12);
+                    WelsCabacMbRef(buf, &mut *pCabacCtx, &mut *pMbCache, 0);
+                    WelsCabacMbRef(buf, &mut *pCabacCtx, &mut *pMbCache, 12);
                 }
                 let cur_mv0 = (*pCurMb).sMv[0];
                 let pred_mv0 = (*pMbCache).sMbMvp[0];
@@ -1221,8 +1221,8 @@ pub unsafe fn WelsSpatialWriteMbSynCabac(
                 }
             } else if uiMbType == MB_TYPE_8x16 {
                 if uiNumRefIdxL0Active > 0 {
-                    WelsCabacMbRef(buf, &mut *pCabacCtx, pMbCache, 0);
-                    WelsCabacMbRef(buf, &mut *pCabacCtx, pMbCache, 2);
+                    WelsCabacMbRef(buf, &mut *pCabacCtx, &mut *pMbCache, 0);
+                    WelsCabacMbRef(buf, &mut *pCabacCtx, &mut *pMbCache, 2);
                 }
                 let cur_mv0 = (*pCurMb).sMv[0];
                 let pred_mv0 = (*pMbCache).sMbMvp[0];
@@ -1245,12 +1245,12 @@ pub unsafe fn WelsSpatialWriteMbSynCabac(
             } else if (uiMbType == MB_TYPE_8x8) || (uiMbType == MB_TYPE_8x8_REF0) {
                 WelsCabacSubMbType(buf, &mut *pCabacCtx, &*pCurMb);
                 if uiNumRefIdxL0Active > 0 {
-                    WelsCabacMbRef(buf, &mut *pCabacCtx, pMbCache, 0);
-                    WelsCabacMbRef(buf, &mut *pCabacCtx, pMbCache, 2);
-                    WelsCabacMbRef(buf, &mut *pCabacCtx, pMbCache, 12);
-                    WelsCabacMbRef(buf, &mut *pCabacCtx, pMbCache, 14);
+                    WelsCabacMbRef(buf, &mut *pCabacCtx, &mut *pMbCache, 0);
+                    WelsCabacMbRef(buf, &mut *pCabacCtx, &mut *pMbCache, 2);
+                    WelsCabacMbRef(buf, &mut *pCabacCtx, &mut *pMbCache, 12);
+                    WelsCabacMbRef(buf, &mut *pCabacCtx, &mut *pMbCache, 14);
                 }
-                WelsCabacSubMbMvd(buf, &mut *pCabacCtx, pCurMb, pMbCache, iMbWidth);
+                WelsCabacSubMbMvd(buf, &mut *pCabacCtx, pCurMb, &mut *pMbCache, iMbWidth);
             }
 
             if uiMbType != MB_TYPE_INTRA16x16 {

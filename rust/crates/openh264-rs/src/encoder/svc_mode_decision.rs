@@ -157,7 +157,7 @@ pub enum ESkipModes {
 pub type pJudgeSkipFun = unsafe extern "C" fn(
     pEncCtx: *mut sWelsEncCtx,
     pCurMb: &mut SMB,
-    pMbCache: *mut SMbCache,
+    pMbCache: &mut SMbCache,
     pWelsMd: &mut SWelsMD,
 ) -> bool;
 
@@ -340,7 +340,7 @@ pub unsafe extern "C" fn WelsMdInterJudgePskip(
             0,
             &mut (*pWelsMd).iSadPredSkip,
         );
-        bRet = crate::encoder::svc_base_layer_md::WelsMdPSkipEnc(pEncCtx, pWelsMd, pCurMb, pMbCache);
+        bRet = crate::encoder::svc_base_layer_md::WelsMdPSkipEnc(pEncCtx, pWelsMd, pCurMb, &mut *pMbCache);
         return bRet;
     }
 
@@ -364,7 +364,7 @@ pub unsafe extern "C" fn WelsMdInterDecidedPskip(
     let pMbCache = std::ptr::addr_of_mut!((*pSlice).sMbCacheInfo);
     let pCurDqLayer = current_layer(pEncCtx);
     (*pCurMb).uiMbType = MB_TYPE_SKIP;
-    WelsRecPskip(pCurDqLayer, &*ctx_func_list(pEncCtx), pCurMb, pMbCache);
+    WelsRecPskip(pCurDqLayer, &*ctx_func_list(pEncCtx), pCurMb, &mut *pMbCache);
     WelsMdInterUpdatePskip(pEncCtx, pCurDqLayer, pSlice, pCurMb);
 }
 
@@ -393,7 +393,7 @@ pub unsafe extern "C" fn WelsMdInterSecondaryModesEnc(
     let kbTrySkip = (*pFuncList).pfFirstIntraMode.expect(
         "pfFirstIntraMode is unset; PreprocessSliceCoding must assign WelsMdFirstIntraMode \
          before any P macroblock is coded",
-    )(pEncCtx, pWelsMd, pCurMb, pMbCache);
+    )(pEncCtx, pWelsMd, pCurMb, &mut *pMbCache);
     if kbTrySkip {
         return;
     }
@@ -412,13 +412,13 @@ pub unsafe extern "C" fn WelsMdInterSecondaryModesEnc(
         )(pEncCtx, pWelsMd, pSlice, pCurMb, (*pWelsMd).iCostLuma);
 
         //refinement for inter type
-        crate::encoder::svc_base_layer_md::WelsMdInterMbRefinement(pEncCtx, pWelsMd, pCurMb, pMbCache);
+        crate::encoder::svc_base_layer_md::WelsMdInterMbRefinement(pEncCtx, pWelsMd, pCurMb, &mut *pMbCache);
 
         //step 7: invoke encoding
         crate::encoder::svc_base_layer_md::WelsMdInterEncode(pEncCtx, pSlice, pCurMb);
 
         //step 8: double check Pskip
-        crate::encoder::svc_base_layer_md::WelsMdInterDoubleCheckPskip(pCurMb, pMbCache);
+        crate::encoder::svc_base_layer_md::WelsMdInterDoubleCheckPskip(pCurMb, &mut *pMbCache);
     }
 }
 
@@ -440,7 +440,7 @@ pub unsafe extern "C" fn WelsMdIntraSecondaryModesEnc(
     pEncCtx: *mut sWelsEncCtx,
     pWelsMd: &mut SWelsMD,
     pCurMb: &mut SMB,
-    pMbCache: *mut SMbCache,
+    pMbCache: &mut SMbCache,
 ) {
     let pFunc = ctx_func_list(pEncCtx);
     //initial prediction memory for I_4x4
@@ -481,7 +481,7 @@ pub unsafe extern "C" fn WelsRecPskip(
     pCurLayer: *mut SDqLayer,
     pFuncList: &SWelsFuncPtrList,
     pCurMb: &mut SMB,
-    pMbCache: *mut SMbCache,
+    pMbCache: &mut SMbCache,
 ) {
     let iRecStride = (*pCurLayer).iCsStride;
     let pCsMb = (*pMbCache).SPicData.pCsMb;
@@ -619,7 +619,7 @@ pub unsafe extern "C" fn WelsMdBackgroundMbEnc(
                 (*pCurMb).uiLumaQp as i32 + (*layer_pps(pEncCtx, pCurDqLayer)).uiChromaQpIndexOffset as i32,
             )];
 
-        WelsRecPskip(pCurDqLayer, &*pFunc, pCurMb, pMbCache);
+        WelsRecPskip(pCurDqLayer, &*pFunc, pCurMb, &mut *pMbCache);
         VaaBackgroundMbDataUpdate(
             &*pFunc,
             ctx_vaa(pEncCtx) as *mut crate::encoder::wels_preprocess::SVAAFrameInfo,
@@ -1127,11 +1127,14 @@ pub extern "C" fn UpdateP4x8Motion2Cache(
 pub unsafe extern "C" fn WelsMdI16x16(
     pFunc: &SWelsFuncPtrList,
     pCurDqLayer: *mut SDqLayer,
-    pMbCache: *mut SMbCache,
+    pMbCache: &mut SMbCache,
     iLambda: i32,
 ) -> i32 {
-    // T6.I2: `pFunc.is_null()` was the first arm; the table is a `&` now.
-    if pCurDqLayer.is_null() || pMbCache.is_null() {
+    // T6.I2: `pFunc.is_null()` was the first arm; the table is a `&` now. **T9.D7**
+    // dropped `pMbCache.is_null()` the same way — the arena is one owned field of the
+    // slice, every caller reaches it as `&mut (*pSlice).sMbCacheInfo`, and a reference
+    // cannot be absent. `pCurDqLayer` stays raw until the layer family.
+    if pCurDqLayer.is_null() {
         return i32::MAX;
     }
     // `svc_base_layer_md.cpp:369` reads pMemPredMb, not pMemPredLuma. The two are
@@ -1409,7 +1412,7 @@ pub unsafe extern "C" fn WelsInterMbEncode(pEncCtx: *mut sWelsEncCtx, pSlice: *m
         }
     }
 
-    WelsEncInterY(&*pFuncList, pCurMb, pMbCache);
+    WelsEncInterY(&*pFuncList, pCurMb, &mut *pMbCache);
 }
 
 // ============================================================================
@@ -1549,7 +1552,7 @@ pub unsafe extern "C" fn WelsMdSpatialelInterMbIlfmdNoilp(
         let kiCostI16x16 = WelsMdI16x16(
             &*ctx_func_list(pEncCtx),
             current_layer(pEncCtx),
-            pMbCache,
+            &mut *pMbCache,
             (*pWelsMd).iLambda,
         );
         if bSkip && ((*pWelsMd).iCostLuma <= kiCostI16x16) {
@@ -1558,7 +1561,7 @@ pub unsafe extern "C" fn WelsMdSpatialelInterMbIlfmdNoilp(
             (*pWelsMd).iCostLuma = kiCostI16x16;
             (*pCurMb).uiMbType = MB_TYPE_INTRA16x16;
 
-            WelsMdIntraSecondaryModesEnc(pEncCtx, pWelsMd, &mut *pCurMb, pMbCache);
+            WelsMdIntraSecondaryModesEnc(pEncCtx, pWelsMd, &mut *pCurMb, &mut *pMbCache);
         }
     }
 }
@@ -1627,7 +1630,7 @@ pub unsafe fn IsCostLessEqualSkipCost(
 pub unsafe fn CheckChromaCost(
     pEncCtx: *mut sWelsEncCtx,
     pWelsMd: &mut SWelsMD,
-    pMbCache: *mut SMbCache,
+    pMbCache: &mut SMbCache,
     iCurMbXy: i32,
 ) -> bool {
     let pSad = (*ctx_func_list(pEncCtx)).sSampleDealingFuncs.pfSampleSad.as_mut_ptr();
@@ -1695,7 +1698,7 @@ pub unsafe extern "C" fn WelsMdInterJudgeBGDPskip(
         && !IS_INTRA((*pMbCache).uiRefMbType)
         && ((kiRefMbQp - kiCurMbQp <= DELTA_QP_BGD_THD) || (kiRefMbQp <= 26))
     {
-        if CheckChromaCost(pEncCtx, pWelsMd, pMbCache, (*pCurMb).iMbXY) {
+        if CheckChromaCost(pEncCtx, pWelsMd, &mut *pMbCache, (*pCurMb).iMbXY) {
             let mut sVaaPredSkipMv = SMVUnitXY::default();
             PredSkipMv(&(*pMbCache).sMvComponents, &mut sVaaPredSkipMv);
             let bZeroMv = sVaaPredSkipMv.iMvX == 0 && sVaaPredSkipMv.iMvY == 0;
@@ -1825,7 +1828,7 @@ pub fn CheckBorder(
 pub unsafe extern "C" fn JudgeStaticSkip(
     pEncCtx: *mut sWelsEncCtx,
     pCurMb: &mut SMB,
-    pMbCache: *mut SMbCache,
+    pMbCache: &mut SMbCache,
     pWelsMd: &mut SWelsMD,
 ) -> bool {
     let pCurDqLayer = current_layer(pEncCtx);
@@ -1873,7 +1876,7 @@ pub unsafe extern "C" fn JudgeStaticSkip(
 pub unsafe extern "C" fn JudgeScrollSkip(
     pEncCtx: *mut sWelsEncCtx,
     pCurMb: &mut SMB,
-    pMbCache: *mut SMbCache,
+    pMbCache: &mut SMbCache,
     pWelsMd: &mut SWelsMD,
 ) -> bool {
     let pCurDqLayer = current_layer(pEncCtx);
@@ -2034,7 +2037,7 @@ pub unsafe extern "C" fn SvcMdSCDMbEnc(
             pfUpdateMbMv(&mut (*pCurMb).sMv, sMvp);
         }
         (*pCurMb).uiMbType = MB_TYPE_SKIP;
-        WelsRecPskip(pCurDqLayer, &*pFunc, pCurMb, pMbCache);
+        WelsRecPskip(pCurDqLayer, &*pFunc, pCurMb, &mut *pMbCache);
         WelsMdInterUpdatePskip(pEncCtx, pCurDqLayer, pSlice, pCurMb);
         return;
     }
@@ -2119,7 +2122,7 @@ pub unsafe extern "C" fn MdInterSCDPskipProcess(
     let kiCurMbQp = (*pCurMb).uiLumaQp as i32;
 
     let pJudgeSkip: [pJudgeSkipFun; 2] = [JudgeStaticSkip, JudgeScrollSkip];
-    let bSkipFlag = pJudgeSkip[eSkipMode as usize](pEncCtx, pCurMb, pMbCache, pWelsMd);
+    let bSkipFlag = pJudgeSkip[eSkipMode as usize](pEncCtx, pCurMb, &mut *pMbCache, pWelsMd);
 
     if bSkipFlag {
         let bQpSimilarFlag = (kiRefMbQp - kiCurMbQp <= DELTA_QP_SCD_THD) || (kiRefMbQp <= 26);
@@ -2250,7 +2253,7 @@ pub fn IsSameMv(sMv0: &SMVUnitXY, sMv1: &SMVUnitXY) -> bool {
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe fn TryModeMerge(
-    pMbCache: *mut SMbCache,
+    pMbCache: &mut SMbCache,
     pWelsMd: &mut SWelsMD,
     pCurMb: &mut SMB,
 ) -> bool {
@@ -2321,7 +2324,7 @@ pub unsafe extern "C" fn WelsMdInterFinePartitionVaaOnScreen(
         iBestCost = iCostP8x8;
         (*pCurMb).uiMbType = MB_TYPE_8x8;
         (*pCurMb).uiSubMbType = [SUB_MB_TYPE_8x8; 4];
-        TryModeMerge(pMbCache, pWelsMd, pCurMb);
+        TryModeMerge(&mut *pMbCache, pWelsMd, pCurMb);
     }
     (*pWelsMd).iCostLuma = iBestCost;
 }
