@@ -197,7 +197,7 @@ family assignment in `FAMILY_OF_TYPE`.
 | u8                         | 87         | plane    |           |
 | SDqLayer                   | 74         | layer    |           |
 | i32                        | 40         | other    | scalar    |
-| SMB                        | 34         | mbcache  |           |
+| SMB                        | 35         | mbcache  |           |
 | SWelsSvcCodingParam        | 26         | other    | paramset  |
 | BsWriter                   | 21         | other    | bitstream |
 | SWelsFuncPtrList           | 19         | dispatch |           |
