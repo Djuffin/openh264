@@ -44,7 +44,19 @@ session C's conversion) — writing that plane cannot be expressed as one
     rust/tools/phase9_plane_callers.py --internal  # the kernel-internal composition calls
     rust/tools/phase9_plane_callers.py --handoff   # slots passed/stored, not called
 
-Exit status is always 0; this is a reading aid, not a gate.
+Exit status is 0 on a clean read and **1 when any operand is unclassified**.
+
+That last part is the T9.B20 change and it is not cosmetic. The classifier keys
+on how an operand is *spelled*, so a refactor that renames a buffer does not fail
+the tool — it silently moves call sites into `?`, and `?` is the column nobody
+reads. Session D renamed the ten `md::mem_pred_*` accessors to direct field
+access; this census went from 0 unclassified to 40 and from 13 coefficient-gated
+to 0, printed the new numbers without comment, and exited 0. Session B2 scoped
+against those numbers. S46 and S55 are the same lesson twice (an empty scan and
+an uncalibrated detector must be loud); this is the third.
+
+If a survivor is genuinely unclassifiable, add it to `UNKNOWN_ALLOWLIST` with the
+reason — an allowlisted unknown still prints, it just stops failing.
 """
 
 import argparse
@@ -147,15 +159,30 @@ SLOTS = {
 # --------------------------------------------------------------------------
 CLASSIFIERS = [
     # The per-macroblock carrier, which is unambiguous and therefore first.
-    ("rec",   r"SPicData\s*\.\s*pCsMb|SPicData\s*\.\s*pDecMb"),
-    ("src",   r"SPicData\s*\.\s*pEncMb"),
-    ("ref",   r"SPicData\s*\.\s*pRefMb"),
+    # The receiver is deliberately *not* pinned to the literal `SPicData`: the
+    # bundle is also reached through a binding that already names it, and
+    # `AcceptPskip` takes it as a `&SPicData` parameter called `kpPicData`
+    # (`svc_base_layer_md.rs:1602`) — one `.pEncMb[0]` operand that a
+    # receiver-pinned rule reports as unclassified. The four field names are
+    # unique to this carrier and to `SWelsME`, whose `pEncMb`/`pRefMb` name the
+    # same two surfaces, so widening the receiver cannot mis-class anything.
+    ("rec",   r"\.\s*(pCsMb|pDecMb)\b"),
+    ("src",   r"\.\s*pEncMb\b"),
+    ("ref",   r"\.\s*(pRefMb|pColoRefMb)\b"),
     # SMbCache-owned scratch, reached through the `md::` accessors.
+    # SMbCache-owned scratch. The `md::` accessor names are session D's *former*
+    # spelling: T9.D7 deleted every one of them in favour of reaching the field
+    # directly (`addr_of_mut!((*pMbCache).sSkipMb)`), so the field spellings are
+    # what actually appears at HEAD. Both are kept — the accessor arm costs
+    # nothing and the file's history still reads.
     ("cache", r"(?:encoder::)?md::(mem_pred_\w+|best_pred_\w+|skip_mb|buffer_inter_pred_me)"
-              r"|\bsMemPred\w*|\bsBufferInterPredMe"),
+              r"|\bsMemPred\w*|\bsBufferInterPredMe|\bsSkipMb\b|\bsBestPred\w*"),
     # Coefficient buffers — family 3's, not this family's (F103).
+    # Coefficient buffers — family 3's, not this family's (F103). `sCoeffLevel`
+    # is the same session-D respelling as `sSkipMb` above, and it is the single
+    # biggest hole: 13 dct and 10 idct operands read as unclassified without it.
     ("coeff", r"(?:encoder::)?md::(coeff_level|dct)\b|\biLumaBlock\b|\biChromaBlock\b"
-              r"|\bg_kiQuant\w*|\bget_quant_\w+|\bg_kuiDequant\w*"),
+              r"|\bg_kiQuant\w*|\bget_quant_\w+|\bg_kuiDequant\w*|\bsCoeffLevel\b"),
     # The layer's stamped plane roots and views.
     ("rec",   r"\bpCsData\b|sDecPicView|\bpDecPic\b"),
     ("src",   r"\bpEncData\b|\bpEncPic\b"),
@@ -289,6 +316,12 @@ def balanced_args(text, open_idx):
             start = i + 1
         i += 1
     return None, -1
+
+
+# `(file, line, operand)` triples that are known-unclassifiable, each with the
+# reason. An entry here still prints in `--unknown`; it just does not fail the
+# run. Empty is the correct state: every operand at HEAD classifies.
+UNKNOWN_ALLOWLIST = {}
 
 
 def classify(expr):
@@ -442,7 +475,13 @@ def root_ident(expr):
     """The variable an operand expression is built from: `pRefCb.offset(x)` ->
     `pRefCb`, `(*pMbCache).SPicData...` -> None (already classified),
     `pPredIntraChma[0]` -> `pPredIntraChma`."""
-    e = expr.strip().lstrip("&*( ")
+    # `[` has to be stripped as well as `&*( `, and for two different reasons.
+    # Leading: an operand may be an array *literal* whose first element is the
+    # root — `let pPredIntraChma = [pMemPredChroma, pMemPredChroma.add(128)]`,
+    # the right-hand side the walk lands on from `pDstChma`. Without it the
+    # regex fails on `[` and the walk dead-ends one hop short of the `sMemPredMb`
+    # that classifies it, losing four `WelsMdIntraChroma` operands.
+    e = expr.strip().lstrip("&*([ ")
     m = re.match(r"([A-Za-z_][A-Za-z0-9_]*)", e)
     if not m or m.group(1) in STOPWORDS:
         return None
@@ -678,6 +717,8 @@ def main():
     ap.add_argument("--handoff", action="store_true",
                     help="places a cost slot is passed or stored as a value, not called")
     ap.add_argument("--group", help="restrict to one kernel group")
+    ap.add_argument("--allow-unknown", action="store_true",
+                    help="report unclassified operands but exit 0 anyway")
     args = ap.parse_args()
 
     files, names = build_index()
@@ -690,6 +731,27 @@ def main():
         sites = [s for s in sites if args.group in s["group"]]
         internal = [s for s in internal if args.group in s["group"]]
 
+    unknown = [(s["file"], s["line"], e)
+               for s in sites for e, c in s["ops"] if c == "?"]
+    unknown = [u for u in unknown if u not in UNKNOWN_ALLOWLIST]
+
+    def finish(rc=0):
+        """Fail loudly on an unclassified operand — see the module docstring."""
+        if not unknown or args.allow_unknown:
+            return rc
+        print(f"\n!! {len(unknown)} UNCLASSIFIED OPERAND(S) — this census is not "
+              f"safe to scope a session against.", file=sys.stderr)
+        print("   The classifier keys on how an operand is spelled, so a rename "
+              "moves sites into `?`", file=sys.stderr)
+        print("   rather than failing. Run --unknown, then either extend "
+              "CLASSIFIERS or add the", file=sys.stderr)
+        print("   survivor to UNKNOWN_ALLOWLIST with its reason.", file=sys.stderr)
+        for f, ln, e in unknown[:10]:
+            print(f"     {f}:{ln}  <<{e}>>", file=sys.stderr)
+        if len(unknown) > 10:
+            print(f"     ... and {len(unknown) - 10} more", file=sys.stderr)
+        return 1
+
     if args.handoff:
         for path in rust_files():
             lines, spans = files[path]
@@ -700,26 +762,26 @@ def main():
                 for m in HANDOFF_RE.finditer(strip_comment(raw)):
                     print(f"{rel(path)}:{i + 1:<5} {owner_of(spans, i):<32} "
                           f"{m.group(1)} passed/stored as a value")
-        return
+        return finish()
 
     if args.internal:
         for s in internal:
             print(f"{s['file']}:{s['line']:<5} {s['fn']:<28} -> {s['entry']}")
-        return
+        return finish()
 
     if args.unknown:
         for s in sites:
             for e, c in s["ops"]:
                 if c == "?":
                     print(f"{s['file']}:{s['line']}  {s['fn']}  {s['entry']}  <<{e}>>")
-        return
+        return finish()
 
     if args.sites:
         for s in sites:
             ops = " ".join(f"{c}:{e}" for e, c in s["ops"])
             print(f"{s['file']}:{s['line']:<5} {'fork' if s['fork'] else 'ST  '} "
                   f"{verdict(s):<8} {s['group']:<10} {s['entry']:<28} {s['fn']:<30} {ops}")
-        return
+        return finish()
 
     # Group x verdict, and file x verdict.
     by_group = defaultdict(lambda: defaultdict(int))
@@ -754,6 +816,7 @@ def main():
           f"family (F103), {sum(1 for s in sites if verdict(s) == '?')} unclassified.")
     table("By kernel group", by_group, "group")
     table("By file", by_file, "file")
+    return finish()
 
 
 if __name__ == "__main__":
