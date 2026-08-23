@@ -127,7 +127,7 @@ from the layer (`SDqLayer::pRefPic` + `pRefList`, i.e. `layer_ref_pic`); the
 **source** picture is not — the layer holds only the raw `pEncData[3]` roots, and
 the spatial pool lives in `pVpp`. So converting `pEncMb` needs a source-picture
 handle on the layer (`pEncPic: Option<SrcPicId>`, stamped in
-`WelsInitCurrentLayer` beside `pEncData`, `encoder_ext.rs:2148-2165`) and a route
+`WelsInitCurrentLayer` beside `pEncData`, `encoder_ext.rs:2156-2172`) and a route
 to the pool, exactly as `pRefList` is the route for the reconstruction pool.
 
 ## 6. The reconstruction surface, for F107
@@ -142,4 +142,4 @@ size the design against it:
 | `layer_dec_pic_mut` / `layer_dec_pic` | 14 | `&mut SPicture` on the reconstruction pool — **F73's retag** |
 | `SPicture::planes()` | 38 | the `&mut self` that hands out the raw roots — F73's other half |
 | blocked call sites (§1) | 32 | 17 copy, 10 idct, 5 intra-pred |
-| `deblocking.rs` + `common/deblocking_common.rs` | 16 + 35 unsafe sites | `SDeblockingFilter::pCsData`, walked per macroblock |
+| `deblocking.rs` + `common/deblocking_common.rs` | 20 + 13 `unsafe fn` | `SDeblockingFilter::pCsData`, walked per macroblock |
