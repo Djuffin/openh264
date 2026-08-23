@@ -8,8 +8,9 @@
 #     session  family + Miri --lib, NO benches — the Phase 9 session close
 #              (D-gate-4, 2026-08-22): run it as
 #                  MIRI_SCOPE=encoder bash rust/tools/gates.sh session
-#              ~2 min family + ~3 min Miri with the decoder probes skipped. The
-#              benches stay at the phase close (D-gate-1: no mid-phase perf).
+#              ~2.5 min family + ~15 min Miri (894 s measured 2026-08-22 at 0bfc7687,
+#              274 tests with the decoder's 101 skipped — the four encoder probes are
+#              most of it). The benches stay at the phase close (D-gate-1).
 #     full     family + decode bench + encoder bench + Miri --lib         (default)
 #     exit     full + Miri over the differential integration tests
 #              + the three C-ABI boundary gates: the cdylib's export list, the
