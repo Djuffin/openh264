@@ -16139,17 +16139,54 @@ And the acceptance test needs a second probe: the existing Miri fork/join probe
 drives `SM_FIXEDSLCNUM_SLICE` with RC on — the one **row-aligned** mode, i.e. the
 easy case. A design that only worked on row-aligned slices would pass it.
 
+### T9.B3 — the one plane site that had no second gate on it
+
+F104's census leaves exactly one plane consumer whose operands are both **whole
+pictures named by a handle**, with no `SMbCache` or coefficient operand beside
+them: the layer's PSNR, `WelsCalcPsnr`. It runs after the fork has joined and
+after `UpdateRefList`, so both pictures are read-only, and the two live in
+different owners (the layer's reference list and the preprocessor's spatial pool),
+so two shared borrows never name one allocation.
+
+`WelsCalcPsnr(*const u8, i32, *const u8, i32, i32, i32)` is now
+`calc_psnr(&PlaneCursor, &PlaneCursor, i32, i32)` — same `i64`/`i32` accumulation
+widths, same `99.99` sentinel, the null-plane `-1.0` answered by the caller, which
+has the handle. `common/wels_common_defs.rs` goes under `deny`, the third of
+`common/`'s nine. The caller loses **both** `PicPlanes` locals: six raw plane
+roots that were carried across six hundred lines of the encoder's main loop.
+
+**F109, and it is the finding of the session for whoever converts `SPicData`.**
+The obvious form of this conversion drops the snapshot and re-reads
+`(*pCtx).pDecPic` where the pixels are read. That names a *different picture*:
+between the capture and the read sits `UpdateRefList`, which ends in
+`EndofUpdateRefList` -> `PrefetchNextBuffer` -> `(*pCtx).pDecPic = pNextBuffer` —
+the slot the **next** frame decodes into. S37's rule ("a picture is an arena;
+resolve it once and copy the geometry out") was written about *borrows*; what this
+site needed copied out was the **value**, and that is true of a raw root, a
+borrow and a handle alike. Session B2 converts 120 `SPicData` reads to precisely
+this shape and has to ask, at each one, whether the field the handle comes from is
+still the same field at the point of use.
+
+And the coverage, stated rather than implied: **no byte gate exercises this
+block.** Both diffharness drivers set `bPsnrY/U/V = false` (`cxx_enc.cpp:148`,
+`rust_enc/main.rs:133-135`) and no test asks for PSNR, so the 535-configuration
+sweep is blind to it. What defends the change is the kernel's differential test —
+whose goldens were **measured against `libopenh264.a`**, so it keeps its meaning
+after the shim dies, unlike F106's — and the fact that the two handles are the two
+the raw roots were derived from. A green sweep is not evidence here and should not
+be quoted as if it were.
+
 ### The tally
 
 | metric | session start | now | delta |
 |---|---:|---:|---:|
 | `port-raw(Phase 9)` tags | 687 | 687 | 0 |
 | `cursor` tags | 61 | 61 | 0 |
-| `unsafe_fn` | 806 | **803** | **−3** |
-| `unsafe_block` | 437 | **435** | **−2** |
-| `raw_ptr` | 2243 | **2240** | **−3** |
+| `unsafe_fn` | 806 | **802** | **−4** |
+| `unsafe_block` | 437 | **433** | **−4** |
+| `raw_ptr` | 2243 | **2239** | **−4** |
 | `shim` | 107 | **105** | **−2** |
-| `common/` files under `deny` | 0 | **2** | **+2** |
+| `common/` files under `deny` | 0 | **3** | **+3** |
 
 The tag count does not move because the three deleted items were **untagged**:
 `common/` carries no `#![deny(unsafe_code)]`, so its `unsafe` needs no `#[allow]`
@@ -16159,7 +16196,8 @@ off the tag total alone — the ~80 untagged `common/` sites are real work that 
 
 ### What this session did not do, and why
 
-* **`SPicData` was not converted.** Not for lack of time: F104 says the handles buy
+* **`SPicData` was not converted.** T9.B3's site is the layer-level PSNR, not the
+  per-macroblock carrier. Not for lack of time: F104 says the handles buy
   nothing until family 3 lands, and dead fields carried across two sessions are a
   liability. Session B2 in the charter's §8 now owns it, with the structural note it
   needs (ten consumers take the layer and no context; the layer can reach the
@@ -16188,3 +16226,13 @@ from the callers of fourteen slots; F104 finds it for the plane family across 10
 call sites; F105 and F106 are both the same instrument turning up *dead* code that
 a signature census renders as work. Sessions D–H should build the caller view of
 their own family before scoping, and the charter now says so.
+
+There is a second one, from the single conversion that did land. **F109 is what a
+census cannot see**: the call sites tell you which surface an operand names, and
+they do not tell you whether the *name* is still the same name by the time you read
+it. The plane family's whole method is "carry a handle, resolve it where the pixels
+are read", and the first site converted to it had a re-assignment of that handle
+sitting between the two points, six hundred lines apart, on a path no gate in this
+project exercises. The instrument for that is not a tool; it is reading the writers
+of the field between the capture and the use — and the family's next session does it
+120 times.

@@ -233,7 +233,7 @@ unaided, `total` its workload once the earlier families have landed.
 | session | scope | size | brief |
 |---|---|---|---|
 | **A** ✅ | census + the `q1c.py` detector rebuilt; the coefficient family converted | **19 → 5 done, 14 moved to D** | [`phase9_session_a.md`](phase9_session_a.md) |
-| **B** ✅ brief [`phase9_session_b.md`](phase9_session_b.md) | plane family, part one. **The caller census (F104) and the reconstruction-write design (F107) landed; the conversions did not, and the census is why** — every cost-table site pairs a plane operand with an SMbCache one, so the tables wait on family 3 (see §4.2). Also: `expand_pic.rs`'s three dead shims deleted (F106), `expand_pic.rs` + `cpu_core.rs` under `deny`, F105 (20 dead `mc.rs` kernels), F108 (deblocking runs *inside* the fork) | census + design; 2 files denied, 3 items deleted | — |
+| **B** ✅ brief [`phase9_session_b.md`](phase9_session_b.md) | plane family, part one. **The caller census (F104) and the reconstruction-write design (F107) landed; the conversions did not, and the census is why** — every cost-table site pairs a plane operand with an SMbCache one, so the tables wait on family 3 (see §4.2). Also: `WelsCalcPsnr` takes plane cursors (the one site with no second gate — F109, the snapshot is load-bearing), `expand_pic.rs`'s three dead shims deleted (F106); `cpu_core.rs` / `expand_pic.rs` / `wels_common_defs.rs` under `deny`; F105 (20 dead `mc.rs` kernels), F108 (deblocking runs *inside* the fork) | census + design; 3 files denied, 4 items deleted | — |
 | **B2** | plane family, part 1b — the part B could not reach: `SPicData` becomes handles + coordinates, `SDqLayer` gains a source-picture handle so the ten layer-only consumers can reach the spatial pool (`phase9_plane_census.md` §5), and the 12 `src` x `ref` cost sites are made ready. **No table flips here** — they need family 3 | 120 `SPicData` uses; 49 `pEncMb` / 29 `pRefMb` | — |
 | C | plane family, part two: the **reconstruction** consumers against F107's design — 32 blocked call sites (17 copy, 10 idct, 5 intra-pred), deblocking (in-fork, F108), the MT fork's plane access, the `planes()`/`.pData[` roots (38 + 94 sites, `wels_preprocess.rs` 49), the 44 `&mut` picture accessors (F73); the MT Miri probe un-ignored **plus a second probe on a mid-row slice boundary**; `mc.rs`'s 20 dead kernels deleted (F105) | the remainder, sized by B's census | — |
 | D–D2 | SMbCache/SMB **+ the 14 coefficient slot types and their 59 call-throughs**, and with them the plane family's tables: the cost tables (37 sites), `mc` (23), `dct` (13). `sad_common.rs`/`mc.rs`/`sample.rs` reach `deny` **here**, not in B or C (F104) | 45 pure / 48 (+14 slots + the plane tables) | — |
@@ -257,7 +257,9 @@ names, in-fork or not), `rust/tools/phase9_plane_callers.py` (regenerate it;
 **F104** (the double gate — the census's headline, and what re-scoped §4.2 and §8),
 **F105** (20 dead `mc.rs` kernels), **F106** (the dead expand shims, deleted),
 **F107** (the reconstruction-write measurement and design — read this before
-starting session C), **F108** (deblocking is in-fork under MT).
+starting session C), **F108** (deblocking is in-fork under MT), **F109** (a handle
+re-read at the point of use is not always the handle that was captured — read this
+before starting session B2).
 
 **The generalisation these three sessions have now made twice** (F103, F104):
 `pure` and `safe-now` are properties of *signatures*, and a session's real start
