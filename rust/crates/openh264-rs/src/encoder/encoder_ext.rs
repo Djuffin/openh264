@@ -3186,12 +3186,19 @@ pub unsafe fn WelsEncoderEncodeExt(
         return ENC_RETURN_MEMALLOCERR;
     }
     let pSvcParam = ctx_param(pCtx);
-    // The two pictures this loop names, as **geometry copied out of them** rather than
-    // as references: `fsnr` is a reconstruction picture and `pEncPic` a spatial source
-    // picture, they live in different owners, and both are read after the calls that
-    // resolve the other (S37).
-    let mut fsnr: Option<crate::encoder::picture::PicPlanes>;
-    let mut pEncPic: crate::encoder::picture::PicPlanes;
+    // The reconstruction picture the PSNR block measures, **as a handle** — T9.B3.
+    // It was `Option<PicPlanes>`, three raw plane roots copied out of the picture
+    // six hundred lines above their only reader; it is now the handle those roots
+    // were derived from, and `LayerPlanePsnr` resolves the picture where it reads
+    // it. The source picture beside it was the same shape and is gone entirely —
+    // `idEncPic`, a local of the layer body, already names it.
+    //
+    // **The snapshot itself is load-bearing and stays** (F109). `(*pCtx).pDecPic`
+    // cannot be re-read at the PSNR block, because `UpdateRefList` runs in between
+    // and ends in `EndofUpdateRefList` -> `PrefetchNextBuffer`, which reassigns it
+    // to the *next* frame's target. What S37 made this a copy for was the borrow,
+    // not the value; the value has to be captured here either way.
+    let mut fsnr: Option<crate::encoder::picture::RecPicId>;
     let mut iLayerNum = 0i32;
     let mut iLayerSize;
     let mut iSpatialNum = 0i32;
@@ -3344,7 +3351,6 @@ pub unsafe fn WelsEncoderEncodeExt(
             p.iPictureType = (*pCtx).eSliceType as i32;
             p.iFramePoc = (*pSvcParam).sDependencyLayers[iCurDid as usize].iPOC;
         }
-        pEncPic = (*(*pCtx).pVpp).m_pSpatialPicPool.get_mut(idEncPic).planes();
 
         iCurWidth = (*pParam).iVideoWidth;
         iCurHeight = (*pParam).iVideoHeight;
@@ -3426,15 +3432,12 @@ pub unsafe fn WelsEncoderEncodeExt(
 
         let pRefListCur = ctx_ref_list(pCtx, iCurDid as usize);
         (*pCtx).pDecPic = (*pRefListCur).pNextBuffer;
-        fsnr = match (*pCtx).pDecPic {
-            Some(id) => {
-                let p = (*pRefListCur).pic_mut(id);
-                p.iPictureType = (*pCtx).eSliceType as i32;
-                p.iFramePoc = (*pSvcParam).sDependencyLayers[iCurDid as usize].iPOC;
-                Some(p.planes())
-            }
-            None => None,
-        };
+        fsnr = (*pCtx).pDecPic;
+        if let Some(id) = fsnr {
+            let p = (*pRefListCur).pic_mut(id);
+            p.iPictureType = (*pCtx).eSliceType as i32;
+            p.iFramePoc = (*pSvcParam).sDependencyLayers[iCurDid as usize].iPOC;
+        }
 
         WelsInitCurrentLayer(pCtx, iCurWidth, iCurHeight);
 
@@ -3829,36 +3832,50 @@ pub unsafe fn WelsEncoderEncodeExt(
         let mut fSnrY: f32 = 0.0;
         let mut fSnrU: f32 = 0.0;
         let mut fSnrV: f32 = 0.0;
-        let sFsnr = fsnr.unwrap_or(pEncPic);
-        if fsnr.is_some() && ((*pSvcParam).bPsnrY || (*pSrcPic).bPsnrY) {
-            fSnrY = crate::common::wels_common_defs::WelsCalcPsnr(
-                sFsnr.pData[0],
-                sFsnr.iLineSize[0],
-                pEncPic.pData[0],
-                pEncPic.iLineSize[0],
-                iCurWidth,
-                iCurHeight,
-            );
-        }
-        if fsnr.is_some() && ((*pSvcParam).bPsnrU || (*pSrcPic).bPsnrU) {
-            fSnrU = crate::common::wels_common_defs::WelsCalcPsnr(
-                sFsnr.pData[1],
-                sFsnr.iLineSize[1],
-                pEncPic.pData[1],
-                pEncPic.iLineSize[1],
-                iCurWidth >> 1,
-                iCurHeight >> 1,
-            );
-        }
-        if fsnr.is_some() && ((*pSvcParam).bPsnrV || (*pSrcPic).bPsnrV) {
-            fSnrV = crate::common::wels_common_defs::WelsCalcPsnr(
-                sFsnr.pData[2],
-                sFsnr.iLineSize[2],
-                pEncPic.pData[2],
-                pEncPic.iLineSize[2],
-                iCurWidth >> 1,
-                iCurHeight >> 1,
-            );
+        // `sFsnr = fsnr.unwrap_or(pEncPic)` stood here and never fired: every use of
+        // it is under `fsnr.is_some()`, so the fallback was the source picture
+        // measured against itself and unreachable. The `is_some()` is the `if let`.
+        //
+        // **T9.B3, the plane family's first conversion on this side.** The C++
+        // (`encoder_ext.cpp:3927-3980`) hands `WelsCalcPsnr` two `uint8_t*` plane
+        // origins and two strides, and the port carried them as two `PicPlanes`
+        // copied out of the pictures six hundred lines above. Both pictures are
+        // named by a handle, so each plane is resolved here, read, and dropped —
+        // nothing derived from a picture crosses the encode. The two live in
+        // **different owners** (this layer's reference list and the preprocessor's
+        // spatial pool), so the two shared borrows never name one allocation, and
+        // both are read-only: this runs after the fork has joined and after
+        // `UpdateRefList`. `-1.0` is the raw form's null-plane sentinel, answered
+        // where the handle is rather than inside the kernel.
+        if let Some(idDecPic) = fsnr {
+            let pRefListPsnr = crate::encoder::encoder_context::ctx_ref_list(pCtx, iCurDid as usize);
+            if !pRefListPsnr.is_null() && !(*pCtx).pVpp.is_null() {
+                let recon = &*pRefListPsnr;
+                let vpp = &*(*pCtx).pVpp;
+                let plane_psnr = |i: usize, w: i32, h: i32| -> f32 {
+                    let tar = recon.pic(idDecPic).plane(i);
+                    let src = vpp.src_id(idEncPic).plane(i);
+                    if tar.is_empty() || src.is_empty() {
+                        -1.0
+                    } else {
+                        crate::common::wels_common_defs::calc_psnr(
+                            &tar.cursor(0, 0),
+                            &src.cursor(0, 0),
+                            w,
+                            h,
+                        )
+                    }
+                };
+                if (*pSvcParam).bPsnrY || (*pSrcPic).bPsnrY {
+                    fSnrY = plane_psnr(0, iCurWidth, iCurHeight);
+                }
+                if (*pSvcParam).bPsnrU || (*pSrcPic).bPsnrU {
+                    fSnrU = plane_psnr(1, iCurWidth >> 1, iCurHeight >> 1);
+                }
+                if (*pSvcParam).bPsnrV || (*pSrcPic).bPsnrV {
+                    fSnrV = plane_psnr(2, iCurWidth >> 1, iCurHeight >> 1);
+                }
+            }
         }
 
         (*pLayerBsInfo).rPsnr[0] = 0.0;
