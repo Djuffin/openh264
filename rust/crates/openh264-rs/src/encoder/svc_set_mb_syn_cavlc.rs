@@ -819,7 +819,7 @@ pub unsafe fn WelsWriteMbResidual(
         iC = wels_non_zero_count_average(iA, iB);
         if WriteBlockResidualCavlc(
             pFuncList,
-            (*crate::encoder::md::dct(sMbCacheInfo)).iLumaI16x16Dc.as_mut_ptr(),
+            (*sMbCacheInfo).sDct.iLumaI16x16Dc.as_mut_ptr(),
             15,
             1,
             LUMA_4x4,
@@ -834,7 +834,7 @@ pub unsafe fn WelsWriteMbResidual(
         // AC Luma
         if kiCbpLuma != 0 {
             // S28: the cursor walks all sixteen blocks — derived from the whole array.
-            pBlock = std::ptr::addr_of_mut!((*crate::encoder::md::dct(sMbCacheInfo)).iLumaBlock).cast::<i16>();
+            pBlock = std::ptr::addr_of_mut!((*sMbCacheInfo).sDct.iLumaBlock).cast::<i16>();
 
             for i in 0..16 {
                 let iIdx = g_kuiCache48CountScan4Idx[i] as usize;
@@ -860,7 +860,7 @@ pub unsafe fn WelsWriteMbResidual(
         // Luma DC AC
         if kiCbpLuma != 0 {
             // S28: the cursor walks all sixteen blocks — derived from the whole array.
-            pBlock = std::ptr::addr_of_mut!((*crate::encoder::md::dct(sMbCacheInfo)).iLumaBlock).cast::<i16>();
+            pBlock = std::ptr::addr_of_mut!((*sMbCacheInfo).sDct.iLumaBlock).cast::<i16>();
 
             let mut i = 0usize;
             while i < 16 {
@@ -944,7 +944,7 @@ pub unsafe fn WelsWriteMbResidual(
     if kiCbpChroma != 0 {
         // Chroma DC residual present
         // S28: `.add(4)` below walks into `iChromaDc[1]` — derived from the whole array.
-        pBlock = std::ptr::addr_of_mut!((*crate::encoder::md::dct(sMbCacheInfo)).iChromaDc).cast::<i16>(); // Cb
+        pBlock = std::ptr::addr_of_mut!((*sMbCacheInfo).sDct.iChromaDc).cast::<i16>(); // Cb
         if WriteBlockResidualCavlc(
             pFuncList,
             pBlock,
@@ -976,7 +976,7 @@ pub unsafe fn WelsWriteMbResidual(
         if (kiCbpChroma & 0x02) != 0 {
             let kCache48CountScan4Idx16base = &g_kuiCache48CountScan4Idx[16..];
             // S28: walks all eight chroma blocks — derived from the whole array.
-            pBlock = std::ptr::addr_of_mut!((*crate::encoder::md::dct(sMbCacheInfo)).iChromaBlock).cast::<i16>(); // Cb
+            pBlock = std::ptr::addr_of_mut!((*sMbCacheInfo).sDct.iChromaBlock).cast::<i16>(); // Cb
 
             for i in 0..4 {
                 let iIdx = kCache48CountScan4Idx16base[i] as usize;
@@ -1003,7 +1003,7 @@ pub unsafe fn WelsWriteMbResidual(
             // narrowed the tag to block 4 and the second iteration read outside it.
             // Derived from the whole array, offset to block 4. **The CABAC/LOW probe
             // could not see it** — only the CAVLC probe (T6.C2) reaches this line.
-            pBlock = std::ptr::addr_of_mut!((*crate::encoder::md::dct(sMbCacheInfo)).iChromaBlock)
+            pBlock = std::ptr::addr_of_mut!((*sMbCacheInfo).sDct.iChromaBlock)
                 .cast::<i16>()
                 .add(4 * 16); // Cr
 

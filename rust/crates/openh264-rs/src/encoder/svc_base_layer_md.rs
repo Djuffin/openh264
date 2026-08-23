@@ -39,6 +39,7 @@ use crate::encoder::picture::{RecPicId, SrcPicId};
 use crate::common::mc::{McChroma_c, McLuma_c};
 use crate::encoder::encoder_context::{sWelsEncCtx, SMVComponentUnit, SMVUnitXY, ctx_func_list};
 use crate::encoder::encoder_context::ctx_vaa;
+use crate::encoder::md::{mem_pred_chroma_off, mem_pred_luma_off};
 use crate::encoder::md::{
     FillNeighborCacheIntra, InitMeRefinePointer, MdIntraAnalysisVaaInfo, MeRefineFracPixel, SMB,
     SMbCache, SMeRefinePointer, SWelsMD, BsSizeUE, MB_TYPE_16x16, MB_TYPE_16x8, MB_TYPE_8x16,
@@ -438,7 +439,9 @@ pub unsafe extern "C" fn WelsMdI4x4(
             let iCurMode = kpAvailMode[j] as i32;
             debug_assert!((0..14).contains(&iCurMode));
 
-            let pDst = crate::encoder::md::mem_pred_blk4(pMbCache).offset(((1 - iBestPredBufferNum) << 4) as isize);
+            let pDst = std::ptr::addr_of_mut!((*pMbCache).sMemPredBlk4)
+                .cast::<u8>()
+                .offset(((1 - iBestPredBufferNum) << 4) as isize);
 
             (*pFunc).pfGetLumaI4x4Pred[iCurMode as usize].unwrap()(pDst, pCurDec, kiLineSizeDec);
             let iCurCost = pfSatd4x4(pDst, 4, pCurEnc, kiLineSizeEnc)
@@ -560,7 +563,9 @@ pub unsafe extern "C" fn WelsMdI4x4Fast(
         }
         macro_rules! alt_buf {
             () => {
-                crate::encoder::md::mem_pred_blk4(pMbCache).offset(((1 - iBestPredBufferNum) << 4) as isize)
+                std::ptr::addr_of_mut!((*pMbCache).sMemPredBlk4)
+                    .cast::<u8>()
+                    .offset(((1 - iBestPredBufferNum) << 4) as isize)
             };
         }
         // `if (iCurCost < iBestCost) { best = cur; iBestPredBufferNum = 1 - …; }`
@@ -577,7 +582,9 @@ pub unsafe extern "C" fn WelsMdI4x4Fast(
         if iAvailCount == 9 || iAvailCount == 7 {
             //I4_PRED_DC(2)
             iBestMode = I4_PRED_DC;
-            let pDst = crate::encoder::md::mem_pred_blk4(pMbCache).offset((iBestPredBufferNum << 4) as isize);
+            let pDst = std::ptr::addr_of_mut!((*pMbCache).sMemPredBlk4)
+                .cast::<u8>()
+                .offset((iBestPredBufferNum << 4) as isize);
             iBestCost = score!(I4_PRED_DC, pDst);
 
             //I4_PRED_H(1)
@@ -708,8 +715,10 @@ pub unsafe extern "C" fn WelsMdIntraChroma(
     iLambda: i32,
 ) -> i32 {
     let mut iChmaIdx: usize = 0;
-    let pPredIntraChma: [*mut u8; 2] =
-        [crate::encoder::md::mem_pred_chroma(pMbCache), crate::encoder::md::mem_pred_chroma(pMbCache).add(128)];
+    let pMemPredChroma = std::ptr::addr_of_mut!((*pMbCache).sMemPredMb)
+        .cast::<u8>()
+        .add(mem_pred_chroma_off((*pMbCache).uiMemPredLumaHalf));
+    let pPredIntraChma: [*mut u8; 2] = [pMemPredChroma, pMemPredChroma.add(128)];
     let mut pDstChma = pPredIntraChma[0];
     let pEncCb = (*pMbCache).SPicData.pEncMb[1];
     let pEncCr = (*pMbCache).SPicData.pEncMb[2];
@@ -1443,7 +1452,7 @@ pub unsafe fn WelsMdPSkipEnc(
     // offsets of the luma one and carry the same whole-array provenance (S28);
     // deriving them through two further calls put those calls *between* the first
     // cursor and its use, which is what `q1c.py --type SMbCache` flagged.
-    let pDstLuma = crate::encoder::md::skip_mb(pMbCache);
+    let pDstLuma = std::ptr::addr_of_mut!((*pMbCache).sSkipMb).cast::<u8>();
     let pDstCb = pDstLuma.add(256);
     let pDstCr = pDstLuma.add(256 + 64);
 
@@ -1531,7 +1540,7 @@ pub unsafe fn WelsMdPSkipEnc(
     }
 
     WelsDctMb(
-        crate::encoder::md::coeff_level(pMbCache),
+        std::ptr::addr_of_mut!((*pMbCache).sCoeffLevel).cast::<i16>(),
         pEncMb,
         iEncStride,
         pDstLuma,
@@ -1543,20 +1552,20 @@ pub unsafe fn WelsMdPSkipEnc(
         pEncMb = (*pMbCache).SPicData.pEncMb[1];
         pEncBlockOffset = pStrideEncBlockOffset.add(16);
         (*pFunc).pfDctFourT4.expect("pfDctFourT4 unset")(
-            crate::encoder::md::coeff_level(pMbCache).add(256),
+            std::ptr::addr_of_mut!((*pMbCache).sCoeffLevel).cast::<i16>().add(256),
             pEncMb.offset(*pEncBlockOffset as isize),
             iEncStride,
-            crate::encoder::md::skip_mb(pMbCache).add(256),
+            std::ptr::addr_of_mut!((*pMbCache).sSkipMb).cast::<u8>().add(256),
             8,
         );
         if WelsTryPUVskip(pEncCtx, pCurMb, pMbCache, 1) {
             pEncMb = (*pMbCache).SPicData.pEncMb[2];
             pEncBlockOffset = pStrideEncBlockOffset.add(20);
             (*pFunc).pfDctFourT4.expect("pfDctFourT4 unset")(
-                crate::encoder::md::coeff_level(pMbCache).add(320),
+                std::ptr::addr_of_mut!((*pMbCache).sCoeffLevel).cast::<i16>().add(320),
                 pEncMb.offset(*pEncBlockOffset as isize),
                 iEncStride,
-                crate::encoder::md::skip_mb(pMbCache).add(320),
+                std::ptr::addr_of_mut!((*pMbCache).sSkipMb).cast::<u8>().add(320),
                 8,
             );
             if WelsTryPUVskip(pEncCtx, pCurMb, pMbCache, 2) {
@@ -1639,14 +1648,18 @@ pub unsafe fn WelsMdInterMbRefinement(
 
     let pRefCb = (*pMbCache).SPicData.pRefMb[1];
     let pRefCr = (*pMbCache).SPicData.pRefMb[2];
-    let pDstLuma = crate::encoder::md::mem_pred_luma(pMbCache);
+    let pDstLuma = std::ptr::addr_of_mut!((*pMbCache).sMemPredMb)
+        .cast::<u8>()
+        .add(mem_pred_luma_off((*pMbCache).uiMemPredLumaHalf));
     // The one cursor every `sMeRefine` offset is measured from — derived once here,
     // from the cache root, and handed to each `MeRefineFracPixel` call below (S28).
-    let pBufMe = crate::encoder::md::buffer_inter_pred_me(pMbCache);
+    let pBufMe = std::ptr::addr_of_mut!((*pMbCache).sBufferInterPredMe).cast::<u8>();
     // **T9.D3**: the chroma pair comes last, and `pDstCr` off `pDstCb` rather than
     // off a second `mem_pred_chroma()` — so no accessor call sits between any of
     // these four cursors and its first use. Same addresses, same provenance.
-    let pDstCb = crate::encoder::md::mem_pred_chroma(pMbCache);
+    let pDstCb = std::ptr::addr_of_mut!((*pMbCache).sMemPredMb)
+        .cast::<u8>()
+        .add(mem_pred_chroma_off((*pMbCache).uiMemPredLumaHalf));
     let pDstCr = pDstCb.add(64);
 
     let iLineSizeRefUV = (*pCurDqLayer).sRefPicView.sPlanes.iLineSize[1];
@@ -2312,20 +2325,27 @@ pub unsafe fn WelsMdInterEncode(
     (*pFunc).pfCopy16x16Aligned.expect("pfCopy16x16Aligned unset")(
         (*pMbCache).SPicData.pCsMb[0],
         kiCsStrideY,
-        crate::encoder::md::mem_pred_luma(pMbCache),
+        std::ptr::addr_of_mut!((*pMbCache).sMemPredMb)
+            .cast::<u8>()
+            .add(mem_pred_luma_off((*pMbCache).uiMemPredLumaHalf)),
         16,
     );
     let copy8 = (*pFunc).pfCopy8x8Aligned.expect("pfCopy8x8Aligned unset");
     copy8(
         (*pMbCache).SPicData.pCsMb[1],
         kiCsStrideUV,
-        crate::encoder::md::mem_pred_chroma(pMbCache),
+        std::ptr::addr_of_mut!((*pMbCache).sMemPredMb)
+            .cast::<u8>()
+            .add(mem_pred_chroma_off((*pMbCache).uiMemPredLumaHalf)),
         8,
     );
     copy8(
         (*pMbCache).SPicData.pCsMb[2],
         kiCsStrideUV,
-        crate::encoder::md::mem_pred_chroma(pMbCache).add(64),
+        std::ptr::addr_of_mut!((*pMbCache).sMemPredMb)
+            .cast::<u8>()
+            .add(mem_pred_chroma_off((*pMbCache).uiMemPredLumaHalf))
+            .add(64),
         8,
     );
 }
