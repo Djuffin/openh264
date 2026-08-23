@@ -142,17 +142,16 @@ for _n in (
 
 # Table slots, by the name that appears at the call site. `args` as above.
 SLOTS = {
-    "pfSampleSad":        ("sad", (0, 2)),
-    "pfSampleSatd":       ("satd", (0, 2)),
-    "pfSample4Sad":       ("sad4", (0, 2)),
-    "md_cost":            ("sad|satd", (0, 2)),
-    "me_cost":            ("sad|satd", (0, 2)),
-    # **T9.B28.** The transitional raw cost tables (T9.B25): while the campaign
-    # converts the readers, a *raw* cost site is spelled `pfSampleSadRaw[..]` and a
-    # converted one calls the kernel directly. Without these five names the census
-    # stops seeing the raw sites the moment they are re-spelled — which is the same
-    # blindness F116 was, arriving by a different route (S58). The `*Raw` names are
-    # deleted with the tables.
+    # **T9.B25/B28/B29 — the cost tables' *raw* names only.** `pfSampleSad`,
+    # `pfSampleSatd`, `pfSample4Sad`, `md_cost` and `me_cost` are the **safe** slots
+    # now (`fn(&PlaneCursor, &PlaneCursor) -> i32`) and their call sites are
+    # *converted* — counting them would report finished work as remaining. The raw
+    # tables carry the transitional `*Raw` suffix and are what is left to convert;
+    # they and these five entries are deleted together when the last raw reader goes.
+    #
+    # Listing only the raw names is also what keeps the tool honest through the
+    # campaign: a site that converts *leaves* the census, and a site that is merely
+    # re-spelled does not (S58, and F116's lesson arriving by a different route).
     "pfSampleSadRaw":     ("sad", (0, 2)),
     "pfSampleSatdRaw":    ("satd", (0, 2)),
     "pfSample4SadRaw":    ("sad4", (0, 2)),
@@ -169,7 +168,9 @@ SLOTS = {
     "pfCopy4x4":          ("copy", (0, 2)),
     "pfCopy8x4":          ("copy", (0, 2)),
     "pfCopy4x8":          ("copy", (0, 2)),
-    "pfCopyBlockByMode":  ("copy", (0, 2)),
+    # `pfCopyBlockByMode` is `SMeRefinePointer`'s own slot, safe since T9.B29 — its
+    # one call site is converted, so it leaves the census with the others.
+
     "pfIDctT4":           ("idct", (0, 2, 4)),
     "pfIDctFourT4":       ("idct", (0, 2, 4)),
     "pfDctT4":            ("dct", (0, 1, 3)),
@@ -688,8 +689,7 @@ def collect_sites(files, in_fork):
                 # `md_cost(block)` / `me_cost(block)` *select* a kernel; the call
                 # that takes the operands is the one after the `.unwrap()`, so for
                 # those two the suffix is required rather than optional.
-                suffix = "" if slot in ("md_cost", "me_cost",
-                                        "md_cost_raw", "me_cost_raw") else "?"
+                suffix = "" if slot in ("md_cost_raw", "me_cost_raw") else "?"
                 m2 = re.match(r"(\s*\[[^\]]*\]\s*|\s*\([^)]*\)\s*)?"
                               r"(\s*\.\s*(unwrap|expect)\s*\([^)]*\)\s*)" + suffix + r"\(",
                               tail, re.S)
