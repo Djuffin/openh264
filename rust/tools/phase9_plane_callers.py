@@ -147,6 +147,17 @@ SLOTS = {
     "pfSample4Sad":       ("sad4", (0, 2)),
     "md_cost":            ("sad|satd", (0, 2)),
     "me_cost":            ("sad|satd", (0, 2)),
+    # **T9.B28.** The transitional raw cost tables (T9.B25): while the campaign
+    # converts the readers, a *raw* cost site is spelled `pfSampleSadRaw[..]` and a
+    # converted one calls the kernel directly. Without these five names the census
+    # stops seeing the raw sites the moment they are re-spelled — which is the same
+    # blindness F116 was, arriving by a different route (S58). The `*Raw` names are
+    # deleted with the tables.
+    "pfSampleSadRaw":     ("sad", (0, 2)),
+    "pfSampleSatdRaw":    ("satd", (0, 2)),
+    "pfSample4SadRaw":    ("sad4", (0, 2)),
+    "md_cost_raw":        ("sad|satd", (0, 2)),
+    "me_cost_raw":        ("sad|satd", (0, 2)),
     "pfGetLumaI4x4Pred":  ("intrapred", (0, 1)),
     "pfGetLumaI16x16Pred": ("intrapred", (0, 1)),
     "pfGetChromaPred":    ("intrapred", (0, 1)),
@@ -247,7 +258,7 @@ PARAM_CLASS = {
 # Re-typing a slot re-types these signatures too, so they are counted separately
 # rather than missed.
 HANDOFF_RE = re.compile(
-    r"(pfSampleSad|pfSampleSatd|pfSample4Sad)\s*\[[^\]]*\]\s*(?![.(\[])")
+    r"(pfSampleSad|pfSampleSatd|pfSample4Sad)(?:Raw)?\s*\[[^\]]*\]\s*(?![.(\[])")
 
 # Identifiers an alias walk must not mistake for a variable root.
 STOPWORDS = {"if", "else", "match", "let", "mut", "as", "isize", "usize", "i32",
@@ -677,7 +688,8 @@ def collect_sites(files, in_fork):
                 # `md_cost(block)` / `me_cost(block)` *select* a kernel; the call
                 # that takes the operands is the one after the `.unwrap()`, so for
                 # those two the suffix is required rather than optional.
-                suffix = "" if slot in ("md_cost", "me_cost") else "?"
+                suffix = "" if slot in ("md_cost", "me_cost",
+                                        "md_cost_raw", "me_cost_raw") else "?"
                 m2 = re.match(r"(\s*\[[^\]]*\]\s*|\s*\([^)]*\)\s*)?"
                               r"(\s*\.\s*(unwrap|expect)\s*\([^)]*\)\s*)" + suffix + r"\(",
                               tail, re.S)

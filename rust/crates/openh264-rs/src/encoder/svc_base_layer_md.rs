@@ -1505,29 +1505,65 @@ pub unsafe fn WelsMdInterMbRefinement(
 ) {
     let pCurDqLayer = current_layer(pEncCtx);
     let pFunc = ctx_func_list(pEncCtx);
-    let pTmpRefCb: *mut u8;
-    let pTmpRefCr: *mut u8;
     let mut iBestSadCost = 0i32;
     let mut iBestSatdCost = 0i32;
     let mut sMeRefine = SMeRefinePointer::default();
 
-    let pRefCb = (*pMbCache).SPicData.pRefMb[1];
-    let pRefCr = (*pMbCache).SPicData.pRefMb[2];
-    let pDstLuma = std::ptr::addr_of_mut!((*pMbCache).sMemPredMb)
-        .cast::<u8>()
-        .add(mem_pred_luma_off((*pMbCache).uiMemPredLumaHalf));
+    // **T9.B28 — the chroma reference cursors are gone.** `SPicData.pRefMb[1|2]` was
+    // read here and offset per partition and per motion vector at each of the twelve
+    // `McChroma_c` calls below; each is now a `PlaneCursor` on the reference picture,
+    // anchored by coordinate. The macroblock's chroma origin is what `pRefMb[i]`
+    // encoded as an address (`WelsMdInterInit`, `:945`: `sRefPicView.pData[i] +
+    // ((mbX + mbY * stride) << 3)`), the per-partition `iRefBlk4Stride` is a byte
+    // offset `blk4Y * stride + blk4X` — i.e. the coordinate `(blk4X, blk4Y)` — and
+    // `iMvStride` is `(mvY >> 3) * stride + (mvX >> 3)`, i.e. `(mvX >> 3, mvY >> 3)`.
+    // The strides this drops (`sRefPicView.sPlanes.iLineSize[1]`) are the numbers
+    // `plane(1).stride()` returns; the view is stamped from the same picture
+    // (`encoder_ext.rs:1952`).
+    let kiMbXChroma = ((*pCurMb).iMbX as isize) << 3;
+    let kiMbYChroma = ((*pCurMb).iMbY as isize) << 3;
+
     // The one cursor every `sMeRefine` offset is measured from — derived once here,
     // from the cache root, and handed to each `MeRefineFracPixel` call below (S28).
+    // `sBufferInterPredMe` is a *different field* from `sMemPredMb`, which the chroma
+    // destinations below borrow, so no borrow here pops it (F114a is about a raw and
+    // a safe borrow of the **same** field).
     let pBufMe = std::ptr::addr_of_mut!((*pMbCache).sBufferInterPredMe).cast::<u8>();
-    // **T9.D3**: the chroma pair comes last, and `pDstCr` off `pDstCb` rather than
-    // off a second `mem_pred_chroma()` — so no accessor call sits between any of
-    // these four cursors and its first use. Same addresses, same provenance.
-    let pDstCb = std::ptr::addr_of_mut!((*pMbCache).sMemPredMb)
-        .cast::<u8>()
-        .add(mem_pred_chroma_off((*pMbCache).uiMemPredLumaHalf));
-    let pDstCr = pDstCb.add(64);
 
-    let iLineSizeRefUV = (*pCurDqLayer).sRefPicView.sPlanes.iLineSize[1];
+    // Byte offsets of the three prediction regions inside `sMemPredMb`, not pointers:
+    // an index cannot be invalidated by a retag, and the twelve chroma motion
+    // compensations below take `&mut` to their own slice of that field while the luma
+    // raw (`MeRefineFracPixel`'s destination) has to survive the whole body. T9.D3's
+    // note about deriving all four cursors adjacently applied to raws held across the
+    // body; the rule that replaces it is T9.D11's — derive at the call.
+    let kiOffLuma = mem_pred_luma_off((*pMbCache).uiMemPredLumaHalf);
+    let kiOffCb = mem_pred_chroma_off((*pMbCache).uiMemPredLumaHalf);
+    let kiOffCr = kiOffCb + 64;
+
+    /// One chroma motion compensation, per partition. `$plane` is 1 (Cb) or 2 (Cr);
+    /// `($dx, $dy)` is the partition's own chroma offset **plus** the motion vector's
+    /// integer chroma part, in samples from the macroblock's chroma origin; `$off` is
+    /// the destination's byte offset inside `sMemPredMb`, whose prediction rows are
+    /// 8 samples apart.
+    ///
+    /// The destination slice is exactly the block's span, `($h - 1) * 8 + $w` — the
+    /// same discipline `common/mc.rs`'s shims apply to a raw pointer, stated here in
+    /// the type instead. Each borrow ends with the statement (F114a).
+    macro_rules! mc_chroma_at {
+        ($plane:expr, $off:expr, $dx:expr, $dy:expr, $mv:expr, $w:expr, $h:expr) => {{
+            let pRefPicture =
+                layer_ref_pic(pCurDqLayer).expect("the layer's reference picture is bound");
+            let cRef = pRefPicture
+                .plane($plane)
+                .cursor(kiMbXChroma + ($dx) as isize, kiMbYChroma + ($dy) as isize);
+            let mut cDst = PlaneCursorMut::new(
+                &mut (*pMbCache).sMemPredMb[($off)..][..(($h) - 1) * 8 + ($w)],
+                0,
+                8,
+            );
+            mc_chroma(&cRef, &mut cDst, ($mv).iMvX, ($mv).iMvY, $w, $h);
+        }};
+    }
 
     match (*pCurMb).uiMbType {
         MB_TYPE_16x16 => {
@@ -1536,7 +1572,9 @@ pub unsafe fn WelsMdInterMbRefinement(
             sMeRefine.pfCopyBlockByMode = (*pFunc).pfCopy16x16NotAligned;
             MeRefineFracPixel(
                 pEncCtx,
-                pDstLuma,
+                // Derived at the call, after every chroma borrow of `sMemPredMb`
+                // above has ended — never bound at the top and carried (F114a).
+                std::ptr::addr_of_mut!((*pMbCache).sMemPredMb).cast::<u8>().add(kiOffLuma),
                 &mut (*pWelsMd).sMe.sMe16x16,
                 &mut sMeRefine,
                 pBufMe,
@@ -1556,32 +1594,32 @@ pub unsafe fn WelsMdInterMbRefinement(
             iBestSatdCost = (*pWelsMd).sMe.sMe16x16.uiSatdCost as i32;
 
             //chroma
-            let pMv = &mut (*pWelsMd).sMe.sMe16x16.sMv;
-            let iMvStride =
-                ((*pMv).iMvY as i32 >> 3) * iLineSizeRefUV + ((*pMv).iMvX as i32 >> 3);
-            pTmpRefCb = pRefCb.offset(iMvStride as isize);
-            pTmpRefCr = pRefCr.offset(iMvStride as isize);
-            McChroma_c(pTmpRefCb, iLineSizeRefUV, pDstCb, 8, (*pMv).iMvX, (*pMv).iMvY, 8, 8); //Cb
-            McChroma_c(pTmpRefCr, iLineSizeRefUV, pDstCr, 8, (*pMv).iMvX, (*pMv).iMvY, 8, 8); //Cr
+            let sMv = (*pWelsMd).sMe.sMe16x16.sMv;
+            let dx = sMv.iMvX as i32 >> 3;
+            let dy = sMv.iMvY as i32 >> 3;
+            mc_chroma_at!(1, kiOffCb, dx, dy, sMv, 8, 8); //Cb
+            mc_chroma_at!(2, kiOffCr, dx, dy, sMv, 8, 8); //Cr
 
-            let sdf = &(*pFunc).sSampleDealingFuncs;
-            (*pWelsMd).iCostSkipMb = sdf.pfSampleSadRaw[BLOCK_16x16].expect("pfSampleSad unset")(
-                (*pMbCache).SPicData.pEncMb[0],
-                (*pCurDqLayer).iEncStride[0],
-                pDstLuma,
-                16,
+            // The three cost sites: constant block indices, so the kernels are called
+            // direct (F118, and `WelsInitSampleSadFunc`'s doc carries the proof). The
+            // source operand is the sample `SPicData.pEncMb[i]` named — the source
+            // picture through the layer's handle at the macroblock's own origin.
+            let pEncPicture =
+                layer_enc_pic(pCurDqLayer).expect("the layer's source picture is bound");
+            let cEncLuma = pEncPicture.plane(0).cursor(kiMbXChroma << 1, kiMbYChroma << 1);
+            let cEncCb = pEncPicture.plane(1).cursor(kiMbXChroma, kiMbYChroma);
+            let cEncCr = pEncPicture.plane(2).cursor(kiMbXChroma, kiMbYChroma);
+            (*pWelsMd).iCostSkipMb = sample_sad::<16, 16>(
+                &cEncLuma,
+                &PlaneCursor::new(&(*pMbCache).sMemPredMb[kiOffLuma..][..256], 0, 16),
             );
-            (*pWelsMd).iCostSkipMb += sdf.pfSampleSadRaw[BLOCK_8x8].expect("pfSampleSad unset")(
-                (*pMbCache).SPicData.pEncMb[1],
-                (*pCurDqLayer).iEncStride[1],
-                pDstCb,
-                8,
+            (*pWelsMd).iCostSkipMb += sample_sad::<8, 8>(
+                &cEncCb,
+                &PlaneCursor::new(&(*pMbCache).sMemPredMb[kiOffCb..][..64], 0, 8),
             );
-            (*pWelsMd).iCostSkipMb += sdf.pfSampleSadRaw[BLOCK_8x8].expect("pfSampleSad unset")(
-                (*pMbCache).SPicData.pEncMb[2],
-                (*pCurDqLayer).iEncStride[2],
-                pDstCr,
-                8,
+            (*pWelsMd).iCostSkipMb += sample_sad::<8, 8>(
+                &cEncCr,
+                &PlaneCursor::new(&(*pMbCache).sMemPredMb[kiOffCr..][..64], 0, 8),
             );
         }
 
@@ -1601,7 +1639,7 @@ pub unsafe fn WelsMdInterMbRefinement(
                 );
                 MeRefineFracPixel(
                     pEncCtx,
-                    pDstLuma.add(g_kuiSmb4AddrIn256[iIdx as usize] as usize),
+                    std::ptr::addr_of_mut!((*pMbCache).sMemPredMb).cast::<u8>().add(kiOffLuma).add(g_kuiSmb4AddrIn256[iIdx as usize] as usize),
                     &mut (*pWelsMd).sMe.sMe16x8[i],
                     &mut sMeRefine,
                 pBufMe,
@@ -1621,17 +1659,16 @@ pub unsafe fn WelsMdInterMbRefinement(
                 iBestSatdCost += (*pWelsMd).sMe.sMe16x8[i].uiSatdCost as i32;
 
                 //chroma
-                let iRefBlk4Stride = ((i as i32) << 2) * iLineSizeRefUV;
-                let iDstBlk4Stride = (i as i32) << 5; // 4*8
-                let pMv = &mut (*pWelsMd).sMe.sMe16x8[i].sMv;
-                let iMvStride =
-                    ((*pMv).iMvY as i32 >> 3) * iLineSizeRefUV + ((*pMv).iMvX as i32 >> 3);
-                let pTmpRefCb = pRefCb.offset((iRefBlk4Stride + iMvStride) as isize);
-                let pTmpRefCr = pRefCr.offset((iRefBlk4Stride + iMvStride) as isize);
-                let pTmpDstCb = pDstCb.offset(iDstBlk4Stride as isize);
-                let pTmpDstCr = pDstCr.offset(iDstBlk4Stride as isize);
-                McChroma_c(pTmpRefCb, iLineSizeRefUV, pTmpDstCb, 8, (*pMv).iMvX, (*pMv).iMvY, 8, 4); //Cb
-                McChroma_c(pTmpRefCr, iLineSizeRefUV, pTmpDstCr, 8, (*pMv).iMvX, (*pMv).iMvY, 8, 4); //Cr
+                // `iRefBlk4Stride` was `(i << 2) * strideUV` — a pure row offset, so
+                // the partition sits `4 * i` rows down and in column 0; the
+                // destination's `i << 5` is `4 * i` rows at stride 8, the same place.
+                let iBlk4Y = (i as i32) << 2;
+                let sMv = (*pWelsMd).sMe.sMe16x8[i].sMv;
+                let dx = sMv.iMvX as i32 >> 3;
+                let dy = iBlk4Y + (sMv.iMvY as i32 >> 3);
+                let iDstOff = (i as usize) << 5; // 4 rows x 8
+                mc_chroma_at!(1, kiOffCb + iDstOff, dx, dy, sMv, 8, 4); //Cb
+                mc_chroma_at!(2, kiOffCr + iDstOff, dx, dy, sMv, 8, 4); //Cr
             }
         }
 
@@ -1651,7 +1688,7 @@ pub unsafe fn WelsMdInterMbRefinement(
                 );
                 MeRefineFracPixel(
                     pEncCtx,
-                    pDstLuma.add(g_kuiSmb4AddrIn256[iIdx as usize] as usize),
+                    std::ptr::addr_of_mut!((*pMbCache).sMemPredMb).cast::<u8>().add(kiOffLuma).add(g_kuiSmb4AddrIn256[iIdx as usize] as usize),
                     &mut (*pWelsMd).sMe.sMe8x16[i],
                     &mut sMeRefine,
                 pBufMe,
@@ -1671,16 +1708,16 @@ pub unsafe fn WelsMdInterMbRefinement(
                 iBestSatdCost += (*pWelsMd).sMe.sMe8x16[i].uiSatdCost as i32;
 
                 //chroma
-                let iRefBlk4Stride = iIdx; //4
-                let pMv = &mut (*pWelsMd).sMe.sMe8x16[i].sMv;
-                let iMvStride =
-                    ((*pMv).iMvY as i32 >> 3) * iLineSizeRefUV + ((*pMv).iMvX as i32 >> 3);
-                let pTmpRefCb = pRefCb.offset((iRefBlk4Stride + iMvStride) as isize);
-                let pTmpRefCr = pRefCr.offset((iRefBlk4Stride + iMvStride) as isize);
-                let pTmpDstCb = pDstCb.offset(iRefBlk4Stride as isize);
-                let pTmpDstCr = pDstCr.offset(iRefBlk4Stride as isize);
-                McChroma_c(pTmpRefCb, iLineSizeRefUV, pTmpDstCb, 8, (*pMv).iMvX, (*pMv).iMvY, 4, 8); //Cb
-                McChroma_c(pTmpRefCr, iLineSizeRefUV, pTmpDstCr, 8, (*pMv).iMvX, (*pMv).iMvY, 4, 8); //Cr
+                // `iRefBlk4Stride` was `iIdx` (= 4 * i) added to a byte pointer with no
+                // stride factor — a pure *column* offset — and the destination used the
+                // same number, which at stride 8 is also column `4 * i` of row 0.
+                let iBlk4X = iIdx; // 4 * i
+                let sMv = (*pWelsMd).sMe.sMe8x16[i].sMv;
+                let dx = iBlk4X + (sMv.iMvX as i32 >> 3);
+                let dy = sMv.iMvY as i32 >> 3;
+                let iDstOff = iBlk4X as usize;
+                mc_chroma_at!(1, kiOffCb + iDstOff, dx, dy, sMv, 4, 8); //Cb
+                mc_chroma_at!(2, kiOffCr + iDstOff, dx, dy, sMv, 4, 8); //Cr
             }
         }
 
@@ -1705,7 +1742,7 @@ pub unsafe fn WelsMdInterMbRefinement(
                         );
                         MeRefineFracPixel(
                             pEncCtx,
-                            pDstLuma.add(g_kuiSmb4AddrIn256[iBlk8Idx as usize] as usize),
+                            std::ptr::addr_of_mut!((*pMbCache).sMemPredMb).cast::<u8>().add(kiOffLuma).add(g_kuiSmb4AddrIn256[iBlk8Idx as usize] as usize),
                             &mut (*pWelsMd).sMe.sMe8x8[i],
                             &mut sMeRefine,
                 pBufMe,
@@ -1725,39 +1762,16 @@ pub unsafe fn WelsMdInterMbRefinement(
                         iBestSatdCost += (*pWelsMd).sMe.sMe8x8[i].uiSatdCost as i32;
 
                         //chroma
-                        let pMv = &mut (*pWelsMd).sMe.sMe8x8[i].sMv;
-                        let iMvStride =
-                            ((*pMv).iMvY as i32 >> 3) * iLineSizeRefUV + ((*pMv).iMvX as i32 >> 3);
-
+                        let sMv = (*pWelsMd).sMe.sMe8x8[i].sMv;
                         let iBlk4X = ((i as i32) & 1) << 2;
                         let iBlk4Y = ((i as i32) >> 1) << 2;
-                        let iRefBlk4Stride = iBlk4Y * iLineSizeRefUV + iBlk4X;
-                        let iDstBlk4Stride = (iBlk4Y << 3) + iBlk4X;
-
-                        let pTmpRefCb = pRefCb.offset(iRefBlk4Stride as isize);
-                        let pTmpDstCb = pDstCb.offset(iDstBlk4Stride as isize);
-                        let pTmpRefCr = pRefCr.offset(iRefBlk4Stride as isize);
-                        let pTmpDstCr = pDstCr.offset(iDstBlk4Stride as isize);
-                        McChroma_c(
-                            pTmpRefCb.offset(iMvStride as isize),
-                            iLineSizeRefUV,
-                            pTmpDstCb,
-                            8,
-                            (*pMv).iMvX,
-                            (*pMv).iMvY,
-                            4,
-                            4,
-                        ); //Cb
-                        McChroma_c(
-                            pTmpRefCr.offset(iMvStride as isize),
-                            iLineSizeRefUV,
-                            pTmpDstCr,
-                            8,
-                            (*pMv).iMvX,
-                            (*pMv).iMvY,
-                            4,
-                            4,
-                        ); //Cr
+                        let dx = iBlk4X + (sMv.iMvX as i32 >> 3);
+                        let dy = iBlk4Y + (sMv.iMvY as i32 >> 3);
+                        // `iDstBlk4Stride` was `(iBlk4Y << 3) + iBlk4X`, which is the
+                        // coordinate `(iBlk4X, iBlk4Y)` at stride 8.
+                        let iDstOff = ((iBlk4Y << 3) + iBlk4X) as usize;
+                        mc_chroma_at!(1, kiOffCb + iDstOff, dx, dy, sMv, 4, 4); //Cb
+                        mc_chroma_at!(2, kiOffCr + iDstOff, dx, dy, sMv, 4, 4); //Cr
                     }
                     SUB_MB_TYPE_4x4 => {
                         sMeRefine.pfCopyBlockByMode = (*pFunc).pfCopy4x4;
@@ -1774,7 +1788,7 @@ pub unsafe fn WelsMdInterMbRefinement(
                             );
                             MeRefineFracPixel(
                                 pEncCtx,
-                                pDstLuma.add(g_kuiSmb4AddrIn256[iBlk4x4Idx as usize] as usize),
+                                std::ptr::addr_of_mut!((*pMbCache).sMemPredMb).cast::<u8>().add(kiOffLuma).add(g_kuiSmb4AddrIn256[iBlk4x4Idx as usize] as usize),
                                 &mut (*pWelsMd).sMe.sMe4x4[i][j],
                                 &mut sMeRefine,
                 pBufMe,
@@ -1795,39 +1809,14 @@ pub unsafe fn WelsMdInterMbRefinement(
                             iBestSatdCost += (*pWelsMd).sMe.sMe4x4[i][j].uiSatdCost as i32;
 
                             //chroma
-                            let pMv = &mut (*pWelsMd).sMe.sMe4x4[i][j].sMv;
-                            let iMvStride = ((*pMv).iMvY as i32 >> 3) * iLineSizeRefUV
-                                + ((*pMv).iMvX as i32 >> 3);
-
+                            let sMv = (*pWelsMd).sMe.sMe4x4[i][j].sMv;
                             let iBlk4X = (((((i as i32) & 1) << 1) + (j as i32 & 1)) as i32) << 1;
                             let iBlk4Y = (((((i as i32) >> 1) << 1) + (j as i32 >> 1)) as i32) << 1;
-                            let iRefBlk4Stride = iBlk4Y * iLineSizeRefUV + iBlk4X;
-                            let iDstBlk4Stride = (iBlk4Y << 3) + iBlk4X;
-
-                            let pTmpRefCb = pRefCb.offset(iRefBlk4Stride as isize);
-                            let pTmpDstCb = pDstCb.offset(iDstBlk4Stride as isize);
-                            let pTmpRefCr = pRefCr.offset(iRefBlk4Stride as isize);
-                            let pTmpDstCr = pDstCr.offset(iDstBlk4Stride as isize);
-                            McChroma_c(
-                                pTmpRefCb.offset(iMvStride as isize),
-                                iLineSizeRefUV,
-                                pTmpDstCb,
-                                8,
-                                (*pMv).iMvX,
-                                (*pMv).iMvY,
-                                2,
-                                2,
-                            ); //Cb
-                            McChroma_c(
-                                pTmpRefCr.offset(iMvStride as isize),
-                                iLineSizeRefUV,
-                                pTmpDstCr,
-                                8,
-                                (*pMv).iMvX,
-                                (*pMv).iMvY,
-                                2,
-                                2,
-                            ); //Cr
+                            let dx = iBlk4X + (sMv.iMvX as i32 >> 3);
+                            let dy = iBlk4Y + (sMv.iMvY as i32 >> 3);
+                            let iDstOff = ((iBlk4Y << 3) + iBlk4X) as usize;
+                            mc_chroma_at!(1, kiOffCb + iDstOff, dx, dy, sMv, 2, 2); //Cb
+                            mc_chroma_at!(2, kiOffCr + iDstOff, dx, dy, sMv, 2, 2); //Cr
                         }
                     }
                     SUB_MB_TYPE_8x4 => {
@@ -1845,7 +1834,7 @@ pub unsafe fn WelsMdInterMbRefinement(
                             );
                             MeRefineFracPixel(
                                 pEncCtx,
-                                pDstLuma.add(g_kuiSmb4AddrIn256[iBlk4x4Idx as usize] as usize),
+                                std::ptr::addr_of_mut!((*pMbCache).sMemPredMb).cast::<u8>().add(kiOffLuma).add(g_kuiSmb4AddrIn256[iBlk4x4Idx as usize] as usize),
                                 &mut (*pWelsMd).sMe.sMe8x4[i][j],
                                 &mut sMeRefine,
                 pBufMe,
@@ -1866,39 +1855,14 @@ pub unsafe fn WelsMdInterMbRefinement(
                             iBestSatdCost += (*pWelsMd).sMe.sMe8x4[i][j].uiSatdCost as i32;
 
                             //chroma
-                            let pMv = &mut (*pWelsMd).sMe.sMe8x4[i][j].sMv;
-                            let iMvStride = ((*pMv).iMvY as i32 >> 3) * iLineSizeRefUV
-                                + ((*pMv).iMvX as i32 >> 3);
-
+                            let sMv = (*pWelsMd).sMe.sMe8x4[i][j].sMv;
                             let iBlk4X = ((((i as i32) & 1) << 1) as i32) << 1;
                             let iBlk4Y = (((((i as i32) >> 1) << 1) + j as i32) as i32) << 1;
-                            let iRefBlk4Stride = iBlk4Y * iLineSizeRefUV + iBlk4X;
-                            let iDstBlk4Stride = (iBlk4Y << 3) + iBlk4X;
-
-                            let pTmpRefCb = pRefCb.offset(iRefBlk4Stride as isize);
-                            let pTmpDstCb = pDstCb.offset(iDstBlk4Stride as isize);
-                            let pTmpRefCr = pRefCr.offset(iRefBlk4Stride as isize);
-                            let pTmpDstCr = pDstCr.offset(iDstBlk4Stride as isize);
-                            McChroma_c(
-                                pTmpRefCb.offset(iMvStride as isize),
-                                iLineSizeRefUV,
-                                pTmpDstCb,
-                                8,
-                                (*pMv).iMvX,
-                                (*pMv).iMvY,
-                                4,
-                                2,
-                            ); //Cb
-                            McChroma_c(
-                                pTmpRefCr.offset(iMvStride as isize),
-                                iLineSizeRefUV,
-                                pTmpDstCr,
-                                8,
-                                (*pMv).iMvX,
-                                (*pMv).iMvY,
-                                4,
-                                2,
-                            ); //Cr
+                            let dx = iBlk4X + (sMv.iMvX as i32 >> 3);
+                            let dy = iBlk4Y + (sMv.iMvY as i32 >> 3);
+                            let iDstOff = ((iBlk4Y << 3) + iBlk4X) as usize;
+                            mc_chroma_at!(1, kiOffCb + iDstOff, dx, dy, sMv, 4, 2); //Cb
+                            mc_chroma_at!(2, kiOffCr + iDstOff, dx, dy, sMv, 4, 2); //Cr
                         }
                     }
                     SUB_MB_TYPE_4x8 => {
@@ -1916,7 +1880,7 @@ pub unsafe fn WelsMdInterMbRefinement(
                             );
                             MeRefineFracPixel(
                                 pEncCtx,
-                                pDstLuma.add(g_kuiSmb4AddrIn256[iBlk4x4Idx as usize] as usize),
+                                std::ptr::addr_of_mut!((*pMbCache).sMemPredMb).cast::<u8>().add(kiOffLuma).add(g_kuiSmb4AddrIn256[iBlk4x4Idx as usize] as usize),
                                 &mut (*pWelsMd).sMe.sMe4x8[i][j],
                                 &mut sMeRefine,
                 pBufMe,
@@ -1937,39 +1901,14 @@ pub unsafe fn WelsMdInterMbRefinement(
                             iBestSatdCost += (*pWelsMd).sMe.sMe4x8[i][j].uiSatdCost as i32;
 
                             //chroma
-                            let pMv = &mut (*pWelsMd).sMe.sMe4x8[i][j].sMv;
-                            let iMvStride = ((*pMv).iMvY as i32 >> 3) * iLineSizeRefUV
-                                + ((*pMv).iMvX as i32 >> 3);
-
+                            let sMv = (*pWelsMd).sMe.sMe4x8[i][j].sMv;
                             let iBlk4X = (((((i as i32) & 1) << 1) + j as i32) as i32) << 1;
                             let iBlk4Y = ((((i as i32) >> 1) << 1) as i32) << 1;
-                            let iRefBlk4Stride = iBlk4Y * iLineSizeRefUV + iBlk4X;
-                            let iDstBlk4Stride = (iBlk4Y << 3) + iBlk4X;
-
-                            let pTmpRefCb = pRefCb.offset(iRefBlk4Stride as isize);
-                            let pTmpDstCb = pDstCb.offset(iDstBlk4Stride as isize);
-                            let pTmpRefCr = pRefCr.offset(iRefBlk4Stride as isize);
-                            let pTmpDstCr = pDstCr.offset(iDstBlk4Stride as isize);
-                            McChroma_c(
-                                pTmpRefCb.offset(iMvStride as isize),
-                                iLineSizeRefUV,
-                                pTmpDstCb,
-                                8,
-                                (*pMv).iMvX,
-                                (*pMv).iMvY,
-                                2,
-                                4,
-                            ); //Cb
-                            McChroma_c(
-                                pTmpRefCr.offset(iMvStride as isize),
-                                iLineSizeRefUV,
-                                pTmpDstCr,
-                                8,
-                                (*pMv).iMvX,
-                                (*pMv).iMvY,
-                                2,
-                                4,
-                            ); //Cr
+                            let dx = iBlk4X + (sMv.iMvX as i32 >> 3);
+                            let dy = iBlk4Y + (sMv.iMvY as i32 >> 3);
+                            let iDstOff = ((iBlk4Y << 3) + iBlk4X) as usize;
+                            mc_chroma_at!(1, kiOffCb + iDstOff, dx, dy, sMv, 2, 4); //Cb
+                            mc_chroma_at!(2, kiOffCr + iDstOff, dx, dy, sMv, 2, 4); //Cr
                         }
                     }
                     _ => {}
