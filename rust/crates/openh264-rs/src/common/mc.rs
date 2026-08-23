@@ -1,3 +1,16 @@
+//! Motion compensation — luma quarter-pel, chroma eighth-pel, and the copy paths.
+//!
+//! **`#![deny(unsafe_code)]` as of T9.B4 (D-cov-1).** The module was the last of
+//! `common/`'s ten to carry raw entry points: 28 strangler shims (plan §4 R7) wrapping
+//! the safe cursor kernels for callers that still held pointers. Twenty-six had no
+//! `src/` caller left — the last four lost theirs at T9.B29 — and are deleted here with
+//! their span and dispatch tests. **Two shims survive — `McLuma_c` and `McChroma_c` —
+//! and they need `shim_wh`, so the module carries three tagged allows, not two.** B4's
+//! brief said "exactly the two dormant-tagged allows" and missed the machinery; F130
+//! records it. All three retire together in Phase 10, when `SvcMdSCDMbEnc` — their only
+//! caller, unreachable without `iUsageType == SCREEN_CONTENT_REAL_TIME` (F125) —
+//! converts behind a screen-content referee.
+#![deny(unsafe_code)]
 #![allow(
     non_snake_case,
     non_camel_case_types,
@@ -11,65 +24,40 @@
 
 use crate::safe::plane::{PlaneCursor, PlaneCursorMut};
 
-// Function pointer signatures matching mc.h
-pub type PWelsMcFunc = unsafe extern "C" fn(
-    pSrc: *const u8,
-    iSrcStride: i32,
-    pDst: *mut u8,
-    iDstStride: i32,
-    iMvX: i16,
-    iMvY: i16,
-    iWidth: i32,
-    iHeight: i32,
-);
+// Function pointer signatures matching mc.h.
+//
+// **D-cov-1 (T9.B4): the three `SMcFunc` slot types are the safe kernels' signatures
+// now, not the raw ones.** They were `unsafe extern "C" fn(*const u8, i32, *mut u8,
+// i32, ...)` because `InitMcFunc` installed the strangler shims; the shims are gone
+// (26 of them, no `src/` caller since T9.B29), so the slots hold `mc_luma`,
+// `mc_chroma`, `mc_hor_ver20`/`_02`/`_22` and `pixel_avg` directly, on cursors. Six
+// `Option<fn>` slots, still 8 bytes each by null-pointer optimisation, so
+// `abi_guard.rs`'s `assert_size!(SMcFunc, 48)` holds unchanged — checked, not assumed.
+//
+// **What reads these slots: nothing in `src/`.** The port de-virtualized both codecs'
+// motion compensation in Phase 4a — `BaseMC` names the kernels directly
+// (`decode_slice.rs:1081`) — so the only readers left are
+// `encoder_context.rs:2464`'s `is_none()` construction assertion and the Phase 4a
+// dispatch test. The table is kept, filled and pinned because it is upstream's
+// (`codec/common/inc/mc.h:46`) and the ABI guard's, not because anything dispatches
+// through it.
+pub type PWelsMcFunc =
+    fn(src: &PlaneCursor<'_>, dst: &mut PlaneCursorMut<'_>, mv_x: i16, mv_y: i16, width: usize, height: usize);
 
-pub type PWelsLumaHalfpelMcFunc = unsafe extern "C" fn(
-    pSrc: *const u8,
-    iSrcStride: i32,
-    pDst: *mut u8,
-    iDstStride: i32,
-    iWidth: i32,
-    iHeight: i32,
-);
+pub type PWelsLumaHalfpelMcFunc =
+    fn(src: &PlaneCursor<'_>, dst: &mut PlaneCursorMut<'_>, width: usize, height: usize);
 
-pub type PWelsSampleAveragingFunc = unsafe extern "C" fn(
-    pDst: *mut u8,
-    iDstStride: i32,
-    pSrcA: *const u8,
-    iSrcAStride: i32,
-    pSrcB: *const u8,
-    iSrcBStride: i32,
-    iWidth: i32,
-    iHeight: i32,
-);
+pub type PWelsSampleAveragingFunc =
+    fn(dst: &mut PlaneCursorMut<'_>, a: &PlaneCursor<'_>, b: &PlaneCursor<'_>, width: usize, height: usize);
 
-pub type PMcChromaWidthExtFunc = unsafe extern "C" fn(
-    pSrc: *const u8,
-    iSrcStride: i32,
-    pDst: *mut u8,
-    iDstStride: i32,
-    kpABCD: *const u8,
-    iHeight: i32,
-);
-
-pub type PWelsSampleWidthAveragingFunc = unsafe extern "C" fn(
-    pDst: *mut u8,
-    iDstStride: i32,
-    pSrcA: *const u8,
-    iSrcAStride: i32,
-    pSrcB: *const u8,
-    iSrcBStride: i32,
-    iHeight: i32,
-);
-
-pub type PWelsMcWidthHeightFunc = unsafe extern "C" fn(
-    pSrc: *const u8,
-    iSrcStride: i32,
-    pDst: *mut u8,
-    iDstStride: i32,
-    iWidth: i32,
-    iHeight: i32,
-);
+// **D-cov-1 (T9.B4): `PMcChromaWidthExtFunc`, `PWelsSampleWidthAveragingFunc` and
+// `PWelsMcWidthHeightFunc` deleted.** Three `unsafe extern "C" fn` type aliases with
+// zero references anywhere in the crate — not a slot type, not a parameter, not
+// re-exported. They are `mc.h`'s width-specialised dispatch shapes, which this port
+// never dispatched through: the width-specialised kernels became `mc_copy_width_eq*`
+// and are reached by direct call. Their only remaining effect was to keep three
+// `unsafe` spellings in a module that is otherwise safe, which is what this commit is
+// about.
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug)]
@@ -1192,6 +1180,12 @@ fn block_span(stride: usize, width: usize, height: usize) -> usize {
 /// reads and writes respectively, at the given strides, and the two spans must not
 /// overlap.
 #[inline(always)]
+// SCREEN_CONTENT(dormant: Phase 10) — the span machinery `McLuma_c` and `McChroma_c`
+// below need, and nothing else: it materialises a raw pointer pair as the two slices
+// the safe kernels take, sized to the reach the caller declared. It is not itself
+// screen-content code, but it has exactly their lifetime and dies in the same commit.
+// unsafe-cat: SCREEN_CONTENT(dormant)
+#[allow(unsafe_code)]
 unsafe fn shim_wh(
     pSrc: *const u8,
     iSrcStride: i32,
@@ -1219,879 +1213,11 @@ unsafe fn shim_wh(
     );
 }
 
-/// C++: `McCopyWidthEq2_c`, `codec/common/src/mc.cpp`.
-///
-/// # Safety
-/// * `pSrc` and `pDst` point at sample `(0, 0)` of a 2 x `iHeight` block in surfaces
-///   whose rows are `iSrcStride` / `iDstStride` bytes apart, and reads span
-///   `[0, (iHeight - 1) * iSrcStride + 2)` from `pSrc`, writes the same shape from
-///   `pDst`. Nothing outside the block is touched.
-/// * The two spans must not overlap, and both strides must be positive.
-#[inline(always)]
-pub unsafe extern "C" fn McCopyWidthEq2_c(
-    pSrc: *const u8,
-    iSrcStride: i32,
-    pDst: *mut u8,
-    iDstStride: i32,
-    iHeight: i32,
-) {
-    // SHIM(phase2) -> mc_copy_width_eq2
-    unsafe {
-        shim_wh(pSrc, iSrcStride, pDst, iDstStride, 2, iHeight, R_COPY, 2, |s, d, _, h| {
-            mc_copy_width_eq2(s, d, h)
-        })
-    };
-}
-
-/// C++: `McCopyWidthEq4_c`, `codec/common/src/mc.cpp`.
-///
-/// # Safety
-/// As [`McCopyWidthEq2_c`], with a block 4 samples wide.
-#[inline(always)]
-pub unsafe extern "C" fn McCopyWidthEq4_c(
-    pSrc: *const u8,
-    iSrcStride: i32,
-    pDst: *mut u8,
-    iDstStride: i32,
-    iHeight: i32,
-) {
-    // SHIM(phase2) -> mc_copy_width_eq4
-    unsafe {
-        shim_wh(pSrc, iSrcStride, pDst, iDstStride, 4, iHeight, R_COPY, 4, |s, d, _, h| {
-            mc_copy_width_eq4(s, d, h)
-        })
-    };
-}
-
-/// C++: `McCopyWidthEq8_c`, `codec/common/src/mc.cpp`.
-///
-/// # Safety
-/// As [`McCopyWidthEq2_c`], with a block 8 samples wide.
-#[inline(always)]
-pub unsafe extern "C" fn McCopyWidthEq8_c(
-    pSrc: *const u8,
-    iSrcStride: i32,
-    pDst: *mut u8,
-    iDstStride: i32,
-    iHeight: i32,
-) {
-    // SHIM(phase2) -> mc_copy_width_eq8
-    unsafe {
-        shim_wh(pSrc, iSrcStride, pDst, iDstStride, 8, iHeight, R_COPY, 8, |s, d, _, h| {
-            mc_copy_width_eq8(s, d, h)
-        })
-    };
-}
-
-/// C++: `McCopyWidthEq16_c`, `codec/common/src/mc.cpp`.
-///
-/// # Safety
-/// As [`McCopyWidthEq2_c`], with a block 16 samples wide.
-#[inline(always)]
-pub unsafe extern "C" fn McCopyWidthEq16_c(
-    pSrc: *const u8,
-    iSrcStride: i32,
-    pDst: *mut u8,
-    iDstStride: i32,
-    iHeight: i32,
-) {
-    // SHIM(phase2) -> mc_copy_width_eq16
-    unsafe {
-        shim_wh(pSrc, iSrcStride, pDst, iDstStride, 16, iHeight, R_COPY, 16, |s, d, _, h| {
-            mc_copy_width_eq16(s, d, h)
-        })
-    };
-}
-
-/// C++: `McCopy_c`, `codec/common/src/mc.cpp`.
-///
-/// # Safety
-/// * `pSrc` and `pDst` point at sample `(0, 0)` of a `w` x `iHeight` block, where
-///   **`w` is 16, 8 or 4 if `iWidth` is exactly that and 2 otherwise** — this kernel
-///   dispatches on the exact value and copies two bytes for anything else. Reads span
-///   `[0, (iHeight - 1) * iSrcStride + w)` from `pSrc` and writes the same shape from
-///   `pDst`; nothing outside the block is touched.
-/// * The two spans must not overlap, and both strides must be positive.
-#[inline(always)]
-pub unsafe extern "C" fn McCopy_c(
-    pSrc: *const u8,
-    iSrcStride: i32,
-    pDst: *mut u8,
-    iDstStride: i32,
-    iWidth: i32,
-    iHeight: i32,
-) {
-    // SHIM(phase2) -> mc_copy
-    let span_width = copy_width(iWidth.max(0) as usize);
-    unsafe {
-        shim_wh(
-            pSrc,
-            iSrcStride,
-            pDst,
-            iDstStride,
-            iWidth,
-            iHeight,
-            R_COPY,
-            span_width,
-            mc_copy,
-        )
-    };
-}
-
-/// C++: `HorFilterInput16bit_c`, `codec/common/src/mc.cpp`.
-///
-/// Nothing in the tree calls this any more — `mc_hor_ver22` uses
-/// [`hor_filter_input_16bit`] directly. The raw entry point is kept so this phase
-/// changes no signature; Phase 5 deletes it.
-///
-/// # Safety
-/// `pSrc` must be valid to read for six `i16`s, `pSrc[0..6]`.
-#[inline(always)]
-pub unsafe fn HorFilterInput16bit_c(pSrc: *const i16) -> i32 {
-    // SHIM(phase2) -> hor_filter_input_16bit
-    let p = unsafe { std::slice::from_raw_parts(pSrc, 6) };
-    hor_filter_input_16bit(p.try_into().unwrap())
-}
-
-/// C++: `FilterInput8bitWithStride_c`, `codec/common/src/mc.cpp`.
-///
-/// Nothing in the tree calls this any more — the half-pel kernels use
-/// [`filter_input_8bit`] over a row window (horizontal) or six row windows
-/// (vertical), which is where the per-row rather than per-sample bounds check comes
-/// from. The raw entry point is kept so this phase changes no signature; Phase 5
-/// deletes it.
-///
-/// # Safety
-/// `kiOffset` is positive — 1 for the horizontal filter, the source stride for the
-/// vertical one — and `pSrc[-2*kiOffset ..= 3*kiOffset]` must be valid to read.
-#[inline(always)]
-pub unsafe fn FilterInput8bitWithStride_c(pSrc: *const u8, kiOffset: i32) -> i32 {
-    // SHIM(phase2) -> filter_input_8bit
-    let k = kiOffset as isize;
-    let span = unsafe { std::slice::from_raw_parts(pSrc.offset(-2 * k), (5 * k + 1) as usize) };
-    let k = k as usize;
-    let p = [span[0], span[k], span[2 * k], span[3 * k], span[4 * k], span[5 * k]];
-    filter_input_8bit(&p)
-}
-
-/// C++: `PixelAvg_c`, `codec/common/src/mc.cpp` — `SMcFunc::pfSampleAveraging`.
-///
-/// # Safety
-/// * `pDst`, `pSrcA` and `pSrcB` each point at sample `(0, 0)` of an `iWidth` x
-///   `iHeight` block in a surface of its own stride; each span is
-///   `[0, (iHeight - 1) * stride + iWidth)`. Nothing outside the blocks is touched.
-/// * The destination span must not overlap either source span. The encoder does hand
-///   this kernel two regions of one allocation (`pBufferInterPredMe`, at the fixed
-///   640-byte offsets of `encoder/md.rs:1043-1046`) — those regions are disjoint,
-///   which is what makes it legal.
-/// * All three strides must be positive.
-#[inline(always)]
-pub unsafe extern "C" fn PixelAvg_c(
-    pDst: *mut u8,
-    iDstStride: i32,
-    pSrcA: *const u8,
-    iSrcAStride: i32,
-    pSrcB: *const u8,
-    iSrcBStride: i32,
-    iWidth: i32,
-    iHeight: i32,
-) {
-    // SHIM(phase2) -> pixel_avg
-    if iWidth <= 0 || iHeight <= 0 {
-        return;
-    }
-    let (w, h) = (iWidth as usize, iHeight as usize);
-    let (ds, sa, sb) = (iDstStride as usize, iSrcAStride as usize, iSrcBStride as usize);
-    let dst = unsafe { std::slice::from_raw_parts_mut(pDst, block_span(ds, w, h)) };
-    let a = unsafe { std::slice::from_raw_parts(pSrcA, block_span(sa, w, h)) };
-    let b = unsafe { std::slice::from_raw_parts(pSrcB, block_span(sb, w, h)) };
-    pixel_avg(
-        &mut PlaneCursorMut::new(dst, 0, ds),
-        &PlaneCursor::new(a, 0, sa),
-        &PlaneCursor::new(b, 0, sb),
-        w,
-        h,
-    );
-}
-
 // The fifteen quarter-pel entry points. Written out one by one rather than generated
 // from a macro on purpose: a macro folds fifteen `unsafe extern "C" fn` definitions
 // into one line of source, which makes the unsafe ratchet report a 13-definition drop
 // that did not happen (plan §7.1) — and it would hide each kernel's own reach behind a
 // table lookup in the one place a reader is looking for it.
-
-/// C++: `McHorVer20_c`, `codec/common/src/mc.cpp`.
-///
-/// # Safety
-/// * `pSrc` points at sample `(0, 0)` of an `iWidth` x `iHeight` block in a surface
-///   whose rows are `iSrcStride` bytes apart. This kernel reads `x` in
-///   `-2 .. iWidth + 3` and `y` in `-0 .. iHeight + 0` — `LUMA_REACH[2][0]` — and all
-///   of it must be valid to read.
-/// * For a decoder reference picture that follows from the motion-vector clamp in
-///   `BaseMC` (`decoder/decode_slice.rs:1069-1091`) against the 32-sample
-///   `PADDING_LENGTH` border, as derived in this section's header. `PADDING_LENGTH`
-///   alone is **not** sufficient: `pSrc` has already been displaced by the vector.
-/// * `pDst` points at sample `(0, 0)` of the destination block; writes span
-///   `[0, (iHeight - 1) * iDstStride + iWidth)` and nothing else. The two spans must
-///   not overlap, and both strides are positive.
-/// * No internal scratch, so no width or height ceiling beyond the spans above.
-#[inline(always)]
-pub unsafe extern "C" fn McHorVer20_c(
-    pSrc: *const u8,
-    iSrcStride: i32,
-    pDst: *mut u8,
-    iDstStride: i32,
-    iWidth: i32,
-    iHeight: i32,
-) {
-    // SHIM(phase2) -> mc_hor_ver20
-    unsafe {
-        shim_wh(
-            pSrc,
-            iSrcStride,
-            pDst,
-            iDstStride,
-            iWidth,
-            iHeight,
-            LUMA_REACH[2][0],
-            iWidth.max(0) as usize,
-            mc_hor_ver20,
-        )
-    };
-}
-
-/// C++: `McHorVer02_c`, `codec/common/src/mc.cpp`.
-///
-/// # Safety
-/// * `pSrc` points at sample `(0, 0)` of an `iWidth` x `iHeight` block in a surface
-///   whose rows are `iSrcStride` bytes apart. This kernel reads `x` in
-///   `-0 .. iWidth + 0` and `y` in `-2 .. iHeight + 3` — `LUMA_REACH[0][2]` — and all
-///   of it must be valid to read.
-/// * For a decoder reference picture that follows from the motion-vector clamp in
-///   `BaseMC` (`decoder/decode_slice.rs:1069-1091`) against the 32-sample
-///   `PADDING_LENGTH` border, as derived in this section's header. `PADDING_LENGTH`
-///   alone is **not** sufficient: `pSrc` has already been displaced by the vector.
-/// * `pDst` points at sample `(0, 0)` of the destination block; writes span
-///   `[0, (iHeight - 1) * iDstStride + iWidth)` and nothing else. The two spans must
-///   not overlap, and both strides are positive.
-/// * No internal scratch, so no width or height ceiling beyond the spans above.
-#[inline(always)]
-pub unsafe extern "C" fn McHorVer02_c(
-    pSrc: *const u8,
-    iSrcStride: i32,
-    pDst: *mut u8,
-    iDstStride: i32,
-    iWidth: i32,
-    iHeight: i32,
-) {
-    // SHIM(phase2) -> mc_hor_ver02
-    unsafe {
-        shim_wh(
-            pSrc,
-            iSrcStride,
-            pDst,
-            iDstStride,
-            iWidth,
-            iHeight,
-            LUMA_REACH[0][2],
-            iWidth.max(0) as usize,
-            mc_hor_ver02,
-        )
-    };
-}
-
-/// C++: `McHorVer22_c`, `codec/common/src/mc.cpp`.
-///
-/// # Safety
-/// * `pSrc` points at sample `(0, 0)` of an `iWidth` x `iHeight` block in a surface
-///   whose rows are `iSrcStride` bytes apart. This kernel reads `x` in
-///   `-2 .. iWidth + 3` and `y` in `-2 .. iHeight + 3` — `LUMA_REACH[2][2]` — and all
-///   of it must be valid to read.
-/// * For a decoder reference picture that follows from the motion-vector clamp in
-///   `BaseMC` (`decoder/decode_slice.rs:1069-1091`) against the 32-sample
-///   `PADDING_LENGTH` border, as derived in this section's header. `PADDING_LENGTH`
-///   alone is **not** sufficient: `pSrc` has already been displaced by the vector.
-/// * `pDst` points at sample `(0, 0)` of the destination block; writes span
-///   `[0, (iHeight - 1) * iDstStride + iWidth)` and nothing else. The two spans must
-///   not overlap, and both strides are positive.
-/// * `iWidth` is at most 17: this kernel's 16-bit intermediates live in a
-///   `[i16; 17 + 5]`, and the encoder's half-pel refinement is what needs the 17
-///   (`encoder/md.rs:1289` filters `iWidth + 1` columns).
-#[inline(always)]
-pub unsafe extern "C" fn McHorVer22_c(
-    pSrc: *const u8,
-    iSrcStride: i32,
-    pDst: *mut u8,
-    iDstStride: i32,
-    iWidth: i32,
-    iHeight: i32,
-) {
-    // SHIM(phase2) -> mc_hor_ver22
-    unsafe {
-        shim_wh(
-            pSrc,
-            iSrcStride,
-            pDst,
-            iDstStride,
-            iWidth,
-            iHeight,
-            LUMA_REACH[2][2],
-            iWidth.max(0) as usize,
-            mc_hor_ver22,
-        )
-    };
-}
-
-/// C++: `McHorVer01_c`, `codec/common/src/mc.cpp`.
-///
-/// # Safety
-/// * `pSrc` points at sample `(0, 0)` of an `iWidth` x `iHeight` block in a surface
-///   whose rows are `iSrcStride` bytes apart. This kernel reads `x` in
-///   `-0 .. iWidth + 0` and `y` in `-2 .. iHeight + 3` — `LUMA_REACH[0][1]` — and all
-///   of it must be valid to read.
-/// * For a decoder reference picture that follows from the motion-vector clamp in
-///   `BaseMC` (`decoder/decode_slice.rs:1069-1091`) against the 32-sample
-///   `PADDING_LENGTH` border, as derived in this section's header. `PADDING_LENGTH`
-///   alone is **not** sufficient: `pSrc` has already been displaced by the vector.
-/// * `pDst` points at sample `(0, 0)` of the destination block; writes span
-///   `[0, (iHeight - 1) * iDstStride + iWidth)` and nothing else. The two spans must
-///   not overlap, and both strides are positive.
-/// * `iWidth` and `iHeight` are at most 16: this kernel interpolates through a
-///   `[u8; 256]` scratch at stride 16, exactly as the C++ does.
-#[inline(always)]
-pub unsafe extern "C" fn McHorVer01_c(
-    pSrc: *const u8,
-    iSrcStride: i32,
-    pDst: *mut u8,
-    iDstStride: i32,
-    iWidth: i32,
-    iHeight: i32,
-) {
-    // SHIM(phase2) -> mc_hor_ver01
-    unsafe {
-        shim_wh(
-            pSrc,
-            iSrcStride,
-            pDst,
-            iDstStride,
-            iWidth,
-            iHeight,
-            LUMA_REACH[0][1],
-            iWidth.max(0) as usize,
-            mc_hor_ver01,
-        )
-    };
-}
-
-/// C++: `McHorVer03_c`, `codec/common/src/mc.cpp`.
-///
-/// # Safety
-/// * `pSrc` points at sample `(0, 0)` of an `iWidth` x `iHeight` block in a surface
-///   whose rows are `iSrcStride` bytes apart. This kernel reads `x` in
-///   `-0 .. iWidth + 0` and `y` in `-2 .. iHeight + 3` — `LUMA_REACH[0][3]` — and all
-///   of it must be valid to read.
-/// * For a decoder reference picture that follows from the motion-vector clamp in
-///   `BaseMC` (`decoder/decode_slice.rs:1069-1091`) against the 32-sample
-///   `PADDING_LENGTH` border, as derived in this section's header. `PADDING_LENGTH`
-///   alone is **not** sufficient: `pSrc` has already been displaced by the vector.
-/// * `pDst` points at sample `(0, 0)` of the destination block; writes span
-///   `[0, (iHeight - 1) * iDstStride + iWidth)` and nothing else. The two spans must
-///   not overlap, and both strides are positive.
-/// * `iWidth` and `iHeight` are at most 16: this kernel interpolates through a
-///   `[u8; 256]` scratch at stride 16, exactly as the C++ does.
-#[inline(always)]
-pub unsafe extern "C" fn McHorVer03_c(
-    pSrc: *const u8,
-    iSrcStride: i32,
-    pDst: *mut u8,
-    iDstStride: i32,
-    iWidth: i32,
-    iHeight: i32,
-) {
-    // SHIM(phase2) -> mc_hor_ver03
-    unsafe {
-        shim_wh(
-            pSrc,
-            iSrcStride,
-            pDst,
-            iDstStride,
-            iWidth,
-            iHeight,
-            LUMA_REACH[0][3],
-            iWidth.max(0) as usize,
-            mc_hor_ver03,
-        )
-    };
-}
-
-/// C++: `McHorVer10_c`, `codec/common/src/mc.cpp`.
-///
-/// # Safety
-/// * `pSrc` points at sample `(0, 0)` of an `iWidth` x `iHeight` block in a surface
-///   whose rows are `iSrcStride` bytes apart. This kernel reads `x` in
-///   `-2 .. iWidth + 3` and `y` in `-0 .. iHeight + 0` — `LUMA_REACH[1][0]` — and all
-///   of it must be valid to read.
-/// * For a decoder reference picture that follows from the motion-vector clamp in
-///   `BaseMC` (`decoder/decode_slice.rs:1069-1091`) against the 32-sample
-///   `PADDING_LENGTH` border, as derived in this section's header. `PADDING_LENGTH`
-///   alone is **not** sufficient: `pSrc` has already been displaced by the vector.
-/// * `pDst` points at sample `(0, 0)` of the destination block; writes span
-///   `[0, (iHeight - 1) * iDstStride + iWidth)` and nothing else. The two spans must
-///   not overlap, and both strides are positive.
-/// * `iWidth` and `iHeight` are at most 16: this kernel interpolates through a
-///   `[u8; 256]` scratch at stride 16, exactly as the C++ does.
-#[inline(always)]
-pub unsafe extern "C" fn McHorVer10_c(
-    pSrc: *const u8,
-    iSrcStride: i32,
-    pDst: *mut u8,
-    iDstStride: i32,
-    iWidth: i32,
-    iHeight: i32,
-) {
-    // SHIM(phase2) -> mc_hor_ver10
-    unsafe {
-        shim_wh(
-            pSrc,
-            iSrcStride,
-            pDst,
-            iDstStride,
-            iWidth,
-            iHeight,
-            LUMA_REACH[1][0],
-            iWidth.max(0) as usize,
-            mc_hor_ver10,
-        )
-    };
-}
-
-/// C++: `McHorVer11_c`, `codec/common/src/mc.cpp`.
-///
-/// # Safety
-/// * `pSrc` points at sample `(0, 0)` of an `iWidth` x `iHeight` block in a surface
-///   whose rows are `iSrcStride` bytes apart. This kernel reads `x` in
-///   `-2 .. iWidth + 3` and `y` in `-2 .. iHeight + 3` — `LUMA_REACH[1][1]` — and all
-///   of it must be valid to read.
-/// * For a decoder reference picture that follows from the motion-vector clamp in
-///   `BaseMC` (`decoder/decode_slice.rs:1069-1091`) against the 32-sample
-///   `PADDING_LENGTH` border, as derived in this section's header. `PADDING_LENGTH`
-///   alone is **not** sufficient: `pSrc` has already been displaced by the vector.
-/// * `pDst` points at sample `(0, 0)` of the destination block; writes span
-///   `[0, (iHeight - 1) * iDstStride + iWidth)` and nothing else. The two spans must
-///   not overlap, and both strides are positive.
-/// * `iWidth` and `iHeight` are at most 16: this kernel interpolates through a
-///   `[u8; 256]` scratch at stride 16, exactly as the C++ does.
-#[inline(always)]
-pub unsafe extern "C" fn McHorVer11_c(
-    pSrc: *const u8,
-    iSrcStride: i32,
-    pDst: *mut u8,
-    iDstStride: i32,
-    iWidth: i32,
-    iHeight: i32,
-) {
-    // SHIM(phase2) -> mc_hor_ver11
-    unsafe {
-        shim_wh(
-            pSrc,
-            iSrcStride,
-            pDst,
-            iDstStride,
-            iWidth,
-            iHeight,
-            LUMA_REACH[1][1],
-            iWidth.max(0) as usize,
-            mc_hor_ver11,
-        )
-    };
-}
-
-/// C++: `McHorVer12_c`, `codec/common/src/mc.cpp`.
-///
-/// # Safety
-/// * `pSrc` points at sample `(0, 0)` of an `iWidth` x `iHeight` block in a surface
-///   whose rows are `iSrcStride` bytes apart. This kernel reads `x` in
-///   `-2 .. iWidth + 3` and `y` in `-2 .. iHeight + 3` — `LUMA_REACH[1][2]` — and all
-///   of it must be valid to read.
-/// * For a decoder reference picture that follows from the motion-vector clamp in
-///   `BaseMC` (`decoder/decode_slice.rs:1069-1091`) against the 32-sample
-///   `PADDING_LENGTH` border, as derived in this section's header. `PADDING_LENGTH`
-///   alone is **not** sufficient: `pSrc` has already been displaced by the vector.
-/// * `pDst` points at sample `(0, 0)` of the destination block; writes span
-///   `[0, (iHeight - 1) * iDstStride + iWidth)` and nothing else. The two spans must
-///   not overlap, and both strides are positive.
-/// * `iWidth` and `iHeight` are at most 16: this kernel interpolates through a
-///   `[u8; 256]` scratch at stride 16, exactly as the C++ does.
-#[inline(always)]
-pub unsafe extern "C" fn McHorVer12_c(
-    pSrc: *const u8,
-    iSrcStride: i32,
-    pDst: *mut u8,
-    iDstStride: i32,
-    iWidth: i32,
-    iHeight: i32,
-) {
-    // SHIM(phase2) -> mc_hor_ver12
-    unsafe {
-        shim_wh(
-            pSrc,
-            iSrcStride,
-            pDst,
-            iDstStride,
-            iWidth,
-            iHeight,
-            LUMA_REACH[1][2],
-            iWidth.max(0) as usize,
-            mc_hor_ver12,
-        )
-    };
-}
-
-/// C++: `McHorVer13_c`, `codec/common/src/mc.cpp`.
-///
-/// # Safety
-/// * `pSrc` points at sample `(0, 0)` of an `iWidth` x `iHeight` block in a surface
-///   whose rows are `iSrcStride` bytes apart. This kernel reads `x` in
-///   `-2 .. iWidth + 3` and `y` in `-2 .. iHeight + 3` — `LUMA_REACH[1][3]` — and all
-///   of it must be valid to read.
-/// * For a decoder reference picture that follows from the motion-vector clamp in
-///   `BaseMC` (`decoder/decode_slice.rs:1069-1091`) against the 32-sample
-///   `PADDING_LENGTH` border, as derived in this section's header. `PADDING_LENGTH`
-///   alone is **not** sufficient: `pSrc` has already been displaced by the vector.
-/// * `pDst` points at sample `(0, 0)` of the destination block; writes span
-///   `[0, (iHeight - 1) * iDstStride + iWidth)` and nothing else. The two spans must
-///   not overlap, and both strides are positive.
-/// * `iWidth` and `iHeight` are at most 16: this kernel interpolates through a
-///   `[u8; 256]` scratch at stride 16, exactly as the C++ does.
-#[inline(always)]
-pub unsafe extern "C" fn McHorVer13_c(
-    pSrc: *const u8,
-    iSrcStride: i32,
-    pDst: *mut u8,
-    iDstStride: i32,
-    iWidth: i32,
-    iHeight: i32,
-) {
-    // SHIM(phase2) -> mc_hor_ver13
-    unsafe {
-        shim_wh(
-            pSrc,
-            iSrcStride,
-            pDst,
-            iDstStride,
-            iWidth,
-            iHeight,
-            LUMA_REACH[1][3],
-            iWidth.max(0) as usize,
-            mc_hor_ver13,
-        )
-    };
-}
-
-/// C++: `McHorVer21_c`, `codec/common/src/mc.cpp`.
-///
-/// # Safety
-/// * `pSrc` points at sample `(0, 0)` of an `iWidth` x `iHeight` block in a surface
-///   whose rows are `iSrcStride` bytes apart. This kernel reads `x` in
-///   `-2 .. iWidth + 3` and `y` in `-2 .. iHeight + 3` — `LUMA_REACH[2][1]` — and all
-///   of it must be valid to read.
-/// * For a decoder reference picture that follows from the motion-vector clamp in
-///   `BaseMC` (`decoder/decode_slice.rs:1069-1091`) against the 32-sample
-///   `PADDING_LENGTH` border, as derived in this section's header. `PADDING_LENGTH`
-///   alone is **not** sufficient: `pSrc` has already been displaced by the vector.
-/// * `pDst` points at sample `(0, 0)` of the destination block; writes span
-///   `[0, (iHeight - 1) * iDstStride + iWidth)` and nothing else. The two spans must
-///   not overlap, and both strides are positive.
-/// * `iWidth` and `iHeight` are at most 16: this kernel interpolates through a
-///   `[u8; 256]` scratch at stride 16, exactly as the C++ does.
-#[inline(always)]
-pub unsafe extern "C" fn McHorVer21_c(
-    pSrc: *const u8,
-    iSrcStride: i32,
-    pDst: *mut u8,
-    iDstStride: i32,
-    iWidth: i32,
-    iHeight: i32,
-) {
-    // SHIM(phase2) -> mc_hor_ver21
-    unsafe {
-        shim_wh(
-            pSrc,
-            iSrcStride,
-            pDst,
-            iDstStride,
-            iWidth,
-            iHeight,
-            LUMA_REACH[2][1],
-            iWidth.max(0) as usize,
-            mc_hor_ver21,
-        )
-    };
-}
-
-/// C++: `McHorVer23_c`, `codec/common/src/mc.cpp`.
-///
-/// # Safety
-/// * `pSrc` points at sample `(0, 0)` of an `iWidth` x `iHeight` block in a surface
-///   whose rows are `iSrcStride` bytes apart. This kernel reads `x` in
-///   `-2 .. iWidth + 3` and `y` in `-2 .. iHeight + 3` — `LUMA_REACH[2][3]` — and all
-///   of it must be valid to read.
-/// * For a decoder reference picture that follows from the motion-vector clamp in
-///   `BaseMC` (`decoder/decode_slice.rs:1069-1091`) against the 32-sample
-///   `PADDING_LENGTH` border, as derived in this section's header. `PADDING_LENGTH`
-///   alone is **not** sufficient: `pSrc` has already been displaced by the vector.
-/// * `pDst` points at sample `(0, 0)` of the destination block; writes span
-///   `[0, (iHeight - 1) * iDstStride + iWidth)` and nothing else. The two spans must
-///   not overlap, and both strides are positive.
-/// * `iWidth` and `iHeight` are at most 16: this kernel interpolates through a
-///   `[u8; 256]` scratch at stride 16, exactly as the C++ does.
-#[inline(always)]
-pub unsafe extern "C" fn McHorVer23_c(
-    pSrc: *const u8,
-    iSrcStride: i32,
-    pDst: *mut u8,
-    iDstStride: i32,
-    iWidth: i32,
-    iHeight: i32,
-) {
-    // SHIM(phase2) -> mc_hor_ver23
-    unsafe {
-        shim_wh(
-            pSrc,
-            iSrcStride,
-            pDst,
-            iDstStride,
-            iWidth,
-            iHeight,
-            LUMA_REACH[2][3],
-            iWidth.max(0) as usize,
-            mc_hor_ver23,
-        )
-    };
-}
-
-/// C++: `McHorVer30_c`, `codec/common/src/mc.cpp`.
-///
-/// # Safety
-/// * `pSrc` points at sample `(0, 0)` of an `iWidth` x `iHeight` block in a surface
-///   whose rows are `iSrcStride` bytes apart. This kernel reads `x` in
-///   `-2 .. iWidth + 3` and `y` in `-0 .. iHeight + 0` — `LUMA_REACH[3][0]` — and all
-///   of it must be valid to read.
-/// * For a decoder reference picture that follows from the motion-vector clamp in
-///   `BaseMC` (`decoder/decode_slice.rs:1069-1091`) against the 32-sample
-///   `PADDING_LENGTH` border, as derived in this section's header. `PADDING_LENGTH`
-///   alone is **not** sufficient: `pSrc` has already been displaced by the vector.
-/// * `pDst` points at sample `(0, 0)` of the destination block; writes span
-///   `[0, (iHeight - 1) * iDstStride + iWidth)` and nothing else. The two spans must
-///   not overlap, and both strides are positive.
-/// * `iWidth` and `iHeight` are at most 16: this kernel interpolates through a
-///   `[u8; 256]` scratch at stride 16, exactly as the C++ does.
-#[inline(always)]
-pub unsafe extern "C" fn McHorVer30_c(
-    pSrc: *const u8,
-    iSrcStride: i32,
-    pDst: *mut u8,
-    iDstStride: i32,
-    iWidth: i32,
-    iHeight: i32,
-) {
-    // SHIM(phase2) -> mc_hor_ver30
-    unsafe {
-        shim_wh(
-            pSrc,
-            iSrcStride,
-            pDst,
-            iDstStride,
-            iWidth,
-            iHeight,
-            LUMA_REACH[3][0],
-            iWidth.max(0) as usize,
-            mc_hor_ver30,
-        )
-    };
-}
-
-/// C++: `McHorVer31_c`, `codec/common/src/mc.cpp`.
-///
-/// # Safety
-/// * `pSrc` points at sample `(0, 0)` of an `iWidth` x `iHeight` block in a surface
-///   whose rows are `iSrcStride` bytes apart. This kernel reads `x` in
-///   `-2 .. iWidth + 3` and `y` in `-2 .. iHeight + 3` — `LUMA_REACH[3][1]` — and all
-///   of it must be valid to read.
-/// * For a decoder reference picture that follows from the motion-vector clamp in
-///   `BaseMC` (`decoder/decode_slice.rs:1069-1091`) against the 32-sample
-///   `PADDING_LENGTH` border, as derived in this section's header. `PADDING_LENGTH`
-///   alone is **not** sufficient: `pSrc` has already been displaced by the vector.
-/// * `pDst` points at sample `(0, 0)` of the destination block; writes span
-///   `[0, (iHeight - 1) * iDstStride + iWidth)` and nothing else. The two spans must
-///   not overlap, and both strides are positive.
-/// * `iWidth` and `iHeight` are at most 16: this kernel interpolates through a
-///   `[u8; 256]` scratch at stride 16, exactly as the C++ does.
-#[inline(always)]
-pub unsafe extern "C" fn McHorVer31_c(
-    pSrc: *const u8,
-    iSrcStride: i32,
-    pDst: *mut u8,
-    iDstStride: i32,
-    iWidth: i32,
-    iHeight: i32,
-) {
-    // SHIM(phase2) -> mc_hor_ver31
-    unsafe {
-        shim_wh(
-            pSrc,
-            iSrcStride,
-            pDst,
-            iDstStride,
-            iWidth,
-            iHeight,
-            LUMA_REACH[3][1],
-            iWidth.max(0) as usize,
-            mc_hor_ver31,
-        )
-    };
-}
-
-/// C++: `McHorVer32_c`, `codec/common/src/mc.cpp`.
-///
-/// # Safety
-/// * `pSrc` points at sample `(0, 0)` of an `iWidth` x `iHeight` block in a surface
-///   whose rows are `iSrcStride` bytes apart. This kernel reads `x` in
-///   `-2 .. iWidth + 3` and `y` in `-2 .. iHeight + 3` — `LUMA_REACH[3][2]` — and all
-///   of it must be valid to read.
-/// * For a decoder reference picture that follows from the motion-vector clamp in
-///   `BaseMC` (`decoder/decode_slice.rs:1069-1091`) against the 32-sample
-///   `PADDING_LENGTH` border, as derived in this section's header. `PADDING_LENGTH`
-///   alone is **not** sufficient: `pSrc` has already been displaced by the vector.
-/// * `pDst` points at sample `(0, 0)` of the destination block; writes span
-///   `[0, (iHeight - 1) * iDstStride + iWidth)` and nothing else. The two spans must
-///   not overlap, and both strides are positive.
-/// * `iWidth` and `iHeight` are at most 16: this kernel interpolates through a
-///   `[u8; 256]` scratch at stride 16, exactly as the C++ does.
-#[inline(always)]
-pub unsafe extern "C" fn McHorVer32_c(
-    pSrc: *const u8,
-    iSrcStride: i32,
-    pDst: *mut u8,
-    iDstStride: i32,
-    iWidth: i32,
-    iHeight: i32,
-) {
-    // SHIM(phase2) -> mc_hor_ver32
-    unsafe {
-        shim_wh(
-            pSrc,
-            iSrcStride,
-            pDst,
-            iDstStride,
-            iWidth,
-            iHeight,
-            LUMA_REACH[3][2],
-            iWidth.max(0) as usize,
-            mc_hor_ver32,
-        )
-    };
-}
-
-/// C++: `McHorVer33_c`, `codec/common/src/mc.cpp`.
-///
-/// # Safety
-/// * `pSrc` points at sample `(0, 0)` of an `iWidth` x `iHeight` block in a surface
-///   whose rows are `iSrcStride` bytes apart. This kernel reads `x` in
-///   `-2 .. iWidth + 3` and `y` in `-2 .. iHeight + 3` — `LUMA_REACH[3][3]` — and all
-///   of it must be valid to read.
-/// * For a decoder reference picture that follows from the motion-vector clamp in
-///   `BaseMC` (`decoder/decode_slice.rs:1069-1091`) against the 32-sample
-///   `PADDING_LENGTH` border, as derived in this section's header. `PADDING_LENGTH`
-///   alone is **not** sufficient: `pSrc` has already been displaced by the vector.
-/// * `pDst` points at sample `(0, 0)` of the destination block; writes span
-///   `[0, (iHeight - 1) * iDstStride + iWidth)` and nothing else. The two spans must
-///   not overlap, and both strides are positive.
-/// * `iWidth` and `iHeight` are at most 16: this kernel interpolates through a
-///   `[u8; 256]` scratch at stride 16, exactly as the C++ does.
-#[inline(always)]
-pub unsafe extern "C" fn McHorVer33_c(
-    pSrc: *const u8,
-    iSrcStride: i32,
-    pDst: *mut u8,
-    iDstStride: i32,
-    iWidth: i32,
-    iHeight: i32,
-) {
-    // SHIM(phase2) -> mc_hor_ver33
-    unsafe {
-        shim_wh(
-            pSrc,
-            iSrcStride,
-            pDst,
-            iDstStride,
-            iWidth,
-            iHeight,
-            LUMA_REACH[3][3],
-            iWidth.max(0) as usize,
-            mc_hor_ver33,
-        )
-    };
-}
-
-/// Horizontal luma half-pel motion compensation — the C++ names this separately from
-/// `McHorVer20_c` and then defines it as the same function.
-///
-/// # Safety
-/// As [`McHorVer20_c`].
-#[inline(always)]
-pub unsafe extern "C" fn McHorizLuma_c(
-    pSrc: *const u8,
-    iSrcStride: i32,
-    pDst: *mut u8,
-    iDstStride: i32,
-    iWidth: i32,
-    iHeight: i32,
-) {
-    // SHIM(phase2) -> mc_hor_ver20
-    unsafe {
-        shim_wh(
-            pSrc,
-            iSrcStride,
-            pDst,
-            iDstStride,
-            iWidth,
-            iHeight,
-            R_HOR,
-            iWidth.max(0) as usize,
-            mc_hor_ver20,
-        )
-    };
-}
-
-/// Vertical luma half-pel motion compensation — the C++ alias of `McHorVer02_c`.
-///
-/// # Safety
-/// As [`McHorVer02_c`].
-#[inline(always)]
-pub unsafe extern "C" fn McVertLuma_c(
-    pSrc: *const u8,
-    iSrcStride: i32,
-    pDst: *mut u8,
-    iDstStride: i32,
-    iWidth: i32,
-    iHeight: i32,
-) {
-    // SHIM(phase2) -> mc_hor_ver02
-    unsafe {
-        shim_wh(
-            pSrc,
-            iSrcStride,
-            pDst,
-            iDstStride,
-            iWidth,
-            iHeight,
-            R_VER,
-            iWidth.max(0) as usize,
-            mc_hor_ver02,
-        )
-    };
-}
 
 /// C++: `McLuma_c`, `codec/common/src/mc.cpp` — `SMcFunc::pMcLumaFunc`.
 ///
@@ -2105,6 +1231,15 @@ pub unsafe extern "C" fn McVertLuma_c(
 // directly. Inlining is the mechanism the recovery thesis rests on — it is what
 // folds the shim's span arithmetic against the caller's constant block sizes.
 #[inline]
+// SCREEN_CONTENT(dormant: Phase 10) — F125. The only caller left is `SvcMdSCDMbEnc`
+// (`svc_mode_decision.rs:2043`/`:2053`/`:2063`), which `WelsInitSCDPskipFunc` reaches
+// only when `bScreenContent && bEnableSceneChangeDetect && iComplexityMode < HIGH` —
+// and `bScreenContent` is an axis neither diffharness driver expresses, so a probe
+// reads 0 entries in every one of the 48 `bg` rows. `WelsMdBackgroundMbEnc` was the
+// other caller and converted at T9.B4 behind that preset; this one cannot, because no
+// gate in Phase 9 can see it (S57).
+// unsafe-cat: SCREEN_CONTENT(dormant)
+#[allow(unsafe_code)]
 pub unsafe extern "C" fn McLuma_c(
     pSrc: *const u8,
     iSrcStride: i32,
@@ -2135,44 +1270,6 @@ pub unsafe extern "C" fn McLuma_c(
     };
 }
 
-/// C++: `McChromaWithFragMv_c`, `codec/common/src/mc.cpp`.
-///
-/// # Safety
-/// * `pSrc` points at sample `(0, 0)` of an `iWidth` x `iHeight` block whose
-///   bilinear neighbourhood — `x` in `0 .. iWidth + 1`, `y` in `0 .. iHeight + 1`,
-///   one sample right and one row below — is valid to read. For a decoder reference
-///   picture that follows from the `BaseMC` clamp against the 16-sample chroma
-///   border, per this section's header.
-/// * `pDst` points at sample `(0, 0)` of the destination block; writes span
-///   `[0, (iHeight - 1) * iDstStride + iWidth)` and nothing else.
-/// * The two spans must not overlap, and both strides must be positive.
-#[inline(always)]
-pub unsafe extern "C" fn McChromaWithFragMv_c(
-    pSrc: *const u8,
-    iSrcStride: i32,
-    pDst: *mut u8,
-    iDstStride: i32,
-    iMvX: i16,
-    iMvY: i16,
-    iWidth: i32,
-    iHeight: i32,
-) {
-    // SHIM(phase2) -> mc_chroma_with_frag_mv
-    unsafe {
-        shim_wh(
-            pSrc,
-            iSrcStride,
-            pDst,
-            iDstStride,
-            iWidth,
-            iHeight,
-            R_CHROMA,
-            iWidth.max(0) as usize,
-            |s, d, w, h| mc_chroma_with_frag_mv(s, d, iMvX, iMvY, w, h),
-        )
-    };
-}
-
 /// C++: `McChroma_c`, `codec/common/src/mc.cpp` — `SMcFunc::pMcChromaFunc`.
 ///
 /// # Safety
@@ -2183,6 +1280,15 @@ pub unsafe extern "C" fn McChromaWithFragMv_c(
 // directly. Inlining is the mechanism the recovery thesis rests on — it is what
 // folds the shim's span arithmetic against the caller's constant block sizes.
 #[inline]
+// SCREEN_CONTENT(dormant: Phase 10) — F125. The only caller left is `SvcMdSCDMbEnc`
+// (`svc_mode_decision.rs:2043`/`:2053`/`:2063`), which `WelsInitSCDPskipFunc` reaches
+// only when `bScreenContent && bEnableSceneChangeDetect && iComplexityMode < HIGH` —
+// and `bScreenContent` is an axis neither diffharness driver expresses, so a probe
+// reads 0 entries in every one of the 48 `bg` rows. `WelsMdBackgroundMbEnc` was the
+// other caller and converted at T9.B4 behind that preset; this one cannot, because no
+// gate in Phase 9 can see it (S57).
+// unsafe-cat: SCREEN_CONTENT(dormant)
+#[allow(unsafe_code)]
 pub unsafe extern "C" fn McChroma_c(
     pSrc: *const u8,
     iSrcStride: i32,
@@ -2218,12 +1324,12 @@ pub unsafe extern "C" fn McChroma_c(
 
 pub fn InitMcFunc(pMcFuncs: &mut SMcFunc, _uiCpuFlag: u32) {
     let mc = pMcFuncs;
-    mc.pfLumaHalfpelHor = Some(McHorVer20_c);
-    mc.pfLumaHalfpelVer = Some(McHorVer02_c);
-    mc.pfLumaHalfpelCen = Some(McHorVer22_c);
-    mc.pfSampleAveraging = Some(PixelAvg_c);
-    mc.pMcChromaFunc = Some(McChroma_c);
-    mc.pMcLumaFunc = Some(McLuma_c);
+    mc.pfLumaHalfpelHor = Some(mc_hor_ver20);
+    mc.pfLumaHalfpelVer = Some(mc_hor_ver02);
+    mc.pfLumaHalfpelCen = Some(mc_hor_ver22);
+    mc.pfSampleAveraging = Some(pixel_avg);
+    mc.pMcChromaFunc = Some(mc_chroma);
+    mc.pMcLumaFunc = Some(mc_luma);
 }
 
 #[cfg(test)]
@@ -2517,41 +1623,15 @@ mod tests {
         );
     }
 
-    /// The two aliases really are `McHorVer20_c` and `McHorVer02_c`.
-    ///
-    /// This test used to anchor a 4x4 block at `src.as_ptr()` of a bare `[u8; 64]`
-    /// and filter it, which reads `pSrc[-2]` (horizontal) and `pSrc[-2 * 8]`
-    /// (vertical) — off the front of the array, in a test whose whole subject is a
-    /// kernel that reaches outside its block. The old raw code did that read
-    /// silently; the shim now materialises the span as a slice, so it is stated
-    /// instead. The block is anchored inside a padded surface here, which is what a
-    /// real caller hands these kernels.
-    #[test]
-    fn test_mc_horiz_and_vert_luma_aliases() {
-        const STRIDE: usize = 16;
-        const PAD: usize = 4;
-        let mut src = [0u8; STRIDE * 16];
-        for (i, v) in src.iter_mut().enumerate() {
-            *v = i as u8;
-        }
-        let center = PAD * STRIDE + PAD;
-        let mut dst_hor = [0u8; 64];
-        let mut dst_vert = [0u8; 64];
-        let mut want_hor = [0u8; 64];
-        let mut want_vert = [0u8; 64];
-
-        unsafe {
-            McHorizLuma_c(src.as_ptr().add(center), STRIDE as i32, dst_hor.as_mut_ptr(), 8, 4, 4);
-            McVertLuma_c(src.as_ptr().add(center), STRIDE as i32, dst_vert.as_mut_ptr(), 8, 4, 4);
-            McHorVer20_c(src.as_ptr().add(center), STRIDE as i32, want_hor.as_mut_ptr(), 8, 4, 4);
-            McHorVer02_c(src.as_ptr().add(center), STRIDE as i32, want_vert.as_mut_ptr(), 8, 4, 4);
-        }
-
-        assert!(dst_hor.iter().any(|&x| x != 0));
-        assert!(dst_vert.iter().any(|&x| x != 0));
-        assert_eq!(dst_hor, want_hor, "McHorizLuma_c must be McHorVer20_c");
-        assert_eq!(dst_vert, want_vert, "McVertLuma_c must be McHorVer02_c");
-    }
+    // **D-cov-1 (T9.B4): `test_mc_horiz_and_vert_luma_aliases` deleted with its
+    // subjects.** It proved `McHorizLuma_c == McHorVer20_c` and
+    // `McVertLuma_c == McHorVer02_c` — an equivalence between two raw shims, all four
+    // of which are now gone (no `src/` caller since T9.B29). The safe kernels it would
+    // have to be rewritten against, `mc_hor_ver20` and `mc_hor_ver02`, have no aliases
+    // to disagree with: the aliasing was a property of the C header, not of the
+    // arithmetic. F130 records that this is a **third** mc test dying here — B4's
+    // brief and F124 between them named two, both in
+    // `tests/kernels_differential_phase2.rs`, and neither noticed this one.
 }
 
 // WELS_CPU_* flags: one definition, in `common/cpu_core.rs`. The copies that
