@@ -311,6 +311,37 @@ impl PaddedPlane {
     }
 }
 
+/// The read half of a plane cursor — and the whole of what an intra predictor
+/// needs of its reference.
+///
+/// **Why this exists (T9.C2).** The encoder's intra predictors read the
+/// *reconstruction* picture, which under multi-threading is reached through the
+/// reconstruction seam's `RecCursor`: a shared, interior-mutable view that cannot
+/// lend `&[u8]` and therefore cannot be a [`PlaneCursor`]. The kernels never
+/// needed a slice. Measured over `encoder/get_intra_predictor.rs` and
+/// `common/intra_pred_common.rs`, every read of the reference is one of exactly
+/// two calls — `at` (45 sites) and `row` (6). Abstracting those two lets one set
+/// of kernels serve an ordinary plane and the shared view alike, with no copy and
+/// no second implementation to keep in step.
+///
+/// Static dispatch only: every consumer takes `&impl RefSamples`, so each kernel
+/// monomorphises to exactly the code it had and the trait costs nothing at run
+/// time. It is deliberately **read-only** — the reconstruction is an *operand* of
+/// intra prediction and never its destination, which is the macroblock cache's
+/// arena.
+pub trait RefSamples {
+    /// Sample at `(dx, dy)` from the anchor.
+    fn at(&self, dx: isize, dy: isize) -> u8;
+
+    /// `N` samples of row `dy` starting at `dx0`, **by value**.
+    ///
+    /// By value rather than by reference because a shared view cannot lend a
+    /// slice into its cells; every reference row an intra predictor reads is 3,
+    /// 4, 8 or 16 samples, so the copy is a register-file move.
+    fn row_n<const N: usize>(&self, dy: isize, dx0: isize) -> [u8; N];
+}
+
+
 /// A read view of a plane anchored at some sample — the safe form of a `const uint8_t*`
 /// walking a picture with a stride.
 ///
@@ -322,6 +353,20 @@ pub struct PlaneCursor<'a> {
     center: usize,
     stride: usize,
 }
+
+impl RefSamples for PlaneCursor<'_> {
+    #[inline]
+    fn at(&self, dx: isize, dy: isize) -> u8 {
+        PlaneCursor::at(self, dx, dy)
+    }
+
+    #[inline]
+    fn row_n<const N: usize>(&self, dy: isize, dx0: isize) -> [u8; N] {
+        let r = PlaneCursor::row(self, dy, dx0, N);
+        std::array::from_fn(|i| r[i])
+    }
+}
+
 
 /// A read-write view of a plane anchored at some sample — the safe form of the
 /// `pDstY`/`pEncMb`/`pDecMb` cursors (`decode_slice.rs:1944`,

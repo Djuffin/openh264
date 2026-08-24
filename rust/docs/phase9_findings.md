@@ -1853,3 +1853,87 @@ of slot names, and a slot with a singleton type is exactly the shape that gets l
 Before trusting a family's count, grep the tool for every `pf*` name in that family's C++
 header — the census cannot report what it was never told to look for, and a missing row
 is indistinguishable from a converted one.*
+
+## F138 — the intra-pred family converted in one step because it had exactly three raw helpers, and it took two probes' worth of coverage with it
+
+`encoder/get_intra_predictor.rs` looked like the session's expensive step: twenty-six
+`unsafe extern "C" fn(pPred, pRef, kiStride)` shims, plus two more imported from
+`common/intra_pred_common.rs`, across three dispatch tables and twenty-eight modes. It
+was the cheapest, and the reason is a *shape* rather than luck.
+
+**Every shim was one line, and every line called one of three helpers.**
+
+```rust
+unsafe { i4x4_luma_pred_v(pred::<16>(pPred), top_row::<4>(pRef, kiStride)) }
+unsafe { i4x4_luma_pred_h(pred::<16>(pPred), &reference(pRef, kiStride, REACH_I4X4_LEFT)) }
+unsafe { i4x4_luma_pred_dc_na(pred::<16>(pPred)) }
+```
+
+`pred` built the destination array, `top_row` the row above, `reference` a `PlaneCursor`
+over exactly the mode's reach. Nothing else in the file touched a pointer. So the whole
+family's raw surface was **three functions**, and the conversion was: give the kernels a
+way to read a reference that is not a slice, rewrite twenty-eight one-liners
+mechanically, delete the three.
+
+The trait is `safe::plane::RefSamples`, and it is small because the kernels are
+disciplined — measured over both files, every read of the reference is one of two calls:
+
+```
+$ grep -o 'reference\.\w*' src/encoder/get_intra_predictor.rs src/common/intra_pred_common.rs \
+    | sort | uniq -c
+  45 reference.at
+   6 reference.row
+```
+
+Two methods, two impls (`PlaneCursor` and the seam's `RecCursor`), static dispatch, no
+copy, and one set of kernels still serving both.
+
+### What it cost, which is the part worth the entry
+
+Deleting the shims deleted the subject of two Miri probes in
+`tests/kernels_differential_phase2.rs` —
+`encoder_intra_pred_shims_stay_inside_the_spans_they_declare` (with its `probe_intra`
+driver and three `safe_*` builders, ~325 lines) and
+`i16x16_luma_pred_shims_stay_inside_the_spans_they_declare`. Both probed *hand-written
+span contracts*, and there are none left. D-cov-1's rule says name what dies:
+
+| property the probe pinned | what holds it now |
+|---|---|
+| **span tightness** — reference allocation sized to `ref_span`'s exact claim, so an over-claim was an OOB read Miri reported | `RecCursor` bounds-checks every access against the whole plane allocation: an over-reach panics instead of being UB. The narrower claim — an over-reach that stays inside the plane but outside the mode's availability — was never this probe's job; it is `reach_table_agrees_with_the_availability_tables`', which stands unchanged. `ref_span` and the `REACH_*` constants stay for it. |
+| **anchor** — shim output must equal the safe kernel at the contract's geometry, killing an off-by-a-row anchor | Vacuous: the shim *is* the safe kernel. The geometry is pinned by the rewritten unit tests, which read their expectations through the cursor, and end to end by the sweep — a one-column anchor slip planted in `WelsI4x4LumaPredV_c` failed **210 of 210** `st` rows, and the same slip in the moved `common` adapter failed 210 of 210. |
+| **destination extent** — eight bytes of noise slack each side of the packed block | `&mut [u8; N]`. Writing past it does not compile. |
+
+Two of the three are now *type-enforced* rather than *tested*, which is the trade the
+phase is making; the third moved to a test that already existed. The retirement is a
+strict improvement, but it is still ~370 lines of Miri probe gone, and the next coverage
+audit should find this entry rather than a hole.
+
+### The ratchet, and what it says about metric choice
+
+    raw_ptr      2000 -> 1937    unsafe_fn    728 -> 696
+    unsafe_block  366 -> 312     shim          65 ->  37
+
+Compare T9.C2d and T9.C2e — nineteen reconstruction sites converted, **ratchet flat on
+every metric**. Those sites called through pointers already bound inside `unsafe fn`
+bodies with other raw work; this family's conversion deleted whole `unsafe fn` items.
+*The ratchet measures declarations, not call sites*, so a session that converts consumers
+reads as zero progress on it and a session that deletes wrappers reads as a landslide.
+Both are real work; neither number is the work. For seam sessions the plane census is the
+instrument — 27 blocked to 3 across T9.C2d/e/f — and the ratchet is the floor that must
+not rise.
+
+### Two tables did not flip, and their reasons differ
+
+* **`PIDctFunc`** — after T9.C2d the only raw reader of `pfIDctFourT4` was
+  `WelsIDctT4RecOnMb`, whose one caller (`OutputPMbWithoutConstructCsRsNoCopy`) that same
+  commit converted. The helper is now dead, and with it dead the three `pfIDct*` slots are
+  *installed, asserted-installed, and never called* — `pGomCost`'s shape (F133) in a
+  dispatch table. Flipping a table nothing reads is churn; deleting one is a ruling. Left
+  as measured, for the steward.
+* **`PCopyFunc`** — genuinely blocked, and not by this session. Four raw readers remain:
+  `VaaBackgroundMbDataUpdate`'s two (F117's, still open, source-picture copies) and
+  `SvcMdSCDMbEnc`'s two (Phase 10's, `SCREEN_CONTENT(dormant)`). `common/copy_mb.rs`
+  cannot reach `#![deny(unsafe_code)]` until both go, because its `copy_shim` is what the
+  seven `WelsCopy*_c` wrappers are built from. **`copy_mb.rs` reaching `deny` is therefore
+  F117's exit criterion as much as Phase 10's** — worth pairing them in whichever session
+  takes F117.

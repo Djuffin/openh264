@@ -1130,12 +1130,13 @@ pub unsafe extern "C" fn WelsMdI16x16(
     // pMemPredMb; this function then *moves* pMemPredLuma to the losing ping-pong
     // half before returning, so reading pMemPredLuma here would follow the previous
     // macroblock's pointer whenever WelsMdIntraInit had not just run.
-    let pPredI16x16: [*mut u8; 2] = [std::ptr::addr_of_mut!((*pMbCache).sMemPredMb)
-        .cast::<u8>(), std::ptr::addr_of_mut!((*pMbCache).sMemPredMb).cast::<u8>().add(256)];
-    let mut pDst = pPredI16x16[0];
-    let pDec = (*pMbCache).SPicData.pCsMb[0];
+    // **T9.C2**: the two-pointer ping-pong `pPredI16x16` / `pDst` carried exactly
+    // one bit — which 256-byte half of `sMemPredMb` the search last wrote — and
+    // `iIdx` already *is* that bit, as the tail of this function has always said.
+    // With the destination an offset, the pointers have nothing left to carry.
     let pEnc = (*pMbCache).SPicData.pEncMb[0];
-    let iLineSizeDec = (*pCurDqLayer).iCsStride[0];
+    let view = layer_rec_view(pCurDqLayer)
+        .expect("the layer's reconstruction view is built for this frame");
     let iLineSizeEnc = (*pCurDqLayer).iEncStride[0];
     let mut iBestMode;
     let mut iBestCost = i32::MAX;
@@ -1158,19 +1159,26 @@ pub unsafe extern "C" fn WelsMdI16x16(
     let pEncPicture = crate::encoder::svc_encode_slice::layer_enc_pic(pCurDqLayer)
         .expect("the layer's source picture is bound");
     let (kiMbOrgX, kiMbOrgY) = (*pMbCache).SPicData.luma_origin();
-    let kiPredBase = std::ptr::addr_of!((*pMbCache).sMemPredMb).cast::<u8>();
 
     iBestMode = kpAvailMode[0] as i32;
     for i in 0..iAvailCount {
         let iCurMode = kpAvailMode[i] as i32;
         debug_assert!((0..7).contains(&iCurMode));
 
-        pFunc.pfGetLumaI16x16Pred[iCurMode as usize].unwrap()(pDst, pDec, iLineSizeDec);
-        // `pDst` is one of the two 256-byte halves of `sMemPredMb`; as an offset that
-        // is `iIdx * 256`. The prediction slot is still raw (it reads the
-        // reconstruction plane — session C's), so the raw is used at that call and the
-        // cost takes a shared borrow of the same field afterwards (F114a's boundary).
-        let kiDstOff = pDst.offset_from(kiPredBase) as usize;
+        // **T9.C2 — the last of the intra-pred read sites.** `pDst` was one of the
+        // two 256-byte halves of `sMemPredMb` and `pDec` the reconstruction luma
+        // plane's raw root; the half is `iIdx * 256` as an offset, and the plane is
+        // the seam's view at this macroblock's origin. Both operands are safe now,
+        // so the F114a dance — raw at the call, shared borrow only afterwards — has
+        // nothing left to arbitrate. Slot flipped rather than bypassed: the mode
+        // index is a runtime value.
+        let kiDstOff = iIdx * 256;
+        pFunc.pfGetLumaI16x16Pred[iCurMode as usize].unwrap()(
+            (&mut (*pMbCache).sMemPredMb[kiDstOff..kiDstOff + 256])
+                .try_into()
+                .expect("a packed 16x16 prediction block is 256 bytes"),
+            &view.plane(0).cursor(kiMbOrgX, kiMbOrgY),
+        );
         let mut iCurCost = pfMdCost16x16(
             &PlaneCursor::new(&(*pMbCache).sMemPredMb[kiDstOff..][..256], 0, 16),
             &pEncPicture.plane(0).cursor(kiMbOrgX, kiMbOrgY),
@@ -1181,7 +1189,6 @@ pub unsafe extern "C" fn WelsMdI16x16(
             iBestMode = iCurMode;
             iBestCost = iCurCost;
             iIdx ^= 0x01;
-            pDst = pPredI16x16[iIdx];
         }
     }
     // The two pointers carried one bit between them and the selector *is* that bit:
@@ -2623,11 +2630,20 @@ mod tests {
             crate::encoder::sample::WelsInitSampleSadFunc(&mut func_list, 0);
             func_list.sSampleDealingFuncs.pfMdCost = crate::encoder::md::CostFamily::Sad;
 
-            // Reconstruction plane: still reached raw through `SPicData.pCsMb[0]`
-            // (intra prediction reads it — session C's), and it needs a real border,
-            // because the V/H/DC predictors read `pRef[-stride]` and `pRef[-1]`.
+            // **T9.C2**: the reconstruction is reached through the layer's seam view
+            // now, so the fixture builds a real picture for it rather than a bare
+            // `Vec` and a hand-offset pointer — the same change T9.B30 made to the
+            // source side above, and for the same reason. It still needs a real
+            // border, because the V/H/DC predictors read `(x, -1)` and `(-1, y)`.
             const STRIDE: usize = 48;
-            let mut cs_plane = vec![128u8; STRIDE * 40];
+            let mut rec_pic = crate::encoder::picture::SPicture::new(160, 160, false);
+            {
+                let plane = rec_pic.plane_mut(0);
+                let (w, h) = (plane.width() as isize, plane.height() as isize);
+                for y in -1..h {
+                    plane.row_mut(y, -1, (w + 2) as usize).fill(128);
+                }
+            }
 
             // **The source comes through the layer since T9.B30**, so the fixture
             // builds a real picture and a pool rather than a bare `Vec` and a pointer.
@@ -2664,11 +2680,11 @@ mod tests {
                     iMbX: MB_X,
                     iMbY: MB_Y,
                     pRefMb: [std::ptr::null_mut(); 3],
-                    pCsMb: [
-                        cs_plane.as_mut_ptr().add(16 * STRIDE + 16),
-                        std::ptr::null_mut(),
-                        std::ptr::null_mut(),
-                    ],
+                    // `pCsMb` is null on purpose, as `pEncMb` is: this function
+                    // reaches the reconstruction through the layer's view and the
+                    // carrier's coordinates, and a null here asserts it does not
+                    // fall back to the raw cursor it used before T9.C2.
+                    pCsMb: [std::ptr::null_mut(); 3],
                     ..Default::default()
                 },
                 uiNeighborIntra: 0x07, // left + top + top-left available
@@ -2683,6 +2699,7 @@ mod tests {
                 sLayerInfo: SLayerInfo::default(),
                 pEncPic: Some(src_id),
                 pSrcPool: &mut src_pool,
+                pRecView: Some(crate::encoder::rec_view::RecPicView::build(&mut rec_pic)),
                 ..Default::default()
             };
 
