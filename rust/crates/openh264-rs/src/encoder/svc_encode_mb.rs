@@ -942,42 +942,19 @@ pub unsafe fn WelsEncRecUV(
     }
 }
 
-/// Reconstructs a **P_SKIP** macroblock by copying motion-compensated samples directly
-/// to the reconstructed frame buffer and clearing non-zero coefficient counts.
-///
-/// # Safety
-/// All pointers in `pCurLayer`, `pFuncList`, `pCurMb`, and `pMbCache` must be valid.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn WelsRecPskip(
-    pCurLayer: *mut SDqLayer,
-    pFuncList: &SWelsFuncPtrList,
-    pCurMb: &mut SMB,
-    pMbCache: &mut SMbCache,
-) {
-    let iRecStride = (*pCurLayer).iCsStride.as_ptr();
-    let pCsMb = (*pMbCache).SPicData.pCsMb.as_ptr();
-
-    if let Some(func) = pFuncList.pfCopy16x16Aligned {
-        func(*pCsMb.add(0), *iRecStride.add(0), std::ptr::addr_of_mut!((*pMbCache).sSkipMb).cast::<u8>(), 16);
-    }
-    if let Some(func) = pFuncList.pfCopy8x8Aligned {
-        func(
-            *pCsMb.add(1),
-            *iRecStride.add(1),
-            std::ptr::addr_of_mut!((*pMbCache).sSkipMb).cast::<u8>().add(256),
-            8,
-        );
-        func(
-            *pCsMb.add(2),
-            *iRecStride.add(2),
-            std::ptr::addr_of_mut!((*pMbCache).sSkipMb).cast::<u8>().add(320),
-            8,
-        );
-    }
-    // `WelsSetMemZero (pCurMb->pNonZeroCount, 24)` — the row is inline now.
-    (*pCurMb).iNonZeroCount = [0; crate::encoder::md::MB_LUMA_CHROMA_BLOCK4x4_NUM];
-}
+// **`WelsRecPskip` stood here — deleted in T9.C2 on F135's ruling.**
+//
+// The port carried two copies of `svc_encode_mb.cpp:315`: this one, in the file
+// the C++ puts it in, and a second in `svc_mode_decision.rs` beside the three
+// call sites. Only the second was ever reached — all three callers
+// (`svc_base_layer_md.cpp:1395`/`:1957`, `svc_mode_decision.cpp:440`) resolve
+// there, and T9.C7 converted it to the reconstruction seam. This one had no
+// caller in `src/`, `tests/` or `benches/`; both being `pub` in a `pub mod`,
+// no compiler pass could say so (F129), only a per-symbol grep.
+//
+// The surviving implementation keeps the provenance: its doc cites
+// `codec/encoder/core/src/svc_encode_mb.cpp:315`. Three blocked plane-census
+// rows come off here as a **deletion**, never summed with a conversion (F128).
 
 /// Fast early-termination test evaluating whether Luma (Y) residual qualifies for `P_SKIP`.
 ///
