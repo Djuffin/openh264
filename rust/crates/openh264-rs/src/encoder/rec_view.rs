@@ -265,6 +265,37 @@ impl<'a> RecCursor<'a> {
     }
 }
 
+/// The reconstruction plane's flavour of `common::copy_mb`'s `copy_WxH` family:
+/// a `W`x`h` block copied out of a contiguous prediction buffer into the shared
+/// view.
+///
+/// **This is the "write-through-`&self` flavour" F107 §3 priced into D-mt-3.**
+/// `PlaneCursorMut::row_mut` hands out `&mut [u8]`, which a shared view cannot
+/// do and must not do — a macroblock's contiguous plane span is the full width
+/// of its rows, so `&mut [u8]` over it would claim the neighbouring slice's
+/// columns as well. Rows go in by value instead.
+///
+/// Every one of the reconstruction copy sites has an *arena* source — the
+/// macroblock cache's `sSkipMb` or `sMemPredMb`, both plain owned arrays — so the
+/// source is a slice and a stride rather than a second cursor.
+///
+/// # Panics
+/// If `src` is shorter than `(h - 1) * src_stride + W`, or the block runs off the
+/// plane. Both are geometry bugs in the caller, and the raw form they replace
+/// would have written into another picture.
+#[inline]
+pub fn copy_block_to_view<const W: usize>(
+    src: &[u8],
+    src_stride: usize,
+    dst: &RecCursor<'_>,
+    h: usize,
+) {
+    for y in 0..h {
+        let row: &[u8; W] = src[y * src_stride..][..W].try_into().unwrap();
+        dst.write_row::<W>(y as isize, 0, row);
+    }
+}
+
 /// One per-macroblock side array of the reconstruction picture, shared and
 /// writable: `sMvList`, `pRefMbQp`, `pMbSkipSad`, `uiRefMbType`.
 ///
