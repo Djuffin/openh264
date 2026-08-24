@@ -17149,3 +17149,152 @@ in the model, and the mid-row probe is the instrument that will confirm the fix.
 
 **Phase 10** is unchanged: 19 `SCREEN_CONTENT(dormant)` tags, `SvcMdSCDMbEnc`'s three
 copy sites among them.
+
+## 2026-08-24 — Phase 9, session C2 (the seam's consumers: every blocked site in scope, and three families to `deny`)
+
+### what the session was handed, and what was true
+
+26 blocked plane-census sites across three kernel families, plus deblocking, plus
+`pOverallMbMap` → atomics as step 0a. Three of the brief's numbers were wrong and each
+mattered:
+
+* **step 0a was two fields, not one** (F136). `pOverallMbMap`'s 18 sites were exact, but
+  converting them did not meet the brief's own acceptance — the mid-row probe still
+  stopped inside `SSliceCtx`, at `iSliceNumInFrame`. Round 6 closed only with both.
+* **the census was one site short** (F137). `phase9_plane_callers.py` never knew the
+  `pfIDctI16x16Dc` slot, so `WelsEncRecI16x16Y`'s DC-only branch was invisible. 26 → 24
+  mine after F135's three deletions and this correction.
+* **deblocking's counts were wrong in both directions** (F139): 20 unsafe items in
+  `encoder/deblocking.rs` (not 26, though the 21-tag figure was exact), 13 `unsafe fn` in
+  `common/deblocking_common.rs` (not 19).
+
+### what landed
+
+| commit | what |
+|---|---|
+| T9.C2a | F135's dead `WelsRecPskip` twin deleted (the user's ruling) |
+| T9.C2b | `pOverallMbMap` **and** `iSliceNumInFrame` → atomics; F132 round 6 closed |
+| T9.C2c | the six `RecCursor` idct kernels, no consumers, six differential tests |
+| T9.C2d | the **11** idct consumers, four owners, both shapes |
+| T9.C2e | the **8** copy consumers through `copy_block_to_view` |
+| T9.C2f | the **5** intra-pred sites, 28 shims, three tables; two files to `deny` |
+| T9.C2g | `WelsIDctT4RecOnMb` deleted — orphaned by T9.C2d |
+| T9.C2h | deblocking's encoder half: 8 dispatchers, 4 kernels, `pCsData` gone |
+
+**Every site in the session's scope is converted.** Plane census **27 blocked → 3**, and
+the 3 are `SvcMdSCDMbEnc`'s, Phase 10's.
+
+### the two traits, and why they were the whole cost
+
+Both remaining kernel families turned out to be convertible in a single pass each,
+because each had its raw surface concentrated in a handful of helpers rather than spread
+through the bodies (F138, F139). The kernels themselves touch their plane through two
+calls apiece, measured not assumed:
+
+```
+intra-pred   45 × reference.at   6 × reference.row     -> safe::plane::RefSamples
+deblocking   22 × pix.at        18 × pix.set           -> safe::plane::PlaneSamples
+```
+
+`RefSamples` is read-only (the reconstruction is intra prediction's *operand*, never its
+destination); `PlaneSamples` is `RefSamples` plus `set`. Two impls each — `PlaneCursor` /
+`PlaneCursorMut` for ordinary planes, `RecCursor` for the seam — static dispatch, no copy,
+and **one** kernel set still serving both the decoder and the encoder.
+
+### the referees used
+
+| shape | fault planted | verdict |
+|---|---|---|
+| idct, two-plane | prediction offset transposed | 169 / 210 `st` |
+| idct, in-place | Cr reads the Cb quadrant | 208 / 210 `st` |
+| copy (`bg`-only owner) | Cb/Cr planes swapped | 16 / 48 `bg`, `sl` 12/12 clean |
+| copy (`bg`-only owner) | luma copy writes 15 rows | 16 / 48 `bg` |
+| intra-pred read path | top row one column right | 210 / 210 `st` |
+| intra-pred, moved adapter | left column one row down | 210 / 210 `st` |
+| deblocking dispatch | tap steps transposed | 180 / 210 `st` |
+| deblocking geometry | chroma origin one row down | 208 / 210 `st` |
+
+**`WelsMdBackgroundMbEnc`'s referee is 16 of 48, not F126's 32.** F126 planted its fault
+immediately after `McLuma_c`, early enough to perturb the mode decision; a fault in the
+final reconstruction copy only shows where that macroblock is later referenced. Quoting
+32 would have overstated this owner's coverage by double.
+
+### what did not happen, and whose it is
+
+* **`PIDctFunc` and the encoder's 8 deblocking slots are write-only** — installed,
+  asserted-installed, never called. Third and fourth instances of `pGomCost`'s shape in
+  one session; left as measured under F133's ruling. **The phase-exit checklist should
+  gain a line**: for each dispatch table, grep for a *read* of each slot, not an install
+  (F139).
+* **`PCopyFunc` is blocked** by F117's two `VaaBackgroundMbDataUpdate` sites and Phase
+  10's two SCD sites, so `common/copy_mb.rs` cannot reach `deny`. That makes it F117's
+  exit criterion as much as Phase 10's.
+* **`encoder/deblocking.rs` is 13 allows, all on `*mut SMB` / `*mut SDqLayer` /
+  `*mut sWelsEncCtx` parameters** — its `deny` falls out of **session E's** `&mut SMB`
+  work, not out of deblocking.
+* **`common/deblocking_common.rs` keeps its 12 shims** because the *decoder* installs and
+  reads them. A decoder session's call.
+* **F117 was not started.** Nothing this session did blocks B4's design (record indices
+  in-loop, copy after the join, `bg`'s 48 rows as the proof). It passes on unstarted and
+  needs an owner assigned rather than inherited.
+
+### the close gate — **not green, and the reason is F140**
+
+The family half passed, twice, at `41ff57ad`:
+
+| step | verdict |
+|---|---|
+| `cargo build --all-targets` | PASS |
+| `cargo test` debug / release | **554 / 547**, 0 failed, 20 ignored |
+| unsafe ratchet | PASS, no per-file increase |
+| duplicate census | PASS, 56 allowlisted |
+| sweep (debug) | **PASS=583 FAIL=0**, 49 s |
+| sweep (release) | **PASS=583 FAIL=0**, 38 s |
+| Miri `--lib`, encoder scope | **never completed** — three attempts, see below |
+
+**Attempt 1** stalled mid-probe and the process was lost without a verdict. **Attempt 2**
+ran 1.5 hours and was killed by the user. **Attempt 3** was scoped to single probes to
+find out why, and produced F140's numbers:
+
+```
+encode_loop_runs_over_a_macroblock_grid_…          96.5 s  ->  254.3 s   (2.6x)
+encode_loop_runs_over_size_limited_dynamic_slices_…  422.9 s  ->  >19 min, killed
+```
+
+measured at `e1cb5ad9` (this session's first commit) against `41ff57ad` (its last). The
+regression is **uniform**, it is the seam's bounds-checked `Cell` accesses replacing raw
+pointer accesses, and there is nothing to optimise — F140 records the two hypotheses that
+were wrong (cursor construction, the atomics) with the experiments that killed them, so
+nobody repeats them.
+
+**What this means for the session's standing.** Every commit is byte-identical and passed
+the family battery; the *correctness* evidence is complete and unaffected. What is missing
+is the aliasing evidence at session scope. The four seam probes, the two threaded ones and
+the whole encoder-scoped set were green at session C's close and nothing in C2 touches the
+seam's soundness argument — but that is an argument, not a run, and the run did not happen.
+**The next session should treat the encoder Miri set as unverified since `bdf425fd`**, and
+whoever re-scopes the gate per F140 should get one clean run before building on this.
+
+### counts at close
+
+| | C | C2 |
+|---|---:|---:|
+| `unsafe-cat` tags, total | 779 | **730** |
+| … `port-raw(Phase 9)` | 629 | **580** |
+| … `cursor` | 57 | 57 |
+| … `recon-seam` | 2 | **2** |
+| plane census: blocked | 29 | **3** |
+| plane census: seam (converted, new class) | — | **5** |
+| plane census: safe-now / coeff | 20 / 13 | 20 / 13 |
+| census tags | 686 | **637** |
+| `raw_ptr` (tree) | 2001 | **1896** |
+| `unsafe_fn` | 729 | **687** |
+| `unsafe_block` | 366 | **312** |
+| `shim` | 65 | **37** |
+
+**Three numbers move for three different reasons and must not be summed** (F128, extended
+by F137): the blocked census fell 29 → 3 by **24 conversions**, **3 deletions** (F135's
+twin) and **one census correction** (+1, F137's missing slot). Of the 24 conversions, 19
+left the census entirely — they call their kernels directly now (F118) and no longer look
+like slot calls — and 5 remain visible under the new `seam` class, which was added so a
+converted site reads as converted rather than as unclassifiable.
