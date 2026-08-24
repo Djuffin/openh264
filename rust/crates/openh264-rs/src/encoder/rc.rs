@@ -2086,7 +2086,7 @@ pub unsafe fn RcUpdatePictureQpBits(pEncCtx: *mut sWelsEncCtx, iCodedBits: i32) 
     let mut iTotalMb = 0;
 
     if (*pEncCtx).eSliceType as i32 == P_SLICE {
-        for i in 0..pCurSliceCtx.iSliceNumInFrame as usize {
+        for i in 0..pCurSliceCtx.iSliceNumInFrame.load(Ordering::Relaxed) as usize {
             let pSlice = crate::encoder::svc_encode_slice::slice_in_layer(pCurDq, i as i32);
             let pSOverRc = &(*pSlice).sSlicingOverRc;
             iTotalQp += pSOverRc.iTotalQpSlice;

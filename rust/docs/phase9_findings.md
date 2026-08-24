@@ -1703,3 +1703,91 @@ reason" is ignored for **cost**, not aliasing — its own comment says "roughly 
 the work of the fork/join probe" and "the aliasing question this path raises is the
 fork/join's, and that probe answers it". The seam cannot retire that reason and
 un-ignoring it would put the largest single test in the battery under Miri.*
+
+## F136 — F132's round 6 is **two** fields, not one, and the second is guarded by a mutex only its writer takes
+
+The C2 brief scopes step 0a as "`SSliceCtx::pOverallMbMap` → atomics, 18 mentions", and
+gives the acceptance in advance: re-run the mid-row probe under Miri afterwards and it
+"must now name the **`&mut SMB` / `uiSliceIdc`** family (round 5, session E's), not
+`SSliceCtx`". The 18 mentions were exact. The acceptance was not met by them.
+
+With `pOverallMbMap` atomic and nothing else changed, the probe still stopped inside
+`SSliceCtx`:
+
+```
+error: Undefined Behavior: Data race detected between (1) retag read on thread
+`unnamed-3` and (2) non-atomic write on thread `unnamed-2` at alloc284162+0x15c
+   (2) svc_encode_slice.rs:3266   (*pSliceCtx).iSliceNumInFrame += 1;
+   (1) svc_encode_slice.rs:1997   let map: &[AtomicU16] = &pSliceSeg.pOverallMbMap;
+```
+
+The offset names the field with no ambiguity. Measured at this commit:
+
+```
+SDqLayer.sSliceEncCtx     320  = 0x140
+SSliceCtx.iSliceNumInFrame 28  = 0x01c        0x140 + 0x01c = 0x15c
+SSliceCtx.pOverallMbMap     0
+```
+
+so the racing byte is `iSliceNumInFrame`, and the read that reaches it is not the
+`pOverallMbMap` borrow Miri's span points at but the **whole-`SSliceCtx` shared retag**
+four lines up (`svc_encode_slice.rs:1982`, `let pSliceSeg = &(*pCurDq).sSliceEncCtx;`) —
+the retag T9.C4 already narrowed from `&mut` to `&`, which was enough to stop it racing
+against other readers and is not enough to stop it racing against a writer. Under a
+whole-struct retag **the fork contends with the struct, not with a field**, so a
+field-at-a-time conversion keeps producing new verdicts until every field written inside
+the fork is atomic.
+
+**The good news is that the enumeration terminates immediately.** Every write to an
+`SSliceCtx` scalar, by grep over `src/encoder`:
+
+```
+encoder_ext.rs:2956          UpdateSlicepEncCtxWithPartition   setup
+slice_multi_threading.rs:1095 (a unit test)                    setup
+svc_enc_slice_segment.rs:546-598  InitSliceSegment             setup
+svc_enc_slice_segment.rs:617-623  UninitSliceSegment           teardown
+svc_encode_slice.rs:3266     DynSlcJudgeSliceBoundaryStepBack  ** inside the fork **
+```
+
+One of thirty is in the fork. So round 6 is `pOverallMbMap` *and* `iSliceNumInFrame`, and
+with both atomic the probe advances exactly as the brief predicted:
+
+```
+error: Data race between (1) non-atomic read on thread `unnamed-3`
+                     and (2) retag write of type `encoder::md::SMB` on `unnamed-2`
+   (2) svc_encode_slice.rs:1464  UpdateMbNeighbor(pCurDq, &mut *pMb, ..)
+   (1) deblocking.rs:1190        (*pCurMb).uiSliceIdc
+                                   == (*pCurMb.offset(-iMbStride)).uiSliceIdc
+```
+
+Round 5, F112/F114b's family, session E's. **Both encoder fork/join probes now stop on
+the same thing**, where before they stopped on two different families — which is the
+useful part for whoever schedules E: one conversion un-ignores two probes, not one.
+
+### Why the mutex did not save it, and why it still has to stay
+
+`iSliceNumInFrame`'s increment is not unguarded. F69 restored `mutexSliceNumUpdate`
+around it precisely because the raw translation had dropped it, and the port holds it
+across `AddSliceBoundary` *and* the `++`, exactly as `svc_encode_slice.cpp:1776-1791`
+does. The lock is real and it is upstream's.
+
+It does not help, because **no reader takes it.** `WelsGetNextMbOfSlice` runs per
+macroblock on every worker and reborrows the whole `SSliceCtx` without any lock at all;
+`WelsMbToSliceIdc`, `NeedDynamicAdjust` and `ReOrderSliceInLayer` likewise. A mutex only
+one side of a conflict acquires is not synchronisation — it orders writers against each
+other and says nothing about readers. That is F133's shape a second time (`pGomCost`: a
+race nothing could observe) with one difference worth flagging: here the value *is* read,
+by `ReOrderSliceInLayer`'s `iEncodeSliceNum != iSliceNumInFrame` test, so this one is not
+write-only storage and the atomic is load-bearing rather than hygienic.
+
+**The mutex is therefore not redundant and was not removed.** It brackets the slice-map
+rewrite *with* the counter increment; an atomic `fetch_add` makes the counter's own
+accesses well defined and cannot make that pair indivisible. Both are needed, and a later
+session that reads "the field is atomic now" as licence to drop the lock would reopen F3.
+
+*Method note, since the brief invited it: the brief's count was right and its acceptance
+was the thing that caught the gap. A step specified as "convert these 18 sites" would
+have been reported done and green; a step specified as "convert these 18 sites, and the
+probe must then say X" was not. Write the next brief's steps with the instrument's
+expected reading attached — it is the only part of step 0a that failed, and the only part
+that could have.*

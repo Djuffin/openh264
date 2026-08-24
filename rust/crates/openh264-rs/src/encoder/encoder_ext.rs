@@ -15,6 +15,7 @@
 // Phase 4a: `pfMdCost`/`pfMeCost` are enum selectors, not interior pointers (F13).
 
 #![deny(unsafe_code)]
+use std::sync::atomic::{AtomicU16, Ordering};
 use crate::encoder::picture::{RecPicId, RecPicPool, SRefPicView, SrcPicId, SrcPicPool};
 use crate::encoder::md::CostFamily;
 use std::ffi::c_char;
@@ -1751,7 +1752,7 @@ mod tests {
             assert_eq!((*pDq).iMbWidth, 10);
             assert_eq!((*pDq).iMbHeight, 6);
             assert_eq!((*pDq).sSliceEncCtx.iMbNumInFrame, 60);
-            assert_eq!((*pDq).sSliceEncCtx.iSliceNumInFrame, 1);
+            assert_eq!((*pDq).sSliceEncCtx.iSliceNumInFrame.load(Ordering::Relaxed), 1);
             assert_eq!((*pDq).sSliceEncCtx.pOverallMbMap.len(), 60);
             assert_eq!((*pDq).sMbDataP.dims().count(), 60);
 
@@ -2952,7 +2953,7 @@ pub unsafe fn UpdateSlicepEncCtxWithPartition(pCurDq: *mut SDqLayer, mut iPartit
         iPartitionNum = 1;
     }
 
-    pSliceCtx.iSliceNumInFrame = iPartitionNum;
+    pSliceCtx.iSliceNumInFrame.store(iPartitionNum, Ordering::Relaxed);
 
     i = 0;
     while i < iPartitionNum as usize {
@@ -2968,7 +2969,7 @@ pub unsafe fn UpdateSlicepEncCtxWithPartition(pCurDq: *mut SDqLayer, mut iPartit
         (*pCurDq).NumSliceCodedOfPartition[i] = 0;
 
         {
-            let map: &mut Vec<u16> = &mut (*pCurDq).sSliceEncCtx.pOverallMbMap;
+            let map: &[AtomicU16] = &(*pCurDq).sSliceEncCtx.pOverallMbMap;
             crate::encoder::slice_multi_threading::fill_mb_map(
                 map,
                 iFirstMbIdx,

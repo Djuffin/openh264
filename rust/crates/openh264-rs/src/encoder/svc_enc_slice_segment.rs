@@ -30,6 +30,7 @@
 #![deny(unsafe_code)]
 
 use std::ffi::c_char;
+use std::sync::atomic::{AtomicU16, Ordering};
 
 use crate::api::codec_api::SliceModeEnum::{
     SM_FIXEDSLCNUM_SLICE, SM_RASTER_SLICE, SM_SINGLE_SLICE, SM_SIZELIMITED_SLICE,
@@ -388,15 +389,24 @@ pub unsafe fn SliceArgumentValidationFixedSliceMode(
 /// `pMbMap` must point to at least `kiCountMbNum * kiMapUnitSize` writable bytes.
 /// (`*mut u16` since Phase 6 session B: the C++ takes `void*` and every caller
 /// passes `pOverallMbMap`, which is `uint16_t*` at both ends.)
-pub fn AssignMbMapSingleSlice(pMbMap: &mut [u16], kiCountMbNum: i32) -> i32 {
+pub fn AssignMbMapSingleSlice(pMbMap: &[AtomicU16], kiCountMbNum: i32) -> i32 {
     if pMbMap.is_empty() || kiCountMbNum <= 0 {
         return 1;
     }
 
     let n = (kiCountMbNum as usize).min(pMbMap.len());
-    pMbMap[..n].fill(0);
+    for c in &pMbMap[..n] {
+        c.store(0, Ordering::Relaxed);
+    }
 
     0
+}
+
+/// A zeroed macroblock map of `kiCountMbNum` entries — the port's spelling of the
+/// `WelsMallocz` the C++ carves the map with, now that the element is `AtomicU16`
+/// and `vec![_; n]` cannot clone it (T9.C2).
+fn new_mb_map(kiCountMbNum: i32) -> Vec<AtomicU16> {
+    (0..kiCountMbNum.max(0) as usize).map(|_| AtomicU16::new(0)).collect()
 }
 
 /// `AssignMbMapMultipleSlices` — svc_enc_slice_segment.cpp:70.
@@ -424,12 +434,12 @@ pub unsafe fn AssignMbMapMultipleSlices(
 
     if (*pSliceSeg).uiSliceMode == SM_RASTER_SLICE && 0 == (*kpSliceArgument).uiSliceMbNum[0] {
         let kiMbWidth = (*pSliceSeg).iMbWidth as i32;
-        let iSliceNum = (*pSliceSeg).iSliceNumInFrame;
+        let iSliceNum = (*pSliceSeg).iSliceNumInFrame.load(Ordering::Relaxed);
 
         iSliceIdx = 0;
         while iSliceIdx < iSliceNum {
             let kiFirstMb = iSliceIdx * kiMbWidth;
-            let map: &mut Vec<u16> = &mut (*pSliceSeg).pOverallMbMap;
+            let map: &[AtomicU16] = &(*pSliceSeg).pOverallMbMap;
             crate::encoder::slice_multi_threading::fill_mb_map(
                 map,
                 kiFirstMb,
@@ -445,7 +455,7 @@ pub unsafe fn AssignMbMapMultipleSlices(
     {
         let kpSlicesAssignList = (*kpSliceArgument).uiSliceMbNum.as_ptr() as *const i32;
         let kiCountNumMbInFrame = (*pSliceSeg).iMbNumInFrame;
-        let kiCountSliceNumInFrame = (*pSliceSeg).iSliceNumInFrame;
+        let kiCountSliceNumInFrame = (*pSliceSeg).iSliceNumInFrame.load(Ordering::Relaxed);
         let mut iMbIdx: i32 = 0;
 
         iSliceIdx = 0;
@@ -456,8 +466,8 @@ pub unsafe fn AssignMbMapMultipleSlices(
             // the mb_assign_map has to be validated against the input data here, so
             // this cannot be a memset
             loop {
-                let map: &mut Vec<u16> = &mut (*pSliceSeg).pOverallMbMap;
-                map[(iMbIdx + iRunIdx) as usize] = iSliceIdx as u16;
+                let map: &[AtomicU16] = &(*pSliceSeg).pOverallMbMap;
+                map[(iMbIdx + iRunIdx) as usize].store(iSliceIdx as u16, Ordering::Relaxed);
                 iRunIdx += 1;
                 if !(iRunIdx < kiCurRunLength && iMbIdx + iRunIdx < kiCountNumMbInFrame) {
                     break;
@@ -533,7 +543,7 @@ pub unsafe fn InitSliceSegment(
         (*pSliceSeg).pOverallMbMap = Vec::new();
 
         // just for safe
-        (*pSliceSeg).iSliceNumInFrame = 0;
+        (*pSliceSeg).iSliceNumInFrame.store(0, Ordering::Relaxed);
         (*pSliceSeg).iMbNumInFrame = 0;
         (*pSliceSeg).iMbWidth = 0;
         (*pSliceSeg).iMbHeight = 0;
@@ -541,15 +551,15 @@ pub unsafe fn InitSliceSegment(
     }
 
     if SM_SINGLE_SLICE == uiSliceMode {
-        (*pSliceSeg).pOverallMbMap = vec![0u16; kiCountMbNum as usize];
-        (*pSliceSeg).iSliceNumInFrame = 1;
+        (*pSliceSeg).pOverallMbMap = new_mb_map(kiCountMbNum);
+        (*pSliceSeg).iSliceNumInFrame.store(1, Ordering::Relaxed);
 
         (*pSliceSeg).uiSliceMode = uiSliceMode;
         (*pSliceSeg).iMbWidth = kiMbWidth as i16;
         (*pSliceSeg).iMbHeight = kiMbHeight as i16;
         (*pSliceSeg).iMbNumInFrame = kiCountMbNum;
 
-        AssignMbMapSingleSlice(&mut (*pSliceSeg).pOverallMbMap, kiCountMbNum)
+        AssignMbMapSingleSlice(&(*pSliceSeg).pOverallMbMap, kiCountMbNum)
     } else {
         if uiSliceMode != SM_FIXEDSLCNUM_SLICE
             && uiSliceMode != SM_RASTER_SLICE
@@ -559,12 +569,14 @@ pub unsafe fn InitSliceSegment(
         }
 
         // `WelsMallocz` zeroed the block and the `WelsSetMemMultiplebytes_c` that
-        // followed zeroed it again; `vec![0; n]` is both.
-        (*pSliceSeg).pOverallMbMap = vec![0u16; kiCountMbNum as usize];
+        // followed zeroed it again; a zeroed map is both.
+        (*pSliceSeg).pOverallMbMap = new_mb_map(kiCountMbNum);
 
         // SM_SIZELIMITED_SLICE: init, set pSliceSeg->iSliceNumInFrame = 1
-        (*pSliceSeg).iSliceNumInFrame = GetInitialSliceNum(pSliceArgument);
-        if -1 == (*pSliceSeg).iSliceNumInFrame {
+        (*pSliceSeg)
+            .iSliceNumInFrame
+            .store(GetInitialSliceNum(pSliceArgument), Ordering::Relaxed);
+        if -1 == (*pSliceSeg).iSliceNumInFrame.load(Ordering::Relaxed) {
             return 1;
         }
 
@@ -607,7 +619,7 @@ pub unsafe fn UninitSliceSegment(pCurDq: *mut SDqLayer) {
     (*pSliceSeg).uiSliceMode = SM_SINGLE_SLICE; // single in default
     (*pSliceSeg).iMbWidth = 0;
     (*pSliceSeg).iMbHeight = 0;
-    (*pSliceSeg).iSliceNumInFrame = 0;
+    (*pSliceSeg).iSliceNumInFrame.store(0, Ordering::Relaxed);
     (*pSliceSeg).iMbNumInFrame = 0;
     (*pSliceSeg).uiSliceSizeConstraint = 0;
     (*pSliceSeg).iMaxSliceNumConstraint = 0;

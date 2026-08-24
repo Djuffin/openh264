@@ -58,6 +58,8 @@
 // note gives.
 
 
+use std::sync::atomic::{AtomicI32, AtomicU16, Ordering};
+
 use crate::encoder::nal_encap::{
     WelsEncodeNal, WelsLoadNalForSlice, WelsUnloadNalForSlice, WelsWriteSVCPrefixNal, SWelsNalRaw,
 };
@@ -155,14 +157,19 @@ pub unsafe fn WelsSetMemUint32_c(pDst: *mut u32, iValue: u32, iSizeOfData: i32) 
 /// the clamp below change nothing that is defined today, and make the two
 /// preconditions the raw spelling relied on explicit instead of latent.
 #[inline]
-pub fn fill_mb_map(map: &mut [u16], kiFirstMb: i32, kiCount: i32, uiValue: u16) {
+pub fn fill_mb_map(map: &[AtomicU16], kiFirstMb: i32, kiCount: i32, uiValue: u16) {
     if kiFirstMb < 0 || kiCount <= 0 {
         return;
     }
     let a = kiFirstMb as usize;
     let b = a.saturating_add(kiCount as usize).min(map.len());
     if a < b {
-        map[a..b].fill(uiValue);
+        // `&[AtomicU16]` rather than `&mut [u16]` since T9.C2: `AddSliceBoundary`
+        // calls this from inside the fork, and a `&mut` over the run would be a
+        // `Unique` retag over storage the other partitions are reading.
+        for c in &map[a..b] {
+            c.store(uiValue, Ordering::Relaxed);
+        }
     }
 }
 
@@ -268,20 +275,36 @@ pub type TagWelsSliceBs = SWelsSliceBs;
 
 pub type TagSlice = SSlice;
 
-// Not `repr(C)` and not `Copy` since **T6.D7**: `pOverallMbMap` is a `Vec<u16>`,
-// which has no C shape and owns its storage. Nothing in the crate copied this struct
-// by value — the compiler's answer, not an argument.
+// Not `repr(C)` and not `Copy` since **T6.D7**: `pOverallMbMap` owns its storage and
+// has no C shape. Nothing in the crate copied this struct by value — the compiler's
+// answer, not an argument.
+//
+// **T9.C2, F132 round 6**: the element type is `AtomicU16`. `AddSliceBoundary`
+// rewrites this map from inside the fork under `SM_SIZELIMITED_SLICE` while the
+// other partitions' workers read it, so the plain `u16` was a data race on the
+// same shape `pGomCost` was (T9.C5) — one entry per macroblock, partitions
+// disjoint, nothing synchronising the storage itself. `Relaxed` throughout: the
+// disjointness is the argument, and the scope join is the publication edge.
 #[derive(Debug)]
 pub struct SSliceCtx {
     pub uiSliceMode: SliceMode,
     pub iMbWidth: i16,
     pub iMbHeight: i16,
-    pub iSliceNumInFrame: i32,
+    /// **T9.C2, F136 — atomic, and the mutex above still stands.**
+    /// `DynSlcJudgeSliceBoundaryStepBack` increments this from inside the fork
+    /// under `mutexSliceNumUpdate` (F69), but every *reader* takes no lock:
+    /// `WelsGetNextMbOfSlice` reborrows the whole `SSliceCtx` per macroblock on
+    /// each worker, and a shared retag over the struct covers this field. A lock
+    /// only one side takes is not synchronisation — the same shape F133 found on
+    /// `pGomCost`. The mutex is *not* redundant: it brackets `AddSliceBoundary`'s
+    /// map rewrite *with* the increment, which no single atomic can do.
+    pub iSliceNumInFrame: AtomicI32,
     pub iMbNumInFrame: i32,
     /// One slice index per macroblock, in raster order — **owned since T6.D7**
-    /// (plan §4's "maps -> `Vec<u16>`"). Allocated by `InitSlicePEncCtx`, released by
-    /// the layer's `Drop` where `UninitSlicePEncCtx` used to free it.
-    pub pOverallMbMap: Vec<u16>,
+    /// (plan §4's "maps -> `Vec<u16>`"), **atomic since T9.C2**. Allocated by
+    /// `InitSlicePEncCtx`, released by the layer's `Drop` where `UninitSlicePEncCtx`
+    /// used to free it.
+    pub pOverallMbMap: Vec<AtomicU16>,
     pub uiSliceSizeConstraint: u32,
     pub iMaxSliceNumConstraint: i32,
 }
@@ -292,7 +315,7 @@ impl Default for SSliceCtx {
             uiSliceMode: SliceMode::SM_SINGLE_SLICE,
             iMbWidth: 0,
             iMbHeight: 0,
-            iSliceNumInFrame: 0,
+            iSliceNumInFrame: AtomicI32::new(0),
             iMbNumInFrame: 0,
             pOverallMbMap: Vec::new(),
             uiSliceSizeConstraint: 0,
@@ -453,7 +476,7 @@ pub unsafe fn CalcSliceComplexRatio(pCurDq: *mut SDqLayer) {
     }
     let pSliceCtx = &mut (*pCurDq).sSliceEncCtx;
     let mut iSumAv = 0i32;
-    let kiSliceCount = pSliceCtx.iSliceNumInFrame;
+    let kiSliceCount = pSliceCtx.iSliceNumInFrame.load(Ordering::Relaxed);
     let mut iSliceIdx = 0i32;
     let mut iAvI = [0i32; MAX_SLICES_NUM];
 
@@ -558,7 +581,7 @@ pub unsafe fn DynamicAdjustSlicing(
     }
 
     let pSliceCtx = &mut (*pCurDqLayer).sSliceEncCtx;
-    let kiCountSliceNum = pSliceCtx.iSliceNumInFrame;
+    let kiCountSliceNum = pSliceCtx.iSliceNumInFrame.load(Ordering::Relaxed);
     let kiCountNumMb = pSliceCtx.iMbNumInFrame;
     let mut iMinimalMbNum = pSliceCtx.iMbWidth as i32;
     let mut iMaximalMbNum;
@@ -652,7 +675,7 @@ pub unsafe fn DynamicAdjustSlicePEncCtxAll(pCurDq: *mut SDqLayer, pRunLength: *m
     }
     let pSliceCtx = &mut (*pCurDq).sSliceEncCtx;
     let iCountNumMbInFrame = pSliceCtx.iMbNumInFrame;
-    let iCountSliceNumInFrame = pSliceCtx.iSliceNumInFrame;
+    let iCountSliceNumInFrame = pSliceCtx.iSliceNumInFrame.load(Ordering::Relaxed);
     let mut iSameRunLenFlag = 1i32;
     let mut iFirstMbIdx = 0i32;
     let mut iSliceIdx = 0i32;
@@ -680,7 +703,7 @@ pub unsafe fn DynamicAdjustSlicePEncCtxAll(pCurDq: *mut SDqLayer, pRunLength: *m
         }
 
         {
-            let map: &mut Vec<u16> = &mut pSliceCtx.pOverallMbMap;
+            let map: &[AtomicU16] = &pSliceCtx.pOverallMbMap;
             fill_mb_map(map, iFirstMbIdx, kiSliceRun, iSliceIdx as u16);
         }
 
@@ -958,7 +981,8 @@ pub unsafe fn AdjustBaseLayer(pCtx: *mut sWelsEncCtx) -> i32 {
     // up). Body otherwise untouched — Phase 7 owns everything else here.
     set_current_layer(pCtx, Some(LayerIdx(0)));
 
-    let iNeedAdj = NeedDynamicAdjust(pCurDq, (*pCurDq).sSliceEncCtx.iSliceNumInFrame);
+    let iNeedAdj =
+        NeedDynamicAdjust(pCurDq, (*pCurDq).sSliceEncCtx.iSliceNumInFrame.load(Ordering::Relaxed));
 
     if iNeedAdj != 0 {
         DynamicAdjustSlicing(pCtx, pCurDq, 0);
@@ -996,7 +1020,7 @@ pub unsafe fn AdjustEnhanceLayer(pCtx: *mut sWelsEncCtx, iCurDid: i32) -> i32 {
         }
         iNeedAdj = NeedDynamicAdjust(
             pBaseLayer,
-            (*current_layer(pCtx)).sSliceEncCtx.iSliceNumInFrame,
+            (*current_layer(pCtx)).sSliceEncCtx.iSliceNumInFrame.load(Ordering::Relaxed),
         );
         if iNeedAdj != 0 {
             DynamicAdjustSlicing(pCtx, current_layer(pCtx), iCurDid);
@@ -1008,7 +1032,7 @@ pub unsafe fn AdjustEnhanceLayer(pCtx: *mut sWelsEncCtx, iCurDid: i32) -> i32 {
         }
         iNeedAdj = NeedDynamicAdjust(
             pCurLayer,
-            (*current_layer(pCtx)).sSliceEncCtx.iSliceNumInFrame,
+            (*current_layer(pCtx)).sSliceEncCtx.iSliceNumInFrame.load(Ordering::Relaxed),
         );
         if iNeedAdj != 0 {
             DynamicAdjustSlicing(pCtx, current_layer(pCtx), iCurDid);
@@ -1077,7 +1101,7 @@ mod tests {
             slice.iCountMbNumInSlice = 100;
             slice.uiSliceConsumeTime = 1000;
         }
-        dq_layer.sSliceEncCtx.iSliceNumInFrame = 2;
+        dq_layer.sSliceEncCtx.iSliceNumInFrame.store(2, Ordering::Relaxed);
 
         unsafe {
             CalcSliceComplexRatio(&mut dq_layer);
