@@ -1937,3 +1937,103 @@ not rise.
   seven `WelsCopy*_c` wrappers are built from. **`copy_mb.rs` reaching `deny` is therefore
   F117's exit criterion as much as Phase 10's** — worth pairing them in whichever session
   takes F117.
+
+## F139 — deblocking's encoder half converts cleanly; the two `deny`s the brief promised are both blocked, and by different sessions
+
+The C2 brief's step 6 is one sentence with three clauses: "the per-MB walk uses view
+cursors; `deblocking_common.rs`'s edge filters gain the `&self`-write flavour; both files
+reach `deny`." The first two landed. Neither `deny` can, and it is worth separating why,
+because the two reasons belong to two different owners.
+
+### First, the brief's counts, which are wrong in both directions
+
+```
+encoder/deblocking.rs        brief: "26 unsafe items, 21 tags"
+                             tree:  19 unsafe fn + 1 unsafe block = 20 items, 21 tags,
+                                    already under #![deny(unsafe_code)] with 21 allows
+common/deblocking_common.rs  brief: "19 unsafe fn, un-denied"
+                             tree:  13 unsafe fn (12 edge shims + WelsNonZeroCount_c)
+                                    + 15 unsafe blocks; un-denied is right
+```
+
+Three `grep`-visible `unsafe extern "C" fn` lines in `encoder/deblocking.rs` are `pub
+type` aliases, not definitions, which is most likely where 26 came from. The tag count
+(21) is exact.
+
+### What converted, and why it was cheap for the same reason F138's family was
+
+`common/deblocking_common.rs`'s twelve shims are one line each over **four** safe kernels
+(`deblock_luma_lt4`/`_eq4`, `deblock_chroma_lt4`/`_eq4`), and those kernels touch their
+plane through exactly two calls:
+
+```
+$ grep -oE 'pix\.\w+' src/common/deblocking_common.rs | sort | uniq -c
+  22 pix.at
+  18 pix.set
+```
+
+So `safe::plane::PlaneSamples` is `RefSamples` plus `set`, two impls
+(`PlaneCursorMut`, `RecCursor`), static dispatch — and the *decoder*, which already calls
+these kernels directly with `planeY.cursor_mut(..)`, is untouched by the change. One
+kernel set, two storages, no copy. That is the second time in this session that a family
+turned out to be convertible in one pass because its raw surface was a handful of
+helpers rather than a habit spread through the bodies.
+
+The encoder's eight `FilteringEdge*` dispatchers are safe now, and
+`SDeblockingFilter::pCsData: [*mut u8; 3]` — three raw plane roots the frame and slice
+drivers re-advanced per macroblock — is deleted in favour of `mb_cursors`, which derives
+the same three addresses from the seam view and the macroblock's own `(iMbX, iMbY)`. The
+arithmetic moved one level down and can no longer drift out of step with the loop that
+used to maintain it.
+
+### Why `encoder/deblocking.rs` cannot reach `deny` — session E's
+
+13 `#[allow(unsafe_code)]` remain, down from 21. Every one is on a function whose
+*parameters* are raw: `*mut SMB` (`DeblockingInterMb`, `DeblockingIntraMb`,
+`FilteringEdgeLumaHV`, `FilteringEdgeChromaHV`, `DeblockingMbAvcbase`,
+`DeblockingBSCalc_c`), `*mut SDqLayer`, `*mut sWelsEncCtx`, `*mut DeblockingFunc`. The
+`*mut SMB` ones are F112/F114b's family and F132's **round 5** — the same neighbour-bound
+`SMB` pointers whose `uiSliceIdc` reads both fork/join probes now stop on (F136). This
+file's `deny` is therefore not a deblocking task at all; it falls out of session E's
+`&mut SMB` work, and should be listed as one of E's exit criteria rather than left as an
+orphan.
+
+### Why `common/deblocking_common.rs` cannot reach `deny` — the decoder's
+
+Its twelve shims have no encoder reader left, but they are not the encoder's to delete:
+`decoder/deblocking.rs:208` re-exports the module wholesale, `decoder_core.rs:2142` calls
+its `DeblockingInit`, and the decoder's `DeblockingFunc` reads every slot. Deleting them
+means flipping the decoder's dispatch table, which is a decoder session's work and
+outside an encoder session's lane.
+
+### The third write-only table this session found
+
+With the eight dispatchers calling their kernels directly (F118 — `DeblockingInit`
+installs unconditionally and nothing rewrites), the encoder's own `DeblockingFunc` now
+has **8 of 10 slots installed and never read**: the four `pfLumaDeblocking*` and four
+`pfChromaDeblocking*`. `pfDeblockingBSCalc` and `pfDeblockingFilterSlice` are still read
+and stay.
+
+That makes three in one session — `pGomCost` (F133), the three `pfIDct*` slots (F138),
+and now these eight. **The shape is worth naming**: converting a consumer to call its
+kernel directly does not retire the slot, it silently demotes it to write-only storage,
+and nothing in the build or the gates notices. A `pf*` slot that is assigned, asserted
+`is_some()`, and never invoked is indistinguishable from a live one by every instrument
+this project has except a per-symbol grep for the read. Whoever writes the phase-exit
+checklist should add one: *for each dispatch table, grep for a read of each slot, not
+just an install.* All three are left exactly as measured, under F133's ruling that
+write-only storage is not this phase's to delete.
+
+### Calibration
+
+Two faults, planted separately, `st` preset:
+
+```
+FilteringEdgeLumaH's tap steps transposed (step_x/step_y swapped)  180 of 210 fail
+mb_cursors' chroma origin one row down                             208 of 210 fail
+reverted                                                           210 of 210 pass
+```
+
+Deblocking touches every reconstructed sample of every frame, which is what those
+numbers say; it is also why this was the session's highest-risk commit and got a full
+`family` gate rather than a `commit` one.

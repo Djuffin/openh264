@@ -368,6 +368,28 @@ impl RefSamples for PlaneCursor<'_> {
 }
 
 
+/// A plane cursor that can be read *and* written — [`RefSamples`] plus `set`.
+///
+/// **Why this exists (T9.C2).** The deblocking filters are the one kernel family
+/// that reads and writes the same samples, and they run over two different
+/// storages: the decoder's ordinary picture, reached as [`PlaneCursorMut`], and
+/// the encoder's reconstruction picture, reached under multi-threading through
+/// the seam's `RecCursor`. Abstracting the two calls they actually make lets one
+/// set of filters serve both — measured over `common/deblocking_common.rs`, the
+/// six kernels and their two line helpers use `at` 22 times and `set` 18 times,
+/// and nothing else.
+///
+/// Note `set` takes `&mut self` even though `RecCursor` can write through
+/// `&self`: the stricter of the two signatures is the one that fits both, and
+/// taking `&mut` of a cursor a caller owns costs nothing. What it must never do
+/// is hand out `&mut [u8]` into the plane, and this trait has no method that
+/// could.
+pub trait PlaneSamples: RefSamples {
+    /// Writes the sample at `(dx, dy)` from the anchor.
+    fn set(&mut self, dx: isize, dy: isize, v: u8);
+}
+
+
 /// A read-write view of a plane anchored at some sample — the safe form of the
 /// `pDstY`/`pEncMb`/`pDecMb` cursors (`decode_slice.rs:1944`,
 /// `svc_base_layer_md.rs:327-358`).
@@ -593,6 +615,26 @@ impl<'a> PlaneCursorMut<'a> {
     #[inline]
     pub fn stride(&self) -> usize {
         self.stride
+    }
+}
+
+impl RefSamples for PlaneCursorMut<'_> {
+    #[inline]
+    fn at(&self, dx: isize, dy: isize) -> u8 {
+        PlaneCursorMut::at(self, dx, dy)
+    }
+
+    #[inline]
+    fn row_n<const N: usize>(&self, dy: isize, dx0: isize) -> [u8; N] {
+        let r = PlaneCursorMut::row(self, dy, dx0, N);
+        std::array::from_fn(|i| r[i])
+    }
+}
+
+impl PlaneSamples for PlaneCursorMut<'_> {
+    #[inline]
+    fn set(&mut self, dx: isize, dy: isize, v: u8) {
+        PlaneCursorMut::set(self, dx, dy, v)
     }
 }
 

@@ -60,7 +60,7 @@ pub fn WelsClip1(iX: i32) -> u8 {
 // like the C++'s implicit int-to-uint8_t conversion. `WelsClip1` is applied only
 // where the C++ applies it (p0'/q0').
 
-use crate::safe::plane::PlaneCursorMut;
+use crate::safe::plane::{PlaneCursorMut, PlaneSamples};
 
 /// C++: `DeblockLumaLt4_c`, `codec/common/src/deblocking_common.cpp` — the
 /// normal/weak (bS < 4) luma filter across 16 lines of one macroblock edge.
@@ -70,7 +70,7 @@ use crate::safe::plane::PlaneCursorMut;
 /// `tc[i >> 2]` gates each line: negative means the line's 4-sample group is not
 /// filtered at all.
 pub fn deblock_luma_lt4(
-    pix: &mut PlaneCursorMut<'_>,
+    pix: &mut impl PlaneSamples,
     step_x: isize,
     step_y: isize,
     alpha: i32,
@@ -120,7 +120,7 @@ pub fn deblock_luma_lt4(
 /// be read at `j * step_x` (`p3`/`q3` only on the strong-filter branch); `p2..q2`
 /// may be written; lines advance by `step_y`.
 pub fn deblock_luma_eq4(
-    pix: &mut PlaneCursorMut<'_>,
+    pix: &mut impl PlaneSamples,
     step_x: isize,
     step_y: isize,
     alpha: i32,
@@ -170,7 +170,7 @@ pub fn deblock_luma_eq4(
 /// One line of the weak chroma filter, shared by the two-plane and single-plane
 /// (`*2_c`) variants — the body the C++ repeats verbatim for Cb, Cr and CbCr.
 #[inline(always)]
-fn chroma_lt4_line(pix: &mut PlaneCursorMut<'_>, b: isize, step_x: isize, alpha: i32, beta: i32, tc0: i32) {
+fn chroma_lt4_line(pix: &mut impl PlaneSamples, b: isize, step_x: isize, alpha: i32, beta: i32, tc0: i32) {
     let p0 = pix.at(b - step_x, 0) as i32;
     let p1 = pix.at(b - 2 * step_x, 0) as i32;
     let q0 = pix.at(b, 0) as i32;
@@ -188,7 +188,7 @@ fn chroma_lt4_line(pix: &mut PlaneCursorMut<'_>, b: isize, step_x: isize, alpha:
 
 /// One line of the strong chroma filter, shared the same way.
 #[inline(always)]
-fn chroma_eq4_line(pix: &mut PlaneCursorMut<'_>, b: isize, step_x: isize, alpha: i32, beta: i32) {
+fn chroma_eq4_line(pix: &mut impl PlaneSamples, b: isize, step_x: isize, alpha: i32, beta: i32) {
     let p0 = pix.at(b - step_x, 0) as i32;
     let p1 = pix.at(b - 2 * step_x, 0) as i32;
     let q0 = pix.at(b, 0) as i32;
@@ -210,8 +210,8 @@ fn chroma_eq4_line(pix: &mut PlaneCursorMut<'_>, b: isize, step_x: isize, alpha:
 /// advance by `step_y`. `tc[i >> 1]` gates each line — note `> 0` here where the
 /// luma gate is `>= 0`, faithful to the C++.
 pub fn deblock_chroma_lt4(
-    cb: &mut PlaneCursorMut<'_>,
-    cr: &mut PlaneCursorMut<'_>,
+    cb: &mut impl PlaneSamples,
+    cr: &mut impl PlaneSamples,
     step_x: isize,
     step_y: isize,
     alpha: i32,
@@ -232,8 +232,8 @@ pub fn deblock_chroma_lt4(
 /// strong (bS == 4) chroma filter across 8 lines, on separate Cb and Cr planes.
 /// Reach as [`deblock_chroma_lt4`].
 pub fn deblock_chroma_eq4(
-    cb: &mut PlaneCursorMut<'_>,
-    cr: &mut PlaneCursorMut<'_>,
+    cb: &mut impl PlaneSamples,
+    cr: &mut impl PlaneSamples,
     step_x: isize,
     step_y: isize,
     alpha: i32,
@@ -250,7 +250,7 @@ pub fn deblock_chroma_eq4(
 /// weak chroma filter on a single combined CbCr buffer (one plane, 8 lines).
 /// Reach and gating as [`deblock_chroma_lt4`].
 pub fn deblock_chroma_lt42(
-    cbcr: &mut PlaneCursorMut<'_>,
+    cbcr: &mut impl PlaneSamples,
     step_x: isize,
     step_y: isize,
     alpha: i32,
@@ -269,7 +269,7 @@ pub fn deblock_chroma_lt42(
 /// C++: `DeblockChromaEq42_c`, `codec/common/src/deblocking_common.cpp` — the
 /// strong chroma filter on a single combined CbCr buffer (one plane, 8 lines).
 pub fn deblock_chroma_eq42(
-    cbcr: &mut PlaneCursorMut<'_>,
+    cbcr: &mut impl PlaneSamples,
     step_x: isize,
     step_y: isize,
     alpha: i32,
