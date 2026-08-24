@@ -268,6 +268,18 @@ impl<'a> RecCursor<'a> {
     }
 }
 
+impl crate::safe::plane::RefSamples for RecCursor<'_> {
+    #[inline]
+    fn at(&self, dx: isize, dy: isize) -> u8 {
+        RecCursor::at(self, dx, dy)
+    }
+
+    #[inline]
+    fn row_n<const N: usize>(&self, dy: isize, dx0: isize) -> [u8; N] {
+        RecCursor::row::<N>(self, dy, dx0)
+    }
+}
+
 /// The reconstruction plane's flavour of `common::copy_mb`'s `copy_WxH` family:
 /// a `W`x`h` block copied out of a contiguous prediction buffer into the shared
 /// view.

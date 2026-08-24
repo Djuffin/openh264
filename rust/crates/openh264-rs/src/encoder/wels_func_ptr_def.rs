@@ -15,6 +15,7 @@
 #![deny(unsafe_code)]
 
 
+use crate::encoder::rec_view::RecCursor;
 use crate::common::mc::SMcFunc;
 use crate::encoder::deblocking::{DeblockingFunc, PSetNoneZeroCountZeroFunc};
 use crate::encoder::encoder_context::{
@@ -46,10 +47,27 @@ use crate::encoder::wels_preprocess::SVAAFrameInfo;
 // Function pointer typedefs that had no Rust counterpart
 // ============================================================================
 
-/// `wels_func_ptr_def.h:178`. Note this is **not** the decoder's `PGetIntraPredFunc`,
-/// which takes two arguments; the encoder's takes a separate reference pointer.
-pub type PGetIntraPredFunc =
-    unsafe extern "C" fn(pPrediction: *mut u8, pRef: *mut u8, kiStride: i32);
+/// `wels_func_ptr_def.h:178`, **safe and split three ways since T9.C2**.
+///
+/// The C++ has one `PGetIntraPredFunc` serving all three tables, and the port had
+/// one `unsafe extern "C" fn(*mut u8, *mut u8, i32)` doing the same. Both are the
+/// F113/S52 shape: *one type serving several lengths*. The destination is a packed
+/// prediction block whose size is fixed per table — 16, 64 or 256 bytes — so the
+/// safe form names the size, and a chroma predictor can no longer be installed
+/// into the luma table by a slip of the index.
+///
+/// The reference is the **reconstruction picture**, read and never written, so it
+/// arrives as the seam's read cursor. Note what the type change buys beyond
+/// soundness: `reference`/`top_row` used to turn `(pRef, kiStride)` into a slice
+/// under a hand-written `# Safety` contract naming each kernel's reach; a
+/// `RecCursor` bounds-checks every access against the whole plane allocation, so
+/// the reach constants below are now a *correctness* statement about which
+/// neighbours must be available, not a memory-safety one.
+pub type PGetLumaI4x4PredFunc = fn(pred: &mut [u8; 16], rec: &RecCursor<'_>);
+/// [`PGetLumaI4x4PredFunc`] for the 8x8 chroma prediction block.
+pub type PGetChromaPredFunc = fn(pred: &mut [u8; 64], rec: &RecCursor<'_>);
+/// [`PGetLumaI4x4PredFunc`] for the 16x16 luma prediction block.
+pub type PGetLumaI16x16PredFunc = fn(pred: &mut [u8; 256], rec: &RecCursor<'_>);
 
 /// `wels_func_ptr_def.h:106`
 pub type PIntraFineMdFunc = unsafe extern "C" fn(
@@ -339,9 +357,9 @@ pub struct SWelsFuncPtrList {
 
     pub sMcFuncs: SMcFunc,
     pub sSampleDealingFuncs: SSampleDealingFunc,
-    pub pfGetLumaI16x16Pred: [Option<PGetIntraPredFunc>; I16_PRED_DC_A],
-    pub pfGetLumaI4x4Pred: [Option<PGetIntraPredFunc>; I4_PRED_A],
-    pub pfGetChromaPred: [Option<PGetIntraPredFunc>; C_PRED_A],
+    pub pfGetLumaI16x16Pred: [Option<PGetLumaI16x16PredFunc>; I16_PRED_DC_A],
+    pub pfGetLumaI4x4Pred: [Option<PGetLumaI4x4PredFunc>; I4_PRED_A],
+    pub pfGetChromaPred: [Option<PGetChromaPredFunc>; C_PRED_A],
 
     /// 1: for 16x16 square; 0: for 8x8 square
     pub pfSampleSadHor8: [Option<PSampleSadHor8Func>; 2],

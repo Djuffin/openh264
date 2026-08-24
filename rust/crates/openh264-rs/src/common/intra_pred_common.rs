@@ -41,12 +41,15 @@
     unused_variables,
     unused_unsafe
 )]
+// **T9.C2**: the file's last raw pointer left with the two `(pPred, pRef, kiStride)`
+// shims, so the port's safety floor applies here now.
+#![deny(unsafe_code)]
 
-/// Function pointer typedef for 16x16 intra prediction routines.
-pub type PGetIntraPredFunc = unsafe extern "C" fn(pPred: *mut u8, pRef: *mut u8, kiStride: i32);
-
-/// Alias for 16x16 intra prediction function pointer.
-pub type PWelsI16x16LumaPredFunc = unsafe extern "C" fn(pPred: *mut u8, pRef: *mut u8, kiStride: i32);
+// `PGetIntraPredFunc` and `PWelsI16x16LumaPredFunc` stood here — two names for one
+// `unsafe extern "C" fn(*mut u8, *mut u8, i32)`, deleted with the shims they
+// described (T9.C2). Nothing outside this file ever named either: the encoder has
+// its own three types, now safe and split by prediction size, and the decoder's
+// `PGetIntraPredFunc` is a different signature entirely (`decoder_context.rs:244`).
 
 // ============================================================================
 // Safe kernels
@@ -66,7 +69,7 @@ pub type PWelsI16x16LumaPredFunc = unsafe extern "C" fn(pPred: *mut u8, pRef: *m
 // other's reach — the union-span mistake T4 recorded (`safety_refactor_log.md`,
 // "per-kernel reach, not the union").
 
-use crate::safe::plane::PlaneCursor;
+use crate::safe::plane::{PlaneCursor, RefSamples};
 
 /// C++: `WelsI16x16LumaPredV_c`, `codec/common/src/intra_pred_common.cpp`.
 ///
@@ -92,7 +95,7 @@ pub fn i16x16_luma_pred_v(pred: &mut [u8; 256], top: &[u8; 16]) {
 /// value` broadcast — that trick was never a memory operation, only a way to spell a
 /// wide store (`prompts/phase2.md` §3.3, taxonomy T7).
 #[inline(always)]
-pub fn i16x16_luma_pred_h(pred: &mut [u8; 256], reference: &PlaneCursor<'_>) {
+pub fn i16x16_luma_pred_h(pred: &mut [u8; 256], reference: &impl RefSamples) {
     for y in 0..16 {
         let v = reference.at(-1, y as isize);
         let row: &mut [u8; 16] = (&mut pred[y * 16..][..16]).try_into().unwrap();
@@ -104,50 +107,19 @@ pub fn i16x16_luma_pred_h(pred: &mut [u8; 256], reference: &PlaneCursor<'_>) {
 // C Reference Implementations
 // ============================================================================
 
-/// C++: `WelsI16x16LumaPredV_c`, `codec/common/src/intra_pred_common.cpp` — mode 0,
-/// vertical.
-///
-/// # Safety
-/// * `pPred` points at a writable **packed** 16x16 block: 256 bytes at an implicit
-///   stride of 16. `kiStride` describes `pRef` and nothing else.
-/// * `pRef` points at sample `(0, 0)` of that macroblock in a surface whose rows are
-///   `kiStride` bytes apart, with one valid row above it. Reads span
-///   `[-kiStride, -kiStride + 16)` — the sixteen samples above the block, and nothing
-///   else. In particular this kernel never reads to the left.
-/// * The two regions must not overlap, and `kiStride` must be positive.
-#[inline]
-pub unsafe extern "C" fn WelsI16x16LumaPredV_c(pPred: *mut u8, pRef: *mut u8, kiStride: i32) {
-    // SHIM(phase2) -> i16x16_luma_pred_v
-    unsafe {
-        let top: &[u8; 16] = std::slice::from_raw_parts(pRef.offset(-(kiStride as isize)), 16)
-            .try_into()
-            .unwrap();
-        let pred: &mut [u8; 256] = std::slice::from_raw_parts_mut(pPred, 256).try_into().unwrap();
-        i16x16_luma_pred_v(pred, top);
-    }
-}
-
-/// C++: `WelsI16x16LumaPredH_c`, `codec/common/src/intra_pred_common.cpp` — mode 1,
-/// horizontal.
-///
-/// # Safety
-/// * `pPred` points at a writable **packed** 16x16 block, as above.
-/// * `pRef` points at sample `(0, 0)` of that macroblock, with one valid column to its
-///   left across all sixteen rows. Reads span **`[-1, 15 * kiStride)`** — one sample
-///   per row, at `x = -1`. In particular this kernel never reads the row above, which
-///   is why it and the vertical one take different reference shapes rather than a
-///   shared span that would have each claiming the other's reach.
-/// * The two regions must not overlap, and `kiStride` must be positive.
-#[inline]
-pub unsafe extern "C" fn WelsI16x16LumaPredH_c(pPred: *mut u8, pRef: *mut u8, kiStride: i32) {
-    // SHIM(phase2) -> i16x16_luma_pred_h
-    unsafe {
-        let stride = kiStride as usize;
-        let refs = std::slice::from_raw_parts(pRef.sub(1), 15 * stride + 1);
-        let pred: &mut [u8; 256] = std::slice::from_raw_parts_mut(pPred, 256).try_into().unwrap();
-        i16x16_luma_pred_h(pred, &PlaneCursor::new(refs, 1, stride));
-    }
-}
+// **The two `(pPred, pRef, kiStride)` shims stood here — deleted in T9.C2.**
+//
+// They were this file's only unsafe: `from_raw_parts` over a caller-promised
+// reach, once per prediction mode, under a hand-written `# Safety` contract. The
+// encoder's intra-prediction tables were their only callers, and those tables now
+// hold safe `fn(&mut [u8; N], &RecCursor<'_>)` — so the adapters moved to
+// `encoder/get_intra_predictor.rs`, beside the other twenty-six, where the
+// encoder-side `RecCursor` belongs. `common` gains no dependency on `encoder`,
+// and this file reaches `#![deny(unsafe_code)]`.
+//
+// The kernels themselves are unchanged and still live above: `i16x16_luma_pred_v`
+// takes the sixteen samples above the block by value, `i16x16_luma_pred_h` reads
+// its left column through `RefSamples`.
 
 // ============================================================================
 // Unit Tests
@@ -156,24 +128,22 @@ pub unsafe extern "C" fn WelsI16x16LumaPredH_c(pPred: *mut u8, pRef: *mut u8, ki
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::safe::plane::PaddedPlane;
     
     #[test]
     fn test_i16x16_luma_pred_v() {
-        let mut ref_buf = vec![0u8; 1024];
-        let stride = 32i32;
-        let mb_offset = stride as usize * 10 + 16;
-
-        // Populate top row reference samples (pRef - kiStride)
-        for i in 0..16 {
-            ref_buf[mb_offset - stride as usize + i] = (10 + i) as u8;
+        // Was driven through the raw shim; drives the kernel directly since T9.C2,
+        // over an ordinary `PaddedPlane` — which is what the `PlaneCursor` half of
+        // `RefSamples` is for, and what keeps these kernels testable without a
+        // reconstruction picture.
+        let mut plane = PaddedPlane::new(16, 16, 8, 32);
+        for i in 0..16isize {
+            plane.set(i, -1, (10 + i) as u8);
         }
 
         let mut pred_buf_c = [0u8; 256];
-
-        unsafe {
-            let p_ref = ref_buf.as_mut_ptr().add(mb_offset);
-            WelsI16x16LumaPredV_c(pred_buf_c.as_mut_ptr(), p_ref, stride);
-        }
+        let top: [u8; 16] = core::array::from_fn(|i| plane.at(i as isize, -1));
+        i16x16_luma_pred_v(&mut pred_buf_c, &top);
 
         for row in 0..16 {
             for col in 0..16 {
@@ -185,21 +155,13 @@ mod tests {
 
     #[test]
     fn test_i16x16_luma_pred_h() {
-        let mut ref_buf = vec![0u8; 1024];
-        let stride = 32i32;
-        let mb_offset = stride as usize * 10 + 16;
-
-        // Populate left column reference samples (pRef[y * stride - 1])
-        for y in 0..16 {
-            ref_buf[mb_offset + y * stride as usize - 1] = (50 + y) as u8;
+        let mut plane = PaddedPlane::new(16, 16, 8, 32);
+        for y in 0..16isize {
+            plane.set(-1, y, (50 + y) as u8);
         }
 
         let mut pred_buf_c = [0u8; 256];
-
-        unsafe {
-            let p_ref = ref_buf.as_mut_ptr().add(mb_offset);
-            WelsI16x16LumaPredH_c(pred_buf_c.as_mut_ptr(), p_ref, stride);
-        }
+        i16x16_luma_pred_h(&mut pred_buf_c, &plane.cursor(0, 0));
 
         for row in 0..16 {
             for col in 0..16 {

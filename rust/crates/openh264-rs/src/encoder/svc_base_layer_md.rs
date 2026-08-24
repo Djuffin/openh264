@@ -408,8 +408,12 @@ pub unsafe extern "C" fn WelsMdI4x4(
     // its stride. **T9.B30** reads the source through the layer at the carrier's
     // coordinates instead; `pDecMb` is the reconstruction plane and stays raw with
     // the intra predictors that read it (session C).
-    let pDecMb = (*pMbCache).SPicData.pCsMb[0];
-    let kiLineSizeDec = (*pCurDqLayer).iCsStride[0];
+    // **T9.C2**: `pDecMb` — the reconstruction luma plane's raw root for this
+    // macroblock — and `kiLineSizeDec`, the stride the predictors were handed, are
+    // both the seam's plane view now. The view carries the stride, and the
+    // per-block cursors below come from the macroblock origin by coordinate.
+    let view = layer_rec_view(pCurDqLayer)
+        .expect("the layer's reconstruction view is built for this frame");
 
     let lambda: [i32; 2] = [iLambda << 2, iLambda];
     let kpNeighborIntraToI4x4 = &g_kiNeighborIntraToI4x4[(*pMbCache).uiNeighborIntra as usize];
@@ -427,8 +431,13 @@ pub unsafe extern "C" fn WelsMdI4x4(
         let iCoordinateX = g_kiCoordinateIdx4x4X[i] as i32;
         let iCoordinateY = g_kiCoordinateIdx4x4Y[i] as i32;
 
-        let iIdxStrideDec = iCoordinateY * kiLineSizeDec + iCoordinateX;
-        let pCurDec = pDecMb.offset(iIdxStrideDec as isize);
+        // **T9.C2**: `pDecMb.offset(iCoordinateY * kiLineSizeDec + iCoordinateX)` was
+        // the reconstruction plane's raw cursor at this 4x4 block; the seam reaches
+        // the same sample by coordinate, from the macroblock origin the carrier
+        // already holds.
+        let pCurDec = view
+            .plane(0)
+            .cursor(kiMbOrgX + iCoordinateX as isize, kiMbOrgY + iCoordinateY as isize);
 
         //step 2: get predicted mode from neighbor
         let iPredMode = PredIntra4x4Mode(
@@ -448,11 +457,21 @@ pub unsafe extern "C" fn WelsMdI4x4(
             let iCurMode = kpAvailMode[j] as i32;
             debug_assert!((0..14).contains(&iCurMode));
 
-            let pDst = std::ptr::addr_of_mut!((*pMbCache).sMemPredBlk4)
-                .cast::<u8>()
-                .offset(((1 - iBestPredBufferNum) << 4) as isize);
-
-            (*pFunc).pfGetLumaI4x4Pred[iCurMode as usize].unwrap()(pDst, pCurDec, kiLineSizeDec);
+            // **T9.C2 — the intra-pred read path.** The predictor's *destination*
+            // was always the arena (`sMemPredBlk4`, packed 4x4 at stride 4) and its
+            // *reference* was always the reconstruction plane, read and never
+            // written. The slot is now safe over both: a `&mut [u8; 16]` into the
+            // arena half, and the seam's read cursor at this 4x4 block's origin.
+            //
+            // Unlike the idct and copy families the slot is **flipped, not
+            // bypassed** — F118's exemption is for fixed-size sites, and this one
+            // indexes the table by a runtime mode, so the operand and the slot had
+            // to move together.
+            let kiDstOff = ((1 - iBestPredBufferNum) << 4) as usize;
+            let pDst: &mut [u8; 16] = (&mut (*pMbCache).sMemPredBlk4[kiDstOff..kiDstOff + 16])
+                .try_into()
+                .expect("a packed 4x4 prediction block is 16 bytes");
+            (*pFunc).pfGetLumaI4x4Pred[iCurMode as usize].unwrap()(pDst, &pCurDec);
             let iCurCost = {
                 let cPred = PlaneCursor::new(
                     &(*pMbCache).sMemPredBlk4[((1 - iBestPredBufferNum) << 4) as usize..][..16],
@@ -537,8 +556,12 @@ pub unsafe extern "C" fn WelsMdI4x4Fast(
     // its stride. **T9.B30** reads the source through the layer at the carrier's
     // coordinates instead; `pDecMb` is the reconstruction plane and stays raw with
     // the intra predictors that read it (session C).
-    let pDecMb = (*pMbCache).SPicData.pCsMb[0];
-    let kiLineSizeDec = (*pCurDqLayer).iCsStride[0];
+    // **T9.C2**: `pDecMb` — the reconstruction luma plane's raw root for this
+    // macroblock — and `kiLineSizeDec`, the stride the predictors were handed, are
+    // both the seam's plane view now. The view carries the stride, and the
+    // per-block cursors below come from the macroblock origin by coordinate.
+    let view = layer_rec_view(pCurDqLayer)
+        .expect("the layer's reconstruction view is built for this frame");
 
     let lambda: [i32; 2] = [iLambda << 2, iLambda];
     let kpNeighborIntraToI4x4 = &g_kiNeighborIntraToI4x4[(*pMbCache).uiNeighborIntra as usize];
@@ -556,8 +579,11 @@ pub unsafe extern "C" fn WelsMdI4x4Fast(
         let iCoordinateX = g_kiCoordinateIdx4x4X[i] as i32;
         let iCoordinateY = g_kiCoordinateIdx4x4Y[i] as i32;
 
-        let iIdxStrideDec = iCoordinateY * kiLineSizeDec + iCoordinateX;
-        let pCurDec = pDecMb.offset(iIdxStrideDec as isize);
+        // **T9.C2**, as `WelsMdI4x4` above: the block's reconstruction cursor by
+        // coordinate rather than by raw offset.
+        let pCurDec = view
+            .plane(0)
+            .cursor(kiMbOrgX + iCoordinateX as isize, kiMbOrgY + iCoordinateY as isize);
 
         //step 2: get predicted mode from neighbor
         let iPredMode = PredIntra4x4Mode(
@@ -583,9 +609,10 @@ pub unsafe extern "C" fn WelsMdI4x4Fast(
                 let m: i8 = $mode;
                 let off: usize = $dst_off;
                 (*pFunc).pfGetLumaI4x4Pred[m as usize].unwrap()(
-                    std::ptr::addr_of_mut!((*pMbCache).sMemPredBlk4).cast::<u8>().add(off),
-                    pCurDec,
-                    kiLineSizeDec,
+                    (&mut (*pMbCache).sMemPredBlk4[off..off + 16])
+                        .try_into()
+                        .expect("a packed 4x4 prediction block is 16 bytes"),
+                    &pCurDec,
                 );
                 pfMdCost4x4(
                     &PlaneCursor::new(&(*pMbCache).sMemPredBlk4[off..][..16], 0, 4),
@@ -744,15 +771,13 @@ pub unsafe extern "C" fn WelsMdIntraChroma(
     iLambda: i32,
 ) -> i32 {
     let mut iChmaIdx: usize = 0;
-    let pMemPredChroma = std::ptr::addr_of_mut!((*pMbCache).sMemPredMb)
-        .cast::<u8>()
-        .add(mem_pred_chroma_off((*pMbCache).uiMemPredLumaHalf));
-    let pPredIntraChma: [*mut u8; 2] = [pMemPredChroma, pMemPredChroma.add(128)];
-    let mut pDstChma = pPredIntraChma[0];
+    // **T9.C2**: `pPredIntraChma` / `pDstChma` were a two-pointer ping-pong over the
+    // chroma half's two 128-byte sides, carrying exactly the bit `iChmaIdx` already
+    // holds — the same shape `WelsMdI16x16`'s `pPredI16x16` had. With the
+    // destination an offset (`kiDstOff` below), the pointers carry nothing.
     // `pEncCb`/`pEncCr` stood here; T9.B30's cost sites read the source picture.
-    let pDecCb = (*pMbCache).SPicData.pCsMb[1];
-    let pDecCr = (*pMbCache).SPicData.pCsMb[2];
-    let kiLineSizeDec = (*pCurDqLayer).iCsStride[1];
+    let view = layer_rec_view(pCurDqLayer)
+        .expect("the layer's reconstruction view is built for this frame");
 
     let mut iBestCost = i32::MAX;
 
@@ -777,13 +802,29 @@ pub unsafe extern "C" fn WelsMdIntraChroma(
         // `pDstChma` is `sMemPredMb` at the chroma half's `iChmaIdx` 128-byte side;
         // as an offset it is that side's start, and the Cr block sits 64 beyond it.
         let kiDstOff = kiPredOff + 128 * iChmaIdx;
-        pfChromaPred(pDstChma, pDecCb, kiLineSizeDec); //Cb
+        // **T9.C2**: `pDecCb`/`pDecCr` were raw roots into the reconstruction chroma
+        // planes; they are the seam's two plane views at this macroblock's chroma
+        // origin, which the carrier already holds for the cost sites below. The
+        // destination stays the arena half it always was. Slot flipped rather than
+        // bypassed — the mode index is a runtime value (F118's exemption is for
+        // fixed-size sites only).
+        pfChromaPred(
+            (&mut (*pMbCache).sMemPredMb[kiDstOff..kiDstOff + 64])
+                .try_into()
+                .expect("a packed 8x8 chroma prediction block is 64 bytes"),
+            &view.plane(1).cursor(kiChrOrgX, kiChrOrgY),
+        ); //Cb
         let mut iCurCost = pfMdCost8x8(
             &PlaneCursor::new(&(*pMbCache).sMemPredMb[kiDstOff..][..64], 0, 8),
             &pEncPicture.plane(1).cursor(kiChrOrgX, kiChrOrgY),
         );
 
-        pfChromaPred(pDstChma.add(64), pDecCr, kiLineSizeDec); //Cr
+        pfChromaPred(
+            (&mut (*pMbCache).sMemPredMb[kiDstOff + 64..kiDstOff + 128])
+                .try_into()
+                .expect("a packed 8x8 chroma prediction block is 64 bytes"),
+            &view.plane(2).cursor(kiChrOrgX, kiChrOrgY),
+        ); //Cr
         iCurCost += pfMdCost8x8(
             &PlaneCursor::new(&(*pMbCache).sMemPredMb[kiDstOff + 64..][..64], 0, 8),
             &pEncPicture.plane(2).cursor(kiChrOrgX, kiChrOrgY),
@@ -792,7 +833,6 @@ pub unsafe extern "C" fn WelsMdIntraChroma(
             iBestMode = iCurMode;
             iBestCost = iCurCost;
             iChmaIdx ^= 0x01;
-            pDstChma = pPredIntraChma[iChmaIdx];
         }
     }
 
