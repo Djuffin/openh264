@@ -2173,6 +2173,20 @@ pub unsafe fn WelsInitCurrentLayer(pCtx: *mut sWelsEncCtx, _kiWidth: i32, _kiHei
     let pEncPic = (*pSrcPool).get_mut(idEnc).planes();
     let pDecPic = (*pRefList).pic_mut(idDec).planes();
 
+    // **The reconstruction seam is built here, and here is not an accident**
+    // (T9.C2, D-mt-3 option A). This is the last point in the frame at which the
+    // reconstruction picture is borrowed exclusively on the calling thread —
+    // everything after it is the macroblock loop, which forks. The view captures
+    // the same three plane roots `pCsData` is about to be stamped with, plus the
+    // four per-macroblock side arrays no plane cursor can carry, and from here on
+    // *nothing* in the frame may take `&mut` on this picture again.
+    //
+    // Rebuilt every frame, unconditionally, because the pool may have handed
+    // `idDec` a different slot: a view is only ever valid for the frame that
+    // built it.
+    (*pCurDq).pRecView =
+        Some(crate::encoder::rec_view::RecPicView::build((*pRefList).pic_mut(idDec)));
+
     (*pCurDq).pEncData[0] = pEncPic.pData[0];
     (*pCurDq).pEncData[1] = pEncPic.pData[1];
     (*pCurDq).pEncData[2] = pEncPic.pData[2];

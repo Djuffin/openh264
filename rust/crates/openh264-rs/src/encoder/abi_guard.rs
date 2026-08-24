@@ -342,7 +342,11 @@ assert_size!(SSliceBufferInfo, 32);
 // **T9.B21**: +16, `pEncPic` (`Option<SrcPicId>`) and `pSrcPool` — the source
 // picture said as a handle plus the pool that opens it, which is `pRefPic`/`pRefList`
 // one picture over. **840 debug / 768 release**, measured.
-assert_size_by_profile!(SDqLayer, debug 840, release 768);
+// **T9.C2**: +168, `pRecView` (`Option<RecPicView>`) — the reconstruction seam:
+// three shared planes at 32 bytes each and four shared per-macroblock arrays at 16,
+// plus the `Option` discriminant, which costs a word because a captured base has no
+// niche. **1008 debug / 936 release**, measured.
+assert_size_by_profile!(SDqLayer, debug 1008, release 936);
 
 // codec/encoder/core/inc/wels_func_ptr_def.h
 // 1280 before Phase 4a; -8 for `SSampleDealingFunc`'s shrink above; -24 at T4b.1,
