@@ -446,41 +446,23 @@ pub unsafe extern "C" fn WelsIDctRecI16x16Dc_c(
     );
 }
 
-/// `decode_mb_aux.cpp:209`. Applies `pfIDctFourT4` to the four 8x8 quadrants of a
-/// macroblock.
-///
-/// # Safety
-/// `pDst`/`pPred` must address 16 rows at their strides; `pDct` 256 readable `i16`.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn WelsIDctT4RecOnMb(
-    pDst: *mut u8,
-    iDstStride: i32,
-    pPred: *mut u8,
-    iPredStride: i32,
-    pDct: *mut i16,
-    pfIDctFourT4: PIDctFunc,
-) {
-    let iDstStridex8 = (iDstStride << 3) as isize;
-    let iPredStridex8 = (iPredStride << 3) as isize;
-
-    pfIDctFourT4(pDst, iDstStride, pPred, iPredStride, pDct);
-    pfIDctFourT4(pDst.add(8), iDstStride, pPred.add(8), iPredStride, pDct.add(64));
-    pfIDctFourT4(
-        pDst.offset(iDstStridex8),
-        iDstStride,
-        pPred.offset(iPredStridex8),
-        iPredStride,
-        pDct.add(128),
-    );
-    pfIDctFourT4(
-        pDst.offset(iDstStridex8).add(8),
-        iDstStride,
-        pPred.offset(iPredStridex8).add(8),
-        iPredStride,
-        pDct.add(192),
-    );
-}
+// **`WelsIDctT4RecOnMb` stood here — deleted in T9.C2g.**
+//
+// `decode_mb_aux.cpp:209`, the four-quadrant walk over a macroblock's luma. It
+// had exactly one caller, `OutputPMbWithoutConstructCsRsNoCopy`, and T9.C2d gave
+// that caller `idct_t4_rec_on_mb_in_place_view` — so this function was orphaned
+// by this session's own commit, which is why deleting it is cleanup rather than
+// a ruling (contrast F135, where the dead twin predated the session).
+//
+// Its replacement keeps the provenance and drops the parameter that only existed
+// to spell an alias: the raw form took `pDst` *and* `pPred` with two strides, and
+// its one caller passed the same pointer and the same stride to both (F59).
+//
+// **Consequence, recorded in F138 and left for the steward.** This was the last
+// raw reader of `pfIDctFourT4`, so all three `pfIDct*` slots are now installed by
+// `WelsInitReconstructionFuncs`, asserted-installed by two tests, and called by
+// nothing — `pGomCost`'s shape (F133) in a dispatch table. Left as measured: the
+// F133 ruling was to leave write-only storage alone.
 
 /// `decode_mb_aux.cpp:251`. Installs the scalar dequantisation and IDCT tables.
 ///
