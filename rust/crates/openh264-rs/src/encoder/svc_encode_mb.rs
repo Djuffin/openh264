@@ -57,10 +57,12 @@ pub use crate::encoder::encoder_context::SStrideTables;
 pub use crate::encoder::svc_encode_slice::SLayerInfo;
 use crate::encoder::svc_encode_slice::layer_pps;
 use crate::encoder::svc_encode_slice::current_layer;
-use crate::encoder::encode_mb_aux::{blk4x4, blk4x4_mut, blk_four4x4_mut, hadamard2x2_span,
+use crate::encoder::encode_mb_aux::{blk4x4, blk4x4_mut, blk_four4x4, blk_four4x4_mut, hadamard2x2_span,
     hadamard2x2_span_mut, hadamard_dc_span};
 pub use crate::encoder::md::SMbCache;
 use crate::encoder::md::{best_pred_i4x4_blk4_off, mem_pred_luma_off};
+use crate::encoder::decode_mb_aux::{idct_four_t4_rec_to_view, idct_rec_i16x16_dc_to_view, idct_t4_rec_to_view};
+use crate::encoder::svc_encode_slice::layer_rec_view;
 pub use crate::encoder::md::SMB;
 pub use crate::encoder::svc_encode_slice::SDqLayer;
 pub use crate::encoder::wels_func_ptr_def::SWelsFuncPtrList;
@@ -592,29 +594,52 @@ pub unsafe fn WelsEncRecI16x16Y(
             (*pMbCache).sCoeffLevel[k << 4] = aDctT4Dc[src];
         }
 
-        if let Some(func) = (*pFuncList).pfIDctFourT4 {
-            let pRes = std::ptr::addr_of_mut!((*pMbCache).sCoeffLevel).cast::<i16>();
-            func(pPred, kiRecStride, pBestPred, 16, pRes);
-            func(pPred.add(8), kiRecStride, pBestPred.add(8), 16, pRes.add(64));
-            func(
-                pPred.offset(kiRecStride as isize * 8),
-                kiRecStride,
-                pBestPred.add(128),
+        // **T9.C2 — the seam's idct consumers.** Four quadrant calls onto
+        // `SPicData.pCsMb[0]`, a raw cursor into the reconstruction plane, become
+        // four onto the seam's cursor at this macroblock's own origin. The
+        // prediction operand is unchanged in every respect but its type: it was
+        // always `sMemPredMb`'s luma half at stride 16, an owned arena array, so
+        // it is a slice and a stride rather than a second raw.
+        //
+        // The four `pBestPred` offsets `0 / 8 / 128 / 136` at stride 16 are the
+        // quadrant grid `(0,0) (8,0) (0,8) (8,8)`, which is also what the four
+        // `pPred` offsets spell against `kiRecStride`; writing it once as
+        // `QUADS` makes the two agree by construction instead of by inspection.
+        //
+        // **The slot is bypassed, not flipped** (F118): `pfIDctFourT4` is
+        // installed unconditionally by `WelsInitEncodingFuncs` and constant after
+        // init, so a fixed-size site may call the kernel directly and
+        // byte-identically. `kiRecStride` leaves the call because the view
+        // carries it.
+        const QUADS: [(isize, isize); 4] = [(0, 0), (8, 0), (0, 8), (8, 8)];
+        let view = layer_rec_view(pCurDqLayer)
+            .expect("the layer's reconstruction view is built for this frame");
+        let (lx, ly) = (*pMbCache).SPicData.luma_origin();
+        let dst = view.plane(0).cursor(lx, ly);
+        let kiPredOff = mem_pred_luma_off((*pMbCache).uiMemPredLumaHalf);
+        for (k, &(dx, dy)) in QUADS.iter().enumerate() {
+            idct_four_t4_rec_to_view(
+                &dst.advance(dx, dy),
+                &(*pMbCache).sMemPredMb[kiPredOff + dy as usize * 16 + dx as usize..],
                 16,
-                pRes.add(128),
-            );
-            func(
-                pPred.offset(kiRecStride as isize * 8 + 8),
-                kiRecStride,
-                pBestPred.add(136),
-                16,
-                pRes.add(192),
+                blk_four4x4(&(*pMbCache).sCoeffLevel, k << 6),
             );
         }
     } else if uiCountI16x16Dc > 0 {
-        if let Some(func) = (*pFuncList).pfIDctI16x16Dc {
-            func(pPred, kiRecStride, pBestPred, 16, aDctT4Dc.as_mut_ptr());
-        }
+        // **F137**: this site is the one the plane census never listed, because
+        // the census knew neither the `pfIDctI16x16Dc` slot nor its
+        // `WelsIDctRecI16x16Dc_c` kernel. It writes the reconstruction plane from
+        // the same `pPred` / `pBestPred` pair as the four calls above.
+        let view = layer_rec_view(pCurDqLayer)
+            .expect("the layer's reconstruction view is built for this frame");
+        let (lx, ly) = (*pMbCache).SPicData.luma_origin();
+        let kiPredOff = mem_pred_luma_off((*pMbCache).uiMemPredLumaHalf);
+        idct_rec_i16x16_dc_to_view(
+            &view.plane(0).cursor(lx, ly),
+            &(*pMbCache).sMemPredMb[kiPredOff..],
+            16,
+            &aDctT4Dc,
+        );
     } else if let Some(func) = (*pFuncList).pfCopy16x16Aligned {
         func(pPred, kiRecStride, pBestPred, 16);
     }
@@ -702,9 +727,24 @@ pub unsafe fn WelsEncRecI4x4Y(
                 &g_kuiDequantCoeff[uiQp as usize],
             );
         }
-        if let Some(func) = (*pFuncList).pfIDctT4 {
-            func(pPredI4x4, iRecStride, pBestPred, 4, std::ptr::addr_of_mut!((*pMbCache).sCoeffLevel).cast::<i16>());
-        }
+        // **T9.C2.** `pPredI4x4` is `pPred.offset(dec_block_offset)`, and
+        // `dec_block_offset` is a flat byte offset into a plane of `iRecStride`
+        // — so `(off % stride, off / stride)` is the same address the raw form
+        // reached, exactly. The 4x4 blocks sit at `dx, dy` in `{0,4,8,12}` and
+        // the stride is never below 16, so neither term can wrap into the other.
+        // Prediction is `sMemPredBlk4` at stride 4 (not 16 — this is the 4x4
+        // arena, and its rows are four bytes).
+        let view = layer_rec_view(pCurDqLayer)
+            .expect("the layer's reconstruction view is built for this frame");
+        let (lx, ly) = (*pMbCache).SPicData.luma_origin();
+        let (dx, dy) = (dec_block_offset % iRecStride as isize, dec_block_offset / iRecStride as isize);
+        let kiPredOff = best_pred_i4x4_blk4_off((*pMbCache).uiBestPredI4x4Blk4Half);
+        idct_t4_rec_to_view(
+            &view.plane(0).cursor(lx + dx, ly + dy),
+            &(*pMbCache).sMemPredBlk4[kiPredOff..],
+            4,
+            blk4x4(&(*pMbCache).sCoeffLevel, 0),
+        );
     } else if let Some(func) = (*pFuncList).pfCopy4x4 {
         func(pPredI4x4, iRecStride, pBestPred, 4);
     }
