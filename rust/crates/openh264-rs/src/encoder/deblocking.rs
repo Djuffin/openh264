@@ -185,6 +185,7 @@ pub static g_kuiTableBIdx: [[u8; 8]; 2] = [
 /// 4-byte motion vector unit $(MV_x, MV_y)$ in quarter-pel precision.
 pub use crate::encoder::svc_encode_slice::SMVUnitXY;
 use crate::encoder::rec_view::{RecCursor, RecPicView};
+use std::sync::atomic::{AtomicU16, Ordering};
 use crate::common::deblocking_common::{
     deblock_chroma_eq4, deblock_chroma_lt4, deblock_luma_eq4, deblock_luma_lt4,
 };
@@ -823,6 +824,7 @@ fn FilteringEdgeChromaIntraV(
 #[allow(unsafe_code)]
 pub unsafe fn DeblockingInterMb(
     view: &RecPicView,
+    map: &[AtomicU16],
     pCurMb: *mut SMB,
     pFilter: *mut SDeblockingFilter,
     uiBS: &[[[u8; 4]; 4]; 2],
@@ -987,6 +989,7 @@ pub unsafe fn DeblockingInterMb(
 #[allow(unsafe_code)]
 pub unsafe fn FilteringEdgeLumaHV(
     view: &RecPicView,
+    map: &[AtomicU16],
     pCurMb: *mut SMB,
     pFilter: *mut SDeblockingFilter,
 ) {
@@ -1060,6 +1063,7 @@ pub unsafe fn FilteringEdgeLumaHV(
 #[allow(unsafe_code)]
 pub unsafe fn FilteringEdgeChromaHV(
     view: &RecPicView,
+    map: &[AtomicU16],
     pCurMb: *mut SMB,
     pFilter: *mut SDeblockingFilter,
 ) {
@@ -1146,11 +1150,12 @@ pub unsafe fn FilteringEdgeChromaHV(
 #[allow(unsafe_code)]
 pub unsafe fn DeblockingIntraMb(
     view: &RecPicView,
+    map: &[AtomicU16],
     pCurMb: *mut SMB,
     pFilter: *mut SDeblockingFilter,
 ) {
-    FilteringEdgeLumaHV(view, pCurMb, pFilter);
-    FilteringEdgeChromaHV(view, pCurMb, pFilter);
+    FilteringEdgeLumaHV(view, map, pCurMb, pFilter);
+    FilteringEdgeChromaHV(view, map, pCurMb, pFilter);
 }
 
 // unsafe-cat: cursor
@@ -1158,6 +1163,7 @@ pub unsafe fn DeblockingIntraMb(
 pub unsafe fn DeblockingMbAvcbase(
     pFunc: *mut SWelsFuncPtrList,
     view: &RecPicView,
+    map: &[AtomicU16],
     pCurMb: *mut SMB,
     pFilter: *mut SDeblockingFilter,
 ) {
@@ -1181,6 +1187,33 @@ pub unsafe fn DeblockingMbAvcbase(
         iMbY > 0 && ((*pCurMb).uiSliceIdc == (*pCurMb.offset(-iMbStride)).uiSliceIdc),
     ];
 
+    // T9.E3 scaffolding (round 5's equality proof) — deleted with the guard
+    // flip. Every macroblock either walker deblocks flows through this
+    // function, and nothing writes any `uiSliceIdc` between here and the same
+    // guard pairs in DeblockingInterMb / FilteringEdge*HV, so this one site
+    // proves record == map for all eight neighbour reads of the pass.
+    // Asserted only on the post-join frame walk (uiFilterIdc == 0), where
+    // every record is final and the read is single-threaded by construction;
+    // the in-fork half of the proof is the write-site asserts plus the mod-N
+    // argument in the commit message.
+    if (*pFilter).uiFilterIdc == 0 {
+        let kiMbXY = (*pCurMb).iMbXY;
+        if iMbX > 0 {
+            debug_assert_eq!(
+                (*pCurMb.offset(-1)).uiSliceIdc,
+                map[(kiMbXY - 1) as usize].load(Ordering::Relaxed),
+                "left neighbour record disagrees with pOverallMbMap at mb {kiMbXY}"
+            );
+        }
+        if iMbY > 0 {
+            debug_assert_eq!(
+                (*pCurMb.offset(-iMbStride)).uiSliceIdc,
+                map[(kiMbXY - iMbStride as i32) as usize].load(Ordering::Relaxed),
+                "top neighbour record disagrees with pOverallMbMap at mb {kiMbXY}"
+            );
+        }
+    }
+
     let iLeftFlag = bLeftBsValid[(*pFilter).uiFilterIdc as usize] as i32;
     let iTopFlag = bTopBsValid[(*pFilter).uiFilterIdc as usize] as i32;
 
@@ -1188,7 +1221,7 @@ pub unsafe fn DeblockingMbAvcbase(
 
     match uiCurMbType {
         MB_TYPE_INTRA4x4 | MB_TYPE_INTRA16x16 | MB_TYPE_INTRA_PCM => {
-            DeblockingIntraMb(view, pCurMb, pFilter);
+            DeblockingIntraMb(view, map, pCurMb, pFilter);
         }
         _ => {
             if let Some(bs_calc) = (*pfDeblocking).pfDeblockingBSCalc {
@@ -1202,7 +1235,7 @@ pub unsafe fn DeblockingMbAvcbase(
                     iTopFlag,
                 );
             }
-            DeblockingInterMb(view, pCurMb, pFilter, &uiBS);
+            DeblockingInterMb(view, map, pCurMb, pFilter, &uiBS);
         }
     }
 }
@@ -1267,9 +1300,15 @@ pub unsafe fn DeblockingFilterFrameAvcbase(pCurDq: *mut SDqLayer, pFunc: *mut SW
     pFilter.iSliceBetaOffset = sSliceHeaderExt.sSliceHeader.iSliceBetaOffset;
     pFilter.iMbStride = kiMbWidth as i16;
 
+    // Round 5 (F132): the guards' neighbour reads answer "is this edge inside
+    // my slice", and the slice map already holds that answer per macroblock.
+    // A shared borrow of the field alone — atomics are read through `&`, and
+    // the only in-fork map writer (`AddSliceBoundary`) stores element-wise.
+    let map: &[AtomicU16] = &(*pCurDq).sSliceEncCtx.pOverallMbMap;
+
     for _ in 0..kiMbHeight {
         for _ in 0..kiMbWidth {
-            DeblockingMbAvcbase(pFunc, view, pCurrentMbBlock, &mut pFilter);
+            DeblockingMbAvcbase(pFunc, view, map, pCurrentMbBlock, &mut pFilter);
             pCurrentMbBlock = pCurrentMbBlock.add(1);
         }
     }
@@ -1340,13 +1379,18 @@ pub unsafe extern "C" fn DeblockingFilterSliceAvcbase(
     pFilter.iSliceBetaOffset = sSliceHeaderExt.sSliceHeader.iSliceBetaOffset;
     pFilter.iMbStride = kiMbWidth as i16;
 
+    // Round 5 (F132): see DeblockingFilterFrameAvcbase — this walker is the
+    // one that runs *inside* the fork (uiFilterIdc == 1 under MT), so the map
+    // is exactly what its guards must read instead of the neighbour records.
+    let map: &[AtomicU16] = &(*pCurDq).sSliceEncCtx.pOverallMbMap;
+
     let mut iNextMbIdx = sSliceHeaderExt.sSliceHeader.iFirstMbInSlice;
 
     loop {
         let iCurMbIdx = iNextMbIdx;
         let pCurrentMbBlock = pMbList.add(iCurMbIdx as usize);
 
-        DeblockingMbAvcbase(pFunc, view, pCurrentMbBlock, &mut pFilter);
+        DeblockingMbAvcbase(pFunc, view, map, pCurrentMbBlock, &mut pFilter);
 
         iNumMbFiltered += 1;
         iNextMbIdx = WelsGetNextMbOfSlice(pCurDq, iCurMbIdx);
