@@ -48,6 +48,7 @@
 
 #![deny(unsafe_code)]
 
+use std::sync::atomic::{AtomicU16, Ordering};
 use crate::encoder::picture::{PicRef, RecPicId, SPicture, SRefPicView, SrcPicId};
 use std::ffi::c_char;
 use crate::{
@@ -1385,10 +1386,10 @@ pub unsafe fn WelsMbToSliceIdc(pCurDq: *mut SDqLayer, kiMbXY: i32) -> u16 {
     // `&`, T9.C5 — as `WelsGetNextMbOfSlice`: nothing here writes, and this runs
     // per macroblock inside the fork.
     let pSliceCtx = &(*pCurDq).sSliceEncCtx;
-    let map: &[u16] = &(*pSliceCtx).pOverallMbMap;
+    let map: &[AtomicU16] = &(*pSliceCtx).pOverallMbMap;
     if kiMbXY >= 0 && kiMbXY < (*pSliceCtx).iMbNumInFrame {
         match map.get(kiMbXY as usize) {
-            Some(&v) => v,
+            Some(c) => c.load(Ordering::Relaxed),
             None => u16::MAX,
         }
     } else {
@@ -1993,9 +1994,15 @@ pub unsafe fn WelsGetNextMbOfSlice(pCurDq: *mut SDqLayer, kiMbXY: i32) -> i32 {
         let iNextMbIdx = kiMbXY + 1;
         if iNextMbIdx < pSliceSeg.iMbNumInFrame
             && {
-                let map: &[u16] = &pSliceSeg.pOverallMbMap;
-                map.get(iNextMbIdx as usize).is_some()
-                    && map.get(iNextMbIdx as usize) == map.get(kiMbXY as usize)
+                let map: &[AtomicU16] = &pSliceSeg.pOverallMbMap;
+                // Was `Option<&u16>` equality, which is false unless *both* are
+                // `Some`; the pair match keeps that exactly.
+                match (map.get(iNextMbIdx as usize), map.get(kiMbXY as usize)) {
+                    (Some(a), Some(b)) => {
+                        a.load(Ordering::Relaxed) == b.load(Ordering::Relaxed)
+                    }
+                    _ => false,
+                }
             }
         {
             iNextMbIdx
@@ -3149,8 +3156,8 @@ pub unsafe fn AddSliceBoundary(
     let iCodedSliceNum = (*pCurLayer).sSliceBufferInfo[buf_idx].iCodedSliceNum;
     let iCurMbIdx = kiCurMbIdx;
     let iCurSliceIdc = {
-        let map: &[u16] = &(*pSliceCtx).pOverallMbMap;
-        map[iCurMbIdx as usize]
+        let map: &[AtomicU16] = &(*pSliceCtx).pOverallMbMap;
+        map[iCurMbIdx as usize].load(Ordering::Relaxed)
     };
     let kiSliceIdxStep = (*pEncCtx).iActiveThreadsNum;
     let iNextSliceIdc = iCurSliceIdc + kiSliceIdxStep as u16;
@@ -3172,7 +3179,7 @@ pub unsafe fn AddSliceBoundary(
         // open-coded `for i in 0..count as usize` here wrapped to ~2^64 iterations
         // when the boundary landed past the end of the partition.
         {
-            let map: &mut Vec<u16> = &mut (*pSliceCtx).pOverallMbMap;
+            let map: &[AtomicU16] = &(*pSliceCtx).pOverallMbMap;
             crate::encoder::slice_multi_threading::fill_mb_map(
                 map,
                 iFirstMbIdxOfNextSlice,
@@ -3204,8 +3211,9 @@ pub unsafe fn DynSlcJudgeSliceBoundaryStepBack(
 
     let kbCurMbNotFirstMbOfCurSlice = (iCurMbIdx > 0)
         && {
-            let map: &[u16] = &(*pSliceCtx).pOverallMbMap;
-            map[iCurMbIdx as usize] == map[(iCurMbIdx - 1) as usize]
+            let map: &[AtomicU16] = &(*pSliceCtx).pOverallMbMap;
+            map[iCurMbIdx as usize].load(Ordering::Relaxed)
+                == map[(iCurMbIdx - 1) as usize].load(Ordering::Relaxed)
         };
     let kbCurMbNotLastMbOfCurPartition = iCurMbIdx < kiEndMbIdxOfPartition;
 
@@ -3255,7 +3263,7 @@ pub unsafe fn DynSlcJudgeSliceBoundaryStepBack(
         };
         crate::encoder::slice_multi_threading::with_wels_mutex(pSmtMutex, || {
             AddSliceBoundary(pEncCtx, pCurSlice, pSliceCtx, iCurMbIdx, iCurMbIdx, kiEndMbIdxOfPartition);
-            (*pSliceCtx).iSliceNumInFrame += 1;
+            (*pSliceCtx).iSliceNumInFrame.fetch_add(1, Ordering::Relaxed);
         });
         return true;
     }
@@ -3914,11 +3922,12 @@ pub unsafe fn ReOrderSliceInLayer(pCtx: *mut sWelsEncCtx, kuiSliceMode: SliceMod
         if kuiSliceMode == SliceMode::SM_SIZELIMITED_SLICE {
             iEncodeSliceNum += (*pCurLayer).NumSliceCodedOfPartition[iPartitionIdx as usize];
         } else {
-            iEncodeSliceNum = (*pCurLayer).sSliceEncCtx.iSliceNumInFrame;
+            iEncodeSliceNum =
+                (*pCurLayer).sSliceEncCtx.iSliceNumInFrame.load(Ordering::Relaxed);
         }
     }
 
-    if iEncodeSliceNum != (*pCurLayer).sSliceEncCtx.iSliceNumInFrame {
+    if iEncodeSliceNum != (*pCurLayer).sSliceEncCtx.iSliceNumInFrame.load(Ordering::Relaxed) {
         return ENC_RETURN_UNEXPECTED;
     }
 
@@ -3983,7 +3992,7 @@ pub unsafe fn GetCurrentSliceNum(pCurDq: *const SDqLayer) -> i32 {
     if pCurDq.is_null() {
         -1
     } else {
-        (*pCurDq).sSliceEncCtx.iSliceNumInFrame
+        (*pCurDq).sSliceEncCtx.iSliceNumInFrame.load(Ordering::Relaxed)
     }
 }
 
@@ -4363,22 +4372,27 @@ mod tests {
     /// Miri's clock talking.
     ///
     /// **Ignored under Miri, and what remains is named rather than shrugged at**
-    /// (T9.C6). With the reconstruction seam in place, this probe's next verdict
-    /// is `SSliceCtx::pOverallMbMap`: `AddSliceBoundary` **rewrites** the slice
-    /// map from inside the fork (`:3175`), through a `&mut Vec<u16>` that claims
-    /// the whole array, while `WelsGetNextMbOfSlice` reads it — and at a
-    /// partition's last macroblock that read is of the *next* partition's first
-    /// entry, i.e. of another worker's. The value is stable either way (the two
-    /// partitions' slice indices never collide, so the comparison answers `-1`
-    /// whichever version is read), so this is a benign race in the C++ and a real
-    /// one in the memory model. The row-aligned probe above stops earlier and on
-    /// something else — deblocking's cross-slice read of a neighbour's
-    /// `SMB.uiSliceIdc` against the `&mut SMB` the worker encoding that neighbour
-    /// holds, which is F112/F114b's family and session E's 31 neighbour-bound
-    /// `*mut SMB` parameters.
+    /// (T9.C6, re-measured T9.C2). `SSliceCtx` was this probe's verdict for two
+    /// rounds and is no longer: T9.C2 made `pOverallMbMap` and `iSliceNumInFrame`
+    /// atomic (F136), closing F132's round 6. What the probe reports now is
+    /// **round 5 — the `&mut SMB` family**, measured at this commit:
     ///
-    /// Neither is the reconstruction write, and neither is in this session's lane;
-    /// the finding carries the full enumeration. The attribute retires with them,
+    /// ```text
+    /// Data race between (1) non-atomic read on thread `unnamed-3`
+    ///                and (2) retag write of type `encoder::md::SMB` on `unnamed-2`
+    ///   (2) svc_encode_slice.rs:1464  UpdateMbNeighbor(pCurDq, &mut *pMb, ..)
+    ///   (1) deblocking.rs:1190        (*pCurMb).uiSliceIdc
+    ///                                   == (*pCurMb.offset(-iMbStride)).uiSliceIdc
+    /// ```
+    ///
+    /// That is deblocking's cross-slice read of a neighbour's `SMB.uiSliceIdc`
+    /// against the `&mut SMB` the worker encoding that neighbour holds —
+    /// F112/F114b's family and session E's 31 neighbour-bound `*mut SMB`
+    /// parameters. **Both encoder fork/join probes now stop on the same thing**,
+    /// where before they stopped on two different families.
+    ///
+    /// It is not the reconstruction write and it is not in this session's lane;
+    /// the finding carries the full enumeration. The attribute retires with it,
     /// and this comment is the ratchet.
     #[test]
     #[cfg_attr(miri, ignore)]

@@ -483,7 +483,7 @@ pub unsafe fn GetCurrentSliceNum(pCurDq: *const SDqLayer) -> i32 {
     if pCurDq.is_null() {
         -1
     } else {
-        unsafe { (*pCurDq).sSliceEncCtx.iSliceNumInFrame }
+        unsafe { (*pCurDq).sSliceEncCtx.iSliceNumInFrame.load(std::sync::atomic::Ordering::Relaxed) }
     }
 }
 

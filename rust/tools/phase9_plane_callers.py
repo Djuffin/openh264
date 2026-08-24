@@ -110,6 +110,7 @@ SHIMS = {
     "WelsDctMb":                  ("dct", (0, 1, 3)),
     "WelsIDctT4Rec_c":            ("idct", (0, 2, 4)),
     "WelsIDctFourT4Rec_c":        ("idct", (0, 2, 4)),
+    "WelsIDctRecI16x16Dc_c":      ("idct", (0, 2, 4)),   # F137, added T9.C2
     "WelsIDctT4RecOnMb":          ("idct", (0, 2, 4)),
     "McLuma_c":                   ("mc", (0, 2)),
     "McChroma_c":                 ("mc", (0, 2)),
@@ -173,6 +174,13 @@ SLOTS = {
 
     "pfIDctT4":           ("idct", (0, 2, 4)),
     "pfIDctFourT4":       ("idct", (0, 2, 4)),
+    # **F137, added T9.C2.** Missing since the census was written, and it is a
+    # *blocked* site: `WelsEncRecI16x16Y`'s DC-only branch
+    # (`svc_encode_mb.rs:616`) writes the reconstruction plane through `pPred`
+    # from the `pBestPred` arena, the same operand pair as the four
+    # `pfIDctFourT4` calls twenty lines above it that the census always listed.
+    # Same `PIDctFunc` signature, so the same operand positions.
+    "pfIDctI16x16Dc":     ("idct", (0, 2, 4)),
     "pfDctT4":            ("dct", (0, 1, 3)),
     "pfDctFourT4":        ("dct", (0, 1, 3)),
 }
