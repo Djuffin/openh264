@@ -4130,6 +4130,16 @@ mod tests {
     use crate::api::codec_api::SliceModeEnum;
     use crate::api::codec_api::abi_test_driver::{EncoderProbeOptions, drive_encoder_over};
 
+    /// D-gate-6's scaling knob (the user, 2026-08-24: the session gate is capped at
+    /// 15 minutes, coverage yields). `small` under the Miri interpreter, `full` on
+    /// every native run — and under Miri again when the battery exports
+    /// `MIRI_FULL=1`, which is how the phase-exit tiers restore the full drive
+    /// (`gates.sh` sets it for `full`/`exit`; the env read needs
+    /// `-Zmiri-disable-isolation`, which the `--lib` step has always passed).
+    fn miri_scaled(full: i32, small: i32) -> i32 {
+        if cfg!(miri) && std::env::var_os("MIRI_FULL").is_none() { small } else { full }
+    }
+
     /// **The encoder's aliasing probe** — Phase 6 session A, and the first Miri
     /// coverage the encode path has ever had.
     ///
@@ -4228,7 +4238,7 @@ mod tests {
     /// `cargo test`.
     #[test]
     fn encode_loop_runs_over_a_macroblock_grid_under_the_aliasing_checker() {
-        let kiFrames = if cfg!(miri) { 2 } else { 3 };
+        let kiFrames = miri_scaled(3, 2) as usize;
         let (frames, dims) = drive_encoder_over(48, 32, kiFrames, EncoderProbeOptions::default());
 
         assert_eq!(
@@ -4513,7 +4523,7 @@ mod tests {
     /// inter frame over paths frame 1 already ran.
     #[test]
     fn encode_loop_runs_with_cavlc_and_fine_mode_decision_under_the_aliasing_checker() {
-        let kiFrames = if cfg!(miri) { 2 } else { 3 };
+        let kiFrames = miri_scaled(3, 2) as usize;
         let (frames, dims) = drive_encoder_over(
             48,
             32,
@@ -4678,25 +4688,35 @@ mod tests {
     /// second inter-coded, and an inter frame an order of magnitude above the
     /// all-skip floor.
     ///
-    /// **Two frames under Miri, three everywhere else (D-gate-5, the `scale()`
-    /// pattern) — and the geometry does not shrink, because the geometry is the
-    /// realloc.** 112x96 is the smallest grid whose IDR codes the 35 slices that
-    /// trigger `DynSliceRealloc` (measured above), so a smaller Miri geometry
-    /// would silently drop the realloc chain — the buffer moves this probe
-    /// exists for, and F60's shape — from the aliasing checker exactly while the
-    /// slice family converts under it. What Miri loses instead is frame 2, the
-    /// second inter frame: 3 slices against frame 1's 9, the same
-    /// `WelsMdInterMbLoopOverDynamicSlice` / stash-rollback / boundary-step-back
-    /// paths frame 1 drives. Every surviving assertion runs on frames 0 and 1;
-    /// full size on every plain `cargo test`. (F140 measured this probe at
-    /// >19 minutes under Miri un-shrunk; the two-frame drive keeps the IDR's 37
-    /// slices and the realloc assertion below intact.)
+    /// **48x32 x 2 frames under Miri, 112x96 x 3 everywhere else (D-gate-6).**
+    /// D-gate-5's first cut kept 112x96 under Miri because that geometry *is* the
+    /// realloc (35 slices trigger `DynSliceRealloc`, and 112x96 is the smallest
+    /// grid whose IDR codes 35 — measured above); at the seam's interpreter cost
+    /// that made this one test ~13 minutes and the session gate ~40, and the
+    /// user capped the gate at 15 (2026-08-24). So under Miri the drive is now
+    /// 48x32 at the same 401-byte constraint — measured **3 / 3 / 3** slices
+    /// across three frames (64x48 gives 9/4/4 and measured 534 s in the sharded
+    /// lane — still the critical path, so the smaller grid it is). Every frame
+    /// still splits, each frame still closes slices through
+    /// `DynSlcJudgeSliceBoundaryStepBack` / `AddSliceBoundary` / stash-rollback,
+    /// and `WelsMdInterMbLoopOverDynamicSlice` and the F60 accounting assertion
+    /// stay live. **What the aliasing checker loses at session scope is the
+    /// realloc chain itself**
+    /// (`CalculateNewSliceNum` -> `ReallocSliceBuffer` -> `ExtendLayerBuffer`):
+    /// its assertion below is gated to the full drive, which every native
+    /// `cargo test` still runs — and Miri runs it again wherever the battery
+    /// exports `MIRI_FULL=1` (the `full`/`exit` tiers), which is where that
+    /// coverage now lives. Named plainly per D-cov-1: a session-scope Miri run
+    /// no longer sees slice-buffer moves.
     #[test]
     fn encode_loop_runs_over_size_limited_dynamic_slices_under_the_aliasing_checker() {
-        let kiFrames = if cfg!(miri) { 2 } else { 3 };
+        let kiFrames = miri_scaled(3, 2) as usize;
+        let kiWidth = miri_scaled(112, 48);
+        let kiHeight = miri_scaled(96, 32);
+        let kbFullDrive = kiWidth == 112;
         let (frames, dims) = drive_encoder_over(
-            112,
-            96,
+            kiWidth,
+            kiHeight,
             kiFrames,
             EncoderProbeOptions {
                 slice_mode: SliceModeEnum::SM_SIZELIMITED_SLICE,
@@ -4707,9 +4727,10 @@ mod tests {
 
         assert_eq!(
             dims,
-            (112, 96),
-            "the encoder must be configured for a 7x6 macroblock grid; below 35 \
-             macroblocks no frame can code the 35 slices the realloc needs"
+            (kiWidth, kiHeight),
+            "the encoder must be configured for the geometry the drive asked for; \
+             at full size that is the 7x6 grid below which no frame can code the \
+             35 slices the realloc needs"
         );
         assert_eq!(frames.len(), kiFrames, "the encode loop did not run to the end");
         assert_eq!(
@@ -4737,14 +4758,18 @@ mod tests {
         // this mode (AVERSLICENUM_CONSTRAINT = MAX_SLICES_NUM = 35) and
         // WelsCodeOnePicPartition reallocates before coding slice index
         // `iMaxSliceNum - iActiveThreadsNum` = 34, so >= 35 coded slices is the
-        // trigger itself.
-        assert!(
-            slices[0] >= 35,
-            "the IDR coded {} slices, under the 35 that make WelsCodeOnePicPartition \
-             call DynSliceRealloc -> ReallocSliceBuffer -> ExtendLayerBuffer: the \
-             realloc path this probe exists for did not run",
-            slices[0]
-        );
+        // trigger itself. Full drive only (D-gate-6): the 64x48 Miri geometry
+        // cannot reach 35 slices by construction, so at session scope this
+        // assertion would only ever restate the geometry choice.
+        if kbFullDrive {
+            assert!(
+                slices[0] >= 35,
+                "the IDR coded {} slices, under the 35 that make WelsCodeOnePicPartition \
+                 call DynSliceRealloc -> ReallocSliceBuffer -> ExtendLayerBuffer: the \
+                 realloc path this probe exists for did not run",
+                slices[0]
+            );
+        }
 
         // F60. The NAL-length cursors and the frame size are two independent
         // accountings of the same bytes; FrameBsRealloc moves the array the first

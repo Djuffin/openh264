@@ -1,7 +1,14 @@
-# S61 (F140): the previous session close's `MIRI_SCOPE=encoder gates.sh session`
-# Miri wall-time, in seconds. gates.sh reads the first non-comment line's first
-# field, prints this run's time beside it, and WARNs past 1.3x. A session close
-# replaces the data line with its own number; mid-session runs read, never write.
+# S61 (F140): the previous session close's Miri wall-time, in seconds. gates.sh
+# reads the first non-comment line's first field, prints this run's time beside
+# it, and WARNs past 1.3x. A session close replaces the data line with its own
+# number; mid-session runs read, never write.
+#
+# REGIME NOTE (D-gate-6, 2026-08-24): from session E on, the session level's
+# number is the parallel Miri lane's wall (one compile + four concurrent
+# shards, small probe drives) — not the serial un-sharded step the 1012 below
+# was measured on. The first ratio across that boundary compares two different
+# instruments and the close report must say so; after E's close the series is
+# lane-vs-lane and the 1.3x tripwire means what S61 intends.
 #
 # Format: <seconds> <commit> <date> <note>
-1012 08c98c47 2026-08-23 session-C-close-the-last-verified-close-C2-never-produced-one-F140
+1012 08c98c47 2026-08-23 session-C-close-serial-regime-last-verified-close-F140

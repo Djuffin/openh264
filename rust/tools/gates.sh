@@ -6,11 +6,15 @@
 #     commit   build --all-targets + cargo test (debug + release) + ratchet (~2 min)
 #     family   commit + diffharness sweeps st/mt/def/sl in BOTH profiles  (~5 min)
 #     session  family + Miri --lib, NO benches — the Phase 9 session close
-#              (D-gate-4, 2026-08-22): run it as
-#                  MIRI_SCOPE=encoder bash rust/tools/gates.sh session
-#              ~2.5 min family + ~15 min Miri (894 s measured 2026-08-22 at 0bfc7687,
-#              274 tests with the decoder's 101 skipped — the four encoder probes are
-#              most of it). The benches stay at the phase close (D-gate-1).
+#              (D-gate-4, 2026-08-22; re-architected under D-gate-6, 2026-08-24:
+#              the whole level is CAPPED AT 15 MINUTES, the user's ruling).
+#                  bash rust/tools/gates.sh session
+#              The Miri step runs as a parallel background lane (one compile +
+#              five concurrent shards, encoder-scoped by construction — no
+#              MIRI_SCOPE needed at this level, and the encode probes drive
+#              small geometries; see the D-gate-6 block below for what this
+#              level no longer covers and where it is restored). The benches
+#              stay at the phase close (D-gate-1).
 #     full     family + decode bench + encoder bench + Miri --lib         (default)
 #     exit     full + Miri over the differential integration tests
 #              + the three C-ABI boundary gates: the cdylib's export list, the
@@ -63,6 +67,135 @@ fail() { FAIL=$((FAIL+1)); RESULTS+=("FAIL  $1"); printf 'FAIL  %s\n' "$1"; }
 skip() { SKIP=$((SKIP+1)); RESULTS+=("SKIP  $1"); printf 'SKIP  %s\n' "$1"; }
 
 hdr() { printf '\n=== %s\n' "$1"; }
+
+# ---------------------------------------------------------------------------
+# D-gate-6 (the user, 2026-08-24): the WHOLE session gate is capped at 15
+# minutes — "even if we need to reduce the amount of tests that we run". The
+# ruling landed after a session-level run was stopped at ~40 minutes; D-gate-5's
+# probe shrink alone could not meet it, because the serial battery already
+# spends ~4 min in builds/tests and ~3-4 min in sweeps before Miri starts, and
+# the Miri step's own compile is minutes. What meets it is parallelism the
+# machine already has:
+#
+#   native lane (this shell):  build, tests, ratchet, census, both sweeps
+#   miri lane   (background):  one `--no-run` compile, then FIVE concurrent
+#                              `cargo miri test` shards — the three encode
+#                              probes are one shard each (they are the three
+#                              largest single tests, F140/F141), everything
+#                              else splits into an encoder shard and an api/common/safe shard
+#
+# The lanes do not contend: cargo-miri builds under target/miri with its own
+# lock, the diffharness builds in its own tree, and each Miri interpreter is
+# single-threaded, so five shards cost five cores beside the native builds.
+#
+# What the session level no longer covers (named per D-cov-1; every item is
+# restored at `full`/`exit`, which export MIRI_FULL=1 and run the serial
+# un-sharded step):
+#   - the size-limited probe drives 48x32x2 under Miri, so session-scope Miri
+#     does not see the slice-buffer realloc chain (the probe's own doc says
+#     why 112x96 cannot be afforded there);
+#   - the two fork/join probes are skipped BY NAME in the rest shard: once
+#     un-ignored (session E's acceptance) they cost tens of minutes EACH under
+#     Miri — MIN_NUM_MB_PER_SLICE floors their geometry at 49 macroblocks and
+#     two frames is the inter-coverage floor, so no shrink exists. They run at
+#     full/exit, and any session that touches the fork, the slice structures,
+#     or deblocking runs them explicitly once at its close:
+#       MIRIFLAGS='-Zmiri-ignore-leaks -Zmiri-disable-isolation' \
+#         cargo +nightly miri test --lib -- fork_join_encodes
+#
+# Verdicts follow F17: each shard's rc is captured via `wait`, corroborated
+# against its parsed totals, and a shard that ran zero tests fails loudly — a
+# renamed probe must not pass by vanishing (this script's own header rule).
+# ---------------------------------------------------------------------------
+MIRI_SHARDS=(grid cavlc sizelimited enc other)
+MIRI_LANE_FLAGS="-Zmiri-ignore-leaks -Zmiri-disable-isolation"
+miri_session_lane() {
+  local t0 rc
+  t0=$(date +%s)
+  # The compile step is a run with a filter nothing matches, NOT `--no-run`:
+  # measured 2026-08-24, `cargo miri test --no-run` reports up-to-date without
+  # building the interpreted target, so the four shards would then race for the
+  # build lock and one of them pays the whole compile while three block. A
+  # zero-match run compiles everything and interprets nothing; its verdict is
+  # the rc alone (zero tests is this step's expected shape, unlike the shards').
+  (cd "$CRATE" && MIRIFLAGS="${MIRIFLAGS:-} $MIRI_LANE_FLAGS" \
+     cargo +nightly miri test --lib -- __miri_lane_compile_only__) > "$LOGS/miri_compile.log" 2>&1
+  rc=$?
+  echo "$rc" > "$LOGS/miri_compile.rc"
+  if [ "$rc" -ne 0 ]; then
+    echo $(( $(date +%s) - t0 )) > "$LOGS/miri_lane_wall"
+    return
+  fi
+  # The two catch-all shards split the ~280 non-probe tests: `enc` is the
+  # encoder module minus the probe shards' tests and the fork probes (see the
+  # header), `other` is everything outside encoder:: and decoder:: (api,
+  # common, safe, bits). The un-sharded rest measured 560 s against the probe
+  # shards' 188-237, so it was the critical path; halved, no shard dominates.
+  # decoder:: is out of `other` unconditionally at this level — the session
+  # level *is* the encoder-scoped close (D-gate-4 pairs them), and a session
+  # that touches decoder code runs the serial `full` step for it instead.
+  local pids=()
+  (cd "$CRATE" && MIRIFLAGS="${MIRIFLAGS:-} $MIRI_LANE_FLAGS" cargo +nightly miri test --lib -- \
+     encode_loop_runs_over_a_macroblock_grid) > "$LOGS/miri_shard_grid.log" 2>&1 &
+  pids+=($!)
+  (cd "$CRATE" && MIRIFLAGS="${MIRIFLAGS:-} $MIRI_LANE_FLAGS" cargo +nightly miri test --lib -- \
+     encode_loop_runs_with_cavlc) > "$LOGS/miri_shard_cavlc.log" 2>&1 &
+  pids+=($!)
+  (cd "$CRATE" && MIRIFLAGS="${MIRIFLAGS:-} $MIRI_LANE_FLAGS" cargo +nightly miri test --lib -- \
+     encode_loop_runs_over_size_limited) > "$LOGS/miri_shard_sizelimited.log" 2>&1 &
+  pids+=($!)
+  (cd "$CRATE" && MIRIFLAGS="${MIRIFLAGS:-} $MIRI_LANE_FLAGS" cargo +nightly miri test --lib -- \
+     'encoder::' --skip 'encode_loop_runs' --skip 'fork_join_encodes') \
+     > "$LOGS/miri_shard_enc.log" 2>&1 &
+  pids+=($!)
+  (cd "$CRATE" && MIRIFLAGS="${MIRIFLAGS:-} $MIRI_LANE_FLAGS" cargo +nightly miri test --lib -- \
+     --skip 'encoder::' --skip 'decoder::') > "$LOGS/miri_shard_other.log" 2>&1 &
+  pids+=($!)
+  local i=0
+  local pid
+  for pid in "${pids[@]}"; do
+    wait "$pid"
+    echo $? > "$LOGS/miri_shard_${MIRI_SHARDS[$i]}.rc"
+    i=$((i+1))
+  done
+  echo $(( $(date +%s) - t0 )) > "$LOGS/miri_lane_wall"
+}
+
+# S61 (F140): the gate's own cost is a gated quantity. Prints this run's Miri
+# wall beside the previous session close's (miri_wall_baseline.txt) and WARNs
+# past 1.3x — warn, never fail: machine variance is real, and the duty S61
+# assigns is that the close *report* quotes both numbers and files a finding.
+s61_report() {  # $1 = this run's miri wall seconds
+  local wall=$1 prev ratio
+  local base="$HERE/miri_wall_baseline.txt"
+  prev=$(grep -v '^#' "$base" 2>/dev/null | awk 'NF {print $1; exit}')
+  if [ -n "${prev:-}" ] && [ "$prev" -gt 0 ] 2>/dev/null; then
+    ratio=$(awk -v a="$wall" -v b="$prev" 'BEGIN { printf "%.2f", a / b }')
+    printf '  S61: miri wall %ss against the previous close'\''s %ss — ratio %s\n' \
+      "$wall" "$prev" "$ratio"
+    if awk -v a="$wall" -v b="$prev" 'BEGIN { exit !(a > 1.3 * b) }'; then
+      printf '  *** S61 WARNING: the Miri step is %sx the previous session close — past the\n' "$ratio"
+      printf '  *** 1.3x tripwire. This is a finding to file (F140'\''s rule), not a nuisance to\n'
+      printf '  *** route around; the close report must quote both numbers.\n'
+    fi
+    printf '  (a session close then updates %s)\n' "$base"
+  else
+    # The baseline is part of the instrument (S58: a silent gap reads as a
+    # clean run). Missing or unparsable means the tripwire measured nothing.
+    printf '  *** S61: no baseline in %s — this run measured %ss and compared it\n' "$base" "$wall"
+    printf '  *** against nothing. Seed the file with that number.\n'
+  fi
+}
+
+MIRI_LANE_PID=""
+if [ "$LEVEL" = session ] && rustup toolchain list 2>/dev/null | grep -q nightly; then
+  rm -f "$LOGS/miri_compile.rc" "$LOGS/miri_lane_wall"
+  for s in "${MIRI_SHARDS[@]}"; do rm -f "$LOGS/miri_shard_$s.rc"; done
+  miri_session_lane &
+  MIRI_LANE_PID=$!
+  printf 'miri lane launched in parallel (pid %s; logs %s/miri_shard_*.log)\n' \
+    "$MIRI_LANE_PID" "$LOGS"
+fi
 
 # ---------------------------------------------------------------------------
 # 0. Every target compiles (Phase 5 session U, T5.T5).
@@ -431,6 +564,43 @@ if [ "${LEVEL_DONE:-0}" != 1 ]; then
   else
     MIRI_DESC="--lib (whole library, no skips)"
   fi
+  if [ "$LEVEL" = session ]; then
+    # D-gate-6: the parallel lane launched at the top of the script; this is
+    # the join. See the lane's header comment for what session scope covers.
+    hdr "miri (parallel lane join: 1 compile + 5 shards — D-gate-6)"
+    if [ -z "$MIRI_LANE_PID" ]; then
+      skip "miri: no nightly toolchain (rustup toolchain install nightly)"
+    else
+      wait "$MIRI_LANE_PID"
+      if [ "$(cat "$LOGS/miri_compile.rc" 2>/dev/null)" != 0 ]; then
+        tail -8 "$LOGS/miri_compile.log"
+        fail "miri lane: the --no-run compile failed — see $LOGS/miri_compile.log"
+      else
+        miri_total_passed=0
+        miri_shards_bad=0
+        for s in "${MIRI_SHARDS[@]}"; do
+          shard_rc=$(cat "$LOGS/miri_shard_$s.rc" 2>/dev/null)
+          shard_log="$LOGS/miri_shard_$s.log"
+          shard_passed=$(awk '/^test result:/ { for (i=1;i<=NF;i++) if ($i=="passed;") t+=$(i-1) } END { print t+0 }' "$shard_log")
+          shard_failed=$(awk '/^test result:/ { for (i=1;i<=NF;i++) if ($i=="failed;") t+=$(i-1) } END { print t+0 }' "$shard_log")
+          printf '  shard %-12s %s passed / %s failed  (rc=%s)\n' "$s:" "$shard_passed" "$shard_failed" "${shard_rc:-?}"
+          if [ "${shard_rc:-1}" -ne 0 ] || [ "$shard_failed" -ne 0 ]; then
+            tail -12 "$shard_log"
+            fail "miri shard $s: $shard_passed passed / $shard_failed failed, rc=${shard_rc:-?} — see $shard_log"
+            miri_shards_bad=1
+          elif [ "$shard_passed" -eq 0 ]; then
+            fail "miri shard $s: ran 0 tests — a renamed probe or a dead filter; see $shard_log"
+            miri_shards_bad=1
+          fi
+          miri_total_passed=$((miri_total_passed + shard_passed))
+        done
+        if [ "$miri_shards_bad" -eq 0 ]; then
+          pass "miri (5 shards, session scope): $miri_total_passed passed / 0 failed"
+        fi
+        s61_report "$(cat "$LOGS/miri_lane_wall" 2>/dev/null || echo 0)"
+      fi
+    fi
+  else
   hdr "miri ($MIRI_DESC)"
   if ! rustup toolchain list 2>/dev/null | grep -q nightly; then
     skip "miri: no nightly toolchain (rustup toolchain install nightly)"
@@ -459,30 +629,16 @@ if [ "${LEVEL_DONE:-0}" != 1 ]; then
     # *report* quotes both numbers and files a finding — not that a loaded machine
     # can veto a session.
     MIRI_T0=$(date +%s)
-    run_miri lib "$MIRI_DESC" \
+    # MIRI_FULL=1 restores the encode probes' full drives at the un-capped
+    # tiers (`full`/`exit`) — see `miri_scaled` in svc_encode_slice.rs
+    # (D-gate-6): the session lane runs them small, these levels run them
+    # whole, fork/join probes included once they are un-ignored.
+    MIRI_FULL=1 run_miri lib "$MIRI_DESC" \
       "-Zmiri-ignore-leaks -Zmiri-disable-isolation" --lib -- \
       ${MIRI_SKIPS[@]+"${MIRI_SKIPS[@]}"}   # F75: bash 3.2 + set -u, empty array
-    MIRI_WALL=$(( $(date +%s) - MIRI_T0 ))
-    MIRI_BASELINE="$HERE/miri_wall_baseline.txt"
-    prev_wall=$(grep -v '^#' "$MIRI_BASELINE" 2>/dev/null | awk 'NF {print $1; exit}')
-    if [ -n "${prev_wall:-}" ] && [ "$prev_wall" -gt 0 ] 2>/dev/null; then
-      s61_ratio=$(awk -v a="$MIRI_WALL" -v b="$prev_wall" 'BEGIN { printf "%.2f", a / b }')
-      printf '  S61: miri wall %ss against the previous close'\''s %ss — ratio %s\n' \
-        "$MIRI_WALL" "$prev_wall" "$s61_ratio"
-      if awk -v a="$MIRI_WALL" -v b="$prev_wall" 'BEGIN { exit !(a > 1.3 * b) }'; then
-        printf '  *** S61 WARNING: the Miri step is %sx the previous session close — past the\n' "$s61_ratio"
-        printf '  *** 1.3x tripwire. This is a finding to file (F140'\''s rule), not a nuisance to\n'
-        printf '  *** route around; the close report must quote both numbers.\n'
-      fi
-      printf '  (a session close then updates %s)\n' "$MIRI_BASELINE"
-    else
-      # The baseline is part of the instrument (S58: a silent gap reads as a clean
-      # run). Missing or unparsable means the tripwire measured nothing — loud, and
-      # this run's number is printed so the file can be seeded from it.
-      printf '  *** S61: no baseline in %s — this run measured %ss and compared it\n' "$MIRI_BASELINE" "$MIRI_WALL"
-      printf '  *** against nothing. Seed the file with that number.\n'
-    fi
+    s61_report $(( $(date +%s) - MIRI_T0 ))
   fi
+  fi  # session lane join / serial step (D-gate-6)
 fi
 
 case "$LEVEL" in session|full) LEVEL_DONE=1 ;; esac
