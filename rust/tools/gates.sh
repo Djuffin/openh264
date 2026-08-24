@@ -450,9 +450,38 @@ if [ "${LEVEL_DONE:-0}" != 1 ]; then
     # and nothing else: aliasing (Stacked Borrows) and validity checking are exactly
     # what they were. The forbidden list stands — `-Zmiri-disable-stacked-borrows`,
     # `-Zmiri-disable-validation`, and anything else that weakens the checker.
+    # S61 (F140): the gate's own cost is a gated quantity. A 2.6x Miri regression
+    # passed eight commits because nothing watches the instrument — the charter was
+    # quoting the wall-time series (894 / 978 / 1012 s) in prose and checking it
+    # nowhere. So this step times itself and compares against the previous session
+    # close's number, committed in miri_wall_baseline.txt. WARN past 1.3x, never
+    # fail: machine variance is real, and the duty S61 assigns is that the close
+    # *report* quotes both numbers and files a finding — not that a loaded machine
+    # can veto a session.
+    MIRI_T0=$(date +%s)
     run_miri lib "$MIRI_DESC" \
       "-Zmiri-ignore-leaks -Zmiri-disable-isolation" --lib -- \
       ${MIRI_SKIPS[@]+"${MIRI_SKIPS[@]}"}   # F75: bash 3.2 + set -u, empty array
+    MIRI_WALL=$(( $(date +%s) - MIRI_T0 ))
+    MIRI_BASELINE="$HERE/miri_wall_baseline.txt"
+    prev_wall=$(grep -v '^#' "$MIRI_BASELINE" 2>/dev/null | awk 'NF {print $1; exit}')
+    if [ -n "${prev_wall:-}" ] && [ "$prev_wall" -gt 0 ] 2>/dev/null; then
+      s61_ratio=$(awk -v a="$MIRI_WALL" -v b="$prev_wall" 'BEGIN { printf "%.2f", a / b }')
+      printf '  S61: miri wall %ss against the previous close'\''s %ss — ratio %s\n' \
+        "$MIRI_WALL" "$prev_wall" "$s61_ratio"
+      if awk -v a="$MIRI_WALL" -v b="$prev_wall" 'BEGIN { exit !(a > 1.3 * b) }'; then
+        printf '  *** S61 WARNING: the Miri step is %sx the previous session close — past the\n' "$s61_ratio"
+        printf '  *** 1.3x tripwire. This is a finding to file (F140'\''s rule), not a nuisance to\n'
+        printf '  *** route around; the close report must quote both numbers.\n'
+      fi
+      printf '  (a session close then updates %s)\n' "$MIRI_BASELINE"
+    else
+      # The baseline is part of the instrument (S58: a silent gap reads as a clean
+      # run). Missing or unparsable means the tripwire measured nothing — loud, and
+      # this run's number is printed so the file can be seeded from it.
+      printf '  *** S61: no baseline in %s — this run measured %ss and compared it\n' "$MIRI_BASELINE" "$MIRI_WALL"
+      printf '  *** against nothing. Seed the file with that number.\n'
+    fi
   fi
 fi
 

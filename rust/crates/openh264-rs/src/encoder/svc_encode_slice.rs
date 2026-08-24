@@ -4216,9 +4216,20 @@ mod tests {
     /// `EncodeFrameInternal` around every frame; it does not reach the bitstream).
     /// That flag disables host isolation and nothing else — aliasing and validity
     /// checking are exactly what they were.
+    ///
+    /// **Two frames under Miri, three everywhere else (D-gate-5, the `scale()`
+    /// pattern).** The seam made every reconstruction access a bounds-checked
+    /// `Cell` index and Miri interprets each one (F140: 96.5 s → 258.5 s for this
+    /// probe, uniform, no hot spot). What the third frame added was a second
+    /// inter frame — the same ME/MD/reconstruction paths as frame 1 with one more
+    /// picture in the reference list, and the list update itself runs after
+    /// frames 0 and 1 alike. Every assertion below is on frames 0 and 1, and the
+    /// 3x2 neighbour grid (F34) is untouched. Full size on every plain
+    /// `cargo test`.
     #[test]
     fn encode_loop_runs_over_a_macroblock_grid_under_the_aliasing_checker() {
-        let (frames, dims) = drive_encoder_over(48, 32, 3, EncoderProbeOptions::default());
+        let kiFrames = if cfg!(miri) { 2 } else { 3 };
+        let (frames, dims) = drive_encoder_over(48, 32, kiFrames, EncoderProbeOptions::default());
 
         assert_eq!(
             dims,
@@ -4226,7 +4237,7 @@ mod tests {
             "the encoder must be configured for a 3x2 macroblock grid; a picture \
              without neighbours covers nothing this test exists for"
         );
-        assert_eq!(frames.len(), 3, "the encode loop did not run to the end");
+        assert_eq!(frames.len(), kiFrames, "the encode loop did not run to the end");
         assert!(
             frames.iter().all(|f| f.bytes > 0),
             "a frame produced no NAL bytes: {:?}",
@@ -4492,12 +4503,21 @@ mod tests {
     /// 3x2 macroblock grid read back from the encoder (F34), three frames with the
     /// second inter-coded, and an inter frame an order of magnitude above the
     /// all-skip floor.
+    ///
+    /// **Two frames under Miri, three everywhere else — the grid probe's shrink,
+    /// for the grid probe's reason (F141).** D-gate-5 and F140 name "the two
+    /// full-encode Miri probes"; this is a third, in the same cost class
+    /// (216.5 s at session E's start against the grid probe's 258.5 s — measured,
+    /// not assumed), because it drives the same encode loop through the same
+    /// seam. The third frame's marginal coverage is the grid probe's: a second
+    /// inter frame over paths frame 1 already ran.
     #[test]
     fn encode_loop_runs_with_cavlc_and_fine_mode_decision_under_the_aliasing_checker() {
+        let kiFrames = if cfg!(miri) { 2 } else { 3 };
         let (frames, dims) = drive_encoder_over(
             48,
             32,
-            3,
+            kiFrames,
             EncoderProbeOptions {
                 cabac: false,
                 complexity: ECOMPLEXITY_MODE::MEDIUM_COMPLEXITY,
@@ -4511,7 +4531,7 @@ mod tests {
             "the encoder must be configured for a 3x2 macroblock grid; a picture \
              without neighbours covers nothing this test exists for"
         );
-        assert_eq!(frames.len(), 3, "the encode loop did not run to the end");
+        assert_eq!(frames.len(), kiFrames, "the encode loop did not run to the end");
         assert!(
             frames.iter().all(|f| f.bytes > 0),
             "a frame produced no NAL bytes: {:?}",
@@ -4657,12 +4677,27 @@ mod tests {
     /// reasons: the grid read back from the encoder (F34), three frames with the
     /// second inter-coded, and an inter frame an order of magnitude above the
     /// all-skip floor.
+    ///
+    /// **Two frames under Miri, three everywhere else (D-gate-5, the `scale()`
+    /// pattern) — and the geometry does not shrink, because the geometry is the
+    /// realloc.** 112x96 is the smallest grid whose IDR codes the 35 slices that
+    /// trigger `DynSliceRealloc` (measured above), so a smaller Miri geometry
+    /// would silently drop the realloc chain — the buffer moves this probe
+    /// exists for, and F60's shape — from the aliasing checker exactly while the
+    /// slice family converts under it. What Miri loses instead is frame 2, the
+    /// second inter frame: 3 slices against frame 1's 9, the same
+    /// `WelsMdInterMbLoopOverDynamicSlice` / stash-rollback / boundary-step-back
+    /// paths frame 1 drives. Every surviving assertion runs on frames 0 and 1;
+    /// full size on every plain `cargo test`. (F140 measured this probe at
+    /// >19 minutes under Miri un-shrunk; the two-frame drive keeps the IDR's 37
+    /// slices and the realloc assertion below intact.)
     #[test]
     fn encode_loop_runs_over_size_limited_dynamic_slices_under_the_aliasing_checker() {
+        let kiFrames = if cfg!(miri) { 2 } else { 3 };
         let (frames, dims) = drive_encoder_over(
             112,
             96,
-            3,
+            kiFrames,
             EncoderProbeOptions {
                 slice_mode: SliceModeEnum::SM_SIZELIMITED_SLICE,
                 slice_constraint: 401,
@@ -4676,7 +4711,7 @@ mod tests {
             "the encoder must be configured for a 7x6 macroblock grid; below 35 \
              macroblocks no frame can code the 35 slices the realloc needs"
         );
-        assert_eq!(frames.len(), 3, "the encode loop did not run to the end");
+        assert_eq!(frames.len(), kiFrames, "the encode loop did not run to the end");
         assert_eq!(
             frames[0].kind,
             EVideoFrameType::videoFrameTypeIDR,

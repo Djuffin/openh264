@@ -1,0 +1,7 @@
+# S61 (F140): the previous session close's `MIRI_SCOPE=encoder gates.sh session`
+# Miri wall-time, in seconds. gates.sh reads the first non-comment line's first
+# field, prints this run's time beside it, and WARNs past 1.3x. A session close
+# replaces the data line with its own number; mid-session runs read, never write.
+#
+# Format: <seconds> <commit> <date> <note>
+1012 08c98c47 2026-08-23 session-C-close-the-last-verified-close-C2-never-produced-one-F140
