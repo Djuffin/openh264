@@ -1010,21 +1010,19 @@ pub unsafe fn layer_rec_view<'a>(
     (*pLayer).pRecView.as_ref()
 }
 
-/// The `&mut` route into the reconstruction picture — **being retired** (T9.C3).
-///
-/// # Safety
-/// As [`layer_ref_pic`], and no other borrow of the same pool may be live.
-#[inline]
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn layer_dec_pic_mut<'a>(pLayer: *mut SDqLayer) -> Option<&'a mut SPicture> {
-    let id = (*pLayer).pDecPic?;
-    let pRefList = (*pLayer).pRefList;
-    if pRefList.is_null() {
-        return None;
-    }
-    Some((*pRefList).pic_mut(id))
-}
+// `layer_dec_pic_mut` stood here, and **F73 was its name**. It handed out
+// `&mut SPicture` — a fresh whole-picture retag at every call — and the frame
+// loop called it fifteen times per macroblock's worth of work, inside the fork.
+// Miri's verdict on the ignored fork/join probe named it directly: "Data race
+// detected between (1) retag write on thread `unnamed-2` and (2) retag write of
+// type `SRefList` on thread `unnamed-3`", `WelsMdIntraInit` ->
+// `layer_dec_pic_mut` -> `SRefList::pic_mut` -> `Pool::get_mut`.
+//
+// **S18, deleted in T9.C4.** Ten of its call sites became `layer_rec_view`
+// (T9.C3), three were second derivations of numbers already on the layer, and
+// one — `pDecMb` — was a second derivation of `pCsMb`, proved and deleted. The
+// route into the reconstruction picture from inside a frame is now the seam and
+// nothing else.
 
 /// Not `repr(C)`: `pRefLayer` is an `Option<LayerIdx>`, which has no C shape.
 /// `assert_size!(SDqLayer, ...)` is re-pinned to the measured size in the same
@@ -1925,15 +1923,16 @@ pub unsafe fn OutputPMbWithoutConstructCsRsNoCopy(pCtx: *mut sWelsEncCtx, pDq: *
     //intra have been reconstructed, NO COPY from CS to pDecPic--
     if (IS_INTER(mb_type) && !IS_SKIP(mb_type)) || IS_I_BL(mb_type) {
         let pMbCache = &mut (*pSlice).sMbCacheInfo;
-        let pDecY = (*pMbCache).SPicData.pDecMb[0];
-        let pDecU = (*pMbCache).SPicData.pDecMb[1];
-        let pDecV = (*pMbCache).SPicData.pDecMb[2];
+        let pDecY = (*pMbCache).SPicData.pCsMb[0];
+        let pDecU = (*pMbCache).SPicData.pCsMb[1];
+        let pDecV = (*pMbCache).SPicData.pCsMb[2];
         let pScaledTcoeff = std::ptr::addr_of_mut!((*pMbCache).sCoeffLevel).cast::<i16>();
-        let sDec = layer_dec_pic_mut(pDq)
-            .expect("the layer's reconstruction picture is bound for this frame")
-            .planes();
-        let kiDecStrideLuma = sDec.iLineSize[0];
-        let kiDecStrideChroma = sDec.iLineSize[1];
+        // **T9.C4**: the strides came from a third `layer_dec_pic_mut(..).planes()`
+        // — a whole-picture retag, per inter macroblock, inside the fork — to read
+        // two numbers `WelsInitCurrentLayer` had already stamped on the layer from
+        // that same call. `iCsStride` is those numbers.
+        let kiDecStrideLuma = (*pDq).iCsStride[0];
+        let kiDecStrideChroma = (*pDq).iCsStride[1];
         let pfIdctFour4x4 = (*ctx_func_list(pCtx)).pfIDctFourT4.expect("pfIDctFourT4 unset");
 
         // The luma half of this function was missing: no `pDecY`, no

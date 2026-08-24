@@ -2657,7 +2657,6 @@ mod tests {
                     pEncMb: [std::ptr::null_mut(); 3],
                     iMbX: MB_X,
                     iMbY: MB_Y,
-                    pDecMb: [std::ptr::null_mut(); 3],
                     pRefMb: [std::ptr::null_mut(); 3],
                     pCsMb: [
                         cs_plane.as_mut_ptr().add(16 * STRIDE + 16),

@@ -289,7 +289,11 @@ assert_size!(SSliceCtx, 48);
 // the port's own field — the coordinate the twelve plane pointers are a function of —
 // and it is what lets a reader with no `SMB` in scope build a cursor. See the field's
 // doc in `encoder_context.rs`.
-assert_size!(SMbCache, 5600);
+// **-32 at T9.C4**: `SPicData` loses `pDecMb` — three pointers that were a second
+// derivation of `pCsMb`'s three addresses, proved equal over 583 sweep rows in both
+// profiles before being deleted — and the 8 bytes of `align(16)` rounding go with
+// them. **5568, measured.**
+assert_size!(SMbCache, 5568);
 // 152 in the C++ and in this port until **T6.C1**, which moved the five
 // per-macroblock scratch arrays the C++ reaches by pointer (`sMv`, `pRefIndex`,
 // `pSadCost`, `pIntra4x4PredMode`, `pNonZeroCount`) into the struct as inline
