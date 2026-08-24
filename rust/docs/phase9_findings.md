@@ -2037,3 +2037,98 @@ reverted                                                           210 of 210 pa
 Deblocking touches every reconstructed sample of every frame, which is what those
 numbers say; it is also why this was the session's highest-risk commit and got a full
 `family` gate rather than a `commit` one.
+
+## F140 — the seam costs **2.6x** in Miri wall-time, no gate measures it, and the session close gate no longer fits
+
+The C2 close gate was run three times and never produced a verdict. The first attempt
+stalled and was abandoned; the second ran 1.5 hours and was killed by the user; a third,
+scoped to single probes, was killed after the numbers below were in hand. **This session
+has no green `MIRI_SCOPE=encoder gates.sh session`**, and the reason is not a defect.
+
+### The measurement
+
+Two encode probes, timed at `e1cb5ad9` (this session's first commit, before any seam
+consumer landed) and at `41ff57ad` (its last):
+
+| probe | pre-session | HEAD | ratio |
+|---|---:|---:|---:|
+| `encode_loop_runs_over_a_macroblock_grid_…` | **96.5 s** | **254.3 s** | **2.6x** |
+| `encode_loop_runs_over_size_limited_dynamic_slices_…` | **422.9 s** | ≥19 min, killed | **≥2.7x** |
+
+Session C's whole encoder-scoped run was **1012 s**. At 2.6x that is ~44 minutes on a
+quiet machine, and this one was not quiet.
+
+### Two wrong diagnoses, and what killed each
+
+Worth recording because both were plausible and both were wrong, and the disproofs were
+cheap:
+
+1. **"Cursor construction is the cost."** `SharedPlane::cursor` calls
+   `SharedCells::cells`, which is `from_raw_parts` over the *whole plane*; Stacked
+   Borrows charges a retag proportional to the range. Several converted sites build
+   cursors inside mode loops where they are loop-invariant — `WelsMdIntraChroma` builds
+   two per mode, `WelsMdI16x16` one. **Disproved by hoisting them: 254.26 s → 253.93 s**,
+   a 0.1% move. Cursor construction is not where the time goes.
+2. **"The atomics are the cost."** `fill_mb_map` went from one `fill()` memset to a
+   per-entry relaxed store, and `AddSliceBoundary` calls it per slice boundary — which is
+   reached only under `SM_SIZELIMITED_SLICE`, exactly the probe that stalled. **Disproved
+   by the grid probe**, which has almost no slice boundaries and regressed 2.6% anyway.
+
+The slowdown is *uniform across both probes*, which rules out any single hot spot and
+points at the only thing that changed everywhere.
+
+### What it actually is, and why there is nothing to optimise
+
+Every reconstruction access that was a raw pointer read or write is now a bounds-checked
+`Cell` index:
+
+```rust
+pub fn at(&self, dx: isize, dy: isize) -> u8 {
+    self.cells[idx(self.center, dx, dy, self.stride)].get()
+}
+```
+
+Miri interprets each access individually, so an index-plus-bounds-check costs a small
+multiple of a raw deref — and deblocking, idct and copy touch **every reconstructed
+sample of every frame**. A ~2.6x interpreter cost for that substitution is unremarkable.
+
+`at`/`set` are already minimal. The only way to make them cheaper is `get_unchecked`,
+which reintroduces exactly the unsafe the seam exists to remove. **This is the price of
+the safety, not a defect to fix**, and no future session should spend time hunting for a
+hot spot here — the two obvious ones are disproved above.
+
+### The gate hole this exposes, which is the actionable part
+
+**A 2.6x regression in the project's principal safety instrument passed every gate, eight
+commits running.** `gates.sh` measures byte-identity (583 rows x 2 profiles), test counts,
+the unsafe ratchet and the duplicate census. **None of them measures Miri wall-time**, and
+the session-level Miri step reports pass/fail only. The cost grew commit by commit and
+nothing said so; it surfaced only when a human noticed a gate taking 1.5 hours.
+
+Concretely, for whoever owns the gates:
+
+* **record the Miri wall-time per session close** the way the sweep's is recorded, and
+  fail or warn on a ratio against the previous session rather than on an absolute. The
+  charter already quotes these numbers in prose (894 s at D, 978 s at B4, 1012 s at C) —
+  they are being *read* as a series and should be *checked* as one.
+* **the two encode probes are the whole cost**: 96.5 + 422.9 = 519 s of session C's 1012 s
+  before this session, and ~1100 s of ~2600 s after. Any re-scoping decision is a decision
+  about these two tests and nothing else.
+
+### The decision this leaves, which is the steward's
+
+Phase 9 has more seam work ahead (session E's `&mut SMB` family, F117, Phase 10), and each
+conversion of this kind will add interpreter cost on the same curve. Three options, none
+of them free:
+
+1. **Accept a ~45-minute session close.** Honest, and it gets worse with every session.
+2. **Move the two encode probes from `session` to `exit`.** Cheap to do; the cost is that
+   an aliasing regression inside the encode loop would then be caught at phase exit rather
+   than at session close — and F114 is the precedent for that mattering, since the first
+   encoder-scoped Miri run over a finished session is exactly what found two UB the byte
+   gates had passed.
+3. **Shrink the probes' drive** — fewer frames, smaller grids. A coverage trade, D-cov-1's
+   rules apply, and the mid-row probe's boundary assertions constrain how small it can go.
+
+Not taken here: it is a gate-policy decision with a coverage cost, and this session had no
+mandate for it.

@@ -215,6 +215,14 @@ CLASSIFIERS = [
     # biggest hole: 13 dct and 10 idct operands read as unclassified without it.
     ("coeff", r"(?:encoder::)?md::(coeff_level|dct)\b|\biLumaBlock\b|\biChromaBlock\b"
               r"|\bg_kiQuant\w*|\bget_quant_\w+|\bg_kuiDequant\w*|\bsCoeffLevel\b"),
+    # **The reconstruction seam (T9.C2).** A site whose reconstruction operand is
+    # a `RecCursor` is *converted*, not blocked and not unclassifiable: the plane
+    # is reached through `RecPicView` and the write goes through `&self`. Tested
+    # before the raw-root arm below so a converted site never reads as `rec`, and
+    # given its own class so the census cannot confuse "done" with "unknown" —
+    # which is exactly what the five intra-pred sites did at first measurement.
+    ("seam",  r"\bview\s*\.\s*plane\s*\(|\blayer_rec_view\b|\bRecCursor\b"
+              r"|&\s*pCurDec\b|&\s*pDest(?:Y|Cb|Cr)\b"),
     # The layer's stamped plane roots and views.
     ("rec",   r"\bpCsData\b|sDecPicView|\bpDecPic\b"),
     ("src",   r"\bpEncData\b|\bpEncPic\b"),
@@ -743,6 +751,8 @@ def verdict(site):
         return "?"
     if "rec" in classes:
         return "blocked"
+    if "seam" in classes:
+        return "seam"
     if "coeff" in classes:
         return "coeff"
     return "safe-now"
@@ -833,7 +843,7 @@ def main():
         by_file[s["file"]][v] += 1
         by_file[s["file"]]["fork" if s["fork"] else "st"] += 1
 
-    cols = ["safe-now", "coeff", "blocked", "?", "n/a", "fork", "st"]
+    cols = ["safe-now", "seam", "coeff", "blocked", "?", "n/a", "fork", "st"]
 
     def table(title, d, keyname):
         rows = [[k] + [str(d[k].get(c, 0)) for c in cols] for k in sorted(d)]
