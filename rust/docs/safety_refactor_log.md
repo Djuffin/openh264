@@ -17037,6 +17037,42 @@ boundary from the bitstream, and carries the name of what stops it under Miri.
 * **T9.C7's shape (S55/S59)**: +1 on one reconstruction sample fails **150 of 210** `st`
   rows. Sixty swallow it; 150 is the number to quote for the seam-written copy.
 
+### the close gate
+
+`MIRI_SCOPE=encoder bash rust/tools/gates.sh session`, at `08c98c47`:
+
+| step | verdict |
+|---|---|
+| `cargo build --all-targets` | PASS |
+| `cargo test` debug / release | **550 / 543**, 0 failed, 20 ignored |
+| unsafe ratchet | PASS, no per-file increase |
+| duplicate census | PASS, 56 allowlisted |
+| sweep (debug) | **PASS=583 FAIL=0**, 50 s |
+| sweep (release) | **PASS=583 FAIL=0**, 43 s |
+| Miri `--lib`, encoder scope | **277 passed / 0 failed / 5 ignored**, 101 filtered — **1012 s** |
+
+**The Miri wall-time delta, and what it is not.** 1012 s against the 978 s the charter
+records for B4 and the 894 s for session D — **+34 s**, and the four new seam probes are
+**1.84 s** of it (measured standalone before the close), so most of the difference is
+run-to-run variance rather than this session's tests. The encoder-scoped set is **282
+tests, +5 this session and nothing removed** — verified by diffing `cargo test --lib
+-- --list` against `9fa8cde3` in a throwaway worktree rather than by subtracting
+reported totals, because the "274" in the charter is session D's number and not B4's.
+Four of the five are the seam's probes and all four run; the fifth is the mid-row probe
+and is one of the **5** ignored (with `load_balancing_completes_frames_with_sane_slice_counts`,
+the row-aligned fork/join probe, and the two `..._ignores_the_cpu_flag` dispatch tests,
+which are `#[ignore]` for their own reasons and not Miri's).
+
+**When the two encoder probes un-ignore, budget for two more encode drives**, not for the
+seam: the mid-row probe is 2 frames of a 7x7 grid at two partitions, the same order as the
+row-aligned probe beside it.
+
+The gate was run in two halves for a mechanical reason worth recording: a first invocation
+was left running while a later one started, two `tee`s ended up appending to the same
+`.gates/miri_lib.log`, and the totals that log feeds would have been interleaved. Both
+stale runs were killed and the Miri step re-run alone against the committed tree; the
+family half's numbers above are from the second full invocation.
+
 ### counts at close
 
 | | B4 | C |
