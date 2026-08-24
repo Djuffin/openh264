@@ -1084,6 +1084,26 @@ pub struct SDqLayer {
     /// that stamps `pEncData`, from the same already-resolved `idEnc`.
     pub pEncPic: Option<SrcPicId>,
     pub pSrcPool: *mut crate::encoder::picture::SrcPicPool,
+    /// **The reconstruction seam** — D-mt-3 option A, built per frame by
+    /// `WelsInitCurrentLayer` in the same statement that stamps
+    /// [`pCsData`](Self::pCsData), from the same `&mut SPicture`.
+    ///
+    /// This is the layer's route to the picture *every worker writes*: three
+    /// planes and four per-macroblock side arrays, shared and writable through
+    /// `&self`. It sits here rather than on the job because every consumer
+    /// already reaches the layer and `SDqLayer` cannot carry a lifetime, so the
+    /// view holds captured parts instead — see
+    /// [`crate::encoder::rec_view`] for the soundness argument, which this
+    /// field is one half of.
+    ///
+    /// **The stability requirement, in one sentence** (F109's shape): while
+    /// this is `Some`, nothing may take `&mut` to the same picture through the
+    /// pool — `pic_mut(idDec)`, `layer_dec_pic_mut` — because that retag makes
+    /// the captured bases stale and, under the fork, races on `SRefList`
+    /// itself. `None` between frames is not decoration: `WelsInitCurrentLayer`
+    /// rebuilds it every frame, and nothing may read a view built for a frame
+    /// that has ended.
+    pub pRecView: Option<crate::encoder::rec_view::RecPicView>,
     /// The two pictures above **as this frame sees them** — plane roots, strides and
     /// picture type, stamped once by `WelsInitCurrentLayer` (T6.F5). The handles are
     /// still the truth; these are the per-macroblock world's read path, and they are
@@ -1154,6 +1174,9 @@ impl SDqLayer {
             // every frame by `WelsInitCurrentLayer`; null means "no frame started".
             pCsData: [std::ptr::null_mut(); 3],
             iCsStride: [0; 3],
+            // The seam, rebuilt per frame beside `pCsData`; `None` is "no frame
+            // started", the same thing the null above means.
+            pRecView: None,
             pEncData: [std::ptr::null_mut(); 3],
             iEncStride: [0; 3],
             // The macroblock records, sized by `InitMbListD` once the geometry is
