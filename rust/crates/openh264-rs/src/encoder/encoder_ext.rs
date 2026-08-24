@@ -2508,6 +2508,29 @@ pub unsafe fn PreprocessSliceCoding(pCtx: *mut sWelsEncCtx) {
         fl.pfDeblocking.pfDeblockingFilterSlice =
             Some(crate::encoder::deblocking::DeblockingFilterSliceAvcbaseNull);
     }
+
+    // **F132 round 7 (T9.E5)**: `pfInterMd` used to be stamped by
+    // `WelsCodePSlice`/`WelsCodePOverDynamicSlice` — per slice, from inside the
+    // fork, into this shared function list, exactly as the C++ does
+    // (`svc_encode_slice.cpp:733/750`). Every slice of a frame computes the
+    // same value from the same two layer-level facts, so under MT that was N
+    // workers writing the same bytes with no ordering — the write/write race
+    // the fixed-slice fork probe stopped on the moment round 5's deblocking
+    // race no longer aborted the run first. F71's pattern (T7.C3): the
+    // loop-invariant write hoists to the frame level, before anything spawns;
+    // the per-slice readers see the same value in the same order.
+    let kbBaseAvail = (*pCurLayer).bBaseLayerAvailableFlag;
+    let kbHighestSpatial = if !ctx_param(pCtx).is_null() {
+        (*ctx_param(pCtx)).iSpatialLayerNum
+            == ((*pCurLayer).sLayerInfo.sNalHeaderExt.uiDependencyId as i32 + 1)
+    } else {
+        true
+    };
+    fl.pfInterMd = if kbBaseAvail && kbHighestSpatial {
+        Some(crate::encoder::svc_mode_decision::WelsMdInterMbEnhancelayer)
+    } else {
+        Some(crate::encoder::svc_base_layer_md::WelsMdInterMb)
+    };
 }
 
 /// `encoder_ext.cpp:3131`. Write the parameter sets for (simulcast) SVC.
@@ -3679,7 +3702,14 @@ pub unsafe fn WelsEncoderEncodeExt(
 
             //TODO: use a function to remove duplicate code here and ln3994
             let iLayerBsIdx = (*(*pCtx).pOut).iLayerBsIndex;
-            let pLbi = &mut (*pFbi).sLayerInfo[iLayerBsIdx as usize] as *mut SLayerBSInfo;
+            // **T9.E5, the mid-row probe's verdict once round 5 stopped aborting
+            // first**: this was `&mut (*pFbi).sLayerInfo[..] as *mut` — a `&mut`
+            // element borrow whose Unique retag popped `pLayerBsInfo` (the raw
+            // over the whole array, minted at the top of this function) for the
+            // element's bytes, and `SliceLayerInfoUpdate` writes through
+            // `pLayerBsInfo` right below. S29's spelling reuses the parent's
+            // provenance and pops nothing — F70's rule, F114a's shape.
+            let pLbi = std::ptr::addr_of_mut!((*pFbi).sLayerInfo[iLayerBsIdx as usize]);
             (*pLbi).pBsBuf = ctx_frame_bs_at(pCtx, (*pCtx).iPosBsBuffer);
             (*pLbi).uiLayerType = VIDEO_CODING_LAYER;
             (*pLbi).uiSpatialId = (*pCtx).uiDependencyId;

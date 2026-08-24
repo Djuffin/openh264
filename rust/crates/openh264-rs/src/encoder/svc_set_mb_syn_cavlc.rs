@@ -406,8 +406,8 @@ pub unsafe fn WelsSpatialWriteMbPred(
     pCurMb: &mut SMB,
 ) {
     let pMbCache = &mut (*pSlice).sMbCacheInfo;
-    let pBs = crate::encoder::svc_encode_slice::slice_writer(pEncCtx, pSlice);
-    let buf = crate::encoder::svc_encode_slice::slice_bs_buffer(pEncCtx, pSlice);
+    let pBs = crate::encoder::svc_encode_slice::slice_writer(pEncCtx, std::ptr::addr_of_mut!((*pSlice).sSliceBs));
+    let buf = crate::encoder::svc_encode_slice::slice_bs_buffer(pEncCtx, std::ptr::addr_of_mut!((*pSlice).sSliceBs), (*pSlice).uiBufferIdx as usize);
     let pSliceHeadExt = &mut (*pSlice).sSliceHeaderExt;
     let iNumRefIdxl0ActiveMinus1 = (pSliceHeadExt.sSliceHeader.uiNumRefIdxL0Active as i32) - 1;
 
@@ -528,8 +528,8 @@ pub unsafe fn WelsSpatialWriteSubMbPred(
     pCurMb: &mut SMB,
 ) {
     let pMbCache = &mut (*pSlice).sMbCacheInfo;
-    let pBs = crate::encoder::svc_encode_slice::slice_writer(pEncCtx, pSlice);
-    let buf = crate::encoder::svc_encode_slice::slice_bs_buffer(pEncCtx, pSlice);
+    let pBs = crate::encoder::svc_encode_slice::slice_writer(pEncCtx, std::ptr::addr_of_mut!((*pSlice).sSliceBs));
+    let buf = crate::encoder::svc_encode_slice::slice_bs_buffer(pEncCtx, std::ptr::addr_of_mut!((*pSlice).sSliceBs), (*pSlice).uiBufferIdx as usize);
     let pSliceHeadExt = &mut (*pSlice).sSliceHeaderExt;
 
     let iNumRefIdxl0ActiveMinus1 = (pSliceHeadExt.sSliceHeader.uiNumRefIdxL0Active as i32) - 1;
@@ -671,7 +671,7 @@ pub unsafe fn WelsSpatialWriteMbSyn(
     // slice's `sMbCacheInfo` for themselves, so a `&mut` of either taken before
     // Step 1 is invalidated by Step 1 and used again in Steps 2-4. This is not a
     // spelling: the borrow has to be taken after the call that pops it.
-    let pBs = crate::encoder::svc_encode_slice::slice_writer(pEncCtx, pSlice);
+    let pBs = crate::encoder::svc_encode_slice::slice_writer(pEncCtx, std::ptr::addr_of_mut!((*pSlice).sSliceBs));
     let kuiChromaQpIndexOffset = (*layer_pps(pEncCtx, current_layer(pEncCtx))).uiChromaQpIndexOffset;
 
     if IS_SKIP((*pCurMb).uiMbType) {
@@ -683,7 +683,7 @@ pub unsafe fn WelsSpatialWriteMbSyn(
         ENC_RETURN_SUCCESS
     } else {
         if (*pEncCtx).eSliceType != EWelsSliceType::I_SLICE {
-            let buf = crate::encoder::svc_encode_slice::slice_bs_buffer(pEncCtx, pSlice);
+            let buf = crate::encoder::svc_encode_slice::slice_bs_buffer(pEncCtx, std::ptr::addr_of_mut!((*pSlice).sSliceBs), (*pSlice).uiBufferIdx as usize);
             BsWriteUE(buf, &mut *pBs, (*pSlice).iMbSkipRun as u32);
             (*pSlice).iMbSkipRun = 0;
         }
@@ -697,10 +697,10 @@ pub unsafe fn WelsSpatialWriteMbSyn(
 
         // Step 2: write coded block pattern
         if IS_INTRA4x4((*pCurMb).uiMbType) {
-            let buf = crate::encoder::svc_encode_slice::slice_bs_buffer(pEncCtx, pSlice);
+            let buf = crate::encoder::svc_encode_slice::slice_bs_buffer(pEncCtx, std::ptr::addr_of_mut!((*pSlice).sSliceBs), (*pSlice).uiBufferIdx as usize);
             BsWriteUE(buf, &mut *pBs, g_kuiIntra4x4CbpMap[(*pCurMb).uiCbp as usize]);
         } else if !IS_INTRA16x16((*pCurMb).uiMbType) {
-            let buf = crate::encoder::svc_encode_slice::slice_bs_buffer(pEncCtx, pSlice);
+            let buf = crate::encoder::svc_encode_slice::slice_bs_buffer(pEncCtx, std::ptr::addr_of_mut!((*pSlice).sSliceBs), (*pSlice).uiBufferIdx as usize);
             BsWriteUE(buf, &mut *pBs, g_kuiInterCbpMap[(*pCurMb).uiCbp as usize]);
         }
 
@@ -710,12 +710,12 @@ pub unsafe fn WelsSpatialWriteMbSyn(
             (*pSlice).uiLastMbQp = (*pCurMb).uiLumaQp;
 
             BsWriteSE(
-                crate::encoder::svc_encode_slice::slice_bs_buffer(pEncCtx, pSlice),
+                crate::encoder::svc_encode_slice::slice_bs_buffer(pEncCtx, std::ptr::addr_of_mut!((*pSlice).sSliceBs), (*pSlice).uiBufferIdx as usize),
                 &mut *pBs,
                 kiDeltaQp,
             );
             let pMbCache = std::ptr::addr_of_mut!((*pSlice).sMbCacheInfo);
-            let buf = crate::encoder::svc_encode_slice::slice_bs_buffer(pEncCtx, pSlice);
+            let buf = crate::encoder::svc_encode_slice::slice_bs_buffer(pEncCtx, std::ptr::addr_of_mut!((*pSlice).sSliceBs), (*pSlice).uiBufferIdx as usize);
             if WelsWriteMbResidual(&*ctx_func_list(pEncCtx), &mut *pMbCache, &*pCurMb, buf, pBs) != 0 {
                 return ENC_RETURN_VLCOVERFLOWFOUND;
             }
@@ -736,7 +736,7 @@ pub unsafe fn WelsSpatialWriteMbSyn(
         CheckBitstreamBuffer(
             (*pSlice).iSliceIdx as u32,
             pEncCtx,
-            crate::encoder::svc_encode_slice::slice_bs_buffer(pEncCtx, pSlice),
+            crate::encoder::svc_encode_slice::slice_bs_buffer(pEncCtx, std::ptr::addr_of_mut!((*pSlice).sSliceBs), (*pSlice).uiBufferIdx as usize),
             &*pBs,
         )
     }
@@ -1004,10 +1004,10 @@ pub unsafe fn WelsWriteMbResidual(
 pub unsafe fn StashMBStatusCavlc(
     pBs: *mut BsWriter,
     pDss: *mut crate::encoder::svc_encode_slice::SDynamicSlicingStack,
-    pSlice: *mut SSlice,
+    kuiLastMbQp: u8,
     iMbSkipRun: i32,
 ) {
-    if pDss.is_null() || pSlice.is_null() {
+    if pDss.is_null() {
         return;
     }
     if !pBs.is_null() {
@@ -1019,25 +1019,26 @@ pub unsafe fn StashMBStatusCavlc(
         // `PropagateCarry` and not for the cursor.
         (*pDss).sBsStack = *pBs;
     }
-    (*pDss).uiLastMbQp = (*pSlice).uiLastMbQp as u8;
+    (*pDss).uiLastMbQp = kuiLastMbQp;
     (*pDss).iMbSkipRunStack = iMbSkipRun;
 }
 
 /// See [`StashMBStatusCavlc`] for why this takes no buffer.
+///
+/// **T9.E5**: the `uiLastMbQp` restore moved to the call sites (the caller owns
+/// `sDss` and the slice; this fn no longer names `SSlice` — S54's value rule).
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe fn StashPopMBStatusCavlc(
     pBs: *mut BsWriter,
     pDss: *mut crate::encoder::svc_encode_slice::SDynamicSlicingStack,
-    pSlice: *mut SSlice,
 ) -> i32 {
-    if pDss.is_null() || pSlice.is_null() {
+    if pDss.is_null() {
         return 0;
     }
     if !pBs.is_null() {
         *pBs = (*pDss).sBsStack;
     }
-    (*pSlice).uiLastMbQp = (*pDss).uiLastMbQp;
     (*pDss).iMbSkipRunStack
 }
 
@@ -1053,13 +1054,14 @@ pub unsafe fn StashPopMBStatusCavlc(
 pub unsafe fn StashMBStatusCabac(
     buf: &mut [u8],
     pDss: *mut crate::encoder::svc_encode_slice::SDynamicSlicingStack,
-    pSlice: *mut SSlice,
+    pCabacCtx: *mut crate::encoder::set_mb_syn_cabac::SCabacCtx,
+    kuiLastMbQp: u8,
     iMbSkipRun: i32,
 ) {
-    if pDss.is_null() || pSlice.is_null() {
+    if pDss.is_null() || pCabacCtx.is_null() {
         return;
     }
-    let pCtx = std::ptr::addr_of_mut!((*pSlice).sCabacCtx);
+    let pCtx = pCabacCtx;
     // `SCabacCtx` is `Copy` and, since T3.5, holds no pointers — so the whole
     // snapshot is this one assignment, the same shape the CAVLC twin above
     // reached in T3.4. What the two still do not share is the byte copy below:
@@ -1067,7 +1069,7 @@ pub unsafe fn StashMBStatusCabac(
     // the cursor is not enough to restore the output.
     (*pDss).sStoredCabac = *pCtx;
     if !(*pDss).pRestoreBuffer.is_null() {
-        let iPosBitOffset = GetBsPosCabac(pSlice) - (*pDss).iStartPos;
+        let iPosBitOffset = GetBsPosCabac(pCtx as *const _) - (*pDss).iStartPos;
         let iLen = (iPosBitOffset >> 3) + if (iPosBitOffset & 0x07) != 0 { 1 } else { 0 };
         let start = (*pCtx).m_iBufStart;
         // Sliced, not offset: `buf[start..start + iLen]` is what bounds the
@@ -1077,7 +1079,7 @@ pub unsafe fn StashMBStatusCabac(
         let src = &buf[start..start + iLen as usize];
         std::ptr::copy_nonoverlapping(src.as_ptr(), (*pDss).pRestoreBuffer, iLen as usize);
     }
-    (*pDss).uiLastMbQp = (*pSlice).uiLastMbQp;
+    (*pDss).uiLastMbQp = kuiLastMbQp;
     (*pDss).iMbSkipRunStack = iMbSkipRun;
 }
 
@@ -1090,16 +1092,16 @@ pub unsafe fn StashMBStatusCabac(
 pub unsafe fn StashPopMBStatusCabac(
     buf: &mut [u8],
     pDss: *mut crate::encoder::svc_encode_slice::SDynamicSlicingStack,
-    pSlice: *mut SSlice,
+    pCabacCtx: *mut crate::encoder::set_mb_syn_cabac::SCabacCtx,
 ) -> i32 {
-    if pDss.is_null() || pSlice.is_null() {
+    if pDss.is_null() || pCabacCtx.is_null() {
         return 0;
     }
-    let pCtx = std::ptr::addr_of_mut!((*pSlice).sCabacCtx);
+    let pCtx = pCabacCtx;
     *pCtx = (*pDss).sStoredCabac;
     // Write-extent audit site 3: the one write that is not at the cursor.
     if !(*pDss).pRestoreBuffer.is_null() {
-        let iPosBitOffset = GetBsPosCabac(pSlice) - (*pDss).iStartPos;
+        let iPosBitOffset = GetBsPosCabac(pCtx as *const _) - (*pDss).iStartPos;
         let iLen = (iPosBitOffset >> 3) + if (iPosBitOffset & 0x07) != 0 { 1 } else { 0 };
         let start = (*pCtx).m_iBufStart;
         // Same bound as the stash side, on the write this time — this is the
@@ -1108,7 +1110,6 @@ pub unsafe fn StashPopMBStatusCabac(
         let dst = &mut buf[start..start + iLen as usize];
         std::ptr::copy_nonoverlapping((*pDss).pRestoreBuffer, dst.as_mut_ptr(), iLen as usize);
     }
-    (*pSlice).uiLastMbQp = (*pDss).uiLastMbQp;
     (*pDss).iMbSkipRunStack
 }
 
@@ -1128,11 +1129,11 @@ pub unsafe fn StashPopMBStatusCabac(
 /// [`EntropyCoder::GetBsPosition`]: crate::encoder::wels_func_ptr_def::EntropyCoder::GetBsPosition
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
-pub unsafe fn GetBsPosCabac(pSlice: *mut SSlice) -> i32 {
-    if pSlice.is_null() {
+pub unsafe fn GetBsPosCabac(pCabacCtx: *const crate::encoder::set_mb_syn_cabac::SCabacCtx) -> i32 {
+    if pCabacCtx.is_null() {
         return 0;
     }
-    let pCtx = &(*pSlice).sCabacCtx;
+    let pCtx = &*pCabacCtx;
     ((pCtx.m_iBufCur - pCtx.m_iBufStart) as i32) * 8 + (pCtx.m_iLowBitCnt - 9)
 }
 

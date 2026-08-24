@@ -257,20 +257,27 @@ impl EntropyCoder {
     #[inline]
     // unsafe-cat: port-raw(Phase 9)
     #[allow(unsafe_code)]
+    /// **T9.E5**: `pSlice` became the three things the two arms touch — the
+    /// CABAC coder state, the last macroblock QP as a value, and (on the pop
+    /// side, at the call sites) the restore of that QP — so no argument of
+    /// this call names `SSlice` and nothing here retags the slice when the
+    /// family flips (the two shape-B sites q1c reported here were exactly the
+    /// `slice_writer` result held across the future `&mut *pSlice` argument).
     pub unsafe fn StashMBStatus(
         self,
         buf: &mut [u8],
         pBs: *mut BsWriter,
         pDss: *mut SDynamicSlicingStack,
-        pSlice: *mut SSlice,
+        pCabacCtx: *mut crate::encoder::set_mb_syn_cabac::SCabacCtx,
+        kuiLastMbQp: u8,
         iMbSkipRun: i32,
     ) {
         match self {
             EntropyCoder::Cavlc => crate::encoder::svc_set_mb_syn_cavlc::StashMBStatusCavlc(
-                pBs, pDss, pSlice, iMbSkipRun,
+                pBs, pDss, kuiLastMbQp, iMbSkipRun,
             ),
             EntropyCoder::Cabac => crate::encoder::svc_set_mb_syn_cavlc::StashMBStatusCabac(
-                buf, pDss, pSlice, iMbSkipRun,
+                buf, pDss, pCabacCtx, kuiLastMbQp, iMbSkipRun,
             ),
         }
     }
@@ -285,19 +292,23 @@ impl EntropyCoder {
     #[inline]
     // unsafe-cat: port-raw(Phase 9)
     #[allow(unsafe_code)]
+    /// **T9.E5**, as [`StashMBStatus`]: the caller restores
+    /// `uiLastMbQp` from `sDss` beside the call — it owns both.
+    ///
+    /// [`StashMBStatus`]: EntropyCoder::StashMBStatus
     pub unsafe fn StashPopMBStatus(
         self,
         buf: &mut [u8],
         pBs: *mut BsWriter,
         pDss: *mut SDynamicSlicingStack,
-        pSlice: *mut SSlice,
+        pCabacCtx: *mut crate::encoder::set_mb_syn_cabac::SCabacCtx,
     ) -> i32 {
         match self {
             EntropyCoder::Cavlc => {
-                crate::encoder::svc_set_mb_syn_cavlc::StashPopMBStatusCavlc(pBs, pDss, pSlice)
+                crate::encoder::svc_set_mb_syn_cavlc::StashPopMBStatusCavlc(pBs, pDss)
             }
             EntropyCoder::Cabac => {
-                crate::encoder::svc_set_mb_syn_cavlc::StashPopMBStatusCabac(buf, pDss, pSlice)
+                crate::encoder::svc_set_mb_syn_cavlc::StashPopMBStatusCabac(buf, pDss, pCabacCtx)
             }
         }
     }
@@ -312,10 +323,14 @@ impl EntropyCoder {
     #[inline]
     // unsafe-cat: port-raw(Phase 9)
     #[allow(unsafe_code)]
-    pub unsafe fn GetBsPosition(self, pBs: *mut BsWriter, pSlice: *mut SSlice) -> i32 {
+    pub unsafe fn GetBsPosition(
+        self,
+        pBs: *mut BsWriter,
+        pCabacCtx: *const crate::encoder::set_mb_syn_cabac::SCabacCtx,
+    ) -> i32 {
         match self {
             EntropyCoder::Cavlc => crate::encoder::svc_set_mb_syn_cavlc::GetBsPosCavlc(pBs),
-            EntropyCoder::Cabac => crate::encoder::svc_set_mb_syn_cavlc::GetBsPosCabac(pSlice),
+            EntropyCoder::Cabac => crate::encoder::svc_set_mb_syn_cavlc::GetBsPosCabac(pCabacCtx),
         }
     }
 }

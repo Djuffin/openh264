@@ -1574,10 +1574,13 @@ pub unsafe fn RcInitGomParameters(pEncCtx: *mut sWelsEncCtx) {
 /// Assigns final macroblock luma and chroma QPs.
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
-pub unsafe fn RcCalculateMbQp(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSlice, pCurMb: &mut SMB) {
+pub unsafe fn RcCalculateMbQp(
+    pEncCtx: *mut sWelsEncCtx,
+    pSOverRc: &mut crate::encoder::svc_encode_slice::SRCSlicing,
+    pCurMb: &mut SMB,
+) {
     let did = (*pEncCtx).uiDependencyId as usize;
     let pWelsSvcRc = ctx_rc_at(pEncCtx, did);
-    let pSOverRc = &mut (*pSlice).sSlicingOverRc;
 
     let mut iLumaQp = pSOverRc.iCalculatedQpSlice;
     let pCurLayer = current_layer(pEncCtx);
@@ -1630,10 +1633,12 @@ pub unsafe fn RcJudgeBaseUsability(pEncCtx: *mut sWelsEncCtx) -> *mut SWelsSvcRc
 /// Distributes slice bit budget to the upcoming GOM unit.
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
-pub unsafe fn RcGomTargetBits(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSlice) {
+pub unsafe fn RcGomTargetBits(
+    pEncCtx: *mut sWelsEncCtx,
+    pSOverRc: &mut crate::encoder::svc_encode_slice::SRCSlicing,
+) {
     let did = (*pEncCtx).uiDependencyId as usize;
     let pWelsSvcRc = ctx_rc_at(pEncCtx, did);
-    let pSOverRc = &mut (*pSlice).sSlicingOverRc;
 
     let kiComplexityIndex = pSOverRc.iComplexityIndexSlice;
     let iLastGomIndex = pSOverRc.iEndMbSlice / (*pWelsSvcRc).iNumberMbGom;
@@ -1676,10 +1681,13 @@ pub unsafe fn RcGomTargetBits(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSlice) {
 /// Dynamically adjusts slice QP at GOM boundaries.
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
-pub unsafe fn RcCalculateGomQp(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSlice, _pCurMb: &mut SMB) {
+pub unsafe fn RcCalculateGomQp(
+    pEncCtx: *mut sWelsEncCtx,
+    pSOverRc: &mut crate::encoder::svc_encode_slice::SRCSlicing,
+    _pCurMb: &mut SMB,
+) {
     let did = (*pEncCtx).uiDependencyId as usize;
     let pWelsSvcRc = ctx_rc_at(pEncCtx, did);
-    let pSOverRc = &mut (*pSlice).sSlicingOverRc;
 
     let iLeftBits = (pSOverRc.iTargetBitsSlice - pSOverRc.iFrameBitsSlice) as i64;
     let iTargetLeftBits = iLeftBits + pSOverRc.iGomBitsSlice as i64 - pSOverRc.iGomTargetBits as i64;
@@ -2349,7 +2357,7 @@ pub unsafe extern "C" fn WelsRcMbInitGom(
     let pCurLayer = current_layer(pEncCtx);
     let kuiChromaQpIndexOffset = (*layer_pps(pEncCtx, pCurLayer)).uiChromaQpIndexOffset;
 
-    pSOverRc.iBsPosSlice = (*ctx_func_list(pEncCtx)).eEntropyCoder.GetBsPosition(crate::encoder::svc_encode_slice::slice_writer(pEncCtx, pSlice), pSlice);
+    pSOverRc.iBsPosSlice = (*ctx_func_list(pEncCtx)).eEntropyCoder.GetBsPosition(crate::encoder::svc_encode_slice::slice_writer(pEncCtx, std::ptr::addr_of_mut!((*pSlice).sSliceBs)), std::ptr::addr_of!((*pSlice).sCabacCtx));
 
     if (*pWelsSvcRc).bEnableGomQp != 0 {
         if (*pWelsSvcRc).iNumberMbGom != 0
@@ -2357,11 +2365,11 @@ pub unsafe extern "C" fn WelsRcMbInitGom(
         {
             if (*pCurMb).iMbXY != pSOverRc.iStartMbSlice {
                 pSOverRc.iComplexityIndexSlice += 1;
-                RcCalculateGomQp(pEncCtx, pSlice, pCurMb);
+                RcCalculateGomQp(pEncCtx, &mut *pSOverRc, pCurMb);
             }
-            RcGomTargetBits(pEncCtx, pSlice);
+            RcGomTargetBits(pEncCtx, &mut *pSOverRc);
         }
-        RcCalculateMbQp(pEncCtx, pSlice, pCurMb);
+        RcCalculateMbQp(pEncCtx, &mut *pSOverRc, pCurMb);
     } else {
         (*pCurMb).uiLumaQp = (*pEncCtx).iGlobalQp as u8;
         (*pCurMb).uiChromaQp = g_kuiChromaQpTable
@@ -2399,7 +2407,7 @@ pub unsafe extern "C" fn WelsRcMbInfoUpdateGom(
     let pSOverRc = &mut (*pSlice).sSlicingOverRc;
     let kiComplexityIndex = pSOverRc.iComplexityIndexSlice as usize;
 
-    let cur_bs = (*ctx_func_list(pEncCtx)).eEntropyCoder.GetBsPosition(crate::encoder::svc_encode_slice::slice_writer(pEncCtx, pSlice), pSlice);
+    let cur_bs = (*ctx_func_list(pEncCtx)).eEntropyCoder.GetBsPosition(crate::encoder::svc_encode_slice::slice_writer(pEncCtx, std::ptr::addr_of_mut!((*pSlice).sSliceBs)), std::ptr::addr_of!((*pSlice).sCabacCtx));
     let iCurMbBits = cur_bs - pSOverRc.iBsPosSlice;
     pSOverRc.iFrameBitsSlice += iCurMbBits;
     pSOverRc.iGomBitsSlice += iCurMbBits;
