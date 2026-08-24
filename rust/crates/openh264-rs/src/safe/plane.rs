@@ -215,6 +215,18 @@ impl PaddedPlane {
         self.origin
     }
 
+    /// The allocation's length in bytes, padding included — `as_slice().len()`
+    /// without taking the slice.
+    ///
+    /// The distinction matters exactly where [`root_ptr`](Self::root_ptr)'s does:
+    /// a caller pairing a root address with a length must not create a `&[u8]`
+    /// to learn the length, because that retag is a child of the buffer and the
+    /// next `&mut` pops it. `Vec::len` reads the header, like `Vec::as_mut_ptr`.
+    #[inline]
+    pub fn buf_len(&self) -> usize {
+        self.buf.len()
+    }
+
     /// The whole allocation, padding included — the C++ `pBuffer[i]`.
     ///
     /// The escape hatch for kernels that want to walk rows with `chunks_exact`

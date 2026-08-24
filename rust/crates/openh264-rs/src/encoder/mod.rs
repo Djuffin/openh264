@@ -11,6 +11,7 @@ pub mod nal_encap;
 pub mod param_svc;
 pub mod paraset_strategy;
 pub mod picture;
+pub mod rec_view;
 pub mod set_mb_syn_cabac;
 // **T6.J6's exemption retired at T7.C8, on schedule.** `#![deny(unsafe_code)]` above
 // is an inner attribute on the `encoder` module, so it reaches every file below it —
