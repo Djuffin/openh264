@@ -62,21 +62,20 @@ this family that is genuinely hard, is the wrong trade at any price.
 ## 1. The tables
 
 <!-- BEGIN phase9_plane_callers -->
-70 plane call sites (64 kernel-internal composition calls excluded — they die with their shims); 25 safe-now, 32 blocked on the reconstruction write, 13 gated on the coefficient family (F103), 0 unclassified.
+62 plane call sites (64 kernel-internal composition calls excluded — they die with their shims); 20 safe-now, 29 blocked on the reconstruction write, 13 gated on the coefficient family (F103), 0 unclassified.
 
 ### By kernel group
 
 | group     | safe-now | coeff | blocked | ? | n/a | fork | st |
 |-----------|----------|-------|---------|---|-----|------|----|
-| copy      | 3        | 0     | 17      | 0 | 0   | 20   | 0  |
+| copy      | 3        | 0     | 14      | 0 | 0   | 17   | 0  |
 | dct       | 0        | 13    | 0       | 0 | 0   | 13   | 0  |
 | idct      | 0        | 0     | 10      | 0 | 0   | 10   | 0  |
 | intrapred | 0        | 0     | 5       | 0 | 0   | 5    | 0  |
-| mc        | 6        | 0     | 0       | 0 | 0   | 6    | 0  |
-| sad       | 14       | 0     | 0       | 0 | 0   | 11   | 3  |
+| mc        | 3        | 0     | 0       | 0 | 0   | 3    | 0  |
+| sad       | 13       | 0     | 0       | 0 | 0   | 10   | 3  |
 | sad4      | 1        | 0     | 0       | 0 | 0   | 1    | 0  |
-| satd      | 1        | 0     | 0       | 0 | 0   | 1    | 0  |
-| **total** | 25       | 13    | 32      | 0 | 0   | 67   | 3  |
+| **total** | 20       | 13    | 29      | 0 | 0   | 59   | 3  |
 
 ### By file
 
@@ -85,10 +84,10 @@ this family that is genuinely hard, is the wrong trade at any price.
 | encoder/svc_base_layer_md.rs         | 0        | 3     | 7       | 0 | 0   | 10   | 0  |
 | encoder/svc_encode_mb.rs             | 0        | 2     | 10      | 0 | 0   | 12   | 0  |
 | encoder/svc_encode_slice.rs          | 0        | 4     | 5       | 0 | 0   | 9    | 0  |
-| encoder/svc_mode_decision.rs         | 14       | 4     | 10      | 0 | 0   | 27   | 1  |
+| encoder/svc_mode_decision.rs         | 9        | 4     | 7       | 0 | 0   | 19   | 1  |
 | encoder/svc_motion_estimate.rs       | 10       | 0     | 0       | 0 | 0   | 8    | 2  |
 | processing/scene_change_detection.rs | 1        | 0     | 0       | 0 | 0   | 1    | 0  |
-| **total**                            | 25       | 13    | 32      | 0 | 0   | 67   | 3  |
+| **total**                            | 20       | 13    | 29      | 0 | 0   | 59   | 3  |
 
 <!-- END phase9_plane_callers -->
 
@@ -180,11 +179,22 @@ to the pool, exactly as `pRefList` is the route for the reconstruction pool.
 Every place the reconstruction picture is reached, with counts, so session C can
 size the design against it:
 
-| route | sites | what it is |
-|---|---:|---|
-| `SPicData.pCsMb` / `pDecMb` | 42 | the per-macroblock cursor bundle |
-| `SDqLayer.pCsData[..]` | 24 | the per-frame plane roots the bundle is stamped from |
-| `layer_dec_pic_mut` / `layer_dec_pic` | 14 | `&mut SPicture` on the reconstruction pool — **F73's retag** |
-| `SPicture::planes()` | 38 | the `&mut self` that hands out the raw roots — F73's other half |
-| blocked call sites (§1) | 32 | 17 copy, 10 idct, 5 intra-pred |
-| `deblocking.rs` + `common/deblocking_common.rs` | 20 + 13 `unsafe fn` | `SDeblockingFilter::pCsData`, walked per macroblock |
+> **Re-measured at session C's close (T9.C7, `bdf425fd`).** The `after` column is
+> `grep -rn <pattern> src/encoder | grep -v ':\s*//' | wc -l`, re-run; the `at F107`
+> column is what F107 wrote and is kept because three of the six rows moved for reasons
+> worth reading rather than by being converted.
+
+| route | at F107 | after C | what it is |
+|---|---:|---:|---|
+| `SPicData.pCsMb` | 26 | **28** | the per-macroblock cursor bundle. It *grew*: `pDecMb`'s three readers in `OutputPMbWithoutConstructCsRsNoCopy` moved onto it (F134 — the two were one address), and the live `WelsRecPskip`'s three went to the seam |
+| `SPicData.pDecMb` | 9 | **0** | **deleted** (F134) — a second derivation of `pCsMb`, proved equal over 583 rows x 2 profiles, and the last per-macroblock `&mut SPicture` |
+| `SDqLayer.pCsData[..]` | 24 | **29** | the per-frame plane roots. Also grew: deblocking's two root triples and `OutputPMb`'s stride pair now read the layer instead of re-resolving the pool |
+| `layer_dec_pic_mut` / `layer_dec_pic` | 14 | **0** | **both accessors deleted.** There is no `&mut` route into the reconstruction picture from inside a frame |
+| `SPicture::planes()` | 38 | **26** | the `&mut self` that hands out the raw roots. What is left is pre-frame stamping and the reference-list manager; none of it is in the macroblock loop |
+| blocked call sites (§1) | 32 | **29** | 14 copy, 10 idct, 5 intra-pred. −3 is T9.C7's `WelsRecPskip` and nothing else (F128) |
+| `deblocking.rs` + `common/deblocking_common.rs` | 20 + 13 | **21 tags + 19 `unsafe fn`** | untouched beyond the two roots; C2's |
+
+**And the seam is the route that replaced them**: `layer_rec_view(pCurLayer)` →
+`RecPicView::plane(i).cursor(x, y)`, with `(x, y)` from `SPicData`'s `iMbX`/`iMbY`. The
+picture's four per-macroblock side arrays go through the same view — F131 is why they are
+in it at all, and it is the correction this document's own §6 most needs read beside it.

@@ -16933,3 +16933,183 @@ not with C's.
 census sites sit behind them. **`common/mc.rs` retires its last three unsafe items the
 day `SvcMdSCDMbEnc` converts**, which needs a `SCREEN_CONTENT_REAL_TIME` axis in both
 drivers — the one thing B4 proved the `bg` preset can never be.
+
+## 2026-08-23 — Phase 9, session C (the reconstruction seam, and the measurement that says who owns the acceptance)
+
+Seven commits, `85a525d3`..`bdf425fd`, every one byte-identical: 583 sweep rows in both
+profiles, five `gates.sh family` runs across the session.
+
+### the measurement the session opened with
+
+Before writing anything, the ignored fork/join probe was run under Miri. That is not in
+the brief and it is what re-shaped the session:
+
+```
+error: Undefined Behavior: Data race detected between (1) retag write on thread
+`unnamed-2` and (2) retag write of type `encoder::encoder_context::SRefList` on
+thread `unnamed-3` at alloc294067
+   --> encoder_context.rs:406  pub fn pic_mut(&mut self, id: RecPicId) -> &mut SPicture
+   1: layer_dec_pic_mut   2: WelsMdIntraInit (svc_base_layer_md.rs:359)
+```
+
+Not a pixel, not even the picture: the **pool**. Two workers taking
+`SRefList::pic_mut(&mut self)` at once. Everything below follows from reading that
+before designing to F107 §3's sketch rather than after (**F131**, **F132**).
+
+### what landed
+
+| commit | what |
+|---|---|
+| `85a525d3` | **T9.C1** — the seam type, `encoder/rec_view.rs`, no consumers. Four probes, all green under Miri (1.84 s); both threaded ones calibrated by planting the overlap and watching the detector fire, then reverted. Ratchet **rebaselined** with the reason in the message |
+| `d8356e4b` | **T9.C2** — `SDqLayer.pRecView`, built in `WelsInitCurrentLayer` beside the `pCsData` stamps. `assert_size!(SDqLayer)` 840/768 → **1008/936** |
+| `7aefe658` | **T9.C3** — the ten side-array sites; `PFillInterNeighborCacheFunc` takes `&SharedMbArray<i32>`; `layer_dec_pic` deleted (S18) |
+| `b7a54d61` | **T9.C4** — `pDecMb` deleted after proof (**F134**), the four plane roots, `layer_dec_pic_mut` deleted, and `SStrideTables`' read path made shared. `assert_size!(SMbCache)` 5600 → **5568** |
+| `5a17e272` | **T9.C5** — `pGomCost` made atomic (**F133**, a real upstream race); `WelsGetNextMbOfSlice` and `WelsMbToSliceIdc` stop borrowing `SSliceCtx` mutably to read it |
+| `6b8a4fc1` | **T9.C6** — the mid-row probe, with `first_mb_in_slice` read off the bitstream so the boundary is asserted; calibrated against the row-aligned mode |
+| `bdf425fd` | **T9.C7** — `WelsRecPskip` writes through the seam; `copy_block_to_view` is the first of F107 §3's three write-through-`&self` kernel families |
+
+### the seam, as committed
+
+`encoder/rec_view.rs`. **One** `UnsafeCell`-crossing accessor and **one**
+`unsafe impl Sync`, both `// unsafe-cat: recon-seam` from the first commit (D-exit-1):
+
+* `SharedCells<T>` — a captured base address and a length, and the module's only place
+  either is taken. `cells(&self) -> &[Cell<T>]` is the crossing; the `Sync` impl is on
+  this type rather than on the picture view, because the parts are what is being promised
+  about. Everything above it is safe code with bounds checks intact.
+* `SharedPlane` / `RecCursor<'a>` — the plane half, `PlaneCursorMut`'s shape with
+  `set`/`write_row` on `&self` and rows passed by value.
+* `SharedMbArray<T>` — the side-array half, which the brief did not scope (F131).
+* `RecPicView` — three planes and the four per-macroblock arrays, built from
+  `&mut SPicture`.
+
+`RecCursor` stays `!Sync` by inference (it holds `&[Cell<u8>]`), so a worker must make
+its own from the shared plane rather than be handed one. That is deliberate and
+documented.
+
+**The soundness paragraph, as it stands in the module docs**: the view is built from
+`&mut SPicture`, so for its lifetime nothing else may borrow the picture — that exclusive
+borrow is what retires F73, and it is why the view is built where the frame's plane roots
+are stamped rather than inside the loop. From it the view captures, per storage, exactly
+two numbers: the allocation's base address and its length. Every later access re-derives
+a `&[Cell<T>]` from that captured pair, so no access is a child of any other and none can
+pop a sibling — S40's retag-stable root, one level down. Writes then go through `Cell`
+with no synchronisation, which is sound **iff** no two workers touch the same byte; that
+"iff" is not asserted, it is F107 §2's measurement, and it is checked by the data-race
+probes, because a shared `Cell` retag performs no memory access and Miri therefore
+reports an *actual* overlapping access rather than a retag conflict. Publication to
+post-join readers is the scope join, which is a happens-before edge.
+
+**Placement: the layer, not the job.** Every consumer already reaches `pCurDqLayer` and
+all three forks reach it through the raw ctx, so no signature moves; the cost is that
+`SDqLayer` carries no lifetime, so the view holds captured parts and the stability
+requirement is a documented contract rather than a borrow — which is exactly what T9.C3
+and T9.C4 then enforced by deleting the other route.
+
+### the acceptance, and who owns it
+
+Six rounds of "fix what Miri names, re-run, read the next verdict" (**F132**): the fork
+shares six families, not one. Four are closed — the reconstruction picture (this
+session's), `SStrideTables`, `pGomCost`, `sSliceEncCtx` — and the last two are the two
+probes' current verdicts: `&mut SMB` vs deblocking's cross-slice neighbour read (session
+E's, F112/F114b) and `pOverallMbMap` rewritten in-fork (the slice structures'). **Three
+of the six are not this session's family by the charter's own §8, and two of them are
+genuine races rather than port-introduced over-claims.**
+
+So the acceptance as F107 wrote it is not a property of the reconstruction seam and could
+not have been met here. What is met: the seam's own two data-race probes pass under Miri,
+both calibrated; the mid-row probe exists, passes as a behaviour test, asserts its
+boundary from the bitstream, and carries the name of what stops it under Miri.
+
+### the referees used
+
+* `gates.sh family` x5 — 583/583 both profiles every time.
+* **`pDecMb == pCsMb`**: a `debug_assert_eq!` in both stamp branches, carried through a
+  whole family run, then calibrated by planting `.wrapping_add(1)` (exit 134 on every row
+  of the first preset). The debug sweep does run with `debug_assertions`.
+* **The seam's own overlap calibration**: widening one probe's second stripe from `16..32`
+  to `0..32` gives "Data race detected … non-atomic write … retag write of type `u8`";
+  making both side-array threads write every index gives the same on `SMVUnitXY`.
+* **The mid-row assertion**: pointed at `SM_FIXEDSLCNUM_SLICE` it fails with
+  `first_mb_in_slice = [0, 28] at 7 macroblocks per row` — which is F107 §1's
+  row-alignment result confirmed a second way, from the bitstream instead of from the
+  slice-assignment code.
+* **T9.C7's shape (S55/S59)**: +1 on one reconstruction sample fails **150 of 210** `st`
+  rows. Sixty swallow it; 150 is the number to quote for the seam-written copy.
+
+### counts at close
+
+| | B4 | C |
+|---|---:|---:|
+| `unsafe-cat` tags, total | 779 | **779** |
+| … `port-raw(Phase 9)` | 631 | **629** |
+| … `cursor` | 57 | 57 |
+| … `recon-seam` | — | **2** |
+| plane census: blocked | 32 | **29** |
+| plane census: safe-now / coeff | 20 / 13 | 20 / 13 |
+| census tags | 688 | **686** |
+| `raw_ptr` (tree) | 2004 | **2001** |
+| `unsafe_fn` | 731 | **729** |
+| `layer_dec_pic*` call sites | 14 | **0** |
+| `SPicData.pDecMb` uses | 9 | **0** |
+
+**The total tag count did not move, and that is the honest reading**: three accessors
+died (`layer_dec_pic`, `layer_dec_pic_mut`, `rc_gom_cost`), one was born
+(`layer_rec_view`), and the seam contributed two `recon-seam` items — a new lawful
+category, not a conversion. The work this session did is in the four rows that *did*
+move: the fourteen `&mut SPicture` routes into the reconstruction picture are gone, and
+so is one of its four raw cursor triples. **Do not sum the blocked-census drop with
+anything**: 32 → 29 is T9.C7's three conversions and nothing else (F128).
+
+### what C2, E, F and Phase 10 inherit
+
+**C2** (the seam's consumers). **26 blocked sites are C2's** of the 29 the census reports
+— the other 3 are `SvcMdSCDMbEnc`'s, dormant, Phase 10's. And **3 of the 26 are dead
+code**: `svc_encode_mb.rs::WelsRecPskip` is a second implementation of the function
+T9.C7 converted, with no caller anywhere (**F135**); left in place so the census is not
+credited for a deletion.
+
+| owner | sites | group |
+|---|---:|---|
+| `WelsEncRecI16x16Y` | 5 | 4 idct + 1 copy |
+| `OutputPMbWithoutConstructCsRsNoCopy` | 3 | idct |
+| `WelsMdInterEncode` | 3 | copy |
+| `WelsMdBackgroundMbEnc` | 3 | copy — lit by `bg`, 32-row teeth (F126) |
+| `WelsRecPskip` (dead copy) | 3 | copy |
+| `WelsMdIntraChroma` | 2 | intrapred |
+| `WelsIMbChromaEncode` | 2 | idct |
+| `WelsEncRecI4x4Y` | 2 | 1 idct + 1 copy |
+| `WelsMdI4x4Fast` / `WelsMdI4x4` / `WelsMdI16x16` | 3 | intrapred |
+| `SvcMdSCDMbEnc` | 3 | copy — **dormant, Phase 10's** |
+
+The route is built and proved: `layer_rec_view(pCurLayer)` → `plane(i).cursor(x, y)` from
+`SPicData`'s `iMbX`/`iMbY`, operand from the arena. `copy_block_to_view` covers all 14
+remaining copy sites (every one has an arena source). The **idct** family still needs its
+write-through-`&self` flavour — `idct_t4_rec`/`idct_four_t4_rec` and their `_in_place`
+forms, where the in-place pair also *reads* the plane, which `RecCursor::at` already
+does. Intra-pred needs the pred-side kernels over a `RecCursor` for the `pRef` operand.
+Tables flip last (F118); `common/copy_mb.rs` and `common/intra_pred_common.rs` reach
+`deny` when their last raw caller goes.
+
+**Deblocking is untouched beyond its two roots** — 26 unsafe items and 21 tags in
+`encoder/deblocking.rs`, 19 `unsafe fn` in `common/deblocking_common.rs`, still un-denied.
+Its roots are now the layer's `pCsData` rather than a per-worker `planes()` retag, which
+is the retag removed; the per-MB walk and the edge kernels are C2's, and fact 5's caution
+stands — the slice-boundary skip is load-bearing and the mid-row probe is its referee.
+
+**F117 was not reached.** The three `VaaBackgroundMbDataUpdate` copies are untouched and
+B4's constraint on them is unchanged. The design B4 handed over (record the macroblock
+indices during the loop, execute the copies after the join) is not blocked by anything
+this session did, and the `bg` preset is still its referee.
+
+**Session E** inherits F132's round 5 as a *measured* blocker with a probe attached:
+`&mut SMB` over-claims the whole macroblock record, and deblocking reads a neighbour's
+`uiSliceIdc` cross-slice. The C++ is sound there (disjoint bytes); only the port's borrow
+conflicts. `q1c.py --type SDqLayer` is unchanged at 14 sites in 5 callers.
+
+**The slice structures** inherit round 6: `AddSliceBoundary` rewriting `pOverallMbMap`
+in-fork. Benign in value (the two partitions' slice indices never collide), a real race
+in the model, and the mid-row probe is the instrument that will confirm the fix.
+
+**Phase 10** is unchanged: 19 `SCREEN_CONTENT(dormant)` tags, `SvcMdSCDMbEnc`'s three
+copy sites among them.

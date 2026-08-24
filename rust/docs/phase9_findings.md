@@ -1492,3 +1492,214 @@ one test. The table is kept, filled and pinned because it is upstream's
 through it. The retype is therefore cheap and the deleted dispatch test genuinely
 spent: "slot equals direct call" has become "`mc_luma == mc_luma`", and the mistake it
 guarded against is now a type error at `InitMcFunc`.
+
+## F131 — the reconstruction seam is a *picture* view, not a plane view: 11 of the 14 contested sites are not planes at all
+
+Session C's brief, and F107 §3/§4 behind it, scope D-mt-3 as a **plane** seam: "one seam
+type over each reconstruction plane", "workers share `&SharedPlane` and write through
+`&self`", consumers counted as "32 blocked call sites — 17 copy, 10 idct, 5 intra-pred —
+plus deblocking's own walk". Fact 4 of the brief treats the reconstruction picture's
+other route as bookkeeping: "there are **18** `layer_dec_pic`/`_mut` uses … every
+in-frame one must become a view route or be proven pre-fork/post-join. List them in the
+report."
+
+**Listing them is not the work; nine tenths of the work is in that list.** The 18 lines
+are 4 imports and **14 call sites**, and only **4** of the 14 reach a plane:
+
+| what it reaches | sites | where |
+|---|---:|---|
+| `sMvList` | 5 | `svc_mode_decision` 665/1305/2088, `svc_base_layer_md` 988/1506 |
+| `pMbSkipSad` | 3 | `svc_base_layer_md` 955 (read), `svc_encode_slice` 2371/2544 (write) |
+| `uiRefMbType` | 2 | `svc_encode_slice` 2371/2544, the same two calls |
+| `pRefMbQp` | 1 | `svc_mode_decision` 1736 |
+| the `sMvList.is_empty()` test | 1 | `svc_mode_decision` 1304 |
+| **a plane** (`planes()`) | **4** | `svc_base_layer_md` 359, `svc_encode_slice` 1893, `deblocking` 1367/1436 |
+
+Ten of the fourteen reach four **per-macroblock side arrays** of `SPicture` —
+`sMvList: Vec<SMVUnitXY>`, `pRefMbQp: Vec<u8>`, `pMbSkipSad: Vec<i32>`,
+`uiRefMbType: Vec<u32>`. A plane view cannot carry them, and F107 §3's argument applies
+to them *verbatim*: a `&mut Vec<T>` is a `Unique` retag over the whole array however
+narrow the write, so "worker *w* stamps only its own macroblocks' entries" is exactly as
+inexpressible as "worker *w* writes only its own macroblocks' pixels".
+
+**And it is not a detail at the margin — it is the first thing that fails.** Running the
+ignored fork/join probe under Miri *before* writing any code (the measurement this
+session opened with, and the one the brief did not ask for) reports:
+
+```
+error: Undefined Behavior: Data race detected between (1) retag write on thread
+`unnamed-2` and (2) retag write of type `encoder::encoder_context::SRefList` on
+thread `unnamed-3` at alloc294067
+   --> src/encoder/encoder_context.rs:406  pub fn pic_mut(&mut self, ...)
+   1: encoder::svc_encode_slice::layer_dec_pic_mut
+   2: encoder::svc_base_layer_md::WelsMdIntraInit  (svc_base_layer_md.rs:359)
+```
+
+The race is not on a pixel. It is not even on the picture: it is on `SRefList`, the
+**pool**, because `layer_dec_pic_mut` goes through `SRefList::pic_mut(&mut self)` and two
+workers take that borrow at once. A seam that covers only the pixel planes leaves every
+one of the fourteen sites on that route and cannot move the probe one instruction.
+
+So `RecPicView` (`encoder/rec_view.rs`) carries the three planes **and** the four side
+arrays, and its one `unsafe impl Sync` sits on `SharedCells<T>`, the captured
+base/length pair all seven are built from. The side arrays converted in T9.C3, the four
+plane roots in T9.C4, and `layer_dec_pic`/`layer_dec_pic_mut` are both deleted.
+
+*Two smaller errors in the same brief, recorded so the next one does not inherit them:
+it instructs "your findings start at **F130**", and F130 was written by session B4 at the
+commit the brief itself was authored on top of (`72fa0c0c`); and it names the fork sites
+as "`std::thread::scope` (`:1443`, `:1511`)", which is `EncodeFixedSlicesForked` and
+`UpdateMbMapForked` — **`EncodeSizeLimitedSlicesForked` at `:1727` is a third fork and
+is missing**, which matters because it is the one the brief's own mid-row probe
+suggestion (`SM_SIZELIMITED_SLICE` at threads=2) drives.*
+
+## F132 — the fork contends over **six** shared families, not one, and F107's acceptance was assigned to the wrong session
+
+F107 §4 makes the acceptance of session C "the Miri probe
+`fork_join_encodes_a_multi_slice_frame_under_the_aliasing_checker` loses its
+`#[cfg_attr(miri, ignore)]` and passes", and the plan's D-mt-3 repeats it. That reads as
+if the probe were failing *because of* the reconstruction write. It is not. The probe is
+the whole fork's UB detector, and the reconstruction write is one of six things the fork
+shares.
+
+Method: fix the family Miri names, re-run, read the next verdict. Six rounds, each
+verdict quoted in the commit that answered it.
+
+| # | shared state | shape | verdict | owner |
+|---|---|---|---|---|
+| 1 | reconstruction picture — 3 planes + `sMvList`/`pRefMbQp`/`pMbSkipSad`/`uiRefMbType` | `&mut SPicture` per worker, per macroblock, via `SRefList::pic_mut` | race on `SRefList` | **session C** — fixed (T9.C3/C4) |
+| 2 | `Option<Box<SStrideTables>>` | four read-only lookup accessors taking `&mut self` down to `Vec::as_mut_ptr` | race on the `Option<Box<..>>` | families 4/6 — fixed here (T9.C4): the four accessors go `&self`/`*const`, the four `AllocStrideTables` writers spell `root()` at the site, and two S40 tests split their read and write halves |
+| 3 | `SWelsSvcRc::pGomCost` | `&mut Vec<i32>` per macroblock, then `+=` at a **shared** index | write/read race between two workers *inside* `WelsRcMbInfoUpdateGom` | X1–X2 (RC) — **a genuine upstream race**, see F133; made `AtomicI32` here |
+| 4 | `SDqLayer::sSliceEncCtx` | `WelsGetNextMbOfSlice` and `WelsMbToSliceIdc` borrowing the whole `SSliceCtx` mutably to read it | race on `SSliceCtx` | families 4/6 — fixed here (T9.C5), two lines |
+| 5 | `SMB` | deblocking reads a **neighbour's** `uiSliceIdc` (`pCurMb.offset(-iMbStride)`) while the worker encoding that neighbour holds `&mut SMB` | retag-write vs non-atomic read | **session E** — open (F112/F114b, the 31 neighbour-bound `*mut SMB`) |
+| 6 | `SSliceCtx::pOverallMbMap` | `AddSliceBoundary` **rewrites** the map in-fork through `&mut Vec<u16>`; `WelsGetNextMbOfSlice` reads `map[mb+1]`, which at a partition's last macroblock is the next partition's | retag-read vs retag-write | the slice structures (D/E) — open |
+
+Rounds 1–4 are closed; the two remaining are the two probes' current verdicts —
+row-aligned probe stops at (5), mid-row probe at (6), because the size-limited mode is
+the only one that rewrites the map.
+
+**Three of the six are not session C's family by the charter's own §8**, and two of them
+(3 and 6) are real races rather than port-introduced over-claims. So the acceptance as
+written cannot be met by the session that owns the reconstruction write, and the honest
+form of it is narrower: *the seam's own data-race probes pass, and the encoder probes'
+remaining verdicts are named*. Both hold at this session's close.
+
+What the enumeration is worth beyond this session: it is the **complete** list of what
+`gates.sh session`'s Miri step will report as families 4–6 land, in the order it will
+report them, with the owner of each. Rounds 2 and 4 also say something about cost —
+neither needed a design, and round 4 was literally two characters twice
+(`&mut` -> `&`).
+
+## F133 — `pGomCost` is a data race in upstream OpenH264, on storage nothing ever reads
+
+Round 3 of F132, and it is worth its own entry because the defect is upstream's, not the
+port's.
+
+`RcInitGomParameters` sets `iComplexityIndexSlice = 0` for **every** slice
+(`ratectl.cpp:665`, and the port at `rc.rs:1548`). `WelsRcMbInfoUpdateGom` then does
+
+```c
+pWelsSvcRc->pGomCost[kiComplexityIndex] += iCostLuma;      // ratectl.cpp:1273
+```
+
+per macroblock, from every slice's thread, with `kiComplexityIndex` that per-slice
+counter. So slice 0's GOM *k* and slice 1's GOM *k* are **one entry**, and the `+=` is a
+concurrent non-atomic read-modify-write. `pWelsSvcRc` is per dependency layer, shared by
+every slice of the layer; nothing in the C++ synchronises it. Miri:
+
+```
+Data race detected between (1) non-atomic write on thread `unnamed-2` and
+(2) non-atomic read on thread `unnamed-3`
+   1: encoder::rc::WelsRcMbInfoUpdateGom
+```
+
+both threads in the same function, at the same entry.
+
+**It is invisible because nothing reads the array.** Exhaustively, in the C++:
+`rc.h:191` (the field), `ratectl.cpp:79` (carve), `:90` (null on failure), `:669`
+(memset), `:1273` (this `+=`). Five references, not one of them a read. The port had
+exactly five with the same property. So a lost update cannot reach a bit of output —
+which is why the `mt` sweep has never seen it and why it survived to Phase 9.
+
+Fixed here in the minimal way: the element is `AtomicI32` and the accumulate is
+`fetch_add(_, Relaxed)`. Defined where the C++ is not, identical wherever it is
+observable, and `assert_size!(SWelsSvcRc, 440)` does not move because that is the same
+three words. Two things went with it: `rc_gom_cost` (S18 — its last production caller
+was that one statement) and `SWelsSvcRc`'s `Clone` derive, which was needed only by two
+`vec![default(); n]` constructions and would have been a trap next to a captured base.
+
+**The deletion is the better answer and it is a ruling, not a session's call.** Dead
+storage in both codebases, five references each; deleting the field and the statement
+would be provably output-neutral. It is left in place because F115 set the precedent that
+"dead in the port *and* dead upstream" is the steward's call, and because the atomic
+costs nothing while the question is open.
+
+## F134 — `SPicData.pDecMb` was `pCsMb` under a second name, and the second name was the last per-macroblock `&mut SPicture`
+
+`WelsMdIntraInit` stamped two triples of plane cursors per macroblock:
+
+```rust
+iStrideY = (*pCurLayer).iCsStride[0];                            // from the layer
+(*pMbCache).SPicData.pCsMb[0] = (*pCurLayer).pCsData[0].offset(iOffsetY);
+…
+let pDecPic = layer_dec_pic_mut(pCurLayer).expect(..).planes();   // from the pool
+iStrideY = pDecPic.iLineSize[0];
+(*pMbCache).SPicData.pDecMb[0] = pDecPic.pData[0].offset(iOffsetY);
+```
+
+`WelsInitCurrentLayer` fills `pCsData`/`iCsStride` from that same `planes()` call, so the
+two triples are one address computed twice — and the second computation is a
+whole-picture `&mut` retag, per macroblock, inside the fork. It is the site Miri named
+first (F131).
+
+Proved before deleting: `debug_assert_eq!(pDecMb[i], pCsMb[i])` in **both** branches of
+the stamp, carried through a whole `gates.sh family` — 583 configurations x 2 profiles —
+without firing. Calibrated the assertion by planting `.wrapping_add(1)` on one side,
+which aborted (exit 134) on every row of the first preset, so `debug_assertions` is live
+in the sweep's debug driver and the pass meant something.
+
+`pDecMb`'s only readers were the luma/chroma triple in
+`OutputPMbWithoutConstructCsRsNoCopy`; they read `pCsMb` now, the field is gone, and
+`assert_size!(SMbCache)` moves 5600 → **5568** (three pointers plus the 8 bytes of
+`align(16)` rounding). Two more `planes()` calls in the same class went with it — that
+function's stride pair and deblocking's two root triples, all three reading numbers
+`WelsInitCurrentLayer` had already stamped on the layer — and with the last of them
+**`layer_dec_pic_mut` is deleted**.
+
+The general form, for the sessions that still have picture accessors to retire: *a raw
+cursor stamped from the layer and a raw cursor stamped from the pool can be the same
+address, and the pool one costs a retag.* Check for the duplicate before designing a
+route for it.
+
+## F135 — `svc_encode_mb.rs::WelsRecPskip` is a dead second implementation, and it is three of the census's "blocked 32"
+
+The plane census attributes **6** blocked copy sites to `WelsRecPskip`, more than any
+other owner, which is why the brief names it as the one consumer session C must convert
+if it splits. Three of the six are in a function with no caller.
+
+```
+$ grep -rn 'WelsRecPskip' src/ | grep -v 'pub unsafe'
+svc_mode_decision.rs:366    WelsRecPskip(pCurDqLayer, &*ctx_func_list(pEncCtx), …)
+svc_mode_decision.rs:685    WelsRecPskip(pCurDqLayer, &*pFunc, …)
+svc_mode_decision.rs:2105   WelsRecPskip(pCurDqLayer, &*pFunc, …)
+```
+
+All three resolve to `svc_mode_decision.rs`'s `pub unsafe extern "C" fn WelsRecPskip`.
+The one in `svc_encode_mb.rs` — same name, same four parameters, same body modulo
+`.as_ptr()` spelling instead of array indexing — has none, in `src/`, `tests/` or
+`benches/`. Both are `pub` in a `pub mod`, so F129's rule holds: no compiler pass finds
+this, only a per-symbol grep.
+
+T9.C7 converted the live one. The dead one is **not** deleted, and the reason is F128's:
+deleting it would take three rows off the blocked census with no conversion behind them,
+and the whole point of keeping the two censuses apart is that reclassification and
+conversion never get summed. So the count reads **29 blocked** after T9.C7 — 26 mine, 3
+of which are dead code — and the deletion is a ruling with the evidence attached.
+
+*While in there: the brief's table calls the third intra-pred array `pfGetIChromaPred`;
+it is `pfGetChromaPred` (`wels_func_ptr_def.rs:344`). And the ignore on
+`slice_multi_threading.rs:1124` that the brief offers to retire "if the seam retires its
+reason" is ignored for **cost**, not aliasing — its own comment says "roughly eight times
+the work of the fork/join probe" and "the aliasing question this path raises is the
+fork/join's, and that probe answers it". The seam cannot retire that reason and
+un-ignoring it would put the largest single test in the battery under Miri.*
