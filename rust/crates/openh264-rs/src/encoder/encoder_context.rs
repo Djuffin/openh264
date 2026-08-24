@@ -2080,7 +2080,7 @@ mod tests {
         ctx.pPPSArray = vec![crate::encoder::param_svc::SWelsPPS::ZERO; 2];
         ctx.pDqIdcMap = vec![SDqIdc::default(); 2];
         ctx.pLtr = vec![SLTRState::default(); 2];
-        ctx.pWelsSvcRc = vec![SWelsSvcRc::default(); 2];
+        ctx.pWelsSvcRc = (0..2).map(|_| SWelsSvcRc::default()).collect();
         ctx.pMvdCostTable = vec![0u16; 64];
         ctx.iMvdCostTableSize = 8;
         ctx.pVaa = Some(Box::new(SVAAFrameInfo::default()));
@@ -2159,8 +2159,6 @@ mod tests {
             |q: *mut i32| *q = 21, |q: *mut i32| *q == 21);
         siblings!("rc_gom_sad", crate::encoder::rc::rc_gom_sad(rc),
             |q: *mut i32| *q = 22, |q: *mut i32| *q == 22);
-        siblings!("rc_gom_cost", crate::encoder::rc::rc_gom_cost(rc),
-            |q: *mut i32| *q = 23, |q: *mut i32| *q == 23);
 
         // And the whole set once more, interleaved: every cursor taken first, then
         // every one used — which is the frame loop's actual shape, and the case a

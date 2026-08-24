@@ -1382,7 +1382,9 @@ pub unsafe fn WelsMbToSliceIdc(pCurDq: *mut SDqLayer, kiMbXY: i32) -> u16 {
     if pCurDq.is_null() {
         return u16::MAX;
     }
-    let pSliceCtx = &mut (*pCurDq).sSliceEncCtx;
+    // `&`, T9.C5 — as `WelsGetNextMbOfSlice`: nothing here writes, and this runs
+    // per macroblock inside the fork.
+    let pSliceCtx = &(*pCurDq).sSliceEncCtx;
     let map: &[u16] = &(*pSliceCtx).pOverallMbMap;
     if kiMbXY >= 0 && kiMbXY < (*pSliceCtx).iMbNumInFrame {
         match map.get(kiMbXY as usize) {
@@ -1971,7 +1973,12 @@ pub unsafe fn WelsGetNextMbOfSlice(pCurDq: *mut SDqLayer, kiMbXY: i32) -> i32 {
     if pCurDq.is_null() {
         return -1;
     }
-    let pSliceSeg = &mut (*pCurDq).sSliceEncCtx;
+    // **`&`, T9.C5.** Nothing below writes; the `&mut` was a transliteration of the
+    // C++'s `SSliceCtx*`, and under multi-threading every worker walks its own
+    // slice through this function per macroblock, so it was a whole-`SSliceCtx`
+    // retag taken concurrently — Miri's fourth verdict on the fork/join probe,
+    // and the same shape as the stride tables' (T9.C4).
+    let pSliceSeg = &(*pCurDq).sSliceEncCtx;
     if kiMbXY < 0 || kiMbXY >= pSliceSeg.iMbNumInFrame {
         return -1;
     }

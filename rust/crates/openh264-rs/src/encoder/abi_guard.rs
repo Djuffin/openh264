@@ -266,6 +266,9 @@ assert_size!(SWelsSvcCodingParam, 1240);
 // The five raw pointers into the one `RcInitLayerMemory` block are five owned
 // containers at 24 bytes each, +80. The pin stays for what it has always caught: a
 // field added, dropped, or given the wrong width.
+// **440 still at T9.C5**: `pGomCost` became `Vec<AtomicI32>`, which is the same
+// three words — the field's doc says why, and it is the only pin in this file that
+// a Miri data-race verdict has ever moved *without* moving.
 assert_size!(SWelsSvcRc, 440);
 // 32 in the C++ and in this port until **T6.D7**, which made `pOverallMbMap` a
 // `Vec<u16>` — one pointer becomes three words, and `repr(C)` comes off with it, so

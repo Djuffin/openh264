@@ -77,6 +77,8 @@
 
 #![deny(unsafe_code)]
 
+use std::sync::atomic::{AtomicI32, Ordering};
+
 use crate::{RCMode, SSliceArgument, SSpatialLayerConfig, EUsageType};
 pub use crate::encoder::svc_encode_slice::SSliceHeader;
 use crate::encoder::svc_encode_slice::layer_pps;
@@ -313,7 +315,12 @@ pub struct SRCTemporal {
 /// only by-value use in the tree was `Default`, and the three `let r = &*pWelsSvcRc`
 /// bindings take a reference, not a copy.
 #[repr(C)]
-#[derive(Debug, Clone)]
+/// `Clone` was derived here and **never used** — T9.C5 dropped it, because the
+/// seam view below makes it a trap rather than dead weight: a cloned rate
+/// controller would carry a capture of the *original's* `pGomCost` beside its own
+/// fresh `Vec`. Nothing in the tree clones one (the pool is built in place by
+/// `RcInitLayerMemory`), so the derive was already only an invitation.
+#[derive(Debug)]
 pub struct SWelsSvcRc {
     pub iRcVaryPercentage: i32,
     pub iRcVaryRatio: i32,
@@ -349,7 +356,24 @@ pub struct SWelsSvcRc {
     pub pGomComplexity: Vec<f64>,
     pub pGomForegroundBlockNum: Vec<i32>,
     pub pCurrentFrameGomSad: Vec<i32>,
-    pub pGomCost: Vec<i32>,
+    /// **Write-only, in this port and in the C++ — and racy under
+    /// multi-threading, which is how T9.C5 found it.**
+    ///
+    /// `WelsRcMbInfoUpdateGom` accumulates one macroblock's luma cost into its
+    /// slice's GOM entry, per macroblock, *inside* the fork.
+    /// `RcInitGomParameters` sets `iComplexityIndexSlice = 0` for **every**
+    /// slice, so slice 0's GOM *k* and slice 1's GOM *k* are the same entry, and
+    /// the `+=` is a concurrent non-atomic read-modify-write. `ratectl.cpp:1273`
+    /// is the same statement with the same index.
+    ///
+    /// It is byte-inert only because **nothing reads it**: five references in
+    /// the C++ (`rc.h:191`, `ratectl.cpp:79`, `:90`, `:669`, `:1273`) and five
+    /// here, and not one of them a read. The element is therefore `AtomicI32` —
+    /// `Relaxed`, which is what an accumulator nobody reads needs — so the port
+    /// is defined where the C++ is not, at no observable cost. Whether the whole
+    /// field should go instead is a deletion ruling, not a session's call; the
+    /// finding carries the evidence.
+    pub pGomCost: Vec<std::sync::atomic::AtomicI32>,
 
     pub bEnableGomQp: i32,
     pub iAverageFrameQp: i32,
@@ -765,7 +789,7 @@ pub unsafe fn RcInitLayerMemory(pWelsSvcRc: *mut SWelsSvcRc, kiMaxTl: i32) {
     (*pWelsSvcRc).pGomComplexity = vec![0.0f64; kiGomSize];
     (*pWelsSvcRc).pGomForegroundBlockNum = vec![0i32; kiGomSize];
     (*pWelsSvcRc).pCurrentFrameGomSad = vec![0i32; kiGomSize];
-    (*pWelsSvcRc).pGomCost = vec![0i32; kiGomSize];
+    (*pWelsSvcRc).pGomCost = (0..kiGomSize).map(|_| AtomicI32::new(0)).collect();
 }
 
 /// The **root** of a layer's `pTemporalOverRc` — S40's spelling, as everywhere in
@@ -831,20 +855,11 @@ pub unsafe fn rc_gom_sad(pRc: *mut SWelsSvcRc) -> *mut i32 {
     v.as_mut_ptr()
 }
 
-/// The **root** of a layer's `pGomCost` — see [`rc_temporal_over`].
-///
-/// # Safety
-/// As [`rc_temporal_over`].
-#[inline]
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn rc_gom_cost(pRc: *mut SWelsSvcRc) -> *mut i32 {
-    let v: &mut Vec<i32> = &mut (*pRc).pGomCost;
-    if v.is_empty() {
-        return std::ptr::null_mut();
-    }
-    v.as_mut_ptr()
-}
+// `rc_gom_cost` stood here — the raw root of `pGomCost`, the fifth of this
+// family. **S18, deleted in T9.C5**: the array is `Vec<AtomicI32>` now and its
+// one production caller indexes it directly, so the accessor's only remaining
+// caller was the sibling-derivation test beside its four peers, which still
+// covers the property for all four.
 
 /// Converts a quantization parameter ($QP$) to its scaled quantization step size ($Q_{\text{step}}$).
 #[inline]
@@ -1550,7 +1565,10 @@ pub unsafe fn RcInitGomParameters(pEncCtx: *mut sWelsEncCtx) {
     }
 
     (*pWelsSvcRc).pGomComplexity.fill(0.0);
-    (*pWelsSvcRc).pGomCost.fill(0);
+    let pGomCost: &[AtomicI32] = &(*pWelsSvcRc).pGomCost;
+    for c in pGomCost.iter() {
+        c.store(0, Ordering::Relaxed);
+    }
 }
 
 /// Assigns final macroblock luma and chroma QPs.
@@ -2386,8 +2404,12 @@ pub unsafe extern "C" fn WelsRcMbInfoUpdateGom(
     pSOverRc.iFrameBitsSlice += iCurMbBits;
     pSOverRc.iGomBitsSlice += iCurMbBits;
 
-    if !rc_gom_cost(pWelsSvcRc).is_null() {
-        *rc_gom_cost(pWelsSvcRc).add(kiComplexityIndex) += iCostLuma;
+    // `ratectl.cpp:1273`, with the read-modify-write made atomic — see the
+    // field's doc. The `is_empty` guard is the C++'s null test on `pGomCost`,
+    // which `RcInitLayerMemory` leaves unallocated when `iGomSize` is 0.
+    let pGomCost: &[AtomicI32] = &(*pWelsSvcRc).pGomCost;
+    if let Some(c) = pGomCost.get(kiComplexityIndex) {
+        c.fetch_add(iCostLuma, Ordering::Relaxed);
     }
     if iCurMbBits > 0 {
         pSOverRc.iTotalQpSlice += (*pCurMb).uiLumaQp as i32;

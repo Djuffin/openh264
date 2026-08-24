@@ -1213,10 +1213,13 @@ pub unsafe fn RequestMemorySvc(
     // Rate control module memory allocation; only malloc once for RC data (12/14/2009)
     // **T6.H6**: and one `Vec` for the states, which now own the five arrays
     // `RcInitLayerMemory` used to cut out of a second block each.
-    (**ppCtx).pWelsSvcRc = vec![
-        crate::encoder::rc::SWelsSvcRc::default();
-        kiNumDependencyLayers as usize
-    ];
+    // Built one at a time rather than with `vec![x; n]`, which would need
+    // `SWelsSvcRc: Clone` — T9.C5 dropped that derive, because a rate controller
+    // now carries a capture of its own `pGomCost` and a clone would aim the copy
+    // at the original's buffer.
+    (**ppCtx).pWelsSvcRc = (0..kiNumDependencyLayers as usize)
+        .map(|_| crate::encoder::rc::SWelsSvcRc::default())
+        .collect();
 
     // pVaa memory allocation
     if (*pParam).iUsageType == SCREEN_CONTENT_REAL_TIME {
