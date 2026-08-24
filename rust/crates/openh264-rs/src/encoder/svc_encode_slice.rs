@@ -1415,6 +1415,20 @@ pub unsafe fn UpdateMbNeighbor(pCurDq: *mut SDqLayer, pMb: &mut SMB, kiMbWidth: 
     let kiMbX = (*pMb).iMbX as i32;
     let kiMbY = (*pMb).iMbY as i32;
 
+    // T9.E3 scaffolding (round 5's equality proof) — deleted with the guard
+    // flip. One assert covers every caller: two of the three call sites pass
+    // `WelsMbToSliceIdc(..)` itself, and the third (the load-balancing
+    // re-stamp in `UpdateMbListNeighborParallel`) passes a slice index whose
+    // whole range `DynamicAdjustSlicePEncCtxAll` stamped into the map before
+    // `bNeedAdjustingSlicing` was raised — so the record never stores a value
+    // the map does not hold for this macroblock at stamp time. Race-free: the
+    // map entry for a worker's own macroblock is written only pre-fork or by
+    // this worker's own boundary moves.
+    debug_assert_eq!(
+        uiSliceIdc,
+        WelsMbToSliceIdc(pCurDq, kiMbXY),
+        "uiSliceIdc stamp disagrees with pOverallMbMap at mb {kiMbXY}"
+    );
     (*pMb).uiSliceIdc = uiSliceIdc;
     let iLeftXY = kiMbXY - 1;
     let iTopXY = kiMbXY - kiMbWidth;
@@ -2142,6 +2156,15 @@ pub unsafe fn WelsISliceMdEnc(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSlice) ->
             break;
         }
 
+        // T9.E3 scaffolding (round 5's equality proof) — deleted with the
+        // guard flip. The macroblock stayed in this slice, so the map must
+        // already say so; the record stamp adds nothing the map lacks.
+        debug_assert_eq!(
+            kiSliceIdx as u16,
+            WelsMbToSliceIdc(pCurLayer, (*pCurMb).iMbXY),
+            "I-slice stamp disagrees with pOverallMbMap at mb {}",
+            (*pCurMb).iMbXY
+        );
         (*pCurMb).uiSliceIdc = kiSliceIdx as u16;
 
         if let Some(func_list) = ctx_func_list(pEncCtx).as_ref() {
@@ -2283,6 +2306,15 @@ pub unsafe fn WelsISliceMdEncDynamic(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSl
             break;
         }
 
+        // T9.E3 scaffolding (round 5's equality proof) — deleted with the
+        // guard flip. Past the step-back judgement the boundary did not move,
+        // so this macroblock's map entry still names this slice.
+        debug_assert_eq!(
+            kiSliceIdx as u16,
+            WelsMbToSliceIdc(pCurLayer, (*pCurMb).iMbXY),
+            "dynamic-slice stamp disagrees with pOverallMbMap at mb {}",
+            (*pCurMb).iMbXY
+        );
         (*pCurMb).uiSliceIdc = kiSliceIdx as u16;
 
         if let Some(func_list) = ctx_func_list(pEncCtx).as_ref() {
@@ -2486,6 +2518,15 @@ pub unsafe fn WelsMdInterMbLoop(
             break;
         }
 
+        // T9.E3 scaffolding (round 5's equality proof) — deleted with the
+        // guard flip. Static modes pre-stamp the whole slice's range, so the
+        // map already names this slice for this macroblock.
+        debug_assert_eq!(
+            kiSliceIdx as u16,
+            WelsMbToSliceIdc(pCurLayer, (*pCurMb).iMbXY),
+            "P-slice stamp disagrees with pOverallMbMap at mb {}",
+            (*pCurMb).iMbXY
+        );
         (*pCurMb).uiSliceIdc = kiSliceIdx as u16;
         OutputPMbWithoutConstructCsRsNoCopy(pEncCtx, pCurLayer, pSlice, &*pCurMb);
 
@@ -2678,6 +2719,15 @@ pub unsafe fn WelsMdInterMbLoopOverDynamicSlice(
             break;
         }
 
+        // T9.E3 scaffolding (round 5's equality proof) — deleted with the
+        // guard flip. Past the step-back judgement the boundary did not move,
+        // so this macroblock's map entry still names this slice.
+        debug_assert_eq!(
+            kiSliceIdx as u16,
+            WelsMbToSliceIdc(pCurLayer, (*pCurMb).iMbXY),
+            "dynamic-slice stamp disagrees with pOverallMbMap at mb {}",
+            (*pCurMb).iMbXY
+        );
         (*pCurMb).uiSliceIdc = kiSliceIdx as u16;
         OutputPMbWithoutConstructCsRsNoCopy(pEncCtx, pCurLayer, pSlice, &*pCurMb);
 
