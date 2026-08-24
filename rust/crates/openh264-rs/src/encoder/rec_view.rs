@@ -278,6 +278,18 @@ pub struct SharedMbArray<T: Copy> {
 }
 
 impl<T: Copy> SharedMbArray<T> {
+    /// Captures a per-macroblock array for the frame.
+    ///
+    /// Public because the reconstruction picture is not the only owner of one:
+    /// the rate controller's `pGomCost` has the same shape and the same fork
+    /// (T9.C5). The contract is the module's, unchanged — the exclusive borrow
+    /// taken here must be the last one until the view is dropped, and the
+    /// workers' index sets must be disjoint.
+    #[inline]
+    pub fn capture(v: &mut Vec<T>) -> Self {
+        Self { cells: SharedCells::capture(v) }
+    }
+
     /// Entry `i`.
     #[inline]
     pub fn get(&self, i: usize) -> T {
