@@ -1362,24 +1362,33 @@ pub unsafe fn DeblockingFilterFrameAvcbase(pCurDq: *mut SDqLayer, pFunc: *mut SW
         0
     };
 
-    // S37: the reconstruction picture resolved once to its plane roots; the walk
-    // below is raw cursors derived from them.
-    let Some(pDecPic) = crate::encoder::svc_encode_slice::layer_dec_pic_mut(pCurDq) else {
+    // **T9.C4**: this resolved the reconstruction picture to its plane roots with
+    // `layer_dec_pic_mut(..).planes()` — a whole-picture `&mut` retag, and F108
+    // measured that under multi-threading this filter runs *inside* the fork, so
+    // two workers took it at once. The layer already carries those three roots
+    // and their three strides: `WelsInitCurrentLayer` stamps `pCsData`/`iCsStride`
+    // from the same `planes()` call, before anything spawns. Same numbers, same
+    // addresses, one derivation instead of two.
+    //
+    // The guard is the old `None` arm's two conditions — the layer's handle
+    // (tested at the top of this function) and a bound reference list — plus a
+    // null root, which the old spelling would have carried into a null deref.
+    if (*pCurDq).pRefList.is_null() || (*pCurDq).pCsData[0].is_null() {
         return;
-    };
-    let pDecPic = pDecPic.planes();
-    pFilter.iCsStride[0] = pDecPic.iLineSize[0];
-    pFilter.iCsStride[1] = pDecPic.iLineSize[1];
-    pFilter.iCsStride[2] = pDecPic.iLineSize[2];
+    }
+    let pCsData = (*pCurDq).pCsData;
+    pFilter.iCsStride[0] = (*pCurDq).iCsStride[0];
+    pFilter.iCsStride[1] = (*pCurDq).iCsStride[1];
+    pFilter.iCsStride[2] = (*pCurDq).iCsStride[2];
 
     pFilter.iSliceAlphaC0Offset = sSliceHeaderExt.sSliceHeader.iSliceAlphaC0Offset;
     pFilter.iSliceBetaOffset = sSliceHeaderExt.sSliceHeader.iSliceBetaOffset;
     pFilter.iMbStride = kiMbWidth as i16;
 
     for j in 0..kiMbHeight {
-        pFilter.pCsData[0] = pDecPic.pData[0].add(((j as i32 * pFilter.iCsStride[0]) << 4) as usize);
-        pFilter.pCsData[1] = pDecPic.pData[1].add(((j as i32 * pFilter.iCsStride[1]) << 3) as usize);
-        pFilter.pCsData[2] = pDecPic.pData[2].add(((j as i32 * pFilter.iCsStride[2]) << 3) as usize);
+        pFilter.pCsData[0] = pCsData[0].add(((j as i32 * pFilter.iCsStride[0]) << 4) as usize);
+        pFilter.pCsData[1] = pCsData[1].add(((j as i32 * pFilter.iCsStride[1]) << 3) as usize);
+        pFilter.pCsData[2] = pCsData[2].add(((j as i32 * pFilter.iCsStride[2]) << 3) as usize);
 
         for _ in 0..kiMbWidth {
             DeblockingMbAvcbase(pFunc, pCurrentMbBlock, &mut pFilter);
@@ -1431,15 +1440,24 @@ pub unsafe extern "C" fn DeblockingFilterSliceAvcbase(
         0
     };
 
-    // S37: the reconstruction picture resolved once to its plane roots; the walk
-    // below is raw cursors derived from them.
-    let Some(pDecPic) = crate::encoder::svc_encode_slice::layer_dec_pic_mut(pCurDq) else {
+    // **T9.C4**: this resolved the reconstruction picture to its plane roots with
+    // `layer_dec_pic_mut(..).planes()` — a whole-picture `&mut` retag, and F108
+    // measured that under multi-threading this filter runs *inside* the fork, so
+    // two workers took it at once. The layer already carries those three roots
+    // and their three strides: `WelsInitCurrentLayer` stamps `pCsData`/`iCsStride`
+    // from the same `planes()` call, before anything spawns. Same numbers, same
+    // addresses, one derivation instead of two.
+    //
+    // The guard is the old `None` arm's two conditions — the layer's handle
+    // (tested at the top of this function) and a bound reference list — plus a
+    // null root, which the old spelling would have carried into a null deref.
+    if (*pCurDq).pRefList.is_null() || (*pCurDq).pCsData[0].is_null() {
         return;
-    };
-    let pDecPic = pDecPic.planes();
-    pFilter.iCsStride[0] = pDecPic.iLineSize[0];
-    pFilter.iCsStride[1] = pDecPic.iLineSize[1];
-    pFilter.iCsStride[2] = pDecPic.iLineSize[2];
+    }
+    let pCsData = (*pCurDq).pCsData;
+    pFilter.iCsStride[0] = (*pCurDq).iCsStride[0];
+    pFilter.iCsStride[1] = (*pCurDq).iCsStride[1];
+    pFilter.iCsStride[2] = (*pCurDq).iCsStride[2];
 
     pFilter.iSliceAlphaC0Offset = sSliceHeaderExt.sSliceHeader.iSliceAlphaC0Offset;
     pFilter.iSliceBetaOffset = sSliceHeaderExt.sSliceHeader.iSliceBetaOffset;
@@ -1454,9 +1472,9 @@ pub unsafe extern "C" fn DeblockingFilterSliceAvcbase(
         let mbX = (*pCurrentMbBlock).iMbX as i32;
         let mbY = (*pCurrentMbBlock).iMbY as i32;
 
-        pFilter.pCsData[0] = pDecPic.pData[0].add(((mbX + mbY * pFilter.iCsStride[0]) << 4) as usize);
-        pFilter.pCsData[1] = pDecPic.pData[1].add(((mbX + mbY * pFilter.iCsStride[1]) << 3) as usize);
-        pFilter.pCsData[2] = pDecPic.pData[2].add(((mbX + mbY * pFilter.iCsStride[2]) << 3) as usize);
+        pFilter.pCsData[0] = pCsData[0].add(((mbX + mbY * pFilter.iCsStride[0]) << 4) as usize);
+        pFilter.pCsData[1] = pCsData[1].add(((mbX + mbY * pFilter.iCsStride[1]) << 3) as usize);
+        pFilter.pCsData[2] = pCsData[2].add(((mbX + mbY * pFilter.iCsStride[2]) << 3) as usize);
 
         DeblockingMbAvcbase(pFunc, pCurrentMbBlock, &mut pFilter);
 

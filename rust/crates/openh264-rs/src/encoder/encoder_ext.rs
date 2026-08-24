@@ -352,8 +352,12 @@ pub unsafe fn AllocStrideTables(ppCtx: *mut *mut sWelsEncCtx, kiNumSpatialLayers
             let kiChromaWidth = iLineSizeUV[kiActualSpatialIdx][kbBaseTemporalFlag];
 
             pPtr.pStrideDecBlockOffset[kiActualSpatialIdx][kbBaseTemporalFlag] = Some(pBaseDec);
+            // T9.C4: the writable derivation, spelled here — `StrideDecBlockOffset`
+            // is `&self`/`*const` now, and this is one of the four sites that fill
+            // the block. Same arithmetic the accessor did: root + the offset just
+            // stored.
             WelsGetEncBlockStrideOffset(
-                pPtr.StrideDecBlockOffset(kiActualSpatialIdx, kbBaseTemporalFlag),
+                pPtr.root().add(pBaseDec as usize).cast::<i32>(),
                 kiLumaWidth,
                 kiChromaWidth,
             );
@@ -459,7 +463,11 @@ pub unsafe fn AllocStrideTables(ppCtx: *mut *mut sWelsEncCtx, kiNumSpatialLayers
         if iSpatialIdx < 0 {
             break;
         }
-        let mut pMbIndexX = pPtr.MbIndexX(iSpatialIdx as usize);
+        // T9.C4, as above.
+        let mut pMbIndexX = match pPtr.pMbIndexX[iSpatialIdx as usize] {
+            Some(off) => pPtr.root().add(off as usize).cast::<i16>(),
+            None => std::ptr::null_mut(),
+        };
         let kiMbWidth = sMbSizeMap[iSpatialIdx as usize].iMbWidth;
         let kiMbHeight = sMbSizeMap[iSpatialIdx as usize].iCountMbNum / kiMbWidth;
 
@@ -485,7 +493,12 @@ pub unsafe fn AllocStrideTables(ppCtx: *mut *mut sWelsEncCtx, kiNumSpatialLayers
         while iSpatialIdx >= 0 {
             let kiMbWidth = sMbSizeMap[iSpatialIdx as usize].iMbWidth;
             let kiMbHeight = sMbSizeMap[iSpatialIdx as usize].iCountMbNum / kiMbWidth;
-            let pMbIndexY = pPtr.MbIndexY(iSpatialIdx as usize).add((i * kiMbWidth) as usize);
+            // T9.C4, as above.
+            let pMbIndexY = match pPtr.pMbIndexY[iSpatialIdx as usize] {
+                Some(off) => pPtr.root().add(off as usize).cast::<i16>(),
+                None => std::ptr::null_mut(),
+            }
+            .add((i * kiMbWidth) as usize);
 
             if i < kiMbHeight {
                 std::ptr::copy_nonoverlapping(pRowY, pMbIndexY, kiMbWidth as usize);
@@ -733,11 +746,17 @@ pub unsafe fn InitDqLayers(
         iPicWidth = WELS_ALIGN(iPicWidth, 32);
         iPicChromaWidth = WELS_ALIGN(iPicChromaWidth, 16);
 
-        WelsGetEncBlockStrideOffset(
-            ctx_stride_enc_block_offset(*ppCtx, iDlayerIndex as usize),
-            iPicWidth,
-            iPicChromaWidth,
-        );
+        // T9.C4, as above — the fourth and last writer, and the one that reaches
+        // the tables through the context rather than through `AllocStrideTables`'
+        // own `&mut`.
+        let pEncBlockOffset = {
+            let tab = (**ppCtx).pStrideTab.as_mut().expect("pStrideTab allocated");
+            match tab.pStrideEncBlockOffset[iDlayerIndex as usize] {
+                Some(off) => tab.root().add(off as usize).cast::<i32>(),
+                None => std::ptr::null_mut(),
+            }
+        };
+        WelsGetEncBlockStrideOffset(pEncBlockOffset, iPicWidth, iPicChromaWidth);
 
         // Reference list. **`Box`-built with a real constructor since T6.F1** — it
         // owns this layer's reconstruction pool now, and a `WelsMallocz`'d shell is UB

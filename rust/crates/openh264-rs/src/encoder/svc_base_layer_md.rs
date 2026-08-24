@@ -34,7 +34,7 @@
 
 #![deny(unsafe_code)]
 use crate::encoder::svc_encode_slice::{
-    layer_dec_pic_mut, layer_enc_pic, layer_rec_view, layer_ref_pic,
+    layer_enc_pic, layer_rec_view, layer_ref_pic,
 };
 use crate::encoder::svc_encode_slice::current_layer;
 use crate::encoder::picture::{RecPicId, SrcPicId};
@@ -356,26 +356,15 @@ pub unsafe fn WelsMdIntraInit(
         (*pMbCache).SPicData.pCsMb[1] = (*pCurLayer).pCsData[1].offset(iOffsetUV as isize);
         (*pMbCache).SPicData.pCsMb[2] = (*pCurLayer).pCsData[2].offset(iOffsetUV as isize);
 
-        let pDecPic = layer_dec_pic_mut(pCurLayer)
-            .expect("the layer's reconstruction picture is bound")
-            .planes();
-        iStrideY = pDecPic.iLineSize[0];
-        iStrideUV = pDecPic.iLineSize[1];
-        iOffsetY = (kiMbX + kiMbY * iStrideY) << 4;
-        iOffsetUV = (kiMbX + kiMbY * iStrideUV) << 3;
-        (*pMbCache).SPicData.pDecMb[0] = pDecPic.pData[0].offset(iOffsetY as isize);
-        (*pMbCache).SPicData.pDecMb[1] = pDecPic.pData[1].offset(iOffsetUV as isize);
-        (*pMbCache).SPicData.pDecMb[2] = pDecPic.pData[2].offset(iOffsetUV as isize);
+        // The `pDecMb` triple stood here — a second `layer_dec_pic_mut(..).planes()`
+        // resolution producing, sample for sample, the three pointers stamped four
+        // lines above. See `SPicData`'s note: proved, then deleted (T9.C4).
     } else {
         (*pMbCache).SPicData.iMbX = kiMbX;
         (*pMbCache).SPicData.iMbY = kiMbY;
         (*pMbCache).SPicData.pEncMb[0] = (*pMbCache).SPicData.pEncMb[0].add(MB_WIDTH_LUMA);
         (*pMbCache).SPicData.pEncMb[1] = (*pMbCache).SPicData.pEncMb[1].add(MB_WIDTH_CHROMA);
         (*pMbCache).SPicData.pEncMb[2] = (*pMbCache).SPicData.pEncMb[2].add(MB_WIDTH_CHROMA);
-
-        (*pMbCache).SPicData.pDecMb[0] = (*pMbCache).SPicData.pDecMb[0].add(MB_WIDTH_LUMA);
-        (*pMbCache).SPicData.pDecMb[1] = (*pMbCache).SPicData.pDecMb[1].add(MB_WIDTH_CHROMA);
-        (*pMbCache).SPicData.pDecMb[2] = (*pMbCache).SPicData.pDecMb[2].add(MB_WIDTH_CHROMA);
 
         (*pMbCache).SPicData.pCsMb[0] = (*pMbCache).SPicData.pCsMb[0].add(MB_WIDTH_LUMA);
         (*pMbCache).SPicData.pCsMb[1] = (*pMbCache).SPicData.pCsMb[1].add(MB_WIDTH_CHROMA);
@@ -1296,7 +1285,7 @@ pub unsafe fn WelsMdPSkipEnc(
         pEncCtx,
         (*pEncCtx).uiDependencyId as usize,
     );
-    let mut pEncBlockOffset: *mut i32;
+    let mut pEncBlockOffset: *const i32;
 
     let iSadCostLuma: i32;
     let mut iSadCostChroma: i32;

@@ -156,7 +156,18 @@ impl Default for SDCTCoeff {
 #[derive(Debug, Copy, Clone)]
 pub struct SPicData {
     pub pEncMb: [*mut u8; 3],
-    pub pDecMb: [*mut u8; 3],
+    // `pDecMb` stood here, between `pEncMb` and `pRefMb`, exactly as in the C++.
+    // **S18, deleted in T9.C4, after being proved redundant rather than assumed
+    // so**: `WelsMdIntraInit` stamped it from `pDecPic.planes()` and stamped
+    // `pCsMb` from `(*pCurLayer).pCsData` — two derivations of *one* address,
+    // because `WelsInitCurrentLayer` fills `pCsData` from that same `planes()`
+    // call. A `debug_assert_eq!` of the two, in both branches of the stamp, was
+    // carried through a whole `gates.sh family` (583 rows x both profiles) and
+    // never fired; planting `.wrapping_add(1)` on one side aborted every row of
+    // the first preset, so the assertion had teeth. Its three readers — the
+    // luma/chroma triple in `OutputPMbWithoutConstructCsRsNoCopy` — now read
+    // `pCsMb`, and the second derivation, which was the last per-macroblock
+    // `&mut SPicture` retag in the mode-decision tree, is gone.
     pub pRefMb: [*mut u8; 3],
     pub pCsMb: [*mut u8; 3],
     /// The macroblock these four point at, in macroblocks — **T9.B30, and the port's
@@ -196,7 +207,6 @@ impl Default for SPicData {
     fn default() -> Self {
         Self {
             pEncMb: [std::ptr::null_mut(); 3],
-            pDecMb: [std::ptr::null_mut(); 3],
             pRefMb: [std::ptr::null_mut(); 3],
             pCsMb: [std::ptr::null_mut(); 3],
             iMbX: 0,
@@ -530,59 +540,77 @@ impl SStrideTables {
     /// cursors out of the block and advances them in interleaved loops) and what
     /// `svc_encode_mb.rs` does per macroblock. See `PaddedPlane::root_ptr` for the
     /// same statement on the picture planes, and F63 for what the other spelling did.
+    ///
+    /// **`pub` since T9.C4**: the four accessors below became `&self`/`*const`
+    /// so the fork's workers stop retagging the whole
+    /// `Option<Box<SStrideTables>>` to read a lookup table, and the writable
+    /// derivation has to live somewhere. It lives at the four `AllocStrideTables`
+    /// sites that fill the block, on the calling thread, before anything spawns —
+    /// spelled at the site (session D's rule for accessors with one caller each)
+    /// rather than as four `_mut` twins nobody else may use.
     #[inline]
-    fn root(&mut self) -> *mut u8 {
+    pub fn root(&mut self) -> *mut u8 {
         self.base.as_mut_ptr().cast::<u8>()
     }
 
+    /// **`&self`, and T9.C4 is why.** These tables are filled once by
+    /// `WelsGetEncBlockStrideOffset` at `InitDqLayers` and read-only for the
+    /// rest of the encode — but the accessors took `&mut self` all the way down
+    /// to `Vec::as_mut_ptr`, so every worker of the fork retagged the whole
+    /// `Option<Box<SStrideTables>>` field to read a lookup table. Miri reported
+    /// exactly that, as a data race on
+    /// `Option<Box<SStrideTables>>`, once the reconstruction picture stopped
+    /// being the first thing it tripped over. Shared reads do not race with
+    /// each other, so the read path is `&self` and `*const`, and the one writer
+    /// keeps its own `_mut` twin below.
     #[inline]
     // unsafe-cat: port-raw(Phase 9)
     #[allow(unsafe_code)]
-    fn at_i32(&mut self, kiByteOffset: Option<u32>) -> *mut i32 {
+    fn at_i32(&self, kiByteOffset: Option<u32>) -> *const i32 {
         match kiByteOffset {
             // SAFETY: every offset stored here was produced by `AllocStrideTables`
             // carving the very block `base` is, and is a multiple of 4.
-            Some(off) => unsafe { self.root().add(off as usize).cast::<i32>() },
-            None => std::ptr::null_mut(),
+            Some(off) => unsafe { self.base.as_ptr().cast::<u8>().add(off as usize).cast::<i32>() },
+            None => std::ptr::null(),
         }
     }
 
     #[inline]
     // unsafe-cat: port-raw(Phase 9)
     #[allow(unsafe_code)]
-    fn at_i16(&mut self, kiByteOffset: Option<u32>) -> *mut i16 {
+    fn at_i16(&self, kiByteOffset: Option<u32>) -> *const i16 {
         match kiByteOffset {
             // SAFETY: as `at_i32`; the two coordinate regions are even-aligned.
-            Some(off) => unsafe { self.root().add(off as usize).cast::<i16>() },
-            None => std::ptr::null_mut(),
+            Some(off) => unsafe { self.base.as_ptr().cast::<u8>().add(off as usize).cast::<i16>() },
+            None => std::ptr::null(),
         }
     }
 
     /// `pStrideDecBlockOffset[kiDid][kiTid0]` as the cursor it used to be. `kiTid0`
     /// is the C++'s `kbBaseTemporalFlag` — 1 for the base temporal layer.
     #[inline]
-    pub fn StrideDecBlockOffset(&mut self, kiDid: usize, kiTid0: usize) -> *mut i32 {
+    pub fn StrideDecBlockOffset(&self, kiDid: usize, kiTid0: usize) -> *const i32 {
         let off = self.pStrideDecBlockOffset[kiDid][kiTid0];
         self.at_i32(off)
     }
 
     /// `pStrideEncBlockOffset[kiDid]` as the cursor it used to be.
     #[inline]
-    pub fn StrideEncBlockOffset(&mut self, kiDid: usize) -> *mut i32 {
+    pub fn StrideEncBlockOffset(&self, kiDid: usize) -> *const i32 {
         let off = self.pStrideEncBlockOffset[kiDid];
         self.at_i32(off)
     }
 
     /// `pMbIndexX[kiDid]` as the cursor it used to be.
     #[inline]
-    pub fn MbIndexX(&mut self, kiDid: usize) -> *mut i16 {
+    pub fn MbIndexX(&self, kiDid: usize) -> *const i16 {
         let off = self.pMbIndexX[kiDid];
         self.at_i16(off)
     }
 
     /// `pMbIndexY[kiDid]` as the cursor it used to be.
     #[inline]
-    pub fn MbIndexY(&mut self, kiDid: usize) -> *mut i16 {
+    pub fn MbIndexY(&self, kiDid: usize) -> *const i16 {
         let off = self.pMbIndexY[kiDid];
         self.at_i16(off)
     }
@@ -605,10 +633,10 @@ pub unsafe fn ctx_stride_dec_block_offset(
     pCtx: *mut sWelsEncCtx,
     kiDid: usize,
     kiTid0: usize,
-) -> *mut i32 {
-    match (*pCtx).pStrideTab.as_mut() {
+) -> *const i32 {
+    match (*pCtx).pStrideTab.as_ref() {
         Some(tab) => tab.StrideDecBlockOffset(kiDid, kiTid0),
-        None => std::ptr::null_mut(),
+        None => std::ptr::null(),
     }
 }
 
@@ -619,10 +647,10 @@ pub unsafe fn ctx_stride_dec_block_offset(
 #[inline]
 // unsafe-cat: cursor
 #[allow(unsafe_code)]
-pub unsafe fn ctx_stride_enc_block_offset(pCtx: *mut sWelsEncCtx, kiDid: usize) -> *mut i32 {
-    match (*pCtx).pStrideTab.as_mut() {
+pub unsafe fn ctx_stride_enc_block_offset(pCtx: *mut sWelsEncCtx, kiDid: usize) -> *const i32 {
+    match (*pCtx).pStrideTab.as_ref() {
         Some(tab) => tab.StrideEncBlockOffset(kiDid),
-        None => std::ptr::null_mut(),
+        None => std::ptr::null(),
     }
 }
 
@@ -633,10 +661,10 @@ pub unsafe fn ctx_stride_enc_block_offset(pCtx: *mut sWelsEncCtx, kiDid: usize) 
 #[inline]
 // unsafe-cat: cursor
 #[allow(unsafe_code)]
-pub unsafe fn ctx_mb_index_x(pCtx: *mut sWelsEncCtx, kiDid: usize) -> *mut i16 {
-    match (*pCtx).pStrideTab.as_mut() {
+pub unsafe fn ctx_mb_index_x(pCtx: *mut sWelsEncCtx, kiDid: usize) -> *const i16 {
+    match (*pCtx).pStrideTab.as_ref() {
         Some(tab) => tab.MbIndexX(kiDid),
-        None => std::ptr::null_mut(),
+        None => std::ptr::null(),
     }
 }
 
@@ -1001,10 +1029,10 @@ pub unsafe fn ctx_pps_array(pCtx: *mut sWelsEncCtx) -> *mut SWelsPPS {
 #[inline]
 // unsafe-cat: cursor
 #[allow(unsafe_code)]
-pub unsafe fn ctx_mb_index_y(pCtx: *mut sWelsEncCtx, kiDid: usize) -> *mut i16 {
-    match (*pCtx).pStrideTab.as_mut() {
+pub unsafe fn ctx_mb_index_y(pCtx: *mut sWelsEncCtx, kiDid: usize) -> *const i16 {
+    match (*pCtx).pStrideTab.as_ref() {
         Some(tab) => tab.MbIndexY(kiDid),
-        None => std::ptr::null_mut(),
+        None => std::ptr::null(),
     }
 }
 
@@ -1987,29 +2015,35 @@ mod tests {
         tab.pMbIndexX[0] = Some(96 * 2);
         tab.pMbIndexY[0] = Some(96 * 2 + 64);
 
-        let first = tab.StrideDecBlockOffset(0, 1);
-        let second = tab.StrideDecBlockOffset(0, 1);
-        assert_eq!(first, second, "the same table resolves to the same address");
-
-        // The use that matters: the FIRST cursor, after the second derivation.
-        unsafe { *first = 0x5A5A };
-        assert_eq!(unsafe { *second }, 0x5A5A, "sibling cursors read each other's writes");
-        unsafe { *second = 0x3C3C };
-        assert_eq!(unsafe { *first }, 0x3C3C);
-
-        // Cursors into the other three regions, live across a re-derivation of this one
-        // — `AllocStrideTables` holds exactly this set while it fills the block.
-        let enc = tab.StrideEncBlockOffset(0);
-        let x = tab.MbIndexX(0);
-        let y = tab.MbIndexY(0);
-        let dec_again = tab.StrideDecBlockOffset(0, 1);
-        unsafe {
+        // **T9.C4 split this test's two halves apart, and the split is the point.**
+        // The write path is `root()`; the read path is the four `&self` accessors.
+        // They must not be interleaved on one `Vec` — `as_ptr`'s contract forbids
+        // writing through what it returns — so the writes go first, in one `&mut`
+        // stretch that holds four sibling cursors at once, which is exactly what
+        // `AllocStrideTables` does.
+        let (dec, enc, x, y) = unsafe {
+            let dec = tab.root().add(0).cast::<i32>();
+            let enc = tab.root().add(96).cast::<i32>();
+            let x = tab.root().add(96 * 2).cast::<i16>();
+            let y = tab.root().add(96 * 2 + 64).cast::<i16>();
+            // The use that matters: the FIRST cursor, after three more derivations.
+            *dec = 0x3C3C;
             *enc = 7;
             *x = 3;
             *y = 4;
-        }
-        assert_eq!(unsafe { *dec_again }, 0x3C3C, "re-deriving did not disturb the region");
-        assert_eq!(unsafe { (*enc, *x, *y) }, (7, 3, 4));
+            (dec, enc, x, y)
+        };
+        assert_eq!(unsafe { (*dec, *enc, *x, *y) }, (0x3C3C, 7, 3, 4));
+
+        // And the read accessors resolve to those same four addresses, twice each.
+        let first = tab.StrideDecBlockOffset(0, 1);
+        let second = tab.StrideDecBlockOffset(0, 1);
+        assert_eq!(first, second, "the same table resolves to the same address");
+        assert_eq!(first, dec.cast_const(), "the read path names what the write path wrote");
+        assert_eq!(unsafe { *first }, 0x3C3C, "and reads it back");
+        assert_eq!(tab.StrideEncBlockOffset(0), enc.cast_const());
+        assert_eq!(tab.MbIndexX(0), x.cast_const());
+        assert_eq!(tab.MbIndexY(0), y.cast_const());
 
         assert_eq!(tab.StrideDecBlockOffset(1, 1), first, "two layers, one region");
         assert!(tab.MbIndexX(3).is_null(), "None answers the null the field used to hold");
@@ -2216,13 +2250,20 @@ mod tests {
         ctx.pStrideTab = Some(Box::new(tab));
 
         let p: *mut sWelsEncCtx = &mut *ctx;
+        // The write path, once (T9.C4): `root()` under the one `&mut` the init-time
+        // filler takes.
+        unsafe {
+            let tab = (*p).pStrideTab.as_mut().unwrap();
+            *tab.root().add(0).cast::<i32>() = 11;
+            *tab.root().add(96).cast::<i32>() = 22;
+        }
+        // The read path, three times, two of them naming the same region — the
+        // property that matters is that the first answer is still usable after the
+        // third call, which is what every in-fork consumer relies on.
         let first = unsafe { ctx_stride_enc_block_offset(p, 0) };
         let other = unsafe { ctx_stride_enc_block_offset(p, 1) };
         let again = unsafe { ctx_stride_enc_block_offset(p, 0) };
-        unsafe {
-            *first = 11;
-            *other = 22;
-        }
+        assert_eq!(first, again);
         assert_eq!(unsafe { (*again, *first, *other) }, (11, 11, 22));
     }
 
