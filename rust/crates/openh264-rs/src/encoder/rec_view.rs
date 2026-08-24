@@ -420,17 +420,28 @@ impl RecPicView {
     }
 }
 
+/// A standalone plane view over one `PaddedPlane`, with the same shape
+/// [`RecPicView::build`] gives each of its three.
+///
+/// **Test-only, and deliberately so**: it is the differential tests' way to put a
+/// seam cursor and a `PlaneCursorMut` over the same storage, which is how every
+/// `RecCursor` kernel in `decode_mb_aux` is checked against its `PlaneCursorMut`
+/// twin. Production code reaches planes through `RecPicView::build`'s
+/// `&mut SPicture` and nothing else — that exclusive borrow is the module
+/// contract, and a public constructor from a single plane would let a caller take
+/// two views of one picture without the compiler objecting.
+#[cfg(test)]
+pub(crate) fn shared_plane_for_test(p: &mut crate::safe::plane::PaddedPlane) -> SharedPlane {
+    let (origin, stride, len) = (p.origin(), p.stride(), p.buf_len());
+    SharedPlane { cells: SharedCells::from_parts(p.root_ptr(), len), stride, origin }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::safe::plane::PaddedPlane;
 
-    /// A standalone plane view, with the same shape `RecPicView::build` gives
-    /// each of its three.
-    fn view_of(p: &mut PaddedPlane) -> SharedPlane {
-        let (origin, stride, len) = (p.origin(), p.stride(), p.buf_len());
-        SharedPlane { cells: SharedCells::from_parts(p.root_ptr(), len), stride, origin }
-    }
+    use super::shared_plane_for_test as view_of;
 
     #[test]
     fn a_cursor_reads_back_what_it_wrote_through_a_shared_view() {
@@ -554,3 +565,4 @@ mod tests {
         assert!(b.is_empty());
     }
 }
+

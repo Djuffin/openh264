@@ -50,6 +50,7 @@ fn WelsClip1(iX: i32) -> u8 {
 
 use crate::encoder::svc_encode_mb::g_kuiDequantCoeff;
 use crate::safe::plane::{PlaneCursor, PlaneCursorMut};
+use crate::encoder::rec_view::RecCursor;
 
 /// Inverse 4x4 Hadamard of the luma DC block, then scale by the
 /// dequantisation multiplier. The qp >= 12 path (the qp < 12 path is
@@ -224,6 +225,115 @@ pub fn idct_four_t4_rec_in_place(rec: &mut PlaneCursorMut<'_>, dct: &[i16; 64]) 
     }
 }
 
+/// The reconstruction-seam flavour of [`idct_t4_rec`] and friends.
+///
+/// **Why a second set rather than a generic destination.** `PlaneCursorMut::row_mut`
+/// hands out `&mut [u8]`; the seam cannot and must not, because a macroblock's
+/// contiguous plane span is the full width of its rows and a `&mut` over it would
+/// claim the neighbouring slice's columns (`rec_view`'s module docs). So the
+/// destination writes go through [`RecCursor::write_row`] by value. Everything
+/// else — the transform, the `+32 >> 6` rounding, the `WelsClip1` saturation, the
+/// `as i16` narrowing in the horizontal pass — is [`idct_t4_residual`], shared
+/// with the `PlaneCursorMut` forms so the arithmetic exists exactly once and the
+/// differential tests below have something to be differential *about*.
+///
+/// **The prediction operand is a slice, not a cursor.** Every blocked idct site
+/// takes its prediction from the macroblock cache's `sMemPredMb` arena at a fixed
+/// stride (16 for luma, 16 for the chroma pair as the C++ calls them) — a plain
+/// owned array, never the picture. The in-place pair takes no prediction at all:
+/// there `pRec` *is* `pPred` (F59).
+///
+/// 4x4 residual added to an arena prediction, saturated into the shared view.
+pub fn idct_t4_rec_to_view(
+    rec: &RecCursor<'_>,
+    pred: &[u8],
+    pred_stride: usize,
+    dct: &[i16; 16],
+) {
+    let res = idct_t4_residual(dct);
+    for (dy, r) in res.iter().enumerate() {
+        let p: &[u8; 4] = pred[dy * pred_stride..][..4].try_into().unwrap();
+        let mut out = [0u8; 4];
+        for ((o, &pv), &v) in out.iter_mut().zip(p.iter()).zip(r.iter()) {
+            *o = WelsClip1(pv as i32 + ((v + 32) >> 6));
+        }
+        rec.write_row::<4>(dy as isize, 0, &out);
+    }
+}
+
+/// [`idct_t4_rec_to_view`] over the four 4x4 blocks of one 8x8 quadrant.
+pub fn idct_four_t4_rec_to_view(
+    rec: &RecCursor<'_>,
+    pred: &[u8],
+    pred_stride: usize,
+    dct: &[i16; 64],
+) {
+    const SUBS: [(isize, isize); 4] = [(0, 0), (4, 0), (0, 4), (4, 4)];
+    for (k, &(dx, dy)) in SUBS.iter().enumerate() {
+        let sub: &[i16; 16] = (&dct[k << 4..][..16]).try_into().unwrap();
+        let off = dy as usize * pred_stride + dx as usize;
+        idct_t4_rec_to_view(&rec.advance(dx, dy), &pred[off..], pred_stride, sub);
+    }
+}
+
+/// [`idct_rec_i16x16_dc`]'s seam flavour: the DC-only I16x16 luma reconstruction.
+pub fn idct_rec_i16x16_dc_to_view(
+    rec: &RecCursor<'_>,
+    pred: &[u8],
+    pred_stride: usize,
+    dc: &[i16; 16],
+) {
+    for i in 0..16usize {
+        let p: &[u8; 16] = pred[i * pred_stride..][..16].try_into().unwrap();
+        let mut out = [0u8; 16];
+        for (j, (o, &pv)) in out.iter_mut().zip(p.iter()).enumerate() {
+            let d = dc[(i & 0x0C) + (j >> 2)] as i32;
+            *o = WelsClip1(pv as i32 + ((d + 32) >> 6));
+        }
+        rec.write_row::<16>(i as isize, 0, &out);
+    }
+}
+
+/// [`idct_t4_rec_in_place`]'s seam flavour — the inter reconstruction where the
+/// prediction is already in the picture (F59). Reads and writes the same four
+/// rows, which `RecCursor`'s by-value `row`/`write_row` pair does without ever
+/// naming a `&mut [u8]`.
+pub fn idct_t4_rec_in_place_view(rec: &RecCursor<'_>, dct: &[i16; 16]) {
+    let res = idct_t4_residual(dct);
+    for (dy, r) in res.iter().enumerate() {
+        let cur = rec.row::<4>(dy as isize, 0);
+        let mut out = [0u8; 4];
+        for ((o, &c), &v) in out.iter_mut().zip(cur.iter()).zip(r.iter()) {
+            *o = WelsClip1(c as i32 + ((v + 32) >> 6));
+        }
+        rec.write_row::<4>(dy as isize, 0, &out);
+    }
+}
+
+/// [`idct_t4_rec_in_place_view`] over the four 4x4 blocks of one 8x8 quadrant.
+pub fn idct_four_t4_rec_in_place_view(rec: &RecCursor<'_>, dct: &[i16; 64]) {
+    const SUBS: [(isize, isize); 4] = [(0, 0), (4, 0), (0, 4), (4, 4)];
+    for (k, &(dx, dy)) in SUBS.iter().enumerate() {
+        let sub: &[i16; 16] = (&dct[k << 4..][..16]).try_into().unwrap();
+        idct_t4_rec_in_place_view(&rec.advance(dx, dy), sub);
+    }
+}
+
+/// [`WelsIDctT4RecOnMb`]'s seam flavour: the 16x16 luma inter reconstruction, four
+/// 8x8 quadrants of [`idct_four_t4_rec_in_place_view`].
+///
+/// In-place only, because that is the only way its one caller ever used it —
+/// `OutputPMbWithoutConstructCsRsNoCopy` passes `pDecY` as both `pDst` and
+/// `pPred` (F59), and the raw form's two independent stride parameters existed
+/// solely to spell that aliasing pair. One cursor, one stride, no pair.
+pub fn idct_t4_rec_on_mb_in_place_view(rec: &RecCursor<'_>, dct: &[i16; 256]) {
+    const QUADS: [(isize, isize); 4] = [(0, 0), (8, 0), (0, 8), (8, 8)];
+    for (k, &(dx, dy)) in QUADS.iter().enumerate() {
+        let sub: &[i16; 64] = (&dct[k << 6..][..64]).try_into().unwrap();
+        idct_four_t4_rec_in_place_view(&rec.advance(dx, dy), sub);
+    }
+}
+
 /// Inverse 4x4 Hadamard for the I16x16 luma DC block, qp < 12 path.
 ///
 /// The additions are **plain `i16`**, exactly the raw port's: with a 16x
@@ -393,6 +503,166 @@ pub unsafe fn WelsInitReconstructionFuncs(pFuncList: &mut SWelsFuncPtrList, _uiC
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use crate::encoder::rec_view::shared_plane_for_test;
+    use crate::safe::plane::PaddedPlane;
+
+    /// **The seam kernels' acceptance (T9.C2, step 1).** Each `RecCursor` form is
+    /// run against its `PlaneCursorMut` twin over *two planes built the same way*,
+    /// from the same coefficients and the same prediction, and the whole
+    /// allocations are compared — not just the block, so a write that lands one
+    /// row or one column out is a failure rather than a silent pass.
+    ///
+    /// Pseudo-random but fixed: a 64-bit LCG seeded per test, because a constant
+    /// pattern cannot tell a transposed write from a correct one and real
+    /// coefficients span the `as i16` narrowing the horizontal pass depends on.
+    fn lcg(seed: &mut u64) -> u32 {
+        *seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        (*seed >> 33) as u32
+    }
+
+    /// Two planes of identical geometry, both filled with the same noise.
+    fn twin_planes(seed: &mut u64) -> (PaddedPlane, PaddedPlane) {
+        let (w, h, pad, stride) = (32usize, 32usize, 16usize, 64usize);
+        let mut a = PaddedPlane::new(w, h, pad, stride);
+        let mut b = PaddedPlane::new(w, h, pad, stride);
+        for y in -(pad as isize)..(h + pad) as isize {
+            for x in -(pad as isize)..(w + pad) as isize {
+                let v = (lcg(seed) & 0xFF) as u8;
+                a.set(x, y, v);
+                b.set(x, y, v);
+            }
+        }
+        (a, b)
+    }
+
+    fn noisy_coeffs<const N: usize>(seed: &mut u64) -> [i16; N] {
+        // Full `i16` range: the horizontal pass narrows with `as i16` and that
+        // truncation is load-bearing (see `idct_t4_residual`), so the test has to
+        // reach coefficients large enough to exercise it.
+        core::array::from_fn(|_| (lcg(seed) as u16) as i16)
+    }
+
+    /// The arena prediction operand: `sMemPredMb`'s shape — a flat owned buffer at
+    /// a fixed stride, never the picture.
+    fn noisy_pred(seed: &mut u64, stride: usize, rows: usize) -> Vec<u8> {
+        (0..stride * rows).map(|_| (lcg(seed) & 0xFF) as u8).collect()
+    }
+
+    #[test]
+    fn idct_t4_rec_to_view_matches_the_plane_cursor_form() {
+        let mut seed = 0x9E3779B97F4A7C15;
+        let (mut pa, mut pb) = twin_planes(&mut seed);
+        let dct: [i16; 16] = noisy_coeffs(&mut seed);
+        let pred = noisy_pred(&mut seed, 16, 4);
+
+        // The `PlaneCursorMut` twin needs its prediction as a plane, so give it one
+        // whose rows are the same bytes at the same stride.
+        let mut pp = PaddedPlane::new(16, 16, 0, 16);
+        for y in 0..4isize {
+            for x in 0..16isize {
+                pp.set(x, y, pred[y as usize * 16 + x as usize]);
+            }
+        }
+        idct_t4_rec(&mut pa.cursor_mut(5, 7), &pp.cursor(0, 0), &dct);
+
+        let view = shared_plane_for_test(&mut pb);
+        idct_t4_rec_to_view(&view.cursor(5, 7), &pred, 16, &dct);
+
+        assert_eq!(pa.as_slice(), pb.as_slice(), "whole allocation, not just the block");
+    }
+
+    #[test]
+    fn idct_four_t4_rec_to_view_matches_the_plane_cursor_form() {
+        let mut seed = 0xD1B54A32D192ED03;
+        let (mut pa, mut pb) = twin_planes(&mut seed);
+        let dct: [i16; 64] = noisy_coeffs(&mut seed);
+        let pred = noisy_pred(&mut seed, 16, 8);
+
+        let mut pp = PaddedPlane::new(16, 16, 0, 16);
+        for y in 0..8isize {
+            for x in 0..16isize {
+                pp.set(x, y, pred[y as usize * 16 + x as usize]);
+            }
+        }
+        idct_four_t4_rec(&mut pa.cursor_mut(6, 9), &pp.cursor(0, 0), &dct);
+
+        let view = shared_plane_for_test(&mut pb);
+        idct_four_t4_rec_to_view(&view.cursor(6, 9), &pred, 16, &dct);
+
+        assert_eq!(pa.as_slice(), pb.as_slice());
+    }
+
+    #[test]
+    fn idct_rec_i16x16_dc_to_view_matches_the_plane_cursor_form() {
+        let mut seed = 0xA24BAED4963EE407;
+        let (mut pa, mut pb) = twin_planes(&mut seed);
+        let dc: [i16; 16] = noisy_coeffs(&mut seed);
+        let pred = noisy_pred(&mut seed, 16, 16);
+
+        let mut pp = PaddedPlane::new(16, 16, 0, 16);
+        for y in 0..16isize {
+            for x in 0..16isize {
+                pp.set(x, y, pred[y as usize * 16 + x as usize]);
+            }
+        }
+        idct_rec_i16x16_dc(&mut pa.cursor_mut(3, 4), &pp.cursor(0, 0), &dc);
+
+        let view = shared_plane_for_test(&mut pb);
+        idct_rec_i16x16_dc_to_view(&view.cursor(3, 4), &pred, 16, &dc);
+
+        assert_eq!(pa.as_slice(), pb.as_slice());
+    }
+
+    /// The in-place pair reads *and* writes the same block, so the twin planes
+    /// must start equal — which `twin_planes` guarantees — and the prediction is
+    /// whatever noise is already there (F59's shape).
+    #[test]
+    fn idct_t4_rec_in_place_view_matches_the_plane_cursor_form() {
+        let mut seed = 0x2545F4914F6CDD1D;
+        let (mut pa, mut pb) = twin_planes(&mut seed);
+        let dct: [i16; 16] = noisy_coeffs(&mut seed);
+
+        idct_t4_rec_in_place(&mut pa.cursor_mut(8, 5), &dct);
+
+        let view = shared_plane_for_test(&mut pb);
+        idct_t4_rec_in_place_view(&view.cursor(8, 5), &dct);
+
+        assert_eq!(pa.as_slice(), pb.as_slice());
+    }
+
+    /// The 16x16 composite, against the four `PlaneCursorMut` quadrant calls
+    /// `WelsIDctT4RecOnMb` makes — same quadrant order, same coefficient offsets.
+    #[test]
+    fn idct_t4_rec_on_mb_in_place_view_matches_four_plane_cursor_quadrants() {
+        let mut seed = 0xBF58476D1CE4E5B9;
+        let (mut pa, mut pb) = twin_planes(&mut seed);
+        let dct: [i16; 256] = noisy_coeffs(&mut seed);
+
+        for (k, &(dx, dy)) in [(0isize, 0isize), (8, 0), (0, 8), (8, 8)].iter().enumerate() {
+            let sub: &[i16; 64] = (&dct[k << 6..][..64]).try_into().unwrap();
+            idct_four_t4_rec_in_place(&mut pa.cursor_mut(4 + dx, 4 + dy), sub);
+        }
+
+        let view = shared_plane_for_test(&mut pb);
+        idct_t4_rec_on_mb_in_place_view(&view.cursor(4, 4), &dct);
+
+        assert_eq!(pa.as_slice(), pb.as_slice());
+    }
+
+    #[test]
+    fn idct_four_t4_rec_in_place_view_matches_the_plane_cursor_form() {
+        let mut seed = 0x14057B7EF767814F;
+        let (mut pa, mut pb) = twin_planes(&mut seed);
+        let dct: [i16; 64] = noisy_coeffs(&mut seed);
+
+        idct_four_t4_rec_in_place(&mut pa.cursor_mut(2, 11), &dct);
+
+        let view = shared_plane_for_test(&mut pb);
+        idct_four_t4_rec_in_place_view(&view.cursor(2, 11), &dct);
+
+        assert_eq!(pa.as_slice(), pb.as_slice());
+    }
 
     /// Dequantisation is an elementwise multiply by the eight-entry MF row, applied to
     /// both halves of the 4x4 block.
