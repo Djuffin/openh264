@@ -15,6 +15,7 @@
 #![deny(unsafe_code)]
 
 
+use crate::encoder::rec_view::copy_block_to_view;
 use crate::encoder::svc_encode_slice::{layer_enc_pic, layer_rec_view, layer_ref_pic};
 use crate::encoder::svc_encode_slice::layer_pps;
 use crate::encoder::svc_encode_slice::current_layer;
@@ -478,22 +479,36 @@ pub unsafe extern "C" fn WelsMdIntraSecondaryModesEnc(
 #[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsRecPskip(
     pCurLayer: *mut SDqLayer,
-    pFuncList: &SWelsFuncPtrList,
+    _pFuncList: &SWelsFuncPtrList,
     pCurMb: &mut SMB,
     pMbCache: &mut SMbCache,
 ) {
-    let iRecStride = (*pCurLayer).iCsStride;
-    let pCsMb = (*pMbCache).SPicData.pCsMb;
+    // **T9.C7 — the seam's first consumer, and the biggest single one.**
+    //
+    // Was three `pfCopy*Aligned` slot calls onto `SPicData.pCsMb[i]`, a raw
+    // cursor into the reconstruction plane. The destination is now the seam's
+    // cursor at this macroblock's own origin, and the operand is the arena slice
+    // it always was — `sSkipMb`'s luma 16x16 at stride 16 and its two chroma 8x8
+    // at stride 8, exactly the `(pSrc, 16)` / `(pSrc + 256, 8)` / `(pSrc + 320, 8)`
+    // triple the slots were handed.
+    //
+    // **The slots are bypassed rather than flipped** (F118's rule): the eight
+    // `pfCopy*` entries are installed unconditionally by `WelsInitEncodingFuncs`
+    // and constant after init, so a fixed-size site may call the kernel directly,
+    // byte-identically. The table itself flips when its last raw reader goes.
+    //
+    // The three destination strides are gone from the call because the view
+    // carries them: `plane(i).stride()` is `iCsStride[i]` — `WelsInitCurrentLayer`
+    // stamps both from the same `SPicture::stride(i)`.
+    let view = crate::encoder::svc_encode_slice::layer_rec_view(pCurLayer)
+        .expect("the layer's reconstruction view is built for this frame");
+    let (lx, ly) = (*pMbCache).SPicData.luma_origin();
+    let (cx, cy) = (*pMbCache).SPicData.chroma_origin();
+    let src = &(*pMbCache).sSkipMb;
 
-    pFuncList.pfCopy16x16Aligned.expect("pfCopy16x16Aligned unset")(
-        pCsMb[0],
-        iRecStride[0],
-        std::ptr::addr_of_mut!((*pMbCache).sSkipMb).cast::<u8>(),
-        16,
-    );
-    let copy8 = pFuncList.pfCopy8x8Aligned.expect("pfCopy8x8Aligned unset");
-    copy8(pCsMb[1], iRecStride[1], std::ptr::addr_of_mut!((*pMbCache).sSkipMb).cast::<u8>().add(256), 8);
-    copy8(pCsMb[2], iRecStride[2], std::ptr::addr_of_mut!((*pMbCache).sSkipMb).cast::<u8>().add(320), 8);
+    copy_block_to_view::<16>(&src[..256], 16, &view.plane(0).cursor(lx, ly), 16);
+    copy_block_to_view::<8>(&src[256..320], 8, &view.plane(1).cursor(cx, cy), 8);
+    copy_block_to_view::<8>(&src[320..384], 8, &view.plane(2).cursor(cx, cy), 8);
     // `WelsSetMemZero (pCurMb->pNonZeroCount, 24)` — the row is inline now.
     (*pCurMb).iNonZeroCount = [0; MB_LUMA_CHROMA_BLOCK4x4_NUM];
 }
