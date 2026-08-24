@@ -4333,6 +4333,105 @@ mod tests {
         );
     }
 
+    /// **The mid-row fork/join probe — F107's second acceptance, and the one the
+    /// existing probe cannot be.**
+    ///
+    /// The probe above drives `SM_FIXEDSLCNUM_SLICE` with RC on, which F107 §1
+    /// measured as the **one** row-aligned configuration of the four
+    /// multi-threaded ones: its slice runs are whole macroblock rows, so a design
+    /// that only works on row-aligned slices passes it. Three modes out of four
+    /// put a boundary *mid-row*, and that is the case every `&mut [u8]` band, every
+    /// per-macroblock `PlaneCursorMut` and every per-worker `&mut SPicture` fails
+    /// on — so the seam is not tested until one of them runs.
+    ///
+    /// **`SM_SIZELIMITED_SLICE` at two threads, and the boundary is asserted
+    /// rather than assumed** (which is the whole point of
+    /// `EncodedFrame::first_mbs`). This mode reaches
+    /// `EncodeSizeLimitedSlicesForked` — a third fork, distinct from the one the
+    /// probe above drives — where the workers are *partitions* rather than
+    /// slices: `UpdateSlicepEncCtxWithPartition` cuts the 49-macroblock frame in
+    /// two at macroblock 24, and 24 is not a multiple of the 7-macroblock row.
+    /// Measured at this commit, three frames' slice starts were
+    /// `[0, 6, 12, 17, 22, 24, 30, 36, 42]`, `[0, 15, 24, 45]` and `[0, 24]`; the
+    /// assertion below fails if that ever becomes a row grid, because then this
+    /// test would be the row-aligned one twice.
+    ///
+    /// 112x112 for `MIN_NUM_MB_PER_SLICE`'s reason (see the probe above), and
+    /// `uiSliceSizeConstraint` above `MAX_MACROBLOCK_SIZE_IN_BYTE` because
+    /// `SliceArgumentValidation` refuses anything at or below it — 1000 rather
+    /// than 600 so the IDR comes out in nine slices rather than sixteen, which is
+    /// Miri's clock talking.
+    ///
+    /// **Ignored under Miri, and what remains is named rather than shrugged at**
+    /// (T9.C6). With the reconstruction seam in place, this probe's next verdict
+    /// is `SSliceCtx::pOverallMbMap`: `AddSliceBoundary` **rewrites** the slice
+    /// map from inside the fork (`:3175`), through a `&mut Vec<u16>` that claims
+    /// the whole array, while `WelsGetNextMbOfSlice` reads it — and at a
+    /// partition's last macroblock that read is of the *next* partition's first
+    /// entry, i.e. of another worker's. The value is stable either way (the two
+    /// partitions' slice indices never collide, so the comparison answers `-1`
+    /// whichever version is read), so this is a benign race in the C++ and a real
+    /// one in the memory model. The row-aligned probe above stops earlier and on
+    /// something else — deblocking's cross-slice read of a neighbour's
+    /// `SMB.uiSliceIdc` against the `&mut SMB` the worker encoding that neighbour
+    /// holds, which is F112/F114b's family and session E's 31 neighbour-bound
+    /// `*mut SMB` parameters.
+    ///
+    /// Neither is the reconstruction write, and neither is in this session's lane;
+    /// the finding carries the full enumeration. The attribute retires with them,
+    /// and this comment is the ratchet.
+    #[test]
+    #[cfg_attr(miri, ignore)]
+    fn fork_join_encodes_a_frame_whose_slice_boundary_is_mid_row() {
+        let (frames, dims) = drive_encoder_over(
+            112,
+            112,
+            2,
+            EncoderProbeOptions {
+                slice_mode: SliceModeEnum::SM_SIZELIMITED_SLICE,
+                slice_constraint: 1000,
+                threads: 2,
+                ..EncoderProbeOptions::default()
+            },
+        );
+
+        assert_eq!(dims, (112, 112), "the encoder must be configured for a 7x7 grid");
+        let kiMbWidth = dims.0 / 16;
+        assert_eq!(frames.len(), 2, "the encode loop did not run to the end");
+        assert!(
+            frames.iter().all(|f| f.bytes > 0),
+            "a frame produced no NAL bytes: {:?}",
+            frames.iter().map(|f| (f.kind, f.bytes)).collect::<Vec<_>>()
+        );
+        assert_eq!(frames[0].kind, EVideoFrameType::videoFrameTypeIDR);
+        assert_eq!(
+            frames[1].kind,
+            EVideoFrameType::videoFrameTypeP,
+            "the second frame must be inter-coded, or the fork runs over an all-intra \
+             frame and the mode-decision half of the tree stays dark"
+        );
+        assert!(
+            frames.iter().all(|f| f.vcl_nals >= 2),
+            "a frame carried fewer than two VCL NALs, so the size limit never split it \
+             and the fork ran one job: {:?}",
+            frames.iter().map(|f| (f.kind, f.vcl_nals)).collect::<Vec<_>>()
+        );
+
+        // **The assertion this probe exists for.** A slice that starts at a
+        // macroblock which is not the start of a row is a slice whose first row is
+        // shared with the previous slice — the case no `&mut [u8]` over the plane
+        // can express.
+        for f in &frames {
+            assert!(
+                f.first_mbs.iter().any(|&m| m != 0 && m % kiMbWidth as u32 != 0),
+                "every slice of this frame starts on a row boundary, so the probe is \
+                 driving the row-aligned case the other probe already covers: \
+                 first_mb_in_slice = {:?} at {kiMbWidth} macroblocks per row",
+                f.first_mbs
+            );
+        }
+    }
+
     /// **The second encode probe — CAVLC and the fine mode-decision family, both
     /// knobs flipped together** (Phase 6 session C, face 1).
     ///

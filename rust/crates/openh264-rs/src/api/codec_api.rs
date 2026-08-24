@@ -4222,6 +4222,19 @@ pub(crate) mod abi_test_driver {
         pub(crate) nals: usize,
         pub(crate) vcl_nals: usize,
         pub(crate) frame_size: i32,
+        /// `first_mb_in_slice` of every VCL NAL of this frame, in emission order
+        /// — **T9.C6**, and it exists for one assertion: that a slice boundary
+        /// landed *mid-row*.
+        ///
+        /// F107 §1 measured that only `SM_FIXEDSLCNUM_SLICE` with RC on is
+        /// row-aligned, and the fork/join probe drives exactly that — the easy
+        /// case. A probe on any other mode is worth nothing unless it can show
+        /// the boundary it claims to test, and the bitstream is the only place
+        /// that fact is visible from outside the encoder. Read straight off the
+        /// slice header as `ue(v)`; the value cannot need two zero bytes of
+        /// prefix at any picture size this crate's probes use, so emulation
+        /// prevention never falls inside it.
+        pub(crate) first_mbs: Vec<u32>,
     }
 
     /// Fills `buf` with frame `f` of a synthetic I420 sequence that **moves**.
@@ -4339,6 +4352,41 @@ pub(crate) mod abi_test_driver {
                 load_balancing: false,
             }
         }
+    }
+
+    /// `first_mb_in_slice` of one Annex-B VCL NAL — the leading `ue(v)` of the
+    /// slice header, and nothing else of it.
+    ///
+    /// Returns `None` for a NAL with no start code or no payload byte, which is
+    /// what a caller should see rather than a panic: the counts beside it are
+    /// still meaningful.
+    fn first_mb_in_slice(nal: &[u8]) -> Option<u32> {
+        // Skip the start code (3 or 4 bytes) and the one-byte NAL header.
+        let body = if nal.starts_with(&[0, 0, 0, 1]) {
+            &nal[4..]
+        } else if nal.starts_with(&[0, 0, 1]) {
+            &nal[3..]
+        } else {
+            nal
+        };
+        let rbsp = body.get(1..)?;
+        // `ue(v)`: count leading zero bits, then read that many more.
+        let bit = |i: usize| -> Option<u32> {
+            Some(((*rbsp.get(i / 8)? >> (7 - (i % 8))) & 1) as u32)
+        };
+        let mut lead = 0usize;
+        while bit(lead)? == 0 {
+            lead += 1;
+            // 32 leading zeros is not a slice header; refuse rather than loop.
+            if lead > 31 {
+                return None;
+            }
+        }
+        let mut v: u32 = 1;
+        for k in 1..=lead {
+            v = (v << 1) | bit(lead + k)?;
+        }
+        Some(v - 1)
     }
 
     // unsafe-cat: C-ABI(test)
@@ -4482,17 +4530,28 @@ pub(crate) mod abi_test_driver {
                 let mut bytes = 0usize;
                 let mut nals = 0usize;
                 let mut vcl_nals = 0usize;
+                let mut first_mbs: Vec<u32> = Vec::new();
                 for l in 0..info.iLayerNum as usize {
                     let lay = &info.sLayerInfo[l];
                     if lay.pNalLengthInByte.is_null() {
                         continue;
                     }
                     nals += lay.iNalCount as usize;
-                    if lay.uiLayerType == LAYER_TYPE::VIDEO_CODING_LAYER as u8 {
+                    let is_vcl = lay.uiLayerType == LAYER_TYPE::VIDEO_CODING_LAYER as u8;
+                    if is_vcl {
                         vcl_nals += lay.iNalCount as usize;
                     }
+                    let mut at = 0usize;
                     for n in 0..lay.iNalCount as usize {
-                        bytes += *lay.pNalLengthInByte.add(n) as usize;
+                        let len = *lay.pNalLengthInByte.add(n) as usize;
+                        bytes += len;
+                        if is_vcl && !lay.pBsBuf.is_null() {
+                            let nal = std::slice::from_raw_parts(lay.pBsBuf.add(at), len);
+                            if let Some(v) = first_mb_in_slice(nal) {
+                                first_mbs.push(v);
+                            }
+                        }
+                        at += len;
                     }
                 }
                 out.push(EncodedFrame {
@@ -4501,6 +4560,7 @@ pub(crate) mod abi_test_driver {
                     nals,
                     vcl_nals,
                     frame_size: info.iFrameSizeInBytes,
+                    first_mbs,
                 });
             }
 
