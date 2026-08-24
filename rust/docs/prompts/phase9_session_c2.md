@@ -66,9 +66,11 @@ Plus **deblocking**, which session C touched only at its two roots:
 
 ## The three kernel families, and what each needs
 
-`copy_block_to_view` (in `rec_view.rs`) already covers **all 14 remaining copy sites** —
-every reconstruction copy has an *arena* source (`sSkipMb` or `sMemPredMb`), so a slice
-and a stride is the right operand shape and no new kernel is needed. The other two:
+`copy_block_to_view` (in `rec_view.rs`) already covers **every blocked copy site** — 14
+by the census, of which **11 are yours** (SCD's 3 are Phase 10's) and **3 of those 11 are
+the dead duplicate**. Every reconstruction copy has an *arena* source (`sSkipMb` or
+`sMemPredMb`), so a slice and a stride is the right operand shape and no new kernel is
+needed. The other two families do:
 
 * **idct** — `encoder/decode_mb_aux.rs`'s `idct_t4_rec` / `idct_four_t4_rec` and the two
   `_in_place` forms, all taking `&mut PlaneCursorMut`. They need a `RecCursor` flavour.
@@ -134,8 +136,9 @@ their last raw caller goes. Tables flip **last** (F118).
 2. **The idct consumers** (10 sites, four owners), direct-called per F118. Planted fault
    once for the two-plane shape and once for the in-place shape — they are different
    conversions and S59 counts them separately.
-3. **The copy consumers** (11 live + 3 dead), `copy_block_to_view`. `WelsMdBackgroundMbEnc`
-   is the one with a narrow referee: quote 32 rows, not 48.
+3. **The copy consumers** — 11 sites, 3 of them the dead duplicate from step 0 —
+   through `copy_block_to_view`. `WelsMdBackgroundMbEnc` is the one with a narrow
+   referee: quote 32 rows, not 48 (F126).
 4. **The intra-pred read path** (5 sites) and the three arrays.
 5. **The tables**: `PIDctFunc` → safe over `RecCursor` + `&[i16; N]`; `PCopyFunc` → safe;
    the three intra-pred arrays → `Option<fn(..)>` over safe types. Shims delete;

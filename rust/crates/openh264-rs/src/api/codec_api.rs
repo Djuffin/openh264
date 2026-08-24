@@ -4369,6 +4369,17 @@ pub(crate) mod abi_test_driver {
         } else {
             nal
         };
+        // **Refuse rather than guess on the SVC extension types.** `eNalUnitType`
+        // 14 (`NAL_UNIT_PREFIX`) and 20 (`NAL_UNIT_CODED_SLICE_EXT`) carry a
+        // three-byte `SNalUnitHeaderExt` between the NAL header and the slice
+        // header, so skipping one byte would read the extension as a `ue(v)` and
+        // return a plausible wrong number. No probe drives multi-layer SVC today;
+        // when one does, this returns `None` and the caller's assertion fails
+        // loudly instead of asserting on garbage.
+        let nal_type = body.first()? & 0x1F;
+        if nal_type == 14 || nal_type == 20 {
+            return None;
+        }
         let rbsp = body.get(1..)?;
         // `ue(v)`: count leading zero bits, then read that many more.
         let bit = |i: usize| -> Option<u32> {
