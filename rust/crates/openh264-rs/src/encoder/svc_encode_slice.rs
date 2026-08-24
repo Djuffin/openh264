@@ -978,23 +978,39 @@ pub unsafe fn layer_enc_pic<'a>(pLayer: *mut SDqLayer) -> Option<&'a SPicture> {
 // family now — the exclusive borrow it hands out is a fresh whole-picture retag at
 // every call (F73), which is precisely what [`layer_enc_pic`] exists to avoid.
 
-/// The reconstruction picture this layer is **decoding into** — see [`layer_ref_pic`].
+// `layer_dec_pic` stood here — the shared form, "the reconstruction picture this
+// layer is decoding into". **S18, deleted in T9.C3**: its one caller was the
+// `sMvList.is_empty()` test at `svc_mode_decision.rs:1304`, which now asks the
+// seam's own `mv_list()` instead, so the shared read route into the
+// reconstruction picture has no caller at all. [`layer_rec_view`] below replaces
+// it; what is left of the `_mut` form is four plane sites and a deletion.
+
+/// **The reconstruction seam's route from a layer** — D-mt-3 option A, and the
+/// replacement for every in-frame use of [`layer_dec_pic_mut`].
+///
+/// Where `layer_dec_pic_mut` hands out `&mut SPicture` — a fresh whole-picture
+/// retag at every call, which is F73 and which Miri reports as a data race on
+/// `SRefList` itself when two workers do it at once — this hands out a shared
+/// view whose writes go through `&self`. Two workers may hold it at the same
+/// time; that is the whole point, and
+/// [`crate::encoder::rec_view`] carries the argument for why it is sound.
+///
+/// `None` means no frame has started (or the picture is unbound), which is what
+/// `layer_dec_pic_mut`'s `None` meant.
 ///
 /// # Safety
-/// As [`layer_ref_pic`].
+/// `pLayer` must be a live layer stamped by `WelsInitCurrentLayer`, and the
+/// frame it stamped must still be the frame in progress.
 #[inline]
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
-pub unsafe fn layer_dec_pic<'a>(pLayer: *mut SDqLayer) -> Option<&'a SPicture> {
-    let id = (*pLayer).pDecPic?;
-    let pRefList = (*pLayer).pRefList;
-    if pRefList.is_null() {
-        return None;
-    }
-    Some((*pRefList).pic(id))
+pub unsafe fn layer_rec_view<'a>(
+    pLayer: *mut SDqLayer,
+) -> Option<&'a crate::encoder::rec_view::RecPicView> {
+    (*pLayer).pRecView.as_ref()
 }
 
-/// Mutable form of [`layer_dec_pic`].
+/// The `&mut` route into the reconstruction picture — **being retired** (T9.C3).
 ///
 /// # Safety
 /// As [`layer_ref_pic`], and no other borrow of the same pool may be live.
@@ -2389,13 +2405,13 @@ pub unsafe fn WelsMdInterMbLoop(
 
                 //step (4): save from the MD process for future use
                 {
-                    // Two disjoint fields of one picture; the borrows do not overlap, so the
-                    // arrays go in whole (T6.F0 — `pMbCache->pEncSad` no longer carries either).
-                    let pDecPic = layer_dec_pic_mut(pCurLayer)
-                        .expect("the layer's reconstruction picture is bound");
+                    // Two disjoint fields of one picture (T6.F0 — `pMbCache->pEncSad`
+                    // no longer carries either), reached through the seam: the pair of
+                    // `&mut Vec` borrows this used to take retagged both arrays whole,
+                    // which is the shape no worker may hold under the fork.
                     crate::encoder::svc_base_layer_md::WelsMdInterSaveSadAndRefMbType(
-                        &mut pDecPic.uiRefMbType,
-                        &mut pDecPic.pMbSkipSad,
+                        layer_rec_view(pCurLayer)
+                            .expect("the layer's reconstruction picture is bound"),
                         pCurMb,
                         pMd,
                     );
@@ -2562,13 +2578,10 @@ pub unsafe fn WelsMdInterMbLoopOverDynamicSlice(
             }
             // step (4): save from the MD process for future use
             {
-                // Two disjoint fields of one picture; the borrows do not overlap, so the
-                // arrays go in whole (T6.F0 — `pMbCache->pEncSad` no longer carries either).
-                let pDecPic = layer_dec_pic_mut(pCurLayer)
-                    .expect("the layer's reconstruction picture is bound");
+                // As above.
                 crate::encoder::svc_base_layer_md::WelsMdInterSaveSadAndRefMbType(
-                    &mut pDecPic.uiRefMbType,
-                    &mut pDecPic.pMbSkipSad,
+                    layer_rec_view(pCurLayer)
+                        .expect("the layer's reconstruction picture is bound"),
                     pCurMb,
                     pMd,
                 );

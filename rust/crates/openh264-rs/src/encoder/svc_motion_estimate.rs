@@ -47,7 +47,7 @@
 
 #![deny(unsafe_code)]
 
-use crate::encoder::svc_encode_slice::{layer_dec_pic, layer_dec_pic_mut, layer_ref_pic};
+use crate::encoder::svc_encode_slice::layer_ref_pic;
 use crate::encoder::picture::{RecPicId};
 use crate::safe::plane::PlaneCursor;
 pub use crate::encoder::encoder_context::SMVUnitXY;

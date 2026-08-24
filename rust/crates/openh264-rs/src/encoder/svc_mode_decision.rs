@@ -15,7 +15,7 @@
 #![deny(unsafe_code)]
 
 
-use crate::encoder::svc_encode_slice::{layer_dec_pic, layer_dec_pic_mut, layer_enc_pic, layer_ref_pic};
+use crate::encoder::svc_encode_slice::{layer_enc_pic, layer_rec_view, layer_ref_pic};
 use crate::encoder::svc_encode_slice::layer_pps;
 use crate::encoder::svc_encode_slice::current_layer;
 use crate::encoder::picture::{RecPicId, SrcPicId};
@@ -662,7 +662,10 @@ pub unsafe extern "C" fn WelsMdBackgroundMbEnc(
         sample_sad::<16, 16>(&cEncLuma, &cRefLuma)
     };
     (*pCurMb).sP16x16Mv = SMVUnitXY::default();
-    (&mut layer_dec_pic_mut(pCurDqLayer).expect("bound").sMvList)[(*pCurMb).iMbXY as usize] = SMVUnitXY::default();
+    layer_rec_view(pCurDqLayer)
+        .expect("bound")
+        .mv_list()
+        .set((*pCurMb).iMbXY as usize, SMVUnitXY::default());
 
     if bSkipMbFlag {
         (*pCurMb).uiMbType = MB_TYPE_BACKGROUND;
@@ -1300,9 +1303,12 @@ pub unsafe extern "C" fn WelsMdP16x16(
 
     (*pCurMb).sP16x16Mv = (*pMe16x16).sMv;
     // `is_empty()` is the port's spelling of the C++'s null test: a picture built
-    // without `bNeedMbInfo` carries no MV list at all (T6.F0).
-    if layer_dec_pic(pCurLayer).map_or(false, |p| !p.sMvList.is_empty()) {
-        (&mut layer_dec_pic_mut(pCurLayer).expect("bound").sMvList)[(*pCurMb).iMbXY as usize] = (*pMe16x16).sMv;
+    // without `bNeedMbInfo` carries no MV list at all (T6.F0). One view where
+    // there were two picture borrows: the test and the write now read the same
+    // capture rather than resolving the pool twice.
+    let sMvList = layer_rec_view(pCurLayer).expect("bound").mv_list();
+    if !sMvList.is_empty() {
+        sMvList.set((*pCurMb).iMbXY as usize, (*pMe16x16).sMv);
     }
 
     (*pMe16x16).uiSatdCost as i32
@@ -1733,7 +1739,7 @@ pub unsafe extern "C" fn WelsMdUpdateBGDInfo(
     } else {
         (&layer_ref_pic(pCurLayer).expect("bound").pRefMbQp)[kiMbXY]
     };
-    (&mut layer_dec_pic_mut(pCurLayer).expect("bound").pRefMbQp)[kiMbXY] = uiQp;
+    layer_rec_view(pCurLayer).expect("bound").ref_mb_qp().set(kiMbXY, uiQp);
 
     if (*pCurMb).uiMbType == MB_TYPE_BACKGROUND {
         (*pCurMb).uiMbType = MB_TYPE_SKIP;
@@ -2085,7 +2091,10 @@ pub unsafe extern "C" fn SvcMdSCDMbEnc(
     (*pWelsMd).iCostSkipMb = sad_cost;
 
     (*pCurMb).sP16x16Mv = sCandidateMv;
-    (&mut layer_dec_pic_mut(pCurDqLayer).expect("bound").sMvList)[(*pCurMb).iMbXY as usize] = sCandidateMv;
+    layer_rec_view(pCurDqLayer)
+        .expect("bound")
+        .mv_list()
+        .set((*pCurMb).iMbXY as usize, sCandidateMv);
 
     if bQpSimilarFlag && bMbSkipFlag {
         (*pCurMb).iRefIndex = [0; MB_BLOCK8x8_NUM];

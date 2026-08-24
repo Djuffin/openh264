@@ -686,12 +686,19 @@ pub const fn best_pred_i4x4_blk4_off(uiBestPredI4x4Blk4Half: u8) -> usize {
 /// neighbour reads index `pCurMb->iMbXY + <offset>` against the root instead (S28).
 /// The slot drops `extern "C"` to take the slice — the precedent is `PUpdateMbMvFunc`
 /// and `PSetNoneZeroCountZeroFunc`, both plain `fn` over references since session C.
+///
+/// **T9.C3**: and it is the seam's array rather than a `&[i32]`, because those
+/// four reads are of *neighbouring* macroblocks — under multi-threading, of
+/// macroblocks that may belong to another worker's slice. They are guarded by
+/// the same slice-scoped `uiNeighborAvail` that F107 §2 measured, so the reads
+/// never actually cross; `SharedMbArray` is the type that lets Miri's data-race
+/// detector be the referee for that claim instead of taking it on trust.
 pub type PFillInterNeighborCacheFunc = unsafe fn(
     pMbCache: &mut SMbCache,
     pCurMb: *mut SMB,
     iMbWidth: i32,
     pVaaBgMbFlag: *mut i8,
-    kpMbSkipSad: &[i32],
+    kpMbSkipSad: &crate::encoder::rec_view::SharedMbArray<i32>,
 );
 pub type PGetVarianceFromIntraVaaFunc = unsafe extern "C" fn(pDataY: *mut u8, kiLineSize: i32) -> i32;
 pub type PGetMbSignFromInterVaaFunc = unsafe extern "C" fn(pSad8x8: *mut i32) -> u8;
@@ -704,7 +711,7 @@ pub type PUpdateMbMvFunc = fn(pMvBuffer: &mut [SMVUnitXY; MB_BLOCK4x4_NUM], ksMv
 // had it with correctly typed pointers where this copy used *mut c_void.
 pub use crate::common::mc::SMcFunc;
 // Phase 4a: MC and the half-pel filters are called directly, not via `sMcFuncs`.
-use crate::encoder::svc_encode_slice::{layer_dec_pic, layer_dec_pic_mut, layer_enc_pic, layer_ref_pic};
+use crate::encoder::svc_encode_slice::{layer_enc_pic, layer_ref_pic};
 use crate::encoder::picture::{RecPicId};
 use crate::common::mc::{mc_hor_ver02, mc_hor_ver20, mc_hor_ver22, pixel_avg};
 pub use crate::encoder::encoder_context::SPicData;
@@ -1024,7 +1031,7 @@ pub unsafe fn FillNeighborCacheInterWithoutBGD(
     pCurMb: *mut SMB,
     iMbWidth: i32,
     _pVaaBgMbFlag: *mut i8,
-    kpMbSkipSad: &[i32],
+    kpMbSkipSad: &crate::encoder::rec_view::SharedMbArray<i32>,
 ) {
     let uiNeighborAvail = (*pCurMb).uiNeighborAvail as u32;
     let kiMbXY = (*pCurMb).iMbXY as isize;
@@ -1048,7 +1055,7 @@ pub unsafe fn FillNeighborCacheInterWithoutBGD(
 
         if (*pLeftMb).uiMbType == MB_TYPE_SKIP {
             (*pMbCache).bMbTypeSkip[3] = true;
-            (*pMbCache).iSadCostSkip[3] = kpMbSkipSad[(kiMbXY - 1) as usize];
+            (*pMbCache).iSadCostSkip[3] = kpMbSkipSad.get((kiMbXY - 1) as usize);
         } else {
             (*pMbCache).bMbTypeSkip[3] = false;
             (*pMbCache).iSadCostSkip[3] = 0;
@@ -1080,7 +1087,7 @@ pub unsafe fn FillNeighborCacheInterWithoutBGD(
 
         if (*pTopMb).uiMbType == MB_TYPE_SKIP {
             (*pMbCache).bMbTypeSkip[1] = true;
-            (*pMbCache).iSadCostSkip[1] = kpMbSkipSad[(kiMbXY - iMbWidth as isize) as usize];
+            (*pMbCache).iSadCostSkip[1] = kpMbSkipSad.get((kiMbXY - iMbWidth as isize) as usize);
         } else {
             (*pMbCache).bMbTypeSkip[1] = false;
             (*pMbCache).iSadCostSkip[1] = 0;
@@ -1107,7 +1114,7 @@ pub unsafe fn FillNeighborCacheInterWithoutBGD(
 
         if (*pLeftTopMb).uiMbType == MB_TYPE_SKIP {
             (*pMbCache).bMbTypeSkip[0] = true;
-            (*pMbCache).iSadCostSkip[0] = kpMbSkipSad[(kiMbXY - iMbWidth as isize - 1) as usize];
+            (*pMbCache).iSadCostSkip[0] = kpMbSkipSad.get((kiMbXY - iMbWidth as isize - 1) as usize);
         } else {
             (*pMbCache).bMbTypeSkip[0] = false;
             (*pMbCache).iSadCostSkip[0] = 0;
@@ -1127,7 +1134,7 @@ pub unsafe fn FillNeighborCacheInterWithoutBGD(
 
         if (*iRightTopMb).uiMbType == MB_TYPE_SKIP {
             (*pMbCache).bMbTypeSkip[2] = true;
-            (*pMbCache).iSadCostSkip[2] = kpMbSkipSad[(kiMbXY - iMbWidth as isize + 1) as usize];
+            (*pMbCache).iSadCostSkip[2] = kpMbSkipSad.get((kiMbXY - iMbWidth as isize + 1) as usize);
         } else {
             (*pMbCache).bMbTypeSkip[2] = false;
             (*pMbCache).iSadCostSkip[2] = 0;
@@ -1159,7 +1166,7 @@ pub unsafe fn FillNeighborCacheInterWithBGD(
     pCurMb: *mut SMB,
     iMbWidth: i32,
     pVaaBgMbFlag: *mut i8,
-    kpMbSkipSad: &[i32],
+    kpMbSkipSad: &crate::encoder::rec_view::SharedMbArray<i32>,
 ) {
     let uiNeighborAvail = (*pCurMb).uiNeighborAvail as u32;
     let kiMbXY = (*pCurMb).iMbXY as isize;
@@ -1183,7 +1190,7 @@ pub unsafe fn FillNeighborCacheInterWithBGD(
 
         if (*pLeftMb).uiMbType == MB_TYPE_SKIP && *pVaaBgMbFlag.offset(-1) == 0 {
             (*pMbCache).bMbTypeSkip[3] = true;
-            (*pMbCache).iSadCostSkip[3] = kpMbSkipSad[(kiMbXY - 1) as usize];
+            (*pMbCache).iSadCostSkip[3] = kpMbSkipSad.get((kiMbXY - 1) as usize);
         } else {
             (*pMbCache).bMbTypeSkip[3] = false;
             (*pMbCache).iSadCostSkip[3] = 0;
@@ -1215,7 +1222,7 @@ pub unsafe fn FillNeighborCacheInterWithBGD(
 
         if (*pTopMb).uiMbType == MB_TYPE_SKIP && *pVaaBgMbFlag.offset(-(iMbWidth as isize)) == 0 {
             (*pMbCache).bMbTypeSkip[1] = true;
-            (*pMbCache).iSadCostSkip[1] = kpMbSkipSad[(kiMbXY - iMbWidth as isize) as usize];
+            (*pMbCache).iSadCostSkip[1] = kpMbSkipSad.get((kiMbXY - iMbWidth as isize) as usize);
         } else {
             (*pMbCache).bMbTypeSkip[1] = false;
             (*pMbCache).iSadCostSkip[1] = 0;
@@ -1242,7 +1249,7 @@ pub unsafe fn FillNeighborCacheInterWithBGD(
 
         if (*pLeftTopMb).uiMbType == MB_TYPE_SKIP && *pVaaBgMbFlag.offset(-(iMbWidth as isize) - 1) == 0 {
             (*pMbCache).bMbTypeSkip[0] = true;
-            (*pMbCache).iSadCostSkip[0] = kpMbSkipSad[(kiMbXY - iMbWidth as isize - 1) as usize];
+            (*pMbCache).iSadCostSkip[0] = kpMbSkipSad.get((kiMbXY - iMbWidth as isize - 1) as usize);
         } else {
             (*pMbCache).bMbTypeSkip[0] = false;
             (*pMbCache).iSadCostSkip[0] = 0;
@@ -1262,7 +1269,7 @@ pub unsafe fn FillNeighborCacheInterWithBGD(
 
         if (*iRightTopMb).uiMbType == MB_TYPE_SKIP && *pVaaBgMbFlag.offset(-(iMbWidth as isize) + 1) == 0 {
             (*pMbCache).bMbTypeSkip[2] = true;
-            (*pMbCache).iSadCostSkip[2] = kpMbSkipSad[(kiMbXY - iMbWidth as isize + 1) as usize];
+            (*pMbCache).iSadCostSkip[2] = kpMbSkipSad.get((kiMbXY - iMbWidth as isize + 1) as usize);
         } else {
             (*pMbCache).bMbTypeSkip[2] = false;
             (*pMbCache).iSadCostSkip[2] = 0;
