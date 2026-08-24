@@ -48,6 +48,10 @@
 
 #![deny(unsafe_code)]
 
+use crate::encoder::decode_mb_aux::{
+    idct_four_t4_rec_in_place_view, idct_four_t4_rec_to_view, idct_t4_rec_on_mb_in_place_view,
+};
+use crate::encoder::encode_mb_aux::{blk_four4x4, blk_mb256};
 use std::sync::atomic::{AtomicU16, Ordering};
 use crate::encoder::picture::{PicRef, RecPicId, SPicture, SRefPicView, SrcPicId};
 use std::ffi::c_char;
@@ -1824,7 +1828,9 @@ pub unsafe fn WelsSliceHeaderExtWrite(
 pub unsafe fn WelsIMbChromaEncode(pEncCtx: *mut sWelsEncCtx, pCurMb: &mut SMB, pMbCache: &mut SMbCache) {
     let pCurLayer = current_layer(pEncCtx);
     let kiEncStride = (*pCurLayer).iEncStride[1];
-    let kiCsStride = (*pCurLayer).iCsStride[1];
+    // `kiCsStride` stood here: the reconstruction stride, read for the two
+    // `pfIDctFourT4` calls alone. T9.C2 gave those calls the seam's cursor, which
+    // carries the stride, so the binding has no reader left.
     // **T9.D6**: both cursors are re-derived at each use rather than held across the
     // two `WelsEncRecUV` calls, which retag the whole arena once their parameter is a
     // reference (F66). The chroma prediction's *half* is snapshotted here instead —
@@ -1832,8 +1838,12 @@ pub unsafe fn WelsIMbChromaEncode(pEncCtx: *mut sWelsEncCtx, pCurMb: &mut SMB, p
     // nothing between here and the last use writes either half flag.
     let kiBestPredOff =
         best_pred_intra_chroma_off((*pMbCache).uiMemPredLumaHalf, (*pMbCache).uiBestPredIntraChromaHalf);
-    let pCsCb = (*pMbCache).SPicData.pCsMb[1];
-    let pCsCr = (*pMbCache).SPicData.pCsMb[2];
+    // **T9.C2**: `pCsCb`/`pCsCr` — two raw cursors into the reconstruction
+    // chroma planes — are the seam's two plane views plus this macroblock's
+    // chroma origin, which `SPicData`'s `iMbX`/`iMbY` carrier already holds.
+    let view_chroma = layer_rec_view(pCurLayer)
+        .expect("the layer's reconstruction view is built for this frame");
+    let (kiChrOrgX, kiChrOrgY) = (*pMbCache).SPicData.chroma_origin();
 
     // This previously ran both DCTs and then both IDCTs, omitting the two
     // `WelsEncRecUV` calls between them. That is the quantise / zigzag /
@@ -1842,7 +1852,6 @@ pub unsafe fn WelsIMbChromaEncode(pEncCtx: *mut sWelsEncCtx, pCurMb: &mut SMB, p
     // `pNonZeroCount[16..24]` stayed zero, so no chroma residual was ever coded.
     let pFunc = ctx_func_list(pEncCtx);
     let pfDctFourT4 = (*pFunc).pfDctFourT4.expect("pfDctFourT4 unset");
-    let pfIDctFourT4 = (*pFunc).pfIDctFourT4.expect("pfIDctFourT4 unset");
 
     //cb
     pfDctFourT4(
@@ -1853,12 +1862,15 @@ pub unsafe fn WelsIMbChromaEncode(pEncCtx: *mut sWelsEncCtx, pCurMb: &mut SMB, p
         8,
     );
     crate::encoder::svc_encode_mb::WelsEncRecUV(&*pFunc, pCurMb, pMbCache, 0, 1);
-    pfIDctFourT4(
-        pCsCb,
-        kiCsStride,
-        std::ptr::addr_of_mut!((*pMbCache).sMemPredMb).cast::<u8>().add(kiBestPredOff),
+    // **T9.C2.** `pCsCb` is the reconstruction Cb plane at this macroblock's
+    // chroma origin; the prediction is `sMemPredMb`'s intra-chroma half at stride
+    // 8, an owned arena. Slot bypassed per F118 — `pfIDctFourT4` is constant
+    // after init, and `kiCsStride` leaves the call because the view carries it.
+    idct_four_t4_rec_to_view(
+        &view_chroma.plane(1).cursor(kiChrOrgX, kiChrOrgY),
+        &(*pMbCache).sMemPredMb[kiBestPredOff..],
         8,
-        std::ptr::addr_of_mut!((*pMbCache).sCoeffLevel).cast::<i16>(),
+        blk_four4x4(&(*pMbCache).sCoeffLevel, 0),
     );
 
     //cr
@@ -1870,12 +1882,11 @@ pub unsafe fn WelsIMbChromaEncode(pEncCtx: *mut sWelsEncCtx, pCurMb: &mut SMB, p
         8,
     );
     crate::encoder::svc_encode_mb::WelsEncRecUV(&*pFunc, pCurMb, pMbCache, 64, 2);
-    pfIDctFourT4(
-        pCsCr,
-        kiCsStride,
-        std::ptr::addr_of_mut!((*pMbCache).sMemPredMb).cast::<u8>().add(kiBestPredOff + 64),
+    idct_four_t4_rec_to_view(
+        &view_chroma.plane(2).cursor(kiChrOrgX, kiChrOrgY),
+        &(*pMbCache).sMemPredMb[kiBestPredOff + 64..],
         8,
-        std::ptr::addr_of_mut!((*pMbCache).sCoeffLevel).cast::<i16>().add(64),
+        blk_four4x4(&(*pMbCache).sCoeffLevel, 64),
     );
 }
 
@@ -1926,33 +1937,39 @@ pub unsafe fn OutputPMbWithoutConstructCsRsNoCopy(pCtx: *mut sWelsEncCtx, pDq: *
     //intra have been reconstructed, NO COPY from CS to pDecPic--
     if (IS_INTER(mb_type) && !IS_SKIP(mb_type)) || IS_I_BL(mb_type) {
         let pMbCache = &mut (*pSlice).sMbCacheInfo;
-        let pDecY = (*pMbCache).SPicData.pCsMb[0];
-        let pDecU = (*pMbCache).SPicData.pCsMb[1];
-        let pDecV = (*pMbCache).SPicData.pCsMb[2];
-        let pScaledTcoeff = std::ptr::addr_of_mut!((*pMbCache).sCoeffLevel).cast::<i16>();
-        // **T9.C4**: the strides came from a third `layer_dec_pic_mut(..).planes()`
-        // — a whole-picture retag, per inter macroblock, inside the fork — to read
-        // two numbers `WelsInitCurrentLayer` had already stamped on the layer from
-        // that same call. `iCsStride` is those numbers.
-        let kiDecStrideLuma = (*pDq).iCsStride[0];
-        let kiDecStrideChroma = (*pDq).iCsStride[1];
-        let pfIdctFour4x4 = (*ctx_func_list(pCtx)).pfIDctFourT4.expect("pfIDctFourT4 unset");
+        // **T9.C2 — the in-place family, and the reason `idct_*_in_place` exists
+        // at all (F59).** `pRec` *is* `pPred` at all three of these sites: the
+        // raw form passed `pDecY`/`pDecU`/`pDecV` twice each, with two identical
+        // strides, to spell an aliasing pair Rust cannot build from two
+        // references. One seam cursor per plane, read and written by value, says
+        // the same thing and says it soundly.
+        //
+        // The strides go with them: T9.C4 had already replaced a whole-picture
+        // retag with `iCsStride`, and the view carries those same numbers —
+        // `WelsInitCurrentLayer` stamps `iCsStride[i]` and the view's plane
+        // stride from one `SPicture::stride(i)`.
+        let view = layer_rec_view(pDq)
+            .expect("the layer's reconstruction view is built for this frame");
+        let (lx, ly) = (*pMbCache).SPicData.luma_origin();
+        let (cx, cy) = (*pMbCache).SPicData.chroma_origin();
 
         // The luma half of this function was missing: no `pDecY`, no
         // `WelsIDctT4RecOnMb`. Every inter macroblock's luma residual was therefore
         // never added back into the reconstruction, so the encoder's reference frame
         // diverged from what a decoder produces from its own (correct) bitstream —
         // invisible until a second P frame referenced it.
-        crate::encoder::decode_mb_aux::WelsIDctT4RecOnMb(
-            pDecY,
-            kiDecStrideLuma,
-            pDecY,
-            kiDecStrideLuma,
-            pScaledTcoeff,
-            pfIdctFour4x4,
+        idct_t4_rec_on_mb_in_place_view(
+            &view.plane(0).cursor(lx, ly),
+            blk_mb256(&(*pMbCache).sCoeffLevel, 0),
         );
-        pfIdctFour4x4(pDecU, kiDecStrideChroma, pDecU, kiDecStrideChroma, pScaledTcoeff.add(256));
-        pfIdctFour4x4(pDecV, kiDecStrideChroma, pDecV, kiDecStrideChroma, pScaledTcoeff.add(320));
+        idct_four_t4_rec_in_place_view(
+            &view.plane(1).cursor(cx, cy),
+            blk_four4x4(&(*pMbCache).sCoeffLevel, 256),
+        );
+        idct_four_t4_rec_in_place_view(
+            &view.plane(2).cursor(cx, cy),
+            blk_four4x4(&(*pMbCache).sCoeffLevel, 320),
+        );
     }
 }
 

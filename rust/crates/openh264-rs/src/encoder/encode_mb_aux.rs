@@ -261,6 +261,20 @@ pub fn blk4x4_mut(a: &mut [i16], off: usize) -> &mut [i16; 16] {
     (&mut a[off..off + 16]).try_into().expect("a 4x4 block is 16 coefficients")
 }
 
+/// [`blk_four4x4_mut`], shared — the reconstruction kernels only read their
+/// coefficients (T9.C2).
+#[inline]
+pub fn blk_four4x4(a: &[i16], off: usize) -> &[i16; 64] {
+    a[off..off + 64].try_into().expect("four 4x4 blocks are 64 coefficients")
+}
+
+/// The whole macroblock's 256 luma coefficients at `off` — `WelsIDctT4RecOnMb`'s
+/// span, which it walks as four quadrants of 64 (T9.C2).
+#[inline]
+pub fn blk_mb256(a: &[i16], off: usize) -> &[i16; 256] {
+    a[off..off + 256].try_into().expect("a macroblock's luma is 256 coefficients")
+}
+
 /// The four 4x4 blocks at coefficient offset `off` — `pRes.add(off)` where the
 /// callee reads a quadrant.
 #[inline]

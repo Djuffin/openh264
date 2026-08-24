@@ -1791,3 +1791,65 @@ have been reported done and green; a step specified as "convert these 18 sites, 
 probe must then say X" was not. Write the next brief's steps with the instrument's
 expected reading attached — it is the only part of step 0a that failed, and the only part
 that could have.*
+
+## F137 — the plane census could not see `pfIDctI16x16Dc`, and had not been able to since it was written
+
+The C2 brief opens with a rule — "re-run before quoting, and trust the tree over this
+document" — and applies it to the brief's own numbers. It does not extend it to the
+instrument the numbers come from. It should.
+
+`WelsEncRecI16x16Y` has three mutually exclusive reconstruction branches, chosen by how
+much residual survived quantisation:
+
+```rust
+if uiNoneZeroCountMbAc > 0 {            // four pfIDctFourT4 quadrants — census: 4 rows
+    ...
+} else if uiCountI16x16Dc > 0 {         // pfIDctI16x16Dc              — census: NOTHING
+    func(pPred, kiRecStride, pBestPred, 16, aDctT4Dc.as_mut_ptr());
+} else if let Some(func) = ... {        // pfCopy16x16Aligned          — census: 1 row
+    func(pPred, kiRecStride, pBestPred, 16);
+}
+```
+
+All three write `pPred` — `SPicData.pCsMb[0]`, a raw cursor into the reconstruction luma
+plane — from `pBestPred`, the `sMemPredMb` arena, at the same two strides. The census
+listed the first branch and the third and was silent about the second, because
+
+```
+$ grep -n 'pfIDctI16x16Dc\|I16x16Dc' tools/phase9_plane_callers.py
+$                     # (no output)
+```
+
+Neither the `pfIDctI16x16Dc` slot nor the `WelsIDctRecI16x16Dc_c` kernel installed into
+it appears in either of the tool's two classification tables, so calls through that slot
+fall through as unclassified rather than as `blocked`. The slot has its own Rust type
+(`PIDctI16x16DcFunc`, `svc_encode_mb.rs:310`) distinct from `PIDctFunc`, which is
+probably how it was missed: whoever added the idct family to the census added the type's
+two members and not the singleton beside it.
+
+**The correction, and the accounting.** With the slot and its kernel added:
+
+| | blocked | mine | Phase 10's (SCD) |
+|---|---:|---:|---:|
+| session C's close, as the brief states it | 29 | 26 | 3 |
+| after F135's deletion (3 rows, no conversion) | 26 | 23 | 3 |
+| after this correction (+1 row, no conversion) | **27** | **24** | 3 |
+
+F128 keeps *reclassification* and *conversion* from being summed. This is a third
+category and needs the same discipline: a **census correction** is neither. Three rows
+left because code was deleted, one arrived because the instrument was fixed, and not one
+of the four is a raw site converted to the seam. The conversions are counted separately
+and they are 11 (idct) + 8 (copy) + 5 (intra-pred).
+
+**What the site itself needed was nothing special.** It is `idct_rec_i16x16_dc_to_view`,
+converted in T9.C2d beside its four siblings, and the sweep does referee it — the DC-only
+branch is reached whenever an I16x16 macroblock quantises to DC alone, which is common in
+flat content and is why the `st` preset's Static clip exercises it. The defect was never
+in the code; it was that the number this session budgeted against was one too small, and
+nothing in the pipeline would have said so.
+
+*Generalisation for the remaining sessions: the census's tables are hand-maintained lists
+of slot names, and a slot with a singleton type is exactly the shape that gets left out.
+Before trusting a family's count, grep the tool for every `pf*` name in that family's C++
+header — the census cannot report what it was never told to look for, and a missing row
+is indistinguishable from a converted one.*
