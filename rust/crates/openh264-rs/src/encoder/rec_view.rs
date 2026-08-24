@@ -60,8 +60,9 @@ use crate::encoder::picture::SPicture;
 /// The one place a captured base/length pair becomes a cell slice.
 ///
 /// Held by value in every view below, so the whole seam has exactly one
-/// `UnsafeCell`-crossing accessor and exactly one place raw parts are captured
-/// ([`SharedCells::capture`]).
+/// `UnsafeCell`-crossing accessor ([`SharedCells::cells`]) and exactly one place
+/// raw parts are captured ([`SharedCells::from_parts`], which
+/// [`SharedCells::capture`] and the plane build both route through).
 #[derive(Debug)]
 pub struct SharedCells<T: Copy> {
     /// The allocation's base, read out of the `Vec` header at capture time
@@ -101,11 +102,13 @@ impl<T: Copy> SharedCells<T> {
     /// The captured storage, as cells.
     ///
     /// # Safety
-    /// The base/length pair came from a `Vec` borrowed exclusively at
-    /// [`capture`](Self::capture) and the module contract keeps that borrow
-    /// alive for the view's whole lifetime, so the range is allocated and no
-    /// `&mut` to it exists. A `Cell` retag is `SharedReadWrite`, which performs
-    /// no memory access, so this call cannot itself race.
+    /// The base/length pair was taken at [`from_parts`](Self::from_parts) from
+    /// storage borrowed exclusively at that moment — a `&mut Vec<T>` through
+    /// [`capture`](Self::capture), or a `PaddedPlane`'s `root_ptr`/`buf_len` pair
+    /// — and the module contract keeps that exclusive borrow the last one for the
+    /// view's whole lifetime, so the range is allocated and no `&mut` to it
+    /// exists. A `Cell` retag is `SharedReadWrite`, which performs no memory
+    /// access, so this call cannot itself race.
     // unsafe-cat: recon-seam
     #[allow(unsafe_code)]
     #[inline]
