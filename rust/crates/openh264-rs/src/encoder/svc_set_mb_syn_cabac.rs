@@ -1092,8 +1092,8 @@ pub unsafe fn WelsInitSliceCabac(
 ) {
     unsafe {
         /* alignment needed */
-        let pBs = crate::encoder::svc_encode_slice::slice_writer(pEncCtx, pSlice);
-        let buf = crate::encoder::svc_encode_slice::slice_bs_buffer(pEncCtx, pSlice);
+        let pBs = crate::encoder::svc_encode_slice::slice_writer(pEncCtx, std::ptr::addr_of_mut!((*pSlice).sSliceBs));
+        let buf = crate::encoder::svc_encode_slice::slice_bs_buffer(pEncCtx, std::ptr::addr_of_mut!((*pSlice).sSliceBs), (*pSlice).uiBufferIdx as usize);
         BsAlign(buf, &mut *pBs);
 
         /* init cabac */
@@ -1126,7 +1126,7 @@ pub unsafe fn WelsSpatialWriteMbSynCabac(
         // buffer from what it already has, exactly as `WelsInitSliceCabac`
         // does. Session E's rule, second application: derive from the state
         // that recorded the decision, not from the inputs to it.
-        let buf = crate::encoder::svc_encode_slice::slice_bs_buffer(pEncCtx, pSlice);
+        let buf = crate::encoder::svc_encode_slice::slice_bs_buffer(pEncCtx, std::ptr::addr_of_mut!((*pSlice).sSliceBs), (*pSlice).uiBufferIdx as usize);
         let pCabacCtx = std::ptr::addr_of_mut!((*pSlice).sCabacCtx);
         let pMbCache = std::ptr::addr_of_mut!((*pSlice).sMbCacheInfo);
         let uiMbType = (*pCurMb).uiMbType;

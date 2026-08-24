@@ -933,7 +933,7 @@ pub unsafe fn WriteSliceBs(
         // positioned in; that buffer is named here, beside the entry.
         iReturn = WelsEncodeNal(
             &(*pSliceBs).sNalList[iNalIdx as usize],
-            &*thread_bs_buffer(pCtx, pSlice),
+            &*thread_bs_buffer(pCtx, (*pSlice).uiBufferIdx as usize, (*pSlice).sSliceBs.uiSize),
             Some(&*pNalHdrExt),
             pDst,
             iTotalLeftLength - *iSliceSize,
@@ -1320,7 +1320,7 @@ unsafe fn WritePrefixNalForSlice(
     if eNalRefIdc != EWelsNalRefIdc::NRI_PRI_LOWEST {
         WelsLoadNalForSlice(pSliceBs, EWelsNalUnitType::NAL_UNIT_PREFIX as i32, eNalRefIdc as i32);
         WelsWriteSVCPrefixNal(
-            thread_bs_buffer(pCtx, pSlice),
+            thread_bs_buffer(pCtx, (*pSlice).uiBufferIdx as usize, (*pSlice).sSliceBs.uiSize),
             std::ptr::addr_of_mut!((*pSliceBs).sBsWrite),
             eNalRefIdc as i32,
             EWelsNalUnitType::NAL_UNIT_CODED_SLICE_IDR == eNalType,
