@@ -33,6 +33,7 @@
 // Phase 4a: MC is called directly, not via `sMcFuncs`.
 
 #![deny(unsafe_code)]
+use crate::encoder::rec_view::copy_block_to_view;
 use crate::encoder::svc_encode_slice::{
     layer_enc_pic, layer_rec_view, layer_ref_pic,
 };
@@ -2016,30 +2017,30 @@ pub unsafe fn WelsMdInterEncode(
     crate::encoder::svc_mode_decision::WelsInterMbEncode(pEncCtx, pSlice, pCurMb);
     crate::encoder::svc_encode_slice::WelsPMbChromaEncode(pEncCtx, pSlice, pCurMb);
 
-    (*pFunc).pfCopy16x16Aligned.expect("pfCopy16x16Aligned unset")(
-        (*pMbCache).SPicData.pCsMb[0],
-        kiCsStrideY,
-        std::ptr::addr_of_mut!((*pMbCache).sMemPredMb)
-            .cast::<u8>()
-            .add(mem_pred_luma_off((*pMbCache).uiMemPredLumaHalf)),
-        16,
-    );
-    let copy8 = (*pFunc).pfCopy8x8Aligned.expect("pfCopy8x8Aligned unset");
-    copy8(
-        (*pMbCache).SPicData.pCsMb[1],
-        kiCsStrideUV,
-        std::ptr::addr_of_mut!((*pMbCache).sMemPredMb)
-            .cast::<u8>()
-            .add(mem_pred_chroma_off((*pMbCache).uiMemPredLumaHalf)),
+    // **T9.C2 — the same triple T9.C7 converted in `WelsRecPskip`**, with
+    // `sMemPredMb`'s two halves as the arena instead of `sSkipMb`: luma 16x16 at
+    // stride 16 from the luma half, then the two chroma 8x8 at stride 8 from the
+    // chroma half and 64 beyond it. Destination is the seam's cursor at this
+    // macroblock's own origin; the three destination strides leave the call
+    // because the view carries them (`iCsStride[i]` and the plane stride are
+    // stamped from one `SPicture::stride(i)`).
+    //
+    // Slots bypassed, not flipped (F118) — the eight `pfCopy*` entries are
+    // installed unconditionally by `WelsInitEncodingFuncs` and constant after
+    // init, so a fixed-size site may call the kernel directly, byte-identically.
+    let view = layer_rec_view(pCurDqLayer)
+        .expect("the layer's reconstruction view is built for this frame");
+    let (lx, ly) = (*pMbCache).SPicData.luma_origin();
+    let (cx, cy) = (*pMbCache).SPicData.chroma_origin();
+    let kiLumaOff = mem_pred_luma_off((*pMbCache).uiMemPredLumaHalf);
+    let kiChromaOff = mem_pred_chroma_off((*pMbCache).uiMemPredLumaHalf);
+    let src = &(*pMbCache).sMemPredMb;
+    copy_block_to_view::<16>(&src[kiLumaOff..kiLumaOff + 256], 16, &view.plane(0).cursor(lx, ly), 16);
+    copy_block_to_view::<8>(&src[kiChromaOff..kiChromaOff + 64], 8, &view.plane(1).cursor(cx, cy), 8);
+    copy_block_to_view::<8>(
+        &src[kiChromaOff + 64..kiChromaOff + 128],
         8,
-    );
-    copy8(
-        (*pMbCache).SPicData.pCsMb[2],
-        kiCsStrideUV,
-        std::ptr::addr_of_mut!((*pMbCache).sMemPredMb)
-            .cast::<u8>()
-            .add(mem_pred_chroma_off((*pMbCache).uiMemPredLumaHalf))
-            .add(64),
+        &view.plane(2).cursor(cx, cy),
         8,
     );
 }

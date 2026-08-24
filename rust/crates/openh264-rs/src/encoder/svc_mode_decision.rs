@@ -744,35 +744,26 @@ pub unsafe extern "C" fn WelsMdBackgroundMbEnc(
         pCurMb,
     );
 
-    if let Some(copy16) = (*pFunc).pfCopy16x16Aligned {
-        copy16(
-            (*pMbCache).SPicData.pCsMb[0],
-            (*pCurDqLayer).iCsStride[0],
-            std::ptr::addr_of_mut!((*pMbCache).sMemPredMb)
-                .cast::<u8>()
-                .add(mem_pred_luma_off((*pMbCache).uiMemPredLumaHalf)),
-            16,
-        );
-    }
-    if let Some(copy8) = (*pFunc).pfCopy8x8Aligned {
-        copy8(
-            (*pMbCache).SPicData.pCsMb[1],
-            (*pCurDqLayer).iCsStride[1],
-            std::ptr::addr_of_mut!((*pMbCache).sMemPredMb)
-                .cast::<u8>()
-                .add(mem_pred_chroma_off((*pMbCache).uiMemPredLumaHalf)),
-            8,
-        );
-        copy8(
-            (*pMbCache).SPicData.pCsMb[2],
-            (*pCurDqLayer).iCsStride[1],
-            std::ptr::addr_of_mut!((*pMbCache).sMemPredMb)
-                .cast::<u8>()
-                .add(mem_pred_chroma_off((*pMbCache).uiMemPredLumaHalf))
-                .add(64),
-            8,
-        );
-    }
+    // **T9.C2**, the `WelsRecPskip` triple again — see `WelsMdInterEncode` for the
+    // shape and F118 for why the slots are bypassed rather than flipped. This
+    // owner's referee is the narrow one: `WelsMdBackgroundMbEnc` is lit only by the
+    // `bg` preset, and F126 measured its teeth at **32 of 48** `bg` rows, not 48 —
+    // the other 16 light the family without refereeing it.
+    let view = layer_rec_view(pCurDqLayer)
+        .expect("the layer's reconstruction view is built for this frame");
+    let (lx, ly) = (*pMbCache).SPicData.luma_origin();
+    let (cx, cy) = (*pMbCache).SPicData.chroma_origin();
+    let kiLumaOff = mem_pred_luma_off((*pMbCache).uiMemPredLumaHalf);
+    let kiChromaOff = mem_pred_chroma_off((*pMbCache).uiMemPredLumaHalf);
+    let src = &(*pMbCache).sMemPredMb;
+    copy_block_to_view::<16>(&src[kiLumaOff..kiLumaOff + 256], 16, &view.plane(0).cursor(lx, ly), 16);
+    copy_block_to_view::<8>(&src[kiChromaOff..kiChromaOff + 64], 8, &view.plane(1).cursor(cx, cy), 8);
+    copy_block_to_view::<8>(
+        &src[kiChromaOff + 64..kiChromaOff + 128],
+        8,
+        &view.plane(2).cursor(cx, cy),
+        8,
+    );
 }
 
 // ============================================================================

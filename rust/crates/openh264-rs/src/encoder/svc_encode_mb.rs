@@ -47,6 +47,7 @@
 
 #![deny(unsafe_code)]
 
+use crate::encoder::rec_view::copy_block_to_view;
 use crate::safe::plane::{PlaneCursor, PlaneCursorMut};
 pub use crate::encoder::encoder_context::SMVUnitXY;
 use crate::encoder::encoder_context::ctx_func_list;
@@ -640,8 +641,19 @@ pub unsafe fn WelsEncRecI16x16Y(
             16,
             &aDctT4Dc,
         );
-    } else if let Some(func) = (*pFuncList).pfCopy16x16Aligned {
-        func(pPred, kiRecStride, pBestPred, 16);
+    } else {
+        // **T9.C2.** The residual-free branch: the prediction *is* the
+        // reconstruction, copied straight across from `sMemPredMb`'s luma half.
+        let view = layer_rec_view(pCurDqLayer)
+            .expect("the layer's reconstruction view is built for this frame");
+        let (lx, ly) = (*pMbCache).SPicData.luma_origin();
+        let kiPredOff = mem_pred_luma_off((*pMbCache).uiMemPredLumaHalf);
+        copy_block_to_view::<16>(
+            &(*pMbCache).sMemPredMb[kiPredOff..kiPredOff + 256],
+            16,
+            &view.plane(0).cursor(lx, ly),
+            16,
+        );
     }
 }
 
@@ -745,8 +757,22 @@ pub unsafe fn WelsEncRecI4x4Y(
             4,
             blk4x4(&(*pMbCache).sCoeffLevel, 0),
         );
-    } else if let Some(func) = (*pFuncList).pfCopy4x4 {
-        func(pPredI4x4, iRecStride, pBestPred, 4);
+    } else {
+        // **T9.C2.** As the `pfIDctT4` branch above: `dec_block_offset` divides by
+        // `iRecStride` into the 4x4 block's `(dx, dy)` within the macroblock, and
+        // the prediction is `sMemPredBlk4` at stride 4.
+        let view = layer_rec_view(pCurDqLayer)
+            .expect("the layer's reconstruction view is built for this frame");
+        let (lx, ly) = (*pMbCache).SPicData.luma_origin();
+        let (dx, dy) =
+            (dec_block_offset % iRecStride as isize, dec_block_offset / iRecStride as isize);
+        let kiPredOff = best_pred_i4x4_blk4_off((*pMbCache).uiBestPredI4x4Blk4Half);
+        copy_block_to_view::<4>(
+            &(*pMbCache).sMemPredBlk4[kiPredOff..kiPredOff + 16],
+            4,
+            &view.plane(0).cursor(lx + dx, ly + dy),
+            4,
+        );
     }
 }
 
