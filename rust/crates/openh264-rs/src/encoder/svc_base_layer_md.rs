@@ -34,7 +34,7 @@
 
 #![deny(unsafe_code)]
 use crate::encoder::svc_encode_slice::{
-    layer_dec_pic, layer_dec_pic_mut, layer_enc_pic, layer_ref_pic,
+    layer_dec_pic_mut, layer_enc_pic, layer_rec_view, layer_ref_pic,
 };
 use crate::encoder::svc_encode_slice::current_layer;
 use crate::encoder::picture::{RecPicId, SrcPicId};
@@ -952,9 +952,9 @@ pub unsafe fn WelsMdInterInit(
         pCurMb,
         kiMbWidth,
         (*ctx_vaa(pEncCtx)).pVaaBackgroundMbFlag.as_mut_ptr().add(kiMbXY as usize),
-        &layer_dec_pic_mut(pCurLayer)
+        layer_rec_view(pCurLayer)
             .expect("the layer's reconstruction picture is bound")
-            .pMbSkipSad,
+            .mb_skip_sad(),
     ); //BGD spatial pFunc
 
     //step 4. locating current p_ref
@@ -985,7 +985,10 @@ pub unsafe fn WelsMdInterInit(
 
     //comment: sometimes, mode decision process may skip the md_p16x16 and md_pskip function,
     (*pCurMb).sP16x16Mv = SMVUnitXY { iMvX: 0, iMvY: 0 };
-    (&mut layer_dec_pic_mut(pCurLayer).expect("bound").sMvList)[kiMbXY as usize] = SMVUnitXY { iMvX: 0, iMvY: 0 };
+    layer_rec_view(pCurLayer)
+        .expect("bound")
+        .mv_list()
+        .set(kiMbXY as usize, SMVUnitXY { iMvX: 0, iMvY: 0 });
 
     SetMvWithinIntegerMvRange(
         kiMbWidth,
@@ -1503,7 +1506,10 @@ unsafe fn AcceptPskip(
     (*pWelsMd).iCostSkipMb = iSadCostMb;
 
     (*pCurMb).sP16x16Mv = *sMvp;
-    (&mut layer_dec_pic_mut(pCurLayer).expect("bound").sMvList)[(*pCurMb).iMbXY as usize] = *sMvp;
+    layer_rec_view(pCurLayer)
+        .expect("bound")
+        .mv_list()
+        .set((*pCurMb).iMbXY as usize, *sMvp);
 }
 
 /// `svc_base_layer_md.cpp:1573`. Quarter-pel refinement of whichever partitioning the
@@ -2063,8 +2069,7 @@ pub unsafe fn WelsMdInterEncode(
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe fn WelsMdInterSaveSadAndRefMbType(
-    pRefMbtypeList: &mut [u32],
-    pMbSkipSadList: &mut [i32],
+    pRecView: &crate::encoder::rec_view::RecPicView,
     pCurMb: *const SMB,
     pMd: &SWelsMD,
 ) {
@@ -2072,13 +2077,12 @@ pub unsafe fn WelsMdInterSaveSadAndRefMbType(
     let kiMbXY = (*pCurMb).iMbXY as usize;
 
     //sad
-    pMbSkipSadList[kiMbXY] = if kmtCurMbtype == MB_TYPE_SKIP {
-        (*pMd).iCostSkipMb
-    } else {
-        0
-    };
+    pRecView.mb_skip_sad().set(
+        kiMbXY,
+        if kmtCurMbtype == MB_TYPE_SKIP { (*pMd).iCostSkipMb } else { 0 },
+    );
     //uiMbType
-    pRefMbtypeList[kiMbXY] = kmtCurMbtype;
+    pRecView.ref_mb_type().set(kiMbXY, kmtCurMbtype);
 }
 
 #[cfg(test)]
