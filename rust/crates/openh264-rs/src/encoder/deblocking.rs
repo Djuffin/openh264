@@ -837,14 +837,27 @@ pub unsafe fn DeblockingInterMb(
 
     let iMbX = (*pCurMb).iMbX as i32;
     let iMbY = (*pCurMb).iMbY as i32;
+    let kiMbXY = (*pCurMb).iMbXY;
 
+    // **Round 5 (F132, T9.E4)**: the `[1]` guards used to read the NEIGHBOUR's
+    // `SMB.uiSliceIdc` — under MT a record another worker can hold `&mut` over,
+    // the race both fork probes stopped on. `pOverallMbMap` holds the same
+    // answer per macroblock (record == map wherever the record is final, and
+    // cross-partition both readings refuse the edge under every interleaving —
+    // T9.E3's proof), so the guard asks the map and no foreign `SMB` record is
+    // touched by deblocking at all. The current macroblock's own record read
+    // stays: it is this worker's.
     let bLeftBsValid = [
         iMbX > 0,
-        iMbX > 0 && ((*pCurMb).uiSliceIdc == (*pCurMb.offset(-1)).uiSliceIdc),
+        iMbX > 0
+            && ((*pCurMb).uiSliceIdc
+                == map[(kiMbXY - 1) as usize].load(Ordering::Relaxed)),
     ];
     let bTopBsValid = [
         iMbY > 0,
-        iMbY > 0 && ((*pCurMb).uiSliceIdc == (*pCurMb.offset(-iMbStride)).uiSliceIdc),
+        iMbY > 0
+            && ((*pCurMb).uiSliceIdc
+                == map[(kiMbXY - iMbStride as i32) as usize].load(Ordering::Relaxed)),
     ];
 
     let iLeftFlag = bLeftBsValid[(*pFilter).uiFilterIdc as usize];
@@ -1003,13 +1016,20 @@ pub unsafe fn FilteringEdgeLumaHV(
     let iMbX = (*pCurMb).iMbX as i32;
     let iMbY = (*pCurMb).iMbY as i32;
 
+    // Round 5 (F132, T9.E4): the neighbour's record read becomes the map load —
+    // see DeblockingInterMb for the whole story.
+    let kiMbXY = (*pCurMb).iMbXY;
     let bLeftBsValid = [
         iMbX > 0,
-        iMbX > 0 && ((*pCurMb).uiSliceIdc == (*pCurMb.offset(-1)).uiSliceIdc),
+        iMbX > 0
+            && ((*pCurMb).uiSliceIdc
+                == map[(kiMbXY - 1) as usize].load(Ordering::Relaxed)),
     ];
     let bTopBsValid = [
         iMbY > 0,
-        iMbY > 0 && ((*pCurMb).uiSliceIdc == (*pCurMb.offset(-iMbStride)).uiSliceIdc),
+        iMbY > 0
+            && ((*pCurMb).uiSliceIdc
+                == map[(kiMbXY - iMbStride as i32) as usize].load(Ordering::Relaxed)),
     ];
 
     let iLeftFlag = bLeftBsValid[(*pFilter).uiFilterIdc as usize];
@@ -1077,13 +1097,20 @@ pub unsafe fn FilteringEdgeChromaHV(
     let iMbX = (*pCurMb).iMbX as i32;
     let iMbY = (*pCurMb).iMbY as i32;
 
+    // Round 5 (F132, T9.E4): the neighbour's record read becomes the map load —
+    // see DeblockingInterMb for the whole story.
+    let kiMbXY = (*pCurMb).iMbXY;
     let bLeftBsValid = [
         iMbX > 0,
-        iMbX > 0 && ((*pCurMb).uiSliceIdc == (*pCurMb.offset(-1)).uiSliceIdc),
+        iMbX > 0
+            && ((*pCurMb).uiSliceIdc
+                == map[(kiMbXY - 1) as usize].load(Ordering::Relaxed)),
     ];
     let bTopBsValid = [
         iMbY > 0,
-        iMbY > 0 && ((*pCurMb).uiSliceIdc == (*pCurMb.offset(-iMbStride)).uiSliceIdc),
+        iMbY > 0
+            && ((*pCurMb).uiSliceIdc
+                == map[(kiMbXY - iMbStride as i32) as usize].load(Ordering::Relaxed)),
     ];
 
     let iLeftFlag = bLeftBsValid[(*pFilter).uiFilterIdc as usize];
@@ -1178,41 +1205,21 @@ pub unsafe fn DeblockingMbAvcbase(
     let iMbX = (*pCurMb).iMbX as i32;
     let iMbY = (*pCurMb).iMbY as i32;
 
+    // Round 5 (F132, T9.E4): the neighbour's record read becomes the map load —
+    // see DeblockingInterMb for the whole story.
+    let kiMbXY = (*pCurMb).iMbXY;
     let bLeftBsValid = [
         iMbX > 0,
-        iMbX > 0 && ((*pCurMb).uiSliceIdc == (*pCurMb.offset(-1)).uiSliceIdc),
+        iMbX > 0
+            && ((*pCurMb).uiSliceIdc
+                == map[(kiMbXY - 1) as usize].load(Ordering::Relaxed)),
     ];
     let bTopBsValid = [
         iMbY > 0,
-        iMbY > 0 && ((*pCurMb).uiSliceIdc == (*pCurMb.offset(-iMbStride)).uiSliceIdc),
+        iMbY > 0
+            && ((*pCurMb).uiSliceIdc
+                == map[(kiMbXY - iMbStride as i32) as usize].load(Ordering::Relaxed)),
     ];
-
-    // T9.E3 scaffolding (round 5's equality proof) — deleted with the guard
-    // flip. Every macroblock either walker deblocks flows through this
-    // function, and nothing writes any `uiSliceIdc` between here and the same
-    // guard pairs in DeblockingInterMb / FilteringEdge*HV, so this one site
-    // proves record == map for all eight neighbour reads of the pass.
-    // Asserted only on the post-join frame walk (uiFilterIdc == 0), where
-    // every record is final and the read is single-threaded by construction;
-    // the in-fork half of the proof is the write-site asserts plus the mod-N
-    // argument in the commit message.
-    if (*pFilter).uiFilterIdc == 0 {
-        let kiMbXY = (*pCurMb).iMbXY;
-        if iMbX > 0 {
-            debug_assert_eq!(
-                (*pCurMb.offset(-1)).uiSliceIdc,
-                map[(kiMbXY - 1) as usize].load(Ordering::Relaxed),
-                "left neighbour record disagrees with pOverallMbMap at mb {kiMbXY}"
-            );
-        }
-        if iMbY > 0 {
-            debug_assert_eq!(
-                (*pCurMb.offset(-iMbStride)).uiSliceIdc,
-                map[(kiMbXY - iMbStride as i32) as usize].load(Ordering::Relaxed),
-                "top neighbour record disagrees with pOverallMbMap at mb {kiMbXY}"
-            );
-        }
-    }
 
     let iLeftFlag = bLeftBsValid[(*pFilter).uiFilterIdc as usize] as i32;
     let iTopFlag = bTopBsValid[(*pFilter).uiFilterIdc as usize] as i32;
