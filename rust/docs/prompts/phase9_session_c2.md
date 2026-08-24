@@ -158,3 +158,38 @@ Plain prose: commits with ratchet deltas; every gate verdict; the consumer table
 re-measured (29 blocked → what remains, by owner, and how many of the remainder are dead
 code); which kernel families reached `deny`; whether the tables flipped or why not; where
 this brief was wrong, quoting the sentence; and what E, F and Phase 10 inherit after you.
+
+---
+
+## Steward's addendum at kickoff (verified against the tree at `be9ab935`)
+
+Everything above was written at session C's close; three things landed after it.
+
+1. **The F107 acceptance re-scope is now a ruling, and it adds one step to your scope**
+   (charter §8, F132; the user did not veto). The "not yours" bullet about the fork
+   probes stands *except* its `pOverallMbMap` half: **`SSliceCtx::pOverallMbMap` →
+   atomics is yours, as step 0a** — fork round 6, **18 mentions** across four files
+   (`svc_enc_slice_segment.rs` 8, `svc_encode_slice.rs` 5, `slice_multi_threading.rs` 3,
+   `encoder_ext.rs` 2; `grep -rn 'pOverallMbMap' src/encoder`), mechanical
+   `AtomicU16`/`AtomicU8`-shaped conversion on the model of T9.C5's `pGomCost`.
+   **Verification that it worked**: re-run the mid-row probe under Miri afterwards — it
+   still fails, and it must now name the **`&mut SMB` / `uiSliceIdc`** family (round 5,
+   session E's), not `SSliceCtx`. Quote the new verdict in the report; if it names
+   anything else, that is a fresh finding, not noise. The probes' un-ignore stays E's.
+2. **The two deletion rulings are still the user's.** If your kickoff message says to
+   take them: F135's twin deletes in step 0 (3 census rows reported as a deletion,
+   F128) and **F133's `pGomCost` deletes outright** — the field, the zeroing at
+   `rc.rs:792`, the accumulate, *and* the atomics T9.C5 added — with upstream's five
+   write-only references quoted. Absent that instruction, follow step 0 as written
+   above and leave `pGomCost` atomic.
+3. **Two anchors drifted between C's close and this kickoff** — trust these:
+   `pRecView` is built in `WelsInitCurrentLayer` at `encoder_ext.rs:~2210` (re-grep
+   `pRecView = `), and `WelsIMbChromaEncode`'s two idct sites are at
+   `svc_encode_slice.rs:1855` and `:1872` (its slot hoist at `:1844`).
+
+One inherited duty restated because it is easy to drop: **F117's three source-picture
+copies are open and nobody owns them after you** — if you have budget after step 6,
+take the B4-handover design (record indices in-loop, copy after the join, the `bg`
+preset's 48 rows as the proof); if not, say in the report that F117 passes to the
+next owner unstarted, so the charter can assign it rather than lose it.
+
