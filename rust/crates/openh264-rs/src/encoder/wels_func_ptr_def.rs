@@ -220,9 +220,13 @@ impl EntropyCoder {
 
     /// `pfWelsSpatialWriteMbSyn` — writes one macroblock's syntax elements.
     ///
+    /// The record comes as the grid window (E3): both writers read same-slice
+    /// neighbours for context modelling and write the current record's QP and
+    /// MVD state, so `mbs` is exactly "my slice's records so far, current last".
+    ///
     /// # Safety
-    /// As the two implementations: `pEncCtx`, `pSlice` and `pCurMb` must be live
-    /// and the slice's writer positioned in the buffer `slice_bs_buffer` returns.
+    /// As the two implementations: `pEncCtx` and `pSlice` must be live and the
+    /// slice's writer positioned in the buffer `slice_bs_buffer` returns.
     #[inline]
     // unsafe-cat: port-raw(Phase 9)
     #[allow(unsafe_code)]
@@ -230,14 +234,14 @@ impl EntropyCoder {
         self,
         pEncCtx: *mut sWelsEncCtx,
         pSlice: &mut SSlice,
-        pCurMb: *mut SMB,
+        mbs: &mut crate::safe::mb_grid::MbWindow<'_, SMB>,
     ) -> i32 {
         match self {
             EntropyCoder::Cavlc => {
-                crate::encoder::svc_set_mb_syn_cavlc::WelsSpatialWriteMbSyn(pEncCtx, pSlice, pCurMb)
+                crate::encoder::svc_set_mb_syn_cavlc::WelsSpatialWriteMbSyn(pEncCtx, pSlice, mbs)
             }
             EntropyCoder::Cabac => crate::encoder::svc_set_mb_syn_cabac::WelsSpatialWriteMbSynCabac(
-                pEncCtx, pSlice, pCurMb,
+                pEncCtx, pSlice, mbs,
             ),
         }
     }

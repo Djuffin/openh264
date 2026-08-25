@@ -910,12 +910,8 @@ pub unsafe extern "C" fn WelsCabacEncodeInit(pCbCtx: &mut SCabacCtx, iStart: usi
 
 /// Flushes accumulated bits from `m_uiLow` to the output bitstream when bit capacity reaches/exceeds 64 bits.
 ///
-/// # Safety
-/// - `pCbCtx` must point to a valid, initialized `SCabacCtx` with allocated buffers.
 #[inline(never)]
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn WelsCabacEncodeUpdateLowNontrivial_(buf: &mut [u8], pCbCtx: &mut SCabacCtx) {
+pub fn WelsCabacEncodeUpdateLowNontrivial_(buf: &mut [u8], pCbCtx: &mut SCabacCtx) {
     let mut iLowBitCnt = pCbCtx.m_iLowBitCnt;
     let mut iRenormCnt = pCbCtx.m_iRenormCnt;
     let mut uiLow = pCbCtx.m_uiLow;
@@ -957,12 +953,8 @@ pub unsafe fn WelsCabacEncodeUpdateLowNontrivial_(buf: &mut [u8], pCbCtx: &mut S
 
 /// Inline fast path for updating the 64-bit lower bound register `m_uiLow`.
 ///
-/// # Safety
-/// - `pCbCtx` must point to a valid `SCabacCtx` instance.
 #[inline(always)]
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn WelsCabacEncodeUpdateLow_(buf: &mut [u8], pCbCtx: &mut SCabacCtx) {
+pub fn WelsCabacEncodeUpdateLow_(buf: &mut [u8], pCbCtx: &mut SCabacCtx) {
     if (pCbCtx.m_iLowBitCnt + pCbCtx.m_iRenormCnt) < (CABAC_LOW_WIDTH as i32) {
         pCbCtx.m_iLowBitCnt += pCbCtx.m_iRenormCnt;
         pCbCtx.m_uiLow = pCbCtx.m_uiLow.wrapping_shl(pCbCtx.m_iRenormCnt as u32);
@@ -974,13 +966,9 @@ pub unsafe fn WelsCabacEncodeUpdateLow_(buf: &mut [u8], pCbCtx: &mut SCabacCtx) 
 
 /// Out-of-line slow path for Least Probable Symbol (LPS) bin encoding.
 ///
-/// # Safety
-/// - `pCbCtx` must point to a valid `SCabacCtx` instance.
-/// - `iCtx` must be in $[0, \text{WELS\_CONTEXT\_COUNT} - 1]$.
+/// `iCtx` must be in $[0, \text{WELS\_CONTEXT\_COUNT} - 1]$.
 #[inline]
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn WelsCabacEncodeDecisionLps_(buf: &mut [u8], pCbCtx: &mut SCabacCtx, iCtx: i32) {
+pub fn WelsCabacEncodeDecisionLps_(buf: &mut [u8], pCbCtx: &mut SCabacCtx, iCtx: i32) {
     let ctx_idx = iCtx as usize;
     let kiState = pCbCtx.m_sStateCtx[ctx_idx].State() as usize;
     let mut uiRange = pCbCtx.m_uiRange;
@@ -1001,13 +989,9 @@ pub unsafe fn WelsCabacEncodeDecisionLps_(buf: &mut [u8], pCbCtx: &mut SCabacCtx
 
 /// Encodes a regular context-modeled binary symbol (`uiBin`).
 ///
-/// # Safety
-/// - `pCbCtx` must point to a valid `SCabacCtx` instance.
-/// - `iCtx` must be in $[0, \text{WELS\_CONTEXT\_COUNT} - 1]$.
+/// `iCtx` must be in $[0, \text{WELS\_CONTEXT\_COUNT} - 1]$.
 #[inline(always)]
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn WelsCabacEncodeDecision(buf: &mut [u8], pCbCtx: &mut SCabacCtx, iCtx: i32, uiBin: u32) {
+pub fn WelsCabacEncodeDecision(buf: &mut [u8], pCbCtx: &mut SCabacCtx, iCtx: i32, uiBin: u32) {
     let ctx_idx = iCtx as usize;
     if (uiBin as u8) == pCbCtx.m_sStateCtx[ctx_idx].Mps() {
         let kiState = pCbCtx.m_sStateCtx[ctx_idx].State() as usize;
@@ -1026,12 +1010,8 @@ pub unsafe fn WelsCabacEncodeDecision(buf: &mut [u8], pCbCtx: &mut SCabacCtx, iC
 
 /// Encodes an equiprobable bypass binary decision ($p = 0.5$).
 ///
-/// # Safety
-/// - `pCbCtx` must point to a valid `SCabacCtx` instance.
 #[inline(always)]
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn WelsCabacEncodeBypassOne(buf: &mut [u8], pCbCtx: &mut SCabacCtx, uiBin: i32) {
+pub fn WelsCabacEncodeBypassOne(buf: &mut [u8], pCbCtx: &mut SCabacCtx, uiBin: i32) {
     let kuiBinBitmask = (uiBin as u32).wrapping_neg();
     pCbCtx.m_iRenormCnt += 1;
     WelsCabacEncodeUpdateLow_(buf, pCbCtx);
@@ -1041,12 +1021,8 @@ pub unsafe fn WelsCabacEncodeBypassOne(buf: &mut [u8], pCbCtx: &mut SCabacCtx, u
 
 /// Encodes terminating syntax elements (`end_of_slice_flag` or `I_PCM` type).
 ///
-/// # Safety
-/// - `pCbCtx` must point to a valid `SCabacCtx` instance.
 #[inline]
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn WelsCabacEncodeTerminate(buf: &mut [u8], pCbCtx: &mut SCabacCtx, uiBin: u32) {
+pub fn WelsCabacEncodeTerminate(buf: &mut [u8], pCbCtx: &mut SCabacCtx, uiBin: u32) {
     pCbCtx.m_uiRange = pCbCtx.m_uiRange.wrapping_sub(2);
     if uiBin != 0 {
         WelsCabacEncodeUpdateLow_(buf, pCbCtx);
@@ -1067,12 +1043,8 @@ pub unsafe fn WelsCabacEncodeTerminate(buf: &mut [u8], pCbCtx: &mut SCabacCtx, u
 
 /// Encodes an unsigned integer via multi-bin Exp-Golomb bypass coding.
 ///
-/// # Safety
-/// - `pCbCtx` must point to a valid `SCabacCtx` instance.
 #[inline]
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn WelsCabacEncodeUeBypass(buf: &mut [u8], pCbCtx: &mut SCabacCtx, iExpBits: i32, uiVal: u32) {
+pub fn WelsCabacEncodeUeBypass(buf: &mut [u8], pCbCtx: &mut SCabacCtx, iExpBits: i32, uiVal: u32) {
     let mut iSufS = uiVal as i32;
     let mut iStopLoop = 0;
     let mut k = iExpBits;
@@ -1097,12 +1069,8 @@ pub unsafe fn WelsCabacEncodeUeBypass(buf: &mut [u8], pCbCtx: &mut SCabacCtx, iE
 
 /// Finalizes and flushes the CABAC bitstream at the end of a slice NAL unit.
 ///
-/// # Safety
-/// - `pCbCtx` must point to a valid `SCabacCtx` instance.
 #[inline]
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn WelsCabacEncodeFlush(buf: &mut [u8], pCbCtx: &mut SCabacCtx) {
+pub fn WelsCabacEncodeFlush(buf: &mut [u8], pCbCtx: &mut SCabacCtx) {
     WelsCabacEncodeTerminate(buf, pCbCtx, 1);
 
     let mut uiLow = pCbCtx.m_uiLow;
