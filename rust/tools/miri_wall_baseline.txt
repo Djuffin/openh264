@@ -11,4 +11,4 @@
 # lane-vs-lane and the 1.3x tripwire means what S61 intends.
 #
 # Format: <seconds> <commit> <date> <note>
-536 0c9de7eb 2026-08-25 session-E3-close-lane-vs-lane-ratio-1.02
+521 b194697c 2026-08-25 session-G-close-lane-vs-lane-ratio-0.97-fork-pair-NOT-run
