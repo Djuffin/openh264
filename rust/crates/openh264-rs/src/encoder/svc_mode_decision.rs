@@ -1214,30 +1214,26 @@ pub unsafe extern "C" fn WelsMdI16x16(
 /// # Safety
 /// `sWelsMe` must be valid; `pEnc`/`pRef` must point into the encode and reference
 /// planes for this partition.
+/// Session F: the `pEnc`/`pRef` cursor arguments and the three `SWelsME`
+/// cursor stores are gone — the coordinates this function already stamps are
+/// the same information (the verified identity), and the search family
+/// receives the planes as parameters.
 #[inline]
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub(crate) unsafe fn InitMe(
+pub(crate) fn InitMe(
     iMbPixX: i32,
     iMbPixY: i32,
     pMvdCost: *mut u16,
     iBlockSize: i32,
-    pEnc: *mut u8,
-    pRef: *mut u8,
     // SCREEN_CONTENT(dormant: Phase 10)
     pRefFeatureStorage: *mut SScreenBlockFeatureStorage,
     sWelsMe: &mut SWelsME,
 ) {
-    (*sWelsMe).iCurMeBlockPixX = iMbPixX;
-    (*sWelsMe).iCurMeBlockPixY = iMbPixY;
-    (*sWelsMe).uiBlockSize = iBlockSize as u8;
-    (*sWelsMe).pMvdCost = pMvdCost;
+    sWelsMe.iCurMeBlockPixX = iMbPixX;
+    sWelsMe.iCurMeBlockPixY = iMbPixY;
+    sWelsMe.uiBlockSize = iBlockSize as u8;
+    sWelsMe.pMvdCost = pMvdCost;
 
-    (*sWelsMe).pEncMb = pEnc;
-    (*sWelsMe).pRefMb = pRef;
-    (*sWelsMe).pColoRefMb = pRef;
-
-    (*sWelsMe).pRefFeatureStorage = pRefFeatureStorage;
+    sWelsMe.pRefFeatureStorage = pRefFeatureStorage;
 }
 
 // unsafe-cat: cursor
@@ -1255,14 +1251,12 @@ pub unsafe extern "C" fn WelsMdP16x16(
     let kiMbWidth: i32 = (*pCurLayer).iMbWidth as i32;
     let kiMbHeight: i32 = (*pCurLayer).iMbHeight as i32;
     // `svc_base_layer_md.cpp:983`. This call was missing: without it the search block
-    // kept the previous macroblock's pEncMb/pRefMb/uiBlockSize/pMvdCost.
+    // kept the previous macroblock's coordinates/uiBlockSize/pMvdCost.
     InitMe(
         (*pWelsMd).iMbPixX,
         (*pWelsMd).iMbPixY,
         (*pWelsMd).pMvdCost,
         BLOCK_16x16 as i32,
-        (*pMbCache).SPicData.pEncMb[0],
-        (*pMbCache).SPicData.pRefMb[0],
         (*pCurLayer).sRefPicView.pScreenBlockFeatureStorage,
         pMe16x16,
     );
@@ -1314,7 +1308,20 @@ pub unsafe extern "C" fn WelsMdP16x16(
     );
 
     if let Some(search_fn) = (*pFunc).pfMotionSearch[0] {
-        search_fn(pFunc, pCurLayer, pMe16x16, &mut *pSlice);
+        // The de-virtualized slot takes what it reaches (the ME group + the
+        // cost tables — both shared reads of the pre-fork table) and the two
+        // planes, resolved per call through the layer's frame-stable handles
+        // (S37's value half; the pattern MeRefineFracPixel proved).
+        let pEncPicture = layer_enc_pic(pCurLayer).expect("the layer's source picture is bound");
+        let pRefPicture = layer_ref_pic(pCurLayer).expect("the layer's reference picture is bound");
+        search_fn(
+            &(*pFunc).sMeFuncs,
+            &(*pFunc).sSampleDealingFuncs,
+            pMe16x16,
+            &mut *pSlice,
+            pEncPicture.plane(0),
+            pRefPicture.plane(0),
+        );
     }
 
     (*pCurMb).sP16x16Mv = (*pMe16x16).sMv;
@@ -1338,13 +1345,6 @@ pub unsafe extern "C" fn WelsMdP8x8(
     pWelsMd: &mut SWelsMD,
     pSlice: &mut SSlice,
 ) -> i32 {
-    let iLineSizeEnc = (*pCurDqLayer).iEncStride[0];
-    let iLineSizeRef = if let Some(p) = layer_ref_pic(pCurDqLayer) {
-        p.stride(0)
-    } else {
-        iLineSizeEnc
-    };
-
     let mut iCostP8x8 = 0i32;
     for i in 0..4 {
         let pMbCache = &mut pSlice.sMbCacheInfo;
@@ -1352,8 +1352,6 @@ pub unsafe extern "C" fn WelsMdP8x8(
         let iIdxY = i >> 1;
         let iPixelX = iIdxX << 3;
         let iPixelY = iIdxY << 3;
-        let iStrideEnc = iPixelX + (iPixelY * iLineSizeEnc);
-        let iStrideRef = iPixelX + (iPixelY * iLineSizeRef);
 
         let sMe8x8 = &mut (*pWelsMd).sMe.sMe8x8[i as usize];
         // `svc_base_layer_md.cpp:1096`. The InitMe call, the two block-pixel offsets,
@@ -1364,8 +1362,6 @@ pub unsafe extern "C" fn WelsMdP8x8(
             (*pWelsMd).iMbPixY,
             (*pWelsMd).pMvdCost,
             BLOCK_8x8 as i32,
-            (*pMbCache).SPicData.pEncMb[0].offset(iStrideEnc as isize),
-            (*pMbCache).SPicData.pRefMb[0].offset(iStrideRef as isize),
             (*pCurDqLayer).sRefPicView.pScreenBlockFeatureStorage,
             sMe8x8,
         );
@@ -1385,8 +1381,27 @@ pub unsafe extern "C" fn WelsMdP8x8(
             &mut (*sMe8x8).sMvp,
         );
 
-        (*pFunc).pfMotionSearch[(*pWelsMd).iBlock8x8StaticIdc[i as usize] as usize]
-            .expect("pfMotionSearch unset")(pFunc, pCurDqLayer, sMe8x8, &mut *pSlice);
+        {
+            // The runtime index selects among four identical entries today:
+            // the only writer of `pfMotionSearch` is `PreprocessSliceCoding`'s
+            // loop, which installs `WelsMotionEstimateSearch` in every slot
+            // (the C++'s SCREEN_CONTENT block that would install the
+            // static/scrolled variants is untranslated), and the only nonzero
+            // writer of `iBlock8x8StaticIdc` is `SetBlockStaticIdcToMd`,
+            // SCREEN_CONTENT(dormant). Both locks are stated so the dispatch
+            // stays honest when Phase 10 lights them.
+            let pEncPicture = layer_enc_pic(pCurDqLayer).expect("the layer's source picture is bound");
+            let pRefPicture = layer_ref_pic(pCurDqLayer).expect("the layer's reference picture is bound");
+            (*pFunc).pfMotionSearch[(*pWelsMd).iBlock8x8StaticIdc[i as usize] as usize]
+                .expect("pfMotionSearch unset")(
+                &(*pFunc).sMeFuncs,
+                &(*pFunc).sSampleDealingFuncs,
+                sMe8x8,
+                &mut *pSlice,
+                pEncPicture.plane(0),
+                pRefPicture.plane(0),
+            );
+        }
         // T9.E2b: the slot call above passes `&mut *pSlice` (the typedef flipped
         // with its family, S52), and that whole-slice reborrow pops every cursor
         // derived from the slice before it — q1c is blind here in both kinds
