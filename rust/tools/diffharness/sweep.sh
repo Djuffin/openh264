@@ -49,13 +49,30 @@ cd "$ROOT" || exit 1
 # codec/-side staleness of cxx_enc remains build.sh's business; this checks
 # what the incident was: the Rust tree and the harness's own driver source.
 # Override for a deliberately old driver: SWEEP_STALE_OK=1.
+#
+# **`$HERE/rust_enc` is the cargo crate DIRECTORY, not the binary** — the binary
+# is `$HERE/rust_enc/target/$PROFILE/rust_enc`, which is how `compare.sh:35`
+# spells it and how this guard must. As first written (`583cd21a`) it tested the
+# directory: `[ -x <dir> ]` is true, so the missing-binary arm never fired, and
+# the directory's mtime is when a file was last added to the crate — Aug 22 —
+# so `find -newer` matched 83 sources and the guard reported STALE on every run,
+# including inside `gates.sh`, whose two sweeps it failed with rc=2 from the
+# moment it landed. It was calibrated on a positive and never on a negative
+# (S55's other half): it was shown to fire, never shown to stay silent, and its
+# commit message read the false positive as a true one. Fixed and calibrated
+# both ways in Phase 9 session G (F159); the profile is now part of the answer,
+# because a fresh debug driver says nothing about a stale release one.
 if [ "${SWEEP_STALE_OK:-0}" != "1" ]; then
   stale=""
-  if [ ! -x "$HERE/rust_enc" ] || [ ! -x "$HERE/cxx_enc" ]; then
-    stale="driver binaries missing"
+  _prof=${RUST_ENC_PROFILE:-debug}
+  _renc="$HERE/rust_enc/target/$_prof/rust_enc"
+  if [ ! -f "$_renc" ] || [ ! -x "$_renc" ]; then
+    stale="rust_enc ($_prof) missing: $_renc"
+  elif [ ! -f "$HERE/cxx_enc" ] || [ ! -x "$HERE/cxx_enc" ]; then
+    stale="cxx_enc missing: $HERE/cxx_enc"
   else
-    newer=$(find "$ROOT/rust/crates/openh264-rs/src" -name '*.rs' -newer "$HERE/rust_enc" 2>/dev/null | head -3)
-    [ -n "$newer" ] && stale="rust_enc older than: $(echo "$newer" | tr '\n' ' ')"
+    newer=$(find "$ROOT/rust/crates/openh264-rs/src" -name '*.rs' -newer "$_renc" 2>/dev/null | head -3)
+    [ -n "$newer" ] && stale="rust_enc ($_prof) older than: $(echo "$newer" | tr '\n' ' ')"
     [ "$HERE/cxx_enc.cpp" -nt "$HERE/cxx_enc" ] && stale="${stale:+$stale; }cxx_enc older than cxx_enc.cpp"
   fi
   if [ -n "$stale" ]; then
