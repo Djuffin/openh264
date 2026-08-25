@@ -2293,3 +2293,120 @@ arguing with it):
 Neither matcher was changed: S55's second edge requires any detector change to
 re-calibrate against `0bfc7687^`, and this session had rounds in flight; the
 narrowing decision passes to the steward with this ledger.
+
+## F145 — the E2 brief's counts: nine slice-carrying typedefs, not six; "107 parameter
+mentions" is a contaminated grep; and the true parameter inventory was 93
+
+Three of the brief's load-bearing numbers, re-measured at its own commit before any
+edit (its opening instruction):
+
+1. **"The worker's count is six typedefs carrying `*mut SSlice`"** — the multiline-
+   aware scan the same sentence prescribes finds **nine**: beside the two it names
+   (`PDeblockingFilterSlice`, `PWelsCodingSliceFunc`) and the two it hints at
+   (`PMotionSearchFunc`, `PSearchMethodFunc`), also `PWelsSliceHeaderWriteFunc` and
+   the four MD slot types in `wels_func_ptr_def.rs` — `PInterFineMdFunc`,
+   `PInterMdBackgroundDecisionFunc`, `PInterMdScrollingPSkipDecisionFunc`,
+   `PInterMdFunc` — every one wrap-hidden past a one-line grep, which is F101's
+   lesson biting the very sentence that cited it. All nine flipped in stage 1's S20
+   closure; the installee sets pulled `WelsDiamondSearch`, `WelsMotionCrossSearch`
+   and `WelsDiamondCrossSearch` up a level with `PSearchMethodFunc`.
+2. **"82 bodies, 107 parameter mentions"** — 82 bodies is exact; 107 is the line
+   count of `grep ': \*mut SSlice'`, which without a word boundary also matches
+   `*mut SSliceThreading` (`encoder_context.rs:1091`), and with comments and locals
+   included counts three worker locals and eleven prose mentions. The parameter
+   inventory the campaign actually converts was **93**: 84 fn-signature positions
+   plus 9 typedef positions (and of the 84, two left by S54 deletion rather than
+   flip — `WelsMarkMMCORefInfoWithBase`'s base became a value, `mb_dump`'s
+   `*const` became `&SSlice`).
+3. Smaller: `sRefPicView` "21 reads" measures 22 code mentions at the close (the
+   harvest was dropped at the frontier; the successor re-measures).
+
+## F146 — the layer flip's real shape is a fork-reachability split: the brief's step
+2 contradicts its own edge-2 rule, and 43 of the 72 layer-param definitions must
+stay raw until G–H
+
+The brief's step 2 says "`*mut SDqLayer` → `&mut SDqLayer` the same staged way — 73
+mentions"; its own edge 2 says "no `&mut` to the slice **array** (or the layer that
+owns it) inside the fork, ever." Both cannot hold: the layer is the one object every
+worker shares, and a `&mut SDqLayer` parameter on any fork-reachable function makes N
+workers perform concurrent entry retags of one object — F73 across threads, the class
+rounds 5–9 spent the previous session evicting. The in-fork surface is not a corner:
+a call-graph closure seeded at the three `thread::scope` workers and every dispatch-
+slot installee the fork calls through reaches **42 of the 71 layer-param bodies** —
+the MD partition searches, the ME entries, the header writers and their init pair,
+deblocking's slice filter, the slice services (`SetSliceBoundaryInfo`,
+`ReallocateSliceInThread`/`List`, `UpdateMbNeighbor` and both walkers,
+`WelsGetNextMbOfSlice`, `WelsMbToSliceIdc`) and every accessor. Those, plus
+`slice_in_layer` (kept with its accessor family), stay raw: **43 definitions, G–H's
+layer inheritance**. The other **30 definitions** run only outside the fork — the
+init, teardown, between-frames-adjust, and ref-marking families plus the frame
+deblocking walk — and flipped this session (28 `&mut SDqLayer`, 2 `&SDqLayer`).
+
+The classification's referee is the close's Miri (the probes drive both fork paths
+and the ST paths); its one catch is F148's third item. What G–H inherits beyond the
+list: the in-fork layer writes are per-worker-disjoint fields of one shared struct
+(`sSliceBufferInfo[slot]`, the partition arrays), which is interior-mutability
+territory (rec_view's shape) or permanent raw — a design decision, not a flip.
+
+## F147 — the popped-sibling-argument class: a cursor passed INTO the same call
+beside its own root, invisible to all four detector shapes; S54 narrowing is the fix
+
+A caller that passes the slice AND a slice-derived cursor in one call is sound while
+both are raw and UB the moment the slice parameter becomes `&mut`: the argument
+reborrow is a whole-object write retag that pops the sibling cursor **before the
+callee runs**, wherever the cursor's bytes live inside the object. q1c cannot see it
+in either kind: shape B's "through-read" pattern requires a deref of the root
+itself (the cursor is one derivation removed), and shape A requires a use *strictly
+after* the call — the use here is *at* the call. Five instances, all closed by
+narrowing (S54) rather than windows, because in each the cursor was a pure function
+of the other arguments:
+
+* the header writers and `PWelsSliceHeaderWriteFunc` lost `pBs: *mut BsWriter`
+  (derived inside via `slice_writer` under the parameter's own tag);
+* `WritePrefixNalForSlice` lost `pSliceBs: *mut SWelsSliceBs` the same way;
+* `WelsCodeOneSlice`'s `pBs` moved below the two slot calls whose reborrows popped
+  it, minted at its one remaining use;
+* both P-macroblock loops (and the cavlc syntax writer, forward-proofed at its own
+  stage) re-mint their writer after the loop's whole-slice passes;
+* `WelsMarkMMCORefInfoWithBase` takes the base *marking by value* — the variant
+  where the protector itself is the problem: iteration 0 writes the very bytes a
+  reference parameter would protect (its own S29 comment documented the self-copy),
+  and a value cannot be invalidated by a retag.
+
+The general rule for every future flip: at each call-site rewrite, read the OTHER
+arguments of the same call for derived cursors into the object being reborrowed.
+
+## F148 — a flip's blast radius is caller-side and read-side: three instrument gaps
+this campaign hit, one of which only the close's Miri saw
+
+1. **A typedef flip creates held-cursor UB in still-raw callers** (S52's atomicity
+   has a blast radius the stage plan must own). When stage 1 flipped the ME slot
+   types, the still-raw loop bodies `WelsMdP8x8`/`P16x8`/`P8x16` were suddenly
+   holding `pMbCache` across a `&mut *pSlice` argument — and using it after, in a
+   loop, so even the next iteration's pre-call reads were through a popped tag.
+   F114's C/D class ("hazards the conversion creates") extends to the *callers* of
+   a flipped dispatch surface; q1c is blind in both kinds (dispatch slot, F111;
+   raw-param root, F144's third limit). Fix: per-iteration derivation windows,
+   placed in the same commit as the typedef flip.
+2. **Shape B is blind at accessor-minted roots** (the tool's documented first
+   limit, now with teeth): four hand-found same-call hazards — `NeedDynamicAdjust`'s
+   `iSliceNumInFrame` argument at three sites, one of which can pass THE SAME layer
+   as both arguments (base == current), and
+   `DynslcUpdateMbNeighbourInfoListForAllSlices`' `mb_list_root` argument, fixed by
+   reorder (the MB buffer is a separate allocation, so the retag cannot reach it).
+   The layer campaign's roots are almost all `current_layer(pCtx)` mints, so for
+   G–H this blindness is the norm, not the exception.
+3. **A protector is violated by a foreign READ, and shape D only models mints.**
+   The close's session gate — the session's single Miri run, per the user's
+   directive — aborted both encode probes at one line:
+   `WelsUpdateSliceHeaderSyntax`, freshly `&mut SDqLayer`, read
+   `(*current_layer(pCtx)).iMaxSliceNum` — the same object its own parameter
+   protects, reached by the ctx path. No `&mut` is minted anywhere: a plain read
+   through an independent same-tag copy pops a strongly protected Unique. Shape D's
+   closure looks for reborrow mints and cannot see reads, so the site survived a
+   clean `--kind ref` scan. Fixed by T9.D11's move (read through the parameter; the
+   caller hoists the old null arm), confirmed by re-running exactly the two failed
+   probes. Instrument note for the steward: shape D's "mint" model needs a
+   read-through-independent-path clause for ref-param bodies whose type has
+   ctx-resident accessors — with S55's calibration cost, this session left the
+   matcher alone and hands the ledger forward.
