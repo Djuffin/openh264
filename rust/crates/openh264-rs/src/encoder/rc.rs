@@ -1392,10 +1392,7 @@ pub unsafe fn RcCalculatePictureQp(pEncCtx: *mut sWelsEncCtx) {
 /// Initializes slice-level GOM rate control parameters.
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
-pub unsafe fn GomRCInitForOneSlice(pSlice: *mut SSlice, kiBitsPerMb: i32) {
-    if pSlice.is_null() {
-        return;
-    }
+pub unsafe fn GomRCInitForOneSlice(pSlice: &mut SSlice, kiBitsPerMb: i32) {
     let pSOverRc = &mut (*pSlice).sSlicingOverRc;
     pSOverRc.iStartMbSlice = (*pSlice).sSliceHeaderExt.sSliceHeader.iFirstMbInSlice;
     pSOverRc.iEndMbSlice = pSOverRc.iStartMbSlice + (*pSlice).iCountMbNumInSlice - 1;
@@ -2654,7 +2651,7 @@ pub unsafe extern "C" fn WelsRcPictureInfoUpdateScc(pEncCtx: *mut sWelsEncCtx, i
 pub unsafe extern "C" fn WelsRcMbInitScc(
     pEncCtx: *mut sWelsEncCtx,
     pCurMb: &mut SMB,
-    _pSlice: *mut SSlice,
+    _pSlice: &mut SSlice,
 ) {
     (*pCurMb).uiLumaQp = (*pEncCtx).iGlobalQp as u8;
     let offset = (*ctx_pps(pEncCtx)).uiChromaQpIndexOffset as i32;

@@ -277,7 +277,7 @@ pub type PDeblockingBSCalc = unsafe extern "C" fn(
 );
 
 pub type PDeblockingFilterSlice =
-    unsafe extern "C" fn(pCurDq: *mut SDqLayer, pFunc: *mut SWelsFuncPtrList, pSlice: *mut SSlice);
+    unsafe extern "C" fn(pCurDq: *mut SDqLayer, pFunc: *mut SWelsFuncPtrList, pSlice: &mut SSlice);
 
 /// **T6.C1**: the slot took `int8_t*` because the C++ passes `pCurMb->pNonZeroCount`,
 /// a pointer into a context-wide array. The array is inline in `SMB` now and every
@@ -1340,7 +1340,7 @@ pub use crate::encoder::svc_encode_slice::WelsGetNextMbOfSlice;
 pub unsafe extern "C" fn DeblockingFilterSliceAvcbase(
     pCurDq: *mut SDqLayer,
     pFunc: *mut SWelsFuncPtrList,
-    pSlice: *mut SSlice,
+    pSlice: &mut SSlice,
 ) {
     let pMbList = crate::encoder::svc_encode_slice::mb_list_root(pCurDq);
     let sSliceHeaderExt = &(*pSlice).sSliceHeaderExt;
@@ -1412,7 +1412,7 @@ pub unsafe extern "C" fn DeblockingFilterSliceAvcbase(
 pub unsafe extern "C" fn DeblockingFilterSliceAvcbaseNull(
     _pCurDq: *mut SDqLayer,
     _pFunc: *mut SWelsFuncPtrList,
-    _pSlice: *mut SSlice,
+    _pSlice: &mut SSlice,
 ) {
 }
 
@@ -1434,7 +1434,7 @@ pub unsafe extern "C" fn PerformDeblockingFilter(pEnc: *mut sWelsEncCtx) {
         for iSliceIdx in 0..iSliceCount {
             let pSlice = crate::encoder::svc_encode_slice::slice_in_layer(pCurLayer, iSliceIdx);
             if !pSlice.is_null() {
-                DeblockingFilterSliceAvcbase(pCurLayer, ctx_func_list(pEnc), pSlice);
+                DeblockingFilterSliceAvcbase(pCurLayer, ctx_func_list(pEnc), &mut *pSlice);
             }
         }
     }

@@ -81,7 +81,7 @@ pub type PIntraFineMdFunc = unsafe extern "C" fn(
 pub type PInterFineMdFunc = unsafe extern "C" fn(
     pEncCtx: *mut sWelsEncCtx,
     pWelsMd: &mut SWelsMD,
-    slice: *mut SSlice,
+    slice: &mut SSlice,
     pCurMb: &mut SMB,
     bestCost: i32,
 );
@@ -106,7 +106,7 @@ pub type PAccumulateSadFunc = unsafe extern "C" fn(
 pub type PInterMdBackgroundDecisionFunc = unsafe extern "C" fn(
     pEncCtx: *mut sWelsEncCtx,
     pWelsMd: &mut SWelsMD,
-    slice: *mut SSlice,
+    slice: &mut SSlice,
     pCurMb: &mut SMB,
     pKeepPskip: *mut bool,
 ) -> bool;
@@ -123,7 +123,7 @@ pub type PMdBackgroundInfoUpdateFunc = unsafe extern "C" fn(
 pub type PInterMdScrollingPSkipDecisionFunc = unsafe extern "C" fn(
     pEncCtx: *mut sWelsEncCtx,
     pWelsMd: &mut SWelsMD,
-    slice: *mut SSlice,
+    slice: &mut SSlice,
     pCurMb: &mut SMB,
 ) -> bool;
 
@@ -135,7 +135,7 @@ pub type PSetScrollingMv =
 pub type PInterMdFunc = unsafe extern "C" fn(
     pEncCtx: *mut sWelsEncCtx,
     pWelsMd: &mut SWelsMD,
-    slice: *mut SSlice,
+    slice: &mut SSlice,
     pCurMb: *mut SMB,
 );
 

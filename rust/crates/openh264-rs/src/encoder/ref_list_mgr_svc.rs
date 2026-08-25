@@ -872,23 +872,20 @@ pub unsafe fn CheckCurMarkFrameNumUsed(pCtx: *mut sWelsEncCtx) -> bool {
 #[allow(unsafe_code)]
 pub unsafe fn WelsMarkMMCORefInfoWithBase(
     pCurDq: *mut SDqLayer,
-    pBaseSlice: *mut SSlice,
+    kBaseMarking: SRefPicMarking,
     kiCountSliceNum: i32,
 ) {
-    if pCurDq.is_null() || pBaseSlice.is_null() {
+    if pCurDq.is_null() {
         return;
     }
-    // **Read the base out by value before the loop, and it is not a style
-    // preference** (S29, and the dynamic-slice probe's second red, session D).
-    // Both callers pass `pBaseSlice = ppSliceList[0]`, so iteration 0 writes the
-    // very bytes a held `&` names: the `SharedReadOnly` tag is popped by that
-    // write and iteration 1 reads through a tag that no longer exists. With one
-    // slice the write is the last use and nothing ever reads after it, which is
-    // why three probes and 341/341 have run over this.
-    //
-    // The copy is byte-identical to the C++'s `memcpy` from the live field: the
-    // first store is `base = base`.
-    let kBaseMarking = (*pBaseSlice).sSliceHeaderExt.sSliceHeader.sRefMarking;
+    // **The base arrives by value, and it is not a style preference** (T9.E2b,
+    // the S29/S54 lineage). Both callers read `ppSliceList[0]`'s marking, and
+    // iteration 0 of this loop writes the very bytes that marking lives in: a
+    // reference parameter — `&` or `&mut` — is protected for the whole call
+    // (F114b), so the write through `slice_in_layer(pCurDq, 0)` would pop it
+    // mid-loop. The value cannot be invalidated by a retag, and the copy is
+    // byte-identical to the C++'s `memcpy` from the live field: the first
+    // store is `base = base`.
     for iSliceIdx in 0..kiCountSliceNum {
         let pSlice = crate::encoder::svc_encode_slice::slice_in_layer(pCurDq, iSliceIdx);
         if !pSlice.is_null() {
@@ -948,7 +945,7 @@ pub unsafe fn WelsMarkMMCORefInfo(
         }
     }
 
-    WelsMarkMMCORefInfoWithBase(pCurDq, pBaseSlice, kiCountSliceNum);
+    WelsMarkMMCORefInfoWithBase(pCurDq, *pRefPicMark, kiCountSliceNum);
 }
 
 /// Evaluates LTR marking criteria and populates slice header MMCO commands.
@@ -1518,7 +1515,7 @@ pub unsafe fn WelsMarkMMCORefInfoScreen(
         pRefPicMark.uiMmcoCount += 1;
     }
 
-    WelsMarkMMCORefInfoWithBase(pCurDq, pBaseSlice, kiCountSliceNum);
+    WelsMarkMMCORefInfoWithBase(pCurDq, *pRefPicMark, kiCountSliceNum);
 }
 
 // unsafe-cat: port-raw(Phase 9)

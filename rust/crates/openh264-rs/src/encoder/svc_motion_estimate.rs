@@ -323,13 +323,13 @@ pub type PMotionSearchFunc = unsafe extern "C" fn(
     pFuncList: *mut SWelsFuncPtrList,
     pCurDqLayer: *mut SDqLayer,
     pMe: &mut SWelsME,
-    pSlice: *mut SSlice,
+    pSlice: &mut SSlice,
 );
 
 pub type PSearchMethodFunc = unsafe extern "C" fn(
     pFuncList: *mut SWelsFuncPtrList,
     pMe: &mut SWelsME,
-    pSlice: *mut SSlice,
+    pSlice: &mut SSlice,
     kiEncStride: i32,
     kiRefStride: i32,
 );
@@ -540,7 +540,7 @@ pub unsafe extern "C" fn WelsMotionEstimateSearch(
     pFuncList: *mut SWelsFuncPtrList,
     pCurDqLayer: *mut SDqLayer,
     pMe: &mut SWelsME,
-    pSlice: *mut SSlice,
+    pSlice: &mut SSlice,
 ) {
     unsafe {
         let kiStrideEnc = (*pCurDqLayer).iEncStride[0];
@@ -625,7 +625,7 @@ pub unsafe extern "C" fn WelsMotionEstimateSearchStatic(
     pFuncList: *mut SWelsFuncPtrList,
     pCurDqLayer: *mut SDqLayer,
     pMe: &mut SWelsME,
-    _pSlice: *mut SSlice,
+    _pSlice: &mut SSlice,
 ) {
     unsafe {
         let kiStrideEnc = (*pCurDqLayer).iEncStride[0];
@@ -661,7 +661,7 @@ pub unsafe extern "C" fn WelsMotionEstimateSearchScrolled(
     pFuncList: *mut SWelsFuncPtrList,
     pCurDqLayer: *mut SDqLayer,
     pMe: &mut SWelsME,
-    _pSlice: *mut SSlice,
+    _pSlice: &mut SSlice,
 ) {
     unsafe {
         let kiStrideEnc = (*pCurDqLayer).iEncStride[0];
@@ -707,7 +707,7 @@ pub unsafe extern "C" fn WelsMotionEstimateSearchScrolled(
 pub unsafe extern "C" fn WelsMotionEstimateInitialPoint(
     pFuncList: *mut SWelsFuncPtrList,
     pMe: &mut SWelsME,
-    pSlice: *mut SSlice,
+    pSlice: &mut SSlice,
     iStrideEnc: i32,
     iStrideRef: i32,
 ) -> bool {
@@ -872,7 +872,7 @@ pub unsafe extern "C" fn WelsMeSadCostSelect(
 pub unsafe extern "C" fn WelsDiamondSearch(
     pFuncList: *mut SWelsFuncPtrList,
     pMe: &mut SWelsME,
-    pSlice: *mut SSlice,
+    pSlice: &mut SSlice,
     kiStrideEnc: i32,
     kiStrideRef: i32,
 ) {
@@ -1084,7 +1084,7 @@ pub unsafe extern "C" fn LineFullSearch_c(
 pub unsafe extern "C" fn WelsMotionCrossSearch(
     pFuncList: *mut SWelsFuncPtrList,
     pMe: &mut SWelsME,
-    pSlice: *mut SSlice,
+    pSlice: &mut SSlice,
     kiEncStride: i32,
     kiRefStride: i32,
 ) {
@@ -1124,7 +1124,7 @@ pub unsafe extern "C" fn WelsMotionCrossSearch(
 pub unsafe extern "C" fn WelsDiamondCrossSearch(
     pFunc: *mut SWelsFuncPtrList,
     pMe: &mut SWelsME,
-    pSlice: *mut SSlice,
+    pSlice: &mut SSlice,
     kiEncStride: i32,
     kiRefStride: i32,
 ) {
@@ -1147,7 +1147,7 @@ pub unsafe extern "C" fn WelsDiamondCrossSearch(
 pub unsafe extern "C" fn WelsDiamondCrossFeatureSearch(
     pFunc: *mut SWelsFuncPtrList,
     pMe: &mut SWelsME,
-    pSlice: *mut SSlice,
+    pSlice: &mut SSlice,
     kiEncStride: i32,
     kiRefStride: i32,
 ) {
