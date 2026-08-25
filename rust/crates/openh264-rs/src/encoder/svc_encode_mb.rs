@@ -309,8 +309,9 @@ pub type PGetNoneZeroCountFunc = unsafe extern "C" fn(*mut i16) -> i32;
 pub type PDeQuantizationFunc = fn(pRes: &mut [i16; 64], kpMF: &[u16; 8]);
 pub type PDeQuantization4x4Func = fn(pRes: &mut [i16; 16], kpMF: &[u16; 8]);
 pub type PDeQuantizationIHadamard4x4Func = unsafe extern "C" fn(*mut i16, u16);
-pub type PIDctFunc = unsafe extern "C" fn(*mut u8, i32, *mut u8, i32, *mut i16);
-pub type PIDctI16x16DcFunc = unsafe extern "C" fn(*mut u8, i32, *mut u8, i32, *mut i16);
+// `PIDctFunc` and `PIDctI16x16DcFunc` stood here. The three slots they typed
+// were write-only (F138/F139) and are deleted with their installs (S18, session
+// F step 0); the second typedef had zero references even before that.
 pub type PCopyAlignedFunc = unsafe extern "C" fn(*mut u8, i32, *mut u8, i32);
 // `PSetMemoryZero = unsafe extern "C" fn(*mut c_void, i32)` was here; see
 // `encoder_context::WelsSetMemZero_c` for why the three slots that used it went.

@@ -1785,51 +1785,17 @@ fn steps(stride: usize, vertical_taps: bool) -> (isize, isize) {
 
 use openh264_rs::encoder::deblocking as encdeb;
 
-/// The eight encoder wrappers are now the common module's shims, re-exported —
-/// so the equivalence entries went with the swap, as the recipe intends, and
-/// what survives is the fact the re-export rests on: the encoder's dispatch
-/// table really does end up holding the shimmed functions.
-///
-/// A `pub use` is checked by the compiler, so this is not testing the language.
-/// It is testing that `DeblockingInit` was not left installing something else,
-/// which is the only way the re-export could be undone by a later edit — and it
-/// is exactly the mistake that produced the straggler in the first place.
-///
-/// **Not under Miri** (Phase 3 exit, 2026-08-11 — see `phase3_findings.md` F18).
-/// This compares reified function pointers, and **Miri mints a fresh synthetic
-/// address for each one**, so even two reifications of the *same* function
-/// compare unequal there: two runs of this test produced
-/// `43215773 vs 43216036` and `1789169 vs 1789457`, different values each time.
-/// The property asserted here is **symbol identity**, which Miri deliberately
-/// does not model, so it is unrepresentable under Miri rather than merely
-/// untested. Same reasoning and same fix as `init_mc_func_ignores_the_cpu_flag`
-/// in `common/mc.rs`, which carries the original write-up; the plan's §4
-/// instrument note states the rule ("address comparison is not a sound
-/// assert-map technique").
-///
-/// It failed unnoticed from the day it was written: it predates F17's fix, and
-/// F17 meant `gates.sh` could not fail on Miri at all. The first `exit`-level
-/// battery after that fix is what surfaced it.
-#[test]
-#[cfg_attr(miri, ignore)]
-fn encoder_deblocking_table_installs_the_common_shims() {
-    let mut fl = encdeb::DeblockingFunc::default();
-    unsafe { encdeb::DeblockingInit(&mut fl, 0) };
-
-    let pairs: [(usize, usize); 8] = [
-        (fl.pfLumaDeblockingLT4Ver.unwrap() as usize, deb::DeblockLumaLt4V_c as usize),
-        (fl.pfLumaDeblockingEQ4Ver.unwrap() as usize, deb::DeblockLumaEq4V_c as usize),
-        (fl.pfLumaDeblockingLT4Hor.unwrap() as usize, deb::DeblockLumaLt4H_c as usize),
-        (fl.pfLumaDeblockingEQ4Hor.unwrap() as usize, deb::DeblockLumaEq4H_c as usize),
-        (fl.pfChromaDeblockingLT4Ver.unwrap() as usize, deb::DeblockChromaLt4V_c as usize),
-        (fl.pfChromaDeblockingEQ4Ver.unwrap() as usize, deb::DeblockChromaEq4V_c as usize),
-        (fl.pfChromaDeblockingLT4Hor.unwrap() as usize, deb::DeblockChromaLt4H_c as usize),
-        (fl.pfChromaDeblockingEQ4Hor.unwrap() as usize, deb::DeblockChromaEq4H_c as usize),
-    ];
-    for (i, (installed, expected)) in pairs.into_iter().enumerate() {
-        assert_eq!(installed, expected, "encoder deblocking slot {i} is not the common shim");
-    }
-}
+// **Session F step 0: `encoder_deblocking_table_installs_the_common_shims`
+// deleted with the eight slots it guarded.** F139 measured the encoder's eight
+// `DeblockingFunc` kernel slots write-only — installed by `DeblockingInit`,
+// read by nothing, because the `FilteringEdge*` dispatchers call the safe
+// kernels directly since T9.C2 — and this test's whole property was "the
+// installs aim at the common shims". With the slots gone there is no install
+// left to misdirect and no reader a misdirection could reach; the property is
+// void, not merely stale — D-cov-1's `mc_table_slots_match_the_direct_calls`
+// reasoning, one block below. The decoder-side behavioural assert-map
+// (`deblocking_table_slots_match_the_direct_calls`) stays: it drives the
+// *common* table, which the decoder still dispatches through.
 
 /// The remaining copies of `WelsNonZeroCount_c`: `common` has the shim over the
 /// safe kernel, and `encoder/deblocking.rs` keeps a raw `extern "C"` duplicate

@@ -33,12 +33,12 @@ use crate::encoder::md::{
 };
 use crate::encoder::md::SMbCache;
 use crate::encoder::rc::SWelsRcFunc;
-use crate::encoder::svc_encode_mb::{PDeQuantization4x4Func, PDeQuantizationFunc, PIDctFunc};
+use crate::encoder::svc_encode_mb::{PDeQuantization4x4Func, PDeQuantizationFunc};
 use crate::encoder::svc_encode_slice::{BsWriter, SDqLayer, SDynamicSlicingStack, SSlice};
 use crate::encoder::svc_motion_estimate::{
     PCalculateBlockFeatureOfFrame, PCalculateSatdFunc, PCalculateSingleBlockFeature,
     PCheckDirectionalMv, PFillQpelLocationByFeatureValueFunc, PInitializeHashforFeatureFunc,
-    PLineFullSearchFunc, PMotionSearchFunc, PSampleSadHor8Func, PSearchMethodFunc,
+    PLineFullSearchFunc, PMotionSearchFunc, PSearchMethodFunc,
     PUpdateFMESwitch,
 };
 use crate::encoder::wels_preprocess::SVAAFrameInfo;
@@ -376,8 +376,10 @@ pub struct SWelsFuncPtrList {
     pub pfGetLumaI4x4Pred: [Option<PGetLumaI4x4PredFunc>; I4_PRED_A],
     pub pfGetChromaPred: [Option<PGetChromaPredFunc>; C_PRED_A],
 
-    /// 1: for 16x16 square; 0: for 8x8 square
-    pub pfSampleSadHor8: [Option<PSampleSadHor8Func>; 2],
+    // `pfSampleSadHor8: [Option<PSampleSadHor8Func>; 2]` stood here — the
+    // screen-content SIMD horizontal-SAD pair. Zero writers and zero readers in
+    // the whole tree (the C++ fills it only from SSE4.1 kernels this port does
+    // not have). S18, session F step 0.
     pub pfMotionSearch: [Option<PMotionSearchFunc>; BLOCK_STATIC_IDC_ALL],
     pub pfSearchMethod: [Option<PSearchMethodFunc>; BLOCK_SIZE_ALL],
     pub pfCalculateSatd: Option<PCalculateSatdFunc>,
@@ -424,9 +426,11 @@ pub struct SWelsFuncPtrList {
     pub pfDequantization4x4: Option<PDeQuantization4x4Func>,
     pub pfDequantizationFour4x4: Option<PDeQuantizationFunc>,
     pub pfDequantizationIHadamard4x4: Option<PDeQuantizationHadamardFunc>,
-    pub pfIDctFourT4: Option<PIDctFunc>,
-    pub pfIDctT4: Option<PIDctFunc>,
-    pub pfIDctI16x16Dc: Option<PIDctFunc>,
+    // `pfIDctFourT4`/`pfIDctT4`/`pfIDctI16x16Dc` stood here — installed by
+    // `WelsInitReconstructionFuncs`, asserted `is_some()`, and never called
+    // (F138/F139): the reconstruction writes go through the seam's kernels
+    // directly since T9.C2. S18, session F step 0; the kernels stay (the
+    // differential tests drive them), only the write-only slots go.
 
     /* For Deblocking */
     pub pfDeblocking: DeblockingFunc,
@@ -502,7 +506,6 @@ impl Default for SWelsFuncPtrList {
             pfGetLumaI16x16Pred: [None; I16_PRED_DC_A],
             pfGetLumaI4x4Pred: [None; I4_PRED_A],
             pfGetChromaPred: [None; C_PRED_A],
-            pfSampleSadHor8: [None; 2],
             pfMotionSearch: [None; BLOCK_STATIC_IDC_ALL],
             pfSearchMethod: [None; BLOCK_SIZE_ALL],
             pfCalculateSatd: None,
@@ -538,9 +541,6 @@ impl Default for SWelsFuncPtrList {
             pfDequantization4x4: None,
             pfDequantizationFour4x4: None,
             pfDequantizationIHadamard4x4: None,
-            pfIDctFourT4: None,
-            pfIDctT4: None,
-            pfIDctI16x16Dc: None,
             pfDeblocking: DeblockingFunc::default(),
             pfSetNZCZero: None,
             pfRc: SWelsRcFunc::default(),
