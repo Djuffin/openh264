@@ -402,7 +402,7 @@ pub unsafe fn WriteBlockResidualCavlc(
 #[allow(unsafe_code)]
 pub unsafe fn WelsSpatialWriteMbPred(
     pEncCtx: *mut sWelsEncCtx,
-    pSlice: *mut SSlice,
+    pSlice: &mut SSlice,
     pCurMb: &mut SMB,
 ) {
     let pMbCache = &mut (*pSlice).sMbCacheInfo;
@@ -524,7 +524,7 @@ pub unsafe fn WelsSpatialWriteMbPred(
 #[allow(unsafe_code)]
 pub unsafe fn WelsSpatialWriteSubMbPred(
     pEncCtx: *mut sWelsEncCtx,
-    pSlice: *mut SSlice,
+    pSlice: &mut SSlice,
     pCurMb: &mut SMB,
 ) {
     let pMbCache = &mut (*pSlice).sMbCacheInfo;

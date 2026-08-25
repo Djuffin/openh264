@@ -3204,7 +3204,7 @@ pub unsafe fn WelsWriteSliceEndSyn(
 #[allow(unsafe_code)]
 pub unsafe fn AddSliceBoundary(
     pEncCtx: *mut sWelsEncCtx,
-    pCurSlice: *mut SSlice,
+    pCurSlice: &mut SSlice,
     pSliceCtx: *mut SSliceCtx,
     // **T9.D11**: this was `pCurMb: &SMB`, and the reference — not the read — was the
     // defect. A `&`/`&mut` *argument* is **strongly protected** for the whole call, and
@@ -3217,7 +3217,7 @@ pub unsafe fn AddSliceBoundary(
     iFirstMbIdxOfNextSlice: i32,
     kiLastMbIdxInPartition: i32,
 ) {
-    if pEncCtx.is_null() || pCurSlice.is_null() || pSliceCtx.is_null() {
+    if pEncCtx.is_null() || pSliceCtx.is_null() {
         return;
     }
     let pCurLayer = current_layer(pEncCtx);

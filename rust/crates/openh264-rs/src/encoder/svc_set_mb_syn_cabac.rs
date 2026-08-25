@@ -892,7 +892,7 @@ pub fn WelsCalNonZeroCount2x2Block(pBlock: &[i16; 4]) -> i32 {
 pub unsafe fn WelsWriteMbResidualCabac(
     buf: &mut [u8],
     pFuncList: &SWelsFuncPtrList,
-    pSlice: *mut SSlice,
+    pSlice: &mut SSlice,
     pCurMb: *mut SMB,
     iMbWidth: i16,
     uiChromaQpIndexOffset: u32,
@@ -907,8 +907,8 @@ pub unsafe fn WelsWriteMbResidualCabac(
         // made for, and the `(*pSlice)` accesses in between never overlap one.
         // `sMbCacheInfo` was already dead as a parameter — the old body re-derived
         // `pMbCache` from `pSlice` and never read the argument.
-        let pMbCache = std::ptr::addr_of_mut!((*pSlice).sMbCacheInfo);
-        let pCabacCtx = std::ptr::addr_of_mut!((*pSlice).sCabacCtx);
+        let pMbCache = &mut pSlice.sMbCacheInfo;
+        let pCabacCtx = &mut pSlice.sCabacCtx;
         let kpNonZeroCoeffCount = &(*pMbCache).iNonZeroCoeffCount;
         let pSliceHeadExt = &mut (*pSlice).sSliceHeaderExt;
         let iSliceFirstMbXY = pSliceHeadExt.sSliceHeader.iFirstMbInSlice;
@@ -1117,7 +1117,7 @@ pub unsafe fn WelsInitSliceCabac(
 #[allow(unsafe_code)]
 pub unsafe fn WelsSpatialWriteMbSynCabac(
     pEncCtx: *mut crate::encoder::encoder_context::sWelsEncCtx,
-    pSlice: *mut SSlice,
+    pSlice: &mut SSlice,
     pCurMb: *mut SMB,
 ) -> i32 {
     unsafe {
@@ -1127,8 +1127,8 @@ pub unsafe fn WelsSpatialWriteMbSynCabac(
         // does. Session E's rule, second application: derive from the state
         // that recorded the decision, not from the inputs to it.
         let buf = crate::encoder::svc_encode_slice::slice_bs_buffer(pEncCtx, std::ptr::addr_of_mut!((*pSlice).sSliceBs), (*pSlice).uiBufferIdx as usize);
-        let pCabacCtx = std::ptr::addr_of_mut!((*pSlice).sCabacCtx);
-        let pMbCache = std::ptr::addr_of_mut!((*pSlice).sMbCacheInfo);
+        let pCabacCtx = &mut pSlice.sCabacCtx;
+        let pMbCache = &mut pSlice.sMbCacheInfo;
         let uiMbType = (*pCurMb).uiMbType;
         let pSliceHeadExt = &mut (*pSlice).sSliceHeaderExt;
         let uiNumRefIdxL0Active = (pSliceHeadExt.sSliceHeader.uiNumRefIdxL0Active as i32) - 1;
