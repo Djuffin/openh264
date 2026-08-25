@@ -1896,10 +1896,10 @@ pub unsafe fn WelsIMbChromaEncode(pEncCtx: *mut sWelsEncCtx, pCurMb: &mut SMB, p
 
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
-pub unsafe fn WelsPMbChromaEncode(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSlice, pCurMb: &mut SMB) {
+pub unsafe fn WelsPMbChromaEncode(pEncCtx: *mut sWelsEncCtx, pSlice: &mut SSlice, pCurMb: &mut SMB) {
     let pCurLayer = current_layer(pEncCtx);
     let kiEncStride = (*pCurLayer).iEncStride[1];
-    let pMbCache = std::ptr::addr_of_mut!((*pSlice).sMbCacheInfo);
+    let pMbCache = &mut pSlice.sMbCacheInfo;
     // **T9.D6**, as in `WelsIMbChromaEncode` — but note the base: this one starts at
     // `pCoeffLevel + 256` (`svc_encode_slice.cpp:499`) where the intra path starts at
     // 0, which is why `WelsEncRecUV` takes the offset as a parameter rather than
@@ -1933,8 +1933,8 @@ pub unsafe fn WelsPMbChromaEncode(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSlice
 
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
-pub unsafe fn OutputPMbWithoutConstructCsRsNoCopy(pCtx: *mut sWelsEncCtx, pDq: *mut SDqLayer, pSlice: *mut SSlice, pMb: &SMB) {
-    if pCtx.is_null() || pDq.is_null() || pSlice.is_null() {
+pub unsafe fn OutputPMbWithoutConstructCsRsNoCopy(pCtx: *mut sWelsEncCtx, pDq: *mut SDqLayer, pSlice: &mut SSlice, pMb: &SMB) {
+    if pCtx.is_null() || pDq.is_null() {
         return;
     }
     let mb_type = (*pMb).uiMbType;
@@ -2332,7 +2332,7 @@ pub unsafe fn WelsISliceMdEncDynamic(pEncCtx: *mut sWelsEncCtx, pSlice: &mut SSl
 /// All three pointers must be valid, with `pCurMb`'s side arrays allocated.
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
-unsafe fn mb_dump(pCurMb: &SMB, pMd: &SWelsMD, pSlice: *const SSlice) {
+unsafe fn mb_dump(pCurMb: &SMB, pMd: &SWelsMD, pSlice: & SSlice) {
     if !crate::encoder::dump_enabled(&MB_DUMP, "OH264_MBDUMP") {
         return;
     }
@@ -3266,7 +3266,7 @@ pub unsafe fn AddSliceBoundary(
 #[allow(unsafe_code)]
 pub unsafe fn DynSlcJudgeSliceBoundaryStepBack(
     pEncCtx: *mut sWelsEncCtx,
-    pCurSlice: *mut SSlice,
+    pCurSlice: &mut SSlice,
     pSliceCtx: *mut SSliceCtx,
     // **T9.D11**, as `AddSliceBoundary` above: the body reads one field of the
     // macroblock, and a reference parameter would protect it across the

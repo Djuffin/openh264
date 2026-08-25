@@ -287,10 +287,10 @@ pub fn WELS_CLIP3(iX: i32, iMin: i32, iMax: i32) -> i32 {
 pub unsafe extern "C" fn WelsMdInterUpdatePskip(
     pEncCtx: *mut sWelsEncCtx,
     pCurDqLayer: *mut SDqLayer,
-    pSlice: *mut SSlice,
+    pSlice: &mut SSlice,
     pCurMb: &mut SMB,
 ) {
-    let pMbCache = std::ptr::addr_of_mut!((*pSlice).sMbCacheInfo);
+    let pMbCache = &mut pSlice.sMbCacheInfo;
     //add pEnc&rec to MD--2010.3.15
     (*pCurMb).uiCbp = 0;
     (*pCurMb).uiLumaQp = (*pSlice).uiLastMbQp;
@@ -1407,10 +1407,10 @@ pub unsafe extern "C" fn WelsMdP8x8(
 
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
-pub unsafe extern "C" fn WelsInterMbEncode(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSlice, pCurMb: &mut SMB) {
+pub unsafe extern "C" fn WelsInterMbEncode(pEncCtx: *mut sWelsEncCtx, pSlice: &mut SSlice, pCurMb: &mut SMB) {
     // Port-added guard deleted with the retyping: `svc_encode_slice.cpp:458` opens at
     // `SMbCache* pMbCache = &pSlice->sMbCacheInfo;` and checks nothing.
-    let pMbCache = std::ptr::addr_of_mut!((*pSlice).sMbCacheInfo);
+    let pMbCache = &mut pSlice.sMbCacheInfo;
     let pCurDqLayer = current_layer(pEncCtx);
     let pFuncList = ctx_func_list(pEncCtx);
     // T6.I1: the `|| pFuncList.is_null()` arm went with the raw table.

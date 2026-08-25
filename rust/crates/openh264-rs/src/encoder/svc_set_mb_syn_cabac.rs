@@ -1088,7 +1088,7 @@ pub unsafe fn WelsWriteMbResidualCabac(
 #[allow(unsafe_code)]
 pub unsafe fn WelsInitSliceCabac(
     pEncCtx: *mut crate::encoder::encoder_context::sWelsEncCtx,
-    pSlice: *mut SSlice,
+    pSlice: &mut SSlice,
 ) {
     unsafe {
         /* alignment needed */
