@@ -17654,3 +17654,161 @@ eleven-ish sites now — all shared-read in-fork; the accessor retires with the
 ctx family). `PerformDeblockingFilter` remains ctx-blocked as E2's report said.
 Phase 10 inherits the dormant search family on the new typedefs, with
 `SMeFuncs` as the install surface and no raw table anywhere in the path.
+
+## 2026-08-25 — Phase 9, session E3 (the macroblock grid closed at zero, the layer's picture views harvested, and G's ground pre-paid)
+
+Ten commits, `0186d622`..`0c9de7eb`, every one green on its gate and the close's
+session gate **PASS on the first run**. The user's standing gating directive
+held throughout: byte gates between commits (`family` after each grid commit,
+seven times), no Miri until the close, the full-drive fork pair not owed.
+
+**Step 0 (T9.E3a)** deleted `WelsDeblockingFilterMB` and `WelsGetFirstMbOfSlice`
+per S18 with the read greps quoted at the deletion sites — and filed **F153**,
+because the F84 row the brief inherited is stale in two of its three claims.
+`WelsDecodeAndConstructSlice` is *not* deletable: T7.C7 kept it and fenced it
+behind `DECODER_MT(incomplete: F36)`, with two tests driving the wrapper, so
+deleting it would reverse a recorded decision. The 18 `MBPad*`/`PadMB*` kernels
+were never ported (`grep -rn 'MBPad\|PadMB' src` → 0) — the "18 kernels only
+they reach" described the C++, not the port. One deletable function, not two.
+`WelsGetFirstMbOfSlice` is the cleaner story the row folded in beside it: dead
+in **both** trees, defined at `svc_enc_slice_segment.cpp:540` and called by
+nothing.
+
+**The grid (T9.E3b–T9.E3g), the session's core, landed whole.** The shape is
+`MbWindow<'a, T>` in `safe/mb_grid.rs` — a borrowed range of one grid, a stride,
+and a current raster index, which is what all 34 walkers actually share ("grid
+root + my index + a neighbour question"). It is generic, so the module keeps
+depending on nothing and keeps `#![forbid(unsafe_code)]`. Designed against the
+callers rather than copied from the decoder's `MbArray`: the decoder owns its
+grid and indexes it; the encoder's problem was never indexing, it was that a
+worker holds a *range* and asks about neighbours inside it.
+
+**Why the fork cannot misuse it**: a window's bounds are the disjointness. Each
+worker mints over exactly the records it owns — its slice's range for the MD and
+entropy paths (whose neighbour reads are already guarded by the slice-scoped
+`uiNeighborAvail`), its partition's for the dynamic list walker, its own slice
+for the parallel neighbour update — so a cross-slice record read does not race,
+it **panics with coordinates** (F77's instrument shape, `#[track_caller]`, the
+message naming the question, the window and the stride). Single-threaded callers
+mint the whole grid and the same accessors cross freely; that asymmetry is
+exactly the ST frame deblocking walk under filter idc 0.
+
+Three representative callers, as the brief asked:
+* **A cabac walker** — `WelsCabacMbCbp` read `(*pCurMb.offset(-1)).uiCbp` under
+  `LEFT_MB_POS`; it now reads `mbs.left().uiCbp`, loses its `iMbWidth`
+  parameter (the window carries the stride) and loses `unsafe` entirely.
+  `WelsCabacMbDeltaQp` is the interesting one: its neighbour is the *previously
+  coded* record, which at a row start is the previous row's last macroblock —
+  raster order, not geometry — so it takes `MbWindow::prev`, where `left` would
+  rightly panic.
+* **A deblocking BS walk** — `DeblockingBSCalc_c` took `(pCurMb, iMbStride,
+  iLeftFlag, iTopFlag)` and offset out of the record; it takes the window,
+  drops the stride parameter, and reads `mbs.left()`/`mbs.top()` under the same
+  guards. The in-fork slice driver mints per macroblock over
+  `[iFirstMbInSlice .. cur]` when `uiFilterIdc == 1` (F142's in-fork state);
+  the ST frame driver holds one whole-grid window and `set_cur`s down it.
+* **An MD site** — `WelsMdInterMb`'s four `IS_SKIP(...)` availability probes
+  were a `wrapping_offset` preamble plus four derefs (F14's shape, kept legal
+  by spelling); they are four checked accessor calls, and the preamble is gone.
+  Its driver `WelsMdInterMbLoop` mints one window per macroblock iteration and
+  every record touch in the loop — RC init and update, the cache update, the
+  entropy call, the QP-overflow re-encode, the `uiSliceIdc` stamp — reborrows
+  through it.
+
+Two cross-family carriers retyped their SMB half only, per S52: `PInterMdFunc`
+and `EntropyCoder::WelsSpatialWriteMbSyn` both keep `*mut sWelsEncCtx` (G's).
+The cross-layer read is the one place a window was the wrong answer:
+`GetRefMb` returns the base layer's record **by value** (`SMB` is `Copy`)
+through `MbArray`'s checked indexing — the base layer is quiescent when its
+enhancement layer encodes, and the raw hand-out it replaced carried whole-array
+provenance for a walk nobody performed.
+
+Falling out of the closure, unplanned and worth naming: **nine CABAC syntax
+functions and the eight arithmetic-engine primitives went fully safe**. The
+engine pair (`WelsCabacEncodeDecision` and friends) had been `unsafe fn` by
+vestige alone — safe signatures, safe bodies, `# Safety` clauses describing
+pointers that became references phases ago. That is the charter's body-only
+class (§2) doing what it promised.
+
+**F154** files what the brief's grep could not see: three `*const SMB`
+parameters, one raw `-> *mut SMB` return, and a zero-user `pub type PMb = *mut
+SMB`. A family scoped by one pointer spelling is scoped by a grep, not by the
+relationship. The session's exit condition became `grep -rn '\*mut SMB\|\*const
+SMB' src tests benches` → **0**, which it reads today.
+
+**The planted faults, and F155.** The first deblocking fault skewed the **QP
+average** one macroblock right and came back **st 210/210, dl 76/76 — zero
+rows**. Not a coverage gap: QP is assigned per GOM row, so the "wrong"
+neighbour holds the same QP and the average is unchanged. Re-planted at the
+**BS-calc top record** — `uiMbType`/`iNonZeroCount`/`sMv`, genuinely
+per-macroblock — the same skew fails **st 180/210 and dl 76/76**. S59's law one
+level down, at the field: a planted fault proves coverage of the field it
+perturbs, not of the site. Two earlier "fault" runs were also void and are
+recorded as such: `sweep.sh` does **not** rebuild the diffharness driver (its own
+workspace; `build.sh` does), so a hand-run probe must run the battery's
+build-and-run pair, not half of it.
+
+**The harvest (T9.E3h)** deleted both `SDqLayer` picture views, and **F156** is
+why it was smaller and larger than the brief said. `sDecPicView` had **zero
+readers** — four mentions, all writes, write-only since the seam took the
+reconstruction path in T9.C2/C4; a write-only struct *field*, F139's write-only
+slot class one container over, invisible to the compiler for F129's reason.
+`sRefPicView`'s 23 re-route per call through `layer_ref_pic`. What made that
+legal in-fork is two new `&self` root mints — `PaddedPlane::root_ptr_shared` and
+`SPicture::data_ptr_shared` — carrying F71's argument across from `MbArray`:
+the `&mut` forms are whole-picture exclusive retags, which is *why* T6.F5
+stamped the copies, and reading the buffer pointer out through a shared borrow
+makes concurrent resolutions siblings. `SRefPicView`, `SPicture::view()` and
+`StampLayerPictureViews` all delete together; the dormant Phase-10 pointer gets
+a named tagged home (`layer_ref_feature_storage`) rather than smuggling the
+struct back. `assert_size!(SDqLayer)` re-pinned 1008/936 → **880/808** in the
+same commit (S36 — the assertion fired, which is the instrument working).
+
+The harvest's own planted fault repeats F155's lesson from the other side: the
+reference **luma origin +1** passes st 210/210, because the `pRefMb` triple's
+only reader is `SvcMdSCDMbEnc`, which F125 measured dark. The live re-routed
+read is the `iPictureType` guard, and inverting it fails **st 180/210**.
+
+**The tag sweep (T9.E3i)** retired `ctx_pic_ref_mut`, whose last callers went in
+session F. Same command at both ends: port-raw **574 → 545**, cursor **42 → 40**,
+C-ABI 50 → 51 and `SCREEN_CONTENT(dormant)` 18 → 19 (the two items this session
+tagged: the test's boundary wrapper and the dormant pointer's accessor).
+
+**G's ground-laying landed whole, and both steps are calibrated.** `q1c.py`
+gains **shape E** — F148.3's class, a body whose `&mut T` parameter is a
+protector while it *reads* the same object through an independent accessor path,
+with no `&mut` minted anywhere for shape D's closure to find. Nullness tests are
+not accesses, so the report points at the deref rather than the guard above it.
+At `020dfb0a^` it reports **exactly one** site, `WelsUpdateSliceHeaderSyntax`,
+param `pCurDq` at `ref_list_mgr_svc.rs:1167`, read at `:1176` — line for line
+what Miri named; at HEAD, 0. At `0bfc7687^` the older shapes are untouched,
+proven by running the before- and after-tools side by side on one tree: C =
+F114a's four bodies, D = F114b's two, identical.
+
+The **S63 fork-split census** is a tool now (`phase9_forksplit.py`) rather than
+E2's hand-count, and **F157** records why that mattered: its first honest run
+said 27 of 268 bodies in-fork with mode decision at *zero*, because the encoder
+reaches MD through a **static array of function items** (`g_pWelsSliceCoding`),
+not through a `pf` slot. With that arm the split is **111 in-fork / 157
+ST-flippable**, calibrated by knocking the dispatch arms out (27 vs 111) and
+spot-checked with `--why`. The census document
+(`rust/docs/phase9_ctx_forksplit.md`) reconciles its 268 bodies against the
+charter's 285 grep mentions (13 typedef mentions, 4 second-parameter/`*mut
+*mut` spellings) and states the unit: fork-reachability is a property of a
+body, not of a token. **Zero ctx conversions**, per the brief.
+
+**S58's respelling duty** was paid in the commits that incurred it:
+`phase9_plane_callers.py` learned the harvest's spellings
+(`layer_ref_pic`/`pRefPicture`/`data_ptr_shared`) in T9.E3h itself, and its
+table is unchanged at 27 sites / 0 unclassified — so no row left the census by
+relocation. The main census regenerates at **569 Phase-9 tags**.
+
+**Close**: `MIRI_SCOPE=encoder gates.sh session` **PASS, first run** — 583/583
+both profiles, tests 560/553, Miri **291 passed / 0 failed** across four shards,
+whole battery **8:56**. S61: Miri lane wall **536 s** against session F's
+**528 s**, ratio **1.02** — lane-vs-lane, well inside the 1.3x tripwire; the
+baseline file is updated. Ratchet across the session: `raw_ptr` **−63**,
+`unsafe_fn` **−32**, `unsafe_block` **−6**, with two rebaselines whose reasons
+are in their commits (the grid mint's shared helper; the harvest's covering
+test and the shared root's two spellings — S16's instrument class both times).
+Findings **F153–F158**.
