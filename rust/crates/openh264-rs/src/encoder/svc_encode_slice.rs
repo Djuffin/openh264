@@ -53,7 +53,7 @@ use crate::encoder::decode_mb_aux::{
 };
 use crate::encoder::encode_mb_aux::{blk_four4x4, blk_mb256};
 use std::sync::atomic::{AtomicU16, Ordering};
-use crate::encoder::picture::{PicRef, RecPicId, SPicture, SRefPicView, SrcPicId};
+use crate::encoder::picture::{PicRef, RecPicId, SPicture, SrcPicId};
 use std::ffi::c_char;
 use crate::{
     SliceMode, SFrameBSInfo, SLayerBSInfo, SSliceArgument,
@@ -975,6 +975,27 @@ pub unsafe fn layer_ref_pic<'a>(pLayer: *mut SDqLayer) -> Option<&'a SPicture> {
     Some((*pRefList).pic(id))
 }
 
+/// The reference picture's screen-content feature storage, resolved per call —
+/// **the dormant Phase-10 pointer's home** after the `sRefPicView` harvest
+/// (E3): the pointer lives on `SPicture` and this is the one place the
+/// per-frame stamped copy of it is re-derived. Null exactly where the stamped
+/// default was null: no reference bound, or no list.
+///
+/// # Safety
+/// `pLayer` must be a live layer.
+#[inline]
+// unsafe-cat: SCREEN_CONTENT(dormant: Phase 10) — the pointer it hands out; the raw
+// layer parameter is the S63 seam (G's)
+#[allow(unsafe_code)]
+pub unsafe fn layer_ref_feature_storage(
+    pLayer: *mut SDqLayer,
+) -> *mut crate::encoder::picture::SScreenBlockFeatureStorage {
+    match layer_ref_pic(pLayer) {
+        Some(p) => p.pScreenBlockFeatureStorage,
+        None => std::ptr::null_mut(),
+    }
+}
+
 /// The **source** picture this layer encodes from, resolved through the spatial pool
 /// the layer was stamped with — the [`layer_ref_pic`] of the source half (T9.B21).
 ///
@@ -1146,13 +1167,14 @@ pub struct SDqLayer {
     /// rebuilds it every frame, and nothing may read a view built for a frame
     /// that has ended.
     pub pRecView: Option<crate::encoder::rec_view::RecPicView>,
-    /// The two pictures above **as this frame sees them** — plane roots, strides and
-    /// picture type, stamped once by `WelsInitCurrentLayer` (T6.F5). The handles are
-    /// still the truth; these are the per-macroblock world's read path, and they are
-    /// `pEncData`/`pCsData`'s own treatment applied to the other two pictures. See
-    /// [`SRefPicView`].
-    pub sRefPicView: SRefPicView,
-    pub sDecPicView: SRefPicView,
+    // `sRefPicView` and `sDecPicView` stood here — T6.F5's per-frame stamped
+    // copies of the two pictures' plane roots/strides/type. Phase 9 E3's harvest:
+    // `sDecPicView` had **zero readers** (write-only since the seam took the
+    // reconstruction writes, T9.C2); `sRefPicView`'s readers resolve the picture
+    // per call through [`layer_ref_pic`] instead (`SPicture::data_ptr_shared`,
+    // `stride`, `iPictureType`, and [`layer_ref_feature_storage`] for the
+    // dormant Phase-10 pointer). The stamp (`StampLayerPictureViews`) died with
+    // the fields.
     /// The *source* pictures behind the reference list — slots of the preprocessor's
     /// spatial pool, resolved through `pCtx->pVpp` (both readers hold the context).
     pub pRefOri: [Option<PicRef>; MAX_REF_PIC_COUNT as usize],
@@ -1247,8 +1269,6 @@ impl SDqLayer {
             pDecPic: None,
             pEncPic: None,
             pSrcPool: std::ptr::null_mut(),
-            sRefPicView: SRefPicView::default(),
-            sDecPicView: SRefPicView::default(),
             pRefOri: [None; MAX_REF_PIC_COUNT as usize],
             // Both are `iMultipleThreadIdc > 1` predicates that `InitSliceInLayer`
             // computes; false is the single-threaded answer and the honest default.

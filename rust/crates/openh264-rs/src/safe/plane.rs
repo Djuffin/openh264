@@ -269,6 +269,22 @@ impl PaddedPlane {
         self.buf.as_mut_ptr()
     }
 
+    /// The same root, reached through `&self` — **F71's shape for the picture
+    /// pool** (Phase 9 E3, the `sRefPicView` harvest).
+    ///
+    /// [`root_ptr`](Self::root_ptr) is sound for one thread and wrong under the
+    /// fork: `&mut self` is a `Unique` retag over the plane's own header words,
+    /// and every worker resolves the same reference picture per call
+    /// (`layer_ref_pic`), so two of them retagging it at once is a data race
+    /// even though neither writes the header. This reads the buffer pointer out
+    /// through a shared borrow instead — identical address, the buffer's own
+    /// whole-allocation provenance, no exclusive claim on the container. See
+    /// `MbArray::root_ptr` for the argument's first application.
+    #[inline]
+    pub fn root_ptr_shared(&self) -> *mut u8 {
+        self.buf.as_ptr() as *mut u8
+    }
+
     /// Sample at logical `(x, y)`; negative coordinates read the padding.
     #[inline]
     pub fn at(&self, x: isize, y: isize) -> u8 {
