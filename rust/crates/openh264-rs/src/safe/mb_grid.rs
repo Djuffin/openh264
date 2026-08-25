@@ -342,6 +342,229 @@ impl<T> MbArray<T> {
     }
 }
 
+/// A borrowed window of per-macroblock records — the **encoder's neighbour-walk
+/// answer** (Phase 9 session E3), sibling to [`MbArray`] the way a slice is
+/// sibling to a `Vec`.
+///
+/// The encoder's per-macroblock consumers were raw-`SMB`-pointer walkers: handed the
+/// current record's address, they stepped `offset(-1)` for the left neighbour and
+/// `offset(-stride)` for the one above, so the pointer had to carry the whole
+/// array's provenance (S28) and none of them could take `&mut SMB` (F112). What
+/// every one of them actually shares is *grid root + my index + a neighbour
+/// question* — this type is exactly that and nothing else. It is generic so this
+/// module keeps depending on nothing; the encoder instantiates it at its `SMB`.
+///
+/// # The window is the fork-safety argument
+///
+/// Under the multi-threaded fork each worker's record accesses are confined to
+/// the records it owns — its slice's range (fixed slicing, and the mode-decision
+/// and entropy paths generally, whose neighbour reads are guarded by the
+/// slice-scoped `uiNeighborAvail` flags) or its partition's (dynamic slicing);
+/// deblocking's in-fork guards ask the atomic `pOverallMbMap` the same-slice
+/// question (T9.E4, F142). A window is minted per call over exactly the owned
+/// range, so disjointness is enforced mechanically: an access that would leave
+/// the window — a cross-slice record read under the fork — **panics with
+/// coordinates instead of racing**. Single-threaded callers mint the whole grid
+/// and the same accessors cross slice boundaries freely (the frame deblocking
+/// walk under filter idc 0).
+///
+/// # Panics are the instrument (F77)
+///
+/// Every accessor is `#[track_caller]` and its message names the question, the
+/// current index, the window and the stride, so a wrong availability flag or a
+/// wrong window range says *which* neighbour question failed and where — not
+/// "index out of bounds" three frames down.
+pub struct MbWindow<'a, T> {
+    /// Records `[base .. base + mbs.len())` of one grid, in raster order.
+    mbs: &'a mut [T],
+    /// Raster address of `mbs[0]`.
+    base: usize,
+    /// Macroblocks per row — the grid's `iMbWidth`, shared by every window of it.
+    stride: usize,
+    /// Raster address of the current macroblock.
+    cur: usize,
+}
+
+impl<'a, T> MbWindow<'a, T> {
+    /// A window over `mbs`, which are records `base..` of a grid `stride` wide,
+    /// with the current macroblock at raster address `cur`.
+    ///
+    /// # Panics
+    /// If `stride` is zero, or `cur` is outside the window.
+    #[track_caller]
+    pub fn new(mbs: &'a mut [T], base: usize, stride: usize, cur: usize) -> Self {
+        assert!(stride > 0, "macroblock window over a zero-width grid");
+        assert!(
+            cur >= base && cur - base < mbs.len(),
+            "current mb {cur} outside window [{base}..{}) (stride {stride})",
+            base + mbs.len()
+        );
+        Self { mbs, base, stride, cur }
+    }
+
+    /// The whole of `arr` as one window, current macroblock at `cur` — the
+    /// single-threaded mint, where one owner holds the grid and every neighbour
+    /// on it is legal.
+    #[track_caller]
+    pub fn whole(arr: &'a mut MbArray<T>, cur: usize) -> Self {
+        let stride = arr.dims().mb_width();
+        Self::new(arr.as_mut_slice(), 0, stride, cur)
+    }
+
+    /// Raster address of the current macroblock.
+    #[inline]
+    pub fn cur_xy(&self) -> usize {
+        self.cur
+    }
+
+    /// Macroblocks per row.
+    #[inline]
+    pub fn stride(&self) -> usize {
+        self.stride
+    }
+
+    /// Move the current macroblock to raster address `cur`.
+    ///
+    /// # Panics
+    /// If `cur` is outside the window.
+    #[inline]
+    #[track_caller]
+    pub fn set_cur(&mut self, cur: usize) {
+        assert!(
+            cur >= self.base && cur - self.base < self.mbs.len(),
+            "current mb {cur} outside window [{}..{}) (stride {})",
+            self.base,
+            self.base + self.mbs.len(),
+            self.stride
+        );
+        self.cur = cur;
+    }
+
+    /// `xy` relative to the window, with the F77-grade message on a miss.
+    #[inline]
+    #[track_caller]
+    fn rel(&self, xy: usize, what: &'static str) -> usize {
+        assert!(
+            xy >= self.base && xy - self.base < self.mbs.len(),
+            "{what} of mb {} is mb {xy}, outside window [{}..{}) (stride {})",
+            self.cur,
+            self.base,
+            self.base + self.mbs.len(),
+            self.stride
+        );
+        xy - self.base
+    }
+
+    /// The current macroblock's record.
+    #[inline]
+    pub fn cur(&self) -> &T {
+        &self.mbs[self.cur - self.base]
+    }
+
+    /// Mutable form of [`cur`](Self::cur).
+    #[inline]
+    pub fn cur_mut(&mut self) -> &mut T {
+        &mut self.mbs[self.cur - self.base]
+    }
+
+    /// The record at raster address `xy` — for the list walkers; neighbour
+    /// questions read better through the named accessors below.
+    #[inline]
+    #[track_caller]
+    pub fn at(&self, xy: usize) -> &T {
+        let i = self.rel(xy, "record");
+        &self.mbs[i]
+    }
+
+    /// Mutable form of [`at`](Self::at).
+    #[inline]
+    #[track_caller]
+    pub fn at_mut(&mut self, xy: usize) -> &mut T {
+        let i = self.rel(xy, "record");
+        &mut self.mbs[i]
+    }
+
+    /// The left neighbour's record. The caller has already checked its
+    /// availability flag — a panic here means the flag and the geometry
+    /// disagree, which is exactly what it should say.
+    ///
+    /// # Panics
+    /// At the left grid edge, or if `cur - 1` is outside the window.
+    #[inline]
+    #[track_caller]
+    pub fn left(&self) -> &T {
+        assert!(
+            self.cur % self.stride != 0,
+            "left of mb {} at the left grid edge (stride {})",
+            self.cur,
+            self.stride
+        );
+        let i = self.rel(self.cur - 1, "left");
+        &self.mbs[i]
+    }
+
+    /// The record above. See [`left`](Self::left) for the contract.
+    ///
+    /// # Panics
+    /// In the top grid row, or if `cur - stride` is outside the window.
+    #[inline]
+    #[track_caller]
+    pub fn top(&self) -> &T {
+        assert!(
+            self.cur >= self.stride,
+            "top of mb {} in the top grid row (stride {})",
+            self.cur,
+            self.stride
+        );
+        let i = self.rel(self.cur - self.stride, "top");
+        &self.mbs[i]
+    }
+
+    /// The record above-left. See [`left`](Self::left) for the contract.
+    #[inline]
+    #[track_caller]
+    pub fn top_left(&self) -> &T {
+        assert!(
+            self.cur >= self.stride && self.cur % self.stride != 0,
+            "top-left of mb {} at a grid edge (stride {})",
+            self.cur,
+            self.stride
+        );
+        let i = self.rel(self.cur - self.stride - 1, "top-left");
+        &self.mbs[i]
+    }
+
+    /// The record above-right. See [`left`](Self::left) for the contract.
+    #[inline]
+    #[track_caller]
+    pub fn top_right(&self) -> &T {
+        assert!(
+            self.cur >= self.stride && (self.cur + 1) % self.stride != 0,
+            "top-right of mb {} at a grid edge (stride {})",
+            self.cur,
+            self.stride
+        );
+        let i = self.rel(self.cur - self.stride + 1, "top-right");
+        &self.mbs[i]
+    }
+
+    /// The record before the current one in **coding order** — the CABAC
+    /// delta-QP question ("the previously coded macroblock"), which is raster
+    /// order within a slice and *not* a geometric neighbour: at a row start it
+    /// names the previous row's last record, where [`left`](Self::left) would
+    /// rightly panic.
+    ///
+    /// # Panics
+    /// If `cur - 1` is outside the window (the caller has already checked
+    /// "not the first macroblock of the slice").
+    #[inline]
+    #[track_caller]
+    pub fn prev(&self) -> &T {
+        let i = self.rel(self.cur.wrapping_sub(1), "prev-in-coding-order");
+        &self.mbs[i]
+    }
+}
+
 /// Reference lists per macroblock — the decoder's `LIST_A`.
 ///
 /// Declared here rather than imported so this module keeps depending on nothing.
@@ -492,6 +715,88 @@ mod f77_instrument_tests {
             .cloned()
             .unwrap_or_else(|| String::from("<not a String>"));
         assert_eq!(text, "mb_xy 400 >= 396 (grid 22x18)");
+    }
+}
+
+#[cfg(test)]
+mod mb_window_tests {
+    use super::*;
+
+    /// A 4x3 grid whose records are their own raster addresses.
+    fn grid() -> MbArray<usize> {
+        let dims = MbDims::new(4, 3);
+        MbArray::from_vec((0..dims.count()).collect(), dims)
+    }
+
+    #[test]
+    fn a_whole_window_answers_every_neighbour_the_grid_has() {
+        let mut a = grid();
+        let mut w = MbWindow::whole(&mut a, 6); // row 1, col 2: all four present
+        assert_eq!((*w.cur(), *w.left(), *w.top(), *w.top_left(), *w.top_right()), (6, 5, 2, 1, 3));
+        w.set_cur(9);
+        assert_eq!((*w.cur(), *w.top_right()), (9, 6));
+        *w.cur_mut() = 99;
+        assert_eq!(*w.at(9), 99);
+        *w.at_mut(9) = 9;
+        assert_eq!(*w.cur(), 9);
+    }
+
+    /// The encoder's sub-range mint: a slice's records only, base > 0.
+    #[test]
+    fn a_sub_window_is_addressed_by_raster_indices_not_window_offsets() {
+        let mut a = grid();
+        let base = 5;
+        let w = MbWindow::new(&mut a.as_mut_slice()[base..9], base, 4, 6);
+        assert_eq!((*w.cur(), *w.left()), (6, 5));
+        assert_eq!(*w.at(8), 8);
+    }
+
+    /// Delta-QP's "previously coded" record at a row start is the previous
+    /// row's *last* record — `prev` answers it and `left` refuses it.
+    #[test]
+    fn prev_is_coding_order_not_geometry() {
+        let mut a = grid();
+        let w = MbWindow::whole(&mut a, 4); // row 1, col 0
+        assert_eq!(*w.prev(), 3);
+    }
+
+    #[test]
+    #[should_panic(expected = "left of mb 4 at the left grid edge (stride 4)")]
+    fn left_at_the_grid_edge_names_the_question() {
+        let mut a = grid();
+        let _ = MbWindow::whole(&mut a, 4).left();
+    }
+
+    #[test]
+    #[should_panic(expected = "top of mb 2 in the top grid row (stride 4)")]
+    fn top_in_the_top_row_names_the_question() {
+        let mut a = grid();
+        let _ = MbWindow::whole(&mut a, 2).top();
+    }
+
+    /// The fork-safety tooth: a same-slice-guarded walker that steps outside
+    /// its own window aborts with the window's coordinates (F77's message
+    /// shape), instead of reading another worker's record.
+    #[test]
+    #[should_panic(expected = "top of mb 6 is mb 2, outside window [5..9) (stride 4)")]
+    fn an_out_of_window_neighbour_read_names_window_and_question() {
+        let mut a = grid();
+        let w = MbWindow::new(&mut a.as_mut_slice()[5..9], 5, 4, 6);
+        let _ = w.top();
+    }
+
+    #[test]
+    #[should_panic(expected = "current mb 9 outside window [5..9) (stride 4)")]
+    fn set_cur_refuses_an_index_outside_the_window() {
+        let mut a = grid();
+        MbWindow::new(&mut a.as_mut_slice()[5..9], 5, 4, 6).set_cur(9);
+    }
+
+    #[test]
+    #[should_panic(expected = "top-right of mb 7 at a grid edge (stride 4)")]
+    fn top_right_at_the_right_edge_names_the_question() {
+        let mut a = grid();
+        let _ = MbWindow::whole(&mut a, 7).top_right();
     }
 }
 
