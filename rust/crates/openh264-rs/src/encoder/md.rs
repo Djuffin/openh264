@@ -267,19 +267,13 @@ pub type PWelsLumaHalfpelMcFunc = unsafe extern "C" fn(
 /// the slot's index (`BLOCK_16x16` ..), exactly as it was for the raw kernels.
 pub type PSampleSadSatdCostFunc = fn(&PlaneCursor<'_>, &PlaneCursor<'_>) -> i32;
 
-/// The **raw** shape the slot had before T9.B25 — `(pSample1, iStride1, pSample2,
-/// iStride2)`, `uint8_t*` in the C++. **Transitional** (S20's F118 clause): a
-/// `PlaneCursor` cannot feed a raw slot and a raw pointer cannot feed a safe one, so
-/// while the plane-family campaign converts the callers function by function the
-/// table carries both shapes, installed from the same `WelsInitSampleSadFunc` — the
-/// `*Raw` arrays, `md_cost_raw`/`me_cost_raw`, and this alias are deleted the commit
-/// the last raw reader converts, and `SSampleDealingFunc` goes back to 176 bytes.
-pub type PSampleSadSatdCostFuncRaw = unsafe extern "C" fn(
-    pSample1: *mut u8,
-    iStride1: i32,
-    pSample2: *mut u8,
-    iStride2: i32,
-) -> i32;
+// `PSampleSadSatdCostFuncRaw` stood here — T9.B25's transitional raw slot
+// shape, kept while the plane campaign converted the cost readers one
+// function at a time. Session F converted the last of them (the ME family in
+// T9.F1b, the chroma-check and SCD readers in T9.F2a), so the alias, the
+// `*Raw` arrays, the dead `md_cost_raw`/`me_cost_raw` accessors and the
+// fourteen raw SAD shims are deleted exactly as this comment always promised,
+// and `SSampleDealingFunc` is back to 176 bytes.
 
 /// The four fractional-pixel refinement planes, as **offsets** into the one buffer
 /// they all point into.
@@ -717,7 +711,7 @@ use crate::common::mc::{mc_hor_ver02, mc_hor_ver20, mc_hor_ver22, pixel_avg};
 pub use crate::encoder::encoder_context::SPicData;
 pub use crate::encoder::encoder_context::SDCTCoeff;
 pub use crate::encoder::encoder_context::BLOCK_SIZE_ALL;
-pub use crate::encoder::svc_motion_estimate::{PSample4SadCostFunc, PSample4SadCostFuncRaw};
+pub use crate::encoder::svc_motion_estimate::PSample4SadCostFunc;
 use crate::safe::plane::{PlaneCursor, PlaneCursorMut};
 pub use crate::encoder::svc_encode_slice::SDqLayer;
 pub use crate::encoder::wels_func_ptr_def::SWelsFuncPtrList;
@@ -758,12 +752,9 @@ pub struct SSampleDealingFunc {
     pub pfSampleSad: [Option<PSampleSadSatdCostFunc>; BLOCK_SIZE_ALL],
     pub pfSampleSatd: [Option<PSampleSadSatdCostFunc>; BLOCK_SIZE_ALL],
     pub pfSample4Sad: [Option<PSample4SadCostFunc>; BLOCK_SIZE_ALL],
-    /// Transitional (T9.B25) — the raw `(ptr, stride, ptr, stride)` SAD table.
-    pub pfSampleSadRaw: [Option<PSampleSadSatdCostFuncRaw>; BLOCK_SIZE_ALL],
-    /// Transitional (T9.B25) — the raw SATD table.
-    pub pfSampleSatdRaw: [Option<PSampleSadSatdCostFuncRaw>; BLOCK_SIZE_ALL],
-    /// Transitional (T9.B25) — the raw four-candidate SAD table.
-    pub pfSample4SadRaw: [Option<PSample4SadCostFuncRaw>; BLOCK_SIZE_ALL],
+    // T9.B25's transitional raw triple (`pfSampleSadRaw`/`pfSampleSatdRaw`/
+    // `pfSample4SadRaw`) stood here; deleted in session F with its last
+    // readers, per its own charter.
     // The five `pfIntra*Combined3*Satd`/`Sad` slots and the three
     // `pfIntra*Combined3` they were copied into were here, all eight
     // `*mut c_void`. The C++ leaves them NULL on every target this port builds
@@ -791,9 +782,6 @@ impl Default for SSampleDealingFunc {
             pfSampleSad: [None; BLOCK_SIZE_ALL],
             pfSampleSatd: [None; BLOCK_SIZE_ALL],
             pfSample4Sad: [None; BLOCK_SIZE_ALL],
-            pfSampleSadRaw: [None; BLOCK_SIZE_ALL],
-            pfSampleSatdRaw: [None; BLOCK_SIZE_ALL],
-            pfSample4SadRaw: [None; BLOCK_SIZE_ALL],
             pfMdCost: CostFamily::Unset,
             pfMeCost: CostFamily::Unset,
         }
@@ -831,27 +819,11 @@ impl SSampleDealingFunc {
         }
     }
 
-    /// [`md_cost`](Self::md_cost) over the transitional raw tables (T9.B25). Deleted
-    /// with them.
-    #[inline(always)]
-    pub fn md_cost_raw(&self, block: usize) -> Option<PSampleSadSatdCostFuncRaw> {
-        match self.pfMdCost {
-            CostFamily::Sad => self.pfSampleSadRaw[block],
-            CostFamily::Satd => self.pfSampleSatdRaw[block],
-            CostFamily::Unset => None,
-        }
-    }
-
-    /// [`me_cost`](Self::me_cost) over the transitional raw tables (T9.B25). Deleted
-    /// with them.
-    #[inline(always)]
-    pub fn me_cost_raw(&self, block: usize) -> Option<PSampleSadSatdCostFuncRaw> {
-        match self.pfMeCost {
-            CostFamily::Sad => self.pfSampleSadRaw[block],
-            CostFamily::Satd => self.pfSampleSatdRaw[block],
-            CostFamily::Unset => None,
-        }
-    }
+    // `md_cost_raw`/`me_cost_raw` stood here — the transitional accessors over
+    // the raw triple. At deletion (session F) they had **zero callers anywhere
+    // in the tree**: every runtime-selected cost site went through the safe
+    // `md_cost`/`me_cost` from the moment B2-B3 flipped it, so the raw pair
+    // was dead the day it was written.
 }
 
 

@@ -220,7 +220,7 @@ pub struct SVAAFrameInfoExt_t {
 // wels_func_ptr_def.h:127 takes uint8_t*, not const uint8_t*; this module's own
 // alias had it const, which made it a distinct function type from the one the
 // SSampleDealingFunc tables actually hold.
-pub use crate::encoder::md::{PSampleSadSatdCostFunc, PSampleSadSatdCostFuncRaw};
+pub use crate::encoder::md::PSampleSadSatdCostFunc;
 
 // `SSampleDealingFuncs` (trailing `s`) used to be declared here: a dead, truncated
 // rename of the canonical `md::SSampleDealingFunc`. Removed — the canonical type is

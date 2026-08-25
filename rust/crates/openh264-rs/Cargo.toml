@@ -23,9 +23,12 @@ harness = false
 name = "decode_1080p_bench"
 harness = false
 
-[[bench]]
-name = "sad_bodies_bench"
-harness = false
+# `sad_bodies_bench` stood here — Phase 4a's raw-vs-safe body-cost instrument
+# for the parked SAD/SATD families. Session F retired the raw bodies with
+# T9.B25's transitional tables (the swap it existed to price landed
+# byte-identically across B2..F), so its question is closed and its raw side
+# is gone; the bench's own header says a retrospective rebuilds it from git.
+# The phase-exit perf position is D-perf-4's instrument (c_vs_rust_bench).
 
 # `cargo test` in debug was spending minutes decoding a handful of large assets:
 # `test_asset_vid_1280x720_cabac_temporal_direct` alone ran **62.3s**, and the six

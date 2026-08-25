@@ -285,8 +285,9 @@ pub struct SFeatureSearchOut {
 // and `census_allowlist.txt` carried the pair as `alias PSampleSadSatdCostFunc x2`.
 // **T9.B25**: one declaration, in `md.rs`, re-exported here — the slot type is
 // safe now and a second spelling of it is exactly the divergence the census exists
-// to catch (the allowlist entry retires with the duplicate).
-pub use crate::encoder::md::{PSampleSadSatdCostFunc, PSampleSadSatdCostFuncRaw};
+// to catch (the allowlist entry retires with the duplicate). The `*Raw` alias
+// went with the transitional triple (session F).
+pub use crate::encoder::md::PSampleSadSatdCostFunc;
 
 /// `PSample4SadCostFunc` — the four-candidate SAD the diamond search steps with:
 /// `sample1`'s block against `sample2`'s at each whole-sample neighbour, written to
@@ -297,14 +298,8 @@ pub use crate::encoder::md::{PSampleSadSatdCostFunc, PSampleSadSatdCostFuncRaw};
 /// [`PSample4SadCostFuncRaw`] for the shape this replaces.
 pub type PSample4SadCostFunc = fn(&PlaneCursor<'_>, &PlaneCursor<'_>, &mut [i32; 4]);
 
-/// The raw four-candidate shape — transitional, as [`PSampleSadSatdCostFuncRaw`].
-pub type PSample4SadCostFuncRaw = unsafe extern "C" fn(
-    pEnc: *mut u8,
-    iEncStride: i32,
-    pRef: *mut u8,
-    iRefStride: i32,
-    pSadCosts: *mut i32,
-);
+// `PSample4SadCostFuncRaw` — the transitional raw four-candidate shape — went
+// with the raw triple (session F).
 
 // `PSampleSadHor8Func` stood here — it typed `pfSampleSadHor8`, the
 // screen-content SIMD horizontal-SAD pair, which had zero writers and zero

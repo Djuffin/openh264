@@ -15,8 +15,35 @@
 
 #![deny(unsafe_code)]
 
-use crate::common::sad_common::WelsSampleSad8x8_c;
 use crate::encoder::wels_preprocess::{ESceneChangeIdc, SPixMap, SSceneChangeResult};
+
+/// The raw 8x8 SAD this detector's block walk needs — the one caller
+/// `common/sad_common.rs`'s shim family had left when session F retired the
+/// transitional raw tables. The body moves to the family that owns its last
+/// caller (C2's ownership rule for the decoder's deblocking shims, applied
+/// here to the preprocess family): the walk reads `SPixMap.pPixel` raw
+/// pointers, so it cannot take a `PlaneCursor` until the preprocess family's
+/// own session converts the pixmap. Flattened from the 4x4-composed original —
+/// exact, because the summands are the same `|a - b|` terms and no grouping of
+/// 64 terms of at most 255 can overflow `i32`.
+///
+/// # Safety
+/// Both pointers must be readable for 8 rows of 8 samples at their strides.
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
+unsafe fn sad_8x8_raw(pSample1: *mut u8, iStride1: i32, pSample2: *mut u8, iStride2: i32) -> i32 {
+    let mut iSadSum = 0i32;
+    let mut pSrc1 = pSample1;
+    let mut pSrc2 = pSample2;
+    for _ in 0..8 {
+        for x in 0..8 {
+            iSadSum += unsafe { (*pSrc1.add(x)).abs_diff(*pSrc2.add(x)) as i32 };
+        }
+        pSrc1 = unsafe { pSrc1.offset(iStride1 as isize) };
+        pSrc2 = unsafe { pSrc2.offset(iStride2 as isize) };
+    }
+    iSadSum
+}
 
 use super::vaacalc::{RET_INVALIDPARAM, RET_SUCCESS};
 
@@ -84,7 +111,7 @@ impl CSceneChangeDetection {
             let mut pRefTmp = pRefRow;
             let mut pCurTmp = pCurRow;
             for _i in 0..iBlock8x8Width {
-                let iSad = WelsSampleSad8x8_c(pCurTmp, iCurStride, pRefTmp, iRefStride);
+                let iSad = sad_8x8_raw(pCurTmp, iCurStride, pRefTmp, iRefStride);
                 self.m_sSceneChangeParam.iMotionBlockNum +=
                     (iSad > HIGH_MOTION_BLOCK_THRESHOLD) as i32;
                 pRefTmp = pRefTmp.offset(8);
