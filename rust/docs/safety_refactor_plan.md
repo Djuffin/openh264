@@ -2180,6 +2180,43 @@ S6=R-e, S7=R-c, S8=R-i, S9=R-o, S10=R-d, S14=R-g, S16=R-f+R-p.*
   referees a conversion, choose the perturbed field for its per-site variation, and
   treat 0/210 as an inert field before an unreached path (S59 one level down); before
   re-routing a cached copy, grep its readers per field.
+- **S65 — a hazard report is a conditional, so filter it before quoting it as a
+  work list: by whether the conversion it models can happen, and by the allocation
+  it lands in** (Phase 9 session G; F161, F163). `q1c.py --kind raw` models exactly
+  one thing, and says so — "the parameter becomes `&mut T`" — asked of every body in
+  the family. Two facts the report cannot know make half of it inert. **(a)
+  Fork-reachability**: S63 forbids the in-fork half from ever taking `&mut`, so a
+  hazard whose *callee* is in that column models a retag that will never be taken —
+  135 of G's 266, including all 55 against `ctx_param`, which G's brief had named as
+  the campaign's centrepiece. **(b) Allocation**: a `&mut T` entry retag covers T's
+  own allocation, and F66's Miri trace names the range (`[0x0..0x17ee8]`, the whole
+  `sWelsEncCtx`). The cursor it killed was an *inline array field*. A cursor into a
+  `Vec` buffer or a `Box` the arena merely points at is in a different allocation and
+  cannot be reached — and this port's accessors launder provenance out of the
+  container on purpose (F71), so most of its arena cursors are of that second kind.
+  Consequences: a brief must not write "detector to zero" as an exit criterion (its
+  own remedy for one shape produces the other — F163), and the join of the two
+  instruments, not either one, is the work list. Ship the join as a tool
+  (`phase9_ctx_join.py`), because two instruments that do not know about each other
+  cannot do it for you. The corollary is worth its own sentence: **the exempt half is
+  a resource, not just non-work** — a cursor may be held across a permanently-raw
+  accessor for free, which is what makes a derivation order with zero live hazards
+  exist at all (T9.G4).
+- **S66 — calibrate a detector on a known NEGATIVE, not only a known positive; a
+  detector that fires on everything passes a positive-only calibration perfectly**
+  (Phase 9 session G, F159). S55 says to plant a known positive and watch the
+  instrument fire. The stale-driver guard was calibrated exactly that way and its
+  commit records the result — "First live run fired truthfully: rust_enc is stale at
+  HEAD right now." That sentence is a false positive being read as a confirmation.
+  The guard was pointed at the cargo crate *directory* rather than the binary:
+  `[ -x <dir> ]` is true so its missing-binary arm was dead, and the directory's
+  mtime made `find -newer` match 83 sources forever. **Every `sweep.sh` run since it
+  landed exited 2 without probing a byte, including the two inside `gates.sh`** — the
+  byte-identity gate, this phase's central rule, was down for two commits and read as
+  green. One run of the negative arm — show it silent on a tree you know is clean —
+  distinguishes "detects the fault" from "detects nothing", and nothing else does.
+  Applies to every instrument this phase ships: `q1c.py` and `phase9_forksplit.py`
+  both have a documented positive calibration and neither has a recorded negative one.
 - **S60 — run the acceptance instrument before designing against it; its current
   failure list is the scope, and an acceptance that is a whole-system property cannot
   be a family session's exit criterion** (Phase 9 session C, F132). C's brief said

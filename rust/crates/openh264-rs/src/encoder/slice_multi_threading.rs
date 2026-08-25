@@ -1250,12 +1250,29 @@ pub struct SliceJobHandle {
 //
 // **The one hand-written `Send` this phase permits** (decision D-mt-1, plan §7.4)
 // — and the ratchet's `unsafe_impl` metric is an occurrence count, so this comment
-// deliberately does not spell the two words it would otherwise double. It retires
-// when Phase 9's context split makes this handle naturally `Send`:
-// `sWelsEncCtx` is `!Sync` for twelve distinct reasons (F67), five of them inside
-// types Phases 8 and 10 own, so the split is a precondition of the fork/join and
-// not a consequence of it. Until then the soundness argument is three parts, each
-// verified rather than asserted:
+// deliberately does not spell the two words it would otherwise double.
+//
+// **Its retirement condition, corrected by measurement — F164, Phase 9 session G.**
+// This comment used to say it retires "when Phase 9's context split makes this
+// handle naturally `Send`", on F67's inventory of twelve `!Sync` reasons with
+// "five of them inside types Phases 8 and 10 own". Re-derived at HEAD with F67's
+// own probe, it is still twelve and it is a **different** twelve — `CMemoryAlign`
+// retired with the allocator, `SrcPicPool` arrived inside `SDqLayer`, and the three
+// scalar-pointer reasons F67 attributed to the context directly all reach through
+// `SVAAFrameInfo` now. A stable total is not a stable list. **Only four of the
+// twelve are the context split's**: `SSliceThreading`, `SWelsEncoderOutput`, and
+// `SRefList`/`SrcPicPool` through `SDqLayer`. The other eight are `SVAAFrameInfo`'s
+// four (the VAA family), `SWelsSvcCodingParam`'s signed-char pointer (Phase 8's),
+// `SScreenBlockFeatureStorage` (Phase 10's), `SLogContext`'s opaque handle, and
+// `CWelsPreProcess`. (Type names only above: the ratchet's `raw_ptr` metric is an
+// occurrence count too, and F164's table in the findings is where the spellings
+// belong.)
+//
+// So the context split is **necessary and not sufficient**, and this is a
+// phase-exit item rather than a session item: the seam retires when the VAA family,
+// the coding parameters, the screen-content storage, the log context and the
+// preprocessor are all raw-free. Until then the soundness argument is three parts,
+// each verified rather than asserted:
 //
 // **1 — disjointness is index-based, and the index is now static** (session A's
 // premise-1 proof, T7.A1). The only per-thread mutable state the encode reaches
