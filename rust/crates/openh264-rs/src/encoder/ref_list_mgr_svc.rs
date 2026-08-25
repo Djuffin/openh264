@@ -393,8 +393,15 @@ pub unsafe fn DeleteInvalidLTR(pCtx: *mut sWelsEncCtx) {
     if pRefList.is_null() {
         return;
     }
-    let pLtr = &mut *ctx_ltr_at(pCtx, (uiDid) as usize);
+    // **T9.G4 — the derivation order is the fix, and the order is not arbitrary.**
+    // Each of these three lines makes a whole-context call, so whatever is derived
+    // first is held across the ones after it. Sorted by what the call becomes:
+    // `ctx_sps` and `ctx_ltr_at` are ST-flippable and really will retag; `ctx_param`
+    // is fork-reachable, so S63 keeps it `*mut` permanently and it never retags at
+    // all (`phase9_ctx_join.py` calls that the moot half). So: the scalar first
+    // while nothing is live, then the flipping accessor, then the permanent-raw one.
     let iMaxFrameNumPlus1 = 1 << (*ctx_sps(pCtx)).uiLog2MaxFrameNum;
+    let pLtr = &mut *ctx_ltr_at(pCtx, (uiDid) as usize);
     let pParamInternal = std::ptr::addr_of_mut!((*ctx_param(pCtx)).sDependencyLayers[uiDid]);
 
     for i in 0..LONG_TERM_REF_NUM {
@@ -527,7 +534,8 @@ pub unsafe fn LTRMarkProcess(pCtx: *mut sWelsEncCtx) {
     if pRefList.is_null() {
         return;
     }
-    let pLtr = &mut *ctx_ltr_at(pCtx, (uiDid) as usize);
+    // T9.G4: derived above `pLtr`, not below it — these are whole-context calls
+    // and `pLtr` is a cursor held to the end of the body.
     let gopSize = (*ctx_param(pCtx)).uiGopSize;
     let iGoPFrameNumInterval = if (gopSize >> 1) > 1 {
         (gopSize >> 1) as i32
@@ -535,6 +543,7 @@ pub unsafe fn LTRMarkProcess(pCtx: *mut sWelsEncCtx) {
         1
     };
     let iMaxFrameNumPlus1 = 1 << (*ctx_sps(pCtx)).uiLog2MaxFrameNum;
+    let pLtr = &mut *ctx_ltr_at(pCtx, (uiDid) as usize);
     let mut i = 0usize;
     let mut bMoveLtrFromShortToLong = false;
     let pParamInternal = std::ptr::addr_of_mut!((*ctx_param(pCtx)).sDependencyLayers[uiDid]);
@@ -828,11 +837,11 @@ pub unsafe fn CheckCurMarkFrameNumUsed(pCtx: *mut sWelsEncCtx) -> bool {
         return false;
     }
     let uiDid = (*pCtx).uiDependencyId as usize;
-    let pLtr = &*ctx_ltr_at(pCtx, (uiDid) as usize);
     let pRefList = ctx_ref_list(pCtx, (uiDid) as usize);
     if pRefList.is_null() {
         return false;
     }
+    // T9.G4: derived above `pLtr`, not below it — see `DeleteInvalidLTR`.
     let gopSize = (*ctx_param(pCtx)).uiGopSize;
     let iGoPFrameNumInterval = if (gopSize >> 1) > 1 {
         (gopSize >> 1) as i32
@@ -840,6 +849,7 @@ pub unsafe fn CheckCurMarkFrameNumUsed(pCtx: *mut sWelsEncCtx) -> bool {
         1
     };
     let iMaxFrameNumPlus1 = 1 << (*ctx_sps(pCtx)).uiLog2MaxFrameNum;
+    let pLtr = &*ctx_ltr_at(pCtx, (uiDid) as usize);
     let pParamInternal = &(*ctx_param(pCtx)).sDependencyLayers[uiDid];
 
     for i in 0..((*pRefList).uiLongRefCount as usize) {
@@ -999,8 +1009,10 @@ pub unsafe fn FilterLTRRecoveryRequest(
             return 0;
         }
 
-        let pLtr = &mut *ctx_ltr_at(pCtx, (iLayerId as usize) as usize);
+        // T9.G4 — the derivation order, as in `DeleteInvalidLTR`: scalar, then the
+        // ST-flippable accessor, then the permanently-raw fork-reachable one.
         let iMaxFrameNumPlus1 = 1 << (*ctx_sps(pCtx)).uiLog2MaxFrameNum;
+        let pLtr = &mut *ctx_ltr_at(pCtx, (iLayerId as usize) as usize);
         let pParamInternal = std::ptr::addr_of_mut!((*ctx_param(pCtx)).sDependencyLayers[iLayerId as usize]);
 
         if (*pRequest).uiFeedbackType == LTR_RECOVERY_REQUEST && (*pRequest).uiIDRPicId == (*pParamInternal).uiIdrPicId as u32 {

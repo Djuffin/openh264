@@ -1726,6 +1726,11 @@ pub unsafe fn UpdateFrameNum(pEncCtx: *mut sWelsEncCtx, kiDidx: i32) {
     if pEncCtx.is_null() || ctx_param(pEncCtx).is_null() || ctx_sps(pEncCtx).is_null() {
         return;
     }
+    // T9.G4: the `ctx_sps` read below is hoisted above the cursor rather than left
+    // inside the branch. `uiLog2MaxFrameNum` is a sequence-parameter constant and
+    // `ctx_sps` is null-guarded above, so reading it unconditionally is pure — and
+    // it is the whole-context call this body used to make with a cursor live.
+    let max_frame_num_minus1 = (1 << (*ctx_sps(pEncCtx)).uiLog2MaxFrameNum) - 1;
     let pParamInternal = std::ptr::addr_of_mut!((*ctx_param(pEncCtx)).sDependencyLayers[kiDidx as usize]);
     let mut bNeedFrameNumIncreasing = false;
 
@@ -1734,7 +1739,6 @@ pub unsafe fn UpdateFrameNum(pEncCtx: *mut sWelsEncCtx, kiDidx: i32) {
     }
 
     if bNeedFrameNumIncreasing {
-        let max_frame_num_minus1 = (1 << (*ctx_sps(pEncCtx)).uiLog2MaxFrameNum) - 1;
         if (*pParamInternal).iFrameNum < max_frame_num_minus1 {
             (*pParamInternal).iFrameNum += 1;
         } else {
@@ -1755,6 +1759,11 @@ pub unsafe fn LoadBackFrameNum(pEncCtx: *mut sWelsEncCtx, kiDidx: i32) {
     if pEncCtx.is_null() || ctx_param(pEncCtx).is_null() || ctx_sps(pEncCtx).is_null() {
         return;
     }
+    // T9.G4: the `ctx_sps` read below is hoisted above the cursor rather than left
+    // inside the branch. `uiLog2MaxFrameNum` is a sequence-parameter constant and
+    // `ctx_sps` is null-guarded above, so reading it unconditionally is pure — and
+    // it is the whole-context call this body used to make with a cursor live.
+    let max_frame_num_minus1 = (1 << (*ctx_sps(pEncCtx)).uiLog2MaxFrameNum) - 1;
     let pParamInternal = std::ptr::addr_of_mut!((*ctx_param(pEncCtx)).sDependencyLayers[kiDidx as usize]);
     let mut bNeedFrameNumIncreasing = false;
 
@@ -1766,7 +1775,7 @@ pub unsafe fn LoadBackFrameNum(pEncCtx: *mut sWelsEncCtx, kiDidx: i32) {
         if (*pParamInternal).iFrameNum != 0 {
             (*pParamInternal).iFrameNum -= 1;
         } else {
-            (*pParamInternal).iFrameNum = (1 << (*ctx_sps(pEncCtx)).uiLog2MaxFrameNum) - 1;
+            (*pParamInternal).iFrameNum = max_frame_num_minus1;
         }
     }
 }
@@ -1807,12 +1816,19 @@ pub unsafe fn InitFrameCoding(
     if pEncCtx.is_null() || ctx_param(pEncCtx).is_null() || ctx_sps(pEncCtx).is_null() {
         return;
     }
-    let pParamInternal = std::ptr::addr_of_mut!((*ctx_param(pEncCtx)).sDependencyLayers[kiDidx as usize]);
+    // T9.G4, with `UpdateFrameNum`'s: `iLog2MaxPocLsb` is hoisted above the cursor
+    // (a sequence constant, and `ctx_sps` is null-guarded above), and the cursor is
+    // derived **per branch** rather than once at the top. The three branches are
+    // exclusive and each one's last use of it precedes its `UpdateFrameNum` call, so
+    // nothing here was unsound; deriving per branch is what makes that visible to a
+    // reader and to the detector, and it is what the borrow checker will need when
+    // this body takes `&mut`.
+    let max_poc_boundary = (1 << (*ctx_sps(pEncCtx)).iLog2MaxPocLsb) - 2;
 
     if keFrameType == EVideoFrameType::videoFrameTypeP {
+        let pParamInternal = std::ptr::addr_of_mut!((*ctx_param(pEncCtx)).sDependencyLayers[kiDidx as usize]);
         (*pParamInternal).iFrameIndex += 1;
 
-        let max_poc_boundary = (1 << (*ctx_sps(pEncCtx)).iLog2MaxPocLsb) - 2;
         if (*pParamInternal).iPOC < max_poc_boundary {
             (*pParamInternal).iPOC += 2;
         } else {
@@ -1825,6 +1841,7 @@ pub unsafe fn InitFrameCoding(
         (*pEncCtx).eSliceType = EWelsSliceType::P_SLICE;
         (*pEncCtx).eNalPriority = EWelsNalRefIdc::NRI_PRI_HIGH;
     } else if keFrameType == EVideoFrameType::videoFrameTypeIDR {
+        let pParamInternal = std::ptr::addr_of_mut!((*ctx_param(pEncCtx)).sDependencyLayers[kiDidx as usize]);
         (*pParamInternal).iFrameNum = 0;
         (*pParamInternal).iPOC = 0;
         (*pParamInternal).bEncCurFrmAsIdrFlag = false;
@@ -1836,7 +1853,7 @@ pub unsafe fn InitFrameCoding(
 
         (*pParamInternal).iCodingIndex = 0;
     } else if keFrameType == EVideoFrameType::videoFrameTypeI {
-        let max_poc_boundary = (1 << (*ctx_sps(pEncCtx)).iLog2MaxPocLsb) - 2;
+        let pParamInternal = std::ptr::addr_of_mut!((*ctx_param(pEncCtx)).sDependencyLayers[kiDidx as usize]);
         if (*pParamInternal).iPOC < max_poc_boundary {
             (*pParamInternal).iPOC += 2;
         } else {
