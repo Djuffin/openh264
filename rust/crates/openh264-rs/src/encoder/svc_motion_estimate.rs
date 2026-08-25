@@ -310,14 +310,9 @@ pub type PSample4SadCostFuncRaw = unsafe extern "C" fn(
     pSadCosts: *mut i32,
 );
 
-pub type PSampleSadHor8Func = unsafe extern "C" fn(
-    pEnc: *mut u8,
-    iEncStride: i32,
-    pRef: *mut u8,
-    iRefStride: i32,
-    pBaseCost: *mut u16,
-    pMinIndex: *mut i32,
-) -> u32;
+// `PSampleSadHor8Func` stood here — it typed `pfSampleSadHor8`, the
+// screen-content SIMD horizontal-SAD pair, which had zero writers and zero
+// readers in the whole tree. Both deleted, S18 (session F step 0).
 
 pub type PMotionSearchFunc = unsafe extern "C" fn(
     pFuncList: *mut SWelsFuncPtrList,

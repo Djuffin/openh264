@@ -2746,7 +2746,6 @@ mod tests {
             // `InitCoeffFunc` call below *writes* the table, and a `&` held across
             // it is the exact shape this session's step-1 checker exists to reject.
             assert!(ctx.pFuncList.pfDctFourT4.is_some());
-            assert!(ctx.pFuncList.pfIDctFourT4.is_some());
             // pfInterMd is deliberately NOT asserted: C++ InitFunctionPointers
             // (encoder.cpp) never sets it. It is assigned per-slice in
             // svc_encode_slice.cpp:733/736. This assertion passed only because the

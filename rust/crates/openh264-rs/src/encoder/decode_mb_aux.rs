@@ -14,7 +14,6 @@
 
 #![deny(unsafe_code)]
 
-use crate::encoder::svc_encode_mb::PIDctFunc;
 use crate::encoder::wels_func_ptr_def::SWelsFuncPtrList;
 
 pub use crate::encoder::svc_encode_mb::{
@@ -477,9 +476,14 @@ pub unsafe fn WelsInitReconstructionFuncs(pFuncList: &mut SWelsFuncPtrList, _uiC
     fl.pfDequantizationFour4x4 = Some(dequant_four_4x4);
     fl.pfDequantizationIHadamard4x4 = Some(dequant_ihadamard_4x4);
 
-    fl.pfIDctT4 = Some(WelsIDctT4Rec_c);
-    fl.pfIDctFourT4 = Some(WelsIDctFourT4Rec_c);
-    fl.pfIDctI16x16Dc = Some(WelsIDctRecI16x16Dc_c);
+    // The three `pfIDct*` installs stood here. The slots were write-only
+    // (F138/F139: installed, asserted, never called — the reconstruction writes
+    // go through the seam's kernels directly since T9.C2) and are deleted, S18.
+    // Read greps at deletion (session F step 0): `pfIDctT4` — field, default,
+    // this install, one `is_some` assert; `pfIDctFourT4` — those plus
+    // `encoder_context.rs`'s init assert; `pfIDctI16x16Dc` — field, default,
+    // install, assert. No call through any of the three anywhere in src/ or
+    // tests/. The kernels stay: the differential tests drive them by name.
 }
 
 #[cfg(test)]
@@ -726,8 +730,5 @@ mod tests {
         assert!(fl.pfDequantization4x4.is_some());
         assert!(fl.pfDequantizationFour4x4.is_some());
         assert!(fl.pfDequantizationIHadamard4x4.is_some());
-        assert!(fl.pfIDctT4.is_some());
-        assert!(fl.pfIDctFourT4.is_some());
-        assert!(fl.pfIDctI16x16Dc.is_some());
     }
 }

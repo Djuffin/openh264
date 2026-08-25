@@ -237,28 +237,16 @@ pub use crate::encoder::md::{MB_BLOCK4x4_NUM, MB_LUMA_CHROMA_BLOCK4x4_NUM};
 pub type PMb = *mut SMB;
 
 // Function Pointer Typedefs
-pub type PLumaDeblockingLT4Func =
-    unsafe extern "C" fn(pPixY: *mut u8, iStride: i32, iAlpha: i32, iBeta: i32, pTc: *mut i8);
-
-pub type PLumaDeblockingEQ4Func =
-    unsafe extern "C" fn(pPixY: *mut u8, iStride: i32, iAlpha: i32, iBeta: i32);
-
-pub type PChromaDeblockingLT4Func = unsafe extern "C" fn(
-    pPixCb: *mut u8,
-    pPixCr: *mut u8,
-    iStride: i32,
-    iAlpha: i32,
-    iBeta: i32,
-    pTc: *mut i8,
-);
-
-pub type PChromaDeblockingEQ4Func = unsafe extern "C" fn(
-    pPixCb: *mut u8,
-    pPixCr: *mut u8,
-    iStride: i32,
-    iAlpha: i32,
-    iBeta: i32,
-);
+//
+// The encoder's four edge-kernel typedefs (`PLumaDeblockingLT4Func`,
+// `PLumaDeblockingEQ4Func`, `PChromaDeblockingLT4Func`,
+// `PChromaDeblockingEQ4Func`) stood here, duplicating
+// `common/deblocking_common.rs`'s set name for name. They typed the eight
+// `DeblockingFunc` kernel slots, which F139 measured write-only — installed by
+// `DeblockingInit`, read by nothing, because the eight `FilteringEdge*`
+// dispatchers call the safe kernels directly since T9.C2. Slots, installs and
+// typedefs deleted together, S18 (session F step 0); the decoder's own copies
+// and the common shims are untouched.
 
 // `uiBS` carries its real C++ type end-to-end: `uint8_t uiBS[2][4][4]`
 // (`deblocking.cpp:629`) — two 4x4 planes, `[dir][edge][blk]`, dir 0 = vertical
@@ -285,17 +273,16 @@ pub type PDeblockingFilterSlice =
 pub type PSetNoneZeroCountZeroFunc = fn(pNonZeroCount: &mut [i8; MB_LUMA_CHROMA_BLOCK4x4_NUM]);
 
 /// Function pointer dispatch table for deblocking routines.
+///
+/// Eight kernel slots (`pfLumaDeblocking{LT4,EQ4}{Ver,Hor}`,
+/// `pfChromaDeblocking{LT4,EQ4}{Ver,Hor}`) are deleted (F139, S18): installed
+/// by `DeblockingInit` and read by nothing — the `FilteringEdge*` dispatchers
+/// call the safe kernels directly since T9.C2. Read grep at deletion (session
+/// F step 0): each name's every mention was its field, its `Default`, and its
+/// one install; zero reads in src/ or tests/.
 #[repr(C)]
 #[derive(Debug, Copy, Clone, Default)]
 pub struct tagDeblockingFunc {
-    pub pfLumaDeblockingLT4Ver: Option<PLumaDeblockingLT4Func>,
-    pub pfLumaDeblockingEQ4Ver: Option<PLumaDeblockingEQ4Func>,
-    pub pfLumaDeblockingLT4Hor: Option<PLumaDeblockingLT4Func>,
-    pub pfLumaDeblockingEQ4Hor: Option<PLumaDeblockingEQ4Func>,
-    pub pfChromaDeblockingLT4Ver: Option<PChromaDeblockingLT4Func>,
-    pub pfChromaDeblockingEQ4Ver: Option<PChromaDeblockingEQ4Func>,
-    pub pfChromaDeblockingLT4Hor: Option<PChromaDeblockingLT4Func>,
-    pub pfChromaDeblockingEQ4Hor: Option<PChromaDeblockingEQ4Func>,
     pub pfDeblockingBSCalc: Option<PDeblockingBSCalc>,
     pub pfDeblockingFilterSlice: Option<PDeblockingFilterSlice>,
 }
@@ -620,10 +607,10 @@ pub unsafe extern "C" fn DeblockingBSCalc_c(
 //
 // `DeblockingInit` below installs these names exactly as before; no dispatch
 // table changes here (that is Phase 4a's).
-pub use crate::common::deblocking_common::{
-    DeblockChromaEq4H_c, DeblockChromaEq4V_c, DeblockChromaLt4H_c, DeblockChromaLt4V_c,
-    DeblockLumaEq4H_c, DeblockLumaEq4V_c, DeblockLumaLt4H_c, DeblockLumaLt4V_c,
-};
+// The eight-shim re-export (`pub use crate::common::deblocking_common::{
+// DeblockLuma*_c, DeblockChroma*_c}`) stood here for `DeblockingInit`'s
+// installs alone; it went with the write-only slots (F139, S18, session F
+// step 0). The decoder reaches the common shims through its own re-export.
 
 /// C++: `WelsNonZeroCount_c` — the encoder's copy, installed into `pfSetNZCZero`.
 /// The common module's shim still takes a raw pointer (the decoder's callers hold
@@ -1462,16 +1449,8 @@ pub unsafe extern "C" fn DeblockingInit(pFunc: *mut DeblockingFunc, _iCpu: i32) 
         return;
     }
 
-    (*pFunc).pfLumaDeblockingLT4Ver = Some(DeblockLumaLt4V_c);
-    (*pFunc).pfLumaDeblockingEQ4Ver = Some(DeblockLumaEq4V_c);
-    (*pFunc).pfLumaDeblockingLT4Hor = Some(DeblockLumaLt4H_c);
-    (*pFunc).pfLumaDeblockingEQ4Hor = Some(DeblockLumaEq4H_c);
-
-    (*pFunc).pfChromaDeblockingLT4Ver = Some(DeblockChromaLt4V_c);
-    (*pFunc).pfChromaDeblockingEQ4Ver = Some(DeblockChromaEq4V_c);
-    (*pFunc).pfChromaDeblockingLT4Hor = Some(DeblockChromaLt4H_c);
-    (*pFunc).pfChromaDeblockingEQ4Hor = Some(DeblockChromaEq4H_c);
-
+    // The eight kernel-slot installs stood here; the slots were write-only
+    // (F139) and are deleted with their typedefs, S18 (session F step 0).
     (*pFunc).pfDeblockingBSCalc = Some(DeblockingBSCalc_c);
     (*pFunc).pfDeblockingFilterSlice = Some(DeblockingFilterSliceAvcbase);
 }
