@@ -1025,7 +1025,7 @@ pub unsafe fn StashMBStatusCavlc(
 
 /// See [`StashMBStatusCavlc`] for why this takes no buffer.
 ///
-/// **T9.E5**: the `uiLastMbQp` restore moved to the call sites (the caller owns
+/// **T9.E6**: the `uiLastMbQp` restore moved to the call sites (the caller owns
 /// `sDss` and the slice; this fn no longer names `SSlice` — S54's value rule).
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]

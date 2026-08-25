@@ -2886,7 +2886,7 @@ pub static g_pWelsWriteSliceHeader: [PWelsSliceHeaderWriteFunc; 2] = [
 /// 3, and T4b.1 vindicated it: with both arms deriving the buffer themselves,
 /// `EntropyCoder::WelsSpatialWriteMbSyn` needed no `buf` at all. The arithmetic
 /// coder no longer reaches the output any other way.
-/// **T9.E5 narrowed the slice half to the field it touches** (the D-session
+/// **T9.E6 narrowed the slice half to the field it touches** (the D-session
 /// playbook, step 3 of the slice family): the parameter is the `SWelsSliceBs`
 /// field and the bank slot, not the slice — so entering this function retags
 /// nothing of `SSlice`, and the 8 callers that hold an `sMbCacheInfo` cursor
@@ -2922,7 +2922,7 @@ pub unsafe fn slice_bs_buffer<'a>(
 /// thread slot a slice was claimed into (`InitOneSliceInThread`), with `kuiSize`
 /// that slice's `sSliceBs.uiSize`.
 ///
-/// **T9.E5**: the two slice reads became the two values they read — the slot and
+/// **T9.E6**: the two slice reads became the two values they read — the slot and
 /// the size — so this function's parameters no longer name `SSlice` at all
 /// (the D-session playbook's `usize`-offset rule, S54's shape).
 #[inline]
@@ -2986,7 +2986,7 @@ pub unsafe fn dynamic_bs_buffer(pEncCtx: *mut sWelsEncCtx, kiPartitionId: usize)
 /// # Safety
 /// `pSlice` must be live, and `pEncCtx` and `(*pEncCtx).pOut` must be live when
 /// `pBs` is null.
-/// **T9.E5 narrowed the slice half to the field it touches** — see
+/// **T9.E6 narrowed the slice half to the field it touches** — see
 /// [`slice_bs_buffer`]: the parameter is the `SWelsSliceBs` field, so this call
 /// retags nothing of `SSlice` and the 9 callers holding slice cursors across it
 /// stop being F66 hazards. The ctx half stays raw for G–H (the `pOut` arm).
@@ -4342,31 +4342,27 @@ mod tests {
     /// live. `bUseLoadBalancing` is off (the probe forces it), so the slice
     /// boundaries are a function of the input and these assertions mean something.
     ///
-    /// **Ignored under Miri, and F73 is why — not a skip without a finding.** This
-    /// probe was written to make deleting F12's `--skip wels_thread_pool` mean
-    /// something, and it has now found four things by being run: F70 (a dead-tag read
-    /// in `InitSliceSettings`, fixed), F71 (the root-accessor family taking `&mut` to
-    /// shared context state — sixteen accessors at T7.B5, **the last of it at T7.C3**,
-    /// closed), and F73.
+    /// **Live under Miri since T9.E8 — the ignore attribute retired with the last
+    /// fork race.** It stood from T7.B4 to session E as a work queue, not a shrug:
+    /// each run aborts at the first undefined behaviour it meets, a session fixed
+    /// that family, and the next run reached deeper — F70, F71, F73/F107 (the
+    /// reconstruction seam), F132's rounds 1-6, then this session's round 5
+    /// (deblocking's cross-slice `uiSliceIdc` reads, closed by the map
+    /// substitution, T9.E4) and the rounds it had been masking: the per-slice
+    /// `pfInterMd` stamp into the shared function list (hoisted, T9.E7) and the
+    /// in-fork `as_mut_ptr` autoref mints on shared state (re-spelled on
+    /// `addr_of!`, T9.E7; F143 carries the enumeration).
     ///
-    /// **F71 is closed and this attribute outlived it**, which is worth saying
-    /// plainly. F71's named residue was one shared *write* —
-    /// `WelsCodeOneSlice` stamping `sLayerInfo.sNalHeaderExt` per slice per worker.
-    /// T7.C3 hoisted it out of the fork (`StampLayerIdrFlagForSliceType`) and made the
-    /// two remaining layer-header derivations raw, and Miri's next answer was a
-    /// **different class**: `&mut` retags over the *reconstruction picture*
-    /// (`layer_dec_pic_mut` -> `SRefList::pic_mut` -> `&mut SPicture`, and
-    /// `SPicture::planes`' `&mut self`), taken by every worker while each writes its
-    /// own disjoint macroblock rows. The aliasing is in how the port **reaches** the
-    /// picture, not in what it writes, and unpicking it is 32 `planes()` sites and 68
-    /// `_mut` picture-accessor calls across the preprocessor, the reference-list
-    /// manager and the encode tree — F67's context split, i.e. Phase 9's, not a site.
-    /// That is F73, and the attribute retires with it.
+    /// **First green run: 3356 s under Miri, 2026-08-24** — a complete two-frame
+    /// two-worker encode with zero reports. The cost is why the session-level
+    /// gate skips both fork probes BY NAME (D-gate-6's 15-minute cap; see
+    /// gates.sh): they run at `full`/`exit` and by the explicit command in that
+    /// block, and any session that touches the fork, the slice structures, or
+    /// deblocking owes them one explicit run at its close.
     ///
     /// The test runs normally in both profiles and is the only coverage the fork/join
     /// has outside the diffharness.
     #[test]
-    #[cfg_attr(miri, ignore)]
     fn fork_join_encodes_a_multi_slice_frame_under_the_aliasing_checker() {
         let (frames, dims) = drive_encoder_over(
             112,
@@ -4444,31 +4440,17 @@ mod tests {
     /// than 600 so the IDR comes out in nine slices rather than sixteen, which is
     /// Miri's clock talking.
     ///
-    /// **Ignored under Miri, and what remains is named rather than shrugged at**
-    /// (T9.C6, re-measured T9.C2). `SSliceCtx` was this probe's verdict for two
-    /// rounds and is no longer: T9.C2 made `pOverallMbMap` and `iSliceNumInFrame`
-    /// atomic (F136), closing F132's round 6. What the probe reports now is
-    /// **round 5 — the `&mut SMB` family**, measured at this commit:
+    /// **Live under Miri since T9.E8** — round 5 (the cross-slice `uiSliceIdc`
+    /// read this comment used to quote) closed when deblocking's guards moved to
+    /// `pOverallMbMap` (T9.E4, F142), and what round 5 had been masking on this
+    /// probe's path — the `sLayerInfo` array-autoref mint the size-limited
+    /// branch's sibling write popped — closed with it (T9.E7, F143).
     ///
-    /// ```text
-    /// Data race between (1) non-atomic read on thread `unnamed-3`
-    ///                and (2) retag write of type `encoder::md::SMB` on `unnamed-2`
-    ///   (2) svc_encode_slice.rs:1464  UpdateMbNeighbor(pCurDq, &mut *pMb, ..)
-    ///   (1) deblocking.rs:1190        (*pCurMb).uiSliceIdc
-    ///                                   == (*pCurMb.offset(-iMbStride)).uiSliceIdc
-    /// ```
-    ///
-    /// That is deblocking's cross-slice read of a neighbour's `SMB.uiSliceIdc`
-    /// against the `&mut SMB` the worker encoding that neighbour holds —
-    /// F112/F114b's family and session E's 31 neighbour-bound `*mut SMB`
-    /// parameters. **Both encoder fork/join probes now stop on the same thing**,
-    /// where before they stopped on two different families.
-    ///
-    /// It is not the reconstruction write and it is not in this session's lane;
-    /// the finding carries the full enumeration. The attribute retires with it,
-    /// and this comment is the ratchet.
+    /// **First green run: 3449 s under Miri, 2026-08-24** — two frames, two
+    /// workers, a mid-row boundary asserted from the bitstream, zero reports.
+    /// Session-scope cost policy is the fixed-slice probe's (D-gate-6): skipped
+    /// by name in the session lane, live at `full`/`exit` and by explicit run.
     #[test]
-    #[cfg_attr(miri, ignore)]
     fn fork_join_encodes_a_frame_whose_slice_boundary_is_mid_row() {
         let (frames, dims) = drive_encoder_over(
             112,

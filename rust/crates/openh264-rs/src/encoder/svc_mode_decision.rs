@@ -1651,7 +1651,7 @@ pub unsafe fn CheckChromaCost(
     pMbCache: &mut SMbCache,
     iCurMbXy: i32,
 ) -> bool {
-    // T9.E8 (F132 round 8's class): the array method autorefs `&mut` on the
+    // T9.E7 (F132 round 8's class): the array method autorefs `&mut` on the
     // SHARED function list, per macroblock, on every worker — and this body
     // only reads the slots. `addr_of!` reads without retagging.
     let pSad = std::ptr::addr_of!((*ctx_func_list(pEncCtx)).sSampleDealingFuncs.pfSampleSadRaw)
@@ -1707,7 +1707,7 @@ pub unsafe extern "C" fn WelsMdInterJudgeBGDPskip(
 
     let kiRefMbQp = (&layer_ref_pic(pCurDqLayer).expect("bound").pRefMbQp)[(*pCurMb).iMbXY as usize] as i32;
     let kiCurMbQp = (*pCurMb).uiLumaQp as i32;
-    // T9.E8, as svc_base_layer_md's mint (F132 round 8's class).
+    // T9.E7, as svc_base_layer_md's mint (F132 round 8's class).
     let pVaaBgMbFlag = {
         let v = std::ptr::addr_of!((*ctx_vaa(pEncCtx)).pVaaBackgroundMbFlag);
         (*v).as_ptr().add((*pCurMb).iMbXY as usize) as *mut i8

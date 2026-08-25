@@ -257,7 +257,7 @@ impl EntropyCoder {
     #[inline]
     // unsafe-cat: port-raw(Phase 9)
     #[allow(unsafe_code)]
-    /// **T9.E5**: `pSlice` became the three things the two arms touch — the
+    /// **T9.E6**: `pSlice` became the three things the two arms touch — the
     /// CABAC coder state, the last macroblock QP as a value, and (on the pop
     /// side, at the call sites) the restore of that QP — so no argument of
     /// this call names `SSlice` and nothing here retags the slice when the
@@ -292,7 +292,7 @@ impl EntropyCoder {
     #[inline]
     // unsafe-cat: port-raw(Phase 9)
     #[allow(unsafe_code)]
-    /// **T9.E5**, as [`StashMBStatus`]: the caller restores
+    /// **T9.E6**, as [`StashMBStatus`]: the caller restores
     /// `uiLastMbQp` from `sDss` beside the call — it owns both.
     ///
     /// [`StashMBStatus`]: EntropyCoder::StashMBStatus

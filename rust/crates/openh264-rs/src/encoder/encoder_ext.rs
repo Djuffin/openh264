@@ -2509,7 +2509,7 @@ pub unsafe fn PreprocessSliceCoding(pCtx: *mut sWelsEncCtx) {
             Some(crate::encoder::deblocking::DeblockingFilterSliceAvcbaseNull);
     }
 
-    // **F132 round 7 (T9.E5)**: `pfInterMd` used to be stamped by
+    // **F132 round 7 (T9.E6)**: `pfInterMd` used to be stamped by
     // `WelsCodePSlice`/`WelsCodePOverDynamicSlice` — per slice, from inside the
     // fork, into this shared function list, exactly as the C++ does
     // (`svc_encode_slice.cpp:733/750`). Every slice of a frame computes the
@@ -3308,7 +3308,7 @@ pub unsafe fn WelsEncoderEncodeExt(
     // is derived after `BuildSpatialPicList`: that loop **writes**
     // `(*pFbi).sLayerInfo[..]` through `pFbi`, and a write through the parent pops
     // a child taken before it. Every use of this cursor is below.
-    // T9.E8: `addr_of_mut!`, not `as_mut_ptr()` — the array method autorefs
+    // T9.E7: `addr_of_mut!`, not `as_mut_ptr()` — the array method autorefs
     // `&mut (*pFbi).sLayerInfo` first, so the old mint was a raw ABOVE a Unique,
     // and any sibling raw's write into an entry (the size-limited branch's
     // `pLbi` stamps below) popped it before `SliceLayerInfoUpdate` wrote back
@@ -3708,7 +3708,7 @@ pub unsafe fn WelsEncoderEncodeExt(
 
             //TODO: use a function to remove duplicate code here and ln3994
             let iLayerBsIdx = (*(*pCtx).pOut).iLayerBsIndex;
-            // **T9.E5, the mid-row probe's verdict once round 5 stopped aborting
+            // **T9.E6, the mid-row probe's verdict once round 5 stopped aborting
             // first**: this was `&mut (*pFbi).sLayerInfo[..] as *mut` — a `&mut`
             // element borrow whose Unique retag popped `pLayerBsInfo` (the raw
             // over the whole array, minted at the top of this function) for the
