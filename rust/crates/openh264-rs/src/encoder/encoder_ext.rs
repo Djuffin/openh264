@@ -598,7 +598,7 @@ pub unsafe fn GetMvMvdRange(
 unsafe fn InitMbInfo(
     pEnc: *mut sWelsEncCtx,
     pList: *mut SMB,
-    pLayer: *mut SDqLayer,
+    pLayer: &mut SDqLayer,
     kiDlayerId: i32,
 ) {
     let iMbWidth = (*pLayer).iMbWidth as i32;
@@ -686,7 +686,7 @@ pub unsafe fn InitMbListD(ppCtx: *mut *mut sWelsEncCtx) -> i32 {
         InitMbInfo(
             *ppCtx,
             crate::encoder::svc_encode_slice::mb_list_root(pLayer),
-            pLayer,
+            &mut *pLayer,
             i as i32,
         );
     }
@@ -836,7 +836,7 @@ pub unsafe fn InitDqLayers(
         }
         (*pDqLayer).iMaxSliceNum = iMaxSliceNum;
 
-        iResult = InitSliceInLayer(*ppCtx, pDqLayer, iDlayerIndex);
+        iResult = InitSliceInLayer(*ppCtx, &mut *pDqLayer, iDlayerIndex);
         if iResult != 0 {
             return iResult;
         }
@@ -972,7 +972,7 @@ pub unsafe fn InitDqLayers(
 
         // FMO is not used in SVC coding so far; come back if FMO is needed
         iResult = InitSlicePEncCtx(
-            ctx_dq_layer(*ppCtx, iDlayerIndex as usize),
+            &mut *ctx_dq_layer(*ppCtx, iDlayerIndex as usize),
             false,
             (*pSps).iMbWidth as i32,
             (*pSps).iMbHeight as i32,
@@ -1574,7 +1574,7 @@ pub const STATISTICS_LOG_INTERVAL_MS: i32 = 5000;
 /// `pDq` must be non-null.
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
-pub unsafe fn FreeSliceInLayer(pDq: *mut SDqLayer) {
+pub unsafe fn FreeSliceInLayer(pDq: &mut SDqLayer) {
     for iIdx in 0..MAX_THREADS_NUM {
         crate::encoder::svc_encode_slice::FreeSliceBuffer(pDq, iIdx);
     }
@@ -1586,23 +1586,20 @@ pub unsafe fn FreeSliceInLayer(pDq: *mut SDqLayer) {
 /// `pDq` must have come from `InitDqLayers` and must not be used afterwards.
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
-pub unsafe fn FreeDqLayer(p: *mut SDqLayer) {
-    if p.is_null() {
-        return;
-    }
+pub unsafe fn FreeDqLayer(p: &mut SDqLayer) {
 
     // **T7.C4 finished this function.** `FreeSliceInLayer` used to release one
     // `CMemoryAlign` block per slice (`sSliceBs.pBs`) — the last allocation the layer
     // held by raw pointer. The slice owns its bitstream now, so this call empties the
     // banks and their buffers go with them; everything else the C++ frees here has
     // been owned since Phase 6.
-    FreeSliceInLayer(p);
+    FreeSliceInLayer(&mut *p);
 
     // `ppSliceInLayer` is a `Vec<SliceIdx>` since T6.D4, `pFirstMbIdxOfSlice` and
     // `pCountMbNumInSlice` are `Vec<i32>` since T6.D6, and `pOverallMbMap` is a
     // `Vec<u16>` since T6.D7 — this call releases that last one early and restamps
     // the segment fields, all of which the layer's `Drop` would cover anyway.
-    crate::encoder::svc_enc_slice_segment::UninitSlicePEncCtx(p);
+    crate::encoder::svc_enc_slice_segment::UninitSlicePEncCtx(&mut *p);
     (*p).iMaxSliceNum = 0;
 
     // **T6.H8**: `drop(Box::from_raw(p))` stood here, with the slot's null-out under
@@ -1865,7 +1862,7 @@ pub unsafe fn WelsUninitEncoderExt(pEncContext: Option<Box<sWelsEncCtx>>) {
         for ilayer in 0..(*pCtx).ppDqLayerList.len() {
             let pLayer = ctx_dq_layer(pCtx, ilayer);
             if !pLayer.is_null() {
-                FreeDqLayer(pLayer);
+                FreeDqLayer(&mut *pLayer);
             }
         }
         // **T6.H7**: the reference-list entry stood here — a loop calling `FreeRefList`
@@ -2912,7 +2909,7 @@ pub unsafe fn PicPartitionNumDecision(pCtx: *mut sWelsEncCtx) -> i32 {
 /// `pCurDq` must be live with `sMbDataP` allocated.
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
-pub unsafe fn DynslcUpdateMbNeighbourInfoListForAllSlices(pCurDq: *mut SDqLayer, pMbList: *mut SMB) {
+pub unsafe fn DynslcUpdateMbNeighbourInfoListForAllSlices(pCurDq: &mut SDqLayer, pMbList: *mut SMB) {
     let pSliceCtx = &mut (*pCurDq).sSliceEncCtx;
     let kiMbWidth = pSliceCtx.iMbWidth as i32;
     let kiEndMbInSlice = pSliceCtx.iMbNumInFrame - 1;
@@ -2940,7 +2937,11 @@ pub unsafe fn WelsInitCurrentQBLayerMltslc(pCtx: *mut sWelsEncCtx) {
     // pData init
     let pCurDq = current_layer(pCtx);
     // mb_neighbor
-    DynslcUpdateMbNeighbourInfoListForAllSlices(pCurDq, crate::encoder::svc_encode_slice::mb_list_root(pCurDq));
+    // T9.E2h, F66's shape B with an accessor-minted root the detector cannot
+    // see: the MB-list root is minted BEFORE the layer argument's retag (its
+    // buffer is a separate allocation, so the retag cannot reach it).
+    let pMbList = crate::encoder::svc_encode_slice::mb_list_root(pCurDq);
+    DynslcUpdateMbNeighbourInfoListForAllSlices(&mut *pCurDq, pMbList);
 }
 
 /// `UpdateSlicepEncCtxWithPartition` — encoder_ext.cpp:2430.
@@ -2954,7 +2955,7 @@ pub unsafe fn WelsInitCurrentQBLayerMltslc(pCtx: *mut sWelsEncCtx) {
 /// `pCurDq` must be live with `sSliceEncCtx.pOverallMbMap` allocated.
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
-pub unsafe fn UpdateSlicepEncCtxWithPartition(pCurDq: *mut SDqLayer, mut iPartitionNum: i32) {
+pub unsafe fn UpdateSlicepEncCtxWithPartition(pCurDq: &mut SDqLayer, mut iPartitionNum: i32) {
     let pSliceCtx = &mut (*pCurDq).sSliceEncCtx;
     let kiMbNumInFrame = pSliceCtx.iMbNumInFrame;
     let mut iCountMbNumPerPartition = kiMbNumInFrame;
@@ -3033,7 +3034,7 @@ pub unsafe fn WelsInitCurrentDlayerMltslc(pCtx: *mut sWelsEncCtx, iPartitionNum:
 
     let pCurDq = current_layer(pCtx);
 
-    UpdateSlicepEncCtxWithPartition(pCurDq, iPartitionNum);
+    UpdateSlicepEncCtxWithPartition(&mut *pCurDq, iPartitionNum);
 
     if (*pCtx).eSliceType == EWelsSliceType::I_SLICE {
         // check if uiSliceSizeConstraint too small
@@ -3659,7 +3660,7 @@ pub unsafe fn WelsEncoderEncodeExt(
             // THREAD_FULLY_FIRE_MODE/THREAD_PICK_UP_MODE for any mode of
             // non-SM_SIZELIMITED_SLICE
             iSliceCount =
-                crate::encoder::svc_encode_slice::GetCurrentSliceNum(current_layer(pCtx));
+                crate::encoder::svc_encode_slice::GetCurrentSliceNum(&mut *current_layer(pCtx));
             if iLayerNum + 1 >= MAX_LAYER_NUM_OF_FRAME as i32 {
                 // check available layer_bs_info for further writing as followed
                 return ENC_RETURN_UNSUPPORTED_PARA;
@@ -3763,7 +3764,7 @@ pub unsafe fn WelsEncoderEncodeExt(
             }
 
             iSliceCount =
-                crate::encoder::svc_encode_slice::GetCurrentSliceNum(current_layer(pCtx));
+                crate::encoder::svc_encode_slice::GetCurrentSliceNum(&mut *current_layer(pCtx));
             iLayerSize = crate::encoder::slice_multi_threading::AppendSliceToFrameBs(
                 pCtx,
                 pLayerBsInfo,
@@ -3778,7 +3779,7 @@ pub unsafe fn WelsEncoderEncodeExt(
             let mut iSliceIdx = 0i32;
 
             iSliceCount =
-                crate::encoder::svc_encode_slice::GetCurrentSliceNum(current_layer(pCtx));
+                crate::encoder::svc_encode_slice::GetCurrentSliceNum(&mut *current_layer(pCtx));
             while iSliceIdx < iSliceCount {
                 let mut iPayloadSize = 0i32;
 
@@ -4046,7 +4047,7 @@ pub unsafe fn WelsEncoderEncodeExt(
             && (*pSvcParam).iMultipleThreadIdc > 1
             && (*pSvcParam).iMultipleThreadIdc >= (*pParam).sSliceArgument.uiSliceNum as u16
         {
-            crate::encoder::slice_multi_threading::CalcSliceComplexRatio(current_layer(pCtx));
+            crate::encoder::slice_multi_threading::CalcSliceComplexRatio(&mut *current_layer(pCtx));
         }
 
         (*pCtx).eLastNalPriority[iCurDid as usize] = eNalRefIdc;

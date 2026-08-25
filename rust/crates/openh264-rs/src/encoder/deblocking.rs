@@ -1253,8 +1253,8 @@ pub unsafe fn DeblockingMbAvcbase(
 
 // unsafe-cat: cursor
 #[allow(unsafe_code)]
-pub unsafe fn DeblockingFilterFrameAvcbase(pCurDq: *mut SDqLayer, pFunc: *mut SWelsFuncPtrList) {
-    if pCurDq.is_null() || (*pCurDq).pDecPic.is_none() {
+pub unsafe fn DeblockingFilterFrameAvcbase(pCurDq: &mut SDqLayer, pFunc: *mut SWelsFuncPtrList) {
+    if (*pCurDq).pDecPic.is_none() {
         return;
     }
     let pSlice = crate::encoder::svc_encode_slice::slice_in_layer(pCurDq, 0);
@@ -1428,9 +1428,9 @@ pub unsafe extern "C" fn PerformDeblockingFilter(pEnc: *mut sWelsEncCtx) {
     }
 
     if (*pCurLayer).iLoopFilterDisableIdc == 0 {
-        DeblockingFilterFrameAvcbase(pCurLayer, ctx_func_list(pEnc));
+        DeblockingFilterFrameAvcbase(&mut *pCurLayer, ctx_func_list(pEnc));
     } else if (*pCurLayer).iLoopFilterDisableIdc == 2 {
-        let iSliceCount = GetCurrentSliceNum(pCurLayer);
+        let iSliceCount = GetCurrentSliceNum(&*pCurLayer);
         for iSliceIdx in 0..iSliceCount {
             let pSlice = crate::encoder::svc_encode_slice::slice_in_layer(pCurLayer, iSliceIdx);
             if !pSlice.is_null() {

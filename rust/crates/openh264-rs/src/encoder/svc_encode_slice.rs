@@ -1464,7 +1464,12 @@ pub unsafe fn UpdateMbNeighbourInfoForNextSlice(
     // boundary lands on the last macroblock of a partition. A `while` skips it.
     let mut pMb = pMbList.add(iIdx as usize);
     loop {
-        UpdateMbNeighbor(pCurDq, &mut *pMb, kiMbWidth, WelsMbToSliceIdc(pCurDq, (*pMb).iMbXY));
+        // T9.E2h (F66's shape B, session J's fix): the idc is read BEFORE the
+        // call — once `UpdateMbNeighbor` takes `&mut SDqLayer`, its argument
+        // retag would kill a same-call read through the raw. Nothing between
+        // the read and the call reallocates.
+        let kiSliceIdc = WelsMbToSliceIdc(pCurDq, (*pMb).iMbXY);
+        UpdateMbNeighbor(pCurDq, &mut *pMb, kiMbWidth, kiSliceIdc);
         pMb = pMb.add(1);
         iIdx += 1;
         if !((iIdx < kiEndMbNeedUpdate) && (iIdx <= kiLastMbIdxInPartition)) {
@@ -3357,11 +3362,11 @@ pub unsafe fn DynSlcJudgeSliceBoundaryStepBack(
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe fn InitSliceBoundaryInfo(
-    pCurLayer: *mut SDqLayer,
+    pCurLayer: &mut SDqLayer,
     pSliceArgument: *mut SSliceArgument,
     kiSliceNumInFrame: i32,
 ) -> i32 {
-    if pCurLayer.is_null() || pSliceArgument.is_null() {
+    if pSliceArgument.is_null() {
         return ENC_RETURN_INVALIDINPUT;
     }
     let kiMBWidth: i32 = (*pCurLayer).iMbWidth as i32;
@@ -3474,7 +3479,7 @@ pub unsafe fn InitSliceBsBuffer(
 /// last thing `FreeDqLayer` had to release by hand.
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
-pub unsafe fn FreeSliceBuffer(pDqLayer: *mut SDqLayer, kiBank: usize) {
+pub unsafe fn FreeSliceBuffer(pDqLayer: &mut SDqLayer, kiBank: usize) {
     let bank: &mut Vec<SSlice> = &mut (*pDqLayer).sSliceBufferInfo[kiBank].pSliceBuffer;
     bank.clear();
     bank.shrink_to_fit();
@@ -3483,7 +3488,7 @@ pub unsafe fn FreeSliceBuffer(pDqLayer: *mut SDqLayer, kiBank: usize) {
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe fn InitSliceList(
-    pDqLayer: *mut SDqLayer,
+    pDqLayer: &mut SDqLayer,
     kiBank: i32,
     kiMaxSliceNum: i32,
     kiMaxSliceBufferSize: i32,
@@ -3570,7 +3575,7 @@ pub unsafe fn InitOneSliceInThread(
 #[allow(unsafe_code)]
 pub unsafe fn InitSliceThreadInfo(
     pCtx: *mut sWelsEncCtx,
-    pDqLayer: *mut SDqLayer,
+    pDqLayer: &mut SDqLayer,
     kiDlayerIndex: i32,
 ) -> i32 {
     let iThreadNum = if !ctx_param(pCtx).is_null() {
@@ -3597,12 +3602,14 @@ pub unsafe fn InitSliceThreadInfo(
         (*pDqLayer).sSliceBufferInfo[iIdx as usize].pSliceBuffer =
             (0..iMaxSliceNum as usize).map(|_| SSlice::new()).collect();
 
+        // T9.E2h, shape B as above: the flag is read before the call.
+        let kbSliceBsBufferFlag = (*pDqLayer).bSliceBsBufferFlag;
         let iRet = InitSliceList(
             pDqLayer,
             iIdx,
             iMaxSliceNum,
             (*pCtx).iSliceBufferSize[kiDlayerIndex as usize],
-            (*pDqLayer).bSliceBsBufferFlag,
+            kbSliceBsBufferFlag,
         );
         if iRet != ENC_RETURN_SUCCESS {
             return iRet;
@@ -3624,7 +3631,7 @@ pub unsafe fn InitSliceThreadInfo(
 #[allow(unsafe_code)]
 pub unsafe fn InitSliceInLayer(
     pCtx: *mut sWelsEncCtx,
-    pDqLayer: *mut SDqLayer,
+    pDqLayer: &mut SDqLayer,
     kiDlayerIndex: i32,
 ) -> i32 {
     // S29, and F13's remaining production site. This was `&mut ...sSliceArgument`,
@@ -3661,7 +3668,9 @@ pub unsafe fn InitSliceInLayer(
     (*pDqLayer).pFirstMbIdxOfSlice = vec![0i32; (*pDqLayer).iMaxSliceNum as usize];
     (*pDqLayer).pCountMbNumInSlice = vec![0i32; (*pDqLayer).iMaxSliceNum as usize];
 
-    let iRet2 = InitSliceBoundaryInfo(pDqLayer, pSliceArgument, (*pDqLayer).iMaxSliceNum);
+    // T9.E2h, shape B as above: the count is read before the call.
+    let kiMaxSliceNum = (*pDqLayer).iMaxSliceNum;
+    let iRet2 = InitSliceBoundaryInfo(pDqLayer, pSliceArgument, kiMaxSliceNum);
     if iRet2 != ENC_RETURN_SUCCESS {
         return iRet2;
     }
@@ -3968,7 +3977,7 @@ pub unsafe fn ReallocSliceBuffer(pCtx: *mut sWelsEncCtx) -> i32 {
 #[inline]
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
-pub unsafe fn CheckAllSliceBuffer(pCurLayer: *mut SDqLayer, kiCodedSliceNum: i32) -> i32 {
+pub unsafe fn CheckAllSliceBuffer(pCurLayer: &mut SDqLayer, kiCodedSliceNum: i32) -> i32 {
     for iSliceIdx in 0..kiCodedSliceNum {
         let slice_ptr = slice_in_layer(pCurLayer, iSliceIdx);
         if slice_ptr.is_null() || iSliceIdx != (*slice_ptr).iSliceIdx {
@@ -4031,12 +4040,12 @@ pub unsafe fn ReOrderSliceInLayer(pCtx: *mut sWelsEncCtx, kuiSliceMode: SliceMod
         return ENC_RETURN_UNEXPECTED;
     }
 
-    CheckAllSliceBuffer(pCurLayer, iEncodeSliceNum)
+    CheckAllSliceBuffer(&mut *pCurLayer, iEncodeSliceNum)
 }
 
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
-pub unsafe fn GetCurLayerNalCount(pCurDq: *mut SDqLayer, kiCodedSliceNum: i32) -> i32 {
+pub unsafe fn GetCurLayerNalCount(pCurDq: &mut SDqLayer, kiCodedSliceNum: i32) -> i32 {
     let mut iTotalNalCount = 0;
     for iSliceIdx in 0..kiCodedSliceNum {
         let slice_ptr = slice_in_layer(pCurDq, iSliceIdx);
@@ -4059,12 +4068,8 @@ pub unsafe fn GetTotalCodedNalCount(pFbi: *mut SFrameBSInfo) -> i32 {
 
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
-pub unsafe fn GetCurrentSliceNum(pCurDq: *const SDqLayer) -> i32 {
-    if pCurDq.is_null() {
-        -1
-    } else {
-        (*pCurDq).sSliceEncCtx.iSliceNumInFrame.load(Ordering::Relaxed)
-    }
+pub unsafe fn GetCurrentSliceNum(pCurDq: &SDqLayer) -> i32 {
+    pCurDq.sSliceEncCtx.iSliceNumInFrame.load(Ordering::Relaxed)
 }
 
 /// `FrameBsRealloc` — svc_encode_slice.cpp:1562.
@@ -4154,8 +4159,8 @@ pub unsafe fn SliceLayerInfoUpdate(
         return iRet;
     }
 
-    let iCodedSliceNum = GetCurrentSliceNum(current_layer(pCtx));
-    (*pLayerBsInfo).iNalCount = GetCurLayerNalCount(current_layer(pCtx), iCodedSliceNum);
+    let iCodedSliceNum = GetCurrentSliceNum(&*current_layer(pCtx));
+    (*pLayerBsInfo).iNalCount = GetCurLayerNalCount(&mut *current_layer(pCtx), iCodedSliceNum);
     let iCodedNalCount = GetTotalCodedNalCount(pFrameBsInfo);
 
     if iCodedNalCount > (*(*pCtx).pOut).sNalList.len() as i32 {

@@ -470,10 +470,7 @@ pub unsafe fn UpdateMbListNeighborParallel(
 /// second expected-divergent class after `CABA2_SVA_B` — see plan §1.5 and F72.
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
-pub unsafe fn CalcSliceComplexRatio(pCurDq: *mut SDqLayer) {
-    if pCurDq.is_null() {
-        return;
-    }
+pub unsafe fn CalcSliceComplexRatio(pCurDq: &mut SDqLayer) {
     let pSliceCtx = &mut (*pCurDq).sSliceEncCtx;
     let mut iSumAv = 0i32;
     let kiSliceCount = pSliceCtx.iSliceNumInFrame.load(Ordering::Relaxed);
@@ -510,8 +507,8 @@ pub unsafe fn CalcSliceComplexRatio(pCurDq: *mut SDqLayer) {
 /// slices exceeds the core-dependent threshold to justify dynamic slicing.
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
-pub unsafe fn NeedDynamicAdjust(pCurDq: *mut SDqLayer, iSliceNum: i32) -> i32 {
-    if pCurDq.is_null() || iSliceNum <= 0 {
+pub unsafe fn NeedDynamicAdjust(pCurDq: &mut SDqLayer, iSliceNum: i32) -> i32 {
+    if iSliceNum <= 0 {
         return 0;
     }
 
@@ -573,10 +570,10 @@ pub unsafe fn NeedDynamicAdjust(pCurDq: *mut SDqLayer, iSliceNum: i32) -> i32 {
 #[allow(unsafe_code)]
 pub unsafe fn DynamicAdjustSlicing(
     pCtx: *mut sWelsEncCtx,
-    pCurDqLayer: *mut SDqLayer,
+    pCurDqLayer: &mut SDqLayer,
     iCurDid: i32,
 ) {
-    if pCtx.is_null() || pCurDqLayer.is_null() {
+    if pCtx.is_null() {
         return;
     }
 
@@ -669,8 +666,8 @@ pub unsafe fn DynamicAdjustSlicing(
 /// Applies newly calculated macroblock run-lengths to slice context structures.
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
-pub unsafe fn DynamicAdjustSlicePEncCtxAll(pCurDq: *mut SDqLayer, pRunLength: *mut i32) -> i32 {
-    if pCurDq.is_null() || pRunLength.is_null() {
+pub unsafe fn DynamicAdjustSlicePEncCtxAll(pCurDq: &mut SDqLayer, pRunLength: *mut i32) -> i32 {
+    if pRunLength.is_null() {
         return 1;
     }
     let pSliceCtx = &mut (*pCurDq).sSliceEncCtx;
@@ -981,11 +978,13 @@ pub unsafe fn AdjustBaseLayer(pCtx: *mut sWelsEncCtx) -> i32 {
     // up). Body otherwise untouched — Phase 7 owns everything else here.
     set_current_layer(pCtx, Some(LayerIdx(0)));
 
-    let iNeedAdj =
-        NeedDynamicAdjust(pCurDq, (*pCurDq).sSliceEncCtx.iSliceNumInFrame.load(Ordering::Relaxed));
+    // T9.E2h, F66's shape B with an accessor-minted root the detector cannot
+    // see: the count is read before the call whose first argument retags.
+    let kiSliceNumInFrame = (*pCurDq).sSliceEncCtx.iSliceNumInFrame.load(Ordering::Relaxed);
+    let iNeedAdj = NeedDynamicAdjust(&mut *pCurDq, kiSliceNumInFrame);
 
     if iNeedAdj != 0 {
-        DynamicAdjustSlicing(pCtx, pCurDq, 0);
+        DynamicAdjustSlicing(pCtx, &mut *pCurDq, 0);
     }
 
     iNeedAdj
@@ -1018,24 +1017,25 @@ pub unsafe fn AdjustEnhanceLayer(pCtx: *mut sWelsEncCtx, iCurDid: i32) -> i32 {
         if pBaseLayer.is_null() {
             return 0;
         }
-        iNeedAdj = NeedDynamicAdjust(
-            pBaseLayer,
-            (*current_layer(pCtx)).sSliceEncCtx.iSliceNumInFrame.load(Ordering::Relaxed),
-        );
+        // T9.E2h, shape B again — and here the two arguments can NAME THE SAME
+        // LAYER (base == current when iCurDid is the base), so the load is
+        // hoisted above the retag.
+        let kiSliceNumInFrame =
+            (*current_layer(pCtx)).sSliceEncCtx.iSliceNumInFrame.load(Ordering::Relaxed);
+        iNeedAdj = NeedDynamicAdjust(&mut *pBaseLayer, kiSliceNumInFrame);
         if iNeedAdj != 0 {
-            DynamicAdjustSlicing(pCtx, current_layer(pCtx), iCurDid);
+            DynamicAdjustSlicing(pCtx, &mut *current_layer(pCtx), iCurDid);
         }
     } else {
         let pCurLayer = ctx_dq_layer(pCtx, iCurDid as usize);
         if pCurLayer.is_null() {
             return 0;
         }
-        iNeedAdj = NeedDynamicAdjust(
-            pCurLayer,
-            (*current_layer(pCtx)).sSliceEncCtx.iSliceNumInFrame.load(Ordering::Relaxed),
-        );
+        let kiSliceNumInFrame =
+            (*current_layer(pCtx)).sSliceEncCtx.iSliceNumInFrame.load(Ordering::Relaxed);
+        iNeedAdj = NeedDynamicAdjust(&mut *pCurLayer, kiSliceNumInFrame);
         if iNeedAdj != 0 {
-            DynamicAdjustSlicing(pCtx, current_layer(pCtx), iCurDid);
+            DynamicAdjustSlicing(pCtx, &mut *current_layer(pCtx), iCurDid);
         }
     }
 
