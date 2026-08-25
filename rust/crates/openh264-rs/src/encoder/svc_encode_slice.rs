@@ -894,37 +894,17 @@ pub unsafe fn ctx_ref_pic<'a>(pCtx: *mut sWelsEncCtx) -> Option<&'a SPicture> {
     Some((*pRefList).pic(id))
 }
 
+// `ctx_pic_ref_mut` stood here — the exclusive form of the `PicRef` resolution.
+// Its last callers were `JudgeStaticSkip`/`JudgeScrollSkip`'s two
+// `ctx_pic_ref_mut(..).planes()` whole-picture retags (F121's live-as-code,
+// dark-as-behaviour pair), which session F replaced with the shared route; the
+// accessor has had **zero callers anywhere in the tree** since (whole-tree read
+// grep at deletion). S18, with E3's tag sweep. One `cursor` tag retires.
+
 /// The picture a [`PicRef`] names — the reconstruction pool through the current
 /// dependency layer's reference list, or the spatial source pool through the
 /// preprocessor. `SDqLayer::pRefOri` is the one field that holds either; see
-/// [`PicRef`].
-///
-/// # Safety
-/// As [`ctx_ref_pic`].
-#[inline]
-// unsafe-cat: cursor
-#[allow(unsafe_code)]
-pub unsafe fn ctx_pic_ref_mut<'a>(pCtx: *mut sWelsEncCtx, r: PicRef) -> Option<&'a mut SPicture> {
-    match r {
-        PicRef::Rec(id) => {
-            let pRefList = ctx_ref_list(pCtx, (*pCtx).uiDependencyId as usize);
-            if pRefList.is_null() {
-                None
-            } else {
-                Some((*pRefList).pic_mut(id))
-            }
-        }
-        PicRef::Src(id) => {
-            if (*pCtx).pVpp.is_null() {
-                None
-            } else {
-                Some((*(*pCtx).pVpp).m_pSpatialPicPool.get_mut(id))
-            }
-        }
-    }
-}
-
-/// Shared form of [`ctx_pic_ref_mut`].
+/// [`PicRef`]. Shared only: the exclusive form is deleted (see above).
 ///
 /// # Safety
 /// As [`ctx_ref_pic`].
