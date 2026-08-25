@@ -2410,3 +2410,103 @@ this campaign hit, one of which only the close's Miri saw
    read-through-independent-path clause for ref-param bodies whose type has
    ctx-resident accessors — with S55's calibration cost, this session left the
    matcher alone and hands the ledger forward.
+
+## F149 — `md_cost_raw`/`me_cost_raw` had zero callers from birth; the brief's "16 uses outside md.rs" matches nothing measurable
+
+The F brief's step-2 list included "the `md_cost_raw`/`me_cost_raw` accessors
+(`md.rs:837`/`:848`, **16** uses outside `md.rs`)" as conversion work. Measured at
+the brief's own commit:
+
+```
+$ grep -rn 'md_cost_raw\|me_cost_raw' src tests --include='*.rs' | grep -v 'src/encoder/md.rs'
+(nothing)
+$ grep -rn '\.md_cost(\|\.me_cost(' src | grep -v md.rs | wc -l
+3
+```
+
+The raw pair had **zero callers anywhere in the tree** — every runtime-selected
+cost site went through the safe `md_cost`/`me_cost` from the moment B2–B3 flipped
+it, so T9.B25's transitional accessors were dead the day they were written. And the
+safe pair has **3** uses outside `md.rs`, not 16; the brief's number corresponds to
+no grep this tree can produce. Consequence for the session: an S18 deletion where
+the brief had scheduled a conversion — strictly less work, but the class matters:
+**a brief's workload number for an accessor is a grep, and quoting it without the
+command beside it is how a phantom 16 survives review** (S24's rule, restated for
+briefs). The deletion grep is quoted at the site in `md.rs`.
+
+## F150 — the `pfMotionSearch` loop installs one function into every slot; the screen-content variants have no installer at all
+
+The brief: "The installs (`encoder_ext.rs:2446`, a loop over screen-content
+variants) update signatures with the typedef." The tree: the loop installs
+`WelsMotionEstimateSearch` — the one live search — into **every**
+`BLOCK_STATIC_IDC` slot, unconditionally, on every P-frame preprocess:
+
+```rust
+for i in 0..EStaticBlockIdc::BLOCK_STATIC_IDC_ALL as usize {
+    fl.pfMotionSearch[i] = Some(crate::encoder::svc_motion_estimate::WelsMotionEstimateSearch);
+}
+```
+
+`WelsMotionEstimateSearchStatic` and `..Scrolled` have **zero install sites** — the
+C++ block that installs them per static idc (`encoder_ext.cpp:2708-2771`, the
+SCREEN_CONTENT arm of `PreprocessSliceCoding`) is explicitly untranslated, a fact
+the port records at the site and F125's table mis-attributed to `WelsInitMeFunc`.
+Three consequences, all landed this session: (a) the runtime-indexed dispatch
+`pfMotionSearch[iBlock8x8StaticIdc[i]]` is **double-locked** — every entry holds
+the same function, and the index's only nonzero writer (`SetBlockStaticIdcToMd`)
+is SCREEN_CONTENT(dormant) — so the de-virtualized call is byte-identical without
+any constancy argument on the index; (b) `pfSearchMethod`'s only writer is the
+sibling loop installing `WelsDiamondSearch` for every block size, because (c)
+`SetMeMethod` — the ME_DIA/CROSS/FME selector the C++ reaches only from that same
+untranslated block — had **zero callers** and is deleted (S18). The dormant search
+variants stay, converted to the new typedefs, for Phase 10 to re-install.
+
+## F151 — the brief's "sad_common denies with zero allows" collides with its own "preprocess is not this session"; resolved by C2's ownership rule
+
+The 14 raw SAD shims' read grep (S18, tests and benches included — F119's clause,
+paid once more by this session's step 0 before it was re-learned) found **15**
+callers, not 14 + tests: `processing/scene_change_detection.rs:87` — the scene
+change detector's 8x8 block walk, the plane census's `preprocess` row — calls
+`WelsSampleSad8x8_c` on raw `SPixMap` pixel pointers that no cursor can replace
+until the preprocess family's own session converts the pixmap. The brief demands
+both "`sad_common.rs` denies with zero allows" and "not this session: the
+preprocess family", and lists neither the caller nor the tension.
+
+Resolution: **the raw body moves to the family that owns its last caller** —
+F139's ownership rule for the decoder's deblocking shims, applied to the
+preprocess family. `sad_8x8_raw` is a private, flattened (exactness argued from
+associativity at the site), `port-raw`-tagged kernel inside
+`scene_change_detection.rs`; `sad_common.rs` reaches `#![deny(unsafe_code)]` with
+zero allows. The ratchet was **rebaselined** for that one file (+2 `raw_ptr`,
++3 `unsafe_block`, +1 `unsafe_fn`) in the same commit, reason stated — the only
+per-file increase in a session that took the crate down 118 `raw_ptr`. The
+preprocess session inherits one raw kernel where it used to inherit a
+cross-module dependency.
+
+## F152 — two census blind spots: an interior-pointer slot read is invisible, and a relocated kernel takes its row with it
+
+Two ways `phase9_plane_callers.py`'s picture diverged from the tree this session,
+both one class: **the census keys on spellings, and both fixes changed the
+spelling without changing the fact.**
+
+1. `CheckChromaCost`'s cost-table read was respelled by T9.E7 (F132 round 8) as
+   `addr_of!((*fl).sSampleDealingFuncs.pfSampleSadRaw).cast::<..>()` — an interior
+   pointer handed to `GetChromaCost` — and from that commit on the census had **no
+   row for the encoder's one remaining live raw cost read**: it lists direct slot
+   mentions at call sites, and the slot's mention had moved into a cast expression
+   two frames up the call chain. The brief scoped step 2 off the census and
+   therefore never listed `CheckChromaCost`/`GetChromaCost`, the largest live
+   conversion in the step (F137's lesson, third instance: the census's kernel and
+   slot lists are enumerations, and every respelling is a chance to fall out of
+   them).
+2. The `preprocess` row (`Process`, `WelsSampleSad8x8_c`) disappeared from the
+   census at T9.F2b not because the site converted but because the kernel it calls
+   is now a private local name the census does not enumerate. The census's
+   `safe-now` column closing at 6 rows is right about the encoder and silent about
+   the relocation; the log states it so the row is not read as converted.
+
+Session F's close census: 27 sites — 6 `safe-now` (3 `VaaBackgroundMbDataUpdate`
+copies under F117/S57's stay-raw ruling, 3 dormant `SvcMdSCDMbEnc` MCs — all
+Phase 10's or F117's), 13 `coeff`, 3 `blocked`, 5 `seam`, 0 unclassified. The ME
+rows are gone: the brief's step-2 prediction ("only the preprocess row and Phase
+10's") is right in substance with the two corrections above.
