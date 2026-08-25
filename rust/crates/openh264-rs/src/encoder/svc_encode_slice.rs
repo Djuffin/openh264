@@ -4271,7 +4271,19 @@ mod tests {
     /// frames 0 and 1 alike. Every assertion below is on frames 0 and 1, and the
     /// 3x2 neighbour grid (F34) is untouched. Full size on every plain
     /// `cargo test`.
+    ///
+    /// **Ignored under Miri — D-gate-7 (the user, 2026-08-24), a cost scope,
+    /// not a defect skip.** This probe's distinguishing axes are CABAC entropy
+    /// over LOW_COMPLEXITY on a single slice; under Miri both are covered more
+    /// deeply elsewhere — the size-limited probe drives the CABAC writers *and*
+    /// their stash/restore arm at LOW_COMPLEXITY (its options default `cabac:
+    /// true`), the fork probes drive CABAC multi-slice at `full`/`exit`, and
+    /// the CAVLC probe carries the other entropy family — so its marginal Miri
+    /// coverage no longer pays its ~4 minutes in every encoder run. It runs at
+    /// full size on every native `cargo test`, where its measured anchors
+    /// (F34's grid, the 618-byte inter floor) keep their teeth.
     #[test]
+    #[cfg_attr(miri, ignore)]
     fn encode_loop_runs_over_a_macroblock_grid_under_the_aliasing_checker() {
         let kiFrames = miri_scaled(3, 2) as usize;
         let (frames, dims) = drive_encoder_over(48, 32, kiFrames, EncoderProbeOptions::default());
