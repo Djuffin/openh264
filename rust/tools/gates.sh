@@ -78,11 +78,12 @@ hdr() { printf '\n=== %s\n' "$1"; }
 # machine already has:
 #
 #   native lane (this shell):  build, tests, ratchet, census, both sweeps
-#   miri lane   (background):  one `--no-run` compile, then FIVE concurrent
-#                              `cargo miri test` shards — the three encode
-#                              probes are one shard each (they are the three
-#                              largest single tests, F140/F141), everything
-#                              else splits into an encoder shard and an api/common/safe shard
+#   miri lane   (background):  one compile, then FOUR concurrent
+#                              `cargo miri test` shards — the CAVLC and
+#                              size-limited encode probes are one shard each
+#                              (the largest single tests, F140/F141),
+#                              everything else splits into an encoder shard
+#                              and an api/common/safe shard
 #
 # The lanes do not contend: cargo-miri builds under target/miri with its own
 # lock, the diffharness builds in its own tree, and each Miri interpreter is
@@ -94,6 +95,13 @@ hdr() { printf '\n=== %s\n' "$1"; }
 #   - the size-limited probe drives 48x32x2 under Miri, so session-scope Miri
 #     does not see the slice-buffer realloc chain (the probe's own doc says
 #     why 112x96 cannot be afforded there);
+#   - D-gate-7 (the user, 2026-08-24): the CABAC/low-complexity grid probe is
+#     `#[cfg_attr(miri, ignore)]` — its Miri axes are covered more deeply by
+#     the size-limited probe (CABAC + stash/restore, LOW_COMPLEXITY) and the
+#     fork probes; it runs natively on every cargo test. The same ruling asks
+#     that encoder Miri probes run as SEPARATE invocations — the lane already
+#     does (one shard per probe), and full/exit run each probe as its own
+#     step below instead of one monolithic --lib pass;
 #   - the two fork/join probes are skipped BY NAME in the encoder shard: live
 #     (un-ignored) since T9.E8, their first green runs measured 3356 s and
 #     3449 s (~57 min as a parallel pair) — MIN_NUM_MB_PER_SLICE floors their
@@ -109,7 +117,7 @@ hdr() { printf '\n=== %s\n' "$1"; }
 # against its parsed totals, and a shard that ran zero tests fails loudly — a
 # renamed probe must not pass by vanishing (this script's own header rule).
 # ---------------------------------------------------------------------------
-MIRI_SHARDS=(grid cavlc sizelimited enc other)
+MIRI_SHARDS=(cavlc sizelimited enc other)
 MIRI_LANE_FLAGS="-Zmiri-ignore-leaks -Zmiri-disable-isolation"
 miri_session_lane() {
   local t0 rc
@@ -137,9 +145,6 @@ miri_session_lane() {
   # level *is* the encoder-scoped close (D-gate-4 pairs them), and a session
   # that touches decoder code runs the serial `full` step for it instead.
   local pids=()
-  (cd "$CRATE" && MIRIFLAGS="${MIRIFLAGS:-} $MIRI_LANE_FLAGS" cargo +nightly miri test --lib -- \
-     encode_loop_runs_over_a_macroblock_grid) > "$LOGS/miri_shard_grid.log" 2>&1 &
-  pids+=($!)
   (cd "$CRATE" && MIRIFLAGS="${MIRIFLAGS:-} $MIRI_LANE_FLAGS" cargo +nightly miri test --lib -- \
      encode_loop_runs_with_cavlc) > "$LOGS/miri_shard_cavlc.log" 2>&1 &
   pids+=($!)
@@ -569,7 +574,7 @@ if [ "${LEVEL_DONE:-0}" != 1 ]; then
   if [ "$LEVEL" = session ]; then
     # D-gate-6: the parallel lane launched at the top of the script; this is
     # the join. See the lane's header comment for what session scope covers.
-    hdr "miri (parallel lane join: 1 compile + 5 shards — D-gate-6)"
+    hdr "miri (parallel lane join: 1 compile + 4 shards — D-gate-6)"
     if [ -z "$MIRI_LANE_PID" ]; then
       skip "miri: no nightly toolchain (rustup toolchain install nightly)"
     else
@@ -597,7 +602,7 @@ if [ "${LEVEL_DONE:-0}" != 1 ]; then
           miri_total_passed=$((miri_total_passed + shard_passed))
         done
         if [ "$miri_shards_bad" -eq 0 ]; then
-          pass "miri (5 shards, session scope): $miri_total_passed passed / 0 failed"
+          pass "miri (4 shards, session scope): $miri_total_passed passed / 0 failed"
         fi
         s61_report "$(cat "$LOGS/miri_lane_wall" 2>/dev/null || echo 0)"
       fi
@@ -631,13 +636,31 @@ if [ "${LEVEL_DONE:-0}" != 1 ]; then
     # *report* quotes both numbers and files a finding — not that a loaded machine
     # can veto a session.
     MIRI_T0=$(date +%s)
-    # MIRI_FULL=1 restores the encode probes' full drives at the un-capped
-    # tiers (`full`/`exit`) — see `miri_scaled` in svc_encode_slice.rs
-    # (D-gate-6): the session lane runs them small, these levels run them
-    # whole, fork/join probes included once they are un-ignored.
-    MIRI_FULL=1 run_miri lib "$MIRI_DESC" \
+    # D-gate-7 (the user, 2026-08-24): each encoder probe runs as its OWN
+    # invocation with its own verdict line, never inside one monolithic pass —
+    # so the big --lib step skips them all, and the per-probe steps follow.
+    # MIRI_FULL=1 restores the probes' full drives at these un-capped tiers
+    # (`full`/`exit`) — see `miri_scaled` in svc_encode_slice.rs (D-gate-6):
+    # the session lane runs them small, these levels run them whole. The two
+    # fork probes measured 3356 s and 3449 s green (T9.E8); running them here
+    # is what "the phase exit runs the fork" means, and the wall is theirs.
+    run_miri lib "$MIRI_DESC (probes split out, D-gate-7)" \
       "-Zmiri-ignore-leaks -Zmiri-disable-isolation" --lib -- \
+      --skip 'encode_loop_runs' --skip 'fork_join_encodes' \
       ${MIRI_SKIPS[@]+"${MIRI_SKIPS[@]}"}   # F75: bash 3.2 + set -u, empty array
+    hdr "miri (per-probe steps — D-gate-7)"
+    MIRI_FULL=1 run_miri probe_cavlc "probe: cavlc+fine-MD (full drive)" \
+      "-Zmiri-ignore-leaks -Zmiri-disable-isolation" --lib -- \
+      encode_loop_runs_with_cavlc
+    MIRI_FULL=1 run_miri probe_sizelimited "probe: size-limited dynamic slices (full drive)" \
+      "-Zmiri-ignore-leaks -Zmiri-disable-isolation" --lib -- \
+      encode_loop_runs_over_size_limited
+    run_miri probe_fork_fixed "probe: fork/join fixed-slice (~56 min, T9.E8)" \
+      "-Zmiri-ignore-leaks -Zmiri-disable-isolation -Zmiri-report-progress" --lib -- \
+      fork_join_encodes_a_multi_slice_frame
+    run_miri probe_fork_midrow "probe: fork/join mid-row boundary (~57 min, T9.E8)" \
+      "-Zmiri-ignore-leaks -Zmiri-disable-isolation -Zmiri-report-progress" --lib -- \
+      fork_join_encodes_a_frame_whose_slice_boundary
     s61_report $(( $(date +%s) - MIRI_T0 ))
   fi
   fi  # session lane join / serial step (D-gate-6)
