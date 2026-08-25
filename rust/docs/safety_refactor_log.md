@@ -17812,3 +17812,111 @@ baseline file is updated. Ratchet across the session: `raw_ptr` **−63**,
 are in their commits (the grid mint's shared helper; the harvest's covering
 test and the shared root's two spellings — S16's instrument class both times).
 Findings **F153–F158**.
+
+---
+
+## Phase 9 — session G (2026-08-25): the context family, step 0 through step 2
+
+**Steps 0, 1 and 2 landed. Steps 3–6 did not start, and the report says why:
+what the session found in steps 0–2 changes what step 3 should be.** Eight
+commits, `gates.sh family` green on every one of them.
+
+**Step 0 — D-dead-3.** `pGomCost` deleted whole: field, `Default`, allocation,
+the per-frame zeroing, the per-macroblock `+=`. Five sites here, five upstream
+(`rc.h:191`, `ratectl.cpp:79/90/669/1273`), and not one of the ten a read — both
+greps quoted in the commit. F133 ends with no artefact of the race in the port.
+`iCostLuma` and `iComplexityIndexSlice` were that statement's only consumers in
+`WelsRcMbInfoUpdateGom`; the parameter stays as `_iCostLuma` because the
+`pfRcMbInfoUpdate` slot's other three installees share its shape. **Eight
+cross-references updated, not the brief's seven** — it missed the `rc_gom_cost`
+gravestone at `rc.rs:850`. `assert_size!(SWelsSvcRc, 440)` re-pins to **416**,
+measured by the compiler (`assert_size!` is a `const _: () = assert!(…)`, so the
+build *is* the measurement). Byte-neutral and ratchet-neutral.
+
+**The byte-identity gate was down, and step 0 found it (F159, S66).** The
+stale-driver guard `583cd21a` added to `sweep.sh` was pointed at
+`$HERE/rust_enc` — the cargo crate **directory**, not
+`$HERE/rust_enc/target/$PROFILE/rust_enc`. `[ -x <dir> ]` is true, so its
+missing-binary arm never fired; the directory's mtime is when a file was last
+added to the crate, so `find -newer` matched 83 sources and it reported STALE on
+every run. **Every `sweep.sh` invocation since that commit exited 2 without
+probing a byte, the two inside `gates.sh family/session/full/exit` included** —
+and G's brief carried the claim forward as "gates.sh is unaffected (build.sh
+runs first at gates.sh:356)". build.sh did run and did rebuild; the guard was not
+comparing against what it built. Its first live run's "fired truthfully" was the
+false positive being read as a confirmation. Fixed and calibrated in **both**
+directions, six arms — that is S66, and it is the half S55 was missing. The first
+sweep to execute since `583cd21a` ran at that commit: **583/583 both profiles**.
+
+**Step 1 — the instruments, and the join (F161).** Both reproduced exactly:
+forksplit **111 / 157 / 268**, q1c **266 sites / 69 callers / 82 callees**, A=205
+over 44 cursors, B=61, C/D/E=0. And that is the problem — **they do not know
+about each other.** q1c models one conversion ("the parameter becomes `&mut T`",
+its own docstring) and S63 forbids the in-fork half from ever taking `&mut`, so a
+hazard whose *callee* is in-fork is a conditional with a forbidden antecedent.
+`phase9_ctx_join.py` (shipped) does the join: **131 live / 135 moot**. The
+brief's named centrepiece is in the moot half — "narrowing `ctx_param` alone
+implicates 55 sites", and `ctx_param` is reached from the fork seed through
+`WelsCodeOneSlice`. With `ctx_ref_list` 19, `current_layer` 19, `ctx_rc_at` 10,
+`ctx_vaa` 9, `ctx_func_list` 7 beside it: 119 sites of accessor narrowing buying
+zero live sites. **This is F146 in the mirror** — E2's brief ordered a flip *on*
+fork-shared bodies, G's ordered hazard-clearing *for* them; both applied the split
+to the family and not to the detector's output. S65 is the rule.
+
+**Step 2 — 131 live to 7, and the 7 are analysed false positives.** Six commits:
+
+* **T9.G2** — `pSpatialIndexMap` retired (61 sites, one binding). It is an inline
+  `[SSpatialPicIndex; 4]` *in* the context, so an index is a field read;
+  `rc.rs:1881` and four siblings had always spelled it that way. One use is kept
+  raw on purpose (**F162**): at the `ENC_RETURN_CORRECTED` tail
+  `iSpatialIdx == iSpatialNum`, so with 4 spatial layers it reads one past the
+  end — as upstream does, twice, at `encoder_ext.cpp:4109-4110`. An index would
+  panic where that reads, and a panic is not byte-identical.
+* **T9.G3** — `DeleteLTRFromLongList` and `DeleteSTRFromShortList` narrowed onto
+  `&mut SRefList` (11 sites, 2 bodies out of the family). They used the context
+  for exactly one derivation their five callers already held, with the same
+  `uiDid` — `uiDependencyId` is written in one place in the encoder and never in
+  that file. Both lose `unsafe` entirely.
+* **T9.G4** — derivation order, and **the order is decided by the fork split.**
+  The first ordering traded two hazards for two new ones; there is no ordering
+  with none, but there is one with none *live*: scalar first, then the
+  ST-flippable accessor, then the permanently-raw fork-reachable one. **The moot
+  half is a resource, not just non-work.**
+* **T9.G5** — `ctx_frame_bs_at` loses the position it never varied. All 18
+  production callers passed `(*pCtx).iPosBsBuffer`; `ctx_frame_bs_cur` **replaces**
+  it. **The ratchet refused two attempts and was right both times** — adding the
+  accessor beside the old one moved one file up to move eighteen sites down, and
+  the rewritten test then added two raw mints and two unsafe blocks.
+* **T9.G6** — the 18 live shape-B hoists; live shape B to **0**.
+* **T9.G7** — the four *holding* `pLtr` bindings go raw. They were
+  `&mut *ctx_ltr_at(pCtx, uiDid)` held across callees that derive their own `&mut`
+  to the **same** `SLTRState`: two Unique tags from one raw root, siblings, the
+  second popping the first. **That is a hazard today, with everything raw**, and
+  the `*mut ctx` question was hiding it. The holding was never the problem; the
+  `&mut` was.
+
+**Why 7 and not 0 (F163).** q1c's remedy for shape B produces shape A whenever
+the hoisted value is a pointer, and for a context whose accessors return pointers
+that is most of them. Deeper: it models the retag **by type** and the hazard is
+**by allocation**. F66's Miri trace names `[0x0..0x17ee8]` — the context's own
+allocation — and the cursor it killed was an inline array field. All 7 survivors
+are outside that allocation or are their own call's argument: 4 × `pParamD` into
+the coding-param `Box`, 3 × T9.G6's hoists. "Detector to zero" should not be
+written into a brief as an exit criterion.
+
+**Step 5's instrument, run early because it is cheap (F164).** F67's `Sync` probe
+re-derived at HEAD: **still twelve, and a different twelve.** `*mut CMemoryAlign`
+retired as F67 predicted; `*mut SrcPicPool` arrived inside `SDqLayer`; the three
+scalar-pointer reasons F67 attributed to the context directly all reach through
+`SVAAFrameInfo` now. A stable total is not a stable list. **Only 4 of the 12 are
+the context split's** — the seam's comment said "five of them inside types Phases
+8 and 10 own" and the measurement is **eight** not-G's. So **the send-seam cannot
+be retired by this session or by any amount of its work**; the comment is
+corrected in place to name the residue and to say it is a phase-exit item.
+
+**Also recorded, neither touched (F160).** D-dead-3 orphaned two things of the
+shape the ruling was about: `SharedMbArray::capture` (`rec_view.rs:342`) has no
+caller and its stated justification was `pGomCost`; and the three `pfIDct*` slots
+(F138) were left alone on the ground that "the F133 ruling was to leave write-only
+storage alone" — a precedent D-dead-3 has now reversed. Extending a ruling made on
+one field to two more members of its class is a second ruling, not an inference.

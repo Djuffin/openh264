@@ -2824,3 +2824,134 @@ brief must carry — the missing clause is that it is also the first number the
 know about each other cannot do it for you. A hazard report is a conditional:
 *if* this converts, this breaks. Counting conditionals whose antecedent is
 forbidden is counting.
+
+## F162 — an upstream one-past-the-end read the port reproduces, at `WelsEncoderEncodeExt`'s error tail
+
+`encoder_ext.rs`, at the `ENC_RETURN_CORRECTED` branch after the spatial loop:
+
+```rust
+if ENC_RETURN_CORRECTED == (*pCtx).iEncoderError {
+    let iDid = (*pSpatialIndexMap.add(iSpatialIdx as usize)).iDid;
+```
+
+`iSpatialIdx == iSpatialNum` there — the loop ran to completion — and
+`sSpatialIndexMap` is `[SSpatialPicIndex; MAX_DEPENDENCY_LAYER]` with
+`MAX_DEPENDENCY_LAYER = 4`. With four spatial layers configured (`dl` sweeps 2/3/4)
+the read is one past the end.
+
+Upstream does the identical thing, twice, at `encoder_ext.cpp:4109-4110`:
+`(pSpatialIndexMap + iSpatialIdx)->iDid` as the fourth argument to
+`UpdateSpatialPictures` and the second to `ForceCodingIDR`.
+
+**Left as upstream has it.** T9.G2 replaced every other use of that cursor with a
+direct index; this one keeps the raw spelling because an index panics where a
+pointer reads, and a panic is not byte-identical. It is spelled as a derivation
+that lives and dies inside the statement, so it costs nothing in hazard terms. The
+site is commented and points here.
+
+Whether the port should diverge from upstream on a latent out-of-bounds read in an
+error path is a ruling, not a session's call — the same shape as D-dead-3, and
+recorded the same way.
+
+## F163 — "drive the hazard detector to zero" is not a reachable exit criterion: its own remedy for shape B produces shape A
+
+Session G's brief scopes step 2 as `q1c --kind raw` → **0 across all shapes**. The
+campaign got 266 → 92 and live 131 → 7, and the last stretch showed why 0 is the
+wrong target.
+
+q1c reports two shapes. **A** is a cursor held across a call; its remedy is to
+retire or re-derive the cursor. **B** is an argument evaluated after the callee has
+taken the retag; its remedy is to hoist the argument into a binding before the
+call. The two remedies are in tension:
+
+- hoisting a **scalar** clears the site — `iRCMode`, `iMaxSliceNum`,
+  `iActiveThreadsNum`, `uiDependencyId`;
+- hoisting a **pointer** converts B into A — `let l = &mut *current_layer(pCtx);
+  f(pCtx, …, l, …)` is read as a cursor derived, then a call, then a use.
+
+Three of T9.G6's eighteen hoists moved that way, and all three are the *correct*
+end state: `current_layer` is fork-reachable, so S63 keeps it `*mut` permanently,
+the `&mut` lands on the layer allocation rather than on a borrow of the context,
+and the hoisted form is what compiles once the callee flips. The unhoisted form is
+what does not. For a context whose accessors return pointers, that case is most of
+them.
+
+**The deeper reason 0 is unreachable is that q1c models the retag by type and the
+hazard is by allocation.** A `&mut sWelsEncCtx` entry retag covers
+`[0x0..0x17ee8]` — the context's own allocation. F66's Miri trace names exactly
+that, and the cursor it killed was `sSpatialIndexMap`, an **inline array field**
+inside the context. A cursor that points into a `Vec` buffer or a `Box` the context
+merely holds a pointer to is in a *different allocation* and cannot be reached by
+that retag. The port's accessors are written to launder provenance out of the
+container on purpose (F71, "shared access to the `Vec`, buffer provenance out"), so
+most context cursors are of the second kind. All 7 live sites left at G's close are:
+4 × `pParamD` into the coding-param `Box`, 3 × T9.G6's hoists.
+
+The reachable criterion is **the join's live count, read per site** — and the
+useful instrument would be a q1c that classifies a derivation by the allocation it
+lands in (inline field vs. container payload), which is a static question its
+existing `DERIV_HINT` machinery is already most of the way to answering. Until then
+"0" should not be written into a brief as an exit condition.
+
+This is F161's sibling: F161 is the detector over-reporting because it does not
+know the fork split; F163 is the detector over-reporting because it does not know
+the allocation. Both are the same lesson — **a hazard report is a conditional, and
+the brief must filter it before quoting it as a work list.**
+
+## F164 — F67 re-derived at HEAD: still twelve, but a different twelve, and only four of them are G's
+
+The send-seam's own comment (`slice_multi_threading.rs:1245`) names its retirement
+condition and its evidence: `sWelsEncCtx` is `!Sync` for **twelve** distinct
+reasons, "five of them inside types Phases 8 and 10 own". That inventory is Phase
+7's. Re-derived at HEAD with the same probe F67 used:
+
+```rust
+fn _probe_assert_sync<T: Sync>() {}
+fn _probe_ctx_sync() { _probe_assert_sync::<sWelsEncCtx>(); }
+```
+
+**12 `E0277`s again — and the membership has moved.**
+
+| blocking type | reached through | whose |
+|---|---|---|
+| `*mut SSliceThreading` | `sWelsEncCtx` directly | **G/H** |
+| `*mut SWelsEncoderOutput` | `sWelsEncCtx` directly | **G/H** |
+| `*mut SRefList` | `SDqLayer` → `Box` → `Option` → `Vec` → ctx | **G/H** |
+| `*mut SrcPicPool` | `SDqLayer` → … → ctx | **G/H — new, not in F67** |
+| `*mut CWelsPreProcess` | `sWelsEncCtx` directly | preprocessing |
+| `*mut c_void` | `SLogContext` → ctx | trace |
+| `*mut i8` | `SWelsSvcCodingParam` → `Box` → `Option` → ctx | **Phase 8's** |
+| `*mut u8` | `SVAAFrameInfo` → `Box` → `Option` → ctx | **X's** |
+| `*mut SMotionTextureUnit` | `SAdaptiveQuantizationParam` → `SVAAFrameInfo` → … | **X's** |
+| `*mut i32` | `SComplexityAnalysisParam` → `SVAAFrameInfo` → … | **X's** |
+| `*mut u32` | `SComplexityAnalysisParam` → `SVAAFrameInfo` → … | **X's** |
+| `*mut SScreenBlockFeatureStorage` | ctx | **Phase 10's** |
+
+Three changes since Phase 7:
+
+1. **`*mut CMemoryAlign` is gone**, exactly as F67 predicted ("retires with the last
+   two allocator sites in session B").
+2. **`*mut SrcPicPool` is new**, inside `SDqLayer` — it arrived with the layer's
+   picture-pool work after F67 was written. The count held at twelve by
+   coincidence, which is worth saying out loud: a stable total is not a stable list.
+3. **The `[*mut u8; 4]` field F67 named on the context itself is gone**; `*mut u8`,
+   `*mut i32` and `*mut u32` now all reach through `SVAAFrameInfo`. F67's table
+   attributed them to the context directly.
+
+**The verdict for the send-seam: G cannot retire it, and no amount of G's work
+can.** Only 4 of the 12 are G's; the other 8 are `SVAAFrameInfo`'s four (X's),
+`SWelsSvcCodingParam`'s one (Phase 8's), `SScreenBlockFeatureStorage` (Phase 10's),
+`SLogContext`'s `*mut c_void`, and `CWelsPreProcess`. Converting every ST body and
+building the whole in-fork read surface leaves `sWelsEncCtx` `!Sync` for eight
+reasons that are not in this session's lane. The brief's own branch applies:
+**narrow the justification, name the residue, file it, do not force it.**
+
+The residue, as the exit condition's amendment: `send-seam(Phase 9)` retires when
+`SVAAFrameInfo` (X), `SWelsSvcCodingParam` (Phase 8), `SScreenBlockFeatureStorage`
+(Phase 10), `SLogContext` and `CWelsPreProcess` are raw-free — **it is a phase-exit
+item, not a session item**, and the seam's comment should say so instead of naming
+"Phase 9's context split", which is this session and is not sufficient.
+
+Note also that "five of them inside types Phases 8 and 10 own" was already an
+undercount when the seam's comment was written, and the brief carried it forward.
+The measurement is eight not-G's, and the probe that settles it costs one build.

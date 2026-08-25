@@ -5,6 +5,18 @@ E3's close (commit `3a1d39b7`). **Re-run it before quoting** — that is the who
 point of it being a tool (S24). This document is the snapshot G's brief is
 scoped from; the tool is the authority.*
 
+> **Moved by session G (T9.G3).** `DeleteLTRFromLongList` and
+> `DeleteSTRFromShortList` were narrowed off the context onto `&mut SRefList`, so
+> the family is **266 bodies / 111 in-fork / 155 ST-flippable** at G's close and
+> the reconciliation grep reads **283** mentions. The in-fork column is unchanged
+> — both were ST — and the body lists below still name them. Re-run the tool.
+>
+> G also ships the **join** with the hazard detector
+> (`rust/docs/phase9_ctx_join.md`, `phase9_ctx_join.py`, F161): a hazard whose
+> *callee* is in this document's in-fork column models a retag S63 forbids, and at
+> G's step 1 that was 135 of q1c's 266. **This document's split is not only the
+> flip's plan; it is the filter the detector's output has to pass through.**
+
 ## The number G's brief must carry
 
 | | bodies |
