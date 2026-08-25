@@ -47,8 +47,6 @@
 
 #![deny(unsafe_code)]
 
-use crate::encoder::svc_encode_slice::layer_ref_pic;
-use crate::encoder::picture::{RecPicId};
 use crate::safe::plane::{PaddedPlane, PlaneCursor};
 pub use crate::encoder::encoder_context::SMVUnitXY;
 pub use crate::encoder::picture::SPicture;
@@ -528,39 +526,38 @@ pub unsafe fn GetCurrentSliceNum(pCurDq: &SDqLayer) -> i32 {
 // ============================================================================
 
 /// Populates motion estimation function pointer table based on CPU capabilities and content type.
-// unsafe-cat: cursor
-#[allow(unsafe_code)]
-pub unsafe extern "C" fn WelsInitMeFunc(
-    pFuncList: *mut SWelsFuncPtrList,
+///
+/// Session F: `&mut` — the init path's exclusive borrow, taken before anything
+/// shares the table (the C-ABI init chain is single-threaded); the null
+/// tolerance guarded a pointer that no longer exists.
+pub fn WelsInitMeFunc(
+    pFuncList: &mut SWelsFuncPtrList,
     uiCpuFlag: u32,
     bScreenContent: bool,
 ) {
-    if pFuncList.is_null() {
-        return;
-    }
-    unsafe {
-        (*pFuncList).pfUpdateFMESwitch = Some(UpdateFMESwitchNull);
+    {
+        pFuncList.pfUpdateFMESwitch = Some(UpdateFMESwitchNull);
 
         if !bScreenContent {
-            (*pFuncList).sMeFuncs.pfCheckDirectionalMv = Some(CheckDirectionalMvFalse);
-            (*pFuncList).pfCalculateBlockFeatureOfFrame[0] = None;
-            (*pFuncList).pfCalculateBlockFeatureOfFrame[1] = None;
-            (*pFuncList).sMeFuncs.pfCalculateSingleBlockFeature[0] = None;
-            (*pFuncList).sMeFuncs.pfCalculateSingleBlockFeature[1] = None;
+            pFuncList.sMeFuncs.pfCheckDirectionalMv = Some(CheckDirectionalMvFalse);
+            pFuncList.pfCalculateBlockFeatureOfFrame[0] = None;
+            pFuncList.pfCalculateBlockFeatureOfFrame[1] = None;
+            pFuncList.sMeFuncs.pfCalculateSingleBlockFeature[0] = None;
+            pFuncList.sMeFuncs.pfCalculateSingleBlockFeature[1] = None;
         } else {
-            (*pFuncList).sMeFuncs.pfCheckDirectionalMv = Some(CheckDirectionalMv);
+            pFuncList.sMeFuncs.pfCheckDirectionalMv = Some(CheckDirectionalMv);
 
             // Cross Search
-            (*pFuncList).sMeFuncs.pfVerticalFullSearch = Some(LineFullSearch_c);
-            (*pFuncList).sMeFuncs.pfHorizontalFullSearch = Some(LineFullSearch_c);
+            pFuncList.sMeFuncs.pfVerticalFullSearch = Some(LineFullSearch_c);
+            pFuncList.sMeFuncs.pfHorizontalFullSearch = Some(LineFullSearch_c);
 
             // Feature Search
-            (*pFuncList).pfInitializeHashforFeature = Some(InitializeHashforFeature_c);
-            (*pFuncList).pfFillQpelLocationByFeatureValue = Some(FillQpelLocationByFeatureValue_c);
-            (*pFuncList).pfCalculateBlockFeatureOfFrame[0] = Some(SumOf8x8BlockOfFrame_c);
-            (*pFuncList).pfCalculateBlockFeatureOfFrame[1] = Some(SumOf16x16BlockOfFrame_c);
-            (*pFuncList).sMeFuncs.pfCalculateSingleBlockFeature[0] = Some(sum_of_8x8_single_block);
-            (*pFuncList).sMeFuncs.pfCalculateSingleBlockFeature[1] = Some(sum_of_16x16_single_block);
+            pFuncList.pfInitializeHashforFeature = Some(InitializeHashforFeature_c);
+            pFuncList.pfFillQpelLocationByFeatureValue = Some(FillQpelLocationByFeatureValue_c);
+            pFuncList.pfCalculateBlockFeatureOfFrame[0] = Some(SumOf8x8BlockOfFrame_c);
+            pFuncList.pfCalculateBlockFeatureOfFrame[1] = Some(SumOf16x16BlockOfFrame_c);
+            pFuncList.sMeFuncs.pfCalculateSingleBlockFeature[0] = Some(sum_of_8x8_single_block);
+            pFuncList.sMeFuncs.pfCalculateSingleBlockFeature[1] = Some(sum_of_16x16_single_block);
         }
     }
 }

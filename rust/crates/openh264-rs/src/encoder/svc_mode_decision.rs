@@ -1236,10 +1236,11 @@ pub(crate) fn InitMe(
     sWelsMe.pRefFeatureStorage = pRefFeatureStorage;
 }
 
-// unsafe-cat: cursor
+// unsafe-cat: port-raw(Phase 9) — the layer/SMB cursors (E3's grid); the
+// dispatch cursor this tag used to name is a shared reference since T9.F4
 #[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsMdP16x16(
-    pFunc: *mut SWelsFuncPtrList,
+    pFunc: &SWelsFuncPtrList,
     pCurLayer: *mut SDqLayer,
     pWelsMd: &mut SWelsMD,
     pSlice: &mut SSlice,
@@ -1307,7 +1308,7 @@ pub unsafe extern "C" fn WelsMdP16x16(
         &mut (*pMe16x16).sMvp,
     );
 
-    if let Some(search_fn) = (*pFunc).pfMotionSearch[0] {
+    if let Some(search_fn) = pFunc.pfMotionSearch[0] {
         // The de-virtualized slot takes what it reaches (the ME group + the
         // cost tables — both shared reads of the pre-fork table) and the two
         // planes, resolved per call through the layer's frame-stable handles
@@ -1315,8 +1316,8 @@ pub unsafe extern "C" fn WelsMdP16x16(
         let pEncPicture = layer_enc_pic(pCurLayer).expect("the layer's source picture is bound");
         let pRefPicture = layer_ref_pic(pCurLayer).expect("the layer's reference picture is bound");
         search_fn(
-            &(*pFunc).sMeFuncs,
-            &(*pFunc).sSampleDealingFuncs,
+            &pFunc.sMeFuncs,
+            &pFunc.sSampleDealingFuncs,
             pMe16x16,
             &mut *pSlice,
             pEncPicture.plane(0),
@@ -1337,10 +1338,11 @@ pub unsafe extern "C" fn WelsMdP16x16(
     (*pMe16x16).uiSatdCost as i32
 }
 
-// unsafe-cat: cursor
+// unsafe-cat: port-raw(Phase 9) — the layer/SMB cursors (E3's grid); the
+// dispatch cursor this tag used to name is a shared reference since T9.F4
 #[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsMdP8x8(
-    pFunc: *mut SWelsFuncPtrList,
+    pFunc: &SWelsFuncPtrList,
     pCurDqLayer: *mut SDqLayer,
     pWelsMd: &mut SWelsMD,
     pSlice: &mut SSlice,
@@ -1392,10 +1394,10 @@ pub unsafe extern "C" fn WelsMdP8x8(
             // stays honest when Phase 10 lights them.
             let pEncPicture = layer_enc_pic(pCurDqLayer).expect("the layer's source picture is bound");
             let pRefPicture = layer_ref_pic(pCurDqLayer).expect("the layer's reference picture is bound");
-            (*pFunc).pfMotionSearch[(*pWelsMd).iBlock8x8StaticIdc[i as usize] as usize]
+            pFunc.pfMotionSearch[(*pWelsMd).iBlock8x8StaticIdc[i as usize] as usize]
                 .expect("pfMotionSearch unset")(
-                &(*pFunc).sMeFuncs,
-                &(*pFunc).sSampleDealingFuncs,
+                &pFunc.sMeFuncs,
+                &pFunc.sSampleDealingFuncs,
                 sMe8x8,
                 &mut *pSlice,
                 pEncPicture.plane(0),
@@ -1578,7 +1580,7 @@ pub unsafe extern "C" fn WelsMdSpatialelInterMbIlfmdNoilp(
 
             // Step 2: P_16x16
             (*pWelsMd).iCostLuma =
-                WelsMdP16x16(ctx_func_list(pEncCtx), pCurDqLayer, pWelsMd, pSlice, pCurMb);
+                WelsMdP16x16(&*ctx_func_list(pEncCtx), pCurDqLayer, pWelsMd, pSlice, pCurMb);
             (*pCurMb).uiMbType = MB_TYPE_16x16;
         }
 
@@ -2464,7 +2466,7 @@ pub unsafe extern "C" fn WelsMdInterFinePartitionVaaOnScreen(
         return;
     }
 
-    let iCostP8x8 = WelsMdP8x8(ctx_func_list(pEncCtx), pCurDqLayer, pWelsMd, pSlice);
+    let iCostP8x8 = WelsMdP8x8(&*ctx_func_list(pEncCtx), pCurDqLayer, pWelsMd, pSlice);
     if iCostP8x8 < iBestCost {
         iBestCost = iCostP8x8;
         (*pCurMb).uiMbType = MB_TYPE_8x8;

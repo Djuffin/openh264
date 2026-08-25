@@ -1043,10 +1043,11 @@ pub unsafe fn WelsMdInterInit(
 ///
 /// # Safety
 /// All pointers must be valid and `pfMotionSearch[0]` assigned.
-// unsafe-cat: cursor
+// unsafe-cat: port-raw(Phase 9) — the layer/SMB cursors (E3's grid); the
+// dispatch cursor this tag used to name is a shared reference since T9.F4
 #[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsMdP16x8(
-    pFunc: *mut SWelsFuncPtrList,
+    pFunc: &SWelsFuncPtrList,
     pCurDqLayer: *mut SDqLayer,
     pWelsMd: &mut SWelsMD,
     pSlice: &mut SSlice,
@@ -1075,9 +1076,9 @@ pub unsafe extern "C" fn WelsMdP16x8(
         {
             let pEncPicture = layer_enc_pic(pCurDqLayer).expect("the layer's source picture is bound");
             let pRefPicture = layer_ref_pic(pCurDqLayer).expect("the layer's reference picture is bound");
-            (*pFunc).pfMotionSearch[0].expect("pfMotionSearch[0] unset")(
-                &(*pFunc).sMeFuncs,
-                &(*pFunc).sSampleDealingFuncs,
+            pFunc.pfMotionSearch[0].expect("pfMotionSearch[0] unset")(
+                &pFunc.sMeFuncs,
+                &pFunc.sSampleDealingFuncs,
                 sMe16x8,
                 &mut *pSlice,
                 pEncPicture.plane(0),
@@ -1106,10 +1107,11 @@ pub unsafe extern "C" fn WelsMdP16x8(
 ///
 /// # Safety
 /// All pointers must be valid and `pfMotionSearch[0]` assigned.
-// unsafe-cat: cursor
+// unsafe-cat: port-raw(Phase 9) — the layer/SMB cursors (E3's grid); the
+// dispatch cursor this tag used to name is a shared reference since T9.F4
 #[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsMdP8x16(
-    pFunc: *mut SWelsFuncPtrList,
+    pFunc: &SWelsFuncPtrList,
     pCurLayer: *mut SDqLayer,
     pWelsMd: &mut SWelsMD,
     pSlice: &mut SSlice,
@@ -1138,9 +1140,9 @@ pub unsafe extern "C" fn WelsMdP8x16(
         {
             let pEncPicture = layer_enc_pic(pCurLayer).expect("the layer's source picture is bound");
             let pRefPicture = layer_ref_pic(pCurLayer).expect("the layer's reference picture is bound");
-            (*pFunc).pfMotionSearch[0].expect("pfMotionSearch[0] unset")(
-                &(*pFunc).sMeFuncs,
-                &(*pFunc).sSampleDealingFuncs,
+            pFunc.pfMotionSearch[0].expect("pfMotionSearch[0] unset")(
+                &pFunc.sMeFuncs,
+                &pFunc.sSampleDealingFuncs,
                 sMe8x16,
                 &mut *pSlice,
                 pEncPicture.plane(0),
@@ -1187,7 +1189,7 @@ pub unsafe extern "C" fn WelsMdInterFinePartition(
 ) {
     let pCurDqLayer = current_layer(pEncCtx);
     let mut iCost = crate::encoder::svc_mode_decision::WelsMdP8x8(
-        ctx_func_list(pEncCtx),
+        &*ctx_func_list(pEncCtx),
         pCurDqLayer,
         pWelsMd,
         pSlice,
@@ -1197,13 +1199,13 @@ pub unsafe extern "C" fn WelsMdInterFinePartition(
         (*pCurMb).uiMbType = MB_TYPE_8x8;
         (*pCurMb).uiSubMbType = [SUB_MB_TYPE_8x8; 4];
 
-        let mut iCostPart = WelsMdP16x8(ctx_func_list(pEncCtx), pCurDqLayer, pWelsMd, pSlice);
+        let mut iCostPart = WelsMdP16x8(&*ctx_func_list(pEncCtx), pCurDqLayer, pWelsMd, pSlice);
         if iCostPart <= iCost {
             iCost = iCostPart;
             (*pCurMb).uiMbType = MB_TYPE_16x8;
         }
 
-        iCostPart = WelsMdP8x16(ctx_func_list(pEncCtx), pCurDqLayer, pWelsMd, pSlice);
+        iCostPart = WelsMdP8x16(&*ctx_func_list(pEncCtx), pCurDqLayer, pWelsMd, pSlice);
         if iCostPart <= iCost {
             (*pCurMb).uiMbType = MB_TYPE_8x16;
         }
@@ -1257,14 +1259,14 @@ pub unsafe extern "C" fn WelsMdInterFinePartitionVaa(
 
     match uiMbSign {
         3 | 12 => {
-            let iCostP16x8 = WelsMdP16x8(ctx_func_list(pEncCtx), pCurDqLayer, pWelsMd, pSlice);
+            let iCostP16x8 = WelsMdP16x8(&*ctx_func_list(pEncCtx), pCurDqLayer, pWelsMd, pSlice);
             if iCostP16x8 < iBestCost {
                 iBestCost = iCostP16x8;
                 (*pCurMb).uiMbType = MB_TYPE_16x8;
             }
         }
         5 | 10 => {
-            let iCostP8x16 = WelsMdP8x16(ctx_func_list(pEncCtx), pCurDqLayer, pWelsMd, pSlice);
+            let iCostP8x16 = WelsMdP8x16(&*ctx_func_list(pEncCtx), pCurDqLayer, pWelsMd, pSlice);
             if iCostP8x16 < iBestCost {
                 iBestCost = iCostP8x16;
                 (*pCurMb).uiMbType = MB_TYPE_8x16;
@@ -1272,7 +1274,7 @@ pub unsafe extern "C" fn WelsMdInterFinePartitionVaa(
         }
         6 | 9 => {
             let iCostP8x8 = crate::encoder::svc_mode_decision::WelsMdP8x8(
-                ctx_func_list(pEncCtx),
+                &*ctx_func_list(pEncCtx),
                 pCurDqLayer,
                 pWelsMd,
                 pSlice,
@@ -1285,7 +1287,7 @@ pub unsafe extern "C" fn WelsMdInterFinePartitionVaa(
         }
         _ => {
             let iCostP8x8 = crate::encoder::svc_mode_decision::WelsMdP8x8(
-                ctx_func_list(pEncCtx),
+                &*ctx_func_list(pEncCtx),
                 pCurDqLayer,
                 pWelsMd,
                 pSlice,
@@ -1295,13 +1297,13 @@ pub unsafe extern "C" fn WelsMdInterFinePartitionVaa(
                 (*pCurMb).uiMbType = MB_TYPE_8x8;
                 (*pCurMb).uiSubMbType = [SUB_MB_TYPE_8x8; 4];
 
-                let iCostP16x8 = WelsMdP16x8(ctx_func_list(pEncCtx), pCurDqLayer, pWelsMd, pSlice);
+                let iCostP16x8 = WelsMdP16x8(&*ctx_func_list(pEncCtx), pCurDqLayer, pWelsMd, pSlice);
                 if iCostP16x8 <= iBestCost {
                     iBestCost = iCostP16x8;
                     (*pCurMb).uiMbType = MB_TYPE_16x8;
                 }
 
-                let iCostP8x16 = WelsMdP8x16(ctx_func_list(pEncCtx), pCurDqLayer, pWelsMd, pSlice);
+                let iCostP8x16 = WelsMdP8x16(&*ctx_func_list(pEncCtx), pCurDqLayer, pWelsMd, pSlice);
                 if iCostP8x16 <= iBestCost {
                     iBestCost = iCostP8x16;
                     (*pCurMb).uiMbType = MB_TYPE_8x16;
@@ -2021,7 +2023,7 @@ pub unsafe extern "C" fn WelsMdInterMb(
 
         //step 2: P_16x16
         (*pWelsMd).iCostLuma = crate::encoder::svc_mode_decision::WelsMdP16x16(
-            ctx_func_list(pEncCtx),
+            &*ctx_func_list(pEncCtx),
             pCurDqLayer,
             pWelsMd,
             pSlice,
