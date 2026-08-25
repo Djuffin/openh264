@@ -2370,15 +2370,14 @@ unsafe fn mb_dump(pCurMb: &SMB, pMd: &SWelsMD, pSlice: *const SSlice) {
 #[allow(unsafe_code)]
 pub unsafe fn WelsMdInterMbLoop(
     pEncCtx: *mut sWelsEncCtx,
-    pSlice: *mut SSlice,
+    pSlice: &mut SSlice,
     pWelsMd: &mut SWelsMD,
     kiSliceFirstMbXY: i32,
 ) -> i32 {
-    if pEncCtx.is_null() || pSlice.is_null() || current_layer(pEncCtx).is_null() || (*current_layer(pEncCtx)).sMbDataP.dims().count() == 0 || (*current_layer(pEncCtx)).iMbWidth <= 0 || (*current_layer(pEncCtx)).iMbHeight <= 0 {
+    if pEncCtx.is_null() || current_layer(pEncCtx).is_null() || (*current_layer(pEncCtx)).sMbDataP.dims().count() == 0 || (*current_layer(pEncCtx)).iMbWidth <= 0 || (*current_layer(pEncCtx)).iMbHeight <= 0 {
         return ENC_RETURN_SUCCESS;
     }
     let pMd = pWelsMd;
-    let pBs = slice_writer(pEncCtx, std::ptr::addr_of_mut!((*pSlice).sSliceBs));
     let pCurLayer = current_layer(pEncCtx);
     // S29: raw, held across the MB loop (see `WelsISliceMdEnc`).
     let pMbList = mb_list_root(pCurLayer);
@@ -2426,11 +2425,11 @@ pub unsafe fn WelsMdInterMbLoop(
         if let Some(func_list) = ctx_func_list(pEncCtx).as_ref() {
             func_list
                 .pfRc
-                .WelsRcMbInit(pEncCtx as *mut _, &mut *pCurMb, pSlice as *mut _);
+                .WelsRcMbInit(pEncCtx as *mut _, &mut *pCurMb, &mut *pSlice);
         }
 
         //step (2). save some value for future use, initial pWelsMd
-        let pMbCache = std::ptr::addr_of_mut!((*pSlice).sMbCacheInfo);
+        let pMbCache = &mut pSlice.sMbCacheInfo;
         crate::encoder::svc_base_layer_md::WelsMdIntraInit(
             pEncCtx,
             pCurMb,
@@ -2454,7 +2453,7 @@ pub unsafe fn WelsMdInterMbLoop(
                 // slot (q1c cannot attribute it, F111's second limit) and its
                 // type carries `*mut SSlice`, so it is a crossing like any
                 // named callee.
-                let pMbCache = std::ptr::addr_of_mut!((*pSlice).sMbCacheInfo);
+                let pMbCache = &mut pSlice.sMbCacheInfo;
 
                 //step (4): save from the MD process for future use
                 {
@@ -2481,7 +2480,7 @@ pub unsafe fn WelsMdInterMbLoop(
                 mb_dump(&*pCurMb, pMd, pSlice);
             }
             //step (5): update cache
-            let pMbCache = std::ptr::addr_of_mut!((*pSlice).sMbCacheInfo);
+            let pMbCache = &mut pSlice.sMbCacheInfo;
             UpdateNonZeroCountCache(&*pCurMb, &mut *pMbCache);
 
             let mut iEncReturn = ENC_RETURN_SUCCESS;
@@ -2519,7 +2518,7 @@ pub unsafe fn WelsMdInterMbLoop(
                 pEncCtx as *mut _,
                 &mut *pCurMb,
                 (*pMd).iCostLuma,
-                pSlice as *mut _,
+                &mut *pSlice,
             );
         }
 
@@ -2532,6 +2531,10 @@ pub unsafe fn WelsMdInterMbLoop(
 
     if (*pSlice).iMbSkipRun > 0 {
         // Derived at the use, after the loop's own derivations (see `WelsCodeOneSlice`).
+        // T9.E2e: the writer is minted here, after the loop — the loop's slot and
+        // entropy calls reborrow the whole slice, and a writer held from the top
+        // would be popped by the first of them (WelsCodeOneSlice's shape).
+        let pBs = slice_writer(pEncCtx, std::ptr::addr_of_mut!((*pSlice).sSliceBs));
         BsWriteUE(slice_bs_buffer(pEncCtx, std::ptr::addr_of_mut!((*pSlice).sSliceBs), (*pSlice).uiBufferIdx as usize), &mut *pBs, (*pSlice).iMbSkipRun as u32);
     }
 
@@ -2542,15 +2545,14 @@ pub unsafe fn WelsMdInterMbLoop(
 #[allow(unsafe_code)]
 pub unsafe fn WelsMdInterMbLoopOverDynamicSlice(
     pEncCtx: *mut sWelsEncCtx,
-    pSlice: *mut SSlice,
+    pSlice: &mut SSlice,
     pWelsMd: &mut SWelsMD,
     kiSliceFirstMbXY: i32,
 ) -> i32 {
-    if pEncCtx.is_null() || pSlice.is_null() || current_layer(pEncCtx).is_null() || (*current_layer(pEncCtx)).sMbDataP.dims().count() == 0 || (*current_layer(pEncCtx)).iMbWidth <= 0 || (*current_layer(pEncCtx)).iMbHeight <= 0 {
+    if pEncCtx.is_null() || current_layer(pEncCtx).is_null() || (*current_layer(pEncCtx)).sMbDataP.dims().count() == 0 || (*current_layer(pEncCtx)).iMbWidth <= 0 || (*current_layer(pEncCtx)).iMbHeight <= 0 {
         return ENC_RETURN_SUCCESS;
     }
     let pMd = pWelsMd;
-    let pBs = slice_writer(pEncCtx, std::ptr::addr_of_mut!((*pSlice).sSliceBs));
     let pCurLayer = current_layer(pEncCtx);
     // S29, both: held across the MB loop, whose callees re-derive the same fields.
     // See `WelsISliceMdEncDynamic` for `sSliceEncCtx`'s red and its invalidator.
@@ -2577,6 +2579,9 @@ pub unsafe fn WelsMdInterMbLoopOverDynamicSlice(
         sDss.iCurrentPos = 0;
         sDss.pRestoreBuffer = dynamic_bs_buffer(pEncCtx, kiPartitionId);
     } else {
+        // Minted at the use (T9.E2e): before the loop, so nothing has
+        // reborrowed the slice yet; the post-loop use mints its own.
+        let pBs = slice_writer(pEncCtx, std::ptr::addr_of_mut!((*pSlice).sSliceBs));
         sDss.iStartPos = (*pBs).bits_pos();
     }
     (*pSlice).iMbSkipRun = 0;
@@ -2598,7 +2603,7 @@ pub unsafe fn WelsMdInterMbLoopOverDynamicSlice(
         if let Some(func_list) = ctx_func_list(pEncCtx).as_ref() {
             func_list
                 .pfRc
-                .WelsRcMbInit(pEncCtx as *mut _, &mut *pCurMb, pSlice as *mut _);
+                .WelsRcMbInit(pEncCtx as *mut _, &mut *pCurMb, &mut *pSlice);
         }
 
         if (*pSlice).bDynamicSlicingSliceSizeCtrlFlag {
@@ -2610,7 +2615,7 @@ pub unsafe fn WelsMdInterMbLoopOverDynamicSlice(
         // step (2): save some values for future use, initialise pWelsMd. Both of
         // these were missing: WelsMdInterInit is what installs the reference-block
         // pointers in pMbCache, so pfInterMd read a null pSample2.
-        let pMbCache = std::ptr::addr_of_mut!((*pSlice).sMbCacheInfo);
+        let pMbCache = &mut pSlice.sMbCacheInfo;
         crate::encoder::svc_base_layer_md::WelsMdIntraInit(
             pEncCtx,
             pCurMb,
@@ -2635,7 +2640,7 @@ pub unsafe fn WelsMdInterMbLoopOverDynamicSlice(
             // T9.E7: fresh window — `pfInterMd` goes through the dispatch slot
             // (q1c cannot attribute it, F111's second limit) and its type
             // carries `*mut SSlice`, so it is a crossing like any named callee.
-            let pMbCache = std::ptr::addr_of_mut!((*pSlice).sMbCacheInfo);
+            let pMbCache = &mut pSlice.sMbCacheInfo;
             // step (4): save from the MD process for future use
             {
                 // As above.
@@ -2718,7 +2723,7 @@ pub unsafe fn WelsMdInterMbLoopOverDynamicSlice(
                 pEncCtx as *mut _,
                 &mut *pCurMb,
                 (*pMd).iCostLuma,
-                pSlice as *mut _,
+                &mut *pSlice,
             );
         }
 
@@ -2733,6 +2738,10 @@ pub unsafe fn WelsMdInterMbLoopOverDynamicSlice(
 
     if (*pSlice).iMbSkipRun > 0 {
         // Derived at the use, after the loop's own derivations (see `WelsCodeOneSlice`).
+        // T9.E2e: the writer is minted here, after the loop — the loop's slot and
+        // entropy calls reborrow the whole slice, and a writer held from the top
+        // would be popped by the first of them (WelsCodeOneSlice's shape).
+        let pBs = slice_writer(pEncCtx, std::ptr::addr_of_mut!((*pSlice).sSliceBs));
         BsWriteUE(slice_bs_buffer(pEncCtx, std::ptr::addr_of_mut!((*pSlice).sSliceBs), (*pSlice).uiBufferIdx as usize), &mut *pBs, (*pSlice).iMbSkipRun as u32);
     }
 
