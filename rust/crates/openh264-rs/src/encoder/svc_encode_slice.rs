@@ -2085,21 +2085,18 @@ pub unsafe fn WelsGetNextMbOfSlice(pCurDq: *mut SDqLayer, kiMbXY: i32) -> i32 {
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe fn WelsInitInterMDStruc(
-    pCurMb: *const SMB,
+    pCurMb: &SMB,
     pMvdCostTable: *mut u16,
     kiMvdInterTableStride: i32,
     pMd: &mut SWelsMD,
 ) {
-    if pCurMb.is_null() {
-        return;
-    }
     let luma_qp = (*pCurMb).uiLumaQp as usize;
     (*pMd).iLambda = g_kiQpCostTable[luma_qp];
     if !pMvdCostTable.is_null() {
         (*pMd).pMvdCost = pMvdCostTable.add(luma_qp * kiMvdInterTableStride as usize);
     }
-    (*pMd).iMbPixX = ((*pCurMb).iMbX as i32) << 4;
-    (*pMd).iMbPixY = ((*pCurMb).iMbY as i32) << 4;
+    (*pMd).iMbPixX = (pCurMb.iMbX as i32) << 4;
+    (*pMd).iMbPixY = (pCurMb.iMbY as i32) << 4;
     (*pMd).iBlock8x8StaticIdc.fill(0);
 }
 
@@ -2119,7 +2116,6 @@ pub unsafe fn WelsISliceMdEnc(pEncCtx: *mut sWelsEncCtx, pSlice: &mut SSlice) ->
     // probe's fourth red, session B), and after the flip each window is what
     // keeps the derivation alive.
     let pSliceHdExt = std::ptr::addr_of_mut!((*pSlice).sSliceHeaderExt);
-    let pMbList = mb_list_root(pCurLayer);
     let kiSliceFirstMbXY = (*pSliceHdExt).sSliceHeader.iFirstMbInSlice;
     let mut iNextMbIdx = kiSliceFirstMbXY;
     let kiTotalNumMb: i32 = (*pCurLayer).iMbWidth as i32 * (*pCurLayer).iMbHeight as i32;
@@ -2152,16 +2148,21 @@ pub unsafe fn WelsISliceMdEnc(pEncCtx: *mut sWelsEncCtx, pSlice: &mut SSlice) ->
             }
         }
         iCurMbIdx = iNextMbIdx;
-        let pCurMb = pMbList.add(iCurMbIdx as usize);
+        let mut mbs = mb_window(
+            pCurLayer,
+            kiSliceFirstMbXY,
+            iCurMbIdx - kiSliceFirstMbXY + 1,
+            iCurMbIdx,
+        );
 
         if let Some(func_list) = ctx_func_list(pEncCtx).as_ref() {
             func_list
                 .pfRc
-                .WelsRcMbInit(pEncCtx as *mut _, &mut *pCurMb, &mut *pSlice);
+                .WelsRcMbInit(pEncCtx as *mut _, mbs.cur_mut(), &mut *pSlice);
         }
         crate::encoder::svc_base_layer_md::WelsMdIntraInit(
             pEncCtx,
-            pCurMb,
+            &mut mbs,
             &mut pSlice.sMbCacheInfo,
             kiSliceFirstMbXY,
         );
@@ -2172,34 +2173,25 @@ pub unsafe fn WelsISliceMdEnc(pEncCtx: *mut sWelsEncCtx, pSlice: &mut SSlice) ->
             // writer below takes the whole slice, and a borrow held across it
             // would not compile (which is the point of F112's one step).
             let pMbCache = &mut pSlice.sMbCacheInfo;
-            sMd.iLambda = g_kiQpCostTable[(*pCurMb).uiLumaQp as usize];
-            crate::encoder::svc_base_layer_md::WelsMdIntraMb(pEncCtx, &mut sMd, &mut *pCurMb, &mut *pMbCache);
-            UpdateNonZeroCountCache(&*pCurMb, &mut *pMbCache);
+            sMd.iLambda = g_kiQpCostTable[mbs.cur().uiLumaQp as usize];
+            crate::encoder::svc_base_layer_md::WelsMdIntraMb(pEncCtx, &mut sMd, mbs.cur_mut(), &mut *pMbCache);
+            UpdateNonZeroCountCache(mbs.cur(), &mut *pMbCache);
 
             let mut iEncReturn = ENC_RETURN_SUCCESS;
             if let Some(func_list) = ctx_func_list(pEncCtx).as_ref() {
                 iEncReturn = func_list
                     .eEntropyCoder
-                    .WelsSpatialWriteMbSyn(
-                        pEncCtx,
-                        pSlice,
-                        &mut mb_window(
-                            pCurLayer,
-                            kiSliceFirstMbXY,
-                            iCurMbIdx - kiSliceFirstMbXY + 1,
-                            iCurMbIdx,
-                        ),
-                    );
+                    .WelsSpatialWriteMbSyn(pEncCtx, pSlice, &mut mbs);
             }
 
-            if !kbCabac && iEncReturn == ENC_RETURN_VLCOVERFLOWFOUND && (*pCurMb).uiLumaQp < 50 {
+            if !kbCabac && iEncReturn == ENC_RETURN_VLCOVERFLOWFOUND && mbs.cur().uiLumaQp < 50 {
                 if let Some(func_list) = ctx_func_list(pEncCtx).as_ref() {
                     func_list
                         .eEntropyCoder
                         .StashPopMBStatus(slice_bs_buffer(pEncCtx, std::ptr::addr_of_mut!((*pSlice).sSliceBs), (*pSlice).uiBufferIdx as usize), slice_writer(pEncCtx, std::ptr::addr_of_mut!((*pSlice).sSliceBs)), &mut sDss, std::ptr::addr_of_mut!((*pSlice).sCabacCtx));
                     (*pSlice).uiLastMbQp = sDss.uiLastMbQp;
                 }
-                UpdateQpForOverflow(&mut *pCurMb, kuiChromaQpIndexOffset);
+                UpdateQpForOverflow(mbs.cur_mut(), kuiChromaQpIndexOffset);
                 continue;
             }
 
@@ -2209,16 +2201,16 @@ pub unsafe fn WelsISliceMdEnc(pEncCtx: *mut sWelsEncCtx, pSlice: &mut SSlice) ->
             break;
         }
 
-        (*pCurMb).uiSliceIdc = kiSliceIdx as u16;
+        mbs.cur_mut().uiSliceIdc = kiSliceIdx as u16;
 
         let pMbCache = &mut pSlice.sMbCacheInfo;
         if let Some(func_list) = ctx_func_list(pEncCtx).as_ref() {
             if let Some(func) = func_list.pfMdBackgroundInfoUpdate {
-                func(pCurLayer, &mut *pCurMb, pMbCache.bCollocatedPredFlag, I_SLICE);
+                func(pCurLayer, mbs.cur_mut(), pMbCache.bCollocatedPredFlag, I_SLICE);
             }
             func_list.pfRc.WelsRcMbInfoUpdate(
                 pEncCtx as *mut _,
-                &mut *pCurMb,
+                mbs.cur_mut(),
                 sMd.iCostLuma,
                 &mut *pSlice,
             );
@@ -2250,7 +2242,6 @@ pub unsafe fn WelsISliceMdEncDynamic(pEncCtx: *mut sWelsEncCtx, pSlice: &mut SSl
     // the dead tag. `pMbCache` is the encode probe's fourth red (session B).
     let pSliceCtx = std::ptr::addr_of_mut!((*pCurLayer).sSliceEncCtx);
     let pSliceHdExt = std::ptr::addr_of_mut!((*pSlice).sSliceHeaderExt);
-    let pMbList = mb_list_root(pCurLayer);
     let kiSliceFirstMbXY = (*pSliceHdExt).sSliceHeader.iFirstMbInSlice;
     let mut iNextMbIdx = kiSliceFirstMbXY;
     let kiTotalNumMb: i32 = (*pCurLayer).iMbWidth as i32 * (*pCurLayer).iMbHeight as i32;
@@ -2277,7 +2268,12 @@ pub unsafe fn WelsISliceMdEncDynamic(pEncCtx: *mut sWelsEncCtx, pSlice: &mut SSl
 
     loop {
         iCurMbIdx = iNextMbIdx;
-        let pCurMb = pMbList.add(iCurMbIdx as usize);
+        let mut mbs = mb_window(
+            pCurLayer,
+            kiSliceFirstMbXY,
+            iCurMbIdx - kiSliceFirstMbXY + 1,
+            iCurMbIdx,
+        );
 
         if let Some(func_list) = ctx_func_list(pEncCtx).as_ref() {
             func_list
@@ -2285,17 +2281,17 @@ pub unsafe fn WelsISliceMdEncDynamic(pEncCtx: *mut sWelsEncCtx, pSlice: &mut SSl
                 .StashMBStatus(slice_bs_buffer(pEncCtx, std::ptr::addr_of_mut!((*pSlice).sSliceBs), (*pSlice).uiBufferIdx as usize), slice_writer(pEncCtx, std::ptr::addr_of_mut!((*pSlice).sSliceBs)), &mut sDss, std::ptr::addr_of_mut!((*pSlice).sCabacCtx), (*pSlice).uiLastMbQp, 0);
             func_list
                 .pfRc
-                .WelsRcMbInit(pEncCtx as *mut _, &mut *pCurMb, &mut *pSlice);
+                .WelsRcMbInit(pEncCtx as *mut _, mbs.cur_mut(), &mut *pSlice);
         }
 
         if (*pSlice).bDynamicSlicingSliceSizeCtrlFlag {
             let max_qp = (*ctx_rc_at(pEncCtx, (*pEncCtx).uiDependencyId as usize)).iMaxQp;
-            (*pCurMb).uiLumaQp = max_qp as u8;
-            (*pCurMb).uiChromaQp = g_kuiChromaQpTable[CLIP3_QP_0_51(max_qp as i32 + kuiChromaQpIndexOffset as i32)];
+            mbs.cur_mut().uiLumaQp = max_qp as u8;
+            mbs.cur_mut().uiChromaQp = g_kuiChromaQpTable[CLIP3_QP_0_51(max_qp as i32 + kuiChromaQpIndexOffset as i32)];
         }
         crate::encoder::svc_base_layer_md::WelsMdIntraInit(
             pEncCtx,
-            pCurMb,
+            &mut mbs,
             &mut pSlice.sMbCacheInfo,
             kiSliceFirstMbXY,
         );
@@ -2306,34 +2302,25 @@ pub unsafe fn WelsISliceMdEncDynamic(pEncCtx: *mut sWelsEncCtx, pSlice: &mut SSl
             // writer below takes the whole slice, and a borrow held across it
             // would not compile (which is the point of F112's one step).
             let pMbCache = &mut pSlice.sMbCacheInfo;
-            sMd.iLambda = g_kiQpCostTable[(*pCurMb).uiLumaQp as usize];
-            crate::encoder::svc_base_layer_md::WelsMdIntraMb(pEncCtx, &mut sMd, &mut *pCurMb, &mut *pMbCache);
-            UpdateNonZeroCountCache(&*pCurMb, &mut *pMbCache);
+            sMd.iLambda = g_kiQpCostTable[mbs.cur().uiLumaQp as usize];
+            crate::encoder::svc_base_layer_md::WelsMdIntraMb(pEncCtx, &mut sMd, mbs.cur_mut(), &mut *pMbCache);
+            UpdateNonZeroCountCache(mbs.cur(), &mut *pMbCache);
 
             let mut iEncReturn = ENC_RETURN_SUCCESS;
             if let Some(func_list) = ctx_func_list(pEncCtx).as_ref() {
                 iEncReturn = func_list
                     .eEntropyCoder
-                    .WelsSpatialWriteMbSyn(
-                        pEncCtx,
-                        pSlice,
-                        &mut mb_window(
-                            pCurLayer,
-                            kiSliceFirstMbXY,
-                            iCurMbIdx - kiSliceFirstMbXY + 1,
-                            iCurMbIdx,
-                        ),
-                    );
+                    .WelsSpatialWriteMbSyn(pEncCtx, pSlice, &mut mbs);
             }
 
-            if iEncReturn == ENC_RETURN_VLCOVERFLOWFOUND && (*pCurMb).uiLumaQp < 50 {
+            if iEncReturn == ENC_RETURN_VLCOVERFLOWFOUND && mbs.cur().uiLumaQp < 50 {
                 if let Some(func_list) = ctx_func_list(pEncCtx).as_ref() {
                     func_list
                         .eEntropyCoder
                         .StashPopMBStatus(slice_bs_buffer(pEncCtx, std::ptr::addr_of_mut!((*pSlice).sSliceBs), (*pSlice).uiBufferIdx as usize), slice_writer(pEncCtx, std::ptr::addr_of_mut!((*pSlice).sSliceBs)), &mut sDss, std::ptr::addr_of_mut!((*pSlice).sCabacCtx));
                     (*pSlice).uiLastMbQp = sDss.uiLastMbQp;
                 }
-                UpdateQpForOverflow(&mut *pCurMb, kuiChromaQpIndexOffset);
+                UpdateQpForOverflow(mbs.cur_mut(), kuiChromaQpIndexOffset);
                 continue;
             }
 
@@ -2351,7 +2338,7 @@ pub unsafe fn WelsISliceMdEncDynamic(pEncCtx: *mut sWelsEncCtx, pSlice: &mut SSl
             pEncCtx,
             pSlice,
             pSliceCtx,
-            (*pCurMb).iMbXY,
+            mbs.cur().iMbXY,
             &mut sDss,
         ) {
             if let Some(func_list) = ctx_func_list(pEncCtx).as_ref() {
@@ -2365,12 +2352,12 @@ pub unsafe fn WelsISliceMdEncDynamic(pEncCtx: *mut sWelsEncCtx, pSlice: &mut SSl
             break;
         }
 
-        (*pCurMb).uiSliceIdc = kiSliceIdx as u16;
+        mbs.cur_mut().uiSliceIdc = kiSliceIdx as u16;
 
         if let Some(func_list) = ctx_func_list(pEncCtx).as_ref() {
             func_list.pfRc.WelsRcMbInfoUpdate(
                 pEncCtx as *mut _,
-                &mut *pCurMb,
+                mbs.cur_mut(),
                 sMd.iCostLuma,
                 &mut *pSlice,
             );
@@ -2445,7 +2432,6 @@ pub unsafe fn WelsMdInterMbLoop(
     let pMd = pWelsMd;
     let pCurLayer = current_layer(pEncCtx);
     // S29: raw, held across the MB loop (see `WelsISliceMdEnc`).
-    let pMbList = mb_list_root(pCurLayer);
     let mut iNumMbCoded = 0;
     let mut iNextMbIdx = kiSliceFirstMbXY;
     let mut iCurMbIdx: i32;
@@ -2484,35 +2470,40 @@ pub unsafe fn WelsMdInterMbLoop(
             }
         }
         iCurMbIdx = iNextMbIdx;
-        let pCurMb = pMbList.add(iCurMbIdx as usize);
+        let mut mbs = mb_window(
+            pCurLayer,
+            kiSliceFirstMbXY,
+            iCurMbIdx - kiSliceFirstMbXY + 1,
+            iCurMbIdx,
+        );
 
         //step(1): set QP for the current MB
         if let Some(func_list) = ctx_func_list(pEncCtx).as_ref() {
             func_list
                 .pfRc
-                .WelsRcMbInit(pEncCtx as *mut _, &mut *pCurMb, &mut *pSlice);
+                .WelsRcMbInit(pEncCtx as *mut _, mbs.cur_mut(), &mut *pSlice);
         }
 
         //step (2). save some value for future use, initial pWelsMd
         let pMbCache = &mut pSlice.sMbCacheInfo;
         crate::encoder::svc_base_layer_md::WelsMdIntraInit(
             pEncCtx,
-            pCurMb,
+            &mut mbs,
             &mut *pMbCache,
             kiSliceFirstMbXY,
         );
         crate::encoder::svc_base_layer_md::WelsMdInterInit(
             pEncCtx,
             pSlice,
-            pCurMb,
+            &mut mbs,
             kiSliceFirstMbXY,
         );
 
         loop {
-            WelsInitInterMDStruc(pCurMb, pMvdCostTable, kiMvdInterTableStride, pMd);
+            WelsInitInterMDStruc(mbs.cur(), pMvdCostTable, kiMvdInterTableStride, pMd);
             if let Some(func_list) = ctx_func_list(pEncCtx).as_ref() {
                 if let Some(func) = func_list.pfInterMd {
-                    func(pEncCtx, pMd, &mut *pSlice, pCurMb);
+                    func(pEncCtx, pMd, &mut *pSlice, &mut mbs);
                 }
                 // T9.E7: fresh window — `pfInterMd` goes through the dispatch
                 // slot (q1c cannot attribute it, F111's second limit) and its
@@ -2529,7 +2520,7 @@ pub unsafe fn WelsMdInterMbLoop(
                     crate::encoder::svc_base_layer_md::WelsMdInterSaveSadAndRefMbType(
                         layer_rec_view(pCurLayer)
                             .expect("the layer's reconstruction picture is bound"),
-                        pCurMb,
+                        mbs.cur(),
                         pMd,
                     );
                 }
@@ -2537,34 +2528,25 @@ pub unsafe fn WelsMdInterMbLoop(
                 if let Some(func) = func_list.pfMdBackgroundInfoUpdate {
                     func(
                         pCurLayer,
-                        &mut *pCurMb,
+                        mbs.cur_mut(),
                         (*pMbCache).bCollocatedPredFlag,
                         ctx_ref_pic(pEncCtx).map_or(0, |p| p.iPictureType),
                     );
                 }
-                mb_dump(&*pCurMb, pMd, pSlice);
+                mb_dump(mbs.cur(), pMd, pSlice);
             }
             //step (5): update cache
             let pMbCache = &mut pSlice.sMbCacheInfo;
-            UpdateNonZeroCountCache(&*pCurMb, &mut *pMbCache);
+            UpdateNonZeroCountCache(mbs.cur(), &mut *pMbCache);
 
             let mut iEncReturn = ENC_RETURN_SUCCESS;
             if let Some(func_list) = ctx_func_list(pEncCtx).as_ref() {
                 iEncReturn = func_list
                     .eEntropyCoder
-                    .WelsSpatialWriteMbSyn(
-                        pEncCtx,
-                        pSlice,
-                        &mut mb_window(
-                            pCurLayer,
-                            kiSliceFirstMbXY,
-                            iCurMbIdx - kiSliceFirstMbXY + 1,
-                            iCurMbIdx,
-                        ),
-                    );
+                    .WelsSpatialWriteMbSyn(pEncCtx, pSlice, &mut mbs);
             }
 
-            if !kbCabac && iEncReturn == ENC_RETURN_VLCOVERFLOWFOUND && (*pCurMb).uiLumaQp < 50 {
+            if !kbCabac && iEncReturn == ENC_RETURN_VLCOVERFLOWFOUND && mbs.cur().uiLumaQp < 50 {
                 if let Some(func_list) = ctx_func_list(pEncCtx).as_ref() {
                     (*pSlice).iMbSkipRun = func_list.eEntropyCoder.StashPopMBStatus(
                         slice_bs_buffer(pEncCtx, std::ptr::addr_of_mut!((*pSlice).sSliceBs), (*pSlice).uiBufferIdx as usize),
@@ -2574,7 +2556,7 @@ pub unsafe fn WelsMdInterMbLoop(
                     );
                     (*pSlice).uiLastMbQp = sDss.uiLastMbQp;
                 }
-                UpdateQpForOverflow(&mut *pCurMb, kuiChromaQpIndexOffset);
+                UpdateQpForOverflow(mbs.cur_mut(), kuiChromaQpIndexOffset);
                 continue;
             }
 
@@ -2584,13 +2566,13 @@ pub unsafe fn WelsMdInterMbLoop(
             break;
         }
 
-        (*pCurMb).uiSliceIdc = kiSliceIdx as u16;
-        OutputPMbWithoutConstructCsRsNoCopy(pEncCtx, pCurLayer, pSlice, &*pCurMb);
+        mbs.cur_mut().uiSliceIdc = kiSliceIdx as u16;
+        OutputPMbWithoutConstructCsRsNoCopy(pEncCtx, pCurLayer, pSlice, mbs.cur());
 
         if let Some(func_list) = ctx_func_list(pEncCtx).as_ref() {
             func_list.pfRc.WelsRcMbInfoUpdate(
                 pEncCtx as *mut _,
-                &mut *pCurMb,
+                mbs.cur_mut(),
                 (*pMd).iCostLuma,
                 &mut *pSlice,
             );
@@ -2631,7 +2613,6 @@ pub unsafe fn WelsMdInterMbLoopOverDynamicSlice(
     // S29, both: held across the MB loop, whose callees re-derive the same fields.
     // See `WelsISliceMdEncDynamic` for `sSliceEncCtx`'s red and its invalidator.
     let pSliceCtx = std::ptr::addr_of_mut!((*pCurLayer).sSliceEncCtx);
-    let pMbList = mb_list_root(pCurLayer);
     let mut iNumMbCoded = 0;
     let kiTotalNumMb: i32 = (*pCurLayer).iMbWidth as i32 * (*pCurLayer).iMbHeight as i32;
     let mut iNextMbIdx = kiSliceFirstMbXY;
@@ -2672,18 +2653,23 @@ pub unsafe fn WelsMdInterMbLoopOverDynamicSlice(
             );
         }
         iCurMbIdx = iNextMbIdx;
-        let pCurMb = pMbList.add(iCurMbIdx as usize);
+        let mut mbs = mb_window(
+            pCurLayer,
+            kiSliceFirstMbXY,
+            iCurMbIdx - kiSliceFirstMbXY + 1,
+            iCurMbIdx,
+        );
 
         if let Some(func_list) = ctx_func_list(pEncCtx).as_ref() {
             func_list
                 .pfRc
-                .WelsRcMbInit(pEncCtx as *mut _, &mut *pCurMb, &mut *pSlice);
+                .WelsRcMbInit(pEncCtx as *mut _, mbs.cur_mut(), &mut *pSlice);
         }
 
         if (*pSlice).bDynamicSlicingSliceSizeCtrlFlag {
             let max_qp = (*ctx_rc_at(pEncCtx, (*pEncCtx).uiDependencyId as usize)).iMaxQp;
-            (*pCurMb).uiLumaQp = max_qp as u8;
-            (*pCurMb).uiChromaQp = g_kuiChromaQpTable[CLIP3_QP_0_51(max_qp as i32 + kuiChromaQpIndexOffset as i32)];
+            mbs.cur_mut().uiLumaQp = max_qp as u8;
+            mbs.cur_mut().uiChromaQp = g_kuiChromaQpTable[CLIP3_QP_0_51(max_qp as i32 + kuiChromaQpIndexOffset as i32)];
         }
 
         // step (2): save some values for future use, initialise pWelsMd. Both of
@@ -2692,23 +2678,23 @@ pub unsafe fn WelsMdInterMbLoopOverDynamicSlice(
         let pMbCache = &mut pSlice.sMbCacheInfo;
         crate::encoder::svc_base_layer_md::WelsMdIntraInit(
             pEncCtx,
-            pCurMb,
+            &mut mbs,
             &mut *pMbCache,
             kiSliceFirstMbXY,
         );
         crate::encoder::svc_base_layer_md::WelsMdInterInit(
             pEncCtx,
             pSlice,
-            pCurMb,
+            &mut mbs,
             kiSliceFirstMbXY,
         );
 
         // TRY_REENCODING
         loop {
-            WelsInitInterMDStruc(pCurMb, pMvdCostTable, kiMvdInterTableStride, pMd);
+            WelsInitInterMDStruc(mbs.cur(), pMvdCostTable, kiMvdInterTableStride, pMd);
             if let Some(func_list) = ctx_func_list(pEncCtx).as_ref() {
                 if let Some(func) = func_list.pfInterMd {
-                    func(pEncCtx, pMd, &mut *pSlice, pCurMb);
+                    func(pEncCtx, pMd, &mut *pSlice, &mut mbs);
                 }
             }
             // T9.E7: fresh window — `pfInterMd` goes through the dispatch slot
@@ -2721,7 +2707,7 @@ pub unsafe fn WelsMdInterMbLoopOverDynamicSlice(
                 crate::encoder::svc_base_layer_md::WelsMdInterSaveSadAndRefMbType(
                     layer_rec_view(pCurLayer)
                         .expect("the layer's reconstruction picture is bound"),
-                    pCurMb,
+                    mbs.cur(),
                     pMd,
                 );
             }
@@ -2729,31 +2715,22 @@ pub unsafe fn WelsMdInterMbLoopOverDynamicSlice(
                 if let Some(func) = func_list.pfMdBackgroundInfoUpdate {
                     func(
                         pCurLayer,
-                        &mut *pCurMb,
+                        mbs.cur_mut(),
                         (*pMbCache).bCollocatedPredFlag,
                         ctx_ref_pic(pEncCtx).map_or(0, |p| p.iPictureType),
                     );
                 }
             }
-            UpdateNonZeroCountCache(&*pCurMb, &mut *pMbCache);
+            UpdateNonZeroCountCache(mbs.cur(), &mut *pMbCache);
 
             let mut iEncReturn = ENC_RETURN_SUCCESS;
             if let Some(func_list) = ctx_func_list(pEncCtx).as_ref() {
                 iEncReturn = func_list
                     .eEntropyCoder
-                    .WelsSpatialWriteMbSyn(
-                        pEncCtx,
-                        pSlice,
-                        &mut mb_window(
-                            pCurLayer,
-                            kiSliceFirstMbXY,
-                            iCurMbIdx - kiSliceFirstMbXY + 1,
-                            iCurMbIdx,
-                        ),
-                    );
+                    .WelsSpatialWriteMbSyn(pEncCtx, pSlice, &mut mbs);
             }
 
-            if iEncReturn == ENC_RETURN_VLCOVERFLOWFOUND && (*pCurMb).uiLumaQp < 50 {
+            if iEncReturn == ENC_RETURN_VLCOVERFLOWFOUND && mbs.cur().uiLumaQp < 50 {
                 if let Some(func_list) = ctx_func_list(pEncCtx).as_ref() {
                     (*pSlice).iMbSkipRun = func_list.eEntropyCoder.StashPopMBStatus(
                         slice_bs_buffer(pEncCtx, std::ptr::addr_of_mut!((*pSlice).sSliceBs), (*pSlice).uiBufferIdx as usize),
@@ -2763,7 +2740,7 @@ pub unsafe fn WelsMdInterMbLoopOverDynamicSlice(
                     );
                     (*pSlice).uiLastMbQp = sDss.uiLastMbQp;
                 }
-                UpdateQpForOverflow(&mut *pCurMb, kuiChromaQpIndexOffset);
+                UpdateQpForOverflow(mbs.cur_mut(), kuiChromaQpIndexOffset);
                 continue;
             }
 
@@ -2781,7 +2758,7 @@ pub unsafe fn WelsMdInterMbLoopOverDynamicSlice(
             pEncCtx,
             pSlice,
             pSliceCtx,
-            (*pCurMb).iMbXY,
+            mbs.cur().iMbXY,
             &mut sDss,
         ) {
             if let Some(func_list) = ctx_func_list(pEncCtx).as_ref() {
@@ -2798,13 +2775,13 @@ pub unsafe fn WelsMdInterMbLoopOverDynamicSlice(
             break;
         }
 
-        (*pCurMb).uiSliceIdc = kiSliceIdx as u16;
-        OutputPMbWithoutConstructCsRsNoCopy(pEncCtx, pCurLayer, pSlice, &*pCurMb);
+        mbs.cur_mut().uiSliceIdc = kiSliceIdx as u16;
+        OutputPMbWithoutConstructCsRsNoCopy(pEncCtx, pCurLayer, pSlice, mbs.cur());
 
         if let Some(func_list) = ctx_func_list(pEncCtx).as_ref() {
             func_list.pfRc.WelsRcMbInfoUpdate(
                 pEncCtx as *mut _,
-                &mut *pCurMb,
+                mbs.cur_mut(),
                 (*pMd).iCostLuma,
                 &mut *pSlice,
             );
