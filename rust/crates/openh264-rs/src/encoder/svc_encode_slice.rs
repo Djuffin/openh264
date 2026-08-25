@@ -1479,8 +1479,8 @@ pub unsafe fn UpdateMbNeighbourInfoForNextSlice(
 
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
-pub unsafe fn WelsSliceHeaderScalExtInit(pCurLayer: *mut SDqLayer, pSlice: *mut SSlice) {
-    if pCurLayer.is_null() || pSlice.is_null() {
+pub unsafe fn WelsSliceHeaderScalExtInit(pCurLayer: *mut SDqLayer, pSlice: &mut SSlice) {
+    if pCurLayer.is_null() {
         return;
     }
     let pSliceHeadExt = &mut (*pSlice).sSliceHeaderExt;
@@ -2741,7 +2741,7 @@ pub unsafe fn WelsMdInterMbLoopOverDynamicSlice(
 
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
-pub unsafe fn WelsPSliceMdEnc(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSlice, kbIsHighestDlayerFlag: bool) -> i32 {
+pub unsafe fn WelsPSliceMdEnc(pEncCtx: *mut sWelsEncCtx, pSlice: &mut SSlice, kbIsHighestDlayerFlag: bool) -> i32 {
     let kpShExt = &(*pSlice).sSliceHeaderExt;
     let kiSliceFirstMbXY = kpShExt.sSliceHeader.iFirstMbInSlice;
     // C++ leaves `SWelsMD sMd;` uninitialized and only `memset`s `sMd.sMe` when the
@@ -2761,7 +2761,7 @@ pub unsafe fn WelsPSliceMdEnc(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSlice, kb
 
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
-pub unsafe fn WelsPSliceMdEncDynamic(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSlice, kbIsHighestDlayerFlag: bool) -> i32 {
+pub unsafe fn WelsPSliceMdEncDynamic(pEncCtx: *mut sWelsEncCtx, pSlice: &mut SSlice, kbIsHighestDlayerFlag: bool) -> i32 {
     let kpShExt = &(*pSlice).sSliceHeaderExt;
     let kiSliceFirstMbXY = kpShExt.sSliceHeader.iFirstMbInSlice;
     let mut sMd = SWelsMD::default();

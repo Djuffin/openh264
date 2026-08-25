@@ -321,16 +321,16 @@ fn LD32_MV(pMv: &SMVUnitXY) -> u32 {
 pub unsafe extern "C" fn WelsMdInterJudgePskip(
     pEncCtx: *mut sWelsEncCtx,
     pWelsMd: &mut SWelsMD,
-    pSlice: *mut SSlice,
+    pSlice: &mut SSlice,
     pCurMb: &mut SMB,
     bTrySkip: bool,
 ) -> bool {
-    let pMbCache = std::ptr::addr_of_mut!((*pSlice).sMbCacheInfo);
+    let pMbCache = &mut pSlice.sMbCacheInfo;
     let bRet;
     if ((crate::encoder::svc_encode_slice::ctx_ref_pic(pEncCtx)
         .map_or(0, |p| p.iPictureType)
         == EWelsSliceType::P_SLICE as i32)
-        && ((*pMbCache).uiRefMbType == MB_TYPE_SKIP || (*pMbCache).uiRefMbType == MB_TYPE_BACKGROUND))
+        && (pMbCache.uiRefMbType == MB_TYPE_SKIP || pMbCache.uiRefMbType == MB_TYPE_BACKGROUND))
         || bTrySkip
     {
         PredictSadSkip(
@@ -383,11 +383,11 @@ pub unsafe extern "C" fn WelsMdInterDecidedPskip(
 pub unsafe extern "C" fn WelsMdInterSecondaryModesEnc(
     pEncCtx: *mut sWelsEncCtx,
     pWelsMd: &mut SWelsMD,
-    pSlice: *mut SSlice,
+    pSlice: &mut SSlice,
     pCurMb: &mut SMB,
     bSkip: bool,
 ) {
-    let pMbCache = std::ptr::addr_of_mut!((*pSlice).sMbCacheInfo);
+    let pMbCache = &mut pSlice.sMbCacheInfo;
     let pFuncList = ctx_func_list(pEncCtx);
     //step 2: Intra
     let kbTrySkip = (*pFuncList).pfFirstIntraMode.expect(
@@ -412,15 +412,13 @@ pub unsafe extern "C" fn WelsMdInterSecondaryModesEnc(
         )(pEncCtx, pWelsMd, &mut *pSlice, pCurMb, (*pWelsMd).iCostLuma);
 
         //refinement for inter type
-        let pMbCache = std::ptr::addr_of_mut!((*pSlice).sMbCacheInfo);
-        crate::encoder::svc_base_layer_md::WelsMdInterMbRefinement(pEncCtx, pWelsMd, pCurMb, &mut *pMbCache);
+        crate::encoder::svc_base_layer_md::WelsMdInterMbRefinement(pEncCtx, pWelsMd, pCurMb, &mut pSlice.sMbCacheInfo);
 
         //step 7: invoke encoding
         crate::encoder::svc_base_layer_md::WelsMdInterEncode(pEncCtx, pSlice, pCurMb);
 
         //step 8: double check Pskip
-        let pMbCache = std::ptr::addr_of_mut!((*pSlice).sMbCacheInfo);
-        crate::encoder::svc_base_layer_md::WelsMdInterDoubleCheckPskip(pCurMb, &mut *pMbCache);
+        crate::encoder::svc_base_layer_md::WelsMdInterDoubleCheckPskip(pCurMb, &mut pSlice.sMbCacheInfo);
     }
 }
 
@@ -1249,10 +1247,10 @@ pub unsafe extern "C" fn WelsMdP16x16(
     pFunc: *mut SWelsFuncPtrList,
     pCurLayer: *mut SDqLayer,
     pWelsMd: &mut SWelsMD,
-    pSlice: *mut SSlice,
+    pSlice: &mut SSlice,
     pCurMb: *mut SMB,
 ) -> i32 {
-    let pMbCache = std::ptr::addr_of_mut!((*pSlice).sMbCacheInfo);
+    let pMbCache = &mut pSlice.sMbCacheInfo;
     let pMe16x16 = &mut (*pWelsMd).sMe.sMe16x16;
     let uiNeighborAvail = (*pCurMb).uiNeighborAvail as u32;
     let kiMbWidth: i32 = (*pCurLayer).iMbWidth as i32;
@@ -2039,13 +2037,13 @@ pub unsafe extern "C" fn SvcMdSCDMbEnc(
     pEncCtx: *mut sWelsEncCtx,
     pWelsMd: &mut SWelsMD,
     pCurMb: &mut SMB,
-    pSlice: *mut SSlice,
+    pSlice: &mut SSlice,
     bQpSimilarFlag: bool,
     bMbSkipFlag: bool,
     sCurMbMv: &[SMVUnitXY; 2],
     eSkipMode: ESkipModes,
 ) {
-    let pMbCache = std::ptr::addr_of_mut!((*pSlice).sMbCacheInfo);
+    let pMbCache = &mut pSlice.sMbCacheInfo;
     let pCurDqLayer = current_layer(pEncCtx);
     let pFunc = ctx_func_list(pEncCtx);
     let skip_idx = eSkipMode as usize;
@@ -2140,14 +2138,14 @@ pub unsafe extern "C" fn SvcMdSCDMbEnc(
         }
         (*pCurMb).uiMbType = MB_TYPE_SKIP;
         WelsRecPskip(pCurDqLayer, &*pFunc, pCurMb, &mut *pMbCache);
-        WelsMdInterUpdatePskip(pEncCtx, pCurDqLayer, pSlice, pCurMb);
+        WelsMdInterUpdatePskip(pEncCtx, pCurDqLayer, &mut *pSlice, pCurMb);
         return;
     }
 
     (*pCurMb).uiMbType = MB_TYPE_16x16;
 
     (*pWelsMd).sMe.sMe16x16.sMv = sCandidateMv;
-    let pMbCache = std::ptr::addr_of_mut!((*pSlice).sMbCacheInfo);
+    let pMbCache = &mut pSlice.sMbCacheInfo;
     PredMv(
         &(*pMbCache).sMvComponents,
         0,
@@ -2173,11 +2171,11 @@ pub unsafe extern "C" fn SvcMdSCDMbEnc(
     WelsInterMbEncode(pEncCtx, pSlice, pCurMb);
     WelsPMbChromaEncode(
         pEncCtx as *mut crate::encoder::svc_encode_slice::sWelsEncCtx,
-        pSlice as *mut crate::encoder::svc_encode_slice::SSlice,
+        &mut *pSlice,
         pCurMb,
     );
 
-    let pMbCache = std::ptr::addr_of_mut!((*pSlice).sMbCacheInfo);
+    let pMbCache = &mut pSlice.sMbCacheInfo;
     if let Some(copy16) = (*pFunc).pfCopy16x16Aligned {
         copy16(
             (*pMbCache).SPicData.pCsMb[0],
