@@ -689,8 +689,7 @@ pub const fn best_pred_i4x4_blk4_off(uiBestPredI4x4Blk4Half: u8) -> usize {
 /// detector be the referee for that claim instead of taking it on trust.
 pub type PFillInterNeighborCacheFunc = unsafe fn(
     pMbCache: &mut SMbCache,
-    pCurMb: *mut SMB,
-    iMbWidth: i32,
+    mbs: &crate::safe::mb_grid::MbWindow<'_, SMB>,
     pVaaBgMbFlag: *mut i8,
     kpMbSkipSad: &crate::encoder::rec_view::SharedMbArray<i32>,
 );
@@ -902,14 +901,11 @@ pub fn IS_SVC_INTER(uiMbType: u32) -> bool {
 }
 
 // Function Implementations
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe extern "C" fn FillNeighborCacheIntra(
+pub fn FillNeighborCacheIntra(
     pMbCache: &mut SMbCache,
-    pCurMb: *mut SMB,
-    iMbWidth: i32,
+    mbs: &crate::safe::mb_grid::MbWindow<'_, SMB>,
 ) {
-    let uiNeighborAvail = (*pCurMb).uiNeighborAvail as u32;
+    let uiNeighborAvail = mbs.cur().uiNeighborAvail as u32;
     let mut uiNeighborIntra: u32 = 0;
 
     if (uiNeighborAvail & LEFT_MB_POS) != 0 {
@@ -918,24 +914,24 @@ pub unsafe extern "C" fn FillNeighborCacheIntra(
         // `pIntra4x4PredMode - INTRA_4x4_MODE_NUM`). T6.C1: the arrays are inline, so
         // the same values come from the left macroblock's own struct -- which is the
         // one `pCurMb - 1` names, exactly as the branch below already assumed.
-        let pLeftMb = pCurMb.offset(-1);
-        (*pMbCache).iNonZeroCoeffCount[8] = (*pLeftMb).iNonZeroCount[3];
-        (*pMbCache).iNonZeroCoeffCount[16] = (*pLeftMb).iNonZeroCount[7];
-        (*pMbCache).iNonZeroCoeffCount[24] = (*pLeftMb).iNonZeroCount[11];
-        (*pMbCache).iNonZeroCoeffCount[32] = (*pLeftMb).iNonZeroCount[15];
+        let pLeftMb = mbs.left();
+        (*pMbCache).iNonZeroCoeffCount[8] = pLeftMb.iNonZeroCount[3];
+        (*pMbCache).iNonZeroCoeffCount[16] = pLeftMb.iNonZeroCount[7];
+        (*pMbCache).iNonZeroCoeffCount[24] = pLeftMb.iNonZeroCount[11];
+        (*pMbCache).iNonZeroCoeffCount[32] = pLeftMb.iNonZeroCount[15];
 
-        (*pMbCache).iNonZeroCoeffCount[13] = (*pLeftMb).iNonZeroCount[17];
-        (*pMbCache).iNonZeroCoeffCount[21] = (*pLeftMb).iNonZeroCount[21];
-        (*pMbCache).iNonZeroCoeffCount[37] = (*pLeftMb).iNonZeroCount[19];
-        (*pMbCache).iNonZeroCoeffCount[45] = (*pLeftMb).iNonZeroCount[23];
+        (*pMbCache).iNonZeroCoeffCount[13] = pLeftMb.iNonZeroCount[17];
+        (*pMbCache).iNonZeroCoeffCount[21] = pLeftMb.iNonZeroCount[21];
+        (*pMbCache).iNonZeroCoeffCount[37] = pLeftMb.iNonZeroCount[19];
+        (*pMbCache).iNonZeroCoeffCount[45] = pLeftMb.iNonZeroCount[23];
 
         uiNeighborIntra |= LEFT_MB_POS;
 
-        if ((*pLeftMb).uiMbType & MB_TYPE_INTRA4x4) != 0 {
-            (*pMbCache).iIntraPredMode[8] = (*pLeftMb).iIntra4x4PredMode[4];
-            (*pMbCache).iIntraPredMode[16] = (*pLeftMb).iIntra4x4PredMode[5];
-            (*pMbCache).iIntraPredMode[24] = (*pLeftMb).iIntra4x4PredMode[6];
-            (*pMbCache).iIntraPredMode[32] = (*pLeftMb).iIntra4x4PredMode[3];
+        if (pLeftMb.uiMbType & MB_TYPE_INTRA4x4) != 0 {
+            (*pMbCache).iIntraPredMode[8] = pLeftMb.iIntra4x4PredMode[4];
+            (*pMbCache).iIntraPredMode[16] = pLeftMb.iIntra4x4PredMode[5];
+            (*pMbCache).iIntraPredMode[24] = pLeftMb.iIntra4x4PredMode[6];
+            (*pMbCache).iIntraPredMode[32] = pLeftMb.iIntra4x4PredMode[3];
         } else {
             (*pMbCache).iIntraPredMode[8] = 2;
             (*pMbCache).iIntraPredMode[16] = 2;
@@ -959,20 +955,20 @@ pub unsafe extern "C" fn FillNeighborCacheIntra(
     }
 
     if (uiNeighborAvail & TOP_MB_POS) != 0 {
-        let pTopMb = pCurMb.offset(-(iMbWidth as isize));
+        let pTopMb = mbs.top();
         // One reborrow of each row rather than one per statement: the destination is
         // the cache's array and the source is the top macroblock's, two allocations.
         let pCacheNzc = &mut (*pMbCache).iNonZeroCoeffCount;
-        let pTopNzc = &(*pTopMb).iNonZeroCount;
+        let pTopNzc = &pTopMb.iNonZeroCount;
         pCacheNzc[1..5].copy_from_slice(&pTopNzc[12..16]);
         pCacheNzc[6..8].copy_from_slice(&pTopNzc[20..22]);
         pCacheNzc[30..32].copy_from_slice(&pTopNzc[22..24]);
 
         uiNeighborIntra |= TOP_MB_POS;
 
-        if ((*pTopMb).uiMbType & MB_TYPE_INTRA4x4) != 0 {
+        if (pTopMb.uiMbType & MB_TYPE_INTRA4x4) != 0 {
             let pCacheMode = &mut (*pMbCache).iIntraPredMode;
-            let pTopMode = &(*pTopMb).iIntra4x4PredMode;
+            let pTopMode = &pTopMb.iIntra4x4PredMode;
             pCacheMode[1..5].copy_from_slice(&pTopMode[0..4]);
         } else {
             (*pMbCache).iIntraPredMode[1] = 2;
@@ -981,10 +977,10 @@ pub unsafe extern "C" fn FillNeighborCacheIntra(
             (*pMbCache).iIntraPredMode[4] = 2;
         }
     } else {
-        std::ptr::write_bytes((*pMbCache).iIntraPredMode.as_mut_ptr().add(1), 0xff, 4);
-        std::ptr::write_bytes((*pMbCache).iNonZeroCoeffCount.as_mut_ptr().add(1), 0xff, 4);
-        std::ptr::write_bytes((*pMbCache).iNonZeroCoeffCount.as_mut_ptr().add(6), 0xff, 2);
-        std::ptr::write_bytes((*pMbCache).iNonZeroCoeffCount.as_mut_ptr().add(30), 0xff, 2);
+        (*pMbCache).iIntraPredMode[1..5].fill(-1);
+        (*pMbCache).iNonZeroCoeffCount[1..5].fill(-1);
+        (*pMbCache).iNonZeroCoeffCount[6..8].fill(-1);
+        (*pMbCache).iNonZeroCoeffCount[30..32].fill(-1);
     }
 
     if (uiNeighborAvail & TOPLEFT_MB_POS) != 0 {
@@ -1000,32 +996,27 @@ pub unsafe extern "C" fn FillNeighborCacheIntra(
 #[allow(unsafe_code)]
 pub unsafe fn FillNeighborCacheInterWithoutBGD(
     pMbCache: &mut SMbCache,
-    pCurMb: *mut SMB,
-    iMbWidth: i32,
+    mbs: &crate::safe::mb_grid::MbWindow<'_, SMB>,
     _pVaaBgMbFlag: *mut i8,
     kpMbSkipSad: &crate::encoder::rec_view::SharedMbArray<i32>,
 ) {
-    let uiNeighborAvail = (*pCurMb).uiNeighborAvail as u32;
-    let kiMbXY = (*pCurMb).iMbXY as isize;
-    // F14's class: a neighbour pointer formed before its availability guard, dereferenced only under it — `wrapping_offset` keeps the arithmetic defined off the edge of the MB array (the encode probe, Phase 6 session B).
-    let pLeftMb = pCurMb.wrapping_offset(-1);
-    let pTopMb = pCurMb.wrapping_offset(-(iMbWidth as isize));
-    let pLeftTopMb = pCurMb.wrapping_offset(-(iMbWidth as isize) - 1);
-    let iRightTopMb = pCurMb.wrapping_offset(-(iMbWidth as isize) + 1);
+    let uiNeighborAvail = mbs.cur().uiNeighborAvail as u32;
+    let kiMbXY = mbs.cur().iMbXY as isize;
+    let iMbWidth = mbs.stride() as i32;
     let pMvComp = &mut (*pMbCache).sMvComponents;
 
-    if (uiNeighborAvail & LEFT_MB_POS) != 0 && IS_SVC_INTER((*pLeftMb).uiMbType) {
-        pMvComp.sMotionVectorCache[6] = (*pLeftMb).sMv[3];
-        pMvComp.sMotionVectorCache[12] = (*pLeftMb).sMv[7];
-        pMvComp.sMotionVectorCache[18] = (*pLeftMb).sMv[11];
-        pMvComp.sMotionVectorCache[24] = (*pLeftMb).sMv[15];
-        pMvComp.iRefIndexCache[6] = (*pLeftMb).iRefIndex[1];
-        pMvComp.iRefIndexCache[12] = (*pLeftMb).iRefIndex[1];
-        pMvComp.iRefIndexCache[18] = (*pLeftMb).iRefIndex[3];
-        pMvComp.iRefIndexCache[24] = (*pLeftMb).iRefIndex[3];
-        (*pMbCache).iSadCost[3] = (*pLeftMb).iSadCost;
+    if (uiNeighborAvail & LEFT_MB_POS) != 0 && IS_SVC_INTER(mbs.left().uiMbType) {
+        pMvComp.sMotionVectorCache[6] = mbs.left().sMv[3];
+        pMvComp.sMotionVectorCache[12] = mbs.left().sMv[7];
+        pMvComp.sMotionVectorCache[18] = mbs.left().sMv[11];
+        pMvComp.sMotionVectorCache[24] = mbs.left().sMv[15];
+        pMvComp.iRefIndexCache[6] = mbs.left().iRefIndex[1];
+        pMvComp.iRefIndexCache[12] = mbs.left().iRefIndex[1];
+        pMvComp.iRefIndexCache[18] = mbs.left().iRefIndex[3];
+        pMvComp.iRefIndexCache[24] = mbs.left().iRefIndex[3];
+        (*pMbCache).iSadCost[3] = mbs.left().iSadCost;
 
-        if (*pLeftMb).uiMbType == MB_TYPE_SKIP {
+        if mbs.left().uiMbType == MB_TYPE_SKIP {
             (*pMbCache).bMbTypeSkip[3] = true;
             (*pMbCache).iSadCostSkip[3] = kpMbSkipSad.get((kiMbXY - 1) as usize);
         } else {
@@ -1047,17 +1038,17 @@ pub unsafe fn FillNeighborCacheInterWithoutBGD(
         (*pMbCache).iSadCostSkip[3] = 0;
     }
 
-    if (uiNeighborAvail & TOP_MB_POS) != 0 && IS_SVC_INTER((*pTopMb).uiMbType) {
-        let pTopMv = &(*pTopMb).sMv;
+    if (uiNeighborAvail & TOP_MB_POS) != 0 && IS_SVC_INTER(mbs.top().uiMbType) {
+        let pTopMv = &mbs.top().sMv;
         pMvComp.sMotionVectorCache[1..3].copy_from_slice(&pTopMv[12..14]);
         pMvComp.sMotionVectorCache[3..5].copy_from_slice(&pTopMv[14..16]);
-        pMvComp.iRefIndexCache[1] = (*pTopMb).iRefIndex[2];
-        pMvComp.iRefIndexCache[2] = (*pTopMb).iRefIndex[2];
-        pMvComp.iRefIndexCache[3] = (*pTopMb).iRefIndex[3];
-        pMvComp.iRefIndexCache[4] = (*pTopMb).iRefIndex[3];
-        (*pMbCache).iSadCost[1] = (*pTopMb).iSadCost;
+        pMvComp.iRefIndexCache[1] = mbs.top().iRefIndex[2];
+        pMvComp.iRefIndexCache[2] = mbs.top().iRefIndex[2];
+        pMvComp.iRefIndexCache[3] = mbs.top().iRefIndex[3];
+        pMvComp.iRefIndexCache[4] = mbs.top().iRefIndex[3];
+        (*pMbCache).iSadCost[1] = mbs.top().iSadCost;
 
-        if (*pTopMb).uiMbType == MB_TYPE_SKIP {
+        if mbs.top().uiMbType == MB_TYPE_SKIP {
             (*pMbCache).bMbTypeSkip[1] = true;
             (*pMbCache).iSadCostSkip[1] = kpMbSkipSad.get((kiMbXY - iMbWidth as isize) as usize);
         } else {
@@ -1079,12 +1070,12 @@ pub unsafe fn FillNeighborCacheInterWithoutBGD(
         (*pMbCache).iSadCostSkip[1] = 0;
     }
 
-    if (uiNeighborAvail & TOPLEFT_MB_POS) != 0 && IS_SVC_INTER((*pLeftTopMb).uiMbType) {
-        pMvComp.sMotionVectorCache[0] = (*pLeftTopMb).sMv[15];
-        pMvComp.iRefIndexCache[0] = (*pLeftTopMb).iRefIndex[3];
-        (*pMbCache).iSadCost[0] = (*pLeftTopMb).iSadCost;
+    if (uiNeighborAvail & TOPLEFT_MB_POS) != 0 && IS_SVC_INTER(mbs.top_left().uiMbType) {
+        pMvComp.sMotionVectorCache[0] = mbs.top_left().sMv[15];
+        pMvComp.iRefIndexCache[0] = mbs.top_left().iRefIndex[3];
+        (*pMbCache).iSadCost[0] = mbs.top_left().iSadCost;
 
-        if (*pLeftTopMb).uiMbType == MB_TYPE_SKIP {
+        if mbs.top_left().uiMbType == MB_TYPE_SKIP {
             (*pMbCache).bMbTypeSkip[0] = true;
             (*pMbCache).iSadCostSkip[0] = kpMbSkipSad.get((kiMbXY - iMbWidth as isize - 1) as usize);
         } else {
@@ -1099,12 +1090,12 @@ pub unsafe fn FillNeighborCacheInterWithoutBGD(
         (*pMbCache).iSadCostSkip[0] = 0;
     }
 
-    if (uiNeighborAvail & TOPRIGHT_MB_POS) != 0 && IS_SVC_INTER((*iRightTopMb).uiMbType) {
-        pMvComp.sMotionVectorCache[5] = (*iRightTopMb).sMv[12];
-        pMvComp.iRefIndexCache[5] = (*iRightTopMb).iRefIndex[2];
-        (*pMbCache).iSadCost[2] = (*iRightTopMb).iSadCost;
+    if (uiNeighborAvail & TOPRIGHT_MB_POS) != 0 && IS_SVC_INTER(mbs.top_right().uiMbType) {
+        pMvComp.sMotionVectorCache[5] = mbs.top_right().sMv[12];
+        pMvComp.iRefIndexCache[5] = mbs.top_right().iRefIndex[2];
+        (*pMbCache).iSadCost[2] = mbs.top_right().iSadCost;
 
-        if (*iRightTopMb).uiMbType == MB_TYPE_SKIP {
+        if mbs.top_right().uiMbType == MB_TYPE_SKIP {
             (*pMbCache).bMbTypeSkip[2] = true;
             (*pMbCache).iSadCostSkip[2] = kpMbSkipSad.get((kiMbXY - iMbWidth as isize + 1) as usize);
         } else {
@@ -1135,32 +1126,27 @@ pub unsafe fn FillNeighborCacheInterWithoutBGD(
 #[allow(unsafe_code)]
 pub unsafe fn FillNeighborCacheInterWithBGD(
     pMbCache: &mut SMbCache,
-    pCurMb: *mut SMB,
-    iMbWidth: i32,
+    mbs: &crate::safe::mb_grid::MbWindow<'_, SMB>,
     pVaaBgMbFlag: *mut i8,
     kpMbSkipSad: &crate::encoder::rec_view::SharedMbArray<i32>,
 ) {
-    let uiNeighborAvail = (*pCurMb).uiNeighborAvail as u32;
-    let kiMbXY = (*pCurMb).iMbXY as isize;
-    // F14's class: a neighbour pointer formed before its availability guard, dereferenced only under it — `wrapping_offset` keeps the arithmetic defined off the edge of the MB array (the encode probe, Phase 6 session B).
-    let pLeftMb = pCurMb.wrapping_offset(-1);
-    let pTopMb = pCurMb.wrapping_offset(-(iMbWidth as isize));
-    let pLeftTopMb = pCurMb.wrapping_offset(-(iMbWidth as isize) - 1);
-    let iRightTopMb = pCurMb.wrapping_offset(-(iMbWidth as isize) + 1);
+    let uiNeighborAvail = mbs.cur().uiNeighborAvail as u32;
+    let kiMbXY = mbs.cur().iMbXY as isize;
+    let iMbWidth = mbs.stride() as i32;
     let pMvComp = &mut (*pMbCache).sMvComponents;
 
-    if (uiNeighborAvail & LEFT_MB_POS) != 0 && IS_SVC_INTER((*pLeftMb).uiMbType) {
-        pMvComp.sMotionVectorCache[6] = (*pLeftMb).sMv[3];
-        pMvComp.sMotionVectorCache[12] = (*pLeftMb).sMv[7];
-        pMvComp.sMotionVectorCache[18] = (*pLeftMb).sMv[11];
-        pMvComp.sMotionVectorCache[24] = (*pLeftMb).sMv[15];
-        pMvComp.iRefIndexCache[6] = (*pLeftMb).iRefIndex[1];
-        pMvComp.iRefIndexCache[12] = (*pLeftMb).iRefIndex[1];
-        pMvComp.iRefIndexCache[18] = (*pLeftMb).iRefIndex[3];
-        pMvComp.iRefIndexCache[24] = (*pLeftMb).iRefIndex[3];
-        (*pMbCache).iSadCost[3] = (*pLeftMb).iSadCost;
+    if (uiNeighborAvail & LEFT_MB_POS) != 0 && IS_SVC_INTER(mbs.left().uiMbType) {
+        pMvComp.sMotionVectorCache[6] = mbs.left().sMv[3];
+        pMvComp.sMotionVectorCache[12] = mbs.left().sMv[7];
+        pMvComp.sMotionVectorCache[18] = mbs.left().sMv[11];
+        pMvComp.sMotionVectorCache[24] = mbs.left().sMv[15];
+        pMvComp.iRefIndexCache[6] = mbs.left().iRefIndex[1];
+        pMvComp.iRefIndexCache[12] = mbs.left().iRefIndex[1];
+        pMvComp.iRefIndexCache[18] = mbs.left().iRefIndex[3];
+        pMvComp.iRefIndexCache[24] = mbs.left().iRefIndex[3];
+        (*pMbCache).iSadCost[3] = mbs.left().iSadCost;
 
-        if (*pLeftMb).uiMbType == MB_TYPE_SKIP && *pVaaBgMbFlag.offset(-1) == 0 {
+        if mbs.left().uiMbType == MB_TYPE_SKIP && *pVaaBgMbFlag.offset(-1) == 0 {
             (*pMbCache).bMbTypeSkip[3] = true;
             (*pMbCache).iSadCostSkip[3] = kpMbSkipSad.get((kiMbXY - 1) as usize);
         } else {
@@ -1182,17 +1168,17 @@ pub unsafe fn FillNeighborCacheInterWithBGD(
         (*pMbCache).iSadCostSkip[3] = 0;
     }
 
-    if (uiNeighborAvail & TOP_MB_POS) != 0 && IS_SVC_INTER((*pTopMb).uiMbType) {
-        let pTopMv = &(*pTopMb).sMv;
+    if (uiNeighborAvail & TOP_MB_POS) != 0 && IS_SVC_INTER(mbs.top().uiMbType) {
+        let pTopMv = &mbs.top().sMv;
         pMvComp.sMotionVectorCache[1..3].copy_from_slice(&pTopMv[12..14]);
         pMvComp.sMotionVectorCache[3..5].copy_from_slice(&pTopMv[14..16]);
-        pMvComp.iRefIndexCache[1] = (*pTopMb).iRefIndex[2];
-        pMvComp.iRefIndexCache[2] = (*pTopMb).iRefIndex[2];
-        pMvComp.iRefIndexCache[3] = (*pTopMb).iRefIndex[3];
-        pMvComp.iRefIndexCache[4] = (*pTopMb).iRefIndex[3];
-        (*pMbCache).iSadCost[1] = (*pTopMb).iSadCost;
+        pMvComp.iRefIndexCache[1] = mbs.top().iRefIndex[2];
+        pMvComp.iRefIndexCache[2] = mbs.top().iRefIndex[2];
+        pMvComp.iRefIndexCache[3] = mbs.top().iRefIndex[3];
+        pMvComp.iRefIndexCache[4] = mbs.top().iRefIndex[3];
+        (*pMbCache).iSadCost[1] = mbs.top().iSadCost;
 
-        if (*pTopMb).uiMbType == MB_TYPE_SKIP && *pVaaBgMbFlag.offset(-(iMbWidth as isize)) == 0 {
+        if mbs.top().uiMbType == MB_TYPE_SKIP && *pVaaBgMbFlag.offset(-(iMbWidth as isize)) == 0 {
             (*pMbCache).bMbTypeSkip[1] = true;
             (*pMbCache).iSadCostSkip[1] = kpMbSkipSad.get((kiMbXY - iMbWidth as isize) as usize);
         } else {
@@ -1214,12 +1200,12 @@ pub unsafe fn FillNeighborCacheInterWithBGD(
         (*pMbCache).iSadCostSkip[1] = 0;
     }
 
-    if (uiNeighborAvail & TOPLEFT_MB_POS) != 0 && IS_SVC_INTER((*pLeftTopMb).uiMbType) {
-        pMvComp.sMotionVectorCache[0] = (*pLeftTopMb).sMv[15];
-        pMvComp.iRefIndexCache[0] = (*pLeftTopMb).iRefIndex[3];
-        (*pMbCache).iSadCost[0] = (*pLeftTopMb).iSadCost;
+    if (uiNeighborAvail & TOPLEFT_MB_POS) != 0 && IS_SVC_INTER(mbs.top_left().uiMbType) {
+        pMvComp.sMotionVectorCache[0] = mbs.top_left().sMv[15];
+        pMvComp.iRefIndexCache[0] = mbs.top_left().iRefIndex[3];
+        (*pMbCache).iSadCost[0] = mbs.top_left().iSadCost;
 
-        if (*pLeftTopMb).uiMbType == MB_TYPE_SKIP && *pVaaBgMbFlag.offset(-(iMbWidth as isize) - 1) == 0 {
+        if mbs.top_left().uiMbType == MB_TYPE_SKIP && *pVaaBgMbFlag.offset(-(iMbWidth as isize) - 1) == 0 {
             (*pMbCache).bMbTypeSkip[0] = true;
             (*pMbCache).iSadCostSkip[0] = kpMbSkipSad.get((kiMbXY - iMbWidth as isize - 1) as usize);
         } else {
@@ -1234,12 +1220,12 @@ pub unsafe fn FillNeighborCacheInterWithBGD(
         (*pMbCache).iSadCostSkip[0] = 0;
     }
 
-    if (uiNeighborAvail & TOPRIGHT_MB_POS) != 0 && IS_SVC_INTER((*iRightTopMb).uiMbType) {
-        pMvComp.sMotionVectorCache[5] = (*iRightTopMb).sMv[12];
-        pMvComp.iRefIndexCache[5] = (*iRightTopMb).iRefIndex[2];
-        (*pMbCache).iSadCost[2] = (*iRightTopMb).iSadCost;
+    if (uiNeighborAvail & TOPRIGHT_MB_POS) != 0 && IS_SVC_INTER(mbs.top_right().uiMbType) {
+        pMvComp.sMotionVectorCache[5] = mbs.top_right().sMv[12];
+        pMvComp.iRefIndexCache[5] = mbs.top_right().iRefIndex[2];
+        (*pMbCache).iSadCost[2] = mbs.top_right().iSadCost;
 
-        if (*iRightTopMb).uiMbType == MB_TYPE_SKIP && *pVaaBgMbFlag.offset(-(iMbWidth as isize) + 1) == 0 {
+        if mbs.top_right().uiMbType == MB_TYPE_SKIP && *pVaaBgMbFlag.offset(-(iMbWidth as isize) + 1) == 0 {
             (*pMbCache).bMbTypeSkip[2] = true;
             (*pMbCache).iSadCostSkip[2] = kpMbSkipSad.get((kiMbXY - iMbWidth as isize + 1) as usize);
         } else {

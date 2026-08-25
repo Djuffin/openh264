@@ -378,7 +378,15 @@ pub unsafe fn WelsMdIntraInit(
     //step 4: locating scaled_tcoeff
 
     //step 1. load neighbor cache
-    FillNeighborCacheIntra(pMbCache, pCurMb, (*pCurLayer).iMbWidth as i32);
+    FillNeighborCacheIntra(
+        pMbCache,
+        &crate::encoder::svc_encode_slice::mb_window(
+            pCurLayer,
+            iSliceFirstMbXY,
+            kiMbXY - iSliceFirstMbXY + 1,
+            kiMbXY,
+        ),
+    );
     // in WelsMdI16x16() will be changed, so re-init here!
     // Init with default, maybe change in WelsMdI16x16 and svc_md_i16x16_sad:
     // luma is the first 256-byte half of `sMemPredMb` and chroma the second.
@@ -979,8 +987,12 @@ pub unsafe fn WelsMdInterInit(
         .pfFillInterNeighborCache
         .expect("pfFillInterNeighborCache unset")(
         &mut *pMbCache,
-        pCurMb,
-        kiMbWidth,
+        &crate::encoder::svc_encode_slice::mb_window(
+            pCurLayer,
+            iSliceFirstMbXY,
+            kiMbXY - iSliceFirstMbXY + 1,
+            kiMbXY,
+        ),
         {
             // T9.E7 (F132 round 8): `Vec::as_mut_ptr` autorefs `&mut` on the
             // SHARED VAA struct's vector — a retag-write every worker makes per
