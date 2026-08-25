@@ -1366,8 +1366,11 @@ impl CWelsPreProcess {
         let gopIdx = (pParamInternal.iCodingIndex & gopMask) as usize;
         let mut iRefTemporalIdx = g_kuiRefTemporalIdx[stageIdx][gopIdx] as i32;
 
+        // T9.G6: hoisted — `ctx_ltr_at` takes the context retag and its own second
+        // argument reads through the same context (shape B).
+        let uiDidForLtr = (*pCtx).uiDependencyId as usize;
         if (*pCtx).uiTemporalId == 0
-            && (*ctx_ltr_at(pCtx, (*pCtx).uiDependencyId as usize)).bReceivedT0LostFlag
+            && (*ctx_ltr_at(pCtx, uiDidForLtr)).bReceivedT0LostFlag
         {
             iRefTemporalIdx = self.m_uiSpatialLayersInTemporal[dIdx] as i32
                 + (*ctx_vaa(pCtx)).uiValidLongTermPicIdx as i32;

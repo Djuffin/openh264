@@ -1518,9 +1518,12 @@ pub unsafe fn WelsInitEncoderExt(
     // the same image the memset produced), so there is nothing to allocate and no
     // allocation to fail; `InitFunctionPointers` writes over it exactly as before.
     // The trade is `pSvcParam`'s at T6.H11 and `pOut`'s at T3.6: panic-on-OOM.
+    // T9.G6: hoisted — the call takes the context retag and this argument reads
+    // through the same context (shape B).
+    let pParamForFuncs = ctx_param(pCtx);
     iRet = crate::encoder::encoder_context::InitFunctionPointers(
         pCtx,
-        ctx_param(pCtx),
+        pParamForFuncs,
         uiCpuFeatureFlags,
     );
     if iRet != ENC_RETURN_SUCCESS {
@@ -1540,14 +1543,20 @@ pub unsafe fn WelsInitEncoderExt(
     if (*pCodingParam).iEntropyCodingModeFlag != 0 {
         crate::encoder::set_mb_syn_cabac::WelsCabacInit(pCtx);
     }
-    crate::encoder::rc::WelsRcInitModule(pCtx, (*ctx_param(pCtx)).iRCMode);
+    // T9.G6: hoisted — the call takes the context retag and this argument reads
+    // through the same context (shape B).
+    let iRCMode = (*ctx_param(pCtx)).iRCMode;
+    crate::encoder::rc::WelsRcInitModule(pCtx, iRCMode);
 
     (*pCtx).pVpp = crate::encoder::wels_preprocess::CWelsPreProcess::CreatePreProcess(pCtx);
     if (*pCtx).pVpp.is_null() {
         WelsUninitEncoderExt(Some(Box::from_raw(pCtx)));
         return 1;
     }
-    iRet = (*(*pCtx).pVpp).AllocSpatialPictures(pCtx, ctx_param(pCtx));
+    // T9.G6: hoisted — the call takes the context retag and this argument reads
+    // through the same context (shape B).
+    let pParamForAlloc = ctx_param(pCtx);
+    iRet = (*(*pCtx).pVpp).AllocSpatialPictures(pCtx, pParamForAlloc);
     if iRet != 0 {
         WelsUninitEncoderExt(Some(Box::from_raw(pCtx)));
         return iRet;
@@ -1682,7 +1691,7 @@ mod tests {
         *ctx_param(pCtx) = param;
         // T6.I1: the table comes with the context; see `WelsInitEncoderExt`.
         assert_eq!(
-            InitFunctionPointers(pCtx, ctx_param(pCtx), uiCpuFeatureFlags),
+            { let pParam = ctx_param(pCtx); InitFunctionPointers(pCtx, pParam, uiCpuFeatureFlags) },
             ENC_RETURN_SUCCESS
         );
         (*pCtx).iActiveThreadsNum = param.iMultipleThreadIdc as i16;
@@ -2028,7 +2037,8 @@ pub unsafe fn StackBackEncoderStatus(pEncCtx: *mut sWelsEncCtx, keFrameType: EVi
             (*pParamInternal).iPOC = (1 << (*ctx_sps(pEncCtx)).iLog2MaxPocLsb) - 2;
         }
 
-        crate::encoder::encoder_context::LoadBackFrameNum(pEncCtx, (*pEncCtx).uiDependencyId as i32);
+        let iDid = (*pEncCtx).uiDependencyId as i32;
+        crate::encoder::encoder_context::LoadBackFrameNum(pEncCtx, iDid);
 
         (*pEncCtx).eNalType = EWelsNalUnitType::NAL_UNIT_CODED_SLICE;
         (*pEncCtx).eSliceType = EWelsSliceType::P_SLICE;
@@ -2036,7 +2046,8 @@ pub unsafe fn StackBackEncoderStatus(pEncCtx: *mut sWelsEncCtx, keFrameType: EVi
     } else if keFrameType == EVideoFrameType::videoFrameTypeIDR {
         (*pParamInternal).uiIdrPicId -= 1;
         // set the next frame to be IDR
-        crate::encoder::wels_encoder_ext::ForceCodingIDR(pEncCtx, (*pEncCtx).uiDependencyId as i32);
+        let iDid = (*pEncCtx).uiDependencyId as i32;
+        crate::encoder::wels_encoder_ext::ForceCodingIDR(pEncCtx, iDid);
     } else {
         // B pictures are not supported now
         debug_assert!(false, "StackBackEncoderStatus: unsupported frame type");
@@ -3032,11 +3043,14 @@ pub unsafe fn DynSliceRealloc(
     pFrameBsInfo: *mut SFrameBSInfo,
     pLayerBsInfo: *mut SLayerBSInfo,
 ) -> i32 {
+    // T9.G6: hoisted — the call takes the context retag and this argument reads
+    // through the same context (shape B).
+    let iMaxSliceNum = (*current_layer(pCtx)).iMaxSliceNum;
     let mut iRet = crate::encoder::svc_encode_slice::FrameBsRealloc(
         pCtx,
         pFrameBsInfo,
         pLayerBsInfo,
-        (*current_layer(pCtx)).iMaxSliceNum,
+        iMaxSliceNum,
     );
     if iRet != ENC_RETURN_SUCCESS {
         return iRet;
@@ -3499,13 +3513,17 @@ pub unsafe fn WelsEncoderEncodeExt(
             } else {
                 None
             };
+            // T9.G6: hoisted — the call takes the context retag and these arguments
+            // read through the same context (shape B).
+            let idEncPicForVaa = (*pCtx).pEncPic;
+            let bBgd = (*pCtx).eSliceType == EWelsSliceType::P_SLICE
+                && (*pSvcParam).bEnableBackgroundDetection;
             (*(*pCtx).pVpp).AnalyzePictureComplexity(
                 pCtx,
-                (*pCtx).pEncPic,
+                idEncPicForVaa,
                 pRef,
                 iCurDid as i32,
-                (*pCtx).eSliceType == EWelsSliceType::P_SLICE
-                    && (*pSvcParam).bEnableBackgroundDetection,
+                bBgd,
             );
         }
         // get reordering syntax used for writing the slice header
@@ -4027,7 +4045,8 @@ pub unsafe fn WelsEncoderEncodeExt(
             return ENC_RETURN_CORRECTED;
         }
 
-        let pLtr = ctx_ltr_at(pCtx, (*pCtx).uiDependencyId as usize);
+        let uiDidForLtr = (*pCtx).uiDependencyId as usize;
+        let pLtr = ctx_ltr_at(pCtx, uiDidForLtr);
         if (*pSvcParam).bEnableLongTermReference
             && (((*pLtr).bLTRMarkingFlag
                 && (*pLtr).iLTRMarkMode == crate::encoder::ref_list_mgr_svc::LTR_MARKING_PROCESS_MODE::LTR_DIRECT_MARK as i32)

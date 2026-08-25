@@ -979,10 +979,13 @@ pub unsafe fn WelsMarkPic(pCtx: *mut sWelsEncCtx) {
         }
     }
 
+    // T9.G6: hoisted — the call takes the context retag and this argument reads
+    // through the same context (shape B).
+    let pCurLayerForMmco = &mut *current_layer(pCtx);
     WelsMarkMMCORefInfo(
         pCtx,
         pLtr,
-        &mut *current_layer(pCtx),
+        pCurLayerForMmco,
         kiCountSliceNum,
     );
 }
@@ -1263,10 +1266,12 @@ pub unsafe fn WelsUpdateRefSyntax(pCtx: *mut sWelsEncCtx, kiPOC: i32, kiFrameTyp
 
     if !current_layer(pCtx).is_null() {
         // The null arm of the callee's old guard, hoisted with the reborrow.
+        // T9.G6: hoisted — see `WelsMarkMMCORefInfo` above.
+        let pCurLayerForSh = &mut *current_layer(pCtx);
         WelsUpdateSliceHeaderSyntax(
             pCtx,
             iAbsDiffPicNumMinus1,
-            &mut *current_layer(pCtx),
+            pCurLayerForSh,
             kiFrameType,
         );
     }
@@ -1630,10 +1635,12 @@ pub unsafe fn WelsMarkPicScreen(pCtx: *mut sWelsEncCtx) {
     }
 
     let iSliceNum = (*current_layer(pCtx)).iMaxSliceNum;
+    // T9.G6: hoisted — see `WelsMarkMMCORefInfo`.
+    let pCurLayerForMmco = &mut *current_layer(pCtx);
     WelsMarkMMCORefInfoScreen(
         pCtx,
         pLtr,
-        &mut *current_layer(pCtx),
+        pCurLayerForMmco,
         iSliceNum,
     );
 }

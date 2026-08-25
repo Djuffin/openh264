@@ -4192,14 +4192,18 @@ pub unsafe fn SliceLayerInfoUpdate(
     }
 
     if iMaxSliceNum > (*current_layer(pCtx)).iMaxSliceNum {
-        let iRet = ExtendLayerBuffer(pCtx, (*current_layer(pCtx)).iMaxSliceNum, iMaxSliceNum);
+        // T9.G6: hoisted (shape B).
+        let iCurMaxSliceNum = (*current_layer(pCtx)).iMaxSliceNum;
+        let iRet = ExtendLayerBuffer(pCtx, iCurMaxSliceNum, iMaxSliceNum);
         if iRet != ENC_RETURN_SUCCESS {
             return iRet;
         }
         (*current_layer(pCtx)).iMaxSliceNum = iMaxSliceNum;
     }
 
-    let mut iRet = ReOrderSliceInLayer(pCtx, kuiSliceMode, (*pCtx).iActiveThreadsNum as i32);
+    // T9.G6: hoisted (shape B).
+    let iActiveThreadsNum = (*pCtx).iActiveThreadsNum as i32;
+    let mut iRet = ReOrderSliceInLayer(pCtx, kuiSliceMode, iActiveThreadsNum);
     if iRet != ENC_RETURN_SUCCESS {
         return iRet;
     }
@@ -4209,7 +4213,9 @@ pub unsafe fn SliceLayerInfoUpdate(
     let iCodedNalCount = GetTotalCodedNalCount(pFrameBsInfo);
 
     if iCodedNalCount > (*(*pCtx).pOut).sNalList.len() as i32 {
-        iRet = FrameBsRealloc(pCtx, pFrameBsInfo, pLayerBsInfo, (*current_layer(pCtx)).iMaxSliceNum);
+        // T9.G6: hoisted (shape B).
+        let iCurMaxSliceNum = (*current_layer(pCtx)).iMaxSliceNum;
+        iRet = FrameBsRealloc(pCtx, pFrameBsInfo, pLayerBsInfo, iCurMaxSliceNum);
         if iRet != ENC_RETURN_SUCCESS {
             return iRet;
         }
