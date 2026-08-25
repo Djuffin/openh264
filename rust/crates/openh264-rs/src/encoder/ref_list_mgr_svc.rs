@@ -270,52 +270,47 @@ pub unsafe fn WelsResetRefList(pCtx: *mut sWelsEncCtx) {
 }
 
 /// Remove a long-term reference entry by index from pLongRefList.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn DeleteLTRFromLongList(pCtx: *mut sWelsEncCtx, iIdx: i32) {
-    if pCtx.is_null() {
-        return;
-    }
-    let pRefList = ctx_ref_list(pCtx, (*pCtx).uiDependencyId as usize);
-    if pRefList.is_null() {
-        return;
-    }
-    let count = (*pRefList).uiLongRefCount as i32;
+///
+/// **Narrowed to the list it edits — T9.G3, S54.** It took `*mut sWelsEncCtx` and
+/// used it for exactly one thing: `ctx_ref_list(pCtx, (*pCtx).uiDependencyId)`.
+/// Every one of its five callers already holds that same pointer, derived with the
+/// same `uiDid` (`uiDependencyId` is written in one place in the encoder,
+/// `encoder_ext.rs:3356`, and never inside this file), and every one has already
+/// null-guarded it. So the context parameter carried no information the caller did
+/// not have, and carrying it made this call a **whole-context retag in the middle
+/// of five loops that hold cursors across it** — 8 of the 131 live hazards
+/// (`phase9_ctx_join.py`), and, after the flip, five borrow-checker errors instead.
+/// Taking the list retags the list.
+pub fn DeleteLTRFromLongList(pRefList: &mut SRefList, iIdx: i32) {
+    let count = pRefList.uiLongRefCount as i32;
     let mut k = iIdx;
     while k < count - 1 {
-        (*pRefList).pLongRefList[k as usize] = (*pRefList).pLongRefList[(k + 1) as usize];
+        pRefList.pLongRefList[k as usize] = pRefList.pLongRefList[(k + 1) as usize];
         k += 1;
     }
     if k >= 0 && (k as usize) <= MAX_REF_PIC_COUNT {
-        (*pRefList).pLongRefList[k as usize] = None;
+        pRefList.pLongRefList[k as usize] = None;
     }
-    if (*pRefList).uiLongRefCount > 0 {
-        (*pRefList).uiLongRefCount -= 1;
+    if pRefList.uiLongRefCount > 0 {
+        pRefList.uiLongRefCount -= 1;
     }
 }
 
 /// Remove a short-term reference entry by index from pShortRefList.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn DeleteSTRFromShortList(pCtx: *mut sWelsEncCtx, iIdx: i32) {
-    if pCtx.is_null() {
-        return;
-    }
-    let pRefList = ctx_ref_list(pCtx, (*pCtx).uiDependencyId as usize);
-    if pRefList.is_null() {
-        return;
-    }
-    let count = (*pRefList).uiShortRefCount as i32;
+///
+/// Narrowed with [`DeleteLTRFromLongList`] and for the same reason — T9.G3.
+pub fn DeleteSTRFromShortList(pRefList: &mut SRefList, iIdx: i32) {
+    let count = pRefList.uiShortRefCount as i32;
     let mut k = iIdx;
     while k < count - 1 {
-        (*pRefList).pShortRefList[k as usize] = (*pRefList).pShortRefList[(k + 1) as usize];
+        pRefList.pShortRefList[k as usize] = pRefList.pShortRefList[(k + 1) as usize];
         k += 1;
     }
     if k >= 0 && (k as usize) <= MAX_SHORT_REF_COUNT {
-        (*pRefList).pShortRefList[k as usize] = None;
+        pRefList.pShortRefList[k as usize] = None;
     }
-    if (*pRefList).uiShortRefCount > 0 {
-        (*pRefList).uiShortRefCount -= 1;
+    if pRefList.uiShortRefCount > 0 {
+        pRefList.uiShortRefCount -= 1;
     }
 }
 
@@ -347,7 +342,7 @@ pub unsafe fn DeleteNonSceneLTR(pCtx: *mut sWelsEncCtx) {
         if hit {
             let id = (*pRefList).pLongRefList[i as usize].expect("checked just above");
             (*pRefList).pic_mut(id).SetUnref();
-            DeleteLTRFromLongList(pCtx, i);
+            DeleteLTRFromLongList(&mut *pRefList, i);
             i -= 1;
         }
         i += 1;
@@ -413,7 +408,7 @@ pub unsafe fn DeleteInvalidLTR(pCtx: *mut sWelsEncCtx) {
 
             if cond1 {
                 (*pRefList).pic_mut(idPic).SetUnref();
-                DeleteLTRFromLongList(pCtx, i);
+                DeleteLTRFromLongList(&mut *pRefList, i);
                 pLtr.bLTRMarkEnable = true;
                 if (*pRefList).uiLongRefCount == 0 {
                     (*pParamInternal).bEncCurFrmAsIdrFlag = true;
@@ -429,7 +424,7 @@ pub unsafe fn DeleteInvalidLTR(pCtx: *mut sWelsEncCtx) {
 
                 if cond2 {
                     (*pRefList).pic_mut(idPic).SetUnref();
-                    DeleteLTRFromLongList(pCtx, i);
+                    DeleteLTRFromLongList(&mut *pRefList, i);
                     pLtr.bLTRMarkEnable = true;
                     if (*pRefList).uiLongRefCount == 0 {
                         (*pParamInternal).bEncCurFrmAsIdrFlag = true;
@@ -482,7 +477,7 @@ pub unsafe fn HandleLTRMarkFeedback(pCtx: *mut sWelsEncCtx) {
                     if drop {
                         let id = (*pRefList).pLongRefList[j as usize].expect("checked just above");
                         (*pRefList).pic_mut(id).SetUnref();
-                        DeleteLTRFromLongList(pCtx, j);
+                        DeleteLTRFromLongList(&mut *pRefList, j);
                     } else {
                         j += 1;
                     }
@@ -507,7 +502,7 @@ pub unsafe fn HandleLTRMarkFeedback(pCtx: *mut sWelsEncCtx) {
             };
             if (*pRefList).pic(idPic).iFrameNum == pLtr.iLtrMarkFbFrameNum {
                 (*pRefList).pic_mut(idPic).SetUnref();
-                DeleteLTRFromLongList(pCtx, i);
+                DeleteLTRFromLongList(&mut *pRefList, i);
                 break;
             }
         }
@@ -619,9 +614,9 @@ pub unsafe fn LTRMarkProcess(pCtx: *mut sWelsEncCtx) {
             if let Some(id) = (*pRefList).pLongRefList[lastIdx] {
                 (*pRefList).pic_mut(id).SetUnref();
             }
-            DeleteLTRFromLongList(pCtx, lastIdx as i32);
+            DeleteLTRFromLongList(&mut *pRefList, lastIdx as i32);
         }
-        DeleteSTRFromShortList(pCtx, i as i32);
+        DeleteSTRFromShortList(&mut *pRefList, i as i32);
     }
 }
 
@@ -776,7 +771,7 @@ pub unsafe fn WelsUpdateRefList(pCtx: *mut sWelsEncCtx) -> bool {
                 if let Some(id) = (*pRefList).pShortRefList[i as usize] {
                     (*pRefList).pic_mut(id).SetUnref();
                 }
-                DeleteSTRFromShortList(pCtx, i);
+                DeleteSTRFromShortList(&mut *pRefList, i);
                 i -= 1;
             }
             if (*pRefList).uiShortRefCount > 0 {
@@ -790,7 +785,7 @@ pub unsafe fn WelsUpdateRefList(pCtx: *mut sWelsEncCtx) -> bool {
                 if stale {
                     let id = (*pRefList).pShortRefList[0].expect("checked just above");
                     (*pRefList).pic_mut(id).SetUnref();
-                    DeleteSTRFromShortList(pCtx, 0);
+                    DeleteSTRFromShortList(&mut *pRefList, 0);
                 }
             }
         }
