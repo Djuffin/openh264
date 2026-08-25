@@ -17539,3 +17539,118 @@ callers, on the decoder's `MbGrid` model. `WelsGetFirstMbOfSlice` has zero calle
 | `raw_ptr` (ratchet) | 1895 | **1753** (−142; all other metrics flat) |
 | q1c SSlice raw / ref | 0 / — | exit-2 "nothing to find" / **0 all shapes** |
 | q1c SDqLayer raw / ref | 14 (11 false) | **0 / 0 all shapes** |
+
+## 2026-08-25 — Phase 9, session F (the dispatch survivors de-virtualized, the search block loses its cursors, the transitional triple retires, and two files reach deny)
+
+Seven commits, `487a2cf0`..`29951b85`, every one green on its gate and the close's
+session gate PASS on the first run. The user's standing gating directive held
+throughout: byte gates between commits (`family` after the three risky ones), no
+Miri until the close, the full-drive fork pair not owed (E2 paid it; the phase
+exit repeats it).
+
+**Step 0 (T9.F0)** deleted F139's write-only slots per S18 with the read grep
+quoted per slot at the deletion sites: the three `pfIDct*` slots, the eight
+`DeblockingFunc` kernel slots (with their four encoder-local typedefs and the
+eight-shim re-export), plus two the brief did not list — `pfSampleSadHor8`
+(zero writers *and* zero readers) and the orphaned `PIDctFunc`/
+`PIDctI16x16DcFunc` pair. The F119 lesson was re-paid before it was re-learned:
+the first grep was `src/`-scoped and the all-targets build surfaced
+`encoder_deblocking_table_installs_the_common_shims` — deleted with the slots it
+guarded (no install left to misdirect, no reader a misdirection could reach;
+D-cov-1's template). `pGomCost` untouched (F133's deletion is a ruling).
+`SWelsFuncPtrList` 1240 → 1136.
+
+**Step 1 (T9.F1a/F1b)** is the session's core. The identity probe re-ran first
+(B3's shape at today's tree): entry asserts `pEncMb == encRoot + (y·strideEnc + x)`,
+`pColoRefMb == refRoot + (y·strideRef + x)`, `pRefMb == pColoRefMb`; exit assert
+`pRefMb == colo + intMv` — **583/583 rows, ~3.09M search entries and exits each,
+zero violations**; probe reverted. Then stage A regrouped the six
+search-reachable slots into `SMeFuncs` (byte-neutral, size unmoved), and stage B
+flipped the family in one S20 closure: the five self-referential typedefs
+(`PMotionSearchFunc`, `PSearchMethodFunc`, `PLineFullSearchFunc`,
+`PCalculateSatdFunc`, `PCheckDirectionalMv`) now take `&SMeFuncs` +
+`&SSampleDealingFunc` + the two planes (`&PaddedPlane` src/ref; strides travel
+inside; the layer parameter died with them), and `SWelsME` lost
+`pEncMb`/`pRefMb`/`pColoRefMb` (96 → 64; `SWelsMD` 928 → 640). `InitMe` lost its
+pointer arguments (S54: all four callers passed root+coords); `UpdateMeResults`
+lost `pRef`; `SFeatureSearchOut.pBestRef` died (it cached `colo + sBestMv`);
+`SFeatureSearchIn` carries the two planes and its own coordinates. The MD callers
+resolve the planes per slot call through `layer_enc_pic`/`layer_ref_pic` (S37's
+value half, `MeRefineFracPixel`'s proven pattern). MT soundness is E's hoists:
+the table is written only pre-fork since F132 round 7, so every new `&` is a
+shared read of pre-fork state. Planted fault: +1 on the initial-point ref-cursor
+x — **210/210 st rows FAIL**; reverted; `family` PASS.
+
+**Step 2 (T9.F2a/F2b)** converted the raw cost tables' last readers and deleted
+the tables. The live one the brief never listed (F152): `CheckChromaCost`/
+`GetChromaCost`, whose E7 interior pointer became a plain place-projection copy
+of the safe slot and whose four `SPicData` chroma cursors became plane cursors at
+the carrier coordinates; planted fault +1 on the Cb ref cursor — **30/210 st rows
+FAIL** (the check is a skip tiebreaker; 30 is its honest referee count, S59).
+The dormant readers (`JudgeStaticSkip`/`JudgeScrollSkip`/`CalUVSadCost`,
+`SvcMdSCDMbEnc`'s two SADs) took the same route mechanically — retiring, as a
+side effect, the two `ctx_pic_ref_mut(..).planes()` whole-picture retags F121
+had called "live as code, unreachable as behaviour". Then the triple died whole:
+`SSampleDealingFunc` back to **176** exactly as T9.B25's pin promised
+(`SWelsFuncPtrList` → 968), the dead `md_cost_raw`/`me_cost_raw` deleted (F149 —
+zero callers from birth), the fourteen raw SAD shims and seven raw SATD bodies
+deleted, **`common/sad_common.rs` and `encoder/sample.rs` under
+`#![deny(unsafe_code)]` with zero allows**. The fifteenth caller (F151) — the
+scene-change detector's block walk — keeps a private flattened `sad_8x8_raw`
+(the ownership rule; ratchet rebaselined for that one file, reason in the
+commit). The raw-vs-safe differential entries and `sad_bodies_bench` retired
+with their old side per the test file's own charter; the span property survives
+re-anchored on the safe kernels with exact-span allocations, ending F10's third
+instance for good.
+
+**Step 3 (T9.F3)** resolved deblocking's dispatch: `pfDeblockingBSCalc` and
+`pfSetNZCZero` both had one unconditional writer and one reader — F118 — so
+`DeblockingMbAvcbase` calls `DeblockingBSCalc_c` directly (the interior-table
+aggregate pointer died at the same line) and `DeblockingBSCalc_c` calls
+`WelsNonZeroCount_c` directly; slots, installers (`WelsBlockFuncInit`) and
+typedefs deleted together. `pfDeblockingFilterSlice` — the one genuinely
+two-valued slot (Avcbase/Null per frame) — **stays**, de-virtualized:
+`PDeblockingFilterSlice` is `(pCurDq: *mut SDqLayer, pSlice: &mut SSlice)` (the
+layer stays raw in-fork, S63). `DeblockingFilterFrameAvcbase` is
+`(&mut SDqLayer)` alone — its ST-only claim verified at the callers
+(`encoder_ext.rs:3861`, behind `!bDeblockingParallelFlag`, post-join — F108).
+Planted fault: left/top flags swapped at the direct call — **124/210 st rows
+FAIL**; reverted; `family` PASS. `encoder/deblocking.rs` mentions
+`SWelsFuncPtrList` zero times. Table 968 → 952.
+
+**Step 4 (T9.F4)**: `: *mut SWelsFuncPtrList` **24 → 0**. `WelsInitMeFunc` is a
+safe fn over `&mut` (the init path's exclusive borrow; its `cursor` tag retired
+outright); the four MD callers take `&SWelsFuncPtrList` (shared, in-fork-sound
+per the pre-fork-write-only argument, refereed by the close's Miri shards). The
+seven surviving `cursor` tags in the family's files re-reasoned to `port-raw`
+(their raw is the SMB/layer grid, E3's, and the in-fork layer, S63's). `cursor`
+crate-wide 49 → 42, none of them dispatch.
+
+**The close**: `MIRI_SCOPE=encoder gates.sh session` PASS first run — 583/583
+both profiles, **Miri 282 passed / 0 failed, lane wall 528 s against E2's 553 s,
+S61 ratio 0.95** (baseline updated). Censuses regenerated: 601 tags (559
+`port-raw` + 42 `cursor`), down 58 this session; plane census 27 sites, 6
+`safe-now` (all Phase 10's or F117's — the ME rows are gone), 13 coeff, 3
+blocked, 5 seam. Ratchet across the session: `raw_ptr` 1753 → 1635 (**−118**),
+`unsafe_fn` 687 → 655 (−32), `unsafe_block` 312 → 287 (−25); one rebaseline
+(F151's relocation), reason in its commit.
+
+**Where the brief was wrong**, each with the sentence: F149 (the phantom "16
+uses outside md.rs"; the accessors had zero callers), F150 ("a loop over
+screen-content variants" — the loop installs the one live search everywhere;
+the variants have no installer, `SetMeMethod` had no caller), F151 ("sad_common
+denies with zero allows" vs "not this session: the preprocess family" — the
+fifteenth caller it never listed), F152 (the census the brief scoped step 2 from
+could not see the E7-respelled slot read, so `CheckChromaCost` — the step's
+largest live conversion — appears nowhere in the brief).
+
+**What the successors inherit**: **E3** — the 35 `*mut SMB` walkers unchanged;
+`encoder/deblocking.rs`'s remaining allows are now *pure* grid/layer (the
+func-list and dispatch-table entries in E2's split report are gone);
+`WelsGetFirstMbOfSlice` still S18-pending. **X1** — F117 unchanged. **G–H** — no
+`*mut SWelsFuncPtrList` survivor is ctx-coupled: the family is closed, and what
+touches ctx is only `ctx_func_list` itself (the accessor mints `&`/`&mut` at
+eleven-ish sites now — all shared-read in-fork; the accessor retires with the
+ctx family). `PerformDeblockingFilter` remains ctx-blocked as E2's report said.
+Phase 10 inherits the dormant search family on the new typedefs, with
+`SMeFuncs` as the install surface and no raw table anywhere in the path.
