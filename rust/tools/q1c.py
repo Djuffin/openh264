@@ -219,8 +219,20 @@ LET_RE = re.compile(r"^\s*let\s+(?:mut\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*(?::[^=]+)
 
 # A derivation is context-derived if it reaches through the context root and
 # produces something pointer-like: a raw pointer, a reference, or a slice.
+#
+# **T9.E2a (F144.1): `&&` is not `&`.** The two reference alternatives are guarded
+# with `(?<!&)`/`(?!&)` because a boolean chain reads as a borrow without them:
+# in `let bLeft = (*pMb).iMbX > 0 && uiSliceIdc == WelsMbToSliceIdc(pLayer, iLeftXY)`
+# the second `&` of `&&` sits before ` uiSliceIdc` and matched `&\s*[a-zA-Z_(*]`,
+# so a held *bool* was reported as a held cursor — 11 of the layer family's 14
+# "hazards" were this one shape (a value cannot be invalidated by a retag).
+# Calibrated per S55 against `0bfc7687^`: shape C still reports F114a's four
+# bodies with the Miri-reported one line-for-line, shape D still reports its two
+# functions, and the only shape-A sites the narrowing removes are `&&`-chain
+# bool bindings.
 DERIV_HINT = re.compile(
-    r"as_mut_ptr\(\)|as_ptr\(\)|\.as_mut\(\)|&\s*mut\b|&\s*[a-zA-Z_(*]|"
+    r"as_mut_ptr\(\)|as_ptr\(\)|\.as_mut\(\)|(?<!&)&(?!&)\s*mut\b|"
+    r"(?<!&)&(?!&)\s*[a-zA-Z_(*]|"
     r"addr_of(?:_mut)?!\(|"
     r"\.add\(|\.offset\(|_mut\(|_ptr\b|as\s+\*\s*(?:mut|const)\b")
 
