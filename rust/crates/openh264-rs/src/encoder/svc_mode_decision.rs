@@ -358,14 +358,13 @@ pub unsafe extern "C" fn WelsMdInterJudgePskip(
 #[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsMdInterDecidedPskip(
     pEncCtx: *mut sWelsEncCtx,
-    pSlice: *mut SSlice,
+    pSlice: &mut SSlice,
     pCurMb: &mut SMB,
 ) {
-    let pMbCache = std::ptr::addr_of_mut!((*pSlice).sMbCacheInfo);
     let pCurDqLayer = current_layer(pEncCtx);
     (*pCurMb).uiMbType = MB_TYPE_SKIP;
-    WelsRecPskip(pCurDqLayer, &*ctx_func_list(pEncCtx), pCurMb, &mut *pMbCache);
-    WelsMdInterUpdatePskip(pEncCtx, pCurDqLayer, pSlice, pCurMb);
+    WelsRecPskip(pCurDqLayer, &*ctx_func_list(pEncCtx), pCurMb, &mut pSlice.sMbCacheInfo);
+    WelsMdInterUpdatePskip(pEncCtx, pCurDqLayer, &mut *pSlice, pCurMb);
 }
 
 /// `svc_base_layer_md.cpp:1997`.

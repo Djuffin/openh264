@@ -2066,10 +2066,10 @@ fn LD32_MV_PUB(pMv: &SMVUnitXY) -> u32 {
 #[allow(unsafe_code)]
 pub unsafe fn WelsMdInterEncode(
     pEncCtx: *mut sWelsEncCtx,
-    pSlice: *mut SSlice,
+    pSlice: &mut SSlice,
     pCurMb: &mut SMB,
 ) {
-    let pMbCache = std::ptr::addr_of_mut!((*pSlice).sMbCacheInfo);
+    let pMbCache = &mut pSlice.sMbCacheInfo;
     let pFunc = ctx_func_list(pEncCtx);
     let pCurDqLayer = current_layer(pEncCtx);
 
@@ -2095,7 +2095,7 @@ pub unsafe fn WelsMdInterEncode(
     // init, so a fixed-size site may call the kernel directly, byte-identically.
     let view = layer_rec_view(pCurDqLayer)
         .expect("the layer's reconstruction view is built for this frame");
-    let pMbCache = std::ptr::addr_of_mut!((*pSlice).sMbCacheInfo);
+    let pMbCache = &mut pSlice.sMbCacheInfo;
     let (lx, ly) = (*pMbCache).SPicData.luma_origin();
     let (cx, cy) = (*pMbCache).SPicData.chroma_origin();
     let kiLumaOff = mem_pred_luma_off((*pMbCache).uiMemPredLumaHalf);
