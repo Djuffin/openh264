@@ -1037,7 +1037,9 @@ pub unsafe fn AdjustEnhanceLayer(pCtx: *mut sWelsEncCtx, iCurDid: i32) -> i32 {
             (*current_layer(pCtx)).sSliceEncCtx.iSliceNumInFrame.load(Ordering::Relaxed);
         iNeedAdj = NeedDynamicAdjust(&mut *pBaseLayer, kiSliceNumInFrame);
         if iNeedAdj != 0 {
-            DynamicAdjustSlicing(pCtx, &mut *current_layer(pCtx), iCurDid);
+            // T9.G6: hoisted (shape B).
+            let pCurLayer = &mut *current_layer(pCtx);
+            DynamicAdjustSlicing(pCtx, pCurLayer, iCurDid);
         }
     } else {
         let pCurLayer = ctx_dq_layer(pCtx, iCurDid as usize);
@@ -1048,7 +1050,9 @@ pub unsafe fn AdjustEnhanceLayer(pCtx: *mut sWelsEncCtx, iCurDid: i32) -> i32 {
             (*current_layer(pCtx)).sSliceEncCtx.iSliceNumInFrame.load(Ordering::Relaxed);
         iNeedAdj = NeedDynamicAdjust(&mut *pCurLayer, kiSliceNumInFrame);
         if iNeedAdj != 0 {
-            DynamicAdjustSlicing(pCtx, &mut *current_layer(pCtx), iCurDid);
+            // T9.G6: hoisted (shape B).
+            let pCurLayer = &mut *current_layer(pCtx);
+            DynamicAdjustSlicing(pCtx, pCurLayer, iCurDid);
         }
     }
 
