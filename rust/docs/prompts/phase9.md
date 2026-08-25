@@ -246,7 +246,7 @@ to be wrong.
    `#[allow(unsafe_code)]` items** except the lawful boundary categories, which by Phase 9's
    end are only `C-ABI`/`C-ABI(test)` (all `port-raw`, `cursor`, `MT`, `send-seam` retired),
    **`recon-seam` (2 items, D-mt-3's ruling — the exit condition admits them by that
-   decision, and `send-seam`'s 1 retires into the ctx conversion while these do not)**
+   decision, and `send-seam`'s 1 was chartered to retire into the ctx conversion — **F164 re-measured that: 8 of its 12 `!Sync` reasons live outside G/H's lane (X's `SVAAFrameInfo` four, Phase 8's coding-param, Phase 10's feature storage, trace, preprocess), so it retires at phase exit once those fall; amendment pending the user's ruling** — while these do not)**
    and `SCREEN_CONTENT(dormant)` (Phase 10's).
 2. `#![deny(unsafe_code)]` at the crate root; `libc` removed from `[dependencies]`; `*mut`/
    `*const` appear only in the ABI types and the boundary thunks (a grep census proves it).
