@@ -1239,16 +1239,16 @@ pub(crate) fn InitMe(
 // unsafe-cat: port-raw(Phase 9) — the layer/SMB cursors (E3's grid); the
 // dispatch cursor this tag used to name is a shared reference since T9.F4
 #[allow(unsafe_code)]
-pub unsafe extern "C" fn WelsMdP16x16(
+pub unsafe fn WelsMdP16x16(
     pFunc: &SWelsFuncPtrList,
     pCurLayer: *mut SDqLayer,
     pWelsMd: &mut SWelsMD,
     pSlice: &mut SSlice,
-    pCurMb: *mut SMB,
+    mbs: &mut crate::safe::mb_grid::MbWindow<'_, SMB>,
 ) -> i32 {
     let pMbCache = &mut pSlice.sMbCacheInfo;
     let pMe16x16 = &mut (*pWelsMd).sMe.sMe16x16;
-    let uiNeighborAvail = (*pCurMb).uiNeighborAvail as u32;
+    let uiNeighborAvail = mbs.cur().uiNeighborAvail as u32;
     let kiMbWidth: i32 = (*pCurLayer).iMbWidth as i32;
     let kiMbHeight: i32 = (*pCurLayer).iMbHeight as i32;
     // `svc_base_layer_md.cpp:983`. This call was missing: without it the search block
@@ -1269,31 +1269,25 @@ pub unsafe extern "C" fn WelsMdP16x16(
     (*pSlice).uiMvcNum += 1;
 
     if (uiNeighborAvail & LEFT_MB_POS as u32) != 0 {
-        let left_mb = pCurMb.offset(-1);
-        if !left_mb.is_null() {
-            (*pSlice).sMvc[(*pSlice).uiMvcNum as usize] = (*left_mb).sP16x16Mv;
-            (*pSlice).uiMvcNum += 1;
-        }
+        (*pSlice).sMvc[(*pSlice).uiMvcNum as usize] = mbs.left().sP16x16Mv;
+        (*pSlice).uiMvcNum += 1;
     }
     if (uiNeighborAvail & TOP_MB_POS as u32) != 0 {
-        let top_mb = pCurMb.offset(-(kiMbWidth as isize));
-        if !top_mb.is_null() {
-            (*pSlice).sMvc[(*pSlice).uiMvcNum as usize] = (*top_mb).sP16x16Mv;
-            (*pSlice).uiMvcNum += 1;
-        }
+        (*pSlice).sMvc[(*pSlice).uiMvcNum as usize] = mbs.top().sP16x16Mv;
+        (*pSlice).uiMvcNum += 1;
     }
 
     if ((*pCurLayer).pRefPic.is_some() && (*pCurLayer).sRefPicView.iPictureType == P_SLICE) {
-        if ((*pCurMb).iMbX as i32) < kiMbWidth - 1 {
+        if (mbs.cur().iMbX as i32) < kiMbWidth - 1 {
             let sTempMv =
-                layer_ref_pic(pCurLayer).expect("bound").sMvList[((*pCurMb).iMbXY + 1) as usize];
+                layer_ref_pic(pCurLayer).expect("bound").sMvList[(mbs.cur().iMbXY + 1) as usize];
             (*pSlice).sMvc[(*pSlice).uiMvcNum as usize].iMvX = sTempMv.iMvX >> (*pSlice).sScaleShift;
             (*pSlice).sMvc[(*pSlice).uiMvcNum as usize].iMvY = sTempMv.iMvY >> (*pSlice).sScaleShift;
             (*pSlice).uiMvcNum += 1;
         }
-        if ((*pCurMb).iMbY as i32) < kiMbHeight - 1 {
+        if (mbs.cur().iMbY as i32) < kiMbHeight - 1 {
             let sTempMv = layer_ref_pic(pCurLayer).expect("bound").sMvList
-                [((*pCurMb).iMbXY + kiMbWidth) as usize];
+                [(mbs.cur().iMbXY + kiMbWidth) as usize];
             (*pSlice).sMvc[(*pSlice).uiMvcNum as usize].iMvX = sTempMv.iMvX >> (*pSlice).sScaleShift;
             (*pSlice).sMvc[(*pSlice).uiMvcNum as usize].iMvY = sTempMv.iMvY >> (*pSlice).sScaleShift;
             (*pSlice).uiMvcNum += 1;
@@ -1325,14 +1319,14 @@ pub unsafe extern "C" fn WelsMdP16x16(
         );
     }
 
-    (*pCurMb).sP16x16Mv = (*pMe16x16).sMv;
+    mbs.cur_mut().sP16x16Mv = (*pMe16x16).sMv;
     // `is_empty()` is the port's spelling of the C++'s null test: a picture built
     // without `bNeedMbInfo` carries no MV list at all (T6.F0). One view where
     // there were two picture borrows: the test and the write now read the same
     // capture rather than resolving the pool twice.
     let sMvList = layer_rec_view(pCurLayer).expect("bound").mv_list();
     if !sMvList.is_empty() {
-        sMvList.set((*pCurMb).iMbXY as usize, (*pMe16x16).sMv);
+        sMvList.set(mbs.cur().iMbXY as usize, (*pMe16x16).sMv);
     }
 
     (*pMe16x16).uiSatdCost as i32
@@ -1468,32 +1462,35 @@ pub unsafe extern "C" fn WelsInterMbEncode(pEncCtx: *mut sWelsEncCtx, pSlice: &m
 #[inline(always)]
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
-pub unsafe extern "C" fn GetRefMb(pEncCtx: *mut sWelsEncCtx, pCurMb: &mut SMB) -> *mut SMB {
+pub unsafe fn GetRefMb(pEncCtx: *mut sWelsEncCtx, pCurMb: &SMB) -> SMB {
     let kRefIdx = (*current_layer(pEncCtx))
         .pRefLayer
         .expect("GetRefMb on a layer with no base layer: bBaseLayerAvailableFlag gates every caller");
     let kpRefLayer = ctx_dq_layer(pEncCtx, kRefIdx.get());
     let kiRefMbIdx =
-        (((*pCurMb).iMbY as i32 >> 1) * (*kpRefLayer).iMbWidth as i32) + ((*pCurMb).iMbX as i32 >> 1);
-    crate::encoder::svc_encode_slice::mb_at(kpRefLayer, kiRefMbIdx)
+        ((pCurMb.iMbY as i32 >> 1) * (*kpRefLayer).iMbWidth as i32) + (pCurMb.iMbX as i32 >> 1);
+    // The base layer is quiescent by the time its enhancement layer encodes
+    // (the fork joins per layer), so a shared read of its record — through the
+    // MbArray's own checked indexing — is the whole access, copied out (SMB is
+    // Copy). The raw hand-out this replaced carried the array's provenance for
+    // a walk nobody performed.
+    *(*std::ptr::addr_of!((*kpRefLayer).sMbDataP)).get(kiRefMbIdx as usize)
 }
 
 /// Scales base-layer motion vectors by 2x to initialize enhancement-layer candidates.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe extern "C" fn SetMvBaseEnhancelayer(
+pub fn SetMvBaseEnhancelayer(
     pMd: &mut SWelsMD,
     pCurMb: &mut SMB,
-    kpRefMb: *const SMB,
+    kpRefMb: &SMB,
 ) {
-    let kuiRefMbType = (*kpRefMb).uiMbType;
+    let kuiRefMbType = kpRefMb.uiMbType;
 
     if !IS_SVC_INTRA(kuiRefMbType) {
         let iRefMbPartIdx =
-            ((((*pCurMb).iMbY as i32 & 0x01) << 1) + ((*pCurMb).iMbX as i32 & 0x01)) as usize;
+            (((pCurMb.iMbY as i32 & 0x01) << 1) + (pCurMb.iMbX as i32 & 0x01)) as usize;
         let iScan4RefPartIdx = g_kuiMbCountScan4Idx[iRefMbPartIdx << 2] as isize;
 
-        let ref_mv = (*kpRefMb).sMv[(iScan4RefPartIdx) as usize];
+        let ref_mv = kpRefMb.sMv[(iScan4RefPartIdx) as usize];
         let sMv = SMVUnitXY {
             iMvX: ref_mv.iMvX * 2,
             iMvY: ref_mv.iMvY * 2,
@@ -1515,36 +1512,33 @@ pub unsafe extern "C" fn SetMvBaseEnhancelayer(
 /// Core spatial enhancement layer mode decision without Inter-Layer Prediction.
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
-pub unsafe extern "C" fn WelsMdSpatialelInterMbIlfmdNoilp(
+pub unsafe fn WelsMdSpatialelInterMbIlfmdNoilp(
     pEncCtx: *mut sWelsEncCtx,
     pWelsMd: &mut SWelsMD,
     pSlice: &mut SSlice,
-    pCurMb: *mut SMB,
+    mbs: &mut crate::safe::mb_grid::MbWindow<'_, SMB>,
     kuiRefMbType: Mb_Type,
 ) {
     let pCurDqLayer = current_layer(pEncCtx);
-    let kuiNeighborAvail = (*pCurMb).uiNeighborAvail as u32;
-    let kiMbWidth: i32 = (*pCurDqLayer).iMbWidth as i32;
-    // F14's class: formed before the availability guards below, read only under them.
-    let kpTopMb = pCurMb.wrapping_offset(-(kiMbWidth as isize));
+    let kuiNeighborAvail = mbs.cur().uiNeighborAvail as u32;
 
     let kbMbLeftAvailPskip = if (kuiNeighborAvail & LEFT_MB_POS as u32) != 0 {
-        IS_SKIP((*pCurMb.offset(-1)).uiMbType)
+        IS_SKIP(mbs.left().uiMbType)
     } else {
         false
     };
     let kbMbTopAvailPskip = if (kuiNeighborAvail & TOP_MB_POS as u32) != 0 {
-        IS_SKIP((*kpTopMb).uiMbType)
+        IS_SKIP(mbs.top().uiMbType)
     } else {
         false
     };
     let kbMbTopLeftAvailPskip = if (kuiNeighborAvail & TOPLEFT_MB_POS as u32) != 0 {
-        IS_SKIP((*kpTopMb.offset(-1)).uiMbType)
+        IS_SKIP(mbs.top_left().uiMbType)
     } else {
         false
     };
     let kbMbTopRightAvailPskip = if (kuiNeighborAvail & TOPRIGHT_MB_POS as u32) != 0 {
-        IS_SKIP((*kpTopMb.offset(1)).uiMbType)
+        IS_SKIP(mbs.top_right().uiMbType)
     } else {
         false
     };
@@ -1555,16 +1549,16 @@ pub unsafe extern "C" fn WelsMdSpatialelInterMbIlfmdNoilp(
     let bSkip: bool;
 
     if let Some(pfBgd) = (*ctx_func_list(pEncCtx)).pfInterMdBackgroundDecision {
-        if pfBgd(pEncCtx, pWelsMd, &mut *pSlice, &mut *pCurMb, &mut bKeepSkip) {
+        if pfBgd(pEncCtx, pWelsMd, &mut *pSlice, mbs.cur_mut(), &mut bKeepSkip) {
             return;
         }
     }
 
     // Step 1: Try SKIP
-    bSkip = WelsMdInterJudgePskip(pEncCtx, pWelsMd, pSlice, &mut *pCurMb, bTrySkip);
+    bSkip = WelsMdInterJudgePskip(pEncCtx, pWelsMd, pSlice, mbs.cur_mut(), bTrySkip);
 
     if bSkip && bKeepSkip {
-        WelsMdInterDecidedPskip(pEncCtx, pSlice, &mut *pCurMb);
+        WelsMdInterDecidedPskip(pEncCtx, pSlice, mbs.cur_mut());
         return;
     }
 
@@ -1580,11 +1574,11 @@ pub unsafe extern "C" fn WelsMdSpatialelInterMbIlfmdNoilp(
 
             // Step 2: P_16x16
             (*pWelsMd).iCostLuma =
-                WelsMdP16x16(&*ctx_func_list(pEncCtx), pCurDqLayer, pWelsMd, pSlice, pCurMb);
-            (*pCurMb).uiMbType = MB_TYPE_16x16;
+                WelsMdP16x16(&*ctx_func_list(pEncCtx), pCurDqLayer, pWelsMd, pSlice, mbs);
+            mbs.cur_mut().uiMbType = MB_TYPE_16x16;
         }
 
-        WelsMdInterSecondaryModesEnc(pEncCtx, pWelsMd, pSlice, &mut *pCurMb, bSkip);
+        WelsMdInterSecondaryModesEnc(pEncCtx, pWelsMd, pSlice, mbs.cur_mut(), bSkip);
     } else {
         // Base layer is Intra (BLMODE == SVC_INTRA)
         let pMbCache = &mut pSlice.sMbCacheInfo;
@@ -1595,12 +1589,12 @@ pub unsafe extern "C" fn WelsMdSpatialelInterMbIlfmdNoilp(
             (*pWelsMd).iLambda,
         );
         if bSkip && ((*pWelsMd).iCostLuma <= kiCostI16x16) {
-            WelsMdInterDecidedPskip(pEncCtx, pSlice, &mut *pCurMb);
+            WelsMdInterDecidedPskip(pEncCtx, pSlice, mbs.cur_mut());
         } else {
             (*pWelsMd).iCostLuma = kiCostI16x16;
-            (*pCurMb).uiMbType = MB_TYPE_INTRA16x16;
+            mbs.cur_mut().uiMbType = MB_TYPE_INTRA16x16;
 
-            WelsMdIntraSecondaryModesEnc(pEncCtx, pWelsMd, &mut *pCurMb, &mut pSlice.sMbCacheInfo);
+            WelsMdIntraSecondaryModesEnc(pEncCtx, pWelsMd, mbs.cur_mut(), &mut pSlice.sMbCacheInfo);
         }
     }
 }
@@ -1608,17 +1602,17 @@ pub unsafe extern "C" fn WelsMdSpatialelInterMbIlfmdNoilp(
 /// Top-level MD entry point for spatial enhancement layer inter MBs.
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
-pub unsafe extern "C" fn WelsMdInterMbEnhancelayer(
+pub unsafe fn WelsMdInterMbEnhancelayer(
     pEncCtx: *mut sWelsEncCtx,
     pMd: &mut SWelsMD,
     pSlice: &mut SSlice,
-    pCurMb: *mut SMB,
+    mbs: &mut crate::safe::mb_grid::MbWindow<'_, SMB>,
 ) {
-    let kpInterLayerRefMb = GetRefMb(pEncCtx, &mut *pCurMb);
-    let kuiInterLayerRefMbType = (*kpInterLayerRefMb).uiMbType;
+    let kInterLayerRefMb = GetRefMb(pEncCtx, mbs.cur());
+    let kuiInterLayerRefMbType = kInterLayerRefMb.uiMbType;
 
-    SetMvBaseEnhancelayer(pMd, &mut *pCurMb, kpInterLayerRefMb);
-    WelsMdSpatialelInterMbIlfmdNoilp(pEncCtx, pMd, pSlice, pCurMb, kuiInterLayerRefMbType);
+    SetMvBaseEnhancelayer(pMd, mbs.cur_mut(), &kInterLayerRefMb);
+    WelsMdSpatialelInterMbIlfmdNoilp(pEncCtx, pMd, pSlice, mbs, kuiInterLayerRefMbType);
 }
 
 // ============================================================================

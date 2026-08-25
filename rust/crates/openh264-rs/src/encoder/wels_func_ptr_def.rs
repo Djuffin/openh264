@@ -132,11 +132,11 @@ pub type PSetScrollingMv =
     unsafe extern "C" fn(pVaa: *mut SVAAFrameInfo, pMd: &mut SWelsMD);
 
 /// `wels_func_ptr_def.h:125`
-pub type PInterMdFunc = unsafe extern "C" fn(
+pub type PInterMdFunc = unsafe fn(
     pEncCtx: *mut sWelsEncCtx,
     pWelsMd: &mut SWelsMD,
     slice: &mut SSlice,
-    pCurMb: *mut SMB,
+    mbs: &mut crate::safe::mb_grid::MbWindow<'_, SMB>,
 );
 
 /// `wels_func_ptr_def.h:64`

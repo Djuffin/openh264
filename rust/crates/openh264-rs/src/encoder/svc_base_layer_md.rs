@@ -318,15 +318,15 @@ pub unsafe fn PredIntra4x4Mode(pIntraPredMode: *const i8, iIdx4: i32) -> i32 {
 #[allow(unsafe_code)]
 pub unsafe fn WelsMdIntraInit(
     pEncCtx: *mut sWelsEncCtx,
-    pCurMb: *mut SMB,
+    mbs: &mut crate::safe::mb_grid::MbWindow<'_, SMB>,
     pMbCache: &mut SMbCache,
     iSliceFirstMbXY: i32,
 ) {
     let pCurLayer = current_layer(pEncCtx);
 
-    let kiMbX = (*pCurMb).iMbX as i32;
-    let kiMbY = (*pCurMb).iMbY as i32;
-    let kiMbXY = (*pCurMb).iMbXY;
+    let kiMbX = mbs.cur().iMbX as i32;
+    let kiMbY = mbs.cur().iMbY as i32;
+    let kiMbXY = mbs.cur().iMbXY;
 
     // step 3. locating current pEnc and pDec
     // unroll loops here
@@ -373,20 +373,12 @@ pub unsafe fn WelsMdIntraInit(
     }
 
     //step 2. initial pWelsMd
-    (*pCurMb).uiCbp = 0;
+    mbs.cur_mut().uiCbp = 0;
 
     //step 4: locating scaled_tcoeff
 
     //step 1. load neighbor cache
-    FillNeighborCacheIntra(
-        pMbCache,
-        &crate::encoder::svc_encode_slice::mb_window(
-            pCurLayer,
-            iSliceFirstMbXY,
-            kiMbXY - iSliceFirstMbXY + 1,
-            kiMbXY,
-        ),
-    );
+    FillNeighborCacheIntra(pMbCache, mbs);
     // in WelsMdI16x16() will be changed, so re-init here!
     // Init with default, maybe change in WelsMdI16x16 and svc_md_i16x16_sad:
     // luma is the first 256-byte half of `sMemPredMb` and chroma the second.
@@ -966,14 +958,14 @@ pub unsafe fn WelsMdInterInit(
     // provenance to it. Session E's classifier propagated neighbour-boundness
     // through *named* callees and could not see this one, because the call goes
     // through a function-pointer slot — Miri's encode probe found it.
-    pCurMb: *mut SMB,
+    mbs: &mut crate::safe::mb_grid::MbWindow<'_, SMB>,
     iSliceFirstMbXY: i32,
 ) {
     let pCurLayer = current_layer(pEncCtx);
     let pMbCache = &mut pSlice.sMbCacheInfo;
-    let kiMbX = (*pCurMb).iMbX as i32;
-    let kiMbY = (*pCurMb).iMbY as i32;
-    let kiMbXY = (*pCurMb).iMbXY;
+    let kiMbX = mbs.cur().iMbX as i32;
+    let kiMbY = mbs.cur().iMbY as i32;
+    let kiMbXY = mbs.cur().iMbXY;
     let kiMbWidth = (*pCurLayer).iMbWidth as i32;
     let kiMbHeight = (*pCurLayer).iMbHeight as i32;
 
@@ -987,12 +979,7 @@ pub unsafe fn WelsMdInterInit(
         .pfFillInterNeighborCache
         .expect("pfFillInterNeighborCache unset")(
         &mut *pMbCache,
-        &crate::encoder::svc_encode_slice::mb_window(
-            pCurLayer,
-            iSliceFirstMbXY,
-            kiMbXY - iSliceFirstMbXY + 1,
-            kiMbXY,
-        ),
+        &*mbs,
         {
             // T9.E7 (F132 round 8): `Vec::as_mut_ptr` autorefs `&mut` on the
             // SHARED VAA struct's vector — a retag-write every worker makes per
@@ -1034,7 +1021,7 @@ pub unsafe fn WelsMdInterInit(
     (*pMbCache).bCollocatedPredFlag = false;
 
     //comment: sometimes, mode decision process may skip the md_p16x16 and md_pskip function,
-    (*pCurMb).sP16x16Mv = SMVUnitXY { iMvX: 0, iMvY: 0 };
+    mbs.cur_mut().sP16x16Mv = SMVUnitXY { iMvX: 0, iMvY: 0 };
     layer_rec_view(pCurLayer)
         .expect("bound")
         .mv_list()
@@ -1956,34 +1943,31 @@ pub unsafe extern "C" fn WelsMdFirstIntraMode(
 /// `pfSCDPSkipDecision` must be assigned (`WelsInitBGDFunc` / `WelsInitSCDPskipFunc`).
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
-pub unsafe extern "C" fn WelsMdInterMb(
+pub unsafe fn WelsMdInterMb(
     pEncCtx: *mut sWelsEncCtx,
     pWelsMd: &mut SWelsMD,
     pSlice: &mut SSlice,
-    pCurMb: *mut SMB,
+    mbs: &mut crate::safe::mb_grid::MbWindow<'_, SMB>,
 ) {
     let pCurDqLayer = current_layer(pEncCtx);
-    let kuiNeighborAvail = (*pCurMb).uiNeighborAvail as u32;
-    let kiMbWidth = (*pCurDqLayer).iMbWidth as i32;
-    // F14's class: formed before the availability guards below, read only under them.
-    let top_mb = pCurMb.wrapping_offset(-(kiMbWidth as isize));
+    let kuiNeighborAvail = mbs.cur().uiNeighborAvail as u32;
     let bMbLeftAvailPskip = if (kuiNeighborAvail & LEFT_MB_POS) != 0 {
-        IS_SKIP((*pCurMb.offset(-1)).uiMbType)
+        IS_SKIP(mbs.left().uiMbType)
     } else {
         false
     };
     let bMbTopAvailPskip = if (kuiNeighborAvail & TOP_MB_POS) != 0 {
-        IS_SKIP((*top_mb).uiMbType)
+        IS_SKIP(mbs.top().uiMbType)
     } else {
         false
     };
     let bMbTopLeftAvailPskip = if (kuiNeighborAvail & TOPLEFT_MB_POS) != 0 {
-        IS_SKIP((*top_mb.offset(-1)).uiMbType)
+        IS_SKIP(mbs.top_left().uiMbType)
     } else {
         false
     };
     let bMbTopRightAvailPskip = if (kuiNeighborAvail & TOPRIGHT_MB_POS) != 0 {
-        IS_SKIP((*top_mb.offset(1)).uiMbType)
+        IS_SKIP(mbs.top_right().uiMbType)
     } else {
         false
     };
@@ -1999,7 +1983,7 @@ pub unsafe extern "C" fn WelsMdInterMb(
         pEncCtx,
         pWelsMd,
         pSlice,
-        &mut *pCurMb,
+        mbs.cur_mut(),
         &mut bKeepSkip as *mut bool,
     ) {
         return;
@@ -2008,17 +1992,17 @@ pub unsafe extern "C" fn WelsMdInterMb(
     //try static or scrolled Pskip
     if (*ctx_func_list(pEncCtx))
         .pfSCDPSkipDecision
-        .expect("pfSCDPSkipDecision unset")(pEncCtx, pWelsMd, pSlice, &mut *pCurMb)
+        .expect("pfSCDPSkipDecision unset")(pEncCtx, pWelsMd, pSlice, mbs.cur_mut())
     {
         return;
     }
 
     //step 1: try SKIP
-    bSkip = WelsMdInterJudgePskip(pEncCtx, pWelsMd, pSlice, &mut *pCurMb, bTrySkip);
+    bSkip = WelsMdInterJudgePskip(pEncCtx, pWelsMd, pSlice, mbs.cur_mut(), bTrySkip);
 
     if bSkip {
         if bKeepSkip {
-            WelsMdInterDecidedPskip(pEncCtx, pSlice, &mut *pCurMb);
+            WelsMdInterDecidedPskip(pEncCtx, pSlice, mbs.cur_mut());
             return;
         }
     } else {
@@ -2039,12 +2023,12 @@ pub unsafe extern "C" fn WelsMdInterMb(
             pCurDqLayer,
             pWelsMd,
             pSlice,
-            pCurMb,
+            mbs,
         );
-        (*pCurMb).uiMbType = MB_TYPE_16x16;
+        mbs.cur_mut().uiMbType = MB_TYPE_16x16;
     }
 
-    WelsMdInterSecondaryModesEnc(pEncCtx, pWelsMd, pSlice, &mut *pCurMb, bSkip);
+    WelsMdInterSecondaryModesEnc(pEncCtx, pWelsMd, pSlice, mbs.cur_mut(), bSkip);
 }
 
 /// `svc_base_layer_md.cpp:1937`. Re-classifies a zero-CBP 16x16 as P_SKIP when its MV
@@ -2142,15 +2126,13 @@ pub unsafe fn WelsMdInterEncode(
 ///
 /// # Safety
 /// Both arrays must have room for `pCurMb->iMbXY`.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn WelsMdInterSaveSadAndRefMbType(
+pub fn WelsMdInterSaveSadAndRefMbType(
     pRecView: &crate::encoder::rec_view::RecPicView,
-    pCurMb: *const SMB,
+    pCurMb: &SMB,
     pMd: &SWelsMD,
 ) {
-    let kmtCurMbtype = (*pCurMb).uiMbType;
-    let kiMbXY = (*pCurMb).iMbXY as usize;
+    let kmtCurMbtype = pCurMb.uiMbType;
+    let kiMbXY = pCurMb.iMbXY as usize;
 
     //sad
     pRecView.mb_skip_sad().set(
