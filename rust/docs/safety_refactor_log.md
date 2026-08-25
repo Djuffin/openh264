@@ -17298,3 +17298,123 @@ twin) and **one census correction** (+1, F137's missing slot). Of the 24 convers
 left the census entirely — they call their kernels directly now (F118) and no longer look
 like slot calls — and 5 remain visible under the new `seam` class, which was added so a
 converted site reads as converted rather than as unclassifiable.
+
+## 2026-08-24 — Phase 9, session E (the gate rebuilt under a 15-minute cap, the fork's frontier walked to green, and the slice family's hazards to zero)
+
+### what the session was handed, and what was true
+
+Step 0 (D-gate-5 + S61 + one clean run), the fork's round 5 with the acceptance taken
+early, then the slice and layer families. The brief was wrong about four structural
+things, each of which redirected a step (F141–F144):
+
+* **D-gate-5's "two full-encode probes" are three** — the CAVLC/fine-MD probe measured
+  216.5 s at the session's start, unnamed by F140 — and the ruling's "<20 min" target
+  was arithmetically unreachable under its own macroblock-count floor. The first
+  executed shrink kept the floor and honestly missed the budget; the user stopped the
+  ~40-minute run and ruled **D-gate-6: the whole session gate is capped at 15
+  minutes, coverage yields**. What meets the cap is architecture, not a shorter test
+  list: T9.E2 runs the Miri step as a background lane beside the native battery —
+  one compile plus five concurrent shards — with the encode probes on small drives,
+  `MIRI_FULL=1` restoring full drives at `full`/`exit`, and the fork probes
+  name-skipped at session scope with an explicit-run recipe. Validated the same day:
+  **the whole session gate, OVERALL PASS in 542 s** (283 Miri tests, 583/583 sweeps
+  both profiles) — which is also **C/C2's missing session-scope aliasing evidence**,
+  under the reduced and named scope (no realloc chain under session Miri; fork probes
+  at the un-capped tiers).
+* **Round 5's equality lead was the wrong assert** (F142): the proposed
+  `debug_assert_eq!(record, map)` at every deblocking read is itself the cross-thread
+  race it interrogates, and its value equality is legitimately false cross-partition
+  mid-frame. What is true and provable race-free is *outcome* equality — write-site
+  asserts at every `uiSliceIdc` stamp (calibrated: a planted +1 aborts 210/210 `st`
+  rows and both fork probes at mb 0) plus the mod-N residue argument plus
+  `uiFilterIdc == 0`-gated guard asserts on the post-join walk. T9.E4 then flipped the
+  eight guards to relaxed `pOverallMbMap` loads: no foreign `SMB` record is read by
+  in-fork deblocking at all, bytes unmoved. The brief also never said *why*
+  deblocking is in-fork: `SliceArgumentValidation` rewrites idc 0 → 2 under MT —
+  which also closes the brief's "uiMbType/QP/MVs next" hedge structurally, since at
+  idc==2 the guards refuse cross-slice edges and every deeper neighbour read is
+  same-worker.
+* **F132's six rounds were a frontier, not an inventory** (F143): Miri stops at the
+  first UB, so the "complete" enumeration was bounded by round 5's frame-0 abort.
+  Closing it unmasked round 7 (`pfInterMd` stamped per slice into the shared function
+  list, in-fork, upstream's own shape — hoisted to `PreprocessSliceCoding` per F71),
+  round 8 (four in-fork `as_mut_ptr` autoref mints on shared state — the VAA flag
+  twice, `pSad8x8`, `pfSampleSadRaw` — re-spelled on `addr_of!`), and the mid-row
+  probe's parallel find (`pLayerBsInfo` minted by array-`as_mut_ptr`, a
+  raw-above-a-Unique popped by the size-limited branch's sibling write — now a place
+  projection). The class lesson: the fork's residue was ordinary library-method
+  autorefs, findable by grep faster than by ~50-minute probe iterations.
+* **The layer family's 14 hazards are 3** (F144): eleven are the detector reporting a
+  held *bool* as a held cursor. Two more instrument facts logged there: a
+  re-derivation spelled as an assignment reads as a use (the `let`-shadow spelling is
+  clean), and the dispatch blind spot bit exactly as F111 predicted (`pfInterMd`
+  through the slot, placed by hand).
+
+### the acceptance
+
+**Both fork/join probes ran green under Miri for the first time in the project's
+history and lost their ignore attributes** (T9.E8): the fixed-slice probe in
+**3356 s**, the mid-row probe in **3449 s** (~57 minutes as a parallel pair) — a
+complete two-frame, two-worker encode each, aliasing checker and data-race detector,
+zero reports. Three fix-and-rerun iterations got there, each ~28–57 minutes, each
+naming the next frontier; the enumeration that began at F132's round 1 is closed at
+round 9.
+
+### step 3, landed whole
+
+`q1c.py --type SSlice`: **68 hazardous sites in 22 callers → 0** with the pointers
+still raw, the D-session playbook throughout. Three callee groups narrowed to the
+fields they touch (`slice_writer`/`slice_bs_buffer`/`thread_bs_buffer` to the
+`SWelsSliceBs` field + slot/size values; the stash pair and `GetBsPosition` to
+`SCabacCtx` + `uiLastMbQp` as a value with the pop's restore moved beside its six
+call sites; the three RC helpers to `&mut SRCSlicing`), which also cleared the
+shape-B class — real, not cosmetic: a `slice_writer` *result* held as an evaluated
+argument dies to a later argument's future `&mut *pSlice`. Fourteen callers then got
+per-use-cluster derivation windows. `WelsWriteSliceEndSyn` narrowed last. The ratchet
+was rebaselined +1 spelling in `svc_encode_slice.rs` with the reason in the commit;
+the session's global movement is raw_ptr −111, unsafe_fn −44, unsafe_block −58,
+shim −28.
+
+### the ledger
+
+- T9.E1 `17b943a4`: D-gate-5 executed — three probes shrink under `cfg!(miri)`; S61's
+  tripwire and baseline.
+- T9.E2 `a67e21af`: D-gate-6 — the parallel five-shard session gate; 542 s validated;
+  C/C2's evidence paid.
+- T9.E3 `47210ed4`: round 5's proof — the map threaded through deblocking, the
+  race-free assert pack, three planted-fault calibrations.
+- T9.E4 `4dbbf19b`: round 5's flip — the guards read the map; F132 round 5 closed.
+- T9.E6 `b29eb4b0`: step 3's first cut — three callee groups narrowed, q1c 68 → 37
+  (also carried round 7's fixes uncredited; disclosed in T9.E7's message).
+- T9.E7 `11f9d85b`: step 3 whole — q1c 68 → 0; rounds 7–9; F141–F144.
+- T9.E8 `b29b0625`: the acceptance — both probes green and un-ignored, first in
+  history.
+
+### what E2, F, G–H and the steward inherit
+
+- **E2** (next): step 4 — the flip, its precondition met (hazards 0, probes live as
+  referees): 122 `*mut SSlice` parameters in one S20 closure, the 26 arena roots →
+  field borrows in the same commit (F112), six slice-carrying fn-pointer types, one
+  `&mut *pSlice` reborrow per worker entry, exit `q1c --kind ref` = 0 plus a green
+  explicit fork-probe run. Then steps 5–6: the layer flip (3 real B-sites, then 73
+  parameters), the neighbour-bound `SMB` grid answer, deblocking's 13 allows,
+  `sRefPicView`'s 21 reads, and the ~34 reachable `cursor` tags (23 of 57 are
+  `ctx_*`, G–H's — the brief's "most" overcounted).
+- **G–H**: `slice_writer`/`slice_bs_buffer`'s ctx halves (the `pOut` arm), and the
+  ctx-taking deblocking allows.
+- **The steward**: F144's two detector questions under S55's recalibration rule; the
+  fork probes' measured standing cost at `full`/`exit` (~57 min as a pair, in the
+  D-gate-6 block with `-Zmiri-report-progress` in the recipe).
+
+### addendum — D-gate-7, ruled during the close
+
+**D-gate-7 (the user, 2026-08-24): encoder Miri probes run as separate invocations,
+and the CABAC/low-complexity grid probe is skipped under Miri** (T9.E9). The grid
+probe's Miri axes are covered more deeply by the size-limited probe (CABAC writers
+plus their stash/restore arm, LOW_COMPLEXITY — probe options default `cabac: true`)
+and the fork probes; it keeps its full native drive on every `cargo test`. The
+session lane drops to four shards; `full`/`exit` stop running probes inside one
+monolithic `--lib` pass and run four per-probe steps, each with its own verdict line,
+the fork pair carrying `-Zmiri-report-progress` (flag verified before being parked in
+the rarely-run path). The close gate below is the first run of this shape and its
+lane wall is the new S61 baseline.

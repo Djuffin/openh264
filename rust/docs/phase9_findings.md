@@ -2153,8 +2153,10 @@ ruling's quantities did not survive contact:
 3. **The step-2 acceptance and any per-close budget collide.** The two fork/join probes
    cannot shrink at all: `MIN_NUM_MB_PER_SLICE` floors their geometry at 49 macroblocks
    (112x112) and two frames is the inter-coverage floor. Measured at their first
-   full-length runs (T9.E5's iterations): ~28 minutes for the pair, run in parallel.
-   No 15-minute gate carries them.
+   GREEN runs (T9.E8): 3356 s and 3449 s — ~57 minutes as a parallel pair; the ~28
+   minutes the aborted iterations suggested was half the truth, because the aborts
+   all fell in frame 1's opening and the inter frame is the expensive half. No
+   15-minute gate carries them.
 
 **D-gate-6 (the user, 2026-08-24, mid-session): the whole session gate is capped at 15
 minutes — "even if we need to reduce the amount of tests that we run"** — ruled after
