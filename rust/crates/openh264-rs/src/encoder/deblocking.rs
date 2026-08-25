@@ -1238,7 +1238,7 @@ pub unsafe fn DeblockingMbAvcbase(
 // Frame and Slice Level Traversal
 // ============================================================================
 
-// unsafe-cat: cursor
+// unsafe-cat: port-raw(Phase 9) — the *mut SMB walk (E3's grid)
 #[allow(unsafe_code)]
 pub unsafe fn DeblockingFilterFrameAvcbase(pCurDq: &mut SDqLayer) {
     if (*pCurDq).pDecPic.is_none() {
@@ -1322,7 +1322,7 @@ pub use crate::encoder::svc_encode_slice::GetCurrentSliceNum;
 // walks straight across slice boundaries for every other slice mode.
 pub use crate::encoder::svc_encode_slice::WelsGetNextMbOfSlice;
 
-// unsafe-cat: cursor
+// unsafe-cat: port-raw(Phase 9) — the in-fork *mut SDqLayer (S63) + the *mut SMB walk (E3)
 #[allow(unsafe_code)]
 pub unsafe extern "C" fn DeblockingFilterSliceAvcbase(
     pCurDq: *mut SDqLayer,
@@ -1393,7 +1393,7 @@ pub unsafe extern "C" fn DeblockingFilterSliceAvcbase(
     }
 }
 
-// unsafe-cat: cursor
+// unsafe-cat: port-raw(Phase 9) — the slot type's in-fork *mut SDqLayer (S63)
 #[allow(unsafe_code)]
 pub unsafe extern "C" fn DeblockingFilterSliceAvcbaseNull(
     _pCurDq: *mut SDqLayer,

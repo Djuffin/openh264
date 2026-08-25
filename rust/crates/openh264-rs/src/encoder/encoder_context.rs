@@ -1626,7 +1626,7 @@ pub unsafe fn InitFunctionPointers(
     crate::encoder::get_intra_predictor::WelsInitIntraPredFuncs(&mut *fl, _uiCpuFlag);
 
     /* ME func */
-    crate::encoder::svc_motion_estimate::WelsInitMeFunc(&mut *fl as *mut _, _uiCpuFlag, bScreenContent);
+    crate::encoder::svc_motion_estimate::WelsInitMeFunc(&mut *fl, _uiCpuFlag, bScreenContent);
 
     /* sad, satd, average */
     crate::encoder::sample::WelsInitSampleSadFunc(&mut *fl, _uiCpuFlag);
