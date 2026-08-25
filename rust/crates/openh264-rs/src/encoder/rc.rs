@@ -625,7 +625,7 @@ impl SWelsRcFunc {
     #[inline]
     // unsafe-cat: port-raw(Phase 9)
     #[allow(unsafe_code)]
-    pub unsafe fn WelsRcMbInit(self, pCtx: *mut sWelsEncCtx, pCurMb: &mut SMB, pSlice: *mut SSlice) {
+    pub unsafe fn WelsRcMbInit(self, pCtx: *mut sWelsEncCtx, pCurMb: &mut SMB, pSlice: &mut SSlice) {
         match self.eInstalledMode {
             RCMode::RC_OFF_MODE | RCMode::RC_BUFFERBASED_MODE => {
                 WelsRcMbInitDisable(pCtx, pCurMb, pSlice)
@@ -649,7 +649,7 @@ impl SWelsRcFunc {
         pCtx: *mut sWelsEncCtx,
         pCurMb: &mut SMB,
         iCostLuma: i32,
-        pSlice: *mut SSlice,
+        pSlice: &mut SSlice,
     ) {
         match self.eInstalledMode {
             RCMode::RC_OFF_MODE | RCMode::RC_BUFFERBASED_MODE => {

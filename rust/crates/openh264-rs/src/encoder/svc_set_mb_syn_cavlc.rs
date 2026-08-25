@@ -661,7 +661,7 @@ pub fn CheckBitstreamBuffer(
 #[allow(unsafe_code)]
 pub unsafe fn WelsSpatialWriteMbSyn(
     pEncCtx: *mut sWelsEncCtx,
-    pSlice: *mut SSlice,
+    pSlice: &mut SSlice,
     pCurMb: *mut SMB,
 ) -> i32 {
     // **Derived at each use, not once at the top** — the ordering class session B
@@ -690,10 +690,15 @@ pub unsafe fn WelsSpatialWriteMbSyn(
 
         // Step 1: write mb type and pred
         if IS_Inter_8x8((*pCurMb).uiMbType) {
-            WelsSpatialWriteSubMbPred(pEncCtx, pSlice, &mut *pCurMb);
+            WelsSpatialWriteSubMbPred(pEncCtx, &mut *pSlice, &mut *pCurMb);
         } else {
-            WelsSpatialWriteMbPred(pEncCtx, pSlice, &mut *pCurMb);
+            WelsSpatialWriteMbPred(pEncCtx, &mut *pSlice, &mut *pCurMb);
         }
+        // T9.E2f: the writer is re-minted after the pred writers — their slice
+        // parameters flip with their stage, and the whole-slice reborrow above
+        // pops a writer minted before it (WelsCodeOneSlice's shape; q1c cannot
+        // attribute either kind here).
+        let pBs = crate::encoder::svc_encode_slice::slice_writer(pEncCtx, std::ptr::addr_of_mut!((*pSlice).sSliceBs));
 
         // Step 2: write coded block pattern
         if IS_INTRA4x4((*pCurMb).uiMbType) {
@@ -714,7 +719,7 @@ pub unsafe fn WelsSpatialWriteMbSyn(
                 &mut *pBs,
                 kiDeltaQp,
             );
-            let pMbCache = std::ptr::addr_of_mut!((*pSlice).sMbCacheInfo);
+            let pMbCache = &mut pSlice.sMbCacheInfo;
             let buf = crate::encoder::svc_encode_slice::slice_bs_buffer(pEncCtx, std::ptr::addr_of_mut!((*pSlice).sSliceBs), (*pSlice).uiBufferIdx as usize);
             if WelsWriteMbResidual(&*ctx_func_list(pEncCtx), &mut *pMbCache, &*pCurMb, buf, pBs) != 0 {
                 return ENC_RETURN_VLCOVERFLOWFOUND;

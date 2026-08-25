@@ -951,7 +951,7 @@ pub const g_kiPixStrideIdx8x8: [i32; 4] = [
 #[allow(unsafe_code)]
 pub unsafe fn WelsMdInterInit(
     pEncCtx: *mut sWelsEncCtx,
-    pSlice: *mut SSlice,
+    pSlice: &mut SSlice,
     // Stays raw, and the reason is one call below: `pfFillInterNeighborCache` is a
     // neighbour-walker (`pCurMb.offset(-1)` in `FillNeighborCacheInter*`), so its
     // slot type keeps `*mut SMB` and this parameter has to carry the array's
@@ -962,7 +962,7 @@ pub unsafe fn WelsMdInterInit(
     iSliceFirstMbXY: i32,
 ) {
     let pCurLayer = current_layer(pEncCtx);
-    let pMbCache = std::ptr::addr_of_mut!((*pSlice).sMbCacheInfo);
+    let pMbCache = &mut pSlice.sMbCacheInfo;
     let kiMbX = (*pCurMb).iMbX as i32;
     let kiMbY = (*pCurMb).iMbY as i32;
     let kiMbXY = (*pCurMb).iMbXY;

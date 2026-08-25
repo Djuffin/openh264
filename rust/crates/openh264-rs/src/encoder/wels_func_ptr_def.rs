@@ -229,7 +229,7 @@ impl EntropyCoder {
     pub unsafe fn WelsSpatialWriteMbSyn(
         self,
         pEncCtx: *mut sWelsEncCtx,
-        pSlice: *mut SSlice,
+        pSlice: &mut SSlice,
         pCurMb: *mut SMB,
     ) -> i32 {
         match self {
