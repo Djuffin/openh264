@@ -62,7 +62,7 @@ a cursor from the context, call something, use the cursor) has been sound throug
 six phases. A **`&mut` retag** pops every cursor into the context regardless of
 what the callee goes near.
 
-There are **four** shapes. F66's two Miri-confirmed sites are one each of A and
+There are **five** shapes. F66's two Miri-confirmed sites are one each of A and
 B; F114's two are one each of C and D, and those two were added in T9.B20 after
 session D shipped one of each past ten green byte gates *and* a clean run of this
 tool. A and B are hazards a conversion **exposes** — they are latent in the tree
@@ -102,6 +102,30 @@ because nothing reallocates in between, which is *not* true of shape A in genera
 
 Shape B is reported separately because its remedy is different: hoist the
 argument. Shape A's remedy is to retire the cursor's family first.
+
+**Shape E — a foreign READ pops the protector, and no `&mut` is minted anywhere**
+(F148.3, added in T9.E3):
+
+    fn WelsUpdateSliceHeaderSyntax(pCtx: *mut sWelsEncCtx, pLayer: &mut SDqLayer) {
+        let n = (*current_layer(pCtx)).iMaxSliceNum;   // the SAME layer, other path
+
+`pLayer` is strongly protected for the whole body; the accessor hands back an
+independent same-tag copy of the object it names, and a plain **read** through
+that copy pops the protected `Unique`. Shape D's closure looks for reborrow
+*mints* and therefore cannot see this — E2's close hit it after a `--kind ref`
+scan came back clean, which is exactly the gap this shape closes. Its remedy is
+to read through the parameter (T9.D11's move), or to hoist the read above the
+call that creates the protector.
+
+Calibrated per S55 in **both** directions at T9.E3: at `020dfb0a^` — the tree
+that carried the live defect — `--type SDqLayer --kind ref` reports **exactly
+one** site, `WelsUpdateSliceHeaderSyntax` reaching `current_layer`, line for
+line with what Miri named; at HEAD it reports 0, T9.D11 having fixed it. And
+adding it changed nothing about the older shapes: at `0bfc7687^`, C still
+reports F114a's four bodies (`WelsEncRecI16x16Y`, `WelsEncRecI4x4Y`,
+`WelsEncInterY`, `WelsEncRecUV`) and D still reports its two
+(`AddSliceBoundary`, `DynSlcJudgeSliceBoundaryStepBack`), identical before and
+after the change.
 
 ## How to use the result
 
@@ -722,6 +746,116 @@ def scan_shape_d(files, closure):
                               lines[start].strip()))
     return out
 
+def accessor_names(files):
+    """Functions that resolve a `CTX_TYPE` **from somewhere else** — the
+    independent path shape E needs.
+
+    Two spellings, both of which the port uses for every root type this tool is
+    ever aimed at: a function returning `*mut CTX_TYPE` (`current_layer`,
+    `slice_in_layer`, `ctx_dq_layer`) and one returning
+    `Option<&(mut) CTX_TYPE>` (`layer_ref_pic`'s shape). A body that calls one
+    of these has a second, independent handle on the object — which is the whole
+    precondition of the shape.
+    """
+    ret = re.compile(
+        r"->\s*(?:Option\s*<\s*)?(?:&\s*(?:'[a-z_]+\s+)?(?:mut\s+)?|\*\s*(?:mut|const)\s+)"
+        + CTX_TYPE + r"\b")
+    out = set()
+    for _rel, lines in files:
+        for name, b, _end, _roots, _pp in split_bodies(lines):
+            head, _ = signature(lines, name, b)
+            if ret.search(head):
+                out.add(name)
+    return out
+
+
+def _accessor_reads(line, accessors):
+    """The accessor calls on `line` that actually **access** the object.
+
+    A nullness test does not: `current_layer(pCtx).is_null()` calls the
+    accessor, looks at the returned pointer, and never touches a byte of the
+    layer, so it pops nothing. The deref two lines below it —
+    `(*current_layer(pCtx)).iMaxSliceNum` — is the access F148.3's Miri run
+    named, and reporting the null check instead would point the reader at the
+    wrong line. Anything else counts, including handing the resolved pointer to
+    a callee, which reads it on the caller's behalf.
+    """
+    out = []
+    for m in re.finditer(r"\b([A-Za-z_][A-Za-z0-9_]*)\s*\(", line):
+        if m.group(1) not in accessors:
+            continue
+        depth, k = 0, m.end() - 1
+        for k in range(m.end() - 1, len(line)):
+            if line[k] == "(":
+                depth += 1
+            elif line[k] == ")":
+                depth -= 1
+                if depth == 0:
+                    break
+        tail = line[k + 1:].lstrip()
+        if tail.startswith("."):
+            meth = re.match(r"\.\s*([A-Za-z_][A-Za-z0-9_]*)", tail)
+            if meth and meth.group(1) in ("is_null", "is_none", "is_some"):
+                continue
+        out.append(m.group(1))
+    return out
+
+
+def scan_shape_e(files, accessors):
+    """**A protector is violated by a foreign READ, and it needs no mint** —
+    F148.3, the class E2's close caught and this tool could not see.
+
+    Shape D models *mints*: it asks whether anything the callee reaches forms a
+    second `&mut`. The site that aborted both encode probes formed none.
+    `WelsUpdateSliceHeaderSyntax`, freshly `&mut SDqLayer`, simply **read**
+    `(*current_layer(pCtx)).iMaxSliceNum` — the same object its own parameter
+    protects, reached by an independent accessor path. A plain read through an
+    independent same-tag copy pops a strongly protected `Unique`, so the whole
+    hazard is: *this body has a `&mut CTX_TYPE` parameter, and it also resolves
+    and accesses a `CTX_TYPE` through an accessor rather than through that
+    parameter.*
+
+    Deliberately narrower than shape D in one way and wider in another. Narrower:
+    only `&mut` parameters qualify — a shared `&T` parameter is not a `Unique`
+    and a foreign read cannot pop it (the protector class where a *read* is
+    harmless is shape D's). Wider: no closure walk, because the offending access
+    is in the body itself, in the accessor's own call. Nullness tests are not
+    accesses (see `_accessor_reads`).
+
+    The false positives it accepts, both cheap to read past and both seen in
+    calibration: a body whose accessor call names a **different instance** of the
+    same type (`GetRefMb`'s `mb_at(base_layer, ..)` beside its own `&mut SMB`
+    — a different macroblock in a different layer, reported at `0bfc7687^`); and
+    a resolution whose result is only written *through the parameter* afterwards.
+    The report prints the accessor and the line so the reader can decide, which
+    is the same trade shapes C and D make.
+    """
+    out = []
+    if not accessors:
+        return out
+    for rel, lines in files:
+        for name, b, end, _roots, _pp in split_bodies(lines):
+            head, start = signature(lines, name, b)
+            pm = None
+            for m in REF_PARAM_RE.finditer(head):
+                if m.group(2):                      # `mut ` — a Unique protector
+                    pm = m
+                    break
+            if pm is None:
+                continue
+            for j in range(b, end + 1):
+                if COMMENT_RE.match(lines[j]):
+                    continue
+                s_ = strip_comment(lines[j])
+                reads = [r for r in _accessor_reads(s_, accessors) if r != name]
+                if not reads:
+                    continue
+                out.append(Hazard("E", rel, name, pm.group(1), start + 1, j + 1,
+                                  j + 1, reads[0], s_.strip()))
+                break
+    return out
+
+
 def scan():
     callees = ctx_taking_callees()
     if not callees:
@@ -733,6 +867,7 @@ def scan():
              for path in sorted(SRC.rglob("*.rs"))]
     closure, _direct = reborrow_closure(files)
     hazards += scan_shape_d(files, closure)
+    hazards += scan_shape_e(files, accessor_names(files))
     for rel, lines in files:
         for caller, b, end, roots, pp in split_bodies(lines):
             roots = body_roots(lines, b, end, roots, pp, fields)
@@ -886,6 +1021,7 @@ def main():
     B = [h for h in hazards if h.shape == "B"]
     C = [h for h in hazards if h.shape == "C"]
     D = [h for h in hazards if h.shape == "D"]
+    E = [h for h in hazards if h.shape == "E"]
 
     if a.sites:
         for h in sorted(hazards, key=lambda x: (x.file, x.derive_ln)):
@@ -905,12 +1041,19 @@ def main():
                 print(f"     borrow {h.call_ln:5d}  {h.callee}  <-- safe borrow of the "
                       f"same field pops the raw")
                 print(f"     use    {h.use_ln:5d}  `{h.binding}` read after the borrow")
-            else:
+            elif h.shape == "D":
                 print(f"D  {h.file}:{h.derive_ln}  in {h.caller}()")
                 print(f"     param  {h.derive_ln:5d}  {h.binding}: {h.callee}  "
                       f"<-- strongly protected for the whole call")
                 print(f"            and {h.caller} can reach a `&mut {CTX_TYPE}` "
                       f"re-borrow of what it names")
+            else:
+                print(f"E  {h.file}:{h.call_ln}  in {h.caller}()")
+                print(f"     param  {h.derive_ln:5d}  {h.binding}  "
+                      f"<-- strongly protected for the whole body")
+                print(f"     read   {h.call_ln:5d}  {h.text[:96]}")
+                print(f"            reaches a {CTX_TYPE} through `{h.callee}` — an "
+                      f"independent path; a foreign READ pops a protected Unique")
         print()
 
     byfile = collections.Counter(h.file for h in hazards)
@@ -919,10 +1062,10 @@ def main():
 
     w = max([len(f) for f in byfile] + [12])
     print(f"{'file':<{w}}  sites   (A=held cursor, B=arg order, "
-          f"C=safe-borrow pop, D=protector)")
+          f"C=safe-borrow pop, D=protector, E=foreign read)")
     for f, n in byfile.most_common():
         c = collections.Counter(h.shape for h in hazards if h.file == f)
-        print(f"{f:<{w}}  {n:5d}   A={c['A']} B={c['B']} C={c['C']} D={c['D']}")
+        print(f"{f:<{w}}  {n:5d}   A={c['A']} B={c['B']} C={c['C']} D={c['D']} E={c['E']}")
     bindings = {(h.file, h.caller, h.binding) for h in A}
     print(f"\n{len(hazards)} hazardous sites in {len(bycaller)} callers, "
           f"across {len(bycallee)} distinct ctx-taking callees.")
@@ -931,6 +1074,7 @@ def main():
     print(f"  shape B (argument evaluation order):     {len(B)} sites")
     print(f"  shape C (raw popped by a safe borrow):   {len(C)} sites   [F114a]")
     print(f"  shape D (a reference argument protects): {len(D)} sites   [F114b]")
+    print(f"  shape E (a foreign READ pops the protector): {len(E)} sites   [F148.3]")
     if C or D:
         print("  C and D are hazards the conversion *creates*, not ones it exposes:"
               "\n  both are sound while the parent is raw. Pre-conversion Miri cannot "
