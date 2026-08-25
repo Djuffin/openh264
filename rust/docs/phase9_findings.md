@@ -2538,3 +2538,154 @@ charter row inherited all three claims. Measured at E3's step 0
 `WelsGetFirstMbOfSlice` (deleted in the same commit) is the cleaner story the
 charter row folded in beside F84: dead in **both** trees — the C++ defines it at
 `svc_enc_slice_segment.cpp:540` and never calls it.
+
+## F154 — the grid's 34 was three counts short, and the missing three are the ones a `*mut SMB` grep cannot see
+
+The E3 brief scoped the grid at "**34** `*mut SMB` parameters" with its command
+quoted, and that command is right about what it asks. The family is bigger,
+because three sites spell the same relationship differently:
+
+```
+$ grep -rn ': \*const SMB\b' src/encoder | grep -v ':\s*//'
+svc_mode_decision.rs:1487   SetMvBaseEnhancelayer's kpRefMb
+svc_encode_slice.rs:2046    WelsInitInterMDStruc's pCurMb
+svc_base_layer_md.rs:2137   WelsMdInterSaveSadAndRefMbType's pCurMb
+$ grep -rn '\-> \*mut SMB' src/encoder            # GetRefMb, mb_at, mb_list_root
+$ grep -rn 'pub type PMb' src/encoder             # deblocking.rs:237
+```
+
+Three `*const` parameters, one raw **return** (`GetRefMb`, the cross-layer
+read), and a type alias with zero users. None is exotic: the `*const` three are
+neighbour-family functions whose bodies only read, `GetRefMb` is how the
+enhancement layer reaches its base layer's record, and `PMb` is a leftover
+spelling of the family's own type. All five converted or died with the 34, and
+the session's exit condition became `grep -rn '\*mut SMB\|\*const SMB' src tests
+benches` → **0** rather than the brief's number reaching zero.
+
+The general clause, and it is S24's unit rule pointed at *mutability*: a family
+scoped by one pointer spelling is scoped by a **grep, not by the relationship**.
+The question "how many places hold a raw macroblock record" has four spellings
+in this tree (`*mut T`, `*const T`, `-> *mut T`, `type Alias = *mut T`), and a
+brief that quotes one of them is quoting a lower bound. Enumerate the *type*,
+not the parameter form — the same way F101 says to enumerate the whole item and
+not the first line.
+
+## F155 — a QP-average neighbour read is byte-inert at one-macroblock granularity: the first planted fault proved nothing, and the reason generalises
+
+Deblocking's grid conversion was calibrated per S55 by skewing a neighbour
+lookup one macroblock right. The first attempt skewed the **QP average** —
+`(iCurLumaQp + left/topMb.uiLumaQp + 1) >> 1`, `DeblockingInterMb`'s filter
+strength input — and the honest count was **st 210/210 PASS, dl 76/76 PASS**:
+zero rows, on the two presets that exercise deblocking hardest.
+
+The cause is not coverage. QP is assigned per *GOM row* (`bGomRC`,
+`iGomSize`), so at every interior macroblock the "wrong" neighbour holds the
+**same QP**, the average is unchanged, and the filter runs identically. A
+one-macroblock skew is invisible to any read of a value that varies more slowly
+than one macroblock.
+
+Re-planted in the same function family at the **BS-calc top record** — whose
+inputs are `uiMbType`, `iNonZeroCount` and `sMv`, all genuinely per-macroblock —
+the same skew fails **st 180 of 210** and **dl 76 of 76**. Both counts are
+quoted in T9.E3c's message.
+
+S59 says an inert row referees nothing at that site whatever the entry counter
+says; this is the same law one level down, at the *field*: **a planted fault
+proves coverage of the field it perturbs, not of the site.** Choose the
+perturbed field for its variation, not for its convenience — and when a fault
+comes back 0/210, the first hypothesis is an inert field, not an unreached path.
+
+## F156 — `sDecPicView` had zero readers, and the field that survived it needed no struct at all
+
+The E3 brief scoped the harvest as "the two raw picture views re-routed onto
+per-call cursors", with `sRefPicView` at 23 mentions and `sDecPicView` at 4.
+Measured at conversion time, the twin is not a re-routing job:
+
+```
+$ grep -rn 'sDecPicView' src | grep -v '^\s*//'
+svc_encode_slice.rs:1132   the declaration
+svc_encode_slice.rs:1228   its Default
+encoder_ext.rs:1969        the null-stamp arm
+encoder_ext.rs:1976        the stamp
+```
+
+Four mentions, **all writes**. The reconstruction picture's readers moved to the
+seam in T9.C2/C4 (`layer_rec_view`, `pCsData`/`iCsStride`), and the view field
+kept being stamped for nobody — a write-only struct field, F139's write-only
+*slot* class one container over, and undetectable by the same means (it is
+`pub`, in a `pub` struct, so the compiler's dead-code pass says nothing —
+F129's rule again).
+
+`sRefPicView`'s 23 are real, and they resolve into fewer moving parts than the
+count suggests: 13 are one stamp block's plane/stride reads, 4 are the dormant
+screen-content pointer, 2 are `iPictureType` guards, and 4 are comments. What
+the struct actually bought was **one exclusive-borrow avoidance** (T6.F5:
+`SPicture::view()` needs `&mut`, and per-call resolution in-fork would be F73's
+retag per worker) — and that is a property of the *accessor*, not of the data.
+Two `&self` root mints (`PaddedPlane::root_ptr_shared`,
+`SPicture::data_ptr_shared`, F71's argument transplanted from `MbArray`) remove
+the reason, after which both fields, the struct, its constructor and its stamp
+all delete together.
+
+The clause worth carrying: **before re-routing a cached copy, grep its readers
+per field.** A "pair of fields" in a brief may be one field with readers and one
+with none, and the second costs nothing but is invisible until asked.
+
+## F157 — the fork-reachability walker's answer is decided by an arm no signature census has: function-item arrays
+
+S63 tells G's brief to carry the ctx family's fork-split, and E2 produced the
+layer's by hand. Built as a tool (`phase9_forksplit.py`), the first honest run
+reported **27 of 268 bodies in-fork**, with `svc_base_layer_md.rs` and
+`svc_mode_decision.rs` at **zero** — which is absurd on its face: mode decision
+is what the fork's workers spend their time in.
+
+The walker knew two dispatch arms — named calls and `pf*` slot installees — and
+the encoder reaches mode decision through neither. `WelsCodeOneSlice` indexes a
+**static array of function items**:
+
+```rust
+pub static g_pWelsSliceCoding: [[PWelsCodingSliceFunc; 2]; 2] = [ … ];
+let func = g_pWelsSliceCoding[idr_idx][kiDynamicSliceFlag];
+let iEncReturn = func(pEncCtx, &mut *pCurSlice);
+```
+
+With that arm added the split is **111 in-fork / 157 ST-flippable**, and the
+`--why` paths check out by hand. The arms are worth 84 bodies, which is the
+calibration the tool ships with (`--no-slots`: 27 vs 111).
+
+Two things generalise. First, **a table is a dispatch surface even when it is
+not a struct field** — S52 said "read the callers of the table, not of the
+kernel" about `SWelsFuncPtrList`; a `static` array of `fn` items is the same
+object with no owner to key on, and a census that greps for `.pf` cannot see
+it. Second, and this is the reason to write the walker rather than repeat E2's
+hand-count: **the hand-count and the tool disagreeing is the useful event.** The
+hand method has no way to report which arm it forgot.
+
+## F158 — where the encoder's per-macroblock reads now live, for G and X
+
+A closing inventory, since after E3 the encoder's per-macroblock world has one
+raw spine left and the next sessions should not have to re-derive its shape.
+
+**Gone**: every raw macroblock-record access. `grep -rn '\*mut SMB\|\*const SMB'
+src tests benches` → 0; records are reached through `MbWindow` (a borrowed range
+of the grid, with the window's bounds as the fork-disjointness mechanism) or
+through `&SMB`/`&mut SMB` where a single record is the whole subject.
+
+**Gone**: the layer's two stamped picture views; the reference picture resolves
+per call.
+
+**What still carries raw, per file, and whose it is**:
+
+* `*mut sWelsEncCtx` — 285 mentions / 268 bodies, split 111 in-fork / 157 ST
+  (`phase9_ctx_forksplit.md`). **G's**, and the split is the plan, not the
+  hazard count.
+* `*mut SDqLayer` — the in-fork half of E2's split, unchanged this session
+  except that E3's mints take it as a parameter. **G's**, and it moves with the
+  ctx: both are "the object every worker shares".
+* `*mut u8` VAA flag walks (`pVaaBgMbFlag` in the two inter fills), `*mut i16`
+  residual cursors (`WelsWriteBlockResidualCabac`'s `pBlock`), `*mut u16` MVD
+  cost tables. **X's**, all three, and none is grid-shaped: they are flat
+  per-macroblock arrays indexed by `iMbXY`, which is the `SharedMbArray` shape
+  the seam already uses for `pMbSkipSad`.
+* The dormant screen-content pointer, now behind one named accessor
+  (`layer_ref_feature_storage`). **Phase 10's.**
