@@ -662,7 +662,7 @@ pub fn CheckBitstreamBuffer(
 pub unsafe fn WelsSpatialWriteMbSyn(
     pEncCtx: *mut sWelsEncCtx,
     pSlice: &mut SSlice,
-    pCurMb: *mut SMB,
+    mbs: &mut crate::safe::mb_grid::MbWindow<'_, SMB>,
 ) -> i32 {
     // **Derived at each use, not once at the top** — the ordering class session B
     // closed for the other writers and the second encode probe (CAVLC + fine mode
@@ -674,10 +674,10 @@ pub unsafe fn WelsSpatialWriteMbSyn(
     let pBs = crate::encoder::svc_encode_slice::slice_writer(pEncCtx, std::ptr::addr_of_mut!((*pSlice).sSliceBs));
     let kuiChromaQpIndexOffset = (*layer_pps(pEncCtx, current_layer(pEncCtx))).uiChromaQpIndexOffset;
 
-    if IS_SKIP((*pCurMb).uiMbType) {
-        (*pCurMb).uiLumaQp = (*pSlice).uiLastMbQp;
-        let idx = CLIP3_QP_0_51(((*pCurMb).uiLumaQp as i32) + (kuiChromaQpIndexOffset as i32));
-        (*pCurMb).uiChromaQp = g_kuiChromaQpTable[idx as usize];
+    if IS_SKIP(mbs.cur().uiMbType) {
+        mbs.cur_mut().uiLumaQp = (*pSlice).uiLastMbQp;
+        let idx = CLIP3_QP_0_51((mbs.cur().uiLumaQp as i32) + (kuiChromaQpIndexOffset as i32));
+        mbs.cur_mut().uiChromaQp = g_kuiChromaQpTable[idx as usize];
 
         (*pSlice).iMbSkipRun += 1;
         ENC_RETURN_SUCCESS
@@ -689,10 +689,10 @@ pub unsafe fn WelsSpatialWriteMbSyn(
         }
 
         // Step 1: write mb type and pred
-        if IS_Inter_8x8((*pCurMb).uiMbType) {
-            WelsSpatialWriteSubMbPred(pEncCtx, &mut *pSlice, &mut *pCurMb);
+        if IS_Inter_8x8(mbs.cur().uiMbType) {
+            WelsSpatialWriteSubMbPred(pEncCtx, &mut *pSlice, mbs.cur_mut());
         } else {
-            WelsSpatialWriteMbPred(pEncCtx, &mut *pSlice, &mut *pCurMb);
+            WelsSpatialWriteMbPred(pEncCtx, &mut *pSlice, mbs.cur_mut());
         }
         // T9.E2f: the writer is re-minted after the pred writers — their slice
         // parameters flip with their stage, and the whole-slice reborrow above
@@ -701,18 +701,18 @@ pub unsafe fn WelsSpatialWriteMbSyn(
         let pBs = crate::encoder::svc_encode_slice::slice_writer(pEncCtx, std::ptr::addr_of_mut!((*pSlice).sSliceBs));
 
         // Step 2: write coded block pattern
-        if IS_INTRA4x4((*pCurMb).uiMbType) {
+        if IS_INTRA4x4(mbs.cur().uiMbType) {
             let buf = crate::encoder::svc_encode_slice::slice_bs_buffer(pEncCtx, std::ptr::addr_of_mut!((*pSlice).sSliceBs), (*pSlice).uiBufferIdx as usize);
-            BsWriteUE(buf, &mut *pBs, g_kuiIntra4x4CbpMap[(*pCurMb).uiCbp as usize]);
-        } else if !IS_INTRA16x16((*pCurMb).uiMbType) {
+            BsWriteUE(buf, &mut *pBs, g_kuiIntra4x4CbpMap[mbs.cur().uiCbp as usize]);
+        } else if !IS_INTRA16x16(mbs.cur().uiMbType) {
             let buf = crate::encoder::svc_encode_slice::slice_bs_buffer(pEncCtx, std::ptr::addr_of_mut!((*pSlice).sSliceBs), (*pSlice).uiBufferIdx as usize);
-            BsWriteUE(buf, &mut *pBs, g_kuiInterCbpMap[(*pCurMb).uiCbp as usize]);
+            BsWriteUE(buf, &mut *pBs, g_kuiInterCbpMap[mbs.cur().uiCbp as usize]);
         }
 
         // Step 3: write QP and residual
-        if (*pCurMb).uiCbp > 0 || IS_INTRA16x16((*pCurMb).uiMbType) {
-            let kiDeltaQp = ((*pCurMb).uiLumaQp as i32) - ((*pSlice).uiLastMbQp as i32);
-            (*pSlice).uiLastMbQp = (*pCurMb).uiLumaQp;
+        if mbs.cur().uiCbp > 0 || IS_INTRA16x16(mbs.cur().uiMbType) {
+            let kiDeltaQp = (mbs.cur().uiLumaQp as i32) - ((*pSlice).uiLastMbQp as i32);
+            (*pSlice).uiLastMbQp = mbs.cur().uiLumaQp;
 
             BsWriteSE(
                 crate::encoder::svc_encode_slice::slice_bs_buffer(pEncCtx, std::ptr::addr_of_mut!((*pSlice).sSliceBs), (*pSlice).uiBufferIdx as usize),
@@ -721,20 +721,20 @@ pub unsafe fn WelsSpatialWriteMbSyn(
             );
             let pMbCache = &mut pSlice.sMbCacheInfo;
             let buf = crate::encoder::svc_encode_slice::slice_bs_buffer(pEncCtx, std::ptr::addr_of_mut!((*pSlice).sSliceBs), (*pSlice).uiBufferIdx as usize);
-            if WelsWriteMbResidual(&*ctx_func_list(pEncCtx), &mut *pMbCache, &*pCurMb, buf, pBs) != 0 {
+            if WelsWriteMbResidual(&*ctx_func_list(pEncCtx), &mut *pMbCache, mbs.cur(), buf, pBs) != 0 {
                 return ENC_RETURN_VLCOVERFLOWFOUND;
             }
         } else {
-            (*pCurMb).uiLumaQp = (*pSlice).uiLastMbQp;
+            mbs.cur_mut().uiLumaQp = (*pSlice).uiLastMbQp;
             // `kuiChromaQpIndexOffset`, bound at this function's head from the same
             // expression. The C++ re-reads `pCurLayer->sLayerInfo.pPpsP->…` here
             // (`svc_set_mb_syn_cavlc.cpp`) and so did this port; nothing between the
             // two can change the layer's PPS, and T6.G3 made the re-read cost a
             // resolution rather than a load. Same value, once per macroblock.
             let idx = CLIP3_QP_0_51(
-                ((*pCurMb).uiLumaQp as i32) + (kuiChromaQpIndexOffset as i32),
+                (mbs.cur().uiLumaQp as i32) + (kuiChromaQpIndexOffset as i32),
             );
-            (*pCurMb).uiChromaQp = g_kuiChromaQpTable[idx as usize];
+            mbs.cur_mut().uiChromaQp = g_kuiChromaQpTable[idx as usize];
         }
 
         // Step 4: Check the left buffer

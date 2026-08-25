@@ -2180,7 +2180,16 @@ pub unsafe fn WelsISliceMdEnc(pEncCtx: *mut sWelsEncCtx, pSlice: &mut SSlice) ->
             if let Some(func_list) = ctx_func_list(pEncCtx).as_ref() {
                 iEncReturn = func_list
                     .eEntropyCoder
-                    .WelsSpatialWriteMbSyn(pEncCtx, pSlice, pCurMb);
+                    .WelsSpatialWriteMbSyn(
+                        pEncCtx,
+                        pSlice,
+                        &mut mb_window(
+                            pCurLayer,
+                            kiSliceFirstMbXY,
+                            iCurMbIdx - kiSliceFirstMbXY + 1,
+                            iCurMbIdx,
+                        ),
+                    );
             }
 
             if !kbCabac && iEncReturn == ENC_RETURN_VLCOVERFLOWFOUND && (*pCurMb).uiLumaQp < 50 {
@@ -2305,7 +2314,16 @@ pub unsafe fn WelsISliceMdEncDynamic(pEncCtx: *mut sWelsEncCtx, pSlice: &mut SSl
             if let Some(func_list) = ctx_func_list(pEncCtx).as_ref() {
                 iEncReturn = func_list
                     .eEntropyCoder
-                    .WelsSpatialWriteMbSyn(pEncCtx, pSlice, pCurMb);
+                    .WelsSpatialWriteMbSyn(
+                        pEncCtx,
+                        pSlice,
+                        &mut mb_window(
+                            pCurLayer,
+                            kiSliceFirstMbXY,
+                            iCurMbIdx - kiSliceFirstMbXY + 1,
+                            iCurMbIdx,
+                        ),
+                    );
             }
 
             if iEncReturn == ENC_RETURN_VLCOVERFLOWFOUND && (*pCurMb).uiLumaQp < 50 {
@@ -2534,7 +2552,16 @@ pub unsafe fn WelsMdInterMbLoop(
             if let Some(func_list) = ctx_func_list(pEncCtx).as_ref() {
                 iEncReturn = func_list
                     .eEntropyCoder
-                    .WelsSpatialWriteMbSyn(pEncCtx, pSlice, pCurMb);
+                    .WelsSpatialWriteMbSyn(
+                        pEncCtx,
+                        pSlice,
+                        &mut mb_window(
+                            pCurLayer,
+                            kiSliceFirstMbXY,
+                            iCurMbIdx - kiSliceFirstMbXY + 1,
+                            iCurMbIdx,
+                        ),
+                    );
             }
 
             if !kbCabac && iEncReturn == ENC_RETURN_VLCOVERFLOWFOUND && (*pCurMb).uiLumaQp < 50 {
@@ -2714,7 +2741,16 @@ pub unsafe fn WelsMdInterMbLoopOverDynamicSlice(
             if let Some(func_list) = ctx_func_list(pEncCtx).as_ref() {
                 iEncReturn = func_list
                     .eEntropyCoder
-                    .WelsSpatialWriteMbSyn(pEncCtx, pSlice, pCurMb);
+                    .WelsSpatialWriteMbSyn(
+                        pEncCtx,
+                        pSlice,
+                        &mut mb_window(
+                            pCurLayer,
+                            kiSliceFirstMbXY,
+                            iCurMbIdx - kiSliceFirstMbXY + 1,
+                            iCurMbIdx,
+                        ),
+                    );
             }
 
             if iEncReturn == ENC_RETURN_VLCOVERFLOWFOUND && (*pCurMb).uiLumaQp < 50 {
