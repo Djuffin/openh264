@@ -2132,3 +2132,162 @@ of them free:
 
 Not taken here: it is a gate-policy decision with a coverage cost, and this session had no
 mandate for it.
+
+## F141 — D-gate-5 counted two full-encode probes where the tree has three, and both of its numbers were arithmetically unreachable; D-gate-6 replaced the arithmetic
+
+Session E's step 0 executed D-gate-5 as ruled and measured it as it went. Three of the
+ruling's quantities did not survive contact:
+
+1. **"The two full-encode Miri probes" are three.** The CAVLC/fine-MD probe
+   (`encode_loop_runs_with_cavlc_and_fine_mode_decision_…`) drives the same encode loop
+   through the same seam as the grid probe, and measured **216.5 s** at the session's
+   start against the grid probe's 258.5 s — the same cost class, unnamed by F140, whose
+   "the two encode probes are the whole cost" undercounted by one. It was shrunk with
+   the same `cfg!(miri)` pattern in T9.E1, as a correction rather than a silent
+   extension.
+2. **The "<20 min" target and the "macroblock-count floor" cannot both hold.** The
+   realloc chain needs 35 slices, 35 slices need 112x96, and at the seam's interpreter
+   cost that geometry costs ~13 min for one test — so a serial session gate under 20
+   minutes cannot carry it, shrink or no shrink. The first executed shrink kept the
+   floor and honestly missed the budget.
+3. **The step-2 acceptance and any per-close budget collide.** The two fork/join probes
+   cannot shrink at all: `MIN_NUM_MB_PER_SLICE` floors their geometry at 49 macroblocks
+   (112x112) and two frames is the inter-coverage floor. Measured at their first
+   full-length runs (T9.E5's iterations): ~28 minutes for the pair, run in parallel.
+   No 15-minute gate carries them.
+
+**D-gate-6 (the user, 2026-08-24, mid-session): the whole session gate is capped at 15
+minutes — "even if we need to reduce the amount of tests that we run"** — ruled after
+the first post-shrink session run was stopped at ~40 minutes. What meets the cap is not
+a smaller test list but a different architecture, T9.E2:
+
+* the Miri step runs as a **background lane in parallel with the native battery** (they
+  do not contend: cargo-miri builds under `target/miri` with its own lock), as **one
+  compile plus five concurrent shards** — the three encode probes are the three largest
+  single tests and get a shard each; the rest splits into an encoder shard and an
+  api/common/safe shard;
+* the size-limited probe's Miri drive is 48x32x2 (measured 3/3/3 slices — every frame
+  still splits and rolls back; the realloc assertion gates to the full drive);
+* `MIRI_FULL=1` restores every full drive at `full`/`exit`, and the fork probes are
+  skipped **by name** at session scope with the explicit-run command in the D-gate-6
+  block — a cost scope in D-gate-2's sense, not a defect skip;
+* S61 reports the lane wall; the baseline file documents the regime change.
+
+Validated the same day: the whole session gate, **OVERALL PASS in 542 s** (9:02) — 283
+Miri tests across five shards, 583/583 sweeps in both profiles — against ~40 minutes
+stopped and an estimated ~55+ serial. A from-scratch close adds ~3 min of Miri compile.
+That run is also C/C2's missing session-scope aliasing evidence, under the reduced and
+named scope. What session scope no longer sees: the slice-buffer realloc chain under
+Miri, and the fork probes except at `full`/`exit` and explicit runs — both restored
+exactly there.
+
+## F142 — round 5 closed by an outcome-equality substitution; the brief's value-assert was the race it proposed to measure, and in-fork deblocking exists because validation rewrites idc 0 to 2
+
+Three structural facts the session E brief did not carry, each load-bearing for round 5:
+
+1. **Why deblocking runs inside the fork at all.** The driver requests
+   `iLoopFilterDisableIdc = 0`, and `SliceArgumentValidation` rewrites 0 → 2 under
+   threading (encoder_ext.rs:1390, upstream encoder_ext.cpp:2061: "not allowed with
+   multithreading"). At idc==2 multi-slice the parallel-deblocking flag survives
+   (multi-slice + idc==0 would falsify it), `DeblockingFilterSliceAvcbase` is installed
+   per frame, and `uiFilterIdc == 1` makes the `uiSliceIdc` guards the live arm. The
+   brief's hedge — "the probe may advance to `uiMbType`/QP/MVs next" — is structurally
+   closed by the same fact: at idc==2 these guards *refuse* cross-slice edges, so every
+   deeper neighbour read (QP averaging, the BS calc) is same-slice-only, which is
+   same-worker.
+2. **The brief's proof plan measured the wrong thing with the wrong instrument.**
+   `debug_assert_eq!(record, map)` "at every deblocking read, carried through family +
+   mt": (a) the assert's neighbour-record read *is* the cross-thread race being removed
+   — it cannot run under `mt` or Miri at all; (b) the value equality is legitimately
+   false cross-partition mid-frame (a stale record holds a previous frame's `q + k'N`
+   against the fresh map's `q + kN`), so the assert would fire on a correct tree and
+   the brief's fallback — build a seam view — would have triggered on a false alarm.
+3. **What is actually true, and how it was proved (T9.E3/T9.E4).** The comparison's
+   *outcome* is interleaving-invariant: same-partition neighbours are final with
+   record == map (asserted race-free at every record stamp — `UpdateMbNeighbor` plus
+   the four `kiSliceIdx` stamps — and at the guards on the post-join frame walk, where
+   uiFilterIdc == 0 means single-threaded by construction); cross-partition, every
+   value a partition-q record or map entry can ever hold is ≡ q (mod
+   `iActiveThreadsNum`) — `UpdateSlicepEncCtxWithPartition` stamps q,
+   `AddSliceBoundary` steps by the thread count and rewrites only from the rolled-back
+   macroblock up — while the current macroblock's index is ≡ p ≠ q, so both readings
+   refuse the edge under every interleaving. Calibration: the guard assert planted +1
+   aborted **210 of 210** `st` rows (exit 134) and the grid probe; the write-site
+   assert aborted the dynamic probe and both fork probes at mb 0. The flip then made
+   the guards read the map (`family` PASS, 583/583 both profiles, bytes unmoved), and
+   `grep 'offset(-…).uiSliceIdc'` over `encoder/deblocking.rs` is empty: in-fork
+   deblocking touches no other worker's `SMB` record. Where upstream's eager guard
+   reads are a benign-by-outcome data race, the port's relaxed load is defined with
+   the same observable result — F133's pattern.
+
+One measured aside: the brief's "the fork boundary keeps its raw mint … the model is
+the value assert" arithmetic on assert placement also missed that **one guard site
+covers all eight reads** — every deblocked macroblock flows through
+`DeblockingMbAvcbase` and nothing writes `uiSliceIdc` within a pass.
+
+## F143 — F132's six-family enumeration was bounded by its earliest abort: closing round 5 unmasked three more shared-state families in two probe iterations
+
+F132 presented its six rounds as "the complete list of what the Miri step will report
+as families 4–6 land, in the order it will report them." The list was complete only
+relative to where the probes aborted: Miri stops at the first UB, so an enumeration
+made by fixing-and-re-running sees exactly one frontier at a time, and round 5's
+deblocking race — hit in frame 0 — stood in front of everything later in
+interpretation order. With round 5 closed (T9.E4), the two probes advanced past frame
+0 for the first time and named, across two ~28-minute iterations:
+
+* **Round 7** (fixed-slice probe): `WelsCodePSlice`/`WelsCodePOverDynamicSlice` stamp
+  `pfInterMd` into the **shared** function list per slice, from inside the fork — N
+  workers writing the same bytes with no ordering, upstream's own shape
+  (`svc_encode_slice.cpp:733/750`), F71/F133's benign-same-value class. Fixed by
+  F71's pattern: the stamp is loop-invariant across a frame's slices and hoisted to
+  `PreprocessSliceCoding`, beside the deblocking-slot install.
+* **Round 8** (fixed-slice probe, next iteration): in-fork
+  `Vec::as_mut_ptr()`/array-`as_mut_ptr()` mints on **shared** state — the method
+  autorefs `&mut`, so every worker retag-writes the shared header per macroblock:
+  `pVaaBackgroundMbFlag` (two sites), `sVaaCalcInfo.pSad8x8`, and
+  `sSampleDealingFuncs.pfSampleSadRaw` (read-only use behind a `*mut` habit). All
+  re-spelled on `addr_of!`, `thread_bs_buffer`'s proven pattern; `GetChromaCost`'s
+  parameter went `*const` to match its reads.
+* **The mid-row probe's parallel find**, not a race: `pLayerBsInfo` is minted by
+  `(*pFbi).sLayerInfo.as_mut_ptr()` — the array method autorefs
+  `&mut (*pFbi).sLayerInfo`, so the "raw" was a raw-above-a-Unique, and the
+  size-limited branch's sibling `pLbi` write popped it before `SliceLayerInfoUpdate`
+  wrote back through it. T5.O8/F70's rule in a new costume: the mint is
+  `addr_of_mut!((*pFbi).sLayerInfo).cast()` now, a place projection sharing `pFbi`'s
+  provenance, and raw-sibling writes do not pop raw siblings.
+
+The general lesson extends S60's: **an enumeration produced by a first-abort
+instrument is a frontier, not an inventory** — its completeness claim is conditional
+on every earlier frontier staying closed, and the honest phrasing is "the next
+verdict", never "the remaining list". The class lesson is F71's, now three times over:
+the fork's remaining hazards are not exotic aliasing but ordinary library-method
+autorefs (`as_mut_ptr` on a shared field) and per-slice re-stamps of frame-constant
+values; both are findable by grep (`\.as_mut_ptr()` on ctx-reached state inside the
+MB loop) faster than by 28-minute probe iterations, which is how rounds 8's four
+sites were closed in one pass.
+
+## F144 — the detector's session-E ledger: one false-positive class confirmed, one
+new artifact class, and the dispatch blind spot observed live
+
+Three instrument observations from driving `q1c.py --type SSlice` from 68 to 0 and
+scoping `--type SDqLayer` (F123's discipline: understand the instrument before
+arguing with it):
+
+1. **A held *bool* is not a held cursor** — 11 of the layer family's 14 reported
+   hazards are `let bLeft = … && uiSliceIdc == WelsMbToSliceIdc(pLayer, …)` followed
+   by another `WelsMbToSliceIdc` call and a later read of `bLeft`. The "cursor" is a
+   `bool`; a value cannot be invalidated by a retag. The layer family's real
+   pre-flip work is its 3 shape-B argument-order sites, not 14 sites.
+2. **A re-derivation spelled as an assignment reads as a use** — `pSliceBs =
+   addr_of_mut!(…)` after a crossing call is reported as "`pSliceBs` read after the
+   call": the write to the local counts as a mention. The `let`-shadow spelling of
+   the same fix reads clean, and is what the tree now uses.
+3. **The dispatch blind spot bites in exactly the way F111 predicted** — the inter
+   loops call `pfInterMd` through the slot with `pSlice` as an argument;
+   `q1c` attributes nothing to it, but its function type carries `*mut SSlice`, so
+   it is a crossing like any named callee, found by reading. The step-3 windows in
+   both inter loops are placed after it, with a comment naming the blind spot.
+
+Neither matcher was changed: S55's second edge requires any detector change to
+re-calibrate against `0bfc7687^`, and this session had rounds in flight; the
+narrowing decision passes to the steward with this ledger.

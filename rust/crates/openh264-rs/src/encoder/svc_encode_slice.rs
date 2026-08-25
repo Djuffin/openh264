@@ -1560,6 +1560,7 @@ pub unsafe fn WelsSliceHeaderExtInit(pEncCtx: *mut sWelsEncCtx, pCurLayer: *mut 
     if (*pSlice).bSliceHeaderExtFlag {
         WelsSliceHeaderScalExtInit(pCurLayer, pSlice);
     } else {
+        let pCurSliceExt = &mut (*pSlice).sSliceHeaderExt;
         pCurSliceExt.bAdaptiveBaseModeFlag = false;
         pCurSliceExt.bAdaptiveMotionPredFlag = false;
         pCurSliceExt.bAdaptiveResidualPredFlag = false;
@@ -2062,9 +2063,11 @@ pub unsafe fn WelsISliceMdEnc(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSlice) ->
     if pCurLayer.is_null() || (*pCurLayer).sMbDataP.dims().count() == 0 || (*pCurLayer).iMbWidth <= 0 || (*pCurLayer).iMbHeight <= 0 {
         return ENC_RETURN_SUCCESS;
     }
-    // S29: raw, not `&mut` — held across the MB loop, whose callees derive their
-    // own borrows of the same fields (the encode probe's fourth red, session B).
-    let pMbCache = std::ptr::addr_of_mut!((*pSlice).sMbCacheInfo);
+    // S29 and the D-session playbook (T9.E7): the arena root is derived per
+    // use-cluster inside the loop, never held across a slice-taking call —
+    // the callees re-derive their own borrows of the same fields (the encode
+    // probe's fourth red, session B), and after the flip each window is what
+    // keeps the derivation alive.
     let pSliceHdExt = std::ptr::addr_of_mut!((*pSlice).sSliceHeaderExt);
     let pMbList = mb_list_root(pCurLayer);
     let kiSliceFirstMbXY = (*pSliceHdExt).sSliceHeader.iFirstMbInSlice;
@@ -2106,6 +2109,7 @@ pub unsafe fn WelsISliceMdEnc(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSlice) ->
                 .pfRc
                 .WelsRcMbInit(pEncCtx as *mut _, &mut *pCurMb, pSlice as *mut _);
         }
+        let pMbCache = std::ptr::addr_of_mut!((*pSlice).sMbCacheInfo);
         crate::encoder::svc_base_layer_md::WelsMdIntraInit(
             pEncCtx,
             pCurMb,
@@ -2145,6 +2149,7 @@ pub unsafe fn WelsISliceMdEnc(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSlice) ->
 
         (*pCurMb).uiSliceIdc = kiSliceIdx as u16;
 
+        let pMbCache = std::ptr::addr_of_mut!((*pSlice).sMbCacheInfo);
         if let Some(func_list) = ctx_func_list(pEncCtx).as_ref() {
             if let Some(func) = func_list.pfMdBackgroundInfoUpdate {
                 func(pCurLayer, &mut *pCurMb, (*pMbCache).bCollocatedPredFlag, I_SLICE);
@@ -2182,7 +2187,6 @@ pub unsafe fn WelsISliceMdEncDynamic(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSl
     // this binding held, and `DynSlcJudgeSliceBoundaryStepBack` then reads through
     // the dead tag. `pMbCache` is the encode probe's fourth red (session B).
     let pSliceCtx = std::ptr::addr_of_mut!((*pCurLayer).sSliceEncCtx);
-    let pMbCache = std::ptr::addr_of_mut!((*pSlice).sMbCacheInfo);
     let pSliceHdExt = std::ptr::addr_of_mut!((*pSlice).sSliceHeaderExt);
     let pMbList = mb_list_root(pCurLayer);
     let kiSliceFirstMbXY = (*pSliceHdExt).sSliceHeader.iFirstMbInSlice;
@@ -2227,6 +2231,7 @@ pub unsafe fn WelsISliceMdEncDynamic(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSl
             (*pCurMb).uiLumaQp = max_qp as u8;
             (*pCurMb).uiChromaQp = g_kuiChromaQpTable[CLIP3_QP_0_51(max_qp as i32 + kuiChromaQpIndexOffset as i32)];
         }
+        let pMbCache = std::ptr::addr_of_mut!((*pSlice).sMbCacheInfo);
         crate::encoder::svc_base_layer_md::WelsMdIntraInit(
             pEncCtx,
             pCurMb,
@@ -2367,7 +2372,6 @@ pub unsafe fn WelsMdInterMbLoop(
     let pBs = slice_writer(pEncCtx, std::ptr::addr_of_mut!((*pSlice).sSliceBs));
     let pCurLayer = current_layer(pEncCtx);
     // S29: raw, held across the MB loop (see `WelsISliceMdEnc`).
-    let pMbCache = std::ptr::addr_of_mut!((*pSlice).sMbCacheInfo);
     let pMbList = mb_list_root(pCurLayer);
     let mut iNumMbCoded = 0;
     let mut iNextMbIdx = kiSliceFirstMbXY;
@@ -2417,6 +2421,7 @@ pub unsafe fn WelsMdInterMbLoop(
         }
 
         //step (2). save some value for future use, initial pWelsMd
+        let pMbCache = std::ptr::addr_of_mut!((*pSlice).sMbCacheInfo);
         crate::encoder::svc_base_layer_md::WelsMdIntraInit(
             pEncCtx,
             pCurMb,
@@ -2436,6 +2441,11 @@ pub unsafe fn WelsMdInterMbLoop(
                 if let Some(func) = func_list.pfInterMd {
                     func(pEncCtx, pMd, pSlice, pCurMb);
                 }
+                // T9.E7: fresh window — `pfInterMd` goes through the dispatch
+                // slot (q1c cannot attribute it, F111's second limit) and its
+                // type carries `*mut SSlice`, so it is a crossing like any
+                // named callee.
+                let pMbCache = std::ptr::addr_of_mut!((*pSlice).sMbCacheInfo);
 
                 //step (4): save from the MD process for future use
                 {
@@ -2462,6 +2472,7 @@ pub unsafe fn WelsMdInterMbLoop(
                 mb_dump(&*pCurMb, pMd, pSlice);
             }
             //step (5): update cache
+            let pMbCache = std::ptr::addr_of_mut!((*pSlice).sMbCacheInfo);
             UpdateNonZeroCountCache(&*pCurMb, &mut *pMbCache);
 
             let mut iEncReturn = ENC_RETURN_SUCCESS;
@@ -2535,7 +2546,6 @@ pub unsafe fn WelsMdInterMbLoopOverDynamicSlice(
     // S29, both: held across the MB loop, whose callees re-derive the same fields.
     // See `WelsISliceMdEncDynamic` for `sSliceEncCtx`'s red and its invalidator.
     let pSliceCtx = std::ptr::addr_of_mut!((*pCurLayer).sSliceEncCtx);
-    let pMbCache = std::ptr::addr_of_mut!((*pSlice).sMbCacheInfo);
     let pMbList = mb_list_root(pCurLayer);
     let mut iNumMbCoded = 0;
     let kiTotalNumMb: i32 = (*pCurLayer).iMbWidth as i32 * (*pCurLayer).iMbHeight as i32;
@@ -2591,6 +2601,7 @@ pub unsafe fn WelsMdInterMbLoopOverDynamicSlice(
         // step (2): save some values for future use, initialise pWelsMd. Both of
         // these were missing: WelsMdInterInit is what installs the reference-block
         // pointers in pMbCache, so pfInterMd read a null pSample2.
+        let pMbCache = std::ptr::addr_of_mut!((*pSlice).sMbCacheInfo);
         crate::encoder::svc_base_layer_md::WelsMdIntraInit(
             pEncCtx,
             pCurMb,
@@ -2612,6 +2623,10 @@ pub unsafe fn WelsMdInterMbLoopOverDynamicSlice(
                     func(pEncCtx, pMd, pSlice, pCurMb);
                 }
             }
+            // T9.E7: fresh window — `pfInterMd` goes through the dispatch slot
+            // (q1c cannot attribute it, F111's second limit) and its type
+            // carries `*mut SSlice`, so it is a crossing like any named callee.
+            let pMbCache = std::ptr::addr_of_mut!((*pSlice).sMbCacheInfo);
             // step (4): save from the MD process for future use
             {
                 // As above.
@@ -3118,7 +3133,7 @@ pub unsafe fn WelsCodeOneSlice(pEncCtx: *mut sWelsEncCtx, pCurSlice: *mut SSlice
     WelsWriteSliceEndSyn(
         slice_bs_buffer(pEncCtx, std::ptr::addr_of_mut!((*pCurSlice).sSliceBs), (*pCurSlice).uiBufferIdx as usize),
         pBs,
-        pCurSlice,
+        std::ptr::addr_of_mut!((*pCurSlice).sCabacCtx),
         (*ctx_param(pEncCtx)).iEntropyCodingModeFlag != 0,
     );
 
@@ -3144,18 +3159,18 @@ pub unsafe fn WelsCodeOneSlice(pEncCtx: *mut sWelsEncCtx, pCurSlice: *mut SSlice
 pub unsafe fn WelsWriteSliceEndSyn(
     buf: &mut [u8],
     pBs: *mut BsWriter,
-    pSlice: *mut SSlice,
+    pCabacCtx: *mut crate::encoder::set_mb_syn_cabac::SCabacCtx,
     bEntropyCodingModeFlag: bool,
 ) {
     if bEntropyCodingModeFlag {
-        crate::encoder::set_mb_syn_cabac::WelsCabacEncodeFlush(buf, &mut (*pSlice).sCabacCtx);
+        crate::encoder::set_mb_syn_cabac::WelsCabacEncodeFlush(buf, &mut *pCabacCtx);
         // Both coders now count in the same units over the same buffer, so
         // handing the position back is an assignment. This used to be
         // `set_pos(end.offset_from(buf.as_ptr()))` around a pointer the coder
         // had derived from an offset in the first place; `BsWriter::set_pos`
         // existed for this one caller and is deleted with it.
         *pBs = BsWriter::at(crate::encoder::set_mb_syn_cabac::WelsCabacEncodePos(
-            &mut (*pSlice).sCabacCtx,
+            &mut *pCabacCtx,
         ));
     } else {
         crate::encoder::vlc_encoder::BsRbspTrailingBits(buf, &mut *pBs);

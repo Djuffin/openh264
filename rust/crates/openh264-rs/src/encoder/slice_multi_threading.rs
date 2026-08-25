@@ -1383,6 +1383,7 @@ unsafe fn EncodeOneSliceInJob(
     if iReturn != ENC_RETURN_SUCCESS {
         return SliceJobResult { iResult: iReturn, bInitFailed: true };
     }
+    let pSliceBs = std::ptr::addr_of_mut!((*pSlice).sSliceBs);
     (*pSliceBs).sBsWrite = BsWriter::new();
     let iSliceStart = if bRecordsTime { WelsTime() } else { 0 };
 
@@ -1391,12 +1392,14 @@ unsafe fn EncodeOneSliceInJob(
         if bNeedPrefix {
             WritePrefixNalForSlice(pCtx, pSlice, pSliceBs, eNalRefIdc, eNalType);
         }
+        let pSliceBs = std::ptr::addr_of_mut!((*pSlice).sSliceBs);
         WelsLoadNalForSlice(pSliceBs, eNalType as i32, eNalRefIdc as i32);
         debug_assert_eq!(iSliceIdx, (*pSlice).iSliceIdx);
         let mut iReturn = WelsCodeOneSlice(pCtx, pSlice, eNalType as i32);
         if ENC_RETURN_SUCCESS != iReturn {
             return iReturn;
         }
+        let pSliceBs = std::ptr::addr_of_mut!((*pSlice).sSliceBs);
         WelsUnloadNalForSlice(pSliceBs);
 
         let mut iSliceSize = 0i32;
@@ -1597,11 +1600,11 @@ unsafe fn EncodeOnePartitionSizeLimited(
     if iReturn != ENC_RETURN_SUCCESS {
         return SliceJobResult { iResult: iReturn, bInitFailed: true };
     }
-    let mut pSliceBs = std::ptr::addr_of_mut!((*pSlice).sSliceBs);
     iReturn = SetSliceBoundaryInfo(current_layer(pCtx), pSlice, iPartitionIdx);
     if iReturn != ENC_RETURN_SUCCESS {
         return SliceJobResult { iResult: iReturn, bInitFailed: true };
     }
+    let pSliceBs = std::ptr::addr_of_mut!((*pSlice).sSliceBs);
     (*pSliceBs).sBsWrite = BsWriter::new();
     // `CWelsConstrainedSizeSlicingEncodingTask` derives from the load-balancing task,
     // not from `CWelsSliceEncodingTask`, so it stamps the slice time *unconditionally*
@@ -1669,12 +1672,13 @@ unsafe fn EncodeOnePartitionSizeLimited(
                 return iRet;
             }
             pSlice = pNext;
-            pSliceBs = std::ptr::addr_of_mut!((*pSlice).sSliceBs);
+            let pSliceBs = std::ptr::addr_of_mut!((*pSlice).sSliceBs);
             (*pSliceBs).sBsWrite = BsWriter::new();
 
             if bNeedPrefix {
                 WritePrefixNalForSlice(pCtx, pSlice, pSliceBs, eNalRefIdc, eNalType);
             }
+            let pSliceBs = std::ptr::addr_of_mut!((*pSlice).sSliceBs);
             WelsLoadNalForSlice(pSliceBs, eNalType as i32, eNalRefIdc as i32);
 
             debug_assert_eq!(iLocalSliceIdx, (*pSlice).iSliceIdx);
@@ -1682,6 +1686,7 @@ unsafe fn EncodeOnePartitionSizeLimited(
             if ENC_RETURN_SUCCESS != iRet {
                 return iRet;
             }
+            let pSliceBs = std::ptr::addr_of_mut!((*pSlice).sSliceBs);
             WelsUnloadNalForSlice(pSliceBs);
 
             let mut iSliceSize = 0i32;

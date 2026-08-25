@@ -981,7 +981,15 @@ pub unsafe fn WelsMdInterInit(
         &mut *pMbCache,
         pCurMb,
         kiMbWidth,
-        (*ctx_vaa(pEncCtx)).pVaaBackgroundMbFlag.as_mut_ptr().add(kiMbXY as usize),
+        {
+            // T9.E8 (F132 round 8): `Vec::as_mut_ptr` autorefs `&mut` on the
+            // SHARED VAA struct's vector — a retag-write every worker makes per
+            // macroblock, the race the fixed-slice probe stopped on once round
+            // 7 was closed. F71's spelling reads the header through `addr_of!`
+            // and never retags it (thread_bs_buffer's pattern).
+            let v = std::ptr::addr_of!((*ctx_vaa(pEncCtx)).pVaaBackgroundMbFlag);
+            (*v).as_ptr().add(kiMbXY as usize) as *mut i8
+        },
         layer_rec_view(pCurLayer)
             .expect("the layer's reconstruction picture is bound")
             .mb_skip_sad(),
@@ -1202,11 +1210,11 @@ pub unsafe extern "C" fn WelsMdInterFinePartitionVaa(
     let uiMbSign = (*ctx_func_list(pEncCtx))
         .pfGetMbSignFromInterVaa
         .expect("pfGetMbSignFromInterVaa unset")(
-        (*ctx_vaa(pEncCtx))
-            .sVaaCalcInfo
-            .pSad8x8
-            .as_mut_ptr()
-            .add((*pCurMb).iMbXY as usize) as *mut i32,
+        {
+            // T9.E8, as the background-flag mint above (F132 round 8's class).
+            let v = std::ptr::addr_of!((*ctx_vaa(pEncCtx)).sVaaCalcInfo.pSad8x8);
+            (*v).as_ptr().add((*pCurMb).iMbXY as usize) as *mut i32
+        },
     );
 
     if crate::encoder::dump_enabled(&FP_DUMP, "OH264_FPDUMP") {
@@ -1981,6 +1989,7 @@ pub unsafe extern "C" fn WelsMdInterMb(
             return;
         }
     } else {
+        let pMbCache = std::ptr::addr_of_mut!((*pSlice).sMbCacheInfo);
         PredictSad(
             (*pMbCache).sMvComponents.iRefIndexCache.as_mut_ptr(),
             (*pMbCache).iSadCost.as_mut_ptr(),
@@ -2070,6 +2079,7 @@ pub unsafe fn WelsMdInterEncode(
     // init, so a fixed-size site may call the kernel directly, byte-identically.
     let view = layer_rec_view(pCurDqLayer)
         .expect("the layer's reconstruction view is built for this frame");
+    let pMbCache = std::ptr::addr_of_mut!((*pSlice).sMbCacheInfo);
     let (lx, ly) = (*pMbCache).SPicData.luma_origin();
     let (cx, cy) = (*pMbCache).SPicData.chroma_origin();
     let kiLumaOff = mem_pred_luma_off((*pMbCache).uiMemPredLumaHalf);

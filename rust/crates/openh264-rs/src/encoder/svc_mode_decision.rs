@@ -412,12 +412,14 @@ pub unsafe extern "C" fn WelsMdInterSecondaryModesEnc(
         )(pEncCtx, pWelsMd, pSlice, pCurMb, (*pWelsMd).iCostLuma);
 
         //refinement for inter type
+        let pMbCache = std::ptr::addr_of_mut!((*pSlice).sMbCacheInfo);
         crate::encoder::svc_base_layer_md::WelsMdInterMbRefinement(pEncCtx, pWelsMd, pCurMb, &mut *pMbCache);
 
         //step 7: invoke encoding
         crate::encoder::svc_base_layer_md::WelsMdInterEncode(pEncCtx, pSlice, pCurMb);
 
         //step 8: double check Pskip
+        let pMbCache = std::ptr::addr_of_mut!((*pSlice).sMbCacheInfo);
         crate::encoder::svc_base_layer_md::WelsMdInterDoubleCheckPskip(pCurMb, &mut *pMbCache);
     }
 }
@@ -751,6 +753,7 @@ pub unsafe extern "C" fn WelsMdBackgroundMbEnc(
     // the other 16 light the family without refereeing it.
     let view = layer_rec_view(pCurDqLayer)
         .expect("the layer's reconstruction view is built for this frame");
+    let pMbCache = std::ptr::addr_of_mut!((*pSlice).sMbCacheInfo);
     let (lx, ly) = (*pMbCache).SPicData.luma_origin();
     let (cx, cy) = (*pMbCache).SPicData.chroma_origin();
     let kiLumaOff = mem_pred_luma_off((*pMbCache).uiMemPredLumaHalf);
@@ -1545,6 +1548,7 @@ pub unsafe extern "C" fn WelsMdSpatialelInterMbIlfmdNoilp(
 
     if !IS_SVC_INTRA(kuiRefMbType) {
         if !bSkip {
+            let pMbCache = std::ptr::addr_of_mut!((*pSlice).sMbCacheInfo);
             PredictSad(
                 (*pMbCache).sMvComponents.iRefIndexCache.as_mut_ptr(),
                 (*pMbCache).iSadCost.as_mut_ptr(),
@@ -1561,6 +1565,7 @@ pub unsafe extern "C" fn WelsMdSpatialelInterMbIlfmdNoilp(
         WelsMdInterSecondaryModesEnc(pEncCtx, pWelsMd, pSlice, &mut *pCurMb, bSkip);
     } else {
         // Base layer is Intra (BLMODE == SVC_INTRA)
+        let pMbCache = std::ptr::addr_of_mut!((*pSlice).sMbCacheInfo);
         let kiCostI16x16 = WelsMdI16x16(
             &*ctx_func_list(pEncCtx),
             current_layer(pEncCtx),
@@ -1573,6 +1578,7 @@ pub unsafe extern "C" fn WelsMdSpatialelInterMbIlfmdNoilp(
             (*pWelsMd).iCostLuma = kiCostI16x16;
             (*pCurMb).uiMbType = MB_TYPE_INTRA16x16;
 
+            let pMbCache = std::ptr::addr_of_mut!((*pSlice).sMbCacheInfo);
             WelsMdIntraSecondaryModesEnc(pEncCtx, pWelsMd, &mut *pCurMb, &mut *pMbCache);
         }
     }
@@ -1603,7 +1609,7 @@ pub unsafe extern "C" fn WelsMdInterMbEnhancelayer(
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe fn GetChromaCost(
-    pCalculateFunc: *mut Option<PSampleSadSatdCostFuncRaw>,
+    pCalculateFunc: *const Option<PSampleSadSatdCostFuncRaw>,
     pSrcChroma: *mut u8,
     iSrcStride: i32,
     pRefChroma: *mut u8,
@@ -1645,7 +1651,11 @@ pub unsafe fn CheckChromaCost(
     pMbCache: &mut SMbCache,
     iCurMbXy: i32,
 ) -> bool {
-    let pSad = (*ctx_func_list(pEncCtx)).sSampleDealingFuncs.pfSampleSadRaw.as_mut_ptr();
+    // T9.E8 (F132 round 8's class): the array method autorefs `&mut` on the
+    // SHARED function list, per macroblock, on every worker — and this body
+    // only reads the slots. `addr_of!` reads without retagging.
+    let pSad = std::ptr::addr_of!((*ctx_func_list(pEncCtx)).sSampleDealingFuncs.pfSampleSadRaw)
+        .cast::<Option<crate::encoder::md::PSampleSadSatdCostFuncRaw>>();
     let pCurDqLayer = current_layer(pEncCtx);
 
     let pCbEnc = (*pMbCache).SPicData.pEncMb[1];
@@ -1697,7 +1707,11 @@ pub unsafe extern "C" fn WelsMdInterJudgeBGDPskip(
 
     let kiRefMbQp = (&layer_ref_pic(pCurDqLayer).expect("bound").pRefMbQp)[(*pCurMb).iMbXY as usize] as i32;
     let kiCurMbQp = (*pCurMb).uiLumaQp as i32;
-    let pVaaBgMbFlag = (*ctx_vaa(pEncCtx)).pVaaBackgroundMbFlag.as_mut_ptr().add((*pCurMb).iMbXY as usize);
+    // T9.E8, as svc_base_layer_md's mint (F132 round 8's class).
+    let pVaaBgMbFlag = {
+        let v = std::ptr::addr_of!((*ctx_vaa(pEncCtx)).pVaaBackgroundMbFlag);
+        (*v).as_ptr().add((*pCurMb).iMbXY as usize) as *mut i8
+    };
 
     let kiMbWidth: isize = (*pCurDqLayer).iMbWidth as isize;
 
@@ -2123,6 +2137,7 @@ pub unsafe extern "C" fn SvcMdSCDMbEnc(
     (*pCurMb).uiMbType = MB_TYPE_16x16;
 
     (*pWelsMd).sMe.sMe16x16.sMv = sCandidateMv;
+    let pMbCache = std::ptr::addr_of_mut!((*pSlice).sMbCacheInfo);
     PredMv(
         &(*pMbCache).sMvComponents,
         0,
@@ -2152,6 +2167,7 @@ pub unsafe extern "C" fn SvcMdSCDMbEnc(
         pCurMb,
     );
 
+    let pMbCache = std::ptr::addr_of_mut!((*pSlice).sMbCacheInfo);
     if let Some(copy16) = (*pFunc).pfCopy16x16Aligned {
         copy16(
             (*pMbCache).SPicData.pCsMb[0],
@@ -2429,6 +2445,7 @@ pub unsafe extern "C" fn WelsMdInterFinePartitionVaaOnScreen(
         iBestCost = iCostP8x8;
         (*pCurMb).uiMbType = MB_TYPE_8x8;
         (*pCurMb).uiSubMbType = [SUB_MB_TYPE_8x8; 4];
+        let pMbCache = std::ptr::addr_of_mut!((*pSlice).sMbCacheInfo);
         TryModeMerge(&mut *pMbCache, pWelsMd, pCurMb);
     }
     (*pWelsMd).iCostLuma = iBestCost;
