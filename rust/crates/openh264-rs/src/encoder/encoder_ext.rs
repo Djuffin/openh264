@@ -2756,7 +2756,6 @@ pub unsafe fn PrepareEncodeFrame(
     uiTimeStamp: i64,
 ) -> EVideoFrameType {
     let pSvcParam = ctx_param(pCtx);
-    let pSpatialIndexMap = (*pCtx).sSpatialIndexMap.as_ptr();
 
     let bSkipFrameFlag = crate::encoder::rc::WelsRcCheckFrameStatus(
         pCtx,
@@ -2780,7 +2779,11 @@ pub unsafe fn PrepareEncodeFrame(
             pfRc.WelsUpdateBufferWhenSkip(pCtx, *iCurDid as i32);
         } else {
             for i in 0..iSpatialNum as usize {
-                pfRc.WelsUpdateBufferWhenSkip(pCtx, (*pSpatialIndexMap.add(i)).iDid);
+                // T9.G2, with `WelsEncoderEncodeExt`'s: the cursor is gone and the
+                // index is read at the use. Hoisted as well — `WelsUpdateBufferWhenSkip`
+                // takes the ctx retag and this argument reads through the same ctx.
+                let iDid = (*pCtx).sSpatialIndexMap[i].iDid;
+                pfRc.WelsUpdateBufferWhenSkip(pCtx, iDid);
             }
         }
     } else {
@@ -3253,8 +3256,9 @@ pub unsafe fn WelsEncoderEncodeExt(
         (*pFbi).sLayerInfo[iNalIdx].iNalCount = 0;
     }
 
-    // Derived after the reset loop above, for the same reason `pSpatialIndexMap`
-    // is derived after `BuildSpatialPicList`: that loop **writes**
+    // Derived after the reset loop above, for the reason `pSpatialIndexMap` used to
+    // be derived after `BuildSpatialPicList` (T9.G2 retired that binding): the loop
+    // above **writes**
     // `(*pFbi).sLayerInfo[..]` through `pFbi`, and a write through the parent pops
     // a child taken before it. Every use of this cursor is below.
     // T9.E7: `addr_of_mut!`, not `as_mut_ptr()` — the array method autorefs
@@ -3284,18 +3288,24 @@ pub unsafe fn WelsEncoderEncodeExt(
         return ENC_RETURN_SUCCESS;
     }
 
-    // Derived here rather than at the top of the function, and the order is the
-    // fix: `BuildSpatialPicList` above **writes** this array (through
-    // `wels_preprocess.rs`'s `(*pEncCtx).sSpatialIndexMap[idx].iDid = ...`), and a
-    // write through the parent pops a `SharedReadOnly` child taken before it. S29's
-    // own boundary clause — the spelling rescues derivations through a raw parent,
-    // but only ordering rescues one the parent then writes through. Every use of
-    // this pointer is below. Found by the encoder aliasing probe, Phase 6 session A.
-    let pSpatialIndexMap = (*pCtx).sSpatialIndexMap.as_ptr();
+    // **`pSpatialIndexMap` stood here — T9.G2, the largest single item in the ctx
+    // hazard campaign.** It was `(*pCtx).sSpatialIndexMap.as_ptr()`, held from here
+    // to the end of the function across every context call in between: **58 of the
+    // 131 live shape-A hazards in the whole encoder** (`phase9_ctx_join.py`), one
+    // binding.
+    //
+    // Phase 6 session A had already been forced to move its *derivation* down here,
+    // because `BuildSpatialPicList` above writes the array through the parent and a
+    // write through the parent pops a `SharedReadOnly` child taken before it (S29's
+    // boundary clause). That fix bought the derivation order and left the holding.
+    // Deriving at each use — which is what `rc.rs:1881` and its four siblings have
+    // always done for this same field — buys both, and needs no ordering argument at
+    // all: `sSpatialIndexMap` is an inline `[SSpatialPicIndex; 4]` in the context,
+    // so an index is a field read, not a cursor.
     crate::encoder::encoder_context::InitBitStream(pCtx);
     (*pLayerBsInfo).pBsBuf = ctx_frame_bs(pCtx);
     (*pLayerBsInfo).pNalLengthInByte = (*(*pCtx).pOut).sNalLen.as_mut_ptr();
-    iCurDid = (*pSpatialIndexMap).iDid as i8;
+    iCurDid = (*pCtx).sSpatialIndexMap[0].iDid as i8;
     set_current_layer(pCtx, Some(LayerIdx(iCurDid as u8)));
     (*current_layer(pCtx)).pRefLayer = None;
 
@@ -3333,7 +3343,7 @@ pub unsafe fn WelsEncoderEncodeExt(
     }
 
     while iSpatialIdx < iSpatialNum {
-        iCurDid = (*pSpatialIndexMap.add(iSpatialIdx as usize)).iDid as i8;
+        iCurDid = (*pCtx).sSpatialIndexMap[iSpatialIdx as usize].iDid as i8;
         // S29 / F13's family (the encode probe's sixth red, session B): `addr_of_mut!`
         // on the element — `as_mut_ptr().add()` reborrowed the whole array, and the
         // `.iPOC` reads below re-derived it and popped these.
@@ -3373,7 +3383,7 @@ pub unsafe fn WelsEncoderEncodeExt(
         // the use is the ordering that holds however the calls are rearranged. The
         // binding above stays correct for `iDecompositionStages`, read before any
         // of them. Found by the encoder aliasing probe, Phase 6 session A.
-        let idEncPic = (*pSpatialIndexMap.add(iSpatialIdx as usize))
+        let idEncPic = (*pCtx).sSpatialIndexMap[iSpatialIdx as usize]
             .pSrc
             .expect("the spatial index map names a live source picture");
         (*pCtx).pEncPic = Some(idEncPic);
@@ -4002,8 +4012,11 @@ pub unsafe fn WelsEncoderEncodeExt(
         iSpatialIdx += 1;
 
         if (iCurDid as i32) + 1 < (*pSvcParam).iSpatialLayerNum {
-            // iSpatialIdx has already been incremented, so this points at the next layer
-            WelsSwapDqLayers(pCtx, (*pSpatialIndexMap.add(iSpatialIdx as usize)).iDid);
+            // iSpatialIdx has already been incremented, so this points at the next layer.
+            // Hoisted: `WelsSwapDqLayers` takes the ctx retag and this argument reads
+            // through the same ctx (shape B).
+            let iNextDid = (*pCtx).sSpatialIndexMap[iSpatialIdx as usize].iDid;
+            WelsSwapDqLayers(pCtx, iNextDid);
         }
 
         if (*(*pCtx).pVpp).UpdateSpatialPictures(pCtx, pSvcParam, iCurTid as i8, iCurDid as i32) != 0 {
@@ -4034,7 +4047,15 @@ pub unsafe fn WelsEncoderEncodeExt(
     }
 
     if ENC_RETURN_CORRECTED == (*pCtx).iEncoderError {
-        let iDid = (*pSpatialIndexMap.add(iSpatialIdx as usize)).iDid;
+        // **`iSpatialIdx == iSpatialNum` here** — the loop above ran to completion —
+        // so with 4 spatial layers configured this reads **one past the end** of a
+        // `[SSpatialPicIndex; 4]`. Upstream does the identical thing at
+        // `encoder_ext.cpp:4109-4110` (`(pSpatialIndexMap + iSpatialIdx)->iDid`,
+        // twice), so the port reproduces it rather than fixing it: an index would
+        // panic where this reads, and a panic is not byte-identical. F162.
+        // Spelled through a derivation that lives and dies inside this statement, so
+        // nothing is held across the two calls below — which is the whole hazard.
+        let iDid = (*(*pCtx).sSpatialIndexMap.as_ptr().add(iSpatialIdx as usize)).iDid;
         (*(*pCtx).pVpp).UpdateSpatialPictures(pCtx, pSvcParam, iCurTid as i8, iDid);
         crate::encoder::wels_encoder_ext::ForceCodingIDR(pCtx, iDid);
         // the above sets the next frame to IDR
