@@ -11,4 +11,4 @@
 # lane-vs-lane and the 1.3x tripwire means what S61 intends.
 #
 # Format: <seconds> <commit> <date> <note>
-1012 08c98c47 2026-08-23 session-C-close-serial-regime-last-verified-close-F140
+517 59c17abc 2026-08-24 session-E-close-first-parallel-lane-regime-close-D-gate-6-7
