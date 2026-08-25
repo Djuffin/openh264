@@ -1624,19 +1624,16 @@ pub unsafe extern "C" fn WelsMdInterMbEnhancelayer(
 // ============================================================================
 
 #[inline(always)]
-/// `svc_mode_decision.cpp:161`. Every pointer is non-const in C++.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn GetChromaCost(
-    pCalculateFunc: *const Option<PSampleSadSatdCostFuncRaw>,
-    pSrcChroma: *mut u8,
-    iSrcStride: i32,
-    pRefChroma: *mut u8,
-    iRefStride: i32,
+/// `svc_mode_decision.cpp:161`. Every pointer is non-const in C++; the port
+/// passes the selected safe cost slot and the two chroma cursors (session F —
+/// the last interior pointer into the cost tables went with the raw triple).
+pub fn GetChromaCost(
+    pSad: Option<crate::encoder::md::PSampleSadSatdCostFunc>,
+    cSrcChroma: &crate::safe::plane::PlaneCursor<'_>,
+    cRefChroma: &crate::safe::plane::PlaneCursor<'_>,
 ) -> i32 {
-    let func = *pCalculateFunc.add(BLOCK_8x8);
-    if let Some(f) = func {
-        f(pSrcChroma, iSrcStride, pRefChroma, iRefStride)
+    if let Some(f) = pSad {
+        f(cSrcChroma, cRefChroma)
     } else {
         0
     }
@@ -1670,24 +1667,29 @@ pub unsafe fn CheckChromaCost(
     pMbCache: &mut SMbCache,
     iCurMbXy: i32,
 ) -> bool {
-    // T9.E7 (F132 round 8's class): the array method autorefs `&mut` on the
-    // SHARED function list, per macroblock, on every worker — and this body
-    // only reads the slots. `addr_of!` reads without retagging.
-    let pSad = std::ptr::addr_of!((*ctx_func_list(pEncCtx)).sSampleDealingFuncs.pfSampleSadRaw)
-        .cast::<Option<crate::encoder::md::PSampleSadSatdCostFuncRaw>>();
+    // T9.E7's `addr_of!` interior pointer retired with the raw table (session
+    // F): a plain place-projection copy of the safe slot reads without any
+    // autoref, and the chroma positions come from the carrier coordinates —
+    // the stamped `SPicData.pEncMb[1]`/`pRefMb[1]` were exactly
+    // plane-root + ((iMbX + iMbY*stride) << 3), T9.B30's identity.
+    let pSad = (*ctx_func_list(pEncCtx)).sSampleDealingFuncs.pfSampleSad[BLOCK_8x8];
     let pCurDqLayer = current_layer(pEncCtx);
 
-    let pCbEnc = (*pMbCache).SPicData.pEncMb[1];
-    let pCrEnc = (*pMbCache).SPicData.pEncMb[2];
-    let pCbRef = (*pMbCache).SPicData.pRefMb[1];
-    let pCrRef = (*pMbCache).SPicData.pRefMb[2];
+    let kiMbXChroma = ((*pMbCache).SPicData.iMbX as isize) << 3;
+    let kiMbYChroma = ((*pMbCache).SPicData.iMbY as isize) << 3;
+    let pEncPicture = layer_enc_pic(pCurDqLayer).expect("the layer's source picture is bound");
+    let pRefPicture = layer_ref_pic(pCurDqLayer).expect("the layer's reference picture is bound");
 
-    let iCbEncStride = (*pCurDqLayer).iEncStride[1];
-    let iCrEncStride = (*pCurDqLayer).iEncStride[2];
-    let iChromaRefStride = (*pCurDqLayer).sRefPicView.sPlanes.iLineSize[1];
-
-    let iCbSad = GetChromaCost(pSad, pCbEnc, iCbEncStride, pCbRef, iChromaRefStride);
-    let iCrSad = GetChromaCost(pSad, pCrEnc, iCrEncStride, pCrRef, iChromaRefStride);
+    let iCbSad = GetChromaCost(
+        pSad,
+        &pEncPicture.plane(1).cursor(kiMbXChroma, kiMbYChroma),
+        &pRefPicture.plane(1).cursor(kiMbXChroma, kiMbYChroma),
+    );
+    let iCrSad = GetChromaCost(
+        pSad,
+        &pEncPicture.plane(2).cursor(kiMbXChroma, kiMbYChroma),
+        &pRefPicture.plane(2).cursor(kiMbXChroma, kiMbYChroma),
+    );
 
     let bChromaTooLarge = iCbSad > KNOWN_CHROMA_TOO_LARGE || iCrSad > KNOWN_CHROMA_TOO_LARGE;
     let iChromaSad = iCbSad + iCrSad;
@@ -1863,18 +1865,13 @@ pub unsafe fn IsMbScrolledStatic(pBlockType: *const i32) -> bool {
 // one of the 48 `bg` rows, including the row where `WelsMdBackgroundMbEnc` entered
 // 5771 times. This is Phase 10's family, and the retag says so rather than leaving it
 // filed under Phase 9's port-raw backlog where it reads as pending work.
-// unsafe-cat: SCREEN_CONTENT(dormant)
-#[allow(unsafe_code)]
-pub unsafe fn CalUVSadCost(
-    pFunc: &SWelsFuncPtrList,
-    pEncOri: *mut u8,
-    iStrideUV: i32,
-    pRefOri: *mut u8,
-    iRefLineSize: i32,
+pub fn CalUVSadCost(
+    sdf: &crate::encoder::md::SSampleDealingFunc,
+    cEncOri: &crate::safe::plane::PlaneCursor<'_>,
+    cRefOri: &crate::safe::plane::PlaneCursor<'_>,
 ) -> i32 {
-    let f = pFunc.sSampleDealingFuncs.pfSampleSadRaw[BLOCK_8x8];
-    if let Some(sad_func) = f {
-        sad_func(pEncOri, iStrideUV, pRefOri, iRefLineSize)
+    if let Some(sad_func) = sdf.pfSampleSad[BLOCK_8x8] {
+        sad_func(cEncOri, cRefOri)
     } else {
         0
     }
@@ -1924,28 +1921,27 @@ pub unsafe extern "C" fn JudgeStaticSkip(
 
     let mut bTryStaticSkip = IsMbCollocatedStatic((*pWelsMd).iBlock8x8StaticIdc.as_ptr());
     if bTryStaticSkip {
-        let pFunc = ctx_func_list(pEncCtx);
-        let pRefOri = (*pCurDqLayer).pRefOri[0]
-            .and_then(|r| crate::encoder::svc_encode_slice::ctx_pic_ref_mut(pEncCtx, r))
-            .map(|p| p.planes());
-        if let Some(pRefOri) = pRefOri {
-            let iStrideUV = (*pCurDqLayer).iEncStride[1];
-            let iOffsetUV = (kiMbX + kiMbY * iStrideUV) << 3;
+        // Session F: the shared picture route (`ctx_pic_ref` + plane cursors)
+        // replaces the `ctx_pic_ref_mut(..).planes()` whole-picture retag F121
+        // named live-as-code — and the raw-table read goes with the triple.
+        let sdf = &(*ctx_func_list(pEncCtx)).sSampleDealingFuncs;
+        let pRefOriPic = (*pCurDqLayer).pRefOri[0]
+            .and_then(|r| crate::encoder::svc_encode_slice::ctx_pic_ref(pEncCtx, r));
+        if let Some(pRefOriPic) = pRefOriPic {
+            let pEncPicture = layer_enc_pic(pCurDqLayer).expect("the layer's source picture is bound");
+            let kiCx = (kiMbX as isize) << 3;
+            let kiCy = (kiMbY as isize) << 3;
 
             let iSadCostCb = CalUVSadCost(
-                &*pFunc,
-                (*pMbCache).SPicData.pEncMb[1],
-                iStrideUV,
-                pRefOri.pData[1].offset(iOffsetUV as isize),
-                pRefOri.iLineSize[1],
+                sdf,
+                &pEncPicture.plane(1).cursor(kiCx, kiCy),
+                &pRefOriPic.plane(1).cursor(kiCx, kiCy),
             );
             if iSadCostCb == 0 {
                 let iSadCostCr = CalUVSadCost(
-                    &*pFunc,
-                    (*pMbCache).SPicData.pEncMb[2],
-                    iStrideUV,
-                    pRefOri.pData[2].offset(iOffsetUV as isize),
-                    pRefOri.iLineSize[1],
+                    sdf,
+                    &pEncPicture.plane(2).cursor(kiCx, kiCy),
+                    &pRefOriPic.plane(2).cursor(kiCx, kiCy),
                 );
                 bTryStaticSkip = iSadCostCr == 0;
             } else {
@@ -1993,35 +1989,32 @@ pub unsafe extern "C" fn JudgeScrollSkip(
     }
 
     if bTryScrollSkip {
-        let pFunc = ctx_func_list(pEncCtx);
-        let pRefOri = (*pCurDqLayer).pRefOri[0]
-            .and_then(|r| crate::encoder::svc_encode_slice::ctx_pic_ref_mut(pEncCtx, r))
-            .map(|p| p.planes());
-        if let Some(pRefOri) = pRefOri {
+        // Session F: as JudgeStaticSkip — shared picture route, safe cost slot.
+        let sdf = &(*ctx_func_list(pEncCtx)).sSampleDealingFuncs;
+        let pRefOriPic = (*pCurDqLayer).pRefOri[0]
+            .and_then(|r| crate::encoder::svc_encode_slice::ctx_pic_ref(pEncCtx, r));
+        if let Some(pRefOriPic) = pRefOriPic {
             let iScrollMvX = (*pVaaExt).sScrollDetectInfo.iScrollMvX;
             let iScrollMvY = (*pVaaExt).sScrollDetectInfo.iScrollMvY;
             if CheckBorder(kiMbX, kiMbY, iScrollMvX, iScrollMvY, kiMbWidth, kiMbHeight) {
                 bTryScrollSkip = false;
             } else {
-                let iStrideUV = (*pCurDqLayer).iEncStride[1];
-                let iOffsetUV = (kiMbX << 3)
-                    + (iScrollMvX >> 1)
-                    + (((kiMbY << 3) + (iScrollMvY >> 1)) * iStrideUV);
+                let pEncPicture = layer_enc_pic(pCurDqLayer).expect("the layer's source picture is bound");
+                let kiCx = (kiMbX as isize) << 3;
+                let kiCy = (kiMbY as isize) << 3;
+                let kiRx = kiCx + (iScrollMvX >> 1) as isize;
+                let kiRy = kiCy + (iScrollMvY >> 1) as isize;
 
                 let iSadCostCb = CalUVSadCost(
-                    &*pFunc,
-                    (*pMbCache).SPicData.pEncMb[1],
-                    iStrideUV,
-                    pRefOri.pData[1].offset(iOffsetUV as isize),
-                    pRefOri.iLineSize[1],
+                    sdf,
+                    &pEncPicture.plane(1).cursor(kiCx, kiCy),
+                    &pRefOriPic.plane(1).cursor(kiRx, kiRy),
                 );
                 if iSadCostCb == 0 {
                     let iSadCostCr = CalUVSadCost(
-                        &*pFunc,
-                        (*pMbCache).SPicData.pEncMb[2],
-                        iStrideUV,
-                        pRefOri.pData[2].offset(iOffsetUV as isize),
-                        pRefOri.iLineSize[1],
+                        sdf,
+                        &pEncPicture.plane(2).cursor(kiCx, kiCy),
+                        &pRefOriPic.plane(2).cursor(kiRx, kiRy),
                     );
                     bTryScrollSkip = iSadCostCr == 0;
                 } else {
@@ -2129,13 +2122,23 @@ pub unsafe extern "C" fn SvcMdSCDMbEnc(
     (*pCurMb).uiCbp = 0;
     (*pWelsMd).iCostLuma = 0;
 
-    let sad_16x16 = (*pFunc).sSampleDealingFuncs.pfSampleSadRaw[BLOCK_16x16].unwrap();
-    let sad_cost = sad_16x16(
-        (*pMbCache).SPicData.pEncMb[0],
-        (*pCurDqLayer).iEncStride[0],
-        pRefLuma.offset(iOffsetY as isize),
-        iLineSizeY,
-    );
+    // Session F: the safe cost slot and the carrier coordinates replace the
+    // raw table and the stamped cursors (`pRefMb[0] + iOffsetY` was the ref
+    // plane at MB origin + integer candidate MV — the verified identity).
+    let sad_16x16 = (*pFunc).sSampleDealingFuncs.pfSampleSad[BLOCK_16x16].unwrap();
+    let kiMbXLuma = ((*pMbCache).SPicData.iMbX as isize) << 4;
+    let kiMbYLuma = ((*pMbCache).SPicData.iMbY as isize) << 4;
+    let sad_cost = {
+        let pEncPicture = layer_enc_pic(pCurDqLayer).expect("the layer's source picture is bound");
+        let pRefPicture = layer_ref_pic(pCurDqLayer).expect("the layer's reference picture is bound");
+        sad_16x16(
+            &pEncPicture.plane(0).cursor(kiMbXLuma, kiMbYLuma),
+            &pRefPicture.plane(0).cursor(
+                kiMbXLuma + ((sCandidateMv.iMvX as isize) >> 2),
+                kiMbYLuma + ((sCandidateMv.iMvY as isize) >> 2),
+            ),
+        )
+    };
     (*pCurMb).iSadCost = sad_cost;
     (*pWelsMd).iCostSkipMb = sad_cost;
 
@@ -2174,11 +2177,11 @@ pub unsafe extern "C" fn SvcMdSCDMbEnc(
     if (*pWelsMd).bMdUsingSad {
         (*pWelsMd).iCostLuma = (*pCurMb).iSadCost;
     } else {
+        let pEncPicture = layer_enc_pic(pCurDqLayer).expect("the layer's source picture is bound");
+        let pRefPicture = layer_ref_pic(pCurDqLayer).expect("the layer's reference picture is bound");
         (*pWelsMd).iCostLuma = sad_16x16(
-            (*pMbCache).SPicData.pEncMb[0],
-            (*pCurDqLayer).iEncStride[0],
-            pRefLuma,
-            iLineSizeY,
+            &pEncPicture.plane(0).cursor(kiMbXLuma, kiMbYLuma),
+            &pRefPicture.plane(0).cursor(kiMbXLuma, kiMbYLuma),
         );
     }
 
