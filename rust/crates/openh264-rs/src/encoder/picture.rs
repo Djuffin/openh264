@@ -274,6 +274,27 @@ impl SPicture {
         plane.root_ptr().wrapping_add(origin)
     }
 
+    /// [`data_ptr`](Self::data_ptr) through `&self` — the **in-fork** form
+    /// (Phase 9 E3, the `sRefPicView` harvest).
+    ///
+    /// The reference picture's plane origins used to be copied onto the layer
+    /// once per frame (`SRefPicView`) exactly because resolving them per call
+    /// needed `&mut SPicture` — a fresh whole-picture exclusive retag every
+    /// worker would perform (F73's shape). With the root read through `&self`
+    /// ([`PaddedPlane::root_ptr_shared`], F71) the per-call resolution is a
+    /// shared read of a pre-fork-stamped pool picture, which is what every
+    /// in-frame consumer of the reference actually does. Same address, same
+    /// whole-plane provenance (S28), null when the plane is unallocated.
+    #[inline]
+    pub fn data_ptr_shared(&self, i: usize) -> *mut u8 {
+        let plane = &self.planes[i];
+        if plane.is_empty() {
+            return std::ptr::null_mut();
+        }
+        let origin = plane.origin();
+        plane.root_ptr_shared().wrapping_add(origin)
+    }
+
     /// Plane `i`'s stride — the C++'s `iLineSize[i]`.
     #[inline]
     pub fn stride(&self, i: usize) -> i32 {
@@ -423,42 +444,19 @@ impl Default for PicPlanes {
     }
 }
 
-/// A reference or reconstruction picture **as one frame sees it** — the plane roots,
-/// the strides, the picture type, and the dormant screen-feature slot.
-///
-/// **T6.F5, and it is `pEncData`/`pCsData`'s own treatment applied to the other two
-/// pictures.** The picture-id flip made every per-macroblock read of a stride or a
-/// plane root resolve a handle through a pool: read the `Option`, read the layer's
-/// reference list, null-check it, bounds-check the slot, and follow `Vec` → `Box` →
-/// `SPicture`. That is five dependent loads where the C++ has one, at roughly forty
-/// sites inside the macroblock loop, and it **measured**: +1.45% median on the encode
-/// bench, against a +0.00% null (session F's span attribution).
-///
-/// A reference picture does not move for the duration of a frame, which is exactly
-/// why the layer already carries `pEncData`/`pCsData` as raw cursors re-derived once
-/// a frame. This is the same fact stated for the other two pictures: stamped by
-/// `WelsInitCurrentLayer`, read as plain fields, and **the handle stays the truth** —
-/// `pRefPic`/`pDecPic` are still `Option<RecPicId>` and every access that needs the
-/// picture *itself* (the four per-macroblock side arrays) still resolves it.
-#[derive(Clone, Copy, Debug, Default)]
-pub struct SRefPicView {
-    pub sPlanes: PicPlanes,
-    pub iPictureType: i32,
-    // SCREEN_CONTENT(dormant: Phase 10)
-    pub pScreenBlockFeatureStorage: *mut SScreenBlockFeatureStorage,
-}
-
-impl SPicture {
-    /// This picture's per-frame view — see [`SRefPicView`].
-    #[inline]
-    pub fn view(&mut self) -> SRefPicView {
-        SRefPicView {
-            sPlanes: self.planes(),
-            iPictureType: self.iPictureType,
-            pScreenBlockFeatureStorage: self.pScreenBlockFeatureStorage,
-        }
-    }
-}
+// `SRefPicView` and `SPicture::view()` stood here — T6.F5's per-frame raw copy
+// of the reference/reconstruction picture's plane roots, strides, type and the
+// dormant feature-storage pointer, stamped onto the layer because resolving
+// them per call used to need `&mut SPicture` (a per-worker exclusive retag,
+// F73). Phase 9 E3's harvest re-routed every reader through
+// [`SPicture::data_ptr_shared`] / [`SPicture::stride`] / the fields themselves,
+// resolved per call via `layer_ref_pic` — shared reads of a pre-fork-stamped
+// pool picture — and both layer fields (`sRefPicView`, and `sDecPicView`, which
+// had zero readers) died with the stamp. T6.F5's measured +1.45% was the cost
+// of *five dependent loads through an Option chain per site*; the per-call
+// route here is the same pool resolution every surviving reference read
+// (`sMvList`, `uiRefMbType`, `pMbSkipSad`) has performed since T9.C3, so no new
+// cost class is introduced. D-gate-1 defers the measurement to the phase close.
 
 // ===========================================================================
 // The two pools, and the two handle types that address them — T6.F1
@@ -667,6 +665,51 @@ mod tests {
         );
         assert_eq!(pic.stride(1), pic.stride(2));
         assert_eq!(pic.plane(1).pad(), PADDING_LENGTH / 2);
+    }
+
+    /// **S28/S40's mandated test for [`SPicture::data_ptr_shared`]** (E3's
+    /// harvest). Three properties, none visible to a byte gate:
+    /// the shared mint reaches the padding behind the origin (S28 — provenance
+    /// is the whole plane, not `[origin..]`); repeated mints are siblings, so
+    /// an earlier pointer survives a later call (S40's two-calls test); and the
+    /// harvest's actual shape — a pre-fork `data_ptr` stamp followed by shared
+    /// per-call mints — leaves both usable, with the shared read seeing the
+    /// exclusive write. Miri at the session close is the referee.
+    #[test]
+    // unsafe-cat: cursor
+    #[allow(unsafe_code)]
+    fn data_ptr_shared_reaches_the_padding_and_survives_sibling_mints() {
+        let mut pic = SPicture::new(176, 144, false);
+        let pad = PADDING_LENGTH;
+        let stride = pic.plane(0).stride();
+
+        pic.plane_mut(0).set(0, 0, 0x5A);
+        pic.plane_mut(0).set(-1, -1, 0xC3);
+
+        // The harvest's shape: one exclusive stamp first (WelsInitCurrentLayer's
+        // pEncData/pCsData world), then shared per-call mints.
+        let p_stamp = pic.data_ptr(0);
+        let p1 = pic.data_ptr_shared(0);
+        let p2 = pic.data_ptr_shared(0);
+        assert_eq!(p1, p2);
+        assert_eq!(p1, p_stamp, "the shared mint is the same origin address");
+
+        assert_eq!(unsafe { *p1 }, 0x5A);
+        assert_eq!(
+            unsafe { *p1.sub(stride + 1) },
+            0xC3,
+            "one sample diagonally behind the origin — the S28 reach"
+        );
+        // Forward, to the last byte of the bottom-right padding.
+        let len = pic.plane(0).as_slice().len();
+        let tail = len - (pad * stride + pad) - 1;
+        assert_eq!(unsafe { *p1.add(tail) }, 0);
+
+        // S40: the first mint is used after the second call — and after an
+        // exclusive write through the stamp, which the shared read observes.
+        unsafe { *p_stamp = 0x11 };
+        let _p3 = pic.data_ptr_shared(0);
+        assert_eq!(unsafe { *p1 }, 0x11, "a later mint or write popped the first");
     }
 
     /// The four per-macroblock side arrays exist exactly when `bNeedMbInfo` says so,

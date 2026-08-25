@@ -997,18 +997,24 @@ pub unsafe fn WelsMdInterInit(
     //step 4. locating current p_ref
     // merge loops
     if 0 == kiMbX || iSliceFirstMbXY == kiMbXY {
-        let kiRefStrideY = (*pCurLayer).sRefPicView.sPlanes.iLineSize[0];
-        let kiRefStrideUV = (*pCurLayer).sRefPicView.sPlanes.iLineSize[1];
+        // The stamp reads the reference picture per call since E3's harvest —
+        // a shared resolution of a pre-fork-stamped pool picture (the same
+        // route `sMvList`/`uiRefMbType` reads have taken since T9.C3), with
+        // the plane origins minted through the shared root (F71, S28). Same
+        // addresses the per-frame `sRefPicView` copy held.
+        let pRefPicture = layer_ref_pic(pCurLayer).expect("bound");
+        let kiRefStrideY = pRefPicture.stride(0);
+        let kiRefStrideUV = pRefPicture.stride(1);
         let kiCurStrideY = (kiMbX + kiMbY * kiRefStrideY) << 4;
         let kiCurStrideUV = (kiMbX + kiMbY * kiRefStrideUV) << 3;
         (*pMbCache).SPicData.iMbX = kiMbX;
         (*pMbCache).SPicData.iMbY = kiMbY;
         (*pMbCache).SPicData.pRefMb[0] =
-            (*pCurLayer).sRefPicView.sPlanes.pData[0].offset(kiCurStrideY as isize);
+            pRefPicture.data_ptr_shared(0).offset(kiCurStrideY as isize);
         (*pMbCache).SPicData.pRefMb[1] =
-            (*pCurLayer).sRefPicView.sPlanes.pData[1].offset(kiCurStrideUV as isize);
+            pRefPicture.data_ptr_shared(1).offset(kiCurStrideUV as isize);
         (*pMbCache).SPicData.pRefMb[2] =
-            (*pCurLayer).sRefPicView.sPlanes.pData[2].offset(kiCurStrideUV as isize);
+            pRefPicture.data_ptr_shared(2).offset(kiCurStrideUV as isize);
     } else {
         (*pMbCache).SPicData.iMbX = kiMbX;
         (*pMbCache).SPicData.iMbY = kiMbY;
@@ -1061,7 +1067,7 @@ pub unsafe extern "C" fn WelsMdP16x8(
             (*pWelsMd).iMbPixY,
             (*pWelsMd).pMvdCost,
             BLOCK_16x8 as i32,
-            (*pCurDqLayer).sRefPicView.pScreenBlockFeatureStorage,
+            crate::encoder::svc_encode_slice::layer_ref_feature_storage(pCurDqLayer),
             sMe16x8,
         );
         //not putting the lines below into InitMe to avoid judging mode in InitMe
@@ -1125,7 +1131,7 @@ pub unsafe extern "C" fn WelsMdP8x16(
             (*pWelsMd).iMbPixY,
             (*pWelsMd).pMvdCost,
             BLOCK_8x16 as i32,
-            (*pCurLayer).sRefPicView.pScreenBlockFeatureStorage,
+            crate::encoder::svc_encode_slice::layer_ref_feature_storage(pCurLayer),
             sMe8x16,
         );
         //not putting the lines below into InitMe to avoid judging mode in InitMe
@@ -1334,7 +1340,7 @@ pub unsafe fn WelsMdPSkipEnc(
     // read here and offset by the clipped motion vector at each of the three motion
     // compensations below; each is now a `PlaneCursor` anchored straight at the
     // sample the C++ arithmetic lands on. The reference picture resolves through
-    // `layer_ref_pic`, which names the same picture `sRefPicView` is a copy of —
+    // `layer_ref_pic`, which names the same picture the `pRefMb` stamp reads —
     // `WelsInitCurrentLayer` stamps that view as `(*pRefList).pic_mut(pRefPic)
     // .view()` (`encoder_ext.rs:1952`), so the strides this drops were the same
     // numbers `plane(i).stride()` returns.
@@ -1383,7 +1389,7 @@ pub unsafe fn WelsMdPSkipEnc(
     }
 
     // The macroblock's own position, which is what `SPicData.pRefMb` encoded as an
-    // address: it is stamped as `sRefPicView.pData[i] + ((mbX + mbY * stride) << 4)`
+    // address: it is stamped as `data_ptr_shared(i) + ((mbX + mbY * stride) << 4)`
     // for luma and `<< 3` for chroma (`WelsMdInterInit`, `:945`). A cursor says the
     // same thing in samples, and the plane's padding is what makes the clipped
     // vector's excursion outside the visible picture addressable rather than merely
@@ -1459,7 +1465,7 @@ pub unsafe fn WelsMdPSkipEnc(
 
     if iSadCostMb == 0
         || iSadCostMb < (*pWelsMd).iSadPredSkip
-        || ((*pCurLayer).sRefPicView.iPictureType == EWelsSliceType::P_SLICE as i32
+        || (layer_ref_pic(pCurLayer).map_or(false, |p| p.iPictureType == EWelsSliceType::P_SLICE as i32)
             && (*pMbCache).uiRefMbType == MB_TYPE_SKIP
             && iSadCostMb < (&layer_ref_pic(pCurLayer).expect("bound").pMbSkipSad)[(*pCurMb).iMbXY as usize])
     {
@@ -1595,11 +1601,11 @@ pub unsafe fn WelsMdInterMbRefinement(
     // read here and offset per partition and per motion vector at each of the twelve
     // `McChroma_c` calls below; each is now a `PlaneCursor` on the reference picture,
     // anchored by coordinate. The macroblock's chroma origin is what `pRefMb[i]`
-    // encoded as an address (`WelsMdInterInit`, `:945`: `sRefPicView.pData[i] +
+    // encoded as an address (`WelsMdInterInit`: `data_ptr_shared(i) +
     // ((mbX + mbY * stride) << 3)`), the per-partition `iRefBlk4Stride` is a byte
     // offset `blk4Y * stride + blk4X` — i.e. the coordinate `(blk4X, blk4Y)` — and
     // `iMvStride` is `(mvY >> 3) * stride + (mvX >> 3)`, i.e. `(mvX >> 3, mvY >> 3)`.
-    // The strides this drops (`sRefPicView.sPlanes.iLineSize[1]`) are the numbers
+    // The strides this drops (the reference picture's `stride(1)`) are the numbers
     // `plane(1).stride()` returns; the view is stamped from the same picture
     // (`encoder_ext.rs:1952`).
     let kiMbXChroma = ((*pCurMb).iMbX as isize) << 3;

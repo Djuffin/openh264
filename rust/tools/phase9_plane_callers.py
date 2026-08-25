@@ -226,7 +226,11 @@ CLASSIFIERS = [
     # The layer's stamped plane roots and views.
     ("rec",   r"\bpCsData\b|sDecPicView|\bpDecPic\b"),
     ("src",   r"\bpEncData\b|\bpEncPic\b"),
-    ("ref",   r"sRefPicView|\bpRefPic\b"),
+    # E3's harvest respelled the reference stamps: `sRefPicView.sPlanes.pData[i]`
+    # became a per-call `layer_ref_pic(..)` resolution (`pRefPicture` binding,
+    # `data_ptr_shared`); the census learns the new spelling in the same commit
+    # (S58/F152 — a respelling edits the census with itself).
+    ("ref",   r"sRefPicView|\bpRefPic\b|\blayer_ref_pic\b|\bpRefPicture\b|data_ptr_shared"),
     # The VAA frame info's plane copies (`wels_preprocess.rs` stamps `pCurY` from
     # the source picture and `pRefY` from the reference).
     ("src",   r"pVaaInfo\s*\)\s*\.\s*pCur[YUV]|\bpCur[YUV]\b"),

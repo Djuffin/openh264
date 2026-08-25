@@ -596,11 +596,11 @@ pub unsafe extern "C" fn WelsMdBackgroundMbEnc(
 
     // T9.B22's shape, at zero motion. The C++ addressed the reference through
     // `SPicData.pRefMb[i]`, which `WelsMdInterInit` (`:945`) stamps as
-    // `sRefPicView.pData[i] + ((mbX + mbY * stride) << 4)` for luma and `<< 3` for
+    // `data_ptr_shared(i) + ((mbX + mbY * stride) << 4)` for luma and `<< 3` for
     // chroma — the macroblock's own origin. The motion vector here is
     // `SMVUnitXY::default()`, so there is no excursion to add: the cursor is the same
     // sample the pointer named, said in samples instead of bytes, and
-    // `sRefPicView.sPlanes.iLineSize[..]` is the stride the plane already carries.
+    // the reference picture's `stride(..)` is the stride the plane already carries.
     let kiMbXLuma = ((*pCurMb).iMbX as isize) << 4;
     let kiMbYLuma = ((*pCurMb).iMbY as isize) << 4;
     let kiMbXChroma = ((*pCurMb).iMbX as isize) << 3;
@@ -1258,7 +1258,7 @@ pub unsafe fn WelsMdP16x16(
         (*pWelsMd).iMbPixY,
         (*pWelsMd).pMvdCost,
         BLOCK_16x16 as i32,
-        (*pCurLayer).sRefPicView.pScreenBlockFeatureStorage,
+        crate::encoder::svc_encode_slice::layer_ref_feature_storage(pCurLayer),
         pMe16x16,
     );
     //not putting the line below into InitMe to avoid judging mode in InitMe
@@ -1277,7 +1277,7 @@ pub unsafe fn WelsMdP16x16(
         (*pSlice).uiMvcNum += 1;
     }
 
-    if ((*pCurLayer).pRefPic.is_some() && (*pCurLayer).sRefPicView.iPictureType == P_SLICE) {
+    if layer_ref_pic(pCurLayer).map_or(false, |p| p.iPictureType == P_SLICE) {
         if (mbs.cur().iMbX as i32) < kiMbWidth - 1 {
             let sTempMv =
                 layer_ref_pic(pCurLayer).expect("bound").sMvList[(mbs.cur().iMbXY + 1) as usize];
@@ -1358,7 +1358,7 @@ pub unsafe extern "C" fn WelsMdP8x8(
             (*pWelsMd).iMbPixY,
             (*pWelsMd).pMvdCost,
             BLOCK_8x8 as i32,
-            (*pCurDqLayer).sRefPicView.pScreenBlockFeatureStorage,
+            crate::encoder::svc_encode_slice::layer_ref_feature_storage(pCurDqLayer),
             sMe8x8,
         );
         //not putting these three lines below into InitMe to avoid judging mode in InitMe
@@ -2060,8 +2060,8 @@ pub unsafe extern "C" fn SvcMdSCDMbEnc(
     let pRefLuma = (*pMbCache).SPicData.pRefMb[0];
     let pRefCb = (*pMbCache).SPicData.pRefMb[1];
     let pRefCr = (*pMbCache).SPicData.pRefMb[2];
-    let iLineSizeY = (*pCurDqLayer).sRefPicView.sPlanes.iLineSize[0];
-    let iLineSizeUV = (*pCurDqLayer).sRefPicView.sPlanes.iLineSize[1];
+    let iLineSizeY = layer_ref_pic(pCurDqLayer).map_or(0, |p| p.stride(0));
+    let iLineSizeUV = layer_ref_pic(pCurDqLayer).map_or(0, |p| p.stride(1));
 
     let mut pDstLuma = std::ptr::addr_of_mut!((*pMbCache).sSkipMb).cast::<u8>();
     let mut pDstCb = std::ptr::addr_of_mut!((*pMbCache).sSkipMb).cast::<u8>().add(256);

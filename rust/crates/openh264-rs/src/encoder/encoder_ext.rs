@@ -16,7 +16,7 @@
 
 #![deny(unsafe_code)]
 use std::sync::atomic::{AtomicU16, Ordering};
-use crate::encoder::picture::{RecPicId, RecPicPool, SRefPicView, SrcPicId, SrcPicPool};
+use crate::encoder::picture::{RecPicId, RecPicPool, SrcPicId, SrcPicPool};
 use crate::encoder::md::CostFamily;
 use std::ffi::c_char;
 use std::ptr::{null, null_mut};
@@ -1941,38 +1941,12 @@ pub unsafe fn WelsSwapDqLayers(pCtx: *mut sWelsEncCtx, kiNextDqIdx: i32) {
     (*current_layer(pCtx)).pRefLayer = Some(kRefIdx);
 }
 
-/// Re-derive the layer's two picture **views** from the two handles it holds — T6.F5.
-///
-/// Called at every point either handle is assigned (`WelsInitCurrentLayer` and
-/// [`PrefetchReferencePicture`]), so a view can never name a picture the layer has
-/// stopped pointing at. That is the whole invariant, and stamping both together at
-/// both sites is what makes it checkable by reading two call sites instead of four
-/// assignments.
-///
-/// # Safety
-/// `pCtx->pCurDqLayer` must be live and stamped with its reference list.
-// unsafe-cat: cursor
-#[allow(unsafe_code)]
-pub unsafe fn StampLayerPictureViews(pCtx: *mut sWelsEncCtx) {
-    let pCurDq = current_layer(pCtx);
-    if pCurDq.is_null() {
-        return;
-    }
-    let pRefList = (*pCurDq).pRefList;
-    if pRefList.is_null() {
-        (*pCurDq).sRefPicView = SRefPicView::default();
-        (*pCurDq).sDecPicView = SRefPicView::default();
-        return;
-    }
-    (*pCurDq).sRefPicView = match (*pCurDq).pRefPic {
-        Some(id) => (*pRefList).pic_mut(id).view(),
-        None => SRefPicView::default(),
-    };
-    (*pCurDq).sDecPicView = match (*pCurDq).pDecPic {
-        Some(id) => (*pRefList).pic_mut(id).view(),
-        None => SRefPicView::default(),
-    };
-}
+// `StampLayerPictureViews` stood here — the once-per-frame stamp of
+// `sRefPicView`/`sDecPicView` (T6.F5). Phase 9 E3's harvest deleted both fields:
+// the reference readers resolve the picture per call (`layer_ref_pic` +
+// `SPicture::data_ptr_shared`/`stride`/`iPictureType`), and the reconstruction
+// view had zero readers. One `cursor` tag retires with it.
+
 
 /// `encoder_ext.cpp:2808`. Prefetch the reference picture after `WelsBuildRefList`.
 // unsafe-cat: port-raw(Phase 9)
@@ -1994,7 +1968,6 @@ pub unsafe fn PrefetchReferencePicture(pCtx: *mut sWelsEncCtx, keFrameType: EVid
         (*pCtx).pRefPic = None;
         (*current_layer(pCtx)).pRefPic = None;
     }
-    StampLayerPictureViews(pCtx);
 
     let mut iIdx = 0;
     while iIdx < kiSliceCount {
@@ -2101,7 +2074,6 @@ pub unsafe fn WelsInitCurrentLayer(pCtx: *mut sWelsEncCtx, _kiWidth: i32, _kiHei
     let pParamInternal = std::ptr::addr_of_mut!((*pParam).sDependencyLayers[kiCurDid as usize]);
 
     (*pCurDq).pDecPic = (*pCtx).pDecPic;
-    StampLayerPictureViews(pCtx);
 
     debug_assert!(iSliceCount > 0);
 
