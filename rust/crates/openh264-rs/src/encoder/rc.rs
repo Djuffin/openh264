@@ -2346,7 +2346,7 @@ pub unsafe extern "C" fn WelsRcPictureInfoUpdateGom(pEncCtx: *mut sWelsEncCtx, i
 pub unsafe extern "C" fn WelsRcMbInitGom(
     pEncCtx: *mut sWelsEncCtx,
     pCurMb: &mut SMB,
-    pSlice: *mut SSlice,
+    pSlice: &mut SSlice,
 ) {
     let did = (*pEncCtx).uiDependencyId as usize;
     let pWelsSvcRc = ctx_rc_at(pEncCtx, did);
@@ -2397,7 +2397,7 @@ pub unsafe extern "C" fn WelsRcMbInfoUpdateGom(
     pEncCtx: *mut sWelsEncCtx,
     pCurMb: &mut SMB,
     iCostLuma: i32,
-    pSlice: *mut SSlice,
+    pSlice: &mut SSlice,
 ) {
     let did = (*pEncCtx).uiDependencyId as usize;
     let pWelsSvcRc = ctx_rc_at(pEncCtx, did);
@@ -2459,7 +2459,7 @@ pub unsafe extern "C" fn WelsRcPictureInfoUpdateDisable(_pEncCtx: *mut sWelsEncC
 pub unsafe extern "C" fn WelsRcMbInitDisable(
     pEncCtx: *mut sWelsEncCtx,
     pCurMb: &mut SMB,
-    _pSlice: *mut SSlice,
+    _pSlice: &mut SSlice,
 ) {
     let mut iLumaQp = (*pEncCtx).iGlobalQp;
     let did = (*pEncCtx).uiDependencyId as usize;
@@ -2493,7 +2493,7 @@ pub unsafe extern "C" fn WelsRcMbInfoUpdateDisable(
     _pEncCtx: *mut sWelsEncCtx,
     _pCurMb: &mut SMB,
     _iCostLuma: i32,
-    _pSlice: *mut SSlice,
+    _pSlice: &mut SSlice,
 ) {}
 
 // unsafe-cat: port-raw(Phase 9)
@@ -2832,12 +2832,13 @@ mod tests {
             assert!(!WelsRcPostFrameSkipping(std::ptr::null_mut(), 0, 0));
             WelsRcPostFrameSkippedUpdate(std::ptr::null_mut(), 0);
             WelsRcPictureInfoUpdateDisable(std::ptr::null_mut(), 0);
-            // The macroblock argument is a `&mut SMB` now, so the null goes and a
-            // real record takes its place. The other three are still raw (context,
-            // slice) and stay null: this is the no-op arm of `pfWelsRcMbInfoUpdate`
+            // The macroblock and slice arguments are references now (T9.E2g), so
+            // the nulls go and real records take their place. The context is still
+            // raw and stays null: this is the no-op arm of `pfWelsRcMbInfoUpdate`
             // and reads none of them.
             let mut sMb = SMB::default();
-            WelsRcMbInfoUpdateDisable(std::ptr::null_mut(), &mut sMb, 0, std::ptr::null_mut());
+            let mut sSlice = crate::encoder::svc_encode_slice::SSlice::new();
+            WelsRcMbInfoUpdateDisable(std::ptr::null_mut(), &mut sMb, 0, &mut sSlice);
         }
     }
 }
