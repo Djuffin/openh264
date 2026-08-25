@@ -1658,20 +1658,15 @@ pub unsafe fn InitFunctionPointers(
     // mem::transmute around it was what let that through. WelsMdInterMb is not
     // ported yet, so the assignment belongs with that work, not here.
 
-    crate::encoder::deblocking::DeblockingInit(
-        &mut fl.pfDeblocking as *mut _,
-        _uiCpuFlag as i32,
-    );
+    crate::encoder::deblocking::DeblockingInit(&mut fl.pfDeblocking, _uiCpuFlag as i32);
 
     crate::encoder::rc::WelsRcInitFuncPointers(
         &mut fl.pfRc,
         (*pParam).iRCMode,
     );
 
-    crate::encoder::deblocking::WelsBlockFuncInit(
-        &mut fl.pfSetNZCZero as *mut _,
-        _uiCpuFlag as i32,
-    );
+    // `WelsBlockFuncInit(&mut fl.pfSetNZCZero, ..)` stood here — the slot and
+    // its installer went when `DeblockingBSCalc_c` went direct (session F).
 
     crate::encoder::md::InitFillNeighborCacheInterFunc(
         &mut *fl,
@@ -2508,8 +2503,7 @@ mod tests {
             "new(): no sample-dealing kernels, and neither cost family is selected"
         );
         assert!(
-            fl.pfDeblocking.pfDeblockingBSCalc.is_none()
-                && fl.pfDeblocking.pfDeblockingFilterSlice.is_none(),
+            fl.pfDeblocking.pfDeblockingFilterSlice.is_none(),
             "new(): no deblocking kernels"
         );
         // The two discriminants whose zero *is* a declared variant — which is what

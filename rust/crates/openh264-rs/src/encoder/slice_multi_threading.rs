@@ -1413,7 +1413,7 @@ unsafe fn EncodeOneSliceInJob(
 
         let pfDeblockingFilterSlice =
             (*ctx_func_list(pCtx)).pfDeblocking.pfDeblockingFilterSlice.unwrap();
-        pfDeblockingFilterSlice(current_layer(pCtx), ctx_func_list(pCtx), &mut *pSlice);
+        pfDeblockingFilterSlice(current_layer(pCtx), &mut *pSlice);
         ENC_RETURN_SUCCESS
     })();
 
@@ -1699,7 +1699,7 @@ unsafe fn EncodeOnePartitionSizeLimited(
             }
             let pfDeblockingFilterSlice =
                 (*ctx_func_list(pCtx)).pfDeblocking.pfDeblockingFilterSlice.unwrap();
-            pfDeblockingFilterSlice(pCurDq, ctx_func_list(pCtx), &mut *pSlice);
+            pfDeblockingFilterSlice(pCurDq, &mut *pSlice);
 
             iAnyMbLeftInPartition = kiEndMbIdxInPartition
                 - (*pCurDq).LastCodedMbIdxOfPartition[kiPartitionId as usize];
