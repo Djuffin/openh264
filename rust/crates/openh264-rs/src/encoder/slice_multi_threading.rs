@@ -425,21 +425,31 @@ pub fn WelsEmms() {
 #[allow(unsafe_code)]
 pub unsafe fn UpdateMbListNeighborParallel(
     pCurDq: *mut SDqLayer,
-    pMbList: *mut SMB,
     kiSliceIdc: i32,
 ) {
-    if pCurDq.is_null() || pMbList.is_null() {
+    if pCurDq.is_null() {
         return;
     }
     let pSliceCtx = &mut (*pCurDq).sSliceEncCtx;
     let kiMbWidth = pSliceCtx.iMbWidth as i32;
     let first: &[i32] = &(*pCurDq).pFirstMbIdxOfSlice;
     let count: &[i32] = &(*pCurDq).pCountMbNumInSlice;
-    let mut iIdx = first[kiSliceIdc as usize];
-    let kiEndMbInSlice = iIdx + count[kiSliceIdc as usize] - 1;
+    let kiFirst = first[kiSliceIdc as usize];
+    let kiCount = count[kiSliceIdc as usize];
+    if kiCount <= 0 {
+        // The old `while` simply did not run; the window mint requires a
+        // non-empty range, so the empty case returns before it.
+        return;
+    }
+    // Each worker's window is exactly its own slice's records — the
+    // fork-disjointness this walker's name promises, now enforced (E3).
+    let mut mbs =
+        crate::encoder::svc_encode_slice::mb_window(pCurDq, kiFirst, kiCount, kiFirst);
+    let mut iIdx = kiFirst;
+    let kiEndMbInSlice = kiFirst + kiCount - 1;
 
     while iIdx <= kiEndMbInSlice {
-        crate::encoder::svc_encode_slice::UpdateMbNeighbor(pCurDq, &mut *pMbList.add(iIdx as usize), kiMbWidth, kiSliceIdc as u16);
+        crate::encoder::svc_encode_slice::UpdateMbNeighbor(pCurDq, mbs.at_mut(iIdx as usize), kiMbWidth, kiSliceIdc as u16);
         iIdx += 1;
     }
 }
@@ -1543,10 +1553,9 @@ pub unsafe fn UpdateMbMapForked(pCtx: *mut sWelsEncCtx, kiTaskCount: i32) {
             s.spawn(move || {
                 let job = job;
                 let pCurDq = current_layer(job.pCtx);
-                let pMbList = crate::encoder::svc_encode_slice::mb_list_root(pCurDq);
                 let mut iSliceIdc = job.iFirstSlice;
                 while iSliceIdc < job.iSliceCount {
-                    UpdateMbListNeighborParallel(pCurDq, pMbList, iSliceIdc);
+                    UpdateMbListNeighborParallel(pCurDq, iSliceIdc);
                     iSliceIdc += job.iSliceStep;
                 }
             });
