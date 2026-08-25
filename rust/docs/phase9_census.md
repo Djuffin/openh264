@@ -25,7 +25,7 @@ F101, and it is the number the phase estimate rests on. For comparison, forcing
 this tool to look at the first line only reproduces the charter's table almost
 exactly: 420/121/51/36/39/19/9 against its 419/120/51/33/31/25/15.
 
-At **this** commit the body-only set is **136** of **580** `port-raw(Phase 9)` tags; the two figures differ as conversions land.
+At **this** commit the body-only set is **157** of **580** `port-raw(Phase 9)` tags; the two figures differ as conversions land.
 
 ## 2. Families, in dependency order
 
@@ -51,12 +51,12 @@ says what is actually reachable.
 |---|----------|---------------------------------------|------|---------|-------|
 | 1 | coeff    | Coefficient buffers                   | 0    | 0       | 0     |
 | 2 | plane    | Plane / byte cursors                  | 26   | 6       | 32    |
-| 3 | mbcache  | MB metadata                           | 11   | 2       | 13    |
-| 4 | layer    | Layer / picture / slice               | 47   | 3       | 50    |
+| 3 | mbcache  | MB metadata                           | 13   | 2       | 15    |
+| 4 | layer    | Layer / picture / slice               | 26   | 1       | 27    |
 | 5 | dispatch | Dispatch tables                       | 4    | 1       | 5     |
-| 6 | other    | Other raw signatures                  | 82   | 33      | 115   |
-| 7 | ctx      | Context parameter                     | 132  | 97      | 229   |
-| — | body     | Body-only                             | 136  | 0       | 136   |
+| 6 | other    | Other raw signatures                  | 83   | 32      | 115   |
+| 7 | ctx      | Context parameter                     | 170  | 59      | 229   |
+| — | body     | Body-only                             | 157  | 0       | 157   |
 | — | stmt     | Statement-level allows (no signature) | 0    | 0       | 0     |
 
 Total `port-raw(Phase 9)`: **580**.
@@ -74,18 +74,18 @@ Total `port-raw(Phase 9)`: **580**.
 
 | file                                 | plane | mbcache | layer | dispatch | other | ctx | body | stmt | all |
 |--------------------------------------|-------|---------|-------|----------|-------|-----|------|------|-----|
-| encoder/svc_encode_slice.rs          |       |         | 20    |          | 5     | 41  | 6    |      | 72  |
-| encoder/rc.rs                        |       |         | 1     |          | 5     | 55  | 2    |      | 63  |
+| encoder/svc_encode_slice.rs          |       |         | 10    |          | 5     | 41  | 16   |      | 72  |
+| encoder/rc.rs                        |       |         |       |          | 5     | 55  | 3    |      | 63  |
 | encoder/wels_preprocess.rs           | 4     |         | 2     | 1        | 13    | 12  | 13   |      | 45  |
-| encoder/encoder_ext.rs               |       |         | 4     | 1        | 6     | 25  | 4    |      | 40  |
+| encoder/encoder_ext.rs               |       | 1       |       | 1        | 6     | 25  | 7    |      | 40  |
 | encoder/svc_mode_decision.rs         |       | 1       | 4     | 1        | 7     | 15  | 9    |      | 37  |
-| encoder/ref_list_mgr_svc.rs          |       |         | 1     |          | 1     | 32  | 2    |      | 36  |
-| encoder/svc_enc_slice_segment.rs     |       |         | 11    |          | 2     |     | 11   |      | 24  |
+| encoder/ref_list_mgr_svc.rs          |       |         |       |          | 1     | 32  | 3    |      | 36  |
+| encoder/svc_enc_slice_segment.rs     |       |         | 8     |          | 2     |     | 14   |      | 24  |
 | encoder/wels_encoder_ext.rs          |       |         |       |          | 13    | 5   | 6    |      | 24  |
-| encoder/svc_motion_estimate.rs       | 3     |         | 2     |          | 7     |     | 11   |      | 23  |
+| encoder/svc_motion_estimate.rs       | 3     |         | 1     |          | 7     |     | 12   |      | 23  |
 | encoder/svc_base_layer_md.rs         |       | 1       | 1     |          | 1     | 15  | 3    |      | 21  |
 | encoder/encoder_context.rs           | 1     |         | 1     |          |       | 6   | 10   |      | 18  |
-| encoder/svc_set_mb_syn_cabac.rs      |       | 9       | 1     |          |       | 2   | 6    |      | 18  |
+| encoder/svc_set_mb_syn_cabac.rs      |       | 10      |       |          |       | 2   | 6    |      | 18  |
 | encoder/au_set.rs                    |       |         |       |          | 11    |     | 5    |      | 16  |
 | encoder/md.rs                        | 1     | 1       |       |          | 8     | 2   | 3    |      | 15  |
 | encoder/paraset_strategy.rs          |       |         |       |          | 7     | 7   |      |      | 14  |
@@ -93,7 +93,7 @@ Total `port-raw(Phase 9)`: **580**.
 | encoder/encode_mb_aux.rs             | 9     |         |       |          |       |     | 3    |      | 12  |
 | encoder/sample.rs                    | 7     |         |       |          |       |     | 5    |      | 12  |
 | encoder/set_mb_syn_cabac.rs          |       |         |       |          |       |     | 10   |      | 10  |
-| encoder/slice_multi_threading.rs     |       |         | 2     |          | 4     | 3   |      |      | 9   |
+| encoder/slice_multi_threading.rs     |       |         |       |          | 4     | 3   | 2    |      | 9   |
 | encoder/svc_encode_mb.rs             | 3     |         |       |          |       | 4   | 2    |      | 9   |
 | processing/vaacalc.rs                |       |         |       |          | 5     |     | 4    |      | 9   |
 | encoder/deblocking.rs                |       |         |       | 2        | 4     | 1   | 1    |      | 8   |
@@ -106,7 +106,7 @@ Total `port-raw(Phase 9)`: **580**.
 | encoder/picture.rs                   |       |         |       |          |       |     | 1    |      | 1   |
 | encoder/vlc_encoder.rs               |       |         |       |          | 1     |     |      |      | 1   |
 | processing/scene_change_detection.rs |       |         |       |          |       |     | 1    |      | 1   |
-| **total**                            | 32    | 13      | 50    | 5        | 115   | 229 | 136  | 0    | 580 |
+| **total**                            | 32    | 15      | 27    | 5        | 115   | 229 | 157  | 0    | 580 |
 
 ## 4. What each family waits on
 
@@ -166,12 +166,12 @@ scoped off the first-line numbers and is superseded by this one.
 |----------|---------|------|-------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | coeff    | A -> D  | 0    | 0     | session A converted the 5 with a direct caller; the 14 left are table slots that follow their data into family 3 (F103)                                                |
 | plane    | B-C     | 26   | 32    | largest cursor family; pulls `common/`'s mc/sad/intra-pred shims with it                                                                                               |
-| mbcache  | D       | 11   | 13    | 45 pure — 3x the charter's 15 — **plus the 14 coefficient slot types and their 59 call-throughs**; `svc_mode_decision.rs` 19, `svc_set_mb_syn_cabac.rs` 11, `md.rs` 11 |
-| layer    | E       | 47   | 50    | 47 pure — `svc_encode_slice.rs` 21, `svc_enc_slice_segment.rs` 11                                                                                                      |
+| mbcache  | D       | 13   | 15    | 45 pure — 3x the charter's 15 — **plus the 14 coefficient slot types and their 59 call-throughs**; `svc_mode_decision.rs` 19, `svc_set_mb_syn_cabac.rs` 11, `md.rs` 11 |
+| layer    | E       | 26   | 27    | 47 pure — `svc_encode_slice.rs` 21, `svc_enc_slice_segment.rs` 11                                                                                                      |
 | dispatch | F       | 4    | 5     | the 5 signature sites plus the 22 `cursor` survivors                                                                                                                   |
-| other    | ?       | 82   | 115   | **unscoped in the charter** — 123 sites, 7 unrelated sub-groups; needs its own split                                                                                   |
-| ctx      | G-H     | 132  | 229   | F66's conversion; 111 pure is the set `q1c.py` gates                                                                                                                   |
-| body     | -       | —    | 136   | no conversion; audited at the phase close once the callees are safe                                                                                                    |
+| other    | ?       | 83   | 115   | **unscoped in the charter** — 123 sites, 7 unrelated sub-groups; needs its own split                                                                                   |
+| ctx      | G-H     | 170  | 229   | F66's conversion; 111 pure is the set `q1c.py` gates                                                                                                                   |
+| body     | -       | —    | 157   | no conversion; audited at the phase close once the callees are safe                                                                                                    |
 
 Two things the charter does not budget for:
 
@@ -193,13 +193,12 @@ family assignment in `FAMILY_OF_TYPE`.
 | pointee                    | signatures | family   | sub-group |
 |----------------------------|------------|----------|-----------|
 | sWelsEncCtx                | 260        | ctx      |           |
-| SSlice                     | 75         | layer    |           |
-| SDqLayer                   | 68         | layer    |           |
 | u8                         | 45         | plane    |           |
 | i32                        | 40         | other    | scalar    |
+| SDqLayer                   | 39         | layer    |           |
 | SMB                        | 35         | mbcache  |           |
 | SWelsSvcCodingParam        | 26         | other    | paramset  |
-| BsWriter                   | 21         | other    | bitstream |
+| BsWriter                   | 17         | other    | bitstream |
 | SLogContext                | 17         | other    | trace     |
 | SWelsFuncPtrList           | 15         | dispatch |           |
 | i16                        | 12         | coeff    |           |
@@ -242,4 +241,5 @@ family assignment in `FAMILY_OF_TYPE`.
 | SMotionTextureUnit         | 1          | mbcache  |           |
 | SNalUnitHeaderExt          | 1          | other    | paramset  |
 | SPixMap                    | 1          | layer    |           |
+| SSlice                     | 1          | layer    |           |
 

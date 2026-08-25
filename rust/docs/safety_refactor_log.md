@@ -17418,3 +17418,124 @@ monolithic `--lib` pass and run four per-probe steps, each with its own verdict 
 the fork pair carrying `-Zmiri-report-progress` (flag verified before being parked in
 the rarely-run path). The close gate below is the first run of this shape and its
 lane wall is the new S61 baseline.
+
+## 2026-08-24 — Phase 9, session E2 (the slice flip landed whole; the layer split measured, its single-threaded half flipped; the close's one Miri caught the one read the static discipline missed)
+
+### what the session was handed, and what was true
+
+The flips E priced: the detector narrowing (step 0), the slice flip root-down (step
+1), the layer pre-fix and flip (step 2), the SMB grid (step 3), the harvest (step 4),
+under the user's gating directive — no Miri between commits, the static detector
+between stages, the session gate once at the close plus one MIRI_FULL fork-probe
+pair. The brief was wrong about three structural things (F145, F146; its own opening
+predicted one):
+
+* **Nine slice-carrying fn-pointer typedefs, not six** (F145) — the four MD slot
+  types in `wels_func_ptr_def.rs` were wrap-hidden exactly the way F101 warns, in
+  the sentence citing F101. All nine flipped in stage 1's closure.
+* **"107 parameter mentions" was a contaminated grep** (F145) — the real inventory
+  was 93 positions (84 fn + 9 typedef), 82 bodies exact.
+* **Step 2 as written contradicts the brief's own edge-2 rule** (F146) — "73
+  mentions → `&mut SDqLayer`" would put concurrent whole-layer entry retags on N
+  workers (F73 across threads). A fork-reachability closure split the family:
+  **43 definitions stay raw** (the in-fork MD/ME/header/deblocking/slice-service
+  surface plus every accessor — G–H's layer inheritance) and **30 flipped** (init,
+  teardown, between-frames adjusters, ref marking, the frame deblocking walk; 28
+  `&mut`, 2 `&`).
+
+### the work, in order
+
+**T9.E2a** (`e818f36f`) — step 0: `&&` is not `&` in shape A's derivation hint.
+Calibrated per S55/F123 against `0bfc7687^` with HEAD's tool copied in (that tree's
+own copy predates shapes C/D): shape C still reports F114a's four bodies
+line-for-line, shape D its two functions, and across five aimed types every removed
+site is a `&&`-chain value binding. S60 expected-vs-actual on `--type SDqLayer`:
+**expected 3 shape-B, actual 3 shape-B, exact match** — the step-2 work list.
+
+**T9.E2b..g** (`dfce11fb`, `8bda95eb`, `da9a5534`, `de176d37`, `3e43bc97`) — the
+slice flip, root-down on J's model, six stages in five commits (stages 1+2 merged:
+stage 2's edits began while stage 1's family gate was still building, which voided
+that gate and made the split unrecoverable — the same mistake voided the first
+stage-6 run and step 2a's solo gate; the rule "no tree edits while a gate runs" is
+this session's process lesson, learned twice). Each stage: signatures → guards fall
+with the parameters or hoist to callers (T9.D9's precedent) → the stage's arena
+roots become plain field borrows (F112's one step — after which the borrow checker
+itself referees every window) → boundary spellings (`&mut *p` both directions; the
+fork keeps its raw mint and the workers' existing per-use `pSliceBs` shadows are
+exactly the windows the reborrows need) → `gates.sh family`, 583/583 both profiles,
+every time. The campaign's real content beyond the mechanics:
+
+* **The popped-sibling-argument class** (F147): five S54 narrowings — the header
+  writers' and their typedef's `pBs`, `WritePrefixNalForSlice`'s `pSliceBs`,
+  `WelsCodeOneSlice`'s writer moved below its slot calls, both P-loops' (and the
+  cavlc writer's) post-loop writer re-mints, and `WelsMarkMMCORefInfoWithBase`'s
+  base-by-value (iteration 0 writes the bytes a reference would protect).
+* **The typedef flip's caller-side blast radius** (F148.1): the three ME loop
+  bodies held `pMbCache` across the freshly-`&mut` slot calls — per-iteration
+  windows landed in the same commit as the typedef flip.
+* Two dead top-of-body roots deleted; `mb_dump` took `&SSlice`; the RC no-op test
+  learned to pass a real `SSlice`.
+
+Exit state: `grep ': \*mut SSlice'` over the encoder = the three fork-worker
+locals (the permanent mint); `q1c --type SSlice --kind ref` = **80 bodies, all four
+shapes 0**; `--kind raw` = the loud exit-2 "nothing to find". The shape-D frontier
+(3 → 6 → 8 sites mid-campaign, every one read and adjudicated as the documented
+own-raw-param over-approximation plus AddSliceBoundary's disjoint-neighbor bank
+mint) collapsed to 0 at stage 5 exactly as the adjudication predicted.
+
+**T9.E2h** (`dbb30034`) — the layer campaign: the three shape-B hoists raw-first
+(detector to 0 on the raw tree), then the ST-30 flip. Three MORE same-call hazards
+found by hand where shape B is blind (accessor-minted roots, F148.2) — including
+`NeedDynamicAdjust`'s base==current self-aliasing site — and the three
+`&mut (*pCurDq).sSliceEncCtx as *mut SSliceCtx` casts became field borrows (S29's
+cast clause).
+
+**T9.E2i** — the close's verdict, fixed. The session gate's Miri lane aborted both
+encode probes at one line: `WelsUpdateSliceHeaderSyntax` reading
+`(*current_layer(pCtx)).iMaxSliceNum` under its own fresh `&mut SDqLayer` protector
+(F148.3 — a foreign READ pops a protected Unique; shape D models only mints and
+cannot see it). Fixed by reading through the parameter; the caller hoists the old
+null arm; confirmed by re-running exactly the two failed probes, then the full
+session gate.
+
+### the close
+
+Session gate (`MIRI_SCOPE=encoder gates.sh session`): first run **FAIL** (the catch
+above — the close doing precisely what D-gate-4 exists for; its lane aborted both
+encode probes and named the line), re-run after the fix **OVERALL PASS** — 282 Miri
+tests / 0 failed across the four shards, 583/583 sweeps both profiles, 554/547
+native tests. **S61: lane wall 553 s against E's 517 s — ratio 1.07**, the first
+lane-vs-lane comparison of the D-gate-6 regime, under the 1.3x tripwire; the rise
+is the flip's own retag accounting plus machine variance, and the baseline file
+now carries 553. The fork-probe pair ran once at `MIRI_FULL=1` as two parallel
+per-probe invocations (D-gate-7): **fixed-slice 3294.86 s PASS, mid-row
+3343.20 s PASS** (~56 min as a parallel pair, against E's first-green 3356 s /
+3449 s — the flip is Miri-cost-neutral on the fork), zero reports. The
+multi-threaded encode paths' whole retype — every slice a `&mut SSlice` below
+the worker's raw mint, the layer's ST half `&mut SDqLayer` — is now
+Miri-verified end to end.
+
+Steps 3 and 4 dropped at the frontier per the brief's own order ("4, then 3, then
+2"), with step 3's split report delivered: of `encoder/deblocking.rs`'s 13 allows,
+**6 are SMB-grid-blocked** (`DeblockingBSCalc_c`, `DeblockingInterMb`,
+`FilteringEdgeLumaHV`, `FilteringEdgeChromaHV`, `DeblockingIntraMb`,
+`DeblockingMbAvcbase`), **2 are the in-fork layer pair**
+(`DeblockingFilterSliceAvcbase`(+`Null`)), **1 is ctx-blocked**
+(`PerformDeblockingFilter` — G–H's), **1 waits only on `*mut SWelsFuncPtrList`**
+(`DeblockingFilterFrameAvcbase` — session F's), **2 are F's dispatch tables**
+(`WelsBlockFuncInit`, `DeblockingInit`), **1 is a test shim**. The 35 `*mut SMB`
+parameters are untouched — the grid is the successor's design task, against the
+callers, on the decoder's `MbGrid` model. `WelsGetFirstMbOfSlice` has zero callers
+(S18 candidate). `sRefPicView`: 22 code mentions at the close.
+
+| | E close | E2 close |
+|---|---:|---:|
+| `*mut SSlice` parameters | 93 positions | **0** |
+| `*mut SDqLayer` definitions | 72 | **43** (42 in-fork + `slice_in_layer`) |
+| `&(mut) SDqLayer` definitions | 0 | **30** |
+| `*mut SMB` parameters | 35 | 35 (successor's) |
+| arena roots `addr_of_mut!((*pSlice).sMbCacheInfo)` | 41 | **0** (field borrows) |
+| `unsafe-cat` tags | 659 | 659 (flips retype; the harvest retires) |
+| `raw_ptr` (ratchet) | 1895 | **1753** (−142; all other metrics flat) |
+| q1c SSlice raw / ref | 0 / — | exit-2 "nothing to find" / **0 all shapes** |
+| q1c SDqLayer raw / ref | 14 (11 false) | **0 / 0 all shapes** |
