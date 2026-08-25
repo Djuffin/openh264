@@ -2510,3 +2510,31 @@ copies under F117/S57's stay-raw ruling, 3 dormant `SvcMdSCDMbEnc` MCs — all
 Phase 10's or F117's), 13 `coeff`, 3 `blocked`, 5 `seam`, 0 unclassified. The ME
 rows are gone: the brief's step-2 prediction ("only the preprocess row and Phase
 10's") is right in substance with the two corrections above.
+
+## F153 — F84's "two dead threaded-decoder functions + 18 pad kernels" is stale in two of its three claims, and the stale copy propagated through two briefs
+
+F84 (Phase 8b session A) recorded `WelsDecodeAndConstructSlice` and
+`WelsDeblockingFilterMB` as S18 candidates with zero callers, plus the 18
+`MBPad*_c`/`PadMB*_c` kernels "only they reach". The D-scope-1 board and the E3
+charter row inherited all three claims. Measured at E3's step 0
+(`96b68a91`), only one survives:
+
+1. **`WelsDeblockingFilterMB` was deletable and is deleted** —
+   `grep -rn 'WelsDeblockingFilterMB' src tests benches | grep -v 'fn WelsDeblockingFilterMB'`
+   → 0 before the deletion. Its one C++ caller is `decode_slice.cpp:1727`, inside
+   the untranslated deblock-as-you-go arm.
+2. **`WelsDecodeAndConstructSlice` is not deletable and is not deleted.** T7.C7
+   (after F84 was filed) *kept and fenced it*: `decoder_core.rs:4696` calls it
+   under `iThreadCount > 1` behind the documented `DECODER_MT(incomplete: F36)`
+   fence, through the wrapper at `decoder_core.rs:824`, and two tests drive the
+   wrapper (`decoder_core.rs:5254`, `decode_slice.rs:5596`). Deleting it would
+   reverse a recorded decision. F84's zero-caller claim was true when filed and
+   falsified by a later session's work — the class S24 names: a brief inheriting
+   a finding inherits the finding's *date*.
+3. **The 18 pad kernels were never ported**: `grep -rn 'MBPad\|PadMB' src` → 0.
+   There was nothing to delete; "the 18 kernels only they reach" described the
+   C++, not the port.
+
+`WelsGetFirstMbOfSlice` (deleted in the same commit) is the cleaner story the
+charter row folded in beside F84: dead in **both** trees — the C++ defines it at
+`svc_enc_slice_segment.cpp:540` and never calls it.

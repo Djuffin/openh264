@@ -14,7 +14,8 @@
 //!
 //! The rest of `svc_enc_slice_segment.cpp` — `InitSliceSegment`,
 //! `AssignMbMapSingleSlice`, `AssignMbMapMultipleSlices`, `GetInitialSliceNum`,
-//! `InitSlicePEncCtx`/`UninitSlicePEncCtx`, `WelsGetFirstMbOfSlice`,
+//! `InitSlicePEncCtx`/`UninitSlicePEncCtx`, `WelsGetFirstMbOfSlice` (dead in both
+//! trees — the port's copy was deleted per S18, Phase 9 E3 step 0),
 //! `WelsGetPrevMbOfSlice`, `WelsGetNumMbInSlice`, `DynamicMaxSliceNumConstraint` —
 //! allocates and drives `SSliceCtx::pOverallMbMap` and belongs with the context
 //! construction in Phase 4. `WelsMbToSliceIdc`, `WelsGetNextMbOfSlice`,
@@ -664,19 +665,11 @@ pub unsafe fn UninitSlicePEncCtx(pCurDq: &mut SDqLayer) {
     UninitSliceSegment(pCurDq);
 }
 
-/// `WelsGetFirstMbOfSlice` — svc_enc_slice_segment.cpp:540.
-///
-/// # Safety
-/// `pCurLayer` may be null, which returns -1.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn WelsGetFirstMbOfSlice(pCurLayer: &mut SDqLayer, kuiSliceIdc: i32) -> i32 {
-    let first: &[i32] = &(*pCurLayer).pFirstMbIdxOfSlice;
-    match first.get(kuiSliceIdc as usize) {
-        Some(&v) => v,
-        None => -1,
-    }
-}
+// `WelsGetFirstMbOfSlice` stood here — dead in **both** trees: the C++ defines it
+// (`svc_enc_slice_segment.cpp:540`) and never calls it, and the port's copy had
+// zero callers (read grep at deletion, Phase 9 E3 step 0:
+// `grep -rn 'WelsGetFirstMbOfSlice' src tests benches | grep -v 'fn '` → the module
+// doc's mention alone). **S18: deleted, not converted** — one `port-raw` tag with it.
 
 #[cfg(test)]
 mod tests {
