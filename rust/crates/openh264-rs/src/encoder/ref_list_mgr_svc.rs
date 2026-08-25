@@ -1170,10 +1170,14 @@ pub unsafe fn WelsUpdateSliceHeaderSyntax(
     pCurDq: &mut SDqLayer,
     uiFrameType: i32,
 ) {
-    if pCtx.is_null() || current_layer(pCtx).is_null() {
+    if pCtx.is_null() {
         return;
     }
-    let kiCountSliceNum = (*current_layer(pCtx)).iMaxSliceNum;
+    // T9.E2i (the close's Miri verdict, F114b's shape): the count is read
+    // through the parameter — `(*current_layer(pCtx)).iMaxSliceNum` was a
+    // second, independent path to the same object this function's `&mut`
+    // already protects, and the read popped the protector.
+    let kiCountSliceNum = pCurDq.iMaxSliceNum;
     let uiDid = (*pCtx).uiDependencyId as usize;
     let pLtr = &*ctx_ltr_at(pCtx, (uiDid) as usize);
 
@@ -1250,12 +1254,15 @@ pub unsafe fn WelsUpdateRefSyntax(pCtx: *mut sWelsEncCtx, kiPOC: i32, kiFrameTyp
         }
     }
 
-    WelsUpdateSliceHeaderSyntax(
-        pCtx,
-        iAbsDiffPicNumMinus1,
-        &mut *current_layer(pCtx),
-        kiFrameType,
-    );
+    if !current_layer(pCtx).is_null() {
+        // The null arm of the callee's old guard, hoisted with the reborrow.
+        WelsUpdateSliceHeaderSyntax(
+            pCtx,
+            iAbsDiffPicNumMinus1,
+            &mut *current_layer(pCtx),
+            kiFrameType,
+        );
+    }
 }
 
 /// Synchronizes reconstructed picture metadata back to the source input picture.
