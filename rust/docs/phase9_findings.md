@@ -2689,3 +2689,138 @@ per call.
   the seam already uses for `pMbSkipSad`.
 * The dormant screen-content pointer, now behind one named accessor
   (`layer_ref_feature_storage`). **Phase 10's.**
+
+## F159 — the stale-driver guard was aimed at the cargo crate *directory*, so it reported STALE on every run and had failed both `gates.sh` sweeps since it landed
+
+`583cd21a` added a stale-driver guard to `sweep.sh` after E3 lost two hand-run
+fault probes to an old binary. Sound idea, wrong path:
+
+```
+$HERE/rust_enc                          <- the cargo crate DIRECTORY
+$HERE/rust_enc/target/$PROFILE/rust_enc <- the binary (compare.sh:35 spells it)
+```
+
+Both arms of the guard died on that:
+
+```
+$ [ -x rust_enc ] && echo TRUE                 # directories are traversable
+TRUE                                           #  -> "binaries missing" never fires
+$ find …/src -name '*.rs' -newer rust_enc | wc -l
+83                                             # vs the DIRECTORY's mtime — Aug 22,
+                                               #  when a file was last added to the
+                                               #  crate — so always STALE
+$ find …/src -name '*.rs' -newer rust_enc/target/debug/rust_enc | wc -l
+0                                              # the tree was fresh the whole time
+```
+
+So every `sweep.sh` invocation after that commit exited 2 without probing a byte,
+including the two inside `gates.sh family/session/full/exit`. **The byte-identity
+gate — the phase's central rule, and the thing every session's "583/583" quotes —
+was down from `583cd21a` until this session fixed it.** Session G's brief carried
+the claim forward as "gates.sh is unaffected (build.sh runs first at
+gates.sh:356)": build.sh does run, and does rebuild, and the guard was not
+comparing against what it built.
+
+**The generalisable part is S55's other half, and it is not "calibrate the
+detector" — it is *which* calibration.** S55 as written says to plant a known
+positive and watch the instrument fire. This guard was calibrated exactly that
+way: its commit records "First live run fired truthfully: rust_enc is stale at
+HEAD right now." That sentence is the false positive being read as a
+confirmation. A detector that fires on everything passes a positive-only
+calibration perfectly. **The arm that finds this class is the negative one: show
+the instrument SILENT on a case you know is clean.** It costs one run and it is
+the only arm that distinguishes "detects the fault" from "detects nothing".
+
+Fixed and calibrated in both directions, six arms — fresh/debug and fresh/release
+silent with `PASS=11 FAIL=0`, touched source fires and names the file, debug-fresh
+/ release-stale fires for release only (a new arm: the old guard had no profile,
+so one fresh driver vouched for both), moved binary fires with the path,
+`SWEEP_STALE_OK=1` still overrides. Exit code checked directly rather than through
+a pipe: 2 on stale, 0 on fresh.
+
+**Where else this reaches.** Every instrument this phase ships is a candidate:
+`q1c.py` and `phase9_forksplit.py` both have a documented positive calibration
+(F157's `--no-slots` 27-vs-111) and neither has a recorded negative one. A
+forksplit that reported every body in-fork, or a q1c that reported every call a
+hazard, would read as "conservative" and would pass every check either tool
+currently ships.
+
+## F160 — D-dead-3 leaves two orphans, both of the shape the ruling was about, and neither is this session's to delete
+
+Deleting `pGomCost` took its justifications with it, and two things in the tree
+were standing on them.
+
+**1. `SharedMbArray::capture` (`encoder/rec_view.rs:342`) has no caller.** Its doc
+said it was public "because the reconstruction picture is not the only owner of
+one: the rate controller's `pGomCost` has the same shape and the same fork". The
+rate controller never took it — T9.C5 made the field `Vec<AtomicI32>` instead —
+and every construction in `rec_view.rs` builds the struct literal directly
+(`SharedMbArray { cells: SharedCells::capture(…) }`, 7 sites). So the method was
+dead at the moment its justification was written, and `grep -rn '::capture('`
+finds only `SharedCells::capture`.
+
+**2. The three `pfIDct*` slots are installed, asserted-installed, and called by
+nothing** (F138, recorded at `decode_mb_aux.rs:463`). That note left them alone
+and said why: "the F133 ruling was to leave write-only storage alone." **D-dead-3
+reversed that ruling.** Its ground — a write with no reader is not state — reaches
+a dispatch slot with no caller verbatim, so F138's precedent is now the opposite
+of what its comment says.
+
+Both are recorded, neither is touched. The ruling that reached `pGomCost` is the
+user's, and it was made on `pGomCost`; extending it to two more members of the
+same class is a second ruling, not an inference a session gets to make. Both
+comments now point here instead of at a precedent that has flipped.
+
+## F161 — the hazard detector's output has to be split by fork-reachability too: 135 of 266 reported hazards model a retag S63 forbids, including all 55 against the brief's centrepiece
+
+Session G's brief scopes step 2 as "hazards to zero": `q1c.py --kind raw` reads
+266 hazardous sites in 69 callers, and the campaign drives that to 0 before any
+signature moves. It names the remedy as narrowing the wide accessors, and names
+the largest one: *"Narrowing `ctx_param` alone implicates 55 sites."*
+
+`ctx_param` is in the **in-fork** column.
+
+```
+$ python3 rust/tools/phase9_forksplit.py --why ctx_param
+ctx_param <- WelsCodeOneSlice <- EncodeOnePartitionSizeLimited <- fork seed
+```
+
+S63 (F146) is that an in-fork body **cannot take `&mut` by any amount of hazard
+work**; its end states are interior mutability or lawful raw. q1c's own docstring
+is equally explicit about what it reports: *"It models one conversion — the
+parameter becomes `&mut T`."* Put together: a hazard whose **callee** is in-fork
+models a retag that will never be taken. It is not UB today either — F66's whole
+finding is that a raw entry retag pops only the offsets it touches, which is why
+the port's dominant idiom is sound and why the tree is green under Miri with all
+266 present.
+
+Joined (`rust/tools/phase9_ctx_join.py`, shipped with this finding):
+
+| | sites | shape A | shape B | held cursors |
+|---|---:|---:|---:|---:|
+| **live** — callee flips, the retag really happens | **131** | 95 | 36 | **17** |
+| **moot** — callee is in-fork, S63 forbids the retag | **135** | 110 | 25 | 41 |
+| total (what q1c reports) | 266 | 205 | 61 | 44 |
+
+Half the prescribed campaign is not work, and the half the brief singled out is
+the moot half: `ctx_param` 55, `ctx_ref_list` 19, `current_layer` 19, `ctx_rc_at`
+10, `ctx_vaa` 9, `ctx_func_list` 7 — every one in-fork, 119 sites, and the brief's
+named remedy (narrowing `ctx_param`) buys **zero** live sites.
+
+The live campaign is also a different *shape*, which is the part that matters for
+scoping. Its 95 shape-A sites stand on **17** (file, caller, binding) cursors and
+only **four distinct names** — `pSpatialIndexMap`, `pLtr`, `pParamInternal`,
+`pParamD` — with 58 of the 95 being one cursor in one function
+(`pSpatialIndexMap` in `WelsEncoderEncodeExt`). "44 cursors retired by accessor
+narrowing" and "17 cursors retired by re-derivation, 4 of them by name" are not
+the same session.
+
+**The class.** This is F146 in the mirror. E2's brief ordered a `&mut` flip *on*
+bodies the fork shares; G's brief ordered hazard-clearing *for* bodies the fork
+shares. Both come from applying the split to the family and then reading the
+detector as if the split did not exist. S63 says the split is the first number a
+brief must carry — the missing clause is that it is also the first number the
+**detector's output** must be filtered by, because two instruments that do not
+know about each other cannot do it for you. A hazard report is a conditional:
+*if* this converts, this breaks. Counting conditionals whose antecedent is
+forbidden is counting.
