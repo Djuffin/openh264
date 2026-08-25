@@ -17,7 +17,7 @@
 
 use crate::encoder::rec_view::RecCursor;
 use crate::common::mc::SMcFunc;
-use crate::encoder::deblocking::{DeblockingFunc, PSetNoneZeroCountZeroFunc};
+use crate::encoder::deblocking::DeblockingFunc;
 use crate::encoder::encoder_context::{
     sWelsEncCtx, BLOCK_STATIC_IDC_ALL, BLOCK_SIZE_ALL, C_PRED_A, I16_PRED_DC_A, I4_PRED_A,
 };
@@ -431,7 +431,8 @@ pub struct SWelsFuncPtrList {
 
     /* For Deblocking */
     pub pfDeblocking: DeblockingFunc,
-    pub pfSetNZCZero: Option<PSetNoneZeroCountZeroFunc>,
+    // `pfSetNZCZero` stood here — one writer (`WelsBlockFuncInit`), one
+    // reader (`DeblockingBSCalc_c`), the reader direct since session F (F118).
 
     pub pfRc: SWelsRcFunc,
     pub pfAccumulateSadForRc: Option<PAccumulateSadFunc>,
@@ -534,7 +535,6 @@ impl Default for SWelsFuncPtrList {
             pfDequantizationFour4x4: None,
             pfDequantizationIHadamard4x4: None,
             pfDeblocking: DeblockingFunc::default(),
-            pfSetNZCZero: None,
             pfRc: SWelsRcFunc::default(),
             pfAccumulateSadForRc: None,
             pfCavlcParamCal: None,

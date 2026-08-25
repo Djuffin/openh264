@@ -254,23 +254,26 @@ pub type PMb = *mut SMB;
 // with the second plane reached through 32-byte `from_raw_parts_mut` casts, which
 // is exactly the size relationship whose collapse caused the F1 release segfault
 // (`phase0_findings.md`). The F1 surgery (Phase 2 T6) made the type say it.
-pub type PDeblockingBSCalc = unsafe extern "C" fn(
-    pFunc: *mut SWelsFuncPtrList,
-    pCurMb: *mut SMB,
-    uiBS: *mut [[[u8; 4]; 4]; 2],
-    uiCurMbType: u32,
-    iMbStride: i32,
-    iLeftFlag: i32,
-    iTopFlag: i32,
-);
+// `PDeblockingBSCalc` stood here — the slot type whose first parameter was
+// the table that contained it. Session F de-virtualized the pair: the one
+// thing `DeblockingBSCalc_c` reached through the table was `pfSetNZCZero`
+// (single unconditional install, `WelsNonZeroCount_c`), which it now calls
+// directly, and the slot itself had a single unconditional install
+// (`DeblockingInit`) and one reader — F118's constant-after-init argument —
+// so `DeblockingMbAvcbase` calls `DeblockingBSCalc_c` directly and the slot,
+// its install and the typedef are deleted together (F139's shape rule: the
+// demotion to write-only and the deletion happen in one commit).
 
-pub type PDeblockingFilterSlice =
-    unsafe extern "C" fn(pCurDq: *mut SDqLayer, pFunc: *mut SWelsFuncPtrList, pSlice: &mut SSlice);
+/// The per-frame slice-walk dispatch — the one deblocking slot that is
+/// genuinely two-valued at runtime (`DeblockingFilterSliceAvcbase` when the
+/// parallel-deblocking conditions hold, `..Null` otherwise, re-stamped every
+/// frame by `PreprocessSliceCoding`). De-virtualized in session F: the table
+/// parameter is gone — the walkers reach nothing through it any more.
+pub type PDeblockingFilterSlice = unsafe extern "C" fn(pCurDq: *mut SDqLayer, pSlice: &mut SSlice);
 
-/// **T6.C1**: the slot took `int8_t*` because the C++ passes `pCurMb->pNonZeroCount`,
-/// a pointer into a context-wide array. The array is inline in `SMB` now and every
-/// caller has the whole 24-entry row, so the slot takes the row.
-pub type PSetNoneZeroCountZeroFunc = fn(pNonZeroCount: &mut [i8; MB_LUMA_CHROMA_BLOCK4x4_NUM]);
+// `PSetNoneZeroCountZeroFunc` (T6.C1's safe slot type) stood here — deleted
+// with the `pfSetNZCZero` slot and `WelsBlockFuncInit` when session F made the
+// one reader call `WelsNonZeroCount_c` directly (F118).
 
 /// Function pointer dispatch table for deblocking routines.
 ///
@@ -283,7 +286,8 @@ pub type PSetNoneZeroCountZeroFunc = fn(pNonZeroCount: &mut [i8; MB_LUMA_CHROMA_
 #[repr(C)]
 #[derive(Debug, Copy, Clone, Default)]
 pub struct tagDeblockingFunc {
-    pub pfDeblockingBSCalc: Option<PDeblockingBSCalc>,
+    // `pfDeblockingBSCalc` stood here — deleted with its typedef (above) when
+    // `DeblockingMbAvcbase` went direct on F118's constancy (session F).
     pub pfDeblockingFilterSlice: Option<PDeblockingFilterSlice>,
 }
 
@@ -522,20 +526,17 @@ pub fn DeblockingBSMarginalMBAvcbase(pCurMb: &SMB, pNeighMb: &SMB, iEdge: usize)
 ///
 /// # Safety
 /// `pCurMb` must be a valid MB pointer with in-bounds left/top neighbours for
-/// whichever of `iLeftFlag`/`iTopFlag` is set, `pFunc` null or valid, and
-/// `uiBS` must point at a writable `[2][4][4]` boundary-strength array.
-// unsafe-cat: cursor
+/// whichever of `iLeftFlag`/`iTopFlag` is set.
+// unsafe-cat: port-raw(Phase 9) — pCurMb neighbour walk (*mut SMB, E3's grid)
 #[allow(unsafe_code)]
-pub unsafe extern "C" fn DeblockingBSCalc_c(
-    pFunc: *mut SWelsFuncPtrList,
+pub unsafe fn DeblockingBSCalc_c(
     pCurMb: *mut SMB,
-    uiBS: *mut [[[u8; 4]; 4]; 2],
+    uiBS: &mut [[[u8; 4]; 4]; 2],
     uiCurMbType: u32,
     iMbStride: i32,
     iLeftFlag: i32,
     iTopFlag: i32,
 ) {
-    let uiBS = &mut *uiBS;
     if iLeftFlag != 0 {
         let leftMb = pCurMb.offset(-1);
         let val = if IS_INTRA((*leftMb).uiMbType) {
@@ -561,12 +562,13 @@ pub unsafe extern "C" fn DeblockingBSCalc_c(
     }
 
     if uiCurMbType != MB_TYPE_SKIP {
-        if !pFunc.is_null() {
-            if let Some(set_nzc) = (*pFunc).pfSetNZCZero {
-                // deblocking.cpp:615 — one argument.
-                set_nzc(&mut (*pCurMb).iNonZeroCount);
-            }
-        }
+        // deblocking.cpp:615 — one argument. `pfSetNZCZero` had one writer
+        // (`WelsBlockFuncInit`, unconditionally this function) and this was
+        // its one reader, so the call is direct (F118) and the slot is
+        // deleted with its installer; the old `pFunc.is_null()` tolerance
+        // guarded a table pointer that no longer exists (the one live caller
+        // always passed the context's non-null list).
+        WelsNonZeroCount_c(&mut (*pCurMb).iNonZeroCount);
         if uiCurMbType == MB_TYPE_16x16 {
             DeblockingBSInsideMBAvsbase(&(*pCurMb).iNonZeroCount, uiBS, 1);
         } else {
@@ -1172,10 +1174,9 @@ pub unsafe fn DeblockingIntraMb(
     FilteringEdgeChromaHV(view, map, pCurMb, pFilter);
 }
 
-// unsafe-cat: cursor
+// unsafe-cat: port-raw(Phase 9) — pCurMb neighbour walk (*mut SMB, E3's grid)
 #[allow(unsafe_code)]
 pub unsafe fn DeblockingMbAvcbase(
-    pFunc: *mut SWelsFuncPtrList,
     view: &RecPicView,
     map: &[AtomicU16],
     pCurMb: *mut SMB,
@@ -1211,24 +1212,23 @@ pub unsafe fn DeblockingMbAvcbase(
     let iLeftFlag = bLeftBsValid[(*pFilter).uiFilterIdc as usize] as i32;
     let iTopFlag = bTopBsValid[(*pFilter).uiFilterIdc as usize] as i32;
 
-    let pfDeblocking = &(*pFunc).pfDeblocking as *const DeblockingFunc;
-
     match uiCurMbType {
         MB_TYPE_INTRA4x4 | MB_TYPE_INTRA16x16 | MB_TYPE_INTRA_PCM => {
             DeblockingIntraMb(view, map, pCurMb, pFilter);
         }
         _ => {
-            if let Some(bs_calc) = (*pfDeblocking).pfDeblockingBSCalc {
-                bs_calc(
-                    pFunc,
-                    pCurMb,
-                    &mut uiBS,
-                    uiCurMbType,
-                    iMbStride as i32,
-                    iLeftFlag,
-                    iTopFlag,
-                );
-            }
+            // Direct since session F (F118): `pfDeblockingBSCalc` had one
+            // unconditional install (`DeblockingInit`) and this one reader,
+            // so the slot — and with it the interior-table aggregate pointer
+            // that used to be minted here — is deleted.
+            DeblockingBSCalc_c(
+                pCurMb,
+                &mut uiBS,
+                uiCurMbType,
+                iMbStride as i32,
+                iLeftFlag,
+                iTopFlag,
+            );
             DeblockingInterMb(view, map, pCurMb, pFilter, &uiBS);
         }
     }
@@ -1240,7 +1240,7 @@ pub unsafe fn DeblockingMbAvcbase(
 
 // unsafe-cat: cursor
 #[allow(unsafe_code)]
-pub unsafe fn DeblockingFilterFrameAvcbase(pCurDq: &mut SDqLayer, pFunc: *mut SWelsFuncPtrList) {
+pub unsafe fn DeblockingFilterFrameAvcbase(pCurDq: &mut SDqLayer) {
     if (*pCurDq).pDecPic.is_none() {
         return;
     }
@@ -1302,7 +1302,7 @@ pub unsafe fn DeblockingFilterFrameAvcbase(pCurDq: &mut SDqLayer, pFunc: *mut SW
 
     for _ in 0..kiMbHeight {
         for _ in 0..kiMbWidth {
-            DeblockingMbAvcbase(pFunc, view, map, pCurrentMbBlock, &mut pFilter);
+            DeblockingMbAvcbase(view, map, pCurrentMbBlock, &mut pFilter);
             pCurrentMbBlock = pCurrentMbBlock.add(1);
         }
     }
@@ -1326,7 +1326,6 @@ pub use crate::encoder::svc_encode_slice::WelsGetNextMbOfSlice;
 #[allow(unsafe_code)]
 pub unsafe extern "C" fn DeblockingFilterSliceAvcbase(
     pCurDq: *mut SDqLayer,
-    pFunc: *mut SWelsFuncPtrList,
     pSlice: &mut SSlice,
 ) {
     let pMbList = crate::encoder::svc_encode_slice::mb_list_root(pCurDq);
@@ -1384,7 +1383,7 @@ pub unsafe extern "C" fn DeblockingFilterSliceAvcbase(
         let iCurMbIdx = iNextMbIdx;
         let pCurrentMbBlock = pMbList.add(iCurMbIdx as usize);
 
-        DeblockingMbAvcbase(pFunc, view, map, pCurrentMbBlock, &mut pFilter);
+        DeblockingMbAvcbase(view, map, pCurrentMbBlock, &mut pFilter);
 
         iNumMbFiltered += 1;
         iNextMbIdx = WelsGetNextMbOfSlice(pCurDq, iCurMbIdx);
@@ -1398,7 +1397,6 @@ pub unsafe extern "C" fn DeblockingFilterSliceAvcbase(
 #[allow(unsafe_code)]
 pub unsafe extern "C" fn DeblockingFilterSliceAvcbaseNull(
     _pCurDq: *mut SDqLayer,
-    _pFunc: *mut SWelsFuncPtrList,
     _pSlice: &mut SSlice,
 ) {
 }
@@ -1415,13 +1413,13 @@ pub unsafe extern "C" fn PerformDeblockingFilter(pEnc: *mut sWelsEncCtx) {
     }
 
     if (*pCurLayer).iLoopFilterDisableIdc == 0 {
-        DeblockingFilterFrameAvcbase(&mut *pCurLayer, ctx_func_list(pEnc));
+        DeblockingFilterFrameAvcbase(&mut *pCurLayer);
     } else if (*pCurLayer).iLoopFilterDisableIdc == 2 {
         let iSliceCount = GetCurrentSliceNum(&*pCurLayer);
         for iSliceIdx in 0..iSliceCount {
             let pSlice = crate::encoder::svc_encode_slice::slice_in_layer(pCurLayer, iSliceIdx);
             if !pSlice.is_null() {
-                DeblockingFilterSliceAvcbase(pCurLayer, ctx_func_list(pEnc), &mut *pSlice);
+                DeblockingFilterSliceAvcbase(pCurLayer, &mut *pSlice);
             }
         }
     }
@@ -1431,28 +1429,16 @@ pub unsafe extern "C" fn PerformDeblockingFilter(pEnc: *mut sWelsEncCtx) {
 // Architecture and Dispatch Table Initialization
 // ============================================================================
 
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe extern "C" fn WelsBlockFuncInit(
-    pfSetNZCZero: *mut Option<PSetNoneZeroCountZeroFunc>,
-    _iCpu: i32,
-) {
-    if !pfSetNZCZero.is_null() {
-        *pfSetNZCZero = Some(WelsNonZeroCount_c);
-    }
-}
+// `WelsBlockFuncInit` stood here — `pfSetNZCZero`'s one writer. The slot's
+// one reader (`DeblockingBSCalc_c`) calls `WelsNonZeroCount_c` directly since
+// session F (F118), so slot, installer and the `PSetNoneZeroCountZeroFunc`
+// typedef are deleted together.
 
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe extern "C" fn DeblockingInit(pFunc: *mut DeblockingFunc, _iCpu: i32) {
-    if pFunc.is_null() {
-        return;
-    }
-
-    // The eight kernel-slot installs stood here; the slots were write-only
-    // (F139) and are deleted with their typedefs, S18 (session F step 0).
-    (*pFunc).pfDeblockingBSCalc = Some(DeblockingBSCalc_c);
-    (*pFunc).pfDeblockingFilterSlice = Some(DeblockingFilterSliceAvcbase);
+pub fn DeblockingInit(pFunc: &mut DeblockingFunc, _iCpu: i32) {
+    // The eight kernel-slot installs stood here (write-only, F139, deleted in
+    // step 0), then the `pfDeblockingBSCalc` install (direct since T9.F3,
+    // F118). What remains is the one genuinely dispatched slot.
+    pFunc.pfDeblockingFilterSlice = Some(DeblockingFilterSliceAvcbase);
 }
 
 // ============================================================================

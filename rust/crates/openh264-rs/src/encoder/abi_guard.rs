@@ -390,8 +390,9 @@ assert_size_by_profile!(SDqLayer, debug 1008, release 936);
 // `pfIDct*` slots (-24), `DeblockingFunc`'s eight kernel slots (-64), and
 // `pfSampleSadHor8` (-16), all installed-and-never-read (or, for the last,
 // never even installed). **-168 more at T9.F2b**: the transitional raw triple
-// left `SSampleDealingFunc` (its pin above).
-assert_size!(SWelsFuncPtrList, 968);
+// left `SSampleDealingFunc` (its pin above). **-16 at T9.F3**: the
+// `pfDeblockingBSCalc` and `pfSetNZCZero` slots went direct (F118).
+assert_size!(SWelsFuncPtrList, 952);
 
 // codec/encoder/core/inc/encoder_context.h:116. C++ is 98008 bytes, but that number
 // embeds WELS_MUTEX (pthread_mutex_t, 64 B on darwin) by value where this port models
