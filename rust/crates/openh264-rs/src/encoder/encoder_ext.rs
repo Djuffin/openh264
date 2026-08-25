@@ -2145,7 +2145,7 @@ pub unsafe fn WelsInitCurrentLayer(pCtx: *mut sWelsEncCtx, _kiWidth: i32, _kiHei
     while iIdx < iSliceCount {
         let pSlice = crate::encoder::svc_encode_slice::slice_in_layer(pCurDq, iIdx);
         if !pSlice.is_null() {
-            crate::encoder::svc_encode_slice::InitSliceHeadWithBase(pSlice, pBaseSlice);
+            crate::encoder::svc_encode_slice::InitSliceHeadWithBase(&mut *pSlice, &*pBaseSlice);
         }
         iIdx += 1;
     }
@@ -3188,7 +3188,7 @@ pub unsafe fn WelsCodeOnePicPartition(
 
         iReturn = crate::encoder::svc_encode_slice::WelsCodeOneSlice(
             pCtx,
-            pCurSlice,
+            &mut *pCurSlice,
             keNalType as i32,
         );
         if iReturn != ENC_RETURN_SUCCESS {
@@ -3593,7 +3593,7 @@ pub unsafe fn WelsEncoderEncodeExt(
             debug_assert_eq!(0, (*pCurSlice).iSliceIdx);
             (*pCtx).iEncoderError = crate::encoder::svc_encode_slice::SetSliceBoundaryInfo(
                 current_layer(pCtx),
-                pCurSlice,
+                &mut *pCurSlice,
                 0,
             );
             if (*pCtx).iEncoderError != ENC_RETURN_SUCCESS {
@@ -3603,7 +3603,7 @@ pub unsafe fn WelsEncoderEncodeExt(
             // T7.C3, as above.
             crate::encoder::svc_encode_slice::StampLayerIdrFlagForSliceType(pCtx);
             (*pCtx).iEncoderError =
-                crate::encoder::svc_encode_slice::WelsCodeOneSlice(pCtx, pCurSlice, eNalType as i32);
+                crate::encoder::svc_encode_slice::WelsCodeOneSlice(pCtx, &mut *pCurSlice, eNalType as i32);
             if (*pCtx).iEncoderError != ENC_RETURN_SUCCESS {
                 return (*pCtx).iEncoderError;
             }
@@ -3808,7 +3808,7 @@ pub unsafe fn WelsEncoderEncodeExt(
                 debug_assert_eq!(iSliceIdx, (*pCurSlice).iSliceIdx);
                 (*pCtx).iEncoderError = crate::encoder::svc_encode_slice::SetSliceBoundaryInfo(
                     current_layer(pCtx),
-                    pCurSlice,
+                    &mut *pCurSlice,
                     iSliceIdx,
                 );
 
@@ -3816,7 +3816,7 @@ pub unsafe fn WelsEncoderEncodeExt(
                 crate::encoder::svc_encode_slice::StampLayerIdrFlagForSliceType(pCtx);
                 (*pCtx).iEncoderError = crate::encoder::svc_encode_slice::WelsCodeOneSlice(
                     pCtx,
-                    pCurSlice,
+                    &mut *pCurSlice,
                     eNalType as i32,
                 );
                 if (*pCtx).iEncoderError != ENC_RETURN_SUCCESS {

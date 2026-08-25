@@ -1049,13 +1049,13 @@ pub unsafe extern "C" fn WelsMdP16x8(
     pFunc: *mut SWelsFuncPtrList,
     pCurDqLayer: *mut SDqLayer,
     pWelsMd: &mut SWelsMD,
-    pSlice: *mut SSlice,
+    pSlice: &mut SSlice,
 ) -> i32 {
-    let pMbCache = std::ptr::addr_of_mut!((*pSlice).sMbCacheInfo);
     let iStrideEnc = (*pCurDqLayer).iEncStride[0];
     let iStrideRef = (*pCurDqLayer).sRefPicView.sPlanes.iLineSize[0];
     let mut iCostP16x8 = 0i32;
     for i in 0..2i32 {
+        let pMbCache = &mut pSlice.sMbCacheInfo;
         let sMe16x8 = &mut (*pWelsMd).sMe.sMe16x8[i as usize];
         let iPixelY = i << 3;
         InitMe(
@@ -1080,8 +1080,15 @@ pub unsafe extern "C" fn WelsMdP16x8(
             pFunc,
             pCurDqLayer,
             sMe16x8,
-            pSlice,
+            &mut *pSlice,
         );
+        // T9.E2b: the slot call above passes `&mut *pSlice` (the typedef flipped
+        // with its family, S52), and that whole-slice reborrow pops every cursor
+        // derived from the slice before it — q1c is blind here in both kinds
+        // (dispatch slot, F111/F144.3; raw-param root). Fresh window per use
+        // cluster, F144.2's spelling; the loop head re-derives for the next
+        // iteration's own reads.
+        let pMbCache = &mut pSlice.sMbCacheInfo;
         UpdateP16x8Motion2Cache(
             &mut (*pMbCache).sMvComponents,
             i << 3,
@@ -1103,11 +1110,11 @@ pub unsafe extern "C" fn WelsMdP8x16(
     pFunc: *mut SWelsFuncPtrList,
     pCurLayer: *mut SDqLayer,
     pWelsMd: &mut SWelsMD,
-    pSlice: *mut SSlice,
+    pSlice: &mut SSlice,
 ) -> i32 {
-    let pMbCache = std::ptr::addr_of_mut!((*pSlice).sMbCacheInfo);
     let mut iCostP8x16 = 0i32;
     for i in 0..2i32 {
+        let pMbCache = &mut pSlice.sMbCacheInfo;
         let iPixelX = i << 3;
         let sMe8x16 = &mut (*pWelsMd).sMe.sMe8x16[i as usize];
         InitMe(
@@ -1132,8 +1139,15 @@ pub unsafe extern "C" fn WelsMdP8x16(
             pFunc,
             pCurLayer,
             sMe8x16,
-            pSlice,
+            &mut *pSlice,
         );
+        // T9.E2b: the slot call above passes `&mut *pSlice` (the typedef flipped
+        // with its family, S52), and that whole-slice reborrow pops every cursor
+        // derived from the slice before it — q1c is blind here in both kinds
+        // (dispatch slot, F111/F144.3; raw-param root). Fresh window per use
+        // cluster, F144.2's spelling; the loop head re-derives for the next
+        // iteration's own reads.
+        let pMbCache = &mut pSlice.sMbCacheInfo;
         UpdateP8x16Motion2Cache(
             &mut (*pMbCache).sMvComponents,
             i << 2,
@@ -1161,7 +1175,7 @@ pub unsafe extern "C" fn WelsMdP8x16(
 pub unsafe extern "C" fn WelsMdInterFinePartition(
     pEncCtx: *mut sWelsEncCtx,
     pWelsMd: &mut SWelsMD,
-    pSlice: *mut SSlice,
+    pSlice: &mut SSlice,
     pCurMb: &mut SMB,
     iBestCost: i32,
 ) {
@@ -1201,7 +1215,7 @@ pub unsafe extern "C" fn WelsMdInterFinePartition(
 pub unsafe extern "C" fn WelsMdInterFinePartitionVaa(
     pEncCtx: *mut sWelsEncCtx,
     pWelsMd: &mut SWelsMD,
-    pSlice: *mut SSlice,
+    pSlice: &mut SSlice,
     pCurMb: &mut SMB,
     iBestCostIn: i32,
 ) {
@@ -1925,11 +1939,10 @@ pub unsafe extern "C" fn WelsMdFirstIntraMode(
 pub unsafe extern "C" fn WelsMdInterMb(
     pEncCtx: *mut sWelsEncCtx,
     pWelsMd: &mut SWelsMD,
-    pSlice: *mut SSlice,
+    pSlice: &mut SSlice,
     pCurMb: *mut SMB,
 ) {
     let pCurDqLayer = current_layer(pEncCtx);
-    let pMbCache = std::ptr::addr_of_mut!((*pSlice).sMbCacheInfo);
     let kuiNeighborAvail = (*pCurMb).uiNeighborAvail as u32;
     let kiMbWidth = (*pCurDqLayer).iMbWidth as i32;
     // F14's class: formed before the availability guards below, read only under them.
@@ -1989,10 +2002,13 @@ pub unsafe extern "C" fn WelsMdInterMb(
             return;
         }
     } else {
-        let pMbCache = std::ptr::addr_of_mut!((*pSlice).sMbCacheInfo);
+        // T9.E2b: a field borrow, not a raw — the parent is `&mut` now (F112's
+        // one step); disjoint-field borrows coexist and NLL ends this one at its
+        // last use below, before the next whole-slice reborrow.
+        let pMbCache = &mut pSlice.sMbCacheInfo;
         PredictSad(
-            (*pMbCache).sMvComponents.iRefIndexCache.as_mut_ptr(),
-            (*pMbCache).iSadCost.as_mut_ptr(),
+            pMbCache.sMvComponents.iRefIndexCache.as_mut_ptr(),
+            pMbCache.iSadCost.as_mut_ptr(),
             0,
             &mut (*pWelsMd).iSadPredMb,
         );
