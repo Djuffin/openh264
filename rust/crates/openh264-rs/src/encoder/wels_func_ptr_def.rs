@@ -38,7 +38,7 @@ use crate::encoder::svc_encode_slice::{BsWriter, SDqLayer, SDynamicSlicingStack,
 use crate::encoder::svc_motion_estimate::{
     PCalculateBlockFeatureOfFrame, PCalculateSatdFunc, PCalculateSingleBlockFeature,
     PCheckDirectionalMv, PFillQpelLocationByFeatureValueFunc, PInitializeHashforFeatureFunc,
-    PLineFullSearchFunc, PMotionSearchFunc, PSearchMethodFunc,
+    PLineFullSearchFunc, PMotionSearchFunc, PSearchMethodFunc, SMeFuncs,
     PUpdateFMESwitch,
 };
 use crate::encoder::wels_preprocess::SVAAFrameInfo;
@@ -381,18 +381,15 @@ pub struct SWelsFuncPtrList {
     // the whole tree (the C++ fills it only from SSE4.1 kernels this port does
     // not have). S18, session F step 0.
     pub pfMotionSearch: [Option<PMotionSearchFunc>; BLOCK_STATIC_IDC_ALL],
-    pub pfSearchMethod: [Option<PSearchMethodFunc>; BLOCK_SIZE_ALL],
-    pub pfCalculateSatd: Option<PCalculateSatdFunc>,
-    pub pfCheckDirectionalMv: Option<PCheckDirectionalMv>,
+    /// The slots the search family reaches — see [`SMeFuncs`]. Same six
+    /// members the table carried flat until session F, regrouped so the five
+    /// de-virtualized typedefs can take `&SMeFuncs` instead of the table.
+    pub sMeFuncs: SMeFuncs,
 
     pub pfInitializeHashforFeature: Option<PInitializeHashforFeatureFunc>,
     pub pfFillQpelLocationByFeatureValue: Option<PFillQpelLocationByFeatureValueFunc>,
     /// 0 - for 8x8, 1 for 16x16
     pub pfCalculateBlockFeatureOfFrame: [Option<PCalculateBlockFeatureOfFrame>; 2],
-    /// 0 - for 8x8, 1 for 16x16
-    pub pfCalculateSingleBlockFeature: [Option<PCalculateSingleBlockFeature>; 2],
-    pub pfVerticalFullSearch: Option<PLineFullSearchFunc>,
-    pub pfHorizontalFullSearch: Option<PLineFullSearchFunc>,
     pub pfUpdateFMESwitch: Option<PUpdateFMESwitch>,
 
     pub pfCopy16x16Aligned: Option<PCopyFunc>,
@@ -507,15 +504,10 @@ impl Default for SWelsFuncPtrList {
             pfGetLumaI4x4Pred: [None; I4_PRED_A],
             pfGetChromaPred: [None; C_PRED_A],
             pfMotionSearch: [None; BLOCK_STATIC_IDC_ALL],
-            pfSearchMethod: [None; BLOCK_SIZE_ALL],
-            pfCalculateSatd: None,
-            pfCheckDirectionalMv: None,
+            sMeFuncs: SMeFuncs::default(),
             pfInitializeHashforFeature: None,
             pfFillQpelLocationByFeatureValue: None,
             pfCalculateBlockFeatureOfFrame: [None; 2],
-            pfCalculateSingleBlockFeature: [None; 2],
-            pfVerticalFullSearch: None,
-            pfHorizontalFullSearch: None,
             pfUpdateFMESwitch: None,
             pfCopy16x16Aligned: None,
             pfCopy16x16NotAligned: None,

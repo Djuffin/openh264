@@ -386,6 +386,46 @@ pub type PCalculateSingleBlockFeature =
 
 pub type PUpdateFMESwitch = unsafe extern "C" fn(pCurLayer: *mut SDqLayer);
 
+/// The motion-estimation dispatch group — every slot the search family reaches
+/// *through the table it used to be handed back* (session F, the Phase 4a
+/// de-virtualization move applied to the five self-referential typedefs).
+///
+/// The C++ hands each search function `SWelsFuncPtrList*` so it can reach
+/// these five surfaces plus `sSampleDealingFuncs`; the port groups the five
+/// here and passes `&SMeFuncs` + `&SSampleDealingFunc` instead, so the table
+/// parameter dies and the typedefs stop naming the struct that contains them.
+/// Membership is the measured reach set: `pfSearchMethod` (the top-level
+/// search's per-block dispatch), `pfCalculateSatd` (fast/normal per frame),
+/// `pfCheckDirectionalMv` (screen-content arm), the two line-search slots and
+/// `pfCalculateSingleBlockFeature` (both FME, dormant). `pfMotionSearch`
+/// stays in the table proper: its readers are the mode-decision callers,
+/// which hold the whole table lawfully.
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct SMeFuncs {
+    pub pfSearchMethod: [Option<PSearchMethodFunc>; BLOCK_SIZE_ALL],
+    pub pfCalculateSatd: Option<PCalculateSatdFunc>,
+    pub pfCheckDirectionalMv: Option<PCheckDirectionalMv>,
+    // SCREEN_CONTENT(dormant: Phase 10) — the cross/feature-search half.
+    pub pfVerticalFullSearch: Option<PLineFullSearchFunc>,
+    pub pfHorizontalFullSearch: Option<PLineFullSearchFunc>,
+    /// 0 - for 8x8, 1 for 16x16
+    pub pfCalculateSingleBlockFeature: [Option<PCalculateSingleBlockFeature>; 2],
+}
+
+impl Default for SMeFuncs {
+    fn default() -> Self {
+        Self {
+            pfSearchMethod: [None; BLOCK_SIZE_ALL],
+            pfCalculateSatd: None,
+            pfCheckDirectionalMv: None,
+            pfVerticalFullSearch: None,
+            pfHorizontalFullSearch: None,
+            pfCalculateSingleBlockFeature: [None; 2],
+        }
+    }
+}
+
 
 
 
@@ -497,25 +537,25 @@ pub unsafe extern "C" fn WelsInitMeFunc(
         (*pFuncList).pfUpdateFMESwitch = Some(UpdateFMESwitchNull);
 
         if !bScreenContent {
-            (*pFuncList).pfCheckDirectionalMv = Some(CheckDirectionalMvFalse);
+            (*pFuncList).sMeFuncs.pfCheckDirectionalMv = Some(CheckDirectionalMvFalse);
             (*pFuncList).pfCalculateBlockFeatureOfFrame[0] = None;
             (*pFuncList).pfCalculateBlockFeatureOfFrame[1] = None;
-            (*pFuncList).pfCalculateSingleBlockFeature[0] = None;
-            (*pFuncList).pfCalculateSingleBlockFeature[1] = None;
+            (*pFuncList).sMeFuncs.pfCalculateSingleBlockFeature[0] = None;
+            (*pFuncList).sMeFuncs.pfCalculateSingleBlockFeature[1] = None;
         } else {
-            (*pFuncList).pfCheckDirectionalMv = Some(CheckDirectionalMv);
+            (*pFuncList).sMeFuncs.pfCheckDirectionalMv = Some(CheckDirectionalMv);
 
             // Cross Search
-            (*pFuncList).pfVerticalFullSearch = Some(LineFullSearch_c);
-            (*pFuncList).pfHorizontalFullSearch = Some(LineFullSearch_c);
+            (*pFuncList).sMeFuncs.pfVerticalFullSearch = Some(LineFullSearch_c);
+            (*pFuncList).sMeFuncs.pfHorizontalFullSearch = Some(LineFullSearch_c);
 
             // Feature Search
             (*pFuncList).pfInitializeHashforFeature = Some(InitializeHashforFeature_c);
             (*pFuncList).pfFillQpelLocationByFeatureValue = Some(FillQpelLocationByFeatureValue_c);
             (*pFuncList).pfCalculateBlockFeatureOfFrame[0] = Some(SumOf8x8BlockOfFrame_c);
             (*pFuncList).pfCalculateBlockFeatureOfFrame[1] = Some(SumOf16x16BlockOfFrame_c);
-            (*pFuncList).pfCalculateSingleBlockFeature[0] = Some(SumOf8x8SingleBlock_c);
-            (*pFuncList).pfCalculateSingleBlockFeature[1] = Some(SumOf16x16SingleBlock_c);
+            (*pFuncList).sMeFuncs.pfCalculateSingleBlockFeature[0] = Some(SumOf8x8SingleBlock_c);
+            (*pFuncList).sMeFuncs.pfCalculateSingleBlockFeature[1] = Some(SumOf16x16SingleBlock_c);
         }
     }
 }
@@ -581,14 +621,14 @@ pub unsafe extern "C" fn WelsMotionEstimateSearch(
         // Step 1: Initial point prediction
         if !WelsMotionEstimateInitialPoint(pFuncList, pMe, pSlice, kiStrideEnc, kiStrideRef) {
             let block_size = (*pMe).uiBlockSize as usize;
-            if let Some(search_fn) = (*pFuncList).pfSearchMethod[block_size] {
+            if let Some(search_fn) = (*pFuncList).sMeFuncs.pfSearchMethod[block_size] {
                 search_fn(pFuncList, pMe, pSlice, kiStrideEnc, kiStrideRef);
             }
             MeEndIntepelSearch(pMe);
         }
 
         let block_size = (*pMe).uiBlockSize as usize;
-        if let Some(calc_satd) = (*pFuncList).pfCalculateSatd {
+        if let Some(calc_satd) = (*pFuncList).sMeFuncs.pfCalculateSatd {
             calc_satd(
                 (*pFuncList).sSampleDealingFuncs.pfSampleSatdRaw[block_size],
                 pMe,
@@ -633,7 +673,7 @@ pub unsafe extern "C" fn WelsMotionEstimateSearchStatic(
 
         MeEndIntepelSearch(pMe);
 
-        if let Some(calc_satd) = (*pFuncList).pfCalculateSatd {
+        if let Some(calc_satd) = (*pFuncList).sMeFuncs.pfCalculateSatd {
             calc_satd(
                 (*pFuncList).sSampleDealingFuncs.pfSampleSatdRaw[block_size],
                 pMe,
@@ -677,7 +717,7 @@ pub unsafe extern "C" fn WelsMotionEstimateSearchScrolled(
 
         MeEndIntepelSearch(pMe);
 
-        if let Some(calc_satd) = (*pFuncList).pfCalculateSatd {
+        if let Some(calc_satd) = (*pFuncList).sMeFuncs.pfCalculateSatd {
             calc_satd(
                 (*pFuncList).sSampleDealingFuncs.pfSampleSatdRaw[block_size],
                 pMe,
@@ -756,7 +796,7 @@ pub unsafe extern "C" fn WelsMotionEstimateInitialPoint(
             }
         }
 
-        if let Some(check_dir) = (*pFuncList).pfCheckDirectionalMv {
+        if let Some(check_dir) = (*pFuncList).sMeFuncs.pfCheckDirectionalMv {
             if check_dir(pSad, pMe, ksMvStartMin, ksMvStartMax, iStrideEnc, iStrideRef, &mut iSadCost) {
                 sMv = (*pMe).sDirectionalMv;
                 pRefMb = (*pMe).pColoRefMb.offset((sMv.iMvY as i32 * iStrideRef + sMv.iMvX as i32) as isize);
@@ -1080,7 +1120,7 @@ pub unsafe extern "C" fn WelsMotionCrossSearch(
     kiRefStride: i32,
 ) {
     unsafe {
-        if let Some(vert_fn) = (*pFuncList).pfVerticalFullSearch {
+        if let Some(vert_fn) = (*pFuncList).sMeFuncs.pfVerticalFullSearch {
             vert_fn(
                 pFuncList,
                 pMe,
@@ -1094,7 +1134,7 @@ pub unsafe extern "C" fn WelsMotionCrossSearch(
         }
 
         if (*pMe).uiSadCost >= (*pMe).uiSadCostThreshold {
-            if let Some(horiz_fn) = (*pFuncList).pfHorizontalFullSearch {
+            if let Some(horiz_fn) = (*pFuncList).sMeFuncs.pfHorizontalFullSearch {
                 horiz_fn(
                     pFuncList,
                     pMe,
@@ -1413,7 +1453,7 @@ pub unsafe fn SetFeatureSearchIn(
         pFeatureSearchIn.pSad = pFunc.sSampleDealingFuncs.pfSampleSadRaw[block_size];
 
         let single_fn_idx = if block_size == BLOCK_16x16 { 1 } else { 0 };
-        if let Some(calc_single) = pFunc.pfCalculateSingleBlockFeature[single_fn_idx] {
+        if let Some(calc_single) = pFunc.sMeFuncs.pfCalculateSingleBlockFeature[single_fn_idx] {
             pFeatureSearchIn.iFeatureOfCurrent = calc_single(sMe.pEncMb, kiEncStride);
         }
 

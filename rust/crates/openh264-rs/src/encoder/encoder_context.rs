@@ -2499,7 +2499,7 @@ mod tests {
         assert!(fl.pfGetLumaI4x4Pred.iter().all(Option::is_none), "new(): no I4x4 predictors");
         assert!(fl.pfGetChromaPred.iter().all(Option::is_none), "new(): no chroma predictors");
         assert!(fl.pfMotionSearch.iter().all(Option::is_none), "new(): no motion search");
-        assert!(fl.pfSearchMethod.iter().all(Option::is_none), "new(): no search method");
+        assert!(fl.sMeFuncs.pfSearchMethod.iter().all(Option::is_none), "new(): no search method");
         assert!(fl.sMcFuncs.pMcLumaFunc.is_none(), "new(): no motion compensation");
         assert!(
             fl.sSampleDealingFuncs.pfSampleSad.iter().all(Option::is_none)
