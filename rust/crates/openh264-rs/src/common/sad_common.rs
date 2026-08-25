@@ -2,10 +2,10 @@
     non_snake_case,
     non_camel_case_types,
     non_upper_case_globals,
-    dead_code,
-    unused_variables,
-    unused_unsafe
+    dead_code
 )]
+
+#![deny(unsafe_code)]
 
 //! Sum of Absolute Differences (SAD) distortion calculation engine.
 //!
@@ -56,359 +56,15 @@ pub fn WELS_ABS(iX: i32) -> i32 {
 // both libraries would have had one interpose on the other. `tools/abi_exports.sh` is
 // the gate that will not let them come back.
 
-//=================== Single-Block SAD Functions =====================//
-
-/// Computes the Sum of Absolute Differences for a 4x4 block.
-///
-/// Matches `int32_t WelsSampleSad4x4_c (uint8_t* pSample1, int32_t iStride1, uint8_t* pSample2, int32_t iStride2)`
-/// in `sad_common.cpp`.
-///
-/// # Safety
-/// `pSample1` and `pSample2` must point to valid readable pixel buffers of at least 4 rows with
-/// the specified strides.
-pub unsafe extern "C" fn WelsSampleSad4x4_c(
-    pSample1: *mut u8,
-    iStride1: i32,
-    pSample2: *mut u8,
-    iStride2: i32,
-) -> i32 {
-    let mut iSadSum: i32 = 0;
-    let mut pSrc1 = pSample1;
-    let mut pSrc2 = pSample2;
-
-    unsafe {
-        for _ in 0..4 {
-            iSadSum += (*pSrc1.add(0) as i32 - *pSrc2.add(0) as i32).abs();
-            iSadSum += (*pSrc1.add(1) as i32 - *pSrc2.add(1) as i32).abs();
-            iSadSum += (*pSrc1.add(2) as i32 - *pSrc2.add(2) as i32).abs();
-            iSadSum += (*pSrc1.add(3) as i32 - *pSrc2.add(3) as i32).abs();
-
-            pSrc1 = pSrc1.offset(iStride1 as isize);
-            pSrc2 = pSrc2.offset(iStride2 as isize);
-        }
-    }
-
-    iSadSum
-}
-
-/// Computes the Sum of Absolute Differences for an 8x4 block.
-///
-/// Matches `int32_t WelsSampleSad8x4_c (uint8_t* pSample1, int32_t iStride1, uint8_t* pSample2, int32_t iStride2)`
-/// in `sad_common.cpp`.
-///
-/// # Safety
-/// Requires valid readable pointers for `pSample1` and `pSample2`.
-pub unsafe extern "C" fn WelsSampleSad8x4_c(
-    pSample1: *mut u8,
-    iStride1: i32,
-    pSample2: *mut u8,
-    iStride2: i32,
-) -> i32 {
-    let mut iSadSum: i32 = 0;
-    unsafe {
-        iSadSum += WelsSampleSad4x4_c(pSample1, iStride1, pSample2, iStride2);
-        iSadSum += WelsSampleSad4x4_c(pSample1.add(4), iStride1, pSample2.add(4), iStride2);
-    }
-    iSadSum
-}
-
-/// Computes the Sum of Absolute Differences for a 4x8 block.
-///
-/// Matches `int32_t WelsSampleSad4x8_c (uint8_t* pSample1, int32_t iStride1, uint8_t* pSample2, int32_t iStride2)`
-/// in `sad_common.cpp`.
-///
-/// # Safety
-/// Requires valid readable pointers for `pSample1` and `pSample2`.
-pub unsafe extern "C" fn WelsSampleSad4x8_c(
-    pSample1: *mut u8,
-    iStride1: i32,
-    pSample2: *mut u8,
-    iStride2: i32,
-) -> i32 {
-    let mut iSadSum: i32 = 0;
-    unsafe {
-        iSadSum += WelsSampleSad4x4_c(pSample1, iStride1, pSample2, iStride2);
-        iSadSum += WelsSampleSad4x4_c(
-            pSample1.offset((iStride1 << 2) as isize),
-            iStride1,
-            pSample2.offset((iStride2 << 2) as isize),
-            iStride2,
-        );
-    }
-    iSadSum
-}
-
-/// Computes the Sum of Absolute Differences for an 8x8 block.
-///
-/// Matches `int32_t WelsSampleSad8x8_c (uint8_t* pSample1, int32_t iStride1, uint8_t* pSample2, int32_t iStride2)`
-/// in `sad_common.cpp`.
-///
-/// # Safety
-/// Requires valid readable pointers for `pSample1` and `pSample2`.
-pub unsafe extern "C" fn WelsSampleSad8x8_c(
-    pSample1: *mut u8,
-    iStride1: i32,
-    pSample2: *mut u8,
-    iStride2: i32,
-) -> i32 {
-    let mut iSadSum: i32 = 0;
-    let mut pSrc1 = pSample1;
-    let mut pSrc2 = pSample2;
-
-    unsafe {
-        for _ in 0..8 {
-            iSadSum += (*pSrc1.add(0) as i32 - *pSrc2.add(0) as i32).abs();
-            iSadSum += (*pSrc1.add(1) as i32 - *pSrc2.add(1) as i32).abs();
-            iSadSum += (*pSrc1.add(2) as i32 - *pSrc2.add(2) as i32).abs();
-            iSadSum += (*pSrc1.add(3) as i32 - *pSrc2.add(3) as i32).abs();
-            iSadSum += (*pSrc1.add(4) as i32 - *pSrc2.add(4) as i32).abs();
-            iSadSum += (*pSrc1.add(5) as i32 - *pSrc2.add(5) as i32).abs();
-            iSadSum += (*pSrc1.add(6) as i32 - *pSrc2.add(6) as i32).abs();
-            iSadSum += (*pSrc1.add(7) as i32 - *pSrc2.add(7) as i32).abs();
-
-            pSrc1 = pSrc1.offset(iStride1 as isize);
-            pSrc2 = pSrc2.offset(iStride2 as isize);
-        }
-    }
-
-    iSadSum
-}
-
-/// Computes the Sum of Absolute Differences for a 16x8 block.
-///
-/// Matches `int32_t WelsSampleSad16x8_c (uint8_t* pSample1, int32_t iStride1, uint8_t* pSample2, int32_t iStride2)`
-/// in `sad_common.cpp`.
-///
-/// # Safety
-/// Requires valid readable pointers for `pSample1` and `pSample2`.
-pub unsafe extern "C" fn WelsSampleSad16x8_c(
-    pSample1: *mut u8,
-    iStride1: i32,
-    pSample2: *mut u8,
-    iStride2: i32,
-) -> i32 {
-    let mut iSadSum: i32 = 0;
-    unsafe {
-        iSadSum += WelsSampleSad8x8_c(pSample1, iStride1, pSample2, iStride2);
-        iSadSum += WelsSampleSad8x8_c(pSample1.add(8), iStride1, pSample2.add(8), iStride2);
-    }
-    iSadSum
-}
-
-/// Computes the Sum of Absolute Differences for an 8x16 block.
-///
-/// Matches `int32_t WelsSampleSad8x16_c (uint8_t* pSample1, int32_t iStride1, uint8_t* pSample2, int32_t iStride2)`
-/// in `sad_common.cpp`.
-///
-/// # Safety
-/// Requires valid readable pointers for `pSample1` and `pSample2`.
-pub unsafe extern "C" fn WelsSampleSad8x16_c(
-    pSample1: *mut u8,
-    iStride1: i32,
-    pSample2: *mut u8,
-    iStride2: i32,
-) -> i32 {
-    let mut iSadSum: i32 = 0;
-    unsafe {
-        iSadSum += WelsSampleSad8x8_c(pSample1, iStride1, pSample2, iStride2);
-        iSadSum += WelsSampleSad8x8_c(
-            pSample1.offset((iStride1 << 3) as isize),
-            iStride1,
-            pSample2.offset((iStride2 << 3) as isize),
-            iStride2,
-        );
-    }
-    iSadSum
-}
-
-/// Computes the Sum of Absolute Differences for a 16x16 macroblock.
-///
-/// Matches `int32_t WelsSampleSad16x16_c (uint8_t* pSample1, int32_t iStride1, uint8_t* pSample2, int32_t iStride2)`
-/// in `sad_common.cpp`.
-///
-/// # Safety
-/// Requires valid readable pointers for `pSample1` and `pSample2`.
-pub unsafe extern "C" fn WelsSampleSad16x16_c(
-    pSample1: *mut u8,
-    iStride1: i32,
-    pSample2: *mut u8,
-    iStride2: i32,
-) -> i32 {
-    let mut iSadSum: i32 = 0;
-    unsafe {
-        iSadSum += WelsSampleSad8x8_c(pSample1, iStride1, pSample2, iStride2);
-        iSadSum += WelsSampleSad8x8_c(pSample1.add(8), iStride1, pSample2.add(8), iStride2);
-        iSadSum += WelsSampleSad8x8_c(
-            pSample1.offset((iStride1 << 3) as isize),
-            iStride1,
-            pSample2.offset((iStride2 << 3) as isize),
-            iStride2,
-        );
-        iSadSum += WelsSampleSad8x8_c(
-            pSample1.offset((iStride1 << 3) as isize).add(8),
-            iStride1,
-            pSample2.offset((iStride2 << 3) as isize).add(8),
-            iStride2,
-        );
-    }
-    iSadSum
-}
-
-//=================== 4-Directional Diamond SAD Functions =====================//
-
-/// Computes 4-point directional diamond search SAD for 16x16 macroblocks (Top, Bottom, Left, Right).
-///
-/// Matches `void WelsSampleSadFour16x16_c (uint8_t* iSample1, int32_t iStride1, uint8_t* iSample2, int32_t iStride2, int32_t* pSad)`
-/// in `sad_common.cpp`.
-///
-/// # Safety
-/// `iSample1`, `iSample2`, and `pSad` (must have at least 4 elements) must be valid pointers.
-pub unsafe extern "C" fn WelsSampleSadFour16x16_c(
-    iSample1: *mut u8,
-    iStride1: i32,
-    iSample2: *mut u8,
-    iStride2: i32,
-    pSad: *mut i32,
-) {
-    unsafe {
-        *pSad.add(0) = WelsSampleSad16x16_c(iSample1, iStride1, iSample2.offset(-(iStride2 as isize)), iStride2);
-        *pSad.add(1) = WelsSampleSad16x16_c(iSample1, iStride1, iSample2.offset(iStride2 as isize), iStride2);
-        *pSad.add(2) = WelsSampleSad16x16_c(iSample1, iStride1, iSample2.offset(-1), iStride2);
-        *pSad.add(3) = WelsSampleSad16x16_c(iSample1, iStride1, iSample2.offset(1), iStride2);
-    }
-}
-
-/// Computes 4-point directional diamond search SAD for 16x8 blocks.
-///
-/// Matches `void WelsSampleSadFour16x8_c (uint8_t* iSample1, int32_t iStride1, uint8_t* iSample2, int32_t iStride2, int32_t* pSad)`
-/// in `sad_common.cpp`.
-///
-/// # Safety
-/// Requires valid pointers for `iSample1`, `iSample2`, and `pSad`.
-pub unsafe extern "C" fn WelsSampleSadFour16x8_c(
-    iSample1: *mut u8,
-    iStride1: i32,
-    iSample2: *mut u8,
-    iStride2: i32,
-    pSad: *mut i32,
-) {
-    unsafe {
-        *pSad.add(0) = WelsSampleSad16x8_c(iSample1, iStride1, iSample2.offset(-(iStride2 as isize)), iStride2);
-        *pSad.add(1) = WelsSampleSad16x8_c(iSample1, iStride1, iSample2.offset(iStride2 as isize), iStride2);
-        *pSad.add(2) = WelsSampleSad16x8_c(iSample1, iStride1, iSample2.offset(-1), iStride2);
-        *pSad.add(3) = WelsSampleSad16x8_c(iSample1, iStride1, iSample2.offset(1), iStride2);
-    }
-}
-
-/// Computes 4-point directional diamond search SAD for 8x16 blocks.
-///
-/// Matches `void WelsSampleSadFour8x16_c (uint8_t* iSample1, int32_t iStride1, uint8_t* iSample2, int32_t iStride2, int32_t* pSad)`
-/// in `sad_common.cpp`.
-///
-/// # Safety
-/// Requires valid pointers for `iSample1`, `iSample2`, and `pSad`.
-pub unsafe extern "C" fn WelsSampleSadFour8x16_c(
-    iSample1: *mut u8,
-    iStride1: i32,
-    iSample2: *mut u8,
-    iStride2: i32,
-    pSad: *mut i32,
-) {
-    unsafe {
-        *pSad.add(0) = WelsSampleSad8x16_c(iSample1, iStride1, iSample2.offset(-(iStride2 as isize)), iStride2);
-        *pSad.add(1) = WelsSampleSad8x16_c(iSample1, iStride1, iSample2.offset(iStride2 as isize), iStride2);
-        *pSad.add(2) = WelsSampleSad8x16_c(iSample1, iStride1, iSample2.offset(-1), iStride2);
-        *pSad.add(3) = WelsSampleSad8x16_c(iSample1, iStride1, iSample2.offset(1), iStride2);
-    }
-}
-
-/// Computes 4-point directional diamond search SAD for 8x8 blocks.
-///
-/// Matches `void WelsSampleSadFour8x8_c (uint8_t* iSample1, int32_t iStride1, uint8_t* iSample2, int32_t iStride2, int32_t* pSad)`
-/// in `sad_common.cpp`.
-///
-/// # Safety
-/// Requires valid pointers for `iSample1`, `iSample2`, and `pSad`.
-pub unsafe extern "C" fn WelsSampleSadFour8x8_c(
-    iSample1: *mut u8,
-    iStride1: i32,
-    iSample2: *mut u8,
-    iStride2: i32,
-    pSad: *mut i32,
-) {
-    unsafe {
-        *pSad.add(0) = WelsSampleSad8x8_c(iSample1, iStride1, iSample2.offset(-(iStride2 as isize)), iStride2);
-        *pSad.add(1) = WelsSampleSad8x8_c(iSample1, iStride1, iSample2.offset(iStride2 as isize), iStride2);
-        *pSad.add(2) = WelsSampleSad8x8_c(iSample1, iStride1, iSample2.offset(-1), iStride2);
-        *pSad.add(3) = WelsSampleSad8x8_c(iSample1, iStride1, iSample2.offset(1), iStride2);
-    }
-}
-
-/// Computes 4-point directional diamond search SAD for 4x4 blocks.
-///
-/// Matches `void WelsSampleSadFour4x4_c (uint8_t* iSample1, int32_t iStride1, uint8_t* iSample2, int32_t iStride2, int32_t* pSad)`
-/// in `sad_common.cpp`.
-///
-/// # Safety
-/// Requires valid pointers for `iSample1`, `iSample2`, and `pSad`.
-pub unsafe extern "C" fn WelsSampleSadFour4x4_c(
-    iSample1: *mut u8,
-    iStride1: i32,
-    iSample2: *mut u8,
-    iStride2: i32,
-    pSad: *mut i32,
-) {
-    unsafe {
-        *pSad.add(0) = WelsSampleSad4x4_c(iSample1, iStride1, iSample2.offset(-(iStride2 as isize)), iStride2);
-        *pSad.add(1) = WelsSampleSad4x4_c(iSample1, iStride1, iSample2.offset(iStride2 as isize), iStride2);
-        *pSad.add(2) = WelsSampleSad4x4_c(iSample1, iStride1, iSample2.offset(-1), iStride2);
-        *pSad.add(3) = WelsSampleSad4x4_c(iSample1, iStride1, iSample2.offset(1), iStride2);
-    }
-}
-
-/// Computes 4-point directional diamond search SAD for 8x4 blocks.
-///
-/// Matches `void WelsSampleSadFour8x4_c (uint8_t* iSample1, int32_t iStride1, uint8_t* iSample2, int32_t iStride2, int32_t* pSad)`
-/// in `sad_common.cpp`.
-///
-/// # Safety
-/// Requires valid pointers for `iSample1`, `iSample2`, and `pSad`.
-pub unsafe extern "C" fn WelsSampleSadFour8x4_c(
-    iSample1: *mut u8,
-    iStride1: i32,
-    iSample2: *mut u8,
-    iStride2: i32,
-    pSad: *mut i32,
-) {
-    unsafe {
-        *pSad.add(0) = WelsSampleSad8x4_c(iSample1, iStride1, iSample2.offset(-(iStride2 as isize)), iStride2);
-        *pSad.add(1) = WelsSampleSad8x4_c(iSample1, iStride1, iSample2.offset(iStride2 as isize), iStride2);
-        *pSad.add(2) = WelsSampleSad8x4_c(iSample1, iStride1, iSample2.offset(-1), iStride2);
-        *pSad.add(3) = WelsSampleSad8x4_c(iSample1, iStride1, iSample2.offset(1), iStride2);
-    }
-}
-
-/// Computes 4-point directional diamond search SAD for 4x8 blocks.
-///
-/// Matches `void WelsSampleSadFour4x8_c (uint8_t* iSample1, int32_t iStride1, uint8_t* iSample2, int32_t iStride2, int32_t* pSad)`
-/// in `sad_common.cpp`.
-///
-/// # Safety
-/// Requires valid pointers for `iSample1`, `iSample2`, and `pSad`.
-pub unsafe extern "C" fn WelsSampleSadFour4x8_c(
-    iSample1: *mut u8,
-    iStride1: i32,
-    iSample2: *mut u8,
-    iStride2: i32,
-    pSad: *mut i32,
-) {
-    unsafe {
-        *pSad.add(0) = WelsSampleSad4x8_c(iSample1, iStride1, iSample2.offset(-(iStride2 as isize)), iStride2);
-        *pSad.add(1) = WelsSampleSad4x8_c(iSample1, iStride1, iSample2.offset(iStride2 as isize), iStride2);
-        *pSad.add(2) = WelsSampleSad4x8_c(iSample1, iStride1, iSample2.offset(-1), iStride2);
-        *pSad.add(3) = WelsSampleSad4x8_c(iSample1, iStride1, iSample2.offset(1), iStride2);
-    }
-}
+// The fourteen raw `WelsSampleSad*_c` / `WelsSampleSadFour*_c` shims stood
+// here (the "Single-Block" and "4-Directional Diamond" sections) — the parked
+// raw half of the SAD family, installed only into T9.B25's transitional raw
+// tables after B2-B4 flipped the production tables safe. Session F converted
+// the tables' last readers (the ME family, the chroma P-skip check, and the
+// dormant SCD sites) and deleted the tables, so the raw bodies went per the
+// park's own charter: `sample_sad::<W, H>` / `sample_sad_four::<W, H>` below
+// are the family, refereed by the 583-row byte gates on every commit. This
+// file carries `#![deny(unsafe_code)]` with zero allows from this commit on.
 
 //=================== Safe kernels =====================//
 
@@ -504,97 +160,71 @@ mod tests {
         assert_eq!(WELS_ABS(0), 0);
     }
 
-    /// One `as_mut_ptr()`, reused — not two. Calling it twice on the same `&mut`
-    /// reborrows, which pops the first pointer's tag off the borrow stack and makes
-    /// the kernel's read through it Undefined Behaviour under Stacked Borrows. The
-    /// kernel is blameless (it only reads); the *test* was manufacturing two live
-    /// mutable pointers into one allocation, which is exactly the aliasing shape
-    /// session B predicted the `safe::`-only Miri gate could not see. Found when
-    /// that gate was widened to the port's unit tests at Phase 2's exit.
+    // Session F: these value tests drove the raw `WelsSampleSad*_c` shims
+    // (deleted with T9.B25's transitional tables); the same values now pin the
+    // safe kernels — which also ends F10's third instance for good: the raw
+    // bodies' trailing `pSrc += iStride` needed `(h + 1) * stride` buffers,
+    // and the safe kernels read exactly `W` x `H`.
     #[test]
     fn test_sample_sad_4x4_identical() {
-        let mut buf = [42u8; 64];
-        unsafe {
-            let p = buf.as_mut_ptr();
-            let sad = WelsSampleSad4x4_c(p, 8, p, 8);
-            assert_eq!(sad, 0);
-        }
+        let buf = [42u8; 64];
+        let c = PlaneCursor::new(&buf, 0, 8);
+        assert_eq!(sample_sad::<4, 4>(&c, &c), 0);
     }
 
     #[test]
     fn test_sample_sad_4x4_diff() {
-        let mut buf1 = [10u8; 16];
-        let mut buf2 = [20u8; 16];
-        unsafe {
-            let sad = WelsSampleSad4x4_c(buf1.as_mut_ptr(), 4, buf2.as_mut_ptr(), 4);
-            assert_eq!(sad, 16 * 10);
-        }
+        let buf1 = [10u8; 16];
+        let buf2 = [20u8; 16];
+        let sad = sample_sad::<4, 4>(&PlaneCursor::new(&buf1, 0, 4), &PlaneCursor::new(&buf2, 0, 4));
+        assert_eq!(sad, 16 * 10);
     }
 
     #[test]
     fn test_sample_sad_8x8_diff() {
-        let mut buf1 = [5u8; 64];
-        let mut buf2 = [15u8; 64];
-        unsafe {
-            let sad = WelsSampleSad8x8_c(buf1.as_mut_ptr(), 8, buf2.as_mut_ptr(), 8);
-            assert_eq!(sad, 64 * 10);
-        }
+        let buf1 = [5u8; 64];
+        let buf2 = [15u8; 64];
+        let sad = sample_sad::<8, 8>(&PlaneCursor::new(&buf1, 0, 8), &PlaneCursor::new(&buf2, 0, 8));
+        assert_eq!(sad, 64 * 10);
     }
 
-    /// Buffers are `(h + 1) * stride`, not `h * stride`: these kernels are
-    /// **parked raw** (`perf_baseline.md` §Parked), so they still carry the C++'s
-    /// trailing `pSrc += iStride` past the last row, and a composite's sub-blocks
-    /// bump from their own anchors — `WelsSampleSad16x16_c`'s bottom-right 8x8
-    /// reaches `8*stride + 8 + 8*stride`. On an exactly-sized buffer that is
-    /// out-of-allocation pointer arithmetic: `phase2_findings.md` **F10**, third
-    /// instance, found by the widened Miri gate at Phase 2's exit. The exact spans
-    /// come back when the family re-lands (Phase 4a).
     #[test]
     fn test_sample_sad_16x16_diff() {
-        let mut buf1 = [0u8; 17 * 16];
-        let mut buf2 = [2u8; 17 * 16];
-        unsafe {
-            let sad = WelsSampleSad16x16_c(buf1.as_mut_ptr(), 16, buf2.as_mut_ptr(), 16);
-            assert_eq!(sad, 256 * 2);
-        }
+        let buf1 = [0u8; 16 * 16];
+        let buf2 = [2u8; 16 * 16];
+        let sad =
+            sample_sad::<16, 16>(&PlaneCursor::new(&buf1, 0, 16), &PlaneCursor::new(&buf2, 0, 16));
+        assert_eq!(sad, 256 * 2);
     }
 
     #[test]
     fn test_sample_sad_partitions() {
-        // (16 + 1) * 32 for the same F10 reason as `test_sample_sad_16x16_diff`.
-        let mut buf1: Vec<u8> = (0..17 * 32).map(|x| (x % 255) as u8).collect();
-        let mut buf2: Vec<u8> = (0..17 * 32).map(|x| ((x + 5) % 255) as u8).collect();
+        let buf1: Vec<u8> = (0..16 * 32).map(|x| (x % 255) as u8).collect();
+        let buf2: Vec<u8> = (0..16 * 32).map(|x| ((x + 5) % 255) as u8).collect();
+        let c1 = PlaneCursor::new(&buf1, 0, 32);
+        let c2 = PlaneCursor::new(&buf2, 0, 32);
 
-        unsafe {
-            let s8x4 = WelsSampleSad8x4_c(buf1.as_mut_ptr(), 32, buf2.as_mut_ptr(), 32);
-            let s4x8 = WelsSampleSad4x8_c(buf1.as_mut_ptr(), 32, buf2.as_mut_ptr(), 32);
-            let s16x8 = WelsSampleSad16x8_c(buf1.as_mut_ptr(), 32, buf2.as_mut_ptr(), 32);
-            let s8x16 = WelsSampleSad8x16_c(buf1.as_mut_ptr(), 32, buf2.as_mut_ptr(), 32);
-            let s16x16 = WelsSampleSad16x16_c(buf1.as_mut_ptr(), 32, buf2.as_mut_ptr(), 32);
-
-            assert!(s8x4 > 0);
-            assert!(s4x8 > 0);
-            assert_eq!(
-                s16x8,
-                WelsSampleSad8x8_c(buf1.as_mut_ptr(), 32, buf2.as_mut_ptr(), 32)
-                    + WelsSampleSad8x8_c(buf1.as_mut_ptr().add(8), 32, buf2.as_mut_ptr().add(8), 32)
-            );
-        }
+        assert!(sample_sad::<8, 4>(&c1, &c2) > 0);
+        assert!(sample_sad::<4, 8>(&c1, &c2) > 0);
+        assert_eq!(
+            sample_sad::<16, 8>(&c1, &c2),
+            sample_sad::<8, 8>(&c1, &c2)
+                + sample_sad::<8, 8>(&c1.advance(8, 0), &c2.advance(8, 0))
+        );
     }
 
     #[test]
     fn test_sample_sad_four_16x16() {
         let stride = 64;
-        let mut buf1 = vec![100u8; stride * 32];
-        let mut buf2 = vec![100u8; stride * 32];
-
-        let center_offset = stride * 10 + 10;
-        let p_center = unsafe { buf2.as_mut_ptr().add(center_offset) };
+        let buf1 = vec![100u8; stride * 32];
+        let buf2 = vec![100u8; stride * 32];
 
         let mut sad_results = [0i32; 4];
-        unsafe {
-            WelsSampleSadFour16x16_c(buf1.as_mut_ptr(), stride as i32, p_center, stride as i32, sad_results.as_mut_ptr());
-        }
+        sample_sad_four::<16, 16>(
+            &PlaneCursor::new(&buf1, 0, stride),
+            &PlaneCursor::new(&buf2, stride * 10 + 10, stride),
+            &mut sad_results,
+        );
         assert_eq!(sad_results, [0, 0, 0, 0]);
     }
 }

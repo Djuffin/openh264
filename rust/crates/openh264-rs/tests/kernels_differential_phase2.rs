@@ -337,205 +337,92 @@ fn safe_sad_four(w: usize, h: usize, c1: &PlaneCursor<'_>, c2: &PlaneCursor<'_>,
     }
 }
 
-/// The safe SAD kernels against the raw ones they will replace once the swap can hold
-/// the performance budget. Live again after the unswap — while `sad_common.rs` runs
-/// raw code, this is what keeps the safe kernels honest.
+// **Session F: `sad_kernels_match_the_raw_ones`, the `SAD_SHIMS`/`FOUR_SHIMS`
+// tables and `sad_shims_stay_inside_the_spans_they_declare` are retired with
+// the raw kernels they drove.** This file's own charter rules it: when the old
+// side dies, the comparison entry dies in the same commit, and what survives
+// pins a *property*. Two properties survive, both re-anchored on the safe
+// kernels below: the span discipline the old span test's comment prescribed
+// for exactly this moment ("the shim-contract spans are `(h-1)*stride + w`:
+// restore them in the commit that re-lands the swap"), and the
+// four-distinct-right-points check that already called itself "the entry that
+// outlives it".
+
+/// The safe SAD kernels' declared reach, proven by exact-span allocations: an
+/// over-read panics at the slice, and agreement with the same content in a
+/// padded surface proves the values depend on nothing outside the span.
+/// `sample_sad` reads `(h-1)*stride + w` from its anchor; `sample_sad_four`'s
+/// reference side reads one row and one column beyond the block on every side.
+/// The four-point arms are also checked to be four *distinct* points scoring
+/// inside their own block bound — the halves of the retired raw span test that
+/// were properties of the family rather than of the deleted shims.
 #[test]
-fn sad_kernels_match_the_raw_ones() {
-    let mut rng = Prng::new(0x5AD0_0500);
-
-    for &(name, raw, w, h) in SAD_SHIMS {
-        for &s1 in &strides(w) {
-            for &s2 in &strides(w) {
-                for _ in 0..scale(40) {
-                    let (mut b1, c1) = sad_surface(&mut rng, s1, w, h, 0);
-                    let (mut b2, c2) = sad_surface(&mut rng, s2, w, h, 0);
-                    let old = unsafe {
-                        raw(b1.as_mut_ptr().add(c1), s1 as i32, b2.as_mut_ptr().add(c2), s2 as i32)
-                    };
-                    let new = safe_sad(
-                        w,
-                        h,
-                        &PlaneCursor::new(&b1, c1, s1),
-                        &PlaneCursor::new(&b2, c2, s2),
-                    );
-                    assert_eq!(old, new, "{name}: strides {s1}/{s2}, seed {:#x}", rng.seed());
-                }
-            }
-        }
-    }
-
-    // `pad = 1` on the second surface is exactly the four-point reach, so the noise the
-    // diamond's arms read is real data that differs from the block's own edge.
-    for &(name, raw, w, h) in FOUR_SHIMS {
-        for &s1 in &strides(w) {
-            for &s2 in &strides(w + 2) {
-                for _ in 0..scale(40) {
-                    let (mut b1, c1) = sad_surface(&mut rng, s1, w, h, 0);
-                    let (mut b2, c2) = sad_surface(&mut rng, s2, w, h, 1);
-                    let mut old = [0i32; 4];
-                    unsafe {
-                        raw(
-                            b1.as_mut_ptr().add(c1),
-                            s1 as i32,
-                            b2.as_mut_ptr().add(c2),
-                            s2 as i32,
-                            old.as_mut_ptr(),
-                        )
-                    };
-                    let mut new = [0i32; 4];
-                    safe_sad_four(
-                        w,
-                        h,
-                        &PlaneCursor::new(&b1, c1, s1),
-                        &PlaneCursor::new(&b2, c2, s2),
-                        &mut new,
-                    );
-                    assert_eq!(
-                        old, new,
-                        "{name}: strides {s1}/{s2}, seed {:#x} (up, down, left, right)",
-                        rng.seed()
-                    );
-                }
-            }
-        }
-    }
-}
-
-type RawSad = unsafe extern "C" fn(*mut u8, i32, *mut u8, i32) -> i32;
-type RawFour = unsafe extern "C" fn(*mut u8, i32, *mut u8, i32, *mut i32);
-
-/// Named `_SHIMS` because that is what these entry points are when the swap is
-/// landed; right now the SAD half is unswapped and they are the raw kernels. Both
-/// readings are true of the spans, which is why the property survives the unswap.
-const SAD_SHIMS: &[(&str, RawSad, usize, usize)] = &[
-    ("Sad4x4", sad::WelsSampleSad4x4_c, 4, 4),
-    ("Sad8x4", sad::WelsSampleSad8x4_c, 8, 4),
-    ("Sad4x8", sad::WelsSampleSad4x8_c, 4, 8),
-    ("Sad8x8", sad::WelsSampleSad8x8_c, 8, 8),
-    ("Sad16x8", sad::WelsSampleSad16x8_c, 16, 8),
-    ("Sad8x16", sad::WelsSampleSad8x16_c, 8, 16),
-    ("Sad16x16", sad::WelsSampleSad16x16_c, 16, 16),
-];
-
-const FOUR_SHIMS: &[(&str, RawFour, usize, usize)] = &[
-    ("SadFour4x4", sad::WelsSampleSadFour4x4_c, 4, 4),
-    ("SadFour8x4", sad::WelsSampleSadFour8x4_c, 8, 4),
-    ("SadFour4x8", sad::WelsSampleSadFour4x8_c, 4, 8),
-    ("SadFour8x8", sad::WelsSampleSadFour8x8_c, 8, 8),
-    ("SadFour16x8", sad::WelsSampleSadFour16x8_c, 16, 8),
-    ("SadFour8x16", sad::WelsSampleSadFour8x16_c, 8, 16),
-    ("SadFour16x16", sad::WelsSampleSadFour16x16_c, 16, 16),
-];
-
-/// Every `common/sad_common.rs` shim, against allocations sized to **exactly** the
-/// span it declares.
-///
-/// Too small a span and the safe kernel indexes past its slice and panics, in any
-/// build, on the first call. Too large and the shim materialises a reference to bytes
-/// it does not own — undefined behaviour that produces perfectly plausible pixels and
-/// is visible only to Miri, at the `from_raw_parts`. Run this file under Miri for that
-/// half; `cargo test` gets the other.
-#[test]
-fn sad_shims_stay_inside_the_spans_they_declare() {
+fn sad_kernels_stay_inside_the_spans_they_declare() {
     let mut rng = Prng::new(0x5AD0_0501);
 
-    // PARKED-FAMILY BUFFER SIZES (F10). While T5-sad is unswapped these Wels
-    // names are the *raw* kernels, whose row loop bumps its pointers one stride
-    // past the last row after the final iteration (`pSrc = pSrc.offset(iStride)`,
-    // inherited from the C++'s `pSrc += iStride`). On a buffer that ends at the
-    // block's last row that bump computes an out-of-allocation pointer — UB that
-    // Miri reports even though nothing dereferences it (`phase2_findings.md`
-    // F10). The buffers below are therefore sized to the raw kernels'
-    // pointer-arithmetic footprint — whole rows plus the composite sub-block
-    // offset, and two extra rows on the four-point reference side for the
-    // down/right arms. **The shim-contract spans are `(h-1)*stride + w` and
-    // `(h+1)*stride + w`: restore them in the commit that re-lands the swap**,
-    // because the safe kernels never compute past their span and the exact size
-    // is what makes an over-claiming shim Miri-visible.
-    for &(name, f, w, h) in SAD_SHIMS {
+    const SAD_SHAPES: &[(usize, usize)] = &[(4, 4), (8, 4), (4, 8), (8, 8), (16, 8), (8, 16), (16, 16)];
+
+    for &(w, h) in SAD_SHAPES {
         for &s1 in &strides(w) {
             for &s2 in &strides(w) {
-                let mut b1 = rng.bytes(h * s1 + w);
-                let mut b2 = rng.bytes(h * s2 + w);
-                let got =
-                    unsafe { f(b1.as_mut_ptr(), s1 as i32, b2.as_mut_ptr(), s2 as i32) };
-                // A SAD is bounded by its own block; anything else means the kernel
-                // summed samples it should not have reached.
+                let exact1 = rng.bytes((h - 1) * s1 + w);
+                let exact2 = rng.bytes((h - 1) * s2 + w);
+                let got = safe_sad(w, h, &PlaneCursor::new(&exact1, 0, s1), &PlaneCursor::new(&exact2, 0, s2));
                 assert!(
                     (0..=(w * h * 255) as i32).contains(&got),
-                    "{name}: {got} is outside [0, {}] at strides {s1}/{s2}",
+                    "sad {w}x{h}: {got} outside [0, {}] at strides {s1}/{s2}",
                     w * h * 255
                 );
+
+                let mut pad1 = rng.bytes(h * s1 + 64);
+                let mut pad2 = rng.bytes(h * s2 + 64);
+                pad1[..exact1.len()].copy_from_slice(&exact1);
+                pad2[..exact2.len()].copy_from_slice(&exact2);
+                let want = safe_sad(w, h, &PlaneCursor::new(&pad1, 0, s1), &PlaneCursor::new(&pad2, 0, s2));
+                assert_eq!(got, want, "sad {w}x{h} strides {s1}/{s2}");
             }
         }
     }
 
-    for &(name, f, w, h) in FOUR_SHIMS {
+    for &(w, h) in SAD_SHAPES {
         for &s1 in &strides(w) {
             for &s2 in &strides(w + 2) {
-                let mut b1 = rng.bytes(h * s1 + w);
-                let mut b2 = rng.bytes((h + 2) * s2 + w);
-                // Eight slots, of which exactly four may be written. The back half is
-                // the assertion that the shim's `[i32; 4]` really is four: a kernel
-                // handed a bare `int32_t*` has nothing else stopping it at four, and
-                // `pSad` at every live call site is a `[0i32; 4]` on the stack
-                // (`svc_motion_estimate.rs:871`) with the caller's locals behind it.
-                let mut sads = [0i32; 8];
-                for (i, s) in sads.iter_mut().enumerate() {
-                    *s = -(i as i32) - 1;
-                }
-                let guard = sads[4..].to_vec();
-                unsafe {
-                    f(
-                        b1.as_mut_ptr(),
-                        s1 as i32,
-                        b2.as_mut_ptr().add(s2),
-                        s2 as i32,
-                        sads.as_mut_ptr(),
-                    )
-                };
-                assert_eq!(
-                    &sads[4..],
-                    &guard[..],
-                    "{name}: wrote past the four results it was given, at strides {s1}/{s2}"
+                let exact1 = rng.bytes((h - 1) * s1 + w);
+                // The four-point reference reach: anchor at (1, 1) of a surface
+                // spanning rows -1 .. h+1 and one column either side.
+                let exact2 = rng.bytes((h + 1) * s2 + w + 1);
+                let mut got = [0i32; 4];
+                safe_sad_four(
+                    w,
+                    h,
+                    &PlaneCursor::new(&exact1, 0, s1),
+                    &PlaneCursor::new(&exact2, s2 + 1, s2),
+                    &mut got,
                 );
-                for (k, &v) in sads[..4].iter().enumerate() {
+                for (k, &v) in got.iter().enumerate() {
                     assert!(
                         (0..=(w * h * 255) as i32).contains(&v),
-                        "{name}: arm {k} scored {v}, outside [0, {}]",
+                        "sad-four {w}x{h}: arm {k} scored {v}, outside [0, {}]",
                         w * h * 255
                     );
                 }
-                // The four arms are four *distinct* points. Equivalence against the
-                // raw kernel could never have shown a shared misreading of the offsets
-                // — the raw kernel was the reference, not an oracle — so this is the
-                // entry that outlives it.
                 assert!(
-                    sads[..4].iter().collect::<std::collections::HashSet<_>>().len() > 1,
-                    "{name}: all four search points scored identically on noise, so they \
-                     are not four distinct points (strides {s1}/{s2}, seed {:#x})",
+                    got.iter().collect::<std::collections::HashSet<_>>().len() > 1,
+                    "sad-four {w}x{h}: all four search points scored identically on noise                      (strides {s1}/{s2}, seed {:#x})",
                     rng.seed()
                 );
 
-                // And they are the four *right* points. Sizing the span correctly does
-                // not pin where it starts: a shim that built its slice from `pSample2`
-                // instead of one row above it, and left the cursor anchored at
-                // `iStride2`, reads a block shifted a whole row down and still returns
-                // four plausible, distinct, in-range numbers. That mutation survived
-                // everything above; it dies here. The reference calls anchor their own
-                // cursors, so what is being compared is the shim's span arithmetic
-                // against arithmetic written independently of it.
-                let c1 = PlaneCursor::new(&b1, 0, s1);
-                let c2 = PlaneCursor::new(&b2, s2, s2);
+                let mut pad2 = rng.bytes((h + 2) * s2 + 64);
+                pad2[..exact2.len()].copy_from_slice(&exact2);
                 let mut want = [0i32; 4];
-                safe_sad_four(w, h, &c1, &c2, &mut want);
-                assert_eq!(
-                    &sads[..4],
-                    &want[..],
-                    "{name}: the shim's block is not where its contract says it is \
-                     (strides {s1}/{s2})"
+                safe_sad_four(
+                    w,
+                    h,
+                    &PlaneCursor::new(&exact1, 0, s1),
+                    &PlaneCursor::new(&pad2, s2 + 1, s2),
+                    &mut want,
                 );
+                assert_eq!(got, want, "sad-four {w}x{h} strides {s1}/{s2}");
             }
         }
     }
@@ -1551,86 +1438,28 @@ fn encoder_recon_shims_stay_inside_the_spans_they_declare() {
 }
 
 // ===========================================================================
-// T7 — `encoder/sample.rs`, the SATD family: PROVEN AND PARKED
+// T7 — `encoder/sample.rs`, the SATD family
 // ===========================================================================
 //
-// No commit B exists for this family and none is planned before Phase 4a:
-// D-perf-2's measurements are the tripwire projection (sad-class swap cost
-// +16.8% median onto an encoder already ≈ +13% cumulative crosses +25%), so
-// the safe kernels land proven and **uninstalled** — the raw
-// `WelsSampleSatd*_c` bodies are the code that runs, exactly like the parked
-// T5-sad family. These entries are therefore *live differentials*, not
-// commit-A scaffolding: they outlive this session and die only when the
-// family re-lands.
-//
-// F10's rule, applied from the start: the raw kernels bump their row
-// pointers past the last row (`pSrc += iStride` after row 3), which is
-// out-of-allocation pointer arithmetic on an exactly-sized buffer — so every
-// **raw-side** buffer here spans whole rows (`h * stride`), and the
-// **safe-side** exact-span probe below is the only place exact spans appear.
-// This file runs under Miri at phase exits; whole-row raw buffers are what
-// keep that run meaningful.
+// These entries were live raw-vs-safe differentials while the family was
+// parked (no commit B before Phase 4a, D-perf-2's tripwire projection).
+// Session F retired the raw `WelsSampleSatd*_c` bodies with the transitional
+// raw tables, so the comparison died with its old side — this file's own
+// charter — and the safe span property below is what survives.
 
 use openh264_rs::encoder::sample as satd;
 
-type RawSatd = unsafe extern "C" fn(*mut u8, i32, *mut u8, i32) -> i32;
 type SafeSatd = fn(&PlaneCursor<'_>, &PlaneCursor<'_>) -> i32;
 
-const SATD_SHAPES: &[(&str, usize, usize, RawSatd, SafeSatd)] = &[
-    ("Satd4x4", 4, 4, satd::WelsSampleSatd4x4_c, satd::satd_4x4),
-    ("Satd8x4", 8, 4, satd::WelsSampleSatd8x4_c, satd::satd_8x4),
-    ("Satd4x8", 4, 8, satd::WelsSampleSatd4x8_c, satd::satd_4x8),
-    ("Satd8x8", 8, 8, satd::WelsSampleSatd8x8_c, satd::satd_8x8),
-    ("Satd16x8", 16, 8, satd::WelsSampleSatd16x8_c, satd::satd_16x8),
-    ("Satd8x16", 8, 16, satd::WelsSampleSatd8x16_c, satd::satd_8x16),
-    ("Satd16x16", 16, 16, satd::WelsSampleSatd16x16_c, satd::satd_16x16),
+const SATD_SHAPES: &[(&str, usize, usize, SafeSatd)] = &[
+    ("Satd4x4", 4, 4, satd::satd_4x4),
+    ("Satd8x4", 8, 4, satd::satd_8x4),
+    ("Satd4x8", 4, 8, satd::satd_4x8),
+    ("Satd8x8", 8, 8, satd::satd_8x8),
+    ("Satd16x8", 16, 8, satd::satd_16x8),
+    ("Satd8x16", 8, 16, satd::satd_8x16),
+    ("Satd16x16", 16, 16, satd::satd_16x16),
 ];
-
-#[test]
-fn satd_kernels_match_the_raw_ones() {
-    let mut rng = Prng::new(0x5A7D_0007);
-
-    for &(name, w, h, raw, safe) in SATD_SHAPES {
-        for &(s1, s2) in &[(0usize, 0usize), (21, 0), (240, 25)] {
-            let (s1, s2) = (s1.max(w), s2.max(w));
-            for _ in 0..scale(60) {
-                // Raw-side buffers sized to the raw kernels' pointer-arithmetic
-                // footprint (F10) — and for the SATD *composites* that is more
-                // than whole rows: each 4x4 sub-block's trailing bump computes
-                // `sub_anchor + 4*stride`, and the bottom-right sub-block's
-                // anchor is `c + (w-4) + (h-4)*stride`, so the farthest pointer
-                // is `c + (w-4) + h*stride` — Miri flagged exactly this at
-                // `h*stride` sizing. `(h+1)*stride` covers every legal anchor.
-                let mut b1 = rng.bytes((h + 1) * s1);
-                let mut b2 = rng.bytes((h + 1) * s2);
-                let c1 = rng.below((s1 - w + 1) as u32) as usize;
-                let c2 = rng.below((s2 - w + 1) as u32) as usize;
-
-                let got_raw = unsafe {
-                    raw(b1.as_mut_ptr().add(c1), s1 as i32, b2.as_mut_ptr().add(c2), s2 as i32)
-                };
-                let got_safe = satd_pair(&b1, c1, s1, &b2, c2, s2, safe);
-                assert_eq!(
-                    got_raw, got_safe,
-                    "{name} s1={s1} s2={s2} c1={c1} c2={c2}, seed {:#x}",
-                    rng.seed()
-                );
-            }
-        }
-    }
-}
-
-fn satd_pair(
-    b1: &[u8],
-    c1: usize,
-    s1: usize,
-    b2: &[u8],
-    c2: usize,
-    s2: usize,
-    safe: SafeSatd,
-) -> i32 {
-    safe(&PlaneCursor::new(b1, c1, s1), &PlaneCursor::new(b2, c2, s2))
-}
 
 /// The safe kernels' declared reach is `(h-1)*stride + w` from the anchor on
 /// each surface — exact-span allocations prove it is not under-claimed (an
@@ -1642,7 +1471,7 @@ fn satd_pair(
 fn satd_kernels_stay_inside_the_spans_they_declare() {
     let mut rng = Prng::new(0x5A7D_59A9);
 
-    for &(name, w, h, _raw, safe) in SATD_SHAPES {
+    for &(name, w, h, safe) in SATD_SHAPES {
         for &(s1, s2) in &[(0usize, 0usize), (21, 25)] {
             let (s1, s2) = (s1.max(w), s2.max(w));
             for _ in 0..scale(20) {
