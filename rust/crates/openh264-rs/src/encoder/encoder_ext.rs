@@ -2449,7 +2449,7 @@ pub unsafe fn PreprocessSliceCoding(pCtx: *mut sWelsEncCtx) {
         for b in [
             BLOCK_16x16, BLOCK_16x8, BLOCK_8x16, BLOCK_8x8, BLOCK_4x4, BLOCK_8x4, BLOCK_4x8,
         ] {
-            fl.pfSearchMethod[b] =
+            fl.sMeFuncs.pfSearchMethod[b] =
                 Some(crate::encoder::svc_motion_estimate::WelsDiamondSearch);
         }
         fl.pfFirstIntraMode =
@@ -2460,12 +2460,12 @@ pub unsafe fn PreprocessSliceCoding(pCtx: *mut sWelsEncCtx) {
             Some(crate::encoder::svc_mode_decision::SetScrollingMvToMdNull);
 
         if bFastMode {
-            fl.pfCalculateSatd =
+            fl.sMeFuncs.pfCalculateSatd =
                 Some(crate::encoder::svc_motion_estimate::NotCalculateSatdCost);
             fl.pfInterFineMd =
                 Some(crate::encoder::svc_base_layer_md::WelsMdInterFinePartitionVaa);
         } else {
-            fl.pfCalculateSatd =
+            fl.sMeFuncs.pfCalculateSatd =
                 Some(crate::encoder::svc_motion_estimate::CalculateSatdCost);
             fl.pfInterFineMd =
                 Some(crate::encoder::svc_base_layer_md::WelsMdInterFinePartition);
