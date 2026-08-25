@@ -2292,20 +2292,14 @@ pub fn WelsDeblockingInitFilter(
     (*pFilter).ref_ids = snapshot_ref_ids(pCtx.sRefPic);
 }
 
-pub fn WelsDeblockingFilterMB(
-    pCurDqLayer: &mut DqLayerState,
-    pDec: &mut SPicture,
-    pFilter: &mut SDeblockingFilter,
-    iFilterIdc: i32,
-    pDeblockMb: Option<PDeblockingFilterMbFunc>,
-) {
-    if iFilterIdc == 0 || iFilterIdc == 2 {
-        let iBoundryFlag = DeblockingAvailableNoInterlayer(pCurDqLayer, iFilterIdc);
-        if let Some(func) = pDeblockMb {
-            func(pCurDqLayer, pDec, pFilter, iBoundryFlag);
-        }
-    }
-}
+// `WelsDeblockingFilterMB` stood here — the deblock-as-you-go dispatcher whose one
+// C++ caller is `decode_slice.cpp:1727`, inside `WelsDecodeAndConstructSlice`'s
+// untranslated per-macroblock arm (the `DECODER_MT(incomplete: F36)` fence). Zero
+// callers in the port for its whole life (F84; read grep at deletion, Phase 9 E3
+// step 0: `grep -rn 'WelsDeblockingFilterMB' src tests benches | grep -v 'fn '` → 0).
+// **S18: deleted, not converted.** Its callees keep other users:
+// `DeblockingAvailableNoInterlayer` at `WelsDeblockingFilterSlice`'s walk above,
+// `PDeblockingFilterMbFunc` as that same walk's parameter type.
 
 // ============================================================================
 // SIMD Function Pointer Dispatch Initialization
