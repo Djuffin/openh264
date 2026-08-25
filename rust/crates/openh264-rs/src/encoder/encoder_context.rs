@@ -899,7 +899,7 @@ pub unsafe fn ctx_ltr_at(pCtx: *mut sWelsEncCtx, kiDid: usize) -> *mut SLTRState
 /// cursors it hands out are *held*: `SLayerBSInfo::pBsBuf` keeps one for the life of
 /// a layer's bitstream info while the NAL writers derive more from the same buffer.
 /// There are **nineteen** cursor derivations in production — sixteen walking ones
-/// through [`ctx_frame_bs_at`] (12 in `encoder_ext.rs`, 3 in `wels_encoder_ext.rs`,
+/// through [`ctx_frame_bs_cur`] (12 in `encoder_ext.rs`, 3 in `wels_encoder_ext.rs`,
 /// 1 in `slice_multi_threading.rs`) and three of the root itself stored into a
 /// `pBsBuf` — plus one null guard in `slice_multi_threading.rs`. The conversion adds
 /// no `&mut` to any of them: as everywhere in this family, `Vec::as_mut_ptr` reads
@@ -922,20 +922,36 @@ pub unsafe fn ctx_frame_bs(pCtx: *mut sWelsEncCtx) -> *mut u8 {
     (*buf).as_ptr() as *mut u8
 }
 
-/// The frame bitstream's write cursor at byte `kiPos` — `pFrameBs + iPosBsBuffer`,
-/// which is how all fourteen of the walking derivations spell it. See
+/// The frame bitstream's write cursor — `pFrameBs + iPosBsBuffer`. See
 /// [`ctx_frame_bs`].
 ///
+/// **T9.G5 — this took the position as a parameter, and it was `ctx_frame_bs_at`.**
+/// It never varied. All 18 production callers passed the same expression:
+///
+/// ```text
+/// $ grep -rn 'ctx_frame_bs_at(' src/ | sed 's/.*ctx_frame_bs_at/&/' | sort | uniq -c
+///    9 ctx_frame_bs_at(pCtx, (*pCtx).iPosBsBuffer);
+///    9 ctx_frame_bs_at(pCtx, (*pCtx).iPosBsBuffer),
+/// ```
+///
+/// S54: a two-argument accessor whose second argument is always a field of the
+/// first is a one-argument accessor written 18 times. Written that way it was also
+/// **16 of the 51 live shape-B hazards** — the callee takes the retag and the
+/// argument reads through the same context, which is a borrow-checker error the
+/// moment either body flips. The write position is not a parameter; it is the
+/// invariant, and it now lives here where the bounds assert can name it.
+///
 /// # Safety
-/// As [`ctx_frame_bs`], and `kiPos` must be within the buffer.
+/// As [`ctx_frame_bs`].
 #[inline]
 // unsafe-cat: cursor
 #[allow(unsafe_code)]
-pub unsafe fn ctx_frame_bs_at(pCtx: *mut sWelsEncCtx, kiPos: i32) -> *mut u8 {
+pub unsafe fn ctx_frame_bs_cur(pCtx: *mut sWelsEncCtx) -> *mut u8 {
     let root = ctx_frame_bs(pCtx);
     if root.is_null() {
         return std::ptr::null_mut();
     }
+    let kiPos = (*pCtx).iPosBsBuffer;
     debug_assert!(
         kiPos >= 0 && (kiPos as usize) <= (*pCtx).pFrameBs.len(),
         "frame bitstream cursor {kiPos} is outside the buffer"
@@ -1213,7 +1229,7 @@ pub struct sWelsEncCtx {
     /// The frame's output bitstream — **T6.H4, and the encoder's one arena of
     /// bytes.** Every NAL the frame emits is written into it at `iPosBsBuffer`, and
     /// `SLayerBSInfo::pBsBuf` holds cursors into it that outlive the call that made
-    /// them. Root: [`ctx_frame_bs`]; the write cursor: [`ctx_frame_bs_at`].
+    /// them. Root: [`ctx_frame_bs`]; the write cursor: [`ctx_frame_bs_cur`].
     ///
     /// **A recorded deviation.** The C++ takes this block with `WelsMalloc`, not
     /// `WelsMallocz` — it is the one member of `RequestMemorySvc`'s set that starts
@@ -2213,7 +2229,7 @@ mod tests {
         let p: *mut sWelsEncCtx = &mut *ctx;
         // Before `RequestMemorySvc`, both answer the null the raw field held.
         assert!(unsafe { ctx_frame_bs(p) }.is_null());
-        assert!(unsafe { ctx_frame_bs_at(p, 0) }.is_null());
+        assert!(unsafe { ctx_frame_bs_cur(p) }.is_null());
 
         ctx.pFrameBs = vec![0u8; 64];
         ctx.iFrameBsSize = 64;
@@ -2224,14 +2240,24 @@ mod tests {
         let stored = unsafe { ctx_frame_bs(p) };
 
         // The frame loop then walks: derive at the cursor, write, advance, repeat.
+        // T9.G5: the walk drives `iPosBsBuffer`, because that is what the accessor
+        // reads now and what the production loop has always advanced. The position
+        // is set through `p` rather than through `ctx`, so the one raw binding above
+        // stays live across the whole walk — which is the sibling property this test
+        // exists for, and one fewer mint besides.
         for i in 0..8i32 {
-            let at = unsafe { ctx_frame_bs_at(p, i) };
-            unsafe { *at = 0xA0 | i as u8 };
+            unsafe {
+                (*p).iPosBsBuffer = i;
+                *ctx_frame_bs_cur(p) = 0xA0 | i as u8;
+            }
         }
         // The use that matters: the FIRST cursor, after eight later derivations.
-        assert_eq!(unsafe { *stored }, 0xA0, "the stored pBsBuf still reaches the buffer");
-        unsafe { *stored.add(8) = 0x5A };
-        assert_eq!(unsafe { *ctx_frame_bs_at(p, 8) }, 0x5A);
+        unsafe {
+            assert_eq!(*stored, 0xA0, "the stored pBsBuf still reaches the buffer");
+            *stored.add(8) = 0x5A;
+            (*p).iPosBsBuffer = 8;
+            assert_eq!(*ctx_frame_bs_cur(p), 0x5A);
+        }
 
         // And the whole buffer reads back through the container, which is the point
         // of owning it: no third party is needed to free or bound it.

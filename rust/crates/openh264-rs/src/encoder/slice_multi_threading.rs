@@ -88,7 +88,7 @@ pub use crate::encoder::encoder_context::sWelsEncCtx;
 // accessors. Field spellings only — no body in this file is touched, and the
 // thread machinery is Phase 7's.
 use crate::encoder::encoder_context::{
-    ctx_dq_layer, ctx_frame_bs, ctx_frame_bs_at, ctx_param, ctx_rc, ctx_rc_at,
+    ctx_dq_layer, ctx_frame_bs, ctx_frame_bs_cur, ctx_param, ctx_rc, ctx_rc_at,
 };
 
 // ============================================================================
@@ -871,7 +871,7 @@ pub unsafe fn AppendSliceToFrameBs(
                     if let Some(src) = pSliceBs.pBs.as_ref() {
                         std::ptr::copy(
                             src.as_ptr(),
-                            ctx_frame_bs_at(pCtx, (*pCtx).iPosBsBuffer),
+                            ctx_frame_bs_cur(pCtx),
                             pSliceBs.uiBsPos as usize,
                         );
                     }
