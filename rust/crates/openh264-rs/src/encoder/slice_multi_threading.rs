@@ -282,7 +282,8 @@ pub type TagSlice = SSlice;
 // **T9.C2, F132 round 6**: the element type is `AtomicU16`. `AddSliceBoundary`
 // rewrites this map from inside the fork under `SM_SIZELIMITED_SLICE` while the
 // other partitions' workers read it, so the plain `u16` was a data race on the
-// same shape `pGomCost` was (T9.C5) — one entry per macroblock, partitions
+// same shape `pGomCost` was (T9.C5; that field is itself gone — D-dead-3, it had
+// no reader in either tree) — one entry per macroblock, partitions
 // disjoint, nothing synchronising the storage itself. `Relaxed` throughout: the
 // disjointness is the argument, and the scope join is the publication edge.
 #[derive(Debug)]
@@ -296,7 +297,9 @@ pub struct SSliceCtx {
     /// `WelsGetNextMbOfSlice` reborrows the whole `SSliceCtx` per macroblock on
     /// each worker, and a shared retag over the struct covers this field. A lock
     /// only one side takes is not synchronisation — the same shape F133 found on
-    /// `pGomCost`. The mutex is *not* redundant: it brackets `AddSliceBoundary`'s
+    /// `pGomCost` (deleted whole since, D-dead-3: nothing read it, so it was never
+    /// state; *this* field is read on every macroblock, which is the difference).
+    /// The mutex is *not* redundant: it brackets `AddSliceBoundary`'s
     /// map rewrite *with* the increment, which no single atomic can do.
     pub iSliceNumInFrame: AtomicI32,
     pub iMbNumInFrame: i32,

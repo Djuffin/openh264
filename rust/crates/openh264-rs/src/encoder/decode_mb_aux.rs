@@ -460,8 +460,11 @@ pub unsafe extern "C" fn WelsIDctRecI16x16Dc_c(
 // **Consequence, recorded in F138 and left for the steward.** This was the last
 // raw reader of `pfIDctFourT4`, so all three `pfIDct*` slots are now installed by
 // `WelsInitReconstructionFuncs`, asserted-installed by two tests, and called by
-// nothing — `pGomCost`'s shape (F133) in a dispatch table. Left as measured: the
-// F133 ruling was to leave write-only storage alone.
+// nothing — `pGomCost`'s shape (F133) in a dispatch table. **F133's storage went
+// the other way on 2026-08-25: D-dead-3 deleted `pGomCost` whole, on the ground
+// that a write with no reader is not state.** That ground reaches these three slots
+// verbatim, so "left as measured" is now waiting on a ruling, not on a precedent —
+// F160 carries it.
 
 /// `decode_mb_aux.cpp:251`. Installs the scalar dequantisation and IDCT tables.
 ///

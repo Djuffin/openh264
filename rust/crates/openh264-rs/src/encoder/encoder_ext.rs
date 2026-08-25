@@ -1210,9 +1210,10 @@ pub unsafe fn RequestMemorySvc(
     // **T6.H6**: and one `Vec` for the states, which now own the five arrays
     // `RcInitLayerMemory` used to cut out of a second block each.
     // Built one at a time rather than with `vec![x; n]`, which would need
-    // `SWelsSvcRc: Clone` — T9.C5 dropped that derive, because a rate controller
-    // now carries a capture of its own `pGomCost` and a clone would aim the copy
-    // at the original's buffer.
+    // `SWelsSvcRc: Clone`, and the derive is not there: T9.C5 dropped it over
+    // `pGomCost`, and D-dead-3 has since deleted that field. Nothing in the tree
+    // clones a rate controller, so re-deriving it would buy this one line and
+    // re-open the invitation; see the struct's own note in `rc.rs`.
     (**ppCtx).pWelsSvcRc = (0..kiNumDependencyLayers as usize)
         .map(|_| crate::encoder::rc::SWelsSvcRc::default())
         .collect();

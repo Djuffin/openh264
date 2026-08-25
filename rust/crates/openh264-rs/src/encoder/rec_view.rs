@@ -336,11 +336,14 @@ pub struct SharedMbArray<T: Copy> {
 impl<T: Copy> SharedMbArray<T> {
     /// Captures a per-macroblock array for the frame.
     ///
-    /// Public because the reconstruction picture is not the only owner of one:
-    /// the rate controller's `pGomCost` has the same shape and the same fork
-    /// (T9.C5). The contract is the module's, unchanged — the exclusive borrow
-    /// taken here must be the last one until the view is dropped, and the
-    /// workers' index sets must be disjoint.
+    /// **No caller, at HEAD.** It was made public for the rate controller's
+    /// `pGomCost` — same shape, same fork (T9.C5) — which never took it (the field
+    /// went to `Vec<AtomicI32>` instead) and is now deleted whole (D-dead-3). Every
+    /// construction in this module builds the struct literal directly. Whether this
+    /// goes the way `rc_gom_cost` did (S18) is a deletion ruling, not a session's
+    /// call — F160 carries the evidence. The contract is the module's, unchanged —
+    /// the exclusive borrow taken here must be the last one until the view is
+    /// dropped, and the workers' index sets must be disjoint.
     #[inline]
     pub fn capture(v: &mut Vec<T>) -> Self {
         Self { cells: SharedCells::capture(v) }
