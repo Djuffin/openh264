@@ -94,13 +94,15 @@ hdr() { printf '\n=== %s\n' "$1"; }
 #   - the size-limited probe drives 48x32x2 under Miri, so session-scope Miri
 #     does not see the slice-buffer realloc chain (the probe's own doc says
 #     why 112x96 cannot be afforded there);
-#   - the two fork/join probes are skipped BY NAME in the rest shard: once
-#     un-ignored (session E's acceptance) they cost tens of minutes EACH under
-#     Miri — MIN_NUM_MB_PER_SLICE floors their geometry at 49 macroblocks and
-#     two frames is the inter-coverage floor, so no shrink exists. They run at
+#   - the two fork/join probes are skipped BY NAME in the encoder shard: live
+#     (un-ignored) since T9.E8, their first green runs measured 3356 s and
+#     3449 s (~57 min as a parallel pair) — MIN_NUM_MB_PER_SLICE floors their
+#     geometry at 49 macroblocks and two frames is the inter-coverage floor,
+#     so no shrink exists and no 15-minute gate can carry them. They run at
 #     full/exit, and any session that touches the fork, the slice structures,
-#     or deblocking runs them explicitly once at its close:
-#       MIRIFLAGS='-Zmiri-ignore-leaks -Zmiri-disable-isolation' \
+#     or deblocking runs them explicitly once at its close (the two probes in
+#     parallel halve the wall; -Zmiri-report-progress makes the hour visible):
+#       MIRIFLAGS='-Zmiri-ignore-leaks -Zmiri-disable-isolation -Zmiri-report-progress' \
 #         cargo +nightly miri test --lib -- fork_join_encodes
 #
 # Verdicts follow F17: each shard's rc is captured via `wait`, corroborated

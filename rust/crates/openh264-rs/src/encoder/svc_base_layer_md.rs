@@ -982,7 +982,7 @@ pub unsafe fn WelsMdInterInit(
         pCurMb,
         kiMbWidth,
         {
-            // T9.E8 (F132 round 8): `Vec::as_mut_ptr` autorefs `&mut` on the
+            // T9.E7 (F132 round 8): `Vec::as_mut_ptr` autorefs `&mut` on the
             // SHARED VAA struct's vector — a retag-write every worker makes per
             // macroblock, the race the fixed-slice probe stopped on once round
             // 7 was closed. F71's spelling reads the header through `addr_of!`
@@ -1211,7 +1211,7 @@ pub unsafe extern "C" fn WelsMdInterFinePartitionVaa(
         .pfGetMbSignFromInterVaa
         .expect("pfGetMbSignFromInterVaa unset")(
         {
-            // T9.E8, as the background-flag mint above (F132 round 8's class).
+            // T9.E7, as the background-flag mint above (F132 round 8's class).
             let v = std::ptr::addr_of!((*ctx_vaa(pEncCtx)).sVaaCalcInfo.pSad8x8);
             (*v).as_ptr().add((*pCurMb).iMbXY as usize) as *mut i32
         },
