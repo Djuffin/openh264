@@ -190,6 +190,7 @@ use crate::common::deblocking_common::{
     deblock_chroma_eq4, deblock_chroma_lt4, deblock_luma_eq4, deblock_luma_lt4,
 };
 use crate::encoder::svc_encode_slice::current_layer;
+use crate::safe::mb_grid::MbWindow;
 
 /// Active parameters and pointers for macroblock deblocking filtering.
 /// Matches `struct TagDeblockingFilter` in `codec/encoder/core/inc/deblocking.h`.
@@ -234,7 +235,9 @@ impl Default for TagDeblockingFilter {
 // fields no live struct has. **S18: deleted, not converted.**
 pub use crate::encoder::svc_encode_slice::SMB;
 pub use crate::encoder::md::{MB_BLOCK4x4_NUM, MB_LUMA_CHROMA_BLOCK4x4_NUM};
-pub type PMb = *mut SMB;
+// `pub type PMb = *mut SMB` stood here — zero users anywhere in the tree
+// (`grep -rn '\bPMb\b' src tests benches` → the definition alone). S18, with
+// the E3 grid conversion that retired the spelling it aliased.
 
 // Function Pointer Typedefs
 //
@@ -524,25 +527,24 @@ pub fn DeblockingBSMarginalMBAvcbase(pCurMb: &SMB, pNeighMb: &SMB, iEdge: usize)
 /// through `uint32_t` punning (`*(uint32_t*)uiBS[0][0]`); a 4-byte row
 /// assignment is the same store with the type kept.
 ///
-/// # Safety
-/// `pCurMb` must be a valid MB pointer with in-bounds left/top neighbours for
-/// whichever of `iLeftFlag`/`iTopFlag` is set.
-// unsafe-cat: port-raw(Phase 9) — pCurMb neighbour walk (*mut SMB, E3's grid)
-#[allow(unsafe_code)]
-pub unsafe fn DeblockingBSCalc_c(
-    pCurMb: *mut SMB,
+/// The left/top record reads are in-window by the guards' own construction:
+/// under the fork the flags come from the same-slice `pOverallMbMap` checks
+/// (`uiFilterIdc == 1`, F142's rewrite), and single-threaded callers hand a
+/// whole-grid window. A flag set with the neighbour outside the window is a
+/// bug, and [`MbWindow`]'s panic names it (F77).
+pub fn DeblockingBSCalc_c(
+    mbs: &mut MbWindow<'_, SMB>,
     uiBS: &mut [[[u8; 4]; 4]; 2],
     uiCurMbType: u32,
-    iMbStride: i32,
     iLeftFlag: i32,
     iTopFlag: i32,
 ) {
     if iLeftFlag != 0 {
-        let leftMb = pCurMb.offset(-1);
-        let val = if IS_INTRA((*leftMb).uiMbType) {
+        let leftMb = mbs.left();
+        let val = if IS_INTRA(leftMb.uiMbType) {
             0x04040404u32
         } else {
-            DeblockingBSMarginalMBAvcbase(&*pCurMb, &*leftMb, 0)
+            DeblockingBSMarginalMBAvcbase(mbs.cur(), leftMb, 0)
         };
         uiBS[0][0] = val.to_ne_bytes();
     } else {
@@ -550,11 +552,11 @@ pub unsafe fn DeblockingBSCalc_c(
     }
 
     if iTopFlag != 0 {
-        let topMb = pCurMb.offset(-(iMbStride as isize));
-        let val = if IS_INTRA((*topMb).uiMbType) {
+        let topMb = mbs.top();
+        let val = if IS_INTRA(topMb.uiMbType) {
             0x04040404u32
         } else {
-            DeblockingBSMarginalMBAvcbase(&*pCurMb, &*topMb, 1)
+            DeblockingBSMarginalMBAvcbase(mbs.cur(), topMb, 1)
         };
         uiBS[1][0] = val.to_ne_bytes();
     } else {
@@ -568,11 +570,12 @@ pub unsafe fn DeblockingBSCalc_c(
         // deleted with its installer; the old `pFunc.is_null()` tolerance
         // guarded a table pointer that no longer exists (the one live caller
         // always passed the context's non-null list).
-        WelsNonZeroCount_c(&mut (*pCurMb).iNonZeroCount);
+        WelsNonZeroCount_c(&mut mbs.cur_mut().iNonZeroCount);
         if uiCurMbType == MB_TYPE_16x16 {
-            DeblockingBSInsideMBAvsbase(&(*pCurMb).iNonZeroCount, uiBS, 1);
+            DeblockingBSInsideMBAvsbase(&mbs.cur().iNonZeroCount, uiBS, 1);
         } else {
-            DeblockingBSInsideMBNormal(&(*pCurMb).sMv, uiBS, &(*pCurMb).iNonZeroCount);
+            let cur = mbs.cur();
+            DeblockingBSInsideMBNormal(&cur.sMv, uiBS, &cur.iNonZeroCount);
         }
     } else {
         for dir in 0..2 {
@@ -809,24 +812,22 @@ fn FilteringEdgeChromaIntraV(
 // Macroblock Deblocking Execution
 // ============================================================================
 
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn DeblockingInterMb(
+pub fn DeblockingInterMb(
     view: &RecPicView,
     map: &[AtomicU16],
-    pCurMb: *mut SMB,
-    pFilter: *mut SDeblockingFilter,
+    mbs: &mut MbWindow<'_, SMB>,
+    pFilter: &mut SDeblockingFilter,
     uiBS: &[[[u8; 4]; 4]; 2],
 ) {
-    let iCurLumaQp = (*pCurMb).uiLumaQp as i8;
-    let iCurChromaQp = (*pCurMb).uiChromaQp as i8;
-    let iLineSize = (*pFilter).iCsStride[0];
-    let iLineSizeUV = (*pFilter).iCsStride[1];
-    let iMbStride = (*pFilter).iMbStride as isize;
+    let iCurLumaQp = mbs.cur().uiLumaQp as i8;
+    let iCurChromaQp = mbs.cur().uiChromaQp as i8;
+    let iLineSize = pFilter.iCsStride[0];
+    let iLineSizeUV = pFilter.iCsStride[1];
+    let iMbStride = pFilter.iMbStride as isize;
 
-    let iMbX = (*pCurMb).iMbX as i32;
-    let iMbY = (*pCurMb).iMbY as i32;
-    let kiMbXY = (*pCurMb).iMbXY;
+    let iMbX = mbs.cur().iMbX as i32;
+    let iMbY = mbs.cur().iMbY as i32;
+    let kiMbXY = mbs.cur().iMbXY;
 
     // **Round 5 (F132, T9.E4)**: the `[1]` guards used to read the NEIGHBOUR's
     // `SMB.uiSliceIdc` — under MT a record another worker can hold `&mut` over,
@@ -839,18 +840,18 @@ pub unsafe fn DeblockingInterMb(
     let bLeftBsValid = [
         iMbX > 0,
         iMbX > 0
-            && ((*pCurMb).uiSliceIdc
+            && (mbs.cur().uiSliceIdc
                 == map[(kiMbXY - 1) as usize].load(Ordering::Relaxed)),
     ];
     let bTopBsValid = [
         iMbY > 0,
         iMbY > 0
-            && ((*pCurMb).uiSliceIdc
+            && (mbs.cur().uiSliceIdc
                 == map[(kiMbXY - iMbStride as i32) as usize].load(Ordering::Relaxed)),
     ];
 
-    let iLeftFlag = bLeftBsValid[(*pFilter).uiFilterIdc as usize];
-    let iTopFlag = bTopBsValid[(*pFilter).uiFilterIdc as usize];
+    let iLeftFlag = bLeftBsValid[pFilter.uiFilterIdc as usize];
+    let iTopFlag = bTopBsValid[pFilter.uiFilterIdc as usize];
 
     // **T9.C2**: the three raw roots `pCsData[i]`, advanced to this macroblock by
     // the slice driver, are the seam's three cursors at the same coordinates.
@@ -859,10 +860,11 @@ pub unsafe fn DeblockingInterMb(
     let (mut pDestY, mut pDestCb, mut pDestCr) = mb_cursors(view, iMbX, iMbY);
 
     if iLeftFlag {
-        (*pFilter).uiLumaQP =
-            ((iCurLumaQp as i32 + (*pCurMb.offset(-1)).uiLumaQp as i32 + 1) >> 1) as u8;
-        (*pFilter).uiChromaQP =
-            ((iCurChromaQp as i32 + (*pCurMb.offset(-1)).uiChromaQp as i32 + 1) >> 1) as u8;
+        let leftMb = mbs.left();
+        pFilter.uiLumaQP =
+            ((iCurLumaQp as i32 + leftMb.uiLumaQp as i32 + 1) >> 1) as u8;
+        pFilter.uiChromaQP =
+            ((iCurChromaQp as i32 + leftMb.uiChromaQp as i32 + 1) >> 1) as u8;
 
         if uiBS[0][0][0] == 0x04 {
             FilteringEdgeLumaIntraV(&*pFilter, &mut pDestY, iLineSize);
@@ -882,8 +884,8 @@ pub unsafe fn DeblockingInterMb(
         }
     }
 
-    (*pFilter).uiLumaQP = iCurLumaQp as u8;
-    (*pFilter).uiChromaQP = iCurChromaQp as u8;
+    pFilter.uiLumaQP = iCurLumaQp as u8;
+    pFilter.uiChromaQP = iCurChromaQp as u8;
 
     let bs01_u32 = u32::from_ne_bytes(uiBS[0][1]);
     if bs01_u32 != 0 {
@@ -923,10 +925,11 @@ pub unsafe fn DeblockingInterMb(
     }
 
     if iTopFlag {
-        (*pFilter).uiLumaQP =
-            ((iCurLumaQp as i32 + (*pCurMb.offset(-iMbStride)).uiLumaQp as i32 + 1) >> 1) as u8;
-        (*pFilter).uiChromaQP =
-            ((iCurChromaQp as i32 + (*pCurMb.offset(-iMbStride)).uiChromaQp as i32 + 1) >> 1) as u8;
+        let topMb = mbs.top();
+        pFilter.uiLumaQP =
+            ((iCurLumaQp as i32 + topMb.uiLumaQp as i32 + 1) >> 1) as u8;
+        pFilter.uiChromaQP =
+            ((iCurChromaQp as i32 + topMb.uiChromaQp as i32 + 1) >> 1) as u8;
 
         if uiBS[1][0][0] == 0x04 {
             FilteringEdgeLumaIntraH(&*pFilter, &mut pDestY, iLineSize);
@@ -946,8 +949,8 @@ pub unsafe fn DeblockingInterMb(
         }
     }
 
-    (*pFilter).uiLumaQP = iCurLumaQp as u8;
-    (*pFilter).uiChromaQP = iCurChromaQp as u8;
+    pFilter.uiLumaQP = iCurLumaQp as u8;
+    pFilter.uiChromaQP = iCurChromaQp as u8;
 
     let bs11_u32 = u32::from_ne_bytes(uiBS[1][1]);
     if bs11_u32 != 0 {
@@ -987,61 +990,59 @@ pub unsafe fn DeblockingInterMb(
     }
 }
 
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn FilteringEdgeLumaHV(
+pub fn FilteringEdgeLumaHV(
     view: &RecPicView,
     map: &[AtomicU16],
-    pCurMb: *mut SMB,
-    pFilter: *mut SDeblockingFilter,
+    mbs: &MbWindow<'_, SMB>,
+    pFilter: &mut SDeblockingFilter,
 ) {
-    let iLineSize = (*pFilter).iCsStride[0];
-    let iMbStride = (*pFilter).iMbStride as isize;
+    let iLineSize = pFilter.iCsStride[0];
+    let iMbStride = pFilter.iMbStride as isize;
 
     let mut iIdexA = 0i32;
     let mut iAlpha = 0i32;
     let mut iBeta = 0i32;
 
-    let iMbX = (*pCurMb).iMbX as i32;
-    let iMbY = (*pCurMb).iMbY as i32;
+    let iMbX = mbs.cur().iMbX as i32;
+    let iMbY = mbs.cur().iMbY as i32;
 
     // Round 5 (F132, T9.E4): the neighbour's record read becomes the map load —
     // see DeblockingInterMb for the whole story.
-    let kiMbXY = (*pCurMb).iMbXY;
+    let kiMbXY = mbs.cur().iMbXY;
     let bLeftBsValid = [
         iMbX > 0,
         iMbX > 0
-            && ((*pCurMb).uiSliceIdc
+            && (mbs.cur().uiSliceIdc
                 == map[(kiMbXY - 1) as usize].load(Ordering::Relaxed)),
     ];
     let bTopBsValid = [
         iMbY > 0,
         iMbY > 0
-            && ((*pCurMb).uiSliceIdc
+            && (mbs.cur().uiSliceIdc
                 == map[(kiMbXY - iMbStride as i32) as usize].load(Ordering::Relaxed)),
     ];
 
-    let iLeftFlag = bLeftBsValid[(*pFilter).uiFilterIdc as usize];
-    let iTopFlag = bTopBsValid[(*pFilter).uiFilterIdc as usize];
+    let iLeftFlag = bLeftBsValid[pFilter.uiFilterIdc as usize];
+    let iTopFlag = bTopBsValid[pFilter.uiFilterIdc as usize];
 
     let mut iTc: [i8; 4] = [0; 4];
     let uiBSx4: [u8; 4] = [0x03, 0x03, 0x03, 0x03];
 
     let (mut pDestY, _, _) = mb_cursors(view, iMbX, iMbY);
-    let iCurQp = (*pCurMb).uiLumaQp as i8;
+    let iCurQp = mbs.cur().uiLumaQp as i8;
 
     // Luma vertical edges
     if iLeftFlag {
-        (*pFilter).uiLumaQP =
-            ((iCurQp as i32 + (*pCurMb.offset(-1)).uiLumaQp as i32 + 1) >> 1) as u8;
+        pFilter.uiLumaQP =
+            ((iCurQp as i32 + mbs.left().uiLumaQp as i32 + 1) >> 1) as u8;
         FilteringEdgeLumaIntraV(&*pFilter, &mut pDestY, iLineSize);
     }
 
-    (*pFilter).uiLumaQP = iCurQp as u8;
+    pFilter.uiLumaQP = iCurQp as u8;
     GET_ALPHA_BETA_FROM_QP(
-        (*pFilter).uiLumaQP as i32,
-        (*pFilter).iSliceAlphaC0Offset as i32,
-        (*pFilter).iSliceBetaOffset as i32,
+        pFilter.uiLumaQP as i32,
+        pFilter.iSliceAlphaC0Offset as i32,
+        pFilter.iSliceBetaOffset as i32,
         &mut iIdexA,
         &mut iAlpha,
         &mut iBeta,
@@ -1055,12 +1056,12 @@ pub unsafe fn FilteringEdgeLumaHV(
 
     // Luma horizontal edges
     if iTopFlag {
-        (*pFilter).uiLumaQP =
-            ((iCurQp as i32 + (*pCurMb.offset(-iMbStride)).uiLumaQp as i32 + 1) >> 1) as u8;
+        pFilter.uiLumaQP =
+            ((iCurQp as i32 + mbs.top().uiLumaQp as i32 + 1) >> 1) as u8;
         FilteringEdgeLumaIntraH(&*pFilter, &mut pDestY, iLineSize);
     }
 
-    (*pFilter).uiLumaQP = iCurQp as u8;
+    pFilter.uiLumaQP = iCurQp as u8;
     if (iAlpha | iBeta) != 0 {
                     deblock_luma_lt4(&mut pDestY.advance(0, 4), iLineSize as isize, 1, iAlpha, iBeta, &iTc);
             deblock_luma_lt4(&mut pDestY.advance(0, 8), iLineSize as isize, 1, iAlpha, iBeta, &iTc);
@@ -1068,61 +1069,59 @@ pub unsafe fn FilteringEdgeLumaHV(
     }
 }
 
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn FilteringEdgeChromaHV(
+pub fn FilteringEdgeChromaHV(
     view: &RecPicView,
     map: &[AtomicU16],
-    pCurMb: *mut SMB,
-    pFilter: *mut SDeblockingFilter,
+    mbs: &MbWindow<'_, SMB>,
+    pFilter: &mut SDeblockingFilter,
 ) {
-    let iLineSize = (*pFilter).iCsStride[1];
-    let iMbStride = (*pFilter).iMbStride as isize;
+    let iLineSize = pFilter.iCsStride[1];
+    let iMbStride = pFilter.iMbStride as isize;
 
     let mut iIdexA = 0i32;
     let mut iAlpha = 0i32;
     let mut iBeta = 0i32;
 
-    let iMbX = (*pCurMb).iMbX as i32;
-    let iMbY = (*pCurMb).iMbY as i32;
+    let iMbX = mbs.cur().iMbX as i32;
+    let iMbY = mbs.cur().iMbY as i32;
 
     // Round 5 (F132, T9.E4): the neighbour's record read becomes the map load —
     // see DeblockingInterMb for the whole story.
-    let kiMbXY = (*pCurMb).iMbXY;
+    let kiMbXY = mbs.cur().iMbXY;
     let bLeftBsValid = [
         iMbX > 0,
         iMbX > 0
-            && ((*pCurMb).uiSliceIdc
+            && (mbs.cur().uiSliceIdc
                 == map[(kiMbXY - 1) as usize].load(Ordering::Relaxed)),
     ];
     let bTopBsValid = [
         iMbY > 0,
         iMbY > 0
-            && ((*pCurMb).uiSliceIdc
+            && (mbs.cur().uiSliceIdc
                 == map[(kiMbXY - iMbStride as i32) as usize].load(Ordering::Relaxed)),
     ];
 
-    let iLeftFlag = bLeftBsValid[(*pFilter).uiFilterIdc as usize];
-    let iTopFlag = bTopBsValid[(*pFilter).uiFilterIdc as usize];
+    let iLeftFlag = bLeftBsValid[pFilter.uiFilterIdc as usize];
+    let iTopFlag = bTopBsValid[pFilter.uiFilterIdc as usize];
 
     let mut iTc: [i8; 4] = [0; 4];
     let uiBSx4: [u8; 4] = [0x03, 0x03, 0x03, 0x03];
 
     let (_, mut pDestCb, mut pDestCr) = mb_cursors(view, iMbX, iMbY);
-    let iCurQp = (*pCurMb).uiChromaQp as i8;
+    let iCurQp = mbs.cur().uiChromaQp as i8;
 
     // Chroma vertical edges
     if iLeftFlag {
-        (*pFilter).uiChromaQP =
-            ((iCurQp as i32 + (*pCurMb.offset(-1)).uiChromaQp as i32 + 1) >> 1) as u8;
+        pFilter.uiChromaQP =
+            ((iCurQp as i32 + mbs.left().uiChromaQp as i32 + 1) >> 1) as u8;
         FilteringEdgeChromaIntraV(&*pFilter, &mut &mut pDestCb, &mut &mut pDestCr, iLineSize);
     }
 
-    (*pFilter).uiChromaQP = iCurQp as u8;
+    pFilter.uiChromaQP = iCurQp as u8;
     GET_ALPHA_BETA_FROM_QP(
-        (*pFilter).uiChromaQP as i32,
-        (*pFilter).iSliceAlphaC0Offset as i32,
-        (*pFilter).iSliceBetaOffset as i32,
+        pFilter.uiChromaQP as i32,
+        pFilter.iSliceAlphaC0Offset as i32,
+        pFilter.iSliceBetaOffset as i32,
         &mut iIdexA,
         &mut iAlpha,
         &mut iBeta,
@@ -1142,12 +1141,12 @@ pub unsafe fn FilteringEdgeChromaHV(
 
     // Chroma horizontal edges
     if iTopFlag {
-        (*pFilter).uiChromaQP =
-            ((iCurQp as i32 + (*pCurMb.offset(-iMbStride)).uiChromaQp as i32 + 1) >> 1) as u8;
+        pFilter.uiChromaQP =
+            ((iCurQp as i32 + mbs.top().uiChromaQp as i32 + 1) >> 1) as u8;
         FilteringEdgeChromaIntraH(&*pFilter, &mut &mut pDestCb, &mut &mut pDestCr, iLineSize);
     }
 
-    (*pFilter).uiChromaQP = iCurQp as u8;
+    pFilter.uiChromaQP = iCurQp as u8;
     if (iAlpha | iBeta) != 0 {
         deblock_chroma_lt4(
             &mut pDestCb.advance(0, 4),
@@ -1162,59 +1161,55 @@ pub unsafe fn FilteringEdgeChromaHV(
 }
 
 #[inline(always)]
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn DeblockingIntraMb(
+pub fn DeblockingIntraMb(
     view: &RecPicView,
     map: &[AtomicU16],
-    pCurMb: *mut SMB,
-    pFilter: *mut SDeblockingFilter,
+    mbs: &MbWindow<'_, SMB>,
+    pFilter: &mut SDeblockingFilter,
 ) {
-    FilteringEdgeLumaHV(view, map, pCurMb, pFilter);
-    FilteringEdgeChromaHV(view, map, pCurMb, pFilter);
+    FilteringEdgeLumaHV(view, map, mbs, pFilter);
+    FilteringEdgeChromaHV(view, map, mbs, pFilter);
 }
 
-// unsafe-cat: port-raw(Phase 9) — pCurMb neighbour walk (*mut SMB, E3's grid)
-#[allow(unsafe_code)]
-pub unsafe fn DeblockingMbAvcbase(
+pub fn DeblockingMbAvcbase(
     view: &RecPicView,
     map: &[AtomicU16],
-    pCurMb: *mut SMB,
-    pFilter: *mut SDeblockingFilter,
+    mbs: &mut MbWindow<'_, SMB>,
+    pFilter: &mut SDeblockingFilter,
 ) {
     // deblocking.cpp:629 — `uint8_t uiBS[2][4][4]`, two 4x4 planes (vertical and
     // horizontal edges). Since the F1 surgery the callees take exactly this
     // type, so the 16-vs-32-byte relationship that caused the release segfault
     // is carried by the signatures instead of by five raw casts.
     let mut uiBS: [[[u8; 4]; 4]; 2] = [[[0; 4]; 4]; 2];
-    let uiCurMbType = (*pCurMb).uiMbType;
-    let iMbStride = (*pFilter).iMbStride as isize;
+    let uiCurMbType = mbs.cur().uiMbType;
+    let iMbStride = pFilter.iMbStride as isize;
 
-    let iMbX = (*pCurMb).iMbX as i32;
-    let iMbY = (*pCurMb).iMbY as i32;
+    let iMbX = mbs.cur().iMbX as i32;
+    let iMbY = mbs.cur().iMbY as i32;
 
     // Round 5 (F132, T9.E4): the neighbour's record read becomes the map load —
     // see DeblockingInterMb for the whole story.
-    let kiMbXY = (*pCurMb).iMbXY;
+    let kiMbXY = mbs.cur().iMbXY;
     let bLeftBsValid = [
         iMbX > 0,
         iMbX > 0
-            && ((*pCurMb).uiSliceIdc
+            && (mbs.cur().uiSliceIdc
                 == map[(kiMbXY - 1) as usize].load(Ordering::Relaxed)),
     ];
     let bTopBsValid = [
         iMbY > 0,
         iMbY > 0
-            && ((*pCurMb).uiSliceIdc
+            && (mbs.cur().uiSliceIdc
                 == map[(kiMbXY - iMbStride as i32) as usize].load(Ordering::Relaxed)),
     ];
 
-    let iLeftFlag = bLeftBsValid[(*pFilter).uiFilterIdc as usize] as i32;
-    let iTopFlag = bTopBsValid[(*pFilter).uiFilterIdc as usize] as i32;
+    let iLeftFlag = bLeftBsValid[pFilter.uiFilterIdc as usize] as i32;
+    let iTopFlag = bTopBsValid[pFilter.uiFilterIdc as usize] as i32;
 
     match uiCurMbType {
         MB_TYPE_INTRA4x4 | MB_TYPE_INTRA16x16 | MB_TYPE_INTRA_PCM => {
-            DeblockingIntraMb(view, map, pCurMb, pFilter);
+            DeblockingIntraMb(view, map, mbs, pFilter);
         }
         _ => {
             // Direct since session F (F118): `pfDeblockingBSCalc` had one
@@ -1222,14 +1217,13 @@ pub unsafe fn DeblockingMbAvcbase(
             // so the slot — and with it the interior-table aggregate pointer
             // that used to be minted here — is deleted.
             DeblockingBSCalc_c(
-                pCurMb,
+                mbs,
                 &mut uiBS,
                 uiCurMbType,
-                iMbStride as i32,
                 iLeftFlag,
                 iTopFlag,
             );
-            DeblockingInterMb(view, map, pCurMb, pFilter, &uiBS);
+            DeblockingInterMb(view, map, mbs, pFilter, &uiBS);
         }
     }
 }
@@ -1238,7 +1232,8 @@ pub unsafe fn DeblockingMbAvcbase(
 // Frame and Slice Level Traversal
 // ============================================================================
 
-// unsafe-cat: port-raw(Phase 9) — the *mut SMB walk (E3's grid)
+// unsafe-cat: port-raw(Phase 9) — the raw-layer accessor calls (slice_in_layer,
+// layer_rec_view: the S63 seam, G's); the record walk itself is the safe window
 #[allow(unsafe_code)]
 pub unsafe fn DeblockingFilterFrameAvcbase(pCurDq: &mut SDqLayer) {
     if (*pCurDq).pDecPic.is_none() {
@@ -1250,7 +1245,6 @@ pub unsafe fn DeblockingFilterFrameAvcbase(pCurDq: &mut SDqLayer) {
     }
     let kiMbWidth = (*pCurDq).iMbWidth;
     let kiMbHeight = (*pCurDq).iMbHeight;
-    let mut pCurrentMbBlock = crate::encoder::svc_encode_slice::mb_list_root(pCurDq);
 
     let sSliceHeaderExt = &(*pSlice).sSliceHeaderExt;
 
@@ -1298,12 +1292,18 @@ pub unsafe fn DeblockingFilterFrameAvcbase(pCurDq: &mut SDqLayer) {
     // my slice", and the slice map already holds that answer per macroblock.
     // A shared borrow of the field alone — atomics are read through `&`, and
     // the only in-fork map writer (`AddSliceBoundary`) stores element-wise.
-    let map: &[AtomicU16] = &(*pCurDq).sSliceEncCtx.pOverallMbMap;
+    let map: &[AtomicU16] = &pCurDq.sSliceEncCtx.pOverallMbMap;
 
-    for _ in 0..kiMbHeight {
-        for _ in 0..kiMbWidth {
-            DeblockingMbAvcbase(view, map, pCurrentMbBlock, &mut pFilter);
-            pCurrentMbBlock = pCurrentMbBlock.add(1);
+    // The whole grid as one window: this walk is the single-threaded frame
+    // filter (F108's verified claim), the one deblocking path where the guards'
+    // `[0]` mode legitimately reads a neighbour record across a slice boundary
+    // — so its window is the grid, and the same accessors that panic on a
+    // cross-slice read under the fork answer freely here.
+    let mut mbs = crate::safe::mb_grid::MbWindow::whole(&mut pCurDq.sMbDataP, 0);
+    for iMbY in 0..kiMbHeight as usize {
+        for iMbX in 0..kiMbWidth as usize {
+            mbs.set_cur(iMbY * kiMbWidth as usize + iMbX);
+            DeblockingMbAvcbase(view, map, &mut mbs, &mut pFilter);
         }
     }
 }
@@ -1322,13 +1322,13 @@ pub use crate::encoder::svc_encode_slice::GetCurrentSliceNum;
 // walks straight across slice boundaries for every other slice mode.
 pub use crate::encoder::svc_encode_slice::WelsGetNextMbOfSlice;
 
-// unsafe-cat: port-raw(Phase 9) — the in-fork *mut SDqLayer (S63) + the *mut SMB walk (E3)
+// unsafe-cat: port-raw(Phase 9) — the in-fork *mut SDqLayer (S63, G's); the record
+// walk is the safe window since E3
 #[allow(unsafe_code)]
 pub unsafe extern "C" fn DeblockingFilterSliceAvcbase(
     pCurDq: *mut SDqLayer,
     pSlice: &mut SSlice,
 ) {
-    let pMbList = crate::encoder::svc_encode_slice::mb_list_root(pCurDq);
     let sSliceHeaderExt = &(*pSlice).sSliceHeaderExt;
 
     let kiMbWidth: i32 = (*pCurDq).iMbWidth as i32;
@@ -1379,11 +1379,29 @@ pub unsafe extern "C" fn DeblockingFilterSliceAvcbase(
 
     let mut iNextMbIdx = sSliceHeaderExt.sSliceHeader.iFirstMbInSlice;
 
+    // The window's base is the guard mode's own reach: under `uiFilterIdc == 1`
+    // every record this walk touches is this slice's (the map guards refuse
+    // foreign edges — F142's in-fork state, and the ST idc==2 slice loop), so
+    // the window starts at the slice's first macroblock and a cross-slice read
+    // would name itself (F77). Under `uiFilterIdc == 0` — unreached today, since
+    // validation rewrites idc 0 to 2 wherever this walker runs — the guards may
+    // legally cross slices, and the window is the grid.
+    let kiFirstWindowMb = if pFilter.uiFilterIdc == 1 {
+        sSliceHeaderExt.sSliceHeader.iFirstMbInSlice
+    } else {
+        0
+    };
+
     loop {
         let iCurMbIdx = iNextMbIdx;
-        let pCurrentMbBlock = pMbList.add(iCurMbIdx as usize);
+        let mut mbs = crate::encoder::svc_encode_slice::mb_window(
+            pCurDq,
+            kiFirstWindowMb,
+            iCurMbIdx - kiFirstWindowMb + 1,
+            iCurMbIdx,
+        );
 
-        DeblockingMbAvcbase(view, map, pCurrentMbBlock, &mut pFilter);
+        DeblockingMbAvcbase(view, map, &mut mbs, &mut pFilter);
 
         iNumMbFiltered += 1;
         iNextMbIdx = WelsGetNextMbOfSlice(pCurDq, iCurMbIdx);

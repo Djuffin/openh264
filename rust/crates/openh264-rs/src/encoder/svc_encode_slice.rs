@@ -303,7 +303,7 @@ impl Default for SSliceHeaderExt {
 
 pub use crate::common::wels_common_defs::EWelsNalUnitType;
 pub use crate::safe::bits::BsWriter;
-use crate::safe::mb_grid::{MbArray, MbDims};
+use crate::safe::mb_grid::{MbArray, MbDims, MbWindow};
 pub use crate::encoder::set_mb_syn_cabac::SCabacCtx;
 use crate::encoder::paraset_strategy::CWelsParametersetIdStrategyObj;
 
@@ -659,6 +659,48 @@ pub unsafe fn mb_list_root(pCurLayer: *mut SDqLayer) -> *mut SMB {
 #[allow(unsafe_code)]
 pub unsafe fn mb_at(pCurLayer: *mut SDqLayer, kiMbXY: i32) -> *mut SMB {
     mb_list_root(pCurLayer).add(kiMbXY as usize)
+}
+
+/// A per-call window over records `[kiFirstMb .. kiFirstMb + kiCount)` of the
+/// layer's macroblock grid, current record at `kiCurMb` — **the grid family's
+/// mint** (Phase 9 E3), replacing per-record raw hand-outs ([`mb_at`]) for the
+/// neighbour-walker family.
+///
+/// The layer stays raw under the fork (S63), so the window is minted *from the
+/// raw layer per call*, and the window is the safe object the walkers take.
+/// Derivation is S28/S40/F71 verbatim: the array root is read out of the
+/// container's header with no reference formed, so concurrent workers minting
+/// disjoint windows are sibling derivations, and the exclusive range each window
+/// covers is exactly the records its caller owns — never the array struct, never
+/// another worker's records. [`MbWindow`]'s own asserts turn any out-of-window
+/// access into a coordinate-naming panic (F77) instead of a cross-worker read.
+///
+/// # Safety
+/// `pCurLayer` must be live with `sMbDataP` allocated. The caller must own
+/// records `[kiFirstMb .. kiFirstMb + kiCount)` exclusively for the window's
+/// lifetime — its own slice's or partition's under the fork, any range
+/// single-threaded — and must not use another pointer into that range while the
+/// window lives.
+#[inline]
+// unsafe-cat: cursor — the raw-layer parameter is the S63 seam; retires with G's family
+#[allow(unsafe_code)]
+pub unsafe fn mb_window<'a>(
+    pCurLayer: *mut SDqLayer,
+    kiFirstMb: i32,
+    kiCount: i32,
+    kiCurMb: i32,
+) -> MbWindow<'a, SMB> {
+    let mb = std::ptr::addr_of!((*pCurLayer).sMbDataP);
+    let dims = (*mb).dims();
+    assert!(
+        kiFirstMb >= 0 && kiCount > 0 && (kiFirstMb as usize) + (kiCount as usize) <= dims.count(),
+        "mb window [{kiFirstMb}..{}) outside a grid of {}",
+        kiFirstMb as i64 + kiCount as i64,
+        dims.count()
+    );
+    let root = (*mb).root_ptr();
+    let mbs = std::slice::from_raw_parts_mut(root.add(kiFirstMb as usize), kiCount as usize);
+    MbWindow::new(mbs, kiFirstMb as usize, dims.mb_width(), kiCurMb as usize)
 }
 
 /// The layer the context is currently working on — **T6.G2's resolution accessor,
