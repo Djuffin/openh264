@@ -42,6 +42,29 @@ ROOT=$(cd "$HERE/../../.." && pwd)
 CMP="$HERE/compare.sh"
 cd "$ROOT" || exit 1
 
+# Stale-driver guard (Phase 9 E3's log, the voided hand-run fault probes):
+# sweep.sh does not build — build.sh does — and a driver older than the tree
+# being probed refereed nothing while looking green. Sources newer than a
+# binary are an error, not a warning (S58: loudness lives in the exit code).
+# codec/-side staleness of cxx_enc remains build.sh's business; this checks
+# what the incident was: the Rust tree and the harness's own driver source.
+# Override for a deliberately old driver: SWEEP_STALE_OK=1.
+if [ "${SWEEP_STALE_OK:-0}" != "1" ]; then
+  stale=""
+  if [ ! -x "$HERE/rust_enc" ] || [ ! -x "$HERE/cxx_enc" ]; then
+    stale="driver binaries missing"
+  else
+    newer=$(find "$ROOT/rust/crates/openh264-rs/src" -name '*.rs' -newer "$HERE/rust_enc" 2>/dev/null | head -3)
+    [ -n "$newer" ] && stale="rust_enc older than: $(echo "$newer" | tr '\n' ' ')"
+    [ "$HERE/cxx_enc.cpp" -nt "$HERE/cxx_enc" ] && stale="${stale:+$stale; }cxx_enc older than cxx_enc.cpp"
+  fi
+  if [ -n "$stale" ]; then
+    echo "sweep.sh: STALE DRIVER — $stale" >&2
+    echo "sweep.sh: run rust/tools/diffharness/build.sh first (or SWEEP_STALE_OK=1 to override)" >&2
+    exit 2
+  fi
+fi
+
 # Per-run watchdog. macOS has no timeout(1), and a deadlocked encoder would
 # otherwise stall the sweep and merely look slow.
 TIMEOUT=${SWEEP_TIMEOUT:-180}
