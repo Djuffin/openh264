@@ -707,7 +707,13 @@ pub unsafe fn WelsUpdateRefList(pCtx: *mut sWelsEncCtx) -> bool {
         return false;
     }
 
-    let pLtr = &mut *ctx_ltr_at(pCtx, (uiDid) as usize);
+    // **T9.G7 — raw, not `&mut`.** This body holds the LTR state across calls that
+    // derive their own `&mut` to the *same* `SLTRState` (`LTRMarkProcess` and the
+    // rest re-derive `ctx_ltr_at(pCtx, uiDid)` for this same `uiDid`). Two Unique
+    // tags from one raw root are siblings, and the second pops the first — so the
+    // `&mut` binding was the hazard, not the holding. A raw cursor with a deref at
+    // each use is the port's own idiom and is what F66 says is sound here.
+    let pLtr = ctx_ltr_at(pCtx, (uiDid) as usize);
     let pParamD = std::ptr::addr_of_mut!((*ctx_param(pCtx)).sDependencyLayers[uiDid]);
     let kuiTid = (*pCtx).uiTemporalId;
     let kuiDid = (*pCtx).uiDependencyId;
@@ -770,9 +776,9 @@ pub unsafe fn WelsUpdateRefList(pCtx: *mut sWelsEncCtx) -> bool {
                 DeleteInvalidLTR(pCtx);
                 HandleLTRMarkFeedback(pCtx);
 
-                pLtr.bReceivedT0LostFlag = false;
-                pLtr.bLTRMarkingFlag = false;
-                pLtr.uiLtrMarkInterval += 1;
+                (*pLtr).bReceivedT0LostFlag = false;
+                (*pLtr).bLTRMarkingFlag = false;
+                (*pLtr).uiLtrMarkInterval += 1;
             }
 
             let mut i = ((*pRefList).uiShortRefCount as i32) - 1;
@@ -802,10 +808,10 @@ pub unsafe fn WelsUpdateRefList(pCtx: *mut sWelsEncCtx) -> bool {
         if (*ctx_param(pCtx)).bEnableLongTermReference {
             LTRMarkProcess(pCtx);
 
-            pLtr.iCurLtrIdx = (pLtr.iCurLtrIdx + 1) % LONG_TERM_REF_NUM;
-            pLtr.iLTRMarkSuccessNum = 1;
-            pLtr.bLTRMarkEnable = true;
-            pLtr.uiLtrMarkInterval = 0;
+            (*pLtr).iCurLtrIdx = ((*pLtr).iCurLtrIdx + 1) % LONG_TERM_REF_NUM;
+            (*pLtr).iLTRMarkSuccessNum = 1;
+            (*pLtr).bLTRMarkEnable = true;
+            (*pLtr).uiLtrMarkInterval = 0;
 
             if !ctx_vaa(pCtx).is_null() {
                 (*ctx_vaa(pCtx)).uiValidLongTermPicIdx = 0;
@@ -958,24 +964,30 @@ pub unsafe fn WelsMarkPic(pCtx: *mut sWelsEncCtx) {
         return;
     }
     let uiDid = (*pCtx).uiDependencyId as usize;
-    let pLtr = &mut *ctx_ltr_at(pCtx, (uiDid) as usize);
+    // **T9.G7 — raw, not `&mut`.** This body holds the LTR state across calls that
+    // derive their own `&mut` to the *same* `SLTRState` (`LTRMarkProcess` and the
+    // rest re-derive `ctx_ltr_at(pCtx, uiDid)` for this same `uiDid`). Two Unique
+    // tags from one raw root are siblings, and the second pops the first — so the
+    // `&mut` binding was the hazard, not the holding. A raw cursor with a deref at
+    // each use is the port's own idiom and is what F66 says is sound here.
+    let pLtr = ctx_ltr_at(pCtx, (uiDid) as usize);
     let kiCountSliceNum = (*current_layer(pCtx)).iMaxSliceNum;
 
-    if (*ctx_param(pCtx)).bEnableLongTermReference && pLtr.bLTRMarkEnable && (*pCtx).uiTemporalId == 0 {
-        if !pLtr.bReceivedT0LostFlag
-            && pLtr.uiLtrMarkInterval > (*ctx_param(pCtx)).iLtrMarkPeriod as u32
+    if (*ctx_param(pCtx)).bEnableLongTermReference && (*pLtr).bLTRMarkEnable && (*pCtx).uiTemporalId == 0 {
+        if !(*pLtr).bReceivedT0LostFlag
+            && (*pLtr).uiLtrMarkInterval > (*ctx_param(pCtx)).iLtrMarkPeriod as u32
             && CheckCurMarkFrameNumUsed(pCtx)
         {
-            pLtr.bLTRMarkingFlag = true;
-            pLtr.bLTRMarkEnable = false;
-            pLtr.uiLtrMarkInterval = 0;
+            (*pLtr).bLTRMarkingFlag = true;
+            (*pLtr).bLTRMarkEnable = false;
+            (*pLtr).uiLtrMarkInterval = 0;
             for i in 0..MAX_TEMPORAL_LAYER_NUM {
                 if ((*pCtx).uiTemporalId as usize) < i || (*pCtx).uiTemporalId == 0 {
-                    pLtr.iLastLtrIdx[i] = pLtr.iCurLtrIdx;
+                    (*pLtr).iLastLtrIdx[i] = (*pLtr).iCurLtrIdx;
                 }
             }
         } else {
-            pLtr.bLTRMarkingFlag = false;
+            (*pLtr).bLTRMarkingFlag = false;
         }
     }
 
@@ -1363,7 +1375,13 @@ pub unsafe fn WelsUpdateRefListScreen(pCtx: *mut sWelsEncCtx) -> bool {
     if pRefList.is_null() || (*pRefList).pRef.is_empty() {
         return false;
     }
-    let pLtr = &mut *ctx_ltr_at(pCtx, (uiDid) as usize);
+    // **T9.G7 — raw, not `&mut`.** This body holds the LTR state across calls that
+    // derive their own `&mut` to the *same* `SLTRState` (`LTRMarkProcess` and the
+    // rest re-derive `ctx_ltr_at(pCtx, uiDid)` for this same `uiDid`). Two Unique
+    // tags from one raw root are siblings, and the second pops the first — so the
+    // `&mut` binding was the hazard, not the holding. A raw cursor with a deref at
+    // each use is the port's own idiom and is what F66 says is sound here.
+    let pLtr = ctx_ltr_at(pCtx, (uiDid) as usize);
     let pParamD = std::ptr::addr_of_mut!((*ctx_param(pCtx)).sDependencyLayers[uiDid]);
     let kuiTid = (*pCtx).uiTemporalId;
 
@@ -1388,22 +1406,22 @@ pub unsafe fn WelsUpdateRefListScreen(pCtx: *mut sWelsEncCtx) -> bool {
         pDecPic.iFramePoc = (*pParamD).iPOC;
         pDecPic.bUsedAsRef = true;
         pDecPic.bIsLongRef = true;
-        pDecPic.bIsSceneLTR = pLtr.bLTRMarkingFlag
+        pDecPic.bIsSceneLTR = (*pLtr).bLTRMarkingFlag
             || ((*ctx_param(pCtx)).bEnableLongTermReference
                 && (*pCtx).eSliceType == EWelsSliceType::I_SLICE);
-        pDecPic.iLongTermPicNum = pLtr.iCurLtrIdx;
+        pDecPic.iLongTermPicNum = (*pLtr).iCurLtrIdx;
     }
 
     if (*pCtx).eSliceType == EWelsSliceType::P_SLICE {
         DeleteNonSceneLTR(pCtx);
         LTRMarkProcessScreen(pCtx);
-        pLtr.bLTRMarkingFlag = false;
-        pLtr.uiLtrMarkInterval += 1;
+        (*pLtr).bLTRMarkingFlag = false;
+        (*pLtr).uiLtrMarkInterval += 1;
     } else {
         LTRMarkProcessScreen(pCtx);
-        pLtr.iCurLtrIdx = 1;
-        pLtr.iSceneLtrIdx = 1;
-        pLtr.uiLtrMarkInterval = 0;
+        (*pLtr).iCurLtrIdx = 1;
+        (*pLtr).iSceneLtrIdx = 1;
+        (*pLtr).uiLtrMarkInterval = 0;
         if !ctx_vaa(pCtx).is_null() {
             (*ctx_vaa(pCtx)).uiValidLongTermPicIdx = 0;
         }
@@ -1541,7 +1559,13 @@ pub unsafe fn WelsMarkPicScreen(pCtx: *mut sWelsEncCtx) {
         return;
     }
     let uiDid = (*pCtx).uiDependencyId as usize;
-    let pLtr = &mut *ctx_ltr_at(pCtx, (uiDid) as usize);
+    // **T9.G7 — raw, not `&mut`.** This body holds the LTR state across calls that
+    // derive their own `&mut` to the *same* `SLTRState` (`LTRMarkProcess` and the
+    // rest re-derive `ctx_ltr_at(pCtx, uiDid)` for this same `uiDid`). Two Unique
+    // tags from one raw root are siblings, and the second pops the first — so the
+    // `&mut` binding was the hazard, not the holding. A raw cursor with a deref at
+    // each use is the port's own idiom and is what F66 says is sound here.
+    let pLtr = ctx_ltr_at(pCtx, (uiDid) as usize);
     let gopSize = (*ctx_param(pCtx)).uiGopSize;
     let iMaxTid = if gopSize > 0 { (31 - gopSize.leading_zeros()) as i32 } else { 0 };
     let mut iMaxActualLtrIdx = -1i32;
@@ -1558,19 +1582,19 @@ pub unsafe fn WelsMarkPicScreen(pCtx: *mut sWelsEncCtx) {
     let bIsRefListNotFull = ((*pRefList).uiLongRefCount as i32) < iLongRefNum;
 
     if !(*ctx_param(pCtx)).bEnableLongTermReference {
-        pLtr.iCurLtrIdx = (*pCtx).uiTemporalId as i32;
+        (*pLtr).iCurLtrIdx = (*pCtx).uiTemporalId as i32;
     } else {
         if iMaxActualLtrIdx != -1 && (*pCtx).uiTemporalId == 0 && (*pCtx).bCurFrameMarkedAsSceneLtr {
-            pLtr.bLTRMarkingFlag = true;
-            pLtr.uiLtrMarkInterval = 0;
-            pLtr.iCurLtrIdx = pLtr.iSceneLtrIdx % (iMaxActualLtrIdx + 1);
-            pLtr.iSceneLtrIdx += 1;
+            (*pLtr).bLTRMarkingFlag = true;
+            (*pLtr).uiLtrMarkInterval = 0;
+            (*pLtr).iCurLtrIdx = (*pLtr).iSceneLtrIdx % (iMaxActualLtrIdx + 1);
+            (*pLtr).iSceneLtrIdx += 1;
         } else {
-            pLtr.bLTRMarkingFlag = false;
+            (*pLtr).bLTRMarkingFlag = false;
             if bIsRefListNotFull {
                 for i in 0..iLongRefNum {
                     if (*pRefList).pLongRefList[i as usize].is_none() {
-                        pLtr.iCurLtrIdx = i;
+                        (*pLtr).iCurLtrIdx = i;
                         break;
                     }
                 }
@@ -1619,7 +1643,7 @@ pub unsafe fn WelsMarkPicScreen(pCtx: *mut sWelsEncCtx) {
                         };
 
                         if iDeltaFrameNum > iLongestDeltaFrameNum {
-                            pLtr.iCurLtrIdx = pPic.iLongTermPicNum;
+                            (*pLtr).iCurLtrIdx = pPic.iLongTermPicNum;
                             iLongestDeltaFrameNum = iDeltaFrameNum;
                         }
                     }
@@ -1630,7 +1654,7 @@ pub unsafe fn WelsMarkPicScreen(pCtx: *mut sWelsEncCtx) {
 
     for i in 0..MAX_TEMPORAL_LAYER_NUM {
         if ((*pCtx).uiTemporalId as usize) < i || (*pCtx).uiTemporalId == 0 {
-            pLtr.iLastLtrIdx[i] = pLtr.iCurLtrIdx;
+            (*pLtr).iLastLtrIdx[i] = (*pLtr).iCurLtrIdx;
         }
     }
 
