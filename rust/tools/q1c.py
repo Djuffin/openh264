@@ -41,6 +41,27 @@ gate the conversion on it. It is a **heuristic**: a green site is "no hazard
 found", not "proved safe" (F66's own words — a false negative is silent UB with
 no gate behind it).
 
+3. **It over-reports in two ways it cannot see, and the count is not a work list**
+   (Phase 9 session G — F161, F163, S65). **(a) Reachability.** It models the
+   conversion for every body in the family; S63 forbids the fork-reachable half from
+   ever taking `&mut`, so a hazard whose *callee* is in that column models a retag
+   that will never be taken. At G's step 1 that was **135 of 266**, including all 55
+   against `ctx_param`. Join it with `phase9_forksplit.py` before quoting a number —
+   `phase9_ctx_join.py` does exactly that and is the tool to run. **(b) Allocation.**
+   The retag it models covers the arena's **own allocation** — F66's trace prints the
+   range, `[0x0..0x17ee8]`, and the cursor it killed was an *inline array field*. A
+   cursor into a `Vec` buffer or a `Box` the arena merely points at lives in a
+   different allocation and cannot be reached; this port's accessors launder
+   provenance out of the container on purpose (F71, and `ctx_param`'s own comment
+   says "the pointer still carries the heap block's own provenance"). This scan
+   classifies by type, not by allocation, so those are reported and are not hazards.
+
+   A consequence worth stating because a brief got it wrong: **"drive this tool to
+   zero" is not a reachable exit criterion.** Its remedy for shape B — hoist the
+   argument into a binding — produces shape A whenever the hoisted value is a
+   pointer, which for this context is most of them. Read the join's live count per
+   site instead.
+
 ## What it detects, and why
 
 Phase 6 session J converted 109 context-only signatures from `*mut sWelsEncCtx`
@@ -87,7 +108,10 @@ detector that has never been shown to fire is not a detector (S55).
 
 Today (2) passes a raw pointer and nothing is invalidated. The moment `SomeCallee`
 takes `&mut sWelsEncCtx`, step 2 invalidates `cur` and step 3 is UB. This is
-F66's second confirmed site (`pSpatialIndexMap` before `InitBitStream`).
+F66's second confirmed site (`pSpatialIndexMap` before `InitBitStream`) — **which
+T9.G2 has since retired**, along with the shape-B example below (`WelsRcInitModule`,
+hoisted in T9.G6). Both are kept here as the canonical illustrations; neither is
+still in the tree, so do not grep for them expecting a hit (S58).
 
 **Shape B — argument evaluation order.** One line, no binding at all:
 

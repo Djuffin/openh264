@@ -17818,8 +17818,8 @@ Findings **F153–F158**.
 ## Phase 9 — session G (2026-08-25): the context family, step 0 through step 2
 
 **Steps 0, 1 and 2 landed. Steps 3–6 did not start, and the report says why:
-what the session found in steps 0–2 changes what step 3 should be.** Eight
-commits, `gates.sh family` green on every one of them.
+what the session found in steps 0–2 changes what step 3 should be.** **Ten**
+commits, `gates.sh family` **583/583 in both profiles on every one of them.**
 
 **Step 0 — D-dead-3.** `pGomCost` deleted whole: field, `Default`, allocation,
 the per-frame zeroing, the per-macroblock `+=`. Five sites here, five upstream
@@ -17920,3 +17920,33 @@ caller and its stated justification was `pGomCost`; and the three `pfIDct*` slot
 (F138) were left alone on the ground that "the F133 ruling was to leave write-only
 storage alone" — a precedent D-dead-3 has now reversed. Extending a ruling made on
 one field to two more members of its class is a second ruling, not an inference.
+
+**Close.** `MIRI_SCOPE=encoder gates.sh session` **PASS, first run** — 583/583 both
+profiles, tests 560/553, ratchet clean, Miri **291 passed / 0 failed** across four
+shards. **S61: Miri lane wall 521 s against E3's 536 s, ratio 0.97** — lane-vs-lane,
+well inside the 1.3x tripwire.
+
+**The `MIRI_FULL=1` fork-probe pair did NOT complete, and the session is short one
+owed verification.** Both probes were launched per D-gate-7 as their own
+invocations (separate `CARGO_TARGET_DIR`s, so genuinely parallel rather than
+lock-serialised), with `-Zmiri-ignore-leaks -Zmiri-disable-isolation
+-Zmiri-report-progress`. At **56 minutes** both were still running and healthy — 68
+and 65 progress reports, no `error`, no `Undefined Behavior`, no panic in either
+log — and **the user stopped them.** They are recorded as *incomplete*, not as
+green: a probe that was killed proves nothing, and T9.E8's 3356 s / 3449 s were
+measured serially, so the parallel pair on a machine that had just run the session
+gate was always going to be slower than the ~57 min the brief budgeted. The
+estimate, not the tree, is what was wrong.
+
+**What that leaves unverified, precisely.** The session made no MT-visible change:
+every commit is single-threaded encode-path work (hazard clearing, two narrowings,
+one accessor replacement, one field deletion), the fork's own machinery was not
+touched except for one shape-B hoist in `AppendSliceToFrameBs` and two in
+`AdjustEnhanceLayer`, and `gates.sh family` ran **583/583 in both profiles on every
+one of the ten commits** — the `mt` preset included. The sharded Miri lane at the
+session gate is green. So the residual risk is narrow and named: **the three
+`slice_multi_threading.rs` hoists and T9.G7's raw `pLtr` conversion have not been
+seen by the fork probes.** H's first act should be to run the pair on a quiet
+machine, serially, before anything else — and if the intent is to run it inside a
+session again, `gates.sh full` is the level that does it and its wall should be
+budgeted from T9.E8's serial numbers, not from a parallel estimate.
