@@ -479,12 +479,8 @@ pub fn CalcFMESwitchFlag(
 #[inline]
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
-pub unsafe fn GetCurrentSliceNum(pCurDq: *const SDqLayer) -> i32 {
-    if pCurDq.is_null() {
-        -1
-    } else {
-        unsafe { (*pCurDq).sSliceEncCtx.iSliceNumInFrame.load(std::sync::atomic::Ordering::Relaxed) }
-    }
+pub unsafe fn GetCurrentSliceNum(pCurDq: &SDqLayer) -> i32 {
+    unsafe { pCurDq.sSliceEncCtx.iSliceNumInFrame.load(std::sync::atomic::Ordering::Relaxed) }
 }
 
 // ============================================================================

@@ -423,10 +423,13 @@ fn new_mb_map(kiCountMbNum: i32) -> Vec<AtomicU16> {
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe fn AssignMbMapMultipleSlices(
-    pCurDq: *mut SDqLayer,
+    pCurDq: &mut SDqLayer,
     kpSliceArgument: *const SSliceArgument,
 ) -> i32 {
-    let pSliceSeg = &mut (*pCurDq).sSliceEncCtx as *mut SSliceCtx;
+    // T9.E2h: a plain field borrow — the `as *mut` spelling made a raw whose
+    // parent temporary expired at the statement (S29's cast clause); under the
+    // `&mut` parameter the borrow checker referees the window instead.
+    let pSliceSeg = &mut pCurDq.sSliceEncCtx;
     let mut iSliceIdx: i32;
     if (*pSliceSeg).uiSliceMode == SM_SINGLE_SLICE {
         return 1;
@@ -519,12 +522,15 @@ pub unsafe fn GetInitialSliceNum(pSliceArgument: *const SSliceArgument) -> i32 {
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe fn InitSliceSegment(
-    pCurDq: *mut SDqLayer,
+    pCurDq: &mut SDqLayer,
     pSliceArgument: *mut SSliceArgument,
     kiMbWidth: i32,
     kiMbHeight: i32,
 ) -> i32 {
-    let pSliceSeg = &mut (*pCurDq).sSliceEncCtx as *mut SSliceCtx;
+    // T9.E2h: a plain field borrow — the `as *mut` spelling made a raw whose
+    // parent temporary expired at the statement (S29's cast clause); under the
+    // `&mut` parameter the borrow checker referees the window instead.
+    let pSliceSeg = &mut pCurDq.sSliceEncCtx;
     let kiCountMbNum = kiMbWidth * kiMbHeight;
 
     if pSliceArgument.is_null() || kiMbWidth == 0 || kiMbHeight == 0 {
@@ -609,8 +615,11 @@ pub unsafe fn InitSliceSegment(
 /// `pCurDq` and `pMa` must be non-null.
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
-pub unsafe fn UninitSliceSegment(pCurDq: *mut SDqLayer) {
-    let pSliceSeg = &mut (*pCurDq).sSliceEncCtx as *mut SSliceCtx;
+pub unsafe fn UninitSliceSegment(pCurDq: &mut SDqLayer) {
+    // T9.E2h: a plain field borrow — the `as *mut` spelling made a raw whose
+    // parent temporary expired at the statement (S29's cast clause); under the
+    // `&mut` parameter the borrow checker referees the window instead.
+    let pSliceSeg = &mut pCurDq.sSliceEncCtx;
     // The map is a `Vec<u16>` since T6.D7 — clearing it releases the storage the
     // explicit `WelsFree` used to, and the layer's `Drop` covers the paths that never
     // reach here at all.
@@ -635,16 +644,12 @@ pub unsafe fn UninitSliceSegment(pCurDq: *mut SDqLayer) {
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe fn InitSlicePEncCtx(
-    pCurDq: *mut SDqLayer,
+    pCurDq: &mut SDqLayer,
     _bFmoUseFlag: bool,
     iMbWidth: i32,
     iMbHeight: i32,
     pSliceArgument: *mut SSliceArgument,
 ) -> i32 {
-    if pCurDq.is_null() {
-        return 1;
-    }
-
     InitSliceSegment(pCurDq, pSliceArgument, iMbWidth, iMbHeight);
     0
 }
@@ -655,10 +660,8 @@ pub unsafe fn InitSlicePEncCtx(
 /// `pMa` must be non-null when `pCurDq` is.
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
-pub unsafe fn UninitSlicePEncCtx(pCurDq: *mut SDqLayer) {
-    if !pCurDq.is_null() {
-        UninitSliceSegment(pCurDq);
-    }
+pub unsafe fn UninitSlicePEncCtx(pCurDq: &mut SDqLayer) {
+    UninitSliceSegment(pCurDq);
 }
 
 /// `WelsGetFirstMbOfSlice` — svc_enc_slice_segment.cpp:540.
@@ -667,10 +670,7 @@ pub unsafe fn UninitSlicePEncCtx(pCurDq: *mut SDqLayer) {
 /// `pCurLayer` may be null, which returns -1.
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
-pub unsafe fn WelsGetFirstMbOfSlice(pCurLayer: *mut SDqLayer, kuiSliceIdc: i32) -> i32 {
-    if pCurLayer.is_null() {
-        return -1;
-    }
+pub unsafe fn WelsGetFirstMbOfSlice(pCurLayer: &mut SDqLayer, kuiSliceIdc: i32) -> i32 {
     let first: &[i32] = &(*pCurLayer).pFirstMbIdxOfSlice;
     match first.get(kuiSliceIdc as usize) {
         Some(&v) => v,
