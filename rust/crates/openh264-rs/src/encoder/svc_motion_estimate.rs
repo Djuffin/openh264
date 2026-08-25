@@ -49,7 +49,7 @@
 
 use crate::encoder::svc_encode_slice::layer_ref_pic;
 use crate::encoder::picture::{RecPicId};
-use crate::safe::plane::PlaneCursor;
+use crate::safe::plane::{PaddedPlane, PlaneCursor};
 pub use crate::encoder::encoder_context::SMVUnitXY;
 pub use crate::encoder::picture::SPicture;
 pub use crate::encoder::picture::SScreenBlockFeatureStorage;
@@ -162,9 +162,15 @@ pub struct SWelsME {
     pub uiBlockSize: u8,
     pub uiReserved: u8,
 
-    pub pEncMb: *mut u8,
-    pub pRefMb: *mut u8,
-    pub pColoRefMb: *mut u8,
+    // `pEncMb`/`pRefMb`/`pColoRefMb` stood here — the C++'s three per-block
+    // plane cursors. Session F deleted them on B3's coordinate identity,
+    // re-verified at this tree (583/583 rows, ~3.09M search entries/exits
+    // asserted, zero violations): `pEncMb == encRoot + (y*strideEnc + x)`,
+    // `pColoRefMb == refRoot + (y*strideRef + x)`, and `pRefMb == colo + mv`
+    // at every read. The search family takes the two planes as parameters and
+    // derives each position from `iCurMeBlockPixX/Y` + the MV it is probing —
+    // S37's value half: the *coordinates* are the information, and no retag
+    // can invalidate them.
 
     pub sMvp: SMVUnitXY,
     pub sMvBase: SMVUnitXY,
@@ -188,9 +194,6 @@ impl Default for SWelsME {
             iCurMeBlockPixY: 0,
             uiBlockSize: 0,
             uiReserved: 0,
-            pEncMb: std::ptr::null_mut(),
-            pRefMb: std::ptr::null_mut(),
-            pColoRefMb: std::ptr::null_mut(),
             sMvp: SMVUnitXY::default(),
             sMvBase: SMVUnitXY::default(),
             sDirectionalMv: SMVUnitXY::default(),
@@ -201,18 +204,21 @@ impl Default for SWelsME {
 }
 
 /// Input configuration block for the hash-based feature search engine.
+///
+/// Session F: `pSad` holds the safe cost slot, and the two block cursors
+/// (`pEnc`/`pColoRef`, with their strides) became the two planes plus the
+/// `iCurPixX/Y` coordinates the struct already carried — the same identity
+/// the search family converted on. The mvd-cost and hash cursors stay raw
+/// (the ctx family's and Phase 10's respectively).
 // SCREEN_CONTENT(dormant: Phase 10)
-#[repr(C)]
-pub struct SFeatureSearchIn {
-    pub pSad: Option<PSampleSadSatdCostFuncRaw>,
+pub struct SFeatureSearchIn<'a> {
+    pub pSad: Option<PSampleSadSatdCostFunc>,
     pub pTimesOfFeature: *mut u32,
     pub pQpelLocationOfFeature: *mut *mut u16,
     pub pMvdCostX: *mut u16,
     pub pMvdCostY: *mut u16,
-    pub pEnc: *mut u8,
-    pub pColoRef: *mut u8,
-    pub iEncStride: i32,
-    pub iRefStride: i32,
+    pub pEncPlane: Option<&'a PaddedPlane>,
+    pub pRefPlane: Option<&'a PaddedPlane>,
     pub uiSadCostThresh: u16,
     pub iFeatureOfCurrent: i32,
     pub iCurPixX: i32,
@@ -225,7 +231,7 @@ pub struct SFeatureSearchIn {
     pub iMaxQpelY: i32,
 }
 
-impl Default for SFeatureSearchIn {
+impl Default for SFeatureSearchIn<'_> {
     fn default() -> Self {
         Self {
             pSad: None,
@@ -233,10 +239,8 @@ impl Default for SFeatureSearchIn {
             pQpelLocationOfFeature: std::ptr::null_mut(),
             pMvdCostX: std::ptr::null_mut(),
             pMvdCostY: std::ptr::null_mut(),
-            pEnc: std::ptr::null_mut(),
-            pColoRef: std::ptr::null_mut(),
-            iEncStride: 0,
-            iRefStride: 0,
+            pEncPlane: None,
+            pRefPlane: None,
             uiSadCostThresh: 0,
             iFeatureOfCurrent: 0,
             iCurPixX: 0,
@@ -252,23 +256,15 @@ impl Default for SFeatureSearchIn {
 }
 
 /// Output container populated during feature search passes.
+///
+/// Session F: `pBestRef: *mut u8` is deleted — it cached `colo + sBestMv`,
+/// which is `sBestMv`'s information (the identity the whole family converted
+/// on), and its one consumer wrote it into the deleted `SWelsME::pRefMb`.
 // SCREEN_CONTENT(dormant: Phase 10)
-#[repr(C)]
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Default)]
 pub struct SFeatureSearchOut {
     pub sBestMv: SMVUnitXY,
     pub uiBestSadCost: u32,
-    pub pBestRef: *mut u8,
-}
-
-impl Default for SFeatureSearchOut {
-    fn default() -> Self {
-        Self {
-            sBestMv: SMVUnitXY::default(),
-            uiBestSadCost: 0,
-            pBestRef: std::ptr::null_mut(),
-        }
-    }
 }
 
 /// Reconstructed or reference picture frame buffer descriptor.
@@ -314,44 +310,62 @@ pub type PSample4SadCostFuncRaw = unsafe extern "C" fn(
 // screen-content SIMD horizontal-SAD pair, which had zero writers and zero
 // readers in the whole tree. Both deleted, S18 (session F step 0).
 
-pub type PMotionSearchFunc = unsafe extern "C" fn(
-    pFuncList: *mut SWelsFuncPtrList,
-    pCurDqLayer: *mut SDqLayer,
+// **Session F — the five self-referential typedefs de-virtualized** (Phase
+// 4a's `pfMdCost` move, applied to the whole family). Each used to take
+// `*mut SWelsFuncPtrList` — the table handed back into its own callees so
+// they could reach the cost slots and the sub-search slots. The callees now
+// take exactly what they reach: `&SMeFuncs` (the sub-search group) and/or
+// `&SSampleDealingFunc` (the safe cost tables), plus the two planes the
+// deleted `SWelsME` cursors pointed into. Strides travel inside the planes.
+// The layer parameter died with the strides: it was read for nothing else.
+//
+// All remain `unsafe fn` — every body still walks `pMe.pMvdCost`, the raw
+// MVD-cost cursor (the ctx family's, G–H) — but nothing in the signatures is
+// raw, and under MT every reference parameter is a shared read of pre-fork
+// state (the table is written only by `PreprocessSliceCoding`, before the
+// fork — F132 round 7's hoist is what makes the `&` lawful).
+
+pub type PMotionSearchFunc = unsafe fn(
+    pMeFuncs: &SMeFuncs,
+    sdf: &SSampleDealingFunc,
     pMe: &mut SWelsME,
     pSlice: &mut SSlice,
+    pEncPlane: &PaddedPlane,
+    pRefPlane: &PaddedPlane,
 );
 
-pub type PSearchMethodFunc = unsafe extern "C" fn(
-    pFuncList: *mut SWelsFuncPtrList,
+pub type PSearchMethodFunc = unsafe fn(
+    pMeFuncs: &SMeFuncs,
+    sdf: &SSampleDealingFunc,
     pMe: &mut SWelsME,
     pSlice: &mut SSlice,
-    kiEncStride: i32,
-    kiRefStride: i32,
+    pEncPlane: &PaddedPlane,
+    pRefPlane: &PaddedPlane,
 );
 
-pub type PCalculateSatdFunc = unsafe extern "C" fn(
-    pSatd: Option<PSampleSadSatdCostFuncRaw>,
+pub type PCalculateSatdFunc = unsafe fn(
+    pSatd: Option<PSampleSadSatdCostFunc>,
     pMe: &mut SWelsME,
-    kiEncStride: i32,
-    kiRefStride: i32,
+    pEncPlane: &PaddedPlane,
+    pRefPlane: &PaddedPlane,
 );
 
-pub type PCheckDirectionalMv = unsafe extern "C" fn(
-    pSad: Option<PSampleSadSatdCostFuncRaw>,
+pub type PCheckDirectionalMv = unsafe fn(
+    pSad: Option<PSampleSadSatdCostFunc>,
     pMe: &mut SWelsME,
     ksMinMv: SMVUnitXY,
     ksMaxMv: SMVUnitXY,
-    kiEncStride: i32,
-    kiRefStride: i32,
+    pEncPlane: &PaddedPlane,
+    pRefPlane: &PaddedPlane,
     iBestSadCost: &mut i32,
 ) -> bool;
 
-pub type PLineFullSearchFunc = unsafe extern "C" fn(
-    pFuncList: *mut SWelsFuncPtrList,
+pub type PLineFullSearchFunc = unsafe fn(
+    sdf: &SSampleDealingFunc,
     pMe: &mut SWelsME,
     pMvdTable: *mut u16,
-    kiEncStride: i32,
-    kiRefStride: i32,
+    pEncPlane: &PaddedPlane,
+    pRefPlane: &PaddedPlane,
     kiMinMv: i16,
     kiMaxMv: i16,
     bVerticalSearch: bool,
@@ -381,8 +395,11 @@ pub type PCalculateBlockFeatureOfFrame = unsafe extern "C" fn(
     pTimesOfFeatureValue: *mut u32,
 );
 
-pub type PCalculateSingleBlockFeature =
-    unsafe extern "C" fn(pRef: *mut u8, kiRefStride: i32) -> i32;
+/// Session F: the slot's one reader is `SetFeatureSearchIn`, whose block
+/// origin is a plane cursor now — the raw `SumOf*SingleBlock_c` kernels stay
+/// for the frame-feature builders, which walk a whole raw plane, and the slot
+/// holds the safe per-block twins below.
+pub type PCalculateSingleBlockFeature = fn(cRef: &PlaneCursor<'_>) -> i32;
 
 pub type PUpdateFMESwitch = unsafe extern "C" fn(pCurLayer: *mut SDqLayer);
 
@@ -442,20 +459,13 @@ pub unsafe fn COST_MVD(table: *const u16, mx: i32, my: i32) -> u32 {
     unsafe { (*table.offset(mx as isize) as u32) + (*table.offset(my as isize) as u32) }
 }
 
+/// Session F: the `pRef` argument and the `pRefMb` store are gone — the
+/// pointer was `colo + ksBestMv` at every call site (the verified identity),
+/// so the MV alone carries the result.
 #[inline]
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn UpdateMeResults(
-    ksBestMv: SMVUnitXY,
-    kiBestSadCost: u32,
-    pRef: *mut u8,
-    pMe: &mut SWelsME,
-) {
-    unsafe {
-        (*pMe).sMv = ksBestMv;
-        (*pMe).pRefMb = pRef;
-        (*pMe).uiSadCost = kiBestSadCost;
-    }
+pub fn UpdateMeResults(ksBestMv: SMVUnitXY, kiBestSadCost: u32, pMe: &mut SWelsME) {
+    pMe.sMv = ksBestMv;
+    pMe.uiSadCost = kiBestSadCost;
 }
 
 #[inline]
@@ -554,8 +564,8 @@ pub unsafe extern "C" fn WelsInitMeFunc(
             (*pFuncList).pfFillQpelLocationByFeatureValue = Some(FillQpelLocationByFeatureValue_c);
             (*pFuncList).pfCalculateBlockFeatureOfFrame[0] = Some(SumOf8x8BlockOfFrame_c);
             (*pFuncList).pfCalculateBlockFeatureOfFrame[1] = Some(SumOf16x16BlockOfFrame_c);
-            (*pFuncList).sMeFuncs.pfCalculateSingleBlockFeature[0] = Some(SumOf8x8SingleBlock_c);
-            (*pFuncList).sMeFuncs.pfCalculateSingleBlockFeature[1] = Some(SumOf16x16SingleBlock_c);
+            (*pFuncList).sMeFuncs.pfCalculateSingleBlockFeature[0] = Some(sum_of_8x8_single_block);
+            (*pFuncList).sMeFuncs.pfCalculateSingleBlockFeature[1] = Some(sum_of_16x16_single_block);
         }
     }
 }
@@ -565,18 +575,17 @@ pub unsafe extern "C" fn WelsInitMeFunc(
 // ============================================================================
 
 /// Top-level motion estimation search for a macroblock or sub-partition.
-// unsafe-cat: cursor
+// unsafe-cat: port-raw(Phase 9) — pMvdCost (the ctx family's raw MVD table)
 #[allow(unsafe_code)]
-pub unsafe extern "C" fn WelsMotionEstimateSearch(
-    pFuncList: *mut SWelsFuncPtrList,
-    pCurDqLayer: *mut SDqLayer,
+pub unsafe fn WelsMotionEstimateSearch(
+    pMeFuncs: &SMeFuncs,
+    sdf: &SSampleDealingFunc,
     pMe: &mut SWelsME,
     pSlice: &mut SSlice,
+    pEncPlane: &PaddedPlane,
+    pRefPlane: &PaddedPlane,
 ) {
     unsafe {
-        let kiStrideEnc = (*pCurDqLayer).iEncStride[0];
-        let kiStrideRef = (*pCurDqLayer).sRefPicView.sPlanes.iLineSize[0];
-
         if crate::encoder::dump_enabled(&ME_DUMP, "OH264_MEDUMP") {
             let mut mvc = String::new();
             for di in 0..(*pSlice).uiMvcNum as usize {
@@ -586,13 +595,19 @@ pub unsafe extern "C" fn WelsMotionEstimateSearch(
                     (*pSlice).sMvc[di].iMvY
                 ));
             }
+            let kiX = (*pMe).iCurMeBlockPixX as isize;
+            let kiY = (*pMe).iCurMeBlockPixY as isize;
+            let cEnc = pEncPlane.cursor(kiX, kiY);
+            // Entry state: the reference position is colocated (mv not yet
+            // searched), which is what the deleted `pRefMb` held here.
+            let cRef = pRefPlane.cursor(kiX, kiY);
             let mut enc = String::new();
             let mut rf = String::new();
             let mut rfup = String::new();
             for di in 0..8isize {
-                enc.push_str(&format!("{},", *(*pMe).pEncMb.offset(di)));
-                rf.push_str(&format!("{},", *(*pMe).pRefMb.offset(di)));
-                rfup.push_str(&format!("{},", *(*pMe).pRefMb.offset(di - kiStrideRef as isize)));
+                enc.push_str(&format!("{},", cEnc.row(0, di, 1)[0]));
+                rf.push_str(&format!("{},", cRef.row(0, di, 1)[0]));
+                rfup.push_str(&format!("{},", cRef.row(-1, di, 1)[0]));
             }
             eprintln!(
                 "ME bs={} px={},{} mvp={},{} base={},{} sadpred={} mvcn={} min={},{} max={},{} mvc={} enc={} ref={} refup={} mvdc={},{}",
@@ -619,22 +634,17 @@ pub unsafe extern "C" fn WelsMotionEstimateSearch(
         }
 
         // Step 1: Initial point prediction
-        if !WelsMotionEstimateInitialPoint(pFuncList, pMe, pSlice, kiStrideEnc, kiStrideRef) {
+        if !WelsMotionEstimateInitialPoint(pMeFuncs, sdf, pMe, pSlice, pEncPlane, pRefPlane) {
             let block_size = (*pMe).uiBlockSize as usize;
-            if let Some(search_fn) = (*pFuncList).sMeFuncs.pfSearchMethod[block_size] {
-                search_fn(pFuncList, pMe, pSlice, kiStrideEnc, kiStrideRef);
+            if let Some(search_fn) = pMeFuncs.pfSearchMethod[block_size] {
+                search_fn(pMeFuncs, sdf, pMe, pSlice, pEncPlane, pRefPlane);
             }
             MeEndIntepelSearch(pMe);
         }
 
         let block_size = (*pMe).uiBlockSize as usize;
-        if let Some(calc_satd) = (*pFuncList).sMeFuncs.pfCalculateSatd {
-            calc_satd(
-                (*pFuncList).sSampleDealingFuncs.pfSampleSatdRaw[block_size],
-                pMe,
-                kiStrideEnc,
-                kiStrideRef,
-            );
+        if let Some(calc_satd) = pMeFuncs.pfCalculateSatd {
+            calc_satd(sdf.pfSampleSatd[block_size], pMe, pEncPlane, pRefPlane);
         }
         if crate::encoder::dump_enabled(&ME_DUMP, "OH264_MEDUMP") {
             eprintln!(
@@ -652,34 +662,32 @@ pub unsafe extern "C" fn WelsMotionEstimateSearch(
 // SCREEN_CONTENT(dormant: Phase 10)
 // unsafe-cat: SCREEN_CONTENT(dormant)
 #[allow(unsafe_code)]
-pub unsafe extern "C" fn WelsMotionEstimateSearchStatic(
-    pFuncList: *mut SWelsFuncPtrList,
-    pCurDqLayer: *mut SDqLayer,
+pub unsafe fn WelsMotionEstimateSearchStatic(
+    pMeFuncs: &SMeFuncs,
+    sdf: &SSampleDealingFunc,
     pMe: &mut SWelsME,
     _pSlice: &mut SSlice,
+    pEncPlane: &PaddedPlane,
+    pRefPlane: &PaddedPlane,
 ) {
     unsafe {
-        let kiStrideEnc = (*pCurDqLayer).iEncStride[0];
-        let kiStrideRef = (*pCurDqLayer).sRefPicView.sPlanes.iLineSize[0];
         let block_size = (*pMe).uiBlockSize as usize;
+        let kiX = (*pMe).iCurMeBlockPixX as isize;
+        let kiY = (*pMe).iCurMeBlockPixY as isize;
 
         (*pMe).sMv.iMvX = 0;
         (*pMe).sMv.iMvY = 0;
 
-        if let Some(sad_fn) = (*pFuncList).sSampleDealingFuncs.pfSampleSadRaw[block_size] {
-            (*pMe).uiSadCost = sad_fn((*pMe).pEncMb, kiStrideEnc, (*pMe).pRefMb, kiStrideRef) as u32;
+        if let Some(sad_fn) = sdf.pfSampleSad[block_size] {
+            (*pMe).uiSadCost =
+                sad_fn(&pEncPlane.cursor(kiX, kiY), &pRefPlane.cursor(kiX, kiY)) as u32;
         }
         (*pMe).uiSadCost += COST_MVD((*pMe).pMvdCost, -((*pMe).sMvp.iMvX as i32), -((*pMe).sMvp.iMvY as i32));
 
         MeEndIntepelSearch(pMe);
 
-        if let Some(calc_satd) = (*pFuncList).sMeFuncs.pfCalculateSatd {
-            calc_satd(
-                (*pFuncList).sSampleDealingFuncs.pfSampleSatdRaw[block_size],
-                pMe,
-                kiStrideEnc,
-                kiStrideRef,
-            );
+        if let Some(calc_satd) = pMeFuncs.pfCalculateSatd {
+            calc_satd(sdf.pfSampleSatd[block_size], pMe, pEncPlane, pRefPlane);
         }
     }
 }
@@ -688,25 +696,29 @@ pub unsafe extern "C" fn WelsMotionEstimateSearchStatic(
 // SCREEN_CONTENT(dormant: Phase 10)
 // unsafe-cat: SCREEN_CONTENT(dormant)
 #[allow(unsafe_code)]
-pub unsafe extern "C" fn WelsMotionEstimateSearchScrolled(
-    pFuncList: *mut SWelsFuncPtrList,
-    pCurDqLayer: *mut SDqLayer,
+pub unsafe fn WelsMotionEstimateSearchScrolled(
+    pMeFuncs: &SMeFuncs,
+    sdf: &SSampleDealingFunc,
     pMe: &mut SWelsME,
     _pSlice: &mut SSlice,
+    pEncPlane: &PaddedPlane,
+    pRefPlane: &PaddedPlane,
 ) {
     unsafe {
-        let kiStrideEnc = (*pCurDqLayer).iEncStride[0];
-        let kiStrideRef = (*pCurDqLayer).sRefPicView.sPlanes.iLineSize[0];
         let block_size = (*pMe).uiBlockSize as usize;
+        let kiX = (*pMe).iCurMeBlockPixX as isize;
+        let kiY = (*pMe).iCurMeBlockPixY as isize;
 
         (*pMe).sMv = (*pMe).sDirectionalMv;
         let mv_x = (*pMe).sMv.iMvX as i32;
         let mv_y = (*pMe).sMv.iMvY as i32;
-        (*pMe).pRefMb = (*pMe).pColoRefMb.offset((mv_y * kiStrideRef + mv_x) as isize);
 
         let mut sad_cost = 0u32;
-        if let Some(sad_fn) = (*pFuncList).sSampleDealingFuncs.pfSampleSadRaw[block_size] {
-            sad_cost = sad_fn((*pMe).pEncMb, kiStrideEnc, (*pMe).pRefMb, kiStrideRef) as u32;
+        if let Some(sad_fn) = sdf.pfSampleSad[block_size] {
+            sad_cost = sad_fn(
+                &pEncPlane.cursor(kiX, kiY),
+                &pRefPlane.cursor(kiX + mv_x as isize, kiY + mv_y as isize),
+            ) as u32;
         }
         sad_cost += COST_MVD(
             (*pMe).pMvdCost,
@@ -717,13 +729,8 @@ pub unsafe extern "C" fn WelsMotionEstimateSearchScrolled(
 
         MeEndIntepelSearch(pMe);
 
-        if let Some(calc_satd) = (*pFuncList).sMeFuncs.pfCalculateSatd {
-            calc_satd(
-                (*pFuncList).sSampleDealingFuncs.pfSampleSatdRaw[block_size],
-                pMe,
-                kiStrideEnc,
-                kiStrideRef,
-            );
+        if let Some(calc_satd) = pMeFuncs.pfCalculateSatd {
+            calc_satd(sdf.pfSampleSatd[block_size], pMe, pEncPlane, pRefPlane);
         }
     }
 }
@@ -733,20 +740,23 @@ pub unsafe extern "C" fn WelsMotionEstimateSearchScrolled(
 // ============================================================================
 
 /// Evaluates spatial MVP, MVC candidate list, and directional scrolling vectors.
-// unsafe-cat: cursor
+// unsafe-cat: port-raw(Phase 9) — pMvdCost (the ctx family's raw MVD table)
 #[allow(unsafe_code)]
-pub unsafe extern "C" fn WelsMotionEstimateInitialPoint(
-    pFuncList: *mut SWelsFuncPtrList,
+pub unsafe fn WelsMotionEstimateInitialPoint(
+    pMeFuncs: &SMeFuncs,
+    sdf: &SSampleDealingFunc,
     pMe: &mut SWelsME,
     pSlice: &mut SSlice,
-    iStrideEnc: i32,
-    iStrideRef: i32,
+    pEncPlane: &PaddedPlane,
+    pRefPlane: &PaddedPlane,
 ) -> bool {
     unsafe {
         let block_size = (*pMe).uiBlockSize as usize;
-        let pSad = (*pFuncList).sSampleDealingFuncs.pfSampleSadRaw[block_size];
+        let pSad = sdf.pfSampleSad[block_size];
         let kpMvdCost = (*pMe).pMvdCost;
-        let kpEncMb = (*pMe).pEncMb;
+        let kiX = (*pMe).iCurMeBlockPixX as isize;
+        let kiY = (*pMe).iCurMeBlockPixY as isize;
+        let cEnc = pEncPlane.cursor(kiX, kiY);
 
         let kuiMvcNum = (*pSlice).uiMvcNum as usize;
         let ksMvStartMin = (*pSlice).sMvStartMin;
@@ -758,11 +768,12 @@ pub unsafe extern "C" fn WelsMotionEstimateInitialPoint(
             iMvY: (((2 + ksMvp.iMvY as i32) >> 2).clamp(ksMvStartMin.iMvY as i32, ksMvStartMax.iMvY as i32)) as i16,
         };
 
-        let mut pRefMb = (*pMe).pRefMb.offset((sMv.iMvY as i32 * iStrideRef + sMv.iMvX as i32) as isize);
-
         let mut iBestSadCost: i32 = 0;
         if let Some(sad_fn) = pSad {
-            iBestSadCost = sad_fn(kpEncMb, iStrideEnc, pRefMb, iStrideRef);
+            iBestSadCost = sad_fn(
+                &cEnc,
+                &pRefPlane.cursor(kiX + sMv.iMvX as isize, kiY + sMv.iMvY as isize),
+            );
         }
         iBestSadCost += COST_MVD(
             kpMvdCost,
@@ -777,9 +788,11 @@ pub unsafe extern "C" fn WelsMotionEstimateInitialPoint(
             let iMvc1 = (((2 + mvc.iMvY as i32) >> 2).clamp(ksMvStartMin.iMvY as i32, ksMvStartMax.iMvY as i32)) as i16;
 
             if (iMvc0 != sMv.iMvX) || (iMvc1 != sMv.iMvY) {
-                let pFref2 = (*pMe).pRefMb.offset((iMvc1 as i32 * iStrideRef + iMvc0 as i32) as isize);
                 if let Some(sad_fn) = pSad {
-                    iSadCost = sad_fn(kpEncMb, iStrideEnc, pFref2, iStrideRef);
+                    iSadCost = sad_fn(
+                        &cEnc,
+                        &pRefPlane.cursor(kiX + iMvc0 as isize, kiY + iMvc1 as isize),
+                    );
                 }
                 iSadCost += COST_MVD(
                     kpMvdCost,
@@ -790,21 +803,19 @@ pub unsafe extern "C" fn WelsMotionEstimateInitialPoint(
                 if iSadCost < iBestSadCost {
                     sMv.iMvX = iMvc0;
                     sMv.iMvY = iMvc1;
-                    pRefMb = pFref2;
                     iBestSadCost = iSadCost;
                 }
             }
         }
 
-        if let Some(check_dir) = (*pFuncList).sMeFuncs.pfCheckDirectionalMv {
-            if check_dir(pSad, pMe, ksMvStartMin, ksMvStartMax, iStrideEnc, iStrideRef, &mut iSadCost) {
+        if let Some(check_dir) = pMeFuncs.pfCheckDirectionalMv {
+            if check_dir(pSad, pMe, ksMvStartMin, ksMvStartMax, pEncPlane, pRefPlane, &mut iSadCost) {
                 sMv = (*pMe).sDirectionalMv;
-                pRefMb = (*pMe).pColoRefMb.offset((sMv.iMvY as i32 * iStrideRef + sMv.iMvX as i32) as isize);
                 iBestSadCost = iSadCost;
             }
         }
 
-        UpdateMeResults(sMv, iBestSadCost as u32, pRefMb, pMe);
+        UpdateMeResults(sMv, iBestSadCost as u32, pMe);
 
         if iBestSadCost < (*pMe).uSadPredISatd.uiSadPred as i32 {
             MeEndIntepelSearch(pMe);
@@ -819,17 +830,26 @@ pub unsafe extern "C" fn WelsMotionEstimateInitialPoint(
 // SATD Cost Calculation
 // ============================================================================
 
+/// Runs after `MeEndIntepelSearch`, so `sMv` is quarter-pel and the integer
+/// reference position is `colo + (sMv >> 2)` — `MeRefineFracPixel`'s spelling
+/// of the same identity.
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
-pub unsafe extern "C" fn CalculateSatdCost(
-    pSatd: Option<PSampleSadSatdCostFuncRaw>,
+pub unsafe fn CalculateSatdCost(
+    pSatd: Option<PSampleSadSatdCostFunc>,
     pMe: &mut SWelsME,
-    kiEncStride: i32,
-    kiRefStride: i32,
+    pEncPlane: &PaddedPlane,
+    pRefPlane: &PaddedPlane,
 ) {
     unsafe {
         if let Some(satd_fn) = pSatd {
-            (*pMe).uSadPredISatd.uiSatd = satd_fn((*pMe).pEncMb, kiEncStride, (*pMe).pRefMb, kiRefStride) as u32;
+            let kiX = (*pMe).iCurMeBlockPixX as isize;
+            let kiY = (*pMe).iCurMeBlockPixY as isize;
+            let cRef = pRefPlane.cursor(
+                kiX + (((*pMe).sMv.iMvX as isize) >> 2),
+                kiY + (((*pMe).sMv.iMvY as isize) >> 2),
+            );
+            (*pMe).uSadPredISatd.uiSatd = satd_fn(&pEncPlane.cursor(kiX, kiY), &cRef) as u32;
             (*pMe).uiSatdCost = (*pMe).uSadPredISatd.uiSatd
                 + COST_MVD(
                     (*pMe).pMvdCost,
@@ -840,13 +860,11 @@ pub unsafe extern "C" fn CalculateSatdCost(
     }
 }
 
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe extern "C" fn NotCalculateSatdCost(
-    _pSatd: Option<PSampleSadSatdCostFuncRaw>,
+pub fn NotCalculateSatdCost(
+    _pSatd: Option<PSampleSadSatdCostFunc>,
     _pMe: &mut SWelsME,
-    _kiEncStride: i32,
-    _kiRefStride: i32,
+    _pEncPlane: &PaddedPlane,
+    _pRefPlane: &PaddedPlane,
 ) {
 }
 
@@ -898,22 +916,24 @@ pub unsafe extern "C" fn WelsMeSadCostSelect(
     }
 }
 
-// unsafe-cat: cursor
+// unsafe-cat: port-raw(Phase 9) — pMvdCost (the ctx family's raw MVD table)
 #[allow(unsafe_code)]
-pub unsafe extern "C" fn WelsDiamondSearch(
-    pFuncList: *mut SWelsFuncPtrList,
+pub unsafe fn WelsDiamondSearch(
+    _pMeFuncs: &SMeFuncs,
+    sdf: &SSampleDealingFunc,
     pMe: &mut SWelsME,
     pSlice: &mut SSlice,
-    kiStrideEnc: i32,
-    kiStrideRef: i32,
+    pEncPlane: &PaddedPlane,
+    pRefPlane: &PaddedPlane,
 ) {
     unsafe {
         let block_size = (*pMe).uiBlockSize as usize;
-        let pSad4 = (*pFuncList).sSampleDealingFuncs.pfSample4SadRaw[block_size];
-        let pSadSingle = (*pFuncList).sSampleDealingFuncs.pfSampleSadRaw[block_size];
+        let pSad4 = sdf.pfSample4Sad[block_size];
+        let pSadSingle = sdf.pfSampleSad[block_size];
 
-        let pFref = (*pMe).pRefMb;
-        let kpEncMb = (*pMe).pEncMb;
+        let kiX = (*pMe).iCurMeBlockPixX as isize;
+        let kiY = (*pMe).iCurMeBlockPixY as isize;
+        let cEnc = pEncPlane.cursor(kiX, kiY);
         let kpMvdCost = (*pMe).pMvdCost;
 
         let ksMvStartMin = (*pSlice).sMvStartMin;
@@ -922,7 +942,6 @@ pub unsafe extern "C" fn WelsDiamondSearch(
         let mut iMvDx = ((*pMe).sMv.iMvX as i32 * 4) - (*pMe).sMvp.iMvX as i32;
         let mut iMvDy = ((*pMe).sMv.iMvY as i32 * 4) - (*pMe).sMvp.iMvY as i32;
 
-        let mut pRefMb = pFref;
         let mut iBestCost = (*pMe).uiSadCost as i32;
         let mut iTimeThreshold = ITERATIVE_TIMES;
         let mut iSadCosts = [0i32; 4];
@@ -936,13 +955,19 @@ pub unsafe extern "C" fn WelsDiamondSearch(
                 continue;
             }
 
+            // The centre of this iteration's probe: colo + the current
+            // integer MV — the walking `pRefMb` this loop used to maintain,
+            // proven equal by the identity probe (session F step 1).
+            let kiRx = kiX + (*pMe).sMv.iMvX as isize;
+            let kiRy = kiY + (*pMe).sMv.iMvY as isize;
+
             if let Some(sad4_fn) = pSad4 {
-                sad4_fn(kpEncMb, kiStrideEnc, pRefMb, kiStrideRef, iSadCosts.as_mut_ptr());
+                sad4_fn(&cEnc, &pRefPlane.cursor(kiRx, kiRy), &mut iSadCosts);
             } else if let Some(sad_fn) = pSadSingle {
-                iSadCosts[0] = sad_fn(kpEncMb, kiStrideEnc, pRefMb.offset(-(kiStrideRef as isize)), kiStrideRef);
-                iSadCosts[1] = sad_fn(kpEncMb, kiStrideEnc, pRefMb.offset(kiStrideRef as isize), kiStrideRef);
-                iSadCosts[2] = sad_fn(kpEncMb, kiStrideEnc, pRefMb.offset(-1), kiStrideRef);
-                iSadCosts[3] = sad_fn(kpEncMb, kiStrideEnc, pRefMb.offset(1), kiStrideRef);
+                iSadCosts[0] = sad_fn(&cEnc, &pRefPlane.cursor(kiRx, kiRy - 1));
+                iSadCosts[1] = sad_fn(&cEnc, &pRefPlane.cursor(kiRx, kiRy + 1));
+                iSadCosts[2] = sad_fn(&cEnc, &pRefPlane.cursor(kiRx - 1, kiRy));
+                iSadCosts[3] = sad_fn(&cEnc, &pRefPlane.cursor(kiRx + 1, kiRy));
             }
 
             let mut iX = 0i32;
@@ -962,14 +987,12 @@ pub unsafe extern "C" fn WelsDiamondSearch(
 
             iMvDx -= iX * 4;
             iMvDy -= iY * 4;
-            pRefMb = pRefMb.offset(-((iX + iY * kiStrideRef) as isize));
         }
 
         (*pMe).sMv.iMvX = ((iMvDx + (*pMe).sMvp.iMvX as i32) >> 2) as i16;
         (*pMe).sMv.iMvY = ((iMvDy + (*pMe).sMvp.iMvY as i32) >> 2) as i16;
         (*pMe).uiSadCost = iBestCost as u32;
         (*pMe).uiSatdCost = (*pMe).uiSadCost;
-        (*pMe).pRefMb = pRefMb;
     }
 }
 
@@ -977,15 +1000,15 @@ pub unsafe extern "C" fn WelsDiamondSearch(
 // Directional Scrolling Search
 // ============================================================================
 
-// unsafe-cat: port-raw(Phase 9)
+// unsafe-cat: port-raw(Phase 9) — pMvdCost (the ctx family's raw MVD table)
 #[allow(unsafe_code)]
-pub unsafe extern "C" fn CheckDirectionalMv(
-    pSad: Option<PSampleSadSatdCostFuncRaw>,
+pub unsafe fn CheckDirectionalMv(
+    pSad: Option<PSampleSadSatdCostFunc>,
     pMe: &mut SWelsME,
     ksMinMv: SMVUnitXY,
     ksMaxMv: SMVUnitXY,
-    kiEncStride: i32,
-    kiRefStride: i32,
+    pEncPlane: &PaddedPlane,
+    pRefPlane: &PaddedPlane,
     iBestSadCost: &mut i32,
 ) -> bool {
     unsafe {
@@ -996,10 +1019,14 @@ pub unsafe extern "C" fn CheckDirectionalMv(
             && ((kiMvX != 0) || (kiMvY != 0))
             && CheckMvInRange((*pMe).sDirectionalMv, ksMinMv, ksMaxMv)
         {
-            let pRef = (*pMe).pColoRefMb.offset((kiMvY as i32 * kiRefStride + kiMvX as i32) as isize);
+            let kiX = (*pMe).iCurMeBlockPixX as isize;
+            let kiY = (*pMe).iCurMeBlockPixY as isize;
             let mut uiCurrentSadCost = 0u32;
             if let Some(sad_fn) = pSad {
-                uiCurrentSadCost = sad_fn((*pMe).pEncMb, kiEncStride, pRef, kiRefStride) as u32;
+                uiCurrentSadCost = sad_fn(
+                    &pEncPlane.cursor(kiX, kiY),
+                    &pRefPlane.cursor(kiX + kiMvX as isize, kiY + kiMvY as isize),
+                ) as u32;
             }
             uiCurrentSadCost += COST_MVD(
                 (*pMe).pMvdCost,
@@ -1015,15 +1042,13 @@ pub unsafe extern "C" fn CheckDirectionalMv(
     }
 }
 
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe extern "C" fn CheckDirectionalMvFalse(
-    _pSad: Option<PSampleSadSatdCostFuncRaw>,
+pub fn CheckDirectionalMvFalse(
+    _pSad: Option<PSampleSadSatdCostFunc>,
     _pMe: &mut SWelsME,
     _ksMinMv: SMVUnitXY,
     _ksMaxMv: SMVUnitXY,
-    _kiEncStride: i32,
-    _kiRefStride: i32,
+    _pEncPlane: &PaddedPlane,
+    _pRefPlane: &PaddedPlane,
     _iBestSadCost: &mut i32,
 ) -> bool {
     false
@@ -1042,27 +1067,29 @@ pub unsafe extern "C" fn CheckDirectionalMvFalse(
 // which read as a Phase 9 conversion still owed. It is not — it is Phase 10's.
 // unsafe-cat: SCREEN_CONTENT(dormant)
 #[allow(unsafe_code)]
-pub unsafe extern "C" fn LineFullSearch_c(
-    pFuncList: *mut SWelsFuncPtrList,
+pub unsafe fn LineFullSearch_c(
+    sdf: &SSampleDealingFunc,
     pMe: &mut SWelsME,
     pMvdTable: *mut u16,
-    kiEncStride: i32,
-    kiRefStride: i32,
+    pEncPlane: &PaddedPlane,
+    pRefPlane: &PaddedPlane,
     iMinMv: i16,
     iMaxMv: i16,
     bVerticalSearch: bool,
 ) {
     unsafe {
         let block_size = (*pMe).uiBlockSize as usize;
-        let pSad = (*pFuncList).sSampleDealingFuncs.pfSampleSadRaw[block_size];
+        let pSad = sdf.pfSampleSad[block_size];
         let kiCurMeBlockPixX = (*pMe).iCurMeBlockPixX;
         let kiCurMeBlockPixY = (*pMe).iCurMeBlockPixY;
+        let kiX = kiCurMeBlockPixX as isize;
+        let kiY = kiCurMeBlockPixY as isize;
+        let cEnc = pEncPlane.cursor(kiX, kiY);
 
         let iMinPos: i32;
         let iMaxPos: i32;
         let iFixedMvd: i32;
         let iCurMeBlockPix: i32;
-        let iStride: i32;
         let mut pMvdCost: *mut u16;
 
         if bVerticalSearch {
@@ -1070,33 +1097,35 @@ pub unsafe extern "C" fn LineFullSearch_c(
             iMaxPos = kiCurMeBlockPixY + iMaxMv as i32;
             iFixedMvd = *pMvdTable.offset(-((*pMe).sMvp.iMvX as isize)) as i32;
             iCurMeBlockPix = kiCurMeBlockPixY;
-            iStride = kiRefStride;
             pMvdCost = pMvdTable.offset(((iMinMv as i32 * 4) - (*pMe).sMvp.iMvY as i32) as isize);
         } else {
             iMinPos = kiCurMeBlockPixX + iMinMv as i32;
             iMaxPos = kiCurMeBlockPixX + iMaxMv as i32;
             iFixedMvd = *pMvdTable.offset(-((*pMe).sMvp.iMvY as isize)) as i32;
             iCurMeBlockPix = kiCurMeBlockPixX;
-            iStride = 1;
             pMvdCost = pMvdTable.offset(((iMinMv as i32 * 4) - (*pMe).sMvp.iMvX as i32) as isize);
         }
 
-        let mut pRef = (*pMe).pColoRefMb.offset((iMinMv as i32 * iStride) as isize);
         let mut uiBestCost: u32 = 0xFFFF_FFFF;
         let mut iBestPos: i32 = 0;
 
         for iTargetPos in iMinPos..iMaxPos {
-            let kpEncMb = (*pMe).pEncMb;
+            // The walking pRef was colo + d rows (vertical) or d columns.
+            let d = (iTargetPos - iCurMeBlockPix) as isize;
+            let cRef = if bVerticalSearch {
+                pRefPlane.cursor(kiX, kiY + d)
+            } else {
+                pRefPlane.cursor(kiX + d, kiY)
+            };
             let mut uiSadCost: u32 = 0;
             if let Some(sad_fn) = pSad {
-                uiSadCost = sad_fn(kpEncMb, kiEncStride, pRef, kiRefStride) as u32;
+                uiSadCost = sad_fn(&cEnc, &cRef) as u32;
             }
             uiSadCost += (iFixedMvd + *pMvdCost as i32) as u32;
             if uiSadCost < uiBestCost {
                 uiBestCost = uiSadCost;
                 iBestPos = iTargetPos;
             }
-            pRef = pRef.offset(iStride as isize);
             pMvdCost = pMvdCost.add(4);
         }
 
@@ -1104,29 +1133,29 @@ pub unsafe extern "C" fn LineFullSearch_c(
             let mut sBestMv = SMVUnitXY::default();
             sBestMv.iMvX = if bVerticalSearch { 0 } else { (iBestPos - iCurMeBlockPix) as i16 };
             sBestMv.iMvY = if bVerticalSearch { (iBestPos - iCurMeBlockPix) as i16 } else { 0 };
-            let pBestRef = (*pMe).pColoRefMb.offset((sBestMv.iMvY as i32 * kiRefStride + sBestMv.iMvX as i32) as isize);
-            UpdateMeResults(sBestMv, uiBestCost, pBestRef, pMe);
+            UpdateMeResults(sBestMv, uiBestCost, pMe);
         }
     }
 }
 
-// unsafe-cat: cursor
+// unsafe-cat: port-raw(Phase 9) — pMvdCost (the ctx family's raw MVD table)
 #[allow(unsafe_code)]
-pub unsafe extern "C" fn WelsMotionCrossSearch(
-    pFuncList: *mut SWelsFuncPtrList,
+pub unsafe fn WelsMotionCrossSearch(
+    pMeFuncs: &SMeFuncs,
+    sdf: &SSampleDealingFunc,
     pMe: &mut SWelsME,
     pSlice: &mut SSlice,
-    kiEncStride: i32,
-    kiRefStride: i32,
+    pEncPlane: &PaddedPlane,
+    pRefPlane: &PaddedPlane,
 ) {
     unsafe {
-        if let Some(vert_fn) = (*pFuncList).sMeFuncs.pfVerticalFullSearch {
+        if let Some(vert_fn) = pMeFuncs.pfVerticalFullSearch {
             vert_fn(
-                pFuncList,
+                sdf,
                 pMe,
                 (*pMe).pMvdCost,
-                kiEncStride,
-                kiRefStride,
+                pEncPlane,
+                pRefPlane,
                 (*pSlice).sMvStartMin.iMvY,
                 (*pSlice).sMvStartMax.iMvY,
                 true,
@@ -1134,13 +1163,13 @@ pub unsafe extern "C" fn WelsMotionCrossSearch(
         }
 
         if (*pMe).uiSadCost >= (*pMe).uiSadCostThreshold {
-            if let Some(horiz_fn) = (*pFuncList).sMeFuncs.pfHorizontalFullSearch {
+            if let Some(horiz_fn) = pMeFuncs.pfHorizontalFullSearch {
                 horiz_fn(
-                    pFuncList,
+                    sdf,
                     pMe,
                     (*pMe).pMvdCost,
-                    kiEncStride,
-                    kiRefStride,
+                    pEncPlane,
+                    pRefPlane,
                     (*pSlice).sMvStartMin.iMvX,
                     (*pSlice).sMvStartMax.iMvX,
                     false,
@@ -1150,24 +1179,25 @@ pub unsafe extern "C" fn WelsMotionCrossSearch(
     }
 }
 
-// unsafe-cat: cursor
+// unsafe-cat: port-raw(Phase 9) — pRefFeatureStorage (Phase 10's raw storage)
 #[allow(unsafe_code)]
-pub unsafe extern "C" fn WelsDiamondCrossSearch(
-    pFunc: *mut SWelsFuncPtrList,
+pub unsafe fn WelsDiamondCrossSearch(
+    pMeFuncs: &SMeFuncs,
+    sdf: &SSampleDealingFunc,
     pMe: &mut SWelsME,
     pSlice: &mut SSlice,
-    kiEncStride: i32,
-    kiRefStride: i32,
+    pEncPlane: &PaddedPlane,
+    pRefPlane: &PaddedPlane,
 ) {
     unsafe {
-        WelsDiamondSearch(pFunc, pMe, pSlice, kiEncStride, kiRefStride);
+        WelsDiamondSearch(pMeFuncs, sdf, pMe, pSlice, pEncPlane, pRefPlane);
 
         if !(*pMe).pRefFeatureStorage.is_null() {
             let block_size = (*pMe).uiBlockSize as usize;
             (*pMe).uiSadCostThreshold = (*(*pMe).pRefFeatureStorage).uiSadCostThreshold[block_size];
         }
         if (*pMe).uiSadCost >= (*pMe).uiSadCostThreshold {
-            WelsMotionCrossSearch(pFunc, pMe, pSlice, kiEncStride, kiRefStride);
+            WelsMotionCrossSearch(pMeFuncs, sdf, pMe, pSlice, pEncPlane, pRefPlane);
         }
     }
 }
@@ -1175,27 +1205,29 @@ pub unsafe extern "C" fn WelsDiamondCrossSearch(
 // SCREEN_CONTENT(dormant: Phase 10)
 // unsafe-cat: SCREEN_CONTENT(dormant)
 #[allow(unsafe_code)]
-pub unsafe extern "C" fn WelsDiamondCrossFeatureSearch(
-    pFunc: *mut SWelsFuncPtrList,
+pub unsafe fn WelsDiamondCrossFeatureSearch(
+    pMeFuncs: &SMeFuncs,
+    sdf: &SSampleDealingFunc,
     pMe: &mut SWelsME,
     pSlice: &mut SSlice,
-    kiEncStride: i32,
-    kiRefStride: i32,
+    pEncPlane: &PaddedPlane,
+    pRefPlane: &PaddedPlane,
 ) {
     unsafe {
-        WelsDiamondCrossSearch(pFunc, pMe, pSlice, kiEncStride, kiRefStride);
+        WelsDiamondCrossSearch(pMeFuncs, sdf, pMe, pSlice, pEncPlane, pRefPlane);
 
         if (*pMe).uiSadCost >= (*pMe).uiSadCostThreshold {
             (*pSlice).uiSliceFMECostDown = (*pSlice).uiSliceFMECostDown.wrapping_add((*pMe).uiSadCost);
 
             let mut sFeatureSearchIn = SFeatureSearchIn::default();
             if SetFeatureSearchIn(
-                &*pFunc,
+                pMeFuncs,
+                sdf,
                 pMe,
                 &*pSlice,
                 (*pMe).pRefFeatureStorage,
-                kiEncStride,
-                kiRefStride,
+                pEncPlane,
+                pRefPlane,
                 &mut sFeatureSearchIn,
             ) {
                 MotionEstimateFeatureFullSearch(sFeatureSearchIn, u32::MAX, pMe);
@@ -1208,6 +1240,32 @@ pub unsafe extern "C" fn WelsDiamondCrossFeatureSearch(
 // ============================================================================
 // Feature Search (FME / Screen Content Coding)
 // ============================================================================
+
+/// The safe per-block twin of [`SumOf8x8SingleBlock_c`] — what the
+/// `pfCalculateSingleBlockFeature` slot holds since session F. The raw kernel
+/// stays for the frame-feature builders, which walk a whole raw plane.
+// SCREEN_CONTENT(dormant: Phase 10)
+pub fn sum_of_8x8_single_block(cRef: &PlaneCursor<'_>) -> i32 {
+    let mut iSum = 0i32;
+    for y in 0..8 {
+        for &b in cRef.row(y, 0, 8) {
+            iSum += b as i32;
+        }
+    }
+    iSum
+}
+
+/// As [`sum_of_8x8_single_block`], 16x16.
+// SCREEN_CONTENT(dormant: Phase 10)
+pub fn sum_of_16x16_single_block(cRef: &PlaneCursor<'_>) -> i32 {
+    let mut iSum = 0i32;
+    for y in 0..16 {
+        for &b in cRef.row(y, 0, 16) {
+            iSum += b as i32;
+        }
+    }
+    iSum
+}
 
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
@@ -1439,28 +1497,29 @@ pub unsafe extern "C" fn PerformFMEPreprocess(
 // SCREEN_CONTENT(dormant: Phase 10)
 // unsafe-cat: SCREEN_CONTENT(dormant)
 #[allow(unsafe_code)]
-pub unsafe fn SetFeatureSearchIn(
-    pFunc: &SWelsFuncPtrList,
+pub unsafe fn SetFeatureSearchIn<'a>(
+    pMeFuncs: &SMeFuncs,
+    sdf: &SSampleDealingFunc,
     sMe: &SWelsME,
     pSlice: &SSlice,
     pRefFeatureStorage: *mut SScreenBlockFeatureStorage,
-    kiEncStride: i32,
-    kiRefStride: i32,
-    pFeatureSearchIn: &mut SFeatureSearchIn,
+    pEncPlane: &'a PaddedPlane,
+    pRefPlane: &'a PaddedPlane,
+    pFeatureSearchIn: &mut SFeatureSearchIn<'a>,
 ) -> bool {
     unsafe {
         let block_size = sMe.uiBlockSize as usize;
-        pFeatureSearchIn.pSad = pFunc.sSampleDealingFuncs.pfSampleSadRaw[block_size];
+        pFeatureSearchIn.pSad = sdf.pfSampleSad[block_size];
 
         let single_fn_idx = if block_size == BLOCK_16x16 { 1 } else { 0 };
-        if let Some(calc_single) = pFunc.sMeFuncs.pfCalculateSingleBlockFeature[single_fn_idx] {
-            pFeatureSearchIn.iFeatureOfCurrent = calc_single(sMe.pEncMb, kiEncStride);
+        if let Some(calc_single) = pMeFuncs.pfCalculateSingleBlockFeature[single_fn_idx] {
+            pFeatureSearchIn.iFeatureOfCurrent = calc_single(
+                &pEncPlane.cursor(sMe.iCurMeBlockPixX as isize, sMe.iCurMeBlockPixY as isize),
+            );
         }
 
-        pFeatureSearchIn.pEnc = sMe.pEncMb;
-        pFeatureSearchIn.pColoRef = sMe.pColoRefMb;
-        pFeatureSearchIn.iEncStride = kiEncStride;
-        pFeatureSearchIn.iRefStride = kiRefStride;
+        pFeatureSearchIn.pEncPlane = Some(pEncPlane);
+        pFeatureSearchIn.pRefPlane = Some(pRefPlane);
         pFeatureSearchIn.uiSadCostThresh = sMe.uiSadCostThreshold as u16;
 
         pFeatureSearchIn.iCurPixX = sMe.iCurMeBlockPixX;
@@ -1489,29 +1548,23 @@ pub unsafe fn SetFeatureSearchIn(
 }
 
 // SCREEN_CONTENT(dormant: Phase 10)
-// unsafe-cat: SCREEN_CONTENT(dormant)
-#[allow(unsafe_code)]
-pub unsafe fn SaveFeatureSearchOut(
+pub fn SaveFeatureSearchOut(
     sBestMv: SMVUnitXY,
     uiBestSadCost: u32,
-    pRef: *mut u8,
-    pFeatureSearchOut: *mut SFeatureSearchOut,
+    pFeatureSearchOut: &mut SFeatureSearchOut,
 ) {
-    unsafe {
-        (*pFeatureSearchOut).sBestMv = sBestMv;
-        (*pFeatureSearchOut).uiBestSadCost = uiBestSadCost;
-        (*pFeatureSearchOut).pBestRef = pRef;
-    }
+    pFeatureSearchOut.sBestMv = sBestMv;
+    pFeatureSearchOut.uiBestSadCost = uiBestSadCost;
 }
 
 // SCREEN_CONTENT(dormant: Phase 10)
 // unsafe-cat: SCREEN_CONTENT(dormant)
 #[allow(unsafe_code)]
 pub unsafe fn FeatureSearchOne(
-    sFeatureSearchIn: &SFeatureSearchIn,
+    sFeatureSearchIn: &SFeatureSearchIn<'_>,
     iFeatureDifference: i32,
     kuiExpectedSearchTimes: u32,
-    pFeatureSearchOut: *mut SFeatureSearchOut,
+    pFeatureSearchOut: &mut SFeatureSearchOut,
 ) -> bool {
     let iFeatureOfRef = sFeatureSearchIn.iFeatureOfCurrent + iFeatureDifference;
     if iFeatureOfRef < 0 || iFeatureOfRef >= LIST_SIZE {
@@ -1519,16 +1572,15 @@ pub unsafe fn FeatureSearchOne(
     }
 
     let pSad = sFeatureSearchIn.pSad;
-    let pEnc = sFeatureSearchIn.pEnc;
-    let pColoRef = sFeatureSearchIn.pColoRef;
-    let iEncStride = sFeatureSearchIn.iEncStride;
-    let iRefStride = sFeatureSearchIn.iRefStride;
+    let pEncPlane = sFeatureSearchIn.pEncPlane.expect("SetFeatureSearchIn bound the planes");
+    let pRefPlane = sFeatureSearchIn.pRefPlane.expect("SetFeatureSearchIn bound the planes");
     let uiSadCostThresh = sFeatureSearchIn.uiSadCostThresh as u32;
 
     let iCurPixX = sFeatureSearchIn.iCurPixX;
     let iCurPixY = sFeatureSearchIn.iCurPixY;
     let iCurPixXQpel = sFeatureSearchIn.iCurPixXQpel;
     let iCurPixYQpel = sFeatureSearchIn.iCurPixYQpel;
+    let cEnc = pEncPlane.cursor(iCurPixX as isize, iCurPixY as isize);
 
     let iMinQpelX = sFeatureSearchIn.iMinQpelX;
     let iMinQpelY = sFeatureSearchIn.iMinQpelY;
@@ -1541,9 +1593,8 @@ pub unsafe fn FeatureSearchOne(
         let iSearchTimesx2 = iSearchTimes << 1;
         let pQpelPosition = *sFeatureSearchIn.pQpelLocationOfFeature.offset(iFeatureOfRef as isize);
 
-        let mut sBestMv = (*pFeatureSearchOut).sBestMv;
-        let mut uiBestCost = (*pFeatureSearchOut).uiBestSadCost;
-        let mut pBestRef = (*pFeatureSearchOut).pBestRef;
+        let mut sBestMv = pFeatureSearchOut.sBestMv;
+        let mut uiBestCost = pFeatureSearchOut.uiBestSadCost;
 
         let mut i = 0i32;
         while i < iSearchTimesx2 {
@@ -1570,17 +1621,21 @@ pub unsafe fn FeatureSearchOne(
 
             let iIntepelX = (iQpelX >> 2) - iCurPixX;
             let iIntepelY = (iQpelY >> 2) - iCurPixY;
-            let pCurRef = pColoRef.offset((iIntepelX + iIntepelY * iRefStride) as isize);
 
             if let Some(sad_fn) = pSad {
-                uiTmpCost += sad_fn(pEnc, iEncStride, pCurRef, iRefStride) as u32;
+                uiTmpCost += sad_fn(
+                    &cEnc,
+                    &pRefPlane.cursor(
+                        (iCurPixX + iIntepelX) as isize,
+                        (iCurPixY + iIntepelY) as isize,
+                    ),
+                ) as u32;
             }
 
             if uiTmpCost < uiBestCost {
                 sBestMv.iMvX = iIntepelX as i16;
                 sBestMv.iMvY = iIntepelY as i16;
                 uiBestCost = uiTmpCost;
-                pBestRef = pCurRef;
 
                 if uiBestCost < uiSadCostThresh {
                     break;
@@ -1590,15 +1645,16 @@ pub unsafe fn FeatureSearchOne(
             i += 2;
         }
 
-        SaveFeatureSearchOut(sBestMv, uiBestCost, pBestRef, pFeatureSearchOut);
+        SaveFeatureSearchOut(sBestMv, uiBestCost, pFeatureSearchOut);
         i < iSearchTimesx2
     }
 }
 
-// unsafe-cat: port-raw(Phase 9)
+// SCREEN_CONTENT(dormant: Phase 10)
+// unsafe-cat: SCREEN_CONTENT(dormant)
 #[allow(unsafe_code)]
-pub unsafe extern "C" fn MotionEstimateFeatureFullSearch(
-    sFeatureSearchIn: SFeatureSearchIn,
+pub unsafe fn MotionEstimateFeatureFullSearch(
+    sFeatureSearchIn: SFeatureSearchIn<'_>,
     kuiMaxSearchPoint: u32,
     pMe: &mut SWelsME,
 ) {
@@ -1606,7 +1662,6 @@ pub unsafe extern "C" fn MotionEstimateFeatureFullSearch(
         let mut sFeatureSearchOut = SFeatureSearchOut {
             sBestMv: (*pMe).sMv,
             uiBestSadCost: (*pMe).uiSadCost,
-            pBestRef: (*pMe).pRefMb,
         };
 
         let iFeatureDifference = 0i32;
@@ -1616,7 +1671,6 @@ pub unsafe extern "C" fn MotionEstimateFeatureFullSearch(
             UpdateMeResults(
                 sFeatureSearchOut.sBestMv,
                 sFeatureSearchOut.uiBestSadCost,
-                sFeatureSearchOut.pBestRef,
                 pMe,
             );
         }

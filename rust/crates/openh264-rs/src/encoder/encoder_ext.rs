@@ -2380,39 +2380,13 @@ unsafe fn SetNormalCodingFunc(pFuncList: &mut SWelsFuncPtrList) {
     // As `SetFastCodingFunc`: the three `Combined3` aims are deleted with the fields.
 }
 
-/// `encoder_ext.cpp:2643`. Returns false when the requested method has no dedicated
-/// search and the caller falls back to the diamond search.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn SetMeMethod(uiMethod: u32, pSearchMethodFunc: *mut Option<PSearchMethodFunc>) -> bool {
-    match uiMethod {
-        ME_DIA => {
-            *pSearchMethodFunc = Some(crate::encoder::svc_motion_estimate::WelsDiamondSearch);
-            true
-        }
-        ME_CROSS => {
-            *pSearchMethodFunc = Some(crate::encoder::svc_motion_estimate::WelsMotionCrossSearch);
-            true
-        }
-        ME_DIA_CROSS => {
-            *pSearchMethodFunc = Some(crate::encoder::svc_motion_estimate::WelsDiamondCrossSearch);
-            true
-        }
-        ME_DIA_CROSS_FME => {
-            *pSearchMethodFunc =
-                Some(crate::encoder::svc_motion_estimate::WelsDiamondCrossFeatureSearch);
-            true
-        }
-        ME_FULL => {
-            *pSearchMethodFunc = Some(crate::encoder::svc_motion_estimate::WelsDiamondSearch);
-            false
-        }
-        _ => {
-            *pSearchMethodFunc = Some(crate::encoder::svc_motion_estimate::WelsDiamondSearch);
-            false
-        }
-    }
-}
+// `SetMeMethod` (`encoder_ext.cpp:2643`) stood here — the ME-method selector
+// that aims a `pfSearchMethod` slot at diamond/cross/feature search. **Zero
+// callers anywhere in src/ or tests/** (the C++ calls it from the
+// SCREEN_CONTENT block `PreprocessSliceCoding` did not translate; the camera
+// path installs `WelsDiamondSearch` for every block size directly). S18,
+// session F — Phase 10 re-ports it from the reference when the screen-content
+// dispatch arrives.
 
 /// `encoder_ext.cpp:2665`. Per-frame function-pointer selection. MUST be called after
 /// `pfWelsRcPictureInit()` and `WelsInitCurrentLayer()`.

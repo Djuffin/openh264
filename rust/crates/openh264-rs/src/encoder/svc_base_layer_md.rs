@@ -1051,8 +1051,6 @@ pub unsafe extern "C" fn WelsMdP16x8(
     pWelsMd: &mut SWelsMD,
     pSlice: &mut SSlice,
 ) -> i32 {
-    let iStrideEnc = (*pCurDqLayer).iEncStride[0];
-    let iStrideRef = (*pCurDqLayer).sRefPicView.sPlanes.iLineSize[0];
     let mut iCostP16x8 = 0i32;
     for i in 0..2i32 {
         let pMbCache = &mut pSlice.sMbCacheInfo;
@@ -1063,8 +1061,6 @@ pub unsafe extern "C" fn WelsMdP16x8(
             (*pWelsMd).iMbPixY,
             (*pWelsMd).pMvdCost,
             BLOCK_16x8 as i32,
-            (*pMbCache).SPicData.pEncMb[0].offset((iPixelY * iStrideEnc) as isize),
-            (*pMbCache).SPicData.pRefMb[0].offset((iPixelY * iStrideRef) as isize),
             (*pCurDqLayer).sRefPicView.pScreenBlockFeatureStorage,
             sMe16x8,
         );
@@ -1076,12 +1072,18 @@ pub unsafe extern "C" fn WelsMdP16x8(
         (*pSlice).uiMvcNum = 1;
 
         PredInter16x8Mv(&(*pMbCache).sMvComponents, i << 3, 0, &mut (*sMe16x8).sMvp);
-        (*pFunc).pfMotionSearch[0].expect("pfMotionSearch[0] unset")(
-            pFunc,
-            pCurDqLayer,
-            sMe16x8,
-            &mut *pSlice,
-        );
+        {
+            let pEncPicture = layer_enc_pic(pCurDqLayer).expect("the layer's source picture is bound");
+            let pRefPicture = layer_ref_pic(pCurDqLayer).expect("the layer's reference picture is bound");
+            (*pFunc).pfMotionSearch[0].expect("pfMotionSearch[0] unset")(
+                &(*pFunc).sMeFuncs,
+                &(*pFunc).sSampleDealingFuncs,
+                sMe16x8,
+                &mut *pSlice,
+                pEncPicture.plane(0),
+                pRefPicture.plane(0),
+            );
+        }
         // T9.E2b: the slot call above passes `&mut *pSlice` (the typedef flipped
         // with its family, S52), and that whole-slice reborrow pops every cursor
         // derived from the slice before it — q1c is blind here in both kinds
@@ -1122,8 +1124,6 @@ pub unsafe extern "C" fn WelsMdP8x16(
             (*pWelsMd).iMbPixY,
             (*pWelsMd).pMvdCost,
             BLOCK_8x16 as i32,
-            (*pMbCache).SPicData.pEncMb[0].offset(iPixelX as isize),
-            (*pMbCache).SPicData.pRefMb[0].offset(iPixelX as isize),
             (*pCurLayer).sRefPicView.pScreenBlockFeatureStorage,
             sMe8x16,
         );
@@ -1135,12 +1135,18 @@ pub unsafe extern "C" fn WelsMdP8x16(
         (*pSlice).uiMvcNum = 1;
 
         PredInter8x16Mv(&(*pMbCache).sMvComponents, i << 2, 0, &mut (*sMe8x16).sMvp);
-        (*pFunc).pfMotionSearch[0].expect("pfMotionSearch[0] unset")(
-            pFunc,
-            pCurLayer,
-            sMe8x16,
-            &mut *pSlice,
-        );
+        {
+            let pEncPicture = layer_enc_pic(pCurLayer).expect("the layer's source picture is bound");
+            let pRefPicture = layer_ref_pic(pCurLayer).expect("the layer's reference picture is bound");
+            (*pFunc).pfMotionSearch[0].expect("pfMotionSearch[0] unset")(
+                &(*pFunc).sMeFuncs,
+                &(*pFunc).sSampleDealingFuncs,
+                sMe8x16,
+                &mut *pSlice,
+                pEncPicture.plane(0),
+                pRefPicture.plane(0),
+            );
+        }
         // T9.E2b: the slot call above passes `&mut *pSlice` (the typedef flipped
         // with its family, S52), and that whole-slice reborrow pops every cursor
         // derived from the slice before it — q1c is blind here in both kinds

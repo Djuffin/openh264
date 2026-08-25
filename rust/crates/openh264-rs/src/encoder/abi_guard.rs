@@ -217,7 +217,13 @@ assert_size!(SRCSlicing, 44);
 // dropped, or given the wrong width, and a second declaration read at the wrong
 // offsets — it just no longer claims correspondence with a C++ `sizeof`.
 assert_size!(SStrideTables, 184);
-assert_size!(SWelsME, 96);
+// **96 -> 64 at session F**: the three per-block plane cursors (`pEncMb`/
+// `pRefMb`/`pColoRefMb`) left the search block — the coordinates already in
+// the struct carry the same information (the verified identity), and the
+// search family takes the planes as parameters. -24 of pointer plus -8 of
+// padding: without the pointer block the struct's tail packs at 2-byte
+// alignment. Measured, not predicted.
+assert_size!(SWelsME, 64);
 // **928 in the port, 4000 in the C++, and the gap is D-dead-2 (F122).** The struct
 // carried `sMe4x4`/`sMe8x4`/`sMe4x8` — 32 `SWelsME` at 96 bytes, 3072 of the 4000 —
 // whose only readers were `WelsMdInterMbRefinement`'s three sub-8x8 arms. Nothing in
@@ -229,7 +235,9 @@ assert_size!(SWelsME, 96);
 // no longer claims correspondence with a C++ `sizeof`. `SWelsMD` is encoder-internal
 // and crosses no ABI, so no header, no caller and no byte of output depends on the
 // old number.
-assert_size!(SWelsMD, 928);
+// **928 -> 640 at session F**: nine embedded `SWelsME` at -32 each (the
+// container: sMe16x16 + sMe16x8[2] + sMe8x16[2] + sMe8x8[4]).
+assert_size!(SWelsMD, 640);
 // `SVAAFrameInfo`: 264 in the C++. Phase 6 session B dissolved the `IWelsVP`
 // vtable and deleted the stored `pCalcResult` pointer from the two parameter
 // blocks this embeds (`sAdaptiveQuantParam`, `sComplexityAnalysisParam` — the
