@@ -633,38 +633,19 @@ pub unsafe fn slice_in_bank(pCurLayer: *mut SDqLayer, kiBank: usize, kiOffset: i
     root.add(kiOffset as usize)
 }
 
-/// The layer's macroblock array as a raw pointer to its **root** — T6.D5, and
-/// **S28 verbatim**.
-///
-/// Every `*mut SMB` consumer in the tree walks out of the macroblock it is handed:
-/// `pCurMb.offset(-1)` reaches the left neighbour, `.offset(-iMbStride)` the one
-/// above, and the mode-decision and deblocking paths do both for every macroblock
-/// of every frame. A pointer taken through a narrowing index
-/// (`as_mut_slice()[xy..].as_mut_ptr()`) has the correct *address* and provenance
-/// for the tail alone, so the first neighbour read walks out of it — safe code,
-/// correct output, and UB that no byte-level gate can see. This derives from the
-/// array's own root and every caller offsets from there.
-#[inline]
-// unsafe-cat: cursor
-#[allow(unsafe_code)]
-pub unsafe fn mb_list_root(pCurLayer: *mut SDqLayer) -> *mut SMB {
-    // **F71**, as `slice_bank_root`: every worker asks for this same array.
-    let mb = std::ptr::addr_of!((*pCurLayer).sMbDataP);
-    (*mb).root_ptr()
-}
-
-/// The macroblock at `kiMbXY`, derived from the array's root — see [`mb_list_root`].
-#[inline]
-// unsafe-cat: cursor
-#[allow(unsafe_code)]
-pub unsafe fn mb_at(pCurLayer: *mut SDqLayer, kiMbXY: i32) -> *mut SMB {
-    mb_list_root(pCurLayer).add(kiMbXY as usize)
-}
+// `mb_list_root` (T6.D5, S28's root hand-out) and `mb_at` stood here — the raw
+// per-record mints every neighbour walker offset out of. The grid conversion
+// (Phase 9 E3) moved all 34 walker parameters and the four list walkers onto
+// [`mb_window`] below, and the pair's last callers went with them (whole-tree
+// read grep at deletion: zero mentions beyond the definitions). Their S28/S40
+// covering test is re-aimed at the mint —
+// `mb_window_reaches_its_range_and_disjoint_windows_coexist` — rather than
+// deleted (S36). Two `cursor` tags retire.
 
 /// A per-call window over records `[kiFirstMb .. kiFirstMb + kiCount)` of the
 /// layer's macroblock grid, current record at `kiCurMb` — **the grid family's
-/// mint** (Phase 9 E3), replacing per-record raw hand-outs ([`mb_at`]) for the
-/// neighbour-walker family.
+/// mint** (Phase 9 E3), replacing the per-record raw hand-outs that stood above
+/// for the neighbour-walker family.
 ///
 /// The layer stays raw under the fork (S63), so the window is minted *from the
 /// raw layer per call*, and the window is the safe object the walkers take.
@@ -1488,11 +1469,10 @@ pub unsafe fn UpdateMbNeighbor(pCurDq: *mut SDqLayer, pMb: &mut SMB, kiMbWidth: 
 #[allow(unsafe_code)]
 pub unsafe fn UpdateMbNeighbourInfoForNextSlice(
     pCurDq: *mut SDqLayer,
-    pMbList: *mut SMB,
     kiFirstMbIdxOfNextSlice: i32,
     kiLastMbIdxInPartition: i32,
 ) {
-    if pCurDq.is_null() || pMbList.is_null() {
+    if pCurDq.is_null() {
         return;
     }
     let kiMbWidth = (*pCurDq).sSliceEncCtx.iMbWidth as i32;
@@ -1504,15 +1484,25 @@ pub unsafe fn UpdateMbNeighbourInfoForNextSlice(
     // C++ is a do-while: the first macroblock is always updated, even when
     // `kiFirstMbIdxOfNextSlice > kiLastMbIdxInPartition` -- which happens when the
     // boundary lands on the last macroblock of a partition. A `while` skips it.
-    let mut pMb = pMbList.add(iIdx as usize);
+    // The window is sized to exactly the records this walk touches — the next
+    // slice's first row-and-a-bit, bounded by the caller's own partition (the
+    // fork-disjointness argument: a worker updates only its partition's records).
+    let kiEnd = kiEndMbNeedUpdate
+        .min(kiLastMbIdxInPartition + 1)
+        .max(kiFirstMbIdxOfNextSlice + 1);
+    let mut mbs = mb_window(
+        pCurDq,
+        kiFirstMbIdxOfNextSlice,
+        kiEnd - kiFirstMbIdxOfNextSlice,
+        kiFirstMbIdxOfNextSlice,
+    );
     loop {
         // T9.E2h (F66's shape B, session J's fix): the idc is read BEFORE the
         // call — once `UpdateMbNeighbor` takes `&mut SDqLayer`, its argument
         // retag would kill a same-call read through the raw. Nothing between
         // the read and the call reallocates.
-        let kiSliceIdc = WelsMbToSliceIdc(pCurDq, (*pMb).iMbXY);
-        UpdateMbNeighbor(pCurDq, &mut *pMb, kiMbWidth, kiSliceIdc);
-        pMb = pMb.add(1);
+        let kiSliceIdc = WelsMbToSliceIdc(pCurDq, mbs.at(iIdx as usize).iMbXY);
+        UpdateMbNeighbor(pCurDq, mbs.at_mut(iIdx as usize), kiMbWidth, kiSliceIdc);
         iIdx += 1;
         if !((iIdx < kiEndMbNeedUpdate) && (iIdx <= kiLastMbIdxInPartition)) {
             break;
@@ -3318,7 +3308,7 @@ pub unsafe fn AddSliceBoundary(
             );
         }
 
-        UpdateMbNeighbourInfoForNextSlice(pCurLayer, mb_list_root(pCurLayer), iFirstMbIdxOfNextSlice, kiLastMbIdxInPartition);
+        UpdateMbNeighbourInfoForNextSlice(pCurLayer, iFirstMbIdxOfNextSlice, kiLastMbIdxInPartition);
     }
 }
 
@@ -4673,31 +4663,22 @@ mod tests {
         );
     }
 
-    /// **S28's mandated test for [`mb_list_root`]** — Phase 6 session D, face 2.
-    ///
-    /// S28 says every accessor that hands a raw pointer out of a safe container gets
-    /// a Miri test that reads the pointer's **full legal reach in both directions**,
-    /// because that class is invisible to every byte-level gate: a pointer derived
-    /// through `as_mut_slice()[xy..].as_mut_ptr()` has the right address and
-    /// provenance for the tail alone, and nine gates passed on exactly that in Phase
-    /// 5 (T5.C3).
-    ///
-    /// The reach here is the whole macroblock array, and **backwards is the direction
-    /// that matters**: the encoder's neighbour reads are `pCurMb.offset(-1)` (left)
-    /// and `.offset(-iMbStride)` (above), so a pointer to the macroblock in the
-    /// middle of the grid must be able to walk to index 0 and to the last index.
-    /// Under the narrowing spelling the first backwards step is UB.
-    ///
-    /// It also exercises the second half of the accessor's contract: **two
-    /// derivations must coexist**. `mb_list_root` is called once per function in
-    /// production and `mb_at` calls it again, so the second call must not invalidate
-    /// the first one's pointer — which is why it reads the `Vec`'s own stored pointer
-    /// rather than reborrowing the buffer through `as_mut_slice()`.
+    /// **The mint's instrument, re-aimed (S36).** Its predecessor
+    /// (`mb_list_root_reaches_the_whole_array_in_both_directions`) proved two
+    /// properties of the raw root hand-out: whole-array provenance, and that a
+    /// second derivation does not pop the first. The window mint restates both
+    /// structurally — a window's reach *is* its range, and an out-of-range access
+    /// panics instead of walking — so what is left to pin under Miri is the pair
+    /// of properties the fork relies on: a whole-grid window really reaches every
+    /// record in both directions from the middle, and **two disjoint windows of
+    /// one grid coexist under interleaved writes** (each worker's mint is a
+    /// sibling derivation from the array root, F71; overlapping live windows are
+    /// the shape the design forbids and does not need).
     #[test]
-    // unsafe-cat: port-raw(Phase 9)
+    // unsafe-cat: port-raw(Phase 9) — the mint under test takes the raw layer
     #[allow(unsafe_code)]
-    fn mb_list_root_reaches_the_whole_array_in_both_directions() {
-        use crate::encoder::svc_encode_slice::{mb_at, mb_list_root, SDqLayer};
+    fn mb_window_reaches_its_range_and_disjoint_windows_coexist() {
+        use crate::encoder::svc_encode_slice::{mb_window, SDqLayer};
         use crate::encoder::md::SMB;
         use crate::safe::mb_grid::{MbArray, MbDims};
 
@@ -4709,37 +4690,39 @@ mod tests {
         let p_layer: *mut SDqLayer = &mut layer;
 
         unsafe {
-            // Stamp every macroblock through the root, so the writes below have
-            // something to disagree with.
-            let root = mb_list_root(p_layer);
+            // Whole-grid window: stamp every record, then read the whole grid
+            // back both ways out from the middle.
+            let mut whole = mb_window(p_layer, 0, (w * h) as i32, 0);
             for i in 0..(w * h) {
-                (*root.add(i)).iMbXY = i as i32;
+                whole.at_mut(i).iMbXY = i as i32;
             }
-
-            // The middle of the grid, and its whole legal reach both ways.
-            let kiMid = (2 * w + 2) as i32;
-            let p_mid = mb_at(p_layer, kiMid);
+            let kiMid = 2 * w + 2;
+            whole.set_cur(kiMid);
             let mut seen = 0i64;
             for back in 1..=kiMid {
-                seen += (*p_mid.offset(-(back as isize))).iMbXY as i64;
+                seen += whole.at(kiMid - back).iMbXY as i64;
             }
-            for fwd in 1..((w * h) as i32 - kiMid) {
-                seen += (*p_mid.offset(fwd as isize)).iMbXY as i64;
+            for fwd in 1..(w * h - kiMid) {
+                seen += whole.at(kiMid + fwd).iMbXY as i64;
             }
             let expected: i64 = (0..(w * h) as i64).sum::<i64>() - kiMid as i64;
-            assert_eq!(seen, expected, "the root-derived pointer did not reach every macroblock");
+            assert_eq!(seen, expected, "the whole-grid window did not reach every record");
 
             // The two neighbour derivations the encoder actually makes.
-            assert_eq!((*p_mid.offset(-1)).iMbXY, kiMid - 1, "left neighbour");
-            assert_eq!((*p_mid.offset(-(w as isize))).iMbXY, kiMid - w as i32, "top neighbour");
+            assert_eq!(whole.left().iMbXY, (kiMid - 1) as i32, "left neighbour");
+            assert_eq!(whole.top().iMbXY, (kiMid - w) as i32, "top neighbour");
 
-            // A second derivation must not invalidate the first: write through the
-            // older pointer after taking a newer one, then read it back through the
-            // newer one.
-            let p_first = mb_list_root(p_layer);
-            let p_second = mb_at(p_layer, 7);
-            (*p_first.add(7)).iMbXY = -99;
-            assert_eq!((*p_second).iMbXY, -99, "the second derivation popped the first");
+            // Two disjoint windows — the fork's shape: worker A's slice and
+            // worker B's. Interleave writes and read A's back through A after
+            // B has been minted and used: sibling derivations, nothing popped.
+            let mut a = mb_window(p_layer, 0, 7, 0);
+            a.at_mut(3).iMbXY = -3;
+            let mut b = mb_window(p_layer, 7, (w * h - 7) as i32, 7);
+            b.at_mut(9).iMbXY = -9;
+            a.at_mut(5).iMbXY = -5;
+            assert_eq!(a.at(3).iMbXY, -3, "window B's mint popped window A");
+            assert_eq!(b.at(9).iMbXY, -9);
+            assert_eq!(a.at(5).iMbXY, -5);
         }
     }
 

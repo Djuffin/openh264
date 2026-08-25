@@ -597,20 +597,20 @@ pub unsafe fn GetMvMvdRange(
 #[allow(unsafe_code)]
 unsafe fn InitMbInfo(
     pEnc: *mut sWelsEncCtx,
-    pList: *mut SMB,
     pLayer: &mut SDqLayer,
     kiDlayerId: i32,
 ) {
     let iMbWidth = (*pLayer).iMbWidth as i32;
     let iMbHeight = (*pLayer).iMbHeight as i32;
     let iMbNum = iMbWidth * iMbHeight;
+    let mut mbs = crate::encoder::svc_encode_slice::mb_window(pLayer, 0, iMbNum, 0);
 
     for iIdx in 0..iMbNum as usize {
-        let pMb = pList.add(iIdx);
+        let pMb = mbs.at_mut(iIdx);
 
-        (*pMb).iMbX = *ctx_mb_index_x(pEnc, kiDlayerId as usize).add(iIdx);
-        (*pMb).iMbY = *ctx_mb_index_y(pEnc, kiDlayerId as usize).add(iIdx);
-        (*pMb).iMbXY = iIdx as i32;
+        pMb.iMbX = *ctx_mb_index_x(pEnc, kiDlayerId as usize).add(iIdx);
+        pMb.iMbY = *ctx_mb_index_y(pEnc, kiDlayerId as usize).add(iIdx);
+        pMb.iMbXY = iIdx as i32;
 
         // [0..65535] > 36864 of LEVEL5.2
         let uiSliceIdc: u16 = WelsMbToSliceIdc(pLayer, iIdx as i32);
@@ -619,12 +619,12 @@ unsafe fn InitMbInfo(
         let iLeftTopXY = iTopXY - 1;
         let iRightTopXY = iTopXY + 1;
 
-        let bLeft = (*pMb).iMbX > 0 && uiSliceIdc == WelsMbToSliceIdc(pLayer, iLeftXY);
-        let bTop = (*pMb).iMbY > 0 && uiSliceIdc == WelsMbToSliceIdc(pLayer, iTopXY);
+        let bLeft = pMb.iMbX > 0 && uiSliceIdc == WelsMbToSliceIdc(pLayer, iLeftXY);
+        let bTop = pMb.iMbY > 0 && uiSliceIdc == WelsMbToSliceIdc(pLayer, iTopXY);
         let bLeftTop =
-            (*pMb).iMbX > 0 && (*pMb).iMbY > 0 && uiSliceIdc == WelsMbToSliceIdc(pLayer, iLeftTopXY);
-        let bRightTop = ((*pMb).iMbX as i32) < (iMbWidth - 1)
-            && (*pMb).iMbY > 0
+            pMb.iMbX > 0 && pMb.iMbY > 0 && uiSliceIdc == WelsMbToSliceIdc(pLayer, iLeftTopXY);
+        let bRightTop = (pMb.iMbX as i32) < (iMbWidth - 1)
+            && pMb.iMbY > 0
             && uiSliceIdc == WelsMbToSliceIdc(pLayer, iRightTopXY);
 
         let mut uiNeighborAvail: u8 = 0;
@@ -641,8 +641,8 @@ unsafe fn InitMbInfo(
             uiNeighborAvail |= TOPRIGHT_MB_POS;
         }
         // merged from svc_hd_opt_b for multiple slices coding
-        (*pMb).uiSliceIdc = uiSliceIdc;
-        (*pMb).uiNeighborAvail = uiNeighborAvail;
+        pMb.uiSliceIdc = uiSliceIdc;
+        pMb.uiNeighborAvail = uiNeighborAvail;
 
         // C++ recomputes uiNeighborAvail here for the base-MV neighbourhood, then
         // discards it — the result is never stored. Reproduced as a no-op comment
@@ -683,12 +683,7 @@ pub unsafe fn InitMbListD(ppCtx: *mut *mut sWelsEncCtx) -> i32 {
             MbDims::new(iMbWidth as usize, iMbHeight as usize),
             SMB::default(),
         );
-        InitMbInfo(
-            *ppCtx,
-            crate::encoder::svc_encode_slice::mb_list_root(pLayer),
-            &mut *pLayer,
-            i as i32,
-        );
+        InitMbInfo(*ppCtx, &mut *pLayer, i as i32);
     }
 
     0
@@ -1754,15 +1749,15 @@ mod tests {
             assert_eq!((*pDq).sMbDataP.dims().count(), 60);
 
             // InitMbInfo wired every macroblock to its slot in the context arrays.
-            let pMb = crate::encoder::svc_encode_slice::mb_list_root(pDq);
-            assert_eq!((*pMb).iMbXY, 0);
-            assert_eq!((*pMb).iMbX, 0);
-            assert_eq!((*pMb).iMbY, 0);
+            let pMb = (*pDq).sMbDataP.get(0);
+            assert_eq!(pMb.iMbXY, 0);
+            assert_eq!(pMb.iMbX, 0);
+            assert_eq!(pMb.iMbY, 0);
             // MB 0 has no left/top neighbour.
-            assert_eq!((*pMb).uiNeighborAvail, 0);
-            let pMb11 = pMb.add(11); // row 1, column 1: all four neighbours present
-            assert_eq!((*pMb11).iMbX, 1);
-            assert_eq!((*pMb11).iMbY, 1);
+            assert_eq!(pMb.uiNeighborAvail, 0);
+            let pMb11 = (*pDq).sMbDataP.get(11); // row 1, column 1: all four neighbours present
+            assert_eq!(pMb11.iMbX, 1);
+            assert_eq!(pMb11.iMbY, 1);
             assert_eq!(
                 (*pMb11).uiNeighborAvail,
                 LEFT_MB_POS | TOP_MB_POS | TOPLEFT_MB_POS | TOPRIGHT_MB_POS
@@ -2883,17 +2878,24 @@ pub unsafe fn PicPartitionNumDecision(pCtx: *mut sWelsEncCtx) -> i32 {
 /// `pCurDq` must be live with `sMbDataP` allocated.
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
-pub unsafe fn DynslcUpdateMbNeighbourInfoListForAllSlices(pCurDq: &mut SDqLayer, pMbList: *mut SMB) {
-    let pSliceCtx = &mut (*pCurDq).sSliceEncCtx;
-    let kiMbWidth = pSliceCtx.iMbWidth as i32;
-    let kiEndMbInSlice = pSliceCtx.iMbNumInFrame - 1;
+pub unsafe fn DynslcUpdateMbNeighbourInfoListForAllSlices(pCurDq: &mut SDqLayer) {
+    let kiMbWidth = (*pCurDq).sSliceEncCtx.iMbWidth as i32;
+    let kiEndMbInSlice = (*pCurDq).sSliceEncCtx.iMbNumInFrame - 1;
     let mut iIdx = 0i32;
+    let mut mbs =
+        crate::encoder::svc_encode_slice::mb_window(pCurDq, 0, kiEndMbInSlice + 1, 0);
 
     loop {
-        let pMb = pMbList.add(iIdx as usize);
-        let uiSliceIdc =
-            crate::encoder::svc_encode_slice::WelsMbToSliceIdc(pCurDq, (*pMb).iMbXY as i32);
-        crate::encoder::svc_encode_slice::UpdateMbNeighbor(pCurDq, &mut *pMb, kiMbWidth, uiSliceIdc);
+        let uiSliceIdc = crate::encoder::svc_encode_slice::WelsMbToSliceIdc(
+            pCurDq,
+            mbs.at(iIdx as usize).iMbXY as i32,
+        );
+        crate::encoder::svc_encode_slice::UpdateMbNeighbor(
+            pCurDq,
+            mbs.at_mut(iIdx as usize),
+            kiMbWidth,
+            uiSliceIdc,
+        );
         iIdx += 1;
         if iIdx > kiEndMbInSlice {
             break;
@@ -2914,8 +2916,7 @@ pub unsafe fn WelsInitCurrentQBLayerMltslc(pCtx: *mut sWelsEncCtx) {
     // T9.E2h, F66's shape B with an accessor-minted root the detector cannot
     // see: the MB-list root is minted BEFORE the layer argument's retag (its
     // buffer is a separate allocation, so the retag cannot reach it).
-    let pMbList = crate::encoder::svc_encode_slice::mb_list_root(pCurDq);
-    DynslcUpdateMbNeighbourInfoListForAllSlices(&mut *pCurDq, pMbList);
+    DynslcUpdateMbNeighbourInfoListForAllSlices(&mut *pCurDq);
 }
 
 /// `UpdateSlicepEncCtxWithPartition` — encoder_ext.cpp:2430.
