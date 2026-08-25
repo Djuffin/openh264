@@ -3308,7 +3308,13 @@ pub unsafe fn WelsEncoderEncodeExt(
     // is derived after `BuildSpatialPicList`: that loop **writes**
     // `(*pFbi).sLayerInfo[..]` through `pFbi`, and a write through the parent pops
     // a child taken before it. Every use of this cursor is below.
-    let mut pLayerBsInfo: *mut SLayerBSInfo = (*pFbi).sLayerInfo.as_mut_ptr();
+    // T9.E8: `addr_of_mut!`, not `as_mut_ptr()` — the array method autorefs
+    // `&mut (*pFbi).sLayerInfo` first, so the old mint was a raw ABOVE a Unique,
+    // and any sibling raw's write into an entry (the size-limited branch's
+    // `pLbi` stamps below) popped it before `SliceLayerInfoUpdate` wrote back
+    // through it. A place projection reuses `pFbi`'s provenance; the two mints
+    // are then raw siblings, which writes do not pop (T5.O8, F70).
+    let mut pLayerBsInfo: *mut SLayerBSInfo = std::ptr::addr_of_mut!((*pFbi).sLayerInfo).cast::<SLayerBSInfo>();
 
     // perform csc/denoise/downsample/padding, generate spatial layers
     let iRet = (*(*pCtx).pVpp).BuildSpatialPicList(pCtx, pSrcPic, &mut iSpatialNum);
