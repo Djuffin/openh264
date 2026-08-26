@@ -38,4 +38,4 @@
 # parallel one and read a regression.
 #
 # Format: <seconds> <commit> <date> <note>
-543 65b2d0f0 2026-08-25 session-H-close-lane-vs-lane-ratio-1.04-fork-pair-parallel-3499s-GREEN
+507 863d1b30 2026-08-26 session-X-close-lane-vs-lane-ratio-0.93-291-0-fork-pair-NOT-OWED-per-brief
