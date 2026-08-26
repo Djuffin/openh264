@@ -330,6 +330,13 @@ pub unsafe extern "C" fn WelsLoadNal(
 /// - `pEncoderOuput` must point to a valid `SWelsEncoderOutput` structure.
 #[inline]
 // unsafe-cat: port-raw(Phase 9)
+// **T9.X — this is not a C-ABI boundary, and the tag stays `port-raw`.** The brief
+// calls it one of "the two `unsafe extern \"C\"` unload fns ... lawful remainder".
+// It carries no export attribute, it is installed into no dispatch slot, and its five
+// callers are all Rust (`encoder_ext.rs:2254`, `:2263`, `:2318`, `:3161`, `:3606`).
+// The `extern "C"` is a vestigial calling convention from the raw translation, not
+// an ABI crossing, so the parameter is convertible work rather than remainder — it
+// is X2's, along with the rest of this file.
 #[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsUnloadNal(pEncoderOuput: *mut SWelsEncoderOutput) {
     if pEncoderOuput.is_null() || (*pEncoderOuput).sNalList.is_empty() {
@@ -352,6 +359,13 @@ pub unsafe extern "C" fn WelsUnloadNal(pEncoderOuput: *mut SWelsEncoderOutput) {
 /// - `pSliceBs` must point to a valid `SWelsSliceBs` structure.
 #[inline]
 // unsafe-cat: MT
+// **T9.X — adjudicated: the seam's, not the bitstream's (H2's, not X's).** G left
+// this tag unattributed. Every production caller is in `slice_multi_threading.rs`
+// (`:1369`, `:1379`, `:1442`, `:1732`) and the walker puts the body inside the fork:
+//     WelsLoadNalForSlice <- EncodeOneSliceInJob <- fork seed (thread::scope spawn)
+// `SWelsSliceBs` is the per-worker bitstream, so S63 applies: this route's end
+// states are interior mutability or lawful raw, and naming it belongs to the
+// session that designs the seam.
 #[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsLoadNalForSlice(
     pSliceBs: *mut SWelsSliceBs,
@@ -377,6 +391,11 @@ pub unsafe extern "C" fn WelsLoadNalForSlice(
 /// - `pSliceBs` must point to a valid `SWelsSliceBs` structure.
 #[inline]
 // unsafe-cat: MT
+// **T9.X — adjudicated with [`WelsLoadNalForSlice`]: the seam's (H2's).**
+//     WelsUnloadNalForSlice <- EncodeOnePartitionSizeLimited <- fork seed
+// Note the brief also lists this function's line as one of "the two `unsafe extern
+// \"C\"` unload fns ... C-ABI boundary, lawful remainder". It is neither: it is one
+// of the three MT tags the same brief asks to adjudicate, and it is fork-reachable.
 #[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsUnloadNalForSlice(pSliceBs: *mut SWelsSliceBs) {
     let pSlice = &mut *pSliceBs;
@@ -649,7 +668,12 @@ mod tests {
     }
 
     #[test]
-    // unsafe-cat: MT
+    // unsafe-cat: C-ABI(test)
+    // **T9.X — retagged from `MT`.** This is a test, and it drives a local
+    // `SWelsSliceBs::default()` on the calling thread; nothing about it is
+    // fork-reachable. Its `unsafe` is the ordinary one of calling an `unsafe extern
+    // "C"` item from a test, which is what `C-ABI(test)` already means in this tree.
+    // The other two `MT` tags in this file are real and stay.
     #[allow(unsafe_code)]
     fn test_wels_load_and_unload_nal_slice() {
         let mut bs_buf = vec![0u8; 1024];
