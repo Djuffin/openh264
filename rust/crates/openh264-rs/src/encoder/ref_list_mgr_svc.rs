@@ -1710,7 +1710,7 @@ pub unsafe fn WelsMarkPicScreen(pCtx: &mut sWelsEncCtx) {
 /// Matches `void DoNothing (sWelsEncCtx* pointer)` in `ref_list_mgr_svc.cpp:996`.
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
-pub unsafe fn DoNothing(_pCtx: *mut sWelsEncCtx) {}
+pub unsafe fn DoNothing(_pCtx: &mut sWelsEncCtx) {}
 
 // ============================================================================
 // Reference strategy — T4b.2b
@@ -1861,8 +1861,13 @@ mod tests {
     // unsafe-cat: port-raw(Phase 9)
     #[allow(unsafe_code)]
     fn test_ref_list_mgr_noop_callback() {
+        // T9.H11: the context argument is `&mut` now, so the null goes — see
+        // `rc.rs`'s `test_rc_intentional_noop_callbacks` for the reasoning. A
+        // `&mut sWelsEncCtx` cannot be null, so the type enforces more than the
+        // old `null_mut()` argument asserted.
+        let mut ctx = Box::new(sWelsEncCtx::default());
         unsafe {
-            DoNothing(std::ptr::null_mut());
+            DoNothing(&mut ctx);
         }
     }
 
