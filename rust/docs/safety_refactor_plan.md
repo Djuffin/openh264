@@ -1099,6 +1099,13 @@ as D-perf-1 was.**
 
 **D-scope-2 (the user, 2026-08-25): the board's tail is X → H2 → J.** X first because it clears `SVAAFrameInfo`'s four `!Sync` reasons — half of F164's send-seam contingency — and its own raws before H2 designs the in-fork read surface against a smaller context. H2 is the spine's last session: the seam (smallest D-mt-3-template surface, every item counted for the user), the 5 slice-returning accessor APIs, S67's 24-site out-of-family retag audit, F167's owed Miri run. Planned phase total **17** — D-scope-1's worst case, and the count stops there.
 
+
+**D-fid-3 (the user, 2026-08-26): F173's abort is fixed by clamping, and a gtest smoke joins the session gate.** `GetRefMb` clamps its ref-macroblock index to the base layer's bounds where upstream's implicit 2:1 invariant breaks — defined and non-aborting exactly where upstream silently reads out of bounds (a drop-in library must not abort on a config upstream survives); the divergence is documented at the site per the D-poc-1 pattern, byte-identical wherever the invariant holds. A filtered gtest smoke (≤60 s, S66-calibrated both ways) joins `gates.sh session` so a red exit can never again hide below it — three sessions ran green over F173. Executed in X2's step 0.
+
+**D-dead-6 (the user, 2026-08-26): `SWelsSvcRc::pGomComplexity` is deleted** — the second dead GOM sibling (F174): allocated, nulled, memset, never read in either tree, accessor already S18-retired. The field, its allocation arm, and the mirrored memset go together, read greps quoted for both trees. D-dead-3's ground, third application. Executed in X2's step 0.
+
+**D-scope-3 (the user, 2026-08-26): X2 runs before H2; the phase's planned total is 18.** X2 closes the family cleanly (the scalars, the log referee) so H2 gets an undiluted session for the seam — H proved design work eats sessions. One over D-scope-1's worst case, chosen knowingly: honesty beats the number.
+
 ### 7.5 Session workflow
 Each session: run battery → pick next plan item → convert with shims → battery → commit with ratchet update → update this doc's checkbox (add a `## Progress` appendix on first execution session). The phase structure is deliberately interruptible; no step leaves the tree broken across a session boundary.
 
