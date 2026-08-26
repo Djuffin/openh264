@@ -514,11 +514,13 @@ impl CWelsParametersetIdStrategyObj {
     /// asks `RequestMemorySvc` for.
     // unsafe-cat: port-raw(Phase 9)
     #[allow(unsafe_code)]
-    pub unsafe fn UpdatePpsList(&mut self, pCtx: *mut sWelsEncCtx) {
-        if self.eIdKind != ParasetIdKind::SpsPpsListing || pCtx.is_null() {
+    pub unsafe fn UpdatePpsList(&mut self, pCtx: &mut sWelsEncCtx) {
+        // T9.H: the trailing `|| pCtx.is_null()` is gone — a `&mut sWelsEncCtx`
+        // cannot be null. The remaining condition is unchanged.
+        if self.eIdKind != ParasetIdKind::SpsPpsListing {
             return;
         }
-        let iPpsNum = (*pCtx).iPpsNum;
+        let iPpsNum = pCtx.iPpsNum;
         if iPpsNum >= MAX_PPS_COUNT as i32 {
             return;
         }
@@ -539,9 +541,9 @@ impl CWelsParametersetIdStrategyObj {
         for iPpsId in iUsePpsNum as usize..MAX_PPS_COUNT {
             *pps.add(iPpsId) = *pps.add(iPpsId % iUsePpsNum as usize);
             (*pps.add(iPpsId)).iPpsId = iPpsId as u32;
-            (*pCtx).iPpsNum += 1;
+            pCtx.iPpsNum += 1;
         }
-        self.m_sParaSetOffset.uiInUsePpsNum = (*pCtx).iPpsNum as u32;
+        self.m_sParaSetOffset.uiInUsePpsNum = pCtx.iPpsNum as u32;
     }
 
     /// `CheckParamCompatibility` — `paraset_strategy.h:116` (unconditionally true) /

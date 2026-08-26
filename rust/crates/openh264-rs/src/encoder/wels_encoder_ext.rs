@@ -386,8 +386,8 @@ pub use crate::encoder::rc::SWelsSvcRc;
 
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
-pub unsafe fn WelsWriteOneSPS(pCtx: *mut sWelsEncCtx, kiSpsIdx: i32, iNalSize: *mut i32) -> i32 {
-    let pOut = (*pCtx).pOut;
+pub unsafe fn WelsWriteOneSPS(pCtx: &mut sWelsEncCtx, kiSpsIdx: i32, iNalSize: *mut i32) -> i32 {
+    let pOut = pCtx.pOut;
     let iNal = (*pOut).iNalIndex;
     crate::encoder::nal_encap::WelsLoadNal(
         pOut,
@@ -409,22 +409,22 @@ pub unsafe fn WelsWriteOneSPS(pCtx: *mut sWelsEncCtx, kiSpsIdx: i32, iNalSize: *
         None,
         ctx_frame_bs_cur(pCtx),
         // available buffer to be written, so need to subtract the used length
-        (*pCtx).iFrameBsSize - (*pCtx).iPosBsBuffer,
+        pCtx.iFrameBsSize - pCtx.iPosBsBuffer,
         &mut *iNalSize,
     );
     if iReturn != ENC_RETURN_SUCCESS {
         return iReturn;
     }
 
-    (*pCtx).iPosBsBuffer += *iNalSize;
+    pCtx.iPosBsBuffer += *iNalSize;
     ENC_RETURN_SUCCESS
 }
 
 /// `WelsWriteOnePPS` — encoder_ext.cpp:2849.
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
-pub unsafe fn WelsWriteOnePPS(pCtx: *mut sWelsEncCtx, kiPpsIdx: i32, iNalSize: *mut i32) -> i32 {
-    let pOut = (*pCtx).pOut;
+pub unsafe fn WelsWriteOnePPS(pCtx: &mut sWelsEncCtx, kiPpsIdx: i32, iNalSize: *mut i32) -> i32 {
+    let pOut = pCtx.pOut;
     let iNal = (*pOut).iNalIndex;
     /* generate picture parameter set */
     crate::encoder::nal_encap::WelsLoadNal(
@@ -446,14 +446,14 @@ pub unsafe fn WelsWriteOnePPS(pCtx: *mut sWelsEncCtx, kiPpsIdx: i32, iNalSize: *
         &(&*pOut).sBsBuffer[..],
         None,
         ctx_frame_bs_cur(pCtx),
-        (*pCtx).iFrameBsSize - (*pCtx).iPosBsBuffer,
+        pCtx.iFrameBsSize - pCtx.iPosBsBuffer,
         &mut *iNalSize,
     );
     if iReturn != ENC_RETURN_SUCCESS {
         return iReturn;
     }
 
-    (*pCtx).iPosBsBuffer += *iNalSize;
+    pCtx.iPosBsBuffer += *iNalSize;
     ENC_RETURN_SUCCESS
 }
 
