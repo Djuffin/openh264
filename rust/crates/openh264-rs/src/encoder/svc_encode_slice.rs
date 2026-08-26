@@ -3621,7 +3621,7 @@ pub unsafe fn InitOneSliceInThread(
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe fn InitSliceThreadInfo(
-    pCtx: *mut sWelsEncCtx,
+    pCtx: &mut sWelsEncCtx,
     pDqLayer: &mut SDqLayer,
     kiDlayerIndex: i32,
 ) -> i32 {
@@ -3655,7 +3655,7 @@ pub unsafe fn InitSliceThreadInfo(
             pDqLayer,
             iIdx,
             iMaxSliceNum,
-            (*pCtx).iSliceBufferSize[kiDlayerIndex as usize],
+            pCtx.iSliceBufferSize[kiDlayerIndex as usize],
             kbSliceBsBufferFlag,
         );
         if iRet != ENC_RETURN_SUCCESS {

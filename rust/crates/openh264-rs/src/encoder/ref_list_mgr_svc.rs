@@ -669,11 +669,13 @@ pub unsafe fn LTRMarkProcessScreen(pCtx: &mut sWelsEncCtx) {
 /// Pre-allocates destination frame buffer pointer pDecPic for upcoming reconstruction.
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
-pub unsafe fn PrefetchNextBuffer(pCtx: *mut sWelsEncCtx) {
-    if pCtx.is_null() || ctx_param(pCtx).is_null() {
+pub unsafe fn PrefetchNextBuffer(pCtx: &mut sWelsEncCtx) {
+    // T9.H: the `pCtx.is_null()` disjunct is gone — a `&mut sWelsEncCtx`
+    // cannot be null and every caller now holds one. The rest is unchanged.
+    if ctx_param(pCtx).is_null() {
         return;
     }
-    let uiDid = (*pCtx).uiDependencyId as usize;
+    let uiDid = pCtx.uiDependencyId as usize;
     let pRefList = ctx_ref_list(pCtx, (uiDid) as usize);
     if pRefList.is_null() {
         return;
@@ -699,7 +701,7 @@ pub unsafe fn PrefetchNextBuffer(pCtx: *mut sWelsEncCtx) {
         }
     }
 
-    (*pCtx).pDecPic = (*pRefList).pNextBuffer;
+    pCtx.pDecPic = (*pRefList).pNextBuffer;
 }
 
 /// Updates reference picture list after current frame reconstruction.
@@ -1338,18 +1340,18 @@ pub fn UpdateOriginalPicInfo(pOrigPic: &mut SPicture, pReconPic: &SPicture) {
 /// its own pool. A no-op if either is unset, as the C++'s null tests are.
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
-unsafe fn UpdateOriginalPicInfoFromCtx(pCtx: *mut sWelsEncCtx) {
-    let (Some(idEnc), Some(idDec)) = ((*pCtx).pEncPic, (*pCtx).pDecPic) else {
+unsafe fn UpdateOriginalPicInfoFromCtx(pCtx: &mut sWelsEncCtx) {
+    let (Some(idEnc), Some(idDec)) = (pCtx.pEncPic, pCtx.pDecPic) else {
         return;
     };
-    let pRefList = ctx_ref_list(pCtx, (*pCtx).uiDependencyId as usize);
-    if pRefList.is_null() || (*pCtx).pVpp.is_null() {
+    let pRefList = ctx_ref_list(pCtx, pCtx.uiDependencyId as usize);
+    if pRefList.is_null() || pCtx.pVpp.is_null() {
         return;
     }
     // Two owners, two raw parents, so both references are live at once without either
     // borrow overlapping the other.
     let pRecon: &SPicture = (*pRefList).pic(idDec);
-    let pOrig: &mut SPicture = (*(*pCtx).pVpp).m_pSpatialPicPool.get_mut(idEnc);
+    let pOrig: &mut SPicture = (*pCtx.pVpp).m_pSpatialPicPool.get_mut(idEnc);
     UpdateOriginalPicInfo(pOrig, pRecon);
 }
 

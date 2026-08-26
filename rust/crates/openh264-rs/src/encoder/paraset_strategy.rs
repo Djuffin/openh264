@@ -602,7 +602,7 @@ impl CWelsParametersetIdStrategyObj {
     /// `MAX_SPS_COUNT` entries.
     // unsafe-cat: port-raw(Phase 9)
     #[allow(unsafe_code)]
-    unsafe fn SpsReset(&mut self, pCtx: *mut sWelsEncCtx, kbUseSubsetSps: bool) -> i32 {
+    unsafe fn SpsReset(&mut self, pCtx: &mut sWelsEncCtx, kbUseSubsetSps: bool) -> i32 {
         if self.eIdKind == ParasetIdKind::SpsPpsListing {
             return -1;
         }
@@ -826,7 +826,7 @@ impl CWelsParametersetIdStrategyObj {
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe fn WelsGenerateNewSps(
-    pCtx: *mut sWelsEncCtx,
+    pCtx: &mut sWelsEncCtx,
     kbUseSubsetSps: bool,
     iDlayerIndex: i32,
     iDlayerCount: i32,
