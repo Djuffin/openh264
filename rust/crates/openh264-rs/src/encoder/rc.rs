@@ -2015,9 +2015,7 @@ pub unsafe extern "C" fn UpdateMaxBrCheckWindowStatus(
 
 /// Intentional no-op callback invoked after frame skipping.
 /// Matches `WelsRcPostFrameSkipping` in `ratectl.cpp`.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe extern "C" fn WelsRcPostFrameSkipping(
+pub extern "C" fn WelsRcPostFrameSkipping(
     _pCtx: &mut sWelsEncCtx,
     _iDid: i32,
     _uiTimeStamp: i64,
@@ -2027,9 +2025,7 @@ pub unsafe extern "C" fn WelsRcPostFrameSkipping(
 
 /// Intentional no-op callback invoked after frame skipped update.
 /// Matches `WelsRcPostFrameSkippedUpdate` in `ratectl.cpp`.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn WelsRcPostFrameSkippedUpdate(_pCtx: &mut sWelsEncCtx, _iDid: i32) {}
+pub fn WelsRcPostFrameSkippedUpdate(_pCtx: &mut sWelsEncCtx, _iDid: i32) {}
 
 /// Evaluates virtual buffer underflow and calculates required padding bits.
 // unsafe-cat: port-raw(Phase 9)
@@ -2437,9 +2433,7 @@ pub unsafe extern "C" fn WelsRcPictureInitDisable(pEncCtx: &mut sWelsEncCtx, _ui
 
 /// Intentional no-op picture-level RC update callback when rate control is disabled.
 /// Matches `WelsRcPictureInfoUpdateDisable` in `ratectl.cpp:1298`.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe extern "C" fn WelsRcPictureInfoUpdateDisable(_pEncCtx: &mut sWelsEncCtx, _iLayerSize: i32) {}
+pub extern "C" fn WelsRcPictureInfoUpdateDisable(_pEncCtx: &mut sWelsEncCtx, _iLayerSize: i32) {}
 
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]

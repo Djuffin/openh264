@@ -780,9 +780,7 @@ impl CWelsParametersetIdStrategyObj {
     ///
     /// # Safety
     /// On a listing kind, `pCtx` must be a live encoder context.
-    // unsafe-cat: port-raw(Phase 9)
-    #[allow(unsafe_code)]
-    pub unsafe fn UpdateParaSetNum(&mut self, pCtx: &mut sWelsEncCtx) {
+    pub fn UpdateParaSetNum(&mut self, pCtx: &mut sWelsEncCtx) {
         // T9.H8: the trailing `|| pCtx.is_null()` is gone — a `&mut sWelsEncCtx`
         // cannot be null. The listing condition is unchanged.
         if !self.eIdKind.is_listing() {

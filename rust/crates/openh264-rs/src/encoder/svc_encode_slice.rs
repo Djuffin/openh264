@@ -741,9 +741,7 @@ pub unsafe fn current_layer(pCtx: *mut sWelsEncCtx) -> *mut SDqLayer {
 /// # Safety
 /// `pCtx` must point to a live encoder context.
 #[inline]
-// unsafe-cat: cursor
-#[allow(unsafe_code)]
-pub unsafe fn set_current_layer(pCtx: &mut sWelsEncCtx, kIdx: Option<LayerIdx>) {
+pub fn set_current_layer(pCtx: &mut sWelsEncCtx, kIdx: Option<LayerIdx>) {
     debug_assert!(
         kIdx.is_none_or(|i| i.get() < MAX_DEPENDENCY_LAYER),
         "{kIdx:?} is past the largest list InitDqLayers can build"

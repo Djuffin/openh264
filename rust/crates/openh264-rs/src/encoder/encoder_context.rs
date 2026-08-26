@@ -659,9 +659,7 @@ pub unsafe fn ctx_stride_enc_block_offset(pCtx: *mut sWelsEncCtx, kiDid: usize) 
 /// # Safety
 /// As [`ctx_stride_dec_block_offset`].
 #[inline]
-// unsafe-cat: cursor
-#[allow(unsafe_code)]
-pub unsafe fn ctx_mb_index_x(pCtx: &mut sWelsEncCtx, kiDid: usize) -> *const i16 {
+pub fn ctx_mb_index_x(pCtx: &mut sWelsEncCtx, kiDid: usize) -> *const i16 {
     match pCtx.pStrideTab.as_ref() {
         Some(tab) => tab.MbIndexX(kiDid),
         None => std::ptr::null(),
@@ -1043,9 +1041,7 @@ pub unsafe fn ctx_pps_array(pCtx: *mut sWelsEncCtx) -> *mut SWelsPPS {
 /// # Safety
 /// As [`ctx_stride_dec_block_offset`].
 #[inline]
-// unsafe-cat: cursor
-#[allow(unsafe_code)]
-pub unsafe fn ctx_mb_index_y(pCtx: &mut sWelsEncCtx, kiDid: usize) -> *const i16 {
+pub fn ctx_mb_index_y(pCtx: &mut sWelsEncCtx, kiDid: usize) -> *const i16 {
     match pCtx.pStrideTab.as_ref() {
         Some(tab) => tab.MbIndexY(kiDid),
         None => std::ptr::null(),

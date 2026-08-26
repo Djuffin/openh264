@@ -689,9 +689,7 @@ pub unsafe fn WelsMoveMemory_c(
 
 /// Updates the spatial index map pointer for a dependency layer.
 #[inline]
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn WelsUpdateSpatialIdxMap(
+pub fn WelsUpdateSpatialIdxMap(
     pEncCtx: &mut sWelsEncCtx,
     iPos: i32,
     pPic: Option<SrcPicId>,
