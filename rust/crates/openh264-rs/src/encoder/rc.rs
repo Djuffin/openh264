@@ -2018,7 +2018,7 @@ pub unsafe extern "C" fn UpdateMaxBrCheckWindowStatus(
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsRcPostFrameSkipping(
-    _pCtx: *mut sWelsEncCtx,
+    _pCtx: &mut sWelsEncCtx,
     _iDid: i32,
     _uiTimeStamp: i64,
 ) -> bool {
@@ -2029,7 +2029,7 @@ pub unsafe extern "C" fn WelsRcPostFrameSkipping(
 /// Matches `WelsRcPostFrameSkippedUpdate` in `ratectl.cpp`.
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
-pub unsafe fn WelsRcPostFrameSkippedUpdate(_pCtx: *mut sWelsEncCtx, _iDid: i32) {}
+pub unsafe fn WelsRcPostFrameSkippedUpdate(_pCtx: &mut sWelsEncCtx, _iDid: i32) {}
 
 /// Evaluates virtual buffer underflow and calculates required padding bits.
 // unsafe-cat: port-raw(Phase 9)
@@ -2439,7 +2439,7 @@ pub unsafe extern "C" fn WelsRcPictureInitDisable(pEncCtx: &mut sWelsEncCtx, _ui
 /// Matches `WelsRcPictureInfoUpdateDisable` in `ratectl.cpp:1298`.
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
-pub unsafe extern "C" fn WelsRcPictureInfoUpdateDisable(_pEncCtx: *mut sWelsEncCtx, _iLayerSize: i32) {}
+pub unsafe extern "C" fn WelsRcPictureInfoUpdateDisable(_pEncCtx: &mut sWelsEncCtx, _iLayerSize: i32) {}
 
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
@@ -2817,14 +2817,22 @@ mod tests {
     // unsafe-cat: port-raw(Phase 9)
     #[allow(unsafe_code)]
     fn test_rc_intentional_noop_callbacks() {
+        // **T9.H11: the context arguments are `&mut` now, so the nulls go.**
+        // This test used to pass `null_mut()` for the context to prove these
+        // callbacks dereference nothing. That property is no longer *testable*
+        // because it is no longer *expressible*: a `&mut sWelsEncCtx` cannot be
+        // null, so the type enforces strictly more than the assertion did. What
+        // remains worth running is that each no-op is callable and answers its
+        // documented value, so a real context takes the nulls' place.
+        //
+        // `WelsRcMbInfoUpdateDisable` keeps its raw context and its null: it is
+        // in-fork (S63) and its parameter is staying `*mut sWelsEncCtx`, so the
+        // original assertion still means what it meant.
+        let mut ctx = Box::new(sWelsEncCtx::default());
         unsafe {
-            assert!(!WelsRcPostFrameSkipping(std::ptr::null_mut(), 0, 0));
-            WelsRcPostFrameSkippedUpdate(std::ptr::null_mut(), 0);
-            WelsRcPictureInfoUpdateDisable(std::ptr::null_mut(), 0);
-            // The macroblock and slice arguments are references now (T9.E2g), so
-            // the nulls go and real records take their place. The context is still
-            // raw and stays null: this is the no-op arm of `pfWelsRcMbInfoUpdate`
-            // and reads none of them.
+            assert!(!WelsRcPostFrameSkipping(&mut ctx, 0, 0));
+            WelsRcPostFrameSkippedUpdate(&mut ctx, 0);
+            WelsRcPictureInfoUpdateDisable(&mut ctx, 0);
             let mut sMb = SMB::default();
             let mut sSlice = crate::encoder::svc_encode_slice::SSlice::new();
             WelsRcMbInfoUpdateDisable(std::ptr::null_mut(), &mut sMb, 0, &mut sSlice);
