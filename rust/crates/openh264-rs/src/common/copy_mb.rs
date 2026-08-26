@@ -48,6 +48,11 @@
 
 #![allow(non_snake_case, non_camel_case_types, non_upper_case_globals, dead_code)]
 
+//! **T9.X — this module denies.** The seven kernels were always safe; the one
+//! remaining raw body is [`copy_shim`], the C-ABI-shaped span constructor the
+//! encoder's seven `WelsCopy*_c` entry points share, and it is tagged at the item.
+#![deny(unsafe_code)]
+
 use crate::common::mc::copy_rows;
 use crate::safe::plane::{PlaneCursor, PlaneCursorMut};
 
@@ -102,6 +107,8 @@ pub fn copy_16x16(src: &PlaneCursor<'_>, dst: &mut PlaneCursorMut<'_>) {
 /// `(H-1)*iStrideS + W` byte span (both reach forward only from their block's
 /// `(0, 0)`); the spans are disjoint; strides `>= W` and positive.
 #[inline(always)]
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
 pub unsafe fn copy_shim<const W: usize, const H: usize>(
     pDst: *mut u8,
     iStrideD: i32,
