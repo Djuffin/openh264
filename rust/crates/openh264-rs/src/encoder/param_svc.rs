@@ -13,7 +13,6 @@
 
 #![deny(unsafe_code)]
 
-use std::ffi::c_char;
 use crate::{
     EComplexityMode, EParameterSetStrategy, EUsageType, RCMode, SEncParamBase, SEncParamExt,
     SSliceArgument, SSpatialLayerConfig, SliceMode, VideoFormat,
@@ -248,25 +247,13 @@ pub struct SWelsSvcCodingParam {
     pub sDependencyLayers: [SSpatialLayerInternal; MAX_DEPENDENCY_LAYER],
     pub uiGopSize: u32,
     pub SUsedPicRect: SUsedPicRect,
-    /// `param_svc.h:118` — the caller's library path, handed in by
-    /// `SetOption(ENCODER_OPTION_CURRENT_PATH)` and stored verbatim.
-    ///
-    /// **T9.X2: this stays a raw pointer, and the reason is ownership, not
-    /// difficulty.** The value is a C string the *caller* owns and outlives nothing
-    /// this crate controls; upstream stores the same `char*` unchanged
-    /// (`welsEncoderExt.cpp:1076`). An owned `CString` here would copy a buffer the
-    /// reference does not copy and would answer a different question about lifetime
-    /// than the C API asks. It is F166's shape: a permanent raw site inside a file
-    /// this session otherwise converts.
-    ///
-    /// **And it has no reader in either tree.** The reference declares it (`:118`),
-    /// nulls it (`:228`) and stores to it (`:1076`) — three writes, no read, in the
-    /// whole of `codec/`. This port has the same three (here, `:309`, `:489`, and
-    /// `wels_encoder_ext.rs:2489`) and likewise never reads it. That is D-dead-3's
-    /// shape a fourth time, so it is **filed and not acted on**: D-dead-3, D-dead-5
-    /// and D-dead-6 were each a ruling, and deleting a field also deletes the
-    /// C-ABI-visible store behind a documented option id. See F183.
-    pub pCurPath: *mut c_char,
+    // `param_svc.h:118`'s `pCurPath` stood here — **deleted, D-dead-7** (the user,
+    // 2026-08-26, from F183). Three writes and no reader, in *both* trees: upstream
+    // declares it (`param_svc.h:118`), nulls it (`:228`) and stores to it
+    // (`welsEncoderExt.cpp:1076`), and never reads it anywhere in `codec/`; this
+    // port had the same three and likewise never read it. D-dead-3's shape a fourth
+    // time. `SetOption(ENCODER_OPTION_CURRENT_PATH)` keeps returning success and now
+    // does nothing, which is observably what it already did.
     pub bDeblockingParallelFlag: bool,
     pub iBitsVaryPercentage: i32,
     pub iDecompStages: i8,
@@ -324,7 +311,6 @@ impl Default for SWelsSvcCodingParam {
             sDependencyLayers: [SSpatialLayerInternal::default(); MAX_DEPENDENCY_LAYER],
             uiGopSize: 1,
             SUsedPicRect: SUsedPicRect::default(),
-            pCurPath: std::ptr::null_mut(),
             bDeblockingParallelFlag: false,
             iBitsVaryPercentage: 10,
             iDecompStages: 0,
@@ -504,7 +490,6 @@ impl SWelsSvcCodingParam {
         self.uiGopSize = 1;
         self.iMaxNumRefFrame = AUTO_REF_PIC_COUNT;
         self.SUsedPicRect = SUsedPicRect::default();
-        self.pCurPath = std::ptr::null_mut();
         self.bDeblockingParallelFlag = false;
         self.iDecompStages = 0;
         self.iBitsVaryPercentage = 10;
