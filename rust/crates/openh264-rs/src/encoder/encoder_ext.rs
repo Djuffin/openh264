@@ -1198,7 +1198,7 @@ pub unsafe fn RequestMemorySvc(
         kiNumDependencyLayers as usize
     ];
     for i in 0..kiNumDependencyLayers as usize {
-        crate::encoder::ref_list_mgr_svc::ResetLtrState(ctx_ltr_at(&mut **ppCtx, i));
+        crate::encoder::ref_list_mgr_svc::ResetLtrState(&mut *ctx_ltr_at(&mut **ppCtx, i));
     }
 
     // stride tables
