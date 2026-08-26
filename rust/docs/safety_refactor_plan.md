@@ -1094,6 +1094,11 @@ as D-perf-1 was.**
 
 **D-exit-2 (the user, 2026-08-25): exit condition 1 amended per F164.** `send-seam(Phase 9)` does not retire in the ctx sessions — 8 of `sWelsEncCtx`'s twelve `!Sync` reasons live outside G/H's lane (X's `SVAAFrameInfo` four, Phase 8's coding-param, Phase 10's feature storage, trace, preprocess). It is a phase-exit item, retiring when those fall; the seam's comment says so (corrected in G), and the charter's exit condition now matches the measurement.
 
+
+**D-dead-5 (the user, 2026-08-25): the flip's two dead ST bodies split.** `WelsRcDropFrameUpdate` is deleted per S18 — dead in both trees, upstream's only mention its own `WelsLog` line — executed in session X's step 0, whose family file (`rc.rs`) it lives in. `WelsMdInterFinePartitionVaaOnScreen` stays, tagged `SCREEN_CONTENT(dormant)`: C++ installs it at `encoder_ext.cpp:2711` inside the untranslated SCREEN_CONTENT arm, so it is Phase 10's to wire — F150's precedent (the dormant search variants kept for re-install). The forksplit's 3-body ST remainder becomes 2 permanent (F166's `ParasetStrategy`, the dormant body) once X lands.
+
+**D-scope-2 (the user, 2026-08-25): the board's tail is X → H2 → J.** X first because it clears `SVAAFrameInfo`'s four `!Sync` reasons — half of F164's send-seam contingency — and its own raws before H2 designs the in-fork read surface against a smaller context. H2 is the spine's last session: the seam (smallest D-mt-3-template surface, every item counted for the user), the 5 slice-returning accessor APIs, S67's 24-site out-of-family retag audit, F167's owed Miri run. Planned phase total **17** — D-scope-1's worst case, and the count stops there.
+
 ### 7.5 Session workflow
 Each session: run battery → pick next plan item → convert with shims → battery → commit with ratchet update → update this doc's checkbox (add a `## Progress` appendix on first execution session). The phase structure is deliberately interruptible; no step leaves the tree broken across a session boundary.
 
