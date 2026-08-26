@@ -17950,3 +17950,157 @@ seen by the fork probes.** H's first act should be to run the pair on a quiet
 machine, serially, before anything else — and if the intent is to run it inside a
 session again, `gates.sh full` is the level that does it and its wall should be
 budgeted from T9.E8's serial numbers, not from a parallel estimate.
+
+## Phase 9 — session H (2026-08-25): the context flip, end to end
+
+**The `*mut sWelsEncCtx` family is flipped.** 266 bodies / 111 in-fork / 155 ST at
+G's close; **114 / 111 / 3** at H's. 152 of the 155 ST bodies now take
+`&mut sWelsEncCtx` — there were **zero** such bodies in the encoder when the
+session opened. Every `*mut sWelsEncCtx` parameter that remains is either one of
+the 111 in-fork bodies S63 says can never move, or one of three named exceptions.
+
+Sixteen commits, `gates.sh family` green on every one (583/583, both profiles).
+
+### step 0a — G's debt, paid green
+
+`MIRI_FULL=1`, serial, one probe at a time, on G's exact close tree before any
+edit, as the brief ordered:
+
+    fixed-slice  3194.20 s   87 progress reports   1 passed / 0 failed
+    mid-row      3260.15 s   88 progress reports   1 passed / 0 failed
+    pair wall    6463 s = 108 min
+
+**G's close is retroactively whole**: T9.G7's four raw `pLtr` bindings and
+T9.G6's three `slice_multi_threading.rs` hoists are refereed, and no bisect is
+owed.
+
+**F168 — and the hour it cost was avoidable.** The brief ordered serial on the
+reading that "E8's reference numbers (3356 s / 3449 s) were *serial* numbers".
+T9.E8's own log entry says "*~57 minutes as a parallel pair*", and 3356 + 3449 is
+113 minutes, so they cannot have been. This session's serial run settles it:
+3194/3260 alone on an idle machine against 3356/3449 and 3294/3343 run
+concurrently — **serial buys 3-5% per probe and costs 2x on the pair**. G's pair,
+stopped at 56 minutes, was inside a minute or two of green; G's diagnosis ("the
+estimate, not the tree, is what was wrong") was itself the misreading, and H's
+brief inherited it as an instruction. `miri_wall_baseline.txt` now carries the
+pair as a second regime with both forms and all six numbers.
+
+### step 0b/0c
+
+**D-dead-4** executed at the steward's corrected scope: `SharedMbArray::capture`
+deleted (zero callers before and after), and the stale `pfIDct*` gravestone
+corrected — the comment twenty lines above the installer's own deletion note had
+described slots session F had already removed, which is how F160's item 2 came to
+ask for a ruling on things that no longer existed.
+
+**The two negative calibrations S66 owed** (F159's debt), recorded in the tools'
+docstrings. `q1c.py` got two, because the prescribed one is a guard test:
+`--type SSlice --kind raw` exits 2 with "that is 'nothing to find', not 'nothing
+found'" — but the scanner never runs, so `--kind ref` over the same flipped family
+scans **80 bodies and reports 1 site, 79 silent**. `phase9_forksplit.py`:
+`--type SWelsSvcCodingParam` reads **0 in-fork / 26 ST** over a non-empty family
+whose members are eye-checkably pre-fork setup, against `--type SDqLayer`'s
+38/2 in the same breath.
+
+### step 1 — the plan, and the brief's defect
+
+`rust/docs/phase9_ctx_flip_plan.md`, written and lab-verified before the first
+flip commit (S60), with three standalone `rustc` models in an appendix because
+the plan's whole content is a claim about what will and will not compile.
+
+**F165 — the brief's accessor inventory is bounded by a one-file grep.** "The
+accessors decide the stages. 21 `ctx_*` accessors (`grep -c ...
+encoder_context.rs`)" counts a file, not a relationship: `grep -rn` over
+`src/encoder/` reads **25**, and with `current_layer`/`set_current_layer` the
+family is **27 bodies, 10 ST not 7**. The brief's own crux sentence names
+`ctx_sps`, which its own inventory cannot see. S64's fifth instance in three
+sessions. Second consequence: "the 23 `cursor` tags fall with their accessors" is
+over by 16 — 7 fall, 13 stay on in-fork accessors, 3 are test-side.
+
+**F166 — the ST column is a candidate list, not the flip list.**
+`ParasetStrategy` is ST and must never flip: ten of its twenty call sites pass the
+context into the method while holding its `&'a mut` return. Verified: all ten are
+E0499, and **passing the argument raw does not rescue them**. Keeping it raw is
+what lets `OutputCurrentStructure` — a root reached through it — flip at all.
+
+**F167 — the flip's root stage kills a stored raw copy.**
+`CWelsPreProcess::m_pEncCtx` is sound only because the API layer uses
+`addr_of_mut!` rather than `&mut`. Stage A0 mints the first `&mut` and pops it;
+the remedy landed in the same commit.
+
+### step 2 — the flip, nine stages
+
+| stage | bodies | census after |
+|---|---:|---|
+| A0 `WelsEncoderEncodeExt` + F167's remedy | 1 | 265/111/154 |
+| A1 incl. both fork drivers | 36 | 230/111/119 |
+| A2 | 32 | 198/111/87 |
+| A3 the RC bulk | 34 | 164/111/53 |
+| A4 | 9 | 155/111/44 |
+| A5 the init path | 17 | 138/111/27 |
+| A6 | 7 | 131/111/20 |
+| A7 | 3 | 128/111/17 |
+| A8 phase A complete | 4 | 124/111/13 |
+| the ten accessors | 10 | **114/111/3** |
+
+**Phase A's falsifiable claim held for every stage**: no borrow error, ever.
+Every compiler error in the whole campaign was a contract question — 28
+`is_null()` guards on a reference across five distinct syntactic shapes, and
+three boundary type mismatches. **The join's LIVE column reached 0 at A2 and was
+not driven there** (F163's distinction): the seven analysed false positives lived
+in `ref_list_mgr_svc.rs` bodies that A1 and A2 flipped, so the conversions q1c was
+modelling simply happened.
+
+**F169 — the boundary spelling, and its amendment.** A0 wrote `pCtx as *mut _` at
+93 sites; `gates.sh family` FAILED because `raw_ptr` counts `*mut ` occurrences
+and one body cost **+92**, which extrapolated to ~500 on the metric the phase
+exists to reduce. A1 then falsified the premise both spellings rest on: **Rust
+coerces `&mut T` to `*mut T` implicitly in argument position**, discovered because
+A1's boundary pass silently failed to run and the stage compiled anyway. The tree
+is uniform on the implicit form, which is what keeps a stage's edit inside the
+bodies it flips.
+
+**F170 — the gate battery times its sweeps with wall clock.** A1's family gate
+read `sweep (debug): 5887s` against 46 s earlier the same session — a 125x
+regression in the profile the flip had just touched. Re-run on the identical
+tree: **44.83 s**. `run_sweep` brackets with `date +%s`, which counts suspend, and
+the gate had run unattended across an idle stretch. It fails both ways.
+
+**Three instrument failures, all mine, all caught.** The blanket `is_null()` regex
+trimmed 51 guards where the compiler had named 10 — 41 of them in bodies still
+raw, where the check is live, and no gate in this project would have seen it
+(reverted whole, redone from the error list). `flip.py` skipped four bodies
+silently because their parameters are `_pCtx` (it now prints `!! NO CHANGE`). The
+harvest's safety detector looked for raw *syntax* and cleared 22 bodies whose
+content was calls to unsafe functions — 37 errors, corrected to 10.
+
+### step 4 — the first harvest
+
+Ten bodies now contain no raw operation and call no unsafe function, so
+`unsafe fn`, the allow and the tag all come off: **unsafe_fn 626 -> 613**,
+`raw_ptr` 1587 -> 1434 (**-153**), `cursor` tags in `encoder_context.rs` 23 -> 21.
+The remaining five of F165's seven need slice-returning APIs on `pLtr`,
+`pFrameBs`, `pDqIdcMap` and `SStrideTables` — phase B proper, not a rename.
+
+### the close
+
+**`MIRI_SCOPE=encoder gates.sh session` FAILED on its first run** — two shards,
+one site, genuine UB created by this session (**F171**):
+`ctx_ltr(&mut *pCtx)` retags the whole context at `[0x0..0x17f10]` and pops
+`pStatistics`, a `&mut` into `sEncoderStatistics[iDid]` at `[0x770..0x7c8]`, held
+across it. Fixed with T9.G6's remedy; re-run **OVERALL PASS, 291 Miri / 0
+failed**. **S61: lane wall 543 s against G's 521 s, ratio 1.04.**
+
+**Why no instrument predicted it, and this is the session's most important
+finding.** `q1c` and `forksplit` both scope to *bodies with a `*mut sWelsEncCtx`
+parameter*. `UpdateStatistics` is a method on `CWelsH264SVCEncoder` holding the
+context in a **local** raw from `ctx_ptr` — outside both domains. The join read 0
+LIVE from A2 through six more stages while this was being created, and nine
+stages passed 583/583 in both profiles with the UB live in the tree. No byte gate
+could ever have seen it: the read returns the right value through a pointer
+Stacked Borrows has invalidated. **The flip's precondition is not "no live
+hazards in the family" but "no live hazard anywhere the context is reachable by a
+`&mut` retag"**, and enumerating that set is a J-sized job. There are **24**
+`&mut *pCtx`-style call-site retags outside the family in `src/encoder` today
+(15 `encoder_ext.rs`, 7 `wels_encoder_ext.rs`, 1 each in `wels_preprocess.rs` and
+`svc_encode_slice.rs`); each is a candidate and they are greppable.

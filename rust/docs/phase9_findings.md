@@ -3560,3 +3560,87 @@ fires on — so today that tripwire can be tripped by an idle laptop. Left as a
 phase-exit item for J rather than changed mid-session under a running campaign,
 because changing the instrument and the tree in one session is what D-gate-6's
 regime note warns against; recorded here so J does not have to rediscover it.
+
+## F171 — the flip's hazard surface is larger than the parameter family, and that is why no instrument saw the UB it created
+
+Session H's close ran `MIRI_SCOPE=encoder gates.sh session` and it **failed on
+its first run**, two shards, one site, genuine Undefined Behavior created by this
+session's own work:
+
+```
+error: Undefined Behavior: attempting a read access using <4020398> at
+alloc276218[0x7b0], but that tag does not exist in the borrow stack
+  --> wels_encoder_ext.rs:2180   pStatistics.iTotalEncodedBytes += ...
+<4020398> was created by a Unique retag at offsets [0x770..0x7c8]
+  --> wels_encoder_ext.rs:2126   &mut (*pCtx).sEncoderStatistics[iDid as usize]
+<4020398> was later invalidated at offsets [0x0..0x17f10] by a Unique retag
+  --> wels_encoder_ext.rs:2175   let pLtr = ctx_ltr(&mut *pCtx);
+```
+
+Read the three offsets together and the whole thing is there. `pStatistics` is a
+`&mut` into the context's own allocation at `[0x770..0x7c8]`. `ctx_ltr` took
+`*mut sWelsEncCtx` until T9.H12 and takes `&mut` now, so its call site became
+`ctx_ltr(&mut *pCtx)` — a `Unique` retag over `[0x0..0x17f10]`, the whole
+context, which contains and therefore pops `pStatistics`. The next use of
+`pStatistics` reads a tag that is gone.
+
+**This is exactly the shape `q1c.py` was built to find** — F66's shape A, a
+cursor held across a call that retags. It is the shape the join tracked all
+session. And the join read **0 LIVE from T9.H5 onward**, through six more
+stages, while this was being created.
+
+### Why both instruments were blind to it
+
+`q1c`'s family, and `forksplit`'s, is *bodies that take a `*mut sWelsEncCtx`
+**parameter***. `UpdateStatistics` is a method on `CWelsH264SVCEncoder`. It has
+no context parameter at all — it holds the context in a **local** raw obtained
+from `Self::ctx_ptr(&mut self.m_pEncContext)`. So it was never in the domain
+either instrument scans, and no amount of driving the detector to zero could
+have reported it.
+
+That is the same hole F167 found from the other side. F167 named a **stored**
+copy — `CWelsPreProcess::m_pEncCtx`, a struct field — and predicted the flip
+would kill it, noting q1c cannot see it "because it scans local bindings and this
+is a struct field". The symmetric case is a **local binding in a body outside
+the family**, and it is the one that actually fired. The difference in how they
+surfaced is instructive: F167's site is on a dormant screen-content path no gate
+drives and remains argued rather than run; this one is on the main encode path
+and took eleven minutes of Miri to find.
+
+### The correction to the phase's model
+
+The flip's precondition has been stated all session as "no live hazards in the
+family". It is not. It is:
+
+> no live hazard **anywhere the context is reachable by a `&mut` retag** —
+> which is every body that can name the context, not every body that takes it as
+> a parameter.
+
+The parameter family is a *convenient* domain, not the *correct* one; it was
+chosen because `S63`'s fork-split question really is about parameters, and the
+hazard question was allowed to inherit that domain without anyone checking that
+it fits. Enumerating the correct set means finding every route to the context —
+parameters, locals from `ctx_ptr`, struct fields (F167's one), and anything
+reached through `self` on the two encoder objects. That is a J-sized job and it
+should be scoped as one.
+
+**The standing guard in the meantime is the one that just worked.** D-gate-4 puts
+`gates.sh session`'s Miri lane at every session close precisely because "the byte
+gates passed 535/535 and only Miri saw it" (F114). It has now done that twice.
+Nine stages of the flip passed `gates.sh family` at 583/583 in both profiles with
+this UB live in the tree from T9.H12 onward, and no byte gate could ever have
+seen it: the read returns the right value, it is simply reading through a pointer
+Stacked Borrows has invalidated.
+
+### The narrow lesson for whoever finishes the flip
+
+Every remaining `&mut *pCtx` **written at a call site in a body that is not in
+the family** is a candidate for this. They are greppable and there are few:
+
+```
+grep -rn '&mut \*pCtx\|&mut \*\*ppCtx\|&mut \*pEncCtx' src/encoder | wc -l
+```
+
+Each one retags the whole context. Before adding another, check what the
+surrounding body is holding across it — the compiler will not, and neither will
+the byte gates.
