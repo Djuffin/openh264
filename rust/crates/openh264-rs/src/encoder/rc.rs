@@ -349,11 +349,12 @@ pub struct SWelsSvcRc {
     pub iFrameDqBits: i32,
 
     pub bGomRC: bool,
-    // **T6.H6 — the four GOM arrays and `pTemporalOverRc` below are owned.** They
-    // were five raw pointers into one `CMemoryAlign` block `RcInitLayerMemory` cut
-    // and `RcFreeLayerMemory` released; see [`rc_gom_complexity`] for what replaced
-    // them and why they are five containers rather than one arena.
-    pub pGomComplexity: Vec<f64>,
+    // **T6.H6 — the GOM arrays and `pTemporalOverRc` below are owned.** They were
+    // five raw pointers into one `CMemoryAlign` block `RcInitLayerMemory` cut and
+    // `RcFreeLayerMemory` released; they became five containers rather than one
+    // arena. **Two of the five are gone now** — `pGomCost` (D-dead-3) and
+    // `pGomComplexity` (D-dead-6), each deleted after both trees were grepped and
+    // neither had a reader; see below for the second.
     pub pGomForegroundBlockNum: Vec<i32>,
     pub pCurrentFrameGomSad: Vec<i32>,
     // **`pGomCost` stood here — deleted whole, D-dead-3 (2026-08-25), F133's end.**
@@ -443,7 +444,6 @@ impl Default for SWelsSvcRc {
             iRemainingWeights: 0,
             iFrameDqBits: 0,
             bGomRC: false,
-            pGomComplexity: Vec::new(),
             pGomForegroundBlockNum: Vec::new(),
             pCurrentFrameGomSad: Vec::new(),
             bEnableGomQp: 1,
@@ -772,11 +772,11 @@ impl SWelsRcFunc {
 pub fn RcInitLayerMemory(pWelsSvcRc: &mut SWelsSvcRc, kiMaxTl: i32) {
     let kiGomSize = (*pWelsSvcRc).iGomSize.max(0) as usize;
     (*pWelsSvcRc).pTemporalOverRc = vec![SRCTemporal::default(); kiMaxTl.max(0) as usize];
-    (*pWelsSvcRc).pGomComplexity = vec![0.0f64; kiGomSize];
     (*pWelsSvcRc).pGomForegroundBlockNum = vec![0i32; kiGomSize];
     (*pWelsSvcRc).pCurrentFrameGomSad = vec![0i32; kiGomSize];
-    // `ratectl.cpp:79`'s fifth cut of the `CMemoryAlign` block — `pGomCost`,
-    // **D-dead-3**, deleted with the field.
+    // Two of the C++ block's five cuts have no line here: `ratectl.cpp:79`'s
+    // `pGomCost` (**D-dead-3**) and `:73`'s `pGomComplexity` (**D-dead-6**), both
+    // deleted with their fields.
 }
 
 // `rc_temporal_over` stood here — the raw root of `pTemporalOverRc`, the first of
@@ -791,13 +791,23 @@ pub fn RcInitLayerMemory(pWelsSvcRc: &mut SWelsSvcRc, kiMaxTl: i32) {
 // (`pWelsSvcRc->pTemporalOverRc[iTl]`) than the cursor ever was. T9.C5 retired
 // `rc_gom_cost` the same way.
 //
-// `rc_gom_complexity` stood here too, the second of the family. It had **no
-// production caller at all** — only the sibling-derivation test. Upstream is the
-// reason: `SWelsSvcRc::pGomComplexity` (`rc.h:188`) is allocated (`ratectl.cpp:73`),
-// nulled (`:87`) and `memset` to zero (`:668`), and *never read anywhere in the
-// reference*. It is D-dead-3's `pGomCost` exactly — a second dead sibling, not the
-// "fourth" the brief says was the only one. The field itself stays pending a
-// ruling; see F174.
+// `rc_gom_complexity` stood here too, the second of the family — and **the field
+// it read is gone as well, D-dead-6 (the user, 2026-08-26), F174's ruling.**
+// `SWelsSvcRc::pGomComplexity` (`rc.h:188`) is allocated (`ratectl.cpp:73`), nulled
+// (`:87`) and `memset` to zero (`:668`) in the reference, and read **nowhere** in
+// either tree; this port mirrored all three writes and likewise never read it. It
+// is D-dead-3's `pGomCost` exactly, a second time.
+//
+// **The grep that makes this safe is not the one on the name.** `grep -rn
+// pGomComplexity codec/` returns sixteen lines and twelve of them belong to a
+// *different* field: `SComplexityAnalysisParam::pGomComplexity` and
+// `SComplexityAnalysisScreenParam::pGomComplexity` (`IWelsVP.h:226/:235`, `int*`,
+// not `double*`), which `ComplexityAnalysis.cpp` really does read and write. That
+// one is alive, and `wels_preprocess.cpp:859/:924` aims it at
+// `pWelsSvcRc->pCurrentFrameGomSad` — a third field again, misnomer and all (see
+// `SComplexityAnalysisParam` in `wels_preprocess.rs`). Only after the three are
+// told apart does the deleted one read as dead. S64's rule, on a name collision
+// rather than a type.
 
 /// The **root** of a layer's `pGomForegroundBlockNum`.
 ///
@@ -1566,9 +1576,10 @@ pub unsafe fn RcInitGomParameters(pEncCtx: &mut sWelsEncCtx) {
         pSOverRc.iCalculatedQpSlice = kiGlobalQp;
     }
 
-    (*pWelsSvcRc).pGomComplexity.fill(0.0);
-    // `ratectl.cpp:669`'s `memset (pWelsSvcRc->pGomCost, ...)` stood here —
-    // **D-dead-3**, deleted with the field.
+    // Two of `RcInitGomParameters`'s memsets have no line here: `ratectl.cpp:668`'s
+    // `pGomComplexity` (**D-dead-6**) and `:669`'s `pGomCost` (**D-dead-3**), both
+    // deleted with their fields. Mirroring a memset of storage neither tree reads
+    // is not fidelity, it is an allocation and a loop for nobody.
 }
 
 /// Assigns final macroblock luma and chroma QPs.
