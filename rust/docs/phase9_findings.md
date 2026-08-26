@@ -4566,7 +4566,7 @@ returning API sized by its callers". Read the callers and they are not one probl
 | `ctx_ltr` | 5 | the root; 3 of the 5 are the sibling-derivation tests |
 | `ctx_ltr_at` | 26 | **22 immediately deref** — `&mut *ctx_ltr_at(..)`, `&*ctx_ltr_at(..)`, `(*ctx_ltr_at(..)).field` |
 | `ctx_frame_bs` | 8 | **store the cursor into `SLayerBSInfo::pBsBuf`** |
-| `ctx_frame_bs_cur` | 21 | **the same store**, at 12 of the 21 |
+| `ctx_frame_bs_cur` | 21 | **the same store at 9**; 9 more pass the cursor into NAL writers, 3 are tests |
 
 `SLayerBSInfo::pBsBuf` is `codec_app_def.h:640` — `unsigned char* pBsBuf`, a **public
 C-ABI field of a struct this library hands to the application**. It cannot become a
@@ -4574,6 +4574,17 @@ slice, a reference, or anything else with a lifetime, in this phase or any other
 because the value crosses the boundary. So two of the five are **permanent raw
 returns by the ABI**, not by port debt, and the right outcome for them is a note at
 the accessor saying so — otherwise a later session pays S54's cost again to learn it.
+
+**The precise count, corrected.** This finding first said "12 of the 21" for
+`ctx_frame_bs_cur`, read off a truncated listing. Measured:
+`grep -c 'pBsBuf = ctx_frame_bs_cur(' ` is **9**, plus 3 for `ctx_frame_bs`. The other
+nine production uses pass the cursor into the NAL writers, and three are tests. **The
+correction does not move the verdict but it does narrow it**: what is permanent is
+that the accessor must yield something storable in a C `unsigned char*` field, which
+those nine stores require. The nine writer-passes are an ordinary raw-parameter
+question and belong to whoever converts `nal_encap`'s bitstream surface — not to this
+row. Two counts in one table, and only one of them was load-bearing; the habit that
+matters is measuring the one that is.
 
 The remaining three are real work of two different sizes. `ctx_dq_idc_map`'s four
 sites convert. `ctx_ltr_at`'s twenty-six are twenty-two that want `&mut SLTRState`

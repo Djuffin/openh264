@@ -894,7 +894,17 @@ pub struct CWelsPreProcess {
     /// The video-processing plugins, owned. Was `m_pInterfaceVp: *mut IWelsVP`, a
     /// pointer to the dissolved vtable whose `pCtx` was this object behind a `void*`.
     pub m_vp: Box<crate::processing::SWelsVpContext>,
-    pub m_pEncCtx: *mut sWelsEncCtx,
+    // `m_pEncCtx` stood here — **deleted at T9.H2, and the deletion is the fix**
+    // (F192). It was a raw copy of the encoder context, stashed by `CreatePreProcess`
+    // and read back by four screen-content methods. Miri calls those reads Undefined
+    // Behavior whenever a caller holds `&mut sWelsEncCtx`, because a reference
+    // function argument is strongly protected for the duration of the call and the
+    // whole context is inside it. All four take the context as a parameter now, as
+    // ten of their sibling methods already did, which left this field write-only —
+    // and a write-only raw copy of the context is not merely dead, it is the
+    // hazard's *storage*. Deleting it means no later reader can reintroduce the
+    // shape by accident. It has no C-ABI surface: `CWelsPreProcess` is this port's
+    // own object and no size pin names it.
     pub m_uiSpatialLayersInTemporal: [u8; MAX_DEPENDENCY_LAYER],
     pub m_sScaledPicture: Scaled_Picture,
     pub m_pLastSpatialPicture: [[Option<SrcPicId>; 2]; MAX_DEPENDENCY_LAYER],
@@ -918,7 +928,6 @@ impl Default for CWelsPreProcess {
     fn default() -> Self {
         Self {
             m_vp: Box::new(crate::processing::SWelsVpContext::default()),
-            m_pEncCtx: std::ptr::null_mut(),
             m_uiSpatialLayersInTemporal: [0; MAX_DEPENDENCY_LAYER],
             m_sScaledPicture: Scaled_Picture::default(),
             m_pLastSpatialPicture: [[None; 2]; MAX_DEPENDENCY_LAYER],
@@ -1027,7 +1036,6 @@ impl CWelsPreProcess {
         // shell is not a valid intermediate). This used to `alloc_zeroed` and set
         // three fields; `Default` is those zeros written out.
         let p = Box::new(CWelsPreProcess {
-            m_pEncCtx: pEncCtx,
             m_eUsageType: (*ctx_param(pEncCtx)).iUsageType,
             ..Default::default()
         });
@@ -1287,7 +1295,7 @@ impl CWelsPreProcess {
                 let idc = if (*pDlayerParamInternal).bEncCurFrmAsIdrFlag {
                     ESceneChangeIdc::LARGE_CHANGED_SCENE
                 } else {
-                    self.DetectSceneChange(pDstPic, None)
+                    self.DetectSceneChange(pCtx, pDstPic, None)
                 };
                 (*ctx_vaa(pCtx)).eSceneChangeIdc = idc;
                 (*ctx_vaa(pCtx)).bSceneChangeFlag = idc == ESceneChangeIdc::LARGE_CHANGED_SCENE;
@@ -1302,7 +1310,7 @@ impl CWelsPreProcess {
                     self.m_pLastSpatialPicture[depIdx][0]
                 };
                 let pRefPic = pRefPic.map(SrcPicRef::Pooled);
-                let idc = self.DetectSceneChange(pDstPic, pRefPic);
+                let idc = self.DetectSceneChange(pCtx, pDstPic, pRefPic);
                 (*ctx_vaa(pCtx)).bSceneChangeFlag = self.GetSceneChangeFlag(idc);
             }
         }
@@ -1413,10 +1421,17 @@ impl CWelsPreProcess {
         let bCalculateVar = ((*pSvcParam).iRCMode as i32 >= RC_BITRATE_MODE) && (pCtx.eSliceType == EWelsSliceType::I_SLICE);
 
         if (*pSvcParam).iUsageType == EUsageType::SCREEN_CONTENT_REAL_TIME {
+            // T9.G6's hoist, for T9.H2's reason: the callee takes the context now,
+            // so its two other arguments may not read through the same context in the
+            // same argument list.
+            let bSceneLtr = pCtx.bCurFrameMarkedAsSceneLtr;
+            let eSliceType = pCtx.eSliceType;
+            let iUsageType = (*pSvcParam).iUsageType;
             let pRefPic = self.GetBestRefPicScreen(
-                (*pSvcParam).iUsageType,
-                pCtx.bCurFrameMarkedAsSceneLtr,
-                pCtx.eSliceType,
+                pCtx,
+                iUsageType,
+                bSceneLtr,
+                eSliceType,
                 kiDidx,
                 iRefTemporalIdx,
             );
@@ -1558,13 +1573,21 @@ impl CWelsPreProcess {
     #[allow(unsafe_code)]
     pub unsafe fn GetBestRefPicScreen(
         &self,
+        // **T9.H2, F192.** The context is a parameter now, where this used to reach
+        // it through `self.m_pEncCtx`. Miri calls that read Undefined Behavior: a
+        // reference function argument is *strongly protected* for the duration of
+        // the call, and the caller above holds `&mut sWelsEncCtx` over the whole
+        // context — so a read through a stored raw of the same allocation may not
+        // remove it, whatever the byte ranges are. Ten sibling methods on this type
+        // already took the context this way; these four were the exceptions.
+        pCtx: &mut sWelsEncCtx,
         _iUsageType: EUsageType,
         bSceneLtr: bool,
         _eSliceType: EWelsSliceType,
         _kiDidx: i32,
         _iRefTemporalIdx: i32,
     ) -> Option<SrcPicId> {
-        let pVaaExt = ctx_vaa(self.m_pEncCtx) as *mut SVAAFrameInfoExt;
+        let pVaaExt = ctx_vaa(pCtx) as *mut SVAAFrameInfoExt;
         let pBest = if bSceneLtr {
             &(*pVaaExt).sVaaLtrBestRefCandidate[0]
         } else {
@@ -2228,11 +2251,15 @@ impl CWelsPreProcess {
     #[allow(unsafe_code)]
     pub unsafe fn DetectSceneChange(
         &mut self,
+        // T9.H2, F192: threaded from `SingleLayerPreprocess`, which already holds it,
+        // so the screen arm below can stop reading `self.m_pEncCtx`. The video arm
+        // does not need it and does not take it.
+        pCtx: &mut sWelsEncCtx,
         pCurPicture: SrcPicRef,
         pRefPicture: Option<SrcPicRef>,
     ) -> ESceneChangeIdc {
         if self.m_eUsageType == EUsageType::SCREEN_CONTENT_REAL_TIME {
-            self.DetectSceneChangeScreen(pCurPicture, pRefPicture)
+            self.DetectSceneChangeScreen(pCtx, pCurPicture, pRefPicture)
         } else {
             self.DetectSceneChangeVideo(pCurPicture, pRefPicture)
         }
@@ -2311,11 +2338,14 @@ impl CWelsPreProcess {
     #[allow(unsafe_code)]
     unsafe fn DetectSceneChangeScreen(
         &mut self,
+        // T9.H2, F192 — see `GetBestRefPicScreen`.
+        pCtx: &mut sWelsEncCtx,
         pCurPicture: SrcPicRef,
         _pRef: Option<SrcPicRef>,
     ) -> ESceneChangeIdc {
-        let pCtx = self.m_pEncCtx;
-        if pCtx.is_null() || ctx_vaa(pCtx).is_null() {
+        // The `pCtx.is_null()` disjunct went with the stored raw: a `&mut
+        // sWelsEncCtx` cannot be null. The rest of the guard is unchanged.
+        if ctx_vaa(pCtx).is_null() {
             return ESceneChangeIdc::LARGE_CHANGED_SCENE;
         }
 
@@ -2347,6 +2377,7 @@ impl CWelsPreProcess {
             (*ctx_ltr_at(&mut *pCtx, iTargetDid as usize)).iLastLtrIdx[iCurTid as usize];
         if (*pSvcParam).bEnableLongTermReference {
             self.GetAvailableRefListLosslessScreenRefSelection(
+                pCtx,
                 &pRefPicList,
                 iCurTid,
                 iClosestLtrFrameNum,
@@ -2581,6 +2612,8 @@ impl CWelsPreProcess {
     #[allow(unsafe_code)]
     unsafe fn GetAvailableRefListLosslessScreenRefSelection(
         &self,
+        // T9.H2, F192 — see `GetBestRefPicScreen`.
+        pCtx: &mut sWelsEncCtx,
         pRefPicList: &[Option<SrcPicId>],
         iCurTid: u8,
         iClosestLtrFrameNum: i32,
@@ -2595,7 +2628,7 @@ impl CWelsPreProcess {
             return;
         }
 
-        let bCurFrameMarkedAsSceneLtr = (*self.m_pEncCtx).bCurFrameMarkedAsSceneLtr;
+        let bCurFrameMarkedAsSceneLtr = pCtx.bCurFrameMarkedAsSceneLtr;
         *pAvailableRefNum = 1;
         *pAvailableSceneRefNum = 0;
 
@@ -2888,18 +2921,23 @@ impl CWelsPreProcess {
     /// with no body behind it.
     ///
     /// # Safety
-    /// `m_pEncCtx`, its `pSvcParam`/`pVaa`, and the selected `m_pSpatialPic` entry
-    /// must be valid, as in C++ where all three are dereferenced unconditionally.
+    /// `pCtx`'s `pSvcParam`/`pVaa` and the selected `m_pSpatialPic` entry must be
+    /// valid, as in C++ where all three are dereferenced unconditionally.
     // unsafe-cat: port-raw(Phase 9)
     #[allow(unsafe_code)]
     pub unsafe fn GetRefFrameInfo(
         &mut self,
+        // T9.H2, F192 — see `GetBestRefPicScreen`. This is the one of the four whose
+        // caller is reachable-shaped: `ref_list_mgr_svc.rs`'s `WelsBuildRefListScreen`
+        // takes `&mut sWelsEncCtx` and reached this through `pCtx.pVpp`, which is the
+        // exact shape the probe reproduces.
+        pCtx: &mut sWelsEncCtx,
         iRefIdx: i32,
         bCurrentFrameIsSceneLtr: bool,
         pRefOri: &mut Option<SrcPicId>,
     ) -> i32 {
-        let iTargetDid = (*ctx_param(self.m_pEncCtx)).iSpatialLayerNum - 1;
-        let pVaaExt = ctx_vaa(self.m_pEncCtx) as *mut SVAAFrameInfoExt;
+        let iTargetDid = (*ctx_param(pCtx)).iSpatialLayerNum - 1;
+        let pVaaExt = ctx_vaa(pCtx) as *mut SVAAFrameInfoExt;
         let pBestRefCandidateParam = if bCurrentFrameIsSceneLtr {
             &(*pVaaExt).sVaaLtrBestRefCandidate[iRefIdx as usize]
         } else {
@@ -3042,7 +3080,9 @@ mod tests {
     fn test_wels_preprocess_init_and_uninit() {
         let preprocess = CWelsPreProcess::default();
         assert!(!preprocess.m_bInitDone);
-        assert!(preprocess.m_pEncCtx.is_null());
+        // `m_pEncCtx` is gone (F192) — there is no stored context to assert about,
+        // which is the point. What a fresh preprocessor still owes is its plugins at
+        // their defaults, asserted below.
         // The plugins are owned and start at their defaults.
         assert!(!preprocess.m_vp.sVaaCalc.m_sCalcParam.iCalcBgd);
         drop(preprocess);
