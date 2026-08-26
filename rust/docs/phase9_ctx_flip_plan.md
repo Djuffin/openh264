@@ -1,9 +1,13 @@
 # Phase 9 — the `sWelsEncCtx` flip: stage plan (session H, step 1)
 
 *Written before the first flip commit, so it can be falsified by one (S60).
-**Status at session H's stop: phase A is 111 of 154 bodies done across five stages
-(A0-A4), every stage green, the remaining 44 blocked behind the init path. Phase B
-has not started; the ten accessors are all still raw. See the postscript.**
+**Status: THE FLIP IS COMPLETE.** 152 of 155 ST bodies converted across nine
+stages (A0-A8 plus the accessors), every stage green on 583/583 in both profiles.
+Census 266/111/155 -> **114/111/3**. The three exceptions are named, not residual:
+`ParasetStrategy` (permanently raw, F166) and two dead bodies awaiting a ruling.
+Phase B's *signature* half is done — the ten accessors take `&mut` — but its
+**tag** half is not: five of them still return raw pointers into `Vec` buffers and
+keep their `cursor` tags. See the postscript.**
  Every
 number was re-derived at H's step-0 commit with the command beside it; the tools
 are the authority, this is the snapshot (S24).*
@@ -305,11 +309,11 @@ far does.
 
 ---
 
-# Postscript — what the plan got right and wrong, written at session H's stop
+# Postscript — what the plan got right and wrong
 
-Five stages ran (A0–A4), each green on `gates.sh family` at 583/583 in both
-profiles. **111 of 154 bodies flipped; 44 remain.** Census `266/111/155` →
-`155/111/44`; `raw_ptr` 1587 → 1474.
+Nine stages ran, each green on `gates.sh family` at 583/583 in both profiles.
+**152 of 155 bodies flipped.** Census `266/111/155` → `114/111/3`; `raw_ptr`
+1587 → 1434; `unsafe_fn` 626 → 613.
 
 ## Right
 
@@ -346,16 +350,31 @@ cannot: `WelsInitEncoderExt` owns the context as `Box::into_raw` and has no live
 plan's tables — which counted only bodies *inside* the family — could not show it.
 The next session's first move is that body, not a depth level.
 
+## The one thing the plan could not have known, and it is the important one
+
+**The hazard domain is wrong, and F171 is the proof.** The plan, the join, and
+q1c all scope to *bodies with a `*mut sWelsEncCtx` parameter*. The session's one
+piece of real UB was created in `UpdateStatistics` — a method on
+`CWelsH264SVCEncoder` that holds the context in a **local** raw from `ctx_ptr`,
+and therefore in none of those domains. The join read 0 LIVE for six stages while
+it existed. **The precondition is "no live hazard anywhere the context is
+reachable by a `&mut` retag", not "in the family"**, and there are 24 such
+call-site retags outside the family today.
+
 ## The remaining work, named
 
 | | |
 |---|---:|
-| ST bodies still raw | **44** |
-| — blocked behind the init path (`WelsInitEncoderExt` + `CWelsH264SVCEncoder` methods) | 42 |
+| ST bodies still raw | **3** |
+| — permanently, by ruling (`ParasetStrategy`, F166) | 1 |
 | — dead, awaiting a ruling (`WelsRcDropFrameUpdate`, `WelsMdInterFinePartitionVaaOnScreen`) | 2 |
-| permanently raw by ruling (`ParasetStrategy`, F166) | 1 |
-| phase B accessors, none started | **10** |
 | in-fork, permanently raw (S63) | **111** |
+| accessors still returning raw pointers, tags intact | **5** |
+| `&mut *pCtx` call-site retags outside the family, unaudited (F171) | **24** |
 
-Phase B's table above is unchanged and still costed; nothing in phase A
-invalidated it, because phase A deliberately never touched an accessor.
+The five accessors are `ctx_ltr`, `ctx_ltr_at`, `ctx_frame_bs`,
+`ctx_frame_bs_cur`, `ctx_dq_idc_map`. Retiring their `cursor` tags means giving
+`pLtr`, `pFrameBs`, `pDqIdcMap` and `SStrideTables` slice-returning APIs — real
+work, and the honest remainder of phase B. `ctx_mb_index_x`/`_y` needed none of
+that and are already safe fns, which is why 2 of the 7 tags F165 costed have
+fallen and 5 have not.
