@@ -1473,8 +1473,8 @@ unsafe fn EncodeOneSliceInJob(
 /// never more than there are bs scratch buffers behind the slots (F67's bound).
 // unsafe-cat: MT
 #[allow(unsafe_code)]
-unsafe fn ForkWidth(pCtx: *mut sWelsEncCtx, iItemCount: i32) -> i32 {
-    let pSmt = (*pCtx).pSliceThreading;
+unsafe fn ForkWidth(pCtx: &mut sWelsEncCtx, iItemCount: i32) -> i32 {
+    let pSmt = pCtx.pSliceThreading;
     let iBuffers = if pSmt.is_null() { 1 } else { (*pSmt).uiThreadBsBufferNum as i32 };
     iItemCount.min(iBuffers.max(1)).max(1)
 }

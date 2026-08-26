@@ -3973,11 +3973,11 @@ pub unsafe fn ExtendLayerBuffer(
 
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
-pub unsafe fn ReallocSliceBuffer(pCtx: *mut sWelsEncCtx) -> i32 {
+pub unsafe fn ReallocSliceBuffer(pCtx: &mut sWelsEncCtx) -> i32 {
     let pCurLayer = current_layer(pCtx);
     let iMaxSliceNumOld = (*pCurLayer).sSliceBufferInfo[0].iMaxSliceNum;
     let mut iMaxSliceNumNew = 0;
-    let kiCurDid = (*pCtx).uiDependencyId as usize;
+    let kiCurDid = pCtx.uiDependencyId as usize;
     let pLastCodedSlice = slice_in_bank(pCurLayer, 0, iMaxSliceNumOld - 1);
     let pSliceArgument = &mut (*ctx_param(pCtx)).sSpatialLayers[kiCurDid].sSliceArgument;
 
@@ -3997,7 +3997,7 @@ pub unsafe fn ReallocSliceBuffer(pCtx: *mut sWelsEncCtx) -> i32 {
     (*pCurLayer).sSliceBufferInfo[0].iMaxSliceNum = iMaxSliceNumNew;
 
     iMaxSliceNumNew = 0;
-    for iSlcBuffIdx in 0..(*pCtx).iActiveThreadsNum {
+    for iSlcBuffIdx in 0..pCtx.iActiveThreadsNum {
         iMaxSliceNumNew += (*pCurLayer).sSliceBufferInfo[iSlcBuffIdx as usize].iMaxSliceNum;
     }
 
@@ -4007,7 +4007,7 @@ pub unsafe fn ReallocSliceBuffer(pCtx: *mut sWelsEncCtx) -> i32 {
     }
 
     let mut iStartIdx = 0;
-    for iSlcBuffIdx in 0..(*pCtx).iActiveThreadsNum {
+    for iSlcBuffIdx in 0..pCtx.iActiveThreadsNum {
         for iSliceIdx in 0..(*pCurLayer).sSliceBufferInfo[iSlcBuffIdx as usize].iMaxSliceNum {
             let slices: &mut Vec<SliceIdx> = &mut (*pCurLayer).ppSliceInLayer;
             slices[(iStartIdx + iSliceIdx) as usize] =
@@ -4128,15 +4128,15 @@ pub unsafe fn GetCurrentSliceNum(pCurDq: &SDqLayer) -> i32 {
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe fn FrameBsRealloc(
-    pCtx: *mut sWelsEncCtx,
+    pCtx: &mut sWelsEncCtx,
     pFrameBsInfo: *mut SFrameBSInfo,
     pLayerBsInfo: *mut SLayerBSInfo,
     kiMaxSliceNumOld: i32,
 ) -> i32 {
-    let pOut = &mut *(*pCtx).pOut;
+    let pOut = &mut *pCtx.pOut;
     let mut iCountNals = pOut.sNalList.len() as i32;
     let spatial_layers = if !ctx_param(pCtx).is_null() { (*ctx_param(pCtx)).iSpatialLayerNum } else { 1 };
-    iCountNals += kiMaxSliceNumOld * (spatial_layers + if (*pCtx).bNeedPrefixNalFlag { 1 } else { 0 });
+    iCountNals += kiMaxSliceNumOld * (spatial_layers + if pCtx.bNeedPrefixNalFlag { 1 } else { 0 });
 
     // Was: allocate a bigger block, `copy_nonoverlapping` the old contents in,
     // free the old, store the new — twice, with a null check each. `Vec::resize`

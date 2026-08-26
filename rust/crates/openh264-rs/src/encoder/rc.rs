@@ -583,7 +583,7 @@ impl SWelsRcFunc {
     #[inline]
     // unsafe-cat: port-raw(Phase 9)
     #[allow(unsafe_code)]
-    pub unsafe fn WelsRcPicDelayJudge(self, pCtx: *mut sWelsEncCtx, uiTimeStamp: i64, iDidIdx: i32) {
+    pub unsafe fn WelsRcPicDelayJudge(self, pCtx: &mut sWelsEncCtx, uiTimeStamp: i64, iDidIdx: i32) {
         if self.eInstalledMode == RCMode::RC_TIMESTAMP_MODE {
             WelsRcFrameDelayJudgeTimeStamp(pCtx, uiTimeStamp, iDidIdx);
         }
@@ -663,7 +663,7 @@ impl SWelsRcFunc {
     #[allow(unsafe_code)]
     pub unsafe fn WelsCheckSkipBasedMaxbr(
         self,
-        pCtx: *mut sWelsEncCtx,
+        pCtx: &mut sWelsEncCtx,
         uiTimeStamp: i64,
         iDidIdx: i32,
     ) {
@@ -1107,8 +1107,8 @@ pub unsafe fn RcInitVGop(pEncCtx: *mut sWelsEncCtx) {
 /// Full reset of the rate control state machine upon encoder initialization or IDR insertion.
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
-pub unsafe fn RcInitRefreshParameter(pEncCtx: *mut sWelsEncCtx) {
-    let kiDid = (*pEncCtx).uiDependencyId as usize;
+pub unsafe fn RcInitRefreshParameter(pEncCtx: &mut sWelsEncCtx) {
+    let kiDid = pEncCtx.uiDependencyId as usize;
     let pWelsSvcRc = ctx_rc_at(pEncCtx, kiDid);
     let pTOverRc = rc_temporal_over(pWelsSvcRc);
     let pDLayerParam = &(*ctx_param(pEncCtx)).sSpatialLayers[kiDid];
@@ -1155,8 +1155,8 @@ pub unsafe fn RcInitRefreshParameter(pEncCtx: *mut sWelsEncCtx) {
 /// Checks whether user bitrate or framerate settings have changed at runtime.
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
-pub unsafe fn RcJudgeBitrateFpsUpdate(pEncCtx: *mut sWelsEncCtx) -> bool {
-    let iCurDid = (*pEncCtx).uiDependencyId as usize;
+pub unsafe fn RcJudgeBitrateFpsUpdate(pEncCtx: &mut sWelsEncCtx) -> bool {
+    let iCurDid = pEncCtx.uiDependencyId as usize;
     let pWelsSvcRc = ctx_rc_at(pEncCtx, iCurDid);
     let pDLayerParamInternal = &(*ctx_param(pEncCtx)).sDependencyLayers[iCurDid];
     let pDLayerParam = &(*ctx_param(pEncCtx)).sSpatialLayers[iCurDid];
@@ -1174,8 +1174,8 @@ pub unsafe fn RcJudgeBitrateFpsUpdate(pEncCtx: *mut sWelsEncCtx) -> bool {
 /// Updates base temporal layer boundaries (`uiTemporalId == 0`).
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
-pub unsafe fn RcUpdateTemporalZero(pEncCtx: *mut sWelsEncCtx) {
-    let kiDid = (*pEncCtx).uiDependencyId as usize;
+pub unsafe fn RcUpdateTemporalZero(pEncCtx: &mut sWelsEncCtx) {
+    let kiDid = pEncCtx.uiDependencyId as usize;
     let pWelsSvcRc = ctx_rc_at(pEncCtx, kiDid);
     let pDLayerParam = &(*ctx_param(pEncCtx)).sDependencyLayers[kiDid];
     let kiGopSize = 1 << pDLayerParam.iDecompositionStages;
@@ -1184,7 +1184,7 @@ pub unsafe fn RcUpdateTemporalZero(pEncCtx: *mut sWelsEncCtx) {
         RcInitTlWeight(pEncCtx);
         RcInitVGop(pEncCtx);
     } else if (*pWelsSvcRc).iGopIndexInVGop == (*pWelsSvcRc).iGopNumberInVGop
-        || (*pEncCtx).eSliceType as i32 == I_SLICE
+        || pEncCtx.eSliceType as i32 == I_SLICE
     {
         RcInitVGop(pEncCtx);
     }
@@ -1194,7 +1194,7 @@ pub unsafe fn RcUpdateTemporalZero(pEncCtx: *mut sWelsEncCtx) {
 /// Calculates the quantization parameter for IDR keyframes.
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
-pub unsafe fn RcCalculateIdrQp(pEncCtx: *mut sWelsEncCtx) {
+pub unsafe fn RcCalculateIdrQp(pEncCtx: &mut sWelsEncCtx) {
     let dBpp: f64;
     let dBppArray: [[f64; 4]; 4] = [
         [0.25, 0.5, 0.75, 1.0],
@@ -1217,7 +1217,7 @@ pub unsafe fn RcCalculateIdrQp(pEncCtx: *mut sWelsEncCtx) {
         iFrameComplexity = (*pVaa).sComplexityScreenParam.iFrameComplexity;
     }
 
-    let did = (*pEncCtx).uiDependencyId as usize;
+    let did = pEncCtx.uiDependencyId as usize;
     let pWelsSvcRc = ctx_rc_at(pEncCtx, did);
     let pDLayerParam = &(*ctx_param(pEncCtx)).sSpatialLayers[did];
     let pDLayerParamInternal = &(*ctx_param(pEncCtx)).sDependencyLayers[did];
@@ -1286,22 +1286,22 @@ pub unsafe fn RcCalculateIdrQp(pEncCtx: *mut sWelsEncCtx) {
     }
 
     (*pWelsSvcRc).iInitialQp = WELS_CLIP3((*pWelsSvcRc).iInitialQp, iMinQp, iMaxQp);
-    (*pEncCtx).iGlobalQp = (*pWelsSvcRc).iInitialQp;
-    (*pWelsSvcRc).iQStep = RcConvertQp2QStep((*pEncCtx).iGlobalQp);
-    (*pWelsSvcRc).iLastCalculatedQScale = (*pEncCtx).iGlobalQp;
+    pEncCtx.iGlobalQp = (*pWelsSvcRc).iInitialQp;
+    (*pWelsSvcRc).iQStep = RcConvertQp2QStep(pEncCtx.iGlobalQp);
+    (*pWelsSvcRc).iLastCalculatedQScale = pEncCtx.iGlobalQp;
     (*pWelsSvcRc).iMinFrameQp =
-        WELS_CLIP3((*pEncCtx).iGlobalQp - DELTA_QP_BGD_THD, iMinQp, iMaxQp);
+        WELS_CLIP3(pEncCtx.iGlobalQp - DELTA_QP_BGD_THD, iMinQp, iMaxQp);
     (*pWelsSvcRc).iMaxFrameQp =
-        WELS_CLIP3((*pEncCtx).iGlobalQp + DELTA_QP_BGD_THD, iMinQp, iMaxQp);
+        WELS_CLIP3(pEncCtx.iGlobalQp + DELTA_QP_BGD_THD, iMinQp, iMaxQp);
 }
 
 /// Calculates the base quantization parameter for Inter P-frames.
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
-pub unsafe fn RcCalculatePictureQp(pEncCtx: *mut sWelsEncCtx) {
-    let did = (*pEncCtx).uiDependencyId as usize;
+pub unsafe fn RcCalculatePictureQp(pEncCtx: &mut sWelsEncCtx) {
+    let did = pEncCtx.uiDependencyId as usize;
     let pWelsSvcRc = ctx_rc_at(pEncCtx, did);
-    let iTl = (*pEncCtx).uiTemporalId as usize;
+    let iTl = pEncCtx.uiTemporalId as usize;
     let pTOverRc = rc_temporal_over(pWelsSvcRc).add(iTl);
 
     let mut iLumaQp: i32;
@@ -1379,7 +1379,7 @@ pub unsafe fn RcCalculatePictureQp(pEncCtx: *mut sWelsEncCtx) {
 
     (*pWelsSvcRc).iQStep = RcConvertQp2QStep(iLumaQp);
     (*pWelsSvcRc).iLastCalculatedQScale = iLumaQp;
-    (*pEncCtx).iGlobalQp = iLumaQp;
+    pEncCtx.iGlobalQp = iLumaQp;
 }
 
 /// Initializes slice-level GOM rate control parameters.
@@ -1398,9 +1398,9 @@ pub unsafe fn GomRCInitForOneSlice(pSlice: &mut SSlice, kiBitsPerMb: i32) {
 /// Resets bit accumulators and macroblock counters across slices.
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
-pub unsafe fn RcInitSliceInformation(pEncCtx: *mut sWelsEncCtx) {
+pub unsafe fn RcInitSliceInformation(pEncCtx: &mut sWelsEncCtx) {
     let pCurDq = current_layer(pEncCtx);
-    let did = (*pEncCtx).uiDependencyId as usize;
+    let did = pEncCtx.uiDependencyId as usize;
     let pWelsSvcRc = ctx_rc_at(pEncCtx, did);
     let kiSliceNum = (*current_layer(pEncCtx)).iMaxSliceNum;
 
@@ -1428,16 +1428,16 @@ pub unsafe fn RcInitSliceInformation(pEncCtx: *mut sWelsEncCtx) {
 /// Allocates the target bit budget `iTargetBits` for the current frame.
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
-pub unsafe fn RcDecideTargetBits(pEncCtx: *mut sWelsEncCtx) {
-    let did = (*pEncCtx).uiDependencyId as usize;
+pub unsafe fn RcDecideTargetBits(pEncCtx: &mut sWelsEncCtx) {
+    let did = pEncCtx.uiDependencyId as usize;
     let pWelsSvcRc = ctx_rc_at(pEncCtx, did);
-    let tid = (*pEncCtx).uiTemporalId as usize;
+    let tid = pEncCtx.uiTemporalId as usize;
     let pTOverRc = rc_temporal_over(pWelsSvcRc).add(tid);
 
     (*pWelsSvcRc).iCurrentBitsLevel = BITS_NORMAL;
     let fix_rc_overshoot = (*ctx_param(pEncCtx)).bFixRCOverShoot;
 
-    if (*pEncCtx).eSliceType as i32 == I_SLICE {
+    if pEncCtx.eSliceType as i32 == I_SLICE {
         if (*pWelsSvcRc).iIdrNum != 0 {
             (*pWelsSvcRc).iTargetBits = (*pWelsSvcRc).iBitsPerFrame
                 * (*ctx_param(pEncCtx)).iIdrBitrateRatio
@@ -1475,17 +1475,17 @@ pub unsafe fn RcDecideTargetBits(pEncCtx: *mut sWelsEncCtx) {
 /// Target bit allocation routine used under `RC_TIMESTAMP_MODE`.
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
-pub unsafe fn RcDecideTargetBitsTimestamp(pEncCtx: *mut sWelsEncCtx) {
-    let did = (*pEncCtx).uiDependencyId as usize;
+pub unsafe fn RcDecideTargetBitsTimestamp(pEncCtx: &mut sWelsEncCtx) {
+    let did = pEncCtx.uiDependencyId as usize;
     let pWelsSvcRc = ctx_rc_at(pEncCtx, did);
     let pDLayerParam = &(*ctx_param(pEncCtx)).sSpatialLayers[did];
-    let iTl = (*pEncCtx).uiTemporalId as usize;
+    let iTl = pEncCtx.uiTemporalId as usize;
     let pTOverRc = rc_temporal_over(pWelsSvcRc).add(iTl);
     (*pWelsSvcRc).iCurrentBitsLevel = BITS_NORMAL;
 
     let iBufferTh = ((*pWelsSvcRc).iBufferSizeSkip as i64 - (*pWelsSvcRc).iBufferFullnessSkip) as i32;
 
-    if (*pEncCtx).eSliceType as i32 == I_SLICE {
+    if pEncCtx.eSliceType as i32 == I_SLICE {
         if iBufferTh <= 0 {
             (*pWelsSvcRc).iCurrentBitsLevel = BITS_EXCEEDED;
             (*pWelsSvcRc).iTargetBits = (*pTOverRc).iMinBitsTl;
@@ -1539,12 +1539,12 @@ pub unsafe fn RcDecideTargetBitsTimestamp(pEncCtx: *mut sWelsEncCtx) {
 /// Clears the GOM complexity tracking array.
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
-pub unsafe fn RcInitGomParameters(pEncCtx: *mut sWelsEncCtx) {
+pub unsafe fn RcInitGomParameters(pEncCtx: &mut sWelsEncCtx) {
     let pCurDq = current_layer(pEncCtx);
-    let did = (*pEncCtx).uiDependencyId as usize;
+    let did = pEncCtx.uiDependencyId as usize;
     let pWelsSvcRc = ctx_rc_at(pEncCtx, did);
     let kiSliceNum = (*current_layer(pEncCtx)).iMaxSliceNum;
-    let kiGlobalQp = (*pEncCtx).iGlobalQp;
+    let kiGlobalQp = pEncCtx.iGlobalQp;
 
     (*pWelsSvcRc).iAverageFrameQp = 0;
     for i in 0..kiSliceNum as usize {
@@ -1713,8 +1713,8 @@ pub unsafe fn RcCalculateGomQp(
 /// Updates virtual buffer fullness after encoding a frame.
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
-pub unsafe fn RcVBufferCalculationSkip(pEncCtx: *mut sWelsEncCtx) {
-    let did = (*pEncCtx).uiDependencyId as usize;
+pub unsafe fn RcVBufferCalculationSkip(pEncCtx: &mut sWelsEncCtx) {
+    let did = pEncCtx.uiDependencyId as usize;
     let pWelsSvcRc = ctx_rc_at(pEncCtx, did);
     let pTOverRc = rc_temporal_over(pWelsSvcRc);
     let kiOutputBits = (*pWelsSvcRc).iBitsPerFrame;
@@ -1919,7 +1919,7 @@ pub unsafe fn WelsRcCheckFrameStatus(
 /// Adjusts virtual buffer fullness and bit quotas when a frame is skipped.
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
-pub unsafe extern "C" fn UpdateBufferWhenFrameSkipped(pEncCtx: *mut sWelsEncCtx, iCurDid: i32) {
+pub unsafe extern "C" fn UpdateBufferWhenFrameSkipped(pEncCtx: &mut sWelsEncCtx, iCurDid: i32) {
     let pWelsSvcRc = ctx_rc_at(pEncCtx, iCurDid as usize);
     let kiOutputBits = (*pWelsSvcRc).iBitsPerFrame;
     let kiOutputMaxBits = (*pWelsSvcRc).iMaxBitsPerFrame;
@@ -2034,8 +2034,8 @@ pub unsafe fn WelsRcPostFrameSkippedUpdate(_pCtx: *mut sWelsEncCtx, _iDid: i32) 
 /// Evaluates virtual buffer underflow and calculates required padding bits.
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
-pub unsafe fn RcVBufferCalculationPadding(pEncCtx: *mut sWelsEncCtx) {
-    let did = (*pEncCtx).uiDependencyId as usize;
+pub unsafe fn RcVBufferCalculationPadding(pEncCtx: &mut sWelsEncCtx) {
+    let did = pEncCtx.uiDependencyId as usize;
     let pWelsSvcRc = ctx_rc_at(pEncCtx, did);
     let kiOutputBits = (*pWelsSvcRc).iBitsPerFrame;
     let kiBufferThreshold = WELS_DIV_ROUND(
@@ -2073,15 +2073,15 @@ pub unsafe fn RcTraceFrameBits(pEncCtx: &mut sWelsEncCtx, _uiTimeStamp: i64, _iF
 /// Computes average frame QP and updates temporal layer bit counters.
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
-pub unsafe fn RcUpdatePictureQpBits(pEncCtx: *mut sWelsEncCtx, iCodedBits: i32) {
+pub unsafe fn RcUpdatePictureQpBits(pEncCtx: &mut sWelsEncCtx, iCodedBits: i32) {
     let pCurDq = current_layer(pEncCtx);
-    let did = (*pEncCtx).uiDependencyId as usize;
+    let did = pEncCtx.uiDependencyId as usize;
     let pWelsSvcRc = ctx_rc_at(pEncCtx, did);
     let pCurSliceCtx = &(*current_layer(pEncCtx)).sSliceEncCtx;
     let mut iTotalQp = 0;
     let mut iTotalMb = 0;
 
-    if (*pEncCtx).eSliceType as i32 == P_SLICE {
+    if pEncCtx.eSliceType as i32 == P_SLICE {
         for i in 0..pCurSliceCtx.iSliceNumInFrame.load(Ordering::Relaxed) as usize {
             let pSlice = crate::encoder::svc_encode_slice::slice_in_layer(pCurDq, i as i32);
             let pSOverRc = &(*pSlice).sSlicingOverRc;
@@ -2094,24 +2094,24 @@ pub unsafe fn RcUpdatePictureQpBits(pEncCtx: *mut sWelsEncCtx, iCodedBits: i32) 
                 iTotalMb * INT_MULTIPLY,
             );
         } else {
-            (*pWelsSvcRc).iAverageFrameQp = (*pEncCtx).iGlobalQp;
+            (*pWelsSvcRc).iAverageFrameQp = pEncCtx.iGlobalQp;
         }
     } else {
-        (*pWelsSvcRc).iAverageFrameQp = (*pEncCtx).iGlobalQp;
+        (*pWelsSvcRc).iAverageFrameQp = pEncCtx.iGlobalQp;
     }
 
     (*pWelsSvcRc).iFrameDqBits = iCodedBits;
     (*pWelsSvcRc).iLastCalculatedQScale = (*pWelsSvcRc).iAverageFrameQp;
 
-    let tid = (*pEncCtx).uiTemporalId as usize;
+    let tid = pEncCtx.uiTemporalId as usize;
     (*rc_temporal_over(pWelsSvcRc).add(tid)).iGopBitsDq += (*pWelsSvcRc).iFrameDqBits;
 }
 
 /// Updates the exponential moving average of Intra frame complexity.
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
-pub unsafe fn RcUpdateIntraComplexity(pEncCtx: *mut sWelsEncCtx) {
-    let did = (*pEncCtx).uiDependencyId as usize;
+pub unsafe fn RcUpdateIntraComplexity(pEncCtx: &mut sWelsEncCtx) {
+    let did = pEncCtx.uiDependencyId as usize;
     let pWelsSvcRc = ctx_rc_at(pEncCtx, did);
     let iQStep = RcConvertQp2QStep((*pWelsSvcRc).iAverageFrameQp);
     let iIntraCmplx = iQStep as i64 * (*pWelsSvcRc).iFrameDqBits as i64;
@@ -2147,10 +2147,10 @@ pub unsafe fn RcUpdateIntraComplexity(pEncCtx: *mut sWelsEncCtx) {
 /// Updates the exponential moving average of Inter P-frame linear complexity.
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
-pub unsafe fn RcUpdateFrameComplexity(pEncCtx: *mut sWelsEncCtx) {
-    let did = (*pEncCtx).uiDependencyId as usize;
+pub unsafe fn RcUpdateFrameComplexity(pEncCtx: &mut sWelsEncCtx) {
+    let did = pEncCtx.uiDependencyId as usize;
     let pWelsSvcRc = ctx_rc_at(pEncCtx, did);
-    let kiTl = (*pEncCtx).uiTemporalId as usize;
+    let kiTl = pEncCtx.uiTemporalId as usize;
     let pTOverRc = rc_temporal_over(pWelsSvcRc).add(kiTl);
 
     let mut iFrameComplexity = (*ctx_vaa(pEncCtx)).sComplexityAnalysisParam.iFrameComplexity;
@@ -2187,10 +2187,10 @@ pub unsafe fn RcUpdateFrameComplexity(pEncCtx: *mut sWelsEncCtx) {
 /// Derives cascaded temporal layer QPs when rate control is disabled (`RC_OFF_MODE`).
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
-pub unsafe fn RcCalculateCascadingQp(pEncCtx: *mut sWelsEncCtx, iQp: i32) -> i32 {
+pub unsafe fn RcCalculateCascadingQp(pEncCtx: &mut sWelsEncCtx, iQp: i32) -> i32 {
     let decomp = (*ctx_param(pEncCtx)).iDecompStages;
     if decomp != 0 {
-        let tid = (*pEncCtx).uiTemporalId as i32;
+        let tid = pEncCtx.uiTemporalId as i32;
         let mut iTemporalQp = if tid == 0 {
             iQp - 3 - (decomp as i32 - 1)
         } else {
