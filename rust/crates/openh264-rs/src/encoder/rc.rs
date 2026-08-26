@@ -100,7 +100,7 @@ pub use crate::encoder::svc_encode_slice::SSlice;
 pub use crate::encoder::svc_encode_slice::SDqLayer;
 pub use crate::encoder::wels_func_ptr_def::SWelsFuncPtrList;
 pub use crate::encoder::encoder_context::sWelsEncCtx;
-use crate::encoder::encoder_context::{ctx_param, ctx_rc, ctx_rc_at, ctx_vaa, ctx_func_list};
+use crate::encoder::encoder_context::{ctx_param, ctx_rc_at, ctx_vaa, ctx_func_list};
 
 // ============================================================================
 // Constants and Macros
@@ -2587,14 +2587,6 @@ pub unsafe extern "C" fn WelRcPictureInitScc(pEncCtx: &mut sWelsEncCtx, uiTimeSt
     }
     (*pWelsSvcRc).iAverageFrameQp = pEncCtx.iGlobalQp;
     (*pWelsSvcRc).uiLastTimeStamp = uiTimeStamp;
-}
-
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn WelsRcDropFrameUpdate(pEncCtx: *mut sWelsEncCtx, iDropSize: u32) {
-    let pWelsSvcRc = ctx_rc(pEncCtx);
-    (*pWelsSvcRc).iBufferFullnessSkip -= iDropSize as i64;
-    (*pWelsSvcRc).iBufferFullnessSkip = WELS_MAX(0, (*pWelsSvcRc).iBufferFullnessSkip);
 }
 
 // unsafe-cat: port-raw(Phase 9)
