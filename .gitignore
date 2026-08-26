@@ -77,3 +77,4 @@ target/
 
 # ecref's compiled binary (rust/tools/ecref/build.sh rebuilds it from ecref.cpp)
 rust/tools/ecref/ecref
+rust/crates/openh264-rs/target-fixed/
