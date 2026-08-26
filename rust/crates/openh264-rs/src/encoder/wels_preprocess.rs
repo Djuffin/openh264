@@ -2215,32 +2215,61 @@ impl CWelsPreProcess {
         let Some(pRefPicture) = pRefPicture else {
             return ESceneChangeIdc::SIMILAR_SCENE;
         };
-        // S37: resolved once, raw cursors after.
-        let sCur = self.src_mut(pCurPicture).planes();
-        let sRef = self.src_mut(pRefPicture).planes();
+        // **T9.X — the views come off the pictures, not off a raw stamp.** Both
+        // pictures are read here and only read, so two *shared* borrows of the pool
+        // coexist where the old `src_mut(..).planes()` pair had to launder itself
+        // through raw to end the borrow. `src()` takes `&self` and so would borrow
+        // the plugin along with the pool; destructuring names the two fields
+        // separately, which is what lets the `&mut` on `m_vp` sit beside them.
+        let Self {
+            m_pSpatialPicPool,
+            m_sScaledPicture,
+            m_vp,
+            ..
+        } = self;
+        let pick = |which: SrcPicRef| -> &SPicture {
+            match which {
+                SrcPicRef::Pooled(id) => m_pSpatialPicPool.get(id),
+                SrcPicRef::Scaled => m_sScaledPicture
+                    .pScaledInputPicture
+                    .as_deref()
+                    .expect("the scaled input picture is allocated"),
+            }
+        };
+        let cur_pic = pick(pCurPicture);
+        let cur_y = cur_pic.plane(0);
+        let (cur_w, cur_h) = (cur_pic.iWidthInPixel, cur_pic.iHeightInPixel);
+        let ref_pic = pick(pRefPicture);
+        let ref_y = ref_pic.plane(0);
+        let (ref_w, ref_h) = (ref_pic.iWidthInPixel, ref_pic.iHeightInPixel);
 
         // METHOD_SCENE_CHANGE_DETECTION_VIDEO: no `Set` in the C++ either.
         let mut sSceneChangeDetectResult = SSceneChangeResult::default();
         let mut sSrcPixMap = SPixMap::default();
         let mut sRefPixMap = SPixMap::default();
 
-        sSrcPixMap.pPixel[0] = sCur.pData[0];
         sSrcPixMap.iSizeInBits = g_kiPixMapSizeInBits;
-        sSrcPixMap.iStride[0] = sCur.iLineSize[0];
-        sSrcPixMap.sRect.iRectWidth = sCur.iWidthInPixel;
-        sSrcPixMap.sRect.iRectHeight = sCur.iHeightInPixel;
+        sSrcPixMap.iStride[0] = cur_y.stride() as i32;
+        sSrcPixMap.sRect.iRectWidth = cur_w;
+        sSrcPixMap.sRect.iRectHeight = cur_h;
         sSrcPixMap.eFormat = VideoFormat::videoFormatI420;
 
-        sRefPixMap.pPixel[0] = sRef.pData[0];
         sRefPixMap.iSizeInBits = g_kiPixMapSizeInBits;
-        sRefPixMap.iStride[0] = sRef.iLineSize[0];
-        sRefPixMap.sRect.iRectWidth = sRef.iWidthInPixel;
-        sRefPixMap.sRect.iRectHeight = sRef.iHeightInPixel;
+        sRefPixMap.iStride[0] = ref_y.stride() as i32;
+        sRefPixMap.sRect.iRectWidth = ref_w;
+        sRefPixMap.sRect.iRectHeight = ref_h;
         sRefPixMap.eFormat = VideoFormat::videoFormatI420;
 
-        let iRet = self.m_vp.sSceneChangeDetection.Process(&sSrcPixMap, &sRefPixMap);
+        let planes = crate::processing::scene_change_detection::ScdPlanes {
+            cur: &cur_y.as_slice()[cur_y.origin()..],
+            cur_stride: cur_y.stride(),
+            refp: &ref_y.as_slice()[ref_y.origin()..],
+            ref_stride: ref_y.stride(),
+        };
+
+        let iRet = m_vp.sSceneChangeDetection.Process(&sSrcPixMap, &planes);
         if iRet == 0 {
-            self.m_vp.sSceneChangeDetection.Get(&mut sSceneChangeDetectResult);
+            m_vp.sSceneChangeDetection.Get(&mut sSceneChangeDetectResult);
         }
         sSceneChangeDetectResult.eSceneChangeIdc
     }

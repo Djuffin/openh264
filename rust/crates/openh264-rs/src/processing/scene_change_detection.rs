@@ -15,35 +15,33 @@
 
 #![deny(unsafe_code)]
 
+use crate::common::sad_common::sample_sad;
 use crate::encoder::wels_preprocess::{ESceneChangeIdc, SPixMap, SSceneChangeResult};
+use crate::safe::plane::PlaneCursor;
 
-/// The raw 8x8 SAD this detector's block walk needs — the one caller
-/// `common/sad_common.rs`'s shim family had left when session F retired the
-/// transitional raw tables. The body moves to the family that owns its last
-/// caller (C2's ownership rule for the decoder's deblocking shims, applied
-/// here to the preprocess family): the walk reads `SPixMap.pPixel` raw
-/// pointers, so it cannot take a `PlaneCursor` until the preprocess family's
-/// own session converts the pixmap. Flattened from the 4x4-composed original —
-/// exact, because the summands are the same `|a - b|` terms and no grouping of
-/// 64 terms of at most 255 can overflow `i32`.
+/// The two luma planes this detector walks, routed from the pool pictures that own
+/// them — **S37: built per call, never stored.** `DenoisePlanes` is the same shape one
+/// plugin over (`processing/denoise.rs:220`); this one is read-only and luma-only,
+/// which is all `CSceneChangeDetectorVideo` ever touches.
 ///
-/// # Safety
-/// Both pointers must be readable for 8 rows of 8 samples at their strides.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-unsafe fn sad_8x8_raw(pSample1: *mut u8, iStride1: i32, pSample2: *mut u8, iStride2: i32) -> i32 {
-    let mut iSadSum = 0i32;
-    let mut pSrc1 = pSample1;
-    let mut pSrc2 = pSample2;
-    for _ in 0..8 {
-        for x in 0..8 {
-            iSadSum += unsafe { (*pSrc1.add(x)).abs_diff(*pSrc2.add(x)) as i32 };
-        }
-        pSrc1 = unsafe { pSrc1.offset(iStride1 as isize) };
-        pSrc2 = unsafe { pSrc2.offset(iStride2 as isize) };
-    }
-    iSadSum
+/// Each slice starts at its plane's logical origin and runs to the end of the padded
+/// allocation, so a block at `(x, y)` is at byte `y * stride + x`.
+pub struct ScdPlanes<'a> {
+    pub cur: &'a [u8],
+    pub cur_stride: usize,
+    pub refp: &'a [u8],
+    pub ref_stride: usize,
 }
+
+// `sad_8x8_raw` stood here — **F151 CLOSED, T9.X.** Session F relocated it into this
+// file because the block walk below read `SPixMap.pPixel` raw and so could not take a
+// `PlaneCursor` "until the preprocess family's own session converts the pixmap". This
+// is that session. The walk takes [`ScdPlanes`] now and the kernel is
+// `common::sad_common::sample_sad::<8, 8>`, which is the same summation over the same
+// 64 `|a - b|` terms with the same `i32` accumulator.
+//
+// F151's ratchet rebaseline for this file (+2 raw_ptr, +3 unsafe_block, +1 unsafe_fn)
+// comes back out with it.
 
 use super::vaacalc::{RET_INVALIDPARAM, RET_SUCCESS};
 
@@ -78,21 +76,20 @@ impl CSceneChangeDetection {
     /// `CSceneChangeDetection::Process` — `SceneChangeDetection.h:215`, with
     /// `CSceneChangeDetectorVideo::operator()` inlined.
     ///
-    /// # Safety
-    /// Both pixel maps must describe readable luma planes of the stated size.
-    // unsafe-cat: port-raw(Phase 9)
-    #[allow(unsafe_code)]
-    pub unsafe fn Process(&mut self, pSrcPixMap: &SPixMap, pRefPixMap: &SPixMap) -> i32 {
+    /// **T9.X — safe.** `pSrcPixMap` still carries the geometry (it is the VP's own
+    /// parameter block); the pixels arrive as [`ScdPlanes`], and the block walk is
+    /// slice indexing over two [`PlaneCursor`]s. `denoise::Denoise` has taken its
+    /// pixels this way since it was ported.
+    pub fn Process(&mut self, pSrcPixMap: &SPixMap, planes: &ScdPlanes<'_>) -> i32 {
+        if planes.cur.is_empty() || planes.refp.is_empty() {
+            return RET_INVALIDPARAM;
+        }
         let iWidth = pSrcPixMap.sRect.iRectWidth;
         let iHeight = pSrcPixMap.sRect.iRectHeight;
-        let iBlock8x8Width = iWidth >> 3;
-        let iBlock8x8Height = iHeight >> 3;
-        let pRefY = pRefPixMap.pPixel[0];
-        let pCurY = pSrcPixMap.pPixel[0];
-        let iRefStride = (*pRefPixMap).iStride[0];
-        let iCurStride = (*pSrcPixMap).iStride[0];
+        let iBlock8x8Width = (iWidth >> 3).max(0) as usize;
+        let iBlock8x8Height = (iHeight >> 3).max(0) as usize;
 
-        let iBlock8x8Num = iBlock8x8Width * iBlock8x8Height;
+        let iBlock8x8Num = (iBlock8x8Width * iBlock8x8Height) as i32;
         let iSceneChangeThresholdLarge =
             (SCENE_CHANGE_MOTION_RATIO_LARGE_VIDEO * iBlock8x8Num as f32 + 0.5 + PESN) as i32;
         let iSceneChangeThresholdMedium =
@@ -102,23 +99,25 @@ impl CSceneChangeDetection {
         self.m_sSceneChangeParam.iFrameComplexity = 0;
         self.m_sSceneChangeParam.eSceneChangeIdc = ESceneChangeIdc::SIMILAR_SCENE;
 
-        // CSceneChangeDetectorVideo::operator() — SceneChangeDetection.h:113.
-        let iRefRowStride = (iRefStride << 3) as isize;
-        let iCurRowStride = (iCurStride << 3) as isize;
-        let mut pRefRow = pRefY;
-        let mut pCurRow = pCurY;
-        for _j in 0..iBlock8x8Height {
-            let mut pRefTmp = pRefRow;
-            let mut pCurTmp = pCurRow;
-            for _i in 0..iBlock8x8Width {
-                let iSad = sad_8x8_raw(pCurTmp, iCurStride, pRefTmp, iRefStride);
+        // CSceneChangeDetectorVideo::operator() — SceneChangeDetection.h:113. The C++
+        // walks two row cursors and steps them by `stride << 3`; the offsets below are
+        // the same arithmetic with the multiplication written out.
+        for j in 0..iBlock8x8Height {
+            for i in 0..iBlock8x8Width {
+                let cur = PlaneCursor::new(
+                    planes.cur,
+                    j * 8 * planes.cur_stride + i * 8,
+                    planes.cur_stride,
+                );
+                let refp = PlaneCursor::new(
+                    planes.refp,
+                    j * 8 * planes.ref_stride + i * 8,
+                    planes.ref_stride,
+                );
+                let iSad = sample_sad::<8, 8>(&cur, &refp);
                 self.m_sSceneChangeParam.iMotionBlockNum +=
                     (iSad > HIGH_MOTION_BLOCK_THRESHOLD) as i32;
-                pRefTmp = pRefTmp.offset(8);
-                pCurTmp = pCurTmp.offset(8);
             }
-            pRefRow = pRefRow.offset(iRefRowStride);
-            pCurRow = pCurRow.offset(iCurRowStride);
         }
 
         if self.m_sSceneChangeParam.iMotionBlockNum >= iSceneChangeThresholdLarge {
