@@ -939,7 +939,8 @@ pub unsafe fn ctx_ltr_at(pCtx: &mut sWelsEncCtx, kiDid: usize) -> *mut SLTRState
 /// become a slice, a reference, or anything else carrying a lifetime, in this phase
 /// or any later one. A session that reaches for "make the five slice-returning APIs
 /// return slices" should stop at this note rather than pay S54's cost again to learn
-/// it. Same for [`ctx_frame_bs_cur`], whose 21 sites include twelve of the same store.
+/// it. Same for [`ctx_frame_bs_cur`], whose 21 sites include **nine** of the same
+/// store (the other nine pass the cursor into the NAL writers; three are tests).
 ///
 /// # Safety
 /// `pCtx` must point to a live encoder context.
@@ -2342,141 +2343,21 @@ mod tests {
     /// consumer outside `AllocStrideTables` reaches the tables.
     use crate::encoder::wels_preprocess::CWelsPreProcess;
 
-    /// **F167's three reads, and nothing else** — the probe half of F192.
-    ///
-    /// Exactly the accesses the four dormant `CWelsPreProcess::m_pEncCtx` consumers
-    /// perform through the stored field: `ctx_param(m_pEncCtx)`
-    /// (`wels_preprocess.rs:2899`, `GetRefFrameInfo`), `ctx_vaa(m_pEncCtx)` (`:1567`
-    /// and the same method) and `(*m_pEncCtx).bCurFrameMarkedAsSceneLtr` (`:2596`).
-    ///
-    /// **Why a probe rather than driving `GetRefFrameInfo` itself.** All four
-    /// consumers are on the screen-content path, and `RequestMemorySvc` returns
-    /// `ENC_RETURN_UNSUPPORTED_PARA` the moment `iUsageType ==
-    /// SCREEN_CONTENT_REAL_TIME` (`encoder_ext.rs:1222`) — **no configuration
-    /// finishes `WelsInitEncoderExt`, so no configuration reaches any of them**.
-    /// `GetRefFrameInfo` additionally dereferences `pVaa` as an `SVAAFrameInfoExt`,
-    /// which this port never allocates (F177). The *aliasing* shape is the subject
-    /// and this performs it through the same field and the same accessors.
-    ///
-    /// **Why it lives here rather than on `CWelsPreProcess`.** The ratchet is a
-    /// **per-file** rule and `wels_preprocess.rs` sits at zero `unsafe_block`, so a
-    /// test-only probe there is an increase on a file the phase has driven to zero —
-    /// test unsafe and library unsafe compete for the same headroom and the
-    /// instrument cannot tell them apart. This file is the subject's own and is
-    /// four `unsafe fn` and three `unsafe {` below its baseline. Taking the object
-    /// as a parameter instead of `&mut self` changes nothing about the shape: the
-    /// receiver is derived from the same `pVpp` raw either way.
-    ///
-    /// # Safety
-    /// As the four consumers: `m_pEncCtx` must name a live context.
-    // unsafe-cat: port-raw(Phase 9)
-    #[allow(unsafe_code)]
-    unsafe fn f167_stored_ctx_reads(vpp: &mut CWelsPreProcess) -> (bool, bool, bool) {
-        let bScene = (*vpp.m_pEncCtx).bCurFrameMarkedAsSceneLtr;
-        let bParam = !ctx_param(vpp.m_pEncCtx).is_null();
-        let bVaa = !ctx_vaa(vpp.m_pEncCtx).is_null();
-        (bScene, bParam, bVaa)
-    }
-
-    // F192's shape is built inline in both tests below and **not** behind a helper,
-    // and that is a measurement rather than a style choice: returning the owner
-    // `Box<sWelsEncCtx>` by value *moves* it, and moving a `Box` is itself a retag
-    // (`Box` is `noalias`), which invalidates the root raw derived inside the helper.
-    // The first draft did exactly that and Miri reported a SharedReadOnly retag from
-    // a tag that no longer existed — a defect in the fixture, not in the subject. A
-    // probe that cannot be built without disturbing what it probes has to be built
-    // where the subject lives.
-
-    /// **F192 — the remedy, driven so that it is a fact and not a proposal.**
-    ///
-    /// The identical call with a **shared** context borrow. A `&T` protector forbids
-    /// writes through other tags and permits reads, so the stored copy's three reads
-    /// are lawful under it exactly where they are not under `&mut`. This is what the
-    /// four dormant consumers' fix looks like, and it is green.
-    #[test]
-    // unsafe-cat: port-raw(Phase 9)
-    #[allow(unsafe_code)]
-    fn f167_stored_context_copy_under_a_shared_borrow() {
-        // SAFETY: the fixture's `pVpp` names a live object whose `m_pEncCtx` is this
-        // very context, which is the invariant `CreatePreProcess` establishes.
-        unsafe fn drive_shared(pCtx: &sWelsEncCtx) -> (bool, bool, bool) {
-            f167_stored_ctx_reads(&mut *pCtx.pVpp)
-        }
-        unsafe {
-            let mut owner: Box<sWelsEncCtx> = Box::new(sWelsEncCtx::new());
-            let pCtx: *mut sWelsEncCtx = std::ptr::addr_of_mut!(*owner);
-            let mut vpp = CWelsPreProcess::default();
-            vpp.m_pEncCtx = pCtx;
-            (*pCtx).pVpp = std::ptr::addr_of_mut!(vpp);
-
-            // A bare context has neither `pSvcParam` nor `pVaa` built, which is what
-            // the four consumers' own null guards are written against; the subject is
-            // the access, not the value.
-            assert_eq!(drive_shared(&*pCtx), (false, false, false));
-            assert_eq!(drive_shared(&*pCtx), (false, false, false));
-            (*pCtx).pVpp = std::ptr::null_mut();
-        }
-    }
-
-    /// **F192 — F167's shape as the tree actually has it, and Miri says it is UB.**
-    ///
-    /// F167 argued `CWelsPreProcess::m_pEncCtx` sound on its dormant half and never
-    /// ran it; F171 is what that distinction cost on the other half. Run at last, the
-    /// verdict is **not sound**:
-    ///
-    /// ```text
-    /// error: Undefined Behavior: not granting access to tag <593196> because that
-    /// would remove [Unique for <593445>] which is strongly protected
-    ///   --> wels_preprocess.rs:2939  let bScene = (*self.m_pEncCtx).bCurFrameMarkedAsSceneLtr;
-    /// <593196> was created by a Unique retag at offsets [0x0..0x17f10]   (the owner Box)
-    /// <593445> is this argument     -->  drive(pCtx: &mut sWelsEncCtx)
-    /// ```
-    ///
-    /// **The mechanism is stronger than the argument anyone had made for it, in both
-    /// directions.** It is not that the caller's `Unique` is *disabled over the bytes
-    /// read* and the ranges happen to be disjoint — a reference **function argument
-    /// is strongly protected for the duration of the call**, so no access through any
-    /// other tag may remove it, and a *read* through the stored copy is therefore UB
-    /// immediately, whatever the caller does afterwards. The context `&mut` covers
-    /// `[0x0..0x17f10]`, which contains every byte the stored copy touches.
-    ///
-    /// **It cannot fire today**, and that is the only reason this is a finding rather
-    /// than a stop: all four consumers are on the screen-content path and
-    /// `RequestMemorySvc` returns `ENC_RETURN_UNSUPPORTED_PARA` for
-    /// `SCREEN_CONTENT_REAL_TIME` (`encoder_ext.rs:1222`), so nothing reaches them.
-    /// It becomes live the day Phase 10 enables screen content, and the live shape is
-    /// `ref_list_mgr_svc.rs:1539` — `WelsBuildRefListScreen(pCtx: &mut sWelsEncCtx)`
-    /// calling `(*pCtx.pVpp).GetRefFrameInfo(..)`.
-    ///
-    /// **`#[cfg_attr(miri, ignore)]` records an open verdict with an owner**, which is
-    /// what F112/F114b's rows do; it does not excuse one. The remedy is the sibling
-    /// test above and it is green — the consumers take the context by shared borrow
-    /// (or as a parameter) instead of reading it back out of `m_pEncCtx`.
-    #[test]
-    #[cfg_attr(miri, ignore)]
-    // unsafe-cat: port-raw(Phase 9)
-    #[allow(unsafe_code)]
-    fn f167_stored_context_copy_under_a_mut_borrow() {
-        // SAFETY: as the shared sibling — and under Miri, NOT safe; see the doc.
-        unsafe fn drive(pCtx: &mut sWelsEncCtx) -> (i32, (bool, bool, bool)) {
-            pCtx.iGlobalQp = 26; // a write through the `&mut`, before
-            let seen = f167_stored_ctx_reads(&mut *pCtx.pVpp); // the dormant reads
-            pCtx.iGlobalQp += 1; // and the `&mut` used AFTER them
-            (pCtx.iGlobalQp, seen)
-        }
-        unsafe {
-            let mut owner: Box<sWelsEncCtx> = Box::new(sWelsEncCtx::new());
-            let pCtx: *mut sWelsEncCtx = std::ptr::addr_of_mut!(*owner);
-            let mut vpp = CWelsPreProcess::default();
-            vpp.m_pEncCtx = pCtx;
-            (*pCtx).pVpp = std::ptr::addr_of_mut!(vpp);
-
-            let (qp, seen) = drive(&mut *pCtx);
-            assert_eq!(qp, 27);
-            assert_eq!(seen, (false, false, false));
-            (*pCtx).pVpp = std::ptr::null_mut();
-        }
-    }
+    // **F192's two probes stood here and are retired by their own fix (T9.H2).**
+    //
+    // They minted F167's shape — an owner `Box<sWelsEncCtx>`, the root raw via
+    // `addr_of_mut!`, `CWelsPreProcess::m_pEncCtx` set the way `CreatePreProcess`
+    // set it, the object reached through `pCtx.pVpp`, and a driver taking
+    // `&mut sWelsEncCtx` — and Miri refused the `&mut` form in one line while
+    // passing the shared one. The trace is quoted in F192.
+    //
+    // **`m_pEncCtx` no longer exists**, so neither probe has a subject: nothing in
+    // this encoder stores a second route to the context any more, and a test cannot
+    // exercise a field that is not declared. Deleting them with the field is the
+    // honest bookkeeping — a test kept alive past its subject is a claim of coverage
+    // nobody is providing. What guards the shape from here is that there is nothing
+    // left to guard: reintroducing it means declaring a new stored context pointer,
+    // which is a design change and not an accident.
 
     #[test]
     // unsafe-cat: cursor

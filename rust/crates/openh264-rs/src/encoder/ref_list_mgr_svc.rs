@@ -1535,12 +1535,20 @@ pub unsafe fn WelsBuildRefListScreen(
         let mut pRefOri: Option<SrcPicId> = None;
 
         for idx in 0..(*pVaaExt).iNumOfAvailableRef {
-            if !pCtx.pVpp.is_null() {
-                iLtrRefIdx = (*pCtx.pVpp).GetRefFrameInfo(
-                    idx,
-                    pCtx.bCurFrameMarkedAsSceneLtr,
-                    &mut pRefOri,
-                );
+            // **T9.H2, F192 — this is the site the finding is about.** It called
+            // `GetRefFrameInfo` while holding `pCtx: &mut sWelsEncCtx`, and the callee
+            // read the context back out of `CWelsPreProcess::m_pEncCtx`: a read through
+            // a stored raw of an allocation whose `&mut` is *strongly protected* for the
+            // duration of this call, which Miri refuses. The context is an argument now,
+            // so there is no second route and nothing to refuse.
+            //
+            // Two hoists, both T9.G6's shape: the object pointer and the scene-LTR flag
+            // are read out before the borrow, because neither may read through the
+            // context in the same argument list that passes it.
+            let pVpp = pCtx.pVpp;
+            let bSceneLtr = pCtx.bCurFrameMarkedAsSceneLtr;
+            if !pVpp.is_null() {
+                iLtrRefIdx = (*pVpp).GetRefFrameInfo(pCtx, idx, bSceneLtr, &mut pRefOri);
             }
             let refOri = pRefOri.map(PicRef::Src);
             if iLtrRefIdx >= 0 && iLtrRefIdx <= (*pParam).iLTRRefNum {

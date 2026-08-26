@@ -18663,6 +18663,52 @@ T9.G6's hoist note, one carries F171's own explanation, and three are test code.
 the `pOut` allocation and matches only because the detector's regex is textual. J
 should be told the detector's domain is a *string*, not a type.
 
+#### The per-site verdict table — J inherits a list, not a promise
+
+Line numbers are H2's close. The two columns that matter are *what the body holds
+across the retag* and *which allocation that lives in*, because the second is what
+decides the first's fate: a whole-context retag pops only tags inside the context's
+own bytes.
+
+| # | site | held across it | allocation | verdict |
+|---|------|----------------|------------|---------|
+| 1 | `encoder_ext.rs` `InitMbInfo` call | `pLayer` | layer `Box` | **CONVERTED** — the body reaches the context for two lookups and nothing else, so its `&mut` asserted an exclusivity it never used. Now `&**ppCtx` |
+| 2 | `encoder_ext.rs:844` `InitSliceInLayer` | `pDqLayer`; `pParam`, `pDlayer`, `pParamInternal` | layer `Box`; `pSvcParam` `Box` | bless |
+| 3 | `encoder_ext.rs` `ctx_dq_idc_map` cursor | `pDqIdc`, written after two later retags | `pDqIdcMap` **Vec buffer** | **CONVERTED** (step 4) — the cursor is gone; three writes commute into one borrow |
+| 4 | `encoder_ext.rs:937` `GenerateNewSps` | `pSps`/`pSubsetSps`, `pDlayerParam`, `pParam` | Vec buffers; param `Box` | bless |
+| 5 | `encoder_ext.rs:964` `InitPps` | same, plus two `as_ref()` arguments in the same call | Vec buffers | bless |
+| 6 | `encoder_ext.rs:1005` `ctx_dq_idc_map` borrow | nothing — scope ends on the brace | Vec buffer | bless (new, and net −1 held) |
+| 7 | `encoder_ext.rs:1027` `UpdateParaSetNum` | the strategy receiver | strategy `Box` | bless |
+| 8 | `encoder_ext.rs:1234` `ResetLtrState` | nothing — minted and consumed in the call | — | bless |
+| 9 | `encoder_ext.rs:1558` `InitFunctionPointers` | `pParamForFuncs`, hoisted by T9.G6 | param `Box` | bless (T9.G6's note) |
+| 10 | `encoder_ext.rs:1582` `WelsRcInitModule` | `iRCMode`, a copied `i32` | stack | bless (T9.G6's note) |
+| 11 | `encoder_ext.rs:1584` `CreatePreProcess` | nothing live | — | bless (T9.G6's note) |
+| 12 | `encoder_ext.rs:1592` `AllocSpatialPictures` | the `pVpp` receiver; `pParamForAlloc` | `pVpp` block; param `Box` | bless (T9.G6's note) |
+| 13 | `encoder_ext.rs:1727` `InitFunctionPointers` | `pParam`, hoisted in place | param `Box` | bless (test) |
+| 14 | `encoder_ext.rs:1756` `ctx_sps` | `ctx_sps_array(pCtx)` as the other argument | Vec buffer | bless (test) |
+| 15 | `encoder_ext.rs:1757` `ctx_pps` | as 14 | Vec buffer | bless (test) |
+| 16 | `encoder_ext.rs:1851` `FreeSpatialPictures` | the `pVpp` receiver | `pVpp` block | bless |
+| 17 | `svc_encode_slice.rs:4136` `&mut *pCtx.pOut` | — | `pOut` block | **not a context retag** — textual match only |
+| 18 | `wels_preprocess.rs:2347` `ctx_ltr_at` | `pSvcParam`; `pParamInternal` is dead by this line | param `Box` | bless |
+| 19 | `wels_encoder_ext.rs:540` `&mut *pCtx.pOut` | arg 1's slice, in `sBsBuffer`'s bytes | `pOut` block, **disjoint ranges** from arg 3's `sBsWrite` retag | **not a context retag** |
+| 20 | `wels_encoder_ext.rs:869` `OutputCurrentStructure` | `sTempEncoderStatistics` (a **copy**), two stack arrays, the strategy receiver | stack; strategy `Box` | bless |
+| 21 | `wels_encoder_ext.rs:2070` `WelsEncoderEncodeParameterSetsRust` | nothing live | — | bless |
+| 22 | `wels_encoder_ext.rs:2292` `ctx_ltr` | **nothing, and that is F171's fix** — `pStatistics` is minted after | — | bless (F171's note) |
+| 23 | `wels_encoder_ext.rs:2600` `FilterLTRRecoveryRequest` | `pLTR_Recover_Request`, from `pOption` | the **C caller's** memory | bless |
+| 24 | `wels_encoder_ext.rs:2606` `FilterLTRMarkingFeedback` | `fb`, from `pOption` | the C caller's memory | bless |
+
+Twenty-three at the open, **twenty-two in production at the close** (two converted,
+one added by step 4's split, net −1). The crate-wide grep reads **25** because F192's
+test adds three at `encoder_context.rs:2404`, `:2464` and `:2475`; all three are the
+test's *subject*, and two of them are the same `&mut *pCtx.pVpp` over-match as rows
+17 and 19.
+
+**Fifteen sites carry a one-line blessing naming what was checked**; four already
+carried T9.G6's hoist note, one carries F171's own explanation, and three are test
+code. The audit is a *reading* — the executable check is the Miri lane, which is what
+found F171 when nine stages of byte gates could not.
+
+
 ### Step 2 — F167's owed Miri: the answer is **not sound**
 
 The four consumers are unreachable (`RequestMemorySvc` refuses
@@ -18770,11 +18816,15 @@ Read all the callers first (S54), and they are not one problem.
   borrow checker now says at the call what Miri used to say at run time — and the
   held-cursor list beside it had a literal `10` in two places that went stale the
   moment it left. Both counts derive from `held.len()` now.
-* **`ctx_frame_bs` (8) and `ctx_frame_bs_cur` (21) — permanent, by the C ABI.** The
-  production callers store the answer into `SLayerBSInfo::pBsBuf`, which is
-  `codec_app_def.h:640` — a public `unsigned char*` in a struct handed to the
-  application. It cannot carry a lifetime, in this phase or any later one. Recorded
-  at both accessors so a later session does not pay S54's cost again.
+* **`ctx_frame_bs` (8) and `ctx_frame_bs_cur` (21) — permanent, by the C ABI.**
+  **Twelve** of their sites store the answer into `SLayerBSInfo::pBsBuf` (3 + 9),
+  which is `codec_app_def.h:640` — a public `unsigned char*` in a struct handed to
+  the application. It cannot carry a lifetime, in this phase or any later one.
+  Recorded at both accessors so a later session does not pay S54's cost again.
+  *(The finding first said "12 of the 21" for `ctx_frame_bs_cur` alone, read off a
+  truncated listing; it is 9 there and 3 in `ctx_frame_bs`. Corrected in place — the
+  verdict does not move, but the nine writer-passes it swept in are a different
+  question and belong to `nal_encap`'s surface, not to this row.)*
 * **`ctx_ltr_at` (26) — 22 want `&mut SLTRState`, 4 cannot have it.** The four are
   `ref_list_mgr_svc.rs:757`, `:1025`, `:1453`, `:1648`, each already carrying T9.G7's
   note. A `&mut`-returning accessor borrows the context for the reference's lifetime,

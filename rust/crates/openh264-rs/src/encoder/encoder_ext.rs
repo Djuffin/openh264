@@ -3269,25 +3269,23 @@ pub unsafe fn WelsEncoderEncodeExt(
     pFbi: *mut SFrameBSInfo,
     pSrcPic: *const SSourcePicture,
 ) -> i32 {
-    // **T9.H3 / F167 — re-stamp the preprocessor's cached context pointer.**
-    // `CWelsPreProcess::m_pEncCtx` is the encoder's one long-lived stored copy of
-    // the context pointer, written once by `CreatePreProcess` at init time and
-    // read back by five screen-path sites that have no other route to the context.
-    // It was sound for exactly as long as nothing minted a `&mut sWelsEncCtx`:
-    // `ctx_ptr` derives with `addr_of_mut!` (T8.B5/S42), so every raw derivation
-    // was a *sibling* under the owning `Box`'s tag, and siblings coexist. The
-    // caller above now takes a `&mut`, which puts a protected `Unique` on this
-    // allocation for the length of the encode and pops every sibling — including
-    // this one. Re-deriving it here, from the live borrow, makes it a *child*
-    // instead, which is the port's own "derive at each use" idiom (F71/S40).
+    // **T9.H3's re-stamp of `CWelsPreProcess::m_pEncCtx` stood here — gone at
+    // T9.H2, because the field is gone (F192).**
     //
-    // This is the interim remedy F167 names, and it is deliberately in the same
-    // commit as the `&mut` that requires it. The end state is to delete the field
-    // and pass the context to its five readers; that is a larger edit than a root
-    // stage should carry, and F167 records it as the follow-on.
-    if !pCtx.pVpp.is_null() {
-        (*pCtx.pVpp).m_pEncCtx = std::ptr::from_mut(pCtx);
-    }
+    // H installed it as the *interim* remedy and said so at the time: "the end
+    // state is to delete the field and pass the context to its five readers; that
+    // is a larger edit than a root stage should carry". That edit has landed. The
+    // five sites were four methods, all of them screen-content, and each takes
+    // `pCtx: &mut sWelsEncCtx` now as ten of their siblings already did.
+    //
+    // Re-deriving the copy from the live borrow was the right call for a root
+    // stage and it was **not sufficient**: re-stamping makes the stored raw a
+    // *child* of the borrow rather than a sibling, which survives the retag — but
+    // it does not survive the *protector*. A reference function argument is
+    // strongly protected for the duration of the call, so a read through any other
+    // tag into that allocation is refused however the tag was derived. Miri says so
+    // in one line, and F192 quotes it. Deleting the field is what actually closes
+    // it, because it removes the second route rather than blessing it.
     let pSvcParam = ctx_param(pCtx);
     // The reconstruction picture the PSNR block measures, **as a handle** — T9.B3.
     // It was `Option<PicPlanes>`, three raw plane roots copied out of the picture
