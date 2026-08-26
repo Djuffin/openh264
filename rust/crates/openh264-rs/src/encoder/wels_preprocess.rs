@@ -1136,7 +1136,7 @@ impl CWelsPreProcess {
     #[allow(unsafe_code)]
     pub unsafe fn BuildSpatialPicList(
         &mut self,
-        pCtx: *mut sWelsEncCtx,
+        pCtx: &mut sWelsEncCtx,
         kpSrcPic: *const SSourcePicture,
         pSpatialNum: *mut i32,
     ) -> i32 {
@@ -1353,10 +1353,10 @@ impl CWelsPreProcess {
 
     // unsafe-cat: port-raw(Phase 9)
     #[allow(unsafe_code)]
-    pub unsafe fn AnalyzeSpatialPic(&mut self, pCtx: *mut sWelsEncCtx, kiDidx: i32) -> i32 {
+    pub unsafe fn AnalyzeSpatialPic(&mut self, pCtx: &mut sWelsEncCtx, kiDidx: i32) -> i32 {
         let pSvcParam = ctx_param(pCtx);
-        let bNeededMbAq = (*pSvcParam).bEnableAdaptiveQuant && ((*pCtx).eSliceType == EWelsSliceType::P_SLICE);
-        let bCalculateBGD = ((*pCtx).eSliceType == EWelsSliceType::P_SLICE) && (*pSvcParam).bEnableBackgroundDetection;
+        let bNeededMbAq = (*pSvcParam).bEnableAdaptiveQuant && (pCtx.eSliceType == EWelsSliceType::P_SLICE);
+        let bCalculateBGD = (pCtx.eSliceType == EWelsSliceType::P_SLICE) && (*pSvcParam).bEnableBackgroundDetection;
         let dIdx = kiDidx as usize;
         let pParamInternal = &(*pSvcParam).sDependencyLayers[dIdx];
         let iCurTemporalIdx = self.m_uiSpatialLayersInTemporal[dIdx] as i32 - 1;
@@ -1368,8 +1368,8 @@ impl CWelsPreProcess {
 
         // T9.G6: hoisted — `ctx_ltr_at` takes the context retag and its own second
         // argument reads through the same context (shape B).
-        let uiDidForLtr = (*pCtx).uiDependencyId as usize;
-        if (*pCtx).uiTemporalId == 0
+        let uiDidForLtr = pCtx.uiDependencyId as usize;
+        if pCtx.uiTemporalId == 0
             && (*ctx_ltr_at(pCtx, uiDidForLtr)).bReceivedT0LostFlag
         {
             iRefTemporalIdx = self.m_uiSpatialLayersInTemporal[dIdx] as i32
@@ -1377,13 +1377,13 @@ impl CWelsPreProcess {
         }
 
         let pCurPic = self.m_pSpatialPic[dIdx][iCurTemporalIdx as usize];
-        let bCalculateVar = ((*pSvcParam).iRCMode as i32 >= RC_BITRATE_MODE) && ((*pCtx).eSliceType == EWelsSliceType::I_SLICE);
+        let bCalculateVar = ((*pSvcParam).iRCMode as i32 >= RC_BITRATE_MODE) && (pCtx.eSliceType == EWelsSliceType::I_SLICE);
 
         if (*pSvcParam).iUsageType == EUsageType::SCREEN_CONTENT_REAL_TIME {
             let pRefPic = self.GetBestRefPicScreen(
                 (*pSvcParam).iUsageType,
-                (*pCtx).bCurFrameMarkedAsSceneLtr,
-                (*pCtx).eSliceType,
+                pCtx.bCurFrameMarkedAsSceneLtr,
+                pCtx.eSliceType,
                 kiDidx,
                 iRefTemporalIdx,
             );
@@ -1427,7 +1427,7 @@ impl CWelsPreProcess {
         }
 
         if crate::encoder::dump_enabled(&VP_DUMP, "OH264_VPDUMP")
-            && (*pCtx).eSliceType == EWelsSliceType::P_SLICE
+            && pCtx.eSliceType == EWelsSliceType::P_SLICE
             && !(*ctx_vaa(pCtx)).pVaaBackgroundMbFlag.is_empty()
             && !(*ctx_vaa(pCtx)).sVaaCalcInfo.pSad8x8.is_empty()
             && !(*ctx_vaa(pCtx)).sVaaCalcInfo.pSumOfDiff8x8.is_empty()
@@ -1462,7 +1462,7 @@ impl CWelsPreProcess {
             }
             eprintln!(
                 "VP st={} sqd={} var={} bgd={} frmsad={} aqavg={} aq={} bg={} sad={} sd={} mad={} ssd={} sum={} sqsum={} scd={}",
-                (*pCtx).eSliceType as i32,
+                pCtx.eSliceType as i32,
                 VP_DUMP_SQD.load(std::sync::atomic::Ordering::Relaxed) as i32,
                 bCalculateVar as i32,
                 bCalculateBGD as i32,
@@ -1544,7 +1544,7 @@ impl CWelsPreProcess {
     #[allow(unsafe_code)]
     pub unsafe fn UpdateSpatialPictures(
         &mut self,
-        pCtx: *mut sWelsEncCtx,
+        pCtx: &mut sWelsEncCtx,
         pParam: *mut SWelsSvcCodingParam,
         iCurTid: i8,
         kiDidx: i32,
@@ -1565,14 +1565,14 @@ impl CWelsPreProcess {
                 self.InitLastSpatialPictures(pCtx);
                 return 1;
             }
-            if (*pCtx).bRefOfCurTidIsLtr[dIdx][iCurTid as usize] {
+            if pCtx.bRefOfCurTidIsLtr[dIdx][iCurTid as usize] {
                 let kiAvailableLtrPos = self.m_uiSpatialLayersInTemporal[dIdx] as usize
                     + (*ctx_vaa(pCtx)).uiMarkLongTermPicIdx as usize;
                 Self::WelsExchangeSpatialPictures(
                     &mut self.m_pSpatialPic[dIdx][kiAvailableLtrPos],
                     &mut self.m_pSpatialPic[dIdx][iCurTid as usize],
                 );
-                (*pCtx).bRefOfCurTidIsLtr[dIdx][iCurTid as usize] = false;
+                pCtx.bRefOfCurTidIsLtr[dIdx][iCurTid as usize] = false;
             }
             Self::WelsExchangeSpatialPictures(
                 &mut self.m_pSpatialPic[dIdx][kiCurPos as usize],
@@ -2669,13 +2669,16 @@ impl CWelsPreProcess {
     #[allow(unsafe_code)]
     pub unsafe fn AnalyzePictureComplexity(
         &mut self,
-        pCtx: *mut sWelsEncCtx,
+        pCtx: &mut sWelsEncCtx,
         pCurPicture: Option<SrcPicId>,
         pRefPicture: Option<RecPicId>,
         kiDependencyId: i32,
         bCalculateBGD: bool,
     ) {
-        if pCtx.is_null() || ctx_param(pCtx).is_null() {
+        // T9.H4: the `is_null()` disjunct that opened this guard is gone — a
+        // `&mut sWelsEncCtx` cannot be null, and every caller now holds one. The
+        // remaining conditions are unchanged.
+        if ctx_param(pCtx).is_null() {
             return;
         }
         let Some(idCur) = pCurPicture else {
@@ -2686,7 +2689,7 @@ impl CWelsPreProcess {
         // *reconstruction* picture (`pCtx->pRefList0[0]`, `encoder_ext.cpp:2662`) —
         // both `SPicture*` in C++, so nothing there says the two arguments come from
         // different owners. S37: each resolved once in its own pool, to geometry.
-        let pRefList = ctx_ref_list(pCtx, (*pCtx).uiDependencyId as usize);
+        let pRefList = ctx_ref_list(pCtx, pCtx.uiDependencyId as usize);
         let sCur = self.m_pSpatialPicPool.get_mut(idCur).planes();
         let sRefPic = pRefPicture.filter(|_| !pRefList.is_null());
         let sRef = sRefPic
@@ -2699,9 +2702,9 @@ impl CWelsPreProcess {
             let sComplexityAnalysisParam = &mut (*pVaaExt).sComplexityScreenParam;
             let pWelsSvcRc = ctx_rc_at(pCtx, kiDependencyId as usize);
 
-            let _iComplexityAnalysisMode = if (*pCtx).eSliceType == EWelsSliceType::P_SLICE {
+            let _iComplexityAnalysisMode = if pCtx.eSliceType == EWelsSliceType::P_SLICE {
                 GOM_SAD
-            } else if (*pCtx).eSliceType == EWelsSliceType::I_SLICE {
+            } else if pCtx.eSliceType == EWelsSliceType::I_SLICE {
                 GOM_VAR
             } else {
                 return;
@@ -2713,7 +2716,7 @@ impl CWelsPreProcess {
             sComplexityAnalysisParam.iFrameComplexity = 0;
             sComplexityAnalysisParam.pGomComplexity = rc_gom_sad(pWelsSvcRc);
             sComplexityAnalysisParam.iGomNumInFrame = (*pWelsSvcRc).iGomSize;
-            sComplexityAnalysisParam.iIdrFlag = if (*pCtx).eSliceType == EWelsSliceType::I_SLICE { 1 } else { 0 };
+            sComplexityAnalysisParam.iIdrFlag = if pCtx.eSliceType == EWelsSliceType::I_SLICE { 1 } else { 0 };
             sComplexityAnalysisParam.iMbRowInGom = GOM_H_SCC;
             sComplexityAnalysisParam.sScrollResult.bScrollDetectFlag = false;
             sComplexityAnalysisParam.sScrollResult.iScrollMvX = 0;
@@ -2733,14 +2736,14 @@ impl CWelsPreProcess {
             let sComplexityAnalysisParam = &mut (*pVaaInfo).sComplexityAnalysisParam;
             let pWelsSvcRc = ctx_rc_at(pCtx, kiDependencyId as usize);
 
-            let iComplexityAnalysisMode = if (*pSvcParam).iRCMode as i32 == RC_QUALITY_MODE && (*pCtx).eSliceType == EWelsSliceType::P_SLICE {
+            let iComplexityAnalysisMode = if (*pSvcParam).iRCMode as i32 == RC_QUALITY_MODE && pCtx.eSliceType == EWelsSliceType::P_SLICE {
                 FRAME_SAD
             } else if (((*pSvcParam).iRCMode as i32 == RC_BITRATE_MODE) || ((*pSvcParam).iRCMode as i32 == RC_TIMESTAMP_MODE))
-                && (*pCtx).eSliceType == EWelsSliceType::P_SLICE
+                && pCtx.eSliceType == EWelsSliceType::P_SLICE
             {
                 GOM_SAD
             } else if (((*pSvcParam).iRCMode as i32 == RC_BITRATE_MODE) || ((*pSvcParam).iRCMode as i32 == RC_TIMESTAMP_MODE))
-                && (*pCtx).eSliceType == EWelsSliceType::I_SLICE
+                && pCtx.eSliceType == EWelsSliceType::I_SLICE
             {
                 GOM_VAR
             } else {
