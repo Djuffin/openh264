@@ -3903,3 +3903,310 @@ The fix is small (skip comment lines, or count only outside them) and it is a
 *ratchet* change, so it needs a rebaseline with the reason recorded — S24's
 clause. Until then, per-file `raw_ptr` deltas of 1–2 on files whose comments
 changed are noise, and sessions should say so when they quote them.
+
+---
+
+## F179 — `SetRefMbType` has been ported since 2026-08-06; F177's third row, the port's own comment, and X2's whole step 3 all say otherwise
+
+**Session X2, step 3, before writing a line.** S68 says to check out the commit a
+finding names and read the line it quotes. F177's third row says:
+
+| field | upstream | this port |
+|---|---|---|
+| `sComplexityAnalysisParam.uiRefMbType` | `SetRefMbType(pCtx, &.., pRefPicture->iPictureType)`, `wels_preprocess.cpp:916` | **`SetRefMbType` was never ported** — permanently null |
+
+**It was ported in `580c678d`, 2026-08-06 — 806 commits before this session's
+HEAD, and before Phase 9 began.** It is `wels_preprocess.rs:2696-2733`, a faithful
+transcription of `wels_preprocess.cpp:811-835` down to the two
+`*pRefMbTypeArray = pRef->uiRefMbType` assignments, and it is *called* at
+`wels_preprocess.rs:2825`, which is upstream's `:916`. `80f9081e` (session H)
+retyped its first parameter, so Phase 9 has edited the function it is said not to
+have.
+
+The port's own doc comment asserts the same falsehood, 2,250 lines above the
+function, in the same file:
+
+> `pBackgroundMbFlag` and `uiRefMbType` stay: ... the second has **no writer in
+> this port at all** — upstream fills it through `SetRefMbType`
+> (`wels_preprocess.cpp:916`), which was never ported.
+
+That comment is `wels_preprocess.rs:443-447`, written by session X. F177 took it
+at face value; X2's brief took F177 at face value and built a step on it ("port
+the 25 lines and restore the field's buffer the way X restored its two
+siblings"), with an expected close verdict of F67 ten → nine.
+
+**Three things follow, and only the first is about this field.**
+
+1. **There is no buffer to restore, and there never was.** `SetRefMbType` takes
+   `uint32_t**` and *assigns a pointer*: it aims the VAA's field at
+   `SPicture::uiRefMbType`, an array the picture pool owns and
+   `picture_handle.cpp:98` allocates. The two siblings X did restore
+   (`pMotionTextureUnit`, `pMotionTextureIndexToDeltaQp`) were `WelsMallocz`'d
+   blocks belonging to `SVAAFrameInfo` itself. The brief generalised from two
+   allocations to a third that is an alias, and F177's own table says "`SetRefMbType
+   (pCtx, &.., ...)`" — the `&` was the tell.
+
+2. **The readers are not dark.** F177 says all three fields sit behind
+   `bEnableAdaptiveQuant = false`. That is true of the first two; `uiRefMbType`'s
+   readers are behind `AnalyzePictureComplexity`'s **RC-mode** gate — `iRCMode` in
+   {QUALITY, BITRATE, TIMESTAMP} with the matching slice type — and `sweep.sh`
+   runs `RCMODES=(-1 0 1 2 3)`. The path has byte coverage today, which is *why*
+   the field is written and read correctly and why 583/583 holds.
+
+3. **F67's `*mut u32` cannot fall by handing over a slice, and the reason is
+   upstream's stickiness.** `SComplexityAnalysisParam` is a persistent member of
+   `SVAAFrameInfo`, and `SetRefMbType` is called only `if (pRefPicture)` — and,
+   inside, assigns only if a reference in the list qualifies. On a frame with no
+   usable reference the field **keeps the previous frame's pointer** and the GOM_VAR
+   reader dereferences it. Passing `Option<&[u32]>` computed per call, the way T9.X
+   passed the two GOM arrays, would send `None` exactly where upstream reads stale
+   data, which is a behaviour change no byte gate on the `bg` preset would let
+   through quietly. Storing a persistent `SrcPicId` instead is not equivalent
+   either: pictures are recycled, so a stale id resolves to a *different* buffer
+   than a stale pointer does. This is a real conversion with a real hazard, not
+   the twenty-five lines the brief costed it at.
+
+**Expected ten, measured ten** (S60): the probe at the close returns the same
+count as X's, because nothing in step 3 was ever going to move it.
+
+**The general point, which is F86's and S68's, one level deeper.** F86 cost two
+briefs because they inherited a citation. This cost a step because a *comment*
+asserted a negative about the tree it lives in — and a negative about your own
+tree is the cheapest claim in the world to check and the easiest to write without
+checking. `grep -n 'fn SetRefMbType'` was the whole audit.
+
+---
+
+## F180 — `WelsUnloadNal`'s caller enumeration was four short, in a file nobody grepped
+
+**Session X2, step 1.** X adjudicated `WelsUnloadNal` as not a C-ABI boundary and
+recorded the evidence in the source:
+
+> It carries no export attribute, it is installed into no dispatch slot, and its
+> five callers are all Rust (`encoder_ext.rs:2254`, `:2263`, `:2318`, `:3161`,
+> `:3606`).
+
+There are **nine**. X's list misses `encoder_ext.rs:3814` and all three in
+`wels_encoder_ext.rs` (`:404`, `:442`, `:541`) — a whole second file. The brief
+repeats "five Rust callers" as X's evidence.
+
+**The verdict is unaffected**, which is the point worth recording: all nine are
+ordinary Rust calls, so `extern "C"` really was a vestige and X2 dropped it. But
+the claim being carried was *"all its callers are Rust"*, and that is a universal
+over a set the enumeration did not close. Had the tenth caller been an
+`extern "C"` shim in the file that was not grepped, the conclusion would have been
+wrong and the evidence would have looked exactly the same.
+
+S64 already says to enumerate types outward. This says the same thing about
+call sites: an enumeration that names a file is evidence about that file.
+
+---
+
+## F181 — `_pLogCtx` was not a dead parameter; eight `WelsLog` calls were missing, and the brief's instruction was to delete the evidence
+
+**Session X2, step 1, `au_set.rs`.** The brief's instruction:
+
+> the two `_pLogCtx: *mut SLogContext` parameters are unused by name — S54: read
+> every caller, then **delete** the dead parameters rather than retype them.
+
+Read the reference first and the underscore means the opposite of what it looks
+like. `WelsBitRateVerification` (`encoder_ext.cpp:74`) logs through that context
+**six** times; `WelsCheckNumRefSetting` (`au_set.cpp:88`) logs **twice**. Eight
+messages, and every one of them narrates a parameter the function silently
+*rewrites*: an invalid bitrate rejected, `iMaxSpatialBitrate` replaced from the
+level table, `uiLevelIdc` moved under it, `iLTRRefNum` reset, `iNumRefFrame`
+reset. The port performs every one of those rewrites and announced none of them.
+
+Deleting the parameter would have removed the last trace of the omission and made
+the gap unrecoverable without a diff against the reference.
+
+**Restored in X2**, and the log referee measured the result: before this session
+the port emitted **one** of the reference's nineteen messages on the fixed row;
+after `TraceParamInfo` (F100) and these eight, it emits **nine, character for
+character identical**.
+
+**The rule.** F177 said: grep the reference's *writer* before believing a field is
+inert. This is the same sentence with "parameter" for "field". An unused name is
+evidence about the tree you are reading and about nothing else; whether it was
+*supposed* to be used is a question only the other tree can answer. Three
+consecutive sessions have now been caught by some form of this, on a field
+(F177), on a name collision (D-dead-6's three `pGomComplexity`s) and on a
+parameter (here).
+
+---
+
+## F182 — `TraceParamInfo` has four call sites upstream and had three here, and the port's own doc pointed at `GetOption`
+
+**Session X2, step 2.** Two errors that survived because the function's body was
+empty and nothing downstream could notice.
+
+1. **A missing call site.** `welsEncoderExt.cpp` calls `TraceParamInfo` at `:202`,
+   `:229`, `:334` **and `:796`** — the last inside
+   `case ENCODER_OPTION_SVC_ENCODE_PARAM_EXT`, immediately after the parameter
+   block is copied and *before* the spatial-layer check that may reject it, so a
+   caller whose settings are about to be refused still gets them echoed. The port
+   had the first three. X2's brief lists "`:202/:229/:334` — the init/SetOption
+   paths", which is where the omission was inherited rather than found.
+2. **A citation to the wrong function.** The port's doc comment said
+   "`welsEncoderExt.cpp:1197` dumps the whole parameter block". `:1197` is inside
+   `CWelsH264SVCEncoder::GetOption`. `TraceParamInfo` is at `:505`.
+
+Both fixed here. Neither could have been caught by any gate in this repo before
+`log_referee.sh` existed, which is the argument for it in one sentence: the
+encoder had a *stub with three of its four callers wired to it and a doc pointing
+at a different function*, and every gate was green.
+
+---
+
+## F183 — `pCurPath` is a third field of D-dead-3's shape: written in both trees, read in neither
+
+**Session X2, step 1, `param_svc.rs`.** The file's one raw site is
+`pCurPath: *mut c_char` (`param_svc.h:118` upstream), the library path a caller
+hands in through `SetOption(ENCODER_OPTION_CURRENT_PATH)`.
+
+The whole of `codec/` touches it three times: the declaration (`:118`), the null
+in the constructor (`:228`) and the store in `welsEncoderExt.cpp:1076`. **No
+read.** This port has the same three (`param_svc.rs:251`, `:309`, `:489` and
+`wels_encoder_ext.rs:2489`) and likewise never reads it.
+
+That is `pGomCost` (D-dead-3) and `pGomComplexity` (D-dead-6) a third time, and it
+is **filed rather than executed** for two reasons. Each of those two was a
+*ruling*, not an inference a session made on its own. And this one is not
+identical to them: deleting it also deletes a store that sits behind a documented,
+C-ABI-visible option id, so `SetOption(ENCODER_OPTION_CURRENT_PATH)` would go from
+"stores a pointer nobody reads" to "succeeds and does nothing". Observably the
+same, formally not — which is exactly the kind of distinction the steward has
+been ruling on.
+
+Meanwhile the field stays raw and X2 documented why: the value is a C string the
+*caller* owns, stored verbatim as upstream stores it. An owned `CString` would
+copy a buffer the reference does not copy. F166's shape — a permanent raw site
+inside a file the session otherwise converts.
+
+**And it is worth more than a tidy-up: `pCurPath` is one of F67's ten.** It is
+`SWelsSvcCodingParam`'s *only* raw member, and `c_char` is `i8` on this target, so
+it is exactly the `*mut i8` row F164 attributes to `SWelsSvcCodingParam` — the one
+labelled "Phase 8's". Deleting it takes `sWelsEncCtx`'s `!Sync` count **ten to
+nine**.
+
+That is the number X2's brief predicted for this session, by a route that never
+existed (step 3, F179). The route that does exist is a five-line deletion of a
+field nobody reads, in a file the brief listed as `0 unsafe fn / 1 raw` and
+expected to be trivia.
+
+---
+
+## F184 — the port's `WELS_LOG_*` levels are consecutive integers where the reference's are a bit mask, in five places, and the level reaches the caller's own callback
+
+**Session X2, step 2 — found by `log_referee.sh` on its first run**, which is the
+whole reason it was built.
+
+`codec_app_def.h:323-331`:
+
+```c
+WELS_LOG_QUIET   = 0x00,      WELS_LOG_ERROR  = 1 << 0,   WELS_LOG_WARNING = 1 << 1,
+WELS_LOG_INFO    = 1 << 2,    WELS_LOG_DEBUG  = 1 << 3,   WELS_LOG_DETAIL  = 1 << 4,
+WELS_LOG_RESV    = 1 << 5,    WELS_LOG_DEFAULT = WELS_LOG_WARNING
+```
+
+The port (`common/wels_trace.rs:56-63`, citing that exact line range):
+
+```rust
+QUIET 0, ERROR 1, WARNING 2, INFO 3, DEBUG 4, DETAIL 5
+```
+
+`ERROR` and `WARNING` agree by coincidence — `1 << 0` and `1 << 1` are 1 and 2.
+Everything above them diverges: **INFO is 4 upstream and 3 here, DEBUG is 8
+upstream and 4 here**, so the port's `DEBUG` is bit-identical to the reference's
+`INFO`. Measured, not reasoned: on the referee's fixed row the reference delivers
+levels `{2, 4}` and the port delivers `{3}` for the same messages.
+
+**It is C-ABI-visible in both directions.**
+
+* The level is the **second argument of the caller's own trace callback**. An
+  application that switches on `WELS_LOG_INFO` from the real header sees the
+  port's DEBUG messages as INFO, and the port's INFO messages as a value the
+  header does not define.
+* It is the value `SetOption(ENCODER_OPTION_TRACE_CALLBACK, ...)`'s companion
+  `ENCODER_OPTION_TRACE_LEVEL` is compared against, and the comparison is a
+  threshold (`m_iTraceLevel < iLevel`, `welsCodecTrace.cpp:76`). Asking the
+  reference for `4` admits ERROR, WARNING, INFO. Asking this port for `4` admits
+  ERROR, WARNING, INFO **and DEBUG**, and not DETAIL. Different sets from the same
+  documented request.
+
+**The definitions are duplicated five times** and all five are wrong the same way:
+`common/wels_trace.rs`, `decoder/decoder_core.rs`, `decoder/decode_slice.rs`,
+`decoder/manage_dec_ref.rs`, and — the one that matters most —
+`tests/trace_callback_test.rs:41`, which hardcodes `const WELS_LOG_INFO: i32 = 3`
+and cites `codec_app_def.h:323`. **The test enshrines the wrong value**, so the
+port has a green test asserting the divergence is correct.
+
+**Why no gate has ever seen it.** The levels never touch a bitstream, so the
+sweeps and the benches are blind; the ratchet counts pointers; Miri interprets
+memory; `gtest_stretch.sh` links `test/api`, which does not assert on trace
+levels. The only instrument that can see it is a second encoder logging the same
+run, which is what the referee is.
+
+**Not fixed here, and the reason is scope rather than difficulty.** The fix is
+mechanical — the values are 1, 2, 4, 8, 16, 32, the `<` threshold keeps working
+because they stay monotonic, and nothing does arithmetic on them. But it spans
+**encoder and decoder**, it changes behaviour visible to any caller of the
+cdylib, and this session's lane is the encoder's `other` family. Every ABI-visible
+divergence in this phase has been a ruling (D-poc-1, D-fid-2, D-fid-3, D-scr-1).
+This one wants the same, and it should land as one commit touching all five
+definitions plus the test, with the referee's level check as its acceptance.
+
+---
+
+## F185 — the session battery is over D-gate-6's 15-minute cap, and the smoke is not why
+
+**Session X2, the close.** D-gate-6 (the user, 2026-08-24) caps the whole
+`session` level at fifteen minutes — "even if we need to reduce the amount of
+tests that we run" — and the level was re-architected into a native lane and a
+parallel Miri lane to meet it.
+
+X2's close, measured end to end: **977 s = 16 min 17 s. Over the cap by 77 s.**
+
+**The smoke this session added is not the cause.** It reports its own wall and it
+was **9 s** against a self-enforced 60 s budget. 977 − 9 = 968 s, still over. The
+battery was already past 900 s before D-fid-3 touched it.
+
+Where the time goes, from the same run's own numbers:
+
+| step | wall |
+|---|---:|
+| miri lane (parallel, 4 shards, encoder scope) | 480 s |
+| sweep (debug) | 47 s |
+| sweep (release) | 40 s |
+| gtest simulcast smoke | 9 s |
+| **the rest** — `cargo build --all-targets`, `cargo test` x2, ratchet, census | **~400 s** |
+
+The Miri lane at 480 s is *below* the previous close's 507 s (S61 ratio 0.95), so
+the regression is not there. It is the native lane, and specifically the two
+`cargo test` runs: the same steps measured ~4 minutes in this session's earlier
+`family` runs and visibly longer under the session level, because the Miri lane's
+compile and five interpreters are taking cores from them. **The parallelism that
+made the cap reachable is also what makes the native lane slower**, and D-gate-6's
+own comment predicts the trade without pricing it.
+
+Three honest options, none of them a session's to pick:
+
+1. **Accept 16 minutes** and restate the cap. The number the ruling was reacting
+   to was ~40 minutes; the level is now 40% over a round number rather than
+   160% over.
+2. **Shrink the native lane at `session`.** The obvious candidate is the debug
+   `cargo test` run: the integration suite runs in both profiles and a type error
+   is profile-independent (`gates.sh`'s own argument for why the `--all-targets`
+   build is debug-only). Dropping *one* profile's integration tests at `session`
+   would take roughly 150-200 s, and it is exactly the kind of coverage cut
+   D-cov-1 says must be named out loud.
+3. **Cap the lanes rather than the level**, so the number the ruling governs stops
+   depending on how well two lanes share eight cores.
+
+Filed rather than acted on: it is a change to the gate the user ruled on, and
+this session's mandate for the gate was to *add* a smoke to it, not to re-cut it.
+
+**Instrument caveat, inherited**: F170 already says `run_sweep` and `s61_report`
+time with `date +%s`, so every number above is wall and not CPU, and an idle or
+busy machine moves them. That fix is J's, and it matters more now that a ruling
+turns on a wall-clock threshold.

@@ -18321,3 +18321,182 @@ F166's permanently-raw object, `nal_encap.rs`'s `bs_buffer`/`dst` glue,
 `nal_encap` MT adjudication, because the report owed it: both production tags are
 fork-reachable (`WelsLoadNalForSlice <- EncodeOneSliceInJob <- fork seed`), so they
 are the seam's and H2's; the third was on a test and is retagged `C-ABI(test)`.
+
+---
+
+# Phase 9, session X2 — the `other` family's close
+
+*The two rulings executed, the gtest gate alive again after five sessions, and a
+new instrument that found a C-ABI divergence on its first run. Steps 0a, 0b and 2
+complete; step 1 partial and named; step 3 dissolved into F179.*
+
+## Metrics, live at both ends (§7.1)
+
+`unsafe_ratchet.sh report`, session-relative (the report's own delta column is
+Phase-9-baseline-relative — the fifth session running to say so):
+
+| metric | X2 open | X2 close | session delta |
+|---|---:|---:|---:|
+| `raw_ptr` | 1369 | 1365 | **-4** |
+| `unsafe_fn` | 601 | 600 | **-1** |
+| `unsafe_block` | 268 | 267 | -1 |
+| `shim` | 32 | 32 | 0 |
+| `mem_zeroed` / `transmute` / `unsafe_impl` / `no_mangle` | 16/4/3/10 | 16/4/3/10 | 0 |
+
+**The ratchet barely moved and that is the honest headline of the numbers.** All
+four counts come from one deletion (`vlc_encoder.rs`'s dead `CavlcParamCal_c`: one
+`unsafe extern "C" fn`, its four raw parameters, its block). Nothing else this
+session was a conversion: two rulings executed, a dead gate revived, eight
+missing log calls *added* to the source, and three defects found. A session can
+be worth having and move this table by four.
+
+## The headline: the brief was wrong twice, in the same way, and both were fatal to a step
+
+X2's brief carried two structural defects, and they are the *same* defect:
+**a thing absent from this tree was read as a thing that was never supposed to be
+here, without asking the reference.**
+
+1. **Step 3 (F179).** "`SetRefMbType` was never ported ... port the 25 lines and
+   restore the field's buffer." It was ported on **2026-08-06**, 806 commits
+   before this session's HEAD and before Phase 9 began (`580c678d`), and session H
+   edited it (`80f9081e`). The claim came from a comment session X wrote at
+   `wels_preprocess.rs:443-447` — 2,250 lines above the function, in the same
+   file — which F177 quoted and the brief inherited. Step 3 had nothing to do.
+2. **Step 1 (F181).** "the two `_pLogCtx` parameters are unused by name — S54:
+   read every caller, then **delete** the dead parameters." Upstream logs through
+   that context **eight** times across the two functions. The parameters were not
+   dead; the `WelsLog` calls were missing. Deleting them would have erased the
+   last evidence of the gap.
+
+S68 was minted last session for exactly this and it worked both times: check out
+the commit, read the line. What it did not cover, and what this session adds, is
+that **a comment asserting a negative about its own tree is the cheapest claim
+there is to check and the easiest to write without checking**.
+
+## What landed
+
+### Step 0a — D-fid-3, and the gate that could not see it
+
+`GetRefMb`'s index is clamped to the base layer's last record where upstream's
+2:1 invariant breaks (`svc_mode_decision.rs:1483`), documented at the site as a
+divergence. **`gtest_stretch.sh --check` completes for the first time since
+session E3: `gtest: 191/199, allowlist 8`** — Phase 8b's close exactly.
+`EncodeDecodeTestAPI.SimulcastAVC_SPS_PPS_LISTING` **passes**; no allowlist row
+was needed and the allowlist did not grow.
+
+A filtered smoke (`EncodeDecodeTestAPI.Simulcast*`, **9 s** against a self-enforced
+60 s budget) joins `session` and `full`, in the **native lane**. S66 both ways,
+both recorded: clean tree rc 0 / `4/4`; clamp reverted rc 1 / abort / no tally.
+
+### Step 0b — D-dead-6
+
+`SWelsSvcRc::pGomComplexity` deleted whole. Four code sites plus two comments;
+pin 416 -> 392, expected and measured.
+
+> **Correction to this session's own commit `896896fd`.** Its message says "Five
+> safe sites, not the four the brief counts ... the brief's list omits it" of the
+> per-frame `fill(0.0)`. **That is false and the brief is right.** The brief lists
+> four safe sites and names `:1569` among them explicitly; what happened is that
+> *this session's* first patch omitted the site, the build caught it, and the
+> omission was then written up as the brief's. Left in place rather than rebased
+> — the record of a wrong claim plus its correction is worth more than a tidy
+> history — but the commit message should be read with this beside it. Ironic
+> given F179 and F181: the session's own defect is the same one it was auditing,
+> a claim about another document made without re-reading it. The grep that makes it safe is not the one on
+the name: sixteen hits in `codec/`, twelve of them a *different* struct's
+identically-named live field, aimed at a *third* field again.
+
+### Step 1 — the scalars, partial and named
+
+| file | done | left |
+|---|---|---|
+| `vlc_encoder.rs` | dead duplicate `CavlcParamCal_c` **deleted** — no caller anywhere; the live kernel is `svc_set_mb_syn_cavlc.rs:209` | — |
+| `param_svc.rs` | `pCurPath` documented as permanently raw (caller-owned C string) + **F183** | — |
+| `picture.rs` | `ref_mb_type_root`'s "(step 3's)" struck; tags were already precise | — |
+| `au_set.rs` | **eight missing `WelsLog` calls restored** (F181); `_pLogCtx`/`_iLayerId` live | the raw parameter conversions |
+| `nal_encap.rs` | `WelsUnloadNal` de-externed; caller count corrected 5 -> 9 (**F180**) | `bs_buffer`, `WelsEncodeNal`'s `dst` |
+| `wels_trace.rs` | — (its raws are C-ABI; the work it produced is **F184**) | `WelsLog`'s context parameter |
+| `paraset_strategy.rs` | **not started** | all of it |
+
+### Step 2 — F100 and the log referee
+
+`TraceParamInfo` (`welsEncoderExt.cpp:505` — the port's doc said `:1197`, which is
+inside `GetOption`) and `LogStatistics` (`:569`) ported into the two empty bodies,
+plus the port's **missing fourth `TraceParamInfo` call site** (upstream `:796`,
+the `SVC_ENCODE_PARAM_EXT` arm; the brief lists three). **F182.**
+
+`rust/tools/diffharness/log_referee.sh` — both drivers register a capturing trace
+callback via `SetOption(ENCODER_OPTION_TRACE_CALLBACK/_CONTEXT/_TRACE_LEVEL)`
+under `OH264_TRACE_LOG`, one fixed `dl` row, seven named normalizations, a named
+gap list on `gtest_known_failures.txt`'s contract (unowned difference fails, stale
+row fails, an *extra* port message is never allowlisted), loud per S58.
+
+**What it measured on its first run: 19 reference messages, 9 from the port —
+and before this session's work, 1.** The nine are character-for-character
+identical. And it found **F184**.
+
+## F184 — what the referee found
+
+The reference's `WELS_LOG_*` are a bit mask (`INFO = 1 << 2 = 4`); this port
+defines them as consecutive integers (`INFO = 3`, `DEBUG = 4`), in **five**
+places, one of which is `tests/trace_callback_test.rs` — so the port has a green
+test asserting the wrong value. The level is the second argument of the caller's
+own callback and the threshold `ENCODER_OPTION_TRACE_LEVEL` is compared against,
+so it is C-ABI-visible in both directions. **Not fixed**: it spans encoder and
+decoder, and every ABI-visible divergence in this phase has been a ruling.
+
+## F67's probe: ten, and expected ten
+
+Re-run at the close. **Expected ten, measured ten** (S60) — and the expectation
+was revised *before* the run, not after: the brief predicted nine on step 3's
+premise, and F179 dissolved that premise. `SVAAFrameInfo`'s `*mut`-u32 does not
+fall by handing over a slice, because upstream's field is **sticky across frames**
+and a per-call `Option<&[u32]>` would send `None` exactly where upstream reads the
+previous frame's pointer.
+
+## The close gate
+
+`MIRI_SCOPE=encoder gates.sh session`, **OVERALL: PASS**.
+
+| | |
+|---|---|
+| sweeps | 583/583 both profiles (47 s debug, 40 s release) |
+| gtest simulcast smoke | **PASS 4/4, allowlist 8, 9 s** against its 60 s budget — the wiring, not just the script |
+| miri (4 shards, encoder scope) | **291 passed / 0 failed**, wall **480 s** vs X's **507 s**, **S61 ratio 0.95** — lane-vs-lane, the smoke is in the native lane by design |
+| ratchet / census | no per-file increase; 56 allowlisted |
+| **battery total** | **977 s = 16 min 17 s — over D-gate-6's 15-minute cap by 77 s (F185)** |
+
+The overrun is filed rather than fixed. **The smoke is not the cause**: 977 − 9 =
+968 s is still over, so the battery was already past 900 s before D-fid-3 touched
+it. The Miri lane is *below* the previous close; the time is in the native lane's
+two `cargo test` runs, which are slower at `session` than at `family` precisely
+because five Miri interpreters are taking cores from them. Re-cutting a gate the
+user ruled on is not a session's call.
+
+## Deferred, named (S60/F143)
+
+* **`paraset_strategy.rs`** (14 unsafe fn / 30 raw, minus `ParasetStrategy`
+  itself) — step 1's largest file, not started.
+* **`au_set.rs`'s raw parameters** and **`nal_encap.rs`'s `bs_buffer` /
+  `WelsEncodeNal` slice conversions** — the log restoration took the file's
+  session budget.
+* **`wels_trace.rs`'s `WelsLog(pLogCtx: *mut SLogContext, ..)`** — 43 call sites.
+
+**These are step 1's remainder and step 1 was "never dropped".** It is named
+here rather than quietly re-scoped; the brief's own rule is that a second
+deferral needs the user's sign-off, and this is the first for these items.
+
+## What H2 inherits
+
+Unchanged from X's list, and **nothing added**: the in-fork read surface, the 5
+slice-returning accessor APIs, S67's audit of the 24 out-of-family retags, F167's
+owed Miri, and `nal_encap.rs`'s two seam MT tags (`:361`, `:393` — untouched).
+
+## What J inherits
+
+X's list, plus: **F184's ruling** (five definition sites plus the test, one
+commit, the referee's level check as acceptance), **F183's ruling** (`pCurPath`,
+D-dead-3's shape a third time), and the ten `ParamValidationExt` /
+`WelsInitEncoderExt` trace messages the referee's gap list now names and owns —
+two of which are permanent (this port has no `CMemoryAlign` running total to
+print).
