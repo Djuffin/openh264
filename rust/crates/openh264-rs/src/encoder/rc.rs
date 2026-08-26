@@ -683,7 +683,7 @@ impl SWelsRcFunc {
     #[inline]
     // unsafe-cat: port-raw(Phase 9)
     #[allow(unsafe_code)]
-    pub unsafe fn WelsUpdateBufferWhenSkip(self, pCtx: *mut sWelsEncCtx, iSpatialNum: i32) {
+    pub unsafe fn WelsUpdateBufferWhenSkip(self, pCtx: &mut sWelsEncCtx, iSpatialNum: i32) {
         match self.eInstalledMode {
             RCMode::RC_BITRATE_MODE
             | RCMode::RC_BITRATE_MODE_POST_SKIP
@@ -1841,7 +1841,7 @@ pub unsafe extern "C" fn CheckFrameSkipBasedMaxbr(
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe fn WelsRcCheckFrameStatus(
-    pEncCtx: *mut sWelsEncCtx,
+    pEncCtx: &mut sWelsEncCtx,
     uiTimeStamp: i64,
     iSpatialNum: i32,
     iCurDid: i32,
@@ -1878,7 +1878,7 @@ pub unsafe fn WelsRcCheckFrameStatus(
         }
     } else {
         for i in 0..iSpatialNum as usize {
-            let iDidIdx = (*pEncCtx).sSpatialIndexMap[i].iDid;
+            let iDidIdx = pEncCtx.sSpatialIndexMap[i].iDid;
             (*ctx_func_list(pEncCtx))
                 .pfRc
                 .WelsRcPicDelayJudge(pEncCtx, uiTimeStamp, iDidIdx);
@@ -1904,7 +1904,7 @@ pub unsafe fn WelsRcCheckFrameStatus(
 
         if bSkipMustFlag {
             for i in 0..iSpatialNum as usize {
-                let iDidIdx = (*pEncCtx).sSpatialIndexMap[i].iDid;
+                let iDidIdx = pEncCtx.sSpatialIndexMap[i].iDid;
                 let pRc = ctx_rc_at(pEncCtx, iDidIdx as usize);
                 (*pRc).uiLastTimeStamp = uiTimeStamp;
                 (*pRc).bSkipFlag = false;
@@ -1946,18 +1946,18 @@ pub unsafe extern "C" fn UpdateBufferWhenFrameSkipped(pEncCtx: *mut sWelsEncCtx,
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe extern "C" fn UpdateMaxBrCheckWindowStatus(
-    pEncCtx: *mut sWelsEncCtx,
+    pEncCtx: &mut sWelsEncCtx,
     iSpatialNum: i32,
     uiTimeStamp: i64,
 ) {
-    if (*pEncCtx).bCheckWindowStatusRefreshFlag {
-        (*pEncCtx).iCheckWindowCurrentTs = uiTimeStamp;
+    if pEncCtx.bCheckWindowStatusRefreshFlag {
+        pEncCtx.iCheckWindowCurrentTs = uiTimeStamp;
     } else {
-        (*pEncCtx).iCheckWindowCurrentTs = uiTimeStamp;
-        (*pEncCtx).iCheckWindowStartTs = uiTimeStamp;
-        (*pEncCtx).bCheckWindowStatusRefreshFlag = true;
+        pEncCtx.iCheckWindowCurrentTs = uiTimeStamp;
+        pEncCtx.iCheckWindowStartTs = uiTimeStamp;
+        pEncCtx.bCheckWindowStatusRefreshFlag = true;
         for i in 0..iSpatialNum as usize {
-            let iCurDid = (*pEncCtx).sSpatialIndexMap[i].iDid as usize;
+            let iCurDid = pEncCtx.sSpatialIndexMap[i].iDid as usize;
             let pRc = ctx_rc_at(pEncCtx, iCurDid);
             (*pRc).iBufferFullnessSkip = 0;
             (*pRc).iBufferMaxBRFullness[ODD_TIME_WINDOW] = 0;
@@ -1967,15 +1967,15 @@ pub unsafe extern "C" fn UpdateMaxBrCheckWindowStatus(
         }
     }
 
-    (*pEncCtx).iCheckWindowInterval =
-        ((*pEncCtx).iCheckWindowCurrentTs - (*pEncCtx).iCheckWindowStartTs) as i32;
+    pEncCtx.iCheckWindowInterval =
+        (pEncCtx.iCheckWindowCurrentTs - pEncCtx.iCheckWindowStartTs) as i32;
 
-    if (*pEncCtx).iCheckWindowInterval >= (TIME_CHECK_WINDOW >> 1)
-        && !(*pEncCtx).bCheckWindowShiftResetFlag
+    if pEncCtx.iCheckWindowInterval >= (TIME_CHECK_WINDOW >> 1)
+        && !pEncCtx.bCheckWindowShiftResetFlag
     {
-        (*pEncCtx).bCheckWindowShiftResetFlag = true;
+        pEncCtx.bCheckWindowShiftResetFlag = true;
         for i in 0..iSpatialNum as usize {
-            let iCurDid = (*pEncCtx).sSpatialIndexMap[i].iDid as usize;
+            let iCurDid = pEncCtx.sSpatialIndexMap[i].iDid as usize;
             let pRc = ctx_rc_at(pEncCtx, iCurDid);
             if (*pRc).iBufferMaxBRFullness[ODD_TIME_WINDOW] > 0
                 && (*pRc).iBufferMaxBRFullness[ODD_TIME_WINDOW] != (*pRc).iBufferMaxBRFullness[0]
@@ -1988,20 +1988,20 @@ pub unsafe extern "C" fn UpdateMaxBrCheckWindowStatus(
         }
     }
 
-    (*pEncCtx).iCheckWindowIntervalShift =
-        if (*pEncCtx).iCheckWindowInterval >= (TIME_CHECK_WINDOW >> 1) {
-            (*pEncCtx).iCheckWindowInterval - (TIME_CHECK_WINDOW >> 1)
+    pEncCtx.iCheckWindowIntervalShift =
+        if pEncCtx.iCheckWindowInterval >= (TIME_CHECK_WINDOW >> 1) {
+            pEncCtx.iCheckWindowInterval - (TIME_CHECK_WINDOW >> 1)
         } else {
-            (*pEncCtx).iCheckWindowInterval + (TIME_CHECK_WINDOW >> 1)
+            pEncCtx.iCheckWindowInterval + (TIME_CHECK_WINDOW >> 1)
         };
 
-    if (*pEncCtx).iCheckWindowInterval >= TIME_CHECK_WINDOW || (*pEncCtx).iCheckWindowInterval == 0
+    if pEncCtx.iCheckWindowInterval >= TIME_CHECK_WINDOW || pEncCtx.iCheckWindowInterval == 0
     {
-        (*pEncCtx).iCheckWindowStartTs = (*pEncCtx).iCheckWindowCurrentTs;
-        (*pEncCtx).iCheckWindowInterval = 0;
-        (*pEncCtx).bCheckWindowShiftResetFlag = false;
+        pEncCtx.iCheckWindowStartTs = pEncCtx.iCheckWindowCurrentTs;
+        pEncCtx.iCheckWindowInterval = 0;
+        pEncCtx.bCheckWindowShiftResetFlag = false;
         for i in 0..iSpatialNum as usize {
-            let iCurDid = (*pEncCtx).sSpatialIndexMap[i].iDid as usize;
+            let iCurDid = pEncCtx.sSpatialIndexMap[i].iDid as usize;
             let pRc = ctx_rc_at(pEncCtx, iCurDid);
             if (*pRc).iBufferMaxBRFullness[EVEN_TIME_WINDOW] > 0 {
                 (*pRc).bNeedShiftWindowCheck[ODD_TIME_WINDOW] = true;
@@ -2209,19 +2209,19 @@ pub unsafe fn RcCalculateCascadingQp(pEncCtx: *mut sWelsEncCtx, iQp: i32) -> i32
 
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
-pub unsafe extern "C" fn WelsRcPictureInitGom(pEncCtx: *mut sWelsEncCtx, uiTimeStamp: i64) {
-    let did = (*pEncCtx).uiDependencyId as usize;
+pub unsafe extern "C" fn WelsRcPictureInitGom(pEncCtx: &mut sWelsEncCtx, uiTimeStamp: i64) {
+    let did = pEncCtx.uiDependencyId as usize;
     let pWelsSvcRc = ctx_rc_at(pEncCtx, did);
     let kiSliceNum = (*current_layer(pEncCtx)).iMaxSliceNum;
     (*pWelsSvcRc).iContinualSkipFrames = 0;
 
-    if (*pEncCtx).eSliceType as i32 == I_SLICE && (*pWelsSvcRc).iIdrNum == 0 {
+    if pEncCtx.eSliceType as i32 == I_SLICE && (*pWelsSvcRc).iIdrNum == 0 {
         RcInitRefreshParameter(pEncCtx);
     }
     if RcJudgeBitrateFpsUpdate(pEncCtx) {
         RcUpdateBitrateFps(pEncCtx);
     }
-    if (*pEncCtx).uiTemporalId == 0 {
+    if pEncCtx.uiTemporalId == 0 {
         RcUpdateTemporalZero(pEncCtx);
     }
     if (*ctx_param(pEncCtx)).iRCMode == RCMode::RC_TIMESTAMP_MODE {
@@ -2233,14 +2233,14 @@ pub unsafe extern "C" fn WelsRcPictureInitGom(pEncCtx: *mut sWelsEncCtx, uiTimeS
 
     if kiSliceNum > 1
         || ((*ctx_param(pEncCtx)).iRCMode == RCMode::RC_BITRATE_MODE
-            && (*pEncCtx).eSliceType as i32 == I_SLICE)
+            && pEncCtx.eSliceType as i32 == I_SLICE)
     {
         (*pWelsSvcRc).bEnableGomQp = 0;
     } else {
         (*pWelsSvcRc).bEnableGomQp = 1;
     }
 
-    if (*pEncCtx).eSliceType as i32 == I_SLICE {
+    if pEncCtx.eSliceType as i32 == I_SLICE {
         RcCalculateIdrQp(pEncCtx);
     } else {
         RcCalculatePictureQp(pEncCtx);
@@ -2253,8 +2253,8 @@ pub unsafe extern "C" fn WelsRcPictureInitGom(pEncCtx: *mut sWelsEncCtx, uiTimeS
             "RCF st={} gqp={} tgt={} rem={} bpf={} maxbpf={} bpmb={} remw={} \
              idr={} gomqp={} minfq={} maxfq={} minq={} maxq={} nmbf={} nmbg={} gsz={} \
              gidx={} gnum={} fcv={} iq={} qs={} lcq={} icx={} icm={} imc={} skip={} bfs={} cbl={}",
-            (*pEncCtx).eSliceType as i32,
-            (*pEncCtx).iGlobalQp,
+            pEncCtx.eSliceType as i32,
+            pEncCtx.iGlobalQp,
             r.iTargetBits,
             r.iRemainingBits,
             r.iBitsPerFrame,
@@ -2294,14 +2294,14 @@ static RC_MB_DUMP: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
 
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
-pub unsafe extern "C" fn WelsRcPictureInfoUpdateGom(pEncCtx: *mut sWelsEncCtx, iLayerSize: i32) {
-    let did = (*pEncCtx).uiDependencyId as usize;
+pub unsafe extern "C" fn WelsRcPictureInfoUpdateGom(pEncCtx: &mut sWelsEncCtx, iLayerSize: i32) {
+    let did = pEncCtx.uiDependencyId as usize;
     let pWelsSvcRc = ctx_rc_at(pEncCtx, did);
     let iCodedBits = iLayerSize << 3;
 
     RcUpdatePictureQpBits(pEncCtx, iCodedBits);
 
-    if (*pEncCtx).eSliceType as i32 == P_SLICE {
+    if pEncCtx.eSliceType as i32 == P_SLICE {
         RcUpdateFrameComplexity(pEncCtx);
     } else {
         RcUpdateIntraComplexity(pEncCtx);
@@ -2411,28 +2411,28 @@ pub unsafe extern "C" fn WelsRcMbInfoUpdateGom(
 
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
-pub unsafe extern "C" fn WelsRcPictureInitDisable(pEncCtx: *mut sWelsEncCtx, _uiTimeStamp: i64) {
-    let did = (*pEncCtx).uiDependencyId as usize;
+pub unsafe extern "C" fn WelsRcPictureInitDisable(pEncCtx: &mut sWelsEncCtx, _uiTimeStamp: i64) {
+    let did = pEncCtx.uiDependencyId as usize;
     let pWelsSvcRc = ctx_rc_at(pEncCtx, did);
     let pDLayerParam = &(*ctx_param(pEncCtx)).sSpatialLayers[did];
     let kiQp = pDLayerParam.iDLayerQp;
 
-    (*pEncCtx).iGlobalQp = RcCalculateCascadingQp(pEncCtx, kiQp);
+    pEncCtx.iGlobalQp = RcCalculateCascadingQp(pEncCtx, kiQp);
 
-    if (*ctx_param(pEncCtx)).bEnableAdaptiveQuant && (*pEncCtx).eSliceType as i32 == P_SLICE {
+    if (*ctx_param(pEncCtx)).bEnableAdaptiveQuant && pEncCtx.eSliceType as i32 == P_SLICE {
         let delta_offset = (*ctx_vaa(pEncCtx))
             .sAdaptiveQuantParam
             .iAverMotionTextureIndexToDeltaQp;
-        (*pEncCtx).iGlobalQp = WELS_CLIP3(
-            ((*pEncCtx).iGlobalQp * INT_MULTIPLY - delta_offset) / INT_MULTIPLY,
+        pEncCtx.iGlobalQp = WELS_CLIP3(
+            (pEncCtx.iGlobalQp * INT_MULTIPLY - delta_offset) / INT_MULTIPLY,
             (*pWelsSvcRc).iMinQp,
             (*pWelsSvcRc).iMaxQp,
         );
     } else {
-        (*pEncCtx).iGlobalQp = WELS_CLIP3((*pEncCtx).iGlobalQp, 0, 51);
+        pEncCtx.iGlobalQp = WELS_CLIP3(pEncCtx.iGlobalQp, 0, 51);
     }
 
-    (*pWelsSvcRc).iAverageFrameQp = (*pEncCtx).iGlobalQp;
+    (*pWelsSvcRc).iAverageFrameQp = pEncCtx.iGlobalQp;
 }
 
 /// Intentional no-op picture-level RC update callback when rate control is disabled.
@@ -2486,11 +2486,11 @@ pub unsafe extern "C" fn WelsRcMbInfoUpdateDisable(
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe extern "C" fn WelRcPictureInitBufferBasedQp(
-    pEncCtx: *mut sWelsEncCtx,
+    pEncCtx: &mut sWelsEncCtx,
     _uiTimeStamp: i64,
 ) {
     let pVaa = ctx_vaa(pEncCtx);
-    let did = (*pEncCtx).uiDependencyId as usize;
+    let did = pEncCtx.uiDependencyId as usize;
     let pWelsSvcRc = ctx_rc_at(pEncCtx, did);
 
     let mut iMinQp = (*ctx_param(pEncCtx)).iMinQp;
@@ -2500,15 +2500,15 @@ pub unsafe extern "C" fn WelRcPictureInitBufferBasedQp(
         iMinQp += 1;
     }
 
-    if (*pEncCtx).bDeliveryFlag {
-        (*pEncCtx).iGlobalQp -= 1;
+    if pEncCtx.bDeliveryFlag {
+        pEncCtx.iGlobalQp -= 1;
     } else {
-        (*pEncCtx).iGlobalQp += 2;
+        pEncCtx.iGlobalQp += 2;
     }
-    (*pEncCtx).iGlobalQp = WELS_CLIP3((*pEncCtx).iGlobalQp, iMinQp, (*pWelsSvcRc).iMaxQp);
-    (*pWelsSvcRc).iAverageFrameQp = (*pEncCtx).iGlobalQp;
-    (*pWelsSvcRc).iMaxFrameQp = (*pEncCtx).iGlobalQp;
-    (*pWelsSvcRc).iMinFrameQp = (*pEncCtx).iGlobalQp;
+    pEncCtx.iGlobalQp = WELS_CLIP3(pEncCtx.iGlobalQp, iMinQp, (*pWelsSvcRc).iMaxQp);
+    (*pWelsSvcRc).iAverageFrameQp = pEncCtx.iGlobalQp;
+    (*pWelsSvcRc).iMaxFrameQp = pEncCtx.iGlobalQp;
+    (*pWelsSvcRc).iMinFrameQp = pEncCtx.iGlobalQp;
 }
 
 // unsafe-cat: port-raw(Phase 9)
@@ -2702,15 +2702,15 @@ pub unsafe extern "C" fn WelsRcFrameDelayJudgeTimeStamp(
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsRcPictureInfoUpdateGomTimeStamp(
-    pEncCtx: *mut sWelsEncCtx,
+    pEncCtx: &mut sWelsEncCtx,
     iLayerSize: i32,
 ) {
-    let did = (*pEncCtx).uiDependencyId as usize;
+    let did = pEncCtx.uiDependencyId as usize;
     let pWelsSvcRc = ctx_rc_at(pEncCtx, did);
     let iCodedBits = iLayerSize << 3;
 
     RcUpdatePictureQpBits(pEncCtx, iCodedBits);
-    if (*pEncCtx).eSliceType as i32 == P_SLICE {
+    if pEncCtx.eSliceType as i32 == P_SLICE {
         RcUpdateFrameComplexity(pEncCtx);
     } else {
         RcUpdateIntraComplexity(pEncCtx);

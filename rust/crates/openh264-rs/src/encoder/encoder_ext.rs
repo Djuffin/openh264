@@ -2226,7 +2226,7 @@ pub unsafe fn WelsInitCurrentLayer(pCtx: &mut sWelsEncCtx, _kiWidth: i32, _kiHei
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe fn AddPrefixNal(
-    pCtx: *mut sWelsEncCtx,
+    pCtx: &mut sWelsEncCtx,
     _pLayerBsInfo: *mut SLayerBSInfo,
     pNalLen: *mut i32,
     pNalIdxInLayer: *mut i32,
@@ -2237,7 +2237,7 @@ pub unsafe fn AddPrefixNal(
     let mut iReturn;
     *iPayloadSize = 0;
 
-    let pOut = (*pCtx).pOut;
+    let pOut = pCtx.pOut;
 
     if keNalRefIdc != EWelsNalRefIdc::NRI_PRI_LOWEST {
         crate::encoder::nal_encap::WelsLoadNal(
@@ -2270,7 +2270,7 @@ pub unsafe fn AddPrefixNal(
         &(&*pOut).sBsBuffer[..],
         Some(&(*current_layer(pCtx)).sLayerInfo.sNalHeaderExt),
         ctx_frame_bs_cur(pCtx),
-        (*pCtx).iFrameBsSize - (*pCtx).iPosBsBuffer,
+        pCtx.iFrameBsSize - pCtx.iPosBsBuffer,
         &mut *pNalLen.add(*pNalIdxInLayer as usize),
     );
     if iReturn != ENC_RETURN_SUCCESS {
@@ -2278,7 +2278,7 @@ pub unsafe fn AddPrefixNal(
     }
     *iPayloadSize = *pNalLen.add(*pNalIdxInLayer as usize);
 
-    (*pCtx).iPosBsBuffer += *iPayloadSize;
+    pCtx.iPosBsBuffer += *iPayloadSize;
     *pNalIdxInLayer += 1;
 
     iReturn = ENC_RETURN_SUCCESS;
@@ -2487,7 +2487,7 @@ pub unsafe fn PreprocessSliceCoding(pCtx: &mut sWelsEncCtx) {
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe fn WriteSsvcParaset(
-    pCtx: *mut sWelsEncCtx,
+    pCtx: &mut sWelsEncCtx,
     kiSpatialNum: i32,
     ppLayerBsInfo: *mut *mut SLayerBSInfo,
     iLayerNum: *mut i32,
@@ -2527,7 +2527,7 @@ pub unsafe fn WriteSsvcParaset(
     // point to next pLayerBsInfo
     let pNext = pLayerBsInfo.add(1);
     *ppLayerBsInfo = pNext;
-    (*(*pCtx).pOut).iLayerBsIndex += 1;
+    (*pCtx.pOut).iLayerBsIndex += 1;
     (*pNext).pBsBuf = ctx_frame_bs_cur(pCtx);
     (*pNext).pNalLengthInByte = (*pLayerBsInfo).pNalLengthInByte.add(iCountNal as usize);
 
@@ -2649,7 +2649,7 @@ pub unsafe fn WriteSavcParaset(
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe fn WriteSavcParaset_Listing(
-    pCtx: *mut sWelsEncCtx,
+    pCtx: &mut sWelsEncCtx,
     kiSpatialNum: i32,
     ppLayerBsInfo: *mut *mut SLayerBSInfo,
     iLayerNum: *mut i32,
@@ -2670,7 +2670,7 @@ pub unsafe fn WriteSavcParaset_Listing(
         }
 
         let mut iCountNal = 0i32;
-        for iIdx in 0..(*pCtx).iSpsNum {
+        for iIdx in 0..pCtx.iSpsNum {
             let mut iNalSize = 0i32;
             iReturn = crate::encoder::wels_encoder_ext::WelsWriteOneSPS(pCtx, iIdx, &mut iNalSize);
             if iReturn != ENC_RETURN_SUCCESS {
@@ -2690,7 +2690,7 @@ pub unsafe fn WriteSavcParaset_Listing(
         (*pLayerBsInfo).iSubSeqId = GetSubSequenceId(pCtx, EVideoFrameType::videoFrameTypeIDR);
 
         let pNext = pLayerBsInfo.add(1);
-        (*(*pCtx).pOut).iLayerBsIndex += 1;
+        (*pCtx.pOut).iLayerBsIndex += 1;
         (*pNext).pBsBuf = ctx_frame_bs_cur(pCtx);
         (*pNext).pNalLengthInByte = (*pLayerBsInfo).pNalLengthInByte.add(iCountNal as usize);
         *iLayerNum += 1;
@@ -2706,7 +2706,7 @@ pub unsafe fn WriteSavcParaset_Listing(
 
     for iSpatialId in 0..kiSpatialNum {
         let mut iCountNal = 0i32;
-        for iIdx in 0..(*pCtx).iPpsNum {
+        for iIdx in 0..pCtx.iPpsNum {
             let mut iNalSize = 0i32;
             iReturn = crate::encoder::wels_encoder_ext::WelsWriteOnePPS(pCtx, iIdx, &mut iNalSize);
             if iReturn != ENC_RETURN_SUCCESS {
@@ -2726,7 +2726,7 @@ pub unsafe fn WriteSavcParaset_Listing(
         (*pLayerBsInfo).iSubSeqId = GetSubSequenceId(pCtx, EVideoFrameType::videoFrameTypeIDR);
 
         let pNext = pLayerBsInfo.add(1);
-        (*(*pCtx).pOut).iLayerBsIndex += 1;
+        (*pCtx.pOut).iLayerBsIndex += 1;
         (*pNext).pBsBuf = ctx_frame_bs_cur(pCtx);
         (*pNext).pNalLengthInByte = (*pLayerBsInfo).pNalLengthInByte.add(iCountNal as usize);
         *iLayerNum += 1;
@@ -2738,7 +2738,7 @@ pub unsafe fn WriteSavcParaset_Listing(
     // to check number of layers / nals / slices dependencies
     if *iLayerNum > MAX_LAYER_NUM_OF_FRAME {
         crate::common::wels_trace::WelsLog(
-            std::ptr::addr_of_mut!((*pCtx).sLogCtx),
+            std::ptr::addr_of_mut!(pCtx.sLogCtx),
             crate::common::wels_trace::WELS_LOG_ERROR,
             &format!(
                 "WriteSavcParaset(), iLayerNum({}) > MAX_LAYER_NUM_OF_FRAME({})!",
@@ -2896,7 +2896,7 @@ pub unsafe fn DynslcUpdateMbNeighbourInfoListForAllSlices(pCurDq: &mut SDqLayer)
 /// `pCtx` must be a context built by [`WelsInitEncoderExt`].
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
-pub unsafe fn WelsInitCurrentQBLayerMltslc(pCtx: *mut sWelsEncCtx) {
+pub unsafe fn WelsInitCurrentQBLayerMltslc(pCtx: &mut sWelsEncCtx) {
     // pData init
     let pCurDq = current_layer(pCtx);
     // mb_neighbor
@@ -3039,7 +3039,7 @@ pub unsafe fn WelsInitCurrentDlayerMltslc(pCtx: &mut sWelsEncCtx, iPartitionNum:
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe fn DynSliceRealloc(
-    pCtx: *mut sWelsEncCtx,
+    pCtx: &mut sWelsEncCtx,
     pFrameBsInfo: *mut SFrameBSInfo,
     pLayerBsInfo: *mut SLayerBSInfo,
 ) -> i32 {

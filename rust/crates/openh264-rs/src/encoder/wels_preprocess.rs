@@ -1029,11 +1029,13 @@ impl CWelsPreProcess {
     #[allow(unsafe_code)]
     pub unsafe fn WelsPreprocessReset(
         &mut self,
-        pCtx: *mut sWelsEncCtx,
+        pCtx: &mut sWelsEncCtx,
         iWidth: i32,
         iHeight: i32,
     ) -> i32 {
-        if pCtx.is_null() || ctx_param(pCtx).is_null() {
+        // T9.H: the `pCtx.is_null()` disjunct is gone — a `&mut sWelsEncCtx`
+        // cannot be null and every caller now holds one. The rest is unchanged.
+        if ctx_param(pCtx).is_null() {
             return -1;
         }
 
@@ -1183,7 +1185,7 @@ impl CWelsPreProcess {
     #[allow(unsafe_code)]
     pub unsafe fn SingleLayerPreprocess(
         &mut self,
-        pCtx: *mut sWelsEncCtx,
+        pCtx: &mut sWelsEncCtx,
         kpSrc: *const SSourcePicture,
         pSpatialNum: *mut i32,
     ) -> i32 {
@@ -2632,9 +2634,9 @@ impl CWelsPreProcess {
     /// reference at or below the current temporal id.
     // unsafe-cat: port-raw(Phase 9)
     #[allow(unsafe_code)]
-    pub unsafe fn SetRefMbType(&self, pCtx: *mut sWelsEncCtx, pRefMbTypeArray: *mut *mut u32, _iRefPicType: i32) {
-        let uiTid = (*pCtx).uiTemporalId;
-        let uiDid = (*pCtx).uiDependencyId;
+    pub unsafe fn SetRefMbType(&self, pCtx: &mut sWelsEncCtx, pRefMbTypeArray: *mut *mut u32, _iRefPicType: i32) {
+        let uiTid = pCtx.uiTemporalId;
+        let uiDid = pCtx.uiDependencyId;
         let pRefPicLlist = ctx_ref_list(pCtx, uiDid as usize);
         let pLtr = ctx_ltr_at(pCtx, uiDid as usize);
         if pRefPicLlist.is_null() {

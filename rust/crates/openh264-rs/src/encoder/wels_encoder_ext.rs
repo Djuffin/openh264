@@ -646,10 +646,10 @@ pub unsafe fn WelsEncoderEncodeParameterSetsRust(
 /// written once over the layer range each arm selects.
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
-pub unsafe fn ForceCodingIDR(pCtx: *mut sWelsEncCtx, iLayerId: i32) -> i32 {
-    if pCtx.is_null() {
-        return 1;
-    }
+pub unsafe fn ForceCodingIDR(pCtx: &mut sWelsEncCtx, iLayerId: i32) -> i32 {
+    // T9.H: `if pCtx.is_null() { ... }` stood here. A `&mut sWelsEncCtx`
+    // cannot be null and every caller now holds one, so the guard is not
+    // merely dead — it is inexpressible. Nothing replaces it.
     let pParam = crate::encoder::encoder_context::ctx_param(pCtx);
     if pParam.is_null() {
         return 1;
@@ -675,10 +675,10 @@ pub unsafe fn ForceCodingIDR(pCtx: *mut sWelsEncCtx, iLayerId: i32) -> i32 {
         // a "fix" here would diverge from what a consumer reading
         // `ENCODER_OPTION_GET_STATISTICS` sees.
         let stat_idx = if all_layers { 0 } else { iLayerId as usize };
-        (*pCtx).sEncoderStatistics[stat_idx].uiIDRReqNum =
-            (*pCtx).sEncoderStatistics[stat_idx].uiIDRReqNum.wrapping_add(1);
+        pCtx.sEncoderStatistics[stat_idx].uiIDRReqNum =
+            pCtx.sEncoderStatistics[stat_idx].uiIDRReqNum.wrapping_add(1);
     }
-    (*pCtx).bCheckWindowStatusRefreshFlag = false;
+    pCtx.bCheckWindowStatusRefreshFlag = false;
     0
 }
 
@@ -2062,11 +2062,19 @@ impl CWelsH264SVCEncoder {
     // unsafe-cat: port-raw(Phase 9)
     #[allow(unsafe_code)]
     pub fn ForceIntraFrame(&mut self, bIDR: bool, iLayerId: i32) -> i32 {
-        let pCtx = Self::ctx_ptr(&mut self.m_pEncContext);
         if bIDR {
-            if pCtx.is_null() || !self.m_bInitialFlag {
+            if !self.m_bInitialFlag {
                 return 1;
             }
+            // T9.H5: `ForceCodingIDR` takes `&mut sWelsEncCtx`, so the context is
+            // borrowed from the owning `Box` rather than flattened through
+            // `ctx_ptr`. The `pCtx.is_null()` half of the old guard becomes the
+            // `else` arm and answers the same `1`; `ctx_ptr` has no side effect,
+            // so deriving it inside the `bIDR` arm rather than above it is the
+            // same program.
+            let Some(pCtx) = self.m_pEncContext.as_deref_mut() else {
+                return 1;
+            };
             unsafe {
                 ForceCodingIDR(pCtx, iLayerId);
             }
