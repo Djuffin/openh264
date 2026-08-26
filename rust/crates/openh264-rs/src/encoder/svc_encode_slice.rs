@@ -3566,7 +3566,7 @@ pub unsafe fn InitSliceList(
 
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
-pub unsafe fn InitAllSlicesInThread(pCtx: *mut sWelsEncCtx) -> i32 {
+pub unsafe fn InitAllSlicesInThread(pCtx: &mut sWelsEncCtx) -> i32 {
     let pCurDqLayer = current_layer(pCtx);
     for iSliceIdx in 0..(*pCurDqLayer).iMaxSliceNum {
         let slice_ptr = slice_in_layer(pCurDqLayer, iSliceIdx);
@@ -3576,7 +3576,7 @@ pub unsafe fn InitAllSlicesInThread(pCtx: *mut sWelsEncCtx) -> i32 {
         (*slice_ptr).iSliceIdx = -1;
     }
 
-    for iSlcBuffIdx in 0..(*pCtx).iActiveThreadsNum {
+    for iSlcBuffIdx in 0..pCtx.iActiveThreadsNum {
         (*pCurDqLayer).sSliceBufferInfo[iSlcBuffIdx as usize].iCodedSliceNum = 0;
     }
 
@@ -4181,13 +4181,13 @@ pub unsafe fn FrameBsRealloc(
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe fn SliceLayerInfoUpdate(
-    pCtx: *mut sWelsEncCtx,
+    pCtx: &mut sWelsEncCtx,
     pFrameBsInfo: *mut SFrameBSInfo,
     pLayerBsInfo: *mut SLayerBSInfo,
     kuiSliceMode: SliceMode,
 ) -> i32 {
     let mut iMaxSliceNum = 0;
-    for iSlcBuffIdx in 0..(*pCtx).iActiveThreadsNum {
+    for iSlcBuffIdx in 0..pCtx.iActiveThreadsNum {
         iMaxSliceNum += (*current_layer(pCtx)).sSliceBufferInfo[iSlcBuffIdx as usize].iMaxSliceNum;
     }
 
@@ -4202,7 +4202,7 @@ pub unsafe fn SliceLayerInfoUpdate(
     }
 
     // T9.G6: hoisted (shape B).
-    let iActiveThreadsNum = (*pCtx).iActiveThreadsNum as i32;
+    let iActiveThreadsNum = pCtx.iActiveThreadsNum as i32;
     let mut iRet = ReOrderSliceInLayer(pCtx, kuiSliceMode, iActiveThreadsNum);
     if iRet != ENC_RETURN_SUCCESS {
         return iRet;
@@ -4212,7 +4212,7 @@ pub unsafe fn SliceLayerInfoUpdate(
     (*pLayerBsInfo).iNalCount = GetCurLayerNalCount(&mut *current_layer(pCtx), iCodedSliceNum);
     let iCodedNalCount = GetTotalCodedNalCount(pFrameBsInfo);
 
-    if iCodedNalCount > (*(*pCtx).pOut).sNalList.len() as i32 {
+    if iCodedNalCount > (*pCtx.pOut).sNalList.len() as i32 {
         // T9.G6: hoisted (shape B).
         let iCurMaxSliceNum = (*current_layer(pCtx)).iMaxSliceNum;
         iRet = FrameBsRealloc(pCtx, pFrameBsInfo, pLayerBsInfo, iCurMaxSliceNum);

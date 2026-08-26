@@ -563,7 +563,7 @@ impl SWelsRcFunc {
     #[inline]
     // unsafe-cat: port-raw(Phase 9)
     #[allow(unsafe_code)]
-    pub unsafe fn WelsRcPictureInit(self, pCtx: *mut sWelsEncCtx, uiTimeStamp: i64) {
+    pub unsafe fn WelsRcPictureInit(self, pCtx: &mut sWelsEncCtx, uiTimeStamp: i64) {
         match self.eInstalledMode {
             RCMode::RC_OFF_MODE => WelsRcPictureInitDisable(pCtx, uiTimeStamp),
             RCMode::RC_BUFFERBASED_MODE => WelRcPictureInitBufferBasedQp(pCtx, uiTimeStamp),
@@ -596,7 +596,7 @@ impl SWelsRcFunc {
     #[inline]
     // unsafe-cat: port-raw(Phase 9)
     #[allow(unsafe_code)]
-    pub unsafe fn WelsRcPictureInfoUpdate(self, pCtx: *mut sWelsEncCtx, iLayerSize: i32) {
+    pub unsafe fn WelsRcPictureInfoUpdate(self, pCtx: &mut sWelsEncCtx, iLayerSize: i32) {
         match self.eInstalledMode {
             RCMode::RC_OFF_MODE | RCMode::RC_BUFFERBASED_MODE => {
                 WelsRcPictureInfoUpdateDisable(pCtx, iLayerSize)
@@ -702,7 +702,7 @@ impl SWelsRcFunc {
     #[allow(unsafe_code)]
     pub unsafe fn WelsUpdateMaxBrWindowStatus(
         self,
-        pCtx: *mut sWelsEncCtx,
+        pCtx: &mut sWelsEncCtx,
         iSpatialNum: i32,
         uiTimeStamp: i64,
     ) {
@@ -730,7 +730,7 @@ impl SWelsRcFunc {
     #[allow(unsafe_code)]
     pub unsafe fn WelsRcPostFrameSkipping(
         self,
-        pCtx: *mut sWelsEncCtx,
+        pCtx: &mut sWelsEncCtx,
         iDid: i32,
         uiTimeStamp: i64,
     ) -> bool {
@@ -2057,8 +2057,8 @@ pub unsafe fn RcVBufferCalculationPadding(pEncCtx: *mut sWelsEncCtx) {
 /// Logs frame bit rate control telemetry.
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
-pub unsafe fn RcTraceFrameBits(pEncCtx: *mut sWelsEncCtx, _uiTimeStamp: i64, _iFrameSize: i32) {
-    let did = (*pEncCtx).uiDependencyId as usize;
+pub unsafe fn RcTraceFrameBits(pEncCtx: &mut sWelsEncCtx, _uiTimeStamp: i64, _iFrameSize: i32) {
+    let did = pEncCtx.uiDependencyId as usize;
     let pWelsSvcRc = ctx_rc_at(pEncCtx, did);
     if (*pWelsSvcRc).iPredFrameBit != 0 {
         (*pWelsSvcRc).iPredFrameBit = (LAST_FRAME_PREDICT_WEIGHT

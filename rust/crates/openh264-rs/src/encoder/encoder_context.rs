@@ -1802,20 +1802,23 @@ pub unsafe fn LoadBackFrameNum(pEncCtx: *mut sWelsEncCtx, kiDidx: i32) {
 /// `pEncCtx` must be non-null and contain a valid `pOut`.
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
-pub unsafe fn InitBitStream(pEncCtx: *mut sWelsEncCtx) {
-    if pEncCtx.is_null() || (*pEncCtx).pOut.is_null() {
+pub unsafe fn InitBitStream(pEncCtx: &mut sWelsEncCtx) {
+    // T9.H4: the `is_null()` disjunct that opened this guard is gone — a
+    // `&mut sWelsEncCtx` cannot be null, and every caller now holds one. The
+    // remaining conditions are unchanged.
+    if pEncCtx.pOut.is_null() {
         return;
     }
-    (*pEncCtx).iPosBsBuffer = 0;
-    (*(*pEncCtx).pOut).iNalIndex = 0;
-    (*(*pEncCtx).pOut).iLayerBsIndex = 0;
+    pEncCtx.iPosBsBuffer = 0;
+    (*pEncCtx.pOut).iNalIndex = 0;
+    (*pEncCtx.pOut).iLayerBsIndex = 0;
 
     // Was `InitBits(&…sBsWrite, …pBsBuffer, …uiSize)`. The buffer and its length stay
     // where they were; the writer is a position, and resetting it is all `InitBits`
     // did that still means anything. Its `kpBuf: *const u8` parameter — stored as
     // `pStartBuf: *mut u8` and written through — is deleted rather than amended
     // (`phase2_findings.md` F13, third site).
-    (*(*pEncCtx).pOut).sBsWrite = crate::encoder::vlc_encoder::BsWriter::new();
+    (*pEncCtx.pOut).sBsWrite = crate::encoder::vlc_encoder::BsWriter::new();
 }
 
 /// Configures slice types, NAL headers, and Picture Order Count (POC) for the frame.
@@ -1825,11 +1828,14 @@ pub unsafe fn InitBitStream(pEncCtx: *mut sWelsEncCtx) {
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe fn InitFrameCoding(
-    pEncCtx: *mut sWelsEncCtx,
+    pEncCtx: &mut sWelsEncCtx,
     keFrameType: EVideoFrameType,
     kiDidx: i32,
 ) {
-    if pEncCtx.is_null() || ctx_param(pEncCtx).is_null() || ctx_sps(pEncCtx).is_null() {
+    // T9.H4: the `is_null()` disjunct that opened this guard is gone — a
+    // `&mut sWelsEncCtx` cannot be null, and every caller now holds one. The
+    // remaining conditions are unchanged.
+    if ctx_param(pEncCtx).is_null() || ctx_sps(pEncCtx).is_null() {
         return;
     }
     // T9.G4, with `UpdateFrameNum`'s: `iLog2MaxPocLsb` is hoisted above the cursor
@@ -1853,9 +1859,9 @@ pub unsafe fn InitFrameCoding(
 
         UpdateFrameNum(pEncCtx, kiDidx);
 
-        (*pEncCtx).eNalType = EWelsNalUnitType::NAL_UNIT_CODED_SLICE;
-        (*pEncCtx).eSliceType = EWelsSliceType::P_SLICE;
-        (*pEncCtx).eNalPriority = EWelsNalRefIdc::NRI_PRI_HIGH;
+        pEncCtx.eNalType = EWelsNalUnitType::NAL_UNIT_CODED_SLICE;
+        pEncCtx.eSliceType = EWelsSliceType::P_SLICE;
+        pEncCtx.eNalPriority = EWelsNalRefIdc::NRI_PRI_HIGH;
     } else if keFrameType == EVideoFrameType::videoFrameTypeIDR {
         let pParamInternal = std::ptr::addr_of_mut!((*ctx_param(pEncCtx)).sDependencyLayers[kiDidx as usize]);
         (*pParamInternal).iFrameNum = 0;
@@ -1863,9 +1869,9 @@ pub unsafe fn InitFrameCoding(
         (*pParamInternal).bEncCurFrmAsIdrFlag = false;
         (*pParamInternal).iFrameIndex = 0;
 
-        (*pEncCtx).eNalType = EWelsNalUnitType::NAL_UNIT_CODED_SLICE_IDR;
-        (*pEncCtx).eSliceType = EWelsSliceType::I_SLICE;
-        (*pEncCtx).eNalPriority = EWelsNalRefIdc::NRI_PRI_HIGHEST;
+        pEncCtx.eNalType = EWelsNalUnitType::NAL_UNIT_CODED_SLICE_IDR;
+        pEncCtx.eSliceType = EWelsSliceType::I_SLICE;
+        pEncCtx.eNalPriority = EWelsNalRefIdc::NRI_PRI_HIGHEST;
 
         (*pParamInternal).iCodingIndex = 0;
     } else if keFrameType == EVideoFrameType::videoFrameTypeI {
@@ -1878,9 +1884,9 @@ pub unsafe fn InitFrameCoding(
 
         UpdateFrameNum(pEncCtx, kiDidx);
 
-        (*pEncCtx).eNalType = EWelsNalUnitType::NAL_UNIT_CODED_SLICE;
-        (*pEncCtx).eSliceType = EWelsSliceType::I_SLICE;
-        (*pEncCtx).eNalPriority = EWelsNalRefIdc::NRI_PRI_HIGHEST;
+        pEncCtx.eNalType = EWelsNalUnitType::NAL_UNIT_CODED_SLICE;
+        pEncCtx.eSliceType = EWelsSliceType::I_SLICE;
+        pEncCtx.eNalPriority = EWelsNalRefIdc::NRI_PRI_HIGHEST;
     }
 }
 

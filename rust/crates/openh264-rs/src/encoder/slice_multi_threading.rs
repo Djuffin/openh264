@@ -836,11 +836,14 @@ pub unsafe fn ReleaseMtResource(ppCtx: *mut *mut sWelsEncCtx) {
 // unsafe-cat: MT
 #[allow(unsafe_code)]
 pub unsafe fn AppendSliceToFrameBs(
-    pCtx: *mut sWelsEncCtx,
+    pCtx: &mut sWelsEncCtx,
     pLbi: *mut SLayerBSInfo,
     kiSliceCount: i32,
 ) -> i32 {
-    if pCtx.is_null() || pLbi.is_null() || current_layer(pCtx).is_null() {
+    // T9.H4: the `is_null()` disjunct that opened this guard is gone — a
+    // `&mut sWelsEncCtx` cannot be null, and every caller now holds one. The
+    // remaining conditions are unchanged.
+    if pLbi.is_null() || current_layer(pCtx).is_null() {
         return 0;
     }
 
@@ -857,10 +860,10 @@ pub unsafe fn AppendSliceToFrameBs(
             if pSliceBs.uiBsPos > 0 {
                 let iCountNal = pSliceBs.iNalIndex;
 
-                if ((*pCtx).iPosBsBuffer as u64) + (pSliceBs.uiBsPos as u64)
-                    > ((*pCtx).iFrameBsSize as u64)
+                if (pCtx.iPosBsBuffer as u64) + (pSliceBs.uiBsPos as u64)
+                    > (pCtx.iFrameBsSize as u64)
                 {
-                    (*pCtx).iEncoderError |= ENC_RETURN_MEMALLOCERR;
+                    pCtx.iEncoderError |= ENC_RETURN_MEMALLOCERR;
                     return 0;
                 }
 
@@ -877,7 +880,7 @@ pub unsafe fn AppendSliceToFrameBs(
                     }
                 }
 
-                (*pCtx).iPosBsBuffer += pSliceBs.uiBsPos as i32;
+                pCtx.iPosBsBuffer += pSliceBs.uiBsPos as i32;
                 iLayerSize += pSliceBs.uiBsPos as i32;
 
                 let mut iNalIdx = 0i32;
@@ -976,8 +979,11 @@ pub fn DynamicDetectCpuCores() -> i32 {
 /// Evaluates load balance and dynamically adjusts slicing for the base spatial dependency layer.
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
-pub unsafe fn AdjustBaseLayer(pCtx: *mut sWelsEncCtx) -> i32 {
-    if pCtx.is_null() || ctx_dq_layer(pCtx, 0).is_null() {
+pub unsafe fn AdjustBaseLayer(pCtx: &mut sWelsEncCtx) -> i32 {
+    // T9.H4: the `is_null()` disjunct that opened this guard is gone — a
+    // `&mut sWelsEncCtx` cannot be null, and every caller now holds one. The
+    // remaining conditions are unchanged.
+    if ctx_dq_layer(pCtx, 0).is_null() {
         return 0;
     }
 
@@ -1006,8 +1012,11 @@ pub unsafe fn AdjustBaseLayer(pCtx: *mut sWelsEncCtx) -> i32 {
 /// Evaluates load balance and dynamically adjusts slicing for spatial enhancement layers.
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
-pub unsafe fn AdjustEnhanceLayer(pCtx: *mut sWelsEncCtx, iCurDid: i32) -> i32 {
-    if pCtx.is_null() || ctx_dq_layer(pCtx, 0).is_null() || current_layer(pCtx).is_null() {
+pub unsafe fn AdjustEnhanceLayer(pCtx: &mut sWelsEncCtx, iCurDid: i32) -> i32 {
+    // T9.H4: the `is_null()` disjunct that opened this guard is gone — a
+    // `&mut sWelsEncCtx` cannot be null, and every caller now holds one. The
+    // remaining conditions are unchanged.
+    if ctx_dq_layer(pCtx, 0).is_null() || current_layer(pCtx).is_null() {
         return 0;
     }
 
@@ -1482,8 +1491,11 @@ unsafe fn ForkWidth(pCtx: *mut sWelsEncCtx, iItemCount: i32) -> i32 {
 /// slice bank sized for `kiSliceCount` slices.
 // unsafe-cat: MT
 #[allow(unsafe_code)]
-pub unsafe fn EncodeFixedSlicesForked(pCtx: *mut sWelsEncCtx, kiSliceCount: i32) -> i32 {
-    if pCtx.is_null() || kiSliceCount <= 0 || (*pCtx).pSliceThreading.is_null() {
+pub unsafe fn EncodeFixedSlicesForked(pCtx: &mut sWelsEncCtx, kiSliceCount: i32) -> i32 {
+    // T9.H4: the `is_null()` disjunct that opened this guard is gone — a
+    // `&mut sWelsEncCtx` cannot be null, and every caller now holds one. The
+    // remaining conditions are unchanged.
+    if kiSliceCount <= 0 || pCtx.pSliceThreading.is_null() {
         return ENC_RETURN_SUCCESS;
     }
     let bRecordsTime = !ctx_param(pCtx).is_null() && (*ctx_param(pCtx)).bUseLoadBalancing;
@@ -1762,8 +1774,11 @@ unsafe fn EncodeOnePartitionSizeLimited(
 /// per-thread slice banks `InitSliceThreadInfo` sized.
 // unsafe-cat: MT
 #[allow(unsafe_code)]
-pub unsafe fn EncodeSizeLimitedSlicesForked(pCtx: *mut sWelsEncCtx, kiPartitionCnt: i32) -> i32 {
-    if pCtx.is_null() || kiPartitionCnt <= 0 || (*pCtx).pSliceThreading.is_null() {
+pub unsafe fn EncodeSizeLimitedSlicesForked(pCtx: &mut sWelsEncCtx, kiPartitionCnt: i32) -> i32 {
+    // T9.H4: the `is_null()` disjunct that opened this guard is gone — a
+    // `&mut sWelsEncCtx` cannot be null, and every caller now holds one. The
+    // remaining conditions are unchanged.
+    if kiPartitionCnt <= 0 || pCtx.pSliceThreading.is_null() {
         return ENC_RETURN_SUCCESS;
     }
     // Every partition is its own worker: the partition count is bounded by

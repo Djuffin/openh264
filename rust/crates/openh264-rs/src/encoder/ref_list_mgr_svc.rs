@@ -1258,17 +1258,20 @@ pub unsafe fn WelsUpdateSliceHeaderSyntax(
 /// Updates reference picture syntax and picture number delta in slice headers.
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
-pub unsafe fn WelsUpdateRefSyntax(pCtx: *mut sWelsEncCtx, kiPOC: i32, kiFrameType: i32) {
-    if pCtx.is_null() || ctx_param(pCtx).is_null() || current_layer(pCtx).is_null() {
+pub unsafe fn WelsUpdateRefSyntax(pCtx: &mut sWelsEncCtx, kiPOC: i32, kiFrameType: i32) {
+    // T9.H4: the `is_null()` disjunct that opened this guard is gone — a
+    // `&mut sWelsEncCtx` cannot be null, and every caller now holds one. The
+    // remaining conditions are unchanged.
+    if ctx_param(pCtx).is_null() || current_layer(pCtx).is_null() {
         return;
     }
     let mut iAbsDiffPicNumMinus1 = -1i32;
-    let uiDid = (*pCtx).uiDependencyId as usize;
+    let uiDid = pCtx.uiDependencyId as usize;
     let pParamD = &(*ctx_param(pCtx)).sDependencyLayers[uiDid];
 
-    if (*pCtx).iNumRef0 > 0 {
+    if pCtx.iNumRef0 > 0 {
         let pRefList = ctx_ref_list(pCtx, uiDid);
-        if let Some(id) = (*pCtx).pRefList0[0] {
+        if let Some(id) = pCtx.pRefList0[0] {
             iAbsDiffPicNumMinus1 = pParamD.iFrameNum - (*pRefList).pic(id).iFrameNum - 1;
             if iAbsDiffPicNumMinus1 < 0 && !ctx_sps(pCtx).is_null() {
                 iAbsDiffPicNumMinus1 += 1 << (*ctx_sps(pCtx)).uiLog2MaxFrameNum;
@@ -1745,7 +1748,7 @@ impl RefStrategyKind {
     #[inline]
     // unsafe-cat: port-raw(Phase 9)
     #[allow(unsafe_code)]
-    pub unsafe fn BuildRefList(self, pCtx: *mut sWelsEncCtx, iPOC: i32, iBestLtrRefIdx: i32) -> bool {
+    pub unsafe fn BuildRefList(self, pCtx: &mut sWelsEncCtx, iPOC: i32, iBestLtrRefIdx: i32) -> bool {
         match self {
             RefStrategyKind::TemporalLayer | RefStrategyKind::Screen => {
                 WelsBuildRefList(pCtx, iPOC, iBestLtrRefIdx)
@@ -1761,7 +1764,7 @@ impl RefStrategyKind {
     #[inline]
     // unsafe-cat: port-raw(Phase 9)
     #[allow(unsafe_code)]
-    pub unsafe fn MarkPic(self, pCtx: *mut sWelsEncCtx) {
+    pub unsafe fn MarkPic(self, pCtx: &mut sWelsEncCtx) {
         match self {
             RefStrategyKind::TemporalLayer | RefStrategyKind::Screen => WelsMarkPic(pCtx),
             RefStrategyKind::LosslessWithLtr => WelsMarkPicScreen(pCtx),
@@ -1775,7 +1778,7 @@ impl RefStrategyKind {
     #[inline]
     // unsafe-cat: port-raw(Phase 9)
     #[allow(unsafe_code)]
-    pub unsafe fn UpdateRefList(self, pCtx: *mut sWelsEncCtx) -> bool {
+    pub unsafe fn UpdateRefList(self, pCtx: &mut sWelsEncCtx) -> bool {
         match self {
             RefStrategyKind::TemporalLayer | RefStrategyKind::Screen => WelsUpdateRefList(pCtx),
             RefStrategyKind::LosslessWithLtr => WelsUpdateRefListScreen(pCtx),
@@ -1808,7 +1811,7 @@ impl RefStrategyKind {
     #[inline]
     // unsafe-cat: port-raw(Phase 9)
     #[allow(unsafe_code)]
-    pub unsafe fn AfterBuildRefList(self, pCtx: *mut sWelsEncCtx) {
+    pub unsafe fn AfterBuildRefList(self, pCtx: &mut sWelsEncCtx) {
         match self {
             RefStrategyKind::TemporalLayer => DoNothing(pCtx),
             RefStrategyKind::Screen | RefStrategyKind::LosslessWithLtr => UpdateBlockStatic(pCtx),

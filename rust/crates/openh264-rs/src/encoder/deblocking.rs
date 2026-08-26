@@ -1421,10 +1421,10 @@ pub unsafe extern "C" fn DeblockingFilterSliceAvcbaseNull(
 
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
-pub unsafe extern "C" fn PerformDeblockingFilter(pEnc: *mut sWelsEncCtx) {
-    if pEnc.is_null() {
-        return;
-    }
+pub unsafe extern "C" fn PerformDeblockingFilter(pEnc: &mut sWelsEncCtx) {
+    // T9.H4: `if pEnc.is_null() { return; }` stood here. A `&mut
+    // sWelsEncCtx` cannot be null and every caller now holds one, so the
+    // guard is not merely dead — it is inexpressible. Nothing replaces it.
     let pCurLayer = current_layer(pEnc);
     if pCurLayer.is_null() {
         return;

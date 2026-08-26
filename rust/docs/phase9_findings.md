@@ -3426,3 +3426,137 @@ every remaining stage, and because it is the second time this session that the
 cheapest correct-looking spelling was the wrong one (F168's serial pair was the
 first): **the tree's own instruments are the check on that, and they only work
 if a stage runs them before it believes itself finished.**
+
+### Amendment (T9.H4, the same session): the right answer is *no* explicit coercion
+
+F169 was written after stage A0 and prescribed `std::ptr::from_mut(pCtx)` at
+every phase-A boundary. Stage A1 falsified the premise both spellings rest on.
+
+**Rust coerces `&mut T` to `*mut T` implicitly in argument position.** A flipped
+body calling a still-raw callee needs no coercion at all:
+
+```rust
+ctx_param(pCtx)          // pCtx: &mut sWelsEncCtx, ctx_param: *mut sWelsEncCtx
+```
+
+This was discovered by accident and is worth recording as such: stage A1's
+boundary pass silently failed to run, and the stage **compiled anyway** — 36
+bodies flipped, and the only errors were the ten `is_null()` guards. Five files
+had zero coercions written and zero type errors. A pass that does nothing and a
+pass that does the right thing are indistinguishable from the exit code, which is
+S66's shape one level over: the boundary pass had never been shown to be *load-
+bearing*, only to be *green*.
+
+**So the campaign takes the implicit form, and the tree is uniform on it.** A0's
+93 explicit coercions were converted back. Three consequences, in the order they
+matter:
+
+1. **Each stage touches only the bodies it flips**, never their call sites. For
+   154 bodies with ~500 boundaries that is the difference between a stage being a
+   signature-and-derefs edit and a stage being a whole-tree edit. It also removes
+   the un-spelling step: an explicit wrapper at a call site has to be *removed*
+   when the callee flips later, so every boundary would have been written once
+   and deleted once.
+2. **The ratchet finding stands and is unchanged.** `as *mut _` costs one
+   `raw_ptr` per site and would have added ~500 to the metric the phase exists to
+   reduce. That was and is real; the correction is only that the remedy is
+   cheaper than the one first proposed. A1's totals: `raw_ptr 1587 -> 1549`
+   (**-38**), no per-file increases.
+3. **The greppability argument F169 made for `from_mut` is withdrawn**, and it
+   was the weaker half of the finding anyway. The campaign's progress metric is
+   the census — `phase9_forksplit.py` reads 265/111/154 after A0 and moves with
+   every stage — not a grep for a boundary spelling. Counting boundaries would
+   have measured the flip's *scaffolding*; the census measures the flip.
+
+**Explicit coercion is still required outside argument position**, and the tree
+has exactly one such site: F167's re-stamp,
+`(*pCtx.pVpp).m_pEncCtx = std::ptr::from_mut(pCtx);` — an assignment, where no
+coercion site exists. That one keeps the explicit spelling, and it is the right
+one to keep visible, because it is the campaign's only deliberate raw alias of
+the root borrow.
+
+### A second lesson from the same stage, about blanket edits
+
+The ten `is_null()` guards look like one shape and invite one regex. Applying
+`if X.is_null() || ` -> `if ` across `src/encoder/` trimmed **51** guards — the
+ten that the compiler had flagged, and **41 in bodies that are still raw, where
+the check is live and necessary**. The build would have stayed green (a raw
+pointer's `is_null()` compiles fine either way) and the byte gates would have
+passed, because no gate in this project drives a null context.
+
+That is the whole failure mode this phase is built to avoid: a mechanical edit
+that the compiler cannot referee and the gates cannot see. **The rule is that a
+phase-A stage edits only what the compiler names**, one site at a time, and never
+by pattern across a file the stage does not own — the compiler's error list *is*
+the work list, and its length is the check on the edit's scope. The stage was
+reverted whole and redone from the error list; the second attempt produced ten
+edits and zero collateral.
+
+## F170 — the gate battery times its sweeps with wall clock, so an unattended run reports machine sleep as compute
+
+`gates.sh family` on stage A1 reported:
+
+```
+PASS  sweep (debug):   PASS=583 FAIL=0, 5887s wall
+PASS  sweep (release): PASS=583 FAIL=0,   40s wall
+```
+
+5887 s is 98 minutes, against 46 s and 47 s on the two family gates earlier in
+the same session — a 125x regression in one profile, on a stage that had just
+flipped 36 bodies including both fork drivers. It read exactly like the flip
+having made the debug encoder pathologically slow.
+
+**It had not.** Re-run immediately, on the same tree, unchanged:
+
+```
+$ /usr/bin/time -p env RUST_ENC_PROFILE=debug \
+      bash rust/tools/diffharness/sweep.sh st mt def sl ltr ps dl bg
+PASS=583 FAIL=0
+real 44.83
+```
+
+Per preset: st 12.2, mt 6.6, def 2.8, sl 1.5, ltr 2.8, ps 5.4, dl 6.3, bg 7.3.
+No preset is slow, `mt` — the one the flip's fork drivers live in — least of all.
+
+**The cause is the instrument.** `run_sweep` brackets the sweep with
+`t0=$(date +%s)` / `t1=$(date +%s)` (`gates.sh:361,379`) and reports `t1-t0`.
+That is wall clock, and wall clock counts suspend. The gate was launched, exceeded
+its foreground budget, and continued unattended; the log mtimes bound it exactly —
+`build_debug.log` 18:22:39, `sweep_debug.log` 20:00:46 — across a stretch with no
+commands issued, during which the machine idled. The release sweep ran after it
+woke and read 40 s, which is why only one profile looked broken.
+
+### Why this is worth a number rather than a shrug
+
+S61 exists because "a 2.6x Miri regression passed eight commits because nothing
+watches the instrument". The same clause makes the gate's own cost a gated
+quantity — and a cost measured in wall clock fails in **both** directions:
+
+* **False positive**, which is what happened here: an idle period is indicted as
+  a regression, and the session spends its time bisecting a stage that is fine.
+* **False negative**, which is worse and silent: a genuine 2x slowdown inside a
+  gate that also happened to run while the machine was busy with something else
+  is indistinguishable from this. The number cannot be compared across runs
+  unless every run had the machine to itself, and nothing checks that.
+
+This is F168's shape in a different instrument, and the pair of them is the
+general statement: **for a measured time, the unit is not the command — it is the
+command plus everything else that was true while it ran.** F168's fork pair
+recorded a per-probe wall whose meaning depended on whether the other probe was
+running; this records a sweep wall whose meaning depends on whether the machine
+was awake.
+
+### The fix
+
+Report CPU time, not wall clock. The shell already has it: bash's `time` keyword
+and `times` both give user+sys for the subshell, and `/usr/bin/time -p` prints
+`user`/`sys` beside `real`. Suspend does not accrue CPU time, and a busy machine
+inflates `real` while leaving `user+sys` roughly honest — which is the property a
+regression tripwire needs. **Report both**: `real` stays useful for a human
+watching a session, `user+sys` is the number a threshold may be set on.
+The same correction applies to `s61_report`'s Miri wall, which is `date +%s`
+arithmetic too (`gates.sh:136,168`) and is the number the 1.3x tripwire actually
+fires on — so today that tripwire can be tripped by an idle laptop. Left as a
+phase-exit item for J rather than changed mid-session under a running campaign,
+because changing the instrument and the tree in one session is what D-gate-6's
+regime note warns against; recorded here so J does not have to rediscover it.
