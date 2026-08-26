@@ -230,8 +230,15 @@ impl SPicture {
     /// **S28 verbatim**: the address is the `Vec`'s own root, never an index into it,
     /// so the pointer's provenance covers the whole array. It exists for one consumer
     /// — `SComplexityAnalysisParam.uiRefMbType`, a `processing/` field that is still
-    /// C-shaped (step 3's) and whose reader tests it for null (`AnalyzePictureComplexity`
-    /// may run with no usable reference). `is_empty()` is that null.
+    /// C-shaped and whose reader tests it for null (`AnalyzePictureComplexity` may
+    /// run with no usable reference). `is_empty()` is that null.
+    ///
+    /// **T9.X2: "step 3's" is struck.** X2's step 3 was to *port* `SetRefMbType` and
+    /// give this field an owned buffer; `SetRefMbType` turned out to have been ported
+    /// since `580c678d` (2026-08-06), and the field is an alias into a *picture's*
+    /// array rather than storage of its own, so there is no buffer here to own. What
+    /// blocks the conversion is upstream's stickiness across frames, not a missing
+    /// function — see F179.
     #[inline]
     pub fn ref_mb_type_root(&mut self) -> *mut u32 {
         if self.uiRefMbType.is_empty() {
