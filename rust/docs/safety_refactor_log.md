@@ -18091,7 +18091,30 @@ one site, genuine UB created by this session (**F171**):
 across it. Fixed with T9.G6's remedy; re-run **OVERALL PASS, 291 Miri / 0
 failed**. **S61: lane wall 543 s against G's 521 s, ratio 1.04.**
 
-**Why no instrument predicted it, and this is the session's most important
+**The owed fork pair ran parallel on the flipped tree and is GREEN:**
+
+    fixed-slice  3411.72 s   1 passed / 0 failed
+    mid-row      3493.33 s   1 passed / 0 failed
+    pair wall    3499 s = 58 min
+
+**The fork is entered under a `&mut` root for the first time in this project's
+history and both probes pass.** `EncodeFixedSlicesForked` and
+`EncodeSizeLimitedSlicesForked` both take `&mut sWelsEncCtx` now, and above them
+`WelsEncoderEncodeExt` holds a protected `Unique` on the context for the whole
+encode, so every worker's pointer is a *child* of that borrow rather than a
+sibling of an `addr_of_mut!` raw. That is the change these two probes existed to
+referee, and no byte gate or 15-minute lane could have seen it.
+
+**And H ran both forms of the pair, which settles F168 with one session's own
+numbers**: 58 min parallel against 108 min serial, same probes, same drives.
+Parallel-vs-parallel across the flip — H 3411/3493 against E8's 3356/3449, ratio
+**1.017 / 1.013** — says the context flip is **Miri-cost-neutral on the fork**,
+the same result E2 measured for the slice flip. H's serial numbers are 6-7%
+*below* its parallel ones per probe; that is the contention, not a regression,
+and it is exactly the comparison the baseline file now warns against making
+carelessly.
+
+**Why no instrument predicted the UB, and this is the session's most important
 finding.** `q1c` and `forksplit` both scope to *bodies with a `*mut sWelsEncCtx`
 parameter*. `UpdateStatistics` is a method on `CWelsH264SVCEncoder` holding the
 context in a **local** raw from `ctx_ptr` — outside both domains. The join read 0
@@ -18104,3 +18127,69 @@ hazards in the family" but "no live hazard anywhere the context is reachable by 
 `&mut *pCtx`-style call-site retags outside the family in `src/encoder` today
 (15 `encoder_ext.rs`, 7 `wels_encoder_ext.rs`, 1 each in `wels_preprocess.rs` and
 `svc_encode_slice.rs`); each is a candidate and they are greppable.
+
+### what session H did not do, named rather than dropped quietly
+
+**Step 3, the in-fork read surface: not started.** The brief's drop order is "4,
+then 3", so this is the item that should have survived a short session and it did
+not — the flip took the session. What it needs is unchanged and now better
+grounded: F132's rounds made every measured in-fork ctx *write* atomic or
+per-slice, and what remains is reads of pre-fork-stamped state through the **14
+in-fork accessors** (unchanged at 14 — the flip touched none of them, by design).
+The template is `rec_view.rs`'s shape under D-mt-3, whose veto is still open, and
+the brief's rule stands: **every new seam item counted and named for the user
+before it lands**. H added none, so the count is still D-mt-3's 2.
+
+**Step 4, the harvest: partially done, and the remainder is not a rename.** Ten
+bodies stopped being `unsafe fn` (T9.H13). What did *not* move, with the reason:
+
+* `ctx_func_list`'s **106** sites — unchanged, and correctly so: it is in-fork,
+  so S63 keeps it raw and its sites are the seam's or the exit's story.
+* the layer's **42** raw `*mut SDqLayer` parameter mentions — unchanged; that is
+  E2's in-fork layer half, X's and J's, not this family.
+* the **21** `MT` tags (18 `slice_multi_threading.rs`, 3 `nal_encap.rs`) —
+  unchanged. The flip converted the fork's *drivers*, not the fork's *shared
+  state*, which is what those tags mark.
+* `deblocking.rs`'s allows — unchanged at 5.
+* **5 of F165's 7 `cursor` accessors** — `ctx_ltr`, `ctx_ltr_at`, `ctx_frame_bs`,
+  `ctx_frame_bs_cur`, `ctx_dq_idc_map`. Their parameters flipped; their *returns*
+  did not, and the tag is on the return. Retiring them needs slice-returning APIs
+  on `pLtr`, `pFrameBs`, `pDqIdcMap` and `SStrideTables`.
+
+**F167's Miri verification: still owed.** The `m_pEncCtx` remedy landed with the
+`&mut` that requires it (T9.H3), but the probe that would drive a screen-content
+reader under a live borrow was not written, because those paths are dormant and
+no existing probe reaches them. The remedy is argued, not run — and F171 is what
+happens when that distinction is allowed to sit: the same class, on a live path,
+was real.
+
+### what X and J inherit
+
+**J's exit-item list**, written most carefully because it is the one that must
+not be re-derived:
+
+1. **The send-seam stays** (D-exit-2, F164) — 8 of its 12 `!Sync` reasons are
+   outside this family. H did not touch it and its comment is still true.
+2. **F162's upstream one-past-the-end read stays** (D-fid-2), revisited at J.
+3. **The full fork pair at the exit — run it parallel** (F168). Two per-probe
+   invocations, separate `CARGO_TARGET_DIR`s. ~57 min, not ~111, and never
+   compare a serial number to a parallel one.
+4. **F163's per-allocation classifier, unbuilt.** It was not needed: the join's
+   LIVE column reached 0 on its own. It becomes necessary again the moment
+   someone widens the hazard domain per S67, because the widened set will not be
+   analysable by hand.
+5. **S67's real domain, unenumerated** — the 24 `&mut *pCtx` call-site retags
+   outside the parameter family, plus F167's stored copy. This is the largest
+   inherited item and the one with a live example behind it.
+6. **F170's instrument fix** — `run_sweep` and `s61_report` both time with
+   `date +%s`, so an idle machine can trip the 1.3x tripwire or mask a real
+   regression. Report CPU beside wall.
+7. **Two dead bodies awaiting a ruling** — `WelsRcDropFrameUpdate` and
+   `WelsMdInterFinePartitionVaaOnScreen`, no caller anywhere in `src/` or
+   `tests/`. D-dead-3's ground reaches them; extending it is the user's, not a
+   session's (F160's precedent).
+8. **`ParasetStrategy` is permanently raw** (F166) and the tool's ST column
+   should be read as "may flip, subject to a borrow check".
+
+**X inherits** the `other` family's raw (F158's list) untouched, and the 5
+`deblocking.rs` allows.

@@ -19,8 +19,16 @@
 #   parallel pair (two invocations, separate CARGO_TARGET_DIRs, concurrent)
 #       T9.E8  3356 s / 3449 s   pair wall ~57 min   (first green)
 #       T9.E2  3294.86 / 3343.20 pair wall ~56 min
+#       T9.H   3411.72 / 3493.33 pair wall 3499 s = 58 min   H's close, GREEN
 #   serial pair (one probe at a time)
-#       T9.H   3194.20 / 3260.15 pair wall 6463 s = 108 min   step 0a, GREEN
+#       T9.H   3194.20 / 3260.15 pair wall 6463 s = 108 min   H's step 0a, GREEN
+#
+# Session H ran BOTH forms on the same two probes, which is what makes this
+# table readable: 58 min parallel against 108 min serial. And parallel-vs-parallel
+# across the context flip — H 3411/3493 against E8 3356/3449, ratio 1.017/1.013 —
+# says the flip is Miri-cost-neutral on the fork, the same result E2 measured for
+# the slice flip. Compare like with like: H's own serial numbers are 6-7% BELOW
+# its parallel ones per probe, which is the contention, not a regression.
 #
 # Serial buys 3-5% per probe and costs 2x on the pair: Miri is a single-threaded
 # interpreter, so two probes are two cores and they do not contend. **Run the
@@ -30,4 +38,4 @@
 # parallel one and read a regression.
 #
 # Format: <seconds> <commit> <date> <note>
-521 b194697c 2026-08-25 session-G-close-lane-vs-lane-ratio-0.97-fork-pair-PAID-BY-H-step-0a-green
+543 65b2d0f0 2026-08-25 session-H-close-lane-vs-lane-ratio-1.04-fork-pair-parallel-3499s-GREEN
