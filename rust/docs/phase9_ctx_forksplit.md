@@ -5,6 +5,28 @@ E3's close (commit `3a1d39b7`). **Re-run it before quoting** — that is the who
 point of it being a tool (S24). This document is the snapshot G's brief is
 scoped from; the tool is the authority.*
 
+> **Moved again by session H (T9.H3-H7) — the flip is running.** The ST column is
+> being converted, so the family shrinks with every stage and **this document's
+> tables are a snapshot of a moving number**. At H's stop:
+>
+> | | at G's close | at H's stop |
+> |---|---:|---:|
+> | bodies with a `*mut sWelsEncCtx` parameter | 266 | **155** |
+> | in-fork | 111 | **111** |
+> | ST-flippable | 155 | **44** |
+>
+> The in-fork column has not moved and will not: S63 says it cannot. **111 bodies
+> taking `&mut sWelsEncCtx` now exist** where there were zero. The plan the flip
+> runs to is `phase9_ctx_flip_plan.md`; the 44 that remain are all blocked behind
+> the init path (`WelsInitEncoderExt`, which owns the context as a `Box::into_raw`
+> raw rather than a live `Box`), and F166's `ParasetStrategy` is excluded
+> permanently. **Two of the 44 are dead** — `WelsRcDropFrameUpdate` and
+> `WelsMdInterFinePartitionVaaOnScreen` have no caller anywhere.
+>
+> A trap for anything that builds a call graph from this document: **a flipped body
+> leaves the family**, so the tool stops listing it and its call edges vanish. Union
+> both spellings (T9.H4).
+
 > **Moved by session G (T9.G3).** `DeleteLTRFromLongList` and
 > `DeleteSTRFromShortList` were narrowed off the context onto `&mut SRefList`, so
 > the family is **266 bodies / 111 in-fork / 155 ST-flippable** at G's close and

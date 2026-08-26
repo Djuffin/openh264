@@ -1,6 +1,10 @@
 # Phase 9 — the `sWelsEncCtx` flip: stage plan (session H, step 1)
 
-*Written before the first flip commit, so it can be falsified by one (S60). Every
+*Written before the first flip commit, so it can be falsified by one (S60).
+**Status at session H's stop: phase A is 111 of 154 bodies done across five stages
+(A0-A4), every stage green, the remaining 44 blocked behind the init path. Phase B
+has not started; the ten accessors are all still raw. See the postscript.**
+ Every
 number was re-derived at H's step-0 commit with the command beside it; the tools
 are the authority, this is the snapshot (S24).*
 
@@ -298,3 +302,60 @@ So **no split-borrow helper is needed anywhere in phase B on current evidence.**
 The brief's "split-borrow helper on the ctx (one `&mut self` method returning
 disjoint `&mut` fields)" remains available if a site needs it; no site found so
 far does.
+
+---
+
+# Postscript — what the plan got right and wrong, written at session H's stop
+
+Five stages ran (A0–A4), each green on `gates.sh family` at 583/583 in both
+profiles. **111 of 154 bodies flipped; 44 remain.** Census `266/111/155` →
+`155/111/44`; `raw_ptr` 1587 → 1474.
+
+## Right
+
+**Phase A's falsifiable claim held for all five stages.** Every compiler error
+across the whole campaign was a *contract* question, never a borrow error: 10 +
+17 + 1 + 0 `is_null()` guards on a reference, and three type mismatches at
+boundaries where a non-family caller had to start borrowing the owning `Box`.
+The prediction was that phase A cannot produce a borrow error because nothing
+holds a checker-visible borrow of the context, and it did not.
+
+**Deferring the accessors to phase B was right for a reason the plan did not
+give.** The plan argued it spreads the crux into ten doses. The stronger reason
+appeared in practice: with the accessors raw, **a stage touches only the bodies
+it flips** — signature and derefs, nothing else — which is what made 111 bodies
+in five stages possible at all.
+
+## Wrong
+
+**"Root-down by depth level" is the wrong unit.** Depth is a property of the
+static call graph; the flip's actual precondition is *every caller already
+flipped*, which is a property of the current tree and changes after every stage.
+The stages ran off a computed frontier instead, and their sizes — 1, 36, 32, 34,
+9 — look nothing like the depth levels the plan tabulated (12, 32, 20, 10, 11).
+**Replace "depth levels" with "recompute the frontier after each stage."**
+
+**The boundary spelling was over-thought.** The plan and F169 both prescribed an
+explicit coercion; Rust coerces `&mut T` → `*mut T` implicitly in argument
+position and none was ever needed (F169's amendment).
+
+**The plan said nothing about the top boundary bodies, and they are the gate.**
+`WelsEncoderEncodeExt`'s caller could hand it a `&mut` for free. The init path
+cannot: `WelsInitEncoderExt` owns the context as `Box::into_raw` and has no live
+`Box` to borrow. **All 44 remaining bodies are behind that one edit**, and the
+plan's tables — which counted only bodies *inside* the family — could not show it.
+The next session's first move is that body, not a depth level.
+
+## The remaining work, named
+
+| | |
+|---|---:|
+| ST bodies still raw | **44** |
+| — blocked behind the init path (`WelsInitEncoderExt` + `CWelsH264SVCEncoder` methods) | 42 |
+| — dead, awaiting a ruling (`WelsRcDropFrameUpdate`, `WelsMdInterFinePartitionVaaOnScreen`) | 2 |
+| permanently raw by ruling (`ParasetStrategy`, F166) | 1 |
+| phase B accessors, none started | **10** |
+| in-fork, permanently raw (S63) | **111** |
+
+Phase B's table above is unchanged and still costed; nothing in phase A
+invalidated it, because phase A deliberately never touched an accessor.
