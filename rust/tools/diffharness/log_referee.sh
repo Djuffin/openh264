@@ -37,7 +37,16 @@
 #
 #   1. `this = 0x<hex>`   the codec instance address `WelsLog` prints in its tag.
 #                         Two processes, two heaps. -> `this = 0xINSTANCE`
-#   2. `0x<hex>`          any other address that reaches a message. -> `0xPTR`
+#   2. `pCtx= 0x<hex>`    the encoder context address, in the two
+#                         `Wels*EncoderExt()` lines. **Anchored to the field name
+#                         on purpose**: the first version of this rule matched any
+#                         `0x<hex>` anywhere, and `LogStatistics` prints the frame
+#                         size as `<w>x<h>` — so `SpatialId = 0,80x48` contains
+#                         `0x48` and was being rewritten to `80xPTR`, on both sides,
+#                         silently normalizing away the resolution the line exists
+#                         to report. A port printing `80x49` would have compared
+#                         equal. Never write a normalization broader than the thing
+#                         it is meant to hide.
 #   3. `SpeedInMs: <f>`   `LogStatistics`' wall-clock encode speed. -> `<TIME>`
 #   4. `fAverageFrameRate=<f>`, `LastFrameRate=<f>`
 #                         both derived from wall-clock elapsed time. -> `<RATE>`
@@ -60,6 +69,19 @@
 # single-layer row would run it once and prove almost nothing; bitrate mode
 # because the statistics block is config-dependent, which is why this is one
 # fixed row rather than a sweep.
+#
+# **The last argument is why the row has one, and it was an afterthought that
+# turned out to be load-bearing.** `LogStatistics` has exactly two callers, and on
+# the first version of this script the capture contained **zero** of its lines on
+# *both* sides — so half of the work it was built to check had no coverage and the
+# script said PASS to the text it did compare. Neither caller is reachable from
+# these drivers by choosing a different config: `UpdateStatistics` needs
+# `kiDeltaFrames > fMaxFrameRate * 2` plus a log interval (tens of frames at 30
+# fps), and neither driver called `SetOption(ENCODER_OPTION_SVC_ENCODE_PARAM_*)`
+# at all. The 23rd driver argument re-applies the *same* parameter block through
+# the EXT arm after frame 2, which is a no-op for the encode and the only way in
+# for the trace. Four frames rather than three so there is a frame on each side of
+# it.
 set -u
 HERE=$(cd "$(dirname "$0")" && pwd)
 ROOT=$(cd "$HERE/../../.." && pwd)
@@ -77,8 +99,8 @@ done
 YUV="$ROOT/res/CiscoVT2people_320x192_12fps.yuv"
 [ -f "$YUV" ] || { echo "log_referee: missing $YUV"; exit 2; }
 
-#            src   w   h  frames qp cabac gop  out            rc bi sm sn th cx ltr lp fb ps dl dn
-ARGS=(   "$YUV" 320 192      3   26     1  -1  "$OUT/x.264"    1  0  0  1  1  0   0 30  0  0  3  1 )
+#            src   w   h  frames qp cabac gop  out            rc bi sm sn th cx ltr lp fb ps dl dn bgd sox
+ARGS=(   "$YUV" 320 192      4   26     1  -1  "$OUT/x.264"    1  0  0  1  1  0   0 30  0  0  3  1   0   2 )
 
 echo "=== the fixed row: ${ARGS[*]}"
 
@@ -102,7 +124,7 @@ normalize() {  # stdin -> stdout; the seven rules above, in order
   # `wels_trace.rs`). Matching only `0x<hex>` leaves the second half behind.
   sed -E \
     -e 's/this = (0x)+[0-9a-fA-F]+/this = 0xINSTANCE/g' \
-    -e 's/(0x)+[0-9a-fA-F]+/0xPTR/g' \
+    -e 's/pCtx= (0x)+[0-9a-fA-F]+/pCtx= 0xPTR/g' \
     -e 's/SpeedInMs: [-0-9.eE+]+/SpeedInMs: <TIME>/g' \
     -e 's/fAverageFrameRate=[-0-9.eE+]+/fAverageFrameRate=<RATE>/g' \
     -e 's/LastFrameRate=[-0-9.eE+]+/LastFrameRate=<RATE>/g' \

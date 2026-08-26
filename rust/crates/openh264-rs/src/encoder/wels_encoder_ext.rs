@@ -2097,6 +2097,15 @@ impl CWelsH264SVCEncoder {
     /// inside `GetOption`; the reference's `TraceParamInfo` is at `:505` and always
     /// was. See F182 — a citation nobody could act on until somebody tried to.
     ///
+    /// **Every unsigned field printed through `%d` is cast to `i32` here, and that
+    /// is not a lint — it is the reference's output.** C's `%d` on a `uint32_t`
+    /// reinterprets the bits as signed, so upstream prints `uiIntraPeriod= -1`
+    /// where the stored value is `0xFFFFFFFF`; Rust's `{}` on a `u32` prints
+    /// `4294967295`. `log_referee.sh` caught exactly that divergence on this
+    /// function's first covered run (F186), which is the argument for the referee
+    /// in one line: the port was *already wrong* the day it was written and no
+    /// other instrument in this repo could have said so.
+    ///
     /// **Format fidelity is the whole contract**, so the odd spellings below are
     /// deliberate transcriptions and not typos: `fFrameRate= %.6ff` really does
     /// print a trailing `f` after six decimals, the block prints `iComplexityMode`
@@ -2122,7 +2131,7 @@ iComplexityMode = {};iNumRefFrame = {};iEntropyCodingModeFlag = {};uiMaxNalSize 
                 pParam.iTemporalLayerNum,
                 pParam.iSpatialLayerNum,
                 pParam.fMaxFrameRate,
-                pParam.uiIntraPeriod,
+                pParam.uiIntraPeriod as i32,
                 pParam.eSpsPpsIdStrategy as i32,
                 b(pParam.bPrefixNalAddingCtrl),
                 b(pParam.bSimulcastAVC),
@@ -2132,14 +2141,14 @@ iComplexityMode = {};iNumRefFrame = {};iEntropyCodingModeFlag = {};uiMaxNalSize 
                 b(pParam.bEnableAdaptiveQuant),
                 b(pParam.bEnableFrameSkip),
                 b(pParam.bEnableLongTermReference),
-                pParam.iLtrMarkPeriod,
+                pParam.iLtrMarkPeriod as i32,
                 b(pParam.bIsLosslessLink),
                 pParam.iComplexityMode as i32,
                 pParam.iNumRefFrame,
                 pParam.iEntropyCodingModeFlag,
-                pParam.uiMaxNalSize,
+                pParam.uiMaxNalSize as i32,
                 pParam.iLTRRefNum,
-                pParam.iMultipleThreadIdc,
+                pParam.iMultipleThreadIdc as i32,
                 pParam.iLoopFilterDisableIdc,
                 pParam.iLoopFilterAlphaC0Offset,
                 pParam.iLoopFilterBetaOffset,
@@ -2170,8 +2179,8 @@ uiProfileIdc = {};uiLevelIdc = {};iDLayerQp = {}",
                     pSpatialCfg.iSpatialBitrate,
                     pSpatialCfg.iMaxSpatialBitrate,
                     pSpatialCfg.sSliceArgument.uiSliceMode as i32,
-                    pSpatialCfg.sSliceArgument.uiSliceNum,
-                    pSpatialCfg.sSliceArgument.uiSliceSizeConstraint,
+                    pSpatialCfg.sSliceArgument.uiSliceNum as i32,
+                    pSpatialCfg.sSliceArgument.uiSliceSizeConstraint as i32,
                     pSpatialCfg.uiProfileIdc as i32,
                     pSpatialCfg.uiLevelIdc as i32,
                     pSpatialCfg.iDLayerQp
@@ -2209,18 +2218,18 @@ uiProfileIdc = {};uiLevelIdc = {};iDLayerQp = {}",
 LastFrameRate={}, LatestBitRate={}, LastFrameQP={}, uiInputFrameCount={}, uiSkippedFrameCount={}, \
 uiResolutionChangeTimes={}, uIDRReqNum={}, uIDRSentNum={}, uLTRSentNum=NA, iTotalEncodedBytes={} at Ts = {}",
                     iDid,
-                    pStatistics.uiWidth,
-                    pStatistics.uiHeight,
+                    pStatistics.uiWidth as i32,
+                    pStatistics.uiHeight as i32,
                     format!("{:.6}", pStatistics.fAverageFrameSpeedInMs),
                     format!("{:.6}", pStatistics.fAverageFrameRate),
                     format!("{:.6}", pStatistics.fLatestFrameRate),
-                    pStatistics.uiBitRate,
-                    pStatistics.uiAverageFrameQP,
-                    pStatistics.uiInputFrameCount,
-                    pStatistics.uiSkippedFrameCount,
-                    pStatistics.uiResolutionChangeTimes,
-                    pStatistics.uiIDRReqNum,
-                    pStatistics.uiIDRSentNum,
+                    pStatistics.uiBitRate as i32,
+                    pStatistics.uiAverageFrameQP as i32,
+                    pStatistics.uiInputFrameCount as i32,
+                    pStatistics.uiSkippedFrameCount as i32,
+                    pStatistics.uiResolutionChangeTimes as i32,
+                    pStatistics.uiIDRReqNum as i32,
+                    pStatistics.uiIDRSentNum as i32,
                     pStatistics.iTotalEncodedBytes,
                     kiCurrentFrameTs
                 ),
@@ -2477,7 +2486,19 @@ uiResolutionChangeTimes={}, uIDRReqNum={}, uIDRSentNum={}, uLTRSentNum=NA, iTota
                     // context. Re-derived from the slot the adjust just filled.
                     pCtx = Self::ctx_ptr(&mut self.m_pEncContext);
                     // LogStatistics
+                    //
+                    // **T9.X2 — the announcement line was missing too (F186).**
+                    // `welsEncoderExt.cpp:845` logs this immediately before the
+                    // statistics block, and the port had the call without it. It went
+                    // unnoticed because until this session neither diffharness driver
+                    // ever took this arm; the referee's 23rd argument is what made the
+                    // arm reachable and the omission visible on the same run.
                     let ts = (*pCtx).iLastStatisticsLogTs;
+                    WelsLog(
+                        self.log_ctx(),
+                        WELS_LOG_INFO,
+                        "CWelsH264SVCEncoder::SetOption():ENCODER_OPTION_SVC_ENCODE_PARAM_EXT, LogStatisticsBeforeNewEncoding",
+                    );
                     self.LogStatistics(ts, sEncodingParam.iSpatialLayerNum - 1);
                 }
                 EncoderOption::ENCODER_OPTION_FRAME_RATE => {

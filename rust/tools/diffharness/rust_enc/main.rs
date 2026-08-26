@@ -71,7 +71,7 @@ unsafe fn install_trace_capture(pEnc: *mut ISVCEncoder) -> Option<Box<TraceSinkC
 fn main() {
     let a: Vec<String> = std::env::args().collect();
     if a.len() < 9 {
-        eprintln!("usage: rust_enc <src.yuv> <w> <h> <frames> <qp> <cabac> <gop> <out.264> [rcmode] [baseinit 0|1|2] [slicemode] [slicenum] [threads] [complexity] [ltr] [ltrperiod] [ltrfb]");
+        eprintln!("usage: rust_enc <src.yuv> <w> <h> <frames> <qp> <cabac> <gop> <out.264> [rcmode] [baseinit 0|1|2] [slicemode] [slicenum] [threads] [complexity] [ltr] [ltrperiod] [ltrfb] [psstrategy] [dlayers] [denoise] [bgd] [setoptext]");
         std::process::exit(1);
     }
     let src = &a[1];
@@ -127,6 +127,11 @@ fn main() {
     // `WelsInitSCDPskipFunc` also requires `bScreenContent`, an axis neither driver
     // expresses (F125).
     let bgd: i32 = if a.len() > 21 { a[21].parse().unwrap() } else { 0 };
+    // 23rd: the log referee's reach into `SetOption` — see `cxx_enc.cpp` for why.
+    // N > 0 re-applies the same `SEncParamExt` through
+    // `SetOption(ENCODER_OPTION_SVC_ENCODE_PARAM_EXT)` after frame N-1. 0 in every
+    // sweep row.
+    let setoptext: i32 = if a.len() > 22 { a[22].parse().unwrap() } else { 0 };
 
     unsafe {
         let mut pEnc: *mut ISVCEncoder = std::ptr::null_mut();
@@ -306,6 +311,19 @@ fn main() {
             if ret != 0 {
                 eprintln!("EncodeFrame failed at {}: {}", f, ret);
                 break;
+            }
+            // The referee's SetOption reach — after this frame, before the next.
+            // `cxx_enc.cpp` does the same thing at the same point.
+            if setoptext > 0 && f == setoptext - 1 {
+                let opt_ret = ISVCEncoder::SetOption(
+                    pEnc,
+                    ENCODER_OPTION::ENCODER_OPTION_SVC_ENCODE_PARAM_EXT,
+                    std::ptr::from_mut(&mut p).cast::<std::ffi::c_void>(),
+                );
+                if opt_ret != 0 {
+                    eprintln!("SetOption(SVC_ENCODE_PARAM_EXT) failed at {}: {}", f, opt_ret);
+                    break;
+                }
             }
             if info.eFrameType == EVideoFrameType::videoFrameTypeSkip {
                 continue;
