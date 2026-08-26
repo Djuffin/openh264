@@ -55,7 +55,7 @@ static void InstallTraceCapture (ISVCEncoder* pEnc) {
 
 int main (int argc, char** argv) {
   if (argc < 9) {
-    fprintf (stderr, "usage: %s <src.yuv> <w> <h> <frames> <qp> <cabac> <gop> <out.264> [rcmode] [baseinit 0|1|2] [slicemode] [slicenum] [threads] [complexity] [ltr] [ltrperiod] [ltrfb] [psstrategy] [dlayers] [denoise]\n", argv[0]);
+    fprintf (stderr, "usage: %s <src.yuv> <w> <h> <frames> <qp> <cabac> <gop> <out.264> [rcmode] [baseinit 0|1|2] [slicemode] [slicenum] [threads] [complexity] [ltr] [ltrperiod] [ltrfb] [psstrategy] [dlayers] [denoise] [bgd] [setoptext]\n", argv[0]);
     return 1;
   }
   const char* kpSrc    = argv[1];
@@ -130,6 +130,18 @@ int main (int argc, char** argv) {
   // (F117/T9.B27). `FillDefault` leaves the flag ON, so an ordinary application runs
   // this family and the harness never did. See the `bg` preset in sweep.sh.
   const int   kiBgd = (argc > 21) ? atoi (argv[21]) : 0;
+  // 23rd: **the log referee's reach into `SetOption` (T9.X2)**. N > 0 re-applies
+  // the *same* SEncParamExt through
+  // `SetOption(ENCODER_OPTION_SVC_ENCODE_PARAM_EXT)` after frame N-1. It exists
+  // because `CWelsH264SVCEncoder::LogStatistics` has exactly two callers and
+  // neither is reachable from this driver otherwise: the `UpdateStatistics` path
+  // needs `kiDeltaFrames > fMaxFrameRate * 2` plus a log interval (tens of
+  // frames), and the two `SetOption` arms were never exercised here at all. With
+  // the parameters unchanged the option is a no-op for the encode; what it is
+  // NOT a no-op for is the trace, which is the point.
+  //
+  // 0 (default) in every sweep row, so `sweep.sh` is untouched.
+  const int   kiSetOptExt = (argc > 22) ? atoi (argv[22]) : 0;
 
   ISVCEncoder* pEnc = NULL;
   if (WelsCreateSVCEncoder (&pEnc) != 0 || pEnc == NULL) {
@@ -309,6 +321,14 @@ int main (int argc, char** argv) {
     if (iRet != cmResultSuccess) {
       fprintf (stderr, "EncodeFrame failed at %d: %d\n", f, iRet);
       break;
+    }
+    // The referee's SetOption reach — after this frame, before the next.
+    if (kiSetOptExt > 0 && f == kiSetOptExt - 1) {
+      int iOptRet = pEnc->SetOption (ENCODER_OPTION_SVC_ENCODE_PARAM_EXT, &sParam);
+      if (iOptRet != cmResultSuccess) {
+        fprintf (stderr, "SetOption(SVC_ENCODE_PARAM_EXT) failed at %d: %d\n", f, iOptRet);
+        break;
+      }
     }
     if (sInfo.eFrameType == videoFrameTypeSkip)
       continue;

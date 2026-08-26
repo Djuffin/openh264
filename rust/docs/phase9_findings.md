@@ -4210,3 +4210,79 @@ this session's mandate for the gate was to *add* a smoke to it, not to re-cut it
 time with `date +%s`, so every number above is wall and not CPU, and an idle or
 busy machine moves them. That fix is J's, and it matters more now that a ruling
 turns on a wall-clock threshold.
+
+---
+
+## F186 — the referee's first covered run of `LogStatistics` found three defects, one of them in the referee itself
+
+**Session X2, the follow-up.** `log_referee.sh` shipped with `LogStatistics`
+ported and **zero coverage of it**: the capture contained no `EncoderStatistics:`
+line on *either* side, so half of F100 was unverified and the script still said
+`PASS` on the text it did compare. That is S57's shape aimed at a new instrument —
+a gate whose green includes a region it never reaches.
+
+**Why no config could fix it.** `LogStatistics` has exactly two callers.
+`UpdateStatistics`'s needs `kiDeltaFrames > fMaxFrameRate * 2` *and*
+`kiTimeDiff >= iStatisticsLogInterval` — tens of frames at 30 fps, which the
+referee's row (and every sweep row) is far short of. The other two are
+`SetOption(ENCODER_OPTION_SVC_ENCODE_PARAM_BASE / _EXT)`, and **neither
+diffharness driver has ever called either option**: `grep -c 'SVC_ENCODE_PARAM'`
+is 0 in both `cxx_enc.cpp` and `rust_enc/main.rs`. The coverage gap was in the
+drivers, not the configuration.
+
+Both drivers gained a 23rd argument that re-applies the *same* `SEncParamExt`
+through the EXT arm after frame N-1 — a no-op for the encode, the only door in
+for the trace. The referee's row uses it and the row stays byte-identical, which
+is worth stating: the trace divergences below are about logging and not a symptom
+of an encoding difference.
+
+### 1. `%d` on an unsigned field prints the signed reinterpretation
+
+The first covered run:
+
+```
+cxx :  uiIntraPeriod= -1
+rust:  uiIntraPeriod= 4294967295
+```
+
+C's `%d` on a `uint32_t` reinterprets the bits; Rust's `{}` on a `u32` does not.
+**Sixteen fields across both functions were wrong the day they were written** —
+`uiIntraPeriod`, `iLtrMarkPeriod`, `uiMaxNalSize`, `iMultipleThreadIdc`, the two
+`sSliceArgument` counts, and nine of `SEncoderStatistics`' unsigned members. Every
+one is now cast to `i32` at the call, with a doc note saying why so a later reader
+does not tidy them back.
+
+The value is only visibly wrong when the field is large enough to set the sign
+bit, which `uiIntraPeriod = 0xFFFFFFFF` is and `uiInputFrameCount = 2` is not — so
+this would have sat correct-looking on most configurations forever.
+
+### 2. `SetOption`'s EXT arm was missing its announcement line
+
+`welsEncoderExt.cpp:845` logs
+`"...ENCODER_OPTION_SVC_ENCODE_PARAM_EXT, LogStatisticsBeforeNewEncoding"`
+immediately before the statistics block. The port had the `LogStatistics` call and
+not the line above it. Restored. It was invisible until the same commit made the
+arm reachable — the omission and the instrument that finds it arrived together.
+
+### 3. The referee was normalizing away the field it was checking
+
+Its rule 2 was `s/(0x)+[0-9a-fA-F]+/0xPTR/g` — any address anywhere. But
+`LogStatistics` prints the frame size as `<w>x<h>`, so `SpatialId = 0,80x48`
+contains the substring `0x48` and was being rewritten to `80xPTR`. On both sides,
+identically, so it compared clean: **a port printing `80x49` would have passed**.
+The rule is now anchored to `pCtx= `, the only field that actually carries an
+address in a message the port emits.
+
+**The rule this leaves behind.** A normalization is a hole you cut in your own
+instrument, and cutting it wider than the thing you meant to hide is how a
+referee ends up certifying the field it was built to check. Every normalization
+should be anchored to the field name it applies to, not to the shape of the value.
+
+### Calibration
+
+S66 both ways on the *new* coverage specifically, not just the old: a planted
+`uiSkipedFrameCount` typo inside `LogStatistics` drops the tally **20 -> 17** (all
+three statistics lines) and surfaces as MISSING-AND-UNOWNED *and* EXTRA; the clean
+tree returns 20/35 with 0 unowned, 0 extra, 0 stale. Proving the typo is caught in
+the function that had no coverage an hour earlier is the point of running the
+calibration again rather than trusting the first one.

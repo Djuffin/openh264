@@ -18486,6 +18486,45 @@ user ruled on is not a session's call.
 here rather than quietly re-scoped; the brief's own rule is that a second
 deferral needs the user's sign-off, and this is the first for these items.
 
+## The follow-up: `LogStatistics` had no coverage, and closing that found three more (F186)
+
+The referee shipped green-on-text with **zero `EncoderStatistics:` lines on either
+side** — half of F100 unverified, and the script saying `PASS` on the part it did
+compare. No configuration could have fixed it: `LogStatistics`' two callers are
+`UpdateStatistics` (needs tens of frames) and the two
+`SetOption(ENCODER_OPTION_SVC_ENCODE_PARAM_*)` arms, and **neither driver had ever
+called either option** (`grep -c 'SVC_ENCODE_PARAM'` = 0 in both). The gap was in
+the drivers, not the configuration.
+
+Both gained a 23rd argument that re-applies the same `SEncParamExt` through the
+EXT arm after frame N-1 — a no-op for the encode, the only door in for the trace.
+The row stays byte-identical, so what follows is about logging and not a symptom
+of an encoding difference. Coverage 19 -> 35 reference messages, and the first
+covered run found three things:
+
+1. **`%d` on an unsigned field prints the signed reinterpretation.** `cxx` printed
+   `uiIntraPeriod= -1` where the port printed `4294967295`. **Sixteen fields**
+   across the two functions were wrong from the day they were written; all now
+   cast at the call site, with a note against future tidying. Only visible when
+   the sign bit is set, so most configurations would have looked correct forever.
+2. **`SetOption`'s EXT arm was missing `"...LogStatisticsBeforeNewEncoding"`**
+   (`welsEncoderExt.cpp:845`) — the port had the `LogStatistics` call and not the
+   line above it. The omission and the instrument that finds it arrived together.
+3. **The referee was normalizing away the field it was checking.** Rule 2 matched
+   any `0x<hex>`, and `LogStatistics` prints `<w>x<h>` — so `SpatialId = 0,80x48`
+   became `80xPTR` on both sides and compared clean. **A port printing `80x49`
+   would have passed.** Anchored to `pCtx= ` now.
+
+The rule that leaves behind: a normalization is a hole cut in your own instrument,
+and cutting it wider than the thing you meant to hide is how a referee ends up
+certifying the field it was built to check. Anchor to the field name, never to the
+shape of the value.
+
+Re-calibrated on the *new* coverage rather than trusting the first S66: a planted
+`uiSkipedFrameCount` typo inside `LogStatistics` drops the tally **20 -> 17** and
+surfaces both ways; clean tree 20/35, 0 unowned, 0 extra, 0 stale.
+
+
 ## What H2 inherits
 
 Unchanged from X's list, and **nothing added**: the in-fork read surface, the 5
