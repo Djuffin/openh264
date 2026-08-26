@@ -4286,3 +4286,66 @@ three statistics lines) and surfaces as MISSING-AND-UNOWNED *and* EXTRA; the cle
 tree returns 20/35 with 0 unowned, 0 extra, 0 stale. Proving the typo is caught in
 the function that had no coverage an hour earlier is the point of running the
 calibration again rather than trusting the first one.
+
+---
+
+## F187 — six of fourteen "mechanical" conversions were documented hazards, and the documentation was in the file
+
+**Session X2, the second follow-up.** Asked which of step 1's remaining raw sites
+were mechanical, this session classified fourteen as such: five `pBsWriter`, three
+`CheckMatched*` parameters, and six `WelsInitSps`/`WelsBitRateVerification` layer
+parameters. **Eight survived contact with the call sites. Six did not, and both
+refusals were already written down in the source.**
+
+### What went in (9 raw sites, 2 `unsafe fn`)
+
+* **`au_set.rs`'s five `pBsWriter: *mut BsWriter` -> `&mut BsWriter`.** Every body
+  opened with `let pBs = &mut *pBsWriter;` and a null check, and every production
+  call site already formed the reference — `&mut (*pOut).sBsWrite`, passed beside
+  `&mut (*pOut).sBsBuffer[..]` as a separate argument. Two disjoint fields of one
+  `SWelsEncoderOutput`; never an aliasing question. The raw was a vestige and the
+  null check was unreachable.
+* **`CheckMatchedSps` and `CheckMatchedSubsetSps` — both now safe fns**, four
+  `*const` parameters gone. The two call sites that held raws spell
+  `&*pSpsArray.add(id)` now.
+
+### What did not, and why
+
+1. **`WelsWriteSVCPrefixNal`'s `pBsWriter` (`nal_encap.rs`).** Its multi-threaded
+   caller passes `std::ptr::addr_of_mut!((*pSliceBs).sBsWrite)`
+   (`slice_multi_threading.rs:1371`) over fork-shared slice state, and the comment
+   two lines above says the spelling is deliberate. Converting the parameter would
+   force a `&mut` retag over the seam. **H2's question, not this one's.**
+2. **The five `WelsInitSps` / `WelsInitSubsetSps` layer parameters.** The call site
+   carries its own refusal (`paraset_strategy.rs:846`):
+
+   > S29's named shape. `WelsInitSps` takes `*mut SSpatialLayerConfig`, so the
+   > reference here only existed to retag and be cast away — **and its retag is
+   > what invalidated `InitDqLayers`'s live pointer into the same layer.**
+
+   A previous session tried exactly this conversion and it broke something. The
+   `addr_of_mut!` at the call site is the fix.
+
+### The distinction the eight share and the six do not
+
+**Shared versus unique.** `CheckMatched*` only reads, so `&*ptr` is a
+`SharedReadOnly` retag that leaves every other pointer into the array standing —
+which is why it is safe where F71's `&mut` was not. `pBsWriter` writes, but to a
+field nothing else aliases. The six that failed all mint a `Unique` retag over
+storage something else holds a live pointer into: the fork's slice buffer, or a
+spatial layer `InitDqLayers` is walking.
+
+So "mechanical" is not a property of the *parameter* — a raw pointer to a single
+object with one caller looks identical in all fourteen. It is a property of what
+else is live at the call site, which the signature cannot show you and the count
+in a brief's table certainly cannot.
+
+### The honest correction
+
+The estimate of "roughly 14, give or take a few either way" was **43% wrong in the
+optimistic direction**, and every one of the six had its reason in a comment
+within twenty lines of the code. The lesson is this session's own, for the third
+time: F179 was a comment asserting a false negative about its own tree, F181 was a
+parameter name read instead of the reference, and this was a classification made
+from signatures instead of from call sites. **Read the caller before you call
+anything mechanical.**

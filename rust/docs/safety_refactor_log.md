@@ -18525,6 +18525,41 @@ Re-calibrated on the *new* coverage rather than trusting the first S66: a plante
 surfaces both ways; clean tree 20/35, 0 unowned, 0 extra, 0 stale.
 
 
+## The second follow-up: eight of the fourteen "mechanical" sites, and why six were not (F187)
+
+Asked which of step 1's remaining raw sites could be converted independently, this
+session classified fourteen as mechanical. **Eight went in. Six were documented
+hazards, and the documentation was inside the file.**
+
+In: `au_set.rs`'s five `pBsWriter: *mut BsWriter` -> `&mut BsWriter` (every body
+opened with `let pBs = &mut *pBsWriter;` and every call site already formed the
+reference beside `&mut (*pOut).sBsBuffer[..]` — two disjoint fields, never an
+aliasing question), and `CheckMatchedSps`/`CheckMatchedSubsetSps`, which are now
+**safe fns**. Nine raw sites, two `unsafe fn`: raw_ptr 1365 -> 1356, unsafe_fn
+600 -> 598.
+
+Out, with their own reasons:
+
+* `WelsWriteSVCPrefixNal`'s writer — its MT caller passes
+  `addr_of_mut!((*pSliceBs).sBsWrite)` over fork-shared state, deliberately.
+  **H2's.**
+* The five `WelsInitSps`/`WelsInitSubsetSps` layer parameters — the call site says
+  why: *"its retag is what invalidated `InitDqLayers`'s live pointer into the same
+  layer"* (S29). A previous session already tried it.
+
+**The distinction is shared versus unique, and it is not visible in the
+signature.** `CheckMatched*` only reads, so `&*ptr` is a `SharedReadOnly` retag
+that leaves other pointers standing — safe exactly where F71's `&mut` was not.
+The six that failed all mint a `Unique` retag over storage something else holds a
+live pointer into. A raw parameter to a single object looks identical in all
+fourteen cases; what separates them is what else is live at the caller.
+
+The estimate was 43% optimistic, and this is the third time in one session the
+same error has been made in a different costume: F179 believed a comment's false
+negative, F181 read a parameter name instead of the reference, and this classified
+from signatures instead of call sites. **Read the caller.**
+
+
 ## What H2 inherits
 
 Unchanged from X's list, and **nothing added**: the in-fork read surface, the 5

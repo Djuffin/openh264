@@ -987,40 +987,45 @@ pub fn CreateParametersetStrategy(
 
 /// `CheckMatchedSps` — `paraset_strategy.cpp:106` (file-static).
 ///
-/// # Safety
-/// Both pointers must reference initialised `SWelsSPS` values.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn CheckMatchedSps(pSps1: *const SWelsSPS, pSps2: *const SWelsSPS) -> bool {
-    if (*pSps1).iMbWidth != (*pSps2).iMbWidth || (*pSps1).iMbHeight != (*pSps2).iMbHeight {
+/// **T9.X2 — safe, and the reason it could go where its neighbours could not is
+/// that the borrow is SHARED.** Both parameters were `*const` to single objects
+/// that this function only reads, which is R1's shape; the two call sites that
+/// held raws now spell `&*pSpsArray.add(id)`. That is a shared retag over one
+/// element of the SPS array, which is exactly the access, and it is not F71's
+/// hazard: F71 is about `&mut` — a `Unique` retag that pops every pointer the
+/// other workers hold. A `&` reborrow narrows to `SharedReadOnly` and leaves them
+/// standing. The neighbouring `WelsInitSps` parameters stay raw for the opposite
+/// reason (S29, see `ParasetIdAdditionIdAdjust`): they are written through.
+pub fn CheckMatchedSps(pSps1: &SWelsSPS, pSps2: &SWelsSPS) -> bool {
+    if pSps1.iMbWidth != pSps2.iMbWidth || pSps1.iMbHeight != pSps2.iMbHeight {
         return false;
     }
 
-    if (*pSps1).uiLog2MaxFrameNum != (*pSps2).uiLog2MaxFrameNum
-        || (*pSps1).iLog2MaxPocLsb != (*pSps2).iLog2MaxPocLsb
+    if pSps1.uiLog2MaxFrameNum != pSps2.uiLog2MaxFrameNum
+        || pSps1.iLog2MaxPocLsb != pSps2.iLog2MaxPocLsb
     {
         return false;
     }
 
-    if (*pSps1).iNumRefFrames != (*pSps2).iNumRefFrames {
+    if pSps1.iNumRefFrames != pSps2.iNumRefFrames {
         return false;
     }
 
-    if (*pSps1).bFrameCroppingFlag != (*pSps2).bFrameCroppingFlag
-        || (*pSps1).sFrameCrop.iCropLeft != (*pSps2).sFrameCrop.iCropLeft
-        || (*pSps1).sFrameCrop.iCropRight != (*pSps2).sFrameCrop.iCropRight
-        || (*pSps1).sFrameCrop.iCropTop != (*pSps2).sFrameCrop.iCropTop
-        || (*pSps1).sFrameCrop.iCropBottom != (*pSps2).sFrameCrop.iCropBottom
+    if pSps1.bFrameCroppingFlag != pSps2.bFrameCroppingFlag
+        || pSps1.sFrameCrop.iCropLeft != pSps2.sFrameCrop.iCropLeft
+        || pSps1.sFrameCrop.iCropRight != pSps2.sFrameCrop.iCropRight
+        || pSps1.sFrameCrop.iCropTop != pSps2.sFrameCrop.iCropTop
+        || pSps1.sFrameCrop.iCropBottom != pSps2.sFrameCrop.iCropBottom
     {
         return false;
     }
 
-    if (*pSps1).uiProfileIdc != (*pSps2).uiProfileIdc
-        || (*pSps1).bConstraintSet0Flag != (*pSps2).bConstraintSet0Flag
-        || (*pSps1).bConstraintSet1Flag != (*pSps2).bConstraintSet1Flag
-        || (*pSps1).bConstraintSet2Flag != (*pSps2).bConstraintSet2Flag
-        || (*pSps1).bConstraintSet3Flag != (*pSps2).bConstraintSet3Flag
-        || (*pSps1).iLevelIdc != (*pSps2).iLevelIdc
+    if pSps1.uiProfileIdc != pSps2.uiProfileIdc
+        || pSps1.bConstraintSet0Flag != pSps2.bConstraintSet0Flag
+        || pSps1.bConstraintSet1Flag != pSps2.bConstraintSet1Flag
+        || pSps1.bConstraintSet2Flag != pSps2.bConstraintSet2Flag
+        || pSps1.bConstraintSet3Flag != pSps2.bConstraintSet3Flag
+        || pSps1.iLevelIdc != pSps2.iLevelIdc
     {
         return false;
     }
@@ -1030,26 +1035,20 @@ pub unsafe fn CheckMatchedSps(pSps1: *const SWelsSPS, pSps2: *const SWelsSPS) ->
 
 /// `CheckMatchedSubsetSps` — `paraset_strategy.cpp:143` (file-static).
 ///
-/// # Safety
-/// Both pointers must reference initialised `SSubsetSps` values.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn CheckMatchedSubsetSps(
-    pSubsetSps1: *const SSubsetSps,
-    pSubsetSps2: *const SSubsetSps,
-) -> bool {
-    if !CheckMatchedSps(&(*pSubsetSps1).pSps, &(*pSubsetSps2).pSps) {
+/// Safe since T9.X2, with [`CheckMatchedSps`] and for its reason.
+pub fn CheckMatchedSubsetSps(pSubsetSps1: &SSubsetSps, pSubsetSps2: &SSubsetSps) -> bool {
+    if !CheckMatchedSps(&pSubsetSps1.pSps, &pSubsetSps2.pSps) {
         return false;
     }
 
-    if (*pSubsetSps1).sSpsSvcExt.iExtendedSpatialScalability
-        != (*pSubsetSps2).sSpsSvcExt.iExtendedSpatialScalability
-        || (*pSubsetSps1).sSpsSvcExt.bAdaptiveTcoeffLevelPredFlag
-            != (*pSubsetSps2).sSpsSvcExt.bAdaptiveTcoeffLevelPredFlag
-        || (*pSubsetSps1).sSpsSvcExt.bSeqTcoeffLevelPredFlag
-            != (*pSubsetSps2).sSpsSvcExt.bSeqTcoeffLevelPredFlag
-        || (*pSubsetSps1).sSpsSvcExt.bSliceHeaderRestrictionFlag
-            != (*pSubsetSps2).sSpsSvcExt.bSliceHeaderRestrictionFlag
+    if pSubsetSps1.sSpsSvcExt.iExtendedSpatialScalability
+        != pSubsetSps2.sSpsSvcExt.iExtendedSpatialScalability
+        || pSubsetSps1.sSpsSvcExt.bAdaptiveTcoeffLevelPredFlag
+            != pSubsetSps2.sSpsSvcExt.bAdaptiveTcoeffLevelPredFlag
+        || pSubsetSps1.sSpsSvcExt.bSeqTcoeffLevelPredFlag
+            != pSubsetSps2.sSpsSvcExt.bSeqTcoeffLevelPredFlag
+        || pSubsetSps1.sSpsSvcExt.bSliceHeaderRestrictionFlag
+            != pSubsetSps2.sSpsSvcExt.bSliceHeaderRestrictionFlag
     {
         return false;
     }
@@ -1150,7 +1149,7 @@ pub unsafe fn FindExistingSps(
             bSVCBaseLayer,
         );
         for iId in 0..iSpsNumInUse {
-            if CheckMatchedSps(&sTmpSps, pSpsArray.add(iId as usize)) {
+            if CheckMatchedSps(&sTmpSps, &*pSpsArray.add(iId as usize)) {
                 return iId;
             }
         }
@@ -1169,7 +1168,7 @@ pub unsafe fn FindExistingSps(
         );
 
         for iId in 0..iSpsNumInUse {
-            if CheckMatchedSubsetSps(&sTmpSubsetSps, pSubsetArray.add(iId as usize)) {
+            if CheckMatchedSubsetSps(&sTmpSubsetSps, &*pSubsetArray.add(iId as usize)) {
                 return iId;
             }
         }
