@@ -65,10 +65,11 @@ pub const ERR_INFO_BS_INCOMPLETE: i32 = ERR_INFO_LOGIC_BASE + 9;
 
 pub const dsBitstreamError: i32 = 0x04;
 
-pub const WELS_LOG_ERROR: i32 = 1;
-pub const WELS_LOG_WARNING: i32 = 2;
-pub const WELS_LOG_INFO: i32 = 3;
-pub const WELS_LOG_DEBUG: i32 = 4;
+// Log levels — **re-exported, not redeclared** (D-fid-4, 2026-08-26, from F184).
+// This file used to carry its own copy; all five copies were consecutive integers
+// where `codec_app_def.h:323-331` is a bit mask, and the level reaches the caller's
+// own callback. A re-export cannot diverge from the canonical block again.
+pub use crate::common::wels_trace::{WELS_LOG_DEBUG, WELS_LOG_ERROR, WELS_LOG_INFO, WELS_LOG_WARNING};
 
 #[inline(always)]
 pub fn GENERATE_ERROR_NO(iErrLevel: i32, iErrInfo: i32) -> i32 {

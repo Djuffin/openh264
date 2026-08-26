@@ -68,10 +68,11 @@ pub const dsNoParamSets: i32 = 0x10;
 pub const dsDataErrorConcealed: i32 = 0x20;
 pub const dsOutOfMemory: i32 = 0x4000;
 
-// Log Levels
-pub const WELS_LOG_ERROR: i32 = 1;
-pub const WELS_LOG_WARNING: i32 = 2;
-pub const WELS_LOG_INFO: i32 = 3;
+// Log levels — **re-exported, not redeclared** (D-fid-4, 2026-08-26, from F184).
+// This file used to carry its own copy; all five copies were consecutive integers
+// where `codec_app_def.h:323-331` is a bit mask, and the level reaches the caller's
+// own callback. A re-export cannot diverge from the canonical block again.
+pub use crate::common::wels_trace::{WELS_LOG_ERROR, WELS_LOG_INFO, WELS_LOG_WARNING};
 
 // ============================================================================
 // Data Structures

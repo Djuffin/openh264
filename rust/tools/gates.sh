@@ -6,8 +6,9 @@
 #     commit   build --all-targets + cargo test (debug + release) + ratchet (~2 min)
 #     family   commit + diffharness sweeps st/mt/def/sl in BOTH profiles  (~5 min)
 #     session  family + Miri --lib, NO benches — the Phase 9 session close
-#              (D-gate-4, 2026-08-22; re-architected under D-gate-6, 2026-08-24:
-#              the whole level is CAPPED AT 15 MINUTES, the user's ruling).
+#              (D-gate-4, 2026-08-22; re-architected under D-gate-6, 2026-08-24,
+#              which capped the whole level — at 15 minutes as first ruled, and
+#              at 20 MINUTES (1200 s) as amended 2026-08-26).
 #                  bash rust/tools/gates.sh session
 #              The Miri step runs as a parallel background lane (one compile +
 #              five concurrent shards, encoder-scoped by construction — no
@@ -70,8 +71,17 @@ hdr() { printf '\n=== %s\n' "$1"; }
 
 # ---------------------------------------------------------------------------
 # D-gate-6 (the user, 2026-08-24): the WHOLE session gate is capped at 15
-# minutes — "even if we need to reduce the amount of tests that we run". The
-# ruling landed after a session-level run was stopped at ~40 minutes; D-gate-5's
+# minutes — "even if we need to reduce the amount of tests that we run".
+#
+# **AMENDED 2026-08-26 (the user, from F185): the cap is 20 minutes, 1200 s.**
+# X2's battery measured 977 s with full coverage; the amendment's reasoning is
+# that a round number bought by a named coverage cut is worse than 977 s that
+# covers everything, and that the Miri lane's parallelism taxing the native lane
+# is a trade this block predicted without pricing. Until F170's CPU-time fix
+# lands at J, the wall number carries F170's caveat about machine load. This
+# header read "15 minutes" for two sessions after the amendment; H2 corrected it.
+#
+# The ruling landed after a session-level run was stopped at ~40 minutes; D-gate-5's
 # probe shrink alone could not meet it, because the serial battery already
 # spends ~4 min in builds/tests and ~3-4 min in sweeps before Miri starts, and
 # the Miri step's own compile is minutes. What meets it is parallelism the

@@ -158,29 +158,86 @@ fi
 rc=0
 
 # ---------------------------------------------------------------------------
-# CHECK 1 — the level vocabulary, reported by name and not normalized away.
+# CHECK 1 — the level each message is delivered with.
 #
 # The `iLevel` a message is delivered with is part of the C ABI: it is the second
 # argument of the caller's own callback and the value `SetOption(
-# ENCODER_OPTION_TRACE_LEVEL, ...)` is compared against. The two links do NOT
-# agree on it, and that is a finding rather than noise — see F184. It is checked
-# here separately, loudly, because folding it into the text comparison would make
-# every single line differ and bury the nine that match.
+# ENCODER_OPTION_TRACE_LEVEL, ...)` is compared against. It is checked here
+# separately from the text, loudly, because folding it into the text comparison
+# would make every single line differ and bury the ones that match.
+#
+# **This check compared the two delivered level VOCABULARIES until H2, and that
+# was coverage-confounded — the same class of defect as F186, in the other
+# direction.** The reference's vocabulary on this row is `{2, 4}`; every one of
+# its eight level-2 lines is a `ParamValidationExt` warning the port does not
+# emit at all, and all four texts are J-owned rows in the gap list. So the set
+# comparison could not go green while ANY owned gap remained, however correct the
+# levels were — it was reporting missing MESSAGES in the name of wrong LEVELS.
+# D-fid-4 aligned the levels with the header's bit mask and the set check stayed
+# red, which is what exposed it. A check whose green is gated on unrelated work
+# is a check nobody can act on.
+#
+# What replaces it is two questions the instrument can actually answer:
+#
+#   1a. Is every level the port delivers a member of the header's mask? This is
+#       F184's defect shape exactly — 3 and 5 are not values `codec_app_def.h`
+#       defines — and it needs no coverage at all to fire.
+#   1b. For every message BOTH sides emit, do the levels agree? This is the
+#       divergence that survives 1a: a real level, on the wrong message.
+#
+# Together they fail on any level defect the capture can see, and are silent
+# about messages only one side emits, which is CHECK 2's subject and the gap
+# list's.
 # ---------------------------------------------------------------------------
 cut -d'|' -f1 "$OUT/cxx.log"  | sort -u | tr '\n' ' ' > "$OUT/cxx.levels"
 cut -d'|' -f1 "$OUT/rust.log" | sort -u | tr '\n' ' ' > "$OUT/rust.levels"
 printf '=== levels delivered: cxx [%s], rust [%s]\n' \
   "$(cat "$OUT/cxx.levels")" "$(cat "$OUT/rust.levels")"
-if ! cmp -s "$OUT/cxx.levels" "$OUT/rust.levels"; then
-  rc=1
-  echo "log_referee: LEVEL MISMATCH — the two links deliver different iLevel values."
-  echo "  The reference's WELS_LOG_* are a bit mask (codec_app_def.h:323-331:"
-  echo "  ERROR 1, WARNING 2, INFO 4, DEBUG 8, DETAIL 16). This port defines them"
-  echo "  as consecutive integers (INFO 3, DEBUG 4, DETAIL 5) in five places:"
-  echo "  common/wels_trace.rs, decoder/{decoder_core,decode_slice,manage_dec_ref}.rs"
-  echo "  and tests/trace_callback_test.rs. F184 — needs a ruling, not a patch:"
-  echo "  it is C-ABI-visible, it spans encoder and decoder, and no byte gate sees it."
-fi
+
+# --- 1a. every delivered level is a value codec_app_def.h:323-331 defines ----
+# WELS_LOG_QUIET 0, then 1 << 0 .. 1 << 5. QUIET is never a message's level, but
+# it is a legal member of the enum and is not the thing under test here.
+for lv in $(cat "$OUT/rust.levels"); do
+  case "$lv" in
+    0|1|2|4|8|16|32) ;;
+    *)
+      rc=1
+      echo "log_referee: LEVEL NOT IN THE HEADER'S MASK — the port delivered iLevel=$lv."
+      echo "  codec_app_def.h:323-331 defines WELS_LOG_* as a bit mask: QUIET 0,"
+      echo "  ERROR 1, WARNING 2, INFO 4, DEBUG 8, DETAIL 16, RESV 32. A value"
+      echo "  outside it reaches the caller's own callback and matches nothing the"
+      echo "  caller can have compiled against. This was F184 (fixed by D-fid-4);"
+      echo "  a recurrence means a WELS_LOG_* constant has been redeclared somewhere."
+      ;;
+  esac
+done
+
+# --- 1b. per-message agreement over the messages both sides emit -------------
+# `<message><TAB><level>`, deduplicated, then one row per message carrying its
+# comma-joined level set. `join` needs both sides sorted on the key by the same
+# collation, which `sort -u` under the C locale gives.
+lvl_by_msg() {  # $1 = normalized log -> stdout "msg<TAB>lv[,lv...]"
+  LC_ALL=C sed -E 's/^([0-9]+)\|\[OpenH264\] this = [^,]*, [A-Za-z]+:(.*)$/\2\t\1/' "$1" \
+  | LC_ALL=C sort -u \
+  | LC_ALL=C awk -F'\t' '{ m[$1] = ($1 in m ? m[$1] "," : "") $2 }
+                          END { for (k in m) printf "%s\t%s\n", k, m[k] }' \
+  | LC_ALL=C sort
+}
+lvl_by_msg "$OUT/cxx.log"  > "$OUT/cxx.lvlmsg"
+lvl_by_msg "$OUT/rust.log" > "$OUT/rust.lvlmsg"
+
+shared=0; disagreed=0
+while IFS=$'\t' read -r msg clv rlv; do
+  [ -n "$msg" ] || continue
+  shared=$((shared+1))
+  if [ "$clv" != "$rlv" ]; then
+    disagreed=$((disagreed+1))
+    rc=1
+    [ "$disagreed" -eq 1 ] && echo "log_referee: LEVEL MISMATCH — same message, different iLevel:"
+    printf '  cxx=%s rust=%s : %s\n' "$clv" "$rlv" "$msg"
+  fi
+done < <(LC_ALL=C join -t$'\t' -j 1 -o 0,1.2,2.2 "$OUT/cxx.lvlmsg" "$OUT/rust.lvlmsg")
+printf '=== level agreement: %s messages on both sides, %s disagreed\n' "$shared" "$disagreed"
 
 # ---------------------------------------------------------------------------
 # CHECK 2 — the message text, against the named gap list.

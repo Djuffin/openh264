@@ -52,13 +52,27 @@ use std::ffi::{CString, c_char, c_void};
 
 pub use crate::api::codec_api::WelsTraceCallback;
 
-/// `codec_app_def.h:323` — the trace levels, and `WELS_LOG_DEFAULT`.
+/// `codec_app_def.h:323-331` — the trace levels, and `WELS_LOG_DEFAULT`.
+///
+/// **These are a bit mask upstream, not consecutive integers** (decision
+/// **D-fid-4**, 2026-08-26, from F184): `1 << 0 .. 1 << 5`. Until that ruling the
+/// port declared them 0,1,2,3,4,5 here and in four other places, which made this
+/// port's `DEBUG` bit-identical to the reference's `INFO` — ABI-visibly, because
+/// the level is the second argument of the caller's own trace callback and the
+/// value `SetOption(ENCODER_OPTION_TRACE_LEVEL, ..)` is compared against
+/// (`m_iTraceLevel < iLevel`, `welsCodecTrace.cpp:76`). `ERROR` and `WARNING`
+/// agreed by coincidence; everything above them did not.
+///
+/// The threshold keeps working because the values stay monotonic, and nothing in
+/// either codec does arithmetic on them — they are compared and matched only.
+/// `WELS_LOG_LEVEL_COUNT` is a *count*, not a mask member, and stays 6.
 pub const WELS_LOG_QUIET: i32 = 0;
-pub const WELS_LOG_ERROR: i32 = 1;
-pub const WELS_LOG_WARNING: i32 = 2;
-pub const WELS_LOG_INFO: i32 = 3;
-pub const WELS_LOG_DEBUG: i32 = 4;
-pub const WELS_LOG_DETAIL: i32 = 5;
+pub const WELS_LOG_ERROR: i32 = 1 << 0;
+pub const WELS_LOG_WARNING: i32 = 1 << 1;
+pub const WELS_LOG_INFO: i32 = 1 << 2;
+pub const WELS_LOG_DEBUG: i32 = 1 << 3;
+pub const WELS_LOG_DETAIL: i32 = 1 << 4;
+pub const WELS_LOG_RESV: i32 = 1 << 5;
 pub const WELS_LOG_LEVEL_COUNT: i32 = 6;
 pub const WELS_LOG_DEFAULT: i32 = WELS_LOG_WARNING;
 
