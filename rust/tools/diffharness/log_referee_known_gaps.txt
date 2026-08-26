@@ -1,0 +1,36 @@
+# Trace messages the reference delivers and this port does not — the log referee's
+# allowlist (Phase 9 session X2, F100). Same contract as
+# `abi_harness/gtest_known_failures.txt`: the referee fails on any difference NOT
+# named here, and fails again on a row here that has stopped differing (a stale
+# row is a lie about coverage). The list therefore moves only in the commit that
+# fixes the gap.
+#
+#   format:  <extended regex matching the message text> | <owner> | <reason>
+#   blank lines and `#` comments ignored. The regex is matched against the
+#   normalized message text with the `<level>|` prefix and the `[OpenH264] this =
+#   ... , <Tag>:` header already stripped.
+#
+# Measured on the fixed row 2026-08-26: reference 19 lines, port 9. The nine the
+# port does emit are byte-for-byte identical to the reference's, which is what
+# `TraceParamInfo` (F100) and `WelsBitRateVerification`'s six restored calls
+# (F181) bought — before this session the port emitted **one** of the nineteen.
+
+# --- ParamValidationExt's profile/entropy adjustments (encoder_ext.rs) --------
+# Three layers x "doesn't support profile" plus the CABAC->CAVLC follow-on. The
+# port performs every one of these adjustments and announces none of them.
+layerId\([0-9]+\) doesn't support profile\([0-9]+\), change to scalable baseline profile | J | ParamValidationExt: the adjustment is ported, the WelsLog is not
+layerId\([0-9]+\) Profile is baseline, Change CABAC to CAVLC | J | ParamValidationExt: same
+bEnableFrameSkip = 0,bitrate can't be controlled for RC_QUALITY_MODE,RC_BITRATE_MODE and RC_TIMESTAMP_MODE without enabling skip frame\. | J | ParamValidationExt: same
+Change QP Range from\([0-9]+,[0-9]+\) to \([0-9]+,[0-9]+\) | J | ParamValidationExt: same
+
+# --- WelsInitEncoderExt / WelsUninitEncoderExt / FreeMemorySvc ---------------
+# The allocator accounting lines. `overall memory usage: N bytes` cannot be ported
+# verbatim: this port has no `CMemoryAlign` running total to print — Phase 3-6
+# replaced the arena with owned containers, which is the reason the number does
+# not exist rather than an oversight. Its row is permanent unless a ruling says
+# to synthesize a number, which would be inventing an observable.
+WelsInitEncoderExt\(\) exit, overall memory usage: [0-9]+ bytes | permanent | no CMemoryAlign running total exists in this port (Phase 3-6 retired the arena)
+FreeMemorySvc\(\), verify memory usage \([0-9]+ bytes\) after free\.\. | permanent | same
+WelsInitEncoderExt\(\), pCtx= .* | J | the line is portable; it was never ported
+WelsUninitEncoderExt\(\), pCtx= .*, iMultipleThreadIdc= [0-9]+\. | J | same
+CWelsH264SVCEncoder::~CWelsH264SVCEncoder\(\) | J | destructor trace; the port's Drop does not log

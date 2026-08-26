@@ -6,6 +6,67 @@ use openh264_rs::api::codec_api::*;
 use openh264_rs::encoder::wels_encoder_ext::{SLTRMarkingFeedback, SLTRRecoverRequest};
 use std::fs::File;
 use std::io::{Read, Write};
+use std::ffi::c_char;
+
+// ---------------------------------------------------------------------------
+// The log referee's capture side (T9.X2, F100) — `cxx_enc.cpp`'s mirror.
+//
+// `OH264_TRACE_LOG=<path>` installs a trace callback that writes every delivered
+// message as `<level>|<text>`, and raises the trace level to INFO because the
+// default is WELS_LOG_WARNING and the parameter/statistics blocks are INFO. Unset
+// — every sweep run — none of this executes and the driver is unchanged.
+//
+// The callback writes through a `File` reached from the trace *context*, which is
+// the one pointer in this plumbing that genuinely belongs to the caller; the
+// registration idiom is `tests/trace_callback_test.rs`'s.
+// ---------------------------------------------------------------------------
+struct TraceSinkCtx {
+    file: File,
+}
+
+unsafe extern "C" fn trace_sink(ctx: *mut std::ffi::c_void, level: i32, string: *const c_char) {
+    unsafe {
+        if ctx.is_null() || string.is_null() {
+            return;
+        }
+        let sink = &mut *ctx.cast::<TraceSinkCtx>();
+        let text = std::ffi::CStr::from_ptr(string).to_string_lossy();
+        let _ = writeln!(sink.file, "{level}|{text}");
+        let _ = sink.file.flush();
+    }
+}
+
+/// Installs the capture if `OH264_TRACE_LOG` names a path. The returned box must
+/// outlive the encoder: the callback keeps its address.
+unsafe fn install_trace_capture(pEnc: *mut ISVCEncoder) -> Option<Box<TraceSinkCtx>> {
+    let path = std::env::var("OH264_TRACE_LOG").ok()?;
+    if path.is_empty() {
+        return None;
+    }
+    let file = File::create(&path).expect("create OH264_TRACE_LOG");
+    let mut sink = Box::new(TraceSinkCtx { file });
+    unsafe {
+        let mut cb: WelsTraceCallback = Some(trace_sink);
+        ISVCEncoder::SetOption(
+            pEnc,
+            ENCODER_OPTION::ENCODER_OPTION_TRACE_CALLBACK,
+            std::ptr::from_mut(&mut cb).cast::<std::ffi::c_void>(),
+        );
+        let mut ctx = std::ptr::from_mut(&mut *sink).cast::<std::ffi::c_void>();
+        ISVCEncoder::SetOption(
+            pEnc,
+            ENCODER_OPTION::ENCODER_OPTION_TRACE_CALLBACK_CONTEXT,
+            std::ptr::from_mut(&mut ctx).cast::<std::ffi::c_void>(),
+        );
+        let mut level: u32 = 3; // WELS_LOG_INFO — codec_app_def.h:323
+        ISVCEncoder::SetOption(
+            pEnc,
+            ENCODER_OPTION::ENCODER_OPTION_TRACE_LEVEL,
+            std::ptr::from_mut(&mut level).cast::<std::ffi::c_void>(),
+        );
+    }
+    Some(sink)
+}
 
 fn main() {
     let a: Vec<String> = std::env::args().collect();
@@ -71,6 +132,10 @@ fn main() {
         let mut pEnc: *mut ISVCEncoder = std::ptr::null_mut();
         assert_eq!(WelsCreateSVCEncoder(&mut pEnc), 0, "WelsCreateSVCEncoder");
         assert!(!pEnc.is_null());
+
+        // Before any Initialize: the parameter block is logged from inside it.
+        // Bound to a local so the sink outlives every encode call below.
+        let _trace_sink = install_trace_capture(pEnc);
 
         let mut p = SEncParamExt::default();
         ISVCEncoder::GetDefaultParams(pEnc, &mut p);
