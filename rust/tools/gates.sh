@@ -417,6 +417,68 @@ fi
 [ "$LEVEL" = family ] && LEVEL_DONE=1
 
 # ---------------------------------------------------------------------------
+# 3b. The gtest simulcast smoke (D-fid-3, the user, 2026-08-26).
+#
+# **Why this exists.** `gtest_stretch.sh --check` in full runs only at `exit`
+# (6c below), and between session E3 and session X2 it did not run at all: the
+# binary took `Abort trap: 6` inside `EncodeDecodeTestAPI.SimulcastAVC_SPS_PPS_LISTING`,
+# printed no tally, and every session in between closed green at `family` with a
+# red `exit` gate in the tree nobody was running (F173). A gate that only the
+# phase close executes is a gate that discovers a five-session-old regression at
+# the phase close.
+#
+# So a filtered subset joins the session battery: the four `Simulcast*` rows, the
+# family the abort lived in, run through the same `--check` ratchet as 6c. With a
+# `--gtest_filter` the script suppresses only its "listed but never ran" arm (the
+# filter is why they did not run); "failing but unlisted" and "listed but passing"
+# both still apply, so this is a real red/green and not a smoke that only checks
+# for a pulse.
+#
+# **Budget: <=60 s.** Measured 2026-08-26 on the session-X2 tree — 4.9 s of gtest
+# for the four rows, ~10 s of link, and the `cargo build --release` the script
+# opens with is a cache hit because `cargo test (release)` above already built it.
+# The wall is printed every run so the budget stays a measured quantity.
+#
+# **Native lane, deliberately** (S61): this runs in the main shell beside the
+# builds and sweeps, never inside the Miri lane, so the session's Miri wall stays
+# comparable to the previous close's number lane-for-lane.
+#
+# Not at `commit`/`family` (a link plus a run per commit is not worth it) and not
+# at `exit`, where 6c runs the whole suite and this would be a strict subset of
+# it. rc 2 is the script's "prerequisites missing" code and SKIPs loudly, exactly
+# as 6c does.
+# ---------------------------------------------------------------------------
+GTEST_SMOKE_FILTER='EncodeDecodeTestAPI.Simulcast*'
+GTEST_SMOKE_BUDGET=60
+if [ "${LEVEL_DONE:-0}" != 1 ] && [ "$LEVEL" != exit ]; then
+  if [ ! -f "$ROOT/libgtest.a" ] || [ ! -f "$ROOT/libopenh264.a" ]; then
+    skip "gtest simulcast smoke: prerequisites missing — run 'make -j8 libraries binaries' at the repo root"
+  else
+    hdr "gtest simulcast smoke ($GTEST_SMOKE_FILTER, allowlist ratchet)"
+    t0=$(date +%s)
+    bash "$HERE/abi_harness/gtest_stretch.sh" --check "--filter=$GTEST_SMOKE_FILTER" 2>&1       | tee "$LOGS/gtest_smoke.log"       | grep -vE '^(warning|note|help|error)|^ +[0-9]* *\||^ +\||^ +[-^=]' | tail -12
+    rc=${PIPESTATUS[0]}
+    smoke_wall=$(( $(date +%s) - t0 ))
+    tally=$(grep -E '^gtest: ' "$LOGS/gtest_smoke.log" | tail -1 | sed 's/^gtest: //')
+    printf '  %ss wall (budget %ss)
+' "$smoke_wall" "$GTEST_SMOKE_BUDGET"
+    if [ "$rc" -eq 2 ]; then
+      skip "gtest simulcast smoke: prerequisites missing — see $LOGS/gtest_smoke.log"
+    elif [ "$rc" -ne 0 ]; then
+      fail "gtest simulcast smoke: a failure is unlisted, or a listed row passed (rc=$rc) — see $LOGS/gtest_smoke.log"
+    elif [ -z "$tally" ]; then
+      # The F173 shape itself: an abort prints no verdict line, and exit status
+      # alone would not have caught it here either.
+      fail "gtest simulcast smoke: exit 0 but no 'gtest: n/n' line — the binary died before its verdict; see $LOGS/gtest_smoke.log"
+    elif [ "$smoke_wall" -gt "$GTEST_SMOKE_BUDGET" ]; then
+      fail "gtest simulcast smoke: $tally, but ${smoke_wall}s exceeds the ${GTEST_SMOKE_BUDGET}s budget — trim the filter or re-argue the budget"
+    else
+      pass "gtest simulcast smoke: $tally, ${smoke_wall}s"
+    fi
+  fi
+fi
+
+# ---------------------------------------------------------------------------
 # 4. Benches. The decoder bench is the sharper instrument (perf_baseline.md);
 #    it exits non-zero on a frame-count or hash mismatch, which is the gate.
 #
