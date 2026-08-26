@@ -404,8 +404,15 @@ pub struct SMotionTextureUnit {
 #[derive(Debug, Copy, Clone)]
 pub struct SAdaptiveQuantizationParam {
     pub iAdaptiveQuantMode: i32,
-    pub pMotionTextureUnit: *mut SMotionTextureUnit,
-    pub pMotionTextureIndexToDeltaQp: *mut i8,
+    /// **T9.X — `pMotionTextureUnit` and `pMotionTextureIndexToDeltaQp` are gone from
+    /// here.** They were `*mut`-SMotionTextureUnit and `*mut`-i8, and they were two of
+    /// `SVAAFrameInfo`'s four `!Sync` reasons (F67/F164). They are owned `Vec`s on
+    /// `SVAAFrameInfo` now and reach `CAdaptiveQuantization::Process` as slices, which
+    /// is the shape `SVAACalcResult`'s six arrays already had — "handed over at the
+    /// call rather than storing a pointer to it in the parameter block".
+    ///
+    /// This struct stays `Copy`, which is why the buffers could not simply become
+    /// `Vec` fields *here*: `Set` copies the whole block once per frame.
     pub iAverMotionTextureIndexToDeltaQp: i32,
 }
 
@@ -413,8 +420,6 @@ impl Default for SAdaptiveQuantizationParam {
     fn default() -> Self {
         Self {
             iAdaptiveQuantMode: 0,
-            pMotionTextureUnit: std::ptr::null_mut(),
-            pMotionTextureIndexToDeltaQp: std::ptr::null_mut(),
             iAverMotionTextureIndexToDeltaQp: 0,
         }
     }
@@ -427,8 +432,19 @@ pub struct SComplexityAnalysisParam {
     pub iCalcBgd: bool,
     pub iMbNumInGom: i32,
     pub iFrameComplexity: i64,
-    pub pGomComplexity: *mut i32,
-    pub pGomForegroundBlockNum: *mut i32,
+    /// **T9.X — `pGomComplexity` and `pGomForegroundBlockNum` are gone from here.**
+    /// They were two `*mut`-i32 and they were never this block's memory: the caller
+    /// aimed them at the rate controller's `pCurrentFrameGomSad` and
+    /// `pGomForegroundBlockNum` `Vec`s one line before every `Process` call
+    /// (`wels_preprocess.cpp:859/:924` does the same, misnomer and all —
+    /// `pGomComplexity` is pointed at the *SAD* array). They reach the plugin as
+    /// slices now, which retires `SVAAFrameInfo`'s `*mut`-i32 `!Sync` reason.
+    ///
+    /// `pBackgroundMbFlag` and `uiRefMbType` stay: the first is a self-pointer into
+    /// `SVAAFrameInfo::pVaaBackgroundMbFlag` that `background_detection.rs` also
+    /// copies, and the second has **no writer in this port at all** — upstream fills
+    /// it through `SetRefMbType` (`wels_preprocess.cpp:916`), which was never ported.
+    /// See F177.
     pub pBackgroundMbFlag: *mut i8,
     pub uiRefMbType: *mut u32,
 }
@@ -440,8 +456,6 @@ impl Default for SComplexityAnalysisParam {
             iCalcBgd: false,
             iMbNumInGom: 0,
             iFrameComplexity: 0,
-            pGomComplexity: std::ptr::null_mut(),
-            pGomForegroundBlockNum: std::ptr::null_mut(),
             pBackgroundMbFlag: std::ptr::null_mut(),
             uiRefMbType: std::ptr::null_mut(),
         }
@@ -493,6 +507,14 @@ pub struct SVAAFrameInfo {
     /// One byte per macroblock, **owned since T6.F3** — `RequestMemorySvc`'s
     /// seventh and last `WelsMallocz` for the VAA block.
     pub pVaaBackgroundMbFlag: Vec<i8>,
+
+    /// `encoder_ext.cpp:1721` — `iCountMaxMbNum * sizeof(SMotionTextureUnit)`.
+    /// **T9.X: this allocation did not exist in the port at all**, and the field it
+    /// fills was a permanently-null `*mut` on `sAdaptiveQuantParam` with two
+    /// unguarded dereferences (`adaptive_quantization.rs`). See F177.
+    pub pMotionTextureUnit: Vec<SMotionTextureUnit>,
+    /// `encoder_ext.cpp:1724` — `iCountMaxMbNum * sizeof(int8_t)`. Same story.
+    pub pMotionTextureIndexToDeltaQp: Vec<i8>,
     pub uiValidLongTermPicIdx: u8,
     pub uiMarkLongTermPicIdx: u8,
 
@@ -521,6 +543,9 @@ impl SVAAFrameInfo {
         let n = iCountMaxMbNum.max(0) as usize;
         let mut p = Box::new(SVAAFrameInfo::default());
         p.pVaaBackgroundMbFlag = vec![0i8; n];
+        // `encoder_ext.cpp:1721-1726`, the two blocks this constructor never cut.
+        p.pMotionTextureUnit = vec![SMotionTextureUnit::default(); n];
+        p.pMotionTextureIndexToDeltaQp = vec![0i8; n];
         p.sVaaCalcInfo.pSad8x8 = vec![[0i32; 4]; n];
         p.sVaaCalcInfo.pSsd16x16 = vec![0i32; n];
         p.sVaaCalcInfo.pSum16x16 = vec![0i32; n];
@@ -550,6 +575,8 @@ impl Default for SVAAFrameInfo {
             pRefV: std::ptr::null_mut(),
             pCurV: std::ptr::null_mut(),
             pVaaBackgroundMbFlag: Vec::new(),
+            pMotionTextureUnit: Vec::new(),
+            pMotionTextureIndexToDeltaQp: Vec::new(),
             uiValidLongTermPicIdx: 0,
             uiMarkLongTermPicIdx: 0,
             eSceneChangeIdc: ESceneChangeIdc::SIMILAR_SCENE,
@@ -1934,7 +1961,13 @@ impl CWelsPreProcess {
 
         // METHOD_ADAPTIVE_QUANT.
         self.m_vp.sAdaptiveQuant.Set(&(*pVaaInfo).sAdaptiveQuantParam);
-        let iRet = self.m_vp.sAdaptiveQuant.Process(&pSrc, &pRef, &(*pVaaInfo).sVaaCalcInfo);
+        let iRet = self.m_vp.sAdaptiveQuant.Process(
+            &pSrc,
+            &pRef,
+            &(*pVaaInfo).sVaaCalcInfo,
+            &mut (*pVaaInfo).pMotionTextureUnit,
+            &mut (*pVaaInfo).pMotionTextureIndexToDeltaQp,
+        );
         if iRet == 0 {
             self.m_vp.sAdaptiveQuant.Get(&mut (*pVaaInfo).sAdaptiveQuantParam);
         }
@@ -2804,8 +2837,6 @@ impl CWelsPreProcess {
                 (*pWelsSvcRc).pCurrentFrameGomSad.fill(0);
             }
 
-            sComplexityAnalysisParam.pGomComplexity = rc_gom_sad(pWelsSvcRc);
-            sComplexityAnalysisParam.pGomForegroundBlockNum = rc_gom_fg_blocks(pWelsSvcRc);
             sComplexityAnalysisParam.iMbNumInGom = (*pWelsSvcRc).iNumberMbGom;
 
             // METHOD_COMPLEXITY_ANALYSIS; the VAA result handed over at the call.
@@ -2829,8 +2860,19 @@ impl CWelsPreProcess {
             }
 
             self.m_vp.sComplexityAnalysis.Set(sComplexityAnalysisParam);
-            let iRet =
-                self.m_vp.sComplexityAnalysis.Process(&sSrcPixMap, &sRefPixMap, &(*pVaaInfo).sVaaCalcInfo);
+            // **T9.X**: the two GOM arrays are the rate controller's own `Vec`s and
+            // reach the plugin as slices — `sComplexityAnalysisParam.pGomComplexity`
+            // and `.pGomForegroundBlockNum` were `rc_gom_sad`/`rc_gom_fg_blocks`
+            // stamped one line above this. `pGomComplexity` really is aimed at
+            // `pCurrentFrameGomSad`: the VP's field name is a misnomer and
+            // `wels_preprocess.cpp:859/:924` does exactly the same.
+            let iRet = self.m_vp.sComplexityAnalysis.Process(
+                &sSrcPixMap,
+                &sRefPixMap,
+                &(*pVaaInfo).sVaaCalcInfo,
+                &mut (*pWelsSvcRc).pCurrentFrameGomSad,
+                &mut (*pWelsSvcRc).pGomForegroundBlockNum,
+            );
             if iRet == 0 {
                 self.m_vp.sComplexityAnalysis.Get(sComplexityAnalysisParam);
             }

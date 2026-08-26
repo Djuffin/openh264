@@ -100,16 +100,31 @@ impl CComplexityAnalysis {
     /// its macroblocks.
     // unsafe-cat: port-raw(Phase 9)
     #[allow(unsafe_code)]
+    /// **T9.X** — `pGomComplexity` and `pGomForegroundBlockNum` arrive as slices
+    /// rather than as two `*mut`-i32 on the parameter block. They were never this
+    /// object's memory: they point into the *rate controller's* `pCurrentFrameGomSad`
+    /// and `pGomForegroundBlockNum` `Vec`s, which `AnalyzePictureComplexity` aims at
+    /// them one line before the call. Handing them over at the call is the move
+    /// session B made for `pCalcResult`, and it is what retires `SVAAFrameInfo`'s
+    /// `*mut`-i32 `!Sync` reason (F67/F164).
     pub unsafe fn Process(
         &mut self,
         pSrcPixMap: &SPixMap,
         pRefPixMap: &SPixMap,
         calc: &SVAACalcResult,
+        pGomComplexity: &mut [i32],
+        pGomForegroundBlockNum: &mut [i32],
     ) -> i32 {
         match self.m_sComplexityAnalysisParam.iComplexityAnalysisMode {
-            FRAME_SAD => self.AnalyzeFrameComplexityViaSad(pSrcPixMap, pRefPixMap, calc),
-            GOM_SAD => self.AnalyzeGomComplexityViaSad(pSrcPixMap, pRefPixMap, calc),
-            GOM_VAR => self.AnalyzeGomComplexityViaVar(pSrcPixMap, pRefPixMap, calc),
+            FRAME_SAD => self.AnalyzeFrameComplexityViaSad(
+                pSrcPixMap, pRefPixMap, calc, pGomForegroundBlockNum,
+            ),
+            GOM_SAD => self.AnalyzeGomComplexityViaSad(
+                pSrcPixMap, pRefPixMap, calc, pGomComplexity, pGomForegroundBlockNum,
+            ),
+            GOM_VAR => self.AnalyzeGomComplexityViaVar(
+                pSrcPixMap, pRefPixMap, calc, pGomComplexity, pGomForegroundBlockNum,
+            ),
             _ => return RET_INVALIDPARAM,
         }
         RET_SUCCESS
@@ -123,13 +138,16 @@ impl CComplexityAnalysis {
         pSrcPixMap: &SPixMap,
         pRefPixMap: &SPixMap,
         calc: &SVAACalcResult,
+        pGomForegroundBlockNum: &mut [i32],
     ) {
         self.m_sComplexityAnalysisParam.iFrameComplexity = calc.iFrameSad as i64;
 
         if self.m_sComplexityAnalysisParam.iCalcBgd {
             //BGD control
             self.m_sComplexityAnalysisParam.iFrameComplexity =
-                self.GetFrameSadExcludeBackground(pSrcPixMap, pRefPixMap, calc) as i64;
+                self.GetFrameSadExcludeBackground(
+                    pSrcPixMap, pRefPixMap, calc, pGomForegroundBlockNum,
+                ) as i64;
         }
     }
 
@@ -145,6 +163,7 @@ impl CComplexityAnalysis {
         pSrcPixMap: &SPixMap,
         _pRefPixMap: &SPixMap,
         calc: &SVAACalcResult,
+        pGomForegroundBlockNum: &mut [i32],
     ) -> i32 {
         let iWidth = pSrcPixMap.sRect.iRectWidth;
         let iHeight = pSrcPixMap.sRect.iRectHeight;
@@ -157,7 +176,6 @@ impl CComplexityAnalysis {
 
         let pBackgroundMbFlag = self.m_sComplexityAnalysisParam.pBackgroundMbFlag;
         let uiRefMbType = self.m_sComplexityAnalysisParam.uiRefMbType;
-        let pGomForegroundBlockNum = self.m_sComplexityAnalysisParam.pGomForegroundBlockNum;
 
         let mut uiFrameSad: u32 = 0;
         for j in 0..iGomMbNum {
@@ -168,7 +186,7 @@ impl CComplexityAnalysis {
                 if *pBackgroundMbFlag.offset(i as isize) == 0
                     || IS_INTRA(*uiRefMbType.offset(i as isize))
                 {
-                    *pGomForegroundBlockNum.offset(j as isize) += 1;
+                    pGomForegroundBlockNum[j as usize] += 1;
                     let sad8x8 = &calc.pSad8x8[(i as isize) as usize];
                     uiFrameSad = uiFrameSad.wrapping_add(sad8x8[0] as u32);
                     uiFrameSad = uiFrameSad.wrapping_add(sad8x8[1] as u32);
@@ -192,6 +210,8 @@ impl CComplexityAnalysis {
         pSrcPixMap: &SPixMap,
         _pRefPixMap: &SPixMap,
         calc: &SVAACalcResult,
+        pGomComplexity: &mut [i32],
+        pGomForegroundBlockNum: &mut [i32],
     ) {
         let iWidth = pSrcPixMap.sRect.iRectWidth;
         let iHeight = pSrcPixMap.sRect.iRectHeight;
@@ -204,8 +224,6 @@ impl CComplexityAnalysis {
 
         let pBackgroundMbFlag = self.m_sComplexityAnalysisParam.pBackgroundMbFlag;
         let uiRefMbType = self.m_sComplexityAnalysisParam.uiRefMbType;
-        let pGomForegroundBlockNum = self.m_sComplexityAnalysisParam.pGomForegroundBlockNum;
-        let pGomComplexity = self.m_sComplexityAnalysisParam.pGomComplexity;
 
         let mut uiFrameSad: u32 = 0;
         // `InitGomSadFunc (m_pfGomSad, iCalcBgd)`.
@@ -236,7 +254,7 @@ impl CComplexityAnalysis {
                         && *pBackgroundMbFlag.offset(i as isize) != 0
                         && !IS_INTRA(*uiRefMbType.offset(i as isize));
                     if !bExceptBackground || !uiBackgroundMbFlag {
-                        *pGomForegroundBlockNum.offset(j as isize) += 1;
+                        pGomForegroundBlockNum[j as usize] += 1;
                         let sad8x8 = &calc.pSad8x8[(i as isize) as usize];
                         uiGomSad = uiGomSad.wrapping_add(sad8x8[0] as u32);
                         uiGomSad = uiGomSad.wrapping_add(sad8x8[1] as u32);
@@ -253,8 +271,8 @@ impl CComplexityAnalysis {
                     break;
                 }
             }
-            *pGomComplexity.offset(j as isize) = uiGomSad as i32;
-            uiFrameSad = uiFrameSad.wrapping_add(*pGomComplexity.offset(j as isize) as u32);
+            pGomComplexity[j as usize] = uiGomSad as i32;
+            uiFrameSad = uiFrameSad.wrapping_add(pGomComplexity[j as usize] as u32);
         }
         self.m_sComplexityAnalysisParam.iFrameComplexity = uiFrameSad as i64;
     }
@@ -267,6 +285,8 @@ impl CComplexityAnalysis {
         pSrcPixMap: &SPixMap,
         _pRefPixMap: &SPixMap,
         calc: &SVAACalcResult,
+        pGomComplexity: &mut [i32],
+        pGomForegroundBlockNum: &mut [i32],
     ) {
         let iWidth = pSrcPixMap.sRect.iRectWidth;
         let iHeight = pSrcPixMap.sRect.iRectHeight;
@@ -277,7 +297,6 @@ impl CComplexityAnalysis {
         let iMbNumInGom = self.m_sComplexityAnalysisParam.iMbNumInGom;
         let iGomMbNum = (iMbNum + iMbNumInGom - 1) / iMbNumInGom;
 
-        let pGomComplexity = self.m_sComplexityAnalysisParam.pGomComplexity;
         let mut uiFrameSad: u32 = 0;
 
         for j in 0..iGomMbNum {
@@ -318,8 +337,8 @@ impl CComplexityAnalysis {
             let mean = uiSampleSum
                 .wrapping_mul(uiSampleSum)
                 .wrapping_div(iGomSampleNum as u32);
-            *pGomComplexity.offset(j as isize) = uiSquareSum.wrapping_sub(mean) as i32;
-            uiFrameSad = uiFrameSad.wrapping_add(*pGomComplexity.offset(j as isize) as u32);
+            pGomComplexity[j as usize] = uiSquareSum.wrapping_sub(mean) as i32;
+            uiFrameSad = uiFrameSad.wrapping_add(pGomComplexity[j as usize] as u32);
         }
         self.m_sComplexityAnalysisParam.iFrameComplexity = uiFrameSad as i64;
     }

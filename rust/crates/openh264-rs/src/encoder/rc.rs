@@ -802,7 +802,7 @@ pub fn RcInitLayerMemory(pWelsSvcRc: &mut SWelsSvcRc, kiMaxTl: i32) {
 /// The **root** of a layer's `pGomForegroundBlockNum`.
 ///
 /// **T9.X — this one stays raw, and so does [`rc_gom_sad`].** Both feed
-/// `SComplexityAnalysisParam`'s own `*mut i32` members in `wels_preprocess.rs`
+/// `SComplexityAnalysisParam`'s own `*mut`-i32 members in `wels_preprocess.rs`
 /// (`:2723`, `:2778`, `:2779`), which are step 3c's to convert, not step 2's — a
 /// safe API here would have nothing safe to hand them to. `rc_gom_sad` has the
 /// second reason as well: its two `rc.rs` callers are both inside
@@ -1588,9 +1588,13 @@ pub unsafe fn RcCalculateMbQp(
 
     if (*ctx_param(pEncCtx)).bEnableAdaptiveQuant {
         let pVaa = ctx_vaa(pEncCtx);
-        let delta_qp_ptr = (*pVaa).sAdaptiveQuantParam.pMotionTextureIndexToDeltaQp;
+        // **T9.X**: the buffer is `SVAAFrameInfo`'s own `Vec<i8>` now (it was a
+        // permanently-null `*mut`-i8 on the parameter block — F177). Both of these
+        // bodies are in-fork (S63) and both only *read* it, which a shared slice
+        // expresses exactly.
+        let delta_qp: &[i8] = &(*pVaa).pMotionTextureIndexToDeltaQp;
         let mb_xy = (*pCurMb).iMbXY as usize;
-        let delta = *delta_qp_ptr.add(mb_xy) as i32;
+        let delta = delta_qp[mb_xy] as i32;
         iLumaQp = WELS_CLIP3(
             iLumaQp + delta,
             (*pWelsSvcRc).iMinFrameQp,
@@ -2473,9 +2477,13 @@ pub unsafe extern "C" fn WelsRcMbInitDisable(
 
     if (*ctx_param(pEncCtx)).bEnableAdaptiveQuant && (*pEncCtx).eSliceType as i32 == P_SLICE {
         let pVaa = ctx_vaa(pEncCtx);
-        let delta_qp_ptr = (*pVaa).sAdaptiveQuantParam.pMotionTextureIndexToDeltaQp;
+        // **T9.X**: the buffer is `SVAAFrameInfo`'s own `Vec<i8>` now (it was a
+        // permanently-null `*mut`-i8 on the parameter block — F177). Both of these
+        // bodies are in-fork (S63) and both only *read* it, which a shared slice
+        // expresses exactly.
+        let delta_qp: &[i8] = &(*pVaa).pMotionTextureIndexToDeltaQp;
         let mb_xy = (*pCurMb).iMbXY as usize;
-        let delta = *delta_qp_ptr.add(mb_xy) as i32;
+        let delta = delta_qp[mb_xy] as i32;
         iLumaQp = WELS_CLIP3(
             iLumaQp + delta,
             (*pWelsSvcRc).iMinQp,
@@ -2835,7 +2843,7 @@ mod tests {
         // documented value, so a real context takes the nulls' place.
         //
         // `WelsRcMbInfoUpdateDisable` keeps its raw context and its null: it is
-        // in-fork (S63) and its parameter is staying `*mut sWelsEncCtx`, so the
+        // in-fork (S63) and its parameter is staying `*mut`-sWelsEncCtx, so the
         // original assertion still means what it meant.
         let mut ctx = Box::new(sWelsEncCtx::default());
         unsafe {

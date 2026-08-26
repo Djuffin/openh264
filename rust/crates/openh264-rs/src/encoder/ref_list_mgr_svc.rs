@@ -198,7 +198,7 @@ pub struct SLTRMarkingFeedback {
 
 /// Reset LTR marking, recovery, and feedback state to defaults.
 ///
-/// **T9.X — `&mut`, and safe.** The parameter was `*mut SLTRState` with a null
+/// **T9.X — `&mut`, and safe.** The parameter was `*mut`-SLTRState with a null
 /// guard; all three callers derive it from `ctx_ltr_at`, which cannot yield null
 /// for an in-range layer, and two of them already spelled the argument
 /// `&mut *ctx_ltr_at(..)`. The body only writes fields, so nothing here needs
@@ -272,7 +272,7 @@ pub unsafe fn WelsResetRefList(pCtx: &mut sWelsEncCtx) {
 
 /// Remove a long-term reference entry by index from pLongRefList.
 ///
-/// **Narrowed to the list it edits — T9.G3, S54.** It took `*mut sWelsEncCtx` and
+/// **Narrowed to the list it edits — T9.G3, S54.** It took `*mut`-sWelsEncCtx and
 /// used it for exactly one thing: `ctx_ref_list(pCtx, (*pCtx).uiDependencyId)`.
 /// Every one of its five callers already holds that same pointer, derived with the
 /// same `uiDid` (`uiDependencyId` is written in one place in the encoder,
