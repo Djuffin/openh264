@@ -10,5 +10,24 @@
 # instruments and the close report must say so; after E's close the series is
 # lane-vs-lane and the 1.3x tripwire means what S61 intends.
 #
+# THE FORK PAIR IS A SECOND REGIME, AND IT HAS TWO FORMS (F168, session H).
+# The two `fork_join_encodes` probes are not in the lane above; they run at
+# `full`/`exit` and by explicit command. Their wall depends on **how the two
+# per-probe invocations are scheduled relative to each other**, and the two
+# forms are 2x apart — so a number recorded without its form is unreadable:
+#
+#   parallel pair (two invocations, separate CARGO_TARGET_DIRs, concurrent)
+#       T9.E8  3356 s / 3449 s   pair wall ~57 min   (first green)
+#       T9.E2  3294.86 / 3343.20 pair wall ~56 min
+#   serial pair (one probe at a time)
+#       T9.H   3194.20 / 3260.15 pair wall 6463 s = 108 min   step 0a, GREEN
+#
+# Serial buys 3-5% per probe and costs 2x on the pair: Miri is a single-threaded
+# interpreter, so two probes are two cores and they do not contend. **Run the
+# pair parallel.** H's brief instructed serial on the reading that E8's numbers
+# were serial; E8's own log says "~57 minutes as a parallel pair" and 3356+3449
+# is 113 minutes, so they cannot have been. Do not compare a serial number to a
+# parallel one and read a regression.
+#
 # Format: <seconds> <commit> <date> <note>
-521 b194697c 2026-08-25 session-G-close-lane-vs-lane-ratio-0.97-fork-pair-NOT-run
+521 b194697c 2026-08-25 session-G-close-lane-vs-lane-ratio-0.97-fork-pair-PAID-BY-H-step-0a-green

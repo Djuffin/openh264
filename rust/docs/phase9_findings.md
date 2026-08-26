@@ -2955,3 +2955,86 @@ item, not a session item**, and the seam's comment should say so instead of nami
 Note also that "five of them inside types Phases 8 and 10 own" was already an
 undercount when the seam's comment was written, and the brief carried it forward.
 The measurement is eight not-G's, and the probe that settles it costs one build.
+
+## F168 — E8's fork-probe numbers were parallel, not serial; the brief doubled the pair's cost by re-running it the wrong way, and G's stopped pair was about a minute from green
+
+Session H's brief charters step 0a like this:
+
+> `MIRI_FULL=1`, per-probe invocations (D-gate-7), **one probe at a time** —
+> E8's reference numbers (3356 s / 3449 s) were *serial* numbers; run them the
+> same way and expect ~115 min total.
+
+They were not serial numbers. T9.E8's own log entry says so in the same sentence
+that reports them:
+
+> **Both fork/join probes ran green under Miri for the first time in the
+> project's history** (T9.E8): the fixed-slice probe in **3356 s**, the mid-row
+> probe in **3449 s** (*~57 minutes as a parallel pair*)
+
+The parenthesis is decisive on arithmetic alone: 3356 + 3449 = 6805 s = 113
+minutes. "~57 minutes" is the *longer of the two*, which is only the pair's wall
+if they ran concurrently. E2's later run says the same thing in the same words —
+"fixed-slice 3294.86 s PASS, mid-row 3343.20 s PASS (**~56 min as a parallel
+pair**)".
+
+### The measurement that settles it
+
+This session ran the fixed-slice probe **serially, alone, on an idle machine**:
+
+```
+FIXED rc=0 wall=3199s      87 progress reports, 0 UB      (H step 0a, serial)
+```
+
+Against 3356 s (E8, parallel) and 3294.86 s (E2, parallel). **Serial buys 3%
+per probe.** The machine is 8 logical cores and Miri is a single-threaded
+interpreter — it schedules the interpreted threads itself rather than using host
+cores — so two probes are two cores of eight and they do not contend.
+
+So the pair's honest cost is:
+
+| | wall |
+|---|---:|
+| parallel (E8, E2, and G's stopped run) | **~57 min** |
+| serial (this brief's instruction) | **~111 min** |
+
+The brief did not trade wall-time for anything. Both forms run the same two
+probes over the same two drives and prove the same thing; one takes twice as
+long.
+
+### What this does to G's close
+
+G's pair was stopped at **56 minutes** with both probes healthy and 68/65
+progress reports, and G recorded them *incomplete, not green* — correctly, since
+a killed probe proves nothing. But G's diagnosis of *why* was built on the same
+misreading:
+
+> "T9.E8's 3356 s / 3449 s were measured serially, so the parallel pair on a
+> machine that had just run the session gate was always going to be slower than
+> the ~57 min the brief budgeted. **The estimate, not the tree, is what was
+> wrong.**"
+
+The estimate was right. Against reference completions of ~3300–3450 s, a
+parallel pair at 3360 s was **inside a minute or two of finishing**. G stopped at
+the finish line and then wrote down a reason why the finish line had never been
+reachable — and H's brief inherited that reason as an instruction, which is
+F153's class again (a conclusion inheriting an earlier document's frame rather
+than re-deriving it) one level up: not a stale date this time, a stale
+*explanation*.
+
+### Consequences
+
+1. **The closing pair runs parallel.** Two per-probe invocations with separate
+   `CARGO_TARGET_DIR`s (cargo's file lock serialises them otherwise — G's own
+   note records this correctly), which is exactly what D-gate-7 asks for and
+   what E8 and E2 both did. ~57 min, not ~111.
+2. **The Miri baseline note should carry the pair's form, not just its number.**
+   `miri_wall_baseline.txt` records the session lane's wall and says
+   lane-vs-lane; the pair has no such line and its two regimes are 2× apart, so
+   a future session comparing 57 to 111 would read a catastrophic regression
+   that is only a scheduling choice. Recorded as a phase-exit item for J.
+3. **S24's clause wants one more word.** A number is falsifiable when the
+   command that produced it stands beside it. Two of these numbers came with
+   their command and still misled, because the command was per-probe and the
+   fact that mattered was *how the two invocations were scheduled relative to
+   each other*. For a measured wall-time the unit is not the command, it is the
+   command plus what else was running.
