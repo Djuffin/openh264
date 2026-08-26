@@ -468,7 +468,7 @@ pub unsafe fn WelsWriteOnePPS(pCtx: *mut sWelsEncCtx, kiPpsIdx: i32, iNalSize: *
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe fn WelsWriteParameterSets(
-    pCtx: *mut sWelsEncCtx,
+    pCtx: &mut sWelsEncCtx,
     pNalLen: *mut i32,
     pNumNal: *mut i32,
     pTotalLength: *mut i32,
@@ -481,8 +481,9 @@ pub unsafe fn WelsWriteParameterSets(
     let mut iNalLength = 0i32;
     let mut iReturn;
 
-    if pCtx.is_null()
-        || pNalLen.is_null()
+    // T9.H9: the `pCtx.is_null()` disjunct that opened this multi-line guard
+    // is gone — a `&mut sWelsEncCtx` cannot be null. The rest is unchanged.
+    if pNalLen.is_null()
         || pNumNal.is_null()
         || (*ctx_func_list(pCtx)).pParametersetStrategy.is_none()
     {
@@ -495,7 +496,7 @@ pub unsafe fn WelsWriteParameterSets(
     *pTotalLength = 0;
     /* write all SPS */
     iIdx = 0;
-    while iIdx < (*pCtx).iSpsNum {
+    while iIdx < pCtx.iSpsNum {
         ParasetStrategy(pCtx).Update(
             (*ctx_sps_array(pCtx).add(iIdx as usize)).uiSpsId,
             PARA_SET_TYPE_AVCSPS as i32,
@@ -514,8 +515,8 @@ pub unsafe fn WelsWriteParameterSets(
 
     /* write all Subset SPS */
     iIdx = 0;
-    while iIdx < (*pCtx).iSubsetSpsNum {
-        iNal = (*(*pCtx).pOut).iNalIndex;
+    while iIdx < pCtx.iSubsetSpsNum {
+        iNal = (*pCtx.pOut).iNalIndex;
 
         ParasetStrategy(pCtx).Update(
             (*ctx_subset_array(pCtx).add(iIdx as usize)).pSps.uiSpsId,
@@ -526,25 +527,25 @@ pub unsafe fn WelsWriteParameterSets(
 
         /* generate Subset SPS */
         crate::encoder::nal_encap::WelsLoadNal(
-            (*pCtx).pOut,
+            pCtx.pOut,
             crate::encoder::nal_encap::EWelsNalUnitType::NAL_UNIT_SUBSET_SPS as i32,
             NRI_PRI_HIGHEST as i32,
         );
 
         WelsWriteSubsetSpsSyntax(
-            &mut (&mut *(*pCtx).pOut).sBsBuffer[..],
+            &mut (&mut *pCtx.pOut).sBsBuffer[..],
             &*ctx_subset_array(pCtx).add(iId as usize),
-            &mut (*(*pCtx).pOut).sBsWrite,
+            &mut (*pCtx.pOut).sBsWrite,
             ParasetStrategy(pCtx).GetSpsIdOffsetList(PARA_SET_TYPE_SUBSETSPS as i32),
         );
-        crate::encoder::nal_encap::WelsUnloadNal((*pCtx).pOut);
+        crate::encoder::nal_encap::WelsUnloadNal(pCtx.pOut);
 
         iReturn = crate::encoder::nal_encap::WelsEncodeNal(
-            &(&*(*pCtx).pOut).sNalList[iNal as usize],
-            &(&*(*pCtx).pOut).sBsBuffer[..],
+            &(&*pCtx.pOut).sNalList[iNal as usize],
+            &(&*pCtx.pOut).sBsBuffer[..],
             None,
             ctx_frame_bs_cur(pCtx),
-            (*pCtx).iFrameBsSize - (*pCtx).iPosBsBuffer,
+            pCtx.iFrameBsSize - pCtx.iPosBsBuffer,
             &mut iNalLength,
         );
         if iReturn != ENC_RETURN_SUCCESS {
@@ -552,7 +553,7 @@ pub unsafe fn WelsWriteParameterSets(
         }
         *pNalLen.add(iCountNal as usize) = iNalLength;
 
-        (*pCtx).iPosBsBuffer += iNalLength;
+        pCtx.iPosBsBuffer += iNalLength;
         iSize += iNalLength;
 
         iIdx += 1;
@@ -562,7 +563,7 @@ pub unsafe fn WelsWriteParameterSets(
     ParasetStrategy(pCtx).UpdatePpsList(pCtx);
 
     iIdx = 0;
-    while iIdx < (*pCtx).iPpsNum {
+    while iIdx < pCtx.iPpsNum {
         ParasetStrategy(pCtx).Update(
             (*ctx_pps_array(pCtx).add(iIdx as usize)).iPpsId,
             PARA_SET_TYPE_PPS as i32,

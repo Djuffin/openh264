@@ -874,7 +874,7 @@ pub fn RcConvertQStep2Qp(iQpStep: i32) -> i32 {
 /// Initializes sequence-level rate control parameters for all spatial layers.
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
-pub unsafe fn RcInitSequenceParameter(pEncCtx: *mut sWelsEncCtx) {
+pub unsafe fn RcInitSequenceParameter(pEncCtx: &mut sWelsEncCtx) {
     let pSvcParam = ctx_param(pEncCtx);
     let spatial_layer_num = (*pSvcParam).iSpatialLayerNum;
 
