@@ -2196,13 +2196,12 @@ mod tests {
         let rc = unsafe { ctx_rc_at(p, 0) };
         unsafe {
             (*rc).iGomSize = 4;
-            crate::encoder::rc::RcInitLayerMemory(rc, 2);
+            crate::encoder::rc::RcInitLayerMemory(&mut *rc, 2);
         }
-        siblings!("rc_temporal_over", crate::encoder::rc::rc_temporal_over(rc),
-            |q: *mut crate::encoder::rc::SRCTemporal| (*q).iMaxQp = 40,
-            |q: *mut crate::encoder::rc::SRCTemporal| (*q).iMaxQp == 40);
-        siblings!("rc_gom_complexity", crate::encoder::rc::rc_gom_complexity(rc),
-            |q: *mut f64| *q = 1.5, |q: *mut f64| *q == 1.5);
+        // T9.X: `rc_temporal_over` and `rc_gom_complexity` are retired (S18 — the
+        // first onto direct `Vec` indexing at its ten callers, the second for having
+        // no production caller at all). The two survivors still carry the property
+        // for the family, which is T9.C5's own precedent for `rc_gom_cost`.
         siblings!("rc_gom_fg_blocks", crate::encoder::rc::rc_gom_fg_blocks(rc),
             |q: *mut i32| *q = 21, |q: *mut i32| *q == 21);
         siblings!("rc_gom_sad", crate::encoder::rc::rc_gom_sad(rc),

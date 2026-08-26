@@ -48,7 +48,7 @@
 //! | count | what | whose |
 //! |---|---|---|
 //! | 61 | `pEncCtx`/`pCtx` parameters, raw `sWelsEncCtx` | **session I** — the context is the largest arena in the tree, and the S37 inventory decides `&mut` for all of it at once, not file by file |
-//! | 16 | `SWelsSvcRc`'s own five member pointers and the reaches through them | **spent at T6.H6** — the five are owned containers, reached through `rc_temporal_over` and its four siblings |
+//! | 16 | `SWelsSvcRc`'s own five member pointers and the reaches through them | **spent at T6.H6** — the five are owned containers, reached through `rc_gom_fg_blocks` and its siblings |
 //! |  7 | `pSlice` parameters, raw `SSlice` | **session I** — five sit behind `pfWelsRcMbInit`/`pfWelsRcMbInfoUpdate`, which is 4b's fence, and the two that do not are covered by the blocker below |
 //! |  6 | `ctx_vaa(pEncCtx)` cast to a raw `SVAAFrameInfoExt` | **Phase 10** — the `SCREEN_CONTENT(dormant)` family, fenced |
 //! |  3 | `RcInitLayerMemory`'s carve-up of one `CMemoryAlign` block | **spent at T6.H6** — the carve-up is gone; this file no longer names `CMemoryAlign` at all |
@@ -405,7 +405,7 @@ pub struct SWelsSvcRc {
     pub bSkipFlag: bool,
     pub iContinualSkipFrames: i32,
     /// **T6.H6 — owned**; the head of the block the other four hung off. See
-    /// [`rc_temporal_over`].
+    /// [`rc_gom_fg_blocks`].
     pub pTemporalOverRc: Vec<SRCTemporal>,
 
     pub iAvgCost2Bits: i64,
@@ -769,12 +769,7 @@ impl SWelsRcFunc {
 /// The C++ takes the block with `WelsMalloc` (uninitialized) and every consumer
 /// either writes before reading or is guarded by `bGomRC`; the containers are
 /// zero-filled, which the port's own fallback path already did.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn RcInitLayerMemory(pWelsSvcRc: *mut SWelsSvcRc, kiMaxTl: i32) {
-    if pWelsSvcRc.is_null() {
-        return;
-    }
+pub fn RcInitLayerMemory(pWelsSvcRc: &mut SWelsSvcRc, kiMaxTl: i32) {
     let kiGomSize = (*pWelsSvcRc).iGomSize.max(0) as usize;
     (*pWelsSvcRc).pTemporalOverRc = vec![SRCTemporal::default(); kiMaxTl.max(0) as usize];
     (*pWelsSvcRc).pGomComplexity = vec![0.0f64; kiGomSize];
@@ -784,43 +779,38 @@ pub unsafe fn RcInitLayerMemory(pWelsSvcRc: *mut SWelsSvcRc, kiMaxTl: i32) {
     // **D-dead-3**, deleted with the field.
 }
 
-/// The **root** of a layer's `pTemporalOverRc` — S40's spelling, as everywhere in
-/// this family: `Vec::as_mut_ptr` reads the header, so repeated calls are siblings
-/// and a caller may hold one cursor across another. Empty answers the null the raw
-/// field held before `RcInitLayerMemory` ran, which every consumer's guard reads.
+// `rc_temporal_over` stood here — the raw root of `pTemporalOverRc`, the first of
+// this family. **S18, retired in T9.X.** Its ten production callers were all
+// single-threaded (checked against the forksplit's in-fork column body by body),
+// but every one of them interleaved `(*pTOverRc).field` with `(*pWelsSvcRc).field`
+// on the same statement or the next one, so a `&mut SWelsSvcRc` -> `&mut
+// [SRCTemporal]` API would have minted exactly F171's shape: a Unique over the
+// container popped by the raw read beside it. Indexing the `Vec` field directly —
+// `(*pWelsSvcRc).pTemporalOverRc[iTl]` — borrows only that field, for the length of
+// one expression, and is a closer transcription of the C++
+// (`pWelsSvcRc->pTemporalOverRc[iTl]`) than the cursor ever was. T9.C5 retired
+// `rc_gom_cost` the same way.
+//
+// `rc_gom_complexity` stood here too, the second of the family. It had **no
+// production caller at all** — only the sibling-derivation test. Upstream is the
+// reason: `SWelsSvcRc::pGomComplexity` (`rc.h:188`) is allocated (`ratectl.cpp:73`),
+// nulled (`:87`) and `memset` to zero (`:668`), and *never read anywhere in the
+// reference*. It is D-dead-3's `pGomCost` exactly — a second dead sibling, not the
+// "fourth" the brief says was the only one. The field itself stays pending a
+// ruling; see F174.
+
+/// The **root** of a layer's `pGomForegroundBlockNum`.
+///
+/// **T9.X — this one stays raw, and so does [`rc_gom_sad`].** Both feed
+/// `SComplexityAnalysisParam`'s own `*mut i32` members in `wels_preprocess.rs`
+/// (`:2723`, `:2778`, `:2779`), which are step 3c's to convert, not step 2's — a
+/// safe API here would have nothing safe to hand them to. `rc_gom_sad` has the
+/// second reason as well: its two `rc.rs` callers are both inside
+/// `RcGomTargetBits`, which the forksplit puts **in-fork**, so S63 keeps a raw
+/// route there and naming it is H2's job.
 ///
 /// # Safety
 /// `pRc` must point to a live `SWelsSvcRc`.
-#[inline]
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn rc_temporal_over(pRc: *mut SWelsSvcRc) -> *mut SRCTemporal {
-    let v: &mut Vec<SRCTemporal> = &mut (*pRc).pTemporalOverRc;
-    if v.is_empty() {
-        return std::ptr::null_mut();
-    }
-    v.as_mut_ptr()
-}
-
-/// The **root** of a layer's `pGomComplexity` — see [`rc_temporal_over`].
-///
-/// # Safety
-/// As [`rc_temporal_over`].
-#[inline]
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn rc_gom_complexity(pRc: *mut SWelsSvcRc) -> *mut f64 {
-    let v: &mut Vec<f64> = &mut (*pRc).pGomComplexity;
-    if v.is_empty() {
-        return std::ptr::null_mut();
-    }
-    v.as_mut_ptr()
-}
-
-/// The **root** of a layer's `pGomForegroundBlockNum` — see [`rc_temporal_over`].
-///
-/// # Safety
-/// As [`rc_temporal_over`].
 #[inline]
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
@@ -832,10 +822,11 @@ pub unsafe fn rc_gom_fg_blocks(pRc: *mut SWelsSvcRc) -> *mut i32 {
     v.as_mut_ptr()
 }
 
-/// The **root** of a layer's `pCurrentFrameGomSad` — see [`rc_temporal_over`].
+/// The **root** of a layer's `pCurrentFrameGomSad` — see [`rc_gom_fg_blocks`],
+/// including why this one stays raw.
 ///
 /// # Safety
-/// As [`rc_temporal_over`].
+/// As [`rc_gom_fg_blocks`].
 #[inline]
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
@@ -944,7 +935,7 @@ pub unsafe fn RcInitSequenceParameter(pEncCtx: &mut sWelsEncCtx) {
         (*pWelsSvcRc).bEnableGomQp = 1;
 
         RcInitLayerMemory(
-            pWelsSvcRc,
+            &mut *pWelsSvcRc,
             1 + (*pSvcParam).sDependencyLayers[j].iHighestTemporalId as i32,
         );
 
@@ -963,7 +954,10 @@ pub unsafe fn RcInitSequenceParameter(pEncCtx: &mut sWelsEncCtx) {
 pub unsafe fn RcInitTlWeight(pEncCtx: &mut sWelsEncCtx) {
     let did = pEncCtx.uiDependencyId as usize;
     let pWelsSvcRc = ctx_rc_at(pEncCtx, did);
-    let pTOverRc = rc_temporal_over(pWelsSvcRc);
+    // T9.X: the C++ hoists this pointer once per body
+    // (`SRCTemporal* pTOverRc = pWelsSvcRc->pTemporalOverRc;`, ratectl.cpp:180 and
+    // nine more); the port hoists the slice — same shape, no arithmetic.
+    let pTOverRc: &mut [SRCTemporal] = &mut (*pWelsSvcRc).pTemporalOverRc;
     let pDLayerParam = &(*ctx_param(pEncCtx)).sDependencyLayers[did];
     let kiDecompositionStages = pDLayerParam.iDecompositionStages as usize;
     let kiHighestTid = pDLayerParam.iHighestTemporalId;
@@ -978,7 +972,7 @@ pub unsafe fn RcInitTlWeight(pEncCtx: &mut sWelsEncCtx) {
 
     let mut n: i32 = 0;
     while n <= kiHighestTid as i32 {
-        let t_rc = &mut *pTOverRc.add(n as usize);
+        let t_rc = &mut pTOverRc[n as usize];
         t_rc.iTlayerWeight = iWeightArray[kiDecompositionStages][n as usize];
         t_rc.iMinQp = (*pWelsSvcRc).iMinQp + (n << 1);
         t_rc.iMinQp = WELS_CLIP3(t_rc.iMinQp, 0, 51);
@@ -1010,7 +1004,10 @@ pub unsafe fn RcInitTlWeight(pEncCtx: &mut sWelsEncCtx) {
 pub unsafe fn RcUpdateBitrateFps(pEncCtx: &mut sWelsEncCtx) {
     let did = pEncCtx.uiDependencyId as usize;
     let pWelsSvcRc = ctx_rc_at(pEncCtx, did);
-    let pTOverRc = rc_temporal_over(pWelsSvcRc);
+    // T9.X: the C++ hoists this pointer once per body
+    // (`SRCTemporal* pTOverRc = pWelsSvcRc->pTemporalOverRc;`, ratectl.cpp:180 and
+    // nine more); the port hoists the slice — same shape, no arithmetic.
+    let pTOverRc: &mut [SRCTemporal] = &mut (*pWelsSvcRc).pTemporalOverRc;
 
     let pDLayerParam = &(*ctx_param(pEncCtx)).sSpatialLayers[did];
     let pDLayerParamInternal = &(*ctx_param(pEncCtx)).sDependencyLayers[did];
@@ -1032,7 +1029,7 @@ pub unsafe fn RcUpdateBitrateFps(pEncCtx: &mut sWelsEncCtx) {
     let iMaxBitsRatio = MAX_BITS_VARY_PERCENTAGE_x3d2;
 
     for i in 0..=kiHighestTid {
-        let t_rc = &mut *pTOverRc.add(i as usize);
+        let t_rc = &mut pTOverRc[i as usize];
         let kdConstraintBits = kiGopBits * t_rc.iTlayerWeight as i64;
         t_rc.iMinBitsTl = WELS_DIV_ROUND64(
             kdConstraintBits * iMinBitsRatio as i64,
@@ -1073,7 +1070,10 @@ pub unsafe fn RcUpdateBitrateFps(pEncCtx: &mut sWelsEncCtx) {
 pub unsafe fn RcInitVGop(pEncCtx: &mut sWelsEncCtx) {
     let kiDid = pEncCtx.uiDependencyId as usize;
     let pWelsSvcRc = ctx_rc_at(pEncCtx, kiDid);
-    let pTOverRc = rc_temporal_over(pWelsSvcRc);
+    // T9.X: the C++ hoists this pointer once per body
+    // (`SRCTemporal* pTOverRc = pWelsSvcRc->pTemporalOverRc;`, ratectl.cpp:180 and
+    // nine more); the port hoists the slice — same shape, no arithmetic.
+    let pTOverRc: &mut [SRCTemporal] = &mut (*pWelsSvcRc).pTemporalOverRc;
     let kiHighestTid = (*ctx_param(pEncCtx)).sDependencyLayers[kiDid].iHighestTemporalId;
     let fix_rc_overshoot = (*ctx_param(pEncCtx)).bFixRCOverShoot;
 
@@ -1099,7 +1099,7 @@ pub unsafe fn RcInitVGop(pEncCtx: &mut sWelsEncCtx) {
     (*pWelsSvcRc).iGopIndexInVGop = 0;
 
     for i in 0..=kiHighestTid {
-        (*pTOverRc.add(i as usize)).iGopBitsDq = 0;
+        pTOverRc[i as usize].iGopBitsDq = 0;
     }
     (*pWelsSvcRc).iSkipFrameInVGop = 0;
 }
@@ -1110,7 +1110,10 @@ pub unsafe fn RcInitVGop(pEncCtx: &mut sWelsEncCtx) {
 pub unsafe fn RcInitRefreshParameter(pEncCtx: &mut sWelsEncCtx) {
     let kiDid = pEncCtx.uiDependencyId as usize;
     let pWelsSvcRc = ctx_rc_at(pEncCtx, kiDid);
-    let pTOverRc = rc_temporal_over(pWelsSvcRc);
+    // T9.X: the C++ hoists this pointer once per body
+    // (`SRCTemporal* pTOverRc = pWelsSvcRc->pTemporalOverRc;`, ratectl.cpp:180 and
+    // nine more); the port hoists the slice — same shape, no arithmetic.
+    let pTOverRc: &mut [SRCTemporal] = &mut (*pWelsSvcRc).pTemporalOverRc;
     let pDLayerParam = &(*ctx_param(pEncCtx)).sSpatialLayers[kiDid];
     let pDLayerParamInternal = &(*ctx_param(pEncCtx)).sDependencyLayers[kiDid];
     let kiHighestTid = pDLayerParamInternal.iHighestTemporalId;
@@ -1121,7 +1124,7 @@ pub unsafe fn RcInitRefreshParameter(pEncCtx: &mut sWelsEncCtx) {
     (*pWelsSvcRc).iIntraComplxMean = 0;
 
     for i in 0..=kiHighestTid {
-        let t_rc = &mut *pTOverRc.add(i as usize);
+        let t_rc = &mut pTOverRc[i as usize];
         t_rc.iPFrameNum = 0;
         t_rc.iLinearCmplx = 0;
         t_rc.iFrameCmplxMean = 0;
@@ -1301,8 +1304,11 @@ pub unsafe fn RcCalculateIdrQp(pEncCtx: &mut sWelsEncCtx) {
 pub unsafe fn RcCalculatePictureQp(pEncCtx: &mut sWelsEncCtx) {
     let did = pEncCtx.uiDependencyId as usize;
     let pWelsSvcRc = ctx_rc_at(pEncCtx, did);
+    // T9.X: the C++ hoists this pointer once per body
+    // (`SRCTemporal* pTOverRc = pWelsSvcRc->pTemporalOverRc;`, ratectl.cpp:180 and
+    // nine more); the port hoists the slice — same shape, no arithmetic.
+    let pTOverRc: &mut [SRCTemporal] = &mut (*pWelsSvcRc).pTemporalOverRc;
     let iTl = pEncCtx.uiTemporalId as usize;
-    let pTOverRc = rc_temporal_over(pWelsSvcRc).add(iTl);
 
     let mut iLumaQp: i32;
     let mut iDeltaQpTemporal: i32 = 0;
@@ -1312,7 +1318,7 @@ pub unsafe fn RcCalculatePictureQp(pEncCtx: &mut sWelsEncCtx) {
         iFrameComplexity = (*pVaa).sComplexityScreenParam.iFrameComplexity;
     }
 
-    if (*pTOverRc).iPFrameNum == 0 {
+    if pTOverRc[iTl].iPFrameNum == 0 {
         iLumaQp = (*pWelsSvcRc).iInitialQp;
     } else if (*pWelsSvcRc).iCurrentBitsLevel == BITS_EXCEEDED {
         iLumaQp = (*pWelsSvcRc).iLastCalculatedQScale + DELTA_QP_BGD_THD;
@@ -1331,7 +1337,7 @@ pub unsafe fn RcCalculatePictureQp(pEncCtx: &mut sWelsEncCtx) {
     } else {
         let mut iCmplxRatio = WELS_DIV_ROUND64(
             iFrameComplexity * INT_MULTIPLY as i64,
-            (*pTOverRc).iFrameCmplxMean,
+            pTOverRc[iTl].iFrameCmplxMean,
         );
         iCmplxRatio = WELS_CLIP3(
             iCmplxRatio,
@@ -1340,7 +1346,7 @@ pub unsafe fn RcCalculatePictureQp(pEncCtx: &mut sWelsEncCtx) {
         );
 
         let denom = (*pWelsSvcRc).iTargetBits as i64 * INT_MULTIPLY as i64;
-        (*pWelsSvcRc).iQStep = WELS_DIV_ROUND64((*pTOverRc).iLinearCmplx * iCmplxRatio, denom) as i32;
+        (*pWelsSvcRc).iQStep = WELS_DIV_ROUND64(pTOverRc[iTl].iLinearCmplx * iCmplxRatio, denom) as i32;
         iLumaQp = RcConvertQStep2Qp((*pWelsSvcRc).iQStep);
 
         let mut iLastIdxCodecInVGop = (*pWelsSvcRc).iFrameCodedInVGop - 1;
@@ -1358,13 +1364,13 @@ pub unsafe fn RcCalculatePictureQp(pEncCtx: &mut sWelsEncCtx) {
 
     (*pWelsSvcRc).iMinFrameQp = WELS_CLIP3(
         (*pWelsSvcRc).iLastCalculatedQScale - (*pWelsSvcRc).iFrameDeltaQpLower + iDeltaQpTemporal,
-        (*pTOverRc).iMinQp,
-        (*pTOverRc).iMaxQp,
+        pTOverRc[iTl].iMinQp,
+        pTOverRc[iTl].iMaxQp,
     );
     (*pWelsSvcRc).iMaxFrameQp = WELS_CLIP3(
         (*pWelsSvcRc).iLastCalculatedQScale + (*pWelsSvcRc).iFrameDeltaQpUpper + iDeltaQpTemporal,
-        (*pTOverRc).iMinQp,
-        (*pTOverRc).iMaxQp,
+        pTOverRc[iTl].iMinQp,
+        pTOverRc[iTl].iMaxQp,
     );
 
     iLumaQp = WELS_CLIP3(iLumaQp, (*pWelsSvcRc).iMinFrameQp, (*pWelsSvcRc).iMaxFrameQp);
@@ -1431,8 +1437,11 @@ pub unsafe fn RcInitSliceInformation(pEncCtx: &mut sWelsEncCtx) {
 pub unsafe fn RcDecideTargetBits(pEncCtx: &mut sWelsEncCtx) {
     let did = pEncCtx.uiDependencyId as usize;
     let pWelsSvcRc = ctx_rc_at(pEncCtx, did);
+    // T9.X: the C++ hoists this pointer once per body
+    // (`SRCTemporal* pTOverRc = pWelsSvcRc->pTemporalOverRc;`, ratectl.cpp:180 and
+    // nine more); the port hoists the slice — same shape, no arithmetic.
+    let pTOverRc: &mut [SRCTemporal] = &mut (*pWelsSvcRc).pTemporalOverRc;
     let tid = pEncCtx.uiTemporalId as usize;
-    let pTOverRc = rc_temporal_over(pWelsSvcRc).add(tid);
 
     (*pWelsSvcRc).iCurrentBitsLevel = BITS_NORMAL;
     let fix_rc_overshoot = (*ctx_param(pEncCtx)).bFixRCOverShoot;
@@ -1446,11 +1455,11 @@ pub unsafe fn RcDecideTargetBits(pEncCtx: &mut sWelsEncCtx) {
             (*pWelsSvcRc).iTargetBits = (*pWelsSvcRc).iBitsPerFrame * IDR_BITRATE_RATIO;
         }
     } else {
-        if (*pWelsSvcRc).iRemainingWeights > (*pTOverRc).iTlayerWeight
-            || (fix_rc_overshoot && (*pWelsSvcRc).iRemainingWeights == (*pTOverRc).iTlayerWeight)
+        if (*pWelsSvcRc).iRemainingWeights > pTOverRc[tid].iTlayerWeight
+            || (fix_rc_overshoot && (*pWelsSvcRc).iRemainingWeights == pTOverRc[tid].iTlayerWeight)
         {
             (*pWelsSvcRc).iTargetBits = WELS_DIV_ROUND64(
-                (*pWelsSvcRc).iRemainingBits as i64 * (*pTOverRc).iTlayerWeight as i64,
+                (*pWelsSvcRc).iRemainingBits as i64 * pTOverRc[tid].iTlayerWeight as i64,
                 (*pWelsSvcRc).iRemainingWeights as i64,
             ) as i32;
         } else {
@@ -1465,11 +1474,11 @@ pub unsafe fn RcDecideTargetBits(pEncCtx: &mut sWelsEncCtx) {
         }
         (*pWelsSvcRc).iTargetBits = WELS_CLIP3(
             (*pWelsSvcRc).iTargetBits,
-            (*pTOverRc).iMinBitsTl,
-            (*pTOverRc).iMaxBitsTl,
+            pTOverRc[tid].iMinBitsTl,
+            pTOverRc[tid].iMaxBitsTl,
         );
     }
-    (*pWelsSvcRc).iRemainingWeights -= (*pTOverRc).iTlayerWeight;
+    (*pWelsSvcRc).iRemainingWeights -= pTOverRc[tid].iTlayerWeight;
 }
 
 /// Target bit allocation routine used under `RC_TIMESTAMP_MODE`.
@@ -1478,9 +1487,12 @@ pub unsafe fn RcDecideTargetBits(pEncCtx: &mut sWelsEncCtx) {
 pub unsafe fn RcDecideTargetBitsTimestamp(pEncCtx: &mut sWelsEncCtx) {
     let did = pEncCtx.uiDependencyId as usize;
     let pWelsSvcRc = ctx_rc_at(pEncCtx, did);
+    // T9.X: the C++ hoists this pointer once per body
+    // (`SRCTemporal* pTOverRc = pWelsSvcRc->pTemporalOverRc;`, ratectl.cpp:180 and
+    // nine more); the port hoists the slice — same shape, no arithmetic.
+    let pTOverRc: &mut [SRCTemporal] = &mut (*pWelsSvcRc).pTemporalOverRc;
     let pDLayerParam = &(*ctx_param(pEncCtx)).sSpatialLayers[did];
     let iTl = pEncCtx.uiTemporalId as usize;
-    let pTOverRc = rc_temporal_over(pWelsSvcRc).add(iTl);
     (*pWelsSvcRc).iCurrentBitsLevel = BITS_NORMAL;
 
     let iBufferTh = ((*pWelsSvcRc).iBufferSizeSkip as i64 - (*pWelsSvcRc).iBufferFullnessSkip) as i32;
@@ -1488,7 +1500,7 @@ pub unsafe fn RcDecideTargetBitsTimestamp(pEncCtx: &mut sWelsEncCtx) {
     if pEncCtx.eSliceType as i32 == I_SLICE {
         if iBufferTh <= 0 {
             (*pWelsSvcRc).iCurrentBitsLevel = BITS_EXCEEDED;
-            (*pWelsSvcRc).iTargetBits = (*pTOverRc).iMinBitsTl;
+            (*pWelsSvcRc).iTargetBits = pTOverRc[iTl].iMinBitsTl;
         } else {
             let iMaxTh = iBufferTh * 3 / 4;
             let iMinTh = if pDLayerParam.fFrameRate < 8.0 {
@@ -1510,7 +1522,7 @@ pub unsafe fn RcDecideTargetBitsTimestamp(pEncCtx: &mut sWelsEncCtx) {
     } else {
         if iBufferTh <= 0 {
             (*pWelsSvcRc).iCurrentBitsLevel = BITS_EXCEEDED;
-            (*pWelsSvcRc).iTargetBits = (*pTOverRc).iMinBitsTl;
+            (*pWelsSvcRc).iTargetBits = pTOverRc[iTl].iMinBitsTl;
         } else {
             let pDLayerParamInternal = &(*ctx_param(pEncCtx)).sDependencyLayers[did];
             let kiGopSize = 1 << pDLayerParamInternal.iDecompositionStages;
@@ -1521,7 +1533,7 @@ pub unsafe fn RcDecideTargetBitsTimestamp(pEncCtx: &mut sWelsEncCtx) {
             };
             let kiGopBits = iAverageFrameSize * kiGopSize;
             (*pWelsSvcRc).iTargetBits = WELS_DIV_ROUND(
-                (*pTOverRc).iTlayerWeight * kiGopBits,
+                pTOverRc[iTl].iTlayerWeight * kiGopBits,
                 INT_MULTIPLY * 10 * 2,
             );
 
@@ -1716,7 +1728,10 @@ pub unsafe fn RcCalculateGomQp(
 pub unsafe fn RcVBufferCalculationSkip(pEncCtx: &mut sWelsEncCtx) {
     let did = pEncCtx.uiDependencyId as usize;
     let pWelsSvcRc = ctx_rc_at(pEncCtx, did);
-    let pTOverRc = rc_temporal_over(pWelsSvcRc);
+    // T9.X: the C++ hoists this pointer once per body
+    // (`SRCTemporal* pTOverRc = pWelsSvcRc->pTemporalOverRc;`, ratectl.cpp:180 and
+    // nine more); the port hoists the slice — same shape, no arithmetic.
+    let pTOverRc: &mut [SRCTemporal] = &mut (*pWelsSvcRc).pTemporalOverRc;
     let kiOutputBits = (*pWelsSvcRc).iBitsPerFrame;
     let kiOutputMaxBits = (*pWelsSvcRc).iMaxBitsPerFrame;
 
@@ -1730,7 +1745,7 @@ pub unsafe fn RcVBufferCalculationSkip(pEncCtx: &mut sWelsEncCtx) {
     let mut iVGopBitsPred: i64 = 0;
     for i in ((*pWelsSvcRc).iFrameCodedInVGop + 1)..VGOP_SIZE as i32 {
         let tid = (*pWelsSvcRc).iTlOfFrames[i as usize] as usize;
-        iVGopBitsPred += (*pTOverRc.add(tid)).iMinBitsTl as i64;
+        iVGopBitsPred += pTOverRc[tid].iMinBitsTl as i64;
     }
     iVGopBitsPred -= (*pWelsSvcRc).iRemainingBits as i64;
 
@@ -2073,6 +2088,10 @@ pub unsafe fn RcUpdatePictureQpBits(pEncCtx: &mut sWelsEncCtx, iCodedBits: i32) 
     let pCurDq = current_layer(pEncCtx);
     let did = pEncCtx.uiDependencyId as usize;
     let pWelsSvcRc = ctx_rc_at(pEncCtx, did);
+    // T9.X: the C++ hoists this pointer once per body
+    // (`SRCTemporal* pTOverRc = pWelsSvcRc->pTemporalOverRc;`, ratectl.cpp:180 and
+    // nine more); the port hoists the slice — same shape, no arithmetic.
+    let pTOverRc: &mut [SRCTemporal] = &mut (*pWelsSvcRc).pTemporalOverRc;
     let pCurSliceCtx = &(*current_layer(pEncCtx)).sSliceEncCtx;
     let mut iTotalQp = 0;
     let mut iTotalMb = 0;
@@ -2100,7 +2119,8 @@ pub unsafe fn RcUpdatePictureQpBits(pEncCtx: &mut sWelsEncCtx, iCodedBits: i32) 
     (*pWelsSvcRc).iLastCalculatedQScale = (*pWelsSvcRc).iAverageFrameQp;
 
     let tid = pEncCtx.uiTemporalId as usize;
-    (*rc_temporal_over(pWelsSvcRc).add(tid)).iGopBitsDq += (*pWelsSvcRc).iFrameDqBits;
+    let iFrameDqBits = (*pWelsSvcRc).iFrameDqBits;
+    pTOverRc[tid].iGopBitsDq += iFrameDqBits;
 }
 
 /// Updates the exponential moving average of Intra frame complexity.
@@ -2146,8 +2166,11 @@ pub unsafe fn RcUpdateIntraComplexity(pEncCtx: &mut sWelsEncCtx) {
 pub unsafe fn RcUpdateFrameComplexity(pEncCtx: &mut sWelsEncCtx) {
     let did = pEncCtx.uiDependencyId as usize;
     let pWelsSvcRc = ctx_rc_at(pEncCtx, did);
+    // T9.X: the C++ hoists this pointer once per body
+    // (`SRCTemporal* pTOverRc = pWelsSvcRc->pTemporalOverRc;`, ratectl.cpp:180 and
+    // nine more); the port hoists the slice — same shape, no arithmetic.
+    let pTOverRc: &mut [SRCTemporal] = &mut (*pWelsSvcRc).pTemporalOverRc;
     let kiTl = pEncCtx.uiTemporalId as usize;
-    let pTOverRc = rc_temporal_over(pWelsSvcRc).add(kiTl);
 
     let mut iFrameComplexity = (*ctx_vaa(pEncCtx)).sComplexityAnalysisParam.iFrameComplexity;
     if (*ctx_param(pEncCtx)).iUsageType == EUsageType::SCREEN_CONTENT_REAL_TIME {
@@ -2157,26 +2180,26 @@ pub unsafe fn RcUpdateFrameComplexity(pEncCtx: &mut sWelsEncCtx) {
 
     let iQStep = RcConvertQp2QStep((*pWelsSvcRc).iAverageFrameQp);
 
-    if (*pTOverRc).iPFrameNum == 0 {
-        (*pTOverRc).iLinearCmplx = (*pWelsSvcRc).iFrameDqBits as i64 * iQStep as i64;
-        (*pTOverRc).iFrameCmplxMean = iFrameComplexity;
+    if pTOverRc[kiTl].iPFrameNum == 0 {
+        pTOverRc[kiTl].iLinearCmplx = (*pWelsSvcRc).iFrameDqBits as i64 * iQStep as i64;
+        pTOverRc[kiTl].iFrameCmplxMean = iFrameComplexity;
     } else {
-        (*pTOverRc).iLinearCmplx = WELS_DIV_ROUND64(
-            LINEAR_MODEL_DECAY_FACTOR as i64 * (*pTOverRc).iLinearCmplx
+        pTOverRc[kiTl].iLinearCmplx = WELS_DIV_ROUND64(
+            LINEAR_MODEL_DECAY_FACTOR as i64 * pTOverRc[kiTl].iLinearCmplx
                 + (INT_MULTIPLY - LINEAR_MODEL_DECAY_FACTOR) as i64
                     * ((*pWelsSvcRc).iFrameDqBits as i64 * iQStep as i64),
             INT_MULTIPLY as i64,
         );
-        (*pTOverRc).iFrameCmplxMean = WELS_DIV_ROUND64(
-            LINEAR_MODEL_DECAY_FACTOR as i64 * (*pTOverRc).iFrameCmplxMean
+        pTOverRc[kiTl].iFrameCmplxMean = WELS_DIV_ROUND64(
+            LINEAR_MODEL_DECAY_FACTOR as i64 * pTOverRc[kiTl].iFrameCmplxMean
                 + (INT_MULTIPLY - LINEAR_MODEL_DECAY_FACTOR) as i64 * iFrameComplexity,
             INT_MULTIPLY as i64,
         );
     }
 
-    (*pTOverRc).iPFrameNum += 1;
-    if (*pTOverRc).iPFrameNum > 255 {
-        (*pTOverRc).iPFrameNum = 255;
+    pTOverRc[kiTl].iPFrameNum += 1;
+    if pTOverRc[kiTl].iPFrameNum > 255 {
+        pTOverRc[kiTl].iPFrameNum = 255;
     }
 }
 
