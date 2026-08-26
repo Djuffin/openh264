@@ -661,8 +661,8 @@ pub unsafe fn ctx_stride_enc_block_offset(pCtx: *mut sWelsEncCtx, kiDid: usize) 
 #[inline]
 // unsafe-cat: cursor
 #[allow(unsafe_code)]
-pub unsafe fn ctx_mb_index_x(pCtx: *mut sWelsEncCtx, kiDid: usize) -> *const i16 {
-    match (*pCtx).pStrideTab.as_ref() {
+pub unsafe fn ctx_mb_index_x(pCtx: &mut sWelsEncCtx, kiDid: usize) -> *const i16 {
+    match pCtx.pStrideTab.as_ref() {
         Some(tab) => tab.MbIndexX(kiDid),
         None => std::ptr::null(),
     }
@@ -867,9 +867,9 @@ pub unsafe fn ctx_rc_at(pCtx: *mut sWelsEncCtx, kiDid: usize) -> *mut SWelsSvcRc
 #[inline]
 // unsafe-cat: cursor
 #[allow(unsafe_code)]
-pub unsafe fn ctx_ltr(pCtx: *mut sWelsEncCtx) -> *mut SLTRState {
+pub unsafe fn ctx_ltr(pCtx: &mut sWelsEncCtx) -> *mut SLTRState {
     // **F71** — see `ctx_param`. Shared access to the `Vec`, buffer provenance out.
-    let v = std::ptr::addr_of!((*pCtx).pLtr);
+    let v = std::ptr::addr_of!(pCtx.pLtr);
     if (*v).is_empty() {
         return std::ptr::null_mut();
     }
@@ -884,12 +884,12 @@ pub unsafe fn ctx_ltr(pCtx: *mut sWelsEncCtx) -> *mut SLTRState {
 #[inline]
 // unsafe-cat: cursor
 #[allow(unsafe_code)]
-pub unsafe fn ctx_ltr_at(pCtx: *mut sWelsEncCtx, kiDid: usize) -> *mut SLTRState {
+pub unsafe fn ctx_ltr_at(pCtx: &mut sWelsEncCtx, kiDid: usize) -> *mut SLTRState {
     let root = ctx_ltr(pCtx);
     if root.is_null() {
         return std::ptr::null_mut();
     }
-    debug_assert!(kiDid < (*pCtx).pLtr.len(), "LTR layer {kiDid} is past the array");
+    debug_assert!(kiDid < pCtx.pLtr.len(), "LTR layer {kiDid} is past the array");
     root.add(kiDid)
 }
 
@@ -913,9 +913,9 @@ pub unsafe fn ctx_ltr_at(pCtx: *mut sWelsEncCtx, kiDid: usize) -> *mut SLTRState
 #[inline]
 // unsafe-cat: cursor
 #[allow(unsafe_code)]
-pub unsafe fn ctx_frame_bs(pCtx: *mut sWelsEncCtx) -> *mut u8 {
+pub unsafe fn ctx_frame_bs(pCtx: &mut sWelsEncCtx) -> *mut u8 {
     // **F71** — see `ctx_param`. Shared access to the `Vec`, buffer provenance out.
-    let buf = std::ptr::addr_of!((*pCtx).pFrameBs);
+    let buf = std::ptr::addr_of!(pCtx.pFrameBs);
     if (*buf).is_empty() {
         return std::ptr::null_mut();
     }
@@ -946,14 +946,14 @@ pub unsafe fn ctx_frame_bs(pCtx: *mut sWelsEncCtx) -> *mut u8 {
 #[inline]
 // unsafe-cat: cursor
 #[allow(unsafe_code)]
-pub unsafe fn ctx_frame_bs_cur(pCtx: *mut sWelsEncCtx) -> *mut u8 {
+pub unsafe fn ctx_frame_bs_cur(pCtx: &mut sWelsEncCtx) -> *mut u8 {
     let root = ctx_frame_bs(pCtx);
     if root.is_null() {
         return std::ptr::null_mut();
     }
-    let kiPos = (*pCtx).iPosBsBuffer;
+    let kiPos = pCtx.iPosBsBuffer;
     debug_assert!(
-        kiPos >= 0 && (kiPos as usize) <= (*pCtx).pFrameBs.len(),
+        kiPos >= 0 && (kiPos as usize) <= pCtx.pFrameBs.len(),
         "frame bitstream cursor {kiPos} is outside the buffer"
     );
     root.add(kiPos as usize)
@@ -967,9 +967,9 @@ pub unsafe fn ctx_frame_bs_cur(pCtx: *mut sWelsEncCtx) -> *mut u8 {
 #[inline]
 // unsafe-cat: cursor
 #[allow(unsafe_code)]
-pub unsafe fn ctx_dq_idc_map(pCtx: *mut sWelsEncCtx) -> *mut SDqIdc {
+pub unsafe fn ctx_dq_idc_map(pCtx: &mut sWelsEncCtx) -> *mut SDqIdc {
     // **F71** — see `ctx_param`. Shared access to the `Vec`, buffer provenance out.
-    let v = std::ptr::addr_of!((*pCtx).pDqIdcMap);
+    let v = std::ptr::addr_of!(pCtx.pDqIdcMap);
     if (*v).is_empty() {
         return std::ptr::null_mut();
     }
@@ -1045,8 +1045,8 @@ pub unsafe fn ctx_pps_array(pCtx: *mut sWelsEncCtx) -> *mut SWelsPPS {
 #[inline]
 // unsafe-cat: cursor
 #[allow(unsafe_code)]
-pub unsafe fn ctx_mb_index_y(pCtx: *mut sWelsEncCtx, kiDid: usize) -> *const i16 {
-    match (*pCtx).pStrideTab.as_ref() {
+pub unsafe fn ctx_mb_index_y(pCtx: &mut sWelsEncCtx, kiDid: usize) -> *const i16 {
+    match pCtx.pStrideTab.as_ref() {
         Some(tab) => tab.MbIndexY(kiDid),
         None => std::ptr::null(),
     }
@@ -2148,6 +2148,16 @@ mod tests {
             }};
         }
 
+        // **T9.H12: three of these now take `&mut sWelsEncCtx` and the rest still
+        // take `*mut`, and the test is better for the mix.** `ctx_dq_idc_map`,
+        // `ctx_ltr` and `ctx_ltr_at` were ST and flipped; the others are in-fork
+        // and stay raw under S63. So the flipped three assert something stronger
+        // than the sibling property they were written for: the second call now
+        // performs a **`&mut` entry retag of the whole context**, and the first
+        // cursor survives it anyway — because `pLtr` and `pDqIdcMap` are `Vec`s
+        // whose buffers are separate allocations from the context, which a context
+        // retag cannot reach. That is F163's allocation argument, asserted rather
+        // than argued, beside the un-flipped accessors it does not apply to.
         siblings!("ctx_sps_array", ctx_sps_array(p),
             |q: *mut crate::encoder::param_svc::SWelsSPS| (*q).uiSpsId = 7,
             |q: *mut crate::encoder::param_svc::SWelsSPS| (*q).uiSpsId == 7);
@@ -2157,11 +2167,11 @@ mod tests {
         siblings!("ctx_pps_array", ctx_pps_array(p),
             |q: *mut crate::encoder::param_svc::SWelsPPS| (*q).iPpsId = 3,
             |q: *mut crate::encoder::param_svc::SWelsPPS| (*q).iPpsId == 3);
-        siblings!("ctx_dq_idc_map", ctx_dq_idc_map(p),
+        siblings!("ctx_dq_idc_map", ctx_dq_idc_map(&mut *p),
             |q: *mut SDqIdc| (*q).iPpsId = 9, |q: *mut SDqIdc| (*q).iPpsId == 9);
-        siblings!("ctx_ltr", ctx_ltr(p),
+        siblings!("ctx_ltr", ctx_ltr(&mut *p),
             |q: *mut SLTRState| (*q).iCurLtrIdx = 4, |q: *mut SLTRState| (*q).iCurLtrIdx == 4);
-        siblings!("ctx_ltr_at", ctx_ltr_at(p, 1),
+        siblings!("ctx_ltr_at", ctx_ltr_at(&mut *p, 1),
             |q: *mut SLTRState| (*q).iCurLtrIdx = 6, |q: *mut SLTRState| (*q).iCurLtrIdx == 6);
         siblings!("ctx_rc", ctx_rc(p),
             |q: *mut SWelsSvcRc| (*q).iGomSize = 11, |q: *mut SWelsSvcRc| (*q).iGomSize == 11);
@@ -2207,10 +2217,10 @@ mod tests {
         // per-accessor test cannot reach.
         let held: Vec<*mut u8> = unsafe {
             vec![
-                ctx_sps_array(p).cast(), ctx_pps_array(p).cast(), ctx_dq_idc_map(p).cast(),
-                ctx_ltr(p).cast(), ctx_rc(p).cast(), ctx_mvd_cost_origin(p).cast(),
+                ctx_sps_array(p).cast(), ctx_pps_array(p).cast(), ctx_dq_idc_map(&mut *p).cast(),
+                ctx_ltr(&mut *p).cast(), ctx_rc(p).cast(), ctx_mvd_cost_origin(p).cast(),
                 ctx_vaa(p).cast(), ctx_param(p).cast(), ctx_ref_list(p, 0).cast(),
-                ctx_dq_layer(p, 0).cast(), ctx_frame_bs(p).cast(),
+                ctx_dq_layer(p, 0).cast(), ctx_frame_bs(&mut *p).cast(),
             ]
         };
         // `ctx_frame_bs` is null here (no bitstream in this fixture), which is itself
@@ -2242,8 +2252,8 @@ mod tests {
         let mut ctx = Box::new(sWelsEncCtx::new());
         let p: *mut sWelsEncCtx = &mut *ctx;
         // Before `RequestMemorySvc`, both answer the null the raw field held.
-        assert!(unsafe { ctx_frame_bs(p) }.is_null());
-        assert!(unsafe { ctx_frame_bs_cur(p) }.is_null());
+        assert!(unsafe { ctx_frame_bs(&mut *p) }.is_null());
+        assert!(unsafe { ctx_frame_bs_cur(&mut *p) }.is_null());
 
         ctx.pFrameBs = vec![0u8; 64];
         ctx.iFrameBsSize = 64;
@@ -2251,7 +2261,7 @@ mod tests {
 
         // `pBsBuf` — the root, stored and kept, exactly as the three sites that take
         // it do.
-        let stored = unsafe { ctx_frame_bs(p) };
+        let stored = unsafe { ctx_frame_bs(&mut *p) };
 
         // The frame loop then walks: derive at the cursor, write, advance, repeat.
         // T9.G5: the walk drives `iPosBsBuffer`, because that is what the accessor
@@ -2262,7 +2272,7 @@ mod tests {
         for i in 0..8i32 {
             unsafe {
                 (*p).iPosBsBuffer = i;
-                *ctx_frame_bs_cur(p) = 0xA0 | i as u8;
+                *ctx_frame_bs_cur(&mut *p) = 0xA0 | i as u8;
             }
         }
         // The use that matters: the FIRST cursor, after eight later derivations.
@@ -2270,7 +2280,7 @@ mod tests {
             assert_eq!(*stored, 0xA0, "the stored pBsBuf still reaches the buffer");
             *stored.add(8) = 0x5A;
             (*p).iPosBsBuffer = 8;
-            assert_eq!(*ctx_frame_bs_cur(p), 0x5A);
+            assert_eq!(*ctx_frame_bs_cur(&mut *p), 0x5A);
         }
 
         // And the whole buffer reads back through the container, which is the point
@@ -2291,8 +2301,8 @@ mod tests {
         // `pStrideTab` held, and the question every `is_null()` guard was written to ask.
         assert!(unsafe { ctx_stride_enc_block_offset(p, 0) }.is_null());
         assert!(unsafe { ctx_stride_dec_block_offset(p, 0, 1) }.is_null());
-        assert!(unsafe { ctx_mb_index_x(p, 0) }.is_null());
-        assert!(unsafe { ctx_mb_index_y(p, 0) }.is_null());
+        assert!(unsafe { ctx_mb_index_x(&mut *p, 0) }.is_null());
+        assert!(unsafe { ctx_mb_index_y(&mut *p, 0) }.is_null());
 
         let mut tab = SStrideTables::new(96 * 2);
         tab.pStrideEncBlockOffset[0] = Some(0);

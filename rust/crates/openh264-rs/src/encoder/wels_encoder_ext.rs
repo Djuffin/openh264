@@ -2172,7 +2172,7 @@ impl CWelsH264SVCEncoder {
                 {
                     pStatistics.uiIDRSentNum += 1;
                 }
-                let pLtr = ctx_ltr(pCtx);
+                let pLtr = ctx_ltr(&mut *pCtx);
                 if !pLtr.is_null() && (*pLtr).bLTRMarkingFlag {
                     pStatistics.uiLTRSentNum += 1;
                 }

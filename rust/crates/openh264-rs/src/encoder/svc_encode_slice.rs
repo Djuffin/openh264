@@ -743,12 +743,12 @@ pub unsafe fn current_layer(pCtx: *mut sWelsEncCtx) -> *mut SDqLayer {
 #[inline]
 // unsafe-cat: cursor
 #[allow(unsafe_code)]
-pub unsafe fn set_current_layer(pCtx: *mut sWelsEncCtx, kIdx: Option<LayerIdx>) {
+pub unsafe fn set_current_layer(pCtx: &mut sWelsEncCtx, kIdx: Option<LayerIdx>) {
     debug_assert!(
         kIdx.is_none_or(|i| i.get() < MAX_DEPENDENCY_LAYER),
         "{kIdx:?} is past the largest list InitDqLayers can build"
     );
-    (*pCtx).iCurDqLayer = kIdx;
+    pCtx.iCurDqLayer = kIdx;
 }
 
 /// A layer's **active SPS**, resolved from [`LayerSps`] — T6.G3.
@@ -846,15 +846,15 @@ pub unsafe fn layer_pps(pCtx: *mut sWelsEncCtx, pCurLayer: *const SDqLayer) -> *
 #[inline]
 // unsafe-cat: cursor
 #[allow(unsafe_code)]
-pub unsafe fn ctx_sps(pCtx: *mut sWelsEncCtx) -> *mut SWelsSPS {
-    let Some(id) = (*pCtx).iSps else {
+pub unsafe fn ctx_sps(pCtx: &mut sWelsEncCtx) -> *mut SWelsSPS {
+    let Some(id) = pCtx.iSps else {
         return std::ptr::null_mut();
     };
     let arr = ctx_sps_array(pCtx);
     if arr.is_null() {
         return std::ptr::null_mut();
     }
-    debug_assert!((id.get() as i32) < (*pCtx).iSpsNum.max(1), "iSps past iSpsNum");
+    debug_assert!((id.get() as i32) < pCtx.iSpsNum.max(1), "iSps past iSpsNum");
     arr.add(id.get())
 }
 
@@ -865,15 +865,15 @@ pub unsafe fn ctx_sps(pCtx: *mut sWelsEncCtx) -> *mut SWelsSPS {
 #[inline]
 // unsafe-cat: cursor
 #[allow(unsafe_code)]
-pub unsafe fn ctx_pps(pCtx: *mut sWelsEncCtx) -> *mut SWelsPPS {
-    let Some(id) = (*pCtx).iPps else {
+pub unsafe fn ctx_pps(pCtx: &mut sWelsEncCtx) -> *mut SWelsPPS {
+    let Some(id) = pCtx.iPps else {
         return std::ptr::null_mut();
     };
     let arr = ctx_pps_array(pCtx);
     if arr.is_null() {
         return std::ptr::null_mut();
     }
-    debug_assert!((id.get() as i32) < (*pCtx).iPpsNum.max(1), "iPps past iPpsNum");
+    debug_assert!((id.get() as i32) < pCtx.iPpsNum.max(1), "iPps past iPpsNum");
     arr.add(id.get())
 }
 
