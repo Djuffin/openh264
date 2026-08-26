@@ -520,6 +520,22 @@ fn noise_i32(rng: &mut Prng, len: usize) -> Vec<i32> {
     (0..len).map(|_| rng.next_u32() as i32).collect()
 }
 
+/// The per-quadrant form of [`noise_i32`] — **T9.X**: the safe VAA kernels type
+/// `pSad8x8`/`pSd8x8` as one `[i32; 4]` per macroblock rather than a flat run, which
+/// is the shape that made the raw entry points retirable.
+fn noise_quads_i32(rng: &mut Prng, len: usize) -> Vec<[i32; 4]> {
+    (0..len)
+        .map(|_| std::array::from_fn(|_| rng.next_u32() as i32))
+        .collect()
+}
+
+/// As [`noise_quads_i32`], for `pMad8x8`.
+fn noise_quads_u8(rng: &mut Prng, len: usize) -> Vec<[u8; 4]> {
+    (0..len)
+        .map(|_| std::array::from_fn(|_| rng.next_u32() as u8))
+        .collect()
+}
+
 /// **Span size.** Every plane is allocated to exactly `vaa_span`, so a shim that
 /// claims one byte more is UB that Miri reports at the `from_raw_parts`, and one that
 /// claims less panics inside the safe walk. The output arrays carry a noise tail that
@@ -542,62 +558,56 @@ fn vaa_shims_stay_inside_the_spans_they_declare() {
 
         // Every output array each of the five kernels can write, allocated once and
         // re-noised per call so a kernel that fails to write an entry is visible.
-        let mut sad = noise_i32(&mut rng, n * 4);
-        let mut sd = noise_i32(&mut rng, n * 4);
+        let mut sad = noise_quads_i32(&mut rng, n);
+        let mut sd = noise_quads_i32(&mut rng, n);
         let mut sum = noise_i32(&mut rng, n);
         let mut sqsum = noise_i32(&mut rng, n);
         let mut sqdiff = noise_i32(&mut rng, n);
-        let mut mad = rng.bytes(n * 4);
-        let tail_sad = sad[mbs * 4..].to_vec();
-        let tail_sd = sd[mbs * 4..].to_vec();
+        let mut mad = noise_quads_u8(&mut rng, n);
+        let tail_sad = sad[mbs..].to_vec();
+        let tail_sd = sd[mbs..].to_vec();
         let tail_sum = sum[mbs..].to_vec();
         let tail_sqsum = sqsum[mbs..].to_vec();
         let tail_sqdiff = sqdiff[mbs..].to_vec();
-        let tail_mad = mad[mbs * 4..].to_vec();
-        let mut frame = 0i32;
+        let tail_mad = mad[mbs..].to_vec();
 
-        unsafe {
-            vaa::VAACalcSad_c(
-                cur.as_ptr(), refp.as_ptr(), w, h, stride, &mut frame, sad.as_mut_ptr(),
-            );
-            assert_eq!(&sad[mbs * 4..], &tail_sad[..], "Sad wrote past the last MB, {at}");
-            assert_eq!(
-                frame,
-                sad[..mbs * 4].iter().sum::<i32>(),
-                "the frame total is the sum of the parts, {at}"
-            );
+        // **T9.X — the property survives the retirement of the raw entry points.**
+        // It used to say "a shim that claims one byte more is UB Miri reports at the
+        // `from_raw_parts`". The safe walkers cannot claim a byte more — the slice
+        // says how many there are — but they can still write the wrong *number* of
+        // entries, and the noise tail beyond `mbs` is exactly what catches that. The
+        // span property moved from the pointer to the slice; the assertion did not
+        // move at all.
+        let frame = vaa::vaa_calc_sad(&cur, &refp, w, h, stride, &mut sad);
+        assert_eq!(&sad[mbs..], &tail_sad[..], "Sad wrote past the last MB, {at}");
+        assert_eq!(
+            frame,
+            sad[..mbs].iter().flatten().sum::<i32>(),
+            "the frame total is the sum of the parts, {at}"
+        );
 
-            vaa::VAACalcSadVar_c(
-                cur.as_ptr(), refp.as_ptr(), w, h, stride, &mut frame,
-                sad.as_mut_ptr(), sum.as_mut_ptr(), sqsum.as_mut_ptr(),
-            );
-            assert_eq!(&sad[mbs * 4..], &tail_sad[..], "SadVar wrote past the last MB, {at}");
-            assert_eq!(&sum[mbs..], &tail_sum[..], "SadVar wrote past sum16x16, {at}");
-            assert_eq!(&sqsum[mbs..], &tail_sqsum[..], "SadVar wrote past sqsum16x16, {at}");
+        vaa::vaa_calc_sad_var(&cur, &refp, w, h, stride, &mut sad, &mut sum, &mut sqsum);
+        assert_eq!(&sad[mbs..], &tail_sad[..], "SadVar wrote past the last MB, {at}");
+        assert_eq!(&sum[mbs..], &tail_sum[..], "SadVar wrote past sum16x16, {at}");
+        assert_eq!(&sqsum[mbs..], &tail_sqsum[..], "SadVar wrote past sqsum16x16, {at}");
 
-            vaa::VAACalcSadSsd_c(
-                cur.as_ptr(), refp.as_ptr(), w, h, stride, &mut frame,
-                sad.as_mut_ptr(), sum.as_mut_ptr(), sqsum.as_mut_ptr(), sqdiff.as_mut_ptr(),
-            );
-            assert_eq!(&sqdiff[mbs..], &tail_sqdiff[..], "SadSsd wrote past sqdiff16x16, {at}");
+        vaa::vaa_calc_sad_ssd(
+            &cur, &refp, w, h, stride, &mut sad, &mut sum, &mut sqsum, &mut sqdiff,
+        );
+        assert_eq!(&sqdiff[mbs..], &tail_sqdiff[..], "SadSsd wrote past sqdiff16x16, {at}");
 
-            vaa::VAACalcSadBgd_c(
-                cur.as_ptr(), refp.as_ptr(), w, h, stride, &mut frame,
-                sad.as_mut_ptr(), sd.as_mut_ptr(), mad.as_mut_ptr(),
-            );
-            assert_eq!(&sd[mbs * 4..], &tail_sd[..], "SadBgd wrote past pSd8x8, {at}");
-            assert_eq!(&mad[mbs * 4..], &tail_mad[..], "SadBgd wrote past pMad8x8, {at}");
+        vaa::vaa_calc_sad_bgd(&cur, &refp, w, h, stride, &mut sad, &mut sd, &mut mad);
+        assert_eq!(&sd[mbs..], &tail_sd[..], "SadBgd wrote past pSd8x8, {at}");
+        assert_eq!(&mad[mbs..], &tail_mad[..], "SadBgd wrote past pMad8x8, {at}");
 
-            vaa::VAACalcSadSsdBgd_c(
-                cur.as_ptr(), refp.as_ptr(), w, h, stride, &mut frame,
-                sad.as_mut_ptr(), sum.as_mut_ptr(), sqsum.as_mut_ptr(),
-                sqdiff.as_mut_ptr(), sd.as_mut_ptr(), mad.as_mut_ptr(),
-            );
-            assert_eq!(&sad[mbs * 4..], &tail_sad[..], "SadSsdBgd wrote past the last MB, {at}");
-            assert_eq!(&sd[mbs * 4..], &tail_sd[..], "SadSsdBgd wrote past pSd8x8, {at}");
-            assert_eq!(&sqdiff[mbs..], &tail_sqdiff[..], "SadSsdBgd wrote past sqdiff16x16, {at}");
-            assert_eq!(&mad[mbs * 4..], &tail_mad[..], "SadSsdBgd wrote past pMad8x8, {at}");
-        }
+        vaa::vaa_calc_sad_ssd_bgd(
+            &cur, &refp, w, h, stride, &mut sad, &mut sum, &mut sqsum, &mut sqdiff,
+            &mut sd, &mut mad,
+        );
+        assert_eq!(&sad[mbs..], &tail_sad[..], "SadSsdBgd wrote past the last MB, {at}");
+        assert_eq!(&sd[mbs..], &tail_sd[..], "SadSsdBgd wrote past pSd8x8, {at}");
+        assert_eq!(&sqdiff[mbs..], &tail_sqdiff[..], "SadSsdBgd wrote past sqdiff16x16, {at}");
+        assert_eq!(&mad[mbs..], &tail_mad[..], "SadSsdBgd wrote past pMad8x8, {at}");
     }
 }
 
@@ -635,20 +645,15 @@ fn vaa_shim_reads_each_quadrant_where_its_contract_says_it_does() {
             }
         }
 
-        let mut sad = vec![0i32; mbs * 4];
-        let mut frame = 0i32;
-        unsafe {
-            vaa::VAACalcSad_c(
-                cur.as_ptr(), refp.as_ptr(), w, h, stride, &mut frame, sad.as_mut_ptr(),
-            );
-        }
+        let mut sad = vec![[0i32; 4]; mbs];
+        let frame = vaa::vaa_calc_sad(&cur, &refp, w, h, stride, &mut sad);
 
         let mut expect_frame = 0i32;
         for mb in 0..mbs {
             for q in 0..4 {
                 let want = 64 * delta(mb, q) as i32;
                 assert_eq!(
-                    sad[mb * 4 + q], want,
+                    sad[mb][q], want,
                     "macroblock {mb} quadrant {q} read the wrong 8x8 block, {at}"
                 );
                 expect_frame += want;
