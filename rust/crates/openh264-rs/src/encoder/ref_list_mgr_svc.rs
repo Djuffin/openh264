@@ -697,11 +697,13 @@ pub unsafe fn PrefetchNextBuffer(pCtx: *mut sWelsEncCtx) {
 /// Updates reference picture list after current frame reconstruction.
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
-pub unsafe fn WelsUpdateRefList(pCtx: *mut sWelsEncCtx) -> bool {
-    if pCtx.is_null() || current_layer(pCtx).is_null() || ctx_param(pCtx).is_null() {
+pub unsafe fn WelsUpdateRefList(pCtx: &mut sWelsEncCtx) -> bool {
+    // T9.H: the `pCtx.is_null()` disjunct is gone — a `&mut sWelsEncCtx`
+    // cannot be null and every caller now holds one. The rest is unchanged.
+    if current_layer(pCtx).is_null() || ctx_param(pCtx).is_null() {
         return false;
     }
-    let uiDid = (*pCtx).uiDependencyId as usize;
+    let uiDid = pCtx.uiDependencyId as usize;
     let pRefList = ctx_ref_list(pCtx, (uiDid) as usize);
     if pRefList.is_null() || (*pRefList).pRef.is_empty() {
         return false;
@@ -715,11 +717,11 @@ pub unsafe fn WelsUpdateRefList(pCtx: *mut sWelsEncCtx) -> bool {
     // each use is the port's own idiom and is what F66 says is sound here.
     let pLtr = ctx_ltr_at(pCtx, (uiDid) as usize);
     let pParamD = std::ptr::addr_of_mut!((*ctx_param(pCtx)).sDependencyLayers[uiDid]);
-    let kuiTid = (*pCtx).uiTemporalId;
-    let kuiDid = (*pCtx).uiDependencyId;
-    let keSliceType = (*pCtx).eSliceType;
+    let kuiTid = pCtx.uiTemporalId;
+    let kuiDid = pCtx.uiDependencyId;
+    let keSliceType = pCtx.eSliceType;
 
-    if let Some(idDec) = (*pCtx).pDecPic {
+    if let Some(idDec) = pCtx.pDecPic {
         // The reconstruction picture, resolved once — S37: everything below either
         // reads its geometry or writes its own fields, and the borrow ends before the
         // reference-list shifts that would touch the pool again.
@@ -770,7 +772,7 @@ pub unsafe fn WelsUpdateRefList(pCtx: *mut sWelsEncCtx) -> bool {
     }
 
     if keSliceType == EWelsSliceType::P_SLICE {
-        if (*pCtx).uiTemporalId == 0 {
+        if pCtx.uiTemporalId == 0 {
             if (*ctx_param(pCtx)).bEnableLongTermReference {
                 LTRMarkProcess(pCtx);
                 DeleteInvalidLTR(pCtx);
@@ -831,7 +833,7 @@ pub unsafe fn WelsUpdateRefList(pCtx: *mut sWelsEncCtx) -> bool {
     // `RefStrategyKind::UpdateRefList` is its one caller, so by the time the body
     // runs the kind has already been read. The guard was re-checking a thing its
     // caller had just dereferenced.
-    (*pCtx).eRefStrategy.EndofUpdateRefList(pCtx);
+    pCtx.eRefStrategy.EndofUpdateRefList(pCtx);
     true
 }
 
@@ -959,11 +961,13 @@ pub unsafe fn WelsMarkMMCORefInfo(
 /// Evaluates LTR marking criteria and populates slice header MMCO commands.
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
-pub unsafe fn WelsMarkPic(pCtx: *mut sWelsEncCtx) {
-    if pCtx.is_null() || current_layer(pCtx).is_null() || ctx_param(pCtx).is_null() {
+pub unsafe fn WelsMarkPic(pCtx: &mut sWelsEncCtx) {
+    // T9.H: the `pCtx.is_null()` disjunct is gone — a `&mut sWelsEncCtx`
+    // cannot be null and every caller now holds one. The rest is unchanged.
+    if current_layer(pCtx).is_null() || ctx_param(pCtx).is_null() {
         return;
     }
-    let uiDid = (*pCtx).uiDependencyId as usize;
+    let uiDid = pCtx.uiDependencyId as usize;
     // **T9.G7 — raw, not `&mut`.** This body holds the LTR state across calls that
     // derive their own `&mut` to the *same* `SLTRState` (`LTRMarkProcess` and the
     // rest re-derive `ctx_ltr_at(pCtx, uiDid)` for this same `uiDid`). Two Unique
@@ -973,7 +977,7 @@ pub unsafe fn WelsMarkPic(pCtx: *mut sWelsEncCtx) {
     let pLtr = ctx_ltr_at(pCtx, (uiDid) as usize);
     let kiCountSliceNum = (*current_layer(pCtx)).iMaxSliceNum;
 
-    if (*ctx_param(pCtx)).bEnableLongTermReference && (*pLtr).bLTRMarkEnable && (*pCtx).uiTemporalId == 0 {
+    if (*ctx_param(pCtx)).bEnableLongTermReference && (*pLtr).bLTRMarkEnable && pCtx.uiTemporalId == 0 {
         if !(*pLtr).bReceivedT0LostFlag
             && (*pLtr).uiLtrMarkInterval > (*ctx_param(pCtx)).iLtrMarkPeriod as u32
             && CheckCurMarkFrameNumUsed(pCtx)
@@ -982,7 +986,7 @@ pub unsafe fn WelsMarkPic(pCtx: *mut sWelsEncCtx) {
             (*pLtr).bLTRMarkEnable = false;
             (*pLtr).uiLtrMarkInterval = 0;
             for i in 0..MAX_TEMPORAL_LAYER_NUM {
-                if ((*pCtx).uiTemporalId as usize) < i || (*pCtx).uiTemporalId == 0 {
+                if (pCtx.uiTemporalId as usize) < i || pCtx.uiTemporalId == 0 {
                     (*pLtr).iLastLtrIdx[i] = (*pLtr).iCurLtrIdx;
                 }
             }
@@ -1089,37 +1093,39 @@ pub unsafe fn FilterLTRMarkingFeedback(
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe fn WelsBuildRefList(
-    pCtx: *mut sWelsEncCtx,
+    pCtx: &mut sWelsEncCtx,
     kiPOC: i32,
     iBestLtrRefIdx: i32,
 ) -> bool {
-    if pCtx.is_null() || ctx_param(pCtx).is_null() || current_layer(pCtx).is_null() {
+    // T9.H: the `pCtx.is_null()` disjunct is gone — a `&mut sWelsEncCtx`
+    // cannot be null and every caller now holds one. The rest is unchanged.
+    if ctx_param(pCtx).is_null() || current_layer(pCtx).is_null() {
         return false;
     }
-    let uiDid = (*pCtx).uiDependencyId as usize;
+    let uiDid = pCtx.uiDependencyId as usize;
     let pRefList = ctx_ref_list(pCtx, (uiDid) as usize);
     if pRefList.is_null() {
         return false;
     }
     let pLtr = &mut *ctx_ltr_at(pCtx, (uiDid) as usize);
     let kiNumRef = (*ctx_param(pCtx)).iNumRefFrame;
-    let kuiTid = (*pCtx).uiTemporalId;
+    let kuiTid = pCtx.uiTemporalId;
     let pParamD = std::ptr::addr_of_mut!((*ctx_param(pCtx)).sDependencyLayers[uiDid]);
 
-    (*pCtx).iNumRef0 = 0;
-    if (*pCtx).eSliceType != EWelsSliceType::I_SLICE {
-        if (*ctx_param(pCtx)).bEnableLongTermReference && pLtr.bReceivedT0LostFlag && (*pCtx).uiTemporalId == 0 {
+    pCtx.iNumRef0 = 0;
+    if pCtx.eSliceType != EWelsSliceType::I_SLICE {
+        if (*ctx_param(pCtx)).bEnableLongTermReference && pLtr.bReceivedT0LostFlag && pCtx.uiTemporalId == 0 {
             for i in 0..((*pRefList).uiLongRefCount as usize) {
                 let Some(idLong) = (*pRefList).pLongRefList[i] else {
                     continue;
                 };
                 if (*pRefList).pic(idLong).uiRecieveConfirmed == RECIEVE_SUCCESS {
-                    let numRef0 = (*pCtx).iNumRef0 as usize;
+                    let numRef0 = pCtx.iNumRef0 as usize;
                     // The camera path puts a *reconstruction* picture in `pRefOri`
                     // where the screen path puts a source picture — see `PicRef`.
                     (*current_layer(pCtx)).pRefOri[numRef0] = Some(PicRef::Rec(idLong));
-                    (*pCtx).pRefList0[numRef0] = Some(idLong);
-                    (*pCtx).iNumRef0 += 1;
+                    pCtx.pRefList0[numRef0] = Some(idLong);
+                    pCtx.iNumRef0 += 1;
                     pLtr.iLastRecoverFrameNum = (*pParamD).iFrameNum;
                     break;
                 }
@@ -1131,10 +1137,10 @@ pub unsafe fn WelsBuildRefList(
                 };
                 let pRef = (*pRefList).pic(idRef);
                 if pRef.bUsedAsRef && pRef.iFramePoc >= 0 && pRef.uiTemporalId <= kuiTid {
-                    let numRef0 = (*pCtx).iNumRef0 as usize;
+                    let numRef0 = pCtx.iNumRef0 as usize;
                     (*current_layer(pCtx)).pRefOri[numRef0] = Some(PicRef::Rec(idRef));
-                    (*pCtx).pRefList0[numRef0] = Some(idRef);
-                    (*pCtx).iNumRef0 += 1;
+                    pCtx.pRefList0[numRef0] = Some(idRef);
+                    pCtx.iNumRef0 += 1;
                 }
             }
         }
@@ -1142,29 +1148,31 @@ pub unsafe fn WelsBuildRefList(
         WelsResetRefList(pCtx);
         ResetLtrState(&mut *ctx_ltr_at(pCtx, (uiDid) as usize));
         for k in 0..MAX_TEMPORAL_LEVEL {
-            (*pCtx).bRefOfCurTidIsLtr[uiDid][k] = false;
+            pCtx.bRefOfCurTidIsLtr[uiDid][k] = false;
         }
-        (*pCtx).pRefList0[0] = None;
+        pCtx.pRefList0[0] = None;
     }
 
-    if (*pCtx).iNumRef0 as i32 > kiNumRef {
-        (*pCtx).iNumRef0 = kiNumRef as u8;
+    if pCtx.iNumRef0 as i32 > kiNumRef {
+        pCtx.iNumRef0 = kiNumRef as u8;
     }
-    (*pCtx).iNumRef0 > 0 || (*pCtx).eSliceType == EWelsSliceType::I_SLICE
+    pCtx.iNumRef0 > 0 || pCtx.eSliceType == EWelsSliceType::I_SLICE
 }
 
 /// Invokes VPP UpdateBlockIdcForScreen to update static block map.
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
-pub unsafe fn UpdateBlockStatic(pCtx: *mut sWelsEncCtx) {
-    if pCtx.is_null() || ctx_vaa(pCtx).is_null() || (*pCtx).pVpp.is_null() {
+pub unsafe fn UpdateBlockStatic(pCtx: &mut sWelsEncCtx) {
+    // T9.H: the `pCtx.is_null()` disjunct is gone — a `&mut sWelsEncCtx`
+    // cannot be null and every caller now holds one. The rest is unchanged.
+    if ctx_vaa(pCtx).is_null() || pCtx.pVpp.is_null() {
         return;
     }
     // ref_list_mgr_svc.cpp:649 — static_cast<SVAAFrameInfoExt*> (pCtx->pVaa)
         let pVaaExt = ctx_vaa(pCtx) as *mut SVAAFrameInfoExt;
-    let pRefList = ctx_ref_list(pCtx, (*pCtx).uiDependencyId as usize);
-    for idx in 0..((*pCtx).iNumRef0 as usize) {
-        let Some(idRef) = (*pCtx).pRefList0[idx] else {
+    let pRefList = ctx_ref_list(pCtx, pCtx.uiDependencyId as usize);
+    for idx in 0..(pCtx.iNumRef0 as usize) {
+        let Some(idRef) = pCtx.pRefList0[idx] else {
             continue;
         };
         // Two pools again: the reference is a reconstruction picture, the current one
@@ -1173,8 +1181,8 @@ pub unsafe fn UpdateBlockStatic(pCtx: *mut sWelsEncCtx) {
         if (*pVaaExt).iVaaBestRefFrameNum != (*pRefList).pic(idRef).iFrameNum {
             let sSrc = (*pCtx)
                 .pEncPic
-                .map(|id| (*(*pCtx).pVpp).m_pSpatialPicPool.get_mut(id).planes());
-            (*(*pCtx).pVpp).UpdateBlockIdcForScreen(
+                .map(|id| (*pCtx.pVpp).m_pSpatialPicPool.get_mut(id).planes());
+            (*pCtx.pVpp).UpdateBlockIdcForScreen(
                 (*pVaaExt).pVaaBestBlockStaticIdc,
                 Some(&sRef),
                 sSrc.as_ref(),
@@ -1187,20 +1195,20 @@ pub unsafe fn UpdateBlockStatic(pCtx: *mut sWelsEncCtx) {
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe fn WelsUpdateSliceHeaderSyntax(
-    pCtx: *mut sWelsEncCtx,
+    pCtx: &mut sWelsEncCtx,
     iAbsDiffPicNumMinus1: i32,
     pCurDq: &mut SDqLayer,
     uiFrameType: i32,
 ) {
-    if pCtx.is_null() {
-        return;
-    }
+    // T9.H: `if pCtx.is_null() { ... }` stood here. A `&mut sWelsEncCtx`
+    // cannot be null and every caller now holds one, so the guard is not
+    // merely dead — it is inexpressible. Nothing replaces it.
     // T9.E2i (the close's Miri verdict, F114b's shape): the count is read
     // through the parameter — `(*current_layer(pCtx)).iMaxSliceNum` was a
     // second, independent path to the same object this function's `&mut`
     // already protects, and the read popped the protector.
     let kiCountSliceNum = pCurDq.iMaxSliceNum;
-    let uiDid = (*pCtx).uiDependencyId as usize;
+    let uiDid = pCtx.uiDependencyId as usize;
     let pLtr = &*ctx_ltr_at(pCtx, (uiDid) as usize);
 
     for iIdx in 0..kiCountSliceNum {
@@ -1212,10 +1220,10 @@ pub unsafe fn WelsUpdateSliceHeaderSyntax(
         let pRefReorder = &mut pSliceHdr.sRefReordering;
         let pRefPicMark = &mut pSliceHdr.sRefMarking;
 
-        pSliceHdr.uiRefCount = (*pCtx).iNumRef0 as u8;
-        if (*pCtx).iNumRef0 > 0 {
-            let pRefList = ctx_ref_list(pCtx, (*pCtx).uiDependencyId as usize);
-            let isLongRef = match (*pCtx).pRefList0[0] {
+        pSliceHdr.uiRefCount = pCtx.iNumRef0 as u8;
+        if pCtx.iNumRef0 > 0 {
+            let pRefList = ctx_ref_list(pCtx, pCtx.uiDependencyId as usize);
+            let isLongRef = match pCtx.pRefList0[0] {
                 Some(id) => (*pRefList).pic(id).bIsLongRef,
                 None => false,
             };
@@ -1225,10 +1233,10 @@ pub unsafe fn WelsUpdateSliceHeaderSyntax(
                 pRefReorder.SReorderingSyntax[1].uiReorderingOfPicNumsIdc = 3;
             } else {
                 let mut iRefIdx = 0usize;
-                while (iRefIdx as i32) < (*pCtx).iNumRef0 as i32 {
+                while (iRefIdx as i32) < pCtx.iNumRef0 as i32 {
                     if iRefIdx < MAX_REFERENCE_REORDER_COUNT_NUM {
                         pRefReorder.SReorderingSyntax[iRefIdx].uiReorderingOfPicNumsIdc = 2;
-                        if let Some(id) = (*pCtx).pRefList0[iRefIdx] {
+                        if let Some(id) = pCtx.pRefList0[iRefIdx] {
                             pRefReorder.SReorderingSyntax[iRefIdx].iLongTermPicNum =
                                 (*pRefList).pic(id).iLongTermPicNum as u16;
                         }
@@ -1369,11 +1377,13 @@ pub unsafe fn UpdateSrcPicList(pCtx: *mut sWelsEncCtx) {
 /// Screen content specialized reference picture list update.
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
-pub unsafe fn WelsUpdateRefListScreen(pCtx: *mut sWelsEncCtx) -> bool {
-    if pCtx.is_null() || current_layer(pCtx).is_null() || ctx_param(pCtx).is_null() {
+pub unsafe fn WelsUpdateRefListScreen(pCtx: &mut sWelsEncCtx) -> bool {
+    // T9.H: the `pCtx.is_null()` disjunct is gone — a `&mut sWelsEncCtx`
+    // cannot be null and every caller now holds one. The rest is unchanged.
+    if current_layer(pCtx).is_null() || ctx_param(pCtx).is_null() {
         return false;
     }
-    let uiDid = (*pCtx).uiDependencyId as usize;
+    let uiDid = pCtx.uiDependencyId as usize;
     let pRefList = ctx_ref_list(pCtx, (uiDid) as usize);
     if pRefList.is_null() || (*pRefList).pRef.is_empty() {
         return false;
@@ -1386,9 +1396,9 @@ pub unsafe fn WelsUpdateRefListScreen(pCtx: *mut sWelsEncCtx) -> bool {
     // each use is the port's own idiom and is what F66 says is sound here.
     let pLtr = ctx_ltr_at(pCtx, (uiDid) as usize);
     let pParamD = std::ptr::addr_of_mut!((*ctx_param(pCtx)).sDependencyLayers[uiDid]);
-    let kuiTid = (*pCtx).uiTemporalId;
+    let kuiTid = pCtx.uiTemporalId;
 
-    if let Some(idDec) = (*pCtx).pDecPic {
+    if let Some(idDec) = pCtx.pDecPic {
         // The reconstruction picture, resolved once — S37: everything below either
         // reads its geometry or writes its own fields, and the borrow ends before the
         // reference-list shifts that would touch the pool again.
@@ -1403,19 +1413,19 @@ pub unsafe fn WelsUpdateRefListScreen(pCtx: *mut sWelsEncCtx) -> bool {
             pDecPic.expand_as_reference();
         }
 
-        pDecPic.uiTemporalId = (*pCtx).uiTemporalId;
-        pDecPic.uiSpatialId = (*pCtx).uiDependencyId;
+        pDecPic.uiTemporalId = pCtx.uiTemporalId;
+        pDecPic.uiSpatialId = pCtx.uiDependencyId;
         pDecPic.iFrameNum = (*pParamD).iFrameNum;
         pDecPic.iFramePoc = (*pParamD).iPOC;
         pDecPic.bUsedAsRef = true;
         pDecPic.bIsLongRef = true;
         pDecPic.bIsSceneLTR = (*pLtr).bLTRMarkingFlag
             || ((*ctx_param(pCtx)).bEnableLongTermReference
-                && (*pCtx).eSliceType == EWelsSliceType::I_SLICE);
+                && pCtx.eSliceType == EWelsSliceType::I_SLICE);
         pDecPic.iLongTermPicNum = (*pLtr).iCurLtrIdx;
     }
 
-    if (*pCtx).eSliceType == EWelsSliceType::P_SLICE {
+    if pCtx.eSliceType == EWelsSliceType::P_SLICE {
         DeleteNonSceneLTR(pCtx);
         LTRMarkProcessScreen(pCtx);
         (*pLtr).bLTRMarkingFlag = false;
@@ -1432,7 +1442,7 @@ pub unsafe fn WelsUpdateRefListScreen(pCtx: *mut sWelsEncCtx) -> bool {
 
     // Same dispatch and the same guard argument as `WelsUpdateRefList` above: this
     // body is reached only through `RefStrategyKind::UpdateRefList`.
-    (*pCtx).eRefStrategy.EndofUpdateRefList(pCtx);
+    pCtx.eRefStrategy.EndofUpdateRefList(pCtx);
     true
 }
 
@@ -1440,33 +1450,35 @@ pub unsafe fn WelsUpdateRefListScreen(pCtx: *mut sWelsEncCtx) -> bool {
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe fn WelsBuildRefListScreen(
-    pCtx: *mut sWelsEncCtx,
+    pCtx: &mut sWelsEncCtx,
     iPOC: i32,
     iBestLtrRefIdx: i32,
 ) -> bool {
-    if pCtx.is_null() || ctx_param(pCtx).is_null() || ctx_vaa(pCtx).is_null() || current_layer(pCtx).is_null() {
+    // T9.H: the `pCtx.is_null()` disjunct is gone — a `&mut sWelsEncCtx`
+    // cannot be null and every caller now holds one. The rest is unchanged.
+    if ctx_param(pCtx).is_null() || ctx_vaa(pCtx).is_null() || current_layer(pCtx).is_null() {
         return false;
     }
-    let uiDid = (*pCtx).uiDependencyId as usize;
+    let uiDid = pCtx.uiDependencyId as usize;
     let pRefList = ctx_ref_list(pCtx, (uiDid) as usize);
     let pParam = ctx_param(pCtx);
     // ref_list_mgr_svc.cpp:649 — static_cast<SVAAFrameInfoExt*> (pCtx->pVaa)
         let pVaaExt = ctx_vaa(pCtx) as *mut SVAAFrameInfoExt;
     let iNumRef = (*pParam).iNumRefFrame;
     let pParamD = &(*pParam).sDependencyLayers[uiDid];
-    (*pCtx).iNumRef0 = 0;
+    pCtx.iNumRef0 = 0;
 
-    if (*pCtx).eSliceType != EWelsSliceType::I_SLICE {
+    if pCtx.eSliceType != EWelsSliceType::I_SLICE {
         let mut iLtrRefIdx = 0i32;
         // The screen path's `pRefOri` is a **spatial source** picture, where the
         // camera path's is a reconstruction picture — see [`PicRef`].
         let mut pRefOri: Option<SrcPicId> = None;
 
         for idx in 0..(*pVaaExt).iNumOfAvailableRef {
-            if !(*pCtx).pVpp.is_null() {
-                iLtrRefIdx = (*(*pCtx).pVpp).GetRefFrameInfo(
+            if !pCtx.pVpp.is_null() {
+                iLtrRefIdx = (*pCtx.pVpp).GetRefFrameInfo(
                     idx,
-                    (*pCtx).bCurFrameMarkedAsSceneLtr,
+                    pCtx.bCurFrameMarkedAsSceneLtr,
                     &mut pRefOri,
                 );
             }
@@ -1478,13 +1490,13 @@ pub unsafe fn WelsBuildRefListScreen(
                 let pRefPic = (*pRefList).pic(idRefPic);
                 if pRefPic.bUsedAsRef
                     && pRefPic.bIsLongRef
-                    && pRefPic.uiTemporalId <= (*pCtx).uiTemporalId
-                    && (!(*pCtx).bCurFrameMarkedAsSceneLtr || pRefPic.bIsSceneLTR)
+                    && pRefPic.uiTemporalId <= pCtx.uiTemporalId
+                    && (!pCtx.bCurFrameMarkedAsSceneLtr || pRefPic.bIsSceneLTR)
                 {
-                    let num0 = (*pCtx).iNumRef0 as usize;
+                    let num0 = pCtx.iNumRef0 as usize;
                     (*current_layer(pCtx)).pRefOri[num0] = refOri;
-                    (*pCtx).pRefList0[num0] = Some(idRefPic);
-                    (*pCtx).iNumRef0 += 1;
+                    pCtx.pRefList0[num0] = Some(idRefPic);
+                    pCtx.iNumRef0 += 1;
                 }
             } else {
                 let mut i = iNumRef;
@@ -1494,11 +1506,11 @@ pub unsafe fn WelsBuildRefListScreen(
                         continue;
                     };
                     let uiTemporalId = (*pRefList).pic(idLong).uiTemporalId;
-                    if uiTemporalId == 0 || uiTemporalId < (*pCtx).uiTemporalId {
-                        let num0 = (*pCtx).iNumRef0 as usize;
+                    if uiTemporalId == 0 || uiTemporalId < pCtx.uiTemporalId {
+                        let num0 = pCtx.iNumRef0 as usize;
                         (*current_layer(pCtx)).pRefOri[num0] = refOri;
-                        (*pCtx).pRefList0[num0] = Some(idLong);
-                        (*pCtx).iNumRef0 += 1;
+                        pCtx.pRefList0[num0] = Some(idLong);
+                        pCtx.iNumRef0 += 1;
                         break;
                     }
                     i -= 1;
@@ -1508,13 +1520,13 @@ pub unsafe fn WelsBuildRefListScreen(
     } else {
         WelsResetRefList(pCtx);
         ResetLtrState(&mut *ctx_ltr_at(pCtx, (uiDid) as usize));
-        (*pCtx).pRefList0[0] = None;
+        pCtx.pRefList0[0] = None;
     }
 
-    if (*pCtx).iNumRef0 as i32 > iNumRef {
-        (*pCtx).iNumRef0 = iNumRef as u8;
+    if pCtx.iNumRef0 as i32 > iNumRef {
+        pCtx.iNumRef0 = iNumRef as u8;
     }
-    (*pCtx).iNumRef0 > 0 || (*pCtx).eSliceType == EWelsSliceType::I_SLICE
+    pCtx.iNumRef0 > 0 || pCtx.eSliceType == EWelsSliceType::I_SLICE
 }
 
 pub fn IsValidFrameNum(kiFrameNum: i32) -> bool {
@@ -1557,11 +1569,13 @@ pub unsafe fn WelsMarkMMCORefInfoScreen(
 
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
-pub unsafe fn WelsMarkPicScreen(pCtx: *mut sWelsEncCtx) {
-    if pCtx.is_null() || ctx_param(pCtx).is_null() || current_layer(pCtx).is_null() {
+pub unsafe fn WelsMarkPicScreen(pCtx: &mut sWelsEncCtx) {
+    // T9.H: the `pCtx.is_null()` disjunct is gone — a `&mut sWelsEncCtx`
+    // cannot be null and every caller now holds one. The rest is unchanged.
+    if ctx_param(pCtx).is_null() || current_layer(pCtx).is_null() {
         return;
     }
-    let uiDid = (*pCtx).uiDependencyId as usize;
+    let uiDid = pCtx.uiDependencyId as usize;
     // **T9.G7 — raw, not `&mut`.** This body holds the LTR state across calls that
     // derive their own `&mut` to the *same* `SLTRState` (`LTRMarkProcess` and the
     // rest re-derive `ctx_ltr_at(pCtx, uiDid)` for this same `uiDid`). Two Unique
@@ -1585,9 +1599,9 @@ pub unsafe fn WelsMarkPicScreen(pCtx: *mut sWelsEncCtx) {
     let bIsRefListNotFull = ((*pRefList).uiLongRefCount as i32) < iLongRefNum;
 
     if !(*ctx_param(pCtx)).bEnableLongTermReference {
-        (*pLtr).iCurLtrIdx = (*pCtx).uiTemporalId as i32;
+        (*pLtr).iCurLtrIdx = pCtx.uiTemporalId as i32;
     } else {
-        if iMaxActualLtrIdx != -1 && (*pCtx).uiTemporalId == 0 && (*pCtx).bCurFrameMarkedAsSceneLtr {
+        if iMaxActualLtrIdx != -1 && pCtx.uiTemporalId == 0 && pCtx.bCurFrameMarkedAsSceneLtr {
             (*pLtr).bLTRMarkingFlag = true;
             (*pLtr).uiLtrMarkInterval = 0;
             (*pLtr).iCurLtrIdx = (*pLtr).iSceneLtrIdx % (iMaxActualLtrIdx + 1);
@@ -1656,7 +1670,7 @@ pub unsafe fn WelsMarkPicScreen(pCtx: *mut sWelsEncCtx) {
     }
 
     for i in 0..MAX_TEMPORAL_LAYER_NUM {
-        if ((*pCtx).uiTemporalId as usize) < i || (*pCtx).uiTemporalId == 0 {
+        if (pCtx.uiTemporalId as usize) < i || pCtx.uiTemporalId == 0 {
             (*pLtr).iLastLtrIdx[i] = (*pLtr).iCurLtrIdx;
         }
     }

@@ -582,13 +582,13 @@ pub unsafe fn NeedDynamicAdjust(pCurDq: &mut SDqLayer, iSliceNum: i32) -> i32 {
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe fn DynamicAdjustSlicing(
-    pCtx: *mut sWelsEncCtx,
+    pCtx: &mut sWelsEncCtx,
     pCurDqLayer: &mut SDqLayer,
     iCurDid: i32,
 ) {
-    if pCtx.is_null() {
-        return;
-    }
+    // T9.H: `if pCtx.is_null() { ... }` stood here. A `&mut sWelsEncCtx`
+    // cannot be null and every caller now holds one, so the guard is not
+    // merely dead — it is inexpressible. Nothing replaces it.
 
     let pSliceCtx = &mut (*pCurDqLayer).sSliceEncCtx;
     let kiCountSliceNum = pSliceCtx.iSliceNumInFrame.load(Ordering::Relaxed);
@@ -1572,9 +1572,11 @@ pub unsafe fn EncodeFixedSlicesForked(pCtx: &mut sWelsEncCtx, kiSliceCount: i32)
 /// As [`EncodeFixedSlicesForked`].
 // unsafe-cat: MT
 #[allow(unsafe_code)]
-pub unsafe fn UpdateMbMapForked(pCtx: *mut sWelsEncCtx, kiTaskCount: i32) {
-    if pCtx.is_null() || kiTaskCount <= 0 || current_layer(pCtx).is_null()
-        || (*pCtx).pSliceThreading.is_null()
+pub unsafe fn UpdateMbMapForked(pCtx: &mut sWelsEncCtx, kiTaskCount: i32) {
+    // T9.H: the `pCtx.is_null()` disjunct is gone — a `&mut sWelsEncCtx`
+    // cannot be null and every caller now holds one. The rest is unchanged.
+    if kiTaskCount <= 0 || current_layer(pCtx).is_null()
+        || pCtx.pSliceThreading.is_null()
     {
         return;
     }

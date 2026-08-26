@@ -1738,8 +1738,10 @@ unsafe fn InitCoeffFunc(
 /// `pEncCtx` must be non-null and initialized.
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
-pub unsafe fn UpdateFrameNum(pEncCtx: *mut sWelsEncCtx, kiDidx: i32) {
-    if pEncCtx.is_null() || ctx_param(pEncCtx).is_null() || ctx_sps(pEncCtx).is_null() {
+pub unsafe fn UpdateFrameNum(pEncCtx: &mut sWelsEncCtx, kiDidx: i32) {
+    // T9.H: the `pEncCtx.is_null()` disjunct is gone — a `&mut sWelsEncCtx`
+    // cannot be null and every caller now holds one. The rest is unchanged.
+    if ctx_param(pEncCtx).is_null() || ctx_sps(pEncCtx).is_null() {
         return;
     }
     // T9.G4: the `ctx_sps` read below is hoisted above the cursor rather than left
@@ -1750,7 +1752,7 @@ pub unsafe fn UpdateFrameNum(pEncCtx: *mut sWelsEncCtx, kiDidx: i32) {
     let pParamInternal = std::ptr::addr_of_mut!((*ctx_param(pEncCtx)).sDependencyLayers[kiDidx as usize]);
     let mut bNeedFrameNumIncreasing = false;
 
-    if (*pEncCtx).eLastNalPriority[kiDidx as usize] != EWelsNalRefIdc::NRI_PRI_LOWEST {
+    if pEncCtx.eLastNalPriority[kiDidx as usize] != EWelsNalRefIdc::NRI_PRI_LOWEST {
         bNeedFrameNumIncreasing = true;
     }
 
@@ -1762,7 +1764,7 @@ pub unsafe fn UpdateFrameNum(pEncCtx: *mut sWelsEncCtx, kiDidx: i32) {
         }
     }
 
-    (*pEncCtx).eLastNalPriority[kiDidx as usize] = EWelsNalRefIdc::NRI_PRI_LOWEST;
+    pEncCtx.eLastNalPriority[kiDidx as usize] = EWelsNalRefIdc::NRI_PRI_LOWEST;
 }
 
 /// Rolls back the `frame_num` counter if a reference frame encoding attempt fails.
@@ -1771,8 +1773,10 @@ pub unsafe fn UpdateFrameNum(pEncCtx: *mut sWelsEncCtx, kiDidx: i32) {
 /// `pEncCtx` must be non-null and initialized.
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
-pub unsafe fn LoadBackFrameNum(pEncCtx: *mut sWelsEncCtx, kiDidx: i32) {
-    if pEncCtx.is_null() || ctx_param(pEncCtx).is_null() || ctx_sps(pEncCtx).is_null() {
+pub unsafe fn LoadBackFrameNum(pEncCtx: &mut sWelsEncCtx, kiDidx: i32) {
+    // T9.H: the `pEncCtx.is_null()` disjunct is gone — a `&mut sWelsEncCtx`
+    // cannot be null and every caller now holds one. The rest is unchanged.
+    if ctx_param(pEncCtx).is_null() || ctx_sps(pEncCtx).is_null() {
         return;
     }
     // T9.G4: the `ctx_sps` read below is hoisted above the cursor rather than left
@@ -1783,7 +1787,7 @@ pub unsafe fn LoadBackFrameNum(pEncCtx: *mut sWelsEncCtx, kiDidx: i32) {
     let pParamInternal = std::ptr::addr_of_mut!((*ctx_param(pEncCtx)).sDependencyLayers[kiDidx as usize]);
     let mut bNeedFrameNumIncreasing = false;
 
-    if (*pEncCtx).eLastNalPriority[kiDidx as usize] != EWelsNalRefIdc::NRI_PRI_LOWEST {
+    if pEncCtx.eLastNalPriority[kiDidx as usize] != EWelsNalRefIdc::NRI_PRI_LOWEST {
         bNeedFrameNumIncreasing = true;
     }
 
@@ -1897,12 +1901,14 @@ pub unsafe fn InitFrameCoding(
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe fn DecideFrameType(
-    pEncCtx: *mut sWelsEncCtx,
+    pEncCtx: &mut sWelsEncCtx,
     kiSpatialNum: i8,
     kiDidx: i32,
     bSkipFrameFlag: bool,
 ) -> EVideoFrameType {
-    if pEncCtx.is_null() || ctx_param(pEncCtx).is_null() {
+    // T9.H: the `pEncCtx.is_null()` disjunct is gone — a `&mut sWelsEncCtx`
+    // cannot be null and every caller now holds one. The rest is unchanged.
+    if ctx_param(pEncCtx).is_null() {
         return EVideoFrameType::videoFrameTypeInvalid;
     }
     let pSvcParam = ctx_param(pEncCtx);
@@ -1951,7 +1957,7 @@ pub unsafe fn DecideFrameType(
                 iFrameType = EVideoFrameType::videoFrameTypeIDR;
             } else {
                 iFrameType = EVideoFrameType::videoFrameTypeP;
-                (*pEncCtx).bCurFrameMarkedAsSceneLtr = true;
+                pEncCtx.bCurFrameMarkedAsSceneLtr = true;
             }
         } else {
             iFrameType = EVideoFrameType::videoFrameTypeP;
@@ -1961,7 +1967,7 @@ pub unsafe fn DecideFrameType(
             iFrameType = EVideoFrameType::videoFrameTypeSkip;
         } else if iFrameType == EVideoFrameType::videoFrameTypeIDR {
             (*pParamInternal).iCodingIndex = 0;
-            (*pEncCtx).bCurFrameMarkedAsSceneLtr = true;
+            pEncCtx.bCurFrameMarkedAsSceneLtr = true;
         }
     } else {
         let pVaa = ctx_vaa(pEncCtx);

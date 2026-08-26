@@ -3107,8 +3107,10 @@ pub unsafe fn slice_writer(pEncCtx: *mut sWelsEncCtx, pSliceBs: *mut SWelsSliceB
 /// `pEncCtx` must be a live context whose current layer is set for this frame.
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
-pub unsafe fn StampLayerIdrFlagForSliceType(pEncCtx: *mut sWelsEncCtx) {
-    if pEncCtx.is_null() || (*pEncCtx).eSliceType != EWelsSliceType::I_SLICE {
+pub unsafe fn StampLayerIdrFlagForSliceType(pEncCtx: &mut sWelsEncCtx) {
+    // T9.H: the `pEncCtx.is_null()` disjunct is gone — a `&mut sWelsEncCtx`
+    // cannot be null and every caller now holds one. The rest is unchanged.
+    if pEncCtx.eSliceType != EWelsSliceType::I_SLICE {
         return;
     }
     let pCurLayer = current_layer(pEncCtx);
@@ -4034,7 +4036,7 @@ pub unsafe fn CheckAllSliceBuffer(pCurLayer: &mut SDqLayer, kiCodedSliceNum: i32
 
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
-pub unsafe fn ReOrderSliceInLayer(pCtx: *mut sWelsEncCtx, kuiSliceMode: SliceMode, kiThreadNum: i32) -> i32 {
+pub unsafe fn ReOrderSliceInLayer(pCtx: &mut sWelsEncCtx, kuiSliceMode: SliceMode, kiThreadNum: i32) -> i32 {
     let pCurLayer = current_layer(pCtx);
     let mut iEncodeSliceNum = 0;
     let mut iUsedSliceNum = 0;
