@@ -18128,6 +18128,36 @@ hazards in the family" but "no live hazard anywhere the context is reachable by 
 (15 `encoder_ext.rs`, 7 `wels_encoder_ext.rs`, 1 each in `wels_preprocess.rs` and
 `svc_encode_slice.rs`); each is a candidate and they are greppable.
 
+### the closing instrument reading, and which instrument it has to be now
+
+`q1c --kind raw` is the **pre**-conversion question ("this parameter becomes
+`&mut T`"), and for 152 of the family's bodies that question has been answered by
+doing it. Run against the flipped tree it now reads 23 hazards / 3 LIVE, and all
+three "LIVE" rows are `cursor=None call:None` against a **function signature
+line** — shape D firing on bodies that now hold a `&mut` protector. That is not a
+work list; it is the tool being asked a question that no longer applies.
+
+**The post-conversion audit is the reading that counts, and it is `--kind ref`:**
+
+    152 bodies take `&mut sWelsEncCtx`
+    145 of the 152 have no detected hazard at any call site
+      7 implicated sites remain
+
+The seven are `LTRMarkProcess`, `DeleteInvalidLTR`, `HandleLTRMarkFeedback`,
+`WelsMarkMMCORefInfo`, `WelsUpdateSliceHeaderSyntax`, `WelsMarkMMCORefInfoScreen`
+and `ctx_sps` — the `ref_list_mgr_svc.rs` family F163 analysed at G's close, whose
+held cursors are into the coding-param `Box` and the layer `Box`, both different
+allocations from the context. **The tree's own referees agree**: `gates.sh
+session`'s Miri lane is green at 291/0 and both fork probes pass on this tree.
+
+Two things follow for J. **The tracked number changes instrument** — the join's
+LIVE column was the right measure while the flip was running and is meaningless
+now; `--kind ref` replaces it, and `phase9_ctx_join.py` should be re-aimed or
+retired. And **`--kind ref`'s 7 are a frontier, not an inventory** (S60's E
+clause): they are argued false positives, they are consistent with every gate
+this project owns, and F171 is a standing reminder that both instruments' domain
+is narrower than the hazard's.
+
 ### what session H did not do, named rather than dropped quietly
 
 **Step 3, the in-fork read surface: not started.** The brief's drop order is "4,
