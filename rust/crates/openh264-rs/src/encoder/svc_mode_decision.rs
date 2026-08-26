@@ -1480,7 +1480,38 @@ pub unsafe fn GetRefMb(pEncCtx: *mut sWelsEncCtx, pCurMb: &SMB) -> SMB {
     // MbArray's own checked indexing — is the whole access, copied out (SMB is
     // Copy). The raw hand-out this replaced carried the array's provenance for
     // a walk nobody performed.
-    *(*std::ptr::addr_of!((*kpRefLayer).sMbDataP)).get(kiRefMbIdx as usize)
+    //
+    // **D-fid-3 (the user, 2026-08-26): the index is CLAMPED to the base layer's
+    // last record, and that is a deliberate divergence from upstream.** The
+    // `>> 1` pair above is only an address when the base layer really is half
+    // size on both axes, which is what upstream's own comment at
+    // `svc_mode_decision.cpp:125` asserts and never checks:
+    //
+    // ```cpp
+    // const int32_t kiRefMbIdx = (pCurMb->iMbY >> 1) * kpRefLayer->iMbWidth + (pCurMb->iMbX >> 1);
+    //   //because current lower layer is half size on both vertical and horizontal
+    // return (&kpRefLayer->sMbDataP[kiRefMbIdx]);
+    // ```
+    //
+    // Simulcast can break the invariant — `EncodeDecodeTestAPI.SimulcastAVC_SPS_PPS_LISTING`
+    // halves layer 0's dimensions alone, leaving a pair that is not 2:1 — and
+    // then upstream indexes past `sMbDataP` and returns whatever follows the
+    // allocation, while the port's checked read aborted the process
+    // (panic-in-nounwind through the C ABI). F173: the gtest suite has not
+    // tallied since session E3 because of it.
+    //
+    // Clamping is byte-identical wherever the invariant holds, because there
+    // the index is already in bounds and `min` is the identity; where it does
+    // not hold, upstream reads out of bounds and this reads a real record.
+    // Neither is *correct* — the mode decision below is seeded from a base-layer
+    // macroblock that does not collocate with this one either way — but one is
+    // defined and the other is not, and only the defined one lets the suite run.
+    let ref_mbs = (*std::ptr::addr_of!((*kpRefLayer).sMbDataP)).dims().count();
+    // A base layer with no macroblocks at all cannot be a reference layer (it
+    // would have no reconstruction to predict from), so this leaves the checked
+    // read to fail loudly rather than inventing a record for it.
+    let kiClampedIdx = (kiRefMbIdx as usize).min(ref_mbs.saturating_sub(1));
+    *(*std::ptr::addr_of!((*kpRefLayer).sMbDataP)).get(kiClampedIdx)
 }
 
 /// Scales base-layer motion vectors by 2x to initialize enhancement-layer candidates.
