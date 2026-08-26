@@ -225,11 +225,11 @@ pub unsafe fn ResetLtrState(pLtr: *mut SLTRState) {
 /// Reset active reference picture lists for current spatial layer.
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
-pub unsafe fn WelsResetRefList(pCtx: *mut sWelsEncCtx) {
-    if pCtx.is_null() {
-        return;
-    }
-    let uiDid = (*pCtx).uiDependencyId as usize;
+pub unsafe fn WelsResetRefList(pCtx: &mut sWelsEncCtx) {
+    // T9.H: `if pCtx.is_null() { ... }` stood here. A `&mut sWelsEncCtx`
+    // cannot be null and every caller now holds one, so the guard is not
+    // merely dead — it is inexpressible. Nothing replaces it.
+    let uiDid = pCtx.uiDependencyId as usize;
     let pRefList = ctx_ref_list(pCtx, (uiDid) as usize);
     if pRefList.is_null() {
         return;
@@ -317,11 +317,13 @@ pub fn DeleteSTRFromShortList(pRefList: &mut SRefList, iIdx: i32) {
 /// Unreferences non-scene LTR frames when current frame is marked as Scene LTR.
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
-pub unsafe fn DeleteNonSceneLTR(pCtx: *mut sWelsEncCtx) {
-    if pCtx.is_null() || ctx_param(pCtx).is_null() {
+pub unsafe fn DeleteNonSceneLTR(pCtx: &mut sWelsEncCtx) {
+    // T9.H: the `pCtx.is_null()` disjunct is gone — a `&mut sWelsEncCtx`
+    // cannot be null and every caller now holds one. The rest is unchanged.
+    if ctx_param(pCtx).is_null() {
         return;
     }
-    let pRefList = ctx_ref_list(pCtx, (*pCtx).uiDependencyId as usize);
+    let pRefList = ctx_ref_list(pCtx, pCtx.uiDependencyId as usize);
     if pRefList.is_null() {
         return;
     }
@@ -334,8 +336,8 @@ pub unsafe fn DeleteNonSceneLTR(pCtx: *mut sWelsEncCtx) {
                 pRef.bUsedAsRef
                     && pRef.bIsLongRef
                     && (!pRef.bIsSceneLTR)
-                    && ((*pCtx).uiTemporalId < pRef.uiTemporalId
-                        || (*pCtx).bCurFrameMarkedAsSceneLtr)
+                    && (pCtx.uiTemporalId < pRef.uiTemporalId
+                        || pCtx.bCurFrameMarkedAsSceneLtr)
             }
             None => false,
         };
@@ -384,11 +386,13 @@ pub fn CompareFrameNum(iFrameNumA: i32, iFrameNumB: i32, iMaxFrameNumPlus1: i32)
 /// Purges unacknowledged or invalid LTR frames based on decoder feedback.
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
-pub unsafe fn DeleteInvalidLTR(pCtx: *mut sWelsEncCtx) {
-    if pCtx.is_null() || ctx_sps(pCtx).is_null() || ctx_param(pCtx).is_null() {
+pub unsafe fn DeleteInvalidLTR(pCtx: &mut sWelsEncCtx) {
+    // T9.H: the `pCtx.is_null()` disjunct is gone — a `&mut sWelsEncCtx`
+    // cannot be null and every caller now holds one. The rest is unchanged.
+    if ctx_sps(pCtx).is_null() || ctx_param(pCtx).is_null() {
         return;
     }
-    let uiDid = (*pCtx).uiDependencyId as usize;
+    let uiDid = pCtx.uiDependencyId as usize;
     let pRefList = ctx_ref_list(pCtx, (uiDid) as usize);
     if pRefList.is_null() {
         return;
@@ -445,11 +449,13 @@ pub unsafe fn DeleteInvalidLTR(pCtx: *mut sWelsEncCtx) {
 /// Handles asynchronous decoder confirmation or failure feedback for LTR marking.
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
-pub unsafe fn HandleLTRMarkFeedback(pCtx: *mut sWelsEncCtx) {
-    if pCtx.is_null() || ctx_param(pCtx).is_null() {
+pub unsafe fn HandleLTRMarkFeedback(pCtx: &mut sWelsEncCtx) {
+    // T9.H: the `pCtx.is_null()` disjunct is gone — a `&mut sWelsEncCtx`
+    // cannot be null and every caller now holds one. The rest is unchanged.
+    if ctx_param(pCtx).is_null() {
         return;
     }
-    let uiDid = (*pCtx).uiDependencyId as usize;
+    let uiDid = pCtx.uiDependencyId as usize;
     let pRefList = ctx_ref_list(pCtx, (uiDid) as usize);
     if pRefList.is_null() {
         return;
@@ -525,11 +531,13 @@ pub unsafe fn HandleLTRMarkFeedback(pCtx: *mut sWelsEncCtx) {
 /// Executes promotion and movement of frames from short-term to long-term lists.
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
-pub unsafe fn LTRMarkProcess(pCtx: *mut sWelsEncCtx) {
-    if pCtx.is_null() || ctx_param(pCtx).is_null() || ctx_sps(pCtx).is_null() {
+pub unsafe fn LTRMarkProcess(pCtx: &mut sWelsEncCtx) {
+    // T9.H: the `pCtx.is_null()` disjunct is gone — a `&mut sWelsEncCtx`
+    // cannot be null and every caller now holds one. The rest is unchanged.
+    if ctx_param(pCtx).is_null() || ctx_sps(pCtx).is_null() {
         return;
     }
-    let uiDid = (*pCtx).uiDependencyId as usize;
+    let uiDid = pCtx.uiDependencyId as usize;
     let pRefList = ctx_ref_list(pCtx, (uiDid) as usize);
     if pRefList.is_null() {
         return;
@@ -548,7 +556,7 @@ pub unsafe fn LTRMarkProcess(pCtx: *mut sWelsEncCtx) {
     let mut bMoveLtrFromShortToLong = false;
     let pParamInternal = std::ptr::addr_of_mut!((*ctx_param(pCtx)).sDependencyLayers[uiDid]);
 
-    if (*pCtx).eSliceType == EWelsSliceType::I_SLICE {
+    if pCtx.eSliceType == EWelsSliceType::I_SLICE {
         i = 0;
         if let Some(id) = (*pRefList).pShortRefList[i] {
             (*pRefList).pic_mut(id).uiRecieveConfirmed = RECIEVE_SUCCESS;
@@ -575,7 +583,7 @@ pub unsafe fn LTRMarkProcess(pCtx: *mut sWelsEncCtx) {
         }
     }
 
-    if (*pCtx).eSliceType == EWelsSliceType::I_SLICE || pLtr.bLTRMarkingFlag {
+    if pCtx.eSliceType == EWelsSliceType::I_SLICE || pLtr.bLTRMarkingFlag {
         if let Some(id) = (*pRefList).pShortRefList[i] {
             let iFrameNum = (*pParamInternal).iFrameNum;
             let pShort = (*pRefList).pic_mut(id);
@@ -586,7 +594,7 @@ pub unsafe fn LTRMarkProcess(pCtx: *mut sWelsEncCtx) {
     }
 
     if pLtr.iLTRMarkMode == LTR_MARKING_PROCESS_MODE::LTR_DIRECT_MARK as i32
-        && (*pCtx).eSliceType != EWelsSliceType::I_SLICE
+        && pCtx.eSliceType != EWelsSliceType::I_SLICE
         && !pLtr.bLTRMarkingFlag
     {
         for j in 0..((*pRefList).uiShortRefCount as usize) {
@@ -603,9 +611,9 @@ pub unsafe fn LTRMarkProcess(pCtx: *mut sWelsEncCtx) {
     if (pLtr.iLTRMarkMode == LTR_MARKING_PROCESS_MODE::LTR_DELAY_MARK as i32 && pLtr.bLTRMarkingFlag)
         || ((pLtr.iLTRMarkMode == LTR_MARKING_PROCESS_MODE::LTR_DIRECT_MARK as i32) && bMoveLtrFromShortToLong)
     {
-        let tid = (*pCtx).uiTemporalId as usize;
+        let tid = pCtx.uiTemporalId as usize;
         if uiDid < MAX_DEPENDENCY_LAYER && tid < MAX_TEMPORAL_LEVEL {
-            (*pCtx).bRefOfCurTidIsLtr[uiDid][tid] = true;
+            pCtx.bRefOfCurTidIsLtr[uiDid][tid] = true;
         }
 
         let longCount = (*pRefList).uiLongRefCount as usize;
@@ -632,14 +640,14 @@ pub unsafe fn LTRMarkProcess(pCtx: *mut sWelsEncCtx) {
 /// Executes promotion of screen content references to long-term reference slots.
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
-pub unsafe fn LTRMarkProcessScreen(pCtx: *mut sWelsEncCtx) {
-    if pCtx.is_null() {
-        return;
-    }
-    let Some(idDec) = (*pCtx).pDecPic else {
+pub unsafe fn LTRMarkProcessScreen(pCtx: &mut sWelsEncCtx) {
+    // T9.H: `if pCtx.is_null() { ... }` stood here. A `&mut sWelsEncCtx`
+    // cannot be null and every caller now holds one, so the guard is not
+    // merely dead — it is inexpressible. Nothing replaces it.
+    let Some(idDec) = pCtx.pDecPic else {
         return;
     };
-    let uiDid = (*pCtx).uiDependencyId as usize;
+    let uiDid = pCtx.uiDependencyId as usize;
     let pRefList = ctx_ref_list(pCtx, (uiDid) as usize);
     if pRefList.is_null() {
         return;
@@ -840,11 +848,13 @@ pub unsafe fn WelsUpdateRefList(pCtx: &mut sWelsEncCtx) -> bool {
 /// Checks whether candidate frame number is already occupied in LTR list.
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
-pub unsafe fn CheckCurMarkFrameNumUsed(pCtx: *mut sWelsEncCtx) -> bool {
-    if pCtx.is_null() || ctx_param(pCtx).is_null() || ctx_sps(pCtx).is_null() {
+pub unsafe fn CheckCurMarkFrameNumUsed(pCtx: &mut sWelsEncCtx) -> bool {
+    // T9.H: the `pCtx.is_null()` disjunct is gone — a `&mut sWelsEncCtx`
+    // cannot be null and every caller now holds one. The rest is unchanged.
+    if ctx_param(pCtx).is_null() || ctx_sps(pCtx).is_null() {
         return false;
     }
-    let uiDid = (*pCtx).uiDependencyId as usize;
+    let uiDid = pCtx.uiDependencyId as usize;
     let pRefList = ctx_ref_list(pCtx, (uiDid) as usize);
     if pRefList.is_null() {
         return false;
@@ -908,12 +918,14 @@ pub unsafe fn WelsMarkMMCORefInfoWithBase(
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe fn WelsMarkMMCORefInfo(
-    pCtx: *mut sWelsEncCtx,
+    pCtx: &mut sWelsEncCtx,
     pLtr: *mut SLTRState,
     pCurDq: &mut SDqLayer,
     kiCountSliceNum: i32,
 ) {
-    if pCtx.is_null() || pLtr.is_null() || kiCountSliceNum <= 0 {
+    // T9.H: the `pCtx.is_null()` disjunct is gone — a `&mut sWelsEncCtx`
+    // cannot be null and every caller now holds one. The rest is unchanged.
+    if pLtr.is_null() || kiCountSliceNum <= 0 {
         return;
     }
     let pBaseSlice = crate::encoder::svc_encode_slice::slice_in_layer(pCurDq, 0);
@@ -1536,12 +1548,14 @@ pub fn IsValidFrameNum(kiFrameNum: i32) -> bool {
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe fn WelsMarkMMCORefInfoScreen(
-    pCtx: *mut sWelsEncCtx,
+    pCtx: &mut sWelsEncCtx,
     pLtr: *mut SLTRState,
     pCurDq: &mut SDqLayer,
     kiCountSliceNum: i32,
 ) {
-    if pCtx.is_null() || pLtr.is_null() || kiCountSliceNum <= 0 {
+    // T9.H: the `pCtx.is_null()` disjunct is gone — a `&mut sWelsEncCtx`
+    // cannot be null and every caller now holds one. The rest is unchanged.
+    if pLtr.is_null() || kiCountSliceNum <= 0 {
         return;
     }
     let pBaseSlice = crate::encoder::svc_encode_slice::slice_in_layer(pCurDq, 0);
@@ -1807,7 +1821,7 @@ impl RefStrategyKind {
     #[inline]
     // unsafe-cat: port-raw(Phase 9)
     #[allow(unsafe_code)]
-    pub unsafe fn EndofUpdateRefList(self, pCtx: *mut sWelsEncCtx) {
+    pub unsafe fn EndofUpdateRefList(self, pCtx: &mut sWelsEncCtx) {
         match self {
             RefStrategyKind::TemporalLayer => PrefetchNextBuffer(pCtx),
             RefStrategyKind::Screen => UpdateSrcPicList(pCtx),

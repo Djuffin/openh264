@@ -2541,7 +2541,7 @@ pub unsafe fn WriteSsvcParaset(
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe fn WriteSavcParaset(
-    pCtx: *mut sWelsEncCtx,
+    pCtx: &mut sWelsEncCtx,
     iIdx: i32,
     ppLayerBsInfo: *mut *mut SLayerBSInfo,
     iLayerNum: *mut i32,
@@ -2582,7 +2582,7 @@ pub unsafe fn WriteSavcParaset(
     (*pLayerBsInfo).iSubSeqId = GetSubSequenceId(pCtx, EVideoFrameType::videoFrameTypeIDR);
 
     let mut pNext = pLayerBsInfo.add(1);
-    (*(*pCtx).pOut).iLayerBsIndex += 1;
+    (*pCtx.pOut).iLayerBsIndex += 1;
     (*pNext).pBsBuf = ctx_frame_bs_cur(pCtx);
     (*pNext).pNalLengthInByte = (*pLayerBsInfo).pNalLengthInByte.add(iCountNal as usize);
     *iLayerNum += 1;
@@ -2613,7 +2613,7 @@ pub unsafe fn WriteSavcParaset(
     (*pLayerBsInfo).iSubSeqId = GetSubSequenceId(pCtx, EVideoFrameType::videoFrameTypeIDR);
 
     pNext = pLayerBsInfo.add(1);
-    (*(*pCtx).pOut).iLayerBsIndex += 1;
+    (*pCtx.pOut).iLayerBsIndex += 1;
     (*pNext).pBsBuf = ctx_frame_bs_cur(pCtx);
     (*pNext).pNalLengthInByte = (*pLayerBsInfo).pNalLengthInByte.add(iCountNal as usize);
     *iLayerNum += 1;

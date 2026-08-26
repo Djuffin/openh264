@@ -692,15 +692,17 @@ pub unsafe fn WelsMoveMemory_c(
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe fn WelsUpdateSpatialIdxMap(
-    pEncCtx: *mut sWelsEncCtx,
+    pEncCtx: &mut sWelsEncCtx,
     iPos: i32,
     pPic: Option<SrcPicId>,
     iDidx: i32,
 ) {
-    if !pEncCtx.is_null() && iPos >= 0 && (iPos as usize) < MAX_DEPENDENCY_LAYER {
+    // T9.H: the `!pEncCtx.is_null()` conjunct is gone — a `&mut sWelsEncCtx`
+    // cannot be null, so it was always true. The rest is unchanged.
+    if iPos >= 0 && (iPos as usize) < MAX_DEPENDENCY_LAYER {
         let idx = iPos as usize;
-        (*pEncCtx).sSpatialIndexMap[idx].pSrc = pPic;
-        (*pEncCtx).sSpatialIndexMap[idx].iDid = iDidx;
+        pEncCtx.sSpatialIndexMap[idx].pSrc = pPic;
+        pEncCtx.sSpatialIndexMap[idx].iDid = iDidx;
     }
 }
 
@@ -2008,7 +2010,7 @@ impl CWelsPreProcess {
 
     // unsafe-cat: port-raw(Phase 9)
     #[allow(unsafe_code)]
-    pub unsafe fn InitLastSpatialPictures(&mut self, pCtx: *mut sWelsEncCtx) -> i32 {
+    pub unsafe fn InitLastSpatialPictures(&mut self, pCtx: &mut sWelsEncCtx) -> i32 {
         let pParam = ctx_param(pCtx);
         let kiDlayerCount = (*pParam).iSpatialLayerNum;
         let mut iDlayerIndex = 0;
