@@ -457,14 +457,19 @@ pub unsafe extern "C" fn WelsIDctRecI16x16Dc_c(
 // to spell an alias: the raw form took `pDst` *and* `pPred` with two strides, and
 // its one caller passed the same pointer and the same stride to both (F59).
 //
-// **Consequence, recorded in F138 and left for the steward.** This was the last
-// raw reader of `pfIDctFourT4`, so all three `pfIDct*` slots are now installed by
-// `WelsInitReconstructionFuncs`, asserted-installed by two tests, and called by
-// nothing — `pGomCost`'s shape (F133) in a dispatch table. **F133's storage went
-// the other way on 2026-08-25: D-dead-3 deleted `pGomCost` whole, on the ground
-// that a write with no reader is not state.** That ground reaches these three slots
-// verbatim, so "left as measured" is now waiting on a ruling, not on a precedent —
-// F160 carries it.
+// **Consequence, recorded in F138 — and since resolved.** This was the last raw
+// reader of `pfIDctFourT4`, which left all three `pfIDct*` slots installed,
+// asserted-installed by two tests, and called by nothing — `pGomCost`'s shape
+// (F133) in a dispatch table.
+//
+// **The three slots are gone.** Session F's step 0 deleted them under S18; the
+// installer's own note twenty lines below carries the read greps taken at that
+// deletion. Do not read the paragraph above as a description of the tree: it
+// describes the tree as it stood before session F, and the sentence that used to
+// end it — "'left as measured' is now waiting on a ruling" — was already false
+// when F160 quoted it, which is how F160's item 2 came to ask the user for a
+// ruling on slots that no longer existed (D-dead-4 corrected the scope; the
+// ruling executed against `SharedMbArray::capture` alone).
 
 /// `decode_mb_aux.cpp:251`. Installs the scalar dequantisation and IDCT tables.
 ///
