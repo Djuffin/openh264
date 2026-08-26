@@ -2282,7 +2282,7 @@ impl CWelsPreProcess {
         }
 
         let iClosestLtrFrameNum =
-            (*ctx_ltr_at(pCtx, iTargetDid as usize)).iLastLtrIdx[iCurTid as usize];
+            (*ctx_ltr_at(&mut *pCtx, iTargetDid as usize)).iLastLtrIdx[iCurTid as usize];
         if (*pSvcParam).bEnableLongTermReference {
             self.GetAvailableRefListLosslessScreenRefSelection(
                 &pRefPicList,

@@ -912,7 +912,7 @@ pub unsafe fn InitDqLayers(
 
     iDlayerIndex = 0;
     while iDlayerIndex < iDlayerCount {
-        let pDqIdc = ctx_dq_idc_map(*ppCtx).add(iDlayerIndex as usize);
+        let pDqIdc = ctx_dq_idc_map(&mut **ppCtx).add(iDlayerIndex as usize);
         let bUseSubsetSps = !(*pParam).bSimulcastAVC && (iDlayerIndex > BASE_DEPENDENCY_ID as i32);
         // S29, and the second site the encoder probe reached: `paraset_strategy.rs`
         // re-derives this same layer inside `GenerateNewSps` below, which popped
@@ -1198,7 +1198,7 @@ pub unsafe fn RequestMemorySvc(
         kiNumDependencyLayers as usize
     ];
     for i in 0..kiNumDependencyLayers as usize {
-        crate::encoder::ref_list_mgr_svc::ResetLtrState(ctx_ltr_at(*ppCtx, i));
+        crate::encoder::ref_list_mgr_svc::ResetLtrState(ctx_ltr_at(&mut **ppCtx, i));
     }
 
     // stride tables
@@ -1720,8 +1720,8 @@ mod tests {
             assert_eq!((*pCtx).iSpsNum, 1);
             assert_eq!((*pCtx).iPpsNum, 1);
             assert_eq!((*pCtx).iSubsetSpsNum, 0);
-            assert_eq!(ctx_sps(pCtx), ctx_sps_array(pCtx));
-            assert_eq!(ctx_pps(pCtx), ctx_pps_array(pCtx));
+            assert_eq!(ctx_sps(&mut *pCtx), ctx_sps_array(pCtx));
+            assert_eq!(ctx_pps(&mut *pCtx), ctx_pps_array(pCtx));
 
             // The SPS the strategy generated must be the one Phase 3 proved
             // byte-exact against the C++ reference for this configuration.
