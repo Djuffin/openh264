@@ -1106,6 +1106,13 @@ as D-perf-1 was.**
 
 **D-scope-3 (the user, 2026-08-26): X2 runs before H2; the phase's planned total is 18.** X2 closes the family cleanly (the scalars, the log referee) so H2 gets an undiluted session for the seam — H proved design work eats sessions. One over D-scope-1's worst case, chosen knowingly: honesty beats the number.
 
+
+**D-fid-4 (the user, 2026-08-26): the `WELS_LOG_*` levels align with upstream's bit mask (F184).** The port's consecutive integers made its DEBUG bit-identical to the reference's INFO, ABI-visibly in both directions — the trace callback's level argument and the `ENCODER_OPTION_TRACE_LEVEL` threshold. All five duplication sites remap (encoder and decoder), and the green test that hardcoded 3 while citing the header line that says 4 is corrected. Acceptance is pre-built: `log_referee.sh`'s level check goes green. Executed in H2's step 0.
+
+**D-dead-7 (the user, 2026-08-26): `pCurPath` is deleted (F183)** — the third write-only field (three touches in each tree, no reader), and `SWelsSvcCodingParam`'s only raw member. `SetOption(ENCODER_OPTION_CURRENT_PATH)` goes from storing a pointer nobody reads to succeeding and doing nothing — observably identical to any caller. `sWelsEncCtx`'s `!Sync` count reads **ten → nine**. Both trees' read greps quoted. Executed in H2's step 0.
+
+**D-gate-6 amended (the user, 2026-08-26, from F185): the session battery's cap is restated at 20 minutes (1200 s).** The original ruling's enemy was the ~40-minute state; 977 s with full coverage beats a round number bought by a named coverage cut, and the Miri lane's parallelism taxing the native lane is the trade D-gate-6's own note predicted without pricing. F170's CPU-time fix at J makes the measured number honest against machine load; until then the wall number carries F170's caveat.
+
 ### 7.5 Session workflow
 Each session: run battery → pick next plan item → convert with shims → battery → commit with ratchet update → update this doc's checkbox (add a `## Progress` appendix on first execution session). The phase structure is deliberately interruptible; no step leaves the tree broken across a session boundary.
 
