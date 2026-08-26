@@ -960,8 +960,8 @@ pub unsafe fn RcInitSequenceParameter(pEncCtx: *mut sWelsEncCtx) {
 /// Initializes temporal layer weighting matrices for Virtual GOP bit allocation.
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
-pub unsafe fn RcInitTlWeight(pEncCtx: *mut sWelsEncCtx) {
-    let did = (*pEncCtx).uiDependencyId as usize;
+pub unsafe fn RcInitTlWeight(pEncCtx: &mut sWelsEncCtx) {
+    let did = pEncCtx.uiDependencyId as usize;
     let pWelsSvcRc = ctx_rc_at(pEncCtx, did);
     let pTOverRc = rc_temporal_over(pWelsSvcRc);
     let pDLayerParam = &(*ctx_param(pEncCtx)).sDependencyLayers[did];
@@ -1007,8 +1007,8 @@ pub unsafe fn RcInitTlWeight(pEncCtx: *mut sWelsEncCtx) {
 /// Updates frame and temporal bit quotas whenever user bitrate or framerate changes.
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
-pub unsafe fn RcUpdateBitrateFps(pEncCtx: *mut sWelsEncCtx) {
-    let did = (*pEncCtx).uiDependencyId as usize;
+pub unsafe fn RcUpdateBitrateFps(pEncCtx: &mut sWelsEncCtx) {
+    let did = pEncCtx.uiDependencyId as usize;
     let pWelsSvcRc = ctx_rc_at(pEncCtx, did);
     let pTOverRc = rc_temporal_over(pWelsSvcRc);
 
@@ -1070,8 +1070,8 @@ pub unsafe fn RcUpdateBitrateFps(pEncCtx: *mut sWelsEncCtx) {
 /// Resets the bit budget accumulator at the start of a Virtual GOP.
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
-pub unsafe fn RcInitVGop(pEncCtx: *mut sWelsEncCtx) {
-    let kiDid = (*pEncCtx).uiDependencyId as usize;
+pub unsafe fn RcInitVGop(pEncCtx: &mut sWelsEncCtx) {
+    let kiDid = pEncCtx.uiDependencyId as usize;
     let pWelsSvcRc = ctx_rc_at(pEncCtx, kiDid);
     let pTOverRc = rc_temporal_over(pWelsSvcRc);
     let kiHighestTid = (*ctx_param(pEncCtx)).sDependencyLayers[kiDid].iHighestTemporalId;
@@ -1753,7 +1753,7 @@ pub unsafe fn RcVBufferCalculationSkip(pEncCtx: &mut sWelsEncCtx) {
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe extern "C" fn CheckFrameSkipBasedMaxbr(
-    pEncCtx: *mut sWelsEncCtx,
+    pEncCtx: &mut sWelsEncCtx,
     _uiTimeStamp: i64,
     iDidIdx: i32,
 ) {
@@ -1780,11 +1780,11 @@ pub unsafe extern "C" fn CheckFrameSkipBasedMaxbr(
         >> 1;
 
     let iAvailableBitsInTimeWindow = WELS_DIV_ROUND64(
-        (TIME_CHECK_WINDOW - (*pEncCtx).iCheckWindowInterval) as i64 * kiMaxSpatialBitRate,
+        (TIME_CHECK_WINDOW - pEncCtx.iCheckWindowInterval) as i64 * kiMaxSpatialBitRate,
         1000,
     ) as i32;
     let iAvailableBitsInShiftTimeWindow = WELS_DIV_ROUND64(
-        (TIME_CHECK_WINDOW - (*pEncCtx).iCheckWindowIntervalShift) as i64 * kiMaxSpatialBitRate,
+        (TIME_CHECK_WINDOW - pEncCtx.iCheckWindowIntervalShift) as i64 * kiMaxSpatialBitRate,
         1000,
     ) as i32;
 
@@ -1794,14 +1794,14 @@ pub unsafe extern "C" fn CheckFrameSkipBasedMaxbr(
         && ((*pWelsSvcRc).iBufferFullnessSkip > (*pWelsSvcRc).iBufferSizeSkip as i64);
 
     let bJudgeMaxBRbufferFullSkip = ((*pWelsSvcRc).iContinualSkipFrames <= iPredSkipFramesMaxBr)
-        && ((*pEncCtx).iCheckWindowInterval > TIME_CHECK_WINDOW / 2)
+        && (pEncCtx.iCheckWindowInterval > TIME_CHECK_WINDOW / 2)
         && ((*pWelsSvcRc).iBufferMaxBRFullness[EVEN_TIME_WINDOW]
             + (*pWelsSvcRc).iPredFrameBit as i64
             - iAvailableBitsInTimeWindow as i64
             > 0);
 
     let mut bJudgeMaxBRbSkip = [false; TIME_WINDOW_TOTAL];
-    bJudgeMaxBRbSkip[EVEN_TIME_WINDOW] = ((*pEncCtx).iCheckWindowInterval > TIME_CHECK_WINDOW / 2)
+    bJudgeMaxBRbSkip[EVEN_TIME_WINDOW] = (pEncCtx.iCheckWindowInterval > TIME_CHECK_WINDOW / 2)
         && ((*pWelsSvcRc).bNeedShiftWindowCheck[EVEN_TIME_WINDOW])
         && ((*pWelsSvcRc).iBufferMaxBRFullness[EVEN_TIME_WINDOW]
             + (*pWelsSvcRc).iPredFrameBit as i64
@@ -1810,7 +1810,7 @@ pub unsafe extern "C" fn CheckFrameSkipBasedMaxbr(
             > 0);
 
     bJudgeMaxBRbSkip[ODD_TIME_WINDOW] =
-        ((*pEncCtx).iCheckWindowIntervalShift > TIME_CHECK_WINDOW / 2)
+        (pEncCtx.iCheckWindowIntervalShift > TIME_CHECK_WINDOW / 2)
             && ((*pWelsSvcRc).bNeedShiftWindowCheck[ODD_TIME_WINDOW])
             && ((*pWelsSvcRc).iBufferMaxBRFullness[ODD_TIME_WINDOW]
                 + (*pWelsSvcRc).iPredFrameBit as i64
@@ -2648,7 +2648,7 @@ pub unsafe extern "C" fn WelsRcMbInitScc(
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsRcFrameDelayJudgeTimeStamp(
-    pEncCtx: *mut sWelsEncCtx,
+    pEncCtx: &mut sWelsEncCtx,
     uiTimeStamp: i64,
     iDidIdx: i32,
 ) {

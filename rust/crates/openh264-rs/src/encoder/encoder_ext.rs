@@ -1919,17 +1919,17 @@ pub unsafe fn GetTemporalLevel(
 /// `encoder_ext.cpp:3114`.
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
-pub unsafe fn GetSubSequenceId(pCtx: *mut sWelsEncCtx, eFrameType: EVideoFrameType) -> i32 {
+pub unsafe fn GetSubSequenceId(pCtx: &mut sWelsEncCtx, eFrameType: EVideoFrameType) -> i32 {
     if eFrameType == EVideoFrameType::videoFrameTypeIDR {
         0
     } else if eFrameType == EVideoFrameType::videoFrameTypeI {
         1
     } else if eFrameType == EVideoFrameType::videoFrameTypeP {
-        if (*pCtx).bCurFrameMarkedAsSceneLtr {
+        if pCtx.bCurFrameMarkedAsSceneLtr {
             2
         } else {
             // T0:3 T1:4 T2:5 T3:6
-            3 + (*pCtx).uiTemporalId as i32
+            3 + pCtx.uiTemporalId as i32
         }
     } else {
         3 + MAX_TEMPORAL_LAYER_NUM as i32

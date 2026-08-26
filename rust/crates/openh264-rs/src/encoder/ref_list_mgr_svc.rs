@@ -1351,18 +1351,18 @@ unsafe fn UpdateOriginalPicInfoFromCtx(pCtx: *mut sWelsEncCtx) {
 
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
-pub unsafe fn UpdateSrcPicListLosslessScreenRefSelectionWithLtr(pCtx: *mut sWelsEncCtx) {
-    if pCtx.is_null() {
-        return;
-    }
-    let iDIdx = (*pCtx).uiDependencyId as i32;
+pub unsafe fn UpdateSrcPicListLosslessScreenRefSelectionWithLtr(pCtx: &mut sWelsEncCtx) {
+    // T9.H: `if pCtx.is_null() { ... }` stood here. A `&mut sWelsEncCtx`
+    // cannot be null and every caller now holds one, so the guard is not
+    // merely dead — it is inexpressible. Nothing replaces it.
+    let iDIdx = pCtx.uiDependencyId as i32;
     UpdateOriginalPicInfoFromCtx(pCtx);
     PrefetchNextBuffer(pCtx);
-    if !(*pCtx).pVpp.is_null() && !ctx_vaa(pCtx).is_null() {
+    if !pCtx.pVpp.is_null() && !ctx_vaa(pCtx).is_null() {
         let pRefList = &*(ctx_ref_list(pCtx, iDIdx as usize));
         // wels_preprocess.h:143 takes const int32_t; the uint8_t field promotes.
-        (*(*pCtx).pVpp).UpdateSrcListLosslessScreenRefSelectionWithLtr(
-            (*pCtx).pEncPic,
+        (*pCtx.pVpp).UpdateSrcListLosslessScreenRefSelectionWithLtr(
+            pCtx.pEncPic,
             iDIdx,
             (*ctx_vaa(pCtx)).uiMarkLongTermPicIdx as i32,
             pRefList,
@@ -1372,17 +1372,17 @@ pub unsafe fn UpdateSrcPicListLosslessScreenRefSelectionWithLtr(pCtx: *mut sWels
 
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
-pub unsafe fn UpdateSrcPicList(pCtx: *mut sWelsEncCtx) {
-    if pCtx.is_null() {
-        return;
-    }
-    let iDIdx = (*pCtx).uiDependencyId as i32;
+pub unsafe fn UpdateSrcPicList(pCtx: &mut sWelsEncCtx) {
+    // T9.H: `if pCtx.is_null() { ... }` stood here. A `&mut sWelsEncCtx`
+    // cannot be null and every caller now holds one, so the guard is not
+    // merely dead — it is inexpressible. Nothing replaces it.
+    let iDIdx = pCtx.uiDependencyId as i32;
     UpdateOriginalPicInfoFromCtx(pCtx);
     PrefetchNextBuffer(pCtx);
-    if !(*pCtx).pVpp.is_null() {
+    if !pCtx.pVpp.is_null() {
         let pRefList = ctx_ref_list(pCtx, (iDIdx as usize) as usize);
         let shortCount = (*pRefList).uiShortRefCount;
-        (*(*pCtx).pVpp).UpdateSrcList((*pCtx).pEncPic, iDIdx, shortCount as u32);
+        (*pCtx.pVpp).UpdateSrcList(pCtx.pEncPic, iDIdx, shortCount as u32);
     }
 }
 
