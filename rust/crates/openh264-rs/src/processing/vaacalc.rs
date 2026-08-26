@@ -3,7 +3,8 @@
 //! Port of `codec/processing/src/vaacalc/` — the VAA (video analysis) statistics
 //! plugin reached through `METHOD_VAA_STATISTICS`.
 //!
-//! All five kernels are translated. Only `pfVAACalcSad` is *reached* in the gate
+//! All five kernels are translated — as the safe walkers below; their raw
+//! `VAACalc*_c` entry points retired in T9.X. Only `pfVAACalcSad` is *reached* in the gate
 //! configuration: the other four (`pfVAACalcSadVar`, `pfVAACalcSadSsd`,
 //! `pfVAACalcSadBgd`, `pfVAACalcSadSsdBgd`) are selected by
 //! `iCalcVar`/`iCalcSsd`/`iCalcBgd`, which `CWelsPreProcess::AnalyzeSpatialPic`
@@ -27,61 +28,6 @@ pub const RET_OUTOFMEMORY: i32 = -3;
 pub const RET_NOTSUPPORTED: i32 = -4;
 pub const RET_UNEXPECTED: i32 = -5;
 
-/// The two quantities every `VAACalc*` shim needs to turn its raw pointers into
-/// slices: the plane span the walk reads, and the number of macroblocks it writes.
-///
-/// One helper, so that no shim does this arithmetic itself and a wrong span is one
-/// bug rather than five (the T3 rule — `safety_refactor_log.md`, Phase 2 session A).
-fn shim_extent(pic_width: i32, pic_height: i32, pic_stride: i32) -> (usize, usize) {
-    let mbs = (pic_width >> 4).max(0) as usize * (pic_height >> 4).max(0) as usize;
-    (vaa_span(pic_width, pic_height, pic_stride), mbs)
-}
-
-/// `VAACalcSad_c` — `codec/processing/src/vaacalc/vaacalcfuncs.cpp:39`.
-///
-/// Walks the picture macroblock by macroblock, writing the four 8x8 sums of
-/// absolute differences of each macroblock into `pSad8x8[(mb_index << 2) + n]` and
-/// accumulating the frame total into `*pFrameSad`.
-///
-/// # Safety
-/// * `pCurData` and `pRefData` each point at sample `(0, 0)` of a luma plane whose
-///   rows are `iPicStride` bytes apart, with at least
-///   `vaa_span(iPicWidth, iPicHeight, iPicStride)` readable bytes from there. That is
-///   the walk's **exact** reach and it is strictly forward — this family reads no row
-///   above and no column left of its origin, so no padding is required in any
-///   direction and `PADDING_LENGTH` does not enter the argument. A plane of
-///   `iPicHeight * iPicStride` bytes, which is what every caller has, always contains
-///   the span; the tighter figure is stated because it is what the shim claims.
-/// * `pSad8x8` has room for `4 * (iPicWidth >> 4) * (iPicHeight >> 4)` `i32`s, i.e.
-///   one `[i32; 4]` per macroblock — which is the type `SVAACalcResult::pSad8x8`
-///   actually declares, and the cast below undoes the caller's own cast to `*mut i32`.
-/// * `pFrameSad` is writable. See F9: it is an `i32` accumulated over the whole
-///   picture and overflows above 32 896 macroblocks, exactly as the C++ does.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn VAACalcSad_c(
-    pCurData: *const u8,
-    pRefData: *const u8,
-    iPicWidth: i32,
-    iPicHeight: i32,
-    iPicStride: i32,
-    pFrameSad: *mut i32,
-    pSad8x8: *mut i32,
-) {
-    // SHIM(phase2) -> vaa_calc_sad
-    unsafe {
-        let (span, mbs) = shim_extent(iPicWidth, iPicHeight, iPicStride);
-        *pFrameSad = vaa_calc_sad(
-            core::slice::from_raw_parts(pCurData, span),
-            core::slice::from_raw_parts(pRefData, span),
-            iPicWidth,
-            iPicHeight,
-            iPicStride,
-            core::slice::from_raw_parts_mut(pSad8x8 as *mut [i32; 4], mbs),
-        );
-    }
-}
-
 /// `CVAACalculation` — `codec/processing/src/vaacalc/vaacalculation.cpp`. The only
 /// state the class carries across calls is the `SVAACalcParam` its `Set` stores.
 #[derive(Default)]
@@ -89,164 +35,20 @@ pub struct CVAACalculation {
     pub m_sCalcParam: SVAACalcParam,
 }
 
-/// `VAACalcSadVar_c` — `codec/processing/src/vaacalc/vaacalcfuncs.cpp:121`.
-///
-/// `VAACalcSad_c` plus, per macroblock, the sum and the sum of squares of the
-/// current picture's 256 luma samples. `CWelsPreProcess::AnalyzeSpatialPic` selects
-/// it whenever `iRCMode >= RC_BITRATE_MODE` and the slice is an I slice
-/// (`wels_preprocess.cpp:283`), because `AnalyzeGomComplexityViaVar` derives each
-/// GOM's variance from those two sums.
-///
-/// # Safety
-/// As [`VAACalcSad_c`], and `pSum16x16`/`psqsum16x16` must each have room for
-/// `(iPicWidth >> 4) * (iPicHeight >> 4)` `i32`s.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn VAACalcSadVar_c(
-    pCurData: *const u8,
-    pRefData: *const u8,
-    iPicWidth: i32,
-    iPicHeight: i32,
-    iPicStride: i32,
-    pFrameSad: *mut i32,
-    pSad8x8: *mut i32,
-    pSum16x16: *mut i32,
-    psqsum16x16: *mut i32,
-) {
-    // SHIM(phase2) -> vaa_calc_sad_var
-    unsafe {
-        let (span, mbs) = shim_extent(iPicWidth, iPicHeight, iPicStride);
-        *pFrameSad = vaa_calc_sad_var(
-            core::slice::from_raw_parts(pCurData, span),
-            core::slice::from_raw_parts(pRefData, span),
-            iPicWidth,
-            iPicHeight,
-            iPicStride,
-            core::slice::from_raw_parts_mut(pSad8x8 as *mut [i32; 4], mbs),
-            core::slice::from_raw_parts_mut(pSum16x16, mbs),
-            core::slice::from_raw_parts_mut(psqsum16x16, mbs),
-        );
-    }
-}
+// The five raw entry points — `VAACalcSad_c`, `VAACalcSadVar_c`, `VAACalcSadSsd_c`,
+// `VAACalcSadBgd_c`, `VAACalcSadSsdBgd_c` — stood here. **S18, retired in T9.X**,
+// on session F's SAD precedent: the safe twins below (`vaa_calc_sad` and its four
+// siblings) had been the only production path for a session already, and the raw
+// five survived solely as the entry points of their own differential tests.
+//
+// The read grep spans tests and benches (F119), and that matters here: the brief
+// listed three callers, all of them in this file's own `mod tests`. There were
+// **nine** — the other six are in `tests/kernels_differential_phase2.rs`, which is
+// precisely the file F119 was written about. Both of its VAA properties re-anchored
+// on the safe kernels in the same commit and neither weakened: the span/tail
+// property still catches a walker that writes the wrong number of entries, and the
+// quadrant-anchor property is unchanged apart from its indexing.
 
-/// `VAACalcSadSsd_c` — `vaacalcfuncs.cpp:225`.
-///
-/// `VAACalcSadVar_c` plus the per-macroblock sum of squared *differences*, which
-/// `CAdaptiveQuantization` reads as the motion index.
-///
-/// # Safety
-/// As [`VAACalcSadVar_c`], plus `psqdiff16x16`.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn VAACalcSadSsd_c(
-    pCurData: *const u8,
-    pRefData: *const u8,
-    iPicWidth: i32,
-    iPicHeight: i32,
-    iPicStride: i32,
-    pFrameSad: *mut i32,
-    pSad8x8: *mut i32,
-    pSum16x16: *mut i32,
-    psqsum16x16: *mut i32,
-    psqdiff16x16: *mut i32,
-) {
-    // SHIM(phase2) -> vaa_calc_sad_ssd
-    unsafe {
-        let (span, mbs) = shim_extent(iPicWidth, iPicHeight, iPicStride);
-        *pFrameSad = vaa_calc_sad_ssd(
-            core::slice::from_raw_parts(pCurData, span),
-            core::slice::from_raw_parts(pRefData, span),
-            iPicWidth,
-            iPicHeight,
-            iPicStride,
-            core::slice::from_raw_parts_mut(pSad8x8 as *mut [i32; 4], mbs),
-            core::slice::from_raw_parts_mut(pSum16x16, mbs),
-            core::slice::from_raw_parts_mut(psqsum16x16, mbs),
-            core::slice::from_raw_parts_mut(psqdiff16x16, mbs),
-        );
-    }
-}
-
-/// `VAACalcSadBgd_c` — `vaacalcfuncs.cpp:462`.
-///
-/// SAD plus, per 8x8 block, the **signed** sum of differences and the maximum
-/// absolute difference. `CBackgroundDetection` reads both.
-///
-/// # Safety
-/// As [`VAACalcSad_c`], plus `pSd8x8` (4 `i32`s per macroblock) and `pMad8x8`
-/// (4 `u8`s per macroblock).
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn VAACalcSadBgd_c(
-    pCurData: *const u8,
-    pRefData: *const u8,
-    iPicWidth: i32,
-    iPicHeight: i32,
-    iPicStride: i32,
-    pFrameSad: *mut i32,
-    pSad8x8: *mut i32,
-    pSd8x8: *mut i32,
-    pMad8x8: *mut u8,
-) {
-    // SHIM(phase2) -> vaa_calc_sad_bgd
-    unsafe {
-        let (span, mbs) = shim_extent(iPicWidth, iPicHeight, iPicStride);
-        *pFrameSad = vaa_calc_sad_bgd(
-            core::slice::from_raw_parts(pCurData, span),
-            core::slice::from_raw_parts(pRefData, span),
-            iPicWidth,
-            iPicHeight,
-            iPicStride,
-            core::slice::from_raw_parts_mut(pSad8x8 as *mut [i32; 4], mbs),
-            core::slice::from_raw_parts_mut(pSd8x8 as *mut [i32; 4], mbs),
-            core::slice::from_raw_parts_mut(pMad8x8 as *mut [u8; 4], mbs),
-        );
-    }
-}
-
-/// `VAACalcSadSsdBgd_c` — `vaacalcfuncs.cpp:640`. Everything the other four
-/// compute, in one pass.
-///
-/// Note it squares `abs_diff`, not `diff`, where `VAACalcSadSsd_c` squares the
-/// already-absolute `diff`. Same value; the safe side computes one form for both.
-///
-/// # Safety
-/// The union of [`VAACalcSadSsd_c`]'s and [`VAACalcSadBgd_c`]'s requirements.
-#[allow(clippy::too_many_arguments)]
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn VAACalcSadSsdBgd_c(
-    pCurData: *const u8,
-    pRefData: *const u8,
-    iPicWidth: i32,
-    iPicHeight: i32,
-    iPicStride: i32,
-    pFrameSad: *mut i32,
-    pSad8x8: *mut i32,
-    pSum16x16: *mut i32,
-    psqsum16x16: *mut i32,
-    psqdiff16x16: *mut i32,
-    pSd8x8: *mut i32,
-    pMad8x8: *mut u8,
-) {
-    // SHIM(phase2) -> vaa_calc_sad_ssd_bgd
-    unsafe {
-        let (span, mbs) = shim_extent(iPicWidth, iPicHeight, iPicStride);
-        *pFrameSad = vaa_calc_sad_ssd_bgd(
-            core::slice::from_raw_parts(pCurData, span),
-            core::slice::from_raw_parts(pRefData, span),
-            iPicWidth,
-            iPicHeight,
-            iPicStride,
-            core::slice::from_raw_parts_mut(pSad8x8 as *mut [i32; 4], mbs),
-            core::slice::from_raw_parts_mut(pSum16x16, mbs),
-            core::slice::from_raw_parts_mut(psqsum16x16, mbs),
-            core::slice::from_raw_parts_mut(psqdiff16x16, mbs),
-            core::slice::from_raw_parts_mut(pSd8x8 as *mut [i32; 4], mbs),
-            core::slice::from_raw_parts_mut(pMad8x8 as *mut [u8; 4], mbs),
-        );
-    }
-}
 
 //=================== Safe kernels =====================//
 
@@ -671,9 +473,13 @@ impl CVAACalculation {
         // arrays as bare pointers and each rebuilding a slice over them with
         // `from_raw_parts_mut` and a length it re-derived. The arrays are the VAA
         // block's own `Vec`s now, so the safe kernels underneath those shims are
-        // called *directly* and the length is the `Vec`'s. The shims stay: they are
-        // the C-ABI-shaped subjects `tests/kernels_differential_phase2.rs` runs
-        // against the reference implementation, and that is what they are for.
+        // called *directly* and the length is the `Vec`'s. **T9.X — and the shims are
+        // gone.** The sentence that stood here said they stayed because they were
+        // "the C-ABI-shaped subjects `tests/kernels_differential_phase2.rs` runs
+        // against the reference implementation". That harness has no C++ side —
+        // F124 corrected exactly this belief about exactly this file — so the shims
+        // were the entry points of their own tests and nothing else. Both properties
+        // now drive the safe kernels.
         //
         // The two planes still arrive as raw roots (`SPicture::data_ptr`), so they are
         // the one `from_raw_parts` left — over `vaa_span`, the exact reach the walk
@@ -732,8 +538,6 @@ mod tests {
     /// their sum. Values checked against the C++ arithmetic by construction — a
     /// constant difference of `d` over an 8x8 block gives `64 * d`.
     #[test]
-    // unsafe-cat: port-raw(Phase 9)
-    #[allow(unsafe_code)]
     fn calc_sad_one_macroblock() {
         let stride = 16i32;
         let cur = vec![100u8; 16 * 16];
@@ -749,20 +553,9 @@ mod tests {
                 refp[y * 16 + x] = 95;
             }
         }
-        let mut sad8x8 = [0i32; 4];
-        let mut frame_sad = 0i32;
-        unsafe {
-            VAACalcSad_c(
-                cur.as_ptr(),
-                refp.as_ptr(),
-                16,
-                16,
-                stride,
-                &mut frame_sad,
-                sad8x8.as_mut_ptr(),
-            );
-        }
-        assert_eq!(sad8x8, [0, 64 * 3, 64 * 5, 0]);
+        let mut sad8x8 = [[0i32; 4]; 1];
+        let frame_sad = vaa_calc_sad(&cur, &refp, 16, 16, stride, &mut sad8x8);
+        assert_eq!(sad8x8[0], [0, 64 * 3, 64 * 5, 0]);
         assert_eq!(frame_sad, 64 * 3 + 64 * 5);
     }
 
@@ -770,8 +563,6 @@ mod tests {
     /// macroblock rows, so a picture whose stride exceeds its width still lands each
     /// macroblock's four sums at the right index.
     #[test]
-    // unsafe-cat: port-raw(Phase 9)
-    #[allow(unsafe_code)]
     fn calc_sad_honours_stride_step() {
         let w = 32i32;
         let h = 32i32;
@@ -784,23 +575,12 @@ mod tests {
                 refp[(y * stride + x) as usize] = 11;
             }
         }
-        let mut sad8x8 = [0i32; 16];
-        let mut frame_sad = 0i32;
-        unsafe {
-            VAACalcSad_c(
-                cur.as_ptr(),
-                refp.as_ptr(),
-                w,
-                h,
-                stride,
-                &mut frame_sad,
-                sad8x8.as_mut_ptr(),
-            );
-        }
+        let mut sad8x8 = [[0i32; 4]; 4];
+        let frame_sad = vaa_calc_sad(&cur, &refp, w, h, stride, &mut sad8x8);
         // mb_index 3 is the bottom-right macroblock; quadrant 3 is its bottom-right.
-        assert_eq!(sad8x8[(3 << 2) + 3], 64);
+        assert_eq!(sad8x8[3][3], 64);
         assert_eq!(frame_sad, 64);
-        assert_eq!(sad8x8.iter().filter(|&&v| v != 0).count(), 1);
+        assert_eq!(sad8x8.iter().flatten().filter(|&&v| v != 0).count(), 1);
     }
 
     /// A width that is not a multiple of 16 makes the walk's step quirk observable,
@@ -819,8 +599,6 @@ mod tests {
     /// macroblock row eight bytes later and read a different block, which is exactly
     /// what this asserts against.
     #[test]
-    // unsafe-cat: port-raw(Phase 9)
-    #[allow(unsafe_code)]
     fn calc_sad_reproduces_the_step_quirk_at_a_width_that_is_not_a_multiple_of_16() {
         let (w, h, stride) = (40i32, 32i32, 64i32);
         let refp = vec![0u8; (h * stride) as usize];
@@ -839,25 +617,14 @@ mod tests {
             }
         }
 
-        let mut sad8x8 = [0i32; 16];
-        let mut frame_sad = 0i32;
-        unsafe {
-            VAACalcSad_c(
-                cur.as_ptr(),
-                refp.as_ptr(),
-                w,
-                h,
-                stride,
-                &mut frame_sad,
-                sad8x8.as_mut_ptr(),
-            );
-        }
+        let mut sad8x8 = [[0i32; 4]; 4];
+        let frame_sad = vaa_calc_sad(&cur, &refp, w, h, stride, &mut sad8x8);
 
         // Macroblock 2 is the first of the second row; quadrant 0 is its top-left.
-        assert_eq!(sad8x8[2 << 2], 64 * 7, "the quirky walk did not land here");
+        assert_eq!(sad8x8[2][0], 64 * 7, "the quirky walk did not land here");
         assert_eq!(frame_sad, 64 * 7);
         assert_eq!(
-            sad8x8.iter().filter(|&&v| v != 0).count(),
+            sad8x8.iter().flatten().filter(|&&v| v != 0).count(),
             1,
             "the marked block leaked into another quadrant"
         );
