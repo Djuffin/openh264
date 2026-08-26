@@ -533,6 +533,10 @@ pub unsafe fn WelsWriteParameterSets(
         );
 
         WelsWriteSubsetSpsSyntax(
+            // S67 (H2): **not a context retag** — both this and the `sBsWrite` argument below
+            // borrow the `pOut` allocation, and over **disjoint field ranges**, which is why
+            // the slice survives the third argument's retag. Textual match in the detector; see
+            // the audit note in the log.
             &mut (&mut *pCtx.pOut).sBsBuffer[..],
             &*ctx_subset_array(pCtx).add(iId as usize),
             &mut (*pCtx.pOut).sBsWrite,
@@ -856,6 +860,9 @@ pub unsafe fn WelsEncoderParamAdjust(
         let mut pExistingParasetList: *mut SExistingParasetList = null_mut();
 
         if iOldSpsPpsIdStrategy != CONSTANT_ID && (*pNewParam).eSpsPpsIdStrategy != CONSTANT_ID {
+            // S67 blessed (H2): live across it are `sTempEncoderStatistics` (a **copy**, taken
+            // by value at the top of this block), two stack arrays, and a receiver in the
+            // strategy object's own `Box`.
             ParasetStrategy(pCtx).OutputCurrentStructure(
                 sTmpPsoVariable.as_mut_ptr(),
                 iTmpPpsIdList.as_mut_ptr(),
@@ -2059,6 +2066,7 @@ impl CWelsH264SVCEncoder {
         if pCtx.is_null() || !self.m_bInitialFlag {
             return cmInitParaError;
         }
+        // S67 blessed (H2): nothing of the context is live here; `pBsInfo` is the caller's.
         unsafe { WelsEncoderEncodeParameterSetsRust(&mut *pCtx, pBsInfo) }
     }
 
@@ -2587,10 +2595,14 @@ uiResolutionChangeTimes={}, uIDRReqNum={}, uIDRSentNum={}, uLTRSentNum=NA, iTota
                 }
                 EncoderOption::ENCODER_LTR_RECOVERY_REQUEST => {
                     let pLTR_Recover_Request = &mut *(pOption as *mut SLTRRecoverRequest);
+                    // S67 blessed (H2): the second argument points into the **C caller's**
+                    // memory, not the context.
                     FilterLTRRecoveryRequest(&mut *pCtx, pLTR_Recover_Request);
                 }
                 EncoderOption::ENCODER_LTR_MARKING_FEEDBACK => {
                     let fb = &mut *(pOption as *mut SLTRMarkingFeedback);
+                    // S67 blessed (H2): as the recovery-request arm above — `pOption` is the
+                    // caller's.
                     FilterLTRMarkingFeedback(&mut *pCtx, fb);
                 }
                 EncoderOption::ENCODER_LTR_MARKING_PERIOD => {

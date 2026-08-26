@@ -2341,6 +2341,8 @@ impl CWelsPreProcess {
             return ESceneChangeIdc::LARGE_CHANGED_SCENE;
         }
 
+        // S67 blessed (H2): `pSvcParam` lives in its own `Box`; `pParamInternal` is dead by
+        // this line (last read two lines up). The cursor is consumed into an `i32` here.
         let iClosestLtrFrameNum =
             (*ctx_ltr_at(&mut *pCtx, iTargetDid as usize)).iLastLtrIdx[iCurTid as usize];
         if (*pSvcParam).bEnableLongTermReference {

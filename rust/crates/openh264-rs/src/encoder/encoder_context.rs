@@ -619,47 +619,59 @@ impl SStrideTables {
 /// [`SStrideTables::StrideDecBlockOffset`] reached through the context — the
 /// spelling every consumer used when `pStrideTab` was a raw pointer.
 ///
-/// The `&mut` these four take covers the `Option<Box<SStrideTables>>` field and the
-/// 160-odd bytes it points at; the cursor they answer points into the *arena*, which
-/// is a different allocation and is never retagged by any of them. That is the whole
-/// reason repeated calls are safe to interleave with held cursors.
+/// **`&sWelsEncCtx`, and session H2 is why — the in-fork read surface, first
+/// family.** These four are pure lookups into tables `WelsGetEncBlockStrideOffset`
+/// fills once at `InitDqLayers` and nothing writes again; every worker of the fork
+/// reads them and none writes them. Taking the context by `*mut` or `&mut` to
+/// perform a read is the shape F132 round 2 already removed one level down, inside
+/// [`SStrideTables`] itself ("literally two characters twice, `&mut` -> `&`"), and
+/// leaving it at *this* level meant the fork's lawful read still had to be spelled
+/// through a raw. A shared borrow is what the operation actually is, so:
 ///
-/// # Safety
-/// `pCtx` must point to a live encoder context.
+/// * the two `*mut` ones lose `unsafe fn` and their `cursor` tags — with
+///   `&sWelsEncCtx` the body is a field read, and there is no `unsafe` left in it;
+/// * the two that already took `&mut` lose it (S63: nothing in-fork takes `&mut`),
+///   and any number of workers may now hold the borrow at once, which is the
+///   property that makes the read lawful rather than merely sound;
+/// * **no new seam item.** Shared reads do not race with shared reads, so this
+///   needs no `UnsafeCell` crossing and no `Sync` impl — the count of seam items
+///   stays at D-mt-3's two.
+///
+/// The **return stays `*const`**, and the reason is the arena, not reluctance:
+/// `SStrideTables` stores byte *offsets* into one flat `Vec<i32>` and records no
+/// region lengths, so a slice API cannot be formed here without inventing a bound
+/// the C++ never had. That is J's, named in the log.
+///
+/// The cursor these answer points into the arena, which is a different allocation
+/// from the context and is never retagged by any of them — which is why repeated
+/// calls are safe to interleave with held cursors, and why the shared borrow of the
+/// context above says nothing about writes to the arena below.
 #[inline]
-// unsafe-cat: cursor
-#[allow(unsafe_code)]
-pub unsafe fn ctx_stride_dec_block_offset(
-    pCtx: *mut sWelsEncCtx,
+pub fn ctx_stride_dec_block_offset(
+    pCtx: &sWelsEncCtx,
     kiDid: usize,
     kiTid0: usize,
 ) -> *const i32 {
-    match (*pCtx).pStrideTab.as_ref() {
+    match pCtx.pStrideTab.as_ref() {
         Some(tab) => tab.StrideDecBlockOffset(kiDid, kiTid0),
         None => std::ptr::null(),
     }
 }
 
-/// [`SStrideTables::StrideEncBlockOffset`] reached through the context.
-///
-/// # Safety
-/// As [`ctx_stride_dec_block_offset`].
+/// [`SStrideTables::StrideEncBlockOffset`] reached through the context. See
+/// [`ctx_stride_dec_block_offset`] for why this family takes `&sWelsEncCtx`.
 #[inline]
-// unsafe-cat: cursor
-#[allow(unsafe_code)]
-pub unsafe fn ctx_stride_enc_block_offset(pCtx: *mut sWelsEncCtx, kiDid: usize) -> *const i32 {
-    match (*pCtx).pStrideTab.as_ref() {
+pub fn ctx_stride_enc_block_offset(pCtx: &sWelsEncCtx, kiDid: usize) -> *const i32 {
+    match pCtx.pStrideTab.as_ref() {
         Some(tab) => tab.StrideEncBlockOffset(kiDid),
         None => std::ptr::null(),
     }
 }
 
-/// [`SStrideTables::MbIndexX`] reached through the context.
-///
-/// # Safety
-/// As [`ctx_stride_dec_block_offset`].
+/// [`SStrideTables::MbIndexX`] reached through the context. See
+/// [`ctx_stride_dec_block_offset`].
 #[inline]
-pub fn ctx_mb_index_x(pCtx: &mut sWelsEncCtx, kiDid: usize) -> *const i16 {
+pub fn ctx_mb_index_x(pCtx: &sWelsEncCtx, kiDid: usize) -> *const i16 {
     match pCtx.pStrideTab.as_ref() {
         Some(tab) => tab.MbIndexX(kiDid),
         None => std::ptr::null(),
@@ -877,6 +889,19 @@ pub unsafe fn ctx_ltr(pCtx: &mut sWelsEncCtx) -> *mut SLTRState {
 /// The long-term-reference state of dependency layer `kiDid` — `pLtr[did]`, which is
 /// how all 24 consumers spell it. See [`ctx_ltr`].
 ///
+/// **F193 — this wants to return `&mut SLTRState` and cannot yet, and the blocker is
+/// named rather than guessed.** Twenty-two of its twenty-six call sites already
+/// dereference the answer on the spot (`&mut *ctx_ltr_at(..)`, `&*ctx_ltr_at(..)`,
+/// `(*ctx_ltr_at(..)).field`), so S54 says the accessor should return the reference.
+/// **Four cannot** — `ref_list_mgr_svc.rs:757`, `:1025`, `:1453`, `:1648`, each
+/// already carrying T9.G7's note: the body holds the LTR state across calls that
+/// re-derive their own `&mut` to the *same* `SLTRState`, and two `Unique` tags from
+/// one raw root are siblings where the second pops the first. A `&mut`-returning
+/// accessor borrows the context for the reference's lifetime, so the borrow checker
+/// would refuse those four **at the call** — the crux arriving where H's precedent
+/// says it does. Splitting them is four bodies of restructuring, not a signature
+/// change, and it is J's.
+///
 /// # Safety
 /// As [`ctx_ltr`], and `kiDid` must be a layer the array holds.
 #[inline]
@@ -905,6 +930,16 @@ pub unsafe fn ctx_ltr_at(pCtx: &mut sWelsEncCtx, kiDid: usize) -> *mut SLTRState
 /// `frame_bs_cursors_are_siblings` is that as a test.
 ///
 /// Empty answers null, which is what the field held before `RequestMemorySvc` ran.
+///
+/// **This one is a permanent raw return, and the reason is the C ABI — F193,
+/// measured at the callers rather than assumed.** Of the eight call sites, the
+/// production ones store the answer into `SLayerBSInfo::pBsBuf`, and that field is
+/// `codec_app_def.h:640` — `unsigned char* pBsBuf`, a public member of a struct this
+/// library hands to the application. The value crosses the boundary, so it cannot
+/// become a slice, a reference, or anything else carrying a lifetime, in this phase
+/// or any later one. A session that reaches for "make the five slice-returning APIs
+/// return slices" should stop at this note rather than pay S54's cost again to learn
+/// it. Same for [`ctx_frame_bs_cur`], whose 21 sites include twelve of the same store.
 ///
 /// # Safety
 /// `pCtx` must point to a live encoder context.
@@ -939,6 +974,9 @@ pub unsafe fn ctx_frame_bs(pCtx: &mut sWelsEncCtx) -> *mut u8 {
 /// moment either body flips. The write position is not a parameter; it is the
 /// invariant, and it now lives here where the bounds assert can name it.
 ///
+/// **Permanent raw return, as [`ctx_frame_bs`] — `SLayerBSInfo::pBsBuf` is
+/// `codec_app_def.h:640` and crosses the C boundary (F193).**
+///
 /// # Safety
 /// As [`ctx_frame_bs`].
 #[inline]
@@ -957,21 +995,29 @@ pub unsafe fn ctx_frame_bs_cur(pCtx: &mut sWelsEncCtx) -> *mut u8 {
     root.add(kiPos as usize)
 }
 
-/// The **root** of `pCtx->pDqIdcMap` — T6.H3; see [`ctx_sps_array`] for the
-/// spelling and for what empty means.
+/// `pCtx->pDqIdcMap`, as the slice it is — T6.H3, **converted at T9.H2 (step 4)**.
 ///
-/// # Safety
-/// `pCtx` must point to a live encoder context.
+/// This answered the root as `*mut SDqIdc` and both production callers immediately
+/// wrote `.add(did)`; S54's rule says an accessor every caller offsets and
+/// dereferences is an accessor returning the element. It returns the slice, the two
+/// callers index it, and **neither holds anything any more** — which is the part
+/// worth stating, because the held cursor was the whole reason this accessor needed
+/// F71's `addr_of!` spelling and a row in the sibling-derivation test. `InitParaSet`
+/// used to carry `pDqIdc` across `GenerateNewSps` and `InitPps` and write through it
+/// afterwards; it now writes in two tight scopes and the binding is gone. The
+/// sibling property is not asserted for this accessor any longer because a
+/// reference API cannot have it.
+///
+/// Empty answers an empty slice where this answered null — the callers' `is_null()`
+/// guards were never here (both index unconditionally, as the C++ does), and an
+/// out-of-range layer id is now a bounded panic instead of a walk off a `Vec`
+/// buffer.
+///
+/// The other four of the brief's five stay raw for reasons measured at their
+/// callers — see F193, and the notes on `ctx_frame_bs`/`ctx_frame_bs_cur`.
 #[inline]
-// unsafe-cat: cursor
-#[allow(unsafe_code)]
-pub unsafe fn ctx_dq_idc_map(pCtx: &mut sWelsEncCtx) -> *mut SDqIdc {
-    // **F71** — see `ctx_param`. Shared access to the `Vec`, buffer provenance out.
-    let v = std::ptr::addr_of!(pCtx.pDqIdcMap);
-    if (*v).is_empty() {
-        return std::ptr::null_mut();
-    }
-    (*v).as_ptr() as *mut SDqIdc
+pub fn ctx_dq_idc_map(pCtx: &mut sWelsEncCtx) -> &mut [SDqIdc] {
+    &mut pCtx.pDqIdcMap
 }
 
 /// The **root** of `pCtx->pSpsArray` — T6.H2, and S40's spelling again.
@@ -1036,12 +1082,10 @@ pub unsafe fn ctx_pps_array(pCtx: *mut sWelsEncCtx) -> *mut SWelsPPS {
     (*v).as_ptr() as *mut SWelsPPS
 }
 
-/// [`SStrideTables::MbIndexY`] reached through the context.
-///
-/// # Safety
-/// As [`ctx_stride_dec_block_offset`].
+/// [`SStrideTables::MbIndexY`] reached through the context. See
+/// [`ctx_stride_dec_block_offset`].
 #[inline]
-pub fn ctx_mb_index_y(pCtx: &mut sWelsEncCtx, kiDid: usize) -> *const i16 {
+pub fn ctx_mb_index_y(pCtx: &sWelsEncCtx, kiDid: usize) -> *const i16 {
     match pCtx.pStrideTab.as_ref() {
         Some(tab) => tab.MbIndexY(kiDid),
         None => std::ptr::null(),
@@ -2163,8 +2207,11 @@ mod tests {
         siblings!("ctx_pps_array", ctx_pps_array(p),
             |q: *mut crate::encoder::param_svc::SWelsPPS| (*q).iPpsId = 3,
             |q: *mut crate::encoder::param_svc::SWelsPPS| (*q).iPpsId == 3);
-        siblings!("ctx_dq_idc_map", ctx_dq_idc_map(&mut *p),
-            |q: *mut SDqIdc| (*q).iPpsId = 9, |q: *mut SDqIdc| (*q).iPpsId == 9);
+        // `ctx_dq_idc_map` had a row here until T9.H2 step 4. It returns
+        // `&mut [SDqIdc]` now, so it has no sibling property to assert — two
+        // derivations cannot coexist, and the borrow checker says so at the call
+        // rather than Miri saying so at run time. That is the trade the conversion
+        // makes and it is the direction the phase is going.
         siblings!("ctx_ltr", ctx_ltr(&mut *p),
             |q: *mut SLTRState| (*q).iCurLtrIdx = 4, |q: *mut SLTRState| (*q).iCurLtrIdx == 4);
         siblings!("ctx_ltr_at", ctx_ltr_at(&mut *p, 1),
@@ -2212,16 +2259,23 @@ mod tests {
         // per-accessor test cannot reach.
         let held: Vec<*mut u8> = unsafe {
             vec![
-                ctx_sps_array(p).cast(), ctx_pps_array(p).cast(), ctx_dq_idc_map(&mut *p).cast(),
+                // `ctx_dq_idc_map` left this list at T9.H2 step 4 — a `&mut [SDqIdc]`
+                // cannot be *held* alongside the others, which is the point of it.
+                ctx_sps_array(p).cast(), ctx_pps_array(p).cast(),
                 ctx_ltr(&mut *p).cast(), ctx_rc(p).cast(), ctx_mvd_cost_origin(p).cast(),
                 ctx_vaa(p).cast(), ctx_param(p).cast(), ctx_ref_list(p, 0).cast(),
                 ctx_dq_layer(p, 0).cast(), ctx_frame_bs(&mut *p).cast(),
             ]
         };
         // `ctx_frame_bs` is null here (no bitstream in this fixture), which is itself
-        // the assertion that empty still answers null after everything above.
-        assert!(held[10].is_null(), "no frame bitstream was installed");
-        for (i, q) in held.iter().enumerate().take(10) {
+        // the assertion that empty still answers null after everything above. It is
+        // the **last** entry, and the two counts below are derived from the vector
+        // rather than written twice — the literal `10`/`take(10)` pair went stale the
+        // moment `ctx_dq_idc_map` left this list at T9.H2 step 4, and an index
+        // computed from `held.len()` cannot.
+        let last = held.len() - 1;
+        assert!(held[last].is_null(), "no frame bitstream was installed");
+        for (i, q) in held.iter().enumerate().take(last) {
             assert!(!q.is_null(), "held cursor {i} went null");
             unsafe { assert_eq!(*q.cast::<u8>(), *q.cast::<u8>()) };
         }
@@ -2286,6 +2340,144 @@ mod tests {
 
     /// The same property through the context's four accessors, which is how every
     /// consumer outside `AllocStrideTables` reaches the tables.
+    use crate::encoder::wels_preprocess::CWelsPreProcess;
+
+    /// **F167's three reads, and nothing else** — the probe half of F192.
+    ///
+    /// Exactly the accesses the four dormant `CWelsPreProcess::m_pEncCtx` consumers
+    /// perform through the stored field: `ctx_param(m_pEncCtx)`
+    /// (`wels_preprocess.rs:2899`, `GetRefFrameInfo`), `ctx_vaa(m_pEncCtx)` (`:1567`
+    /// and the same method) and `(*m_pEncCtx).bCurFrameMarkedAsSceneLtr` (`:2596`).
+    ///
+    /// **Why a probe rather than driving `GetRefFrameInfo` itself.** All four
+    /// consumers are on the screen-content path, and `RequestMemorySvc` returns
+    /// `ENC_RETURN_UNSUPPORTED_PARA` the moment `iUsageType ==
+    /// SCREEN_CONTENT_REAL_TIME` (`encoder_ext.rs:1222`) — **no configuration
+    /// finishes `WelsInitEncoderExt`, so no configuration reaches any of them**.
+    /// `GetRefFrameInfo` additionally dereferences `pVaa` as an `SVAAFrameInfoExt`,
+    /// which this port never allocates (F177). The *aliasing* shape is the subject
+    /// and this performs it through the same field and the same accessors.
+    ///
+    /// **Why it lives here rather than on `CWelsPreProcess`.** The ratchet is a
+    /// **per-file** rule and `wels_preprocess.rs` sits at zero `unsafe_block`, so a
+    /// test-only probe there is an increase on a file the phase has driven to zero —
+    /// test unsafe and library unsafe compete for the same headroom and the
+    /// instrument cannot tell them apart. This file is the subject's own and is
+    /// four `unsafe fn` and three `unsafe {` below its baseline. Taking the object
+    /// as a parameter instead of `&mut self` changes nothing about the shape: the
+    /// receiver is derived from the same `pVpp` raw either way.
+    ///
+    /// # Safety
+    /// As the four consumers: `m_pEncCtx` must name a live context.
+    // unsafe-cat: port-raw(Phase 9)
+    #[allow(unsafe_code)]
+    unsafe fn f167_stored_ctx_reads(vpp: &mut CWelsPreProcess) -> (bool, bool, bool) {
+        let bScene = (*vpp.m_pEncCtx).bCurFrameMarkedAsSceneLtr;
+        let bParam = !ctx_param(vpp.m_pEncCtx).is_null();
+        let bVaa = !ctx_vaa(vpp.m_pEncCtx).is_null();
+        (bScene, bParam, bVaa)
+    }
+
+    // F192's shape is built inline in both tests below and **not** behind a helper,
+    // and that is a measurement rather than a style choice: returning the owner
+    // `Box<sWelsEncCtx>` by value *moves* it, and moving a `Box` is itself a retag
+    // (`Box` is `noalias`), which invalidates the root raw derived inside the helper.
+    // The first draft did exactly that and Miri reported a SharedReadOnly retag from
+    // a tag that no longer existed — a defect in the fixture, not in the subject. A
+    // probe that cannot be built without disturbing what it probes has to be built
+    // where the subject lives.
+
+    /// **F192 — the remedy, driven so that it is a fact and not a proposal.**
+    ///
+    /// The identical call with a **shared** context borrow. A `&T` protector forbids
+    /// writes through other tags and permits reads, so the stored copy's three reads
+    /// are lawful under it exactly where they are not under `&mut`. This is what the
+    /// four dormant consumers' fix looks like, and it is green.
+    #[test]
+    // unsafe-cat: port-raw(Phase 9)
+    #[allow(unsafe_code)]
+    fn f167_stored_context_copy_under_a_shared_borrow() {
+        // SAFETY: the fixture's `pVpp` names a live object whose `m_pEncCtx` is this
+        // very context, which is the invariant `CreatePreProcess` establishes.
+        unsafe fn drive_shared(pCtx: &sWelsEncCtx) -> (bool, bool, bool) {
+            f167_stored_ctx_reads(&mut *pCtx.pVpp)
+        }
+        unsafe {
+            let mut owner: Box<sWelsEncCtx> = Box::new(sWelsEncCtx::new());
+            let pCtx: *mut sWelsEncCtx = std::ptr::addr_of_mut!(*owner);
+            let mut vpp = CWelsPreProcess::default();
+            vpp.m_pEncCtx = pCtx;
+            (*pCtx).pVpp = std::ptr::addr_of_mut!(vpp);
+
+            // A bare context has neither `pSvcParam` nor `pVaa` built, which is what
+            // the four consumers' own null guards are written against; the subject is
+            // the access, not the value.
+            assert_eq!(drive_shared(&*pCtx), (false, false, false));
+            assert_eq!(drive_shared(&*pCtx), (false, false, false));
+            (*pCtx).pVpp = std::ptr::null_mut();
+        }
+    }
+
+    /// **F192 — F167's shape as the tree actually has it, and Miri says it is UB.**
+    ///
+    /// F167 argued `CWelsPreProcess::m_pEncCtx` sound on its dormant half and never
+    /// ran it; F171 is what that distinction cost on the other half. Run at last, the
+    /// verdict is **not sound**:
+    ///
+    /// ```text
+    /// error: Undefined Behavior: not granting access to tag <593196> because that
+    /// would remove [Unique for <593445>] which is strongly protected
+    ///   --> wels_preprocess.rs:2939  let bScene = (*self.m_pEncCtx).bCurFrameMarkedAsSceneLtr;
+    /// <593196> was created by a Unique retag at offsets [0x0..0x17f10]   (the owner Box)
+    /// <593445> is this argument     -->  drive(pCtx: &mut sWelsEncCtx)
+    /// ```
+    ///
+    /// **The mechanism is stronger than the argument anyone had made for it, in both
+    /// directions.** It is not that the caller's `Unique` is *disabled over the bytes
+    /// read* and the ranges happen to be disjoint — a reference **function argument
+    /// is strongly protected for the duration of the call**, so no access through any
+    /// other tag may remove it, and a *read* through the stored copy is therefore UB
+    /// immediately, whatever the caller does afterwards. The context `&mut` covers
+    /// `[0x0..0x17f10]`, which contains every byte the stored copy touches.
+    ///
+    /// **It cannot fire today**, and that is the only reason this is a finding rather
+    /// than a stop: all four consumers are on the screen-content path and
+    /// `RequestMemorySvc` returns `ENC_RETURN_UNSUPPORTED_PARA` for
+    /// `SCREEN_CONTENT_REAL_TIME` (`encoder_ext.rs:1222`), so nothing reaches them.
+    /// It becomes live the day Phase 10 enables screen content, and the live shape is
+    /// `ref_list_mgr_svc.rs:1539` — `WelsBuildRefListScreen(pCtx: &mut sWelsEncCtx)`
+    /// calling `(*pCtx.pVpp).GetRefFrameInfo(..)`.
+    ///
+    /// **`#[cfg_attr(miri, ignore)]` records an open verdict with an owner**, which is
+    /// what F112/F114b's rows do; it does not excuse one. The remedy is the sibling
+    /// test above and it is green — the consumers take the context by shared borrow
+    /// (or as a parameter) instead of reading it back out of `m_pEncCtx`.
+    #[test]
+    #[cfg_attr(miri, ignore)]
+    // unsafe-cat: port-raw(Phase 9)
+    #[allow(unsafe_code)]
+    fn f167_stored_context_copy_under_a_mut_borrow() {
+        // SAFETY: as the shared sibling — and under Miri, NOT safe; see the doc.
+        unsafe fn drive(pCtx: &mut sWelsEncCtx) -> (i32, (bool, bool, bool)) {
+            pCtx.iGlobalQp = 26; // a write through the `&mut`, before
+            let seen = f167_stored_ctx_reads(&mut *pCtx.pVpp); // the dormant reads
+            pCtx.iGlobalQp += 1; // and the `&mut` used AFTER them
+            (pCtx.iGlobalQp, seen)
+        }
+        unsafe {
+            let mut owner: Box<sWelsEncCtx> = Box::new(sWelsEncCtx::new());
+            let pCtx: *mut sWelsEncCtx = std::ptr::addr_of_mut!(*owner);
+            let mut vpp = CWelsPreProcess::default();
+            vpp.m_pEncCtx = pCtx;
+            (*pCtx).pVpp = std::ptr::addr_of_mut!(vpp);
+
+            let (qp, seen) = drive(&mut *pCtx);
+            assert_eq!(qp, 27);
+            assert_eq!(seen, (false, false, false));
+            (*pCtx).pVpp = std::ptr::null_mut();
+        }
+    }
+
     #[test]
     // unsafe-cat: cursor
     #[allow(unsafe_code)]
@@ -2294,10 +2486,10 @@ mod tests {
         let p: *mut sWelsEncCtx = &mut *ctx;
         // Before `AllocStrideTables` runs, all four answer null — the value the raw
         // `pStrideTab` held, and the question every `is_null()` guard was written to ask.
-        assert!(unsafe { ctx_stride_enc_block_offset(p, 0) }.is_null());
-        assert!(unsafe { ctx_stride_dec_block_offset(p, 0, 1) }.is_null());
-        assert!(unsafe { ctx_mb_index_x(&mut *p, 0) }.is_null());
-        assert!(unsafe { ctx_mb_index_y(&mut *p, 0) }.is_null());
+        assert!(unsafe { ctx_stride_enc_block_offset(&*p, 0) }.is_null());
+        assert!(unsafe { ctx_stride_dec_block_offset(&*p, 0, 1) }.is_null());
+        assert!(unsafe { ctx_mb_index_x(&*p, 0) }.is_null());
+        assert!(unsafe { ctx_mb_index_y(&*p, 0) }.is_null());
 
         let mut tab = SStrideTables::new(96 * 2);
         tab.pStrideEncBlockOffset[0] = Some(0);
@@ -2315,9 +2507,9 @@ mod tests {
         // The read path, three times, two of them naming the same region — the
         // property that matters is that the first answer is still usable after the
         // third call, which is what every in-fork consumer relies on.
-        let first = unsafe { ctx_stride_enc_block_offset(p, 0) };
-        let other = unsafe { ctx_stride_enc_block_offset(p, 1) };
-        let again = unsafe { ctx_stride_enc_block_offset(p, 0) };
+        let first = unsafe { ctx_stride_enc_block_offset(&*p, 0) };
+        let other = unsafe { ctx_stride_enc_block_offset(&*p, 1) };
+        let again = unsafe { ctx_stride_enc_block_offset(&*p, 0) };
         assert_eq!(first, again);
         assert_eq!(unsafe { (*again, *first, *other) }, (11, 11, 22));
     }

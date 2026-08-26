@@ -590,13 +590,21 @@ pub unsafe fn GetMvMvdRange(
 /// more — and `kiDlayerId`/`kiMaxMbNum` no longer select anything. See the session
 /// C log entry for the ruling and the configuration it rests on.
 ///
+/// **`&sWelsEncCtx` since T9.H2, and S67's audit is what said so.** This body
+/// reaches the context for exactly two things — `ctx_mb_index_x` and
+/// `ctx_mb_index_y`, both pure lookups into the stride arena — so the `&mut` it took
+/// was asserting an exclusivity it never used, and its call site was one of the
+/// twenty-three out-of-family whole-context retags the audit enumerated. It is
+/// twenty-two now, and the layer's `&mut` beside it no longer coexists with a
+/// context `&mut` at all.
+///
 /// # Safety
 /// `pEnc` must have `pStrideTab` allocated; `pList` must hold at least
 /// `iMbWidth * iMbHeight` entries.
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 unsafe fn InitMbInfo(
-    pEnc: &mut sWelsEncCtx,
+    pEnc: &sWelsEncCtx,
     pLayer: &mut SDqLayer,
     kiDlayerId: i32,
 ) {
@@ -683,7 +691,7 @@ pub unsafe fn InitMbListD(ppCtx: *mut *mut sWelsEncCtx) -> i32 {
             MbDims::new(iMbWidth as usize, iMbHeight as usize),
             SMB::default(),
         );
-        InitMbInfo(&mut **ppCtx, &mut *pLayer, i as i32);
+        InitMbInfo(&**ppCtx, &mut *pLayer, i as i32);
     }
 
     0
@@ -831,6 +839,8 @@ pub unsafe fn InitDqLayers(
         }
         (*pDqLayer).iMaxSliceNum = iMaxSliceNum;
 
+        // S67 blessed (H2): `pDqLayer` is in the layer's `Box`;
+        // `pParam`/`pDlayer`/`pParamInternal` in `pSvcParam`'s.
         iResult = InitSliceInLayer(&mut **ppCtx, &mut *pDqLayer, iDlayerIndex);
         if iResult != 0 {
             return iResult;
@@ -912,7 +922,6 @@ pub unsafe fn InitDqLayers(
 
     iDlayerIndex = 0;
     while iDlayerIndex < iDlayerCount {
-        let pDqIdc = ctx_dq_idc_map(&mut **ppCtx).add(iDlayerIndex as usize);
         let bUseSubsetSps = !(*pParam).bSimulcastAVC && (iDlayerIndex > BASE_DEPENDENCY_ID as i32);
         // S29, and the second site the encoder probe reached: `paraset_strategy.rs`
         // re-derives this same layer inside `GenerateNewSps` below, which popped
@@ -921,8 +930,9 @@ pub unsafe fn InitDqLayers(
         let bSvcBaselayer = !(*pParam).bSimulcastAVC
             && (iDlayerCount > BASE_DEPENDENCY_ID as i32)
             && (iDlayerIndex == BASE_DEPENDENCY_ID as i32);
-        (*pDqIdc).uiSpatialId = iDlayerIndex as i8;
 
+        // S67 blessed (H2): live across it are `pDqIdc`, `pSps`/`pSubsetSps` (Vec buffers) and
+        // `pDlayerParam` (`pSvcParam`'s `Box`) — none inside the context's own bytes.
         iSpsId = ParasetStrategy(*ppCtx).GenerateNewSps(
             &mut **ppCtx,
             bUseSubsetSps,
@@ -948,6 +958,8 @@ pub unsafe fn InitDqLayers(
             pSps = std::ptr::addr_of_mut!((*pSubsetSps).pSps);
         }
 
+        // S67 blessed (H2): as `GenerateNewSps` above; the two `as_ref()` arguments point into
+        // the paraset Vec buffers, which this retag does not cover.
         iPpsId = ParasetStrategy(*ppCtx).InitPps(
             &mut **ppCtx,
             iSpsId as u32,
@@ -976,8 +988,25 @@ pub unsafe fn InitDqLayers(
         if iResult != 0 {
             return iResult;
         }
-        (*pDqIdc).iSpsId = iSpsId as u8;
-        (*pDqIdc).iPpsId = iPpsId as u16;
+        // **T9.H2 step 4 — one retag, nothing held, and `uiSpatialId` moved down here
+        // with it.** This layer's three `SDqIdc` writes used to straddle the paraset
+        // calls: a cursor taken above `GenerateNewSps`, `uiSpatialId` written through
+        // it, then `iSpsId`/`iPpsId` written through the same cursor after `InitPps`
+        // — the held-across-a-call shape S67's audit exists to find, surviving only
+        // because F71's spelling gave the cursor the `Vec` buffer's provenance.
+        //
+        // Byte-neutral, and measured rather than reasoned: `grep -rn 'pDqIdcMap|
+        // ctx_dq_idc_map' src` finds **no** reader between the old and new write
+        // positions — `paraset_strategy.rs` never names the map at all, and the only
+        // other consumer is `encoder_ext.rs`'s `WelsInitCurrentLayer`, a different
+        // function later in the frame. So the three writes commute into one borrow
+        // that ends on the closing brace.
+        {
+            let pDqIdc = &mut ctx_dq_idc_map(&mut **ppCtx)[iDlayerIndex as usize];
+            pDqIdc.uiSpatialId = iDlayerIndex as i8;
+            pDqIdc.iSpsId = iSpsId as u8;
+            pDqIdc.iPpsId = iPpsId as u16;
+        }
 
         if (*pParam).bSimulcastAVC || bUseSubsetSps {
             iSpsId += 1;
@@ -993,6 +1022,8 @@ pub unsafe fn InitDqLayers(
         iDlayerIndex += 1;
     }
 
+    // S67 blessed (H2): the receiver is a `&mut` into the strategy object's own `Box`, reached
+    // without a reference to the context (`ctx_func_list`, F71); nothing else is live.
     ParasetStrategy(*ppCtx).UpdateParaSetNum(&mut **ppCtx);
     ENC_RETURN_SUCCESS
 }
@@ -1198,6 +1229,8 @@ pub unsafe fn RequestMemorySvc(
         kiNumDependencyLayers as usize
     ];
     for i in 0..kiNumDependencyLayers as usize {
+        // S67 blessed (H2): nothing is held across it — the cursor is minted and consumed in
+        // the same call.
         crate::encoder::ref_list_mgr_svc::ResetLtrState(&mut *ctx_ltr_at(&mut **ppCtx, i));
     }
 
@@ -1814,6 +1847,7 @@ pub unsafe fn WelsUninitEncoderExt(pEncContext: Option<Box<sWelsEncCtx>>) {
     let pCtx = Box::into_raw(pEncContext);
 
     if !(*pCtx).pVpp.is_null() {
+        // S67 blessed (H2): the receiver borrows the `pVpp` allocation, not the context.
         (*(*pCtx).pVpp).FreeSpatialPictures(&mut *pCtx);
         drop(Box::from_raw((*pCtx).pVpp));
         (*pCtx).pVpp = null_mut();
@@ -2077,7 +2111,6 @@ pub unsafe fn WelsInitCurrentLayer(pCtx: &mut sWelsEncCtx, _kiWidth: i32, _kiHei
     let kiCurDid = pCtx.uiDependencyId;
     let kbUseSubsetSpsFlag = !(*pParam).bSimulcastAVC && (kiCurDid as i32) > BASE_DEPENDENCY_ID;
     let pNalHdExt = &mut (*pCurDq).sLayerInfo.sNalHeaderExt;
-    let pDqIdc = ctx_dq_idc_map(pCtx).add(kiCurDid as usize);
     let iSliceCount = (*pCurDq).iMaxSliceNum;
     // S29 / F13's family: `addr_of_mut!` on the element, not `as_mut_ptr().add()` —
     // the latter reborrows the whole array and a second such derivation pops the first.
@@ -2087,8 +2120,13 @@ pub unsafe fn WelsInitCurrentLayer(pCtx: &mut sWelsEncCtx, _kiWidth: i32, _kiHei
 
     debug_assert!(iSliceCount > 0);
 
-    let mut iCurPpsId = (*pDqIdc).iPpsId as i32;
-    let iCurSpsId = (*pDqIdc).iSpsId as i32;
+    // T9.H2 step 4: both reads were through a cursor taken 10 lines up and held
+    // across the body's other reaches into the context; they are one bounded borrow
+    // that ends on the semicolon.
+    let (mut iCurPpsId, iCurSpsId) = {
+        let pDqIdc = &ctx_dq_idc_map(pCtx)[kiCurDid as usize];
+        (pDqIdc.iPpsId as i32, pDqIdc.iSpsId as i32)
+    };
 
     iCurPpsId = ParasetStrategy(pCtx).GetCurrentPpsId(
         iCurPpsId,

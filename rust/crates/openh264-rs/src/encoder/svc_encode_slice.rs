@@ -4131,6 +4131,8 @@ pub unsafe fn FrameBsRealloc(
     pLayerBsInfo: *mut SLayerBSInfo,
     kiMaxSliceNumOld: i32,
 ) -> i32 {
+    // S67 (H2): **not a context retag** — this borrows the `pOut` allocation. It is in the
+    // detector's list only because the regex is textual; see the audit note in the log.
     let pOut = &mut *pCtx.pOut;
     let mut iCountNals = pOut.sNalList.len() as i32;
     let spatial_layers = if !ctx_param(pCtx).is_null() { (*ctx_param(pCtx)).iSpatialLayerNum } else { 1 };
