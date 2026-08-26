@@ -18223,3 +18223,101 @@ not be re-derived:
 
 **X inherits** the `other` family's raw (F158's list) untouched, and the 5
 `deblocking.rs` allows.
+
+---
+
+# Phase 9, session X — the `other` family
+
+*The off-spine family in one session: reference lists and LTR, rate control's
+single-threaded half, the preprocess/VAA pipeline, and the first half of the
+send-seam's `SVAAFrameInfo` contingency. Steps 4 (partly) and 5 deferred to X2.*
+
+## Metrics, live at both ends (§7.1)
+
+`unsafe_ratchet.sh report`, session-relative rather than baseline-relative — the
+fourth session running to note that the report's own delta column is against the
+Phase 9 baseline, not against the session:
+
+| metric | X open | X close | session delta |
+|---|---:|---:|---:|
+| `raw_ptr` | 1434 | 1369 | **-65** |
+| `unsafe_fn` | 613 | 601 | **-12** |
+| `unsafe_block` | 279 | 268 | -11 |
+| `shim` | 37 | 32 | -5 |
+| `mem_zeroed` / `transmute` / `unsafe_impl` / `no_mangle` | 16/4/3/10 | 16/4/3/10 | 0 |
+
+Of `raw_ptr`'s 65, **4 are prose** taken out by F178's respelling, not code. Said
+plainly because F178 is a finding against this very number.
+
+## The headline: F67's probe, 12 -> 10
+
+Recorded before step 3c and again at the close, by the scratch
+`fn _s<T: Sync>() {} _s::<sWelsEncCtx>();` the brief specifies. **By owner:**
+
+| reason | owner | X |
+|---|---|---|
+| `SVAAFrameInfo` / `*mut`-SMotionTextureUnit | X (send-seam) | **fell** |
+| `SVAAFrameInfo` / `*mut`-i32 | X (send-seam) | **fell** |
+| `SVAAFrameInfo` / `*mut`-u32 | X (send-seam) | blocked by F177 — `SetRefMbType` is not ported |
+| `SVAAFrameInfo` / `*mut`-u8 | X (send-seam) | remains: six plane views on the struct + two on `SVAACalcResult`; readers in `svc_mode_decision.rs`, out of family |
+| `SDqLayer` / `*mut`-SRefList | H2 / layer | remains |
+| `SDqLayer` / `*mut`-SrcPicPool | H2 / layer | remains |
+| `SWelsSvcCodingParam` / `*mut`-i8 | X2 (`param_svc`, step 4) | remains |
+| `SPicture` / `*mut`-SScreenBlockFeatureStorage | Phase 10 (dormant) | remains, by design |
+| `sWelsEncCtx` / `*mut`-CWelsPreProcess | H2 | remains |
+| `sWelsEncCtx` / `*mut`-SSliceThreading | H2 (seam) | remains |
+| `sWelsEncCtx` / `*mut`-SWelsEncoderOutput | X2 (`nal_encap`, step 4) | remains |
+| `sWelsEncCtx` / `*mut`-c_void | H2 | remains |
+
+So **half of F164's four is cleared**, as the brief scoped — but not the half it
+expected, and for a reason no reading would have produced: two of the four rest on
+upstream functionality this port never had (F177).
+
+## What H2 inherits — the `SVAAFrameInfo` end state
+
+The seam designs against this, so it is worth stating exactly:
+
+* `sAdaptiveQuantParam` is `{ iAdaptiveQuantMode, iAverMotionTextureIndexToDeltaQp }`
+  — **8 bytes, no pointers.** Its two buffers are owned `Vec`s on `SVAAFrameInfo`
+  (`pMotionTextureUnit`, `pMotionTextureIndexToDeltaQp`), allocated in
+  `SVAAFrameInfo::new` beside `pVaaBackgroundMbFlag`, and reach
+  `CAdaptiveQuantization::Process` as slices.
+* `sComplexityAnalysisParam` is 40 bytes and keeps two pointers,
+  `pBackgroundMbFlag` and `uiRefMbType`. Its two GOM pointers are gone, and the
+  important part for the seam is that they were **borrowed, not owned**: they
+  pointed into the rate controller's `pCurrentFrameGomSad` and
+  `pGomForegroundBlockNum`. They are `&mut [i32]` at the call now, taken straight
+  off `(*pWelsSvcRc)`. A seam that treats `SVAAFrameInfo` as self-contained will be
+  wrong about these two.
+* The eight `*mut`-u8 plane views are untouched and are the largest remaining
+  block. They are *views into pool pictures*, not owned buffers, so the
+  `Vec`-with-index shape does **not** apply to them; the answer is either the pool
+  identity route (`SrcPicId`, as `SPicture` already uses) or the seam's own.
+* ABI pins moved and are recorded with reasons in `abi_guard.rs`:
+  `SAdaptiveQuantizationParam` 32 -> 8, `SComplexityAnalysisParam` 56 -> 40,
+  `SVAAFrameInfo` 352 -> 360, `SVAAFrameInfoExt` 1368 -> 1376.
+
+## What J inherits
+
+**F173 first, and it is not a safety item.** `gtest_stretch.sh --check` aborts
+(`svc_mode_decision.rs:1477`, `SimulcastAVC_SPS_PPS_LISTING`, not on the
+allowlist), so the `exit` battery's gtest gate cannot tally and has not since
+session E3 introduced the checked index. It is F162's shape live — a Phase 9
+conversion turning upstream's silent out-of-bounds read into an abort — and it
+needs the same ruling. It also argues for a cheap filtered `--check` below `exit`,
+since every session since E3 has been green at `family` with this in the tree.
+
+Then F174's ruling (`SWelsSvcRc::pGomComplexity`, dead in both trees, but deleting
+it deletes a `memset` the port faithfully mirrors), and F177's third row
+(`SetRefMbType`, never ported).
+
+## Deferred, named (S60/F143)
+
+Step 5 (F100's two empty bodies and the trace-callback log referee) and most of
+step 4 (`au_set.rs`'s `_pLogCtx` deletions, `paraset_strategy.rs`'s internals minus
+F166's permanently-raw object, `nal_encap.rs`'s `bs_buffer`/`dst` glue,
+`vlc_encoder.rs`, `wels_trace.rs`, `param_svc.rs`, `picture.rs`'s dormant tags) are
+**X2's frontier**, in the brief's own drop order. What step 4 did land is the
+`nal_encap` MT adjudication, because the report owed it: both production tags are
+fork-reachable (`WelsLoadNalForSlice <- EncodeOneSliceInJob <- fork seed`), so they
+are the seam's and H2's; the third was on a test and is retagged `C-ABI(test)`.
