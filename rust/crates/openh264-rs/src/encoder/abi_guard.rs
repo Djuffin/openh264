@@ -243,9 +243,15 @@ assert_size!(SWelsMD, 640);
 // **T6.F3**: +104. The six per-frame result arrays are the block's own `Vec`s, so
 // six pointers become six fat pointers (+48) and `pVaaBackgroundMbFlag` a seventh
 // (+16); `repr(C)` comes off with them and the compiler repacks. **352, measured.**
-assert_size!(SVAAFrameInfo, 352);
+// **T9.X**: +24. `sAdaptiveQuantParam` loses two pointers (-16) and this struct
+// gains the two owned `Vec`s they should have pointed at (+48) — `pMotionTextureUnit`
+// and `pMotionTextureIndexToDeltaQp`, `encoder_ext.cpp:1721/:1724`, two allocations
+// the port had never made at all (F177); `sComplexityAnalysisParam` then loses two
+// more pointers (-16). **360, measured.**
+assert_size!(SVAAFrameInfo, 360);
 // **T6.F3**: +104, all of it its embedded `SVAAFrameInfo`. **1368, measured.**
-assert_size!(SVAAFrameInfoExt, 1368);
+// **T9.X**: +8, all of it the same. **1376, measured.**
+assert_size!(SVAAFrameInfoExt, 1376);
 // SSliceThreading is deliberately NOT asserted. C++ (mt_defs.h:68) embeds
 // WELS_EVENT (pthread_cond_t, 48 B) and WELS_MUTEX (pthread_mutex_t, 64 B) by
 // value, reaching 1256 bytes on darwin; those sizes are libc-specific, and this
@@ -257,8 +263,15 @@ assert_size!(SVAACalcResult, 168);
 assert_size!(SScrollDetectionParam, 32);
 // 40 and 64 in the C++; each lost its stored `pCalcResult` pointer at Phase 6
 // session B (see `SVAAFrameInfo` above): 32 and 56, measured.
-assert_size!(SAdaptiveQuantizationParam, 32);
-assert_size!(SComplexityAnalysisParam, 56);
+// **T9.X**: `SAdaptiveQuantizationParam` 32 -> 8 — its two buffer pointers moved to
+// `SVAAFrameInfo` as owned `Vec`s and reach the plugin as slices at the `Process`
+// call, which is where this block's `pCalcResult` went at session B for the same
+// reason. Two of `SVAAFrameInfo`'s four `!Sync` reasons go with them (F67/F164).
+assert_size!(SAdaptiveQuantizationParam, 8);
+// **T9.X**: 56 -> 40 — `pGomComplexity` and `pGomForegroundBlockNum` are the rate
+// controller's `Vec`s and reach the plugin as slices; see `SAdaptiveQuantizationParam`
+// above. **40, measured.**
+assert_size!(SComplexityAnalysisParam, 40);
 assert_size!(SComplexityAnalysisScreenParam, 72);
 
 // Mid-tier types.
@@ -525,6 +538,7 @@ const _: () = assert!(std::mem::offset_of!(SSpatialPicIndex, pSrc) == 0);
 const _: () = assert!(std::mem::offset_of!(SSpatialPicIndex, iDid) == 8);
 #[cfg(not(debug_assertions))]
 const _: () = assert!(std::mem::offset_of!(SSpatialPicIndex, iDid) == 4);
+
 
 
 

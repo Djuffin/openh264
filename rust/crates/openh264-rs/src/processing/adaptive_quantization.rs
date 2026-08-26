@@ -198,7 +198,14 @@ impl CAdaptiveQuantization {
     /// cover the picture's macroblocks.
     // unsafe-cat: port-raw(Phase 9)
     #[allow(unsafe_code)]
-    pub unsafe fn Process(&mut self, pSrcPixMap: &SPixMap, pRefPixMap: &SPixMap, calc: &SVAACalcResult) -> i32 {
+    pub unsafe fn Process(
+        &mut self,
+        pSrcPixMap: &SPixMap,
+        pRefPixMap: &SPixMap,
+        calc: &SVAACalcResult,
+        pMotionTexture: &mut [SMotionTextureUnit],
+        pMotionTextureIndexToDeltaQp: &mut [i8],
+    ) -> i32 {
         let iWidth = pSrcPixMap.sRect.iRectWidth;
         let iHeight = pSrcPixMap.sRect.iRectHeight;
         let iMbWidth = iWidth >> 4;
@@ -212,8 +219,6 @@ impl CAdaptiveQuantization {
         let mut pCurFrameY = pSrcPixMap.pPixel[0] as *const u8;
         let iRefStride = pRefPixMap.iStride[0];
         let iCurStride = pSrcPixMap.iStride[0];
-
-        let mut pMotionTexture = self.m_sAdaptiveQuantParam.pMotionTextureUnit;
 
         // Reuse the VAA statistics when they were computed over exactly this pair
         // of pictures; otherwise recompute per macroblock.
@@ -237,32 +242,34 @@ impl CAdaptiveQuantization {
                     // stored into a `uint16_t` field, so the truncation is at the
                     // store, not at the arithmetic.
                     iSumDiff >>= 8;
-                    (*pMotionTexture).uiMotionIndex = ((iSQDiff >> 8) - iSumDiff * iSumDiff) as u16;
+                    let mt = &mut pMotionTexture[iMbIndex as usize];
+                    mt.uiMotionIndex = ((iSQDiff >> 8) - iSumDiff * iSumDiff) as u16;
 
                     uiSum >>= 8;
-                    (*pMotionTexture).uiTextureIndex = ((iSQSum >> 8) - uiSum * uiSum) as u16;
+                    mt.uiTextureIndex = ((iSQSum >> 8) - uiSum * uiSum) as u16;
 
-                    iAverageMotionIndex += (*pMotionTexture).uiMotionIndex as i64;
-                    iAverageTextureIndex += (*pMotionTexture).uiTextureIndex as i64;
-                    pMotionTexture = pMotionTexture.add(1);
+                    iAverageMotionIndex += mt.uiMotionIndex as i64;
+                    iAverageTextureIndex += mt.uiTextureIndex as i64;
                     iMbIndex += 1;
                 }
             }
         } else {
+            let mut iMbIndex = 0usize;
             for _j in 0..iMbHeight {
                 let mut pRefFrameTmp = pRefFrameY;
                 let mut pCurFrameTmp = pCurFrameY;
                 for _i in 0..iMbWidth {
+                    let mt = &mut pMotionTexture[iMbIndex];
                     SampleVariance16x16_c(
                         pRefFrameTmp,
                         iRefStride,
                         pCurFrameTmp,
                         iCurStride,
-                        pMotionTexture,
+                        mt,
                     );
-                    iAverageMotionIndex += (*pMotionTexture).uiMotionIndex as i64;
-                    iAverageTextureIndex += (*pMotionTexture).uiTextureIndex as i64;
-                    pMotionTexture = pMotionTexture.add(1);
+                    iAverageMotionIndex += mt.uiMotionIndex as i64;
+                    iAverageTextureIndex += mt.uiTextureIndex as i64;
+                    iMbIndex += 1;
                     pRefFrameTmp = pRefFrameTmp.offset(MB_WIDTH_LUMA as isize);
                     pCurFrameTmp = pCurFrameTmp.offset(MB_WIDTH_LUMA as isize);
                 }
@@ -302,11 +309,11 @@ impl CAdaptiveQuantization {
 
         let iAQ_EPSN: i64 =
             -(AQ_PESN * AQ_TIME_INT_MULTIPLY * AQ_QSTEP_INT_MULTIPLY / AQ_INT_MULTIPLY);
-        let mut pMotionTexture = self.m_sAdaptiveQuantParam.pMotionTextureUnit;
         for j in 0..iMbHeight {
             for i in 0..iMbWidth {
+                let mt = pMotionTexture[(j * iMbWidth + i) as usize];
                 let mut a = WELS_DIV_ROUND64(
-                    (*pMotionTexture).uiTextureIndex as i64 * AQ_INT_MULTIPLY * AQ_TIME_INT_MULTIPLY,
+                    mt.uiTextureIndex as i64 * AQ_INT_MULTIPLY * AQ_TIME_INT_MULTIPLY,
                     iAverageTextureIndex,
                 );
                 let mut iQStep = WELS_DIV_ROUND64(
@@ -319,7 +326,7 @@ impl CAdaptiveQuantization {
                     (iLumaTextureDeltaQp / AQ_TIME_INT_MULTIPLY) as i32;
 
                 a = WELS_DIV_ROUND64(
-                    (*pMotionTexture).uiMotionIndex as i64 * AQ_INT_MULTIPLY * AQ_TIME_INT_MULTIPLY,
+                    mt.uiMotionIndex as i64 * AQ_INT_MULTIPLY * AQ_TIME_INT_MULTIPLY,
                     iAverageMotionIndex,
                 );
                 iQStep = WELS_DIV_ROUND64(
@@ -336,13 +343,9 @@ impl CAdaptiveQuantization {
                         (iLumaMotionDeltaQp / AQ_TIME_INT_MULTIPLY) as i32;
                 }
 
-                *self
-                    .m_sAdaptiveQuantParam
-                    .pMotionTextureIndexToDeltaQp
-                    .offset((j * iMbWidth + i) as isize) =
+                pMotionTextureIndexToDeltaQp[(j * iMbWidth + i) as usize] =
                     (iMotionTextureIndexToDeltaQp as i64 / AQ_QSTEP_INT_MULTIPLY) as i8;
                 iAverMotionTextureIndexToDeltaQp += iMotionTextureIndexToDeltaQp;
-                pMotionTexture = pMotionTexture.add(1);
             }
         }
 
