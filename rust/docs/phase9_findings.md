@@ -3644,3 +3644,262 @@ grep -rn '&mut \*pCtx\|&mut \*\*ppCtx\|&mut \*pEncCtx' src/encoder | wc -l
 Each one retags the whole context. Before adding another, check what the
 surrounding body is holding across it — the compiler will not, and neither will
 the byte gates.
+
+---
+
+## F172 — F86's own diagnosis named a guarded site, and the brief inherited the misattribution
+
+**Session X, step 1.** F86 (phase 8b) recorded an abort and attributed it to a
+write the port has bound-guarded since the raw translation. Session X's brief
+inherited that attribution and added an error of its own on top.
+
+F86's text says the panic was the unchecked short-reference **insert** shift:
+
+> **The C++ writes `pShortRefList[iRefIdx + 1]` unchecked** at
+> `ref_list_mgr_svc.cpp:387–391`, so the same state corrupts memory there and
+> panics here.
+
+It did not. That shift is guarded in this port — `if iRefIdx + 1 <=
+MAX_SHORT_REF_COUNT` — and has been since `68c4f6a5`, the original raw
+translation, so it cannot raise an index panic at all. Checking out `6d682b7e`
+(T8b.A3, the commit F86 names) and reading `ref_list_mgr_svc.rs:684` — the exact
+line F86 quotes — gives
+
+```rust
+(*pRefList).pNextBuffer = (*pRefList).pShortRefList[lastIdx];
+```
+
+in `PrefetchNextBuffer`, with `lastIdx = uiShortRefCount - 1`. At
+`uiShortRefCount == 6` that is index 5 on a `[_; 1 + MAX_SHORT_REF_COUNT]` =
+`[_; 5]`, which reproduces F86's message exactly (`the len is 5 but the index is
+5`). Its C++ counterpart is `ref_list_mgr_svc.cpp:343` — an unchecked **read**,
+in a different function, in the opposite direction.
+
+The brief then compounded it, pointing at a **third** site:
+
+> **F86-open — the short-ref shift**: `ref_list_mgr_svc.rs:299–310` shifts
+> `pShortRefList[k] = pShortRefList[k+1]` with safe indexing where the C++
+> (`ref_list_mgr_svc.cpp:387–391`) writes unchecked.
+
+`rs:299–310` is `DeleteSTRFromShortList`, the *delete* shift. `cpp:387–391` is
+the *insert* shift in `WelsUpdateRefList`. They are not counterparts; they are
+opposite operations in different functions.
+
+**The class.** F153 says a brief inheriting a finding inherits the finding's
+*date*. This is the same failure one level down: a brief inheriting a finding
+inherits the finding's **attribution**, including the line number it got wrong,
+and a citation that has been copied twice reads as twice-confirmed. The check
+that catches it is cheap and nobody ran it for two sessions: check out the commit
+the finding names and read the line it quotes.
+
+**Two brief-level citations that no run of the tools produces.** The same
+paragraph says the file has "zero in-fork bodies (the forksplit's table:
+`ref_list_mgr_svc.rs` 0/32)". The forksplit's default table has no
+`ref_list_mgr_svc.rs` row at all — its domain is the 114 bodies that still carry a
+`*mut` sWelsEncCtx parameter, and post-H this file's bodies take `&mut`. Aimed at
+the LTR types it prints `0 / 3`, not `0 / 32`; the file has 41 functions and 31
+`unsafe fn`, so no run of any instrument produces a 32 either. The **conclusion**
+is right — checked with `--why`, the walker's reachability arm, which is the arm
+that answers the question the parameter table cannot.
+
+**Resolution (not a ruling request).** Measured rather than argued: a probe on
+`uiShortRefCount` at all three exposed sites, over the whole 583-row sweep, tops
+out at **2** against a panic threshold of **6**, and `PrefetchNextBuffer`'s exposed
+branch is never entered at all. F86's own trigger was `ForceCodingIDR` being a
+stub, which T8b.A4 fixed. No reachable panic, so the brief's other branch applies:
+the three exposed reads are guarded exactly where upstream's invariant is implicit,
+byte-neutral wherever that invariant holds, with the invariant named at each site.
+
+---
+
+## F173 — the gtest gate has been aborting since some Phase 9 session, and no session-level gate runs it
+
+**Session X, found while chasing F86.** `gtest_stretch.sh --check` does not
+complete: the binary takes `Abort trap: 6` in
+`EncodeDecodeTestAPI.SimulcastAVC_SPS_PPS_LISTING`, so the suite prints no
+`[==========] n tests ran` line and the gate cannot tally at all. Phase 8b's close
+recorded 191/199 with an allowlist of exactly 8, so it ran to completion then.
+
+```
+thread '<unnamed>' panicked at src/encoder/svc_mode_decision.rs:1477:52:
+mb_xy 549 >= 549 (grid 61x9)
+panic in a function that cannot unwind  ->  abort
+```
+
+Reproduced on a clean tree with this session's work-in-progress reverted, so it is
+inherited, not caused here. The row is **not** on
+`gtest_known_failures.txt`.
+
+**It is F162's shape, live.** The site is `GetRefMb`:
+
+```rust
+*(*std::ptr::addr_of!((*kpRefLayer).sMbDataP)).get(kiRefMbIdx as usize)
+```
+
+introduced by `4ab1919a` (session E3), replacing a raw hand-out with checked
+indexing. Upstream reads the same index unchecked and says why in its own comment:
+
+```cpp
+const int32_t kiRefMbIdx = (pCurMb->iMbY >> 1) * kpRefLayer->iMbWidth + (pCurMb->iMbX >> 1);
+  //because current lower layer is half size on both vertical and horizontal
+return (&kpRefLayer->sMbDataP[kiRefMbIdx]);
+```
+
+Simulcast with a layer pair that is not an exact 2:1 ratio breaks that implicit
+invariant, so upstream reads out of bounds and the port panics — **a Phase 9
+safety conversion turned upstream's silent OOB read into an abort**, which is
+exactly the D-fid pattern the steward rules on.
+
+Out of session X's lane (`svc_mode_decision.rs` is not in the family), so it is
+filed rather than fixed. Two things follow for the phase:
+
+1. **The `exit` gate is currently red and nothing below `exit` runs it.** Every
+   session since E3 has been green at `family` with this in the tree. If the
+   gtest suite is the referee for the API surface, a session-level `--check`
+   (even filtered) is cheap insurance; at minimum the phase exit should not be
+   the first place this is discovered.
+2. It needs the same ruling F162 got: guard to match upstream's read, or accept
+   the panic as a deliberate divergence.
+
+---
+
+## F174 — `SWelsSvcRc::pGomComplexity` is a second dead sibling, where the brief says the dead one was the only one
+
+**Session X, step 2.** The brief describes the three GOM arrays behind `rc.rs`'s
+raw accessors as "the three **live** GOM arrays (D-dead-3 deleted their dead
+fourth sibling; these three are the mechanism with ten C++ uses)". Both halves are
+wrong.
+
+`SWelsSvcRc::pGomComplexity` (`rc.h:188`, `double*`) is **allocated
+(`ratectl.cpp:73`), nulled (`:87`), and `memset` to zero (`:668`) — and never read
+anywhere in the reference.** The port mirrors the memset faithfully
+(`rc.rs:1550`) and likewise never reads it; its accessor `rc_gom_complexity` had
+**no production caller at all**, only the sibling-derivation test. That is
+D-dead-3's `pGomCost` exactly, a second time.
+
+And "ten C++ uses" is `pTemporalOverRc`'s number — ten reads in `ratectl.cpp`,
+which is why *that* root was worth retiring onto direct indexing. The GOM arrays'
+real numbers: `pCurrentFrameGomSad` has two encoder-side reads (`:734`, `:740`,
+both inside the in-fork `RcGomTargetBits`); `pGomForegroundBlockNum` has none —
+the encoder only zeroes it and hands it to the VP.
+
+The accessor is retired (S18, zero callers). **The field itself needs a ruling**,
+because deleting it also deletes the `memset` the port faithfully mirrors, and
+D-dead-3 and D-dead-5 were both ruled rather than assumed.
+
+---
+
+## F175 — a doubly-thresholded verdict swallows a plane-root fault, and the escalation is the measurement
+
+**Session X, step 3a.** The scene-change detector's conversion was refereed with a
+planted plane-root fault, per S55/S59. The honest sequence:
+
+| fault | rows failed of 583 |
+|---|---|
+| current-luma plane view `origin + 1` | **0** |
+| verdict forced to `LARGE_CHANGED_SCENE` | **71** |
+
+The first reading is not "the path is uncovered". `Process` is entered in **101**
+of the 583 configurations (counted by a probe in the same run) and the second
+reading proves the sweep sees the verdict. The path is covered; the *fault* was
+too weak, because the verdict is quantised twice: a block counts only if its SAD
+exceeds `HIGH_MOTION_BLOCK_THRESHOLD` (320), and the frame's verdict changes only
+if that count crosses 85% or 50% of the block total. Shifting every block by one
+pixel moves neither threshold.
+
+**S64/F155 one level deeper.** F155 says to perturb a field for its per-site
+variation. This adds: when the observable is a threshold over a count of
+thresholded quantities, per-site variation is not enough either — the fault has to
+move the *verdict*. A 0-row result on such a site is only informative alongside a
+maximal fault that is non-zero. Escalate before concluding, and report both.
+
+---
+
+## F176 — the read grep was six callers short, on the very family F119 was written about
+
+**Session X, step 3b.** The brief says the five raw VAA kernels' "only remaining
+callers are the file's own differential tests (`:755/:790/:845`)". There were
+**nine** call sites. The other six are in `tests/kernels_differential_phase2.rs`
+(`:560`, `:570`, `:578`, `:584`, `:591`, `:641`).
+
+F119 exists because a dead-grep excluded `tests/` and the "dead" `mc.rs` shims
+turned out to be that file's raw entry points. This is the same file, the same
+omission, one session later. The rule is not new; what is new is that quoting
+three specific line numbers made the count look *measured*. S24 says a number that
+decides a conversion comes with the command beside it — and the command here would
+have had to include `tests` and `benches`, which is F119's whole content.
+
+Both of that file's VAA properties re-anchored on the safe kernels in the same
+commit and neither weakened; see the commit for how the span property survives the
+move from pointer to slice.
+
+**A stale comment was the reason the shims looked load-bearing.** `Process`
+carried: "The shims stay: they are the C-ABI-shaped subjects
+`tests/kernels_differential_phase2.rs` runs against the reference implementation."
+That harness has no C++ side, and **F124 corrected exactly this belief about
+exactly this file**. A stale justification comment outlives the finding that
+refutes it, because nothing greps comments for claims.
+
+---
+
+## F177 — three buffers the port never allocates, with four unguarded dereferences, all dark
+
+**Session X, step 3c.** Converting `SVAAFrameInfo`'s raw members turned up not
+dead fields but **missing ports**:
+
+| field | upstream | this port |
+|---|---|---|
+| `sAdaptiveQuantParam.pMotionTextureUnit` | `WelsMallocz(iCountMaxMbNum * sizeof(SMotionTextureUnit))`, `encoder_ext.cpp:1721` | never allocated — permanently null |
+| `sAdaptiveQuantParam.pMotionTextureIndexToDeltaQp` | `WelsMallocz(iCountMaxMbNum)`, `encoder_ext.cpp:1724` | never allocated — permanently null |
+| `sComplexityAnalysisParam.uiRefMbType` | `SetRefMbType(pCtx, &.., pRefPicture->iPictureType)`, `wels_preprocess.cpp:916` | **`SetRefMbType` was never ported** — permanently null |
+
+All three are dereferenced **unguarded**: `adaptive_quantization.rs` at four sites,
+`complexity_analysis.rs:169/:184`. They have never fired because
+`bEnableAdaptiveQuant = false` in both diffharness drivers (`cxx_enc.cpp:150`) and
+the complexity readers sit behind the same family of flags — S57's "no gate runs
+this", holding up a null dereference rather than merely an unconverted site.
+
+The first two are fixed here: the constructor cuts both blocks, matching upstream,
+and the buffers are owned `Vec`s on `SVAAFrameInfo` reaching the plugin as slices.
+The third is **not**, and should not be by a safety session: porting a missing
+function is a correctness job. It is why `*mut`-u32 is still one of
+`SVAAFrameInfo`'s `!Sync` reasons.
+
+**The general point.** A permanently-null field with live readers looks identical
+to a dead field under every instrument this phase owns — the census sees a tagged
+raw site, the ratchet sees a pointer, the byte gates see nothing. What
+distinguishes them is one grep on the *other* tree for the writer. F156 said to
+grep a cached copy's readers per field before re-routing it; this says to grep the
+**writer**, in the reference, before believing a field is inert.
+
+---
+
+## F178 — the ratchet counts its own subject matter in prose
+
+**Session X, steps 3c and 4.** `unsafe_ratchet.sh`'s metrics are textual counts
+over the source, comments included. Documenting a raw pointer therefore raises
+`raw_ptr`, and documenting the absence of an export attribute raises `no_mangle`.
+Both were observed as **gate failures on documentation**:
+
+* `gates.sh family` failed on `processing/complexity_analysis.rs raw_ptr: 0 -> 2`
+  — both counts prose in the doc comment explaining that the raw pointers had left
+  the file.
+* `gates.sh commit` failed on `encoder/nal_encap.rs no_mangle: 0 -> 1` — the count
+  was the literal token inside a comment stating that the function does not carry
+  one.
+
+Two of the eight metrics, demonstrated. The consequences are worth stating
+separately because they point in opposite directions:
+
+1. **A conversion is penalised for explaining itself.** The incentive is to
+   convert quietly, which is the opposite of what every other rule in this phase
+   asks for.
+2. **The absolute numbers are slightly wrong in the sessions' favour or against
+   it, unpredictably.** Respelling this session's prose to avoid the literal
+   tokens took **4 counts** of already-committed prose out of `raw_ptr` — the
+   close reads 1369 where steps 0–3b's own commit messages imply 1373.
+
+The fix is small (skip comment lines, or count only outside them) and it is a
+*ratchet* change, so it needs a rebaseline with the reason recorded — S24's
+clause. Until then, per-file `raw_ptr` deltas of 1–2 on files whose comments
+changed are noise, and sessions should say so when they quote them.
