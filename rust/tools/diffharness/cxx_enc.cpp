@@ -13,6 +13,46 @@
 #include "codec_app_def.h"
 #include "codec_def.h"
 
+// ---------------------------------------------------------------------------
+// The log referee's capture side (T9.X2, F100).
+//
+// `OH264_TRACE_LOG=<path>` installs a trace callback that writes every delivered
+// message to <path> as `<level>|<text>`, and raises the trace level to INFO so
+// the INFO-level parameter and statistics blocks are actually delivered (the
+// default is WELS_LOG_WARNING, and a filter that never passes looks exactly like
+// a codec that never logs). Unset — which is every sweep run — this is inert and
+// the driver behaves as it always did.
+//
+// The sink is a file rather than stdout because the drivers already write the
+// bitstream and their own diagnostics there.
+// ---------------------------------------------------------------------------
+static FILE* g_pTraceLog = NULL;
+
+static void TraceSink (void* pCtx, int iLevel, const char* kpString) {
+  (void) pCtx;
+  if (g_pTraceLog != NULL && kpString != NULL) {
+    fprintf (g_pTraceLog, "%d|%s\n", iLevel, kpString);
+  }
+}
+
+static void InstallTraceCapture (ISVCEncoder* pEnc) {
+  const char* kpPath = getenv ("OH264_TRACE_LOG");
+  if (kpPath == NULL || *kpPath == '\0') {
+    return;
+  }
+  g_pTraceLog = fopen (kpPath, "wb");
+  if (g_pTraceLog == NULL) {
+    fprintf (stderr, "cxx_enc: cannot open OH264_TRACE_LOG=%s\n", kpPath);
+    return;
+  }
+  WelsTraceCallback pfCb = TraceSink;
+  pEnc->SetOption (ENCODER_OPTION_TRACE_CALLBACK, &pfCb);
+  void* pTraceCtx = (void*) g_pTraceLog;
+  pEnc->SetOption (ENCODER_OPTION_TRACE_CALLBACK_CONTEXT, &pTraceCtx);
+  int iLevel = WELS_LOG_INFO;
+  pEnc->SetOption (ENCODER_OPTION_TRACE_LEVEL, &iLevel);
+}
+
 int main (int argc, char** argv) {
   if (argc < 9) {
     fprintf (stderr, "usage: %s <src.yuv> <w> <h> <frames> <qp> <cabac> <gop> <out.264> [rcmode] [baseinit 0|1|2] [slicemode] [slicenum] [threads] [complexity] [ltr] [ltrperiod] [ltrfb] [psstrategy] [dlayers] [denoise]\n", argv[0]);
@@ -96,6 +136,9 @@ int main (int argc, char** argv) {
     fprintf (stderr, "WelsCreateSVCEncoder failed\n");
     return 1;
   }
+
+  // Before any Initialize: the parameter block is logged from inside it.
+  InstallTraceCapture (pEnc);
 
   SEncParamExt sParam;
   memset (&sParam, 0, sizeof (sParam));

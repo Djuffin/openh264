@@ -2085,12 +2085,148 @@ impl CWelsH264SVCEncoder {
         0
     }
 
-    /// `welsEncoderExt.cpp:1197` dumps the whole parameter block at
-    /// `WELS_LOG_INFO`. Still a stub here; the encoder's remaining trace call
-    /// sites are enumerated in the session log (T8.B6) and owned by Phase 9.
-    pub fn TraceParamInfo(&mut self, _pParam: &SEncParamExt) {}
+    /// `CWelsH264SVCEncoder::TraceParamInfo` — **`welsEncoderExt.cpp:505`**, ported
+    /// in T9.X2 (F100).
+    ///
+    /// One `WELS_LOG_INFO` line carrying the whole parameter block, then one more
+    /// per spatial layer. Both bodies were empty here since the port began; nothing
+    /// a byte gate can see passes through them, which is exactly why they survived
+    /// eight phases and why `log_referee.sh` exists to check them.
+    ///
+    /// The port's own doc used to cite `:1197` for this function. That line is
+    /// inside `GetOption`; the reference's `TraceParamInfo` is at `:505` and always
+    /// was. See F182 — a citation nobody could act on until somebody tried to.
+    ///
+    /// **Format fidelity is the whole contract**, so the odd spellings below are
+    /// deliberate transcriptions and not typos: `fFrameRate= %.6ff` really does
+    /// print a trailing `f` after six decimals, the block prints `iComplexityMode`
+    /// **twice** (once mid-line and once inside the parenthesised tail), and the
+    /// parenthesis opened at `iLoopFilterDisableIdc (offset(alpha/beta):` is never
+    /// closed until the tail's own `)`. Every `bool` reaches C's `%d` as 0 or 1.
+    pub fn TraceParamInfo(&mut self, pParam: &SEncParamExt) {
+        let b = |v: bool| if v { 1 } else { 0 };
+        WelsLog(
+            self.log_ctx(),
+            WELS_LOG_INFO,
+            &format!(
+                "iUsageType = {},iPicWidth= {};iPicHeight= {};iTargetBitrate= {};iMaxBitrate= {};iRCMode= {};iPaddingFlag= {};iTemporalLayerNum= {};iSpatialLayerNum= {};fFrameRate= {:.6}f;uiIntraPeriod= {};\
+eSpsPpsIdStrategy = {};bPrefixNalAddingCtrl = {};bSimulcastAVC={};bEnableDenoise= {};bEnableBackgroundDetection= {};bEnableSceneChangeDetect = {};bEnableAdaptiveQuant= {};bEnableFrameSkip= {};bEnableLongTermReference= {};iLtrMarkPeriod= {}, bIsLosslessLink={};\
+iComplexityMode = {};iNumRefFrame = {};iEntropyCodingModeFlag = {};uiMaxNalSize = {};iLTRRefNum = {};iMultipleThreadIdc = {};iLoopFilterDisableIdc = {} (offset(alpha/beta): {},{};iComplexityMode = {},iMaxQp = {};iMinQp = {})",
+                pParam.iUsageType as i32,
+                pParam.iPicWidth,
+                pParam.iPicHeight,
+                pParam.iTargetBitrate,
+                pParam.iMaxBitrate,
+                pParam.iRCMode as i32,
+                pParam.iPaddingFlag,
+                pParam.iTemporalLayerNum,
+                pParam.iSpatialLayerNum,
+                pParam.fMaxFrameRate,
+                pParam.uiIntraPeriod,
+                pParam.eSpsPpsIdStrategy as i32,
+                b(pParam.bPrefixNalAddingCtrl),
+                b(pParam.bSimulcastAVC),
+                b(pParam.bEnableDenoise),
+                b(pParam.bEnableBackgroundDetection),
+                b(pParam.bEnableSceneChangeDetect),
+                b(pParam.bEnableAdaptiveQuant),
+                b(pParam.bEnableFrameSkip),
+                b(pParam.bEnableLongTermReference),
+                pParam.iLtrMarkPeriod,
+                b(pParam.bIsLosslessLink),
+                pParam.iComplexityMode as i32,
+                pParam.iNumRefFrame,
+                pParam.iEntropyCodingModeFlag,
+                pParam.uiMaxNalSize,
+                pParam.iLTRRefNum,
+                pParam.iMultipleThreadIdc,
+                pParam.iLoopFilterDisableIdc,
+                pParam.iLoopFilterAlphaC0Offset,
+                pParam.iLoopFilterBetaOffset,
+                pParam.iComplexityMode as i32,
+                pParam.iMaxQp,
+                pParam.iMinQp
+            ),
+        );
+        // `while (i < iSpatialLayers)` with the same clamp the reference applies —
+        // a caller may name more layers than the array holds.
+        let iSpatialLayers = if (pParam.iSpatialLayerNum as usize) < MAX_SPATIAL_LAYER_NUM {
+            pParam.iSpatialLayerNum as usize
+        } else {
+            MAX_SPATIAL_LAYER_NUM
+        };
+        for i in 0..iSpatialLayers {
+            let pSpatialCfg = &pParam.sSpatialLayers[i];
+            WelsLog(
+                self.log_ctx(),
+                WELS_LOG_INFO,
+                &format!(
+                    "sSpatialLayers[{}]: .iVideoWidth= {}; .iVideoHeight= {}; .fFrameRate= {:.6}f; .iSpatialBitrate= {}; .iMaxSpatialBitrate= {}; .sSliceArgument.uiSliceMode= {}; .sSliceArgument.iSliceNum= {}; .sSliceArgument.uiSliceSizeConstraint= {};\
+uiProfileIdc = {};uiLevelIdc = {};iDLayerQp = {}",
+                    i,
+                    pSpatialCfg.iVideoWidth,
+                    pSpatialCfg.iVideoHeight,
+                    pSpatialCfg.fFrameRate,
+                    pSpatialCfg.iSpatialBitrate,
+                    pSpatialCfg.iMaxSpatialBitrate,
+                    pSpatialCfg.sSliceArgument.uiSliceMode as i32,
+                    pSpatialCfg.sSliceArgument.uiSliceNum,
+                    pSpatialCfg.sSliceArgument.uiSliceSizeConstraint,
+                    pSpatialCfg.uiProfileIdc as i32,
+                    pSpatialCfg.uiLevelIdc as i32,
+                    pSpatialCfg.iDLayerQp
+                ),
+            );
+        }
+    }
 
-    pub fn LogStatistics(&mut self, _kiCurrentFrameTs: i64, _iMaxDid: i32) {}
+    /// `CWelsH264SVCEncoder::LogStatistics` — `welsEncoderExt.cpp:569`, ported in
+    /// T9.X2 (F100).
+    ///
+    /// One `WELS_LOG_INFO` line per dependency id in `[0, iMaxDid]`, read straight
+    /// out of `sEncoderStatistics[iDid]` — which `UpdateStatistics` (already ported)
+    /// has been filling all along, so this is a reader over live state and not a
+    /// second accounting of it.
+    ///
+    /// `uLTRSentNum=NA` is a literal in the reference: the field exists
+    /// (`uiLTRSentNum`) and the line does not print it.
+    pub fn LogStatistics(&mut self, kiCurrentFrameTs: i64, iMaxDid: i32) {
+        for iDid in 0..=iMaxDid {
+            // Copied out (`SEncoderStatistics` is `Copy`) so the context borrow ends
+            // before `log_ctx()` takes `&mut self` for the trace object beside it.
+            let Some(pStatistics) = self
+                .m_pEncContext
+                .as_deref()
+                .map(|pCtx| pCtx.sEncoderStatistics[iDid as usize])
+            else {
+                return;
+            };
+            WelsLog(
+                self.log_ctx(),
+                WELS_LOG_INFO,
+                &format!(
+                    "EncoderStatistics: SpatialId = {},{}x{}, SpeedInMs: {}, fAverageFrameRate={}, \
+LastFrameRate={}, LatestBitRate={}, LastFrameQP={}, uiInputFrameCount={}, uiSkippedFrameCount={}, \
+uiResolutionChangeTimes={}, uIDRReqNum={}, uIDRSentNum={}, uLTRSentNum=NA, iTotalEncodedBytes={} at Ts = {}",
+                    iDid,
+                    pStatistics.uiWidth,
+                    pStatistics.uiHeight,
+                    format!("{:.6}", pStatistics.fAverageFrameSpeedInMs),
+                    format!("{:.6}", pStatistics.fAverageFrameRate),
+                    format!("{:.6}", pStatistics.fLatestFrameRate),
+                    pStatistics.uiBitRate,
+                    pStatistics.uiAverageFrameQP,
+                    pStatistics.uiInputFrameCount,
+                    pStatistics.uiSkippedFrameCount,
+                    pStatistics.uiResolutionChangeTimes,
+                    pStatistics.uiIDRReqNum,
+                    pStatistics.uiIDRSentNum,
+                    pStatistics.iTotalEncodedBytes,
+                    kiCurrentFrameTs
+                ),
+            );
+        }
+    }
 
     // unsafe-cat: port-raw(Phase 9)
     #[allow(unsafe_code)]
@@ -2298,6 +2434,15 @@ impl CWelsH264SVCEncoder {
                 }
                 EncoderOption::ENCODER_OPTION_SVC_ENCODE_PARAM_EXT => {
                     let sEncodingParam = *(pOption as *const SEncParamExt);
+                    // **T9.X2 — the port's fourth `TraceParamInfo` call site, missing
+                    // until now.** `welsEncoderExt.cpp:796` logs the incoming block
+                    // here, immediately after the copy and *before* the spatial-layer
+                    // check below, so a caller whose parameters are about to be
+                    // rejected still gets them echoed. The port had the other three
+                    // (`:202`, `:229`, `:334`) and not this one; X2's brief lists only
+                    // those three, which is where the omission survived. It made no
+                    // observable difference while the body was empty. See F182.
+                    self.TraceParamInfo(&sEncodingParam);
                     // verify number of spatial layer
                     if sEncodingParam.iSpatialLayerNum < 1
                         || sEncodingParam.iSpatialLayerNum > MAX_SPATIAL_LAYER_NUM as i32
