@@ -519,6 +519,12 @@ pub unsafe extern "C" fn WelsRecPskip(
 /// `codec/encoder/core/src/svc_base_layer_md.cpp:1341`.
 #[inline(always)]
 // unsafe-cat: port-raw(Phase 9)
+// **S57 — dark, converts never (F117).** The copies below write the *current*
+// source picture (the brief that first read this had the direction backwards
+// against a dst-first typedef), and no gate runs the path:
+// `bEnableBackgroundDetection = false` in both diffharness drivers. T9.X confirmed
+// the allow is already item-level rather than module-wide, which is what "precise"
+// asked for; the census row keeps this note.
 #[allow(unsafe_code)]
 unsafe fn VaaBackgroundMbDataUpdate(
     pFunc: &SWelsFuncPtrList,
