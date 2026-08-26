@@ -91,6 +91,33 @@ before it. C and D are hazards a conversion **creates**: both are sound while th
 parent is a raw pointer, so no amount of pre-conversion Miri finds them, and the
 only instrument that does is this scan plus the post-conversion Miri step.
 
+**The negative calibration (S66, recorded by session H).** Every calibration
+below is a *positive* one — plant a known fault, watch the scanner fire — and
+S66 exists because a detector that fires on everything passes those perfectly.
+Two runs, both at H's step-0 commit:
+
+    $ python3 rust/tools/q1c.py --type SSlice --kind raw ; echo $?
+    q1c: FATAL — scanned 83 files under .../src and found no function taking a
+         `*mut SSlice` parameter.
+    q1c: that is 'nothing to find', not 'nothing found'. Check the spelling of
+         --type against the tree: grep -rn 'struct SSlice' .../src
+    2
+
+The slice family was flipped whole by session E2, so `*mut SSlice` is genuinely
+gone and the right answer is to refuse rather than to report zero. That is the
+**guard's** negative, and it is worth having — but note what it does *not* test:
+the scanner never ran. So a second one, over a family that exists:
+
+    $ python3 rust/tools/q1c.py --type SSlice --kind ref
+    80 function bodies (79 distinct names) take a `&mut SSlice` parameter
+    ...
+    1 hazardous sites in 1 callers, across 1 distinct ctx-taking callees.
+    80 of the 80 SSlice-taking bodies have no detected hazard at any call site.
+
+**80 bodies scanned, 1 site reported, 79 silent.** That is the discriminating
+negative: a scanner that fired on everything would report ~80 here, and this one
+reports one. Re-run both beside the positives below when either scanner changes.
+
 Both C and D are calibrated against the tree at `0bfc7687^` — the tree that
 carried F114's two live defects. Shape C reports exactly the four bodies F114a
 named (`WelsEncRecI4x4Y`, `WelsEncRecI16x16Y`, `WelsEncInterY`, `WelsEncRecUV`),

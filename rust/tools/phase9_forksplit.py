@@ -57,6 +57,41 @@ a data race with no gate behind it. Two known over-counts: a slot's *other*
 installee (only one `pfInterMd` runs per layer, both are pulled in), and helpers
 shared between a fork path and an init path.
 
+## Calibration
+
+**Positive (`--no-slots`, session E3).** Knock the dispatch-slot arm out and the
+in-fork column collapses from 111 to 27: the arms are 84 bodies, and a walker
+that had never been shown to move would not be evidence (S55).
+
+**Negative (S66, session H).** A detector that fires on everything passes a
+positive-only calibration perfectly, so the walker also has to be shown *silent
+where silence is the truth* — over a family that exists, not an empty one:
+
+    $ python3 rust/tools/phase9_forksplit.py --type SWelsSvcCodingParam
+    == IN-FORK ... : 0
+    == ST-FLIPPABLE ... : 26
+
+**26 bodies, 0 in-fork**, and the list is checkable by eye in one read — it is
+`WelsInitEncoderExt`, `ParamValidation`, `ParamValidationExt`, `CheckLevelSetting`,
+`CheckProfileSetting`, `WelsEncoderParamAdjust`, `InitializeInternal` and their
+neighbours: encoder setup and parameter validation, every one of which runs to
+completion before a worker exists. Zero is the right answer and the walker gives
+it. Contrast the same invocation one type over, which is the positive in the same
+breath: `--type SDqLayer` reads **38 in-fork / 2 ST**. Same tool, same command
+shape, opposite answers — that is what distinguishes "classifies" from "asserts".
+
+## What the ST column does NOT mean (F166, session H)
+
+The column is labelled "a root-down campaign can convert" and that is a
+**candidate list, not a work list**. Fork-unreachability is what makes a flip
+*permissible*; it is not what makes it *possible*. `ParasetStrategy`
+(`paraset_strategy.rs:937`) is ST here and must never be flipped: it returns
+`&'a mut` derived from the context with an unbound lifetime, and ten of its
+twenty call sites pass the context into the method while holding that reference —
+flipping it makes all ten `E0499`, and passing the argument raw does not rescue
+them. Before a stage flips an ST body that returns a pointer or a reference,
+check whether any caller passes the context alongside it.
+
 The seeds are structural, so a fork that stops being spawned from
 `slice_multi_threading.rs` silently shrinks the in-fork column. `--why` prints
 the path that reached a body, which is how a suspicious classification is read
