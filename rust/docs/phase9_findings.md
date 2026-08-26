@@ -2956,6 +2956,313 @@ Note also that "five of them inside types Phases 8 and 10 own" was already an
 undercount when the seam's comment was written, and the brief carried it forward.
 The measurement is eight not-G's, and the probe that settles it costs one build.
 
+## F165 — the brief's accessor inventory is bounded by a one-file grep, and the flip it stages is decided by a family 29% larger: 27 accessor bodies, 10 of them ST
+
+Session H's brief makes the accessor family the thing that decides the flip:
+
+> **The accessors decide the stages.** 21 `ctx_*` accessors
+> (`grep -c 'pub unsafe fn ctx_' src/encoder/encoder_context.rs`): **14 are
+> in-fork** … and **7 are ST bodies** (`ctx_mb_index_x/y`, `ctx_ltr`,
+> `ctx_ltr_at`, `ctx_frame_bs`, `ctx_frame_bs_cur`, `ctx_dq_idc_map`) …
+
+The grep is correct and its number is correct — for `encoder_context.rs`. The
+family is not in `encoder_context.rs`.
+
+```
+$ grep -c 'pub unsafe fn ctx_' src/encoder/encoder_context.rs      # the brief's grep
+21
+$ grep -rn 'pub unsafe fn ctx_' src/encoder/ | wc -l               # the relationship
+25
+```
+
+The four the file boundary hides are in `svc_encode_slice.rs`: `ctx_sps:849`,
+`ctx_pps:868`, `ctx_ref_pic:888`, `ctx_pic_ref:914` — and beside them live
+`current_layer:713` and `set_current_layer:746`, the same class of body (a
+cursor accessor on the context, `unsafe-cat: cursor`, minting a raw derivation
+from `*mut sWelsEncCtx`) under a name that does not begin with `ctx_`. The
+family is **27 bodies**, and the split the tool gives is **17 in-fork / 10 ST**,
+not 14 / 7:
+
+```
+$ python3 rust/tools/phase9_forksplit.py --list      # columns; both re-derived at HEAD
+ST accessors  (10): ctx_mb_index_x, ctx_mb_index_y, ctx_ltr, ctx_ltr_at,
+                    ctx_frame_bs, ctx_frame_bs_cur, ctx_dq_idc_map,
+                    ctx_sps, ctx_pps, set_current_layer
+in-fork       (17): the brief's 14, plus ctx_ref_pic, ctx_pic_ref, current_layer
+```
+
+**The brief's own crux sentence names a body its own inventory cannot see.**
+"`ctx_ltr_at` and `ctx_sps` are themselves ST bodies" is true of both; only
+`ctx_ltr_at` is in the 21.
+
+### Why the three missing ST accessors are not three more of the same
+
+Had the residue been three more direct field projections, this would be an
+arithmetic correction. It is not — each of the three is a shape the brief's
+model has no slot for.
+
+**1. `ctx_sps` and `ctx_pps` are chained accessors whose callee is in the other
+column.** `ctx_sps` resolves `iSps` against `ctx_sps_array(pCtx)`, and
+`ctx_sps_array` is **in-fork** — permanently raw under S63. So "the ST accessors
+dissolve into direct field paths" cannot be executed on these two: the field
+path runs *through* a body that is not allowed to take `&mut`. They dissolve
+into a field path plus a raw hop, or they stay. `ctx_pps`/`ctx_pps_array` is the
+same pair. 20 of the 90 ST-accessor call sites are these two.
+
+**2. `set_current_layer` is the writer of a getter/setter pair split across the
+columns.** `current_layer` is not merely in-fork — it is called *directly from a
+`thread::scope` spawn closure*:
+
+```
+$ python3 rust/tools/phase9_forksplit.py --why current_layer
+current_layer <- fork seed (thread::scope spawn)
+$ python3 rust/tools/phase9_forksplit.py --why set_current_layer
+set_current_layer is NOT fork-reachable
+```
+
+One field, `iCurDqLayer`; its only writer flips, its reader stays raw forever.
+The brief's two-bucket model ("7 dissolve, 14 stay raw") has no way to state
+that, and the flip has to: after `set_current_layer` becomes
+`ctx.iCurDqLayer = …`, `current_layer` still reads that field through
+`*mut sWelsEncCtx` from inside N workers. That read is a **seam question**
+(step 3's surface), not a flip question, and the brief's step 3 does not carry
+it because its step 2 could not see it.
+
+### The second consequence: the tag harvest is over-claimed by 16
+
+> `encoder_context.rs`'s 23 `cursor` tags fall with their accessors
+
+Of the 23, **7** sit on ST accessors and fall with the flip; **13** sit on the
+in-fork accessors S63 keeps raw permanently and cannot fall while the fork
+exists; **3** are in the test module. Measured by walking each tag to the item
+it precedes:
+
+```
+ST-accessor  7   ctx_mb_index_x, ctx_ltr, ctx_ltr_at, ctx_frame_bs,
+                 ctx_frame_bs_cur, ctx_dq_idc_map, ctx_mb_index_y
+in-fork     13   ctx_stride_dec/enc_block_offset, ctx_param, ctx_func_list,
+                 ctx_mvd_cost_table/origin, ctx_dq_layer, ctx_ref_list,
+                 ctx_rc, ctx_rc_at, ctx_sps_array, ctx_subset_array, ctx_pps_array
+test         3
+```
+
+The same error in both places, and it is one error: the accessor family was
+enumerated by a grep whose scope was a file.
+
+### The class
+
+This is **S64** exactly — "a grep bounds a spelling, not a relationship" — and it
+is the rule's fifth instance in three sessions (F149, F154, F155, F156 were the
+first four). S64's own remedy sentence is the one that was needed here: *"before
+scoping a family, enumerate every spelling of the type's reach … a brief that
+quotes one spelling is quoting a lower bound and says so."* The brief quoted a
+lower bound and did not say so; it presented `21` as the family and built both
+the stage plan and the harvest on it.
+
+The narrower lesson worth carrying to J: **`encoder_context.rs` is not where the
+context's accessors live, it is where most of them live** — and for a campaign
+whose staging is decided by accessor coexistence, "most" is the wrong instrument.
+Enumerate accessors by what they return from what they take
+(`grep -rn 'unsafe fn \w*(\w*: \*mut sWelsEncCtx' src/`), not by the file that
+usually holds them.
+
+## F166 — the ST column is a candidate list, not the flip list: `ParasetStrategy` is ST, and flipping it turns ten sound call sites into borrow errors
+
+`phase9_forksplit.py` names its second column *"ST-FLIPPABLE (a root-down
+campaign can convert)"*, and every brief since E2 has read it as the work list.
+S63 is careful about the other direction — an in-fork body **cannot** take `&mut`
+— and says nothing about this one, because at the time the question had not been
+asked. Asked now, the answer is no: **fork-unreachability is what makes a flip
+permissible, not what makes it possible.**
+
+One body in the 155 demonstrates it.
+
+```rust
+// paraset_strategy.rs:937 — unsafe-cat: cursor
+pub unsafe fn ParasetStrategy<'a>(
+    pCtx: *mut sWelsEncCtx,
+) -> &'a mut CWelsParametersetIdStrategyObj {
+    (*ctx_func_list(pCtx)).pParametersetStrategy.as_deref_mut().expect(…)
+}
+```
+
+`ParasetStrategy` is in the ST column (`--why`: not fork-reachable). It is also
+an accessor returning `&'a mut` with an **unbound** lifetime — its own doc says
+so: *"The unbound lifetime is the usual laundering this port does at a
+raw-pointer boundary."* Ten of its twenty call sites hold that reference across a
+second use of the context:
+
+```
+encoder_ext.rs:901   ParasetStrategy(*ppCtx).LoadPrevious(…  *ppCtx …)
+encoder_ext.rs:926   ParasetStrategy(*ppCtx).GenerateNewSps(…  *ppCtx …)
+encoder_ext.rs:951   ParasetStrategy(*ppCtx).InitPps(…  *ppCtx …)
+encoder_ext.rs:996   ParasetStrategy(*ppCtx).UpdateParaSetNum(*ppCtx)
+encoder_ext.rs:2705  ParasetStrategy(pCtx).UpdatePpsList(…  pCtx …)
+wels_encoder_ext.rs:499/520/566   ParasetStrategy(pCtx).Update(…  pCtx …)
+wels_encoder_ext.rs:562  ParasetStrategy(pCtx).UpdatePpsList(…  pCtx …)
+wels_encoder_ext.rs:856  ParasetStrategy(pCtx).OutputCurrentStructure(…  pCtx …)
+```
+
+Flip `ParasetStrategy` to `pCtx: &mut sWelsEncCtx` and the returned reference
+becomes a borrow **of** the context; all ten become E0499, and none has a local
+fix — the receiver and the argument are the same object by construction.
+
+**Verified, not predicted** (a standalone `rustc` model of the shape, run
+before this finding was written — S60; reproduced in `phase9_ctx_flip_plan.md`'s
+appendix). The raw form compiles; the flipped
+form is `error[E0499]: cannot borrow *ctx as mutable more than once at a time`.
+The case worth recording is the second one: **keeping the method's parameter raw
+does not rescue the site.** `strategy_ref(ctx).update_paraset_num(ctx as *mut Ctx)`
+is E0499 too — the coercion is itself a use of `ctx`, and two-phase borrows do
+not reach it because the receiver is a function's return value, not an autoref.
+So "pass it raw at the boundary", which is the remedy every other collision in
+this campaign takes, is exactly the remedy that fails here.
+
+**And the sites are sound today, for the F163 reason.** `pParametersetStrategy`
+is an `Option<Box<…>>`; `as_deref_mut()` lands in the *Box's* allocation, not the
+context's, so a `&mut sWelsEncCtx` entry retag never reaches it. The laundering
+here is not J's ghost — it is the same allocation argument that exempts
+`pParamD`. Flipping this body would convert ten sound sites into ten broken ones
+and buy nothing.
+
+So `ParasetStrategy` stays `*mut sWelsEncCtx` permanently, for a reason unrelated
+to the fork, and the flip list is **154**, not 155.
+
+**And keeping it raw is not damage control — it is what unblocks the ten sites.**
+With the accessor raw, the *methods* on the strategy object flip freely:
+`strategy_raw(ctx as *mut Ctx).output_current_structure(ctx)` compiles clean
+(appendix, `phase9_ctx_flip_plan.md`), because the receiver's lifetime is unbound and holds no
+borrow of `ctx`. That matters immediately: `OutputCurrentStructure` is itself one
+of the twelve depth-0 roots of the flip (`wels_encoder_ext.rs:856`), so stage A0
+walks straight into this shape. One body staying raw is what lets the ten sites —
+and the roots reached through them — flip at all.
+
+### The rule this wants
+
+An ST body must **also** stay raw when it returns a context-derived reference
+whose callers hold it across a use of the context, *and* the referent is in
+another allocation — because there the raw spelling is buying real coexistence,
+not hiding a hazard. The test is mechanical and worth running before each stage
+rather than discovering at `cargo build`: for every ST body returning a pointer
+or a reference, check whether any caller passes the context alongside it.
+
+Eleven ST bodies return a pointer or reference at HEAD. Nine are the ST
+accessors phase B dissolves (F165); `CreatePreProcess` returns a newly allocated
+object, not a context cursor; `ParasetStrategy` is the eleventh and the only one
+this catches. **One instance is enough to make the column's label wrong**, and a
+future family will have more — the phase-exit session should read
+`forksplit`'s second column as "may flip, subject to a borrow check", and the
+tool's own header should say it.
+
+## F167 — the flip's root stage kills a stored raw copy of the context, and the detector cannot see it because it is a struct field, not a binding
+
+`q1c.py` finds a hazard by looking for a **local binding** derived from the
+context and held across a call that retags it. The context has one derivation
+that is not a local binding and outlives every call:
+
+```
+$ # struct FIELDS whose type mentions sWelsEncCtx (brace-matched, all of src/)
+src/encoder/slice_multi_threading.rs:1236  struct SliceJobHandle    pCtx: *mut sWelsEncCtx
+src/encoder/wels_preprocess.rs:870         struct CWelsPreProcess   pub m_pEncCtx: *mut sWelsEncCtx
+src/encoder/wels_encoder_ext.rs:1678       struct CWelsH264SVCEncoder  pub m_pEncContext: Option<Box<sWelsEncCtx>>
+```
+
+The third is the **owner**. The first is the fork's job handle — minted inside
+the fork from the in-fork raw chain and dead at the join, and in-fork by
+construction (S63). **The second is a cached copy stored at encoder-init time and
+read for the whole life of the encoder**, and it is the one the flip breaks.
+
+### Why it is sound today, and exactly what makes it so
+
+`CreatePreProcess` stashes the pointer once (`wels_preprocess.rs:1001`,
+`m_pEncCtx: pEncCtx`) and five sites read it back to re-derive the context —
+`ctx_vaa(self.m_pEncCtx)` (1534, 2820), `(*self.m_pEncCtx).bCurFrameMarkedAsSceneLtr`
+(2528), `ctx_param(self.m_pEncCtx)` (2819), `let pCtx = self.m_pEncCtx` (2249).
+None of the five takes a context parameter; the field is their only route.
+
+Today that is fine, and it is fine **for one specific reason** — the root
+derivation is not a reference:
+
+```rust
+// wels_encoder_ext.rs:711 — T8.B5 (S42): "derived once, from the owner's `Box`."
+let mut pCtx: *mut sWelsEncCtx = match ppCtx.as_mut() {
+    Some(pEncContext) => std::ptr::addr_of_mut!(**pEncContext),
+    None => return 1,
+};
+```
+
+`addr_of_mut!` forms a raw place without an intermediate `&mut`. So `m_pEncCtx`
+and every other raw derivation are *siblings* under the `Box`'s tag, and siblings
+coexist. Nothing in the encoder ever mints a `&mut sWelsEncCtx` — the
+measurement is flat zero:
+
+```
+$ grep -rn ': &mut sWelsEncCtx' src/encoder | grep -v ':\s*//' | wc -l
+0
+```
+
+### What the flip does to it
+
+Stage A0 replaces that `addr_of_mut!` with a `&mut` at the root, because that is
+what "the roots take `&mut sWelsEncCtx`" means. The moment it does, a `Unique`
+sits at the top of the context allocation's borrow stack and every raw sibling
+derived earlier is popped — `m_pEncCtx` among them. The next
+`ctx_param(self.m_pEncCtx)` is then a use of a dead tag.
+
+**So the hazard is created by the flip, not inherited.** That is the unusual part
+and the reason it deserves a number: every other item in this campaign is a
+pre-existing hazard the flip *reveals*. This one is sound at HEAD, sound at the
+end of phase A for every body that does not touch the preprocessor, and unsound
+for exactly as long as stage A0 has landed and the remedy has not.
+
+### Reachability — latent today, and that is not a defence
+
+All five readers are screen-content paths (`GetBestRefPicScreen`,
+`DetectSceneChangeScreen`, `GetAvailableRefListLosslessScreenRefSelection`,
+`GetRefFrameInfo`), and `SCREEN_CONTENT` is dormant — which is why no probe has
+ever driven them. But the call is in the tree on a live edge:
+
+```
+ref_list_mgr_svc.rs:1464   in WelsBuildRefListScreen()   (ST-flippable, depth 8)
+    iLtrRefIdx = (*(*pCtx).pVpp).GetRefFrameInfo(…)
+```
+
+`WelsBuildRefListScreen` is one of the 155. After its stage it holds
+`&mut sWelsEncCtx` and calls a method whose only route to the context is the dead
+field. A dormant path is a path a gate does not cover, so this would land green
+and stay green until someone enabled screen content.
+
+### The remedy, and why it is stage A0's and not a later stage's
+
+Three options, in the order they were considered:
+
+1. **Re-stamp the field** at each entry to the frame loop
+   (`self.m_pEncCtx = ctx as *mut _`), making it a fresh child of the live
+   `&mut`. Cheapest, and it is the port's existing "re-derive per use" idiom
+   (F71/S40) — but it leaves a raw alias of a `&mut`-governed object in a field,
+   which is the shape this phase is retiring.
+2. **Pass the context** to the five readers and delete the field. Correct, and
+   the largest edit: four of the five are methods reached from
+   `wels_preprocess.rs`-internal call chains that would each grow a parameter.
+3. **Keep the root raw** and flip only below it — abandons the flip's own premise.
+
+**(2) is the right end state and (1) is the right stage-A0 move**, because the
+field must stop being a dangling tag in the same commit that mints the first
+`&mut`, and (2) is a bigger change than a root stage should carry. Recorded so
+the two commits are visibly one decision: A0 re-stamps, and a named later stage
+deletes the field. If A0 lands without either, phase A is unsound from that
+commit forward on a path no gate drives.
+
+### Owed verification
+
+The Stacked Borrows reasoning above is argued, not run — the fork pair was
+holding the machine and a second Miri process would have corrupted its wall-time
+(S20, one battery at a time). **A probe that drives the preprocessor's cached
+read with a live `&mut sWelsEncCtx` is owed before stage A0 is called green**,
+and its expected first verdict is stated here so it can be checked rather than
+interpreted (D-gate/S60's C2 clause): *"use of a dead tag / attempting a read
+access with tag … but that tag does not exist in the borrow stack"* against the
+context's allocation, at `ctx_param` inside `GetRefFrameInfo`.
 ## F168 — E8's fork-probe numbers were parallel, not serial; the brief doubled the pair's cost by re-running it the wrong way, and G's stopped pair was about a minute from green
 
 Session H's brief charters step 0a like this:
