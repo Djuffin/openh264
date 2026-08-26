@@ -2650,10 +2650,13 @@ uiResolutionChangeTimes={}, uIDRReqNum={}, uIDRSentNum={}, uLTRSentNum=NA, iTota
                     // context in this arm, so there is nothing to re-derive.
                 }
                 EncoderOption::ENCODER_OPTION_CURRENT_PATH => {
-                    if !ctx_param(pCtx).is_null() {
-                        let path = pOption as *mut c_char;
-                        (*ctx_param(pCtx)).pCurPath = path;
-                    }
+                    // **D-dead-7** (the user, 2026-08-26, from F183). This arm stored
+                    // `pOption` into `pSvcParam->pCurPath`, exactly as
+                    // `welsEncoderExt.cpp:1076` does — and nothing in either tree ever
+                    // read the field. The field is gone; the option id keeps returning
+                    // success and now does nothing, which is observably identical to
+                    // storing into storage no one reads. Same shape as
+                    // `ENCODER_OPTION_DUMP_FILE` below.
                 }
                 EncoderOption::ENCODER_OPTION_DUMP_FILE => {
                     // The whole body is `#ifdef ENABLE_FRAME_DUMP` in C++, and

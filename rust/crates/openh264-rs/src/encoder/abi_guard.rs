@@ -276,7 +276,17 @@ assert_size!(SComplexityAnalysisScreenParam, 72);
 
 // Mid-tier types.
 assert_size!(SSpatialLayerInternal, 68);
-assert_size!(SWelsSvcCodingParam, 1240);
+// **1240 -> 1232 at H2, and this one is a deliberate divergence from the C++ rather
+// than a port shape.** **D-dead-7** (the user, 2026-08-26, from F183) deleted
+// `pCurPath` (`param_svc.h:118`), an 8-byte `char*` with three writes and **no reader
+// in either tree** — upstream declares it, nulls it and stores to it and never reads
+// it anywhere in `codec/`. So `SWelsSvcCodingParam` is now one field short of its C++
+// counterpart, on purpose, and this pin is where that is recorded: it is the file's
+// only intentional field-count divergence. Every other pin here still means "the
+// translation is field for field". Nothing outside the crate reads this layout (see
+// the module note) — the struct is `param_svc.h`'s internal one, not
+// `codec_app_def.h`'s `SEncParamExt`, which is untouched.
+assert_size!(SWelsSvcCodingParam, 1232);
 
 
 // **360 in the C++, and 440 is the port's own number since T6.H6** — the third pin
