@@ -1357,8 +1357,11 @@ pub unsafe fn WelsMdPSkipEnc(
 
     let mut iEncStride = (*pCurLayer).iEncStride[0];
     let mut pEncMb = (*pMbCache).SPicData.pEncMb[0];
+    // T9.H2: `&sWelsEncCtx`. The layer id is read through the same raw beside it —
+    // both are shared reads, so the argument and the borrow coexist by construction
+    // rather than by the hoist T9.G6 needed when the callee took a `&mut`.
     let pStrideEncBlockOffset = crate::encoder::encoder_context::ctx_stride_enc_block_offset(
-        pEncCtx,
+        &*pEncCtx,
         (*pEncCtx).uiDependencyId as usize,
     );
     let mut pEncBlockOffset: *const i32;
