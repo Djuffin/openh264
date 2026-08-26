@@ -1613,13 +1613,15 @@ pub unsafe fn WelsInitBGDFunc(
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe fn InitFunctionPointers(
-    pEncCtx: *mut sWelsEncCtx,
+    pEncCtx: &mut sWelsEncCtx,
     pParam: *mut SWelsSvcCodingParam,
     _uiCpuFlag: u32,
 ) -> i32 {
     // A third arm testing the table for null was here; T6.I1 made it an owned
     // `Box`, so there is no null to test.
-    if pEncCtx.is_null() || pParam.is_null() {
+    // T9.H: the `pEncCtx.is_null()` disjunct is gone — a `&mut sWelsEncCtx`
+    // cannot be null and every caller now holds one. The rest is unchanged.
+    if pParam.is_null() {
         return ENC_RETURN_SUCCESS;
     }
     // **T6.I2.** One `&mut` for the whole function, derived from the owner once —

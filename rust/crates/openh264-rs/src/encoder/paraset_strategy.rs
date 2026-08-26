@@ -270,7 +270,7 @@ impl CWelsParametersetIdStrategyObj {
         &mut self,
         pParaSetOffsetVariable: *mut SParaSetOffsetVariable,
         pPpsIdList: *mut i32,
-        pCtx: *mut sWelsEncCtx,
+        pCtx: &mut sWelsEncCtx,
         pExistingParasetList: *mut SExistingParasetList,
     ) {
         if !self.eIdKind.is_non_constant() {
@@ -289,7 +289,9 @@ impl CWelsParametersetIdStrategyObj {
             PARA_SET_TYPE,
         );
 
-        if !self.eIdKind.is_listing() || pExistingParasetList.is_null() || pCtx.is_null() {
+        // T9.H8: the trailing `|| pCtx.is_null()` is gone — a `&mut sWelsEncCtx`
+        // cannot be null. The listing and paraset-list conditions are unchanged.
+        if !self.eIdKind.is_listing() || pExistingParasetList.is_null() {
             return;
         }
         // `CWelsParametersetSpsListing::OutputCurrentStructure` — `:519`.
@@ -629,7 +631,7 @@ impl CWelsParametersetIdStrategyObj {
     #[allow(unsafe_code)]
     pub unsafe fn GenerateNewSps(
         &mut self,
-        pCtx: *mut sWelsEncCtx,
+        pCtx: &mut sWelsEncCtx,
         kbUseSubsetSps: bool,
         iDlayerIndex: i32,
         iDlayerCount: i32,
@@ -716,7 +718,7 @@ impl CWelsParametersetIdStrategyObj {
     #[allow(unsafe_code)]
     pub unsafe fn InitPps(
         &mut self,
-        pCtx: *mut sWelsEncCtx,
+        pCtx: &mut sWelsEncCtx,
         _kiSpsId: u32,
         pSps: Option<&SWelsSPS>,
         pSubsetSps: Option<&SSubsetSps>,
@@ -778,14 +780,16 @@ impl CWelsParametersetIdStrategyObj {
     /// On a listing kind, `pCtx` must be a live encoder context.
     // unsafe-cat: port-raw(Phase 9)
     #[allow(unsafe_code)]
-    pub unsafe fn UpdateParaSetNum(&mut self, pCtx: *mut sWelsEncCtx) {
-        if !self.eIdKind.is_listing() || pCtx.is_null() {
+    pub unsafe fn UpdateParaSetNum(&mut self, pCtx: &mut sWelsEncCtx) {
+        // T9.H8: the trailing `|| pCtx.is_null()` is gone — a `&mut sWelsEncCtx`
+        // cannot be null. The listing condition is unchanged.
+        if !self.eIdKind.is_listing() {
             return;
         }
-        (*pCtx).iSpsNum = self.m_sParaSetOffset.uiInUseSpsNum as i32;
-        (*pCtx).iSubsetSpsNum = self.m_sParaSetOffset.uiInUseSubsetSpsNum as i32;
+        pCtx.iSpsNum = self.m_sParaSetOffset.uiInUseSpsNum as i32;
+        pCtx.iSubsetSpsNum = self.m_sParaSetOffset.uiInUseSubsetSpsNum as i32;
         if self.eIdKind == ParasetIdKind::SpsPpsListing {
-            (*pCtx).iPpsNum = self.m_sParaSetOffset.uiInUsePpsNum as i32;
+            pCtx.iPpsNum = self.m_sParaSetOffset.uiInUsePpsNum as i32;
         }
     }
 

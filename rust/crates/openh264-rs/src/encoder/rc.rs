@@ -2513,8 +2513,8 @@ pub unsafe extern "C" fn WelRcPictureInitBufferBasedQp(
 
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
-pub unsafe extern "C" fn WelRcPictureInitScc(pEncCtx: *mut sWelsEncCtx, uiTimeStamp: i64) {
-    let did = (*pEncCtx).uiDependencyId as usize;
+pub unsafe extern "C" fn WelRcPictureInitScc(pEncCtx: &mut sWelsEncCtx, uiTimeStamp: i64) {
+    let did = pEncCtx.uiDependencyId as usize;
     let pWelsSvcRc = ctx_rc_at(pEncCtx, did);
     let pVaa = ctx_vaa(pEncCtx) as *mut SVAAFrameInfoExt;
     let pDLayerConfig = &(*ctx_param(pEncCtx)).sSpatialLayers[did];
@@ -2524,14 +2524,14 @@ pub unsafe extern "C" fn WelRcPictureInitScc(pEncCtx: *mut sWelsEncCtx, uiTimeSt
     let iBitRate = pDLayerConfig.iSpatialBitrate;
 
     let mut iBaseQp = (*pWelsSvcRc).iBaseQp;
-    (*pEncCtx).iGlobalQp = iBaseQp;
+    pEncCtx.iGlobalQp = iBaseQp;
 
-    if (*pEncCtx).eSliceType as i32 == I_SLICE {
+    if pEncCtx.eSliceType as i32 == I_SLICE {
         let mut iTargetBits = (iBitRate as i64 * 2) - (*pWelsSvcRc).iBufferFullnessSkip;
         iTargetBits = WELS_MAX(1, iTargetBits);
         let iQstep = WELS_DIV_ROUND64(iFrameCplx * (*pWelsSvcRc).iCost2BitsIntra, iTargetBits) as i32;
         let iQp = RcConvertQStep2Qp(iQstep);
-        (*pEncCtx).iGlobalQp = WELS_CLIP3(iQp, (*pWelsSvcRc).iMinQp, (*pWelsSvcRc).iMaxQp);
+        pEncCtx.iGlobalQp = WELS_CLIP3(iQp, (*pWelsSvcRc).iMinQp, (*pWelsSvcRc).iMaxQp);
     } else {
         let iTargetBits = if pDLayerParamInternal.fOutputFrameRate > 0.0 {
             WELS_ROUND(iBitRate as f64 / pDLayerParamInternal.fOutputFrameRate as f64) as i64
@@ -2558,10 +2558,10 @@ pub unsafe extern "C" fn WelRcPictureInitScc(pEncCtx: *mut sWelsEncCtx, uiTimeSt
             iBaseQp -= 1;
         }
         iBaseQp = WELS_CLIP3(iBaseQp, (*pWelsSvcRc).iMinQp, (*pWelsSvcRc).iMaxQp);
-        (*pEncCtx).iGlobalQp = iBaseQp;
+        pEncCtx.iGlobalQp = iBaseQp;
 
         if iDeltaQp < -6 {
-            (*pEncCtx).iGlobalQp = WELS_CLIP3(
+            pEncCtx.iGlobalQp = WELS_CLIP3(
                 (*pWelsSvcRc).iBaseQp - 6,
                 (*pWelsSvcRc).iMinQp,
                 (*pWelsSvcRc).iMaxQp,
@@ -2574,7 +2574,7 @@ pub unsafe extern "C" fn WelRcPictureInitScc(pEncCtx: *mut sWelsEncCtx, uiTimeSt
                 || (*pWelsSvcRc).iBufferFullnessSkip > 2 * iBitRate as i64
                 || iDeltaQp > 10
             {
-                (*pEncCtx).iGlobalQp = WELS_CLIP3(
+                pEncCtx.iGlobalQp = WELS_CLIP3(
                     (*pWelsSvcRc).iBaseQp + iDeltaQp,
                     (*pWelsSvcRc).iMinQp,
                     (*pWelsSvcRc).iMaxQp,
@@ -2582,7 +2582,7 @@ pub unsafe extern "C" fn WelRcPictureInitScc(pEncCtx: *mut sWelsEncCtx, uiTimeSt
             } else if scene_change as i32 == MEDIUM_CHANGED_SCENE
                 || (*pWelsSvcRc).iBufferFullnessSkip > iBitRate as i64
             {
-                (*pEncCtx).iGlobalQp = WELS_CLIP3(
+                pEncCtx.iGlobalQp = WELS_CLIP3(
                     (*pWelsSvcRc).iBaseQp + 5,
                     (*pWelsSvcRc).iMinQp,
                     (*pWelsSvcRc).iMaxQp,
@@ -2591,7 +2591,7 @@ pub unsafe extern "C" fn WelRcPictureInitScc(pEncCtx: *mut sWelsEncCtx, uiTimeSt
         }
         (*pWelsSvcRc).iBaseQp = iBaseQp;
     }
-    (*pWelsSvcRc).iAverageFrameQp = (*pEncCtx).iGlobalQp;
+    (*pWelsSvcRc).iAverageFrameQp = pEncCtx.iGlobalQp;
     (*pWelsSvcRc).uiLastTimeStamp = uiTimeStamp;
 }
 
@@ -2605,14 +2605,14 @@ pub unsafe fn WelsRcDropFrameUpdate(pEncCtx: *mut sWelsEncCtx, iDropSize: u32) {
 
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
-pub unsafe extern "C" fn WelsRcPictureInfoUpdateScc(pEncCtx: *mut sWelsEncCtx, iNalSize: i32) {
-    let did = (*pEncCtx).uiDependencyId as usize;
+pub unsafe extern "C" fn WelsRcPictureInfoUpdateScc(pEncCtx: &mut sWelsEncCtx, iNalSize: i32) {
+    let did = pEncCtx.uiDependencyId as usize;
     let pWelsSvcRc = ctx_rc_at(pEncCtx, did);
     let iFrameBits = iNalSize << 3;
     (*pWelsSvcRc).iBufferFullnessSkip += iFrameBits as i64;
 
     let pVaa = ctx_vaa(pEncCtx) as *mut SVAAFrameInfoExt;
-    let iQstep = RcConvertQp2QStep((*pEncCtx).iGlobalQp);
+    let iQstep = RcConvertQp2QStep(pEncCtx.iGlobalQp);
     let screen_cmplx = (*pVaa).sComplexityScreenParam.iFrameComplexity;
     let iCost2Bits = if screen_cmplx != 0 {
         WELS_DIV_ROUND64(iFrameBits as i64 * iQstep as i64, screen_cmplx)
@@ -2620,7 +2620,7 @@ pub unsafe extern "C" fn WelsRcPictureInfoUpdateScc(pEncCtx: *mut sWelsEncCtx, i
         0
     };
 
-    if (*pEncCtx).eSliceType as i32 == P_SLICE {
+    if pEncCtx.eSliceType as i32 == P_SLICE {
         (*pWelsSvcRc).iAvgCost2Bits = WELS_DIV_ROUND64(
             95 * (*pWelsSvcRc).iAvgCost2Bits + 5 * iCost2Bits,
             INT_MULTIPLY as i64,
@@ -2636,11 +2636,11 @@ pub unsafe extern "C" fn WelsRcPictureInfoUpdateScc(pEncCtx: *mut sWelsEncCtx, i
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsRcMbInitScc(
-    pEncCtx: *mut sWelsEncCtx,
+    pEncCtx: &mut sWelsEncCtx,
     pCurMb: &mut SMB,
     _pSlice: &mut SSlice,
 ) {
-    (*pCurMb).uiLumaQp = (*pEncCtx).iGlobalQp as u8;
+    (*pCurMb).uiLumaQp = pEncCtx.iGlobalQp as u8;
     let offset = (*ctx_pps(pEncCtx)).uiChromaQpIndexOffset as i32;
     (*pCurMb).uiChromaQp = g_kuiChromaQpTable[CLIP3_QP_0_51((*pCurMb).uiLumaQp as i32 + offset)];
 }
@@ -2746,11 +2746,13 @@ pub unsafe fn WelsRcInitFuncPointers(pRcf: &mut SWelsRcFunc, iRcMode: RCMode) {
 /// Top-level initialization entry point called during encoder creation.
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
-pub unsafe fn WelsRcInitModule(pEncCtx: *mut sWelsEncCtx, iRcMode: RCMode) {
+pub unsafe fn WelsRcInitModule(pEncCtx: &mut sWelsEncCtx, iRcMode: RCMode) {
     // T6.I1: the `&& !pFuncList.is_null()` arm went with the raw table.
-    if !pEncCtx.is_null() {
-        WelsRcInitFuncPointers(&mut (*ctx_func_list(pEncCtx)).pfRc, iRcMode);
-    }
+    // T9.H8: and the `!pEncCtx.is_null()` arm goes with the flip — a
+    // `&mut sWelsEncCtx` cannot be null, so the condition was always true and the
+    // install is unconditional. Both arms of the original guard are now gone for
+    // the same reason: the thing each tested has a type that cannot express it.
+    WelsRcInitFuncPointers(&mut (*ctx_func_list(pEncCtx)).pfRc, iRcMode);
     RcInitSequenceParameter(pEncCtx);
 }
 
