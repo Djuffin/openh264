@@ -33,6 +33,9 @@ use crate::encoder::wels_encoder_ext::{
     MAX_REFERENCE_PICTURE_COUNT_NUM_SCREEN, MIN_REF_PIC_COUNT, LEVEL_NUMBER,
 };
 use crate::encoder::param_svc::UNSPECIFIED_BIT_RATE;
+// T9.X2 (F181): the two reference-limitation helpers below log through the context
+// they are handed, which is what makes that parameter live rather than dead.
+use crate::common::wels_trace::{WELS_LOG_ERROR, WELS_LOG_INFO, WELS_LOG_WARNING, WelsLog};
 
 /// `CpbBrNalFactor` — codec/common/inc/wels_common_defs.h:61.
 /// Baseline, main and extended profiles.
@@ -157,16 +160,40 @@ fn level_idc_from_raw(uiLevelIdc: u8) -> ELevelIdc {
 ///
 /// Declared in au_set.h, defined in encoder_ext.cpp; kept here with the rest of
 /// the parameter-set helpers.
+///
+/// **T9.X2 — the log context was not dead, the six `WelsLog` calls were missing.**
+/// The parameter stood here as `_pLogCtx` and X2's brief read that underscore as
+/// evidence of a dead parameter, to be deleted under S54. The reference disagrees:
+/// `encoder_ext.cpp:74-127` logs **six** times through it — one ERROR on an invalid
+/// bitrate, two INFO and one WARNING while it rewrites `iMaxSpatialBitrate` against
+/// the level table, and an INFO/ERROR pair on the max-vs-target comparison. Every
+/// one of those describes a parameter this function silently *changes*, so dropping
+/// them cost the caller the only account of why its settings moved. They are
+/// restored below and the parameter is live.
+///
+/// This is F177's rule reaching a parameter rather than a field: an unused name is
+/// evidence about *this* tree only, and the reference is where you find out whether
+/// it was ever supposed to be used. See F181.
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe fn WelsBitRateVerification(
-    _pLogCtx: *mut SLogContext,
+    pLogCtx: *mut SLogContext,
     pLayerParam: *mut SSpatialLayerConfig,
-    _iLayerId: i32,
+    iLayerId: i32,
 ) -> i32 {
     if (*pLayerParam).iSpatialBitrate <= 0
         || ((*pLayerParam).iSpatialBitrate as f32) < (*pLayerParam).fFrameRate
     {
+        WelsLog(
+            pLogCtx,
+            WELS_LOG_ERROR,
+            &format!(
+                "Invalid bitrate settings in layer {}, bitrate= {} at FrameRate({:.6})",
+                iLayerId,
+                (*pLayerParam).iSpatialBitrate,
+                (*pLayerParam).fFrameRate
+            ),
+        );
         return ENC_RETURN_UNSUPPORTED_PARA;
     }
 
@@ -186,21 +213,74 @@ pub unsafe fn WelsBitRateVerification(
             || (*pLayerParam).iMaxSpatialBitrate > iLevel52MaxBitrate
         {
             (*pLayerParam).iMaxSpatialBitrate = iLevelMaxBitrate;
+            WelsLog(
+                pLogCtx,
+                WELS_LOG_INFO,
+                &format!(
+                    "Current MaxSpatialBitrate is invalid (UNSPECIFIED_BIT_RATE or larger than LEVEL5_2) but level setting is valid, set iMaxSpatialBitrate to {} from level ({})",
+                    (*pLayerParam).iMaxSpatialBitrate,
+                    (*pLayerParam).uiLevelIdc as i32
+                ),
+            );
         } else if (*pLayerParam).iMaxSpatialBitrate > iLevelMaxBitrate {
+            // The reference reads the level id into `iCurLevel` *before* the adjust
+            // and prints both; `WelsAdjustLevel` is what moves it.
+            let iCurLevel = (*pLayerParam).uiLevelIdc;
             WelsAdjustLevel(&mut *pLayerParam, iCurLevelIdx);
+            WelsLog(
+                pLogCtx,
+                WELS_LOG_INFO,
+                &format!(
+                    "LevelIdc is changed from ({}) to ({}) according to the iMaxSpatialBitrate({})",
+                    iCurLevel as i32,
+                    (*pLayerParam).uiLevelIdc as i32,
+                    (*pLayerParam).iMaxSpatialBitrate
+                ),
+            );
         }
     } else if (*pLayerParam).iMaxSpatialBitrate != UNSPECIFIED_BIT_RATE
         && (*pLayerParam).iMaxSpatialBitrate > iLevel52MaxBitrate
     {
         // no level limitation, only guard against an unreasonably large max
+        WelsLog(
+            pLogCtx,
+            WELS_LOG_WARNING,
+            &format!(
+                "No LevelIdc setting and iMaxSpatialBitrate ({}) is considered too big to be valid, changed to UNSPECIFIED_BIT_RATE",
+                (*pLayerParam).iMaxSpatialBitrate
+            ),
+        );
         (*pLayerParam).iMaxSpatialBitrate = UNSPECIFIED_BIT_RATE;
     }
 
     // deal with iSpatialBitrate and iMaxSpatialBitrate setting
-    if (*pLayerParam).iMaxSpatialBitrate != UNSPECIFIED_BIT_RATE
-        && (*pLayerParam).iMaxSpatialBitrate < (*pLayerParam).iSpatialBitrate
-    {
-        return ENC_RETURN_UNSUPPORTED_PARA;
+    //
+    // The reference splits this into an `==` arm that only logs and a `<` arm that
+    // logs and fails; the port had collapsed them to the failing comparison alone,
+    // which is the same program and one message short of the same encoder.
+    if (*pLayerParam).iMaxSpatialBitrate != UNSPECIFIED_BIT_RATE {
+        if (*pLayerParam).iMaxSpatialBitrate == (*pLayerParam).iSpatialBitrate {
+            WelsLog(
+                pLogCtx,
+                WELS_LOG_INFO,
+                &format!(
+                    "Setting MaxSpatialBitrate ({}) the same at SpatialBitrate ({}) will make the actual bit rate lower than SpatialBitrate",
+                    (*pLayerParam).iMaxSpatialBitrate,
+                    (*pLayerParam).iSpatialBitrate
+                ),
+            );
+        } else if (*pLayerParam).iMaxSpatialBitrate < (*pLayerParam).iSpatialBitrate {
+            WelsLog(
+                pLogCtx,
+                WELS_LOG_ERROR,
+                &format!(
+                    "MaxSpatialBitrate ({}) should be larger than SpatialBitrate ({}), considering it as error setting",
+                    (*pLayerParam).iMaxSpatialBitrate,
+                    (*pLayerParam).iSpatialBitrate
+                ),
+            );
+            return ENC_RETURN_UNSUPPORTED_PARA;
+        }
     }
     ENC_RETURN_SUCCESS
 }
@@ -210,10 +290,16 @@ pub unsafe fn WelsBitRateVerification(
 /// Reconciles `iLTRRefNum` / `iNumRefFrame` / `iMaxNumRefFrame` against the GOP
 /// size and LTR settings. With `bStrictCheck` an under-sized `iNumRefFrame` is an
 /// error; otherwise it is corrected in place.
+///
+/// **T9.X2 — two `WelsLog` calls restored, and the parameter with them** (see
+/// [`WelsBitRateVerification`] for the general point). `au_set.cpp:88-133` warns
+/// when it resets `iLTRRefNum` and again when it resets `iNumRefFrame`; both
+/// describe a silent rewrite of a caller's setting, and the second fires on the
+/// strict path too — the reference logs *before* it decides whether to fail.
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe fn WelsCheckNumRefSetting(
-    _pLogCtx: *mut SLogContext,
+    pLogCtx: *mut SLogContext,
     pParam: *mut SWelsSvcCodingParam,
     bStrictCheck: bool,
 ) -> i32 {
@@ -224,6 +310,15 @@ pub unsafe fn WelsCheckNumRefSetting(
         LONG_TERM_REF_NUM_SCREEN
     };
     if (*pParam).bEnableLongTermReference && iCurrentSupportedLtrNum != (*pParam).iLTRRefNum {
+        WelsLog(
+            pLogCtx,
+            WELS_LOG_WARNING,
+            &format!(
+                "iLTRRefNum({}) does not equal to currently supported {}, will be reset",
+                (*pParam).iLTRRefNum,
+                iCurrentSupportedLtrNum
+            ),
+        );
         (*pParam).iLTRRefNum = iCurrentSupportedLtrNum;
     } else if !(*pParam).bEnableLongTermReference {
         (*pParam).iLTRRefNum = 0;
@@ -259,6 +354,17 @@ pub unsafe fn WelsCheckNumRefSetting(
     if (*pParam).iNumRefFrame == AUTO_REF_PIC_COUNT {
         (*pParam).iNumRefFrame = iNeededRefNum;
     } else if (*pParam).iNumRefFrame < iNeededRefNum {
+        // Logged before the strict-check return, as in the reference: a caller that
+        // gets ENC_RETURN_UNSUPPORTED_PARA out of this still learns why.
+        WelsLog(
+            pLogCtx,
+            WELS_LOG_WARNING,
+            &format!(
+                "iNumRefFrame({}) setting does not support the temporal and LTR setting, will be reset to {}",
+                (*pParam).iNumRefFrame,
+                iNeededRefNum
+            ),
+        );
         if bStrictCheck {
             return ENC_RETURN_UNSUPPORTED_PARA;
         }

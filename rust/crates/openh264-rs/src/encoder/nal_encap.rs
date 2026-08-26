@@ -332,13 +332,19 @@ pub unsafe extern "C" fn WelsLoadNal(
 // unsafe-cat: port-raw(Phase 9)
 // **T9.X — this is not a C-ABI boundary, and the tag stays `port-raw`.** The brief
 // calls it one of "the two `unsafe extern \"C\"` unload fns ... lawful remainder".
-// It carries no export attribute, it is installed into no dispatch slot, and its five
-// callers are all Rust (`encoder_ext.rs:2254`, `:2263`, `:2318`, `:3161`, `:3606`).
-// The `extern "C"` is a vestigial calling convention from the raw translation, not
-// an ABI crossing, so the parameter is convertible work rather than remainder — it
-// is X2's, along with the rest of this file.
+// It carries no export attribute and is installed into no dispatch slot, so the
+// calling convention was a vestige of the raw translation rather than an ABI
+// crossing. **T9.X2 dropped the `extern "C"` on that evidence** — and re-ran the
+// enumeration first, because X's own count was short.
+//
+// X recorded "five callers ... `encoder_ext.rs:2254`, `:2263`, `:2318`, `:3161`,
+// `:3606`". There are **nine**, and X's list misses four of them:
+// `encoder_ext.rs:3814` and `wels_encoder_ext.rs:404`, `:442`, `:541`. The verdict
+// is unchanged — all nine are ordinary Rust calls, which is the whole question —
+// but a conclusion carried by an enumeration is only as good as the enumeration,
+// and the second file was never grepped. S64, on its own evidence. See F180.
 #[allow(unsafe_code)]
-pub unsafe extern "C" fn WelsUnloadNal(pEncoderOuput: *mut SWelsEncoderOutput) {
+pub unsafe fn WelsUnloadNal(pEncoderOuput: *mut SWelsEncoderOutput) {
     if pEncoderOuput.is_null() || (*pEncoderOuput).sNalList.is_empty() {
         return;
     }

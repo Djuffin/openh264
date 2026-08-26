@@ -549,43 +549,21 @@ pub fn WriteRunBefore(
 // CAVLC Parameter Extraction and Block Residual Serialization
 // ============================================================================
 
-/// C-reference parameter extraction kernel for CAVLC.
-/// Scans quantized coefficients in reverse zigzag order, isolating non-zero levels and zero runs.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe extern "C" fn CavlcParamCal_c(
-    pCoffLevel: *const i16,
-    pRun: *mut u8,
-    pLevel: *mut i16,
-    pTotalCoeff: *mut i32,
-    mut iLastIndex: i32,
-) -> i32 {
-    unsafe {
-        let mut iTotalZeros = 0i32;
-        let mut iTotalCoeffs = 0i32;
-
-        while iLastIndex >= 0 && *pCoffLevel.add(iLastIndex as usize) == 0 {
-            iLastIndex -= 1;
-        }
-
-        while iLastIndex >= 0 {
-            let mut iCountZero = 0i32;
-            *pLevel.add(iTotalCoeffs as usize) = *pCoffLevel.add(iLastIndex as usize);
-            iLastIndex -= 1;
-
-            while iLastIndex >= 0 && *pCoffLevel.add(iLastIndex as usize) == 0 {
-                iCountZero += 1;
-                iLastIndex -= 1;
-            }
-            iTotalZeros += iCountZero;
-            *pRun.add(iTotalCoeffs as usize) = iCountZero as u8;
-            iTotalCoeffs += 1;
-        }
-
-        *pTotalCoeff = iTotalCoeffs;
-        iTotalZeros
-    }
-}
+// `CavlcParamCal_c` is deliberately NOT defined here either — **T9.X2 deleted a
+// second dead copy, the exact trap the paragraph below records.** The live kernel
+// is `svc_set_mb_syn_cavlc.rs:209`: it is the one `encoder_context.rs:1729`
+// installs into `pfCavlcParamCal`, the one the dispatch fallback at
+// `svc_set_mb_syn_cavlc.rs:265` names, and the one the in-module test at `:1206`
+// calls. Nothing anywhere named this file's copy — `svc_set_mb_syn_cavlc.rs`'s
+// `pub use` from here (`:167`) re-exports the five `Bs*` writers and not this.
+//
+// The two were **not** textually identical, which is why a dead copy is worse than
+// a redundant one: this one took `pCoffLevel` as a const-qualified pointer where
+// the live one takes a mutable one, and counted its zero run in an `i32` where the
+// live one uses a `u8`. Neither difference can bite at 16 coefficients, and that is
+// the point — the copy could have drifted somewhere that did bite and no gate in
+// this repo would have said a word, because no gate runs code with no callers.
+// F2's four-copy inventory is the standing record of the class.
 
 // `WriteBlockResidualCavlc` is deliberately NOT defined here. The live
 // definition is svc_set_mb_syn_cavlc.rs:299, where all ten call sites resolve
