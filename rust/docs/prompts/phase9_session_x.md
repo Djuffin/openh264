@@ -130,30 +130,140 @@ a dormant path shares, never its behavior; no perf (D-gate-1).
 
 ## Steps
 
-0. **D-dead-5** (one commit, byte-neutral, both trees' read greps).
-1. **Ref-lists + LTR** (`ref_list_mgr_svc.rs`, F86 inside — its proof or its
-   ruling before the file's conversions land).
-2. **Rate control** (`rc.rs` — the biggest unsafe-fn count; its 10 in-fork
-   bodies keep their read shape, S63).
-3. **Preprocess + VAA** (`wels_preprocess.rs`, `vaacalc.rs`,
-   `background_detection.rs`, `complexity_analysis.rs`,
-   `adaptive_quantization.rs`, `scene_change_detection.rs`): `SPixMap`'s views,
-   F151's kernel retired, F164's four members, F117's precise allows +
-   `copy_mb.rs` deny. Planted fault once per new conversion shape
-   (S55/S59/S64): perturb a field that varies — a pixmap plane root +1 should
-   fail the presets that drive preprocess (`dl` is the only one running
-   METHOD_DOWNSAMPLE; `bg` drives the background detector) — quote honest
-   counts, and a 0-row fault means an inert field before an unreached path.
-4. **The scalars**: `paraset_strategy.rs` (minus `ParasetStrategy` itself),
-   `au_set.rs`, `nal_encap.rs` (+ the MT adjudication), `vlc_encoder.rs`,
-   `picture.rs`, `param_svc.rs`, `wels_trace.rs`.
-5. **F100 + the log referee**.
-6. **Close**: the session gate once (S61 vs 543 s); **F67's probe re-run and the
-   fallen-reasons count reported**; both censuses (S58's respelling duty);
-   findings from **F172**; the log; the charter row; metrics live at both ends.
+0. **D-dead-5's deletion** (one commit, byte-neutral). `WelsRcDropFrameUpdate`
+   (`rc.rs:2594`) goes with both trees' read greps quoted in the message
+   (`grep -rn 'WelsRcDropFrameUpdate' src tests benches` on this side — F119:
+   tests and benches included — and the `codec/` grep showing only
+   `ratectl.cpp:1405`, its own log line). `gates.sh commit` proves neutrality.
+
+1. **Ref-lists + LTR** (`ref_list_mgr_svc.rs`). Two motions, in order:
+   - **F86 first, before any conversion in the file**: the short-ref shift at
+     `:299–310` indexes `pShortRefList[k+1]` where the C++
+     (`ref_list_mgr_svc.cpp:387–391`) writes unchecked. Read the callers, prove
+     the `k+1` bound from their invariant (state where the proof lives — a
+     comment at the site naming the invariant is enough), or guard it exactly
+     where upstream's implicit invariant holds. **If any reachable input would
+     panic where upstream reads out of bounds, stop and file for a ruling**
+     (F162's shape, D-fid pattern) — do not convert around an open soundness
+     question.
+   - **The LTR structs flip**: the file's whole remaining raw surface is five
+     parameters — `pLtr: *mut SLTRState` (`:202`, `:924`, `:1558`),
+     `pLTRRecoverRequest: *mut SLTRRecoverRequest` (`:1028`),
+     `pLTRMarkingFeedback: *mut SLTRMarkingFeedback` (`:1086`). The file has
+     **zero in-fork bodies** (the forksplit's table: `ref_list_mgr_svc.rs`
+     0/32), so these flip to `&mut` on the plain S20 pattern; the 31 `unsafe
+     fn`s de-unsafe as the raw leaves their signatures (most are vestigial
+     already — 8 raw mentions in 31 unsafe fns).
+   - Gate: `commit` per cluster, one `family` after the file.
+
+2. **Rate control** (`rc.rs`). The X half is the `*mut SWelsSvcRc` surface —
+   **the in-fork ctx bodies (the file's 10, `WelsRcMbInit`, `RcCalculateMbQp`,
+   `RcCalculateGomQp`…) are H2's and do not change** (S63).
+   - `RcInitLayerMemory(pWelsSvcRc: *mut SWelsSvcRc)` (`:774`) → `&mut`.
+   - The four raw accessors — `rc_temporal_over` (`:797`), `rc_gom_complexity`
+     (`:812`), `rc_gom_fg_blocks` (`:827`), `rc_gom_sad` (`:842`) — retire onto
+     slice-returning safe APIs over the three **live** GOM arrays (D-dead-3
+     deleted their dead fourth sibling; these three are the mechanism with ten
+     C++ uses). Check each accessor's callers against the in-fork column before
+     touching its signature: an in-fork caller keeps a raw route (S63), and
+     that route is then H2's to name, not yours to convert.
+   - Gate: `commit` per cluster; `family` after the file.
+
+3. **Preprocess + VAA** — the biggest step, ordered inside; `family` after 3a
+   and after 3c (both risky):
+   - **3a — `SPixMap` grows safe plane views** (`wels_preprocess.rs:265`).
+     Design against the four consumer files' `Process(&SPixMap, &SPixMap)`
+     methods — `scene_change_detection.rs:85`, `background_detection.rs:126`,
+     `denoise.rs:236`, and `complexity_analysis.rs`'s six (`:105`–`:268`). The
+     pipeline stamps pixmaps from pool pictures; route the views from the same
+     roots (the `PaddedPlane` shape is the house pattern — S37, per call, never
+     stored). Then **F151 closes**: `sad_8x8_raw`
+     (`scene_change_detection.rs:34`) retires onto the safe SAD kernels, and
+     the file's F151 rebaseline (+2 raw_ptr/+3 unsafe_block/+1 unsafe_fn) comes
+     back out — state the reversal in the commit.
+   - **3b — vaacalc's five raw kernels retire** (`VAACalcSad_c :62`,
+     `SadVar :105`, `SadSsd :141`, `SadBgd :180`, `SadSsdBgd :218`): their safe
+     twins already exist (`vaa_calc_sad :488` …), and the raw five's only
+     remaining callers are the file's own differential tests
+     (`:755/:790/:845`) — session F's SAD precedent applies verbatim: the
+     old side retires per the test file's charter, the property re-anchors on
+     the safe kernels, read greps include tests and benches (F119).
+   - **3c — F164's members convert** (the send-seam deliverable):
+     `pMotionTextureUnit: *mut SMotionTextureUnit` (`wels_preprocess.rs:407`;
+     readers `adaptive_quantization.rs:216/:305`),
+     `SComplexityAnalysisParam`'s `pGomComplexity`/`pGomForegroundBlockNum`
+     (`:425`+), and the F164 table's `*mut u8`/`*mut u32` members — one of
+     them, `pVaaBestBlockStaticIdc` (`:574`), sits on the **Ext** struct:
+     screen-content-coupled, so **convert the container, do not touch the
+     dormant semantics**. These are owned buffers pointed at raw; the
+     `Vec`-with-index shape the seam uses is the likely answer, designed
+     against the readers **including the in-fork ones** (`ctx_vaa`'s readers —
+     an in-fork read path keeps its shape).
+   - **3d — F117's allows become precise + `copy_mb.rs` denies**: the
+     `VaaBackgroundMbDataUpdate` copies stay raw by S57's ruling with
+     item-level allows and the census note kept; `common/copy_mb.rs` (1 unsafe
+     fn, 2 raw) gets `#![deny(unsafe_code)]` with its sites item-tagged.
+   - **Planted faults** (S55/S59/S64, reverted, honest counts): a pixmap plane
+     root +1 — `dl` is the only preset running METHOD_DOWNSAMPLE and `bg`
+     drives the background detector, so quote those; a VAA-kernel fault → `bg`
+     rows. A 0-row fault means an inert field before an unreached path (F155).
+
+4. **The scalars**, in this order:
+   - `au_set.rs`: `*mut SWelsSvcCodingParam` → `&`/`&mut`; the `_pLogCtx:
+     *mut SLogContext` parameters are unused by name — S54: read every caller,
+     then delete the dead parameters rather than retype them.
+   - `paraset_strategy.rs`: the strategy object's internals (30 raw mentions)
+     — **minus `ParasetStrategy` itself** (F166: permanently raw; its tag and
+     doc stay).
+   - `nal_encap.rs`: the `bs_buffer` glue (`:137`) and `dst: *mut u8` (`:415`)
+     → slices; the two `unsafe extern "C"` unload fns (`:334`, `:381`) are
+     C-ABI boundary — tag them `C-ABI` if not already, they are lawful
+     remainder; **adjudicate the 3 `MT` tags** (bitstream-shaped → retire
+     here; seam-shaped → H2's, say so in the report).
+   - `vlc_encoder.rs` (6), `wels_trace.rs` (6 — the glue step 5 will lean on),
+     `param_svc.rs` (1).
+   - `picture.rs` **mostly stays**: `:45–54` is `SScreenBlockFeatureStorage`'s
+     own guts — Phase 10's dormant storage (F164 lists its pointer as Phase
+     10's `!Sync` reason, not yours); make its tags precise and leave it. The
+     two `data_ptr` mints (`:268`, `:289`) are live API from F156's fix — they
+     stay.
+   - Gate: `commit` per file; one `family` at the step's end.
+
+5. **F100 + the log referee**:
+   - Port `TraceParamInfo` from `welsEncoderExt.cpp:505` (called on the
+     init/SetOption paths — `:202`, `:229`, `:334`) and `LogStatistics` from
+     `:569` (the per-frame statistics log) into the empty bodies at
+     `wels_encoder_ext.rs:2091/:2093`. Pure `WelsLog` formatting — no byte a
+     gate can see (F100's whole point).
+   - The referee: both drivers speak the same C API —
+     `SetOption(ENCODER_OPTION_TRACE_CALLBACK = 26, cb)` (+`_CONTEXT = 27`)
+     exists on both sides (`codec_api.rs:252`). Register a capturing callback
+     in `cxx_enc.cpp` and `rust_enc`, run **one fixed config** (pick a `dl`
+     row — the statistics log is config-dependent), capture both texts, diff.
+     Normalize only what is honestly nondeterministic — timestamps, pointer
+     values, version strings — and list every normalization in the script.
+     Ship it as a small script beside `compare.sh` (not wired into the sweep),
+     loud per S58: nonzero exit on mismatch, and calibrate it both ways (S66:
+     a planted format-string typo must fail it; the clean run must pass).
+
+6. **Close**, itemized:
+   - `MIRI_SCOPE=encoder bash rust/tools/gates.sh session` once — S61: lane
+     wall beside H's **543 s**, ratio stated.
+   - **F67's probe**: a scratch `fn _s<T: Sync>() {} _s::<sWelsEncCtx>();` —
+     rustc's E0277 notes enumerate the offending member chain; record the
+     before/after lists, revert the scratch, and report **which of the twelve
+     `!Sync` reasons fell, by owner** — the session's headline beyond the
+     ratchet.
+   - Both censuses regenerated (S58's respelling duty — if `SPixMap`'s new
+     views respell a fact a census keys on, the census learns it in the same
+     commit).
+   - `unsafe_ratchet.sh report` at the close against the start capture —
+     live at both ends (§7.1); tags re-measured; the F151 reversal stated.
+   - Findings from **F172**; the log; the charter row.
 
 **Drop order if short**: 5, then 4 — each becomes X2's named frontier
-(S60/F143); step 3 stops only at a file boundary; steps 0–2 are never dropped.
+(S60/F143); step 3 stops only at a file boundary (3a is never split); steps
+0–2 are never dropped.
 
 ## What to report back
 
