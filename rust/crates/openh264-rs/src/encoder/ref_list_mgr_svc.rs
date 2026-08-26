@@ -1708,9 +1708,7 @@ pub unsafe fn WelsMarkPicScreen(pCtx: &mut sWelsEncCtx) {
 
 /// Intentional no-op reference list manager callback.
 /// Matches `void DoNothing (sWelsEncCtx* pointer)` in `ref_list_mgr_svc.cpp:996`.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn DoNothing(_pCtx: &mut sWelsEncCtx) {}
+pub fn DoNothing(_pCtx: &mut sWelsEncCtx) {}
 
 // ============================================================================
 // Reference strategy — T4b.2b
