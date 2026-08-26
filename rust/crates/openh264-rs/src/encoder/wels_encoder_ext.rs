@@ -2122,6 +2122,23 @@ impl CWelsH264SVCEncoder {
                     }
                 }
 
+                // **T9.H14: hoisted above `pStatistics` — T9.G6's shape, found by
+                // the session gate's Miri lane.** `ctx_ltr` took `*mut
+                // sWelsEncCtx` until this session; it takes `&mut` now, so its
+                // call site below spelled `ctx_ltr(&mut *pCtx)` — a `Unique`
+                // retag of the **whole context** at [0x0..0x17f10]. `pStatistics`
+                // is a `&mut` into `sEncoderStatistics[iDid]`, inside that same
+                // allocation at [0x770..0x7c8], and was held across it: the retag
+                // popped it and the next `pStatistics` use was a read through a
+                // dead tag. Reading the flag into a `bool` here, before the
+                // cursor exists, is the same remedy T9.G6 applied eighteen times.
+                //
+                // Nothing between the old site and this one writes `pLtr`, so the
+                // value is the same one the old code read.
+                let bLtrMarkingFlag = {
+                    let pLtr = ctx_ltr(&mut *pCtx);
+                    !pLtr.is_null() && (*pLtr).bLTRMarkingFlag
+                };
                 let pStatistics =
                     &mut (*pCtx).sEncoderStatistics[iDid as usize];
                 let pSpatialLayerInternalParam =
@@ -2172,8 +2189,7 @@ impl CWelsH264SVCEncoder {
                 {
                     pStatistics.uiIDRSentNum += 1;
                 }
-                let pLtr = ctx_ltr(&mut *pCtx);
-                if !pLtr.is_null() && (*pLtr).bLTRMarkingFlag {
+                if bLtrMarkingFlag {
                     pStatistics.uiLTRSentNum += 1;
                 }
 
