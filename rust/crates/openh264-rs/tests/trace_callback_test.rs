@@ -37,8 +37,17 @@ unsafe extern "C" fn collect(ctx: *mut c_void, level: i32, string: *const c_char
     }
 }
 
-/// `WELS_LOG_INFO` / `WELS_LOG_ERROR` — `codec_app_def.h:323`.
-const WELS_LOG_INFO: i32 = 3;
+/// `WELS_LOG_INFO` / `WELS_LOG_ERROR` — `codec_app_def.h:323-331`, where the
+/// levels are a **bit mask**: `WELS_LOG_ERROR = 1 << 0`, `WELS_LOG_INFO = 1 << 2`.
+///
+/// **Spelled out rather than imported, on purpose.** These are the values a C
+/// caller gets from the real header, and this test's job is to assert the port
+/// delivers *those* — importing `common::wels_trace`'s constants would make the
+/// assertion agree with the port by construction and check nothing. It used to
+/// say `WELS_LOG_INFO = 3` while citing the header line that says 4, which is
+/// how the port kept a green test asserting an ABI divergence was correct
+/// (F184; corrected under D-fid-4, 2026-08-26).
+const WELS_LOG_INFO: i32 = 4;
 const WELS_LOG_ERROR: i32 = 1;
 
 // ---------------------------------------------------------------------------

@@ -58,7 +58,15 @@ unsafe fn install_trace_capture(pEnc: *mut ISVCEncoder) -> Option<Box<TraceSinkC
             ENCODER_OPTION::ENCODER_OPTION_TRACE_CALLBACK_CONTEXT,
             std::ptr::from_mut(&mut ctx).cast::<std::ffi::c_void>(),
         );
-        let mut level: u32 = 3; // WELS_LOG_INFO — codec_app_def.h:323
+        // `WELS_LOG_INFO` — `codec_app_def.h:323-331`, where the levels are a bit
+        // mask and INFO is `1 << 2`. **The literal is the point**: `cxx_enc.cpp`
+        // gets this value from the real header, so this driver must ask the port
+        // for the same number a C caller would. Importing the port's own constant
+        // would make the two drivers agree by construction and hide exactly the
+        // divergence the level check exists to catch. It said 3 until D-fid-4
+        // (2026-08-26) — the sixth copy of F184's defect, outside the `src tests`
+        // scope every enumeration of it had used.
+        let mut level: u32 = 4;
         ISVCEncoder::SetOption(
             pEnc,
             ENCODER_OPTION::ENCODER_OPTION_TRACE_LEVEL,

@@ -10,10 +10,17 @@
 #   normalized message text with the `<level>|` prefix and the `[OpenH264] this =
 #   ... , <Tag>:` header already stripped.
 #
-# Measured on the fixed row 2026-08-26: reference 19 lines, port 9. The nine the
-# port does emit are byte-for-byte identical to the reference's, which is what
+# Measured on the fixed row 2026-08-26 (session H2, F188): **reference 35 lines,
+# port 20**, of which 20 are byte-for-byte identical — which is what
 # `TraceParamInfo` (F100) and `WelsBitRateVerification`'s six restored calls
-# (F181) bought — before this session the port emitted **one** of the nineteen.
+# (F181) bought; before X2 the port emitted **one** of them.
+#
+# This header said "reference 19 lines, port 9" until H2. Those were X2's numbers
+# from `d0020008`, and `c55b7581` — the commit whose own message reads "Coverage
+# 19 -> 35 reference messages" — updated the script, the drivers and the log, and
+# left the count here. A file whose whole contract is "a stale row is a lie about
+# coverage" carried a stale coverage count in its header for two sessions. The
+# numbers a document states about an instrument are as stale-able as the rows.
 
 # --- ParamValidationExt's profile/entropy adjustments (encoder_ext.rs) --------
 # Three layers x "doesn't support profile" plus the CABAC->CAVLC follow-on. The
