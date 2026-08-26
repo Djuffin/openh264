@@ -18574,3 +18574,543 @@ D-dead-3's shape a third time), and the ten `ParamValidationExt` /
 `WelsInitEncoderExt` trace messages the referee's gap list now names and owns —
 two of which are permanent (this port has no `CMemoryAlign` running total to
 print).
+
+---
+
+## 2026-08-26 — Phase 9, session H2 (the fork workers' context reads)
+
+**Goal:** the brief's five steps — three rulings, S67's audit, F167's owed Miri, the
+in-fork read seam, the five slice-returning APIs. **Started at** `c85d258e`.
+
+### Step 0 — the three rulings
+
+**D-fid-4 — the log levels align with upstream's bit mask.** `74b844be`. Five
+duplication sites were **six**: the sixth (F188) is
+`rust/tools/diffharness/rust_enc/main.rs:61`, outside the `src tests` scope every
+enumeration of this defect had used, and inside the referee that D-fid-4 names as its
+own acceptance. Fixing five and not the sixth would have asked the port for level 3,
+which under the mask admits ERROR and WARNING and **not** INFO — the driver would
+have gone silent and tripped the "the PORT logged nothing" guard.
+
+The three decoder copies are re-exports now; the test's copy stays a literal on
+purpose (it asserts what a C caller compiled against the real header receives).
+
+**The acceptance as ruled was unreachable (F189).** The level check compared the two
+delivered level *vocabularies*. The reference's is `{2, 4}` on the fixed row and all
+eight of its level-2 lines are `ParamValidationExt` warnings this port does not emit
+— all four texts **J-owned rows in the gap list**. So the check could not go green
+while any owned gap remained, however correct the levels were. After the remap it
+stayed red at `cxx [2 4], rust [4]`, which is the levels being exactly right. S69
+replaced it with the two questions the capture can answer: **1a** every delivered
+level is a member of the header's mask; **1b** for every message both sides emit, the
+levels agree.
+
+| | levels | check 1 | text | verdict |
+|---|---|---|---|---|
+| before | cxx `[2 4]`, rust `[3]` | LEVEL MISMATCH | 20/35 identical, 9 gap rows owned | **FAIL** |
+| after | cxx `[2 4]`, rust `[4]` | 12 messages both sides, **0 disagreed** | 20/35 identical, 9 gap rows owned | **PASS** |
+
+**PASS is the first time this instrument has been green.** No gap row moved; none
+went stale. Planted faults (S66): `WELS_LOG_INFO` back to 3 fires **1a** and 1b at
+**12/12**; `TraceParamInfo`'s level to WARNING (a legal mask value) leaves 1a
+**silent** and 1b at **2/12** — the two checks discriminate the two defect classes.
+
+**D-dead-7 — `pCurPath` deleted.** Both trees' greps, quoted:
+
+```
+port      param_svc.rs:252 (doc) :269 (field) :327 (default) :507 (FillDefault reset)
+          wels_encoder_ext.rs:2655 (the SetOption store)          -- no reader
+upstream  param_svc.h:118 (decl) :228 (null)  welsEncoderExt.cpp:1076 (store) -- no reader
+```
+
+The brief calls `:507` "the store's helper"; it is `FillDefault`'s reset. `SetOption(
+ENCODER_OPTION_CURRENT_PATH)` keeps returning success and now does nothing, which is
+observably what storing into storage nobody reads already was. **The ABI size pin
+moved, 1240 -> 1232**, and it is now this file's only intentional field-count
+divergence from the C++ — recorded at the pin, because a pin that moves silently
+stops meaning "field for field".
+
+**The F67 probe — and this session got it wrong at step 0 and caught it at the
+close.** The step-0 commit says "expected nine, actual nine". **Both halves are
+false, and F195 is the write-up.** The probe reports one `E0277` per distinct
+**type**, not per field; `pCurPath` is a `*mut c_char`, which is `*mut i8` on this
+target, a type `SComplexityAnalysisParam` also contributes through `SVAAFrameInfo`.
+Measured at the close: **ten**. Measured again with `pCurPath` restored and nothing
+else changed: **ten**. D-dead-7 did not move this number and could not have, so the
+ruling's own predicted verdict was unachievable by construction.
+
+*Expected* nine came from quoting the brief instead of deriving it. *Actual* nine
+came from reading my own command through `head -60`, which cut the tenth block —
+`*mut SScreenBlockFeatureStorage`, reached through `SPicture` → `RecPicPool`, which
+has the longest `required because` chain of the ten and is therefore the block a line
+limit eats first. A wrong expectation and a truncated measurement agreed, which is
+what made it look like a confirmation. S60 exists so a mismatch is visible; two
+errors that cancel defeat it.
+
+### Step 1 — S67's audit: 23 sites, 23 blessed, 0 fixed
+
+`grep -rn '&mut \*pCtx\|&mut \*\*ppCtx\|&mut \*pEncCtx' src/encoder | grep -v ':\s*//'`
+= **23** (H measured 24). The rule the audit runs on, and it is what collapses it:
+a `&mut *pCtx` retag pops only tags whose **locations lie inside the retagged range**,
+and every `ctx_*` accessor answers a pointer whose provenance is a `Box`/`Vec` block
+in a **different allocation** (F71, the reason that spelling exists). So the hazard
+class is exactly F171's: a `&mut` into the context's *own inline bytes*, held live
+across a whole-context retag. One row in twenty-three, and H fixed it.
+
+Fifteen sites carry a one-line blessing naming what was checked; four already carried
+T9.G6's hoist note, one carries F171's own explanation, and three are test code.
+**Two of the twenty-three are not context retags at all** — `&mut *pCtx.pOut` borrows
+the `pOut` allocation and matches only because the detector's regex is textual. J
+should be told the detector's domain is a *string*, not a type.
+
+### Step 2 — F167's owed Miri: the answer is **not sound**
+
+The four consumers are unreachable (`RequestMemorySvc` refuses
+`SCREEN_CONTENT_REAL_TIME` at `encoder_ext.rs:1222`), so the brief's escape hatch was
+the only route and what it mints is listed in the test. Miri's verdict, first run:
+
+```text
+error: Undefined Behavior: not granting access to tag <1118667> because that would
+remove [Unique for <1118916>] which is strongly protected
+  --> wels_preprocess.rs:2939  let bScene = (*self.m_pEncCtx).bCurFrameMarkedAsSceneLtr;
+<1118667> was created by a Unique retag at offsets [0x0..0x17f10]   (the owner Box)
+<1118916> is this argument    -->  drive(pCtx: &mut sWelsEncCtx)
+```
+
+F192. A reference **function argument is strongly protected for the duration of the
+call**, so the *read* through the stored copy is UB immediately — disjoint byte ranges
+buy nothing, which is what my own pre-run reasoning had rested on. It cannot fire
+today (screen content is unreachable) and it goes live the day Phase 10 enables it.
+
+**The remedy is driven, not proposed**: the sibling test makes the identical call
+under a **shared** context borrow and is **green under Miri** — a `&T` protector
+forbids writes through other tags and permits reads. The `&mut` test carries
+`#[cfg_attr(miri, ignore)]` with the trace in its doc, which is how F112/F114b's open
+verdicts are recorded.
+
+Two corrections fell out. F167 predicted the hazard would arrive with stage A0's
+`&mut` at the root; **A0 never landed** (`addr_of_mut!` at all four root sites) and
+the 149 `&mut sWelsEncCtx` bodies create the protected retag instead — right outcome,
+wrong trigger. And the first fixture returned the owner `Box` by value, which is
+itself a retag, so Miri reported a defect in the probe wearing a finding's costume;
+both tests build inline now and the reason is written where the helper was.
+
+### Step 3 — the seam: **zero new seam items**
+
+`phase9_forksplit.py` at this commit: **113** bodies carry `*mut sWelsEncCtx` (111
+in-fork, 2 ST-flippable — `paraset_strategy.rs` is F166's and `svc_mode_decision.rs`
+is the one the brief does not name). The 17 in-fork accessors are 14 + 3, confirmed.
+
+**The design, and why it needs no seam item.** Every `ctx_*` accessor already reads a
+pointer *value* out of a `Box`/`Vec` slot through `addr_of!` and forms no reference to
+the context (F71). What was left was the *parameter*: a pure lookup was still taking
+`*mut` or `&mut`, so the fork's lawful read had to be spelled through a raw. A
+**shared borrow is what the operation is**, and shared reads do not race with shared
+reads — no `UnsafeCell` crossing, no `Sync` impl. **The seam-item count stays at
+D-mt-3's 2, and D-mt-3's veto was not needed.**
+
+Landed: the const-after-init lookup family — `ctx_stride_dec_block_offset`,
+`ctx_stride_enc_block_offset` (`*mut` -> `&`, `unsafe fn` -> safe fn, `cursor` tags
+retired), `ctx_mb_index_x`, `ctx_mb_index_y` (`&mut` -> `&`, S63) — 12 call sites.
+And `InitMbInfo`, **because the audit said what it held**: it reaches the context for
+those two lookups and nothing else, so its `&mut` was asserting an exclusivity it
+never used. `cursor` **37 -> 34** (2 stride + 1 `ctx_dq_idc_map`); out-of-family retags
+**23 -> 22** in production; `&mut sWelsEncCtx` 152 -> **149**; `&sWelsEncCtx`
+0 -> **5**. The crate-wide retag grep reads **25**: F192's test adds three, and all
+three are the test's *subject* — `drive(&mut *pCtx)` is the protected retag the
+finding is about, and the other two are `&mut *pCtx.pVpp`, the same textual
+over-match the audit found twice already.
+
+Returns stay `*const`: `SStrideTables` stores byte offsets into one flat `Vec<i32>`
+and records **no region lengths**, so a slice API cannot be formed without inventing
+a bound the C++ never had.
+
+### What the surface dissolved, and what it did not — each named
+
+| route | brief's number | measured | verdict |
+|---|---|---|---|
+| the stride/index lookups | (not called out) | 12 sites, 4 accessors | **dissolved** — landed |
+| X2's absorbed ~36 | ~36 | the `LoadPrevious` shape | **not dissolved, and re-attempting is what showed why** — see below |
+| `ctx_func_list` | 106 | **105** (the brief counts the definition) | **cannot dissolve** — the table is re-written per frame; a shared projection would be *unsound in the direction the number suggests*. See F191 |
+| the layer's raw params | 42 | 42, 7 files | **out of family** — the layer's, not the context's |
+| `MT` tags | 20, `nal_encap:361/:393` | 20, `nal_encap` **`:367`/`:399`** | **stays** — F187 §1's reason is the fork-shared *slice buffer* |
+| F187's six refusals | re-read at the site | all six re-read | **all six stand**; H2's surface dissolves none of their stated reasons |
+
+**The ~36, re-attempted rather than assumed, and the answer is not the surface this
+session built.** The plan folds them into H2 because "`LoadPrevious`'s
+four-simultaneous-`&mut`-projections shape is S63's forbidden retag exactly". Read at
+the site (`paraset_strategy.rs:456`), `LoadPrevious` takes three **write** cursors —
+`*mut SWelsSPS`, `*mut SSubsetSps`, `*mut SWelsPPS` — into three different `Vec`s of
+one context, and `encoder_ext.rs:916` supplies all three from one `*ppCtx` in one
+call. A **shared** read projection cannot serve a writer, so H2's surface is simply
+the wrong tool and saying otherwise would have been the third repetition of X2's own
+lesson.
+
+**The right tool, named so it need not be re-derived**: one accessor returning the
+three as a tuple of disjoint borrows —
+`ctx_paraset_arrays(&mut sWelsEncCtx) -> (&mut [SWelsSPS], &mut [SSubsetSps], &mut [SWelsPPS])`.
+Rust permits `(&mut s.a, &mut s.b, &mut s.c)` from one `&mut s` inside a single body;
+what it forbids is three *separate* accessor calls, which is exactly the shape that
+blocked the ~36. The block is a call-shape problem with a one-function answer, not a
+seam problem.
+
+### Step 4 — the five slice-returning APIs: one number, four answers (F193)
+
+Read all the callers first (S54), and they are not one problem.
+
+* **`ctx_dq_idc_map` (4 sites) — converted.** `-> &mut [SDqIdc]`; both production
+  callers indexed and dereferenced, so S54 says return the element. The win is not
+  the signature: `InitParaSet` **held** `pDqIdc` across `GenerateNewSps` and
+  `InitPps` and wrote through it afterwards — the exact shape S67's audit exists to
+  find, surviving only on F71's `Vec`-buffer provenance. The three writes commute
+  into **one** borrow that ends on a closing brace, so production retags go 23 -> 22
+  rather than up; byte-neutral, and `grep -rn 'pDqIdcMap|ctx_dq_idc_map' src` shows
+  no reader between the old and new write positions. It leaves the
+  sibling-derivation test because a reference API cannot have that property — the
+  borrow checker now says at the call what Miri used to say at run time — and the
+  held-cursor list beside it had a literal `10` in two places that went stale the
+  moment it left. Both counts derive from `held.len()` now.
+* **`ctx_frame_bs` (8) and `ctx_frame_bs_cur` (21) — permanent, by the C ABI.** The
+  production callers store the answer into `SLayerBSInfo::pBsBuf`, which is
+  `codec_app_def.h:640` — a public `unsigned char*` in a struct handed to the
+  application. It cannot carry a lifetime, in this phase or any later one. Recorded
+  at both accessors so a later session does not pay S54's cost again.
+* **`ctx_ltr_at` (26) — 22 want `&mut SLTRState`, 4 cannot have it.** The four are
+  `ref_list_mgr_svc.rs:757`, `:1025`, `:1453`, `:1648`, each already carrying T9.G7's
+  note. A `&mut`-returning accessor borrows the context for the reference's lifetime,
+  so the borrow checker would refuse them **at the call** — H's crux, arriving where
+  H said it would. Four bodies of restructuring; named for J with the line numbers.
+* **`ctx_ltr` (5)** follows `ctx_ltr_at`; 3 of its 5 sites are the sibling tests.
+
+### Where this brief was wrong — the sentence, then the correction
+
+1. > "F184 counted **five** duplication sites ... **enumerate all five yourself**
+   > (`grep -rn 'WELS_LOG_' src tests`, both codecs; S64)."
+
+   Six. The sixth is `rust/tools/diffharness/rust_enc/main.rs:61`, outside that
+   scope and **inside the acceptance instrument** (F188). Fixing five would have
+   silenced the port driver.
+
+2. > "the acceptance is pre-built: `diffharness/log_referee.sh`'s level check goes
+   > green"
+
+   It could not, and neither could D-fid-4's own ruling text. The check compared
+   level *vocabularies*, and every level-2 line on the fixed row is a J-owned gap
+   (F189). Repaired under S69; now green.
+
+3. > "`param_svc.rs:269` (field), `:327` (default), `:507` (the store's helper)"
+
+   `:507` is `FillDefault`'s reset, not the store's helper.
+
+4. > "`ctx_func_list`'s **106** call sites"
+
+   **105**; the 106th is the definition.
+
+5. > "the **20** `MT` tags (`slice_multi_threading.rs` 18, `nal_encap.rs:361/:393`)"
+
+   20 and 18 are right; the `nal_encap` lines are **`:367`/`:399`** (the brief said
+   to re-verify, and they had drifted).
+
+6. > "**113** bodies still carrying `*mut sWelsEncCtx` (111 in-fork + F166 + re-derive
+   > the tail)"
+
+   113 and 111 are right, and the unnamed "tail" is one ST-flippable body in
+   `svc_mode_decision.rs` — worth a name, since it is half of what is left.
+
+7. > "**The F67 probe after both** ... : **ten → nine expected**"
+
+   Ten → ten. The probe counts distinct types and `pCurPath`'s type survives in
+   `SComplexityAnalysisParam` (F195). D-dead-7's own ruling text carries the same
+   wrong prediction, and this session reproduced it before measuring it.
+
+8. > "F167's ... `CWelsPreProcess::m_pEncCtx` ... was argued sound on its dormant half"
+
+   Not sound. Miri refuses it in one line, and the protector mechanism removes the
+   disjointness escape the argument rested on (F192). The brief inherited F167's
+   framing; running it is what the step was for.
+
+**And where I was wrong, before running it.** My own written analysis of the audit
+and of F167 said the shape was sound "because the byte ranges are disjoint". A
+protected reference argument makes that irrelevant. The audit's twenty-two blessings
+do not depend on that reasoning — they rest on *different allocations*, which no
+protector reaches — but the F167 row would have been blessed on a false premise if
+step 2 had been an argument instead of a run.
+### The seam items, counted and named for the user's confirmation
+
+**Count today: 2. Count at H2's close: 2. Nothing was added.**
+
+| # | item | where | asserts |
+|---|---|---|---|
+| 1 | `SharedCells::cells` — the one `UnsafeCell`-crossing accessor | `rec_view.rs:112` | D-mt-3's: exclusive-borrow-at-build, base/length captured from a header never through a slice, and the two Miri data-race probes as acceptance |
+| 2 | `unsafe impl<T: Copy> Sync for SharedCells<T>` | `rec_view.rs:152` | the same argument, once |
+
+**Why H2 adds none.** S62 asks for stamp-side race-free asserts and outcome-equality
+"where a value is substituted". Nothing is substituted here: the in-fork read of
+fork-constant state becomes a **shared borrow of the same storage**, returning the
+same address the raw returned. There is no crossing to guard, no interior mutability
+to declare, and no `Sync` to assert, because shared reads do not race with shared
+reads. D-mt-3's template is the right shape for genuinely shared-*mutable* state and
+the wrong shape here, and "fewer seam items beats views everywhere" is the brief's own
+instruction followed to its end rather than to a template.
+
+### Planted faults, honestly counted
+
+| plant | instrument | result |
+|---|---|---|
+| `WELS_LOG_INFO` 4 -> 3 (the whole mask shifts) | `log_referee.sh` CHECK 1 | **1a fires** + 1b **12/12** disagreed |
+| `TraceParamInfo`'s level INFO -> WARNING (one call site, a legal mask value) | same | 1a **silent**, 1b **2/12** — the two checks discriminate |
+| the F167 `&mut` drive with `#[cfg_attr(miri, ignore)]` removed | Miri | **UB, reproducibly**, with the tag trace quoted in the test's doc |
+| the F167 fixture returning the owner `Box` by value | Miri | a *different* error (SharedReadOnly retag from a dead tag) — the probe's own defect, found and removed before it could be reported as the subject's |
+
+Where a verdict is thresholded, F175's rule applies — none of these is: they are
+counts and a binary, reported as measured.
+### Close
+
+**Gate sequencing, stated because it deviates from the brief's letter.** The brief
+asks for `family` after every conversion cluster. The seam cluster got its own
+`family`; step 4's cluster got `commit` and then the close's `session`, which
+contains `family` — one battery instead of two, same coverage, and the deviation is
+here rather than silent (S58).
+
+### F187's six, re-read at the site (S68) — all six stand
+
+* **#1, `nal_encap`'s `WelsWriteSVCPrefixNal`.** `slice_multi_threading.rs:1372`
+  passes `addr_of_mut!((*pSliceBs).sBsWrite)` where `pSliceBs` is
+  `addr_of_mut!((*pSlice).sSliceBs)` — **fork-shared slice state**, with the note two
+  lines above saying the spelling is the parameter's own tag, deliberately.
+* **#2-6, `WelsInitSps`/`WelsInitSubsetSps`'s five layer parameters.**
+  `paraset_strategy.rs:846` still reads: the reference "only existed to retag and be
+  cast away — and its retag is what invalidated `InitDqLayers`'s live pointer into
+  the same layer."
+
+**Neither reason is a context-read reason, and that is not a coincidence.** The rule
+this session's audit rests on is that a whole-context retag reaches only the
+context's *own bytes*; F187's two refusals are both about two derivations into **one
+other** allocation — the slice's bitstream state, and `pSvcParam`'s layer array.
+Same rule, other side of it. A surface built over the context cannot dissolve either,
+and pretending otherwise would have been the third repetition of X2's lesson in three
+sessions.
+### The gate caught one of my own (F194)
+
+`gates.sh family` on the first seam tree came back **FAIL** with 583/583 in both
+profiles and every test green:
+
+```
+INCREASES vs baseline:
+  encoder/wels_preprocess.rs  unsafe_block: 0 -> 2
+  encoder/wels_preprocess.rs  unsafe_fn:   45 -> 47
+```
+
+F192's two probes had been written beside their subject, in a file the phase had
+driven to **zero** `unsafe_block`. Not F178's shape — that is the ratchet counting
+`*mut` in *comments*, a false positive on prose. This is a true positive with a
+consequence nobody had written down: **the ratchet is per-file and cannot tell test
+code from library code**, so a probe's location is constrained by headroom, and "put
+the test next to the thing it tests" is not always available.
+
+Moved, not rebaselined, into `encoder_context.rs` — the subject's own file (the
+aliasing under test is the *context*'s), and four `unsafe fn` / three `unsafe {`
+below its baseline after this session's own conversions. A baseline regenerated to
+admit a test is an instrument quietly lowered, which is the one thing a ratchet
+exists to prevent.
+### What landed
+
+| commit | what |
+|---|---|
+| `74b844be` | **D-fid-4** — the `WELS_LOG_*` bit mask, six sites (F188), the referee's level check repaired (F189) and green for the first time, two stale instrument numbers corrected (F190) |
+| `70729e28` | **D-dead-7** — `pCurPath` deleted both halves, `SWelsSvcCodingParam` 1240 → 1232 with the divergence recorded at the pin, F67 nine-for-nine |
+| `9804989b` | **the in-fork read surface** — zero new seam items, S67's 23 (22 blessed / 1 converted), F192's two Miri probes, `ctx_dq_idc_map` converted, F193's two permanent verdicts recorded at the accessors, F194's relocation |
+
+### The close
+
+    session battery      551 s   against D-gate-6's amended 1200 s cap   PASS
+    Miri lane wall       551 s   against X2's 480 s      S61 ratio 1.15   (WARN is 1.3x)
+    Miri, 4 shards       292 passed / 0 failed  (enc 142, other 148, cavlc 1, sizelimited 1)
+    sweeps               583/583 debug (63 s) and release (56 s)
+    gtest simulcast      4/4, allowlist 8, 12 s
+    fork pair (parallel) <<FORK_WALL>>   fixed-slice <<FORK_FIXED>>, mid-row <<FORK_MIDROW>>
+
+The battery is **551 s against a 1200-s cap**, which is less than half of it and well
+under X2's 977 s — and the reason is not that the work shrank. X2 measured 977 s with
+the same architecture; the difference is machine load, which is exactly F170's caveat
+and exactly why S61 compares **lane against lane** rather than battery against
+battery. The lane number, 551 s against X2's 480 s at **ratio 1.15**, is the one that
+means anything, and it is inside the 1.3x WARN threshold.
+
+**The Miri lane taxing the native lane, measured this session rather than assumed.**
+The debug sweep ran 63 s inside the session battery against **47 s** in the family
+battery an hour earlier, on the same tree — a 1.34x tax, which is D-gate-6's own
+prediction ("the trade D-gate-6's note predicted without pricing") with a price on it.
+
+Every wall number here carries **F170's caveat** — `gates.sh` reports wall time where
+it means CPU time, so a loaded machine inflates all of them. The fix is J's.
+
+**`MIRI_FULL=1` on the fork pair is inert and that is worth saying once.** The brief
+calls it "the parallel `MIRI_FULL=1` fork pair", and `gates.sh` sets the variable for
+`probe_cavlc` and `probe_sizelimited` but **not** for the two fork probes — because
+those two do not call `miri_scaled` at all: their geometry is a literal 112x112 x 2
+frames. The pair was launched with it set, to match H's spelling; it changes nothing.
+
+### Metrics, both ends (§7.1)
+
+| metric | open | close | note |
+|---|---|---|---|
+| `raw_ptr` | 1356 | **1351** | -5 |
+| `unsafe_fn` | 598 | **598** | -2 stride accessors, -1 `ctx_dq_idc_map`, +3 F192's probes |
+| `unsafe_block` | 267 | **270** | **+3, and it is F192's probes** — reported rather than smoothed. The ratchet permits it because it is a *per-file* rule and `encoder_context.rs` is still below its baseline; the crate total is not what the ratchet gates, and F194 is why the probes are in that file at all |
+| `shim` | 32 | 32 | — |
+
+### Tags, re-measured and each one placed
+
+| tag | open | close | where the difference went |
+|---|---|---|---|
+| `cursor` | 37 | **34** | 2 to the stride accessors (safe fns now), 1 to `ctx_dq_idc_map` (a slice API) |
+
+**The census and the grep disagree by one, and it is not this session's.**
+`phase9_census.py` regenerates to "33 `cursor`" where `grep -rn 'unsafe-cat: cursor'
+src | wc -l` reads **34**. The same 1-off was there at H2's open (the committed
+census said 36 against a tree at 37) and at X2's, so it is a pre-existing property of
+the census's parser — it attributes each tag to the signature that follows it and one
+tag sits on an item it does not classify. **Quote the instrument you name**: the tag
+counts in this entry are the grep's, the family table's are the census's, and they
+are not the same measurement. Finding it is J's; it is small, and it is exactly
+F190's class — two instruments describing one tree and no one comparing them.
+| `MT` | 20 | 20 | none moved: 18 are the fork's own machinery (D-exit-2's) and 2 are `nal_encap.rs:367`/`:399`, whose refusal (F187 §1) is about the **slice buffer**, not the context |
+| `recon-seam` | 2 | **2** | **the seam-item count the user confirms** — nothing added |
+| `send-seam` | 1 | 1 | D-exit-2, the exit's |
+## What J inherits — an executable checklist
+
+J is the exit. Nothing below needs re-deriving; every count has the command that
+produced it, and every "named lawful" site has its reason on the line above it in the
+source as well as here.
+
+### 1. The remaining allows, by lawful category
+
+```bash
+grep -rn 'unsafe-cat: cursor'            rust/crates/openh264-rs/src | wc -l   # 34
+grep -rn 'unsafe-cat: MT'                rust/crates/openh264-rs/src | wc -l   # 20
+grep -rn 'unsafe-cat: recon-seam'        rust/crates/openh264-rs/src | wc -l   #  2  D-mt-3
+grep -rn 'unsafe-cat: send-seam'         rust/crates/openh264-rs/src | wc -l   #  1  D-exit-2
+grep -rn 'unsafe-cat: SCREEN_CONTENT'    rust/crates/openh264-rs/src | wc -l   #     Phase 10's
+grep -rn 'unsafe-cat: port-raw(Phase 9)' rust/crates/openh264-rs/src | wc -l
+```
+
+* **`cursor` 34** — of these, **`ctx_frame_bs` and `ctx_frame_bs_cur` can never be
+  retired as slice APIs** (F193): `SLayerBSInfo::pBsBuf` is `codec_app_def.h:640`, a
+  public `unsigned char*` in a struct handed to the application. The exit condition's
+  category list needs a row for "raw because the C ABI is raw", or these two are a
+  permanent red mark against a target that cannot be met.
+* **`MT` 20** — 18 in `slice_multi_threading.rs` (the fork's own machinery, retiring
+  with D-exit-2) and 2 in `nal_encap.rs` at **`:367`/`:399`**. The `nal_encap` pair's
+  reason is F187 §1, re-read at the site this session: the MT caller passes
+  `addr_of_mut!((*pSliceBs).sBsWrite)` over **fork-shared slice state**. It is a
+  slice-buffer question, not a context question, and no context surface dissolves it.
+* **`recon-seam` 2 / `send-seam` 1** — D-mt-3's and D-exit-2's, unchanged.
+
+### 2. The instrument fixes
+
+* **F170** — `gates.sh` reports wall time where it means CPU time. Every battery
+  number in this log, D-gate-6's 1200 s cap included, carries that caveat.
+* **F178** — the ratchet counts `*mut` and `no_mangle` **in comments**. Respell
+  around it until it is fixed.
+* **F190 (new)** — the same class in prose, twice: the referee's gap list stated
+  19/9 where the tool measures 35/20, and `gates.sh`'s header stated a 15-minute cap
+  two sessions after D-gate-6 was amended to 1200 s. Both fixed here. **A number a
+  document states about an instrument goes stale exactly like a row in that
+  instrument's allowlist, and nothing checks it.**
+* **F194 (new)** — the ratchet is **per-file**, and it cannot tell `#[cfg(test)]`
+  unsafe from library unsafe. A probe's location is therefore constrained by
+  headroom. Never regenerate a baseline to admit a test; move the test.
+
+### 3. The referee's gap list — ten messages, two permanent
+
+`rust/tools/diffharness/log_referee_known_gaps.txt`: nine rows, ten messages, and
+**the referee is green**. Two rows are permanent by design —
+`WelsInitEncoderExt() exit, overall memory usage: N bytes` and
+`FreeMemorySvc(), verify memory usage (N bytes) after free..` — because Phases 3-6
+retired the `CMemoryAlign` arena and there is no running total to print. Synthesizing
+one would be inventing an observable. The other eight are portable and are J's.
+
+Two things J should know before touching it:
+
+* **Do not delete a row without deleting the gap.** The referee fails on a stale row
+  as loudly as on a new one.
+* **The level check no longer depends on message coverage** (F189), so porting these
+  eight will not change CHECK 1's verdict — it is already green, and it will stay
+  green if a ported message carries the right level and go red if it does not. That
+  is the point of the repair.
+
+### 4. The ruling backlog
+
+* **D4 / D5** — unchanged, still open.
+* **D-exit-2** — the send-seam. Its retirement condition is F164's, and §5 below is
+  it re-derived at H2's close: **nine** reasons, not F164's twelve.
+* **D-mt-3's veto is still open, and H2 did not use it.** The seam-item count is 2
+  and has never grown. If the exit condition's category list is amended, it is for
+  F193's ABI-permanent raws, not for a new seam category.
+
+### 5. The F67 probe at H2's close — the send-seam's contingency list, and **ten**
+
+Re-run it exactly as: append `fn _s<T: Sync>() {}` and `fn _p() { _s::<sWelsEncCtx>(); }`
+to `encoder_context.rs`, `cargo build`, revert. **Capture the whole output and count
+`^error\[E0277\]` mechanically** — do not read a tail. The tenth row below has the
+longest `required because` chain and is the first thing a line limit eats, which is
+how H2's step 0 reported nine (F195).
+
+**And do not quote the cardinality as a work measure.** The probe emits one error per
+distinct *type*, not per field, so a deletion whose type survives elsewhere is
+invisible to it: D-dead-7 removed `pCurPath` and the count did not move, because
+`*mut c_char` is `*mut i8` here and `SComplexityAnalysisParam` still contributes one.
+Measured both ways at H2's close — ten with the field, ten without. The member table
+is the artifact; the integer is not.
+
+| # | reason | reached through | owner |
+|---|---|---|---|
+| 1 | `*mut SSliceThreading` | the context, directly | the context split |
+| 2 | `*mut SWelsEncoderOutput` | the context, directly | the context split |
+| 3 | `*mut CWelsPreProcess` | the context, directly | the preprocessor — **and see F192** |
+| 4 | `*mut SRefList` | `SDqLayer` | the layer family |
+| 5 | `*mut SrcPicPool` | `SDqLayer` | the layer family |
+| 6 | `*mut u8` | `SVAAFrameInfo` | the VAA family |
+| 7 | `*mut i8` | `SComplexityAnalysisParam` → `SVAAFrameInfo` | the VAA family |
+| 8 | `*mut u32` | `SComplexityAnalysisParam` → `SVAAFrameInfo` | the VAA family |
+| 9 | `*mut c_void` | `SLogContext` | the trace |
+| 10 | `*mut SScreenBlockFeatureStorage` | `SPicture` → `RecPicPool` | Phase 10's |
+
+**Five of the ten are the context split's own** (1-5), three the VAA family's, one
+the trace's, one Phase 10's. Against F164's twelve at session G, the two that fell
+were X's `SVAAFrameInfo` pair, and **nothing fell at H2** — `SWelsSvcCodingParam`'s
+signed-char pointer was `pCurPath`'s type and the type is still here via
+`SComplexityAnalysisParam`. F164's warning holds and should be obeyed rather than
+quoted: **a stable total is not a stable list** — and F195 adds that it is not a
+stable *measure*, either.
+
+### 6. Named lawful, left by H2 — each with its reason
+
+| site | count | reason it stays, and what would move it |
+|---|---|---|
+| `ctx_func_list` | **105** call sites (not 106; the 106th is the definition) | The table is **re-written mid-stream** — `SetFastCodingFunc`/`SetNormalCodingFunc` run per frame — so the accessor exists precisely so every reader derives a fresh sibling and holds nothing across a call that can reach it again. A shared projection would be **unsound in the direction the site count suggests**. The end state is Phase 4b's dispatch enums finished: a family, not a seam. |
+| `ctx_mvd_cost_table` / `ctx_mvd_cost_origin` | 8 | Fork-constant reads with **one** writer (`MvdCostInit`, `encoder_ext.rs:1291`). Wants `&sWelsEncCtx`/`*const u16` with the writer spelling its derivation at its single site — F132 round 2's shape. Blocked on a **70-site `*const` cascade** into `SWelsMD::pMvdCost` and `SWelsME::pMvdCost`/`pMvdCostX`/`pMvdCostY`, which the accessor's own doc already defers to session I. Measure: `grep -rn 'pMvdCost' src --include='*.rs' \| grep -v pMvdCostTable \| wc -l`. |
+| the stride/index arena's `*const` returns | 4 accessors | Parameters are `&sWelsEncCtx` as of H2. The returns need a **length the arena does not have**: `SStrideTables` stores byte offsets into one flat `Vec<i32>` and records no region lengths. A slice API here means inventing a bound the C++ never had — a ruling, not a refactor. |
+| `ctx_ltr_at` | 26 | 22 want `&mut SLTRState`; **4 cannot** — `ref_list_mgr_svc.rs:757`, `:1025`, `:1453`, `:1648`, each carrying T9.G7's note (the body holds the LTR state across calls that re-derive their own `&mut` to the same `SLTRState`). A `&mut`-returning accessor borrows the context for the reference's lifetime, so the borrow checker refuses those four **at the call**. Four bodies of restructuring. |
+| `ctx_frame_bs` / `ctx_frame_bs_cur` | 29 | **Permanent** — `SLayerBSInfo::pBsBuf`, `codec_app_def.h:640`, crosses the C boundary (F193). |
+| the layer's `: *mut SDqLayer` parameters | 42, 7 files | The **layer** family, not the context. `svc_encode_slice.rs` holds 24 of them. |
+| X2's ~36 | ~36 | **Not this surface's**, and re-attempting is what showed why: `LoadPrevious` (`paraset_strategy.rs:456`) takes three **write** cursors into three different context `Vec`s, supplied from one `*ppCtx` in one call (`encoder_ext.rs:916`). A *shared* read projection cannot serve a writer. **The answer, so it need not be re-derived**: one accessor returning the three as a tuple of disjoint borrows — `ctx_paraset_arrays(&mut sWelsEncCtx) -> (&mut [SWelsSPS], &mut [SSubsetSps], &mut [SWelsPPS])`. Rust permits `(&mut s.a, &mut s.b, &mut s.c)` from one `&mut s` inside one body; what it forbids is three *separate* accessor calls, which is exactly the shape that blocked them. A call-shape problem with a one-function answer. |
+| F187's six refusals | 6 | **All six stand, re-read at the site.** #1 is the `nal_encap` pair above; #2-6 are `WelsInitSps`/`WelsInitSubsetSps`'s five layer parameters, resting on `InitDqLayers` holding a live pointer into the same spatial layer (`paraset_strategy.rs:846`). Neither reason is a context-read reason. |
+| `ParasetStrategy` | 1 | F166's, unchanged — the one ST-flippable body in `paraset_strategy.rs`. The other ST-flippable body the forksplit tool reports is in **`svc_mode_decision.rs`**, and no brief has named it; those two are the whole remainder of the 113. |
+
+### 7. The one live soundness defect H2 leaves, with its trigger
+
+**F192.** `CWelsPreProcess::m_pEncCtx` read while a `&mut sWelsEncCtx` is protected is
+Undefined Behavior — Miri's words, in `encoder_context.rs`'s test doc. It cannot fire
+today because `RequestMemorySvc` refuses `SCREEN_CONTENT_REAL_TIME`
+(`encoder_ext.rs:1222`) and all four consumers are behind that. **It goes live the day
+Phase 10 enables screen content**, and the live shape is
+`WelsBuildRefListScreen(pCtx: &mut sWelsEncCtx)` calling `(*pCtx.pVpp).GetRefFrameInfo(..)`
+at `ref_list_mgr_svc.rs:1539`.
+
+The remedy is not a guess: `f167_stored_context_copy_under_a_shared_borrow` is the
+same call under a shared context borrow and is **green under Miri**. The four
+consumers take the context by shared borrow, or as a parameter, instead of reading it
+back out of the field. Whoever enables screen content owns this, and the test that
+proves the fix is already written.

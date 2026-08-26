@@ -46,5 +46,20 @@
 # smoke is not the cause: 977 - 9 = 968 s is still over, so the battery was
 # already past 900 s before it joined. See F185.
 #
+# REGIME NOTE (session H2, 2026-08-26): D-gate-6 is amended and the cap is
+# **1200 s**, not 900 — the line above was written before the amendment and its
+# "over the cap" verdict is against the old number. H2's battery ran **551 s**,
+# less than half the cap, and that is NOT a coverage change: the architecture is
+# X2's exactly. It is machine load, which is F170's caveat, and it is why S61
+# compares lane against lane and not battery against battery.
+#
+# H2 also priced the tax D-gate-6 predicted without pricing: the debug sweep ran
+# **63 s inside the session battery against 47 s in a family battery on the same
+# tree** — 1.34x, the Miri lane taxing the native one.
+#
+# H2's fork pair shares one CARGO_TARGET_DIR rather than two, which the note above
+# prescribes. The build was already warm from the lane's compile, so the two runs
+# were concurrent from the start; the deviation is recorded because a pair wall is
+# unreadable without its form.
 # Format: <seconds> <commit> <date> <note>
-480 d0020008 2026-08-26 session-X2-close-lane-vs-lane-ratio-0.95-291-0-battery-977s-OVER-the-15min-cap-F185
+551 9804989b 2026-08-26 session-H2-close-lane-vs-lane-ratio-1.15-292-0-battery-551s-vs-the-amended-1200s-cap
