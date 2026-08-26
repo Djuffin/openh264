@@ -1,4 +1,4 @@
-# Phase 9 — Session H2: the in-fork read surface — the seam, the audit, and the spine's close
+# Phase 9 — Session H2: the fork workers' context reads get their lawful end state — the last core-chain session before the exit
 
 *Self-contained. Read top to bottom once; then work the steps in order. Every count
 below was measured at the commit this brief landed in, with the command beside it —
@@ -19,7 +19,10 @@ is tagged, and the phase retires them family by family. The plan is
 
 ## What session H2 is
 
-The spine's last session — after it, only J (the exit) remains. H flipped the ST
+The last session on the encoder's core object chain (the charter's "cursor spine":
+`sWelsEncCtx` → `SDqLayer` → `SSlice` → the macroblock records and pictures, each
+family's raw cursors derived from the one above — converted in that order all
+phase) — after it, only J, the exit, remains. H flipped the ST
 half of the context family; what remains is **the in-fork half's read surface**:
 the fork's workers read pre-fork-stamped context state through raw accessors, and
 this session gives those reads their lawful end state. Around that core: a
@@ -168,7 +171,7 @@ splitting borrows, never by minting a raw).
 ## Step 5 — close
 
 - The session gate once (S61 vs **480 s**; battery vs **1200 s**), then **one
-  parallel `MIRI_FULL=1` fork pair** (~58 min). Both green is the spine's
+  parallel `MIRI_FULL=1` fork pair** (~58 min). Both green is the core chain's
   proof; a report bisects newest-first.
 - **The F67 probe re-run**: the count and the member list **by owner** — this
   is J's send-seam contingency list and the report's most load-bearing table.
