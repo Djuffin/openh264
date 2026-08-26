@@ -334,20 +334,22 @@ pub struct SharedMbArray<T: Copy> {
 }
 
 impl<T: Copy> SharedMbArray<T> {
-    /// Captures a per-macroblock array for the frame.
-    ///
-    /// **No caller, at HEAD.** It was made public for the rate controller's
-    /// `pGomCost` — same shape, same fork (T9.C5) — which never took it (the field
-    /// went to `Vec<AtomicI32>` instead) and is now deleted whole (D-dead-3). Every
-    /// construction in this module builds the struct literal directly. Whether this
-    /// goes the way `rc_gom_cost` did (S18) is a deletion ruling, not a session's
-    /// call — F160 carries the evidence. The contract is the module's, unchanged —
-    /// the exclusive borrow taken here must be the last one until the view is
-    /// dropped, and the workers' index sets must be disjoint.
-    #[inline]
-    pub fn capture(v: &mut Vec<T>) -> Self {
-        Self { cells: SharedCells::capture(v) }
-    }
+    // **`SharedMbArray::capture` stood here — deleted under D-dead-4 (the user,
+    // 2026-08-25).** It was made public for the rate controller's `pGomCost` —
+    // same shape, same fork (T9.C5) — which never took it (the field went to
+    // `Vec<AtomicI32>` instead) and was deleted whole by D-dead-3. So the method
+    // was dead at the moment its justification was written, and the justification
+    // is now dead too. Every construction in this module builds the struct literal
+    // directly (`SharedMbArray { cells: SharedCells::capture(…) }`).
+    //
+    // Read greps at deletion: `grep -rn '::capture(' src | grep -v SharedCells`
+    // read **0** before and after — `SharedCells::capture`, the inner one this
+    // wrapped, is untouched and has seven callers. F160 carried the evidence and
+    // the ruling that reached `pGomCost` reached this by name.
+    //
+    // The module's contract is unchanged and lives on `SharedCells::capture`: the
+    // exclusive borrow taken there must be the last one until the view is dropped,
+    // and the workers' index sets must be disjoint.
 
     /// Entry `i`.
     #[inline]
