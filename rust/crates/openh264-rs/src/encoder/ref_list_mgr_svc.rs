@@ -197,12 +197,13 @@ pub struct SLTRMarkingFeedback {
 // ============================================================================
 
 /// Reset LTR marking, recovery, and feedback state to defaults.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn ResetLtrState(pLtr: *mut SLTRState) {
-    if pLtr.is_null() {
-        return;
-    }
+///
+/// **T9.X — `&mut`, and safe.** The parameter was `*mut SLTRState` with a null
+/// guard; all three callers derive it from `ctx_ltr_at`, which cannot yield null
+/// for an in-range layer, and two of them already spelled the argument
+/// `&mut *ctx_ltr_at(..)`. The body only writes fields, so nothing here needs
+/// `unsafe` once the raw leaves the signature.
+pub fn ResetLtrState(pLtr: &mut SLTRState) {
     (*pLtr).bReceivedT0LostFlag = false;
     (*pLtr).iLastRecoverFrameNum = 0;
     (*pLtr).iLastCorFrameNumDec = -1;
@@ -283,8 +284,18 @@ pub unsafe fn WelsResetRefList(pCtx: &mut sWelsEncCtx) {
 /// Taking the list retags the list.
 pub fn DeleteLTRFromLongList(pRefList: &mut SRefList, iIdx: i32) {
     let count = pRefList.uiLongRefCount as i32;
+    // **T9.X — F86's class, guarded where upstream's invariant is implicit.**
+    // Upstream (`ref_list_mgr_svc.cpp:82`) walks to `uiLongRefCount - 1` and indexes
+    // `pLongRefList[k + 1]` unchecked; the array is `[_; 1 + MAX_REF_PIC_COUNT]` and
+    // nothing in either tree *enforces* `uiLongRefCount <= 1 + MAX_REF_PIC_COUNT` —
+    // it is an emergent property of the marking schedule, not a checked bound. Where
+    // that invariant holds, `kLast` is never the binding term and this loop is
+    // byte-for-byte the C++ one. Where it fails, upstream reads past the array and
+    // this stops at its end instead of panicking. See F172.
+    let kLast = pRefList.pLongRefList.len() as i32 - 1;
+    let kUpper = (count - 1).min(kLast);
     let mut k = iIdx;
-    while k < count - 1 {
+    while k < kUpper {
         pRefList.pLongRefList[k as usize] = pRefList.pLongRefList[(k + 1) as usize];
         k += 1;
     }
@@ -301,8 +312,12 @@ pub fn DeleteLTRFromLongList(pRefList: &mut SRefList, iIdx: i32) {
 /// Narrowed with [`DeleteLTRFromLongList`] and for the same reason — T9.G3.
 pub fn DeleteSTRFromShortList(pRefList: &mut SRefList, iIdx: i32) {
     let count = pRefList.uiShortRefCount as i32;
+    // The same guard as [`DeleteLTRFromLongList`], for the same reason and against
+    // the same C++ shape (`ref_list_mgr_svc.cpp:93`) — T9.X, F172.
+    let kLast = pRefList.pShortRefList.len() as i32 - 1;
+    let kUpper = (count - 1).min(kLast);
     let mut k = iIdx;
-    while k < count - 1 {
+    while k < kUpper {
         pRefList.pShortRefList[k as usize] = pRefList.pShortRefList[(k + 1) as usize];
         k += 1;
     }
@@ -694,7 +709,25 @@ pub unsafe fn PrefetchNextBuffer(pCtx: &mut sWelsEncCtx) {
     }
 
     if (*pRefList).pNextBuffer.is_none() && (*pRefList).uiShortRefCount > 0 {
-        let lastIdx = ((*pRefList).uiShortRefCount - 1) as usize;
+        // **T9.X — this is F86's actual open site**, not the shift the finding names.
+        // The abort F86 recorded (`the len is 5 but the index is 5`, then
+        // `panic in a function that cannot unwind -> abort`) was raised *here*, at
+        // what was `ref_list_mgr_svc.rs:684` when the finding was written: with
+        // `uiShortRefCount == 6`, `lastIdx == 5` on a `[_; 1 + MAX_SHORT_REF_COUNT]`
+        // = `[_; 5]`. The C++ counterpart is `ref_list_mgr_svc.cpp:343`
+        // (`pShortRefList[pRefList->uiShortRefCount - 1]`), an unchecked *read* — not
+        // the `pShortRefList[iRefIdx + 1]` write at `cpp:387-391` the finding cites,
+        // which is `WelsUpdateRefList`'s insert shift and has been bound-guarded in
+        // this port since the raw translation. See F172.
+        //
+        // Measured this session: across all 583 sweep rows (`st mt def sl ltr ps dl
+        // bg`) `uiShortRefCount` never exceeds 2 against a panic threshold of 6, and
+        // this branch is never taken at all — the free-buffer loop above always finds
+        // one. F86's own trigger was `ForceCodingIDR` being a stub, which T8b.A4
+        // fixed. So the guard below is not covering a reachable panic; it makes the
+        // unenforced invariant explicit at the one site that historically broke it.
+        let lastIdx = (((*pRefList).uiShortRefCount - 1) as usize)
+            .min((*pRefList).pShortRefList.len() - 1);
         (*pRefList).pNextBuffer = (*pRefList).pShortRefList[lastIdx];
         if let Some(id) = (*pRefList).pNextBuffer {
             (*pRefList).pic_mut(id).SetUnref();
@@ -921,13 +954,18 @@ pub unsafe fn WelsMarkMMCORefInfoWithBase(
 #[allow(unsafe_code)]
 pub unsafe fn WelsMarkMMCORefInfo(
     pCtx: &mut sWelsEncCtx,
-    pLtr: *mut SLTRState,
+    pLtr: &mut SLTRState,
     pCurDq: &mut SDqLayer,
     kiCountSliceNum: i32,
 ) {
     // T9.H: the `pCtx.is_null()` disjunct is gone — a `&mut sWelsEncCtx`
-    // cannot be null and every caller now holds one. The rest is unchanged.
-    if pLtr.is_null() || kiCountSliceNum <= 0 {
+    // cannot be null and every caller now holds one.
+    // **T9.X**: `pLtr` follows it. The body never re-derives `ctx_ltr_at`, so the
+    // `&mut` minted at the call site is the only cursor to this `SLTRState` while
+    // the call runs, and the call is its caller's last statement — the raw root it
+    // is reborrowed from is never used again afterwards (T9.G7's hazard is a
+    // pop-then-use, and there is no use).
+    if kiCountSliceNum <= 0 {
         return;
     }
     let pBaseSlice = crate::encoder::svc_encode_slice::slice_in_layer(pCurDq, 0);
@@ -1014,7 +1052,7 @@ pub unsafe fn WelsMarkPic(pCtx: &mut sWelsEncCtx) {
     let pCurLayerForMmco = &mut *current_layer(pCtx);
     WelsMarkMMCORefInfo(
         pCtx,
-        pLtr,
+        &mut *pLtr,
         pCurLayerForMmco,
         kiCountSliceNum,
     );
@@ -1025,11 +1063,15 @@ pub unsafe fn WelsMarkPic(pCtx: &mut sWelsEncCtx) {
 #[allow(unsafe_code)]
 pub unsafe fn FilterLTRRecoveryRequest(
     pCtx: &mut sWelsEncCtx,
-    pLTRRecoverRequest: *mut SLTRRecoverRequest,
+    pLTRRecoverRequest: &mut SLTRRecoverRequest,
 ) -> i32 {
     // T9.H: the `pCtx.is_null()` disjunct is gone — a `&mut sWelsEncCtx`
-    // cannot be null and every caller now holds one. The rest is unchanged.
-    if ctx_param(pCtx).is_null() || pLTRRecoverRequest.is_null() {
+    // cannot be null and every caller now holds one.
+    // **T9.X**: the request pointer follows it, and the null guard goes with it —
+    // upstream (`ref_list_mgr_svc.cpp:517`) has no such guard, dereferencing both
+    // `pCtx->pSvcParam` and `pLTRRecoverRequest->iLayerId` unconditionally. The
+    // guard was the port's own addition, not a behaviour the reference has.
+    if ctx_param(pCtx).is_null() {
         return 0;
     }
     if !(*ctx_param(pCtx)).bEnableLongTermReference {
@@ -1083,11 +1125,11 @@ pub unsafe fn FilterLTRRecoveryRequest(
 #[allow(unsafe_code)]
 pub unsafe fn FilterLTRMarkingFeedback(
     pCtx: &mut sWelsEncCtx,
-    pLTRMarkingFeedback: *mut SLTRMarkingFeedback,
+    pLTRMarkingFeedback: &mut SLTRMarkingFeedback,
 ) {
-    // T9.H: the `pCtx.is_null()` disjunct is gone — a `&mut sWelsEncCtx`
-    // cannot be null and every caller now holds one. The rest is unchanged.
-    if ctx_param(pCtx).is_null() || pLTRMarkingFeedback.is_null() {
+    // T9.H / T9.X — as [`FilterLTRRecoveryRequest`]: upstream
+    // (`ref_list_mgr_svc.cpp:563`) guards neither pointer.
+    if ctx_param(pCtx).is_null() {
         return;
     }
     let iLayerId = (*pLTRMarkingFeedback).iLayerId;
@@ -1555,13 +1597,18 @@ pub fn IsValidFrameNum(kiFrameNum: i32) -> bool {
 #[allow(unsafe_code)]
 pub unsafe fn WelsMarkMMCORefInfoScreen(
     pCtx: &mut sWelsEncCtx,
-    pLtr: *mut SLTRState,
+    pLtr: &mut SLTRState,
     pCurDq: &mut SDqLayer,
     kiCountSliceNum: i32,
 ) {
     // T9.H: the `pCtx.is_null()` disjunct is gone — a `&mut sWelsEncCtx`
-    // cannot be null and every caller now holds one. The rest is unchanged.
-    if pLtr.is_null() || kiCountSliceNum <= 0 {
+    // cannot be null and every caller now holds one.
+    // **T9.X**: `pLtr` follows it. The body never re-derives `ctx_ltr_at`, so the
+    // `&mut` minted at the call site is the only cursor to this `SLTRState` while
+    // the call runs, and the call is its caller's last statement — the raw root it
+    // is reborrowed from is never used again afterwards (T9.G7's hazard is a
+    // pop-then-use, and there is no use).
+    if kiCountSliceNum <= 0 {
         return;
     }
     let pBaseSlice = crate::encoder::svc_encode_slice::slice_in_layer(pCurDq, 0);
@@ -1700,7 +1747,7 @@ pub unsafe fn WelsMarkPicScreen(pCtx: &mut sWelsEncCtx) {
     let pCurLayerForMmco = &mut *current_layer(pCtx);
     WelsMarkMMCORefInfoScreen(
         pCtx,
-        pLtr,
+        &mut *pLtr,
         pCurLayerForMmco,
         iSliceNum,
     );

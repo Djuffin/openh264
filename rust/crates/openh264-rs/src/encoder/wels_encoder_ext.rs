@@ -2420,11 +2420,11 @@ impl CWelsH264SVCEncoder {
                     (*ctx_param(pCtx)).iPaddingFlag = iValue;
                 }
                 EncoderOption::ENCODER_LTR_RECOVERY_REQUEST => {
-                    let pLTR_Recover_Request = pOption as *mut SLTRRecoverRequest;
+                    let pLTR_Recover_Request = &mut *(pOption as *mut SLTRRecoverRequest);
                     FilterLTRRecoveryRequest(&mut *pCtx, pLTR_Recover_Request);
                 }
                 EncoderOption::ENCODER_LTR_MARKING_FEEDBACK => {
-                    let fb = pOption as *mut SLTRMarkingFeedback;
+                    let fb = &mut *(pOption as *mut SLTRMarkingFeedback);
                     FilterLTRMarkingFeedback(&mut *pCtx, fb);
                 }
                 EncoderOption::ENCODER_LTR_MARKING_PERIOD => {
