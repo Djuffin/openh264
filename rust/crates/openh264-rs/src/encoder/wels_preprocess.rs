@@ -991,8 +991,10 @@ impl CWelsPreProcess {
     /// Factory constructor instantiating the preprocessing subsystem.
     // unsafe-cat: port-raw(Phase 9)
     #[allow(unsafe_code)]
-    pub unsafe fn CreatePreProcess(pEncCtx: *mut sWelsEncCtx) -> *mut CWelsPreProcess {
-        if pEncCtx.is_null() || ctx_param(pEncCtx).is_null() {
+    pub unsafe fn CreatePreProcess(pEncCtx: &mut sWelsEncCtx) -> *mut CWelsPreProcess {
+        // T9.H: the `pEncCtx.is_null()` disjunct is gone — a `&mut sWelsEncCtx`
+        // cannot be null and every caller now holds one. The rest is unchanged.
+        if ctx_param(pEncCtx).is_null() {
             return std::ptr::null_mut();
         }
 
@@ -1060,7 +1062,7 @@ impl CWelsPreProcess {
     #[allow(unsafe_code)]
     pub unsafe fn AllocSpatialPictures(
         &mut self,
-        pCtx: *mut sWelsEncCtx,
+        pCtx: &mut sWelsEncCtx,
         pParam: *mut SWelsSvcCodingParam,
     ) -> i32 {
         let kiDlayerCount = (*pParam).iSpatialLayerNum;
@@ -1114,8 +1116,10 @@ impl CWelsPreProcess {
 
     // unsafe-cat: port-raw(Phase 9)
     #[allow(unsafe_code)]
-    pub unsafe fn FreeSpatialPictures(&mut self, pCtx: *mut sWelsEncCtx) {
-        if pCtx.is_null() || ctx_param(pCtx).is_null() {
+    pub unsafe fn FreeSpatialPictures(&mut self, pCtx: &mut sWelsEncCtx) {
+        // T9.H: the `pCtx.is_null()` disjunct is gone — a `&mut sWelsEncCtx`
+        // cannot be null and every caller now holds one. The rest is unchanged.
+        if ctx_param(pCtx).is_null() {
             return;
         }
         let mut j = 0;

@@ -589,22 +589,24 @@ pub unsafe fn WelsWriteParameterSets(
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe fn WelsEncoderEncodeParameterSetsRust(
-    pCtx: *mut sWelsEncCtx,
+    pCtx: &mut sWelsEncCtx,
     pBsInfo: *mut SFrameBSInfo,
 ) -> i32 {
-    if pCtx.is_null() || pBsInfo.is_null() {
+    // T9.H: the `pCtx.is_null()` disjunct is gone — a `&mut sWelsEncCtx`
+    // cannot be null and every caller now holds one. The rest is unchanged.
+    if pBsInfo.is_null() {
         return ENC_RETURN_INVALIDINPUT;
     }
     let pLayerBsInfo = &mut (*pBsInfo).sLayerInfo[0];
     pLayerBsInfo.pBsBuf = ctx_frame_bs(pCtx);
-    pLayerBsInfo.pNalLengthInByte = (*(*pCtx).pOut).sNalLen.as_mut_ptr();
+    pLayerBsInfo.pNalLengthInByte = (*pCtx.pOut).sNalLen.as_mut_ptr();
     // Was `InitBits(&…sBsWrite, …pBsBuffer, …uiSize)`. The buffer and its length stay
     // where they were; the writer is a position, and resetting it is all `InitBits`
     // did that still means anything. Its `kpBuf: *const u8` parameter — stored as
     // `pStartBuf: *mut u8` and written through — is deleted rather than amended
     // (`phase2_findings.md` F13, third site).
-    (*(*pCtx).pOut).sBsWrite = crate::encoder::vlc_encoder::BsWriter::new();
-    (*pCtx).iPosBsBuffer = 0;
+    (*pCtx.pOut).sBsWrite = crate::encoder::vlc_encoder::BsWriter::new();
+    pCtx.iPosBsBuffer = 0;
 
     let mut iCountNal = 0;
     let mut iTotalLength = 0;
@@ -856,7 +858,7 @@ pub unsafe fn WelsEncoderParamAdjust(
             ParasetStrategy(pCtx).OutputCurrentStructure(
                 sTmpPsoVariable.as_mut_ptr(),
                 iTmpPpsIdList.as_mut_ptr(),
-                pCtx,
+                &mut *pCtx,
                 &mut sExistingParasetList,
             );
 
@@ -2056,7 +2058,7 @@ impl CWelsH264SVCEncoder {
         if pCtx.is_null() || !self.m_bInitialFlag {
             return cmInitParaError;
         }
-        unsafe { WelsEncoderEncodeParameterSetsRust(pCtx, pBsInfo) }
+        unsafe { WelsEncoderEncodeParameterSetsRust(&mut *pCtx, pBsInfo) }
     }
 
     // unsafe-cat: port-raw(Phase 9)
@@ -2402,11 +2404,11 @@ impl CWelsH264SVCEncoder {
                 }
                 EncoderOption::ENCODER_LTR_RECOVERY_REQUEST => {
                     let pLTR_Recover_Request = pOption as *mut SLTRRecoverRequest;
-                    FilterLTRRecoveryRequest(pCtx, pLTR_Recover_Request);
+                    FilterLTRRecoveryRequest(&mut *pCtx, pLTR_Recover_Request);
                 }
                 EncoderOption::ENCODER_LTR_MARKING_FEEDBACK => {
                     let fb = pOption as *mut SLTRMarkingFeedback;
-                    FilterLTRMarkingFeedback(pCtx, fb);
+                    FilterLTRMarkingFeedback(&mut *pCtx, fb);
                 }
                 EncoderOption::ENCODER_LTR_MARKING_PERIOD => {
                     let iValue = *(pOption as *const u32);

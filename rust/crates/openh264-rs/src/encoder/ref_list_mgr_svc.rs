@@ -1022,10 +1022,12 @@ pub unsafe fn WelsMarkPic(pCtx: &mut sWelsEncCtx) {
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe fn FilterLTRRecoveryRequest(
-    pCtx: *mut sWelsEncCtx,
+    pCtx: &mut sWelsEncCtx,
     pLTRRecoverRequest: *mut SLTRRecoverRequest,
 ) -> i32 {
-    if pCtx.is_null() || ctx_param(pCtx).is_null() || pLTRRecoverRequest.is_null() {
+    // T9.H: the `pCtx.is_null()` disjunct is gone — a `&mut sWelsEncCtx`
+    // cannot be null and every caller now holds one. The rest is unchanged.
+    if ctx_param(pCtx).is_null() || pLTRRecoverRequest.is_null() {
         return 0;
     }
     if !(*ctx_param(pCtx)).bEnableLongTermReference {
@@ -1078,10 +1080,12 @@ pub unsafe fn FilterLTRRecoveryRequest(
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe fn FilterLTRMarkingFeedback(
-    pCtx: *mut sWelsEncCtx,
+    pCtx: &mut sWelsEncCtx,
     pLTRMarkingFeedback: *mut SLTRMarkingFeedback,
 ) {
-    if pCtx.is_null() || ctx_param(pCtx).is_null() || pLTRMarkingFeedback.is_null() {
+    // T9.H: the `pCtx.is_null()` disjunct is gone — a `&mut sWelsEncCtx`
+    // cannot be null and every caller now holds one. The rest is unchanged.
+    if ctx_param(pCtx).is_null() || pLTRMarkingFeedback.is_null() {
         return;
     }
     let iLayerId = (*pLTRMarkingFeedback).iLayerId;

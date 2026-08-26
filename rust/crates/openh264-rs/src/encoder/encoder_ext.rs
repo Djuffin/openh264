@@ -596,7 +596,7 @@ pub unsafe fn GetMvMvdRange(
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 unsafe fn InitMbInfo(
-    pEnc: *mut sWelsEncCtx,
+    pEnc: &mut sWelsEncCtx,
     pLayer: &mut SDqLayer,
     kiDlayerId: i32,
 ) {
@@ -683,7 +683,7 @@ pub unsafe fn InitMbListD(ppCtx: *mut *mut sWelsEncCtx) -> i32 {
             MbDims::new(iMbWidth as usize, iMbHeight as usize),
             SMB::default(),
         );
-        InitMbInfo(*ppCtx, &mut *pLayer, i as i32);
+        InitMbInfo(&mut **ppCtx, &mut *pLayer, i as i32);
     }
 
     0
@@ -831,7 +831,7 @@ pub unsafe fn InitDqLayers(
         }
         (*pDqLayer).iMaxSliceNum = iMaxSliceNum;
 
-        iResult = InitSliceInLayer(*ppCtx, &mut *pDqLayer, iDlayerIndex);
+        iResult = InitSliceInLayer(&mut **ppCtx, &mut *pDqLayer, iDlayerIndex);
         if iResult != 0 {
             return iResult;
         }
@@ -924,7 +924,7 @@ pub unsafe fn InitDqLayers(
         (*pDqIdc).uiSpatialId = iDlayerIndex as i8;
 
         iSpsId = ParasetStrategy(*ppCtx).GenerateNewSps(
-            *ppCtx,
+            &mut **ppCtx,
             bUseSubsetSps,
             iDlayerIndex,
             iDlayerCount,
@@ -949,7 +949,7 @@ pub unsafe fn InitDqLayers(
         }
 
         iPpsId = ParasetStrategy(*ppCtx).InitPps(
-            *ppCtx,
+            &mut **ppCtx,
             iSpsId as u32,
             // T6.G3: `InitPps` takes the arm it will actually use, not both plus a
             // flag. The two locals are still raw here — they are cursors into the
@@ -993,7 +993,7 @@ pub unsafe fn InitDqLayers(
         iDlayerIndex += 1;
     }
 
-    ParasetStrategy(*ppCtx).UpdateParaSetNum(*ppCtx);
+    ParasetStrategy(*ppCtx).UpdateParaSetNum(&mut **ppCtx);
     ENC_RETURN_SUCCESS
 }
 
@@ -1522,7 +1522,7 @@ pub unsafe fn WelsInitEncoderExt(
     // through the same context (shape B).
     let pParamForFuncs = ctx_param(pCtx);
     iRet = crate::encoder::encoder_context::InitFunctionPointers(
-        pCtx,
+        &mut *pCtx,
         pParamForFuncs,
         uiCpuFeatureFlags,
     );
@@ -1546,9 +1546,9 @@ pub unsafe fn WelsInitEncoderExt(
     // T9.G6: hoisted — the call takes the context retag and this argument reads
     // through the same context (shape B).
     let iRCMode = (*ctx_param(pCtx)).iRCMode;
-    crate::encoder::rc::WelsRcInitModule(pCtx, iRCMode);
+    crate::encoder::rc::WelsRcInitModule(&mut *pCtx, iRCMode);
 
-    (*pCtx).pVpp = crate::encoder::wels_preprocess::CWelsPreProcess::CreatePreProcess(pCtx);
+    (*pCtx).pVpp = crate::encoder::wels_preprocess::CWelsPreProcess::CreatePreProcess(&mut *pCtx);
     if (*pCtx).pVpp.is_null() {
         WelsUninitEncoderExt(Some(Box::from_raw(pCtx)));
         return 1;
@@ -1556,7 +1556,7 @@ pub unsafe fn WelsInitEncoderExt(
     // T9.G6: hoisted — the call takes the context retag and this argument reads
     // through the same context (shape B).
     let pParamForAlloc = ctx_param(pCtx);
-    iRet = (*(*pCtx).pVpp).AllocSpatialPictures(pCtx, pParamForAlloc);
+    iRet = (*(*pCtx).pVpp).AllocSpatialPictures(&mut *pCtx, pParamForAlloc);
     if iRet != 0 {
         WelsUninitEncoderExt(Some(Box::from_raw(pCtx)));
         return iRet;
@@ -1691,7 +1691,7 @@ mod tests {
         *ctx_param(pCtx) = param;
         // T6.I1: the table comes with the context; see `WelsInitEncoderExt`.
         assert_eq!(
-            { let pParam = ctx_param(pCtx); InitFunctionPointers(pCtx, pParam, uiCpuFeatureFlags) },
+            { let pParam = ctx_param(pCtx); InitFunctionPointers(&mut *pCtx, pParam, uiCpuFeatureFlags) },
             ENC_RETURN_SUCCESS
         );
         (*pCtx).iActiveThreadsNum = param.iMultipleThreadIdc as i16;
@@ -1814,7 +1814,7 @@ pub unsafe fn WelsUninitEncoderExt(pEncContext: Option<Box<sWelsEncCtx>>) {
     let pCtx = Box::into_raw(pEncContext);
 
     if !(*pCtx).pVpp.is_null() {
-        (*(*pCtx).pVpp).FreeSpatialPictures(pCtx);
+        (*(*pCtx).pVpp).FreeSpatialPictures(&mut *pCtx);
         drop(Box::from_raw((*pCtx).pVpp));
         (*pCtx).pVpp = null_mut();
     }

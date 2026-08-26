@@ -3677,7 +3677,7 @@ pub unsafe fn InitSliceThreadInfo(
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe fn InitSliceInLayer(
-    pCtx: *mut sWelsEncCtx,
+    pCtx: &mut sWelsEncCtx,
     pDqLayer: &mut SDqLayer,
     kiDlayerIndex: i32,
 ) -> i32 {
@@ -3704,7 +3704,7 @@ pub unsafe fn InitSliceInLayer(
     }
 
     (*pDqLayer).iMaxSliceNum = 0;
-    for iSlcBuffIdx in 0..(*pCtx).iActiveThreadsNum {
+    for iSlcBuffIdx in 0..pCtx.iActiveThreadsNum {
         (*pDqLayer).iMaxSliceNum += (*pDqLayer).sSliceBufferInfo[iSlcBuffIdx as usize].iMaxSliceNum;
     }
 
@@ -3723,7 +3723,7 @@ pub unsafe fn InitSliceInLayer(
     }
 
     let mut iStartIdx = 0;
-    for iSlcBuffIdx in 0..(*pCtx).iActiveThreadsNum {
+    for iSlcBuffIdx in 0..pCtx.iActiveThreadsNum {
         for iSliceIdx in 0..(*pDqLayer).sSliceBufferInfo[iSlcBuffIdx as usize].iMaxSliceNum {
             let slices: &mut Vec<SliceIdx> = &mut (*pDqLayer).ppSliceInLayer;
             slices[(iStartIdx + iSliceIdx) as usize] =
