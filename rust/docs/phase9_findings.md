@@ -4349,3 +4349,334 @@ time: F179 was a comment asserting a false negative about its own tree, F181 was
 parameter name read instead of the reference, and this was a classification made
 from signatures instead of from call sites. **Read the caller before you call
 anything mechanical.**
+
+---
+
+## F188 — D-fid-4's five duplication sites are six, and the sixth is inside the acceptance instrument
+
+**Session H2, step 0.** F184 counted five `WELS_LOG_*` duplications and H2's brief
+repeated the number with the grep that produces it:
+
+> "F184 counted **five** duplication sites including `tests/trace_callback_test.rs:41`
+> ... **enumerate all five yourself** (`grep -rn 'WELS_LOG_' src tests`, both codecs; S64)."
+
+That grep is scoped to `src tests`. The port has a sixth copy outside it, in
+`rust/tools/diffharness/rust_enc/main.rs:61`:
+
+```rust
+let mut level: u32 = 3; // WELS_LOG_INFO — codec_app_def.h:323
+```
+
+Same defect, same wrong value, same citation of the header line that says 4 — in the
+Rust half of **the referee that D-fid-4 names as its acceptance**. `cxx_enc.cpp:52`
+takes `WELS_LOG_INFO` from the real header, so the two drivers were asking their
+encoders for *different* trace levels and the referee's level check was reading the
+difference as a port defect on top of the one it was actually reporting.
+
+**Fixing the five and not the sixth would have made the acceptance worse, not
+better.** With the bit mask in place, level 3 admits ERROR (1) and WARNING (2) and
+**not** INFO (4): the port driver would have gone silent on every message the referee
+compares, and the run would have tripped the "the PORT logged nothing" guard rather
+than passing.
+
+The rule this leaves: **an instrument that hardcodes a constant is a copy of that
+constant.** A duplication census scoped to `src` and `tests` cannot see the tools
+directory, and the tools directory is where the acceptance lives.
+
+---
+
+## F189 — D-fid-4's stated acceptance could not be met by D-fid-4, and the remap is what exposed it
+
+**Session H2, step 0.** The ruling's acceptance is "`log_referee.sh`'s level check
+goes green", and the brief repeats it as "pre-built". The check compared the two
+delivered level **vocabularies**:
+
+```bash
+cut -d'|' -f1 cxx.log  | sort -u > cxx.levels
+cut -d'|' -f1 rust.log | sort -u > rust.levels
+cmp -s "$OUT/cxx.levels" "$OUT/rust.levels" || rc=1
+```
+
+The reference's vocabulary on the fixed row is `{2, 4}`. **All eight of its level-2
+lines are `ParamValidationExt` warnings this port does not emit at all**, and all
+four of their texts are rows in the gap list owned by **J**. So the set comparison
+could not go green while any owned gap remained, however correct the levels were: it
+was reporting missing MESSAGES in the name of wrong LEVELS. After the remap it stayed
+red at `cxx [2 4], rust [4]`, which is the levels being exactly right — and that is
+how the confound surfaced. A check whose green is gated on unrelated work in another
+session is a check nobody can act on.
+
+**This is F186's lesson in the other direction.** F186 was a normalization *wider*
+than the nondeterminism it meant to hide, so the referee certified a field it was
+built to check. This was a comparison *wider* than the divergence it could prove, so
+the referee condemned a defect that was not there. Both come from the same habit:
+writing the check against the shape of the data rather than against the question.
+
+**S69's replacement** asks the two questions the capture can answer. **1a**: every
+level the port delivers is a member of the header's mask (`0|1|2|4|8|16|32`) — F184's
+defect shape exactly, and it needs no coverage at all to fire. **1b**: for every
+message *both* sides emit, the levels agree — a real level on the wrong message.
+Coverage stays CHECK 2's subject and the gap list's, where it always belonged.
+
+Calibrated both ways (S66), because a check nobody has seen fail is not a check:
+
+| plant | 1a | 1b |
+|---|---|---|
+| `WELS_LOG_INFO` back to 3 | **fires** (iLevel=3 not in the mask) | 12/12 messages disagreed |
+| one `WelsLog` call INFO -> WARNING (a legal mask value) | **silent** | **2/12** (the param block, emitted twice) |
+| clean tree | silent | 12 messages, 0 disagreed — **PASS** |
+
+---
+
+## F190 — two documents in this tree state stale numbers about the instruments they describe
+
+**Session H2, step 0, found while quoting them.**
+
+1. `log_referee_known_gaps.txt`'s header read "Measured on the fixed row 2026-08-26:
+   reference 19 lines, port 9." The tool measures **35 and 20**. Those were
+   `d0020008`'s numbers; `c55b7581` — whose own commit message reads "**Coverage
+   19 -> 35 reference messages**" — updated the script, both drivers and the log, and
+   left the count in the one file whose entire contract is *"a stale row is a lie
+   about coverage"*.
+2. `gates.sh`'s header and its D-gate-6 block both read "CAPPED AT 15 MINUTES", two
+   sessions after the user amended D-gate-6 to **1200 s**. A session reading the
+   script rather than the plan would have cut coverage to meet a cap that no longer
+   exists.
+
+Neither is parsed by anything, which is exactly why neither was caught, and it is the
+same class as **F178** (the ratchet counting `*mut` in comments) one level up: there,
+prose was read *as* data; here, data was written *as* prose and then went stale. The
+rule both want: **a number a document states about an instrument is as stale-able as
+a row in that instrument's allowlist, and nothing checks it.** Where the instrument
+can print the number, quote the instrument; where a document must carry it, date it
+and name the commit it was measured at — as both now do.
+
+---
+
+## F191 — the in-fork "read routes" are four different problems wearing one label, and the largest of them cannot take a shared projection at all
+
+**Session H2, step 3.** The brief hands the seam four numbers as if they were one
+workload: "`ctx_func_list`'s 106 call sites; the layer's 42 raw parameter mentions;
+and the 20 `MT` tags", plus X2's ~36. Measured at the site, they are four different
+shapes and only one of them is a *context read*:
+
+| route | measured | what it actually is | dissolved by a shared context projection? |
+|---|---|---|---|
+| the stride/index lookups | 12 sites, 4 accessors | pure fork-constant reads | **yes — landed here** |
+| `ctx_mvd_cost_*` | 8 sites | fork-constant read **plus one writer** and a `*mut u16` that lives in `SWelsMD`/`SWelsME` | partly; blocked on a 70-site `*const` cascade in a different family |
+| `ctx_func_list` | **105** call sites (the brief's 106 counts the definition) | a table **re-written mid-stream** — `SetFastCodingFunc`/`SetNormalCodingFunc` run per frame | **no**: the accessor's own doc forbids holding anything derived from it across a call that can reach it again. Shared-projection is the wrong shape; this is a re-derive-every-time contract |
+| the layer's 42 `: *mut SDqLayer` params | 42, in 7 files | the **layer** family, not the context | no — a context surface cannot reach them |
+| the 20 `MT` tags | 18 `slice_multi_threading.rs` + 2 `nal_encap.rs` (`:367`, `:399` — the brief's `:361`/`:393` have drifted) | the fork's own machinery and the slice bitstream seam | no — F187 §1 already ruled `nal_encap`'s reason is the *slice buffer*, not the context |
+
+**`ctx_func_list` is the load-bearing correction.** It is the largest of the four
+numbers and the one a reader would attack first, and a shared projection is not
+merely insufficient there — it is *unsound in the direction the number suggests*.
+The table is mutable at frame cadence; the accessor exists precisely so every reader
+derives a fresh sibling. Handing out `&SWelsFuncPtrList` would let a reader hold one
+across the re-write. The correct end state for its 105 sites is not a projection but
+the dispatch enums Phase 4b built, finished — which is a family, not a seam.
+
+**What that leaves for the count the user confirms: zero new seam items.** The
+fork-constant read this session converts needs no `UnsafeCell` crossing and no `Sync`
+impl, because shared reads do not race with shared reads. The seam-item count stays
+at D-mt-3's **2**.
+
+---
+
+## F192 — F167's stored context copy is Undefined Behavior, not "argued sound": run at last, Miri refuses it in one line
+
+**Session H2, step 2.** F167 argued `CWelsPreProcess::m_pEncCtx` sound on its dormant
+half and never ran it; F171 is what that distinction cost on the other half. Run:
+
+```text
+error: Undefined Behavior: not granting access to tag <1118667> because that would
+remove [Unique for <1118916>] which is strongly protected
+  --> wels_preprocess.rs:2939  let bScene = (*self.m_pEncCtx).bCurFrameMarkedAsSceneLtr;
+<1118667> was created by a Unique retag at offsets [0x0..0x17f10]   (the owner Box)
+<1118916> is this argument    -->  drive(pCtx: &mut sWelsEncCtx)
+```
+
+**The mechanism is stronger than any argument that had been made about it, and it is
+stronger in a way that removes the escape everyone reached for.** The reasoning
+available before running it — mine included, written down before the run — was that a
+raw read below a live `Unique` *disables that `Unique` over the bytes read*, so the
+shape is sound as long as the caller does not go on to touch those same bytes; a
+property of the four call sites. That is wrong. **A reference function argument is
+strongly protected for the duration of the call**: while `drive` is on the stack, no
+access through any other tag may remove its `&mut`, so the *read* through the stored
+copy is UB immediately, whatever the caller does afterwards, and disjointness buys
+nothing. The context `&mut` covers `[0x0..0x17f10]` and contains every byte the stored
+copy touches.
+
+**The real path cannot be driven, and this is measured, not assumed.** All four
+readers — `GetBestRefPicScreen` (`:1567`), `DetectSceneChangeScreen` (`:2317`),
+`GetAvailableRefListLosslessScreenRefSelection` (`:2596`), `GetRefFrameInfo` (`:2899`)
+— are on the screen-content path, and `RequestMemorySvc` returns
+`ENC_RETURN_UNSUPPORTED_PARA` the moment `iUsageType == SCREEN_CONTENT_REAL_TIME`
+(`encoder_ext.rs:1222`), so no configuration finishes `WelsInitEncoderExt`.
+`GetRefFrameInfo` additionally dereferences `pVaa` as an `SVAAFrameInfoExt`, which
+this port never allocates (F177). So the brief's escape hatch is the only option and
+what it mints is stated in the test: the owner `Box`, the root raw as
+`std::ptr::addr_of_mut!` (which is `wels_encoder_ext.rs:715` character for character),
+the field copy set the way `CreatePreProcess` sets it (`:1030`), the object reached
+**through the context** as `(*pCtx.pVpp)` — `ref_list_mgr_svc.rs:1539`'s own route —
+and a driver taking `&mut sWelsEncCtx`, which is what 149 encoder bodies take. The
+reads are the three the consumers actually perform, through the same accessors.
+
+**It cannot fire today**, and that is the only reason this is a finding rather than a
+stop. It becomes live the day Phase 10 enables screen content, and the live shape is
+`WelsBuildRefListScreen(pCtx: &mut sWelsEncCtx)` calling
+`(*pCtx.pVpp).GetRefFrameInfo(..)` at `ref_list_mgr_svc.rs:1539`.
+
+**A correction to F167's own mechanism, which is worth writing down because the
+conclusion survived it.** F167 predicted the hazard arrives when "stage A0 replaces
+that `addr_of_mut!` with a `&mut` at the root". **Stage A0 never landed** — the root
+is still `addr_of_mut!` at all four sites (`wels_encoder_ext.rs:715`, `:882`, `:1094`,
+`:1712`). What creates the protected retag instead is the 149 bodies that took
+`&mut sWelsEncCtx` in session H. The finding was right about the outcome and wrong
+about the trigger.
+
+**The remedy is not proposed, it is driven, and it is green.** The sibling test makes
+the identical call with a **shared** context borrow: a `&T` protector forbids writes
+through other tags and permits reads, so the stored copy's three reads are lawful
+under it exactly where they are not under `&mut`. The fix for the four consumers is
+therefore to take the context by shared borrow (or as a parameter) rather than read it
+back out of `m_pEncCtx`. It is a dormant-path change and this session's brief puts
+`SCREEN_CONTENT(dormant)` semantics out of scope, so it is named for J with the
+executable proof attached rather than performed here.
+
+**And a defect in the first probe, which is the finding's own S57.** The fixture was
+first written as a helper returning the owner `Box<sWelsEncCtx>` by value. Moving a
+`Box` is itself a retag, so the root raw derived inside the helper was already dead
+when the test used it, and Miri reported a SharedReadOnly retag from a nonexistent
+tag — a defect in the instrument wearing the costume of a finding. Both tests build
+the shape inline now, and the reason is written where the helper used to be.
+
+---
+
+## F193 — two of the five "slice-returning" APIs can never return a slice, and the reason is in `codec_app_def.h`
+
+**Session H2, step 4, S54 (read the callers first).** The brief lists five accessors
+that "still return raw pointers under `cursor` tags" and asks for "a typed/slice-
+returning API sized by its callers". Read the callers and they are not one problem:
+
+| accessor | sites | what the callers do with it |
+|---|---|---|
+| `ctx_dq_idc_map` | 4 | `.add(did)` then read/write one `SDqIdc` |
+| `ctx_ltr` | 5 | the root; 3 of the 5 are the sibling-derivation tests |
+| `ctx_ltr_at` | 26 | **22 immediately deref** — `&mut *ctx_ltr_at(..)`, `&*ctx_ltr_at(..)`, `(*ctx_ltr_at(..)).field` |
+| `ctx_frame_bs` | 8 | **store the cursor into `SLayerBSInfo::pBsBuf`** |
+| `ctx_frame_bs_cur` | 21 | **the same store**, at 12 of the 21 |
+
+`SLayerBSInfo::pBsBuf` is `codec_app_def.h:640` — `unsigned char* pBsBuf`, a **public
+C-ABI field of a struct this library hands to the application**. It cannot become a
+slice, a reference, or anything else with a lifetime, in this phase or any other,
+because the value crosses the boundary. So two of the five are **permanent raw
+returns by the ABI**, not by port debt, and the right outcome for them is a note at
+the accessor saying so — otherwise a later session pays S54's cost again to learn it.
+
+The remaining three are real work of two different sizes. `ctx_dq_idc_map`'s four
+sites convert. `ctx_ltr_at`'s twenty-six are twenty-two that want `&mut SLTRState`
+and **four that cannot have it**, and those four are already documented at their sites
+(T9.G7, `ref_list_mgr_svc.rs:757`, `:1025`, `:1453`, `:1648`): the body holds the LTR
+state across calls that re-derive their own `&mut` to the *same* `SLTRState`, and
+"two Unique tags from one raw root are siblings, and the second pops the first". A
+`&mut`-returning accessor borrows the context for the reference's lifetime, so the
+borrow checker would refuse those four at the call — which is the crux arriving
+exactly where H's precedent says it does, and it is four bodies of restructuring, not
+a signature change.
+
+**The count that matters for the brief's framing**: "five slice-returning APIs" is
+2 permanent + 1 small + 1 medium-with-a-named-crux + 1 (`ctx_ltr`, which follows
+`ctx_ltr_at`). One number, four different answers.
+
+---
+
+## F194 — the ratchet is a per-file rule, so test-only unsafe competes with library unsafe for headroom, and it decides where a probe may live
+
+**Session H2, step 2, caught by the gate rather than by review.** The first home for
+F192's two Miri probes was `wels_preprocess.rs`, beside the four consumers they are
+about. `gates.sh family` came back:
+
+```
+INCREASES vs baseline:
+  encoder/wels_preprocess.rs  unsafe_block: 0 -> 2
+  encoder/wels_preprocess.rs  unsafe_fn:   45 -> 47
+```
+
+583/583 in both profiles, every test green, and the battery **FAIL** — correctly.
+`wels_preprocess.rs` had been driven to **zero** `unsafe_block`, and two
+`#[cfg(test)]` probes put it back above a line the phase had paid to reach. The
+ratchet cannot tell test code from library code: both are text in a file under
+`src/`.
+
+**This is not F178 and it is not a defect.** F178 is the ratchet counting `*mut` in
+*comments* — a false positive on prose. This is a **true** positive with a
+consequence nobody had written down: **a probe's location is constrained by the
+ratchet's per-file headroom**, so "put the test next to the thing it tests" is not
+always available, and the alternative is either weakening the instrument
+(regenerating a baseline to pass) or moving the test.
+
+Moved, not regenerated. The probes live in `encoder_context.rs`, which is the
+subject's own file — the aliasing under test is the *context*'s — and which sat four
+`unsafe fn` and three `unsafe {` **below** its baseline after this session's own
+conversions. The probe reads through `CWelsPreProcess::m_pEncCtx` exactly as before;
+it takes the object as a parameter rather than `&mut self`, which changes nothing
+about the shape, because the receiver is derived from the same `pVpp` raw either way.
+
+**The rule for J**: when a session's own conversions free per-file headroom, that
+headroom is the budget for its probes, and where the two do not coincide the probe
+moves. A baseline regenerated to admit a test is an instrument quietly lowered, and
+the whole point of the ratchet is that nobody notices that happening.
+
+---
+
+## F195 — the F67 probe counts distinct *types*, not fields, so it cannot see a deletion whose type survives elsewhere — and D-dead-7's own predicted verdict was unachievable
+
+**Session H2, the close.** D-dead-7's ruling text says "`pCurPath` deleted,
+**ten → nine** on F67", and H2's brief repeats it as the step-0 acceptance:
+
+> "**The F67 probe after both** ... : **ten → nine expected** — state
+> expected-vs-actual (S60)".
+
+Measured at the close, the probe reports **ten**. Measured again with `pCurPath`
+restored to `SWelsSvcCodingParam` and nothing else changed, it reports **ten**.
+**D-dead-7 did not move this number, and it never could have.**
+
+The probe is `fn _s<T: Sync>() {} _s::<sWelsEncCtx>();`, and what it yields is one
+`E0277` per **distinct type** that is not `Sync`, not one per field. `pCurPath` is a
+`*mut c_char`, and `c_char` is `i8` on this target — a type `SComplexityAnalysisParam`
+*also* contributes through `SVAAFrameInfo`. Deleting the field removed one of two
+sources of the same type, so the error set is unchanged.
+
+**Why this matters beyond one wrong prediction.** The count is the phase's headline
+progress metric for the send-seam's retirement condition — X's row reads "F67's probe
+**12 → 10 `!Sync` reasons**", F164 re-derived it and warned that "a stable total is
+not a stable list", and D-exit-2's retirement is written against it. A metric that
+counts types cannot measure work done on fields, and **the direction of the error is
+the dangerous one**: it under-reports remaining work whenever two families share a
+pointer type, and it reports *no progress* for real progress whenever they do. Two of
+today's ten are already in that state (`*mut i8` and `*mut u32` both arrive through
+`SComplexityAnalysisParam`, and `*mut i8` had a second source until this session).
+
+**What J should do with it**: keep the probe — it is the only thing that answers "is
+the context `Sync` yet" — but stop quoting its cardinality as a work measure. The
+member table (owner per reason) is the useful artifact; the integer is not. If a
+count is wanted, it has to come from a field census, not from the borrow checker's
+deduplicated diagnostic set.
+
+### And my own report of it was wrong twice, in one line
+
+H2's step-0 commit (`70729e28`) says:
+
+> "**The F67 probe, run after both step-0 rulings: expected nine, actual nine.**"
+
+Both halves are false. *Expected* nine came from quoting the brief instead of
+deriving it — exactly the failure mode the brief's own header warns about. *Actual*
+nine came from reading my own command through `head -60`, which cut the tenth block:
+`*mut SScreenBlockFeatureStorage` is reached through `SPicture` → `RecPicPool` and has
+the longest `required because` chain of the ten, so it is the block a line limit eats
+first. The agreement between a wrong expectation and a truncated measurement is what
+made it look like a confirmation. **S60 asks for expected-vs-actual precisely so a
+mismatch is visible; two errors that cancel defeat it, and the guard against that is
+to capture the whole output and count it mechanically rather than to read a tail.**
