@@ -2000,12 +2000,29 @@ impl CWelsH264SVCEncoder {
         if pSrcPic.iPicWidth < 16 || pSrcPic.iPicHeight < 16 {
             return cmUnsupportedData;
         }
-        let pCtx = Self::ctx_ptr(&mut self.m_pEncContext);
+        // **T9.H3 — the flip's top boundary.** The encode root takes
+        // `&mut sWelsEncCtx`, so the context reaches it as a borrow of the owning
+        // `Box` rather than through `ctx_ptr`'s `addr_of_mut!`. This is the one
+        // `&mut` the whole encode tree hangs from: everything below re-derives a
+        // raw from it at each use, so there is exactly one `Unique` on the
+        // context's allocation and every other derivation is its child.
+        //
+        // `WelsEncoderEncodeExt`'s own `pCtx.is_null()` guard moved here with it,
+        // and it reproduces the whole old null path, not just the return code: a
+        // null context made that function answer `ENC_RETURN_MEMALLOCERR`, which
+        // fell into the arm below and ran `WelsUninitEncoderExt(take())` before
+        // returning `cmMallocMemeError`. `take()` on an unset slot is `None`, so
+        // this is the same two statements in the same order.
         unsafe {
             // Back to raw for the tree below the boundary, which is
             // `port-raw(Phase 9)` and takes both blocks as pointers.
             let pSrcPic: *const SSourcePicture = pSrcPic;
             let pBsInfo: *mut SFrameBSInfo = pBsInfo;
+
+            let Some(pCtx) = self.m_pEncContext.as_deref_mut() else {
+                crate::encoder::encoder_ext::WelsUninitEncoderExt(None);
+                return cmMallocMemeError;
+            };
 
             let kiBeforeFrameUs = WelsTime();
             let kiEncoderReturn =

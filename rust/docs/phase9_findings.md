@@ -3345,3 +3345,84 @@ than re-deriving it) one level up: not a stale date this time, a stale
    fact that mattered was *how the two invocations were scheduled relative to
    each other*. For a measured wall-time the unit is not the command, it is the
    command plus what else was running.
+
+## F169 — the flip's boundary spelling is a ratchet question, and `as *mut _` is the wrong answer by about 500 counts
+
+Phase A's whole mechanism is that a flipped body reaches a still-raw callee by
+coercing: the context is `&mut sWelsEncCtx`, the callee takes
+`*mut sWelsEncCtx`, and something must spell the conversion. Stage A0 wrote the
+obvious thing at 93 sites in one body:
+
+```rust
+ctx_param(pCtx as *mut _)
+```
+
+`gates.sh family` came back **FAIL — unsafe ratchet: a file x metric increased**:
+
+```
+encoder/encoder_ext.rs  raw_ptr: 95 -> 187
+```
+
+`raw_ptr` counts occurrences of `*mut ` and `*const ` (`unsafe_ratchet.sh:41`),
+so each coercion is a raw-pointer mention. One body cost +92.
+
+**Extrapolated, the naive spelling would have added roughly 500 `raw_ptr` counts
+across the campaign** — 94 boundary calls in this body against 517 derefs
+overall, and every one of the 154 bodies has boundaries. The phase's headline
+metric is 1587; a flip whose entire purpose is retiring raw pointers would have
+finished about a third *above* where it started, and the ratchet — which has no
+escape hatch, "decreases are always fine, `check` is a ratchet, not an equality
+test" — would have failed on every stage.
+
+The fix is a spelling, and it is the standard library's own name for the
+operation:
+
+```rust
+ctx_param(std::ptr::from_mut(pCtx))
+```
+
+`std::ptr::from_mut::<T>(&mut T) -> *mut T` contains no `*mut ` token, so it is
+**net zero** on the metric. Re-spelling the 93 sites turned the stage's totals
+from +92 into:
+
+```
+raw_ptr        1587 -> 1584   -3
+unsafe_block    282 ->  279   -3
+unsafe_fn       626 ->  623   -3
+no per-file increases vs baseline.
+```
+
+### Why this is not just bookkeeping
+
+`as *mut _` and `std::ptr::from_mut` compile identically, so a reader could call
+this cosmetic. It is not, for two reasons.
+
+**It is the difference between a measurable campaign and an unmeasurable one.**
+The ratchet is the only instrument that sees "unsafe fn bodies converted" (its
+own header explains why `grep -c unsafe` cannot). A boundary spelling that
+inflates the metric by one per call site drowns the signal in boundary noise:
+the phase would have had to either abandon its instrument for the duration of
+its largest campaign, or re-baseline every stage, which is the same thing.
+
+**`from_mut` also says the right thing.** `as *mut _` is an inferred cast that
+would silently accept a `*const`-to-`*mut` change or a different pointee if the
+surrounding types moved; `from_mut` takes a `&mut T` and returns `*mut T` and
+nothing else, so the boundary is type-checked as the reborrow it is. For a
+campaign whose failure mode is minting the wrong pointer at a boundary, that is
+worth having.
+
+### The rule
+
+**Every phase-A boundary is `std::ptr::from_mut(ctx)`, and no stage writes
+`as *mut _`.** It is greppable, which the flip's remaining 153 bodies will want:
+`grep -rn 'from_mut(pCtx\|from_mut(pEncCtx' src/encoder | wc -l` counts the
+campaign's outstanding boundaries directly, and that number should fall to zero
+as phase B dissolves the accessors and the in-fork half is enumerated at the
+exit. A count of `as *mut _` would have been indistinguishable from the port's
+pre-existing casts.
+
+Recorded as a stage-0 lesson rather than a stage-A0 detail because it binds
+every remaining stage, and because it is the second time this session that the
+cheapest correct-looking spelling was the wrong one (F168's serial pair was the
+first): **the tree's own instruments are the check on that, and they only work
+if a stage runs them before it believes itself finished.**
