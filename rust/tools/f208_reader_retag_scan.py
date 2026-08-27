@@ -32,12 +32,15 @@ uq = re.compile(r"&mut\s*\(\*(p\w*Ctx\w*)\)\.|addr_of_mut!\(\(\*(p\w*Ctx\w*)\)\.
 # when its `&mut`-shaped derivation provably cannot be live across the reader —
 # the scanner is a line matcher and cannot see argument-position temporaries.
 CLEARED = {
-    # A7: the two uniques are `&mut (*pCtx).sLogCtx` in the argument lists of
-    # `ParamValidationExt` and `GetMultipleThreadIdc`. Each dies at the end of its
-    # own statement, long before the `param_mut` at :766; and `pOldParam` itself is
-    # unused on the branch that reaches the reader at :921 (the reset branch, which
-    # destroys the context and re-derives `pCtx`), which is why borrowck accepts it.
-    ("wels_encoder_ext.rs", "WelsEncoderParamAdjust"),
+    # (S3.B3 retired the WelsEncoderParamAdjust entry that stood here: the body's
+    # context root is a `&mut sWelsEncCtx` named `ctx` now, so it no longer matches
+    # `uq` at all and borrowck referees what the entry used to argue by hand.)
+    #
+    # (S3.B2 briefly held an InitDqLayers entry here, between the conversion that
+    # made its root a `&mut sWelsEncCtx` and the rename of that root to `ctx` —
+    # the hand-read is in the S3.B2 commit: statement-scoped slot writes, and a
+    # `pDqLayer` raw whose provenance is the layer `Box`'s own (F71/F211), out of
+    # reach of context retags. With the rename the body no longer matches `uq`.)
 }
 hits = []
 for f in sorted(glob.glob("src/**/*.rs", recursive=True)):

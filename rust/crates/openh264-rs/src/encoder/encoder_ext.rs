@@ -159,7 +159,7 @@ pub unsafe fn WelsGetEncBlockStrideOffset(pBlock: *mut i32, kiStrideY: i32, kiSt
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe fn AcquireLayersNals(
-    ppCtx: *mut *mut sWelsEncCtx,
+    ctx: &mut sWelsEncCtx,
     pCountLayers: *mut i32,
     pCountNals: *mut i32,
 ) -> i32 {
@@ -169,16 +169,12 @@ pub unsafe fn AcquireLayersNals(
     let mut iCountNumNals: i32 = 0;
     let mut iDIndex: i32 = 0;
 
-    if ppCtx.is_null() || (*ppCtx).is_null() {
-        return 1;
-    }
-
-    let iNumDependencyLayers = (**ppCtx).param().iSpatialLayerNum;
+    let iNumDependencyLayers = ctx.param().iSpatialLayerNum;
 
     loop {
         // S29: `&mut X as *mut T` is the defect with the cast already written.
         // The callee takes `*mut`, so the reference existed only to be discarded.
-        let pDLayer = std::ptr::addr_of_mut!((*ctx_param_raw(&**ppCtx)).sSpatialLayers[iDIndex as usize]);
+        let pDLayer = std::ptr::addr_of_mut!((*ctx_param_raw(&*ctx)).sSpatialLayers[iDIndex as usize]);
         let iOrgNumNals = iCountNumNals;
 
         // Note (Sep. 2010, upstream): the memory over-use here counts little towards
@@ -222,7 +218,7 @@ pub unsafe fn AcquireLayersNals(
 
     // T6.I1: a `pFuncList.is_null()` guard was here; the table is owned now.
     // count parasets
-    let Some(pStrategy) = (**ppCtx).func_list_mut().pParametersetStrategy.as_mut() else {
+    let Some(pStrategy) = ctx.func_list_mut().pParametersetStrategy.as_mut() else {
         return 1;
     };
     iCountNumNals += 1
@@ -251,7 +247,7 @@ pub unsafe fn AcquireLayersNals(
 /// `ppCtx` must point to a live context with `pMemAlign` and `pSvcParam` set.
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
-pub unsafe fn AllocStrideTables(ppCtx: *mut *mut sWelsEncCtx, kiNumSpatialLayers: i32) -> i32 {
+pub unsafe fn AllocStrideTables(ctx: &mut sWelsEncCtx, kiNumSpatialLayers: i32) -> i32 {
     // A7: the binding is gone for the reason `RequestMemorySvc` records — a `&mut`
     // into the parameter block cannot be held across a call that reaches it again.
 
@@ -285,12 +281,12 @@ pub unsafe fn AllocStrideTables(ppCtx: *mut *mut sWelsEncCtx, kiNumSpatialLayers
     // is computed, which is the only ordering change: the C++ installs the struct
     // first so an early `return 1` still frees it, and an owned table has no such
     // failure to protect against.
-    let iCntTid = if (**ppCtx).param().iTemporalLayerNum > 1 { 2 } else { 1 };
+    let iCntTid = if ctx.param().iTemporalLayerNum > 1 { 2 } else { 1 };
 
     iSpatialIdx = 0;
     while iSpatialIdx < kiNumSpatialLayers {
-        let kiTmpWidth = ((**ppCtx).param().sSpatialLayers[iSpatialIdx as usize].iVideoWidth + 15) >> 4;
-        let kiTmpHeight = ((**ppCtx).param().sSpatialLayers[iSpatialIdx as usize].iVideoHeight + 15) >> 4;
+        let kiTmpWidth = (ctx.param().sSpatialLayers[iSpatialIdx as usize].iVideoWidth + 15) >> 4;
+        let kiTmpHeight = (ctx.param().sSpatialLayers[iSpatialIdx as usize].iVideoHeight + 15) >> 4;
         let mut iNumMb = kiTmpWidth * kiTmpHeight;
 
         sMbSizeMap[iSpatialIdx as usize].iMbWidth = kiTmpWidth;
@@ -310,7 +306,7 @@ pub unsafe fn AllocStrideTables(ppCtx: *mut *mut sWelsEncCtx, kiNumSpatialLayers
 
         iSpatialIdx = 0;
         while iSpatialIdx < kiNumSpatialLayers {
-            let fDlp = &(**ppCtx).param().sSpatialLayers[iSpatialIdx as usize];
+            let fDlp = &ctx.param().sSpatialLayers[iSpatialIdx as usize];
 
             let kiWidthPad = WELS_ALIGN(fDlp.iVideoWidth, 16) + (PADDING_LENGTH << 1);
             iLineSizeY[iSpatialIdx as usize][kbBaseTemporalFlag] = WELS_ALIGN(kiWidthPad, 32);
@@ -329,8 +325,8 @@ pub unsafe fn AllocStrideTables(ppCtx: *mut *mut sWelsEncCtx, kiNumSpatialLayers
 
     let iNeedAllocSize = iSizeDec + iSizeEnc + (iUnit2Size << 1);
 
-    (**ppCtx).pStrideTab = Some(Box::new(SStrideTables::new(iNeedAllocSize)));
-    let pPtr: &mut SStrideTables = (**ppCtx).pStrideTab.as_mut().unwrap();
+    ctx.pStrideTab = Some(Box::new(SStrideTables::new(iNeedAllocSize)));
+    let pPtr: &mut SStrideTables = ctx.pStrideTab.as_mut().unwrap();
 
     // The C++ carves the block with four running `uint8_t*` cursors. They are byte
     // *offsets* into the same block here, advanced by the same amounts in the same
@@ -663,8 +659,8 @@ unsafe fn InitMbInfo(
 /// `ppCtx` must point to a live context with `ppDqLayerList` populated.
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
-pub unsafe fn InitMbListD(ppCtx: *mut *mut sWelsEncCtx) -> i32 {
-    let iNumDlayer = (**ppCtx).param().iSpatialLayerNum;
+pub unsafe fn InitMbListD(ctx: &mut sWelsEncCtx) -> i32 {
+    let iNumDlayer = ctx.param().iSpatialLayerNum;
 
     if iNumDlayer > MAX_DEPENDENCY_LAYER as i32 {
         return 1;
@@ -680,9 +676,9 @@ pub unsafe fn InitMbListD(ppCtx: *mut *mut sWelsEncCtx) -> i32 {
     // since T6.D3 and the dimensions are the allocation's own — T5.E2's rule), and
     // `ppMbListD`, its two allocations and its free are gone.
     for i in 0..iNumDlayer as usize {
-        let iMbWidth = ((**ppCtx).param().sSpatialLayers[i].iVideoWidth + 15) >> 4;
-        let iMbHeight = ((**ppCtx).param().sSpatialLayers[i].iVideoHeight + 15) >> 4;
-        let pLayer = ctx_dq_layer(*ppCtx, i);
+        let iMbWidth = (ctx.param().sSpatialLayers[i].iVideoWidth + 15) >> 4;
+        let iMbHeight = (ctx.param().sSpatialLayers[i].iVideoHeight + 15) >> 4;
+        let pLayer = ctx_dq_layer(std::ptr::addr_of_mut!(*ctx), i);
         if pLayer.is_null() {
             return 1;
         }
@@ -690,7 +686,7 @@ pub unsafe fn InitMbListD(ppCtx: *mut *mut sWelsEncCtx) -> i32 {
             MbDims::new(iMbWidth as usize, iMbHeight as usize),
             SMB::default(),
         );
-        InitMbInfo(&**ppCtx, &mut *pLayer, i as i32);
+        InitMbInfo(&*ctx, &mut *pLayer, i as i32);
     }
 
     0
@@ -708,7 +704,7 @@ pub unsafe fn InitMbListD(ppCtx: *mut *mut sWelsEncCtx) -> i32 {
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe fn InitDqLayers(
-    ppCtx: *mut *mut sWelsEncCtx,
+    ctx: &mut sWelsEncCtx,
     pExistingParasetList: *mut SExistingParasetList,
 ) -> i32 {
     let mut pSps: *mut crate::encoder::param_svc::SWelsSPS = null_mut();
@@ -717,20 +713,16 @@ pub unsafe fn InitDqLayers(
     let mut iPpsId: u32 = 0;
     let mut iResult: i32;
 
-    if ppCtx.is_null() || (*ppCtx).is_null() {
-        return 1;
-    }
-
     // A7: the binding is gone for the reason `RequestMemorySvc` records — a `&mut`
     // into the parameter block cannot be held across a call that reaches it again.
-    let iDlayerCount = (**ppCtx).param().iSpatialLayerNum;
-    let iNumRef = (**ppCtx).param().iMaxNumRefFrame as u32;
+    let iDlayerCount = ctx.param().iSpatialLayerNum;
+    let iNumRef = ctx.param().iMaxNumRefFrame as u32;
 
     // FME_DEFAULT_FEATURE_INDEX / ME_DIA_CROSS / ME_DIA_CROSS_FME, screen content only
     let kiFeatureStrategyIndex: i32 = FME_DEFAULT_FEATURE_INDEX as i32;
     let kiMe16x16: i32 = ME_DIA_CROSS as i32;
     let kiMe8x8: i32 = ME_DIA_CROSS_FME as i32;
-    let kiNeedFeatureStorage = if (**ppCtx).param().iUsageType != SCREEN_CONTENT_REAL_TIME {
+    let kiNeedFeatureStorage = if ctx.param().iUsageType != SCREEN_CONTENT_REAL_TIME {
         0
     } else {
         (kiFeatureStrategyIndex << 16) + ((kiMe16x16 & 0x00FF) << 8) + (kiMe8x8 & 0x00FF)
@@ -739,8 +731,8 @@ pub unsafe fn InitDqLayers(
     let mut iDlayerIndex: i32 = 0;
     while iDlayerIndex < iDlayerCount {
         let mut i: u32 = 0;
-        let kiWidth = (**ppCtx).param().sSpatialLayers[iDlayerIndex as usize].iVideoWidth;
-        let kiHeight = (**ppCtx).param().sSpatialLayers[iDlayerIndex as usize].iVideoHeight;
+        let kiWidth = ctx.param().sSpatialLayers[iDlayerIndex as usize].iVideoWidth;
+        let kiHeight = ctx.param().sSpatialLayers[iDlayerIndex as usize].iVideoHeight;
         // with iWidth of horizon
         let mut iPicWidth = WELS_ALIGN(kiWidth, MB_WIDTH_LUMA) + (PADDING_LENGTH << 1);
         let mut iPicChromaWidth = iPicWidth >> 1;
@@ -754,7 +746,7 @@ pub unsafe fn InitDqLayers(
         // the tables through the context rather than through `AllocStrideTables`'
         // own `&mut`.
         let pEncBlockOffset = {
-            let tab = (**ppCtx).pStrideTab.as_mut().expect("pStrideTab allocated");
+            let tab = ctx.pStrideTab.as_mut().expect("pStrideTab allocated");
             match tab.pStrideEncBlockOffset[iDlayerIndex as usize] {
                 Some(off) => tab.root().add(off as usize).cast::<i32>(),
                 None => std::ptr::null_mut(),
@@ -791,9 +783,10 @@ pub unsafe fn InitDqLayers(
         let mut pRefListBox = SRefList::new();
         pRefListBox.pRef = RecPicPool::new(pending);
         pRefListBox.pNextBuffer = Some(pRefListBox.pRef.at(0));
-        // The autoref is explicit because the place is behind a raw pointer: this is a
-        // write into the context's own `Vec` header, not into the list's allocation.
-        (&mut (**ppCtx).ppRefPicListExt)[iDlayerIndex as usize] = Some(pRefListBox);
+        // A write into the context's own `Vec` header, not into the list's
+        // allocation. (S3.B2: the place is behind a `&mut` now, so the explicit
+        // autoref is just spelling — borrowck scopes it to this statement.)
+        (&mut ctx.ppRefPicListExt)[iDlayerIndex as usize] = Some(pRefListBox);
         iDlayerIndex += 1;
     }
 
@@ -803,8 +796,8 @@ pub unsafe fn InitDqLayers(
         // written: the reference retags before the cast discards it, and the tag is
         // what `InitSliceInLayer` used to pop. `addr_of_mut!` derives from the raw
         // parent and creates no reference at all.
-        let pDlayer = std::ptr::addr_of_mut!((*ctx_param_raw(&**ppCtx)).sSpatialLayers[iDlayerIndex as usize]);
-        let pParamInternal = std::ptr::addr_of_mut!((*ctx_param_raw(&**ppCtx)).sDependencyLayers[iDlayerIndex as usize]);
+        let pDlayer = std::ptr::addr_of_mut!((*ctx_param_raw(&*ctx)).sSpatialLayers[iDlayerIndex as usize]);
+        let pParamInternal = std::ptr::addr_of_mut!((*ctx_param_raw(&*ctx)).sDependencyLayers[iDlayerIndex as usize]);
         let kiMbW = ((*pDlayer).iVideoWidth + 0x0f) >> 4;
         let kiMbH = ((*pDlayer).iVideoHeight + 0x0f) >> 4;
 
@@ -826,8 +819,8 @@ pub unsafe fn InitDqLayers(
         // The slot owns the `Box` now; every consumer still gets the same cursor out
         // of `ctx_dq_layer`, and this function keeps one for the rest of the loop.
         let pDqLayerBox = Box::new(SDqLayer::new(LayerIdx(iDlayerIndex as u8)));
-        (&mut (**ppCtx).ppDqLayerList)[iDlayerIndex as usize] = Some(pDqLayerBox);
-        let pDqLayer = ctx_dq_layer(*ppCtx, iDlayerIndex as usize);
+        (&mut ctx.ppDqLayerList)[iDlayerIndex as usize] = Some(pDqLayerBox);
+        let pDqLayer = ctx_dq_layer(std::ptr::addr_of_mut!(*ctx), iDlayerIndex as usize);
 
         (*pDqLayer).iMbWidth = kiMbW as i16;
         (*pDqLayer).iMbHeight = kiMbH as i16;
@@ -841,22 +834,22 @@ pub unsafe fn InitDqLayers(
 
         // S67 blessed (H2): `pDqLayer` is in the layer's `Box`;
         // `pParam`/`pDlayer`/`pParamInternal` in `pSvcParam`'s.
-        iResult = InitSliceInLayer(&mut **ppCtx, &mut *pDqLayer, iDlayerIndex);
+        iResult = InitSliceInLayer(&mut *ctx, &mut *pDqLayer, iDlayerIndex);
         if iResult != 0 {
             return iResult;
         }
 
         // deblocking parameters initialization; target-layer deblocking
-        (*pDqLayer).iLoopFilterDisableIdc = (**ppCtx).param().iLoopFilterDisableIdc as u8;
-        (*pDqLayer).iLoopFilterAlphaC0Offset = ((**ppCtx).param().iLoopFilterAlphaC0Offset << 1) as i8;
-        (*pDqLayer).iLoopFilterBetaOffset = ((**ppCtx).param().iLoopFilterBetaOffset << 1) as i8;
+        (*pDqLayer).iLoopFilterDisableIdc = ctx.param().iLoopFilterDisableIdc as u8;
+        (*pDqLayer).iLoopFilterAlphaC0Offset = (ctx.param().iLoopFilterAlphaC0Offset << 1) as i8;
+        (*pDqLayer).iLoopFilterBetaOffset = (ctx.param().iLoopFilterBetaOffset << 1) as i8;
         // parallel deblocking
-        (*pDqLayer).bDeblockingParallelFlag = (**ppCtx).param().bDeblockingParallelFlag;
+        (*pDqLayer).bDeblockingParallelFlag = ctx.param().bDeblockingParallelFlag;
 
         // deblocking parameter adjustment
         if SM_SINGLE_SLICE == (*pDlayer).sSliceArgument.uiSliceMode {
             // iLoopFilterDisableIdc will be 0 or 1 under single slice
-            if 2 == (**ppCtx).param().iLoopFilterDisableIdc {
+            if 2 == ctx.param().iLoopFilterDisableIdc {
                 (*pDqLayer).iLoopFilterDisableIdc = 0;
             }
             (*pDqLayer).bDeblockingParallelFlag = false;
@@ -882,39 +875,45 @@ pub unsafe fn InitDqLayers(
     // reduce size (3/18/2010)
     // T6.I1: a `pFuncList.is_null()` guard was here; the table is owned now.
     // The borrow is re-acquired at each use rather than held across the loop below:
-    // `GenerateNewSps`/`InitPps` take `*ppCtx`, and reaching the strategy through the
+    // `GenerateNewSps`/`InitPps` take `std::ptr::addr_of_mut!(*ctx)`, and reaching the strategy through the
     // context while a `&mut` to it is live would alias. Same reason as
     // `WelsWriteParameterSets`; T4b.2a.
-    if (**ppCtx).func_list().pParametersetStrategy.is_none() {
+    if ctx.func_list().pParametersetStrategy.is_none() {
         return 1;
     }
-    let kiNeededSpsNum = ParasetStrategy(*ppCtx).GetNeededSpsNum() as i32;
-    let kiNeededSubsetSpsNum = ParasetStrategy(*ppCtx).GetNeededSubsetSpsNum() as i32;
+    let kiNeededSpsNum = ParasetStrategy(std::ptr::addr_of_mut!(*ctx)).GetNeededSpsNum() as i32;
+    let kiNeededSubsetSpsNum = ParasetStrategy(std::ptr::addr_of_mut!(*ctx)).GetNeededSubsetSpsNum() as i32;
     // **T6.H2.** Three `WelsMallocz` calls and their three null checks were here.
     // The lengths are the strategy's own numbers, unchanged; the entries are the
     // zeros `WelsMallocz` left, spelled as `ZERO` rather than `Default` because
     // `SWelsSPS::default()` seeds `uiProfileIdc = PRO_BASELINE` and three VUI
     // `*_UNDEF`s, and none of those is what a memset writes (F56: zeros are ruled).
-    (**ppCtx).pSpsArray = vec![crate::encoder::param_svc::SWelsSPS::ZERO; kiNeededSpsNum as usize];
+    ctx.pSpsArray = vec![crate::encoder::param_svc::SWelsSPS::ZERO; kiNeededSpsNum as usize];
     // The `else` arm was `pSubsetArray = null_mut()` — no allocation at all when the
     // configuration needs no subset SPS. An empty `Vec` is that, and
     // `subset_array()` answers the same emptiness for it.
-    (**ppCtx).pSubsetArray = vec![
+    ctx.pSubsetArray = vec![
         crate::encoder::param_svc::SSubsetSps::ZERO;
         kiNeededSubsetSpsNum.max(0) as usize
     ];
 
     // PPS
-    let kiNeededPpsNum = ParasetStrategy(*ppCtx).GetNeededPpsNum() as i32;
-    (**ppCtx).pPPSArray = vec![crate::encoder::param_svc::SWelsPPS::ZERO; kiNeededPpsNum as usize];
+    let kiNeededPpsNum = ParasetStrategy(std::ptr::addr_of_mut!(*ctx)).GetNeededPpsNum() as i32;
+    ctx.pPPSArray = vec![crate::encoder::param_svc::SWelsPPS::ZERO; kiNeededPpsNum as usize];
 
     // **T9.H2 — the ~36's blocker, dissolved.** This supplied the three arrays as
     // three separate raw roots because three `&mut` out of one context, taken through
     // three accessor calls, is what the borrow checker refuses. `ctx_paraset_arrays`
     // answers all three from **one** borrow, which is legal precisely because the
     // compiler can see the three fields are disjoint.
-    let (pSpsArray, pSubsetArray, pPpsArray) = ctx_paraset_arrays(&mut **ppCtx);
-    ParasetStrategy(*ppCtx).LoadPrevious(
+    // **S3.B2.** The receiver is taken *before* the arrays: `ctx_paraset_arrays`
+    // holds a `&mut` on the context for as long as the three array borrows live, and
+    // deriving the strategy's raw inside that window is a second mutable borrow.
+    // Hoisting is sound as well as legal — the strategy object lives in the
+    // `pFuncList` `Box`, a different allocation, so the reborrow below cannot pop it.
+    let pParasetStrategy = ParasetStrategy(std::ptr::addr_of_mut!(*ctx));
+    let (pSpsArray, pSubsetArray, pPpsArray) = ctx_paraset_arrays(&mut *ctx);
+    pParasetStrategy.LoadPrevious(
         pExistingParasetList,
         pSpsArray,
         pSubsetArray,
@@ -924,23 +923,23 @@ pub unsafe fn InitDqLayers(
     // **T6.H3.** `SDqIdc` is four bytes of POD and its derived `Default` is the
     // memset image field for field, so `Default` *is* the ruled zero here — unlike
     // `SWelsSPS`'s two lines up.
-    (**ppCtx).pDqIdcMap = vec![SDqIdc::default(); iDlayerCount as usize];
+    ctx.pDqIdcMap = vec![SDqIdc::default(); iDlayerCount as usize];
 
     iDlayerIndex = 0;
     while iDlayerIndex < iDlayerCount {
-        let bUseSubsetSps = !(**ppCtx).param().bSimulcastAVC && (iDlayerIndex > BASE_DEPENDENCY_ID as i32);
+        let bUseSubsetSps = !ctx.param().bSimulcastAVC && (iDlayerIndex > BASE_DEPENDENCY_ID as i32);
         // S29, and the second site the encoder probe reached: `paraset_strategy.rs`
         // re-derives this same layer inside `GenerateNewSps` below, which popped
         // this binding's Unique tag before `InitSlicePEncCtx` read through it.
-        let pDlayerParam = std::ptr::addr_of_mut!((*ctx_param_raw(&**ppCtx)).sSpatialLayers[iDlayerIndex as usize]);
-        let bSvcBaselayer = !(**ppCtx).param().bSimulcastAVC
+        let pDlayerParam = std::ptr::addr_of_mut!((*ctx_param_raw(&*ctx)).sSpatialLayers[iDlayerIndex as usize]);
+        let bSvcBaselayer = !ctx.param().bSimulcastAVC
             && (iDlayerCount > BASE_DEPENDENCY_ID as i32)
             && (iDlayerIndex == BASE_DEPENDENCY_ID as i32);
 
         // S67 blessed (H2): live across it are `pDqIdc`, `pSps`/`pSubsetSps` (Vec buffers) and
         // `pDlayerParam` (`pSvcParam`'s `Box`) — none inside the context's own bytes.
-        iSpsId = ParasetStrategy(*ppCtx).GenerateNewSps(
-            &mut **ppCtx,
+        iSpsId = ParasetStrategy(std::ptr::addr_of_mut!(*ctx)).GenerateNewSps(
+            &mut *ctx,
             bUseSubsetSps,
             iDlayerIndex,
             iDlayerCount,
@@ -965,9 +964,9 @@ pub unsafe fn InitDqLayers(
         // makes those coexistences lawful (F71); a `&mut`-derived raw would be
         // popped by the next shared read of the same buffer.
         if !bUseSubsetSps {
-            pSps = (**ppCtx).sps_array().as_ptr().cast_mut().add(iSpsId as usize);
+            pSps = ctx.sps_array().as_ptr().cast_mut().add(iSpsId as usize);
         } else {
-            pSubsetSps = (**ppCtx)
+            pSubsetSps = ctx
                 .subset_array()
                 .as_ptr()
                 .cast_mut()
@@ -977,8 +976,15 @@ pub unsafe fn InitDqLayers(
 
         // S67 blessed (H2): as `GenerateNewSps` above; the two `as_ref()` arguments point into
         // the paraset Vec buffers, which this retag does not cover.
-        iPpsId = ParasetStrategy(*ppCtx).InitPps(
-            &mut **ppCtx,
+        // **S3.B2.** Receiver and the entropy-mode read both hoisted above the call:
+        // argument one is a `&mut` on the context, and the `param()` read that used
+        // to sit in argument eleven is a *shared* reborrow of the same context taken
+        // while it is live — F208's shape, and the reason it was invisible before is
+        // that `ctx` was a raw. The read is a `bool`.
+        let pParasetStrategy = ParasetStrategy(std::ptr::addr_of_mut!(*ctx));
+        let kbEntropyCodingModeFlag = ctx.param().iEntropyCodingModeFlag != 0;
+        iPpsId = pParasetStrategy.InitPps(
+            &mut *ctx,
             iSpsId as u32,
             // T6.G3: `InitPps` takes the arm it will actually use, not both plus a
             // flag. The two locals are still raw here — they are cursors into the
@@ -990,13 +996,13 @@ pub unsafe fn InitDqLayers(
             iPpsId,
             true,
             bUseSubsetSps,
-            (**ppCtx).param().iEntropyCodingModeFlag != 0,
+            kbEntropyCodingModeFlag,
         );
-        let pPps = (**ppCtx).pps_array().as_ptr().cast_mut().add(iPpsId as usize);
+        let pPps = ctx.pps_array().as_ptr().cast_mut().add(iPpsId as usize);
 
         // FMO is not used in SVC coding so far; come back if FMO is needed
         iResult = InitSlicePEncCtx(
-            &mut *ctx_dq_layer(*ppCtx, iDlayerIndex as usize),
+            &mut *ctx_dq_layer(std::ptr::addr_of_mut!(*ctx), iDlayerIndex as usize),
             false,
             (*pSps).iMbWidth as i32,
             (*pSps).iMbHeight as i32,
@@ -1019,29 +1025,29 @@ pub unsafe fn InitDqLayers(
         // function later in the frame. So the three writes commute into one borrow
         // that ends on the closing brace.
         {
-            let pDqIdc = &mut ctx_dq_idc_map(&mut **ppCtx)[iDlayerIndex as usize];
+            let pDqIdc = &mut ctx_dq_idc_map(&mut *ctx)[iDlayerIndex as usize];
             pDqIdc.uiSpatialId = iDlayerIndex as i8;
             pDqIdc.iSpsId = iSpsId as u8;
             pDqIdc.iPpsId = iPpsId as u16;
         }
 
-        if (**ppCtx).param().bSimulcastAVC || bUseSubsetSps {
+        if ctx.param().bSimulcastAVC || bUseSubsetSps {
             iSpsId += 1;
         }
         iPpsId += 1;
         if bUseSubsetSps {
-            (**ppCtx).iSubsetSpsNum += 1;
+            ctx.iSubsetSpsNum += 1;
         } else {
-            (**ppCtx).iSpsNum += 1;
+            ctx.iSpsNum += 1;
         }
-        (**ppCtx).iPpsNum += 1;
+        ctx.iPpsNum += 1;
 
         iDlayerIndex += 1;
     }
 
     // S67 blessed (H2): the receiver is a `&mut` into the strategy object's own `Box`, reached
     // without a reference to the context (`ctx_func_list`, F71); nothing else is live.
-    ParasetStrategy(*ppCtx).UpdateParaSetNum(&mut **ppCtx);
+    ParasetStrategy(std::ptr::addr_of_mut!(*ctx)).UpdateParaSetNum(&mut *ctx);
     ENC_RETURN_SUCCESS
 }
 
@@ -1069,10 +1075,10 @@ pub unsafe fn InitDqLayers(
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe fn RequestMemorySvc(
-    ppCtx: *mut *mut sWelsEncCtx,
+    ctx: &mut sWelsEncCtx,
     pExistingParasetList: *mut SExistingParasetList,
 ) -> i32 {
-    // **A7, and Miri found it**: this binding used to be `ctx_param(*ppCtx)`, a raw
+    // **A7, and Miri found it**: this binding used to be `ctx_param(std::ptr::addr_of_mut!(*ctx))`, a raw
     // carrying the parameter block's own provenance, so it outlived every later
     // reach into the same block. `param_mut` is a real `&mut`, so the next
     // `param_mut` anywhere below — `AcquireLayersNals`, `RequestMtResource` — pops
@@ -1082,78 +1088,94 @@ pub unsafe fn RequestMemorySvc(
     let mut iCountNals: i32 = 0;
     let mut iCountLayers: i32 = 0;
     let mut iResult: i32;
-    let kiNumDependencyLayers = (**ppCtx).param().iSpatialLayerNum;
+    let kiNumDependencyLayers = ctx.param().iSpatialLayerNum;
     let mut iVclLayersBsSizeCount: i32 = 0;
 
     if kiNumDependencyLayers < 1 || kiNumDependencyLayers > MAX_DEPENDENCY_LAYER as i32 {
         return 1;
     }
 
-    if (**ppCtx).param().uiGopSize == 0
-        || ((**ppCtx).param().uiIntraPeriod != 0 && ((**ppCtx).param().uiIntraPeriod % (**ppCtx).param().uiGopSize) != 0)
+    if ctx.param().uiGopSize == 0
+        || (ctx.param().uiIntraPeriod != 0 && (ctx.param().uiIntraPeriod % ctx.param().uiGopSize) != 0)
     {
         return 1;
     }
 
-    let pFinalSpatial = &(**ppCtx).param().sSpatialLayers[(kiNumDependencyLayers - 1) as usize];
+    let pFinalSpatial = &ctx.param().sSpatialLayers[(kiNumDependencyLayers - 1) as usize];
     let iMaxPicWidth = pFinalSpatial.iVideoWidth;
     let iMaxPicHeight = pFinalSpatial.iVideoHeight;
     let iCountMaxMbNum = ((15 + iMaxPicWidth) >> 4) * ((15 + iMaxPicHeight) >> 4);
 
-    iResult = AcquireLayersNals(ppCtx, &mut iCountLayers, &mut iCountNals);
+    iResult = AcquireLayersNals(ctx, &mut iCountLayers, &mut iCountNals);
     if iResult != 0 {
         return 1;
     }
 
-    let kiSpsSize = ParasetStrategy(*ppCtx).GetNeededSpsNum() as i32 * SPS_BUFFER_SIZE;
-    let kiPpsSize = ParasetStrategy(*ppCtx).GetNeededPpsNum() as i32 * PPS_BUFFER_SIZE;
+    let kiSpsSize = ParasetStrategy(std::ptr::addr_of_mut!(*ctx)).GetNeededSpsNum() as i32 * SPS_BUFFER_SIZE;
+    let kiPpsSize = ParasetStrategy(std::ptr::addr_of_mut!(*ctx)).GetNeededPpsNum() as i32 * PPS_BUFFER_SIZE;
     let iNonVclLayersBsSizeCount = SSEI_BUFFER_SIZE + kiSpsSize + kiPpsSize;
 
     let mut bDynamicSlice = false;
     let mut iSliceBufferSize: i32 = 0;
     let mut iMaxSliceBufferSize: i32 = 0;
     let mut iIndex: i32 = 0;
-    while iIndex < (**ppCtx).param().iSpatialLayerNum {
-        let fDlp = &(**ppCtx).param().sSpatialLayers[iIndex as usize];
+    while iIndex < ctx.param().iSpatialLayerNum {
+        // **S3.B2 — §4.6's copy-out, and borrowck is what asked for it.** `fDlp` was
+        // a `&` into the parameter block taken through `param()`, i.e. a shared
+        // reborrow of the **whole context** (F208), and the loop writes
+        // `iMaxSliceCount` and `iSliceBufferSize` on the context while it is live.
+        // Under the old `*mut *mut` root neither derivation was visible to borrowck.
+        // The five values the loop actually reads are scalars, so they are copied out
+        // and the borrow ends on the next line; `sSliceArgument` is *not* copied
+        // whole — only the three fields used, which is S54's remedy at A7's shape.
+        let (kiVideoWidth, kiVideoHeight, kuiSliceMode, kuiSliceNum, kuiSliceSizeConstraint) = {
+            let fDlp = &ctx.param().sSpatialLayers[iIndex as usize];
+            (
+                fDlp.iVideoWidth,
+                fDlp.iVideoHeight,
+                fDlp.sSliceArgument.uiSliceMode,
+                fDlp.sSliceArgument.uiSliceNum,
+                fDlp.sSliceArgument.uiSliceSizeConstraint,
+            )
+        };
 
         let fCompressRatioThr = COMPRESS_RATIO_THR;
 
         let mut iLayerBsSize = WELS_ROUND_f(
-            (((3 * fDlp.iVideoWidth * fDlp.iVideoHeight) >> 1) as f32) * fCompressRatioThr,
+            (((3 * kiVideoWidth * kiVideoHeight) >> 1) as f32) * fCompressRatioThr,
         ) + MAX_MACROBLOCK_SIZE_IN_BYTE_x2;
         iLayerBsSize = WELS_ALIGN(iLayerBsSize, 4); // 4 bytes aligned
         let mut iMaxLayerBsSize: i32;
-        let pSliceArgument = &fDlp.sSliceArgument;
-        if pSliceArgument.uiSliceMode == SM_SIZELIMITED_SLICE {
+        if kuiSliceMode == SM_SIZELIMITED_SLICE {
             bDynamicSlice = true;
             let uiMaxSliceNumEstimation = std::cmp::min(
                 crate::encoder::svc_enc_slice_segment::AVERSLICENUM_CONSTRAINT as u32,
-                (iLayerBsSize as u32 / pSliceArgument.uiSliceSizeConstraint) + 1,
+                (iLayerBsSize as u32 / kuiSliceSizeConstraint) + 1,
             );
-            (**ppCtx).iMaxSliceCount =
-                std::cmp::max((**ppCtx).iMaxSliceCount, uiMaxSliceNumEstimation as i32);
+            ctx.iMaxSliceCount =
+                std::cmp::max(ctx.iMaxSliceCount, uiMaxSliceNumEstimation as i32);
             iSliceBufferSize = ((std::cmp::max(
-                pSliceArgument.uiSliceSizeConstraint,
+                kuiSliceSizeConstraint,
                 iLayerBsSize as u32 / uiMaxSliceNumEstimation,
             ) as i32)
                 << 1)
                 + MAX_MACROBLOCK_SIZE_IN_BYTE_x2;
             iMaxLayerBsSize = iSliceBufferSize * uiMaxSliceNumEstimation as i32;
         } else {
-            (**ppCtx).iMaxSliceCount =
-                std::cmp::max((**ppCtx).iMaxSliceCount, pSliceArgument.uiSliceNum as i32);
-            if (**ppCtx).param().bUseLoadBalancing {
+            ctx.iMaxSliceCount =
+                std::cmp::max(ctx.iMaxSliceCount, kuiSliceNum as i32);
+            if ctx.param().bUseLoadBalancing {
                 iSliceBufferSize = iLayerBsSize + MAX_MACROBLOCK_SIZE_IN_BYTE_x2;
             } else {
-                iSliceBufferSize = ((iLayerBsSize / pSliceArgument.uiSliceNum as i32) << 1)
+                iSliceBufferSize = ((iLayerBsSize / kuiSliceNum as i32) << 1)
                     + MAX_MACROBLOCK_SIZE_IN_BYTE_x2;
             }
-            iMaxLayerBsSize = iSliceBufferSize * pSliceArgument.uiSliceNum as i32;
+            iMaxLayerBsSize = iSliceBufferSize * kuiSliceNum as i32;
         }
         iMaxLayerBsSize = std::cmp::max(iMaxLayerBsSize, iLayerBsSize);
         iVclLayersBsSizeCount += iMaxLayerBsSize;
         iMaxSliceBufferSize = std::cmp::max(iMaxSliceBufferSize, iSliceBufferSize);
-        (**ppCtx).iSliceBufferSize[iIndex as usize] = iSliceBufferSize;
+        ctx.iSliceBufferSize[iIndex as usize] = iSliceBufferSize;
         iIndex += 1;
     }
     let iTargetSpatialBsSize = iVclLayersBsSizeCount;
@@ -1162,10 +1184,10 @@ pub unsafe fn RequestMemorySvc(
     iMaxSliceBufferSize = std::cmp::min(iMaxSliceBufferSize, iTargetSpatialBsSize);
     let iTotalLength = iCountBsLen;
 
-    (**ppCtx).param_mut().iNumRefFrame = crate::encoder::rc::WELS_CLIP3(
-        (**ppCtx).param().iNumRefFrame,
+    ctx.param_mut().iNumRefFrame = crate::encoder::rc::WELS_CLIP3(
+        ctx.param().iNumRefFrame,
         MIN_REF_PIC_COUNT,
-        if (**ppCtx).param().iUsageType == CAMERA_VIDEO_REAL_TIME {
+        if ctx.param().iUsageType == CAMERA_VIDEO_REAL_TIME {
             MAX_REFERENCE_PICTURE_COUNT_NUM_CAMERA
         } else {
             MAX_REFERENCE_PICTURE_COUNT_NUM_SCREEN
@@ -1181,7 +1203,7 @@ pub unsafe fn RequestMemorySvc(
     // whole, so no zeroed intermediate exists to be dropped. The null checks go
     // because allocation failure is now a panic-on-OOM, the same trade the
     // decoder's owned buffers made.
-    (**ppCtx).pOut = Box::into_raw(crate::encoder::nal_encap::SWelsEncoderOutput::new_boxed(
+    ctx.pOut = Box::into_raw(crate::encoder::nal_encap::SWelsEncoderOutput::new_boxed(
         iCountBsLen as usize,
         iCountNals as usize,
     ));
@@ -1193,15 +1215,15 @@ pub unsafe fn RequestMemorySvc(
     // read back only up to `iPosBsBuffer` / `pOut->iNalLen`, which only ever name
     // bytes a NAL writer has just written. A safe container has no uninitialized
     // alternative, so the cost is one memset per encoder, at init.
-    (**ppCtx).pFrameBs = vec![0u8; iTotalLength.max(0) as usize];
-    (**ppCtx).iFrameBsSize = iTotalLength;
-    (**ppCtx).iPosBsBuffer = 0;
+    ctx.pFrameBs = vec![0u8; iTotalLength.max(0) as usize];
+    ctx.iFrameBsSize = iTotalLength;
+    ctx.iPosBsBuffer = 0;
 
     // for dynamic slice mode && CABAC, allocate slice buffers to restore slice data.
     // These are `sDss.pRestoreBuffer` in the two dynamic MB loops: CABAC
     // renormalisation can rewrite bytes already emitted, so stepping back over a
     // slice boundary has to restore the bytes as well as the coder state.
-    if bDynamicSlice && (**ppCtx).param().iEntropyCodingModeFlag != 0 {
+    if bDynamicSlice && ctx.param().iEntropyCodingModeFlag != 0 {
         for iIdx in 0..MAX_THREADS_NUM {
             // **T7.C5 — owned.** The last live allocator call sites in `src/encoder`
             // were this one and its free below. `WelsMalloc` here was *uninitialized*
@@ -1209,13 +1231,13 @@ pub unsafe fn RequestMemorySvc(
             // same recorded deviation `pFrameBs` above carries, and sound for the same
             // reason: every read of this buffer sits behind a write cursor, since
             // `StashPopMBStatus` only reads back the bytes `StashMBStatus` just wrote.
-            (**ppCtx).pDynamicBsBuffer[iIdx] = vec![0u8; iMaxSliceBufferSize.max(0) as usize];
+            ctx.pDynamicBsBuffer[iIdx] = vec![0u8; iMaxSliceBufferSize.max(0) as usize];
         }
     }
     // for pSlice bs buffers
-    if (**ppCtx).param().iMultipleThreadIdc > 1
+    if ctx.param().iMultipleThreadIdc > 1
         && crate::encoder::slice_multi_threading::RequestMtResource(
-            ppCtx,
+            ctx,
             iCountBsLen,
             iMaxSliceBufferSize,
             bDynamicSlice,
@@ -1228,9 +1250,9 @@ pub unsafe fn RequestMemorySvc(
     // this context, so there is nothing left to allocate and nothing left to fail --
     // the `is_null()` check went with the allocation. **S23**: neither selector can
     // change behind this choice; see `RefStrategyKind::Select`.
-    (**ppCtx).eRefStrategy = crate::encoder::ref_list_mgr_svc::RefStrategyKind::Select(
-        (**ppCtx).param().iUsageType,
-        (**ppCtx).param().bEnableLongTermReference,
+    ctx.eRefStrategy = crate::encoder::ref_list_mgr_svc::RefStrategyKind::Select(
+        ctx.param().iUsageType,
+        ctx.param().bEnableLongTermReference,
     );
 
     // encoder_ext.cpp:1141-1179 allocates five context-wide per-macroblock arrays
@@ -1240,24 +1262,24 @@ pub unsafe fn RequestMemorySvc(
     // five inline arrays of `SMB`, which is allocated (and zeroed) by `InitMbListD`,
     // so there is nothing left to allocate and nothing left to fail.
 
-    (**ppCtx).iGlobalQp = 26; // global qp in default
+    ctx.iGlobalQp = 26; // global qp in default
 
     // **T6.H5.** `SLTRState::default()` is all-zero field for field, which is what
     // `WelsMallocz` left; `ResetLtrState` then writes the four `-1`s and the
     // `LTR_DIRECT_MARK` that make it a *state* rather than a zeroed block, exactly as
     // before — the loop is unchanged.
-    (**ppCtx).pLtr = vec![
+    ctx.pLtr = vec![
         crate::encoder::ref_list_mgr_svc::SLTRState::default();
         kiNumDependencyLayers as usize
     ];
     for i in 0..kiNumDependencyLayers as usize {
         // S67 blessed (H2): nothing is held across it — the cursor is minted and consumed in
         // the same call.
-        crate::encoder::ref_list_mgr_svc::ResetLtrState(ctx_ltr_at(&mut **ppCtx, i));
+        crate::encoder::ref_list_mgr_svc::ResetLtrState(ctx_ltr_at(&mut *ctx, i));
     }
 
     // stride tables
-    if AllocStrideTables(ppCtx, kiNumDependencyLayers) != 0 {
+    if AllocStrideTables(ctx, kiNumDependencyLayers) != 0 {
         return 1;
     }
 
@@ -1269,12 +1291,12 @@ pub unsafe fn RequestMemorySvc(
     // `pGomCost`, and D-dead-3 has since deleted that field. Nothing in the tree
     // clones a rate controller, so re-deriving it would buy this one line and
     // re-open the invitation; see the struct's own note in `rc.rs`.
-    (**ppCtx).pWelsSvcRc = (0..kiNumDependencyLayers as usize)
+    ctx.pWelsSvcRc = (0..kiNumDependencyLayers as usize)
         .map(|_| crate::encoder::rc::SWelsSvcRc::default())
         .collect();
 
     // pVaa memory allocation
-    if (**ppCtx).param().iUsageType == SCREEN_CONTENT_REAL_TIME {
+    if ctx.param().iUsageType == SCREEN_CONTENT_REAL_TIME {
         // encoder_ext.cpp:1708, SVAAFrameInfoExt + RequestMemoryVaaScreen. Not ported.
         return ENC_RETURN_UNSUPPORTED_PARA;
     }
@@ -1282,12 +1304,12 @@ pub unsafe fn RequestMemorySvc(
     // `SVAAFrameInfo` is `Box`-built and owns its per-frame result arrays; the
     // background-detection pair exists exactly when the C++ allocates it.
     // **T6.H10**: `Box::into_raw` stood here; the context holds the `Box`.
-    (**ppCtx).pVaa = Some(crate::encoder::wels_preprocess::SVAAFrameInfo::new(
+    ctx.pVaa = Some(crate::encoder::wels_preprocess::SVAAFrameInfo::new(
         iCountMaxMbNum,
-        (**ppCtx).param().bEnableBackgroundDetection,
+        ctx.param().bEnableBackgroundDetection,
     ));
 
-    if (**ppCtx).param().bEnableAdaptiveQuant {
+    if ctx.param().bEnableAdaptiveQuant {
         // encoder_ext.cpp:1720, sAdaptiveQuantParam buffers. Not ported.
         return ENC_RETURN_UNSUPPORTED_PARA;
     }
@@ -1297,34 +1319,34 @@ pub unsafe fn RequestMemorySvc(
     // **T6.H7.** A `WelsMallocz`'d block of `kiNumDependencyLayers` null pointers,
     // which `InitDqLayers` then fills with `Box::into_raw`'d lists. `None` is that
     // null, and the `Box` stays where it already was — it just has an owner now.
-    (**ppCtx).ppRefPicListExt = (0..kiNumDependencyLayers).map(|_| None).collect();
+    ctx.ppRefPicListExt = (0..kiNumDependencyLayers).map(|_| None).collect();
 
     // **T6.H8.** As `ppRefPicListExt` just above: a block of nulls that
     // `InitDqLayers` fills with `Box`-built layers, so a `Vec` of `None`s that it
     // fills with the `Box`es themselves.
-    (**ppCtx).ppDqLayerList = (0..kiNumDependencyLayers).map(|_| None).collect();
+    ctx.ppDqLayerList = (0..kiNumDependencyLayers).map(|_| None).collect();
 
-    iResult = InitDqLayers(ppCtx, pExistingParasetList);
+    iResult = InitDqLayers(ctx, pExistingParasetList);
     if iResult != 0 {
         return iResult;
     }
 
-    if InitMbListD(ppCtx) != 0 {
+    if InitMbListD(ctx) != 0 {
         return 1;
     }
 
     let mut iMvdRange: i32 = 0;
     // §4.6, reorder: the two out-parameters borrow the context, so the range is
     // computed into locals and written back.
-    let mut iMvRangeOut = (**ppCtx).iMvRange;
-    GetMvMvdRange((**ppCtx).param(), &mut iMvRangeOut, &mut iMvdRange);
-    (**ppCtx).iMvRange = iMvRangeOut;
+    let mut iMvRangeOut = ctx.iMvRange;
+    GetMvMvdRange(ctx.param(), &mut iMvRangeOut, &mut iMvdRange);
+    ctx.iMvRange = iMvRangeOut;
     let kuiMvdInterTableSize = iMvdRange << 2; // intepel*4 = qpel
     let kuiMvdInterTableStride = 1 + (kuiMvdInterTableSize << 1); // qpel_mv_range*2 = (+/-)
     let kuiMvdCacheAlignedSize = kuiMvdInterTableStride * 2; // sizeof(uint16_t)
 
-    (**ppCtx).iMvdCostTableSize = kuiMvdInterTableSize;
-    (**ppCtx).iMvdCostTableStride = kuiMvdInterTableStride;
+    ctx.iMvdCostTableSize = kuiMvdInterTableSize;
+    ctx.iMvdCostTableStride = kuiMvdInterTableStride;
     // **F57, and it is F14's accommodation a second time (S12, S6-parity).**
     // `MvdCostInit` walks two cursors one stride per row for 52 rows. `pNegMvd`
     // starts at the table's base and ends exactly one past it, which is legal.
@@ -1342,27 +1364,27 @@ pub unsafe fn RequestMemorySvc(
     let kuiMvdCostTableOvershoot = 2 * ((kuiMvdInterTableStride >> 1) + 1);
     // **T6.H9 — plan item P11.** The size above is in *bytes* (the C++ `WelsMalloc`
     // takes bytes and casts to `uint16_t*`), so the `Vec`'s length is that over two.
-    (**ppCtx).pMvdCostTable = vec![
+    ctx.pMvdCostTable = vec![
         0u16;
         (52 * kuiMvdCacheAlignedSize + kuiMvdCostTableOvershoot) as usize
             / std::mem::size_of::<u16>()
     ];
     crate::encoder::md::MvdCostInit(
-        (**ppCtx).mvd_cost_table_mut().as_mut_ptr(),
+        ctx.mvd_cost_table_mut().as_mut_ptr(),
         kuiMvdInterTableStride,
     );
 
-    let idDec = match (**ppCtx).ref_list(0) {
+    let idDec = match ctx.ref_list(0) {
         Some(pRefList0) if !pRefList0.pRef.is_empty() => Some(pRefList0.pRef.at(0)),
         _ => None, // error here
     };
-    (**ppCtx).pDecPic = idDec;
+    ctx.pDecPic = idDec;
 
     // T6.G3: the head of each array, which is what "= pSpsArray" said. Nothing
     // re-aims these, in this port or in the C++ — `encoder_ext.cpp` assigns them here
     // and nowhere else — so the active set is position 0 for the encoder's whole life.
-    (**ppCtx).iSps = Some(SpsId(0));
-    (**ppCtx).iPps = Some(PpsId(0));
+    ctx.iSps = Some(SpsId(0));
+    ctx.iPps = Some(PpsId(0));
 
     0
 }
@@ -1547,18 +1569,18 @@ pub unsafe fn WelsInitEncoderExt(
     // **T8.B5 — the out-parameter is the owner's slot.** `encoder_ext.cpp:1615`
     // nulls `*ppCtx` before it allocates, so a failed init leaves the caller
     // holding nothing; here the caller holds an `Option<Box<sWelsEncCtx>>` and
-    // this is the same statement. The context below is raw for the whole of the
-    // construction and becomes a `Box` again at the one place it is handed back —
-    // S42's allocation root, and the only place in `src/encoder` where a
-    // `&mut sWelsEncCtx` is born.
+    // this is the same statement. **S3.B2**: the context is held as the `Box`
+    // itself for the whole construction — S42's allocation root, with the
+    // `into_raw`/`from_raw` round-trip deleted: the error paths hand the box to
+    // `WelsUninitEncoderExt` by value, and the success path moves it into the slot.
     *ppCtx = None;
 
     // C++ mallocs and memsets sWelsEncCtx; Box::new of a Default context is the
     // equivalent, and Default is the all-zero/null state for every member.
-    let pCtx = Box::into_raw(Box::new(sWelsEncCtx::default()));
+    let mut ctxBox = Box::new(sWelsEncCtx::default());
 
     if !pLogCtx.is_null() {
-        (*pCtx).sLogCtx = *pLogCtx;
+        ctxBox.sLogCtx = *pLogCtx;
     }
 
     // **T7.C6**: `pCtx->pMemAlign = new CMemoryAlign(iCacheLineSize)` stood here
@@ -1571,8 +1593,8 @@ pub unsafe fn WelsInitEncoderExt(
     // **T6.H11**: `AllocCodingParam` and its failure branch were here. The context
     // owns the parameters, so the allocation is a `Box` and failure is panic-on-OOM
     // — the trade `pOut` made at T3.6 and the paraset arrays at T6.H2.
-    (*pCtx).pSvcParam = Some(crate::encoder::param_svc::NewCodingParam());
-    *(*pCtx).param_mut() = *pCodingParam;
+    ctxBox.pSvcParam = Some(crate::encoder::param_svc::NewCodingParam());
+    *ctxBox.param_mut() = *pCodingParam;
 
     // **T6.I1**: a `WelsMallocz` of `sizeof(SWelsFuncPtrList)` and its null branch
     // stood here. The context is born with the table (`Box`, every slot `None` —
@@ -1582,55 +1604,60 @@ pub unsafe fn WelsInitEncoderExt(
     // A7: T9.G6's hoist is gone with the argument — the callee holds the context
     // and derives the parameters itself.
     iRet = crate::encoder::encoder_context::InitFunctionPointers(
-        &mut *pCtx,
+        &mut ctxBox,
         uiCpuFeatureFlags,
     );
     if iRet != ENC_RETURN_SUCCESS {
-        WelsUninitEncoderExt(Some(Box::from_raw(pCtx)));
+        WelsUninitEncoderExt(Some(ctxBox));
         return iRet;
     }
 
-    (*pCtx).iActiveThreadsNum = (*pCodingParam).iMultipleThreadIdc as i16;
-    (*pCtx).iMaxSliceCount = iSliceNum as i32;
-    let mut pCtxTmp = pCtx;
-    iRet = RequestMemorySvc(&mut pCtxTmp, pExistingParasetList);
+    ctxBox.iActiveThreadsNum = (*pCodingParam).iMultipleThreadIdc as i16;
+    ctxBox.iMaxSliceCount = iSliceNum as i32;
+    // **S3.B2.** `pCtxTmp` existed only to give the `*mut *mut sWelsEncCtx`
+    // parameter an lvalue to point at. The parameter is a `&mut sWelsEncCtx` now,
+    // so the temporary — and the second level of indirection it stood for — go.
+    iRet = RequestMemorySvc(&mut ctxBox, pExistingParasetList);
     if iRet != 0 {
-        WelsUninitEncoderExt(Some(Box::from_raw(pCtx)));
+        WelsUninitEncoderExt(Some(ctxBox));
         return iRet;
     }
 
     if (*pCodingParam).iEntropyCodingModeFlag != 0 {
-        crate::encoder::set_mb_syn_cabac::WelsCabacInit(pCtx);
+        crate::encoder::set_mb_syn_cabac::WelsCabacInit(&mut *ctxBox);
     }
     // T9.G6: hoisted — the call takes the context retag and this argument reads
     // through the same context (shape B).
-    let iRCMode = (*pCtx).param().iRCMode;
-    crate::encoder::rc::WelsRcInitModule(&mut *pCtx, iRCMode);
+    let iRCMode = ctxBox.param().iRCMode;
+    crate::encoder::rc::WelsRcInitModule(&mut ctxBox, iRCMode);
 
-    (*pCtx).pVpp = crate::encoder::wels_preprocess::CWelsPreProcess::CreatePreProcess(&mut *pCtx);
-    if (*pCtx).pVpp.is_null() {
-        WelsUninitEncoderExt(Some(Box::from_raw(pCtx)));
+    ctxBox.pVpp = crate::encoder::wels_preprocess::CWelsPreProcess::CreatePreProcess(&mut ctxBox);
+    if ctxBox.pVpp.is_null() {
+        WelsUninitEncoderExt(Some(ctxBox));
         return 1;
     }
     // A7: as `InitFunctionPointers` — T9.G6's hoist is gone with the argument.
-    iRet = (*(*pCtx).pVpp).AllocSpatialPictures(&mut *pCtx);
+    // (`pVpp` is a `Copy` raw into the preprocess object's own allocation, read
+    // out before the call so the receiver and the context argument are disjoint.)
+    let pVpp = ctxBox.pVpp;
+    iRet = (*pVpp).AllocSpatialPictures(&mut ctxBox);
     if iRet != 0 {
-        WelsUninitEncoderExt(Some(Box::from_raw(pCtx)));
+        WelsUninitEncoderExt(Some(ctxBox));
         return iRet;
     }
 
-    (*pCtx).iStatisticsLogInterval = STATISTICS_LOG_INTERVAL_MS;
-    (*pCtx).uiLastTimestamp = -1;
-    (*pCtx).bDeliveryFlag = true;
+    ctxBox.iStatisticsLogInterval = STATISTICS_LOG_INTERVAL_MS;
+    ctxBox.uiLastTimestamp = -1;
+    ctxBox.bDeliveryFlag = true;
 
     // `encoder_ext.cpp:2386` — the doubled `0x` is the reference's own: the
     // format writes `0x%p` and `%p` prints its own prefix.
     crate::common::wels_trace::WelsLog(
         pLogCtx,
         crate::common::wels_trace::WELS_LOG_INFO,
-        &format!("WelsInitEncoderExt(), pCtx= 0x{:p}.", pCtx),
+        &format!("WelsInitEncoderExt(), pCtx= 0x{:p}.", std::ptr::addr_of!(*ctxBox)),
     );
-    *ppCtx = Some(Box::from_raw(pCtx));
+    *ppCtx = Some(ctxBox);
 
     0
 }
@@ -1751,20 +1778,21 @@ mod tests {
             0
         );
 
-        let pCtx = Box::into_raw(Box::new(sWelsEncCtx::default()));
-        (*pCtx).pSvcParam = Some(NewCodingParam());
-        *(*pCtx).param_mut() = param;
+        // S3.B2: built through the `Box` like `WelsInitEncoderExt` proper; the raw
+        // the callers hold is minted once, at the end, when construction is done.
+        let mut ctxBox = Box::new(sWelsEncCtx::default());
+        ctxBox.pSvcParam = Some(NewCodingParam());
+        *ctxBox.param_mut() = param;
         // T6.I1: the table comes with the context; see `WelsInitEncoderExt`.
         assert_eq!(
-            InitFunctionPointers(&mut *pCtx, uiCpuFeatureFlags),
+            InitFunctionPointers(&mut ctxBox, uiCpuFeatureFlags),
             ENC_RETURN_SUCCESS
         );
-        (*pCtx).iActiveThreadsNum = param.iMultipleThreadIdc as i16;
-        (*pCtx).iMaxSliceCount = iSliceNum as i32;
+        ctxBox.iActiveThreadsNum = param.iMultipleThreadIdc as i16;
+        ctxBox.iMaxSliceCount = iSliceNum as i32;
 
-        let mut p = pCtx;
-        assert_eq!(RequestMemorySvc(&mut p, null_mut()), 0, "RequestMemorySvc");
-        pCtx
+        assert_eq!(RequestMemorySvc(&mut ctxBox, null_mut()), 0, "RequestMemorySvc");
+        Box::into_raw(ctxBox)
     }
 
     /// Blocker C: the parameter-set arrays are allocated and populated.
@@ -1870,33 +1898,39 @@ pub unsafe fn WelsUninitEncoderExt(pEncContext: Option<Box<sWelsEncCtx>>) {
     // **T8.B5 — the teardown takes the context by value**, which is what
     // `encoder_ext.cpp:1878`'s `*ppCtx = NULL` at the end was expressing: after
     // this call the caller has no context, and now that is a fact about the type
-    // rather than a store the function has to remember. The body below is
-    // unchanged and still raw — the free cascade walks the whole context — so the
-    // `Box` is opened here and closed at the end, in one function.
-    let Some(pEncContext) = pEncContext else {
+    // rather than a store the function has to remember. **S3.B2**: the free
+    // cascade walks the context through the `Box` itself now — the
+    // `into_raw`/`from_raw` bracket is gone, and the two raws that remain
+    // (`pVpp`, and `ctx_dq_layer`'s slot read for `FreeDqLayer`) are each
+    // statement-scoped and name *other* allocations.
+    let Some(mut ctxBox) = pEncContext else {
         return;
     };
-    let pCtx = Box::into_raw(pEncContext);
 
     // `encoder_ext.cpp:2250-2252` — the teardown announces itself before any
-    // free runs, through the context's own log sink.
+    // free runs, through the context's own log sink. (S3.B2: the `sLogCtx` raw is
+    // still `addr_of_mut!` — `WelsLog` wants a pointer — but it is statement-scoped
+    // and nothing else of the context is live beside it.)
     {
-        let iMultipleThreadIdc = (*pCtx).param().iMultipleThreadIdc;
+        let iMultipleThreadIdc = ctxBox.param().iMultipleThreadIdc;
+        let kpCtxForLog: *const sWelsEncCtx = std::ptr::addr_of!(*ctxBox);
         crate::common::wels_trace::WelsLog(
-            std::ptr::addr_of_mut!((*pCtx).sLogCtx),
+            std::ptr::addr_of_mut!(ctxBox.sLogCtx),
             crate::common::wels_trace::WELS_LOG_INFO,
             &format!(
                 "WelsUninitEncoderExt(), pCtx= {:p}, iMultipleThreadIdc= {}.",
-                pCtx, iMultipleThreadIdc
+                kpCtxForLog, iMultipleThreadIdc
             ),
         );
     }
 
-    if !(*pCtx).pVpp.is_null() {
-        // S67 blessed (H2): the receiver borrows the `pVpp` allocation, not the context.
-        (*(*pCtx).pVpp).FreeSpatialPictures(&mut *pCtx);
-        drop(Box::from_raw((*pCtx).pVpp));
-        (*pCtx).pVpp = null_mut();
+    if !ctxBox.pVpp.is_null() {
+        // S67 blessed (H2): the receiver borrows the `pVpp` allocation, not the
+        // context. (`pVpp` is a `Copy` raw, read out before the call — S3.B2.)
+        let pVpp = ctxBox.pVpp;
+        (*pVpp).FreeSpatialPictures(&mut ctxBox);
+        drop(Box::from_raw(pVpp));
+        ctxBox.pVpp = null_mut();
     }
 
     {
@@ -1911,9 +1945,9 @@ pub unsafe fn WelsUninitEncoderExt(pEncContext: Option<Box<sWelsEncCtx>>) {
         // `pOut->pNalLen` and the struct itself — are one `drop`. The three
         // buffers are `Vec`s that free themselves, and the struct came from
         // `Box::into_raw`, so it goes back through `Box::from_raw`.
-        if !(*pCtx).pOut.is_null() {
-            drop(Box::from_raw((*pCtx).pOut));
-            (*pCtx).pOut = null_mut();
+        if !ctxBox.pOut.is_null() {
+            drop(Box::from_raw(ctxBox.pOut));
+            ctxBox.pOut = null_mut();
         }
         // T4b.2b: `DestroyReferenceStrategy` freed a box holding one back-pointer.
         // With the strategy an enum there is no allocation, so this free-cascade entry
@@ -1944,8 +1978,8 @@ pub unsafe fn WelsUninitEncoderExt(pEncContext: Option<Box<sWelsEncCtx>>) {
         // loop stays rather than disappearing with the rest. Its bound is the list's
         // own length now, not `iSpatialLayerNum` read back out of the parameters at
         // teardown — the silent-leak shape T6.H7 found next door.
-        for ilayer in 0..(*pCtx).ppDqLayerList.len() {
-            let pLayer = ctx_dq_layer(pCtx, ilayer);
+        for ilayer in 0..ctxBox.ppDqLayerList.len() {
+            let pLayer = ctx_dq_layer(std::ptr::addr_of_mut!(*ctxBox), ilayer);
             if !pLayer.is_null() {
                 FreeDqLayer(&mut *pLayer);
             }
@@ -1974,7 +2008,7 @@ pub unsafe fn WelsUninitEncoderExt(pEncContext: Option<Box<sWelsEncCtx>>) {
         // last one, and the block below it is now just the context's own.
     }
 
-    drop(Box::from_raw(pCtx));
+    drop(ctxBox);
 }
 
 // ============================================================================
