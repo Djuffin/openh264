@@ -6089,3 +6089,152 @@ are the `ctx_vpp_raw`/`ctx_vpp_ref` pair, which exists because F223's data race
 forced the reader and the writer apart — so one of the two is, precisely, the
 price of the soundness fix the MT probes bought.
 
+
+---
+
+## F225 — the fork pair is GREEN on B1's fix, and the brief's "you will produce the first" is wrong: four prior pairs are already recorded, in prose, with no tripwire
+
+**S4 step 0, the duty S3 handed forward.** F223 closes with B1's second-draft
+fix — the `ctx_vpp_ref`/`ctx_vpp_raw` reader/writer split — backed by static
+classification and by `family`, but never by the probes that found the defect it
+answers. F220 handed that obligation from S2 to S3; S3's own close handed it here.
+It is now discharged. Run against `410b9c13` (the tree as S4 found it, before any
+conversion), one compile-only pass then the two probes concurrently:
+
+```
+compile rc=0 wall=5s          (warm target/miri)
+fork_join_encodes_a_multi_slice_frame_..._aliasing_checker   ok  3463.45s
+fork_join_encodes_a_frame_whose_slice_boundary_is_mid_row    ok  3530.38s
+pair wall 3535 s = 59 min;  zero UB, zero data races in either log
+```
+
+Both GREEN. B1's fix is verified by the instrument that refused its predecessor,
+and F223's open tail is closed.
+
+**The correction, and it is the fourth session in a row that a count reached a
+brief without its command (F221's rule).** S4's brief says, of these two probes:
+
+> The `fork_join_encodes` probes have **no completed measurement** — S2 never got
+> one either. You will produce the first.
+
+They have four. `tools/miri_wall_baseline.txt` records, in its own prose:
+T9.E8 `3356 / 3449` ("first green"), T9.E2 `3294.86 / 3343.20`, T9.H `3411.72 /
+3493.33` parallel, and T9.H `3194.20 / 3260.15` serial. `gates.sh`'s own header
+says the same thing in the line that explains why the lane skips them — "their
+first green runs measured 3356 s and 3449 s". What was true is narrower and worth
+stating in the form the brief wanted: this is the first completed pair **of the
+safe-conversion plan** (S1–S4 had none), and the first that verifies any
+conversion checkpoint. Against the most recent comparable form the ratios are
+**1.015 / 1.011 per probe and 1.010 on the pair wall** — the flat series T9.H
+already measured across the context flip, and nowhere near S61's 1.3x tripwire.
+
+**Why the miss was structurally likely, and what is done about it.** Those four
+pairs live in *prose* — a commented regime table inside a file whose machine-read
+data line is the `session` lane's number and has never carried a fork figure. So
+the numbers were simultaneously recorded and unreadable: no reader parsed them, no
+tripwire compared against them, and a brief could truthfully say the file's data
+line held nothing for these probes. S58's rule is that a silent gap reads as a
+clean run, and this is that shape one level up — a *measured* quantity with no
+instrument pointed at it reads as an unmeasured one.
+
+Seeded, therefore, as its own instrument rather than as a fifth paragraph of
+prose: **`tools/fork_join_baseline.txt`** carries the format, the four prior pairs
+in both scheduling forms, and this run as its data line;
+**`tools/fork_join_probe.sh`** runs the pair in the prescribed parallel form
+(one zero-match compile pass, then two concurrent invocations — never
+`--no-run`, which reports up-to-date without building the interpreted target)
+and applies the S61/F140 comparison, warning past 1.3x and never failing. It
+corroborates each rc against its parsed totals and fails loudly on a probe that
+ran **zero** tests, per F17 — a renamed probe must not pass by vanishing, which
+is the failure mode a filter-driven runner is most exposed to.
+
+Two limits, stated rather than left for the next reader to find. The comparison is
+**wall only**: the pair runs as two separate `cargo` invocations rather than inside
+one shell's process tree, so the `times`-builtin CPU measurement F170 added to the
+lane does not reach them, and wall here is load- and suspend-sensitive exactly as
+F170 warns. Read a ratio past the tripwire as "re-measure on a quiet machine"
+before reading it as a codec regression. And the runner is **not wired into
+`gates.sh`**: at ~59 minutes the pair cannot join a 20-minute level, and
+`full`/`exit` already run the probes their own way — so this is the explicit-command
+path §4.7 asks for, one command instead of a remembered two-line incantation.
+
+**Three mechanics, measured, for whoever runs it next.** The compile is **5 s** on
+a warm `target/miri`, not the ~12 min the brief prices — that figure is a cold
+build, and it is what makes "compile once, then shard" cheap rather than
+essential. A foreground run dies at the harness's 600 s cap mid-compile, which
+cost S3 ~25 min twice; background it. And do not `pkill -f` on a pattern that
+matches your own runner: S3 killed its one healthy run that way, which is why
+`fork_join_probe.sh` says so in its header.
+
+---
+
+## F226 — `UpdateMbListNeighborParallel` takes a whole-`SSliceCtx` `&mut` for one scalar read, and N workers take it at once — F223's third rule already broken in the tree, on the one fork no gate reaches
+
+**S4, found by D2's classify-before-convert pass, before any conversion** — which
+is the protocol step earning its keep rather than a lucky grep. The brief asks for
+every `*mut SDqLayer` body to be tabulated by whether it writes *through* the
+layer. Three of forty do. Reading the first of them found this
+(`slice_multi_threading.rs`, `UpdateMbListNeighborParallel`):
+
+```rust
+let pSliceCtx = &mut (*pCurDq).sSliceEncCtx;
+let kiMbWidth = pSliceCtx.iMbWidth as i32;
+```
+
+The binding is used for **exactly one read** of a frame-constant `i16` and is
+never written through. But `UpdateMbMapForked` spawns `ForkWidth(..)` workers
+that all call this body on the **same layer**, one call per slice index, inside a
+`std::thread::scope`. F223's third rule is exact here: in-fork, a `&mut` retag is
+a *write* to the data-race model. This one is a `Unique` retag over the whole
+`SSliceCtx`, which spans `iSliceNumInFrame` (an `AtomicI32`) and the
+`pOverallMbMap` `Vec` header — so N workers each taking it is S63's violation with
+no read of the object required to make it real. It is F223's defect 2 in a
+different struct: two workers, a gratuitous exclusive reborrow, nothing written.
+
+**Why no instrument in the project can see it, and this is a three-layer
+blindness rather than an oversight:**
+
+1. **Byte sweeps.** The retag changes no byte, and the path needs
+   `bUseLoadBalancing`, which **both diffharness drivers pin off** — the covering
+   test's own doc calls this path the project's second expected-divergent class
+   (its slice boundaries are a function of wall-clock encode times, so two runs of
+   the *C++* disagree with each other). No sweep row can ever reach it.
+2. **The §4.7 MT probes.** Both force `bUseLoadBalancing` off — the multi-slice
+   probe says so in its own doc, because that is what makes its boundary
+   assertions mean anything. So `UpdateMbMapForked`'s fork never runs under them.
+3. **The one test that does drive the path**,
+   `load_balancing_completes_frames_with_sane_slice_counts`, is
+   `#[cfg_attr(miri, ignore)]` — 192 macroblocks x 4 frames x 4 threads, priced in
+   its own doc at ~8x the fork probe, which at this session's measured 59-minute
+   pair (F225) is something like eight hours. Natively a retag is not an
+   instruction, so nothing fails.
+
+That test's doc states the justification for the exemption as: "The aliasing
+question this path raises is the fork/join's, and that probe answers it." **That
+sentence is false for this site**, and it is the load-bearing claim — the fork
+probe forces the flag off and therefore never enters this fork at all. The
+exemption is right about cost and wrong about coverage.
+
+**The fix is one word** — read the scalar through the raw and form no reference:
+
+```rust
+let kiMbWidth = (*pCurDq).sSliceEncCtx.iMbWidth as i32;
+```
+
+**The instrument that should back it is not the encoder.** The covering test is
+unaffordable under Miri because it drives a whole encode; the aliasing question
+does not need one. `layer_with_bank` already builds a hand-made `SDqLayer` for two
+tests in this file — give it a real `sMbDataP` grid and slice tables, then two
+scoped threads each calling `UpdateMbListNeighborParallel` on its own slice index.
+That is the exact concurrency `UpdateMbMapForked` creates, at a geometry Miri can
+afford. Under Miri it refuses the old line as a data race and passes the new one;
+natively it is a neighbour-map correctness test. **Not yet written** — named here
+with its design so the next session lands the fix and its referee together, rather
+than a one-word fix no instrument can hold.
+
+**Scope of the surrounding classification, since it is what turned this up.** Of
+the 40 bodies carrying a `*mut SDqLayer`, 37 only read the layer struct; the other
+two writers (`ReallocateSliceList`, `ReallocateSliceInThread`) write
+`sSliceBufferInfo[slot]` for a bank T7.B2 made this worker's own, so their `&mut`
+projections cover sibling ranges rather than the shared struct — lawful, and
+unlike this one they are *used* for the write they take.
