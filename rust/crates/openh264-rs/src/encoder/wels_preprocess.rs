@@ -74,7 +74,7 @@ pub const MAX_REF_PIC_COUNT: usize = 16;
 // MAX_SHORT_REF_COUNT was 16 where C++ derives 4, which over-sized `SRefList` here and
 // let the `WelsPreprocess` unref loop read one past `pShortRefList`.
 pub use crate::encoder::encoder_context::{MAX_GOP_SIZE, MAX_SHORT_REF_COUNT, MAX_TEMPORAL_LEVEL};
-use crate::encoder::encoder_context::{ctx_ltr_at, ctx_param, ctx_rc_at, ctx_ref_list, ctx_vaa};
+use crate::encoder::encoder_context::{ctx_ltr_at, ctx_param, ctx_ref_list, ctx_vaa};
 pub use crate::encoder::encoder_context::SRefList;
 pub use crate::encoder::picture::SPicture;
 pub use crate::encoder::encoder_context::SLTRState;
@@ -2806,11 +2806,13 @@ impl CWelsPreProcess {
         if (*pSvcParam).iUsageType == EUsageType::SCREEN_CONTENT_REAL_TIME {
             let pVaaExt = ctx_vaa(pCtx) as *mut SVAAFrameInfoExt;
             let sComplexityAnalysisParam = &mut (*pVaaExt).sComplexityScreenParam;
-            let pWelsSvcRc = ctx_rc_at(pCtx, kiDependencyId as usize);
+            // §4.6, reorder: the slice type is read before the writer's `&mut`.
+            let eSliceType = pCtx.eSliceType;
+            let pWelsSvcRc = pCtx.rc_at_mut(kiDependencyId as usize);
 
-            let _iComplexityAnalysisMode = if pCtx.eSliceType == EWelsSliceType::P_SLICE {
+            let _iComplexityAnalysisMode = if eSliceType == EWelsSliceType::P_SLICE {
                 GOM_SAD
-            } else if pCtx.eSliceType == EWelsSliceType::I_SLICE {
+            } else if eSliceType == EWelsSliceType::I_SLICE {
                 GOM_VAR
             } else {
                 return;
@@ -2840,16 +2842,19 @@ impl CWelsPreProcess {
         } else {
             let pVaaInfo = ctx_vaa(pCtx);
             let sComplexityAnalysisParam = &mut (*pVaaInfo).sComplexityAnalysisParam;
-            let pWelsSvcRc = ctx_rc_at(pCtx, kiDependencyId as usize);
+            // §4.6, reorder: the writer's `&mut` sinks past everything that still
+            // needs the context — the slice-type reads and `SetRefMbType`'s own
+            // `&mut` — down to the first use of the rate controller's arrays.
+            let eSliceType = pCtx.eSliceType;
 
-            let iComplexityAnalysisMode = if (*pSvcParam).iRCMode as i32 == RC_QUALITY_MODE && pCtx.eSliceType == EWelsSliceType::P_SLICE {
+            let iComplexityAnalysisMode = if (*pSvcParam).iRCMode as i32 == RC_QUALITY_MODE && eSliceType == EWelsSliceType::P_SLICE {
                 FRAME_SAD
             } else if (((*pSvcParam).iRCMode as i32 == RC_BITRATE_MODE) || ((*pSvcParam).iRCMode as i32 == RC_TIMESTAMP_MODE))
-                && pCtx.eSliceType == EWelsSliceType::P_SLICE
+                && eSliceType == EWelsSliceType::P_SLICE
             {
                 GOM_SAD
             } else if (((*pSvcParam).iRCMode as i32 == RC_BITRATE_MODE) || ((*pSvcParam).iRCMode as i32 == RC_TIMESTAMP_MODE))
-                && pCtx.eSliceType == EWelsSliceType::I_SLICE
+                && eSliceType == EWelsSliceType::I_SLICE
             {
                 GOM_VAR
             } else {
@@ -2870,6 +2875,7 @@ impl CWelsPreProcess {
             sComplexityAnalysisParam.iCalcBgd = bCalculateBGD;
             sComplexityAnalysisParam.iFrameComplexity = 0;
 
+            let pWelsSvcRc = pCtx.rc_at_mut(kiDependencyId as usize);
             (*pWelsSvcRc).pGomForegroundBlockNum.fill(0);
             if iComplexityAnalysisMode != FRAME_SAD {
                 (*pWelsSvcRc).pCurrentFrameGomSad.fill(0);

@@ -66,7 +66,7 @@ use crate::{
 
 pub use crate::encoder::encoder_context::EWelsSliceType;
 use crate::encoder::encoder_context::{
-    ctx_dq_layer, ctx_param, ctx_pps_array, ctx_rc_at, ctx_ref_list,
+    ctx_dq_layer, ctx_param, ctx_pps_array, ctx_ref_list,
     ctx_sps_array, ctx_subset_array,
     ctx_func_list,
 };
@@ -2273,7 +2273,7 @@ pub unsafe fn WelsISliceMdEncDynamic(pEncCtx: *mut sWelsEncCtx, pSlice: &mut SSl
         }
 
         if (*pSlice).bDynamicSlicingSliceSizeCtrlFlag {
-            let max_qp = (*ctx_rc_at(pEncCtx, (*pEncCtx).uiDependencyId as usize)).iMaxQp;
+            let max_qp = (*pEncCtx).rc_at((*pEncCtx).uiDependencyId as usize).iMaxQp;
             mbs.cur_mut().uiLumaQp = max_qp as u8;
             mbs.cur_mut().uiChromaQp = g_kuiChromaQpTable[CLIP3_QP_0_51(max_qp as i32 + kuiChromaQpIndexOffset as i32)];
         }
@@ -2655,7 +2655,7 @@ pub unsafe fn WelsMdInterMbLoopOverDynamicSlice(
         }
 
         if (*pSlice).bDynamicSlicingSliceSizeCtrlFlag {
-            let max_qp = (*ctx_rc_at(pEncCtx, (*pEncCtx).uiDependencyId as usize)).iMaxQp;
+            let max_qp = (*pEncCtx).rc_at((*pEncCtx).uiDependencyId as usize).iMaxQp;
             mbs.cur_mut().uiLumaQp = max_qp as u8;
             mbs.cur_mut().uiChromaQp = g_kuiChromaQpTable[CLIP3_QP_0_51(max_qp as i32 + kuiChromaQpIndexOffset as i32)];
         }
@@ -3161,9 +3161,14 @@ pub unsafe fn WelsCodeOneSlice(pEncCtx: *mut sWelsEncCtx, pCurSlice: &mut SSlice
     WelsSliceHeaderExtInit(pEncCtx, pCurLayer, &mut *pCurSlice);
 
     //RomRC init slice by slice
-    let pWelsSvcRc = ctx_rc_at(pEncCtx, (*pEncCtx).uiDependencyId as usize);
-    if !pWelsSvcRc.is_null() && (*pWelsSvcRc).bGomRC {
-        crate::encoder::rc::GomRCInitForOneSlice(&mut *pCurSlice, (*pWelsSvcRc).iBitsPerMb);
+    // A2: the raw accessor answered null on an empty array and this is the one
+    // caller that asked. `rc_at` panics instead (T9.H3's ruling for `ctx_ltr_at`),
+    // so the emptiness question moves back out to the array, where it was.
+    if !(*pEncCtx).rc().is_empty() {
+        let pWelsSvcRc = (*pEncCtx).rc_at((*pEncCtx).uiDependencyId as usize);
+        if pWelsSvcRc.bGomRC {
+            crate::encoder::rc::GomRCInitForOneSlice(&mut *pCurSlice, pWelsSvcRc.iBitsPerMb);
+        }
     }
 
     let ext_hdr_idx = if (*pCurSlice).bSliceHeaderExtFlag { 1 } else { 0 };

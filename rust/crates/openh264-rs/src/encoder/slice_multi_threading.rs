@@ -88,7 +88,7 @@ pub use crate::encoder::encoder_context::sWelsEncCtx;
 // accessors. Field spellings only — no body in this file is touched, and the
 // thread machinery is Phase 7's.
 use crate::encoder::encoder_context::{
-    ctx_dq_layer, ctx_frame_bs_cur, ctx_param, ctx_rc_at,
+    ctx_dq_layer, ctx_frame_bs_cur, ctx_param,
 };
 
 // ============================================================================
@@ -610,8 +610,7 @@ pub unsafe fn DynamicAdjustSlicing(
         if pCtx.rc().is_empty() {
             return;
         }
-        let pWelsSvcRc = ctx_rc_at(pCtx, iCurDid as usize);
-        iNumMbInEachGom = (*pWelsSvcRc).iNumberMbGom;
+        iNumMbInEachGom = pCtx.rc_at(iCurDid as usize).iNumberMbGom;
 
         if iNumMbInEachGom <= 0 {
             return;

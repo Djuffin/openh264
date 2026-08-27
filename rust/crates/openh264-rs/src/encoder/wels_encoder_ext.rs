@@ -73,7 +73,7 @@ use crate::encoder::param_svc::GetLogFactor;
 use crate::encoder::param_svc::SExistingParasetList;
 use crate::encoder::svc_motion_estimate::CheckInRangeCloseOpen;
 use crate::encoder::encoder_context::{
-    ctx_frame_bs_cur, ctx_param, ctx_pps_array, ctx_rc_at,
+    ctx_frame_bs_cur, ctx_param, ctx_pps_array,
     ctx_sps_array, ctx_subset_array,
     SParaSetOffsetVariable, MAX_DQ_LAYER_NUM,
     MAX_PPS_COUNT, PARA_SET_TYPE,
@@ -2404,7 +2404,7 @@ uiResolutionChangeTimes={}, uIDRReqNum={}, uIDRSentNum={}, uLTRSentNum=NA, iTota
                 }
 
                 pStatistics.uiAverageFrameQP = if !(*pCtx).rc().is_empty() {
-                    (*ctx_rc_at(pCtx, iDid as usize)).iAverageFrameQp as u32
+                    (*pCtx).rc_at(iDid as usize).iAverageFrameQp as u32
                 } else {
                     26
                 };
