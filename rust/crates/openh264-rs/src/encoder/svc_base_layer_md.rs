@@ -846,7 +846,7 @@ pub unsafe extern "C" fn WelsMdIntraChroma(
 /// Same as [`WelsMdI4x4`].
 // unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
-pub unsafe extern "C" fn WelsMdIntraFinePartition(
+pub unsafe fn WelsMdIntraFinePartition(
     pEncCtx: *mut sWelsEncCtx,
     pWelsMd: &mut SWelsMD,
     pCurMb: &mut SMB,
@@ -869,7 +869,7 @@ pub unsafe extern "C" fn WelsMdIntraFinePartition(
 /// Same as [`WelsMdI4x4Fast`].
 // unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
-pub unsafe extern "C" fn WelsMdIntraFinePartitionVaa(
+pub unsafe fn WelsMdIntraFinePartitionVaa(
     pEncCtx: *mut sWelsEncCtx,
     pWelsMd: &mut SWelsMD,
     pCurMb: &mut SMB,
@@ -1184,7 +1184,7 @@ pub unsafe extern "C" fn WelsMdP8x16(
 /// All pointers must be valid.
 // unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
-pub unsafe extern "C" fn WelsMdInterFinePartition(
+pub unsafe fn WelsMdInterFinePartition(
     pEncCtx: *mut sWelsEncCtx,
     pWelsMd: &mut SWelsMD,
     pSlice: &mut SSlice,
@@ -1224,7 +1224,7 @@ pub unsafe extern "C" fn WelsMdInterFinePartition(
 /// populated and `pfGetMbSignFromInterVaa` assigned.
 // unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
-pub unsafe extern "C" fn WelsMdInterFinePartitionVaa(
+pub unsafe fn WelsMdInterFinePartitionVaa(
     pEncCtx: *mut sWelsEncCtx,
     pWelsMd: &mut SWelsMD,
     pSlice: &mut SSlice,
@@ -1900,7 +1900,7 @@ pub unsafe fn WelsMdInterMbRefinement(
 /// All four pointers must be valid and `pfIntraFineMd` assigned.
 // unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
-pub unsafe extern "C" fn WelsMdFirstIntraMode(
+pub unsafe fn WelsMdFirstIntraMode(
     pEncCtx: *mut sWelsEncCtx,
     pWelsMd: &mut SWelsMD,
     pCurMb: &mut SMB,
@@ -1992,7 +1992,7 @@ pub unsafe fn WelsMdInterMb(
         pWelsMd,
         pSlice,
         mbs.cur_mut(),
-        &mut bKeepSkip as *mut bool,
+        &mut bKeepSkip,
     ) {
         return;
     }

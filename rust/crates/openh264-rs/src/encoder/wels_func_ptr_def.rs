@@ -70,7 +70,7 @@ pub type PGetChromaPredFunc = fn(pred: &mut [u8; 64], rec: &RecCursor<'_>);
 pub type PGetLumaI16x16PredFunc = fn(pred: &mut [u8; 256], rec: &RecCursor<'_>);
 
 /// `wels_func_ptr_def.h:106`
-pub type PIntraFineMdFunc = unsafe extern "C" fn(
+pub type PIntraFineMdFunc = unsafe fn(
     pEncCtx: *mut sWelsEncCtx,
     pWelsMd: &mut SWelsMD,
     pCurMb: &mut SMB,
@@ -78,7 +78,7 @@ pub type PIntraFineMdFunc = unsafe extern "C" fn(
 ) -> i32;
 
 /// `wels_func_ptr_def.h:107`
-pub type PInterFineMdFunc = unsafe extern "C" fn(
+pub type PInterFineMdFunc = unsafe fn(
     pEncCtx: *mut sWelsEncCtx,
     pWelsMd: &mut SWelsMD,
     slice: &mut SSlice,
@@ -87,28 +87,34 @@ pub type PInterFineMdFunc = unsafe extern "C" fn(
 );
 
 /// `wels_func_ptr_def.h:108`
-pub type PInterMdFirstIntraModeFunc = unsafe extern "C" fn(
+pub type PInterMdFirstIntraModeFunc = unsafe fn(
     pEncCtx: *mut sWelsEncCtx,
     pWelsMd: &mut SWelsMD,
     pCurMb: &mut SMB,
     pMbCache: &mut SMbCache,
 ) -> bool;
 
-/// `wels_func_ptr_def.h:111`
-pub type PAccumulateSadFunc = unsafe extern "C" fn(
-    pSumDiff: *mut u32,
-    pGomForegroundBlockNum: *mut i32,
-    iSad8x8: *mut i32,
-    pVaaBgMbFlag: *mut i8,
-);
+// `PAccumulateSadFunc` (`wels_func_ptr_def.h:111`) stood here, with its
+// `pfAccumulateSadForRc` slot below. **S18, deleted in S4.C1**: the slot was
+// never installed and never dispatched — whole-tree grep at deletion found the
+// type declaration, the field declaration and the one `None` initialiser and
+// nothing else, in `src/`, `tests/`, `benches/` or `rust/tools/`. It is the
+// rate-control SAD accumulator the C++ assigns in `WelsInitEncodingFuncs`; the
+// port's rate control reads its SADs directly, so the indirection never had a
+// producer. One `unsafe` fn-pointer alias retires without a conversion.
 
 /// `wels_func_ptr_def.h:116`
-pub type PInterMdBackgroundDecisionFunc = unsafe extern "C" fn(
+/// **S4.C1**: `pKeepPskip` was `*mut bool` — a pure out-parameter whose single
+/// dispatch site passes `&mut` on a local `bool`, and whose two implementations
+/// only read-modify-write it. The leading context stays raw: this slot is
+/// dispatched inside the fork, so S63 keeps it a pointer until the root converts.
+/// `extern "C"` came off — nothing in this table crosses the C ABI (T4b.1).
+pub type PInterMdBackgroundDecisionFunc = unsafe fn(
     pEncCtx: *mut sWelsEncCtx,
     pWelsMd: &mut SWelsMD,
     slice: &mut SSlice,
     pCurMb: &mut SMB,
-    pKeepPskip: *mut bool,
+    pKeepPskip: &mut bool,
 ) -> bool;
 
 /// `wels_func_ptr_def.h:118`
@@ -120,7 +126,7 @@ pub type PMdBackgroundInfoUpdateFunc = unsafe extern "C" fn(
 );
 
 /// `wels_func_ptr_def.h:121`
-pub type PInterMdScrollingPSkipDecisionFunc = unsafe extern "C" fn(
+pub type PInterMdScrollingPSkipDecisionFunc = unsafe fn(
     pEncCtx: *mut sWelsEncCtx,
     pWelsMd: &mut SWelsMD,
     slice: &mut SSlice,
@@ -128,8 +134,16 @@ pub type PInterMdScrollingPSkipDecisionFunc = unsafe extern "C" fn(
 ) -> bool;
 
 /// `wels_func_ptr_def.h:123`
-pub type PSetScrollingMv =
-    unsafe extern "C" fn(pVaa: *mut SVAAFrameInfo, pMd: &mut SWelsMD);
+/// **S4.C1: shared, and deliberately not `&mut`.** `SetScrollingMvToMdNull` is
+/// fork-reachable (`phase9_forksplit.py --why`: `<- WelsMdInterSecondaryModesEnc
+/// <- WelsMdInterMb <- ... <- EncodeOnePartitionSizeLimited <- fork seed`), so an
+/// exclusive reference here would be N workers each taking a `Unique` retag over
+/// the one video-analysis block every worker shares — F223's second defect
+/// verbatim, and a data race whether or not anything is written through it. The
+/// real implementation only *reads* the block (the screen-content downcast, two
+/// scalars off `sScrollDetectInfo`); everything it writes goes through `pMd`,
+/// which is already exclusive and per-macroblock.
+pub type PSetScrollingMv = unsafe fn(pVaa: &SVAAFrameInfo, pMd: &mut SWelsMD);
 
 /// `wels_func_ptr_def.h:125`
 pub type PInterMdFunc = unsafe fn(
@@ -143,11 +157,22 @@ pub type PInterMdFunc = unsafe fn(
 pub type PDeQuantizationHadamardFunc = fn(pRes: &mut [i16; 16], kuiMF: u16);
 
 /// `wels_func_ptr_def.h:190`
-pub type PCavlcParamCalFunc = unsafe extern "C" fn(
-    pCoff: *mut i16,
-    pRun: *mut u8,
-    pLevel: *mut i16,
-    pTotalCoeffs: *mut i32,
+/// **S4.C1: safe, and `pCoff` is a slice rather than a fixed array on purpose.**
+/// The two call families walk different extents off the same flat cursor —
+/// luma steps `sDct.iLumaBlock` (a `[[i16; 16]; 16]` read flat) in sixteens with
+/// `iEndIdx = 15`, chroma DC steps `sDct.iChromaDc` (`[[i16; 4]; 2]`) in fours
+/// with `iEndIdx = 3`. A `&[i16; 16]` would reach twelve elements past
+/// `iChromaDc[1]`; the slice carries the extent the caller actually owns, and
+/// the implementation's backward scan starts at `iEndIdx` inside it.
+///
+/// `pRun`/`pLevel` are the caller's own `[0u8; 16]` / `[0i16; 16]` locals, so
+/// the fixed-array shape is exact there. `extern "C"` came off with the raws:
+/// nothing in this table crosses the C ABI (T4b.1's precedent).
+pub type PCavlcParamCalFunc = fn(
+    pCoff: &[i16],
+    pRun: &mut [u8; 16],
+    pLevel: &mut [i16; 16],
+    pTotalCoeffs: &mut i32,
     iEndIdx: i32,
 ) -> i32;
 
@@ -439,7 +464,6 @@ pub struct SWelsFuncPtrList {
     // reader (`DeblockingBSCalc_c`), the reader direct since session F (F118).
 
     pub pfRc: SWelsRcFunc,
-    pub pfAccumulateSadForRc: Option<PAccumulateSadFunc>,
 
     // The three `pfSetMemZeroSize*` slots were here (`PSetMemoryZero`, i.e.
     // `fn(*mut c_void, i32)`): sizes times 8, times 64, times 64 aligned to 16.
@@ -540,7 +564,6 @@ impl Default for SWelsFuncPtrList {
             pfDequantizationIHadamard4x4: None,
             pfDeblocking: DeblockingFunc::default(),
             pfRc: SWelsRcFunc::default(),
-            pfAccumulateSadForRc: None,
             pfCavlcParamCal: None,
             eEntropyCoder: EntropyCoder::default(),
             pParametersetStrategy: None,

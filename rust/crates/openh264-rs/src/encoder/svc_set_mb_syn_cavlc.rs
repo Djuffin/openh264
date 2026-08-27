@@ -203,33 +203,44 @@ impl Default for TagMVComponentUnit {
 // ============================================================================
 
 /// Calculates non-zero count, level, run, and total zero statistics for CAVLC transform blocks.
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
-pub unsafe extern "C" fn CavlcParamCal_c(
-    pCoffLevel: *mut i16,
-    pRun: *mut u8,
-    pLevel: *mut i16,
-    pTotalCoeff: *mut i32,
-    mut iLastIndex: i32,
+///
+/// **S4.C1**: the four raw parameters became the shapes the callers already hold
+/// — `pCoffLevel` the coefficient block as a slice (its length is the extent the
+/// caller owns: 16 for luma, 4 for chroma DC), `pRun`/`pLevel` the caller's own
+/// sixteen-element locals. The backward scan is unchanged; what changed is that
+/// `iLastIndex` is now bounds-checked against the block rather than trusted, and
+/// the two output writes index arrays instead of offsetting pointers.
+///
+/// `iLastIndex` is clamped to the block on entry rather than asserted: the C++
+/// passes a compile-time constant (15 or 3) that always matches the block it
+/// passes beside it, so a mismatch is unreachable from the port's own call
+/// sites, and clamping keeps a future caller from reading past the slice.
+pub fn CavlcParamCal_c(
+    pCoffLevel: &[i16],
+    pRun: &mut [u8; 16],
+    pLevel: &mut [i16; 16],
+    pTotalCoeff: &mut i32,
+    iEndIdx: i32,
 ) -> i32 {
     let mut iTotalZeros = 0i32;
     let mut iTotalCoeffs = 0i32;
+    let mut iLastIndex = iEndIdx.min(pCoffLevel.len() as i32 - 1);
 
-    while iLastIndex >= 0 && *pCoffLevel.add(iLastIndex as usize) == 0 {
+    while iLastIndex >= 0 && pCoffLevel[iLastIndex as usize] == 0 {
         iLastIndex -= 1;
     }
 
     while iLastIndex >= 0 {
         let mut iCountZero = 0u8;
-        *pLevel.add(iTotalCoeffs as usize) = *pCoffLevel.add(iLastIndex as usize);
+        pLevel[iTotalCoeffs as usize] = pCoffLevel[iLastIndex as usize];
         iLastIndex -= 1;
 
-        while iLastIndex >= 0 && *pCoffLevel.add(iLastIndex as usize) == 0 {
+        while iLastIndex >= 0 && pCoffLevel[iLastIndex as usize] == 0 {
             iCountZero += 1;
             iLastIndex -= 1;
         }
         iTotalZeros += iCountZero as i32;
-        *pRun.add(iTotalCoeffs as usize) = iCountZero;
+        pRun[iTotalCoeffs as usize] = iCountZero;
         iTotalCoeffs += 1;
     }
     *pTotalCoeff = iTotalCoeffs;
@@ -241,7 +252,7 @@ pub unsafe extern "C" fn CavlcParamCal_c(
 #[allow(unsafe_code)]
 pub unsafe fn WriteBlockResidualCavlc(
     pFuncList: &SWelsFuncPtrList,
-    pCoffLevel: *mut i16,
+    pCoffLevel: &[i16],
     iEndIdx: i32,
     iCalRunLevelFlag: i32,
     iResidualProperty: i32,
@@ -266,8 +277,8 @@ pub unsafe fn WriteBlockResidualCavlc(
 
         iTotalZeros = func(
             pCoffLevel,
-            uiRun.as_mut_ptr(),
-            iLevel.as_mut_ptr(),
+            &mut uiRun,
+            &mut iLevel,
             &mut iTotalCoeffs,
             iEndIdx,
         );
@@ -769,7 +780,6 @@ pub unsafe fn WelsWriteMbResidual(
     // `g_kuiCache48CountScan4Idx` (max 47) or that table's 16.. tail plus 24 (max
     // 47), against `[i8; 48]`; the lowest is `9 - 8`.
 
-    let mut pBlock: *mut i16;
     let mut iA: i8;
     let mut iB: i8;
     let mut iC: i8;
@@ -781,7 +791,7 @@ pub unsafe fn WelsWriteMbResidual(
         iC = wels_non_zero_count_average(iA, iB);
         if WriteBlockResidualCavlc(
             pFuncList,
-            (*sMbCacheInfo).sDct.iLumaI16x16Dc.as_mut_ptr(),
+            &(*sMbCacheInfo).sDct.iLumaI16x16Dc[..],
             15,
             1,
             LUMA_4x4,
@@ -795,9 +805,9 @@ pub unsafe fn WelsWriteMbResidual(
 
         // AC Luma
         if kiCbpLuma != 0 {
-            // S28: the cursor walks all sixteen blocks — derived from the whole array.
-            pBlock = std::ptr::addr_of_mut!((*sMbCacheInfo).sDct.iLumaBlock).cast::<i16>();
-
+            // S4.C1: the flat cursor became the block index it was always walking
+            // — `pBlock.add(16)` per iteration is block `i`, and the extent the
+            // callee may read is exactly that block's sixteen coefficients.
             for i in 0..16 {
                 let iIdx = g_kuiCache48CountScan4Idx[i] as usize;
                 iA = (*sMbCacheInfo).iNonZeroCoeffCount[iIdx - 1];
@@ -805,7 +815,7 @@ pub unsafe fn WelsWriteMbResidual(
                 iC = wels_non_zero_count_average(iA, iB);
                 if WriteBlockResidualCavlc(
                     pFuncList,
-                    pBlock,
+                    &(*sMbCacheInfo).sDct.iLumaBlock[i][..],
                     14,
                     if (*sMbCacheInfo).iNonZeroCoeffCount[iIdx] > 0 { 1 } else { 0 },
                     LUMA_AC,
@@ -815,15 +825,14 @@ pub unsafe fn WelsWriteMbResidual(
                 {
                     return ENC_RETURN_VLCOVERFLOWFOUND;
                 }
-                pBlock = pBlock.add(16);
             }
         }
     } else {
         // Luma DC AC
         if kiCbpLuma != 0 {
-            // S28: the cursor walks all sixteen blocks — derived from the whole array.
-            pBlock = std::ptr::addr_of_mut!((*sMbCacheInfo).sDct.iLumaBlock).cast::<i16>();
-
+            // S4.C1: `pBlock.add(64)` per outer step and `.add(16/32/48)` within
+            // it are blocks `i`, `i+1`, `i+2`, `i+3` — `i` advances by four, so the
+            // flat cursor's arithmetic and the block index coincide exactly.
             let mut i = 0usize;
             while i < 16 {
                 if (kiCbpLuma & (1 << (i >> 2))) != 0 {
@@ -838,7 +847,7 @@ pub unsafe fn WelsWriteMbResidual(
                     iC = wels_non_zero_count_average(iA, iB);
                     if WriteBlockResidualCavlc(
                         pFuncList,
-                        pBlock,
+                        &(*sMbCacheInfo).sDct.iLumaBlock[i][..],
                         15,
                         if kiA > 0 { 1 } else { 0 },
                         LUMA_4x4,
@@ -854,7 +863,7 @@ pub unsafe fn WelsWriteMbResidual(
                     iC = wels_non_zero_count_average(iA, iB);
                     if WriteBlockResidualCavlc(
                         pFuncList,
-                        pBlock.add(16),
+                        &(*sMbCacheInfo).sDct.iLumaBlock[i + 1][..],
                         15,
                         if kiB > 0 { 1 } else { 0 },
                         LUMA_4x4,
@@ -870,7 +879,7 @@ pub unsafe fn WelsWriteMbResidual(
                     iC = wels_non_zero_count_average(iA, iB);
                     if WriteBlockResidualCavlc(
                         pFuncList,
-                        pBlock.add(32),
+                        &(*sMbCacheInfo).sDct.iLumaBlock[i + 2][..],
                         15,
                         if kiC_val > 0 { 1 } else { 0 },
                         LUMA_4x4,
@@ -886,7 +895,7 @@ pub unsafe fn WelsWriteMbResidual(
                     iC = wels_non_zero_count_average(iA, iB);
                     if WriteBlockResidualCavlc(
                         pFuncList,
-                        pBlock.add(48),
+                        &(*sMbCacheInfo).sDct.iLumaBlock[i + 3][..],
                         15,
                         if kiD > 0 { 1 } else { 0 },
                         LUMA_4x4,
@@ -897,7 +906,6 @@ pub unsafe fn WelsWriteMbResidual(
                         return ENC_RETURN_VLCOVERFLOWFOUND;
                     }
                 }
-                pBlock = pBlock.add(64);
                 i += 4;
             }
         }
@@ -905,11 +913,12 @@ pub unsafe fn WelsWriteMbResidual(
 
     if kiCbpChroma != 0 {
         // Chroma DC residual present
-        // S28: `.add(4)` below walks into `iChromaDc[1]` — derived from the whole array.
-        pBlock = std::ptr::addr_of_mut!((*sMbCacheInfo).sDct.iChromaDc).cast::<i16>(); // Cb
+        // S4.C1: the `.add(4)` that walked from `iChromaDc[0]` into `iChromaDc[1]`
+        // is the second row of the array, named as such. Each row is four
+        // coefficients and `iEndIdx` is 3, so the slice is the exact extent.
         if WriteBlockResidualCavlc(
             pFuncList,
-            pBlock,
+            &(*sMbCacheInfo).sDct.iChromaDc[0][..],
             3,
             1,
             CHROMA_DC,
@@ -920,10 +929,9 @@ pub unsafe fn WelsWriteMbResidual(
             return ENC_RETURN_VLCOVERFLOWFOUND;
         }
 
-        pBlock = pBlock.add(4); // Cr
         if WriteBlockResidualCavlc(
             pFuncList,
-            pBlock,
+            &(*sMbCacheInfo).sDct.iChromaDc[1][..],
             3,
             1,
             CHROMA_DC,
@@ -937,9 +945,8 @@ pub unsafe fn WelsWriteMbResidual(
         // Chroma AC residual present
         if (kiCbpChroma & 0x02) != 0 {
             let kCache48CountScan4Idx16base = &g_kuiCache48CountScan4Idx[16..];
-            // S28: walks all eight chroma blocks — derived from the whole array.
-            pBlock = std::ptr::addr_of_mut!((*sMbCacheInfo).sDct.iChromaBlock).cast::<i16>(); // Cb
-
+            // S4.C1: blocks 0..4 are Cb, 4..8 are Cr — the two loops' flat
+            // cursors said the same thing with arithmetic.
             for i in 0..4 {
                 let iIdx = kCache48CountScan4Idx16base[i] as usize;
                 iA = (*sMbCacheInfo).iNonZeroCoeffCount[iIdx - 1];
@@ -947,7 +954,7 @@ pub unsafe fn WelsWriteMbResidual(
                 iC = wels_non_zero_count_average(iA, iB);
                 if WriteBlockResidualCavlc(
                     pFuncList,
-                    pBlock,
+                    &(*sMbCacheInfo).sDct.iChromaBlock[i][..],
                     14,
                     if (*sMbCacheInfo).iNonZeroCoeffCount[iIdx] > 0 { 1 } else { 0 },
                     CHROMA_AC,
@@ -957,18 +964,14 @@ pub unsafe fn WelsWriteMbResidual(
                 {
                     return ENC_RETURN_VLCOVERFLOWFOUND;
                 }
-                pBlock = pBlock.add(16);
             }
 
-            // S28, and the ninth cursor of session B's family: this one walks the four
-            // Cr blocks with `pBlock.add(16)`, so `iChromaBlock[4].as_mut_ptr()`
-            // narrowed the tag to block 4 and the second iteration read outside it.
-            // Derived from the whole array, offset to block 4. **The CABAC/LOW probe
-            // could not see it** — only the CAVLC probe (T6.C2) reaches this line.
-            pBlock = std::ptr::addr_of_mut!((*sMbCacheInfo).sDct.iChromaBlock)
-                .cast::<i16>()
-                .add(4 * 16); // Cr
-
+            // The Cr half. This cursor is the one S28 recorded as session B's ninth:
+            // written as `iChromaBlock[4].as_mut_ptr()` it narrowed the tag to block
+            // 4 and the second iteration read outside it, so it had to be derived
+            // from the whole array and offset. Indexing `[4 + i]` per call retires
+            // the question — there is no cursor to narrow. **Only the CAVLC probe
+            // (T6.C2) reaches this line**; the CABAC/LOW probe never did.
             for i in 0..4 {
                 let iIdx = 24 + (kCache48CountScan4Idx16base[i] as usize);
                 iA = (*sMbCacheInfo).iNonZeroCoeffCount[iIdx - 1];
@@ -976,7 +979,7 @@ pub unsafe fn WelsWriteMbResidual(
                 iC = wels_non_zero_count_average(iA, iB);
                 if WriteBlockResidualCavlc(
                     pFuncList,
-                    pBlock,
+                    &(*sMbCacheInfo).sDct.iChromaBlock[4 + i][..],
                     14,
                     if (*sMbCacheInfo).iNonZeroCoeffCount[iIdx] > 0 { 1 } else { 0 },
                     CHROMA_AC,
@@ -986,7 +989,6 @@ pub unsafe fn WelsWriteMbResidual(
                 {
                     return ENC_RETURN_VLCOVERFLOWFOUND;
                 }
-                pBlock = pBlock.add(16);
             }
         }
     }
@@ -1200,11 +1202,8 @@ mod tests {
         let mut level = [0i16; 16];
         let mut total_coeffs = 0i32;
 
-        unsafe {
-            let total_zeros =
-                CavlcParamCal_c(coeffs.as_mut_ptr(), run.as_mut_ptr(), level.as_mut_ptr(), &mut total_coeffs, 15);
-            assert_eq!(total_coeffs, 3);
-            assert_eq!(total_zeros, 1);
-        }
+        let total_zeros = CavlcParamCal_c(&coeffs[..], &mut run, &mut level, &mut total_coeffs, 15);
+        assert_eq!(total_coeffs, 3);
+        assert_eq!(total_zeros, 1);
     }
 }

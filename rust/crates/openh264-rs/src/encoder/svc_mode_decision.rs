@@ -402,8 +402,11 @@ pub unsafe extern "C" fn WelsMdInterSecondaryModesEnc(
         WelsMdInterDecidedPskip(pEncCtx, pSlice, pCurMb);
     } else {
         //Step 3: SubP16 MD
+        // S4.C1: `vaa_ptr()` was the raw form of this reach; the slot takes the
+        // shared reference now, which is the same `&self` retag `func_list()` above
+        // already makes and which two workers may hold at once.
         (*pFuncList).pfSetScrollingMv.expect("pfSetScrollingMv is unset")(
-            (*pEncCtx).vaa_ptr(),
+            (*pEncCtx).vaa().expect("the frame's video-analysis block"),
             pWelsMd,
         ); //SCC
         (*pFuncList).pfInterFineMd.expect(
@@ -1750,12 +1753,12 @@ pub unsafe fn CheckChromaCost(
 
 // unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
-pub unsafe extern "C" fn WelsMdInterJudgeBGDPskip(
+pub unsafe fn WelsMdInterJudgeBGDPskip(
     pEncCtx: *mut sWelsEncCtx,
     pWelsMd: &mut SWelsMD,
     pSlice: &mut SSlice,
     pCurMb: &mut SMB,
-    bKeepSkip: *mut bool,
+    bKeepSkip: &mut bool,
 ) -> bool {
     // T9.E2b: a field borrow under the `&mut` parent (F112's one step); its last
     // use is above the whole-slice pass to WelsMdBackgroundMbEnc, so NLL ends it
@@ -1796,12 +1799,12 @@ pub unsafe extern "C" fn WelsMdInterJudgeBGDPskip(
 
 // unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
-pub unsafe extern "C" fn WelsMdInterJudgeBGDPskipFalse(
+pub unsafe fn WelsMdInterJudgeBGDPskipFalse(
     _pCtx: *mut sWelsEncCtx,
     _pMd: &mut SWelsMD,
     _pSlice: &mut SSlice,
     _pCurMb: &mut SMB,
-    _bKeepSkip: *mut bool,
+    _bKeepSkip: &mut bool,
 ) -> bool {
     false
 }
@@ -2369,7 +2372,7 @@ pub unsafe extern "C" fn SetBlockStaticIdcToMd(
 // filed under Phase 9's port-raw backlog where it reads as pending work.
 // unsafe-cat: SCREEN_CONTENT(dormant)
 #[allow(unsafe_code)]
-pub unsafe extern "C" fn WelsMdInterJudgeSCDPskip(
+pub unsafe fn WelsMdInterJudgeSCDPskip(
     pEncCtx: *mut sWelsEncCtx,
     pWelsMd: &mut SWelsMD,
     slice: &mut SSlice,
@@ -2390,7 +2393,7 @@ pub unsafe extern "C" fn WelsMdInterJudgeSCDPskip(
 
 // unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
-pub unsafe extern "C" fn WelsMdInterJudgeSCDPskipFalse(
+pub unsafe fn WelsMdInterJudgeSCDPskipFalse(
     _pEncCtx: *mut sWelsEncCtx,
     _pWelsMd: &mut SWelsMD,
     _slice: &mut SSlice,
@@ -2477,7 +2480,7 @@ pub unsafe fn TryModeMerge(
 
 // unsafe-cat: SCREEN_CONTENT(dormant)
 #[allow(unsafe_code)]
-pub unsafe extern "C" fn WelsMdInterFinePartitionVaaOnScreen(
+pub unsafe fn WelsMdInterFinePartitionVaaOnScreen(
     pEncCtx: *mut sWelsEncCtx,
     pWelsMd: &mut SWelsMD,
     pSlice: &mut SSlice,
@@ -2520,25 +2523,33 @@ pub unsafe extern "C" fn WelsMdInterFinePartitionVaaOnScreen(
 
 // unsafe-cat: SCREEN_CONTENT(dormant)
 #[allow(unsafe_code)]
-pub unsafe extern "C" fn SetScrollingMvToMd(pVaa: *mut SVAAFrameInfo, pWelsMd: &mut SWelsMD) {
-    let pVaaExt = pVaa as *mut SVAAFrameInfoExt;
+pub unsafe fn SetScrollingMvToMd(pVaa: &SVAAFrameInfo, pWelsMd: &mut SWelsMD) {
+    // The screen-content downcast — the C++'s `static_cast<SVAAFrameInfoExt*>`.
+    // It stays inside an `unsafe fn` rather than becoming an explicit block in a
+    // safe one: A5 centralised this cast in `sWelsEncCtx::vaa_ext` so it would not
+    // be claimed in fifteen separate places, and re-spelling it here as a safe-fn
+    // block would make it a second claim *and* move an `unsafe_block` onto this
+    // file's ratchet row for no aliasing gain. What C1 changes is the parameter,
+    // not the cast: `*mut SVAAFrameInfo` -> `&SVAAFrameInfo`, so the slot can
+    // never hand a worker an exclusive reference to the one shared block.
+    let pVaaExt = pVaa as *const SVAAFrameInfo as *const SVAAFrameInfoExt;
     let sTempMv = SMVUnitXY {
         iMvX: (*pVaaExt).sScrollDetectInfo.iScrollMvX as i16,
         iMvY: (*pVaaExt).sScrollDetectInfo.iScrollMvY as i16,
     };
 
-    (*pWelsMd).sMe.sMe16x16.sDirectionalMv = sTempMv;
-    (*pWelsMd).sMe.sMe8x8[0].sDirectionalMv = sTempMv;
-    (*pWelsMd).sMe.sMe8x8[1].sDirectionalMv = sTempMv;
-    (*pWelsMd).sMe.sMe8x8[2].sDirectionalMv = sTempMv;
-    (*pWelsMd).sMe.sMe8x8[3].sDirectionalMv = sTempMv;
+    pWelsMd.sMe.sMe16x16.sDirectionalMv = sTempMv;
+    pWelsMd.sMe.sMe8x8[0].sDirectionalMv = sTempMv;
+    pWelsMd.sMe.sMe8x8[1].sDirectionalMv = sTempMv;
+    pWelsMd.sMe.sMe8x8[2].sDirectionalMv = sTempMv;
+    pWelsMd.sMe.sMe8x8[3].sDirectionalMv = sTempMv;
 }
 
 /// Intentional no-op mode decision scrolling MV callback.
 /// Matches `void SetScrollingMvToMdNull (SVAAFrameInfo* pVaa, SWelsMD* pWelsMd)` in `svc_mode_decision.cpp:689`.
 // unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
-pub unsafe extern "C" fn SetScrollingMvToMdNull(_pVaa: *mut SVAAFrameInfo, _pWelsMd: &mut SWelsMD) {}
+pub unsafe fn SetScrollingMvToMdNull(_pVaa: &SVAAFrameInfo, _pWelsMd: &mut SWelsMD) {}
 
 #[cfg(test)]
 mod tests {
@@ -2823,12 +2834,14 @@ mod tests {
     #[allow(unsafe_code)]
     fn test_svc_mode_decision_noop_callback() {
         // The MD argument used to be a null raw MD pointer; it is a `&mut` now, so
-        // the null goes and a real record takes its place. The `pVaa` argument is
-        // still raw (the preprocess family is session F's) and stays null: this
+        // the null goes and a real record takes its place. **S4.C1 does the same to
+        // `pVaa`**: the slot's parameter is `&SVAAFrameInfo` rather than a raw, so
+        // there is no null to pass and a real block takes its place here too. This
         // callback is the no-op arm of `PSetScrollingMv` and reads neither.
+        let sVaa = SVAAFrameInfo::default();
         let mut sMd = SWelsMD::default();
         unsafe {
-            SetScrollingMvToMdNull(std::ptr::null_mut(), &mut sMd);
+            SetScrollingMvToMdNull(&sVaa, &mut sMd);
         }
     }
 }
