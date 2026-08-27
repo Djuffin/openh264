@@ -5647,3 +5647,191 @@ only D2–D3 can land the second.
 core: `current_layer`/`ctx_dq_layer` is where stage A's deferred value is stored,
 and every checkpoint that converts it collects a cascade three stages deep.
 
+---
+
+## F217 — B1 is an MT-seam checkpoint, not a mechanical one: all four ctx singletons are reached **in-fork**, and one of them hands out a `&mut` there
+
+**S2, measured at the stage-A close, before opening B1.** The plan bills B1 in one
+line — "`pOut`/`pVpp`/`pSliceThreading` → `Option<Box<T>>`; `mutexSliceNumUpdate`
+→ owned `Mutex<()>` (deleting `WelsMutexInit/Destroy` and the `Box::into_raw`
+dance)" — which reads as bookkeeping. Cross the four field names against
+`phase9_forksplit.py --list`'s in-fork body set and it is not:
+
+| field | sites | in-fork bodies that touch it |
+|---|---:|---|
+| `pOut` | 125 | `slice_bs_buffer`, `slice_writer` |
+| `pVpp` | 46 | `ctx_pic_ref`, `WelsSliceHeaderExtInit` |
+| `pSliceThreading` | 28 | `thread_bs_buffer`, `DynSlcJudgeSliceBoundaryStepBack` |
+| `mutexSliceNumUpdate` | 8 | `DynSlcJudgeSliceBoundaryStepBack` — the fork's own lock |
+
+**And `pOut`'s in-fork use is a `&mut`, not a read:**
+
+```rust
+pub unsafe fn slice_bs_buffer<'a>(pEncCtx: *mut sWelsEncCtx, …) -> &'a mut [u8] {
+    if (*pSliceBs).pBs.is_some() { thread_bs_buffer(pEncCtx, …) }
+    else { &mut (&mut *(*pEncCtx).pOut).sBsBuffer[..] }        // ← in-fork `&mut`
+}
+```
+
+That is the shape S63 forbids and D1's two audited `unsafe impl`s exist to
+license for the *reconstruction picture*. Under the accessor design an in-fork
+body may only take the `&self` reader — so an `Option<Box<SWelsEncoderOutput>>`
+cannot simply replace the raw field: the bitstream buffer needs the same
+treatment `RecPicView`/`SharedCells` gave the picture, **or** a demonstration
+that the `else` arm is unreachable under MT.
+
+**The fence, measured, so B1 starts from a condition rather than a hunch.**
+`sSliceBs.pBs` is `Some` exactly when `InitSliceBsBuffer` was called with
+`bIndependenceBsBuffer`, and that is computed at one site
+(`svc_encode_slice.rs`, `ReallocateSliceList`'s prologue and its siblings):
+
+```rust
+let bIndependenceBsBuffer = (*pCtx).param().iMultipleThreadIdc > 1
+    && kuiSliceMode != SliceMode::SM_SINGLE_SLICE;
+```
+
+So the `pOut` arm is taken when the encoder is single-threaded **or** the layer
+is single-slice. The first disjunct is not the fork. The second is the open
+question: `iMultipleThreadIdc > 1` with `SM_SINGLE_SLICE` still selects the
+threaded path in `slice_multi_threading.rs`, and whether it spawns a worker that
+reaches `slice_bs_buffer` is a *probe*, not an argument — one `mt` sweep preset
+with a single-slice configuration, or a counter in the `else` arm. **B1 runs that
+probe before it designs anything**, because the answer decides between "delete
+the arm's in-fork reachability with a fence" and "give `pOut`'s buffer D1's
+treatment".
+
+**Why this is worth a finding rather than a note.** Stage A's seven checkpoints
+were all one shape: a raw accessor becomes a reference pair, and the compiler
+enumerates the work. B1 is the first checkpoint where the *storage* moves, and
+the plan's §5 table gives it the same one-line weight as `ctx_rc_at`. S2 stopped
+at the stage-A boundary rather than opening it half-scoped (D3's
+drop-from-the-end), and S3 should price it as an MT-seam checkpoint: fork/join and
+mid-row Miri probes gating every landing (§4.7), and F215's rule — a `&mut self`
+accessor is a fresh whole-struct `Unique` **per call** — applying to every
+per-slice reach into a singleton.
+
+---
+
+## F218 — F191's "42 in-fork `*mut SDqLayer` parameters" is 42 tree-wide and **11** in-fork, and the correction cuts D2's headline in four
+
+**S2, measured while writing S3's brief rather than re-quoting.** F191's fourth
+row, carried forward verbatim by F210 and by the plan's §10.3 ("The layer's 42
+in-fork `*mut SDqLayer` parameters … are named to D2–D3's handle redesign"), is
+two different counts run together:
+
+```
+$ grep -rn ': \*mut SDqLayer' --include='*.rs' src/ | wc -l
+42                                    ← parameter declarations, tree-wide
+
+$ # …crossed against phase9_forksplit.py --list's in-fork body set:
+in-fork: 11 `*mut SDqLayer` parameters across 11 bodies   (of 98 in-fork bodies)
+```
+
+42 is every such parameter anywhere — init, teardown, the single-threaded frame
+loop and the fork together. **Eleven** are in bodies the fork can reach, which is
+the number that decides whether `dq_layer` can hand out a reference.
+
+**What it does and does not change.** It does *not* change F210's ruling: eleven
+fork-reachable bodies taking a writable layer pointer is still eleven too many
+for a `&mut` return (S63) and still means the layer's storage moves before its
+accessor does. It does change the **size** the plan attaches to that work: D2's
+handle redesign has to satisfy eleven in-fork signatures, not forty-two, and the
+other thirty-one convert under the ordinary single-threaded rules stage A has
+been using all along. A session that prices D2 off the 42 will over-plan it by a
+factor of four; one that prices it off the 11 and forgets the other 31 will
+under-plan the cascade. Both numbers, both labelled, is the fix.
+
+**And the general point, which is this session's third instance.** F190 recorded
+two documents stating stale numbers about the instruments they describe; S1's
+prohibition-2 figure of 22 is quoted in four commit messages with no command
+attached and no spelling reproduces it; this is a number carried through three
+documents with its qualifier attached to the wrong noun. The rule the plan
+already has — "every count you quote carries the command that produced it" —
+is the one that would have caught all three, and it is cheap: the two greps above
+are eight seconds.
+
+---
+
+## F219 — the tracking number at S1's close is **613**, not 614, and the commit that "corrected" it moved it the wrong way
+
+**S2, measured at its own close, because the plan's ground rule says to.** The
+session log, S1's hand-off brief and the plan's §9 all carry **614** for the
+`#[allow(unsafe_code)]` count outside `src/api/` at S1's close, and S1's last
+commit is titled *"docs(safeplan): the close's tracking number is 614, not 613"*.
+Counted at that tree:
+
+```
+$ git archive 5cc4bc4b rust/crates/openh264-rs/src | tar -x -C /tmp/s1snap
+$ cd /tmp/s1snap/rust/crates/openh264-rs
+$ grep -rn '#\[allow(unsafe_code)\]' --include='*.rs' src/ | grep -v '^src/api/' | wc -l
+613
+$ grep -ro '#\[allow(unsafe_code)\]' --include='*.rs' src/ | grep -v '^src/api/' | wc -l
+613          # occurrences, not lines — the two agree, so it is not a two-per-line artefact
+$ grep -rn '#\[allow(unsafe_code)\]' --include='*.rs' src/ | wc -l
+658          # api included; 45 in api, which is what §3 records
+```
+
+613. The correcting commit moved a right number to a wrong one.
+
+**Why it is worth a finding and not a footnote.** The figure is the plan's
+**single progress number** (§9), quoted in every session close and used to judge
+whether a stage earned its keep. S2 opened by quoting 614 from the brief and
+would have reported "614 → 612, −2" — twice the movement that actually happened.
+The real S2 delta is **613 → 612, −1**, and stage A's whole delta is **627 →
+612**.
+
+This is the third counting defect S2 found in one session: F218 (a qualifier
+attached to the wrong noun, carried through three documents), S1's prohibition-2
+figure of 22 quoted in four commit messages with no command attached and no
+spelling that reproduces it, and this. All three were caught the same way, by the
+rule the plan already has — *every count you quote carries the command that
+produced it* — and all three would have been caught earlier if the rule had been
+applied to the number being *corrected*, not just to the number being reported.
+The cheap fix for the tracking number specifically: it has one canonical command,
+so put it in a tool beside the other three rather than in prose.
+
+---
+
+## F220 — S2 closes with the two MT probes **unrun**, by direction, and this is what that leaves unverified
+
+**S2, at the close.** Plan §4.7 makes the fork/join and mid-row Miri probes
+load-bearing "for anything touching the MT seam … in every `session`-level gate
+that touches `svc_encode_slice.rs`, `slice_multi_threading.rs`, or
+`rec_view.rs`". A7 touched the first two. `gates.sh session` does **not** run
+them — its lane filters `--skip 'fork_join_encodes'` by construction — so they
+were started by hand, twice, and neither run reached a verdict: this repo sets
+`[profile.dev] opt-level = 3`, every `cargo miri test` invocation recompiles the
+crate at that level, and both attempts were killed in the compile (21 min and
+~12 min). The session closed on the user's direction to proceed without them.
+Recorded here rather than glossed, which is F207's own precedent.
+
+**What *is* verified at the close**, and it is most of the seam:
+
+* `gates.sh session` PASS — Miri 291/291 across four shards, including
+  `encode_loop_runs_with_cavlc` and `encode_loop_runs_over_size_limited`, both of
+  which drive a real encode through `svc_encode_slice.rs`.
+* Both diffharness sweeps 583/583 byte-identical, in both profiles. Those presets
+  include `mt`, so the multi-threaded path is exercised for **output equality** —
+  what they cannot see is a retag that does not change a byte, which is the whole
+  reason the probes exist (F114, F208, F215 are three such).
+* Prohibition 1 (101 `*mut sWelsEncCtx` bodies against 15 writers, no
+  violations) is the static half of S63, and it is green.
+
+**What is not verified**, stated exactly:
+
+1. **No fork/join data-race check ran against A5–A7's tree.** The two audited
+   `unsafe impl`s (D1) have that pair of probes as their entire proof obligation.
+   Nothing in A5–A7 touched `rec_view.rs` or the `SharedCells` scheme, and no
+   checkpoint added an in-fork `&mut` — prohibition 1 says so — so the *expected*
+   result is green; that is an argument, not a run.
+2. **The mid-row boundary case specifically.** A7 changed
+   `ReallocateSliceInThread` and `ReallocSliceBuffer`, both on the dynamic-slicing
+   path the mid-row probe exists to drive, replacing a `*mut SSliceArgument`
+   cursor with a copied-out `Copy` field. Byte-identical across 583 sweeps in two
+   profiles, and the size-limited encode loop passed under Miri — but the
+   *threaded* mid-row case is the one that did not run.
+
+**S3 runs both probes before its first conversion**, against this tree, so that a
+failure is attributed to S2 rather than to S3's own first checkpoint. Budget
+~25 minutes each, most of it compile; the cheap version is to run them once,
+serially, immediately after checking out.
