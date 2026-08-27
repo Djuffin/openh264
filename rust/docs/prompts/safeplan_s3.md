@@ -5,7 +5,8 @@ parentheses (F…, S…, D…) point at entries in the project docs. Re-run ever
 before quoting it — trust the tree over this document, and before acting on any
 claim anywhere, re-read the code it describes (rule S68: a claim of absence gets
 its grep, a cited line gets read). Findings are numbered `F…` in
-`rust/docs/phase9_findings.md`; yours start at **F218**. The operative plan is
+`rust/docs/phase9_findings.md`; yours start at **F221** (the count prints 120 today
+— the F218 this brief's first draft named already exists; it is cited below). The operative plan is
 `rust/docs/safe_conversion_execution_plan.md` — read it first, its §10 amendments
 included; this session is its S3, and it opens with S2's B-tail.*
 
