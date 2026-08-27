@@ -446,8 +446,21 @@ pub unsafe fn UpdateMbListNeighborParallel(
     if pCurDq.is_null() {
         return;
     }
-    let pSliceCtx = &mut (*pCurDq).sSliceEncCtx;
-    let kiMbWidth = pSliceCtx.iMbWidth as i32;
+    // **F226.** This was `let pSliceCtx = &mut (*pCurDq).sSliceEncCtx;` — an
+    // exclusive reborrow taken for the one scalar read below and never written
+    // through. `UpdateMbMapForked` has every worker call this body on the *same*
+    // layer, so N of them took that retag at once, and F223's third rule is exact:
+    // in-fork a `&mut` retag is a **write** to the data-race model. The retag
+    // covered the whole `SSliceCtx` — `iSliceNumInFrame`'s atomic and
+    // `pOverallMbMap`'s `Vec` header included — so it was a write-write race with
+    // nothing written, the same shape as F223's own defect 2.
+    //
+    // No gate in this project could see it: both diffharness drivers and both §4.7
+    // MT probes pin `bUseLoadBalancing` off, and this fork is reachable only with it
+    // on, so the covering test is `load_balancing_completes_frames_with_sane_slice_counts`
+    // — which is `#[cfg_attr(miri, ignore)]`. The probe below is the referee that
+    // was missing.
+    let kiMbWidth = (*pCurDq).sSliceEncCtx.iMbWidth as i32;
     let first: &[i32] = &(*pCurDq).pFirstMbIdxOfSlice;
     let count: &[i32] = &(*pCurDq).pCountMbNumInSlice;
     let kiFirst = first[kiSliceIdc as usize];

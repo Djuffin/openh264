@@ -6228,9 +6228,32 @@ tests in this file — give it a real `sMbDataP` grid and slice tables, then two
 scoped threads each calling `UpdateMbListNeighborParallel` on its own slice index.
 That is the exact concurrency `UpdateMbMapForked` creates, at a geometry Miri can
 afford. Under Miri it refuses the old line as a data race and passes the new one;
-natively it is a neighbour-map correctness test. **Not yet written** — named here
-with its design so the next session lands the fix and its referee together, rather
-than a one-word fix no instrument can hold.
+natively it is a neighbour-map correctness test.
+
+**Both landed in S4, and the probe was checked for teeth rather than assumed to
+have them.** `update_mb_map_forked_workers_share_the_layer_without_racing` builds
+a 4x2 grid in two slices, gives each record its coordinates, and spawns one scoped
+thread per slice — `UpdateMbMapForked`'s shape with the encoder removed, because
+the aliasing question is about two workers and one layer and never needed an
+encode. Run against the **restored** `&mut` binding it fails exactly as F223's
+defect did:
+
+```
+Data race detected between (1) retag write on thread `unnamed-2` and
+  (2) retag write of type `SSliceCtx` on thread `unnamed-3` at alloc296935+0x140
+  --> slice_multi_threading.rs:463   let pSliceCtx = &mut (*pCurDq).sSliceEncCtx;
+```
+
+and against the fix it passes in **1.23 s**. That number is the point: the test
+this replaces for this question is priced at ~8x the fork pair, which at S4's
+measured 59-minute pair (F225) is something like eight hours, and it is
+`#[cfg_attr(miri, ignore)]` for exactly that reason. A probe that drops the encode
+buys the same verdict for a second.
+
+It also **joins the session battery**: the name is under `encoder::` and matches
+neither of the Miri lane's two skips, so `gates.sh session` runs it in the `enc`
+shard from here on. The blindness this finding records is therefore closed at
+session cadence rather than by remembering to run something.
 
 **Scope of the surrounding classification, since it is what turned this up.** Of
 the 40 bodies carrying a `*mut SDqLayer`, 37 only read the layer struct; the other
