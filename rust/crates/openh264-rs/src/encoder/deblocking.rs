@@ -1322,7 +1322,7 @@ pub use crate::encoder::svc_encode_slice::GetCurrentSliceNum;
 // walks straight across slice boundaries for every other slice mode.
 pub use crate::encoder::svc_encode_slice::WelsGetNextMbOfSlice;
 
-// unsafe-cat: port-raw(Phase 9) — the in-fork *mut SDqLayer (S63, G's); the record
+// unsafe-cat: fork-shared(S63) — the in-fork *mut SDqLayer (S63, G's); the record
 // walk is the safe window since E3
 #[allow(unsafe_code)]
 pub unsafe extern "C" fn DeblockingFilterSliceAvcbase(
@@ -1411,7 +1411,7 @@ pub unsafe extern "C" fn DeblockingFilterSliceAvcbase(
     }
 }
 
-// unsafe-cat: port-raw(Phase 9) — the slot type's in-fork *mut SDqLayer (S63)
+// unsafe-cat: fork-shared(S63) — the slot type's in-fork *mut SDqLayer (S63)
 #[allow(unsafe_code)]
 pub unsafe extern "C" fn DeblockingFilterSliceAvcbaseNull(
     _pCurDq: *mut SDqLayer,
@@ -1496,7 +1496,7 @@ mod tests {
     }
 
     #[test]
-    // unsafe-cat: port-raw(Phase 9)
+    // unsafe-cat: instrument(test)
     #[allow(unsafe_code)]
     fn test_non_zero_count_c() {
         let mut nzc: [i8; 24] = [

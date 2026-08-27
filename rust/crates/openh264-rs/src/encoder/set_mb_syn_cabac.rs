@@ -835,7 +835,7 @@ pub unsafe extern "C" fn WelsCabacInit(pEncCtx: *mut crate::encoder::encoder_con
 /// # Safety
 /// - `pCbCtx` must point to a valid, writable `SCabacCtx` instance.
 #[inline]
-// unsafe-cat: port-raw(Phase 9)
+// unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
 pub unsafe fn WelsCabacContextInitFromContexts(
     pCbCtx: &mut SCabacCtx,
@@ -1140,7 +1140,7 @@ mod tests {
     }
 
     #[test]
-    // unsafe-cat: port-raw(Phase 9)
+    // unsafe-cat: instrument(test)
     #[allow(unsafe_code)]
     fn test_cabac_encode_init_and_flush() {
         unsafe {

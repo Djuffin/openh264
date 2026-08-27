@@ -975,7 +975,7 @@ fn ParasetIdAdditionIdAdjust(
 /// call sites that run before that point test the field first. Panics rather than
 /// dereferencing null if the invariant is broken; the vtable version was UB there.
 #[inline]
-// unsafe-cat: cursor
+// unsafe-cat: lawful-single(F166)
 #[allow(unsafe_code)]
 pub unsafe fn ParasetStrategy<'a>(
     pCtx: *mut sWelsEncCtx,

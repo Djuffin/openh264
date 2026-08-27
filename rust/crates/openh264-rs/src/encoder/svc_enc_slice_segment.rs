@@ -685,7 +685,7 @@ mod tests {
 
     /// 4 slices over 99 MBs: 24 each for the first three, 27 for the last.
     #[test]
-    // unsafe-cat: port-raw(Phase 9)
+    // unsafe-cat: instrument(test)
     #[allow(unsafe_code)]
     fn fixed_slice_num_splits_evenly_with_remainder_last() {
         let mut a = arg(4);
@@ -697,7 +697,7 @@ mod tests {
 
     /// More slices than macroblocks leaves nothing for the last slice.
     #[test]
-    // unsafe-cat: port-raw(Phase 9)
+    // unsafe-cat: instrument(test)
     #[allow(unsafe_code)]
     fn fixed_slice_num_rejects_when_a_slice_would_be_empty() {
         let mut a = arg(8);
@@ -707,7 +707,7 @@ mod tests {
     }
 
     #[test]
-    // unsafe-cat: port-raw(Phase 9)
+    // unsafe-cat: instrument(test)
     #[allow(unsafe_code)]
     fn row_mb_assigns_one_row_per_slice() {
         let mut a = arg(3);
@@ -720,7 +720,7 @@ mod tests {
     /// A short total gets a trailing slice carrying the remainder, and uiSliceNum is
     /// rewritten to the actual count.
     #[test]
-    // unsafe-cat: port-raw(Phase 9)
+    // unsafe-cat: instrument(test)
     #[allow(unsafe_code)]
     fn raster_pads_a_short_assignment() {
         let mut a = arg(2);
@@ -735,7 +735,7 @@ mod tests {
 
     /// An over-long total is trimmed on the last used slice.
     #[test]
-    // unsafe-cat: port-raw(Phase 9)
+    // unsafe-cat: instrument(test)
     #[allow(unsafe_code)]
     fn raster_trims_an_over_long_assignment() {
         let mut a = arg(2);
@@ -751,7 +751,7 @@ mod tests {
     /// 160x96 is 10x6 MBs; MB width 10 <= MB_WIDTH_THRESHOLD_90P so the GOM is
     /// 10 * GOM_ROW_MODE0_90P = 20 MBs, and 60 MBs cannot carry 4 slices of one GOM.
     #[test]
-    // unsafe-cat: port-raw(Phase 9)
+    // unsafe-cat: instrument(test)
     #[allow(unsafe_code)]
     fn gom_slice_num_reduces_to_an_even_count_that_fits() {
         let mut uiSliceNum: u32 = 4;
@@ -763,7 +763,7 @@ mod tests {
 
     /// A count that already fits is returned unchanged and reports success.
     #[test]
-    // unsafe-cat: port-raw(Phase 9)
+    // unsafe-cat: instrument(test)
     #[allow(unsafe_code)]
     fn gom_slice_num_accepts_a_fitting_count() {
         let mut uiSliceNum: u32 = 2;
@@ -775,7 +775,7 @@ mod tests {
 
     /// The minimum-per-slice guard added upstream: 4 slices x 20-MB GOM = 80 > 60 MBs.
     #[test]
-    // unsafe-cat: port-raw(Phase 9)
+    // unsafe-cat: instrument(test)
     #[allow(unsafe_code)]
     fn gom_slice_mb_num_rejects_when_minimums_exceed_the_frame() {
         let mut a = arg(4);
@@ -786,7 +786,7 @@ mod tests {
 
     /// 2 slices over 10x12 MBs: GOM is 20 MBs, 120/2 = 60 rounds to 60, leaving 60.
     #[test]
-    // unsafe-cat: port-raw(Phase 9)
+    // unsafe-cat: instrument(test)
     #[allow(unsafe_code)]
     fn gom_slice_mb_num_assigns_gom_aligned_counts() {
         let mut a = arg(2);
@@ -799,7 +799,7 @@ mod tests {
     /// 128x96 is 8x6 = 48 MBs, exactly MIN_NUM_MB_PER_SLICE, so fixed-slice mode falls
     /// back to a single slice (`encoder_ext.cpp:205`).
     #[test]
-    // unsafe-cat: port-raw(Phase 9)
+    // unsafe-cat: instrument(test)
     #[allow(unsafe_code)]
     fn fixed_slice_mode_falls_back_to_single_slice_at_min_mb_count() {
         let mut a = arg(2);
@@ -820,7 +820,7 @@ mod tests {
     /// uiSliceNum above MAX_SLICES_NUM is clamped rather than rejected
     /// (`encoder_ext.cpp:221`).
     #[test]
-    // unsafe-cat: port-raw(Phase 9)
+    // unsafe-cat: instrument(test)
     #[allow(unsafe_code)]
     fn fixed_slice_mode_clamps_slice_num_to_max() {
         let mut a = arg(MAX_SLICES_NUM as u32 + 10);

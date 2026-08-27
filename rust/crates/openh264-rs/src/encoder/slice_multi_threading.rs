@@ -373,7 +373,7 @@ pub fn WelsDivRound64(x: i64, y: i64) -> i64 {
 // the critical sections are identical; only the spelling differs.
 
 /// Allocates a mutex and returns its opaque handle (`WelsMutexInit`).
-// unsafe-cat: MT
+// unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
 pub unsafe fn WelsMutexInit(pMutex: *mut *mut std::sync::Mutex<()>) -> i32 {
     let m: Box<std::sync::Mutex<()>> = Box::new(std::sync::Mutex::new(()));
@@ -382,7 +382,7 @@ pub unsafe fn WelsMutexInit(pMutex: *mut *mut std::sync::Mutex<()>) -> i32 {
 }
 
 /// Frees a mutex allocated by [`WelsMutexInit`] (`WelsMutexDestroy`).
-// unsafe-cat: MT
+// unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
 pub unsafe fn WelsMutexDestroy(pMutex: *mut *mut std::sync::Mutex<()>) {
     if !(*pMutex).is_null() {
@@ -396,7 +396,7 @@ pub unsafe fn WelsMutexDestroy(pMutex: *mut *mut std::sync::Mutex<()>) {
 /// A null handle runs `f` unlocked; that mirrors the C++ behaviour on an
 /// uninitialised mutex closely enough for the single-threaded paths, which
 /// never contend.
-// unsafe-cat: MT
+// unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
 pub unsafe fn with_wels_mutex<R>(pMutex: *mut std::sync::Mutex<()>, f: impl FnOnce() -> R) -> R {
     if pMutex.is_null() {
@@ -424,7 +424,7 @@ pub fn WelsEmms() {
 
 /// Updates macroblock spatial neighbor availability bitmasks for all macroblocks
 /// belonging to a specific slice partition in parallel.
-// unsafe-cat: MT
+// unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
 pub unsafe fn UpdateMbListNeighborParallel(
     pCurDq: *mut SDqLayer,
@@ -725,7 +725,7 @@ pub unsafe fn DynamicAdjustSlicePEncCtxAll(pCurDq: &mut SDqLayer, pRunLength: *m
 }
 
 /// Allocates and initializes multithreading synchronization resources and thread-local bitstream buffers.
-// unsafe-cat: MT
+// unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
 pub unsafe fn RequestMtResource(
     ppCtx: *mut *mut sWelsEncCtx,
@@ -801,7 +801,7 @@ pub unsafe fn RequestMtResource(
 }
 
 /// Tears down and frees all multithreading objects and bitstream buffers.
-// unsafe-cat: MT
+// unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
 pub unsafe fn ReleaseMtResource(ppCtx: *mut *mut sWelsEncCtx) {
     if ppCtx.is_null() || (*ppCtx).is_null() {
@@ -833,7 +833,7 @@ pub unsafe fn ReleaseMtResource(ppCtx: *mut *mut sWelsEncCtx) {
 }
 
 /// Aggregates individual thread-local slice bitstream buffers into the contiguous frame bitstream buffer.
-// unsafe-cat: MT
+// unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
 pub unsafe fn AppendSliceToFrameBs(
     pCtx: &mut sWelsEncCtx,
@@ -909,7 +909,7 @@ pub unsafe fn AppendSliceToFrameBs(
 /// the NAL list is offsets into the thread buffer the slice was claimed into, and
 /// that buffer is `pThreadBsBuffer[pSlice->uiBufferIdx]` — the field that used to
 /// cache it is gone (Phase 6 session B).
-// unsafe-cat: MT
+// unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
 pub unsafe fn WriteSliceBs(
     pCtx: *mut sWelsEncCtx,
@@ -1110,7 +1110,7 @@ mod tests {
     }
 
     #[test]
-    // unsafe-cat: MT
+    // unsafe-cat: fork-shared(S63)
     #[allow(unsafe_code)]
     fn test_need_dynamic_adjust_zero_consume() {
         let mut dq_layer = layer_with_bank(2);
@@ -1119,7 +1119,7 @@ mod tests {
     }
 
     #[test]
-    // unsafe-cat: MT
+    // unsafe-cat: fork-shared(S63)
     #[allow(unsafe_code)]
     fn test_calc_slice_complex_ratio() {
         let mut dq_layer = layer_with_bank(2);
@@ -1321,7 +1321,7 @@ impl SliceJobHandle {
     /// # Safety
     /// `pCtx` must be a live context whose `pSliceThreading` has been built by
     /// `RequestMtResource`, and `iBsSlot` must be a slot that call allocated.
-    // unsafe-cat: MT
+    // unsafe-cat: fork-shared(S63)
     #[allow(unsafe_code)]
     unsafe fn new(
         pCtx: *mut sWelsEncCtx,
@@ -1351,7 +1351,7 @@ impl SliceJobHandle {
 
 /// The prefix-NAL pair both encode bodies open with
 /// (`CWelsBaseTask::WritePrefixNal`).
-// unsafe-cat: MT
+// unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
 unsafe fn WritePrefixNalForSlice(
     pCtx: *mut sWelsEncCtx,
@@ -1401,7 +1401,7 @@ struct SliceJobResult {
 /// The slot claim is gone because the slot is the worker's for the whole scope
 /// (part 1 of the seam's argument); the error mutex is gone because the result
 /// travels back through the join instead of being ORed from the worker.
-// unsafe-cat: MT
+// unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
 unsafe fn EncodeOneSliceInJob(
     pCtx: *mut sWelsEncCtx,
@@ -1471,7 +1471,7 @@ unsafe fn EncodeOneSliceInJob(
 
 /// How many workers a fork gets: never more than there are slices to encode, and
 /// never more than there are bs scratch buffers behind the slots (F67's bound).
-// unsafe-cat: MT
+// unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
 unsafe fn ForkWidth(pCtx: &mut sWelsEncCtx, iItemCount: i32) -> i32 {
     let pSmt = pCtx.pSliceThreading;
@@ -1489,7 +1489,7 @@ unsafe fn ForkWidth(pCtx: &mut sWelsEncCtx, iItemCount: i32) -> i32 {
 /// # Safety
 /// `pCtx` must be a live context with `pSliceThreading` built and the layer's
 /// slice bank sized for `kiSliceCount` slices.
-// unsafe-cat: MT
+// unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
 pub unsafe fn EncodeFixedSlicesForked(pCtx: &mut sWelsEncCtx, kiSliceCount: i32) -> i32 {
     // T9.H4: the `is_null()` disjunct that opened this guard is gone — a
@@ -1570,7 +1570,7 @@ pub unsafe fn EncodeFixedSlicesForked(pCtx: &mut sWelsEncCtx, kiSliceCount: i32)
 ///
 /// # Safety
 /// As [`EncodeFixedSlicesForked`].
-// unsafe-cat: MT
+// unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
 pub unsafe fn UpdateMbMapForked(pCtx: &mut sWelsEncCtx, kiTaskCount: i32) {
     // T9.H: the `pCtx.is_null()` disjunct is gone — a `&mut sWelsEncCtx`
@@ -1627,7 +1627,7 @@ pub unsafe fn UpdateMbMapForked(pCtx: &mut sWelsEncCtx, kiTaskCount: i32) {
 /// and bs slot `p`, which also makes `NumSliceCodedOfPartition[p]` and
 /// `LastCodedMbIdxOfPartition[p]` — written from inside the encode — disjoint by
 /// construction rather than by the claim.
-// unsafe-cat: MT
+// unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
 unsafe fn EncodeOnePartitionSizeLimited(
     pCtx: *mut sWelsEncCtx,
@@ -1774,7 +1774,7 @@ unsafe fn EncodeOnePartitionSizeLimited(
 /// # Safety
 /// As [`EncodeFixedSlicesForked`], and `iActiveThreadsNum` must be within the
 /// per-thread slice banks `InitSliceThreadInfo` sized.
-// unsafe-cat: MT
+// unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
 pub unsafe fn EncodeSizeLimitedSlicesForked(pCtx: &mut sWelsEncCtx, kiPartitionCnt: i32) -> i32 {
     // T9.H4: the `is_null()` disjunct that opened this guard is gone — a

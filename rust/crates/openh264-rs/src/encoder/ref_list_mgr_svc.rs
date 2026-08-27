@@ -1940,7 +1940,7 @@ mod tests {
     use super::*;
 
     #[test]
-    // unsafe-cat: port-raw(Phase 9)
+    // unsafe-cat: instrument(test)
     #[allow(unsafe_code)]
     fn test_ref_list_mgr_noop_callback() {
         // T9.H11: the context argument is `&mut` now, so the null goes — see
@@ -1981,7 +1981,7 @@ mod tests {
     /// be the variant the old factory's `_ =>` arm produced. S21, as an assertion
     /// rather than a sentence.
     #[test]
-    // unsafe-cat: port-raw(Phase 9)
+    // unsafe-cat: instrument(test)
     #[allow(unsafe_code)]
     fn ref_strategy_zero_is_the_default_arm() {
         assert_eq!(RefStrategyKind::default(), RefStrategyKind::TemporalLayer);

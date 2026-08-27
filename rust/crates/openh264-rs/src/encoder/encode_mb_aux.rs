@@ -673,7 +673,7 @@ pub fn get_none_zero_count(level: &[i16; 16]) -> i32 {
 /// macroblock cursor and a 16- or 8-stride prediction scratch
 /// (`svc_encode_mb.rs:684`, `svc_encode_slice.rs`).
 #[inline]
-// unsafe-cat: port-raw(Phase 9)
+// unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsDctT4_c(
     pDct: *mut i16,
@@ -701,7 +701,7 @@ pub unsafe extern "C" fn WelsDctT4_c(
 ///   the bytes `[0, 7*stride + 8)` from each pointer must be readable
 ///   (forward reach only). Both strides `>= 8` and positive. Only read.
 #[inline]
-// unsafe-cat: port-raw(Phase 9)
+// unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsDctFourT4_c(
     pDct: *mut i16,
@@ -795,7 +795,7 @@ pub unsafe extern "C" fn WelsCopy4x8_c(pDst: *mut u8, iStrideD: i32, pSrc: *mut 
 /// See [`copy_shim`] with `W = 8`, `H = 8`. (The decoder's error-concealment
 /// module has its own same-named kernel — different function, never unify.)
 #[inline]
-// unsafe-cat: port-raw(Phase 9)
+// unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsCopy8x8_c(pDst: *mut u8, iStrideD: i32, pSrc: *mut u8, iStrideS: i32) {
     // SHIM(phase2) -> copy_8x8
@@ -826,7 +826,7 @@ pub unsafe extern "C" fn WelsCopy8x16_c(pDst: *mut u8, iStrideD: i32, pSrc: *mut
 /// See [`copy_shim`] with `W = 16`, `H = 16`. (Same name-collision note as
 /// [`WelsCopy8x8_c`].)
 #[inline]
-// unsafe-cat: port-raw(Phase 9)
+// unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsCopy16x16_c(pDst: *mut u8, iStrideD: i32, pSrc: *mut u8, iStrideS: i32) {
     // SHIM(phase2) -> copy_16x16
@@ -896,7 +896,7 @@ mod tests {
     use super::*;
     
     #[test]
-    // unsafe-cat: port-raw(Phase 9)
+    // unsafe-cat: instrument(test)
     #[allow(unsafe_code)]
     fn test_fdct_t4() {
         let mut p1 = [
@@ -981,7 +981,7 @@ mod tests {
     }
 
     #[test]
-    // unsafe-cat: port-raw(Phase 9)
+    // unsafe-cat: instrument(test)
     #[allow(unsafe_code)]
     fn test_init_encoding_funcs() {
         let mut func_list = SWelsFuncPtrList::default();

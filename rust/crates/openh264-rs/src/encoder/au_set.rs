@@ -766,7 +766,7 @@ pub fn WelsGetPaddingOffset(
 ///
 /// # Safety
 /// All three pointers must be non-null and point to writable values.
-// unsafe-cat: port-raw(Phase 9)
+// unsafe-cat: lawful-single(S29/F187)
 #[allow(unsafe_code)]
 pub unsafe fn WelsInitSps(
     pSps: &mut SWelsSPS,
@@ -879,7 +879,7 @@ pub unsafe fn WelsInitSps(
 /// # Safety
 /// All three pointers must be non-null and point to writable values.
 #[allow(clippy::too_many_arguments)]
-// unsafe-cat: port-raw(Phase 9)
+// unsafe-cat: lawful-single(S29/F187)
 #[allow(unsafe_code)]
 pub unsafe fn WelsInitSubsetSps(
     pSubsetSps: &mut SSubsetSps,
@@ -997,7 +997,7 @@ mod tests {
     /// gaps=0 crop=0 cs0=1 cs1=1 cs2=0 cs3=0
     /// ```
     #[test]
-    // unsafe-cat: port-raw(Phase 9)
+    // unsafe-cat: instrument(test)
     #[allow(unsafe_code)]
     fn init_sps_matches_cxx_for_the_gate_configuration() {
         let (mut lp, mut li) = gate_layer();
@@ -1031,7 +1031,7 @@ mod tests {
     /// check that would have caught the missing VUI: the ad-hoc writer this replaced
     /// stopped after `vui_parameters_present_flag = 0` and emitted 8 bytes.
     #[test]
-    // unsafe-cat: port-raw(Phase 9)
+    // unsafe-cat: instrument(test)
     #[allow(unsafe_code)]
     fn write_sps_nal_is_byte_exact_with_cxx() {
         let (mut lp, mut li) = gate_layer();
@@ -1060,7 +1060,7 @@ mod tests {
 
     /// Against the C++ `WelsInitPps`: `ppsid=0 spsid=0 qp=26 qs=26 cqpo=0 ecm=0 dfcp=1`.
     #[test]
-    // unsafe-cat: port-raw(Phase 9)
+    // unsafe-cat: instrument(test)
     #[allow(unsafe_code)]
     fn init_pps_matches_cxx() {
         let (mut lp, mut li) = gate_layer();
@@ -1086,7 +1086,7 @@ mod tests {
     /// `CWelsParametersetIdConstant`, which is what makes this a test of the id
     /// offsets too rather than only of the fixed syntax elements.
     #[test]
-    // unsafe-cat: port-raw(Phase 9)
+    // unsafe-cat: instrument(test)
     #[allow(unsafe_code)]
     fn write_pps_syntax_is_byte_exact_with_cxx() {
         use crate::api::codec_api::EParameterSetStrategy;
@@ -1119,7 +1119,7 @@ mod tests {
 
     /// `WelsInitPps` rejects the combination C++ rejects: no SPS of either kind.
     #[test]
-    // unsafe-cat: port-raw(Phase 9)
+    // unsafe-cat: instrument(test)
     #[allow(unsafe_code)]
     fn init_pps_rejects_missing_sps() {
         let mut pps = SWelsPPS::default();

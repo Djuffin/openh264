@@ -1569,7 +1569,7 @@ impl CWelsPreProcess {
         self.m_pSpatialPic[kiDidx as usize][iRefTemporalIdx as usize]
     }
 
-    // unsafe-cat: port-raw(Phase 9)
+    // unsafe-cat: SCREEN_CONTENT(dormant)
     #[allow(unsafe_code)]
     pub unsafe fn GetBestRefPicScreen(
         &self,
@@ -2608,7 +2608,7 @@ impl CWelsPreProcess {
         }
     }
 
-    // unsafe-cat: port-raw(Phase 9)
+    // unsafe-cat: SCREEN_CONTENT(dormant)
     #[allow(unsafe_code)]
     unsafe fn GetAvailableRefListLosslessScreenRefSelection(
         &self,
@@ -2954,7 +2954,7 @@ impl CWelsPreProcess {
             .iLongTermPicNum
     }
 
-    // unsafe-cat: port-raw(Phase 9)
+    // unsafe-cat: SCREEN_CONTENT(dormant)
     #[allow(unsafe_code)]
     pub unsafe fn UpdateBlockIdcForScreen(
         &self,
@@ -3026,7 +3026,7 @@ impl CWelsPreProcess {
         }
     }
 
-    // unsafe-cat: port-raw(Phase 9)
+    // unsafe-cat: SCREEN_CONTENT(dormant)
     #[allow(unsafe_code)]
     pub unsafe fn UpdateSrcListLosslessScreenRefSelectionWithLtr(
         &mut self,

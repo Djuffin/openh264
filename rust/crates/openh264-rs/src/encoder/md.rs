@@ -863,7 +863,7 @@ pub fn BsSizeSE(kiValue: i32) -> u32 {
 }
 
 #[inline(always)]
-// unsafe-cat: port-raw(Phase 9)
+// unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
 pub unsafe fn COST_MVD(pMvdCost: *const u16, iMvdX: i32, iMvdY: i32) -> i32 {
     let x = *pMvdCost.offset(iMvdX as isize) as i32;
@@ -992,7 +992,7 @@ pub fn FillNeighborCacheIntra(
     (*pMbCache).uiNeighborIntra = uiNeighborIntra as u8;
 }
 
-// unsafe-cat: port-raw(Phase 9)
+// unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
 pub unsafe fn FillNeighborCacheInterWithoutBGD(
     pMbCache: &mut SMbCache,
@@ -1122,7 +1122,7 @@ pub unsafe fn FillNeighborCacheInterWithoutBGD(
     pMvComp.iRefIndexCache[23] = REF_NOT_AVAIL;
 }
 
-// unsafe-cat: port-raw(Phase 9)
+// unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
 pub unsafe fn FillNeighborCacheInterWithBGD(
     pMbCache: &mut SMbCache,
@@ -1274,7 +1274,7 @@ pub fn UpdateMbMv_c(pMvBuffer: &mut [SMVUnitXY; MB_BLOCK4x4_NUM], ksMv: SMVUnitX
     }
 }
 
-// unsafe-cat: port-raw(Phase 9)
+// unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
 pub unsafe extern "C" fn MdInterAnalysisVaaInfo_c(pSad8x8: *mut i32) -> u8 {
     let mut iSadBlock = [0i32; 4];
@@ -1326,7 +1326,7 @@ pub unsafe extern "C" fn MdInterAnalysisVaaInfo_c(pSad8x8: *mut i32) -> u8 {
     uiMbSign
 }
 
-// unsafe-cat: port-raw(Phase 9)
+// unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
 pub unsafe extern "C" fn AnalysisVaaInfoIntra_c(pDataY: *mut u8, kiLineSize: i32) -> i32 {
     let mut uiAvgBlock = [0u16; 16];
@@ -1391,7 +1391,7 @@ pub unsafe extern "C" fn InitIntraAnalysisVaaInfo(
     pFuncList.pfUpdateMbMv = Some(UpdateMbMv_c);
 }
 
-// unsafe-cat: port-raw(Phase 9)
+// unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
 pub unsafe extern "C" fn MdIntraAnalysisVaaInfo(
     pEncCtx: *mut sWelsEncCtx,
@@ -1430,7 +1430,7 @@ pub fn InitMeRefinePointer(pMeRefine: &mut SMeRefinePointer, iStride: i32) {
 /// reference block — the two things `SQuarRefineParams::pSrcA`/`pSrcB` held as raw
 /// addresses.
 #[inline(always)]
-// unsafe-cat: port-raw(Phase 9)
+// unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
 pub unsafe fn MeRefineQuarPixel(
     pFunc: &SWelsFuncPtrList,
@@ -1572,7 +1572,7 @@ pub unsafe fn MeRefineQuarPixel(
 /// sites the moment the parameter went in; the fix removes the pointer (S54: the
 /// information it carried is caller state, and an index no retag can invalidate says
 /// it).
-// unsafe-cat: port-raw(Phase 9)
+// unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
 pub unsafe extern "C" fn MeRefineFracPixel(
     pEncCtx: *mut sWelsEncCtx,
@@ -1984,7 +1984,7 @@ pub unsafe extern "C" fn MvdCostInit(pMvdCostInter: *mut u16, kiMvdSz: i32) {
     }
 }
 
-// unsafe-cat: port-raw(Phase 9)
+// unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
 pub unsafe extern "C" fn PredictSad(
     pRefIndexCache: *mut i8,
@@ -2030,7 +2030,7 @@ pub unsafe extern "C" fn PredictSad(
     *pSadPred = (REPLACE_SAD_MULTIPLY(iCount) + 32) >> 6;
 }
 
-// unsafe-cat: port-raw(Phase 9)
+// unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
 pub unsafe extern "C" fn PredictSadSkip(
     pRefIndexCache: *mut i8,

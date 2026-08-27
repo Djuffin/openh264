@@ -614,7 +614,7 @@ impl SWelsRcFunc {
     /// As [`WelsRcPictureInit`](SWelsRcFunc::WelsRcPictureInit); `pCurMb` and
     /// `pSlice` must be live.
     #[inline]
-    // unsafe-cat: port-raw(Phase 9)
+    // unsafe-cat: fork-shared(S63)
     #[allow(unsafe_code)]
     pub unsafe fn WelsRcMbInit(self, pCtx: *mut sWelsEncCtx, pCurMb: &mut SMB, pSlice: &mut SSlice) {
         match self.eInstalledMode {
@@ -633,7 +633,7 @@ impl SWelsRcFunc {
     /// # Safety
     /// As [`WelsRcMbInit`](SWelsRcFunc::WelsRcMbInit).
     #[inline]
-    // unsafe-cat: port-raw(Phase 9)
+    // unsafe-cat: fork-shared(S63)
     #[allow(unsafe_code)]
     pub unsafe fn WelsRcMbInfoUpdate(
         self,
@@ -838,7 +838,7 @@ pub unsafe fn rc_gom_fg_blocks(pRc: *mut SWelsSvcRc) -> *mut i32 {
 /// # Safety
 /// As [`rc_gom_fg_blocks`].
 #[inline]
-// unsafe-cat: port-raw(Phase 9)
+// unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
 pub unsafe fn rc_gom_sad(pRc: *mut SWelsSvcRc) -> *mut i32 {
     let v: &mut Vec<i32> = &mut (*pRc).pCurrentFrameGomSad;
@@ -1399,7 +1399,7 @@ pub unsafe fn RcCalculatePictureQp(pEncCtx: &mut sWelsEncCtx) {
 }
 
 /// Initializes slice-level GOM rate control parameters.
-// unsafe-cat: port-raw(Phase 9)
+// unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
 pub unsafe fn GomRCInitForOneSlice(pSlice: &mut SSlice, kiBitsPerMb: i32) {
     let pSOverRc = &mut (*pSlice).sSlicingOverRc;
@@ -1583,7 +1583,7 @@ pub unsafe fn RcInitGomParameters(pEncCtx: &mut sWelsEncCtx) {
 }
 
 /// Assigns final macroblock luma and chroma QPs.
-// unsafe-cat: port-raw(Phase 9)
+// unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
 pub unsafe fn RcCalculateMbQp(
     pEncCtx: *mut sWelsEncCtx,
@@ -1618,7 +1618,7 @@ pub unsafe fn RcCalculateMbQp(
 }
 
 /// Evaluates if base layer GOM statistics can be reused for inter-layer prediction.
-// unsafe-cat: port-raw(Phase 9)
+// unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
 pub unsafe fn RcJudgeBaseUsability(pEncCtx: *mut sWelsEncCtx) -> *mut SWelsSvcRc {
     let did = (*pEncCtx).uiDependencyId as usize;
@@ -1646,7 +1646,7 @@ pub unsafe fn RcJudgeBaseUsability(pEncCtx: *mut sWelsEncCtx) -> *mut SWelsSvcRc
 }
 
 /// Distributes slice bit budget to the upcoming GOM unit.
-// unsafe-cat: port-raw(Phase 9)
+// unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
 pub unsafe fn RcGomTargetBits(
     pEncCtx: *mut sWelsEncCtx,
@@ -1694,7 +1694,7 @@ pub unsafe fn RcGomTargetBits(
 }
 
 /// Dynamically adjusts slice QP at GOM boundaries.
-// unsafe-cat: port-raw(Phase 9)
+// unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
 pub unsafe fn RcCalculateGomQp(
     pEncCtx: *mut sWelsEncCtx,
@@ -2366,7 +2366,7 @@ pub unsafe extern "C" fn WelsRcPictureInfoUpdateGom(pEncCtx: &mut sWelsEncCtx, i
     }
 }
 
-// unsafe-cat: port-raw(Phase 9)
+// unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsRcMbInitGom(
     pEncCtx: *mut sWelsEncCtx,
@@ -2416,7 +2416,7 @@ pub unsafe extern "C" fn WelsRcMbInitGom(
     }
 }
 
-// unsafe-cat: port-raw(Phase 9)
+// unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsRcMbInfoUpdateGom(
     pEncCtx: *mut sWelsEncCtx,
@@ -2473,7 +2473,7 @@ pub unsafe extern "C" fn WelsRcPictureInitDisable(pEncCtx: &mut sWelsEncCtx, _ui
 /// Matches `WelsRcPictureInfoUpdateDisable` in `ratectl.cpp:1298`.
 pub extern "C" fn WelsRcPictureInfoUpdateDisable(_pEncCtx: &mut sWelsEncCtx, _iLayerSize: i32) {}
 
-// unsafe-cat: port-raw(Phase 9)
+// unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsRcMbInitDisable(
     pEncCtx: *mut sWelsEncCtx,
@@ -2510,7 +2510,7 @@ pub unsafe extern "C" fn WelsRcMbInitDisable(
 
 /// Intentional no-op macroblock-level RC update callback when rate control is disabled.
 /// Matches `WelsRcMbInfoUpdateDisable` in `ratectl.cpp:1319`.
-// unsafe-cat: port-raw(Phase 9)
+// unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsRcMbInfoUpdateDisable(
     _pEncCtx: *mut sWelsEncCtx,
@@ -2842,7 +2842,7 @@ mod tests {
     }
 
     #[test]
-    // unsafe-cat: port-raw(Phase 9)
+    // unsafe-cat: instrument(test)
     #[allow(unsafe_code)]
     fn test_rc_intentional_noop_callbacks() {
         // **T9.H11: the context arguments are `&mut` now, so the nulls go.**

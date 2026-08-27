@@ -564,7 +564,7 @@ impl SStrideTables {
     /// each other, so the read path is `&self` and `*const`, and the one writer
     /// keeps its own `_mut` twin below.
     #[inline]
-    // unsafe-cat: port-raw(Phase 9)
+    // unsafe-cat: fork-shared(S63)
     #[allow(unsafe_code)]
     fn at_i32(&self, kiByteOffset: Option<u32>) -> *const i32 {
         match kiByteOffset {
@@ -691,7 +691,7 @@ pub fn ctx_mb_index_x(pCtx: &sWelsEncCtx, kiDid: usize) -> *const i16 {
 /// # Safety
 /// `pCtx` must point to a live encoder context.
 #[inline]
-// unsafe-cat: cursor
+// unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
 pub unsafe fn ctx_param(pCtx: *mut sWelsEncCtx) -> *mut SWelsSvcCodingParam {
     // **F71.** `Option::as_mut` is a `Unique` retag over the slot, and every worker
@@ -715,7 +715,7 @@ pub unsafe fn ctx_param(pCtx: *mut sWelsEncCtx) -> *mut SWelsSvcCodingParam {
 /// # Safety
 /// `pCtx` must point to a live encoder context.
 #[inline]
-// unsafe-cat: cursor
+// unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
 pub unsafe fn ctx_func_list(pCtx: *mut sWelsEncCtx) -> *mut SWelsFuncPtrList {
     // **F71**, as `ctx_param`: `Box<T>` is one pointer wide, so the slot is read as a
@@ -750,7 +750,7 @@ pub unsafe fn ctx_vaa(pCtx: *mut sWelsEncCtx) -> *mut SVAAFrameInfo {
 /// # Safety
 /// `pCtx` must point to a live encoder context.
 #[inline]
-// unsafe-cat: cursor
+// unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
 pub unsafe fn ctx_mvd_cost_table(pCtx: *mut sWelsEncCtx) -> *mut u16 {
     // **F71** — see `ctx_param`. Shared access to the `Vec`, buffer provenance out.
@@ -777,7 +777,7 @@ pub unsafe fn ctx_mvd_cost_table(pCtx: *mut sWelsEncCtx) -> *mut u16 {
 /// # Safety
 /// As [`ctx_mvd_cost_table`].
 #[inline]
-// unsafe-cat: cursor
+// unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
 pub unsafe fn ctx_mvd_cost_origin(pCtx: *mut sWelsEncCtx) -> *mut u16 {
     let root = ctx_mvd_cost_table(pCtx);
@@ -799,7 +799,7 @@ pub unsafe fn ctx_mvd_cost_origin(pCtx: *mut sWelsEncCtx) -> *mut u16 {
 /// # Safety
 /// `pCtx` must point to a live encoder context.
 #[inline]
-// unsafe-cat: cursor
+// unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
 pub unsafe fn ctx_dq_layer(pCtx: *mut sWelsEncCtx, kiDid: usize) -> *mut SDqLayer {
     // **F71.** No `&mut` to the `Vec` and no reference to the slot. See the family
@@ -826,7 +826,7 @@ pub unsafe fn ctx_dq_layer(pCtx: *mut sWelsEncCtx, kiDid: usize) -> *mut SDqLaye
 /// # Safety
 /// `pCtx` must point to a live encoder context.
 #[inline]
-// unsafe-cat: cursor
+// unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
 pub unsafe fn ctx_ref_list(pCtx: *mut sWelsEncCtx, kiDid: usize) -> *mut SRefList {
     // **F71** — the same shape as `ctx_dq_layer`.
@@ -842,7 +842,7 @@ pub unsafe fn ctx_ref_list(pCtx: *mut sWelsEncCtx, kiDid: usize) -> *mut SRefLis
 /// # Safety
 /// `pCtx` must point to a live encoder context.
 #[inline]
-// unsafe-cat: cursor
+// unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
 pub unsafe fn ctx_rc(pCtx: *mut sWelsEncCtx) -> *mut SWelsSvcRc {
     // **F71** — see `ctx_param`. Shared access to the `Vec`, buffer provenance out.
@@ -859,7 +859,7 @@ pub unsafe fn ctx_rc(pCtx: *mut sWelsEncCtx) -> *mut SWelsSvcRc {
 /// # Safety
 /// As [`ctx_rc`], and `kiDid` must be a layer the array holds.
 #[inline]
-// unsafe-cat: cursor
+// unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
 pub unsafe fn ctx_rc_at(pCtx: *mut sWelsEncCtx, kiDid: usize) -> *mut SWelsSvcRc {
     let root = ctx_rc(pCtx);
@@ -919,7 +919,7 @@ pub fn ctx_ltr_at(pCtx: &mut sWelsEncCtx, kiDid: usize) -> &mut SLTRState {
 /// # Safety
 /// `pCtx` must point to a live encoder context.
 #[inline]
-// unsafe-cat: cursor
+// unsafe-cat: C-ABI
 #[allow(unsafe_code)]
 pub unsafe fn ctx_frame_bs(pCtx: &mut sWelsEncCtx) -> *mut u8 {
     // **F71** — see `ctx_param`. Shared access to the `Vec`, buffer provenance out.
@@ -955,7 +955,7 @@ pub unsafe fn ctx_frame_bs(pCtx: &mut sWelsEncCtx) -> *mut u8 {
 /// # Safety
 /// As [`ctx_frame_bs`].
 #[inline]
-// unsafe-cat: cursor
+// unsafe-cat: C-ABI
 #[allow(unsafe_code)]
 pub unsafe fn ctx_frame_bs_cur(pCtx: &mut sWelsEncCtx) -> *mut u8 {
     let root = ctx_frame_bs(pCtx);
@@ -1014,7 +1014,7 @@ pub fn ctx_dq_idc_map(pCtx: &mut sWelsEncCtx) -> &mut [SDqIdc] {
 /// # Safety
 /// `pCtx` must point to a live encoder context.
 #[inline]
-// unsafe-cat: cursor
+// unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
 pub unsafe fn ctx_sps_array(pCtx: *mut sWelsEncCtx) -> *mut SWelsSPS {
     // **F71** — see `ctx_param`. Shared access to the `Vec`, buffer provenance out.
@@ -1057,7 +1057,7 @@ pub fn ctx_paraset_arrays(
 /// # Safety
 /// As [`ctx_sps_array`].
 #[inline]
-// unsafe-cat: cursor
+// unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
 pub unsafe fn ctx_subset_array(pCtx: *mut sWelsEncCtx) -> *mut SSubsetSps {
     // **F71** — see `ctx_param`. Shared access to the `Vec`, buffer provenance out.
@@ -1073,7 +1073,7 @@ pub unsafe fn ctx_subset_array(pCtx: *mut sWelsEncCtx) -> *mut SSubsetSps {
 /// # Safety
 /// As [`ctx_sps_array`].
 #[inline]
-// unsafe-cat: cursor
+// unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
 pub unsafe fn ctx_pps_array(pCtx: *mut sWelsEncCtx) -> *mut SWelsPPS {
     // **F71** — see `ctx_param`. Shared access to the `Vec`, buffer provenance out.
@@ -2085,7 +2085,7 @@ mod tests {
     /// "attempting a write access using <tag> but that tag does not exist in the
     /// borrow stack" at the first write below, and passes without Miri.
     #[test]
-    // unsafe-cat: port-raw(Phase 9)
+    // unsafe-cat: instrument(test)
     #[allow(unsafe_code)]
     fn stride_table_accessors_leave_the_first_cursor_usable() {
         // Two 96-byte block-offset regions, then two 64-byte coordinate ones — the
@@ -2153,7 +2153,7 @@ mod tests {
     /// than nineteen because the property is one property; each arm names its
     /// accessor in the assertion message so a failure says which.
     #[test]
-    // unsafe-cat: port-raw(Phase 9)
+    // unsafe-cat: instrument(test)
     #[allow(unsafe_code)]
     fn every_container_accessor_hands_out_sibling_cursors() {
         let mut ctx = Box::new(sWelsEncCtx::new());
@@ -2297,7 +2297,7 @@ mod tests {
     /// access using <565587> ... but that tag does not exist in the borrow stack",
     /// and without Miri it passes.
     #[test]
-    // unsafe-cat: port-raw(Phase 9)
+    // unsafe-cat: instrument(test)
     #[allow(unsafe_code)]
     fn frame_bs_cursors_are_siblings() {
         let mut ctx = Box::new(sWelsEncCtx::new());
@@ -2361,7 +2361,7 @@ mod tests {
     // which is a design change and not an accident.
 
     #[test]
-    // unsafe-cat: cursor
+    // unsafe-cat: instrument(test)
     #[allow(unsafe_code)]
     fn ctx_stride_accessors_are_sibling_derivations() {
         let mut ctx = Box::new(sWelsEncCtx::new());
@@ -2404,7 +2404,7 @@ mod tests {
     }
 
     #[test]
-    // unsafe-cat: port-raw(Phase 9)
+    // unsafe-cat: instrument(test)
     #[allow(unsafe_code)]
     fn test_init_pic() {
         let mut src_pic = SSourcePicture::default();
@@ -2520,7 +2520,7 @@ mod tests {
     /// Tier 3 is the one that shrinks this test's reach, so it is named and counted
     /// in the output rather than left to be inferred from what is missing.
     #[test]
-    // unsafe-cat: cursor
+    // unsafe-cat: instrument(test)
     #[allow(unsafe_code)]
     fn ctx_new_reproduces_the_zeroed_shell() {
         use std::mem::{offset_of, size_of, size_of_val};
@@ -2799,7 +2799,7 @@ mod tests {
     }
 
     #[test]
-    // unsafe-cat: port-raw(Phase 9)
+    // unsafe-cat: instrument(test)
     #[allow(unsafe_code)]
     fn test_update_and_loadback_framenum() {
         let mut param = SWelsSvcCodingParam::default();
@@ -2841,7 +2841,7 @@ mod tests {
     }
 
     #[test]
-    // unsafe-cat: port-raw(Phase 9)
+    // unsafe-cat: instrument(test)
     #[allow(unsafe_code)]
     fn test_decide_frame_type() {
         let mut param = SWelsSvcCodingParam::default();
@@ -2858,7 +2858,7 @@ mod tests {
     }
 
     #[test]
-    // unsafe-cat: cursor
+    // unsafe-cat: instrument(test)
     #[allow(unsafe_code)]
     fn test_init_function_pointers() {
         unsafe {

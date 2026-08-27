@@ -623,7 +623,7 @@ mod tests {
     /// the whole `pad * stride + pad` walk back to the allocation base, which is what
     /// `ExpandReferencingPicture` does to every reconstruction picture, every frame.
     #[test]
-    // unsafe-cat: cursor
+    // unsafe-cat: instrument(test)
     #[allow(unsafe_code)]
     fn data_ptr_reaches_the_padding_behind_the_logical_origin() {
         // 176x144 QCIF as `SPicture::new` lays it out.
@@ -683,7 +683,7 @@ mod tests {
     /// per-call mints — leaves both usable, with the shared read seeing the
     /// exclusive write. Miri at the session close is the referee.
     #[test]
-    // unsafe-cat: cursor
+    // unsafe-cat: instrument(test)
     #[allow(unsafe_code)]
     fn data_ptr_shared_reaches_the_padding_and_survives_sibling_mints() {
         let mut pic = SPicture::new(176, 144, false);
