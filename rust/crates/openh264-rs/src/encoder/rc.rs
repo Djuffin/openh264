@@ -48,7 +48,7 @@
 //! | count | what | whose |
 //! |---|---|---|
 //! | 61 | `pEncCtx`/`pCtx` parameters, raw `sWelsEncCtx` | **session I** — the context is the largest arena in the tree, and the S37 inventory decides `&mut` for all of it at once, not file by file |
-//! | 16 | `SWelsSvcRc`'s own five member pointers and the reaches through them | **spent at T6.H6** — the five are owned containers, reached through `rc_gom_fg_blocks` and its siblings |
+//! | 16 | `SWelsSvcRc`'s own five member pointers and the reaches through them | **spent at T6.H6** — the five are owned containers, reached through `rc_gom_fg_blocks` and its siblings (all four roots retired by A1) |
 //! |  7 | `pSlice` parameters, raw `SSlice` | **session I** — five sit behind `pfWelsRcMbInit`/`pfWelsRcMbInfoUpdate`, which is 4b's fence, and the two that do not are covered by the blocker below |
 //! |  6 | `ctx_vaa(pEncCtx)` cast to a raw `SVAAFrameInfoExt` | **Phase 10** — the `SCREEN_CONTENT(dormant)` family, fenced |
 //! |  3 | `RcInitLayerMemory`'s carve-up of one `CMemoryAlign` block | **spent at T6.H6** — the carve-up is gone; this file no longer names `CMemoryAlign` at all |
@@ -405,8 +405,9 @@ pub struct SWelsSvcRc {
     pub iPaddingBitrateStat: i32,
     pub bSkipFlag: bool,
     pub iContinualSkipFrames: i32,
-    /// **T6.H6 — owned**; the head of the block the other four hung off. See
-    /// [`rc_gom_fg_blocks`].
+    /// **T6.H6 — owned**; the head of the block the other four hung off. All four
+    /// raw roots are comments now; see [`SWelsSvcRc::gom_sad`], the family's one
+    /// surviving accessor.
     pub pTemporalOverRc: Vec<SRCTemporal>,
 
     pub iAvgCost2Bits: i64,
@@ -809,51 +810,54 @@ pub fn RcInitLayerMemory(pWelsSvcRc: &mut SWelsSvcRc, kiMaxTl: i32) {
 // told apart does the deleted one read as dead. S64's rule, on a name collision
 // rather than a type.
 
-/// The **root** of a layer's `pGomForegroundBlockNum`.
-///
-/// **T9.X — this one stays raw, and so does [`rc_gom_sad`].** Both feed
-/// `SComplexityAnalysisParam`'s own `*mut`-i32 members in `wels_preprocess.rs`
-/// (`:2723`, `:2778`, `:2779`), which are step 3c's to convert, not step 2's — a
-/// safe API here would have nothing safe to hand them to. `rc_gom_sad` has the
-/// second reason as well: its two `rc.rs` callers are both inside
-/// `RcGomTargetBits`, which the forksplit puts **in-fork**, so S63 keeps a raw
-/// route there and naming it is H2's job.
-///
-/// # Safety
-/// `pRc` must point to a live `SWelsSvcRc`.
-#[inline]
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn rc_gom_fg_blocks(pRc: *mut SWelsSvcRc) -> *mut i32 {
-    let v: &mut Vec<i32> = &mut (*pRc).pGomForegroundBlockNum;
-    if v.is_empty() {
-        return std::ptr::null_mut();
-    }
-    v.as_mut_ptr()
-}
-
-/// The **root** of a layer's `pCurrentFrameGomSad` — see [`rc_gom_fg_blocks`],
-/// including why this one stays raw.
-///
-/// # Safety
-/// As [`rc_gom_fg_blocks`].
-#[inline]
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
-pub unsafe fn rc_gom_sad(pRc: *mut SWelsSvcRc) -> *mut i32 {
-    let v: &mut Vec<i32> = &mut (*pRc).pCurrentFrameGomSad;
-    if v.is_empty() {
-        return std::ptr::null_mut();
-    }
-    v.as_mut_ptr()
-}
-
 // `rc_gom_cost` stood here — the raw root of `pGomCost`, the fifth of this
 // family. **S18, deleted in T9.C5**: the array became `Vec<AtomicI32>` and its one
 // production caller indexed it directly, so the accessor's only remaining caller
 // was the sibling-derivation test beside its four peers, which still covers the
 // property for all four. **The array itself is gone too — D-dead-3.** Four roots,
 // four arrays, and the family's fifth member is a comment at both ends.
+
+// `rc_gom_fg_blocks` stood here — the raw root of `pGomForegroundBlockNum`, the
+// fourth. **S18 again, deleted in A1 of the safe-conversion plan**, and on the
+// same criterion T9.C5 used: it had **no production caller**. The array reaches
+// the complexity-analysis plugin as `&mut [i32]` (`wels_preprocess.rs:2913`,
+// T9.X), and the accessor's only remaining caller was the sibling-derivation
+// test. All four roots are comments now; the property they asserted is carried
+// one level up by `ctx_rc_at`, which still hands out a raw.
+
+impl SWelsSvcRc {
+    /// A layer's **GOM SAD array** — `pCurrentFrameGomSad`, and the last of the
+    /// five raw roots this struct handed out.
+    ///
+    /// Its two readers are `RcGomTargetBits`'s, which the forksplit puts
+    /// **in-fork**: they take the shared reborrow this `&self` reader is, index
+    /// the slice, and hold nothing. That is exactly the route S63 permits, and it
+    /// replaces a raw `.add(i)` read with a bounds-checked one.
+    #[inline]
+    pub fn gom_sad(&self) -> &[i32] {
+        &self.pCurrentFrameGomSad
+    }
+
+    /// [`gom_sad`](Self::gom_sad) as the raw root, for the **one** consumer that
+    /// needs one: `SComplexityAnalysisParam::pGomComplexity` is an `int*` member
+    /// of the VP plugin's parameter struct (`IWelsVP.h:226`), stamped at
+    /// `wels_preprocess.rs` exactly as `wels_preprocess.cpp:859` stamps it — the
+    /// field name is a misnomer and it really is aimed at the SAD array.
+    ///
+    /// **The value is inert**, and that is measured rather than assumed: `Set`
+    /// copies the parameter struct into the plugin and `Get` reads back
+    /// `iFrameComplexity` and nothing else, while the arrays themselves reach
+    /// `Process` as `&mut [i32]` slices. The store is kept because the C++ keeps
+    /// it. Empty answers null, as the raw root did — `as_mut_ptr` on an empty
+    /// `Vec` answers a dangling non-null address.
+    #[inline]
+    pub fn gom_sad_ptr(&mut self) -> *mut i32 {
+        if self.pCurrentFrameGomSad.is_empty() {
+            return std::ptr::null_mut();
+        }
+        self.pCurrentFrameGomSad.as_mut_ptr()
+    }
+}
 
 /// Converts a quantization parameter ($QP$) to its scaled quantization step size ($Q_{\text{step}}$).
 #[inline]
@@ -1679,14 +1683,14 @@ pub unsafe fn RcGomTargetBits(
         let mut iSumSad: i32 = 0;
         for i in (kiComplexityIndex + 1)..=iLastGomIndex {
             iSumSad =
-                iSumSad.wrapping_add(*rc_gom_sad(pWelsSvcRc_Base).add(i as usize));
+                iSumSad.wrapping_add((*pWelsSvcRc_Base).gom_sad()[i as usize]);
         }
 
         let iAllocateBits = if iSumSad == 0 {
             WELS_DIV_ROUND(iLeftBits, iLastGomIndex - kiComplexityIndex)
         } else {
-            let sad_val = *rc_gom_sad(pWelsSvcRc_Base)
-                .add((kiComplexityIndex + 1) as usize);
+            let sad_val =
+                (*pWelsSvcRc_Base).gom_sad()[(kiComplexityIndex + 1) as usize];
             WELS_DIV_ROUND64(iLeftBits as i64 * sad_val as i64, iSumSad as i64) as i32
         };
         pSOverRc.iGomTargetBits = iAllocateBits;
