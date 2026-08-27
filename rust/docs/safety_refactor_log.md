@@ -19350,3 +19350,136 @@ conversion is done — J's checklist loses it entirely. The only ledger deltas:
 baseline is 506 s at `edcccc68`. Every H2 refusal, gap row, and ruling stands
 untouched; no new raw spelling survives in the LTR family (`&*ctx_ltr_at` at
 two sites is a deliberate shared reborrow of the reference, not a raw).
+
+---
+
+# Phase 9, session J — the exit
+
+**`edcccc68` → close, 2026-08-27.** Five commits. The phase's last session: no
+conversion campaign, by design — prove what the phase claims, close its ledger,
+put the remaining decisions to the user.
+
+## What landed
+
+**Step 0 — the au_parser cluster (F91/F92/F93), and F93 was a real defect.**
+`Error_I_P.264` diverged on exactly the four rows the finding recorded, at HEAD,
+reproduced before anything was touched (S68). The cause was **one missing
+statement**: the reference zeroes `iTotalNumMbRec` whenever it prefetches a fresh
+picture (`decoder_core.cpp:2568`) and the port did not, so a *dropped* access
+unit (error concealment disabled — the mode only parse-only uses) left the count
+nonzero forever. Both trees gate `ResetActiveSPSForEachLayer` on that count being
+zero, and this stream carries **three different SPSs**, so the stale active-SPS
+made `CheckAccessUnitBoundary` split the one recoverable IDR access unit in two.
+All 18 rows now match including the emitted frame's SHA-1; `Error_I_P` moved out
+of the retired `DIVERGING` list into `ASSETS`, so it referees on every
+`cargo test`. The ordinary decode path was re-measured IDENTICAL in all three EC
+modes before and after — the leak was invisible there, which is why seven phases
+of gates never saw it. **F199.**
+
+F91 and F92 needed no code: the port already implements the safe behaviour and
+the `sps_subsetsps_bothVUI` golden referees both arms byte-for-byte. They needed
+rulings, and got them — **D-fid-5** (never scribble the caller's buffer) and
+**D-fid-6** (bounded writer, refusal, escaped length), with F92's previously
+unreachable escape arm given a synthetic referee.
+
+**Step 1 — the disposition census and D-exit-3.** Every tag classified by the
+fork-reachability walker, an unsafe call graph, and a by-hand audit of the
+residual. The brief's "540 = 507 + 33" was stale twice over: the committed census
+had never been regenerated after H3, and the tool's exact-match tag test was
+**silently dropping 16 annotated tags** (F200). True family count 551.
+**D-exit-3 (the user)**: the lawful survivors get named categories with their
+reasons, and the rest stays tagged as an owned queue. 278 retags landed —
+204 `fork-shared(S63)`, 56 `instrument(test)`, 14 more dormant, 3 named singles,
+2 `C-ABI`. The queue is **306** (F203 added 13 at step 3), itemized per item in
+the new `phase9_disposition.md`, whose §2 carries the S63 soundness argument in
+one place for the first time. **F201.**
+
+**Step 2 — both instruments fixed, both calibrated two ways (S66).** F170: the
+gates measure children CPU beside wall and S61's tripwire compares CPU when the
+baseline carries one — a 2.3x CPU regression warns, a run whose *wall* doubled
+with CPU flat stays silent. F178: the ratchet no longer counts `*mut` and
+`no_mangle` inside comments; a planted prose token moves nothing, a planted code
+raw still fails per-file. Rebaselined, and **every total moved by exactly its
+pre-measured prose count** — `raw_ptr` 1338 → 1181, and `shim` and `transmute`
+**close at zero**, both having been comments recalling deleted code. F159's owed
+negative calibrations recorded (`--why ParasetStrategy` = NOT fork-reachable;
+`--no-slots` prices the dispatch arm at 391 of 495 bodies). **F202.**
+
+**Step 3 — the crate root, and it earned its keep immediately.**
+`#![deny(unsafe_code)]` at the root exposed the two files that never had a
+per-file one: `deblocking_common.rs`'s 13 decoder slot shims (C2 said 12) and
+`wels_trace.rs`'s two C-ABI callback sites. `libc` moves to `[dev-dependencies]`
+— zero uses in `src/`, 8 in the benches — so **the shipped cdylib has no
+dependencies at all**. The root's four non-naming allows measured on a clean
+build: `unused_unsafe` 0 and `dead_code` 0, both deleted; `unused_imports` 89 and
+`unused_variables` 8 kept with reasons, the 89 confounded (cargo fix on the
+lint's own suggestions broke the build twice — the `cfg(test)` modules use those
+names). **`cargo clippy --all-targets` completes for the first time in the
+project's history**: 45 deny-by-default `not_unsafe_ptr_arg_deref` had made it
+impossible, 44 of them methods of Phase 8's boundary object. **F203.**
+
+**Step 4 — the log referee's gap list is closed.** The seven J-owned messages
+ported character-identical: 20/35 → **33/35**, and the delivered level sets now
+agree (`[2 4]` both sides), which is what D-fid-4's original acceptance was
+reaching for. The two survivors print a `CMemoryAlign` running total the port
+does not have. **F204.**
+
+**Step 5 — the battery, minus Miri by direction.** Exit condition 3 met with a
+per-slot READ census: **71 slots across four live tables, zero write-only**, none
+of C2's three families regressed. F195's replacement inventory: **7 of
+`sWelsEncCtx`'s 65 fields** block `Sync`, five owners, each verified
+transitively — and one is `sLogCtx`'s `*mut c_void`, the application's own
+handle, which settles D-exit-2 structurally: **the send-seam cannot retire by
+internal conversion at all.** **F205.** The rest of the battery is green
+(sweeps 583/583 both profiles, tests 561/554, ABI 7/7, harness 14/14, gtest
+191/199 allowlist 8, referee 33/35); the Miri half was stopped by the user
+mid-close and **F207 enumerates exactly what that leaves unverified.**
+
+**Step 6 — the freeze lifts on a near-miss.** Both benches bit-identical, 30/30
+encoder rows. Comparing them to the Phase-0 table shows a +59% median
+"regression" that is **an instrument boundary**: the C++ reference moved ~2x on
+unchanged code because it now dispatches NEON (`0x000006`) where Phase 0 recorded
+none. The baseline document already said the cumulative chain is Rust-vs-Rust.
+Position quoted from the record, not manufactured: encoder ≈+10–12% against the
++25% median tripwire, unbreached by ~13 points. **F206.**
+
+## The decision memo, as ruled (2026-08-27)
+
+| decision | ruling | the number it turned on |
+|---|---|---|
+| **D-exit-3** | new lawful categories + an owned queue; Phase 9 closes | 551 tags → 204 fork-shared + 245 other lawful + 306 queue |
+| **D-fid-5** (F91) | bless: the port never mutates the caller's buffer | outputs golden-refereed identical |
+| **D-fid-6** (F92) | bless all three behaviours + a synthetic escape probe | no `res/` asset reaches the arm; now one test does |
+| **D4** workspace split | **deferred post-queue** — not mechanical after all | api 45 allows / core **627**, 582 of them in `encoder/` |
+| **D5** the great rename | **declined while the C++ is still the referee** | F199, F203, F204 all found by same-name side-by-side reading |
+| **D6** error style | **not now; i32 codes stay** | the codes are the ABI's own return values |
+| **D-perf-6** | **re-deferred explicitly**, with the reason sharpened | +13 points of headroom; the measurement chain needs a fresh anchor first |
+
+## Where the brief was wrong, quoting it
+
+1. *"507 `port-raw(Phase 9)` + 33 `cursor`"* and *"540 tagged items"* — the
+   committed census was stale and the tool was blind to 16 annotated tags; the
+   real family count was **551** (F200), and 306 remain after D-exit-3 and F203.
+2. *"**convertible remnant** — genuinely finishable items (**expect few**)"* —
+   there are ~280 of them, and the charter's own §6.1 predicted it: the `other`
+   family "needs roughly 2 sessions of its own — somebody has to be given them",
+   and nobody ever was (F201).
+3. *"one session measured exactly 4 prose counts in `raw_ptr`"* — that was an
+   older tree's number; the fix moved `raw_ptr` by **157** (F202). The
+   validation's *form* held exactly, which is what mattered.
+4. *"`libc = "0.2"` is still a dependency **with exactly one use**"* — it has
+   **zero** uses in `src/`; the single grep hit is a comment naming the function
+   the port does *not* call (F203).
+5. *"the gtest suite ... 191/199 with an allowlist of exactly 8"* — correct, and
+   re-verified; recorded because the brief's other numbers were not.
+6. *"F92 ... **Reachability is not established**"* — still true at the start, and
+   closed here by a synthetic probe rather than by finding an asset.
+
+## What J hands on
+
+**To maintenance / Phase 10**: `phase9_disposition.md` — 306 queue items in five
+kinds, with the unlock table for the largest (180 ST callers of fork-kept
+accessors, H3's recipe proven at 75 sites). **To whoever resumes verification**:
+F207's list — the unscoped Miri `--lib`, both full-drive encode probes, the fork
+pair, the differential tests. **To D-perf-6's owner**: a fresh `perfpair` anchor
+is needed before any recovery target is picked (F206).
