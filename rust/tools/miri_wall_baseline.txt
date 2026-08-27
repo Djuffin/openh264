@@ -82,4 +82,4 @@
 # level, on the same four-shard lane, so S1's number is lane-comparable with
 # H3's. **This close seeds the cpu column**, which F170 asked the first close
 # after its note to do; from S2 on the tripwire compares CPU against CPU.
-508 08d8e2d9 2026-08-27 safeplan-S1-close-lane-vs-lane-wall-ratio-1.00-291-0 cpu=1091
+677 30e71f94 2026-08-27 safeplan-S2-close-291-0-cpu-ratio-1.01-vs-1091 cpu=1105
