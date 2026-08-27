@@ -181,9 +181,9 @@ checkpoint's second half, enforced by the ratchet.
 
 | Session | Checkpoints | Scope | What's at zero afterwards |
 |---|---|---|---|
-| **S1** ✅ **CLOSED 2026-08-27** — brief [`prompts/safeplan_s1.md`](prompts/safeplan_s1.md) | **A1–A4 landed**; A5–A7 roll to S2 | **The accessor layer's first half** (~230 sites): small fry → `ctx_rc_at` → `ctx_ref_list` → paraset trio + `ctx_frame_bs_cur` + `ctx_sps`/`ctx_pps`. `ctx_dq_layer` deferred to D2–D3 (F210). Four gated commits, `session` gate green at the close | `ctx_mvd_cost_*`, `ctx_rc`, `ctx_rc_at`, `ctx_frame_bs`, `ctx_frame_bs_cur`, `ctx_ref_list`, the paraset trio, `ctx_sps`, `ctx_pps`, `rc_gom_*`; allows 627 → 614 |
-| **S2** ◀ next — brief [`prompts/safeplan_s2.md`](prompts/safeplan_s2.md) | **A5–A7** + B1–B3 (+ C1–C6 if it fits) | **The accessor layer's tail, then owned fields**: `ctx_vaa` (79, incl. the 16 `SVAAFrameInfoExt` downcasts) → `ctx_func_list` (106, **flip, per F212**) → `ctx_param` (247, where F209's cascade lands); then singletons → `Option<Box<T>>`, owned mutex, MT lifecycle, init/teardown; the pixel land follows | ctx raw singletons; `wels_func_ptr_def.rs`, `svc_encode_mb.rs`, `svc_mode_decision.rs`, `svc_base_layer_md.rs`, `svc_motion_estimate.rs`, `md.rs`, `wels_preprocess.rs`, `processing/` |
-| **S3** | D1–D4 | **Writers + the slice core**: bit writers onto `safe::bits`; `svc_encode_slice.rs` in two checkpoints (aliases → handles, then the encode loop + dynamic slicing); MT residue; `deblocking_common` + `mc`/`copy_mb`. Miri fork/join + mid-row probes gate every slice-core landing | writer files, `svc_encode_slice.rs`, `slice_multi_threading.rs` (to its D1 line), `common/` |
+| **S1** ✅ **CLOSED 2026-08-27** — brief [`prompts/safeplan_s1.md`](prompts/safeplan_s1.md) | **A1–A4 landed**; A5–A7 roll to S2 | **The accessor layer's first half** (~230 sites): small fry → `ctx_rc_at` → `ctx_ref_list` → paraset trio + `ctx_frame_bs_cur` + `ctx_sps`/`ctx_pps`. `ctx_dq_layer` deferred to D2–D3 (F210). Four gated commits, `session` gate green at the close | `ctx_mvd_cost_*`, `ctx_rc`, `ctx_rc_at`, `ctx_frame_bs`, `ctx_frame_bs_cur`, `ctx_ref_list`, the paraset trio, `ctx_sps`, `ctx_pps`, `rc_gom_*`; allows 627 → 613 (F219) |
+| **S2** ✅ **CLOSED 2026-08-27** — brief [`prompts/safeplan_s2.md`](prompts/safeplan_s2.md) | **A5–A7 landed**; B1–B3 roll to S3 | **The accessor layer's tail — stage A is complete**: `ctx_vaa` → `vaa`/`vaa_mut` (+ the screen-content downcast named once, F213), `ctx_func_list` → the F212 flip, `ctx_param` → `param`/`param_mut`/`param_opt` (258 sites). Three gated commits, `session` gate green at the close. B1 re-priced as an **MT-seam** checkpoint (F217) | every ctx accessor except the **DQ-layer family**, which F210 defers to D2–D3; allows 613 → 612 |
+| **S3** ◀ next — brief [`prompts/safeplan_s3.md`](prompts/safeplan_s3.md) | **B1–B3**, then D1–D4 | **Owned fields, the MT lifecycle, then the writers and the slice core.** B1 is an MT-seam checkpoint (F217): all four ctx singletons are fork-reached and `slice_bs_buffer` hands out a `&mut` into `pOut` in-fork. **F216 asks D2's layer work to come first** — `current_layer`/`ctx_dq_layer` (158 + 22 sites) is where stage A's whole cascade is stored. Miri fork/join + mid-row probes gate every slice-core landing | ctx raw singletons; writer files; `svc_encode_slice.rs`; `slice_multi_threading.rs` (to its D1 line); `common/` |
 | **S4** | E1–E3 | Decoder/common residue + trace newtype; **the lint flip** + census pin; **exit battery** + fallout | everything — §1 acceptance list |
 
 Checkpoint detail follows, grouped by stage.
@@ -200,13 +200,25 @@ callers hold multiple accessors simultaneously.
 | A2 | `ctx_rc_at` | 60 | finishes `rc.rs` (−55 unsafe fn) |
 | A3 | `ctx_ref_list` (**`ctx_dq_layer` split off — F210**: the fork *writes* the layer, so the accessor can return neither `&mut` nor `&`; it converts with the layer's storage in D2–D3, and the join tool reads 0 LIVE, so there is no joint-hold to dissolve) | 36 | `ref_list_mgr_svc.rs` — but see F209: the file's `unsafe fn` collapse waits on `ctx_param` |
 | A4 | `ctx_sps_array`/`ctx_subset_array`/`ctx_pps_array` + `ctx_frame_bs_cur` | 65 | `au_set.rs`, `paraset_strategy.rs` |
-| A5 | `ctx_vaa` — includes resolving the `SVAAFrameInfoExt` downcast (6 callers cast the result; becomes an enum or accessor pair) | 79 | parts of `wels_preprocess.rs` |
-| A6 | `ctx_func_list` — **the flip, priced and chosen in F212**; the dispatch enums F191 prefers stay at C1, where the plan already puts them | 106 | dispatch-heavy files |
-| A7 | `ctx_param` — the monster; by now a large fraction of its 246 sites sit in already-converted callers. Split into `&self` reader + `&mut` writer accessors | ≤246 | `encoder_ext.rs` bulk |
+| A5 ✅ | `ctx_vaa` → `vaa`/`vaa_mut`/`vaa_ptr`, plus `vaa_ext`/`vaa_ext_mut` for the **16** (not six) screen-content downcasts, whose two disagreeing declarations F213 records | 86 textual | `raw_ptr` −20 |
+| A6 ✅ | `ctx_func_list` → `func_list`/`func_list_mut`, F212's flip taken. Moves nothing the ratchet counts and F214 says why; two derivations survive as `ctx_func_list_raw` | 121 textual | none — F214 |
+| A7 ✅ | `ctx_param` → `param`/`param_mut`/`param_opt` + two combined accessors; 26 per-layer cursors keep the slot-read root as `ctx_param_raw` (**F215**: a `&mut self` accessor is a fresh whole-struct `Unique` *per call*) | 258 textual | **none — F216**: the straggler is `current_layer`, not `ctx_param` |
 
 **Exit criteria**: zero `pub unsafe fn ctx_*`/`rc_*` accessors; `rc.rs`,
 `ref_list_mgr_svc.rs`, `au_set.rs`, `paraset_strategy.rs` at or near zero allows;
 family gate green.
+
+**Met as amended, at S2's close (2026-08-27).** The first clause holds for the
+eight accessors stage A owns, with **three named raw survivors** — `ctx_ref_list_raw`
+(A3), `ctx_func_list_raw` (A6), `ctx_param_raw` (A7) — each with a written reason
+and a counted call set; F211/F215 are the record. The **second clause does not
+hold and could not**: those files' allow counts are unchanged, because every one
+of their bodies also calls the **DQ-layer family** (`current_layer` 158 sites,
+`ctx_dq_layer` 22, `layer_pps` 30, `layer_ref_pic` 45, and five more), which F210
+defers to D2–D3. The criterion was written against F209's expectation that
+`ctx_param` was the straggler; **F216 measures that it is not**, and stage A's
+cascade is held in escrow until the layer's storage moves. The tracking number
+moved 627 → 612 across the whole stage, which is the honest figure for it.
 
 ### Stage B — owned fields and the MT lifecycle (S3)
 
@@ -305,13 +317,19 @@ one line — date, session id, checkpoints landed, allows remaining (total / enc
 gate level run. The single progress number is
 **`#[allow(unsafe_code)]` sites outside `src/api/`: 611 → 2**. The figure was
 **627** when S1 opened, not 611 — F203's two found files plus the census fix had
-drifted it upward since the plan was drafted. S1 closed it at **614**.
+drifted it upward since the plan was drafted. S1 closed it at **613** (its own log
+says 614; F219 counts the tree). Stage A closed it at **612**.
+
+The figure has a command of its own now — `rust/tools/safeplan_tracking.sh [ref]`
+— so a session can check its opening number against the previous close instead of
+trusting the hand-off brief.
 
 **Session log**
 
 | date | session | checkpoints landed | allows outside api | gate |
 |---|---|---|---|---|
-| 2026-08-27 | **S1** | A1, A2, A3, A4 (A5–A7 roll to S2) | 627 → 614 | `session` PASS — sweeps 583/583 ×2, Miri 291/291, gtest 4/4 |
+| 2026-08-27 | **S1** | A1, A2, A3, A4 (A5–A7 roll to S2) | 627 → **613** (logged 614; F219) | `session` PASS — sweeps 583/583 ×2, Miri 291/291, gtest 4/4 |
+| 2026-08-27 | **S2** | A5, A6, A7 — **stage A complete** (B1–B3 roll to S3) | 613 → 612 | `session` PASS — sweeps 583/583 ×2, Miri 291/291 (**cpu 1105 s vs 1091 s, ratio 1.01**), gtest 4/4. **§4.7's two MT probes did not run** — F220 names what that leaves unverified; S3 runs them first |
 
 ## 10. Adoption amendments (ratified with the switch, 2026-08-27)
 
@@ -329,8 +347,10 @@ describes; a claim of absence gets its grep.
    `&mut *pCtx` is the S63 violation regardless of duration; every fork-reachable call
    site uses the `&self` reader path only, classified per checkpoint by
    `tools/phase9_forksplit.py`. A7's reader/writer split exists for exactly this.
-3. **The layer's 42 in-fork `*mut SDqLayer` parameters** (F191's fourth row — absent
-   from §3's inventories) are named to D2–D3's handle redesign.
+3. **The layer's `*mut SDqLayer` parameters** (F191's fourth row — absent from
+   §3's inventories) are named to D2–D3's handle redesign. **F218 corrects the
+   count**: 42 is the tree-wide total; **11** are in fork-reachable bodies, and
+   only those eleven constrain what `dq_layer` may return.
 4. **Perf is measured inside C4 and D1** (bench before/after within the session), not
    only at stage closes — ME/SAD regressions localize badly after the fact.
 5. **Carryover disciplines**: a tag (`// unsafe-cat: …`) is removed only by the
