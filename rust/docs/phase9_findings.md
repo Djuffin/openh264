@@ -4642,6 +4642,57 @@ the whole point of the ratchet is that nobody notices that happening.
 
 ---
 
+## F196 — `ctx_ltr_at`'s raw return is load-bearing at seventy-five sites, not the four T9.G7 documented, and only the compiler could say so
+
+**Session H2, section D, attempted and reverted.** S54's rule says an accessor whose
+result every caller dereferences should return the reference, and `ctx_ltr_at` is the
+textbook case: **twenty-two of its twenty-six call sites** spell `&mut
+*ctx_ltr_at(..)`, `&*ctx_ltr_at(..)` or `(*ctx_ltr_at(..)).field` on the spot. F193
+sized the blocker at **four** bodies — `ref_list_mgr_svc.rs:757`, `:1025`, `:1453`,
+`:1648` — each carrying T9.G7's note that it "holds the LTR state across calls that
+re-derive their own `&mut` to the *same* `SLTRState`".
+
+Converted (`-> &mut SLTRState`, `pCtx.pLtr[kiDid]`), the compiler reports **84 errors
+across 75 distinct sites**, and the breakdown is the finding:
+
+```
+  49  E0499  cannot borrow `*pCtx` as mutable more than once
+  28  E0503  cannot use `pCtx.…` because it was mutably borrowed
+   5  E0502  mutable borrow conflicts with immutable borrow
+   1  E0506  assignment to borrowed value
+  ---
+  83  of 84 are borrow conflicts.  ZERO are mechanical type errors.
+```
+
+**Zero mechanical errors is the whole result.** A `*mut` → `&mut` conversion normally
+produces a hail of `E0614`/`E0308` from the `&mut *` and `(*x).f` spellings, and those
+are `sed` work. There are none here: every single site that fails, fails because the
+returned borrow *conflicts with another use of the context*. The raw return was not a
+vestige and it was not laziness — it is what lets seventy-five sites reach the LTR
+state and the context in the same breath.
+
+**So T9.G7's four is an undercount by an order of magnitude**, and not through
+carelessness: T9.G7 was documenting the sites where it had *observed* the hazard —
+bodies that hold the state across a re-deriving call — which is a strictly smaller set
+than the sites where a real borrow would conflict. **A comment can only record the
+conflicts someone tripped over; the borrow checker enumerates the ones that exist.**
+That gap, four against seventy-five, is the argument for doing this conversion *at
+all*: the raw is hiding coexistences nobody has audited.
+
+**Reverted, deliberately.** The session's own rule for this attempt was to back out if
+the work turned from relocating bindings into rewriting the logic, and 83 borrow
+conflicts across `WelsUpdateRefList`, `WelsMarkPic`, `WelsUpdateRefListScreen` and
+`WelsMarkPicScreen` — two of them live camera-path reference-list management, in F3's
+neighbourhood — is the second thing. Landing it half-done would have been worse than
+either finishing or not starting.
+
+**What J gets that H2 did not have**: the real number, the real error mix, and the
+knowledge that this is a borrow-extent refactor of four large bodies plus seventy-one
+call sites, not a signature change. Sized honestly it is its own session's step, and
+it should be scoped as one rather than folded in as "22 easy and 4 hard".
+
+---
+
 ## F195 — the F67 probe counts distinct *types*, not fields, so it cannot see a deletion whose type survives elsewhere — and D-dead-7's own predicted verdict was unachievable
 
 **Session H2, the close.** D-dead-7's ruling text says "`pCurPath` deleted,

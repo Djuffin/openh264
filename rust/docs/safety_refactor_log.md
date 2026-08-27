@@ -19164,3 +19164,85 @@ same call under a shared context borrow and is **green under Miri**. The four
 consumers take the context by shared borrow, or as a parameter, instead of reading it
 back out of the field. Whoever enables screen content owns this, and the test that
 proves the fix is already written.
+
+---
+
+## 2026-08-26 — Phase 9, session H2, section D (post-close, at the user's request)
+
+The session's contract closed green — `gates.sh session` PASS and **the owed fork
+pair GREEN**:
+
+    fixed-slice  3440.00 s   1 passed / 0 failed   wall 3445 s   ratio 1.008 vs H
+    mid-row      3498.14 s   1 passed / 0 failed   wall 3504 s   ratio 1.001 vs H
+    pair wall    ~3504 s = 58 min      zero Undefined Behavior
+
+Parallel-vs-parallel against H's 3411.72 / 3493.33: **the in-fork read surface is
+Miri-cost-neutral on the fork**, the same result H measured for the context flip and
+E2 for the slice flip. The pair shared one `CARGO_TARGET_DIR` rather than two — the
+build was warm from the session lane's compile, so both runs were concurrent from the
+start; recorded because a pair wall is unreadable without its form.
+
+The user then asked for the three items H2 had named as "could have been done here,
+and wasn't". Two landed; the third was attempted, measured, and reverted.
+
+### F192 — closed by deleting its storage (`d7ac736f`)
+
+All four screen-content readers take `pCtx: &mut sWelsEncCtx` now, as **ten of their
+sibling methods on the same type already did**. Threading cost less than the finding
+implied: the context was already in hand at three of the five levels, so only
+`DetectSceneChange` needed a new parameter and both of its call sites are inside
+`SingleLayerPreprocess`. Two T9.G6 hoists at the call sites.
+
+**`m_pEncCtx` is deleted, and the deletion is the fix.** A write-only raw copy of the
+context is not merely dead — it is the hazard's storage, and keeping it makes the
+guard *discipline* rather than *construction*.
+
+A second store the first grep missed: `WelsEncoderEncodeExt` re-stamped the field every
+frame — T9.H3's **interim** remedy, whose own comment names this commit's work as the
+end state. Why the interim was insufficient, recorded because it was the right call at
+the time: re-stamping makes the stored raw a **child** of the borrow rather than a
+sibling, which survives the retag but **not the protector**. Protection is about the
+tag being used, not how it was derived.
+
+F192's own two probes are **retired by their own fix** — no stored context, no
+subject. Deleted with the field; the Miri trace lives in the finding.
+
+### The ~36 unblocked (`ae4de147`)
+
+The charter called this "S63's forbidden retag exactly". Half right, and the wrong
+half matters: three `&mut` out of one context is **not** forbidden — Rust permits
+`(&mut s.a, &mut s.b, &mut s.c)` from one `&mut s`, because the compiler can see the
+fields are disjoint. What it refuses is three *separate accessor calls*. A call-shape
+problem with a one-function answer, and `ctx_paraset_arrays` is the function.
+
+The conversion also found a bound nobody was checking: the three
+`copy_nonoverlapping` calls wrote `MAX_SPS_COUNT` entries into blocks guarded only by
+`is_null()`. In bounds — checked, not assumed: the body runs only on listing kinds and
+those set `m_iBasicNeededSpsNum = MAX_SPS_COUNT` — but that was an argument and it is
+a `debug_assert!` plus a saturating length now.
+
+### `ctx_ltr_at` — attempted, measured, reverted (F196)
+
+The estimate said 22 easy sites and 4 hard ones. The compiler says **84 errors across
+75 sites, 83 of them borrow conflicts and zero of them mechanical**. A `*mut` → `&mut`
+conversion normally produces a hail of `E0614`/`E0308` that `sed` can fix; there were
+none. Every failing site fails because the returned borrow *conflicts with another use
+of the context* — so the raw return is load-bearing at seventy-five sites, not four.
+
+**T9.G7's four was an undercount by an order of magnitude, and honestly so**: a comment
+records the conflicts someone tripped over; the borrow checker enumerates the ones that
+exist. That gap is the argument for doing the conversion — and for scoping it as its
+own session's step rather than folding it in.
+
+Reverted under the rule set before the attempt: back out if it turns from relocating
+bindings into rewriting logic. Two of the four bodies are live camera-path
+reference-list management, in F3's neighbourhood; half-done would have been worse than
+either finishing or not starting.
+
+### J's inheritance, amended
+
+* **F192 is closed**, not deferred. The row that said "whoever enables screen content
+  owns this" is gone — there is nothing left to own.
+* **The ~36 have no blocker in front of them.** They are still step 1's remainder.
+* **`ctx_ltr_at` is sized for the first time**: 75 sites, 83 borrow conflicts, four
+  bodies. Its own step, not a signature change.
