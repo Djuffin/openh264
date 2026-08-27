@@ -41,7 +41,7 @@
 //! * **Parse-only forces `eEcActiveIdc = ERROR_CON_DISABLE`**
 //!   (`welsDecoderExt.cpp:1217`) on every call, so a damaged access unit is dropped
 //!   rather than concealed and the `rv=` column carries the error codes. That mode
-//!   is where [`DIVERGING`] lives — see below.
+//!   is what `Error_I_P` referees — see [`ASSETS`].
 
 use openh264_rs::api::codec_api::*;
 use openh264_rs::split_annexb_units;
@@ -54,7 +54,30 @@ use common::Sha1Hasher;
 /// coverage of the decoder: CAVLC with four IDRs (so the SPS/PPS prepend runs four
 /// times), CABAC with B-frames, all-IPCM, an error stream, a tiny grid, **two slices
 /// per picture** (`fmo_2groups_64x64`, the only `res` asset whose access units carry
-/// more than one VCL NAL), and a stream carrying both an SPS and a subset SPS.
+/// more than one VCL NAL), a stream carrying both an SPS and a subset SPS — and
+/// `Error_I_P`, the damaged stream below.
+///
+/// **`Error_I_P` — F93, closed by F199 (Phase 9 session J).** A *damaged* stream,
+/// and parse-only decodes it with error concealment **disabled** — a combination
+/// nothing else referees: the malformed corpus runs every one of its 2707 rows with
+/// `ERROR_CON_SLICE_COPY` (`malformed_stream_parity.rs:490`) and the conformance
+/// assets are undamaged. It carries **three different SPSs** (ids 0/1/2 —
+/// 352x288, 640x480, 352x288), so every access-unit boundary here leans on
+/// `pActiveLayerSps`. Four of its seventeen rows diverged until session J: a
+/// dropped access unit (EC disabled, refs lost) left `iTotalNumMbRec` nonzero, the
+/// port was missing the fresh-picture zeroing at `decoder_core.cpp:2568`, and
+/// `ResetActiveSPSForEachLayer` — gated on `iTotalNumMbRec == 0` in both trees —
+/// never fired again, splitting the one recoverable IDR access unit in two. One
+/// statement restored all four rows and the emitted frame's SHA-1.
+///
+/// One column that is *expected* to differ and is therefore pinned by the port's
+/// own golden, not the reference's: `in=`, the input timestamp. Upstream's
+/// `DecodeParser` overwrites the caller's `uiInBsTimeStamp` on its way out
+/// (**F90**); the port does not, so the reference reports 0 where the port reports
+/// what it was handed. That is a divergence in the port's favour and is recorded as
+/// one. (The checked-in golden's `in=` column carries the caller's values, which
+/// both implementations now produce on the rows that emit nothing; the emitting row
+/// pins `in=0` — F90's overwrite — which the port reproduces at the copy-out.)
 const ASSETS: &[&str] = &[
     "BA_MW_D",
     "Cisco_Men_whisper_640x320_CABAC_Bframe_9",
@@ -62,49 +85,8 @@ const ASSETS: &[&str] = &[
     "grid_48x32",
     "fmo_2groups_64x64",
     "sps_subsetsps_bothVUI",
+    "Error_I_P",
 ];
-
-/// **F93 — refereed, divergent, and owned; the golden is checked in and this list is
-/// why it is not in [`ASSETS`].**
-///
-/// `Error_I_P.264` is a *damaged* stream, and parse-only decodes it with error
-/// concealment **disabled** — a combination nothing in this project had ever
-/// refereed: the malformed corpus runs every one of its 2707 rows with
-/// `ERROR_CON_SLICE_COPY` (`malformed_stream_parity.rs:490`) and the conformance
-/// assets are undamaged. **Four of its seventeen rows disagree with the reference**,
-/// re-measured after T8b.C4 fixed F96:
-///
-/// ```text
-///   row  7   ref rv=0x0                        port rv=0x1 (dsFramePending)
-///   row  9   ref nal=5 [13,8,5601,8827,10956]  port rv=0x4, nothing emitted
-///   row 13   ref rv=0x1                        port rv=0x2 (dsRefLost)
-///   row 14   ref rv=0x1                        port rv=0x4
-///   total    ref 1 frame emitted               port 0
-/// ```
-///
-/// **Row 16 is gone**: it was F96 — `isNewFrame` was computed without the
-/// `iThreadCount > 1` guard the reference puts on it, so `InitRefPicList` was skipped
-/// on a continuing frame and the port failed the slice decode where the reference
-/// returned early with `dsRefLost`. Closed in T8b.C4, and the ordinary
-/// `DecodeFrame2` path over this asset at `ERROR_CON_DISABLE` is byte- and
-/// code-identical now (`ecref --ec=0` vs `ecref_rs --ec=0`).
-///
-/// **So what is left here is what parse-only adds on top**, which is the split the
-/// F93 experiment was designed to make: the ordinary path agrees and this one does
-/// not, so the four rows above are in the parse-only arm of
-/// `DecodeFrameConstruction`, not in the shared error path.
-///
-/// **Not T8b.B2's.** Every write that commit adds is behind `pParam.bParseOnly`, and
-/// the only codes it can raise are `dsOutOfMemory` (the two `MAX_ACCESS_UNIT_CAPACITY`
-/// checks) and `dsBitstreamError` from the `SPS_PPS_BS_SIZE - 4` guard — which needs a
-/// parameter set of 124 bytes or more, where this stream's are 13 and 8.
-///
-/// One column that is *expected* to differ and is not counted above: `in=`, the
-/// input timestamp. Upstream's `DecodeParser` overwrites the caller's
-/// `uiInBsTimeStamp` on its way out (**F90**); the port does not, so the reference
-/// reports 0 where the port reports what it was handed. That is a divergence in the
-/// port's favour and is recorded as one.
-const DIVERGING: &[&str] = &["Error_I_P"];
 
 /// One `PARSE` row, rendered exactly as `ecref --parse-only` prints it.
 ///
@@ -228,9 +210,10 @@ unsafe fn parseonly_rows(data: &[u8]) -> Vec<String> {
 
 #[test]
 fn decode_parser_matches_the_reference_on_every_asset() {
-    // The divergent asset is named here so that deleting it from `DIVERGING` without
-    // adding it back to `ASSETS` cannot quietly lose the row. Nothing drives it.
-    assert_eq!(DIVERGING, &["Error_I_P"], "F93's owner list changed; update the module docs");
+    // F93's `DIVERGING` list is retired: its one asset moved into `ASSETS` when
+    // session J closed the finding (F199), so the guard that kept the row from
+    // being quietly lost is now the golden itself.
+    assert!(ASSETS.contains(&"Error_I_P"), "F93's asset left the referee; see F199");
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
     let goldens = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data/decoder_parseonly");
     let mut failures = Vec::new();

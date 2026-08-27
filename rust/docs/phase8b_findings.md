@@ -338,6 +338,16 @@ and not the shared error path — the branch that decides whether an access unit
 produces `SParserBsInfo` output. **Owner: Phase 9**, with this table and the two
 `ecref --parse-only --ec=0` transcripts as the repro.
 
+**CLOSED — Phase 9 session J (F199).** The pointer above was half right: the
+defect was one missing statement in the *shared* path (`DecodeCurrentAccessUnit`'s
+fresh-picture prefetch never zeroed `iTotalNumMbRec`, `decoder_core.cpp:2568`),
+but only parse-only could observe it — the stale count kept
+`ResetActiveSPSForEachLayer` from ever firing on this three-SPS stream, and the
+resulting access-unit mis-split is invisible to the ordinary path's observables.
+All four rows and the emitted frame's SHA-1 now match; `Error_I_P` referees in
+`ASSETS` on every `cargo test`. The full mechanism is F199's
+(`phase9_findings.md`).
+
 One column that differs and is *not* one of the four: `in=`, the input timestamp.
 Upstream's `DecodeParser` destroys the caller's `uiInBsTimeStamp` (**F90**) and the
 port does not, so the reference prints 0 where the port prints what it was handed.
