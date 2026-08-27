@@ -790,27 +790,6 @@ pub unsafe fn ctx_ref_list(pCtx: *mut sWelsEncCtx, kiDid: usize) -> *mut SRefLis
     std::ptr::read((*arr).as_ptr().add(kiDid) as *const *mut SRefList)
 }
 
-/// The rate-control state of spatial layer `kiDid` — `pWelsSvcRc[did]`, which is how
-/// all ~60 consumers spell it. See [`ctx_rc`].
-///
-/// # Safety
-/// As [`sWelsEncCtx::rc`], and `kiDid` must be a layer the array holds.
-#[inline]
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
-pub unsafe fn ctx_rc_at(pCtx: *mut sWelsEncCtx, kiDid: usize) -> *mut SWelsSvcRc {
-    // A1: the root comes from the safe reader now. `as_ptr` through a shared
-    // borrow is the same derivation the raw root performed, so this is still the
-    // sibling-stable spelling and `ctx_rc_at`'s own row in the sibling test still
-    // asserts it. A2 converts this one.
-    let rc = (*pCtx).rc();
-    if rc.is_empty() {
-        return std::ptr::null_mut();
-    }
-    debug_assert!(kiDid < rc.len(), "rc layer {kiDid} is past the array");
-    (rc.as_ptr() as *mut SWelsSvcRc).add(kiDid)
-}
-
 /// The long-term-reference state of dependency layer `kiDid` — `pLtr[did]`, which is
 /// how all consumers spell it.
 ///
@@ -1086,6 +1065,40 @@ impl sWelsEncCtx {
         &self.pWelsSvcRc
     }
 
+    /// The rate-control state of spatial layer `kiDid` — `pWelsSvcRc[did]`, which
+    /// is how all sixty consumers spell it. See [`rc`](Self::rc) for the array.
+    ///
+    /// **The reader/writer split is the whole of A2, and it fell out measured
+    /// rather than argued.** Every body that *writes* rate-control state through
+    /// this accessor takes the context by `&mut sWelsEncCtx` — thirty-one of
+    /// them, all single-threaded — and every body the forksplit puts **in-fork**
+    /// reads and writes nothing: `WelsRcMbInitGom`, `WelsRcMbInfoUpdateGom`,
+    /// `RcCalculateMbQp`, `RcCalculateGomQp`, `RcGomTargetBits`,
+    /// `RcJudgeBaseUsability` and the `Disable` pair keep their mutable state in
+    /// `SSlice::sSlicingOverRc`, which is per-slice and not shared. That is
+    /// F132's audited design showing up as a clean split, and it is why the fork
+    /// needs no interior mutability here.
+    ///
+    /// # Panics
+    /// If `kiDid` is not a layer the array holds. The raw accessor's empty-array
+    /// `null` return was never survivable — every consumer dereferenced the
+    /// answer, and the two that guarded first asked [`rc`](Self::rc) whether the
+    /// array was empty, which they still do. Same ruling as `ctx_ltr_at`'s
+    /// (T9.H3).
+    #[inline]
+    pub fn rc_at(&self, kiDid: usize) -> &SWelsSvcRc {
+        &self.pWelsSvcRc[kiDid]
+    }
+
+    /// [`rc_at`](Self::rc_at) for the thirty-one single-threaded writers.
+    ///
+    /// **Single-threaded only** — the prohibition this session checks at every
+    /// checkpoint is that no body taking `*mut sWelsEncCtx` calls this.
+    #[inline]
+    pub fn rc_at_mut(&mut self, kiDid: usize) -> &mut SWelsSvcRc {
+        &mut self.pWelsSvcRc[kiDid]
+    }
+
     /// The **frame bitstream buffer's root** — T6.H4.
     ///
     /// **A permanent raw return, and the reason is the C ABI — F193**, measured
@@ -1248,7 +1261,7 @@ pub struct sWelsEncCtx {
     /// **T6.H6 — owned, and it took the rate controller's own allocations with it.**
     /// One state per spatial layer; each holds the five arrays `RcInitLayerMemory`
     /// used to carve from a `CMemoryAlign` block. Root: [`ctx_rc`]; per-layer:
-    /// [`ctx_rc_at`].
+    /// [`sWelsEncCtx::rc_at`].
     pub pWelsSvcRc: Vec<SWelsSvcRc>,
     pub bCheckWindowStatusRefreshFlag: bool,
     pub iCheckWindowStartTs: i64,
@@ -2245,14 +2258,12 @@ mod tests {
         // `ctx_dq_idc_map` above — it has no sibling property to assert: two
         // derivations cannot coexist, and the borrow checker says so at the call.
         // `ctx_rc` and `ctx_mvd_cost_table` had rows here until A1 of the
-        // safe-conversion plan. Both return slices now (`rc`, `mvd_cost_table`),
-        // so — as with `ctx_dq_idc_map` and `ctx_ltr_at` above — there is no
-        // sibling property left to assert: two derivations cannot coexist and the
-        // borrow checker says so at the call. `ctx_rc_at` still hangs off `rc`'s
-        // root and still hands out a raw, so its row stays and now covers the
-        // reader's derivation too.
-        siblings!("ctx_rc_at", ctx_rc_at(p, 1),
-            |q: *mut SWelsSvcRc| (*q).iGomSize = 12, |q: *mut SWelsSvcRc| (*q).iGomSize == 12);
+        // safe-conversion plan, and `ctx_rc_at` until A2. All three return
+        // references now (`rc`, `mvd_cost_table`, `rc_at`/`rc_at_mut`), so — as
+        // with `ctx_dq_idc_map` and `ctx_ltr_at` above — there is no sibling
+        // property left to assert: two derivations cannot coexist and the borrow
+        // checker says so at the call rather than Miri saying so at run time.
+        // The whole rate-control branch of this family is references now.
         // `mvd_cost_origin` is safe now but still *returns* a raw (the far end is
         // `SWelsMD::pMvdCost`), so the property is unchanged and still asserted —
         // this is the row that proves `as_ptr` through the new `&self` reader is
@@ -2272,23 +2283,21 @@ mod tests {
             |q: *mut crate::encoder::svc_encode_slice::SDqLayer| (*q).iMbWidth = 11,
             |q: *mut crate::encoder::svc_encode_slice::SDqLayer| (*q).iMbWidth == 11);
 
-        // The rate controller's own five, one level down: same spelling, same
-        // question, and they are the only accessors in the family that hang off a
-        // container the context reaches through another accessor.
-        let rc = unsafe { ctx_rc_at(p, 0) };
+        // The rate controller's own five hung off `ctx_rc_at` here, one level
+        // down — the only accessors in the family that reached through another
+        // accessor. Four are retired and the fifth is a slice, so what is left is
+        // the fixture the peers above still need.
         unsafe {
-            (*rc).iGomSize = 4;
-            crate::encoder::rc::RcInitLayerMemory(&mut *rc, 2);
+            let rc = (*p).rc_at_mut(0);
+            rc.iGomSize = 4;
+            crate::encoder::rc::RcInitLayerMemory(rc, 2);
         }
         // T9.X: `rc_temporal_over` and `rc_gom_complexity` were retired (S18 — the
         // first onto direct `Vec` indexing at its ten callers, the second for having
         // no production caller at all). **A1 retires the last two the same way.**
         // `rc_gom_fg_blocks` had no production caller either — this test was its
         // only one, which is S18's own criterion — and `rc_gom_sad` is
-        // `SWelsSvcRc::gom_sad`, a slice, at both of its in-fork readers. The
-        // family's property is now carried where it is still expressible, one
-        // level up, by `ctx_rc_at` above.
-        let _ = rc;
+        // `SWelsSvcRc::gom_sad`, a slice, at both of its in-fork readers.
 
         // And the whole set once more, interleaved: every cursor taken first, then
         // every one used — which is the frame loop's actual shape, and the case a
@@ -2299,7 +2308,7 @@ mod tests {
                 // at T9.H3 (deleted with the raw family) — a real reference
                 // cannot be *held* alongside the others, which is the point.
                 ctx_sps_array(p).cast(), ctx_pps_array(p).cast(),
-                ctx_rc_at(p, 0).cast(), (*p).mvd_cost_origin().cast(),
+                (*p).mvd_cost_origin().cast(),
                 ctx_vaa(p).cast(), ctx_param(p).cast(), ctx_ref_list(p, 0).cast(),
                 ctx_dq_layer(p, 0).cast(), (*p).frame_bs().cast(),
             ]

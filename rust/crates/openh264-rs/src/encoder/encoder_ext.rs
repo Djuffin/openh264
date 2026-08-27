@@ -31,7 +31,6 @@ use crate::encoder::encoder_context::{
     ctx_dq_idc_map, ctx_dq_layer, ctx_frame_bs_cur, ctx_ltr_at, ctx_mb_index_x,
     ctx_paraset_arrays,
     ctx_mb_index_y, ctx_param, ctx_ref_list, ctx_vaa,
-    ctx_rc_at,
     ctx_pps_array, ctx_sps_array,
     ctx_stride_enc_block_offset,
     ctx_subset_array,
@@ -3947,9 +3946,12 @@ pub unsafe fn WelsEncoderEncodeExt(
         iFrameSize += iLayerSize;
         crate::encoder::rc::RcTraceFrameBits(pCtx, (*pFbi).uiTimeStamp, iFrameSize);
         if let Some(id) = pCtx.pDecPic {
+            // §4.6, reorder: the read is hoisted so the shared borrow of the
+            // context ends before the reference list's cursor is written through.
+            let iAverageFrameQp = pCtx.rc_at(iCurDid as usize).iAverageFrameQp;
             (*ctx_ref_list(pCtx, iCurDid as usize))
                 .pic_mut(id)
-                .iFrameAverageQp = (*ctx_rc_at(pCtx, iCurDid as usize)).iAverageFrameQp;
+                .iFrameAverageQp = iAverageFrameQp;
         }
 
         // update scc related
@@ -4045,11 +4047,10 @@ pub unsafe fn WelsEncoderEncodeExt(
             (*pPrev).pNalLengthInByte.add(iCountNal as usize);
 
         if (*pSvcParam).iPaddingFlag != 0
-            && (*ctx_rc_at(pCtx, pCtx.uiDependencyId as usize)).iPaddingSize > 0
+            && pCtx.rc_at(pCtx.uiDependencyId as usize).iPaddingSize > 0
         {
             let mut iPaddingNalSize = 0i32;
-            let iPaddingSize =
-                (*ctx_rc_at(pCtx, pCtx.uiDependencyId as usize)).iPaddingSize;
+            let iPaddingSize = pCtx.rc_at(pCtx.uiDependencyId as usize).iPaddingSize;
             pCtx.iEncoderError = WritePadding(pCtx, iPaddingSize, &mut iPaddingNalSize);
             if pCtx.iEncoderError != ENC_RETURN_SUCCESS {
                 return pCtx.iEncoderError;
@@ -4059,9 +4060,12 @@ pub unsafe fn WelsEncoderEncodeExt(
                 return ENC_RETURN_UNEXPECTED;
             }
 
-            let pRc = ctx_rc_at(pCtx, pCtx.uiDependencyId as usize);
-            (*pRc).iPaddingBitrateStat += (*pRc).iPaddingSize;
-            (*pRc).iPaddingSize = 0;
+            // §4.6, reorder: the layer id is read out before the writer's
+            // `&mut` claims the context.
+            let did = pCtx.uiDependencyId as usize;
+            let pRc = pCtx.rc_at_mut(did);
+            pRc.iPaddingBitrateStat += pRc.iPaddingSize;
+            pRc.iPaddingSize = 0;
 
             (*pLayerBsInfo).uiSpatialId = 0;
             (*pLayerBsInfo).uiTemporalId = 0;
