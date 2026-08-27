@@ -278,9 +278,7 @@ impl CComplexityAnalysis {
     }
 
     /// `CComplexityAnalysis::AnalyzeGomComplexityViaVar` — `ComplexityAnalysis.cpp:222`.
-    // unsafe-cat: port-raw(Phase 9)
-    #[allow(unsafe_code)]
-    unsafe fn AnalyzeGomComplexityViaVar(
+    fn AnalyzeGomComplexityViaVar(
         &mut self,
         pSrcPixMap: &SPixMap,
         _pRefPixMap: &SPixMap,

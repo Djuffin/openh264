@@ -546,9 +546,7 @@ impl CWelsParametersetIdStrategyObj {
     /// On `SpsPpsListing`, `pCtx` must be live with `pPPSArray` allocated to
     /// `MAX_PPS_COUNT` entries — which is what `m_iBasicNeededPpsNum = MAX_PPS_COUNT`
     /// asks `RequestMemorySvc` for.
-    // unsafe-cat: port-raw(Phase 9)
-    #[allow(unsafe_code)]
-    pub unsafe fn UpdatePpsList(&mut self, pCtx: &mut sWelsEncCtx) {
+    pub fn UpdatePpsList(&mut self, pCtx: &mut sWelsEncCtx) {
         // T9.H: the trailing `|| pCtx.is_null()` is gone — a `&mut sWelsEncCtx`
         // cannot be null. The remaining condition is unchanged.
         if self.eIdKind != ParasetIdKind::SpsPpsListing {
@@ -639,9 +637,7 @@ impl CWelsParametersetIdStrategyObj {
     /// # Safety
     /// `pCtx` must be live with `pSpsArray` / `pSubsetArray` allocated to
     /// `MAX_SPS_COUNT` entries.
-    // unsafe-cat: port-raw(Phase 9)
-    #[allow(unsafe_code)]
-    unsafe fn SpsReset(&mut self, pCtx: &mut sWelsEncCtx, kbUseSubsetSps: bool) -> i32 {
+    fn SpsReset(&mut self, pCtx: &mut sWelsEncCtx, kbUseSubsetSps: bool) -> i32 {
         if self.eIdKind == ParasetIdKind::SpsPpsListing {
             return -1;
         }
@@ -758,9 +754,7 @@ impl CWelsParametersetIdStrategyObj {
     ///
     /// # Safety
     /// `pCtx->pPPSArray` must hold at least `kuiPpsId + 1` entries.
-    // unsafe-cat: port-raw(Phase 9)
-    #[allow(unsafe_code)]
-    pub unsafe fn InitPps(
+    pub fn InitPps(
         &mut self,
         pCtx: &mut sWelsEncCtx,
         _kiSpsId: u32,
@@ -1120,9 +1114,7 @@ pub fn CheckMatchedSubsetSps(pSubsetSps1: &SSubsetSps, pSubsetSps2: &SSubsetSps)
 ///
 /// # Safety
 /// `pPpsArray` must hold at least `iPpsNumInUse` entries.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn FindExistingPps(
+pub fn FindExistingPps(
     pSps: Option<&SWelsSPS>,
     pSubsetSps: Option<&SSubsetSps>,
     kbUseSubsetSps: bool,

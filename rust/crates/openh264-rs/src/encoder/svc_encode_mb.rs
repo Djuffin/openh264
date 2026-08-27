@@ -784,9 +784,7 @@ pub unsafe fn WelsEncRecI4x4Y(
 ///
 /// # Safety
 /// All pointers in `pFuncList`, `pCurMb`, and `pMbCache` must be properly initialized and valid.
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
-pub unsafe fn WelsEncInterY(
+pub fn WelsEncInterY(
     pFuncList: &SWelsFuncPtrList,
     pCurMb: &mut SMB,
     pMbCache: &mut SMbCache,
@@ -892,9 +890,7 @@ pub unsafe fn WelsEncInterY(
 ///
 /// # Safety
 /// `kiResOff .. kiResOff + 128` must be in bounds of `pMbCache->sCoeffLevel`.
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
-pub unsafe fn WelsEncRecUV(
+pub fn WelsEncRecUV(
     pFuncList: &SWelsFuncPtrList,
     pCurMb: &mut SMB,
     pMbCache: &mut SMbCache,

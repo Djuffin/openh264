@@ -454,9 +454,7 @@ pub unsafe fn WelsCheckRefFrameLimitationLevelIdcFirst(
 ///
 /// # Safety
 /// `pBsWriter` must have room for the VUI.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn WelsWriteVUI(
+pub fn WelsWriteVUI(
     buf: &mut [u8],
     pSps: &SWelsSPS,
     pBsWriter: &mut BsWriter,
@@ -684,9 +682,7 @@ pub unsafe fn WelsWriteSubsetSpsSyntax(
 /// # Safety
 /// `pPps` and `pBsWriter` must be non-null. The strategy is borrowed by reference,
 /// so unlike C++ there is no null case to consider here.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn WelsWritePpsSyntax(
+pub fn WelsWritePpsSyntax(
     buf: &mut [u8],
     pPps: &SWelsPPS,
     pBsWriter: &mut BsWriter,

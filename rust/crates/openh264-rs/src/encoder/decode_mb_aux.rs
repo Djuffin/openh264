@@ -475,9 +475,7 @@ pub unsafe extern "C" fn WelsIDctRecI16x16Dc_c(
 ///
 /// # Safety
 /// `pFuncList` must be a valid, writable `SWelsFuncPtrList`.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn WelsInitReconstructionFuncs(pFuncList: &mut SWelsFuncPtrList, _uiCpuFlag: u32) {
+pub fn WelsInitReconstructionFuncs(pFuncList: &mut SWelsFuncPtrList, _uiCpuFlag: u32) {
     let fl = &mut *pFuncList;
 
     fl.pfDequantization4x4 = Some(dequant_4x4);

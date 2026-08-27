@@ -726,9 +726,7 @@ impl SWelsRcFunc {
     /// # Safety
     /// As [`WelsRcPictureInit`](SWelsRcFunc::WelsRcPictureInit).
     #[inline]
-    // unsafe-cat: port-raw(Phase 9)
-    #[allow(unsafe_code)]
-    pub unsafe fn WelsRcPostFrameSkipping(
+    pub fn WelsRcPostFrameSkipping(
         self,
         pCtx: &mut sWelsEncCtx,
         iDid: i32,
@@ -877,9 +875,7 @@ pub fn RcConvertQStep2Qp(iQpStep: i32) -> i32 {
 }
 
 /// Initializes sequence-level rate control parameters for all spatial layers.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn RcInitSequenceParameter(pEncCtx: &mut sWelsEncCtx) {
+pub fn RcInitSequenceParameter(pEncCtx: &mut sWelsEncCtx) {
     let spatial_layer_num = pEncCtx.param().iSpatialLayerNum;
 
     for j in 0..spatial_layer_num as usize {
@@ -964,9 +960,7 @@ pub unsafe fn RcInitSequenceParameter(pEncCtx: &mut sWelsEncCtx) {
 }
 
 /// Initializes temporal layer weighting matrices for Virtual GOP bit allocation.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn RcInitTlWeight(pEncCtx: &mut sWelsEncCtx) {
+pub fn RcInitTlWeight(pEncCtx: &mut sWelsEncCtx) {
     let did = pEncCtx.uiDependencyId as usize;
     // §4.6, reorder: the coding-parameter reads are lifted above the rate
     // controller's `&mut`. Nothing moves relative to anything else — the binding
@@ -1018,9 +1012,7 @@ pub unsafe fn RcInitTlWeight(pEncCtx: &mut sWelsEncCtx) {
 }
 
 /// Updates frame and temporal bit quotas whenever user bitrate or framerate changes.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn RcUpdateBitrateFps(pEncCtx: &mut sWelsEncCtx) {
+pub fn RcUpdateBitrateFps(pEncCtx: &mut sWelsEncCtx) {
     let did = pEncCtx.uiDependencyId as usize;
     // §4.6, reorder: the coding-parameter reads are lifted above the rate
     // controller's `&mut`. Nothing moves relative to anything else — the binding
@@ -1092,9 +1084,7 @@ pub unsafe fn RcUpdateBitrateFps(pEncCtx: &mut sWelsEncCtx) {
 }
 
 /// Resets the bit budget accumulator at the start of a Virtual GOP.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn RcInitVGop(pEncCtx: &mut sWelsEncCtx) {
+pub fn RcInitVGop(pEncCtx: &mut sWelsEncCtx) {
     let kiDid = pEncCtx.uiDependencyId as usize;
     // §4.6, reorder: the coding-parameter reads are lifted above the rate
     // controller's `&mut`. Nothing moves relative to anything else — the binding
@@ -1136,9 +1126,7 @@ pub unsafe fn RcInitVGop(pEncCtx: &mut sWelsEncCtx) {
 }
 
 /// Full reset of the rate control state machine upon encoder initialization or IDR insertion.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn RcInitRefreshParameter(pEncCtx: &mut sWelsEncCtx) {
+pub fn RcInitRefreshParameter(pEncCtx: &mut sWelsEncCtx) {
     let kiDid = pEncCtx.uiDependencyId as usize;
     // §4.6, reorder: the coding-parameter reads are lifted above the rate
     // controller's `&mut`. Nothing moves relative to anything else — the binding
@@ -1192,9 +1180,7 @@ pub unsafe fn RcInitRefreshParameter(pEncCtx: &mut sWelsEncCtx) {
 }
 
 /// Checks whether user bitrate or framerate settings have changed at runtime.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn RcJudgeBitrateFpsUpdate(pEncCtx: &mut sWelsEncCtx) -> bool {
+pub fn RcJudgeBitrateFpsUpdate(pEncCtx: &mut sWelsEncCtx) -> bool {
     let iCurDid = pEncCtx.uiDependencyId as usize;
     // §4.6, reorder: the parameter reads go above the writer's `&mut`.
     // A7, §4.6 combined accessor — see `RcUpdateBitrateFps`.
@@ -1213,9 +1199,7 @@ pub unsafe fn RcJudgeBitrateFpsUpdate(pEncCtx: &mut sWelsEncCtx) -> bool {
 }
 
 /// Updates base temporal layer boundaries (`uiTemporalId == 0`).
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn RcUpdateTemporalZero(pEncCtx: &mut sWelsEncCtx) {
+pub fn RcUpdateTemporalZero(pEncCtx: &mut sWelsEncCtx) {
     let kiDid = pEncCtx.uiDependencyId as usize;
     let pDLayerParam = &pEncCtx.param().sDependencyLayers[kiDid];
     let kiGopSize = 1 << pDLayerParam.iDecompositionStages;
@@ -1452,9 +1436,7 @@ pub unsafe fn RcCalculatePictureQp(pEncCtx: &mut sWelsEncCtx) {
 }
 
 /// Initializes slice-level GOM rate control parameters.
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
-pub unsafe fn GomRCInitForOneSlice(pSlice: &mut SSlice, kiBitsPerMb: i32) {
+pub fn GomRCInitForOneSlice(pSlice: &mut SSlice, kiBitsPerMb: i32) {
     let pSOverRc = &mut (*pSlice).sSlicingOverRc;
     pSOverRc.iStartMbSlice = (*pSlice).sSliceHeaderExt.sSliceHeader.iFirstMbInSlice;
     pSOverRc.iEndMbSlice = pSOverRc.iStartMbSlice + (*pSlice).iCountMbNumInSlice - 1;
@@ -1496,9 +1478,7 @@ pub unsafe fn RcInitSliceInformation(pEncCtx: &mut sWelsEncCtx) {
 }
 
 /// Allocates the target bit budget `iTargetBits` for the current frame.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn RcDecideTargetBits(pEncCtx: &mut sWelsEncCtx) {
+pub fn RcDecideTargetBits(pEncCtx: &mut sWelsEncCtx) {
     let did = pEncCtx.uiDependencyId as usize;
     let tid = pEncCtx.uiTemporalId as usize;
     // §4.6, reorder: the context reads go above the writer's `&mut`.
@@ -1550,9 +1530,7 @@ pub unsafe fn RcDecideTargetBits(pEncCtx: &mut sWelsEncCtx) {
 }
 
 /// Target bit allocation routine used under `RC_TIMESTAMP_MODE`.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn RcDecideTargetBitsTimestamp(pEncCtx: &mut sWelsEncCtx) {
+pub fn RcDecideTargetBitsTimestamp(pEncCtx: &mut sWelsEncCtx) {
     let did = pEncCtx.uiDependencyId as usize;
     let iTl = pEncCtx.uiTemporalId as usize;
     // §4.6, reorder: the context reads go above the writer's `&mut`.
@@ -1800,9 +1778,7 @@ pub unsafe fn RcCalculateGomQp(
 }
 
 /// Updates virtual buffer fullness after encoding a frame.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn RcVBufferCalculationSkip(pEncCtx: &mut sWelsEncCtx) {
+pub fn RcVBufferCalculationSkip(pEncCtx: &mut sWelsEncCtx) {
     let did = pEncCtx.uiDependencyId as usize;
     let pWelsSvcRc = pEncCtx.rc_at_mut(did);
     // T9.X: the C++ hoists this pointer once per body
@@ -2124,9 +2100,7 @@ pub extern "C" fn WelsRcPostFrameSkipping(
 pub fn WelsRcPostFrameSkippedUpdate(_pCtx: &mut sWelsEncCtx, _iDid: i32) {}
 
 /// Evaluates virtual buffer underflow and calculates required padding bits.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn RcVBufferCalculationPadding(pEncCtx: &mut sWelsEncCtx) {
+pub fn RcVBufferCalculationPadding(pEncCtx: &mut sWelsEncCtx) {
     let did = pEncCtx.uiDependencyId as usize;
     let pWelsSvcRc = pEncCtx.rc_at_mut(did);
     let kiOutputBits = (*pWelsSvcRc).iBitsPerFrame;
@@ -2147,9 +2121,7 @@ pub unsafe fn RcVBufferCalculationPadding(pEncCtx: &mut sWelsEncCtx) {
 }
 
 /// Logs frame bit rate control telemetry.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn RcTraceFrameBits(pEncCtx: &mut sWelsEncCtx, _uiTimeStamp: i64, _iFrameSize: i32) {
+pub fn RcTraceFrameBits(pEncCtx: &mut sWelsEncCtx, _uiTimeStamp: i64, _iFrameSize: i32) {
     let did = pEncCtx.uiDependencyId as usize;
     let pWelsSvcRc = pEncCtx.rc_at_mut(did);
     if (*pWelsSvcRc).iPredFrameBit != 0 {
@@ -2289,9 +2261,7 @@ pub unsafe fn RcUpdateFrameComplexity(pEncCtx: &mut sWelsEncCtx) {
 }
 
 /// Derives cascaded temporal layer QPs when rate control is disabled (`RC_OFF_MODE`).
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn RcCalculateCascadingQp(pEncCtx: &mut sWelsEncCtx, iQp: i32) -> i32 {
+pub fn RcCalculateCascadingQp(pEncCtx: &mut sWelsEncCtx, iQp: i32) -> i32 {
     let decomp = pEncCtx.param().iDecompStages;
     if decomp != 0 {
         let tid = pEncCtx.uiTemporalId as i32;
@@ -2886,16 +2856,12 @@ pub unsafe extern "C" fn WelsRcPictureInfoUpdateGomTimeStamp(
 /// `SetOption(ENCODER_OPTION_RC_MODE)` — keep their shape; those two are the
 /// **only** places the installed mode may change, which is the property the type
 /// note depends on.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn WelsRcInitFuncPointers(pRcf: &mut SWelsRcFunc, iRcMode: RCMode) {
+pub fn WelsRcInitFuncPointers(pRcf: &mut SWelsRcFunc, iRcMode: RCMode) {
     pRcf.eInstalledMode = iRcMode;
 }
 
 /// Top-level initialization entry point called during encoder creation.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn WelsRcInitModule(pEncCtx: &mut sWelsEncCtx, iRcMode: RCMode) {
+pub fn WelsRcInitModule(pEncCtx: &mut sWelsEncCtx, iRcMode: RCMode) {
     // T6.I1: the `&& !pFuncList.is_null()` arm went with the raw table.
     // T9.H8: and the `!pEncCtx.is_null()` arm goes with the flip — a
     // `&mut sWelsEncCtx` cannot be null, so the condition was always true and the

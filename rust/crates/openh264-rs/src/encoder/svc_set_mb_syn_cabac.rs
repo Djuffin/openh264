@@ -310,7 +310,7 @@ pub fn WelsCabacMbType(
 
 // unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
-pub unsafe fn WelsCabacMbIntra4x4PredMode(buf: &mut [u8], pCabacCtx: &mut SCabacCtx, pMbCache: &mut SMbCache) {
+pub fn WelsCabacMbIntra4x4PredMode(buf: &mut [u8], pCabacCtx: &mut SCabacCtx, pMbCache: &mut SMbCache) {
     unsafe {
         for iMode in 0..16 {
             let bPredFlag = (*pMbCache).bPrevIntra4x4PredModeFlag[iMode];
@@ -540,7 +540,7 @@ pub fn WelsMbSkipCabac(
 
 // unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
-pub unsafe fn WelsCabacMbRef(
+pub fn WelsCabacMbRef(
     buf: &mut [u8],
     pCabacCtx: &mut SCabacCtx,
     pMbCache: &mut SMbCache,
@@ -862,7 +862,7 @@ pub fn WelsCalNonZeroCount2x2Block(pBlock: &[i16; 4]) -> i32 {
 
 // unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
-pub unsafe fn WelsWriteMbResidualCabac(
+pub fn WelsWriteMbResidualCabac(
     buf: &mut [u8],
     pFuncList: &SWelsFuncPtrList,
     pSlice: &mut SSlice,

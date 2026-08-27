@@ -6261,3 +6261,63 @@ two writers (`ReallocateSliceList`, `ReallocateSliceInThread`) write
 `sSliceBufferInfo[slot]` for a bank T7.B2 made this worker's own, so their `&mut`
 projections cover sibling ranges rather than the shared struct — lawful, and
 unlike this one they are *used* for the write they take.
+
+---
+
+## F227 — C4a's `&mut [u16]` conversion took `as_mut_ptr()` **twice**, and the second call popped the first cursor's tag: F215's rule one container in, caught by the gate level above the one the checkpoint ran
+
+**S4, found by `gates.sh session` on the checkpoint *after* the one that
+introduced it.** C4a converted `MvdCostInit` from `(pMvdCostInter: *mut u16)` to
+`(pMvdCostInter: &mut [u16])` so the table's extent would travel with it. The body
+keeps two interleaved raw cursors — the C++ fills 52 QP rows from both ends at once
+— and the conversion derived them the obvious way:
+
+```rust
+let mut pNegMvd = pMvdCostInter.as_mut_ptr();
+let mut pPosMvd = pMvdCostInter.as_mut_ptr().offset((kiSz + 1) as isize);
+```
+
+`as_mut_ptr` takes `&mut self`. So the second call is a **fresh `Unique` retag over
+the whole slice**, and it pops the tag `pNegMvd` is still holding; the next write
+through `pNegMvd` is a write with a dead tag. Miri:
+
+```
+Undefined Behavior: attempting a write access using <654466> at alloc296457[0x0],
+  but that tag does not exist in the borrow stack for this location
+  --> md.rs:1946   *pNegMvd = kiLambda.wrapping_mul(BsSizeSE(iNegSe) as u16);
+  <654466> was created by a SharedReadWrite retag at offsets [0x0..0x1aafa]
+```
+
+**This is F215 exactly, one container in.** F215 says a `&mut self` *accessor* on
+the context is a fresh whole-struct `Unique` per call, so two raw cursors may only
+coexist if they come off the same call. The identical rule holds for `&mut [T]`
+and `as_mut_ptr`, and the conversion that introduces a slice parameter is precisely
+where it becomes easy to write two derivations without noticing — the old code took
+its two cursors off one raw parameter, where the question could not arise. The fix
+is one line: take the root once, and let both cursors be siblings of it.
+
+**What this says about gate levels, and it is the finding's point.** C4a was gated
+at `family`, per the S4 brief's rule that stage C runs `family` per checkpoint and
+reserves `session` for the seam files. `family` passed it whole — **sweeps 583/583
+byte-identical in both profiles**, 562 debug / 555 release, ratchet clean, census
+clean — because the defect changes no byte: both cursors compute the same addresses
+and write the same values, and Stacked Borrows is the only observer that objects.
+`family` does not run Miri. The defect survived a commit and was caught by the next
+checkpoint's `session` gate.
+
+So the brief's split is wrong in one specific way, and the correction is narrow:
+**a checkpoint that converts a raw parameter into a slice or reference is a Miri
+question regardless of which file it is in.** It is not the seam that makes Miri
+necessary — the seam is what makes the *MT probes* necessary. Byte gates cannot see
+a retag, which is F223's first rung, and F223 recorded it for the fork; this is the
+same rung reached single-threaded. Any checkpoint of this shape runs `session`.
+
+Two smaller notes worth keeping. The failure surfaced as **four Miri shards
+reporting `0 passed / 0 failed, rc=1`** rather than as a named test failure — the
+UB aborts the process, so the shard produces no totals. `gates.sh` fails loudly on
+a shard that ran zero tests (its own F17 rule, written for renamed probes) and that
+is what turned an unreadable rc into a legible verdict; without it the run would
+have looked like a filter that matched nothing. And the cost of catching it late
+was small only because the fix is one line: the checkpoint had already landed, so
+the correction rides in the following commit with this finding attached, rather
+than being amendable into the commit that caused it.
