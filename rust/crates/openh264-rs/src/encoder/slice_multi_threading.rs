@@ -1277,11 +1277,27 @@ pub struct SliceJobHandle {
 // occurrence count too, and F164's table in the findings is where the spellings
 // belong.)
 //
-// So the context split is **necessary and not sufficient**, and this is a
-// phase-exit item rather than a session item: the seam retires when the VAA family,
-// the coding parameters, the screen-content storage, the log context and the
-// preprocessor are all raw-free. Until then the soundness argument is three parts,
-// each verified rather than asserted:
+// **Settled at the phase exit — F205, session J, and the answer is structural.**
+// F195 showed why every count above is unreadable: that probe emits one error per
+// distinct *type*, so it cannot see a field retire whose type survives elsewhere.
+// Re-derived **by field** (one `Sync` question per member of the context), the
+// twelve types are **seven fields**, and their owners are five:
+//
+//   pSliceThreading   the field itself                 the ctx split's
+//   pOut              the field itself                 the ctx split's
+//   pVpp              the field itself                 the preprocessor's
+//   pVaa              SVAAFrameInfo's six plane cursors    the VAA family's
+//   ppDqLayerList     SDqLayer::pRefList                   the layer family's
+//   ppRefPicListExt   SPicture::pScreenBlockFeatureStorage  **Phase 10's**
+//   sLogCtx           pLogCtx: *mut c_void                 **the C ABI's**
+//
+// The last line is the one that decides this comment's future: `SLogContext` holds
+// the *application's* opaque handle, set through `SetOption(TRACE_CALLBACK)`, and
+// no amount of internal conversion can make a caller-owned `void*` `Sync`. So the
+// seam does not retire when the port finishes converting itself — it retires only
+// if that field stops being a member of the context, which is an API question and
+// not a safety one. It stays, per D-exit-2, and the soundness argument below is
+// what carries it. Three parts, each verified rather than asserted:
 //
 // **1 — disjointness is index-based, and the index is now static** (session A's
 // premise-1 proof, T7.A1). The only per-thread mutable state the encode reaches

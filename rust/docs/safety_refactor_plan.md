@@ -829,6 +829,30 @@ Two counting rules the script encodes, both learned the hard way:
 - **`unsafe fn` alone does not match `unsafe extern "C" fn`.** Phase 0's T5b deleted 113 definitions spelled that way and the naive pattern reported no change at all. The pattern is `unsafe (extern "C" )?fn`.
 - **That pattern also matches function-pointer *types*** — `Option<unsafe extern "C" fn(..)>` occurs ~210 times in the dispatch tables. Definitions are therefore counted **line-anchored**; the pointer types show up in `raw_ptr`/`transmute`, which is where Phase 4 will show its work. Baseline at `956a8c07`: `unsafe_fn` 1372, `unsafe_block` 507, `raw_ptr` 5390, `transmute` 23, `unsafe_impl` 11, `mem_zeroed` 26, `no_mangle` 42, `SHIM(` 0. (§1.1's "~922 `unsafe fn`" was the naive count; 1372 is the real one.) A third rule, from Phase 9 session E3's close: **a session's metric delta is measured by one instrument at both ends — `report` (live) at start and close.** The baseline JSON is the gate's memory, not the measurement: it may lag a close (session F left it at 1650 against a live 1635) or be regenerated mid-session, and differencing it across sessions produced E3's reported −63 against a live −49. A fourth rule, from the drift the first three permitted: **every session close regenerates the baseline downward** (`generate` at the close is routine and needs no justification; only an increase is a "rebaseline" carrying a reason). Between E3 and H3 no close regenerated it, and the per-file guard silently accumulated 249 raw_ptr of headroom — a stale-high snapshot is a loosened ratchet, the S58/S61 class in the ratchet itself. Session J refreshes it after F178's fix and the practice binds from then on.
 
+**The ratchet's remaining job, from Phase 9's close onward (session J, exit
+condition 6).** With `#![deny(unsafe_code)]` at the crate root, a *new* `unsafe`
+anywhere is a compile error unless the item carries a tagged
+`#[allow(unsafe_code)]` — so the compiler, not the ratchet, is what stops new
+unsafe from appearing silently. What the ratchet still does that the compiler
+cannot:
+
+1. **Watch `src/api/`'s size.** The C-ABI island is the one surface that stays
+   unsafe forever, so its *growth* is the number worth a gate: `api/codec_api.rs`
+   45 `allow(unsafe_code)` items and `api/abi_guard.rs` 0 at Phase 9's exit.
+   A rise there means the boundary is widening, which is a design change and
+   should be argued, not absorbed.
+2. **Watch the queue shrink.** `port-raw(Phase 9)`/`cursor` (306 at the exit,
+   itemized in `phase9_disposition.md`) may only fall — D-exit-1, unchanged.
+3. **Refuse a silent rebaseline.** `generate` at a session close is routine
+   *downward*; an increase carries its reason in the same commit. F178's fix
+   (comments no longer counted) is the last legitimate large jump: `raw_ptr`
+   1338 → 1181, `shim` 32 → 0, `transmute` 4 → 0, `mem_zeroed` 16 → 3,
+   `no_mangle` 10 → 7 — each exactly its measured prose count.
+
+The metrics themselves are now closer to their floors than to their starts, and
+two (`shim`, `transmute`) are **at** zero, so the interesting signal has moved
+from "is the total falling" to "is `api/` holding still".
+
 ### 7.2 The gate battery (every merge)
 0. Both build profiles compile and agree (debug **and** `--release`; the pre-Phase-0 release segfault means any debug/release divergence is treated as UB evidence, not flakiness).
 1. `cargo test` and `cargo test --release` — all green, `#[ignore]` set unchanged.
