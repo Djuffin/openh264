@@ -67,7 +67,6 @@ use crate::{
 pub use crate::encoder::encoder_context::EWelsSliceType;
 use crate::encoder::encoder_context::{
     ctx_dq_layer, ctx_param,
-    ctx_func_list,
 };
 
 pub const P_SLICE: i32 = 0;
@@ -1883,7 +1882,7 @@ pub unsafe fn WelsIMbChromaEncode(pEncCtx: *mut sWelsEncCtx, pCurMb: &mut SMB, p
     // non-zero-count / chroma-CBP step: without it `pCurRS` reached the IDCT holding
     // raw DCT coefficients, `pCurMb->uiCbp` never got its chroma bits and
     // `pNonZeroCount[16..24]` stayed zero, so no chroma residual was ever coded.
-    let pFunc = ctx_func_list(pEncCtx);
+    let pFunc = (*pEncCtx).func_list();
     let pfDctFourT4 = (*pFunc).pfDctFourT4.expect("pfDctFourT4 unset");
 
     //cb
@@ -1935,7 +1934,7 @@ pub unsafe fn WelsPMbChromaEncode(pEncCtx: *mut sWelsEncCtx, pSlice: &mut SSlice
     // deriving it from `iUV`.
     let kiBestPredOff = mem_pred_chroma_off((*pMbCache).uiMemPredLumaHalf);
 
-    let pFunc = ctx_func_list(pEncCtx);
+    let pFunc = (*pEncCtx).func_list();
     let dct = (*pFunc).pfDctFourT4.expect("pfDctFourT4 unset");
     dct(
         std::ptr::addr_of_mut!((*pMbCache).sCoeffLevel).cast::<i16>().add(256),
@@ -2123,7 +2122,8 @@ pub unsafe fn WelsISliceMdEnc(pEncCtx: *mut sWelsEncCtx, pSlice: &mut SSlice) ->
 
     loop {
         if !kbCabac {
-            if let Some(func_list) = ctx_func_list(pEncCtx).as_ref() {
+            {  // A6: the block is the shared borrow's scope (F191/F212)
+                let func_list = (*pEncCtx).func_list();
                 func_list
                     .eEntropyCoder
                     .StashMBStatus(slice_bs_buffer(pEncCtx, std::ptr::addr_of_mut!((*pSlice).sSliceBs), (*pSlice).uiBufferIdx as usize), slice_writer(pEncCtx, std::ptr::addr_of_mut!((*pSlice).sSliceBs)), &mut sDss, std::ptr::addr_of_mut!((*pSlice).sCabacCtx), (*pSlice).uiLastMbQp, 0);
@@ -2137,7 +2137,8 @@ pub unsafe fn WelsISliceMdEnc(pEncCtx: *mut sWelsEncCtx, pSlice: &mut SSlice) ->
             iCurMbIdx,
         );
 
-        if let Some(func_list) = ctx_func_list(pEncCtx).as_ref() {
+        {  // A6: the block is the shared borrow's scope (F191/F212)
+            let func_list = (*pEncCtx).func_list();
             func_list
                 .pfRc
                 .WelsRcMbInit(pEncCtx as *mut _, mbs.cur_mut(), &mut *pSlice);
@@ -2160,14 +2161,16 @@ pub unsafe fn WelsISliceMdEnc(pEncCtx: *mut sWelsEncCtx, pSlice: &mut SSlice) ->
             UpdateNonZeroCountCache(mbs.cur(), &mut *pMbCache);
 
             let mut iEncReturn = ENC_RETURN_SUCCESS;
-            if let Some(func_list) = ctx_func_list(pEncCtx).as_ref() {
+            {  // A6: the block is the shared borrow's scope (F191/F212)
+                let func_list = (*pEncCtx).func_list();
                 iEncReturn = func_list
                     .eEntropyCoder
                     .WelsSpatialWriteMbSyn(pEncCtx, pSlice, &mut mbs);
             }
 
             if !kbCabac && iEncReturn == ENC_RETURN_VLCOVERFLOWFOUND && mbs.cur().uiLumaQp < 50 {
-                if let Some(func_list) = ctx_func_list(pEncCtx).as_ref() {
+                {  // A6: the block is the shared borrow's scope (F191/F212)
+                    let func_list = (*pEncCtx).func_list();
                     func_list
                         .eEntropyCoder
                         .StashPopMBStatus(slice_bs_buffer(pEncCtx, std::ptr::addr_of_mut!((*pSlice).sSliceBs), (*pSlice).uiBufferIdx as usize), slice_writer(pEncCtx, std::ptr::addr_of_mut!((*pSlice).sSliceBs)), &mut sDss, std::ptr::addr_of_mut!((*pSlice).sCabacCtx));
@@ -2186,7 +2189,8 @@ pub unsafe fn WelsISliceMdEnc(pEncCtx: *mut sWelsEncCtx, pSlice: &mut SSlice) ->
         mbs.cur_mut().uiSliceIdc = kiSliceIdx as u16;
 
         let pMbCache = &mut pSlice.sMbCacheInfo;
-        if let Some(func_list) = ctx_func_list(pEncCtx).as_ref() {
+        {  // A6: the block is the shared borrow's scope (F191/F212)
+            let func_list = (*pEncCtx).func_list();
             if let Some(func) = func_list.pfMdBackgroundInfoUpdate {
                 func(pCurLayer, mbs.cur_mut(), pMbCache.bCollocatedPredFlag, I_SLICE);
             }
@@ -2257,7 +2261,8 @@ pub unsafe fn WelsISliceMdEncDynamic(pEncCtx: *mut sWelsEncCtx, pSlice: &mut SSl
             iCurMbIdx,
         );
 
-        if let Some(func_list) = ctx_func_list(pEncCtx).as_ref() {
+        {  // A6: the block is the shared borrow's scope (F191/F212)
+            let func_list = (*pEncCtx).func_list();
             func_list
                 .eEntropyCoder
                 .StashMBStatus(slice_bs_buffer(pEncCtx, std::ptr::addr_of_mut!((*pSlice).sSliceBs), (*pSlice).uiBufferIdx as usize), slice_writer(pEncCtx, std::ptr::addr_of_mut!((*pSlice).sSliceBs)), &mut sDss, std::ptr::addr_of_mut!((*pSlice).sCabacCtx), (*pSlice).uiLastMbQp, 0);
@@ -2289,14 +2294,16 @@ pub unsafe fn WelsISliceMdEncDynamic(pEncCtx: *mut sWelsEncCtx, pSlice: &mut SSl
             UpdateNonZeroCountCache(mbs.cur(), &mut *pMbCache);
 
             let mut iEncReturn = ENC_RETURN_SUCCESS;
-            if let Some(func_list) = ctx_func_list(pEncCtx).as_ref() {
+            {  // A6: the block is the shared borrow's scope (F191/F212)
+                let func_list = (*pEncCtx).func_list();
                 iEncReturn = func_list
                     .eEntropyCoder
                     .WelsSpatialWriteMbSyn(pEncCtx, pSlice, &mut mbs);
             }
 
             if iEncReturn == ENC_RETURN_VLCOVERFLOWFOUND && mbs.cur().uiLumaQp < 50 {
-                if let Some(func_list) = ctx_func_list(pEncCtx).as_ref() {
+                {  // A6: the block is the shared borrow's scope (F191/F212)
+                    let func_list = (*pEncCtx).func_list();
                     func_list
                         .eEntropyCoder
                         .StashPopMBStatus(slice_bs_buffer(pEncCtx, std::ptr::addr_of_mut!((*pSlice).sSliceBs), (*pSlice).uiBufferIdx as usize), slice_writer(pEncCtx, std::ptr::addr_of_mut!((*pSlice).sSliceBs)), &mut sDss, std::ptr::addr_of_mut!((*pSlice).sCabacCtx));
@@ -2312,7 +2319,8 @@ pub unsafe fn WelsISliceMdEncDynamic(pEncCtx: *mut sWelsEncCtx, pSlice: &mut SSl
             break;
         }
 
-        if let Some(func_list) = ctx_func_list(pEncCtx).as_ref() {
+        {  // A6: the block is the shared borrow's scope (F191/F212)
+            let func_list = (*pEncCtx).func_list();
             sDss.iCurrentPos = func_list.eEntropyCoder.GetBsPosition(slice_writer(pEncCtx, std::ptr::addr_of_mut!((*pSlice).sSliceBs)), std::ptr::addr_of!((*pSlice).sCabacCtx));
         }
 
@@ -2323,7 +2331,8 @@ pub unsafe fn WelsISliceMdEncDynamic(pEncCtx: *mut sWelsEncCtx, pSlice: &mut SSl
             mbs.cur().iMbXY,
             &mut sDss,
         ) {
-            if let Some(func_list) = ctx_func_list(pEncCtx).as_ref() {
+            {  // A6: the block is the shared borrow's scope (F191/F212)
+                let func_list = (*pEncCtx).func_list();
                 func_list
                     .eEntropyCoder
                     .StashPopMBStatus(slice_bs_buffer(pEncCtx, std::ptr::addr_of_mut!((*pSlice).sSliceBs), (*pSlice).uiBufferIdx as usize), slice_writer(pEncCtx, std::ptr::addr_of_mut!((*pSlice).sSliceBs)), &mut sDss, std::ptr::addr_of_mut!((*pSlice).sCabacCtx));
@@ -2336,7 +2345,8 @@ pub unsafe fn WelsISliceMdEncDynamic(pEncCtx: *mut sWelsEncCtx, pSlice: &mut SSl
 
         mbs.cur_mut().uiSliceIdc = kiSliceIdx as u16;
 
-        if let Some(func_list) = ctx_func_list(pEncCtx).as_ref() {
+        {  // A6: the block is the shared borrow's scope (F191/F212)
+            let func_list = (*pEncCtx).func_list();
             func_list.pfRc.WelsRcMbInfoUpdate(
                 pEncCtx as *mut _,
                 mbs.cur_mut(),
@@ -2440,7 +2450,8 @@ pub unsafe fn WelsMdInterMbLoop(
 
     loop {
         if !kbCabac {
-            if let Some(func_list) = ctx_func_list(pEncCtx).as_ref() {
+            {  // A6: the block is the shared borrow's scope (F191/F212)
+                let func_list = (*pEncCtx).func_list();
                 func_list.eEntropyCoder.StashMBStatus(
                     slice_bs_buffer(pEncCtx, std::ptr::addr_of_mut!((*pSlice).sSliceBs), (*pSlice).uiBufferIdx as usize),
                     slice_writer(pEncCtx, std::ptr::addr_of_mut!((*pSlice).sSliceBs)),
@@ -2460,7 +2471,8 @@ pub unsafe fn WelsMdInterMbLoop(
         );
 
         //step(1): set QP for the current MB
-        if let Some(func_list) = ctx_func_list(pEncCtx).as_ref() {
+        {  // A6: the block is the shared borrow's scope (F191/F212)
+            let func_list = (*pEncCtx).func_list();
             func_list
                 .pfRc
                 .WelsRcMbInit(pEncCtx as *mut _, mbs.cur_mut(), &mut *pSlice);
@@ -2483,7 +2495,8 @@ pub unsafe fn WelsMdInterMbLoop(
 
         loop {
             WelsInitInterMDStruc(mbs.cur(), pMvdCostTable, kiMvdInterTableStride, pMd);
-            if let Some(func_list) = ctx_func_list(pEncCtx).as_ref() {
+            {  // A6: the block is the shared borrow's scope (F191/F212)
+                let func_list = (*pEncCtx).func_list();
                 if let Some(func) = func_list.pfInterMd {
                     func(pEncCtx, pMd, &mut *pSlice, &mut mbs);
                 }
@@ -2522,14 +2535,16 @@ pub unsafe fn WelsMdInterMbLoop(
             UpdateNonZeroCountCache(mbs.cur(), &mut *pMbCache);
 
             let mut iEncReturn = ENC_RETURN_SUCCESS;
-            if let Some(func_list) = ctx_func_list(pEncCtx).as_ref() {
+            {  // A6: the block is the shared borrow's scope (F191/F212)
+                let func_list = (*pEncCtx).func_list();
                 iEncReturn = func_list
                     .eEntropyCoder
                     .WelsSpatialWriteMbSyn(pEncCtx, pSlice, &mut mbs);
             }
 
             if !kbCabac && iEncReturn == ENC_RETURN_VLCOVERFLOWFOUND && mbs.cur().uiLumaQp < 50 {
-                if let Some(func_list) = ctx_func_list(pEncCtx).as_ref() {
+                {  // A6: the block is the shared borrow's scope (F191/F212)
+                    let func_list = (*pEncCtx).func_list();
                     (*pSlice).iMbSkipRun = func_list.eEntropyCoder.StashPopMBStatus(
                         slice_bs_buffer(pEncCtx, std::ptr::addr_of_mut!((*pSlice).sSliceBs), (*pSlice).uiBufferIdx as usize),
                         slice_writer(pEncCtx, std::ptr::addr_of_mut!((*pSlice).sSliceBs)),
@@ -2551,7 +2566,8 @@ pub unsafe fn WelsMdInterMbLoop(
         mbs.cur_mut().uiSliceIdc = kiSliceIdx as u16;
         OutputPMbWithoutConstructCsRsNoCopy(pEncCtx, pCurLayer, pSlice, mbs.cur());
 
-        if let Some(func_list) = ctx_func_list(pEncCtx).as_ref() {
+        {  // A6: the block is the shared borrow's scope (F191/F212)
+            let func_list = (*pEncCtx).func_list();
             func_list.pfRc.WelsRcMbInfoUpdate(
                 pEncCtx as *mut _,
                 mbs.cur_mut(),
@@ -2624,7 +2640,8 @@ pub unsafe fn WelsMdInterMbLoopOverDynamicSlice(
     (*pSlice).iMbSkipRun = 0;
 
     loop {
-        if let Some(func_list) = ctx_func_list(pEncCtx).as_ref() {
+        {  // A6: the block is the shared borrow's scope (F191/F212)
+            let func_list = (*pEncCtx).func_list();
             func_list.eEntropyCoder.StashMBStatus(
                 slice_bs_buffer(pEncCtx, std::ptr::addr_of_mut!((*pSlice).sSliceBs), (*pSlice).uiBufferIdx as usize),
                 slice_writer(pEncCtx, std::ptr::addr_of_mut!((*pSlice).sSliceBs)),
@@ -2642,7 +2659,8 @@ pub unsafe fn WelsMdInterMbLoopOverDynamicSlice(
             iCurMbIdx,
         );
 
-        if let Some(func_list) = ctx_func_list(pEncCtx).as_ref() {
+        {  // A6: the block is the shared borrow's scope (F191/F212)
+            let func_list = (*pEncCtx).func_list();
             func_list
                 .pfRc
                 .WelsRcMbInit(pEncCtx as *mut _, mbs.cur_mut(), &mut *pSlice);
@@ -2674,7 +2692,8 @@ pub unsafe fn WelsMdInterMbLoopOverDynamicSlice(
         // TRY_REENCODING
         loop {
             WelsInitInterMDStruc(mbs.cur(), pMvdCostTable, kiMvdInterTableStride, pMd);
-            if let Some(func_list) = ctx_func_list(pEncCtx).as_ref() {
+            {  // A6: the block is the shared borrow's scope (F191/F212)
+                let func_list = (*pEncCtx).func_list();
                 if let Some(func) = func_list.pfInterMd {
                     func(pEncCtx, pMd, &mut *pSlice, &mut mbs);
                 }
@@ -2693,7 +2712,8 @@ pub unsafe fn WelsMdInterMbLoopOverDynamicSlice(
                     pMd,
                 );
             }
-            if let Some(func_list) = ctx_func_list(pEncCtx).as_ref() {
+            {  // A6: the block is the shared borrow's scope (F191/F212)
+                let func_list = (*pEncCtx).func_list();
                 if let Some(func) = func_list.pfMdBackgroundInfoUpdate {
                     func(
                         pCurLayer,
@@ -2706,14 +2726,16 @@ pub unsafe fn WelsMdInterMbLoopOverDynamicSlice(
             UpdateNonZeroCountCache(mbs.cur(), &mut *pMbCache);
 
             let mut iEncReturn = ENC_RETURN_SUCCESS;
-            if let Some(func_list) = ctx_func_list(pEncCtx).as_ref() {
+            {  // A6: the block is the shared borrow's scope (F191/F212)
+                let func_list = (*pEncCtx).func_list();
                 iEncReturn = func_list
                     .eEntropyCoder
                     .WelsSpatialWriteMbSyn(pEncCtx, pSlice, &mut mbs);
             }
 
             if iEncReturn == ENC_RETURN_VLCOVERFLOWFOUND && mbs.cur().uiLumaQp < 50 {
-                if let Some(func_list) = ctx_func_list(pEncCtx).as_ref() {
+                {  // A6: the block is the shared borrow's scope (F191/F212)
+                    let func_list = (*pEncCtx).func_list();
                     (*pSlice).iMbSkipRun = func_list.eEntropyCoder.StashPopMBStatus(
                         slice_bs_buffer(pEncCtx, std::ptr::addr_of_mut!((*pSlice).sSliceBs), (*pSlice).uiBufferIdx as usize),
                         slice_writer(pEncCtx, std::ptr::addr_of_mut!((*pSlice).sSliceBs)),
@@ -2732,7 +2754,8 @@ pub unsafe fn WelsMdInterMbLoopOverDynamicSlice(
             break;
         }
 
-        if let Some(func_list) = ctx_func_list(pEncCtx).as_ref() {
+        {  // A6: the block is the shared borrow's scope (F191/F212)
+            let func_list = (*pEncCtx).func_list();
             sDss.iCurrentPos = func_list.eEntropyCoder.GetBsPosition(slice_writer(pEncCtx, std::ptr::addr_of_mut!((*pSlice).sSliceBs)), std::ptr::addr_of!((*pSlice).sCabacCtx));
         }
 
@@ -2743,7 +2766,8 @@ pub unsafe fn WelsMdInterMbLoopOverDynamicSlice(
             mbs.cur().iMbXY,
             &mut sDss,
         ) {
-            if let Some(func_list) = ctx_func_list(pEncCtx).as_ref() {
+            {  // A6: the block is the shared borrow's scope (F191/F212)
+                let func_list = (*pEncCtx).func_list();
                 (*pSlice).iMbSkipRun = func_list.eEntropyCoder.StashPopMBStatus(
                     slice_bs_buffer(pEncCtx, std::ptr::addr_of_mut!((*pSlice).sSliceBs), (*pSlice).uiBufferIdx as usize),
                     slice_writer(pEncCtx, std::ptr::addr_of_mut!((*pSlice).sSliceBs)),
@@ -2760,7 +2784,8 @@ pub unsafe fn WelsMdInterMbLoopOverDynamicSlice(
         mbs.cur_mut().uiSliceIdc = kiSliceIdx as u16;
         OutputPMbWithoutConstructCsRsNoCopy(pEncCtx, pCurLayer, pSlice, mbs.cur());
 
-        if let Some(func_list) = ctx_func_list(pEncCtx).as_ref() {
+        {  // A6: the block is the shared borrow's scope (F191/F212)
+            let func_list = (*pEncCtx).func_list();
             func_list.pfRc.WelsRcMbInfoUpdate(
                 pEncCtx as *mut _,
                 mbs.cur_mut(),
@@ -3171,7 +3196,7 @@ pub unsafe fn WelsCodeOneSlice(pEncCtx: *mut sWelsEncCtx, pCurSlice: &mut SSlice
         pCurLayer,
         &mut *pCurSlice,
         // T6.I1: was guarded on the table being non-null; it is owned now.
-        (*ctx_func_list(pEncCtx)).pParametersetStrategy.as_deref(),
+        (*pEncCtx).func_list().pParametersetStrategy.as_deref(),
     );
 
     let pic_init_qp = if !layer_pps(pEncCtx, pCurLayer).is_null() {

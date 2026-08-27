@@ -34,7 +34,6 @@ use crate::encoder::encoder_context::{
     ctx_stride_enc_block_offset,
     sWelsEncCtx, SDqIdc, SLogContext, SRefList, SStrideTables, SSubsetSps, SWelsPPS,
     SWelsSPS, BASE_DEPENDENCY_ID,
-    ctx_func_list,
 };
 use crate::encoder::md::INTRA_4x4_MODE_NUM;
 use crate::encoder::param_svc::{
@@ -222,7 +221,7 @@ pub unsafe fn AcquireLayersNals(
 
     // T6.I1: a `pFuncList.is_null()` guard was here; the table is owned now.
     // count parasets
-    let Some(pStrategy) = (*ctx_func_list(*ppCtx)).pParametersetStrategy.as_mut() else {
+    let Some(pStrategy) = (**ppCtx).func_list_mut().pParametersetStrategy.as_mut() else {
         return 1;
     };
     iCountNumNals += 1
@@ -883,7 +882,7 @@ pub unsafe fn InitDqLayers(
     // `GenerateNewSps`/`InitPps` take `*ppCtx`, and reaching the strategy through the
     // context while a `&mut` to it is live would alias. Same reason as
     // `WelsWriteParameterSets`; T4b.2a.
-    if (*ctx_func_list(*ppCtx)).pParametersetStrategy.is_none() {
+    if (**ppCtx).func_list().pParametersetStrategy.is_none() {
         return 1;
     }
     let kiNeededSpsNum = ParasetStrategy(*ppCtx).GetNeededSpsNum() as i32;
@@ -2463,12 +2462,35 @@ pub unsafe fn PreprocessSliceCoding(pCtx: &mut sWelsEncCtx) {
     // one per call. This is the function the whole step-1 checker is about — it is
     // where the table is re-written *per frame*, which is why no reader may hold
     // anything derived from it across a call that reaches it again.
-    let fl: &mut SWelsFuncPtrList = &mut *ctx_func_list(pCtx);
+    // **§4.6, reorder, and it is the whole of what A6's flip costs at this body.**
+    // Every context read below is lifted above the table's `&mut`: the usage
+    // type, the slice type, the two layer ids, the NAL priority, the dependency
+    // layer's highest temporal id, and the two layer facts `pfInterMd` is chosen
+    // from. Nothing moves relative to anything else — none of these fields is
+    // written by this body — so it is behaviour-preserving by construction. And
+    // the fact that the compiler *demanded* it is F212's point: the table's
+    // re-write can no longer coexist with any reader of the context.
+    let kiUsageType = (*ctx_param(pCtx)).iUsageType;
+    let keSliceType = pCtx.eSliceType;
+    let kiCurDid = pCtx.uiDependencyId as usize;
+    let kiCurTid = pCtx.uiTemporalId as i32;
+    let keNalPriority = pCtx.eNalPriority;
+    let kiHighestTemporalId =
+        (*ctx_param(pCtx)).sDependencyLayers[kiCurDid].iHighestTemporalId as i32;
+    let kbBaseAvail = (*pCurLayer).bBaseLayerAvailableFlag;
+    let kbHighestSpatial = if !ctx_param(pCtx).is_null() {
+        (*ctx_param(pCtx)).iSpatialLayerNum
+            == ((*pCurLayer).sLayerInfo.sNalHeaderExt.uiDependencyId as i32 + 1)
+    } else {
+        true
+    };
+
+    let fl: &mut SWelsFuncPtrList = pCtx.func_list_mut();
 
     // function pointers conditional assignment under sWelsEncCtx
-    if ((*ctx_param(pCtx)).iUsageType == CAMERA_VIDEO_REAL_TIME && bFastMode)
-        || ((*ctx_param(pCtx)).iUsageType == SCREEN_CONTENT_REAL_TIME
-            && pCtx.eSliceType == EWelsSliceType::P_SLICE
+    if (kiUsageType == CAMERA_VIDEO_REAL_TIME && bFastMode)
+        || (kiUsageType == SCREEN_CONTENT_REAL_TIME
+            && keSliceType == EWelsSliceType::P_SLICE
             && bFastMode)
     {
         SetFastCodingFunc(fl);
@@ -2476,7 +2498,7 @@ pub unsafe fn PreprocessSliceCoding(pCtx: &mut sWelsEncCtx) {
         SetNormalCodingFunc(fl);
     }
 
-    if pCtx.eSliceType == EWelsSliceType::P_SLICE {
+    if keSliceType == EWelsSliceType::P_SLICE {
         for i in 0..EStaticBlockIdc::BLOCK_STATIC_IDC_ALL as usize {
             fl.pfMotionSearch[i] =
                 Some(crate::encoder::svc_motion_estimate::WelsMotionEstimateSearch);
@@ -2525,14 +2547,11 @@ pub unsafe fn PreprocessSliceCoding(pCtx: &mut sWelsEncCtx) {
     (*pCurLayer).bSatdInMdFlag =
         sdf.pfMeCost == CostFamily::Satd && sdf.pfMdCost == CostFamily::Satd;
 
-    let kiCurDid = pCtx.uiDependencyId as usize;
-    let kiCurTid = pCtx.uiTemporalId as i32;
-    let pDep = &(*ctx_param(pCtx)).sDependencyLayers[kiCurDid];
     if (*pCurLayer).bDeblockingParallelFlag
         && (*pCurLayer).iLoopFilterDisableIdc != 1
         // ENABLE_FRAME_DUMP is not defined, so this clause is compiled in.
-        && pCtx.eNalPriority != EWelsNalRefIdc::NRI_PRI_LOWEST
-        && (pDep.iHighestTemporalId == 0 || kiCurTid < pDep.iHighestTemporalId as i32)
+        && keNalPriority != EWelsNalRefIdc::NRI_PRI_LOWEST
+        && (kiHighestTemporalId == 0 || kiCurTid < kiHighestTemporalId)
     {
         fl.pfDeblocking.pfDeblockingFilterSlice =
             Some(crate::encoder::deblocking::DeblockingFilterSliceAvcbase);
@@ -2551,13 +2570,6 @@ pub unsafe fn PreprocessSliceCoding(pCtx: &mut sWelsEncCtx) {
     // race no longer aborted the run first. F71's pattern (T7.C3): the
     // loop-invariant write hoists to the frame level, before anything spawns;
     // the per-slice readers see the same value in the same order.
-    let kbBaseAvail = (*pCurLayer).bBaseLayerAvailableFlag;
-    let kbHighestSpatial = if !ctx_param(pCtx).is_null() {
-        (*ctx_param(pCtx)).iSpatialLayerNum
-            == ((*pCurLayer).sLayerInfo.sNalHeaderExt.uiDependencyId as i32 + 1)
-    } else {
-        true
-    };
     fl.pfInterMd = if kbBaseAvail && kbHighestSpatial {
         Some(crate::encoder::svc_mode_decision::WelsMdInterMbEnhancelayer)
     } else {
@@ -2638,11 +2650,11 @@ pub unsafe fn WriteSavcParaset(
     // Re-acquired here and again for the PPS below rather than held across the two
     // writes: `WelsWriteOneSPS`/`WelsWriteOnePPS` reach this same object through
     // `pCtx->pFuncList`. T4b.2a.
-    if let Some(pStrategy) = (*ctx_func_list(pCtx)).pParametersetStrategy.as_mut() {
-        pStrategy.Update(
-            pCtx.sps_array()[iIdx as usize].uiSpsId,
-            PARA_SET_TYPE_AVCSPS as i32,
-        );
+    // §4.6, reorder: the id is read out of the array before the strategy's `&mut`
+    // — two different fields of one context, and the id is a scalar.
+    let iId = pCtx.sps_array()[iIdx as usize].uiSpsId;
+    if let Some(pStrategy) = pCtx.func_list_mut().pParametersetStrategy.as_mut() {
+        pStrategy.Update(iId, PARA_SET_TYPE_AVCSPS as i32);
     }
 
     let mut iReturn =
@@ -2672,11 +2684,11 @@ pub unsafe fn WriteSavcParaset(
 
     // --- PPS ---
     iNalSize = 0;
-    if let Some(pStrategy) = (*ctx_func_list(pCtx)).pParametersetStrategy.as_mut() {
-        pStrategy.Update(
-            pCtx.pps_array()[iIdx as usize].iPpsId,
-            PARA_SET_TYPE_PPS as i32,
-        );
+    // §4.6, reorder: the id is read out of the array before the strategy's `&mut`
+    // — two different fields of one context, and the id is a scalar.
+    let iId = pCtx.pps_array()[iIdx as usize].iPpsId;
+    if let Some(pStrategy) = pCtx.func_list_mut().pParametersetStrategy.as_mut() {
+        pStrategy.Update(iId, PARA_SET_TYPE_PPS as i32);
     }
     iReturn = crate::encoder::wels_encoder_ext::WelsWriteOnePPS(pCtx, iIdx, &mut iNalSize);
     if iReturn != ENC_RETURN_SUCCESS {
@@ -2867,7 +2879,7 @@ pub unsafe fn PrepareEncodeFrame(
         // The `else if let Some(f)` this replaces read as a second condition but
         // was the same slot as the `if` branch's: the discriminator is
         // `bSimulcastAVC` alone, and an absent callback made both arms no-ops.
-        let pfRc = (*ctx_func_list(pCtx)).pfRc;
+        let pfRc = pCtx.func_list().pfRc;
         if (*pSvcParam).bSimulcastAVC {
             pfRc.WelsUpdateBufferWhenSkip(pCtx, *iCurDid as i32);
         } else {
@@ -3394,7 +3406,7 @@ pub unsafe fn WelsEncoderEncodeExt(
         return iRet;
     }
 
-    (*ctx_func_list(pCtx))
+    pCtx.func_list()
         .pfRc
         .WelsUpdateMaxBrWindowStatus(pCtx, iSpatialNum, (*pFbi).uiTimeStamp);
 
@@ -3645,7 +3657,7 @@ pub unsafe fn WelsEncoderEncodeExt(
         );
         // update reference picture for the current DQ layer
         PrefetchReferencePicture(pCtx, eFrameType);
-        (*ctx_func_list(pCtx))
+        pCtx.func_list()
             .pfRc
             .WelsRcPictureInit(pCtx, (*pFbi).uiTimeStamp);
         // MUST be called after pfWelsRcPictureInit() and WelsInitCurrentLayer()
@@ -3936,7 +3948,7 @@ pub unsafe fn WelsEncoderEncodeExt(
 
         // `None` here meant "never take this path", which is what the method's
         // empty arms return: `false`.
-        if (*ctx_func_list(pCtx))
+        if pCtx.func_list()
             .pfRc
             .WelsRcPostFrameSkipping(pCtx, iCurDid as i32, (*pFbi).uiTimeStamp)
         {
@@ -3946,7 +3958,7 @@ pub unsafe fn WelsEncoderEncodeExt(
             iFrameSize = 0;
             iLayerNum = 0;
 
-            (*ctx_func_list(pCtx))
+            pCtx.func_list()
                 .pfRc
                 .WelsUpdateBufferWhenSkip(pCtx, iSpatialNum);
 
@@ -3966,7 +3978,7 @@ pub unsafe fn WelsEncoderEncodeExt(
             crate::encoder::deblocking::PerformDeblockingFilter(pCtx);
         }
 
-        (*ctx_func_list(pCtx))
+        pCtx.func_list()
             .pfRc
             .WelsRcPictureInfoUpdate(pCtx, iLayerSize);
         iFrameSize += iLayerSize;
@@ -3981,7 +3993,7 @@ pub unsafe fn WelsEncoderEncodeExt(
         }
 
         // update scc related
-        if let Some(f) = (*ctx_func_list(pCtx)).pfUpdateFMESwitch {
+        if let Some(f) = pCtx.func_list().pfUpdateFMESwitch {
             f(current_layer(pCtx));
         }
 

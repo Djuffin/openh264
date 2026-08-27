@@ -73,10 +73,10 @@ use crate::encoder::param_svc::GetLogFactor;
 use crate::encoder::param_svc::SExistingParasetList;
 use crate::encoder::svc_motion_estimate::CheckInRangeCloseOpen;
 use crate::encoder::encoder_context::{
+    ctx_func_list_raw,
     ctx_param,
     SParaSetOffsetVariable, MAX_DQ_LAYER_NUM,
     MAX_PPS_COUNT, PARA_SET_TYPE,
-    ctx_func_list,
 };
 use crate::encoder::encoder_ext::{
     GetMultipleThreadIdc, WelsInitEncoderExt, WelsUninitEncoderExt,
@@ -502,7 +502,7 @@ pub unsafe fn WelsWriteParameterSets(
     // is gone — a `&mut sWelsEncCtx` cannot be null. The rest is unchanged.
     if pNalLen.is_null()
         || pNumNal.is_null()
-        || (*ctx_func_list(pCtx)).pParametersetStrategy.is_none()
+        || pCtx.func_list().pParametersetStrategy.is_none()
     {
         return ENC_RETURN_UNEXPECTED;
     }
@@ -2664,8 +2664,12 @@ uiResolutionChangeTimes={}, uIDRReqNum={}, uIDRSentNum={}, uLTRSentNum=NA, iTota
                     // Re-point the dispatch table. Setting the field alone leaves
                     // the encoder running the previous mode's callbacks.
                     let iRCMode = (*ctx_param(pCtx)).iRCMode;
+                    // **A6: the second of the two derivations the flip could
+                    // not take** — see `ctx_func_list_raw`. `pCtx` here is
+                    // `Self::ctx_ptr`'s raw, so `func_list_mut` would mean a
+                    // whole-context `&mut` retag through a raw root.
                     WelsRcInitFuncPointers(
-                        &mut (*ctx_func_list(pCtx)).pfRc,
+                        &mut (*ctx_func_list_raw(pCtx)).pfRc,
                         iRCMode,
                     );
                 }
