@@ -242,6 +242,23 @@ to be wrong.
 
 ## 7. Exit conditions
 
+> **CLOSED 2026-08-27 by session J.** Each condition below is ticked with the
+> evidence that discharged it, or named as not met with the reason. Two are
+> amended by ruling (1 by D-exit-3, 4 in part by the user's mid-close direction);
+> nothing is silently downgraded.
+>
+> | # | condition | verdict | evidence |
+> |---|---|---|---|
+> | 1 | every module outside `api/` denies, zero `allow` items but the lawful categories | **MET AS AMENDED (D-exit-3)** | the lawful categories are now named and counted — `fork-shared(S63)` 204, `instrument(test)` 56, `C-ABI` 48 + 7, dormant 33, singles 3, `recon-seam` 2, `send-seam` 1 — and the **306** `port-raw`/`cursor` that remain are an *owned queue*, itemized per item in `phase9_disposition.md`, not a claim of completion. The original condition predates the S63 theorem (F146) and could not be met as written. |
+> | 2 | root `deny`; `libc` gone; raw only in ABI types and thunks | **MET, with the census** | `#![deny(unsafe_code)]` at `lib.rs` — and it immediately found the two files that had no per-file deny (F203). `libc` is out of `[dependencies]` (zero uses in `src/`; it serves the benches' `dlopen` and moved to `[dev-dependencies]`), so **the shipped cdylib has no dependencies at all**. The raw census is the queue: 306 tagged sites, not yet confined to the ABI. |
+> | 3 | a per-slot **READ** grep over every dispatch table (F139) | **MET** | 71 slots across `SWelsFuncPtrList` (48), `SSampleDealingFunc` (5), `SMeFuncs` (6) and the decoder's `SDeblockingFunc` (12): **zero with zero reads**. C2's three write-only families are gone and none regressed; `SWelsRcFunc` has no slots left at all. `phase9_disposition.md` §6.1. |
+> | 4 | `gates.sh exit` PASS unscoped — sweeps, benches, Miri, differential, gtest | **PARTLY MET — the Miri half was stopped by direction (F207)** | Green: sweeps **583/583 both profiles**, tests **561/554** (20 ignored), **both benches bit-identical** (30/30 encoder rows), ABI exports **7/7**, dlopen harness **14/14**, gtest **191/199 with the allowlist still exactly 8**, log referee **33/35**. Not run: the unscoped Miri `--lib`, both full-drive encode probes, the fork pair, the differential tests under Miri. F207 enumerates them; the tree's aliasing evidence is H3's close plus the argument that this session performed no conversions. |
+> | 5 | the perf position restated; D-perf-6 taken or re-deferred | **MET** | Both benches bit-identical. The position is quoted from the measured record — encoder cumulative **≈+10–12%** against D-perf-4's **+25%** median tripwire, unbreached by ~13 points — because the exit *cannot* re-derive it: the C++ reference now dispatches NEON where Phase 0 recorded none, so the Phase-0 table is a different instrument (**F206**). **D-perf-6 re-deferred explicitly** by the user, with a fresh `perfpair` anchor named as its precondition. |
+> | 6 | D4 and D5 put to the user; the ratchet's remaining job documented | **MET** | **D4 deferred post-queue** (the split is *not* mechanical: api 45 allow items against the core's 627, 582 of them in `encoder/`). **D5 declined** while the C++ reference is still the referee — this session found F199, F203 and F204 by reading both trees at the same identifier. **D6** ruled not-now (the i32 codes are the ABI's own return values). The ratchet's remaining job is written into plan §7.1: watch `api/`'s size, watch the queue shrink, refuse a silent rebaseline. |
+
+### The conditions as originally written
+
+
 1. Every module outside `src/api/` carries `#![deny(unsafe_code)]` **and has zero
    `#[allow(unsafe_code)]` items** except the lawful boundary categories, which by Phase 9's
    end are only `C-ABI`/`C-ABI(test)` (all `port-raw`, `cursor`, `MT`, `send-seam` retired),
