@@ -957,18 +957,18 @@ pub unsafe fn WelsMarkMMCORefInfoWithBase(
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe fn WelsMarkMMCORefInfo(
-    pCtx: &mut sWelsEncCtx,
-    pLtr: &mut SLTRState,
+    kuiGopSize: u32,
+    kbEnableLongTermReference: bool,
+    pLtr: &SLTRState,
     pCurDq: &mut SDqLayer,
     kiCountSliceNum: i32,
 ) {
-    // T9.H: the `pCtx.is_null()` disjunct is gone — a `&mut sWelsEncCtx`
-    // cannot be null and every caller now holds one.
-    // **T9.X**: `pLtr` follows it. The body never re-derives `ctx_ltr_at`, so the
-    // `&mut` minted at the call site is the only cursor to this `SLTRState` while
-    // the call runs, and the call is its caller's last statement — the raw root it
-    // is reborrowed from is never used again afterwards (T9.G7's hazard is a
-    // pop-then-use, and there is no use).
+    // **T9.H3 — narrowed (S54).** The context parameter is gone: the body read
+    // exactly two `ctx_param` scalars through it, and its single caller
+    // (`WelsMarkPic`) passes them by value now. The LTR state arrives as a
+    // shared borrow — the body only reads it — which the caller's own `&mut`
+    // re-borrows for the call, so no second route to the context exists inside
+    // and T9.X's protector argument is not needed at all.
     if kiCountSliceNum <= 0 {
         return;
     }
@@ -977,16 +977,15 @@ pub unsafe fn WelsMarkMMCORefInfo(
         return;
     }
     let pRefPicMark = &mut (*pBaseSlice).sSliceHeaderExt.sSliceHeader.sRefMarking;
-    let gopSize = (*ctx_param(pCtx)).uiGopSize;
-    let iGoPFrameNumInterval = if (gopSize >> 1) > 1 {
-        (gopSize >> 1) as i32
+    let iGoPFrameNumInterval = if (kuiGopSize >> 1) > 1 {
+        (kuiGopSize >> 1) as i32
     } else {
         1
     };
 
     *pRefPicMark = SRefPicMarking::default();
 
-    if (*ctx_param(pCtx)).bEnableLongTermReference && (*pLtr).bLTRMarkingFlag {
+    if kbEnableLongTermReference && (*pLtr).bLTRMarkingFlag {
         if (*pLtr).iLTRMarkMode == LTR_MARKING_PROCESS_MODE::LTR_DIRECT_MARK as i32 {
             let count0 = pRefPicMark.uiMmcoCount as usize;
             pRefPicMark.SMmcoRef[count0].iMaxLongTermFrameIdx = LONG_TERM_REF_NUM - 1;
@@ -1024,39 +1023,45 @@ pub unsafe fn WelsMarkPic(pCtx: &mut sWelsEncCtx) {
         return;
     }
     let uiDid = pCtx.uiDependencyId as usize;
-    // **T9.G7 — raw, not `&mut`.** This body holds the LTR state across calls that
-    // derive their own `&mut` to the *same* `SLTRState` (`LTRMarkProcess` and the
-    // rest re-derive `ctx_ltr_at(pCtx, uiDid)` for this same `uiDid`). Two Unique
-    // tags from one raw root are siblings, and the second pops the first — so the
-    // `&mut` binding was the hazard, not the holding. A raw cursor with a deref at
-    // each use is the port's own idiom and is what F66 says is sound here.
-    let pLtr = ctx_ltr_at(pCtx, (uiDid) as usize);
+    // **T9.H3 — the held cursor is gone.** T9.G7's note stood here: the body held
+    // the LTR state raw across `CheckCurMarkFrameNumUsed`, which re-derives its
+    // own borrow of the same `SLTRState`. Roots and scalars come first now; the
+    // marking decision reads the state through one short borrow that ends before
+    // that whole-context call, and the writes re-borrow after it, with the C++
+    // condition's short-circuit order preserved exactly — the check runs iff both
+    // cheap conjuncts held, and it only reads. The tail call reaches the context
+    // no second time (`WelsMarkMMCORefInfo` is narrowed to the two scalars it
+    // read, S54).
+    let pParam = ctx_param(pCtx);
+    let kuiTid = pCtx.uiTemporalId;
     let kiCountSliceNum = (*current_layer(pCtx)).iMaxSliceNum;
+    // T9.G6: hoisted — the argument reads through the context, so it is derived
+    // before the LTR borrows below (shape B).
+    let pCurLayerForMmco = &mut *current_layer(pCtx);
 
-    if (*ctx_param(pCtx)).bEnableLongTermReference && (*pLtr).bLTRMarkEnable && pCtx.uiTemporalId == 0 {
-        if !(*pLtr).bReceivedT0LostFlag
-            && (*pLtr).uiLtrMarkInterval > (*ctx_param(pCtx)).iLtrMarkPeriod as u32
-            && CheckCurMarkFrameNumUsed(pCtx)
-        {
-            (*pLtr).bLTRMarkingFlag = true;
-            (*pLtr).bLTRMarkEnable = false;
-            (*pLtr).uiLtrMarkInterval = 0;
+    if (*pParam).bEnableLongTermReference && (*ctx_ltr_at(pCtx, uiDid)).bLTRMarkEnable && kuiTid == 0 {
+        let pLtr = &*ctx_ltr_at(pCtx, uiDid);
+        let bMarkCandidate = !pLtr.bReceivedT0LostFlag
+            && pLtr.uiLtrMarkInterval > (*pParam).iLtrMarkPeriod as u32;
+        if bMarkCandidate && CheckCurMarkFrameNumUsed(pCtx) {
+            let pLtr = &mut *ctx_ltr_at(pCtx, uiDid);
+            pLtr.bLTRMarkingFlag = true;
+            pLtr.bLTRMarkEnable = false;
+            pLtr.uiLtrMarkInterval = 0;
             for i in 0..MAX_TEMPORAL_LAYER_NUM {
-                if (pCtx.uiTemporalId as usize) < i || pCtx.uiTemporalId == 0 {
-                    (*pLtr).iLastLtrIdx[i] = (*pLtr).iCurLtrIdx;
+                if (kuiTid as usize) < i || kuiTid == 0 {
+                    pLtr.iLastLtrIdx[i] = pLtr.iCurLtrIdx;
                 }
             }
         } else {
-            (*pLtr).bLTRMarkingFlag = false;
+            (*ctx_ltr_at(pCtx, uiDid)).bLTRMarkingFlag = false;
         }
     }
 
-    // T9.G6: hoisted — the call takes the context retag and this argument reads
-    // through the same context (shape B).
-    let pCurLayerForMmco = &mut *current_layer(pCtx);
     WelsMarkMMCORefInfo(
-        pCtx,
-        &mut *pLtr,
+        (*pParam).uiGopSize,
+        (*pParam).bEnableLongTermReference,
+        &*ctx_ltr_at(pCtx, uiDid),
         pCurLayerForMmco,
         kiCountSliceNum,
     );
