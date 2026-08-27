@@ -29,6 +29,7 @@ use crate::api::codec_api::{ELevelIdc, SSpatialLayerConfig};
 use crate::decoder::nalu::g_ksLevelLimits;
 use crate::encoder::encoder_context::{
     ctx_dq_idc_map, ctx_dq_layer, ctx_frame_bs, ctx_frame_bs_cur, ctx_ltr_at, ctx_mb_index_x,
+    ctx_paraset_arrays,
     ctx_mb_index_y, ctx_mvd_cost_table, ctx_param, ctx_ref_list, ctx_vaa,
     ctx_rc_at,
     ctx_pps_array, ctx_sps_array,
@@ -908,11 +909,17 @@ pub unsafe fn InitDqLayers(
     let kiNeededPpsNum = ParasetStrategy(*ppCtx).GetNeededPpsNum() as i32;
     (**ppCtx).pPPSArray = vec![crate::encoder::param_svc::SWelsPPS::ZERO; kiNeededPpsNum as usize];
 
+    // **T9.H2 — the ~36's blocker, dissolved.** This supplied the three arrays as
+    // three separate raw roots because three `&mut` out of one context, taken through
+    // three accessor calls, is what the borrow checker refuses. `ctx_paraset_arrays`
+    // answers all three from **one** borrow, which is legal precisely because the
+    // compiler can see the three fields are disjoint.
+    let (pSpsArray, pSubsetArray, pPpsArray) = ctx_paraset_arrays(&mut **ppCtx);
     ParasetStrategy(*ppCtx).LoadPrevious(
         pExistingParasetList,
-        ctx_sps_array(*ppCtx),
-        ctx_subset_array(*ppCtx),
-        ctx_pps_array(*ppCtx),
+        pSpsArray,
+        pSubsetArray,
+        pPpsArray,
     );
 
     // **T6.H3.** `SDqIdc` is four bytes of POD and its derived `Default` is the

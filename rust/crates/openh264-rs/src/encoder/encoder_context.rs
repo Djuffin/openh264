@@ -1051,6 +1051,33 @@ pub unsafe fn ctx_sps_array(pCtx: *mut sWelsEncCtx) -> *mut SWelsSPS {
     (*v).as_ptr() as *mut SWelsSPS
 }
 
+/// The three parameter-set arrays **at once, as disjoint borrows** — T9.H2, and the
+/// answer to the shape that blocked X2's ~36.
+///
+/// `LoadPrevious` (`paraset_strategy.rs`) writes all three in one call, and its call
+/// site supplied them as three separate `ctx_*_array(*ppCtx)` raws. Converting those
+/// to slices one accessor at a time is impossible — three `&mut` out of one context
+/// through three separate calls is what the borrow checker exists to refuse, and it
+/// is what the charter recorded as "`LoadPrevious`'s four-simultaneous-`&mut`
+/// projections shape, S63's forbidden retag exactly".
+///
+/// **The shape was never the problem; the call count was.** Rust permits
+/// `(&mut s.a, &mut s.b, &mut s.c)` from one `&mut s` inside a single body — the
+/// three fields are disjoint and the compiler can see it. What it cannot see is
+/// three accessor calls each claiming the whole context. So this is one call, and
+/// the block dissolves.
+///
+/// The three are `Vec`s on the context, so the returned slices borrow the *context*
+/// (not the buffers' provenance, which is what the raw spellings deliberately
+/// answered). That is the right trade here: the caller wants to write them, the
+/// borrow is short, and no cursor outlives it.
+#[inline]
+pub fn ctx_paraset_arrays(
+    pCtx: &mut sWelsEncCtx,
+) -> (&mut [SWelsSPS], &mut [SSubsetSps], &mut [SWelsPPS]) {
+    (&mut pCtx.pSpsArray, &mut pCtx.pSubsetArray, &mut pCtx.pPPSArray)
+}
+
 /// The **root** of `pCtx->pSubsetArray` — see [`ctx_sps_array`].
 ///
 /// # Safety
