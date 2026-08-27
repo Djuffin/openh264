@@ -8,7 +8,10 @@ its grep, a cited line gets read). Findings are numbered `F…` in
 `rust/docs/phase9_findings.md`; yours start at **F225** (the count prints 124
 today — check it). The operative plan is
 `rust/docs/safe_conversion_execution_plan.md` — read it first, its §10 amendments
-included; this session is its **stage D**, and stage B closed cleanly ahead of it.*
+included; this session is its **stages C and D** — stage C (C1–C6, the pixel land)
+was silently dropped from the roll-forward chain at the S2→S3 hand-off and caught
+at review before launch; it runs FIRST, because §8 makes each stage the next one's
+precondition and D was priced atop it. Stage B closed cleanly ahead of you.*
 
 ## Where S3 left the tree
 
@@ -134,9 +137,24 @@ S2 never got one either. You will produce the first.
 
 ## What S4 does
 
-**D1–D4, the plan as written, and then E1–E3 if the session holds.** Stage D is
-the biggest single block in the plan and `svc_encode_slice.rs` is its largest file
-(81 fn / 117 raw at the plan's census; re-measure).
+**C1–C6 first — the stage the roll chain dropped — then D1–D4, then E1–E3 if the
+session holds.** Fresh allow counts per file (`grep -c 'allow(unsafe_code)'`):
+
+| # | scope | allows today | notes |
+|---|---|---:|---|
+| **C1** | the 10 unsafe fn-pointer aliases in `wels_func_ptr_def.rs` → safe signatures (types, every impl, every dispatch) | 4 | one landing, so the table is never half-typed; the template is the intra-pred families (`&mut [u8; N]` + `&RecCursor`) |
+| **C2** | roving trios `pEncMb`/`pRefMb`/`pCsMb: [*mut u8; 3]` (`encoder_context.rs:158/:171/:172`, mirrored in `svc_mode_decision.rs`) → plane-id + offset pairs; `svc_encode_mb.rs` | 9 | |
+| **C3** | `svc_mode_decision.rs` + `svc_base_layer_md.rs` onto plane cursors | 42 + 22 | |
+| **C4** | `svc_motion_estimate.rs` + `md.rs` — SAD/search paths | 32 + 14 | **§10.4: bench before and after, inside the session** — C4 is a named perf watch point |
+| **C5** | screen-content feature arenas → `Vec` + index tables (`picture.rs` storage + ME mirrors) | — | dark code: the differential on the screen-content sweep before/after; containers only, semantics dormant |
+| **C6** | `wels_preprocess.rs` remaining + `processing/` wrappers | 44 + ~14 | |
+
+Stage C's checkpoints follow the same session-gate + MT-probe regime as D wherever
+they touch the seam files; elsewhere `family` per checkpoint suffices.
+
+**Then stage D.** It is the biggest single block in the plan and
+`svc_encode_slice.rs` is its largest file (81 fn / 117 raw at the plan's census;
+re-measure).
 
 | # | scope | notes |
 |---|---|---|
@@ -272,5 +290,7 @@ conversion; D1's bench numbers before and after and stage D's 3% check; the join
 and forksplit headlines before and after; both prohibitions plus the F208 scan at
 the close; **the MT probes' verdict at every landing that touches the seam, not
 just at the close**; the tracking number's movement with F224 read first; every
-place this brief was wrong, quoting the sentence; and the hand-off to S5 if stage
-E does not fit.
+place this brief was wrong, quoting the sentence; and the hand-off to S5 with an
+**explicit roll line naming every stage and checkpoint remaining** — the C-stage
+drop happened because a roll line named checkpoints instead of everything owed;
+do not repeat it.
