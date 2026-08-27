@@ -1448,13 +1448,14 @@ pub unsafe fn WelsUpdateRefListScreen(pCtx: &mut sWelsEncCtx) -> bool {
     if pRefList.is_null() || (*pRefList).pRef.is_empty() {
         return false;
     }
-    // **T9.G7 — raw, not `&mut`.** This body holds the LTR state across calls that
-    // derive their own `&mut` to the *same* `SLTRState` (`LTRMarkProcess` and the
-    // rest re-derive `ctx_ltr_at(pCtx, uiDid)` for this same `uiDid`). Two Unique
-    // tags from one raw root are siblings, and the second pops the first — so the
-    // `&mut` binding was the hazard, not the holding. A raw cursor with a deref at
-    // each use is the port's own idiom and is what F66 says is sound here.
-    let pLtr = ctx_ltr_at(pCtx, (uiDid) as usize);
+    // **T9.H3 — the held cursor is gone.** T9.G7's note stood here: the body held
+    // the LTR state raw across `LTRMarkProcessScreen`, which re-derives its own
+    // `&mut` to the *same* `SLTRState`. Nothing is held across those calls any
+    // more — each branch re-borrows `ctx_ltr_at` *after* its calls return, and the
+    // two reads in the `pDecPic` block borrow inline for one expression each. The
+    // borrow checker referees every coexistence; this function is dead code today
+    // (F192: screen-content mode is rejected at init), so the compiler is the
+    // *only* referee and the reshape moves derivations, never logic.
     let pParamD = std::ptr::addr_of_mut!((*ctx_param(pCtx)).sDependencyLayers[uiDid]);
     let kuiTid = pCtx.uiTemporalId;
 
@@ -1479,22 +1480,24 @@ pub unsafe fn WelsUpdateRefListScreen(pCtx: &mut sWelsEncCtx) -> bool {
         pDecPic.iFramePoc = (*pParamD).iPOC;
         pDecPic.bUsedAsRef = true;
         pDecPic.bIsLongRef = true;
-        pDecPic.bIsSceneLTR = (*pLtr).bLTRMarkingFlag
+        pDecPic.bIsSceneLTR = (*ctx_ltr_at(pCtx, uiDid)).bLTRMarkingFlag
             || ((*ctx_param(pCtx)).bEnableLongTermReference
                 && pCtx.eSliceType == EWelsSliceType::I_SLICE);
-        pDecPic.iLongTermPicNum = (*pLtr).iCurLtrIdx;
+        pDecPic.iLongTermPicNum = (*ctx_ltr_at(pCtx, uiDid)).iCurLtrIdx;
     }
 
     if pCtx.eSliceType == EWelsSliceType::P_SLICE {
         DeleteNonSceneLTR(pCtx);
         LTRMarkProcessScreen(pCtx);
-        (*pLtr).bLTRMarkingFlag = false;
-        (*pLtr).uiLtrMarkInterval += 1;
+        let pLtr = &mut *ctx_ltr_at(pCtx, uiDid);
+        pLtr.bLTRMarkingFlag = false;
+        pLtr.uiLtrMarkInterval += 1;
     } else {
         LTRMarkProcessScreen(pCtx);
-        (*pLtr).iCurLtrIdx = 1;
-        (*pLtr).iSceneLtrIdx = 1;
-        (*pLtr).uiLtrMarkInterval = 0;
+        let pLtr = &mut *ctx_ltr_at(pCtx, uiDid);
+        pLtr.iCurLtrIdx = 1;
+        pLtr.iSceneLtrIdx = 1;
+        pLtr.uiLtrMarkInterval = 0;
         if !ctx_vaa(pCtx).is_null() {
             (*ctx_vaa(pCtx)).uiValidLongTermPicIdx = 0;
         }
