@@ -1,140 +1,181 @@
-# Phase 9 — Session H3: the LTR accessor returns the reference — 75 sites, one shape, F3's neighbourhood
+# Phase 9 — Session H3: convert the long-term-reference accessor to return a real reference
 
-*Self-contained. Read top to bottom once; then work the steps in order. Every count
-below was measured at the commit this brief landed in, with the command beside it —
-re-run before quoting, trust the tree over this document (S68: this brief's
-predecessor was refuted by one grep). Your findings start at **F197** — verify with
-`grep -c '^## F' rust/docs/phase9_findings.md` (96 today).*
+*Self-contained: everything you need is explained here in plain words; numbers in
+parentheses (F…, S…, D…) point at entries in the project docs for deeper detail,
+but you should not need them to execute. Re-run every count before quoting it —
+trust the tree over this document. Findings are numbered `F…` in
+`rust/docs/phase9_findings.md`; yours start at **F197** (verify:
+`grep -c '^## F' rust/docs/phase9_findings.md` prints 96 today).*
 
 ## What this project is, in one paragraph
 
-`rust/crates/openh264-rs/` is a line-by-line Rust port of Cisco's OpenH264 (the C++
-is at the repo root, `codec/`). It ships as a drop-in `libopenh264` replacement and
-must stay **byte-identical** to the C++ on every stream the gates run. Phase 9 is the
-encoder's safety endgame: every file carries `#![deny(unsafe_code)]`, each raw site
-is tagged, and the phase retires them family by family. The plan is
-`rust/docs/safety_refactor_plan.md` (rules §7.6, S-numbers); the charter is
-`rust/docs/prompts/phase9.md`; findings are `rust/docs/phase9_findings.md`.
+`rust/crates/openh264-rs/` is a line-by-line Rust port of Cisco's OpenH264 (the
+C++ reference is at the repo root, `codec/`). It ships as a drop-in
+`libopenh264` replacement and must stay **byte-identical** to the C++ on every
+stream the test harness runs. Phase 9 is the encoder's safety endgame: every
+file carries `#![deny(unsafe_code)]`, each remaining raw-pointer site is tagged
+with a comment, and the phase retires them family by family. The master plan is
+`rust/docs/safety_refactor_plan.md` (its §7.6 holds the working rules, cited as
+S-numbers); the phase charter is `rust/docs/prompts/phase9.md`.
 
-## What session H3 is
+## What this session does
 
-One conversion, undiluted (D-scope-4): **`ctx_ltr_at` returns `&mut SLTRState`**,
-and `ctx_ltr` goes with it if the shape carries. H2 attempted this, measured it,
-and reverted under its own pre-set rule — and the measurement is your work list
-(F196): converted, the compiler reports **84 errors across 75 distinct sites — 49
-E0499, 28 E0503, 5 E0502, 1 E0506: 83 borrow conflicts, zero mechanical type
-errors**. The raw return is load-bearing at 75 sites, not the 4 an old comment
-documented, and every one of those sites is an unaudited coexistence of the LTR
-state with another use of the context. The remedy family is already proven in this
-tree: **split-borrows** (H2's `LoadPreviousStructure` precedent — disjoint field
-borrows out of one `&mut` context in one function; S63's clarifying clause), plus
-hoists, reorders, and S54 parameter-narrowing. Never a re-minted raw.
+One job. The encoder context struct `sWelsEncCtx` holds per-layer long-term-
+reference (LTR) state in a field `pLtr`. Two accessor functions hand that state
+out as **raw pointers**:
 
-**The care**: two of the four central bodies — `WelsUpdateRefList`
-(`ref_list_mgr_svc.rs:743`) and `WelsMarkPic` (`:1016`) — are live camera-path
-reference-list management in **F3's neighbourhood** (the project's historic
-byte-alternation flake). The other two — `WelsUpdateRefListScreen` (`:1440`),
-`WelsMarkPicScreen` (`:1647`) — are **dark** (F192 measured it: SCREEN_CONTENT is
-rejected at `RequestMemorySvc`), so their only referee is the compiler; their
-redesign stays minimal and Phase 10 revalidates when the path lives.
+- `ctx_ltr_at(pCtx: &mut sWelsEncCtx, kiDid) -> *mut SLTRState`
+  (`src/encoder/encoder_context.rs:910`) — one layer's LTR state;
+- `ctx_ltr(pCtx: &mut sWelsEncCtx) -> *mut SLTRState` (`:880`) — the array root.
 
-**Not this session**: `ctx_frame_bs`/`ctx_frame_bs_cur` (F193: **permanent raw
-returns by the ABI** — the cursor is stored into `SLayerBSInfo::pBsBuf`,
-`codec_app_def.h:640`, a public C-ABI field; the notes stand); `ctx_dq_idc_map`
-(J's inventory); the send-seam table (J re-derives it by field, F195);
-F187's refusals; anything in-fork (this family has none — below); no perf.
+This session makes `ctx_ltr_at` return **`&mut SLTRState`** (and converts
+`ctx_ltr` too if practical), then fixes everything that breaks.
 
-## Rules that never bend — gating per the user's standing directive
+The previous session already attempted this, captured the compiler's verdict,
+and deliberately reverted, leaving you the measurement (recorded as finding
+F196): with the accessor returning a reference, `cargo check` reports **84
+errors at 75 distinct call sites**, and the breakdown is what matters —
 
-- **Byte-identical every commit**: `gates.sh commit` before each; **`family`
-  (583/583 both profiles) after every body** — two of the four are live camera
-  path. `sweep.sh` refuses stale drivers; `diffharness/build.sh` after edits.
-- **F3's alternation discipline stands armed**: any sweep anomaly in or near
-  these bodies — a FAIL that does not reproduce, a short or zero-length output —
-  is adjudicated by the F3 protocol (S14; `phase0_findings.md`): 5/5 re-run
-  first; a second hit escalates to head-vs-control alternation under load;
-  verdicts go in the acquittal ledger. Never explain a flake away, never bisect
-  a phantom.
-- **No Miri between commits — the session gate once at the close** (S61: lane
-  wall beside H2's **551 s**, battery vs the 1200-s cap). **The fork pair is
-  not owed**: `ref_list_mgr_svc.rs` has zero in-fork bodies (the forksplit's
-  column) and `ctx_ltr`/`ctx_ltr_at` are ST accessors (F165) — this session
-  never touches what the fork reads. Say so in the close.
-- **The revert rule is inherited and binding** (H2's own): if a body's fix
-  turns from relocating bindings into rewriting logic, stop at the body
-  boundary, revert the incomplete body, and report the frontier — half-landed
-  is worse than reverted, and any leftover needs the user's sign-off.
-- **S68** on every count here; **S64** on any family you enumerate; **metrics
-  live at both ends** (§7.1: today `raw_ptr` **1345**, `unsafe_fn` **595**);
-  F178's prose caveat; no edits while a gate runs; one battery at a time.
+```
+49  E0499  cannot borrow `*pCtx` as mutable more than once
+28  E0503  cannot use `pCtx.…` because it was mutably borrowed
+ 5  E0502  mutable borrow conflicts with immutable borrow
+ 1  E0506  assignment to borrowed value
+---
+83 of 84 are borrow conflicts. ZERO are simple type errors.
+```
 
-## The facts, measured at this brief's commit
+Zero simple type errors means none of this is find-and-replace work. At 75
+places the code uses the LTR state **and** some other part of the context in
+the same expression or across the same call. A raw pointer lets that coexist
+silently; a real reference makes the borrow checker adjudicate every case.
+Making those 75 coexistences explicit and lawful is the whole session.
 
-- **The pair**: `ctx_ltr` (`encoder_context.rs:880`, the root —
-  `addr_of!(pCtx.pLtr)`) and `ctx_ltr_at` (`:910`, `pLtr[kiDid]`), both
-  `&mut sWelsEncCtx`-taking since H, both raw-returning under `cursor` tags.
-  Callers: `ctx_ltr_at` **28** mentions (`grep -rn 'ctx_ltr_at(' src | grep -v
-  'fn ctx_ltr_at'` — F196 counted 26 call sites, 22 of which immediately deref;
-  re-derive the split), `ctx_ltr` **5** (3 are sibling-derivation tests, some
-  possibly retired with F192's probes — re-check).
-- **The census** (F196, reproduced at H2's HEAD): 84 errors / 75 sites / 83
-  borrow conflicts / **zero mechanical**. The error kinds map to remedies:
-  E0503 (28) is usually a **hoist** — a context field read after the borrow
-  moves before it; E0499 (49) is a **split-borrow or narrowing** — the LTR
-  state and another context piece used in one breath become one helper's
-  disjoint returns, or the callee stops taking the whole context (S54);
-  E0502/E0506 (6) are read-side and assignment variants of the same. Classify
-  before editing.
-- **The four bodies** own the census's mass; the remaining sites are the
-  mechanical tail — 22 spellings of `&mut *ctx_ltr_at(..)` /
-  `&*ctx_ltr_at(..)` / `(*ctx_ltr_at(..)).field` that collapse to the direct
-  call once the bodies compile.
-- **The referees for the live pair**: the `ltr` preset (16 configs — LTR
-  feedback bitmask × intra period) and `mt`; a planted fault (S55/S59/S64)
-  must perturb a field that varies — the marked frame's identity or the
-  recovery-request check — and its honest failed-row count is quoted; a 0-row
-  reading escalates per F175 before it concludes anything.
+## Where the work concentrates, and why care is required
 
-## Steps
+Four functions in `src/encoder/ref_list_mgr_svc.rs` own most of the conflicts:
 
-0. **Reproduce the census** (S60 — run the instrument first, land nothing):
-   re-apply the flip (`-> &mut SLTRState`, body `&mut pCtx.pLtr[kiDid]`),
-   capture `cargo check`'s full error set, diff against F196's 84/75/83/0 —
-   expected-vs-actual stated; drift means the tree moved and the classification
-   below starts from *your* census, not F196's. Revert the probe.
-1. **Classify the 75 by remedy** — hoist / reorder / split-borrow helper /
-   S54-narrowing / genuinely-interleaved (the last is the revert-rule's
-   tripwire) — and commit the table as a doc note before the first edit
-   (S60: the plan is falsifiable before it runs).
-2. **The dark pair first** (`WelsUpdateRefListScreen`, `WelsMarkPicScreen`):
-   minimal reorders and splits, compiler-refereed, logic untouched — the
-   learning run for the shape. One commit each, gates green (they prove the
-   rest of the tree; the dark bodies themselves are compiler-only, said
-   plainly in the commit).
-3. **The live pair** (`WelsUpdateRefList`, `WelsMarkPic`): one body per
-   commit, `family` after each, the classification followed, the revert rule
-   armed. Then the planted fault on the landed form (quote `ltr`/`mt` counts),
-   reverted.
-4. **The flip lands**: `ctx_ltr_at` returns `&mut SLTRState` (a safe fn if the
-   body allows), `ctx_ltr` follows or its remaining callers are named; the
-   22-spelling tail collapses; the `cursor` tags retire; any surviving raw
-   spelling in the family is named with its reason.
-5. **Close**: the session gate once (S61 vs 551; battery vs 1200); both
-   censuses; findings from **F197**; metrics live at both ends; the log; the
-   charter row; **J's inheritance**: ideally one line — "nothing new; the
-   exit's ledger is unchanged" — and if it is more than that, each item named
-   with its reason.
+| function | line | runs when |
+|---|---|---|
+| `WelsUpdateRefList` | 743 | **every frame, live camera path** — reference-list bookkeeping after each encode |
+| `WelsMarkPic` | 1016 | **live camera path** — marks a frame as a long-term reference |
+| `WelsUpdateRefListScreen` | 1440 | never — dead code today (see below) |
+| `WelsMarkPicScreen` | 1647 | never — dead code today |
 
-**Drop order**: there is none — this is one item. If it cannot finish, the
-revert rule produces the honest state: completed bodies stay, the incomplete
-one reverts, the frontier and the remaining census go to the report, and the
-user rules on the leftover.
+**The live two sit in the neighbourhood of this project's oldest flake.** Under
+machine load, an encode here has very rarely produced a byte-different or
+truncated output (recorded as finding F3, with a full adjudication protocol in
+`rust/docs/phase0_findings.md`). The protocol, which binds you: a test failure
+that does not reproduce is re-run five times; a second hit escalates to
+alternating runs of your commit against a control commit under load; verdicts
+are recorded, and you never shrug off a flake or bisect a failure you cannot
+reproduce twice.
+
+**The two Screen variants are dead code today, measured not assumed**: screen-
+content mode is rejected during encoder initialization (`RequestMemorySvc`
+returns "unsupported parameter" — finding F192 verified this), so those two
+functions never execute. Consequence: the byte-identity harness proves nothing
+about them, the **compiler is their only referee**, and your changes there stay
+minimal — reorder and split borrows, never touch the logic. A later phase
+revalidates them when screen content is re-enabled.
+
+## The gates, in one paragraph each
+
+- **`bash rust/tools/gates.sh commit`** (~2.5 min) — a quick byte-identity
+  check plus the "unsafe ratchet" (counts of unsafe constructs may only fall;
+  a rise fails the gate). Run before every commit.
+- **`bash rust/tools/gates.sh family`** — the full differential sweep: 583
+  encoder configurations, both build profiles, every output byte compared
+  against the C++ encoder. **Run after every commit that touches the live
+  pair.** A single differing byte is a defect: bisect it, don't explain it.
+- **`MIRI_SCOPE=encoder bash rust/tools/gates.sh session`** — run **once, at
+  the session's close, and never between commits** (the user's standing
+  directive). It adds the Miri (undefined-behavior interpreter) battery.
+  Compare the reported Miri-lane wall time to the previous close's **551 s**;
+  more than 1.3× slower means stop and investigate the gate itself before
+  believing the tree. Total battery budget: 20 minutes.
+- The **multi-threaded fork Miri probes are NOT needed this session**: the file
+  you are editing has no fork-reachable functions and both accessors are only
+  called on the single-threaded path (the fork-reachability tool
+  `rust/tools/phase9_forksplit.py` confirms; re-run it). Say so in your close
+  rather than silently skipping.
+- **`rust/tools/diffharness/sweep.sh` refuses stale binaries** (exit 2): run
+  `rust/tools/diffharness/build.sh` after any source edit before hand-running
+  a sweep.
+- Report unsafe-count changes from **live runs at start and close**
+  (`bash rust/tools/unsafe_ratchet.sh report` — today: `raw_ptr` 1345,
+  `unsafe_fn` 595), never by differencing the baseline file — it lags.
+- Do not edit the tree while a gate is running, and run one gate at a time.
+
+## The method
+
+**Step 0 — reproduce the measurement; land nothing.** Re-apply the flip
+(`ctx_ltr_at` returns `&mut SLTRState`, body `&mut pCtx.pLtr[kiDid]`), capture
+the full `cargo check` error list, and compare it against the 84/75/83/0 above.
+State expected-vs-actual: if the numbers drifted, the tree moved and your
+classification starts from *your* census, not the recorded one. Revert the
+probe.
+
+**Step 1 — classify every failing site by remedy, and commit the table as a
+doc note before editing anything.** The remedies, from cheapest to deepest:
+
+- **Hoist**: a context field read *after* the LTR borrow moves *before* it
+  (most E0503s).
+- **Reorder**: swap two statements so the borrows no longer overlap.
+- **Split borrow**: where the LTR state and another context field are used in
+  one breath, one helper method on the context returns both as **disjoint
+  field borrows** — Rust accepts `(&mut s.a, &mut s.b)` from a single function
+  where two separate accessor calls conflict. There is a worked example in
+  this tree: `LoadPreviousStructure` (`src/encoder/wels_encoder_ext.rs:912`)
+  returns three parameter-set arrays as one split borrow; copy its shape.
+- **Narrow the callee**: a function that takes the whole context but only
+  needs the LTR state plus one other field takes those two instead (read every
+  caller first — rule S54).
+- **Genuinely interleaved**: the LTR state and the context alternate in a way
+  none of the above untangles. This is the stop signal — see the revert rule.
+
+**Step 2 — convert the two dead Screen functions first.** They are the
+learning run for the shape: minimal reorders and splits, compiler-refereed,
+logic untouched, one commit each, and the commit message says plainly that the
+byte gates prove nothing about dead code.
+
+**Step 3 — the two live functions, one commit each, `family` after each.**
+Follow the classification; the revert rule is armed (below). Then plant one
+deliberate fault in the landed form — for example, an off-by-one in which
+frame gets marked as long-term — and run the harness's long-term-reference
+preset (`sweep.sh ltr`, 16 configurations) plus `mt`: record how many
+configurations fail, so you know the tests actually referee this code. A
+zero-failure fault is not proof of coverage — escalate the fault until it
+moves the output, and report both numbers (rule S59/F175). Revert the fault.
+
+**Step 4 — land the flip.** `ctx_ltr_at` returns `&mut SLTRState` (as a safe
+`fn` if the body allows); `ctx_ltr` follows, or its remaining callers are
+listed with reasons. The ~22 call sites that today spell `&mut *ctx_ltr_at(…)`
+or `(*ctx_ltr_at(…)).field` collapse to direct calls. The accessors'
+raw-pointer tag comments come off. Any raw spelling that survives in this
+family is named in your report with its reason.
+
+**Step 5 — close.** The session gate once (numbers as above); regenerate the
+two census documents their tools maintain (`phase9_census.py`,
+`phase9_plane_callers.py`); findings written from F197; unsafe counts from
+live runs at both ends; the session log entry; the charter row. The next and
+final session is the phase exit — ideally your hand-off to it is one line:
+"nothing new; the exit's ledger is unchanged." If it is more than that, name
+each item and why.
+
+## The revert rule (inherited from the previous session, binding)
+
+If fixing a function stops being *relocating bindings* and becomes *rewriting
+what the function does*, stop at that function's boundary, revert the
+incomplete function, and report the frontier. Completed functions stay. A
+half-converted reference-list manager is worse than a reverted one, and any
+leftover work needs the user's sign-off — it does not silently become debt.
 
 ## What to report back
 
-Plain prose: step 0's expected-vs-actual; the classification table as executed
-vs as written; each body's commit with its gate verdict; the planted fault's
-honest counts; any F3-protocol adjudication in full; the accessor pair's final
-form and every surviving raw spelling with its reason; the close's numbers;
-every place this brief was wrong, quoting the sentence; and J's inheritance in
-one line if you earned it.
+Plain prose: step 0's expected-vs-actual; the classification table as written
+and as executed; each function's commit with its gate verdict; the planted
+fault's honest failure counts; any flake adjudicated under the F3 protocol,
+in full; the accessors' final signatures and every surviving raw spelling with
+its reason; the close's numbers; every place this brief was wrong, quoting the
+sentence; and the hand-off line to the exit session.
