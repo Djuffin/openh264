@@ -103,7 +103,7 @@ Every checkpoint of S1 ran the same loop, and it is worth repeating verbatim:
 
 ```
 ratchet     raw_ptr 1137   unsafe_fn 580   unsafe_block 265   unsafe_impl 2
-tracking    #[allow(unsafe_code)] outside src/api/ : 613
+tracking    #[allow(unsafe_code)] outside src/api/ : 614
 prohibition 2   &mut *pCtx-class retags: 22  (unchanged all session)
 join        14 hazards, 0 LIVE, 14 moot   (was 19/0/19)
 forksplit   103 bodies carry *mut sWelsEncCtx, 101 in-fork + 2 ST  (was 111)
@@ -112,7 +112,7 @@ miri lane   508 s wall / 1091 s cpu — and the cpu column is now SEEDED, so
 ```
 
 The tracking number is the plan's single progress figure and it moved **627 →
-613** across S1. Expect A7 to move it far more than A5 and A6 together, for
+614** across S1. Expect A7 to move it far more than A5 and A6 together, for
 F209's reason.
 
 ## Ground rules, unchanged
