@@ -1,0 +1,56 @@
+# The `fork_join_encodes` pair's baseline, in seconds — the S61/F140 instrument
+# (`miri_wall_baseline.txt`) applied to the two probes that lane does NOT run.
+#
+# WHAT THIS MEASURES. `svc_encode_slice.rs` carries two Miri data-race probes,
+# `fork_join_encodes_a_multi_slice_frame_under_the_aliasing_checker` (112x112,
+# 2 frames, SM_FIXEDSLCNUM_SLICE, 2 threads) and
+# `fork_join_encodes_a_frame_whose_slice_boundary_is_mid_row`
+# (SM_SIZELIMITED_SLICE, 2 threads). They are the proof obligation for decision
+# D1's two kept `unsafe impl` lines, and they are the ONLY instrument in the
+# project that can see a worker-vs-worker race: byte sweeps cannot see a retag
+# that changes no byte, and the single-threaded Miri shards in `gates.sh`'s lane
+# cannot see a race between workers at all (F223's ladder).
+#
+# WHY A SEPARATE FILE. `gates.sh session` skips these two BY NAME
+# (`--skip 'fork_join_encodes'`) — at ~58 minutes as a pair they cannot fit a
+# 20-minute gate — so they run at `full`/`exit` or by explicit command, and their
+# wall never touched `miri_wall_baseline.txt`'s data line. Their numbers lived
+# only in that file's prose. A number in prose has no tripwire; this file gives
+# them one.
+#
+# THE FORM IS PART OF THE NUMBER (F168, session H). The pair wall depends on how
+# the two invocations are scheduled and the two forms are 2x apart, so a number
+# recorded without its form is unreadable. **Run them parallel** — Miri is a
+# single-threaded interpreter, so two probes are two cores and do not contend.
+# Serial buys 3-7% per probe and costs 2x on the pair.
+#
+#   parallel pair (two concurrent invocations, one shared warm target/miri)
+#       T9.E8   3356    / 3449     pair ~57 min   first green
+#       T9.E2   3294.86 / 3343.20  pair ~56 min
+#       T9.H    3411.72 / 3493.33  pair 3499 s    H's close, GREEN
+#       S4      3463.45 / 3530.38  pair 3535 s    B1's fix verified, GREEN
+#   serial pair (one probe at a time — do not compare against the above)
+#       T9.H    3194.20 / 3260.15  pair 6463 s = 108 min, GREEN
+#
+# COMPILE ONCE, THEN SHARD. The Miri compile is minutes from cold and ~5 s on a
+# warm `target/miri`; run one zero-match filter pass first, then the two probes
+# concurrently. `cargo miri test --no-run` reports up-to-date WITHOUT building
+# the interpreted target, so it is not the compile step — use a filter nothing
+# matches, exactly as `gates.sh`'s lane does.
+#
+# THE TRIPWIRE. `fork_join_probe.sh` reads the first non-comment line's first two
+# fields, prints this run's numbers beside them, and WARNs past 1.3x — warn,
+# never fail: machine variance is real (F170), and what the tripwire buys is that
+# a close *report* quotes both numbers and files a finding. Wall only, for now:
+# these probes run as two separate `cargo` invocations rather than inside one
+# shell's process tree, so the `times`-builtin CPU measurement F170 added to the
+# lane does not reach them. Wall is therefore load- and suspend-sensitive here —
+# read a ratio past the tripwire as "measure again on a quiet machine" before
+# reading it as a codec regression.
+#
+# A session close that runs the pair replaces the data line with its own numbers;
+# mid-session runs read, never write.
+#
+# Format: <probe-a-seconds> <probe-b-seconds> <pair-wall-seconds> <commit> <date> <note>
+#   probe-a = ..._a_multi_slice_frame_...   probe-b = ..._a_frame_whose_slice_boundary_...
+3463.45 3530.38 3535 410b9c13 2026-08-27 S4-step0-B1-fix-verified-GREEN-ratio-1.015-1.011-vs-T9.H
