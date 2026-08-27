@@ -10,34 +10,32 @@
 #   normalized message text with the `<level>|` prefix and the `[OpenH264] this =
 #   ... , <Tag>:` header already stripped.
 #
-# Measured on the fixed row 2026-08-26 (session H2, F188): **reference 35 lines,
-# port 20**, of which 20 are byte-for-byte identical — which is what
-# `TraceParamInfo` (F100) and `WelsBitRateVerification`'s six restored calls
-# (F181) bought; before X2 the port emitted **one** of them.
+# Measured on the fixed row 2026-08-27 (session J, step 4): **reference 35 lines,
+# port 33**, of which **33 are byte-for-byte identical** and the remaining two are
+# the permanent pair below. The gap list is CLOSED: every row that was owned by a
+# session is ported, and what is left cannot be ported for a stated reason.
 #
-# This header said "reference 19 lines, port 9" until H2. Those were X2's numbers
-# from `d0020008`, and `c55b7581` — the commit whose own message reads "Coverage
-# 19 -> 35 reference messages" — updated the script, the drivers and the log, and
-# left the count here. A file whose whole contract is "a stale row is a lie about
-# coverage" carried a stale coverage count in its header for two sessions. The
-# numbers a document states about an instrument are as stale-able as the rows.
+# The series, for the record: X2 took the port from **1** identical message to 9,
+# H2's `LogStatistics` coverage work took the capture from 19 to 35 reference
+# lines and the port to 20, and J ported the last seven — the three
+# `CheckProfileSetting` warnings, the CABAC->CAVLC follow-on, the frame-skip
+# warning, both QP-range lines, `WelsInitEncoderExt`/`WelsUninitEncoderExt`'s
+# pointer traces and the destructor's. With them the **delivered level sets agree
+# too** (`[2 4]` on both sides): every level-2 line the reference emits is a
+# `ParamValidationExt` warning the port now emits, which is what D-fid-4's
+# original acceptance was reaching for and F189 could not express while any gap
+# was owned.
+#
+# This header said "reference 19 lines, port 9" until H2, and "port 20" until J.
+# A file whose whole contract is "a stale row is a lie about coverage" has now
+# carried a stale coverage count in its header twice. The numbers a document
+# states about an instrument are as stale-able as the rows.
 
-# --- ParamValidationExt's profile/entropy adjustments (encoder_ext.rs) --------
-# Three layers x "doesn't support profile" plus the CABAC->CAVLC follow-on. The
-# port performs every one of these adjustments and announces none of them.
-layerId\([0-9]+\) doesn't support profile\([0-9]+\), change to scalable baseline profile | J | ParamValidationExt: the adjustment is ported, the WelsLog is not
-layerId\([0-9]+\) Profile is baseline, Change CABAC to CAVLC | J | ParamValidationExt: same
-bEnableFrameSkip = 0,bitrate can't be controlled for RC_QUALITY_MODE,RC_BITRATE_MODE and RC_TIMESTAMP_MODE without enabling skip frame\. | J | ParamValidationExt: same
-Change QP Range from\([0-9]+,[0-9]+\) to \([0-9]+,[0-9]+\) | J | ParamValidationExt: same
-
-# --- WelsInitEncoderExt / WelsUninitEncoderExt / FreeMemorySvc ---------------
-# The allocator accounting lines. `overall memory usage: N bytes` cannot be ported
+# --- The two permanent rows: the allocator's accounting lines ---------------
+# **This is the whole remaining gap, and neither row is portable.** `overall memory usage: N bytes` cannot be ported
 # verbatim: this port has no `CMemoryAlign` running total to print — Phase 3-6
 # replaced the arena with owned containers, which is the reason the number does
 # not exist rather than an oversight. Its row is permanent unless a ruling says
 # to synthesize a number, which would be inventing an observable.
 WelsInitEncoderExt\(\) exit, overall memory usage: [0-9]+ bytes | permanent | no CMemoryAlign running total exists in this port (Phase 3-6 retired the arena)
 FreeMemorySvc\(\), verify memory usage \([0-9]+ bytes\) after free\.\. | permanent | same
-WelsInitEncoderExt\(\), pCtx= .* | J | the line is portable; it was never ported
-WelsUninitEncoderExt\(\), pCtx= .*, iMultipleThreadIdc= [0-9]+\. | J | same
-CWelsH264SVCEncoder::~CWelsH264SVCEncoder\(\) | J | destructor trace; the port's Drop does not log

@@ -5000,3 +5000,107 @@ slot arm carries 391 bodies, which is F157's blindness made visible as a
 number. The hazard detector's negative calibration is **moot**: F163 retired
 "q1c to zero" as a gate (its remedy for shape B produces shape A), and q1c has
 been an audit instrument, not a referee, since session G.
+
+---
+
+## F203 — the crate-root `deny` found the two files that never had a per-file one: 13 untagged decoder shims and the trace callback. The queue grows 293 → 306 because a hole closed, not because work regressed
+
+**Session J, step 3.** The charter makes `#![deny(unsafe_code)]` at the root an
+exit condition, and the reason is exactly what happened when it landed:
+`src/lib.rs` had no `deny`, so a file that also had none was **invisible to the
+whole discipline**. Two were:
+
+- **`common/deblocking_common.rs`, 13 items** — the *decoder's* deblocking
+  dispatch-slot shims (`DeblockLumaLt4V_c` and siblings, `extern "C"`, raw
+  `*mut u8` + `*mut i8` behind `DeblockingInit`'s table). Session C2 named this
+  file as "the decoder's table" and left it there; nobody noticed that it
+  carried no `deny`, so its 13 raw shims were never tagged and never counted.
+  (C2's split report says **12**; the tree has **13** — one more than the
+  number two sessions have quoted.) Tagged `port-raw(Phase 9)` with the owner
+  named at each site, plus one `instrument(test)` on the file's own test module.
+- **`common/wels_trace.rs`, 2 sites in `WelsLog`** — the application's
+  `SLogContext*` deref and the call through its `pfLog`. Tagged `C-ABI`: both
+  cross `codec_api.h` and neither can carry a lifetime.
+
+**So the queue grows from 293 to 306, and the growth is a measurement, not a
+regression** — D-exit-1 forbids *new* raw signatures, and these are eight
+phases old. This is F200's shape a second time in one session: an instrument
+whose scope was assumed rather than checked. The ratchet counted these files
+all along (they are `.rs` under `src/`), which is why no metric moved; the
+*tag* discipline did not see them, and the tag discipline is what the exit
+condition is about.
+
+**The rest of step 3, measured:**
+
+- **`libc` leaves `[dependencies]`.** It had **zero uses in `src/`** — the one
+  grep hit is a comment naming `libc::fprintf` as what the port does *not*
+  call. Its real users are the two benches, which `dlopen` the C++ dylib
+  (8 sites), so it moves to `[dev-dependencies]`: **the shipped cdylib now has
+  no dependencies at all**, which is what the exit condition wanted, and the
+  comparison harness keeps what it needs.
+- **The root's four non-naming allows, measured on a clean build**:
+  `unused_unsafe` **0** and `dead_code` **0** — both suppressed nothing and are
+  deleted (the one item `dead_code` was hiding, `encoder_ext`'s `tag!` macro,
+  fires as `unused_macros`; it minted allocation labels for the `CMemoryAlign`
+  arena Phases 3-6 retired, and is deleted). `unused_imports` **89** and
+  `unused_variables` **8** stay, each with its reason at the root — **and the
+  89 is confounded**: `cargo fix` on the lint's own suggestions broke the build
+  **twice**, once with `--all-targets`, because the `#[cfg(test)]` modules use
+  16+ of the names the lib-only view calls unused. A lint count measured
+  against one target is not a work list.
+- **`cargo clippy --all-targets` completes for the first time.** It could not
+  before: **45 × `not_unsafe_ptr_arg_deref`** (deny-by-default) and 1 ×
+  `absurd_extreme_comparisons` are hard errors, so no session in nine phases
+  had seen a clippy run finish. 44 of the 45 are in one file —
+  `wels_encoder_ext.rs`, every one a method of the C-ABI boundary object Phase
+  8 built, taking the application's own pointers through `codec_api.h`'s
+  vtable. Satisfying the lint by marking them `unsafe fn` would move 44 items
+  **onto** the ratchet's `unsafe_fn` metric, the wrong direction, and would
+  change nothing a caller can do; the honest fix (validating safe wrappers at
+  the boundary) is queue work. Allowed per file with that reasoning written
+  down. The single `absurd_extreme_comparisons` is `manage_dec_ref.cpp:151`
+  verbatim — `uiShortRefCount + uiLongRefCount <= 0` on two `uint8_t`s, where
+  C's promotion makes the `<` half dead too; both trees mean `== 0` and the
+  port keeps the spelling that diffs.
+
+---
+
+## F204 — the log referee's gap list is closed: 20/35 → 33/35 identical, the delivered level sets agree, and the two survivors are unportable by construction
+
+**Session J, step 4.** The seven J-owned rows of
+`log_referee_known_gaps.txt` are ported, each character-identical to the
+reference on the fixed row:
+
+- **`CheckProfileSetting`'s three `WELS_LOG_WARNING`s** (`encoder_ext.cpp:131`,
+  `:138`, `:145`) — the port performed all three profile adjustments and
+  announced none. Its `_pLogCtx` parameter was named with a leading underscore,
+  which is how a dropped observable hides in plain sight; both call sites
+  already had a live context to pass.
+- **the CABAC→CAVLC follow-on** (`:658`), in `ParamValidationExt`'s entropy loop.
+- **the frame-skip warning** (`:373`) and **both `Change QP Range` lines**
+  (`:377`, `:382`) in `ParamValidation`.
+- **`WelsInitEncoderExt`'s and `WelsUninitEncoderExt`'s pointer traces**
+  (`:2386`, `:2250`) — including the reference's own doubled `0x`, which is
+  `"0x%p"` meeting a `%p` that prints its own prefix.
+- **the destructor trace** (`welsEncoderExt.cpp:136`), which goes in `Drop`
+  *before* `Uninitialize` so the two lines land in the reference's order.
+
+**Result: 20/35 → 33/35 identical, and the levels now agree** — `[2 4]` on both
+sides where the port delivered only `[4]`. That is the property D-fid-4's
+original acceptance was reaching for and F189 had to replace: every level-2 line
+the reference emits on this row is a `ParamValidationExt` warning, so the port
+could not deliver the level until it delivered the messages. It does now.
+
+**The two survivors are permanent and say why**: `WelsInitEncoderExt() exit,
+overall memory usage: N bytes` and `FreeMemorySvc(), verify memory usage (N
+bytes) after free..`. Both print a `CMemoryAlign` running total, and Phases 3-6
+retired the arena for owned containers — the number does not exist, and
+synthesizing one would be inventing an observable. The referee's exit code
+reflects the closed list: it fails on any unowned difference **and** on any row
+that has stopped differing, which is how the seven were caught the moment they
+were fixed (the run after the port printed seven `STALE GAP ROW` lines and
+failed until they were deleted).
+
+The header's coverage count was stale a second time (it said "port 20" from H2's
+close through this session's step 4), which the file's own contract calls a lie
+about coverage. Corrected, with the series recorded: 1 → 9 (X2) → 20 (H2) → 33.

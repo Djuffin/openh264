@@ -661,6 +661,14 @@ pub fn RemainOneBufferInDpbForEC(
 /// Detects missing IDR frames during error concealment and constructs a synthetic reference frame.
 ///
 /// Matches `static int32_t WelsCheckAndRecoverForFutureDecoding (PWelsDecoderContext pCtx)`.
+//
+// `clippy::absurd_extreme_comparisons`: the guard below is `manage_dec_ref.cpp:151`
+// verbatim — `uiShortRefCount[0] + uiLongRefCount[0] <= 0` on two `uint8_t`s, where
+// C's integer promotion makes the sum an `int` and the `<` half is dead there too.
+// Both trees mean `== 0`; the port keeps the C's spelling because a rewritten
+// comparison is a line that no longer diffs against the reference. (The sum cannot
+// overflow the `u8` it stays in here: both counts are bounded by `MAX_DPB_COUNT`.)
+#[allow(clippy::absurd_extreme_comparisons)]
 pub fn WelsCheckAndRecoverForFutureDecoding(pCtx: &mut SWelsDecoderContext) -> i32 {
 
     if ((*pCtx).sRefPic.uiShortRefCount[LIST_0] + (*pCtx).sRefPic.uiLongRefCount[LIST_0] <= 0)
