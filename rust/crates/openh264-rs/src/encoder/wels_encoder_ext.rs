@@ -2370,6 +2370,21 @@ uiResolutionChangeTimes={}, uIDRReqNum={}, uIDRSentNum={}, uLTRSentNum=NA, iTota
                     .pLtr
                     .first()
                     .map_or(false, |pLtr| pLtr.bLTRMarkingFlag);
+                // **F208.** The average QP is read *here*, before `pStatistics`
+                // is derived, and the reason is the same one the comment above
+                // gives for `bLtrMarkingFlag`: the reader is a **shared reborrow
+                // of the whole context**, and a `SharedReadOnly` retag over
+                // `[0x0..0x17f10]` invalidates any `Unique` derived from the same
+                // context — including one into a disjoint field. Borrowck cannot
+                // referee it because `pStatistics` is derived through a raw
+                // `pCtx`, so Miri is the only referee, and it refused this exact
+                // shape at `wels_encoder_ext.rs:2412` when A2 first put the read
+                // beside the write.
+                let uiAverageFrameQP = if !(*pCtx).rc().is_empty() {
+                    (*pCtx).rc_at(iDid as usize).iAverageFrameQp as u32
+                } else {
+                    26
+                };
                 let pStatistics =
                     &mut (*pCtx).sEncoderStatistics[iDid as usize];
                 let pSpatialLayerInternalParam =
@@ -2409,11 +2424,7 @@ uiResolutionChangeTimes={}, uIDRReqNum={}, uIDRSentNum={}, uLTRSentNum=NA, iTota
                     (*pCtx).uiStartTimestamp = kiCurrentFrameTs;
                 }
 
-                pStatistics.uiAverageFrameQP = if !(*pCtx).rc().is_empty() {
-                    (*pCtx).rc_at(iDid as usize).iAverageFrameQp as u32
-                } else {
-                    26
-                };
+                pStatistics.uiAverageFrameQP = uiAverageFrameQP;
 
                 if eFrameType == EVideoFrameType::videoFrameTypeIDR
                     || eFrameType == EVideoFrameType::videoFrameTypeI
