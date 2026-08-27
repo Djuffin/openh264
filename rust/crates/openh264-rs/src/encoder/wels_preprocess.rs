@@ -74,7 +74,7 @@ pub const MAX_REF_PIC_COUNT: usize = 16;
 // MAX_SHORT_REF_COUNT was 16 where C++ derives 4, which over-sized `SRefList` here and
 // let the `WelsPreprocess` unref loop read one past `pShortRefList`.
 pub use crate::encoder::encoder_context::{MAX_GOP_SIZE, MAX_SHORT_REF_COUNT, MAX_TEMPORAL_LEVEL};
-use crate::encoder::encoder_context::{ctx_ltr_at, ctx_param, ctx_ref_list, ctx_vaa};
+use crate::encoder::encoder_context::{ctx_ltr_at, ctx_param, ctx_vaa};
 pub use crate::encoder::encoder_context::SRefList;
 pub use crate::encoder::picture::SPicture;
 pub use crate::encoder::encoder_context::SLTRState;
@@ -2737,17 +2737,17 @@ impl CWelsPreProcess {
     pub unsafe fn SetRefMbType(&self, pCtx: &mut sWelsEncCtx, pRefMbTypeArray: *mut *mut u32, _iRefPicType: i32) {
         let uiTid = pCtx.uiTemporalId;
         let uiDid = pCtx.uiDependencyId;
-        let pRefPicLlist = ctx_ref_list(pCtx, uiDid as usize);
-        if pRefPicLlist.is_null() {
-            return;
-        }
-
-        // T9.H3: the held binding is gone — the LTR read borrows inline, after the
-        // `ctx_param` coercion in the same condition has ended (T9.G6's shape).
-        if (*ctx_param(pCtx)).bEnableLongTermReference
+        // §4.6, reorder: the branch condition is decided before the list borrow —
+        // it reads the parameters and the LTR state, two other fields of the same
+        // context. T9.H3's inline-borrow shape, one statement earlier.
+        let bLtrRecovery = (*ctx_param(pCtx)).bEnableLongTermReference
             && ctx_ltr_at(pCtx, uiDid as usize).bReceivedT0LostFlag
-            && uiTid == 0
-        {
+            && uiTid == 0;
+        let Some(pRefPicLlist) = pCtx.ref_list_mut(uiDid as usize) else {
+            return;
+        };
+
+        if bLtrRecovery {
             for i in 0..(*pRefPicLlist).uiLongRefCount as usize {
                 let Some(id) = (*pRefPicLlist).pLongRefList[i] else {
                     continue;
@@ -2795,11 +2795,16 @@ impl CWelsPreProcess {
         // *reconstruction* picture (`pCtx->pRefList0[0]`, `encoder_ext.cpp:2662`) —
         // both `SPicture*` in C++, so nothing there says the two arguments come from
         // different owners. S37: each resolved once in its own pool, to geometry.
-        let pRefList = ctx_ref_list(pCtx, pCtx.uiDependencyId as usize);
+        let uiDidCur = pCtx.uiDependencyId as usize;
         let sCur = self.m_pSpatialPicPool.get_mut(idCur).planes();
-        let sRefPic = pRefPicture.filter(|_| !pRefList.is_null());
+        let sRefPic = pRefPicture.filter(|_| pCtx.ref_list(uiDidCur).is_some());
         let sRef = sRefPic
-            .map(|id| (*pRefList).pic_mut(id).planes())
+            .map(|id| {
+                pCtx.ref_list_mut(uiDidCur)
+                    .expect("checked just above")
+                    .pic_mut(id)
+                    .planes()
+            })
             .unwrap_or(sCur);
 
         let pSvcParam = ctx_param(pCtx);
@@ -2863,13 +2868,18 @@ impl CWelsPreProcess {
 
             sComplexityAnalysisParam.iComplexityAnalysisMode = iComplexityAnalysisMode;
             sComplexityAnalysisParam.pBackgroundMbFlag = (*pVaaInfo).pVaaBackgroundMbFlag.as_mut_ptr();
-            if sRefPic.is_some() {
+            if let Some(idRef) = sRefPic {
+                // §4.6, reorder: the picture type is read out before
+                // `SetRefMbType` claims the context mutably.
+                let iPictureType = pCtx
+                    .ref_list(uiDidCur)
+                    .expect("checked when `sRefPic` was filtered")
+                    .pic(idRef)
+                    .iPictureType;
                 self.SetRefMbType(
                     pCtx,
                     &mut sComplexityAnalysisParam.uiRefMbType,
-                    (*pRefList)
-                        .pic(sRefPic.expect("checked just above"))
-                        .iPictureType,
+                    iPictureType,
                 );
             }
             sComplexityAnalysisParam.iCalcBgd = bCalculateBGD;

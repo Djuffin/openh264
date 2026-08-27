@@ -66,7 +66,7 @@ use crate::{
 
 pub use crate::encoder::encoder_context::EWelsSliceType;
 use crate::encoder::encoder_context::{
-    ctx_dq_layer, ctx_param, ctx_pps_array, ctx_ref_list,
+    ctx_dq_layer, ctx_param, ctx_pps_array,
     ctx_sps_array, ctx_subset_array,
     ctx_func_list,
 };
@@ -885,11 +885,8 @@ pub unsafe fn ctx_pps(pCtx: &mut sWelsEncCtx) -> *mut SWelsPPS {
 #[allow(unsafe_code)]
 pub unsafe fn ctx_ref_pic<'a>(pCtx: *mut sWelsEncCtx) -> Option<&'a SPicture> {
     let id = (*pCtx).pRefPic?;
-    let pRefList = ctx_ref_list(pCtx, (*pCtx).uiDependencyId as usize);
-    if pRefList.is_null() {
-        return None;
-    }
-    Some((*pRefList).pic(id))
+    let pRefList = (*pCtx).ref_list((*pCtx).uiDependencyId as usize)?;
+    Some(pRefList.pic(id))
 }
 
 // `ctx_pic_ref_mut` stood here — the exclusive form of the `PicRef` resolution.
@@ -911,14 +908,9 @@ pub unsafe fn ctx_ref_pic<'a>(pCtx: *mut sWelsEncCtx) -> Option<&'a SPicture> {
 #[allow(unsafe_code)]
 pub unsafe fn ctx_pic_ref<'a>(pCtx: *mut sWelsEncCtx, r: PicRef) -> Option<&'a SPicture> {
     match r {
-        PicRef::Rec(id) => {
-            let pRefList = ctx_ref_list(pCtx, (*pCtx).uiDependencyId as usize);
-            if pRefList.is_null() {
-                None
-            } else {
-                Some((*pRefList).pic(id))
-            }
-        }
+        PicRef::Rec(id) => (*pCtx)
+            .ref_list((*pCtx).uiDependencyId as usize)
+            .map(|pRefList| pRefList.pic(id)),
         PicRef::Src(id) => {
             if (*pCtx).pVpp.is_null() {
                 None

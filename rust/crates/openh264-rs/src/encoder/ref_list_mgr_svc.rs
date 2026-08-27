@@ -26,7 +26,7 @@ pub const STR_ROOM: i32 = 1;
 // `encoder_context.rs` from `wels_const.h`. This module previously had its own copies
 // with MAX_SHORT_REF_COUNT = 16 (C++: 4) and MAX_TEMPORAL_LEVEL = 8 (C++: 4).
 pub use crate::encoder::encoder_context::{MAX_GOP_SIZE, MAX_SHORT_REF_COUNT, MAX_TEMPORAL_LEVEL};
-use crate::encoder::encoder_context::{ctx_ltr_at, ctx_param, ctx_ref_list, ctx_vaa};
+use crate::encoder::encoder_context::{ctx_ltr_at, ctx_param, ctx_vaa};
 pub const MAX_REF_PIC_COUNT: usize = 16;
 pub const LONG_TERM_REF_NUM: i32 = 2;
 pub const MAX_TEMPORAL_LAYER_NUM: usize = 4;
@@ -230,29 +230,30 @@ pub unsafe fn WelsResetRefList(pCtx: &mut sWelsEncCtx) {
     // cannot be null and every caller now holds one, so the guard is not
     // merely dead — it is inexpressible. Nothing replaces it.
     let uiDid = pCtx.uiDependencyId as usize;
-    let pRefList = ctx_ref_list(pCtx, (uiDid) as usize);
-    if pRefList.is_null() {
-        return;
-    }
-
-    for i in 0..=(MAX_SHORT_REF_COUNT) {
-        (*pRefList).pShortRefList[i] = None;
-    }
+    // §4.6, reorder: every raw root and scalar first, the reference-shaped
+    // borrow last — the order this file's own T9.H3 note asks for.
     let ltrRefNum = if !ctx_param(pCtx).is_null() {
         (*ctx_param(pCtx)).iLTRRefNum as usize
     } else {
         0
     };
-    for i in 0..=(ltrRefNum) {
-        if i <= MAX_REF_PIC_COUNT {
-            (*pRefList).pLongRefList[i] = None;
-        }
-    }
     let numRefFrame = if !ctx_param(pCtx).is_null() {
         (*ctx_param(pCtx)).iNumRefFrame as usize
     } else {
         0
     };
+    let Some(pRefList) = pCtx.ref_list_mut((uiDid) as usize) else {
+        return;
+    };
+
+    for i in 0..=(MAX_SHORT_REF_COUNT) {
+        (*pRefList).pShortRefList[i] = None;
+    }
+    for i in 0..=(ltrRefNum) {
+        if i <= MAX_REF_PIC_COUNT {
+            (*pRefList).pLongRefList[i] = None;
+        }
+    }
     for i in 0..=(numRefFrame) {
         if i < (*pRefList).pRef.len() {
             let id = (*pRefList).pRef.at(i);
@@ -272,7 +273,7 @@ pub unsafe fn WelsResetRefList(pCtx: &mut sWelsEncCtx) {
 /// Remove a long-term reference entry by index from pLongRefList.
 ///
 /// **Narrowed to the list it edits — T9.G3, S54.** It took `*mut`-sWelsEncCtx and
-/// used it for exactly one thing: `ctx_ref_list(pCtx, (*pCtx).uiDependencyId)`.
+/// used it for exactly one thing: `pCtx.ref_list_mut((*pCtx).uiDependencyId)`.
 /// Every one of its five callers already holds that same pointer, derived with the
 /// same `uiDid` (`uiDependencyId` is written in one place in the encoder,
 /// `encoder_ext.rs:3356`, and never inside this file), and every one has already
@@ -337,11 +338,14 @@ pub unsafe fn DeleteNonSceneLTR(pCtx: &mut sWelsEncCtx) {
     if ctx_param(pCtx).is_null() {
         return;
     }
-    let pRefList = ctx_ref_list(pCtx, pCtx.uiDependencyId as usize);
-    if pRefList.is_null() {
-        return;
-    }
+    // §4.6, reorder: every raw root and scalar first, the reference-shaped
+    // borrow last — the order this file's own T9.H3 note asks for.
     let numRef = (*ctx_param(pCtx)).iNumRefFrame;
+    let uiTemporalId = pCtx.uiTemporalId;
+    let bCurFrameMarkedAsSceneLtr = pCtx.bCurFrameMarkedAsSceneLtr;
+    let Some(pRefList) = pCtx.ref_list_mut(pCtx.uiDependencyId as usize) else {
+        return;
+    };
     let mut i = 0;
     while i < numRef {
         let hit = match (*pRefList).pLongRefList[i as usize] {
@@ -350,8 +354,8 @@ pub unsafe fn DeleteNonSceneLTR(pCtx: &mut sWelsEncCtx) {
                 pRef.bUsedAsRef
                     && pRef.bIsLongRef
                     && (!pRef.bIsSceneLTR)
-                    && (pCtx.uiTemporalId < pRef.uiTemporalId
-                        || pCtx.bCurFrameMarkedAsSceneLtr)
+                    && (uiTemporalId < pRef.uiTemporalId
+                        || bCurFrameMarkedAsSceneLtr)
             }
             None => false,
         };
@@ -407,10 +411,6 @@ pub unsafe fn DeleteInvalidLTR(pCtx: &mut sWelsEncCtx) {
         return;
     }
     let uiDid = pCtx.uiDependencyId as usize;
-    let pRefList = ctx_ref_list(pCtx, (uiDid) as usize);
-    if pRefList.is_null() {
-        return;
-    }
     // **T9.H3 — T9.G4's order, inverted, and the inversion is the conversion.**
     // T9.G4 put the reference-shaped accessor *before* the permanently-raw one so
     // the raw world's retags could not pop it. In the reference world the borrow
@@ -419,7 +419,12 @@ pub unsafe fn DeleteInvalidLTR(pCtx: &mut sWelsEncCtx) {
     // (F71) and never with a second use of `pCtx`.
     let iMaxFrameNumPlus1 = 1 << (*ctx_sps(pCtx)).uiLog2MaxFrameNum;
     let pParamInternal = std::ptr::addr_of_mut!((*ctx_param(pCtx)).sDependencyLayers[uiDid]);
-    let pLtr = ctx_ltr_at(pCtx, (uiDid) as usize);
+    // A3: the list and the LTR state are two fields of one context, so they come
+    // out of one borrow — §4.6's combined accessor.
+    let (pRefList, pLtr) = pCtx.ref_list_and_ltr_mut(uiDid);
+    let Some(pRefList) = pRefList else {
+        return;
+    };
 
     for i in 0..LONG_TERM_REF_NUM {
         if let Some(idPic) = (*pRefList).pLongRefList[i as usize] {
@@ -469,14 +474,14 @@ pub unsafe fn HandleLTRMarkFeedback(pCtx: &mut sWelsEncCtx) {
         return;
     }
     let uiDid = pCtx.uiDependencyId as usize;
-    let pRefList = ctx_ref_list(pCtx, (uiDid) as usize);
-    if pRefList.is_null() {
-        return;
-    }
-    // T9.H3: raw roots first, the LTR borrow last — see `DeleteInvalidLTR`.
+    // T9.H3: raw roots first, the reference-shaped borrows last — see
+    // `DeleteInvalidLTR`, and A3's combined accessor for why they are one call.
     let pParamInternal = std::ptr::addr_of_mut!((*ctx_param(pCtx)).sDependencyLayers[uiDid]);
     let pVaa = ctx_vaa(pCtx);
-    let pLtr = ctx_ltr_at(pCtx, (uiDid) as usize);
+    let (pRefList, pLtr) = pCtx.ref_list_and_ltr_mut(uiDid);
+    let Some(pRefList) = pRefList else {
+        return;
+    };
 
     if pLtr.uiLtrMarkState == LTR_MARKING_SUCCESS {
         for i in 0..((*pRefList).uiLongRefCount as i32) {
@@ -553,12 +558,9 @@ pub unsafe fn LTRMarkProcess(pCtx: &mut sWelsEncCtx) {
         return;
     }
     let uiDid = pCtx.uiDependencyId as usize;
-    let pRefList = ctx_ref_list(pCtx, (uiDid) as usize);
-    if pRefList.is_null() {
-        return;
-    }
-    // T9.H3: every root and scalar first, the LTR borrow last — see
-    // `DeleteInvalidLTR` for why T9.G4's order inverted.
+    // T9.H3: every root and scalar first, the reference-shaped borrows last —
+    // see `DeleteInvalidLTR` for why T9.G4's order inverted, and A3's combined
+    // accessor for why the list and the LTR state are one call.
     let gopSize = (*ctx_param(pCtx)).uiGopSize;
     let iGoPFrameNumInterval = if (gopSize >> 1) > 1 {
         (gopSize >> 1) as i32
@@ -571,7 +573,13 @@ pub unsafe fn LTRMarkProcess(pCtx: &mut sWelsEncCtx) {
     let pParamInternal = std::ptr::addr_of_mut!((*ctx_param(pCtx)).sDependencyLayers[uiDid]);
     let pVaa = ctx_vaa(pCtx);
     let keSliceType = pCtx.eSliceType;
-    let pLtr = ctx_ltr_at(pCtx, (uiDid) as usize);
+    let iLTRRefNum = (*ctx_param(pCtx)).iLTRRefNum;
+    let uiTemporalId = pCtx.uiTemporalId as usize;
+    let bRefOfCurTidIsLtr = std::ptr::addr_of_mut!(pCtx.bRefOfCurTidIsLtr);
+    let (pRefList, pLtr) = pCtx.ref_list_and_ltr_mut(uiDid);
+    let Some(pRefList) = pRefList else {
+        return;
+    };
 
     if keSliceType == EWelsSliceType::I_SLICE {
         i = 0;
@@ -628,9 +636,12 @@ pub unsafe fn LTRMarkProcess(pCtx: &mut sWelsEncCtx) {
     if (pLtr.iLTRMarkMode == LTR_MARKING_PROCESS_MODE::LTR_DELAY_MARK as i32 && pLtr.bLTRMarkingFlag)
         || ((pLtr.iLTRMarkMode == LTR_MARKING_PROCESS_MODE::LTR_DIRECT_MARK as i32) && bMoveLtrFromShortToLong)
     {
-        let tid = pCtx.uiTemporalId as usize;
+        // The flag lives in a different field of the context from the two
+        // borrows above; its root is derived before them (F71's spelling) so the
+        // write does not need a second claim on `pCtx`.
+        let tid = uiTemporalId;
         if uiDid < MAX_DEPENDENCY_LAYER && tid < MAX_TEMPORAL_LEVEL {
-            pCtx.bRefOfCurTidIsLtr[uiDid][tid] = true;
+            (*bRefOfCurTidIsLtr)[uiDid][tid] = true;
         }
 
         let longCount = (*pRefList).uiLongRefCount as usize;
@@ -643,7 +654,7 @@ pub unsafe fn LTRMarkProcess(pCtx: &mut sWelsEncCtx) {
         }
         (*pRefList).pLongRefList[0] = (*pRefList).pShortRefList[i];
         (*pRefList).uiLongRefCount += 1;
-        if (*pRefList).uiLongRefCount as i32 > (*ctx_param(pCtx)).iLTRRefNum {
+        if (*pRefList).uiLongRefCount as i32 > iLTRRefNum {
             let lastIdx = ((*pRefList).uiLongRefCount - 1) as usize;
             if let Some(id) = (*pRefList).pLongRefList[lastIdx] {
                 (*pRefList).pic_mut(id).SetUnref();
@@ -665,15 +676,19 @@ pub unsafe fn LTRMarkProcessScreen(pCtx: &mut sWelsEncCtx) {
         return;
     };
     let uiDid = pCtx.uiDependencyId as usize;
-    let pRefList = ctx_ref_list(pCtx, (uiDid) as usize);
-    if pRefList.is_null() {
+    // §4.6, reorder: the index is read out, the VAA stamp happens through its own
+    // raw, and the list is re-borrowed after it — the accessor is a field
+    // projection, so re-deriving costs nothing and holds nothing.
+    let Some(iLtrIdx) = pCtx.ref_list(uiDid).map(|l| l.pic(idDec).iLongTermPicNum) else {
         return;
-    }
-    let iLtrIdx = (*pRefList).pic(idDec).iLongTermPicNum;
+    };
     if !ctx_vaa(pCtx).is_null() {
         (*ctx_vaa(pCtx)).uiMarkLongTermPicIdx = iLtrIdx as u8;
     }
 
+    let Some(pRefList) = pCtx.ref_list_mut(uiDid) else {
+        return;
+    };
     if iLtrIdx >= 0 && (iLtrIdx as usize) < MAX_REF_PIC_COUNT {
         match (*pRefList).pLongRefList[iLtrIdx as usize] {
             Some(id) => (*pRefList).pic_mut(id).SetUnref(),
@@ -693,11 +708,11 @@ pub unsafe fn PrefetchNextBuffer(pCtx: &mut sWelsEncCtx) {
         return;
     }
     let uiDid = pCtx.uiDependencyId as usize;
-    let pRefList = ctx_ref_list(pCtx, (uiDid) as usize);
-    if pRefList.is_null() {
-        return;
-    }
+    // §4.6, reorder: the parameter read goes above the reference-shaped borrow.
     let kiNumRef = (*ctx_param(pCtx)).iNumRefFrame;
+    let Some(pRefList) = pCtx.ref_list_mut((uiDid) as usize) else {
+        return;
+    };
 
     (*pRefList).pNextBuffer = None;
     for i in 0..=(kiNumRef as usize) {
@@ -749,8 +764,7 @@ pub unsafe fn WelsUpdateRefList(pCtx: &mut sWelsEncCtx) -> bool {
         return false;
     }
     let uiDid = pCtx.uiDependencyId as usize;
-    let pRefList = ctx_ref_list(pCtx, (uiDid) as usize);
-    if pRefList.is_null() || (*pRefList).pRef.is_empty() {
+    if pCtx.ref_list(uiDid).map_or(true, |l| l.pRef.is_empty()) {
         return false;
     }
 
@@ -765,7 +779,17 @@ pub unsafe fn WelsUpdateRefList(pCtx: &mut sWelsEncCtx) -> bool {
     let kuiDid = pCtx.uiDependencyId;
     let keSliceType = pCtx.eSliceType;
 
+    // **A3 — the list borrow is scoped, for the same reason the LTR one was.**
+    // The tail calls `LTRMarkProcess` / `DeleteInvalidLTR` /
+    // `HandleLTRMarkFeedback`, each of which takes the whole context, and a live
+    // `&mut SRefList` cannot span them. So the list is bound inside the block that
+    // uses it and re-derived after the calls — the same sentence T9.H3 wrote about
+    // the LTR state, one field over. Re-deriving is a field projection and an
+    // index; it holds nothing.
     if let Some(idDec) = pCtx.pDecPic {
+        let Some(pRefList) = pCtx.ref_list_mut(uiDid) else {
+            return false;
+        };
         // The reconstruction picture, resolved once — S37: everything below either
         // reads its geometry or writes its own fields, and the borrow ends before the
         // reference-list shifts that would touch the pool again.
@@ -816,7 +840,7 @@ pub unsafe fn WelsUpdateRefList(pCtx: &mut sWelsEncCtx) -> bool {
     }
 
     if keSliceType == EWelsSliceType::P_SLICE {
-        if pCtx.uiTemporalId == 0 {
+        if kuiTid == 0 {
             if (*ctx_param(pCtx)).bEnableLongTermReference {
                 LTRMarkProcess(pCtx);
                 DeleteInvalidLTR(pCtx);
@@ -828,6 +852,10 @@ pub unsafe fn WelsUpdateRefList(pCtx: &mut sWelsEncCtx) -> bool {
                 pLtr.uiLtrMarkInterval += 1;
             }
 
+            // Re-derived after the three calls above, exactly as the LTR borrow is.
+            let Some(pRefList) = pCtx.ref_list_mut(uiDid) else {
+                return false;
+            };
             let mut i = ((*pRefList).uiShortRefCount as i32) - 1;
             while i > 0 {
                 if let Some(id) = (*pRefList).pShortRefList[i as usize] {
@@ -893,11 +921,8 @@ pub unsafe fn CheckCurMarkFrameNumUsed(pCtx: &mut sWelsEncCtx) -> bool {
         return false;
     }
     let uiDid = pCtx.uiDependencyId as usize;
-    let pRefList = ctx_ref_list(pCtx, (uiDid) as usize);
-    if pRefList.is_null() {
-        return false;
-    }
-    // T9.H3: raw roots first, the LTR borrow last — see `DeleteInvalidLTR`.
+    // T9.H3: raw roots first, the reference-shaped borrows last — see
+    // `DeleteInvalidLTR`.
     let gopSize = (*ctx_param(pCtx)).uiGopSize;
     let iGoPFrameNumInterval = if (gopSize >> 1) > 1 {
         (gopSize >> 1) as i32
@@ -906,7 +931,10 @@ pub unsafe fn CheckCurMarkFrameNumUsed(pCtx: &mut sWelsEncCtx) -> bool {
     };
     let iMaxFrameNumPlus1 = 1 << (*ctx_sps(pCtx)).uiLog2MaxFrameNum;
     let pParamInternal = &(*ctx_param(pCtx)).sDependencyLayers[uiDid];
-    let pLtr = &*ctx_ltr_at(pCtx, (uiDid) as usize);
+    let (pRefList, pLtr) = pCtx.ref_list_and_ltr_mut(uiDid);
+    let Some(pRefList) = pRefList else {
+        return false;
+    };
 
     for i in 0..((*pRefList).uiLongRefCount as usize) {
         if let Some(idLong) = (*pRefList).pLongRefList[i] {
@@ -1173,10 +1201,14 @@ pub unsafe fn WelsBuildRefList(
         return false;
     }
     let uiDid = pCtx.uiDependencyId as usize;
-    let pRefList = ctx_ref_list(pCtx, (uiDid) as usize);
-    if pRefList.is_null() {
+    if pCtx.ref_list(uiDid).is_none() {
         return false;
     }
+    // **A3: the list is re-derived at each read, not held.** This body writes
+    // `iNumRef0`, `pRefList0` and the layer's `pRefOri` between its reads of the
+    // list, and calls `WelsResetRefList` / `ResetLtrState` on the other arm — a
+    // live borrow of one field cannot span writes to the others. The accessor is
+    // a bounds check and a field projection, and this runs once per frame.
     // T9.H3: the held LTR binding is gone — the state is touched twice in this
     // body (one read in the branch condition, one write on recovery), and each
     // touch borrows inline for its own expression.
@@ -1190,11 +1222,12 @@ pub unsafe fn WelsBuildRefList(
             && ctx_ltr_at(pCtx, (uiDid) as usize).bReceivedT0LostFlag
             && pCtx.uiTemporalId == 0
         {
-            for i in 0..((*pRefList).uiLongRefCount as usize) {
-                let Some(idLong) = (*pRefList).pLongRefList[i] else {
+            let longCount = pCtx.ref_list(uiDid).expect("the list was checked at entry").uiLongRefCount as usize;
+            for i in 0..longCount {
+                let Some(idLong) = pCtx.ref_list(uiDid).expect("the list was checked at entry").pLongRefList[i] else {
                     continue;
                 };
-                if (*pRefList).pic(idLong).uiRecieveConfirmed == RECIEVE_SUCCESS {
+                if pCtx.ref_list(uiDid).expect("the list was checked at entry").pic(idLong).uiRecieveConfirmed == RECIEVE_SUCCESS {
                     let numRef0 = pCtx.iNumRef0 as usize;
                     // The camera path puts a *reconstruction* picture in `pRefOri`
                     // where the screen path puts a source picture — see `PicRef`.
@@ -1206,12 +1239,16 @@ pub unsafe fn WelsBuildRefList(
                 }
             }
         } else {
-            for i in 0..((*pRefList).uiShortRefCount as usize) {
-                let Some(idRef) = (*pRefList).pShortRefList[i] else {
+            let shortCount = pCtx.ref_list(uiDid).expect("the list was checked at entry").uiShortRefCount as usize;
+            for i in 0..shortCount {
+                let Some(idRef) = pCtx.ref_list(uiDid).expect("the list was checked at entry").pShortRefList[i] else {
                     continue;
                 };
-                let pRef = (*pRefList).pic(idRef);
-                if pRef.bUsedAsRef && pRef.iFramePoc >= 0 && pRef.uiTemporalId <= kuiTid {
+                let bTake = {
+                    let pRef = pCtx.ref_list(uiDid).expect("the list was checked at entry").pic(idRef);
+                    pRef.bUsedAsRef && pRef.iFramePoc >= 0 && pRef.uiTemporalId <= kuiTid
+                };
+                if bTake {
                     let numRef0 = pCtx.iNumRef0 as usize;
                     (*current_layer(pCtx)).pRefOri[numRef0] = Some(PicRef::Rec(idRef));
                     pCtx.pRefList0[numRef0] = Some(idRef);
@@ -1244,20 +1281,29 @@ pub unsafe fn UpdateBlockStatic(pCtx: &mut sWelsEncCtx) {
         return;
     }
     // ref_list_mgr_svc.cpp:649 — static_cast<SVAAFrameInfoExt*> (pCtx->pVaa)
-        let pVaaExt = ctx_vaa(pCtx) as *mut SVAAFrameInfoExt;
-    let pRefList = ctx_ref_list(pCtx, pCtx.uiDependencyId as usize);
-    for idx in 0..(pCtx.iNumRef0 as usize) {
-        let Some(idRef) = pCtx.pRefList0[idx] else {
+    let pVaaExt = ctx_vaa(pCtx) as *mut SVAAFrameInfoExt;
+    // §4.6, reorder: the roots and scalars first — `pVpp` is a raw field, so a
+    // copy of it is a copy of the pointer, not a borrow — then the list per
+    // iteration, held only across the two reads that need it.
+    let uiDid = pCtx.uiDependencyId as usize;
+    let pVpp = pCtx.pVpp;
+    let idEnc = pCtx.pEncPic;
+    let kiNumRef0 = pCtx.iNumRef0 as usize;
+    let pRefList0 = pCtx.pRefList0;
+    for idx in 0..kiNumRef0 {
+        let Some(idRef) = pRefList0[idx] else {
             continue;
         };
         // Two pools again: the reference is a reconstruction picture, the current one
         // a spatial source picture. Both are copied to geometry before the call.
-        let sRef = (*pRefList).pic_mut(idRef).planes();
-        if (*pVaaExt).iVaaBestRefFrameNum != (*pRefList).pic(idRef).iFrameNum {
-            let sSrc = (*pCtx)
-                .pEncPic
-                .map(|id| (*pCtx.pVpp).m_pSpatialPicPool.get_mut(id).planes());
-            (*pCtx.pVpp).UpdateBlockIdcForScreen(
+        let pRefList = pCtx
+            .ref_list_mut(uiDid)
+            .expect("the dependency layer's reference list");
+        let sRef = pRefList.pic_mut(idRef).planes();
+        let iFrameNum = pRefList.pic(idRef).iFrameNum;
+        if (*pVaaExt).iVaaBestRefFrameNum != iFrameNum {
+            let sSrc = idEnc.map(|id| (*pVpp).m_pSpatialPicPool.get_mut(id).planes());
+            (*pVpp).UpdateBlockIdcForScreen(
                 (*pVaaExt).pVaaBestBlockStaticIdc,
                 Some(&sRef),
                 sSrc.as_ref(),
@@ -1299,9 +1345,14 @@ pub unsafe fn WelsUpdateSliceHeaderSyntax(
 
         pSliceHdr.uiRefCount = pCtx.iNumRef0 as u8;
         if pCtx.iNumRef0 > 0 {
-            let pRefList = ctx_ref_list(pCtx, pCtx.uiDependencyId as usize);
+            // §4.6: the flag is read out, the borrow ends, and the parameter
+            // read below takes the context for itself.
             let isLongRef = match pCtx.pRefList0[0] {
-                Some(id) => (*pRefList).pic(id).bIsLongRef,
+                Some(id) => pCtx
+                    .ref_list(pCtx.uiDependencyId as usize)
+                    .expect("the dependency layer's reference list")
+                    .pic(id)
+                    .bIsLongRef,
                 None => false,
             };
             if !isLongRef || !(*ctx_param(pCtx)).bEnableLongTermReference {
@@ -1315,7 +1366,7 @@ pub unsafe fn WelsUpdateSliceHeaderSyntax(
                         pRefReorder.SReorderingSyntax[iRefIdx].uiReorderingOfPicNumsIdc = 2;
                         if let Some(id) = pCtx.pRefList0[iRefIdx] {
                             pRefReorder.SReorderingSyntax[iRefIdx].iLongTermPicNum =
-                                (*pRefList).pic(id).iLongTermPicNum as u16;
+                                pCtx.ref_list(pCtx.uiDependencyId as usize).expect("the dependency layer's reference list").pic(id).iLongTermPicNum as u16;
                         }
                     }
                     iRefIdx += 1;
@@ -1355,7 +1406,7 @@ pub unsafe fn WelsUpdateRefSyntax(pCtx: &mut sWelsEncCtx, kiPOC: i32, kiFrameTyp
     let pParamD = &(*ctx_param(pCtx)).sDependencyLayers[uiDid];
 
     if pCtx.iNumRef0 > 0 {
-        let pRefList = ctx_ref_list(pCtx, uiDid);
+        let pRefList = pCtx.ref_list(uiDid).expect("the dependency layer's reference list");
         if let Some(id) = pCtx.pRefList0[0] {
             iAbsDiffPicNumMinus1 = pParamD.iFrameNum - (*pRefList).pic(id).iFrameNum - 1;
             if iAbsDiffPicNumMinus1 < 0 && !ctx_sps(pCtx).is_null() {
@@ -1403,8 +1454,10 @@ unsafe fn UpdateOriginalPicInfoFromCtx(pCtx: &mut sWelsEncCtx) {
     let (Some(idEnc), Some(idDec)) = (pCtx.pEncPic, pCtx.pDecPic) else {
         return;
     };
-    let pRefList = ctx_ref_list(pCtx, pCtx.uiDependencyId as usize);
-    if pRefList.is_null() || pCtx.pVpp.is_null() {
+    let Some(pRefList) = pCtx.ref_list(pCtx.uiDependencyId as usize) else {
+        return;
+    };
+    if pCtx.pVpp.is_null() {
         return;
     }
     // Two owners, two raw parents, so both references are live at once without either
@@ -1424,12 +1477,19 @@ pub unsafe fn UpdateSrcPicListLosslessScreenRefSelectionWithLtr(pCtx: &mut sWels
     UpdateOriginalPicInfoFromCtx(pCtx);
     PrefetchNextBuffer(pCtx);
     if !pCtx.pVpp.is_null() && !ctx_vaa(pCtx).is_null() {
-        let pRefList = &*(ctx_ref_list(pCtx, iDIdx as usize));
+        // §4.6, reorder: the raw roots and scalars come out first, so the one
+        // shared borrow of the list is the last thing the call needs.
+        let pVpp = pCtx.pVpp;
+        let idEnc = pCtx.pEncPic;
+        let uiMarkLongTermPicIdx = (*ctx_vaa(pCtx)).uiMarkLongTermPicIdx as i32;
+        let pRefList = pCtx
+            .ref_list(iDIdx as usize)
+            .expect("the dependency layer's reference list");
         // wels_preprocess.h:143 takes const int32_t; the uint8_t field promotes.
-        (*pCtx.pVpp).UpdateSrcListLosslessScreenRefSelectionWithLtr(
-            pCtx.pEncPic,
+        (*pVpp).UpdateSrcListLosslessScreenRefSelectionWithLtr(
+            idEnc,
             iDIdx,
-            (*ctx_vaa(pCtx)).uiMarkLongTermPicIdx as i32,
+            uiMarkLongTermPicIdx,
             pRefList,
         );
     }
@@ -1445,7 +1505,7 @@ pub unsafe fn UpdateSrcPicList(pCtx: &mut sWelsEncCtx) {
     UpdateOriginalPicInfoFromCtx(pCtx);
     PrefetchNextBuffer(pCtx);
     if !pCtx.pVpp.is_null() {
-        let pRefList = ctx_ref_list(pCtx, (iDIdx as usize) as usize);
+        let pRefList = pCtx.ref_list((iDIdx as usize) as usize).expect("the dependency layer's reference list");
         let shortCount = (*pRefList).uiShortRefCount;
         (*pCtx.pVpp).UpdateSrcList(pCtx.pEncPic, iDIdx, shortCount as u32);
     }
@@ -1461,8 +1521,7 @@ pub unsafe fn WelsUpdateRefListScreen(pCtx: &mut sWelsEncCtx) -> bool {
         return false;
     }
     let uiDid = pCtx.uiDependencyId as usize;
-    let pRefList = ctx_ref_list(pCtx, (uiDid) as usize);
-    if pRefList.is_null() || (*pRefList).pRef.is_empty() {
+    if pCtx.ref_list(uiDid).map_or(true, |l| l.pRef.is_empty()) {
         return false;
     }
     // **T9.H3 — the held cursor is gone.** T9.G7's note stood here: the body held
@@ -1477,6 +1536,18 @@ pub unsafe fn WelsUpdateRefListScreen(pCtx: &mut sWelsEncCtx) -> bool {
     let kuiTid = pCtx.uiTemporalId;
 
     if let Some(idDec) = pCtx.pDecPic {
+        // A3: as in `WelsUpdateRefList`, the list borrow is scoped to this block
+        // and the context scalars it needs are read out first, because the tail
+        // calls `DeleteNonSceneLTR` / `LTRMarkProcessScreen`.
+        let uiTemporalId = pCtx.uiTemporalId;
+        let uiDependencyId = pCtx.uiDependencyId;
+        let bIsSceneLTR = ctx_ltr_at(pCtx, uiDid).bLTRMarkingFlag
+            || ((*ctx_param(pCtx)).bEnableLongTermReference
+                && pCtx.eSliceType == EWelsSliceType::I_SLICE);
+        let iLongTermPicNum = ctx_ltr_at(pCtx, uiDid).iCurLtrIdx;
+        let Some(pRefList) = pCtx.ref_list_mut(uiDid) else {
+            return false;
+        };
         // The reconstruction picture, resolved once — S37: everything below either
         // reads its geometry or writes its own fields, and the borrow ends before the
         // reference-list shifts that would touch the pool again.
@@ -1491,16 +1562,14 @@ pub unsafe fn WelsUpdateRefListScreen(pCtx: &mut sWelsEncCtx) -> bool {
             pDecPic.expand_as_reference();
         }
 
-        pDecPic.uiTemporalId = pCtx.uiTemporalId;
-        pDecPic.uiSpatialId = pCtx.uiDependencyId;
+        pDecPic.uiTemporalId = uiTemporalId;
+        pDecPic.uiSpatialId = uiDependencyId;
         pDecPic.iFrameNum = (*pParamD).iFrameNum;
         pDecPic.iFramePoc = (*pParamD).iPOC;
         pDecPic.bUsedAsRef = true;
         pDecPic.bIsLongRef = true;
-        pDecPic.bIsSceneLTR = ctx_ltr_at(pCtx, uiDid).bLTRMarkingFlag
-            || ((*ctx_param(pCtx)).bEnableLongTermReference
-                && pCtx.eSliceType == EWelsSliceType::I_SLICE);
-        pDecPic.iLongTermPicNum = ctx_ltr_at(pCtx, uiDid).iCurLtrIdx;
+        pDecPic.bIsSceneLTR = bIsSceneLTR;
+        pDecPic.iLongTermPicNum = iLongTermPicNum;
     }
 
     if pCtx.eSliceType == EWelsSliceType::P_SLICE {
@@ -1540,7 +1609,6 @@ pub unsafe fn WelsBuildRefListScreen(
         return false;
     }
     let uiDid = pCtx.uiDependencyId as usize;
-    let pRefList = ctx_ref_list(pCtx, (uiDid) as usize);
     let pParam = ctx_param(pCtx);
     // ref_list_mgr_svc.cpp:649 — static_cast<SVAAFrameInfoExt*> (pCtx->pVaa)
         let pVaaExt = ctx_vaa(pCtx) as *mut SVAAFrameInfoExt;
@@ -1572,15 +1640,19 @@ pub unsafe fn WelsBuildRefListScreen(
             }
             let refOri = pRefOri.map(PicRef::Src);
             if iLtrRefIdx >= 0 && iLtrRefIdx <= (*pParam).iLTRRefNum {
-                let Some(idRefPic) = (*pRefList).pLongRefList[iLtrRefIdx as usize] else {
+                // A3: the list is re-derived per read, not held — this loop
+                // writes `iNumRef0`, `pRefList0` and the layer's `pRefOri`.
+                let Some(idRefPic) = pCtx.ref_list(uiDid).expect("the dependency layer's reference list").pLongRefList[iLtrRefIdx as usize] else {
                     continue;
                 };
-                let pRefPic = (*pRefList).pic(idRefPic);
-                if pRefPic.bUsedAsRef
-                    && pRefPic.bIsLongRef
-                    && pRefPic.uiTemporalId <= pCtx.uiTemporalId
-                    && (!pCtx.bCurFrameMarkedAsSceneLtr || pRefPic.bIsSceneLTR)
-                {
+                let bTake = {
+                    let pRefPic = pCtx.ref_list(uiDid).expect("the dependency layer's reference list").pic(idRefPic);
+                    pRefPic.bUsedAsRef
+                        && pRefPic.bIsLongRef
+                        && pRefPic.uiTemporalId <= pCtx.uiTemporalId
+                        && (!pCtx.bCurFrameMarkedAsSceneLtr || pRefPic.bIsSceneLTR)
+                };
+                if bTake {
                     let num0 = pCtx.iNumRef0 as usize;
                     (*current_layer(pCtx)).pRefOri[num0] = refOri;
                     pCtx.pRefList0[num0] = Some(idRefPic);
@@ -1589,11 +1661,11 @@ pub unsafe fn WelsBuildRefListScreen(
             } else {
                 let mut i = iNumRef;
                 while i >= 0 {
-                    let Some(idLong) = (*pRefList).pLongRefList[i as usize] else {
+                    let Some(idLong) = pCtx.ref_list(uiDid).expect("the dependency layer's reference list").pLongRefList[i as usize] else {
                         i -= 1;
                         continue;
                     };
-                    let uiTemporalId = (*pRefList).pic(idLong).uiTemporalId;
+                    let uiTemporalId = pCtx.ref_list(uiDid).expect("the dependency layer's reference list").pic(idLong).uiTemporalId;
                     if uiTemporalId == 0 || uiTemporalId < pCtx.uiTemporalId {
                         let num0 = pCtx.iNumRef0 as usize;
                         (*current_layer(pCtx)).pRefOri[num0] = refOri;
@@ -1692,17 +1764,26 @@ pub unsafe fn WelsMarkPicScreen(pCtx: &mut sWelsEncCtx) {
         iMaxActualLtrIdx = (*pParam).iNumRefFrame - STR_ROOM - 1 - maxTidAdj;
     }
 
-    let pRefList = ctx_ref_list(pCtx, (uiDid) as usize);
     let iNumRef = (*pParam).iNumRefFrame;
     let iLongRefNum = iNumRef - STR_ROOM;
-    let bIsRefListNotFull = ((*pRefList).uiLongRefCount as i32) < iLongRefNum;
+    // §4.6: one scalar out of the list, read before the LTR borrow is taken.
+    let bIsRefListNotFull = (pCtx
+        .ref_list(uiDid)
+        .expect("the dependency layer's reference list")
+        .uiLongRefCount as i32)
+        < iLongRefNum;
     let pSps = ctx_sps(pCtx);
     let kuiTid = pCtx.uiTemporalId;
     let kbSceneLtr = pCtx.bCurFrameMarkedAsSceneLtr;
     let iSliceNum = (*current_layer(pCtx)).iMaxSliceNum;
     // T9.G6: hoisted — see `WelsMarkMMCORefInfo`.
     let pCurLayerForMmco = &mut *current_layer(pCtx);
-    let pLtr = ctx_ltr_at(pCtx, uiDid);
+    // A3: the list and the LTR state are read and written in the same branches
+    // here, so they come out of one borrow — §4.6's combined accessor.
+    let (pRefList, pLtr) = pCtx.ref_list_and_ltr_mut(uiDid);
+    let Some(pRefList) = pRefList else {
+        return;
+    };
 
     if !(*pParam).bEnableLongTermReference {
         pLtr.iCurLtrIdx = kuiTid as i32;
