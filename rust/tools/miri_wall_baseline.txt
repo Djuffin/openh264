@@ -62,4 +62,4 @@
 # were concurrent from the start; the deviation is recorded because a pair wall is
 # unreadable without its form.
 # Format: <seconds> <commit> <date> <note>
-551 9804989b 2026-08-26 session-H2-close-lane-vs-lane-ratio-1.15-292-0-battery-551s-vs-the-amended-1200s-cap
+506 edcccc68 2026-08-26 session-H3-close-lane-vs-lane-ratio-0.92-291-0-well-under-the-1200s-cap

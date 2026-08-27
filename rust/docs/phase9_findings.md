@@ -4810,3 +4810,28 @@ and the release-mode out-of-bounds `root.add(kiDid)` into a bounds-checked panic
 every one of the 20 production call sites dereferences the result unconditionally
 today, so `null` was never a survivable answer — the panic replaces UB, not
 behaviour.
+
+---
+
+## F198 — the planted fault's ledger (S59): the ltr preset referees LTR marking at sixteen of sixteen, and mt's zero is preset design
+
+**Session H3, step 3's tail — planted in the landed form, measured, reverted.** The
+fault: the marked frame's long-term index off by one
+(`pShort.iLongTermPicNum = pLtr.iCurLtrIdx + 1` in `LTRMarkProcess`, the line
+carrying a comment naming it planted). The first fault moved the output, so no
+escalation was needed:
+
+- `sweep.sh ltr`: **16 of 16 configurations FAIL** — fourteen byte-different at
+  identical sizes (the index is a few bits of slice-header MMCO syntax), and two
+  collapsed to a fifth of the reference size (`gop=0 fb=3` at both resolutions:
+  the wrong index compounds through the LTR feedback path until reference frames
+  stop matching at all).
+- `sweep.sh mt`: **0 of 120 rows fail** — the mt preset runs with long-term
+  reference off, so the zero is the preset's design, not a coverage hole. The
+  family battery's 583 rows include the ltr sixteen, so the family gate referees
+  this code on every run this session made.
+
+Clean-tree control after the revert: ltr 16/16 PASS. S59/F175's rule is the
+point — a fault that fails nothing proves nothing, and this one failed
+everything its preset can reach, with the zero recorded beside the reason it
+explains itself.
