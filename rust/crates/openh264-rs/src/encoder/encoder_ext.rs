@@ -1203,7 +1203,7 @@ pub unsafe fn RequestMemorySvc(
     // whole, so no zeroed intermediate exists to be dropped. The null checks go
     // because allocation failure is now a panic-on-OOM, the same trade the
     // decoder's owned buffers made.
-    ctx.pOut = Box::into_raw(crate::encoder::nal_encap::SWelsEncoderOutput::new_boxed(
+    ctx.pOut = Some(crate::encoder::nal_encap::SWelsEncoderOutput::new_boxed(
         iCountBsLen as usize,
         iCountNals as usize,
     ));
@@ -1631,16 +1631,15 @@ pub unsafe fn WelsInitEncoderExt(
     let iRCMode = ctxBox.param().iRCMode;
     crate::encoder::rc::WelsRcInitModule(&mut ctxBox, iRCMode);
 
-    ctxBox.pVpp = crate::encoder::wels_preprocess::CWelsPreProcess::CreatePreProcess(&mut ctxBox);
-    if ctxBox.pVpp.is_null() {
+    // S3.B1: the take dance — the box is held out of the slot for the call that
+    // needs `&mut` to both the vpp and the context, then stored. While it is out,
+    // `pVpp` is `None`, and `AllocSpatialPictures` provably never reads the slot.
+    let Some(mut vpp) = crate::encoder::wels_preprocess::CWelsPreProcess::CreatePreProcess(&mut ctxBox) else {
         WelsUninitEncoderExt(Some(ctxBox));
         return 1;
-    }
-    // A7: as `InitFunctionPointers` — T9.G6's hoist is gone with the argument.
-    // (`pVpp` is a `Copy` raw into the preprocess object's own allocation, read
-    // out before the call so the receiver and the context argument are disjoint.)
-    let pVpp = ctxBox.pVpp;
-    iRet = (*pVpp).AllocSpatialPictures(&mut ctxBox);
+    };
+    iRet = vpp.AllocSpatialPictures(&mut ctxBox);
+    ctxBox.pVpp = Some(vpp);
     if iRet != 0 {
         WelsUninitEncoderExt(Some(ctxBox));
         return iRet;
@@ -1924,13 +1923,10 @@ pub unsafe fn WelsUninitEncoderExt(pEncContext: Option<Box<sWelsEncCtx>>) {
         );
     }
 
-    if !ctxBox.pVpp.is_null() {
-        // S67 blessed (H2): the receiver borrows the `pVpp` allocation, not the
-        // context. (`pVpp` is a `Copy` raw, read out before the call — S3.B2.)
-        let pVpp = ctxBox.pVpp;
-        (*pVpp).FreeSpatialPictures(&mut ctxBox);
-        drop(Box::from_raw(pVpp));
-        ctxBox.pVpp = null_mut();
+    // S3.B1: the take dance again — and the store back is the drop, because the
+    // teardown is the one caller that wants the box gone afterwards.
+    if let Some(mut vpp) = ctxBox.pVpp.take() {
+        vpp.FreeSpatialPictures(&mut ctxBox);
     }
 
     {
@@ -1945,10 +1941,7 @@ pub unsafe fn WelsUninitEncoderExt(pEncContext: Option<Box<sWelsEncCtx>>) {
         // `pOut->pNalLen` and the struct itself — are one `drop`. The three
         // buffers are `Vec`s that free themselves, and the struct came from
         // `Box::into_raw`, so it goes back through `Box::from_raw`.
-        if !ctxBox.pOut.is_null() {
-            drop(Box::from_raw(ctxBox.pOut));
-            ctxBox.pOut = null_mut();
-        }
+        drop(ctxBox.pOut.take());
         // T4b.2b: `DestroyReferenceStrategy` freed a box holding one back-pointer.
         // With the strategy an enum there is no allocation, so this free-cascade entry
         // is deleted rather than converted.
@@ -2106,7 +2099,7 @@ pub unsafe fn PrefetchReferencePicture(pCtx: &mut sWelsEncCtx, keFrameType: EVid
 #[allow(unsafe_code)]
 pub unsafe fn ClearFrameBsInfo(pCtx: &mut sWelsEncCtx, pFbi: *mut SFrameBSInfo) {
     (*pFbi).sLayerInfo[0].pBsBuf = pCtx.frame_bs();
-    (*pFbi).sLayerInfo[0].pNalLengthInByte = (*pCtx.pOut).sNalLen.as_mut_ptr();
+    (*pFbi).sLayerInfo[0].pNalLengthInByte = pCtx.pOut.as_deref_mut().expect("pOut lives").sNalLen.as_mut_ptr();
 
     for i in 0..(*pFbi).iLayerNum as usize {
         (*pFbi).sLayerInfo[i].iNalCount = 0;
@@ -2130,8 +2123,8 @@ pub unsafe fn StackBackEncoderStatus(pEncCtx: &mut sWelsEncCtx, keFrameType: EVi
 
     // for bitstream writing
     pEncCtx.iPosBsBuffer = 0; // reset bs buffer position
-    (*pEncCtx.pOut).iNalIndex = 0; // reset NAL index
-    (*pEncCtx.pOut).iLayerBsIndex = 0; // reset index of Layer Bs
+    pEncCtx.pOut.as_deref_mut().expect("pOut lives").iNalIndex = 0; // reset NAL index
+    pEncCtx.pOut.as_deref_mut().expect("pOut lives").iLayerBsIndex = 0; // reset index of Layer Bs
 
     // Was `InitBits(&pOut->sBsWrite, pOut->pBsBuffer, pOut->uiSize)`. The buffer
     // stays on `pOut` where it already was — owned outright since T3.6, so its
@@ -2139,7 +2132,7 @@ pub unsafe fn StackBackEncoderStatus(pEncCtx: &mut sWelsEncCtx, keFrameType: EVi
     // and resetting it is the whole of what `InitBits` did that still means
     // anything (F13's third site: the `*const`-declared, `*mut`-stored, written-
     // through buffer parameter is gone, not amended).
-    (*pEncCtx.pOut).sBsWrite = crate::encoder::vlc_encoder::BsWriter::new();
+    pEncCtx.pOut.as_deref_mut().expect("pOut lives").sBsWrite = crate::encoder::vlc_encoder::BsWriter::new();
 
     if keFrameType == EVideoFrameType::videoFrameTypeP
         || keFrameType == EVideoFrameType::videoFrameTypeI
@@ -2278,7 +2271,7 @@ pub unsafe fn WelsInitCurrentLayer(pCtx: &mut sWelsEncCtx, _kiWidth: i32, _kiHei
     let (Some(idEnc), Some(idDec)) = (pCtx.pEncPic, pCtx.pDecPic) else {
         return;
     };
-    if pCtx.pVpp.is_null() {
+    if pCtx.pVpp.is_none() {
         return;
     }
     // The handle and its pool, beside the roots they stand for (T9.B21). `idEnc` is
@@ -2293,7 +2286,11 @@ pub unsafe fn WelsInitCurrentLayer(pCtx: &mut sWelsEncCtx, _kiWidth: i32, _kiHei
     // field — the two are competing paths into one place rather than parent and
     // child, and whichever is written second pops the first. S29's boundary clause,
     // and F114a is what it costs to get wrong.
-    let pSrcPool = std::ptr::addr_of_mut!((*pCtx.pVpp).m_pSpatialPicPool);
+    // (S3.B1: the slot is read as a value — `Option<Box<T>>` is one pointer wide,
+    // F71's spelling — so `pSrcPool` still carries the vpp allocation's own
+    // provenance and outlives every later retag of the context, exactly as the raw
+    // field's cursor did. The `is_none` guard above has just proved `Some`.)
+    let pSrcPool = crate::encoder::encoder_context::ctx_src_pool_raw(pCtx);
     (*pCurDq).pEncPic = Some(idEnc);
     (*pCurDq).pSrcPool = pSrcPool;
 
@@ -2338,7 +2335,7 @@ pub unsafe fn WelsInitCurrentLayer(pCtx: &mut sWelsEncCtx, _kiWidth: i32, _kiHei
     // only the fixed modes can reach here: `bNeedAdjustingSlicing` is written by
     // `DynamicAdjustSlicing` alone, which only `AdjustBaseLayer`/`AdjustEnhanceLayer`
     // call, and only on the `SM_FIXEDSLCNUM_SLICE` arm.
-    if !pCtx.pSliceThreading.is_null()
+    if pCtx.pSliceThreading.is_some()
         && !current_layer(pCtx).is_null()
         && (*current_layer(pCtx)).bNeedAdjustingSlicing
     {
@@ -2365,38 +2362,45 @@ pub unsafe fn AddPrefixNal(
     let mut iReturn;
     *iPayloadSize = 0;
 
-    let pOut = pCtx.pOut;
-
+    // S3.B1: per-statement reborrows — see `WelsWriteOneSPS`.
     if keNalRefIdc != EWelsNalRefIdc::NRI_PRI_LOWEST {
         crate::encoder::nal_encap::WelsLoadNal(
-            pOut,
+            pCtx.pOut.as_deref_mut().expect("pOut lives"),
             EWelsNalUnitType::NAL_UNIT_PREFIX as i32,
             keNalRefIdc as i32,
         );
 
-        crate::encoder::nal_encap::WelsWriteSVCPrefixNal(
-            &mut (&mut *pOut).sBsBuffer[..],
-            &mut (*pOut).sBsWrite,
-            keNalRefIdc as i32,
-            keNalType == EWelsNalUnitType::NAL_UNIT_CODED_SLICE_IDR,
-        );
+        {
+            let pOut = pCtx.pOut.as_deref_mut().expect("pOut lives");
+            crate::encoder::nal_encap::WelsWriteSVCPrefixNal(
+                &mut pOut.sBsBuffer[..],
+                &mut pOut.sBsWrite,
+                keNalRefIdc as i32,
+                keNalType == EWelsNalUnitType::NAL_UNIT_CODED_SLICE_IDR,
+            );
+        }
 
-        crate::encoder::nal_encap::WelsUnloadNal(pOut);
+        crate::encoder::nal_encap::WelsUnloadNal(pCtx.pOut.as_deref_mut().expect("pOut lives"));
     } else {
         // No prefix NAL unit RBSP syntax here, but the NAL unit header extension is
         // still needed.
         crate::encoder::nal_encap::WelsLoadNal(
-            pOut,
+            pCtx.pOut.as_deref_mut().expect("pOut lives"),
             EWelsNalUnitType::NAL_UNIT_PREFIX as i32,
             keNalRefIdc as i32,
         );
-        crate::encoder::nal_encap::WelsUnloadNal(pOut);
+        crate::encoder::nal_encap::WelsUnloadNal(pCtx.pOut.as_deref_mut().expect("pOut lives"));
     }
 
+    // S3.B1 hoist: the layer lives in its own allocation; the raw read
+    // survives the shared `pOut`/context borrows in the argument list.
+    let pNalHeaderExt =
+        std::ptr::addr_of!((*current_layer(pCtx)).sLayerInfo.sNalHeaderExt);
     iReturn = crate::encoder::nal_encap::WelsEncodeNal(
-        &(&*pOut).sNalList[(*pOut).iNalIndex as usize - 1],
-        &(&*pOut).sBsBuffer[..],
-        Some(&(*current_layer(pCtx)).sLayerInfo.sNalHeaderExt),
+        &pCtx.pOut.as_deref().expect("pOut lives").sNalList
+            [(pCtx.pOut.as_deref().expect("pOut lives").iNalIndex - 1) as usize],
+        &pCtx.pOut.as_deref().expect("pOut lives").sBsBuffer[..],
+        Some(&*pNalHeaderExt),
         pCtx.frame_bs_cur(),
         pCtx.iFrameBsSize - pCtx.iPosBsBuffer,
         &mut *pNalLen.add(*pNalIdxInLayer as usize),
@@ -2420,41 +2424,52 @@ pub unsafe fn WritePadding(pCtx: &mut sWelsEncCtx, iLen: i32, iSize: *mut i32) -
     let mut iNalLen = 0i32;
 
     *iSize = 0;
-    let pOut = pCtx.pOut;
-    let iNal = (*pOut).iNalIndex;
-    // The frame-level writer, for non-VCL NALs.
-    let buf = &mut (&mut *pOut).sBsBuffer[..];
-    let pBs = &mut (*pOut).sBsWrite;
+    // S3.B1: the take dance — this body holds two `&mut` cursors into the output
+    // block (`buf`, `pBs`) across further calls into it, which no reborrow scheme
+    // spells; the box moves out instead, and every return path below the take
+    // stores it back first.
+    let mut pOut = pCtx.pOut.take().expect("pOut lives");
+    let iNal = pOut.iNalIndex;
 
     // `pEndBuf - pCurBuf < iLen` in comparison form; `iLen` is non-negative here
     // and a `usize` `len - pos` cannot wrap because `pos <= len` always holds for a
     // writer that has not overrun, which the write below would panic on anyway.
-    if (buf.len() - pBs.pos()) < iLen as usize || iNal >= (*pOut).sNalList.len() as i32 {
+    if (pOut.sBsBuffer.len() - pOut.sBsWrite.pos()) < iLen as usize
+        || iNal >= pOut.sNalList.len() as i32
+    {
+        pCtx.pOut = Some(pOut);
         return ENC_RETURN_MEMOVERFLOWFOUND;
     }
 
     crate::encoder::nal_encap::WelsLoadNal(
-        pOut,
+        &mut *pOut,
         EWelsNalUnitType::NAL_UNIT_FILLER_DATA as i32,
         EWelsNalRefIdc::NRI_PRI_LOWEST as i32,
     );
 
-    for _ in 0..iLen {
-        crate::encoder::vlc_encoder::BsWriteBits(buf, pBs, 8, 0xff);
+    {
+        // The frame-level writer, for non-VCL NALs — two disjoint fields of the
+        // owned box, which borrowck splits without ceremony now.
+        let buf = &mut pOut.sBsBuffer[..];
+        let pBs = &mut pOut.sBsWrite;
+        for _ in 0..iLen {
+            crate::encoder::vlc_encoder::BsWriteBits(buf, pBs, 8, 0xff);
+        }
+
+        crate::encoder::vlc_encoder::BsRbspTrailingBits(buf, pBs);
     }
 
-    crate::encoder::vlc_encoder::BsRbspTrailingBits(buf, pBs);
-
-    crate::encoder::nal_encap::WelsUnloadNal(pOut);
+    crate::encoder::nal_encap::WelsUnloadNal(&mut *pOut);
 
     let iReturn = crate::encoder::nal_encap::WelsEncodeNal(
-        &(&*pOut).sNalList[iNal as usize],
-        &(&*pOut).sBsBuffer[..],
+        &pOut.sNalList[iNal as usize],
+        &pOut.sBsBuffer[..],
         None,
         pCtx.frame_bs_cur(),
         pCtx.iFrameBsSize - pCtx.iPosBsBuffer,
         &mut iNalLen,
     );
+    pCtx.pOut = Some(pOut);
     if iReturn != ENC_RETURN_SUCCESS {
         return iReturn;
     }
@@ -2668,7 +2683,7 @@ pub unsafe fn WriteSsvcParaset(
     // point to next pLayerBsInfo
     let pNext = pLayerBsInfo.add(1);
     *ppLayerBsInfo = pNext;
-    (*pCtx.pOut).iLayerBsIndex += 1;
+    pCtx.pOut.as_deref_mut().expect("pOut lives").iLayerBsIndex += 1;
     (*pNext).pBsBuf = pCtx.frame_bs_cur();
     (*pNext).pNalLengthInByte = (*pLayerBsInfo).pNalLengthInByte.add(iCountNal as usize);
 
@@ -2723,7 +2738,7 @@ pub unsafe fn WriteSavcParaset(
     (*pLayerBsInfo).iSubSeqId = GetSubSequenceId(pCtx, EVideoFrameType::videoFrameTypeIDR);
 
     let mut pNext = pLayerBsInfo.add(1);
-    (*pCtx.pOut).iLayerBsIndex += 1;
+    pCtx.pOut.as_deref_mut().expect("pOut lives").iLayerBsIndex += 1;
     (*pNext).pBsBuf = pCtx.frame_bs_cur();
     (*pNext).pNalLengthInByte = (*pLayerBsInfo).pNalLengthInByte.add(iCountNal as usize);
     *iLayerNum += 1;
@@ -2754,7 +2769,7 @@ pub unsafe fn WriteSavcParaset(
     (*pLayerBsInfo).iSubSeqId = GetSubSequenceId(pCtx, EVideoFrameType::videoFrameTypeIDR);
 
     pNext = pLayerBsInfo.add(1);
-    (*pCtx.pOut).iLayerBsIndex += 1;
+    pCtx.pOut.as_deref_mut().expect("pOut lives").iLayerBsIndex += 1;
     (*pNext).pBsBuf = pCtx.frame_bs_cur();
     (*pNext).pNalLengthInByte = (*pLayerBsInfo).pNalLengthInByte.add(iCountNal as usize);
     *iLayerNum += 1;
@@ -2831,7 +2846,7 @@ pub unsafe fn WriteSavcParaset_Listing(
         (*pLayerBsInfo).iSubSeqId = GetSubSequenceId(pCtx, EVideoFrameType::videoFrameTypeIDR);
 
         let pNext = pLayerBsInfo.add(1);
-        (*pCtx.pOut).iLayerBsIndex += 1;
+        pCtx.pOut.as_deref_mut().expect("pOut lives").iLayerBsIndex += 1;
         (*pNext).pBsBuf = pCtx.frame_bs_cur();
         (*pNext).pNalLengthInByte = (*pLayerBsInfo).pNalLengthInByte.add(iCountNal as usize);
         *iLayerNum += 1;
@@ -2867,7 +2882,7 @@ pub unsafe fn WriteSavcParaset_Listing(
         (*pLayerBsInfo).iSubSeqId = GetSubSequenceId(pCtx, EVideoFrameType::videoFrameTypeIDR);
 
         let pNext = pLayerBsInfo.add(1);
-        (*pCtx.pOut).iLayerBsIndex += 1;
+        pCtx.pOut.as_deref_mut().expect("pOut lives").iLayerBsIndex += 1;
         (*pNext).pBsBuf = pCtx.frame_bs_cur();
         (*pNext).pNalLengthInByte = (*pLayerBsInfo).pNalLengthInByte.add(iCountNal as usize);
         *iLayerNum += 1;
@@ -3289,7 +3304,7 @@ pub unsafe fn WelsCodeOnePicPartition(
             iPartitionBsSize += iPayloadSize;
         }
 
-        crate::encoder::nal_encap::WelsLoadNal(pCtx.pOut, keNalType as i32, keNalRefIdc as i32);
+        crate::encoder::nal_encap::WelsLoadNal(pCtx.pOut.as_deref_mut().expect("pOut lives"), keNalType as i32, keNalRefIdc as i32);
         let pCurSlice = crate::encoder::svc_encode_slice::slice_in_bank(current_layer(pCtx), uSlcBuffIdx, iSliceIdx);
         (*pCurSlice).iSliceIdx = iSliceIdx;
 
@@ -3306,12 +3321,17 @@ pub unsafe fn WelsCodeOnePicPartition(
         if iReturn != ENC_RETURN_SUCCESS {
             return iReturn;
         }
-        crate::encoder::nal_encap::WelsUnloadNal(pCtx.pOut);
+        crate::encoder::nal_encap::WelsUnloadNal(pCtx.pOut.as_deref_mut().expect("pOut lives"));
 
+        // S3.B1 hoist: the layer lives in its own allocation; the raw read
+        // survives the shared `pOut`/context borrows in the argument list.
+        let pNalHeaderExt =
+            std::ptr::addr_of!((*current_layer(pCtx)).sLayerInfo.sNalHeaderExt);
         iReturn = crate::encoder::nal_encap::WelsEncodeNal(
-            &(&*pCtx.pOut).sNalList[((*pCtx.pOut).iNalIndex - 1) as usize],
-            &(&*pCtx.pOut).sBsBuffer[..],
-            Some(&(*current_layer(pCtx)).sLayerInfo.sNalHeaderExt),
+            &pCtx.pOut.as_deref().expect("pOut lives").sNalList
+                [(pCtx.pOut.as_deref().expect("pOut lives").iNalIndex - 1) as usize],
+            &pCtx.pOut.as_deref().expect("pOut lives").sBsBuffer[..],
+            Some(&*pNalHeaderExt),
             pCtx.frame_bs_cur(),
             pCtx.iFrameBsSize - pCtx.iPosBsBuffer,
             &mut *(*pLayerBsInfo).pNalLengthInByte.add(iNalIdxInLayer as usize),
@@ -3459,7 +3479,9 @@ pub unsafe fn WelsEncoderEncodeExt(
     let mut pLayerBsInfo: *mut SLayerBSInfo = std::ptr::addr_of_mut!((*pFbi).sLayerInfo).cast::<SLayerBSInfo>();
 
     // perform csc/denoise/downsample/padding, generate spatial layers
-    let iRet = (*pCtx.pVpp).BuildSpatialPicList(pCtx, pSrcPic, &mut iSpatialNum);
+    // (S3.B1: the take dance — see `WelsInitEncoderExt`; `BuildSpatialPicList`
+    // provably makes no cross-file call that could read the empty slot.)
+    let iRet = crate::encoder::encoder_context::ctx_vpp_raw(pCtx).BuildSpatialPicList(pCtx, pSrcPic, &mut iSpatialNum);
     if iRet != ENC_RETURN_SUCCESS {
         return iRet;
     }
@@ -3493,7 +3515,7 @@ pub unsafe fn WelsEncoderEncodeExt(
     // so an index is a field read, not a cursor.
     crate::encoder::encoder_context::InitBitStream(pCtx);
     (*pLayerBsInfo).pBsBuf = pCtx.frame_bs();
-    (*pLayerBsInfo).pNalLengthInByte = (*pCtx.pOut).sNalLen.as_mut_ptr();
+    (*pLayerBsInfo).pNalLengthInByte = pCtx.pOut.as_deref_mut().expect("pOut lives").sNalLen.as_mut_ptr();
     iCurDid = pCtx.sSpatialIndexMap[0].iDid as i8;
     set_current_layer(pCtx, Some(LayerIdx(iCurDid as u8)));
     (*current_layer(pCtx)).pRefLayer = None;
@@ -3560,7 +3582,7 @@ pub unsafe fn WelsEncoderEncodeExt(
             }
         }
         crate::encoder::encoder_context::InitFrameCoding(pCtx, eFrameType, iCurDid as i32);
-        (*pCtx.pVpp).AnalyzeSpatialPic(pCtx, iCurDid as i32);
+        crate::encoder::encoder_context::ctx_vpp_raw(pCtx).AnalyzeSpatialPic(pCtx, iCurDid as i32);
 
         // **`iPOC` is read at each use below rather than through a held pointer.**
         // Every call in this loop — `InitFrameCoding`, `AnalyzeSpatialPic`,
@@ -3575,9 +3597,14 @@ pub unsafe fn WelsEncoderEncodeExt(
             .expect("the spatial index map names a live source picture");
         pCtx.pEncPic = Some(idEncPic);
         {
-            let p = (*pCtx.pVpp).m_pSpatialPicPool.get_mut(idEncPic);
-            p.iPictureType = pCtx.eSliceType as i32;
-            p.iFramePoc = pCtx.param().sDependencyLayers[iCurDid as usize].iPOC;
+            // S3.B1: the two context reads are copied out first — `p` borrows the
+            // context for as long as it lives now that the pool is reached through
+            // the owned box, and borrowck orders the block accordingly.
+            let kiPictureType = pCtx.eSliceType as i32;
+            let kiFramePoc = pCtx.param().sDependencyLayers[iCurDid as usize].iPOC;
+            let p = crate::encoder::encoder_context::ctx_vpp_raw(pCtx).m_pSpatialPicPool.get_mut(idEncPic);
+            p.iPictureType = kiPictureType;
+            p.iFramePoc = kiFramePoc;
         }
 
         iCurWidth = (*pParam).iVideoWidth;
@@ -3701,7 +3728,7 @@ pub unsafe fn WelsEncoderEncodeExt(
             let idEncPicForVaa = pCtx.pEncPic;
             let bBgd = pCtx.eSliceType == EWelsSliceType::P_SLICE
                 && pCtx.param().bEnableBackgroundDetection;
-            (*pCtx.pVpp).AnalyzePictureComplexity(pCtx,
+            crate::encoder::encoder_context::ctx_vpp_raw(pCtx).AnalyzePictureComplexity(pCtx,
                 idEncPicForVaa,
                 pRef,
                 iCurDid as i32,
@@ -3743,7 +3770,7 @@ pub unsafe fn WelsEncoderEncodeExt(
             }
 
             crate::encoder::nal_encap::WelsLoadNal(
-                pCtx.pOut,
+                pCtx.pOut.as_deref_mut().expect("pOut lives"),
                 eNalType as i32,
                 eNalRefIdc as i32,
             );
@@ -3765,12 +3792,17 @@ pub unsafe fn WelsEncoderEncodeExt(
                 return pCtx.iEncoderError;
             }
 
-            crate::encoder::nal_encap::WelsUnloadNal(pCtx.pOut);
+            crate::encoder::nal_encap::WelsUnloadNal(pCtx.pOut.as_deref_mut().expect("pOut lives"));
 
+            // S3.B1 hoist: the layer lives in its own allocation; the raw read
+            // survives the shared `pOut`/context borrows in the argument list.
+            let pNalHeaderExt =
+                std::ptr::addr_of!((*current_layer(pCtx)).sLayerInfo.sNalHeaderExt);
             pCtx.iEncoderError = crate::encoder::nal_encap::WelsEncodeNal(
-                &(&*pCtx.pOut).sNalList[(*pCtx.pOut).iNalIndex as usize - 1],
-                &(&*pCtx.pOut).sBsBuffer[..],
-                Some(&(*current_layer(pCtx)).sLayerInfo.sNalHeaderExt),
+                &pCtx.pOut.as_deref().expect("pOut lives").sNalList
+                    [pCtx.pOut.as_deref().expect("pOut lives").iNalIndex as usize - 1],
+                &pCtx.pOut.as_deref().expect("pOut lives").sBsBuffer[..],
+                Some(&*pNalHeaderExt),
                 pCtx.frame_bs_cur(),
                 pCtx.iFrameBsSize - pCtx.iPosBsBuffer,
                 &mut *(*pLayerBsInfo).pNalLengthInByte.add(iNalIdxInLayer as usize),
@@ -3862,7 +3894,7 @@ pub unsafe fn WelsEncoderEncodeExt(
             let kiPartitionCnt = pCtx.iActiveThreadsNum as i32;
 
             //TODO: use a function to remove duplicate code here and ln3994
-            let iLayerBsIdx = (*pCtx.pOut).iLayerBsIndex;
+            let iLayerBsIdx = pCtx.pOut.as_deref().expect("pOut lives").iLayerBsIndex;
             // **T9.E6, the mid-row probe's verdict once round 5 stopped aborting
             // first**: this was `&mut (*pFbi).sLayerInfo[..] as *mut` — a `&mut`
             // element borrow whose Unique retag popped `pLayerBsInfo` (the raw
@@ -3950,7 +3982,7 @@ pub unsafe fn WelsEncoderEncodeExt(
                 }
 
                 crate::encoder::nal_encap::WelsLoadNal(
-                    pCtx.pOut,
+                    pCtx.pOut.as_deref_mut().expect("pOut lives"),
                     eNalType as i32,
                     eNalRefIdc as i32,
                 );
@@ -3973,12 +4005,17 @@ pub unsafe fn WelsEncoderEncodeExt(
                     return pCtx.iEncoderError;
                 }
 
-                crate::encoder::nal_encap::WelsUnloadNal(pCtx.pOut);
+                crate::encoder::nal_encap::WelsUnloadNal(pCtx.pOut.as_deref_mut().expect("pOut lives"));
 
+                // S3.B1 hoist: the layer lives in its own allocation; the raw read
+                // survives the shared `pOut`/context borrows in the argument list.
+                let pNalHeaderExt =
+                    std::ptr::addr_of!((*current_layer(pCtx)).sLayerInfo.sNalHeaderExt);
                 pCtx.iEncoderError = crate::encoder::nal_encap::WelsEncodeNal(
-                    &(&*pCtx.pOut).sNalList[(*pCtx.pOut).iNalIndex as usize - 1],
-                    &(&*pCtx.pOut).sBsBuffer[..],
-                    Some(&(*current_layer(pCtx)).sLayerInfo.sNalHeaderExt),
+                    &pCtx.pOut.as_deref().expect("pOut lives").sNalList
+                        [pCtx.pOut.as_deref().expect("pOut lives").iNalIndex as usize - 1],
+                    &pCtx.pOut.as_deref().expect("pOut lives").sBsBuffer[..],
+                    Some(&*pNalHeaderExt),
                     pCtx.frame_bs_cur(),
                     pCtx.iFrameBsSize - pCtx.iPosBsBuffer,
                     &mut *(*pLayerBsInfo).pNalLengthInByte.add(iNalIdxInLayer as usize),
@@ -4091,9 +4128,9 @@ pub unsafe fn WelsEncoderEncodeExt(
         // where the handle is rather than inside the kernel.
         if let Some(idDecPic) = fsnr {
             let pRefListPsnr = pCtx.ref_list(iCurDid as usize);
-            if pRefListPsnr.is_some() && !pCtx.pVpp.is_null() {
+            if pRefListPsnr.is_some() && pCtx.pVpp.is_some() {
                 let recon = pRefListPsnr.expect("checked just above");
-                let vpp = &*pCtx.pVpp;
+                let vpp = &*crate::encoder::encoder_context::ctx_vpp_raw(pCtx);
                 let plane_psnr = |i: usize, w: i32, h: i32| -> f32 {
                     let tar = recon.pic(idDecPic).plane(i);
                     let src = vpp.src_id(idEncPic).plane(i);
@@ -4137,7 +4174,7 @@ pub unsafe fn WelsEncoderEncodeExt(
         iLayerNum += 1;
         let pPrev = pLayerBsInfo;
         pLayerBsInfo = pLayerBsInfo.add(1);
-        (*pCtx.pOut).iLayerBsIndex += 1;
+        pCtx.pOut.as_deref_mut().expect("pOut lives").iLayerBsIndex += 1;
         (*pLayerBsInfo).pBsBuf = pCtx.frame_bs_cur();
         (*pLayerBsInfo).pNalLengthInByte =
             (*pPrev).pNalLengthInByte.add(iCountNal as usize);
@@ -4173,7 +4210,7 @@ pub unsafe fn WelsEncoderEncodeExt(
             (*pLayerBsInfo).iSubSeqId = GetSubSequenceId(pCtx, eFrameType);
             let pPrev2 = pLayerBsInfo;
             pLayerBsInfo = pLayerBsInfo.add(1);
-            (*pCtx.pOut).iLayerBsIndex += 1;
+            pCtx.pOut.as_deref_mut().expect("pOut lives").iLayerBsIndex += 1;
             (*pLayerBsInfo).pBsBuf = pCtx.frame_bs_cur();
             (*pLayerBsInfo).pNalLengthInByte = (*pPrev2).pNalLengthInByte.add(1);
             iLayerNum += 1;
@@ -4215,7 +4252,7 @@ pub unsafe fn WelsEncoderEncodeExt(
             WelsSwapDqLayers(pCtx, iNextDid);
         }
 
-        if (*pCtx.pVpp).UpdateSpatialPictures(pCtx, iCurTid as i8, iCurDid as i32) != 0 {
+        if crate::encoder::encoder_context::ctx_vpp_raw(pCtx).UpdateSpatialPictures(pCtx, iCurTid as i8, iCurDid as i32) != 0 {
             crate::encoder::wels_encoder_ext::ForceCodingIDR(pCtx, iCurDid as i32);
             // the above sets the next frame to IDR
             (*pFbi).eFrameType = eFrameType;
@@ -4255,7 +4292,7 @@ pub unsafe fn WelsEncoderEncodeExt(
         // Spelled through a derivation that lives and dies inside this statement, so
         // nothing is held across the two calls below — which is the whole hazard.
         let iDid = (*pCtx.sSpatialIndexMap.as_ptr().add(iSpatialIdx as usize)).iDid;
-        (*pCtx.pVpp).UpdateSpatialPictures(pCtx, iCurTid as i8, iDid);
+        crate::encoder::encoder_context::ctx_vpp_raw(pCtx).UpdateSpatialPictures(pCtx, iCurTid as i8, iDid);
         crate::encoder::wels_encoder_ext::ForceCodingIDR(pCtx, iDid);
         // the above sets the next frame to IDR
         (*pFbi).eFrameType = eFrameType;

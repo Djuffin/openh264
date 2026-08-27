@@ -234,7 +234,11 @@ pub struct SSliceThreading {
     /// `std::sync::Mutex<()>` and nothing outside this crate ever sees it, so the
     /// erasure bought nothing and cost the reader a hop. The plumbing is unchanged
     /// — same allocation, same lock, same critical section.
-    pub mutexSliceNumUpdate: *mut std::sync::Mutex<()>,
+    /// **S3.B1 — owned.** `WelsMutexInit`/`WelsMutexDestroy` and the
+    /// `Box::into_raw` dance are deleted with the indirection: the mutex is born
+    /// with the struct and dies with it. The fork locks it through a shared
+    /// reference resolved off [`ctx_slice_threading_raw`]'s answer.
+    pub mutexSliceNumUpdate: std::sync::Mutex<()>,
     /// One bs scratch buffer per worker slot, **owned since T7.C5**. It was
     /// `[*mut u8; MAX_THREADS_NUM]` over `alloc_zeroed` blocks, and the leak T7.A3
     /// fixed was in the walk that freed them; the array drops with the struct now, so
@@ -261,7 +265,7 @@ pub struct SSliceThreading {
 impl Default for SSliceThreading {
     fn default() -> Self {
         Self {
-            mutexSliceNumUpdate: std::ptr::null_mut(),
+            mutexSliceNumUpdate: std::sync::Mutex::new(()),
             pThreadBsBuffer: std::array::from_fn(|_| Vec::new()),
             uiThreadBsBufferNum: 0,
         }
@@ -372,22 +376,33 @@ pub fn WelsDivRound64(x: i64, y: i64) -> i64 {
 // the critical sections are identical; only the spelling differs.
 
 /// Allocates a mutex and returns its opaque handle (`WelsMutexInit`).
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
-pub unsafe fn WelsMutexInit(pMutex: *mut *mut std::sync::Mutex<()>) -> i32 {
-    let m: Box<std::sync::Mutex<()>> = Box::new(std::sync::Mutex::new(()));
-    *pMutex = Box::into_raw(m);
-    0 // WELS_THREAD_ERROR_OK
-}
+// (S3.B1: `WelsMutexInit` and `WelsMutexDestroy` stood here. The mutex is an
+// owned field of `SSliceThreading` now — born in `Default`, dead with the box —
+// so both helpers and their `Box::into_raw` dance are deleted rather than
+// converted, which is what plan §5's B1 row promised.)
 
-/// Frees a mutex allocated by [`WelsMutexInit`] (`WelsMutexDestroy`).
+/// The slice-threading block **as a raw pointer, read out of the `Box`'s slot** —
+/// F71's spelling, the fourth member of the named-raw family (`ctx_param_raw`,
+/// `ctx_ref_list_raw`, `ctx_func_list_raw`).
+///
+/// **Why the fork cannot take a reference instead.** A worker resolving the block
+/// through `(*pCtx).pSliceThreading.as_deref()` forms a shared borrow *of the
+/// context's field*; N workers doing so concurrently is lawful, but a cursor into
+/// this worker's bs slot must then be derived under that borrow and dies at any
+/// sibling retag of the context. Read as a *value*, the answer carries the
+/// heap block's own provenance (`Option<Box<T>>` is one pointer wide, `None` is
+/// null), so per-slot cursors survive everything that happens to the context —
+/// which is exactly the property the raw field gave the workers before S3.B1.
+///
+/// Null exactly where the field is `None`: a single-threaded encoder.
+///
+/// # Safety
+/// `pCtx` must point to a live encoder context.
+#[inline]
 // unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
-pub unsafe fn WelsMutexDestroy(pMutex: *mut *mut std::sync::Mutex<()>) {
-    if !(*pMutex).is_null() {
-        drop(Box::from_raw(*pMutex));
-        *pMutex = std::ptr::null_mut();
-    }
+pub unsafe fn ctx_slice_threading_raw(pCtx: *const sWelsEncCtx) -> *mut SSliceThreading {
+    std::ptr::read(std::ptr::addr_of!((*pCtx).pSliceThreading) as *const *mut SSliceThreading)
 }
 
 /// Runs `f` holding `pMutex`, i.e. a `WelsMutexLock`/`WelsMutexUnlock` pair.
@@ -395,13 +410,12 @@ pub unsafe fn WelsMutexDestroy(pMutex: *mut *mut std::sync::Mutex<()>) {
 /// A null handle runs `f` unlocked; that mirrors the C++ behaviour on an
 /// uninitialised mutex closely enough for the single-threaded paths, which
 /// never contend.
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
-pub unsafe fn with_wels_mutex<R>(pMutex: *mut std::sync::Mutex<()>, f: impl FnOnce() -> R) -> R {
-    if pMutex.is_null() {
+pub fn with_wels_mutex<R>(pMutex: Option<&std::sync::Mutex<()>>, f: impl FnOnce() -> R) -> R {
+    // S3.B1: a safe fn — `None` is the C++'s `iMultipleThreadIdc <= 1` path, which
+    // never contends and runs unlocked, exactly as the null pointer did.
+    let Some(m) = pMutex else {
         return f();
-    }
-    let m = &*pMutex;
+    };
     // A worker that panicked mid-slice leaves the mutex poisoned; the encoder
     // has no recovery path for that, so take the guard either way.
     let _guard = m.lock().unwrap_or_else(|e| e.into_inner());
@@ -753,8 +767,7 @@ pub unsafe fn RequestMtResource(
     // field inside a zeroed block is UB at its first drop — S21, the same reason
     // every other member of this port's context is constructed rather than
     // zero-filled. `Default` writes what the zeroing stood for.
-    let pSmt = Box::into_raw(Box::new(SSliceThreading::default()));
-    ctx.pSliceThreading = pSmt;
+    let mut pSmt = Box::new(SSliceThreading::default());
 
     // **T7.B4.** An `SSliceThreadPrivateData` array was allocated and filled here, and
     // `WelsEncoderEncodeExt` re-stamped two of its fields before every dynamic-mode
@@ -767,9 +780,9 @@ pub unsafe fn RequestMtResource(
     // `++iSliceNumInFrame` in `DynSlcJudgeSliceBoundaryStepBack`, exactly as
     // `svc_encode_slice.cpp:1776-1791` does. It was on this step's delete list until
     // the C++ was read; see T7.B3.
-    if WelsMutexInit(&mut (*pSmt).mutexSliceNumUpdate) != 0 {
-        return 1;
-    }
+    // (S3.B1: the `WelsMutexInit` call stood here — the mutex is a field of the
+    // `Default` the box was just built from, so there is nothing left to install
+    // and no failure path to report.)
 
     // **T7.B4.** `CreateTaskManage` stood here, and the buffer count was
     // `min(pTaskManage->GetThreadPoolThreadNum(), MAX_THREADS_NUM)` — the *pool*
@@ -781,10 +794,11 @@ pub unsafe fn RequestMtResource(
     let iThreadBufferNum = (iThreadNum as usize).min(MAX_THREADS_NUM);
     let _ = bDynamicSlice;
 
-    (*pSmt).uiThreadBsBufferNum = iThreadBufferNum;
+    pSmt.uiThreadBsBufferNum = iThreadBufferNum;
     for i in 0..iThreadBufferNum {
-        (*pSmt).pThreadBsBuffer[i] = vec![0u8; iCountBsLen as usize];
+        pSmt.pThreadBsBuffer[i] = vec![0u8; iCountBsLen as usize];
     }
+    ctx.pSliceThreading = Some(pSmt);
 
     // `mutexThreadBsBufferUsage` stood here, guarding `QueryEmptyThread`'s test-and-set
     // over `bThreadBsBufferUsage`. Both are gone: the slot is the worker's by
@@ -808,14 +822,11 @@ pub unsafe fn RequestMtResource(
 // unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
 pub unsafe fn ReleaseMtResource(ctx: &mut sWelsEncCtx) {
-    // **S3.B2** — see `RequestMtResource`. The field is still a raw
-    // (`pSliceThreading` is B1's own work); the *context* no longer is.
-    let pSmt = ctx.pSliceThreading;
-    if pSmt.is_null() {
+    // **S3.B1** — the take is the whole teardown: the box drops at the end of
+    // this function, its `Vec`s and the mutex with it.
+    let Some(pSmt) = ctx.pSliceThreading.take() else {
         return;
-    }
-
-    WelsMutexDestroy(&mut (*pSmt).mutexSliceNumUpdate);
+    };
 
     // The C++ frees the thread buffers here (`pMa->WelsFree (pSmt->pThreadBsBuffer[i],
     // ...)`, slice_multi_threading.cpp:426). The raw translation kept the null-out and
@@ -830,8 +841,7 @@ pub unsafe fn ReleaseMtResource(ctx: &mut sWelsEncCtx) {
     // stopped and joined its worker threads. A scope's threads are joined by the
     // scope, so there is no pool lifetime left to manage.
 
-    drop(Box::from_raw(pSmt));
-    ctx.pSliceThreading = std::ptr::null_mut();
+    drop(pSmt);
 }
 
 /// Aggregates individual thread-local slice bitstream buffers into the contiguous frame bitstream buffer.
@@ -1363,14 +1373,15 @@ impl SliceJobHandle {
         // than trusted where it is used. Both entry points refuse a null
         // `pSliceThreading` before they get here, so the deref is the same one the
         // workers will do.
+        let pSmt = ctx_slice_threading_raw(pCtx);
         debug_assert!(
-            iBsSlot >= 0 && (iBsSlot as usize) < (*(*pCtx).pSliceThreading).uiThreadBsBufferNum,
+            iBsSlot >= 0 && (iBsSlot as usize) < (*pSmt).uiThreadBsBufferNum,
             "job slot {} is outside the {} allocated bs buffers — F67's bound",
             iBsSlot,
-            (*(*pCtx).pSliceThreading).uiThreadBsBufferNum
+            (*pSmt).uiThreadBsBufferNum
         );
         debug_assert!(
-            !(*(*pCtx).pSliceThreading).pThreadBsBuffer[iBsSlot as usize].is_empty(),
+            !(*pSmt).pThreadBsBuffer[iBsSlot as usize].is_empty(),
             "job slot {iBsSlot} has no buffer behind it"
         );
         Self { pCtx, iBsSlot, iFirstSlice, iSliceStep, iSliceCount, bRecordsTime }
@@ -1502,8 +1513,10 @@ unsafe fn EncodeOneSliceInJob(
 // unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
 unsafe fn ForkWidth(pCtx: &mut sWelsEncCtx, iItemCount: i32) -> i32 {
-    let pSmt = pCtx.pSliceThreading;
-    let iBuffers = if pSmt.is_null() { 1 } else { (*pSmt).uiThreadBsBufferNum as i32 };
+    let iBuffers = pCtx
+        .pSliceThreading
+        .as_deref()
+        .map_or(1, |pSmt| pSmt.uiThreadBsBufferNum as i32);
     iItemCount.min(iBuffers.max(1)).max(1)
 }
 
@@ -1523,7 +1536,7 @@ pub unsafe fn EncodeFixedSlicesForked(pCtx: &mut sWelsEncCtx, kiSliceCount: i32)
     // T9.H4: the `is_null()` disjunct that opened this guard is gone — a
     // `&mut sWelsEncCtx` cannot be null, and every caller now holds one. The
     // remaining conditions are unchanged.
-    if kiSliceCount <= 0 || pCtx.pSliceThreading.is_null() {
+    if kiSliceCount <= 0 || pCtx.pSliceThreading.is_none() {
         return ENC_RETURN_SUCCESS;
     }
     let bRecordsTime = pCtx.param_opt().is_some() && pCtx.param().bUseLoadBalancing;
@@ -1604,7 +1617,7 @@ pub unsafe fn UpdateMbMapForked(pCtx: &mut sWelsEncCtx, kiTaskCount: i32) {
     // T9.H: the `pCtx.is_null()` disjunct is gone — a `&mut sWelsEncCtx`
     // cannot be null and every caller now holds one. The rest is unchanged.
     if kiTaskCount <= 0 || current_layer(pCtx).is_null()
-        || pCtx.pSliceThreading.is_null()
+        || pCtx.pSliceThreading.is_none()
     {
         return;
     }
@@ -1808,7 +1821,7 @@ pub unsafe fn EncodeSizeLimitedSlicesForked(pCtx: &mut sWelsEncCtx, kiPartitionC
     // T9.H4: the `is_null()` disjunct that opened this guard is gone — a
     // `&mut sWelsEncCtx` cannot be null, and every caller now holds one. The
     // remaining conditions are unchanged.
-    if kiPartitionCnt <= 0 || pCtx.pSliceThreading.is_null() {
+    if kiPartitionCnt <= 0 || pCtx.pSliceThreading.is_none() {
         return ENC_RETURN_SUCCESS;
     }
     // Every partition is its own worker: the partition count is bounded by

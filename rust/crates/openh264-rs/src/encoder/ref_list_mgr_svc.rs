@@ -1286,7 +1286,7 @@ pub unsafe fn WelsBuildRefList(
 pub unsafe fn UpdateBlockStatic(pCtx: &mut sWelsEncCtx) {
     // T9.H: the `pCtx.is_null()` disjunct is gone — a `&mut sWelsEncCtx`
     // cannot be null and every caller now holds one. The rest is unchanged.
-    if pCtx.vaa().is_none() || pCtx.pVpp.is_null() {
+    if pCtx.vaa().is_none() || pCtx.pVpp.is_none() {
         return;
     }
     // ref_list_mgr_svc.cpp:649 — static_cast<SVAAFrameInfoExt*> (pCtx->pVaa)
@@ -1301,11 +1301,13 @@ pub unsafe fn UpdateBlockStatic(pCtx: &mut sWelsEncCtx) {
     let pVaaExt = pCtx.vaa_ext();
     let iVaaBestRefFrameNum = (*pVaaExt).iVaaBestRefFrameNum;
     let pVaaBestBlockStaticIdc = (*pVaaExt).pVaaBestBlockStaticIdc;
-    // §4.6, reorder: the roots and scalars first — `pVpp` is a raw field, so a
-    // copy of it is a copy of the pointer, not a borrow — then the list per
-    // iteration, held only across the two reads that need it.
+    // §4.6, reorder: the roots and scalars first, then the list per iteration,
+    // held only across the two reads that need it. **S3.B1**: the vpp is *taken*
+    // for the loop — the box moves out of the context, so the per-iteration
+    // `ref_list_mut` borrow and the vpp uses are borrows of two different owners,
+    // which is the fact the old raw-copy spelling was expressing.
     let uiDid = pCtx.uiDependencyId as usize;
-    let pVpp = pCtx.pVpp;
+    let pVpp = crate::encoder::encoder_context::ctx_vpp_raw(pCtx);
     let idEnc = pCtx.pEncPic;
     let kiNumRef0 = pCtx.iNumRef0 as usize;
     let pRefList0 = pCtx.pRefList0;
@@ -1321,8 +1323,8 @@ pub unsafe fn UpdateBlockStatic(pCtx: &mut sWelsEncCtx) {
         let sRef = pRefList.pic_mut(idRef).planes();
         let iFrameNum = pRefList.pic(idRef).iFrameNum;
         if iVaaBestRefFrameNum != iFrameNum {
-            let sSrc = idEnc.map(|id| (*pVpp).m_pSpatialPicPool.get_mut(id).planes());
-            (*pVpp).UpdateBlockIdcForScreen(
+            let sSrc = idEnc.map(|id| pVpp.m_pSpatialPicPool.get_mut(id).planes());
+            pVpp.UpdateBlockIdcForScreen(
                 pVaaBestBlockStaticIdc,
                 Some(&sRef),
                 sSrc.as_ref(),
@@ -1473,16 +1475,20 @@ unsafe fn UpdateOriginalPicInfoFromCtx(pCtx: &mut sWelsEncCtx) {
     let (Some(idEnc), Some(idDec)) = (pCtx.pEncPic, pCtx.pDecPic) else {
         return;
     };
+    if pCtx.pVpp.is_none() {
+        return;
+    }
+    // Two owners — the reference list and the taken preprocess box — so both
+    // references are live at once without either borrow overlapping the other
+    // (S3.B1: the take is what says so to borrowck; the old raw parents said it
+    // only to Miri). The take comes first: it needs the `&mut`, and the list
+    // borrow that follows is shared.
+    let pVpp = crate::encoder::encoder_context::ctx_vpp_raw(pCtx);
     let Some(pRefList) = pCtx.ref_list(pCtx.uiDependencyId as usize) else {
         return;
     };
-    if pCtx.pVpp.is_null() {
-        return;
-    }
-    // Two owners, two raw parents, so both references are live at once without either
-    // borrow overlapping the other.
     let pRecon: &SPicture = (*pRefList).pic(idDec);
-    let pOrig: &mut SPicture = (*pCtx.pVpp).m_pSpatialPicPool.get_mut(idEnc);
+    let pOrig: &mut SPicture = pVpp.m_pSpatialPicPool.get_mut(idEnc);
     UpdateOriginalPicInfo(pOrig, pRecon);
 }
 
@@ -1495,17 +1501,18 @@ pub unsafe fn UpdateSrcPicListLosslessScreenRefSelectionWithLtr(pCtx: &mut sWels
     let iDIdx = pCtx.uiDependencyId as i32;
     UpdateOriginalPicInfoFromCtx(pCtx);
     PrefetchNextBuffer(pCtx);
-    if !pCtx.pVpp.is_null() && pCtx.vaa().is_some() {
-        // §4.6, reorder: the raw roots and scalars come out first, so the one
-        // shared borrow of the list is the last thing the call needs.
-        let pVpp = pCtx.pVpp;
+    if pCtx.pVpp.is_some() && pCtx.vaa().is_some() {
+        // §4.6, reorder: the scalars come out first, then the vpp is *taken*
+        // (S3.B1) so the shared borrow of the list and the `&mut` receiver are
+        // borrows of two different owners.
         let idEnc = pCtx.pEncPic;
         let uiMarkLongTermPicIdx = pCtx.vaa().expect("the frame's video-analysis block").uiMarkLongTermPicIdx as i32;
+        let pVpp = crate::encoder::encoder_context::ctx_vpp_raw(pCtx);
         let pRefList = pCtx
             .ref_list(iDIdx as usize)
             .expect("the dependency layer's reference list");
         // wels_preprocess.h:143 takes const int32_t; the uint8_t field promotes.
-        (*pVpp).UpdateSrcListLosslessScreenRefSelectionWithLtr(
+        pVpp.UpdateSrcListLosslessScreenRefSelectionWithLtr(
             idEnc,
             iDIdx,
             uiMarkLongTermPicIdx,
@@ -1523,10 +1530,13 @@ pub unsafe fn UpdateSrcPicList(pCtx: &mut sWelsEncCtx) {
     let iDIdx = pCtx.uiDependencyId as i32;
     UpdateOriginalPicInfoFromCtx(pCtx);
     PrefetchNextBuffer(pCtx);
-    if !pCtx.pVpp.is_null() {
+    if pCtx.pVpp.is_some() {
         let pRefList = pCtx.ref_list((iDIdx as usize) as usize).expect("the dependency layer's reference list");
         let shortCount = (*pRefList).uiShortRefCount;
-        (*pCtx.pVpp).UpdateSrcList(pCtx.pEncPic, iDIdx, shortCount as u32);
+        // S3.B1: reached through the slot read (`ctx_vpp_raw`) so the `&mut`
+        // receiver and the shared list borrow above are siblings off two
+        // allocations, minting nothing that could pop `SDqLayer::pSrcPool`.
+        crate::encoder::encoder_context::ctx_vpp_raw(pCtx).UpdateSrcList(pCtx.pEncPic, iDIdx, shortCount as u32);
     }
 }
 
@@ -1656,13 +1666,13 @@ pub unsafe fn WelsBuildRefListScreen(
             // duration of this call, which Miri refuses. The context is an argument now,
             // so there is no second route and nothing to refuse.
             //
-            // Two hoists, both T9.G6's shape: the object pointer and the scene-LTR flag
-            // are read out before the borrow, because neither may read through the
-            // context in the same argument list that passes it.
-            let pVpp = pCtx.pVpp;
+            // The scene-LTR flag is read out before the borrow (T9.G6's shape);
+            // the object itself is *taken* (S3.B1), so the `&mut self` receiver
+            // and the `&mut pCtx` argument are two owners for the call.
             let bSceneLtr = pCtx.bCurFrameMarkedAsSceneLtr;
-            if !pVpp.is_null() {
-                iLtrRefIdx = (*pVpp).GetRefFrameInfo(pCtx, idx, bSceneLtr, &mut pRefOri);
+            if pCtx.pVpp.is_some() {
+                iLtrRefIdx =
+                    crate::encoder::encoder_context::ctx_vpp_raw(pCtx).GetRefFrameInfo(pCtx, idx, bSceneLtr, &mut pRefOri);
             }
             let refOri = pRefOri.map(PicRef::Src);
             if iLtrRefIdx >= 0 && iLtrRefIdx <= iLTRRefNum {

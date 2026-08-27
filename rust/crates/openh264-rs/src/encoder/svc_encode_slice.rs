@@ -913,10 +913,13 @@ pub unsafe fn ctx_pic_ref<'a>(pCtx: *mut sWelsEncCtx, r: PicRef) -> Option<&'a S
             .ref_list((*pCtx).uiDependencyId as usize)
             .map(|pRefList| pRefList.pic(id)),
         PicRef::Src(id) => {
-            if (*pCtx).pVpp.is_null() {
+            if (*pCtx).pVpp.is_none() {
                 None
             } else {
-                Some((*(*pCtx).pVpp).src_id(id))
+                // S3.B1: the slot read, and the **shared** half of the pair — this
+                // body is fork-reachable, so `ctx_vpp_raw`'s `&mut` would be a
+                // data race the MT probes refuse. See `ctx_vpp_ref`.
+                Some(crate::encoder::encoder_context::ctx_vpp_ref(pCtx).src_id(id))
             }
         }
     }
@@ -1554,7 +1557,13 @@ pub unsafe fn WelsSliceHeaderExtInit(pEncCtx: *mut sWelsEncCtx, pCurLayer: *mut 
     pCurSliceHeader.uiIdrPicId = pParamInternal.uiIdrPicId;
 
     if let Some(id) = (*pEncCtx).pEncPic {
-        pCurSliceHeader.iPicOrderCntLsb = (*(*pEncCtx).pVpp).src_id(id).iFramePoc;
+        // S3.B1: the slot read, and the **shared** half of the pair. This exact
+        // line is where Miri refused the first draft's `Box` route (a retag that
+        // popped `pSrcPool`) and then the mid-row MT probe refused the second
+        // draft's `&mut` route (a retag write raced by every worker). See
+        // `ctx_vpp_ref`; the body is fork-reachable and reads one `Copy` field.
+        pCurSliceHeader.iPicOrderCntLsb =
+            crate::encoder::encoder_context::ctx_vpp_ref(pEncCtx).src_id(id).iFramePoc;
     }
 
     if (*pEncCtx).eSliceType == EWelsSliceType::P_SLICE {
@@ -2986,7 +2995,22 @@ pub unsafe fn slice_bs_buffer<'a>(
     if (*pSliceBs).pBs.is_some() {
         thread_bs_buffer(pEncCtx, kiBufferIdx, (*pSliceBs).uiSize)
     } else {
-        &mut (&mut *(*pEncCtx).pOut).sBsBuffer[..]
+        // **F217, measured in S3.B1**: this arm is main-thread-only. The fence
+        // (`bIndependenceBsBuffer = iMultipleThreadIdc > 1 && mode != SM_SINGLE_SLICE`)
+        // guarantees `pBs = Some` for every slice of a forked layer, and the frame
+        // dispatch peels `SM_SINGLE_SLICE` onto the inline path before either fork
+        // branch. Probed, not argued: a thread-identity assert here survived the
+        // eight MT+single-slice configs and the full 895-case debug sweep.
+        // (S3.B1: `pOut` is an `Option<Box<_>>` now, resolved through the slot read
+        // so the returned slice carries the output block's own provenance rather
+        // than a child of a context retag — F71, and prohibition 2's rule for a
+        // body whose context parameter is raw.)
+        let pOut = crate::encoder::encoder_context::ctx_out_raw(pEncCtx);
+        // The slice comes off the `Vec`'s own buffer (`addr_of_mut!` + `as_mut_ptr`,
+        // F71's spelling) rather than through an autoref of `*pOut`, which would be
+        // a `Unique` retag over the whole output block.
+        let v = std::ptr::addr_of_mut!((*pOut).sBsBuffer);
+        std::slice::from_raw_parts_mut((*v).as_mut_ptr(), (*v).len())
     }
 }
 
@@ -3018,7 +3042,11 @@ pub unsafe fn thread_bs_buffer<'a>(pEncCtx: *mut sWelsEncCtx, kiSlot: usize, kui
     // shares. `as_ptr() as *mut u8` returns the buffer's own provenance without a
     // `Unique` retag on the three-word header, which is the difference between a
     // read two workers can make at once and a race.
-    let v = std::ptr::addr_of!((*(*pEncCtx).pSliceThreading).pThreadBsBuffer[kiSlot]);
+    // (S3.B1: the block resolves through `ctx_slice_threading_raw` — the slot
+    // read keeps the answer's provenance the heap block's own, so this worker's
+    // element cursor survives whatever happens to the context.)
+    let pSmt = crate::encoder::slice_multi_threading::ctx_slice_threading_raw(pEncCtx);
+    let v = std::ptr::addr_of!((*pSmt).pThreadBsBuffer[kiSlot]);
     bs_buffer((*v).as_ptr() as *mut u8, kuiSize)
 }
 
@@ -3080,7 +3108,9 @@ pub unsafe fn slice_writer(pEncCtx: *mut sWelsEncCtx, pSliceBs: *mut SWelsSliceB
     if (*pSliceBs).pBs.is_some() {
         std::ptr::addr_of_mut!((*pSliceBs).sBsWrite)
     } else {
-        std::ptr::addr_of_mut!((*(*pEncCtx).pOut).sBsWrite)
+        // S3.B1: as `slice_bs_buffer`'s arm — the same fence, the same slot read.
+        let pOut = crate::encoder::encoder_context::ctx_out_raw(pEncCtx);
+        std::ptr::addr_of_mut!((*pOut).sBsWrite)
     }
 }
 
@@ -3395,14 +3425,18 @@ pub unsafe fn DynSlcJudgeSliceBoundaryStepBack(
         // The null-mutex arm of `with_wels_mutex` runs the closure unlocked, which
         // is the C++'s `iMultipleThreadIdc <= 1` path: `pSliceThreading` is null
         // there, because `RequestMtResource` only runs above 1.
-        let pSmtMutex = {
+        let pSmtMutex: Option<&std::sync::Mutex<()>> = {
             let bMt = (*pEncCtx).param_opt().is_some()
-                && (*pEncCtx).param().iMultipleThreadIdc > 1
-                && !(*pEncCtx).pSliceThreading.is_null();
+                && (*pEncCtx).param().iMultipleThreadIdc > 1;
             if bMt {
-                (*(*pEncCtx).pSliceThreading).mutexSliceNumUpdate
+                // S3.B1: the block resolves through the slot read and the shared
+                // reference is formed *into its own allocation* — every worker may
+                // hold one at once, and locking takes `&self`.
+                let pSmt =
+                    crate::encoder::slice_multi_threading::ctx_slice_threading_raw(pEncCtx);
+                if pSmt.is_null() { None } else { Some(&(*pSmt).mutexSliceNumUpdate) }
             } else {
-                std::ptr::null_mut()
+                None
             }
         };
         crate::encoder::slice_multi_threading::with_wels_mutex(pSmtMutex, || {
@@ -4164,10 +4198,12 @@ pub unsafe fn FrameBsRealloc(
     pLayerBsInfo: *mut SLayerBSInfo,
     kiMaxSliceNumOld: i32,
 ) -> i32 {
-    // S67 (H2): **not a context retag** — this borrows the `pOut` allocation. It is in the
-    // detector's list only because the regex is textual; see the audit note in the log.
-    let pOut = &mut *pCtx.pOut;
-    let mut iCountNals = pOut.sNalList.len() as i32;
+    // (S3.B1: the S67/H2 audit note that stood here is borrowck's job now — this
+    // is a field-scoped borrow of an owned box, not a context retag.)
+    // §4.6's reorder: the count is a scalar, so the `pOut` borrow ends on this line
+    // and the `param()` reads below are free.
+    let mut iCountNals =
+        pCtx.pOut.as_deref().expect("pOut lives").sNalList.len() as i32;
     let spatial_layers = if pCtx.param_opt().is_some() { pCtx.param().iSpatialLayerNum } else { 1 };
     iCountNals += kiMaxSliceNumOld * (spatial_layers + if pCtx.bNeedPrefixNalFlag { 1 } else { 0 });
 
@@ -4176,6 +4212,7 @@ pub unsafe fn FrameBsRealloc(
     // is the same three steps and keeps the same guarantee, that the existing
     // `iCountNals` entries survive at their indices and the new tail is zeroed
     // (`WelsMallocz` zeroed it too).
+    let pOut = pCtx.pOut.as_deref_mut().expect("pOut lives");
     pOut.sNalList.resize(iCountNals as usize, SWelsNalRaw::default());
     pOut.sNalLen.resize(iCountNals as usize, 0);
     let pNalLen = pOut.sNalLen.as_mut_ptr();
@@ -4247,7 +4284,7 @@ pub unsafe fn SliceLayerInfoUpdate(
     (*pLayerBsInfo).iNalCount = GetCurLayerNalCount(&mut *current_layer(pCtx), iCodedSliceNum);
     let iCodedNalCount = GetTotalCodedNalCount(pFrameBsInfo);
 
-    if iCodedNalCount > (*pCtx.pOut).sNalList.len() as i32 {
+    if iCodedNalCount > pCtx.pOut.as_deref().expect("pOut lives").sNalList.len() as i32 {
         // T9.G6: hoisted (shape B).
         let iCurMaxSliceNum = (*current_layer(pCtx)).iMaxSliceNum;
         iRet = FrameBsRealloc(pCtx, pFrameBsInfo, pLayerBsInfo, iCurMaxSliceNum);

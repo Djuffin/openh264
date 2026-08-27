@@ -1024,21 +1024,19 @@ impl CWelsPreProcess {
     /// Factory constructor instantiating the preprocessing subsystem.
     // unsafe-cat: port-raw(Phase 9)
     #[allow(unsafe_code)]
-    pub unsafe fn CreatePreProcess(pEncCtx: &mut sWelsEncCtx) -> *mut CWelsPreProcess {
+    pub fn CreatePreProcess(pEncCtx: &mut sWelsEncCtx) -> Option<Box<CWelsPreProcess>> {
         // T9.H: the `pEncCtx.is_null()` disjunct is gone — a `&mut sWelsEncCtx`
-        // cannot be null and every caller now holds one. The rest is unchanged.
-        if pEncCtx.param_opt().is_none() {
-            return std::ptr::null_mut();
-        }
+        // cannot be null and every caller now holds one. S3.B1: the `Box` is
+        // returned as itself — `None` is the null the raw return carried.
+        pEncCtx.param_opt()?;
 
         // Built whole and boxed (S21: the object owns a `Box` now, so a zeroed
         // shell is not a valid intermediate). This used to `alloc_zeroed` and set
         // three fields; `Default` is those zeros written out.
-        let p = Box::new(CWelsPreProcess {
+        Some(Box::new(CWelsPreProcess {
             m_eUsageType: pEncCtx.param().iUsageType,
             ..Default::default()
-        });
-        Box::into_raw(p)
+        }))
     }
 
     /// Destructor releasing allocated picture buffers and plugin interfaces.

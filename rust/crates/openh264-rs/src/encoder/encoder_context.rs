@@ -710,6 +710,113 @@ pub unsafe fn ctx_func_list_raw(pCtx: *mut sWelsEncCtx) -> *mut SWelsFuncPtrList
     std::ptr::read(std::ptr::addr_of!((*pCtx).pFuncList) as *const *mut SWelsFuncPtrList)
 }
 
+/// The encoder output block **as a raw pointer, read out of the `Box`'s slot** —
+/// F71's spelling, minted for the two fork-reachable bodies whose `pOut` arm is
+/// main-thread-only by measurement (F217): `slice_bs_buffer` and `slice_writer`.
+/// Their context parameter is a raw, so a `&mut`-shaped route would be a
+/// whole-context retag through a raw root (prohibition 2); the slot read carries
+/// the block's own provenance instead.
+///
+/// Null exactly where the field is `None`: before init, after teardown.
+///
+/// # Safety
+/// `pCtx` must point to a live encoder context.
+#[inline]
+// unsafe-cat: fork-shared(S63)
+#[allow(unsafe_code)]
+pub unsafe fn ctx_out_raw(pCtx: *const sWelsEncCtx) -> *mut SWelsEncoderOutput {
+    std::ptr::read(std::ptr::addr_of!((*pCtx).pOut) as *const *mut SWelsEncoderOutput)
+}
+
+/// The preprocessor's **spatial picture pool** as a raw pointer, read out of
+/// `pVpp`'s slot — F71's spelling, and F211's *provenance* category rather than
+/// debt: the answer is **stored** in `SDqLayer::pSrcPool` and read by the fork for
+/// a whole frame, so it must carry the pool's own provenance. A `&mut`-derived
+/// cast would stamp a fresh `Unique` that the next `pVpp` reborrow pops, leaving
+/// the fork reading through a dead tag — and F208 is the proof that no byte gate
+/// sees that.
+///
+/// # Safety
+/// `pCtx` must point to a live encoder context whose `pVpp` is `Some`.
+#[inline]
+// unsafe-cat: fork-shared(S63)
+#[allow(unsafe_code)]
+pub unsafe fn ctx_src_pool_raw(pCtx: *const sWelsEncCtx) -> *mut SrcPicPool {
+    let pVpp = std::ptr::read(
+        std::ptr::addr_of!((*pCtx).pVpp)
+            as *const *mut crate::encoder::wels_preprocess::CWelsPreProcess,
+    );
+    std::ptr::addr_of_mut!((*pVpp).m_pSpatialPicPool)
+}
+
+/// The preprocess object **as a reference off a slot read** — the route every
+/// body uses that needs the vpp and the context at once.
+///
+/// **Why not `pVpp.as_deref_mut()`, and Miri is what said so.** `SDqLayer::pSrcPool`
+/// stores a raw into `m_pSpatialPicPool`, a *field of this allocation*, and the fork
+/// reads it for a whole frame. Reaching the object through the `Box` mints a fresh
+/// `Unique` over the whole block on every `as_deref`/store (F215's rule, one
+/// allocation further in), so the two routes pop each other: a shared retag through
+/// `pSrcPool` kills the `Box` tag, and re-storing the `Box` kills `pSrcPool`. The
+/// S3.B1 first draft used an `Option::take` dance here and Miri refused it at
+/// `WelsSliceHeaderExtInit` — the byte gates were 583/583 in both profiles through it.
+///
+/// Reading the slot as a *value* mints nothing: every derivation is a sibling off
+/// the allocation's own tag, which is exactly what the `*mut CWelsPreProcess` field
+/// gave these callers before B1 owned it. The ownership moved; the aliasing did not.
+///
+/// # Safety
+/// `pCtx` must point to a live encoder context whose `pVpp` is `Some`.
+#[inline]
+// unsafe-cat: fork-shared(S63)
+#[allow(unsafe_code)]
+pub unsafe fn ctx_vpp_raw<'a>(
+    pCtx: *const sWelsEncCtx,
+) -> &'a mut crate::encoder::wels_preprocess::CWelsPreProcess {
+    let pVpp = std::ptr::read(
+        std::ptr::addr_of!((*pCtx).pVpp)
+            as *const *mut crate::encoder::wels_preprocess::CWelsPreProcess,
+    );
+    &mut *pVpp
+}
+
+/// The preprocess object as a **shared** reference off the same slot read — the
+/// only route an **in-fork** body may take, and the reader half of the pair.
+///
+/// **This split is not stylistic; the MT probes are what forced it.** S3.B1's
+/// first draft let `ctx_pic_ref` and `WelsSliceHeaderExtInit` — both fork-reachable
+/// (F217 names them) — reach the object through [`ctx_vpp_raw`]. A `&mut` retag is
+/// a *write* as far as the data-race model is concerned, so N workers each taking
+/// one is S63's violation with no read of the object needed to make it real:
+///
+/// ```text
+/// Data race detected between (1) retag write on thread `unnamed-2`
+///   and (2) retag write of type CWelsPreProcess on thread `unnamed-3`
+/// ```
+///
+/// The encode shards cannot see this — they are single-threaded — and both byte
+/// sweeps were 583/583 through it. `fork_join_encodes_a_frame_whose_slice_boundary_is_mid_row`
+/// is what refused it, which is plan §4.7's whole argument in one failure.
+///
+/// Shared retags coexist with each other and with the `pSrcPool` reads (F208's
+/// direction is `&mut`-shaped derivations, and there are none here), so this is the
+/// route for every fork-reachable read.
+///
+/// # Safety
+/// `pCtx` must point to a live encoder context whose `pVpp` is `Some`.
+#[inline]
+// unsafe-cat: fork-shared(S63)
+#[allow(unsafe_code)]
+pub unsafe fn ctx_vpp_ref<'a>(
+    pCtx: *const sWelsEncCtx,
+) -> &'a crate::encoder::wels_preprocess::CWelsPreProcess {
+    let pVpp = std::ptr::read(
+        std::ptr::addr_of!((*pCtx).pVpp)
+            as *const *const crate::encoder::wels_preprocess::CWelsPreProcess,
+    );
+    &*pVpp
+}
+
 /// The coding parameters **as a raw pointer, read out of the `Box`'s slot** — the
 /// root the twenty-six per-layer *cursors* are taken from.
 ///
@@ -1484,7 +1591,12 @@ pub struct sWelsEncCtx {
     /// on the *field* dies with the null; the checks on raw table *parameters*
     /// stay, because the survivors still take one. Root: [`sWelsEncCtx::func_list`].
     pub pFuncList: Box<SWelsFuncPtrList>,
-    pub pSliceThreading: *mut SSliceThreading,
+    /// **S3.B1 — owned.** The slice-threading block, `Box`-built by
+    /// `RequestMtResource` and dropped by `ReleaseMtResource`; `None` is the null
+    /// that meant "single-threaded encoder". The fork reads it through
+    /// [`ctx_slice_threading_raw`](crate::encoder::slice_multi_threading::ctx_slice_threading_raw)
+    /// — a slot read (F71), so worker cursors carry the block's own provenance.
+    pub pSliceThreading: Option<Box<SSliceThreading>>,
     // `pTaskManage: *mut c_void` stood here — an `IWelsTaskManage*` in C++, erased to
     // `c_void` because the port could not name the type from this module. It held the
     // one reference to the process-wide thread pool. Deleted at T7.B4; the encoder
@@ -1574,7 +1686,15 @@ pub struct sWelsEncCtx {
     /// the last step, giving the `Box` an owner so `Create`/`Destroy` are `new`/`Drop`.
     /// `None` before the preprocessor runs. Resolve it with [`sWelsEncCtx::vaa`].
     pub pVaa: Option<Box<SVAAFrameInfo>>,
-    pub pVpp: *mut crate::encoder::wels_preprocess::CWelsPreProcess,
+    /// **S3.B1 — owned.** The preprocess object, `Box`-built by
+    /// [`CWelsPreProcess::CreatePreProcess`] and dropped by the teardown; `None` is
+    /// the null the raw held before init and after `FreeMemorySvc`. The methods
+    /// that take both `&mut self` (the vpp) and `&mut sWelsEncCtx` are called
+    /// through the `Option::take` dance — the box moves out for the call and back
+    /// after, which is a pointer move and leaves no aliasing for either referee.
+    /// In-fork bodies read it via `(*pCtx).pVpp.as_deref()` — a *field*-scoped
+    /// shared borrow, narrower than any accessor retag (F208).
+    pub pVpp: Option<Box<crate::encoder::wels_preprocess::CWelsPreProcess>>,
     /// **T6.H2 — owned.** `RequestMemorySvc` sized this from the strategy's
     /// `GetNeededSpsNum` and `WelsMallocz`'d it; the length is the same number and
     /// the entries are the same zeros. Reach its root with [`ctx_sps_array`]; the
@@ -1606,7 +1726,12 @@ pub struct sWelsEncCtx {
     pub iSpsNum: i32,
     pub iSubsetSpsNum: i32,
     pub iPpsNum: i32,
-    pub pOut: *mut SWelsEncoderOutput,
+    /// **S3.B1 — owned.** The encoder output block, `Box`-built at init
+    /// (`new_boxed`) and dropped at teardown; `None` is the raw's null. The two
+    /// fork-reachable readers (`slice_bs_buffer`, `slice_writer`) resolve it
+    /// through [`ctx_out_raw`] on their **main-thread-only** arm — F217's probe is
+    /// the measurement that the arm never runs in-fork.
+    pub pOut: Option<Box<SWelsEncoderOutput>>,
     /// The frame's output bitstream — **T6.H4, and the encoder's one arena of
     /// bytes.** Every NAL the frame emits is written into it at `iPosBsBuffer`, and
     /// `SLayerBSInfo::pBsBuf` holds cursors into it that outlive the call that made
@@ -1726,7 +1851,7 @@ impl sWelsEncCtx {
             iMvdCostTableStride: 0,
             pStrideTab: None,
             pFuncList: Box::new(SWelsFuncPtrList::default()),
-            pSliceThreading: std::ptr::null_mut(),
+            pSliceThreading: None,
 
             // `TemporalLayer`, the zero discriminant, is the variant the old
             // `CreateReferenceStrategy` factory's `_ =>` arm produced — asserted in
@@ -1783,7 +1908,7 @@ impl sWelsEncCtx {
 
             // ---- preprocessing --------------------------------------------------
             pVaa: None,
-            pVpp: std::ptr::null_mut(),
+            pVpp: None,
 
             // ---- parameter sets: the arrays, their aliases, their counts --------
             // The three `Array` members are allocations (H's); the three singular
@@ -1800,7 +1925,7 @@ impl sWelsEncCtx {
             iPpsNum: 0,
 
             // ---- output bitstream ------------------------------------------------
-            pOut: std::ptr::null_mut(),
+            pOut: None,
             pFrameBs: Vec::new(),
             iFrameBsSize: 0,                // paired with pFrameBs
             iPosBsBuffer: 0,                // the write cursor into it, rewound per AU
@@ -2210,19 +2335,19 @@ pub unsafe fn InitBitStream(pEncCtx: &mut sWelsEncCtx) {
     // T9.H4: the `is_null()` disjunct that opened this guard is gone — a
     // `&mut sWelsEncCtx` cannot be null, and every caller now holds one. The
     // remaining conditions are unchanged.
-    if pEncCtx.pOut.is_null() {
+    let Some(pOut) = pEncCtx.pOut.as_deref_mut() else {
         return;
-    }
-    pEncCtx.iPosBsBuffer = 0;
-    (*pEncCtx.pOut).iNalIndex = 0;
-    (*pEncCtx.pOut).iLayerBsIndex = 0;
+    };
+    pOut.iNalIndex = 0;
+    pOut.iLayerBsIndex = 0;
 
     // Was `InitBits(&…sBsWrite, …pBsBuffer, …uiSize)`. The buffer and its length stay
     // where they were; the writer is a position, and resetting it is all `InitBits`
     // did that still means anything. Its `kpBuf: *const u8` parameter — stored as
     // `pStartBuf: *mut u8` and written through — is deleted rather than amended
     // (`phase2_findings.md` F13, third site).
-    (*pEncCtx.pOut).sBsWrite = crate::encoder::vlc_encoder::BsWriter::new();
+    pOut.sBsWrite = crate::encoder::vlc_encoder::BsWriter::new();
+    pEncCtx.iPosBsBuffer = 0;
 }
 
 /// Configures slice types, NAL headers, and Picture Order Count (POC) for the frame.
