@@ -20,7 +20,7 @@ before you plan anything (F221, and "the ordering question" below).
 |---|---|
 | **B3** `0dc2e7bb` | `wels_encoder_ext.rs`'s raw context root deleted. All five `Self::ctx_ptr` callers resolve the context off `m_pEncContext` as a reference; `ctx_ptr` itself is gone |
 | **B2** `8c3de9fb` | `encoder_ext.rs`'s five `*mut *mut sWelsEncCtx` parameters → `&mut sWelsEncCtx`; `WelsInitEncoderExt`/`WelsUninitEncoderExt` build and tear down through the `Box`, `into_raw`/`from_raw` bracket deleted. `RequestMtResource`/`ReleaseMtResource` came with them (B1's row in the plan, forced here by the signature change) |
-| **B1** `980bfb16` | `pOut`/`pVpp`/`pSliceThreading` → `Option<Box<T>>`, `mutexSliceNumUpdate` → an owned `Mutex<()>`. `WelsMutexInit`/`WelsMutexDestroy` deleted, `with_wels_mutex` now a safe fn |
+| **B1** `0ec45dd9` | `pOut`/`pVpp`/`pSliceThreading` → `Option<Box<T>>`, `mutexSliceNumUpdate` → an owned `Mutex<()>`. `WelsMutexInit`/`WelsMutexDestroy` deleted, `with_wels_mutex` now a safe fn |
 
 ### Numbers at S3's close (re-measure; do not quote these)
 
@@ -178,7 +178,8 @@ whether it stays raw-tagged until D3. **Do not convert first and classify after.
 ### The cascade, and what it is actually worth
 
 F216 records stage A's cascade sitting in escrow behind the DQ-layer family, and
-S3 did not collect it — the tracking number moved 612 → 613. The family is
+S3 did not collect it — the tracking number closed at 612 → 614, and F224 explains
+why none of that movement was the cascade. The family is
 measured fresh at S3's close (`grep -rn '\b<name>(' src`):
 
 | route | sites | | route | sites |
