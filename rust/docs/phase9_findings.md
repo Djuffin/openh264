@@ -4835,3 +4835,60 @@ Clean-tree control after the revert: ltr 16/16 PASS. S59/F175's rule is the
 point — a fault that fails nothing proves nothing, and this one failed
 everything its preset can reach, with the zero recorded beside the reason it
 explains itself.
+
+---
+
+## F199 — F93's four parse-only rows were one missing statement: the port never zeroed `iTotalNumMbRec` at fresh-picture prefetch, so `ResetActiveSPSForEachLayer` — gated on that count in both trees — could never fire after a dropped access unit
+
+**Session J, step 0.** The reproduction first (S68): at `edcccc68`,
+`ecref_rs res/Error_I_P.264 99999999 --parse-only` diverged from the checked-in
+golden on exactly F93's four rows (7, 9, 13, 14; 0 frames emitted against the
+reference's 1) — the finding's table was current to the digit.
+
+**What the instrumented run showed.** The stream carries **three different SPSs**
+(ids 0/1/2 — 352x288, 640x480, 352x288; the finding never said this, and it is why
+the asset leans on `pActiveLayerSps` at every boundary). The port's
+`iTotalNumMbRec` *accumulated across access units*: 132 left by the dropped AU1
+(IDR starting at mb 264, EC disabled), then 132+400=532 after the mis-split IDR,
+then 1201 forever. Both trees gate `ResetActiveSPSForEachLayer` on
+`iTotalNumMbRec == 0` (`decoder_context.h:549`), so the stale count meant
+`pActiveLayerSps[0]` stayed at SPS 0 after the sequence switched to SPS 1 — and
+`CheckAccessUnitBoundary`'s first clause (`active != cur` ⇒ boundary) then **split
+the one recoverable IDR access unit in two**: row 7 constructed `{IDR mb 0..399}`
+alone (532 of 1200 ⇒ `dsFramePending`), row 9 constructed `{IDR mb 400..1199}`
+with no slice at mb 0 (⇒ `dsBitstreamError`, nothing emitted), and rows 13/14
+inherited the wreckage (`dsRefLost`/`dsBitstreamError` against the reference's
+two `dsFramePending`s).
+
+**The root is one statement of `DecodeCurrentAccessUnit`.** The reference zeroes
+the count whenever it prefetches a fresh picture (`decoder_core.cpp:2568-2569`,
+inside the `pDec == NULL` arm, *before* the null check):
+
+```c
+if (pCtx->iTotalNumMbRec != 0)
+  pCtx->iTotalNumMbRec = 0;
+```
+
+The port's prefetch arm had the prefetch, the null check and the `bNewSeqBegin`
+stamp — and not the zeroing. The same commit also restores the arm's `else if
+(iTotalNumMbRec == 0)` re-stamp of `pDec->bNewSeqBegin`
+(`decoder_core.cpp:2588-2590`), which the port was equally missing.
+
+**Why seven phases of referees never saw it.** With error concealment on (every
+conformance asset, all 2707 malformed rows), an incomplete frame is *concealed*:
+`iTotalNumMbRec` is forced to the full count and `DecodeFrameConstruction` zeroes
+it on output — the leak needs a *dropped* AU, i.e. EC disabled. On the ordinary
+path with `--ec=0` (F96's referee), the leaked count changed no observable row on
+this asset — `ecref` vs `ecref_rs` re-measured IDENTICAL there both before and
+after this fix, in all three EC modes — because the ordinary path's divergent
+observables (planes, `iBufferStatus`) never materialize for the dropped frames.
+Parse-only is the one mode where the boundary mis-split becomes output: the split
+decides which NALs an emitting call hands back. So F93's "parse-only is the
+messenger" was right twice over — the defect was in the shared path, and only
+parse-only could see it.
+
+**After the fix**: all 18 rows of `Error_I_P` match the golden including the
+emitted frame's SHA-1; the asset moves from the retired `DIVERGING` list into
+`ASSETS` (the golden now referees it on every `cargo test`); the malformed 16 and
+the parity suites pass unchanged; `gates.sh commit` green (the fix is
+decoder-side — encoder bytes cannot move, and did not).

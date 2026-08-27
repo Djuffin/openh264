@@ -4395,10 +4395,26 @@ pub fn DecodeCurrentAccessUnit(
                 Some(pool) => pool.prefetch_free(),
                 None => None,
             };
+            // `decoder_core.cpp:2568-2569` — a fresh picture starts from zero
+            // recorded macroblocks, and the zeroing precedes the null check because
+            // the C's does. Without it a count left over from a dropped access unit
+            // (EC disabled, refs lost) accumulates across frames, and
+            // `ResetActiveSPSForEachLayer` — gated on `iTotalNumMbRec == 0` in both
+            // trees — never fires again (F93's root).
+            if (*pCtx).iTotalNumMbRec != 0 {
+                (*pCtx).iTotalNumMbRec = 0;
+            }
             if (*pCtx).pDec.is_none() {
                 (*pCtx).iErrorCode |= dsOutOfMemory;
                 return ERR_INFO_REF_COUNT_OVERFLOW;
             }
+            let bNewSeqBegin = (*pCtx).bNewSeqBegin;
+            if let Some(pDec) = dec_pic(&mut (*pCtx).pPicBuff, (*pCtx).pDec) {
+                pDec.bNewSeqBegin = bNewSeqBegin;
+            }
+        } else if (*pCtx).iTotalNumMbRec == 0 {
+            // `decoder_core.cpp:2588-2590` — a picture already prefetched but not yet
+            // started re-takes the flag ("pDec != NULL, already start").
             let bNewSeqBegin = (*pCtx).bNewSeqBegin;
             if let Some(pDec) = dec_pic(&mut (*pCtx).pPicBuff, (*pCtx).pDec) {
                 pDec.bNewSeqBegin = bNewSeqBegin;
