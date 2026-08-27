@@ -453,34 +453,65 @@ impl CWelsParametersetIdStrategyObj {
     /// early return.
     // unsafe-cat: port-raw(Phase 9)
     #[allow(unsafe_code)]
+    /// **T9.H2 — the three arrays are slices, and that is what unblocks X2's ~36.**
+    ///
+    /// They were three raw roots, supplied by three separate `ctx_*_array(*ppCtx)`
+    /// calls at the one call site. Three `&mut` out of one context through three
+    /// calls is exactly what the borrow checker refuses, which is why the charter
+    /// recorded this as S63's forbidden retag and folded the dependent sites into
+    /// this session. [`ctx_paraset_arrays`] answers all three from **one** borrow,
+    /// so the shape is legal and the raws are gone.
+    ///
+    /// The `is_null()` guards become `len()` guards, and they are **stronger than
+    /// what they replace**: `copy_nonoverlapping` wrote `MAX_SPS_COUNT` entries into
+    /// a block whose length nothing checked. It is in bounds — this body runs only
+    /// on the listing kinds, and `ParasetIdKind::SpsListing` and its two siblings
+    /// set `m_iBasicNeededSpsNum = MAX_SPS_COUNT`, which is what `RequestMemorySvc`
+    /// allocates — but "it is in bounds" was an argument, and it is an assertion now.
     pub unsafe fn LoadPrevious(
         &mut self,
         pExistingParasetList: *mut SExistingParasetList,
-        pSpsArray: *mut SWelsSPS,
-        pSubsetArray: *mut SSubsetSps,
-        pPpsArray: *mut SWelsPPS,
+        pSpsArray: &mut [SWelsSPS],
+        pSubsetArray: &mut [SSubsetSps],
+        pPpsArray: &mut [SWelsPPS],
     ) {
         if !self.eIdKind.is_listing() || pExistingParasetList.is_null() {
             return;
         }
         // `CWelsParametersetSpsListing::LoadPreviousSps` — `:424`.
         self.m_sParaSetOffset.uiInUseSpsNum = (*pExistingParasetList).uiInUseSpsNum;
-        if !pSpsArray.is_null() {
-            std::ptr::copy_nonoverlapping(
-                (*pExistingParasetList).sSps.as_ptr(),
-                pSpsArray,
-                MAX_SPS_COUNT,
-            );
+        debug_assert!(
+            pSpsArray.is_empty() || pSpsArray.len() >= MAX_SPS_COUNT,
+            "pSpsArray holds {} entries; LoadPrevious copies {MAX_SPS_COUNT}",
+            pSpsArray.len(),
+        );
+        if !pSpsArray.is_empty() {
+            let n = MAX_SPS_COUNT.min(pSpsArray.len());
+            // `addr_of!` rather than `&(*raw).sSps[..n]`: the latter is an implicit
+                // autoref through a raw pointer, which the compiler now refuses.
+                let src = std::slice::from_raw_parts(
+                    std::ptr::addr_of!((*pExistingParasetList).sSps).cast::<SWelsSPS>(),
+                    n,
+                );
+                pSpsArray[..n].copy_from_slice(src);
         }
         if self.GetNeededSubsetSpsNum() > 0 {
             self.m_sParaSetOffset.uiInUseSubsetSpsNum =
                 (*pExistingParasetList).uiInUseSubsetSpsNum;
-            if !pSubsetArray.is_null() {
-                std::ptr::copy_nonoverlapping(
-                    (*pExistingParasetList).sSubsetSps.as_ptr(),
-                    pSubsetArray,
-                    MAX_SPS_COUNT,
+            debug_assert!(
+                pSubsetArray.is_empty() || pSubsetArray.len() >= MAX_SPS_COUNT,
+                "pSubsetArray holds {} entries; LoadPrevious copies {MAX_SPS_COUNT}",
+                pSubsetArray.len(),
+            );
+            if !pSubsetArray.is_empty() {
+                let n = MAX_SPS_COUNT.min(pSubsetArray.len());
+                // `addr_of!` rather than `&(*raw).sSubsetSps[..n]`: the latter is an implicit
+                // autoref through a raw pointer, which the compiler now refuses.
+                let src = std::slice::from_raw_parts(
+                    std::ptr::addr_of!((*pExistingParasetList).sSubsetSps).cast::<SSubsetSps>(),
+                    n,
                 );
+                pSubsetArray[..n].copy_from_slice(src);
             }
         } else {
             self.m_sParaSetOffset.uiInUseSubsetSpsNum = 0;
@@ -490,12 +521,20 @@ impl CWelsParametersetIdStrategyObj {
         // (`paraset_strategy.h:155`), so only this one carries PPSs across.
         if self.eIdKind == ParasetIdKind::SpsPpsListing {
             self.m_sParaSetOffset.uiInUsePpsNum = (*pExistingParasetList).uiInUsePpsNum;
-            if !pPpsArray.is_null() {
-                std::ptr::copy_nonoverlapping(
-                    (*pExistingParasetList).sPps.as_ptr(),
-                    pPpsArray,
-                    MAX_PPS_COUNT,
+            debug_assert!(
+                pPpsArray.is_empty() || pPpsArray.len() >= MAX_PPS_COUNT,
+                "pPpsArray holds {} entries; LoadPrevious copies {MAX_PPS_COUNT}",
+                pPpsArray.len(),
+            );
+            if !pPpsArray.is_empty() {
+                let n = MAX_PPS_COUNT.min(pPpsArray.len());
+                // `addr_of!` rather than `&(*raw).sPps[..n]`: the latter is an implicit
+                // autoref through a raw pointer, which the compiler now refuses.
+                let src = std::slice::from_raw_parts(
+                    std::ptr::addr_of!((*pExistingParasetList).sPps).cast::<SWelsPPS>(),
+                    n,
                 );
+                pPpsArray[..n].copy_from_slice(src);
             }
         }
     }
