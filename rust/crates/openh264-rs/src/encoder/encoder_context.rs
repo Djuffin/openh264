@@ -817,47 +817,6 @@ pub fn ctx_ltr_at(pCtx: &mut sWelsEncCtx, kiDid: usize) -> &mut SLTRState {
     &mut pCtx.pLtr[kiDid]
 }
 
-/// The frame bitstream's write cursor — `pFrameBs + iPosBsBuffer`. See
-/// [`ctx_frame_bs`].
-///
-/// **T9.G5 — this took the position as a parameter, and it was `ctx_frame_bs_at`.**
-/// It never varied. All 18 production callers passed the same expression:
-///
-/// ```text
-/// $ grep -rn 'ctx_frame_bs_at(' src/ | sed 's/.*ctx_frame_bs_at/&/' | sort | uniq -c
-///    9 ctx_frame_bs_at(pCtx, (*pCtx).iPosBsBuffer);
-///    9 ctx_frame_bs_at(pCtx, (*pCtx).iPosBsBuffer),
-/// ```
-///
-/// S54: a two-argument accessor whose second argument is always a field of the
-/// first is a one-argument accessor written 18 times. Written that way it was also
-/// **16 of the 51 live shape-B hazards** — the callee takes the retag and the
-/// argument reads through the same context, which is a borrow-checker error the
-/// moment either body flips. The write position is not a parameter; it is the
-/// invariant, and it now lives here where the bounds assert can name it.
-///
-/// **Permanent raw return, as [`ctx_frame_bs`] — `SLayerBSInfo::pBsBuf` is
-/// `codec_app_def.h:640` and crosses the C boundary (F193).**
-///
-/// # Safety
-/// As [`sWelsEncCtx::frame_bs`].
-#[inline]
-// unsafe-cat: C-ABI
-#[allow(unsafe_code)]
-pub unsafe fn ctx_frame_bs_cur(pCtx: &mut sWelsEncCtx) -> *mut u8 {
-    // A1: the root is the safe reader. A4 converts this one.
-    let root = pCtx.frame_bs();
-    if root.is_null() {
-        return std::ptr::null_mut();
-    }
-    let kiPos = pCtx.iPosBsBuffer;
-    debug_assert!(
-        kiPos >= 0 && (kiPos as usize) <= pCtx.pFrameBs.len(),
-        "frame bitstream cursor {kiPos} is outside the buffer"
-    );
-    root.add(kiPos as usize)
-}
-
 /// `pCtx->pDqIdcMap`, as the slice it is — T6.H3, **converted at T9.H2 (step 4)**.
 ///
 /// This answered the root as `*mut SDqIdc` and both production callers immediately
@@ -877,40 +836,11 @@ pub unsafe fn ctx_frame_bs_cur(pCtx: &mut sWelsEncCtx) -> *mut u8 {
 /// buffer.
 ///
 /// The other four of the brief's five stay raw for reasons measured at their
-/// callers — see F193, and the notes on `ctx_frame_bs`/`ctx_frame_bs_cur`.
+/// callers — see F193, and the notes on [`sWelsEncCtx::frame_bs`] /
+/// [`sWelsEncCtx::frame_bs_cur`].
 #[inline]
 pub fn ctx_dq_idc_map(pCtx: &mut sWelsEncCtx) -> &mut [SDqIdc] {
     &mut pCtx.pDqIdcMap
-}
-
-/// The **root** of `pCtx->pSpsArray` — T6.H2, and S40's spelling again.
-///
-/// The three parameter-set arrays were `WelsMallocz`'d blocks that every consumer
-/// indexed with `.add(id)`; they are `Vec`s now and this answers the same address
-/// the block's head had, so `.add(id)` downstream is unchanged. `Vec::as_mut_ptr`
-/// reads the pointer out of the header rather than forming a `&mut [T]` over the
-/// array, so a caller may hold an entry cursor across a second call — which
-/// `LoadPrevious` does with all three at once, and `WelsInitCurrentLayer` does per
-/// layer.
-///
-/// **Empty answers null**, which is what `pSubsetArray` held whenever the
-/// configuration needed no subset SPS, and what all three held before
-/// `RequestMemorySvc` ran. Every `is_null()` guard downstream therefore still asks
-/// the question it was written to ask — `Vec::as_mut_ptr` on an empty `Vec` answers
-/// a dangling non-null address, so this branch is load-bearing, not defensive.
-///
-/// # Safety
-/// `pCtx` must point to a live encoder context.
-#[inline]
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
-pub unsafe fn ctx_sps_array(pCtx: *mut sWelsEncCtx) -> *mut SWelsSPS {
-    // **F71** — see `ctx_param`. Shared access to the `Vec`, buffer provenance out.
-    let v = std::ptr::addr_of!((*pCtx).pSpsArray);
-    if (*v).is_empty() {
-        return std::ptr::null_mut();
-    }
-    (*v).as_ptr() as *mut SWelsSPS
 }
 
 /// The three parameter-set arrays **at once, as disjoint borrows** — T9.H2, and the
@@ -938,38 +868,6 @@ pub fn ctx_paraset_arrays(
     pCtx: &mut sWelsEncCtx,
 ) -> (&mut [SWelsSPS], &mut [SSubsetSps], &mut [SWelsPPS]) {
     (&mut pCtx.pSpsArray, &mut pCtx.pSubsetArray, &mut pCtx.pPPSArray)
-}
-
-/// The **root** of `pCtx->pSubsetArray` — see [`ctx_sps_array`].
-///
-/// # Safety
-/// As [`ctx_sps_array`].
-#[inline]
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
-pub unsafe fn ctx_subset_array(pCtx: *mut sWelsEncCtx) -> *mut SSubsetSps {
-    // **F71** — see `ctx_param`. Shared access to the `Vec`, buffer provenance out.
-    let v = std::ptr::addr_of!((*pCtx).pSubsetArray);
-    if (*v).is_empty() {
-        return std::ptr::null_mut();
-    }
-    (*v).as_ptr() as *mut SSubsetSps
-}
-
-/// The **root** of `pCtx->pPPSArray` — see [`ctx_sps_array`].
-///
-/// # Safety
-/// As [`ctx_sps_array`].
-#[inline]
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
-pub unsafe fn ctx_pps_array(pCtx: *mut sWelsEncCtx) -> *mut SWelsPPS {
-    // **F71** — see `ctx_param`. Shared access to the `Vec`, buffer provenance out.
-    let v = std::ptr::addr_of!((*pCtx).pPPSArray);
-    if (*v).is_empty() {
-        return std::ptr::null_mut();
-    }
-    (*v).as_ptr() as *mut SWelsPPS
 }
 
 /// [`SStrideTables::MbIndexY`] reached through the context. See
@@ -1099,6 +997,60 @@ impl sWelsEncCtx {
         self.ppRefPicListExt.get_mut(kiDid)?.as_deref_mut()
     }
 
+    /// The **parameter-set arrays** — `pSpsArray`, `pSubsetArray`, `pPPSArray`
+    /// (T6.H2), as the slices they have been since `RequestMemorySvc` stopped
+    /// calling `WelsMallocz`.
+    ///
+    /// The raw roots answered null on an empty `Vec` and every consumer offset
+    /// them with `.add(id)`; the slices are indexed, and the two `is_null()`
+    /// guards ask `is_empty()`. **Empty is a real state** for `pSubsetArray` —
+    /// the configuration may need no subset SPS — so the question those guards
+    /// asked is the question they still ask.
+    ///
+    /// **Readers for the fork, writers for init.** The arrays are filled by
+    /// `RequestMemorySvc` and by the parameter-set strategy, both single-threaded;
+    /// nothing in the fork writes them, and a whole-tree grep for a write through
+    /// `layer_sps` / `layer_pps` / `layer_subset_sps`'s answers returns nothing.
+    /// The three `layer_*` accessors keep raw returns because their far end is
+    /// `SDqLayer::sLayerInfo`, stage C's; they derive them from these readers.
+    ///
+    /// [`paraset_arrays`](Self::paraset_arrays) answers all three at once, which
+    /// is what `LoadPrevious` needs (T9.H2).
+    #[inline]
+    pub fn sps_array(&self) -> &[SWelsSPS] {
+        &self.pSpsArray
+    }
+
+    /// [`sps_array`](Self::sps_array), mutably. Single-threaded only.
+    #[inline]
+    pub fn sps_array_mut(&mut self) -> &mut [SWelsSPS] {
+        &mut self.pSpsArray
+    }
+
+    /// The **subset SPS array** — see [`sps_array`](Self::sps_array).
+    #[inline]
+    pub fn subset_array(&self) -> &[SSubsetSps] {
+        &self.pSubsetArray
+    }
+
+    /// [`subset_array`](Self::subset_array), mutably. Single-threaded only.
+    #[inline]
+    pub fn subset_array_mut(&mut self) -> &mut [SSubsetSps] {
+        &mut self.pSubsetArray
+    }
+
+    /// The **PPS array** — see [`sps_array`](Self::sps_array).
+    #[inline]
+    pub fn pps_array(&self) -> &[SWelsPPS] {
+        &self.pPPSArray
+    }
+
+    /// [`pps_array`](Self::pps_array), mutably. Single-threaded only.
+    #[inline]
+    pub fn pps_array_mut(&mut self) -> &mut [SWelsPPS] {
+        &mut self.pPPSArray
+    }
+
     /// A dependency layer's **reference list and its long-term-reference state,
     /// from one borrow** — §4.6's combined accessor, and the shape
     /// `ref_list_mgr_svc.rs` wants at nine of its bodies.
@@ -1155,6 +1107,35 @@ impl sWelsEncCtx {
     #[inline]
     pub fn rc_at_mut(&mut self, kiDid: usize) -> &mut SWelsSvcRc {
         &mut self.pWelsSvcRc[kiDid]
+    }
+
+    /// The frame bitstream's **write cursor** — `pFrameBs + iPosBsBuffer`. See
+    /// [`frame_bs`](Self::frame_bs), including why the return is **permanently
+    /// raw** (F193: nine of its sites store the answer into
+    /// `SLayerBSInfo::pBsBuf`, `codec_app_def.h:640`).
+    ///
+    /// **T9.G5 — this took the position as a parameter, and it was
+    /// `ctx_frame_bs_at`.** It never varied: all 18 production callers passed
+    /// `(*pCtx).iPosBsBuffer`. S54 — a two-argument accessor whose second argument
+    /// is always a field of the first is a one-argument accessor written 18 times.
+    /// The write position is not a parameter; it is the invariant, and it lives
+    /// here where the bounds assert can name it.
+    ///
+    /// `wrapping_add` rather than `.add`: the same address, computed without an
+    /// in-bounds claim, so the accessor is safe and the claim stays in the
+    /// `debug_assert` that always made it.
+    #[inline]
+    pub fn frame_bs_cur(&self) -> *mut u8 {
+        let root = self.frame_bs();
+        if root.is_null() {
+            return std::ptr::null_mut();
+        }
+        let kiPos = self.iPosBsBuffer;
+        debug_assert!(
+            kiPos >= 0 && (kiPos as usize) <= self.pFrameBs.len(),
+            "frame bitstream cursor {kiPos} is outside the buffer"
+        );
+        root.wrapping_add(kiPos as usize)
     }
 
     /// The **frame bitstream buffer's root** — T6.H4.
@@ -1370,7 +1351,8 @@ pub struct sWelsEncCtx {
     /// The frame's output bitstream — **T6.H4, and the encoder's one arena of
     /// bytes.** Every NAL the frame emits is written into it at `iPosBsBuffer`, and
     /// `SLayerBSInfo::pBsBuf` holds cursors into it that outlive the call that made
-    /// them. Root: [`ctx_frame_bs`]; the write cursor: [`ctx_frame_bs_cur`].
+    /// them. Root: [`sWelsEncCtx::frame_bs`]; the write cursor:
+    /// [`sWelsEncCtx::frame_bs_cur`].
     ///
     /// **A recorded deviation.** The C++ takes this block with `WelsMalloc`, not
     /// `WelsMallocz` — it is the one member of `RequestMemorySvc`'s set that starts
@@ -2297,15 +2279,10 @@ mod tests {
         // real slice and H3 converted `ctx_ltr_at` to a real reference (deleting
         // `ctx_ltr` outright), so those rows are gone the way `ctx_dq_idc_map`'s
         // went. The accessors below are in-fork and stay raw under S63.
-        siblings!("ctx_sps_array", ctx_sps_array(p),
-            |q: *mut crate::encoder::param_svc::SWelsSPS| (*q).uiSpsId = 7,
-            |q: *mut crate::encoder::param_svc::SWelsSPS| (*q).uiSpsId == 7);
-        siblings!("ctx_subset_array", ctx_subset_array(p),
-            |q: *mut crate::encoder::param_svc::SSubsetSps| (*q).pSps.uiSpsId = 5,
-            |q: *mut crate::encoder::param_svc::SSubsetSps| (*q).pSps.uiSpsId == 5);
-        siblings!("ctx_pps_array", ctx_pps_array(p),
-            |q: *mut crate::encoder::param_svc::SWelsPPS| (*q).iPpsId = 3,
-            |q: *mut crate::encoder::param_svc::SWelsPPS| (*q).iPpsId == 3);
+        // The three parameter-set arrays had rows here until A4. They are slices
+        // now (`sps_array`, `subset_array`, `pps_array`), so they join the
+        // references below: no sibling property to assert, the borrow checker
+        // referees the coexistences Miri used to.
         // `ctx_dq_idc_map` had a row here until T9.H2 step 4. It returns
         // `&mut [SDqIdc]` now, so it has no sibling property to assert — two
         // derivations cannot coexist, and the borrow checker says so at the call
@@ -2366,7 +2343,6 @@ mod tests {
                 // `ctx_dq_idc_map` left this list at T9.H2 step 4, and `ctx_ltr`
                 // at T9.H3 (deleted with the raw family) — a real reference
                 // cannot be *held* alongside the others, which is the point.
-                ctx_sps_array(p).cast(), ctx_pps_array(p).cast(),
                 (*p).mvd_cost_origin().cast(),
                 ctx_vaa(p).cast(), ctx_param(p).cast(),
                 ctx_dq_layer(p, 0).cast(), (*p).frame_bs().cast(),
@@ -2407,7 +2383,7 @@ mod tests {
         let p: *mut sWelsEncCtx = &mut *ctx;
         // Before `RequestMemorySvc`, both answer the null the raw field held.
         assert!(unsafe { (*p).frame_bs() }.is_null());
-        assert!(unsafe { ctx_frame_bs_cur(&mut *p) }.is_null());
+        assert!(unsafe { (*p).frame_bs_cur() }.is_null());
 
         ctx.pFrameBs = vec![0u8; 64];
         ctx.iFrameBsSize = 64;
@@ -2426,7 +2402,7 @@ mod tests {
         for i in 0..8i32 {
             unsafe {
                 (*p).iPosBsBuffer = i;
-                *ctx_frame_bs_cur(&mut *p) = 0xA0 | i as u8;
+                *(*p).frame_bs_cur() = 0xA0 | i as u8;
             }
         }
         // The use that matters: the FIRST cursor, after eight later derivations.
@@ -2434,7 +2410,7 @@ mod tests {
             assert_eq!(*stored, 0xA0, "the stored pBsBuf still reaches the buffer");
             *stored.add(8) = 0x5A;
             (*p).iPosBsBuffer = 8;
-            assert_eq!(*ctx_frame_bs_cur(&mut *p), 0x5A);
+            assert_eq!(*(*p).frame_bs_cur(), 0x5A);
         }
 
         // And the whole buffer reads back through the container, which is the point
