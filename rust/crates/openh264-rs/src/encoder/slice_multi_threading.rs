@@ -727,19 +727,23 @@ pub unsafe fn DynamicAdjustSlicePEncCtxAll(pCurDq: &mut SDqLayer, pRunLength: *m
 // unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
 pub unsafe fn RequestMtResource(
-    ppCtx: *mut *mut sWelsEncCtx,
+    ctx: &mut sWelsEncCtx,
     iCountBsLen: i32,
     _iMaxSliceBufferSize: i32,
     bDynamicSlice: bool,
 ) -> i32 {
     // A7: the `pCodingParam` argument is gone — see `InitFunctionPointers`. The
     // caller held it as a `&mut` across this call, which Miri refused.
-    if ppCtx.is_null() || (*ppCtx).is_null() || iCountBsLen <= 0 {
+    // **S3.B2.** The two null tests are gone with the `*mut *mut` parameter: a
+    // `&mut sWelsEncCtx` has no null state, and neither function ever reassigned
+    // `*ctx`, which is what the double pointer was there to allow. The local raw
+    // went with them — deriving one here and then reading `param()` through the
+    // reference would pop it, which is F208's shape exactly.
+    if iCountBsLen <= 0 {
         return 1;
     }
 
-    let pCtx = *ppCtx;
-    let iThreadNum = (**ppCtx).param().iMultipleThreadIdc as i32;
+    let iThreadNum = ctx.param().iMultipleThreadIdc as i32;
 
     if iThreadNum <= 0 {
         return 1;
@@ -750,7 +754,7 @@ pub unsafe fn RequestMtResource(
     // every other member of this port's context is constructed rather than
     // zero-filled. `Default` writes what the zeroing stood for.
     let pSmt = Box::into_raw(Box::new(SSliceThreading::default()));
-    (*pCtx).pSliceThreading = pSmt;
+    ctx.pSliceThreading = pSmt;
 
     // **T7.B4.** An `SSliceThreadPrivateData` array was allocated and filled here, and
     // `WelsEncoderEncodeExt` re-stamped two of its fields before every dynamic-mode
@@ -803,12 +807,10 @@ pub unsafe fn RequestMtResource(
 /// Tears down and frees all multithreading objects and bitstream buffers.
 // unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
-pub unsafe fn ReleaseMtResource(ppCtx: *mut *mut sWelsEncCtx) {
-    if ppCtx.is_null() || (*ppCtx).is_null() {
-        return;
-    }
-    let pCtx = *ppCtx;
-    let pSmt = (*pCtx).pSliceThreading;
+pub unsafe fn ReleaseMtResource(ctx: &mut sWelsEncCtx) {
+    // **S3.B2** — see `RequestMtResource`. The field is still a raw
+    // (`pSliceThreading` is B1's own work); the *context* no longer is.
+    let pSmt = ctx.pSliceThreading;
     if pSmt.is_null() {
         return;
     }
@@ -829,7 +831,7 @@ pub unsafe fn ReleaseMtResource(ppCtx: *mut *mut sWelsEncCtx) {
     // scope, so there is no pool lifetime left to manage.
 
     drop(Box::from_raw(pSmt));
-    (*pCtx).pSliceThreading = std::ptr::null_mut();
+    ctx.pSliceThreading = std::ptr::null_mut();
 }
 
 /// Aggregates individual thread-local slice bitstream buffers into the contiguous frame bitstream buffer.
