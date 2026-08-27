@@ -155,23 +155,33 @@ impl Default for SDCTCoeff {
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct SPicData {
-    pub pEncMb: [*mut u8; 3],
-    // `pDecMb` stood here, between `pEncMb` and `pRefMb`, exactly as in the C++.
-    // **S18, deleted in T9.C4, after being proved redundant rather than assumed
-    // so**: `WelsMdIntraInit` stamped it from `pDecPic.planes()` and stamped
-    // `pCsMb` from `(*pCurLayer).pCsData` — two derivations of *one* address,
-    // because `WelsInitCurrentLayer` fills `pCsData` from that same `planes()`
-    // call. A `debug_assert_eq!` of the two, in both branches of the stamp, was
-    // carried through a whole `gates.sh family` (583 rows x both profiles) and
-    // never fired; planting `.wrapping_add(1)` on one side aborted every row of
-    // the first preset, so the assertion had teeth. Its three readers — the
-    // luma/chroma triple in `OutputPMbWithoutConstructCsRsNoCopy` — now read
-    // `pCsMb`, and the second derivation, which was the last per-macroblock
-    // `&mut SPicture` retag in the mode-decision tree, is gone.
-    pub pRefMb: [*mut u8; 3],
-    pub pCsMb: [*mut u8; 3],
-    /// The macroblock these four point at, in macroblocks — **T9.B30, and the port's
-    /// own field**, not the C++'s.
+    // `pEncMb`, `pRefMb` and `pCsMb` — three `[*mut u8; 3]` cursor triples — stood
+    // here, with `pDecMb` between the first two.
+    //
+    // **`pDecMb` went first, S18/T9.C4**, proved redundant rather than assumed so:
+    // `WelsMdIntraInit` stamped it from `pDecPic.planes()` and stamped `pCsMb` from
+    // `(*pCurLayer).pCsData` — two derivations of *one* address, because
+    // `WelsInitCurrentLayer` fills `pCsData` from that same `planes()` call. A
+    // `debug_assert_eq!` of the two, in both branches of the stamp, was carried
+    // through a whole `gates.sh family` (583 rows x both profiles) and never fired;
+    // planting `.wrapping_add(1)` on one side aborted every row of the first preset,
+    // so the assertion had teeth.
+    //
+    // **The other nine went in S4.C2**, on the argument this field pair was added to
+    // make: every one of them was `root + ((iMbX + iMbY * stride) << shift)`, so a
+    // reader holding the pair and the picture never needed the pointer. They are
+    // resolved at use now — `svc_encode_slice::{enc_mb, cs_mb, ref_mb}` — which
+    // deletes both the storage and the *roving*: the stamps recomputed the triples
+    // at a row or slice start and otherwise **walked** them a macroblock at a time,
+    // and a walked cursor is only correct while the walk's guard holds. The guard
+    // did hold (the walk ran exactly when the previous macroblock was this one's
+    // left neighbour, making `previous + 16` and the absolute form the same
+    // address), which is why this conversion is byte-identical — but it was an
+    // invariant spread across two functions and nine assignments, and now it is
+    // three expressions.
+    /// The macroblock this cache is on, in macroblocks — **T9.B30, and the port's
+    /// own field**, not the C++'s. It was carried beside the twelve pointers; it is
+    /// what remains of them.
     ///
     /// Every one of the twelve pointers above is the same function of this pair and a
     /// picture: `plane(i) + ((iMbX + iMbY * stride) << (4 for luma, 3 for chroma))`,
@@ -190,6 +200,55 @@ pub struct SPicData {
 }
 
 impl SPicData {
+    /// **The offset the twelve deleted pointers were.** This macroblock's origin as
+    /// a byte offset into a plane of `stride` — `((iMbX + iMbY * stride) << 4)` for
+    /// luma and `<< 3` for chroma, which is exactly how `WelsMdIntraInit` and
+    /// `WelsMdInterInit` computed each cursor before stamping it (S4.C2).
+    ///
+    /// **Chroma reads stride index 1 for both chroma planes**, not 2 — the stamps
+    /// computed one `iOffsetUV` from `stride(1)` and applied it to planes 1 *and* 2.
+    /// [`stride_idx`](Self::stride_idx) is that rule, named once so a resolver
+    /// cannot get it subtly wrong.
+    #[inline]
+    pub fn mb_offset(&self, stride: i32, plane: usize) -> isize {
+        let shift = if plane == 0 { 4 } else { 3 };
+        (((self.iMbX + self.iMbY * stride) as isize) << shift)
+    }
+
+    /// The stride index a plane resolves through: luma 0, **both chroma planes 1**.
+    #[inline]
+    pub fn stride_idx(plane: usize) -> usize {
+        if plane == 0 { 0 } else { 1 }
+    }
+
+    /// **The macroblock cursor the twelve stored pointers used to be** (S4.C2), and
+    /// a **safe** fn: forming and offsetting a raw pointer needs no `unsafe` — only
+    /// dereferencing one does, and that belongs to the kernels these are handed to.
+    ///
+    /// `SPicData` carried three `[*mut u8; 3]` triples that `WelsMdIntraInit` and
+    /// `WelsMdInterInit` stamped once per macroblock and then **walked** — advancing
+    /// each by one macroblock width for every macroblock that was neither its row's
+    /// first nor its slice's first. Every one of them was
+    /// `roots[plane] + ((iMbX + iMbY * stride) << shift)`, which is what T9.B30 put
+    /// the coordinate pair here to say: "a reader that has the pair and the picture
+    /// does not need the pointer". This resolves that expression at use.
+    ///
+    /// **It is byte-identical, and the walk's own guard is why**: the advance ran
+    /// exactly when the previous macroblock was this one's left neighbour, so
+    /// `previous + 16` and the absolute form name the same address. The invariant
+    /// was spread over two functions and nine assignments; now there is nothing to
+    /// keep in sync.
+    ///
+    /// **The chroma stride rule lives here and nowhere else.** Both chroma planes
+    /// resolve through stride index **1** — the stamps computed a single `iOffsetUV`
+    /// from `stride(1)` and applied it to planes 1 *and* 2 — so a caller passing
+    /// `strides[2]` for plane 2 would be wrong on any picture whose chroma strides
+    /// differ. [`stride_idx`](Self::stride_idx) is that rule; this is its consumer.
+    #[inline]
+    pub fn mb_cursor(&self, roots: &[*mut u8; 3], strides: &[i32; 3], plane: usize) -> *mut u8 {
+        roots[plane].wrapping_offset(self.mb_offset(strides[Self::stride_idx(plane)], plane))
+    }
+
     /// The macroblock's origin in luma samples — `(iMbX << 4, iMbY << 4)`.
     #[inline]
     pub fn luma_origin(&self) -> (isize, isize) {
@@ -205,13 +264,7 @@ impl SPicData {
 
 impl Default for SPicData {
     fn default() -> Self {
-        Self {
-            pEncMb: [std::ptr::null_mut(); 3],
-            pRefMb: [std::ptr::null_mut(); 3],
-            pCsMb: [std::ptr::null_mut(); 3],
-            iMbX: 0,
-            iMbY: 0,
-        }
+        Self { iMbX: 0, iMbY: 0 }
     }
 }
 

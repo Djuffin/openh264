@@ -506,7 +506,7 @@ pub unsafe fn WelsEncRecI16x16Y(
     // indexed, and the two plane-taking slots derive their cursor where they use it —
     // a `&mut` to this field (`blk_four4x4_mut`) is a Unique retag over the whole
     // array and kills any raw held across it (F114).
-    let pPred = (*pMbCache).SPicData.pCsMb[0];
+    let pPred = (*pMbCache).SPicData.mb_cursor(&(*pCurDqLayer).pCsData, &(*pCurDqLayer).iCsStride, 0);
     let kiRecStride = (*pCurDqLayer).iCsStride[0];
     let pBestPred = std::ptr::addr_of_mut!((*pMbCache).sMemPredMb)
         .cast::<u8>()
@@ -520,7 +520,7 @@ pub unsafe fn WelsEncRecI16x16Y(
 
     WelsDctMb(
         std::ptr::addr_of_mut!((*pMbCache).sCoeffLevel).cast::<i16>(),
-        (*pMbCache).SPicData.pEncMb[0],
+        (*pMbCache).SPicData.mb_cursor(&(*pCurDqLayer).pEncData, &(*pCurDqLayer).iEncStride, 0),
         kiEncStride,
         pBestPred,
         (*pFuncList).pfDctFourT4,
@@ -681,11 +681,11 @@ pub unsafe fn WelsEncRecI4x4Y(
     // Unique retag over **the whole array** — `blk4x4_mut` takes `&mut [i16]`, so
     // the caller borrows all 384 coefficients before indexing. A raw held across
     // that call is dead, which is what Miri reported here (F114).
-    let pPred = (*pMbCache).SPicData.pCsMb[0];
+    let pPred = (*pMbCache).SPicData.mb_cursor(&(*pCurDqLayer).pCsData, &(*pCurDqLayer).iCsStride, 0);
     let iRecStride = (*pCurDqLayer).iCsStride[0];
 
     let uiOffset = g_kuiMbCountScan4Idx[uiI4x4Idx as usize] as usize;
-    let pEncMb = (*pMbCache).SPicData.pEncMb[0];
+    let pEncMb = (*pMbCache).SPicData.mb_cursor(&(*pCurDqLayer).pEncData, &(*pCurDqLayer).iEncStride, 0);
     let pBestPred = std::ptr::addr_of_mut!((*pMbCache).sMemPredBlk4)
         .cast::<u8>()
         .add(best_pred_i4x4_blk4_off((*pMbCache).uiBestPredI4x4Blk4Half));

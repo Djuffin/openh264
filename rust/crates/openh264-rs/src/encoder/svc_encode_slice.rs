@@ -1897,7 +1897,7 @@ pub unsafe fn WelsIMbChromaEncode(pEncCtx: *mut sWelsEncCtx, pCurMb: &mut SMB, p
     //cb
     pfDctFourT4(
         std::ptr::addr_of_mut!((*pMbCache).sCoeffLevel).cast::<i16>(),
-        (*pMbCache).SPicData.pEncMb[1],
+        (*pMbCache).SPicData.mb_cursor(&(*pCurLayer).pEncData, &(*pCurLayer).iEncStride, 1),
         kiEncStride,
         std::ptr::addr_of_mut!((*pMbCache).sMemPredMb).cast::<u8>().add(kiBestPredOff),
         8,
@@ -1917,7 +1917,7 @@ pub unsafe fn WelsIMbChromaEncode(pEncCtx: *mut sWelsEncCtx, pCurMb: &mut SMB, p
     //cr
     pfDctFourT4(
         std::ptr::addr_of_mut!((*pMbCache).sCoeffLevel).cast::<i16>().add(64),
-        (*pMbCache).SPicData.pEncMb[2],
+        (*pMbCache).SPicData.mb_cursor(&(*pCurLayer).pEncData, &(*pCurLayer).iEncStride, 2),
         kiEncStride,
         std::ptr::addr_of_mut!((*pMbCache).sMemPredMb).cast::<u8>().add(kiBestPredOff + 64),
         8,
@@ -1947,14 +1947,14 @@ pub unsafe fn WelsPMbChromaEncode(pEncCtx: *mut sWelsEncCtx, pSlice: &mut SSlice
     let dct = (*pFunc).pfDctFourT4.expect("pfDctFourT4 unset");
     dct(
         std::ptr::addr_of_mut!((*pMbCache).sCoeffLevel).cast::<i16>().add(256),
-        (*pMbCache).SPicData.pEncMb[1],
+        (*pMbCache).SPicData.mb_cursor(&(*pCurLayer).pEncData, &(*pCurLayer).iEncStride, 1),
         kiEncStride,
         std::ptr::addr_of_mut!((*pMbCache).sMemPredMb).cast::<u8>().add(kiBestPredOff),
         8,
     );
     dct(
         std::ptr::addr_of_mut!((*pMbCache).sCoeffLevel).cast::<i16>().add(320),
-        (*pMbCache).SPicData.pEncMb[2],
+        (*pMbCache).SPicData.mb_cursor(&(*pCurLayer).pEncData, &(*pCurLayer).iEncStride, 2),
         kiEncStride,
         std::ptr::addr_of_mut!((*pMbCache).sMemPredMb).cast::<u8>().add(kiBestPredOff + 64),
         8,

@@ -331,7 +331,15 @@ assert_size!(SSliceCtx, 48);
 // derivation of `pCsMb`'s three addresses, proved equal over 583 sweep rows in both
 // profiles before being deleted — and the 8 bytes of `align(16)` rounding go with
 // them. **5568, measured.**
-assert_size!(SMbCache, 5568);
+// **-64 at S4.C2**: `SPicData` loses its last nine pointers — the `pEncMb`,
+// `pRefMb` and `pCsMb` triples, resolved at use through
+// `svc_encode_slice::{enc_mb, cs_mb, ref_mb}` from the `iMbX`/`iMbY` pair T9.B30
+// added for exactly this. Nine pointers is 72 bytes and the number moves **64**:
+// the struct is `repr(C, align(16))`, so 5568 - 72 = 5496 rounds back up to 5504.
+// Measured, not derived — the arithmetic above is the explanation of a number the
+// compiler was asked for, which is the only way to read a size delta on an
+// aligned struct. **5504, measured.**
+assert_size!(SMbCache, 5504);
 // 152 in the C++ and in this port until **T6.C1**, which moved the five
 // per-macroblock scratch arrays the C++ reaches by pointer (`sMv`, `pRefIndex`,
 // `pSadCost`, `pIntra4x4PredMode`, `pNonZeroCount`) into the struct as inline

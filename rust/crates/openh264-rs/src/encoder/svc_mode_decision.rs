@@ -1147,7 +1147,7 @@ pub unsafe extern "C" fn WelsMdI16x16(
     // one bit — which 256-byte half of `sMemPredMb` the search last wrote — and
     // `iIdx` already *is* that bit, as the tail of this function has always said.
     // With the destination an offset, the pointers have nothing left to carry.
-    let pEnc = (*pMbCache).SPicData.pEncMb[0];
+    let pEnc = (*pMbCache).SPicData.mb_cursor(&(*pCurDqLayer).pEncData, &(*pCurDqLayer).iEncStride, 0);
     let view = layer_rec_view(pCurDqLayer)
         .expect("the layer's reconstruction view is built for this frame");
     let iLineSizeEnc = (*pCurDqLayer).iEncStride[0];
@@ -1440,7 +1440,7 @@ pub unsafe extern "C" fn WelsInterMbEncode(pEncCtx: *mut sWelsEncCtx, pSlice: &m
     }
 
     let pCoeffLevel = std::ptr::addr_of_mut!((*pMbCache).sCoeffLevel).cast::<i16>();
-    let pEncMb = (*pMbCache).SPicData.pEncMb[0];
+    let pEncMb = (*pMbCache).SPicData.mb_cursor(&(*pCurDqLayer).pEncData, &(*pCurDqLayer).iEncStride, 0);
     let iEncStride = (*pCurDqLayer).iEncStride[0];
     let pMemPredLuma = std::ptr::addr_of_mut!((*pMbCache).sMemPredMb)
         .cast::<u8>()
@@ -2098,9 +2098,17 @@ pub unsafe extern "C" fn SvcMdSCDMbEnc(
         iMvY: sCandidateMv.iMvY,
     };
 
-    let pRefLuma = (*pMbCache).SPicData.pRefMb[0];
-    let pRefCb = (*pMbCache).SPicData.pRefMb[1];
-    let pRefCr = (*pMbCache).SPicData.pRefMb[2];
+    // S4.C2: `SPicData.pRefMb[i]`, resolved at use. The roots and strides here are
+    // the reference *picture*'s rather than the layer's arrays, so this does not go
+    // through `mb_cursor` — but it is the same expression, and note the third line:
+    // **plane 2 takes stride index 1**, which is what `WelsMdInterInit`'s single
+    // `kiCurStrideUV` applied to both chroma planes. `data_ptr_shared` keeps the
+    // root a shared derivation, so two workers resolving it are siblings (F71).
+    let pRefPic = layer_ref_pic(pCurDqLayer).expect("the layer's reference picture is bound");
+    let pd = &(*pMbCache).SPicData;
+    let pRefLuma = pRefPic.data_ptr_shared(0).wrapping_offset(pd.mb_offset(pRefPic.stride(0), 0));
+    let pRefCb = pRefPic.data_ptr_shared(1).wrapping_offset(pd.mb_offset(pRefPic.stride(1), 1));
+    let pRefCr = pRefPic.data_ptr_shared(2).wrapping_offset(pd.mb_offset(pRefPic.stride(1), 2));
     let iLineSizeY = layer_ref_pic(pCurDqLayer).map_or(0, |p| p.stride(0));
     let iLineSizeUV = layer_ref_pic(pCurDqLayer).map_or(0, |p| p.stride(1));
 
@@ -2232,7 +2240,7 @@ pub unsafe extern "C" fn SvcMdSCDMbEnc(
     let pMbCache = &mut pSlice.sMbCacheInfo;
     if let Some(copy16) = (*pFunc).pfCopy16x16Aligned {
         copy16(
-            (*pMbCache).SPicData.pCsMb[0],
+            (*pMbCache).SPicData.mb_cursor(&(*pCurDqLayer).pCsData, &(*pCurDqLayer).iCsStride, 0),
             (*pCurDqLayer).iCsStride[0],
             std::ptr::addr_of_mut!((*pMbCache).sMemPredMb)
                 .cast::<u8>()
@@ -2242,7 +2250,7 @@ pub unsafe extern "C" fn SvcMdSCDMbEnc(
     }
     if let Some(copy8) = (*pFunc).pfCopy8x8Aligned {
         copy8(
-            (*pMbCache).SPicData.pCsMb[1],
+            (*pMbCache).SPicData.mb_cursor(&(*pCurDqLayer).pCsData, &(*pCurDqLayer).iCsStride, 1),
             (*pCurDqLayer).iCsStride[1],
             std::ptr::addr_of_mut!((*pMbCache).sMemPredMb)
                 .cast::<u8>()
@@ -2250,7 +2258,7 @@ pub unsafe extern "C" fn SvcMdSCDMbEnc(
             8,
         );
         copy8(
-            (*pMbCache).SPicData.pCsMb[2],
+            (*pMbCache).SPicData.mb_cursor(&(*pCurDqLayer).pCsData, &(*pCurDqLayer).iCsStride, 2),
             (*pCurDqLayer).iCsStride[1],
             std::ptr::addr_of_mut!((*pMbCache).sMemPredMb)
                 .cast::<u8>()
@@ -2763,20 +2771,14 @@ mod tests {
             // `+ 16` and the raw 16x16 SAD's one-past-the-row pointer takes this test
             // red under Miri.
             let mut mb_cache = SMbCache {
+                // The three cursor triples were stamped null here on purpose — the
+                // assertion that this function reaches the source and the
+                // reconstruction through the layer plus these coordinates, and never
+                // falls back to a stored pointer. S4.C2 made that structural: the
+                // fields are gone, so the coordinates are all there is to give.
                 SPicData: SPicData {
-                    // `pEncMb` is null on purpose: this function reads the source
-                    // through the layer's handle and the carrier's coordinates now,
-                    // and a null here is the assertion that it does not fall back.
-                    pEncMb: [std::ptr::null_mut(); 3],
                     iMbX: MB_X,
                     iMbY: MB_Y,
-                    pRefMb: [std::ptr::null_mut(); 3],
-                    // `pCsMb` is null on purpose, as `pEncMb` is: this function
-                    // reaches the reconstruction through the layer's view and the
-                    // carrier's coordinates, and a null here asserts it does not
-                    // fall back to the raw cursor it used before T9.C2.
-                    pCsMb: [std::ptr::null_mut(); 3],
-                    ..Default::default()
                 },
                 uiNeighborIntra: 0x07, // left + top + top-left available
                 ..Default::default()
