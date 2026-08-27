@@ -17,7 +17,6 @@
 use crate::safe::bits::BsWriter;
 use crate::encoder::set_mb_syn_cabac::SCabacCtx;
 pub use crate::encoder::encoder_context::EWelsSliceType;
-use crate::encoder::encoder_context::ctx_func_list;
 pub use crate::encoder::encoder_context::SMVUnitXY;
 pub use crate::encoder::encoder_context::SDCTCoeff;
 pub use crate::encoder::svc_encode_slice::SSliceHeader;
@@ -721,7 +720,7 @@ pub unsafe fn WelsSpatialWriteMbSyn(
             );
             let pMbCache = &mut pSlice.sMbCacheInfo;
             let buf = crate::encoder::svc_encode_slice::slice_bs_buffer(pEncCtx, std::ptr::addr_of_mut!((*pSlice).sSliceBs), (*pSlice).uiBufferIdx as usize);
-            if WelsWriteMbResidual(&*ctx_func_list(pEncCtx), &mut *pMbCache, mbs.cur(), buf, pBs) != 0 {
+            if WelsWriteMbResidual((*pEncCtx).func_list(), &mut *pMbCache, mbs.cur(), buf, pBs) != 0 {
                 return ENC_RETURN_VLCOVERFLOWFOUND;
             }
         } else {

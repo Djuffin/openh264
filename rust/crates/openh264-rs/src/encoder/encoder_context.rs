@@ -703,24 +703,33 @@ pub unsafe fn ctx_param(pCtx: *mut sWelsEncCtx) -> *mut SWelsSvcCodingParam {
     std::ptr::read(std::ptr::addr_of!((*pCtx).pSvcParam) as *const *mut SWelsSvcCodingParam)
 }
 
-/// The encoder's **kernel dispatch table** — T6.I1, and never null: the context
-/// owns the `Box` from its constructor on.
+/// The dispatch table **as a raw pointer, read out of the `Box`'s slot** — the
+/// one derivation A6 could not flip, at its **two** callers.
 ///
-/// Same spelling as [`ctx_param`]: the `Box`'s address is read without forming a
-/// reference to the table, so repeated calls are sibling derivations rather than
-/// nested ones. That is what this session needs it for — the table is **re-written
-/// mid-stream** (`SetFastCodingFunc` / `SetNormalCodingFunc` run per frame), so a
-/// reader may not hold anything derived from it across a call that can reach it
-/// again, and every reader deriving its own sibling is how that stays true.
+/// **Why it survives.** Both callers write through the table
+/// (`ParasetStrategy` reaches `pParametersetStrategy` `&mut`;
+/// `CWelsH264SVCEncoder::SetOption`'s rate-control arm re-points `pfRc`), and
+/// both hold the context as a **raw**. [`func_list_mut`](sWelsEncCtx::func_list_mut)
+/// needs `&mut self`, so calling it from either body means a whole-context `&mut`
+/// retag taken through a raw root — the shape S63 forbids and both of the
+/// session's prohibition checks count. Neither body is fork-reachable, so the
+/// retag would in fact be harmless; the rule is deliberately not
+/// case-by-case, because F208 is what happens when a whole-context retag is
+/// argued site by site. Reading the slot as a pointer *value* (F71) forms no
+/// reference to the context at all, which is what the old accessor did at all
+/// 121 sites and what these two keep.
+///
+/// Everything else uses [`sWelsEncCtx::func_list`] /
+/// [`sWelsEncCtx::func_list_mut`]. `ctx_ref_list_raw` below survives A3 for the
+/// neighbouring reason (provenance rather than root shape) — F211's pair is a
+/// trio now.
 ///
 /// # Safety
 /// `pCtx` must point to a live encoder context.
 #[inline]
 // unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
-pub unsafe fn ctx_func_list(pCtx: *mut sWelsEncCtx) -> *mut SWelsFuncPtrList {
-    // **F71**, as `ctx_param`: `Box<T>` is one pointer wide, so the slot is read as a
-    // pointer value rather than dereferenced through a retag of the context.
+pub unsafe fn ctx_func_list_raw(pCtx: *mut sWelsEncCtx) -> *mut SWelsFuncPtrList {
     std::ptr::read(std::ptr::addr_of!((*pCtx).pFuncList) as *const *mut SWelsFuncPtrList)
 }
 
@@ -1194,6 +1203,48 @@ impl sWelsEncCtx {
         self.pFrameBs.as_ptr() as *mut u8
     }
 
+    /// The encoder's **kernel dispatch table** — T6.I1, `pCtx->pFuncList`, and
+    /// never absent: the context owns the `Box` from its constructor on, which is
+    /// why this is a plain `&` where `vaa` and `ref_list` are `Option`s. The
+    /// twenty-six `if let Some(..) = ctx_func_list(..).as_ref()` guards A6 found
+    /// were asking about a null a `Box` cannot hold.
+    ///
+    /// **F212's flip, and F191's objection answered by taking it.** F191 ruled
+    /// that this accessor "cannot take a shared projection at all", because the
+    /// table is re-written at frame cadence (`SetFastCodingFunc` /
+    /// `SetNormalCodingFunc`) and a reader could hold one across the re-write.
+    /// Measured: the re-write is **two fields** (`pfIntraFineMd`,
+    /// `sSampleDealingFuncs.pfMdCost`) in one body with one caller
+    /// (`PreprocessSliceCoding`), which already derived exactly the `&mut` that
+    /// [`func_list_mut`](Self::func_list_mut) is. So under the flip "a reader
+    /// holds one across the re-write" stops being a hazard and becomes a
+    /// **compile error** wherever the context is a reference — borrowck refuses
+    /// precisely what F191 was worried about. The dispatch *enums* F191 prefers
+    /// are a different debt and the plan schedules them at C1.
+    ///
+    /// Where the context is a raw — the fork — borrowck referees nothing and
+    /// F208's rule applies as it does to every other reader here: the call is a
+    /// shared reborrow of the **whole** context, used in the expression and never
+    /// stored across a `&mut`-shaped derivation into it. The fork never writes
+    /// this table, so a shared projection is all it has ever needed.
+    #[inline]
+    pub fn func_list(&self) -> &SWelsFuncPtrList {
+        &self.pFuncList
+    }
+
+    /// [`func_list`](Self::func_list) for the six bodies that write the table:
+    /// `InitFunctionPointers` and `InitCoeffFunc` at init, `WelsRcInitModule` and
+    /// `SetOption` for `pfRc`, `PreprocessSliceCoding` for the two frame-cadence
+    /// fields, and the parameter-set strategy's own `as_mut` callers.
+    ///
+    /// **Single-threaded only** — see [`rc_at_mut`](Self::rc_at_mut). It is the
+    /// half of the flip that makes F191's hazard unrepresentable: no `&` to the
+    /// table can be live across a call that needs this.
+    #[inline]
+    pub fn func_list_mut(&mut self) -> &mut SWelsFuncPtrList {
+        &mut self.pFuncList
+    }
+
     /// The frame's **video-analysis block** — T6.H10, `pCtx->pVaa`.
     ///
     /// **`Option`, because the absence is a state the callers already asked
@@ -1324,7 +1375,7 @@ pub struct sWelsEncCtx {
     /// so the context is born with the same table the C++ memsets and
     /// `InitFunctionPointers` writes over it exactly as before. Every null check
     /// on the *field* dies with the null; the checks on raw table *parameters*
-    /// stay, because the survivors still take one. Root: [`ctx_func_list`].
+    /// stay, because the survivors still take one. Root: [`sWelsEncCtx::func_list`].
     pub pFuncList: Box<SWelsFuncPtrList>,
     pub pSliceThreading: *mut SSliceThreading,
     // `pTaskManage: *mut c_void` stood here — an `IWelsTaskManage*` in C++, erased to
@@ -1853,7 +1904,12 @@ pub unsafe fn InitFunctionPointers(
     // fourteen calls below, is the shape that compiles and is UB: each one pops
     // the raw the next call re-uses. The survivors that still take `*mut` get a
     // reborrow (`&mut *fl`) rather than the binding, so `fl` outlives them.
-    let fl: &mut SWelsFuncPtrList = &mut *ctx_func_list(pEncCtx);
+    // §4.6, reorder: the one context read this body makes below — the complexity
+    // mode, for `WelsInitSCDPskipFunc`'s argument — is lifted above the table's
+    // `&mut`. Under the raw accessor the two coexisted silently; under the flip
+    // the compiler asks, and the answer is a scalar copied one statement earlier.
+    let kiComplexityMode = (*ctx_param(pEncCtx)).iComplexityMode as i32;
+    let fl: &mut SWelsFuncPtrList = pEncCtx.func_list_mut();
 
     let bScreenContent = (*pParam).iUsageType == crate::api::codec_api::EUsageType::SCREEN_CONTENT_REAL_TIME;
 
@@ -1878,7 +1934,7 @@ pub unsafe fn InitFunctionPointers(
         &mut *fl,
         bScreenContent
             && (*pParam).bEnableSceneChangeDetect
-            && ((*ctx_param(pEncCtx)).iComplexityMode as i32)
+            && kiComplexityMode
                 < (crate::api::codec_api::ECOMPLEXITY_MODE::HIGH_COMPLEXITY as i32),
     );
 
@@ -3072,7 +3128,7 @@ mod tests {
             // `InitFunctionPointers`, which would allocate a second parameter-set
             // strategy over the first.
             assert_eq!(ctx.pFuncList.eEntropyCoder, EntropyCoder::Cavlc);
-            InitCoeffFunc(&mut *ctx_func_list(&mut ctx), 0, 1);
+            InitCoeffFunc(ctx.func_list_mut(), 0, 1);
             assert_eq!(ctx.pFuncList.eEntropyCoder, EntropyCoder::Cabac);
 
             assert!(ctx.pFuncList.pfDeblocking.pfDeblockingFilterSlice.is_some());

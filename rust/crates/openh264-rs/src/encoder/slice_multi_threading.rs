@@ -64,7 +64,6 @@ use crate::encoder::nal_encap::{
     WelsEncodeNal, WelsLoadNalForSlice, WelsUnloadNalForSlice, WelsWriteSVCPrefixNal, SWelsNalRaw,
 };
 use crate::common::wels_common_defs::{EWelsNalRefIdc, EWelsNalUnitType};
-use crate::encoder::encoder_context::ctx_func_list;
 use crate::encoder::svc_encode_slice::{
     InitOneSliceInThread, ReallocateSliceInThread, SetSliceBoundaryInfo, WelsCodeOneSlice,
 };
@@ -1470,7 +1469,7 @@ unsafe fn EncodeOneSliceInJob(
         }
 
         let pfDeblockingFilterSlice =
-            (*ctx_func_list(pCtx)).pfDeblocking.pfDeblockingFilterSlice.unwrap();
+            (*pCtx).func_list().pfDeblocking.pfDeblockingFilterSlice.unwrap();
         pfDeblockingFilterSlice(current_layer(pCtx), &mut *pSlice);
         ENC_RETURN_SUCCESS
     })();
@@ -1760,7 +1759,7 @@ unsafe fn EncodeOnePartitionSizeLimited(
                 return iRet;
             }
             let pfDeblockingFilterSlice =
-                (*ctx_func_list(pCtx)).pfDeblocking.pfDeblockingFilterSlice.unwrap();
+                (*pCtx).func_list().pfDeblocking.pfDeblockingFilterSlice.unwrap();
             pfDeblockingFilterSlice(pCurDq, &mut *pSlice);
 
             iAnyMbLeftInPartition = kiEndMbIdxInPartition

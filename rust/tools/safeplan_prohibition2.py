@@ -10,22 +10,31 @@ Run from the crate root:  python3 ../../tools/safeplan_prohibition2.py
 """
 import re, glob, sys
 
-# `&mut *root` where root is a raw context pointer, and NOT a field projection
-# (`&mut *pCtx.field` is a different, benign shape).
-pat = re.compile(r"&mut\s*\*(\*ppCtx|pCtx|pEncCtx)($|[^.\w])")
-hits = []
-for f in sorted(glob.glob("src/**/*.rs", recursive=True)):
-    for i, l in enumerate(open(f).read().split("\n")):
-        if l.lstrip().startswith("//"):
-            continue                       # F178: prose is not a retag
-        for _ in pat.finditer(l):
-            hits.append((f, i + 1, l.strip()))
-per = {}
-for f, _, _ in hits:
-    per[f] = per.get(f, 0) + 1
-print("prohibition 2: %d `&mut *pCtx`-class retags through a raw root" % len(hits))
-for f in sorted(per, key=lambda k: -per[k]):
-    print("  %-45s %d" % (f, per[f]))
-if len(sys.argv) > 1:
-    for f, n, l in hits:
-        print("    %s:%d  %s" % (f, n, l[:100]))
+# Two spellings of the same retag, counted apart because they read differently:
+#   (a) explicit — `&mut *pCtx`, `&mut **ppCtx`; NOT a field projection
+#       (`&mut *pCtx.field` is a different, benign shape).
+#   (b) auto-ref — `(*pCtx).something_mut()`, where the method's `&mut self`
+#       receiver is a whole-context retag the source never spells. A6 added the
+#       category to this tool: the flip makes accessor calls the normal way to
+#       reach the context, so the implicit form is now the one to watch.
+pats = [("explicit", re.compile(r"&mut\s*\*(\*ppCtx|pCtx|pEncCtx)($|[^.\w])")),
+        ("auto-ref", re.compile(r"\(\*+p\w*[Cc]tx\)\.\w+_mut\("))]
+rc = 0
+for kind, pat in pats:
+    hits = []
+    for f in sorted(glob.glob("src/**/*.rs", recursive=True)):
+        for i, l in enumerate(open(f).read().split("\n")):
+            if l.lstrip().startswith("//"):
+                continue                   # F178: prose is not a retag
+            for _ in pat.finditer(l):
+                hits.append((f, i + 1, l.strip()))
+    per = {}
+    for f, _, _ in hits:
+        per[f] = per.get(f, 0) + 1
+    print("prohibition 2 (%s): %d whole-context `&mut` retags through a raw root"
+          % (kind, len(hits)))
+    for f in sorted(per, key=lambda k: -per[k]):
+        print("  %-45s %d" % (f, per[f]))
+    if len(sys.argv) > 1:
+        for f, n, l in hits:
+            print("    %s:%d  %s" % (f, n, l[:100]))

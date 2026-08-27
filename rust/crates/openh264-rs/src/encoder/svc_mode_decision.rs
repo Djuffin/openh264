@@ -27,7 +27,7 @@ use crate::encoder::svc_encode_slice::WelsPMbChromaEncode;
 use crate::encoder::svc_set_mb_syn_cavlc::IS_INTRA16x16;
 use crate::encoder::vlc_encoder::BsSizeUE;
 pub use crate::encoder::encoder_context::SMVUnitXY;
-use crate::encoder::encoder_context::{ctx_dq_layer, ctx_func_list};
+use crate::encoder::encoder_context::ctx_dq_layer;
 pub use crate::encoder::encoder_context::SMVComponentUnit;
 pub use crate::encoder::encoder_context::EWelsSliceType;
 pub use crate::encoder::picture::SScreenBlockFeatureStorage;
@@ -364,7 +364,7 @@ pub unsafe extern "C" fn WelsMdInterDecidedPskip(
 ) {
     let pCurDqLayer = current_layer(pEncCtx);
     (*pCurMb).uiMbType = MB_TYPE_SKIP;
-    WelsRecPskip(pCurDqLayer, &*ctx_func_list(pEncCtx), pCurMb, &mut pSlice.sMbCacheInfo);
+    WelsRecPskip(pCurDqLayer, (*pEncCtx).func_list(), pCurMb, &mut pSlice.sMbCacheInfo);
     WelsMdInterUpdatePskip(pEncCtx, pCurDqLayer, &mut *pSlice, pCurMb);
 }
 
@@ -388,7 +388,7 @@ pub unsafe extern "C" fn WelsMdInterSecondaryModesEnc(
     bSkip: bool,
 ) {
     let pMbCache = &mut pSlice.sMbCacheInfo;
-    let pFuncList = ctx_func_list(pEncCtx);
+    let pFuncList = (*pEncCtx).func_list();
     //step 2: Intra
     let kbTrySkip = (*pFuncList).pfFirstIntraMode.expect(
         "pfFirstIntraMode is unset; PreprocessSliceCoding must assign WelsMdFirstIntraMode \
@@ -442,7 +442,7 @@ pub unsafe extern "C" fn WelsMdIntraSecondaryModesEnc(
     pCurMb: &mut SMB,
     pMbCache: &mut SMbCache,
 ) {
-    let pFunc = ctx_func_list(pEncCtx);
+    let pFunc = (*pEncCtx).func_list();
     //initial prediction memory for I_4x4
     (*pFunc).pfIntraFineMd.expect(
         "pfIntraFineMd is unset; PreprocessSliceCoding must assign \
@@ -598,7 +598,7 @@ pub unsafe extern "C" fn WelsMdBackgroundMbEnc(
     // WelsPMbChromaEncode below, so NLL ends it in time.
     let pMbCache = &mut pSlice.sMbCacheInfo;
     let pCurDqLayer = current_layer(pEncCtx);
-    let pFunc = ctx_func_list(pEncCtx);
+    let pFunc = (*pEncCtx).func_list();
     let sMvp = SMVUnitXY::default();
 
     // T9.B22's shape, at zero motion. The C++ addressed the reference through
@@ -1430,7 +1430,7 @@ pub unsafe extern "C" fn WelsInterMbEncode(pEncCtx: *mut sWelsEncCtx, pSlice: &m
     // `SMbCache* pMbCache = &pSlice->sMbCacheInfo;` and checks nothing.
     let pMbCache = &mut pSlice.sMbCacheInfo;
     let pCurDqLayer = current_layer(pEncCtx);
-    let pFuncList = ctx_func_list(pEncCtx);
+    let pFuncList = (*pEncCtx).func_list();
     // T6.I1: the `|| pFuncList.is_null()` arm went with the raw table.
     if pCurDqLayer.is_null() {
         return;
@@ -1586,7 +1586,7 @@ pub unsafe fn WelsMdSpatialelInterMbIlfmdNoilp(
     let mut bKeepSkip = kbMbLeftAvailPskip & kbMbTopAvailPskip & kbMbTopRightAvailPskip;
     let bSkip: bool;
 
-    if let Some(pfBgd) = (*ctx_func_list(pEncCtx)).pfInterMdBackgroundDecision {
+    if let Some(pfBgd) = (*pEncCtx).func_list().pfInterMdBackgroundDecision {
         if pfBgd(pEncCtx, pWelsMd, &mut *pSlice, mbs.cur_mut(), &mut bKeepSkip) {
             return;
         }
@@ -1612,7 +1612,7 @@ pub unsafe fn WelsMdSpatialelInterMbIlfmdNoilp(
 
             // Step 2: P_16x16
             (*pWelsMd).iCostLuma =
-                WelsMdP16x16(&*ctx_func_list(pEncCtx), pCurDqLayer, pWelsMd, pSlice, mbs);
+                WelsMdP16x16((*pEncCtx).func_list(), pCurDqLayer, pWelsMd, pSlice, mbs);
             mbs.cur_mut().uiMbType = MB_TYPE_16x16;
         }
 
@@ -1621,7 +1621,7 @@ pub unsafe fn WelsMdSpatialelInterMbIlfmdNoilp(
         // Base layer is Intra (BLMODE == SVC_INTRA)
         let pMbCache = &mut pSlice.sMbCacheInfo;
         let kiCostI16x16 = WelsMdI16x16(
-            &*ctx_func_list(pEncCtx),
+            (*pEncCtx).func_list(),
             current_layer(pEncCtx),
             &mut *pMbCache,
             (*pWelsMd).iLambda,
@@ -1706,7 +1706,7 @@ pub unsafe fn CheckChromaCost(
     // autoref, and the chroma positions come from the carrier coordinates —
     // the stamped `SPicData.pEncMb[1]`/`pRefMb[1]` were exactly
     // plane-root + ((iMbX + iMbY*stride) << 3), T9.B30's identity.
-    let pSad = (*ctx_func_list(pEncCtx)).sSampleDealingFuncs.pfSampleSad[BLOCK_8x8];
+    let pSad = (*pEncCtx).func_list().sSampleDealingFuncs.pfSampleSad[BLOCK_8x8];
     let pCurDqLayer = current_layer(pEncCtx);
 
     let kiMbXChroma = ((*pMbCache).SPicData.iMbX as isize) << 3;
@@ -1958,7 +1958,7 @@ pub unsafe extern "C" fn JudgeStaticSkip(
         // Session F: the shared picture route (`ctx_pic_ref` + plane cursors)
         // replaces the `ctx_pic_ref_mut(..).planes()` whole-picture retag F121
         // named live-as-code — and the raw-table read goes with the triple.
-        let sdf = &(*ctx_func_list(pEncCtx)).sSampleDealingFuncs;
+        let sdf = &(*pEncCtx).func_list().sSampleDealingFuncs;
         let pRefOriPic = (*pCurDqLayer).pRefOri[0]
             .and_then(|r| crate::encoder::svc_encode_slice::ctx_pic_ref(pEncCtx, r));
         if let Some(pRefOriPic) = pRefOriPic {
@@ -2024,7 +2024,7 @@ pub unsafe extern "C" fn JudgeScrollSkip(
 
     if bTryScrollSkip {
         // Session F: as JudgeStaticSkip — shared picture route, safe cost slot.
-        let sdf = &(*ctx_func_list(pEncCtx)).sSampleDealingFuncs;
+        let sdf = &(*pEncCtx).func_list().sSampleDealingFuncs;
         let pRefOriPic = (*pCurDqLayer).pRefOri[0]
             .and_then(|r| crate::encoder::svc_encode_slice::ctx_pic_ref(pEncCtx, r));
         if let Some(pRefOriPic) = pRefOriPic {
@@ -2086,7 +2086,7 @@ pub unsafe extern "C" fn SvcMdSCDMbEnc(
 ) {
     let pMbCache = &mut pSlice.sMbCacheInfo;
     let pCurDqLayer = current_layer(pEncCtx);
-    let pFunc = ctx_func_list(pEncCtx);
+    let pFunc = (*pEncCtx).func_list();
     let skip_idx = eSkipMode as usize;
     let sCandidateMv = sCurMbMv[skip_idx];
 
@@ -2497,14 +2497,14 @@ pub unsafe extern "C" fn WelsMdInterFinePartitionVaaOnScreen(
         .pSad8x8
         .as_ptr()
         .add((*pCurMb).iMbXY as usize) as *mut i32;
-    let get_sign = (*ctx_func_list(pEncCtx)).pfGetMbSignFromInterVaa.unwrap();
+    let get_sign = (*pEncCtx).func_list().pfGetMbSignFromInterVaa.unwrap();
     let uiMbSign = get_sign(pSad8x8_ptr);
 
     if uiMbSign == MBVAASIGN_FLAT {
         return;
     }
 
-    let iCostP8x8 = WelsMdP8x8(&*ctx_func_list(pEncCtx), pCurDqLayer, pWelsMd, pSlice);
+    let iCostP8x8 = WelsMdP8x8((*pEncCtx).func_list(), pCurDqLayer, pWelsMd, pSlice);
     if iCostP8x8 < iBestCost {
         iBestCost = iCostP8x8;
         (*pCurMb).uiMbType = MB_TYPE_8x8;

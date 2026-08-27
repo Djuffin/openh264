@@ -46,10 +46,10 @@ use crate::api::codec_api::EParameterSetStrategy;
 use crate::api::codec_api::RC_MODES::RC_OFF_MODE;
 use crate::encoder::au_set::{WelsInitPps, WelsInitSps, WelsInitSubsetSps};
 use crate::encoder::encoder_context::{
+    ctx_func_list_raw,
     ctx_param, sWelsEncCtx, SLogContext,
     SParaSetOffset,
     SParaSetOffsetVariable, MAX_DQ_LAYER_NUM, MAX_PPS_COUNT, PARA_SET_TYPE,
-    ctx_func_list,
 };
 use crate::encoder::param_svc::{
     SExistingParasetList, SSubsetSps, SWelsPPS, SWelsSPS, SWelsSvcCodingParam, MAX_SPS_COUNT,
@@ -978,7 +978,11 @@ fn ParasetIdAdditionIdAdjust(
 pub unsafe fn ParasetStrategy<'a>(
     pCtx: *mut sWelsEncCtx,
 ) -> &'a mut CWelsParametersetIdStrategyObj {
-    (*ctx_func_list(pCtx))
+    // **A6: one of the two derivations the flip could not take** — see
+    // [`ctx_func_list_raw`]. The strategy is reached `&mut` and this body's
+    // context is a raw, where `func_list_mut` would be a whole-context `&mut`
+    // retag through a raw root.
+    (*ctx_func_list_raw(pCtx))
         .pParametersetStrategy
         .as_deref_mut()
         .expect("pParametersetStrategy is installed by InitFunctionPointers")

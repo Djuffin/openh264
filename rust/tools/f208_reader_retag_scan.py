@@ -15,7 +15,9 @@ READERS = ["rc", "rc_at", "mvd_cost_table", "mvd_cost_origin", "frame_bs",
            "vaa", "vaa_ptr", "vaa_ext",
            # …and A5's two combined `&mut self` accessors, which retag the whole
            # context the same way the readers do.
-           "vaa_ref_list_and_ltr_mut", "vaa_and_rc_at_mut"]
+           "vaa_ref_list_and_ltr_mut", "vaa_and_rc_at_mut",
+           # A6 (`ctx_func_list`): the dispatch table's reader, and its writer.
+           "func_list", "func_list_mut"]
 rd = re.compile(r"\.(%s)\s*\(" % "|".join(READERS))
 # a Unique retag into the context through a raw
 uq = re.compile(r"&mut\s*\(\*(p\w*Ctx\w*)\)\.|addr_of_mut!\(\(\*(p\w*Ctx\w*)\)\.")

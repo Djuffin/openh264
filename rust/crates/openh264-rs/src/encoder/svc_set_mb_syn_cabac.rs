@@ -44,7 +44,6 @@
 #![deny(unsafe_code)]
 
 pub use crate::encoder::encoder_context::SMVUnitXY;
-use crate::encoder::encoder_context::ctx_func_list;
 pub use crate::encoder::encoder_context::SDCTCoeff;
 pub use crate::encoder::encoder_context::SMVComponentUnit;
 
@@ -1203,7 +1202,7 @@ pub unsafe fn WelsSpatialWriteMbSynCabac(
                 WelsCabacMbCbp(buf, &*mbs, &mut *pCabacCtx);
             }
 
-            let pFuncList = ctx_func_list(pEncCtx);
+            let pFuncList = (*pEncCtx).func_list();
             iRet = WelsWriteMbResidualCabac(
                 buf,
                 &*pFuncList,

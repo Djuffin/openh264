@@ -100,7 +100,7 @@ pub use crate::encoder::svc_encode_slice::SSlice;
 pub use crate::encoder::svc_encode_slice::SDqLayer;
 pub use crate::encoder::wels_func_ptr_def::SWelsFuncPtrList;
 pub use crate::encoder::encoder_context::sWelsEncCtx;
-use crate::encoder::encoder_context::{ctx_param, ctx_func_list};
+use crate::encoder::encoder_context::ctx_param;
 
 // ============================================================================
 // Constants and Macros
@@ -1937,7 +1937,7 @@ pub unsafe fn WelsRcCheckFrameStatus(
 
     if (*ctx_param(pEncCtx)).bSimulcastAVC {
         let iDidIdx = iCurDid;
-        (*ctx_func_list(pEncCtx))
+        pEncCtx.func_list()
             .pfRc
             .WelsRcPicDelayJudge(pEncCtx, uiTimeStamp, iDidIdx);
         if (*pEncCtx.rc_at_mut(iDidIdx as usize)).bSkipFlag {
@@ -1948,7 +1948,7 @@ pub unsafe fn WelsRcCheckFrameStatus(
             && (*ctx_param(pEncCtx)).sSpatialLayers[iDidIdx as usize].iMaxSpatialBitrate
                 != UNSPECIFIED_BIT_RATE
         {
-            (*ctx_func_list(pEncCtx))
+            pEncCtx.func_list()
                 .pfRc
                 .WelsCheckSkipBasedMaxbr(pEncCtx, uiTimeStamp, iDidIdx);
             if (*pEncCtx.rc_at_mut(iDidIdx as usize)).bSkipFlag {
@@ -1966,7 +1966,7 @@ pub unsafe fn WelsRcCheckFrameStatus(
     } else {
         for i in 0..iSpatialNum as usize {
             let iDidIdx = pEncCtx.sSpatialIndexMap[i].iDid;
-            (*ctx_func_list(pEncCtx))
+            pEncCtx.func_list()
                 .pfRc
                 .WelsRcPicDelayJudge(pEncCtx, uiTimeStamp, iDidIdx);
             if (*pEncCtx.rc_at_mut(iDidIdx as usize)).bSkipFlag {
@@ -1977,7 +1977,7 @@ pub unsafe fn WelsRcCheckFrameStatus(
                 && (*ctx_param(pEncCtx)).sSpatialLayers[iDidIdx as usize].iMaxSpatialBitrate
                     != UNSPECIFIED_BIT_RATE
             {
-                (*ctx_func_list(pEncCtx))
+                pEncCtx.func_list()
                     .pfRc
                     .WelsCheckSkipBasedMaxbr(pEncCtx, uiTimeStamp, iDidIdx);
                 if (*pEncCtx.rc_at_mut(iDidIdx as usize)).bSkipFlag {
@@ -2455,7 +2455,7 @@ pub unsafe extern "C" fn WelsRcMbInitGom(
     let pCurLayer = current_layer(pEncCtx);
     let kuiChromaQpIndexOffset = (*layer_pps(pEncCtx, pCurLayer)).uiChromaQpIndexOffset;
 
-    pSOverRc.iBsPosSlice = (*ctx_func_list(pEncCtx)).eEntropyCoder.GetBsPosition(crate::encoder::svc_encode_slice::slice_writer(pEncCtx, std::ptr::addr_of_mut!((*pSlice).sSliceBs)), std::ptr::addr_of!((*pSlice).sCabacCtx));
+    pSOverRc.iBsPosSlice = (*pEncCtx).func_list().eEntropyCoder.GetBsPosition(crate::encoder::svc_encode_slice::slice_writer(pEncCtx, std::ptr::addr_of_mut!((*pSlice).sSliceBs)), std::ptr::addr_of!((*pSlice).sCabacCtx));
 
     if (*pWelsSvcRc).bEnableGomQp != 0 {
         if (*pWelsSvcRc).iNumberMbGom != 0
@@ -2504,7 +2504,7 @@ pub unsafe extern "C" fn WelsRcMbInfoUpdateGom(
     let pWelsSvcRc = (*pEncCtx).rc_at(did);
     let pSOverRc = &mut (*pSlice).sSlicingOverRc;
 
-    let cur_bs = (*ctx_func_list(pEncCtx)).eEntropyCoder.GetBsPosition(crate::encoder::svc_encode_slice::slice_writer(pEncCtx, std::ptr::addr_of_mut!((*pSlice).sSliceBs)), std::ptr::addr_of!((*pSlice).sCabacCtx));
+    let cur_bs = (*pEncCtx).func_list().eEntropyCoder.GetBsPosition(crate::encoder::svc_encode_slice::slice_writer(pEncCtx, std::ptr::addr_of_mut!((*pSlice).sSliceBs)), std::ptr::addr_of!((*pSlice).sCabacCtx));
     let iCurMbBits = cur_bs - pSOverRc.iBsPosSlice;
     pSOverRc.iFrameBitsSlice += iCurMbBits;
     pSOverRc.iGomBitsSlice += iCurMbBits;
@@ -2890,7 +2890,11 @@ pub unsafe fn WelsRcInitModule(pEncCtx: &mut sWelsEncCtx, iRcMode: RCMode) {
     // `&mut sWelsEncCtx` cannot be null, so the condition was always true and the
     // install is unconditional. Both arms of the original guard are now gone for
     // the same reason: the thing each tested has a type that cannot express it.
-    WelsRcInitFuncPointers(&mut (*ctx_func_list(pEncCtx)).pfRc, iRcMode);
+    // The table's `&mut` is bound before the field is projected out of it: the
+    // inline `&mut <ctx>.func_list_mut().pfRc` spelling reads to the F208 scanner
+    // as a context-`&mut` live across a reader call, and this one is not.
+    let fl = pEncCtx.func_list_mut();
+    WelsRcInitFuncPointers(&mut fl.pfRc, iRcMode);
     RcInitSequenceParameter(pEncCtx);
 }
 

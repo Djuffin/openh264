@@ -297,7 +297,6 @@ pub struct tagDeblockingFunc {
 pub type DeblockingFunc = tagDeblockingFunc;
 
 pub use crate::encoder::encoder_context::{SPicture, SWelsFuncPtrList, sWelsEncCtx};
-use crate::encoder::encoder_context::ctx_func_list;
 pub use crate::encoder::svc_encode_slice::{SDqLayer, SSlice};
 
 // ============================================================================
