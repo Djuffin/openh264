@@ -1376,9 +1376,7 @@ pub use crate::encoder::vlc_encoder::{
 
 /// Copies non-zero coefficient counts from `SMB` into the slice's `SMbCache`.
 #[inline]
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
-pub unsafe fn UpdateNonZeroCountCache(pMb: &SMB, pMbCache: &mut SMbCache) {
+pub fn UpdateNonZeroCountCache(pMb: &SMB, pMbCache: &mut SMbCache) {
     // The `mb_nz.is_null()` guard that stood here was the port's own; the row is an
     // inline array and cannot be absent.
     let mb_nz = &(*pMb).iNonZeroCount;
@@ -2014,9 +2012,7 @@ pub unsafe fn OutputPMbWithoutConstructCsRsNoCopy(pCtx: *mut sWelsEncCtx, pDq: *
     }
 }
 
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
-pub unsafe fn UpdateQpForOverflow(pCurMb: &mut SMB, kuiChromaQpIndexOffset: u8) {
+pub fn UpdateQpForOverflow(pCurMb: &mut SMB, kuiChromaQpIndexOffset: u8) {
     (*pCurMb).uiLumaQp = (*pCurMb).uiLumaQp.wrapping_add(DELTA_QP as u8);
     let clamped_idx = CLIP3_QP_0_51((*pCurMb).uiLumaQp as i32 + kuiChromaQpIndexOffset as i32);
     (*pCurMb).uiChromaQp = g_kuiChromaQpTable[clamped_idx];
@@ -2383,9 +2379,7 @@ pub unsafe fn WelsISliceMdEncDynamic(pEncCtx: *mut sWelsEncCtx, pSlice: &mut SSl
 ///
 /// # Safety
 /// All three pointers must be valid, with `pCurMb`'s side arrays allocated.
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
-unsafe fn mb_dump(pCurMb: &SMB, pMd: &SWelsMD, pSlice: & SSlice) {
+fn mb_dump(pCurMb: &SMB, pMd: &SWelsMD, pSlice: & SSlice) {
     if !crate::encoder::dump_enabled(&MB_DUMP, "OH264_MBDUMP") {
         return;
     }
@@ -3462,9 +3456,7 @@ pub unsafe fn DynSlcJudgeSliceBoundaryStepBack(
 // The `+ 16` accommodation (F14) and its reasoning moved onto `SMbCache::sMemPredMb`
 // with the buffer.
 
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn InitSliceBoundaryInfo(
+pub fn InitSliceBoundaryInfo(
     pCurLayer: &mut SDqLayer,
     pSliceArgument: &SSliceArgument,
     kiSliceNumInFrame: i32,
@@ -3548,9 +3540,7 @@ pub unsafe fn SetSliceBoundaryInfo(pCurLayer: *mut SDqLayer, pSlice: &mut SSlice
 /// this replaces, zeros included, and its failure is a panic-on-OOM — the same trade
 /// every owned buffer in this port has made since T3.6. `pMa` goes with the
 /// allocation.
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
-pub unsafe fn InitSliceBsBuffer(
+pub fn InitSliceBsBuffer(
     pSlice: &mut SSlice,
     bIndependenceBsBuffer: bool,
     iMaxSliceBufferSize: i32,
@@ -3578,9 +3568,7 @@ pub unsafe fn InitSliceBsBuffer(
 /// bank drops every one of them, in the same order, with nothing to null out and
 /// nothing to get wrong on an error path. `pMa` goes with the walk, and this is the
 /// last thing `FreeDqLayer` had to release by hand.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn FreeSliceBuffer(pDqLayer: &mut SDqLayer, kiBank: usize) {
+pub fn FreeSliceBuffer(pDqLayer: &mut SDqLayer, kiBank: usize) {
     let bank: &mut Vec<SSlice> = &mut (*pDqLayer).sSliceBufferInfo[kiBank].pSliceBuffer;
     bank.clear();
     bank.shrink_to_fit();
@@ -3792,9 +3780,7 @@ pub unsafe fn InitSliceInLayer(
     ENC_RETURN_SUCCESS
 }
 
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
-pub unsafe fn InitSliceHeadWithBase(pSlice: &mut SSlice, pBaseSlice: &SSlice) {
+pub fn InitSliceHeadWithBase(pSlice: &mut SSlice, pBaseSlice: &SSlice) {
     let pBaseSHExt = &(*pBaseSlice).sSliceHeaderExt;
     let pSHExt = &mut (*pSlice).sSliceHeaderExt;
 
@@ -3806,9 +3792,7 @@ pub unsafe fn InitSliceHeadWithBase(pSlice: &mut SSlice, pBaseSlice: &SSlice) {
     pSHExt.sSliceHeader.iSpsId = pBaseSHExt.sSliceHeader.iSpsId;
 }
 
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
-pub unsafe fn InitSliceRefInfoWithBase(pSlice: &mut SSlice, pBaseSlice: &SSlice, kuiRefCount: u8) {
+pub fn InitSliceRefInfoWithBase(pSlice: &mut SSlice, pBaseSlice: &SSlice, kuiRefCount: u8) {
     let pBaseSHExt = &(*pBaseSlice).sSliceHeaderExt;
     let pSHExt = &mut (*pSlice).sSliceHeaderExt;
 
@@ -3818,9 +3802,7 @@ pub unsafe fn InitSliceRefInfoWithBase(pSlice: &mut SSlice, pBaseSlice: &SSlice,
 }
 
 #[inline]
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
-pub unsafe fn InitSliceRC(pSlice: &mut SSlice, kiGlobalQp: i32) -> i32 {
+pub fn InitSliceRC(pSlice: &mut SSlice, kiGlobalQp: i32) -> i32 {
     if kiGlobalQp < 0 {
         return ENC_RETURN_INVALIDINPUT;
     }
@@ -4178,9 +4160,7 @@ pub unsafe fn GetTotalCodedNalCount(pFbi: *mut SFrameBSInfo) -> i32 {
     iTotalCodedNalCount
 }
 
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn GetCurrentSliceNum(pCurDq: &SDqLayer) -> i32 {
+pub fn GetCurrentSliceNum(pCurDq: &SDqLayer) -> i32 {
     pCurDq.sSliceEncCtx.iSliceNumInFrame.load(Ordering::Relaxed)
 }
 
@@ -4296,9 +4276,7 @@ pub unsafe fn SliceLayerInfoUpdate(
     ENC_RETURN_SUCCESS
 }
 
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn WelsInitSliceEncodingFuncs(uiCpuFlag: u32) {
+pub fn WelsInitSliceEncodingFuncs(uiCpuFlag: u32) {
     // Dynamically wires CPU architecture flags if SIMD variants are enabled
 }
 

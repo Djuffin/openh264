@@ -1022,8 +1022,6 @@ impl CWelsPreProcess {
     }
 
     /// Factory constructor instantiating the preprocessing subsystem.
-    // unsafe-cat: port-raw(Phase 9)
-    #[allow(unsafe_code)]
     pub fn CreatePreProcess(pEncCtx: &mut sWelsEncCtx) -> Option<Box<CWelsPreProcess>> {
         // T9.H: the `pEncCtx.is_null()` disjunct is gone — a `&mut sWelsEncCtx`
         // cannot be null and every caller now holds one. S3.B1: the `Box` is
@@ -1088,9 +1086,7 @@ impl CWelsPreProcess {
         WelsInitScaledPic(pCtx.param(), &mut self.m_sScaledPicture)
     }
 
-    // unsafe-cat: port-raw(Phase 9)
-    #[allow(unsafe_code)]
-    pub unsafe fn AllocSpatialPictures(&mut self, pCtx: &mut sWelsEncCtx) -> i32 {
+    pub fn AllocSpatialPictures(&mut self, pCtx: &mut sWelsEncCtx) -> i32 {
         // A7: the `pParam` argument is gone — see `InitFunctionPointers`.
         let pParam = pCtx.param();
         let kiDlayerCount = (*pParam).iSpatialLayerNum;
@@ -1142,9 +1138,7 @@ impl CWelsPreProcess {
         0
     }
 
-    // unsafe-cat: port-raw(Phase 9)
-    #[allow(unsafe_code)]
-    pub unsafe fn FreeSpatialPictures(&mut self, pCtx: &mut sWelsEncCtx) {
+    pub fn FreeSpatialPictures(&mut self, pCtx: &mut sWelsEncCtx) {
         // T9.H: the `pCtx.is_null()` disjunct is gone — a `&mut sWelsEncCtx`
         // cannot be null and every caller now holds one. The rest is unchanged.
         if pCtx.param_opt().is_none() {
@@ -1573,15 +1567,11 @@ impl CWelsPreProcess {
         }
     }
 
-    // unsafe-cat: port-raw(Phase 9)
-    #[allow(unsafe_code)]
-    pub unsafe fn GetCurPicPosition(&self, kiDidx: i32) -> i32 {
+    pub fn GetCurPicPosition(&self, kiDidx: i32) -> i32 {
         self.m_uiSpatialLayersInTemporal[kiDidx as usize] as i32 - 1
     }
 
-    // unsafe-cat: port-raw(Phase 9)
-    #[allow(unsafe_code)]
-    pub unsafe fn GetCurrentOrigFrame(&mut self, iDIdx: i32) -> Option<SrcPicId> {
+    pub fn GetCurrentOrigFrame(&mut self, iDIdx: i32) -> Option<SrcPicId> {
         if self.m_eUsageType == EUsageType::SCREEN_CONTENT_REAL_TIME {
             self.m_pSpatialPic[iDIdx as usize][0]
         } else {
@@ -1590,9 +1580,7 @@ impl CWelsPreProcess {
         }
     }
 
-    // unsafe-cat: port-raw(Phase 9)
-    #[allow(unsafe_code)]
-    pub unsafe fn GetBestRefPic(&self, kiDidx: i32, iRefTemporalIdx: i32) -> Option<SrcPicId> {
+    pub fn GetBestRefPic(&self, kiDidx: i32, iRefTemporalIdx: i32) -> Option<SrcPicId> {
         self.m_pSpatialPic[kiDidx as usize][iRefTemporalIdx as usize]
     }
 
@@ -2085,9 +2073,7 @@ impl CWelsPreProcess {
         }
     }
 
-    // unsafe-cat: port-raw(Phase 9)
-    #[allow(unsafe_code)]
-    pub unsafe fn InitLastSpatialPictures(&mut self, pCtx: &mut sWelsEncCtx) -> i32 {
+    pub fn InitLastSpatialPictures(&mut self, pCtx: &mut sWelsEncCtx) -> i32 {
         let pParam = pCtx.param();
         let kiDlayerCount = (*pParam).iSpatialLayerNum;
         let mut iDlayerIndex = 0;
@@ -2260,9 +2246,7 @@ impl CWelsPreProcess {
         ENC_RETURN_SUCCESS
     }
 
-    // unsafe-cat: port-raw(Phase 9)
-    #[allow(unsafe_code)]
-    pub unsafe fn GetSceneChangeFlag(&self, eSceneChangeIdc: ESceneChangeIdc) -> bool {
+    pub fn GetSceneChangeFlag(&self, eSceneChangeIdc: ESceneChangeIdc) -> bool {
         eSceneChangeIdc == ESceneChangeIdc::LARGE_CHANGED_SCENE
     }
 
@@ -2574,9 +2558,7 @@ impl CWelsPreProcess {
         }
     }
 
-    // unsafe-cat: port-raw(Phase 9)
-    #[allow(unsafe_code)]
-    unsafe fn JudgeBestRef(
+    fn JudgeBestRef(
         &self,
         idRefPic: SrcPicId,
         sRefJudgement: &SRefJudgement,

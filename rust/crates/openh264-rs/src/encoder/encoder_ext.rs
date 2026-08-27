@@ -1668,9 +1668,7 @@ pub const STATISTICS_LOG_INTERVAL_MS: i32 = 5000;
 ///
 /// # Safety
 /// `pDq` must be non-null.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn FreeSliceInLayer(pDq: &mut SDqLayer) {
+pub fn FreeSliceInLayer(pDq: &mut SDqLayer) {
     for iIdx in 0..MAX_THREADS_NUM {
         crate::encoder::svc_encode_slice::FreeSliceBuffer(pDq, iIdx);
     }
@@ -1680,9 +1678,7 @@ pub unsafe fn FreeSliceInLayer(pDq: &mut SDqLayer) {
 ///
 /// # Safety
 /// `pDq` must have come from `InitDqLayers` and must not be used afterwards.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn FreeDqLayer(p: &mut SDqLayer) {
+pub fn FreeDqLayer(p: &mut SDqLayer) {
 
     // **T7.C4 finished this function.** `FreeSliceInLayer` used to release one
     // `CMemoryAlign` block per slice (`sSliceBs.pBs`) — the last allocation the layer
@@ -2481,9 +2477,7 @@ pub unsafe fn WritePadding(pCtx: &mut sWelsEncCtx, iLen: i32, iSize: *mut i32) -
 }
 
 /// `encoder_ext.cpp:2624` (`static inline SetFastCodingFunc`).
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-unsafe fn SetFastCodingFunc(pFuncList: &mut SWelsFuncPtrList) {
+fn SetFastCodingFunc(pFuncList: &mut SWelsFuncPtrList) {
     pFuncList.pfIntraFineMd =
         Some(crate::encoder::svc_base_layer_md::WelsMdIntraFinePartitionVaa);
     let sdf = &mut pFuncList.sSampleDealingFuncs;
@@ -2493,9 +2487,7 @@ unsafe fn SetFastCodingFunc(pFuncList: &mut SWelsFuncPtrList) {
 }
 
 /// `encoder_ext.cpp:2630` (`static inline SetNormalCodingFunc`).
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-unsafe fn SetNormalCodingFunc(pFuncList: &mut SWelsFuncPtrList) {
+fn SetNormalCodingFunc(pFuncList: &mut SWelsFuncPtrList) {
     pFuncList.pfIntraFineMd = Some(crate::encoder::svc_base_layer_md::WelsMdIntraFinePartition);
     let sdf = &mut pFuncList.sSampleDealingFuncs;
     sdf.pfMdCost = CostFamily::Satd;
@@ -3010,9 +3002,7 @@ pub unsafe fn PrepareEncodeFrame(
 
 /// `encoder_ext.cpp:2415`. TUNE back if a picture-partition decision algorithm based
 /// on past behaviour becomes available.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn PicPartitionNumDecision(pCtx: &mut sWelsEncCtx) -> i32 {
+pub fn PicPartitionNumDecision(pCtx: &mut sWelsEncCtx) -> i32 {
     let mut iPartitionNum = 1;
     if pCtx.param().iMultipleThreadIdc > 1 {
         iPartitionNum = pCtx.param().iMultipleThreadIdc as i32;
@@ -3076,9 +3066,7 @@ pub unsafe fn WelsInitCurrentQBLayerMltslc(pCtx: &mut sWelsEncCtx) {
 ///
 /// # Safety
 /// `pCurDq` must be live with `sSliceEncCtx.pOverallMbMap` allocated.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn UpdateSlicepEncCtxWithPartition(pCurDq: &mut SDqLayer, mut iPartitionNum: i32) {
+pub fn UpdateSlicepEncCtxWithPartition(pCurDq: &mut SDqLayer, mut iPartitionNum: i32) {
     let pSliceCtx = &mut (*pCurDq).sSliceEncCtx;
     let kiMbNumInFrame = pSliceCtx.iMbNumInFrame;
     let mut iCountMbNumPerPartition = kiMbNumInFrame;

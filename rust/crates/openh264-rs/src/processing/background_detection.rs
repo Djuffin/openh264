@@ -177,9 +177,7 @@ impl CBackgroundDetection {
     }
 
     /// `CBackgroundDetection::ForegroundBackgroundDivision` — `BackgroundDetection.cpp:157`.
-    // unsafe-cat: port-raw(Phase 9)
-    #[allow(unsafe_code)]
-    unsafe fn ForegroundBackgroundDivision(&mut self, calc: &SVAACalcResult) {
+    fn ForegroundBackgroundDivision(&mut self, calc: &SVAACalcResult) {
         let iPicWidthInOU = self.m_BgdParam.iBgdWidth >> LOG2_BGD_OU_SIZE;
         let iPicHeightInOU = self.m_BgdParam.iBgdHeight >> LOG2_BGD_OU_SIZE;
         let iPicWidthInMb = (15 + self.m_BgdParam.iBgdWidth) >> 4;

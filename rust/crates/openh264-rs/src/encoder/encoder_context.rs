@@ -2151,9 +2151,7 @@ pub unsafe fn InitPic(
 ///
 /// # Safety
 /// `pFuncList` must be non-null and point to a valid `SWelsFuncPtrList`.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn WelsInitBGDFunc(
+pub fn WelsInitBGDFunc(
     pFuncList: &mut SWelsFuncPtrList,
     kbEnableBackgroundDetection: bool,
 ) {
@@ -2299,9 +2297,7 @@ pub unsafe fn InitFunctionPointers(
 /// **T4b.1**: the four entropy slots this function used to fill from one `if` are
 /// one [`EntropyCoder`] now, so the `if` *is* the assignment. What is left of the
 /// C++ shape is `pfCavlcParamCal`, which is CPU dispatch and Phase 4a's kind.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-unsafe fn InitCoeffFunc(
+fn InitCoeffFunc(
     pFuncList: &mut SWelsFuncPtrList,
     _uiCpuFlag: u32,
     iEntropyCodingModeFlag: i32,
@@ -2382,9 +2378,7 @@ pub unsafe fn LoadBackFrameNum(pEncCtx: &mut sWelsEncCtx, kiDidx: i32) {
 ///
 /// # Safety
 /// `pEncCtx` must be non-null and contain a valid `pOut`.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn InitBitStream(pEncCtx: &mut sWelsEncCtx) {
+pub fn InitBitStream(pEncCtx: &mut sWelsEncCtx) {
     // T9.H4: the `is_null()` disjunct that opened this guard is gone — a
     // `&mut sWelsEncCtx` cannot be null, and every caller now holds one. The
     // remaining conditions are unchanged.

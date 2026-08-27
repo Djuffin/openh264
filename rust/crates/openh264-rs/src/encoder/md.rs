@@ -1436,9 +1436,7 @@ pub fn InitMeRefinePointer(pMeRefine: &mut SMeRefinePointer, iStride: i32) {
 /// reference block — the two things `SQuarRefineParams::pSrcA`/`pSrcB` held as raw
 /// addresses.
 #[inline(always)]
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
-pub unsafe fn MeRefineQuarPixel(
+pub fn MeRefineQuarPixel(
     pFunc: &SWelsFuncPtrList,
     pMe: &mut SWelsME,
     pMeRefine: &mut SMeRefinePointer,
@@ -1930,8 +1928,16 @@ pub unsafe fn MvdCostInit(pMvdCostInter: &mut [u16], kiMvdSz: i32) {
     // slice buys is that the *extent* is now carried rather than trusted, and the
     // root is derived from it here instead of at a call site that could pass anything.
     let kiSz = kiMvdSz >> 1;
-    let mut pNegMvd = pMvdCostInter.as_mut_ptr();
-    let mut pPosMvd = pMvdCostInter.as_mut_ptr().offset((kiSz + 1) as isize);
+    // **F227, and it is F215's rule one container in.** These were two separate
+    // `pMvdCostInter.as_mut_ptr()` calls. `as_mut_ptr` takes `&mut self`, so the
+    // second call is a *fresh* `Unique` retag over the slice and it pops the tag the
+    // first cursor was still holding — the next write through `pNegMvd` is then a
+    // write with a dead tag. Two raw cursors into one buffer may only coexist if
+    // they come off the **same** derivation, so the root is taken once and both
+    // cursors are siblings of it.
+    let pRoot = pMvdCostInter.as_mut_ptr();
+    let mut pNegMvd = pRoot;
+    let mut pPosMvd = pRoot.offset((kiSz + 1) as isize);
     debug_assert!(
         (52 * kiMvdSz as usize) <= pMvdCostInter.len(),
         "the MVD cost table is smaller than the 52 QP rows this fills"

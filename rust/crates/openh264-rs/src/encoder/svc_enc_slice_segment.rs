@@ -614,9 +614,7 @@ pub unsafe fn InitSliceSegment(
 ///
 /// # Safety
 /// `pCurDq` and `pMa` must be non-null.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn UninitSliceSegment(pCurDq: &mut SDqLayer) {
+pub fn UninitSliceSegment(pCurDq: &mut SDqLayer) {
     // T9.E2h: a plain field borrow — the `as *mut` spelling made a raw whose
     // parent temporary expired at the statement (S29's cast clause); under the
     // `&mut` parameter the borrow checker referees the window instead.
@@ -659,9 +657,7 @@ pub unsafe fn InitSlicePEncCtx(
 ///
 /// # Safety
 /// `pMa` must be non-null when `pCurDq` is.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn UninitSlicePEncCtx(pCurDq: &mut SDqLayer) {
+pub fn UninitSlicePEncCtx(pCurDq: &mut SDqLayer) {
     UninitSliceSegment(pCurDq);
 }
 

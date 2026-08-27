@@ -685,9 +685,7 @@ pub unsafe fn WelsEncoderEncodeParameterSetsRust(
 /// all of them unless simulcast-AVC is on and the caller named a valid one. Both
 /// reset the same five fields and bump the same counter, so the loop below is
 /// written once over the layer range each arm selects.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn ForceCodingIDR(pCtx: &mut sWelsEncCtx, iLayerId: i32) -> i32 {
+pub fn ForceCodingIDR(pCtx: &mut sWelsEncCtx, iLayerId: i32) -> i32 {
     // T9.H: `if pCtx.is_null() { ... }` stood here. A `&mut sWelsEncCtx`
     // cannot be null and every caller now holds one, so the guard is not
     // merely dead — it is inexpressible. Nothing replaces it.
@@ -2085,8 +2083,6 @@ impl CWelsH264SVCEncoder {
         0
     }
 
-    // unsafe-cat: port-raw(Phase 9)
-    #[allow(unsafe_code)]
     pub fn EncodeFrame(
         &mut self,
         kpSrcPic: &SSourcePicture,

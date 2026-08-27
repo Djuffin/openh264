@@ -1165,9 +1165,7 @@ pub unsafe fn FilterLTRRecoveryRequest(
 }
 
 /// Updates LTR marking confirmation or failure feedback from decoder.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn FilterLTRMarkingFeedback(
+pub fn FilterLTRMarkingFeedback(
     pCtx: &mut sWelsEncCtx,
     pLTRMarkingFeedback: &mut SLTRMarkingFeedback,
 ) {

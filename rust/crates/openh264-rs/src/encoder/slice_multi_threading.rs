@@ -751,9 +751,7 @@ pub unsafe fn DynamicAdjustSlicePEncCtxAll(pCurDq: &mut SDqLayer, pRunLength: *m
 }
 
 /// Allocates and initializes multithreading synchronization resources and thread-local bitstream buffers.
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
-pub unsafe fn RequestMtResource(
+pub fn RequestMtResource(
     ctx: &mut sWelsEncCtx,
     iCountBsLen: i32,
     _iMaxSliceBufferSize: i32,
@@ -832,9 +830,7 @@ pub unsafe fn RequestMtResource(
 }
 
 /// Tears down and frees all multithreading objects and bitstream buffers.
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
-pub unsafe fn ReleaseMtResource(ctx: &mut sWelsEncCtx) {
+pub fn ReleaseMtResource(ctx: &mut sWelsEncCtx) {
     // **S3.B1** — the take is the whole teardown: the box drops at the end of
     // this function, its `Vec`s and the mutex with it.
     let Some(pSmt) = ctx.pSliceThreading.take() else {
@@ -1523,9 +1519,7 @@ unsafe fn EncodeOneSliceInJob(
 
 /// How many workers a fork gets: never more than there are slices to encode, and
 /// never more than there are bs scratch buffers behind the slots (F67's bound).
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
-unsafe fn ForkWidth(pCtx: &mut sWelsEncCtx, iItemCount: i32) -> i32 {
+fn ForkWidth(pCtx: &mut sWelsEncCtx, iItemCount: i32) -> i32 {
     let iBuffers = pCtx
         .pSliceThreading
         .as_deref()

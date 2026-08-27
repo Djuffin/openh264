@@ -1190,8 +1190,6 @@ mod tests {
     }
 
     #[test]
-    // unsafe-cat: instrument(test)
-    #[allow(unsafe_code)]
     fn test_cavlc_param_cal() {
         let mut coeffs = [0i16; 16];
         coeffs[0] = 5;

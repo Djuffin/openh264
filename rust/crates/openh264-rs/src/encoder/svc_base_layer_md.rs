@@ -496,9 +496,7 @@ pub unsafe extern "C" fn WelsMdI4x4(
 /// bottom-row I4x4 prediction modes into the macroblock so the *next* macroblock's
 /// `FillNeighborCacheIntra` can read them.
 #[inline]
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
-unsafe fn StoreIntra4x4PredModeToMb(pCurMb: &mut SMB, pMbCache: &mut SMbCache) {
+fn StoreIntra4x4PredModeToMb(pCurMb: &mut SMB, pMbCache: &mut SMbCache) {
     // ST32 (pCurMb->pIntra4x4PredMode, LD32 (&pMbCache->iIntraPredMode[33]));
     let pMbMode = &mut (*pCurMb).iIntra4x4PredMode;
     let pCacheMode = &(*pMbCache).iIntraPredMode;
@@ -2009,9 +2007,7 @@ pub unsafe fn WelsMdInterMb(
 ///
 /// # Safety
 /// `pCurMb` and `pMbCache` must be valid.
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
-pub unsafe fn WelsMdInterDoubleCheckPskip(pCurMb: &mut SMB, pMbCache: &mut SMbCache) {
+pub fn WelsMdInterDoubleCheckPskip(pCurMb: &mut SMB, pMbCache: &mut SMbCache) {
     if MB_TYPE_16x16 == (*pCurMb).uiMbType && 0 == (*pCurMb).uiCbp {
         if 0 == (*pCurMb).iRefIndex[0] {
             let mut sMvp = SMVUnitXY { iMvX: 0, iMvY: 0 };

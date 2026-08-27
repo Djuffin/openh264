@@ -1682,9 +1682,7 @@ pub fn GetChromaCost(
 }
 
 #[inline(always)]
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
-pub unsafe fn IsCostLessEqualSkipCost(
+pub fn IsCostLessEqualSkipCost(
     iCurCost: i32,
     iPredPskipSad: i32,
     iRefMbType: Mb_Type,
@@ -2555,9 +2553,7 @@ pub unsafe fn SetScrollingMvToMd(pVaa: &SVAAFrameInfo, pWelsMd: &mut SWelsMD) {
 
 /// Intentional no-op mode decision scrolling MV callback.
 /// Matches `void SetScrollingMvToMdNull (SVAAFrameInfo* pVaa, SWelsMD* pWelsMd)` in `svc_mode_decision.cpp:689`.
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
-pub unsafe fn SetScrollingMvToMdNull(_pVaa: &SVAAFrameInfo, _pWelsMd: &mut SWelsMD) {}
+pub fn SetScrollingMvToMdNull(_pVaa: &SVAAFrameInfo, _pWelsMd: &mut SWelsMD) {}
 
 #[cfg(test)]
 mod tests {

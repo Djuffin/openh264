@@ -464,7 +464,7 @@ pub fn UpdateMeResults(ksBestMv: SMVUnitXY, kiBestSadCost: u32, pMe: &mut SWelsM
 #[inline]
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
-pub unsafe fn MeEndIntepelSearch(pMe: &mut SWelsME) {
+pub fn MeEndIntepelSearch(pMe: &mut SWelsME) {
     unsafe {
         (*pMe).sMv.iMvX *= 1 << 2;
         (*pMe).sMv.iMvY *= 1 << 2;
@@ -486,7 +486,7 @@ pub fn CheckMvInRange(ksCurrentMv: SMVUnitXY, ksMinMv: SMVUnitXY, ksMaxMv: SMVUn
 #[inline]
 // unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
-pub unsafe fn SetMvWithinIntegerMvRange(
+pub fn SetMvWithinIntegerMvRange(
     kiMbWidth: i32,
     kiMbHeight: i32,
     kiMbX: i32,
@@ -517,7 +517,7 @@ pub fn CalcFMESwitchFlag(
 #[inline]
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
-pub unsafe fn GetCurrentSliceNum(pCurDq: &SDqLayer) -> i32 {
+pub fn GetCurrentSliceNum(pCurDq: &SDqLayer) -> i32 {
     unsafe { pCurDq.sSliceEncCtx.iSliceNumInFrame.load(std::sync::atomic::Ordering::Relaxed) }
 }
 
@@ -569,7 +569,7 @@ pub fn WelsInitMeFunc(
 /// Top-level motion estimation search for a macroblock or sub-partition.
 // unsafe-cat: port-raw(Phase 9) — pMvdCost (the ctx family's raw MVD table)
 #[allow(unsafe_code)]
-pub unsafe fn WelsMotionEstimateSearch(
+pub fn WelsMotionEstimateSearch(
     pMeFuncs: &SMeFuncs,
     sdf: &SSampleDealingFunc,
     pMe: &mut SWelsME,
@@ -654,7 +654,7 @@ pub unsafe fn WelsMotionEstimateSearch(
 // SCREEN_CONTENT(dormant: Phase 10)
 // unsafe-cat: SCREEN_CONTENT(dormant)
 #[allow(unsafe_code)]
-pub unsafe fn WelsMotionEstimateSearchStatic(
+pub fn WelsMotionEstimateSearchStatic(
     pMeFuncs: &SMeFuncs,
     sdf: &SSampleDealingFunc,
     pMe: &mut SWelsME,
@@ -688,7 +688,7 @@ pub unsafe fn WelsMotionEstimateSearchStatic(
 // SCREEN_CONTENT(dormant: Phase 10)
 // unsafe-cat: SCREEN_CONTENT(dormant)
 #[allow(unsafe_code)]
-pub unsafe fn WelsMotionEstimateSearchScrolled(
+pub fn WelsMotionEstimateSearchScrolled(
     pMeFuncs: &SMeFuncs,
     sdf: &SSampleDealingFunc,
     pMe: &mut SWelsME,
@@ -734,7 +734,7 @@ pub unsafe fn WelsMotionEstimateSearchScrolled(
 /// Evaluates spatial MVP, MVC candidate list, and directional scrolling vectors.
 // unsafe-cat: port-raw(Phase 9) — pMvdCost (the ctx family's raw MVD table)
 #[allow(unsafe_code)]
-pub unsafe fn WelsMotionEstimateInitialPoint(
+pub fn WelsMotionEstimateInitialPoint(
     pMeFuncs: &SMeFuncs,
     sdf: &SSampleDealingFunc,
     pMe: &mut SWelsME,
@@ -827,7 +827,7 @@ pub unsafe fn WelsMotionEstimateInitialPoint(
 /// of the same identity.
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
-pub unsafe fn CalculateSatdCost(
+pub fn CalculateSatdCost(
     pSatd: Option<PSampleSadSatdCostFunc>,
     pMe: &mut SWelsME,
     pEncPlane: &PaddedPlane,
@@ -910,7 +910,7 @@ pub unsafe extern "C" fn WelsMeSadCostSelect(
 
 // unsafe-cat: port-raw(Phase 9) — pMvdCost (the ctx family's raw MVD table)
 #[allow(unsafe_code)]
-pub unsafe fn WelsDiamondSearch(
+pub fn WelsDiamondSearch(
     _pMeFuncs: &SMeFuncs,
     sdf: &SSampleDealingFunc,
     pMe: &mut SWelsME,
@@ -994,7 +994,7 @@ pub unsafe fn WelsDiamondSearch(
 
 // unsafe-cat: port-raw(Phase 9) — pMvdCost (the ctx family's raw MVD table)
 #[allow(unsafe_code)]
-pub unsafe fn CheckDirectionalMv(
+pub fn CheckDirectionalMv(
     pSad: Option<PSampleSadSatdCostFunc>,
     pMe: &mut SWelsME,
     ksMinMv: SMVUnitXY,
@@ -1132,7 +1132,7 @@ pub unsafe fn LineFullSearch_c(
 
 // unsafe-cat: port-raw(Phase 9) — pMvdCost (the ctx family's raw MVD table)
 #[allow(unsafe_code)]
-pub unsafe fn WelsMotionCrossSearch(
+pub fn WelsMotionCrossSearch(
     pMeFuncs: &SMeFuncs,
     sdf: &SSampleDealingFunc,
     pMe: &mut SWelsME,
@@ -1173,7 +1173,7 @@ pub unsafe fn WelsMotionCrossSearch(
 
 // unsafe-cat: port-raw(Phase 9) — pRefFeatureStorage (Phase 10's raw storage)
 #[allow(unsafe_code)]
-pub unsafe fn WelsDiamondCrossSearch(
+pub fn WelsDiamondCrossSearch(
     pMeFuncs: &SMeFuncs,
     sdf: &SSampleDealingFunc,
     pMe: &mut SWelsME,
@@ -1197,7 +1197,7 @@ pub unsafe fn WelsDiamondCrossSearch(
 // SCREEN_CONTENT(dormant: Phase 10)
 // unsafe-cat: SCREEN_CONTENT(dormant)
 #[allow(unsafe_code)]
-pub unsafe fn WelsDiamondCrossFeatureSearch(
+pub fn WelsDiamondCrossFeatureSearch(
     pMeFuncs: &SMeFuncs,
     sdf: &SSampleDealingFunc,
     pMe: &mut SWelsME,
@@ -1552,7 +1552,7 @@ pub fn SaveFeatureSearchOut(
 // SCREEN_CONTENT(dormant: Phase 10)
 // unsafe-cat: SCREEN_CONTENT(dormant)
 #[allow(unsafe_code)]
-pub unsafe fn FeatureSearchOne(
+pub fn FeatureSearchOne(
     sFeatureSearchIn: &SFeatureSearchIn<'_>,
     iFeatureDifference: i32,
     kuiExpectedSearchTimes: u32,
@@ -1645,7 +1645,7 @@ pub unsafe fn FeatureSearchOne(
 // SCREEN_CONTENT(dormant: Phase 10)
 // unsafe-cat: SCREEN_CONTENT(dormant)
 #[allow(unsafe_code)]
-pub unsafe fn MotionEstimateFeatureFullSearch(
+pub fn MotionEstimateFeatureFullSearch(
     sFeatureSearchIn: SFeatureSearchIn<'_>,
     kuiMaxSearchPoint: u32,
     pMe: &mut SWelsME,
