@@ -66,7 +66,7 @@ use crate::{
 
 pub use crate::encoder::encoder_context::EWelsSliceType;
 use crate::encoder::encoder_context::{
-    ctx_dq_layer, ctx_param,
+    ctx_dq_layer,
 };
 
 pub const P_SLICE: i32 = 0;
@@ -1549,7 +1549,7 @@ pub unsafe fn WelsSliceHeaderExtInit(pEncCtx: *mut sWelsEncCtx, pCurLayer: *mut 
     // incremented the layer's counter to 1, so the IDR slice header wrote ue(0) (1 bit)
     // where the C++ writes ue(1) (3 bits) -- the 2-bit offset that shifted the whole
     // slice payload.
-    let pParamInternal = &(*ctx_param(pEncCtx)).sDependencyLayers[uiDid];
+    let pParamInternal = &(*pEncCtx).param().sDependencyLayers[uiDid];
     pCurSliceHeader.iFrameNum = pParamInternal.iFrameNum;
     pCurSliceHeader.uiIdrPicId = pParamInternal.uiIdrPicId;
 
@@ -2112,7 +2112,7 @@ pub unsafe fn WelsISliceMdEnc(pEncCtx: *mut sWelsEncCtx, pSlice: &mut SSlice) ->
     let mut sMd = SWelsMD::default();
     let mut sDss = SDynamicSlicingStack::default();
 
-    let kbCabac = (*ctx_param(pEncCtx)).iEntropyCodingModeFlag != 0;
+    let kbCabac = (*pEncCtx).param().iEntropyCodingModeFlag != 0;
     if kbCabac {
         crate::encoder::svc_set_mb_syn_cabac::WelsInitSliceCabac(pEncCtx, pSlice);
         sDss.pRestoreBuffer = std::ptr::null_mut();
@@ -2243,7 +2243,7 @@ pub unsafe fn WelsISliceMdEncDynamic(pEncCtx: *mut sWelsEncCtx, pSlice: &mut SSl
 
     let mut sMd = SWelsMD::default();
     let mut sDss = SDynamicSlicingStack::default();
-    if (*ctx_param(pEncCtx)).iEntropyCodingModeFlag != 0 {
+    if (*pEncCtx).param().iEntropyCodingModeFlag != 0 {
         crate::encoder::svc_set_mb_syn_cabac::WelsInitSliceCabac(pEncCtx, pSlice);
         sDss.pRestoreBuffer = dynamic_bs_buffer(pEncCtx, kiPartitionId);
         sDss.iStartPos = 0;
@@ -2439,7 +2439,7 @@ pub unsafe fn WelsMdInterMbLoop(
 
     let mut sDss = SDynamicSlicingStack::default();
 
-    let kbCabac = (*ctx_param(pEncCtx)).iEntropyCodingModeFlag != 0;
+    let kbCabac = (*pEncCtx).param().iEntropyCodingModeFlag != 0;
     if kbCabac {
         crate::encoder::svc_set_mb_syn_cabac::WelsInitSliceCabac(pEncCtx, pSlice);
         sDss.pRestoreBuffer = std::ptr::null_mut();
@@ -2626,7 +2626,7 @@ pub unsafe fn WelsMdInterMbLoopOverDynamicSlice(
     };
 
     let mut sDss = SDynamicSlicingStack::default();
-    if (*ctx_param(pEncCtx)).iEntropyCodingModeFlag != 0 {
+    if (*pEncCtx).param().iEntropyCodingModeFlag != 0 {
         crate::encoder::svc_set_mb_syn_cabac::WelsInitSliceCabac(pEncCtx, pSlice);
         sDss.iStartPos = 0;
         sDss.iCurrentPos = 0;
@@ -2829,7 +2829,7 @@ pub unsafe fn WelsPSliceMdEnc(pEncCtx: *mut sWelsEncCtx, pSlice: &mut SSlice, kb
     // `svc_encode_slice.cpp:698`. This assignment was missing, so `bMdUsingSad` was
     // always false and every skip/refinement cost was taken from SATD where the gate
     // configuration (LOW_COMPLEXITY) costs with SAD.
-    sMd.bMdUsingSad = (*ctx_param(pEncCtx)).iComplexityMode
+    sMd.bMdUsingSad = (*pEncCtx).param().iComplexityMode
         == crate::api::codec_api::ECOMPLEXITY_MODE::LOW_COMPLEXITY;
 
     WelsMdInterMbLoop(pEncCtx, pSlice, &mut sMd, kiSliceFirstMbXY)
@@ -2846,7 +2846,7 @@ pub unsafe fn WelsPSliceMdEncDynamic(pEncCtx: *mut sWelsEncCtx, pSlice: &mut SSl
     // `WelsPSliceMdEnc` and fixed there; this twin still had the defect, so every
     // dynamic-slice P macroblock costed with SATD where LOW_COMPLEXITY costs with
     // SAD.
-    sMd.bMdUsingSad = (*ctx_param(pEncCtx)).iComplexityMode
+    sMd.bMdUsingSad = (*pEncCtx).param().iComplexityMode
         == crate::api::codec_api::ECOMPLEXITY_MODE::LOW_COMPLEXITY;
 
     WelsMdInterMbLoopOverDynamicSlice(pEncCtx, pSlice, &mut sMd, kiSliceFirstMbXY)
@@ -2862,8 +2862,8 @@ pub unsafe fn WelsCodePSlice(pEncCtx: *mut sWelsEncCtx, pSlice: &mut SSlice) -> 
     // round 5 stopped aborting first). The stamp is loop-invariant across a
     // frame's slices, so it lives in `PreprocessSliceCoding` now (F71's
     // pattern); only the `kbHighestSpatial` the MD callee needs stays.
-    let kbHighestSpatial = if !ctx_param(pEncCtx).is_null() {
-        (*ctx_param(pEncCtx)).iSpatialLayerNum == ((*pCurLayer).sLayerInfo.sNalHeaderExt.uiDependencyId as i32 + 1)
+    let kbHighestSpatial = if (*pEncCtx).param_opt().is_some() {
+        (*pEncCtx).param().iSpatialLayerNum == ((*pCurLayer).sLayerInfo.sNalHeaderExt.uiDependencyId as i32 + 1)
     } else {
         true
     };
@@ -2877,8 +2877,8 @@ pub unsafe fn WelsCodePOverDynamicSlice(pEncCtx: *mut sWelsEncCtx, pSlice: &mut 
     // `svc_encode_slice.cpp:750/753`, the dynamic-slicing twin of
     // `WelsCodePSlice` — same hoist, same reason (F132 round 7): the per-slice
     // `pfInterMd` stamp lives in `PreprocessSliceCoding` now.
-    let kbHighestSpatial = if !ctx_param(pEncCtx).is_null() {
-        (*ctx_param(pEncCtx)).iSpatialLayerNum == ((*pCurLayer).sLayerInfo.sNalHeaderExt.uiDependencyId as i32 + 1)
+    let kbHighestSpatial = if (*pEncCtx).param_opt().is_some() {
+        (*pEncCtx).param().iSpatialLayerNum == ((*pCurLayer).sLayerInfo.sNalHeaderExt.uiDependencyId as i32 + 1)
     } else {
         true
     };
@@ -3149,9 +3149,9 @@ pub unsafe fn WelsCodeOneSlice(pEncCtx: *mut sWelsEncCtx, pCurSlice: &mut SSlice
     // (the encode probe's first red on the walk, Phase 6 session B).
     let pNalHeadExt = std::ptr::addr_of_mut!((*pCurLayer).sLayerInfo.sNalHeaderExt);
 
-    let kiDynamicSliceFlag = if !ctx_param(pEncCtx).is_null() {
+    let kiDynamicSliceFlag = if (*pEncCtx).param_opt().is_some() {
         let did = (*pEncCtx).uiDependencyId as usize;
-        if (*ctx_param(pEncCtx)).sSpatialLayers[did].sSliceArgument.uiSliceMode == SliceMode::SM_SIZELIMITED_SLICE {
+        if (*pEncCtx).param().sSpatialLayers[did].sSliceArgument.uiSliceMode == SliceMode::SM_SIZELIMITED_SLICE {
             1
         } else {
             0
@@ -3226,7 +3226,7 @@ pub unsafe fn WelsCodeOneSlice(pEncCtx: *mut sWelsEncCtx, pCurSlice: &mut SSlice
         slice_bs_buffer(pEncCtx, std::ptr::addr_of_mut!((*pCurSlice).sSliceBs), (*pCurSlice).uiBufferIdx as usize),
         pBs,
         std::ptr::addr_of_mut!((*pCurSlice).sCabacCtx),
-        (*ctx_param(pEncCtx)).iEntropyCodingModeFlag != 0,
+        (*pEncCtx).param().iEntropyCodingModeFlag != 0,
     );
 
     ENC_RETURN_SUCCESS
@@ -3396,8 +3396,8 @@ pub unsafe fn DynSlcJudgeSliceBoundaryStepBack(
         // is the C++'s `iMultipleThreadIdc <= 1` path: `pSliceThreading` is null
         // there, because `RequestMtResource` only runs above 1.
         let pSmtMutex = {
-            let bMt = !ctx_param(pEncCtx).is_null()
-                && (*ctx_param(pEncCtx)).iMultipleThreadIdc > 1
+            let bMt = (*pEncCtx).param_opt().is_some()
+                && (*pEncCtx).param().iMultipleThreadIdc > 1
                 && !(*pEncCtx).pSliceThreading.is_null();
             if bMt {
                 (*(*pEncCtx).pSliceThreading).mutexSliceNumUpdate
@@ -3432,12 +3432,10 @@ pub unsafe fn DynSlcJudgeSliceBoundaryStepBack(
 #[allow(unsafe_code)]
 pub unsafe fn InitSliceBoundaryInfo(
     pCurLayer: &mut SDqLayer,
-    pSliceArgument: *mut SSliceArgument,
+    pSliceArgument: &SSliceArgument,
     kiSliceNumInFrame: i32,
 ) -> i32 {
-    if pSliceArgument.is_null() {
-        return ENC_RETURN_INVALIDINPUT;
-    }
+    // A7: the parameter is a reference now, so its null arm is gone with the raw.
     let kiMBWidth: i32 = (*pCurLayer).iMbWidth as i32;
     let kiMBHeight: i32 = (*pCurLayer).iMbHeight as i32;
     let kiCountNumMbInFrame: i32 = kiMBWidth * kiMBHeight;
@@ -3647,8 +3645,8 @@ pub unsafe fn InitSliceThreadInfo(
     pDqLayer: &mut SDqLayer,
     kiDlayerIndex: i32,
 ) -> i32 {
-    let iThreadNum = if !ctx_param(pCtx).is_null() {
-        (*ctx_param(pCtx)).iMultipleThreadIdc as i32
+    let iThreadNum = if pCtx.param_opt().is_some() {
+        pCtx.param().iMultipleThreadIdc as i32
     } else {
         1
     };
@@ -3703,22 +3701,25 @@ pub unsafe fn InitSliceInLayer(
     pDqLayer: &mut SDqLayer,
     kiDlayerIndex: i32,
 ) -> i32 {
-    // S29, and F13's remaining production site. This was `&mut ...sSliceArgument`,
-    // whose Unique retag popped the tag of `InitDqLayers`'s `pDlayer` — a pointer
-    // into the *same* layer, derived one call up and read again after this function
-    // returns. `addr_of_mut!` creates no reference, so the pointer carries the
-    // parameter struct's own provenance and there is no retag to pop anything.
-    // Found by the encoder aliasing probe (Phase 6 session A) on its first run,
-    // reported at `encoder_ext.rs:822`.
-    let pSliceArgument = std::ptr::addr_of_mut!(
-        (*ctx_param(pCtx)).sSpatialLayers[kiDlayerIndex as usize].sSliceArgument
-    );
+    // S29, and F13's production site: this was `&mut ...sSliceArgument`, whose
+    // `Unique` retag popped the tag of `InitDqLayers`'s `pDlayer` — a pointer into
+    // the *same* layer, derived one call up and read again after this function
+    // returns. Found by the encoder aliasing probe (Phase 6 session A) on its first
+    // run. It became `addr_of_mut!` then, and **A7 retires the cursor entirely**:
+    // `SSliceArgument` is `Copy` (`codec_api.rs:577`) and this body only reads it,
+    // so §4.6's fourth shape applies — copy it out. Nothing writes it in between
+    // (`InitSliceThreadInfo` reads `iMultipleThreadIdc` and nothing else of the
+    // parameter block), so the copy is the re-read. `InitSliceBoundaryInfo` takes
+    // `&SSliceArgument` now, and `ReallocateSliceList` takes the slice *mode* — the
+    // one field it ever read.
+    let sSliceArgument = pCtx.param().sSpatialLayers[kiDlayerIndex as usize].sSliceArgument;
+    let kuiSliceMode = sSliceArgument.uiSliceMode;
 
-    (*pDqLayer).bSliceBsBufferFlag = (*ctx_param(pCtx)).iMultipleThreadIdc > 1
-        && (*pSliceArgument).uiSliceMode != SliceMode::SM_SINGLE_SLICE;
+    (*pDqLayer).bSliceBsBufferFlag = pCtx.param().iMultipleThreadIdc > 1
+        && kuiSliceMode != SliceMode::SM_SINGLE_SLICE;
 
-    (*pDqLayer).bThreadSlcBufferFlag = (*ctx_param(pCtx)).iMultipleThreadIdc > 1
-        && (*pSliceArgument).uiSliceMode == SliceMode::SM_SIZELIMITED_SLICE;
+    (*pDqLayer).bThreadSlcBufferFlag = pCtx.param().iMultipleThreadIdc > 1
+        && kuiSliceMode == SliceMode::SM_SIZELIMITED_SLICE;
 
     let iRet = InitSliceThreadInfo(pCtx, pDqLayer, kiDlayerIndex);
     if iRet != ENC_RETURN_SUCCESS {
@@ -3739,7 +3740,7 @@ pub unsafe fn InitSliceInLayer(
 
     // T9.E2h, shape B as above: the count is read before the call.
     let kiMaxSliceNum = (*pDqLayer).iMaxSliceNum;
-    let iRet2 = InitSliceBoundaryInfo(pDqLayer, pSliceArgument, kiMaxSliceNum);
+    let iRet2 = InitSliceBoundaryInfo(pDqLayer, &sSliceArgument, kiMaxSliceNum);
     if iRet2 != ENC_RETURN_SUCCESS {
         return iRet2;
     }
@@ -3824,20 +3825,24 @@ pub unsafe fn InitSliceRC(pSlice: &mut SSlice, kiGlobalQp: i32) -> i32 {
 #[allow(unsafe_code)]
 pub unsafe fn ReallocateSliceList(
     pCtx: *mut sWelsEncCtx,
-    pSliceArgument: *mut SSliceArgument,
+    kuiSliceMode: SliceMode,
     pDqLayer: *mut SDqLayer,
     kiBank: usize,
     kiMaxSliceNumOld: i32,
     kiMaxSliceNumNew: i32,
 ) -> i32 {
-    if pDqLayer.is_null() || pSliceArgument.is_null() || kiMaxSliceNumNew < kiMaxSliceNumOld {
+    // A7 / S54: the parameter was a `*mut SSliceArgument` this body only ever read
+    // one field of. It is that field now — a `Copy` enum — so there is no cursor to
+    // keep alive across the callers' whole-context calls, and its null arm goes with
+    // it (a value cannot be null).
+    if pDqLayer.is_null() || kiMaxSliceNumNew < kiMaxSliceNumOld {
         return ENC_RETURN_INVALIDINPUT;
     }
 
     let kiCurDid = (*pCtx).uiDependencyId as usize;
     let iMaxSliceBufferSize = (*pCtx).iSliceBufferSize[kiCurDid];
-    let bIndependenceBsBuffer = (*ctx_param(pCtx)).iMultipleThreadIdc > 1
-        && (*pSliceArgument).uiSliceMode != SliceMode::SM_SINGLE_SLICE;
+    let bIndependenceBsBuffer = (*pCtx).param().iMultipleThreadIdc > 1
+        && kuiSliceMode != SliceMode::SM_SINGLE_SLICE;
 
     {
         let bank: &mut Vec<SSlice> = &mut (*pDqLayer).sSliceBufferInfo[kiBank].pSliceBuffer;
@@ -3930,9 +3935,11 @@ pub unsafe fn ReallocateSliceInThread(
     // same layer's slice argument, and `ReallocateSliceList` only ever reads it.
     // `addr_of_mut!` creates no reference, so two workers growing their own banks at
     // the same instant no longer race on this borrow.
-    let pSliceArgument = std::ptr::addr_of_mut!(
-        (*ctx_param(pCtx)).sSpatialLayers[kiDlayerIdx as usize].sSliceArgument
-    );
+    let kuiSliceMode = (*pCtx)
+        .param()
+        .sSpatialLayers[kiDlayerIdx as usize]
+        .sSliceArgument
+        .uiSliceMode;
 
     if pLastCodedSlice.is_null() {
         // CalculateNewSliceNum's own null arm, hoisted with the parameter (T9.E2b).
@@ -3945,7 +3952,7 @@ pub unsafe fn ReallocateSliceInThread(
 
     iRet = ReallocateSliceList(
         pCtx,
-        pSliceArgument,
+        kuiSliceMode,
         pDqLayer,
         KiSlcBuffIdx as usize,
         iMaxSliceNum,
@@ -4001,7 +4008,9 @@ pub unsafe fn ReallocSliceBuffer(pCtx: &mut sWelsEncCtx) -> i32 {
     let mut iMaxSliceNumNew = 0;
     let kiCurDid = pCtx.uiDependencyId as usize;
     let pLastCodedSlice = slice_in_bank(pCurLayer, 0, iMaxSliceNumOld - 1);
-    let pSliceArgument = &mut (*ctx_param(pCtx)).sSpatialLayers[kiCurDid].sSliceArgument;
+    // A7: as `InitSliceInLayer` — the mode, not a cursor.
+    let kuiSliceMode =
+        pCtx.param().sSpatialLayers[kiCurDid].sSliceArgument.uiSliceMode;
 
     if pLastCodedSlice.is_null() {
         // CalculateNewSliceNum's own null arm, hoisted with the parameter (T9.E2b).
@@ -4012,7 +4021,7 @@ pub unsafe fn ReallocSliceBuffer(pCtx: &mut sWelsEncCtx) -> i32 {
         return iRet;
     }
 
-    iRet = ReallocateSliceList(pCtx, pSliceArgument, pCurLayer, 0, iMaxSliceNumOld, iMaxSliceNumNew);
+    iRet = ReallocateSliceList(pCtx, kuiSliceMode, pCurLayer, 0, iMaxSliceNumOld, iMaxSliceNumNew);
     if iRet != ENC_RETURN_SUCCESS {
         return iRet;
     }
@@ -4159,7 +4168,7 @@ pub unsafe fn FrameBsRealloc(
     // detector's list only because the regex is textual; see the audit note in the log.
     let pOut = &mut *pCtx.pOut;
     let mut iCountNals = pOut.sNalList.len() as i32;
-    let spatial_layers = if !ctx_param(pCtx).is_null() { (*ctx_param(pCtx)).iSpatialLayerNum } else { 1 };
+    let spatial_layers = if pCtx.param_opt().is_some() { pCtx.param().iSpatialLayerNum } else { 1 };
     iCountNals += kiMaxSliceNumOld * (spatial_layers + if pCtx.bNeedPrefixNalFlag { 1 } else { 0 });
 
     // Was: allocate a bigger block, `copy_nonoverlapping` the old contents in,

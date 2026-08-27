@@ -5451,3 +5451,199 @@ so the table is never half-typed".
 plan already puts them. The two are orthogonal: the flip removes the accessor's
 `unsafe`, C1 removes the aliases'. Doing the enums inside A6 would pull a
 C-stage checkpoint forward and still leave A6's own job undone.
+
+---
+
+## F213 — `SVAAFrameInfoExt` had a second declaration with a different layout, and only its deadness hid it
+
+**S2, checkpoint A5.** `ctx_vaa`'s sixteen screen-content downcasts were not
+sixteen spellings of one cast. Thirteen cast to
+`wels_preprocess::SVAAFrameInfoExt` — the canonical port of the C type, which
+`abi_guard.rs:254` pins at 1376 bytes — and three cast to a *local*
+`svc_mode_decision::SVAAFrameInfoExt_t`:
+
+```rust
+pub struct SVAAFrameInfoExt_t {        //  the canonical type:
+    pub sVaaBase: SVAAFrameInfo,       //    sVaaFrameInfo: SVAAFrameInfo,
+                                       //    sComplexityScreenParam: SComplexityAnalysisScreenParam,
+    pub sScrollDetectInfo: SScrollDetectionParam,
+    pub pVaaBestBlockStaticIdc: *mut u8,
+}
+```
+
+The twin omits `sComplexityScreenParam`, so **every field it named sat at the
+wrong offset**: `sScrollDetectInfo` by the size of the omitted member,
+`pVaaBestBlockStaticIdc` by that plus four arrays and two `i32`s. The three
+consumers (`JudgeScrollSkip`, `MdInterSCDPskipProcess`, `SetBlockStaticIdcToMd`)
+would have read scroll vectors out of complexity counters.
+
+**Nothing saw it, and the reason is a stack of fences.** `abi_guard` size-asserts
+the canonical type and never mentions the twin. The tree's duplicate-type census
+(`find_dup_types.sh`) is name-based, and the names differ by a suffix. And all
+three consumers sit behind `SCREEN_CONTENT(dormant: Phase 10)` — the port never
+installs `SetScrollingMvToMd` (`encoder_ext.rs` assigns `SetScrollingMvToMdNull`
+at the only site), and `pfSCDPSkipDecision`'s judging arm needs
+`iUsageType == SCREEN_CONTENT_REAL_TIME`, which no diffharness preset expresses.
+A wrong layout in code that cannot run is invisible to every byte gate, the
+ratchet, Miri and the census at once.
+
+**The general point, and it is F177's with the polarity flipped.** F177 said a
+permanently-null field with live readers looks exactly like a dead field. This
+says a *structurally wrong* declaration with dormant readers looks exactly like a
+correct one — and that the thing which finds it is not an instrument but the
+conversion: naming the downcast once forced the question "cast to *which*
+`SVAAFrameInfoExt`?", which no site had ever had to answer. The twin is deleted;
+the canonical type is what `sWelsEncCtx::vaa_ext` hands out.
+
+---
+
+## F214 — A6's flip moves nothing the ratchet counts, and that is the measurement F212 asked for
+
+**S2, checkpoint A6.** `ctx_func_list`'s 121 textual sites converted to
+`func_list`/`func_list_mut` and the ratchet reads **`raw_ptr` +0, `unsafe_fn` +0,
+allows 612 → 612**. Nothing regressed; nothing moved.
+
+The reasons are worth separating, because two of them are structural and one is
+an artefact:
+
+1. **F209 again, and harder.** Every body that reads the table also calls
+   `ctx_param` or `current_layer`, so none of them sheds `unsafe` here. The
+   dispatch-heavy files the plan bills to A6 (`svc_base_layer_md.rs`,
+   `svc_mode_decision.rs`, `svc_encode_mb.rs`) collapse at A7 or later, not here.
+2. **Two derivations survive as `ctx_func_list_raw`**, so the accessor's own
+   `raw_ptr` and `#[allow]` do not leave the tree — they move to a smaller,
+   named route. `ParasetStrategy` and `SetOption` both hold the context as a raw
+   *and* write through the table, and `func_list_mut` needs `&mut self`; taking
+   it would be a whole-context `&mut` retag through a raw root, which is the
+   shape S63 forbids and the session's two prohibition checks count.
+3. **The value A6 actually delivers is not countable.** F191's objection — a
+   reader holding a projection of the table across the frame-cadence re-write —
+   is now a **compile error**: `PreprocessSliceCoding` needed nine context reads
+   lifted above its `&mut`, and the compiler is what demanded them.
+   `InitFunctionPointers` needed one, `WriteSavcParaset` two. Before the flip
+   those coexistences were invisible; after it they are unrepresentable wherever
+   the context is a reference.
+
+**What this says about the plan's tracking number.** §9 makes
+`#[allow(unsafe_code)]` outside `src/api/` the single progress figure, and a
+checkpoint that converts 121 sites and moves it by zero reads as a wasted
+half-day under that metric. It was not: it retired the last accessor A7 depends
+on and turned a class of hazard into a class of compile error. F209 said stage
+A's value is invisible in `unsafe_fn` until A7; this says the same of the
+tracking number, and adds the reason F209 did not have — that a *named survivor*
+keeps the allow alive even when the accessor it replaced is gone.
+
+---
+
+## F215 — a `&mut self` accessor mints a **fresh** `Unique` every call, so two cursors taken off two calls cannot coexist — and that, not `&self`, is what A7 tripped on
+
+**S2, checkpoint A7, and the session's mid-checkpoint Miri run is the only thing
+that saw it.** F208 taught the session to watch `&self` readers: a shared retag
+over the whole context pops sibling `Unique`s. A7 hit the *other* half of the
+same mechanism, one allocation further in:
+
+```text
+error: Undefined Behavior: trying to retag from <640129> for SharedReadOnly
+       permission at alloc289078[0x0], but that tag does not exist in the
+       borrow stack for this location
+  --> encoder_ext.rs:1269   if (*pParam).iUsageType == SCREEN_CONTENT_REAL_TIME
+<640129> was created by a Unique retag at offsets [0x0..0x4d0]
+  --> encoder_ext.rs:1072   let pParam = (**ppCtx).param_mut();
+<640129> was later invalidated at offsets [0x0..0x4d0] by a Unique retag
+  --> encoder_context.rs:1267   self.pSvcParam.as_deref_mut()
+```
+
+`RequestMemorySvc` bound the parameter block once and read it two hundred lines
+later; in between it called `AcquireLayersNals`, which called `param_mut()`
+again. **Each `param_mut()` is a fresh `Unique` retag over the whole 0x4d0-byte
+block**, so the second call popped the first call's tag. A second run found the
+same shape at `encoder_ext.rs:808`, where `InitDqLayers` derives *two* cursors
+from *two* `param_mut()` calls one line apart — the second pops the first.
+
+**The part that matters for the remaining stage-A work.** F71's `addr_of_mut!`
+asymmetry — "a raw made with `addr_of_mut!` inherits the parent's tag rather than
+minting a child" — was the session's standing answer to cursor invalidation, and
+S29 leans on it by name at three of these sites. It still holds, and it is no
+longer sufficient: it protects the cursor from *sibling* retags, and what changed
+is the **parent**. Under `ctx_param` the parent was a slot read, identical on
+every call; under `param_mut` there is a new parent per call, and every earlier
+cursor hangs off a dead one.
+
+So the rule the accessor layer needs is one line longer than F208's:
+
+> A `&mut self` accessor is a fresh whole-struct `Unique` **per call**. Two raw
+> cursors into that struct may only coexist if they come off the **same** call.
+> A cursor that must outlive a later call keeps the slot-read root (F71), which
+> is what `ctx_param_raw` and `ctx_ref_list_raw` exist for.
+
+A7 acted on it: the 230 sites that merely read or write a field go through
+`param`/`param_mut`, and the **26 per-layer cursors** — the ones held across a
+call that reaches the parameters again — come off `ctx_param_raw`, F211's
+provenance category with a third member.
+
+**And the instrument note.** The `f208_reader_retag_scan.py` shape does not catch
+this: its `uq` pattern is a `&mut`-shaped derivation *written in the body*, and
+here the offending `Unique` is minted inside the accessor. The byte gates were
+green — 583/583 in both profiles, 561 debug and 554 release tests — through both
+occurrences. Running Miri **inside** the checkpoint rather than at the session
+close is what turned two silent UB sites into two twenty-minute fixes, and S2's
+brief asked for exactly that "for A7 especially".
+
+---
+
+## F216 — A7's cascade does not land, and the straggler is `current_layer`, not `ctx_param`
+
+**S2, checkpoint A7, measured at its close.** F209 ruled that a body sheds
+`unsafe` only when its **last** unsafe callee does, and named the join: "`rc.rs`,
+`ref_list_mgr_svc.rs`, `encoder_ext.rs` shed `unsafe fn` only when their last
+unsafe callee does, and for most of them that is this one" — `ctx_param`. S2's
+brief repeats it: "Expect the F209 cascade to land here… Expect A7 to move [the
+tracking number] far more than A5 and A6 together."
+
+Measured at A7's close, with `ctx_param` gone from all 258 of its sites:
+
+| metric | A6 close | A7 close |
+|---|---:|---:|
+| `raw_ptr` | 1117 | **1095** |
+| `unsafe_fn` | 579 | **579** |
+| allows outside `src/api/` | 612 | **612** |
+
+Zero. The reason is one grep:
+
+```
+$ grep -rn 'pub unsafe fn' src/encoder/{svc_encode_slice,encoder_context}.rs \
+      | grep -E 'current_layer|ctx_dq_layer|layer_|ctx_ref_pic|ctx_pic_ref'
+current_layer  layer_sps  layer_subset_sps  layer_pps  layer_ref_pic
+layer_enc_pic  layer_rec_view  layer_ref_feature_storage  ctx_dq_layer
+ctx_ref_pic  ctx_pic_ref                     ← every accessor still `unsafe fn`
+
+current_layer 158   layer_ref_pic 45   layer_pps 30   ctx_dq_layer 22
+```
+
+**Every unsafe accessor left in the layer is the DQ-layer family**, and nothing
+else is: `ctx_ltr_at`, `ctx_sps` and `ctx_pps` became safe fns at T9.H3/A4, and
+A1–A7 took the other eight. `current_layer` is `ctx_dq_layer` wearing a different
+name — it resolves `iCurDqLayer` through `ppDqLayerList` and returns the same
+`*mut SDqLayer` — and **F210 deferred that whole family to D2–D3**, because the
+fork *writes* the DQ layer, so the accessor can return neither `&mut` nor `&`
+until the layer's storage moves. At 158 sites it is in essentially every body
+that also used `ctx_param`.
+
+So the join F209 identified is real, and its straggler was never `ctx_param`:
+stage A converts eight of the god-struct's accessors, and the ninth — deferred by
+an ordering constraint stage A cannot lift — holds the entire cascade.
+
+**What this costs the plan.** §9 makes `#[allow(unsafe_code)]` outside `src/api/`
+the single progress figure, and stage A closes having moved it **627 → 612** — a
+fifteen-line change for the ~640-site inventory §3 bills as the enabler. That is
+not stage A failing; it is the metric being unable to see structural work
+(F214 says the same of A6 alone). But it does mean the plan's own sequencing
+claim — "the enabler: ~200 of the remaining unsafe fns are unsafe *only* because
+they call these" — is **false as stated**: ~200 of them are unsafe because they
+call these *and* `current_layer`. The two must land together to be visible, and
+only D2–D3 can land the second.
+
+**The consequence for S3.** D2's brief should open with the layer, not the slice
+core: `current_layer`/`ctx_dq_layer` is where stage A's deferred value is stored,
+and every checkpoint that converts it collects a cascade three stages deep.
+

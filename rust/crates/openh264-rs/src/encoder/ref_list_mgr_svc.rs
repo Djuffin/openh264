@@ -26,7 +26,7 @@ pub const STR_ROOM: i32 = 1;
 // `encoder_context.rs` from `wels_const.h`. This module previously had its own copies
 // with MAX_SHORT_REF_COUNT = 16 (C++: 4) and MAX_TEMPORAL_LEVEL = 8 (C++: 4).
 pub use crate::encoder::encoder_context::{MAX_GOP_SIZE, MAX_SHORT_REF_COUNT, MAX_TEMPORAL_LEVEL};
-use crate::encoder::encoder_context::{ctx_ltr_at, ctx_param};
+use crate::encoder::encoder_context::{ctx_ltr_at, ctx_param_raw};
 pub const MAX_REF_PIC_COUNT: usize = 16;
 pub const LONG_TERM_REF_NUM: i32 = 2;
 pub const MAX_TEMPORAL_LAYER_NUM: usize = 4;
@@ -232,13 +232,13 @@ pub unsafe fn WelsResetRefList(pCtx: &mut sWelsEncCtx) {
     let uiDid = pCtx.uiDependencyId as usize;
     // §4.6, reorder: every raw root and scalar first, the reference-shaped
     // borrow last — the order this file's own T9.H3 note asks for.
-    let ltrRefNum = if !ctx_param(pCtx).is_null() {
-        (*ctx_param(pCtx)).iLTRRefNum as usize
+    let ltrRefNum = if pCtx.param_opt().is_some() {
+        pCtx.param().iLTRRefNum as usize
     } else {
         0
     };
-    let numRefFrame = if !ctx_param(pCtx).is_null() {
-        (*ctx_param(pCtx)).iNumRefFrame as usize
+    let numRefFrame = if pCtx.param_opt().is_some() {
+        pCtx.param().iNumRefFrame as usize
     } else {
         0
     };
@@ -335,12 +335,12 @@ pub fn DeleteSTRFromShortList(pRefList: &mut SRefList, iIdx: i32) {
 pub unsafe fn DeleteNonSceneLTR(pCtx: &mut sWelsEncCtx) {
     // T9.H: the `pCtx.is_null()` disjunct is gone — a `&mut sWelsEncCtx`
     // cannot be null and every caller now holds one. The rest is unchanged.
-    if ctx_param(pCtx).is_null() {
+    if pCtx.param_opt().is_none() {
         return;
     }
     // §4.6, reorder: every raw root and scalar first, the reference-shaped
     // borrow last — the order this file's own T9.H3 note asks for.
-    let numRef = (*ctx_param(pCtx)).iNumRefFrame;
+    let numRef = pCtx.param().iNumRefFrame;
     let uiTemporalId = pCtx.uiTemporalId;
     let bCurFrameMarkedAsSceneLtr = pCtx.bCurFrameMarkedAsSceneLtr;
     let Some(pRefList) = pCtx.ref_list_mut(pCtx.uiDependencyId as usize) else {
@@ -407,7 +407,7 @@ pub fn CompareFrameNum(iFrameNumA: i32, iFrameNumB: i32, iMaxFrameNumPlus1: i32)
 pub unsafe fn DeleteInvalidLTR(pCtx: &mut sWelsEncCtx) {
     // T9.H: the `pCtx.is_null()` disjunct is gone — a `&mut sWelsEncCtx`
     // cannot be null and every caller now holds one. The rest is unchanged.
-    if ctx_sps(pCtx).is_null() || ctx_param(pCtx).is_null() {
+    if ctx_sps(pCtx).is_null() || pCtx.param_opt().is_none() {
         return;
     }
     let uiDid = pCtx.uiDependencyId as usize;
@@ -418,7 +418,7 @@ pub unsafe fn DeleteInvalidLTR(pCtx: &mut sWelsEncCtx) {
     // borrow last, so it coexists only with derefs of raws into other allocations
     // (F71) and never with a second use of `pCtx`.
     let iMaxFrameNumPlus1 = 1 << (*ctx_sps(pCtx)).uiLog2MaxFrameNum;
-    let pParamInternal = std::ptr::addr_of_mut!((*ctx_param(pCtx)).sDependencyLayers[uiDid]);
+    let pParamInternal = std::ptr::addr_of_mut!((*ctx_param_raw(pCtx)).sDependencyLayers[uiDid]);
     // A3: the list and the LTR state are two fields of one context, so they come
     // out of one borrow — §4.6's combined accessor.
     let (pRefList, pLtr) = pCtx.ref_list_and_ltr_mut(uiDid);
@@ -470,13 +470,13 @@ pub unsafe fn DeleteInvalidLTR(pCtx: &mut sWelsEncCtx) {
 pub unsafe fn HandleLTRMarkFeedback(pCtx: &mut sWelsEncCtx) {
     // T9.H: the `pCtx.is_null()` disjunct is gone — a `&mut sWelsEncCtx`
     // cannot be null and every caller now holds one. The rest is unchanged.
-    if ctx_param(pCtx).is_null() {
+    if pCtx.param_opt().is_none() {
         return;
     }
     let uiDid = pCtx.uiDependencyId as usize;
     // T9.H3: raw roots first, the reference-shaped borrows last — see
     // `DeleteInvalidLTR`, and A3's combined accessor for why they are one call.
-    let pParamInternal = std::ptr::addr_of_mut!((*ctx_param(pCtx)).sDependencyLayers[uiDid]);
+    let pParamInternal = std::ptr::addr_of_mut!((*ctx_param_raw(pCtx)).sDependencyLayers[uiDid]);
     // §4.6, combined accessor: the VAA stamp below sits inside the reference-list
     // loop, so both come from one borrow.
     let (mut pVaa, pRefList, pLtr) = pCtx.vaa_ref_list_and_ltr_mut(uiDid);
@@ -555,14 +555,14 @@ pub unsafe fn HandleLTRMarkFeedback(pCtx: &mut sWelsEncCtx) {
 pub unsafe fn LTRMarkProcess(pCtx: &mut sWelsEncCtx) {
     // T9.H: the `pCtx.is_null()` disjunct is gone — a `&mut sWelsEncCtx`
     // cannot be null and every caller now holds one. The rest is unchanged.
-    if ctx_param(pCtx).is_null() || ctx_sps(pCtx).is_null() {
+    if pCtx.param_opt().is_none() || ctx_sps(pCtx).is_null() {
         return;
     }
     let uiDid = pCtx.uiDependencyId as usize;
     // T9.H3: every root and scalar first, the reference-shaped borrows last —
     // see `DeleteInvalidLTR` for why T9.G4's order inverted, and A3's combined
     // accessor for why the list and the LTR state are one call.
-    let gopSize = (*ctx_param(pCtx)).uiGopSize;
+    let gopSize = pCtx.param().uiGopSize;
     let iGoPFrameNumInterval = if (gopSize >> 1) > 1 {
         (gopSize >> 1) as i32
     } else {
@@ -571,9 +571,9 @@ pub unsafe fn LTRMarkProcess(pCtx: &mut sWelsEncCtx) {
     let iMaxFrameNumPlus1 = 1 << (*ctx_sps(pCtx)).uiLog2MaxFrameNum;
     let mut i = 0usize;
     let mut bMoveLtrFromShortToLong = false;
-    let pParamInternal = std::ptr::addr_of_mut!((*ctx_param(pCtx)).sDependencyLayers[uiDid]);
+    let pParamInternal = std::ptr::addr_of_mut!((*ctx_param_raw(pCtx)).sDependencyLayers[uiDid]);
     let keSliceType = pCtx.eSliceType;
-    let iLTRRefNum = (*ctx_param(pCtx)).iLTRRefNum;
+    let iLTRRefNum = pCtx.param().iLTRRefNum;
     let uiTemporalId = pCtx.uiTemporalId as usize;
     let bRefOfCurTidIsLtr = std::ptr::addr_of_mut!(pCtx.bRefOfCurTidIsLtr);
     // §4.6, combined accessor: `LTRMarkProcess` stamps the VAA from inside the
@@ -706,12 +706,12 @@ pub unsafe fn LTRMarkProcessScreen(pCtx: &mut sWelsEncCtx) {
 pub unsafe fn PrefetchNextBuffer(pCtx: &mut sWelsEncCtx) {
     // T9.H: the `pCtx.is_null()` disjunct is gone — a `&mut sWelsEncCtx`
     // cannot be null and every caller now holds one. The rest is unchanged.
-    if ctx_param(pCtx).is_null() {
+    if pCtx.param_opt().is_none() {
         return;
     }
     let uiDid = pCtx.uiDependencyId as usize;
     // §4.6, reorder: the parameter read goes above the reference-shaped borrow.
-    let kiNumRef = (*ctx_param(pCtx)).iNumRefFrame;
+    let kiNumRef = pCtx.param().iNumRefFrame;
     let Some(pRefList) = pCtx.ref_list_mut((uiDid) as usize) else {
         return;
     };
@@ -762,7 +762,7 @@ pub unsafe fn PrefetchNextBuffer(pCtx: &mut sWelsEncCtx) {
 pub unsafe fn WelsUpdateRefList(pCtx: &mut sWelsEncCtx) -> bool {
     // T9.H: the `pCtx.is_null()` disjunct is gone — a `&mut sWelsEncCtx`
     // cannot be null and every caller now holds one. The rest is unchanged.
-    if current_layer(pCtx).is_null() || ctx_param(pCtx).is_null() {
+    if current_layer(pCtx).is_null() || pCtx.param_opt().is_none() {
         return false;
     }
     let uiDid = pCtx.uiDependencyId as usize;
@@ -776,7 +776,7 @@ pub unsafe fn WelsUpdateRefList(pCtx: &mut sWelsEncCtx) -> bool {
     // `SLTRState`. Nothing is held across those calls any more — each branch
     // re-borrows `ctx_ltr_at` *after* its calls return, so "the writes see the
     // state those calls left" is now said in borrows instead of a comment.
-    let pParamD = std::ptr::addr_of_mut!((*ctx_param(pCtx)).sDependencyLayers[uiDid]);
+    let pParamD = std::ptr::addr_of_mut!((*ctx_param_raw(pCtx)).sDependencyLayers[uiDid]);
     let kuiTid = pCtx.uiTemporalId;
     let kuiDid = pCtx.uiDependencyId;
     let keSliceType = pCtx.eSliceType;
@@ -843,7 +843,7 @@ pub unsafe fn WelsUpdateRefList(pCtx: &mut sWelsEncCtx) -> bool {
 
     if keSliceType == EWelsSliceType::P_SLICE {
         if kuiTid == 0 {
-            if (*ctx_param(pCtx)).bEnableLongTermReference {
+            if pCtx.param().bEnableLongTermReference {
                 LTRMarkProcess(pCtx);
                 DeleteInvalidLTR(pCtx);
                 HandleLTRMarkFeedback(pCtx);
@@ -882,7 +882,7 @@ pub unsafe fn WelsUpdateRefList(pCtx: &mut sWelsEncCtx) -> bool {
             }
         }
     } else {
-        if (*ctx_param(pCtx)).bEnableLongTermReference {
+        if pCtx.param().bEnableLongTermReference {
             LTRMarkProcess(pCtx);
 
             let pLtr = ctx_ltr_at(pCtx, uiDid);
@@ -919,20 +919,22 @@ pub unsafe fn WelsUpdateRefList(pCtx: &mut sWelsEncCtx) -> bool {
 pub unsafe fn CheckCurMarkFrameNumUsed(pCtx: &mut sWelsEncCtx) -> bool {
     // T9.H: the `pCtx.is_null()` disjunct is gone — a `&mut sWelsEncCtx`
     // cannot be null and every caller now holds one. The rest is unchanged.
-    if ctx_param(pCtx).is_null() || ctx_sps(pCtx).is_null() {
+    if pCtx.param_opt().is_none() || ctx_sps(pCtx).is_null() {
         return false;
     }
     let uiDid = pCtx.uiDependencyId as usize;
     // T9.H3: raw roots first, the reference-shaped borrows last — see
     // `DeleteInvalidLTR`.
-    let gopSize = (*ctx_param(pCtx)).uiGopSize;
+    let gopSize = pCtx.param().uiGopSize;
     let iGoPFrameNumInterval = if (gopSize >> 1) > 1 {
         (gopSize >> 1) as i32
     } else {
         1
     };
     let iMaxFrameNumPlus1 = 1 << (*ctx_sps(pCtx)).uiLog2MaxFrameNum;
-    let pParamInternal = &(*ctx_param(pCtx)).sDependencyLayers[uiDid];
+    // A7, §4.6 reorder: the only field read out of the layer's parameter block is
+    // `iFrameNum`, a scalar, so the borrow does not have to span the list's `&mut`.
+    let kiParamFrameNum = pCtx.param().sDependencyLayers[uiDid].iFrameNum;
     let (pRefList, pLtr) = pCtx.ref_list_and_ltr_mut(uiDid);
     let Some(pRefList) = pRefList else {
         return false;
@@ -941,10 +943,10 @@ pub unsafe fn CheckCurMarkFrameNumUsed(pCtx: &mut sWelsEncCtx) -> bool {
     for i in 0..((*pRefList).uiLongRefCount as usize) {
         if let Some(idLong) = (*pRefList).pLongRefList[i] {
             let iFrameNum = (*pRefList).pic(idLong).iFrameNum;
-            let cond1 = pParamInternal.iFrameNum == iFrameNum
+            let cond1 = kiParamFrameNum == iFrameNum
                 && pLtr.iLTRMarkMode == LTR_MARKING_PROCESS_MODE::LTR_DIRECT_MARK as i32;
             let cond2 = CompareFrameNum(
-                pParamInternal.iFrameNum + iGoPFrameNumInterval,
+                kiParamFrameNum + iGoPFrameNumInterval,
                 iFrameNum,
                 iMaxFrameNumPlus1,
             ) == COMPARE_FRAME_NUM::FRAME_NUM_EQUAL as i32
@@ -1048,7 +1050,7 @@ pub unsafe fn WelsMarkMMCORefInfo(
 pub unsafe fn WelsMarkPic(pCtx: &mut sWelsEncCtx) {
     // T9.H: the `pCtx.is_null()` disjunct is gone — a `&mut sWelsEncCtx`
     // cannot be null and every caller now holds one. The rest is unchanged.
-    if current_layer(pCtx).is_null() || ctx_param(pCtx).is_null() {
+    if current_layer(pCtx).is_null() || pCtx.param_opt().is_none() {
         return;
     }
     let uiDid = pCtx.uiDependencyId as usize;
@@ -1061,17 +1063,21 @@ pub unsafe fn WelsMarkPic(pCtx: &mut sWelsEncCtx) {
     // cheap conjuncts held, and it only reads. The tail call reaches the context
     // no second time (`WelsMarkMMCORefInfo` is narrowed to the two scalars it
     // read, S54).
-    let pParam = ctx_param(pCtx);
+    // A7, §4.6 reorder: the three parameter fields this body reads are scalars, so
+    // they come out here rather than as a borrow held across `ctx_ltr_at`'s `&mut`.
+    let kbEnableLtr = pCtx.param().bEnableLongTermReference;
+    let kiLtrMarkPeriod = pCtx.param().iLtrMarkPeriod;
+    let kuiGopSize = pCtx.param().uiGopSize;
     let kuiTid = pCtx.uiTemporalId;
     let kiCountSliceNum = (*current_layer(pCtx)).iMaxSliceNum;
     // T9.G6: hoisted — the argument reads through the context, so it is derived
     // before the LTR borrows below (shape B).
     let pCurLayerForMmco = &mut *current_layer(pCtx);
 
-    if (*pParam).bEnableLongTermReference && ctx_ltr_at(pCtx, uiDid).bLTRMarkEnable && kuiTid == 0 {
+    if kbEnableLtr && ctx_ltr_at(pCtx, uiDid).bLTRMarkEnable && kuiTid == 0 {
         let pLtr = &*ctx_ltr_at(pCtx, uiDid);
         let bMarkCandidate = !pLtr.bReceivedT0LostFlag
-            && pLtr.uiLtrMarkInterval > (*pParam).iLtrMarkPeriod as u32;
+            && pLtr.uiLtrMarkInterval > kiLtrMarkPeriod as u32;
         if bMarkCandidate && CheckCurMarkFrameNumUsed(pCtx) {
             let pLtr = ctx_ltr_at(pCtx, uiDid);
             pLtr.bLTRMarkingFlag = true;
@@ -1088,8 +1094,8 @@ pub unsafe fn WelsMarkPic(pCtx: &mut sWelsEncCtx) {
     }
 
     WelsMarkMMCORefInfo(
-        (*pParam).uiGopSize,
-        (*pParam).bEnableLongTermReference,
+        kuiGopSize,
+        kbEnableLtr,
         ctx_ltr_at(pCtx, uiDid),
         pCurLayerForMmco,
         kiCountSliceNum,
@@ -1109,25 +1115,25 @@ pub unsafe fn FilterLTRRecoveryRequest(
     // upstream (`ref_list_mgr_svc.cpp:517`) has no such guard, dereferencing both
     // `pCtx->pSvcParam` and `pLTRRecoverRequest->iLayerId` unconditionally. The
     // guard was the port's own addition, not a behaviour the reference has.
-    if ctx_param(pCtx).is_null() {
+    if pCtx.param_opt().is_none() {
         return 0;
     }
-    if !(*ctx_param(pCtx)).bEnableLongTermReference {
-        for iDid in 0..((*ctx_param(pCtx)).iSpatialLayerNum as usize) {
-            let pParamInternal = std::ptr::addr_of_mut!((*ctx_param(pCtx)).sDependencyLayers[iDid]);
+    if !pCtx.param().bEnableLongTermReference {
+        for iDid in 0..(pCtx.param().iSpatialLayerNum as usize) {
+            let pParamInternal = std::ptr::addr_of_mut!((*ctx_param_raw(pCtx)).sDependencyLayers[iDid]);
             (*pParamInternal).bEncCurFrmAsIdrFlag = true;
         }
     } else {
         let pRequest = pLTRRecoverRequest;
         let iLayerId = (*pRequest).iLayerId;
-        if iLayerId < 0 || iLayerId >= (*ctx_param(pCtx)).iSpatialLayerNum {
+        if iLayerId < 0 || iLayerId >= pCtx.param().iSpatialLayerNum {
             return 0;
         }
 
         // T9.H3 — the derivation order, inverted from T9.G4: scalar and the
         // permanently-raw root first, the LTR borrow last (see `DeleteInvalidLTR`).
         let iMaxFrameNumPlus1 = 1 << (*ctx_sps(pCtx)).uiLog2MaxFrameNum;
-        let pParamInternal = std::ptr::addr_of_mut!((*ctx_param(pCtx)).sDependencyLayers[iLayerId as usize]);
+        let pParamInternal = std::ptr::addr_of_mut!((*ctx_param_raw(pCtx)).sDependencyLayers[iLayerId as usize]);
         let pLtr = ctx_ltr_at(pCtx, (iLayerId as usize) as usize);
 
         if (*pRequest).uiFeedbackType == LTR_RECOVERY_REQUEST && (*pRequest).uiIDRPicId == (*pParamInternal).uiIdrPicId as u32 {
@@ -1167,19 +1173,20 @@ pub unsafe fn FilterLTRMarkingFeedback(
 ) {
     // T9.H / T9.X — as [`FilterLTRRecoveryRequest`]: upstream
     // (`ref_list_mgr_svc.cpp:563`) guards neither pointer.
-    if ctx_param(pCtx).is_null() {
+    if pCtx.param_opt().is_none() {
         return;
     }
     let iLayerId = (*pLTRMarkingFeedback).iLayerId;
-    if iLayerId < 0 || iLayerId >= (*ctx_param(pCtx)).iSpatialLayerNum {
+    if iLayerId < 0 || iLayerId >= pCtx.param().iSpatialLayerNum {
         return;
     }
-    // T9.H3: the param root first, the LTR borrow last — see `DeleteInvalidLTR`.
-    let pParam = ctx_param(pCtx);
+    // A7, §4.6 reorder: the two parameter reads are scalars and come out before
+    // the LTR state's `&mut`. T9.H3 asked for the same order; the flip enforces it.
+    let kbEnableLtr = pCtx.param().bEnableLongTermReference;
+    let kuiIdrPicId = pCtx.param().sDependencyLayers[iLayerId as usize].uiIdrPicId;
     let pLtr = ctx_ltr_at(pCtx, (iLayerId as usize) as usize);
-    if (*pParam).bEnableLongTermReference {
-        let pParamInternal = std::ptr::addr_of_mut!((*pParam).sDependencyLayers[iLayerId as usize]);
-        if (*pLTRMarkingFeedback).uiIDRPicId == (*pParamInternal).uiIdrPicId as u32
+    if kbEnableLtr {
+        if (*pLTRMarkingFeedback).uiIDRPicId == kuiIdrPicId as u32
             && ((*pLTRMarkingFeedback).uiFeedbackType == LTR_MARKING_SUCCESS
                 || (*pLTRMarkingFeedback).uiFeedbackType == LTR_MARKING_FAILED)
         {
@@ -1199,7 +1206,7 @@ pub unsafe fn WelsBuildRefList(
 ) -> bool {
     // T9.H: the `pCtx.is_null()` disjunct is gone — a `&mut sWelsEncCtx`
     // cannot be null and every caller now holds one. The rest is unchanged.
-    if ctx_param(pCtx).is_null() || current_layer(pCtx).is_null() {
+    if pCtx.param_opt().is_none() || current_layer(pCtx).is_null() {
         return false;
     }
     let uiDid = pCtx.uiDependencyId as usize;
@@ -1214,13 +1221,13 @@ pub unsafe fn WelsBuildRefList(
     // T9.H3: the held LTR binding is gone — the state is touched twice in this
     // body (one read in the branch condition, one write on recovery), and each
     // touch borrows inline for its own expression.
-    let kiNumRef = (*ctx_param(pCtx)).iNumRefFrame;
+    let kiNumRef = pCtx.param().iNumRefFrame;
     let kuiTid = pCtx.uiTemporalId;
-    let pParamD = std::ptr::addr_of_mut!((*ctx_param(pCtx)).sDependencyLayers[uiDid]);
+    let pParamD = std::ptr::addr_of_mut!((*ctx_param_raw(pCtx)).sDependencyLayers[uiDid]);
 
     pCtx.iNumRef0 = 0;
     if pCtx.eSliceType != EWelsSliceType::I_SLICE {
-        if (*ctx_param(pCtx)).bEnableLongTermReference
+        if pCtx.param().bEnableLongTermReference
             && ctx_ltr_at(pCtx, (uiDid) as usize).bReceivedT0LostFlag
             && pCtx.uiTemporalId == 0
         {
@@ -1367,7 +1374,7 @@ pub unsafe fn WelsUpdateSliceHeaderSyntax(
                     .bIsLongRef,
                 None => false,
             };
-            if !isLongRef || !(*ctx_param(pCtx)).bEnableLongTermReference {
+            if !isLongRef || !pCtx.param().bEnableLongTermReference {
                 pRefReorder.SReorderingSyntax[0].uiReorderingOfPicNumsIdc = 0;
                 pRefReorder.SReorderingSyntax[0].uiAbsDiffPicNumMinus1 = iAbsDiffPicNumMinus1 as u32;
                 pRefReorder.SReorderingSyntax[1].uiReorderingOfPicNumsIdc = 3;
@@ -1391,13 +1398,13 @@ pub unsafe fn WelsUpdateSliceHeaderSyntax(
 
         if uiFrameType == EVideoFrameType::videoFrameTypeIDR as i32 {
             pRefPicMark.bNoOutputOfPriorPicsFlag = false;
-            pRefPicMark.bLongTermRefFlag = (*ctx_param(pCtx)).bEnableLongTermReference;
+            pRefPicMark.bLongTermRefFlag = pCtx.param().bEnableLongTermReference;
         } else {
             // SCREEN_CONTENT(dormant: Phase 10)
-            if (*ctx_param(pCtx)).iUsageType == EUsageType::SCREEN_CONTENT_REAL_TIME {
-                pRefPicMark.bAdaptiveRefPicMarkingModeFlag = (*ctx_param(pCtx)).bEnableLongTermReference;
+            if pCtx.param().iUsageType == EUsageType::SCREEN_CONTENT_REAL_TIME {
+                pRefPicMark.bAdaptiveRefPicMarkingModeFlag = pCtx.param().bEnableLongTermReference;
             } else {
-                pRefPicMark.bAdaptiveRefPicMarkingModeFlag = (*ctx_param(pCtx)).bEnableLongTermReference && bLtrMarkingFlag;
+                pRefPicMark.bAdaptiveRefPicMarkingModeFlag = pCtx.param().bEnableLongTermReference && bLtrMarkingFlag;
             }
         }
     }
@@ -1410,12 +1417,12 @@ pub unsafe fn WelsUpdateRefSyntax(pCtx: &mut sWelsEncCtx, kiPOC: i32, kiFrameTyp
     // T9.H4: the `is_null()` disjunct that opened this guard is gone — a
     // `&mut sWelsEncCtx` cannot be null, and every caller now holds one. The
     // remaining conditions are unchanged.
-    if ctx_param(pCtx).is_null() || current_layer(pCtx).is_null() {
+    if pCtx.param_opt().is_none() || current_layer(pCtx).is_null() {
         return;
     }
     let mut iAbsDiffPicNumMinus1 = -1i32;
     let uiDid = pCtx.uiDependencyId as usize;
-    let pParamD = &(*ctx_param(pCtx)).sDependencyLayers[uiDid];
+    let pParamD = &pCtx.param().sDependencyLayers[uiDid];
 
     if pCtx.iNumRef0 > 0 {
         let pRefList = pCtx.ref_list(uiDid).expect("the dependency layer's reference list");
@@ -1529,7 +1536,7 @@ pub unsafe fn UpdateSrcPicList(pCtx: &mut sWelsEncCtx) {
 pub unsafe fn WelsUpdateRefListScreen(pCtx: &mut sWelsEncCtx) -> bool {
     // T9.H: the `pCtx.is_null()` disjunct is gone — a `&mut sWelsEncCtx`
     // cannot be null and every caller now holds one. The rest is unchanged.
-    if current_layer(pCtx).is_null() || ctx_param(pCtx).is_null() {
+    if current_layer(pCtx).is_null() || pCtx.param_opt().is_none() {
         return false;
     }
     let uiDid = pCtx.uiDependencyId as usize;
@@ -1544,7 +1551,7 @@ pub unsafe fn WelsUpdateRefListScreen(pCtx: &mut sWelsEncCtx) -> bool {
     // borrow checker referees every coexistence; this function is dead code today
     // (F192: screen-content mode is rejected at init), so the compiler is the
     // *only* referee and the reshape moves derivations, never logic.
-    let pParamD = std::ptr::addr_of_mut!((*ctx_param(pCtx)).sDependencyLayers[uiDid]);
+    let pParamD = std::ptr::addr_of_mut!((*ctx_param_raw(pCtx)).sDependencyLayers[uiDid]);
     let kuiTid = pCtx.uiTemporalId;
 
     if let Some(idDec) = pCtx.pDecPic {
@@ -1554,7 +1561,7 @@ pub unsafe fn WelsUpdateRefListScreen(pCtx: &mut sWelsEncCtx) -> bool {
         let uiTemporalId = pCtx.uiTemporalId;
         let uiDependencyId = pCtx.uiDependencyId;
         let bIsSceneLTR = ctx_ltr_at(pCtx, uiDid).bLTRMarkingFlag
-            || ((*ctx_param(pCtx)).bEnableLongTermReference
+            || (pCtx.param().bEnableLongTermReference
                 && pCtx.eSliceType == EWelsSliceType::I_SLICE);
         let iLongTermPicNum = ctx_ltr_at(pCtx, uiDid).iCurLtrIdx;
         let Some(pRefList) = pCtx.ref_list_mut(uiDid) else {
@@ -1617,11 +1624,15 @@ pub unsafe fn WelsBuildRefListScreen(
 ) -> bool {
     // T9.H: the `pCtx.is_null()` disjunct is gone — a `&mut sWelsEncCtx`
     // cannot be null and every caller now holds one. The rest is unchanged.
-    if ctx_param(pCtx).is_null() || pCtx.vaa().is_none() || current_layer(pCtx).is_null() {
+    if pCtx.param_opt().is_none() || pCtx.vaa().is_none() || current_layer(pCtx).is_null() {
         return false;
     }
     let uiDid = pCtx.uiDependencyId as usize;
-    let pParam = ctx_param(pCtx);
+    // A7, §4.6 reorder: this body writes `iNumRef0` and the layer's `pRefOri`, so
+    // the parameter borrow may not be held across them — both fields it wants are
+    // scalars.
+    let iNumRef = pCtx.param().iNumRefFrame;
+    let iLTRRefNum = pCtx.param().iLTRRefNum;
     // ref_list_mgr_svc.cpp:649 — static_cast<SVAAFrameInfoExt*> (pCtx->pVaa)
     //
     // §4.6, reorder: the count is `Copy` and is read out here, because the loop
@@ -1629,8 +1640,6 @@ pub unsafe fn WelsBuildRefListScreen(
     // `vaa_ext`'s answer is a child of a shared retag now, not the slot read that
     // outlived every later derivation (F71/F211).
     let iNumOfAvailableRef = (*pCtx.vaa_ext()).iNumOfAvailableRef;
-    let iNumRef = (*pParam).iNumRefFrame;
-    let pParamD = &(*pParam).sDependencyLayers[uiDid];
     pCtx.iNumRef0 = 0;
 
     if pCtx.eSliceType != EWelsSliceType::I_SLICE {
@@ -1656,7 +1665,7 @@ pub unsafe fn WelsBuildRefListScreen(
                 iLtrRefIdx = (*pVpp).GetRefFrameInfo(pCtx, idx, bSceneLtr, &mut pRefOri);
             }
             let refOri = pRefOri.map(PicRef::Src);
-            if iLtrRefIdx >= 0 && iLtrRefIdx <= (*pParam).iLTRRefNum {
+            if iLtrRefIdx >= 0 && iLtrRefIdx <= iLTRRefNum {
                 // A3: the list is re-derived per read, not held — this loop
                 // writes `iNumRef0`, `pRefList0` and the layer's `pRefOri`.
                 let Some(idRefPic) = pCtx.ref_list(uiDid).expect("the dependency layer's reference list").pLongRefList[iLtrRefIdx as usize] else {
@@ -1756,7 +1765,7 @@ pub unsafe fn WelsMarkMMCORefInfoScreen(
 pub unsafe fn WelsMarkPicScreen(pCtx: &mut sWelsEncCtx) {
     // T9.H: the `pCtx.is_null()` disjunct is gone — a `&mut sWelsEncCtx`
     // cannot be null and every caller now holds one. The rest is unchanged.
-    if ctx_param(pCtx).is_null() || current_layer(pCtx).is_null() {
+    if pCtx.param_opt().is_none() || current_layer(pCtx).is_null() {
         return;
     }
     let uiDid = pCtx.uiDependencyId as usize;
@@ -1770,18 +1779,20 @@ pub unsafe fn WelsMarkPicScreen(pCtx: &mut sWelsEncCtx) {
     // read). Dead code today (F192: screen-content mode is rejected at init) —
     // the borrow checker is the only referee, and the reshape moves derivations,
     // never logic.
-    let pParam = ctx_param(pCtx);
-    let gopSize = (*pParam).uiGopSize;
+    // A7, §4.6 reorder: the parameter block is read into scalars here — the borrow
+    // may not span `ref_list_and_ltr_mut` below.
+    let gopSize = pCtx.param().uiGopSize;
+    let kbEnableLtr = pCtx.param().bEnableLongTermReference;
+    let iNumRef = pCtx.param().iNumRefFrame;
     let iMaxTid = if gopSize > 0 { (31 - gopSize.leading_zeros()) as i32 } else { 0 };
     let mut iMaxActualLtrIdx = -1i32;
-    let pParamD = &(*pParam).sDependencyLayers[uiDid];
+    let kiParamDFrameNum = pCtx.param().sDependencyLayers[uiDid].iFrameNum;
 
-    if (*pParam).bEnableLongTermReference {
+    if kbEnableLtr {
         let maxTidAdj = if iMaxTid > 1 { iMaxTid } else { 1 };
-        iMaxActualLtrIdx = (*pParam).iNumRefFrame - STR_ROOM - 1 - maxTidAdj;
+        iMaxActualLtrIdx = iNumRef - STR_ROOM - 1 - maxTidAdj;
     }
 
-    let iNumRef = (*pParam).iNumRefFrame;
     let iLongRefNum = iNumRef - STR_ROOM;
     // §4.6: one scalar out of the list, read before the LTR borrow is taken.
     let bIsRefListNotFull = (pCtx
@@ -1802,7 +1813,7 @@ pub unsafe fn WelsMarkPicScreen(pCtx: &mut sWelsEncCtx) {
         return;
     };
 
-    if !(*pParam).bEnableLongTermReference {
+    if !kbEnableLtr {
         pLtr.iCurLtrIdx = kuiTid as i32;
     } else {
         if iMaxActualLtrIdx != -1 && kuiTid == 0 && kbSceneLtr {
@@ -1857,10 +1868,10 @@ pub unsafe fn WelsMarkPicScreen(pCtx: &mut sWelsEncCtx) {
                         if !IsValidFrameNum(pPic.iFrameNum) {
                             return;
                         }
-                        let iDeltaFrameNum = if pParamD.iFrameNum >= pPic.iFrameNum {
-                            pParamD.iFrameNum - pPic.iFrameNum
+                        let iDeltaFrameNum = if kiParamDFrameNum >= pPic.iFrameNum {
+                            kiParamDFrameNum - pPic.iFrameNum
                         } else {
-                            pParamD.iFrameNum + iMaxFrameNum - pPic.iFrameNum
+                            kiParamDFrameNum + iMaxFrameNum - pPic.iFrameNum
                         };
 
                         if iDeltaFrameNum > iLongestDeltaFrameNum {
@@ -1881,7 +1892,7 @@ pub unsafe fn WelsMarkPicScreen(pCtx: &mut sWelsEncCtx) {
 
     WelsMarkMMCORefInfoScreen(
         iNumRef,
-        (*pParam).bEnableLongTermReference,
+        kbEnableLtr,
         pLtr,
         pCurLayerForMmco,
         iSliceNum,

@@ -74,7 +74,7 @@ pub const MAX_REF_PIC_COUNT: usize = 16;
 // MAX_SHORT_REF_COUNT was 16 where C++ derives 4, which over-sized `SRefList` here and
 // let the `WelsPreprocess` unref loop read one past `pShortRefList`.
 pub use crate::encoder::encoder_context::{MAX_GOP_SIZE, MAX_SHORT_REF_COUNT, MAX_TEMPORAL_LEVEL};
-use crate::encoder::encoder_context::{ctx_ltr_at, ctx_param};
+use crate::encoder::encoder_context::{ctx_ltr_at, ctx_param_raw};
 pub use crate::encoder::encoder_context::SRefList;
 pub use crate::encoder::picture::SPicture;
 pub use crate::encoder::encoder_context::SLTRState;
@@ -734,10 +734,10 @@ pub fn WelsUpdateSpatialIdxMap(
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe fn JudgeNeedOfScaling(
-    pParam: *mut SWelsSvcCodingParam,
+    pParam: &SWelsSvcCodingParam,
     pScaledPicture: *mut Scaled_Picture,
 ) -> bool {
-    if pParam.is_null() || pScaledPicture.is_null() {
+    if pScaledPicture.is_null() {
         return false;
     }
 
@@ -832,7 +832,7 @@ pub fn AllocPicture(
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe fn WelsInitScaledPic(
-    pParam: *mut SWelsSvcCodingParam,
+    pParam: &SWelsSvcCodingParam,
     pScaledPicture: *mut Scaled_Picture,
 ) -> i32 {
     let bInputPicNeedScaling = JudgeNeedOfScaling(pParam, pScaledPicture);
@@ -1027,7 +1027,7 @@ impl CWelsPreProcess {
     pub unsafe fn CreatePreProcess(pEncCtx: &mut sWelsEncCtx) -> *mut CWelsPreProcess {
         // T9.H: the `pEncCtx.is_null()` disjunct is gone — a `&mut sWelsEncCtx`
         // cannot be null and every caller now holds one. The rest is unchanged.
-        if ctx_param(pEncCtx).is_null() {
+        if pEncCtx.param_opt().is_none() {
             return std::ptr::null_mut();
         }
 
@@ -1035,7 +1035,7 @@ impl CWelsPreProcess {
         // shell is not a valid intermediate). This used to `alloc_zeroed` and set
         // three fields; `Default` is those zeros written out.
         let p = Box::new(CWelsPreProcess {
-            m_eUsageType: (*ctx_param(pEncCtx)).iUsageType,
+            m_eUsageType: pEncCtx.param().iUsageType,
             ..Default::default()
         });
         Box::into_raw(p)
@@ -1071,11 +1071,11 @@ impl CWelsPreProcess {
     ) -> i32 {
         // T9.H: the `pCtx.is_null()` disjunct is gone — a `&mut sWelsEncCtx`
         // cannot be null and every caller now holds one. The rest is unchanged.
-        if ctx_param(pCtx).is_null() {
+        if pCtx.param_opt().is_none() {
             return -1;
         }
 
-        let pSvcParam = ctx_param(pCtx);
+        let pSvcParam = pCtx.param_mut();
         (*pSvcParam).SUsedPicRect.iLeft = 0;
         (*pSvcParam).SUsedPicRect.iTop = 0;
         (*pSvcParam).SUsedPicRect.iWidth = iWidth;
@@ -1087,16 +1087,14 @@ impl CWelsPreProcess {
 
         FreeScaledPic(&mut self.m_sScaledPicture);
         self.InitLastSpatialPictures(pCtx);
-        WelsInitScaledPic(ctx_param(pCtx), &mut self.m_sScaledPicture)
+        WelsInitScaledPic(pCtx.param(), &mut self.m_sScaledPicture)
     }
 
     // unsafe-cat: port-raw(Phase 9)
     #[allow(unsafe_code)]
-    pub unsafe fn AllocSpatialPictures(
-        &mut self,
-        pCtx: &mut sWelsEncCtx,
-        pParam: *mut SWelsSvcCodingParam,
-    ) -> i32 {
+    pub unsafe fn AllocSpatialPictures(&mut self, pCtx: &mut sWelsEncCtx) -> i32 {
+        // A7: the `pParam` argument is gone — see `InitFunctionPointers`.
+        let pParam = pCtx.param();
         let kiDlayerCount = (*pParam).iSpatialLayerNum;
         let mut iDlayerIndex = 0;
         // The pool takes its slots in one piece and never grows, so the pictures are
@@ -1151,11 +1149,11 @@ impl CWelsPreProcess {
     pub unsafe fn FreeSpatialPictures(&mut self, pCtx: &mut sWelsEncCtx) {
         // T9.H: the `pCtx.is_null()` disjunct is gone — a `&mut sWelsEncCtx`
         // cannot be null and every caller now holds one. The rest is unchanged.
-        if ctx_param(pCtx).is_null() {
+        if pCtx.param_opt().is_none() {
             return;
         }
         let mut j = 0;
-        while j < (*ctx_param(pCtx)).iSpatialLayerNum {
+        while j < pCtx.param().iSpatialLayerNum {
             let jIdx = j as usize;
             let mut i: u8 = 0;
             let uiRefNumInTemporal = self.m_uiSpatialPicNum[jIdx];
@@ -1180,7 +1178,8 @@ impl CWelsPreProcess {
         kpSrcPic: *const SSourcePicture,
         pSpatialNum: *mut i32,
     ) -> i32 {
-        let pSvcParam = ctx_param(pCtx);
+        // A7, §4.6 reorder: three scalars, read where they are used — this body
+        // hands the context to `WelsPreprocessReset` between them.
         let iWidth = ((*kpSrcPic).iPicWidth >> 1) << 1;
         let iHeight = ((*kpSrcPic).iPicHeight >> 1) << 1;
         *pSpatialNum = 0;
@@ -1189,9 +1188,11 @@ impl CWelsPreProcess {
             if self.WelsPreprocessReset(pCtx, iWidth, iHeight) != 0 {
                 return ENC_RETURN_MEMALLOCERR;
             }
-            self.m_iAvaliableRefInSpatialPicList = (*pSvcParam).iNumRefFrame;
+            self.m_iAvaliableRefInSpatialPicList = pCtx.param().iNumRefFrame;
             self.m_bInitDone = true;
-        } else if iWidth != (*pSvcParam).SUsedPicRect.iWidth || iHeight != (*pSvcParam).SUsedPicRect.iHeight {
+        } else if iWidth != pCtx.param().SUsedPicRect.iWidth
+            || iHeight != pCtx.param().SUsedPicRect.iHeight
+        {
             if self.WelsPreprocessReset(pCtx, iWidth, iHeight) != 0 {
                 return ENC_RETURN_MEMALLOCERR;
             }
@@ -1227,22 +1228,27 @@ impl CWelsPreProcess {
         kpSrc: *const SSourcePicture,
         pSpatialNum: *mut i32,
     ) -> i32 {
-        let pSvcParam = ctx_param(pCtx);
-        let mut iDependencyId = (*pSvcParam).iSpatialLayerNum - 1;
+        // A7, §4.6 reorder: the layer's geometry is four scalars, read here rather
+        // than through a borrow that would have to span every context call below.
+        let mut iDependencyId = pCtx.param().iSpatialLayerNum - 1;
 
         let depIdx = iDependencyId as usize;
         // S29: this binding is read again at the bottom of the function, and the
         // shared reborrows of the same array in between (the `iClosestDid` scan)
         // pop a `Unique` where they would leave a `SharedReadWrite` alone.
-        let pDlayerParamInternal = std::ptr::addr_of_mut!((*pSvcParam).sDependencyLayers[depIdx]);
-        let pDlayerParam = &(*pSvcParam).sSpatialLayers[depIdx];
-        let iTargetWidth = pDlayerParam.iVideoWidth;
-        let iTargetHeight = pDlayerParam.iVideoHeight;
-        let iSrcWidth = (*pSvcParam).SUsedPicRect.iWidth;
-        let iSrcHeight = (*pSvcParam).SUsedPicRect.iHeight;
+        let pDlayerParamInternal =
+            std::ptr::addr_of_mut!((*ctx_param_raw(pCtx)).sDependencyLayers[depIdx]);
+        let iTargetWidth = pCtx.param().sSpatialLayers[depIdx].iVideoWidth;
+        let iTargetHeight = pCtx.param().sSpatialLayers[depIdx].iVideoHeight;
+        let iSrcWidth = pCtx.param().SUsedPicRect.iWidth;
+        let iSrcHeight = pCtx.param().SUsedPicRect.iHeight;
+        let uiIntraPeriod = pCtx.param().uiIntraPeriod;
 
-        if (*pSvcParam).uiIntraPeriod != 0 && pCtx.vaa().is_some() {
-            pCtx.vaa_mut().expect("the frame's video-analysis block").bIdrPeriodFlag = (1 + (*pDlayerParamInternal).iFrameIndex) >= (*pSvcParam).uiIntraPeriod as i32;
+        if uiIntraPeriod != 0 && pCtx.vaa().is_some() {
+            let iFrameIndex = (*pDlayerParamInternal).iFrameIndex;
+            pCtx.vaa_mut()
+                .expect("the frame's video-analysis block")
+                .bIdrPeriodFlag = (1 + iFrameIndex) >= uiIntraPeriod as i32;
         }
 
         *pSpatialNum = 0;
@@ -1256,12 +1262,12 @@ impl CWelsPreProcess {
             )
         };
 
-        let iRet = self.WelsMoveMemoryWrapper(pSvcParam, pSrcPic, kpSrc, iSrcWidth, iSrcHeight);
+        let iRet = self.WelsMoveMemoryWrapper(pCtx.param(), pSrcPic, kpSrc, iSrcWidth, iSrcHeight);
         if iRet != ENC_RETURN_SUCCESS {
             return iRet;
         }
 
-        if (*pSvcParam).bEnableDenoise {
+        if pCtx.param().bEnableDenoise {
             self.BilateralDenoising(pSrcPic, iSrcWidth, iSrcHeight);
         }
 
@@ -1289,8 +1295,8 @@ impl CWelsPreProcess {
             false,
         );
 
-        if (*pSvcParam).bEnableSceneChangeDetect && pCtx.vaa().is_some() && !pCtx.vaa().expect("the frame's video-analysis block").bIdrPeriodFlag {
-            if (*pSvcParam).iUsageType == EUsageType::SCREEN_CONTENT_REAL_TIME {
+        if pCtx.param().bEnableSceneChangeDetect && pCtx.vaa().is_some() && !pCtx.vaa().expect("the frame's video-analysis block").bIdrPeriodFlag {
+            if pCtx.param().iUsageType == EUsageType::SCREEN_CONTENT_REAL_TIME {
                 let idc = if (*pDlayerParamInternal).bEncCurFrmAsIdrFlag {
                     ESceneChangeIdc::LARGE_CHANGED_SCENE
                 } else {
@@ -1299,7 +1305,7 @@ impl CWelsPreProcess {
                 pCtx.vaa_mut().expect("the frame's video-analysis block").eSceneChangeIdc = idc;
                 pCtx.vaa_mut().expect("the frame's video-analysis block").bSceneChangeFlag = idc == ESceneChangeIdc::LARGE_CHANGED_SCENE;
             } else if !(*pDlayerParamInternal).bEncCurFrmAsIdrFlag
-                && ((*pDlayerParamInternal).iCodingIndex & ((*pSvcParam).uiGopSize as i32 - 1)) == 0
+                && ((*pDlayerParamInternal).iCodingIndex & (pCtx.param().uiGopSize as i32 - 1)) == 0
             {
                 let pRefPic = if ctx_ltr_at(pCtx, depIdx).bReceivedT0LostFlag {
                     let pos = self.m_uiSpatialLayersInTemporal[depIdx] as usize
@@ -1315,16 +1321,16 @@ impl CWelsPreProcess {
         }
 
         let mut iSpatialNum = 0;
-        for i in 0..(*pSvcParam).iSpatialLayerNum {
-            let pInternal = &(*pSvcParam).sDependencyLayers[i as usize];
-            let gopMask = (*pSvcParam).uiGopSize as i32 - 1;
+        for i in 0..pCtx.param().iSpatialLayerNum {
+            let pInternal = &pCtx.param().sDependencyLayers[i as usize];
+            let gopMask = pCtx.param().uiGopSize as i32 - 1;
             let tid = pInternal.uiCodingIdx2TemporalId[(pInternal.iCodingIndex & gopMask) as usize];
             if tid != INVALID_TEMPORAL_ID {
                 iSpatialNum += 1;
             }
         }
 
-        let gopMask = (*pSvcParam).uiGopSize as i32 - 1;
+        let gopMask = pCtx.param().uiGopSize as i32 - 1;
         let tid = (*pDlayerParamInternal).uiCodingIdx2TemporalId[((*pDlayerParamInternal).iCodingIndex & gopMask) as usize];
         let mut iActualSpatialNum = iSpatialNum - 1;
         if tid != INVALID_TEMPORAL_ID {
@@ -1342,11 +1348,11 @@ impl CWelsPreProcess {
         let mut iClosestDid = iDependencyId;
         iDependencyId -= 1;
 
-        if (*pSvcParam).iSpatialLayerNum > 1 {
+        if pCtx.param().iSpatialLayerNum > 1 {
             while iDependencyId >= 0 {
                 let curDepIdx = iDependencyId as usize;
-                let pInt = &(*pSvcParam).sDependencyLayers[curDepIdx];
-                let pLay = &(*pSvcParam).sSpatialLayers[curDepIdx];
+                let pInt = &pCtx.param().sDependencyLayers[curDepIdx];
+                let pLay = &pCtx.param().sSpatialLayers[curDepIdx];
                 let pSrcPic = SrcPicRef::Pooled(
                     self.m_pLastSpatialPicture[iClosestDid as usize][1]
                         .expect("the closer layer was just written"),
@@ -1394,16 +1400,26 @@ impl CWelsPreProcess {
     // unsafe-cat: port-raw(Phase 9)
     #[allow(unsafe_code)]
     pub unsafe fn AnalyzeSpatialPic(&mut self, pCtx: &mut sWelsEncCtx, kiDidx: i32) -> i32 {
-        let pSvcParam = ctx_param(pCtx);
-        let bNeededMbAq = (*pSvcParam).bEnableAdaptiveQuant && (pCtx.eSliceType == EWelsSliceType::P_SLICE);
-        let bCalculateBGD = (pCtx.eSliceType == EWelsSliceType::P_SLICE) && (*pSvcParam).bEnableBackgroundDetection;
+        // A7, §4.6 reorder: every parameter field this body reads is a scalar, and
+        // this body hands the context to eight different callees, so nothing is held
+        // as a borrow across them.
         let dIdx = kiDidx as usize;
-        let pParamInternal = &(*pSvcParam).sDependencyLayers[dIdx];
+        let bNeededMbAq =
+            pCtx.param().bEnableAdaptiveQuant && (pCtx.eSliceType == EWelsSliceType::P_SLICE);
+        let bCalculateBGD = (pCtx.eSliceType == EWelsSliceType::P_SLICE)
+            && pCtx.param().bEnableBackgroundDetection;
+        let kbEnableBackgroundDetection = pCtx.param().bEnableBackgroundDetection;
+        let kiUsageType = pCtx.param().iUsageType;
         let iCurTemporalIdx = self.m_uiSpatialLayersInTemporal[dIdx] as i32 - 1;
 
-        let gopMask = (*pSvcParam).uiGopSize as i32 - 1;
-        let stageIdx = (*pParamInternal).iDecompositionStages.max(0).min(MAX_TEMPORAL_LEVEL as i32 - 1) as usize;
-        let gopIdx = (pParamInternal.iCodingIndex & gopMask) as usize;
+        let gopMask = pCtx.param().uiGopSize as i32 - 1;
+        let (kiDecompositionStages, kiCodingIndex) = {
+            let p = &pCtx.param().sDependencyLayers[dIdx];
+            (p.iDecompositionStages, p.iCodingIndex)
+        };
+        let stageIdx =
+            kiDecompositionStages.max(0).min(MAX_TEMPORAL_LEVEL as i32 - 1) as usize;
+        let gopIdx = (kiCodingIndex & gopMask) as usize;
         let mut iRefTemporalIdx = g_kuiRefTemporalIdx[stageIdx][gopIdx] as i32;
 
         // T9.G6: hoisted — `ctx_ltr_at` takes the context retag and its own second
@@ -1417,15 +1433,16 @@ impl CWelsPreProcess {
         }
 
         let pCurPic = self.m_pSpatialPic[dIdx][iCurTemporalIdx as usize];
-        let bCalculateVar = ((*pSvcParam).iRCMode as i32 >= RC_BITRATE_MODE) && (pCtx.eSliceType == EWelsSliceType::I_SLICE);
+        let bCalculateVar = (pCtx.param().iRCMode as i32 >= RC_BITRATE_MODE)
+            && (pCtx.eSliceType == EWelsSliceType::I_SLICE);
 
-        if (*pSvcParam).iUsageType == EUsageType::SCREEN_CONTENT_REAL_TIME {
+        if kiUsageType == EUsageType::SCREEN_CONTENT_REAL_TIME {
             // T9.G6's hoist, for T9.H2's reason: the callee takes the context now,
             // so its two other arguments may not read through the same context in the
             // same argument list.
             let bSceneLtr = pCtx.bCurFrameMarkedAsSceneLtr;
             let eSliceType = pCtx.eSliceType;
-            let iUsageType = (*pSvcParam).iUsageType;
+            let iUsageType = kiUsageType;
             let pRefPic = self.GetBestRefPicScreen(
                 pCtx,
                 iUsageType,
@@ -1442,7 +1459,7 @@ impl CWelsPreProcess {
                 self.VaaCalculation(pVaa, pCurPic, pRefPic, false, bCalculateVar, bCalculateBGD);
             }
 
-            if (*pSvcParam).bEnableBackgroundDetection {
+            if kbEnableBackgroundDetection {
                 let bFlag = bCalculateBGD && self.ref_is_inter(pRefPic);
                 if let Some(pVaa) = pCtx.vaa_mut() {
                     self.BackgroundDetection(pVaa, pCurPic, pRefPic, bFlag);
@@ -1469,7 +1486,7 @@ impl CWelsPreProcess {
                 self.VaaCalculation(pVaa, pCurPic, pRefPic, bCalculateSQDiff, bCalculateVar, bCalculateBGD);
             }
 
-            if (*pSvcParam).bEnableBackgroundDetection {
+            if kbEnableBackgroundDetection {
                 let bFlag = bCalculateBGD && self.ref_is_inter(pRefPic);
                 if let Some(pVaa) = pCtx.vaa_mut() {
                     self.BackgroundDetection(pVaa, pCurPic, pRefPic, bFlag);
@@ -1613,11 +1630,12 @@ impl CWelsPreProcess {
     pub unsafe fn UpdateSpatialPictures(
         &mut self,
         pCtx: &mut sWelsEncCtx,
-        pParam: *mut SWelsSvcCodingParam,
         iCurTid: i8,
         kiDidx: i32,
     ) -> i32 {
-        if ctx_param(pCtx).is_null() || (*ctx_param(pCtx)).iUsageType == EUsageType::SCREEN_CONTENT_REAL_TIME {
+        // A7: the `pParam` argument is gone — see `InitFunctionPointers`. This body
+        // already derived the parameters from the context two lines down.
+        if pCtx.param_opt().is_none() || pCtx.param().iUsageType == EUsageType::SCREEN_CONTENT_REAL_TIME {
             return 0;
         }
 
@@ -1628,7 +1646,7 @@ impl CWelsPreProcess {
         );
 
         let kiCurPos = self.GetCurPicPosition(kiDidx);
-        if (iCurTid as i32) < kiCurPos || (*pParam).iDecompStages == 0 {
+        if (iCurTid as i32) < kiCurPos || pCtx.param().iDecompStages == 0 {
             if (iCurTid as usize) >= MAX_TEMPORAL_LEVEL || (kiCurPos as usize) > MAX_TEMPORAL_LEVEL {
                 self.InitLastSpatialPictures(pCtx);
                 return 1;
@@ -2072,7 +2090,7 @@ impl CWelsPreProcess {
     // unsafe-cat: port-raw(Phase 9)
     #[allow(unsafe_code)]
     pub unsafe fn InitLastSpatialPictures(&mut self, pCtx: &mut sWelsEncCtx) -> i32 {
-        let pParam = ctx_param(pCtx);
+        let pParam = pCtx.param();
         let kiDlayerCount = (*pParam).iSpatialLayerNum;
         let mut iDlayerIndex = 0;
 
@@ -2104,7 +2122,7 @@ impl CWelsPreProcess {
     #[allow(unsafe_code)]
     pub unsafe fn WelsMoveMemoryWrapper(
         &mut self,
-        pSvcParam: *mut SWelsSvcCodingParam,
+        pSvcParam: &SWelsSvcCodingParam,
         pDstRef: SrcPicRef,
         kpSrc: *const SSourcePicture,
         kiTargetWidth: i32,
@@ -2352,9 +2370,10 @@ impl CWelsPreProcess {
             return ESceneChangeIdc::LARGE_CHANGED_SCENE;
         }
 
-        let pSvcParam = ctx_param(pCtx);
+        // A7, §4.6 reorder: four scalars out of the parameter block, none of them
+        // held across the context calls below.
         let pVaaExt = pCtx.vaa_ext();
-        let iTargetDid = (*pSvcParam).iSpatialLayerNum - 1;
+        let iTargetDid = pCtx.param().iSpatialLayerNum - 1;
         if iTargetDid != 0 {
             return ESceneChangeIdc::LARGE_CHANGED_SCENE;
         }
@@ -2367,18 +2386,20 @@ impl CWelsPreProcess {
         let mut iAvailableRefNum = 0;
         let mut iAvailableSceneRefNum = 0;
 
-        let pParamInternal = &(*pSvcParam).sDependencyLayers[0];
-        let gopMask = (*pSvcParam).uiGopSize as i32 - 1;
-        let iCurTid = pParamInternal.uiCodingIdx2TemporalId[(pParamInternal.iCodingIndex & gopMask) as usize];
+        let gopMask = pCtx.param().uiGopSize as i32 - 1;
+        let iCurTid = {
+            let p = &pCtx.param().sDependencyLayers[0];
+            p.uiCodingIdx2TemporalId[(p.iCodingIndex & gopMask) as usize]
+        };
         if iCurTid == INVALID_TEMPORAL_ID {
             return ESceneChangeIdc::LARGE_CHANGED_SCENE;
         }
 
-        // S67 blessed (H2): `pSvcParam` lives in its own `Box`; `pParamInternal` is dead by
-        // this line (last read two lines up). The cursor is consumed into an `i32` here.
+        // A7: nothing of the parameter block is live here now — the two reads above
+        // were consumed into `i32`s — so the LTR state's `&mut` stands alone.
         let iClosestLtrFrameNum =
             ctx_ltr_at(&mut *pCtx, iTargetDid as usize).iLastLtrIdx[iCurTid as usize];
-        if (*pSvcParam).bEnableLongTermReference {
+        if pCtx.param().bEnableLongTermReference {
             self.GetAvailableRefListLosslessScreenRefSelection(
                 pCtx,
                 &pRefPicList,
@@ -2744,7 +2765,7 @@ impl CWelsPreProcess {
         // §4.6, reorder: the branch condition is decided before the list borrow —
         // it reads the parameters and the LTR state, two other fields of the same
         // context. T9.H3's inline-borrow shape, one statement earlier.
-        let bLtrRecovery = (*ctx_param(pCtx)).bEnableLongTermReference
+        let bLtrRecovery = pCtx.param().bEnableLongTermReference
             && ctx_ltr_at(pCtx, uiDid as usize).bReceivedT0LostFlag
             && uiTid == 0;
         let Some(pRefPicLlist) = pCtx.ref_list_mut(uiDid as usize) else {
@@ -2788,7 +2809,7 @@ impl CWelsPreProcess {
         // T9.H4: the `is_null()` disjunct that opened this guard is gone — a
         // `&mut sWelsEncCtx` cannot be null, and every caller now holds one. The
         // remaining conditions are unchanged.
-        if ctx_param(pCtx).is_null() {
+        if pCtx.param_opt().is_none() {
             return;
         }
         let Some(idCur) = pCurPicture else {
@@ -2811,7 +2832,7 @@ impl CWelsPreProcess {
             })
             .unwrap_or(sCur);
 
-        let pSvcParam = ctx_param(pCtx);
+        let pSvcParam = pCtx.param_mut();
         if (*pSvcParam).iUsageType == EUsageType::SCREEN_CONTENT_REAL_TIME {
             let pVaaExt = pCtx.vaa_ext_mut();
             let sComplexityAnalysisParam = &mut (*pVaaExt).sComplexityScreenParam;
@@ -2854,13 +2875,14 @@ impl CWelsPreProcess {
             // `&mut` — down to the first use of the rate controller's arrays.
             let eSliceType = pCtx.eSliceType;
 
-            let iComplexityAnalysisMode = if (*pSvcParam).iRCMode as i32 == RC_QUALITY_MODE && eSliceType == EWelsSliceType::P_SLICE {
+            let kiRCMode = pCtx.param().iRCMode as i32;
+            let iComplexityAnalysisMode = if kiRCMode == RC_QUALITY_MODE && eSliceType == EWelsSliceType::P_SLICE {
                 FRAME_SAD
-            } else if (((*pSvcParam).iRCMode as i32 == RC_BITRATE_MODE) || ((*pSvcParam).iRCMode as i32 == RC_TIMESTAMP_MODE))
+            } else if ((kiRCMode == RC_BITRATE_MODE) || (kiRCMode == RC_TIMESTAMP_MODE))
                 && eSliceType == EWelsSliceType::P_SLICE
             {
                 GOM_SAD
-            } else if (((*pSvcParam).iRCMode as i32 == RC_BITRATE_MODE) || ((*pSvcParam).iRCMode as i32 == RC_TIMESTAMP_MODE))
+            } else if ((kiRCMode == RC_BITRATE_MODE) || (kiRCMode == RC_TIMESTAMP_MODE))
                 && eSliceType == EWelsSliceType::I_SLICE
             {
                 GOM_VAR
@@ -2975,7 +2997,7 @@ impl CWelsPreProcess {
         bCurrentFrameIsSceneLtr: bool,
         pRefOri: &mut Option<SrcPicId>,
     ) -> i32 {
-        let iTargetDid = (*ctx_param(pCtx)).iSpatialLayerNum - 1;
+        let iTargetDid = pCtx.param().iSpatialLayerNum - 1;
         let pVaaExt = pCtx.vaa_ext();
         let pBestRefCandidateParam = if bCurrentFrameIsSceneLtr {
             &(*pVaaExt).sVaaLtrBestRefCandidate[iRefIdx as usize]
