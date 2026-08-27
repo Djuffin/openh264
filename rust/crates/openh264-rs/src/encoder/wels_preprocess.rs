@@ -2739,12 +2739,16 @@ impl CWelsPreProcess {
         let uiTid = pCtx.uiTemporalId;
         let uiDid = pCtx.uiDependencyId;
         let pRefPicLlist = ctx_ref_list(pCtx, uiDid as usize);
-        let pLtr = ctx_ltr_at(pCtx, uiDid as usize);
         if pRefPicLlist.is_null() {
             return;
         }
 
-        if (*ctx_param(pCtx)).bEnableLongTermReference && (*pLtr).bReceivedT0LostFlag && uiTid == 0 {
+        // T9.H3: the held binding is gone — the LTR read borrows inline, after the
+        // `ctx_param` coercion in the same condition has ended (T9.G6's shape).
+        if (*ctx_param(pCtx)).bEnableLongTermReference
+            && (*ctx_ltr_at(pCtx, uiDid as usize)).bReceivedT0LostFlag
+            && uiTid == 0
+        {
             for i in 0..(*pRefPicLlist).uiLongRefCount as usize {
                 let Some(id) = (*pRefPicLlist).pLongRefList[i] else {
                     continue;

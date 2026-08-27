@@ -412,16 +412,15 @@ pub unsafe fn DeleteInvalidLTR(pCtx: &mut sWelsEncCtx) {
     if pRefList.is_null() {
         return;
     }
-    // **T9.G4 — the derivation order is the fix, and the order is not arbitrary.**
-    // Each of these three lines makes a whole-context call, so whatever is derived
-    // first is held across the ones after it. Sorted by what the call becomes:
-    // `ctx_sps` and `ctx_ltr_at` are ST-flippable and really will retag; `ctx_param`
-    // is fork-reachable, so S63 keeps it `*mut` permanently and it never retags at
-    // all (`phase9_ctx_join.py` calls that the moot half). So: the scalar first
-    // while nothing is live, then the flipping accessor, then the permanent-raw one.
+    // **T9.H3 — T9.G4's order, inverted, and the inversion is the conversion.**
+    // T9.G4 put the reference-shaped accessor *before* the permanently-raw one so
+    // the raw world's retags could not pop it. In the reference world the borrow
+    // checker wants the opposite: every raw root first, the `&mut`-shaped LTR
+    // borrow last, so it coexists only with derefs of raws into other allocations
+    // (F71) and never with a second use of `pCtx`.
     let iMaxFrameNumPlus1 = 1 << (*ctx_sps(pCtx)).uiLog2MaxFrameNum;
-    let pLtr = &mut *ctx_ltr_at(pCtx, (uiDid) as usize);
     let pParamInternal = std::ptr::addr_of_mut!((*ctx_param(pCtx)).sDependencyLayers[uiDid]);
+    let pLtr = &mut *ctx_ltr_at(pCtx, (uiDid) as usize);
 
     for i in 0..LONG_TERM_REF_NUM {
         if let Some(idPic) = (*pRefList).pLongRefList[i as usize] {
@@ -475,8 +474,10 @@ pub unsafe fn HandleLTRMarkFeedback(pCtx: &mut sWelsEncCtx) {
     if pRefList.is_null() {
         return;
     }
-    let pLtr = &mut *ctx_ltr_at(pCtx, (uiDid) as usize);
+    // T9.H3: raw roots first, the LTR borrow last — see `DeleteInvalidLTR`.
     let pParamInternal = std::ptr::addr_of_mut!((*ctx_param(pCtx)).sDependencyLayers[uiDid]);
+    let pVaa = ctx_vaa(pCtx);
+    let pLtr = &mut *ctx_ltr_at(pCtx, (uiDid) as usize);
 
     if pLtr.uiLtrMarkState == LTR_MARKING_SUCCESS {
         for i in 0..((*pRefList).uiLongRefCount as i32) {
@@ -488,8 +489,8 @@ pub unsafe fn HandleLTRMarkFeedback(pCtx: &mut sWelsEncCtx) {
                 && pPic.uiRecieveConfirmed != RECIEVE_SUCCESS
             {
                 (*pRefList).pic_mut(idPic).uiRecieveConfirmed = RECIEVE_SUCCESS;
-                if !ctx_vaa(pCtx).is_null() {
-                    (*ctx_vaa(pCtx)).uiValidLongTermPicIdx =
+                if !pVaa.is_null() {
+                    (*pVaa).uiValidLongTermPicIdx =
                         (*pRefList).pic(idPic).iLongTermPicNum as u8;
                 }
                 pLtr.iCurFrameNumInDec = pLtr.iLtrMarkFbFrameNum;
@@ -557,8 +558,8 @@ pub unsafe fn LTRMarkProcess(pCtx: &mut sWelsEncCtx) {
     if pRefList.is_null() {
         return;
     }
-    // T9.G4: derived above `pLtr`, not below it — these are whole-context calls
-    // and `pLtr` is a cursor held to the end of the body.
+    // T9.H3: every root and scalar first, the LTR borrow last — see
+    // `DeleteInvalidLTR` for why T9.G4's order inverted.
     let gopSize = (*ctx_param(pCtx)).uiGopSize;
     let iGoPFrameNumInterval = if (gopSize >> 1) > 1 {
         (gopSize >> 1) as i32
@@ -566,19 +567,21 @@ pub unsafe fn LTRMarkProcess(pCtx: &mut sWelsEncCtx) {
         1
     };
     let iMaxFrameNumPlus1 = 1 << (*ctx_sps(pCtx)).uiLog2MaxFrameNum;
-    let pLtr = &mut *ctx_ltr_at(pCtx, (uiDid) as usize);
     let mut i = 0usize;
     let mut bMoveLtrFromShortToLong = false;
     let pParamInternal = std::ptr::addr_of_mut!((*ctx_param(pCtx)).sDependencyLayers[uiDid]);
+    let pVaa = ctx_vaa(pCtx);
+    let keSliceType = pCtx.eSliceType;
+    let pLtr = &mut *ctx_ltr_at(pCtx, (uiDid) as usize);
 
-    if pCtx.eSliceType == EWelsSliceType::I_SLICE {
+    if keSliceType == EWelsSliceType::I_SLICE {
         i = 0;
         if let Some(id) = (*pRefList).pShortRefList[i] {
             (*pRefList).pic_mut(id).uiRecieveConfirmed = RECIEVE_SUCCESS;
         }
     } else if pLtr.bLTRMarkingFlag {
-        if !ctx_vaa(pCtx).is_null() {
-            (*ctx_vaa(pCtx)).uiMarkLongTermPicIdx = pLtr.iCurLtrIdx as u8;
+        if !pVaa.is_null() {
+            (*pVaa).uiMarkLongTermPicIdx = pLtr.iCurLtrIdx as u8;
         }
 
         if pLtr.iLTRMarkMode == LTR_MARKING_PROCESS_MODE::LTR_DELAY_MARK as i32 {
@@ -598,7 +601,7 @@ pub unsafe fn LTRMarkProcess(pCtx: &mut sWelsEncCtx) {
         }
     }
 
-    if pCtx.eSliceType == EWelsSliceType::I_SLICE || pLtr.bLTRMarkingFlag {
+    if keSliceType == EWelsSliceType::I_SLICE || pLtr.bLTRMarkingFlag {
         if let Some(id) = (*pRefList).pShortRefList[i] {
             let iFrameNum = (*pParamInternal).iFrameNum;
             let pShort = (*pRefList).pic_mut(id);
@@ -609,7 +612,7 @@ pub unsafe fn LTRMarkProcess(pCtx: &mut sWelsEncCtx) {
     }
 
     if pLtr.iLTRMarkMode == LTR_MARKING_PROCESS_MODE::LTR_DIRECT_MARK as i32
-        && pCtx.eSliceType != EWelsSliceType::I_SLICE
+        && keSliceType != EWelsSliceType::I_SLICE
         && !pLtr.bLTRMarkingFlag
     {
         for j in 0..((*pRefList).uiShortRefCount as usize) {
@@ -894,7 +897,7 @@ pub unsafe fn CheckCurMarkFrameNumUsed(pCtx: &mut sWelsEncCtx) -> bool {
     if pRefList.is_null() {
         return false;
     }
-    // T9.G4: derived above `pLtr`, not below it — see `DeleteInvalidLTR`.
+    // T9.H3: raw roots first, the LTR borrow last — see `DeleteInvalidLTR`.
     let gopSize = (*ctx_param(pCtx)).uiGopSize;
     let iGoPFrameNumInterval = if (gopSize >> 1) > 1 {
         (gopSize >> 1) as i32
@@ -902,8 +905,8 @@ pub unsafe fn CheckCurMarkFrameNumUsed(pCtx: &mut sWelsEncCtx) -> bool {
         1
     };
     let iMaxFrameNumPlus1 = 1 << (*ctx_sps(pCtx)).uiLog2MaxFrameNum;
-    let pLtr = &*ctx_ltr_at(pCtx, (uiDid) as usize);
     let pParamInternal = &(*ctx_param(pCtx)).sDependencyLayers[uiDid];
+    let pLtr = &*ctx_ltr_at(pCtx, (uiDid) as usize);
 
     for i in 0..((*pRefList).uiLongRefCount as usize) {
         if let Some(idLong) = (*pRefList).pLongRefList[i] {
@@ -1086,11 +1089,11 @@ pub unsafe fn FilterLTRRecoveryRequest(
             return 0;
         }
 
-        // T9.G4 — the derivation order, as in `DeleteInvalidLTR`: scalar, then the
-        // ST-flippable accessor, then the permanently-raw fork-reachable one.
+        // T9.H3 — the derivation order, inverted from T9.G4: scalar and the
+        // permanently-raw root first, the LTR borrow last (see `DeleteInvalidLTR`).
         let iMaxFrameNumPlus1 = 1 << (*ctx_sps(pCtx)).uiLog2MaxFrameNum;
-        let pLtr = &mut *ctx_ltr_at(pCtx, (iLayerId as usize) as usize);
         let pParamInternal = std::ptr::addr_of_mut!((*ctx_param(pCtx)).sDependencyLayers[iLayerId as usize]);
+        let pLtr = &mut *ctx_ltr_at(pCtx, (iLayerId as usize) as usize);
 
         if (*pRequest).uiFeedbackType == LTR_RECOVERY_REQUEST && (*pRequest).uiIDRPicId == (*pParamInternal).uiIdrPicId as u32 {
             if (*pRequest).iLastCorrectFrameNum == -1 {
@@ -1136,9 +1139,11 @@ pub unsafe fn FilterLTRMarkingFeedback(
     if iLayerId < 0 || iLayerId >= (*ctx_param(pCtx)).iSpatialLayerNum {
         return;
     }
+    // T9.H3: the param root first, the LTR borrow last — see `DeleteInvalidLTR`.
+    let pParam = ctx_param(pCtx);
     let pLtr = &mut *ctx_ltr_at(pCtx, (iLayerId as usize) as usize);
-    if (*ctx_param(pCtx)).bEnableLongTermReference {
-        let pParamInternal = std::ptr::addr_of_mut!((*ctx_param(pCtx)).sDependencyLayers[iLayerId as usize]);
+    if (*pParam).bEnableLongTermReference {
+        let pParamInternal = std::ptr::addr_of_mut!((*pParam).sDependencyLayers[iLayerId as usize]);
         if (*pLTRMarkingFeedback).uiIDRPicId == (*pParamInternal).uiIdrPicId as u32
             && ((*pLTRMarkingFeedback).uiFeedbackType == LTR_MARKING_SUCCESS
                 || (*pLTRMarkingFeedback).uiFeedbackType == LTR_MARKING_FAILED)
@@ -1167,14 +1172,19 @@ pub unsafe fn WelsBuildRefList(
     if pRefList.is_null() {
         return false;
     }
-    let pLtr = &mut *ctx_ltr_at(pCtx, (uiDid) as usize);
+    // T9.H3: the held LTR binding is gone — the state is touched twice in this
+    // body (one read in the branch condition, one write on recovery), and each
+    // touch borrows inline for its own expression.
     let kiNumRef = (*ctx_param(pCtx)).iNumRefFrame;
     let kuiTid = pCtx.uiTemporalId;
     let pParamD = std::ptr::addr_of_mut!((*ctx_param(pCtx)).sDependencyLayers[uiDid]);
 
     pCtx.iNumRef0 = 0;
     if pCtx.eSliceType != EWelsSliceType::I_SLICE {
-        if (*ctx_param(pCtx)).bEnableLongTermReference && pLtr.bReceivedT0LostFlag && pCtx.uiTemporalId == 0 {
+        if (*ctx_param(pCtx)).bEnableLongTermReference
+            && (*ctx_ltr_at(pCtx, (uiDid) as usize)).bReceivedT0LostFlag
+            && pCtx.uiTemporalId == 0
+        {
             for i in 0..((*pRefList).uiLongRefCount as usize) {
                 let Some(idLong) = (*pRefList).pLongRefList[i] else {
                     continue;
@@ -1186,7 +1196,7 @@ pub unsafe fn WelsBuildRefList(
                     (*current_layer(pCtx)).pRefOri[numRef0] = Some(PicRef::Rec(idLong));
                     pCtx.pRefList0[numRef0] = Some(idLong);
                     pCtx.iNumRef0 += 1;
-                    pLtr.iLastRecoverFrameNum = (*pParamD).iFrameNum;
+                    (*ctx_ltr_at(pCtx, (uiDid) as usize)).iLastRecoverFrameNum = (*pParamD).iFrameNum;
                     break;
                 }
             }
@@ -1269,7 +1279,9 @@ pub unsafe fn WelsUpdateSliceHeaderSyntax(
     // already protects, and the read popped the protector.
     let kiCountSliceNum = pCurDq.iMaxSliceNum;
     let uiDid = pCtx.uiDependencyId as usize;
-    let pLtr = &*ctx_ltr_at(pCtx, (uiDid) as usize);
+    // T9.H3: one bool, read once before the loop — the loop writes only slice
+    // headers, so the value cannot change while it runs.
+    let bLtrMarkingFlag = (*ctx_ltr_at(pCtx, (uiDid) as usize)).bLTRMarkingFlag;
 
     for iIdx in 0..kiCountSliceNum {
         let pSlice = crate::encoder::svc_encode_slice::slice_in_layer(pCurDq, iIdx);
@@ -1317,7 +1329,7 @@ pub unsafe fn WelsUpdateSliceHeaderSyntax(
             if (*ctx_param(pCtx)).iUsageType == EUsageType::SCREEN_CONTENT_REAL_TIME {
                 pRefPicMark.bAdaptiveRefPicMarkingModeFlag = (*ctx_param(pCtx)).bEnableLongTermReference;
             } else {
-                pRefPicMark.bAdaptiveRefPicMarkingModeFlag = (*ctx_param(pCtx)).bEnableLongTermReference && pLtr.bLTRMarkingFlag;
+                pRefPicMark.bAdaptiveRefPicMarkingModeFlag = (*ctx_param(pCtx)).bEnableLongTermReference && bLtrMarkingFlag;
             }
         }
     }
