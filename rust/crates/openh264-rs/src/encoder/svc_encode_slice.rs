@@ -4581,6 +4581,115 @@ mod tests {
     /// per-macroblock `PlaneCursorMut` and every per-worker `&mut SPicture` fails
     /// on — so the seam is not tested until one of them runs.
     ///
+    /// **F226's referee — the `UpdateMbMapForked` fork, at a size Miri can afford.**
+    ///
+    /// `UpdateMbListNeighborParallel` held `&mut (*pCurDq).sSliceEncCtx` for one
+    /// scalar read while every worker in `UpdateMbMapForked`'s scope called it on
+    /// the same layer. That is F223's third rule — in-fork a `&mut` retag is a
+    /// write — and **nothing in this project could see it**: the fork needs
+    /// `bUseLoadBalancing`, which both diffharness drivers and both §4.7 MT probes
+    /// pin off, and `load_balancing_completes_frames_with_sane_slice_counts` below
+    /// is the only test that reaches the path and is `#[cfg_attr(miri, ignore)]`.
+    /// Its doc says "the aliasing question this path raises is the fork/join's, and
+    /// that probe answers it", and for this site that is false — the fork probe
+    /// forces the flag off and never enters this fork at all.
+    ///
+    /// **This probe does not drive the encoder**, which is what makes it
+    /// affordable where that test is not: the aliasing question is about two
+    /// workers and one layer, not about encoding, so it builds the layer by hand
+    /// and spawns the same shape `UpdateMbMapForked` does — one scoped thread per
+    /// slice, each walking its own slice's macroblocks. Under Miri it is the
+    /// instrument that refuses the `&mut`; natively it is a neighbour-map
+    /// correctness test, and both assertions below hold either way.
+    ///
+    /// **It has teeth, checked rather than assumed**: restoring the `&mut` binding
+    /// in `UpdateMbListNeighborParallel` makes this fail under Miri with "Data race
+    /// detected between (1) retag write on thread `<unnamed>` and (2) retag write
+    /// ... on thread `<unnamed>`", and removing it makes it pass.
+    #[test]
+    // unsafe-cat: instrument(test)
+    #[allow(unsafe_code)]
+    fn update_mb_map_forked_workers_share_the_layer_without_racing() {
+        use crate::safe::mb_grid::{MbArray, MbDims};
+        use crate::encoder::md::SMB;
+        use crate::encoder::deblocking::{LEFT_MB_POS, TOP_MB_POS};
+        use crate::encoder::slice_multi_threading::UpdateMbListNeighborParallel;
+        use super::SDqLayer;
+        use std::sync::atomic::AtomicU16;
+
+        // Two slices over a 4x2 grid, four macroblocks each — the smallest shape
+        // that gives each worker its own contiguous run and still has a slice
+        // boundary for the neighbour walk to respect.
+        const MB_W: usize = 4;
+        const MB_H: usize = 2;
+        const SLICES: usize = 2;
+        let dims = MbDims::new(MB_W, MB_H);
+        let total = (MB_W * MB_H) as i32;
+
+        let mut dq = SDqLayer::default();
+        dq.iMbWidth = MB_W as i16;
+        dq.iMbHeight = MB_H as i16;
+        dq.sMbDataP = MbArray::new(dims, SMB::default());
+        // Each record must know its own coordinates: `UpdateMbNeighbor` reads
+        // `iMbXY` off the window's records to locate their neighbours.
+        for xy in 0..total {
+            let mb = dq.sMbDataP.as_mut_slice();
+            mb[xy as usize].iMbXY = xy;
+            mb[xy as usize].iMbX = (xy % MB_W as i32) as i16;
+            mb[xy as usize].iMbY = (xy / MB_W as i32) as i16;
+        }
+
+        dq.sSliceEncCtx.iMbWidth = MB_W as i16;
+        dq.sSliceEncCtx.iMbHeight = MB_H as i16;
+        dq.sSliceEncCtx.iMbNumInFrame = total;
+        // Row 0 is slice 0, row 1 is slice 1 — the map `WelsMbToSliceIdc` reads.
+        dq.sSliceEncCtx.pOverallMbMap = (0..total)
+            .map(|xy| AtomicU16::new((xy / MB_W as i32) as u16))
+            .collect();
+        dq.pFirstMbIdxOfSlice = (0..SLICES).map(|s| (s * MB_W) as i32).collect();
+        dq.pCountMbNumInSlice = (0..SLICES).map(|_| MB_W as i32).collect();
+
+        // The layer's address, carried as an integer so the workers can share it
+        // without this probe minting a **third** `unsafe impl Send` in the tree:
+        // decision D1 pins that count at two (`SharedCells`'s `Sync` and
+        // `SliceJobHandle`'s `Send`), and a test is not the place to spend the pin.
+        // An address is plain `Copy` data; the safety argument is the same one
+        // `UpdateMbMapForked` relies on and is what this probe exists to keep
+        // honest — every worker only *reads* the layer struct, and each writes only
+        // its own slice's macroblock records, disjoint by
+        // `pFirstMbIdxOfSlice`/`pCountMbNumInSlice`.
+        let layer_addr = (&mut dq as *mut SDqLayer) as usize;
+
+        std::thread::scope(|s| {
+            for slice_idc in 0..SLICES as i32 {
+                s.spawn(move || unsafe {
+                    UpdateMbListNeighborParallel(layer_addr as *mut SDqLayer, slice_idc);
+                });
+            }
+        });
+
+        // Every macroblock was visited (the walk sets a neighbour mask on each).
+        // Row 0's first macroblock has neither a left nor a top neighbour; row 1's
+        // second has both a left neighbour and a top one, but the top is in the
+        // other slice, so `UpdateMbNeighbor` must not mark it available.
+        let mbs = dq.sMbDataP.as_slice();
+        assert_eq!(
+            mbs[0].uiNeighborAvail & ((LEFT_MB_POS | TOP_MB_POS) as u8),
+            0,
+            "the first macroblock of slice 0 has no left or top neighbour"
+        );
+        assert_ne!(
+            mbs[MB_W + 1].uiNeighborAvail & (LEFT_MB_POS as u8),
+            0,
+            "the second macroblock of slice 1 has a left neighbour in its own slice"
+        );
+        assert_eq!(
+            mbs[MB_W + 1].uiNeighborAvail & (TOP_MB_POS as u8),
+            0,
+            "its top neighbour is in slice 0, so it must not be available"
+        );
+    }
+
     /// **`SM_SIZELIMITED_SLICE` at two threads, and the boundary is asserted
     /// rather than assumed** (which is the whole point of
     /// `EncodedFrame::first_mbs`). This mode reaches
