@@ -181,8 +181,8 @@ checkpoint's second half, enforced by the ratchet.
 
 | Session | Checkpoints | Scope | What's at zero afterwards |
 |---|---|---|---|
-| **S1** ◀ next — brief [`prompts/safeplan_s1.md`](prompts/safeplan_s1.md) | A1–A7 | **The whole accessor layer** (~640 sites): small fry → `ctx_rc_at` → `ctx_ref_list`+`ctx_dq_layer` → paraset trio + `ctx_frame_bs_cur` → `ctx_vaa` → `ctx_func_list` → `ctx_param`, join analysis before each, full cascade | the accessor layer itself; `rc.rs`, `ref_list_mgr_svc.rs`, `au_set.rs`, `paraset_strategy.rs`, `encoder_ext.rs` bulk |
-| **S2** | B1–B3 + C1–C6 | **Owned fields + the pixel land**: singletons → `Option<Box<T>>`, owned mutex, MT lifecycle, init/teardown; then the fn-pointer table → safe signatures, roving trios → offsets, MD/ME onto plane cursors, feature arenas → index tables, preprocess + processing | ctx raw singletons; `wels_func_ptr_def.rs`, `svc_encode_mb.rs`, `svc_mode_decision.rs`, `svc_base_layer_md.rs`, `svc_motion_estimate.rs`, `md.rs`, `wels_preprocess.rs`, `processing/` |
+| **S1** ✅ **CLOSED 2026-08-27** — brief [`prompts/safeplan_s1.md`](prompts/safeplan_s1.md) | **A1–A4 landed**; A5–A7 roll to S2 | **The accessor layer's first half** (~230 sites): small fry → `ctx_rc_at` → `ctx_ref_list` → paraset trio + `ctx_frame_bs_cur` + `ctx_sps`/`ctx_pps`. `ctx_dq_layer` deferred to D2–D3 (F210). Four gated commits, `session` gate green at the close | `ctx_mvd_cost_*`, `ctx_rc`, `ctx_rc_at`, `ctx_frame_bs`, `ctx_frame_bs_cur`, `ctx_ref_list`, the paraset trio, `ctx_sps`, `ctx_pps`, `rc_gom_*`; allows 627 → 613 |
+| **S2** ◀ next — brief [`prompts/safeplan_s2.md`](prompts/safeplan_s2.md) | **A5–A7** + B1–B3 (+ C1–C6 if it fits) | **The accessor layer's tail, then owned fields**: `ctx_vaa` (79, incl. the 16 `SVAAFrameInfoExt` downcasts) → `ctx_func_list` (106, **flip, per F212**) → `ctx_param` (247, where F209's cascade lands); then singletons → `Option<Box<T>>`, owned mutex, MT lifecycle, init/teardown; the pixel land follows | ctx raw singletons; `wels_func_ptr_def.rs`, `svc_encode_mb.rs`, `svc_mode_decision.rs`, `svc_base_layer_md.rs`, `svc_motion_estimate.rs`, `md.rs`, `wels_preprocess.rs`, `processing/` |
 | **S3** | D1–D4 | **Writers + the slice core**: bit writers onto `safe::bits`; `svc_encode_slice.rs` in two checkpoints (aliases → handles, then the encode loop + dynamic slicing); MT residue; `deblocking_common` + `mc`/`copy_mb`. Miri fork/join + mid-row probes gate every slice-core landing | writer files, `svc_encode_slice.rs`, `slice_multi_threading.rs` (to its D1 line), `common/` |
 | **S4** | E1–E3 | Decoder/common residue + trace newtype; **the lint flip** + census pin; **exit battery** + fallout | everything — §1 acceptance list |
 
@@ -198,10 +198,10 @@ callers hold multiple accessors simultaneously.
 |---|---|---|---|
 | A1 | `ctx_mvd_cost_table/origin`, `ctx_rc`, `ctx_frame_bs`, `rc_gom_*` — the small fry, re-validating the method | ~32 | starts `rc.rs` |
 | A2 | `ctx_rc_at` | 60 | finishes `rc.rs` (−55 unsafe fn) |
-| A3 | `ctx_ref_list` + `ctx_dq_layer` (held jointly in the encode loop — join analysis first) | 51 | `ref_list_mgr_svc.rs` (−30) |
+| A3 | `ctx_ref_list` (**`ctx_dq_layer` split off — F210**: the fork *writes* the layer, so the accessor can return neither `&mut` nor `&`; it converts with the layer's storage in D2–D3, and the join tool reads 0 LIVE, so there is no joint-hold to dissolve) | 36 | `ref_list_mgr_svc.rs` — but see F209: the file's `unsafe fn` collapse waits on `ctx_param` |
 | A4 | `ctx_sps_array`/`ctx_subset_array`/`ctx_pps_array` + `ctx_frame_bs_cur` | 65 | `au_set.rs`, `paraset_strategy.rs` |
 | A5 | `ctx_vaa` — includes resolving the `SVAAFrameInfoExt` downcast (6 callers cast the result; becomes an enum or accessor pair) | 79 | parts of `wels_preprocess.rs` |
-| A6 | `ctx_func_list` — dispatch sites adopt the copy-the-fn-ptr-first pattern | 106 | dispatch-heavy files |
+| A6 | `ctx_func_list` — **the flip, priced and chosen in F212**; the dispatch enums F191 prefers stay at C1, where the plan already puts them | 106 | dispatch-heavy files |
 | A7 | `ctx_param` — the monster; by now a large fraction of its 246 sites sit in already-converted callers. Split into `&self` reader + `&mut` writer accessors | ≤246 | `encoder_ext.rs` bulk |
 
 **Exit criteria**: zero `pub unsafe fn ctx_*`/`rc_*` accessors; `rc.rs`,
@@ -303,7 +303,15 @@ tail, priced per cluster above rather than by extrapolating the mechanical-phase
 Per checkpoint landing: regenerate the ratchet baseline downward. Per session close: log
 one line — date, session id, checkpoints landed, allows remaining (total / encoder),
 gate level run. The single progress number is
-**`#[allow(unsafe_code)]` sites outside `src/api/`: 611 → 2**.
+**`#[allow(unsafe_code)]` sites outside `src/api/`: 611 → 2**. The figure was
+**627** when S1 opened, not 611 — F203's two found files plus the census fix had
+drifted it upward since the plan was drafted. S1 closed it at **613**.
+
+**Session log**
+
+| date | session | checkpoints landed | allows outside api | gate |
+|---|---|---|---|---|
+| 2026-08-27 | **S1** | A1, A2, A3, A4 (A5–A7 roll to S2) | 627 → 613 | `session` PASS — sweeps 583/583 ×2, Miri 291/291, gtest 4/4 |
 
 ## 10. Adoption amendments (ratified with the switch, 2026-08-27)
 
