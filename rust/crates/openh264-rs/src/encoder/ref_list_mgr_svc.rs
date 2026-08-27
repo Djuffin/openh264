@@ -755,13 +755,12 @@ pub unsafe fn WelsUpdateRefList(pCtx: &mut sWelsEncCtx) -> bool {
         return false;
     }
 
-    // **T9.G7 — raw, not `&mut`.** This body holds the LTR state across calls that
-    // derive their own `&mut` to the *same* `SLTRState` (`LTRMarkProcess` and the
-    // rest re-derive `ctx_ltr_at(pCtx, uiDid)` for this same `uiDid`). Two Unique
-    // tags from one raw root are siblings, and the second pops the first — so the
-    // `&mut` binding was the hazard, not the holding. A raw cursor with a deref at
-    // each use is the port's own idiom and is what F66 says is sound here.
-    let pLtr = ctx_ltr_at(pCtx, (uiDid) as usize);
+    // **T9.H3 — the held cursor is gone.** T9.G7's note stood here: this body held
+    // the LTR state raw across `LTRMarkProcess` / `DeleteInvalidLTR` /
+    // `HandleLTRMarkFeedback`, each of which re-derives its own `&mut` to the same
+    // `SLTRState`. Nothing is held across those calls any more — each branch
+    // re-borrows `ctx_ltr_at` *after* its calls return, so "the writes see the
+    // state those calls left" is now said in borrows instead of a comment.
     let pParamD = std::ptr::addr_of_mut!((*ctx_param(pCtx)).sDependencyLayers[uiDid]);
     let kuiTid = pCtx.uiTemporalId;
     let kuiDid = pCtx.uiDependencyId;
@@ -824,9 +823,10 @@ pub unsafe fn WelsUpdateRefList(pCtx: &mut sWelsEncCtx) -> bool {
                 DeleteInvalidLTR(pCtx);
                 HandleLTRMarkFeedback(pCtx);
 
-                (*pLtr).bReceivedT0LostFlag = false;
-                (*pLtr).bLTRMarkingFlag = false;
-                (*pLtr).uiLtrMarkInterval += 1;
+                let pLtr = &mut *ctx_ltr_at(pCtx, uiDid);
+                pLtr.bReceivedT0LostFlag = false;
+                pLtr.bLTRMarkingFlag = false;
+                pLtr.uiLtrMarkInterval += 1;
             }
 
             let mut i = ((*pRefList).uiShortRefCount as i32) - 1;
@@ -856,10 +856,11 @@ pub unsafe fn WelsUpdateRefList(pCtx: &mut sWelsEncCtx) -> bool {
         if (*ctx_param(pCtx)).bEnableLongTermReference {
             LTRMarkProcess(pCtx);
 
-            (*pLtr).iCurLtrIdx = ((*pLtr).iCurLtrIdx + 1) % LONG_TERM_REF_NUM;
-            (*pLtr).iLTRMarkSuccessNum = 1;
-            (*pLtr).bLTRMarkEnable = true;
-            (*pLtr).uiLtrMarkInterval = 0;
+            let pLtr = &mut *ctx_ltr_at(pCtx, uiDid);
+            pLtr.iCurLtrIdx = (pLtr.iCurLtrIdx + 1) % LONG_TERM_REF_NUM;
+            pLtr.iLTRMarkSuccessNum = 1;
+            pLtr.bLTRMarkEnable = true;
+            pLtr.uiLtrMarkInterval = 0;
 
             if !ctx_vaa(pCtx).is_null() {
                 (*ctx_vaa(pCtx)).uiValidLongTermPicIdx = 0;
