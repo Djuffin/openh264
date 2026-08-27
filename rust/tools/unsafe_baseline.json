@@ -1,5 +1,5 @@
 {
-  "commit": "cd22b64d",
+  "commit": "4a358cbb",
   "metrics": ["unsafe_fn", "unsafe_block", "raw_ptr", "transmute", "unsafe_impl", "mem_zeroed", "no_mangle", "shim"],
   "files": {
     "api/abi_guard.rs": { "unsafe_fn": 0, "unsafe_block": 0, "raw_ptr": 0, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 0, "no_mangle": 0, "shim": 0 },
@@ -66,7 +66,7 @@
     "encoder/svc_set_mb_syn_cabac.rs": { "unsafe_fn": 6, "unsafe_block": 8, "raw_ptr": 3, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 0, "no_mangle": 0, "shim": 0 },
     "encoder/svc_set_mb_syn_cavlc.rs": { "unsafe_fn": 12, "unsafe_block": 1, "raw_ptr": 24, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 0, "no_mangle": 0, "shim": 0 },
     "encoder/vlc_encoder.rs": { "unsafe_fn": 0, "unsafe_block": 0, "raw_ptr": 0, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 0, "no_mangle": 0, "shim": 0 },
-    "encoder/wels_encoder_ext.rs": { "unsafe_fn": 16, "unsafe_block": 8, "raw_ptr": 66, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 0, "no_mangle": 2, "shim": 0 },
+    "encoder/wels_encoder_ext.rs": { "unsafe_fn": 16, "unsafe_block": 8, "raw_ptr": 64, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 0, "no_mangle": 2, "shim": 0 },
     "encoder/wels_func_ptr_def.rs": { "unsafe_fn": 4, "unsafe_block": 0, "raw_ptr": 26, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 0, "no_mangle": 0, "shim": 0 },
     "encoder/wels_preprocess.rs": { "unsafe_fn": 44, "unsafe_block": 0, "raw_ptr": 54, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 0, "no_mangle": 0, "shim": 0 },
     "lib.rs": { "unsafe_fn": 0, "unsafe_block": 0, "raw_ptr": 0, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 0, "no_mangle": 0, "shim": 0 },

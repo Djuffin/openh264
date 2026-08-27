@@ -738,22 +738,23 @@ pub unsafe fn WelsEncoderParamAdjust(
     if pNewParam.is_null() {
         return 1;
     }
-    // **T8.B5 (S42): derived once, from the owner's `Box`.** Everything below that
-    // used to spell `*ppCtx` reads through this; the re-initialisation branch
-    // re-derives it, because the box it came from is gone by then.
-    let mut pCtx: *mut sWelsEncCtx = match ppCtx.as_mut() {
-        Some(pEncContext) => std::ptr::addr_of_mut!(**pEncContext),
+    // **T8.B5 (S42), converted in B3.** Everything below that used to spell `*ppCtx`
+    // reads through this; the re-initialisation branch binds a *second* reference,
+    // because the box this one came from is gone by then — and borrowck now enforces
+    // that separation instead of leaving it to the comment.
+    let ctx = match ppCtx.as_deref_mut() {
+        Some(pEncContext) => pEncContext,
         None => return 1,
     };
 
     /* Check validation in new parameters */
-    iReturn = ParamValidationExt(&mut (*pCtx).sLogCtx, pNewParam);
+    iReturn = ParamValidationExt(&mut ctx.sLogCtx, pNewParam);
     if iReturn != ENC_RETURN_SUCCESS {
         return iReturn;
     }
 
     iReturn = GetMultipleThreadIdc(
-        &mut (*pCtx).sLogCtx,
+        &mut ctx.sLogCtx,
         pNewParam,
         &mut iSliceNum,
         &mut iCacheLineSize,
@@ -763,7 +764,7 @@ pub unsafe fn WelsEncoderParamAdjust(
         return iReturn;
     }
 
-    let pOldParam: &mut SWelsSvcCodingParam = (*pCtx).param_mut();
+    let pOldParam: &mut SWelsSvcCodingParam = ctx.param_mut();
 
     if (*pOldParam).iUsageType != (*pNewParam).iUsageType {
         return ENC_RETURN_UNSUPPORTED_PARA;
@@ -858,8 +859,6 @@ pub unsafe fn WelsEncoderParamAdjust(
     }
 
     if bNeedReset {
-        let mut sLogCtx = (*pCtx).sLogCtx;
-
         let iOldSpsPpsIdStrategy = (*pOldParam).eSpsPpsIdStrategy;
         let mut sTmpPsoVariable: [SParaSetOffsetVariable; PARA_SET_TYPE] = Default::default();
         let mut iTmpPpsIdList: [i32; MAX_DQ_LAYER_NUM * MAX_PPS_COUNT] =
@@ -874,11 +873,20 @@ pub unsafe fn WelsEncoderParamAdjust(
             iIndexD += 1;
         }
 
+        // **B3 — §4.6's reorder, and borrowck is what asked for it.** `sLogCtx` was
+        // read at the top of this branch, above the `pOldParam` loop; it is a `&mut`
+        // into the parameter block taken off `ctx`, so a read of `ctx` while it is
+        // live is a borrow conflict. Every read here is of a `Copy` scalar and
+        // nothing between the old position and this one writes any of them, so the
+        // move is behaviour-preserving by construction. Under the old raw root this
+        // conflict was invisible to every gate except Miri.
+        let mut sLogCtx = ctx.sLogCtx;
+
         // for sEncoderStatistics
-        let sTempEncoderStatistics = (*pCtx).sEncoderStatistics;
-        let uiStartTimestamp = (*pCtx).uiStartTimestamp;
-        let iStatisticsLogInterval = (*pCtx).iStatisticsLogInterval;
-        let iLastStatisticsLogTs = (*pCtx).iLastStatisticsLogTs;
+        let sTempEncoderStatistics = ctx.sEncoderStatistics;
+        let uiStartTimestamp = ctx.uiStartTimestamp;
+        let iStatisticsLogInterval = ctx.iStatisticsLogInterval;
+        let iLastStatisticsLogTs = ctx.iLastStatisticsLogTs;
         // for sEncoderStatistics
 
         let mut sExistingParasetList = SExistingParasetList::default();
@@ -888,10 +896,17 @@ pub unsafe fn WelsEncoderParamAdjust(
             // S67 blessed (H2): live across it are `sTempEncoderStatistics` (a **copy**, taken
             // by value at the top of this block), two stack arrays, and a receiver in the
             // strategy object's own `Box`.
-            ParasetStrategy(pCtx).OutputCurrentStructure(
+            // **B3.** `ParasetStrategy` still takes the context as a raw — it is
+            // `ctx_func_list_raw`'s second surviving caller (A6) — so the raw is
+            // derived here, at the one site that needs it, rather than the whole
+            // body being held as one. The S67 blessing above is unchanged and is
+            // what makes the pair lawful: the receiver lives in the strategy's own
+            // `Box`, a different allocation from the context, so the `&mut` handed
+            // to `OutputCurrentStructure` cannot pop it.
+            ParasetStrategy(std::ptr::addr_of_mut!(*ctx)).OutputCurrentStructure(
                 sTmpPsoVariable.as_mut_ptr(),
                 iTmpPpsIdList.as_mut_ptr(),
-                &mut *pCtx,
+                ctx,
                 &mut sExistingParasetList,
             );
 
@@ -910,23 +925,23 @@ pub unsafe fn WelsEncoderParamAdjust(
         }
         // The context below this line is a different allocation from the one above
         // it. `encoder_ext.cpp` hides that behind `*ppCtx`; here it is a statement.
-        pCtx = match ppCtx.as_mut() {
-            Some(pEncContext) => std::ptr::addr_of_mut!(**pEncContext),
+        let ctx = match ppCtx.as_deref_mut() {
+            Some(pEncContext) => pEncContext,
             None => return 1,
         };
         // if WelsInitEncoderExt succeed
         // for LTR or SPS,PPS ID update
         iIndexD = 0;
         while iIndexD < (*pNewParam).iSpatialLayerNum {
-            (*pCtx).param_mut().sDependencyLayers[iIndexD as usize].uiIdrPicId = uiMaxIdrPicId;
+            ctx.param_mut().sDependencyLayers[iIndexD as usize].uiIdrPicId = uiMaxIdrPicId;
             iIndexD += 1;
         }
 
         // for sEncoderStatistics
-        (*pCtx).sEncoderStatistics = sTempEncoderStatistics;
-        (*pCtx).uiStartTimestamp = uiStartTimestamp;
-        (*pCtx).iStatisticsLogInterval = iStatisticsLogInterval;
-        (*pCtx).iLastStatisticsLogTs = iLastStatisticsLogTs;
+        ctx.sEncoderStatistics = sTempEncoderStatistics;
+        ctx.uiStartTimestamp = uiStartTimestamp;
+        ctx.iStatisticsLogInterval = iStatisticsLogInterval;
+        ctx.iLastStatisticsLogTs = iLastStatisticsLogTs;
         // for sEncoderStatistics
 
         // load back the needed structure for eSpsPpsIdStrategy
@@ -934,7 +949,10 @@ pub unsafe fn WelsEncoderParamAdjust(
             || (iOldSpsPpsIdStrategy == SPS_PPS_LISTING
                 && (*pNewParam).eSpsPpsIdStrategy == SPS_PPS_LISTING)
         {
-            ParasetStrategy(pCtx).LoadPreviousStructure(
+            // `ParasetStrategy`'s raw parameter again — see the note at
+            // `OutputCurrentStructure` above. Nothing of the context is live
+            // alongside the receiver here, so this is the plain form.
+            ParasetStrategy(std::ptr::addr_of_mut!(*ctx)).LoadPreviousStructure(
                 sTmpPsoVariable.as_mut_ptr(),
                 iTmpPpsIdList.as_mut_ptr(),
             );
@@ -1782,22 +1800,15 @@ impl Default for CWelsH264SVCEncoder {
 }
 
 impl CWelsH264SVCEncoder {
-    /// **S42's root, read out.** The one expression in this file that turns the
-    /// boundary object's ownership back into the `*mut sWelsEncCtx` the tree below
-    /// still speaks — derived from the `Box` for the duration of one call, never
-    /// stored. It takes the slot rather than `&mut self` on purpose: a `&mut self`
-    /// here would retag the whole encoder object, and the log-context pointers the
-    /// call sites hold are derived from a *sibling* field.
-    ///
-    /// Null exactly when the encoder has no context, which is the state
-    /// `m_pEncContext == NULL` used to mean.
-    #[inline]
-    fn ctx_ptr(slot: &mut Option<Box<sWelsEncCtx>>) -> *mut sWelsEncCtx {
-        match slot {
-            Some(pEncContext) => std::ptr::addr_of_mut!(**pEncContext),
-            None => null_mut(),
-        }
-    }
+    // **B3 retired `ctx_ptr`.** It was S42's root read-out — the one expression in
+    // this file that turned the boundary object's ownership back into the
+    // `*mut sWelsEncCtx` the tree below still speaks. Every one of its five callers
+    // now resolves the context off `m_pEncContext` as a reference at the point of
+    // use (`as_deref()` / `as_deref_mut()`), so the whole-context retag it minted on
+    // each call is gone and borrowck referees what only Miri could before. Its
+    // reason for taking the slot rather than `&mut self` — keeping the log-context
+    // pointers, which come off a *sibling* field, out of the borrow — survives it:
+    // the call sites still spell `self.m_pEncContext` rather than `self`.
 
     /// `VERSION_NUMBER` — the string `welsEncoderExt.cpp` puts in its trace lines,
     /// built from the version this crate reports through `WelsGetCodecVersion`.
@@ -2140,12 +2151,17 @@ impl CWelsH264SVCEncoder {
     // unsafe-cat: port-raw(Phase 9)
     #[allow(unsafe_code)]
     pub fn EncodeParameterSets(&mut self, pBsInfo: &mut SFrameBSInfo) -> i32 {
-        let pCtx = Self::ctx_ptr(&mut self.m_pEncContext);
-        if pCtx.is_null() || !self.m_bInitialFlag {
+        if !self.m_bInitialFlag {
             return cmInitParaError;
         }
+        // **B3.** The callee already takes `&mut sWelsEncCtx`, so the raw round-trip
+        // through `ctx_ptr` bought nothing but the retag: the slot hands out the
+        // reference directly. `None` is where `pCtx.is_null()` returned.
+        let Some(ctx) = self.m_pEncContext.as_deref_mut() else {
+            return cmInitParaError;
+        };
         // S67 blessed (H2): nothing of the context is live here; `pBsInfo` is the caller's.
-        unsafe { WelsEncoderEncodeParameterSetsRust(&mut *pCtx, pBsInfo) }
+        unsafe { WelsEncoderEncodeParameterSetsRust(ctx, pBsInfo) }
     }
 
     // unsafe-cat: port-raw(Phase 9)
@@ -2326,16 +2342,27 @@ uiResolutionChangeTimes={}, uIDRReqNum={}, uIDRSentNum={}, uLTRSentNum=NA, iTota
     // unsafe-cat: port-raw(Phase 9)
     #[allow(unsafe_code)]
     pub fn UpdateStatistics(&mut self, pBsInfo: &SFrameBSInfo, kiCurrentFrameMs: i64) {
-        let pCtx = Self::ctx_ptr(&mut self.m_pEncContext);
         unsafe {
-            if pCtx.is_null() || (*pCtx).param_opt().is_none() {
-                return;
-            }
+            // **B3.** The context resolves off its own slot per use rather than being
+            // held as `ctx_ptr`'s raw for the whole body. The two scalars below are
+            // `Copy`, so this borrow ends before the loop; the loop re-takes it per
+            // iteration, which is what lets `LogStatistics` — a `&mut self` method —
+            // be called from inside the loop at all. The null guard becomes the
+            // `None` arm and returns where `pCtx.is_null()` did.
             let kiCurrentFrameTs = pBsInfo.uiTimeStamp;
-            (*pCtx).uiLastTimestamp = kiCurrentFrameTs;
-            let kiTimeDiff = kiCurrentFrameTs - (*pCtx).iLastStatisticsLogTs;
-
-            let iMaxDid = (*pCtx).param().iSpatialLayerNum - 1;
+            let (kiTimeDiff, iMaxDid) = {
+                let Some(ctx) = self.m_pEncContext.as_deref_mut() else {
+                    return;
+                };
+                if ctx.param_opt().is_none() {
+                    return;
+                }
+                ctx.uiLastTimestamp = kiCurrentFrameTs;
+                (
+                    kiCurrentFrameTs - ctx.iLastStatisticsLogTs,
+                    ctx.param().iSpatialLayerNum - 1,
+                )
+            };
             for iDid in 0..=iMaxDid {
                 let mut eFrameType = EVideoFrameType::videoFrameTypeSkip;
                 let mut kiCurrentFrameSize = 0;
@@ -2353,6 +2380,11 @@ uiResolutionChangeTimes={}, uIDRReqNum={}, uIDRSentNum={}, uLTRSentNum=NA, iTota
                     }
                 }
 
+                let mut bLogStatisticsNow = false;
+                {
+                let Some(ctx) = self.m_pEncContext.as_deref_mut() else {
+                    return;
+                };
                 // **T9.H14: hoisted above `pStatistics` — T9.G6's shape, found by
                 // the session gate's Miri lane.** `ctx_ltr(&mut *pCtx)` stood
                 // here — a `Unique` retag of the **whole context** at
@@ -2363,23 +2395,26 @@ uiResolutionChangeTimes={}, uIDRReqNum={}, uIDRSentNum={}, uLTRSentNum=NA, iTota
                 // was its last caller — and the read is the safe Vec projection
                 // of the root's element 0, with the old empty-array null check
                 // becoming `first()`. The hoist stays: the shared borrow here
-                // still must end before `pStatistics` is derived.
-                let bLtrMarkingFlag = (*pCtx)
+                // still must end before `pStatistics` is derived — and since B3 the
+                // compiler is what says so.
+                let bLtrMarkingFlag = ctx
                     .pLtr
                     .first()
                     .map_or(false, |pLtr| pLtr.bLTRMarkingFlag);
-                // **F208.** The average QP is read *here*, before `pStatistics`
-                // is derived, and the reason is the same one the comment above
-                // gives for `bLtrMarkingFlag`: the reader is a **shared reborrow
-                // of the whole context**, and a `SharedReadOnly` retag over
-                // `[0x0..0x17f10]` invalidates any `Unique` derived from the same
-                // context — including one into a disjoint field. Borrowck cannot
-                // referee it because `pStatistics` is derived through a raw
-                // `pCtx`, so Miri is the only referee, and it refused this exact
-                // shape at `wels_encoder_ext.rs:2412` when A2 first put the read
-                // beside the write.
-                let uiAverageFrameQP = if !(*pCtx).rc().is_empty() {
-                    (*pCtx).rc_at(iDid as usize).iAverageFrameQp as u32
+                // **F208, and B3 changed who enforces it.** The average QP is read
+                // *here*, before `pStatistics` is derived, for the reason the comment
+                // above gives for `bLtrMarkingFlag`: the reader is a shared reborrow
+                // of the whole context, and a `SharedReadOnly` retag over it
+                // invalidates any `Unique` derived from the same context — including
+                // one into a disjoint field. When this body held `ctx_ptr`'s raw,
+                // borrowck could not see either derivation and Miri was the only
+                // referee; it refused this exact shape at A2's spelling of line 2412.
+                // The root is a `&mut sWelsEncCtx` now, so **borrowck referees it**:
+                // moving this read below `pStatistics` is a compile error rather than
+                // silent UB, and `f208_reader_retag_scan.py` no longer lists the body.
+                // The order is kept as it stands because it is also the correct one.
+                let uiAverageFrameQP = if !ctx.rc().is_empty() {
+                    ctx.rc_at(iDid as usize).iAverageFrameQp as u32
                 } else {
                     26
                 };
@@ -2389,13 +2424,13 @@ uiResolutionChangeTimes={}, uIDRReqNum={}, uIDRSentNum={}, uLTRSentNum=NA, iTota
                 // `[0x0..0x17f10]` that pops `pStatistics`. A7 adds two more such
                 // reads to this body (`fMaxFrameRate` below), and both are scalars.
                 let kiActualWidth =
-                    (*pCtx).param().sDependencyLayers[iDid as usize].iActualWidth;
+                    ctx.param().sDependencyLayers[iDid as usize].iActualWidth;
                 let kiActualHeight =
-                    (*pCtx).param().sDependencyLayers[iDid as usize].iActualHeight;
-                let kfMaxFrameRate = (*pCtx).param().fMaxFrameRate;
-                let kiStatisticsLogInterval = (*pCtx).iStatisticsLogInterval;
+                    ctx.param().sDependencyLayers[iDid as usize].iActualHeight;
+                let kfMaxFrameRate = ctx.param().fMaxFrameRate;
+                let kiStatisticsLogInterval = ctx.iStatisticsLogInterval;
                 let pStatistics =
-                    &mut (*pCtx).sEncoderStatistics[iDid as usize];
+                    &mut ctx.sEncoderStatistics[iDid as usize];
 
                 if pStatistics.uiWidth != 0
                     && pStatistics.uiHeight != 0
@@ -2421,14 +2456,14 @@ uiResolutionChangeTimes={}, uIDRReqNum={}, uIDRSentNum={}, uLTRSentNum=NA, iTota
                         / (iProcessedFrameCount as f32);
                 }
 
-                if (*pCtx).uiStartTimestamp != 0 {
-                    if kiCurrentFrameTs > (*pCtx).uiStartTimestamp + 800 {
+                if ctx.uiStartTimestamp != 0 {
+                    if kiCurrentFrameTs > ctx.uiStartTimestamp + 800 {
                         pStatistics.fAverageFrameRate = (pStatistics.uiInputFrameCount as f32
                             * 1000.0)
-                            / ((kiCurrentFrameTs - (*pCtx).uiStartTimestamp) as f32);
+                            / ((kiCurrentFrameTs - ctx.uiStartTimestamp) as f32);
                     }
                 } else {
-                    (*pCtx).uiStartTimestamp = kiCurrentFrameTs;
+                    ctx.uiStartTimestamp = kiCurrentFrameTs;
                 }
 
                 pStatistics.uiAverageFrameQP = uiAverageFrameQP;
@@ -2461,10 +2496,23 @@ uiResolutionChangeTimes={}, uIDRReqNum={}, uIDRSentNum={}, uLTRSentNum=NA, iTota
                         }
                         pStatistics.iLastStatisticsBytes = pStatistics.iTotalEncodedBytes;
                         pStatistics.iLastStatisticsFrameCount = pStatistics.uiInputFrameCount;
-                        (*pCtx).iLastStatisticsLogTs = kiCurrentFrameTs;
-                        self.LogStatistics(kiCurrentFrameTs, iMaxDid);
-                        pStatistics.iTotalEncodedBytes = 0;
+                        ctx.iLastStatisticsLogTs = kiCurrentFrameTs;
+                        // `LogStatistics` takes `&mut self` and the reset writes
+                        // back into the statistics this scope is holding, so both
+                        // move below the borrow. The C++ order — log, *then* reset
+                        // `iTotalEncodedBytes` — is preserved exactly, and the log
+                        // still sees every mutation above it because they are
+                        // written through the context, not to a copy.
+                        bLogStatisticsNow = true;
                     }
+                }
+                }
+                if bLogStatisticsNow {
+                    self.LogStatistics(kiCurrentFrameTs, iMaxDid);
+                    let Some(ctx) = self.m_pEncContext.as_deref_mut() else {
+                        return;
+                    };
+                    ctx.sEncoderStatistics[iDid as usize].iTotalEncodedBytes = 0;
                 }
             }
         }
@@ -2480,10 +2528,14 @@ uiResolutionChangeTimes={}, uIDRReqNum={}, uIDRSentNum={}, uLTRSentNum=NA, iTota
         if pOption.is_null() {
             return cmInitParaError;
         }
-        // Re-derived after every arm that replaces the context — the three
-        // `WelsEncoderParamAdjust` arms and `ENCODER_OPTION_LTR`.
-        let mut pCtx = Self::ctx_ptr(&mut self.m_pEncContext);
-        if (pCtx.is_null() || !self.m_bInitialFlag)
+        // **B3 — the function-level raw is gone.** Each arm resolves the context off
+        // its own slot at the point it uses it, so the three arms that *replace* the
+        // context (`WelsEncoderParamAdjust` twice, `ENCODER_OPTION_LTR`) no longer
+        // need a re-derivation: there is no stale handle to refresh, and borrowck
+        // rejects using one across the replacement rather than leaving it to Miri.
+        // `is_none()` is `ctx_ptr(..).is_null()` — the accessor answered null exactly
+        // when the slot was empty.
+        if (self.m_pEncContext.is_none() || !self.m_bInitialFlag)
             && eOptionId != EncoderOption::ENCODER_OPTION_TRACE_LEVEL
             && eOptionId != EncoderOption::ENCODER_OPTION_TRACE_CALLBACK
             && eOptionId != EncoderOption::ENCODER_OPTION_TRACE_CALLBACK_CONTEXT
@@ -2505,14 +2557,17 @@ uiResolutionChangeTimes={}, uIDRReqNum={}, uIDRSentNum={}, uLTRSentNum=NA, iTota
                     self.m_iCspInternal = iValue;
                 }
                 EncoderOption::ENCODER_OPTION_IDR_INTERVAL => {
+                    let Some(ctx) = self.m_pEncContext.as_deref_mut() else {
+                        return cmInitExpected;
+                    };
                     let mut iValue = *(pOption as *const i32);
                     if iValue <= -1 {
                         iValue = 0;
                     }
-                    if iValue == (*pCtx).param().uiIntraPeriod as i32 {
+                    if iValue == ctx.param().uiIntraPeriod as i32 {
                         return cmResultSuccess;
                     }
-                    (*pCtx).param_mut().uiIntraPeriod = iValue as u32;
+                    ctx.param_mut().uiIntraPeriod = iValue as u32;
                 }
                 EncoderOption::ENCODER_OPTION_SVC_ENCODE_PARAM_BASE => {
                     let sEncodingParam = *(pOption as *const SEncParamBase);
@@ -2535,12 +2590,16 @@ uiResolutionChangeTimes={}, uIDRReqNum={}, uIDRSentNum={}, uLTRSentNum=NA, iTota
                         return cmInitParaError;
                     }
                     // T8.B5: `WelsEncoderParamAdjust` may replace the context
-                    // (`encoder_ext.cpp`'s uninit/init pair), so the pointer derived
-                    // at the top of `SetOption` no longer names this encoder's
-                    // context. Re-derived from the slot the adjust just filled.
-                    pCtx = Self::ctx_ptr(&mut self.m_pEncContext);
+                    // (`encoder_ext.cpp`'s uninit/init pair), so any earlier handle no
+                    // longer names this encoder's context. **B3**: the re-derivation is
+                    // gone with the function-level raw — each arm resolves the slot
+                    // where it uses it, and the timestamp is copied out so the borrow
+                    // ends before the `&mut self` logging calls below.
+                    let ts = match self.m_pEncContext.as_deref() {
+                        Some(ctx) => ctx.iLastStatisticsLogTs,
+                        None => return cmInitExpected,
+                    };
                     // LogStatistics
-                    let ts = (*pCtx).iLastStatisticsLogTs;
                     self.LogStatistics(ts, 0);
                 }
                 EncoderOption::ENCODER_OPTION_SVC_ENCODE_PARAM_EXT => {
@@ -2583,10 +2642,15 @@ uiResolutionChangeTimes={}, uIDRReqNum={}, uIDRSentNum={}, uLTRSentNum=NA, iTota
                         return cmInitParaError;
                     }
                     // T8.B5: `WelsEncoderParamAdjust` may replace the context
-                    // (`encoder_ext.cpp`'s uninit/init pair), so the pointer derived
-                    // at the top of `SetOption` no longer names this encoder's
-                    // context. Re-derived from the slot the adjust just filled.
-                    pCtx = Self::ctx_ptr(&mut self.m_pEncContext);
+                    // (`encoder_ext.cpp`'s uninit/init pair), so any earlier handle no
+                    // longer names this encoder's context. **B3**: the re-derivation is
+                    // gone with the function-level raw — each arm resolves the slot
+                    // where it uses it, and the timestamp is copied out so the borrow
+                    // ends before the `&mut self` logging calls below.
+                    let ts = match self.m_pEncContext.as_deref() {
+                        Some(ctx) => ctx.iLastStatisticsLogTs,
+                        None => return cmInitExpected,
+                    };
                     // LogStatistics
                     //
                     // **T9.X2 — the announcement line was missing too (F186).**
@@ -2595,7 +2659,6 @@ uiResolutionChangeTimes={}, uIDRReqNum={}, uIDRSentNum={}, uLTRSentNum=NA, iTota
                     // unnoticed because until this session neither diffharness driver
                     // ever took this arm; the referee's 23rd argument is what made the
                     // arm reachable and the omission visible on the same run.
-                    let ts = (*pCtx).iLastStatisticsLogTs;
                     WelsLog(
                         self.log_ctx(),
                         WELS_LOG_INFO,
@@ -2604,15 +2667,21 @@ uiResolutionChangeTimes={}, uIDRReqNum={}, uIDRSentNum={}, uLTRSentNum=NA, iTota
                     self.LogStatistics(ts, sEncodingParam.iSpatialLayerNum - 1);
                 }
                 EncoderOption::ENCODER_OPTION_FRAME_RATE => {
+                    let Some(ctx) = self.m_pEncContext.as_deref_mut() else {
+                        return cmInitExpected;
+                    };
                     let iValue = *(pOption as *const f32);
                     if iValue <= 0.0 {
                         return cmInitParaError;
                     }
-                    (*pCtx).param_mut().fMaxFrameRate =
+                    ctx.param_mut().fMaxFrameRate =
                         WELS_CLIP3(iValue, MIN_FRAME_RATE, MAX_FRAME_RATE);
-                    WelsEncoderApplyFrameRate((*pCtx).param_mut());
+                    WelsEncoderApplyFrameRate(ctx.param_mut());
                 }
                 EncoderOption::ENCODER_OPTION_BITRATE => {
+                    let Some(ctx) = self.m_pEncContext.as_deref_mut() else {
+                        return cmInitExpected;
+                    };
                     let pInfo = &*(pOption as *const SBitrateInfo);
                     let mut iBitrate = pInfo.iBitrate;
                     if iBitrate <= 0 {
@@ -2621,23 +2690,26 @@ uiResolutionChangeTimes={}, uIDRReqNum={}, uIDRSentNum={}, uLTRSentNum=NA, iTota
                     iBitrate = WELS_CLIP3(iBitrate, MIN_BIT_RATE, MAX_BIT_RATE);
                     match pInfo.iLayer {
                         SPATIAL_LAYER_ALL => {
-                            (*pCtx).param_mut().iTargetBitrate = iBitrate;
+                            ctx.param_mut().iTargetBitrate = iBitrate;
                         }
                         SPATIAL_LAYER_0 | SPATIAL_LAYER_1 | SPATIAL_LAYER_2
                         | SPATIAL_LAYER_3 => {
-                            (*pCtx).param_mut().sSpatialLayers[pInfo.iLayer as usize]
+                            ctx.param_mut().sSpatialLayers[pInfo.iLayer as usize]
                                 .iSpatialBitrate = iBitrate;
                         }
                         _ => return cmInitParaError,
                     }
                     let log_ctx = std::ptr::addr_of_mut!(self.m_pWelsTrace.m_sLogCtx);
-                    if WelsEncoderApplyBitRate(log_ctx, (*pCtx).param_mut(), pInfo.iLayer as i32)
+                    if WelsEncoderApplyBitRate(log_ctx, ctx.param_mut(), pInfo.iLayer as i32)
                         != 0
                     {
                         return cmInitParaError;
                     }
                 }
                 EncoderOption::ENCODER_OPTION_MAX_BITRATE => {
+                    let Some(ctx) = self.m_pEncContext.as_deref_mut() else {
+                        return cmInitExpected;
+                    };
                     let pInfo = &*(pOption as *const SBitrateInfo);
                     let mut iBitrate = pInfo.iBitrate;
                     if iBitrate <= 0 {
@@ -2646,66 +2718,84 @@ uiResolutionChangeTimes={}, uIDRReqNum={}, uIDRSentNum={}, uLTRSentNum=NA, iTota
                     iBitrate = WELS_CLIP3(iBitrate, MIN_BIT_RATE, MAX_BIT_RATE);
                     match pInfo.iLayer {
                         SPATIAL_LAYER_ALL => {
-                            (*pCtx).param_mut().iMaxBitrate = iBitrate;
+                            ctx.param_mut().iMaxBitrate = iBitrate;
                         }
                         SPATIAL_LAYER_0 | SPATIAL_LAYER_1 | SPATIAL_LAYER_2
                         | SPATIAL_LAYER_3 => {
-                            (*pCtx).param_mut().sSpatialLayers[pInfo.iLayer as usize]
+                            ctx.param_mut().sSpatialLayers[pInfo.iLayer as usize]
                                 .iMaxSpatialBitrate = iBitrate;
                         }
                         _ => return cmInitParaError,
                     }
                     let log_ctx = std::ptr::addr_of_mut!(self.m_pWelsTrace.m_sLogCtx);
-                    if WelsEncoderApplyBitRate(log_ctx, (*pCtx).param_mut(), pInfo.iLayer as i32)
+                    if WelsEncoderApplyBitRate(log_ctx, ctx.param_mut(), pInfo.iLayer as i32)
                         != 0
                     {
                         return cmInitParaError;
                     }
                 }
                 EncoderOption::ENCODER_OPTION_RC_MODE => {
+                    let Some(ctx) = self.m_pEncContext.as_deref_mut() else {
+                        return cmInitExpected;
+                    };
                     // 0:quality mode;1:bit-rate mode;2:bitrate limited mode
                     let iValue = *(pOption as *const i32);
-                    (*pCtx).param_mut().iRCMode = rc_mode_from_raw(iValue);
+                    ctx.param_mut().iRCMode = rc_mode_from_raw(iValue);
                     // Re-point the dispatch table. Setting the field alone leaves
                     // the encoder running the previous mode's callbacks.
-                    let iRCMode = (*pCtx).param().iRCMode;
+                    let iRCMode = ctx.param().iRCMode;
                     // **A6: the second of the two derivations the flip could
                     // not take** — see `ctx_func_list_raw`. `pCtx` here is
                     // `Self::ctx_ptr`'s raw, so `func_list_mut` would mean a
                     // whole-context `&mut` retag through a raw root.
                     WelsRcInitFuncPointers(
-                        &mut (*ctx_func_list_raw(pCtx)).pfRc,
+                        &mut ctx.func_list_mut().pfRc,
                         iRCMode,
                     );
                 }
                 EncoderOption::ENCODER_OPTION_RC_FRAME_SKIP => {
+                    let Some(ctx) = self.m_pEncContext.as_deref_mut() else {
+                        return cmInitExpected;
+                    };
                     // 0:FRAME-SKIP disabled;1:FRAME-SKIP enabled
                     let bValue = *(pOption as *const bool);
-                    if (*pCtx).param().iRCMode != RC_OFF_MODE {
-                        (*pCtx).param_mut().bEnableFrameSkip = bValue;
+                    if ctx.param().iRCMode != RC_OFF_MODE {
+                        ctx.param_mut().bEnableFrameSkip = bValue;
                     }
                     // rc off: the setting is accepted and ignored, as in C++.
                 }
                 EncoderOption::ENCODER_PADDING_PADDING => {
+                    let Some(ctx) = self.m_pEncContext.as_deref_mut() else {
+                        return cmInitExpected;
+                    };
                     // 0:disable padding;1:padding
                     let iValue = *(pOption as *const i32);
-                    (*pCtx).param_mut().iPaddingFlag = iValue;
+                    ctx.param_mut().iPaddingFlag = iValue;
                 }
                 EncoderOption::ENCODER_LTR_RECOVERY_REQUEST => {
+                    let Some(ctx) = self.m_pEncContext.as_deref_mut() else {
+                        return cmInitExpected;
+                    };
                     let pLTR_Recover_Request = &mut *(pOption as *mut SLTRRecoverRequest);
                     // S67 blessed (H2): the second argument points into the **C caller's**
                     // memory, not the context.
-                    FilterLTRRecoveryRequest(&mut *pCtx, pLTR_Recover_Request);
+                    FilterLTRRecoveryRequest(ctx, pLTR_Recover_Request);
                 }
                 EncoderOption::ENCODER_LTR_MARKING_FEEDBACK => {
+                    let Some(ctx) = self.m_pEncContext.as_deref_mut() else {
+                        return cmInitExpected;
+                    };
                     let fb = &mut *(pOption as *mut SLTRMarkingFeedback);
                     // S67 blessed (H2): as the recovery-request arm above — `pOption` is the
                     // caller's.
-                    FilterLTRMarkingFeedback(&mut *pCtx, fb);
+                    FilterLTRMarkingFeedback(ctx, fb);
                 }
                 EncoderOption::ENCODER_LTR_MARKING_PERIOD => {
+                    let Some(ctx) = self.m_pEncContext.as_deref_mut() else {
+                        return cmInitExpected;
+                    };
                     let iValue = *(pOption as *const u32);
-                    (*pCtx).param_mut().iLtrMarkPeriod = iValue;
+                    ctx.param_mut().iLtrMarkPeriod = iValue;
                 }
                 EncoderOption::ENCODER_OPTION_LTR => {
                     let pLTRValue = pOption as *mut SLTRConfig;
@@ -2719,14 +2809,23 @@ uiResolutionChangeTimes={}, uIDRReqNum={}, uIDRSentNum={}, uLTRSentNum=NA, iTota
                     // re-derive. The stale pointer is unreachable, not tolerated.
                 }
                 EncoderOption::ENCODER_OPTION_ENABLE_SSEI => {
+                    let Some(ctx) = self.m_pEncContext.as_deref_mut() else {
+                        return cmInitExpected;
+                    };
                     let iValue = *(pOption as *const bool);
-                    (*pCtx).param_mut().bEnableSSEI = iValue;
+                    ctx.param_mut().bEnableSSEI = iValue;
                 }
                 EncoderOption::ENCODER_OPTION_ENABLE_PREFIX_NAL_ADDING => {
+                    let Some(ctx) = self.m_pEncContext.as_deref_mut() else {
+                        return cmInitExpected;
+                    };
                     let iValue = *(pOption as *const bool);
-                    (*pCtx).param_mut().bPrefixNalAddingCtrl = iValue;
+                    ctx.param_mut().bPrefixNalAddingCtrl = iValue;
                 }
                 EncoderOption::ENCODER_OPTION_SPS_PPS_ID_STRATEGY => {
+                    let Some(ctx) = self.m_pEncContext.as_deref_mut() else {
+                        return cmInitExpected;
+                    };
                     let iValue = *(pOption as *const i32);
                     let mut eNewStrategy = CONSTANT_ID;
                     match iValue {
@@ -2740,7 +2839,7 @@ uiResolutionChangeTimes={}, uIDRReqNum={}, uIDRSentNum={}, uLTRSentNum=NA, iTota
                         _ => {}
                     }
 
-                    let eOld = (*pCtx).param().eSpsPpsIdStrategy;
+                    let eOld = ctx.param().eSpsPpsIdStrategy;
                     if ((eNewStrategy as i32 & SPS_LISTING as i32) != 0
                         || (eOld as i32 & SPS_LISTING as i32) != 0)
                         && eOld != eNewStrategy
@@ -2750,7 +2849,7 @@ uiResolutionChangeTimes={}, uIDRReqNum={}, uIDRSentNum={}, uLTRSentNum=NA, iTota
                         return cmInitParaError;
                     }
                     let mut sConfig: SWelsSvcCodingParam =
-                        *(*pCtx).param();
+                        *ctx.param();
                     sConfig.eSpsPpsIdStrategy = eNewStrategy;
 
                     if WelsEncoderParamAdjust(&mut self.m_pEncContext, &mut sConfig) != 0 {
@@ -2774,6 +2873,9 @@ uiResolutionChangeTimes={}, uIDRReqNum={}, uIDRSentNum={}, uLTRSentNum=NA, iTota
                     // tracks, so the case compiles to an empty success.
                 }
                 EncoderOption::ENCODER_OPTION_PROFILE => {
+                    let Some(ctx) = self.m_pEncContext.as_deref_mut() else {
+                        return cmInitExpected;
+                    };
                     let pProfileInfo = &*(pOption as *const SProfileInfo);
                     if (pProfileInfo.iLayer as i32) < SPATIAL_LAYER_0 as i32
                         || (pProfileInfo.iLayer as i32) > SPATIAL_LAYER_3 as i32
@@ -2783,12 +2885,15 @@ uiResolutionChangeTimes={}, uIDRReqNum={}, uIDRSentNum={}, uLTRSentNum=NA, iTota
                     let log_ctx = std::ptr::addr_of_mut!(self.m_pWelsTrace.m_sLogCtx);
                     CheckProfileSetting(
                         log_ctx,
-                        (*pCtx).param_mut(),
+                        ctx.param_mut(),
                         pProfileInfo.iLayer as i32,
                         pProfileInfo.uiProfileIdc,
                     );
                 }
                 EncoderOption::ENCODER_OPTION_LEVEL => {
+                    let Some(ctx) = self.m_pEncContext.as_deref_mut() else {
+                        return cmInitExpected;
+                    };
                     let pLevelInfo = &*(pOption as *const SLevelInfo);
                     if (pLevelInfo.iLayer as i32) < SPATIAL_LAYER_0 as i32
                         || (pLevelInfo.iLayer as i32) > SPATIAL_LAYER_3 as i32
@@ -2798,23 +2903,32 @@ uiResolutionChangeTimes={}, uIDRReqNum={}, uIDRSentNum={}, uLTRSentNum=NA, iTota
                     let log_ctx = std::ptr::addr_of_mut!(self.m_pWelsTrace.m_sLogCtx);
                     CheckLevelSetting(
                         log_ctx,
-                        (*pCtx).param_mut(),
+                        ctx.param_mut(),
                         pLevelInfo.iLayer as i32,
                         pLevelInfo.uiLevelIdc,
                     );
                 }
                 EncoderOption::ENCODER_OPTION_NUMBER_REF => {
+                    let Some(ctx) = self.m_pEncContext.as_deref_mut() else {
+                        return cmInitExpected;
+                    };
                     let iValue = *(pOption as *const i32);
                     let log_ctx = std::ptr::addr_of_mut!(self.m_pWelsTrace.m_sLogCtx);
-                    CheckReferenceNumSetting(log_ctx, (*pCtx).param_mut(), iValue);
+                    CheckReferenceNumSetting(log_ctx, ctx.param_mut(), iValue);
                 }
                 EncoderOption::ENCODER_OPTION_DELIVERY_STATUS => {
+                    let Some(ctx) = self.m_pEncContext.as_deref_mut() else {
+                        return cmInitExpected;
+                    };
                     let pValue = &*(pOption as *const SDeliveryStatus);
-                    (*pCtx).bDeliveryFlag = pValue.bDeliveryFlag;
+                    ctx.bDeliveryFlag = pValue.bDeliveryFlag;
                 }
                 EncoderOption::ENCODER_OPTION_COMPLEXITY => {
+                    let Some(ctx) = self.m_pEncContext.as_deref_mut() else {
+                        return cmInitExpected;
+                    };
                     let iValue = *(pOption as *const i32);
-                    (*pCtx).param_mut().iComplexityMode = match iValue {
+                    ctx.param_mut().iComplexityMode = match iValue {
                         0 => EComplexityMode::LOW_COMPLEXITY,
                         1 => EComplexityMode::MEDIUM_COMPLEXITY,
                         _ => EComplexityMode::HIGH_COMPLEXITY,
@@ -2824,22 +2938,31 @@ uiResolutionChangeTimes={}, uIDRReqNum={}, uIDRSentNum={}, uLTRSentNum=NA, iTota
                     // "this option is get-only!" — C++ warns and returns success.
                 }
                 EncoderOption::ENCODER_OPTION_STATISTICS_LOG_INTERVAL => {
+                    let Some(ctx) = self.m_pEncContext.as_deref_mut() else {
+                        return cmInitExpected;
+                    };
                     let iValue = *(pOption as *const i32);
-                    (*pCtx).iStatisticsLogInterval = iValue;
+                    ctx.iStatisticsLogInterval = iValue;
                 }
                 EncoderOption::ENCODER_OPTION_IS_LOSSLESS_LINK => {
+                    let Some(ctx) = self.m_pEncContext.as_deref_mut() else {
+                        return cmInitExpected;
+                    };
                     let bValue = *(pOption as *const bool);
-                    (*pCtx).param_mut().bIsLosslessLink = bValue;
+                    ctx.param_mut().bIsLosslessLink = bValue;
                 }
                 EncoderOption::ENCODER_OPTION_BITS_VARY_PERCENTAGE => {
+                    let Some(ctx) = self.m_pEncContext.as_deref_mut() else {
+                        return cmInitExpected;
+                    };
                     let iValue = *(pOption as *const i32);
-                    (*pCtx).param_mut().iBitsVaryPercentage =
+                    ctx.param_mut().iBitsVaryPercentage =
                         WELS_CLIP3(iValue, 0, 100);
                     let log_ctx = std::ptr::addr_of_mut!(self.m_pWelsTrace.m_sLogCtx);
-                    let iRang = (*pCtx).param().iBitsVaryPercentage;
+                    let iRang = ctx.param().iBitsVaryPercentage;
                     WelsEncoderApplyBitVaryRang(
                         log_ctx,
-                        (*pCtx).param_mut(),
+                        ctx.param_mut(),
                         iRang,
                     );
                 }
@@ -2879,8 +3002,15 @@ uiResolutionChangeTimes={}, uIDRReqNum={}, uIDRSentNum={}, uLTRSentNum=NA, iTota
         if pOption.is_null() {
             return cmInitParaError;
         }
-        let pCtx = Self::ctx_ptr(&mut self.m_pEncContext);
-        if pCtx.is_null() || !self.m_bInitialFlag {
+        // **B3.** The context resolves as a shared reference off its own slot rather
+        // than through `ctx_ptr`'s raw: every use below is a read, so `&sWelsEncCtx`
+        // is the whole requirement, and the null guard becomes the `None` arm and
+        // answers the same `cmInitExpected`. `m_bInitialFlag` is a sibling field, so
+        // the borrow and the flag read coexist by construction.
+        let Some(pCtx) = self.m_pEncContext.as_deref() else {
+            return cmInitExpected;
+        };
+        if !self.m_bInitialFlag {
             return cmInitExpected;
         }
 
@@ -2895,25 +3025,25 @@ uiResolutionChangeTimes={}, uIDRReqNum={}, uIDRSentNum={}, uLTRSentNum=NA, iTota
                 }
                 EncoderOption::ENCODER_OPTION_IDR_INTERVAL => {
                     *(pOption as *mut i32) =
-                        (*pCtx).param().uiIntraPeriod as i32;
+                        pCtx.param().uiIntraPeriod as i32;
                 }
                 EncoderOption::ENCODER_OPTION_SVC_ENCODE_PARAM_EXT => {
-                    let param_ext = (*pCtx).param().to_param_ext();
+                    let param_ext = pCtx.param().to_param_ext();
                     *(pOption as *mut SEncParamExt) = param_ext;
                 }
                 EncoderOption::ENCODER_OPTION_SVC_ENCODE_PARAM_BASE => {
-                    (*pCtx).param()
+                    pCtx.param()
                         .GetBaseParams(&mut *(pOption as *mut SEncParamBase));
                 }
                 EncoderOption::ENCODER_OPTION_FRAME_RATE => {
-                    *(pOption as *mut f32) = (*pCtx).param().fMaxFrameRate;
+                    *(pOption as *mut f32) = pCtx.param().fMaxFrameRate;
                 }
                 EncoderOption::ENCODER_OPTION_BITRATE => {
                     let pInfo = &mut *(pOption as *mut SBitrateInfo);
                     if pInfo.iLayer == SPATIAL_LAYER_ALL {
-                        pInfo.iBitrate = (*pCtx).param().iTargetBitrate;
+                        pInfo.iBitrate = pCtx.param().iTargetBitrate;
                     } else if (pInfo.iLayer as i32) >= 0 && (pInfo.iLayer as i32) < MAX_DEPENDENCY_LAYER {
-                        pInfo.iBitrate = (*pCtx).param().sSpatialLayers
+                        pInfo.iBitrate = pCtx.param().sSpatialLayers
                             [pInfo.iLayer as usize]
                             .iSpatialBitrate;
                     } else {
@@ -2923,9 +3053,9 @@ uiResolutionChangeTimes={}, uIDRReqNum={}, uIDRSentNum={}, uLTRSentNum=NA, iTota
                 EncoderOption::ENCODER_OPTION_MAX_BITRATE => {
                     let pInfo = &mut *(pOption as *mut SBitrateInfo);
                     if pInfo.iLayer == SPATIAL_LAYER_ALL {
-                        pInfo.iBitrate = (*pCtx).param().iMaxBitrate;
+                        pInfo.iBitrate = pCtx.param().iMaxBitrate;
                     } else if (pInfo.iLayer as i32) >= 0 && (pInfo.iLayer as i32) < MAX_DEPENDENCY_LAYER {
-                        pInfo.iBitrate = (*pCtx).param().sSpatialLayers
+                        pInfo.iBitrate = pCtx.param().sSpatialLayers
                             [pInfo.iLayer as usize]
                             .iMaxSpatialBitrate;
                     } else {
@@ -2935,8 +3065,8 @@ uiResolutionChangeTimes={}, uIDRReqNum={}, uIDRSentNum={}, uLTRSentNum=NA, iTota
                 EncoderOption::ENCODER_OPTION_GET_STATISTICS => {
                     let pStatistics = &mut *(pOption as *mut crate::SEncoderStatistics);
                     let iLayerIdx =
-                        ((*pCtx).param().iSpatialLayerNum - 1) as usize;
-                    let pEncStats = &(*pCtx).sEncoderStatistics[iLayerIdx];
+                        (pCtx.param().iSpatialLayerNum - 1) as usize;
+                    let pEncStats = &pCtx.sEncoderStatistics[iLayerIdx];
 
                     pStatistics.uiWidth = pEncStats.uiWidth;
                     pStatistics.uiHeight = pEncStats.uiHeight;
@@ -2957,11 +3087,11 @@ uiResolutionChangeTimes={}, uIDRReqNum={}, uIDRSentNum={}, uLTRSentNum=NA, iTota
                     pStatistics.uiLTRSentNum = pEncStats.uiLTRSentNum;
                 }
                 EncoderOption::ENCODER_OPTION_STATISTICS_LOG_INTERVAL => {
-                    *(pOption as *mut i32) = (*pCtx).iStatisticsLogInterval;
+                    *(pOption as *mut i32) = pCtx.iStatisticsLogInterval;
                 }
                 EncoderOption::ENCODER_OPTION_COMPLEXITY => {
                     *(pOption as *mut i32) =
-                        (*pCtx).param().iComplexityMode as i32;
+                        pCtx.param().iComplexityMode as i32;
                 }
                 // NOTE: C++'s GetOption has **no** ENCODER_OPTION_TRACE_LEVEL case —
                 // it is set-only, and a get falls to `default: return cmInitParaError`.
