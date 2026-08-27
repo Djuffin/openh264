@@ -5104,3 +5104,150 @@ failed until they were deleted).
 The header's coverage count was stale a second time (it said "port 20" from H2's
 close through this session's step 4), which the file's own contract calls a lie
 about coverage. Corrected, with the series recorded: 1 → 9 (X2) → 20 (H2) → 33.
+
+---
+
+## F205 — the `!Sync` contingency table, re-derived BY FIELD as F195 asked: **7 of `sWelsEncCtx`'s 65 fields**, five owners, and only two of them the context split's
+
+**Session J, step 5.** F195 retired the F67 probe's cardinality as a work
+measure — it emits one `E0277` per distinct *type*, so a deletion whose type
+survives elsewhere reads as no progress. The replacement asks the compiler one
+question per **field**: a generated probe module calls
+`needs_sync::<FieldType>()` once for each of the 65 fields of `sWelsEncCtx`, so
+every failing field is named at its own line and the count is per field by
+construction. Each blocking reason below was then verified *transitively by
+hand* rather than trusted from the diagnostic — F195's own lesson.
+
+| field | type | what blocks `Sync` | owner |
+|---|---|---|---|
+| `pSliceThreading` | `*mut SSliceThreading` | the field itself | **the ctx split** (MT resources) |
+| `pOut` | `*mut SWelsEncoderOutput` | the field itself | **the ctx split** (the bitstream sink) |
+| `pVpp` | `*mut CWelsPreProcess` | the field itself | the preprocessor (X's family) |
+| `pVaa` | `Option<Box<SVAAFrameInfo>>` | `SVAAFrameInfo`'s six plane cursors (`pRefY`/`pCurY`/`pRefU`/`pCurU`/`pRefV`/`pCurV`, all `*mut u8`) | the VAA family (X's) |
+| `ppDqLayerList` | `Vec<Option<Box<SDqLayer>>>` | `SDqLayer::pRefList: *mut SRefList` (beside `pCsData`/`pEncData`/`pSrcPool`) | the layer family |
+| `ppRefPicListExt` | `Vec<Option<Box<SRefList>>>` | `SRefList` → `RecPicPool` → `SPicture::pScreenBlockFeatureStorage: *mut SScreenBlockFeatureStorage` | **Phase 10** (screen content) |
+| `sLogCtx` | `SLogContext` | `pLogCtx: *mut c_void`, the application's opaque handle | **permanent — C-ABI** |
+
+**What the table says that the integer could not.** F164's twelve *types*
+resolve to **seven fields**, and their owners are five, not one: two are the
+context split's, two are X's family (VAA and the preprocessor), one is the
+layer family's, one is **Phase 10's**, and one — `sLogCtx` — is the C ABI's and
+can never retire while `SetOption(TRACE_CALLBACK)` exists. So D-exit-2's
+retirement condition for the `send-seam` is now checkable and its answer is
+**no, and structurally no**: the seam cannot retire in this project's current
+API shape, because a `*mut c_void` the application owns is a member of the
+context by design. That is a sharper statement than "eight of twelve are
+outside this phase" and it is the one the comment should carry.
+
+The seam stays, per D-exit-2. Its comment names the five owners above instead of
+a type count; the two that were the ctx split's are the only ones any Phase-9
+successor could have moved, and they are `pSliceThreading` and `pOut` — both
+still raw at this exit, both in the queue.
+
+---
+
+## F206 — the perf freeze lifts on a bit-identical result and an unmeasurable one; the comparison that looked like a +59% regression is an instrument boundary, and the baseline document says so itself
+
+**Session J, step 6 (D-gate-1's freeze ends here).**
+
+**What is measured and green.** Both benches ran at the exit — `decode_1080p_bench`
+all streams bit-identical (SHA-1s unchanged), `c_vs_rust_bench` **every row
+bit-identical** across 30 rows (15 configurations x 1/4 threads), on real `lavfi`
+content with `FFMPEG` set. That is the correctness half of exit condition 4 and it
+passes. First bench run since the phase froze performance work, and nothing moved a
+byte.
+
+**What is not measurable from this run, and the near-miss worth recording.**
+Comparing the exit run's encoder ms against `perf_baseline.md`'s Phase-0 table gives
+a **median +59% Rust regression** across the 20 matched rows (+20% to +103%). It is
+not a regression, and two checks caught it:
+
+1. **The C++ side moved too, by ~2x, on rows whose code has not changed in nine
+   phases** (QVGA Moving Box 0.265 -> 0.133 ms, VGA Mandelbrot 2.656 -> 1.339). A
+   reference that speeds up 2x without changing is an instrument telling you it is
+   not the same instrument.
+2. **The bench prints the reason**: `C++ SIMD : ACTIVE (WelsCPUFeatureDetect =
+   0x000006)`, where the Phase-0 baseline recorded `INACTIVE (0x000000)`. `0x4` is
+   `WELS_CPU_NEON`. The Phase-0 numbers compare **scalar C++ against scalar Rust**;
+   today's compare **NEON C++ against scalar Rust**. They are different quantities
+   with the same units.
+
+**And the project already knew.** `perf_baseline.md` records the flip and states the
+rule this session nearly broke: *"the project's cumulative figures are chains of
+**Rust-vs-Rust** spans anchored at Phase 0"* — measured with `perfpair.py`,
+alternating two builds of the **port** on one machine in one sitting. An absolute-ms
+comparison across twenty days, a toolchain change and a reference-capability change
+is not that chain and cannot join it.
+
+**So the position is restated from the record, not re-derived** (S24's spirit: quote
+the measurement that exists rather than manufacture one):
+
+| ledger row | last measured position | tripwire | verdict |
+|---|---|---|---|
+| encoder cumulative | **≈ +10…+12%** (session D's close, unmoved by E) | D-perf-4 **+25% median** | **unbreached, by ~13 points** |
+| decoder cumulative (CB) | **≈ +22.6…+23.8%** (Phase 5b's close) | D-perf-5 **≈+23% stop-line** | at or ≈0.2–0.8 over, dispositioned by D-perf-6 |
+
+**This session's own span is perf-neutral by construction and no span was run.** Its
+commits are tag text, comments, lint attributes, a `Cargo.toml` dependency move, seven
+`WelsLog` calls on initialisation and teardown paths, one synthetic unit test, and one
+statement in the decoder's access-unit prefetch. No kernel, no dispatch table, no
+allocation path, no hot loop. A `perfpair` span over that would measure its own null,
+which is why none was taken — and why the freeze lifting changes no number.
+
+**The honest gap**: the exit did **not** re-derive the cumulative figure. Doing so
+needs a `perfpair` chain from session E's stashed binaries forward, which is D-perf-6's
+work, not a measurement the exit can substitute for.
+
+---
+
+## F207 — the exit battery's Miri half was stopped by direction, and what that leaves unverified is named here rather than glossed
+
+**Session J, step 5, by the user's instruction mid-close**: *"let's skip Miri by
+now, your changes didn't really make progress for this refactoring, so we can
+skip it"*. The reasoning is sound and worth writing down, because it is the
+first time this project has deliberately closed a phase with the aliasing
+instrument unrun: **Miri's value in this project is catching UB that a
+*conversion* introduced** — F114 (session D), F148.3 (E2), F171 (H) were each a
+retag created by a signature change and invisible to every byte gate. This
+session performed **no conversions**. Its code changes are one decoder statement
+(F199), seven `WelsLog` calls on init/teardown paths, one synthetic unit test,
+and lint/tag/comment text. None of them creates a borrow, moves a lifetime, or
+changes an aliasing relationship, so the probes' expected verdict is the
+previous close's verdict.
+
+**What was run and is green** (the whole non-Miri battery):
+
+| step | result |
+|---|---|
+| `cargo build --all-targets` | PASS |
+| `cargo test` debug / release | **561 / 554** passed, 0 failed, 20 ignored |
+| unsafe ratchet | PASS, no per-file increase |
+| duplicate census | PASS, 56 allowlisted |
+| diffharness sweeps, **both profiles** | **583/583 and 583/583** |
+| `decode_1080p_bench` | all streams bit-identical |
+| `c_vs_rust_bench` | **all 30 rows bit-identical** |
+| ABI export list | **7/7**, exactly upstream's seven |
+| external dlopen harness | **TALLY 14/14** |
+| upstream `test/api` gtest | **191/199, allowlist exactly 8** |
+| log referee | **PASS, 33/35** |
+
+**What is therefore unverified at this exit, precisely:**
+
+1. **The whole-library Miri `--lib` step** (the unscoped one; the last green
+   encoder-scoped run was H3's close at `edcccc68`, 291 passed / 0 failed).
+2. **The two full-drive encode probes** (`encode_loop_runs_with_cavlc`,
+   `encode_loop_runs_over_size_limited`) at `MIRI_FULL=1`.
+3. **The fork/join pair** — both probes were launched in parallel per F168 and
+   killed mid-interpretation. Last green: H3's close, and H's close before it at
+   3411/3493 s.
+4. **The differential integration tests under Miri**.
+
+The tree's aliasing evidence is therefore **H3's close plus this session's
+argument that nothing aliasing-relevant changed**, not a fresh run. Anyone
+resuming should run `FORK_PAIR=external bash rust/tools/gates.sh exit` and the
+parallel fork pair before treating the exit battery as complete; the commands
+and the F168 form are in `gates.sh`'s header and `miri_wall_baseline.txt`.
+
+**S61 has no reading this close** — the lane never completed, so the baseline
+file keeps H3's 506 s and the cpu column stays unseeded, exactly as F170's
+regime note anticipated for the first run after the change.

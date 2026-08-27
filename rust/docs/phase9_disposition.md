@@ -419,3 +419,36 @@ ratchet keeps every number from growing; the census regenerates the queue.
 | processing/complexity_analysis.rs | 206 | port-raw(Phase 9) | AnalyzeGomComplexityViaSad | st-surface |  |
 | processing/complexity_analysis.rs | 281 | port-raw(Phase 9) | AnalyzeGomComplexityViaVar | freebie | no raw in signature or body, no tagged callees |
 | processing/vaacalc.rs | 459 | port-raw(Phase 9) | Process | accessor-downstream | calls fork-kept default |
+
+## 6. Exit-condition evidence gathered at the close (session J, step 5)
+
+### 6.1 The per-slot READ census — exit condition 3, and it is clean
+
+F139 asked for a **read** grep per dispatch-table slot, because a slot that is
+installed and asserted-installed but never *called* is an S18 deletion candidate
+(session F deleted that class; C2 found it). Re-run over every live table at this
+exit, counting writes / reads / asserts per slot across `src/`, `tests/` and
+`benches/`:
+
+| table | slots | slots with zero reads |
+|---|---:|---:|
+| `SWelsFuncPtrList` | 48 | **0** |
+| `SSampleDealingFunc` | 5 | **0** |
+| `SMeFuncs` | 6 | **0** |
+| `SDeblockingFunc` (the decoder's) | 12 | **0** |
+| `SWelsRcFunc` | — | — (no slots left: session F de-virtualized it to a single `eInstalledMode: RCMode` tag) |
+| **total** | **71** | **0** |
+
+C2's three write-only families (`pfIDct*`, 8 of 10 encoder deblocking slots,
+`pGomCost`) are gone — F's S18 deletions and D-dead-3 took them — and **none
+regressed**. Exit condition 3 is met with this table as its evidence.
+
+### 6.2 The `!Sync` inventory, by field — F195's replacement for the type count
+
+Seven of `sWelsEncCtx`'s 65 fields block `Sync`, with five distinct owners; the
+table and each transitively-verified reason are **F205** in
+`phase9_findings.md`. The headline for this document: **one of the seven is the
+C ABI's** (`sLogCtx`'s `pLogCtx: *mut c_void`, the application's own opaque
+handle from `SetOption(TRACE_CALLBACK)`), so the `send-seam` cannot retire by
+internal conversion at all. It stays per D-exit-2, and its comment now names the
+five owners instead of a type count that could not measure field work.
