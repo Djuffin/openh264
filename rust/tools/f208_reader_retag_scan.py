@@ -8,7 +8,14 @@ import re, glob, sys
 
 READERS = ["rc", "rc_at", "mvd_cost_table", "mvd_cost_origin", "frame_bs",
            "frame_bs_cur", "ref_list", "sps_array", "subset_array", "pps_array",
-           "paraset_arrays", "ref_list_and_ltr_mut"]
+           "paraset_arrays", "ref_list_and_ltr_mut",
+           # A5 (`ctx_vaa`): the three `&self` shapes the video-analysis block
+           # answers with — the reference, the raw root the fn-pointer alias still
+           # needs, and the dormant screen-content downcast.
+           "vaa", "vaa_ptr", "vaa_ext",
+           # …and A5's two combined `&mut self` accessors, which retag the whole
+           # context the same way the readers do.
+           "vaa_ref_list_and_ltr_mut", "vaa_and_rc_at_mut"]
 rd = re.compile(r"\.(%s)\s*\(" % "|".join(READERS))
 # a Unique retag into the context through a raw
 uq = re.compile(r"&mut\s*\(\*(p\w*Ctx\w*)\)\.|addr_of_mut!\(\(\*(p\w*Ctx\w*)\)\.")

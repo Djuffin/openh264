@@ -50,7 +50,7 @@
 //! | 61 | `pEncCtx`/`pCtx` parameters, raw `sWelsEncCtx` | **session I** — the context is the largest arena in the tree, and the S37 inventory decides `&mut` for all of it at once, not file by file |
 //! | 16 | `SWelsSvcRc`'s own five member pointers and the reaches through them | **spent at T6.H6** — the five are owned containers, reached through `rc_gom_fg_blocks` and its siblings (all four roots retired by A1) |
 //! |  7 | `pSlice` parameters, raw `SSlice` | **session I** — five sit behind `pfWelsRcMbInit`/`pfWelsRcMbInfoUpdate`, which is 4b's fence, and the two that do not are covered by the blocker below |
-//! |  6 | `ctx_vaa(pEncCtx)` cast to a raw `SVAAFrameInfoExt` | **Phase 10** — the `SCREEN_CONTENT(dormant)` family, fenced |
+//! |  6 | `sWelsEncCtx::vaa_ext` — the video-analysis block downcast | **Phase 10** — the `SCREEN_CONTENT(dormant)` family, fenced |
 //! |  3 | `RcInitLayerMemory`'s carve-up of one `CMemoryAlign` block | **spent at T6.H6** — the carve-up is gone; this file no longer names `CMemoryAlign` at all |
 //!
 //! **The one that looks convertible and is not.** `GomRCInitForOneSlice` takes a raw
@@ -100,7 +100,7 @@ pub use crate::encoder::svc_encode_slice::SSlice;
 pub use crate::encoder::svc_encode_slice::SDqLayer;
 pub use crate::encoder::wels_func_ptr_def::SWelsFuncPtrList;
 pub use crate::encoder::encoder_context::sWelsEncCtx;
-use crate::encoder::encoder_context::{ctx_param, ctx_vaa, ctx_func_list};
+use crate::encoder::encoder_context::{ctx_param, ctx_func_list};
 
 // ============================================================================
 // Constants and Macros
@@ -1253,10 +1253,10 @@ pub unsafe fn RcCalculateIdrQp(pEncCtx: &mut sWelsEncCtx) {
     ];
     let iQpRangeArray: [[i32; 2]; 5] = [[40, 28], [37, 25], [36, 24], [35, 23], [34, 22]];
 
-    let mut iFrameComplexity = (*ctx_vaa(pEncCtx)).sComplexityAnalysisParam.iFrameComplexity;
+    let mut iFrameComplexity = pEncCtx.vaa().expect("the frame's video-analysis block").sComplexityAnalysisParam.iFrameComplexity;
     let fix_rc_overshoot = (*ctx_param(pEncCtx)).bFixRCOverShoot;
     if (*ctx_param(pEncCtx)).iUsageType == EUsageType::SCREEN_CONTENT_REAL_TIME {
-        let pVaa = ctx_vaa(pEncCtx) as *mut SVAAFrameInfoExt;
+        let pVaa = pEncCtx.vaa_ext();
         iFrameComplexity = (*pVaa).sComplexityScreenParam.iFrameComplexity;
     }
 
@@ -1352,16 +1352,16 @@ pub unsafe fn RcCalculatePictureQp(pEncCtx: &mut sWelsEncCtx) {
 
     let mut iLumaQp: i32;
     let mut iDeltaQpTemporal: i32 = 0;
-    let mut iFrameComplexity = (*ctx_vaa(pEncCtx)).sComplexityAnalysisParam.iFrameComplexity;
+    let mut iFrameComplexity = pEncCtx.vaa().expect("the frame's video-analysis block").sComplexityAnalysisParam.iFrameComplexity;
     if (*ctx_param(pEncCtx)).iUsageType == EUsageType::SCREEN_CONTENT_REAL_TIME {
-        let pVaa = ctx_vaa(pEncCtx) as *mut SVAAFrameInfoExt;
+        let pVaa = pEncCtx.vaa_ext();
         iFrameComplexity = (*pVaa).sComplexityScreenParam.iFrameComplexity;
     }
     // §4.6, reorder: the adaptive-quant pair is read here rather than inside the
     // branch below. `pVaa` is already dereferenced unconditionally two lines up,
     // so the read is no more conditional than the one that precedes it.
     let bEnableAdaptiveQuant = (*ctx_param(pEncCtx)).bEnableAdaptiveQuant;
-    let iAverMotionTextureIndexToDeltaQp = (*ctx_vaa(pEncCtx))
+    let iAverMotionTextureIndexToDeltaQp = pEncCtx.vaa().expect("the frame's video-analysis block")
         .sAdaptiveQuantParam
         .iAverMotionTextureIndexToDeltaQp;
 
@@ -1651,12 +1651,12 @@ pub unsafe fn RcCalculateMbQp(
     let kuiChromaQpIndexOffset = (*layer_pps(pEncCtx, pCurLayer)).uiChromaQpIndexOffset;
 
     if (*ctx_param(pEncCtx)).bEnableAdaptiveQuant {
-        let pVaa = ctx_vaa(pEncCtx);
+        let pVaa = (*pEncCtx).vaa().expect("the frame's video-analysis block");
         // **T9.X**: the buffer is `SVAAFrameInfo`'s own `Vec<i8>` now (it was a
         // permanently-null `*mut`-i8 on the parameter block — F177). Both of these
         // bodies are in-fork (S63) and both only *read* it, which a shared slice
         // expresses exactly.
-        let delta_qp: &[i8] = &(*pVaa).pMotionTextureIndexToDeltaQp;
+        let delta_qp: &[i8] = &pVaa.pMotionTextureIndexToDeltaQp;
         let mb_xy = (*pCurMb).iMbXY as usize;
         let delta = delta_qp[mb_xy] as i32;
         iLumaQp = WELS_CLIP3(
@@ -2202,9 +2202,9 @@ pub unsafe fn RcUpdatePictureQpBits(pEncCtx: &mut sWelsEncCtx, iCodedBits: i32) 
 pub unsafe fn RcUpdateIntraComplexity(pEncCtx: &mut sWelsEncCtx) {
     let did = pEncCtx.uiDependencyId as usize;
     // §4.6, reorder: the analysis reads go above the writer's `&mut`.
-    let mut iFrameComplexity = (*ctx_vaa(pEncCtx)).sComplexityAnalysisParam.iFrameComplexity;
+    let mut iFrameComplexity = pEncCtx.vaa().expect("the frame's video-analysis block").sComplexityAnalysisParam.iFrameComplexity;
     if (*ctx_param(pEncCtx)).iUsageType == EUsageType::SCREEN_CONTENT_REAL_TIME {
-        let pVaa = ctx_vaa(pEncCtx) as *mut SVAAFrameInfoExt;
+        let pVaa = pEncCtx.vaa_ext();
         iFrameComplexity = (*pVaa).sComplexityScreenParam.iFrameComplexity;
     }
     let pWelsSvcRc = pEncCtx.rc_at_mut(did);
@@ -2245,9 +2245,9 @@ pub unsafe fn RcUpdateFrameComplexity(pEncCtx: &mut sWelsEncCtx) {
     // `iPFrameNum`), so it takes the writer, and the two scalars it needs from the
     // enclosing struct are copied out first — T9.X's hoisted `pTOverRc` and the
     // struct's own fields cannot both be live once they are references.
-    let mut iFrameComplexity = (*ctx_vaa(pEncCtx)).sComplexityAnalysisParam.iFrameComplexity;
+    let mut iFrameComplexity = pEncCtx.vaa().expect("the frame's video-analysis block").sComplexityAnalysisParam.iFrameComplexity;
     if (*ctx_param(pEncCtx)).iUsageType == EUsageType::SCREEN_CONTENT_REAL_TIME {
-        let pVaa = ctx_vaa(pEncCtx) as *mut SVAAFrameInfoExt;
+        let pVaa = pEncCtx.vaa_ext();
         iFrameComplexity = (*pVaa).sComplexityScreenParam.iFrameComplexity;
     }
 
@@ -2536,7 +2536,7 @@ pub unsafe extern "C" fn WelsRcPictureInitDisable(pEncCtx: &mut sWelsEncCtx, _ui
     pEncCtx.iGlobalQp = RcCalculateCascadingQp(pEncCtx, kiQp);
 
     if (*ctx_param(pEncCtx)).bEnableAdaptiveQuant && pEncCtx.eSliceType as i32 == P_SLICE {
-        let delta_offset = (*ctx_vaa(pEncCtx))
+        let delta_offset = pEncCtx.vaa().expect("the frame's video-analysis block")
             .sAdaptiveQuantParam
             .iAverMotionTextureIndexToDeltaQp;
         pEncCtx.iGlobalQp = WELS_CLIP3(
@@ -2570,12 +2570,12 @@ pub unsafe extern "C" fn WelsRcMbInitDisable(
     let kuiChromaQpIndexOffset = (*layer_pps(pEncCtx, pCurLayer)).uiChromaQpIndexOffset;
 
     if (*ctx_param(pEncCtx)).bEnableAdaptiveQuant && (*pEncCtx).eSliceType as i32 == P_SLICE {
-        let pVaa = ctx_vaa(pEncCtx);
+        let pVaa = (*pEncCtx).vaa().expect("the frame's video-analysis block");
         // **T9.X**: the buffer is `SVAAFrameInfo`'s own `Vec<i8>` now (it was a
         // permanently-null `*mut`-i8 on the parameter block — F177). Both of these
         // bodies are in-fork (S63) and both only *read* it, which a shared slice
         // expresses exactly.
-        let delta_qp: &[i8] = &(*pVaa).pMotionTextureIndexToDeltaQp;
+        let delta_qp: &[i8] = &pVaa.pMotionTextureIndexToDeltaQp;
         let mb_xy = (*pCurMb).iMbXY as usize;
         let delta = delta_qp[mb_xy] as i32;
         iLumaQp = WELS_CLIP3(
@@ -2608,15 +2608,20 @@ pub unsafe extern "C" fn WelRcPictureInitBufferBasedQp(
     pEncCtx: &mut sWelsEncCtx,
     _uiTimeStamp: i64,
 ) {
-    let pVaa = ctx_vaa(pEncCtx);
+    // §4.6, reorder: the scene-change idc is `Copy`, so it is read out here rather
+    // than held as a borrow of the context across the `iGlobalQp` writes below.
+    let eSceneChangeIdc = pEncCtx
+        .vaa()
+        .expect("the frame's video-analysis block")
+        .eSceneChangeIdc;
     let did = pEncCtx.uiDependencyId as usize;
     // §4.6, reorder: the context reads go above the writer's `&mut`.
     let rcMaxQp = pEncCtx.rc_at(did).iMaxQp;
 
     let mut iMinQp = (*ctx_param(pEncCtx)).iMinQp;
-    if (*pVaa).eSceneChangeIdc as i32 == LARGE_CHANGED_SCENE {
+    if eSceneChangeIdc as i32 == LARGE_CHANGED_SCENE {
         iMinQp += 2;
-    } else if (*pVaa).eSceneChangeIdc as i32 == MEDIUM_CHANGED_SCENE {
+    } else if eSceneChangeIdc as i32 == MEDIUM_CHANGED_SCENE {
         iMinQp += 1;
     }
 
@@ -2638,7 +2643,7 @@ pub unsafe extern "C" fn WelRcPictureInitBufferBasedQp(
 pub unsafe extern "C" fn WelRcPictureInitScc(pEncCtx: &mut sWelsEncCtx, uiTimeStamp: i64) {
     let did = pEncCtx.uiDependencyId as usize;
     let eSliceType = pEncCtx.eSliceType;
-    let pVaa = ctx_vaa(pEncCtx) as *mut SVAAFrameInfoExt;
+    let pVaa = pEncCtx.vaa_ext();
     let pDLayerConfig = &(*ctx_param(pEncCtx)).sSpatialLayers[did];
     let pDLayerParamInternal = &(*ctx_param(pEncCtx)).sDependencyLayers[did];
 
@@ -2700,7 +2705,7 @@ pub unsafe extern "C" fn WelRcPictureInitScc(pEncCtx: &mut sWelsEncCtx, uiTimeSt
         }
 
         if iDeltaQp > 5 {
-            let scene_change = (*ctx_vaa(pEncCtx)).eSceneChangeIdc;
+            let scene_change = pEncCtx.vaa().expect("the frame's video-analysis block").eSceneChangeIdc;
             if scene_change as i32 == LARGE_CHANGED_SCENE
                 || rcBufferFullnessSkip > 2 * iBitRate as i64
                 || iDeltaQp > 10
@@ -2735,7 +2740,7 @@ pub unsafe extern "C" fn WelsRcPictureInfoUpdateScc(pEncCtx: &mut sWelsEncCtx, i
     let did = pEncCtx.uiDependencyId as usize;
     let iFrameBits = iNalSize << 3;
     // §4.6, reorder: the context reads go above the writer's `&mut`.
-    let pVaa = ctx_vaa(pEncCtx) as *mut SVAAFrameInfoExt;
+    let pVaa = pEncCtx.vaa_ext();
     let iQstep = RcConvertQp2QStep(pEncCtx.iGlobalQp);
     let eSliceType = pEncCtx.eSliceType;
     let pWelsSvcRc = pEncCtx.rc_at_mut(did);

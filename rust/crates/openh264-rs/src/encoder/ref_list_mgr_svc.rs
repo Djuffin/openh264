@@ -26,7 +26,7 @@ pub const STR_ROOM: i32 = 1;
 // `encoder_context.rs` from `wels_const.h`. This module previously had its own copies
 // with MAX_SHORT_REF_COUNT = 16 (C++: 4) and MAX_TEMPORAL_LEVEL = 8 (C++: 4).
 pub use crate::encoder::encoder_context::{MAX_GOP_SIZE, MAX_SHORT_REF_COUNT, MAX_TEMPORAL_LEVEL};
-use crate::encoder::encoder_context::{ctx_ltr_at, ctx_param, ctx_vaa};
+use crate::encoder::encoder_context::{ctx_ltr_at, ctx_param};
 pub const MAX_REF_PIC_COUNT: usize = 16;
 pub const LONG_TERM_REF_NUM: i32 = 2;
 pub const MAX_TEMPORAL_LAYER_NUM: usize = 4;
@@ -477,8 +477,9 @@ pub unsafe fn HandleLTRMarkFeedback(pCtx: &mut sWelsEncCtx) {
     // T9.H3: raw roots first, the reference-shaped borrows last — see
     // `DeleteInvalidLTR`, and A3's combined accessor for why they are one call.
     let pParamInternal = std::ptr::addr_of_mut!((*ctx_param(pCtx)).sDependencyLayers[uiDid]);
-    let pVaa = ctx_vaa(pCtx);
-    let (pRefList, pLtr) = pCtx.ref_list_and_ltr_mut(uiDid);
+    // §4.6, combined accessor: the VAA stamp below sits inside the reference-list
+    // loop, so both come from one borrow.
+    let (mut pVaa, pRefList, pLtr) = pCtx.vaa_ref_list_and_ltr_mut(uiDid);
     let Some(pRefList) = pRefList else {
         return;
     };
@@ -493,8 +494,8 @@ pub unsafe fn HandleLTRMarkFeedback(pCtx: &mut sWelsEncCtx) {
                 && pPic.uiRecieveConfirmed != RECIEVE_SUCCESS
             {
                 (*pRefList).pic_mut(idPic).uiRecieveConfirmed = RECIEVE_SUCCESS;
-                if !pVaa.is_null() {
-                    (*pVaa).uiValidLongTermPicIdx =
+                if let Some(pVaa) = pVaa.as_mut() {
+                    pVaa.uiValidLongTermPicIdx =
                         (*pRefList).pic(idPic).iLongTermPicNum as u8;
                 }
                 pLtr.iCurFrameNumInDec = pLtr.iLtrMarkFbFrameNum;
@@ -571,12 +572,13 @@ pub unsafe fn LTRMarkProcess(pCtx: &mut sWelsEncCtx) {
     let mut i = 0usize;
     let mut bMoveLtrFromShortToLong = false;
     let pParamInternal = std::ptr::addr_of_mut!((*ctx_param(pCtx)).sDependencyLayers[uiDid]);
-    let pVaa = ctx_vaa(pCtx);
     let keSliceType = pCtx.eSliceType;
     let iLTRRefNum = (*ctx_param(pCtx)).iLTRRefNum;
     let uiTemporalId = pCtx.uiTemporalId as usize;
     let bRefOfCurTidIsLtr = std::ptr::addr_of_mut!(pCtx.bRefOfCurTidIsLtr);
-    let (pRefList, pLtr) = pCtx.ref_list_and_ltr_mut(uiDid);
+    // §4.6, combined accessor: `LTRMarkProcess` stamps the VAA from inside the
+    // reference-list walk, so both come from one borrow.
+    let (mut pVaa, pRefList, pLtr) = pCtx.vaa_ref_list_and_ltr_mut(uiDid);
     let Some(pRefList) = pRefList else {
         return;
     };
@@ -587,8 +589,8 @@ pub unsafe fn LTRMarkProcess(pCtx: &mut sWelsEncCtx) {
             (*pRefList).pic_mut(id).uiRecieveConfirmed = RECIEVE_SUCCESS;
         }
     } else if pLtr.bLTRMarkingFlag {
-        if !pVaa.is_null() {
-            (*pVaa).uiMarkLongTermPicIdx = pLtr.iCurLtrIdx as u8;
+        if let Some(pVaa) = pVaa.as_mut() {
+            pVaa.uiMarkLongTermPicIdx = pLtr.iCurLtrIdx as u8;
         }
 
         if pLtr.iLTRMarkMode == LTR_MARKING_PROCESS_MODE::LTR_DELAY_MARK as i32 {
@@ -682,8 +684,8 @@ pub unsafe fn LTRMarkProcessScreen(pCtx: &mut sWelsEncCtx) {
     let Some(iLtrIdx) = pCtx.ref_list(uiDid).map(|l| l.pic(idDec).iLongTermPicNum) else {
         return;
     };
-    if !ctx_vaa(pCtx).is_null() {
-        (*ctx_vaa(pCtx)).uiMarkLongTermPicIdx = iLtrIdx as u8;
+    if pCtx.vaa().is_some() {
+        pCtx.vaa_mut().expect("the frame's video-analysis block").uiMarkLongTermPicIdx = iLtrIdx as u8;
     }
 
     let Some(pRefList) = pCtx.ref_list_mut(uiDid) else {
@@ -889,9 +891,9 @@ pub unsafe fn WelsUpdateRefList(pCtx: &mut sWelsEncCtx) -> bool {
             pLtr.bLTRMarkEnable = true;
             pLtr.uiLtrMarkInterval = 0;
 
-            if !ctx_vaa(pCtx).is_null() {
-                (*ctx_vaa(pCtx)).uiValidLongTermPicIdx = 0;
-                (*ctx_vaa(pCtx)).uiMarkLongTermPicIdx = 0;
+            if pCtx.vaa().is_some() {
+                pCtx.vaa_mut().expect("the frame's video-analysis block").uiValidLongTermPicIdx = 0;
+                pCtx.vaa_mut().expect("the frame's video-analysis block").uiMarkLongTermPicIdx = 0;
             }
         }
     }
@@ -1277,11 +1279,21 @@ pub unsafe fn WelsBuildRefList(
 pub unsafe fn UpdateBlockStatic(pCtx: &mut sWelsEncCtx) {
     // T9.H: the `pCtx.is_null()` disjunct is gone — a `&mut sWelsEncCtx`
     // cannot be null and every caller now holds one. The rest is unchanged.
-    if ctx_vaa(pCtx).is_null() || pCtx.pVpp.is_null() {
+    if pCtx.vaa().is_none() || pCtx.pVpp.is_null() {
         return;
     }
     // ref_list_mgr_svc.cpp:649 — static_cast<SVAAFrameInfoExt*> (pCtx->pVaa)
-    let pVaaExt = ctx_vaa(pCtx) as *mut SVAAFrameInfoExt;
+    //
+    // **§4.6, reorder, and A5 had to**: `vaa_ext` derives from `&self`, so the
+    // pointer it answers is a child of a shared retag of the context and dies at
+    // the next `ref_list_mut` in the loop below. The old raw accessor read the
+    // `Box`'s slot as a value and so carried the block's own provenance, which
+    // survived that (F71/F211). Both fields wanted here are `Copy` — an `i32`
+    // and a raw `*mut u8` — so they are read out before the loop and the
+    // derivation never spans the `&mut`.
+    let pVaaExt = pCtx.vaa_ext();
+    let iVaaBestRefFrameNum = (*pVaaExt).iVaaBestRefFrameNum;
+    let pVaaBestBlockStaticIdc = (*pVaaExt).pVaaBestBlockStaticIdc;
     // §4.6, reorder: the roots and scalars first — `pVpp` is a raw field, so a
     // copy of it is a copy of the pointer, not a borrow — then the list per
     // iteration, held only across the two reads that need it.
@@ -1301,10 +1313,10 @@ pub unsafe fn UpdateBlockStatic(pCtx: &mut sWelsEncCtx) {
             .expect("the dependency layer's reference list");
         let sRef = pRefList.pic_mut(idRef).planes();
         let iFrameNum = pRefList.pic(idRef).iFrameNum;
-        if (*pVaaExt).iVaaBestRefFrameNum != iFrameNum {
+        if iVaaBestRefFrameNum != iFrameNum {
             let sSrc = idEnc.map(|id| (*pVpp).m_pSpatialPicPool.get_mut(id).planes());
             (*pVpp).UpdateBlockIdcForScreen(
-                (*pVaaExt).pVaaBestBlockStaticIdc,
+                pVaaBestBlockStaticIdc,
                 Some(&sRef),
                 sSrc.as_ref(),
             );
@@ -1476,12 +1488,12 @@ pub unsafe fn UpdateSrcPicListLosslessScreenRefSelectionWithLtr(pCtx: &mut sWels
     let iDIdx = pCtx.uiDependencyId as i32;
     UpdateOriginalPicInfoFromCtx(pCtx);
     PrefetchNextBuffer(pCtx);
-    if !pCtx.pVpp.is_null() && !ctx_vaa(pCtx).is_null() {
+    if !pCtx.pVpp.is_null() && pCtx.vaa().is_some() {
         // §4.6, reorder: the raw roots and scalars come out first, so the one
         // shared borrow of the list is the last thing the call needs.
         let pVpp = pCtx.pVpp;
         let idEnc = pCtx.pEncPic;
-        let uiMarkLongTermPicIdx = (*ctx_vaa(pCtx)).uiMarkLongTermPicIdx as i32;
+        let uiMarkLongTermPicIdx = pCtx.vaa().expect("the frame's video-analysis block").uiMarkLongTermPicIdx as i32;
         let pRefList = pCtx
             .ref_list(iDIdx as usize)
             .expect("the dependency layer's reference list");
@@ -1584,8 +1596,8 @@ pub unsafe fn WelsUpdateRefListScreen(pCtx: &mut sWelsEncCtx) -> bool {
         pLtr.iCurLtrIdx = 1;
         pLtr.iSceneLtrIdx = 1;
         pLtr.uiLtrMarkInterval = 0;
-        if !ctx_vaa(pCtx).is_null() {
-            (*ctx_vaa(pCtx)).uiValidLongTermPicIdx = 0;
+        if pCtx.vaa().is_some() {
+            pCtx.vaa_mut().expect("the frame's video-analysis block").uiValidLongTermPicIdx = 0;
         }
     }
 
@@ -1605,13 +1617,18 @@ pub unsafe fn WelsBuildRefListScreen(
 ) -> bool {
     // T9.H: the `pCtx.is_null()` disjunct is gone — a `&mut sWelsEncCtx`
     // cannot be null and every caller now holds one. The rest is unchanged.
-    if ctx_param(pCtx).is_null() || ctx_vaa(pCtx).is_null() || current_layer(pCtx).is_null() {
+    if ctx_param(pCtx).is_null() || pCtx.vaa().is_none() || current_layer(pCtx).is_null() {
         return false;
     }
     let uiDid = pCtx.uiDependencyId as usize;
     let pParam = ctx_param(pCtx);
     // ref_list_mgr_svc.cpp:649 — static_cast<SVAAFrameInfoExt*> (pCtx->pVaa)
-        let pVaaExt = ctx_vaa(pCtx) as *mut SVAAFrameInfoExt;
+    //
+    // §4.6, reorder: the count is `Copy` and is read out here, because the loop
+    // below calls `GetRefFrameInfo`, which reaches the same block again — and
+    // `vaa_ext`'s answer is a child of a shared retag now, not the slot read that
+    // outlived every later derivation (F71/F211).
+    let iNumOfAvailableRef = (*pCtx.vaa_ext()).iNumOfAvailableRef;
     let iNumRef = (*pParam).iNumRefFrame;
     let pParamD = &(*pParam).sDependencyLayers[uiDid];
     pCtx.iNumRef0 = 0;
@@ -1622,7 +1639,7 @@ pub unsafe fn WelsBuildRefListScreen(
         // camera path's is a reconstruction picture — see [`PicRef`].
         let mut pRefOri: Option<SrcPicId> = None;
 
-        for idx in 0..(*pVaaExt).iNumOfAvailableRef {
+        for idx in 0..iNumOfAvailableRef {
             // **T9.H2, F192 — this is the site the finding is about.** It called
             // `GetRefFrameInfo` while holding `pCtx: &mut sWelsEncCtx`, and the callee
             // read the context back out of `CWelsPreProcess::m_pEncCtx`: a read through

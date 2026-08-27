@@ -30,7 +30,7 @@ use crate::decoder::nalu::g_ksLevelLimits;
 use crate::encoder::encoder_context::{
     ctx_dq_idc_map, ctx_dq_layer, ctx_ltr_at, ctx_mb_index_x,
     ctx_paraset_arrays,
-    ctx_mb_index_y, ctx_param, ctx_vaa,
+    ctx_mb_index_y, ctx_param,
     ctx_stride_enc_block_offset,
     sWelsEncCtx, SDqIdc, SLogContext, SRefList, SStrideTables, SSubsetSps, SWelsPPS,
     SWelsSPS, BASE_DEPENDENCY_ID,
