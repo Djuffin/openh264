@@ -458,7 +458,7 @@ pub fn WelsDequantIHadamard2x2Dc(pDct: &mut [i16; 4], kuiMF: u16) {
 /// - `pRes` must point to a writable `int16_t` buffer of at least 256 elements.
 /// - `pEncMb` and `pBestPred` must point to valid image and prediction sample buffers.
 #[inline]
-// unsafe-cat: port-raw(Phase 9)
+// unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
 pub unsafe fn WelsDctMb(
     pRes: *mut i16,
@@ -492,7 +492,7 @@ pub unsafe fn WelsDctMb(
 ///
 /// # Safety
 /// All pointers in `pEncCtx`, `pCurMb`, and `pMbCache` must be properly initialized and valid.
-// unsafe-cat: port-raw(Phase 9)
+// unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
 pub unsafe fn WelsEncRecI16x16Y(
     pEncCtx: *mut sWelsEncCtx,
@@ -663,7 +663,7 @@ pub unsafe fn WelsEncRecI16x16Y(
 ///
 /// # Safety
 /// All pointers in `pEncCtx`, `pCurMb`, and `pMbCache` must be properly initialized and valid.
-// unsafe-cat: port-raw(Phase 9)
+// unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
 pub unsafe fn WelsEncRecI4x4Y(
     pEncCtx: *mut sWelsEncCtx,
@@ -785,7 +785,7 @@ pub unsafe fn WelsEncRecI4x4Y(
 ///
 /// # Safety
 /// All pointers in `pFuncList`, `pCurMb`, and `pMbCache` must be properly initialized and valid.
-// unsafe-cat: port-raw(Phase 9)
+// unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
 pub unsafe fn WelsEncInterY(
     pFuncList: &SWelsFuncPtrList,
@@ -893,7 +893,7 @@ pub unsafe fn WelsEncInterY(
 ///
 /// # Safety
 /// `kiResOff .. kiResOff + 128` must be in bounds of `pMbCache->sCoeffLevel`.
-// unsafe-cat: port-raw(Phase 9)
+// unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
 pub unsafe fn WelsEncRecUV(
     pFuncList: &SWelsFuncPtrList,
@@ -1034,7 +1034,7 @@ pub unsafe fn WelsEncRecUV(
 ///
 /// # Safety
 /// All pointers in `pEncCtx`, `pCurMb`, and `pMbCache` must be valid.
-// unsafe-cat: port-raw(Phase 9)
+// unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
 pub unsafe fn WelsTryPYskip(
     pEncCtx: *mut sWelsEncCtx,
@@ -1087,7 +1087,7 @@ pub unsafe fn WelsTryPYskip(
 ///
 /// # Safety
 /// All pointers in `pEncCtx`, `pCurMb`, and `pMbCache` must be valid.
-// unsafe-cat: port-raw(Phase 9)
+// unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
 pub unsafe fn WelsTryPUVskip(
     pEncCtx: *mut sWelsEncCtx,

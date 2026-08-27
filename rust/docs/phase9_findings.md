@@ -4892,3 +4892,53 @@ emitted frame's SHA-1; the asset moves from the retired `DIVERGING` list into
 `ASSETS` (the golden now referees it on every `cargo test`); the malformed 16 and
 the parity suites pass unchanged; `gates.sh commit` green (the fix is
 decoder-side — encoder bytes cannot move, and did not).
+
+---
+
+## F200 — the census tool's exact tag match silently dropped 16 annotated tags; the header everyone quoted was undercounting
+
+**Session J, step 1.** `phase9_census.py` matched `m.group(1) not in PHASE9_TAGS`
+— an *exact* string comparison — while sessions E3, G and H had annotated tags in
+place (`// unsafe-cat: port-raw(Phase 9) — the in-fork *mut SDqLayer (S63, G's)`).
+Fifteen annotated `port-raw(Phase 9)` tags and one annotated `cursor` tag were
+therefore invisible to every census since the first annotation landed: the
+committed header said **540** (and the live tool **535** — H3 moved tags and the
+doc was never regenerated, despite H3's close note claiming "censuses regenerated
+unchanged"), while the tree held **551** = 519 + 32. Three separate numbers for
+one quantity, and none of them measured. Fixed by matching the family prefix
+(`tag.split(" — ")[0]`), the same commit that regenerates the census under
+D-exit-3's categories. The J brief's "507 + 33 = 540" is corrected wherever the
+close quotes it.
+
+---
+
+## F201 — the disposition census: 551 queue-family tags classify into 204 fork-shared, 55 instrument, 20 dormant/single/ABI/dead — and a 293-item queue the phase never owned
+
+**Session J, step 1 — the numbers behind D-exit-3.** Every `port-raw(Phase 9)`,
+`cursor` and `MT` tag classified by the fork-reachability walker
+(`phase9_forksplit.py`: 3 scope blocks, 5 seeds, 495 reachable bodies; the 111
+ctx-param bodies split 109 in-fork / 2 ST — F166's `ParasetStrategy` and the
+dormant `WelsMdInterFinePartitionVaaOnScreen`), an unsafe-call-graph join, and a
+by-hand audit of every residual:
+
+- **204 → `fork-shared(S63)`**: the in-fork closure (183 reach-listed items, the
+  20 `MT` tags naming the same seam, `WelsWriteSVCPrefixNal` per F187.1).
+- **55 → `instrument(test)`**: tags sitting on `#[test]` items.
+- **14 → `SCREEN_CONTENT(dormant)`**: feature-search kernels installed only under
+  `bScreenContent` (`svc_motion_estimate.rs:541`), the lossless-ref-selection
+  preprocess surface, S57's dark trio.
+- **3 → `lawful-single`** (F166; S29/F187 twice), **2 → `C-ABI`** (F193's
+  `ctx_frame_bs` pair).
+- **293 stay** (`port-raw` 290 + `cursor` 3): 180 ST callers of fork-kept
+  accessors (unlock table: `ctx_rc_at` 38, `ctx_param` 32, `ctx_ref_list` 25,
+  `current_layer` 13, …; H3's safe-sibling recipe is the proven remedy), 60
+  never-owned ST-surface items (the charter's `other`, which §6.1 flagged as
+  unowned and no session took), 37 safe-shaped freebies (no raw in signature or
+  body), 15 slot-typed kernels awaiting exit condition 3's per-slot READ census,
+  and **1 dead** (`WelsInitSliceEncodingFuncs` — empty body, zero callers in both
+  trees; upstream declares it in `svc_encode_slice.h:167` and never defines it).
+
+The queue, per item, is `phase9_disposition.md` §5. The brief's "expect few"
+for the convertible remnant was wrong by two orders of magnitude, and the
+honest reason is in the charter itself: the `other` family "needs roughly 2
+sessions of its own — somebody has to be given them", and nobody was.

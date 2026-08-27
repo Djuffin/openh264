@@ -132,7 +132,7 @@ impl Default for SWelsNalRaw {
 /// plus the slice's `uiSize` is, and what the task-claiming invariant gives per
 /// thread.
 #[inline]
-// unsafe-cat: port-raw(Phase 9)
+// unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
 pub unsafe fn bs_buffer<'a>(ptr: *mut u8, len: u32) -> &'a mut [u8] {
     debug_assert!(!ptr.is_null(), "a writer's buffer must be allocated first");
@@ -364,7 +364,7 @@ pub unsafe fn WelsUnloadNal(pEncoderOuput: *mut SWelsEncoderOutput) {
 /// # Safety
 /// - `pSliceBs` must point to a valid `SWelsSliceBs` structure.
 #[inline]
-// unsafe-cat: MT
+// unsafe-cat: fork-shared(S63)
 // **T9.X — adjudicated: the seam's, not the bitstream's (H2's, not X's).** G left
 // this tag unattributed. Every production caller is in `slice_multi_threading.rs`
 // (`:1369`, `:1379`, `:1442`, `:1732`) and the walker puts the body inside the fork:
@@ -396,7 +396,7 @@ pub unsafe extern "C" fn WelsLoadNalForSlice(
 /// # Safety
 /// - `pSliceBs` must point to a valid `SWelsSliceBs` structure.
 #[inline]
-// unsafe-cat: MT
+// unsafe-cat: fork-shared(S63)
 // **T9.X — adjudicated with [`WelsLoadNalForSlice`]: the seam's (H2's).**
 //     WelsUnloadNalForSlice <- EncodeOnePartitionSizeLimited <- fork seed
 // Note the brief also lists this function's line as one of "the two `unsafe extern
@@ -431,7 +431,7 @@ pub unsafe extern "C" fn WelsUnloadNalForSlice(pSliceBs: *mut SWelsSliceBs) {
 /// `dst` must be null (rejected with `ENC_RETURN_INVALIDINPUT`, as the C++ did) or
 /// point to `dst_len` writable bytes that do not overlap `src`.
 #[inline]
-// unsafe-cat: port-raw(Phase 9)
+// unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
 pub unsafe fn WelsEncodeNal(
     raw: &SWelsNalRaw,
@@ -527,7 +527,7 @@ pub unsafe fn WelsEncodeNal(
 /// - `pBsWriter` must point to a valid `BsWriter`, and `buf` must be the
 ///   buffer that writer is positioned in.
 #[inline]
-// unsafe-cat: port-raw(Phase 9)
+// unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
 pub unsafe fn WelsWriteSVCPrefixNal(
     buf: &mut [u8],
@@ -553,7 +553,7 @@ mod tests {
     use super::*;
     
     #[test]
-    // unsafe-cat: port-raw(Phase 9)
+    // unsafe-cat: instrument(test)
     #[allow(unsafe_code)]
     fn test_wels_encode_nal_standard_avc() {
         let raw_payload = [0x00, 0x00, 0x01, 0xAA, 0x00, 0x00, 0x00, 0xBB];
@@ -596,7 +596,7 @@ mod tests {
     }
 
     #[test]
-    // unsafe-cat: port-raw(Phase 9)
+    // unsafe-cat: instrument(test)
     #[allow(unsafe_code)]
     fn test_wels_encode_nal_svc_extension() {
         let raw_payload = [0x12, 0x34];
@@ -648,7 +648,7 @@ mod tests {
     }
 
     #[test]
-    // unsafe-cat: port-raw(Phase 9)
+    // unsafe-cat: instrument(test)
     #[allow(unsafe_code)]
     fn test_wels_encode_nal_buffer_too_small() {
         let raw_payload = [0x00; 100];

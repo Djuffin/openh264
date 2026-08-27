@@ -699,6 +699,12 @@ fn parse_only_write_sps(pSpsBs: &mut SSpsBsInfo, iSpsId: i32, kpSrcNal: &[u8]) {
 /// SPS longer than 132 bytes lets the writer run off the allocation. Here the writer
 /// is bounded by the buffer it writes into, and a rewrite that does not fit is
 /// refused (`false`) rather than truncated. See F92.
+///
+/// **Ruled: D-fid-6 (the user, 2026-08-27, session J).** All three port behaviors
+/// stand — the bounded writer, the refusal, and the escaped length (the reference
+/// stores the pre-escape RBSP size, `au_parser.cpp:1252`, truncating one byte per
+/// inserted `0x03`). The previously-unreached escape arm now has a synthetic
+/// referee: `subset_sps_rewrite_reports_the_escaped_length_when_an_escape_is_needed`.
 fn parse_only_write_subset_sps(pSpsBs: &mut SSpsBsInfo, pSps: &SSps) -> bool {
     use crate::encoder::vlc_encoder::{
         BsRbspTrailingBits, BsWriteBits, BsWriteOneBit, BsWriteSE, BsWriteUE,
@@ -826,6 +832,11 @@ fn actual_len_without_trailing_zeros(src: &[u8]) -> usize {
 /// handed in. Nothing downstream reads those bytes again — `sRawData` already holds
 /// the de-escaped copy this NAL will be decoded from — so the only thing the C's
 /// version changes is the application's buffer. See F91.
+///
+/// **Ruled: D-fid-5 (the user, 2026-08-27, session J).** The port never mutates
+/// caller-owned memory; outputs stay byte-identical (the `sps_subsetsps_bothVUI`
+/// golden referees this arm's output on every `cargo test`). A caller feeding the
+/// same buffer twice gets identical results where upstream gives different ones.
 fn parse_only_capture_vcl(
     saved: &mut crate::decoder::bit_stream::RawDataBuffer,
     kpSrcNal: &[u8],
@@ -3018,5 +3029,66 @@ mod au_list_tests {
         let mut cur_sh = sh.clone();
         cur_sh.iFrameNum = 1;
         assert!(CheckAccessUnitBoundaryExt(None, &hdr, &hdr, &sh, &cur_sh));
+    }
+
+    /// **F92's reachability probe (D-fid-6, session J).** No `res/` asset produces a
+    /// subset SPS whose plain-SPS rewrite needs an emulation-prevention byte, so the
+    /// one behavior where the port deliberately diverges from upstream — reporting
+    /// the **escaped** length where `au_parser.cpp:1252` stores the RBSP length,
+    /// one byte short per inserted `0x03` — had no referee. This is that referee,
+    /// synthetic on purpose: it drives the writer directly with an `SSps` crafted so
+    /// the rewrite emits `.. 00 00 02 ..` (`uiLevelIdc = 0` puts two zero bytes after
+    /// `profile_idc`; `iSpsId = 63`'s exp-Golomb prefix makes the next byte `0x02`),
+    /// which `rbsp_to_ebsp` must escape.
+    #[test]
+    fn subset_sps_rewrite_reports_the_escaped_length_when_an_escape_is_needed() {
+        use crate::decoder::decoder_context::SSpsBsInfo;
+        use crate::decoder::parameter_sets::SSps;
+
+        let craft = |level: u8, sps_id: i32| -> SSps {
+            let mut sps = SSps::default();
+            sps.iSpsId = sps_id;
+            sps.uiLevelIdc = level;
+            sps.uiLog2MaxFrameNum = 4; // ue(0)
+            sps.uiPocType = 0;
+            sps.iLog2MaxPocLsb = 4; // ue(0)
+            sps.iNumRefFrames = 0;
+            sps.iMbWidth = 1; // ue(0)
+            sps.iMbHeight = 1;
+            sps.bFrameMbsOnlyFlag = true;
+            sps
+        };
+
+        let verify = |sps: &SSps, want_escapes: usize| {
+            let mut row = SSpsBsInfo::default();
+            assert!(super::parse_only_write_subset_sps(&mut row, sps), "the rewrite fits");
+            let len = row.uiSpsBsLen as usize;
+            assert_eq!(&row.pSpsBsBuf[..5], &[0x00, 0x00, 0x00, 0x01, 0x67]);
+            // De-escape the payload the length names: every inserted byte is a
+            // `03` after `00 00`. The count is the whole disagreement with
+            // upstream — its stored length is exactly `escapes` bytes short.
+            let payload = &row.pSpsBsBuf[5..len];
+            let mut escapes = 0usize;
+            let mut i = 0usize;
+            while i + 2 < payload.len() {
+                if payload[i] == 0 && payload[i + 1] == 0 && payload[i + 2] == 3 {
+                    escapes += 1;
+                    i += 3;
+                } else {
+                    i += 1;
+                }
+            }
+            assert_eq!(escapes, want_escapes, "escape count for level {}", sps.uiLevelIdc);
+            // The length reaches exactly the end of the written NAL: the RBSP
+            // trailing stop bit makes the final byte nonzero, so a length cut
+            // short by the escape count (upstream's) could not end here.
+            assert_ne!(payload.last().copied(), Some(0), "the length ends on the stop-bit byte");
+        };
+
+        // The reached arm: `4D 00 00 02` forces one emulation-prevention byte.
+        verify(&craft(0, 63), 1);
+        // The control: an ordinary level has no zero pair and the two length
+        // formulas agree — which is why every `res/` golden passes under both.
+        verify(&craft(30, 0), 0);
     }
 }

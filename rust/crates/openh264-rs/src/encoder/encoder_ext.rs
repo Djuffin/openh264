@@ -1744,7 +1744,7 @@ mod tests {
 
     /// Blocker C: the parameter-set arrays are allocated and populated.
     #[test]
-    // unsafe-cat: cursor
+    // unsafe-cat: instrument(test)
     #[allow(unsafe_code)]
     fn request_memory_svc_builds_the_parameter_sets() {
         unsafe {
@@ -1783,7 +1783,7 @@ mod tests {
     /// Blocker C, second half: the DQ layers, reference lists and macroblock list
     /// exist, which is what `pCurDqLayer` is selected from.
     #[test]
-    // unsafe-cat: cursor
+    // unsafe-cat: instrument(test)
     #[allow(unsafe_code)]
     fn request_memory_svc_builds_the_dq_layers() {
         unsafe {

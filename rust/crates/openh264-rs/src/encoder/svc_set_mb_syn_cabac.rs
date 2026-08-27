@@ -309,7 +309,7 @@ pub fn WelsCabacMbType(
     }
 }
 
-// unsafe-cat: port-raw(Phase 9)
+// unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
 pub unsafe fn WelsCabacMbIntra4x4PredMode(buf: &mut [u8], pCabacCtx: &mut SCabacCtx, pMbCache: &mut SMbCache) {
     unsafe {
@@ -539,7 +539,7 @@ pub fn WelsMbSkipCabac(
     }
 }
 
-// unsafe-cat: port-raw(Phase 9)
+// unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
 pub unsafe fn WelsCabacMbRef(
     buf: &mut [u8],
@@ -755,7 +755,7 @@ pub fn WelsGetMbCtxCabac(
     }
 }
 
-// unsafe-cat: port-raw(Phase 9) — pBlock, the residual cursor into the cache's sDct
+// unsafe-cat: fork-shared(S63) — pBlock, the residual cursor into the cache's sDct
 #[allow(unsafe_code)]
 pub unsafe fn WelsWriteBlockResidualCabac(
     buf: &mut [u8],
@@ -861,7 +861,7 @@ pub fn WelsCalNonZeroCount2x2Block(pBlock: &[i16; 4]) -> i32 {
         + ((pBlock[3] != 0) as i32)
 }
 
-// unsafe-cat: port-raw(Phase 9)
+// unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
 pub unsafe fn WelsWriteMbResidualCabac(
     buf: &mut [u8],
@@ -1054,7 +1054,7 @@ pub unsafe fn WelsWriteMbResidualCabac(
 // Top-Level Slice & Macroblock CABAC Entry Points
 // ============================================================================
 
-// unsafe-cat: port-raw(Phase 9)
+// unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
 pub unsafe fn WelsInitSliceCabac(
     pEncCtx: *mut crate::encoder::encoder_context::sWelsEncCtx,
@@ -1083,7 +1083,7 @@ pub unsafe fn WelsInitSliceCabac(
     }
 }
 
-// unsafe-cat: port-raw(Phase 9)
+// unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
 pub unsafe fn WelsSpatialWriteMbSynCabac(
     pEncCtx: *mut crate::encoder::encoder_context::sWelsEncCtx,
@@ -1254,7 +1254,7 @@ mod tests {
     }
 
     #[test]
-    // unsafe-cat: port-raw(Phase 9)
+    // unsafe-cat: instrument(test)
     #[allow(unsafe_code)]
     fn test_cabac_encode_init_and_terminate() {
         let mut buffer = vec![0u8; 128];

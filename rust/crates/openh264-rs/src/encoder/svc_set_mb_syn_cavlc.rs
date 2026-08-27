@@ -204,7 +204,7 @@ impl Default for TagMVComponentUnit {
 // ============================================================================
 
 /// Calculates non-zero count, level, run, and total zero statistics for CAVLC transform blocks.
-// unsafe-cat: port-raw(Phase 9)
+// unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
 pub unsafe extern "C" fn CavlcParamCal_c(
     pCoffLevel: *mut i16,
@@ -238,7 +238,7 @@ pub unsafe extern "C" fn CavlcParamCal_c(
 }
 
 /// Serializes transform coefficient block residuals into the CAVLC bitstream.
-// unsafe-cat: port-raw(Phase 9)
+// unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
 pub unsafe fn WriteBlockResidualCavlc(
     pFuncList: &SWelsFuncPtrList,
@@ -398,7 +398,7 @@ pub unsafe fn WriteBlockResidualCavlc(
 /// Encodes macroblock prediction headers (macroblock type, intra modes, MVDs) for CAVLC.
 ///
 /// Matches `void WelsSpatialWriteMbPred (sWelsEncCtx* pEncCtx, SSlice* pSlice, SMB* pCurMb)`
-// unsafe-cat: port-raw(Phase 9)
+// unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
 pub unsafe fn WelsSpatialWriteMbPred(
     pEncCtx: *mut sWelsEncCtx,
@@ -520,7 +520,7 @@ pub unsafe fn WelsSpatialWriteMbPred(
 /// Encodes 8x8 sub-macroblock prediction headers for CAVLC.
 ///
 /// Matches `void WelsSpatialWriteSubMbPred (sWelsEncCtx* pEncCtx, SSlice* pSlice, SMB* pCurMb)`
-// unsafe-cat: port-raw(Phase 9)
+// unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
 pub unsafe fn WelsSpatialWriteSubMbPred(
     pEncCtx: *mut sWelsEncCtx,
@@ -657,7 +657,7 @@ pub fn CheckBitstreamBuffer(
 ///
 /// `extern "C"` came off at T4b.1 with the slot that required it — and with the
 /// thunk its CABAC twin needed to reach the same slot.
-// unsafe-cat: port-raw(Phase 9)
+// unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
 pub unsafe fn WelsSpatialWriteMbSyn(
     pEncCtx: *mut sWelsEncCtx,
@@ -750,7 +750,7 @@ pub unsafe fn WelsSpatialWriteMbSyn(
 /// Serializes all macroblock quantized transform coefficient residuals using CAVLC.
 ///
 /// Matches `int32_t WelsWriteMbResidual (SWelsFuncPtrList* pFuncList, SMbCache* sMbCacheInfo, SMB* pCurMb, SBitStringAux* pBs)`
-// unsafe-cat: port-raw(Phase 9)
+// unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
 pub unsafe fn WelsWriteMbResidual(
     pFuncList: &SWelsFuncPtrList,
@@ -1004,7 +1004,7 @@ pub unsafe fn WelsWriteMbResidual(
 /// a trait object.
 ///
 /// [`EntropyCoder`]: crate::encoder::wels_func_ptr_def::EntropyCoder
-// unsafe-cat: port-raw(Phase 9)
+// unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
 pub unsafe fn StashMBStatusCavlc(
     pBs: *mut BsWriter,
@@ -1032,7 +1032,7 @@ pub unsafe fn StashMBStatusCavlc(
 ///
 /// **T9.E6**: the `uiLastMbQp` restore moved to the call sites (the caller owns
 /// `sDss` and the slice; this fn no longer names `SSlice` — S54's value rule).
-// unsafe-cat: port-raw(Phase 9)
+// unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
 pub unsafe fn StashPopMBStatusCavlc(
     pBs: *mut BsWriter,
@@ -1054,7 +1054,7 @@ pub unsafe fn StashPopMBStatusCavlc(
 /// only has to remember three bitstream cursor fields — copies out the bytes
 /// already emitted, because CABAC renormalisation can rewrite them via
 /// `PropagateCarry`.
-// unsafe-cat: port-raw(Phase 9)
+// unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
 pub unsafe fn StashMBStatusCabac(
     buf: &mut [u8],
@@ -1092,7 +1092,7 @@ pub unsafe fn StashMBStatusCabac(
 ///
 /// Note the offset is recomputed from the *restored* context, so
 /// `GetBsPosCabac` is called after `sStoredCabac` has been copied back.
-// unsafe-cat: port-raw(Phase 9)
+// unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
 pub unsafe fn StashPopMBStatusCabac(
     buf: &mut [u8],
@@ -1132,7 +1132,7 @@ pub unsafe fn StashPopMBStatusCabac(
 /// `extern "C"` came off at T4b.1 with the slot that required it.
 ///
 /// [`EntropyCoder::GetBsPosition`]: crate::encoder::wels_func_ptr_def::EntropyCoder::GetBsPosition
-// unsafe-cat: port-raw(Phase 9)
+// unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
 pub unsafe fn GetBsPosCabac(pCabacCtx: *const crate::encoder::set_mb_syn_cabac::SCabacCtx) -> i32 {
     if pCabacCtx.is_null() {
@@ -1152,7 +1152,7 @@ pub unsafe fn GetBsPosCabac(pCabacCtx: *const crate::encoder::set_mb_syn_cabac::
 ///
 /// Takes the slice's writer (`slice_writer`) rather than the slice: the writer is
 /// all this reads, and the slice no longer stores it (Phase 6 session B).
-// unsafe-cat: port-raw(Phase 9)
+// unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
 pub unsafe fn GetBsPosCavlc(pBs: *mut BsWriter) -> i32 {
     if pBs.is_null() {
@@ -1189,7 +1189,7 @@ mod tests {
     }
 
     #[test]
-    // unsafe-cat: port-raw(Phase 9)
+    // unsafe-cat: instrument(test)
     #[allow(unsafe_code)]
     fn test_cavlc_param_cal() {
         let mut coeffs = [0i16; 16];

@@ -282,7 +282,7 @@ pub fn WELS_CLIP3(iX: i32, iMin: i32, iMax: i32) -> i32 {
 ///
 /// # Safety
 /// All pointers must be valid and the layer's PPS position assigned.
-// unsafe-cat: port-raw(Phase 9)
+// unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsMdInterUpdatePskip(
     pEncCtx: *mut sWelsEncCtx,
@@ -316,7 +316,7 @@ fn LD32_MV(pMv: &SMVUnitXY) -> u32 {
 ///
 /// # Safety
 /// All pointers must be valid; `pEncCtx->pRefPic` must be assigned.
-// unsafe-cat: port-raw(Phase 9)
+// unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsMdInterJudgePskip(
     pEncCtx: *mut sWelsEncCtx,
@@ -354,7 +354,7 @@ pub unsafe extern "C" fn WelsMdInterJudgePskip(
 ///
 /// # Safety
 /// All four pointers must be valid.
-// unsafe-cat: port-raw(Phase 9)
+// unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsMdInterDecidedPskip(
     pEncCtx: *mut sWelsEncCtx,
@@ -377,7 +377,7 @@ pub unsafe extern "C" fn WelsMdInterDecidedPskip(
 /// # Safety
 /// All pointers must be valid and `pfFirstIntraMode`, `pfSetScrollingMv` and
 /// `pfInterFineMd` assigned — `PreprocessSliceCoding` does this for a P slice.
-// unsafe-cat: port-raw(Phase 9)
+// unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsMdInterSecondaryModesEnc(
     pEncCtx: *mut sWelsEncCtx,
@@ -433,7 +433,7 @@ pub unsafe extern "C" fn WelsMdInterSecondaryModesEnc(
 /// All four pointers must be valid, `pEncCtx->pFuncList->pfIntraFineMd` must be
 /// assigned (`PreprocessSliceCoding` does this), and `WelsMdIntraInit` must have run
 /// for this macroblock.
-// unsafe-cat: port-raw(Phase 9)
+// unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsMdIntraSecondaryModesEnc(
     pEncCtx: *mut sWelsEncCtx,
@@ -474,7 +474,7 @@ pub unsafe extern "C" fn WelsMdIntraSecondaryModesEnc(
 ///
 /// # Safety
 /// All pointers in `pCurLayer`, `pFuncList`, `pCurMb`, and `pMbCache` must be valid.
-// unsafe-cat: port-raw(Phase 9)
+// unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsRecPskip(
     pCurLayer: *mut SDqLayer,
@@ -518,7 +518,7 @@ pub unsafe extern "C" fn WelsRecPskip(
 /// Translated from `VaaBackgroundMbDataUpdate` in
 /// `codec/encoder/core/src/svc_base_layer_md.cpp:1341`.
 #[inline(always)]
-// unsafe-cat: port-raw(Phase 9)
+// unsafe-cat: fork-shared(S63)
 // **S57 — dark, converts never (F117).** The copies below write the *current*
 // source picture (the brief that first read this had the direction backwards
 // against a dst-first typedef), and no gate runs the path:
@@ -583,7 +583,7 @@ unsafe fn VaaBackgroundMbDataUpdate(
 /// P_SKIP with no residual, and `WelsMdInterJudgeBGDPskip`'s decision inputs come
 /// from the analyzer's source-domain VAA planes, so the prediction never reaches the
 /// bitstream *or* a decision. Quote 32, not 48, when this body's coverage is cited.
-// unsafe-cat: port-raw(Phase 9)
+// unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsMdBackgroundMbEnc(
     pEncCtx: *mut sWelsEncCtx,
@@ -1119,7 +1119,7 @@ pub extern "C" fn UpdateP8x8Motion2Cache(
     }
 }
 
-// unsafe-cat: port-raw(Phase 9)
+// unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsMdI16x16(
     pFunc: &SWelsFuncPtrList,
@@ -1242,7 +1242,7 @@ pub(crate) fn InitMe(
     sWelsMe.pRefFeatureStorage = pRefFeatureStorage;
 }
 
-// unsafe-cat: port-raw(Phase 9) — the layer/SMB cursors (E3's grid); the
+// unsafe-cat: fork-shared(S63) — the layer/SMB cursors (E3's grid); the
 // dispatch cursor this tag used to name is a shared reference since T9.F4
 #[allow(unsafe_code)]
 pub unsafe fn WelsMdP16x16(
@@ -1338,7 +1338,7 @@ pub unsafe fn WelsMdP16x16(
     (*pMe16x16).uiSatdCost as i32
 }
 
-// unsafe-cat: port-raw(Phase 9) — the layer/SMB cursors (E3's grid); the
+// unsafe-cat: fork-shared(S63) — the layer/SMB cursors (E3's grid); the
 // dispatch cursor this tag used to name is a shared reference since T9.F4
 #[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsMdP8x8(
@@ -1422,7 +1422,7 @@ pub unsafe extern "C" fn WelsMdP8x8(
     iCostP8x8
 }
 
-// unsafe-cat: port-raw(Phase 9)
+// unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsInterMbEncode(pEncCtx: *mut sWelsEncCtx, pSlice: &mut SSlice, pCurMb: &mut SMB) {
     // Port-added guard deleted with the retyping: `svc_encode_slice.cpp:458` opens at
@@ -1466,7 +1466,7 @@ pub unsafe extern "C" fn WelsInterMbEncode(pEncCtx: *mut sWelsEncCtx, pSlice: &m
 /// `SDqLayer` than `pCurDqLayer`, which is why this reads through the list rather
 /// than through the current layer.
 #[inline(always)]
-// unsafe-cat: port-raw(Phase 9)
+// unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
 pub unsafe fn GetRefMb(pEncCtx: *mut sWelsEncCtx, pCurMb: &SMB) -> SMB {
     let kRefIdx = (*current_layer(pEncCtx))
@@ -1547,7 +1547,7 @@ pub fn SetMvBaseEnhancelayer(
 }
 
 /// Core spatial enhancement layer mode decision without Inter-Layer Prediction.
-// unsafe-cat: port-raw(Phase 9)
+// unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
 pub unsafe fn WelsMdSpatialelInterMbIlfmdNoilp(
     pEncCtx: *mut sWelsEncCtx,
@@ -1637,7 +1637,7 @@ pub unsafe fn WelsMdSpatialelInterMbIlfmdNoilp(
 }
 
 /// Top-level MD entry point for spatial enhancement layer inter MBs.
-// unsafe-cat: port-raw(Phase 9)
+// unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
 pub unsafe fn WelsMdInterMbEnhancelayer(
     pEncCtx: *mut sWelsEncCtx,
@@ -1673,7 +1673,7 @@ pub fn GetChromaCost(
 }
 
 #[inline(always)]
-// unsafe-cat: port-raw(Phase 9)
+// unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
 pub unsafe fn IsCostLessEqualSkipCost(
     iCurCost: i32,
@@ -1692,7 +1692,7 @@ pub unsafe fn IsCostLessEqualSkipCost(
         })
 }
 
-// unsafe-cat: port-raw(Phase 9)
+// unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
 pub unsafe fn CheckChromaCost(
     pEncCtx: *mut sWelsEncCtx,
@@ -1747,7 +1747,7 @@ pub unsafe fn CheckChromaCost(
     !bChromaCostCannotSkip && !bChromaTooLarge
 }
 
-// unsafe-cat: port-raw(Phase 9)
+// unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsMdInterJudgeBGDPskip(
     pEncCtx: *mut sWelsEncCtx,
@@ -1793,7 +1793,7 @@ pub unsafe extern "C" fn WelsMdInterJudgeBGDPskip(
     false
 }
 
-// unsafe-cat: port-raw(Phase 9)
+// unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsMdInterJudgeBGDPskipFalse(
     _pCtx: *mut sWelsEncCtx,
@@ -1805,7 +1805,7 @@ pub unsafe extern "C" fn WelsMdInterJudgeBGDPskipFalse(
     false
 }
 
-// unsafe-cat: port-raw(Phase 9)
+// unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsMdUpdateBGDInfo(
     pCurLayer: *mut SDqLayer,
@@ -1830,7 +1830,7 @@ pub unsafe extern "C" fn WelsMdUpdateBGDInfo(
     }
 }
 
-// unsafe-cat: port-raw(Phase 9)
+// unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsMdUpdateBGDInfoNULL(
     pCurLayer: *mut SDqLayer,
@@ -1846,7 +1846,7 @@ pub unsafe extern "C" fn WelsMdUpdateBGDInfoNULL(
 // ============================================================================
 
 #[inline(always)]
-// unsafe-cat: port-raw(Phase 9)
+// unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
 pub unsafe fn IsMbStatic(pBlockType: *const i32, eType: EStaticBlockIdc) -> bool {
     if pBlockType.is_null() {
@@ -1860,14 +1860,14 @@ pub unsafe fn IsMbStatic(pBlockType: *const i32, eType: EStaticBlockIdc) -> bool
 }
 
 #[inline(always)]
-// unsafe-cat: port-raw(Phase 9)
+// unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
 pub unsafe fn IsMbCollocatedStatic(pBlockType: *const i32) -> bool {
     IsMbStatic(pBlockType, EStaticBlockIdc::COLLOCATED_STATIC)
 }
 
 #[inline(always)]
-// unsafe-cat: port-raw(Phase 9)
+// unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
 pub unsafe fn IsMbScrolledStatic(pBlockType: *const i32) -> bool {
     IsMbStatic(pBlockType, EStaticBlockIdc::SCROLLED_STATIC)
@@ -2387,7 +2387,7 @@ pub unsafe extern "C" fn WelsMdInterJudgeSCDPskip(
     false
 }
 
-// unsafe-cat: port-raw(Phase 9)
+// unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsMdInterJudgeSCDPskipFalse(
     _pEncCtx: *mut sWelsEncCtx,
@@ -2398,7 +2398,7 @@ pub unsafe extern "C" fn WelsMdInterJudgeSCDPskipFalse(
     false
 }
 
-// unsafe-cat: port-raw(Phase 9)
+// unsafe-cat: SCREEN_CONTENT(dormant)
 #[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsInitSCDPskipFunc(
     pFuncList: &mut SWelsFuncPtrList,
@@ -2474,7 +2474,7 @@ pub unsafe fn TryModeMerge(
     (*pCurMb).uiMbType != MB_TYPE_8x8
 }
 
-// unsafe-cat: port-raw(Phase 9)
+// unsafe-cat: SCREEN_CONTENT(dormant)
 #[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsMdInterFinePartitionVaaOnScreen(
     pEncCtx: *mut sWelsEncCtx,
@@ -2511,7 +2511,7 @@ pub unsafe extern "C" fn WelsMdInterFinePartitionVaaOnScreen(
 // 5. Global Scrolling Motion Vector Dispatch
 // ============================================================================
 
-// unsafe-cat: port-raw(Phase 9)
+// unsafe-cat: SCREEN_CONTENT(dormant)
 #[allow(unsafe_code)]
 pub unsafe extern "C" fn SetScrollingMvToMd(pVaa: *mut SVAAFrameInfo, pWelsMd: &mut SWelsMD) {
     let pVaaExt = pVaa as *mut SVAAFrameInfoExt_t;
@@ -2529,7 +2529,7 @@ pub unsafe extern "C" fn SetScrollingMvToMd(pVaa: *mut SVAAFrameInfo, pWelsMd: &
 
 /// Intentional no-op mode decision scrolling MV callback.
 /// Matches `void SetScrollingMvToMdNull (SVAAFrameInfo* pVaa, SWelsMD* pWelsMd)` in `svc_mode_decision.cpp:689`.
-// unsafe-cat: port-raw(Phase 9)
+// unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
 pub unsafe extern "C" fn SetScrollingMvToMdNull(_pVaa: *mut SVAAFrameInfo, _pWelsMd: &mut SWelsMD) {}
 
@@ -2538,7 +2538,7 @@ mod tests {
     use super::*;
 
     #[test]
-    // unsafe-cat: port-raw(Phase 9)
+    // unsafe-cat: instrument(test)
     #[allow(unsafe_code)]
     fn test_pred_mv_basic_median() {
         unsafe {
@@ -2562,7 +2562,7 @@ mod tests {
     }
 
     #[test]
-    // unsafe-cat: port-raw(Phase 9)
+    // unsafe-cat: instrument(test)
     #[allow(unsafe_code)]
     fn test_pred_skip_mv_zero_ref() {
         unsafe {
@@ -2594,7 +2594,7 @@ mod tests {
     }
 
     #[test]
-    // unsafe-cat: port-raw(Phase 9)
+    // unsafe-cat: instrument(test)
     #[allow(unsafe_code)]
     fn test_pred_inter_16x8_8x16_mv() {
         unsafe {
@@ -2630,7 +2630,7 @@ mod tests {
     }
 
     #[test]
-    // unsafe-cat: port-raw(Phase 9)
+    // unsafe-cat: instrument(test)
     #[allow(unsafe_code)]
     fn test_update_p16x16_motion_info() {
         unsafe {
@@ -2688,7 +2688,7 @@ mod tests {
     }
 
     #[test]
-    // unsafe-cat: port-raw(Phase 9)
+    // unsafe-cat: instrument(test)
     #[allow(unsafe_code)]
     fn test_wels_md_i16x16_cost() {
         unsafe {
@@ -2812,7 +2812,7 @@ mod tests {
     }
 
     #[test]
-    // unsafe-cat: port-raw(Phase 9)
+    // unsafe-cat: instrument(test)
     #[allow(unsafe_code)]
     fn test_svc_mode_decision_noop_callback() {
         // The MD argument used to be a null raw MD pointer; it is a `&mut` now, so

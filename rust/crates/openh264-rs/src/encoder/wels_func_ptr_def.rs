@@ -228,7 +228,7 @@ impl EntropyCoder {
     /// As the two implementations: `pEncCtx` and `pSlice` must be live and the
     /// slice's writer positioned in the buffer `slice_bs_buffer` returns.
     #[inline]
-    // unsafe-cat: port-raw(Phase 9)
+    // unsafe-cat: fork-shared(S63)
     #[allow(unsafe_code)]
     pub unsafe fn WelsSpatialWriteMbSyn(
         self,
@@ -259,7 +259,7 @@ impl EntropyCoder {
     /// `pDss` and `pSlice` must be live, `pBs` must be `pSlice`'s writer and `buf`
     /// the buffer that writer is positioned in.
     #[inline]
-    // unsafe-cat: port-raw(Phase 9)
+    // unsafe-cat: fork-shared(S63)
     #[allow(unsafe_code)]
     /// **T9.E6**: `pSlice` became the three things the two arms touch — the
     /// CABAC coder state, the last macroblock QP as a value, and (on the pop
@@ -294,7 +294,7 @@ impl EntropyCoder {
     ///
     /// [`StashMBStatus`]: EntropyCoder::StashMBStatus
     #[inline]
-    // unsafe-cat: port-raw(Phase 9)
+    // unsafe-cat: fork-shared(S63)
     #[allow(unsafe_code)]
     /// **T9.E6**, as [`StashMBStatus`]: the caller restores
     /// `uiLastMbQp` from `sDss` beside the call — it owns both.
@@ -325,7 +325,7 @@ impl EntropyCoder {
     /// # Safety
     /// `pSlice` must be live and `pBs` must be its writer.
     #[inline]
-    // unsafe-cat: port-raw(Phase 9)
+    // unsafe-cat: fork-shared(S63)
     #[allow(unsafe_code)]
     pub unsafe fn GetBsPosition(
         self,

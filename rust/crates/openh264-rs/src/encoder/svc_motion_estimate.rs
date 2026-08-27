@@ -446,7 +446,7 @@ impl Default for SMeFuncs {
 
 /// Calculates MVD rate cost: `table[mx] + table[my]`.
 #[inline(always)]
-// unsafe-cat: port-raw(Phase 9)
+// unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
 pub unsafe fn COST_MVD(table: *const u16, mx: i32, my: i32) -> u32 {
     unsafe { (*table.offset(mx as isize) as u32) + (*table.offset(my as isize) as u32) }
@@ -484,7 +484,7 @@ pub fn CheckMvInRange(ksCurrentMv: SMVUnitXY, ksMinMv: SMVUnitXY, ksMaxMv: SMVUn
 }
 
 #[inline]
-// unsafe-cat: port-raw(Phase 9)
+// unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
 pub unsafe fn SetMvWithinIntegerMvRange(
     kiMbWidth: i32,
@@ -1259,7 +1259,7 @@ pub fn sum_of_16x16_single_block(cRef: &PlaneCursor<'_>) -> i32 {
     iSum
 }
 
-// unsafe-cat: port-raw(Phase 9)
+// unsafe-cat: SCREEN_CONTENT(dormant)
 #[allow(unsafe_code)]
 pub unsafe extern "C" fn SumOf8x8SingleBlock_c(pRef: *mut u8, kiRefStride: i32) -> i32 {
     let mut iSum = 0i32;
@@ -1280,7 +1280,7 @@ pub unsafe extern "C" fn SumOf8x8SingleBlock_c(pRef: *mut u8, kiRefStride: i32) 
     iSum
 }
 
-// unsafe-cat: port-raw(Phase 9)
+// unsafe-cat: SCREEN_CONTENT(dormant)
 #[allow(unsafe_code)]
 pub unsafe extern "C" fn SumOf16x16SingleBlock_c(pRef: *mut u8, kiRefStride: i32) -> i32 {
     let mut iSum = 0i32;
@@ -1309,7 +1309,7 @@ pub unsafe extern "C" fn SumOf16x16SingleBlock_c(pRef: *mut u8, kiRefStride: i32
     iSum
 }
 
-// unsafe-cat: port-raw(Phase 9)
+// unsafe-cat: SCREEN_CONTENT(dormant)
 #[allow(unsafe_code)]
 pub unsafe extern "C" fn SumOf8x8BlockOfFrame_c(
     pRefPicture: *mut u8,
@@ -1332,7 +1332,7 @@ pub unsafe extern "C" fn SumOf8x8BlockOfFrame_c(
     }
 }
 
-// unsafe-cat: port-raw(Phase 9)
+// unsafe-cat: SCREEN_CONTENT(dormant)
 #[allow(unsafe_code)]
 pub unsafe extern "C" fn SumOf16x16BlockOfFrame_c(
     pRefPicture: *mut u8,
@@ -1355,7 +1355,7 @@ pub unsafe extern "C" fn SumOf16x16BlockOfFrame_c(
     }
 }
 
-// unsafe-cat: port-raw(Phase 9)
+// unsafe-cat: SCREEN_CONTENT(dormant)
 #[allow(unsafe_code)]
 pub unsafe extern "C" fn InitializeHashforFeature_c(
     pTimesOfFeatureValue: *mut u32,
@@ -1374,7 +1374,7 @@ pub unsafe extern "C" fn InitializeHashforFeature_c(
     }
 }
 
-// unsafe-cat: port-raw(Phase 9)
+// unsafe-cat: SCREEN_CONTENT(dormant)
 #[allow(unsafe_code)]
 pub unsafe extern "C" fn FillQpelLocationByFeatureValue_c(
     pFeatureOfBlock: *mut u16,
@@ -1399,7 +1399,7 @@ pub unsafe extern "C" fn FillQpelLocationByFeatureValue_c(
     }
 }
 
-// unsafe-cat: port-raw(Phase 9)
+// unsafe-cat: SCREEN_CONTENT(dormant)
 #[allow(unsafe_code)]
 pub unsafe fn CalculateFeatureOfBlock(
     pFunc: &SWelsFuncPtrList,
@@ -1750,7 +1750,7 @@ mod tests {
     }
 
     #[test]
-    // unsafe-cat: port-raw(Phase 9)
+    // unsafe-cat: instrument(test)
     #[allow(unsafe_code)]
     fn test_cost_mvd_computation() {
         let table_data = [10u16, 20, 30, 40, 50, 60, 70, 80];
@@ -1762,7 +1762,7 @@ mod tests {
     }
 
     #[test]
-    // unsafe-cat: port-raw(Phase 9)
+    // unsafe-cat: instrument(test)
     #[allow(unsafe_code)]
     fn test_single_block_sums() {
         let mut buf8 = [0u8; 64];
@@ -1785,7 +1785,7 @@ mod tests {
     }
 
     #[test]
-    // unsafe-cat: port-raw(Phase 9)
+    // unsafe-cat: instrument(test)
     #[allow(unsafe_code)]
     fn test_me_sad_cost_select() {
         let mut sad_costs = [100i32, 50, 120, 80];
@@ -1819,7 +1819,7 @@ mod tests {
     }
 
     #[test]
-    // unsafe-cat: port-raw(Phase 9)
+    // unsafe-cat: instrument(test)
     #[allow(unsafe_code)]
     fn test_fme_noop_callback() {
         unsafe {

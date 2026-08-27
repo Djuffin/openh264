@@ -697,7 +697,7 @@ mod tests {
     /// `WelsIDctRecI16x16Dc_c` adds a rounded DC per 4x4 block: block (i>>2, j>>2)
     /// takes `pDctDc[(i & 0x0C) + (j >> 2)]`.
     #[test]
-    // unsafe-cat: port-raw(Phase 9)
+    // unsafe-cat: instrument(test)
     #[allow(unsafe_code)]
     fn idct_reci16x16dc_adds_per_block_dc() {
         let stride = 32usize;
@@ -727,7 +727,7 @@ mod tests {
 
     /// Every slot the reconstruction path dereferences must be filled.
     #[test]
-    // unsafe-cat: port-raw(Phase 9)
+    // unsafe-cat: instrument(test)
     #[allow(unsafe_code)]
     fn init_fills_every_reconstruction_slot() {
         // Zeroing this table is sound for the reason its own `Default` gives
