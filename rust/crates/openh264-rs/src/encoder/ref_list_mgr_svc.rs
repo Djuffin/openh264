@@ -1607,18 +1607,18 @@ pub fn IsValidFrameNum(kiFrameNum: i32) -> bool {
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe fn WelsMarkMMCORefInfoScreen(
-    pCtx: &mut sWelsEncCtx,
-    pLtr: &mut SLTRState,
+    kiNumRefFrame: i32,
+    kbEnableLongTermReference: bool,
+    pLtr: &SLTRState,
     pCurDq: &mut SDqLayer,
     kiCountSliceNum: i32,
 ) {
-    // T9.H: the `pCtx.is_null()` disjunct is gone — a `&mut sWelsEncCtx`
-    // cannot be null and every caller now holds one.
-    // **T9.X**: `pLtr` follows it. The body never re-derives `ctx_ltr_at`, so the
-    // `&mut` minted at the call site is the only cursor to this `SLTRState` while
-    // the call runs, and the call is its caller's last statement — the raw root it
-    // is reborrowed from is never used again afterwards (T9.G7's hazard is a
-    // pop-then-use, and there is no use).
+    // **T9.H3 — narrowed (S54).** The context parameter is gone: the body read
+    // exactly two `ctx_param` scalars through it, and its single caller
+    // (`WelsMarkPicScreen`) passes them by value now. The LTR state arrives as a
+    // shared borrow — the body only reads it — which the caller's own `&mut`
+    // re-borrows for the call, so no second route to the context exists inside
+    // and T9.X's protector argument is not needed at all.
     if kiCountSliceNum <= 0 {
         return;
     }
@@ -1627,10 +1627,10 @@ pub unsafe fn WelsMarkMMCORefInfoScreen(
         return;
     }
     let pRefPicMark = &mut (*pBaseSlice).sSliceHeaderExt.sSliceHeader.sRefMarking;
-    let iMaxLtrIdx = (*ctx_param(pCtx)).iNumRefFrame - STR_ROOM - 1;
+    let iMaxLtrIdx = kiNumRefFrame - STR_ROOM - 1;
 
     *pRefPicMark = SRefPicMarking::default();
-    if (*ctx_param(pCtx)).bEnableLongTermReference {
+    if kbEnableLongTermReference {
         let count0 = pRefPicMark.uiMmcoCount as usize;
         pRefPicMark.SMmcoRef[count0].iMaxLongTermFrameIdx = iMaxLtrIdx;
         pRefPicMark.SMmcoRef[count0].iMmcoType = MMCO_SET_MAX_LONG;
@@ -1654,32 +1654,43 @@ pub unsafe fn WelsMarkPicScreen(pCtx: &mut sWelsEncCtx) {
         return;
     }
     let uiDid = pCtx.uiDependencyId as usize;
-    // **T9.G7 — raw, not `&mut`.** This body holds the LTR state across calls that
-    // derive their own `&mut` to the *same* `SLTRState` (`LTRMarkProcess` and the
-    // rest re-derive `ctx_ltr_at(pCtx, uiDid)` for this same `uiDid`). Two Unique
-    // tags from one raw root are siblings, and the second pops the first — so the
-    // `&mut` binding was the hazard, not the holding. A raw cursor with a deref at
-    // each use is the port's own idiom and is what F66 says is sound here.
-    let pLtr = ctx_ltr_at(pCtx, (uiDid) as usize);
-    let gopSize = (*ctx_param(pCtx)).uiGopSize;
+    // **T9.H3 — roots and scalars first, the LTR reference last (T9.G4 inverted).**
+    // T9.G7's held-raw note stood here. Every whole-context derivation this body
+    // needs — the param root, the ref list, the SPS root, the current layer for
+    // the MMCO call, and the two context scalars — is taken *before* the LTR
+    // state is borrowed, so one `&mut SLTRState` spans the body with only raw
+    // derefs and locals beside it, and the tail call reaches the context no
+    // second time (`WelsMarkMMCORefInfoScreen` is narrowed to the two scalars it
+    // read). Dead code today (F192: screen-content mode is rejected at init) —
+    // the borrow checker is the only referee, and the reshape moves derivations,
+    // never logic.
+    let pParam = ctx_param(pCtx);
+    let gopSize = (*pParam).uiGopSize;
     let iMaxTid = if gopSize > 0 { (31 - gopSize.leading_zeros()) as i32 } else { 0 };
     let mut iMaxActualLtrIdx = -1i32;
-    let pParamD = &(*ctx_param(pCtx)).sDependencyLayers[uiDid];
+    let pParamD = &(*pParam).sDependencyLayers[uiDid];
 
-    if (*ctx_param(pCtx)).bEnableLongTermReference {
+    if (*pParam).bEnableLongTermReference {
         let maxTidAdj = if iMaxTid > 1 { iMaxTid } else { 1 };
-        iMaxActualLtrIdx = (*ctx_param(pCtx)).iNumRefFrame - STR_ROOM - 1 - maxTidAdj;
+        iMaxActualLtrIdx = (*pParam).iNumRefFrame - STR_ROOM - 1 - maxTidAdj;
     }
 
     let pRefList = ctx_ref_list(pCtx, (uiDid) as usize);
-    let iNumRef = (*ctx_param(pCtx)).iNumRefFrame;
+    let iNumRef = (*pParam).iNumRefFrame;
     let iLongRefNum = iNumRef - STR_ROOM;
     let bIsRefListNotFull = ((*pRefList).uiLongRefCount as i32) < iLongRefNum;
+    let pSps = ctx_sps(pCtx);
+    let kuiTid = pCtx.uiTemporalId;
+    let kbSceneLtr = pCtx.bCurFrameMarkedAsSceneLtr;
+    let iSliceNum = (*current_layer(pCtx)).iMaxSliceNum;
+    // T9.G6: hoisted — see `WelsMarkMMCORefInfo`.
+    let pCurLayerForMmco = &mut *current_layer(pCtx);
+    let pLtr = &mut *ctx_ltr_at(pCtx, uiDid);
 
-    if !(*ctx_param(pCtx)).bEnableLongTermReference {
-        (*pLtr).iCurLtrIdx = pCtx.uiTemporalId as i32;
+    if !(*pParam).bEnableLongTermReference {
+        (*pLtr).iCurLtrIdx = kuiTid as i32;
     } else {
-        if iMaxActualLtrIdx != -1 && pCtx.uiTemporalId == 0 && pCtx.bCurFrameMarkedAsSceneLtr {
+        if iMaxActualLtrIdx != -1 && kuiTid == 0 && kbSceneLtr {
             (*pLtr).bLTRMarkingFlag = true;
             (*pLtr).uiLtrMarkInterval = 0;
             (*pLtr).iCurLtrIdx = (*pLtr).iSceneLtrIdx % (iMaxActualLtrIdx + 1);
@@ -1716,7 +1727,7 @@ pub unsafe fn WelsMarkPicScreen(pCtx: &mut sWelsEncCtx) {
                 }
 
                 let mut iLongestDeltaFrameNum = -1i32;
-                let iMaxFrameNum = 1 << (*ctx_sps(pCtx)).uiLog2MaxFrameNum;
+                let iMaxFrameNum = 1 << (*pSps).uiLog2MaxFrameNum;
 
                 for i in 0..((*pRefList).uiLongRefCount as usize) {
                     let Some(idPic) = (*pRefList).pLongRefList[i] else {
@@ -1748,17 +1759,15 @@ pub unsafe fn WelsMarkPicScreen(pCtx: &mut sWelsEncCtx) {
     }
 
     for i in 0..MAX_TEMPORAL_LAYER_NUM {
-        if (pCtx.uiTemporalId as usize) < i || pCtx.uiTemporalId == 0 {
+        if (kuiTid as usize) < i || kuiTid == 0 {
             (*pLtr).iLastLtrIdx[i] = (*pLtr).iCurLtrIdx;
         }
     }
 
-    let iSliceNum = (*current_layer(pCtx)).iMaxSliceNum;
-    // T9.G6: hoisted — see `WelsMarkMMCORefInfo`.
-    let pCurLayerForMmco = &mut *current_layer(pCtx);
     WelsMarkMMCORefInfoScreen(
-        pCtx,
-        &mut *pLtr,
+        iNumRef,
+        (*pParam).bEnableLongTermReference,
+        pLtr,
         pCurLayerForMmco,
         iSliceNum,
     );
