@@ -5251,3 +5251,201 @@ and the F168 form are in `gates.sh`'s header and `miri_wall_baseline.txt`.
 **S61 has no reading this close** — the lane never completed, so the baseline
 file keeps H3's 506 s and the cpu column stays unseeded, exactly as F170's
 regime note anticipated for the first run after the change.
+
+---
+
+## F208 — a `&self` reader on the context is a **whole-context** `SharedReadOnly` retag, so it kills sibling `Unique`s the borrow checker never referees — T9.H14's hazard again, in the other direction
+
+**Safe-conversion S1, checkpoint A2, caught by the session close's Miri lane and
+by nothing else.** The conversion's whole design rests on `&self` readers being
+the cheap, always-available path — "shared reborrows coexist, so the fork may
+take them". They do coexist with each other. What they do **not** coexist with is
+a `Unique` derived from the same context through a *raw* root, and the site that
+proved it is one the tree had already been burned at:
+
+```text
+error: Undefined Behavior: attempting a write access using <4060821> at
+alloc288118[0x788], but that tag does not exist in the borrow stack
+  --> wels_encoder_ext.rs:2412   pStatistics.uiAverageFrameQP = if !(*pCtx).rc()…
+<4060821> was created by a Unique retag at offsets [0x770..0x7c8]
+  --> wels_encoder_ext.rs:2374   &mut (*pCtx).sEncoderStatistics[iDid as usize]
+<4060821> was later invalidated at offsets [0x0..0x17f10] by a SharedReadOnly retag
+  --> wels_encoder_ext.rs:2412                                       (*pCtx).rc()
+```
+
+`UpdateStatistics` holds `pStatistics`, a `&mut` into one field of the context,
+across a read of another field. A2 spelled that read `(*pCtx).rc()`, which
+auto-refs `&(*pCtx)` — a `SharedReadOnly` retag over **`[0x0..0x17f10]`, the
+whole struct** — and a sibling read retag pops an earlier sibling `Unique`. The
+old spelling, `ctx_rc(pCtx)`, formed **no reference to the context at all**
+(`std::ptr::read` of the `Vec` header through `addr_of!`, F71), so there was
+nothing to pop.
+
+**The reason nothing else caught it is the reason it matters.** `pCtx` is a raw
+here (`Self::ctx_ptr`), so borrowck never sees either derivation: both gates were
+green — 583/583 in both profiles, 561 debug and 554 release tests — and the two
+Miri shards that drive a real encode were the only instruments that failed. This
+is F114's lesson restated at a new shape, and it is the argument for the plan's
+§4.7 in one line.
+
+**It is T9.H14's finding with the polarity flipped, at the same three lines.**
+H14 removed `ctx_ltr(&mut *pCtx)` from between the same `pStatistics` derivation
+and the same write — a `Unique` retag of the whole context — and left a comment
+saying so. The comment did not generalise to the shared direction, because in the
+raw world there was no shared direction to generalise to. A2 created one.
+
+**The rule, and it belongs in every later checkpoint's checklist:**
+
+> A `&self` accessor on `sWelsEncCtx` is a retag over the entire context. It may
+> not be called while any `&mut`-derived binding into that same context is live.
+> Where the context is a `&mut sWelsEncCtx`, borrowck enforces this. **Where it
+> is a raw pointer, nothing does but Miri**, so every such body is read by hand
+> and the session close's Miri lane is the gate.
+
+The remedy is §4.6's first, as everywhere else: the read moves above the `&mut`.
+A scanner for the shape (`&mut (*pCtx).field` or `&mut *pCtx` live across a
+reader call, in a body whose context root is raw) is in the session's scratch
+notes; run over the tree after the fix it reports **one** body, this one, with
+the reader now above the retag. It is worth re-running whenever a reader is
+added.
+
+**A second-order note on `addr_of_mut!`, which is *not* affected**: a raw made
+with `addr_of_mut!((*pCtx).f)` inherits the parent's tag rather than minting a
+child, so a sibling `SharedReadOnly` does not pop it — writing through it pops
+the shared child instead, which is allowed. The hazard is specifically the
+`&mut`-shaped derivation. That asymmetry is why F71's spelling was chosen in the
+first place and why the accessors that must hand out *writable* raws keep it
+(`ctx_ref_list_raw`, A3).
+
+---
+
+## F209 — the brief's per-checkpoint cascade estimates are per-accessor, but the de-unsafe cascade is per-**body** and gates on the last accessor a body uses
+
+**S1, measured at A2's close.** The brief bills A2 as "`ctx_rc_at` (60): the rate
+controller's per-layer state; `rc.rs`'s unsafe-fn count should collapse in the
+cascade", and the plan's §5 table puts a number on it: "finishes `rc.rs` (−55
+unsafe fn)". A2 converted all 60 sites and `rc.rs` lost **two** `unsafe fn`
+(ratchet, per file: 55 → 53).
+
+The arithmetic is not wrong about `ctx_rc_at`; it is wrong about what makes a
+body unsafe. `rc.rs`'s bodies call `ctx_param` (37 conflict sites alone),
+`ctx_vaa`, `ctx_func_list` and `current_layer` as well, and a body sheds `unsafe`
+only when its **last** unsafe callee does. So the cascade is not additive per
+accessor — it is a join, and it lands at whichever checkpoint converts the
+straggler. For `rc.rs` that is A7 (`ctx_param`), not A2.
+
+**What the whole session's ratchet shows, by file** (baseline `c521b616` → close):
+
+| file | `unsafe fn` | `raw_ptr` |
+|---|---|---|
+| `encoder/encoder_context.rs` | 24 → **15** | 95 → **59** |
+| `encoder/rc.rs` | 55 → 53 | 21 → 17 |
+| `encoder/svc_encode_slice.rs` | 81 → 79 | 117 → 117 |
+| `encoder/encoder_ext.rs` | 38 → 38 | 73 → 72 |
+| `encoder/paraset_strategy.rs` | 12 → 12 | 18 → 15 |
+
+The accessor layer's own file is where the count moves, because that is where the
+converted items live. Everything else is waiting on its straggler. **The
+consequence for planning**: stage A's value is not visible in `unsafe_fn` until
+A7 lands, and a session that measures itself on that metric mid-stage will read
+its own progress as a failure. The metric that does move honestly is
+`raw_ptr` (1181 → 1137 across S1) and the plan's tracking number (627 → 613).
+
+---
+
+## F210 — `ctx_dq_layer` cannot convert in stage A, and the blocker is not the one the brief pairs it with
+
+**S1, checkpoint A3.** The brief pairs `ctx_dq_layer` with `ctx_ref_list` because
+they are "held **jointly** in the encode loop — join analysis first,
+combined-accessor likely". Measured:
+
+1. **There is no joint-holder problem to solve on the single-threaded side.**
+   `phase9_ctx_join.py` reports **0 LIVE** hazards at the session's start and 0 at
+   its close; all 19 (now 14) are moot, i.e. in-fork, where S63 forbids the retag
+   the analyser models. The combined accessor A3 did mint
+   (`ref_list_and_ltr_mut`) was needed for a *different* pair — the reference
+   list and the LTR state — which the brief does not mention.
+2. **The real blocker is the layer's own ownership.** The fork **writes** the DQ
+   layer: F191's fourth row counts 42 in-fork `: *mut SDqLayer` parameters, and
+   plan §10.3 assigns them to D2–D3. So `dq_layer` can return neither `&mut`
+   (S63 forbids N workers holding one) nor `&` (the writes are real), and
+   `Option<Box<T>>` offers no *safe* way to hand out a writable raw without
+   retagging the pointee — the one spelling that works, `ptr::read` of the slot,
+   is the `unsafe` the conversion is trying to remove.
+
+`ctx_dq_layer` therefore stays raw through stage A and converts when the layer's
+storage does. Its 15 sites are not stage A's work, and a later session should not
+re-derive this at cost: the ordering constraint is **layer-before-accessor**, not
+the reverse.
+
+---
+
+## F211 — two raw routes survive stage A by **provenance**, not by debt, and the slice readers are weaker than the header-read spelling they replace
+
+**S1, A3 and A4.** Two derivations resisted conversion for the same reason, and
+it is worth stating once because it will recur at A5–A7:
+
+* `WelsInitCurrentLayer` stamps `SDqLayer::pRefList`, a raw *field* (stage C's),
+  and the fork reads the stored value for a whole frame. The value must therefore
+  carry the reference list's **own** provenance. A `&mut`-derived cast would
+  stamp a fresh `Unique` that the next `ref_list_mut` call pops, leaving the fork
+  reading through a dead tag — and F208 is the proof that no byte gate sees that.
+  So `ctx_ref_list_raw` survives, with one caller and a note.
+* `RequestMemorySvc`'s `pSps`/`pSubsetSps`/`pPps` cursors must survive the
+  parameter-set calls, which reach the same arrays again. They are derived from
+  the **readers**, deliberately: `as_ptr` through a shared borrow is what makes
+  the coexistence lawful.
+
+**And a real weakening, recorded rather than glossed.** The old root accessors
+read the buffer pointer out of the `Vec` *header* (`(*addr_of!(v)).as_ptr()`), so
+the raw they handed out carried the **buffer allocation's own** tag and survived
+every later retag of the array. `sps_array()` and its siblings return `&[T]`,
+which is a `SharedReadOnly` retag **over the buffer**, so a raw derived from one
+is a child and dies at the next `*_mut` reader on the same array. Nothing in the
+tree does that today — the session close's Miri lane drives the whole init path
+and is green, 291/291 — but the property is now a *checked* invariant rather than
+a structural one. A later session that adds an array writer between a cursor's
+derivation and its use will be told by Miri and by nothing else.
+
+---
+
+## F212 — A6 priced before it is chosen: take the flip, leave the dispatch enums to C1
+
+**S1, the pricing plan §10.1 asks for, done from measurement rather than
+carried forward as an open question.** F191 ruled that `ctx_func_list`'s 105
+sites "cannot take a shared projection at all", because the table is re-written
+at frame cadence and "handing out `&SWelsFuncPtrList` would let a reader hold one
+across the re-write". Measured at the site, the objection is answered by the
+conversion itself:
+
+* **The re-write is two fields, in one body.** `SetFastCodingFunc` /
+  `SetNormalCodingFunc` write `pfIntraFineMd` and
+  `sSampleDealingFuncs.pfMdCost`, and nothing else. They have exactly one caller
+  (`encoder_ext.rs:2474`/`:2476`), which already derives **one** `&mut
+  SWelsFuncPtrList` from the owner (`let fl: &mut SWelsFuncPtrList = &mut
+  *ctx_func_list(pCtx);`) — that is `func_list_mut(&mut self)` character for
+  character.
+* **The caller takes `&mut sWelsEncCtx`, so it is single-threaded**, and the fork
+  never writes the table at all.
+* **Under the flip, "a reader holds one across the re-write" stops being a
+  hazard and becomes a compile error**: the re-writer needs `&mut`, so no `&` can
+  be live across it. F191's concern is exactly what borrowck refuses. The only
+  residue is the raw-rooted case F208 names, and that is a per-checkpoint hand
+  audit plus the Miri lane.
+* **The dispatch-conflict shape is already absent**: a grep for the pattern
+  F191 worried about — a table read whose call takes the context as an argument
+  — returns **zero** sites, so §4.6's copy-the-fn-pointer-first rule costs
+  nothing here.
+
+**The alternative, priced.** F191's preferred end state is "the dispatch enums
+Phase 4b built, finished". That is a different debt: it retypes the fn-pointer
+*aliases* and every impl behind them, and it does **not** remove `ctx_func_list`
+— the accessor would still be there, still raw. The plan already schedules it, as
+**C1**, "the 10 unsafe fn-pointer aliases → safe signatures … lands as one change
+so the table is never half-typed".
+
+**So: A6 takes the flip** — `func_list(&self)` for the ~104 readers,
+`func_list_mut(&mut self)` for the one re-writer — and leaves the enums where the
+plan already puts them. The two are orthogonal: the flip removes the accessor's
+`unsafe`, C1 removes the aliases'. Doing the enums inside A6 would pull a
+C-stage checkpoint forward and still leave A6's own job undone.
