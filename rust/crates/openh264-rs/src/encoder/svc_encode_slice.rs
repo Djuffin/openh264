@@ -66,8 +66,7 @@ use crate::{
 
 pub use crate::encoder::encoder_context::EWelsSliceType;
 use crate::encoder::encoder_context::{
-    ctx_dq_layer, ctx_param, ctx_pps_array,
-    ctx_sps_array, ctx_subset_array,
+    ctx_dq_layer, ctx_param,
     ctx_func_list,
 };
 
@@ -770,18 +769,22 @@ pub unsafe fn layer_sps(pCtx: *mut sWelsEncCtx, pCurLayer: *const SDqLayer) -> *
     match (*pCurLayer).sLayerInfo.eSps {
         None => std::ptr::null_mut(),
         Some(LayerSps::Avc(id)) => {
-            let arr = ctx_sps_array(pCtx);
-            if arr.is_null() {
+            // A4: the array is the safe reader now; the raw comes back out of it
+            // because the far end is `SDqLayer::sLayerInfo`, stage C's. Nothing in
+            // the fork writes a parameter set (whole-tree grep at the conversion),
+            // so a shared reborrow is the right root for this cursor.
+            let arr = (*pCtx).sps_array();
+            if arr.is_empty() {
                 return std::ptr::null_mut();
             }
-            arr.add(id.get())
+            arr.as_ptr().cast_mut().add(id.get())
         }
         Some(LayerSps::Subset(id)) => {
-            let arr = ctx_subset_array(pCtx);
-            if arr.is_null() {
+            let arr = (*pCtx).subset_array();
+            if arr.is_empty() {
                 return std::ptr::null_mut();
             }
-            std::ptr::addr_of_mut!((*arr.add(id.get())).pSps)
+            std::ptr::addr_of_mut!((*arr.as_ptr().cast_mut().add(id.get())).pSps)
         }
     }
 }
@@ -802,11 +805,11 @@ pub unsafe fn layer_subset_sps(
 ) -> *mut SSubsetSps {
     match (*pCurLayer).sLayerInfo.eSps {
         Some(LayerSps::Subset(id)) => {
-            let arr = ctx_subset_array(pCtx);
-            if arr.is_null() {
+            let arr = (*pCtx).subset_array();
+            if arr.is_empty() {
                 return std::ptr::null_mut();
             }
-            arr.add(id.get())
+            arr.as_ptr().cast_mut().add(id.get())
         }
         _ => std::ptr::null_mut(),
     }
@@ -824,11 +827,11 @@ pub unsafe fn layer_pps(pCtx: *mut sWelsEncCtx, pCurLayer: *const SDqLayer) -> *
     let Some(id) = (*pCurLayer).sLayerInfo.iPps else {
         return std::ptr::null_mut();
     };
-    let arr = ctx_pps_array(pCtx);
-    if arr.is_null() {
+    let arr = (*pCtx).pps_array();
+    if arr.is_empty() {
         return std::ptr::null_mut();
     }
-    arr.add(id.get())
+    arr.as_ptr().cast_mut().add(id.get())
 }
 
 /// The context's **active SPS**, resolved from its position — T6.G3.
@@ -836,43 +839,42 @@ pub unsafe fn layer_pps(pCtx: *mut sWelsEncCtx, pCurLayer: *const SDqLayer) -> *
 /// `sWelsEncCtx::pSps` was a pointer into `pSpsArray`; `iSps` is the index, and this
 /// answers the same address, including **null in the two cases the pointer was
 /// null**: before `WelsInitEncoderExt` names one, and before the array exists. The
-/// spelling is S40's — `pSpsArray` is raw, so `.add()` on it forms no reference and
+/// spelling is S40's — the array reader hands out the buffer's own address, so
 /// repeated calls are independent.
-///
-/// # Safety
-/// `pCtx` must point to a live encoder context.
 #[inline]
-// unsafe-cat: cursor
-#[allow(unsafe_code)]
-pub unsafe fn ctx_sps(pCtx: &mut sWelsEncCtx) -> *mut SWelsSPS {
+pub fn ctx_sps(pCtx: &sWelsEncCtx) -> *mut SWelsSPS {
     let Some(id) = pCtx.iSps else {
         return std::ptr::null_mut();
     };
-    let arr = ctx_sps_array(pCtx);
-    if arr.is_null() {
+    let arr = pCtx.sps_array();
+    if arr.is_empty() {
         return std::ptr::null_mut();
     }
     debug_assert!((id.get() as i32) < pCtx.iSpsNum.max(1), "iSps past iSpsNum");
-    arr.add(id.get())
+    // A4: a **safe fn with a raw return** — forming a pointer needs no `unsafe`,
+    // only dereferencing one does, and the dereference belongs to the twenty-two
+    // consumers that read a field off it. `wrapping_add` computes the address
+    // `.add` computed without making the in-bounds claim, which the
+    // `debug_assert` above has always made instead. The return stays raw because
+    // every caller holds it beside other reaches into the same context; a
+    // reference would borrow the context for its whole lifetime and A7's split is
+    // where that gets settled.
+    arr.as_ptr().cast_mut().wrapping_add(id.get())
 }
 
 /// The context's **active PPS**, resolved from its position — see [`ctx_sps`].
-///
-/// # Safety
-/// `pCtx` must point to a live encoder context.
 #[inline]
-// unsafe-cat: cursor
-#[allow(unsafe_code)]
-pub unsafe fn ctx_pps(pCtx: &mut sWelsEncCtx) -> *mut SWelsPPS {
+pub fn ctx_pps(pCtx: &sWelsEncCtx) -> *mut SWelsPPS {
     let Some(id) = pCtx.iPps else {
         return std::ptr::null_mut();
     };
-    let arr = ctx_pps_array(pCtx);
-    if arr.is_null() {
+    let arr = pCtx.pps_array();
+    if arr.is_empty() {
         return std::ptr::null_mut();
     }
     debug_assert!((id.get() as i32) < pCtx.iPpsNum.max(1), "iPps past iPpsNum");
-    arr.add(id.get())
+    // Safe fn, raw return — see [`ctx_sps`].
+    arr.as_ptr().cast_mut().wrapping_add(id.get())
 }
 
 /// The context's current reference picture, resolved through the current dependency

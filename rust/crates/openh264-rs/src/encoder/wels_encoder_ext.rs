@@ -73,8 +73,7 @@ use crate::encoder::param_svc::GetLogFactor;
 use crate::encoder::param_svc::SExistingParasetList;
 use crate::encoder::svc_motion_estimate::CheckInRangeCloseOpen;
 use crate::encoder::encoder_context::{
-    ctx_frame_bs_cur, ctx_param, ctx_pps_array,
-    ctx_sps_array, ctx_subset_array,
+    ctx_param,
     SParaSetOffsetVariable, MAX_DQ_LAYER_NUM,
     MAX_PPS_COUNT, PARA_SET_TYPE,
     ctx_func_list,
@@ -408,9 +407,12 @@ pub unsafe fn WelsWriteOneSPS(pCtx: &mut sWelsEncCtx, kiSpsIdx: i32, iNalSize: *
         NRI_PRI_HIGHEST as i32,
     );
 
+    // §4.6: the parameter set is `Copy`, so it comes out of the array before
+    // `ParasetStrategy(pCtx)` claims the context.
+    let sSps = pCtx.sps_array()[kiSpsIdx as usize];
     WelsWriteSpsNal(
         &mut (&mut *pOut).sBsBuffer[..],
-        &*ctx_sps_array(pCtx).add(kiSpsIdx as usize),
+        &sSps,
         &mut (*pOut).sBsWrite,
         ParasetStrategy(pCtx).GetSpsIdOffsetList(PARA_SET_TYPE_AVCSPS as i32),
     );
@@ -420,7 +422,7 @@ pub unsafe fn WelsWriteOneSPS(pCtx: &mut sWelsEncCtx, kiSpsIdx: i32, iNalSize: *
         &(&*pOut).sNalList[iNal as usize],
         &(&*pOut).sBsBuffer[..],
         None,
-        ctx_frame_bs_cur(pCtx),
+        pCtx.frame_bs_cur(),
         // available buffer to be written, so need to subtract the used length
         pCtx.iFrameBsSize - pCtx.iPosBsBuffer,
         &mut *iNalSize,
@@ -446,9 +448,11 @@ pub unsafe fn WelsWriteOnePPS(pCtx: &mut sWelsEncCtx, kiPpsIdx: i32, iNalSize: *
         NRI_PRI_HIGHEST as i32,
     );
 
+    // §4.6, as the SPS above.
+    let sPps = pCtx.pps_array()[kiPpsIdx as usize];
     WelsWritePpsSyntax(
         &mut (&mut *pOut).sBsBuffer[..],
-        &*ctx_pps_array(pCtx).add(kiPpsIdx as usize),
+        &sPps,
         &mut (*pOut).sBsWrite,
         ParasetStrategy(pCtx),
     );
@@ -458,7 +462,7 @@ pub unsafe fn WelsWriteOnePPS(pCtx: &mut sWelsEncCtx, kiPpsIdx: i32, iNalSize: *
         &(&*pOut).sNalList[iNal as usize],
         &(&*pOut).sBsBuffer[..],
         None,
-        ctx_frame_bs_cur(pCtx),
+        pCtx.frame_bs_cur(),
         pCtx.iFrameBsSize - pCtx.iPosBsBuffer,
         &mut *iNalSize,
     );
@@ -511,7 +515,7 @@ pub unsafe fn WelsWriteParameterSets(
     iIdx = 0;
     while iIdx < pCtx.iSpsNum {
         ParasetStrategy(pCtx).Update(
-            (*ctx_sps_array(pCtx).add(iIdx as usize)).uiSpsId,
+            pCtx.sps_array()[iIdx as usize].uiSpsId,
             PARA_SET_TYPE_AVCSPS as i32,
         );
         /* generate sequence parameters set */
@@ -532,7 +536,7 @@ pub unsafe fn WelsWriteParameterSets(
         iNal = (*pCtx.pOut).iNalIndex;
 
         ParasetStrategy(pCtx).Update(
-            (*ctx_subset_array(pCtx).add(iIdx as usize)).pSps.uiSpsId,
+            pCtx.subset_array()[iIdx as usize].pSps.uiSpsId,
             PARA_SET_TYPE_SUBSETSPS as i32,
         );
 
@@ -545,13 +549,15 @@ pub unsafe fn WelsWriteParameterSets(
             NRI_PRI_HIGHEST as i32,
         );
 
+        // §4.6, as the SPS above.
+        let sSubsetSps = pCtx.subset_array()[iId as usize];
         WelsWriteSubsetSpsSyntax(
             // S67 (H2): **not a context retag** — both this and the `sBsWrite` argument below
             // borrow the `pOut` allocation, and over **disjoint field ranges**, which is why
             // the slice survives the third argument's retag. Textual match in the detector; see
             // the audit note in the log.
             &mut (&mut *pCtx.pOut).sBsBuffer[..],
-            &*ctx_subset_array(pCtx).add(iId as usize),
+            &sSubsetSps,
             &mut (*pCtx.pOut).sBsWrite,
             ParasetStrategy(pCtx).GetSpsIdOffsetList(PARA_SET_TYPE_SUBSETSPS as i32),
         );
@@ -561,7 +567,7 @@ pub unsafe fn WelsWriteParameterSets(
             &(&*pCtx.pOut).sNalList[iNal as usize],
             &(&*pCtx.pOut).sBsBuffer[..],
             None,
-            ctx_frame_bs_cur(pCtx),
+            pCtx.frame_bs_cur(),
             pCtx.iFrameBsSize - pCtx.iPosBsBuffer,
             &mut iNalLength,
         );
@@ -582,7 +588,7 @@ pub unsafe fn WelsWriteParameterSets(
     iIdx = 0;
     while iIdx < pCtx.iPpsNum {
         ParasetStrategy(pCtx).Update(
-            (*ctx_pps_array(pCtx).add(iIdx as usize)).iPpsId,
+            pCtx.pps_array()[iIdx as usize].iPpsId,
             PARA_SET_TYPE_PPS as i32,
         );
 

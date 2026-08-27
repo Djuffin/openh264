@@ -46,7 +46,7 @@ use crate::api::codec_api::EParameterSetStrategy;
 use crate::api::codec_api::RC_MODES::RC_OFF_MODE;
 use crate::encoder::au_set::{WelsInitPps, WelsInitSps, WelsInitSubsetSps};
 use crate::encoder::encoder_context::{
-    ctx_param, ctx_pps_array, ctx_sps_array, ctx_subset_array, sWelsEncCtx, SLogContext,
+    ctx_param, sWelsEncCtx, SLogContext,
     SParaSetOffset,
     SParaSetOffsetVariable, MAX_DQ_LAYER_NUM, MAX_PPS_COUNT, PARA_SET_TYPE,
     ctx_func_list,
@@ -296,20 +296,19 @@ impl CWelsParametersetIdStrategyObj {
         }
         // `CWelsParametersetSpsListing::OutputCurrentStructure` — `:519`.
         (*pExistingParasetList).uiInUseSpsNum = self.m_sParaSetOffset.uiInUseSpsNum;
-        std::ptr::copy_nonoverlapping(
-            ctx_sps_array(pCtx),
-            (*pExistingParasetList).sSps.as_mut_ptr(),
-            MAX_SPS_COUNT,
-        );
+        // A4: the copy is a slice copy now. The listing kinds set
+        // `m_iBasicNeededSpsNum = MAX_SPS_COUNT`, and this body has already
+        // returned unless `eIdKind.is_listing()`, so both sides are exactly
+        // `MAX_SPS_COUNT` long and `copy_from_slice` asserts what the raw copy
+        // assumed.
+        (*pExistingParasetList).sSps.copy_from_slice(pCtx.sps_array());
         // The C tests `NULL != pCtx->pSubsetArray`; the port's accessor is a pointer
         // into the context's own storage and the test is the same one.
-        if !ctx_subset_array(pCtx).is_null() {
+        if !pCtx.subset_array().is_empty() {
             (*pExistingParasetList).uiInUseSubsetSpsNum = self.m_sParaSetOffset.uiInUseSubsetSpsNum;
-            std::ptr::copy_nonoverlapping(
-                ctx_subset_array(pCtx),
-                (*pExistingParasetList).sSubsetSps.as_mut_ptr(),
-                MAX_SPS_COUNT,
-            );
+            (*pExistingParasetList)
+                .sSubsetSps
+                .copy_from_slice(pCtx.subset_array());
         } else {
             (*pExistingParasetList).uiInUseSubsetSpsNum = 0;
         }
@@ -324,11 +323,7 @@ impl CWelsParametersetIdStrategyObj {
         // over-read of 56 structs past the end of one; the port copies the array the
         // sentence means. See F94.
         (*pExistingParasetList).uiInUsePpsNum = self.m_sParaSetOffset.uiInUsePpsNum;
-        std::ptr::copy_nonoverlapping(
-            ctx_pps_array(pCtx),
-            (*pExistingParasetList).sPps.as_mut_ptr(),
-            MAX_PPS_COUNT,
-        );
+        (*pExistingParasetList).sPps.copy_from_slice(pCtx.pps_array());
         if !pPpsIdList.is_null() {
             std::ptr::copy_nonoverlapping(
                 self.m_sParaSetOffset.iPpsIdList.as_ptr() as *const i32,
@@ -576,10 +571,13 @@ impl CWelsParametersetIdStrategyObj {
                     ((iIdrRound * iUsePpsNum as usize + iPpsId) % MAX_PPS_COUNT) as i32;
             }
         }
-        let pps = ctx_pps_array(pCtx);
         for iPpsId in iUsePpsNum as usize..MAX_PPS_COUNT {
-            *pps.add(iPpsId) = *pps.add(iPpsId % iUsePpsNum as usize);
-            (*pps.add(iPpsId)).iPpsId = iPpsId as u32;
+            // §4.6: the source entry is copied out — `SWelsPPS` is `Copy` — so the
+            // array is borrowed once per write instead of twice at once.
+            let src = pCtx.pps_array()[iPpsId % iUsePpsNum as usize];
+            let dst = &mut pCtx.pps_array_mut()[iPpsId];
+            *dst = src;
+            dst.iPpsId = iPpsId as u32;
             pCtx.iPpsNum += 1;
         }
         self.m_sParaSetOffset.uiInUsePpsNum = pCtx.iPpsNum as u32;
@@ -653,12 +651,12 @@ impl CWelsParametersetIdStrategyObj {
         if !kbUseSubsetSps {
             self.m_sParaSetOffset.uiInUseSpsNum = 1;
             for i in 0..MAX_SPS_COUNT {
-                *ctx_sps_array(pCtx).add(i) = SWelsSPS::ZERO;
+                pCtx.sps_array_mut()[i] = SWelsSPS::ZERO;
             }
         } else {
             self.m_sParaSetOffset.uiInUseSubsetSpsNum = 1;
             for i in 0..MAX_SPS_COUNT {
-                *ctx_subset_array(pCtx).add(i) = SSubsetSps::ZERO;
+                pCtx.subset_array_mut()[i] = SSubsetSps::ZERO;
             }
         }
         0
@@ -704,8 +702,8 @@ impl CWelsParametersetIdStrategyObj {
             } else {
                 self.m_sParaSetOffset.uiInUseSpsNum
             } as i32,
-            ctx_sps_array(pCtx),
-            ctx_subset_array(pCtx),
+            pCtx.sps_array(),
+            pCtx.subset_array(),
             bSVCBaselayer,
         );
         if INVALID_ID != kiFoundSpsId {
@@ -780,7 +778,7 @@ impl CWelsParametersetIdStrategyObj {
                 _kiSpsId as i32,
                 kbEntropyCodingModeFlag,
                 self.m_sParaSetOffset.uiInUsePpsNum as i32,
-                ctx_pps_array(pCtx),
+                pCtx.pps_array(),
             );
             if INVALID_ID != kiFoundPpsId {
                 kuiPpsId = kiFoundPpsId as u32;
@@ -791,7 +789,7 @@ impl CWelsParametersetIdStrategyObj {
             self.m_sParaSetOffset.uiInUsePpsNum += 1;
         }
         WelsInitPps(
-            &mut *ctx_pps_array(pCtx).add(kuiPpsId as usize),
+            &mut pCtx.pps_array_mut()[kuiPpsId as usize],
             pSps,
             pSubsetSps,
             kuiPpsId,
@@ -889,7 +887,7 @@ pub unsafe fn WelsGenerateNewSps(
     // Need port pSps/pPps initialization due to spatial scalability changed
     if !kbUseSubsetSps {
         iRet = WelsInitSps(
-            &mut *ctx_sps_array(pCtx).add(kiSpsId as usize),
+            &mut pCtx.sps_array_mut()[kiSpsId as usize],
             pDlayerParam,
             std::ptr::addr_of_mut!((*pParam).sDependencyLayers[iDlayerIndex as usize]),
             (*pParam).uiIntraPeriod,
@@ -902,7 +900,7 @@ pub unsafe fn WelsGenerateNewSps(
         );
     } else {
         iRet = WelsInitSubsetSps(
-            &mut *ctx_subset_array(pCtx).add(kiSpsId as usize),
+            &mut pCtx.subset_array_mut()[kiSpsId as usize],
             pDlayerParam,
             std::ptr::addr_of_mut!((*pParam).sDependencyLayers[iDlayerIndex as usize]),
             (*pParam).uiIntraPeriod,
@@ -1119,7 +1117,7 @@ pub unsafe fn FindExistingPps(
     _iSpsId: i32,
     kbEntropyCodingFlag: bool,
     iPpsNumInUse: i32,
-    pPpsArray: *mut SWelsPPS,
+    pPpsArray: &[SWelsPPS],
 ) -> i32 {
     let mut sTmpPps = SWelsPPS::default();
     WelsInitPps(
@@ -1133,7 +1131,7 @@ pub unsafe fn FindExistingPps(
     );
 
     for iId in 0..iPpsNumInUse {
-        let p = &*pPpsArray.add(iId as usize);
+        let p = &pPpsArray[iId as usize];
         if sTmpPps.iSpsId == p.iSpsId
             && sTmpPps.bEntropyCodingModeFlag == p.bEntropyCodingModeFlag
             && sTmpPps.iPicInitQp == p.iPicInitQp
@@ -1164,8 +1162,8 @@ pub unsafe fn FindExistingSps(
     iDlayerIndex: i32,
     iDlayerCount: i32,
     iSpsNumInUse: i32,
-    pSpsArray: *mut SWelsSPS,
-    pSubsetArray: *mut SSubsetSps,
+    pSpsArray: &[SWelsSPS],
+    pSubsetArray: &[SSubsetSps],
     bSVCBaseLayer: bool,
 ) -> i32 {
     // S29's named shape. `WelsInitSps` takes `*mut SSpatialLayerConfig`, so the
@@ -1188,7 +1186,7 @@ pub unsafe fn FindExistingSps(
             bSVCBaseLayer,
         );
         for iId in 0..iSpsNumInUse {
-            if CheckMatchedSps(&sTmpSps, &*pSpsArray.add(iId as usize)) {
+            if CheckMatchedSps(&sTmpSps, &pSpsArray[iId as usize]) {
                 return iId;
             }
         }
@@ -1207,7 +1205,7 @@ pub unsafe fn FindExistingSps(
         );
 
         for iId in 0..iSpsNumInUse {
-            if CheckMatchedSubsetSps(&sTmpSubsetSps, &*pSubsetArray.add(iId as usize)) {
+            if CheckMatchedSubsetSps(&sTmpSubsetSps, &pSubsetArray[iId as usize]) {
                 return iId;
             }
         }

@@ -28,13 +28,12 @@ use crate::api::codec_api::RC_MODES::RC_OFF_MODE;
 use crate::api::codec_api::{ELevelIdc, SSpatialLayerConfig};
 use crate::decoder::nalu::g_ksLevelLimits;
 use crate::encoder::encoder_context::{
-    ctx_dq_idc_map, ctx_dq_layer, ctx_frame_bs_cur, ctx_ltr_at, ctx_mb_index_x,
+    ctx_dq_idc_map, ctx_dq_layer, ctx_ltr_at, ctx_mb_index_x,
     ctx_paraset_arrays,
     ctx_mb_index_y, ctx_param, ctx_vaa,
-    ctx_pps_array, ctx_sps_array,
     ctx_stride_enc_block_offset,
-    ctx_subset_array,
-    sWelsEncCtx, SDqIdc, SLogContext, SRefList, SStrideTables, BASE_DEPENDENCY_ID,
+    sWelsEncCtx, SDqIdc, SLogContext, SRefList, SStrideTables, SSubsetSps, SWelsPPS,
+    SWelsSPS, BASE_DEPENDENCY_ID,
     ctx_func_list,
 };
 use crate::encoder::md::INTRA_4x4_MODE_NUM;
@@ -896,8 +895,8 @@ pub unsafe fn InitDqLayers(
     // `*_UNDEF`s, and none of those is what a memset writes (F56: zeros are ruled).
     (**ppCtx).pSpsArray = vec![crate::encoder::param_svc::SWelsSPS::ZERO; kiNeededSpsNum as usize];
     // The `else` arm was `pSubsetArray = null_mut()` — no allocation at all when the
-    // configuration needs no subset SPS. An empty `Vec` is that, and `ctx_subset_array`
-    // answers the same null for it.
+    // configuration needs no subset SPS. An empty `Vec` is that, and
+    // `subset_array()` answers the same emptiness for it.
     (**ppCtx).pSubsetArray = vec![
         crate::encoder::param_svc::SSubsetSps::ZERO;
         kiNeededSubsetSpsNum.max(0) as usize
@@ -956,10 +955,21 @@ pub unsafe fn InitDqLayers(
         // spelling the callee used, including the subset arm's inner SPS, which
         // lines 945-946 below read and which this block did *not* previously
         // reassign.
+        // **A4 derives these three from the *readers*, deliberately.** They are
+        // read-only cursors — `InitPps` takes them as `Option<&_>` and the two
+        // `iMb*` reads below are reads — and they must survive the parameter-set
+        // calls, which reach the same arrays again. `as_ptr` through a shared
+        // borrow is the derivation the raw accessor performed, and it is what
+        // makes those coexistences lawful (F71); a `&mut`-derived raw would be
+        // popped by the next shared read of the same buffer.
         if !bUseSubsetSps {
-            pSps = ctx_sps_array(*ppCtx).add(iSpsId as usize);
+            pSps = (**ppCtx).sps_array().as_ptr().cast_mut().add(iSpsId as usize);
         } else {
-            pSubsetSps = ctx_subset_array(*ppCtx).add(iSpsId as usize);
+            pSubsetSps = (**ppCtx)
+                .subset_array()
+                .as_ptr()
+                .cast_mut()
+                .add(iSpsId as usize);
             pSps = std::ptr::addr_of_mut!((*pSubsetSps).pSps);
         }
 
@@ -980,7 +990,7 @@ pub unsafe fn InitDqLayers(
             bUseSubsetSps,
             (*pParam).iEntropyCodingModeFlag != 0,
         );
-        let pPps = ctx_pps_array(*ppCtx).add(iPpsId as usize);
+        let pPps = (**ppCtx).pps_array().as_ptr().cast_mut().add(iPpsId as usize);
 
         // FMO is not used in SVC coding so far; come back if FMO is needed
         iResult = InitSlicePEncCtx(
@@ -1761,26 +1771,26 @@ mod tests {
             assert!(!(*pCtx).pSpsArray.is_empty(), "pSpsArray still unallocated");
             assert!(!(*pCtx).pPPSArray.is_empty(), "pPPSArray still unallocated");
             // The configuration needs no subset SPS, and the C++ allocated nothing
-            // at all for it — an empty `Vec`, which `ctx_subset_array` reads as the
-            // null the raw field held.
+            // at all for it — an empty `Vec`, which `subset_array()` reads as the
+            // emptiness the raw field's null stood for.
             assert!((*pCtx).pSubsetArray.is_empty(), "pSubsetArray was not needed");
-            assert!(ctx_subset_array(pCtx).is_null());
+            assert!((*pCtx).subset_array().is_empty());
             assert_eq!((*pCtx).iSpsNum, 1);
             assert_eq!((*pCtx).iPpsNum, 1);
             assert_eq!((*pCtx).iSubsetSpsNum, 0);
-            assert_eq!(ctx_sps(&mut *pCtx), ctx_sps_array(pCtx));
-            assert_eq!(ctx_pps(&mut *pCtx), ctx_pps_array(pCtx));
+            assert_eq!(ctx_sps(&mut *pCtx), (*pCtx).sps_array().as_ptr().cast_mut());
+            assert_eq!(ctx_pps(&mut *pCtx), (*pCtx).pps_array().as_ptr().cast_mut());
 
             // The SPS the strategy generated must be the one Phase 3 proved
             // byte-exact against the C++ reference for this configuration.
-            let sps = &*ctx_sps_array(pCtx);
+            let sps = &(*pCtx).sps_array()[0];
             assert_eq!(sps.iMbWidth, 10);
             assert_eq!(sps.iMbHeight, 6);
             assert_eq!(sps.uiLog2MaxFrameNum, 15);
             assert_eq!(sps.uiPocType, 2);
             assert_eq!(sps.iLevelIdc, 13);
 
-            let pps = &*ctx_pps_array(pCtx);
+            let pps = &(*pCtx).pps_array()[0];
             assert_eq!(pps.iPicInitQp, 26);
             assert!(pps.bDeblockingFilterControlPresentFlag);
 
@@ -2341,7 +2351,7 @@ pub unsafe fn AddPrefixNal(
         &(&*pOut).sNalList[(*pOut).iNalIndex as usize - 1],
         &(&*pOut).sBsBuffer[..],
         Some(&(*current_layer(pCtx)).sLayerInfo.sNalHeaderExt),
-        ctx_frame_bs_cur(pCtx),
+        pCtx.frame_bs_cur(),
         pCtx.iFrameBsSize - pCtx.iPosBsBuffer,
         &mut *pNalLen.add(*pNalIdxInLayer as usize),
     );
@@ -2395,7 +2405,7 @@ pub unsafe fn WritePadding(pCtx: &mut sWelsEncCtx, iLen: i32, iSize: *mut i32) -
         &(&*pOut).sNalList[iNal as usize],
         &(&*pOut).sBsBuffer[..],
         None,
-        ctx_frame_bs_cur(pCtx),
+        pCtx.frame_bs_cur(),
         pCtx.iFrameBsSize - pCtx.iPosBsBuffer,
         &mut iNalLen,
     );
@@ -2600,7 +2610,7 @@ pub unsafe fn WriteSsvcParaset(
     let pNext = pLayerBsInfo.add(1);
     *ppLayerBsInfo = pNext;
     (*pCtx.pOut).iLayerBsIndex += 1;
-    (*pNext).pBsBuf = ctx_frame_bs_cur(pCtx);
+    (*pNext).pBsBuf = pCtx.frame_bs_cur();
     (*pNext).pNalLengthInByte = (*pLayerBsInfo).pNalLengthInByte.add(iCountNal as usize);
 
     // update for external countings
@@ -2630,7 +2640,7 @@ pub unsafe fn WriteSavcParaset(
     // `pCtx->pFuncList`. T4b.2a.
     if let Some(pStrategy) = (*ctx_func_list(pCtx)).pParametersetStrategy.as_mut() {
         pStrategy.Update(
-            (*ctx_sps_array(pCtx).add(iIdx as usize)).uiSpsId,
+            pCtx.sps_array()[iIdx as usize].uiSpsId,
             PARA_SET_TYPE_AVCSPS as i32,
         );
     }
@@ -2655,7 +2665,7 @@ pub unsafe fn WriteSavcParaset(
 
     let mut pNext = pLayerBsInfo.add(1);
     (*pCtx.pOut).iLayerBsIndex += 1;
-    (*pNext).pBsBuf = ctx_frame_bs_cur(pCtx);
+    (*pNext).pBsBuf = pCtx.frame_bs_cur();
     (*pNext).pNalLengthInByte = (*pLayerBsInfo).pNalLengthInByte.add(iCountNal as usize);
     *iLayerNum += 1;
     pLayerBsInfo = pNext;
@@ -2664,7 +2674,7 @@ pub unsafe fn WriteSavcParaset(
     iNalSize = 0;
     if let Some(pStrategy) = (*ctx_func_list(pCtx)).pParametersetStrategy.as_mut() {
         pStrategy.Update(
-            (*ctx_pps_array(pCtx).add(iIdx as usize)).iPpsId,
+            pCtx.pps_array()[iIdx as usize].iPpsId,
             PARA_SET_TYPE_PPS as i32,
         );
     }
@@ -2686,7 +2696,7 @@ pub unsafe fn WriteSavcParaset(
 
     pNext = pLayerBsInfo.add(1);
     (*pCtx.pOut).iLayerBsIndex += 1;
-    (*pNext).pBsBuf = ctx_frame_bs_cur(pCtx);
+    (*pNext).pBsBuf = pCtx.frame_bs_cur();
     (*pNext).pNalLengthInByte = (*pLayerBsInfo).pNalLengthInByte.add(iCountNal as usize);
     *iLayerNum += 1;
 
@@ -2763,7 +2773,7 @@ pub unsafe fn WriteSavcParaset_Listing(
 
         let pNext = pLayerBsInfo.add(1);
         (*pCtx.pOut).iLayerBsIndex += 1;
-        (*pNext).pBsBuf = ctx_frame_bs_cur(pCtx);
+        (*pNext).pBsBuf = pCtx.frame_bs_cur();
         (*pNext).pNalLengthInByte = (*pLayerBsInfo).pNalLengthInByte.add(iCountNal as usize);
         *iLayerNum += 1;
         pLayerBsInfo = pNext;
@@ -2799,7 +2809,7 @@ pub unsafe fn WriteSavcParaset_Listing(
 
         let pNext = pLayerBsInfo.add(1);
         (*pCtx.pOut).iLayerBsIndex += 1;
-        (*pNext).pBsBuf = ctx_frame_bs_cur(pCtx);
+        (*pNext).pBsBuf = pCtx.frame_bs_cur();
         (*pNext).pNalLengthInByte = (*pLayerBsInfo).pNalLengthInByte.add(iCountNal as usize);
         *iLayerNum += 1;
         pLayerBsInfo = pNext;
@@ -3238,7 +3248,7 @@ pub unsafe fn WelsCodeOnePicPartition(
             &(&*pCtx.pOut).sNalList[((*pCtx.pOut).iNalIndex - 1) as usize],
             &(&*pCtx.pOut).sBsBuffer[..],
             Some(&(*current_layer(pCtx)).sLayerInfo.sNalHeaderExt),
-            ctx_frame_bs_cur(pCtx),
+            pCtx.frame_bs_cur(),
             pCtx.iFrameBsSize - pCtx.iPosBsBuffer,
             &mut *(*pLayerBsInfo).pNalLengthInByte.add(iNalIdxInLayer as usize),
         );
@@ -3691,7 +3701,7 @@ pub unsafe fn WelsEncoderEncodeExt(
                 &(&*pCtx.pOut).sNalList[(*pCtx.pOut).iNalIndex as usize - 1],
                 &(&*pCtx.pOut).sBsBuffer[..],
                 Some(&(*current_layer(pCtx)).sLayerInfo.sNalHeaderExt),
-                ctx_frame_bs_cur(pCtx),
+                pCtx.frame_bs_cur(),
                 pCtx.iFrameBsSize - pCtx.iPosBsBuffer,
                 &mut *(*pLayerBsInfo).pNalLengthInByte.add(iNalIdxInLayer as usize),
             );
@@ -3744,7 +3754,7 @@ pub unsafe fn WelsEncoderEncodeExt(
                 return ENC_RETURN_UNEXPECTED;
             }
             //note: the old codes are removed at commit: 3e0ee69
-            (*pLayerBsInfo).pBsBuf = ctx_frame_bs_cur(pCtx);
+            (*pLayerBsInfo).pBsBuf = pCtx.frame_bs_cur();
             (*pLayerBsInfo).uiLayerType = VIDEO_CODING_LAYER;
             (*pLayerBsInfo).uiSpatialId = pCtx.uiDependencyId;
             (*pLayerBsInfo).uiTemporalId = pCtx.uiTemporalId;
@@ -3791,7 +3801,7 @@ pub unsafe fn WelsEncoderEncodeExt(
             // `pLayerBsInfo` right below. S29's spelling reuses the parent's
             // provenance and pops nothing — F70's rule, F114a's shape.
             let pLbi = std::ptr::addr_of_mut!((*pFbi).sLayerInfo[iLayerBsIdx as usize]);
-            (*pLbi).pBsBuf = ctx_frame_bs_cur(pCtx);
+            (*pLbi).pBsBuf = pCtx.frame_bs_cur();
             (*pLbi).uiLayerType = VIDEO_CODING_LAYER;
             (*pLbi).uiSpatialId = pCtx.uiDependencyId;
             (*pLbi).uiTemporalId = pCtx.uiTemporalId;
@@ -3899,7 +3909,7 @@ pub unsafe fn WelsEncoderEncodeExt(
                     &(&*pCtx.pOut).sNalList[(*pCtx.pOut).iNalIndex as usize - 1],
                     &(&*pCtx.pOut).sBsBuffer[..],
                     Some(&(*current_layer(pCtx)).sLayerInfo.sNalHeaderExt),
-                    ctx_frame_bs_cur(pCtx),
+                    pCtx.frame_bs_cur(),
                     pCtx.iFrameBsSize - pCtx.iPosBsBuffer,
                     &mut *(*pLayerBsInfo).pNalLengthInByte.add(iNalIdxInLayer as usize),
                 );
@@ -4058,7 +4068,7 @@ pub unsafe fn WelsEncoderEncodeExt(
         let pPrev = pLayerBsInfo;
         pLayerBsInfo = pLayerBsInfo.add(1);
         (*pCtx.pOut).iLayerBsIndex += 1;
-        (*pLayerBsInfo).pBsBuf = ctx_frame_bs_cur(pCtx);
+        (*pLayerBsInfo).pBsBuf = pCtx.frame_bs_cur();
         (*pLayerBsInfo).pNalLengthInByte =
             (*pPrev).pNalLengthInByte.add(iCountNal as usize);
 
@@ -4094,7 +4104,7 @@ pub unsafe fn WelsEncoderEncodeExt(
             let pPrev2 = pLayerBsInfo;
             pLayerBsInfo = pLayerBsInfo.add(1);
             (*pCtx.pOut).iLayerBsIndex += 1;
-            (*pLayerBsInfo).pBsBuf = ctx_frame_bs_cur(pCtx);
+            (*pLayerBsInfo).pBsBuf = pCtx.frame_bs_cur();
             (*pLayerBsInfo).pNalLengthInByte = (*pPrev2).pNalLengthInByte.add(1);
             iLayerNum += 1;
 
