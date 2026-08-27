@@ -19246,3 +19246,107 @@ either finishing or not starting.
 * **The ~36 have no blocker in front of them.** They are still step 1's remainder.
 * **`ctx_ltr_at` is sized for the first time**: 75 sites, 83 borrow conflicts, four
   bodies. Its own step, not a signature change.
+
+## 2026-08-26 — Phase 9, session H3 (the long-term-reference accessor returns a real reference)
+
+**One job, done whole: `ctx_ltr_at` returns `&mut SLTRState` as a safe `fn`, and
+`ctx_ltr` is deleted rather than converted.** Seven commits — the census
+classified (F197), the dead Screen pair as the learning run, the nine small live
+bodies, the two central live bodies one commit each, the flip — with the family
+sweep 583/583 in both profiles after every live-path commit. **Zero flakes all
+session**: F3's alternation protocol stood armed and never fired.
+
+### Step 0, expected vs actual (S60)
+
+Expected, from F196 via the brief: 84 errors / 75 sites / 49 E0499 + 28 E0503 +
+5 E0502 + 1 E0506 / zero mechanical. Actual: **83 / 75 / 49+28+5+1 / zero**.
+Breakdown and site count match to the digit — and F196's own table already
+summed to 83 against its stated 84, so the tree had not moved: the recorded
+headline total was arithmetically inconsistent with its own table when written,
+and the table was the correct half (F197). Per the brief's rule the
+classification proceeded from this session's census.
+
+### The classification held to the digit, and the predicted remedies were wrong in one direction only
+
+F197's table — committed before any edit — classified the 83 into **hoist**
+(derive the raw root or scalar before the LTR borrow, leave the deref in
+place), **reorder** (swap two derivations), **re-derive after a whole-context
+call** (the two big update bodies), and **two callee narrowings**
+(`WelsMarkMMCORefInfo`, `WelsMarkMMCORefInfoScreen` — one caller each, two
+`ctx_param` scalars by value, LTR state as a shared borrow). Predicted and
+landed: **zero split borrows, zero genuinely-interleaved sites, the revert rule
+never fired**. Each staged commit's probe re-check removed exactly the errors
+the table assigned it: 83 → 71 → 55 → 22 → 9 → 0.
+
+The structural fact that made it this cheap (F197): `ctx_param`, `ctx_vaa`,
+`ctx_ref_list`, `current_layer` all take `*mut sWelsEncCtx`, so every conflict
+at their call sites was the implicit `&mut → *mut` reborrow-coercion of `pCtx`
+— and every raw they answer points into a different allocation (F71), so a
+call hoisted above the LTR borrow leaves its deref free to stay where the C++
+reads it. The charter row's prediction "resolved by split-borrows over the
+LTR/ref-list state" named the wrong remedy class: nothing needed one, because
+no site pairs the LTR state with a second borrow *into the context struct
+itself* — the one same-struct neighbour (`bRefOfCurTidIsLtr`) is written only
+after the LTR borrow's last use.
+
+### The staging trick, for the next conversion of this shape
+
+`(*ctx_ltr_at(..)).f`, `&mut *ctx_ltr_at(..)` and `&*ctx_ltr_at(..)` compile
+against **both** the raw and the reference signature. So every body was
+reshaped and byte-gated against the raw accessor, with a local uncommitted
+probe flip after each reshape confirming that body's census share went to zero
+— the compiler refereeing dead code (the Screen pair, F192) exactly as hard as
+live. The flip itself then landed as signature + spelling collapses + comments,
+clean on the first build.
+
+### The commits
+
+| commit | what | gate |
+|---|---|---|
+| `8182edab` | F197: census reproduced, classified, committed as a falsifiable plan | commit |
+| `85ef72b2` | `WelsUpdateRefListScreen` (dead): held cursor out, re-borrows per branch | commit (probe 83→71) |
+| `99533c57` | `WelsMarkPicScreen` roots-first + `WelsMarkMMCORefInfoScreen` narrowed (dead) | commit (probe 71→55) |
+| `eb682d60` | nine small live bodies: hoists and reorders only | commit + family 583/583 (probe 55→22) |
+| `88a01aba` | `WelsUpdateRefList`: re-borrow after the three re-deriving calls | commit + family 583/583 (probe 22→9) |
+| `3483de36` | `WelsMarkPic`: short borrow ends before `CheckCurMarkFrameNumUsed`, writes re-borrow after; `WelsMarkMMCORefInfo` narrowed | commit + family 583/583 (probe 9→0) |
+| `edcccc68` | the flip: safe `fn -> &mut SLTRState`; `ctx_ltr` deleted; 22 spellings collapsed; sibling-test rows retired the way `ctx_dq_idc_map`'s were | commit + family 583/583 |
+
+### The fault (F198, S59's ledger)
+
+Off-by-one in the marked frame's long-term index, planted in the landed form:
+**ltr 16/16 FAIL** (fourteen byte-different at identical sizes, two collapsed
+to a fifth of reference size), **mt 0/120** — the zero is preset design (mt
+runs LTR-off), not a coverage hole; the family's 583 include the ltr sixteen.
+First fault moved the output; reverted; clean-tree control 16/16 PASS.
+
+### The close's numbers
+
+Session gate at `edcccc68`: **583/583 both profiles, Miri 291 passed / 0
+failed, lane wall 506 s against H2's 551 s — S61 ratio 0.92**, battery well
+under D-gate-6's 1200 s cap; gtest smoke 4/4, allowlist 8. Ratchet, live runs
+at both ends: `raw_ptr` 1345 → **1338**, `unsafe_fn` 595 → **593** (`ctx_ltr`
+deleted, `ctx_ltr_at` de-unsafed), `unsafe_block` 267 → 267. `unsafe-cat:
+cursor` tags 34 → **32**. Both census documents regenerated, **unchanged**.
+The fork Miri pair was **not run and is not owed**: `phase9_forksplit.py`
+re-run at start and close — `ref_list_mgr_svc.rs` has zero fork-reachable
+bodies and both accessors sat on the single-threaded path.
+
+### Where the brief was wrong, quoting it
+
+1. *"`cargo check` reports 84 errors at 75 distinct call sites"* — 83, and the
+   discrepancy is F196's own internal arithmetic, not tree drift (F197).
+2. The charter row's *"resolved by split-borrows over the LTR/ref-list state"*
+   — zero split borrows were needed; hoist/reorder/re-derive covered all 83,
+   and the in-tree split-borrow example went uncopied.
+3. *"`bash rust/tools/gates.sh commit` (~2.5 min)"* — 15–19 min per run on
+   this machine this session, every run; the estimate assumes a warmer cache
+   than any run saw.
+
+### What J inherits, after H3
+
+**Nothing new; the exit's ledger shrinks by one item and two counts.** F196's
+conversion is done — J's checklist loses it entirely. The only ledger deltas:
+`cursor` 34 → 32 (H2's §1 grep comment now reads two high), and the Miri wall
+baseline is 506 s at `edcccc68`. Every H2 refusal, gap row, and ruling stands
+untouched; no new raw spelling survives in the LTR family (`&*ctx_ltr_at` at
+two sites is a deliberate shared reborrow of the reference, not a raw).
