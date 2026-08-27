@@ -288,11 +288,15 @@ pub const g_kiMapModeI4x4: [i8; 14] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 2, 2, 2, 3, 7]
 // left to guard — the scalar branch each guard protected is now unconditional.
 
 /// `svc_base_layer_md.cpp:246`.
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
-pub unsafe fn PredIntra4x4Mode(pIntraPredMode: *const i8, iIdx4: i32) -> i32 {
-    let iTopMode = *pIntraPredMode.offset(iIdx4 as isize - 8);
-    let iLeftMode = *pIntraPredMode.offset(iIdx4 as isize - 1);
+pub fn PredIntra4x4Mode(pIntraPredMode: &[i8; 48], iIdx4: i32) -> i32 {
+    // S4.C3: was `*const i8` reached at `iIdx4 - 8` and `iIdx4 - 1`. The extent is
+    // `SMbCache::iIntraPredMode`, an `[i8; 48]`, which is what both call sites and
+    // the test already hand it. Indexing bounds-checks the two neighbour reads that
+    // the raw form took on trust — `iIdx4` comes from `g_kuiCache48CountScan4Idx`,
+    // whose smallest entry is 9, so `iIdx4 - 8` is in range for every real caller
+    // and a future one that is not now panics instead of reading behind the array.
+    let iTopMode = pIntraPredMode[(iIdx4 - 8) as usize];
+    let iLeftMode = pIntraPredMode[(iIdx4 - 1) as usize];
 
     let iBestMode: i8 = if -1 == iLeftMode || -1 == iTopMode {
         2
@@ -411,7 +415,7 @@ pub unsafe extern "C" fn WelsMdI4x4(
 
         //step 2: get predicted mode from neighbor
         let iPredMode = PredIntra4x4Mode(
-            (*pMbCache).iIntraPredMode.as_ptr(),
+            &(*pMbCache).iIntraPredMode,
             g_kuiCache48CountScan4Idx[i] as i32,
         );
 
@@ -557,7 +561,7 @@ pub unsafe extern "C" fn WelsMdI4x4Fast(
 
         //step 2: get predicted mode from neighbor
         let iPredMode = PredIntra4x4Mode(
-            (*pMbCache).iIntraPredMode.as_ptr(),
+            &(*pMbCache).iIntraPredMode,
             g_kuiCache48CountScan4Idx[i] as i32,
         ) as i8;
         //step 3: collect candidates of iPredMode
@@ -2156,27 +2160,23 @@ mod tests {
     /// `PredIntra4x4Mode` returns 2 (DC) when either neighbour is unavailable, and the
     /// smaller of the two mode ids otherwise (`svc_base_layer_md.cpp:246`).
     #[test]
-    // unsafe-cat: instrument(test)
-    #[allow(unsafe_code)]
     fn pred_intra4x4_mode_matches_reference() {
         let mut modes = [0i8; 48];
         let idx = 12usize; // any index with both idx-8 and idx-1 in range
 
-        unsafe {
-            modes[idx - 8] = 5;
-            modes[idx - 1] = 3;
-            assert_eq!(PredIntra4x4Mode(modes.as_ptr(), idx as i32), 3);
+        modes[idx - 8] = 5;
+        modes[idx - 1] = 3;
+        assert_eq!(PredIntra4x4Mode(&modes, idx as i32), 3);
 
-            modes[idx - 8] = 1;
-            assert_eq!(PredIntra4x4Mode(modes.as_ptr(), idx as i32), 1);
+        modes[idx - 8] = 1;
+        assert_eq!(PredIntra4x4Mode(&modes, idx as i32), 1);
 
-            modes[idx - 1] = -1;
-            assert_eq!(PredIntra4x4Mode(modes.as_ptr(), idx as i32), 2);
+        modes[idx - 1] = -1;
+        assert_eq!(PredIntra4x4Mode(&modes, idx as i32), 2);
 
-            modes[idx - 1] = 4;
-            modes[idx - 8] = -1;
-            assert_eq!(PredIntra4x4Mode(modes.as_ptr(), idx as i32), 2);
-        }
+        modes[idx - 1] = 4;
+        modes[idx - 8] = -1;
+        assert_eq!(PredIntra4x4Mode(&modes, idx as i32), 2);
     }
 
     /// The neighbour-to-availability table indexes `g_kiIntra4AvailCount`, so every

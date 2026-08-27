@@ -532,7 +532,12 @@ pub unsafe extern "C" fn WelsRecPskip(
 #[allow(unsafe_code)]
 unsafe fn VaaBackgroundMbDataUpdate(
     pFunc: &SWelsFuncPtrList,
-    pVaaInfo: *mut crate::encoder::wels_preprocess::SVAAFrameInfo,
+    // S4.C3: `*mut` -> `&`. Every read below is a field read or a raw plane cursor
+    // taken *out of* a field; nothing writes the block. Shared is also the only
+    // correct shape here — this body is fork-reachable, and F223's third rule makes
+    // an exclusive reborrow of the one shared video-analysis block a write to the
+    // race model whether or not anything is written through it.
+    pVaaInfo: &crate::encoder::wels_preprocess::SVAAFrameInfo,
     pCurMb: &mut SMB,
 ) {
     let kiPicStride = (*pVaaInfo).iPicStride;
@@ -712,7 +717,7 @@ pub unsafe extern "C" fn WelsMdBackgroundMbEnc(
         WelsRecPskip(pCurDqLayer, &*pFunc, pCurMb, &mut *pMbCache);
         VaaBackgroundMbDataUpdate(
             &*pFunc,
-            (*pEncCtx).vaa_ptr(),
+            (*pEncCtx).vaa().expect("the frame's video-analysis block"),
             pCurMb,
         );
         return;
@@ -1850,30 +1855,22 @@ pub unsafe extern "C" fn WelsMdUpdateBGDInfoNULL(
 // ============================================================================
 
 #[inline(always)]
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
-pub unsafe fn IsMbStatic(pBlockType: *const i32, eType: EStaticBlockIdc) -> bool {
-    if pBlockType.is_null() {
-        return false;
-    }
+pub fn IsMbStatic(pBlockType: &[i32; 4], eType: EStaticBlockIdc) -> bool {
+    // S4.C3: was `*const i32` walked with `.add(1..3)`, and the extent it walked is
+    // the array both call sites hand it — `SWelsMD::iBlock8x8StaticIdc`, an
+    // `[i32; 4]`, passed as `.as_ptr()`. The null guard goes with the raw: a
+    // reference cannot be absent, and it answered `false` for a case no caller had.
     let target = eType as i32;
-    *pBlockType == target
-        && *pBlockType.add(1) == target
-        && *pBlockType.add(2) == target
-        && *pBlockType.add(3) == target
+    pBlockType.iter().all(|&b| b == target)
 }
 
 #[inline(always)]
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
-pub unsafe fn IsMbCollocatedStatic(pBlockType: *const i32) -> bool {
+pub fn IsMbCollocatedStatic(pBlockType: &[i32; 4]) -> bool {
     IsMbStatic(pBlockType, EStaticBlockIdc::COLLOCATED_STATIC)
 }
 
 #[inline(always)]
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
-pub unsafe fn IsMbScrolledStatic(pBlockType: *const i32) -> bool {
+pub fn IsMbScrolledStatic(pBlockType: &[i32; 4]) -> bool {
     IsMbStatic(pBlockType, EStaticBlockIdc::SCROLLED_STATIC)
 }
 
@@ -1956,7 +1953,7 @@ pub unsafe extern "C" fn JudgeStaticSkip(
     let kiMbX = (*pCurMb).iMbX as i32;
     let kiMbY = (*pCurMb).iMbY as i32;
 
-    let mut bTryStaticSkip = IsMbCollocatedStatic((*pWelsMd).iBlock8x8StaticIdc.as_ptr());
+    let mut bTryStaticSkip = IsMbCollocatedStatic(&(*pWelsMd).iBlock8x8StaticIdc);
     if bTryStaticSkip {
         // Session F: the shared picture route (`ctx_pic_ref` + plane cursors)
         // replaces the `ctx_pic_ref_mut(..).planes()` whole-picture retag F121
@@ -2020,7 +2017,7 @@ pub unsafe extern "C" fn JudgeScrollSkip(
 
     let mut bTryScrollSkip;
     if (*pVaaExt).sScrollDetectInfo.bScrollDetectFlag {
-        bTryScrollSkip = IsMbScrolledStatic((*pWelsMd).iBlock8x8StaticIdc.as_ptr());
+        bTryScrollSkip = IsMbScrolledStatic(&(*pWelsMd).iBlock8x8StaticIdc);
     } else {
         return false;
     }
@@ -2344,8 +2341,11 @@ pub unsafe extern "C" fn MdInterSCDPskipProcess(
 // filed under Phase 9's port-raw backlog where it reads as pending work.
 // unsafe-cat: SCREEN_CONTENT(dormant)
 #[allow(unsafe_code)]
-pub unsafe extern "C" fn SetBlockStaticIdcToMd(
-    pVaaExt: *mut SVAAFrameInfoExt,
+pub unsafe fn SetBlockStaticIdcToMd(
+    // S4.C3: `*mut` -> `&`, as `VaaBackgroundMbDataUpdate` above and for the same
+    // reason — read-only, and fork-reachable through `pfSCDPSkipDecision`.
+    // `extern "C"` came off with it: nothing in this tree crosses the C ABI (T4b.1).
+    pVaaExt: &SVAAFrameInfoExt,
     pWelsMd: &mut SWelsMD,
     pCurMb: &mut SMB,
     pDqLayer: *mut SDqLayer,
@@ -2387,7 +2387,7 @@ pub unsafe fn WelsMdInterJudgeSCDPskip(
     pCurMb: &mut SMB,
 ) -> bool {
     let pCurDqLayer = current_layer(pEncCtx);
-    SetBlockStaticIdcToMd((*pEncCtx).vaa_ext(), pWelsMd, pCurMb, pCurDqLayer);
+    SetBlockStaticIdcToMd(&*(*pEncCtx).vaa_ext(), pWelsMd, pCurMb, pCurDqLayer);
 
     if MdInterSCDPskipProcess(pEncCtx, pWelsMd, slice, pCurMb, ESkipModes::STATIC) {
         return true;
