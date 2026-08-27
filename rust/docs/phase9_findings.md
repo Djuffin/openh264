@@ -5835,3 +5835,257 @@ Recorded here rather than glossed, which is F207's own precedent.
 failure is attributed to S2 rather than to S3's own first checkpoint. Budget
 ~25 minutes each, most of it compile; the cheap version is to run them once,
 serially, immediately after checking out.
+
+---
+
+## F221 — F218's "11 in-fork `*mut SDqLayer` parameters" is the count of bodies taking **both** a ctx and a layer pointer; the fork-reachable figure is **38 of 40**, and S3's ordering decision turned on it
+
+**S3, measured before the first conversion, because the brief's own ordering
+recommendation rests on this number.** F218 corrected F191's "42 in-fork
+`*mut SDqLayer` parameters" to "42 tree-wide, **11** in-fork", and drew the
+consequence: "D2's handle redesign has to satisfy eleven in-fork signatures, not
+forty-two, and the other thirty-one convert under the ordinary single-threaded
+rules stage A has been using all along." S3's brief carries it forward as the
+sizing fact behind *"the eleven are what a handle redesign must satisfy"*.
+
+`phase9_forksplit.py` has a `--type` option, and asked about the layer directly it
+answers something else:
+
+```
+$ python3 ../../tools/phase9_forksplit.py --type SDqLayer --list | tail -3
+**total**                              38             2
+40 bodies carry a `*mut SDqLayer` parameter.
+```
+
+**38 in-fork, 2 ST-flippable.** F218's method is recoverable from its own text —
+it crossed the layer parameters against "`phase9_forksplit.py --list`'s in-fork
+body set", and that set is the **98 bodies carrying a `*mut sWelsEncCtx`**, a
+different population. Reproduced:
+
+```
+$ comm -12 <ctx in-fork bodies> <SDqLayer in-fork bodies> | wc -l
+12          # bodies taking BOTH parameters; F218 records 11
+```
+
+So the "11" is real, and it counts something — bodies that take a context pointer
+*and* a layer pointer — but not what its sentence claims. A body taking
+`*mut SDqLayer` need not take `*mut sWelsEncCtx`; 26 of the 38 do not.
+
+**This is the third instance of the same defect, and F218 is the finding that
+names it.** F218's closing paragraph diagnoses F191 as "a number carried through
+three documents with its qualifier attached to the wrong noun", and prescribes
+the rule that would have caught it — *every count you quote carries the command
+that produced it.* F218 then quotes 11 with a `wc -l` for the 42 and a prose
+gloss for the 11, and the gloss is the wrong noun. The tool had a `--type` flag
+the whole time; the correct measurement is one command and eight seconds.
+
+**What it changes.** Not F210's ruling — the fork writes the layer either way. It
+changes the **price and the risk class** of D2, and therefore S3's opening move:
+
+* F218 sizes the redesign at 11 in-fork signatures with "the other thirty-one
+  convert under the ordinary single-threaded rules". The real split is **38
+  in-fork, 2 ST**. There is no thirty-one; there is a two.
+* S2's brief recommends S3 open with the layer rather than with stage B. That
+  recommendation was made against the 11.
+
+**S3's decision, recorded as the brief asks.** Stage B first, and within it
+B3 → B2 → B1 rather than the plan's B1 → B2 → B3. The basis was measured:
+`encoder_ext.rs` and `wels_encoder_ext.rs` carry **zero** fork-reachable bodies,
+so with §4.7's MT probes deferred to the session close by the user's direction,
+they are the work that needs those probes least and it goes first; B1, stage B's
+one MT-seam checkpoint (F217), goes last. The decision was vindicated in the
+narrowest possible way: B3 and B2 landed with no aliasing defect at all, and
+**both** of the session's aliasing defects (F223) landed in B1.
+
+A session that opens with the layer opens with 38 in-fork bodies at once.
+
+---
+
+## F222 — `safeplan_prohibitions.py` does not skip comment lines, so a writer's name in prose inside an in-fork body is a phantom violation — and it exits non-zero on it
+
+**S3, at the opening baseline, found by running the tool with a writer list one
+name longer than S2's.** Prohibition 1 answers "no `&mut self` accessor may be
+called from a body whose context parameter is `*mut sWelsEncCtx`". Run with
+`pic_mut` in the writer list it reports:
+
+```
+prohibition 1: 101 *mut-ctx bodies scanned against 16 writers
+  encoder/svc_base_layer_md.rs:1329 WelsMdPSkipEnc (in-fork) calls pic_mut
+```
+
+Two separate defects sit behind that one line, and only the second is the tool's:
+
+1. **`pic_mut` does not belong in the writer list.** It is `impl SRefList`
+   (`encoder_context.rs:386`), not an accessor on the god-struct — S2's 15 was
+   right. Recorded because S2's figure of "15 writers" is quoted with no list
+   attached, so the next session has to re-derive which fifteen, and adding a
+   plausible sixteenth is what a careful re-derivation looks like. **The writer
+   set, for the record**: `func_list_mut`, `mvd_cost_table_mut`, `param_mut`,
+   `pps_array_mut`, `rc_at_mut`, `ref_list_mut`, `sps_array_mut`,
+   `subset_array_mut`, `vaa_ext_mut`, `vaa_mut`, `ref_list_and_ltr_mut`,
+   `vaa_ref_list_and_ltr_mut`, `param_and_paraset_arrays_mut`,
+   `param_and_rc_at_mut`, `vaa_and_rc_at_mut`.
+
+2. **The hit is inside a `//` comment**, at `svc_base_layer_md.rs:1343` — prose
+   describing where `WelsInitCurrentLayer` stamps a view, quoting
+   `(*pRefList).pic_mut(pRefPic)`. The tool's body scan is
+   `re.search(r"\b%s\s*\(" % w, body)` over the raw text with no comment
+   filter, and it `sys.exit(1)` on any hit.
+
+`safeplan_prohibition2.py` skips comment lines and says why in a line of its own
+— `if l.lstrip().startswith("//"): continue   # F178: prose is not a retag`.
+Prohibition 1 was written first and never got the same treatment. The
+consequence is not hypothetical: this repo's convention is heavy in-body prose
+that quotes the exact call spellings under discussion, so the probability that
+some future writer's name appears in an in-fork body's comments is high, and the
+failure mode is a **red gate with a real-looking violation** pointing at a
+comment.
+
+Left as-is by S3 rather than patched, deliberately: the session's edits were to
+`src/`, the tool is green for the correct fifteen, and a one-line instrument
+change is better landed with a session that can re-run the full battery behind
+it. Named here so the next reader does not re-derive it at cost — the fix is
+F178's line, copied across.
+---
+
+## F223 — B1's storage flip produced **two** aliasing defects in the same field, each invisible to the gate that had just passed, and each caught by exactly one instrument the level below it
+
+**S3, checkpoint B1.** Converting `pVpp` from `*mut CWelsPreProcess` to
+`Option<Box<CWelsPreProcess>>` is the plainest kind of ownership change, and it
+broke twice. The two failures are worth recording together because they form a
+ladder: each was invisible to every gate that had already passed, and each was
+refused by the next instrument up.
+
+**Draft 1 — `Option::take`, refused by the Miri encode shards.** Every site
+needing the vpp and the context at once did box-out / call / box-back:
+
+```rust
+let mut vpp = pCtx.pVpp.take().expect("pVpp lives");
+vpp.AnalyzeSpatialPic(pCtx, iCurDid as i32);
+pCtx.pVpp = Some(vpp);
+```
+
+`gates.sh family` passed it whole: **583/583 byte-identical in both profiles**,
+561 debug / 554 release tests, ratchet clean. Miri:
+
+```
+trying to retag from <2512223> for SharedReadOnly ... tag does not exist
+  <2512223> created by a Unique retag   -> encoder_ext.rs  `pCtx.pVpp = Some(vpp)`
+  later invalidated by SharedReadOnly   -> svc_encode_slice.rs `(*pSrcPool).get(id)`
+  at WelsSliceHeaderExtInit's `pVpp.as_deref()`
+```
+
+`SDqLayer::pSrcPool` stores a raw into `m_pSpatialPicPool` — a **field of the vpp
+allocation** — and the fork reads it for a whole frame. The `Box` mints a fresh
+`Unique` over the whole block per `as_deref`/store, so the two routes pop each
+other in both directions: the shared retag through `pSrcPool` kills the `Box`
+tag, and re-storing the `Box` kills `pSrcPool`. This is **F215's rule one
+allocation further in** — a `&mut`-shaped route mints per call — and F211's
+provenance category is the answer: reach the object by reading the slot as a
+*value*, so derivations are siblings off the allocation's own tag. The ownership
+moved; the aliasing must not.
+
+**Draft 2 — the slot read, but the wrong half of the pair, refused by the MT
+probes.** The fix introduced `ctx_vpp_raw` returning `&mut` off the slot read.
+Miri's encode shards then passed (2/2), both sweeps passed again, and the
+checkpoint was committed. §4.7's fork/join and mid-row probes — run at the
+session close rather than the checkpoint, by the user's direction — refused it:
+
+```
+Data race detected between (1) retag write on thread `unnamed-2`
+  and (2) retag write of type CWelsPreProcess on thread `unnamed-3`
+  (2) -> encoder_context.rs  `&mut *pVpp`   in ctx_vpp_raw
+  (1) -> svc_encode_slice.rs `ctx_vpp_ref(pEncCtx).src_id(id)` in WelsSliceHeaderExtInit
+```
+
+Two fork-reachable bodies — `WelsSliceHeaderExtInit` and `ctx_pic_ref`, the two
+F217 names — were handed the **writer**. A `&mut` retag counts as a *write* to
+the data-race model, so N workers each taking one is S63's violation with no read
+of the object required to make it real. Both bodies want `src_id(id)`, a `&self`
+read. The fix is the reader/writer split the design has mandated since A5, with
+`ctx_vpp_ref` (`&`) for the fork and `ctx_vpp_raw` (`&mut`) for the four
+single-threaded callers, each verified by `phase9_forksplit.py --why`. The tool
+now classifies them apart on its own: `ctx_vpp_ref` in-fork, `ctx_vpp_raw`
+ST-flippable.
+
+**The ladder, stated once.** Byte sweeps cannot see a retag that does not change
+a byte (F114, F208, F215 — and draft 1). **Single-threaded Miri cannot see a race
+between workers** — draft 2 is the first recorded instance of that gap in this
+project, and it is the one the plan's §4.7 exists for. The probes are not a
+formality on top of the Miri lane; they are the only instrument in the battery
+that runs two workers at once.
+
+**The cost of running them late, measured.** Draft 2 shipped in commit
+`980bfb16` and was found at the session close, after two further checkpoints'
+worth of context had been paged out; the fix had to be re-attributed to B1 and
+amended in. Run at B1's own gate it would have been what F215 describes for
+A7 — "two silent UB sites into two twenty-minute fixes".
+
+**And the fix itself closes S3 UNVERIFIED by the probes — stated plainly, because
+F220's precedent is to name this rather than gloss it.** What draft 3 has:
+
+* the reader/writer split is the design rule (an in-fork body takes the `&self`
+  reader), applied at exactly the two bodies F217 independently names;
+* `phase9_forksplit.py --why` confirms all four remaining `ctx_vpp_raw` callers
+  are **not** fork-reachable, and `--list` now classifies `ctx_vpp_ref` in-fork
+  and `ctx_vpp_raw` ST-flippable without being told;
+* `gates.sh family` green on the committed tree, and the Miri encode shards green.
+
+What it does **not** have is a completed `fork_join_encodes` run. Five attempts
+were made at S3's close and none reached a verdict: two were killed by a
+600 s foreground cap mid-compile, one by an over-broad `pkill` of the session's
+own making, and the last two — split into concurrent shards, which is the right
+pattern and the one `gates.sh`'s Miri lane already uses — were stopped by
+direction. The Miri compile is ~12 min per invocation before any test runs
+(`[profile.dev] opt-level = 3`, F220's observation), which is what makes every
+one of those losses expensive.
+
+**So the standing obligation transfers to S4**, and it is the same one F220
+transferred to S3: run `fork_join_encodes` against the tree at `980bfb16`'s
+amended tip **before** the first stage-D conversion, so a failure is attributed
+to B1 rather than to S4's own work. The expected result is green — the change
+removes a `&mut` retag from two fork-reachable bodies and adds nothing — but
+that is an argument, and F220's own words apply to it: *that is an argument, not
+a run.*
+
+---
+
+## F224 — B1 moves the plan's single progress number **upward**, 612 → 614, by converting four raw fields to owned storage
+
+**S3, checkpoint B1, and it is the honest figure.** §9 makes
+`#[allow(unsafe_code)]` outside `src/api/` the plan's one progress number. B1
+converts `pOut`, `pVpp` and `pSliceThreading` to `Option<Box<T>>` and
+`mutexSliceNumUpdate` to an owned `Mutex<()>`, deletes `WelsMutexInit` and
+`WelsMutexDestroy` outright, and makes `with_wels_mutex` a safe fn. Counted per
+file across the checkpoint:
+
+```
+encoder_context.rs        25 -> 29    (+4: ctx_out_raw, ctx_src_pool_raw, and the
+                                           ctx_vpp_raw / ctx_vpp_ref pair F223 forced)
+slice_multi_threading.rs  28 -> 26    (-2: WelsMutexInit and WelsMutexDestroy deleted,
+                                           with_wels_mutex now safe, ctx_slice_threading_raw added)
+                                       net +2
+```
+
+**Why the metric scores it backwards.** A raw *field* carries no `#[allow]` —
+`pub pOut: *mut SWelsEncoderOutput` was invisible to the count while being
+exactly the thing the plan exists to remove. What the count *can* see is the
+aliasing contract those fields implied, which is now written down as four named
+accessors with a documented reason each. So the checkpoint traded four unnamed,
+uncounted raw fields for four named, counted, audited derivations — and the
+number rose.
+
+This is **F214's finding running in the opposite direction**. F214 recorded that
+A6's flip "moves nothing the ratchet counts"; here the work moves it the wrong
+way. Both are the same underlying fact: the metric counts *annotations*, and
+structural work changes what needs annotating in ways that do not track progress.
+F216 already warned the figure "should be read before it is quoted at anyone";
+S3 adds that it can go **up** on a checkpoint that strictly reduces raw exposure,
+and that a session judged on it alone would be judged wrongly.
+
+The figure S3 does not dispute: it opened at 612 (`safeplan_tracking.sh`,
+matching S2's close exactly) and closes at **614**. Two of the four added lines
+are the `ctx_vpp_raw`/`ctx_vpp_ref` pair, which exists because F223's data race
+forced the reader and the writer apart — so one of the two is, precisely, the
+price of the soundness fix the MT probes bought.
+
