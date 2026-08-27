@@ -422,7 +422,13 @@ assert_size_by_profile!(SDqLayer, debug 880, release 808);
 // never even installed). **-168 more at T9.F2b**: the transitional raw triple
 // left `SSampleDealingFunc` (its pin above). **-16 at T9.F3**: the
 // `pfDeblockingBSCalc` and `pfSetNZCZero` slots went direct (F118).
-assert_size!(SWelsFuncPtrList, 952);
+// **-8 at S4.C1**: `pfAccumulateSadForRc`, one `Option<PAccumulateSadFunc>` slot,
+// deleted as dead (S18). Whole-tree grep at deletion found the type alias, this
+// field and its one `None` initialiser and nothing else in `src/`, `tests/`,
+// `benches/` or `rust/tools/` — never installed, never dispatched. The C++
+// assigns it in `WelsInitEncodingFuncs`; the port's rate control reads its SADs
+// directly, so the indirection never had a producer here.
+assert_size!(SWelsFuncPtrList, 944);
 
 // codec/encoder/core/inc/encoder_context.h:116. C++ is 98008 bytes, but that number
 // embeds WELS_MUTEX (pthread_mutex_t, 64 B on darwin) by value where this port models
