@@ -183,8 +183,8 @@ checkpoint's second half, enforced by the ratchet.
 |---|---|---|---|
 | **S1** ✅ **CLOSED 2026-08-27** — brief [`prompts/safeplan_s1.md`](prompts/safeplan_s1.md) | **A1–A4 landed**; A5–A7 roll to S2 | **The accessor layer's first half** (~230 sites): small fry → `ctx_rc_at` → `ctx_ref_list` → paraset trio + `ctx_frame_bs_cur` + `ctx_sps`/`ctx_pps`. `ctx_dq_layer` deferred to D2–D3 (F210). Four gated commits, `session` gate green at the close | `ctx_mvd_cost_*`, `ctx_rc`, `ctx_rc_at`, `ctx_frame_bs`, `ctx_frame_bs_cur`, `ctx_ref_list`, the paraset trio, `ctx_sps`, `ctx_pps`, `rc_gom_*`; allows 627 → 613 (F219) |
 | **S2** ✅ **CLOSED 2026-08-27** — brief [`prompts/safeplan_s2.md`](prompts/safeplan_s2.md) | **A5–A7 landed**; B1–B3 roll to S3 | **The accessor layer's tail — stage A is complete**: `ctx_vaa` → `vaa`/`vaa_mut` (+ the screen-content downcast named once, F213), `ctx_func_list` → the F212 flip, `ctx_param` → `param`/`param_mut`/`param_opt` (258 sites). Three gated commits, `session` gate green at the close. B1 re-priced as an **MT-seam** checkpoint (F217) | every ctx accessor except the **DQ-layer family**, which F210 defers to D2–D3; allows 613 → 612 |
-| **S3** ◀ next — brief [`prompts/safeplan_s3.md`](prompts/safeplan_s3.md) | **B1–B3**, then D1–D4 | **Owned fields, the MT lifecycle, then the writers and the slice core.** B1 is an MT-seam checkpoint (F217): all four ctx singletons are fork-reached and `slice_bs_buffer` hands out a `&mut` into `pOut` in-fork. **F216 asks D2's layer work to come first** — `current_layer`/`ctx_dq_layer` (158 + 22 sites) is where stage A's whole cascade is stored. Miri fork/join + mid-row probes gate every slice-core landing | ctx raw singletons; writer files; `svc_encode_slice.rs`; `slice_multi_threading.rs` (to its D1 line); `common/` |
-| **S4** | E1–E3 | Decoder/common residue + trace newtype; **the lint flip** + census pin; **exit battery** + fallout | everything — §1 acceptance list |
+| **S3** ✅ **CLOSED 2026-08-27** — brief [`prompts/safeplan_s3.md`](prompts/safeplan_s3.md) | **B3, B2, B1 landed — stage B complete**; D1–D4 roll to S4 | **Owned fields and the MT lifecycle — stage B, in reverse order.** S2's brief recommended opening with D2's layer instead; S3 measured the basis for that recommendation and it did not hold (**F221**: 38 of 40 layer-parameter bodies are fork-reachable, not 11), so stage B went first and, within it, the two files with **zero** fork-reachable bodies (B3, B2) went ahead of the one MT-seam checkpoint (B1, F217). F217's open question is answered by measurement, not design: `slice_bs_buffer`'s `pOut` arm is **main-thread-only** (probe + 8 previously-unswept MT/single-slice configs + 895-case sweep), so neither `SharedCells` nor a fence was needed | ctx raw singletons (all four owned); `encoder_ext.rs` + `wels_encoder_ext.rs` raw roots; `WelsMutexInit`/`Destroy` deleted |
+| **S4** ◀ next | D1–D4, then E1–E3 | Decoder/common residue + trace newtype; **the lint flip** + census pin; **exit battery** + fallout | everything — §1 acceptance list |
 
 Checkpoint detail follows, grouped by stage.
 
@@ -230,6 +230,22 @@ moved 627 → 612 across the whole stage, which is the honest figure for it.
 
 **Exit criteria**: no raw ctx-singleton fields; `slice_multi_threading.rs` down to its MT
 residue; session gate + Miri probes green.
+
+**Met at S3's close (2026-08-27), with the Miri-probe clause NOT met.** The four singleton
+fields are owned (`pOut`/`pVpp`/`pSliceThreading` as `Option<Box<T>>`,
+`mutexSliceNumUpdate` as an owned `Mutex<()>`); `WelsMutexInit`/`WelsMutexDestroy`
+and their `Box::into_raw` dance are deleted and `with_wels_mutex` is a safe fn.
+Every checkpoint landed on `family` (sweeps 583/583 in both profiles) plus the Miri
+encode shards run **inside** the checkpoint per F215. The unmet clause is "**Miri probes green**":
+S3 gated at `family`, not `session`, per checkpoint, and the §4.7 MT probes were
+deferred to the session close by the user's direction. **F223 records what that
+cost and what it leaves open**: a probe run found a worker-vs-worker data race in
+B1's second draft — a defect no byte gate and no single-threaded Miri shard can
+see — and the fix that answers it never got a completed probe run of its own.
+The fix is backed by static classification (`phase9_forksplit.py --why`, plus the
+tool's own in-fork/ST split of the two accessors) and by `family` on the committed
+tree, but **not by the probes**. That obligation transfers to S4 as its first
+duty, the way F220 transferred it to S3. The residue B1 leaves for D4 is unchanged.
 
 ### Stage C — pixels, MD/ME, arenas, preprocess (S4–S5)
 
@@ -324,12 +340,21 @@ The figure has a command of its own now — `rust/tools/safeplan_tracking.sh [re
 — so a session can check its opening number against the previous close instead of
 trusting the hand-off brief.
 
+**S3 closed it at 614 — upward.** F224 records why, and the reason is structural
+rather than a regression: B1 converted four raw ctx *fields* to owned storage, and
+a raw field carries no `#[allow]`, so the metric never counted the thing that was
+removed. What it counts is the four named accessors that now write down the
+aliasing contract those fields implied. This is F214's finding running the other
+way, and it is the second stage in a row where the plan's single progress number
+fails to track the work: read F216, F224 and this paragraph before quoting it.
+
 **Session log**
 
 | date | session | checkpoints landed | allows outside api | gate |
 |---|---|---|---|---|
 | 2026-08-27 | **S1** | A1, A2, A3, A4 (A5–A7 roll to S2) | 627 → **613** (logged 614; F219) | `session` PASS — sweeps 583/583 ×2, Miri 291/291, gtest 4/4 |
 | 2026-08-27 | **S2** | A5, A6, A7 — **stage A complete** (B1–B3 roll to S3) | 613 → 612 | `session` PASS — sweeps 583/583 ×2, Miri 291/291 (**cpu 1105 s vs 1091 s, ratio 1.01**), gtest 4/4. **§4.7's two MT probes did not run** — F220 names what that leaves unverified; S3 runs them first |
+| 2026-08-27 | **S3** | B3, B2, B1 — **stage B complete** (D1–D4 roll to S4) | 612 → **614** (F224: the figure rises on a checkpoint that strictly reduces raw exposure) | `family` PASS per checkpoint — sweeps 583/583 ×2 each, 561 debug / 554 release; Miri encode shards inside every checkpoint (2/2, ~350 s each); ABI table byte-identical. **§4.7 MT probes: no verdict** — one run found F223's data race, no run completed on the fix (F223's tail; S4's first duty). **Checkpoint order reversed within stage B** on F221's correction |
 
 ## 10. Adoption amendments (ratified with the switch, 2026-08-27)
 
@@ -348,9 +373,15 @@ describes; a claim of absence gets its grep.
    site uses the `&self` reader path only, classified per checkpoint by
    `tools/phase9_forksplit.py`. A7's reader/writer split exists for exactly this.
 3. **The layer's `*mut SDqLayer` parameters** (F191's fourth row — absent from
-   §3's inventories) are named to D2–D3's handle redesign. **F218 corrects the
-   count**: 42 is the tree-wide total; **11** are in fork-reachable bodies, and
-   only those eleven constrain what `dq_layer` may return.
+   §3's inventories) are named to D2–D3's handle redesign. F218 corrected F191's
+   count to "42 tree-wide, 11 in-fork"; **F221 corrects F218**. Measured with the
+   tool's own mode — `phase9_forksplit.py --type SDqLayer --list` — the split is
+   **38 in-fork of 40 bodies, and 2 ST-flippable**. F218's 11 counts bodies taking
+   *both* a `*mut sWelsEncCtx` and a `*mut SDqLayer` (reproducible as 12), which is
+   a different population: 26 of the 38 take no context pointer at all. D2's
+   redesign must satisfy **38** fork-reachable signatures, not eleven, and there is
+   no "other thirty-one that convert under ordinary single-threaded rules" — there
+   are two.
 4. **Perf is measured inside C4 and D1** (bench before/after within the session), not
    only at stage closes — ME/SAD regressions localize badly after the fact.
 5. **Carryover disciplines**: a tag (`// unsafe-cat: …`) is removed only by the
