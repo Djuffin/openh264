@@ -4742,3 +4742,71 @@ first. The agreement between a wrong expectation and a truncated measurement is 
 made it look like a confirmation. **S60 asks for expected-vs-actual precisely so a
 mismatch is visible; two errors that cancel defeat it, and the guard against that is
 to capture the whole output and count it mechanically rather than to read a tail.**
+
+---
+
+## F197 — H3's step-0 reproduction: F196's breakdown is exact and its total is off by one; the 83 classify into five remedies and none of them is a split borrow
+
+**Session H3, step 0 — probe applied, measured, reverted; nothing landed.** The flip
+(`ctx_ltr_at` returns `&mut SLTRState`, body `&mut pCtx.pLtr[kiDid]`) reproduces
+F196's census almost exactly. Expected, from F196: 84 errors / 75 distinct sites /
+breakdown 49 E0499 + 28 E0503 + 5 E0502 + 1 E0506 / zero mechanical. Actual: **83
+errors / 75 distinct sites / breakdown 49 + 28 + 5 + 1 / zero mechanical**. The
+breakdown and site count match to the digit — and F196's own breakdown already summed
+to 83 against its stated total of 84. **The tree did not move; F196's headline total
+was arithmetically inconsistent with its own table when written**, and the table was
+the correct half. 82 of the 83 are in `ref_list_mgr_svc.rs`, 1 in
+`wels_preprocess.rs` (`SetRefMbType`).
+
+**The classification, by function and remedy** — committed before any edit so the
+execution can falsify it. Two structural facts drive every row: (1) `ctx_param`,
+`ctx_vaa`, `ctx_ref_list`, `current_layer` all take `*mut sWelsEncCtx`, so each
+inline call conflicts only through the implicit `&mut → *mut` reborrow-coercion of
+`pCtx` — **hoisting the call and leaving the deref in place** removes the conflict
+without moving any read, because the returned raw points into a different allocation
+(F71) and stays valid across the LTR borrow. (2) Every "uses the LTR state and the
+context in the same breath" site turns out to pair the LTR state with one of those
+separate-allocation raws or with a `Copy` scalar — never with a second live borrow of
+the context struct itself.
+
+| function | path | errors | remedy |
+|---|---|---:|---|
+| `DeleteInvalidLTR` :423 | live | 1 | reorder: `pParamInternal` derived above `pLtr` |
+| `HandleLTRMarkFeedback` :478 | live | 3 | reorder `pParamInternal` above; hoist `ctx_vaa` call to a raw root above `pLtr` |
+| `LTRMarkProcess` :569 | live | 6 | reorder `pParamInternal` above; hoist `keSliceType` scalar; hoist `ctx_vaa` root |
+| `WelsUpdateRefList` :761 | live | 13 | delete the held binding; **re-derive after** `LTRMarkProcess`/`DeleteInvalidLTR`/`HandleLTRMarkFeedback`, one fresh borrow per branch |
+| `CheckCurMarkFrameNumUsed` :905 | live | 1 | reorder: `pParamInternal` above `pLtr` |
+| `WelsMarkPic` :1029 | live | 9 | hoist `pParam` root + `kuiTid`; split the condition at `CheckCurMarkFrameNumUsed` (short-circuit preserved), re-derive for the writes; **narrow `WelsMarkMMCORefInfo`** |
+| `FilterLTRRecoveryRequest` :1092 | live | 1 | reorder: `pParamInternal` above `pLtr` |
+| `FilterLTRMarkingFeedback` :1139 | live | 2 | hoist `pParam` root above `pLtr` |
+| `WelsBuildRefList` :1170 | live | 4 | drop the held binding; inline re-derive at the two LTR touches (condition read, `iLastRecoverFrameNum` write) |
+| `WelsUpdateSliceHeaderSyntax` :1272 | live | 14 | hoist: one `bLTRMarkingFlag` bool read before the slice loop |
+| `WelsUpdateRefListScreen` :1457 | dead | 12 | reorder derivations; inline LTR reads in the `pDecPic` block; re-derive after `DeleteNonSceneLTR`/`LTRMarkProcessScreen` |
+| `WelsMarkPicScreen` :1660 | dead | 16 | hoist `pParam`/`pSps`/`pRefList` roots + `kuiTid`/`bSceneLtr` scalars + the MMCO layer args above one `pLtr` binding; **narrow `WelsMarkMMCORefInfoScreen`** |
+| `SetRefMbType` (wels_preprocess.rs:2742) | live | 1 | reorder: derive `pLtr` inline in the condition, after the `ctx_param` read |
+
+Remedy totals: **hoist** and **reorder** cover eleven functions; **re-derive after a
+whole-context call** is the shape of the two big live/dead update bodies; **narrow
+the callee** twice — `WelsMarkMMCORefInfo` and `WelsMarkMMCORefInfoScreen` each have
+exactly one caller (S54's read-every-caller done) and read only two `ctx_param`
+scalars plus read-only LTR fields, so they take `(scalars, &SLTRState, …)` and lose
+the context parameter entirely. **Split borrow: zero sites need one.** The brief
+carried `LoadPreviousStructure`'s split-borrow shape as the mid-weight remedy; the
+classification finds no site where the LTR state must coexist with a second borrow
+*into the context struct itself* — the one same-struct neighbour
+(`bRefOfCurTidIsLtr`, written in `LTRMarkProcess` and `encoder_ext.rs:4109`) is
+touched only after the LTR borrow's last use, which NLL accepts without help.
+**Genuinely interleaved: zero sites** — the revert rule stands armed but the table
+predicts it fires nowhere.
+
+Two consequences worth recording. First, the conversion's staging is fully
+incremental: `(*ctx_ltr_at(..)).f`, `&mut *ctx_ltr_at(..)` and `&*ctx_ltr_at(..)`
+compile against **both** the raw and the reference signature, so each body can be
+reshaped and gated against the raw accessor, with the flip landing last as a
+near-mechanical commit — and each reshaped body is verified by re-applying the probe
+flip locally (uncommitted) and watching that body's errors vanish from the census.
+Second, the new body `&mut pCtx.pLtr[kiDid]` turns the old empty-Vec `null` return
+and the release-mode out-of-bounds `root.add(kiDid)` into a bounds-checked panic:
+every one of the 20 production call sites dereferences the result unconditionally
+today, so `null` was never a survivable answer — the panic replaces UB, not
+behaviour.
