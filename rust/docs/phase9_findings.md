@@ -5303,11 +5303,13 @@ raw world there was no shared direction to generalise to. A2 created one.
 > and the session close's Miri lane is the gate.
 
 The remedy is §4.6's first, as everywhere else: the read moves above the `&mut`.
-A scanner for the shape (`&mut (*pCtx).field` or `&mut *pCtx` live across a
-reader call, in a body whose context root is raw) is in the session's scratch
-notes; run over the tree after the fix it reports **one** body, this one, with
-the reader now above the retag. It is worth re-running whenever a reader is
-added.
+A scanner for the shape is installed as
+`rust/tools/f208_reader_retag_scan.py` (a `&mut (*pCtx).field` or `&mut *pCtx`
+derivation live across a reader call, in a body whose context root is raw); it
+exits non-zero on any body whose reader sits at or after the retag. Run over the
+tree after the fix it reports **one** candidate, this one, `ordered` — the reader
+now above the retag. Re-run it after every checkpoint that adds a reader; S2's
+brief makes that a step.
 
 **A second-order note on `addr_of_mut!`, which is *not* affected**: a raw made
 with `addr_of_mut!((*pCtx).f)` inherits the parent's tag rather than minting a
