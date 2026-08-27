@@ -1167,6 +1167,8 @@ landed verdict is honest — but one-level-per-commit bisectability was weakened
 points). The gate's verdict names a tree; an edited tree is a different one. Start the
 gate, wait, then edit.
 
+**Brief style (the user, 2026-08-26, standing):** plain titles that say what the session does, and text a fresh session can execute without narrative memory. Every project-specific reference — finding numbers, rule numbers, session letters, decision ids, preset and tool names, historic incidents — is **explained in plain words at first use**, with the number kept only as a parenthetical pointer into the docs. A brief that requires chasing its own citations to be understood is not self-contained, whatever its header claims. (Applied from session H3's brief on; the J brief follows it.)
+
 ### 7.6 Standing working rules
 
 *The criterion for being here is that a current session needs the rule **verbatim**.
