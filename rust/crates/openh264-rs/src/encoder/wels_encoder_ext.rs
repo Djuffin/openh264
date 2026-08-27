@@ -398,28 +398,36 @@ pub use crate::encoder::rc::SWelsSvcRc;
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe fn WelsWriteOneSPS(pCtx: &mut sWelsEncCtx, kiSpsIdx: i32, iNalSize: *mut i32) -> i32 {
-    let pOut = pCtx.pOut;
-    let iNal = (*pOut).iNalIndex;
+    // S3.B1: `pOut` is re-borrowed per statement rather than bound once — the
+    // borrows are transient, so the `ParasetStrategy(pCtx)` claim and the
+    // `frame_bs_cur()` read in between conflict with nothing. §4.6: the parameter
+    // set and the strategy's offset-list argument are hoisted out first.
+    let iNal = pCtx.pOut.as_deref().expect("pOut lives").iNalIndex;
     crate::encoder::nal_encap::WelsLoadNal(
-        pOut,
+        pCtx.pOut.as_deref_mut().expect("pOut lives"),
         crate::encoder::nal_encap::EWelsNalUnitType::NAL_UNIT_SPS as i32,
         NRI_PRI_HIGHEST as i32,
     );
 
-    // §4.6: the parameter set is `Copy`, so it comes out of the array before
-    // `ParasetStrategy(pCtx)` claims the context.
     let sSps = pCtx.sps_array()[kiSpsIdx as usize];
-    WelsWriteSpsNal(
-        &mut (&mut *pOut).sBsBuffer[..],
-        &sSps,
-        &mut (*pOut).sBsWrite,
-        ParasetStrategy(pCtx).GetSpsIdOffsetList(PARA_SET_TYPE_AVCSPS as i32),
-    );
-    crate::encoder::nal_encap::WelsUnloadNal(pOut);
+    let pSpsIdOffsetList = ParasetStrategy(pCtx).GetSpsIdOffsetList(PARA_SET_TYPE_AVCSPS as i32);
+    {
+        let pOut = pCtx.pOut.as_deref_mut().expect("pOut lives");
+        WelsWriteSpsNal(
+            &mut pOut.sBsBuffer[..],
+            &sSps,
+            &mut pOut.sBsWrite,
+            pSpsIdOffsetList,
+        );
+    }
+    crate::encoder::nal_encap::WelsUnloadNal(pCtx.pOut.as_deref_mut().expect("pOut lives"));
 
+    // The nal/buffer arguments and the frame-bs arguments are all shared reads or
+    // raws off disjoint storage; the two `as_deref()`s and `frame_bs_cur()` are
+    // shared reborrows of the context and coexist.
     let iReturn = crate::encoder::nal_encap::WelsEncodeNal(
-        &(&*pOut).sNalList[iNal as usize],
-        &(&*pOut).sBsBuffer[..],
+        &pCtx.pOut.as_deref().expect("pOut lives").sNalList[iNal as usize],
+        &pCtx.pOut.as_deref().expect("pOut lives").sBsBuffer[..],
         None,
         pCtx.frame_bs_cur(),
         // available buffer to be written, so need to subtract the used length
@@ -438,28 +446,34 @@ pub unsafe fn WelsWriteOneSPS(pCtx: &mut sWelsEncCtx, kiSpsIdx: i32, iNalSize: *
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe fn WelsWriteOnePPS(pCtx: &mut sWelsEncCtx, kiPpsIdx: i32, iNalSize: *mut i32) -> i32 {
-    let pOut = pCtx.pOut;
-    let iNal = (*pOut).iNalIndex;
+    // S3.B1: as `WelsWriteOneSPS` — per-statement reborrows, arguments hoisted.
+    let iNal = pCtx.pOut.as_deref().expect("pOut lives").iNalIndex;
     /* generate picture parameter set */
     crate::encoder::nal_encap::WelsLoadNal(
-        pOut,
+        pCtx.pOut.as_deref_mut().expect("pOut lives"),
         crate::encoder::nal_encap::EWelsNalUnitType::NAL_UNIT_PPS as i32,
         NRI_PRI_HIGHEST as i32,
     );
 
     // §4.6, as the SPS above.
+    // The strategy reference is hoisted whole: it lives in the `pFuncList` box,
+    // so the binding holds no borrow of the context.
     let sPps = pCtx.pps_array()[kiPpsIdx as usize];
-    WelsWritePpsSyntax(
-        &mut (&mut *pOut).sBsBuffer[..],
-        &sPps,
-        &mut (*pOut).sBsWrite,
-        ParasetStrategy(pCtx),
-    );
-    crate::encoder::nal_encap::WelsUnloadNal(pOut);
+    let pStrategy = ParasetStrategy(std::ptr::addr_of_mut!(*pCtx));
+    {
+        let pOut = pCtx.pOut.as_deref_mut().expect("pOut lives");
+        WelsWritePpsSyntax(
+            &mut pOut.sBsBuffer[..],
+            &sPps,
+            &mut pOut.sBsWrite,
+            pStrategy,
+        );
+    }
+    crate::encoder::nal_encap::WelsUnloadNal(pCtx.pOut.as_deref_mut().expect("pOut lives"));
 
     let iReturn = crate::encoder::nal_encap::WelsEncodeNal(
-        &(&*pOut).sNalList[iNal as usize],
-        &(&*pOut).sBsBuffer[..],
+        &pCtx.pOut.as_deref().expect("pOut lives").sNalList[iNal as usize],
+        &pCtx.pOut.as_deref().expect("pOut lives").sBsBuffer[..],
         None,
         pCtx.frame_bs_cur(),
         pCtx.iFrameBsSize - pCtx.iPosBsBuffer,
@@ -532,7 +546,7 @@ pub unsafe fn WelsWriteParameterSets(
     /* write all Subset SPS */
     iIdx = 0;
     while iIdx < pCtx.iSubsetSpsNum {
-        iNal = (*pCtx.pOut).iNalIndex;
+        iNal = pCtx.pOut.as_deref().expect("pOut lives").iNalIndex;
 
         ParasetStrategy(pCtx).Update(
             pCtx.subset_array()[iIdx as usize].pSps.uiSpsId,
@@ -543,28 +557,30 @@ pub unsafe fn WelsWriteParameterSets(
 
         /* generate Subset SPS */
         crate::encoder::nal_encap::WelsLoadNal(
-            pCtx.pOut,
+            pCtx.pOut.as_deref_mut().expect("pOut lives"),
             crate::encoder::nal_encap::EWelsNalUnitType::NAL_UNIT_SUBSET_SPS as i32,
             NRI_PRI_HIGHEST as i32,
         );
 
-        // §4.6, as the SPS above.
+        // §4.6, as the SPS above; S3.B1 hoists the strategy's offset list too.
         let sSubsetSps = pCtx.subset_array()[iId as usize];
-        WelsWriteSubsetSpsSyntax(
-            // S67 (H2): **not a context retag** — both this and the `sBsWrite` argument below
-            // borrow the `pOut` allocation, and over **disjoint field ranges**, which is why
-            // the slice survives the third argument's retag. Textual match in the detector; see
-            // the audit note in the log.
-            &mut (&mut *pCtx.pOut).sBsBuffer[..],
-            &sSubsetSps,
-            &mut (*pCtx.pOut).sBsWrite,
-            ParasetStrategy(pCtx).GetSpsIdOffsetList(PARA_SET_TYPE_SUBSETSPS as i32),
-        );
-        crate::encoder::nal_encap::WelsUnloadNal(pCtx.pOut);
+        let pSpsIdOffsetList = ParasetStrategy(pCtx).GetSpsIdOffsetList(PARA_SET_TYPE_SUBSETSPS as i32);
+        {
+            // (The S67/H2 audit note this block used to carry is now borrowck's
+            // job: the two `&mut`s below are disjoint fields of one `&mut pOut`.)
+            let pOut = pCtx.pOut.as_deref_mut().expect("pOut lives");
+            WelsWriteSubsetSpsSyntax(
+                &mut pOut.sBsBuffer[..],
+                &sSubsetSps,
+                &mut pOut.sBsWrite,
+                pSpsIdOffsetList,
+            );
+        }
+        crate::encoder::nal_encap::WelsUnloadNal(pCtx.pOut.as_deref_mut().expect("pOut lives"));
 
         iReturn = crate::encoder::nal_encap::WelsEncodeNal(
-            &(&*pCtx.pOut).sNalList[iNal as usize],
-            &(&*pCtx.pOut).sBsBuffer[..],
+            &pCtx.pOut.as_deref().expect("pOut lives").sNalList[iNal as usize],
+            &pCtx.pOut.as_deref().expect("pOut lives").sBsBuffer[..],
             None,
             pCtx.frame_bs_cur(),
             pCtx.iFrameBsSize - pCtx.iPosBsBuffer,
@@ -622,13 +638,13 @@ pub unsafe fn WelsEncoderEncodeParameterSetsRust(
     }
     let pLayerBsInfo = &mut (*pBsInfo).sLayerInfo[0];
     pLayerBsInfo.pBsBuf = pCtx.frame_bs();
-    pLayerBsInfo.pNalLengthInByte = (*pCtx.pOut).sNalLen.as_mut_ptr();
+    pLayerBsInfo.pNalLengthInByte = pCtx.pOut.as_deref_mut().expect("pOut lives").sNalLen.as_mut_ptr();
     // Was `InitBits(&…sBsWrite, …pBsBuffer, …uiSize)`. The buffer and its length stay
     // where they were; the writer is a position, and resetting it is all `InitBits`
     // did that still means anything. Its `kpBuf: *const u8` parameter — stored as
     // `pStartBuf: *mut u8` and written through — is deleted rather than amended
     // (`phase2_findings.md` F13, third site).
-    (*pCtx.pOut).sBsWrite = crate::encoder::vlc_encoder::BsWriter::new();
+    pCtx.pOut.as_deref_mut().expect("pOut lives").sBsWrite = crate::encoder::vlc_encoder::BsWriter::new();
     pCtx.iPosBsBuffer = 0;
 
     let mut iCountNal = 0;
