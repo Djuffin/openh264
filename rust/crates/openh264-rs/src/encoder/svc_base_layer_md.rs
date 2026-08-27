@@ -958,15 +958,17 @@ pub unsafe fn WelsMdInterInit(
         .expect("pfFillInterNeighborCache unset")(
         &mut *pMbCache,
         &*mbs,
-        {
-            // T9.E7 (F132 round 8): `Vec::as_mut_ptr` autorefs `&mut` on the
-            // SHARED VAA struct's vector — a retag-write every worker makes per
-            // macroblock, the race the fixed-slice probe stopped on once round
-            // 7 was closed. F71's spelling reads the header through `addr_of!`
-            // and never retags it (thread_bs_buffer's pattern).
-            let v = std::ptr::addr_of!((*pEncCtx).vaa().expect("the frame's video-analysis block").pVaaBackgroundMbFlag);
-            (*v).as_ptr().add(kiMbXY as usize) as *mut i8
-        },
+        // S4.C4: the whole array, shared. T9.E7 (F132 round 8) had to reach the
+        // root through `addr_of!` because `Vec::as_mut_ptr` autorefs `&mut` on the
+        // SHARED VAA struct's vector — a retag-write every worker made per
+        // macroblock, and the race the fixed-slice probe stopped on. A shared slice
+        // is that reader path spelled directly, and the `.add(kiMbXY)` pre-offset
+        // goes with it: the callee indexes `iMbXY + <neighbour offset>` off the root
+        // now, which is what T6.F0 did to `pMbSkipSad` beside it.
+        &(*pEncCtx)
+            .vaa()
+            .expect("the frame's video-analysis block")
+            .pVaaBackgroundMbFlag[..],
         layer_rec_view(pCurLayer)
             .expect("the layer's reconstruction picture is bound")
             .mb_skip_sad(),
@@ -1982,8 +1984,8 @@ pub unsafe fn WelsMdInterMb(
         // last use below, before the next whole-slice reborrow.
         let pMbCache = &mut pSlice.sMbCacheInfo;
         PredictSad(
-            pMbCache.sMvComponents.iRefIndexCache.as_mut_ptr(),
-            pMbCache.iSadCost.as_mut_ptr(),
+            &pMbCache.sMvComponents.iRefIndexCache,
+            &pMbCache.iSadCost,
             0,
             &mut (*pWelsMd).iSadPredMb,
         );
