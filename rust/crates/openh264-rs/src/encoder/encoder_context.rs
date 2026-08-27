@@ -870,50 +870,24 @@ pub unsafe fn ctx_rc_at(pCtx: *mut sWelsEncCtx, kiDid: usize) -> *mut SWelsSvcRc
     root.add(kiDid)
 }
 
-/// The **root** of `pCtx->pLtr` — T6.H5; see [`ctx_sps_array`] for the spelling.
-///
-/// # Safety
-/// `pCtx` must point to a live encoder context.
-#[inline]
-// unsafe-cat: cursor
-#[allow(unsafe_code)]
-pub unsafe fn ctx_ltr(pCtx: &mut sWelsEncCtx) -> *mut SLTRState {
-    // **F71** — see `ctx_param`. Shared access to the `Vec`, buffer provenance out.
-    let v = std::ptr::addr_of!(pCtx.pLtr);
-    if (*v).is_empty() {
-        return std::ptr::null_mut();
-    }
-    (*v).as_ptr() as *mut SLTRState
-}
-
 /// The long-term-reference state of dependency layer `kiDid` — `pLtr[did]`, which is
-/// how all 24 consumers spell it. See [`ctx_ltr`].
+/// how all consumers spell it.
 ///
-/// **F193 — this wants to return `&mut SLTRState` and cannot yet, and the blocker is
-/// named rather than guessed.** Twenty-two of its twenty-six call sites already
-/// dereference the answer on the spot (`&mut *ctx_ltr_at(..)`, `&*ctx_ltr_at(..)`,
-/// `(*ctx_ltr_at(..)).field`), so S54 says the accessor should return the reference.
-/// **Four cannot** — `ref_list_mgr_svc.rs:757`, `:1025`, `:1453`, `:1648`, each
-/// already carrying T9.G7's note: the body holds the LTR state across calls that
-/// re-derive their own `&mut` to the *same* `SLTRState`, and two `Unique` tags from
-/// one raw root are siblings where the second pops the first. A `&mut`-returning
-/// accessor borrows the context for the reference's lifetime, so the borrow checker
-/// would refuse those four **at the call** — the crux arriving where H's precedent
-/// says it does. Splitting them is four bodies of restructuring, not a signature
-/// change, and it is J's.
+/// **T9.H3 (F196/F197) — the real reference, and a safe `fn`.** Until this session
+/// the raw return was load-bearing at seventy-five sites that used the LTR state
+/// and the context in the same breath; every one of those coexistences is
+/// borrow-lawful now (raw roots and scalars derived first, re-borrows after the
+/// calls that re-derive the same state, two callees narrowed), so the borrow
+/// checker referees every caller. The root accessor `ctx_ltr` went with the raw:
+/// its last caller reads `pLtr.first()` directly.
 ///
-/// # Safety
-/// As [`ctx_ltr`], and `kiDid` must be a layer the array holds.
+/// # Panics
+/// If `kiDid` is not a layer the array holds — the old `debug_assert` made
+/// unconditional. The old empty-array `null` return was never survivable: every
+/// caller dereferenced the answer.
 #[inline]
-// unsafe-cat: cursor
-#[allow(unsafe_code)]
-pub unsafe fn ctx_ltr_at(pCtx: &mut sWelsEncCtx, kiDid: usize) -> *mut SLTRState {
-    let root = ctx_ltr(pCtx);
-    if root.is_null() {
-        return std::ptr::null_mut();
-    }
-    debug_assert!(kiDid < pCtx.pLtr.len(), "LTR layer {kiDid} is past the array");
-    root.add(kiDid)
+pub fn ctx_ltr_at(pCtx: &mut sWelsEncCtx, kiDid: usize) -> &mut SLTRState {
+    &mut pCtx.pLtr[kiDid]
 }
 
 /// The **root** of `pCtx->pFrameBs` — T6.H4.
@@ -2216,16 +2190,15 @@ mod tests {
             }};
         }
 
-        // **T9.H12: three of these now take `&mut sWelsEncCtx` and the rest still
-        // take `*mut`, and the test is better for the mix.** `ctx_dq_idc_map`,
-        // `ctx_ltr` and `ctx_ltr_at` were ST and flipped; the others are in-fork
-        // and stay raw under S63. So the flipped three assert something stronger
-        // than the sibling property they were written for: the second call now
-        // performs a **`&mut` entry retag of the whole context**, and the first
-        // cursor survives it anyway — because `pLtr` and `pDqIdcMap` are `Vec`s
-        // whose buffers are separate allocations from the context, which a context
-        // retag cannot reach. That is F163's allocation argument, asserted rather
-        // than argued, beside the un-flipped accessors it does not apply to.
+        // **T9.H12, amended by T9.H3: the `&mut`-taking, raw-returning middle
+        // state is gone from this family.** When this comment was written,
+        // `ctx_dq_idc_map`, `ctx_ltr` and `ctx_ltr_at` took `&mut sWelsEncCtx`
+        // and still answered raws, so their rows asserted that a cursor survives
+        // a whole-context entry retag — F163's allocation argument (the `Vec`
+        // buffers are separate allocations). H2 converted `ctx_dq_idc_map` to a
+        // real slice and H3 converted `ctx_ltr_at` to a real reference (deleting
+        // `ctx_ltr` outright), so those rows are gone the way `ctx_dq_idc_map`'s
+        // went. The accessors below are in-fork and stay raw under S63.
         siblings!("ctx_sps_array", ctx_sps_array(p),
             |q: *mut crate::encoder::param_svc::SWelsSPS| (*q).uiSpsId = 7,
             |q: *mut crate::encoder::param_svc::SWelsSPS| (*q).uiSpsId == 7);
@@ -2240,10 +2213,10 @@ mod tests {
         // derivations cannot coexist, and the borrow checker says so at the call
         // rather than Miri saying so at run time. That is the trade the conversion
         // makes and it is the direction the phase is going.
-        siblings!("ctx_ltr", ctx_ltr(&mut *p),
-            |q: *mut SLTRState| (*q).iCurLtrIdx = 4, |q: *mut SLTRState| (*q).iCurLtrIdx == 4);
-        siblings!("ctx_ltr_at", ctx_ltr_at(&mut *p, 1),
-            |q: *mut SLTRState| (*q).iCurLtrIdx = 6, |q: *mut SLTRState| (*q).iCurLtrIdx == 6);
+        // `ctx_ltr` and `ctx_ltr_at` had rows here until T9.H3. The root is
+        // deleted; the layer accessor returns `&mut SLTRState` now, so — as with
+        // `ctx_dq_idc_map` above — it has no sibling property to assert: two
+        // derivations cannot coexist, and the borrow checker says so at the call.
         siblings!("ctx_rc", ctx_rc(p),
             |q: *mut SWelsSvcRc| (*q).iGomSize = 11, |q: *mut SWelsSvcRc| (*q).iGomSize == 11);
         siblings!("ctx_rc_at", ctx_rc_at(p, 1),
@@ -2287,10 +2260,11 @@ mod tests {
         // per-accessor test cannot reach.
         let held: Vec<*mut u8> = unsafe {
             vec![
-                // `ctx_dq_idc_map` left this list at T9.H2 step 4 — a `&mut [SDqIdc]`
-                // cannot be *held* alongside the others, which is the point of it.
+                // `ctx_dq_idc_map` left this list at T9.H2 step 4, and `ctx_ltr`
+                // at T9.H3 (deleted with the raw family) — a real reference
+                // cannot be *held* alongside the others, which is the point.
                 ctx_sps_array(p).cast(), ctx_pps_array(p).cast(),
-                ctx_ltr(&mut *p).cast(), ctx_rc(p).cast(), ctx_mvd_cost_origin(p).cast(),
+                ctx_rc(p).cast(), ctx_mvd_cost_origin(p).cast(),
                 ctx_vaa(p).cast(), ctx_param(p).cast(), ctx_ref_list(p, 0).cast(),
                 ctx_dq_layer(p, 0).cast(), ctx_frame_bs(&mut *p).cast(),
             ]

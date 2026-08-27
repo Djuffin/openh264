@@ -60,7 +60,7 @@ use crate::encoder::param_svc::GetLogFactor;
 use crate::encoder::param_svc::SExistingParasetList;
 use crate::encoder::svc_motion_estimate::CheckInRangeCloseOpen;
 use crate::encoder::encoder_context::{
-    ctx_frame_bs, ctx_frame_bs_cur, ctx_ltr, ctx_param, ctx_pps_array, ctx_rc, ctx_rc_at,
+    ctx_frame_bs, ctx_frame_bs_cur, ctx_param, ctx_pps_array, ctx_rc, ctx_rc_at,
     ctx_sps_array, ctx_subset_array,
     SParaSetOffsetVariable, MAX_DQ_LAYER_NUM,
     MAX_PPS_COUNT, PARA_SET_TYPE,
@@ -2276,22 +2276,20 @@ uiResolutionChangeTimes={}, uIDRReqNum={}, uIDRSentNum={}, uLTRSentNum=NA, iTota
                 }
 
                 // **T9.H14: hoisted above `pStatistics` — T9.G6's shape, found by
-                // the session gate's Miri lane.** `ctx_ltr` took `*mut
-                // sWelsEncCtx` until this session; it takes `&mut` now, so its
-                // call site below spelled `ctx_ltr(&mut *pCtx)` — a `Unique`
-                // retag of the **whole context** at [0x0..0x17f10]. `pStatistics`
-                // is a `&mut` into `sEncoderStatistics[iDid]`, inside that same
-                // allocation at [0x770..0x7c8], and was held across it: the retag
-                // popped it and the next `pStatistics` use was a read through a
-                // dead tag. Reading the flag into a `bool` here, before the
-                // cursor exists, is the same remedy T9.G6 applied eighteen times.
-                //
-                // Nothing between the old site and this one writes `pLtr`, so the
-                // value is the same one the old code read.
-                let bLtrMarkingFlag = {
-                    let pLtr = ctx_ltr(&mut *pCtx);
-                    !pLtr.is_null() && (*pLtr).bLTRMarkingFlag
-                };
+                // the session gate's Miri lane.** `ctx_ltr(&mut *pCtx)` stood
+                // here — a `Unique` retag of the **whole context** at
+                // [0x0..0x17f10] that popped the held `pStatistics` (a `&mut`
+                // into `sEncoderStatistics[iDid]`, inside that same allocation),
+                // so the flag is read into a `bool` before that cursor exists.
+                // **T9.H3**: `ctx_ltr` itself is gone with the raw family — this
+                // was its last caller — and the read is the safe Vec projection
+                // of the root's element 0, with the old empty-array null check
+                // becoming `first()`. The hoist stays: the shared borrow here
+                // still must end before `pStatistics` is derived.
+                let bLtrMarkingFlag = (*pCtx)
+                    .pLtr
+                    .first()
+                    .map_or(false, |pLtr| pLtr.bLTRMarkingFlag);
                 let pStatistics =
                     &mut (*pCtx).sEncoderStatistics[iDid as usize];
                 let pSpatialLayerInternalParam =
