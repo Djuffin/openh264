@@ -328,48 +328,19 @@ pub unsafe fn WelsMdIntraInit(
     let kiMbXY = mbs.cur().iMbXY;
 
     // step 3. locating current pEnc and pDec
-    // unroll loops here
-    if 0 == kiMbX || iSliceFirstMbXY == kiMbXY {
-        // **The source picture's first reader through its handle** (T9.B21). The two
-        // strides are the same numbers `iEncStride` holds — `WelsInitCurrentLayer`
-        // stamps that array from `planes().iLineSize`, and `planes()` fills it from
-        // `SPicture::stride(i)`, which is what `plane(i).stride()` returns — so this
-        // is byte-identical by construction, not by measurement. The borrow is taken
-        // and dropped inside the statement (S37, and `layer_ref_pic`'s doc says why).
-        let pEncPicture = layer_enc_pic(pCurLayer).expect("the layer's source picture is bound");
-        let mut iStrideY = pEncPicture.stride(0);
-        let mut iStrideUV = pEncPicture.stride(1);
-        let mut iOffsetY = (kiMbX + kiMbY * iStrideY) << 4;
-        let mut iOffsetUV = (kiMbX + kiMbY * iStrideUV) << 3;
-        // T9.B30: the pair the twelve pointers are a function of, stamped beside them.
-        (*pMbCache).SPicData.iMbX = kiMbX;
-        (*pMbCache).SPicData.iMbY = kiMbY;
-        (*pMbCache).SPicData.pEncMb[0] = (*pCurLayer).pEncData[0].offset(iOffsetY as isize);
-        (*pMbCache).SPicData.pEncMb[1] = (*pCurLayer).pEncData[1].offset(iOffsetUV as isize);
-        (*pMbCache).SPicData.pEncMb[2] = (*pCurLayer).pEncData[2].offset(iOffsetUV as isize);
-
-        iStrideY = (*pCurLayer).iCsStride[0];
-        iStrideUV = (*pCurLayer).iCsStride[1];
-        iOffsetY = (kiMbX + kiMbY * iStrideY) << 4;
-        iOffsetUV = (kiMbX + kiMbY * iStrideUV) << 3;
-        (*pMbCache).SPicData.pCsMb[0] = (*pCurLayer).pCsData[0].offset(iOffsetY as isize);
-        (*pMbCache).SPicData.pCsMb[1] = (*pCurLayer).pCsData[1].offset(iOffsetUV as isize);
-        (*pMbCache).SPicData.pCsMb[2] = (*pCurLayer).pCsData[2].offset(iOffsetUV as isize);
-
-        // The `pDecMb` triple stood here — a second `layer_dec_pic_mut(..).planes()`
-        // resolution producing, sample for sample, the three pointers stamped four
-        // lines above. See `SPicData`'s note: proved, then deleted (T9.C4).
-    } else {
-        (*pMbCache).SPicData.iMbX = kiMbX;
-        (*pMbCache).SPicData.iMbY = kiMbY;
-        (*pMbCache).SPicData.pEncMb[0] = (*pMbCache).SPicData.pEncMb[0].add(MB_WIDTH_LUMA);
-        (*pMbCache).SPicData.pEncMb[1] = (*pMbCache).SPicData.pEncMb[1].add(MB_WIDTH_CHROMA);
-        (*pMbCache).SPicData.pEncMb[2] = (*pMbCache).SPicData.pEncMb[2].add(MB_WIDTH_CHROMA);
-
-        (*pMbCache).SPicData.pCsMb[0] = (*pMbCache).SPicData.pCsMb[0].add(MB_WIDTH_LUMA);
-        (*pMbCache).SPicData.pCsMb[1] = (*pMbCache).SPicData.pCsMb[1].add(MB_WIDTH_CHROMA);
-        (*pMbCache).SPicData.pCsMb[2] = (*pMbCache).SPicData.pCsMb[2].add(MB_WIDTH_CHROMA);
-    }
+    //
+    // **S4.C2: the six cursors are gone and the branch with them.** This was an
+    // `if 0 == kiMbX || iSliceFirstMbXY == kiMbXY` that computed
+    // `pEncMb`/`pCsMb` absolutely, against an `else` that walked the previous
+    // macroblock's by one macroblock width. The two arms were the same address:
+    // the walk was taken exactly when the previous macroblock was this one's left
+    // neighbour, so `previous + 16` equalled
+    // `root + ((iMbX + iMbY * stride) << 4)`. Both arms also stamped the
+    // coordinate pair — T9.B30 put it here for exactly this — so with the cursors
+    // resolved at use (`enc_mb`/`cs_mb`) the whole construct collapses to the
+    // stamp both arms shared.
+    (*pMbCache).SPicData.iMbX = kiMbX;
+    (*pMbCache).SPicData.iMbY = kiMbY;
 
     //step 2. initial pWelsMd
     mbs.cur_mut().uiCbp = 0;
@@ -875,7 +846,11 @@ pub unsafe fn WelsMdIntraFinePartitionVaa(
     pCurMb: &mut SMB,
     pMbCache: &mut SMbCache,
 ) -> i32 {
-    if MdIntraAnalysisVaaInfo(pEncCtx, (*pMbCache).SPicData.pEncMb[0]) {
+    let pCurLayer = current_layer(pEncCtx);
+    if MdIntraAnalysisVaaInfo(
+        pEncCtx,
+        (*pMbCache).SPicData.mb_cursor(&(*pCurLayer).pEncData, &(*pCurLayer).iEncStride, 0),
+    ) {
         let iCosti4x4 = WelsMdI4x4Fast(pEncCtx, pWelsMd, pCurMb, pMbCache);
 
         if iCosti4x4 < (*pWelsMd).iCostLuma {
@@ -994,33 +969,17 @@ pub unsafe fn WelsMdInterInit(
     ); //BGD spatial pFunc
 
     //step 4. locating current p_ref
-    // merge loops
-    if 0 == kiMbX || iSliceFirstMbXY == kiMbXY {
-        // The stamp reads the reference picture per call since E3's harvest —
-        // a shared resolution of a pre-fork-stamped pool picture (the same
-        // route `sMvList`/`uiRefMbType` reads have taken since T9.C3), with
-        // the plane origins minted through the shared root (F71, S28). Same
-        // addresses the per-frame `sRefPicView` copy held.
-        let pRefPicture = layer_ref_pic(pCurLayer).expect("bound");
-        let kiRefStrideY = pRefPicture.stride(0);
-        let kiRefStrideUV = pRefPicture.stride(1);
-        let kiCurStrideY = (kiMbX + kiMbY * kiRefStrideY) << 4;
-        let kiCurStrideUV = (kiMbX + kiMbY * kiRefStrideUV) << 3;
-        (*pMbCache).SPicData.iMbX = kiMbX;
-        (*pMbCache).SPicData.iMbY = kiMbY;
-        (*pMbCache).SPicData.pRefMb[0] =
-            pRefPicture.data_ptr_shared(0).offset(kiCurStrideY as isize);
-        (*pMbCache).SPicData.pRefMb[1] =
-            pRefPicture.data_ptr_shared(1).offset(kiCurStrideUV as isize);
-        (*pMbCache).SPicData.pRefMb[2] =
-            pRefPicture.data_ptr_shared(2).offset(kiCurStrideUV as isize);
-    } else {
-        (*pMbCache).SPicData.iMbX = kiMbX;
-        (*pMbCache).SPicData.iMbY = kiMbY;
-        (*pMbCache).SPicData.pRefMb[0] = (*pMbCache).SPicData.pRefMb[0].add(MB_WIDTH_LUMA);
-        (*pMbCache).SPicData.pRefMb[1] = (*pMbCache).SPicData.pRefMb[1].add(MB_WIDTH_CHROMA);
-        (*pMbCache).SPicData.pRefMb[2] = (*pMbCache).SPicData.pRefMb[2].add(MB_WIDTH_CHROMA);
-    }
+    //
+    // **S4.C2**, as `WelsMdIntraInit`'s: the three reference cursors resolve at use
+    // through [`ref_mb`] now, so the absolute-vs-walk branch collapses to the
+    // coordinate stamp both arms shared. The resolver keeps the stamp's derivation
+    // exactly — a shared resolution of the pre-fork-stamped pool picture (E3's
+    // harvest; the route `sMvList`/`uiRefMbType` have taken since T9.C3), plane
+    // origins minted through the shared root so two workers are siblings (F71, S28),
+    // and chroma plane 2 addressed with **stride index 1**, which is what the
+    // single `kiCurStrideUV` applied to both chroma planes here.
+    (*pMbCache).SPicData.iMbX = kiMbX;
+    (*pMbCache).SPicData.iMbY = kiMbY;
 
     (*pMbCache).uiRefMbType = (&layer_ref_pic(pCurLayer).expect("bound").uiRefMbType)[kiMbXY as usize];
     (*pMbCache).bCollocatedPredFlag = false;
@@ -1355,7 +1314,7 @@ pub unsafe fn WelsMdPSkipEnc(
     let mut n: i32;
 
     let mut iEncStride = (*pCurLayer).iEncStride[0];
-    let mut pEncMb = (*pMbCache).SPicData.pEncMb[0];
+    let mut pEncMb = (*pMbCache).SPicData.mb_cursor(&(*pCurLayer).pEncData, &(*pCurLayer).iEncStride, 0);
     // T9.H2: `&sWelsEncCtx`. The layer id is read through the same raw beside it —
     // both are shared reads, so the argument and the borrow coexist by construction
     // rather than by the hoist T9.G6 needed when the callee took a `&mut`.
@@ -1490,7 +1449,7 @@ pub unsafe fn WelsMdPSkipEnc(
 
     if WelsTryPYskip(pEncCtx, pCurMb, pMbCache) {
         iEncStride = (*current_layer(pEncCtx)).iEncStride[1];
-        pEncMb = (*pMbCache).SPicData.pEncMb[1];
+        pEncMb = (*pMbCache).SPicData.mb_cursor(&(*pCurLayer).pEncData, &(*pCurLayer).iEncStride, 1);
         pEncBlockOffset = pStrideEncBlockOffset.add(16);
         (*pFunc).pfDctFourT4.expect("pfDctFourT4 unset")(
             std::ptr::addr_of_mut!((*pMbCache).sCoeffLevel).cast::<i16>().add(256),
@@ -1500,7 +1459,7 @@ pub unsafe fn WelsMdPSkipEnc(
             8,
         );
         if WelsTryPUVskip(pEncCtx, pCurMb, pMbCache, 1) {
-            pEncMb = (*pMbCache).SPicData.pEncMb[2];
+            pEncMb = (*pMbCache).SPicData.mb_cursor(&(*pCurLayer).pEncData, &(*pCurLayer).iEncStride, 2);
             pEncBlockOffset = pStrideEncBlockOffset.add(20);
             (*pFunc).pfDctFourT4.expect("pfDctFourT4 unset")(
                 std::ptr::addr_of_mut!((*pMbCache).sCoeffLevel).cast::<i16>().add(320),
