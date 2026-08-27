@@ -1238,7 +1238,7 @@ pub unsafe fn RequestMemorySvc(
     for i in 0..kiNumDependencyLayers as usize {
         // S67 blessed (H2): nothing is held across it — the cursor is minted and consumed in
         // the same call.
-        crate::encoder::ref_list_mgr_svc::ResetLtrState(&mut *ctx_ltr_at(&mut **ppCtx, i));
+        crate::encoder::ref_list_mgr_svc::ResetLtrState(ctx_ltr_at(&mut **ppCtx, i));
     }
 
     // stride tables
@@ -4102,8 +4102,8 @@ pub unsafe fn WelsEncoderEncodeExt(
         let uiDidForLtr = pCtx.uiDependencyId as usize;
         let pLtr = ctx_ltr_at(pCtx, uiDidForLtr);
         if (*pSvcParam).bEnableLongTermReference
-            && (((*pLtr).bLTRMarkingFlag
-                && (*pLtr).iLTRMarkMode == crate::encoder::ref_list_mgr_svc::LTR_MARKING_PROCESS_MODE::LTR_DIRECT_MARK as i32)
+            && ((pLtr.bLTRMarkingFlag
+                && pLtr.iLTRMarkMode == crate::encoder::ref_list_mgr_svc::LTR_MARKING_PROCESS_MODE::LTR_DIRECT_MARK as i32)
                 || eFrameType == EVideoFrameType::videoFrameTypeIDR)
         {
             pCtx.bRefOfCurTidIsLtr[iCurDid as usize][iCurTid as usize] = true;

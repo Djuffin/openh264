@@ -1302,7 +1302,7 @@ impl CWelsPreProcess {
             } else if !(*pDlayerParamInternal).bEncCurFrmAsIdrFlag
                 && ((*pDlayerParamInternal).iCodingIndex & ((*pSvcParam).uiGopSize as i32 - 1)) == 0
             {
-                let pRefPic = if (*ctx_ltr_at(pCtx, depIdx)).bReceivedT0LostFlag {
+                let pRefPic = if ctx_ltr_at(pCtx, depIdx).bReceivedT0LostFlag {
                     let pos = self.m_uiSpatialLayersInTemporal[depIdx] as usize
                         + (*ctx_vaa(pCtx)).uiValidLongTermPicIdx as usize;
                     self.m_pSpatialPic[depIdx][pos]
@@ -1411,7 +1411,7 @@ impl CWelsPreProcess {
         // argument reads through the same context (shape B).
         let uiDidForLtr = pCtx.uiDependencyId as usize;
         if pCtx.uiTemporalId == 0
-            && (*ctx_ltr_at(pCtx, uiDidForLtr)).bReceivedT0LostFlag
+            && ctx_ltr_at(pCtx, uiDidForLtr).bReceivedT0LostFlag
         {
             iRefTemporalIdx = self.m_uiSpatialLayersInTemporal[dIdx] as i32
                 + (*ctx_vaa(pCtx)).uiValidLongTermPicIdx as i32;
@@ -2374,7 +2374,7 @@ impl CWelsPreProcess {
         // S67 blessed (H2): `pSvcParam` lives in its own `Box`; `pParamInternal` is dead by
         // this line (last read two lines up). The cursor is consumed into an `i32` here.
         let iClosestLtrFrameNum =
-            (*ctx_ltr_at(&mut *pCtx, iTargetDid as usize)).iLastLtrIdx[iCurTid as usize];
+            ctx_ltr_at(&mut *pCtx, iTargetDid as usize).iLastLtrIdx[iCurTid as usize];
         if (*pSvcParam).bEnableLongTermReference {
             self.GetAvailableRefListLosslessScreenRefSelection(
                 pCtx,
@@ -2746,7 +2746,7 @@ impl CWelsPreProcess {
         // T9.H3: the held binding is gone — the LTR read borrows inline, after the
         // `ctx_param` coercion in the same condition has ended (T9.G6's shape).
         if (*ctx_param(pCtx)).bEnableLongTermReference
-            && (*ctx_ltr_at(pCtx, uiDid as usize)).bReceivedT0LostFlag
+            && ctx_ltr_at(pCtx, uiDid as usize).bReceivedT0LostFlag
             && uiTid == 0
         {
             for i in 0..(*pRefPicLlist).uiLongRefCount as usize {

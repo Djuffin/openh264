@@ -199,28 +199,27 @@ pub struct SLTRMarkingFeedback {
 /// Reset LTR marking, recovery, and feedback state to defaults.
 ///
 /// **T9.X — `&mut`, and safe.** The parameter was `*mut`-SLTRState with a null
-/// guard; all three callers derive it from `ctx_ltr_at`, which cannot yield null
-/// for an in-range layer, and two of them already spelled the argument
-/// `&mut *ctx_ltr_at(..)`. The body only writes fields, so nothing here needs
-/// `unsafe` once the raw leaves the signature.
+/// guard; all three callers derive it from `ctx_ltr_at`, which — since T9.H3
+/// returns the real `&mut SLTRState` — hands them the argument directly. The
+/// body only writes fields, so nothing here needs `unsafe`.
 pub fn ResetLtrState(pLtr: &mut SLTRState) {
-    (*pLtr).bReceivedT0LostFlag = false;
-    (*pLtr).iLastRecoverFrameNum = 0;
-    (*pLtr).iLastCorFrameNumDec = -1;
-    (*pLtr).iCurFrameNumInDec = -1;
+    pLtr.bReceivedT0LostFlag = false;
+    pLtr.iLastRecoverFrameNum = 0;
+    pLtr.iLastCorFrameNumDec = -1;
+    pLtr.iCurFrameNumInDec = -1;
 
     // LTR mark
-    (*pLtr).iLTRMarkMode = LTR_MARKING_PROCESS_MODE::LTR_DIRECT_MARK as i32;
-    (*pLtr).iLTRMarkSuccessNum = 0;
-    (*pLtr).bLTRMarkingFlag = false;
-    (*pLtr).bLTRMarkEnable = false;
-    (*pLtr).iCurLtrIdx = 0;
-    (*pLtr).iLastLtrIdx = [0; MAX_TEMPORAL_LAYER_NUM];
-    (*pLtr).uiLtrMarkInterval = 0;
+    pLtr.iLTRMarkMode = LTR_MARKING_PROCESS_MODE::LTR_DIRECT_MARK as i32;
+    pLtr.iLTRMarkSuccessNum = 0;
+    pLtr.bLTRMarkingFlag = false;
+    pLtr.bLTRMarkEnable = false;
+    pLtr.iCurLtrIdx = 0;
+    pLtr.iLastLtrIdx = [0; MAX_TEMPORAL_LAYER_NUM];
+    pLtr.uiLtrMarkInterval = 0;
 
     // LTR mark feedback
-    (*pLtr).uiLtrMarkState = NO_LTR_MARKING_FEEDBACK;
-    (*pLtr).iLtrMarkFbFrameNum = -1;
+    pLtr.uiLtrMarkState = NO_LTR_MARKING_FEEDBACK;
+    pLtr.iLtrMarkFbFrameNum = -1;
 }
 
 /// Reset active reference picture lists for current spatial layer.
@@ -420,7 +419,7 @@ pub unsafe fn DeleteInvalidLTR(pCtx: &mut sWelsEncCtx) {
     // (F71) and never with a second use of `pCtx`.
     let iMaxFrameNumPlus1 = 1 << (*ctx_sps(pCtx)).uiLog2MaxFrameNum;
     let pParamInternal = std::ptr::addr_of_mut!((*ctx_param(pCtx)).sDependencyLayers[uiDid]);
-    let pLtr = &mut *ctx_ltr_at(pCtx, (uiDid) as usize);
+    let pLtr = ctx_ltr_at(pCtx, (uiDid) as usize);
 
     for i in 0..LONG_TERM_REF_NUM {
         if let Some(idPic) = (*pRefList).pLongRefList[i as usize] {
@@ -477,7 +476,7 @@ pub unsafe fn HandleLTRMarkFeedback(pCtx: &mut sWelsEncCtx) {
     // T9.H3: raw roots first, the LTR borrow last — see `DeleteInvalidLTR`.
     let pParamInternal = std::ptr::addr_of_mut!((*ctx_param(pCtx)).sDependencyLayers[uiDid]);
     let pVaa = ctx_vaa(pCtx);
-    let pLtr = &mut *ctx_ltr_at(pCtx, (uiDid) as usize);
+    let pLtr = ctx_ltr_at(pCtx, (uiDid) as usize);
 
     if pLtr.uiLtrMarkState == LTR_MARKING_SUCCESS {
         for i in 0..((*pRefList).uiLongRefCount as i32) {
@@ -572,7 +571,7 @@ pub unsafe fn LTRMarkProcess(pCtx: &mut sWelsEncCtx) {
     let pParamInternal = std::ptr::addr_of_mut!((*ctx_param(pCtx)).sDependencyLayers[uiDid]);
     let pVaa = ctx_vaa(pCtx);
     let keSliceType = pCtx.eSliceType;
-    let pLtr = &mut *ctx_ltr_at(pCtx, (uiDid) as usize);
+    let pLtr = ctx_ltr_at(pCtx, (uiDid) as usize);
 
     if keSliceType == EWelsSliceType::I_SLICE {
         i = 0;
@@ -823,7 +822,7 @@ pub unsafe fn WelsUpdateRefList(pCtx: &mut sWelsEncCtx) -> bool {
                 DeleteInvalidLTR(pCtx);
                 HandleLTRMarkFeedback(pCtx);
 
-                let pLtr = &mut *ctx_ltr_at(pCtx, uiDid);
+                let pLtr = ctx_ltr_at(pCtx, uiDid);
                 pLtr.bReceivedT0LostFlag = false;
                 pLtr.bLTRMarkingFlag = false;
                 pLtr.uiLtrMarkInterval += 1;
@@ -856,7 +855,7 @@ pub unsafe fn WelsUpdateRefList(pCtx: &mut sWelsEncCtx) -> bool {
         if (*ctx_param(pCtx)).bEnableLongTermReference {
             LTRMarkProcess(pCtx);
 
-            let pLtr = &mut *ctx_ltr_at(pCtx, uiDid);
+            let pLtr = ctx_ltr_at(pCtx, uiDid);
             pLtr.iCurLtrIdx = (pLtr.iCurLtrIdx + 1) % LONG_TERM_REF_NUM;
             pLtr.iLTRMarkSuccessNum = 1;
             pLtr.bLTRMarkEnable = true;
@@ -985,8 +984,8 @@ pub unsafe fn WelsMarkMMCORefInfo(
 
     *pRefPicMark = SRefPicMarking::default();
 
-    if kbEnableLongTermReference && (*pLtr).bLTRMarkingFlag {
-        if (*pLtr).iLTRMarkMode == LTR_MARKING_PROCESS_MODE::LTR_DIRECT_MARK as i32 {
+    if kbEnableLongTermReference && pLtr.bLTRMarkingFlag {
+        if pLtr.iLTRMarkMode == LTR_MARKING_PROCESS_MODE::LTR_DIRECT_MARK as i32 {
             let count0 = pRefPicMark.uiMmcoCount as usize;
             pRefPicMark.SMmcoRef[count0].iMaxLongTermFrameIdx = LONG_TERM_REF_NUM - 1;
             pRefPicMark.SMmcoRef[count0].iMmcoType = MMCO_SET_MAX_LONG;
@@ -998,13 +997,13 @@ pub unsafe fn WelsMarkMMCORefInfo(
             pRefPicMark.uiMmcoCount += 1;
 
             let count2 = pRefPicMark.uiMmcoCount as usize;
-            pRefPicMark.SMmcoRef[count2].iLongTermFrameIdx = (*pLtr).iCurLtrIdx;
+            pRefPicMark.SMmcoRef[count2].iLongTermFrameIdx = pLtr.iCurLtrIdx;
             pRefPicMark.SMmcoRef[count2].iMmcoType = MMCO_LONG;
             pRefPicMark.uiMmcoCount += 1;
-        } else if (*pLtr).iLTRMarkMode == LTR_MARKING_PROCESS_MODE::LTR_DELAY_MARK as i32 {
+        } else if pLtr.iLTRMarkMode == LTR_MARKING_PROCESS_MODE::LTR_DELAY_MARK as i32 {
             let count0 = pRefPicMark.uiMmcoCount as usize;
             pRefPicMark.SMmcoRef[count0].iDiffOfPicNum = iGoPFrameNumInterval;
-            pRefPicMark.SMmcoRef[count0].iLongTermFrameIdx = (*pLtr).iCurLtrIdx;
+            pRefPicMark.SMmcoRef[count0].iLongTermFrameIdx = pLtr.iCurLtrIdx;
             pRefPicMark.SMmcoRef[count0].iMmcoType = MMCO_SHORT2LONG;
             pRefPicMark.uiMmcoCount += 1;
         }
@@ -1039,12 +1038,12 @@ pub unsafe fn WelsMarkPic(pCtx: &mut sWelsEncCtx) {
     // before the LTR borrows below (shape B).
     let pCurLayerForMmco = &mut *current_layer(pCtx);
 
-    if (*pParam).bEnableLongTermReference && (*ctx_ltr_at(pCtx, uiDid)).bLTRMarkEnable && kuiTid == 0 {
+    if (*pParam).bEnableLongTermReference && ctx_ltr_at(pCtx, uiDid).bLTRMarkEnable && kuiTid == 0 {
         let pLtr = &*ctx_ltr_at(pCtx, uiDid);
         let bMarkCandidate = !pLtr.bReceivedT0LostFlag
             && pLtr.uiLtrMarkInterval > (*pParam).iLtrMarkPeriod as u32;
         if bMarkCandidate && CheckCurMarkFrameNumUsed(pCtx) {
-            let pLtr = &mut *ctx_ltr_at(pCtx, uiDid);
+            let pLtr = ctx_ltr_at(pCtx, uiDid);
             pLtr.bLTRMarkingFlag = true;
             pLtr.bLTRMarkEnable = false;
             pLtr.uiLtrMarkInterval = 0;
@@ -1054,14 +1053,14 @@ pub unsafe fn WelsMarkPic(pCtx: &mut sWelsEncCtx) {
                 }
             }
         } else {
-            (*ctx_ltr_at(pCtx, uiDid)).bLTRMarkingFlag = false;
+            ctx_ltr_at(pCtx, uiDid).bLTRMarkingFlag = false;
         }
     }
 
     WelsMarkMMCORefInfo(
         (*pParam).uiGopSize,
         (*pParam).bEnableLongTermReference,
-        &*ctx_ltr_at(pCtx, uiDid),
+        ctx_ltr_at(pCtx, uiDid),
         pCurLayerForMmco,
         kiCountSliceNum,
     );
@@ -1099,7 +1098,7 @@ pub unsafe fn FilterLTRRecoveryRequest(
         // permanently-raw root first, the LTR borrow last (see `DeleteInvalidLTR`).
         let iMaxFrameNumPlus1 = 1 << (*ctx_sps(pCtx)).uiLog2MaxFrameNum;
         let pParamInternal = std::ptr::addr_of_mut!((*ctx_param(pCtx)).sDependencyLayers[iLayerId as usize]);
-        let pLtr = &mut *ctx_ltr_at(pCtx, (iLayerId as usize) as usize);
+        let pLtr = ctx_ltr_at(pCtx, (iLayerId as usize) as usize);
 
         if (*pRequest).uiFeedbackType == LTR_RECOVERY_REQUEST && (*pRequest).uiIDRPicId == (*pParamInternal).uiIdrPicId as u32 {
             if (*pRequest).iLastCorrectFrameNum == -1 {
@@ -1147,7 +1146,7 @@ pub unsafe fn FilterLTRMarkingFeedback(
     }
     // T9.H3: the param root first, the LTR borrow last — see `DeleteInvalidLTR`.
     let pParam = ctx_param(pCtx);
-    let pLtr = &mut *ctx_ltr_at(pCtx, (iLayerId as usize) as usize);
+    let pLtr = ctx_ltr_at(pCtx, (iLayerId as usize) as usize);
     if (*pParam).bEnableLongTermReference {
         let pParamInternal = std::ptr::addr_of_mut!((*pParam).sDependencyLayers[iLayerId as usize]);
         if (*pLTRMarkingFeedback).uiIDRPicId == (*pParamInternal).uiIdrPicId as u32
@@ -1188,7 +1187,7 @@ pub unsafe fn WelsBuildRefList(
     pCtx.iNumRef0 = 0;
     if pCtx.eSliceType != EWelsSliceType::I_SLICE {
         if (*ctx_param(pCtx)).bEnableLongTermReference
-            && (*ctx_ltr_at(pCtx, (uiDid) as usize)).bReceivedT0LostFlag
+            && ctx_ltr_at(pCtx, (uiDid) as usize).bReceivedT0LostFlag
             && pCtx.uiTemporalId == 0
         {
             for i in 0..((*pRefList).uiLongRefCount as usize) {
@@ -1202,7 +1201,7 @@ pub unsafe fn WelsBuildRefList(
                     (*current_layer(pCtx)).pRefOri[numRef0] = Some(PicRef::Rec(idLong));
                     pCtx.pRefList0[numRef0] = Some(idLong);
                     pCtx.iNumRef0 += 1;
-                    (*ctx_ltr_at(pCtx, (uiDid) as usize)).iLastRecoverFrameNum = (*pParamD).iFrameNum;
+                    ctx_ltr_at(pCtx, (uiDid) as usize).iLastRecoverFrameNum = (*pParamD).iFrameNum;
                     break;
                 }
             }
@@ -1222,7 +1221,7 @@ pub unsafe fn WelsBuildRefList(
         }
     } else {
         WelsResetRefList(pCtx);
-        ResetLtrState(&mut *ctx_ltr_at(pCtx, (uiDid) as usize));
+        ResetLtrState(ctx_ltr_at(pCtx, (uiDid) as usize));
         for k in 0..MAX_TEMPORAL_LEVEL {
             pCtx.bRefOfCurTidIsLtr[uiDid][k] = false;
         }
@@ -1287,7 +1286,7 @@ pub unsafe fn WelsUpdateSliceHeaderSyntax(
     let uiDid = pCtx.uiDependencyId as usize;
     // T9.H3: one bool, read once before the loop — the loop writes only slice
     // headers, so the value cannot change while it runs.
-    let bLtrMarkingFlag = (*ctx_ltr_at(pCtx, (uiDid) as usize)).bLTRMarkingFlag;
+    let bLtrMarkingFlag = ctx_ltr_at(pCtx, (uiDid) as usize).bLTRMarkingFlag;
 
     for iIdx in 0..kiCountSliceNum {
         let pSlice = crate::encoder::svc_encode_slice::slice_in_layer(pCurDq, iIdx);
@@ -1498,21 +1497,21 @@ pub unsafe fn WelsUpdateRefListScreen(pCtx: &mut sWelsEncCtx) -> bool {
         pDecPic.iFramePoc = (*pParamD).iPOC;
         pDecPic.bUsedAsRef = true;
         pDecPic.bIsLongRef = true;
-        pDecPic.bIsSceneLTR = (*ctx_ltr_at(pCtx, uiDid)).bLTRMarkingFlag
+        pDecPic.bIsSceneLTR = ctx_ltr_at(pCtx, uiDid).bLTRMarkingFlag
             || ((*ctx_param(pCtx)).bEnableLongTermReference
                 && pCtx.eSliceType == EWelsSliceType::I_SLICE);
-        pDecPic.iLongTermPicNum = (*ctx_ltr_at(pCtx, uiDid)).iCurLtrIdx;
+        pDecPic.iLongTermPicNum = ctx_ltr_at(pCtx, uiDid).iCurLtrIdx;
     }
 
     if pCtx.eSliceType == EWelsSliceType::P_SLICE {
         DeleteNonSceneLTR(pCtx);
         LTRMarkProcessScreen(pCtx);
-        let pLtr = &mut *ctx_ltr_at(pCtx, uiDid);
+        let pLtr = ctx_ltr_at(pCtx, uiDid);
         pLtr.bLTRMarkingFlag = false;
         pLtr.uiLtrMarkInterval += 1;
     } else {
         LTRMarkProcessScreen(pCtx);
-        let pLtr = &mut *ctx_ltr_at(pCtx, uiDid);
+        let pLtr = ctx_ltr_at(pCtx, uiDid);
         pLtr.iCurLtrIdx = 1;
         pLtr.iSceneLtrIdx = 1;
         pLtr.uiLtrMarkInterval = 0;
@@ -1608,7 +1607,7 @@ pub unsafe fn WelsBuildRefListScreen(
         }
     } else {
         WelsResetRefList(pCtx);
-        ResetLtrState(&mut *ctx_ltr_at(pCtx, (uiDid) as usize));
+        ResetLtrState(ctx_ltr_at(pCtx, (uiDid) as usize));
         pCtx.pRefList0[0] = None;
     }
 
@@ -1655,7 +1654,7 @@ pub unsafe fn WelsMarkMMCORefInfoScreen(
         pRefPicMark.uiMmcoCount += 1;
 
         let count1 = pRefPicMark.uiMmcoCount as usize;
-        pRefPicMark.SMmcoRef[count1].iLongTermFrameIdx = (*pLtr).iCurLtrIdx;
+        pRefPicMark.SMmcoRef[count1].iLongTermFrameIdx = pLtr.iCurLtrIdx;
         pRefPicMark.SMmcoRef[count1].iMmcoType = MMCO_LONG;
         pRefPicMark.uiMmcoCount += 1;
     }
@@ -1703,22 +1702,22 @@ pub unsafe fn WelsMarkPicScreen(pCtx: &mut sWelsEncCtx) {
     let iSliceNum = (*current_layer(pCtx)).iMaxSliceNum;
     // T9.G6: hoisted — see `WelsMarkMMCORefInfo`.
     let pCurLayerForMmco = &mut *current_layer(pCtx);
-    let pLtr = &mut *ctx_ltr_at(pCtx, uiDid);
+    let pLtr = ctx_ltr_at(pCtx, uiDid);
 
     if !(*pParam).bEnableLongTermReference {
-        (*pLtr).iCurLtrIdx = kuiTid as i32;
+        pLtr.iCurLtrIdx = kuiTid as i32;
     } else {
         if iMaxActualLtrIdx != -1 && kuiTid == 0 && kbSceneLtr {
-            (*pLtr).bLTRMarkingFlag = true;
-            (*pLtr).uiLtrMarkInterval = 0;
-            (*pLtr).iCurLtrIdx = (*pLtr).iSceneLtrIdx % (iMaxActualLtrIdx + 1);
-            (*pLtr).iSceneLtrIdx += 1;
+            pLtr.bLTRMarkingFlag = true;
+            pLtr.uiLtrMarkInterval = 0;
+            pLtr.iCurLtrIdx = pLtr.iSceneLtrIdx % (iMaxActualLtrIdx + 1);
+            pLtr.iSceneLtrIdx += 1;
         } else {
-            (*pLtr).bLTRMarkingFlag = false;
+            pLtr.bLTRMarkingFlag = false;
             if bIsRefListNotFull {
                 for i in 0..iLongRefNum {
                     if (*pRefList).pLongRefList[i as usize].is_none() {
-                        (*pLtr).iCurLtrIdx = i;
+                        pLtr.iCurLtrIdx = i;
                         break;
                     }
                 }
@@ -1767,7 +1766,7 @@ pub unsafe fn WelsMarkPicScreen(pCtx: &mut sWelsEncCtx) {
                         };
 
                         if iDeltaFrameNum > iLongestDeltaFrameNum {
-                            (*pLtr).iCurLtrIdx = pPic.iLongTermPicNum;
+                            pLtr.iCurLtrIdx = pPic.iLongTermPicNum;
                             iLongestDeltaFrameNum = iDeltaFrameNum;
                         }
                     }
@@ -1778,7 +1777,7 @@ pub unsafe fn WelsMarkPicScreen(pCtx: &mut sWelsEncCtx) {
 
     for i in 0..MAX_TEMPORAL_LAYER_NUM {
         if (kuiTid as usize) < i || kuiTid == 0 {
-            (*pLtr).iLastLtrIdx[i] = (*pLtr).iCurLtrIdx;
+            pLtr.iLastLtrIdx[i] = pLtr.iCurLtrIdx;
         }
     }
 
