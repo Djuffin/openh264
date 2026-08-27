@@ -744,8 +744,37 @@ pub unsafe fn ctx_vaa(pCtx: *mut sWelsEncCtx) -> *mut SVAAFrameInfo {
     std::ptr::read(std::ptr::addr_of!((*pCtx).pVaa) as *const *mut SVAAFrameInfo)
 }
 
+/// Dependency layer `kiDid`'s reference list **as a raw pointer, read out of the
+/// slot** — the one derivation A3 left raw, and the only caller is
+/// `WelsInitCurrentLayer`'s stamp of `SDqLayer::pRefList`.
+///
+/// **Why it survives the conversion.** `SDqLayer::pRefList` is a raw *field*
+/// (stage C's, plan §3c-5), and the value stored in it is read for the whole
+/// frame by the fork — `layer_ref_pic`, and `deblocking.rs`'s two null guards. It
+/// must therefore carry the reference list's **own** provenance, which is what
+/// reading the slot as a pointer value gives it (F71). A `&mut`-derived cast
+/// would stamp a fresh `Unique` that the next
+/// [`ref_list_mut`](sWelsEncCtx::ref_list_mut) call pops, leaving the fork
+/// reading through a dead tag — a soundness regression the byte gates would not
+/// see. So the accessor's old body lives on here, at one site, until the field it
+/// feeds is gone. Everything else uses [`sWelsEncCtx::ref_list`] /
+/// [`sWelsEncCtx::ref_list_mut`].
+///
+/// # Safety
+/// `pCtx` must point to a live encoder context.
+#[inline]
+// unsafe-cat: fork-shared(S63)
+#[allow(unsafe_code)]
+pub unsafe fn ctx_ref_list_raw(pCtx: &sWelsEncCtx, kiDid: usize) -> *mut SRefList {
+    let arr = std::ptr::addr_of!(pCtx.ppRefPicListExt);
+    if kiDid >= (*arr).len() {
+        return std::ptr::null_mut();
+    }
+    std::ptr::read((*arr).as_ptr().add(kiDid) as *const *mut SRefList)
+}
+
 /// Dependency layer `kiDid`'s **DQ layer** — `ppDqLayerList[did]`, and null where the
-/// slot's pointer was null. T6.H8; the same shape as [`ctx_ref_list`], and
+/// slot's pointer was null. T6.H8; the same shape as [`sWelsEncCtx::ref_list`], and
 /// [`current_layer`](crate::encoder::svc_encode_slice::current_layer) resolves
 /// `iCurDqLayer` through it.
 ///
@@ -766,28 +795,6 @@ pub unsafe fn ctx_dq_layer(pCtx: *mut sWelsEncCtx, kiDid: usize) -> *mut SDqLaye
     // The value read carries the heap block's own provenance — nothing here retags
     // the layer, which is what lets two workers resolve it at once.
     std::ptr::read((*arr).as_ptr().add(kiDid) as *const *mut SDqLayer)
-}
-
-/// Dependency layer `kiDid`'s **reference list** — `ppRefPicListExt[did]`, and null
-/// where the slot's pointer was null: before `InitDqLayers` fills it, and past the
-/// layers the configuration uses. T6.H7.
-///
-/// The `Box` is dereferenced without forming a reference to its target, so repeated
-/// calls hand out sibling cursors — `svc_encode_slice.rs` asks three times in one
-/// function and the frame loop holds one across a fourth.
-///
-/// # Safety
-/// `pCtx` must point to a live encoder context.
-#[inline]
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
-pub unsafe fn ctx_ref_list(pCtx: *mut sWelsEncCtx, kiDid: usize) -> *mut SRefList {
-    // **F71** — the same shape as `ctx_dq_layer`.
-    let arr = std::ptr::addr_of!((*pCtx).ppRefPicListExt);
-    if kiDid >= (*arr).len() {
-        return std::ptr::null_mut();
-    }
-    std::ptr::read((*arr).as_ptr().add(kiDid) as *const *mut SRefList)
 }
 
 /// The long-term-reference state of dependency layer `kiDid` — `pLtr[did]`, which is
@@ -1065,6 +1072,57 @@ impl sWelsEncCtx {
         &self.pWelsSvcRc
     }
 
+    /// Dependency layer `kiDid`'s **reference list** — `ppRefPicListExt[did]`,
+    /// T6.H7.
+    ///
+    /// **`Option`, because the absence is a state and sixteen callers already
+    /// asked about it.** The raw accessor answered null both past the configured
+    /// layers and before `InitDqLayers` fills the slot, and more than half its
+    /// production sites opened with `if pRefList.is_null()`. Those guards become
+    /// `let Some(..) else`, which is the same branch with the question asked in
+    /// the type; the sites that never asked say `.expect` and name the assumption
+    /// they were making silently.
+    ///
+    /// In-fork this is the only path — `ctx_ref_pic`/`ctx_pic_ref` resolve a
+    /// picture through it and read, which is what a shared reborrow is for. The
+    /// writers are all reference-list management, and all single-threaded.
+    #[inline]
+    pub fn ref_list(&self, kiDid: usize) -> Option<&SRefList> {
+        self.ppRefPicListExt.get(kiDid)?.as_deref()
+    }
+
+    /// [`ref_list`](Self::ref_list) for the reference-list managers.
+    ///
+    /// **Single-threaded only** — see [`rc_at_mut`](Self::rc_at_mut).
+    #[inline]
+    pub fn ref_list_mut(&mut self, kiDid: usize) -> Option<&mut SRefList> {
+        self.ppRefPicListExt.get_mut(kiDid)?.as_deref_mut()
+    }
+
+    /// A dependency layer's **reference list and its long-term-reference state,
+    /// from one borrow** — §4.6's combined accessor, and the shape
+    /// `ref_list_mgr_svc.rs` wants at nine of its bodies.
+    ///
+    /// The two live in different fields of the context, so the compiler can see
+    /// they are disjoint once they are projected inside a single body — which is
+    /// exactly the block `ctx_paraset_arrays` dissolved for `LoadPrevious`
+    /// (T9.H2): "the shape was never the problem; the call count was". Two
+    /// accessor calls each claim the whole context; one call projects both.
+    ///
+    /// The file's own T9.H3 note asks for the same order this enforces — every
+    /// raw root derived first, the reference-shaped borrows last and together.
+    #[inline]
+    pub fn ref_list_and_ltr_mut(
+        &mut self,
+        kiDid: usize,
+    ) -> (Option<&mut SRefList>, &mut SLTRState) {
+        let sWelsEncCtx { ppRefPicListExt, pLtr, .. } = self;
+        (
+            ppRefPicListExt.get_mut(kiDid).and_then(|s| s.as_deref_mut()),
+            &mut pLtr[kiDid],
+        )
+    }
+
     /// The rate-control state of spatial layer `kiDid` — `pWelsSvcRc[did]`, which
     /// is how all sixty consumers spell it. See [`rc`](Self::rc) for the array.
     ///
@@ -1242,7 +1300,8 @@ pub struct sWelsEncCtx {
     /// `WelsMallocz`'d block of pointers; the `SRefList`s themselves have been
     /// `Box`-built since T6.F1, so the list is simply their owner now. `None` is the
     /// null a slot held between `RequestMemorySvc` sizing the array and
-    /// `InitDqLayers` filling it. Resolve a layer's list with [`ctx_ref_list`].
+    /// `InitDqLayers` filling it. Resolve a layer's list with
+    /// [`sWelsEncCtx::ref_list`] / [`sWelsEncCtx::ref_list_mut`].
     pub ppRefPicListExt: Vec<Option<Box<SRefList>>>,
     pub pRefList0: [Option<RecPicId>; 16],
     /// **T6.H5 — owned.** One long-term-reference state per dependency layer,
@@ -2024,13 +2083,12 @@ pub unsafe fn DecideFrameType(
         {
             let mut iActualLtrcount = 0;
             {
-                let ref_list_0 = ctx_ref_list(pEncCtx, 0);
-                if !ref_list_0.is_null() {
+                if let Some(ref_list_0) = pEncCtx.ref_list(0) {
                     for i in 0..(*pSvcParam).iLTRRefNum {
-                        let Some(id) = (*ref_list_0).pLongRefList[i as usize] else {
+                        let Some(id) = ref_list_0.pLongRefList[i as usize] else {
                             continue;
                         };
-                        let pic = (*ref_list_0).pic(id);
+                        let pic = ref_list_0.pic(id);
                         if pic.bUsedAsRef && pic.bIsLongRef && pic.bIsSceneLTR {
                             iActualLtrcount += 1;
                         }
@@ -2276,9 +2334,10 @@ mod tests {
         siblings!("ctx_param", ctx_param(p),
             |q: *mut SWelsSvcCodingParam| (*q).iPicWidth = 320,
             |q: *mut SWelsSvcCodingParam| (*q).iPicWidth == 320);
-        siblings!("ctx_ref_list", ctx_ref_list(p, 0),
-            |q: *mut SRefList| (*q).uiShortRefCount = 2,
-            |q: *mut SRefList| (*q).uiShortRefCount == 2);
+        // `ctx_ref_list` had a row here until A3 — `ref_list` returns
+        // `Option<&SRefList>` now, so it joins the references above: no sibling
+        // property to assert, and the borrow checker referees the coexistences
+        // that Miri used to.
         siblings!("ctx_dq_layer", ctx_dq_layer(p, 0),
             |q: *mut crate::encoder::svc_encode_slice::SDqLayer| (*q).iMbWidth = 11,
             |q: *mut crate::encoder::svc_encode_slice::SDqLayer| (*q).iMbWidth == 11);
@@ -2309,7 +2368,7 @@ mod tests {
                 // cannot be *held* alongside the others, which is the point.
                 ctx_sps_array(p).cast(), ctx_pps_array(p).cast(),
                 (*p).mvd_cost_origin().cast(),
-                ctx_vaa(p).cast(), ctx_param(p).cast(), ctx_ref_list(p, 0).cast(),
+                ctx_vaa(p).cast(), ctx_param(p).cast(),
                 ctx_dq_layer(p, 0).cast(), (*p).frame_bs().cast(),
             ]
         };

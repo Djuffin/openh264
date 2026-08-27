@@ -30,7 +30,7 @@ use crate::decoder::nalu::g_ksLevelLimits;
 use crate::encoder::encoder_context::{
     ctx_dq_idc_map, ctx_dq_layer, ctx_frame_bs_cur, ctx_ltr_at, ctx_mb_index_x,
     ctx_paraset_arrays,
-    ctx_mb_index_y, ctx_param, ctx_ref_list, ctx_vaa,
+    ctx_mb_index_y, ctx_param, ctx_vaa,
     ctx_pps_array, ctx_sps_array,
     ctx_stride_enc_block_offset,
     ctx_subset_array,
@@ -1331,12 +1331,11 @@ pub unsafe fn RequestMemorySvc(
         kuiMvdInterTableStride,
     );
 
-    let pRefList0 = ctx_ref_list(*ppCtx, 0);
-    if !pRefList0.is_null() && !(*pRefList0).pRef.is_empty() {
-        (**ppCtx).pDecPic = Some((*pRefList0).pRef.at(0));
-    } else {
-        (**ppCtx).pDecPic = None; // error here
-    }
+    let idDec = match (**ppCtx).ref_list(0) {
+        Some(pRefList0) if !pRefList0.pRef.is_empty() => Some(pRefList0.pRef.at(0)),
+        _ => None, // error here
+    };
+    (**ppCtx).pDecPic = idDec;
 
     // T6.G3: the head of each array, which is what "= pSpsArray" said. Nothing
     // re-aims these, in this port or in the C++ — `encoder_ext.cpp` assigns them here
@@ -1822,11 +1821,11 @@ mod tests {
                 LEFT_MB_POS | TOP_MB_POS | TOPLEFT_MB_POS | TOPRIGHT_MB_POS
             );
 
-            assert!(!ctx_ref_list(pCtx, 0).is_null());
-            assert!(!(*ctx_ref_list(pCtx, 0)).pRef.is_empty());
+            assert!((*pCtx).ref_list(0).is_some());
+            assert!(!(*pCtx).ref_list(0).expect("just checked").pRef.is_empty());
             assert_eq!(
                 (*pCtx).pDecPic,
-                Some((*ctx_ref_list(pCtx, 0)).pRef.at(0))
+                Some((*pCtx).ref_list(0).expect("just checked").pRef.at(0))
             );
 
             assert!((*pCtx).pStrideTab.is_some());
@@ -2132,7 +2131,14 @@ pub unsafe fn WelsInitCurrentLayer(pCtx: &mut sWelsEncCtx, _kiWidth: i32, _kiHei
     // **T6.F1**: the layer is stamped with the list its handles belong to, here, once
     // a frame — `pRefPic`/`pDecPic` on `SDqLayer` are slots of *this* list, and the
     // per-macroblock mode-decision family resolves them through it.
-    let pRefList = ctx_ref_list(pCtx, pCtx.uiDependencyId as usize);
+    // **A3 keeps this one derivation raw** — see `ctx_ref_list_raw`, whose only
+    // caller this is: the field it feeds crosses into the fork, so the value must
+    // carry the list's own provenance rather than a retag from this body's `&mut`.
+    // The two `pic_mut` derivations below want the same raw for the same reason.
+    let pRefList = crate::encoder::encoder_context::ctx_ref_list_raw(
+        pCtx,
+        pCtx.uiDependencyId as usize,
+    );
     (*pCurDq).pRefList = pRefList;
     let pBaseSlice = crate::encoder::svc_encode_slice::slice_in_layer(pCurDq, 0);
     if pBaseSlice.is_null() {
@@ -2216,7 +2222,7 @@ pub unsafe fn WelsInitCurrentLayer(pCtx: &mut sWelsEncCtx, _kiWidth: i32, _kiHei
     let (Some(idEnc), Some(idDec)) = (pCtx.pEncPic, pCtx.pDecPic) else {
         return;
     };
-    if pRefList.is_null() || pCtx.pVpp.is_null() {
+    if pCtx.pVpp.is_null() {
         return;
     }
     // The handle and its pool, beside the roots they stand for (T9.B21). `idEnc` is
@@ -3572,13 +3578,23 @@ pub unsafe fn WelsEncoderEncodeExt(
         pCtx.eNalType = eNalType;
         pCtx.eNalPriority = eNalRefIdc;
 
-        let pRefListCur = ctx_ref_list(pCtx, iCurDid as usize);
-        pCtx.pDecPic = (*pRefListCur).pNextBuffer;
-        fsnr = pCtx.pDecPic;
+        // §4.6, reorder: the next buffer and the slice type come out first, so
+        // the context write and the picture write do not want the context at once.
+        let eSliceTypeNow = pCtx.eSliceType;
+        let idNext = pCtx
+            .ref_list(iCurDid as usize)
+            .expect("the dependency layer's reference list")
+            .pNextBuffer;
+        pCtx.pDecPic = idNext;
+        fsnr = idNext;
         if let Some(id) = fsnr {
-            let p = (*pRefListCur).pic_mut(id);
-            p.iPictureType = pCtx.eSliceType as i32;
-            p.iFramePoc = (*pSvcParam).sDependencyLayers[iCurDid as usize].iPOC;
+            let iPOC = (*pSvcParam).sDependencyLayers[iCurDid as usize].iPOC;
+            let p = pCtx
+                .ref_list_mut(iCurDid as usize)
+                .expect("the dependency layer's reference list")
+                .pic_mut(id);
+            p.iPictureType = eSliceTypeNow as i32;
+            p.iFramePoc = iPOC;
         }
 
         WelsInitCurrentLayer(pCtx, iCurWidth, iCurHeight);
@@ -3949,9 +3965,9 @@ pub unsafe fn WelsEncoderEncodeExt(
             // §4.6, reorder: the read is hoisted so the shared borrow of the
             // context ends before the reference list's cursor is written through.
             let iAverageFrameQp = pCtx.rc_at(iCurDid as usize).iAverageFrameQp;
-            (*ctx_ref_list(pCtx, iCurDid as usize))
-                .pic_mut(id)
-                .iFrameAverageQp = iAverageFrameQp;
+            if let Some(pRefList) = pCtx.ref_list_mut(iCurDid as usize) {
+                pRefList.pic_mut(id).iFrameAverageQp = iAverageFrameQp;
+            }
         }
 
         // update scc related
@@ -3994,9 +4010,9 @@ pub unsafe fn WelsEncoderEncodeExt(
         // `UpdateRefList`. `-1.0` is the raw form's null-plane sentinel, answered
         // where the handle is rather than inside the kernel.
         if let Some(idDecPic) = fsnr {
-            let pRefListPsnr = crate::encoder::encoder_context::ctx_ref_list(pCtx, iCurDid as usize);
-            if !pRefListPsnr.is_null() && !pCtx.pVpp.is_null() {
-                let recon = &*pRefListPsnr;
+            let pRefListPsnr = pCtx.ref_list(iCurDid as usize);
+            if pRefListPsnr.is_some() && !pCtx.pVpp.is_null() {
+                let recon = pRefListPsnr.expect("checked just above");
                 let vpp = &*pCtx.pVpp;
                 let plane_psnr = |i: usize, w: i32, h: i32| -> f32 {
                     let tar = recon.pic(idDecPic).plane(i);
