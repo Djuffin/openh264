@@ -1370,7 +1370,7 @@ pub unsafe fn RequestMemorySvc(
             / std::mem::size_of::<u16>()
     ];
     crate::encoder::md::MvdCostInit(
-        ctx.mvd_cost_table_mut().as_mut_ptr(),
+        ctx.mvd_cost_table_mut(),
         kuiMvdInterTableStride,
     );
 

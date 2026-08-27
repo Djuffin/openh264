@@ -335,9 +335,9 @@ pub unsafe extern "C" fn WelsMdInterJudgePskip(
         || bTrySkip
     {
         PredictSadSkip(
-            (*pMbCache).sMvComponents.iRefIndexCache.as_mut_ptr(),
-            (*pMbCache).bMbTypeSkip.as_mut_ptr(),
-            (*pMbCache).iSadCostSkip.as_mut_ptr(),
+            &(*pMbCache).sMvComponents.iRefIndexCache,
+            &(*pMbCache).bMbTypeSkip,
+            &(*pMbCache).iSadCostSkip,
             0,
             &mut (*pWelsMd).iSadPredSkip,
         );
@@ -1612,8 +1612,8 @@ pub unsafe fn WelsMdSpatialelInterMbIlfmdNoilp(
         if !bSkip {
             let pMbCache = &mut pSlice.sMbCacheInfo;
             PredictSad(
-                pMbCache.sMvComponents.iRefIndexCache.as_mut_ptr(),
-                pMbCache.iSadCost.as_mut_ptr(),
+                &pMbCache.sMvComponents.iRefIndexCache,
+                &pMbCache.iSadCost,
                 0,
                 &mut (*pWelsMd).iSadPredMb,
             );
@@ -1737,9 +1737,9 @@ pub unsafe fn CheckChromaCost(
     let iChromaSad = iCbSad + iCrSad;
 
     PredictSadSkip(
-        (*pMbCache).sMvComponents.iRefIndexCache.as_mut_ptr(),
-        (*pMbCache).bMbTypeSkip.as_mut_ptr(),
-        (*pMbCache).iSadCostSkip.as_mut_ptr(),
+        &(*pMbCache).sMvComponents.iRefIndexCache,
+        &(*pMbCache).bMbTypeSkip,
+        &(*pMbCache).iSadCostSkip,
         0,
         &mut (*pWelsMd).iSadPredSkip,
     );

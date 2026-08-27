@@ -686,10 +686,21 @@ pub const fn best_pred_i4x4_blk4_off(uiBestPredI4x4Blk4Half: u8) -> usize {
 /// the same slice-scoped `uiNeighborAvail` that F107 §2 measured, so the reads
 /// never actually cross; `SharedMbArray` is the type that lets Miri's data-race
 /// detector be the referee for that claim instead of taking it on trust.
-pub type PFillInterNeighborCacheFunc = unsafe fn(
+/// **S4.C4**: `pVaaBgMbFlag` was a `*mut i8` **pre-offset to the current
+/// macroblock**, which the two implementations then walked backwards off
+/// (`.offset(-1)`, `.offset(-iMbWidth)`, and the two diagonals). It is the whole
+/// array now, indexed by `iMbXY + <neighbour offset>` — exactly what T6.F0 did to
+/// the skip-SAD array beside it, whose comment at the call site already describes
+/// this shape. The callee has `iMbXY` in hand, so nothing needed threading through.
+///
+/// **Shared, not `&mut`.** The array lives on the one `SVAAFrameInfo` every worker
+/// shares; F132's round 8 caught `Vec::as_mut_ptr`'s autoref here as a per-macroblock
+/// retag-write and the fixed-slice probe stopped on it. A `&[i8]` is the reader path
+/// that replaced it.
+pub type PFillInterNeighborCacheFunc = fn(
     pMbCache: &mut SMbCache,
     mbs: &crate::safe::mb_grid::MbWindow<'_, SMB>,
-    pVaaBgMbFlag: *mut i8,
+    pVaaBgMbFlag: &[i8],
     kpMbSkipSad: &crate::encoder::rec_view::SharedMbArray<i32>,
 );
 pub type PGetVarianceFromIntraVaaFunc = unsafe extern "C" fn(pDataY: *mut u8, kiLineSize: i32) -> i32;
@@ -991,12 +1002,10 @@ pub fn FillNeighborCacheIntra(
     (*pMbCache).uiNeighborIntra = uiNeighborIntra as u8;
 }
 
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
-pub unsafe fn FillNeighborCacheInterWithoutBGD(
+pub fn FillNeighborCacheInterWithoutBGD(
     pMbCache: &mut SMbCache,
     mbs: &crate::safe::mb_grid::MbWindow<'_, SMB>,
-    _pVaaBgMbFlag: *mut i8,
+    _pVaaBgMbFlag: &[i8],
     kpMbSkipSad: &crate::encoder::rec_view::SharedMbArray<i32>,
 ) {
     let uiNeighborAvail = mbs.cur().uiNeighborAvail as u32;
@@ -1121,12 +1130,10 @@ pub unsafe fn FillNeighborCacheInterWithoutBGD(
     pMvComp.iRefIndexCache[23] = REF_NOT_AVAIL;
 }
 
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
-pub unsafe fn FillNeighborCacheInterWithBGD(
+pub fn FillNeighborCacheInterWithBGD(
     pMbCache: &mut SMbCache,
     mbs: &crate::safe::mb_grid::MbWindow<'_, SMB>,
-    pVaaBgMbFlag: *mut i8,
+    pVaaBgMbFlag: &[i8],
     kpMbSkipSad: &crate::encoder::rec_view::SharedMbArray<i32>,
 ) {
     let uiNeighborAvail = mbs.cur().uiNeighborAvail as u32;
@@ -1145,7 +1152,7 @@ pub unsafe fn FillNeighborCacheInterWithBGD(
         pMvComp.iRefIndexCache[24] = mbs.left().iRefIndex[3];
         (*pMbCache).iSadCost[3] = mbs.left().iSadCost;
 
-        if mbs.left().uiMbType == MB_TYPE_SKIP && *pVaaBgMbFlag.offset(-1) == 0 {
+        if mbs.left().uiMbType == MB_TYPE_SKIP && pVaaBgMbFlag[(kiMbXY - 1) as usize] == 0 {
             (*pMbCache).bMbTypeSkip[3] = true;
             (*pMbCache).iSadCostSkip[3] = kpMbSkipSad.get((kiMbXY - 1) as usize);
         } else {
@@ -1177,7 +1184,7 @@ pub unsafe fn FillNeighborCacheInterWithBGD(
         pMvComp.iRefIndexCache[4] = mbs.top().iRefIndex[3];
         (*pMbCache).iSadCost[1] = mbs.top().iSadCost;
 
-        if mbs.top().uiMbType == MB_TYPE_SKIP && *pVaaBgMbFlag.offset(-(iMbWidth as isize)) == 0 {
+        if mbs.top().uiMbType == MB_TYPE_SKIP && pVaaBgMbFlag[(kiMbXY - iMbWidth as isize) as usize] == 0 {
             (*pMbCache).bMbTypeSkip[1] = true;
             (*pMbCache).iSadCostSkip[1] = kpMbSkipSad.get((kiMbXY - iMbWidth as isize) as usize);
         } else {
@@ -1204,7 +1211,7 @@ pub unsafe fn FillNeighborCacheInterWithBGD(
         pMvComp.iRefIndexCache[0] = mbs.top_left().iRefIndex[3];
         (*pMbCache).iSadCost[0] = mbs.top_left().iSadCost;
 
-        if mbs.top_left().uiMbType == MB_TYPE_SKIP && *pVaaBgMbFlag.offset(-(iMbWidth as isize) - 1) == 0 {
+        if mbs.top_left().uiMbType == MB_TYPE_SKIP && pVaaBgMbFlag[(kiMbXY - iMbWidth as isize - 1) as usize] == 0 {
             (*pMbCache).bMbTypeSkip[0] = true;
             (*pMbCache).iSadCostSkip[0] = kpMbSkipSad.get((kiMbXY - iMbWidth as isize - 1) as usize);
         } else {
@@ -1224,7 +1231,7 @@ pub unsafe fn FillNeighborCacheInterWithBGD(
         pMvComp.iRefIndexCache[5] = mbs.top_right().iRefIndex[2];
         (*pMbCache).iSadCost[2] = mbs.top_right().iSadCost;
 
-        if mbs.top_right().uiMbType == MB_TYPE_SKIP && *pVaaBgMbFlag.offset(-(iMbWidth as isize) + 1) == 0 {
+        if mbs.top_right().uiMbType == MB_TYPE_SKIP && pVaaBgMbFlag[(kiMbXY - iMbWidth as isize + 1) as usize] == 0 {
             (*pMbCache).bMbTypeSkip[2] = true;
             (*pMbCache).iSadCostSkip[2] = kpMbSkipSad.get((kiMbXY - iMbWidth as isize + 1) as usize);
         } else {
@@ -1903,36 +1910,32 @@ pub unsafe extern "C" fn MeRefineFracPixel(
     }
 }
 
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe extern "C" fn InitBlkStrideWithRef(pBlkStride: *mut i32, kiStrideRef: i32) {
-    const KUI_STRIDE_X: [u8; 16] = [
-        0, 4, 0, 4,
-        8, 12, 8, 12,
-        0, 4, 0, 4,
-        8, 12, 8, 12,
-    ];
-    const KUI_STRIDE_Y: [u8; 16] = [
-        0, 0, 4, 4,
-        0, 0, 4, 4,
-        8, 8, 12, 12,
-        8, 8, 12, 12,
-    ];
+// `InitBlkStrideWithRef` stood here — `void InitBlkStrideWithRef (int32_t* pBlkStride,
+// const int32_t kiStrideRef)`, filling a sixteen-entry table of 4x4 block offsets from
+// a reference stride. **S18, deleted in S4.C4**: whole-tree grep at deletion
+// (`src/`, `tests/`, `benches/`, `examples/`, `rust/tools/`) found the definition and
+// its own four body lines and nothing else — never called, and the table it filled was
+// never read. The C++ calls it from `WelsInitMeFunc`; this port's motion search reads
+// its block offsets from `g_kuiSmb4AddrIn256`/the stride tables instead, so the
+// indirection never had a consumer here. One `port-raw` tag retires with it.
 
-    for i in (0..16).step_by(4) {
-        *pBlkStride.add(i) = KUI_STRIDE_X[i] as i32 + KUI_STRIDE_Y[i] as i32 * kiStrideRef;
-        *pBlkStride.add(i + 1) = KUI_STRIDE_X[i + 1] as i32 + KUI_STRIDE_Y[i + 1] as i32 * kiStrideRef;
-        *pBlkStride.add(i + 2) = KUI_STRIDE_X[i + 2] as i32 + KUI_STRIDE_Y[i + 2] as i32 * kiStrideRef;
-        *pBlkStride.add(i + 3) = KUI_STRIDE_X[i + 3] as i32 + KUI_STRIDE_Y[i + 3] as i32 * kiStrideRef;
-    }
-}
 
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
-pub unsafe extern "C" fn MvdCostInit(pMvdCostInter: *mut u16, kiMvdSz: i32) {
+pub unsafe fn MvdCostInit(pMvdCostInter: &mut [u16], kiMvdSz: i32) {
+    // S4.C4: the table arrives as the slice its one caller already holds
+    // (`ctx.mvd_cost_table_mut()`, previously `.as_mut_ptr()`d at the call). The two
+    // walking cursors below stay raw — they run 52 x kiMvdSz interleaved writes from
+    // both ends of the table and are the hottest init loop in the encoder; what the
+    // slice buys is that the *extent* is now carried rather than trusted, and the
+    // root is derived from it here instead of at a call site that could pass anything.
     let kiSz = kiMvdSz >> 1;
-    let mut pNegMvd = pMvdCostInter;
-    let mut pPosMvd = pMvdCostInter.offset((kiSz + 1) as isize);
+    let mut pNegMvd = pMvdCostInter.as_mut_ptr();
+    let mut pPosMvd = pMvdCostInter.as_mut_ptr().offset((kiSz + 1) as isize);
+    debug_assert!(
+        (52 * kiMvdSz as usize) <= pMvdCostInter.len(),
+        "the MVD cost table is smaller than the 52 QP rows this fills"
+    );
     let kpQpLambda = g_kiQpCostTable.as_ptr();
 
     for i in 0..52 {
@@ -1983,24 +1986,22 @@ pub unsafe extern "C" fn MvdCostInit(pMvdCostInter: *mut u16, kiMvdSz: i32) {
     }
 }
 
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
-pub unsafe extern "C" fn PredictSad(
-    pRefIndexCache: *mut i8,
-    pSadCostCache: *mut i32,
+pub fn PredictSad(
+    pRefIndexCache: &[i8; 30],
+    pSadCostCache: &[i32; 4],
     uiRef: i32,
-    pSadPred: *mut i32,
+    pSadPred: &mut i32,
 ) {
-    let kiRefB = *pRefIndexCache.add(1) as i32;
-    let mut iRefC = *pRefIndexCache.add(5) as i32;
-    let kiRefA = *pRefIndexCache.add(6) as i32;
-    let kiSadB = *pSadCostCache.add(1);
-    let mut iSadC = *pSadCostCache.add(2);
-    let kiSadA = *pSadCostCache.add(3);
+    let kiRefB = pRefIndexCache[1] as i32;
+    let mut iRefC = pRefIndexCache[5] as i32;
+    let kiRefA = pRefIndexCache[6] as i32;
+    let kiSadB = pSadCostCache[1];
+    let mut iSadC = pSadCostCache[2];
+    let kiSadA = pSadCostCache[3];
 
     if iRefC == REF_NOT_AVAIL as i32 {
-        iRefC = *pRefIndexCache.add(0) as i32;
-        iSadC = *pSadCostCache.add(0);
+        iRefC = pRefIndexCache[0] as i32;
+        iSadC = pSadCostCache[0];
     }
 
     if kiRefB == REF_NOT_AVAIL as i32 && iRefC == REF_NOT_AVAIL as i32 && kiRefA != REF_NOT_AVAIL as i32 {
@@ -2029,34 +2030,32 @@ pub unsafe extern "C" fn PredictSad(
     *pSadPred = (REPLACE_SAD_MULTIPLY(iCount) + 32) >> 6;
 }
 
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
-pub unsafe extern "C" fn PredictSadSkip(
-    pRefIndexCache: *mut i8,
-    pMbSkipCache: *mut bool,
-    pSadCostCache: *mut i32,
+pub fn PredictSadSkip(
+    pRefIndexCache: &[i8; 30],
+    pMbSkipCache: &[bool; 4],
+    pSadCostCache: &[i32; 4],
     uiRef: i32,
-    iSadPredSkip: *mut i32,
+    iSadPredSkip: &mut i32,
 ) {
-    let kiRefB = *pRefIndexCache.add(1) as i32;
-    let mut iRefC = *pRefIndexCache.add(5) as i32;
-    let kiRefA = *pRefIndexCache.add(6) as i32;
-    let kiSadB = if *pMbSkipCache.add(1) { *pSadCostCache.add(1) } else { 0 };
-    let mut iSadC = if *pMbSkipCache.add(2) { *pSadCostCache.add(2) } else { 0 };
-    let kiSadA = if *pMbSkipCache.add(3) { *pSadCostCache.add(3) } else { 0 };
-    let mut iRefSkip = *pMbSkipCache.add(2);
+    let kiRefB = pRefIndexCache[1] as i32;
+    let mut iRefC = pRefIndexCache[5] as i32;
+    let kiRefA = pRefIndexCache[6] as i32;
+    let kiSadB = if pMbSkipCache[1] { pSadCostCache[1] } else { 0 };
+    let mut iSadC = if pMbSkipCache[2] { pSadCostCache[2] } else { 0 };
+    let kiSadA = if pMbSkipCache[3] { pSadCostCache[3] } else { 0 };
+    let mut iRefSkip = pMbSkipCache[2];
 
     if iRefC == REF_NOT_AVAIL as i32 {
-        iRefC = *pRefIndexCache.add(0) as i32;
-        iSadC = if *pMbSkipCache.add(0) { *pSadCostCache.add(0) } else { 0 };
-        iRefSkip = *pMbSkipCache.add(0);
+        iRefC = pRefIndexCache[0] as i32;
+        iSadC = if pMbSkipCache[0] { pSadCostCache[0] } else { 0 };
+        iRefSkip = pMbSkipCache[0];
     }
 
     if kiRefB == REF_NOT_AVAIL as i32 && iRefC == REF_NOT_AVAIL as i32 && kiRefA != REF_NOT_AVAIL as i32 {
         *iSadPredSkip = kiSadA;
     } else {
-        let mut iCount = (((uiRef == kiRefA) && *pMbSkipCache.add(3)) as i32) << MB_LEFT_BIT;
-        iCount |= (((uiRef == kiRefB) && *pMbSkipCache.add(1)) as i32) << MB_TOP_BIT;
+        let mut iCount = (((uiRef == kiRefA) && pMbSkipCache[3]) as i32) << MB_LEFT_BIT;
+        iCount |= (((uiRef == kiRefB) && pMbSkipCache[1]) as i32) << MB_TOP_BIT;
         iCount |= (((uiRef == iRefC) && iRefSkip) as i32) << MB_TOPRIGHT_BIT;
         match iCount as u32 {
             LEFT_MB_POS => {
