@@ -70,6 +70,19 @@ skip() { SKIP=$((SKIP+1)); RESULTS+=("SKIP  $1"); printf 'SKIP  %s\n' "$1"; }
 hdr() { printf '\n=== %s\n' "$1"; }
 
 # ---------------------------------------------------------------------------
+# F170 (session J): wall clock reads a suspended or loaded machine as a codec
+# regression — one session lost time to a 125x phantom — so the timed steps
+# report the *children CPU* (user+sys) beside wall, and S61's tripwire compares
+# CPU when the baseline carries one. `times` must execute in the shell being
+# measured: a pipeline or `$(...)` is a subshell whose counters read zero
+# (measured on this machine's bash 3.2). So callers snapshot with
+# `times > file` — a redirection, not a pipe — and parse with cpu_of.
+# ---------------------------------------------------------------------------
+cpu_of() {  # $1 = a file `times` wrote; echoes children user+sys, whole seconds
+  awk 'NR==2 { n=0; for (i=1;i<=2;i++) { split($i, t, "m"); sub(/s$/, "", t[2]); n += t[1]*60 + t[2] } printf "%d\n", n }' "$1"
+}
+
+# ---------------------------------------------------------------------------
 # D-gate-6 (the user, 2026-08-24): the WHOLE session gate is capped at 15
 # minutes — "even if we need to reduce the amount of tests that we run".
 #
@@ -130,8 +143,9 @@ hdr() { printf '\n=== %s\n' "$1"; }
 MIRI_SHARDS=(cavlc sizelimited enc other)
 MIRI_LANE_FLAGS="-Zmiri-ignore-leaks -Zmiri-disable-isolation"
 miri_session_lane() {
-  local t0 rc
+  local t0 rc l0 l1
   t0=$(date +%s)
+  times > "$LOGS/.times.lane"; l0=$(cpu_of "$LOGS/.times.lane")   # F170
   # The compile step is a run with a filter nothing matches, NOT `--no-run`:
   # measured 2026-08-24, `cargo miri test --no-run` reports up-to-date without
   # building the interpreted target, so the four shards would then race for the
@@ -144,6 +158,8 @@ miri_session_lane() {
   echo "$rc" > "$LOGS/miri_compile.rc"
   if [ "$rc" -ne 0 ]; then
     echo $(( $(date +%s) - t0 )) > "$LOGS/miri_lane_wall"
+    times > "$LOGS/.times.lane"; l1=$(cpu_of "$LOGS/.times.lane")
+    echo $((l1 - l0)) > "$LOGS/miri_lane_cpu"
     return
   fi
   # The two catch-all shards split the ~280 non-probe tests: `enc` is the
@@ -176,26 +192,40 @@ miri_session_lane() {
     i=$((i+1))
   done
   echo $(( $(date +%s) - t0 )) > "$LOGS/miri_lane_wall"
+  times > "$LOGS/.times.lane"; l1=$(cpu_of "$LOGS/.times.lane")
+  echo $((l1 - l0)) > "$LOGS/miri_lane_cpu"
 }
 
 # S61 (F140): the gate's own cost is a gated quantity. Prints this run's Miri
 # wall beside the previous session close's (miri_wall_baseline.txt) and WARNs
 # past 1.3x — warn, never fail: machine variance is real, and the duty S61
 # assigns is that the close *report* quotes both numbers and files a finding.
-s61_report() {  # $1 = this run's miri wall seconds
-  local wall=$1 prev ratio
+s61_report() {  # $1 = this run's miri wall seconds, $2 = children-CPU seconds ("" if unmeasured)
+  local wall=$1 cpu=${2:-} prev prevcpu ratio data
   local base="$HERE/miri_wall_baseline.txt"
-  prev=$(grep -v '^#' "$base" 2>/dev/null | awk 'NF {print $1; exit}')
+  data=$(grep -v '^#' "$base" 2>/dev/null | awk 'NF {print; exit}')
+  prev=$(printf '%s\n' "$data" | awk '{print $1}')
+  prevcpu=$(printf '%s\n' "$data" | grep -oE 'cpu=[0-9]+' | cut -d= -f2)
   if [ -n "${prev:-}" ] && [ "$prev" -gt 0 ] 2>/dev/null; then
-    ratio=$(awk -v a="$wall" -v b="$prev" 'BEGIN { printf "%.2f", a / b }')
-    printf '  S61: miri wall %ss against the previous close'\''s %ss — ratio %s\n' \
-      "$wall" "$prev" "$ratio"
-    if awk -v a="$wall" -v b="$prev" 'BEGIN { exit !(a > 1.3 * b) }'; then
+    # F170: compare CPU against CPU when both runs measured it — CPU does not
+    # inflate when the machine sleeps or is loaded, which is the whole point.
+    # Wall stays printed beside it; the first run after the regime change has a
+    # wall-only baseline and seeds the cpu column at its close.
+    if [ -n "$cpu" ] && [ -n "${prevcpu:-}" ] && [ "$prevcpu" -gt 0 ] 2>/dev/null; then
+      ratio=$(awk -v a="$cpu" -v b="$prevcpu" 'BEGIN { printf "%.2f", a / b }')
+      printf '  S61: miri cpu %ss (wall %ss) against the previous close'\''s cpu %ss (wall %ss) — ratio %s [CPU, F170]\n' \
+        "$cpu" "$wall" "$prevcpu" "$prev" "$ratio"
+    else
+      ratio=$(awk -v a="$wall" -v b="$prev" 'BEGIN { printf "%.2f", a / b }')
+      printf '  S61: miri wall %ss against the previous close'\''s %ss — ratio %s [wall; cpu %ss unseeded — F170]\n' \
+        "$wall" "$prev" "$ratio" "${cpu:-?}"
+    fi
+    if awk -v r="$ratio" 'BEGIN { exit !(r > 1.3) }'; then
       printf '  *** S61 WARNING: the Miri step is %sx the previous session close — past the\n' "$ratio"
       printf '  *** 1.3x tripwire. This is a finding to file (F140'\''s rule), not a nuisance to\n'
       printf '  *** route around; the close report must quote both numbers.\n'
     fi
-    printf '  (a session close then updates %s)\n' "$base"
+    printf '  (a session close then updates %s — wall first, then cpu=<s>)\n' "$base"
   else
     # The baseline is part of the instrument (S58: a silent gap reads as a
     # clean run). Missing or unparsable means the tripwire measured nothing.
@@ -368,6 +398,7 @@ sweep_gate() {  # $1 = profile
     return
   fi
   t0=$(date +%s)
+  times > "$LOGS/.times"; local c0; c0=$(cpu_of "$LOGS/.times")   # F170
   # **`ps` and `dl` joined the exit list in Phase 8b (T8b.B3 and T8b.C2).** Both
   # cover axes the port *refused at `InitializeExt`* until this phase, so neither
   # had a byte of coverage and neither could have been in this list before:
@@ -389,19 +420,20 @@ sweep_gate() {  # $1 = profile
   RUST_ENC_PROFILE="$prof" bash "$DIFF/sweep.sh" st mt def sl ltr ps dl bg 2>&1 | tee "$log" | tail -20
   rc=${PIPESTATUS[0]}
   t1=$(date +%s)
-  local tally wall=$((t1 - t0))
+  times > "$LOGS/.times"; local c1; c1=$(cpu_of "$LOGS/.times")   # F170
+  local tally wall=$((t1 - t0)) cpu=$((c1 - c0))
   # sweep.sh prints `PASS=n FAIL=n` unconditionally as its last act before
   # exiting, so a missing tally means it died on the way there — a broken
   # instrument, not a verdict. It used to fall back to `tail -3` as display
   # text, which reads like a result. Corroboration, exactly as run_cargo_test
   # corroborates rc with the test totals.
   tally=$(grep -E '^PASS=[0-9]+ FAIL=[0-9]+' "$log" | tail -1)
-  printf '  %s   (%ss wall, sweep.sh rc=%s)\n' "${tally:-<no tally line>}" "$wall" "$rc"
+  printf '  %s   (%ss wall, %ss cpu, sweep.sh rc=%s)\n' "${tally:-<no tally line>}" "$wall" "$cpu" "$rc"
   if [ -z "$tally" ]; then
     tail -3 "$log"
     fail "sweep ($prof): no 'PASS=n FAIL=n' tally in $log (sweep.sh rc=$rc) — it died before finishing; this is a broken run, not an F3 hit"
   elif [ "$rc" -eq 0 ]; then
-    pass "sweep ($prof): $tally, ${wall}s wall"
+    pass "sweep ($prof): $tally, ${wall}s wall / ${cpu}s cpu"
   else
     echo "  --- F3 retry rule ---"
     echo "  A single mt failure at sm=3, t in {2,4} (zero-byte or short output) is F3,"
@@ -676,7 +708,8 @@ if [ "${LEVEL_DONE:-0}" != 1 ]; then
         if [ "$miri_shards_bad" -eq 0 ]; then
           pass "miri (4 shards, session scope): $miri_total_passed passed / 0 failed"
         fi
-        s61_report "$(cat "$LOGS/miri_lane_wall" 2>/dev/null || echo 0)"
+        s61_report "$(cat "$LOGS/miri_lane_wall" 2>/dev/null || echo 0)" \
+          "$(cat "$LOGS/miri_lane_cpu" 2>/dev/null || echo '')"
       fi
     fi
   else
@@ -708,6 +741,7 @@ if [ "${LEVEL_DONE:-0}" != 1 ]; then
     # *report* quotes both numbers and files a finding — not that a loaded machine
     # can veto a session.
     MIRI_T0=$(date +%s)
+    times > "$LOGS/.times"; MIRI_C0=$(cpu_of "$LOGS/.times")   # F170
     # D-gate-7 (the user, 2026-08-24): each encoder probe runs as its OWN
     # invocation with its own verdict line, never inside one monolithic pass —
     # so the big --lib step skips them all, and the per-probe steps follow.
@@ -727,13 +761,25 @@ if [ "${LEVEL_DONE:-0}" != 1 ]; then
     MIRI_FULL=1 run_miri probe_sizelimited "probe: size-limited dynamic slices (full drive)" \
       "-Zmiri-ignore-leaks -Zmiri-disable-isolation" --lib -- \
       encode_loop_runs_over_size_limited
-    run_miri probe_fork_fixed "probe: fork/join fixed-slice (~56 min, T9.E8)" \
+    # F168 (the baseline file's own instruction): the pair runs PARALLEL — two
+    # per-probe invocations, separate CARGO_TARGET_DIRs, concurrent — and a
+    # serial number must never be compared to a parallel one. These two serial
+    # steps predate that rule. `FORK_PAIR=external` says the close runs the
+    # parallel pair as its own explicit step (session J's exit does exactly
+    # that); the SKIP is loud and the close report must carry the pair's own
+    # green verdict beside this battery's, or the battery is incomplete.
+    if [ "${FORK_PAIR:-}" = external ]; then
+      skip "fork/join probe pair: FORK_PAIR=external — the close runs the parallel pair itself (F168); its verdict is owed beside this one"
+    else
+    run_miri probe_fork_fixed "probe: fork/join fixed-slice (~56 min serial, T9.E8; F168 prefers the parallel pair)" \
       "-Zmiri-ignore-leaks -Zmiri-disable-isolation -Zmiri-report-progress" --lib -- \
       fork_join_encodes_a_multi_slice_frame
-    run_miri probe_fork_midrow "probe: fork/join mid-row boundary (~57 min, T9.E8)" \
+    run_miri probe_fork_midrow "probe: fork/join mid-row boundary (~57 min serial, T9.E8; F168 prefers the parallel pair)" \
       "-Zmiri-ignore-leaks -Zmiri-disable-isolation -Zmiri-report-progress" --lib -- \
       fork_join_encodes_a_frame_whose_slice_boundary
-    s61_report $(( $(date +%s) - MIRI_T0 ))
+    fi
+    times > "$LOGS/.times"; MIRI_C1=$(cpu_of "$LOGS/.times")
+    s61_report $(( $(date +%s) - MIRI_T0 )) $((MIRI_C1 - MIRI_C0))
   fi
   fi  # session lane join / serial step (D-gate-6)
 fi
