@@ -119,6 +119,15 @@ recategorization only after it.
   commit. A known validation exists: one session measured exactly 4 prose
   counts in `raw_ptr` — the fix should move the total by exactly the prose
   count, and you should say what it moved.
+- **Regenerate the baseline, and make close-time regeneration standing practice.** The
+  baseline snapshot (`rust/tools/unsafe_baseline.json`) was last written six sessions
+  ago; the live count has since fallen 1587 → 1338, so the per-file no-increase guard
+  carries **249 `raw_ptr` of accumulated headroom** — a file could regress by its slack
+  without failing `check`. After the F178 fix lands, run `unsafe_ratchet.sh generate`
+  so the snapshot is fresh and prose-free, and record the practice in the plan's §7.1:
+  **every session close regenerates the baseline downward** (downward regeneration is
+  routine and needs no justification — only an *increase* is a "rebaseline" that
+  carries a reason).
 - Calibrate every instrument change in **both directions** (rule S66): a
   planted fault must still fail it; a known-clean case must pass. While
   there: the fork-reachability walker and the hazard detector never got
