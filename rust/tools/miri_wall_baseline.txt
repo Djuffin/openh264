@@ -61,5 +61,20 @@
 # prescribes. The build was already warm from the lane's compile, so the two runs
 # were concurrent from the start; the deviation is recorded because a pair wall is
 # unreadable without its form.
-# Format: <seconds> <commit> <date> <note>
+# REGIME NOTE (F170, session J, 2026-08-27): the gates time with wall clock,
+# so a suspended or loaded machine reads as a codec regression — one session
+# lost time to a 125x phantom, and H2 measured the Miri lane taxing the native
+# lane's own sweep 1.34x. From J on, `gates.sh` measures the *children CPU*
+# (user+sys, via the shell's `times` builtin) beside wall for the sweeps and
+# the Miri lane, and S61's 1.3x tripwire compares CPU against CPU whenever the
+# data line below carries a `cpu=<seconds>` column. CPU is load- and
+# suspend-immune, which is the whole point; wall stays printed beside it
+# because it is what a human waits through. The first close after this note has
+# a wall-only baseline: its report compares wall-vs-wall one last time and
+# seeds the cpu column. NOTE ALSO: the phase ends at J, and with it the
+# session-lane series — J's own close runs the `exit` battery (serial Miri,
+# full probe drives), which is not lane-comparable; the lane numbers stand as
+# the phase's record.
+#
+# Format: <seconds> <commit> <date> <note> [cpu=<seconds>]
 506 edcccc68 2026-08-26 session-H3-close-lane-vs-lane-ratio-0.92-291-0-well-under-the-1200s-cap

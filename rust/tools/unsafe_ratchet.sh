@@ -25,6 +25,17 @@
 #      which is where Phase 4 will show its work.
 #
 # Decreases are always fine. `check` is a ratchet, not an equality test.
+#
+#   3. **Comments are stripped before counting (F178, session J).** `raw_ptr` and
+#      `no_mangle` are occurrence counts, and the port's comments quote the code
+#      they explain — `// a raw derived from *mut SDqLayer` counted as a pointer,
+#      and twice a session failed its gate by *documenting* a conversion. The
+#      `sed` below drops `//` to end-of-line. It cannot see a `//` inside a
+#      string literal (it would truncate the rest of that line); measured over
+#      this tree at the fix's commit, no counted token follows a string-borne
+#      `//` on any line, and the calibration diff listed every file the strip
+#      changed. Block comments are not stripped: the tree has no `/* */` bodies
+#      carrying counted tokens (grep at the same commit).
 set -u
 
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -51,6 +62,9 @@ metric_names() {
   for spec in "${METRICS[@]}"; do printf '%s\n' "${spec%%|*}"; done
 }
 
+# F178: comment text is not code. Strip `//` to end-of-line before counting.
+strip_line_comments() { sed -E 's,//.*$,,' "$1"; }
+
 # Emit "<relative path>\t<metric>\t<count>" for every .rs file under src/.
 count_all() {
   local f rel spec name pat mode n
@@ -63,9 +77,9 @@ count_all() {
       mode=${spec##*|}
       pat=${spec#*|}; pat=${pat%|*}
       if [ "$mode" = line ]; then
-        n=$(grep -Ec "$pat" "$f")
+        n=$(strip_line_comments "$f" | grep -Ec "$pat")
       else
-        n=$(grep -Eo "$pat" "$f" | wc -l)
+        n=$(strip_line_comments "$f" | grep -Eo "$pat" | wc -l)
       fi
       printf '%s\t%s\t%s\n' "$rel" "$name" "$((n))"
     done

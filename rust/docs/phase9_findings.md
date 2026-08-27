@@ -4942,3 +4942,61 @@ The queue, per item, is `phase9_disposition.md` §5. The brief's "expect few"
 for the convertible remnant was wrong by two orders of magnitude, and the
 honest reason is in the charter itself: the `other` family "needs roughly 2
 sessions of its own — somebody has to be given them", and nobody was.
+
+---
+
+## F202 — the two instrument fixes, calibrated both ways; the shim and transmute metrics close at zero; the missing negative calibrations recorded
+
+**Session J, step 2.**
+
+**F170 (gates.sh times with wall clock).** The sweeps and the Miri lane now
+measure children CPU (user+sys, the shell's `times` builtin — which must run in
+the invoking shell: a pipeline or `$(...)` is a subshell whose counters read
+zero, measured on this machine's bash 3.2, so the snapshots go through
+`times > file`). `s61_report` compares CPU against CPU whenever the baseline
+line carries `cpu=<s>`, falling back to wall for the seeding run; the regime
+change is recorded in `miri_wall_baseline.txt`'s comment block beside D-gate-6's
+and F168's. Calibrated both ways by driving the extracted function against
+crafted baselines: a 2.3x CPU regression **warns**; a run whose wall doubled
+while CPU stayed flat — the load phantom the fix exists for — **stays silent**;
+the wall-only fallback regime warns and passes on its own numbers. The exit
+battery also gains `FORK_PAIR=external`: F168's rule (run the fork pair
+parallel, never compare serial to parallel) against the two serial fork steps
+the exit level has carried since before the rule; the SKIP is loud and the
+close owes the pair's own verdict beside the battery's.
+
+**F178 (the ratchet counts comment text).** `count_all` strips `//` to
+end-of-line before counting. Calibrated both ways: a planted comment carrying
+`*mut u8`, `no_mangle` and `SHIM(` moves nothing (`check` rc 0 — the defect
+that failed two sessions' gates on documentation is closed), and a planted
+`let _p: *mut u8` in code still fails the per-file ratchet
+(`safe/prng.rs raw_ptr: 0 -> 1`). Rebaselined; the totals moved by **exactly**
+the pre-measured prose counts, per metric:
+
+| metric | was | now | prose removed |
+|---|---:|---:|---:|
+| raw_ptr | 1338 | **1181** | 157 |
+| shim | 32 | **0** | 32 |
+| transmute | 4 | **0** | 4 |
+| mem_zeroed | 16 | **3** | 13 |
+| no_mangle | 10 | **7** | 3 |
+| unsafe_block | 267 | **266** | 1 |
+| unsafe_impl | 3 | **2** | 1 |
+| unsafe_fn | 593 | 593 | 0 (line-anchored) |
+
+Two metrics close at zero: every remaining `SHIM(` and `transmute` in the
+library was a comment recalling deleted code. The brief's "one session measured
+exactly 4 prose counts in raw_ptr" was an old tree's number — the annotated
+tags G/H/E3 added and eight phases of documentation grew it to 157, and the
+validation's *form* (the fix moves each total by exactly the prose count) held
+to the digit.
+
+**The F159-coda calibrations.** The fork-reachability walker's negative:
+`phase9_forksplit.py --why ParasetStrategy` answers **NOT fork-reachable**
+(the ST column is a live negative verdict, F166's body); its positive stands
+(`--why WelsRcMbInitGom` prints the full path to a `thread::scope` seed through
+the dispatch arm), and `--no-slots` drops reachability 495 → 104 bodies — the
+slot arm carries 391 bodies, which is F157's blindness made visible as a
+number. The hazard detector's negative calibration is **moot**: F163 retired
+"q1c to zero" as a gate (its remedy for shape B produces shape A), and q1c has
+been an audit instrument, not a referee, since session G.
