@@ -341,6 +341,8 @@ fn shim_span(step_x: usize, step_y: usize, reach_back: usize, reach_fwd: usize, 
 ///   which must lie inside one live allocation. The p side exists per the
 ///   module-level availability argument above.
 /// * `pTc` points at 4 readable `i8` group thresholds.
+// unsafe-cat: port-raw(Phase 9) — the DECODER's deblocking slot table (C2's split), not the encoder's; see phase9_disposition.md §4.6
+#[allow(unsafe_code)]
 pub unsafe extern "C" fn DeblockLumaLt4V_c(
     pPixY: *mut u8,
     iStride: i32,
@@ -364,6 +366,8 @@ pub unsafe extern "C" fn DeblockLumaLt4V_c(
 /// * As [`DeblockLumaLt4V_c`], but the strong filter reaches one tap further on
 ///   both sides: the span is `[pPixY - 4*s, pPixY + 3*s + 15]` (`7*s + 16`
 ///   bytes) — reads `p3..q3`, writes `p2..q2`.
+// unsafe-cat: port-raw(Phase 9) — the DECODER's deblocking slot table (C2's split), not the encoder's; see phase9_disposition.md §4.6
+#[allow(unsafe_code)]
 pub unsafe extern "C" fn DeblockLumaEq4V_c(
     pPixY: *mut u8,
     iStride: i32,
@@ -388,6 +392,8 @@ pub unsafe extern "C" fn DeblockLumaEq4V_c(
 ///   columns left, two right, sixteen rows down. The p side exists per the
 ///   module-level availability argument above.
 /// * `pTc` points at 4 readable `i8` group thresholds.
+// unsafe-cat: port-raw(Phase 9) — the DECODER's deblocking slot table (C2's split), not the encoder's; see phase9_disposition.md §4.6
+#[allow(unsafe_code)]
 pub unsafe extern "C" fn DeblockLumaLt4H_c(
     pPixY: *mut u8,
     iStride: i32,
@@ -410,6 +416,8 @@ pub unsafe extern "C" fn DeblockLumaLt4H_c(
 /// # Safety
 /// * As [`DeblockLumaLt4H_c`], one tap further both sides: the span is
 ///   `[pPixY - 4, pPixY + 15*s + 3]` (`15*s + 8` bytes).
+// unsafe-cat: port-raw(Phase 9) — the DECODER's deblocking slot table (C2's split), not the encoder's; see phase9_disposition.md §4.6
+#[allow(unsafe_code)]
 pub unsafe extern "C" fn DeblockLumaEq4H_c(
     pPixY: *mut u8,
     iStride: i32,
@@ -435,6 +443,8 @@ pub unsafe extern "C" fn DeblockLumaEq4H_c(
 ///   `[p - 2*s, p + s + 7]` (`3*s + 8` bytes) — reads `p1..q1`, writes
 ///   `p0`/`q0`. The p side exists per the module-level availability argument.
 /// * `pTc` points at 4 readable `i8` group thresholds.
+// unsafe-cat: port-raw(Phase 9) — the DECODER's deblocking slot table (C2's split), not the encoder's; see phase9_disposition.md §4.6
+#[allow(unsafe_code)]
 pub unsafe extern "C" fn DeblockChromaLt4V_c(
     pPixCb: *mut u8,
     pPixCr: *mut u8,
@@ -463,6 +473,8 @@ pub unsafe extern "C" fn DeblockChromaLt4V_c(
 ///
 /// # Safety
 /// * As [`DeblockChromaLt4V_c`], without the tc table.
+// unsafe-cat: port-raw(Phase 9) — the DECODER's deblocking slot table (C2's split), not the encoder's; see phase9_disposition.md §4.6
+#[allow(unsafe_code)]
 pub unsafe extern "C" fn DeblockChromaEq4V_c(
     pPixCb: *mut u8,
     pPixCr: *mut u8,
@@ -491,6 +503,8 @@ pub unsafe extern "C" fn DeblockChromaEq4V_c(
 /// * As [`DeblockChromaLt4V_c`] with the axes swapped: each plane's span is
 ///   exactly `[p - 2, p + 7*s + 1]` (`7*s + 4` bytes) — two columns left, one
 ///   right, eight rows down.
+// unsafe-cat: port-raw(Phase 9) — the DECODER's deblocking slot table (C2's split), not the encoder's; see phase9_disposition.md §4.6
+#[allow(unsafe_code)]
 pub unsafe extern "C" fn DeblockChromaLt4H_c(
     pPixCb: *mut u8,
     pPixCr: *mut u8,
@@ -519,6 +533,8 @@ pub unsafe extern "C" fn DeblockChromaLt4H_c(
 ///
 /// # Safety
 /// * As [`DeblockChromaLt4H_c`], without the tc table.
+// unsafe-cat: port-raw(Phase 9) — the DECODER's deblocking slot table (C2's split), not the encoder's; see phase9_disposition.md §4.6
+#[allow(unsafe_code)]
 pub unsafe extern "C" fn DeblockChromaEq4H_c(
     pPixCb: *mut u8,
     pPixCr: *mut u8,
@@ -548,6 +564,8 @@ pub unsafe extern "C" fn DeblockChromaEq4H_c(
 ///   `[pPixCbCr - 2*s, pPixCbCr + s + 7]` (`3*s + 8` bytes), as one plane of
 ///   [`DeblockChromaLt4V_c`].
 /// * `pTc` points at 4 readable `i8` group thresholds.
+// unsafe-cat: port-raw(Phase 9) — the DECODER's deblocking slot table (C2's split), not the encoder's; see phase9_disposition.md §4.6
+#[allow(unsafe_code)]
 pub unsafe extern "C" fn DeblockChromaLt4V2_c(
     pPixCbCr: *mut u8,
     iStride: i32,
@@ -570,6 +588,8 @@ pub unsafe extern "C" fn DeblockChromaLt4V2_c(
 ///
 /// # Safety
 /// * As [`DeblockChromaLt4V2_c`], without the tc table.
+// unsafe-cat: port-raw(Phase 9) — the DECODER's deblocking slot table (C2's split), not the encoder's; see phase9_disposition.md §4.6
+#[allow(unsafe_code)]
 pub unsafe extern "C" fn DeblockChromaEq4V2_c(
     pPixCbCr: *mut u8,
     iStride: i32,
@@ -593,6 +613,8 @@ pub unsafe extern "C" fn DeblockChromaEq4V2_c(
 ///   `[pPixCbCr - 2, pPixCbCr + 7*s + 1]` (`7*s + 4` bytes), as one plane of
 ///   [`DeblockChromaLt4H_c`].
 /// * `pTc` points at 4 readable `i8` group thresholds.
+// unsafe-cat: port-raw(Phase 9) — the DECODER's deblocking slot table (C2's split), not the encoder's; see phase9_disposition.md §4.6
+#[allow(unsafe_code)]
 pub unsafe extern "C" fn DeblockChromaLt4H2_c(
     pPixCbCr: *mut u8,
     iStride: i32,
@@ -615,6 +637,8 @@ pub unsafe extern "C" fn DeblockChromaLt4H2_c(
 ///
 /// # Safety
 /// * As [`DeblockChromaLt4H2_c`], without the tc table.
+// unsafe-cat: port-raw(Phase 9) — the DECODER's deblocking slot table (C2's split), not the encoder's; see phase9_disposition.md §4.6
+#[allow(unsafe_code)]
 pub unsafe extern "C" fn DeblockChromaEq4H2_c(
     pPixCbCr: *mut u8,
     iStride: i32,
@@ -637,6 +661,8 @@ pub unsafe extern "C" fn DeblockChromaEq4H2_c(
 /// # Safety
 /// * `pNonZeroCount` points at 24 writable `i8` — the per-MB non-zero-count
 ///   cache (16 luma + 8 chroma entries).
+// unsafe-cat: port-raw(Phase 9) — the DECODER's deblocking slot table (C2's split), not the encoder's; see phase9_disposition.md §4.6
+#[allow(unsafe_code)]
 pub unsafe fn WelsNonZeroCount_c(pNonZeroCount: *mut i8) {
     // SHIM(phase2) -> nonzero_count
     unsafe {
@@ -747,6 +773,11 @@ pub fn DeblockingInit(pFunc: &mut SDeblockingFunc, _iCpu: i32) {
 
 #[cfg(test)]
 mod tests {
+    // unsafe-cat: instrument(test)
+    //
+    // These tests call the raw slot shims above through their C-ABI signatures,
+    // which is the surface under test; the module-level allow covers the calls.
+    #![allow(unsafe_code)]
     use super::*;
     
     #[test]

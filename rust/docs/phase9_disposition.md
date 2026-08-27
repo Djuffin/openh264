@@ -110,6 +110,15 @@ premise.
    `codec/` = the declaration `svc_encode_slice.h:167`, never defined or called).
    First deletion of the maintenance queue.
 
+6. **The decoder's deblocking slot table (13, added at step 3)** —
+   `common/deblocking_common.rs`'s `extern "C"` shims behind `DeblockingInit`.
+   They were never tagged because the file never carried a per-file
+   `#![deny(unsafe_code)]`, and the crate root had none either until session J
+   (**F203**). They are the decoder-side analogue of what session F
+   de-virtualized on the encoder side, and they belong to Phase 5's family, not
+   Phase 9's — the tag says so at each site. **The queue is therefore 306, not
+   293**, and the growth is a hole closing, not work regressing.
+
 **Owner**: maintenance / Phase 10, with this document as the work order. The
 ratchet keeps every number from growing; the census regenerates the queue.
 

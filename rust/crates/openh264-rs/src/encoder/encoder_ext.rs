@@ -123,12 +123,11 @@ fn WELS_ROUND_f(x: f32) -> i32 {
     (x + 0.5) as i32
 }
 
-/// Allocation tag for `CMemoryAlign`; the C++ tags are diagnostic strings only.
-macro_rules! tag {
-    ($s:literal) => {
-        concat!($s, "\0").as_ptr() as *const c_char
-    };
-}
+// **The `tag!` macro stood here and is deleted** (session J, step 3): it minted a
+// NUL-terminated allocation label for `CMemoryAlign`, which Phases 3-6 retired
+// with the arena. `wels_preprocess.rs:63` records the same deletion for its own
+// copy; this one survived because the crate root allowed `dead_code`, which is
+// exactly what dropping that allow was for.
 
 /// `WelsGetEncBlockStrideOffset` — `decode_mb_aux.cpp:235`.
 ///
@@ -1605,6 +1604,14 @@ pub unsafe fn WelsInitEncoderExt(
     (*pCtx).iStatisticsLogInterval = STATISTICS_LOG_INTERVAL_MS;
     (*pCtx).uiLastTimestamp = -1;
     (*pCtx).bDeliveryFlag = true;
+
+    // `encoder_ext.cpp:2386` — the doubled `0x` is the reference's own: the
+    // format writes `0x%p` and `%p` prints its own prefix.
+    crate::common::wels_trace::WelsLog(
+        pLogCtx,
+        crate::common::wels_trace::WELS_LOG_INFO,
+        &format!("WelsInitEncoderExt(), pCtx= 0x{:p}.", pCtx),
+    );
     *ppCtx = Some(Box::from_raw(pCtx));
 
     0
@@ -1852,6 +1859,20 @@ pub unsafe fn WelsUninitEncoderExt(pEncContext: Option<Box<sWelsEncCtx>>) {
         return;
     };
     let pCtx = Box::into_raw(pEncContext);
+
+    // `encoder_ext.cpp:2250-2252` — the teardown announces itself before any
+    // free runs, through the context's own log sink.
+    {
+        let iMultipleThreadIdc = (*ctx_param(pCtx)).iMultipleThreadIdc;
+        crate::common::wels_trace::WelsLog(
+            std::ptr::addr_of_mut!((*pCtx).sLogCtx),
+            crate::common::wels_trace::WELS_LOG_INFO,
+            &format!(
+                "WelsUninitEncoderExt(), pCtx= {:p}, iMultipleThreadIdc= {}.",
+                pCtx, iMultipleThreadIdc
+            ),
+        );
+    }
 
     if !(*pCtx).pVpp.is_null() {
         // S67 blessed (H2): the receiver borrows the `pVpp` allocation, not the context.

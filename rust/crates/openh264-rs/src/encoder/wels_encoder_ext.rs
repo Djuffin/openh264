@@ -1,3 +1,16 @@
+// **`clippy::not_unsafe_ptr_arg_deref`, 44 sites — allowed here with its reason**
+// (session J's clippy pass; the lint is deny-by-default, so this file is why
+// `cargo clippy` could not complete before). Every site is a method of
+// `CWelsH264SVCEncoder`, the C-ABI boundary object Phase 8 built: the caller is
+// `codec_api.h`'s vtable, the pointers are the application's own
+// (`SEncParamExt*`, `SSourcePicture*`, `SFrameBSInfo*`, the `void*` of
+// `SetOption`), and their contract is the header's, not Rust's. Marking the
+// methods `unsafe fn` would satisfy the lint by moving 44 items onto the
+// ratchet's `unsafe_fn` metric — the wrong direction for a phase whose whole
+// measure is that count falling — and would not change what any caller can do.
+// The honest fix is the one the queue owns: give the boundary safe wrappers
+// that validate once. Until then this is a named, measured allow, not silence.
+#![allow(clippy::not_unsafe_ptr_arg_deref)]
 #![allow(
     non_snake_case,
     non_camel_case_types,
@@ -1240,11 +1253,43 @@ pub unsafe fn ParamValidation(pLogCtx: *mut SLogContext, pCfg: *mut SWelsSvcCodi
         if iTotalBitrate > (*pCfg).iTargetBitrate {
             return ENC_RETURN_INVALIDINPUT;
         }
+        // `encoder_ext.cpp:370-374` — log-only: the bitrate cannot actually be
+        // held without frame skipping, and the reference says so out loud.
+        if ((*pCfg).iRCMode == RC_QUALITY_MODE
+            || (*pCfg).iRCMode == RC_BITRATE_MODE
+            || (*pCfg).iRCMode == RC_TIMESTAMP_MODE)
+            && !(*pCfg).bEnableFrameSkip
+        {
+            WelsLog(
+                pLogCtx,
+                WELS_LOG_WARNING,
+                &format!(
+                    "bEnableFrameSkip = {},bitrate can't be controlled for RC_QUALITY_MODE,RC_BITRATE_MODE and RC_TIMESTAMP_MODE without enabling skip frame.",
+                    (*pCfg).bEnableFrameSkip as i32
+                ),
+            );
+        }
         if (*pCfg).iMaxQp <= 0 || (*pCfg).iMinQp <= 0 {
             if (*pCfg).iUsageType == SCREEN_CONTENT_REAL_TIME {
+                WelsLog(
+                    pLogCtx,
+                    WELS_LOG_INFO,
+                    &format!(
+                        "Change QP Range from({},{}) to ({},{})",
+                        (*pCfg).iMinQp, (*pCfg).iMaxQp, MIN_SCREEN_QP, MAX_SCREEN_QP
+                    ),
+                );
                 (*pCfg).iMinQp = MIN_SCREEN_QP;
                 (*pCfg).iMaxQp = MAX_SCREEN_QP;
             } else {
+                WelsLog(
+                    pLogCtx,
+                    WELS_LOG_INFO,
+                    &format!(
+                        "Change QP Range from({},{}) to ({},{})",
+                        (*pCfg).iMinQp, (*pCfg).iMaxQp, GOM_MIN_QP_MODE, MAX_LOW_BR_QP
+                    ),
+                );
                 (*pCfg).iMinQp = GOM_MIN_QP_MODE;
                 (*pCfg).iMaxQp = MAX_LOW_BR_QP;
             }
@@ -1560,6 +1605,11 @@ pub unsafe fn ParamValidationExt(
         if uiProfileIdc == PRO_BASELINE || uiProfileIdc == PRO_SCALABLE_BASELINE {
             if (*pCodingParam).iEntropyCodingModeFlag != 0 {
                 (*pCodingParam).iEntropyCodingModeFlag = 0;
+                WelsLog(
+                    pLogCtx,
+                    WELS_LOG_WARNING,
+                    &format!("layerId({}) Profile is baseline, Change CABAC to CAVLC", i),
+                );
             }
         } else if uiProfileIdc == PRO_UNKNOWN {
             (*pCodingParam).sSpatialLayers[i].uiProfileIdc =
@@ -1582,7 +1632,7 @@ pub unsafe fn ParamValidationExt(
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe fn CheckProfileSetting(
-    _pLogCtx: *mut SLogContext,
+    pLogCtx: *mut SLogContext,
     pParam: *mut SWelsSvcCodingParam,
     iLayer: i32,
     uiProfileIdc: EProfileIdc,
@@ -1591,14 +1641,38 @@ pub unsafe fn CheckProfileSetting(
     pLayerInfo.uiProfileIdc = uiProfileIdc;
     if (*pParam).bSimulcastAVC {
         if uiProfileIdc != PRO_BASELINE && uiProfileIdc != PRO_MAIN && uiProfileIdc != PRO_HIGH {
+            WelsLog(
+                pLogCtx,
+                WELS_LOG_WARNING,
+                &format!(
+                    "layerId({}) doesn't support profile({}), change to UNSPECIFIC profile",
+                    iLayer, uiProfileIdc as i32
+                ),
+            );
             pLayerInfo.uiProfileIdc = PRO_UNKNOWN;
         }
     } else if iLayer == SPATIAL_LAYER_0 as i32 {
         if uiProfileIdc != PRO_BASELINE && uiProfileIdc != PRO_MAIN && uiProfileIdc != PRO_HIGH {
+            WelsLog(
+                pLogCtx,
+                WELS_LOG_WARNING,
+                &format!(
+                    "layerId({}) doesn't support profile({}), change to UNSPECIFIC profile",
+                    iLayer, uiProfileIdc as i32
+                ),
+            );
             pLayerInfo.uiProfileIdc = PRO_UNKNOWN;
         }
     } else if uiProfileIdc != PRO_SCALABLE_BASELINE && uiProfileIdc != PRO_SCALABLE_HIGH {
         pLayerInfo.uiProfileIdc = PRO_SCALABLE_BASELINE;
+        WelsLog(
+            pLogCtx,
+            WELS_LOG_WARNING,
+            &format!(
+                "layerId({}) doesn't support profile({}), change to scalable baseline profile",
+                iLayer, uiProfileIdc as i32
+            ),
+        );
     }
 }
 
@@ -2879,6 +2953,13 @@ impl Drop for CWelsH264SVCEncoder {
         // T8.B5: the trace's `Box::from_raw` stood here. Both members are owned, so
         // this is the drop glue's work and the body is `Uninitialize`'s alone —
         // which the reference's destructor also calls (`welsEncoderExt.cpp`).
+        // `welsEncoderExt.cpp:136` — the destructor announces itself first, then
+        // uninitializes, so the two lines land in the reference's order.
+        crate::common::wels_trace::WelsLog(
+            std::ptr::addr_of_mut!(self.m_pWelsTrace.m_sLogCtx),
+            crate::common::wels_trace::WELS_LOG_INFO,
+            "CWelsH264SVCEncoder::~CWelsH264SVCEncoder()",
+        );
         self.Uninitialize();
     }
 }

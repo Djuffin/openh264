@@ -1,4 +1,8 @@
 #![allow(non_snake_case, non_camel_case_types, non_upper_case_globals, dead_code)]
+// `WelsLog` takes the application's own `SLogContext*` and calls the callback
+// inside it; the pointer is the C ABI's and the null check above the deref is
+// the whole contract. See the `C-ABI` tag on the function.
+#![allow(clippy::not_unsafe_ptr_arg_deref)]
 
 //! The codec trace, shared by both codecs.
 //!
@@ -145,6 +149,16 @@ impl Default for SLogContext {
 /// in this port formats first and passes a `&str`; the filter and the tag are both
 /// here, and the observable — one call to the caller's callback per delivered
 /// message, with the level and the tagged text — is the same.
+// unsafe-cat: C-ABI
+//
+// **Both `unsafe` sites in this function are the caller's ABI, not the port's**
+// (tagged at session J's root `deny`, which is what first made this file visible —
+// it never carried a per-file `deny`). `SLogContext` holds the application's own
+// `pfLog` function pointer and its opaque `pLogCtx` handle, set through
+// `SetOption(ENCODER_OPTION_TRACE_CALLBACK)`; both cross `codec_api.h` and neither
+// can carry a lifetime. The deref below and the call at the tail are the two halves
+// of "invoke the caller's callback", which is this module's entire purpose.
+#[allow(unsafe_code)]
 pub fn WelsLog(pLogCtx: *mut SLogContext, iLevel: i32, msg: &str) {
     if pLogCtx.is_null() {
         return;

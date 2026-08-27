@@ -12,7 +12,16 @@ edition = "2024"
 [lib]
 crate-type = ["rlib", "cdylib", "staticlib"]
 
+# **The shipped library has no dependencies at all** (Phase 9 exit condition 2,
+# session J). `libc` was a `[dependencies]` entry with **zero uses in `src/`** — the
+# one grep hit is a comment in `wels_trace.rs` naming `libc::fprintf` as the thing
+# the port does *not* call. Its real users are the two benches, which `dlopen` the
+# C++ dylib to compare against it (`libc::dlopen`/`dlsym`, 8 sites), so it moves to
+# `[dev-dependencies]` rather than being deleted: the cdylib a consumer links now
+# pulls in nothing, and the comparison harness keeps the one thing it needs.
 [dependencies]
+
+[dev-dependencies]
 libc = "0.2"
 
 [[bench]]
