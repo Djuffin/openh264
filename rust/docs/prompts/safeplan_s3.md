@@ -85,7 +85,7 @@ arms of one `if`. Read its LIVE rows, do not count them.
 | **B1** | `pOut`/`pVpp`/`pSliceThreading` → `Option<Box<T>>`; `mutexSliceNumUpdate` → owned `Mutex<()>`; rewire `RequestMtResource`/`ReleaseMtResource` | **This is an MT-seam checkpoint, not bookkeeping — F217.** All four fields are reached from in-fork bodies, and `slice_bs_buffer` hands out `&mut (&mut *(*pEncCtx).pOut).sBsBuffer[..]` **in the fork**. Under the design an in-fork body may take only the `&self` reader, so the bitstream buffer needs either D1's `SharedCells` treatment or a demonstration that the arm is unreachable under MT. The fence is measured in F217: the arm is taken when `iMultipleThreadIdc <= 1` **or** the layer is `SM_SINGLE_SLICE`, and whether the second case still spawns a worker that reaches `slice_bs_buffer` is a probe B1 runs *first*. Sites: `pOut` 125, `pVpp` 46, `pSliceThreading` 28, the mutex 8 |
 | **B2** | `encoder_ext.rs` sweep (38 unsafe fn) | mostly cascade after B1 — but see F216: the DQ-layer family gates most of it too |
 | **B3** | `wels_encoder_ext.rs` (16 fn / 73 raw): frame-loop orchestration; the 2 version exports stay | this file is where prohibition 2's auto-ref count sits (24 of 29): its `pCtx` is `Self::ctx_ptr`'s raw, so every parameter write A7 converted is a `&mut` through a raw root. Converting the file's root retires all 24 at once |
-| **D1–D4** | stage D as the plan has it | writers onto `safe::bits`; `svc_encode_slice.rs` in two checkpoints; MT residue; `deblocking_common` + `mc`/`copy_mb` |
+| **D1–D4** | stage D as the plan has it | writers onto `safe::bits`; `svc_encode_slice.rs` in two checkpoints; MT residue; `deblocking_common` + `mc`/`copy_mb`. **Perf duties (plan §10.4/§6): D1 runs the bench before and after inside the session, and stage D's close checks the 3% budget** — shape fixes only, never `unsafe` back |
 
 ### The ordering question, and S2's recommendation
 
@@ -119,6 +119,43 @@ S2's read is the second, and B1 is the reason: B1's hardest problem
 layer's, one field over. Solving the layer first gives B1 a pattern to copy
 rather than a design to invent. But this is S3's call, and either way it is a
 checkpoint-boundary decision, made before any conversion starts, and recorded.
+
+### If you take layer-first: the family, measured (steward addition at review)
+
+The routes into the DQ layer and its pictures, fresh at this commit
+(`grep -rn '\b<name>(' src`, mentions incl. defs/docs):
+
+| route | sites | | route | sites |
+|---|---:|---|---|---:|
+| `current_layer` | 142 | | `layer_ref_pic` | 31 |
+| `layer_rec_view` | 25 | | `layer_pps` | 23 |
+| `layer_enc_pic` | 22 | | `ctx_dq_layer` | 15 |
+| `layer_sps` / `layer_subset_sps` | 5 / 2 | | `layer_ref_feature_storage` | 5 |
+| `set_current_layer` | 5 | | `ctx_ref_pic` / `ctx_pic_ref` | 4 / 2 |
+
+plus **42** `: *mut SDqLayer` parameters (`grep -rn ': \*mut SDqLayer' src/encoder
+| grep -v ':\s*//' | wc -l`), of which **11 are in-fork** (F218) — the eleven are
+the redesign's real clients; the other thirty-one convert under stage A's ordinary
+single-threaded rules.
+
+Three facts that size the work smaller than it looks:
+
+1. **The storage is already owned.** `sWelsEncCtx::ppDqLayerList` is a `Vec` of
+   owned layers (`encoder_context.rs:1538` — read the field), and `current_layer`
+   already resolves a *position* (`iCurDqLayer`, the identity-moved design at
+   `:1517`) rather than holding an alias. D2's "aliases → handles" is therefore an
+   accessor-and-parameter job, not a storage migration: readers become `&self`
+   resolution (position → `&SDqLayer`), single-threaded writers `&mut self`, and
+   the position itself is the handle (S37: resolved per call, never stored).
+2. **The diagonal exists here — classify first, and expect writers in-fork**
+   (F210, unlike every stage-A accessor). The eleven in-fork parameters are where
+   the fork *writes* the layer; each is either per-slice-disjoint (the worker
+   writes only its own slice's rows — provable, and then the D1 `SharedCells`
+   precedent applies field by field) or stays raw-tagged until D3 handles it.
+   F208 and F215 bind any new layer accessor identically.
+3. **F216's escrow pays out here**: the stage-A bodies still `unsafe` are so
+   only for these calls, so the cascade the tracking number has been waiting for
+   lands with this family — measure it per checkpoint, don't promise it.
 
 ## The protocol that worked, compressed
 
@@ -189,6 +226,8 @@ above and what it was based on; the per-accessor / per-field outcome table
 (reader / writer / in-fork spelling / combined accessor if any); B1's measurement
 of whether `slice_bs_buffer`'s `pOut` arm is reachable under MT; the join and
 forksplit headlines before and after; both prohibitions plus the F208 scan at the
-close; the close gate's Miri **CPU** number against S2's 1105 s; the tracking
+close; the close gate's Miri **CPU** number against S2's 1105 s **and the two MT probes
+run again at your own close** (§4.7 — this session touches all three seam files;
+the opening run proves S2's tree, the closing run proves yours); the tracking
 number's movement; every place this brief was wrong, quoting the sentence; and
 the hand-off to S4.
