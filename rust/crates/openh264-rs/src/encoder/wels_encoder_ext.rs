@@ -73,7 +73,7 @@ use crate::encoder::param_svc::GetLogFactor;
 use crate::encoder::param_svc::SExistingParasetList;
 use crate::encoder::svc_motion_estimate::CheckInRangeCloseOpen;
 use crate::encoder::encoder_context::{
-    ctx_frame_bs, ctx_frame_bs_cur, ctx_param, ctx_pps_array, ctx_rc, ctx_rc_at,
+    ctx_frame_bs_cur, ctx_param, ctx_pps_array, ctx_rc_at,
     ctx_sps_array, ctx_subset_array,
     SParaSetOffsetVariable, MAX_DQ_LAYER_NUM,
     MAX_PPS_COUNT, PARA_SET_TYPE,
@@ -616,7 +616,7 @@ pub unsafe fn WelsEncoderEncodeParameterSetsRust(
         return ENC_RETURN_INVALIDINPUT;
     }
     let pLayerBsInfo = &mut (*pBsInfo).sLayerInfo[0];
-    pLayerBsInfo.pBsBuf = ctx_frame_bs(pCtx);
+    pLayerBsInfo.pBsBuf = pCtx.frame_bs();
     pLayerBsInfo.pNalLengthInByte = (*pCtx.pOut).sNalLen.as_mut_ptr();
     // Was `InitBits(&…sBsWrite, …pBsBuffer, …uiSize)`. The buffer and its length stay
     // where they were; the writer is a position, and resetting it is all `InitBits`
@@ -2403,7 +2403,7 @@ uiResolutionChangeTimes={}, uIDRReqNum={}, uIDRSentNum={}, uLTRSentNum=NA, iTota
                     (*pCtx).uiStartTimestamp = kiCurrentFrameTs;
                 }
 
-                pStatistics.uiAverageFrameQP = if !ctx_rc(pCtx).is_null() {
+                pStatistics.uiAverageFrameQP = if !(*pCtx).rc().is_empty() {
                     (*ctx_rc_at(pCtx, iDid as usize)).iAverageFrameQp as u32
                 } else {
                     26

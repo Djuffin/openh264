@@ -28,9 +28,9 @@ use crate::api::codec_api::RC_MODES::RC_OFF_MODE;
 use crate::api::codec_api::{ELevelIdc, SSpatialLayerConfig};
 use crate::decoder::nalu::g_ksLevelLimits;
 use crate::encoder::encoder_context::{
-    ctx_dq_idc_map, ctx_dq_layer, ctx_frame_bs, ctx_frame_bs_cur, ctx_ltr_at, ctx_mb_index_x,
+    ctx_dq_idc_map, ctx_dq_layer, ctx_frame_bs_cur, ctx_ltr_at, ctx_mb_index_x,
     ctx_paraset_arrays,
-    ctx_mb_index_y, ctx_mvd_cost_table, ctx_param, ctx_ref_list, ctx_vaa,
+    ctx_mb_index_y, ctx_param, ctx_ref_list, ctx_vaa,
     ctx_rc_at,
     ctx_pps_array, ctx_sps_array,
     ctx_stride_enc_block_offset,
@@ -1327,7 +1327,10 @@ pub unsafe fn RequestMemorySvc(
         (52 * kuiMvdCacheAlignedSize + kuiMvdCostTableOvershoot) as usize
             / std::mem::size_of::<u16>()
     ];
-    crate::encoder::md::MvdCostInit(ctx_mvd_cost_table(*ppCtx), kuiMvdInterTableStride);
+    crate::encoder::md::MvdCostInit(
+        (**ppCtx).mvd_cost_table_mut().as_mut_ptr(),
+        kuiMvdInterTableStride,
+    );
 
     let pRefList0 = ctx_ref_list(*ppCtx, 0);
     if !pRefList0.is_null() && !(*pRefList0).pRef.is_empty() {
@@ -1828,7 +1831,7 @@ mod tests {
             );
 
             assert!((*pCtx).pStrideTab.is_some());
-            assert!(!ctx_mvd_cost_table(pCtx).is_null());
+            assert!(!(*pCtx).mvd_cost_table().is_empty());
             assert_eq!(
                 (*pCtx).eRefStrategy,
                 crate::encoder::ref_list_mgr_svc::RefStrategyKind::TemporalLayer,
@@ -2053,7 +2056,7 @@ pub unsafe fn PrefetchReferencePicture(pCtx: &mut sWelsEncCtx, keFrameType: EVid
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe fn ClearFrameBsInfo(pCtx: &mut sWelsEncCtx, pFbi: *mut SFrameBSInfo) {
-    (*pFbi).sLayerInfo[0].pBsBuf = ctx_frame_bs(pCtx);
+    (*pFbi).sLayerInfo[0].pBsBuf = pCtx.frame_bs();
     (*pFbi).sLayerInfo[0].pNalLengthInByte = (*pCtx.pOut).sNalLen.as_mut_ptr();
 
     for i in 0..(*pFbi).iLayerNum as usize {
@@ -3404,7 +3407,7 @@ pub unsafe fn WelsEncoderEncodeExt(
     // all: `sSpatialIndexMap` is an inline `[SSpatialPicIndex; 4]` in the context,
     // so an index is a field read, not a cursor.
     crate::encoder::encoder_context::InitBitStream(pCtx);
-    (*pLayerBsInfo).pBsBuf = ctx_frame_bs(pCtx);
+    (*pLayerBsInfo).pBsBuf = pCtx.frame_bs();
     (*pLayerBsInfo).pNalLengthInByte = (*pCtx.pOut).sNalLen.as_mut_ptr();
     iCurDid = pCtx.sSpatialIndexMap[0].iDid as i8;
     set_current_layer(pCtx, Some(LayerIdx(iCurDid as u8)));

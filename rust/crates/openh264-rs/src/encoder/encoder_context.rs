@@ -744,53 +744,6 @@ pub unsafe fn ctx_vaa(pCtx: *mut sWelsEncCtx) -> *mut SVAAFrameInfo {
     std::ptr::read(std::ptr::addr_of!((*pCtx).pVaa) as *const *mut SVAAFrameInfo)
 }
 
-/// The **root** of `pCtx->pMvdCostTable` — T6.H9; see [`ctx_sps_array`] for the
-/// spelling and for what empty means.
-///
-/// # Safety
-/// `pCtx` must point to a live encoder context.
-#[inline]
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
-pub unsafe fn ctx_mvd_cost_table(pCtx: *mut sWelsEncCtx) -> *mut u16 {
-    // **F71** — see `ctx_param`. Shared access to the `Vec`, buffer provenance out.
-    let v = std::ptr::addr_of!((*pCtx).pMvdCostTable);
-    if (*v).is_empty() {
-        return std::ptr::null_mut();
-    }
-    (*v).as_ptr() as *mut u16
-}
-
-/// The MVD cost table's **origin** — the entry a zero MVD indexes, which is
-/// `iMvdCostTableSize` into the table. Every consumer wants this rather than the
-/// root: `COST_MVD` indexes it with a *signed* MVD, so the bias is what makes a
-/// negative motion-vector difference a negative offset from a pointer that is still
-/// inside the allocation.
-///
-/// It is derived **once per slice**, which is where the two call sites already
-/// derived it — the cadence is unchanged, which is what keeps this off the perf span.
-/// The two record fields that cache a row of it (`SWelsMD::pMvdCost`,
-/// `SWelsME::pMvdCost`) stay raw and are enumerated for session I's inventory: they
-/// are per-macroblock caches of `origin + uiLumaQp * iMvdCostTableStride`, re-stamped
-/// by `WelsInitInterMDStruc` on every macroblock.
-///
-/// # Safety
-/// As [`ctx_mvd_cost_table`].
-#[inline]
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
-pub unsafe fn ctx_mvd_cost_origin(pCtx: *mut sWelsEncCtx) -> *mut u16 {
-    let root = ctx_mvd_cost_table(pCtx);
-    if root.is_null() {
-        return std::ptr::null_mut();
-    }
-    debug_assert!(
-        ((*pCtx).iMvdCostTableSize as usize) < (*pCtx).pMvdCostTable.len(),
-        "the MVD table's origin is outside the table"
-    );
-    root.add((*pCtx).iMvdCostTableSize as usize)
-}
-
 /// Dependency layer `kiDid`'s **DQ layer** — `ppDqLayerList[did]`, and null where the
 /// slot's pointer was null. T6.H8; the same shape as [`ctx_ref_list`], and
 /// [`current_layer`](crate::encoder::svc_encode_slice::current_layer) resolves
@@ -837,37 +790,25 @@ pub unsafe fn ctx_ref_list(pCtx: *mut sWelsEncCtx, kiDid: usize) -> *mut SRefLis
     std::ptr::read((*arr).as_ptr().add(kiDid) as *const *mut SRefList)
 }
 
-/// The **root** of `pCtx->pWelsSvcRc` — T6.H6; see [`ctx_sps_array`] for the spelling.
-///
-/// # Safety
-/// `pCtx` must point to a live encoder context.
-#[inline]
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
-pub unsafe fn ctx_rc(pCtx: *mut sWelsEncCtx) -> *mut SWelsSvcRc {
-    // **F71** — see `ctx_param`. Shared access to the `Vec`, buffer provenance out.
-    let v = std::ptr::addr_of!((*pCtx).pWelsSvcRc);
-    if (*v).is_empty() {
-        return std::ptr::null_mut();
-    }
-    (*v).as_ptr() as *mut SWelsSvcRc
-}
-
 /// The rate-control state of spatial layer `kiDid` — `pWelsSvcRc[did]`, which is how
 /// all ~60 consumers spell it. See [`ctx_rc`].
 ///
 /// # Safety
-/// As [`ctx_rc`], and `kiDid` must be a layer the array holds.
+/// As [`sWelsEncCtx::rc`], and `kiDid` must be a layer the array holds.
 #[inline]
 // unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
 pub unsafe fn ctx_rc_at(pCtx: *mut sWelsEncCtx, kiDid: usize) -> *mut SWelsSvcRc {
-    let root = ctx_rc(pCtx);
-    if root.is_null() {
+    // A1: the root comes from the safe reader now. `as_ptr` through a shared
+    // borrow is the same derivation the raw root performed, so this is still the
+    // sibling-stable spelling and `ctx_rc_at`'s own row in the sibling test still
+    // asserts it. A2 converts this one.
+    let rc = (*pCtx).rc();
+    if rc.is_empty() {
         return std::ptr::null_mut();
     }
-    debug_assert!(kiDid < (*pCtx).pWelsSvcRc.len(), "rc layer {kiDid} is past the array");
-    root.add(kiDid)
+    debug_assert!(kiDid < rc.len(), "rc layer {kiDid} is past the array");
+    (rc.as_ptr() as *mut SWelsSvcRc).add(kiDid)
 }
 
 /// The long-term-reference state of dependency layer `kiDid` — `pLtr[did]`, which is
@@ -888,46 +829,6 @@ pub unsafe fn ctx_rc_at(pCtx: *mut sWelsEncCtx, kiDid: usize) -> *mut SWelsSvcRc
 #[inline]
 pub fn ctx_ltr_at(pCtx: &mut sWelsEncCtx, kiDid: usize) -> &mut SLTRState {
     &mut pCtx.pLtr[kiDid]
-}
-
-/// The **root** of `pCtx->pFrameBs` — T6.H4.
-///
-/// This is the one this session had to enumerate before converting, because the
-/// cursors it hands out are *held*: `SLayerBSInfo::pBsBuf` keeps one for the life of
-/// a layer's bitstream info while the NAL writers derive more from the same buffer.
-/// There are **nineteen** cursor derivations in production — sixteen walking ones
-/// through [`ctx_frame_bs_cur`] (12 in `encoder_ext.rs`, 3 in `wels_encoder_ext.rs`,
-/// 1 in `slice_multi_threading.rs`) and three of the root itself stored into a
-/// `pBsBuf` — plus one null guard in `slice_multi_threading.rs`. The conversion adds
-/// no `&mut` to any of them: as everywhere in this family, `Vec::as_mut_ptr` reads
-/// the header, so the derivations are siblings and none pops another.
-/// `frame_bs_cursors_are_siblings` is that as a test.
-///
-/// Empty answers null, which is what the field held before `RequestMemorySvc` ran.
-///
-/// **This one is a permanent raw return, and the reason is the C ABI — F193,
-/// measured at the callers rather than assumed.** Of the eight call sites, the
-/// production ones store the answer into `SLayerBSInfo::pBsBuf`, and that field is
-/// `codec_app_def.h:640` — `unsigned char* pBsBuf`, a public member of a struct this
-/// library hands to the application. The value crosses the boundary, so it cannot
-/// become a slice, a reference, or anything else carrying a lifetime, in this phase
-/// or any later one. A session that reaches for "make the five slice-returning APIs
-/// return slices" should stop at this note rather than pay S54's cost again to learn
-/// it. Same for [`ctx_frame_bs_cur`], whose 21 sites include **nine** of the same
-/// store (the other nine pass the cursor into the NAL writers; three are tests).
-///
-/// # Safety
-/// `pCtx` must point to a live encoder context.
-#[inline]
-// unsafe-cat: C-ABI
-#[allow(unsafe_code)]
-pub unsafe fn ctx_frame_bs(pCtx: &mut sWelsEncCtx) -> *mut u8 {
-    // **F71** — see `ctx_param`. Shared access to the `Vec`, buffer provenance out.
-    let buf = std::ptr::addr_of!(pCtx.pFrameBs);
-    if (*buf).is_empty() {
-        return std::ptr::null_mut();
-    }
-    (*buf).as_ptr() as *mut u8
 }
 
 /// The frame bitstream's write cursor — `pFrameBs + iPosBsBuffer`. See
@@ -953,12 +854,13 @@ pub unsafe fn ctx_frame_bs(pCtx: &mut sWelsEncCtx) -> *mut u8 {
 /// `codec_app_def.h:640` and crosses the C boundary (F193).**
 ///
 /// # Safety
-/// As [`ctx_frame_bs`].
+/// As [`sWelsEncCtx::frame_bs`].
 #[inline]
 // unsafe-cat: C-ABI
 #[allow(unsafe_code)]
 pub unsafe fn ctx_frame_bs_cur(pCtx: &mut sWelsEncCtx) -> *mut u8 {
-    let root = ctx_frame_bs(pCtx);
+    // A1: the root is the safe reader. A4 converts this one.
+    let root = pCtx.frame_bs();
     if root.is_null() {
         return std::ptr::null_mut();
     }
@@ -1094,6 +996,131 @@ pub fn ctx_mb_index_y(pCtx: &sWelsEncCtx, kiDid: usize) -> *const i16 {
     }
 }
 
+// ---------------------------------------------------------------------------
+// **The safe accessor layer** — stage A of the safe-conversion plan.
+//
+// Everything the god-struct used to hand out through a raw accessor is handed
+// out here instead, by a **safe method**, and on one design:
+//
+// * **Readers take `&self`, and they are what everyone calls — the fork
+//   included.** An in-fork site spells the call `(*pCtx).name()` inside the
+//   `unsafe` block it already has: a per-call *shared* reborrow, used in the
+//   expression and never stored (S37). N workers may hold shared reborrows of
+//   one context at once, which is precisely why this is the only path the fork
+//   is allowed. S63 forbids the `&mut` one at any duration — a reference
+//   argument is strongly protected for the whole call (F192), so "briefly" buys
+//   nothing. The fields workers actually write are already atomics or `Cell`s
+//   behind the audited seam (D-mt-3's two `unsafe impl`s), and a shared
+//   reference reaches those.
+// * **Writers take `&mut self`, and they are single-threaded only.** The rule is
+//   grep-checkable and is checked at every checkpoint: a `*_mut` accessor may
+//   not appear in a body whose context parameter is `*mut sWelsEncCtx`.
+//   `rust/tools/phase9_forksplit.py --list` classifies those bodies; every body
+//   that already takes `&mut sWelsEncCtx` was adjudicated single-threaded by the
+//   Phase 9 flip, which is what made that flip legal in the first place.
+//
+// Where a return **stays raw** it is because the value crosses a boundary that
+// cannot carry a lifetime — F193's `SLayerBSInfo::pBsBuf`, or a raw struct field
+// a later stage converts. Those accessors are still *safe fns*: forming a raw
+// pointer needs no `unsafe`, only dereferencing one does, and the dereference
+// belongs to whoever owns the far end. That is the whole of what "the accessor
+// became safe" claims for them, and it is worth being exact about, because it is
+// the difference between this layer's `unsafe` and the next layer's.
+// ---------------------------------------------------------------------------
+impl sWelsEncCtx {
+    /// The **MVD cost table** — T6.H9, `pCtx->pMvdCostTable`.
+    ///
+    /// Empty before `WelsInitEncoderExt` sizes it, which is the state the raw
+    /// accessor answered with a null and its callers asked about with
+    /// `is_null()`; the question is `is_empty()` now and it is the same question.
+    #[inline]
+    pub fn mvd_cost_table(&self) -> &[u16] {
+        &self.pMvdCostTable
+    }
+
+    /// [`mvd_cost_table`](Self::mvd_cost_table) for its **one** writer:
+    /// `MvdCostInit` fills the whole table once, inside `WelsInitEncoderExt`.
+    /// Single-threaded by construction — the fork only reads this table.
+    #[inline]
+    pub fn mvd_cost_table_mut(&mut self) -> &mut [u16] {
+        &mut self.pMvdCostTable
+    }
+
+    /// The MVD cost table's **origin** — the entry a zero MVD indexes, which is
+    /// `iMvdCostTableSize` into the table. Every consumer wants this rather than
+    /// the root: `COST_MVD` indexes it with a *signed* MVD, so the bias is what
+    /// makes a negative motion-vector difference a negative offset from a pointer
+    /// that is still inside the allocation.
+    ///
+    /// **The return stays raw, and the far end is why.** Both callers
+    /// (`WelsISliceMdEnc` / `WelsISliceMdEncDynamic`, in-fork) hold it across the
+    /// macroblock loop and hand it to `WelsInitInterMDStruc`, which stamps
+    /// `SWelsMD::pMvdCost` — a `*mut u16` *field*, re-stamped per macroblock. The
+    /// field is stage C's to convert; until it does, a reference here would have
+    /// nothing to be stored into. What this conversion buys is that the accessor
+    /// itself is safe: `as_ptr` + `wrapping_add` compute the same address the
+    /// `unsafe` `.add` computed, with no claim about what is in bounds — the
+    /// claim, and the `debug_assert` that guards it, stay exactly where they were.
+    #[inline]
+    pub fn mvd_cost_origin(&self) -> *mut u16 {
+        if self.pMvdCostTable.is_empty() {
+            return std::ptr::null_mut();
+        }
+        debug_assert!(
+            (self.iMvdCostTableSize as usize) < self.pMvdCostTable.len(),
+            "the MVD table's origin is outside the table"
+        );
+        self.pMvdCostTable
+            .as_ptr()
+            .wrapping_add(self.iMvdCostTableSize as usize) as *mut u16
+    }
+
+    /// The **rate controller's per-layer array** — T6.H6, `pCtx->pWelsSvcRc`.
+    ///
+    /// The raw root answered null on an empty `Vec` and its two callers asked
+    /// `is_null()` before indexing; both ask `is_empty()` now. See
+    /// [`rc_at`](Self::rc_at) for the per-layer entry, which is how the other
+    /// sixty consumers spell it.
+    #[inline]
+    pub fn rc(&self) -> &[SWelsSvcRc] {
+        &self.pWelsSvcRc
+    }
+
+    /// The **frame bitstream buffer's root** — T6.H4.
+    ///
+    /// **A permanent raw return, and the reason is the C ABI — F193**, measured
+    /// at the callers rather than assumed. Of the production call sites, three
+    /// store the answer into `SLayerBSInfo::pBsBuf`, and that field is
+    /// `codec_app_def.h:640` — `unsigned char* pBsBuf`, a public member of a
+    /// struct this library hands to the application. The value crosses the
+    /// boundary, so it cannot become a slice, a reference, or anything else
+    /// carrying a lifetime, in this stage or any later one. A session that
+    /// reaches for "make the accessors return slices" should stop at this note
+    /// rather than pay S54's cost again to learn it. Same for
+    /// [`frame_bs_cur`](Self::frame_bs_cur).
+    ///
+    /// What *did* convert is the `unsafe`: the derivation is `Vec::as_ptr`
+    /// through a shared borrow — character for character what the raw accessor's
+    /// `addr_of!` spelling reached — so this reads the `Vec` header and hands out
+    /// the buffer's own provenance, and repeated calls are **siblings**, none
+    /// popping another. That property is load-bearing (`SLayerBSInfo::pBsBuf`
+    /// keeps a cursor live while the NAL writers derive more from the same
+    /// buffer at `iPosBsBuffer`) and `frame_bs_cursors_are_siblings` is it as a
+    /// Miri test. `&self` rather than `&mut self` for the same reason: the
+    /// walking derivations coexist, and a shared borrow says so.
+    ///
+    /// Empty answers null, which is what the field held before `RequestMemorySvc`
+    /// ran — `Vec::as_ptr` on an empty `Vec` answers a dangling *non-null*
+    /// address, so this branch is load-bearing, not defensive.
+    #[inline]
+    pub fn frame_bs(&self) -> *mut u8 {
+        if self.pFrameBs.is_empty() {
+            return std::ptr::null_mut();
+        }
+        self.pFrameBs.as_ptr() as *mut u8
+    }
+}
+
 /// Master runtime encoder context (`sWelsEncCtx` / `TagWelsEncCtx`).
 #[repr(C)]
 pub struct sWelsEncCtx {
@@ -1116,9 +1143,9 @@ pub struct sWelsEncCtx {
     pub iMvRange: i32,
     /// The motion-vector-difference cost table — **T6.H9, and plan item P11 landing.**
     /// 52 QP rows of `iMvdCostTableStride` entries each, plus F57's overshoot. Root:
-    /// [`ctx_mvd_cost_table`]; the **origin** every consumer actually wants (the
-    /// zero-MVD entry, `iMvdCostTableSize` into the table, so that a negative MVD is a
-    /// negative offset) is [`ctx_mvd_cost_origin`].
+    /// [`sWelsEncCtx::mvd_cost_table`]; the **origin** every consumer actually wants
+    /// (the zero-MVD entry, `iMvdCostTableSize` into the table, so that a negative MVD
+    /// is a negative offset) is [`sWelsEncCtx::mvd_cost_origin`].
     pub pMvdCostTable: Vec<u16>,
     pub iMvdCostTableSize: i32,
     pub iMvdCostTableStride: i32,
@@ -2217,13 +2244,20 @@ mod tests {
         // deleted; the layer accessor returns `&mut SLTRState` now, so — as with
         // `ctx_dq_idc_map` above — it has no sibling property to assert: two
         // derivations cannot coexist, and the borrow checker says so at the call.
-        siblings!("ctx_rc", ctx_rc(p),
-            |q: *mut SWelsSvcRc| (*q).iGomSize = 11, |q: *mut SWelsSvcRc| (*q).iGomSize == 11);
+        // `ctx_rc` and `ctx_mvd_cost_table` had rows here until A1 of the
+        // safe-conversion plan. Both return slices now (`rc`, `mvd_cost_table`),
+        // so — as with `ctx_dq_idc_map` and `ctx_ltr_at` above — there is no
+        // sibling property left to assert: two derivations cannot coexist and the
+        // borrow checker says so at the call. `ctx_rc_at` still hangs off `rc`'s
+        // root and still hands out a raw, so its row stays and now covers the
+        // reader's derivation too.
         siblings!("ctx_rc_at", ctx_rc_at(p, 1),
             |q: *mut SWelsSvcRc| (*q).iGomSize = 12, |q: *mut SWelsSvcRc| (*q).iGomSize == 12);
-        siblings!("ctx_mvd_cost_table", ctx_mvd_cost_table(p),
-            |q: *mut u16| *q = 0x1234, |q: *mut u16| *q == 0x1234);
-        siblings!("ctx_mvd_cost_origin", ctx_mvd_cost_origin(p),
+        // `mvd_cost_origin` is safe now but still *returns* a raw (the far end is
+        // `SWelsMD::pMvdCost`), so the property is unchanged and still asserted —
+        // this is the row that proves `as_ptr` through the new `&self` reader is
+        // the same sibling-stable derivation `addr_of!` was.
+        siblings!("mvd_cost_origin", (*p).mvd_cost_origin(),
             |q: *mut u16| *q = 0x4321, |q: *mut u16| *q == 0x4321);
         siblings!("ctx_vaa", ctx_vaa(p),
             |q: *mut SVAAFrameInfo| (*q).iPicWidth = 176,
@@ -2246,14 +2280,15 @@ mod tests {
             (*rc).iGomSize = 4;
             crate::encoder::rc::RcInitLayerMemory(&mut *rc, 2);
         }
-        // T9.X: `rc_temporal_over` and `rc_gom_complexity` are retired (S18 — the
+        // T9.X: `rc_temporal_over` and `rc_gom_complexity` were retired (S18 — the
         // first onto direct `Vec` indexing at its ten callers, the second for having
-        // no production caller at all). The two survivors still carry the property
-        // for the family, which is T9.C5's own precedent for `rc_gom_cost`.
-        siblings!("rc_gom_fg_blocks", crate::encoder::rc::rc_gom_fg_blocks(rc),
-            |q: *mut i32| *q = 21, |q: *mut i32| *q == 21);
-        siblings!("rc_gom_sad", crate::encoder::rc::rc_gom_sad(rc),
-            |q: *mut i32| *q = 22, |q: *mut i32| *q == 22);
+        // no production caller at all). **A1 retires the last two the same way.**
+        // `rc_gom_fg_blocks` had no production caller either — this test was its
+        // only one, which is S18's own criterion — and `rc_gom_sad` is
+        // `SWelsSvcRc::gom_sad`, a slice, at both of its in-fork readers. The
+        // family's property is now carried where it is still expressible, one
+        // level up, by `ctx_rc_at` above.
+        let _ = rc;
 
         // And the whole set once more, interleaved: every cursor taken first, then
         // every one used — which is the frame loop's actual shape, and the case a
@@ -2264,12 +2299,12 @@ mod tests {
                 // at T9.H3 (deleted with the raw family) — a real reference
                 // cannot be *held* alongside the others, which is the point.
                 ctx_sps_array(p).cast(), ctx_pps_array(p).cast(),
-                ctx_rc(p).cast(), ctx_mvd_cost_origin(p).cast(),
+                ctx_rc_at(p, 0).cast(), (*p).mvd_cost_origin().cast(),
                 ctx_vaa(p).cast(), ctx_param(p).cast(), ctx_ref_list(p, 0).cast(),
-                ctx_dq_layer(p, 0).cast(), ctx_frame_bs(&mut *p).cast(),
+                ctx_dq_layer(p, 0).cast(), (*p).frame_bs().cast(),
             ]
         };
-        // `ctx_frame_bs` is null here (no bitstream in this fixture), which is itself
+        // `frame_bs` is null here (no bitstream in this fixture), which is itself
         // the assertion that empty still answers null after everything above. It is
         // the **last** entry, and the two counts below are derived from the vector
         // rather than written twice — the literal `10`/`take(10)` pair went stale the
@@ -2303,7 +2338,7 @@ mod tests {
         let mut ctx = Box::new(sWelsEncCtx::new());
         let p: *mut sWelsEncCtx = &mut *ctx;
         // Before `RequestMemorySvc`, both answer the null the raw field held.
-        assert!(unsafe { ctx_frame_bs(&mut *p) }.is_null());
+        assert!(unsafe { (*p).frame_bs() }.is_null());
         assert!(unsafe { ctx_frame_bs_cur(&mut *p) }.is_null());
 
         ctx.pFrameBs = vec![0u8; 64];
@@ -2312,7 +2347,7 @@ mod tests {
 
         // `pBsBuf` — the root, stored and kept, exactly as the three sites that take
         // it do.
-        let stored = unsafe { ctx_frame_bs(&mut *p) };
+        let stored = unsafe { (*p).frame_bs() };
 
         // The frame loop then walks: derive at the cursor, write, advance, repeat.
         // T9.G5: the walk drives `iPosBsBuffer`, because that is what the accessor

@@ -88,7 +88,7 @@ pub use crate::encoder::encoder_context::sWelsEncCtx;
 // accessors. Field spellings only — no body in this file is touched, and the
 // thread machinery is Phase 7's.
 use crate::encoder::encoder_context::{
-    ctx_dq_layer, ctx_frame_bs, ctx_frame_bs_cur, ctx_param, ctx_rc, ctx_rc_at,
+    ctx_dq_layer, ctx_frame_bs_cur, ctx_param, ctx_rc_at,
 };
 
 // ============================================================================
@@ -607,7 +607,7 @@ pub unsafe fn DynamicAdjustSlicing(
     let rc_mode = (*pSvcParam).iRCMode;
     let mut iNumMbInEachGom = 0i32;
     if rc_mode != RCMode::RC_OFF_MODE {
-        if ctx_rc(pCtx).is_null() {
+        if pCtx.rc().is_empty() {
             return;
         }
         let pWelsSvcRc = ctx_rc_at(pCtx, iCurDid as usize);
@@ -870,7 +870,7 @@ pub unsafe fn AppendSliceToFrameBs(
                 // T7.C4: the slice owns its bitstream, so the source is the `Vec`'s
                 // root rather than a `CMemoryAlign` block. Same bytes, same length,
                 // same destination.
-                if !ctx_frame_bs(pCtx).is_null() {
+                if !pCtx.frame_bs().is_null() {
                     if let Some(src) = pSliceBs.pBs.as_ref() {
                         std::ptr::copy(
                             src.as_ptr(),

@@ -75,7 +75,6 @@ pub const MAX_REF_PIC_COUNT: usize = 16;
 // let the `WelsPreprocess` unref loop read one past `pShortRefList`.
 pub use crate::encoder::encoder_context::{MAX_GOP_SIZE, MAX_SHORT_REF_COUNT, MAX_TEMPORAL_LEVEL};
 use crate::encoder::encoder_context::{ctx_ltr_at, ctx_param, ctx_rc_at, ctx_ref_list, ctx_vaa};
-use crate::encoder::rc::{rc_gom_fg_blocks, rc_gom_sad};
 pub use crate::encoder::encoder_context::SRefList;
 pub use crate::encoder::picture::SPicture;
 pub use crate::encoder::encoder_context::SLTRState;
@@ -2821,7 +2820,7 @@ impl CWelsPreProcess {
             (*pWelsSvcRc).pCurrentFrameGomSad.fill(0);
 
             sComplexityAnalysisParam.iFrameComplexity = 0;
-            sComplexityAnalysisParam.pGomComplexity = rc_gom_sad(pWelsSvcRc);
+            sComplexityAnalysisParam.pGomComplexity = (*pWelsSvcRc).gom_sad_ptr();
             sComplexityAnalysisParam.iGomNumInFrame = (*pWelsSvcRc).iGomSize;
             sComplexityAnalysisParam.iIdrFlag = if pCtx.eSliceType == EWelsSliceType::I_SLICE { 1 } else { 0 };
             sComplexityAnalysisParam.iMbRowInGom = GOM_H_SCC;
