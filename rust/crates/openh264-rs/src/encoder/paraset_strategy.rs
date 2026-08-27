@@ -47,7 +47,7 @@ use crate::api::codec_api::RC_MODES::RC_OFF_MODE;
 use crate::encoder::au_set::{WelsInitPps, WelsInitSps, WelsInitSubsetSps};
 use crate::encoder::encoder_context::{
     ctx_func_list_raw,
-    ctx_param, sWelsEncCtx, SLogContext,
+    sWelsEncCtx, SLogContext,
     SParaSetOffset,
     SParaSetOffsetVariable, MAX_DQ_LAYER_NUM, MAX_PPS_COUNT, PARA_SET_TYPE,
 };
@@ -692,18 +692,23 @@ impl CWelsParametersetIdStrategyObj {
         // `CWelsParametersetSpsListing::GenerateNewSps` — `paraset_strategy.cpp:475`.
         // Reuse an SPS the decoder already has if the configuration matches one;
         // otherwise take the next id, wrapping through `SpsReset`.
+        // A7, §4.6 combined accessor: `FindExistingSps` writes `uiLevelIdc` back
+        // into the layer's configuration while reading the two arrays, so the
+        // parameter block and the arrays come out of one borrow.
+        let iSpsNumInUse = if kbUseSubsetSps {
+            self.m_sParaSetOffset.uiInUseSubsetSpsNum
+        } else {
+            self.m_sParaSetOffset.uiInUseSpsNum
+        } as i32;
+        let (pParam, pSpsArray, pSubsetArray, _) = pCtx.param_and_paraset_arrays_mut();
         let kiFoundSpsId = FindExistingSps(
-            ctx_param(pCtx),
+            pParam,
             kbUseSubsetSps,
             iDlayerIndex,
             iDlayerCount,
-            if kbUseSubsetSps {
-                self.m_sParaSetOffset.uiInUseSubsetSpsNum
-            } else {
-                self.m_sParaSetOffset.uiInUseSpsNum
-            } as i32,
-            pCtx.sps_array(),
-            pCtx.subset_array(),
+            iSpsNumInUse,
+            pSpsArray,
+            pSubsetArray,
             bSVCBaselayer,
         );
         if INVALID_ID != kiFoundSpsId {
@@ -879,7 +884,10 @@ pub unsafe fn WelsGenerateNewSps(
     // now reaches its own array once, where it uses it, and the two-arm derivation
     // that stood here (which computed one pointer the caller's arm never read) is
     // gone with them.
-    let pParam = ctx_param(pCtx);
+    // A7, §4.6 combined accessor: the SPS is built *into* the array while
+    // `WelsInitSps` writes `uiLevelIdc` back into the layer's configuration, so
+    // the parameter block and the arrays come out of one borrow.
+    let (pParam, pSpsArray, pSubsetArray, _) = pCtx.param_and_paraset_arrays_mut();
     // S29's named shape. `WelsInitSps` takes `*mut SSpatialLayerConfig`, so the
     // reference here only existed to retag and be cast away — and its retag is
     // what invalidated `InitDqLayers`'s live pointer into the same layer.
@@ -887,7 +895,7 @@ pub unsafe fn WelsGenerateNewSps(
     // Need port pSps/pPps initialization due to spatial scalability changed
     if !kbUseSubsetSps {
         iRet = WelsInitSps(
-            &mut pCtx.sps_array_mut()[kiSpsId as usize],
+            &mut pSpsArray[kiSpsId as usize],
             pDlayerParam,
             std::ptr::addr_of_mut!((*pParam).sDependencyLayers[iDlayerIndex as usize]),
             (*pParam).uiIntraPeriod,
@@ -900,7 +908,7 @@ pub unsafe fn WelsGenerateNewSps(
         );
     } else {
         iRet = WelsInitSubsetSps(
-            &mut pCtx.subset_array_mut()[kiSpsId as usize],
+            &mut pSubsetArray[kiSpsId as usize],
             pDlayerParam,
             std::ptr::addr_of_mut!((*pParam).sDependencyLayers[iDlayerIndex as usize]),
             (*pParam).uiIntraPeriod,
@@ -1161,7 +1169,7 @@ pub unsafe fn FindExistingPps(
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe fn FindExistingSps(
-    pParam: *mut SWelsSvcCodingParam,
+    pParam: &mut SWelsSvcCodingParam,
     kbUseSubsetSps: bool,
     iDlayerIndex: i32,
     iDlayerCount: i32,

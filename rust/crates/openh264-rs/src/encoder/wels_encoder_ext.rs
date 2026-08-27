@@ -74,7 +74,6 @@ use crate::encoder::param_svc::SExistingParasetList;
 use crate::encoder::svc_motion_estimate::CheckInRangeCloseOpen;
 use crate::encoder::encoder_context::{
     ctx_func_list_raw,
-    ctx_param,
     SParaSetOffsetVariable, MAX_DQ_LAYER_NUM,
     MAX_PPS_COUNT, PARA_SET_TYPE,
 };
@@ -676,25 +675,33 @@ pub unsafe fn ForceCodingIDR(pCtx: &mut sWelsEncCtx, iLayerId: i32) -> i32 {
     // T9.H: `if pCtx.is_null() { ... }` stood here. A `&mut sWelsEncCtx`
     // cannot be null and every caller now holds one, so the guard is not
     // merely dead — it is inexpressible. Nothing replaces it.
-    let pParam = crate::encoder::encoder_context::ctx_param(pCtx);
-    if pParam.is_null() {
+    // A7: the null test went with the raw — see `param_opt`; and the two fields
+    // read here are scalars, so the borrow ends before the loop's writes.
+    let Some((bSimulcastAVC, iSpatialLayerNum)) = pCtx
+        .param_opt()
+        .map(|p| (p.bSimulcastAVC, p.iSpatialLayerNum))
+    else {
         return 1;
-    }
+    };
     let all_layers = iLayerId < 0
         || iLayerId >= crate::encoder::param_svc::MAX_SPATIAL_LAYER_NUM as i32
-        || !(*pParam).bSimulcastAVC;
+        || !bSimulcastAVC;
     let (first, last) = if all_layers {
-        (0, (*pParam).iSpatialLayerNum)
+        (0, iSpatialLayerNum)
     } else {
         (iLayerId, iLayerId + 1)
     };
     for iDid in first..last {
-        let pParamInternal = std::ptr::addr_of_mut!((*pParam).sDependencyLayers[iDid as usize]);
-        (*pParamInternal).iCodingIndex = 0;
-        (*pParamInternal).iFrameIndex = 0;
-        (*pParamInternal).iFrameNum = 0;
-        (*pParamInternal).iPOC = 0;
-        (*pParamInternal).bEncCurFrmAsIdrFlag = true;
+        // A7, §4.6 reorder: the layer's block is claimed and released inside the
+        // loop body, because the statistics write below reaches the context again.
+        {
+            let pParamInternal = &mut pCtx.param_mut().sDependencyLayers[iDid as usize];
+            pParamInternal.iCodingIndex = 0;
+            pParamInternal.iFrameIndex = 0;
+            pParamInternal.iFrameNum = 0;
+            pParamInternal.iPOC = 0;
+            pParamInternal.bEncCurFrmAsIdrFlag = true;
+        }
         // The reference counts the request against layer **0** in the all-layers arm
         // and against `iLayerId` in the other — `sEncoderStatistics[0]` inside the
         // loop, not `sEncoderStatistics[iDid]`. Kept as it is: it is a statistic, and
@@ -756,7 +763,7 @@ pub unsafe fn WelsEncoderParamAdjust(
         return iReturn;
     }
 
-    let pOldParam: *mut SWelsSvcCodingParam = ctx_param(pCtx);
+    let pOldParam: &mut SWelsSvcCodingParam = (*pCtx).param_mut();
 
     if (*pOldParam).iUsageType != (*pNewParam).iUsageType {
         return ENC_RETURN_UNSUPPORTED_PARA;
@@ -764,8 +771,7 @@ pub unsafe fn WelsEncoderParamAdjust(
 
     /* Decide whether need reset for IDR frame based on adjusting prarameters changed */
     /* Temporal levels, spatial settings and/ or quality settings changed need update parameter sets related. */
-    bNeedReset = pOldParam.is_null()
-        || ((*pOldParam).bSimulcastAVC != (*pNewParam).bSimulcastAVC)
+    bNeedReset = ((*pOldParam).bSimulcastAVC != (*pNewParam).bSimulcastAVC)
         || ((*pOldParam).iSpatialLayerNum != (*pNewParam).iSpatialLayerNum)
         || ((*pOldParam).iPicWidth != (*pNewParam).iPicWidth
             || (*pOldParam).iPicHeight != (*pNewParam).iPicHeight)
@@ -912,7 +918,7 @@ pub unsafe fn WelsEncoderParamAdjust(
         // for LTR or SPS,PPS ID update
         iIndexD = 0;
         while iIndexD < (*pNewParam).iSpatialLayerNum {
-            (*ctx_param(pCtx)).sDependencyLayers[iIndexD as usize].uiIdrPicId = uiMaxIdrPicId;
+            (*pCtx).param_mut().sDependencyLayers[iIndexD as usize].uiIdrPicId = uiMaxIdrPicId;
             iIndexD += 1;
         }
 
@@ -1042,7 +1048,7 @@ pub unsafe fn WelsEncoderParamAdjust(
 /// not clip.
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
-pub unsafe fn WelsEncoderApplyFrameRate(pParam: *mut SWelsSvcCodingParam) {
+pub unsafe fn WelsEncoderApplyFrameRate(pParam: &mut SWelsSvcCodingParam) {
     const kfEpsn: f32 = 0.000001;
     let kiNumLayer = (*pParam).iSpatialLayerNum;
     let kfMaxFrameRate = (*pParam).fMaxFrameRate;
@@ -1075,7 +1081,7 @@ pub unsafe fn WelsEncoderApplyFrameRate(pParam: *mut SWelsSvcCodingParam) {
 #[allow(unsafe_code)]
 pub unsafe fn WelsEncoderApplyBitRate(
     pLogCtx: *mut SLogContext,
-    pParam: *mut SWelsSvcCodingParam,
+    pParam: &mut SWelsSvcCodingParam,
     iLayer: i32,
 ) -> i32 {
     let iNumLayers = (*pParam).iSpatialLayerNum;
@@ -1117,7 +1123,7 @@ pub unsafe fn WelsEncoderApplyLTR(
     pLTRValue: *mut SLTRConfig,
 ) -> i32 {
     let mut sConfig: SWelsSvcCodingParam = match ppCtx.as_mut() {
-        Some(pEncContext) => (*ctx_param(std::ptr::addr_of_mut!(**pEncContext))).clone(),
+        Some(pEncContext) => pEncContext.param().clone(),
         None => return 1,
     };
     let mut iNumRefFrame;
@@ -1491,18 +1497,10 @@ pub unsafe fn ParamValidationExt(
             return ENC_RETURN_UNSUPPORTED_PARA;
         }
 
-        CheckProfileSetting(
-            pLogCtx,
-            pCodingParam,
-            i,
-            (*pCodingParam).sSpatialLayers[idx].uiProfileIdc,
-        );
-        CheckLevelSetting(
-            pLogCtx,
-            pCodingParam,
-            i,
-            (*pCodingParam).sSpatialLayers[idx].uiLevelIdc,
-        );
+        let uiProfileIdc = (*pCodingParam).sSpatialLayers[idx].uiProfileIdc;
+        let uiLevelIdc = (*pCodingParam).sSpatialLayers[idx].uiLevelIdc;
+        CheckProfileSetting(pLogCtx, &mut *pCodingParam, i, uiProfileIdc);
+        CheckLevelSetting(pLogCtx, &mut *pCodingParam, i, uiLevelIdc);
 
         // only one MB => single slice
         if kiPicWidth <= 16 && kiPicHeight <= 16 {
@@ -1639,7 +1637,7 @@ pub unsafe fn ParamValidationExt(
 #[allow(unsafe_code)]
 pub unsafe fn CheckProfileSetting(
     pLogCtx: *mut SLogContext,
-    pParam: *mut SWelsSvcCodingParam,
+    pParam: &mut SWelsSvcCodingParam,
     iLayer: i32,
     uiProfileIdc: EProfileIdc,
 ) {
@@ -1689,7 +1687,7 @@ pub unsafe fn CheckProfileSetting(
 #[allow(unsafe_code)]
 pub unsafe fn CheckLevelSetting(
     _pLogCtx: *mut SLogContext,
-    pParam: *mut SWelsSvcCodingParam,
+    pParam: &mut SWelsSvcCodingParam,
     iLayer: i32,
     uiLevelIdc: ELevelIdc,
 ) {
@@ -1713,7 +1711,7 @@ pub unsafe fn CheckLevelSetting(
 #[allow(unsafe_code)]
 pub unsafe fn CheckReferenceNumSetting(
     _pLogCtx: *mut SLogContext,
-    pParam: *mut SWelsSvcCodingParam,
+    pParam: &mut SWelsSvcCodingParam,
     iNumRef: i32,
 ) {
     let iRefUpperBound = if (*pParam).iUsageType == CAMERA_VIDEO_REAL_TIME {
@@ -1736,7 +1734,7 @@ pub unsafe fn CheckReferenceNumSetting(
 #[allow(unsafe_code)]
 pub unsafe fn WelsEncoderApplyBitVaryRang(
     pLogCtx: *mut SLogContext,
-    pParam: *mut SWelsSvcCodingParam,
+    pParam: &mut SWelsSvcCodingParam,
     iRang: i32,
 ) -> i32 {
     let iNumLayers = (*pParam).iSpatialLayerNum;
@@ -2330,14 +2328,14 @@ uiResolutionChangeTimes={}, uIDRReqNum={}, uIDRSentNum={}, uLTRSentNum=NA, iTota
     pub fn UpdateStatistics(&mut self, pBsInfo: &SFrameBSInfo, kiCurrentFrameMs: i64) {
         let pCtx = Self::ctx_ptr(&mut self.m_pEncContext);
         unsafe {
-            if pCtx.is_null() || ctx_param(pCtx).is_null() {
+            if pCtx.is_null() || (*pCtx).param_opt().is_none() {
                 return;
             }
             let kiCurrentFrameTs = pBsInfo.uiTimeStamp;
             (*pCtx).uiLastTimestamp = kiCurrentFrameTs;
             let kiTimeDiff = kiCurrentFrameTs - (*pCtx).iLastStatisticsLogTs;
 
-            let iMaxDid = (*ctx_param(pCtx)).iSpatialLayerNum - 1;
+            let iMaxDid = (*pCtx).param().iSpatialLayerNum - 1;
             for iDid in 0..=iMaxDid {
                 let mut eFrameType = EVideoFrameType::videoFrameTypeSkip;
                 let mut kiCurrentFrameSize = 0;
@@ -2385,20 +2383,29 @@ uiResolutionChangeTimes={}, uIDRReqNum={}, uIDRSentNum={}, uLTRSentNum=NA, iTota
                 } else {
                     26
                 };
+                // **F208 again, and at the same three lines.** The reads of the
+                // parameter block move *above* the `&mut`, not beside it: every one
+                // of them is a `&self` accessor, i.e. a `SharedReadOnly` retag over
+                // `[0x0..0x17f10]` that pops `pStatistics`. A7 adds two more such
+                // reads to this body (`fMaxFrameRate` below), and both are scalars.
+                let kiActualWidth =
+                    (*pCtx).param().sDependencyLayers[iDid as usize].iActualWidth;
+                let kiActualHeight =
+                    (*pCtx).param().sDependencyLayers[iDid as usize].iActualHeight;
+                let kfMaxFrameRate = (*pCtx).param().fMaxFrameRate;
+                let kiStatisticsLogInterval = (*pCtx).iStatisticsLogInterval;
                 let pStatistics =
                     &mut (*pCtx).sEncoderStatistics[iDid as usize];
-                let pSpatialLayerInternalParam =
-                    &(*ctx_param(pCtx)).sDependencyLayers[iDid as usize];
 
                 if pStatistics.uiWidth != 0
                     && pStatistics.uiHeight != 0
-                    && (pStatistics.uiWidth != pSpatialLayerInternalParam.iActualWidth as u32
-                        || pStatistics.uiHeight != pSpatialLayerInternalParam.iActualHeight as u32)
+                    && (pStatistics.uiWidth != kiActualWidth as u32
+                        || pStatistics.uiHeight != kiActualHeight as u32)
                 {
                     pStatistics.uiResolutionChangeTimes += 1;
                 }
-                pStatistics.uiWidth = pSpatialLayerInternalParam.iActualWidth as u32;
-                pStatistics.uiHeight = pSpatialLayerInternalParam.iActualHeight as u32;
+                pStatistics.uiWidth = kiActualWidth as u32;
+                pStatistics.uiHeight = kiActualHeight as u32;
 
                 let kbCurrentFrameSkipped =
                     eFrameType == EVideoFrameType::videoFrameTypeSkip;
@@ -2440,10 +2447,8 @@ uiResolutionChangeTimes={}, uIDRReqNum={}, uIDRSentNum={}, uLTRSentNum=NA, iTota
                 let kiDeltaFrames = (pStatistics.uiInputFrameCount
                     - pStatistics.iLastStatisticsFrameCount)
                     as i32;
-                if kiDeltaFrames as f32
-                    > (*ctx_param(pCtx)).fMaxFrameRate * 2.0
-                {
-                    if kiTimeDiff >= (*pCtx).iStatisticsLogInterval as i64 {
+                if kiDeltaFrames as f32 > kfMaxFrameRate * 2.0 {
+                    if kiTimeDiff >= kiStatisticsLogInterval as i64 {
                         let fTimeDiffSec = kiTimeDiff as f32 / 1000.0;
                         if fTimeDiffSec > 0.0 {
                             pStatistics.fLatestFrameRate = (pStatistics.uiInputFrameCount
@@ -2504,10 +2509,10 @@ uiResolutionChangeTimes={}, uIDRReqNum={}, uIDRSentNum={}, uLTRSentNum=NA, iTota
                     if iValue <= -1 {
                         iValue = 0;
                     }
-                    if iValue == (*ctx_param(pCtx)).uiIntraPeriod as i32 {
+                    if iValue == (*pCtx).param().uiIntraPeriod as i32 {
                         return cmResultSuccess;
                     }
-                    (*ctx_param(pCtx)).uiIntraPeriod = iValue as u32;
+                    (*pCtx).param_mut().uiIntraPeriod = iValue as u32;
                 }
                 EncoderOption::ENCODER_OPTION_SVC_ENCODE_PARAM_BASE => {
                     let sEncodingParam = *(pOption as *const SEncParamBase);
@@ -2603,9 +2608,9 @@ uiResolutionChangeTimes={}, uIDRReqNum={}, uIDRSentNum={}, uLTRSentNum=NA, iTota
                     if iValue <= 0.0 {
                         return cmInitParaError;
                     }
-                    (*ctx_param(pCtx)).fMaxFrameRate =
+                    (*pCtx).param_mut().fMaxFrameRate =
                         WELS_CLIP3(iValue, MIN_FRAME_RATE, MAX_FRAME_RATE);
-                    WelsEncoderApplyFrameRate(ctx_param(pCtx));
+                    WelsEncoderApplyFrameRate((*pCtx).param_mut());
                 }
                 EncoderOption::ENCODER_OPTION_BITRATE => {
                     let pInfo = &*(pOption as *const SBitrateInfo);
@@ -2616,17 +2621,17 @@ uiResolutionChangeTimes={}, uIDRReqNum={}, uIDRSentNum={}, uLTRSentNum=NA, iTota
                     iBitrate = WELS_CLIP3(iBitrate, MIN_BIT_RATE, MAX_BIT_RATE);
                     match pInfo.iLayer {
                         SPATIAL_LAYER_ALL => {
-                            (*ctx_param(pCtx)).iTargetBitrate = iBitrate;
+                            (*pCtx).param_mut().iTargetBitrate = iBitrate;
                         }
                         SPATIAL_LAYER_0 | SPATIAL_LAYER_1 | SPATIAL_LAYER_2
                         | SPATIAL_LAYER_3 => {
-                            (*ctx_param(pCtx)).sSpatialLayers[pInfo.iLayer as usize]
+                            (*pCtx).param_mut().sSpatialLayers[pInfo.iLayer as usize]
                                 .iSpatialBitrate = iBitrate;
                         }
                         _ => return cmInitParaError,
                     }
                     let log_ctx = std::ptr::addr_of_mut!(self.m_pWelsTrace.m_sLogCtx);
-                    if WelsEncoderApplyBitRate(log_ctx, ctx_param(pCtx), pInfo.iLayer as i32)
+                    if WelsEncoderApplyBitRate(log_ctx, (*pCtx).param_mut(), pInfo.iLayer as i32)
                         != 0
                     {
                         return cmInitParaError;
@@ -2641,17 +2646,17 @@ uiResolutionChangeTimes={}, uIDRReqNum={}, uIDRSentNum={}, uLTRSentNum=NA, iTota
                     iBitrate = WELS_CLIP3(iBitrate, MIN_BIT_RATE, MAX_BIT_RATE);
                     match pInfo.iLayer {
                         SPATIAL_LAYER_ALL => {
-                            (*ctx_param(pCtx)).iMaxBitrate = iBitrate;
+                            (*pCtx).param_mut().iMaxBitrate = iBitrate;
                         }
                         SPATIAL_LAYER_0 | SPATIAL_LAYER_1 | SPATIAL_LAYER_2
                         | SPATIAL_LAYER_3 => {
-                            (*ctx_param(pCtx)).sSpatialLayers[pInfo.iLayer as usize]
+                            (*pCtx).param_mut().sSpatialLayers[pInfo.iLayer as usize]
                                 .iMaxSpatialBitrate = iBitrate;
                         }
                         _ => return cmInitParaError,
                     }
                     let log_ctx = std::ptr::addr_of_mut!(self.m_pWelsTrace.m_sLogCtx);
-                    if WelsEncoderApplyBitRate(log_ctx, ctx_param(pCtx), pInfo.iLayer as i32)
+                    if WelsEncoderApplyBitRate(log_ctx, (*pCtx).param_mut(), pInfo.iLayer as i32)
                         != 0
                     {
                         return cmInitParaError;
@@ -2660,10 +2665,10 @@ uiResolutionChangeTimes={}, uIDRReqNum={}, uIDRSentNum={}, uLTRSentNum=NA, iTota
                 EncoderOption::ENCODER_OPTION_RC_MODE => {
                     // 0:quality mode;1:bit-rate mode;2:bitrate limited mode
                     let iValue = *(pOption as *const i32);
-                    (*ctx_param(pCtx)).iRCMode = rc_mode_from_raw(iValue);
+                    (*pCtx).param_mut().iRCMode = rc_mode_from_raw(iValue);
                     // Re-point the dispatch table. Setting the field alone leaves
                     // the encoder running the previous mode's callbacks.
-                    let iRCMode = (*ctx_param(pCtx)).iRCMode;
+                    let iRCMode = (*pCtx).param().iRCMode;
                     // **A6: the second of the two derivations the flip could
                     // not take** — see `ctx_func_list_raw`. `pCtx` here is
                     // `Self::ctx_ptr`'s raw, so `func_list_mut` would mean a
@@ -2676,15 +2681,15 @@ uiResolutionChangeTimes={}, uIDRReqNum={}, uIDRSentNum={}, uLTRSentNum=NA, iTota
                 EncoderOption::ENCODER_OPTION_RC_FRAME_SKIP => {
                     // 0:FRAME-SKIP disabled;1:FRAME-SKIP enabled
                     let bValue = *(pOption as *const bool);
-                    if (*ctx_param(pCtx)).iRCMode != RC_OFF_MODE {
-                        (*ctx_param(pCtx)).bEnableFrameSkip = bValue;
+                    if (*pCtx).param().iRCMode != RC_OFF_MODE {
+                        (*pCtx).param_mut().bEnableFrameSkip = bValue;
                     }
                     // rc off: the setting is accepted and ignored, as in C++.
                 }
                 EncoderOption::ENCODER_PADDING_PADDING => {
                     // 0:disable padding;1:padding
                     let iValue = *(pOption as *const i32);
-                    (*ctx_param(pCtx)).iPaddingFlag = iValue;
+                    (*pCtx).param_mut().iPaddingFlag = iValue;
                 }
                 EncoderOption::ENCODER_LTR_RECOVERY_REQUEST => {
                     let pLTR_Recover_Request = &mut *(pOption as *mut SLTRRecoverRequest);
@@ -2700,7 +2705,7 @@ uiResolutionChangeTimes={}, uIDRReqNum={}, uIDRSentNum={}, uLTRSentNum=NA, iTota
                 }
                 EncoderOption::ENCODER_LTR_MARKING_PERIOD => {
                     let iValue = *(pOption as *const u32);
-                    (*ctx_param(pCtx)).iLtrMarkPeriod = iValue;
+                    (*pCtx).param_mut().iLtrMarkPeriod = iValue;
                 }
                 EncoderOption::ENCODER_OPTION_LTR => {
                     let pLTRValue = pOption as *mut SLTRConfig;
@@ -2715,11 +2720,11 @@ uiResolutionChangeTimes={}, uIDRReqNum={}, uIDRSentNum={}, uLTRSentNum=NA, iTota
                 }
                 EncoderOption::ENCODER_OPTION_ENABLE_SSEI => {
                     let iValue = *(pOption as *const bool);
-                    (*ctx_param(pCtx)).bEnableSSEI = iValue;
+                    (*pCtx).param_mut().bEnableSSEI = iValue;
                 }
                 EncoderOption::ENCODER_OPTION_ENABLE_PREFIX_NAL_ADDING => {
                     let iValue = *(pOption as *const bool);
-                    (*ctx_param(pCtx)).bPrefixNalAddingCtrl = iValue;
+                    (*pCtx).param_mut().bPrefixNalAddingCtrl = iValue;
                 }
                 EncoderOption::ENCODER_OPTION_SPS_PPS_ID_STRATEGY => {
                     let iValue = *(pOption as *const i32);
@@ -2735,7 +2740,7 @@ uiResolutionChangeTimes={}, uIDRReqNum={}, uIDRSentNum={}, uLTRSentNum=NA, iTota
                         _ => {}
                     }
 
-                    let eOld = (*ctx_param(pCtx)).eSpsPpsIdStrategy;
+                    let eOld = (*pCtx).param().eSpsPpsIdStrategy;
                     if ((eNewStrategy as i32 & SPS_LISTING as i32) != 0
                         || (eOld as i32 & SPS_LISTING as i32) != 0)
                         && eOld != eNewStrategy
@@ -2745,7 +2750,7 @@ uiResolutionChangeTimes={}, uIDRReqNum={}, uIDRSentNum={}, uLTRSentNum=NA, iTota
                         return cmInitParaError;
                     }
                     let mut sConfig: SWelsSvcCodingParam =
-                        *ctx_param(pCtx);
+                        *(*pCtx).param();
                     sConfig.eSpsPpsIdStrategy = eNewStrategy;
 
                     if WelsEncoderParamAdjust(&mut self.m_pEncContext, &mut sConfig) != 0 {
@@ -2778,7 +2783,7 @@ uiResolutionChangeTimes={}, uIDRReqNum={}, uIDRSentNum={}, uLTRSentNum=NA, iTota
                     let log_ctx = std::ptr::addr_of_mut!(self.m_pWelsTrace.m_sLogCtx);
                     CheckProfileSetting(
                         log_ctx,
-                        ctx_param(pCtx),
+                        (*pCtx).param_mut(),
                         pProfileInfo.iLayer as i32,
                         pProfileInfo.uiProfileIdc,
                     );
@@ -2793,7 +2798,7 @@ uiResolutionChangeTimes={}, uIDRReqNum={}, uIDRSentNum={}, uLTRSentNum=NA, iTota
                     let log_ctx = std::ptr::addr_of_mut!(self.m_pWelsTrace.m_sLogCtx);
                     CheckLevelSetting(
                         log_ctx,
-                        ctx_param(pCtx),
+                        (*pCtx).param_mut(),
                         pLevelInfo.iLayer as i32,
                         pLevelInfo.uiLevelIdc,
                     );
@@ -2801,7 +2806,7 @@ uiResolutionChangeTimes={}, uIDRReqNum={}, uIDRSentNum={}, uLTRSentNum=NA, iTota
                 EncoderOption::ENCODER_OPTION_NUMBER_REF => {
                     let iValue = *(pOption as *const i32);
                     let log_ctx = std::ptr::addr_of_mut!(self.m_pWelsTrace.m_sLogCtx);
-                    CheckReferenceNumSetting(log_ctx, ctx_param(pCtx), iValue);
+                    CheckReferenceNumSetting(log_ctx, (*pCtx).param_mut(), iValue);
                 }
                 EncoderOption::ENCODER_OPTION_DELIVERY_STATUS => {
                     let pValue = &*(pOption as *const SDeliveryStatus);
@@ -2809,7 +2814,7 @@ uiResolutionChangeTimes={}, uIDRReqNum={}, uIDRSentNum={}, uLTRSentNum=NA, iTota
                 }
                 EncoderOption::ENCODER_OPTION_COMPLEXITY => {
                     let iValue = *(pOption as *const i32);
-                    (*ctx_param(pCtx)).iComplexityMode = match iValue {
+                    (*pCtx).param_mut().iComplexityMode = match iValue {
                         0 => EComplexityMode::LOW_COMPLEXITY,
                         1 => EComplexityMode::MEDIUM_COMPLEXITY,
                         _ => EComplexityMode::HIGH_COMPLEXITY,
@@ -2824,17 +2829,17 @@ uiResolutionChangeTimes={}, uIDRReqNum={}, uIDRSentNum={}, uLTRSentNum=NA, iTota
                 }
                 EncoderOption::ENCODER_OPTION_IS_LOSSLESS_LINK => {
                     let bValue = *(pOption as *const bool);
-                    (*ctx_param(pCtx)).bIsLosslessLink = bValue;
+                    (*pCtx).param_mut().bIsLosslessLink = bValue;
                 }
                 EncoderOption::ENCODER_OPTION_BITS_VARY_PERCENTAGE => {
                     let iValue = *(pOption as *const i32);
-                    (*ctx_param(pCtx)).iBitsVaryPercentage =
+                    (*pCtx).param_mut().iBitsVaryPercentage =
                         WELS_CLIP3(iValue, 0, 100);
                     let log_ctx = std::ptr::addr_of_mut!(self.m_pWelsTrace.m_sLogCtx);
-                    let iRang = (*ctx_param(pCtx)).iBitsVaryPercentage;
+                    let iRang = (*pCtx).param().iBitsVaryPercentage;
                     WelsEncoderApplyBitVaryRang(
                         log_ctx,
-                        ctx_param(pCtx),
+                        (*pCtx).param_mut(),
                         iRang,
                     );
                 }
@@ -2890,25 +2895,25 @@ uiResolutionChangeTimes={}, uIDRReqNum={}, uIDRSentNum={}, uLTRSentNum=NA, iTota
                 }
                 EncoderOption::ENCODER_OPTION_IDR_INTERVAL => {
                     *(pOption as *mut i32) =
-                        (*ctx_param(pCtx)).uiIntraPeriod as i32;
+                        (*pCtx).param().uiIntraPeriod as i32;
                 }
                 EncoderOption::ENCODER_OPTION_SVC_ENCODE_PARAM_EXT => {
-                    let param_ext = (*ctx_param(pCtx)).to_param_ext();
+                    let param_ext = (*pCtx).param().to_param_ext();
                     *(pOption as *mut SEncParamExt) = param_ext;
                 }
                 EncoderOption::ENCODER_OPTION_SVC_ENCODE_PARAM_BASE => {
-                    (*ctx_param(pCtx))
+                    (*pCtx).param()
                         .GetBaseParams(&mut *(pOption as *mut SEncParamBase));
                 }
                 EncoderOption::ENCODER_OPTION_FRAME_RATE => {
-                    *(pOption as *mut f32) = (*ctx_param(pCtx)).fMaxFrameRate;
+                    *(pOption as *mut f32) = (*pCtx).param().fMaxFrameRate;
                 }
                 EncoderOption::ENCODER_OPTION_BITRATE => {
                     let pInfo = &mut *(pOption as *mut SBitrateInfo);
                     if pInfo.iLayer == SPATIAL_LAYER_ALL {
-                        pInfo.iBitrate = (*ctx_param(pCtx)).iTargetBitrate;
+                        pInfo.iBitrate = (*pCtx).param().iTargetBitrate;
                     } else if (pInfo.iLayer as i32) >= 0 && (pInfo.iLayer as i32) < MAX_DEPENDENCY_LAYER {
-                        pInfo.iBitrate = (*ctx_param(pCtx)).sSpatialLayers
+                        pInfo.iBitrate = (*pCtx).param().sSpatialLayers
                             [pInfo.iLayer as usize]
                             .iSpatialBitrate;
                     } else {
@@ -2918,9 +2923,9 @@ uiResolutionChangeTimes={}, uIDRReqNum={}, uIDRSentNum={}, uLTRSentNum=NA, iTota
                 EncoderOption::ENCODER_OPTION_MAX_BITRATE => {
                     let pInfo = &mut *(pOption as *mut SBitrateInfo);
                     if pInfo.iLayer == SPATIAL_LAYER_ALL {
-                        pInfo.iBitrate = (*ctx_param(pCtx)).iMaxBitrate;
+                        pInfo.iBitrate = (*pCtx).param().iMaxBitrate;
                     } else if (pInfo.iLayer as i32) >= 0 && (pInfo.iLayer as i32) < MAX_DEPENDENCY_LAYER {
-                        pInfo.iBitrate = (*ctx_param(pCtx)).sSpatialLayers
+                        pInfo.iBitrate = (*pCtx).param().sSpatialLayers
                             [pInfo.iLayer as usize]
                             .iMaxSpatialBitrate;
                     } else {
@@ -2930,7 +2935,7 @@ uiResolutionChangeTimes={}, uIDRReqNum={}, uIDRSentNum={}, uLTRSentNum=NA, iTota
                 EncoderOption::ENCODER_OPTION_GET_STATISTICS => {
                     let pStatistics = &mut *(pOption as *mut crate::SEncoderStatistics);
                     let iLayerIdx =
-                        ((*ctx_param(pCtx)).iSpatialLayerNum - 1) as usize;
+                        ((*pCtx).param().iSpatialLayerNum - 1) as usize;
                     let pEncStats = &(*pCtx).sEncoderStatistics[iLayerIdx];
 
                     pStatistics.uiWidth = pEncStats.uiWidth;
@@ -2956,7 +2961,7 @@ uiResolutionChangeTimes={}, uIDRReqNum={}, uIDRSentNum={}, uLTRSentNum=NA, iTota
                 }
                 EncoderOption::ENCODER_OPTION_COMPLEXITY => {
                     *(pOption as *mut i32) =
-                        (*ctx_param(pCtx)).iComplexityMode as i32;
+                        (*pCtx).param().iComplexityMode as i32;
                 }
                 // NOTE: C++'s GetOption has **no** ENCODER_OPTION_TRACE_LEVEL case —
                 // it is set-only, and a get falls to `default: return cmInitParaError`.

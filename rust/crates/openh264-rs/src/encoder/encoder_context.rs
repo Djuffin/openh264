@@ -679,29 +679,6 @@ pub fn ctx_mb_index_x(pCtx: &sWelsEncCtx, kiDid: usize) -> *const i16 {
     }
 }
 
-/// The encoder's **coding parameters** — T6.H11, and null before
-/// `WelsInitEncoderExt` builds them, which is what the raw field held.
-///
-/// This is the most-read field in the encoder (256 sites), and every one of them
-/// spelled it `ctx_param(pCtx)` and offset from there; they all spell it this way
-/// now. The `Box`'s address is read without forming a reference to the parameters,
-/// so repeated calls are sibling derivations — which matters because
-/// `WelsEncoderParamAdjust` binds `pOldParam` once and holds it across a dozen
-/// further reaches into the same context.
-///
-/// # Safety
-/// `pCtx` must point to a live encoder context.
-#[inline]
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
-pub unsafe fn ctx_param(pCtx: *mut sWelsEncCtx) -> *mut SWelsSvcCodingParam {
-    // **F71.** `Option::as_mut` is a `Unique` retag over the slot, and every worker
-    // resolves this same field — so two of them doing it at once is a data race even
-    // though neither writes the slot. `Option<Box<T>>` is one pointer wide with
-    // `None` as null, so the slot is read as a pointer *value*: no retag, and the
-    // pointer still carries the heap block's own provenance.
-    std::ptr::read(std::ptr::addr_of!((*pCtx).pSvcParam) as *const *mut SWelsSvcCodingParam)
-}
 
 /// The dispatch table **as a raw pointer, read out of the `Box`'s slot** — the
 /// one derivation A6 could not flip, at its **two** callers.
@@ -731,6 +708,38 @@ pub unsafe fn ctx_param(pCtx: *mut sWelsEncCtx) -> *mut SWelsSvcCodingParam {
 #[allow(unsafe_code)]
 pub unsafe fn ctx_func_list_raw(pCtx: *mut sWelsEncCtx) -> *mut SWelsFuncPtrList {
     std::ptr::read(std::ptr::addr_of!((*pCtx).pFuncList) as *const *mut SWelsFuncPtrList)
+}
+
+/// The coding parameters **as a raw pointer, read out of the `Box`'s slot** — the
+/// root the twenty-six per-layer *cursors* are taken from.
+///
+/// **Why the cursors could not come off `param_mut`, and Miri is what said so.**
+/// `sSpatialLayers[d]` / `sDependencyLayers[d]` are held as raw cursors across
+/// calls that reach the parameters again — `InitDqLayers` derives two and then
+/// calls `WelsGenerateNewSps`, which re-derives the same layer; `RequestMemorySvc`
+/// holds one across `AcquireLayersNals`. Under `ctx_param` that worked, because
+/// the accessor read the slot as a *value* and every `addr_of_mut!` off it
+/// inherited the block's own tag. [`param_mut`](sWelsEncCtx::param_mut) is a real
+/// `&mut`: **each call is a fresh `Unique` retag over the whole 0x4d0-byte
+/// block**, so the second call pops the first call's cursors, and the read that
+/// follows is through a dead tag. A7's first Miri run refused exactly that, at
+/// `encoder_ext.rs:1269` and again at `:808`; no byte gate saw either.
+///
+/// So the cursors keep F71's spelling and this is where it lives. Everything that
+/// merely reads or writes a field goes through [`param`](sWelsEncCtx::param) /
+/// [`param_mut`](sWelsEncCtx::param_mut) — 230 of A7's 258 sites do.
+///
+/// **Single-threaded only.** Every caller is init, per-frame bookkeeping or the
+/// C-API surface; the fork reads parameters through `param` and writes none.
+///
+/// # Safety
+/// `pCtx`'s parameter block must be built (`WelsInitEncoderExt`); the return is
+/// null before that, exactly as the raw field was.
+#[inline]
+// unsafe-cat: port-raw(Phase 9)
+#[allow(unsafe_code)]
+pub unsafe fn ctx_param_raw(pCtx: &sWelsEncCtx) -> *mut SWelsSvcCodingParam {
+    std::ptr::read(std::ptr::addr_of!(pCtx.pSvcParam) as *const *mut SWelsSvcCodingParam)
 }
 
 /// Dependency layer `kiDid`'s reference list **as a raw pointer, read out of the
@@ -774,7 +783,7 @@ pub unsafe fn ctx_ref_list_raw(pCtx: &sWelsEncCtx, kiDid: usize) -> *mut SRefLis
 #[allow(unsafe_code)]
 pub unsafe fn ctx_dq_layer(pCtx: *mut sWelsEncCtx, kiDid: usize) -> *mut SDqLayer {
     // **F71.** No `&mut` to the `Vec` and no reference to the slot. See the family
-    // note above `ctx_param`.
+    // note above `ctx_func_list_raw`.
     let arr = std::ptr::addr_of!((*pCtx).ppDqLayerList);
     if kiDid >= (*arr).len() {
         return std::ptr::null_mut();
@@ -1089,6 +1098,54 @@ impl sWelsEncCtx {
         )
     }
 
+    /// The **coding parameters and the three parameter-set arrays, from one
+    /// borrow** — §4.6's combined accessor for `paraset_strategy.rs`.
+    ///
+    /// `WelsGenerateNewSps` and `FindExistingSps` build an SPS from a layer's
+    /// configuration *into* the SPS array, and `WelsInitSps` writes
+    /// `uiLevelIdc` back into that configuration on the way — so the parameter
+    /// block and the arrays are mutably live in the same statement. Four fields,
+    /// one owner; `ctx_paraset_arrays` is the same move one field narrower, and
+    /// T9.H2's ruling on it applies here verbatim: "the shape was never the
+    /// problem; the call count was".
+    #[inline]
+    pub fn param_and_paraset_arrays_mut(
+        &mut self,
+    ) -> (&mut SWelsSvcCodingParam, &mut [SWelsSPS], &mut [SSubsetSps], &mut [SWelsPPS]) {
+        let sWelsEncCtx { pSvcParam, pSpsArray, pSubsetArray, pPPSArray, .. } = self;
+        (
+            pSvcParam
+                .as_deref_mut()
+                .expect("the coding parameters are built by WelsInitEncoderExt"),
+            pSpsArray,
+            pSubsetArray,
+            pPPSArray,
+        )
+    }
+
+    /// The **coding parameters and one layer's rate-control state, from one
+    /// borrow** — §4.6's combined accessor, and the one A7 could not do without.
+    ///
+    /// Nine bodies in `rc.rs` have the same shape: bind the layer's
+    /// `sSpatialLayers[did]` / `sDependencyLayers[did]` config, then write the
+    /// layer's rate-control state from it. Under the raw accessor the config
+    /// borrow was of the *parameter block's* allocation and the rate controller's
+    /// `&mut` was of the context, so the two never met; `param` borrows the
+    /// context, so they do. Two fields, one owner, one call.
+    #[inline]
+    pub fn param_and_rc_at_mut(
+        &mut self,
+        kiDid: usize,
+    ) -> (&SWelsSvcCodingParam, &mut SWelsSvcRc) {
+        let sWelsEncCtx { pSvcParam, pWelsSvcRc, .. } = self;
+        (
+            pSvcParam
+                .as_deref()
+                .expect("the coding parameters are built by WelsInitEncoderExt"),
+            &mut pWelsSvcRc[kiDid],
+        )
+    }
+
     /// The **video-analysis block and one layer's rate-control state, from one
     /// borrow** — §4.6's combined accessor for `AnalyzePictureComplexity`.
     ///
@@ -1201,6 +1258,56 @@ impl sWelsEncCtx {
             return std::ptr::null_mut();
         }
         self.pFrameBs.as_ptr() as *mut u8
+    }
+
+    /// The encoder's **coding parameters** — T6.H1, `pCtx->pSvcParam`, and the
+    /// most-reached field on the struct: 258 textual sites when A7 opened.
+    ///
+    /// **Three accessors, because the sites ask two different questions.** Some
+    /// 220 of them dereference the answer unconditionally, exactly as the C++
+    /// does; 35 open with `if ctx_param(..).is_null()`, which is asking whether
+    /// `WelsInitEncoderExt` has run. So the unconditional readers get a plain
+    /// reference and [`param_opt`](Self::param_opt) keeps the guards' shape —
+    /// A2's ruling for `rc_at`, at ten times the call count.
+    ///
+    /// # Panics
+    /// If the parameter block is not built. Every caller of this accessor
+    /// dereferenced the raw one without asking, so the panic replaces a null
+    /// dereference, not a branch; the callers that *do* ask keep asking, through
+    /// [`param_opt`](Self::param_opt).
+    #[inline]
+    pub fn param(&self) -> &SWelsSvcCodingParam {
+        self.pSvcParam
+            .as_deref()
+            .expect("the coding parameters are built by WelsInitEncoderExt")
+    }
+
+    /// [`param`](Self::param) for the writers: init, `SetOption`, and the
+    /// per-layer bookkeeping in `ref_list_mgr_svc.rs` / `encoder_context.rs`.
+    ///
+    /// **Single-threaded only** — see [`rc_at_mut`](Self::rc_at_mut). A7's
+    /// classification found no diagonal here either: every body that writes
+    /// through the parameters holds the context by `&mut sWelsEncCtx` or is on
+    /// the C-API/init path, and every one of the fork-reachable bodies —
+    /// `RcCalculateMbQp`, `RcJudgeBaseUsability`, `WelsRcMbInitDisable` and
+    /// `svc_encode_slice.rs`'s slice bodies — only reads.
+    ///
+    /// # Panics
+    /// As [`param`](Self::param).
+    #[inline]
+    pub fn param_mut(&mut self) -> &mut SWelsSvcCodingParam {
+        self.pSvcParam
+            .as_deref_mut()
+            .expect("the coding parameters are built by WelsInitEncoderExt")
+    }
+
+    /// [`param`](Self::param) **as the question the thirty-five guards ask** —
+    /// "has `WelsInitEncoderExt` built the parameters yet?". The raw accessor
+    /// answered null and they asked `is_null()`; this is the same branch with
+    /// the question in the type.
+    #[inline]
+    pub fn param_opt(&self) -> Option<&SWelsSvcCodingParam> {
+        self.pSvcParam.as_deref()
     }
 
     /// The encoder's **kernel dispatch table** — T6.I1, `pCtx->pFuncList`, and
@@ -1337,12 +1444,12 @@ pub struct sWelsEncCtx {
     /// would stay raw and go to Phase 8. It is not. `WelsInitEncoderExt` calls
     /// `AllocCodingParam` to take a block **from the context's own `pMemAlign`**, and
     /// then *copies* the caller's parameters into it by value
-    /// (`*ctx_param(pCtx) = *pCodingParam`); `WelsUninitEncoderExt` frees it.
+    /// (`*pCtx.param_mut() = *pCodingParam`); `WelsUninitEncoderExt` frees it.
     /// The api object never hands the context a pointer to anything it owns — the
     /// only other writers in the tree are unit-test fixtures. The context is the sole
     /// owner, and now says so.
     ///
-    /// Resolve it with [`ctx_param`]. `None` before `WelsInitEncoderExt` runs.
+    /// Resolve it with [`sWelsEncCtx::param`]. `None` before `WelsInitEncoderExt` runs.
     pub pSvcParam: Option<Box<SWelsSvcCodingParam>>,
     pub iMvRange: i32,
     /// The motion-vector-difference cost table — **T6.H9, and plan item P11 landing.**
@@ -1884,19 +1991,23 @@ pub unsafe fn WelsInitBGDFunc(
 /// Initializes encoder compute kernel function pointers.
 ///
 /// # Safety
-/// `pEncCtx` and `pParam` must be valid non-null pointers.
+/// `pEncCtx` must point to a live encoder context whose parameters are built.
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe fn InitFunctionPointers(
     pEncCtx: &mut sWelsEncCtx,
-    pParam: *mut SWelsSvcCodingParam,
     _uiCpuFlag: u32,
 ) -> i32 {
     // A third arm testing the table for null was here; T6.I1 made it an owned
     // `Box`, so there is no null to test.
     // T9.H: the `pEncCtx.is_null()` disjunct is gone — a `&mut sWelsEncCtx`
     // cannot be null and every caller now holds one. The rest is unchanged.
-    if pParam.is_null() {
+    // **A7: the `pParam` argument is gone** — T9.G6's note above this call in
+    // `encoder_ext.rs` said the argument was hoisted because "the call takes the
+    // context retag and this argument reads through the same context", which is
+    // F192's shape written out. The callee holds the context, so it derives the
+    // parameters itself and there is no second route left to hoist.
+    if pEncCtx.param_opt().is_none() {
         return ENC_RETURN_SUCCESS;
     }
     // **T6.I2.** One `&mut` for the whole function, derived from the owner once —
@@ -1908,10 +2019,17 @@ pub unsafe fn InitFunctionPointers(
     // mode, for `WelsInitSCDPskipFunc`'s argument — is lifted above the table's
     // `&mut`. Under the raw accessor the two coexisted silently; under the flip
     // the compiler asks, and the answer is a scalar copied one statement earlier.
-    let kiComplexityMode = (*ctx_param(pEncCtx)).iComplexityMode as i32;
+    let kiComplexityMode = pEncCtx.param().iComplexityMode as i32;
+    let kbEnableBackgroundDetection = pEncCtx.param().bEnableBackgroundDetection;
+    let kbEnableSceneChangeDetect = pEncCtx.param().bEnableSceneChangeDetect;
+    let kiEntropyCodingModeFlag = pEncCtx.param().iEntropyCodingModeFlag;
+    let kiRCMode = pEncCtx.param().iRCMode;
+    let keSpsPpsIdStrategy = pEncCtx.param().eSpsPpsIdStrategy;
+    let kbSimulcastAVC = pEncCtx.param().bSimulcastAVC;
+    let kiSpatialLayerNum = pEncCtx.param().iSpatialLayerNum;
+    let bScreenContent = pEncCtx.param().iUsageType
+        == crate::api::codec_api::EUsageType::SCREEN_CONTENT_REAL_TIME;
     let fl: &mut SWelsFuncPtrList = pEncCtx.func_list_mut();
-
-    let bScreenContent = (*pParam).iUsageType == crate::api::codec_api::EUsageType::SCREEN_CONTENT_REAL_TIME;
 
     // `encoder.cpp:193` installed `sExpandPicFunc` here. T4b.3b deleted the table:
     // the call it fed now names its two kernels directly. The history is worth one
@@ -1929,11 +2047,11 @@ pub unsafe fn InitFunctionPointers(
     /* sad, satd, average */
     crate::encoder::sample::WelsInitSampleSadFunc(&mut *fl, _uiCpuFlag);
 
-    WelsInitBGDFunc(&mut *fl, (*pParam).bEnableBackgroundDetection);
+    WelsInitBGDFunc(&mut *fl, kbEnableBackgroundDetection);
     crate::encoder::svc_mode_decision::WelsInitSCDPskipFunc(
         &mut *fl,
         bScreenContent
-            && (*pParam).bEnableSceneChangeDetect
+            && kbEnableSceneChangeDetect
             && kiComplexityMode
                 < (crate::api::codec_api::ECOMPLEXITY_MODE::HIGH_COMPLEXITY as i32),
     );
@@ -1943,7 +2061,7 @@ pub unsafe fn InitFunctionPointers(
 
     /* Motion compensation */
     crate::common::mc::InitMcFunc(&mut fl.sMcFuncs, _uiCpuFlag);
-    InitCoeffFunc(&mut *fl, _uiCpuFlag, (*pParam).iEntropyCodingModeFlag);
+    InitCoeffFunc(&mut *fl, _uiCpuFlag, kiEntropyCodingModeFlag);
 
     crate::encoder::encode_mb_aux::WelsInitEncodingFuncs(&mut *fl, _uiCpuFlag);
     crate::encoder::decode_mb_aux::WelsInitReconstructionFuncs(&mut *fl, _uiCpuFlag);
@@ -1960,7 +2078,7 @@ pub unsafe fn InitFunctionPointers(
 
     crate::encoder::rc::WelsRcInitFuncPointers(
         &mut fl.pfRc,
-        (*pParam).iRCMode,
+        kiRCMode,
     );
 
     // `WelsBlockFuncInit(&mut fl.pfSetNZCZero, ..)` stood here — the slot and
@@ -1968,7 +2086,7 @@ pub unsafe fn InitFunctionPointers(
 
     crate::encoder::md::InitFillNeighborCacheInterFunc(
         &mut *fl,
-        (*pParam).bEnableBackgroundDetection as i32,
+        kbEnableBackgroundDetection as i32,
     );
 
     // encoder.cpp:227. Only CONSTANT_ID and INCREASING_ID are ported, so this returns
@@ -1982,9 +2100,9 @@ pub unsafe fn InitFunctionPointers(
     // `ParasetIdKind`, and it cannot lag the live parameter — see the type's doc.
     fl.pParametersetStrategy =
         crate::encoder::paraset_strategy::CreateParametersetStrategy(
-            (*pParam).eSpsPpsIdStrategy,
-            (*pParam).bSimulcastAVC,
-            (*pParam).iSpatialLayerNum,
+            keSpsPpsIdStrategy,
+            kbSimulcastAVC,
+            kiSpatialLayerNum,
         );
     if fl.pParametersetStrategy.is_none() {
         return ENC_RETURN_MEMALLOCERR;
@@ -2023,7 +2141,7 @@ unsafe fn InitCoeffFunc(
 pub unsafe fn UpdateFrameNum(pEncCtx: &mut sWelsEncCtx, kiDidx: i32) {
     // T9.H: the `pEncCtx.is_null()` disjunct is gone — a `&mut sWelsEncCtx`
     // cannot be null and every caller now holds one. The rest is unchanged.
-    if ctx_param(pEncCtx).is_null() || ctx_sps(pEncCtx).is_null() {
+    if pEncCtx.param_opt().is_none() || ctx_sps(pEncCtx).is_null() {
         return;
     }
     // T9.G4: the `ctx_sps` read below is hoisted above the cursor rather than left
@@ -2031,7 +2149,7 @@ pub unsafe fn UpdateFrameNum(pEncCtx: &mut sWelsEncCtx, kiDidx: i32) {
     // `ctx_sps` is null-guarded above, so reading it unconditionally is pure — and
     // it is the whole-context call this body used to make with a cursor live.
     let max_frame_num_minus1 = (1 << (*ctx_sps(pEncCtx)).uiLog2MaxFrameNum) - 1;
-    let pParamInternal = std::ptr::addr_of_mut!((*ctx_param(pEncCtx)).sDependencyLayers[kiDidx as usize]);
+    let pParamInternal = std::ptr::addr_of_mut!((*ctx_param_raw(pEncCtx)).sDependencyLayers[kiDidx as usize]);
     let mut bNeedFrameNumIncreasing = false;
 
     if pEncCtx.eLastNalPriority[kiDidx as usize] != EWelsNalRefIdc::NRI_PRI_LOWEST {
@@ -2058,7 +2176,7 @@ pub unsafe fn UpdateFrameNum(pEncCtx: &mut sWelsEncCtx, kiDidx: i32) {
 pub unsafe fn LoadBackFrameNum(pEncCtx: &mut sWelsEncCtx, kiDidx: i32) {
     // T9.H: the `pEncCtx.is_null()` disjunct is gone — a `&mut sWelsEncCtx`
     // cannot be null and every caller now holds one. The rest is unchanged.
-    if ctx_param(pEncCtx).is_null() || ctx_sps(pEncCtx).is_null() {
+    if pEncCtx.param_opt().is_none() || ctx_sps(pEncCtx).is_null() {
         return;
     }
     // T9.G4: the `ctx_sps` read below is hoisted above the cursor rather than left
@@ -2066,7 +2184,7 @@ pub unsafe fn LoadBackFrameNum(pEncCtx: &mut sWelsEncCtx, kiDidx: i32) {
     // `ctx_sps` is null-guarded above, so reading it unconditionally is pure — and
     // it is the whole-context call this body used to make with a cursor live.
     let max_frame_num_minus1 = (1 << (*ctx_sps(pEncCtx)).uiLog2MaxFrameNum) - 1;
-    let pParamInternal = std::ptr::addr_of_mut!((*ctx_param(pEncCtx)).sDependencyLayers[kiDidx as usize]);
+    let pParamInternal = std::ptr::addr_of_mut!((*ctx_param_raw(pEncCtx)).sDependencyLayers[kiDidx as usize]);
     let mut bNeedFrameNumIncreasing = false;
 
     if pEncCtx.eLastNalPriority[kiDidx as usize] != EWelsNalRefIdc::NRI_PRI_LOWEST {
@@ -2121,7 +2239,7 @@ pub unsafe fn InitFrameCoding(
     // T9.H4: the `is_null()` disjunct that opened this guard is gone — a
     // `&mut sWelsEncCtx` cannot be null, and every caller now holds one. The
     // remaining conditions are unchanged.
-    if ctx_param(pEncCtx).is_null() || ctx_sps(pEncCtx).is_null() {
+    if pEncCtx.param_opt().is_none() || ctx_sps(pEncCtx).is_null() {
         return;
     }
     // T9.G4, with `UpdateFrameNum`'s: `iLog2MaxPocLsb` is hoisted above the cursor
@@ -2134,7 +2252,7 @@ pub unsafe fn InitFrameCoding(
     let max_poc_boundary = (1 << (*ctx_sps(pEncCtx)).iLog2MaxPocLsb) - 2;
 
     if keFrameType == EVideoFrameType::videoFrameTypeP {
-        let pParamInternal = std::ptr::addr_of_mut!((*ctx_param(pEncCtx)).sDependencyLayers[kiDidx as usize]);
+        let pParamInternal = std::ptr::addr_of_mut!((*ctx_param_raw(pEncCtx)).sDependencyLayers[kiDidx as usize]);
         (*pParamInternal).iFrameIndex += 1;
 
         if (*pParamInternal).iPOC < max_poc_boundary {
@@ -2149,7 +2267,7 @@ pub unsafe fn InitFrameCoding(
         pEncCtx.eSliceType = EWelsSliceType::P_SLICE;
         pEncCtx.eNalPriority = EWelsNalRefIdc::NRI_PRI_HIGH;
     } else if keFrameType == EVideoFrameType::videoFrameTypeIDR {
-        let pParamInternal = std::ptr::addr_of_mut!((*ctx_param(pEncCtx)).sDependencyLayers[kiDidx as usize]);
+        let pParamInternal = std::ptr::addr_of_mut!((*ctx_param_raw(pEncCtx)).sDependencyLayers[kiDidx as usize]);
         (*pParamInternal).iFrameNum = 0;
         (*pParamInternal).iPOC = 0;
         (*pParamInternal).bEncCurFrmAsIdrFlag = false;
@@ -2161,7 +2279,7 @@ pub unsafe fn InitFrameCoding(
 
         (*pParamInternal).iCodingIndex = 0;
     } else if keFrameType == EVideoFrameType::videoFrameTypeI {
-        let pParamInternal = std::ptr::addr_of_mut!((*ctx_param(pEncCtx)).sDependencyLayers[kiDidx as usize]);
+        let pParamInternal = std::ptr::addr_of_mut!((*ctx_param_raw(pEncCtx)).sDependencyLayers[kiDidx as usize]);
         if (*pParamInternal).iPOC < max_poc_boundary {
             (*pParamInternal).iPOC += 2;
         } else {
@@ -2190,21 +2308,32 @@ pub unsafe fn DecideFrameType(
 ) -> EVideoFrameType {
     // T9.H: the `pEncCtx.is_null()` disjunct is gone — a `&mut sWelsEncCtx`
     // cannot be null and every caller now holds one. The rest is unchanged.
-    if ctx_param(pEncCtx).is_null() {
+    if pEncCtx.param_opt().is_none() {
         return EVideoFrameType::videoFrameTypeInvalid;
     }
-    let pSvcParam = ctx_param(pEncCtx);
-    let pParamInternal = std::ptr::addr_of_mut!((*pSvcParam).sDependencyLayers[kiDidx as usize]);
+    // A7, §4.6 reorder: every parameter field this body reads is a scalar, so they
+    // come out first and the block's `&mut` is over by the time the video-analysis
+    // and reference-list readers are called. `pParamInternal` stays a raw cursor
+    // (F71's asymmetry: `addr_of_mut!` inherits the parent's tag rather than
+    // minting a child, so a later shared reader cannot pop it) and no `param`
+    // call follows it in this body.
+    let kiUsageType = pEncCtx.param().iUsageType;
+    let kbSceneChangeDetect = pEncCtx.param().bEnableSceneChangeDetect;
+    let kiSpatialLayerNum = pEncCtx.param().iSpatialLayerNum;
+    let kbEnableLtr = pEncCtx.param().bEnableLongTermReference;
+    let kiLTRRefNum = pEncCtx.param().iLTRRefNum;
+    let pParamInternal =
+        std::ptr::addr_of_mut!((*ctx_param_raw(pEncCtx)).sDependencyLayers[kiDidx as usize]);
     let mut iFrameType: EVideoFrameType;
     let mut bSceneChangeFlag = false;
 
-    if (*pSvcParam).iUsageType == EUsageType::SCREEN_CONTENT_REAL_TIME {
+    if kiUsageType == EUsageType::SCREEN_CONTENT_REAL_TIME {
         let pVaa = pEncCtx.vaa();
         let vaa_idr = pVaa.is_some_and(|v| v.bIdrPeriodFlag);
 
-        if !(*pSvcParam).bEnableSceneChangeDetect
+        if !kbSceneChangeDetect
             || vaa_idr
-            || ((kiSpatialNum as i32) < (*pSvcParam).iSpatialLayerNum)
+            || ((kiSpatialNum as i32) < kiSpatialLayerNum)
         {
             bSceneChangeFlag = false;
         } else if let Some(pVaa) = pVaa {
@@ -2213,17 +2342,17 @@ pub unsafe fn DecideFrameType(
 
         if vaa_idr
             || (*pParamInternal).bEncCurFrmAsIdrFlag
-            || (!(*pSvcParam).bEnableLongTermReference && bSceneChangeFlag && !bSkipFrameFlag)
+            || (!kbEnableLtr && bSceneChangeFlag && !bSkipFrameFlag)
         {
             iFrameType = EVideoFrameType::videoFrameTypeIDR;
-        } else if (*pSvcParam).bEnableLongTermReference
+        } else if kbEnableLtr
             && (bSceneChangeFlag
                 || pVaa.is_some_and(|v| v.eSceneChangeIdc == ESceneChangeIdc::LARGE_CHANGED_SCENE))
         {
             let mut iActualLtrcount = 0;
             {
                 if let Some(ref_list_0) = pEncCtx.ref_list(0) {
-                    for i in 0..(*pSvcParam).iLTRRefNum {
+                    for i in 0..kiLTRRefNum {
                         let Some(id) = ref_list_0.pLongRefList[i as usize] else {
                             continue;
                         };
@@ -2234,7 +2363,7 @@ pub unsafe fn DecideFrameType(
                     }
                 }
             }
-            if iActualLtrcount == (*pSvcParam).iLTRRefNum && bSceneChangeFlag {
+            if iActualLtrcount == kiLTRRefNum && bSceneChangeFlag {
                 iFrameType = EVideoFrameType::videoFrameTypeIDR;
             } else {
                 iFrameType = EVideoFrameType::videoFrameTypeP;
@@ -2254,9 +2383,9 @@ pub unsafe fn DecideFrameType(
         let pVaa = pEncCtx.vaa();
         let vaa_idr = pVaa.is_some_and(|v| v.bIdrPeriodFlag);
 
-        if !(*pSvcParam).bEnableSceneChangeDetect
+        if !kbSceneChangeDetect
             || vaa_idr
-            || ((kiSpatialNum as i32) < (*pSvcParam).iSpatialLayerNum)
+            || ((kiSpatialNum as i32) < kiSpatialLayerNum)
             || ((*pParamInternal).iFrameIndex < (VGOP_SIZE << 1))
         {
             bSceneChangeFlag = false;
@@ -2469,9 +2598,10 @@ mod tests {
         // than a weaker assertion. Its read half survives in the interleaved
         // `held` list below, which takes a `vaa_ptr` cursor alongside every other
         // and reads through it after all of them exist.
-        siblings!("ctx_param", ctx_param(p),
-            |q: *mut SWelsSvcCodingParam| (*q).iPicWidth = 320,
-            |q: *mut SWelsSvcCodingParam| (*q).iPicWidth == 320);
+        // `ctx_param` had a row here until A7. `param`/`param_mut` are references
+        // now, refereed by the borrow checker like every other row this list has
+        // lost: two derivations cannot coexist, and the compiler says so at the
+        // call rather than Miri saying so at run time.
         // `ctx_ref_list` had a row here until A3 — `ref_list` returns
         // `Option<&SRefList>` now, so it joins the references above: no sibling
         // property to assert, and the borrow checker referees the coexistences
@@ -2505,7 +2635,7 @@ mod tests {
                 // at T9.H3 (deleted with the raw family) — a real reference
                 // cannot be *held* alongside the others, which is the point.
                 (*p).mvd_cost_origin().cast(),
-                (*p).vaa_ptr().cast(), ctx_param(p).cast(),
+                (*p).vaa_ptr().cast(),
                 ctx_dq_layer(p, 0).cast(), (*p).frame_bs().cast(),
             ]
         };
@@ -3108,7 +3238,7 @@ mod tests {
             // aims the field at a stack one — it reads the context's back out.
             ctx.pSvcParam = Some(Box::new(param.clone()));
 
-            let ret = InitFunctionPointers(&mut ctx, &mut param, 0);
+            let ret = InitFunctionPointers(&mut ctx, 0);
             assert_eq!(ret, ENC_RETURN_SUCCESS);
 
             // Each assertion reads the table back through its owner rather than

@@ -17,10 +17,28 @@ READERS = ["rc", "rc_at", "mvd_cost_table", "mvd_cost_origin", "frame_bs",
            # context the same way the readers do.
            "vaa_ref_list_and_ltr_mut", "vaa_and_rc_at_mut",
            # A6 (`ctx_func_list`): the dispatch table's reader, and its writer.
-           "func_list", "func_list_mut"]
+           "func_list", "func_list_mut",
+           # A7 (`ctx_param`): the coding parameters — the reader, the writer, the
+           # guard's question, and the two combined accessors A7 minted.
+           "param", "param_mut", "param_opt",
+           "param_and_rc_at_mut", "param_and_paraset_arrays_mut",
+           # …and the two raw roots that still take the context by reference, so
+           # they retag it exactly as the readers above do.
+           "ctx_param_raw", "ctx_ref_list_raw"]
 rd = re.compile(r"\.(%s)\s*\(" % "|".join(READERS))
 # a Unique retag into the context through a raw
 uq = re.compile(r"&mut\s*\(\*(p\w*Ctx\w*)\)\.|addr_of_mut!\(\(\*(p\w*Ctx\w*)\)\.")
+# Bodies read by hand and cleared, with the reason. A body earns a line here only
+# when its `&mut`-shaped derivation provably cannot be live across the reader —
+# the scanner is a line matcher and cannot see argument-position temporaries.
+CLEARED = {
+    # A7: the two uniques are `&mut (*pCtx).sLogCtx` in the argument lists of
+    # `ParamValidationExt` and `GetMultipleThreadIdc`. Each dies at the end of its
+    # own statement, long before the `param_mut` at :766; and `pOldParam` itself is
+    # unused on the branch that reaches the reader at :921 (the reset branch, which
+    # destroys the context and re-derives `pCtx`), which is why borrowck accepts it.
+    ("wels_encoder_ext.rs", "WelsEncoderParamAdjust"),
+}
 hits = []
 for f in sorted(glob.glob("src/**/*.rs", recursive=True)):
     src = open(f).read().split("\n")
@@ -42,6 +60,9 @@ for f in sorted(glob.glob("src/**/*.rs", recursive=True)):
         hits.append((f, name, uqs, rds))
 bad = 0
 for f, name, u, r in hits:
+    if (f.split("/")[-1], name) in CLEARED:
+        print("cleared  %-24s %-38s see CLEARED in this file" % (f.split("/")[-1], name))
+        continue
     # A candidate is only a HAZARD if some reader call precedes a `&mut`-shaped
     # derivation that is still live afterwards. The cheap, sound-enough screen is
     # "a reader line sits at or after the first unique line" — anything else is

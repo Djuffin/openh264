@@ -87,7 +87,7 @@ pub use crate::encoder::encoder_context::sWelsEncCtx;
 // accessors. Field spellings only — no body in this file is touched, and the
 // thread machinery is Phase 7's.
 use crate::encoder::encoder_context::{
-    ctx_dq_layer, ctx_param,
+    ctx_dq_layer,
 };
 
 // ============================================================================
@@ -598,10 +598,11 @@ pub unsafe fn DynamicAdjustSlicing(
     let mut iRunLen = [0i32; MAX_THREADS_NUM];
     let mut iSliceIdx: i32;
 
-    let pSvcParam = ctx_param(pCtx);
-    if pSvcParam.is_null() {
+    // A7: the null test went with the raw — `param_opt` is the question now, and
+    // this body's callers all run after `WelsInitEncoderExt`.
+    let Some(pSvcParam) = pCtx.param_opt() else {
         return;
-    }
+    };
 
     let rc_mode = (*pSvcParam).iRCMode;
     let mut iNumMbInEachGom = 0i32;
@@ -727,17 +728,18 @@ pub unsafe fn DynamicAdjustSlicePEncCtxAll(pCurDq: &mut SDqLayer, pRunLength: *m
 #[allow(unsafe_code)]
 pub unsafe fn RequestMtResource(
     ppCtx: *mut *mut sWelsEncCtx,
-    pCodingParam: *mut crate::encoder::param_svc::SWelsSvcCodingParam,
     iCountBsLen: i32,
     _iMaxSliceBufferSize: i32,
     bDynamicSlice: bool,
 ) -> i32 {
-    if ppCtx.is_null() || (*ppCtx).is_null() || pCodingParam.is_null() || iCountBsLen <= 0 {
+    // A7: the `pCodingParam` argument is gone — see `InitFunctionPointers`. The
+    // caller held it as a `&mut` across this call, which Miri refused.
+    if ppCtx.is_null() || (*ppCtx).is_null() || iCountBsLen <= 0 {
         return 1;
     }
 
     let pCtx = *ppCtx;
-    let iThreadNum = (*pCodingParam).iMultipleThreadIdc as i32;
+    let iThreadNum = (**ppCtx).param().iMultipleThreadIdc as i32;
 
     if iThreadNum <= 0 {
         return 1;
@@ -1018,18 +1020,28 @@ pub unsafe fn AdjustEnhanceLayer(pCtx: &mut sWelsEncCtx, iCurDid: i32) -> i32 {
         return 0;
     }
 
-    let pSvcParam = ctx_param(pCtx);
-    if pSvcParam.is_null() {
+    // A7: the null test went with the raw — see `param_opt`.
+    if pCtx.param_opt().is_none() {
         return 0;
     }
+    // A7, §4.6 reorder: the layer's slice mode and the thread count are scalars, so
+    // the parameter borrow does not have to span `current_layer`'s claim.
+    let kPrevSliceArg = if iCurDid > 0 && (iCurDid as usize - 1) < MAX_SPATIAL_LAYER_NUM {
+        let a = &pCtx.param().sSpatialLayers[iCurDid as usize - 1].sSliceArgument;
+        Some((a.uiSliceMode, a.uiSliceNum))
+    } else {
+        None
+    };
+    let kiMultipleThreadIdc = pCtx.param().iMultipleThreadIdc;
 
     let kbModelingFromSpatial = (*current_layer(pCtx)).pRefLayer.is_some()
-        && iCurDid > 0
-        && (iCurDid as usize - 1 < MAX_SPATIAL_LAYER_NUM)
-        && ((*pSvcParam).sSpatialLayers[iCurDid as usize - 1].sSliceArgument.uiSliceMode
-            == SliceMode::SM_FIXEDSLCNUM_SLICE)
-        && ((*pSvcParam).iMultipleThreadIdc as u32
-            >= (*pSvcParam).sSpatialLayers[iCurDid as usize - 1].sSliceArgument.uiSliceNum);
+        && match kPrevSliceArg {
+            Some((uiSliceMode, uiSliceNum)) => {
+                uiSliceMode == SliceMode::SM_FIXEDSLCNUM_SLICE
+                    && kiMultipleThreadIdc as u32 >= uiSliceNum
+            }
+            None => false,
+        };
 
     let iNeedAdj: i32;
     if kbModelingFromSpatial {
@@ -1512,7 +1524,7 @@ pub unsafe fn EncodeFixedSlicesForked(pCtx: &mut sWelsEncCtx, kiSliceCount: i32)
     if kiSliceCount <= 0 || pCtx.pSliceThreading.is_null() {
         return ENC_RETURN_SUCCESS;
     }
-    let bRecordsTime = !ctx_param(pCtx).is_null() && (*ctx_param(pCtx)).bUseLoadBalancing;
+    let bRecordsTime = pCtx.param_opt().is_some() && pCtx.param().bUseLoadBalancing;
     let iWidth = ForkWidth(pCtx, kiSliceCount);
 
     // One handle per worker, each carrying its own slot — constructed here, on the
