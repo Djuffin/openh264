@@ -27,7 +27,7 @@ use crate::encoder::svc_encode_slice::WelsPMbChromaEncode;
 use crate::encoder::svc_set_mb_syn_cavlc::IS_INTRA16x16;
 use crate::encoder::vlc_encoder::BsSizeUE;
 pub use crate::encoder::encoder_context::SMVUnitXY;
-use crate::encoder::encoder_context::{ctx_dq_layer, ctx_vaa, ctx_func_list};
+use crate::encoder::encoder_context::{ctx_dq_layer, ctx_func_list};
 pub use crate::encoder::encoder_context::SMVComponentUnit;
 pub use crate::encoder::encoder_context::EWelsSliceType;
 pub use crate::encoder::picture::SScreenBlockFeatureStorage;
@@ -45,6 +45,7 @@ pub use crate::encoder::wels_preprocess::SScrollDetectionParam;
 pub use crate::encoder::svc_motion_estimate::SWelsME;
 pub use crate::encoder::md::SWelsMD;
 pub use crate::encoder::wels_preprocess::SVAAFrameInfo;
+pub use crate::encoder::wels_preprocess::SVAAFrameInfoExt;
 pub use crate::encoder::svc_encode_slice::SLayerInfo;
 pub use crate::encoder::md::SMbCache;
 pub use crate::encoder::encoder_context::SPicData;
@@ -209,13 +210,13 @@ impl Default for SSampleDealingPicData {
 
 
 // SCREEN_CONTENT(dormant: Phase 10) — `pVaa` is only ever an `SVAAFrameInfoExt`
-// under screen content, which `RequestMemorySvc` refuses.
-#[repr(C)]
-pub struct SVAAFrameInfoExt_t {
-    pub sVaaBase: SVAAFrameInfo,
-    pub sScrollDetectInfo: SScrollDetectionParam,
-    pub pVaaBestBlockStaticIdc: *mut u8,
-}
+// under screen content, which `RequestMemorySvc` refuses. **F213**: this module
+// used to declare its own three-field `SVAAFrameInfoExt_t` for the same C type,
+// and the two disagreed on layout — the canonical struct has
+// `sComplexityScreenParam` between the base and `sScrollDetectInfo`, so every
+// field the local twin named was read at the wrong offset. Both were dead, so
+// nothing saw it. The twin is deleted; the canonical type is the one the
+// context's `vaa_ext` accessor hands out.
 
 // wels_func_ptr_def.h:127 takes uint8_t*, not const uint8_t*; this module's own
 // alias had it const, which made it a distinct function type from the one the
@@ -402,7 +403,7 @@ pub unsafe extern "C" fn WelsMdInterSecondaryModesEnc(
     } else {
         //Step 3: SubP16 MD
         (*pFuncList).pfSetScrollingMv.expect("pfSetScrollingMv is unset")(
-            ctx_vaa(pEncCtx),
+            (*pEncCtx).vaa_ptr(),
             pWelsMd,
         ); //SCC
         (*pFuncList).pfInterFineMd.expect(
@@ -708,7 +709,7 @@ pub unsafe extern "C" fn WelsMdBackgroundMbEnc(
         WelsRecPskip(pCurDqLayer, &*pFunc, pCurMb, &mut *pMbCache);
         VaaBackgroundMbDataUpdate(
             &*pFunc,
-            ctx_vaa(pEncCtx) as *mut crate::encoder::wels_preprocess::SVAAFrameInfo,
+            (*pEncCtx).vaa_ptr(),
             pCurMb,
         );
         return;
@@ -1766,7 +1767,7 @@ pub unsafe extern "C" fn WelsMdInterJudgeBGDPskip(
     let kiCurMbQp = (*pCurMb).uiLumaQp as i32;
     // T9.E7, as svc_base_layer_md's mint (F132 round 8's class).
     let pVaaBgMbFlag = {
-        let v = std::ptr::addr_of!((*ctx_vaa(pEncCtx)).pVaaBackgroundMbFlag);
+        let v = std::ptr::addr_of!((*pEncCtx).vaa().expect("the frame's video-analysis block").pVaaBackgroundMbFlag);
         (*v).as_ptr().add((*pCurMb).iMbXY as usize) as *mut i8
     };
 
@@ -2012,7 +2013,7 @@ pub unsafe extern "C" fn JudgeScrollSkip(
     let kiMbY = (*pCurMb).iMbY as i32;
     let kiMbWidth: i32 = (*pCurDqLayer).iMbWidth as i32;
     let kiMbHeight: i32 = (*pCurDqLayer).iMbHeight as i32;
-    let pVaaExt = ctx_vaa(pEncCtx) as *mut SVAAFrameInfoExt_t;
+    let pVaaExt = (*pEncCtx).vaa_ext();
 
     let mut bTryScrollSkip;
     if (*pVaaExt).sScrollDetectInfo.bScrollDetectFlag {
@@ -2276,7 +2277,7 @@ pub unsafe extern "C" fn MdInterSCDPskipProcess(
     eSkipMode: ESkipModes,
 ) -> bool {
     let pMbCache = &mut pSlice.sMbCacheInfo;
-    let pVaaExt = ctx_vaa(pEncCtx) as *mut SVAAFrameInfoExt_t;
+    let pVaaExt = (*pEncCtx).vaa_ext();
     let pCurDqLayer = current_layer(pEncCtx);
 
     let kiRefMbQp = (&layer_ref_pic(pCurDqLayer).expect("bound").pRefMbQp)[(*pCurMb).iMbXY as usize] as i32;
@@ -2333,7 +2334,7 @@ pub unsafe extern "C" fn MdInterSCDPskipProcess(
 // unsafe-cat: SCREEN_CONTENT(dormant)
 #[allow(unsafe_code)]
 pub unsafe extern "C" fn SetBlockStaticIdcToMd(
-    pVaaExt: *mut SVAAFrameInfoExt_t,
+    pVaaExt: *mut SVAAFrameInfoExt,
     pWelsMd: &mut SWelsMD,
     pCurMb: &mut SMB,
     pDqLayer: *mut SDqLayer,
@@ -2375,7 +2376,7 @@ pub unsafe extern "C" fn WelsMdInterJudgeSCDPskip(
     pCurMb: &mut SMB,
 ) -> bool {
     let pCurDqLayer = current_layer(pEncCtx);
-    SetBlockStaticIdcToMd(ctx_vaa(pEncCtx) as *mut SVAAFrameInfoExt_t, pWelsMd, pCurMb, pCurDqLayer);
+    SetBlockStaticIdcToMd((*pEncCtx).vaa_ext(), pWelsMd, pCurMb, pCurDqLayer);
 
     if MdInterSCDPskipProcess(pEncCtx, pWelsMd, slice, pCurMb, ESkipModes::STATIC) {
         return true;
@@ -2485,10 +2486,16 @@ pub unsafe extern "C" fn WelsMdInterFinePartitionVaaOnScreen(
 ) {
     let pCurDqLayer = current_layer(pEncCtx);
 
-    let pSad8x8_ptr = (*ctx_vaa(pEncCtx))
+    // T9.E7's spelling, which this site was missing: `as_mut_ptr` autorefs `&mut`
+    // on the *shared* VAA struct's vector — a retag every worker makes per
+    // macroblock — where `as_ptr` autorefs `&`. Same address, and the two sibling
+    // mints in `svc_base_layer_md.rs` already read it this way.
+    let pSad8x8_ptr = (*pEncCtx)
+        .vaa()
+        .expect("the frame's video-analysis block")
         .sVaaCalcInfo
         .pSad8x8
-        .as_mut_ptr()
+        .as_ptr()
         .add((*pCurMb).iMbXY as usize) as *mut i32;
     let get_sign = (*ctx_func_list(pEncCtx)).pfGetMbSignFromInterVaa.unwrap();
     let uiMbSign = get_sign(pSad8x8_ptr);
@@ -2514,7 +2521,7 @@ pub unsafe extern "C" fn WelsMdInterFinePartitionVaaOnScreen(
 // unsafe-cat: SCREEN_CONTENT(dormant)
 #[allow(unsafe_code)]
 pub unsafe extern "C" fn SetScrollingMvToMd(pVaa: *mut SVAAFrameInfo, pWelsMd: &mut SWelsMD) {
-    let pVaaExt = pVaa as *mut SVAAFrameInfoExt_t;
+    let pVaaExt = pVaa as *mut SVAAFrameInfoExt;
     let sTempMv = SMVUnitXY {
         iMvX: (*pVaaExt).sScrollDetectInfo.iScrollMvX as i16,
         iMvY: (*pVaaExt).sScrollDetectInfo.iScrollMvY as i16,

@@ -352,6 +352,7 @@ pub use crate::encoder::set_mb_syn_cabac::SStateCtx;
 pub use crate::encoder::md::SMcFunc;
 pub use crate::encoder::slice_multi_threading::SSliceThreading;
 pub use crate::encoder::wels_preprocess::SVAAFrameInfo;
+pub use crate::encoder::wels_preprocess::SVAAFrameInfoExt;
 pub use crate::encoder::svc_encode_slice::SLayerInfo;
 pub use crate::encoder::wels_func_ptr_def::{EntropyCoder, SWelsFuncPtrList};
 
@@ -723,27 +724,6 @@ pub unsafe fn ctx_func_list(pCtx: *mut sWelsEncCtx) -> *mut SWelsFuncPtrList {
     std::ptr::read(std::ptr::addr_of!((*pCtx).pFuncList) as *const *mut SWelsFuncPtrList)
 }
 
-/// The frame's **video-analysis block** — T6.H10, and null before the preprocessor
-/// builds one, which is what the raw field held.
-///
-/// Six of its ~80 consumers cast the answer to `*mut SVAAFrameInfoExt` — the
-/// screen-content extension, `SCREEN_CONTENT(dormant: Phase 10)` and fenced. They
-/// keep the cast; this only changes where the pointer comes from.
-///
-/// # Safety
-/// `pCtx` must point to a live encoder context.
-#[inline]
-// unsafe-cat: SCREEN_CONTENT(dormant)
-#[allow(unsafe_code)]
-pub unsafe fn ctx_vaa(pCtx: *mut sWelsEncCtx) -> *mut SVAAFrameInfo {
-    // **F71.** `Option::as_mut` is a `Unique` retag over the slot, and every worker
-    // resolves this same field — so two of them doing it at once is a data race even
-    // though neither writes the slot. `Option<Box<T>>` is one pointer wide with
-    // `None` as null, so the slot is read as a pointer *value*: no retag, and the
-    // pointer still carries the heap block's own provenance.
-    std::ptr::read(std::ptr::addr_of!((*pCtx).pVaa) as *const *mut SVAAFrameInfo)
-}
-
 /// Dependency layer `kiDid`'s reference list **as a raw pointer, read out of the
 /// slot** — the one derivation A3 left raw, and the only caller is
 /// `WelsInitCurrentLayer`'s stamp of `SDqLayer::pRefList`.
@@ -1075,6 +1055,48 @@ impl sWelsEncCtx {
         )
     }
 
+    /// [`ref_list_and_ltr_mut`](Self::ref_list_and_ltr_mut) **plus the
+    /// video-analysis block** — the same combined-accessor move, one field wider.
+    ///
+    /// Two LTR bodies (`HandleLTRMarkFeedback`, `LTRMarkProcess`) stamp
+    /// `SVAAFrameInfo::uiValidLongTermPicIdx` / `uiMarkLongTermPicIdx` from
+    /// inside the loop that walks the reference list, so the VAA write and the
+    /// list borrow are genuinely wanted at once. Under the raw accessor the two
+    /// never met the borrow checker: `ctx_vaa` read the `Box`'s slot as a
+    /// *value*, so the pointer it handed out survived every later retag of the
+    /// context (F71). [`vaa_mut`](Self::vaa_mut) is a real `&mut`, so it does
+    /// not — which is the conversion working, not a regression, and this is
+    /// §4.6's second remedy for it.
+    #[inline]
+    pub fn vaa_ref_list_and_ltr_mut(
+        &mut self,
+        kiDid: usize,
+    ) -> (Option<&mut SVAAFrameInfo>, Option<&mut SRefList>, &mut SLTRState) {
+        let sWelsEncCtx { pVaa, ppRefPicListExt, pLtr, .. } = self;
+        (
+            pVaa.as_deref_mut(),
+            ppRefPicListExt.get_mut(kiDid).and_then(|s| s.as_deref_mut()),
+            &mut pLtr[kiDid],
+        )
+    }
+
+    /// The **video-analysis block and one layer's rate-control state, from one
+    /// borrow** — §4.6's combined accessor for `AnalyzePictureComplexity`.
+    ///
+    /// The complexity plugin is handed `&pVaa->sVaaCalcInfo` and the rate
+    /// controller's two GOM arrays `&mut` **in the same call**, and the block it
+    /// reads back into is `pVaa->sComplexityAnalysisParam`. Three fields, two
+    /// owners, one statement — the raw accessors never had to say so, and two
+    /// separate `&mut` accessor calls each claim the whole context.
+    #[inline]
+    pub fn vaa_and_rc_at_mut(
+        &mut self,
+        kiDid: usize,
+    ) -> (Option<&mut SVAAFrameInfo>, &mut SWelsSvcRc) {
+        let sWelsEncCtx { pVaa, pWelsSvcRc, .. } = self;
+        (pVaa.as_deref_mut(), &mut pWelsSvcRc[kiDid])
+    }
+
     /// The rate-control state of spatial layer `kiDid` — `pWelsSvcRc[did]`, which
     /// is how all sixty consumers spell it. See [`rc`](Self::rc) for the array.
     ///
@@ -1170,6 +1192,85 @@ impl sWelsEncCtx {
             return std::ptr::null_mut();
         }
         self.pFrameBs.as_ptr() as *mut u8
+    }
+
+    /// The frame's **video-analysis block** — T6.H10, `pCtx->pVaa`.
+    ///
+    /// **`Option`, because the absence is a state the callers already asked
+    /// about.** The raw accessor answered null before the preprocessor builds
+    /// one, and a dozen consumers opened with `if !ctx_vaa(..).is_null()` while
+    /// it was raw; those
+    /// guards are `let Some(..) else` / `.is_some()` now, which is the same
+    /// branch with the question asked in the type.
+    ///
+    /// In-fork this is the only path — the workers read the analysis the
+    /// preprocessor wrote and never write it back. The writers are the
+    /// preprocessor and the reference-list managers, all single-threaded.
+    #[inline]
+    pub fn vaa(&self) -> Option<&SVAAFrameInfo> {
+        self.pVaa.as_deref()
+    }
+
+    /// [`vaa`](Self::vaa) for the preprocessor and the reference-list managers.
+    ///
+    /// **Single-threaded only** — see [`rc_at_mut`](Self::rc_at_mut).
+    #[inline]
+    pub fn vaa_mut(&mut self) -> Option<&mut SVAAFrameInfo> {
+        self.pVaa.as_deref_mut()
+    }
+
+    /// [`vaa`](Self::vaa) **as a raw pointer**, null when the block is absent.
+    ///
+    /// **The return stays raw, and the far end is why.** The one production
+    /// caller hands it to `SWelsFuncPtrList::pfSetScrollingMv`, whose type
+    /// (`PSetScrollingMv`, `wels_func_ptr_def.rs:131`) takes `*mut
+    /// SVAAFrameInfo` — a C1 alias, so a reference here would have nothing to be
+    /// passed as. The accessor itself is a safe fn: forming the pointer needs no
+    /// `unsafe`, only dereferencing it does, and that belongs to the far end.
+    /// It is also the root [`vaa_ext`](Self::vaa_ext) casts.
+    #[inline]
+    pub fn vaa_ptr(&self) -> *mut SVAAFrameInfo {
+        match self.pVaa.as_deref() {
+            Some(v) => v as *const SVAAFrameInfo as *mut SVAAFrameInfo,
+            None => std::ptr::null_mut(),
+        }
+    }
+
+    /// The video-analysis block **downcast to its screen-content extension** —
+    /// `static_cast<SVAAFrameInfoExt*>(pCtx->pVaa)`, upstream's spelling.
+    ///
+    /// **Named once here so the cast is not fifteen separate claims.** Every
+    /// consumer is inside the `SCREEN_CONTENT(dormant: Phase 10)` fence: the
+    /// screen strategies (`RefStrategyKind::Screen`/`LosslessWithLtr`), the SCC
+    /// rate-control arms, and `pfSetScrollingMv`'s judging arm — none of which a
+    /// camera-usage preset can select, and the port never installs the one
+    /// function that would allocate an `Ext` in the first place
+    /// (`RequestMemoryVaaScreen`, F177). So `pVaa` is an `SVAAFrameInfo` and
+    /// nothing else, the cast reads past the end of that allocation, and the
+    /// arms are kept **compiling** rather than kept *correct* — Phase 10's job,
+    /// which is what the tag says.
+    #[inline]
+    // unsafe-cat: SCREEN_CONTENT(dormant)
+    pub fn vaa_ext(&self) -> *mut SVAAFrameInfoExt {
+        self.vaa_ptr().cast()
+    }
+
+    /// [`vaa_ext`](Self::vaa_ext) for its **one** writer, `AnalyzePictureComplexity`'s
+    /// screen arm (`wels_preprocess.rs`), which takes `&mut
+    /// SVAAFrameInfoExt::sComplexityScreenParam`.
+    ///
+    /// It exists so that arm's pointer is derived through a `&mut self` rather
+    /// than through [`vaa_ext`](Self::vaa_ext)'s shared root: a write through a
+    /// `SharedReadOnly`-derived raw is UB the moment it is driven, and dormant
+    /// code should not be made *newly* wrong by the conversion that stops
+    /// driving it. Single-threaded only, like every other `*_mut` here.
+    #[inline]
+    // unsafe-cat: SCREEN_CONTENT(dormant)
+    pub fn vaa_ext_mut(&mut self) -> *mut SVAAFrameInfoExt {
+        match self.pVaa.as_deref_mut() {
+            Some(v) => (v as *mut SVAAFrameInfo).cast(),
+            None => std::ptr::null_mut(),
+        }
     }
 }
 
@@ -1313,7 +1414,7 @@ pub struct sWelsEncCtx {
     /// The video-analysis block for the frame in flight — **T6.H10, owned.** It has
     /// been `Box`-built and has owned its seven per-frame arrays since T6.F3; this is
     /// the last step, giving the `Box` an owner so `Create`/`Destroy` are `new`/`Drop`.
-    /// `None` before the preprocessor runs. Resolve it with [`ctx_vaa`].
+    /// `None` before the preprocessor runs. Resolve it with [`sWelsEncCtx::vaa`].
     pub pVaa: Option<Box<SVAAFrameInfo>>,
     pub pVpp: *mut crate::encoder::wels_preprocess::CWelsPreProcess,
     /// **T6.H2 — owned.** `RequestMemorySvc` sized this from the strategy's
@@ -2042,16 +2143,16 @@ pub unsafe fn DecideFrameType(
     let mut bSceneChangeFlag = false;
 
     if (*pSvcParam).iUsageType == EUsageType::SCREEN_CONTENT_REAL_TIME {
-        let pVaa = ctx_vaa(pEncCtx);
-        let vaa_idr = !pVaa.is_null() && (*pVaa).bIdrPeriodFlag;
+        let pVaa = pEncCtx.vaa();
+        let vaa_idr = pVaa.is_some_and(|v| v.bIdrPeriodFlag);
 
         if !(*pSvcParam).bEnableSceneChangeDetect
             || vaa_idr
             || ((kiSpatialNum as i32) < (*pSvcParam).iSpatialLayerNum)
         {
             bSceneChangeFlag = false;
-        } else if !pVaa.is_null() {
-            bSceneChangeFlag = (*pVaa).bSceneChangeFlag;
+        } else if let Some(pVaa) = pVaa {
+            bSceneChangeFlag = pVaa.bSceneChangeFlag;
         }
 
         if vaa_idr
@@ -2061,7 +2162,7 @@ pub unsafe fn DecideFrameType(
             iFrameType = EVideoFrameType::videoFrameTypeIDR;
         } else if (*pSvcParam).bEnableLongTermReference
             && (bSceneChangeFlag
-                || (!pVaa.is_null() && (*pVaa).eSceneChangeIdc == ESceneChangeIdc::LARGE_CHANGED_SCENE))
+                || pVaa.is_some_and(|v| v.eSceneChangeIdc == ESceneChangeIdc::LARGE_CHANGED_SCENE))
         {
             let mut iActualLtrcount = 0;
             {
@@ -2094,8 +2195,8 @@ pub unsafe fn DecideFrameType(
             pEncCtx.bCurFrameMarkedAsSceneLtr = true;
         }
     } else {
-        let pVaa = ctx_vaa(pEncCtx);
-        let vaa_idr = !pVaa.is_null() && (*pVaa).bIdrPeriodFlag;
+        let pVaa = pEncCtx.vaa();
+        let vaa_idr = pVaa.is_some_and(|v| v.bIdrPeriodFlag);
 
         if !(*pSvcParam).bEnableSceneChangeDetect
             || vaa_idr
@@ -2103,8 +2204,8 @@ pub unsafe fn DecideFrameType(
             || ((*pParamInternal).iFrameIndex < (VGOP_SIZE << 1))
         {
             bSceneChangeFlag = false;
-        } else if !pVaa.is_null() {
-            bSceneChangeFlag = (*pVaa).bSceneChangeFlag;
+        } else if let Some(pVaa) = pVaa {
+            bSceneChangeFlag = pVaa.bSceneChangeFlag;
         }
 
         iFrameType = if vaa_idr || bSceneChangeFlag || (*pParamInternal).bEncCurFrmAsIdrFlag {
@@ -2305,9 +2406,13 @@ mod tests {
         // the same sibling-stable derivation `addr_of!` was.
         siblings!("mvd_cost_origin", (*p).mvd_cost_origin(),
             |q: *mut u16| *q = 0x4321, |q: *mut u16| *q == 0x4321);
-        siblings!("ctx_vaa", ctx_vaa(p),
-            |q: *mut SVAAFrameInfo| (*q).iPicWidth = 176,
-            |q: *mut SVAAFrameInfo| (*q).iPicWidth == 176);
+        // `ctx_vaa` had a row here until A5. `vaa`/`vaa_mut` are references now,
+        // refereed by the borrow checker like the rows above, and what stays raw —
+        // `vaa_ptr`, the root `pfSetScrollingMv` needs and `vaa_ext` casts — is
+        // derived through `&self`, so the row's write half would be UB rather
+        // than a weaker assertion. Its read half survives in the interleaved
+        // `held` list below, which takes a `vaa_ptr` cursor alongside every other
+        // and reads through it after all of them exist.
         siblings!("ctx_param", ctx_param(p),
             |q: *mut SWelsSvcCodingParam| (*q).iPicWidth = 320,
             |q: *mut SWelsSvcCodingParam| (*q).iPicWidth == 320);
@@ -2344,7 +2449,7 @@ mod tests {
                 // at T9.H3 (deleted with the raw family) — a real reference
                 // cannot be *held* alongside the others, which is the point.
                 (*p).mvd_cost_origin().cast(),
-                ctx_vaa(p).cast(), ctx_param(p).cast(),
+                (*p).vaa_ptr().cast(), ctx_param(p).cast(),
                 ctx_dq_layer(p, 0).cast(), (*p).frame_bs().cast(),
             ]
         };

@@ -74,7 +74,7 @@ pub const MAX_REF_PIC_COUNT: usize = 16;
 // MAX_SHORT_REF_COUNT was 16 where C++ derives 4, which over-sized `SRefList` here and
 // let the `WelsPreprocess` unref loop read one past `pShortRefList`.
 pub use crate::encoder::encoder_context::{MAX_GOP_SIZE, MAX_SHORT_REF_COUNT, MAX_TEMPORAL_LEVEL};
-use crate::encoder::encoder_context::{ctx_ltr_at, ctx_param, ctx_vaa};
+use crate::encoder::encoder_context::{ctx_ltr_at, ctx_param};
 pub use crate::encoder::encoder_context::SRefList;
 pub use crate::encoder::picture::SPicture;
 pub use crate::encoder::encoder_context::SLTRState;
@@ -1197,9 +1197,9 @@ impl CWelsPreProcess {
             }
         }
 
-        if !ctx_vaa(pCtx).is_null() {
-            (*ctx_vaa(pCtx)).bSceneChangeFlag = false;
-            (*ctx_vaa(pCtx)).bIdrPeriodFlag = false;
+        if pCtx.vaa().is_some() {
+            pCtx.vaa_mut().expect("the frame's video-analysis block").bSceneChangeFlag = false;
+            pCtx.vaa_mut().expect("the frame's video-analysis block").bIdrPeriodFlag = false;
         }
 
         // The `pScaledPic` argument stood here — `addr_of_mut!(self.m_sScaledPicture)`
@@ -1241,8 +1241,8 @@ impl CWelsPreProcess {
         let iSrcWidth = (*pSvcParam).SUsedPicRect.iWidth;
         let iSrcHeight = (*pSvcParam).SUsedPicRect.iHeight;
 
-        if (*pSvcParam).uiIntraPeriod != 0 && !ctx_vaa(pCtx).is_null() {
-            (*ctx_vaa(pCtx)).bIdrPeriodFlag = (1 + (*pDlayerParamInternal).iFrameIndex) >= (*pSvcParam).uiIntraPeriod as i32;
+        if (*pSvcParam).uiIntraPeriod != 0 && pCtx.vaa().is_some() {
+            pCtx.vaa_mut().expect("the frame's video-analysis block").bIdrPeriodFlag = (1 + (*pDlayerParamInternal).iFrameIndex) >= (*pSvcParam).uiIntraPeriod as i32;
         }
 
         *pSpatialNum = 0;
@@ -1289,28 +1289,28 @@ impl CWelsPreProcess {
             false,
         );
 
-        if (*pSvcParam).bEnableSceneChangeDetect && !ctx_vaa(pCtx).is_null() && !(*ctx_vaa(pCtx)).bIdrPeriodFlag {
+        if (*pSvcParam).bEnableSceneChangeDetect && pCtx.vaa().is_some() && !pCtx.vaa().expect("the frame's video-analysis block").bIdrPeriodFlag {
             if (*pSvcParam).iUsageType == EUsageType::SCREEN_CONTENT_REAL_TIME {
                 let idc = if (*pDlayerParamInternal).bEncCurFrmAsIdrFlag {
                     ESceneChangeIdc::LARGE_CHANGED_SCENE
                 } else {
                     self.DetectSceneChange(pCtx, pDstPic, None)
                 };
-                (*ctx_vaa(pCtx)).eSceneChangeIdc = idc;
-                (*ctx_vaa(pCtx)).bSceneChangeFlag = idc == ESceneChangeIdc::LARGE_CHANGED_SCENE;
+                pCtx.vaa_mut().expect("the frame's video-analysis block").eSceneChangeIdc = idc;
+                pCtx.vaa_mut().expect("the frame's video-analysis block").bSceneChangeFlag = idc == ESceneChangeIdc::LARGE_CHANGED_SCENE;
             } else if !(*pDlayerParamInternal).bEncCurFrmAsIdrFlag
                 && ((*pDlayerParamInternal).iCodingIndex & ((*pSvcParam).uiGopSize as i32 - 1)) == 0
             {
                 let pRefPic = if ctx_ltr_at(pCtx, depIdx).bReceivedT0LostFlag {
                     let pos = self.m_uiSpatialLayersInTemporal[depIdx] as usize
-                        + (*ctx_vaa(pCtx)).uiValidLongTermPicIdx as usize;
+                        + pCtx.vaa().expect("the frame's video-analysis block").uiValidLongTermPicIdx as usize;
                     self.m_pSpatialPic[depIdx][pos]
                 } else {
                     self.m_pLastSpatialPicture[depIdx][0]
                 };
                 let pRefPic = pRefPic.map(SrcPicRef::Pooled);
                 let idc = self.DetectSceneChange(pCtx, pDstPic, pRefPic);
-                (*ctx_vaa(pCtx)).bSceneChangeFlag = self.GetSceneChangeFlag(idc);
+                pCtx.vaa_mut().expect("the frame's video-analysis block").bSceneChangeFlag = self.GetSceneChangeFlag(idc);
             }
         }
 
@@ -1413,7 +1413,7 @@ impl CWelsPreProcess {
             && ctx_ltr_at(pCtx, uiDidForLtr).bReceivedT0LostFlag
         {
             iRefTemporalIdx = self.m_uiSpatialLayersInTemporal[dIdx] as i32
-                + (*ctx_vaa(pCtx)).uiValidLongTermPicIdx as i32;
+                + pCtx.vaa().expect("the frame's video-analysis block").uiValidLongTermPicIdx as i32;
         }
 
         let pCurPic = self.m_pSpatialPic[dIdx][iCurTemporalIdx as usize];
@@ -1435,14 +1435,23 @@ impl CWelsPreProcess {
                 iRefTemporalIdx,
             );
 
-            self.VaaCalculation(ctx_vaa(pCtx), pCurPic, pRefPic, false, bCalculateVar, bCalculateBGD);
+            // A5: the three passes take `&mut SVAAFrameInfo` now, so their old
+            // `if pVaaInfo.is_null() { return; }` prologues are these `if let`s —
+            // the same no-op on an unbuilt block, asked one level out.
+            if let Some(pVaa) = pCtx.vaa_mut() {
+                self.VaaCalculation(pVaa, pCurPic, pRefPic, false, bCalculateVar, bCalculateBGD);
+            }
 
             if (*pSvcParam).bEnableBackgroundDetection {
                 let bFlag = bCalculateBGD && self.ref_is_inter(pRefPic);
-                self.BackgroundDetection(ctx_vaa(pCtx), pCurPic, pRefPic, bFlag);
+                if let Some(pVaa) = pCtx.vaa_mut() {
+                    self.BackgroundDetection(pVaa, pCurPic, pRefPic, bFlag);
+                }
             }
             if bNeededMbAq {
-                self.AdaptiveQuantCalculation(ctx_vaa(pCtx), pCurPic, pRefPic);
+                if let Some(pVaa) = pCtx.vaa_mut() {
+                    self.AdaptiveQuantCalculation(pVaa, pCurPic, pRefPic);
+                }
             }
         } else {
             let pRefPic = self.GetBestRefPic(kiDidx, iRefTemporalIdx);
@@ -1456,34 +1465,38 @@ impl CWelsPreProcess {
             let bCalculateSQDiff =
                 pLastPic.is_some() && pLastPic == pRefPic && bNeededMbAq;
 
-            self.VaaCalculation(ctx_vaa(pCtx), pCurPic, pRefPic, bCalculateSQDiff, bCalculateVar, bCalculateBGD);
+            if let Some(pVaa) = pCtx.vaa_mut() {
+                self.VaaCalculation(pVaa, pCurPic, pRefPic, bCalculateSQDiff, bCalculateVar, bCalculateBGD);
+            }
 
             if (*pSvcParam).bEnableBackgroundDetection {
                 let bFlag = bCalculateBGD && self.ref_is_inter(pRefPic);
-                self.BackgroundDetection(ctx_vaa(pCtx), pCurPic, pRefPic, bFlag);
+                if let Some(pVaa) = pCtx.vaa_mut() {
+                    self.BackgroundDetection(pVaa, pCurPic, pRefPic, bFlag);
+                }
             }
 
             if bNeededMbAq {
-                self.AdaptiveQuantCalculation(
-                    ctx_vaa(pCtx),
-                    self.m_pLastSpatialPicture[dIdx][1],
-                    self.m_pLastSpatialPicture[dIdx][0],
-                );
+                let pLast1 = self.m_pLastSpatialPicture[dIdx][1];
+                let pLast0 = self.m_pLastSpatialPicture[dIdx][0];
+                if let Some(pVaa) = pCtx.vaa_mut() {
+                    self.AdaptiveQuantCalculation(pVaa, pLast1, pLast0);
+                }
             }
             VP_DUMP_SQD.store(bCalculateSQDiff, std::sync::atomic::Ordering::Relaxed);
         }
 
         if crate::encoder::dump_enabled(&VP_DUMP, "OH264_VPDUMP")
             && pCtx.eSliceType == EWelsSliceType::P_SLICE
-            && !(*ctx_vaa(pCtx)).pVaaBackgroundMbFlag.is_empty()
-            && !(*ctx_vaa(pCtx)).sVaaCalcInfo.pSad8x8.is_empty()
-            && !(*ctx_vaa(pCtx)).sVaaCalcInfo.pSumOfDiff8x8.is_empty()
-            && !(*ctx_vaa(pCtx)).sVaaCalcInfo.pMad8x8.is_empty()
-            && !(*ctx_vaa(pCtx)).sVaaCalcInfo.pSsd16x16.is_empty()
-            && !(*ctx_vaa(pCtx)).sVaaCalcInfo.pSum16x16.is_empty()
-            && !(*ctx_vaa(pCtx)).sVaaCalcInfo.pSumOfSquare16x16.is_empty()
+            && !pCtx.vaa().expect("the frame's video-analysis block").pVaaBackgroundMbFlag.is_empty()
+            && !pCtx.vaa().expect("the frame's video-analysis block").sVaaCalcInfo.pSad8x8.is_empty()
+            && !pCtx.vaa().expect("the frame's video-analysis block").sVaaCalcInfo.pSumOfDiff8x8.is_empty()
+            && !pCtx.vaa().expect("the frame's video-analysis block").sVaaCalcInfo.pMad8x8.is_empty()
+            && !pCtx.vaa().expect("the frame's video-analysis block").sVaaCalcInfo.pSsd16x16.is_empty()
+            && !pCtx.vaa().expect("the frame's video-analysis block").sVaaCalcInfo.pSum16x16.is_empty()
+            && !pCtx.vaa().expect("the frame's video-analysis block").sVaaCalcInfo.pSumOfSquare16x16.is_empty()
         {
-            let v = &*ctx_vaa(pCtx);
+            let v = pCtx.vaa().expect("the frame's video-analysis block");
             let sCurGeom = self
                 .m_pSpatialPicPool
                 .get_mut(pCurPic.expect("the spatial pool is allocated"))
@@ -1586,7 +1599,7 @@ impl CWelsPreProcess {
         _kiDidx: i32,
         _iRefTemporalIdx: i32,
     ) -> Option<SrcPicId> {
-        let pVaaExt = ctx_vaa(pCtx) as *mut SVAAFrameInfoExt;
+        let pVaaExt = pCtx.vaa_ext();
         let pBest = if bSceneLtr {
             &(*pVaaExt).sVaaLtrBestRefCandidate[0]
         } else {
@@ -1622,7 +1635,7 @@ impl CWelsPreProcess {
             }
             if pCtx.bRefOfCurTidIsLtr[dIdx][iCurTid as usize] {
                 let kiAvailableLtrPos = self.m_uiSpatialLayersInTemporal[dIdx] as usize
-                    + (*ctx_vaa(pCtx)).uiMarkLongTermPicIdx as usize;
+                    + pCtx.vaa().expect("the frame's video-analysis block").uiMarkLongTermPicIdx as usize;
                 Self::WelsExchangeSpatialPictures(
                     &mut self.m_pSpatialPic[dIdx][kiAvailableLtrPos],
                     &mut self.m_pSpatialPic[dIdx][iCurTid as usize],
@@ -1823,16 +1836,13 @@ impl CWelsPreProcess {
     #[allow(unsafe_code)]
     pub unsafe fn VaaCalculation(
         &mut self,
-        pVaaInfo: *mut SVAAFrameInfo,
+        pVaaInfo: &mut SVAAFrameInfo,
         pCurPicture: Option<SrcPicId>,
         pRefPicture: Option<SrcPicId>,
         bCalculateSQDiff: bool,
         bCalculateVar: bool,
         bCalculateBGD: bool,
     ) {
-        if pVaaInfo.is_null() {
-            return;
-        }
         // S37: both pictures resolved once to their plane roots; everything below
         // walks raw cursors, so no borrow of the pool outlives this prologue.
         let (Some(idCur), Some(idRef)) = (pCurPicture, pRefPicture) else {
@@ -1840,8 +1850,8 @@ impl CWelsPreProcess {
         };
         let sCur = self.m_pSpatialPicPool.get_mut(idCur).planes();
         let sRef = self.m_pSpatialPicPool.get_mut(idRef).planes();
-        (*pVaaInfo).sVaaCalcInfo.pCurY = sCur.pData[0];
-        (*pVaaInfo).sVaaCalcInfo.pRefY = sRef.pData[0];
+        pVaaInfo.sVaaCalcInfo.pCurY = sCur.pData[0];
+        pVaaInfo.sVaaCalcInfo.pRefY = sRef.pData[0];
 
         let mut sCurPixMap = SPixMap::default();
         let mut sRefPixMap = SPixMap::default();
@@ -1868,21 +1878,18 @@ impl CWelsPreProcess {
         // METHOD_VAA_STATISTICS. The result is handed over at the call; the C++
         // stored `&pVaaInfo->sVaaCalcInfo` in the parameter block.
         self.m_vp.sVaaCalc.Set(&calc_param);
-        self.m_vp.sVaaCalc.Process(&sCurPixMap, &sRefPixMap, &mut (*pVaaInfo).sVaaCalcInfo);
+        self.m_vp.sVaaCalc.Process(&sCurPixMap, &sRefPixMap, &mut pVaaInfo.sVaaCalcInfo);
     }
 
     // unsafe-cat: port-raw(Phase 9)
     #[allow(unsafe_code)]
     pub unsafe fn BackgroundDetection(
         &mut self,
-        pVaaInfo: *mut SVAAFrameInfo,
+        pVaaInfo: &mut SVAAFrameInfo,
         pCurPicture: Option<SrcPicId>,
         pRefPicture: Option<SrcPicId>,
         bDetectFlag: bool,
     ) {
-        if pVaaInfo.is_null() {
-            return;
-        }
         let Some(idCur) = pCurPicture else {
             return;
         };
@@ -1890,16 +1897,16 @@ impl CWelsPreProcess {
         let sCur = self.m_pSpatialPicPool.get_mut(idCur).planes();
         let sRef = pRefPicture.map(|id| self.m_pSpatialPicPool.get_mut(id).planes());
         if let (true, Some(sRef)) = (bDetectFlag, sRef) {
-            (*pVaaInfo).iPicWidth = sCur.iWidthInPixel;
-            (*pVaaInfo).iPicHeight = sCur.iHeightInPixel;
-            (*pVaaInfo).iPicStride = sCur.iLineSize[0];
-            (*pVaaInfo).iPicStrideUV = sCur.iLineSize[1];
-            (*pVaaInfo).pCurY = sCur.pData[0];
-            (*pVaaInfo).pRefY = sRef.pData[0];
-            (*pVaaInfo).pCurU = sCur.pData[1];
-            (*pVaaInfo).pRefU = sRef.pData[1];
-            (*pVaaInfo).pCurV = sCur.pData[2];
-            (*pVaaInfo).pRefV = sRef.pData[2];
+            pVaaInfo.iPicWidth = sCur.iWidthInPixel;
+            pVaaInfo.iPicHeight = sCur.iHeightInPixel;
+            pVaaInfo.iPicStride = sCur.iLineSize[0];
+            pVaaInfo.iPicStrideUV = sCur.iLineSize[1];
+            pVaaInfo.pCurY = sCur.pData[0];
+            pVaaInfo.pRefY = sRef.pData[0];
+            pVaaInfo.pCurU = sCur.pData[1];
+            pVaaInfo.pRefU = sRef.pData[1];
+            pVaaInfo.pCurV = sCur.pData[2];
+            pVaaInfo.pRefV = sRef.pData[2];
 
             let mut sSrcPixMap = SPixMap::default();
             let mut sRefPixMap = SPixMap::default();
@@ -1927,17 +1934,17 @@ impl CWelsPreProcess {
             sRefPixMap.sRect.iRectHeight = sRef.iHeightInPixel;
             sRefPixMap.eFormat = VideoFormat::videoFormatI420;
 
-            BGDParam.pBackgroundMbFlag = (*pVaaInfo).pVaaBackgroundMbFlag.as_mut_ptr();
+            BGDParam.pBackgroundMbFlag = pVaaInfo.pVaaBackgroundMbFlag.as_mut_ptr();
 
             // METHOD_BACKGROUND_DETECTION; the VAA result handed over at the call.
             self.m_vp.sBackgroundDetection.Set(&BGDParam);
-            self.m_vp.sBackgroundDetection.Process(&sSrcPixMap, &sRefPixMap, &(*pVaaInfo).sVaaCalcInfo);
+            self.m_vp.sBackgroundDetection.Process(&sSrcPixMap, &sRefPixMap, &pVaaInfo.sVaaCalcInfo);
         } else {
             let iPicWidthInMb = (sCur.iWidthInPixel + 15) >> 4;
             let iPicHeightInMb = (sCur.iHeightInPixel + 15) >> 4;
             let n = ((iPicWidthInMb * iPicHeightInMb).max(0) as usize)
-                .min((*pVaaInfo).pVaaBackgroundMbFlag.len());
-            (&mut (*pVaaInfo).pVaaBackgroundMbFlag)[..n].fill(0);
+                .min(pVaaInfo.pVaaBackgroundMbFlag.len());
+            (&mut pVaaInfo.pVaaBackgroundMbFlag)[..n].fill(0);
         }
     }
 
@@ -1945,13 +1952,10 @@ impl CWelsPreProcess {
     #[allow(unsafe_code)]
     pub unsafe fn AdaptiveQuantCalculation(
         &mut self,
-        pVaaInfo: *mut SVAAFrameInfo,
+        pVaaInfo: &mut SVAAFrameInfo,
         pCurPicture: Option<SrcPicId>,
         pRefPicture: Option<SrcPicId>,
     ) {
-        if pVaaInfo.is_null() {
-            return;
-        }
         // S37: both pictures resolved once to their plane roots; everything below
         // walks raw cursors, so no borrow of the pool outlives this prologue.
         let (Some(idCur), Some(idRef)) = (pCurPicture, pRefPicture) else {
@@ -1962,7 +1966,7 @@ impl CWelsPreProcess {
         // The C++ stored `&pVaaInfo->sVaaCalcInfo` *inside* `pVaaInfo` here
         // (`sAdaptiveQuantParam.pCalcResult`) — a self-pointer; the result is
         // handed over at the `Process` call instead.
-        (*pVaaInfo).sAdaptiveQuantParam.iAverMotionTextureIndexToDeltaQp = 0;
+        pVaaInfo.sAdaptiveQuantParam.iAverMotionTextureIndexToDeltaQp = 0;
 
         let mut pSrc = SPixMap::default();
         let mut pRef = SPixMap::default();
@@ -1982,16 +1986,16 @@ impl CWelsPreProcess {
         pRef.eFormat = VideoFormat::videoFormatI420;
 
         // METHOD_ADAPTIVE_QUANT.
-        self.m_vp.sAdaptiveQuant.Set(&(*pVaaInfo).sAdaptiveQuantParam);
+        self.m_vp.sAdaptiveQuant.Set(&pVaaInfo.sAdaptiveQuantParam);
         let iRet = self.m_vp.sAdaptiveQuant.Process(
             &pSrc,
             &pRef,
-            &(*pVaaInfo).sVaaCalcInfo,
-            &mut (*pVaaInfo).pMotionTextureUnit,
-            &mut (*pVaaInfo).pMotionTextureIndexToDeltaQp,
+            &pVaaInfo.sVaaCalcInfo,
+            &mut pVaaInfo.pMotionTextureUnit,
+            &mut pVaaInfo.pMotionTextureIndexToDeltaQp,
         );
         if iRet == 0 {
-            self.m_vp.sAdaptiveQuant.Get(&mut (*pVaaInfo).sAdaptiveQuantParam);
+            self.m_vp.sAdaptiveQuant.Get(&mut pVaaInfo.sAdaptiveQuantParam);
         }
     }
 
@@ -2344,12 +2348,12 @@ impl CWelsPreProcess {
     ) -> ESceneChangeIdc {
         // The `pCtx.is_null()` disjunct went with the stored raw: a `&mut
         // sWelsEncCtx` cannot be null. The rest of the guard is unchanged.
-        if ctx_vaa(pCtx).is_null() {
+        if pCtx.vaa().is_none() {
             return ESceneChangeIdc::LARGE_CHANGED_SCENE;
         }
 
         let pSvcParam = ctx_param(pCtx);
-        let pVaaExt = ctx_vaa(pCtx) as *mut SVAAFrameInfoExt;
+        let pVaaExt = pCtx.vaa_ext();
         let iTargetDid = (*pSvcParam).iSpatialLayerNum - 1;
         if iTargetDid != 0 {
             return ESceneChangeIdc::LARGE_CHANGED_SCENE;
@@ -2809,7 +2813,7 @@ impl CWelsPreProcess {
 
         let pSvcParam = ctx_param(pCtx);
         if (*pSvcParam).iUsageType == EUsageType::SCREEN_CONTENT_REAL_TIME {
-            let pVaaExt = ctx_vaa(pCtx) as *mut SVAAFrameInfoExt;
+            let pVaaExt = pCtx.vaa_ext_mut();
             let sComplexityAnalysisParam = &mut (*pVaaExt).sComplexityScreenParam;
             // §4.6, reorder: the slice type is read before the writer's `&mut`.
             let eSliceType = pCtx.eSliceType;
@@ -2845,8 +2849,6 @@ impl CWelsPreProcess {
             let iRet = crate::processing::vaacalc::RET_NOTSUPPORTED;
             debug_assert_ne!(iRet, 0);
         } else {
-            let pVaaInfo = ctx_vaa(pCtx);
-            let sComplexityAnalysisParam = &mut (*pVaaInfo).sComplexityAnalysisParam;
             // §4.6, reorder: the writer's `&mut` sinks past everything that still
             // needs the context — the slice-type reads and `SetRefMbType`'s own
             // `&mut` — down to the first use of the rate controller's arrays.
@@ -2866,8 +2868,19 @@ impl CWelsPreProcess {
                 return;
             };
 
-            sComplexityAnalysisParam.iComplexityAnalysisMode = iComplexityAnalysisMode;
-            sComplexityAnalysisParam.pBackgroundMbFlag = (*pVaaInfo).pVaaBackgroundMbFlag.as_mut_ptr();
+            // **§4.6, reorder, and A5's one real knot.** `SetRefMbType` takes the
+            // whole context `&mut`, and its out-parameter is a single `*mut u32`
+            // *inside* the block below — so the block's own `&mut` may not span
+            // the call. The out-parameter is staged in a local instead, seeded
+            // with the field's current value so that a `SetRefMbType` which
+            // matches no reference leaves exactly what it left before (it writes
+            // only on a match). None of the block's other writes are read by
+            // `SetRefMbType`, so they move below it unchanged.
+            let mut uiRefMbType = pCtx
+                .vaa()
+                .expect("the frame's video-analysis block")
+                .sComplexityAnalysisParam
+                .uiRefMbType;
             if let Some(idRef) = sRefPic {
                 // §4.6, reorder: the picture type is read out before
                 // `SetRefMbType` claims the context mutably.
@@ -2876,16 +2889,23 @@ impl CWelsPreProcess {
                     .expect("checked when `sRefPic` was filtered")
                     .pic(idRef)
                     .iPictureType;
-                self.SetRefMbType(
-                    pCtx,
-                    &mut sComplexityAnalysisParam.uiRefMbType,
-                    iPictureType,
-                );
+                self.SetRefMbType(pCtx, &mut uiRefMbType, iPictureType);
             }
+
+            // §4.6, combined accessor: `Process` below takes the analysis block's
+            // `sVaaCalcInfo` shared and the rate controller's two GOM arrays
+            // mutably, in one call.
+            let (pVaaInfo, pWelsSvcRc) = pCtx.vaa_and_rc_at_mut(kiDependencyId as usize);
+            let pVaaInfo = pVaaInfo.expect("the frame's video-analysis block");
+            let pBackgroundMbFlag = pVaaInfo.pVaaBackgroundMbFlag.as_mut_ptr();
+            let sComplexityAnalysisParam = &mut pVaaInfo.sComplexityAnalysisParam;
+
+            sComplexityAnalysisParam.iComplexityAnalysisMode = iComplexityAnalysisMode;
+            sComplexityAnalysisParam.pBackgroundMbFlag = pBackgroundMbFlag;
+            sComplexityAnalysisParam.uiRefMbType = uiRefMbType;
             sComplexityAnalysisParam.iCalcBgd = bCalculateBGD;
             sComplexityAnalysisParam.iFrameComplexity = 0;
 
-            let pWelsSvcRc = pCtx.rc_at_mut(kiDependencyId as usize);
             (*pWelsSvcRc).pGomForegroundBlockNum.fill(0);
             if iComplexityAnalysisMode != FRAME_SAD {
                 (*pWelsSvcRc).pCurrentFrameGomSad.fill(0);
@@ -2923,7 +2943,7 @@ impl CWelsPreProcess {
             let iRet = self.m_vp.sComplexityAnalysis.Process(
                 &sSrcPixMap,
                 &sRefPixMap,
-                &(*pVaaInfo).sVaaCalcInfo,
+                &pVaaInfo.sVaaCalcInfo,
                 &mut (*pWelsSvcRc).pCurrentFrameGomSad,
                 &mut (*pWelsSvcRc).pGomForegroundBlockNum,
             );
@@ -2956,7 +2976,7 @@ impl CWelsPreProcess {
         pRefOri: &mut Option<SrcPicId>,
     ) -> i32 {
         let iTargetDid = (*ctx_param(pCtx)).iSpatialLayerNum - 1;
-        let pVaaExt = ctx_vaa(pCtx) as *mut SVAAFrameInfoExt;
+        let pVaaExt = pCtx.vaa_ext();
         let pBestRefCandidateParam = if bCurrentFrameIsSceneLtr {
             &(*pVaaExt).sVaaLtrBestRefCandidate[iRefIdx as usize]
         } else {

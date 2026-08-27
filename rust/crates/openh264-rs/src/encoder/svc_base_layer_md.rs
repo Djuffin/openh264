@@ -45,7 +45,6 @@ use crate::common::sad_common::sample_sad;
 use crate::encoder::sample::{satd_16x16, satd_4x4};
 use crate::safe::plane::{PlaneCursor, PlaneCursorMut};
 use crate::encoder::encoder_context::{sWelsEncCtx, SMVComponentUnit, SMVUnitXY, SPicData, ctx_func_list};
-use crate::encoder::encoder_context::ctx_vaa;
 use crate::encoder::md::{mem_pred_chroma_off, mem_pred_luma_off};
 use crate::encoder::md::{
     FillNeighborCacheIntra, InitMeRefinePointer, MdIntraAnalysisVaaInfo, MeRefineFracPixel, SMB,
@@ -986,7 +985,7 @@ pub unsafe fn WelsMdInterInit(
             // macroblock, the race the fixed-slice probe stopped on once round
             // 7 was closed. F71's spelling reads the header through `addr_of!`
             // and never retags it (thread_bs_buffer's pattern).
-            let v = std::ptr::addr_of!((*ctx_vaa(pEncCtx)).pVaaBackgroundMbFlag);
+            let v = std::ptr::addr_of!((*pEncCtx).vaa().expect("the frame's video-analysis block").pVaaBackgroundMbFlag);
             (*v).as_ptr().add(kiMbXY as usize) as *mut i8
         },
         layer_rec_view(pCurLayer)
@@ -1239,13 +1238,13 @@ pub unsafe extern "C" fn WelsMdInterFinePartitionVaa(
         .expect("pfGetMbSignFromInterVaa unset")(
         {
             // T9.E7, as the background-flag mint above (F132 round 8's class).
-            let v = std::ptr::addr_of!((*ctx_vaa(pEncCtx)).sVaaCalcInfo.pSad8x8);
+            let v = std::ptr::addr_of!((*pEncCtx).vaa().expect("the frame's video-analysis block").sVaaCalcInfo.pSad8x8);
             (*v).as_ptr().add((*pCurMb).iMbXY as usize) as *mut i32
         },
     );
 
     if crate::encoder::dump_enabled(&FP_DUMP, "OH264_FPDUMP") {
-        let sad = (&(*ctx_vaa(pEncCtx)).sVaaCalcInfo.pSad8x8)[(*pCurMb).iMbXY as usize];
+        let sad = (&(*pEncCtx).vaa().expect("the frame's video-analysis block").sVaaCalcInfo.pSad8x8)[(*pCurMb).iMbXY as usize];
         eprintln!(
             "FP mb={:3} sign={:2} best={:7} sad8x8={},{},{},{}",
             (*pCurMb).iMbXY,
