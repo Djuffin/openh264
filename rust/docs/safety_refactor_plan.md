@@ -1113,6 +1113,9 @@ as D-perf-1 was.**
 
 **D-gate-6 amended (the user, 2026-08-26, from F185): the session battery's cap is restated at 20 minutes (1200 s).** The original ruling's enemy was the ~40-minute state; 977 s with full coverage beats a round number bought by a named coverage cut, and the Miri lane's parallelism taxing the native lane is the trade D-gate-6's own note predicted without pricing. F170's CPU-time fix at J makes the measured number honest against machine load; until then the wall number carries F170's caveat.
 
+
+**D-scope-4 (the user, 2026-08-26): F196's conversion gets a dedicated session — H3, before J; the phase's planned total is 19.** The `ctx_ltr_at` split-borrow campaign runs undiluted: the compiler's error census (84 errors, 75 distinct sites, 83 borrow conflicts, zero mechanical) is the ready-made work list; one shape family — split-borrows over the LTR and reference-list state; two of the four central bodies are live camera-path logic in F3's neighbourhood, so the full referee suite applies and F3's alternation discipline stands ready. D-scope-3's "the count stops there" is broken knowingly, for the phase's last real conversion: the raw was hiding seventy-five coexistences nobody had audited, and leaving that unexamined at the exit would have been the worse ledger entry.
+
 ### 7.5 Session workflow
 Each session: run battery → pick next plan item → convert with shims → battery → commit with ratchet update → update this doc's checkbox (add a `## Progress` appendix on first execution session). The phase structure is deliberately interruptible; no step leaves the tree broken across a session boundary.
 
