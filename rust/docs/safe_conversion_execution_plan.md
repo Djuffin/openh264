@@ -181,7 +181,7 @@ checkpoint's second half, enforced by the ratchet.
 
 | Session | Checkpoints | Scope | What's at zero afterwards |
 |---|---|---|---|
-| **S1** ✅ **CLOSED 2026-08-27** — brief [`prompts/safeplan_s1.md`](prompts/safeplan_s1.md) | **A1–A4 landed**; A5–A7 roll to S2 | **The accessor layer's first half** (~230 sites): small fry → `ctx_rc_at` → `ctx_ref_list` → paraset trio + `ctx_frame_bs_cur` + `ctx_sps`/`ctx_pps`. `ctx_dq_layer` deferred to D2–D3 (F210). Four gated commits, `session` gate green at the close | `ctx_mvd_cost_*`, `ctx_rc`, `ctx_rc_at`, `ctx_frame_bs`, `ctx_frame_bs_cur`, `ctx_ref_list`, the paraset trio, `ctx_sps`, `ctx_pps`, `rc_gom_*`; allows 627 → 613 |
+| **S1** ✅ **CLOSED 2026-08-27** — brief [`prompts/safeplan_s1.md`](prompts/safeplan_s1.md) | **A1–A4 landed**; A5–A7 roll to S2 | **The accessor layer's first half** (~230 sites): small fry → `ctx_rc_at` → `ctx_ref_list` → paraset trio + `ctx_frame_bs_cur` + `ctx_sps`/`ctx_pps`. `ctx_dq_layer` deferred to D2–D3 (F210). Four gated commits, `session` gate green at the close | `ctx_mvd_cost_*`, `ctx_rc`, `ctx_rc_at`, `ctx_frame_bs`, `ctx_frame_bs_cur`, `ctx_ref_list`, the paraset trio, `ctx_sps`, `ctx_pps`, `rc_gom_*`; allows 627 → 614 |
 | **S2** ◀ next — brief [`prompts/safeplan_s2.md`](prompts/safeplan_s2.md) | **A5–A7** + B1–B3 (+ C1–C6 if it fits) | **The accessor layer's tail, then owned fields**: `ctx_vaa` (79, incl. the 16 `SVAAFrameInfoExt` downcasts) → `ctx_func_list` (106, **flip, per F212**) → `ctx_param` (247, where F209's cascade lands); then singletons → `Option<Box<T>>`, owned mutex, MT lifecycle, init/teardown; the pixel land follows | ctx raw singletons; `wels_func_ptr_def.rs`, `svc_encode_mb.rs`, `svc_mode_decision.rs`, `svc_base_layer_md.rs`, `svc_motion_estimate.rs`, `md.rs`, `wels_preprocess.rs`, `processing/` |
 | **S3** | D1–D4 | **Writers + the slice core**: bit writers onto `safe::bits`; `svc_encode_slice.rs` in two checkpoints (aliases → handles, then the encode loop + dynamic slicing); MT residue; `deblocking_common` + `mc`/`copy_mb`. Miri fork/join + mid-row probes gate every slice-core landing | writer files, `svc_encode_slice.rs`, `slice_multi_threading.rs` (to its D1 line), `common/` |
 | **S4** | E1–E3 | Decoder/common residue + trace newtype; **the lint flip** + census pin; **exit battery** + fallout | everything — §1 acceptance list |
@@ -305,13 +305,13 @@ one line — date, session id, checkpoints landed, allows remaining (total / enc
 gate level run. The single progress number is
 **`#[allow(unsafe_code)]` sites outside `src/api/`: 611 → 2**. The figure was
 **627** when S1 opened, not 611 — F203's two found files plus the census fix had
-drifted it upward since the plan was drafted. S1 closed it at **613**.
+drifted it upward since the plan was drafted. S1 closed it at **614**.
 
 **Session log**
 
 | date | session | checkpoints landed | allows outside api | gate |
 |---|---|---|---|---|
-| 2026-08-27 | **S1** | A1, A2, A3, A4 (A5–A7 roll to S2) | 627 → 613 | `session` PASS — sweeps 583/583 ×2, Miri 291/291, gtest 4/4 |
+| 2026-08-27 | **S1** | A1, A2, A3, A4 (A5–A7 roll to S2) | 627 → 614 | `session` PASS — sweeps 583/583 ×2, Miri 291/291, gtest 4/4 |
 
 ## 10. Adoption amendments (ratified with the switch, 2026-08-27)
 
