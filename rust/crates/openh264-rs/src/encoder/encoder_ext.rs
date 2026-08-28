@@ -2008,15 +2008,14 @@ pub unsafe fn WelsUninitEncoderExt(pEncContext: Option<Box<sWelsEncCtx>>) {
 // ============================================================================
 
 /// `encoder_ext.cpp:2393`.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn GetTemporalLevel(
-    fDlp: *mut SSpatialLayerInternal,
+// S4.C: `*mut` -> `&`. The body reads one table entry and writes nothing.
+pub fn GetTemporalLevel(
+    fDlp: &SSpatialLayerInternal,
     kiFrameNum: i32,
     kiGopSize: i32,
 ) -> i32 {
     let kiCodingIdx = kiFrameNum & (kiGopSize - 1);
-    (*fDlp).uiCodingIdx2TemporalId[kiCodingIdx as usize] as i32
+    fDlp.uiCodingIdx2TemporalId[kiCodingIdx as usize] as i32
 }
 
 /// `encoder_ext.cpp:3114`.
@@ -2093,7 +2092,7 @@ pub unsafe fn PrefetchReferencePicture(pCtx: &mut sWelsEncCtx, keFrameType: EVid
 /// `encoder_ext.cpp:3376`.
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
-pub unsafe fn ClearFrameBsInfo(pCtx: &mut sWelsEncCtx, pFbi: *mut SFrameBSInfo) {
+pub unsafe fn ClearFrameBsInfo(pCtx: &mut sWelsEncCtx, pFbi: &mut SFrameBSInfo) {
     (*pFbi).sLayerInfo[0].pBsBuf = pCtx.frame_bs();
     (*pFbi).sLayerInfo[0].pNalLengthInByte = pCtx.pOut.as_deref_mut().expect("pOut lives").sNalLen.as_mut_ptr();
 
@@ -2416,7 +2415,7 @@ pub unsafe fn AddPrefixNal(
 /// `encoder_ext.cpp:3003`. Emit a filler-data NAL of `iLen` bytes.
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
-pub unsafe fn WritePadding(pCtx: &mut sWelsEncCtx, iLen: i32, iSize: *mut i32) -> i32 {
+pub unsafe fn WritePadding(pCtx: &mut sWelsEncCtx, iLen: i32, iSize: &mut i32) -> i32 {
     let mut iNalLen = 0i32;
 
     *iSize = 0;
@@ -2957,7 +2956,7 @@ pub unsafe fn PrepareEncodeFrame(
         );
 
         *iCurTid = GetTemporalLevel(
-            pParamInternal,
+            &*pParamInternal,
             (*pParamInternal).iCodingIndex,
             kuiGopSize,
         );
@@ -3530,7 +3529,7 @@ pub unsafe fn WelsEncoderEncodeExt(
         for iDidIdx in 0..pCtx.param().iSpatialLayerNum as usize {
             let pParamInternal = std::ptr::addr_of_mut!((*ctx_param_raw(pCtx)).sDependencyLayers[iDidIdx]);
             let iTemporalId = GetTemporalLevel(
-                pParamInternal,
+                &*pParamInternal,
                 (*pParamInternal).iCodingIndex,
                 pCtx.param().uiGopSize as i32,
             );
@@ -4036,7 +4035,7 @@ pub unsafe fn WelsEncoderEncodeExt(
             .WelsRcPostFrameSkipping(pCtx, iCurDid as i32, (*pFbi).uiTimeStamp)
         {
             StackBackEncoderStatus(pCtx, eFrameType);
-            ClearFrameBsInfo(pCtx, pFbi);
+            ClearFrameBsInfo(pCtx, &mut *pFbi);
 
             iFrameSize = 0;
             iLayerNum = 0;
