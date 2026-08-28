@@ -272,12 +272,12 @@ pub type PGetIntraPred8x8Func =
 // The encoder's same-named table is a **different** C++ type
 // (`encoder/deblocking.cpp:793`, non-`Option` slots) and stays in
 // `encoder/deblocking.rs`.
-pub use crate::common::deblocking_common::{
-    PLumaDeblockingLT4Func, PLumaDeblockingEQ4Func,
-    PChromaDeblockingLT4Func, PChromaDeblockingEQ4Func,
-    PChromaDeblockingLT4Func2, PChromaDeblockingEQ4Func2,
-    SDeblockingFunc,
-};
+// The six `P*Deblocking*Func` aliases and `SDeblockingFunc` were re-exported here.
+// **S18, deleted in S4.D4** with the table itself: T5.Y3 had already found `pLoopf`
+// written-twice-and-read-never and deleted it (see the note on the filter above),
+// leaving the table installed by `DeblockingInit` and consulted by nothing. The
+// twelve raw `Deblock*_c` shims under it went the same way — the decoder's filter
+// has called the safe kernels directly since T9.C2.
 // T5.Y3: `PDeblockingFunc` went with the field it named — the fifth dead pointer
 // typedef this phase has deleted at its definition (S18).
 
@@ -1853,7 +1853,6 @@ pub struct SWelsDecoderContext {
     pub pGetI8x8LumaPredFunc: [PGetIntraPred8x8Func; 14],
     pub pIdctResAddPredFunc8x8: PIdctResAddPred8x8Func,
     pub sCopyFunc: SCopyFunc,
-    pub sDeblockingFunc: SDeblockingFunc,
     // T4b.3b: `sExpandPicFunc: SExpandPicFunc` sat here. Three constant slots,
     // both chroma entries the same function; `common/expand_pic.rs` names the
     // kernels directly now. This struct has no `assert_size!` and no offset pins,
@@ -2089,7 +2088,6 @@ impl Default for SWelsDecoderContext {
             pGetI8x8LumaPredFunc: [None; 14],
             pIdctResAddPredFunc8x8: None,
             sCopyFunc: SCopyFunc::memset_zero(),
-            sDeblockingFunc: SDeblockingFunc::memset_zero(),
             iCurSeqIntervalTargetDependId: 0,
             iCurSeqIntervalMaxPicWidth: 0,
             iCurSeqIntervalMaxPicHeight: 0,

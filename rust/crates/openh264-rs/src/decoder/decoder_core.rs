@@ -2138,8 +2138,11 @@ pub fn WelsInitDecoderFuncs(pCtx: &mut SWelsDecoderContext) {
         // derives the boundary strengths the C++ derives -- is a direct call at its
         // single use in `decode_slice.rs`.
 
-        // 1. Deblocking Filter
-        crate::common::deblocking_common::DeblockingInit(&mut (*pCtx).sDeblockingFunc, cpu_flag as i32);
+        // 1. Deblocking Filter — the `DeblockingInit` install stood here. **S18,
+        // S4.D4**: it filled a twelve-slot table nothing read (T5.Y3 had already
+        // deleted `pLoopf`, the alias the C++ dispatches through), and it ignored
+        // its own `cpu_flag` besides. A future SIMD pass builds its dispatch from
+        // the safe kernels' signatures, not from these C-ABI shims.
 
         // 2. Motion Compensation
         crate::common::mc::InitMcFunc(&mut (*pCtx).sMcFunc, cpu_flag);

@@ -751,213 +751,9 @@ fn sample_variance_16x16_accumulators_cannot_wrap() {
 
 use openh264_rs::common::deblocking_common as deb;
 
-/// The touched-offset predicate, valid for both directions at once: within the
-/// span (anchored at its own start), a byte at index `k` belongs to the edge's
-/// touch set iff `k % stride` is under the dense width — `lines` for a V-shaped
-/// call (taps step by the stride, lines are contiguous columns), the tap width
-/// `rb + rf + 1` for an H-shaped one (taps are contiguous columns, lines step
-/// by the stride).
-fn deblock_touched(k: usize, stride: usize, dense_width: usize) -> bool {
-    k % stride < dense_width
-}
 
-/// Exact-span probe for one single-plane deblocking shim.
-///
-/// * The buffer is `len` bytes and not one more, so an over-claimed span is a
-///   `from_raw_parts_mut` past the allocation — UB that Miri reports; an
-///   under-claimed one panics in the safe kernel at the first out-of-slice tap.
-/// * The crafted step edge (p side 90, q side 110, alpha 255, beta 18, tc 25)
-///   filters on every line, so the probe asserts the surface changed — a shim
-///   that no-ops fails here.
-/// * The same crafted buffer is run through the **safe kernel directly**, on a
-///   cursor built at the anchor the contract names, and the two results must be
-///   bit-identical. This is what pins the shim's anchor: an anchor shifted
-///   along the line axis stays inside the touch set and filters plausibly, and
-///   only a golden comparison sees it (the first version of this probe missed
-///   exactly that mutation).
-/// * Every byte outside the declared touch set must additionally be
-///   bit-identical to the input — the claim the contract makes to callers about
-///   which bytes may move at all.
-fn probe_deblock_span(
-    name: &str,
-    stride: usize,
-    rb: usize,
-    rf: usize,
-    lines: usize,
-    vertical: bool,
-    run: impl Fn(*mut u8, i32),
-    direct: impl Fn(&mut [u8], usize, isize, isize),
-) {
-    let (sx, sy) = if vertical { (stride, 1) } else { (1, stride) };
-    let back = rb * sx;
-    let len = back + rf * sx + (lines - 1) * sy + 1;
-    let dense_width = if vertical { lines } else { rb + rf + 1 };
 
-    // 90 on the p side of the edge, 110 on the q side, on every touched byte;
-    // sentinel noise elsewhere.
-    let mut buf: Vec<u8> = (0..len).map(|k| 0x40 + (k % 191) as u8).collect();
-    for j in 0..=(rb + rf) {
-        for i in 0..lines {
-            buf[j * sx + i * sy] = if j < rb { 90 } else { 110 };
-        }
-    }
-    let before = buf.clone();
-    let mut golden = buf.clone();
 
-    run(unsafe { buf.as_mut_ptr().add(back) }, stride as i32);
-    direct(&mut golden, back, sx as isize, sy as isize);
-
-    assert_ne!(buf, before, "{name}: the always-filter edge did not filter (stride {stride})");
-    assert_eq!(
-        buf, golden,
-        "{name}: shim output disagrees with the safe kernel run at the \
-         contract's own anchor (stride {stride}, back {back}, len {len})"
-    );
-    for (k, (&now, &was)) in buf.iter().zip(before.iter()).enumerate() {
-        if !deblock_touched(k, stride, dense_width) {
-            assert_eq!(
-                now, was,
-                "{name}: byte {k} is outside the declared touch set and moved \
-                 (stride {stride}, back {back}, len {len})"
-            );
-        }
-    }
-}
-
-#[test]
-fn deblock_shims_stay_inside_the_spans_they_declare() {
-    let mut tc = [25i8; 4];
-    let tcp = tc.as_mut_ptr();
-    // Strides: the dense minimum for each shape, a non-multiple-of-16, and a
-    // real picture stride.
-    for &s in &[16usize, 21, 240] {
-        // Luma, both tap directions: reach [-3,2] weak / [-4,3] strong, 16 lines.
-        for &vert in &[true, false] {
-            let (name_lt, name_eq) = if vert {
-                ("DeblockLumaLt4V_c", "DeblockLumaEq4V_c")
-            } else {
-                ("DeblockLumaLt4H_c", "DeblockLumaEq4H_c")
-            };
-            probe_deblock_span(
-                name_lt, s, 3, 2, 16, vert,
-                |p, st| unsafe {
-                    if vert { deb::DeblockLumaLt4V_c(p, st, 255, 18, tcp) }
-                    else { deb::DeblockLumaLt4H_c(p, st, 255, 18, tcp) }
-                },
-                |b, back, sx, sy| {
-                    deb::deblock_luma_lt4(&mut PlaneCursorMut::new(b, back, s), sx, sy, 255, 18, &[25; 4]);
-                },
-            );
-            probe_deblock_span(
-                name_eq, s, 4, 3, 16, vert,
-                |p, st| unsafe {
-                    if vert { deb::DeblockLumaEq4V_c(p, st, 255, 18) }
-                    else { deb::DeblockLumaEq4H_c(p, st, 255, 18) }
-                },
-                |b, back, sx, sy| {
-                    deb::deblock_luma_eq4(&mut PlaneCursorMut::new(b, back, s), sx, sy, 255, 18);
-                },
-            );
-
-            // Single-buffer chroma variants: reach [-2,1], 8 lines.
-            let (name_lt2, name_eq2) = if vert {
-                ("DeblockChromaLt4V2_c", "DeblockChromaEq4V2_c")
-            } else {
-                ("DeblockChromaLt4H2_c", "DeblockChromaEq4H2_c")
-            };
-            probe_deblock_span(
-                name_lt2, s, 2, 1, 8, vert,
-                |p, st| unsafe {
-                    if vert { deb::DeblockChromaLt4V2_c(p, st, 255, 18, tcp) }
-                    else { deb::DeblockChromaLt4H2_c(p, st, 255, 18, tcp) }
-                },
-                |b, back, sx, sy| {
-                    deb::deblock_chroma_lt42(&mut PlaneCursorMut::new(b, back, s), sx, sy, 255, 18, &[25; 4]);
-                },
-            );
-            probe_deblock_span(
-                name_eq2, s, 2, 1, 8, vert,
-                |p, st| unsafe {
-                    if vert { deb::DeblockChromaEq4V2_c(p, st, 255, 18) }
-                    else { deb::DeblockChromaEq4H2_c(p, st, 255, 18) }
-                },
-                |b, back, sx, sy| {
-                    deb::deblock_chroma_eq42(&mut PlaneCursorMut::new(b, back, s), sx, sy, 255, 18);
-                },
-            );
-
-            // Two-plane chroma: probe each plane position through the pair
-            // call, the other plane parked on its own exact-span scratch. The
-            // planes are filtered independently, so the golden run may use any
-            // content for the scratch plane.
-            let (step_x, step_y) = if vert { (s, 1) } else { (1, s) };
-            let scratch_len = 3 * step_x + 7 * step_y + 1;
-            let scratch_anchor = 2 * step_x;
-            for &probe_cb in &[true, false] {
-                let pos = if probe_cb { "cb" } else { "cr" };
-                probe_deblock_span(
-                    &format!("DeblockChromaLt4{}_c[{pos}]", if vert { "V" } else { "H" }),
-                    s, 2, 1, 8, vert,
-                    |p, st| unsafe {
-                        let mut other = vec![128u8; scratch_len];
-                        let o = other.as_mut_ptr().add(scratch_anchor);
-                        let (cb, cr) = if probe_cb { (p, o) } else { (o, p) };
-                        if vert { deb::DeblockChromaLt4V_c(cb, cr, st, 255, 18, tcp) }
-                        else { deb::DeblockChromaLt4H_c(cb, cr, st, 255, 18, tcp) }
-                    },
-                    |b, back, sx_, sy_| {
-                        let mut other = vec![128u8; scratch_len];
-                        let mut oc = PlaneCursorMut::new(&mut other, scratch_anchor, s);
-                        let mut pc = PlaneCursorMut::new(b, back, s);
-                        let (cb, cr) = if probe_cb { (&mut pc, &mut oc) } else { (&mut oc, &mut pc) };
-                        deb::deblock_chroma_lt4(cb, cr, sx_, sy_, 255, 18, &[25; 4]);
-                    },
-                );
-                probe_deblock_span(
-                    &format!("DeblockChromaEq4{}_c[{pos}]", if vert { "V" } else { "H" }),
-                    s, 2, 1, 8, vert,
-                    |p, st| unsafe {
-                        let mut other = vec![128u8; scratch_len];
-                        let o = other.as_mut_ptr().add(scratch_anchor);
-                        let (cb, cr) = if probe_cb { (p, o) } else { (o, p) };
-                        if vert { deb::DeblockChromaEq4V_c(cb, cr, st, 255, 18) }
-                        else { deb::DeblockChromaEq4H_c(cb, cr, st, 255, 18) }
-                    },
-                    |b, back, sx_, sy_| {
-                        let mut other = vec![128u8; scratch_len];
-                        let mut oc = PlaneCursorMut::new(&mut other, scratch_anchor, s);
-                        let mut pc = PlaneCursorMut::new(b, back, s);
-                        let (cb, cr) = if probe_cb { (&mut pc, &mut oc) } else { (&mut oc, &mut pc) };
-                        deb::deblock_chroma_eq4(cb, cr, sx_, sy_, 255, 18);
-                    },
-                );
-            }
-        }
-    }
-}
-
-/// The `WelsNonZeroCount_c` shim materialises exactly the 24 `i8` its contract
-/// declares (an over-claim is Miri-visible UB against this exact-size array),
-/// and normalisation is total on the full `i8` range including `i8::MIN`.
-#[test]
-fn nonzero_count_shim_stays_inside_its_span_and_normalises() {
-    let mut rng = Prng::new(0xDEB3_0024);
-    for _ in 0..scale(50) {
-        let mut nzc: [i8; 24] = std::array::from_fn(|_| rng.next_u8() as i8);
-        let want: [i8; 24] = std::array::from_fn(|i| (nzc[i] != 0) as i8);
-        unsafe {
-            deb::WelsNonZeroCount_c(nzc.as_mut_ptr());
-        }
-        assert_eq!(nzc, want, "seed {:#x}", rng.seed());
-    }
-    let mut extremes: [i8; 24] = [i8::MIN; 24];
-    extremes[23] = 0;
-    unsafe {
-        deb::WelsNonZeroCount_c(extremes.as_mut_ptr());
-    }
-    assert_eq!(&extremes[..23], &[1i8; 23][..]);
-    assert_eq!(extremes[23], 0);
-}
 
 // ===========================================================================
 // T6 — border expansion (`common/expand_pic.rs`)
@@ -1627,14 +1423,26 @@ use openh264_rs::encoder::deblocking as encdeb;
 // installs aim at the common shims". With the slots gone there is no install
 // left to misdirect and no reader a misdirection could reach; the property is
 // void, not merely stale — D-cov-1's `mc_table_slots_match_the_direct_calls`
-// reasoning, one block below. The decoder-side behavioural assert-map
-// (`deblocking_table_slots_match_the_direct_calls`) stays: it drives the
-// *common* table, which the decoder still dispatches through.
+// reasoning, one block below.
+//
+// **S4.D4: the decoder's half went the same way, and the sentence that stood
+// here was the reason to check.** It read "the decoder-side behavioural
+// assert-map (`deblocking_table_slots_match_the_direct_calls`) stays: it drives
+// the *common* table, which the decoder still dispatches through." Measured at
+// deletion, it does not: a whole-tree grep for a call through any of the twelve
+// `pf(Luma|Chroma)Deblocking*` slots returns **nothing** in `src/`, and the
+// decoder's own filter has called the safe kernels directly since T9.C2
+// (`decoder/deblocking.rs`, `deblock_luma_lt4` and its siblings). The only
+// remaining mention on the decoder side was a comment in `decoder_context.rs`
+// quoting the C++'s `pFilter->pLoopf->pfLumaDeblockingLT4Ver`. So the common
+// table was in exactly the state F139 found the encoder's in — installed by
+// `DeblockingInit`, asserted by tests, read by nothing — and the twelve raw
+// shims under it existed only to be its contents and these tests' subjects.
 
-/// The remaining copies of `WelsNonZeroCount_c`: `common` has the shim over the
-/// safe kernel, and `encoder/deblocking.rs` keeps a raw `extern "C"` duplicate
-/// because `SWelsFuncPtrList::pfSetNZCZero` is still an `Option<fn>` slot and a
-/// plain `unsafe fn` cannot fill one. They must agree.
+/// `encoder/deblocking.rs`'s `WelsNonZeroCount_c` against the safe kernel it
+/// duplicates. **S4.D4 removed the third copy**: `common`'s raw shim went with
+/// the deblocking table, its `pfSetNZCZero` slot having been retired by F118, so
+/// what remains is the encoder's (safe since T9) and `common::nonzero_count`.
 ///
 /// **This test had a third arm until T4b.3c**, over `decoder/decode_slice.rs`'s
 /// copy — the one that never got Phase 2's conversion and was still a hand-written
@@ -1702,115 +1510,3 @@ fn nonzero_count_duplicates_agree() {
 // leans on. F124 was right that this test is Phase 4a's mitigation rather than Phase
 // 2's span discipline, and it is retired here with its own reason.
 
-/// Every `SDeblockingFunc` slot computes exactly what the function the direct
-/// call sites name computes.
-///
-/// The behavioural half of the deblocking assert-map; see
-/// `deblocking_init_ignores_the_cpu_flag` in the library for the flag-invariance
-/// half and for why the two are split. Unlike
-/// `encoder_deblocking_table_installs_the_common_shims` above — which compares
-/// addresses and works only because these kernels happen to carry no inline
-/// attribute — this compares outputs, so it keeps working if one ever gains
-/// `#[inline]`.
-///
-/// The whole surface is compared, not the filtered lines: a kernel that writes
-/// one sample outside its edge is exactly what this class of test exists for.
-/// `tc` is swept over its negative gate (a negative entry means "do not filter
-/// this group") as well as real thresholds, because that selector decides
-/// whether the kernel touches memory at all — S10's rule that selectors are
-/// swept, not sampled.
-#[test]
-fn deblocking_table_slots_match_the_direct_calls() {
-    let mut rng = Prng::new(0x04A0_0002);
-    let mut t = deb::SDeblockingFunc::default();
-    unsafe { deb::DeblockingInit(&mut t, 0) };
-
-    const STRIDE: usize = 64;
-    const ROWS: usize = 48;
-    // The strong luma filter reads p3 at -4*step_x; the widest reach in either
-    // axis is 4 samples and edges run 16 lines, so an anchor 8 samples and 8
-    // rows in, on a 64x48 surface, keeps every access inside for both the V
-    // (step_x = stride) and H (step_x = 1) orientations.
-    const ANCHOR: usize = 8 * STRIDE + 8;
-
-    /// `(slot, direct)` over one surface, with a `tc` gate.
-    macro_rules! cmp1_tc {
-        ($base:expr, $tc:expr, $alpha:expr, $beta:expr, $slot:expr, $direct:expr, $name:literal) => {{
-            let (mut a, mut b) = ($base.clone(), $base.clone());
-            let (mut ta, mut tb) = ($tc, $tc);
-            unsafe {
-                $slot(a.as_mut_ptr().add(ANCHOR), STRIDE as i32, $alpha, $beta, ta.as_mut_ptr());
-                $direct(b.as_mut_ptr().add(ANCHOR), STRIDE as i32, $alpha, $beta, tb.as_mut_ptr());
-            }
-            assert_eq!(a, b, concat!($name, ": slot vs direct disagree"));
-        }};
-    }
-    /// `(slot, direct)` over one surface, no `tc`.
-    macro_rules! cmp1 {
-        ($base:expr, $alpha:expr, $beta:expr, $slot:expr, $direct:expr, $name:literal) => {{
-            let (mut a, mut b) = ($base.clone(), $base.clone());
-            unsafe {
-                $slot(a.as_mut_ptr().add(ANCHOR), STRIDE as i32, $alpha, $beta);
-                $direct(b.as_mut_ptr().add(ANCHOR), STRIDE as i32, $alpha, $beta);
-            }
-            assert_eq!(a, b, concat!($name, ": slot vs direct disagree"));
-        }};
-    }
-    /// `(slot, direct)` over the Cb/Cr pair, with a `tc` gate.
-    macro_rules! cmp2_tc {
-        ($base:expr, $tc:expr, $alpha:expr, $beta:expr, $slot:expr, $direct:expr, $name:literal) => {{
-            let (mut acb, mut acr) = ($base.clone(), $base.clone());
-            let (mut bcb, mut bcr) = ($base.clone(), $base.clone());
-            let (mut ta, mut tb) = ($tc, $tc);
-            unsafe {
-                $slot(acb.as_mut_ptr().add(ANCHOR), acr.as_mut_ptr().add(ANCHOR), STRIDE as i32, $alpha, $beta, ta.as_mut_ptr());
-                $direct(bcb.as_mut_ptr().add(ANCHOR), bcr.as_mut_ptr().add(ANCHOR), STRIDE as i32, $alpha, $beta, tb.as_mut_ptr());
-            }
-            assert_eq!(acb, bcb, concat!($name, ": Cb slot vs direct disagree"));
-            assert_eq!(acr, bcr, concat!($name, ": Cr slot vs direct disagree"));
-        }};
-    }
-    /// `(slot, direct)` over the Cb/Cr pair, no `tc`.
-    macro_rules! cmp2 {
-        ($base:expr, $alpha:expr, $beta:expr, $slot:expr, $direct:expr, $name:literal) => {{
-            let (mut acb, mut acr) = ($base.clone(), $base.clone());
-            let (mut bcb, mut bcr) = ($base.clone(), $base.clone());
-            unsafe {
-                $slot(acb.as_mut_ptr().add(ANCHOR), acr.as_mut_ptr().add(ANCHOR), STRIDE as i32, $alpha, $beta);
-                $direct(bcb.as_mut_ptr().add(ANCHOR), bcr.as_mut_ptr().add(ANCHOR), STRIDE as i32, $alpha, $beta);
-            }
-            assert_eq!(acb, bcb, concat!($name, ": Cb slot vs direct disagree"));
-            assert_eq!(acr, bcr, concat!($name, ": Cr slot vs direct disagree"));
-        }};
-    }
-
-    for trial in 0..scale(200) {
-        let alpha = rng.range_i32(0, 255);
-        let beta = rng.range_i32(0, 18);
-        let tc: [i8; 4] = match trial % 4 {
-            0 => [-1, -1, -1, -1],           // gate closed on every group
-            1 => [0, 0, 0, 0],               // open, but no clipping headroom
-            2 => [-1, 3, -1, 12],            // mixed — the case a uniform sweep misses
-            _ => [
-                rng.range_i32(0, 25) as i8, rng.range_i32(0, 25) as i8,
-                rng.range_i32(0, 25) as i8, rng.range_i32(0, 25) as i8,
-            ],
-        };
-        let base: Vec<u8> = (0..STRIDE * ROWS).map(|_| rng.range_i32(0, 255) as u8).collect();
-
-        cmp1_tc!(base, tc, alpha, beta, t.pfLumaDeblockingLT4Ver.unwrap(), deb::DeblockLumaLt4V_c, "LumaLT4Ver");
-        cmp1_tc!(base, tc, alpha, beta, t.pfLumaDeblockingLT4Hor.unwrap(), deb::DeblockLumaLt4H_c, "LumaLT4Hor");
-        cmp1!(base, alpha, beta, t.pfLumaDeblockingEQ4Ver.unwrap(), deb::DeblockLumaEq4V_c, "LumaEQ4Ver");
-        cmp1!(base, alpha, beta, t.pfLumaDeblockingEQ4Hor.unwrap(), deb::DeblockLumaEq4H_c, "LumaEQ4Hor");
-
-        cmp2_tc!(base, tc, alpha, beta, t.pfChromaDeblockingLT4Ver.unwrap(), deb::DeblockChromaLt4V_c, "ChromaLT4Ver");
-        cmp2_tc!(base, tc, alpha, beta, t.pfChromaDeblockingLT4Hor.unwrap(), deb::DeblockChromaLt4H_c, "ChromaLT4Hor");
-        cmp2!(base, alpha, beta, t.pfChromaDeblockingEQ4Ver.unwrap(), deb::DeblockChromaEq4V_c, "ChromaEQ4Ver");
-        cmp2!(base, alpha, beta, t.pfChromaDeblockingEQ4Hor.unwrap(), deb::DeblockChromaEq4H_c, "ChromaEQ4Hor");
-
-        cmp1_tc!(base, tc, alpha, beta, t.pfChromaDeblockingLT4Ver2.unwrap(), deb::DeblockChromaLt4V2_c, "ChromaLT4Ver2");
-        cmp1_tc!(base, tc, alpha, beta, t.pfChromaDeblockingLT4Hor2.unwrap(), deb::DeblockChromaLt4H2_c, "ChromaLT4Hor2");
-        cmp1!(base, alpha, beta, t.pfChromaDeblockingEQ4Ver2.unwrap(), deb::DeblockChromaEq4V2_c, "ChromaEQ4Ver2");
-        cmp1!(base, alpha, beta, t.pfChromaDeblockingEQ4Hor2.unwrap(), deb::DeblockChromaEq4H2_c, "ChromaEQ4Hor2");
-    }
-}

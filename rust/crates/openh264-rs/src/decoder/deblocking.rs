@@ -213,10 +213,8 @@ pub use crate::decoder::parameter_sets::{SSps, SPps};
 pub use crate::decoder::slice::{SSliceHeader, SSliceHeaderExt};
 pub use crate::decoder::decoder_core::{SSlice, SLayerInfo, DqLayerState};
 pub use crate::decoder::decoder_context::{
-    SRefPic, SDeblockingFunc, SDeblockingFilter, PicId,
+    SRefPic, SDeblockingFilter, PicId,
     MAX_DPB_COUNT,
-    PLumaDeblockingLT4Func, PLumaDeblockingEQ4Func, PChromaDeblockingLT4Func,
-    PChromaDeblockingEQ4Func, PChromaDeblockingLT4Func2, PChromaDeblockingEQ4Func2,
 };
 
 /// **T5.P′1 added `pDec`.** The layer used to carry the picture being decoded into,
@@ -2426,31 +2424,6 @@ mod tests {
         }
     }
 
-    /// The installer the decoder actually calls (`decoder_core.rs:1872`) — this
-    /// module's own copy of it was a dead duplicate and is deleted (T5.AA2, S18).
-    /// The one `unsafe` this module still spells, and it is the boundary's own:
-    /// `common/`'s installer keeps its raw signature for the encoder (F12/P10), so
-    /// calling it needs the block. Phase 6 deletes the raw form and this goes with
-    /// it — the module's only exception, allowed by name rather than by silence.
-    #[test]
-    fn test_deblocking_init() {
-        {
-            let mut func = SDeblockingFunc::default();
-            crate::common::deblocking_common::DeblockingInit(&mut func, 0);
-            assert!(func.pfLumaDeblockingLT4Ver.is_some());
-            assert!(func.pfLumaDeblockingEQ4Ver.is_some());
-            assert!(func.pfLumaDeblockingLT4Hor.is_some());
-            assert!(func.pfLumaDeblockingEQ4Hor.is_some());
-            assert!(func.pfChromaDeblockingLT4Ver.is_some());
-            assert!(func.pfChromaDeblockingEQ4Ver.is_some());
-            assert!(func.pfChromaDeblockingLT4Hor.is_some());
-            assert!(func.pfChromaDeblockingEQ4Hor.is_some());
-            assert!(func.pfChromaDeblockingLT4Ver2.is_some());
-            assert!(func.pfChromaDeblockingEQ4Ver2.is_some());
-            assert!(func.pfChromaDeblockingLT4Hor2.is_some());
-            assert!(func.pfChromaDeblockingEQ4Hor2.is_some());
-        }
-    }
 }
 
 // WELS_CPU_* flags: one definition, in `common/cpu_core.rs`. The copies that

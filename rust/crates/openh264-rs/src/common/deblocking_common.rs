@@ -1,4 +1,11 @@
 #![allow(non_snake_case, non_camel_case_types, non_upper_case_globals, dead_code, unused_variables, unused_unsafe)]
+//! **Sealed at S4.D4** — `forbid(unsafe_code)` below. With the twelve raw
+//! `Deblock*_c` shims and the dispatch table they filled deleted, nothing in this
+//! file is unsafe: the deblocking kernels are the safe ones the decoder and encoder
+//! have called directly since T9.C2, over `PlaneSamples` cursors that carry their
+//! own bounds. This is E2's flip, taken early for one file because the deletion
+//! that made it possible happened here.
+#![forbid(unsafe_code)]
 
 //! H.264 / AVC In-Loop Adaptive Deblocking Filter Primitives.
 //!
@@ -331,441 +338,33 @@ fn shim_span(step_x: usize, step_y: usize, reach_back: usize, reach_fwd: usize, 
 // So every tap, including the `-reach_back` ones, lands on picture (or left/top
 // neighbour MB) samples — the padding border is *not* part of this argument.
 
-/// C++: `DeblockLumaLt4V_c` — bS<4 luma, taps stepping by `iStride`.
-///
-/// # Safety
-/// * `pPixY` points at the first line's `q0` of a 16-line luma edge in a plane
-///   of stride `iStride > 0`. With `s = iStride as usize`, the call touches
-///   exactly `[pPixY - 3*s, pPixY + 2*s + 15]` — reads `p2..q2` per line,
-///   writes `p1..q1` — and the shim materialises that span (`5*s + 16` bytes),
-///   which must lie inside one live allocation. The p side exists per the
-///   module-level availability argument above.
-/// * `pTc` points at 4 readable `i8` group thresholds.
-// unsafe-cat: port-raw(Phase 9) — the DECODER's deblocking slot table (C2's split), not the encoder's; see phase9_disposition.md §4.6
-#[allow(unsafe_code)]
-pub unsafe extern "C" fn DeblockLumaLt4V_c(
-    pPixY: *mut u8,
-    iStride: i32,
-    iAlpha: i32,
-    iBeta: i32,
-    pTc: *mut i8,
-) {
-    // SHIM(phase2) -> deblock_luma_lt4
-    unsafe {
-        let s = iStride as usize;
-        let (back, len) = shim_span(s, 1, 3, 2, 16);
-        let buf = std::slice::from_raw_parts_mut(pPixY.sub(back), len);
-        let tc: &[i8; 4] = std::slice::from_raw_parts(pTc, 4).try_into().unwrap();
-        deblock_luma_lt4(&mut PlaneCursorMut::new(buf, back, s), s as isize, 1, iAlpha, iBeta, tc);
-    }
-}
 
-/// C++: `DeblockLumaEq4V_c` — bS==4 luma, taps stepping by `iStride`.
-///
-/// # Safety
-/// * As [`DeblockLumaLt4V_c`], but the strong filter reaches one tap further on
-///   both sides: the span is `[pPixY - 4*s, pPixY + 3*s + 15]` (`7*s + 16`
-///   bytes) — reads `p3..q3`, writes `p2..q2`.
-// unsafe-cat: port-raw(Phase 9) — the DECODER's deblocking slot table (C2's split), not the encoder's; see phase9_disposition.md §4.6
-#[allow(unsafe_code)]
-pub unsafe extern "C" fn DeblockLumaEq4V_c(
-    pPixY: *mut u8,
-    iStride: i32,
-    iAlpha: i32,
-    iBeta: i32,
-) {
-    // SHIM(phase2) -> deblock_luma_eq4
-    unsafe {
-        let s = iStride as usize;
-        let (back, len) = shim_span(s, 1, 4, 3, 16);
-        let buf = std::slice::from_raw_parts_mut(pPixY.sub(back), len);
-        deblock_luma_eq4(&mut PlaneCursorMut::new(buf, back, s), s as isize, 1, iAlpha, iBeta);
-    }
-}
 
-/// C++: `DeblockLumaLt4H_c` — bS<4 luma, taps stepping by 1 byte.
-///
-/// # Safety
-/// * `pPixY` points at the first line's `q0` of a 16-line luma edge in a plane
-///   of stride `iStride > 0`. With `s = iStride as usize`, the call touches
-///   exactly `[pPixY - 3, pPixY + 15*s + 2]` (`15*s + 6` bytes) — three
-///   columns left, two right, sixteen rows down. The p side exists per the
-///   module-level availability argument above.
-/// * `pTc` points at 4 readable `i8` group thresholds.
-// unsafe-cat: port-raw(Phase 9) — the DECODER's deblocking slot table (C2's split), not the encoder's; see phase9_disposition.md §4.6
-#[allow(unsafe_code)]
-pub unsafe extern "C" fn DeblockLumaLt4H_c(
-    pPixY: *mut u8,
-    iStride: i32,
-    iAlpha: i32,
-    iBeta: i32,
-    pTc: *mut i8,
-) {
-    // SHIM(phase2) -> deblock_luma_lt4
-    unsafe {
-        let s = iStride as usize;
-        let (back, len) = shim_span(1, s, 3, 2, 16);
-        let buf = std::slice::from_raw_parts_mut(pPixY.sub(back), len);
-        let tc: &[i8; 4] = std::slice::from_raw_parts(pTc, 4).try_into().unwrap();
-        deblock_luma_lt4(&mut PlaneCursorMut::new(buf, back, s), 1, s as isize, iAlpha, iBeta, tc);
-    }
-}
 
-/// C++: `DeblockLumaEq4H_c` — bS==4 luma, taps stepping by 1 byte.
-///
-/// # Safety
-/// * As [`DeblockLumaLt4H_c`], one tap further both sides: the span is
-///   `[pPixY - 4, pPixY + 15*s + 3]` (`15*s + 8` bytes).
-// unsafe-cat: port-raw(Phase 9) — the DECODER's deblocking slot table (C2's split), not the encoder's; see phase9_disposition.md §4.6
-#[allow(unsafe_code)]
-pub unsafe extern "C" fn DeblockLumaEq4H_c(
-    pPixY: *mut u8,
-    iStride: i32,
-    iAlpha: i32,
-    iBeta: i32,
-) {
-    // SHIM(phase2) -> deblock_luma_eq4
-    unsafe {
-        let s = iStride as usize;
-        let (back, len) = shim_span(1, s, 4, 3, 16);
-        let buf = std::slice::from_raw_parts_mut(pPixY.sub(back), len);
-        deblock_luma_eq4(&mut PlaneCursorMut::new(buf, back, s), 1, s as isize, iAlpha, iBeta);
-    }
-}
 
-/// C++: `DeblockChromaLt4V_c` — bS<4 chroma on separate Cb/Cr planes, taps
-/// stepping by `iStride`.
-///
-/// # Safety
-/// * `pPixCb` and `pPixCr` each point at the first line's `q0` of an 8-line
-///   chroma edge; the planes share stride `iStride > 0` and must not overlap.
-///   With `s = iStride as usize`, each plane's touched span is exactly
-///   `[p - 2*s, p + s + 7]` (`3*s + 8` bytes) — reads `p1..q1`, writes
-///   `p0`/`q0`. The p side exists per the module-level availability argument.
-/// * `pTc` points at 4 readable `i8` group thresholds.
-// unsafe-cat: port-raw(Phase 9) — the DECODER's deblocking slot table (C2's split), not the encoder's; see phase9_disposition.md §4.6
-#[allow(unsafe_code)]
-pub unsafe extern "C" fn DeblockChromaLt4V_c(
-    pPixCb: *mut u8,
-    pPixCr: *mut u8,
-    iStride: i32,
-    iAlpha: i32,
-    iBeta: i32,
-    pTc: *mut i8,
-) {
-    // SHIM(phase2) -> deblock_chroma_lt4
-    unsafe {
-        let s = iStride as usize;
-        let (back, len) = shim_span(s, 1, 2, 1, 8);
-        let cb = std::slice::from_raw_parts_mut(pPixCb.sub(back), len);
-        let cr = std::slice::from_raw_parts_mut(pPixCr.sub(back), len);
-        let tc: &[i8; 4] = std::slice::from_raw_parts(pTc, 4).try_into().unwrap();
-        deblock_chroma_lt4(
-            &mut PlaneCursorMut::new(cb, back, s),
-            &mut PlaneCursorMut::new(cr, back, s),
-            s as isize, 1, iAlpha, iBeta, tc,
-        );
-    }
-}
 
-/// C++: `DeblockChromaEq4V_c` — bS==4 chroma on separate Cb/Cr planes, taps
-/// stepping by `iStride`. Same reach and span as [`DeblockChromaLt4V_c`].
-///
-/// # Safety
-/// * As [`DeblockChromaLt4V_c`], without the tc table.
-// unsafe-cat: port-raw(Phase 9) — the DECODER's deblocking slot table (C2's split), not the encoder's; see phase9_disposition.md §4.6
-#[allow(unsafe_code)]
-pub unsafe extern "C" fn DeblockChromaEq4V_c(
-    pPixCb: *mut u8,
-    pPixCr: *mut u8,
-    iStride: i32,
-    iAlpha: i32,
-    iBeta: i32,
-) {
-    // SHIM(phase2) -> deblock_chroma_eq4
-    unsafe {
-        let s = iStride as usize;
-        let (back, len) = shim_span(s, 1, 2, 1, 8);
-        let cb = std::slice::from_raw_parts_mut(pPixCb.sub(back), len);
-        let cr = std::slice::from_raw_parts_mut(pPixCr.sub(back), len);
-        deblock_chroma_eq4(
-            &mut PlaneCursorMut::new(cb, back, s),
-            &mut PlaneCursorMut::new(cr, back, s),
-            s as isize, 1, iAlpha, iBeta,
-        );
-    }
-}
 
-/// C++: `DeblockChromaLt4H_c` — bS<4 chroma on separate Cb/Cr planes, taps
-/// stepping by 1 byte.
-///
-/// # Safety
-/// * As [`DeblockChromaLt4V_c`] with the axes swapped: each plane's span is
-///   exactly `[p - 2, p + 7*s + 1]` (`7*s + 4` bytes) — two columns left, one
-///   right, eight rows down.
-// unsafe-cat: port-raw(Phase 9) — the DECODER's deblocking slot table (C2's split), not the encoder's; see phase9_disposition.md §4.6
-#[allow(unsafe_code)]
-pub unsafe extern "C" fn DeblockChromaLt4H_c(
-    pPixCb: *mut u8,
-    pPixCr: *mut u8,
-    iStride: i32,
-    iAlpha: i32,
-    iBeta: i32,
-    pTc: *mut i8,
-) {
-    // SHIM(phase2) -> deblock_chroma_lt4
-    unsafe {
-        let s = iStride as usize;
-        let (back, len) = shim_span(1, s, 2, 1, 8);
-        let cb = std::slice::from_raw_parts_mut(pPixCb.sub(back), len);
-        let cr = std::slice::from_raw_parts_mut(pPixCr.sub(back), len);
-        let tc: &[i8; 4] = std::slice::from_raw_parts(pTc, 4).try_into().unwrap();
-        deblock_chroma_lt4(
-            &mut PlaneCursorMut::new(cb, back, s),
-            &mut PlaneCursorMut::new(cr, back, s),
-            1, s as isize, iAlpha, iBeta, tc,
-        );
-    }
-}
 
-/// C++: `DeblockChromaEq4H_c` — bS==4 chroma on separate Cb/Cr planes, taps
-/// stepping by 1 byte. Same span as [`DeblockChromaLt4H_c`].
-///
-/// # Safety
-/// * As [`DeblockChromaLt4H_c`], without the tc table.
-// unsafe-cat: port-raw(Phase 9) — the DECODER's deblocking slot table (C2's split), not the encoder's; see phase9_disposition.md §4.6
-#[allow(unsafe_code)]
-pub unsafe extern "C" fn DeblockChromaEq4H_c(
-    pPixCb: *mut u8,
-    pPixCr: *mut u8,
-    iStride: i32,
-    iAlpha: i32,
-    iBeta: i32,
-) {
-    // SHIM(phase2) -> deblock_chroma_eq4
-    unsafe {
-        let s = iStride as usize;
-        let (back, len) = shim_span(1, s, 2, 1, 8);
-        let cb = std::slice::from_raw_parts_mut(pPixCb.sub(back), len);
-        let cr = std::slice::from_raw_parts_mut(pPixCr.sub(back), len);
-        deblock_chroma_eq4(
-            &mut PlaneCursorMut::new(cb, back, s),
-            &mut PlaneCursorMut::new(cr, back, s),
-            1, s as isize, iAlpha, iBeta,
-        );
-    }
-}
 
-/// C++: `DeblockChromaLt4V2_c` — bS<4 chroma on one combined CbCr buffer, taps
-/// stepping by `iStride`.
-///
-/// # Safety
-/// * `pPixCbCr` points at the first line's `q0`; the touched span is exactly
-///   `[pPixCbCr - 2*s, pPixCbCr + s + 7]` (`3*s + 8` bytes), as one plane of
-///   [`DeblockChromaLt4V_c`].
-/// * `pTc` points at 4 readable `i8` group thresholds.
-// unsafe-cat: port-raw(Phase 9) — the DECODER's deblocking slot table (C2's split), not the encoder's; see phase9_disposition.md §4.6
-#[allow(unsafe_code)]
-pub unsafe extern "C" fn DeblockChromaLt4V2_c(
-    pPixCbCr: *mut u8,
-    iStride: i32,
-    iAlpha: i32,
-    iBeta: i32,
-    pTc: *mut i8,
-) {
-    // SHIM(phase2) -> deblock_chroma_lt42
-    unsafe {
-        let s = iStride as usize;
-        let (back, len) = shim_span(s, 1, 2, 1, 8);
-        let buf = std::slice::from_raw_parts_mut(pPixCbCr.sub(back), len);
-        let tc: &[i8; 4] = std::slice::from_raw_parts(pTc, 4).try_into().unwrap();
-        deblock_chroma_lt42(&mut PlaneCursorMut::new(buf, back, s), s as isize, 1, iAlpha, iBeta, tc);
-    }
-}
 
-/// C++: `DeblockChromaEq4V2_c` — bS==4 chroma on one combined CbCr buffer, taps
-/// stepping by `iStride`. Same span as [`DeblockChromaLt4V2_c`].
-///
-/// # Safety
-/// * As [`DeblockChromaLt4V2_c`], without the tc table.
-// unsafe-cat: port-raw(Phase 9) — the DECODER's deblocking slot table (C2's split), not the encoder's; see phase9_disposition.md §4.6
-#[allow(unsafe_code)]
-pub unsafe extern "C" fn DeblockChromaEq4V2_c(
-    pPixCbCr: *mut u8,
-    iStride: i32,
-    iAlpha: i32,
-    iBeta: i32,
-) {
-    // SHIM(phase2) -> deblock_chroma_eq42
-    unsafe {
-        let s = iStride as usize;
-        let (back, len) = shim_span(s, 1, 2, 1, 8);
-        let buf = std::slice::from_raw_parts_mut(pPixCbCr.sub(back), len);
-        deblock_chroma_eq42(&mut PlaneCursorMut::new(buf, back, s), s as isize, 1, iAlpha, iBeta);
-    }
-}
 
-/// C++: `DeblockChromaLt4H2_c` — bS<4 chroma on one combined CbCr buffer, taps
-/// stepping by 1 byte.
-///
-/// # Safety
-/// * `pPixCbCr` points at the first line's `q0`; the touched span is exactly
-///   `[pPixCbCr - 2, pPixCbCr + 7*s + 1]` (`7*s + 4` bytes), as one plane of
-///   [`DeblockChromaLt4H_c`].
-/// * `pTc` points at 4 readable `i8` group thresholds.
-// unsafe-cat: port-raw(Phase 9) — the DECODER's deblocking slot table (C2's split), not the encoder's; see phase9_disposition.md §4.6
-#[allow(unsafe_code)]
-pub unsafe extern "C" fn DeblockChromaLt4H2_c(
-    pPixCbCr: *mut u8,
-    iStride: i32,
-    iAlpha: i32,
-    iBeta: i32,
-    pTc: *mut i8,
-) {
-    // SHIM(phase2) -> deblock_chroma_lt42
-    unsafe {
-        let s = iStride as usize;
-        let (back, len) = shim_span(1, s, 2, 1, 8);
-        let buf = std::slice::from_raw_parts_mut(pPixCbCr.sub(back), len);
-        let tc: &[i8; 4] = std::slice::from_raw_parts(pTc, 4).try_into().unwrap();
-        deblock_chroma_lt42(&mut PlaneCursorMut::new(buf, back, s), 1, s as isize, iAlpha, iBeta, tc);
-    }
-}
 
-/// C++: `DeblockChromaEq4H2_c` — bS==4 chroma on one combined CbCr buffer, taps
-/// stepping by 1 byte. Same span as [`DeblockChromaLt4H2_c`].
-///
-/// # Safety
-/// * As [`DeblockChromaLt4H2_c`], without the tc table.
-// unsafe-cat: port-raw(Phase 9) — the DECODER's deblocking slot table (C2's split), not the encoder's; see phase9_disposition.md §4.6
-#[allow(unsafe_code)]
-pub unsafe extern "C" fn DeblockChromaEq4H2_c(
-    pPixCbCr: *mut u8,
-    iStride: i32,
-    iAlpha: i32,
-    iBeta: i32,
-) {
-    // SHIM(phase2) -> deblock_chroma_eq42
-    unsafe {
-        let s = iStride as usize;
-        let (back, len) = shim_span(1, s, 2, 1, 8);
-        let buf = std::slice::from_raw_parts_mut(pPixCbCr.sub(back), len);
-        deblock_chroma_eq42(&mut PlaneCursorMut::new(buf, back, s), 1, s as isize, iAlpha, iBeta);
-    }
-}
 
-/// C++: `WelsNonZeroCount_c` — in no dispatch table in this module (the decoder
-/// installs `decode_slice.rs`'s copy, the encoder `encoder/deblocking.rs`'s), so
-/// per the T3 precedent the shim keeps only the Wels name, not the C ABI.
-///
-/// # Safety
-/// * `pNonZeroCount` points at 24 writable `i8` — the per-MB non-zero-count
-///   cache (16 luma + 8 chroma entries).
-// unsafe-cat: port-raw(Phase 9) — the DECODER's deblocking slot table (C2's split), not the encoder's; see phase9_disposition.md §4.6
-#[allow(unsafe_code)]
-pub unsafe fn WelsNonZeroCount_c(pNonZeroCount: *mut i8) {
-    // SHIM(phase2) -> nonzero_count
-    unsafe {
-        let nzc: &mut [i8; 24] = std::slice::from_raw_parts_mut(pNonZeroCount, 24).try_into().unwrap();
-        nonzero_count(nzc);
-    }
-}
 
 // ============================================================================
 // Function Pointer Types & SDeblockingFunc Table
 // ============================================================================
 
-pub type PLumaDeblockingLT4Func =
-    Option<unsafe extern "C" fn(pPixY: *mut u8, iStride: i32, iAlpha: i32, iBeta: i32, pTc: *mut i8)>;
-
-pub type PLumaDeblockingEQ4Func =
-    Option<unsafe extern "C" fn(pPixY: *mut u8, iStride: i32, iAlpha: i32, iBeta: i32)>;
-
-pub type PChromaDeblockingLT4Func = Option<
-    unsafe extern "C" fn(
-        pPixCb: *mut u8,
-        pPixCr: *mut u8,
-        iStride: i32,
-        iAlpha: i32,
-        iBeta: i32,
-        pTc: *mut i8,
-    ),
->;
-
-pub type PChromaDeblockingEQ4Func =
-    Option<unsafe extern "C" fn(pPixCb: *mut u8, pPixCr: *mut u8, iStride: i32, iAlpha: i32, iBeta: i32)>;
-
-pub type PChromaDeblockingLT4Func2 =
-    Option<unsafe extern "C" fn(pPixCbCr: *mut u8, iStride: i32, iAlpha: i32, iBeta: i32, pTc: *mut i8)>;
-
-pub type PChromaDeblockingEQ4Func2 =
-    Option<unsafe extern "C" fn(pPixCbCr: *mut u8, iStride: i32, iAlpha: i32, iBeta: i32)>;
 
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
-pub struct SDeblockingFunc {
-    pub pfLumaDeblockingLT4Ver: PLumaDeblockingLT4Func,
-    pub pfLumaDeblockingEQ4Ver: PLumaDeblockingEQ4Func,
-    pub pfLumaDeblockingLT4Hor: PLumaDeblockingLT4Func,
-    pub pfLumaDeblockingEQ4Hor: PLumaDeblockingEQ4Func,
 
-    pub pfChromaDeblockingLT4Ver: PChromaDeblockingLT4Func,
-    pub pfChromaDeblockingEQ4Ver: PChromaDeblockingEQ4Func,
-    pub pfChromaDeblockingLT4Hor: PChromaDeblockingLT4Func,
-    pub pfChromaDeblockingEQ4Hor: PChromaDeblockingEQ4Func,
 
-    pub pfChromaDeblockingLT4Ver2: PChromaDeblockingLT4Func2,
-    pub pfChromaDeblockingEQ4Ver2: PChromaDeblockingEQ4Func2,
-    pub pfChromaDeblockingLT4Hor2: PChromaDeblockingLT4Func2,
-    pub pfChromaDeblockingEQ4Hor2: PChromaDeblockingEQ4Func2,
-}
 
-impl SDeblockingFunc {
-    /// The all-`None` table `WelsMallocz`'s zeroing leaves — the decoder context's
-    /// state until `WelsInitDecoderFuncs` installs [`Default`]'s twelve kernels.
-    pub fn memset_zero() -> Self {
-        Self {
-            pfLumaDeblockingLT4Ver: None,
-            pfLumaDeblockingEQ4Ver: None,
-            pfLumaDeblockingLT4Hor: None,
-            pfLumaDeblockingEQ4Hor: None,
-            pfChromaDeblockingLT4Ver: None,
-            pfChromaDeblockingEQ4Ver: None,
-            pfChromaDeblockingLT4Hor: None,
-            pfChromaDeblockingEQ4Hor: None,
-            pfChromaDeblockingLT4Ver2: None,
-            pfChromaDeblockingEQ4Ver2: None,
-            pfChromaDeblockingLT4Hor2: None,
-            pfChromaDeblockingEQ4Hor2: None,
-        }
-    }
-}
 
-impl Default for SDeblockingFunc {
-    fn default() -> Self {
-        Self {
-            pfLumaDeblockingLT4Ver: Some(DeblockLumaLt4V_c),
-            pfLumaDeblockingEQ4Ver: Some(DeblockLumaEq4V_c),
-            pfLumaDeblockingLT4Hor: Some(DeblockLumaLt4H_c),
-            pfLumaDeblockingEQ4Hor: Some(DeblockLumaEq4H_c),
 
-            pfChromaDeblockingLT4Ver: Some(DeblockChromaLt4V_c),
-            pfChromaDeblockingEQ4Ver: Some(DeblockChromaEq4V_c),
-            pfChromaDeblockingLT4Hor: Some(DeblockChromaLt4H_c),
-            pfChromaDeblockingEQ4Hor: Some(DeblockChromaEq4H_c),
 
-            pfChromaDeblockingLT4Ver2: Some(DeblockChromaLt4V2_c),
-            pfChromaDeblockingEQ4Ver2: Some(DeblockChromaEq4V2_c),
-            pfChromaDeblockingLT4Hor2: Some(DeblockChromaLt4H2_c),
-            pfChromaDeblockingEQ4Hor2: Some(DeblockChromaEq4H2_c),
-        }
-    }
-}
 
-pub fn DeblockingInit(pFunc: &mut SDeblockingFunc, _iCpu: i32) {
-    *pFunc = SDeblockingFunc::default();
-}
+
 
 // ============================================================================
 // Unit Tests
@@ -773,31 +372,12 @@ pub fn DeblockingInit(pFunc: &mut SDeblockingFunc, _iCpu: i32) {
 
 #[cfg(test)]
 mod tests {
-    // unsafe-cat: instrument(test)
-    //
-    // These tests call the raw slot shims above through their C-ABI signatures,
-    // which is the surface under test; the module-level allow covers the calls.
-    #![allow(unsafe_code)]
+    // The module-level `#![allow(unsafe_code)]` and its `instrument(test)` tag stood
+    // here, for tests that "call the raw slot shims above through their C-ABI
+    // signatures". S4.D4 deleted those shims, so the surface under test is gone and
+    // the allow with it — this module is safe Rust throughout now, as is the file.
     use super::*;
     
-    #[test]
-    fn test_wels_non_zero_count() {
-        let mut counts: [i8; 24] = [
-            0, 3, -1, 0, 5, 0, 0, 12,
-            0, 0, 1, -4, 0, 0, 0, 0,
-            2, 0, 0, 7, 0, -9, 0, 0,
-        ];
-        unsafe {
-            WelsNonZeroCount_c(counts.as_mut_ptr());
-        }
-        for (i, &val) in counts.iter().enumerate() {
-            let expected = match i {
-                1 | 2 | 4 | 7 | 10 | 11 | 16 | 19 | 21 => 1,
-                _ => 0,
-            };
-            assert_eq!(val, expected, "Mismatch at index {}", i);
-        }
-    }
 
     #[test]
     fn test_wels_clip1() {
@@ -808,95 +388,11 @@ mod tests {
         assert_eq!(WelsClip1(300), 255);
     }
 
-    #[test]
-    fn test_deblock_luma_lt4_v() {
-        let mut buf = [128u8; 16 * 16];
-        let stride = 16i32;
-        let mut tc = [2i8; 4];
-        unsafe {
-            DeblockLumaLt4V_c(buf.as_mut_ptr().add(4 * 16), stride, 20, 10, tc.as_mut_ptr());
-        }
-        // Flat buffer remains unmodified
-        assert_eq!(buf[4 * 16], 128);
-    }
 }
 
 #[cfg(test)]
 mod dispatch_tests {
     use super::*;
 
-    /// Plan §5's de-virtualization mitigation for `SDeblockingFunc`:
-    /// `DeblockingInit` is a constant function of its CPU argument.
-    ///
-    /// See `common::mc::tests::init_mc_func_ignores_the_cpu_flag` for why this
-    /// compares two installed tables rather than a table against named
-    /// functions, and why it is scoped out of Miri. In short: taking a
-    /// function's address can mint a fresh instantiation per codegen unit, and
-    /// Miri mints one per cast, so only two addresses produced by the *same*
-    /// installer are safely comparable. The complementary behavioural half is
-    /// `deblocking_table_slots_match_the_direct_calls` in the differential file.
-    #[test]
-    #[cfg_attr(miri, ignore)]
-    fn deblocking_init_ignores_the_cpu_flag() {
-        use crate::common::cpu_core::*;
-        let flags: [i32; 10] = [
-            0, -1,
-            WELS_CPU_SSE2 as i32, WELS_CPU_SSE41 as i32, WELS_CPU_SSE42 as i32,
-            WELS_CPU_AVX as i32, WELS_CPU_AVX2 as i32, WELS_CPU_NEON as i32,
-            WELS_CPU_MMI as i32, WELS_CPU_LSX as i32,
-        ];
-        let addrs = |t: &SDeblockingFunc| -> [usize; 12] {
-            [
-                t.pfLumaDeblockingLT4Ver.unwrap() as usize,
-                t.pfLumaDeblockingEQ4Ver.unwrap() as usize,
-                t.pfLumaDeblockingLT4Hor.unwrap() as usize,
-                t.pfLumaDeblockingEQ4Hor.unwrap() as usize,
-                t.pfChromaDeblockingLT4Ver.unwrap() as usize,
-                t.pfChromaDeblockingEQ4Ver.unwrap() as usize,
-                t.pfChromaDeblockingLT4Hor.unwrap() as usize,
-                t.pfChromaDeblockingEQ4Hor.unwrap() as usize,
-                t.pfChromaDeblockingLT4Ver2.unwrap() as usize,
-                t.pfChromaDeblockingEQ4Ver2.unwrap() as usize,
-                t.pfChromaDeblockingLT4Hor2.unwrap() as usize,
-                t.pfChromaDeblockingEQ4Hor2.unwrap() as usize,
-            ]
-        };
-        const NAMES: [&str; 12] = [
-            "LumaLT4Ver", "LumaEQ4Ver", "LumaLT4Hor", "LumaEQ4Hor",
-            "ChromaLT4Ver", "ChromaEQ4Ver", "ChromaLT4Hor", "ChromaEQ4Hor",
-            "ChromaLT4Ver2", "ChromaEQ4Ver2", "ChromaLT4Hor2", "ChromaEQ4Hor2",
-        ];
-        let mut base = SDeblockingFunc::default();
-        DeblockingInit(&mut base, 0);
-        let want = addrs(&base);
-        for flag in flags {
-            let mut t = SDeblockingFunc::default();
-            DeblockingInit(&mut t, flag);
-            for (i, (got, expected)) in addrs(&t).into_iter().zip(want).enumerate() {
-                assert_eq!(got, expected, "cpu flag {flag:#x} changed slot {}", NAMES[i]);
-            }
-        }
-    }
 
-    /// Every slot is populated after init, so the decoder's former
-    /// `if let Some(f) = (*pLoopf).pf...` guards — 22 of them — were never
-    /// taken, and unconditional direct calls preserve behaviour.
-    ///
-    /// A `None` there did not degrade gracefully: it silently skipped filtering
-    /// one edge, which is a wrong picture rather than an error. `DeblockingInit`
-    /// runs from `WelsInitDecoderFuncs` at open, before any slice is decoded.
-    #[test]
-    fn deblocking_table_is_fully_populated_after_init() {
-        let mut t = SDeblockingFunc::default();
-        DeblockingInit(&mut t, 0);
-        assert!(
-            t.pfLumaDeblockingLT4Ver.is_some() && t.pfLumaDeblockingEQ4Ver.is_some()
-                && t.pfLumaDeblockingLT4Hor.is_some() && t.pfLumaDeblockingEQ4Hor.is_some()
-                && t.pfChromaDeblockingLT4Ver.is_some() && t.pfChromaDeblockingEQ4Ver.is_some()
-                && t.pfChromaDeblockingLT4Hor.is_some() && t.pfChromaDeblockingEQ4Hor.is_some()
-                && t.pfChromaDeblockingLT4Ver2.is_some() && t.pfChromaDeblockingEQ4Ver2.is_some()
-                && t.pfChromaDeblockingLT4Hor2.is_some() && t.pfChromaDeblockingEQ4Hor2.is_some(),
-            "DeblockingInit must leave every slot populated"
-        );
-    }
 }
