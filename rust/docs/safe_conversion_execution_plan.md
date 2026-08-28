@@ -267,7 +267,7 @@ duty, the way F220 transferred it to S3. The residue B1 leaves for D4 is unchang
 |---|---|
 | D1 | Bit writers onto `safe::bits`: `svc_set_mb_syn_cavlc/cabac`, `set_mb_syn_cabac`, `vlc_encoder`, `nal_encap`, `encode_mb_aux`/`decode_mb_aux` |
 | D2 | `svc_encode_slice.rs` part 1 (81 fn / 117 raw, the biggest file): per-slice aliases → handles (§3c-5), slice construction/teardown |
-| D3 | `svc_encode_slice.rs` part 2: the encode loop, dynamic slicing, `svc_enc_slice_segment.rs`; Miri fork/join + mid-row probes gate every landing |
+| D3 | `svc_encode_slice.rs` part 2: the encode loop, dynamic slicing, `svc_enc_slice_segment.rs`; targeted second-scale worker-race probes gate every landing (D-gate-7 — the full fork pair moved to E3) |
 | D4 | `slice_multi_threading.rs` residue (25) + `common/deblocking_common.rs` raw-wrapper retirement (safe kernels already exist; delete the raw twins) + `encoder/deblocking.rs`, `mc.rs`, `copy_mb.rs` |
 
 **Exit criteria**: `encoder/` allows ≈ 0 outside the D1 impl file; session gate green.
@@ -276,7 +276,7 @@ duty, the way F220 transferred it to S3. The residue B1 leaves for D4 is unchang
 
 | # | Scope |
 |---|---|
-| E1 | Decoder residue (`decoder/picture.rs` 11 blocks; stray raws in `decoder_core`/`decoder_context`/`pic_queue`); `wels_trace` `pLogCtx` newtype confined to `src/api/`; opportunistic api-interior shrink (D2) |
+| E1 | Decoder residue (`decoder/picture.rs` — largely retired already, re-measure; stray raws in `decoder_core`/`decoder_context`/`pic_queue`); `wels_trace` `pLogCtx` newtype confined to `src/api/`; opportunistic api-interior shrink (D2) |
 | E2 | **The lint flip**: `#![forbid(unsafe_code)]` on every non-api file except the two D1 files (deny + exactly 1 allow each); delete `lib.rs` blanket allows; reduce `tools/census_allowlist.txt` to the island + 2 lines; pin the ratchet at the floor |
 | E3 | **Exit battery**: `gates.sh exit` — ABI export list, dlopen harness, upstream gtest vs known-failures, full Miri incl. differential tests, both benches vs `perf_baseline.md`, both-profile sweeps. Plus buffer for whatever it surfaces |
 
