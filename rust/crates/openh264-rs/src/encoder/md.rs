@@ -47,6 +47,7 @@ pub use crate::encoder::encoder_context::SMVUnitXY;
 pub use crate::encoder::encoder_context::SMVComponentUnit;
 pub use crate::encoder::picture::SPicture;
 pub use crate::encoder::svc_motion_estimate::SWelsME;
+use crate::safe::mvd_cost::MvdCostCursor;
 
 // Sub-pixel refinement buffer geometry constants
 pub const ME_REFINE_BUF_STRIDE: i32 = 32;
@@ -182,11 +183,11 @@ pub use crate::encoder::svc_motion_estimate::SadPredISatdUnit;
 
 #[repr(C)]
 #[derive(Copy, Clone, Default)]
-pub struct SWelsMD_sMe {
-    pub sMe16x16: SWelsME,
-    pub sMe8x8: [SWelsME; 4],
-    pub sMe16x8: [SWelsME; 2],
-    pub sMe8x16: [SWelsME; 2],
+pub struct SWelsMD_sMe<'a> {
+    pub sMe16x16: SWelsME<'a>,
+    pub sMe8x8: [SWelsME<'a>; 4],
+    pub sMe16x8: [SWelsME<'a>; 2],
+    pub sMe8x16: [SWelsME<'a>; 2],
     // **D-dead-2 / F122 — `sMe4x4`, `sMe8x4` and `sMe4x8` deleted.** Thirty-two
     // `SWelsME` between them (16 + 8 + 8 at 96 bytes each = 3072), and their only
     // readers and writers in the whole port were `WelsMdInterMbRefinement`'s
@@ -197,9 +198,14 @@ pub struct SWelsMD_sMe {
 }
 
 #[repr(C)]
-pub struct SWelsMD {
+pub struct SWelsMD<'a> {
     pub iLambda: i32,
-    pub pMvdCost: *mut u16,
+    /// **S5.C4b**: was `*mut u16`. `WelsInitInterMDStruc` re-parks it per macroblock
+    /// on the current luma QP's row, and `InitMe` copies it into each search block.
+    /// The `'a` reaches no context field: every `SWelsMD` in the tree is a local of
+    /// `WelsISliceMdEnc`/`WelsMdInterMbLoop`, and the table it borrows is written
+    /// once at init, before any slice worker exists.
+    pub pMvdCost: MvdCostCursor<'a>,
     pub iCostLuma: i32,
     pub iCostChroma: i32,
     pub iSadPredMb: i32,
@@ -211,14 +217,14 @@ pub struct SWelsMD {
     pub iMbPixX: i32,
     pub iMbPixY: i32,
     pub iBlock8x8StaticIdc: [i32; 4],
-    pub sMe: SWelsMD_sMe,
+    pub sMe: SWelsMD_sMe<'a>,
 }
 
-impl Default for SWelsMD {
+impl Default for SWelsMD<'_> {
     fn default() -> Self {
         Self {
             iLambda: 0,
-            pMvdCost: std::ptr::null_mut(),
+            pMvdCost: MvdCostCursor::none(),
             iCostLuma: 0,
             iCostChroma: 0,
             iSadPredMb: 0,
@@ -872,12 +878,11 @@ pub fn BsSizeSE(kiValue: i32) -> u32 {
     }
 }
 
+/// **S5.C4b**: safe — `svc_motion_estimate::COST_MVD`'s `i32` twin, converted with it.
 #[inline(always)]
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
-pub unsafe fn COST_MVD(pMvdCost: *const u16, iMvdX: i32, iMvdY: i32) -> i32 {
-    let x = *pMvdCost.offset(iMvdX as isize) as i32;
-    let y = *pMvdCost.offset(iMvdY as isize) as i32;
+pub fn COST_MVD(pMvdCost: MvdCostCursor<'_>, iMvdX: i32, iMvdY: i32) -> i32 {
+    let x = pMvdCost.at(iMvdX) as i32;
+    let y = pMvdCost.at(iMvdY) as i32;
     x + y
 }
 
@@ -1438,7 +1443,7 @@ pub fn InitMeRefinePointer(pMeRefine: &mut SMeRefinePointer, iStride: i32) {
 #[inline(always)]
 pub fn MeRefineQuarPixel(
     pFunc: &SWelsFuncPtrList,
-    pMe: &mut SWelsME,
+    pMe: &mut SWelsME<'_>,
     pMeRefine: &mut SMeRefinePointer,
     pMbCache: &mut SMbCache,
     cEnc: &PlaneCursor<'_>,
@@ -1581,7 +1586,7 @@ pub fn MeRefineQuarPixel(
 pub unsafe extern "C" fn MeRefineFracPixel(
     pEncCtx: *mut sWelsEncCtx,
     kiMemPredInterOff: usize,
-    pMe: &mut SWelsME,
+    pMe: &mut SWelsME<'_>,
     pMeRefine: &mut SMeRefinePointer,
     pMbCache: &mut SMbCache,
     iWidth: i32,

@@ -44,6 +44,7 @@
 pub mod bits;
 pub mod err;
 pub mod mb_grid;
+pub mod mvd_cost;
 pub mod plane;
 pub mod pool;
 

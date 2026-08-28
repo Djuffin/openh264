@@ -1088,34 +1088,12 @@ impl sWelsEncCtx {
         &mut self.pMvdCostTable
     }
 
-    /// The MVD cost table's **origin** — the entry a zero MVD indexes, which is
-    /// `iMvdCostTableSize` into the table. Every consumer wants this rather than
-    /// the root: `COST_MVD` indexes it with a *signed* MVD, so the bias is what
-    /// makes a negative motion-vector difference a negative offset from a pointer
-    /// that is still inside the allocation.
-    ///
-    /// **The return stays raw, and the far end is why.** Both callers
-    /// (`WelsISliceMdEnc` / `WelsISliceMdEncDynamic`, in-fork) hold it across the
-    /// macroblock loop and hand it to `WelsInitInterMDStruc`, which stamps
-    /// `SWelsMD::pMvdCost` — a `*mut u16` *field*, re-stamped per macroblock. The
-    /// field is stage C's to convert; until it does, a reference here would have
-    /// nothing to be stored into. What this conversion buys is that the accessor
-    /// itself is safe: `as_ptr` + `wrapping_add` compute the same address the
-    /// `unsafe` `.add` computed, with no claim about what is in bounds — the
-    /// claim, and the `debug_assert` that guards it, stay exactly where they were.
-    #[inline]
-    pub fn mvd_cost_origin(&self) -> *mut u16 {
-        if self.pMvdCostTable.is_empty() {
-            return std::ptr::null_mut();
-        }
-        debug_assert!(
-            (self.iMvdCostTableSize as usize) < self.pMvdCostTable.len(),
-            "the MVD table's origin is outside the table"
-        );
-        self.pMvdCostTable
-            .as_ptr()
-            .wrapping_add(self.iMvdCostTableSize as usize) as *mut u16
-    }
+    // `mvd_cost_origin(&self) -> *mut u16` stood here. **S5.C4b** retired it: its
+    // two callers now take `svc_encode_slice::ctx_mvd_cost_origin`, which answers
+    // with a `MvdCostCursor` instead of a raw pointer and reaches the table through
+    // a *field* projection rather than a whole-context `&self` — read that function's
+    // header for why the difference matters under the fork. The `debug_assert` this
+    // carried moved with the body; nothing else here had a second reader.
 
     /// The **rate controller's per-layer array** — T6.H6, `pCtx->pWelsSvcRc`.
     ///
@@ -2757,12 +2735,13 @@ mod tests {
         // property left to assert: two derivations cannot coexist and the borrow
         // checker says so at the call rather than Miri saying so at run time.
         // The whole rate-control branch of this family is references now.
-        // `mvd_cost_origin` is safe now but still *returns* a raw (the far end is
-        // `SWelsMD::pMvdCost`), so the property is unchanged and still asserted —
-        // this is the row that proves `as_ptr` through the new `&self` reader is
-        // the same sibling-stable derivation `addr_of!` was.
-        siblings!("mvd_cost_origin", (*p).mvd_cost_origin(),
-            |q: *mut u16| *q = 0x4321, |q: *mut u16| *q == 0x4321);
+        // `mvd_cost_origin` had a row here until S5.C4b, and it leaves for the
+        // reason `ctx_param` and `ctx_ref_list` did: the accessor is gone, and its
+        // successor (`svc_encode_slice::ctx_mvd_cost_origin`) answers with a
+        // `MvdCostCursor` rather than a `*mut u16`. There is no raw sibling left to
+        // assert stability of — the far end this row existed to serve,
+        // `SWelsMD::pMvdCost`, is a borrow now, so the coexistence it measured is
+        // the borrow checker's to referee.
         // `ctx_vaa` had a row here until A5. `vaa`/`vaa_mut` are references now,
         // refereed by the borrow checker like the rows above, and what stays raw —
         // `vaa_ptr`, the root `pfSetScrollingMv` needs and `vaa_ext` casts — is
@@ -2806,7 +2785,9 @@ mod tests {
                 // `ctx_dq_idc_map` left this list at T9.H2 step 4, and `ctx_ltr`
                 // at T9.H3 (deleted with the raw family) — a real reference
                 // cannot be *held* alongside the others, which is the point.
-                (*p).mvd_cost_origin().cast(),
+                // `mvd_cost_origin` left at S5.C4b for exactly that reason: its
+                // successor answers with a `MvdCostCursor`, and a borrow is not
+                // something this list can hold beside three raw cursors.
                 (*p).vaa_ptr().cast(),
                 ctx_dq_layer(p, 0).cast(), (*p).frame_bs().cast(),
             ]

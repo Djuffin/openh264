@@ -6321,3 +6321,53 @@ have looked like a filter that matched nothing. And the cost of catching it late
 was small only because the fix is one line: the checkpoint had already landed, so
 the correction rides in the following commit with this finding attached, rather
 than being amendable into the commit that caused it.
+
+## F228 — a `&self` context accessor is a *whole-context* retag, and inside the fork that races any worker's inline-field write; the raw accessors got away with it only because their borrows died on the next line
+
+**Where.** `sWelsEncCtx::mvd_cost_origin` (retired at S5.C4b), and by construction
+every other `&self` accessor on the context that a fork-reachable body calls.
+
+**What was believed.** The accessor family's own header says the conversion from
+`addr_of!` to `&self` + `as_ptr` "is the same sibling-stable derivation", and
+`every_container_accessor_hands_out_sibling_cursors` asserts exactly that —
+single-threaded. Nothing in the family's documentation distinguishes a `&self`
+derivation from a field-precise one, and C4b's first design took `&self` for
+granted on that basis.
+
+**What is true.** `&self` on `sWelsEncCtx` retags the **whole** context allocation.
+Under the fork that retag is a *read* of every inline field, so it races any other
+worker's concurrent write to any of them. A field place projection through the raw
+pointer — `&(*p).pMvdCostTable` — retags that field's bytes and nothing else, and
+does not race. Both halves measured directly, two scoped threads, no encoder:
+
+* whole-context: `Data race detected between (1) non-atomic write on thread
+  unnamed-2 and (2) retag read of type sWelsEncCtx on thread unnamed-3`
+* field-precise: passes, including when the derived `&[u16]` is *held* across the
+  other worker's writes for the whole of the worker's body.
+
+**Why nothing has caught it.** `mvd_cost_origin` returned a `*mut u16`, so its
+`&self` borrow lived for the length of the call and died on the next line. The
+window was one call wide, and no probe ever landed a concurrent inline write
+inside it. C4b's conversion widens that window to the entire macroblock loop —
+which is what turned a latent shape into one worth measuring.
+
+**What C4b did with it.** `MvdCostCursor::origin` takes the table as a `&[u16]`
+the *caller* derives field-precisely, and its header says so as a requirement
+rather than a preference. The referee is
+`mvd_cursor_survives_a_slice_held_across_the_forked_workers`
+(`svc_encode_slice.rs`, ~1.3 s under Miri), whose teeth are checked: respelling
+the derivation whole-context reproduces the race above.
+
+**Standing consequence, not acted on here.** Every remaining `&self` accessor on
+`sWelsEncCtx` called from a fork-reachable body carries the same shape. They are
+sound today for `mvd_cost_origin`'s reason — short borrow windows — and that is an
+argument about timing, not about types. `svc_encode_slice.rs`'s
+`(*pEncCtx).func_list()` clusters, scoped one use-cluster at a time with the "A6"
+comments, are the same reasoning already applied by hand. A sweep that converts
+the fork-reachable ones to field-precise projections is available and unowned.
+
+**Correction to S5's brief.** The brief says the DQ-layer flip needs storage moved
+first because "a whole-struct shared borrow racing those writes is undefined
+behavior under Miri's model". That is right, and F228 is the same sentence about
+the *context* rather than the layer — the brief states the rule for `SDqLayer`
+only, and the property is not the layer's, it is every struct the fork shares.
