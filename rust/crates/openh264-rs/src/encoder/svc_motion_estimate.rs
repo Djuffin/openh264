@@ -48,6 +48,7 @@
 #![deny(unsafe_code)]
 
 use crate::safe::plane::{PaddedPlane, PlaneCursor};
+use crate::safe::mvd_cost::MvdCostCursor;
 pub use crate::encoder::encoder_context::SMVUnitXY;
 pub use crate::encoder::picture::SPicture;
 pub use crate::encoder::picture::SScreenBlockFeatureStorage;
@@ -149,8 +150,14 @@ impl Default for SadPredISatdUnit {
 /// Central working state structure passed across all motion estimation search routines.
 #[repr(C)]
 #[derive(Copy, Clone)]
-pub struct SWelsME {
-    pub pMvdCost: *mut u16,
+pub struct SWelsME<'a> {
+    /// **S5.C4b**: was `*mut u16` into `pCtx->pMvdCostTable`. The lifetime this
+    /// introduces is the whole reason the struct has one: see
+    /// [`MvdCostCursor`](crate::safe::mvd_cost::MvdCostCursor) for why the biased
+    /// pointer cannot be a plain slice, and `SWelsMD` for how far the parameter
+    /// travels (three structs, all of them slice-encode locals — it reaches no
+    /// context field).
+    pub pMvdCost: MvdCostCursor<'a>,
     pub uSadPredISatd: SadPredISatdUnit,
     pub uiSadCost: u32,
     pub uiSatdCost: u32,
@@ -180,10 +187,10 @@ pub struct SWelsME {
     pub sMv: SMVUnitXY,
 }
 
-impl Default for SWelsME {
+impl Default for SWelsME<'_> {
     fn default() -> Self {
         Self {
-            pMvdCost: std::ptr::null_mut(),
+            pMvdCost: MvdCostCursor::none(),
             uSadPredISatd: SadPredISatdUnit::default(),
             uiSadCost: 0,
             uiSatdCost: 0,
@@ -213,8 +220,8 @@ pub struct SFeatureSearchIn<'a> {
     pub pSad: Option<PSampleSadSatdCostFunc>,
     pub pTimesOfFeature: *mut u32,
     pub pQpelLocationOfFeature: *mut *mut u16,
-    pub pMvdCostX: *mut u16,
-    pub pMvdCostY: *mut u16,
+    pub pMvdCostX: MvdCostCursor<'a>,
+    pub pMvdCostY: MvdCostCursor<'a>,
     pub pEncPlane: Option<&'a PaddedPlane>,
     pub pRefPlane: Option<&'a PaddedPlane>,
     pub uiSadCostThresh: u16,
@@ -235,8 +242,8 @@ impl Default for SFeatureSearchIn<'_> {
             pSad: None,
             pTimesOfFeature: std::ptr::null_mut(),
             pQpelLocationOfFeature: std::ptr::null_mut(),
-            pMvdCostX: std::ptr::null_mut(),
-            pMvdCostY: std::ptr::null_mut(),
+            pMvdCostX: MvdCostCursor::none(),
+            pMvdCostY: MvdCostCursor::none(),
             pEncPlane: None,
             pRefPlane: None,
             uiSadCostThresh: 0,
@@ -321,7 +328,7 @@ pub type PSample4SadCostFunc = fn(&PlaneCursor<'_>, &PlaneCursor<'_>, &mut [i32;
 pub type PMotionSearchFunc = unsafe fn(
     pMeFuncs: &SMeFuncs,
     sdf: &SSampleDealingFunc,
-    pMe: &mut SWelsME,
+    pMe: &mut SWelsME<'_>,
     pSlice: &mut SSlice,
     pEncPlane: &PaddedPlane,
     pRefPlane: &PaddedPlane,
@@ -330,7 +337,7 @@ pub type PMotionSearchFunc = unsafe fn(
 pub type PSearchMethodFunc = unsafe fn(
     pMeFuncs: &SMeFuncs,
     sdf: &SSampleDealingFunc,
-    pMe: &mut SWelsME,
+    pMe: &mut SWelsME<'_>,
     pSlice: &mut SSlice,
     pEncPlane: &PaddedPlane,
     pRefPlane: &PaddedPlane,
@@ -338,14 +345,14 @@ pub type PSearchMethodFunc = unsafe fn(
 
 pub type PCalculateSatdFunc = unsafe fn(
     pSatd: Option<PSampleSadSatdCostFunc>,
-    pMe: &mut SWelsME,
+    pMe: &mut SWelsME<'_>,
     pEncPlane: &PaddedPlane,
     pRefPlane: &PaddedPlane,
 );
 
 pub type PCheckDirectionalMv = unsafe fn(
     pSad: Option<PSampleSadSatdCostFunc>,
-    pMe: &mut SWelsME,
+    pMe: &mut SWelsME<'_>,
     ksMinMv: SMVUnitXY,
     ksMaxMv: SMVUnitXY,
     pEncPlane: &PaddedPlane,
@@ -355,8 +362,8 @@ pub type PCheckDirectionalMv = unsafe fn(
 
 pub type PLineFullSearchFunc = unsafe fn(
     sdf: &SSampleDealingFunc,
-    pMe: &mut SWelsME,
-    pMvdTable: *mut u16,
+    pMe: &mut SWelsME<'_>,
+    pMvdTable: MvdCostCursor<'_>,
     pEncPlane: &PaddedPlane,
     pRefPlane: &PaddedPlane,
     kiMinMv: i16,
@@ -445,27 +452,27 @@ impl Default for SMeFuncs {
 // ============================================================================
 
 /// Calculates MVD rate cost: `table[mx] + table[my]`.
+///
+/// **S5.C4b**: safe. The `*const u16` this took was the encoder's biased cursor
+/// into `pMvdCostTable`; it is a [`MvdCostCursor`] now, and with it every body in
+/// the search family that was `unsafe` *only* because of this call.
 #[inline(always)]
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
-pub unsafe fn COST_MVD(table: *const u16, mx: i32, my: i32) -> u32 {
-    unsafe { (*table.offset(mx as isize) as u32) + (*table.offset(my as isize) as u32) }
+pub fn COST_MVD(table: MvdCostCursor<'_>, mx: i32, my: i32) -> u32 {
+    (table.at(mx) as u32) + (table.at(my) as u32)
 }
 
 /// Session F: the `pRef` argument and the `pRefMb` store are gone — the
 /// pointer was `colo + ksBestMv` at every call site (the verified identity),
 /// so the MV alone carries the result.
 #[inline]
-pub fn UpdateMeResults(ksBestMv: SMVUnitXY, kiBestSadCost: u32, pMe: &mut SWelsME) {
+pub fn UpdateMeResults(ksBestMv: SMVUnitXY, kiBestSadCost: u32, pMe: &mut SWelsME<'_>) {
     pMe.sMv = ksBestMv;
     pMe.uiSadCost = kiBestSadCost;
 }
 
 #[inline]
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub fn MeEndIntepelSearch(pMe: &mut SWelsME) {
-    unsafe {
+pub fn MeEndIntepelSearch(pMe: &mut SWelsME<'_>) {
+    {
         (*pMe).sMv.iMvX *= 1 << 2;
         (*pMe).sMv.iMvY *= 1 << 2;
         (*pMe).uiSatdCost = (*pMe).uiSadCost;
@@ -484,8 +491,6 @@ pub fn CheckMvInRange(ksCurrentMv: SMVUnitXY, ksMinMv: SMVUnitXY, ksMaxMv: SMVUn
 }
 
 #[inline]
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
 pub fn SetMvWithinIntegerMvRange(
     kiMbWidth: i32,
     kiMbHeight: i32,
@@ -495,7 +500,7 @@ pub fn SetMvWithinIntegerMvRange(
     pMvMin: &mut SMVUnitXY,
     pMvMax: &mut SMVUnitXY,
 ) {
-    unsafe {
+    {
         (*pMvMin).iMvX = ((-1 * ((kiMbX + 1) * (1 << 4)) + INTPEL_NEEDED_MARGIN)).max(-1 * kiMaxMvRange) as i16;
         (*pMvMin).iMvY = ((-1 * ((kiMbY + 1) * (1 << 4)) + INTPEL_NEEDED_MARGIN)).max(-1 * kiMaxMvRange) as i16;
         (*pMvMax).iMvX = (((kiMbWidth - kiMbX) * (1 << 4)) - INTPEL_NEEDED_MARGIN).min(kiMaxMvRange) as i16;
@@ -515,10 +520,8 @@ pub fn CalcFMESwitchFlag(
 }
 
 #[inline]
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
 pub fn GetCurrentSliceNum(pCurDq: &SDqLayer) -> i32 {
-    unsafe { pCurDq.sSliceEncCtx.iSliceNumInFrame.load(std::sync::atomic::Ordering::Relaxed) }
+    pCurDq.sSliceEncCtx.iSliceNumInFrame.load(std::sync::atomic::Ordering::Relaxed)
 }
 
 // ============================================================================
@@ -567,12 +570,16 @@ pub fn WelsInitMeFunc(
 // ============================================================================
 
 /// Top-level motion estimation search for a macroblock or sub-partition.
-// unsafe-cat: port-raw(Phase 9) — pMvdCost (the ctx family's raw MVD table)
+// **S5.C4b re-tagged this.** It read `port-raw(Phase 9) — pMvdCost`, and pMvdCost is
+// a `MvdCostCursor` now. What is left unsafe here is the `ME_DUMP` arm: a read of
+// the `uSadPredISatd` union and two calls through the `unsafe fn` cost-function
+// pointers. Neither is this checkpoint's family.
+// unsafe-cat: port-raw(Phase 9) — uSadPredISatd (the union) and the sdf slots
 #[allow(unsafe_code)]
 pub fn WelsMotionEstimateSearch(
     pMeFuncs: &SMeFuncs,
     sdf: &SSampleDealingFunc,
-    pMe: &mut SWelsME,
+    pMe: &mut SWelsME<'_>,
     pSlice: &mut SSlice,
     pEncPlane: &PaddedPlane,
     pRefPlane: &PaddedPlane,
@@ -620,8 +627,8 @@ pub fn WelsMotionEstimateSearch(
                 enc,
                 rf,
                 rfup,
-                *(*pMe).pMvdCost.offset(0),
-                *(*pMe).pMvdCost.offset(4),
+                (*pMe).pMvdCost.at(0),
+                (*pMe).pMvdCost.at(4),
             );
         }
 
@@ -657,7 +664,7 @@ pub fn WelsMotionEstimateSearch(
 pub fn WelsMotionEstimateSearchStatic(
     pMeFuncs: &SMeFuncs,
     sdf: &SSampleDealingFunc,
-    pMe: &mut SWelsME,
+    pMe: &mut SWelsME<'_>,
     _pSlice: &mut SSlice,
     pEncPlane: &PaddedPlane,
     pRefPlane: &PaddedPlane,
@@ -691,7 +698,7 @@ pub fn WelsMotionEstimateSearchStatic(
 pub fn WelsMotionEstimateSearchScrolled(
     pMeFuncs: &SMeFuncs,
     sdf: &SSampleDealingFunc,
-    pMe: &mut SWelsME,
+    pMe: &mut SWelsME<'_>,
     _pSlice: &mut SSlice,
     pEncPlane: &PaddedPlane,
     pRefPlane: &PaddedPlane,
@@ -737,7 +744,7 @@ pub fn WelsMotionEstimateSearchScrolled(
 pub fn WelsMotionEstimateInitialPoint(
     pMeFuncs: &SMeFuncs,
     sdf: &SSampleDealingFunc,
-    pMe: &mut SWelsME,
+    pMe: &mut SWelsME<'_>,
     pSlice: &mut SSlice,
     pEncPlane: &PaddedPlane,
     pRefPlane: &PaddedPlane,
@@ -829,7 +836,7 @@ pub fn WelsMotionEstimateInitialPoint(
 #[allow(unsafe_code)]
 pub fn CalculateSatdCost(
     pSatd: Option<PSampleSadSatdCostFunc>,
-    pMe: &mut SWelsME,
+    pMe: &mut SWelsME<'_>,
     pEncPlane: &PaddedPlane,
     pRefPlane: &PaddedPlane,
 ) {
@@ -854,7 +861,7 @@ pub fn CalculateSatdCost(
 
 pub fn NotCalculateSatdCost(
     _pSatd: Option<PSampleSadSatdCostFunc>,
-    _pMe: &mut SWelsME,
+    _pMe: &mut SWelsME<'_>,
     _pEncPlane: &PaddedPlane,
     _pRefPlane: &PaddedPlane,
 ) {
@@ -864,24 +871,28 @@ pub fn NotCalculateSatdCost(
 // Small Diamond Search (ME_DIA)
 // ============================================================================
 
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe extern "C" fn WelsMeSadCostSelect(
-    iSadCost: *mut i32,
-    kpMvdCost: *const u16,
-    pBestCost: *mut i32,
+/// **S5.C4b**: safe, and no longer `extern "C"`. Both call sites are direct
+/// (`WelsDiamondSearch` and this file's own test) — the body was never installed in
+/// a dispatch table and no C consumer names it — so the four raw out-parameters
+/// become the `&mut`s the call sites already had in hand, and the four-SAD array
+/// becomes the `[i32; 4]` both sites already declared.
+#[inline]
+pub fn WelsMeSadCostSelect(
+    iSadCost: &[i32; 4],
+    kpMvdCost: MvdCostCursor<'_>,
+    pBestCost: &mut i32,
     kiDx: i32,
     kiDy: i32,
-    pIx: *mut i32,
-    pIy: *mut i32,
+    pIx: &mut i32,
+    pIy: &mut i32,
 ) -> bool {
-    unsafe {
+    {
         let iInputSadCost = *pBestCost;
         let mut iTempSadCost = [0i32; 4];
-        iTempSadCost[0] = *iSadCost.add(0) + COST_MVD(kpMvdCost, kiDx, kiDy - 4) as i32;
-        iTempSadCost[1] = *iSadCost.add(1) + COST_MVD(kpMvdCost, kiDx, kiDy + 4) as i32;
-        iTempSadCost[2] = *iSadCost.add(2) + COST_MVD(kpMvdCost, kiDx - 4, kiDy) as i32;
-        iTempSadCost[3] = *iSadCost.add(3) + COST_MVD(kpMvdCost, kiDx + 4, kiDy) as i32;
+        iTempSadCost[0] = iSadCost[0] + COST_MVD(kpMvdCost, kiDx, kiDy - 4) as i32;
+        iTempSadCost[1] = iSadCost[1] + COST_MVD(kpMvdCost, kiDx, kiDy + 4) as i32;
+        iTempSadCost[2] = iSadCost[2] + COST_MVD(kpMvdCost, kiDx - 4, kiDy) as i32;
+        iTempSadCost[3] = iSadCost[3] + COST_MVD(kpMvdCost, kiDx + 4, kiDy) as i32;
 
         if iTempSadCost[0] < *pBestCost {
             *pBestCost = iTempSadCost[0];
@@ -908,17 +919,15 @@ pub unsafe extern "C" fn WelsMeSadCostSelect(
     }
 }
 
-// unsafe-cat: port-raw(Phase 9) — pMvdCost (the ctx family's raw MVD table)
-#[allow(unsafe_code)]
 pub fn WelsDiamondSearch(
     _pMeFuncs: &SMeFuncs,
     sdf: &SSampleDealingFunc,
-    pMe: &mut SWelsME,
+    pMe: &mut SWelsME<'_>,
     pSlice: &mut SSlice,
     pEncPlane: &PaddedPlane,
     pRefPlane: &PaddedPlane,
 ) {
-    unsafe {
+    {
         let block_size = (*pMe).uiBlockSize as usize;
         let pSad4 = sdf.pfSample4Sad[block_size];
         let pSadSingle = sdf.pfSampleSad[block_size];
@@ -965,7 +974,7 @@ pub fn WelsDiamondSearch(
             let mut iX = 0i32;
             let mut iY = 0i32;
             let kbIsBestCostWorse = WelsMeSadCostSelect(
-                iSadCosts.as_mut_ptr(),
+                &iSadCosts,
                 kpMvdCost,
                 &mut iBestCost,
                 iMvDx,
@@ -992,18 +1001,16 @@ pub fn WelsDiamondSearch(
 // Directional Scrolling Search
 // ============================================================================
 
-// unsafe-cat: port-raw(Phase 9) — pMvdCost (the ctx family's raw MVD table)
-#[allow(unsafe_code)]
 pub fn CheckDirectionalMv(
     pSad: Option<PSampleSadSatdCostFunc>,
-    pMe: &mut SWelsME,
+    pMe: &mut SWelsME<'_>,
     ksMinMv: SMVUnitXY,
     ksMaxMv: SMVUnitXY,
     pEncPlane: &PaddedPlane,
     pRefPlane: &PaddedPlane,
     iBestSadCost: &mut i32,
 ) -> bool {
-    unsafe {
+    {
         let kiMvX = (*pMe).sDirectionalMv.iMvX;
         let kiMvY = (*pMe).sDirectionalMv.iMvY;
 
@@ -1036,7 +1043,7 @@ pub fn CheckDirectionalMv(
 
 pub fn CheckDirectionalMvFalse(
     _pSad: Option<PSampleSadSatdCostFunc>,
-    _pMe: &mut SWelsME,
+    _pMe: &mut SWelsME<'_>,
     _ksMinMv: SMVUnitXY,
     _ksMaxMv: SMVUnitXY,
     _pEncPlane: &PaddedPlane,
@@ -1061,8 +1068,8 @@ pub fn CheckDirectionalMvFalse(
 #[allow(unsafe_code)]
 pub unsafe fn LineFullSearch_c(
     sdf: &SSampleDealingFunc,
-    pMe: &mut SWelsME,
-    pMvdTable: *mut u16,
+    pMe: &mut SWelsME<'_>,
+    pMvdTable: MvdCostCursor<'_>,
     pEncPlane: &PaddedPlane,
     pRefPlane: &PaddedPlane,
     iMinMv: i16,
@@ -1082,20 +1089,20 @@ pub unsafe fn LineFullSearch_c(
         let iMaxPos: i32;
         let iFixedMvd: i32;
         let iCurMeBlockPix: i32;
-        let mut pMvdCost: *mut u16;
+        let mut pMvdCost: MvdCostCursor<'_>;
 
         if bVerticalSearch {
             iMinPos = kiCurMeBlockPixY + iMinMv as i32;
             iMaxPos = kiCurMeBlockPixY + iMaxMv as i32;
-            iFixedMvd = *pMvdTable.offset(-((*pMe).sMvp.iMvX as isize)) as i32;
+            iFixedMvd = pMvdTable.at(-((*pMe).sMvp.iMvX as i32)) as i32;
             iCurMeBlockPix = kiCurMeBlockPixY;
-            pMvdCost = pMvdTable.offset(((iMinMv as i32 * 4) - (*pMe).sMvp.iMvY as i32) as isize);
+            pMvdCost = pMvdTable.offset((iMinMv as i32 * 4) - (*pMe).sMvp.iMvY as i32);
         } else {
             iMinPos = kiCurMeBlockPixX + iMinMv as i32;
             iMaxPos = kiCurMeBlockPixX + iMaxMv as i32;
-            iFixedMvd = *pMvdTable.offset(-((*pMe).sMvp.iMvY as isize)) as i32;
+            iFixedMvd = pMvdTable.at(-((*pMe).sMvp.iMvY as i32)) as i32;
             iCurMeBlockPix = kiCurMeBlockPixX;
-            pMvdCost = pMvdTable.offset(((iMinMv as i32 * 4) - (*pMe).sMvp.iMvX as i32) as isize);
+            pMvdCost = pMvdTable.offset((iMinMv as i32 * 4) - (*pMe).sMvp.iMvX as i32);
         }
 
         let mut uiBestCost: u32 = 0xFFFF_FFFF;
@@ -1113,12 +1120,12 @@ pub unsafe fn LineFullSearch_c(
             if let Some(sad_fn) = pSad {
                 uiSadCost = sad_fn(&cEnc, &cRef) as u32;
             }
-            uiSadCost += (iFixedMvd + *pMvdCost as i32) as u32;
+            uiSadCost += (iFixedMvd + pMvdCost.at(0) as i32) as u32;
             if uiSadCost < uiBestCost {
                 uiBestCost = uiSadCost;
                 iBestPos = iTargetPos;
             }
-            pMvdCost = pMvdCost.add(4);
+            pMvdCost = pMvdCost.offset(4);
         }
 
         if uiBestCost < (*pMe).uiSadCost {
@@ -1135,7 +1142,7 @@ pub unsafe fn LineFullSearch_c(
 pub fn WelsMotionCrossSearch(
     pMeFuncs: &SMeFuncs,
     sdf: &SSampleDealingFunc,
-    pMe: &mut SWelsME,
+    pMe: &mut SWelsME<'_>,
     pSlice: &mut SSlice,
     pEncPlane: &PaddedPlane,
     pRefPlane: &PaddedPlane,
@@ -1176,7 +1183,7 @@ pub fn WelsMotionCrossSearch(
 pub fn WelsDiamondCrossSearch(
     pMeFuncs: &SMeFuncs,
     sdf: &SSampleDealingFunc,
-    pMe: &mut SWelsME,
+    pMe: &mut SWelsME<'_>,
     pSlice: &mut SSlice,
     pEncPlane: &PaddedPlane,
     pRefPlane: &PaddedPlane,
@@ -1200,7 +1207,7 @@ pub fn WelsDiamondCrossSearch(
 pub fn WelsDiamondCrossFeatureSearch(
     pMeFuncs: &SMeFuncs,
     sdf: &SSampleDealingFunc,
-    pMe: &mut SWelsME,
+    pMe: &mut SWelsME<'_>,
     pSlice: &mut SSlice,
     pEncPlane: &PaddedPlane,
     pRefPlane: &PaddedPlane,
@@ -1492,7 +1499,7 @@ pub unsafe extern "C" fn PerformFMEPreprocess(
 pub unsafe fn SetFeatureSearchIn<'a>(
     pMeFuncs: &SMeFuncs,
     sdf: &SSampleDealingFunc,
-    sMe: &SWelsME,
+    sMe: &SWelsME<'a>,
     pSlice: &SSlice,
     pRefFeatureStorage: *mut SScreenBlockFeatureStorage,
     pEncPlane: &'a PaddedPlane,
@@ -1521,8 +1528,8 @@ pub unsafe fn SetFeatureSearchIn<'a>(
 
         pFeatureSearchIn.pTimesOfFeature = (*pRefFeatureStorage).pTimesOfFeatureValue;
         pFeatureSearchIn.pQpelLocationOfFeature = (*pRefFeatureStorage).pLocationOfFeature;
-        pFeatureSearchIn.pMvdCostX = sMe.pMvdCost.offset(-(pFeatureSearchIn.iCurPixXQpel as isize) - sMe.sMvp.iMvX as isize);
-        pFeatureSearchIn.pMvdCostY = sMe.pMvdCost.offset(-(pFeatureSearchIn.iCurPixYQpel as isize) - sMe.sMvp.iMvY as isize);
+        pFeatureSearchIn.pMvdCostX = sMe.pMvdCost.offset(-pFeatureSearchIn.iCurPixXQpel - sMe.sMvp.iMvX as i32);
+        pFeatureSearchIn.pMvdCostY = sMe.pMvdCost.offset(-pFeatureSearchIn.iCurPixYQpel - sMe.sMvp.iMvY as i32);
 
         pFeatureSearchIn.iMinQpelX = pFeatureSearchIn.iCurPixXQpel + (pSlice.sMvStartMin.iMvX as i32 * 4);
         pFeatureSearchIn.iMinQpelY = pFeatureSearchIn.iCurPixYQpel + (pSlice.sMvStartMin.iMvY as i32 * 4);
@@ -1604,8 +1611,8 @@ pub fn FeatureSearchOne(
                 continue;
             }
 
-            let mut uiTmpCost = (*sFeatureSearchIn.pMvdCostX.offset(iQpelX as isize) as u32)
-                + (*sFeatureSearchIn.pMvdCostY.offset(iQpelY as isize) as u32);
+            let mut uiTmpCost = (sFeatureSearchIn.pMvdCostX.at(iQpelX) as u32)
+                + (sFeatureSearchIn.pMvdCostY.at(iQpelY) as u32);
             if uiTmpCost.wrapping_add(iFeatureDifference as u32) >= uiBestCost {
                 i += 2;
                 continue;
@@ -1648,9 +1655,9 @@ pub fn FeatureSearchOne(
 pub fn MotionEstimateFeatureFullSearch(
     sFeatureSearchIn: SFeatureSearchIn<'_>,
     kuiMaxSearchPoint: u32,
-    pMe: &mut SWelsME,
+    pMe: &mut SWelsME<'_>,
 ) {
-    unsafe {
+    {
         let mut sFeatureSearchOut = SFeatureSearchOut {
             sBestMv: (*pMe).sMv,
             uiBestSadCost: (*pMe).uiSadCost,
@@ -1750,15 +1757,12 @@ mod tests {
     }
 
     #[test]
-    // unsafe-cat: instrument(test)
-    #[allow(unsafe_code)]
     fn test_cost_mvd_computation() {
         let table_data = [10u16, 20, 30, 40, 50, 60, 70, 80];
-        let base_ptr = table_data.as_ptr();
-        unsafe {
-            let cost = COST_MVD(base_ptr, 2, 5);
-            assert_eq!(cost, 30 + 60);
-        }
+        // S5.C4b: the raw base pointer is a cursor parked at index 0 — the same
+        // two entries the raw form read, now without the `unsafe`.
+        let cost = COST_MVD(MvdCostCursor::new(&table_data, 0), 2, 5);
+        assert_eq!(cost, 30 + 60);
     }
 
     #[test]
@@ -1785,8 +1789,6 @@ mod tests {
     }
 
     #[test]
-    // unsafe-cat: instrument(test)
-    #[allow(unsafe_code)]
     fn test_me_sad_cost_select() {
         let mut sad_costs = [100i32, 50, 120, 80];
         let mvd_cost_table = vec![0u16; 512];
@@ -1794,10 +1796,10 @@ mod tests {
         let mut ix = 0i32;
         let mut iy = 0i32;
 
-        unsafe {
+        {
             let stop = WelsMeSadCostSelect(
-                sad_costs.as_mut_ptr(),
-                mvd_cost_table.as_ptr().add(256),
+                &sad_costs,
+                MvdCostCursor::new(&mvd_cost_table, 256),
                 &mut best_cost,
                 0,
                 0,

@@ -370,7 +370,7 @@ pub unsafe fn WelsMdIntraInit(
 #[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsMdI4x4(
     pEncCtx: *mut sWelsEncCtx,
-    pWelsMd: &mut SWelsMD,
+    pWelsMd: &mut SWelsMD<'_>,
     pCurMb: &mut SMB,
     pMbCache: &mut SMbCache,
 ) -> i32 {
@@ -516,7 +516,7 @@ fn StoreIntra4x4PredModeToMb(pCurMb: &mut SMB, pMbCache: &mut SMbCache) {
 #[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsMdI4x4Fast(
     pEncCtx: *mut sWelsEncCtx,
-    pWelsMd: &mut SWelsMD,
+    pWelsMd: &mut SWelsMD<'_>,
     pCurMb: &mut SMB,
     pMbCache: &mut SMbCache,
 ) -> i32 {
@@ -821,7 +821,7 @@ pub unsafe extern "C" fn WelsMdIntraChroma(
 #[allow(unsafe_code)]
 pub unsafe fn WelsMdIntraFinePartition(
     pEncCtx: *mut sWelsEncCtx,
-    pWelsMd: &mut SWelsMD,
+    pWelsMd: &mut SWelsMD<'_>,
     pCurMb: &mut SMB,
     pMbCache: &mut SMbCache,
 ) -> i32 {
@@ -844,7 +844,7 @@ pub unsafe fn WelsMdIntraFinePartition(
 #[allow(unsafe_code)]
 pub unsafe fn WelsMdIntraFinePartitionVaa(
     pEncCtx: *mut sWelsEncCtx,
-    pWelsMd: &mut SWelsMD,
+    pWelsMd: &mut SWelsMD<'_>,
     pCurMb: &mut SMB,
     pMbCache: &mut SMbCache,
 ) -> i32 {
@@ -875,7 +875,7 @@ pub unsafe fn WelsMdIntraFinePartitionVaa(
 #[allow(unsafe_code)]
 pub unsafe fn WelsMdIntraMb(
     pEncCtx: *mut sWelsEncCtx,
-    pWelsMd: &mut SWelsMD,
+    pWelsMd: &mut SWelsMD<'_>,
     pCurMb: &mut SMB,
     pMbCache: &mut SMbCache,
 ) {
@@ -1016,7 +1016,7 @@ pub unsafe fn WelsMdInterInit(
 pub unsafe extern "C" fn WelsMdP16x8(
     pFunc: &SWelsFuncPtrList,
     pCurDqLayer: *mut SDqLayer,
-    pWelsMd: &mut SWelsMD,
+    pWelsMd: &mut SWelsMD<'_>,
     pSlice: &mut SSlice,
 ) -> i32 {
     let mut iCostP16x8 = 0i32;
@@ -1080,7 +1080,7 @@ pub unsafe extern "C" fn WelsMdP16x8(
 pub unsafe extern "C" fn WelsMdP8x16(
     pFunc: &SWelsFuncPtrList,
     pCurLayer: *mut SDqLayer,
-    pWelsMd: &mut SWelsMD,
+    pWelsMd: &mut SWelsMD<'_>,
     pSlice: &mut SSlice,
 ) -> i32 {
     let mut iCostP8x16 = 0i32;
@@ -1149,7 +1149,7 @@ pub unsafe extern "C" fn WelsMdP8x16(
 #[allow(unsafe_code)]
 pub unsafe fn WelsMdInterFinePartition(
     pEncCtx: *mut sWelsEncCtx,
-    pWelsMd: &mut SWelsMD,
+    pWelsMd: &mut SWelsMD<'_>,
     pSlice: &mut SSlice,
     pCurMb: &mut SMB,
     iBestCost: i32,
@@ -1189,7 +1189,7 @@ pub unsafe fn WelsMdInterFinePartition(
 #[allow(unsafe_code)]
 pub unsafe fn WelsMdInterFinePartitionVaa(
     pEncCtx: *mut sWelsEncCtx,
-    pWelsMd: &mut SWelsMD,
+    pWelsMd: &mut SWelsMD<'_>,
     pSlice: &mut SSlice,
     pCurMb: &mut SMB,
     iBestCostIn: i32,
@@ -1291,7 +1291,7 @@ pub unsafe fn WelsMdInterFinePartitionVaa(
 #[allow(unsafe_code)]
 pub unsafe fn WelsMdPSkipEnc(
     pEncCtx: *mut sWelsEncCtx,
-    pWelsMd: &mut SWelsMD,
+    pWelsMd: &mut SWelsMD<'_>,
     pCurMb: &mut SMB,
     pMbCache: &mut SMbCache,
 ) -> bool {
@@ -1506,7 +1506,7 @@ pub unsafe fn WelsMdPSkipEnc(
 #[allow(unsafe_code)]
 unsafe fn AcceptPskip(
     pEncCtx: *mut sWelsEncCtx,
-    pWelsMd: &mut SWelsMD,
+    pWelsMd: &mut SWelsMD<'_>,
     pCurMb: &mut SMB,
     pMbCache: &SMbCache,
     sMvp: &SMVUnitXY,
@@ -1552,7 +1552,7 @@ unsafe fn AcceptPskip(
 #[allow(unsafe_code)]
 pub unsafe fn WelsMdInterMbRefinement(
     pEncCtx: *mut sWelsEncCtx,
-    pWelsMd: &mut SWelsMD,
+    pWelsMd: &mut SWelsMD<'_>,
     pCurMb: &mut SMB,
     pMbCache: &mut SMbCache,
 ) {
@@ -1865,7 +1865,7 @@ pub unsafe fn WelsMdInterMbRefinement(
 #[allow(unsafe_code)]
 pub unsafe fn WelsMdFirstIntraMode(
     pEncCtx: *mut sWelsEncCtx,
-    pWelsMd: &mut SWelsMD,
+    pWelsMd: &mut SWelsMD<'_>,
     pCurMb: &mut SMB,
     pMbCache: &mut SMbCache,
 ) -> bool {
@@ -1916,7 +1916,7 @@ pub unsafe fn WelsMdFirstIntraMode(
 #[allow(unsafe_code)]
 pub unsafe fn WelsMdInterMb(
     pEncCtx: *mut sWelsEncCtx,
-    pWelsMd: &mut SWelsMD,
+    pWelsMd: &mut SWelsMD<'_>,
     pSlice: &mut SSlice,
     mbs: &mut crate::safe::mb_grid::MbWindow<'_, SMB>,
 ) {
@@ -2098,7 +2098,7 @@ pub unsafe fn WelsMdInterEncode(
 pub fn WelsMdInterSaveSadAndRefMbType(
     pRecView: &crate::encoder::rec_view::RecPicView,
     pCurMb: &SMB,
-    pMd: &SWelsMD,
+    pMd: &SWelsMD<'_>,
 ) {
     let kmtCurMbtype = pCurMb.uiMbType;
     let kiMbXY = pCurMb.iMbXY as usize;

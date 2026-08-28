@@ -221,7 +221,16 @@ assert_size!(SStrideTables, 184);
 // search family takes the planes as parameters. -24 of pointer plus -8 of
 // padding: without the pointer block the struct's tail packs at 2-byte
 // alignment. Measured, not predicted.
-assert_size!(SWelsME, 64);
+// **64 -> 80 at S5.C4b**: `pMvdCost` stopped being a `*mut u16` and became a
+// `MvdCostCursor` — the table as a `&[u16]` plus the index of the entry the raw
+// cursor pointed at. `COST_MVD` indexes with a *signed* MVD, so the pointer was
+// parked mid-table and no plain slice can stand in for it; the pair can. 8 bytes of
+// thin pointer become 16 of fat pointer plus 8 of index, and the alignment is
+// unchanged, so the tail packs exactly as it did. The struct is `repr(C)` and the
+// cursor is not, which costs nothing here for the reason the note below gives: this
+// family crosses no ABI, and the pin catches a field added, dropped or mis-widened
+// rather than any correspondence with a C++ `sizeof`.
+assert_size!(SWelsME, 80);
 // **928 in the port, 4000 in the C++, and the gap is D-dead-2 (F122).** The struct
 // carried `sMe4x4`/`sMe8x4`/`sMe4x8` — 32 `SWelsME` at 96 bytes, 3072 of the 4000 —
 // whose only readers were `WelsMdInterMbRefinement`'s three sub-8x8 arms. Nothing in
@@ -235,7 +244,11 @@ assert_size!(SWelsME, 64);
 // old number.
 // **928 -> 640 at session F**: nine embedded `SWelsME` at -32 each (the
 // container: sMe16x16 + sMe16x8[2] + sMe8x16[2] + sMe8x8[4]).
-assert_size!(SWelsMD, 640);
+// **640 -> 800 at S5.C4b**: +16 for this struct's own `pMvdCost` and +16 for each
+// of the nine `SWelsME` its `sMe` container embeds (sMe16x16 + sMe16x8[2] +
+// sMe8x16[2] + sMe8x8[4]) — one `*mut u16` -> `MvdCostCursor` swap, counted ten
+// times.
+assert_size!(SWelsMD, 800);
 // `SVAAFrameInfo`: 264 in the C++. Phase 6 session B dissolved the `IWelsVP`
 // vtable and deleted the stored `pCalcResult` pointer from the two parameter
 // blocks this embeds (`sAdaptiveQuantParam`, `sComplexityAnalysisParam` — the

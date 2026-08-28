@@ -72,7 +72,7 @@ pub type PGetLumaI16x16PredFunc = fn(pred: &mut [u8; 256], rec: &RecCursor<'_>);
 /// `wels_func_ptr_def.h:106`
 pub type PIntraFineMdFunc = unsafe fn(
     pEncCtx: *mut sWelsEncCtx,
-    pWelsMd: &mut SWelsMD,
+    pWelsMd: &mut SWelsMD<'_>,
     pCurMb: &mut SMB,
     pMbCache: &mut SMbCache,
 ) -> i32;
@@ -80,7 +80,7 @@ pub type PIntraFineMdFunc = unsafe fn(
 /// `wels_func_ptr_def.h:107`
 pub type PInterFineMdFunc = unsafe fn(
     pEncCtx: *mut sWelsEncCtx,
-    pWelsMd: &mut SWelsMD,
+    pWelsMd: &mut SWelsMD<'_>,
     slice: &mut SSlice,
     pCurMb: &mut SMB,
     bestCost: i32,
@@ -89,7 +89,7 @@ pub type PInterFineMdFunc = unsafe fn(
 /// `wels_func_ptr_def.h:108`
 pub type PInterMdFirstIntraModeFunc = unsafe fn(
     pEncCtx: *mut sWelsEncCtx,
-    pWelsMd: &mut SWelsMD,
+    pWelsMd: &mut SWelsMD<'_>,
     pCurMb: &mut SMB,
     pMbCache: &mut SMbCache,
 ) -> bool;
@@ -111,7 +111,7 @@ pub type PInterMdFirstIntraModeFunc = unsafe fn(
 /// `extern "C"` came off — nothing in this table crosses the C ABI (T4b.1).
 pub type PInterMdBackgroundDecisionFunc = unsafe fn(
     pEncCtx: *mut sWelsEncCtx,
-    pWelsMd: &mut SWelsMD,
+    pWelsMd: &mut SWelsMD<'_>,
     slice: &mut SSlice,
     pCurMb: &mut SMB,
     pKeepPskip: &mut bool,
@@ -128,7 +128,7 @@ pub type PMdBackgroundInfoUpdateFunc = unsafe extern "C" fn(
 /// `wels_func_ptr_def.h:121`
 pub type PInterMdScrollingPSkipDecisionFunc = unsafe fn(
     pEncCtx: *mut sWelsEncCtx,
-    pWelsMd: &mut SWelsMD,
+    pWelsMd: &mut SWelsMD<'_>,
     slice: &mut SSlice,
     pCurMb: &mut SMB,
 ) -> bool;
@@ -143,12 +143,12 @@ pub type PInterMdScrollingPSkipDecisionFunc = unsafe fn(
 /// real implementation only *reads* the block (the screen-content downcast, two
 /// scalars off `sScrollDetectInfo`); everything it writes goes through `pMd`,
 /// which is already exclusive and per-macroblock.
-pub type PSetScrollingMv = unsafe fn(pVaa: &SVAAFrameInfo, pMd: &mut SWelsMD);
+pub type PSetScrollingMv = unsafe fn(pVaa: &SVAAFrameInfo, pMd: &mut SWelsMD<'_>);
 
 /// `wels_func_ptr_def.h:125`
 pub type PInterMdFunc = unsafe fn(
     pEncCtx: *mut sWelsEncCtx,
-    pWelsMd: &mut SWelsMD,
+    pWelsMd: &mut SWelsMD<'_>,
     slice: &mut SSlice,
     mbs: &mut crate::safe::mb_grid::MbWindow<'_, SMB>,
 );

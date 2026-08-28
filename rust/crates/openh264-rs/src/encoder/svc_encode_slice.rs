@@ -302,6 +302,7 @@ impl Default for SSliceHeaderExt {
 pub use crate::common::wels_common_defs::EWelsNalUnitType;
 pub use crate::safe::bits::BsWriter;
 use crate::safe::mb_grid::{MbArray, MbDims, MbWindow};
+use crate::safe::mvd_cost::MvdCostCursor;
 pub use crate::encoder::set_mb_syn_cabac::SCabacCtx;
 use crate::encoder::paraset_strategy::CWelsParametersetIdStrategyObj;
 
@@ -2070,16 +2071,19 @@ pub unsafe fn WelsGetNextMbOfSlice(pCurDq: *mut SDqLayer, kiMbXY: i32) -> i32 {
 
 // unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
-pub unsafe fn WelsInitInterMDStruc(
+pub unsafe fn WelsInitInterMDStruc<'a>(
     pCurMb: &SMB,
-    pMvdCostTable: *mut u16,
+    pMvdCostTable: MvdCostCursor<'a>,
     kiMvdInterTableStride: i32,
-    pMd: &mut SWelsMD,
+    pMd: &mut SWelsMD<'a>,
 ) {
     let luma_qp = (*pCurMb).uiLumaQp as usize;
     (*pMd).iLambda = g_kiQpCostTable[luma_qp];
-    if !pMvdCostTable.is_null() {
-        (*pMd).pMvdCost = pMvdCostTable.add(luma_qp * kiMvdInterTableStride as usize);
+    // S5.C4b: `!pMvdCostTable.is_null()` — the cursor spells the same test, and the
+    // row bump is `offset` rather than `add` because the table it arrives parked in
+    // is already biased to the zero-MVD entry (`MvdCostCursor::origin`'s job).
+    if !pMvdCostTable.is_none() {
+        (*pMd).pMvdCost = pMvdCostTable.offset(luma_qp as i32 * kiMvdInterTableStride);
     }
     (*pMd).iMbPixX = (pCurMb.iMbX as i32) << 4;
     (*pMd).iMbPixY = (pCurMb.iMbY as i32) << 4;
@@ -2379,7 +2383,7 @@ pub unsafe fn WelsISliceMdEncDynamic(pEncCtx: *mut sWelsEncCtx, pSlice: &mut SSl
 ///
 /// # Safety
 /// All three pointers must be valid, with `pCurMb`'s side arrays allocated.
-fn mb_dump(pCurMb: &SMB, pMd: &SWelsMD, pSlice: & SSlice) {
+fn mb_dump(pCurMb: &SMB, pMd: &SWelsMD<'_>, pSlice: & SSlice) {
     if !crate::encoder::dump_enabled(&MB_DUMP, "OH264_MBDUMP") {
         return;
     }
@@ -2418,7 +2422,7 @@ fn mb_dump(pCurMb: &SMB, pMd: &SWelsMD, pSlice: & SSlice) {
 pub unsafe fn WelsMdInterMbLoop(
     pEncCtx: *mut sWelsEncCtx,
     pSlice: &mut SSlice,
-    pWelsMd: &mut SWelsMD,
+    pWelsMd: &mut SWelsMD<'_>,
     kiSliceFirstMbXY: i32,
 ) -> i32 {
     if pEncCtx.is_null() || current_layer(pEncCtx).is_null() || (*current_layer(pEncCtx)).sMbDataP.dims().count() == 0 || (*current_layer(pEncCtx)).iMbWidth <= 0 || (*current_layer(pEncCtx)).iMbHeight <= 0 {
@@ -2432,7 +2436,14 @@ pub unsafe fn WelsMdInterMbLoop(
     let mut iCurMbIdx: i32;
     let kiTotalNumMb: i32 = (*pCurLayer).iMbWidth as i32 * (*pCurLayer).iMbHeight as i32;
     let kiMvdInterTableStride = (*pEncCtx).iMvdCostTableStride;
-    let pMvdCostTable = (*pEncCtx).mvd_cost_origin();
+    // **S5.C4b.** Field-precise on purpose — `&(*pEncCtx).pMvdCostTable` retags the
+    // `Vec` header and nothing else, where a `&self` accessor would retag the whole
+    // context. Read `MvdCostCursor::origin` for why that difference decides whether
+    // this borrow may be held across the macroblock loop it is held across.
+    let pMvdCostTable = MvdCostCursor::origin(
+        &(&(*pEncCtx).pMvdCostTable)[..],
+        (*pEncCtx).iMvdCostTableSize,
+    );
     let kiSliceIdx = (*pSlice).iSliceIdx;
     let kuiChromaQpIndexOffset = if !layer_pps(pEncCtx, pCurLayer).is_null() {
         (*layer_pps(pEncCtx, pCurLayer)).uiChromaQpIndexOffset
@@ -2603,7 +2614,7 @@ pub unsafe fn WelsMdInterMbLoop(
 pub unsafe fn WelsMdInterMbLoopOverDynamicSlice(
     pEncCtx: *mut sWelsEncCtx,
     pSlice: &mut SSlice,
-    pWelsMd: &mut SWelsMD,
+    pWelsMd: &mut SWelsMD<'_>,
     kiSliceFirstMbXY: i32,
 ) -> i32 {
     if pEncCtx.is_null() || current_layer(pEncCtx).is_null() || (*current_layer(pEncCtx)).sMbDataP.dims().count() == 0 || (*current_layer(pEncCtx)).iMbWidth <= 0 || (*current_layer(pEncCtx)).iMbHeight <= 0 {
@@ -2619,7 +2630,14 @@ pub unsafe fn WelsMdInterMbLoopOverDynamicSlice(
     let mut iNextMbIdx = kiSliceFirstMbXY;
     let mut iCurMbIdx: i32;
     let kiMvdInterTableStride = (*pEncCtx).iMvdCostTableStride;
-    let pMvdCostTable = (*pEncCtx).mvd_cost_origin();
+    // **S5.C4b.** Field-precise on purpose — `&(*pEncCtx).pMvdCostTable` retags the
+    // `Vec` header and nothing else, where a `&self` accessor would retag the whole
+    // context. Read `MvdCostCursor::origin` for why that difference decides whether
+    // this borrow may be held across the macroblock loop it is held across.
+    let pMvdCostTable = MvdCostCursor::origin(
+        &(&(*pEncCtx).pMvdCostTable)[..],
+        (*pEncCtx).iMvdCostTableSize,
+    );
     let kiSliceIdx = (*pSlice).iSliceIdx;
     let kiPartitionId = (kiSliceIdx % ((*pEncCtx).iActiveThreadsNum as i32)) as usize;
     let kuiChromaQpIndexOffset = if !layer_pps(pEncCtx, pCurLayer).is_null() {
@@ -4666,6 +4684,103 @@ mod tests {
             0,
             "its top neighbour is in slice 0, so it must not be available"
         );
+    }
+
+    /// **S5.C4b's referee — the MVD cursor, held across a slice, under two workers.**
+    ///
+    /// C4b turned `SWelsMD::pMvdCost` from a `*mut u16` into a borrow of the
+    /// context's `pMvdCostTable`, and the two `WelsMdInterMbLoop` bodies derive that
+    /// borrow once and hold it for the whole macroblock loop. Under the fork that is
+    /// a claim about shared data, and no byte gate can see it: the differential sweep
+    /// certifies output, and a stale-tag read produces the same bytes right up until
+    /// the optimiser decides otherwise. So the claim is asked of Miri directly, at a
+    /// size Miri can afford — this probe does not drive the encoder, because the
+    /// question is about two workers and one table, not about encoding.
+    ///
+    /// **The claim, in three parts.**
+    ///
+    /// 1. The `&[u16]` lands in the `Vec`'s *heap buffer*, which is a different
+    ///    allocation from the context — F163's argument, the one the accessor-sibling
+    ///    test above already turns on. So no retag of the context can reach it, and
+    ///    holding it across the loop's calls is lawful.
+    /// 2. The table is written exactly once, by `MvdCostInit` inside
+    ///    `WelsInitEncoderExt`, before any slice worker exists. Concurrent *readers*
+    ///    of one buffer coexist freely; a concurrent writer would not, and there is
+    ///    none.
+    /// 3. Deriving it must be **field-precise** — `&(*p).pMvdCostTable`, never a
+    ///    `&self` accessor. This is the part with teeth, and the part that decided
+    ///    the shape of `MvdCostCursor::origin`.
+    ///
+    /// **It has teeth, checked rather than assumed.** Respelling the derivation
+    /// below as the whole-context borrow a `&self` accessor would make —
+    /// `let c: &sWelsEncCtx = &*p; MvdCostCursor::origin(&c.pMvdCostTable[..], n)` —
+    /// makes this fail under Miri with "Data race detected between (1) non-atomic
+    /// write on thread `unnamed-1` and (2) retag read of type `sWelsEncCtx` on
+    /// thread `unnamed-2`". That is F228, and it is why the raw
+    /// `sWelsEncCtx::mvd_cost_origin` this replaced could not simply start returning
+    /// a reference: its `&self` was harmless only because the borrow died on the
+    /// next line.
+    ///
+    /// The per-worker write below is the *class* of concurrent inline-context write
+    /// the fork performs, reduced to its smallest form — one disjoint scalar slot per
+    /// worker. It is what makes part 3 observable; parts 1 and 2 hold without it.
+    #[test]
+    // unsafe-cat: instrument(test)
+    #[allow(unsafe_code)]
+    fn mvd_cursor_survives_a_slice_held_across_the_forked_workers() {
+        use crate::safe::mvd_cost::MvdCostCursor;
+        use crate::encoder::encoder_context::sWelsEncCtx;
+
+        const SIZE: i32 = 32;                 // the zero-MVD entry's index
+        const LEN: usize = 2 * SIZE as usize + 1;
+        const WORKERS: usize = 2;
+
+        let mut ctx = Box::new(sWelsEncCtx::new());
+        // One QP row, filled so a read's *value* identifies the index it came from.
+        ctx.pMvdCostTable = (0..LEN as u16).collect();
+        ctx.iMvdCostTableSize = SIZE;
+        ctx.iMvdCostTableStride = LEN as i32;
+        // Two disjoint scalar slots, one per worker — see the doc's last paragraph.
+        ctx.iActiveThreadsNum = 0;
+        ctx.iMaxSliceCount = 0;
+
+        // The address as an integer, for the reason the layer probe above gives:
+        // D1 pins the tree's hand-written `Send` impls at two, and a test may not
+        // spend that pin.
+        let ctx_addr = (&mut *ctx as *mut sWelsEncCtx) as usize;
+
+        std::thread::scope(|s| {
+            for w in 0..WORKERS {
+                s.spawn(move || unsafe {
+                    let p = ctx_addr as *mut sWelsEncCtx;
+                    // **The derivation under test** — field-precise, taken once, and
+                    // held for the whole of this worker's body, exactly as
+                    // `WelsMdInterMbLoop` holds it across its macroblock loop.
+                    let cursor = MvdCostCursor::origin(
+                        &(&(*p).pMvdCostTable)[..],
+                        (*p).iMvdCostTableSize,
+                    );
+                    for _ in 0..8 {
+                        // Read through it with signed indices of both signs, which is
+                        // the whole reason the cursor is not a plain slice.
+                        assert_eq!(cursor.at(0), SIZE as u16);
+                        assert_eq!(cursor.at(-SIZE), 0);
+                        assert_eq!(cursor.at(SIZE), (LEN - 1) as u16);
+                        // ... while the other worker writes the context. Each
+                        // branch is one worker's own slot, reached as a raw place so
+                        // that nothing here forms a borrow of the context itself.
+                        if w == 0 {
+                            *std::ptr::addr_of_mut!((*p).iActiveThreadsNum) += 1;
+                        } else {
+                            *std::ptr::addr_of_mut!((*p).iMaxSliceCount) += 1;
+                        }
+                    }
+                });
+            }
+        });
+
+        assert_eq!(ctx.iActiveThreadsNum, 8i16, "worker 0 wrote only its own slot");
+        assert_eq!(ctx.iMaxSliceCount, 8i32, "worker 1 wrote only its own slot");
     }
 
     /// **`SM_SIZELIMITED_SLICE` at two threads, and the boundary is asserted
