@@ -2360,6 +2360,18 @@ S6=R-e, S7=R-c, S8=R-i, S9=R-o, S10=R-d, S14=R-g, S16=R-f+R-p.*
   name it excuses; treat a normalization firing where it was not designed to as a
   finding; and after cutting one, plant a fault inside the normalized neighborhood and
   watch the referee still fail — S66's negative calibration, applied to the hole itself.
+- **S70 — the gate must match the change class: a checkpoint that converts a raw
+  pointer into a reference or slice is a Miri question wherever it lives, because a
+  byte gate cannot see a retag** (safeplan session S4, F227; F223's ladder is the same
+  law one level up). C4a converted a parameter to `&mut [u16]` and called
+  `as_mut_ptr()` on it twice; the second call is a fresh `Unique` retag that pops the
+  first cursor's tag — F215's rule, one container in. `family` passed the defect whole,
+  583/583 byte-identical in both profiles, because it changes no byte, which is the
+  sweep's entire jurisdiction; the next checkpoint's `session`-level Miri lane caught
+  it. The gate split S4's brief prescribed — `family` per checkpoint, `session`
+  reserved for the seam files — was therefore wrong in one specific way: the seam is
+  what makes the *MT probes* necessary, but reference conversions are Miri's
+  jurisdiction everywhere, seam or not. Gate them at `session`.
 - **S60 — run the acceptance instrument before designing against it; its current
   failure list is the scope, and an acceptance that is a whole-system property cannot
   be a family session's exit criterion** (Phase 9 session C, F132). C's brief said

@@ -9,9 +9,11 @@ start at **F228** (the count prints 127 today — check it). The operative plan 
 
 ## Where S4 left the tree
 
-Eight gated commits, `410b9c13..19ff3142`. **The plan's progress number moved
-614 → 532**, the largest movement since it was defined, and most of it came from one
-compiler-driven pass rather than from hand conversion.
+Eleven commits, `410b9c13..4d1a42c1` — nine gated landings, the close-docs commit,
+and two landings **after** the close-docs commit (D4a, E2a; any number quoted in a
+doc written at the close stops at 532 for that reason). **The plan's progress number
+moved 614 → 519**, the largest movement since it was defined, and most of it came
+from one compiler-driven pass rather than from hand conversion.
 
 | commit | what |
 |---|---|
@@ -23,12 +25,16 @@ compiler-driven pass rather than from hand conversion.
 | `a0796cf9` | **C4a** — the MD helpers; MVD-cost family scoped out |
 | `aefac7dd` | **C-cascade** — 87 signatures + 72 allows, one fixpoint |
 | `19ff3142` | **C-params** — four more params, one accessor |
+| `a02cd393` | close-docs — the session log, written **before** the next two rows landed |
+| `98625d8e` | **D4a** — the decoder's deblocking shim table deleted; `deblocking_common.rs` sealed |
+| `4d1a42c1` | **E2a** — 34 already-safe files take `#![forbid(unsafe_code)]` (41 sealed total); **no sweep verdict of its own** — see the duty below |
 
 ### Numbers at S4's close (re-measure; do not quote these)
 
 ```
-ratchet      raw_ptr 1043   unsafe_fn 483   unsafe_block 264   unsafe_impl 2
-tracking     #[allow(unsafe_code)] outside src/api/ : 532   (was 614 at S4's open)
+ratchet      raw_ptr 1009   unsafe_fn 470   unsafe_block 249   unsafe_impl 2
+tracking     #[allow(unsafe_code)] outside src/api/ : 519   (was 614 at S4's open)
+forbid       41 files carry #![forbid(unsafe_code)]   (was 7)
 prohibition1 106 *mut-ctx bodies vs the 15 writers (listed in F222), 0 violations
 prohibition2 explicit 10 (decoder 6, api 1, encoder 3), auto-ref 0
 f208 scan    0 candidates
@@ -59,10 +65,24 @@ pattern matching your own runner — S3 killed its one healthy run that way.
 
 What S4's own probes measured, for your ratio: **3463.45 s / 3530.38 s, pair 3535 s**.
 
+## Two more debts, smaller
+
+* **A sweep verdict for `4d1a42c1` (E2a).** The `family` battery was interrupted when
+  S4 stopped, so the final commit has no sweep verdict of its own. It adds only inner
+  lint attributes (`cargo check --all-targets` clean; seal enforcement proved by an
+  injected violation), so nothing is expected of the sweep — but the gap closes on
+  record, not by assumption: your first `family`- or `session`-level gate covers it,
+  and your report says so explicitly.
+* **The session-lane Miri baseline is stale.** `rust/tools/miri_wall_baseline.txt`'s
+  data line still reads S2's close (`cpu=1105`); S3 gated at `family` and S4 did not
+  advance it. At your close, quote the lane's CPU against 1105 s and replace the data
+  line — and read the ratio as spanning S3+S4+S5's changes, not yours alone.
+
 ## What S5 does
 
-**C4b, C5, C6 to close stage C — then D1–D4, then E1–E3.** Every remaining item is a
-campaign; none is a tail to rush at the end of another checkpoint.
+**C4b, C5, C6 to close stage C — then D1–D3 and D4b, then E1, the rest of E2, E3.**
+Every remaining item is a campaign; none is a tail to rush at the end of another
+checkpoint.
 
 ### C4b — the MVD-cost family (start here; it is the one with a perf question)
 
@@ -113,11 +133,15 @@ sites, 24 of them in `wels_preprocess.rs` itself and the rest in `processing/`
 (`vaacalc`, `background_detection`, `adaptive_quantization`), where it is the one
 `from_raw_parts` left in each. Convert `SPixMap` and those files follow.
 
-### Then D1–D4, then E1–E3
+### Then D1–D3 and D4b, then E1 and the rest of E2, then E3
 
-Unchanged from S4's brief, with one correction below. **E2's lint flip cannot happen
-until stage C and D are done** — `svc_motion_estimate.rs` alone still carries 32
-allows.
+Two post-close landings already took bites out of this list. **D4a** deleted the
+decoder's deblocking shim table and sealed `deblocking_common.rs`; what remains of
+D4 — call it **D4b** — is the `slice_multi_threading.rs` residue (~25 sites) plus
+`encoder/deblocking.rs`, `mc.rs`, `copy_mb.rs`. **E2a** sealed the 34 files that
+already qualified, so E2's remaining flip covers exactly the files C and D convert —
+it still cannot finish until they are done (`svc_motion_estimate.rs` alone carries 32
+allows; re-measure). The rest is unchanged from S4's brief, with one correction below.
 
 ## The rules that earned their keep in S4, and one correction to the brief
 
