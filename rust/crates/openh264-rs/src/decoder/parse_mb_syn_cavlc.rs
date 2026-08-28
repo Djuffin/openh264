@@ -44,6 +44,7 @@
 )]
 
 #![deny(unsafe_code)]
+#![forbid(unsafe_code)]
 // **Phase 5, T5.AC7 — the lint, with the two `PPicture` survivors allowed by
 // name (both converted at T5b.1; this module allows nothing today), and family 8's
 // blocker is gone.** Session W named what stood between this

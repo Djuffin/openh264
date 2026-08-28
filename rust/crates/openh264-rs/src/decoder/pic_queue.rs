@@ -49,6 +49,7 @@
     dead_code,
     unused_variables
 )]
+#![forbid(unsafe_code)]
 
 use std::ffi::{c_char, c_void};
 use crate::decoder::decoder_context::SDecodingParam;

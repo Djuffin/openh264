@@ -102,6 +102,7 @@
     dead_code,
     unused_variables
 )]
+#![forbid(unsafe_code)]
 
 pub const WELS_CABAC_HALF: u64 = 0x01FE;
 pub const WELS_CABAC_QUARTER: u64 = 0x0100;

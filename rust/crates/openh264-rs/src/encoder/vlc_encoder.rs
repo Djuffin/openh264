@@ -20,6 +20,7 @@
 // the callers here is what showed nothing had ever routed to these.
 
 #![deny(unsafe_code)]
+#![forbid(unsafe_code)]
 
 /// Residual transform block category.
 /// Matches `ECtxBlockCat` in `codec/encoder/core/inc/set_mb_syn_cavlc.h`.

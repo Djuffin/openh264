@@ -1,3 +1,4 @@
+#![forbid(unsafe_code)]
 // NOTE: this file is compiled twice, on purpose.
 //   * as `crate::safe::prng` under `#[cfg(test)]`, for the in-module unit tests;
 //   * as `common::prng` in `tests/`, via `#[path = "../../src/safe/prng.rs"]`,

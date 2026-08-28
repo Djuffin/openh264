@@ -1,3 +1,4 @@
+#![forbid(unsafe_code)]
 /*
  * \copy
  *     Copyright (c)  2013, Cisco Systems

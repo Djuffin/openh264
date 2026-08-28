@@ -62,6 +62,7 @@
     unused_mut,
     unused_assignments
 )]
+#![forbid(unsafe_code)]
 
 use std::ffi::c_void;
 use crate::safe::mb_grid::MbArray;

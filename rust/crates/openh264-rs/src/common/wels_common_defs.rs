@@ -5,6 +5,7 @@
     dead_code
 )]
 #![deny(unsafe_code)]
+#![forbid(unsafe_code)]
 
 //! Types shared by the encoder and the decoder.
 //!

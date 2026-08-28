@@ -1,5 +1,6 @@
 #![allow(non_upper_case_globals)]
 #![deny(unsafe_code)]
+#![forbid(unsafe_code)]
 
 //! CPU feature flags — `codec/common/inc/cpu_core.h`.
 //!

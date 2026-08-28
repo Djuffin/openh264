@@ -15,6 +15,7 @@
     dead_code,
     unused_variables
 )]
+#![forbid(unsafe_code)]
 
 //! Exponential-Golomb entropy decoding and bitstream parsing routines.
 //!

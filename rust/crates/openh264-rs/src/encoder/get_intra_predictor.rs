@@ -30,6 +30,7 @@
 #![allow(non_snake_case, non_upper_case_globals, dead_code)]
 
 #![deny(unsafe_code)]
+#![forbid(unsafe_code)]
 
 use crate::common::intra_pred_common::{i16x16_luma_pred_h, i16x16_luma_pred_v};
 use crate::safe::plane::{PlaneCursor, RefSamples};

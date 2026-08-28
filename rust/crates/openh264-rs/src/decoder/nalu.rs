@@ -7,6 +7,7 @@
 )]
 
 #![deny(unsafe_code)]
+#![forbid(unsafe_code)]
 // **Phase 5b, T5b.6: this file's `unsafe` is gone and no exception is enumerated.**
 // `src/decoder/` carries **two** `#[allow(unsafe_code)]` items in total (T8.A8), and
 // both are `picture.rs`'s Miri provenance tests for `data_ptr` — the instruments S28

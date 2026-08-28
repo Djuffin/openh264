@@ -47,6 +47,7 @@
 //! exact. That is where this code came from.
 
 #![deny(unsafe_code)]
+#![forbid(unsafe_code)]
 
 use super::vaacalc::{RET_INVALIDPARAM, RET_SUCCESS};
 

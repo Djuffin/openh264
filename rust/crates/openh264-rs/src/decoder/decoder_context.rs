@@ -7,6 +7,7 @@
 )]
 
 #![deny(unsafe_code)]
+#![forbid(unsafe_code)]
 // **Phase 5, T5.AC10 — the lint on the module the brief called the odd one.** Its
 // 36 raw-pointer occurrences against five `unsafe fn` said what §1 predicted:
 // *"most of those are type aliases and API-boundary spellings, not conversions."*
