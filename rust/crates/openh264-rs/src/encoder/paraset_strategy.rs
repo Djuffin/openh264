@@ -377,10 +377,12 @@ impl CWelsParametersetIdStrategyObj {
     /// Returns a raw pointer because its callers hand it straight to the SPS writers,
     /// which take `*mut i32` from C++.
     #[inline]
-    pub fn GetSpsIdOffsetList(&mut self, iParasetType: i32) -> *mut i32 {
-        self.m_sParaSetOffset.sParaSetOffsetVariable[iParasetType as usize]
-            .iParaSetIdDelta
-            .as_mut_ptr()
+    /// S4.C: the delta table as a **shared slice**. Every consumer
+    /// (`WelsWriteSpsNal`/`WelsWriteSpsSyntax`/`WelsWriteSubsetSpsSyntax`) reads one
+    /// entry at `uiSpsId` and writes none, so `&self` is the honest receiver and
+    /// `&[i32]` the honest answer — the raw was handed out `&mut` for a read.
+    pub fn GetSpsIdOffsetList(&self, iParasetType: i32) -> &[i32] {
+        &self.m_sParaSetOffset.sParaSetOffsetVariable[iParasetType as usize].iParaSetIdDelta
     }
 
     /// `GetAllNeededParasetNum` — `paraset_strategy.cpp:227`.

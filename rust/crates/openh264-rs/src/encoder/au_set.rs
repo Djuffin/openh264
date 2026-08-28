@@ -523,7 +523,7 @@ pub unsafe fn WelsWriteSpsSyntax(
     buf: &mut [u8],
     pSps: &SWelsSPS,
     pBsWriter: &mut BsWriter,
-    pSpsIdDelta: *mut i32,
+    pSpsIdDelta: &[i32],
     bBaseLayer: bool,
 ) -> i32 {
 
@@ -551,7 +551,7 @@ pub unsafe fn WelsWriteSpsSyntax(
     BsWriteUE(buf, pBsWriter,
         (*pSps)
             .uiSpsId
-            .wrapping_add(*pSpsIdDelta.add(pSps.uiSpsId as usize) as u32),
+            .wrapping_add(pSpsIdDelta[pSps.uiSpsId as usize] as u32),
     );
 
     if PRO_SCALABLE_BASELINE as u8 == pSps.uiProfileIdc
@@ -616,7 +616,7 @@ pub unsafe fn WelsWriteSpsNal(
     buf: &mut [u8],
     pSps: &SWelsSPS,
     pBsWriter: &mut BsWriter,
-    pSpsIdDelta: *mut i32,
+    pSpsIdDelta: &[i32],
 ) -> i32 {
     WelsWriteSpsSyntax(buf, pSps, pBsWriter, pSpsIdDelta, true);
 
@@ -635,7 +635,7 @@ pub unsafe fn WelsWriteSubsetSpsSyntax(
     buf: &mut [u8],
     pSubsetSps: &SSubsetSps,
     pBsWriter: &mut BsWriter,
-    pSpsIdDelta: *mut i32,
+    pSpsIdDelta: &[i32],
 ) -> i32 {
     let pSps = &pSubsetSps.pSps;
 
@@ -1043,7 +1043,7 @@ mod tests {
         // header of `tests/safe_bits_differential.rs`.
         let written = unsafe {
             WelsInitSps(&mut sps, &mut lp, &mut li, 0, 1, 0, true, false, 1, false);
-            WelsWriteSpsNal(&mut buf, &mut sps, &mut bs, delta.as_mut_ptr());
+            WelsWriteSpsNal(&mut buf, &mut sps, &mut bs, &delta);
             bs.pos()
         };
 
