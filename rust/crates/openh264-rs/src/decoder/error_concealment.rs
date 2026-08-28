@@ -44,6 +44,7 @@
 )]
 
 #![deny(unsafe_code)]
+#![forbid(unsafe_code)]
 // **Phase 5, T5.AC8 — the lint, with one family allowed by name.** The module's
 // two copy paths converted and its third did not, and the line between them is a
 // data structure rather than a difficulty:

@@ -14,6 +14,7 @@
 //! it also needs the scroll detector, which is unported.
 
 #![deny(unsafe_code)]
+#![forbid(unsafe_code)]
 
 use crate::common::sad_common::sample_sad;
 use crate::encoder::wels_preprocess::{ESceneChangeIdc, SPixMap, SSceneChangeResult};

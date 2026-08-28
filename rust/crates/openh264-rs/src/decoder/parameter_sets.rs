@@ -7,6 +7,7 @@
 )]
 
 #![deny(unsafe_code)]
+#![forbid(unsafe_code)]
 // Phase 5 W7. This module holds none of the three forms the lint denies — no
 // `unsafe fn`, no `unsafe` block, no unsafe trait implementation — so the lint
 // is a statement of fact rather than a goal, and it is here to keep it one: the

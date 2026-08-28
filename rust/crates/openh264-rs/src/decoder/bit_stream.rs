@@ -19,6 +19,7 @@
     dead_code,
     unused_variables
 )]
+#![forbid(unsafe_code)]
 
 //! Decoder bitstream reading and RBSP/EBSP serialization utilities.
 //!

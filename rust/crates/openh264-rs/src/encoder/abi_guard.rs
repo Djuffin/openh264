@@ -17,6 +17,7 @@
 //! A size assertion catches that class of mistake the moment it is written.
 
 #![deny(unsafe_code)]
+#![forbid(unsafe_code)]
 
 use std::mem::size_of;
 

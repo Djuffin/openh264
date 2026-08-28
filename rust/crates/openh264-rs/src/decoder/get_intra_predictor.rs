@@ -6,6 +6,7 @@
     dead_code,
     unused_variables
 )]
+#![forbid(unsafe_code)]
 
 /*!
  * OpenH264 Decoder: Spatial Intra Prediction Module

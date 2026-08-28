@@ -11,6 +11,7 @@
 //! Translated from `codec/decoder/core/inc/manage_dec_ref.h` and `codec/decoder/core/src/manage_dec_ref.cpp`.
 
 #![deny(unsafe_code)]
+#![forbid(unsafe_code)]
 // **Phase 5, T5.AC5 — the lint, allowing nothing.** The module's four raw
 // pointers were four different things and none of them was a pointer:
 //

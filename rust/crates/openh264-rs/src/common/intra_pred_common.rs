@@ -44,6 +44,7 @@
 // **T9.C2**: the file's last raw pointer left with the two `(pPred, pRef, kiStride)`
 // shims, so the port's safety floor applies here now.
 #![deny(unsafe_code)]
+#![forbid(unsafe_code)]
 
 // `PGetIntraPredFunc` and `PWelsI16x16LumaPredFunc` stood here — two names for one
 // `unsafe extern "C" fn(*mut u8, *mut u8, i32)`, deleted with the shims they

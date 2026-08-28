@@ -23,6 +23,7 @@
 //! reason and with the same visible ordering.
 
 #![deny(unsafe_code)]
+#![forbid(unsafe_code)]
 
 use crate::encoder::wels_preprocess::SPixMap;
 

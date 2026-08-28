@@ -6,6 +6,7 @@
 )]
 
 #![deny(unsafe_code)]
+#![forbid(unsafe_code)]
 
 //! Sum of Absolute Differences (SAD) distortion calculation engine.
 //!

@@ -11,6 +11,7 @@
     dead_code,
     unused_variables
 )]
+#![forbid(unsafe_code)]
 
 /// Pixel clipping / saturation helper function clamping values to [0, 255].
 #[inline(always)]

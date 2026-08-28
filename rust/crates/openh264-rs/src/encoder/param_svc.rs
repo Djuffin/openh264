@@ -12,6 +12,7 @@
 )]
 
 #![deny(unsafe_code)]
+#![forbid(unsafe_code)]
 
 use crate::{
     EComplexityMode, EParameterSetStrategy, EUsageType, RCMode, SEncParamBase, SEncParamExt,

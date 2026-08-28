@@ -17,6 +17,7 @@
 //! CAVLC VLC lookup tables.
 //! Translated from `codec/decoder/core/src/decoder_data_tables.cpp`.
 #![allow(non_upper_case_globals)]
+#![forbid(unsafe_code)]
 
 // VLC decoding tables translated from codec/decoder/core/src/decoder_data_tables.cpp.
 // Each entry is [value, bit-count] as in the C++ tables.

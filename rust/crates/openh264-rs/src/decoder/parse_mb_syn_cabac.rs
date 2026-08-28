@@ -44,6 +44,7 @@
 )]
 
 #![deny(unsafe_code)]
+#![forbid(unsafe_code)]
 // **Phase 5, T5.AC6 — the lint, with the two `PPicture` survivors allowed by
 // name; T5b.1 converted both and this module allows nothing today.** What was left after session AB's keyword sweep was one family and one
 // idiom, and neither was a pointer:
