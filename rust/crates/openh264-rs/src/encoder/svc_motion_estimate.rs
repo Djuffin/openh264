@@ -1695,9 +1695,7 @@ pub fn MotionEstimateFeatureFullSearch(
 
 /// Intentional no-op motion estimation FME switch callback.
 /// Matches `void UpdateFMESwitchNull (SDqLayer* pCurLayer)` in `svc_motion_estimate.cpp:1059`.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe extern "C" fn UpdateFMESwitchNull(_pCurLayer: Option<&SDqLayer>) {}
+pub extern "C" fn UpdateFMESwitchNull(_pCurLayer: Option<&SDqLayer>) {}
 
 // ============================================================================
 // Feature Storage Dynamic Allocation & Deallocation

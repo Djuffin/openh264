@@ -1042,9 +1042,7 @@ pub unsafe fn layer_enc_pic<'a>(pLayer: &'a SDqLayer) -> Option<&'a SPicture> {
 /// must still be the frame in progress. Liveness is the reference's since
 /// **S6.A1**; both remaining obligations are the caller's.
 #[inline]
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
-pub unsafe fn layer_rec_view<'a>(
+pub fn layer_rec_view<'a>(
     pLayer: &'a SDqLayer,
 ) -> Option<&'a crate::encoder::rec_view::RecPicView> {
     (*pLayer).pRecView.as_ref()
@@ -1454,9 +1452,7 @@ pub fn UpdateNonZeroCountCache(pMb: &SMB, pMbCache: &mut SMbCache) {
 
 /// Computes the virtual slice identifier `uiSliceIdc` for a given macroblock linear index.
 #[inline]
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
-pub unsafe fn WelsMbToSliceIdc(pCurDq: Option<&SDqLayer>, kiMbXY: i32) -> u16 {
+pub fn WelsMbToSliceIdc(pCurDq: Option<&SDqLayer>, kiMbXY: i32) -> u16 {
     let Some(pCurDq) = pCurDq else {
         return u16::MAX;
     };
@@ -1475,9 +1471,7 @@ pub unsafe fn WelsMbToSliceIdc(pCurDq: Option<&SDqLayer>, kiMbXY: i32) -> u16 {
 }
 
 /// Evaluates spatial neighbor availability masks for intra prediction and motion vector prediction.
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
-pub unsafe fn UpdateMbNeighbor(pCurDq: Option<&SDqLayer>, pMb: &mut SMB, kiMbWidth: i32, uiSliceIdc: u16) {
+pub fn UpdateMbNeighbor(pCurDq: Option<&SDqLayer>, pMb: &mut SMB, kiMbWidth: i32, uiSliceIdc: u16) {
     // **T9.D9**: `pMb.is_null()` went with the parameter — a reference cannot be
     // absent. **S6.A1**: the layer followed, and its null guard came with it — the
     // absent layer is the `None` arm now, so the obligation stayed in the callee
@@ -2089,9 +2083,7 @@ pub fn UpdateQpForOverflow(pCurMb: &mut SMB, kuiChromaQpIndexOffset: u8) {
 // Macroblock Search & Traversal Loops
 // ============================================================================
 
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
-pub unsafe fn WelsGetNextMbOfSlice(pCurDq: Option<&SDqLayer>, kiMbXY: i32) -> i32 {
+pub fn WelsGetNextMbOfSlice(pCurDq: Option<&SDqLayer>, kiMbXY: i32) -> i32 {
     let Some(pCurDq) = pCurDq else {
         return -1;
     };
@@ -3600,9 +3592,7 @@ pub fn InitSliceBoundaryInfo(
     ENC_RETURN_SUCCESS
 }
 
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
-pub unsafe fn SetSliceBoundaryInfo(pCurLayer: Option<&SDqLayer>, pSlice: &mut SSlice, kiSliceIdx: i32) -> i32 {
+pub fn SetSliceBoundaryInfo(pCurLayer: Option<&SDqLayer>, pSlice: &mut SSlice, kiSliceIdx: i32) -> i32 {
     let Some(pCurLayer) = pCurLayer else {
         return ENC_RETURN_UNEXPECTED;
     };
