@@ -6587,3 +6587,37 @@ the DQ-layer storage moves (the brief's own prerequisite: banks out of the struc
 `svc_motion_estimate.rs` (22), `svc_enc_slice_segment.rs` (21), `encode_mb_aux.rs` (12)
 and `nal_encap.rs` (11). That is **179 allows reachable without the fork seam**, which
 is where a session that wants movement should go before it takes on the layer.
+
+## F233 — `SetFeatureSearchIn` dereferences a null `pRefFeatureStorage` on an API-reachable path, and F229's dead allocator is why the pointer is always null
+
+Found while converting the pointer, not by looking for it.
+
+`SetFeatureSearchIn` reads `(*pRefFeatureStorage).pTimesOfFeatureValue` and
+`.pLocationOfFeature` with **no null test**, where its sibling
+`CalculateFeatureOfBlock` guards all four of its pointers and returns `false`. The
+argument comes from `SWelsME::pRefFeatureStorage`, which `InitMe` copies from
+`layer_ref_feature_storage`, which resolves
+`SPicture::pScreenBlockFeatureStorage` — **never assigned anywhere in the tree**
+(F229). So the pointer is null on every path.
+
+Reaching the read needs `bScreenContent`, which is
+`iUsageType == SCREEN_CONTENT_REAL_TIME` (`param_svc.rs:632`) — a public API
+parameter, not a harness knob. `WelsInitMeFunc`'s screen arm installs
+`WelsDiamondCrossFeatureSearch`, whose body calls `SetFeatureSearchIn` once
+`uiSadCost >= uiSadCostThreshold`. A caller setting that usage type therefore reaches a
+null dereference. It has never been observed because **no driver in this project sets
+it** — the same blindness F229 records for the conversion it declines, showing up here
+as an actual defect rather than a hypothetical.
+
+**Fixed by the type, at the point of the read.** With
+`pRefFeatureStorage: Option<&SScreenBlockFeatureStorage>`, the site becomes
+`let Some(..) = .. else { return false; }` — the answer its sibling already gives. The
+guard sits at the dereference rather than at the top of the function deliberately:
+every line above it still runs exactly as before, so the only behaviour that changes is
+the behaviour that was undefined.
+
+**Note what this says about F229's ruling.** The finding argued that *deleting* the
+screen-content family is dangerous because the search tree is API-reachable and no gate
+can see it. This is the same fact from the other side: that path is reachable enough to
+contain a live null dereference. Both conclusions stand together — the code must not be
+deleted blind, and it must not be left unexamined either.

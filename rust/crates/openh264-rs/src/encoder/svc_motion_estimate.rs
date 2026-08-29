@@ -181,8 +181,13 @@ pub struct SWelsME<'a> {
     pub sMvBase: SMVUnitXY,
     pub sDirectionalMv: SMVUnitXY,
 
+    /// **S5.C6d**: was `*mut SScreenBlockFeatureStorage`. It is resolved from
+    /// `SPicture::pScreenBlockFeatureStorage`, which C6c made an `Option<Box<..>>` that
+    /// nothing ever fills, so this is `None` on every path the port can take. The
+    /// lifetime is the one `pMvdCost` already introduced (C4b) — a search block borrows
+    /// the frame's tables for the slice encode and no longer.
     // SCREEN_CONTENT(dormant: Phase 10)
-    pub pRefFeatureStorage: *mut SScreenBlockFeatureStorage,
+    pub pRefFeatureStorage: Option<&'a SScreenBlockFeatureStorage>,
 
     pub sMv: SMVUnitXY,
 }
@@ -202,7 +207,7 @@ impl Default for SWelsME<'_> {
             sMvp: SMVUnitXY::default(),
             sMvBase: SMVUnitXY::default(),
             sDirectionalMv: SMVUnitXY::default(),
-            pRefFeatureStorage: std::ptr::null_mut(),
+            pRefFeatureStorage: None,
             sMv: SMVUnitXY::default(),
         }
     }
@@ -1191,9 +1196,9 @@ pub fn WelsDiamondCrossSearch(
     unsafe {
         WelsDiamondSearch(pMeFuncs, sdf, pMe, pSlice, pEncPlane, pRefPlane);
 
-        if !(*pMe).pRefFeatureStorage.is_null() {
+        if let Some(storage) = (*pMe).pRefFeatureStorage {
             let block_size = (*pMe).uiBlockSize as usize;
-            (*pMe).uiSadCostThreshold = (*(*pMe).pRefFeatureStorage).uiSadCostThreshold[block_size];
+            (*pMe).uiSadCostThreshold = storage.uiSadCostThreshold[block_size];
         }
         if (*pMe).uiSadCost >= (*pMe).uiSadCostThreshold {
             WelsMotionCrossSearch(pMeFuncs, sdf, pMe, pSlice, pEncPlane, pRefPlane);
@@ -1496,12 +1501,12 @@ pub unsafe extern "C" fn PerformFMEPreprocess(
 // SCREEN_CONTENT(dormant: Phase 10)
 // unsafe-cat: SCREEN_CONTENT(dormant)
 #[allow(unsafe_code)]
-pub unsafe fn SetFeatureSearchIn<'a>(
+pub fn SetFeatureSearchIn<'a>(
     pMeFuncs: &SMeFuncs,
     sdf: &SSampleDealingFunc,
     sMe: &SWelsME<'a>,
     pSlice: &SSlice,
-    pRefFeatureStorage: *mut SScreenBlockFeatureStorage,
+    pRefFeatureStorage: Option<&SScreenBlockFeatureStorage>,
     pEncPlane: &'a PaddedPlane,
     pRefPlane: &'a PaddedPlane,
     pFeatureSearchIn: &mut SFeatureSearchIn<'a>,
@@ -1526,8 +1531,18 @@ pub unsafe fn SetFeatureSearchIn<'a>(
         pFeatureSearchIn.iCurPixY = sMe.iCurMeBlockPixY;
         pFeatureSearchIn.iCurPixYQpel = pFeatureSearchIn.iCurPixY << 2;
 
-        pFeatureSearchIn.pTimesOfFeature = (*pRefFeatureStorage).pTimesOfFeatureValue;
-        pFeatureSearchIn.pQpelLocationOfFeature = (*pRefFeatureStorage).pLocationOfFeature;
+        // **S5.C6d.** Placed here, not at the top: every line above still runs exactly
+        // as it did, and only the point where the old code would have dereferenced a
+        // null `pRefFeatureStorage` becomes a defined `false`. That is the same answer
+        // its sibling `CalculateFeatureOfBlock` already gives when its own pointers are
+        // null, and it replaces undefined behaviour rather than defined behaviour: with
+        // `SPicture::pScreenBlockFeatureStorage` never filled (F229), a caller setting
+        // `SCREEN_CONTENT_REAL_TIME` reached this line with a null and read through it.
+        let Some(pRefFeatureStorage) = pRefFeatureStorage else {
+            return false;
+        };
+        pFeatureSearchIn.pTimesOfFeature = pRefFeatureStorage.pTimesOfFeatureValue;
+        pFeatureSearchIn.pQpelLocationOfFeature = pRefFeatureStorage.pLocationOfFeature;
         pFeatureSearchIn.pMvdCostX = sMe.pMvdCost.offset(-pFeatureSearchIn.iCurPixXQpel - sMe.sMvp.iMvX as i32);
         pFeatureSearchIn.pMvdCostY = sMe.pMvdCost.offset(-pFeatureSearchIn.iCurPixYQpel - sMe.sMvp.iMvY as i32);
 
