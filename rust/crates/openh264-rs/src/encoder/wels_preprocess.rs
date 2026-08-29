@@ -1159,7 +1159,7 @@ impl CWelsPreProcess {
         &mut self,
         pCtx: &mut sWelsEncCtx,
         kpSrcPic: *const SSourcePicture,
-        pSpatialNum: *mut i32,
+        pSpatialNum: &mut i32,
     ) -> i32 {
         // A7, §4.6 reorder: three scalars, read where they are used — this body
         // hands the context to `WelsPreprocessReset` between them.
@@ -1209,7 +1209,7 @@ impl CWelsPreProcess {
         &mut self,
         pCtx: &mut sWelsEncCtx,
         kpSrc: *const SSourcePicture,
-        pSpatialNum: *mut i32,
+        pSpatialNum: &mut i32,
     ) -> i32 {
         // A7, §4.6 reorder: the layer's geometry is four scalars, read here rather
         // than through a borrow that would have to span every context call below.
@@ -2389,7 +2389,7 @@ impl CWelsPreProcess {
                 &pRefPicList,
                 iCurTid,
                 iClosestLtrFrameNum,
-                sAvailableRefParam.as_mut_ptr(),
+                &mut sAvailableRefParam,
                 &mut iAvailableRefNum,
                 &mut iAvailableSceneRefNum,
             );
@@ -2398,7 +2398,7 @@ impl CWelsPreProcess {
                 &pRefPicList,
                 iCurTid,
                 iClosestLtrFrameNum,
-                sAvailableRefParam.as_mut_ptr(),
+                &mut sAvailableRefParam,
                 &mut iAvailableRefNum,
                 &mut iAvailableSceneRefNum,
             );
@@ -2532,10 +2532,11 @@ impl CWelsPreProcess {
         iVaaFrameSceneChangeIdc
     }
 
-    // unsafe-cat: port-raw(Phase 9)
-    #[allow(unsafe_code)]
-    unsafe fn InitPixMap(pPicture: &PicPlanes, pPixMap: *mut SPixMap) {
-        if !pPixMap.is_null() {
+    /// **S5.C6b**: `*mut SPixMap` became the `&mut` both call sites already held
+    /// (`&mut sSrcMap`, `&mut sRefMap` — locals of `DetectSceneChangeScreen`), so the
+    /// null test could not fire.
+    fn InitPixMap(pPicture: &PicPlanes, pPixMap: &mut SPixMap) {
+        {
             (*pPixMap).pPixel[0] = pPicture.pData[0];
             (*pPixMap).pPixel[1] = pPicture.pData[1];
             (*pPixMap).pPixel[2] = pPicture.pData[2];
@@ -2548,10 +2549,10 @@ impl CWelsPreProcess {
         }
     }
 
-    // unsafe-cat: port-raw(Phase 9)
-    #[allow(unsafe_code)]
-    unsafe fn InitRefJudgement(&self, pRefJudgement: *mut SRefJudgement) {
-        if !pRefJudgement.is_null() {
+    /// **S5.C6b**: as [`InitPixMap`](Self::InitPixMap) — both call sites pass `&mut`
+    /// to a caller local.
+    fn InitRefJudgement(&self, pRefJudgement: &mut SRefJudgement) {
+        {
             (*pRefJudgement).iMinFrameComplexity = i32::MAX as i64;
             (*pRefJudgement).iMinFrameComplexity08 = i32::MAX as i64;
             (*pRefJudgement).iMinFrameComplexity11 = i32::MAX as i64;
@@ -2576,15 +2577,14 @@ impl CWelsPreProcess {
         }
     }
 
-    // unsafe-cat: port-raw(Phase 9)
-    #[allow(unsafe_code)]
-    unsafe fn SaveBestRefToJudgement(
+    /// **S5.C6b**: as [`InitRefJudgement`](Self::InitRefJudgement).
+    fn SaveBestRefToJudgement(
         &self,
         iRefPictureAvQP: i32,
         iComplexity: i64,
-        pRefJudgement: *mut SRefJudgement,
+        pRefJudgement: &mut SRefJudgement,
     ) {
-        if !pRefJudgement.is_null() {
+        {
             (*pRefJudgement).iMinFrameQp = iRefPictureAvQP;
             (*pRefJudgement).iMinFrameComplexity = iComplexity;
             (*pRefJudgement).iMinFrameComplexity08 = (iComplexity as f64 * 0.8) as i64;
@@ -2592,24 +2592,23 @@ impl CWelsPreProcess {
         }
     }
 
-    // unsafe-cat: port-raw(Phase 9)
-    #[allow(unsafe_code)]
-    unsafe fn SaveBestRefToLocal(
+    /// **S5.C6b**: two raw out-parameters into one read and one write. The `&`/`&mut`
+    /// split is what the body already did — `pRefPicInfo` is only read from.
+    fn SaveBestRefToLocal(
         &self,
-        pRefPicInfo: *mut SRefInfoParam,
+        pRefPicInfo: &SRefInfoParam,
         sSceneChangeResult: &SSceneChangeResult,
-        pRefSaved: *mut SRefInfoParam,
+        pRefSaved: &mut SRefInfoParam,
     ) {
-        if !pRefSaved.is_null() && !pRefPicInfo.is_null() {
+        {
             *pRefSaved = *pRefPicInfo;
             (*pRefSaved).pBestBlockStaticIdc = sSceneChangeResult.pStaticBlockIdc;
         }
     }
 
-    // unsafe-cat: port-raw(Phase 9)
-    #[allow(unsafe_code)]
-    unsafe fn SaveBestRefToVaa(&self, sRefSaved: &SRefInfoParam, pVaaBestRef: *mut SRefInfoParam) {
-        if !pVaaBestRef.is_null() {
+    /// **S5.C6b**: as its siblings — both call sites pass `&mut (*pVaaExt).sVaa*[0]`.
+    fn SaveBestRefToVaa(&self, sRefSaved: &SRefInfoParam, pVaaBestRef: &mut SRefInfoParam) {
+        {
             *pVaaBestRef = *sRefSaved;
         }
     }
@@ -2623,9 +2622,9 @@ impl CWelsPreProcess {
         pRefPicList: &[Option<SrcPicId>],
         iCurTid: u8,
         iClosestLtrFrameNum: i32,
-        pAvailableRefParam: *mut SRefInfoParam,
-        pAvailableRefNum: *mut i32,
-        pAvailableSceneRefNum: *mut i32,
+        pAvailableRefParam: &mut [SRefInfoParam],
+        pAvailableRefNum: &mut i32,
+        pAvailableSceneRefNum: &mut i32,
     ) {
         let iSourcePicNum = self.m_iAvaliableRefInSpatialPicList;
         if iSourcePicNum <= 0 {
@@ -2664,7 +2663,7 @@ impl CWelsPreProcess {
                     *pAvailableRefNum += 1;
                     old
                 };
-                let param = &mut *pAvailableRefParam.offset(idx as isize);
+                let param = &mut pAvailableRefParam[idx as usize];
                 param.pRefPicture = Some(idRefPic);
                 param.iSrcListIdx = i + 1;
                 if bRefRealLtr {
@@ -2675,16 +2674,18 @@ impl CWelsPreProcess {
             i -= 1;
         }
 
-        if (*pAvailableRefParam.offset(0)).pRefPicture.is_none() {
+        if pAvailableRefParam[0].pRefPicture.is_none() {
             let mut j = 1;
             while j < *pAvailableRefNum {
-                let pPrev = &mut *pAvailableRefParam.offset((j - 1) as isize);
-                let pCur = &*pAvailableRefParam.offset(j as isize);
+                // S5.C6b: one `swap`-free shuffle down the slice — `pCur` is a copy
+                // rather than a second borrow, which is what the two raw cursors were.
+                let pCur = pAvailableRefParam[j as usize];
+                let pPrev = &mut pAvailableRefParam[(j - 1) as usize];
                 pPrev.pRefPicture = pCur.pRefPicture;
                 pPrev.iSrcListIdx = pCur.iSrcListIdx;
                 j += 1;
             }
-            let last = &mut *pAvailableRefParam.offset((*pAvailableRefNum - 1) as isize);
+            let last = &mut pAvailableRefParam[(*pAvailableRefNum - 1) as usize];
             last.pRefPicture = None;
             last.iSrcListIdx = 0;
             *pAvailableRefNum -= 1;
@@ -2698,9 +2699,9 @@ impl CWelsPreProcess {
         pSrcPicList: &[Option<SrcPicId>],
         iCurTid: u8,
         _iClosestLtrFrameNum: i32,
-        pAvailableRefList: *mut SRefInfoParam,
-        pAvailableRefNum: *mut i32,
-        pAvailableSceneRefNum: *mut i32,
+        pAvailableRefList: &mut [SRefInfoParam],
+        pAvailableRefNum: &mut i32,
+        pAvailableSceneRefNum: &mut i32,
     ) {
         let iSourcePicNum = self.m_iAvaliableRefInSpatialPicList;
         if iSourcePicNum <= 0 {
@@ -2725,7 +2726,7 @@ impl CWelsPreProcess {
 
             let uiRefTid = self.src_id(idRefPic).uiTemporalId;
             if uiRefTid <= iCurTid {
-                let param = &mut *pAvailableRefList.offset(*pAvailableRefNum as isize);
+                let param = &mut pAvailableRefList[*pAvailableRefNum as usize];
                 param.pRefPicture = Some(idRefPic);
                 param.iSrcListIdx = i + 1;
                 *pAvailableRefNum += 1;
