@@ -1062,7 +1062,27 @@ pub struct SDqLayer {
     pub iDqIdx: LayerIdx,
 
     pub sLayerInfo: SLayerInfo,
-    pub sSliceBufferInfo: [SSliceBufferInfo; MAX_THREADS_NUM],
+    /// **S5.D2b — boxed, and the box is the point.**
+    ///
+    /// This array was *inline* in the layer, and the fork writes into it:
+    /// `ReallocateSliceList` takes `&mut ..[kiBank].pSliceBuffer` and
+    /// `ReallocateSliceInThread` stores `..[idx].iMaxSliceNum`, each on its own bank.
+    /// While those run, a sibling body holding `&SDqLayer` retags the whole layer —
+    /// and a whole-struct shared retag racing a write to an inline field is undefined
+    /// behaviour (F228 for the context, D2a's probe for this struct). That is the
+    /// second and last reason the 37 read-only `*mut SDqLayer` bodies cannot take
+    /// `&SDqLayer`; D2a removed the first.
+    ///
+    /// A `Box` moves the banks to **their own allocation**. The layer then holds one
+    /// pointer, which the fork only ever reads; every bank write lands in the boxed
+    /// allocation, which no whole-layer retag reaches. It is the same argument F163
+    /// makes for `Vec` buffers and C4b relies on for the MVD table — separate
+    /// allocations do not share a borrow stack.
+    ///
+    /// `Box<[T; N]>` rather than `Vec<T>` deliberately: the length is
+    /// `MAX_THREADS_NUM` by construction, and keeping it in the type means no site
+    /// gains a bounds question it did not have.
+    pub sSliceBufferInfo: Box<[SSliceBufferInfo; MAX_THREADS_NUM]>,
     /// One entry per slice in layer order, each naming its bank and its offset
     /// in it — T6.D4. See [`SliceIdx`] and [`slice_in_layer`].
     pub ppSliceInLayer: Vec<SliceIdx>,
@@ -1228,7 +1248,7 @@ impl SDqLayer {
             sLayerInfo: SLayerInfo::default(),
             // No bank allocated yet — `InitSliceThreadInfo` fills bank 0 (and, under
             // MT, one per thread) two calls later.
-            sSliceBufferInfo: std::array::from_fn(|_| SSliceBufferInfo::default()),
+            sSliceBufferInfo: Box::new(std::array::from_fn(|_| SSliceBufferInfo::default())),
             // The slice position array, sized by `InitSliceInLayer` and regrown by
             // `ExtendLayerBuffer`; empty is the raw spelling's null.
             ppSliceInLayer: Vec::new(),
@@ -4708,6 +4728,74 @@ mod tests {
             0,
             "its top neighbour is in slice 0, so it must not be available"
         );
+    }
+
+    /// **S5.D2b's referee — the boxed banks, under the same two workers.**
+    ///
+    /// The second half of what the `&SDqLayer` flip needs, and the same question D2a
+    /// asked of the partition counters: may a body hold a whole-layer shared borrow
+    /// while a sibling worker writes its own slice-buffer bank? With
+    /// `sSliceBufferInfo` *inline* the answer was no — `ReallocateSliceList` and
+    /// `ReallocateSliceInThread` write into the layer's own bytes, and a sibling's
+    /// entry retag races them. Boxed, every bank write lands in the box's allocation,
+    /// which no retag of the layer reaches: F163's argument, the one C4b relies on for
+    /// the MVD table.
+    ///
+    /// **The spelling is `ReallocateSliceList`'s, deliberately.** The write below is
+    /// `&mut (*p).sSliceBufferInfo[w]` — a real `&mut`, not an `addr_of_mut!` — because
+    /// that is what the in-fork writer does, and the two are not equivalent: a probe
+    /// using `addr_of_mut!` would create no reference and so would not exercise the
+    /// retag that matters. It passes because `Box` place-deref is built into rustc: no
+    /// `&mut Box<..>` is created for `..sSliceBufferInfo[w]`, so nothing retags the
+    /// eight header bytes that do live inline.
+    ///
+    /// **Teeth, checked (F234).** Putting the array back inline —
+    /// `[SSliceBufferInfo; MAX_THREADS_NUM]` as a field — makes this fail under Miri
+    /// with "Data race detected between (1) **retag write** on thread `unnamed-2` and
+    /// (2) retag read of type `SDqLayer` on thread `unnamed-3`". Note *retag* write,
+    /// not non-atomic write: with the array inline the `&mut` itself is the conflicting
+    /// access, which is why boxing rather than atomics is the fix for this half. The
+    /// round count and the per-round re-borrow are load-bearing exactly as in D2a's
+    /// probe.
+    #[test]
+    // unsafe-cat: instrument(test)
+    #[allow(unsafe_code)]
+    fn slice_banks_take_a_shared_layer_borrow_across_the_forked_writes() {
+        use super::{SDqLayer, SSliceBufferInfo};
+        const WORKERS: usize = 2;
+        const ROUNDS: i32 = 200;
+
+        let mut dq = SDqLayer::default();
+        for w in 0..WORKERS {
+            dq.sSliceBufferInfo[w].iMaxSliceNum = 0;
+            dq.sSliceBufferInfo[w].iCodedSliceNum = 0;
+        }
+        let layer_addr = (&mut dq as *mut SDqLayer) as usize;
+
+        std::thread::scope(|s| {
+            for w in 0..WORKERS {
+                s.spawn(move || unsafe {
+                    let p = layer_addr as *mut SDqLayer;
+                    for r in 0..ROUNDS {
+                        // the entry retag a flipped read-only body performs
+                        let layer: &SDqLayer = &*p;
+                        let _ = layer.iMbWidth;
+                        // ... while this worker writes its **own** bank, which lives
+                        // in the box rather than in the layer.
+                        // EXACT SPELLING of ReallocateSliceList: a `&mut` through the
+                        // field, which must DerefMut the Box header inline in the layer.
+                        let bank: &mut SSliceBufferInfo = &mut (*p).sSliceBufferInfo[w];
+                        bank.iMaxSliceNum = r;
+                        bank.iCodedSliceNum = r + 1;
+                    }
+                });
+            }
+        });
+
+        for w in 0..WORKERS {
+            assert_eq!(dq.sSliceBufferInfo[w].iMaxSliceNum, ROUNDS - 1);
+            assert_eq!(dq.sSliceBufferInfo[w].iCodedSliceNum, ROUNDS);
+        }
     }
 
     /// **S5.D2a's referee — a whole-layer `&SDqLayer` held while workers stamp their

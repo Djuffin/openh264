@@ -1,5 +1,5 @@
 {
-  "commit": "4bd1f120",
+  "commit": "2b67447e",
   "metrics": ["unsafe_fn", "unsafe_block", "raw_ptr", "transmute", "unsafe_impl", "mem_zeroed", "no_mangle", "shim"],
   "files": {
     "api/abi_guard.rs": { "unsafe_fn": 0, "unsafe_block": 0, "raw_ptr": 0, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 0, "no_mangle": 0, "shim": 0 },
@@ -60,7 +60,7 @@
     "encoder/svc_base_layer_md.rs": { "unsafe_fn": 18, "unsafe_block": 0, "raw_ptr": 20, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 0, "no_mangle": 0, "shim": 0 },
     "encoder/svc_enc_slice_segment.rs": { "unsafe_fn": 10, "unsafe_block": 11, "raw_ptr": 15, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 0, "no_mangle": 0, "shim": 0 },
     "encoder/svc_encode_mb.rs": { "unsafe_fn": 7, "unsafe_block": 0, "raw_ptr": 40, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 0, "no_mangle": 0, "shim": 0 },
-    "encoder/svc_encode_slice.rs": { "unsafe_fn": 67, "unsafe_block": 6, "raw_ptr": 119, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 2, "no_mangle": 0, "shim": 0 },
+    "encoder/svc_encode_slice.rs": { "unsafe_fn": 67, "unsafe_block": 7, "raw_ptr": 121, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 2, "no_mangle": 0, "shim": 0 },
     "encoder/svc_mode_decision.rs": { "unsafe_fn": 30, "unsafe_block": 6, "raw_ptr": 39, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 0, "no_mangle": 0, "shim": 0 },
     "encoder/svc_motion_estimate.rs": { "unsafe_fn": 9, "unsafe_block": 22, "raw_ptr": 38, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 0, "no_mangle": 0, "shim": 0 },
     "encoder/svc_set_mb_syn_cabac.rs": { "unsafe_fn": 3, "unsafe_block": 8, "raw_ptr": 3, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 0, "no_mangle": 0, "shim": 0 },
