@@ -1241,7 +1241,7 @@ pub(crate) fn InitMe<'a>(
     pMvdCost: MvdCostCursor<'a>,
     iBlockSize: i32,
     // SCREEN_CONTENT(dormant: Phase 10)
-    pRefFeatureStorage: *mut SScreenBlockFeatureStorage,
+    pRefFeatureStorage: Option<&'a SScreenBlockFeatureStorage>,
     sWelsMe: &mut SWelsME<'a>,
 ) {
     sWelsMe.iCurMeBlockPixX = iMbPixX;

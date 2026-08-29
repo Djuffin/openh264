@@ -962,21 +962,17 @@ pub unsafe fn layer_ref_pic<'a>(pLayer: *mut SDqLayer) -> Option<&'a SPicture> {
 // unsafe-cat: SCREEN_CONTENT(dormant: Phase 10) — the pointer it hands out; the raw
 // layer parameter is the S63 seam (G's)
 #[allow(unsafe_code)]
-pub unsafe fn layer_ref_feature_storage(
+pub unsafe fn layer_ref_feature_storage<'a>(
     pLayer: *mut SDqLayer,
-) -> *mut crate::encoder::picture::SScreenBlockFeatureStorage {
+) -> Option<&'a crate::encoder::picture::SScreenBlockFeatureStorage> {
     // **S5.C6c**: the picture owns the storage as an `Option<Box<..>>` now, so the
     // pointer is derived from it rather than copied out of it. The far end —
     // `SWelsME::pRefFeatureStorage` — is still raw and is C5's to convert; this
     // bridges the two without changing which address either side sees. In this tree
     // the answer is always null, because nothing ever fills the `Option` (F229).
-    match layer_ref_pic(pLayer) {
-        Some(p) => match p.pScreenBlockFeatureStorage.as_deref() {
-            Some(storage) => std::ptr::from_ref(storage).cast_mut(),
-            None => std::ptr::null_mut(),
-        },
-        None => std::ptr::null_mut(),
-    }
+    // **S5.C6d**: an `Option<&..>` end to end now — the raw bridge C6c needed is gone
+    // with `SWelsME::pRefFeatureStorage`, the far end that had required it.
+    layer_ref_pic(pLayer)?.pScreenBlockFeatureStorage.as_deref()
 }
 
 /// The **source** picture this layer encodes from, resolved through the spatial pool
