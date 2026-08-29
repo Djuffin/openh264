@@ -52,7 +52,7 @@ use crate::encoder::decode_mb_aux::{
     idct_four_t4_rec_in_place_view, idct_four_t4_rec_to_view, idct_t4_rec_on_mb_in_place_view,
 };
 use crate::encoder::encode_mb_aux::{blk_four4x4, blk_mb256};
-use std::sync::atomic::{AtomicU16, Ordering};
+use std::sync::atomic::{AtomicI32, AtomicU16, Ordering};
 use crate::encoder::picture::{PicRef, RecPicId, SPicture, SrcPicId};
 use std::ffi::c_char;
 use crate::{
@@ -1161,8 +1161,30 @@ pub struct SDqLayer {
     pub bThreadSlcBufferFlag: bool,
     pub bSliceBsBufferFlag: bool,
     pub iMaxSliceNum: i32,
-    pub NumSliceCodedOfPartition: [i32; MAX_THREADS_NUM],
-    pub LastCodedMbIdxOfPartition: [i32; MAX_THREADS_NUM],
+    /// **S5.D2a — atomics, and the reason is the `&SDqLayer` flip D2/D3 needs.**
+    ///
+    /// Both arrays live *inline* in the layer and are written **from inside the
+    /// encode**: `WelsISliceMdEncDynamic` and `WelsMdInterMbLoopOverDynamicSlice`
+    /// stamp `[kiPartitionId]` at six sites between them, one worker per partition.
+    /// While that happens, a body holding `&SDqLayer` would have a shared borrow of
+    /// the *whole* struct — and a whole-struct shared retag racing a concurrent write
+    /// to an inline field is undefined behaviour under Miri's model, which is F228's
+    /// finding about the context restated about the layer. As plain `i32` these two
+    /// arrays are the reason all 37 read-only `*mut SDqLayer` bodies must stay raw.
+    ///
+    /// `Relaxed` is the right ordering and the access pattern is why: **every slot has
+    /// exactly one writer** — the worker that owns that partition — and every in-fork
+    /// read is that same worker reading its own slot back
+    /// (`svc_encode_slice.rs:2372`, `slice_multi_threading.rs:1800`,
+    /// `CalculateNewSliceNum`). The only cross-partition reads are
+    /// `ReOrderSliceInLayer` and `WelsCodeOnePicPartition`, both after the join. No
+    /// slot is ever a channel between two threads, so there is nothing for a stronger
+    /// ordering to publish.
+    ///
+    /// `AtomicI32` is `i32`-sized and `i32`-aligned, so the layer's layout is
+    /// unchanged.
+    pub NumSliceCodedOfPartition: [AtomicI32; MAX_THREADS_NUM],
+    pub LastCodedMbIdxOfPartition: [AtomicI32; MAX_THREADS_NUM],
     pub FirstMbIdxOfPartition: [i32; MAX_THREADS_NUM],
     pub EndMbIdxOfPartition: [i32; MAX_THREADS_NUM],
     /// The first macroblock and the macroblock count of each slice, by layer-order
@@ -1257,8 +1279,8 @@ impl SDqLayer {
             iMaxSliceNum: 0,
             // Partition bookkeeping, reset per frame by `InitSliceBoundaryInfo` and
             // `WelsInitCurrentQBLayerMltslc`.
-            NumSliceCodedOfPartition: [0; MAX_THREADS_NUM],
-            LastCodedMbIdxOfPartition: [0; MAX_THREADS_NUM],
+            NumSliceCodedOfPartition: [const { AtomicI32::new(0) }; MAX_THREADS_NUM],
+            LastCodedMbIdxOfPartition: [const { AtomicI32::new(0) }; MAX_THREADS_NUM],
             FirstMbIdxOfPartition: [0; MAX_THREADS_NUM],
             EndMbIdxOfPartition: [0; MAX_THREADS_NUM],
             // The two per-slice-index arrays, sized by `InitSliceInLayer`; empty is
@@ -2349,8 +2371,8 @@ pub unsafe fn WelsISliceMdEncDynamic(pEncCtx: *mut sWelsEncCtx, pSlice: &mut SSl
                     .StashPopMBStatus(slice_bs_buffer(pEncCtx, std::ptr::addr_of_mut!((*pSlice).sSliceBs), (*pSlice).uiBufferIdx as usize), &mut *slice_writer(pEncCtx, std::ptr::addr_of_mut!((*pSlice).sSliceBs)), &mut sDss, &mut (*pSlice).sCabacCtx);
                 (*pSlice).uiLastMbQp = sDss.uiLastMbQp;
             }
-            (*pCurLayer).LastCodedMbIdxOfPartition[kiPartitionId] = iCurMbIdx - 1;
-            (*pCurLayer).NumSliceCodedOfPartition[kiPartitionId] += 1;
+            (*pCurLayer).LastCodedMbIdxOfPartition[kiPartitionId].store(iCurMbIdx - 1, Ordering::Relaxed);
+            (*pCurLayer).NumSliceCodedOfPartition[kiPartitionId].fetch_add(1, Ordering::Relaxed);
             break;
         }
 
@@ -2369,9 +2391,9 @@ pub unsafe fn WelsISliceMdEncDynamic(pEncCtx: *mut sWelsEncCtx, pSlice: &mut SSl
         iNumMbCoded += 1;
         iNextMbIdx = WelsGetNextMbOfSlice(pCurLayer, iCurMbIdx);
         if iNextMbIdx == -1 || iNextMbIdx >= kiTotalNumMb || iNumMbCoded >= kiTotalNumMb {
-            (*pSlice).iCountMbNumInSlice = iCurMbIdx - (*pCurLayer).LastCodedMbIdxOfPartition[kiPartitionId];
-            (*pCurLayer).LastCodedMbIdxOfPartition[kiPartitionId] = iCurMbIdx;
-            (*pCurLayer).NumSliceCodedOfPartition[kiPartitionId] += 1;
+            (*pSlice).iCountMbNumInSlice = iCurMbIdx - (*pCurLayer).LastCodedMbIdxOfPartition[kiPartitionId].load(Ordering::Relaxed);
+            (*pCurLayer).LastCodedMbIdxOfPartition[kiPartitionId].store(iCurMbIdx, Ordering::Relaxed);
+            (*pCurLayer).NumSliceCodedOfPartition[kiPartitionId].fetch_add(1, Ordering::Relaxed);
             break;
         }
     }
@@ -2799,8 +2821,8 @@ pub unsafe fn WelsMdInterMbLoopOverDynamicSlice(
                 );
                 (*pSlice).uiLastMbQp = sDss.uiLastMbQp;
             }
-            (*pCurLayer).LastCodedMbIdxOfPartition[kiPartitionId] = iCurMbIdx - 1;
-            (*pCurLayer).NumSliceCodedOfPartition[kiPartitionId] += 1;
+            (*pCurLayer).LastCodedMbIdxOfPartition[kiPartitionId].store(iCurMbIdx - 1, Ordering::Relaxed);
+            (*pCurLayer).NumSliceCodedOfPartition[kiPartitionId].fetch_add(1, Ordering::Relaxed);
             break;
         }
 
@@ -2820,8 +2842,8 @@ pub unsafe fn WelsMdInterMbLoopOverDynamicSlice(
         iNumMbCoded += 1;
         iNextMbIdx = WelsGetNextMbOfSlice(pCurLayer, iCurMbIdx);
         if iNextMbIdx == -1 || iNextMbIdx >= kiTotalNumMb || iNumMbCoded >= kiTotalNumMb {
-            (*pCurLayer).LastCodedMbIdxOfPartition[kiPartitionId] = iCurMbIdx;
-            (*pCurLayer).NumSliceCodedOfPartition[kiPartitionId] += 1;
+            (*pCurLayer).LastCodedMbIdxOfPartition[kiPartitionId].store(iCurMbIdx, Ordering::Relaxed);
+            (*pCurLayer).NumSliceCodedOfPartition[kiPartitionId].fetch_add(1, Ordering::Relaxed);
             break;
         }
     }
@@ -3937,7 +3959,7 @@ pub unsafe fn CalculateNewSliceNum(
     let iPartitionID = ((*pLastCodedSlice).iSliceIdx % ((*pCtx).iActiveThreadsNum as i32)) as usize;
     let pCurLayer = current_layer(pCtx);
     let iMBNumInPartition = (*pCurLayer).EndMbIdxOfPartition[iPartitionID] - (*pCurLayer).FirstMbIdxOfPartition[iPartitionID] + 1;
-    let iLeftMBNum = (*pCurLayer).EndMbIdxOfPartition[iPartitionID] - (*pCurLayer).LastCodedMbIdxOfPartition[iPartitionID] + 1;
+    let iLeftMBNum = (*pCurLayer).EndMbIdxOfPartition[iPartitionID] - (*pCurLayer).LastCodedMbIdxOfPartition[iPartitionID].load(Ordering::Relaxed) + 1;
 
     let mut iIncreaseSliceNum = if iMBNumInPartition > 0 {
         (iLeftMBNum * INT_MULTIPLY / iMBNumInPartition) * iMaxSliceNumOld
@@ -4114,7 +4136,7 @@ pub unsafe fn ReOrderSliceInLayer(pCtx: &mut sWelsEncCtx, kuiSliceMode: SliceMod
     for iPartitionIdx in 0..iPartitionNum {
         aiPartitionOffset[iPartitionIdx as usize] = iEncodeSliceNum;
         if kuiSliceMode == SliceMode::SM_SIZELIMITED_SLICE {
-            iEncodeSliceNum += (*pCurLayer).NumSliceCodedOfPartition[iPartitionIdx as usize];
+            iEncodeSliceNum += (*pCurLayer).NumSliceCodedOfPartition[iPartitionIdx as usize].load(Ordering::Relaxed);
         } else {
             iEncodeSliceNum =
                 (*pCurLayer).sSliceEncCtx.iSliceNumInFrame.load(Ordering::Relaxed);
@@ -4686,6 +4708,94 @@ mod tests {
             0,
             "its top neighbour is in slice 0, so it must not be available"
         );
+    }
+
+    /// **S5.D2a's referee — a whole-layer `&SDqLayer` held while workers stamp their
+    /// own partition counters.**
+    ///
+    /// This is the property D2/D3's flip is bought with, so it is asked of Miri
+    /// directly rather than inferred. The brief's account of why the 37 read-only
+    /// `*mut SDqLayer` bodies cannot simply take `&SDqLayer` is that
+    /// `NumSliceCodedOfPartition` and `LastCodedMbIdxOfPartition` live **inline in the
+    /// layer** and are written from inside the encode — six sites across
+    /// `WelsISliceMdEncDynamic` and `WelsMdInterMbLoopOverDynamicSlice`, each stamping
+    /// `[kiPartitionId]`. A whole-struct shared retag racing a concurrent write to an
+    /// inline field is undefined behaviour under Miri's model; that is F228's finding
+    /// about the context, restated about the layer.
+    ///
+    /// With the two arrays atomic, the race is gone by construction and a body may take
+    /// a whole-layer shared borrow while its siblings write. That is what this asserts:
+    /// each worker re-takes `&*p` every round — the entry retag a called body performs
+    /// — and stamps only its own partition slot.
+    ///
+    /// **It has teeth, checked rather than assumed.** Pointing the same two workers at
+    /// a *non-atomic* inline field instead — `iMaxSliceNum`, written through a raw
+    /// place while the other worker holds its `&SDqLayer` — makes this fail under Miri
+    /// with "Data race detected between (1) non-atomic write on thread `unnamed-1` and
+    /// (2) retag read of type `SDqLayer` on thread `unnamed-2`". That is precisely the
+    /// diagnosis this checkpoint exists to remove, and it is why
+    /// `sSliceBufferInfo` — the other inline field the fork writes — still blocks the
+    /// flip and is the next checkpoint's subject.
+    ///
+    /// Like the layer probe above, this does not drive the encoder: the question is
+    /// about two workers and one struct, not about encoding.
+    #[test]
+    // unsafe-cat: instrument(test)
+    #[allow(unsafe_code)]
+    fn partition_counters_take_a_shared_layer_borrow_across_the_forked_writes() {
+        use std::sync::atomic::Ordering;
+        use super::SDqLayer;
+        const WORKERS: usize = 2;
+        // **200, and the number is load-bearing.** Miri reports a data race only when
+        // the schedule it runs actually interleaves the two accesses. At 8 rounds this
+        // probe's teeth check came back *green* — the non-atomic control was silent —
+        // and only at 200 does the sibling retag land inside the write. A round count
+        // too small does not make a weak referee, it makes a blind one that reads as a
+        // passing test (F234).
+        const ROUNDS: i32 = 200;
+
+        let mut dq = SDqLayer::default();
+        dq.iMbWidth = 4;
+        dq.iMbHeight = 2;
+
+        // The address as an integer, for the reason the probe above gives: D1 pins the
+        // tree's hand-written `Send` impls at two and a test may not spend that pin.
+        let layer_addr = (&mut dq as *mut SDqLayer) as usize;
+
+        std::thread::scope(|s| {
+            for w in 0..WORKERS {
+                s.spawn(move || unsafe {
+                    let p = layer_addr as *mut SDqLayer;
+                    for r in 0..ROUNDS {
+                        // **The borrow under test, re-taken every round** — because
+                        // that is the shape of the thing being bought. The 37
+                        // read-only bodies are *called*, many times per frame, and
+                        // each retags the whole layer on entry. A probe that borrows
+                        // once at the top and holds it never interleaves its retag
+                        // with the other worker's writes, and so proves nothing: the
+                        // first draft of this probe did exactly that and its teeth
+                        // check came back green, which is how the shape was found.
+                        let layer: &SDqLayer = &*p;
+                        let _ = layer.EndMbIdxOfPartition[w];
+                        layer.LastCodedMbIdxOfPartition[w].store(r, Ordering::Relaxed);
+                        layer.NumSliceCodedOfPartition[w].fetch_add(1, Ordering::Relaxed);
+                    }
+                });
+            }
+        });
+
+        for w in 0..WORKERS {
+            assert_eq!(
+                dq.NumSliceCodedOfPartition[w].load(Ordering::Relaxed),
+                ROUNDS,
+                "worker {w} counted only its own partition's slices"
+            );
+            assert_eq!(
+                dq.LastCodedMbIdxOfPartition[w].load(Ordering::Relaxed),
+                ROUNDS - 1,
+                "worker {w} left its own partition's last macroblock index"
+            );
+        }
     }
 
     /// **S5.C4b's referee — the MVD cursor, held across a slice, under two workers.**

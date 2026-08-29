@@ -3097,8 +3097,8 @@ pub fn UpdateSlicepEncCtxWithPartition(pCurDq: &mut SDqLayer, mut iPartitionNum:
 
         (*pCurDq).FirstMbIdxOfPartition[i] = iFirstMbIdx;
         (*pCurDq).EndMbIdxOfPartition[i] = iFirstMbIdx + iCountMbNumInPartition - 1;
-        (*pCurDq).LastCodedMbIdxOfPartition[i] = 0;
-        (*pCurDq).NumSliceCodedOfPartition[i] = 0;
+        (*pCurDq).LastCodedMbIdxOfPartition[i].store(0, Ordering::Relaxed);
+        (*pCurDq).NumSliceCodedOfPartition[i].store(0, Ordering::Relaxed);
 
         {
             let map: &[AtomicU16] = &(*pCurDq).sSliceEncCtx.pOverallMbMap;
@@ -3119,8 +3119,8 @@ pub fn UpdateSlicepEncCtxWithPartition(pCurDq: &mut SDqLayer, mut iPartitionNum:
     while i < MAX_THREADS_NUM {
         (*pCurDq).FirstMbIdxOfPartition[i] = 0;
         (*pCurDq).EndMbIdxOfPartition[i] = 0;
-        (*pCurDq).LastCodedMbIdxOfPartition[i] = 0;
-        (*pCurDq).NumSliceCodedOfPartition[i] = 0;
+        (*pCurDq).LastCodedMbIdxOfPartition[i].store(0, Ordering::Relaxed);
+        (*pCurDq).NumSliceCodedOfPartition[i].store(0, Ordering::Relaxed);
         i += 1;
     }
 }
@@ -3332,7 +3332,7 @@ pub unsafe fn WelsCodeOnePicPartition(
         iNalIdxInLayer += 1;
         iSliceIdx += kiSliceStep; // iSliceIdx is not contiguous
         iAnyMbLeftInPartition =
-            iEndMbIdxInPartition - (*pCurLayer).LastCodedMbIdxOfPartition[kiPartitionId];
+            iEndMbIdxInPartition - (*pCurLayer).LastCodedMbIdxOfPartition[kiPartitionId].load(Ordering::Relaxed);
     }
 
     *pLayerSize = iPartitionBsSize;
