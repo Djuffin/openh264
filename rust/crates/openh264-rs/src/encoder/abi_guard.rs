@@ -142,7 +142,14 @@ assert_size_by_profile!(
     debug 240,
     release 120
 );
-assert_size!(SScreenBlockFeatureStorage, 88);
+// **S6.B1 re-pin.** 88 was the C++ struct's size — five raw pointers, three scalars and
+// a `[u32; 7]`. The storage owns its five buffers now, so the C++ number no longer
+// describes this type and there is nothing to match it to: the type never crosses the
+// ABI (`src/api/` does not name it, and `SPicture` holds it as a niche-optimised
+// `Option<Box<..>>`, so `assert_size!(SPicture, ..)` is untouched). It stays pinned for
+// the reason `SRefList` above is — one builder, one shape, and a silent change to it
+// would be a silent change to how a reference frame stores its feature arena.
+assert_size!(SScreenBlockFeatureStorage, 160);
 
 // codec/encoder/core/inc/parameter_sets.h
 assert_size!(SWelsSPS, 56);

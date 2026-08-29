@@ -6930,3 +6930,54 @@ should carry it under that item rather than as a layer-flip dividend.
 every field it touches is already owned and safe. It is not enough on its own — the 52
 raw dereferences still stand — so it belongs to the context checkpoint's tabulation, not
 to a cascade rerun.
+
+## F241 — the screen-content storage converts to owned buffers, and the two pointer tables had to become *index* tables; three things the plan's ruling did not mention
+
+D-scope-5's reversal ruled the shape — "full ownership", with the two pointer tables as
+index tables — and that ruling held. Three details it did not carry, each of which the
+conversion had to settle:
+
+**1. The arena has to travel with the index table.** `pLocationOfFeature` held per-value
+*addresses* into `pLocationPointer`; as offsets they are meaningless without the buffer
+they index. So `SFeatureSearchIn` grew a third field, `pLocationPointer`, that the
+pointer spelling never needed, and `PFillQpelLocationByFeatureValueFunc` grew a
+parameter for the same reason. Conversely `PInitializeHashforFeatureFunc` *lost* one:
+its `pBuf` was the arena base every entry was measured from, and with offsets that base
+is the constant 0.
+
+**2. The two tables have different lengths, and one is not `iActualListSize`.** The C++
+allocator sizes `pTimesOfFeatureValue` and `pLocationOfFeature` at `kiListSize` but
+`pFeatureValuePointerList` at `WELS_MAX (LIST_SIZE_SUM_16x16, LIST_SIZE_MSE_16x16)` —
+65281 regardless of the mode, where `kiListSize` is 16321 for 8x8 or 256 for a non-zero
+strategy index. A conversion that read "three tables of `iActualListSize`" out of the
+struct's shape would have silently shrunk the cursor table by 4x in 8x8 mode.
+`SScreenBlockFeatureStorage::for_frame` reproduces all four lengths from
+`svc_motion_estimate.cpp:690-721`.
+
+**3. `#[derive(Default)]` is not the old `Default`.** The hand-written impl filled
+`uiSadCostThreshold` with `UINT_MAX`; a derived one zeroes it, and a zero threshold is
+the opposite instruction to the search — every candidate immediately "under" it. The
+impl stays hand-written for that one field.
+
+**The referee, since no gate reaches this code.** `AllocPicture` refuses
+`iNeedFeatureStorage != 0`, nothing fills `SPicture::pScreenBlockFeatureStorage` (F229),
+and `PerformFMEPreprocess` has no call site — so both sweeps are silent on every line
+of this family, in both profiles, and always were.
+`feature_storage_arena_invariants_hold_over_a_synthetic_frame` is the family's first
+test: it builds the storage by hand (which owning the buffers is what makes possible),
+runs `CalculateFeatureOfBlock` over a deliberately non-flat 48x32 luma, and asserts the
+three arena invariants — histogram sums to the block count; the groups tile the arena
+exactly, each cursor ending `2 * times[value]` past its base; every written position is
+a whole-pixel qpel coordinate inside the frame. **Three controls, each seen red**:
+advancing the hash by `times` instead of `times << 1` ("group 3393 does not start where
+3392 ended"), advancing the fill cursor by 1 instead of 2 ("group 3392's cursor did not
+end 2*1 past its base"), and biasing a written x ("x 1000 outside 40 block columns").
+Runtime is under 0.01 s.
+
+**Two smaller things worth the ledger.** `&mut [T]` in an `extern "C"` signature is not
+FFI-safe (`improper_ctypes_definitions`), so `PCalculateBlockFeatureOfFrame` and its two
+kernels drop `extern "C"` and stay plain `unsafe fn` pointers — the slot is internal
+dispatch and its sibling `PCalculateSingleBlockFeature` was already a plain `fn`. And a
+"dead `#[allow(unsafe_code)]`" detector that looks for the token `unsafe` in the body
+misses `#[unsafe(no_mangle)]` on the *item*: it reported `WelsGetCodecVersion` as dead,
+and removing the allow broke the build. The attribute is the unsafe there.

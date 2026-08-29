@@ -223,8 +223,13 @@ impl Default for SWelsME<'_> {
 // SCREEN_CONTENT(dormant: Phase 10)
 pub struct SFeatureSearchIn<'a> {
     pub pSad: Option<PSampleSadSatdCostFunc>,
-    pub pTimesOfFeature: *mut u32,
-    pub pQpelLocationOfFeature: *mut *mut u16,
+    /// **S6.B1**: the storage's three read-side buffers, borrowed rather than
+    /// pointed at. `pQpelLocationOfFeature` held per-value *addresses* into the arena;
+    /// it holds per-value offsets now, so the arena itself has to travel with it —
+    /// hence `pLocationPointer`, which the pointer spelling did not need to name.
+    pub pTimesOfFeature: &'a [u32],
+    pub pQpelLocationOfFeature: &'a [usize],
+    pub pLocationPointer: &'a [u16],
     pub pMvdCostX: MvdCostCursor<'a>,
     pub pMvdCostY: MvdCostCursor<'a>,
     pub pEncPlane: Option<&'a PaddedPlane>,
@@ -245,8 +250,11 @@ impl Default for SFeatureSearchIn<'_> {
     fn default() -> Self {
         Self {
             pSad: None,
-            pTimesOfFeature: std::ptr::null_mut(),
-            pQpelLocationOfFeature: std::ptr::null_mut(),
+            // Empty, where the pointers were null — and the guard at the end of
+            // `SetFeatureSearchIn` asks `is_empty()` for what it asked `is_null()`.
+            pTimesOfFeature: &[],
+            pQpelLocationOfFeature: &[],
+            pLocationPointer: &[],
             pMvdCostX: MvdCostCursor::none(),
             pMvdCostY: MvdCostCursor::none(),
             pEncPlane: None,
@@ -376,28 +384,35 @@ pub type PLineFullSearchFunc = unsafe fn(
     bVerticalSearch: bool,
 );
 
-pub type PInitializeHashforFeatureFunc = unsafe extern "C" fn(
-    pTimesOfFeatureValue: *mut u32,
-    pBuf: *mut u16,
+/// **S6.B1**: safe, and `pBuf` is gone with the pointers. It was the arena's base
+/// address, which every entry of the two tables was an offset from; the tables hold
+/// those offsets directly now, so the base is the constant 0 and needs no parameter.
+pub type PInitializeHashforFeatureFunc = fn(
+    pTimesOfFeatureValue: &[u32],
     kiListSize: i32,
-    pLocationOfFeature: *mut *mut u16,
-    pFeatureValuePointerList: *mut *mut u16,
+    pLocationOfFeature: &mut [usize],
+    pFeatureValuePointerList: &mut [usize],
 );
 
-pub type PFillQpelLocationByFeatureValueFunc = unsafe extern "C" fn(
-    pFeatureOfBlock: *mut u16,
+/// **S6.B1**: safe, and the arena arrives as its own slice — the cursors used to be
+/// pointers into it, so it did not need naming; they are indices now, so it does.
+pub type PFillQpelLocationByFeatureValueFunc = fn(
+    pFeatureOfBlock: &[u16],
     kiWidth: i32,
     kiHeight: i32,
-    pFeatureValuePointerList: *mut *mut u16,
+    pLocationPointer: &mut [u16],
+    pFeatureValuePointerList: &mut [usize],
 );
 
-pub type PCalculateBlockFeatureOfFrame = unsafe extern "C" fn(
+/// **S6.B1**: the two storage buffers are slices; `pRef` stays raw, because it is a
+/// *plane* root and the plane family is not this checkpoint's.
+pub type PCalculateBlockFeatureOfFrame = unsafe fn(
     pRef: *mut u8,
     kiWidth: i32,
     kiHeight: i32,
     kiRefStride: i32,
-    pFeatureOfBlock: *mut u16,
-    pTimesOfFeatureValue: *mut u32,
+    pFeatureOfBlock: &mut [u16],
+    pTimesOfFeatureValue: &mut [u32],
 );
 
 /// Session F: the slot's one reader is `SetFeatureSearchIn`, whose block
@@ -1323,22 +1338,27 @@ pub unsafe extern "C" fn SumOf16x16SingleBlock_c(pRef: *mut u8, kiRefStride: i32
 
 // unsafe-cat: SCREEN_CONTENT(dormant)
 #[allow(unsafe_code)]
-pub unsafe extern "C" fn SumOf8x8BlockOfFrame_c(
+pub unsafe fn SumOf8x8BlockOfFrame_c(
     pRefPicture: *mut u8,
     kiWidth: i32,
     kiHeight: i32,
     kiRefStride: i32,
-    pFeatureOfBlock: *mut u16,
-    pTimesOfFeatureValue: *mut u32,
+    pFeatureOfBlock: &mut [u16],
+    pTimesOfFeatureValue: &mut [u32],
 ) {
     for y in 0..kiHeight {
+        // **S6.B1**: the plane walk stays raw and the two writes are indexed. `iSum` is
+        // bounded by the kernel's own arithmetic — a sum of 8x8 bytes — and
+        // `pTimesOfFeatureValue` is `iActualListSize` long, which the allocator sizes
+        // from exactly that bound, so the index is in range for every well-formed
+        // storage. Out of range now panics where it used to write past the buffer.
+        let row = (kiWidth * y) as usize;
         unsafe {
             let pRef = pRefPicture.offset((kiRefStride * y) as isize);
-            let pBuffer = pFeatureOfBlock.offset((kiWidth * y) as isize);
             for x in 0..kiWidth {
                 let iSum = SumOf8x8SingleBlock_c(pRef.offset(x as isize), kiRefStride);
-                *pBuffer.offset(x as isize) = iSum as u16;
-                *pTimesOfFeatureValue.offset(iSum as isize) += 1;
+                pFeatureOfBlock[row + x as usize] = iSum as u16;
+                pTimesOfFeatureValue[iSum as usize] += 1;
             }
         }
     }
@@ -1346,155 +1366,174 @@ pub unsafe extern "C" fn SumOf8x8BlockOfFrame_c(
 
 // unsafe-cat: SCREEN_CONTENT(dormant)
 #[allow(unsafe_code)]
-pub unsafe extern "C" fn SumOf16x16BlockOfFrame_c(
+pub unsafe fn SumOf16x16BlockOfFrame_c(
     pRefPicture: *mut u8,
     kiWidth: i32,
     kiHeight: i32,
     kiRefStride: i32,
-    pFeatureOfBlock: *mut u16,
-    pTimesOfFeatureValue: *mut u32,
+    pFeatureOfBlock: &mut [u16],
+    pTimesOfFeatureValue: &mut [u32],
 ) {
     for y in 0..kiHeight {
+        // **S6.B1**: the plane walk stays raw and the two writes are indexed. `iSum` is
+        // bounded by the kernel's own arithmetic — a sum of 16x16 bytes — and
+        // `pTimesOfFeatureValue` is `iActualListSize` long, which the allocator sizes
+        // from exactly that bound, so the index is in range for every well-formed
+        // storage. Out of range now panics where it used to write past the buffer.
+        let row = (kiWidth * y) as usize;
         unsafe {
             let pRef = pRefPicture.offset((kiRefStride * y) as isize);
-            let pBuffer = pFeatureOfBlock.offset((kiWidth * y) as isize);
             for x in 0..kiWidth {
                 let iSum = SumOf16x16SingleBlock_c(pRef.offset(x as isize), kiRefStride);
-                *pBuffer.offset(x as isize) = iSum as u16;
-                *pTimesOfFeatureValue.offset(iSum as isize) += 1;
+                pFeatureOfBlock[row + x as usize] = iSum as u16;
+                pTimesOfFeatureValue[iSum as usize] += 1;
             }
         }
     }
 }
 
-// unsafe-cat: SCREEN_CONTENT(dormant)
-#[allow(unsafe_code)]
-pub unsafe extern "C" fn InitializeHashforFeature_c(
-    pTimesOfFeatureValue: *mut u32,
-    pBuf: *mut u16,
+pub fn InitializeHashforFeature_c(
+    pTimesOfFeatureValue: &[u32],
     kiListSize: i32,
-    pLocationOfFeature: *mut *mut u16,
-    pFeatureValuePointerList: *mut *mut u16,
+    pLocationOfFeature: &mut [usize],
+    pFeatureValuePointerList: &mut [usize],
 ) {
-    unsafe {
-        let mut pBufPos = pBuf;
-        for i in 0..kiListSize as isize {
-            *pLocationOfFeature.offset(i) = pBufPos;
-            *pFeatureValuePointerList.offset(i) = pBufPos;
-            pBufPos = pBufPos.offset((*pTimesOfFeatureValue.offset(i) << 1) as isize);
-        }
+    // **S6.B1**, and this is the loop the whole shape follows from: `pBufPos` was a
+    // cursor walking the arena, laying each feature value's group base and giving that
+    // value's write cursor the same start. It is the running offset now — the identical
+    // arithmetic, `times << 1` per value because each position is an (x, y) pair.
+    let mut pBufPos = 0usize;
+    for i in 0..kiListSize as usize {
+        pLocationOfFeature[i] = pBufPos;
+        pFeatureValuePointerList[i] = pBufPos;
+        pBufPos += (pTimesOfFeatureValue[i] as usize) << 1;
     }
 }
 
-// unsafe-cat: SCREEN_CONTENT(dormant)
-#[allow(unsafe_code)]
-pub unsafe extern "C" fn FillQpelLocationByFeatureValue_c(
-    pFeatureOfBlock: *mut u16,
+pub fn FillQpelLocationByFeatureValue_c(
+    pFeatureOfBlock: &[u16],
     kiWidth: i32,
     kiHeight: i32,
-    pFeatureValuePointerList: *mut *mut u16,
+    pLocationPointer: &mut [u16],
+    pFeatureValuePointerList: &mut [usize],
 ) {
-    unsafe {
-        let mut pSrcPointer = pFeatureOfBlock;
-        let mut iQpelY = 0i32;
-        for _ in 0..kiHeight {
-            for x in 0..kiWidth {
-                let uiFeature = *pSrcPointer.offset(x as isize) as isize;
-                let target_ptr = *pFeatureValuePointerList.offset(uiFeature);
-                *target_ptr.offset(0) = (x << 2) as u16;
-                *target_ptr.offset(1) = iQpelY as u16;
-                *pFeatureValuePointerList.offset(uiFeature) = target_ptr.add(2);
-            }
-            iQpelY += 4;
-            pSrcPointer = pSrcPointer.offset(kiWidth as isize);
+    // **S6.B1**: `target_ptr` was the roving cursor for this feature value and
+    // `target_ptr.add(2)` its advance; `target` is that cursor as an arena offset and
+    // `+ 2` the same advance. Each value's cursor starts at its group base
+    // (`InitializeHashforFeature_c`) and is advanced once per position carrying that
+    // value, so the writes exactly fill `2 * times[value]` slots — the invariant the
+    // family's test asserts, because no gate reaches this line.
+    let mut pSrcPointer = 0usize;
+    let mut iQpelY = 0i32;
+    for _ in 0..kiHeight {
+        for x in 0..kiWidth {
+            let uiFeature = pFeatureOfBlock[pSrcPointer + x as usize] as usize;
+            let target = pFeatureValuePointerList[uiFeature];
+            pLocationPointer[target] = (x << 2) as u16;
+            pLocationPointer[target + 1] = iQpelY as u16;
+            pFeatureValuePointerList[uiFeature] = target + 2;
         }
+        iQpelY += 4;
+        pSrcPointer += kiWidth as usize;
     }
 }
 
 // unsafe-cat: SCREEN_CONTENT(dormant)
 #[allow(unsafe_code)]
-pub unsafe fn CalculateFeatureOfBlock(
+pub fn CalculateFeatureOfBlock(
     pFunc: &SWelsFuncPtrList,
     pRef: &mut SPicture,
-    pScreenBlockFeatureStorage: *mut SScreenBlockFeatureStorage,
+    pScreenBlockFeatureStorage: &mut SScreenBlockFeatureStorage,
 ) -> bool {
-    unsafe {
-        let pFeatureOfBlock = (*pScreenBlockFeatureStorage).pFeatureOfBlockPointer;
-        let pTimesOfFeatureValue = (*pScreenBlockFeatureStorage).pTimesOfFeatureValue;
-        let pLocationOfFeature = (*pScreenBlockFeatureStorage).pLocationOfFeature;
-        let pBuf = (*pScreenBlockFeatureStorage).pLocationPointer;
+    // **S6.B1**: the four `is_null()` arms became four `is_empty()` arms. An unbuilt
+    // storage answers `false` here exactly as a storage with null buffers did — the
+    // allocator either sized all four or none, so no arm changes which inputs are
+    // rejected. `pRef.data_ptr(0)` is still a raw plane root and still tested.
+    let SScreenBlockFeatureStorage {
+        pFeatureOfBlockPointer: pFeatureOfBlock,
+        pTimesOfFeatureValue,
+        pLocationOfFeature,
+        pLocationPointer: pBuf,
+        pFeatureValuePointerList,
+        iIs16x16,
+        iActualListSize: kiActualListSize,
+        ..
+    } = pScreenBlockFeatureStorage;
+    // Destructured, not field-by-field: the three dispatch calls below need two or
+    // three of these buffers borrowed at once, and a `&mut` per field through the
+    // struct would be a fresh whole-struct claim each time.
 
-        if pFeatureOfBlock.is_null()
-            || pTimesOfFeatureValue.is_null()
-            || pLocationOfFeature.is_null()
-            || pBuf.is_null()
-            || pRef.data_ptr(0).is_null()
-        {
-            return false;
-        }
+    if pFeatureOfBlock.is_empty()
+        || pTimesOfFeatureValue.is_empty()
+        || pLocationOfFeature.is_empty()
+        || pBuf.is_empty()
+        || pRef.data_ptr(0).is_null()
+    {
+        return false;
+    }
 
+    let iIs16x16 = *iIs16x16 as usize;
+    let kiActualListSize = *kiActualListSize;
+    let iEdgeDiscard = if iIs16x16 != 0 { 16 } else { 8 };
+    let iWidth = pRef.iWidthInPixel - iEdgeDiscard;
+    let kiHeight = pRef.iHeightInPixel - iEdgeDiscard;
+
+    // `write_bytes(.., 0, kiActualListSize * size_of::<u32>())` — the same
+    // `kiActualListSize` prefix, zeroed elementwise.
+    pTimesOfFeatureValue[..kiActualListSize as usize].fill(0);
+
+    if let Some(calc_frame_feature) = pFunc.pfCalculateBlockFeatureOfFrame[iIs16x16] {
+        // The plane root is raw and the kernel is still `unsafe extern "C"` for it.
         let pRefData = pRef.data_ptr(0);
         let iRefStride = pRef.stride(0);
-        let iIs16x16 = (*pScreenBlockFeatureStorage).iIs16x16 as usize;
-        let iEdgeDiscard = if iIs16x16 != 0 { 16 } else { 8 };
-        let iWidth = pRef.iWidthInPixel - iEdgeDiscard;
-        let kiHeight = pRef.iHeightInPixel - iEdgeDiscard;
-        let kiActualListSize = (*pScreenBlockFeatureStorage).iActualListSize;
-
-        std::ptr::write_bytes(pTimesOfFeatureValue as *mut u8, 0, (kiActualListSize as usize) * std::mem::size_of::<u32>());
-
-        if let Some(calc_frame_feature) = pFunc.pfCalculateBlockFeatureOfFrame[iIs16x16] {
+        unsafe {
             calc_frame_feature(pRefData, iWidth, kiHeight, iRefStride, pFeatureOfBlock, pTimesOfFeatureValue);
         }
-
-        if let Some(init_hash) = pFunc.pfInitializeHashforFeature {
-            init_hash(
-                pTimesOfFeatureValue,
-                pBuf,
-                kiActualListSize,
-                pLocationOfFeature,
-                (*pScreenBlockFeatureStorage).pFeatureValuePointerList,
-            );
-        }
-
-        if let Some(fill_qpel) = pFunc.pfFillQpelLocationByFeatureValue {
-            fill_qpel(
-                pFeatureOfBlock,
-                iWidth,
-                kiHeight,
-                (*pScreenBlockFeatureStorage).pFeatureValuePointerList,
-            );
-        }
-
-        true
     }
+
+    if let Some(init_hash) = pFunc.pfInitializeHashforFeature {
+        init_hash(
+            pTimesOfFeatureValue,
+            kiActualListSize,
+            pLocationOfFeature,
+            pFeatureValuePointerList,
+        );
+    }
+
+    if let Some(fill_qpel) = pFunc.pfFillQpelLocationByFeatureValue {
+        fill_qpel(pFeatureOfBlock, iWidth, kiHeight, pBuf, pFeatureValuePointerList);
+    }
+
+    true
 }
 
 // SCREEN_CONTENT(dormant: Phase 10)
-// unsafe-cat: SCREEN_CONTENT(dormant)
-#[allow(unsafe_code)]
-pub unsafe extern "C" fn PerformFMEPreprocess(
+pub fn PerformFMEPreprocess(
     pFunc: &SWelsFuncPtrList,
     pRef: &mut SPicture,
-    pFeatureOfBlock: *mut u16,
-    pScreenBlockFeatureStorage: *mut SScreenBlockFeatureStorage,
+    pFeatureOfBlock: Vec<u16>,
+    pScreenBlockFeatureStorage: &mut SScreenBlockFeatureStorage,
 ) {
-    unsafe {
-        (*pScreenBlockFeatureStorage).pFeatureOfBlockPointer = pFeatureOfBlock;
-        (*pScreenBlockFeatureStorage).bRefBlockFeatureCalculated =
-            CalculateFeatureOfBlock(pFunc, pRef, pScreenBlockFeatureStorage);
+    // **S6.B1**: the buffer arrives by value and is *moved* in. The C++ stores its
+    // caller's pointer here (`svc_motion_estimate.cpp:868`) and the storage then walks
+    // it for the rest of the frame — one owner, two names. Owning it says the same
+    // thing without the alias, and this function has no call site in the tree (F229:
+    // `SPicture::pScreenBlockFeatureStorage` is never filled), so the signature was
+    // free to take the ownership the semantics already implied.
+    pScreenBlockFeatureStorage.pFeatureOfBlockPointer = pFeatureOfBlock;
+    pScreenBlockFeatureStorage.bRefBlockFeatureCalculated =
+        CalculateFeatureOfBlock(pFunc, pRef, pScreenBlockFeatureStorage);
 
-        if (*pScreenBlockFeatureStorage).bRefBlockFeatureCalculated {
-            let qp_idx = (pRef.iFrameAverageQp).clamp(0, 51) as usize;
-            let uiRefPictureAvgQstepx16 = QStepx16ByQp[qp_idx] as u32;
-            let uiSadCostThreshold16x16 = (30 * (uiRefPictureAvgQstepx16 + 160)) >> 3;
+    if pScreenBlockFeatureStorage.bRefBlockFeatureCalculated {
+        let qp_idx = (pRef.iFrameAverageQp).clamp(0, 51) as usize;
+        let uiRefPictureAvgQstepx16 = QStepx16ByQp[qp_idx] as u32;
+        let uiSadCostThreshold16x16 = (30 * (uiRefPictureAvgQstepx16 + 160)) >> 3;
 
-            (*pScreenBlockFeatureStorage).uiSadCostThreshold[BLOCK_16x16] = uiSadCostThreshold16x16;
-            (*pScreenBlockFeatureStorage).uiSadCostThreshold[BLOCK_8x8] = uiSadCostThreshold16x16 >> 2;
-            (*pScreenBlockFeatureStorage).uiSadCostThreshold[BLOCK_16x8] = u32::MAX;
-            (*pScreenBlockFeatureStorage).uiSadCostThreshold[BLOCK_8x16] = u32::MAX;
-            (*pScreenBlockFeatureStorage).uiSadCostThreshold[BLOCK_4x4] = u32::MAX;
-        }
+        pScreenBlockFeatureStorage.uiSadCostThreshold[BLOCK_16x16] = uiSadCostThreshold16x16;
+        pScreenBlockFeatureStorage.uiSadCostThreshold[BLOCK_8x8] = uiSadCostThreshold16x16 >> 2;
+        pScreenBlockFeatureStorage.uiSadCostThreshold[BLOCK_16x8] = u32::MAX;
+        pScreenBlockFeatureStorage.uiSadCostThreshold[BLOCK_8x16] = u32::MAX;
+        pScreenBlockFeatureStorage.uiSadCostThreshold[BLOCK_4x4] = u32::MAX;
     }
 }
 
@@ -1506,7 +1545,7 @@ pub fn SetFeatureSearchIn<'a>(
     sdf: &SSampleDealingFunc,
     sMe: &SWelsME<'a>,
     pSlice: &SSlice,
-    pRefFeatureStorage: Option<&SScreenBlockFeatureStorage>,
+    pRefFeatureStorage: Option<&'a SScreenBlockFeatureStorage>,
     pEncPlane: &'a PaddedPlane,
     pRefPlane: &'a PaddedPlane,
     pFeatureSearchIn: &mut SFeatureSearchIn<'a>,
@@ -1541,8 +1580,9 @@ pub fn SetFeatureSearchIn<'a>(
         let Some(pRefFeatureStorage) = pRefFeatureStorage else {
             return false;
         };
-        pFeatureSearchIn.pTimesOfFeature = pRefFeatureStorage.pTimesOfFeatureValue;
-        pFeatureSearchIn.pQpelLocationOfFeature = pRefFeatureStorage.pLocationOfFeature;
+        pFeatureSearchIn.pTimesOfFeature = &pRefFeatureStorage.pTimesOfFeatureValue;
+        pFeatureSearchIn.pQpelLocationOfFeature = &pRefFeatureStorage.pLocationOfFeature;
+        pFeatureSearchIn.pLocationPointer = &pRefFeatureStorage.pLocationPointer;
         pFeatureSearchIn.pMvdCostX = sMe.pMvdCost.offset(-pFeatureSearchIn.iCurPixXQpel - sMe.sMvp.iMvX as i32);
         pFeatureSearchIn.pMvdCostY = sMe.pMvdCost.offset(-pFeatureSearchIn.iCurPixYQpel - sMe.sMvp.iMvY as i32);
 
@@ -1552,8 +1592,8 @@ pub fn SetFeatureSearchIn<'a>(
         pFeatureSearchIn.iMaxQpelY = pFeatureSearchIn.iCurPixYQpel + (pSlice.sMvStartMax.iMvY as i32 * 4);
 
         if pFeatureSearchIn.pSad.is_none()
-            || pFeatureSearchIn.pTimesOfFeature.is_null()
-            || pFeatureSearchIn.pQpelLocationOfFeature.is_null()
+            || pFeatureSearchIn.pTimesOfFeature.is_empty()
+            || pFeatureSearchIn.pQpelLocationOfFeature.is_empty()
         {
             return false;
         }
@@ -1572,8 +1612,6 @@ pub fn SaveFeatureSearchOut(
 }
 
 // SCREEN_CONTENT(dormant: Phase 10)
-// unsafe-cat: SCREEN_CONTENT(dormant)
-#[allow(unsafe_code)]
 pub fn FeatureSearchOne(
     sFeatureSearchIn: &SFeatureSearchIn<'_>,
     iFeatureDifference: i32,
@@ -1601,19 +1639,24 @@ pub fn FeatureSearchOne(
     let iMaxQpelX = sFeatureSearchIn.iMaxQpelX;
     let iMaxQpelY = sFeatureSearchIn.iMaxQpelY;
 
-    unsafe {
-        let times = *sFeatureSearchIn.pTimesOfFeature.offset(iFeatureOfRef as isize);
+    {
+        // **S6.B1**: two indexed reads where there were two pointer loads. `times` is
+        // the histogram entry for this feature value and `pQpelPosition` was the
+        // address of that value's group in the arena — the group's offset now, which
+        // the walk below adds to.
+        let times = sFeatureSearchIn.pTimesOfFeature[iFeatureOfRef as usize];
         let iSearchTimes = times.min(kuiExpectedSearchTimes) as i32;
         let iSearchTimesx2 = iSearchTimes << 1;
-        let pQpelPosition = *sFeatureSearchIn.pQpelLocationOfFeature.offset(iFeatureOfRef as isize);
+        let pQpelPosition = sFeatureSearchIn.pQpelLocationOfFeature[iFeatureOfRef as usize];
+        let arena = sFeatureSearchIn.pLocationPointer;
 
         let mut sBestMv = pFeatureSearchOut.sBestMv;
         let mut uiBestCost = pFeatureSearchOut.uiBestSadCost;
 
         let mut i = 0i32;
         while i < iSearchTimesx2 {
-            let iQpelX = *pQpelPosition.offset(i as isize) as i32;
-            let iQpelY = *pQpelPosition.offset((i + 1) as isize) as i32;
+            let iQpelX = arena[pQpelPosition + i as usize] as i32;
+            let iQpelY = arena[pQpelPosition + (i + 1) as usize] as i32;
 
             if (iQpelX > iMaxQpelX)
                 || (iQpelX < iMinQpelX)
@@ -1821,6 +1864,103 @@ mod tests {
             assert_eq!(best_cost, 50);
             assert_eq!(ix, 0);
             assert_eq!(iy, -1);
+        }
+    }
+
+    /// **The screen-content family's first test, and its only referee (S6.B1).**
+    ///
+    /// No sweep row reaches a line of this code: `SPicture::pScreenBlockFeatureStorage`
+    /// is never filled (F229), `AllocPicture` refuses `iNeedFeatureStorage != 0`, and
+    /// `PerformFMEPreprocess` has no call site. So the byte gate proved nothing about
+    /// the S6.B1 conversion, and this is what stands in for it — the storage is
+    /// constructible by hand now, which is the point of owning its buffers.
+    ///
+    /// What it asserts is the arena's three structural invariants, which are exactly
+    /// the properties the pointer-to-index rewrite could have broken:
+    ///
+    /// 1. the histogram sums to the number of block positions — every block counted once;
+    /// 2. each value's write cursor ends exactly `2 * times[value]` past its base —
+    ///    the groups tile the arena with no overlap and no gap, which is what
+    ///    `InitializeHashforFeature_c`'s running offset and
+    ///    `FillQpelLocationByFeatureValue_c`'s `+ 2` advance have to agree on;
+    /// 3. every written position is inside the arena and inside the frame, in qpel units.
+    #[test]
+    fn feature_storage_arena_invariants_hold_over_a_synthetic_frame() {
+        const W: i32 = 48;
+        const H: i32 = 32;
+        const MARGIN: i32 = 8; // the 8x8 feature mode's edge discard
+
+        let mut func_list = SWelsFuncPtrList::default();
+        WelsInitMeFunc(&mut func_list, 0, true);
+
+        // A deterministic, non-flat luma: a flat one puts every block in bucket 0 and
+        // would satisfy all three invariants without ever exercising a second group.
+        let mut pic = SPicture::new(W, H, false);
+        {
+            let luma = pic.plane_mut(0);
+            for y in 0..H as isize {
+                for x in 0..W as isize {
+                    luma.set(x, y, (((x * 7) ^ (y * 13)) & 0xFF) as u8);
+                }
+            }
+        }
+
+        let bw = (W - MARGIN) as usize;
+        let bh = (H - MARGIN) as usize;
+        let mut storage = SScreenBlockFeatureStorage::for_frame(W, H, true, 0);
+        storage.pFeatureOfBlockPointer = vec![0u16; bw * bh];
+
+        assert!(CalculateFeatureOfBlock(&func_list, &mut pic, &mut storage));
+
+        let list_size = storage.iActualListSize as usize;
+        assert_eq!(storage.pTimesOfFeatureValue.len(), list_size);
+        assert_eq!(storage.pLocationOfFeature.len(), list_size);
+        assert_eq!(storage.pLocationPointer.len(), 2 * bw * bh);
+
+        // (1) every block position counted exactly once
+        let counted: u64 = storage.pTimesOfFeatureValue.iter().map(|&n| n as u64).sum();
+        assert_eq!(counted, (bw * bh) as u64, "histogram must sum to the block count");
+
+        // the frame is not flat, so more than one bucket is populated — otherwise (2)
+        // and (3) would hold vacuously for a single group starting at 0
+        let populated = storage.pTimesOfFeatureValue.iter().filter(|&&n| n > 0).count();
+        assert!(populated > 1, "synthetic frame collapsed to {populated} bucket(s)");
+
+        // (2) the groups tile the arena: base_{v+1} == base_v + 2*times_v, and each
+        //     cursor finished exactly at its own group's end
+        let mut expect_base = 0usize;
+        for v in 0..list_size {
+            let base = storage.pLocationOfFeature[v];
+            let times = storage.pTimesOfFeatureValue[v] as usize;
+            assert_eq!(base, expect_base, "group {v} does not start where {} ended", v.wrapping_sub(1));
+            assert_eq!(
+                storage.pFeatureValuePointerList[v], base + 2 * times,
+                "group {v}'s cursor did not end 2*{times} past its base",
+            );
+            expect_base = base + 2 * times;
+        }
+        assert_eq!(expect_base, 2 * bw * bh, "the groups must fill the arena exactly");
+
+        // (3) every written position is a legal qpel coordinate of this frame
+        for v in 0..list_size {
+            let base = storage.pLocationOfFeature[v];
+            let times = storage.pTimesOfFeatureValue[v] as usize;
+            for k in 0..times {
+                let qx = storage.pLocationPointer[base + 2 * k] as i32;
+                let qy = storage.pLocationPointer[base + 2 * k + 1] as i32;
+                assert_eq!(qx & 3, 0, "x qpel {qx} is not a whole pixel (x << 2)");
+                assert_eq!(qy & 3, 0, "y qpel {qy} is not a whole pixel");
+                assert!(qx >> 2 < bw as i32, "x {} outside {bw} block columns", qx >> 2);
+                assert!(qy >> 2 < bh as i32, "y {} outside {bh} block rows", qy >> 2);
+            }
+        }
+
+        // and the feature each position was filed under is the one the block carries
+        for y in 0..bh {
+            for x in 0..bw {
+                let v = storage.pFeatureOfBlockPointer[y * bw + x] as usize;
+                assert!(v < list_size, "feature {v} outside a list of {list_size}");
+            }
         }
     }
 

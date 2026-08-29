@@ -406,7 +406,6 @@ impl PicPool {
     /// already holding. **T5b.2 retired the pointer form of this bracket**: with
     /// `PicRefs::resolve` for the readers and `mc_luma_same` for the one writer, no
     /// caller in the decoder needs an address for the current picture, and the
-    /// twenty-three `#[allow(unsafe_code)]` signatures that carried one are gone.
     #[inline]
     pub fn cur_and_rest_mut(&mut self, cur: PicId) -> (Option<&mut SPicture>, PicRefs<'_>) {
         let (slot, rest) = self.slots.mut_and_rest(cur);
