@@ -7095,3 +7095,57 @@ short, and F242's per-file table inherits the blind spot.
 
 The full tabulation, with the body inventory, the ordered blocker list and the caveats on
 the measurement, is `rust/docs/phase9_context_flip_tabulation.md`.
+
+## F244 — `ParasetStrategy` needed no raw pointer and no detach: the self-referential borrow dissolves because every method's reach into the context was one accessor call
+
+The S7 tabulation named `ParasetStrategy` as design work of the same kind as the
+`SliceJobHandle` seam: the strategy object *lives inside* the context
+(`pFuncList.pParametersetStrategy`), its methods took the context again, so
+`ParasetStrategy(pCtx).UpdatePpsList(pCtx)` is two `&mut` claims on one allocation and
+was expressible only through a raw pointer. The expected fixes were a `take()`/restore
+window or a long narrowing chain.
+
+Neither was needed. **Every context-taking method's reach into the context was one or two
+accessor calls**, measured by reading each body:
+
+| method | what it actually touched |
+|---|---|
+| `UpdatePpsList` | `iPpsNum`, the PPS array |
+| `UpdateParaSetNum` | `iSpsNum`, `iSubsetSpsNum`, `iPpsNum` |
+| `InitPps` | `pps_array()` / `pps_array_mut()` |
+| `GenerateNewSps` | `param_and_paraset_arrays_mut()` — and, transitively, `WelsGenerateNewSps` (the same accessor) and `SpsReset` (`sps_array_mut`, `subset_array_mut`) |
+| `OutputCurrentStructure` | `sps_array()`, `subset_array()`, `pps_array()` — all shared |
+
+So each method takes those values instead, and each call site splits them off one
+`&mut sWelsEncCtx` alongside the strategy — five helpers in the shape
+`encoder_context.rs:1028`'s `ctx_paraset_arrays` already established, whose own comment
+states the principle exactly: *"Rust permits `(&mut s.a, &mut s.b, &mut s.c)` from one
+`&mut s` inside a single body … What it cannot see is three accessor calls each claiming
+the whole context."* The self-referential borrow was never intrinsic; it was two accessor
+calls where one split would do. `ParasetStrategy` is now a safe
+`fn(&mut sWelsEncCtx) -> &mut CWelsParametersetIdStrategyObj`, and
+`paraset_strategy.rs` holds **zero** raw context parameters.
+
+**Three prose comments in the tree were arguing borrowck's case by hand, and all three
+are now type-level.** `encoder_ext.rs:912` — *"Hoisting is sound as well as legal — the
+strategy object lives in the `pFuncList` `Box`, a different allocation, so the reborrow
+below cannot pop it"*; the S67/H2 note at `wels_encoder_ext.rs:925` making the same
+argument for `OutputCurrentStructure`; and `encoder_ext.rs:982`'s F208 note about a read
+*"while it is live … and the reason it was invisible before is that `ctx` was a raw"*.
+Each was true, and each needed a raw pointer to express. The third dissolved by
+**ordering** rather than splitting — the `bool` is read before the strategy borrow opens.
+
+**A measurement error worth recording, because it is the second time this session.**
+Grepping a method body for `pCtx\.[A-Za-z_]+` to find "what it uses from the context"
+misses `pCtx` passed *as an argument* — `WelsGenerateNewSps(pCtx, ..)` and
+`self.SpsReset(pCtx, ..)` were both invisible to it, and `GenerateNewSps` looked like a
+one-accessor body when it was a three-call chain. The chain turned out shallow, so the
+conclusion held; it did not have to. Pair any "what does this touch" grep with `\bpCtx\b`
+unqualified. (F243 records the sibling error: `: *mut sWelsEncCtx` misses
+fully-qualified-path parameters.)
+
+Also corrected here: the tabulation's §2 attributed four `E0502`s to `ParasetStrategy`.
+Three of the four were at *different* sites than the flip experiment suggested — the
+experiment's lifetime pass had moved where the conflict surfaced — and converting the
+function produced nine conflicts, not four, across five distinct shapes. The count was
+never the point, but the tabulation should not be read as an exhaustive site list.
