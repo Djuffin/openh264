@@ -1570,8 +1570,9 @@ pub unsafe fn ParamValidationExt(
                 let iMbHeight = (kiPicHeight + 15) >> 4;
                 let iMbNumInFrame = iMbWidth * iMbHeight;
                 let iMaxSliceNum = MAX_SLICES_NUM as i32;
-                let pSliceArgument =
-                    &mut (*pCodingParam).sSpatialLayers[idx].sSliceArgument as *mut SSliceArgument;
+                // **S6.D1**: the `as *mut SSliceArgument` cast is gone — it existed only
+                // to feed the raw-parameter checkers below, which take `&mut` now.
+                let pSliceArgument = &mut (*pCodingParam).sSpatialLayers[idx].sSliceArgument;
 
                 if (*pSliceArgument).uiSliceMbNum[0] == 0 {
                     if iMbHeight > iMaxSliceNum {
