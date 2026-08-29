@@ -7035,3 +7035,63 @@ exactly that mid-session — "0 *mut-ctx bodies scanned against 0 writers", whic
 like a clean result rather than a non-run. From the crate root the same command reports
 "106 ... no violations". A checker whose failure mode is a green-looking zero should say
 so; until it does, every quoted prohibition result should carry its body count.
+
+## F243 — the context flip needs no storage migration: across all 106 raw-context bodies the compiler finds exactly one write, in a single-threaded initialiser
+
+The plan and the S6 brief both specify the `&sWelsEncCtx` flip as a storage campaign:
+"tabulate every fork-reachable body by what it writes through the context, move each
+worker-written field to atomics / `Cell`s / separately-allocated storage (each move with
+its own targeted two-thread probe, control seen red), and only then flip bodies". That is
+what the layer took across S5 (two field moves, two probes) and S6 (the flip). It is
+budgeted as "likely a whole session by itself".
+
+Measured, it is not that job at all. Flipping all 106 parameters and 9 typedefs to
+`&sWelsEncCtx`, rewriting the call sites off rustc's spans, and clearing residual type
+errors to **zero** — the condition for MIR borrowck to run over every body — leaves **five
+errors, total**:
+
+* **one `E0596`**, `pEncCtx.sWelsCabacContexts` in `WelsCabacInit`
+  (`set_mb_syn_cabac.rs:830`) — the only direct write through the context anywhere. It has
+  one caller, in `WelsInitEncoderExt`, and is not fork-reachable; rustc's own suggestion is
+  `&mut sWelsEncCtx`.
+* **four `E0502`**, all `ParasetStrategy(pCtx)` holding a whole-context borrow across a
+  disjoint `pCtx.pOut` mutation, all in single-threaded parameter-set code, and
+  `ParasetStrategy` is in the fork-split tool's ST-FLIPPABLE list.
+
+**Zero writes from inside the fork.** That does not mean workers write no context state —
+it means every field they write already reaches them through interior mutability or a
+separate allocation, which earlier sessions did incrementally and which
+`safeplan_prohibitions.py` has been reporting as "0 writers" all along. What is new is that
+the compiler now confirms it across all 106 bodies simultaneously, with types clean, rather
+than one prohibition scan at a time.
+
+**So the flip's real cost is three structural items, none of them storage**: (a) it must go
+root-down, because a body cannot take `&sWelsEncCtx` while it still passes the context to a
+raw-taking callee — flipping one body in isolation yields only `E0308` at its onward calls
+and never reaches borrowck, which is also exactly why `ref_list_mgr_svc.rs` did not move in
+S6 (F240); (b) `SliceJobHandle` stores the context across `thread::scope` under
+`unsafe impl Send`, so the field wants `&'a sWelsEncCtx` plus a struct lifetime and
+`sWelsEncCtx: Sync` — the design work, and its own checkpoint; (c) four whole-context
+accessor borrows to split into disjoint fields, the fix S6 already used for
+`DeblockingFilterFrameAvcbase`.
+
+**And the F239 column is empty, with its control seen red.** A scan for the layer flip's
+defect shape at the context level — raw parent, field-precise exclusive derivation, later
+whole-context call, later use — finds nothing; injecting the pattern into `WriteSliceBs`
+makes it fire at `slice_multi_threading.rs:941`. There is a structural reason to expect
+that to hold: once a parameter is `&sWelsEncCtx`, `&mut (*pCtx).f` inside it is a compile
+error rather than silent UB, and the transition sites where a *caller* still holds the
+context are the four `E0502`s above — which rustc catches precisely because those callers
+hold a reference and not a raw pointer. The layer flip's hazard came from raw parents,
+which borrowck does not track. `SliceJobHandle` is the one raw-context-across-a-call object
+left, and it is named rather than diffuse.
+
+**A measurement correction this turned up.** `106` is right and the S6 close's `133` figure
+counts allows, not bodies — but a grep for `: *mut sWelsEncCtx` finds only **102**, missing
+four parameters written `: *mut crate::encoder::encoder_context::sWelsEncCtx` in
+`set_mb_syn_cabac.rs` and `svc_set_mb_syn_cabac.rs`. Those two files do not appear at all in
+a per-file survey built on that grep. `phase9_forksplit.py` had 106 all along; the grep was
+short, and F242's per-file table inherits the blind spot.
+
+The full tabulation, with the body inventory, the ordered blocker list and the caveats on
+the measurement, is `rust/docs/phase9_context_flip_tabulation.md`.
