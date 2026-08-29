@@ -6435,6 +6435,36 @@ sweep row, no unit test, no Miri probe and no gate executes a single line of thi
 family, so a semantic error in the conversion is undetectable by every instrument
 this project has, and would sit in the tree until Phase 10 ran it.
 
+**Amendment (S5, after the ruling was put): deletion was considered and refused, on
+a fact neither T7.C6 nor this finding had stated.** The obvious alternative to
+converting unreachable code is deleting it, and the prize is real — the whole
+screen-content feature-search subtree is 15 functions, **538 lines and 13 allows** in
+`svc_motion_estimate.rs` plus the 12-line struct, which is 13 of that file's 22 and the
+difference between it being convertible and not.
+
+It is refused because the family does not separate where it looks like it does. The
+*storage* is unreachable, because nothing allocates it. Its *readers* are not:
+`SetFeatureSearchIn`, `FeatureSearchOne` and `MotionEstimateFeatureFullSearch` are
+called from `WelsDiamondCrossSearch`, which `WelsInitMeFunc` installs into
+`pfSearchMethod` in its `bScreenContent` arm — and `bScreenContent` is
+`iUsageType == SCREEN_CONTENT_REAL_TIME` (`param_svc.rs:632`), **a public API parameter
+any caller can set**. So today a `SCREEN_CONTENT_REAL_TIME` caller gets the
+screen-content search methods installed and running, with the null guards bailing on
+the storage that was never allocated: degraded, but its own behaviour. Delete the
+family and that caller silently gets camera-content search instead.
+
+That is a behaviour change on a live API configuration, and **no instrument in this
+project can see it** — no harness driver sets that usage type, so the sweep, the gtest
+smoke and every Miri probe are all blind to it, exactly as they are to the conversion
+this finding declines. Deleting is therefore the *more* dangerous of the two options,
+not the safer one, which is the opposite of how it reads.
+
+This is also the sentence T7.C6's note was missing. It deleted the allocations because
+they were unreachable *and* unobservable — eleven and thirty lines of allocate-and-null
+that no configuration could reach. The search tree is only unreachable *by
+configuration*, and the boundary it drew at "the struct and its fields are untouched"
+turns out to be exactly the line between the two.
+
 **Stopped, not skipped, and this is the ruling asked for.** Per S5's rule — "When a
 blocker needs the user's ruling, write the finding and stop that checkpoint rather
 than guessing" — C5 is left undone and named in the roll-forward. The decision it
