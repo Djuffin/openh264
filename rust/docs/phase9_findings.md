@@ -6512,3 +6512,48 @@ The reason it matters beyond tidiness: a stale `# Safety` clause is the evidence
 future session will use to decide whether a signature may be de-unsafed. F230's pass
 consults precisely this text. Left in place, these clauses argue for keeping `unsafe`
 on functions that have not needed it for several phases.
+
+## F232 — the remaining 472 allows, by what actually blocks each one: 197 have no raw parameter at all, and `current_layer` is the single edge holding a whole file
+
+Measured at S5's close, classifying every `#[allow(unsafe_code)]` outside `src/api/`
+by the *signature of the item it heads*:
+
+| blocked by | count |
+|---|---|
+| **no raw parameter at all** — the item's signature is references and scalars | **197** |
+| some other raw parameter (planes, DCT blocks, C-ABI structs, `BsWriter`, …) | 124 |
+| `*mut sWelsEncCtx` — the fork's context pointer | 114 |
+| `*mut SDqLayer` | 29 |
+| not a function (an `impl`, a `static`, a test body) | 8 |
+
+**Read the first row carefully, because it is not 197 free wins.** S5's E2b pass took
+the ones whose *bodies* were also clean and got 26. The rest have raw pointers inside,
+obtained from raw accessors they call. `ref_list_mgr_svc.rs` is the clearest case and
+worth stating exactly: **31 allows, every one of them on a signature with no raw
+pointer**, and stripping the file's `unsafe` keywords produces 101 errors — 51 raw
+dereferences in the bodies plus calls to `current_layer` (17), `SPicture::SetUnref`
+(11), `ctx_param_raw` (8), `ctx_vpp_raw` (5) and `slice_in_layer` (4). Not one of those
+31 is blocked by its own contract; they are blocked by four accessors that still hand
+back pointers. `current_layer` is the largest single edge in the graph, and F210
+deferred it to D2–D3 precisely because the fork *writes* the layer.
+
+**Correction to a number this session first published.** An earlier pass of this
+census reported 242 allows blocked on `*mut sWelsEncCtx` and 57% blocked on the two
+fork pointers. That was wrong: the classifier matched the *string* `sWelsEncCtx` and so
+counted `&mut sWelsEncCtx` — a reference — as a raw pointer. `rc.rs` has 10 raw-ctx
+functions, not 37. The corrected figures are the table above: **143 of 472 (30%)** are
+held by the two fork-shared pointers, not 57%. The difference matters for planning,
+because it is the difference between "most of what is left needs the fork seam
+redesigned" and "most of what is left is reachable without touching it".
+
+**What this says about the plan's stage ordering.** D2/D3 is scheduled as the
+centrepiece and `svc_encode_slice.rs` is its subject — but that file's 72 allows are
+38 ctx + 15 layer, so **74% of it is behind the two pointers** and cannot move until
+the DQ-layer storage moves (the brief's own prerequisite: banks out of the struct,
+`NumSliceCodedOfPartition`/`LastCodedMbIdxOfPartition` to atomics). The files with
+**zero** ctx dependency and real convertible surface are, in order:
+`encoder_ext.rs` (32: 16 raw, 16 body), `ref_list_mgr_svc.rs` (31, all body, one edge),
+`wels_encoder_ext.rs` (24: 17 raw), `wels_preprocess.rs` (26: 14 raw),
+`svc_motion_estimate.rs` (22), `svc_enc_slice_segment.rs` (21), `encode_mb_aux.rs` (12)
+and `nal_encap.rs` (11). That is **179 allows reachable without the fork seam**, which
+is where a session that wants movement should go before it takes on the layer.
