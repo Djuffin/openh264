@@ -1068,7 +1068,12 @@ pub unsafe fn WelsInitSliceCabac(
         /* init cabac */
         let iCabacInitIdc = (*pSlice).iCabacInitIdc;
         crate::encoder::set_mb_syn_cabac::WelsCabacContextInit(
-            pEncCtx,
+            // **S7.A2**: the callee takes `&sWelsEncCtx`. This body still holds the
+            // context raw, so the shared borrow is formed here — and it is a
+            // *whole-context* retag (F239). Nothing in this body derives a
+            // field-precise exclusive pointer from `pEncCtx` across it, which the
+            // F239 scan confirms tree-wide with its control seen red.
+            &*pEncCtx,
             &mut (*pSlice).sCabacCtx,
             iCabacInitIdc,
         );
