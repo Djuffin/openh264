@@ -678,7 +678,7 @@ pub unsafe fn InitMbListD(ctx: &mut sWelsEncCtx) -> i32 {
     for i in 0..iNumDlayer as usize {
         let iMbWidth = (ctx.param().sSpatialLayers[i].iVideoWidth + 15) >> 4;
         let iMbHeight = (ctx.param().sSpatialLayers[i].iVideoHeight + 15) >> 4;
-        let pLayer = ctx_dq_layer(std::ptr::addr_of_mut!(*ctx), i);
+        let pLayer = ctx_dq_layer(ctx, i);
         if pLayer.is_null() {
             return 1;
         }
@@ -820,7 +820,7 @@ pub unsafe fn InitDqLayers(
         // of `ctx_dq_layer`, and this function keeps one for the rest of the loop.
         let pDqLayerBox = Box::new(SDqLayer::new(LayerIdx(iDlayerIndex as u8)));
         (&mut ctx.ppDqLayerList)[iDlayerIndex as usize] = Some(pDqLayerBox);
-        let pDqLayer = ctx_dq_layer(std::ptr::addr_of_mut!(*ctx), iDlayerIndex as usize);
+        let pDqLayer = ctx_dq_layer(ctx, iDlayerIndex as usize);
 
         (*pDqLayer).iMbWidth = kiMbW as i16;
         (*pDqLayer).iMbHeight = kiMbH as i16;
@@ -1014,7 +1014,7 @@ pub unsafe fn InitDqLayers(
 
         // FMO is not used in SVC coding so far; come back if FMO is needed
         iResult = InitSlicePEncCtx(
-            &mut *ctx_dq_layer(std::ptr::addr_of_mut!(*ctx), iDlayerIndex as usize),
+            &mut *ctx_dq_layer(ctx, iDlayerIndex as usize),
             false,
             (*pSps).iMbWidth as i32,
             (*pSps).iMbHeight as i32,
@@ -1855,7 +1855,7 @@ mod tests {
         unsafe {
             let pCtx = build_gate_context();
 
-            let pDq = ctx_dq_layer(pCtx, 0);
+            let pDq = ctx_dq_layer(&*pCtx, 0);
             assert!(!pDq.is_null());
             assert_eq!((*pDq).iMbWidth, 10);
             assert_eq!((*pDq).iMbHeight, 6);
@@ -1986,7 +1986,7 @@ pub unsafe fn WelsUninitEncoderExt(pEncContext: Option<Box<sWelsEncCtx>>) {
         // own length now, not `iSpatialLayerNum` read back out of the parameters at
         // teardown — the silent-leak shape T6.H7 found next door.
         for ilayer in 0..ctxBox.ppDqLayerList.len() {
-            let pLayer = ctx_dq_layer(std::ptr::addr_of_mut!(*ctxBox), ilayer);
+            let pLayer = ctx_dq_layer(&*ctxBox, ilayer);
             if !pLayer.is_null() {
                 FreeDqLayer(&mut *pLayer);
             }

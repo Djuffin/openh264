@@ -411,7 +411,7 @@ pub unsafe fn WriteBlockResidualCavlc(
 // unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
 pub unsafe fn WelsSpatialWriteMbPred(
-    pEncCtx: *mut sWelsEncCtx,
+    pEncCtx: &sWelsEncCtx,
     pSlice: &mut SSlice,
     pCurMb: &mut SMB,
 ) {
@@ -533,7 +533,7 @@ pub unsafe fn WelsSpatialWriteMbPred(
 // unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
 pub unsafe fn WelsSpatialWriteSubMbPred(
-    pEncCtx: *mut sWelsEncCtx,
+    pEncCtx: &sWelsEncCtx,
     pSlice: &mut SSlice,
     pCurMb: &mut SMB,
 ) {
@@ -648,7 +648,7 @@ pub unsafe fn WelsSpatialWriteSubMbPred(
 ///                                                  negative — same verdict)
 pub fn CheckBitstreamBuffer(
     _kuiSliceIdx: u32,
-    _pEncCtx: *mut sWelsEncCtx,
+    _pEncCtx: &sWelsEncCtx,
     buf: &[u8],
     pBs: &BsWriter,
 ) -> i32 {
@@ -670,7 +670,7 @@ pub fn CheckBitstreamBuffer(
 // unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
 pub unsafe fn WelsSpatialWriteMbSyn(
-    pEncCtx: *mut sWelsEncCtx,
+    pEncCtx: &sWelsEncCtx,
     pSlice: &mut SSlice,
     mbs: &mut crate::safe::mb_grid::MbWindow<'_, SMB>,
 ) -> i32 {

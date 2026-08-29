@@ -1401,7 +1401,7 @@ pub extern "C" fn InitIntraAnalysisVaaInfo(
 // unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
 pub unsafe extern "C" fn MdIntraAnalysisVaaInfo(
-    pEncCtx: *mut sWelsEncCtx,
+    pEncCtx: &sWelsEncCtx,
     pEncMb: *mut u8,
 ) -> bool {
     let pCurDqLayer = current_layer(pEncCtx);
@@ -1580,7 +1580,7 @@ pub fn MeRefineQuarPixel(
 // unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
 pub unsafe extern "C" fn MeRefineFracPixel(
-    pEncCtx: *mut sWelsEncCtx,
+    pEncCtx: &sWelsEncCtx,
     kiMemPredInterOff: usize,
     pMe: &mut SWelsME<'_>,
     pMeRefine: &mut SMeRefinePointer,

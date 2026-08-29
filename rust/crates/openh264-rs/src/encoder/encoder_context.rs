@@ -759,7 +759,7 @@ pub fn ctx_mb_index_x(pCtx: &sWelsEncCtx, kiDid: usize) -> *const i16 {
 #[inline]
 // unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
-pub unsafe fn ctx_func_list_raw(pCtx: *mut sWelsEncCtx) -> *mut SWelsFuncPtrList {
+pub unsafe fn ctx_func_list_raw(pCtx: &sWelsEncCtx) -> *mut SWelsFuncPtrList {
     std::ptr::read(std::ptr::addr_of!((*pCtx).pFuncList) as *const *mut SWelsFuncPtrList)
 }
 
@@ -941,7 +941,7 @@ pub unsafe fn ctx_ref_list_raw(pCtx: &sWelsEncCtx, kiDid: usize) -> *mut SRefLis
 #[inline]
 // unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
-pub unsafe fn ctx_dq_layer(pCtx: *mut sWelsEncCtx, kiDid: usize) -> *mut SDqLayer {
+pub unsafe fn ctx_dq_layer(pCtx: &sWelsEncCtx, kiDid: usize) -> *mut SDqLayer {
     // **F71.** No `&mut` to the `Vec` and no reference to the slot. See the family
     // note above `ctx_func_list_raw`.
     let arr = std::ptr::addr_of!((*pCtx).ppDqLayerList);
@@ -2752,7 +2752,7 @@ mod tests {
         // `Option<&SRefList>` now, so it joins the references above: no sibling
         // property to assert, and the borrow checker referees the coexistences
         // that Miri used to.
-        siblings!("ctx_dq_layer", ctx_dq_layer(p, 0),
+        siblings!("ctx_dq_layer", ctx_dq_layer(&*p, 0),
             |q: *mut crate::encoder::svc_encode_slice::SDqLayer| (*q).iMbWidth = 11,
             |q: *mut crate::encoder::svc_encode_slice::SDqLayer| (*q).iMbWidth == 11);
 
@@ -2784,7 +2784,7 @@ mod tests {
                 // successor answers with a `MvdCostCursor`, and a borrow is not
                 // something this list can hold beside three raw cursors.
                 (*p).vaa_ptr().cast(),
-                ctx_dq_layer(p, 0).cast(), (*p).frame_bs().cast(),
+                ctx_dq_layer(&*p, 0).cast(), (*p).frame_bs().cast(),
             ]
         };
         // `frame_bs` is null here (no bitstream in this fixture), which is itself

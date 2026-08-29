@@ -7201,3 +7201,64 @@ were wrong: §4(c) called `ParasetStrategy` mechanical when it was not (F244), a
 called this a blocker when it is not. Where the compiler was asked, the tabulation was
 right; where it was reasoned about, it was not. A blocker list should carry, per item,
 which of the two it is.
+
+## F246 — the context flip lands: 106 raw-context bodies to zero, and the tabulation's residue counts were inflated by comments
+
+The flip the plan budgeted a whole session for, with a storage campaign in front of it,
+landed as one mechanical checkpoint on top of S7.A2–A4. Measured before and after:
+
+| | before | after |
+|---|---:|---:|
+| bodies taking a raw context | 106 | **0** |
+| `safeplan_prohibitions.py` bodies scanned | 106 | **5** |
+| raw-context *sites* in the tree | 115 | **6** |
+| allows (outside `src/api/`) | 440 | **431** |
+
+The six survivors are not residue: five are the `ctx_*_raw` slot readers F71 designed —
+they read a pointer out of a `Box` slot without forming a reference, which is the whole
+point — and the sixth is `SliceJobHandle::pCtx`, which F245 established stays. All six are
+`*const`.
+
+**The cascade is where the flip pays.** Its candidate pool — declarations whose signature
+carries no raw pointer — went **129 → 209** the moment the flip landed, because 80
+signatures stopped being raw. Eleven stripped, nine allows retired behind them, in files
+the flip never touched by hand (`rc.rs` four, `svc_encode_slice.rs` two,
+`svc_mode_decision.rs` two, `svc_encode_mb.rs` one).
+
+**Two of the tabulation's residue counts were wrong, both inflated by comments.** It said
+"56 context `is_null()` call sites". There are **eleven**, in `src/encoder/`; the other 45
+matches are *comment text* — mostly the T9.H notes recording that an earlier session had
+already retired one ("the `pCtx.is_null()` disjunct is gone"). The S6 brief warns that the
+prohibition checker counts comments; the same trap catches any `grep -c` over a codebase
+that documents its own history this thoroughly. Five of the eleven were simple, three were
+compound and had live arms that had to be kept by hand (a layer null, a `pSliceCtx` null,
+and two dimension tests), and two were five-arm guards where only the first arm retired.
+
+The "10 re-casts" was closer but also comment-inflated; the real collapses were four
+`&*(std::ptr::addr_of_mut!(*ctx))` round-trips — a reference laundered through a raw and
+back, which the flip makes visibly pointless — plus the qualified-path forms.
+
+**The null-guard obligation, discharged by enumeration rather than by the general claim.**
+The tabulation's own caveat required confirming each guard's callers rather than deleting
+on "a reference cannot be null". Every root that mints a context pointer was enumerated:
+the three fork entry points (`EncodeFixedSlicesForked`, `UpdateMbMapForked`,
+`EncodeSizeLimitedSlicesForked`) all take `&mut sWelsEncCtx`; every other root is
+`&mut *ctx` or `addr_of_mut!(*ctx)` off an owned `Box`; and no body among the 106 is
+reached from `src/api/`. No null can arrive, so the guards were dead — the same conclusion
+T9.H reached for the bodies it converted, now checked at the roots instead of assumed.
+
+**F238's exception fired again, and rustc caught it again.** `WelsRcMbInfoUpdateDisable`
+is an empty body behind the `pfRc.WelsRcMbInfoUpdate` dispatch, and a test passed it
+`&*(std::ptr::null_mut())` — undefined the moment the parameter became a reference, where
+handing a null raw pointer to a body that ignores it was fine. Unlike S6's
+`UpdateFMESwitchNull`, the fix here is the *test*, not the signature: the production
+dispatch's context comes from the encode path and its sibling arm dereferences
+unconditionally, so `&sWelsEncCtx` is right and the null was a test artifact. The stale
+comment beside it — "keeps its raw context and its null … its parameter is staying `*mut`"
+— is corrected in place.
+
+**And `SliceJobHandle::pCtx` narrowed to `*const`.** The three sites that read it form
+`&*job.pCtx`, and S7.A1 measured the context's write set at one body which is not this
+one, so nothing writes through the handle. `*const` states that; the `unsafe impl Send`
+is unchanged and still necessary, because raw pointers are `!Send` whatever their
+mutability.

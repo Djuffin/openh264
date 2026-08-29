@@ -71,7 +71,7 @@ pub type PGetLumaI16x16PredFunc = fn(pred: &mut [u8; 256], rec: &RecCursor<'_>);
 
 /// `wels_func_ptr_def.h:106`
 pub type PIntraFineMdFunc = unsafe fn(
-    pEncCtx: *mut sWelsEncCtx,
+    pEncCtx: &sWelsEncCtx,
     pWelsMd: &mut SWelsMD<'_>,
     pCurMb: &mut SMB,
     pMbCache: &mut SMbCache,
@@ -79,7 +79,7 @@ pub type PIntraFineMdFunc = unsafe fn(
 
 /// `wels_func_ptr_def.h:107`
 pub type PInterFineMdFunc = unsafe fn(
-    pEncCtx: *mut sWelsEncCtx,
+    pEncCtx: &sWelsEncCtx,
     pWelsMd: &mut SWelsMD<'_>,
     slice: &mut SSlice,
     pCurMb: &mut SMB,
@@ -88,7 +88,7 @@ pub type PInterFineMdFunc = unsafe fn(
 
 /// `wels_func_ptr_def.h:108`
 pub type PInterMdFirstIntraModeFunc = unsafe fn(
-    pEncCtx: *mut sWelsEncCtx,
+    pEncCtx: &sWelsEncCtx,
     pWelsMd: &mut SWelsMD<'_>,
     pCurMb: &mut SMB,
     pMbCache: &mut SMbCache,
@@ -110,7 +110,7 @@ pub type PInterMdFirstIntraModeFunc = unsafe fn(
 /// dispatched inside the fork, so S63 keeps it a pointer until the root converts.
 /// `extern "C"` came off — nothing in this table crosses the C ABI (T4b.1).
 pub type PInterMdBackgroundDecisionFunc = unsafe fn(
-    pEncCtx: *mut sWelsEncCtx,
+    pEncCtx: &sWelsEncCtx,
     pWelsMd: &mut SWelsMD<'_>,
     slice: &mut SSlice,
     pCurMb: &mut SMB,
@@ -127,7 +127,7 @@ pub type PMdBackgroundInfoUpdateFunc = unsafe extern "C" fn(
 
 /// `wels_func_ptr_def.h:121`
 pub type PInterMdScrollingPSkipDecisionFunc = unsafe fn(
-    pEncCtx: *mut sWelsEncCtx,
+    pEncCtx: &sWelsEncCtx,
     pWelsMd: &mut SWelsMD<'_>,
     slice: &mut SSlice,
     pCurMb: &mut SMB,
@@ -147,7 +147,7 @@ pub type PSetScrollingMv = unsafe fn(pVaa: &SVAAFrameInfo, pMd: &mut SWelsMD<'_>
 
 /// `wels_func_ptr_def.h:125`
 pub type PInterMdFunc = unsafe fn(
-    pEncCtx: *mut sWelsEncCtx,
+    pEncCtx: &sWelsEncCtx,
     pWelsMd: &mut SWelsMD<'_>,
     slice: &mut SSlice,
     mbs: &mut crate::safe::mb_grid::MbWindow<'_, SMB>,
@@ -257,7 +257,7 @@ impl EntropyCoder {
     #[allow(unsafe_code)]
     pub unsafe fn WelsSpatialWriteMbSyn(
         self,
-        pEncCtx: *mut sWelsEncCtx,
+        pEncCtx: &sWelsEncCtx,
         pSlice: &mut SSlice,
         mbs: &mut crate::safe::mb_grid::MbWindow<'_, SMB>,
     ) -> i32 {
