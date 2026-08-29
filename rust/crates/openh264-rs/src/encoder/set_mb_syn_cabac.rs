@@ -893,12 +893,7 @@ pub unsafe extern "C" fn WelsCabacContextInit(
 /// `iStart` is the slice's first byte as an offset into the output buffer, and
 /// `iEnd` the caller's intended limit — which nothing enforces (audit, "the
 /// bound that does not exist").
-///
-/// # Safety
-/// - `pCbCtx` must point to a valid, writable `SCabacCtx` instance.
-// unsafe-cat: C-ABI
-#[allow(unsafe_code)]
-pub unsafe extern "C" fn WelsCabacEncodeInit(pCbCtx: &mut SCabacCtx, iStart: usize, iEnd: usize) {
+pub extern "C" fn WelsCabacEncodeInit(pCbCtx: &mut SCabacCtx, iStart: usize, iEnd: usize) {
     pCbCtx.m_uiLow = 0;
     pCbCtx.m_iLowBitCnt = 9;
     pCbCtx.m_iRenormCnt = 0;

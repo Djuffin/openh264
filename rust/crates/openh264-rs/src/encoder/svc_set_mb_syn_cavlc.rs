@@ -1005,8 +1005,6 @@ pub unsafe fn WelsWriteMbResidual(
 /// a trait object.
 ///
 /// [`EntropyCoder`]: crate::encoder::wels_func_ptr_def::EntropyCoder
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
 pub fn StashMBStatusCavlc(
     pBs: &mut BsWriter,
     pDss: &mut crate::encoder::svc_encode_slice::SDynamicSlicingStack,
@@ -1124,8 +1122,6 @@ pub unsafe fn StashPopMBStatusCabac(
 /// `extern "C"` came off at T4b.1 with the slot that required it.
 ///
 /// [`EntropyCoder::GetBsPosition`]: crate::encoder::wels_func_ptr_def::EntropyCoder::GetBsPosition
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
 pub fn GetBsPosCabac(pCabacCtx: &crate::encoder::set_mb_syn_cabac::SCabacCtx) -> i32 {
     // S5.D1: shared, and the null test goes with the pointer. Three call sites: the
     // `EntropyCoder::GetBsPosition` dispatch, which passes `&(*pSlice).sCabacCtx` —

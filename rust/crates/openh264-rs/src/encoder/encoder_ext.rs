@@ -2090,9 +2090,7 @@ pub unsafe fn PrefetchReferencePicture(pCtx: &mut sWelsEncCtx, keFrameType: EVid
 }
 
 /// `encoder_ext.cpp:3376`.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn ClearFrameBsInfo(pCtx: &mut sWelsEncCtx, pFbi: &mut SFrameBSInfo) {
+pub fn ClearFrameBsInfo(pCtx: &mut sWelsEncCtx, pFbi: &mut SFrameBSInfo) {
     (*pFbi).sLayerInfo[0].pBsBuf = pCtx.frame_bs();
     (*pFbi).sLayerInfo[0].pNalLengthInByte = pCtx.pOut.as_deref_mut().expect("pOut lives").sNalLen.as_mut_ptr();
 

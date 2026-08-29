@@ -1050,9 +1050,7 @@ impl CWelsPreProcess {
     // stop, leaving every method `None` and the whole video-analysis stage
     // silently producing zeros — see `crate::processing`.
 
-    // unsafe-cat: port-raw(Phase 9)
-    #[allow(unsafe_code)]
-    pub unsafe fn WelsPreprocessReset(
+    pub fn WelsPreprocessReset(
         &mut self,
         pCtx: &mut sWelsEncCtx,
         iWidth: i32,
@@ -1604,9 +1602,7 @@ impl CWelsPreProcess {
         self.m_pSpatialPic[0][pBest.iSrcListIdx as usize]
     }
 
-    // unsafe-cat: port-raw(Phase 9)
-    #[allow(unsafe_code)]
-    pub unsafe fn UpdateSpatialPictures(
+    pub fn UpdateSpatialPictures(
         &mut self,
         pCtx: &mut sWelsEncCtx,
         iCurTid: i8,
@@ -2276,9 +2272,7 @@ impl CWelsPreProcess {
         }
     }
 
-    // unsafe-cat: port-raw(Phase 9)
-    #[allow(unsafe_code)]
-    unsafe fn DetectSceneChangeVideo(
+    fn DetectSceneChangeVideo(
         &mut self,
         pCurPicture: SrcPicRef,
         pRefPicture: Option<SrcPicRef>,

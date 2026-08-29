@@ -1066,7 +1066,7 @@ pub fn CheckDirectionalMvFalse(
 // which read as a Phase 9 conversion still owed. It is not — it is Phase 10's.
 // unsafe-cat: SCREEN_CONTENT(dormant)
 #[allow(unsafe_code)]
-pub unsafe fn LineFullSearch_c(
+pub fn LineFullSearch_c(
     sdf: &SSampleDealingFunc,
     pMe: &mut SWelsME<'_>,
     pMvdTable: MvdCostCursor<'_>,
@@ -1650,8 +1650,6 @@ pub fn FeatureSearchOne(
 }
 
 // SCREEN_CONTENT(dormant: Phase 10)
-// unsafe-cat: SCREEN_CONTENT(dormant)
-#[allow(unsafe_code)]
 pub fn MotionEstimateFeatureFullSearch(
     sFeatureSearchIn: SFeatureSearchIn<'_>,
     kuiMaxSearchPoint: u32,
