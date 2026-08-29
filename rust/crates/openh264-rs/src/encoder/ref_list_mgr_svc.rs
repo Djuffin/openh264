@@ -223,9 +223,7 @@ pub fn ResetLtrState(pLtr: &mut SLTRState) {
 }
 
 /// Reset active reference picture lists for current spatial layer.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn WelsResetRefList(pCtx: &mut sWelsEncCtx) {
+pub fn WelsResetRefList(pCtx: &mut sWelsEncCtx) {
     // T9.H: `if pCtx.is_null() { ... }` stood here. A `&mut sWelsEncCtx`
     // cannot be null and every caller now holds one, so the guard is not
     // merely dead — it is inexpressible. Nothing replaces it.
@@ -330,9 +328,7 @@ pub fn DeleteSTRFromShortList(pRefList: &mut SRefList, iIdx: i32) {
 }
 
 /// Unreferences non-scene LTR frames when current frame is marked as Scene LTR.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn DeleteNonSceneLTR(pCtx: &mut sWelsEncCtx) {
+pub fn DeleteNonSceneLTR(pCtx: &mut sWelsEncCtx) {
     // T9.H: the `pCtx.is_null()` disjunct is gone — a `&mut sWelsEncCtx`
     // cannot be null and every caller now holds one. The rest is unchanged.
     if pCtx.param_opt().is_none() {
@@ -668,9 +664,7 @@ pub unsafe fn LTRMarkProcess(pCtx: &mut sWelsEncCtx) {
 }
 
 /// Executes promotion of screen content references to long-term reference slots.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn LTRMarkProcessScreen(pCtx: &mut sWelsEncCtx) {
+pub fn LTRMarkProcessScreen(pCtx: &mut sWelsEncCtx) {
     // T9.H: `if pCtx.is_null() { ... }` stood here. A `&mut sWelsEncCtx`
     // cannot be null and every caller now holds one, so the guard is not
     // merely dead — it is inexpressible. Nothing replaces it.
@@ -701,9 +695,7 @@ pub unsafe fn LTRMarkProcessScreen(pCtx: &mut sWelsEncCtx) {
 }
 
 /// Pre-allocates destination frame buffer pointer pDecPic for upcoming reconstruction.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn PrefetchNextBuffer(pCtx: &mut sWelsEncCtx) {
+pub fn PrefetchNextBuffer(pCtx: &mut sWelsEncCtx) {
     // T9.H: the `pCtx.is_null()` disjunct is gone — a `&mut sWelsEncCtx`
     // cannot be null and every caller now holds one. The rest is unchanged.
     if pCtx.param_opt().is_none() {

@@ -127,7 +127,16 @@ pub struct SPicture {
 
     // for screen reference frames
     // SCREEN_CONTENT(dormant: Phase 10)
-    pub pScreenBlockFeatureStorage: *mut SScreenBlockFeatureStorage,
+    /// **S5.C6c**: was `*mut SScreenBlockFeatureStorage`. Nothing in the tree assigns
+    /// this field — `AllocPicture` *refuses* `iNeedFeatureStorage != 0` and the
+    /// allocator that would have filled it was deleted at T7.C6 (F229) — so it is
+    /// `None` for the life of every picture the port can build. Owning it as an
+    /// `Option<Box<..>>` says that in the type, costs nothing (`Option<Box<T>>` is
+    /// niche-optimised to one word, so `assert_size!(SPicture, 344)` is unchanged),
+    /// and deletes the only reason `SetUnref` was `unsafe` — which had **16** call
+    /// sites. Phase 10 fills it with a `Some`; the struct and its fields stay, which
+    /// is the boundary T7.C6 drew.
+    pub pScreenBlockFeatureStorage: Option<Box<SScreenBlockFeatureStorage>>,
 }
 
 impl SPicture {
@@ -220,7 +229,7 @@ impl SPicture {
             iFrameAverageQp: 0,
 
             // SCREEN_CONTENT(dormant: Phase 10)
-            pScreenBlockFeatureStorage: std::ptr::null_mut(),
+            pScreenBlockFeatureStorage: None,
         })
     }
 
@@ -394,11 +403,9 @@ impl SPicture {
 
     /// Set picture as unreferenced. Matches `SPicture::SetUnref()`, `picture.h:106`.
     ///
-    /// # Safety
-    /// `pScreenBlockFeatureStorage` must be null or point to a valid storage block.
-    // unsafe-cat: port-raw(Phase 9)
-    #[allow(unsafe_code)]
-    pub unsafe fn SetUnref(&mut self) {
+    /// **S5.C6c**: safe. Its one unsafe operation was the null-guarded write below,
+    /// through a field that is now an `Option<Box<..>>`.
+    pub fn SetUnref(&mut self) {
         self.iFramePoc = -1;
         self.iFrameNum = -1;
         self.uiTemporalId = 255;
@@ -410,8 +417,8 @@ impl SPicture {
         self.bUsedAsRef = false;
 
         // SCREEN_CONTENT(dormant: Phase 10)
-        if !self.pScreenBlockFeatureStorage.is_null() {
-            (*self.pScreenBlockFeatureStorage).bRefBlockFeatureCalculated = false;
+        if let Some(storage) = self.pScreenBlockFeatureStorage.as_deref_mut() {
+            storage.bRefBlockFeatureCalculated = false;
         }
     }
 }
