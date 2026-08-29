@@ -1797,7 +1797,7 @@ unsafe fn EncodeOnePartitionSizeLimited(
             pfDeblockingFilterSlice(pCurDq, &mut *pSlice);
 
             iAnyMbLeftInPartition = kiEndMbIdxInPartition
-                - (*pCurDq).LastCodedMbIdxOfPartition[kiPartitionId as usize];
+                - (*pCurDq).LastCodedMbIdxOfPartition[kiPartitionId as usize].load(Ordering::Relaxed);
             iLocalSliceIdx += kiSliceIdxStep;
             (*current_layer(pCtx)).sSliceBufferInfo[iBsSlot as usize].iCodedSliceNum += 1;
         }

@@ -6621,3 +6621,43 @@ screen-content family is dangerous because the search tree is API-reachable and 
 can see it. This is the same fact from the other side: that path is reachable enough to
 contain a live null dereference. Both conclusions stand together — the code must not be
 deleted blind, and it must not be left unexamined either.
+
+## F234 — a two-thread Miri race probe with too few rounds is not a weak referee, it is a blind one that reads as a passing test
+
+S5's brief makes targeted Miri probes the referee for every multi-threading seam:
+"build the data structure by hand *without* an encoder, spawn two threads doing exactly
+what the workers do, and let Miri judge." It does not say how long they must run, and
+the answer is not "long enough to be thorough" — it is **long enough for Miri's
+scheduler to interleave the two accesses at all**.
+
+Measured while building D2a's probe, on the probe's own control:
+
+| rounds | non-atomic control (the teeth check) |
+|---|---|
+| 8   | **green** — silent |
+| 200 | red: "Data race detected between (1) non-atomic write on thread `unnamed-2` and (2) retag read of type `SDqLayer` on thread `unnamed-3`" |
+
+Same code, same flags, same two threads; only the loop count differs. Miri's data-race
+detector reports races in the schedule it actually runs, and its default preemption rate
+is low, so two short worker bodies can run almost to completion without the interleaving
+that exposes the conflict. Raising `-Zmiri-preemption-rate` to 0.5 did not change the
+8-round verdict either — **rounds, not preemption, was the variable that mattered here**.
+
+**Why this is worse than a weak test.** The 8-round probe passed with the atomics in
+place *and* passed with them taken away. Had it been written that way and committed, it
+would have sat in the Miri lane as a green referee for a property it could not observe,
+and the next session would have read its passing status as evidence. That is the same
+failure mode as a filter that matches no tests — which `gates.sh` already guards against
+with its own F17 rule for renamed probes — arriving through a different door.
+
+**The rule this fixes.** A probe of this shape is not finished when it passes. It is
+finished when its *control* — the same probe with the property deliberately broken —
+has been run and seen to fail. D2a's probe carries the round count as a documented
+constant with this reason attached, so that a later reader trimming it "because 200
+seems excessive" is told what 200 is buying.
+
+The two probes this session added were both teeth-checked before being relied on:
+C4b's (`mvd_cursor_survives_a_slice_held_across_the_forked_workers`, red on the
+whole-context spelling) and D2a's (red on the non-atomic field). C4b's happened to be
+sharp at 8 rounds because its control conflicts on every iteration; D2a's does not, and
+nothing about the two probes' shape says which is which. Check the control.
