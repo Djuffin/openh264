@@ -6699,3 +6699,51 @@ a raw layer pointer, cross-referenced against `phase9_forksplit.py`, reports **z
 the one remaining in-fork `&mut`, and it now lands in the box. `sMbDataP` was never an
 obstacle: `MbArray<T>` is `Vec`-backed, so per-worker macroblock writes already went to
 a separate allocation.
+
+## F236 — the `&SDqLayer` flip is unsound as a straight substitution, because `current_layer` can return null and ten bodies' null guards are load-bearing; here is the split it actually needs
+
+D2a and D2b removed both reasons a body could not *hold* `&SDqLayer` — no field of the
+layer is written from inside the fork any more. S5 then attempted the flip itself
+(D2c) and **reverted it**. The obstacle is not aliasing; it is nullability, and it is
+worth writing down because the naive version compiles.
+
+**The hazard.** `current_layer` returns `*mut SDqLayer` and answers **null** whenever
+`iCurDqLayer` is `None` (`svc_encode_slice.rs:712`). Today that is handled *inside* the
+callees: fourteen bodies open with `if pCurLayer.is_null() { return .. }`. Flip the
+parameter to `&SDqLayer` and the obligation silently moves to the call sites, which
+become `&*current_layer(pEncCtx)` — **a null dereference the moment the layer is
+unset**. It compiles, every test passes, and the defect lives on the path where
+`iCurDqLayer` is `None`.
+
+**The split the flip needs**, measured at this tree over 41 bodies taking
+`*mut SDqLayer`:
+
+* **4 writers — stay raw.** `UpdateMbListNeighborParallel`, `WelsSliceHeaderWrite`,
+  `WelsSliceHeaderExtWrite`, `ReallocateSliceList`. (The brief says three; the fourth is
+  `ReallocateSliceInThread`'s sibling `ReallocateSliceList`, and note that a
+  writes-detecting *regex* misses `..sSliceBufferInfo[i].iMaxSliceNum = ..` because of
+  the field path after the index — the compiler is the only reliable classifier here,
+  which is the brief's own rule.)
+* **10 readers whose null guard is load-bearing — need `Option<&SDqLayer>`**, with the
+  guard rewritten as `let Some(x) = x else { <the guard's own return> };`:
+  `slice_in_layer`, `WelsMbToSliceIdc`, `UpdateMbNeighbor`,
+  `UpdateMbNeighbourInfoForNextSlice`, `WelsSliceHeaderScalExtInit`,
+  `WelsSliceHeaderExtInit`, `OutputPMbWithoutConstructCsRsNoCopy`,
+  `WelsGetNextMbOfSlice`, `SetSliceBoundaryInfo`, `WelsMdI16x16`. Four of these guard on
+  a *compound* condition (`pCurLayer.is_null() || kiSliceIdx < 0`,
+  `pEncCtx.is_null() || pCurLayer.is_null()`, …) and must be split by hand, not by
+  pattern.
+* **27 readers with no guard — take `&SDqLayer` directly.** Their callers already
+  guarantee non-null, because those bodies already dereference unconditionally; forming
+  `&*ptr` at the call site assumes exactly what the existing deref assumed, and no more.
+
+**Cost, measured**: 125 call sites take `&*`, driven mechanically off rustc's spans;
+that part converged in one pass, 296 errors to 39.
+
+**Why it was reverted rather than finished.** The remaining work is ten hand edits, and
+the attempt reached them through several broad regex passes over 150 sites. A
+pattern-rewrite of `if x.is_null()` cannot tell which `x` is the layer, and applying one
+to a half-converted tree — in fork-shared code, at the end of a long session — is the
+shape that lands a silent defect. The prerequisites are committed and probe-verified;
+the flip is mechanical from this finding and should be started from a clean tree with
+the three groups above applied deliberately, writers first.
