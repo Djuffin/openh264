@@ -611,7 +611,7 @@ impl SWelsRcFunc {
     #[inline]
     // unsafe-cat: fork-shared(S63)
     #[allow(unsafe_code)]
-    pub unsafe fn WelsRcMbInit(self, pCtx: *mut sWelsEncCtx, pCurMb: &mut SMB, pSlice: &mut SSlice) {
+    pub unsafe fn WelsRcMbInit(self, pCtx: &sWelsEncCtx, pCurMb: &mut SMB, pSlice: &mut SSlice) {
         match self.eInstalledMode {
             RCMode::RC_OFF_MODE | RCMode::RC_BUFFERBASED_MODE => {
                 WelsRcMbInitDisable(pCtx, pCurMb, pSlice)
@@ -632,7 +632,7 @@ impl SWelsRcFunc {
     #[allow(unsafe_code)]
     pub unsafe fn WelsRcMbInfoUpdate(
         self,
-        pCtx: *mut sWelsEncCtx,
+        pCtx: &sWelsEncCtx,
         pCurMb: &mut SMB,
         iCostLuma: i32,
         pSlice: &mut SSlice,
@@ -1605,7 +1605,7 @@ pub unsafe fn RcInitGomParameters(pEncCtx: &mut sWelsEncCtx) {
 // unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
 pub unsafe fn RcCalculateMbQp(
-    pEncCtx: *mut sWelsEncCtx,
+    pEncCtx: &sWelsEncCtx,
     pSOverRc: &mut crate::encoder::svc_encode_slice::SRCSlicing,
     pCurMb: &mut SMB,
 ) {
@@ -1643,9 +1643,7 @@ pub unsafe fn RcCalculateMbQp(
 /// exactly that with `is_null()`. The lifetime is free (the input is a raw
 /// pointer), which is the same shape `ctx_ref_pic`/`ctx_pic_ref` already use in
 /// `svc_encode_slice.rs`; the body is in-fork and reads only.
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
-pub unsafe fn RcJudgeBaseUsability<'a>(pEncCtx: *mut sWelsEncCtx) -> Option<&'a SWelsSvcRc> {
+pub fn RcJudgeBaseUsability<'a>(pEncCtx: &'a sWelsEncCtx) -> Option<&'a SWelsSvcRc> {
     let did = (*pEncCtx).uiDependencyId as usize;
     if did == 0 {
         return None;
@@ -1671,10 +1669,8 @@ pub unsafe fn RcJudgeBaseUsability<'a>(pEncCtx: *mut sWelsEncCtx) -> Option<&'a 
 }
 
 /// Distributes slice bit budget to the upcoming GOM unit.
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
-pub unsafe fn RcGomTargetBits(
-    pEncCtx: *mut sWelsEncCtx,
+pub fn RcGomTargetBits(
+    pEncCtx: &sWelsEncCtx,
     pSOverRc: &mut crate::encoder::svc_encode_slice::SRCSlicing,
 ) {
     let did = (*pEncCtx).uiDependencyId as usize;
@@ -1714,10 +1710,8 @@ pub unsafe fn RcGomTargetBits(
 }
 
 /// Dynamically adjusts slice QP at GOM boundaries.
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
-pub unsafe fn RcCalculateGomQp(
-    pEncCtx: *mut sWelsEncCtx,
+pub fn RcCalculateGomQp(
+    pEncCtx: &sWelsEncCtx,
     pSOverRc: &mut crate::encoder::svc_encode_slice::SRCSlicing,
     _pCurMb: &mut SMB,
 ) {
@@ -2396,7 +2390,7 @@ pub unsafe extern "C" fn WelsRcPictureInfoUpdateGom(pEncCtx: &mut sWelsEncCtx, i
 // unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsRcMbInitGom(
-    pEncCtx: *mut sWelsEncCtx,
+    pEncCtx: &sWelsEncCtx,
     pCurMb: &mut SMB,
     pSlice: &mut SSlice,
 ) {
@@ -2446,7 +2440,7 @@ pub unsafe extern "C" fn WelsRcMbInitGom(
 // unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsRcMbInfoUpdateGom(
-    pEncCtx: *mut sWelsEncCtx,
+    pEncCtx: &sWelsEncCtx,
     pCurMb: &mut SMB,
     _iCostLuma: i32,
     pSlice: &mut SSlice,
@@ -2508,7 +2502,7 @@ pub extern "C" fn WelsRcPictureInfoUpdateDisable(_pEncCtx: &mut sWelsEncCtx, _iL
 // unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsRcMbInitDisable(
-    pEncCtx: *mut sWelsEncCtx,
+    pEncCtx: &sWelsEncCtx,
     pCurMb: &mut SMB,
     _pSlice: &mut SSlice,
 ) {
@@ -2542,10 +2536,8 @@ pub unsafe extern "C" fn WelsRcMbInitDisable(
 
 /// Intentional no-op macroblock-level RC update callback when rate control is disabled.
 /// Matches `WelsRcMbInfoUpdateDisable` in `ratectl.cpp:1319`.
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
-pub unsafe extern "C" fn WelsRcMbInfoUpdateDisable(
-    _pEncCtx: *mut sWelsEncCtx,
+pub extern "C" fn WelsRcMbInfoUpdateDisable(
+    _pEncCtx: &sWelsEncCtx,
     _pCurMb: &mut SMB,
     _iCostLuma: i32,
     _pSlice: &mut SSlice,
@@ -2910,9 +2902,14 @@ mod tests {
         // remains worth running is that each no-op is callable and answers its
         // documented value, so a real context takes the nulls' place.
         //
-        // `WelsRcMbInfoUpdateDisable` keeps its raw context and its null: it is
-        // in-fork (S63) and its parameter is staying `*mut`-sWelsEncCtx, so the
-        // original assertion still means what it meant.
+        // **S7.A5**: `WelsRcMbInfoUpdateDisable` no longer keeps its raw context, so
+        // the null this line used to pass is unrepresentable — and it was F238's class
+        // besides: the body is empty, so `&*null` would have been *newly* undefined
+        // where passing a null raw pointer to a body that ignores it was defined. The
+        // assertion is unchanged in what it means (the no-op arm runs and does
+        // nothing); it says it with the context the test already built. Every
+        // production caller reaches this through `pfRc.WelsRcMbInfoUpdate`, whose
+        // context is the encode path's and never null.
         let mut ctx = Box::new(sWelsEncCtx::default());
         unsafe {
             assert!(!WelsRcPostFrameSkipping(&mut ctx, 0, 0));
@@ -2920,7 +2917,7 @@ mod tests {
             WelsRcPictureInfoUpdateDisable(&mut ctx, 0);
             let mut sMb = SMB::default();
             let mut sSlice = crate::encoder::svc_encode_slice::SSlice::new();
-            WelsRcMbInfoUpdateDisable(std::ptr::null_mut(), &mut sMb, 0, &mut sSlice);
+            WelsRcMbInfoUpdateDisable(&ctx, &mut sMb, 0, &mut sSlice);
         }
     }
 }

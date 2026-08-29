@@ -1055,8 +1055,8 @@ pub fn WelsWriteMbResidualCabac(
 
 // unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
-pub unsafe fn WelsInitSliceCabac(
-    pEncCtx: *mut crate::encoder::encoder_context::sWelsEncCtx,
+pub fn WelsInitSliceCabac(
+    pEncCtx: &crate::encoder::encoder_context::sWelsEncCtx,
     pSlice: &mut SSlice,
 ) {
     unsafe {
@@ -1089,8 +1089,8 @@ pub unsafe fn WelsInitSliceCabac(
 
 // unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
-pub unsafe fn WelsSpatialWriteMbSynCabac(
-    pEncCtx: *mut crate::encoder::encoder_context::sWelsEncCtx,
+pub fn WelsSpatialWriteMbSynCabac(
+    pEncCtx: &crate::encoder::encoder_context::sWelsEncCtx,
     pSlice: &mut SSlice,
     mbs: &mut crate::safe::mb_grid::MbWindow<'_, SMB>,
 ) -> i32 {

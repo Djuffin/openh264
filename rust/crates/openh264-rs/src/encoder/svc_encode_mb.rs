@@ -494,7 +494,7 @@ pub unsafe fn WelsDctMb(
 // unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
 pub unsafe fn WelsEncRecI16x16Y(
-    pEncCtx: *mut sWelsEncCtx,
+    pEncCtx: &sWelsEncCtx,
     pCurMb: &mut SMB,
     pMbCache: &mut SMbCache,
 ) {
@@ -665,7 +665,7 @@ pub unsafe fn WelsEncRecI16x16Y(
 // unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
 pub unsafe fn WelsEncRecI4x4Y(
-    pEncCtx: *mut sWelsEncCtx,
+    pEncCtx: &sWelsEncCtx,
     pCurMb: &mut SMB,
     pMbCache: &mut SMbCache,
     uiI4x4Idx: u8,
@@ -1029,10 +1029,8 @@ pub fn WelsEncRecUV(
 ///
 /// # Safety
 /// All pointers in `pEncCtx`, `pCurMb`, and `pMbCache` must be valid.
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
-pub unsafe fn WelsTryPYskip(
-    pEncCtx: *mut sWelsEncCtx,
+pub fn WelsTryPYskip(
+    pEncCtx: &sWelsEncCtx,
     pCurMb: &mut SMB,
     pMbCache: &mut SMbCache,
 ) -> bool {
@@ -1085,7 +1083,7 @@ pub unsafe fn WelsTryPYskip(
 // unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
 pub unsafe fn WelsTryPUVskip(
-    pEncCtx: *mut sWelsEncCtx,
+    pEncCtx: &sWelsEncCtx,
     pCurMb: &mut SMB,
     pMbCache: &mut SMbCache,
     iUV: i32,

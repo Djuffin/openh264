@@ -320,7 +320,7 @@ pub fn PredIntra4x4Mode(pIntraPredMode: &[i8; 48], iIdx4: i32) -> i32 {
 // unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
 pub unsafe fn WelsMdIntraInit(
-    pEncCtx: *mut sWelsEncCtx,
+    pEncCtx: &sWelsEncCtx,
     mbs: &mut crate::safe::mb_grid::MbWindow<'_, SMB>,
     pMbCache: &mut SMbCache,
     iSliceFirstMbXY: i32,
@@ -369,7 +369,7 @@ pub unsafe fn WelsMdIntraInit(
 // unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsMdI4x4(
-    pEncCtx: *mut sWelsEncCtx,
+    pEncCtx: &sWelsEncCtx,
     pWelsMd: &mut SWelsMD<'_>,
     pCurMb: &mut SMB,
     pMbCache: &mut SMbCache,
@@ -515,7 +515,7 @@ fn StoreIntra4x4PredModeToMb(pCurMb: &mut SMB, pMbCache: &mut SMbCache) {
 // unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsMdI4x4Fast(
-    pEncCtx: *mut sWelsEncCtx,
+    pEncCtx: &sWelsEncCtx,
     pWelsMd: &mut SWelsMD<'_>,
     pCurMb: &mut SMB,
     pMbCache: &mut SMbCache,
@@ -820,7 +820,7 @@ pub unsafe extern "C" fn WelsMdIntraChroma(
 // unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
 pub unsafe fn WelsMdIntraFinePartition(
-    pEncCtx: *mut sWelsEncCtx,
+    pEncCtx: &sWelsEncCtx,
     pWelsMd: &mut SWelsMD<'_>,
     pCurMb: &mut SMB,
     pMbCache: &mut SMbCache,
@@ -843,7 +843,7 @@ pub unsafe fn WelsMdIntraFinePartition(
 // unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
 pub unsafe fn WelsMdIntraFinePartitionVaa(
-    pEncCtx: *mut sWelsEncCtx,
+    pEncCtx: &sWelsEncCtx,
     pWelsMd: &mut SWelsMD<'_>,
     pCurMb: &mut SMB,
     pMbCache: &mut SMbCache,
@@ -874,7 +874,7 @@ pub unsafe fn WelsMdIntraFinePartitionVaa(
 // unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
 pub unsafe fn WelsMdIntraMb(
-    pEncCtx: *mut sWelsEncCtx,
+    pEncCtx: &sWelsEncCtx,
     pWelsMd: &mut SWelsMD<'_>,
     pCurMb: &mut SMB,
     pMbCache: &mut SMbCache,
@@ -926,7 +926,7 @@ pub const g_kiPixStrideIdx8x8: [i32; 4] = [
 // unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
 pub unsafe fn WelsMdInterInit(
-    pEncCtx: *mut sWelsEncCtx,
+    pEncCtx: &sWelsEncCtx,
     pSlice: &mut SSlice,
     // Stays raw, and the reason is one call below: `pfFillInterNeighborCache` is a
     // neighbour-walker (`pCurMb.offset(-1)` in `FillNeighborCacheInter*`), so its
@@ -1148,7 +1148,7 @@ pub unsafe extern "C" fn WelsMdP8x16<'a>(
 // unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
 pub unsafe fn WelsMdInterFinePartition(
-    pEncCtx: *mut sWelsEncCtx,
+    pEncCtx: &sWelsEncCtx,
     pWelsMd: &mut SWelsMD<'_>,
     pSlice: &mut SSlice,
     pCurMb: &mut SMB,
@@ -1188,7 +1188,7 @@ pub unsafe fn WelsMdInterFinePartition(
 // unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
 pub unsafe fn WelsMdInterFinePartitionVaa(
-    pEncCtx: *mut sWelsEncCtx,
+    pEncCtx: &sWelsEncCtx,
     pWelsMd: &mut SWelsMD<'_>,
     pSlice: &mut SSlice,
     pCurMb: &mut SMB,
@@ -1290,7 +1290,7 @@ pub unsafe fn WelsMdInterFinePartitionVaa(
 // unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
 pub unsafe fn WelsMdPSkipEnc(
-    pEncCtx: *mut sWelsEncCtx,
+    pEncCtx: &sWelsEncCtx,
     pWelsMd: &mut SWelsMD<'_>,
     pCurMb: &mut SMB,
     pMbCache: &mut SMbCache,
@@ -1505,7 +1505,7 @@ pub unsafe fn WelsMdPSkipEnc(
 // unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
 unsafe fn AcceptPskip(
-    pEncCtx: *mut sWelsEncCtx,
+    pEncCtx: &sWelsEncCtx,
     pWelsMd: &mut SWelsMD<'_>,
     pCurMb: &mut SMB,
     pMbCache: &SMbCache,
@@ -1551,7 +1551,7 @@ unsafe fn AcceptPskip(
 // unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
 pub unsafe fn WelsMdInterMbRefinement(
-    pEncCtx: *mut sWelsEncCtx,
+    pEncCtx: &sWelsEncCtx,
     pWelsMd: &mut SWelsMD<'_>,
     pCurMb: &mut SMB,
     pMbCache: &mut SMbCache,
@@ -1864,7 +1864,7 @@ pub unsafe fn WelsMdInterMbRefinement(
 // unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
 pub unsafe fn WelsMdFirstIntraMode(
-    pEncCtx: *mut sWelsEncCtx,
+    pEncCtx: &sWelsEncCtx,
     pWelsMd: &mut SWelsMD<'_>,
     pCurMb: &mut SMB,
     pMbCache: &mut SMbCache,
@@ -1915,7 +1915,7 @@ pub unsafe fn WelsMdFirstIntraMode(
 // unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
 pub unsafe fn WelsMdInterMb(
-    pEncCtx: *mut sWelsEncCtx,
+    pEncCtx: &sWelsEncCtx,
     pWelsMd: &mut SWelsMD<'_>,
     pSlice: &mut SSlice,
     mbs: &mut crate::safe::mb_grid::MbWindow<'_, SMB>,
@@ -2038,7 +2038,7 @@ fn LD32_MV_PUB(pMv: &SMVUnitXY) -> u32 {
 // unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
 pub unsafe fn WelsMdInterEncode(
-    pEncCtx: *mut sWelsEncCtx,
+    pEncCtx: &sWelsEncCtx,
     pSlice: &mut SSlice,
     pCurMb: &mut SMB,
 ) {

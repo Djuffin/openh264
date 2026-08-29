@@ -162,7 +162,7 @@ pub enum ESkipModes {
 
 
 pub type pJudgeSkipFun = unsafe extern "C" fn(
-    pEncCtx: *mut sWelsEncCtx,
+    pEncCtx: &sWelsEncCtx,
     pCurMb: &mut SMB,
     pMbCache: &mut SMbCache,
     pWelsMd: &mut SWelsMD<'_>,
@@ -287,7 +287,7 @@ pub fn WELS_CLIP3(iX: i32, iMin: i32, iMax: i32) -> i32 {
 // unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsMdInterUpdatePskip(
-    pEncCtx: *mut sWelsEncCtx,
+    pEncCtx: &sWelsEncCtx,
     pCurDqLayer: &SDqLayer,
     pSlice: &mut SSlice,
     pCurMb: &mut SMB,
@@ -321,7 +321,7 @@ fn LD32_MV(pMv: &SMVUnitXY) -> u32 {
 // unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsMdInterJudgePskip(
-    pEncCtx: *mut sWelsEncCtx,
+    pEncCtx: &sWelsEncCtx,
     pWelsMd: &mut SWelsMD<'_>,
     pSlice: &mut SSlice,
     pCurMb: &mut SMB,
@@ -359,7 +359,7 @@ pub unsafe extern "C" fn WelsMdInterJudgePskip(
 // unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsMdInterDecidedPskip(
-    pEncCtx: *mut sWelsEncCtx,
+    pEncCtx: &sWelsEncCtx,
     pSlice: &mut SSlice,
     pCurMb: &mut SMB,
 ) {
@@ -382,7 +382,7 @@ pub unsafe extern "C" fn WelsMdInterDecidedPskip(
 // unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsMdInterSecondaryModesEnc(
-    pEncCtx: *mut sWelsEncCtx,
+    pEncCtx: &sWelsEncCtx,
     pWelsMd: &mut SWelsMD<'_>,
     pSlice: &mut SSlice,
     pCurMb: &mut SMB,
@@ -441,7 +441,7 @@ pub unsafe extern "C" fn WelsMdInterSecondaryModesEnc(
 // unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsMdIntraSecondaryModesEnc(
-    pEncCtx: *mut sWelsEncCtx,
+    pEncCtx: &sWelsEncCtx,
     pWelsMd: &mut SWelsMD<'_>,
     pCurMb: &mut SMB,
     pMbCache: &mut SMbCache,
@@ -594,7 +594,7 @@ unsafe fn VaaBackgroundMbDataUpdate(
 // unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsMdBackgroundMbEnc(
-    pEncCtx: *mut sWelsEncCtx,
+    pEncCtx: &sWelsEncCtx,
     pWelsMd: &mut SWelsMD<'_>,
     pCurMb: &mut SMB,
     pSlice: &mut SSlice,
@@ -755,7 +755,7 @@ pub unsafe extern "C" fn WelsMdBackgroundMbEnc(
 
     WelsInterMbEncode(pEncCtx, pSlice, pCurMb);
     WelsPMbChromaEncode(
-        pEncCtx as *mut crate::encoder::svc_encode_slice::sWelsEncCtx,
+        pEncCtx,
         &mut *pSlice,
         pCurMb,
     );
@@ -1433,7 +1433,7 @@ pub unsafe extern "C" fn WelsMdP8x8<'a>(
 
 // unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
-pub unsafe extern "C" fn WelsInterMbEncode(pEncCtx: *mut sWelsEncCtx, pSlice: &mut SSlice, pCurMb: &mut SMB) {
+pub unsafe extern "C" fn WelsInterMbEncode(pEncCtx: &sWelsEncCtx, pSlice: &mut SSlice, pCurMb: &mut SMB) {
     // Port-added guard deleted with the retyping: `svc_encode_slice.cpp:458` opens at
     // `SMbCache* pMbCache = &pSlice->sMbCacheInfo;` and checks nothing.
     let pMbCache = &mut pSlice.sMbCacheInfo;
@@ -1477,7 +1477,7 @@ pub unsafe extern "C" fn WelsInterMbEncode(pEncCtx: *mut sWelsEncCtx, pSlice: &m
 #[inline(always)]
 // unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
-pub unsafe fn GetRefMb(pEncCtx: *mut sWelsEncCtx, pCurMb: &SMB) -> SMB {
+pub unsafe fn GetRefMb(pEncCtx: &sWelsEncCtx, pCurMb: &SMB) -> SMB {
     let kRefIdx = (*current_layer(pEncCtx))
         .pRefLayer
         .expect("GetRefMb on a layer with no base layer: bBaseLayerAvailableFlag gates every caller");
@@ -1559,7 +1559,7 @@ pub fn SetMvBaseEnhancelayer(
 // unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
 pub unsafe fn WelsMdSpatialelInterMbIlfmdNoilp(
-    pEncCtx: *mut sWelsEncCtx,
+    pEncCtx: &sWelsEncCtx,
     pWelsMd: &mut SWelsMD<'_>,
     pSlice: &mut SSlice,
     mbs: &mut crate::safe::mb_grid::MbWindow<'_, SMB>,
@@ -1649,7 +1649,7 @@ pub unsafe fn WelsMdSpatialelInterMbIlfmdNoilp(
 // unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
 pub unsafe fn WelsMdInterMbEnhancelayer(
-    pEncCtx: *mut sWelsEncCtx,
+    pEncCtx: &sWelsEncCtx,
     pMd: &mut SWelsMD<'_>,
     pSlice: &mut SSlice,
     mbs: &mut crate::safe::mb_grid::MbWindow<'_, SMB>,
@@ -1702,7 +1702,7 @@ pub fn IsCostLessEqualSkipCost(
 // unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
 pub unsafe fn CheckChromaCost(
-    pEncCtx: *mut sWelsEncCtx,
+    pEncCtx: &sWelsEncCtx,
     pWelsMd: &mut SWelsMD<'_>,
     pMbCache: &mut SMbCache,
     iCurMbXy: i32,
@@ -1757,7 +1757,7 @@ pub unsafe fn CheckChromaCost(
 // unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
 pub unsafe fn WelsMdInterJudgeBGDPskip(
-    pEncCtx: *mut sWelsEncCtx,
+    pEncCtx: &sWelsEncCtx,
     pWelsMd: &mut SWelsMD<'_>,
     pSlice: &mut SSlice,
     pCurMb: &mut SMB,
@@ -1800,10 +1800,8 @@ pub unsafe fn WelsMdInterJudgeBGDPskip(
     false
 }
 
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
-pub unsafe fn WelsMdInterJudgeBGDPskipFalse(
-    _pCtx: *mut sWelsEncCtx,
+pub fn WelsMdInterJudgeBGDPskipFalse(
+    _pCtx: &sWelsEncCtx,
     _pMd: &mut SWelsMD<'_>,
     _pSlice: &mut SSlice,
     _pCurMb: &mut SMB,
@@ -1942,7 +1940,7 @@ pub fn CheckBorder(
 // unsafe-cat: SCREEN_CONTENT(dormant)
 #[allow(unsafe_code)]
 pub unsafe extern "C" fn JudgeStaticSkip(
-    pEncCtx: *mut sWelsEncCtx,
+    pEncCtx: &sWelsEncCtx,
     pCurMb: &mut SMB,
     pMbCache: &mut SMbCache,
     pWelsMd: &mut SWelsMD<'_>,
@@ -2001,7 +1999,7 @@ pub unsafe extern "C" fn JudgeStaticSkip(
 // unsafe-cat: SCREEN_CONTENT(dormant)
 #[allow(unsafe_code)]
 pub unsafe extern "C" fn JudgeScrollSkip(
-    pEncCtx: *mut sWelsEncCtx,
+    pEncCtx: &sWelsEncCtx,
     pCurMb: &mut SMB,
     pMbCache: &mut SMbCache,
     pWelsMd: &mut SWelsMD<'_>,
@@ -2073,7 +2071,7 @@ pub unsafe extern "C" fn JudgeScrollSkip(
 // unsafe-cat: SCREEN_CONTENT(dormant)
 #[allow(unsafe_code)]
 pub unsafe extern "C" fn SvcMdSCDMbEnc(
-    pEncCtx: *mut sWelsEncCtx,
+    pEncCtx: &sWelsEncCtx,
     pWelsMd: &mut SWelsMD<'_>,
     pCurMb: &mut SMB,
     pSlice: &mut SSlice,
@@ -2227,7 +2225,7 @@ pub unsafe extern "C" fn SvcMdSCDMbEnc(
 
     WelsInterMbEncode(pEncCtx, pSlice, pCurMb);
     WelsPMbChromaEncode(
-        pEncCtx as *mut crate::encoder::svc_encode_slice::sWelsEncCtx,
+        pEncCtx,
         &mut *pSlice,
         pCurMb,
     );
@@ -2276,7 +2274,7 @@ pub unsafe extern "C" fn SvcMdSCDMbEnc(
 // unsafe-cat: SCREEN_CONTENT(dormant)
 #[allow(unsafe_code)]
 pub unsafe extern "C" fn MdInterSCDPskipProcess(
-    pEncCtx: *mut sWelsEncCtx,
+    pEncCtx: &sWelsEncCtx,
     pWelsMd: &mut SWelsMD<'_>,
     pSlice: &mut SSlice,
     pCurMb: &mut SMB,
@@ -2379,7 +2377,7 @@ pub unsafe fn SetBlockStaticIdcToMd(
 // unsafe-cat: SCREEN_CONTENT(dormant)
 #[allow(unsafe_code)]
 pub unsafe fn WelsMdInterJudgeSCDPskip(
-    pEncCtx: *mut sWelsEncCtx,
+    pEncCtx: &sWelsEncCtx,
     pWelsMd: &mut SWelsMD<'_>,
     slice: &mut SSlice,
     pCurMb: &mut SMB,
@@ -2397,10 +2395,8 @@ pub unsafe fn WelsMdInterJudgeSCDPskip(
     false
 }
 
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
-pub unsafe fn WelsMdInterJudgeSCDPskipFalse(
-    _pEncCtx: *mut sWelsEncCtx,
+pub fn WelsMdInterJudgeSCDPskipFalse(
+    _pEncCtx: &sWelsEncCtx,
     _pWelsMd: &mut SWelsMD<'_>,
     _slice: &mut SSlice,
     _pCurMb: &mut SMB,
@@ -2485,7 +2481,7 @@ pub unsafe fn TryModeMerge(
 // unsafe-cat: SCREEN_CONTENT(dormant)
 #[allow(unsafe_code)]
 pub unsafe fn WelsMdInterFinePartitionVaaOnScreen(
-    pEncCtx: *mut sWelsEncCtx,
+    pEncCtx: &sWelsEncCtx,
     pWelsMd: &mut SWelsMD<'_>,
     pSlice: &mut SSlice,
     pCurMb: &mut SMB,

@@ -933,12 +933,13 @@ pub unsafe fn AppendSliceToFrameBs(
 // unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
 pub unsafe fn WriteSliceBs(
-    pCtx: *mut sWelsEncCtx,
+    pCtx: &sWelsEncCtx,
     pSlice: &mut SSlice,
     _iSliceIdx: i32,
     iSliceSize: &mut i32,
 ) -> i32 {
-    if pCtx.is_null() || current_layer(pCtx).is_null() {
+    // **S7.A5**: the context arm retires with the parameter; the layer arm is live.
+    if current_layer(pCtx).is_null() {
         return 0;
     }
     let pSliceBs = std::ptr::addr_of_mut!((*pSlice).sSliceBs);
@@ -1273,7 +1274,13 @@ mod tests {
 /// deterministic and is why the claiming mutex can go.
 pub struct SliceJobHandle {
     /// The encoder context, held raw exactly as `CWelsBaseTask::m_pCtx` held it.
-    pCtx: *mut sWelsEncCtx,
+    /// The encoder context. **S7.A5**: `*const`, not `*mut` — the three sites that
+    /// read it form `&*job.pCtx` and nothing writes through it (S7.A1 measured the
+    /// context's write set at one body, single-threaded, and not this one). Still raw,
+    /// and still behind the hand-written `Send` below: `sWelsEncCtx` cannot be `Sync`
+    /// while `sLogCtx` holds the caller's `void*` (F245), so the pointer crosses the
+    /// spawn and each worker derives its own shared reference after arrival.
+    pCtx: *const sWelsEncCtx,
     /// This worker's bs scratch slot: `pSliceThreading->pThreadBsBuffer[iBsSlot]`,
     /// reached from the slice through `SSlice::uiBufferIdx`.
     iBsSlot: i32,
@@ -1393,7 +1400,7 @@ impl SliceJobHandle {
     // unsafe-cat: fork-shared(S63)
     #[allow(unsafe_code)]
     unsafe fn new(
-        pCtx: *mut sWelsEncCtx,
+        pCtx: &sWelsEncCtx,
         iBsSlot: i32,
         iFirstSlice: i32,
         iSliceStep: i32,
@@ -1424,7 +1431,7 @@ impl SliceJobHandle {
 // unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
 unsafe fn WritePrefixNalForSlice(
-    pCtx: *mut sWelsEncCtx,
+    pCtx: &sWelsEncCtx,
     pSlice: &mut SSlice,
     eNalRefIdc: EWelsNalRefIdc,
     eNalType: EWelsNalUnitType,
@@ -1474,7 +1481,7 @@ struct SliceJobResult {
 // unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
 unsafe fn EncodeOneSliceInJob(
-    pCtx: *mut sWelsEncCtx,
+    pCtx: &sWelsEncCtx,
     iSliceIdx: i32,
     iBsSlot: i32,
     bRecordsTime: bool,
@@ -1597,7 +1604,7 @@ pub unsafe fn EncodeFixedSlicesForked(pCtx: &mut sWelsEncCtx, kiSliceCount: i32)
                 let mut iSliceIdx = job.iFirstSlice;
                 while iSliceIdx < job.iSliceCount {
                     let r = EncodeOneSliceInJob(
-                        job.pCtx,
+                        &*job.pCtx,
                         iSliceIdx,
                         job.iBsSlot,
                         job.bRecordsTime,
@@ -1660,7 +1667,7 @@ pub unsafe fn UpdateMbMapForked(pCtx: &mut sWelsEncCtx, kiTaskCount: i32) {
         for job in jobs {
             s.spawn(move || {
                 let job = job;
-                let pCurDq = current_layer(job.pCtx);
+                let pCurDq = current_layer(&*job.pCtx);
                 let mut iSliceIdc = job.iFirstSlice;
                 while iSliceIdc < job.iSliceCount {
                     UpdateMbListNeighborParallel(pCurDq, iSliceIdc);
@@ -1700,7 +1707,7 @@ pub unsafe fn UpdateMbMapForked(pCtx: &mut sWelsEncCtx, kiTaskCount: i32) {
 // unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
 unsafe fn EncodeOnePartitionSizeLimited(
-    pCtx: *mut sWelsEncCtx,
+    pCtx: &sWelsEncCtx,
     iPartitionIdx: i32,
     iBsSlot: i32,
 ) -> SliceJobResult {
@@ -1881,7 +1888,7 @@ pub unsafe fn EncodeSizeLimitedSlicesForked(pCtx: &mut sWelsEncCtx, kiPartitionC
         for job in jobs {
             handles.push(s.spawn(move || {
                 let job = job;
-                let r = EncodeOnePartitionSizeLimited(job.pCtx, job.iFirstSlice, job.iBsSlot);
+                let r = EncodeOnePartitionSizeLimited(&*job.pCtx, job.iFirstSlice, job.iBsSlot);
                 if !r.bInitFailed && r.iResult != ENC_RETURN_SUCCESS {
                     r.iResult
                 } else {
