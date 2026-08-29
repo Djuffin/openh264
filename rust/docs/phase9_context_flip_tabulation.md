@@ -104,14 +104,34 @@ in isolation produces only `E0308` at its own onward calls and never reaches bor
 This is why the measurement had to flip all 106 at once, and it is why the landing must go
 leaf-first. It is also the whole reason `ref_list_mgr_svc.rs` did not move in S6 (F240).
 
-**(b) The fork seam — `SliceJobHandle`.** The handle stores the context
-(`slice_multi_threading.rs:1276`) and carries it across `thread::scope`, under
-`unsafe impl Send for SliceJobHandle` — one of the two `unsafe impl` lines the end state
-keeps. Three sites read `job.pCtx` (`:1578`, `:1641`, `:1862`) and pass it onward. Making
-the field `&'a sWelsEncCtx` adds a lifetime parameter to the struct and requires
-`sWelsEncCtx: Sync` for the handle to stay `Send` — which is the same audited-`unsafe impl`
-shape the reconstruction view already uses, not a new kind of claim. **This is the design
-work of the flip**, and it should be its own checkpoint.
+**(b) The fork seam — `SliceJobHandle`. ~~The design work of the flip.~~ Struck: it
+costs the flip nothing.** *(Corrected at S7.A4 — F245. The paragraph below replaces a
+claim that was wrong twice over.)*
+
+The handle stores the context (`slice_multi_threading.rs:1276`) and carries it across
+`thread::scope` under `unsafe impl Send for SliceJobHandle`; three sites read `job.pCtx`
+(`:1578`, `:1641`, `:1862`) and pass it onward. The first draft said the field should
+become `&'a sWelsEncCtx`, which "requires `sWelsEncCtx: Sync` … not a new kind of claim".
+Both halves are false:
+
+* **`sWelsEncCtx: Sync` is structurally unreachable, and the tree already knew.** The
+  `unsafe impl`'s own audit comment records F205's derivation and its conclusion:
+  `sLogCtx` holds the *application's* opaque `*mut c_void`, set through
+  `SetOption(TRACE_CALLBACK)`, and no internal conversion can make a caller-owned pointer
+  `Sync`. **D-exit-2 already ruled the seam stays.** Re-derived at S7, the reasons are six
+  root types under three fields — `ppDqLayerList`, `pVaa`, `sLogCtx` — down from F205's
+  seven fields (S6.B1 retired one of them), and `sLogCtx` is the one that cannot go.
+* **It is not needed anyway.** The flip never *sends* a `&sWelsEncCtx`. It sends the
+  handle — a raw pointer, which is exactly what the `Send` impl covers — and each worker
+  forms `&*job.pCtx` after arrival, on its own thread. The compiler demands no `Sync`
+  bound for that; verified by probe (a `fn(&sWelsEncCtx)` called from inside the spawned
+  closure compiles unchanged).
+
+What the worker-local shared reference *does* require is the three-part disjointness
+argument the `Send` impl already carries. The flip widens who relies on that argument; it
+does not change what the argument claims. So the handle keeps its raw field and its
+`unsafe impl`, which is the plan's stated end state (§7.4's two audited lines), and this
+item is **not** a prerequisite for (a).
 
 **(c) `ParasetStrategy` — a self-referential borrow, and the second piece of design
 work.** *(Corrected after the first draft of this document; the first draft called this
