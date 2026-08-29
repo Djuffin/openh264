@@ -296,21 +296,25 @@ pub use crate::encoder::vlc_encoder::{
 
 /// Initializes a new raw NAL unit entry in the global encoder output context.
 ///
-/// # Safety
-/// - `pEncoderOuput` must point to a valid and properly initialized `SWelsEncoderOutput` structure.
-/// - `pEncoderOuput.sNalList` must have enough capacity for `iNalIndex`.
+/// **S6.C1**: safe, and the `# Safety` clause retired with the pointer — both of its
+/// obligations are the type's now. "Must point to a valid structure" is what `&mut`
+/// means, and "must have enough capacity for `iNalIndex`" is what indexing `sNalList`
+/// checks. (F231's class, one function at a time.)
 #[inline]
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe extern "C" fn WelsLoadNal(
-    pEncoderOuput: *mut SWelsEncoderOutput,
+pub fn WelsLoadNal(
+    pEncoderOuput: &mut SWelsEncoderOutput,
     kiType: i32,
     kiNalRefIdc: i32,
 ) {
-    if pEncoderOuput.is_null() || (*pEncoderOuput).sNalList.is_empty() {
+    // **S6.C1**: `&mut`, and no call site changed — all nine already passed
+    // `pCtx.pOut.as_deref_mut().expect("pOut lives")` or `&mut *pOut` and were relying
+    // on the coercion. The `is_null()` disjunct goes with the parameter; the
+    // `sNalList.is_empty()` one is the real guard and stays, answering for a list the
+    // allocator never sized.
+    if pEncoderOuput.sNalList.is_empty() {
         return;
     }
-    let pWelsEncoderOuput = &mut *pEncoderOuput;
+    let pWelsEncoderOuput = pEncoderOuput;
     let iNalIndex = pWelsEncoderOuput.iNalIndex as usize;
     let kiStartPos = BsGetBitsPos(&pWelsEncoderOuput.sBsWrite) >> 3;
     let pRawNal = &mut pWelsEncoderOuput.sNalList[iNalIndex];
@@ -326,8 +330,7 @@ pub unsafe extern "C" fn WelsLoadNal(
 
 /// Finalizes the raw NAL unit currently being written in `pEncoderOuput`.
 ///
-/// # Safety
-/// - `pEncoderOuput` must point to a valid `SWelsEncoderOutput` structure.
+/// **S6.C1**: safe; the `# Safety` clause retired with the pointer it described.
 #[inline]
 // unsafe-cat: port-raw(Phase 9)
 // **T9.X — this is not a C-ABI boundary, and the tag stays `port-raw`.** The brief
@@ -343,12 +346,16 @@ pub unsafe extern "C" fn WelsLoadNal(
 // is unchanged — all nine are ordinary Rust calls, which is the whole question —
 // but a conclusion carried by an enumeration is only as good as the enumeration,
 // and the second file was never grepped. S64, on its own evidence. See F180.
-#[allow(unsafe_code)]
-pub unsafe fn WelsUnloadNal(pEncoderOuput: *mut SWelsEncoderOutput) {
-    if pEncoderOuput.is_null() || (*pEncoderOuput).sNalList.is_empty() {
+//
+// **S6.C1 finishes it**: the parameter is `&mut SWelsEncoderOutput`, none of the nine
+// callers changed — every one already passed a reference and was relying on the
+// coercion — and the tag and allow retire together.
+pub fn WelsUnloadNal(pEncoderOuput: &mut SWelsEncoderOutput) {
+    // **S6.C1**, as `WelsLoadNal` above.
+    if pEncoderOuput.sNalList.is_empty() {
         return;
     }
-    let pWelsEncoderOuput = &mut *pEncoderOuput;
+    let pWelsEncoderOuput = pEncoderOuput;
     let kiEndPos = BsGetBitsPos(&pWelsEncoderOuput.sBsWrite) >> 3;
     let iIdx = pWelsEncoderOuput.iNalIndex as usize;
     let pRawNal = &mut pWelsEncoderOuput.sNalList[iIdx];
