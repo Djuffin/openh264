@@ -1330,6 +1330,28 @@ pub struct SliceJobHandle {
 // not a safety one. It stays, per D-exit-2, and the soundness argument below is
 // what carries it. Three parts, each verified rather than asserted:
 //
+// **Re-derived at S7 (F245), and F205's seven fields are three.** The same
+// question, asked the same way — one `Sync` bound on the context, read the
+// compiler's chains — now answers with six root types under three fields:
+//
+//   ppDqLayerList   `SDqLayer`'s two pool pointers        the layer family's
+//   pVaa            `SVAAFrameInfo`'s three plane roots   the VAA family's
+//   sLogCtx         `pLogCtx: *mut c_void`                **the C ABI's**
+//
+// Four of F205's seven have retired: `pSliceThreading`, `pOut` and `pVpp` to
+// earlier sessions' conversions, and `ppRefPicListExt` to S6.B1, which made
+// `SPicture::pScreenBlockFeatureStorage` own its five buffers. The conclusion is
+// unchanged and is now the *only* thing left blocking `Sync`: `sLogCtx`.
+//
+// **And S7 settled what this seam costs the context flip: nothing.** The flip does
+// not send a `&sWelsEncCtx` anywhere. It sends this handle — a raw pointer, which
+// is what the impl below covers — and each worker forms `&*job.pCtx` after arrival,
+// on its own thread. The compiler demands no `Sync` bound for that, verified by
+// probe. What the shared reference *does* need is precisely the three-part argument
+// below, which the `Send` already carries; the flip widens who relies on it, not
+// what it claims. The handle therefore keeps its raw field and this impl, which is
+// the plan's stated end state (§7.4's two audited lines) rather than a debt.
+//
 // **1 — disjointness is index-based, and the index is now static** (session A's
 // premise-1 proof, T7.A1). The only per-thread mutable state the encode reaches
 // through the context is the bs scratch buffer, named by `iBsSlot` and reached by

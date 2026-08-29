@@ -7149,3 +7149,55 @@ Three of the four were at *different* sites than the flip experiment suggested �
 experiment's lifetime pass had moved where the conflict surfaced — and converting the
 function produced nine conflicts, not four, across five distinct shapes. The count was
 never the point, but the tabulation should not be read as an exhaustive site list.
+
+## F245 — the `SliceJobHandle` checkpoint dissolves: `sWelsEncCtx: Sync` is unreachable *and* the flip never needed it
+
+S7's tabulation named the fork seam as "the design work of the flip" and said making
+`SliceJobHandle::pCtx` a `&'a sWelsEncCtx` "requires `sWelsEncCtx: Sync` — which is the
+same audited-`unsafe impl` shape the reconstruction view already uses, not a new kind of
+claim". That sentence is wrong twice, and the first half was already answered in the tree
+by a comment I had read past.
+
+**1 — `Sync` is structurally unreachable.** The `unsafe impl Send for SliceJobHandle`
+carries a long audit whose F205 section derives the context's `!Sync` reasons *by field*
+and concludes: `SLogContext` holds the application's opaque `*mut c_void`, installed
+through `SetOption(TRACE_CALLBACK)`, so "no amount of internal conversion can make a
+caller-owned `void*` `Sync`… It stays, per **D-exit-2**." A ruled decision, and the
+tabulation contradicted it without citing it.
+
+**Re-derived at S7** — one `Sync` bound on the context, read the compiler's chains — the
+reasons are **six root types under three fields**, against F205's twelve types under
+seven:
+
+| field | roots | owner |
+|---|---|---|
+| `ppDqLayerList` | `*mut SRefList`, `*mut SrcPicPool` (through `SDqLayer`) | the layer family |
+| `pVaa` | `*mut u8`, `*mut i8`, `*mut u32` (through `SVAAFrameInfo`) | the VAA family |
+| `sLogCtx` | `*mut c_void` | **the C ABI — irreducible** |
+
+Four of F205's seven retired: `pSliceThreading`, `pOut`, `pVpp` to earlier sessions, and
+`ppRefPicListExt` to **S6.B1**, which made `SPicture::pScreenBlockFeatureStorage` own its
+buffers. Converting the other two families would leave `sLogCtx` standing alone, so `Sync`
+does not arrive even then.
+
+**2 — and none of it is needed, which is the part that matters.** The flip does not send a
+`&sWelsEncCtx` across the spawn. It sends the *handle* — a raw pointer, which is precisely
+what the `Send` impl covers — and each worker forms `&*job.pCtx` **after arrival, on its
+own thread**. No `Sync` bound is demanded for that. Verified rather than reasoned: a
+`fn(&sWelsEncCtx)` called from inside the spawned closure with `&*job.pCtx` compiles
+unchanged, and S7.A1's whole-tree experiment had already wrapped those three sites the
+same way and reached zero type errors.
+
+What the worker-local `&sWelsEncCtx` *does* require is the three-part disjointness
+argument the `Send` impl already carries — index-based slot ownership, order-based
+assembly, and the buffer-count cap. The flip widens who relies on that argument without
+changing what it claims. **So the handle keeps its raw field and its `unsafe impl`, which
+is the plan's stated end state (§7.4's two audited lines) and not a debt**, and the flip's
+prerequisite list is one item shorter than the tabulation said.
+
+**The lesson for the tabulation as an instrument.** Its §2 (the write set) was measured and
+held. Its §4 (the blocker list) mixed measurement with inference, and both inferred items
+were wrong: §4(c) called `ParasetStrategy` mechanical when it was not (F244), and §4(b)
+called this a blocker when it is not. Where the compiler was asked, the tabulation was
+right; where it was reasoned about, it was not. A blocker list should carry, per item,
+which of the two it is.
