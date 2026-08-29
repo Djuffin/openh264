@@ -266,11 +266,17 @@ impl CWelsParametersetIdStrategyObj {
     /// `PARA_SET_TYPE` elements.
     // unsafe-cat: port-raw(Phase 9)
     #[allow(unsafe_code)]
+    /// **S7.A3**: the three arrays it copies out, not the context they live in — all
+    /// three reads are shared, and taking the whole context made this call a second
+    /// `&mut` claim beside the strategy's own. Callers use
+    /// [`ctx_strategy_and_paraset_arrays`].
     pub unsafe fn OutputCurrentStructure(
         &mut self,
         pParaSetOffsetVariable: *mut SParaSetOffsetVariable,
         pPpsIdList: *mut i32,
-        pCtx: &mut sWelsEncCtx,
+        pSpsArray: &[SWelsSPS],
+        pSubsetArray: &[SSubsetSps],
+        pPpsArray: &[SWelsPPS],
         pExistingParasetList: *mut SExistingParasetList,
     ) {
         if !self.eIdKind.is_non_constant() {
@@ -301,14 +307,14 @@ impl CWelsParametersetIdStrategyObj {
         // returned unless `eIdKind.is_listing()`, so both sides are exactly
         // `MAX_SPS_COUNT` long and `copy_from_slice` asserts what the raw copy
         // assumed.
-        (*pExistingParasetList).sSps.copy_from_slice(pCtx.sps_array());
+        (*pExistingParasetList).sSps.copy_from_slice(pSpsArray);
         // The C tests `NULL != pCtx->pSubsetArray`; the port's accessor is a pointer
         // into the context's own storage and the test is the same one.
-        if !pCtx.subset_array().is_empty() {
+        if !pSubsetArray.is_empty() {
             (*pExistingParasetList).uiInUseSubsetSpsNum = self.m_sParaSetOffset.uiInUseSubsetSpsNum;
             (*pExistingParasetList)
                 .sSubsetSps
-                .copy_from_slice(pCtx.subset_array());
+                .copy_from_slice(pSubsetArray);
         } else {
             (*pExistingParasetList).uiInUseSubsetSpsNum = 0;
         }
@@ -323,7 +329,7 @@ impl CWelsParametersetIdStrategyObj {
         // over-read of 56 structs past the end of one; the port copies the array the
         // sentence means. See F94.
         (*pExistingParasetList).uiInUsePpsNum = self.m_sParaSetOffset.uiInUsePpsNum;
-        (*pExistingParasetList).sPps.copy_from_slice(pCtx.pps_array());
+        (*pExistingParasetList).sPps.copy_from_slice(pPpsArray);
         if !pPpsIdList.is_null() {
             std::ptr::copy_nonoverlapping(
                 self.m_sParaSetOffset.iPpsIdList.as_ptr() as *const i32,
@@ -544,17 +550,20 @@ impl CWelsParametersetIdStrategyObj {
     /// `iPpsId`, and fills `iPpsIdList[pps][idr_round]` with the id to use on each IDR
     /// round. `GetCurrentPpsId` is the reader.
     ///
-    /// # Safety
-    /// On `SpsPpsListing`, `pCtx` must be live with `pPPSArray` allocated to
-    /// `MAX_PPS_COUNT` entries — which is what `m_iBasicNeededPpsNum = MAX_PPS_COUNT`
-    /// asks `RequestMemorySvc` for.
-    pub fn UpdatePpsList(&mut self, pCtx: &mut sWelsEncCtx) {
-        // T9.H: the trailing `|| pCtx.is_null()` is gone — a `&mut sWelsEncCtx`
-        // cannot be null. The remaining condition is unchanged.
+    /// **S7.A3**: the two fields, not the context. This method reached exactly
+    /// `pCtx.iPpsNum` and the PPS array, and taking the whole context made the call
+    /// `ParasetStrategy(pCtx).UpdatePpsList(pCtx)` — two `&mut` claims on one
+    /// allocation, expressible only through a raw pointer. Callers use
+    /// [`ctx_strategy_and_pps`], which splits the two off one `&mut sWelsEncCtx`.
+    ///
+    /// `pps` must be `MAX_PPS_COUNT` entries, which is what
+    /// `m_iBasicNeededPpsNum = MAX_PPS_COUNT` asks `RequestMemorySvc` for; indexing
+    /// panics rather than running past it.
+    pub fn UpdatePpsList(&mut self, pps: &mut [SWelsPPS], pPpsNum: &mut i32) {
         if self.eIdKind != ParasetIdKind::SpsPpsListing {
             return;
         }
-        let iPpsNum = pCtx.iPpsNum;
+        let iPpsNum = *pPpsNum;
         if iPpsNum >= MAX_PPS_COUNT as i32 {
             return;
         }
@@ -574,13 +583,13 @@ impl CWelsParametersetIdStrategyObj {
         for iPpsId in iUsePpsNum as usize..MAX_PPS_COUNT {
             // §4.6: the source entry is copied out — `SWelsPPS` is `Copy` — so the
             // array is borrowed once per write instead of twice at once.
-            let src = pCtx.pps_array()[iPpsId % iUsePpsNum as usize];
-            let dst = &mut pCtx.pps_array_mut()[iPpsId];
+            let src = pps[iPpsId % iUsePpsNum as usize];
+            let dst = &mut pps[iPpsId];
             *dst = src;
             dst.iPpsId = iPpsId as u32;
-            pCtx.iPpsNum += 1;
+            *pPpsNum += 1;
         }
-        self.m_sParaSetOffset.uiInUsePpsNum = pCtx.iPpsNum as u32;
+        self.m_sParaSetOffset.uiInUsePpsNum = *pPpsNum as u32;
     }
 
     /// `CheckParamCompatibility` — `paraset_strategy.h:116` (unconditionally true) /
@@ -639,7 +648,14 @@ impl CWelsParametersetIdStrategyObj {
     /// # Safety
     /// `pCtx` must be live with `pSpsArray` / `pSubsetArray` allocated to
     /// `MAX_SPS_COUNT` entries.
-    fn SpsReset(&mut self, pCtx: &mut sWelsEncCtx, kbUseSubsetSps: bool) -> i32 {
+    /// **S7.A3**: the two arrays, not the context — `sps_array_mut()` and
+    /// `subset_array_mut()` were this method's only reach into it.
+    fn SpsReset(
+        &mut self,
+        pSpsArray: &mut [SWelsSPS],
+        pSubsetArray: &mut [SSubsetSps],
+        kbUseSubsetSps: bool,
+    ) -> i32 {
         if self.eIdKind == ParasetIdKind::SpsPpsListing {
             return -1;
         }
@@ -649,12 +665,12 @@ impl CWelsParametersetIdStrategyObj {
         if !kbUseSubsetSps {
             self.m_sParaSetOffset.uiInUseSpsNum = 1;
             for i in 0..MAX_SPS_COUNT {
-                pCtx.sps_array_mut()[i] = SWelsSPS::ZERO;
+                pSpsArray[i] = SWelsSPS::ZERO;
             }
         } else {
             self.m_sParaSetOffset.uiInUseSubsetSpsNum = 1;
             for i in 0..MAX_SPS_COUNT {
-                pCtx.subset_array_mut()[i] = SSubsetSps::ZERO;
+                pSubsetArray[i] = SSubsetSps::ZERO;
             }
         }
         0
@@ -666,9 +682,17 @@ impl CWelsParametersetIdStrategyObj {
     /// `pCtx` must satisfy [`WelsGenerateNewSps`]'s contract.
     // unsafe-cat: port-raw(Phase 9)
     #[allow(unsafe_code)]
+    /// **S7.A3**: the four values `param_and_paraset_arrays_mut()` returned, not the
+    /// context they came from — that call was this method's only reach into it, and
+    /// taking the whole context made `ParasetStrategy(ctx).GenerateNewSps(ctx, ..)`
+    /// two `&mut` claims on one allocation. Callers use
+    /// [`ctx_strategy_and_param_arrays`].
     pub unsafe fn GenerateNewSps(
         &mut self,
-        pCtx: &mut sWelsEncCtx,
+        pParam: &mut crate::encoder::param_svc::SWelsSvcCodingParam,
+        pSpsArray: &mut [SWelsSPS],
+        pSubsetArray: &mut [SSubsetSps],
+        pPpsArray: &mut [SWelsPPS],
         kbUseSubsetSps: bool,
         iDlayerIndex: i32,
         iDlayerCount: i32,
@@ -677,7 +701,9 @@ impl CWelsParametersetIdStrategyObj {
     ) -> u32 {
         if !self.eIdKind.is_listing() {
             WelsGenerateNewSps(
-                pCtx,
+                pParam,
+                pSpsArray,
+                pSubsetArray,
                 kbUseSubsetSps,
                 iDlayerIndex,
                 iDlayerCount,
@@ -698,7 +724,10 @@ impl CWelsParametersetIdStrategyObj {
         } else {
             self.m_sParaSetOffset.uiInUseSpsNum
         } as i32;
-        let (pParam, pSpsArray, pSubsetArray, _) = pCtx.param_and_paraset_arrays_mut();
+        // **S7.A3**: the four arrive as parameters now — the combined accessor's call
+        // was this method's only reach into the context, and A7's reason for it (one
+        // borrow covering the parameter block and both arrays) is what the caller's
+        // [`ctx_strategy_and_param_arrays`] split now provides.
         let kiFoundSpsId = FindExistingSps(
             pParam,
             kbUseSubsetSps,
@@ -730,13 +759,15 @@ impl CWelsParametersetIdStrategyObj {
             id
         };
         if kuiSpsId >= MAX_SPS_COUNT as u32 {
-            if self.SpsReset(pCtx, kbUseSubsetSps) < 0 {
+            if self.SpsReset(pSpsArray, pSubsetArray, kbUseSubsetSps) < 0 {
                 return u32::MAX;
             }
             kuiSpsId = 0;
         }
         WelsGenerateNewSps(
-            pCtx,
+            pParam,
+            pSpsArray,
+            pSubsetArray,
             kbUseSubsetSps,
             iDlayerIndex,
             iDlayerCount,
@@ -756,9 +787,11 @@ impl CWelsParametersetIdStrategyObj {
     ///
     /// # Safety
     /// `pCtx->pPPSArray` must hold at least `kuiPpsId + 1` entries.
+    /// **S7.A3**: the PPS array, not the context — `pps_array()`/`pps_array_mut()`
+    /// were this method's only reach into it. Callers use [`ctx_strategy_and_pps`].
     pub fn InitPps(
         &mut self,
-        pCtx: &mut sWelsEncCtx,
+        pps: &mut [SWelsPPS],
         _kiSpsId: u32,
         pSps: Option<&SWelsSPS>,
         pSubsetSps: Option<&SSubsetSps>,
@@ -779,7 +812,7 @@ impl CWelsParametersetIdStrategyObj {
                 _kiSpsId as i32,
                 kbEntropyCodingModeFlag,
                 self.m_sParaSetOffset.uiInUsePpsNum as i32,
-                pCtx.pps_array(),
+                pps,
             );
             if INVALID_ID != kiFoundPpsId {
                 kuiPpsId = kiFoundPpsId as u32;
@@ -790,7 +823,7 @@ impl CWelsParametersetIdStrategyObj {
             self.m_sParaSetOffset.uiInUsePpsNum += 1;
         }
         WelsInitPps(
-            &mut pCtx.pps_array_mut()[kuiPpsId as usize],
+            &mut pps[kuiPpsId as usize],
             pSps,
             pSubsetSps,
             kuiPpsId,
@@ -816,18 +849,18 @@ impl CWelsParametersetIdStrategyObj {
     /// left this empty would write one of each and produce a stream missing the very
     /// list it was configured for.
     ///
-    /// # Safety
-    /// On a listing kind, `pCtx` must be a live encoder context.
-    pub fn UpdateParaSetNum(&mut self, pCtx: &mut sWelsEncCtx) {
-        // T9.H8: the trailing `|| pCtx.is_null()` is gone — a `&mut sWelsEncCtx`
-        // cannot be null. The listing condition is unchanged.
+    /// **S7.A3**: the three counts, not the context — as [`UpdatePpsList`] above, and
+    /// for the same reason. Callers use [`ctx_strategy_and_counts`].
+    ///
+    /// [`UpdatePpsList`]: Self::UpdatePpsList
+    pub fn UpdateParaSetNum(&mut self, pSpsNum: &mut i32, pSubsetSpsNum: &mut i32, pPpsNum: &mut i32) {
         if !self.eIdKind.is_listing() {
             return;
         }
-        pCtx.iSpsNum = self.m_sParaSetOffset.uiInUseSpsNum as i32;
-        pCtx.iSubsetSpsNum = self.m_sParaSetOffset.uiInUseSubsetSpsNum as i32;
+        *pSpsNum = self.m_sParaSetOffset.uiInUseSpsNum as i32;
+        *pSubsetSpsNum = self.m_sParaSetOffset.uiInUseSubsetSpsNum as i32;
         if self.eIdKind == ParasetIdKind::SpsPpsListing {
-            pCtx.iPpsNum = self.m_sParaSetOffset.uiInUsePpsNum as i32;
+            *pPpsNum = self.m_sParaSetOffset.uiInUsePpsNum as i32;
         }
     }
 
@@ -864,7 +897,9 @@ impl CWelsParametersetIdStrategyObj {
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe fn WelsGenerateNewSps(
-    pCtx: &mut sWelsEncCtx,
+    pParam: &mut crate::encoder::param_svc::SWelsSvcCodingParam,
+    pSpsArray: &mut [SWelsSPS],
+    pSubsetArray: &mut [SSubsetSps],
     kbUseSubsetSps: bool,
     iDlayerIndex: i32,
     iDlayerCount: i32,
@@ -883,7 +918,10 @@ pub unsafe fn WelsGenerateNewSps(
     // A7, §4.6 combined accessor: the SPS is built *into* the array while
     // `WelsInitSps` writes `uiLevelIdc` back into the layer's configuration, so
     // the parameter block and the arrays come out of one borrow.
-    let (pParam, pSpsArray, pSubsetArray, _) = pCtx.param_and_paraset_arrays_mut();
+    // **S7.A3**: the three arrive as parameters. A7's reason for the combined
+    // accessor — `WelsInitSps` writes `uiLevelIdc` back into the layer's
+    // configuration while the arrays are read, so both come out of one borrow — is
+    // now the caller's split, and holds the same way.
     // S29's named shape. `WelsInitSps` takes `*mut SSpatialLayerConfig`, so the
     // reference here only existed to retag and be cast away — and its retag is
     // what invalidated `InitDqLayers`'s live pointer into the same layer.
@@ -976,20 +1014,120 @@ fn ParasetIdAdditionIdAdjust(
 /// installed — `InitFunctionPointers` fails the encoder build when it is not, and the
 /// call sites that run before that point test the field first. Panics rather than
 /// dereferencing null if the invariant is broken; the vtable version was UB there.
+/// **S7.A3**: safe, and `&mut sWelsEncCtx`. A6 recorded this as "one of the two
+/// derivations the flip could not take" because the strategy is reached `&mut` while
+/// the body's context was a raw. Every one of the 21 call sites is in a body that
+/// already holds `&mut sWelsEncCtx`, so the raw was a leftover, not a requirement —
+/// and the two calls that genuinely could not be expressed this way are the ones
+/// [`ctx_strategy_and_pps`] and [`ctx_strategy_and_counts`] below exist for.
 #[inline]
-// unsafe-cat: lawful-single(F166)
-#[allow(unsafe_code)]
-pub unsafe fn ParasetStrategy<'a>(
-    pCtx: *mut sWelsEncCtx,
-) -> &'a mut CWelsParametersetIdStrategyObj {
-    // **A6: one of the two derivations the flip could not take** — see
-    // [`ctx_func_list_raw`]. The strategy is reached `&mut` and this body's
-    // context is a raw, where `func_list_mut` would be a whole-context `&mut`
-    // retag through a raw root.
-    (*ctx_func_list_raw(pCtx))
+pub fn ParasetStrategy(pCtx: &mut sWelsEncCtx) -> &mut CWelsParametersetIdStrategyObj {
+    pCtx.pFuncList
         .pParametersetStrategy
         .as_deref_mut()
         .expect("pParametersetStrategy is installed by InitFunctionPointers")
+}
+
+/// The strategy **and** the PPS list it rewrites, as disjoint borrows of one context —
+/// [`crate::encoder::encoder_context::ctx_paraset_arrays`]'s shape, one field deeper.
+///
+/// `ParasetStrategy(pCtx).UpdatePpsList(pCtx)` is two `&mut` claims on one allocation:
+/// the strategy object *lives inside* the context, at
+/// `pFuncList.pParametersetStrategy`, and the method took the context again. That is
+/// only expressible through a raw pointer, which is why it was one. Split at the
+/// source instead — the strategy and `UpdatePpsList`'s two fields are disjoint fields
+/// of one `&mut self`, and the compiler can see that where it cannot see two accessor
+/// calls each claiming the whole context.
+#[inline]
+pub fn ctx_strategy_and_pps(
+    pCtx: &mut sWelsEncCtx,
+) -> (&mut CWelsParametersetIdStrategyObj, &mut [SWelsPPS], &mut i32) {
+    (
+        pCtx.pFuncList
+            .pParametersetStrategy
+            .as_deref_mut()
+            .expect("pParametersetStrategy is installed by InitFunctionPointers"),
+        &mut pCtx.pPPSArray,
+        &mut pCtx.iPpsNum,
+    )
+}
+
+/// The strategy and the three parameter-set **arrays**, for `LoadPrevious`.
+#[inline]
+pub fn ctx_strategy_and_paraset_arrays(
+    pCtx: &mut sWelsEncCtx,
+) -> (&mut CWelsParametersetIdStrategyObj, &mut [SWelsSPS], &mut [SSubsetSps], &mut [SWelsPPS]) {
+    (
+        pCtx.pFuncList
+            .pParametersetStrategy
+            .as_deref_mut()
+            .expect("pParametersetStrategy is installed by InitFunctionPointers"),
+        &mut pCtx.pSpsArray,
+        &mut pCtx.pSubsetArray,
+        &mut pCtx.pPPSArray,
+    )
+}
+
+/// The strategy, the coding parameters and the three arrays, for `GenerateNewSps` —
+/// [`crate::encoder::encoder_context::sWelsEncCtx::param_and_paraset_arrays_mut`]'s
+/// four, with the strategy alongside them.
+#[inline]
+pub fn ctx_strategy_and_param_arrays(
+    pCtx: &mut sWelsEncCtx,
+) -> (
+    &mut CWelsParametersetIdStrategyObj,
+    &mut crate::encoder::param_svc::SWelsSvcCodingParam,
+    &mut [SWelsSPS],
+    &mut [SSubsetSps],
+    &mut [SWelsPPS],
+) {
+    let sWelsEncCtx { pFuncList, pSvcParam, pSpsArray, pSubsetArray, pPPSArray, .. } = pCtx;
+    (
+        pFuncList
+            .pParametersetStrategy
+            .as_deref_mut()
+            .expect("pParametersetStrategy is installed by InitFunctionPointers"),
+        pSvcParam
+            .as_deref_mut()
+            .expect("the coding parameters are built by WelsInitEncoderExt"),
+        pSpsArray,
+        pSubsetArray,
+        pPPSArray,
+    )
+}
+
+/// The strategy and the **encoder output block**, for the three parameter-set writers.
+/// Each of them holds the strategy's id-offset list live across a `pOut` write; the
+/// two are disjoint fields and this is the one call that says so.
+#[inline]
+pub fn ctx_strategy_and_out(
+    pCtx: &mut sWelsEncCtx,
+) -> (&mut CWelsParametersetIdStrategyObj, &mut crate::encoder::encoder_context::SWelsEncoderOutput) {
+    let sWelsEncCtx { pFuncList, pOut, .. } = pCtx;
+    (
+        pFuncList
+            .pParametersetStrategy
+            .as_deref_mut()
+            .expect("pParametersetStrategy is installed by InitFunctionPointers"),
+        pOut.as_deref_mut().expect("pOut lives"),
+    )
+}
+
+/// The strategy and the three parameter-set counts `UpdateParaSetNum` publishes.
+/// [`ctx_strategy_and_pps`]'s argument, for the other context-taking method.
+#[inline]
+pub fn ctx_strategy_and_counts(
+    pCtx: &mut sWelsEncCtx,
+) -> (&mut CWelsParametersetIdStrategyObj, &mut i32, &mut i32, &mut i32) {
+    (
+        pCtx.pFuncList
+            .pParametersetStrategy
+            .as_deref_mut()
+            .expect("pParametersetStrategy is installed by InitFunctionPointers"),
+        &mut pCtx.iSpsNum,
+        &mut pCtx.iSubsetSpsNum,
+        &mut pCtx.iPpsNum,
+    )
 }
 
 /// `IWelsParametersetStrategy::CreateParametersetStrategy` — `paraset_strategy.cpp:40`.

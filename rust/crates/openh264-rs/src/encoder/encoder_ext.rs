@@ -881,8 +881,8 @@ pub unsafe fn InitDqLayers(
     if ctx.func_list().pParametersetStrategy.is_none() {
         return 1;
     }
-    let kiNeededSpsNum = ParasetStrategy(std::ptr::addr_of_mut!(*ctx)).GetNeededSpsNum() as i32;
-    let kiNeededSubsetSpsNum = ParasetStrategy(std::ptr::addr_of_mut!(*ctx)).GetNeededSubsetSpsNum() as i32;
+    let kiNeededSpsNum = ParasetStrategy(ctx).GetNeededSpsNum() as i32;
+    let kiNeededSubsetSpsNum = ParasetStrategy(ctx).GetNeededSubsetSpsNum() as i32;
     // **T6.H2.** Three `WelsMallocz` calls and their three null checks were here.
     // The lengths are the strategy's own numbers, unchanged; the entries are the
     // zeros `WelsMallocz` left, spelled as `ZERO` rather than `Default` because
@@ -898,7 +898,7 @@ pub unsafe fn InitDqLayers(
     ];
 
     // PPS
-    let kiNeededPpsNum = ParasetStrategy(std::ptr::addr_of_mut!(*ctx)).GetNeededPpsNum() as i32;
+    let kiNeededPpsNum = ParasetStrategy(ctx).GetNeededPpsNum() as i32;
     ctx.pPPSArray = vec![crate::encoder::param_svc::SWelsPPS::ZERO; kiNeededPpsNum as usize];
 
     // **T9.H2 — the ~36's blocker, dissolved.** This supplied the three arrays as
@@ -909,10 +909,12 @@ pub unsafe fn InitDqLayers(
     // **S3.B2.** The receiver is taken *before* the arrays: `ctx_paraset_arrays`
     // holds a `&mut` on the context for as long as the three array borrows live, and
     // deriving the strategy's raw inside that window is a second mutable borrow.
-    // Hoisting is sound as well as legal — the strategy object lives in the
-    // `pFuncList` `Box`, a different allocation, so the reborrow below cannot pop it.
-    let pParasetStrategy = ParasetStrategy(std::ptr::addr_of_mut!(*ctx));
-    let (pSpsArray, pSubsetArray, pPpsArray) = ctx_paraset_arrays(&mut *ctx);
+    // **S7.A3**: the hoist and its argument are gone. The note above was right that
+    // the strategy lives in the `pFuncList` `Box` and so cannot be popped by the array
+    // reborrow — but saying so needed a raw pointer, because borrowck sees two `&mut`
+    // claims on `ctx`. One split call says it in the type instead.
+    let (pParasetStrategy, pSpsArray, pSubsetArray, pPpsArray) =
+        crate::encoder::paraset_strategy::ctx_strategy_and_paraset_arrays(ctx);
     pParasetStrategy.LoadPrevious(
         pExistingParasetList,
         pSpsArray,
@@ -938,8 +940,15 @@ pub unsafe fn InitDqLayers(
 
         // S67 blessed (H2): live across it are `pDqIdc`, `pSps`/`pSubsetSps` (Vec buffers) and
         // `pDlayerParam` (`pSvcParam`'s `Box`) — none inside the context's own bytes.
-        iSpsId = ParasetStrategy(std::ptr::addr_of_mut!(*ctx)).GenerateNewSps(
-            &mut *ctx,
+        // **S7.A3**: strategy and the four values the method actually reached for,
+        // split off one `&mut` context.
+        let (strategy, pParam, pSpsArray, pSubsetArray, pPpsArray) =
+            crate::encoder::paraset_strategy::ctx_strategy_and_param_arrays(ctx);
+        iSpsId = strategy.GenerateNewSps(
+            pParam,
+            pSpsArray,
+            pSubsetArray,
+            pPpsArray,
             bUseSubsetSps,
             iDlayerIndex,
             iDlayerCount,
@@ -981,10 +990,13 @@ pub unsafe fn InitDqLayers(
         // to sit in argument eleven is a *shared* reborrow of the same context taken
         // while it is live — F208's shape, and the reason it was invisible before is
         // that `ctx` was a raw. The read is a `bool`.
-        let pParasetStrategy = ParasetStrategy(std::ptr::addr_of_mut!(*ctx));
+        // **S7.A3**: the flag is read *before* the split, so no borrow of the context
+        // is live across it — F208's shape, resolved by ordering rather than by a raw.
         let kbEntropyCodingModeFlag = ctx.param().iEntropyCodingModeFlag != 0;
+        let (pParasetStrategy, pps, _) =
+            crate::encoder::paraset_strategy::ctx_strategy_and_pps(ctx);
         iPpsId = pParasetStrategy.InitPps(
-            &mut *ctx,
+            pps,
             iSpsId as u32,
             // T6.G3: `InitPps` takes the arm it will actually use, not both plus a
             // flag. The two locals are still raw here — they are cursors into the
@@ -1048,7 +1060,12 @@ pub unsafe fn InitDqLayers(
 
     // S67 blessed (H2): the receiver is a `&mut` into the strategy object's own `Box`, reached
     // without a reference to the context (`ctx_func_list`, F71); nothing else is live.
-    ParasetStrategy(std::ptr::addr_of_mut!(*ctx)).UpdateParaSetNum(&mut *ctx);
+    {
+        // **S7.A3**: the strategy and the three counts split off one `&mut` context.
+        let (strategy, pSpsNum, pSubsetSpsNum, pPpsNum) =
+            crate::encoder::paraset_strategy::ctx_strategy_and_counts(ctx);
+        strategy.UpdateParaSetNum(pSpsNum, pSubsetSpsNum, pPpsNum);
+    }
     ENC_RETURN_SUCCESS
 }
 
@@ -1112,8 +1129,8 @@ pub unsafe fn RequestMemorySvc(
         return 1;
     }
 
-    let kiSpsSize = ParasetStrategy(std::ptr::addr_of_mut!(*ctx)).GetNeededSpsNum() as i32 * SPS_BUFFER_SIZE;
-    let kiPpsSize = ParasetStrategy(std::ptr::addr_of_mut!(*ctx)).GetNeededPpsNum() as i32 * PPS_BUFFER_SIZE;
+    let kiSpsSize = ParasetStrategy(ctx).GetNeededSpsNum() as i32 * SPS_BUFFER_SIZE;
+    let kiPpsSize = ParasetStrategy(ctx).GetNeededPpsNum() as i32 * PPS_BUFFER_SIZE;
     let iNonVclLayersBsSizeCount = SSEI_BUFFER_SIZE + kiSpsSize + kiPpsSize;
 
     let mut bDynamicSlice = false;
@@ -2855,7 +2872,14 @@ pub unsafe fn WriteSavcParaset_Listing(
     // `encoder_ext.cpp:3297` — the one `UpdatePpsList` call site the port did not
     // have, because this function did not exist. It is a no-op for four of the five
     // kinds and the whole point of `SPS_PPS_LISTING`.
-    ParasetStrategy(pCtx).UpdatePpsList(pCtx);
+    {
+        // **S7.A3**: the strategy and the PPS list split off one `&mut` context —
+        // the call that used to need a raw pointer because the strategy lives
+        // inside the context it was being handed.
+        let (strategy, pps, pPpsNum) =
+            crate::encoder::paraset_strategy::ctx_strategy_and_pps(pCtx);
+        strategy.UpdatePpsList(pps, pPpsNum);
+    }
 
     for iSpatialId in 0..kiSpatialNum {
         let mut iCountNal = 0i32;

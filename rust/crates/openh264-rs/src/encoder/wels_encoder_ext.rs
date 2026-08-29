@@ -410,9 +410,12 @@ pub unsafe fn WelsWriteOneSPS(pCtx: &mut sWelsEncCtx, kiSpsIdx: i32, iNalSize: *
     );
 
     let sSps = pCtx.sps_array()[kiSpsIdx as usize];
-    let pSpsIdOffsetList = ParasetStrategy(pCtx).GetSpsIdOffsetList(PARA_SET_TYPE_AVCSPS as i32);
+    // **S7.A3**: the id-offset list borrows the strategy and stays live across the
+    // `pOut` write, so the two come out of one split rather than two whole-context
+    // claims.
     {
-        let pOut = pCtx.pOut.as_deref_mut().expect("pOut lives");
+        let (strategy, pOut) = crate::encoder::paraset_strategy::ctx_strategy_and_out(pCtx);
+        let pSpsIdOffsetList = strategy.GetSpsIdOffsetList(PARA_SET_TYPE_AVCSPS as i32);
         WelsWriteSpsNal(
             &mut pOut.sBsBuffer[..],
             &sSps,
@@ -459,9 +462,9 @@ pub unsafe fn WelsWriteOnePPS(pCtx: &mut sWelsEncCtx, kiPpsIdx: i32, iNalSize: *
     // The strategy reference is hoisted whole: it lives in the `pFuncList` box,
     // so the binding holds no borrow of the context.
     let sPps = pCtx.pps_array()[kiPpsIdx as usize];
-    let pStrategy = ParasetStrategy(std::ptr::addr_of_mut!(*pCtx));
+    // **S7.A3**: strategy and output block, split off one `&mut` context.
     {
-        let pOut = pCtx.pOut.as_deref_mut().expect("pOut lives");
+        let (pStrategy, pOut) = crate::encoder::paraset_strategy::ctx_strategy_and_out(pCtx);
         WelsWritePpsSyntax(
             &mut pOut.sBsBuffer[..],
             &sPps,
@@ -527,10 +530,12 @@ pub unsafe fn WelsWriteParameterSets(
     /* write all SPS */
     iIdx = 0;
     while iIdx < pCtx.iSpsNum {
-        ParasetStrategy(pCtx).Update(
-            pCtx.sps_array()[iIdx as usize].uiSpsId,
-            PARA_SET_TYPE_AVCSPS as i32,
-        );
+        // **S7.A3**: the id is read before the strategy borrow opens. It used to be
+        // read *inside* the call's argument list, which is a shared borrow of the
+        // context while `ParasetStrategy` holds it mutably — legal only because the
+        // strategy came through a raw pointer.
+        let uiSpsId = pCtx.sps_array()[iIdx as usize].uiSpsId;
+        ParasetStrategy(pCtx).Update(uiSpsId, PARA_SET_TYPE_AVCSPS as i32);
         /* generate sequence parameters set */
         iId = ParasetStrategy(pCtx).GetSpsIdx(iIdx);
 
@@ -548,10 +553,9 @@ pub unsafe fn WelsWriteParameterSets(
     while iIdx < pCtx.iSubsetSpsNum {
         iNal = pCtx.pOut.as_deref().expect("pOut lives").iNalIndex;
 
-        ParasetStrategy(pCtx).Update(
-            pCtx.subset_array()[iIdx as usize].pSps.uiSpsId,
-            PARA_SET_TYPE_SUBSETSPS as i32,
-        );
+        // **S7.A3**, as the SPS loop above.
+        let uiSpsId = pCtx.subset_array()[iIdx as usize].pSps.uiSpsId;
+        ParasetStrategy(pCtx).Update(uiSpsId, PARA_SET_TYPE_SUBSETSPS as i32);
 
         iId = iIdx;
 
@@ -564,11 +568,12 @@ pub unsafe fn WelsWriteParameterSets(
 
         // §4.6, as the SPS above; S3.B1 hoists the strategy's offset list too.
         let sSubsetSps = pCtx.subset_array()[iId as usize];
-        let pSpsIdOffsetList = ParasetStrategy(pCtx).GetSpsIdOffsetList(PARA_SET_TYPE_SUBSETSPS as i32);
+        // **S7.A3**, as `WelsWriteOneSPS`.
         {
             // (The S67/H2 audit note this block used to carry is now borrowck's
             // job: the two `&mut`s below are disjoint fields of one `&mut pOut`.)
-            let pOut = pCtx.pOut.as_deref_mut().expect("pOut lives");
+            let (strategy, pOut) = crate::encoder::paraset_strategy::ctx_strategy_and_out(pCtx);
+            let pSpsIdOffsetList = strategy.GetSpsIdOffsetList(PARA_SET_TYPE_SUBSETSPS as i32);
             WelsWriteSubsetSpsSyntax(
                 &mut pOut.sBsBuffer[..],
                 &sSubsetSps,
@@ -598,14 +603,19 @@ pub unsafe fn WelsWriteParameterSets(
         iCountNal += 1;
     }
 
-    ParasetStrategy(pCtx).UpdatePpsList(pCtx);
+    {
+        // **S7.A3**, as `WriteSavcParaset_Listing`: strategy and PPS list split off
+        // one `&mut` context.
+        let (strategy, pps, pPpsNum) =
+            crate::encoder::paraset_strategy::ctx_strategy_and_pps(pCtx);
+        strategy.UpdatePpsList(pps, pPpsNum);
+    }
 
     iIdx = 0;
     while iIdx < pCtx.iPpsNum {
-        ParasetStrategy(pCtx).Update(
-            pCtx.pps_array()[iIdx as usize].iPpsId,
-            PARA_SET_TYPE_PPS as i32,
-        );
+        // **S7.A3**, as the two loops above.
+        let iPpsId = pCtx.pps_array()[iIdx as usize].iPpsId;
+        ParasetStrategy(pCtx).Update(iPpsId, PARA_SET_TYPE_PPS as i32);
 
         WelsWriteOnePPS(pCtx, iIdx, &mut iNalLength);
 
@@ -917,10 +927,18 @@ pub unsafe fn WelsEncoderParamAdjust(
             // what makes the pair lawful: the receiver lives in the strategy's own
             // `Box`, a different allocation from the context, so the `&mut` handed
             // to `OutputCurrentStructure` cannot pop it.
-            ParasetStrategy(std::ptr::addr_of_mut!(*ctx)).OutputCurrentStructure(
+            // **S7.A3**: strategy and the three arrays it copies, split off one
+            // `&mut` context. The S67 blessing above said the same thing in prose —
+            // the receiver lives in the strategy's own `Box`, a different allocation
+            // — and needed a raw pointer to say it; this says it in the type.
+            let (strategy, pSpsArray, pSubsetArray, pPpsArray) =
+                crate::encoder::paraset_strategy::ctx_strategy_and_paraset_arrays(ctx);
+            strategy.OutputCurrentStructure(
                 sTmpPsoVariable.as_mut_ptr(),
                 iTmpPpsIdList.as_mut_ptr(),
-                ctx,
+                pSpsArray,
+                pSubsetArray,
+                pPpsArray,
                 &mut sExistingParasetList,
             );
 
@@ -966,7 +984,7 @@ pub unsafe fn WelsEncoderParamAdjust(
             // `ParasetStrategy`'s raw parameter again — see the note at
             // `OutputCurrentStructure` above. Nothing of the context is live
             // alongside the receiver here, so this is the plain form.
-            ParasetStrategy(std::ptr::addr_of_mut!(*ctx)).LoadPreviousStructure(
+            ParasetStrategy(ctx).LoadPreviousStructure(
                 sTmpPsoVariable.as_mut_ptr(),
                 iTmpPpsIdList.as_mut_ptr(),
             );
