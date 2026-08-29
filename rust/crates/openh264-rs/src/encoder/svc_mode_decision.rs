@@ -479,9 +479,7 @@ pub unsafe extern "C" fn WelsMdIntraSecondaryModesEnc(
 ///
 /// # Safety
 /// All pointers in `pCurLayer`, `pFuncList`, `pCurMb`, and `pMbCache` must be valid.
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
-pub unsafe extern "C" fn WelsRecPskip(
+pub extern "C" fn WelsRecPskip(
     pCurLayer: &SDqLayer,
     _pFuncList: &SWelsFuncPtrList,
     pCurMb: &mut SMB,

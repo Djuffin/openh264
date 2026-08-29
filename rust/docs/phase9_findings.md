@@ -6889,3 +6889,44 @@ flip, the derivations that must survive it should move to shared (`&`/atomic/`Ce
 access, where sibling claims coexist by construction — the tabulation the brief already
 asks for should record, per field, whether its derivation is exclusive, because that is
 the column that predicts this defect.
+
+## F240 — the layer flip's cascade is 7 allows, not a wave, and `ref_list_mgr_svc.rs` is blocked by the *context*, not by `current_layer`
+
+F232 and the S6 brief both name `ref_list_mgr_svc.rs` as the layer flip's big payoff —
+"31 allows, *every one* on a signature with no raw pointer — blocked purely by body calls
+into raw accessors, 17 of them `current_layer`", with the instruction to "rerun the
+de-unsafe cascade and expect it to travel far". Measured after the flip landed:
+
+The converging cascade — strip `unsafe` only from `unsafe fn` declarations whose
+signature carries no raw pointer, compile, revert what rustc rejects, to a fixpoint —
+offered **130 candidates and kept 7**, all seven of them bodies this checkpoint had just
+converted (`WelsMbToSliceIdc`, `UpdateMbNeighbor`, `WelsGetNextMbOfSlice`,
+`SetSliceBoundaryInfo`, `layer_rec_view`, `WelsRecPskip`, `UpdateFMESwitchNull`). All
+seven then had empty-of-`unsafe` bodies, so their `#[allow(unsafe_code)]` and
+`// unsafe-cat:` tags retired with them: **460 → 453**.
+
+**Why the file did not move.** Stripping all 25 eligible declarations in
+`ref_list_mgr_svc.rs` and classifying every resulting `E0133` by what it names:
+
+| blocker | count |
+|---|---:|
+| raw pointer dereference (in-body, no callee) | 52 |
+| `current_layer` | 17 |
+| `ctx_param_raw` | 8 |
+| `ctx_vpp_raw` | 5 |
+| `slice_in_layer` | 4 |
+| `CWelsPreProcess::{UpdateBlockIdcForScreen, GetRefFrameInfo}` | 2 |
+
+`current_layer` is the largest *named* blocker, which is the true half of the brief's
+claim. But it is 17 of 88, and the 52 bare raw dereferences plus 13 raw *context*
+accessors are untouched by anything the layer flip could do — `current_layer` itself is
+`unsafe fn` only because it takes `*mut sWelsEncCtx`, so converting the layer it returns
+cannot make it safe. This file unlocks with the **context**, not the layer, and the plan
+should carry it under that item rather than as a layer-flip dividend.
+
+**The cheap piece that would move the 17**: a safe companion
+`current_layer_ref(ctx: &sWelsEncCtx) -> Option<&SDqLayer>`, which is expressible with no
+`unsafe` at all (`ctx.iCurDqLayer?` then `ctx.ppDqLayerList.get(idx)?.as_deref()`) because
+every field it touches is already owned and safe. It is not enough on its own — the 52
+raw dereferences still stand — so it belongs to the context checkpoint's tabulation, not
+to a cascade rerun.
