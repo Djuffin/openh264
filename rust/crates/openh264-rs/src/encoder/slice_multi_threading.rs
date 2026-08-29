@@ -473,12 +473,12 @@ pub unsafe fn UpdateMbListNeighborParallel(
     // Each worker's window is exactly its own slice's records — the
     // fork-disjointness this walker's name promises, now enforced (E3).
     let mut mbs =
-        crate::encoder::svc_encode_slice::mb_window(pCurDq, kiFirst, kiCount, kiFirst);
+        crate::encoder::svc_encode_slice::mb_window(&*pCurDq, kiFirst, kiCount, kiFirst);
     let mut iIdx = kiFirst;
     let kiEndMbInSlice = kiFirst + kiCount - 1;
 
     while iIdx <= kiEndMbInSlice {
-        crate::encoder::svc_encode_slice::UpdateMbNeighbor(pCurDq, mbs.at_mut(iIdx as usize), kiMbWidth, kiSliceIdc as u16);
+        crate::encoder::svc_encode_slice::UpdateMbNeighbor(pCurDq.as_ref(), mbs.at_mut(iIdx as usize), kiMbWidth, kiSliceIdc as u16);
         iIdx += 1;
     }
 }
@@ -522,7 +522,7 @@ pub unsafe fn CalcSliceComplexRatio(pCurDq: &mut SDqLayer) {
     WelsEmms();
 
     while iSliceIdx < kiSliceCount {
-        let pSlice = crate::encoder::svc_encode_slice::slice_in_layer(pCurDq, iSliceIdx);
+        let pSlice = crate::encoder::svc_encode_slice::slice_in_layer(Some(&*pCurDq), iSliceIdx);
         if !pSlice.is_null() {
             let consume_time = (*pSlice).uiSliceConsumeTime as i32;
             let mb_num = (*pSlice).iCountMbNumInSlice;
@@ -534,7 +534,7 @@ pub unsafe fn CalcSliceComplexRatio(pCurDq: &mut SDqLayer) {
 
     while iSliceIdx > 0 {
         iSliceIdx -= 1;
-        let pSlice = crate::encoder::svc_encode_slice::slice_in_layer(pCurDq, iSliceIdx);
+        let pSlice = crate::encoder::svc_encode_slice::slice_in_layer(Some(&*pCurDq), iSliceIdx);
         if !pSlice.is_null() {
             (*pSlice).iSliceComplexRatio =
                 WelsDivRound(INT_MULTIPLY * iAvI[iSliceIdx as usize], iSumAv);
@@ -558,7 +558,7 @@ pub unsafe fn NeedDynamicAdjust(pCurDq: &mut SDqLayer, iSliceNum: i32) -> i32 {
     WelsEmms();
 
     while iSliceIdx < iSliceNum {
-        let pSlice = crate::encoder::svc_encode_slice::slice_in_layer(pCurDq, iSliceIdx);
+        let pSlice = crate::encoder::svc_encode_slice::slice_in_layer(Some(&*pCurDq), iSliceIdx);
         if pSlice.is_null() {
             return 0;
         }
@@ -576,7 +576,7 @@ pub unsafe fn NeedDynamicAdjust(pCurDq: &mut SDqLayer, iSliceNum: i32) -> i32 {
     let kfMeanRatio = 1.0f32 / (iSliceNum as f32);
 
     loop {
-        let pSlice = crate::encoder::svc_encode_slice::slice_in_layer(pCurDq, iSliceIdx);
+        let pSlice = crate::encoder::svc_encode_slice::slice_in_layer(Some(&*pCurDq), iSliceIdx);
         let fRatio = (*pSlice).uiSliceConsumeTime as f32 / (uiTotalConsume as f32);
         let fDiffRatio = fRatio - kfMeanRatio;
         fRmse += fDiffRatio * fDiffRatio;
@@ -663,7 +663,7 @@ pub unsafe fn DynamicAdjustSlicing(
 
     iSliceIdx = 0;
     while iSliceIdx + 1 < kiCountSliceNum {
-        let pSlice = crate::encoder::svc_encode_slice::slice_in_layer(pCurDqLayer, iSliceIdx);
+        let pSlice = crate::encoder::svc_encode_slice::slice_in_layer(Some(&*pCurDqLayer), iSliceIdx);
         if pSlice.is_null() {
             return;
         }
@@ -875,7 +875,7 @@ pub unsafe fn AppendSliceToFrameBs(
 
     let mut iSliceIdx = 0i32;
     while iSliceIdx < kiSliceCount {
-        let pSlice = crate::encoder::svc_encode_slice::slice_in_layer(pCurDq, iSliceIdx);
+        let pSlice = crate::encoder::svc_encode_slice::slice_in_layer(pCurDq.as_ref(), iSliceIdx);
         if !pSlice.is_null() {
             let pSliceBs = &mut (*pSlice).sSliceBs;
             if pSliceBs.uiBsPos > 0 {
@@ -1473,7 +1473,7 @@ unsafe fn EncodeOneSliceInJob(
     if iReturn != ENC_RETURN_SUCCESS {
         return SliceJobResult { iResult: iReturn, bInitFailed: true };
     }
-    iReturn = SetSliceBoundaryInfo(current_layer(pCtx), &mut *pSlice, iSliceIdx);
+    iReturn = SetSliceBoundaryInfo((current_layer(pCtx)).as_ref(), &mut *pSlice, iSliceIdx);
     if iReturn != ENC_RETURN_SUCCESS {
         return SliceJobResult { iResult: iReturn, bInitFailed: true };
     }
@@ -1698,7 +1698,7 @@ unsafe fn EncodeOnePartitionSizeLimited(
     if iReturn != ENC_RETURN_SUCCESS {
         return SliceJobResult { iResult: iReturn, bInitFailed: true };
     }
-    iReturn = SetSliceBoundaryInfo(current_layer(pCtx), &mut *pSlice, iPartitionIdx);
+    iReturn = SetSliceBoundaryInfo((current_layer(pCtx)).as_ref(), &mut *pSlice, iPartitionIdx);
     if iReturn != ENC_RETURN_SUCCESS {
         return SliceJobResult { iResult: iReturn, bInitFailed: true };
     }
@@ -1719,7 +1719,7 @@ unsafe fn EncodeOnePartitionSizeLimited(
         let kiCodedSliceNumByThread =
             (*pCurDq).sSliceBufferInfo[iBsSlot as usize].iCodedSliceNum;
         pSlice = crate::encoder::svc_encode_slice::slice_in_bank(
-            pCurDq,
+            &*pCurDq,
             iBsSlot as usize,
             kiCodedSliceNumByThread,
         );

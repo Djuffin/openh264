@@ -119,7 +119,7 @@ pub type PInterMdBackgroundDecisionFunc = unsafe fn(
 
 /// `wels_func_ptr_def.h:118`
 pub type PMdBackgroundInfoUpdateFunc = unsafe extern "C" fn(
-    pCurLayer: *mut SDqLayer,
+    pCurLayer: &SDqLayer,
     pCurMb: &mut SMB,
     bFlag: bool,
     kiRefPictureType: i32,

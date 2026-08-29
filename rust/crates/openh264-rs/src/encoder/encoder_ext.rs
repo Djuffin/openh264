@@ -616,19 +616,19 @@ unsafe fn InitMbInfo(
         pMb.iMbXY = iIdx as i32;
 
         // [0..65535] > 36864 of LEVEL5.2
-        let uiSliceIdc: u16 = WelsMbToSliceIdc(pLayer, iIdx as i32);
+        let uiSliceIdc: u16 = WelsMbToSliceIdc(Some(&*pLayer), iIdx as i32);
         let iLeftXY = iIdx as i32 - 1;
         let iTopXY = iIdx as i32 - iMbWidth;
         let iLeftTopXY = iTopXY - 1;
         let iRightTopXY = iTopXY + 1;
 
-        let bLeft = pMb.iMbX > 0 && uiSliceIdc == WelsMbToSliceIdc(pLayer, iLeftXY);
-        let bTop = pMb.iMbY > 0 && uiSliceIdc == WelsMbToSliceIdc(pLayer, iTopXY);
+        let bLeft = pMb.iMbX > 0 && uiSliceIdc == WelsMbToSliceIdc(Some(&*pLayer), iLeftXY);
+        let bTop = pMb.iMbY > 0 && uiSliceIdc == WelsMbToSliceIdc(Some(&*pLayer), iTopXY);
         let bLeftTop =
-            pMb.iMbX > 0 && pMb.iMbY > 0 && uiSliceIdc == WelsMbToSliceIdc(pLayer, iLeftTopXY);
+            pMb.iMbX > 0 && pMb.iMbY > 0 && uiSliceIdc == WelsMbToSliceIdc(Some(&*pLayer), iLeftTopXY);
         let bRightTop = (pMb.iMbX as i32) < (iMbWidth - 1)
             && pMb.iMbY > 0
-            && uiSliceIdc == WelsMbToSliceIdc(pLayer, iRightTopXY);
+            && uiSliceIdc == WelsMbToSliceIdc(Some(&*pLayer), iRightTopXY);
 
         let mut uiNeighborAvail: u8 = 0;
         if bLeft {
@@ -2081,7 +2081,7 @@ pub unsafe fn PrefetchReferencePicture(pCtx: &mut sWelsEncCtx, keFrameType: EVid
 
     let mut iIdx = 0;
     while iIdx < kiSliceCount {
-        let pSlice = crate::encoder::svc_encode_slice::slice_in_layer(current_layer(pCtx), iIdx);
+        let pSlice = crate::encoder::svc_encode_slice::slice_in_layer((current_layer(pCtx)).as_ref(), iIdx);
         if !pSlice.is_null() {
             (*pSlice).sSliceHeaderExt.sSliceHeader.uiRefIndex = uiRefIdx;
         }
@@ -2178,7 +2178,7 @@ pub unsafe fn WelsInitCurrentLayer(pCtx: &mut sWelsEncCtx, _kiWidth: i32, _kiHei
         pCtx.uiDependencyId as usize,
     );
     (*pCurDq).pRefList = pRefList;
-    let pBaseSlice = crate::encoder::svc_encode_slice::slice_in_layer(pCurDq, 0);
+    let pBaseSlice = crate::encoder::svc_encode_slice::slice_in_layer(pCurDq.as_ref(), 0);
     if pBaseSlice.is_null() {
         return;
     }
@@ -2187,7 +2187,6 @@ pub unsafe fn WelsInitCurrentLayer(pCtx: &mut sWelsEncCtx, _kiWidth: i32, _kiHei
     // has to be a live borrow of the context across the calls below.
     let kbUseSubsetSpsFlag =
         !pCtx.param().bSimulcastAVC && (kiCurDid as i32) > BASE_DEPENDENCY_ID;
-    let pNalHdExt = &mut (*pCurDq).sLayerInfo.sNalHeaderExt;
     let iSliceCount = (*pCurDq).iMaxSliceNum;
     // S29 / F13's family: `addr_of_mut!` on the element, not `as_mut_ptr().add()` —
     // the latter reborrows the whole array and a second such derivation pops the first.
@@ -2233,13 +2232,21 @@ pub unsafe fn WelsInitCurrentLayer(pCtx: &mut sWelsEncCtx, _kiWidth: i32, _kiHei
 
     let mut iIdx = 1;
     while iIdx < iSliceCount {
-        let pSlice = crate::encoder::svc_encode_slice::slice_in_layer(pCurDq, iIdx);
+        let pSlice = crate::encoder::svc_encode_slice::slice_in_layer(pCurDq.as_ref(), iIdx);
         if !pSlice.is_null() {
             crate::encoder::svc_encode_slice::InitSliceHeadWithBase(&mut *pSlice, &*pBaseSlice);
         }
         iIdx += 1;
     }
 
+    // **S6.A1, and Miri found it where the byte sweep could not.** This binding stood
+    // 50 lines up, next to `iSliceCount`. That was sound while `slice_in_layer` took the
+    // layer raw; with `Option<&SDqLayer>` the two calls above take a *whole-layer*
+    // shared retag, which pops this `&mut`'s Unique tag at [0x208..0x220] and makes the
+    // write below use a dead tag. Nothing between the old site and here read it, so the
+    // binding moves to its first use and the live range no longer spans a shared borrow.
+    // Both sweeps called this byte-identical; only the aliasing checker saw it.
+    let pNalHdExt = &mut (*pCurDq).sLayerInfo.sNalHeaderExt;
     std::ptr::write_bytes(pNalHdExt as *mut _ as *mut u8, 0, std::mem::size_of::<SNalUnitHeaderExt>());
     let pNalHd = &mut pNalHdExt.sNalUnitHeader;
     pNalHd.uiNalRefIdc = pCtx.eNalPriority as u8;
@@ -3022,11 +3029,11 @@ pub unsafe fn DynslcUpdateMbNeighbourInfoListForAllSlices(pCurDq: &mut SDqLayer)
 
     loop {
         let uiSliceIdc = crate::encoder::svc_encode_slice::WelsMbToSliceIdc(
-            pCurDq,
+            Some(&*pCurDq),
             mbs.at(iIdx as usize).iMbXY as i32,
         );
         crate::encoder::svc_encode_slice::UpdateMbNeighbor(
-            pCurDq,
+            Some(&*pCurDq),
             mbs.at_mut(iIdx as usize),
             kiMbWidth,
             uiSliceIdc,
@@ -3235,7 +3242,7 @@ pub unsafe fn WelsCodeOnePicPartition(
 ) -> i32 {
     let pCurLayer = current_layer(pCtx);
     let uSlcBuffIdx = 0usize;
-    let pStartSlice = crate::encoder::svc_encode_slice::slice_in_bank(pCurLayer, uSlcBuffIdx, iStartSliceIdx);
+    let pStartSlice = crate::encoder::svc_encode_slice::slice_in_bank(&*pCurLayer, uSlcBuffIdx, iStartSliceIdx);
     if pStartSlice.is_null() {
         return ENC_RETURN_UNEXPECTED;
     }
@@ -3290,7 +3297,7 @@ pub unsafe fn WelsCodeOnePicPartition(
         }
 
         crate::encoder::nal_encap::WelsLoadNal(pCtx.pOut.as_deref_mut().expect("pOut lives"), keNalType as i32, keNalRefIdc as i32);
-        let pCurSlice = crate::encoder::svc_encode_slice::slice_in_bank(current_layer(pCtx), uSlcBuffIdx, iSliceIdx);
+        let pCurSlice = crate::encoder::svc_encode_slice::slice_in_bank(&*(current_layer(pCtx)), uSlcBuffIdx, iSliceIdx);
         (*pCurSlice).iSliceIdx = iSliceIdx;
 
         // T7.C3: the layer-level half of `WelsCodeOneSlice`'s I_SLICE arm, one line
@@ -3737,7 +3744,7 @@ pub unsafe fn WelsEncoderEncodeExt(
         if (*pParam).sSliceArgument.uiSliceMode == SM_SINGLE_SLICE {
             // only one slice within a quality layer
             let mut iPayloadSize = 0i32;
-            let pCurSlice = crate::encoder::svc_encode_slice::slice_in_bank(current_layer(pCtx), 0, 0);
+            let pCurSlice = crate::encoder::svc_encode_slice::slice_in_bank(&*(current_layer(pCtx)), 0, 0);
 
             if pCtx.bNeedPrefixNalFlag {
                 pCtx.iEncoderError = AddPrefixNal(pCtx,
@@ -3761,7 +3768,7 @@ pub unsafe fn WelsEncoderEncodeExt(
             );
             debug_assert_eq!(0, (*pCurSlice).iSliceIdx);
             pCtx.iEncoderError = crate::encoder::svc_encode_slice::SetSliceBoundaryInfo(
-                current_layer(pCtx),
+                (current_layer(pCtx)).as_ref(),
                 &mut *pCurSlice,
                 0,
             );
@@ -3972,10 +3979,10 @@ pub unsafe fn WelsEncoderEncodeExt(
                     eNalRefIdc as i32,
                 );
 
-                let pCurSlice = crate::encoder::svc_encode_slice::slice_in_bank(current_layer(pCtx), 0, iSliceIdx);
+                let pCurSlice = crate::encoder::svc_encode_slice::slice_in_bank(&*(current_layer(pCtx)), 0, iSliceIdx);
                 debug_assert_eq!(iSliceIdx, (*pCurSlice).iSliceIdx);
                 pCtx.iEncoderError = crate::encoder::svc_encode_slice::SetSliceBoundaryInfo(
-                    current_layer(pCtx),
+                    (current_layer(pCtx)).as_ref(),
                     &mut *pCurSlice,
                     iSliceIdx,
                 );
@@ -4074,7 +4081,7 @@ pub unsafe fn WelsEncoderEncodeExt(
 
         // update scc related
         if let Some(f) = pCtx.func_list().pfUpdateFMESwitch {
-            f(current_layer(pCtx));
+            f(current_layer(pCtx).as_ref());
         }
 
         // reference picture list update

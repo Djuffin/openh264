@@ -581,8 +581,11 @@ impl SliceIdx {
 #[inline]
 // unsafe-cat: cursor
 #[allow(unsafe_code)]
-pub unsafe fn slice_in_layer(pCurLayer: *mut SDqLayer, kiSliceIdx: i32) -> *mut SSlice {
-    if pCurLayer.is_null() || kiSliceIdx < 0 {
+pub unsafe fn slice_in_layer(pCurLayer: Option<&SDqLayer>, kiSliceIdx: i32) -> *mut SSlice {
+    let Some(pCurLayer) = pCurLayer else {
+        return std::ptr::null_mut();
+    };
+    if kiSliceIdx < 0 {
         return std::ptr::null_mut();
     }
     // An explicit `&` rather than `(*p).vec[i]`: indexing a `Vec` through a raw
@@ -605,7 +608,7 @@ pub unsafe fn slice_in_layer(pCurLayer: *mut SDqLayer, kiSliceIdx: i32) -> *mut 
 #[inline]
 // unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
-pub unsafe fn slice_bank_root(pCurLayer: *mut SDqLayer, kiBank: usize) -> *mut SSlice {
+pub unsafe fn slice_bank_root(pCurLayer: &SDqLayer, kiBank: usize) -> *mut SSlice {
     // **F71.** `&mut Vec<SSlice>` + `as_mut_ptr()` is a `Unique` retag over the
     // three-word `Vec`, and for every fixed slice mode **all** workers resolve bank
     // 0 — so two of them retagging it at once is a data race even though neither
@@ -624,7 +627,7 @@ pub unsafe fn slice_bank_root(pCurLayer: *mut SDqLayer, kiBank: usize) -> *mut S
 #[inline]
 // unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
-pub unsafe fn slice_in_bank(pCurLayer: *mut SDqLayer, kiBank: usize, kiOffset: i32) -> *mut SSlice {
+pub unsafe fn slice_in_bank(pCurLayer: &SDqLayer, kiBank: usize, kiOffset: i32) -> *mut SSlice {
     let root = slice_bank_root(pCurLayer, kiBank);
     if root.is_null() || kiOffset < 0 {
         return std::ptr::null_mut();
@@ -646,7 +649,7 @@ pub unsafe fn slice_in_bank(pCurLayer: *mut SDqLayer, kiBank: usize, kiOffset: i
 /// mint** (Phase 9 E3), replacing the per-record raw hand-outs that stood above
 /// for the neighbour-walker family.
 ///
-/// The layer stays raw under the fork (S63), so the window is minted *from the
+/// The layer is shared under the fork (S63, and `&SDqLayer` since S6.A1), so the window is minted *from the
 /// raw layer per call*, and the window is the safe object the walkers take.
 /// Derivation is S28/S40/F71 verbatim: the array root is read out of the
 /// container's header with no reference formed, so concurrent workers minting
@@ -656,16 +659,19 @@ pub unsafe fn slice_in_bank(pCurLayer: *mut SDqLayer, kiBank: usize, kiOffset: i
 /// access into a coordinate-naming panic (F77) instead of a cross-worker read.
 ///
 /// # Safety
-/// `pCurLayer` must be live with `sMbDataP` allocated. The caller must own
+/// `sMbDataP` must be allocated — liveness is the reference's since **S6.A1**,
+/// which is why this parameter is no longer raw. The caller must own
 /// records `[kiFirstMb .. kiFirstMb + kiCount)` exclusively for the window's
 /// lifetime — its own slice's or partition's under the fork, any range
 /// single-threaded — and must not use another pointer into that range while the
 /// window lives.
 #[inline]
-// unsafe-cat: fork-shared(S63) — the raw-layer parameter is the S63 seam; retires with G's family
+// unsafe-cat: fork-shared(S63) — the `&mut [SMB]` it mints, not the layer parameter:
+// **S6.A1** made that a `&SDqLayer`, and the window is still minted per call from a
+// shared layer so concurrent workers stay sibling derivations (S28/S40/F71).
 #[allow(unsafe_code)]
 pub unsafe fn mb_window<'a>(
-    pCurLayer: *mut SDqLayer,
+    pCurLayer: &SDqLayer,
     kiFirstMb: i32,
     kiCount: i32,
     kiCurMb: i32,
@@ -930,18 +936,21 @@ pub unsafe fn ctx_pic_ref<'a>(pCtx: *mut sWelsEncCtx, r: PicRef) -> Option<&'a S
 /// reference list the layer was stamped with — `None` before the first inter frame,
 /// or if the layer has not been initialised for a frame yet.
 ///
-/// **S37, and the rule this family exists to keep**: the returned borrow is not tied
-/// to `pLayer` (the layer is reached raw, so it cannot be), and a caller must not hold
-/// it across a call that resolves *another* handle in the same pool. Every consumer
-/// below takes what it needs — a stride, a plane root, one array element — and drops
-/// the borrow in the same statement.
+/// **S37, and the rule this family exists to keep** — half of it enforced now.
+/// **S6.A1** tied the returned borrow to `pLayer`, which is a `&'a SDqLayer`, so the
+/// compiler holds the layer still for as long as the result lives; the raw parameter
+/// was the only reason it could not. What the compiler still cannot see is the
+/// *pool*: a caller must not hold the result across a call that resolves another
+/// handle in the same pool. Every consumer below takes what it needs — a stride, a
+/// plane root, one array element — and drops the borrow in the same statement.
 ///
 /// # Safety
-/// `pLayer` must be a live layer stamped by `WelsInitCurrentLayer`.
+/// `pLayer` must be stamped by `WelsInitCurrentLayer`. Liveness is the reference's
+/// to guarantee now; "stamped for this frame" is still the caller's.
 #[inline]
 // unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
-pub unsafe fn layer_ref_pic<'a>(pLayer: *mut SDqLayer) -> Option<&'a SPicture> {
+pub unsafe fn layer_ref_pic<'a>(pLayer: &'a SDqLayer) -> Option<&'a SPicture> {
     let id = (*pLayer).pRefPic?;
     let pRefList = (*pLayer).pRefList;
     if pRefList.is_null() {
@@ -957,13 +966,14 @@ pub unsafe fn layer_ref_pic<'a>(pLayer: *mut SDqLayer) -> Option<&'a SPicture> {
 /// default was null: no reference bound, or no list.
 ///
 /// # Safety
-/// `pLayer` must be a live layer.
+/// `pLayer` is a reference since **S6.A1**, so liveness is no longer the caller's;
+/// what remains is that the layer be stamped for the frame in progress.
 #[inline]
 // unsafe-cat: SCREEN_CONTENT(dormant: Phase 10) — the pointer it hands out; the raw
 // layer parameter is the S63 seam (G's)
 #[allow(unsafe_code)]
 pub unsafe fn layer_ref_feature_storage<'a>(
-    pLayer: *mut SDqLayer,
+    pLayer: &'a SDqLayer,
 ) -> Option<&'a crate::encoder::picture::SScreenBlockFeatureStorage> {
     // **S5.C6c**: the picture owns the storage as an `Option<Box<..>>` now, so the
     // pointer is derived from it rather than copied out of it. The far end —
@@ -987,11 +997,12 @@ pub unsafe fn layer_ref_feature_storage<'a>(
 /// in `phase9_plane_census.md` first.
 ///
 /// # Safety
-/// `pLayer` must be a live layer stamped by `WelsInitCurrentLayer`.
+/// `pLayer` must be stamped by `WelsInitCurrentLayer` — liveness is the reference's
+/// since **S6.A1**; the stamp is still the caller's.
 #[inline]
-// unsafe-cat: fork-shared(S63)
+// unsafe-cat: fork-shared(S63) — the pool behind `pSrcPool`, not the layer parameter
 #[allow(unsafe_code)]
-pub unsafe fn layer_enc_pic<'a>(pLayer: *mut SDqLayer) -> Option<&'a SPicture> {
+pub unsafe fn layer_enc_pic<'a>(pLayer: &'a SDqLayer) -> Option<&'a SPicture> {
     let id = (*pLayer).pEncPic?;
     let pSrcPool = (*pLayer).pSrcPool;
     if pSrcPool.is_null() {
@@ -1027,13 +1038,14 @@ pub unsafe fn layer_enc_pic<'a>(pLayer: *mut SDqLayer) -> Option<&'a SPicture> {
 /// `layer_dec_pic_mut`'s `None` meant.
 ///
 /// # Safety
-/// `pLayer` must be a live layer stamped by `WelsInitCurrentLayer`, and the
-/// frame it stamped must still be the frame in progress.
+/// `pLayer` must be stamped by `WelsInitCurrentLayer`, and the frame it stamped
+/// must still be the frame in progress. Liveness is the reference's since
+/// **S6.A1**; both remaining obligations are the caller's.
 #[inline]
 // unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
 pub unsafe fn layer_rec_view<'a>(
-    pLayer: *mut SDqLayer,
+    pLayer: &'a SDqLayer,
 ) -> Option<&'a crate::encoder::rec_view::RecPicView> {
     (*pLayer).pRecView.as_ref()
 }
@@ -1444,10 +1456,10 @@ pub fn UpdateNonZeroCountCache(pMb: &SMB, pMbCache: &mut SMbCache) {
 #[inline]
 // unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
-pub unsafe fn WelsMbToSliceIdc(pCurDq: *mut SDqLayer, kiMbXY: i32) -> u16 {
-    if pCurDq.is_null() {
+pub unsafe fn WelsMbToSliceIdc(pCurDq: Option<&SDqLayer>, kiMbXY: i32) -> u16 {
+    let Some(pCurDq) = pCurDq else {
         return u16::MAX;
-    }
+    };
     // `&`, T9.C5 — as `WelsGetNextMbOfSlice`: nothing here writes, and this runs
     // per macroblock inside the fork.
     let pSliceCtx = &(*pCurDq).sSliceEncCtx;
@@ -1465,12 +1477,14 @@ pub unsafe fn WelsMbToSliceIdc(pCurDq: *mut SDqLayer, kiMbXY: i32) -> u16 {
 /// Evaluates spatial neighbor availability masks for intra prediction and motion vector prediction.
 // unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
-pub unsafe fn UpdateMbNeighbor(pCurDq: *mut SDqLayer, pMb: &mut SMB, kiMbWidth: i32, uiSliceIdc: u16) {
+pub unsafe fn UpdateMbNeighbor(pCurDq: Option<&SDqLayer>, pMb: &mut SMB, kiMbWidth: i32, uiSliceIdc: u16) {
     // **T9.D9**: `pMb.is_null()` went with the parameter — a reference cannot be
-    // absent. `pCurDq` stays raw until the layer family.
-    if pCurDq.is_null() {
+    // absent. **S6.A1**: the layer followed, and its null guard came with it — the
+    // absent layer is the `None` arm now, so the obligation stayed in the callee
+    // rather than moving to the ~147 call sites.
+    let Some(pCurDq) = pCurDq else {
         return;
-    }
+    };
     let mut uiNeighborAvailFlag: u32 = 0;
     let kiMbXY = (*pMb).iMbXY;
     let kiMbX = (*pMb).iMbX as i32;
@@ -1482,10 +1496,10 @@ pub unsafe fn UpdateMbNeighbor(pCurDq: *mut SDqLayer, pMb: &mut SMB, kiMbWidth: 
     let iLeftTopXY = iTopXY - 1;
     let iRightTopXY = iTopXY + 1;
 
-    let bLeft = (kiMbX > 0) && (uiSliceIdc == WelsMbToSliceIdc(pCurDq, iLeftXY));
-    let bTop = (kiMbY > 0) && (uiSliceIdc == WelsMbToSliceIdc(pCurDq, iTopXY));
-    let bLeftTop = (kiMbX > 0) && (kiMbY > 0) && (uiSliceIdc == WelsMbToSliceIdc(pCurDq, iLeftTopXY));
-    let bRightTop = (kiMbX < (kiMbWidth - 1)) && (kiMbY > 0) && (uiSliceIdc == WelsMbToSliceIdc(pCurDq, iRightTopXY));
+    let bLeft = (kiMbX > 0) && (uiSliceIdc == WelsMbToSliceIdc(Some(pCurDq), iLeftXY));
+    let bTop = (kiMbY > 0) && (uiSliceIdc == WelsMbToSliceIdc(Some(pCurDq), iTopXY));
+    let bLeftTop = (kiMbX > 0) && (kiMbY > 0) && (uiSliceIdc == WelsMbToSliceIdc(Some(pCurDq), iLeftTopXY));
+    let bRightTop = (kiMbX < (kiMbWidth - 1)) && (kiMbY > 0) && (uiSliceIdc == WelsMbToSliceIdc(Some(pCurDq), iRightTopXY));
 
     if bLeft {
         uiNeighborAvailFlag |= LEFT_MB_POS as u32;
@@ -1507,13 +1521,13 @@ pub unsafe fn UpdateMbNeighbor(pCurDq: *mut SDqLayer, pMb: &mut SMB, kiMbWidth: 
 // unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
 pub unsafe fn UpdateMbNeighbourInfoForNextSlice(
-    pCurDq: *mut SDqLayer,
+    pCurDq: Option<&SDqLayer>,
     kiFirstMbIdxOfNextSlice: i32,
     kiLastMbIdxInPartition: i32,
 ) {
-    if pCurDq.is_null() {
+    let Some(pCurDq) = pCurDq else {
         return;
-    }
+    };
     let kiMbWidth = (*pCurDq).sSliceEncCtx.iMbWidth as i32;
     let mut iIdx = kiFirstMbIdxOfNextSlice;
     let iNextSliceFirstMbIdxRowStart = if (kiFirstMbIdxOfNextSlice % kiMbWidth) != 0 { 1 } else { 0 };
@@ -1540,8 +1554,8 @@ pub unsafe fn UpdateMbNeighbourInfoForNextSlice(
         // call — once `UpdateMbNeighbor` takes `&mut SDqLayer`, its argument
         // retag would kill a same-call read through the raw. Nothing between
         // the read and the call reallocates.
-        let kiSliceIdc = WelsMbToSliceIdc(pCurDq, mbs.at(iIdx as usize).iMbXY);
-        UpdateMbNeighbor(pCurDq, mbs.at_mut(iIdx as usize), kiMbWidth, kiSliceIdc);
+        let kiSliceIdc = WelsMbToSliceIdc(Some(pCurDq), mbs.at(iIdx as usize).iMbXY);
+        UpdateMbNeighbor(Some(pCurDq), mbs.at_mut(iIdx as usize), kiMbWidth, kiSliceIdc);
         iIdx += 1;
         if !((iIdx < kiEndMbNeedUpdate) && (iIdx <= kiLastMbIdxInPartition)) {
             break;
@@ -1555,10 +1569,10 @@ pub unsafe fn UpdateMbNeighbourInfoForNextSlice(
 
 // unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
-pub unsafe fn WelsSliceHeaderScalExtInit(pCurLayer: *mut SDqLayer, pSlice: &mut SSlice) {
-    if pCurLayer.is_null() {
+pub unsafe fn WelsSliceHeaderScalExtInit(pCurLayer: Option<&SDqLayer>, pSlice: &mut SSlice) {
+    let Some(pCurLayer) = pCurLayer else {
         return;
-    }
+    };
     let pSliceHeadExt = &mut (*pSlice).sSliceHeaderExt;
     // **T7.C3.** `addr_of_mut!`, not `&mut`: this is *layer* state and every worker
     // runs this function, so a `&mut` retag here is a write as far as the data-race
@@ -1581,10 +1595,13 @@ pub unsafe fn WelsSliceHeaderScalExtInit(pCurLayer: *mut SDqLayer, pSlice: &mut 
 
 // unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
-pub unsafe fn WelsSliceHeaderExtInit(pEncCtx: *mut sWelsEncCtx, pCurLayer: *mut SDqLayer, pSlice: &mut SSlice) {
-    if pEncCtx.is_null() || pCurLayer.is_null() {
+pub unsafe fn WelsSliceHeaderExtInit(pEncCtx: *mut sWelsEncCtx, pCurLayer: Option<&SDqLayer>, pSlice: &mut SSlice) {
+    if pEncCtx.is_null() {
         return;
     }
+    let Some(pCurLayer) = pCurLayer else {
+        return;
+    };
     let pCurSliceExt = &mut (*pSlice).sSliceHeaderExt;
     let pCurSliceHeader = &mut pCurSliceExt.sSliceHeader;
     let uiDid = (*pEncCtx).uiDependencyId as usize;
@@ -1639,7 +1656,7 @@ pub unsafe fn WelsSliceHeaderExtInit(pEncCtx: *mut sWelsEncCtx, pCurLayer: *mut 
     pCurSliceExt.uiDisableInterLayerDeblockingFilterIdc = (*pCurLayer).uiDisableInterLayerDeblockingFilterIdc;
 
     if (*pSlice).bSliceHeaderExtFlag {
-        WelsSliceHeaderScalExtInit(pCurLayer, pSlice);
+        WelsSliceHeaderScalExtInit(Some(pCurLayer), pSlice);
     } else {
         let pCurSliceExt = &mut (*pSlice).sSliceHeaderExt;
         pCurSliceExt.bAdaptiveBaseModeFlag = false;
@@ -1927,7 +1944,7 @@ pub unsafe fn WelsIMbChromaEncode(pEncCtx: *mut sWelsEncCtx, pCurMb: &mut SMB, p
     // **T9.C2**: `pCsCb`/`pCsCr` — two raw cursors into the reconstruction
     // chroma planes — are the seam's two plane views plus this macroblock's
     // chroma origin, which `SPicData`'s `iMbX`/`iMbY` carrier already holds.
-    let view_chroma = layer_rec_view(pCurLayer)
+    let view_chroma = layer_rec_view(&*pCurLayer)
         .expect("the layer's reconstruction view is built for this frame");
     let (kiChrOrgX, kiChrOrgY) = (*pMbCache).SPicData.chroma_origin();
 
@@ -2015,10 +2032,13 @@ pub unsafe fn WelsPMbChromaEncode(pEncCtx: *mut sWelsEncCtx, pSlice: &mut SSlice
 
 // unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
-pub unsafe fn OutputPMbWithoutConstructCsRsNoCopy(pCtx: *mut sWelsEncCtx, pDq: *mut SDqLayer, pSlice: &mut SSlice, pMb: &SMB) {
-    if pCtx.is_null() || pDq.is_null() {
+pub unsafe fn OutputPMbWithoutConstructCsRsNoCopy(pCtx: *mut sWelsEncCtx, pDq: Option<&SDqLayer>, pSlice: &mut SSlice, pMb: &SMB) {
+    if pCtx.is_null() {
         return;
     }
+    let Some(pDq) = pDq else {
+        return;
+    };
     let mb_type = (*pMb).uiMbType;
     //intra have been reconstructed, NO COPY from CS to pDecPic--
     if (IS_INTER(mb_type) && !IS_SKIP(mb_type)) || IS_I_BL(mb_type) {
@@ -2071,10 +2091,10 @@ pub fn UpdateQpForOverflow(pCurMb: &mut SMB, kuiChromaQpIndexOffset: u8) {
 
 // unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
-pub unsafe fn WelsGetNextMbOfSlice(pCurDq: *mut SDqLayer, kiMbXY: i32) -> i32 {
-    if pCurDq.is_null() {
+pub unsafe fn WelsGetNextMbOfSlice(pCurDq: Option<&SDqLayer>, kiMbXY: i32) -> i32 {
+    let Some(pCurDq) = pCurDq else {
         return -1;
-    }
+    };
     // **`&`, T9.C5.** Nothing below writes; the `&mut` was a transliteration of the
     // C++'s `SSliceCtx*`, and under multi-threading every worker walks its own
     // slice through this function per macroblock, so it was a whole-`SSliceCtx`
@@ -2184,7 +2204,7 @@ pub unsafe fn WelsISliceMdEnc(pEncCtx: *mut sWelsEncCtx, pSlice: &mut SSlice) ->
         }
         iCurMbIdx = iNextMbIdx;
         let mut mbs = mb_window(
-            pCurLayer,
+            &*pCurLayer,
             kiSliceFirstMbXY,
             iCurMbIdx - kiSliceFirstMbXY + 1,
             iCurMbIdx,
@@ -2245,7 +2265,7 @@ pub unsafe fn WelsISliceMdEnc(pEncCtx: *mut sWelsEncCtx, pSlice: &mut SSlice) ->
         {  // A6: the block is the shared borrow's scope (F191/F212)
             let func_list = (*pEncCtx).func_list();
             if let Some(func) = func_list.pfMdBackgroundInfoUpdate {
-                func(pCurLayer, mbs.cur_mut(), pMbCache.bCollocatedPredFlag, I_SLICE);
+                func(&*pCurLayer, mbs.cur_mut(), pMbCache.bCollocatedPredFlag, I_SLICE);
             }
             func_list.pfRc.WelsRcMbInfoUpdate(
                 pEncCtx as *mut _,
@@ -2256,7 +2276,7 @@ pub unsafe fn WelsISliceMdEnc(pEncCtx: *mut sWelsEncCtx, pSlice: &mut SSlice) ->
         }
 
         iNumMbCoded += 1;
-        iNextMbIdx = WelsGetNextMbOfSlice(pCurLayer, iCurMbIdx);
+        iNextMbIdx = WelsGetNextMbOfSlice(pCurLayer.as_ref(), iCurMbIdx);
         if iNextMbIdx == -1 || iNextMbIdx >= kiTotalNumMb || iNumMbCoded >= kiTotalNumMb {
             break;
         }
@@ -2279,7 +2299,6 @@ pub unsafe fn WelsISliceMdEncDynamic(pEncCtx: *mut sWelsEncCtx, pSlice: &mut SSl
     // its own `&mut (*pCurDq).sSliceEncCtx` every iteration, which pops the `Unique`
     // this binding held, and `DynSlcJudgeSliceBoundaryStepBack` then reads through
     // the dead tag. `pMbCache` is the encode probe's fourth red (session B).
-    let pSliceCtx = std::ptr::addr_of_mut!((*pCurLayer).sSliceEncCtx);
     let pSliceHdExt = std::ptr::addr_of_mut!((*pSlice).sSliceHeaderExt);
     let kiSliceFirstMbXY = (*pSliceHdExt).sSliceHeader.iFirstMbInSlice;
     let mut iNextMbIdx = kiSliceFirstMbXY;
@@ -2308,7 +2327,7 @@ pub unsafe fn WelsISliceMdEncDynamic(pEncCtx: *mut sWelsEncCtx, pSlice: &mut SSl
     loop {
         iCurMbIdx = iNextMbIdx;
         let mut mbs = mb_window(
-            pCurLayer,
+            &*pCurLayer,
             kiSliceFirstMbXY,
             iCurMbIdx - kiSliceFirstMbXY + 1,
             iCurMbIdx,
@@ -2380,7 +2399,11 @@ pub unsafe fn WelsISliceMdEncDynamic(pEncCtx: *mut sWelsEncCtx, pSlice: &mut SSl
         if DynSlcJudgeSliceBoundaryStepBack(
             pEncCtx,
             pSlice,
-            pSliceCtx,
+            // **S6.A1 / F239**: derived here, not 100 lines up. A `&SDqLayer` argument
+            // anywhere above is a shared retag over the *whole* layer, which pops a
+            // field-precise `addr_of_mut!` held across it — the defect Miri found in
+            // `WelsInitCurrentLayer`. Deriving at the use keeps this a fresh sibling.
+            std::ptr::addr_of_mut!((*pCurLayer).sSliceEncCtx),
             mbs.cur().iMbXY,
             &mut sDss,
         ) {
@@ -2409,7 +2432,7 @@ pub unsafe fn WelsISliceMdEncDynamic(pEncCtx: *mut sWelsEncCtx, pSlice: &mut SSl
         }
 
         iNumMbCoded += 1;
-        iNextMbIdx = WelsGetNextMbOfSlice(pCurLayer, iCurMbIdx);
+        iNextMbIdx = WelsGetNextMbOfSlice(pCurLayer.as_ref(), iCurMbIdx);
         if iNextMbIdx == -1 || iNextMbIdx >= kiTotalNumMb || iNumMbCoded >= kiTotalNumMb {
             (*pSlice).iCountMbNumInSlice = iCurMbIdx - (*pCurLayer).LastCodedMbIdxOfPartition[kiPartitionId].load(Ordering::Relaxed);
             (*pCurLayer).LastCodedMbIdxOfPartition[kiPartitionId].store(iCurMbIdx, Ordering::Relaxed);
@@ -2522,7 +2545,7 @@ pub unsafe fn WelsMdInterMbLoop(
         }
         iCurMbIdx = iNextMbIdx;
         let mut mbs = mb_window(
-            pCurLayer,
+            &*pCurLayer,
             kiSliceFirstMbXY,
             iCurMbIdx - kiSliceFirstMbXY + 1,
             iCurMbIdx,
@@ -2571,7 +2594,7 @@ pub unsafe fn WelsMdInterMbLoop(
                     // `&mut Vec` borrows this used to take retagged both arrays whole,
                     // which is the shape no worker may hold under the fork.
                     crate::encoder::svc_base_layer_md::WelsMdInterSaveSadAndRefMbType(
-                        layer_rec_view(pCurLayer)
+                        layer_rec_view(&*pCurLayer)
                             .expect("the layer's reconstruction picture is bound"),
                         mbs.cur(),
                         pMd,
@@ -2580,7 +2603,7 @@ pub unsafe fn WelsMdInterMbLoop(
 
                 if let Some(func) = func_list.pfMdBackgroundInfoUpdate {
                     func(
-                        pCurLayer,
+                        &*pCurLayer,
                         mbs.cur_mut(),
                         (*pMbCache).bCollocatedPredFlag,
                         ctx_ref_pic(pEncCtx).map_or(0, |p| p.iPictureType),
@@ -2622,7 +2645,7 @@ pub unsafe fn WelsMdInterMbLoop(
         }
 
         mbs.cur_mut().uiSliceIdc = kiSliceIdx as u16;
-        OutputPMbWithoutConstructCsRsNoCopy(pEncCtx, pCurLayer, pSlice, mbs.cur());
+        OutputPMbWithoutConstructCsRsNoCopy(pEncCtx, pCurLayer.as_ref(), pSlice, mbs.cur());
 
         {  // A6: the block is the shared borrow's scope (F191/F212)
             let func_list = (*pEncCtx).func_list();
@@ -2635,7 +2658,7 @@ pub unsafe fn WelsMdInterMbLoop(
         }
 
         iNumMbCoded += 1;
-        iNextMbIdx = WelsGetNextMbOfSlice(pCurLayer, iCurMbIdx);
+        iNextMbIdx = WelsGetNextMbOfSlice(pCurLayer.as_ref(), iCurMbIdx);
         if iNextMbIdx == -1 || iNextMbIdx >= kiTotalNumMb || iNumMbCoded >= kiTotalNumMb {
             break;
         }
@@ -2668,7 +2691,6 @@ pub unsafe fn WelsMdInterMbLoopOverDynamicSlice(
     let pCurLayer = current_layer(pEncCtx);
     // S29, both: held across the MB loop, whose callees re-derive the same fields.
     // See `WelsISliceMdEncDynamic` for `sSliceEncCtx`'s red and its invalidator.
-    let pSliceCtx = std::ptr::addr_of_mut!((*pCurLayer).sSliceEncCtx);
     let mut iNumMbCoded = 0;
     let kiTotalNumMb: i32 = (*pCurLayer).iMbWidth as i32 * (*pCurLayer).iMbHeight as i32;
     let mut iNextMbIdx = kiSliceFirstMbXY;
@@ -2718,7 +2740,7 @@ pub unsafe fn WelsMdInterMbLoopOverDynamicSlice(
         }
         iCurMbIdx = iNextMbIdx;
         let mut mbs = mb_window(
-            pCurLayer,
+            &*pCurLayer,
             kiSliceFirstMbXY,
             iCurMbIdx - kiSliceFirstMbXY + 1,
             iCurMbIdx,
@@ -2771,7 +2793,7 @@ pub unsafe fn WelsMdInterMbLoopOverDynamicSlice(
             {
                 // As above.
                 crate::encoder::svc_base_layer_md::WelsMdInterSaveSadAndRefMbType(
-                    layer_rec_view(pCurLayer)
+                    layer_rec_view(&*pCurLayer)
                         .expect("the layer's reconstruction picture is bound"),
                     mbs.cur(),
                     pMd,
@@ -2781,7 +2803,7 @@ pub unsafe fn WelsMdInterMbLoopOverDynamicSlice(
                 let func_list = (*pEncCtx).func_list();
                 if let Some(func) = func_list.pfMdBackgroundInfoUpdate {
                     func(
-                        pCurLayer,
+                        &*pCurLayer,
                         mbs.cur_mut(),
                         (*pMbCache).bCollocatedPredFlag,
                         ctx_ref_pic(pEncCtx).map_or(0, |p| p.iPictureType),
@@ -2827,7 +2849,11 @@ pub unsafe fn WelsMdInterMbLoopOverDynamicSlice(
         if DynSlcJudgeSliceBoundaryStepBack(
             pEncCtx,
             pSlice,
-            pSliceCtx,
+            // **S6.A1 / F239**: derived here, not 100 lines up. A `&SDqLayer` argument
+            // anywhere above is a shared retag over the *whole* layer, which pops a
+            // field-precise `addr_of_mut!` held across it — the defect Miri found in
+            // `WelsInitCurrentLayer`. Deriving at the use keeps this a fresh sibling.
+            std::ptr::addr_of_mut!((*pCurLayer).sSliceEncCtx),
             mbs.cur().iMbXY,
             &mut sDss,
         ) {
@@ -2847,7 +2873,7 @@ pub unsafe fn WelsMdInterMbLoopOverDynamicSlice(
         }
 
         mbs.cur_mut().uiSliceIdc = kiSliceIdx as u16;
-        OutputPMbWithoutConstructCsRsNoCopy(pEncCtx, pCurLayer, pSlice, mbs.cur());
+        OutputPMbWithoutConstructCsRsNoCopy(pEncCtx, pCurLayer.as_ref(), pSlice, mbs.cur());
 
         {  // A6: the block is the shared borrow's scope (F191/F212)
             let func_list = (*pEncCtx).func_list();
@@ -2860,7 +2886,7 @@ pub unsafe fn WelsMdInterMbLoopOverDynamicSlice(
         }
 
         iNumMbCoded += 1;
-        iNextMbIdx = WelsGetNextMbOfSlice(pCurLayer, iCurMbIdx);
+        iNextMbIdx = WelsGetNextMbOfSlice(pCurLayer.as_ref(), iCurMbIdx);
         if iNextMbIdx == -1 || iNextMbIdx >= kiTotalNumMb || iNumMbCoded >= kiTotalNumMb {
             (*pCurLayer).LastCodedMbIdxOfPartition[kiPartitionId].store(iCurMbIdx, Ordering::Relaxed);
             (*pCurLayer).NumSliceCodedOfPartition[kiPartitionId].fetch_add(1, Ordering::Relaxed);
@@ -3263,7 +3289,7 @@ pub unsafe fn WelsCodeOneSlice(pEncCtx: *mut sWelsEncCtx, pCurSlice: &mut SSlice
         (*pCurSlice).sScaleShift = if kuiTemporalId != 0 { kuiTemporalId.saturating_sub(ref_temporal) } else { 0 };
     }
 
-    WelsSliceHeaderExtInit(pEncCtx, pCurLayer, &mut *pCurSlice);
+    WelsSliceHeaderExtInit(pEncCtx, pCurLayer.as_ref(), &mut *pCurSlice);
 
     //RomRC init slice by slice
     // A2: the raw accessor answered null on an empty array and this is the one
@@ -3293,7 +3319,10 @@ pub unsafe fn WelsCodeOneSlice(pEncCtx: *mut sWelsEncCtx, pCurSlice: &mut SSlice
     (*pCurSlice).uiLastMbQp =
         (pic_init_qp as i32 + (*pCurSlice).sSliceHeaderExt.sSliceHeader.iSliceQpDelta as i32) as u8;
 
-    let idr_idx = (*pNalHeadExt).bIdrFlag as usize;
+    // **S6.A1 / F239**: re-derived. `WelsSliceHeaderExtInit(.., pCurLayer.as_ref(), ..)`
+    // above is a whole-layer shared retag that pops the `addr_of_mut!` bound at the top
+    // of this function; the two uses before it are still on the live tag, this one is not.
+    let idr_idx = (*std::ptr::addr_of!((*pCurLayer).sLayerInfo.sNalHeaderExt)).bIdrFlag as usize;
     let func = g_pWelsSliceCoding[idr_idx][kiDynamicSliceFlag];
     let iEncReturn = func(pEncCtx, &mut *pCurSlice);
     if iEncReturn != ENC_RETURN_SUCCESS {
@@ -3382,7 +3411,7 @@ pub unsafe fn AddSliceBoundary(
     }
     let pCurLayer = current_layer(pEncCtx);
     let buf_idx = (*pCurSlice).uiBufferIdx as usize;
-    let pSliceBuffer = slice_bank_root(pCurLayer, buf_idx);
+    let pSliceBuffer = slice_bank_root(&*pCurLayer, buf_idx);
     let iCodedSliceNum = (*pCurLayer).sSliceBufferInfo[buf_idx].iCodedSliceNum;
     let iCurMbIdx = kiCurMbIdx;
     let iCurSliceIdc = {
@@ -3418,7 +3447,7 @@ pub unsafe fn AddSliceBoundary(
             );
         }
 
-        UpdateMbNeighbourInfoForNextSlice(pCurLayer, iFirstMbIdxOfNextSlice, kiLastMbIdxInPartition);
+        UpdateMbNeighbourInfoForNextSlice(pCurLayer.as_ref(), iFirstMbIdxOfNextSlice, kiLastMbIdxInPartition);
     }
 }
 
@@ -3573,11 +3602,11 @@ pub fn InitSliceBoundaryInfo(
 
 // unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
-pub unsafe fn SetSliceBoundaryInfo(pCurLayer: *mut SDqLayer, pSlice: &mut SSlice, kiSliceIdx: i32) -> i32 {
-    if pCurLayer.is_null()
-        || (*pCurLayer).pFirstMbIdxOfSlice.is_empty()
-        || (*pCurLayer).pCountMbNumInSlice.is_empty()
-    {
+pub unsafe fn SetSliceBoundaryInfo(pCurLayer: Option<&SDqLayer>, pSlice: &mut SSlice, kiSliceIdx: i32) -> i32 {
+    let Some(pCurLayer) = pCurLayer else {
+        return ENC_RETURN_UNEXPECTED;
+    };
+    if (*pCurLayer).pFirstMbIdxOfSlice.is_empty() || (*pCurLayer).pCountMbNumInSlice.is_empty() {
         return ENC_RETURN_UNEXPECTED;
     }
 
@@ -3675,7 +3704,7 @@ pub unsafe fn InitSliceList(
 pub unsafe fn InitAllSlicesInThread(pCtx: &mut sWelsEncCtx) -> i32 {
     let pCurDqLayer = current_layer(pCtx);
     for iSliceIdx in 0..(*pCurDqLayer).iMaxSliceNum {
-        let slice_ptr = slice_in_layer(pCurDqLayer, iSliceIdx);
+        let slice_ptr = slice_in_layer(pCurDqLayer.as_ref(), iSliceIdx);
         if slice_ptr.is_null() {
             return ENC_RETURN_UNEXPECTED;
         }
@@ -3701,9 +3730,9 @@ pub unsafe fn InitOneSliceInThread(
     let pCurDq = current_layer(pCtx);
     let slc_ptr = if (*pCurDq).bThreadSlcBufferFlag {
         let kiCodedNumInThread = (*pCurDq).sSliceBufferInfo[kiSlcBuffIdx as usize].iCodedSliceNum;
-        slice_in_bank(pCurDq, kiSlcBuffIdx as usize, kiCodedNumInThread)
+        slice_in_bank(&*pCurDq, kiSlcBuffIdx as usize, kiCodedNumInThread)
     } else {
-        slice_in_bank(pCurDq, 0, kiSliceIdx)
+        slice_in_bank(&*pCurDq, 0, kiSliceIdx)
     };
     if slc_ptr.is_null() {
         return ENC_RETURN_UNEXPECTED;
@@ -3933,10 +3962,10 @@ pub unsafe fn ReallocateSliceList(
     // Both are re-derived from the bank's root *after* the resize, because the resize
     // is what moves it (S28, and the reason the pointer spelling needed re-stamping
     // at all).
-    let pBaseSlice = slice_in_bank(pDqLayer, kiBank, 0);
+    let pBaseSlice = slice_in_bank(&*pDqLayer, kiBank, 0);
 
     for iSliceIdx in kiMaxSliceNumOld..kiMaxSliceNumNew {
-        let pSlice = slice_in_bank(pDqLayer, kiBank, iSliceIdx);
+        let pSlice = slice_in_bank(&*pDqLayer, kiBank, iSliceIdx);
         (*pSlice).iSliceIdx = -1;
         (*pSlice).uiBufferIdx = 0;
         (*pSlice).iCountMbNumInSlice = 0;
@@ -4006,7 +4035,7 @@ pub unsafe fn ReallocateSliceInThread(
     let iMaxSliceNum = (*pDqLayer).sSliceBufferInfo[KiSlcBuffIdx as usize].iMaxSliceNum;
     let iCodedSliceNum = (*pDqLayer).sSliceBufferInfo[KiSlcBuffIdx as usize].iCodedSliceNum;
     let mut iMaxSliceNumNew = 0;
-    let pLastCodedSlice = slice_in_bank(pDqLayer, KiSlcBuffIdx as usize, iCodedSliceNum - 1);
+    let pLastCodedSlice = slice_in_bank(&*pDqLayer, KiSlcBuffIdx as usize, iCodedSliceNum - 1);
     // **T7.C5, F71's idiom at the one site the workers still reached it from.**
     // `&mut` here is a `Unique` retag over *shared* parameter state — this function
     // runs on a worker (`EncodeOnePartitionSizeLimited`), every worker resolves the
@@ -4085,7 +4114,7 @@ pub unsafe fn ReallocSliceBuffer(pCtx: &mut sWelsEncCtx) -> i32 {
     let iMaxSliceNumOld = (*pCurLayer).sSliceBufferInfo[0].iMaxSliceNum;
     let mut iMaxSliceNumNew = 0;
     let kiCurDid = pCtx.uiDependencyId as usize;
-    let pLastCodedSlice = slice_in_bank(pCurLayer, 0, iMaxSliceNumOld - 1);
+    let pLastCodedSlice = slice_in_bank(&*pCurLayer, 0, iMaxSliceNumOld - 1);
     // A7: as `InitSliceInLayer` — the mode, not a cursor.
     let kuiSliceMode =
         pCtx.param().sSpatialLayers[kiCurDid].sSliceArgument.uiSliceMode;
@@ -4135,7 +4164,7 @@ pub unsafe fn ReallocSliceBuffer(pCtx: &mut sWelsEncCtx) -> i32 {
 #[allow(unsafe_code)]
 pub unsafe fn CheckAllSliceBuffer(pCurLayer: &mut SDqLayer, kiCodedSliceNum: i32) -> i32 {
     for iSliceIdx in 0..kiCodedSliceNum {
-        let slice_ptr = slice_in_layer(pCurLayer, iSliceIdx);
+        let slice_ptr = slice_in_layer(Some(&*pCurLayer), iSliceIdx);
         if slice_ptr.is_null() || iSliceIdx != (*slice_ptr).iSliceIdx {
             return ENC_RETURN_UNEXPECTED;
         }
@@ -4170,7 +4199,7 @@ pub unsafe fn ReOrderSliceInLayer(pCtx: &mut sWelsEncCtx, kuiSliceMode: SliceMod
     for iSlcBuffIdx in 0..kiThreadNum {
         let iSliceNumInThread = (*pCurLayer).sSliceBufferInfo[iSlcBuffIdx as usize].iMaxSliceNum;
         for iSliceIdx in 0..iSliceNumInThread {
-            let pSliceBuffer = slice_in_bank(pCurLayer, iSlcBuffIdx as usize, iSliceIdx);
+            let pSliceBuffer = slice_in_bank(&*pCurLayer, iSlcBuffIdx as usize, iSliceIdx);
             if pSliceBuffer.is_null() {
                 return ENC_RETURN_UNEXPECTED;
             }
@@ -4204,7 +4233,7 @@ pub unsafe fn ReOrderSliceInLayer(pCtx: &mut sWelsEncCtx, kuiSliceMode: SliceMod
 pub unsafe fn GetCurLayerNalCount(pCurDq: &mut SDqLayer, kiCodedSliceNum: i32) -> i32 {
     let mut iTotalNalCount = 0;
     for iSliceIdx in 0..kiCodedSliceNum {
-        let slice_ptr = slice_in_layer(pCurDq, iSliceIdx);
+        let slice_ptr = slice_in_layer(Some(&*pCurDq), iSliceIdx);
         if !slice_ptr.is_null() && (*slice_ptr).sSliceBs.uiBsPos > 0 {
             iTotalNalCount += (*slice_ptr).sSliceBs.iNalIndex;
         }
@@ -5172,7 +5201,7 @@ mod tests {
         unsafe {
             // Whole-grid window: stamp every record, then read the whole grid
             // back both ways out from the middle.
-            let mut whole = mb_window(p_layer, 0, (w * h) as i32, 0);
+            let mut whole = mb_window(&*p_layer, 0, (w * h) as i32, 0);
             for i in 0..(w * h) {
                 whole.at_mut(i).iMbXY = i as i32;
             }
@@ -5195,9 +5224,9 @@ mod tests {
             // Two disjoint windows — the fork's shape: worker A's slice and
             // worker B's. Interleave writes and read A's back through A after
             // B has been minted and used: sibling derivations, nothing popped.
-            let mut a = mb_window(p_layer, 0, 7, 0);
+            let mut a = mb_window(&*p_layer, 0, 7, 0);
             a.at_mut(3).iMbXY = -3;
-            let mut b = mb_window(p_layer, 7, (w * h - 7) as i32, 7);
+            let mut b = mb_window(&*p_layer, 7, (w * h - 7) as i32, 7);
             b.at_mut(9).iMbXY = -9;
             a.at_mut(5).iMbXY = -5;
             assert_eq!(a.at(3).iMbXY, -3, "window B's mint popped window A");
