@@ -969,7 +969,7 @@ pub unsafe fn WelsMarkMMCORefInfoWithBase(
     // byte-identical to the C++'s `memcpy` from the live field: the first
     // store is `base = base`.
     for iSliceIdx in 0..kiCountSliceNum {
-        let pSlice = crate::encoder::svc_encode_slice::slice_in_layer(pCurDq, iSliceIdx);
+        let pSlice = crate::encoder::svc_encode_slice::slice_in_layer(Some(&*pCurDq), iSliceIdx);
         if !pSlice.is_null() {
             (*pSlice).sSliceHeaderExt.sSliceHeader.sRefMarking = kBaseMarking;
         }
@@ -995,7 +995,7 @@ pub unsafe fn WelsMarkMMCORefInfo(
     if kiCountSliceNum <= 0 {
         return;
     }
-    let pBaseSlice = crate::encoder::svc_encode_slice::slice_in_layer(pCurDq, 0);
+    let pBaseSlice = crate::encoder::svc_encode_slice::slice_in_layer(Some(&*pCurDq), 0);
     if pBaseSlice.is_null() {
         return;
     }
@@ -1346,7 +1346,7 @@ pub unsafe fn WelsUpdateSliceHeaderSyntax(
     let bLtrMarkingFlag = ctx_ltr_at(pCtx, (uiDid) as usize).bLTRMarkingFlag;
 
     for iIdx in 0..kiCountSliceNum {
-        let pSlice = crate::encoder::svc_encode_slice::slice_in_layer(pCurDq, iIdx);
+        let pSlice = crate::encoder::svc_encode_slice::slice_in_layer(Some(&*pCurDq), iIdx);
         if pSlice.is_null() {
             continue;
         }
@@ -1737,7 +1737,7 @@ pub unsafe fn WelsMarkMMCORefInfoScreen(
     if kiCountSliceNum <= 0 {
         return;
     }
-    let pBaseSlice = crate::encoder::svc_encode_slice::slice_in_layer(pCurDq, 0);
+    let pBaseSlice = crate::encoder::svc_encode_slice::slice_in_layer(Some(&*pCurDq), 0);
     if pBaseSlice.is_null() {
         return;
     }

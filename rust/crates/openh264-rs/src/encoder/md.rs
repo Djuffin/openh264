@@ -1600,9 +1600,9 @@ pub unsafe extern "C" fn MeRefineFracPixel(
     // left `pRefMb` at its whole-sample part, so `>> 2` is the displacement.
     let kiBlockX = (*pMe).iCurMeBlockPixX as isize;
     let kiBlockY = (*pMe).iCurMeBlockPixY as isize;
-    let pEncPicture = layer_enc_pic(pCurDqLayer).expect("the layer's source picture is bound");
+    let pEncPicture = layer_enc_pic(&*pCurDqLayer).expect("the layer's source picture is bound");
     let cEnc = pEncPicture.plane(0).cursor(kiBlockX, kiBlockY);
-    let pRefPicture = layer_ref_pic(pCurDqLayer).expect("the layer's reference picture is bound");
+    let pRefPicture = layer_ref_pic(&*pCurDqLayer).expect("the layer's reference picture is bound");
     let cRef = pRefPicture.plane(0).cursor(
         kiBlockX + ((iMvx as isize) >> 2),
         kiBlockY + ((iMvy as isize) >> 2),

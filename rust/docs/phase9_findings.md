@@ -6747,3 +6747,145 @@ to a half-converted tree — in fork-shared code, at the end of a long session �
 shape that lands a silent defect. The prerequisites are committed and probe-verified;
 the flip is mechanical from this finding and should be started from a clean tree with
 the three groups above applied deliberately, writers first.
+
+## F237 — the layer flip's own census was 4 short and 4 long: 37 bodies, not 41, and three more writers than the split named
+
+F236 measured "41 bodies taking `*mut SDqLayer`" and split them 4 writers / 10
+`Option` / 27 straight. Re-measured at this tree before applying the flip, the
+42 `: *mut SDqLayer` sites are **not** 41 bodies plus one:
+
+* **4 are function-pointer typedefs**, not bodies — `PDeblockingFilterSlice`
+  (`deblocking.rs:275`), `PMdBackgroundInfoUpdateFunc` (`wels_func_ptr_def.rs:121`),
+  `PWelsSliceHeaderWriteFunc` (`svc_encode_slice.rs:1373`), `PUpdateFMESwitch`
+  (`svc_motion_estimate.rs:409`).
+* **1 is a test local** — `let p_layer: *mut SDqLayer = &mut layer;`
+  (`svc_encode_slice.rs:5170`).
+* **37 are bodies**: 14 guarded, 23 unguarded. The guarded 14 are exactly F236's 4
+  writers + 10 `Option` group, so those two groups were right; the straight group is
+  **23, not 27**, and the four missing were the typedefs counted as bodies.
+
+The typedefs matter beyond arithmetic: eleven of the 23 unguarded bodies are
+`unsafe extern "C" fn` targets of those four typedefs, so a body cannot move without
+its typedef moving in the same edit. F236 does not mention them at all.
+
+**And the writer list was three short.** Applying the flip and letting rustc classify —
+F236's own rule, "ask the compiler, not a regex" — turned up three more bodies that
+cannot take `&SDqLayer`:
+
+* `ReallocateSliceInThread` calls the writer `ReallocateSliceList`, so it is a writer by
+  transitivity. The compiler says so at the call, not at any assignment, which is why
+  no writes-detector over its own body would ever have found it.
+* `DeblockingFilterSliceAvcbase` forms `&mut pCurDq.sMbDataP` for the whole-grid window.
+  That is legitimate — its own comment records F108's verified claim that this is the
+  *single-threaded* frame filter — but it is a `&mut` through the layer all the same.
+  Its typedef `PDeblockingFilterSlice` and its sibling `DeblockingFilterSliceAvcbaseNull`
+  stay raw with it.
+
+The two `_c` forwarders `WelsSliceHeaderWrite_c` / `WelsSliceHeaderExtWrite_c` are
+raw for the same transitive reason, and F236's split does not place them either.
+So the true split at this tree, **measured after the flip landed, not derived**:
+**9 stay raw / 11 `Option<&SDqLayer>` / 17 `&SDqLayer`** — with `UpdateFMESwitchNull`
+moved into the `Option` group by F238 below.
+
+**What did drive mechanically, exactly as F236 promised**: the call sites. 323 primary
+error spans, auto-rewritten off rustc's own byte offsets by rule — `&*x` for
+`expected &SDqLayer`, `x.as_ref()` for `expected Option<&SDqLayer>` from a raw, `Some(x)`
+from a reference — converged in two passes to 4 errors, all four of which were the real
+findings above. 124 derefs inserted; an audit of every one against a null guard within
+30 lines flagged 8, of which 6 were `current_layer` sites whose callees deref
+unconditionally (unchanged hazard) and 2 sat *after* `ReallocateSliceList`'s own guard.
+
+## F238 — the straight group's rule has an exception it does not state: a body that never dereferences its layer is not safe to convert to `&`
+
+F236 justifies the unguarded group with: "They already dereference unconditionally, so
+forming `&*ptr` at their call sites assumes exactly what the existing dereference
+assumed, and no more." That is true of 22 of the 23 — and false of the one body that
+dereferences *nothing*.
+
+`UpdateFMESwitchNull` is `pub unsafe extern "C" fn UpdateFMESwitchNull(_pCurLayer) {}` —
+an empty body behind `PUpdateFMESwitch`, and `pfUpdateFMESwitch` is set unconditionally
+to it (`svc_motion_estimate.rs:547`; nothing else is ever assigned). Its only call is
+`encoder_ext.rs:4077`, `f(current_layer(pCtx))`. Passing a **null** raw pointer to a
+function that ignores it is completely defined. Rewriting that site to
+`f(&*(current_layer(pCtx)))` makes it **undefined the moment the layer is unset** — a
+regression manufactured by the conversion, in the one body whose emptiness put it
+outside the rule's premise.
+
+The rule's real form: a body may take `&SDqLayer` when it dereferences the layer
+unconditionally. "No null guard" is a proxy for that, and the proxy fails for no-ops.
+A mechanical check catches the class — for every converted body, count uses of the
+parameter name in the body; zero uses means the premise does not hold. At this tree
+`UpdateFMESwitchNull` was the only one.
+
+**The fix is better than reverting to raw**: `PUpdateFMESwitch` and
+`UpdateFMESwitchNull` take `Option<&SDqLayer>`, and the call site becomes
+`f(current_layer(pCtx).as_ref())`. Null stays representable, exactly as the raw pointer
+made it, and the raw pointer is still gone. `Option<&T>` is niche-optimised to one
+pointer and is FFI-safe, so the `extern "C"` typedef is unaffected.
+
+Two further stale claims this checkpoint corrected, both in `svc_encode_slice.rs`:
+`layer_ref_pic`'s doc asserted "the returned borrow is not tied to `pLayer` (the layer is
+reached raw, so it cannot be)" — tying it is precisely what the flip does — and four
+`# Safety` clauses required a "live layer" from parameters that are now references, which
+is F231's class one file at a time.
+
+## F239 — the layer flip's precondition was necessary but not sufficient: `&SDqLayer` is a whole-struct retag that pops field-precise raw derivations *on one thread*, and only Miri sees it
+
+S5 cleared the flip's stated obstacle — "zero fields of `SDqLayer` are written from
+inside the fork any more", measured, and F236 treated that as the go-ahead. It is a
+statement about **concurrency**. The defect the flip actually shipped is about
+**aliasing on a single thread**, and nothing in the plan anticipated it.
+
+Miri, on `encode_loop_runs_over_size_limited_dynamic_slices_under_the_aliasing_checker`:
+
+```
+error: Undefined Behavior: trying to retag from <2973712> for SharedReadWrite
+       permission at alloc309593[0x208], but that tag does not exist in the borrow stack
+  --> src/encoder/encoder_ext.rs:2243:27   (write_bytes through pNalHdExt)
+help: <2973712> was created by a Unique retag at offsets [0x208..0x220]
+  --> encoder_ext.rs:2190   let pNalHdExt = &mut (*pCurDq).sLayerInfo.sNalHeaderExt;
+help: <2973712> was later invalidated at offsets [0x0..0x2f8] by a SharedReadOnly retag
+  --> encoder_ext.rs:2236   slice_in_layer(pCurDq.as_ref(), iIdx)
+```
+
+Read the two offset ranges: the `&mut` claims **[0x208..0x220]**, 24 bytes of one field;
+`pCurDq.as_ref()` claims **[0x0..0x2f8]**, the whole 760-byte layer. Converting
+`slice_in_layer` to `Option<&SDqLayer>` turned every call site holding a raw layer into
+a whole-struct claim, and a whole-struct claim pops every field-precise derivation live
+across it. The callee reads one `Vec` header. The retag does not care.
+
+**Both differential sweeps passed this, twice, in both profiles — 583/583 each.** The
+byte gate cannot see a tag it never materialises. This is the third defect the Miri lane
+has caught behind a green sweep, and the first where the sweep ran *after* the aliasing
+error was already in the tree.
+
+**The shape, so it can be searched for and not rediscovered.** Within one body:
+
+1. `let X = &mut (*L).field;` or `addr_of_mut!((*L).field)` — a Unique or
+   SharedReadWrite claim on part of the layer;
+2. any later call taking the converted layer — `L.as_ref()`, `&*L` — a SharedReadOnly
+   claim on all of it, which pops X;
+3. any later *use* of X, read or write.
+
+A scan for exactly that three-step span over every layer-named binding found **5 spans in
+4 functions**: `WelsInitCurrentLayer` (the one Miri reached), `WelsISliceMdEncDynamic`
+and `WelsMdInterMbLoopOverDynamicSlice` (`addr_of_mut!((*pCurLayer).sSliceEncCtx)` held
+across three retags apiece), and `WelsCodeOneSlice`
+(`addr_of_mut!((*pCurLayer).sLayerInfo.sNalHeaderExt)` across `WelsSliceHeaderExtInit`).
+**Miri reported one of the five** — it aborts at the first UB, so a green re-run after one
+fix proves only that one fix. The scan is what covers the rest; the checker confirms it.
+
+**The fix is live-range narrowing, not re-plumbing**: derive at the use. Each of the four
+derivations had its uses either entirely before the retag or in one place after it, so
+each became a fresh sibling derived from the still-live raw parent. `addr_of!` bindings
+need no such care — a SharedReadOnly sibling coexists with a SharedReadOnly parent claim,
+which is why the read-only derivation at `svc_encode_slice.rs:1581` is untouched.
+
+**The rule this leaves for the context flip**, which is the same conversion one level up
+and roughly 114 allows wide: `&sWelsEncCtx` will do this to *every* field-precise context
+derivation held across it, and there are far more of those than there were layer ones.
+Narrowing live ranges is a per-site fix that does not scale to that. Before the context
+flip, the derivations that must survive it should move to shared (`&`/atomic/`Cell`)
+access, where sibling claims coexist by construction — the tabulation the brief already
+asks for should record, per field, whether its derivation is exclusive, because that is
+the column that predicts this defect.

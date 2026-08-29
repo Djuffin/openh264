@@ -406,7 +406,7 @@ pub type PCalculateBlockFeatureOfFrame = unsafe extern "C" fn(
 /// holds the safe per-block twins below.
 pub type PCalculateSingleBlockFeature = fn(cRef: &PlaneCursor<'_>) -> i32;
 
-pub type PUpdateFMESwitch = unsafe extern "C" fn(pCurLayer: *mut SDqLayer);
+pub type PUpdateFMESwitch = unsafe extern "C" fn(pCurLayer: Option<&SDqLayer>);
 
 /// The motion-estimation dispatch group — every slot the search family reaches
 /// *through the table it used to be handed back* (session F, the Phase 4a
@@ -1697,7 +1697,7 @@ pub fn MotionEstimateFeatureFullSearch(
 /// Matches `void UpdateFMESwitchNull (SDqLayer* pCurLayer)` in `svc_motion_estimate.cpp:1059`.
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
-pub unsafe extern "C" fn UpdateFMESwitchNull(_pCurLayer: *mut SDqLayer) {}
+pub unsafe extern "C" fn UpdateFMESwitchNull(_pCurLayer: Option<&SDqLayer>) {}
 
 // ============================================================================
 // Feature Storage Dynamic Allocation & Deallocation
@@ -1837,8 +1837,13 @@ mod tests {
     // unsafe-cat: instrument(test)
     #[allow(unsafe_code)]
     fn test_fme_noop_callback() {
+        // **S6.A1**: the callback took `*mut SDqLayer` and this test passed null to
+        // say "the no-op ignores its layer". The parameter is `&SDqLayer` now, so
+        // null is unrepresentable and the test says the same thing with a real
+        // layer — that the body is empty, which is the whole claim.
+        let layer = crate::encoder::svc_encode_slice::SDqLayer::default();
         unsafe {
-            UpdateFMESwitchNull(std::ptr::null_mut());
+            UpdateFMESwitchNull(Some(&layer));
         }
     }
 }

@@ -1238,7 +1238,7 @@ pub unsafe fn DeblockingFilterFrameAvcbase(pCurDq: &mut SDqLayer) {
     if (*pCurDq).pDecPic.is_none() {
         return;
     }
-    let pSlice = crate::encoder::svc_encode_slice::slice_in_layer(pCurDq, 0);
+    let pSlice = crate::encoder::svc_encode_slice::slice_in_layer(Some(&*pCurDq), 0);
     if pSlice.is_null() {
         return;
     }
@@ -1276,7 +1276,13 @@ pub unsafe fn DeblockingFilterFrameAvcbase(pCurDq: &mut SDqLayer) {
     if (*pCurDq).pRefList.is_null() {
         return;
     }
-    let Some(view) = crate::encoder::svc_encode_slice::layer_rec_view(pCurDq) else {
+    // **S6.A1**: the field, not [`layer_rec_view`]. That accessor's `'a` binds to
+    // the layer now that it takes `&'a SDqLayer`, so its result borrows the *whole*
+    // layer — which cannot coexist with the `&mut pCurDq.sMbDataP` window below.
+    // This function holds `&mut SDqLayer`, so it may split the two disjoint fields
+    // itself; the accessor's body is this exact expression, so which address is
+    // read does not change.
+    let Some(view) = pCurDq.pRecView.as_ref() else {
         return;
     };
     pFilter.iCsStride[0] = (*pCurDq).iCsStride[0];
@@ -1360,7 +1366,7 @@ pub unsafe extern "C" fn DeblockingFilterSliceAvcbase(
     if (*pCurDq).pRefList.is_null() {
         return;
     }
-    let Some(view) = crate::encoder::svc_encode_slice::layer_rec_view(pCurDq) else {
+    let Some(view) = crate::encoder::svc_encode_slice::layer_rec_view(&*pCurDq) else {
         return;
     };
     pFilter.iCsStride[0] = (*pCurDq).iCsStride[0];
@@ -1394,7 +1400,7 @@ pub unsafe extern "C" fn DeblockingFilterSliceAvcbase(
     loop {
         let iCurMbIdx = iNextMbIdx;
         let mut mbs = crate::encoder::svc_encode_slice::mb_window(
-            pCurDq,
+            &*pCurDq,
             kiFirstWindowMb,
             iCurMbIdx - kiFirstWindowMb + 1,
             iCurMbIdx,
@@ -1403,7 +1409,7 @@ pub unsafe extern "C" fn DeblockingFilterSliceAvcbase(
         DeblockingMbAvcbase(view, map, &mut mbs, &mut pFilter);
 
         iNumMbFiltered += 1;
-        iNextMbIdx = WelsGetNextMbOfSlice(pCurDq, iCurMbIdx);
+        iNextMbIdx = WelsGetNextMbOfSlice(Some(&*pCurDq), iCurMbIdx);
         if iNextMbIdx == -1 || iNextMbIdx >= kiTotalNumMb || iNumMbFiltered >= kiTotalNumMb {
             break;
         }
@@ -1434,7 +1440,7 @@ pub unsafe extern "C" fn PerformDeblockingFilter(pEnc: &mut sWelsEncCtx) {
     } else if (*pCurLayer).iLoopFilterDisableIdc == 2 {
         let iSliceCount = GetCurrentSliceNum(&*pCurLayer);
         for iSliceIdx in 0..iSliceCount {
-            let pSlice = crate::encoder::svc_encode_slice::slice_in_layer(pCurLayer, iSliceIdx);
+            let pSlice = crate::encoder::svc_encode_slice::slice_in_layer(pCurLayer.as_ref(), iSliceIdx);
             if !pSlice.is_null() {
                 DeblockingFilterSliceAvcbase(pCurLayer, &mut *pSlice);
             }

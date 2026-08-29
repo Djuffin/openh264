@@ -613,7 +613,7 @@ pub unsafe fn WelsEncRecI16x16Y(
         // byte-identically. `kiRecStride` leaves the call because the view
         // carries it.
         const QUADS: [(isize, isize); 4] = [(0, 0), (8, 0), (0, 8), (8, 8)];
-        let view = layer_rec_view(pCurDqLayer)
+        let view = layer_rec_view(&*pCurDqLayer)
             .expect("the layer's reconstruction view is built for this frame");
         let (lx, ly) = (*pMbCache).SPicData.luma_origin();
         let dst = view.plane(0).cursor(lx, ly);
@@ -631,7 +631,7 @@ pub unsafe fn WelsEncRecI16x16Y(
         // the census knew neither the `pfIDctI16x16Dc` slot nor its
         // `WelsIDctRecI16x16Dc_c` kernel. It writes the reconstruction plane from
         // the same `pPred` / `pBestPred` pair as the four calls above.
-        let view = layer_rec_view(pCurDqLayer)
+        let view = layer_rec_view(&*pCurDqLayer)
             .expect("the layer's reconstruction view is built for this frame");
         let (lx, ly) = (*pMbCache).SPicData.luma_origin();
         let kiPredOff = mem_pred_luma_off((*pMbCache).uiMemPredLumaHalf);
@@ -644,7 +644,7 @@ pub unsafe fn WelsEncRecI16x16Y(
     } else {
         // **T9.C2.** The residual-free branch: the prediction *is* the
         // reconstruction, copied straight across from `sMemPredMb`'s luma half.
-        let view = layer_rec_view(pCurDqLayer)
+        let view = layer_rec_view(&*pCurDqLayer)
             .expect("the layer's reconstruction view is built for this frame");
         let (lx, ly) = (*pMbCache).SPicData.luma_origin();
         let kiPredOff = mem_pred_luma_off((*pMbCache).uiMemPredLumaHalf);
@@ -749,7 +749,7 @@ pub unsafe fn WelsEncRecI4x4Y(
         // the stride is never below 16, so neither term can wrap into the other.
         // Prediction is `sMemPredBlk4` at stride 4 (not 16 — this is the 4x4
         // arena, and its rows are four bytes).
-        let view = layer_rec_view(pCurDqLayer)
+        let view = layer_rec_view(&*pCurDqLayer)
             .expect("the layer's reconstruction view is built for this frame");
         let (lx, ly) = (*pMbCache).SPicData.luma_origin();
         let (dx, dy) = (dec_block_offset % iRecStride as isize, dec_block_offset / iRecStride as isize);
@@ -764,7 +764,7 @@ pub unsafe fn WelsEncRecI4x4Y(
         // **T9.C2.** As the `pfIDctT4` branch above: `dec_block_offset` divides by
         // `iRecStride` into the 4x4 block's `(dx, dy)` within the macroblock, and
         // the prediction is `sMemPredBlk4` at stride 4.
-        let view = layer_rec_view(pCurDqLayer)
+        let view = layer_rec_view(&*pCurDqLayer)
             .expect("the layer's reconstruction view is built for this frame");
         let (lx, ly) = (*pMbCache).SPicData.luma_origin();
         let (dx, dy) =
