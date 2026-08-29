@@ -6981,3 +6981,57 @@ dispatch and its sibling `PCalculateSingleBlockFeature` was already a plain `fn`
 "dead `#[allow(unsafe_code)]`" detector that looks for the token `unsafe` in the body
 misses `#[unsafe(no_mangle)]` on the *item*: it reported `WelsGetCodecVersion` as dead,
 and removing the allow broke the build. The attribute is the unsafe there.
+
+## F242 — the 444 remaining allows, re-classified at S6's close, and the two things the next session should know before it starts
+
+F232 classified the then-472 allows and the S6 brief built its "no-seam middle" table
+from that. Re-measured at 444, by what actually blocks each one (the classifier reads
+the whole signature, not the first line — F232's own warning about a classifier that
+counted `&mut sWelsEncCtx` as a raw pointer):
+
+| blocker | count |
+|---|---:|
+| no raw parameter at all — body-blocked | 215 |
+| `*mut sWelsEncCtx` | 133 |
+| some *other* raw parameter | 87 |
+| `*mut SDqLayer` | 10 |
+
+The layer column is down to 10 and those are the nine bodies S6.A1 left raw plus a
+typedef, so the layer is finished as a blocking edge. **The 87 "other" is the tractable
+middle**, and it is not distributed the way the brief's per-file table suggests. By
+pointee type:
+
+| type | count | note |
+|---|---:|---|
+| `u8` | 53 | plane roots — the pixel family, a job of its own |
+| `SLogContext` | 16 | see below |
+| `i16` | 10 | coefficient blocks |
+| `SWelsSvcCodingParam` | 9 | |
+| `i32`, `SSliceArgument` | 7 each | `SSliceArgument` landed as S6.D1 |
+| `BsWriter` | 6 | D1's remainder |
+
+**The `SLogContext` family, analysed but deliberately not started.** 18 raw parameters
+funnel into one sink, `WelsLog(pLogCtx: *mut SLogContext, ..)`, which is *already a safe
+`pub fn`*: it null-checks, copies the struct out (`SLogContext` is `Copy`), and calls the
+application's `pfLog`. The obvious conversion — `Option<&SLogContext>` — is **wrong for a
+reason the function's own comment already records**: it copies the struct out precisely
+so that "the callback's own re-entry (a callback that calls back into the codec)" does
+not alias a live borrow. A `&SLogContext` parameter puts that borrow back, live across
+the callback, in all 63 calling frames — F239's shape, one level out, and with a
+re-entrancy path that Miri's encoder shards do not exercise because no test installs a
+tracing callback that re-enters.
+
+The shape that avoids it is **by value**: `SLogContext` is `Copy` and four words, the
+sink already works on a copy, and a by-value parameter holds no borrow for a re-entrant
+callback to collide with. Null then has to be spelled — and it already has a spelling,
+because `SLogContext::default()` has `pfLog: None` and `WelsLog` returns early on that,
+so a null pointer and a default-constructed context are observationally identical today.
+That is the conversion to do; it is 18 parameters and 63 call sites and it wants a fresh
+session, not the tail of one.
+
+**And a note on running the tools.** The brief warns that `rust/tools/*.py` globbed from
+the repo root match nothing and print a false zero. `safeplan_prohibitions.py` did
+exactly that mid-session — "0 *mut-ctx bodies scanned against 0 writers", which reads
+like a clean result rather than a non-run. From the crate root the same command reports
+"106 ... no violations". A checker whose failure mode is a green-looking zero should say
+so; until it does, every quoted prohibition result should carry its body count.
