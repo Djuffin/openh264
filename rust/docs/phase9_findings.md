@@ -6661,3 +6661,41 @@ C4b's (`mvd_cursor_survives_a_slice_held_across_the_forked_workers`, red on the
 whole-context spelling) and D2a's (red on the non-atomic field). C4b's happened to be
 sharp at 8 rounds because its control conflicts on every iteration; D2a's does not, and
 nothing about the two probes' shape says which is which. Check the control.
+
+## F235 — the DQ layer's two obstacles need *different* fixes, and the Miri message says which: "non-atomic write" wants atomics, "retag write" wants a separate allocation
+
+S5's brief prescribes both halves of the DQ-layer storage move in one breath — "the
+banks to their own allocation outside the struct, the counters to atomics" — without
+saying why the two get different treatment. The probes make the reason legible, and it
+is worth stating because the next such field will present the same choice.
+
+Both obstacles are inline fields of `SDqLayer` written from inside the fork, and both
+make a sibling's whole-layer `&SDqLayer` retag illegal. But Miri diagnoses them
+differently, because the conflicting access is different:
+
+| field | in-fork writer | Miri's report on the control | fix |
+|---|---|---|---|
+| `NumSliceCodedOfPartition`, `LastCodedMbIdxOfPartition` | `[kiPartitionId] = ..` / `+= 1` — a plain store | "(1) **non-atomic write** … (2) retag read of type `SDqLayer`" | atomics |
+| `sSliceBufferInfo` | `&mut ..[kiBank].pSliceBuffer` — a borrow | "(1) **retag write** … (2) retag read of type `SDqLayer`" | separate allocation |
+
+Atomics fix the first because the conflict *is* the write, and an atomic write is not a
+data race against a concurrent read. They cannot fix the second: the conflicting access
+there is the `&mut` **retag**, which happens whatever the field's type is — making
+`iMaxSliceNum` atomic would leave `&mut ..pSliceBuffer` retagging the same bytes.
+Moving the banks to their own allocation fixes it because a retag is confined to the
+allocation it names, so a `&mut` into the box cannot conflict with a `&` over the layer.
+That is F163's argument, the one C4b relies on for the MVD table.
+
+**A detail that decides whether a probe tests anything.** `Box<[T; N]>` works here only
+because rustc handles `Box` place-deref natively: `&mut ..sSliceBufferInfo[w]` creates
+no `&mut Box<..>`, so the eight header bytes that *do* remain inline are never retagged.
+A probe written with `addr_of_mut!` instead of `&mut` would pass without exercising any
+of this — it creates no reference at all. D2b's probe uses `ReallocateSliceList`'s exact
+spelling for that reason, and its control was re-run after the spelling changed.
+
+**Measured outcome.** With both fixes in, a scan of every write and every `&mut` through
+a raw layer pointer, cross-referenced against `phase9_forksplit.py`, reports **zero**
+`SDqLayer` fields written from inside the fork — `ReallocateSliceList`'s bank borrow is
+the one remaining in-fork `&mut`, and it now lands in the box. `sMbDataP` was never an
+obstacle: `MbArray<T>` is `Vec`-backed, so per-worker macroblock writes already went to
+a separate allocation.
