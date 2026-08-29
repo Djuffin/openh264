@@ -16,6 +16,7 @@
 #![deny(unsafe_code)]
 
 use crate::encoder::encoder_context::{BLOCK_SIZE_ALL, SMVUnitXY};
+use crate::encoder::svc_motion_estimate::{LIST_SIZE_MSE_16x16, LIST_SIZE_SUM_16x16, LIST_SIZE_SUM_8x8};
 pub use crate::safe::plane::PaddedPlane;
 
 /// `PADDING_LENGTH` — `codec/encoder/core/inc/wels_const.h`. The luma border
@@ -38,35 +39,106 @@ pub const LIST_SIZE: usize = 0x10000;
 
 /// `SScreenBlockFeatureStorage` — `codec/encoder/core/inc/picture.h:43`.
 /// Stored with a reference picture, one per frame.
+///
+/// **S6.B1 — owned, and the two pointer tables are index tables.** Every field was a
+/// raw pointer into a `CMemoryAlign` block (`svc_motion_estimate.cpp:690-721`); the
+/// storage owns its five buffers now. The shape is not a transliteration, because two
+/// of the five were *pointers into a third*:
+///
+/// * `pLocationPointer` is the **arena** — one flat run of (x, y) qpel pairs, grouped
+///   by feature value, `2 * kiFrameSize` `u16`s wide.
+/// * `pLocationOfFeature` held, per feature value, the address where that value's group
+///   starts in the arena. It is `Vec<usize>` now: the same position, named as an offset
+///   the arena can be indexed by.
+/// * `pFeatureValuePointerList` held, per feature value, a *roving cursor* that starts
+///   at the group base and advances by 2 as positions are written. Same change: an
+///   index that advances by 2.
+///
+/// Indices rather than pointers is what makes the pair expressible at all — two live
+/// raw cursors into one owned `Vec` cannot both be held safely, and the offsets say
+/// exactly what the addresses said. `iActualListSize` still bounds the first two
+/// tables; the cursor table keeps the C++'s larger `WELS_MAX (LIST_SIZE_SUM_16x16,
+/// LIST_SIZE_MSE_16x16)` length, which is **not** `iActualListSize` and never was.
+///
+/// No longer `#[repr(C)]`: `Vec` has no C shape, and nothing crosses the ABI with this
+/// type — `SPicture` owns it as an `Option<Box<..>>` (S5.C6c) and the api island never
+/// names it.
 // SCREEN_CONTENT(dormant: Phase 10)
-#[repr(C)]
 #[derive(Debug)]
 pub struct SScreenBlockFeatureStorage {
-    pub pFeatureOfBlockPointer: *mut u16,
+    /// One feature value per block position of the reference frame, row-major over
+    /// `kiFrameSize` entries. `PerformFMEPreprocess` moves the caller's buffer in.
+    pub pFeatureOfBlockPointer: Vec<u16>,
     pub iIs16x16: i32,
     pub uiFeatureStrategyIndex: u8,
-    pub pTimesOfFeatureValue: *mut u32,
-    pub pLocationOfFeature: *mut *mut u16,
-    pub pLocationPointer: *mut u16,
+    /// Histogram: how many block positions carry each feature value. `iActualListSize`
+    /// entries.
+    pub pTimesOfFeatureValue: Vec<u32>,
+    /// Per feature value, the **start offset** of its group in `pLocationPointer`.
+    /// `iActualListSize` entries.
+    pub pLocationOfFeature: Vec<usize>,
+    /// The arena of (x, y) qpel position pairs, grouped by feature value.
+    pub pLocationPointer: Vec<u16>,
     pub iActualListSize: i32,
     pub uiSadCostThreshold: [u32; BLOCK_SIZE_ALL],
     pub bRefBlockFeatureCalculated: bool,
-    pub pFeatureValuePointerList: *mut *mut u16,
+    /// Per feature value, the **roving write cursor** into `pLocationPointer` — starts
+    /// at that value's base and advances by 2 per position written.
+    pub pFeatureValuePointerList: Vec<usize>,
 }
 
 impl Default for SScreenBlockFeatureStorage {
+    /// The zeroed block `WelsMallocz` handed back, minus the pointers — every buffer
+    /// empty, and `uiSadCostThreshold` `UINT_MAX`-filled exactly as before **S6.B1**
+    /// (a derived `Default` would zero it, which is a different storage).
     fn default() -> Self {
         Self {
-            pFeatureOfBlockPointer: std::ptr::null_mut(),
+            pFeatureOfBlockPointer: Vec::new(),
             iIs16x16: 0,
             uiFeatureStrategyIndex: 0,
-            pTimesOfFeatureValue: std::ptr::null_mut(),
-            pLocationOfFeature: std::ptr::null_mut(),
-            pLocationPointer: std::ptr::null_mut(),
+            pTimesOfFeatureValue: Vec::new(),
+            pLocationOfFeature: Vec::new(),
+            pLocationPointer: Vec::new(),
             iActualListSize: 0,
             uiSadCostThreshold: [u32::MAX; BLOCK_SIZE_ALL],
             bRefBlockFeatureCalculated: false,
-            pFeatureValuePointerList: std::ptr::null_mut(),
+            pFeatureValuePointerList: Vec::new(),
+        }
+    }
+}
+
+impl SScreenBlockFeatureStorage {
+    /// The allocator of `svc_motion_estimate.cpp:690-721`, as a constructor.
+    ///
+    /// Every length is that function's, unchanged: the histogram and base table are
+    /// `kiListSize` long, the arena is `2 * kiFrameSize`, and the cursor table is the
+    /// C++'s `WELS_MAX (LIST_SIZE_SUM_16x16, LIST_SIZE_MSE_16x16)` — deliberately not
+    /// `kiListSize`. `uiSadCostThreshold` is `UINT_MAX`-filled there and here.
+    ///
+    /// Nothing in the tree calls this yet — `AllocPicture` refuses
+    /// `iNeedFeatureStorage != 0` and F229 deleted the caller — so it exists for
+    /// Phase 10 and for this family's first test, which is the only referee the
+    /// conversion has (no sweep row reaches a line of this code).
+    pub fn for_frame(kiFrameWidth: i32, kiFrameHeight: i32, bIsBlock8x8: bool, kiFeatureStrategyIndex: u8) -> Self {
+        let kiMarginSize = if bIsBlock8x8 { 8 } else { 16 };
+        let kiFrameSize =
+            ((kiFrameWidth - kiMarginSize).max(0) * (kiFrameHeight - kiMarginSize).max(0)) as usize;
+        let kiListSize = if kiFeatureStrategyIndex == 0 {
+            if bIsBlock8x8 { LIST_SIZE_SUM_8x8 } else { LIST_SIZE_SUM_16x16 }
+        } else {
+            256
+        };
+        Self {
+            pFeatureOfBlockPointer: Vec::new(),
+            iIs16x16: i32::from(!bIsBlock8x8),
+            uiFeatureStrategyIndex: kiFeatureStrategyIndex,
+            pTimesOfFeatureValue: vec![0; kiListSize],
+            pLocationOfFeature: vec![0; kiListSize],
+            pLocationPointer: vec![0; 2 * kiFrameSize],
+            iActualListSize: kiListSize as i32,
+            uiSadCostThreshold: [u32::MAX; BLOCK_SIZE_ALL],
+            bRefBlockFeatureCalculated: false,
+            pFeatureValuePointerList: vec![0; LIST_SIZE_SUM_16x16.max(LIST_SIZE_MSE_16x16)],
         }
     }
 }

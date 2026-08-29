@@ -1201,7 +1201,6 @@ pub fn long_ref_pic<'a>(
 // `else` arm for a null `pStreamSeqNum` (`decoder_core.cpp:2265`), which is
 // unreachable code once the counter is a field.
 //
-// `src/decoder/` is down to **one** `#[allow(unsafe_code)]` item — `SPicture`'s
 // `data_ptr` in `picture.rs`, whose one production use writes `ppDst` across the
 // ABI.
 
