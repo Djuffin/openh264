@@ -660,15 +660,20 @@ pub use crate::common::wels_common_defs::EWelsSliceType;
 // ============================================================================
 
 /// Zeroes out the line stride padding area `[iWidth .. iStride)` for all lines.
+///
+/// **S5.C6a**: `pData: *mut u8` became the plane it always pointed into. The caller
+/// hands `&mut plane.as_mut_slice()[plane.origin()..]`, which is byte-for-byte the
+/// `data_ptr(i)` this used to take — `data_ptr` *is* `root_ptr() + origin()` — so the
+/// addresses written are unchanged and the extent is now carried rather than trusted.
+/// The `is_null()` guard becomes `is_empty()`: a picture with no plane answered null
+/// there and answers an empty slice here, which is the same question.
 #[inline]
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn ClearEndOfLinePadding(pData: *mut u8, iStride: i32, iWidth: i32, iHeight: i32) {
-    if !pData.is_null() && iWidth < iStride {
+pub fn ClearEndOfLinePadding(pData: &mut [u8], iStride: i32, iWidth: i32, iHeight: i32) {
+    if !pData.is_empty() && iWidth < iStride {
         let diff = (iStride - iWidth) as usize;
         for i in 0..iHeight {
-            let p = pData.offset((i * iStride + iWidth) as isize);
-            std::ptr::write_bytes(p, 0, diff);
+            let at = (i * iStride + iWidth) as usize;
+            pData[at..at + diff].fill(0);
         }
     }
 }
@@ -731,18 +736,16 @@ pub fn WelsUpdateSpatialIdxMap(
 }
 
 /// Evaluates whether the input picture requires aspect-ratio preserving scaling.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn JudgeNeedOfScaling(
+/// **S5.C6a**: `*mut Scaled_Picture` became the `&mut` its one caller already held.
+/// `WelsInitScaledPic` is passed `&mut self.m_sScaledPicture` and hands it straight
+/// through, so the pointer was a reference that had been through a cast and back, and
+/// the `is_null()` guard could not fire.
+pub fn JudgeNeedOfScaling(
     pParam: &SWelsSvcCodingParam,
-    pScaledPicture: *mut Scaled_Picture,
+    pScaledPicture: &mut Scaled_Picture,
 ) -> bool {
-    if pScaledPicture.is_null() {
-        return false;
-    }
-
-    let kiInputPicWidth = (*pParam).SUsedPicRect.iWidth;
-    let kiInputPicHeight = (*pParam).SUsedPicRect.iHeight;
+    let kiInputPicWidth = pParam.SUsedPicRect.iWidth;
+    let kiInputPicHeight = pParam.SUsedPicRect.iHeight;
     let layerCount = (*pParam).iSpatialLayerNum;
     if layerCount <= 0 {
         return false;
@@ -767,21 +770,21 @@ pub unsafe fn JudgeNeedOfScaling(
         let iInputHeightXDstWidth = kiInputPicHeight * iCurDstWidth;
 
         if iInputWidthXDstHeight > iInputHeightXDstWidth {
-            (*pScaledPicture).iScaledWidth[idx] = iCurDstWidth.max(4);
+            pScaledPicture.iScaledWidth[idx] = iCurDstWidth.max(4);
             let h = if kiInputPicWidth != 0 {
                 iInputHeightXDstWidth / kiInputPicWidth
             } else {
                 0
             };
-            (*pScaledPicture).iScaledHeight[idx] = h.max(4);
+            pScaledPicture.iScaledHeight[idx] = h.max(4);
         } else {
             let w = if kiInputPicHeight != 0 {
                 iInputWidthXDstHeight / kiInputPicHeight
             } else {
                 0
             };
-            (*pScaledPicture).iScaledWidth[idx] = w.max(4);
-            (*pScaledPicture).iScaledHeight[idx] = iCurDstHeight.max(4);
+            pScaledPicture.iScaledWidth[idx] = w.max(4);
+            pScaledPicture.iScaledHeight[idx] = iCurDstHeight.max(4);
         }
 
         iSpatialIdx -= 1;
@@ -829,60 +832,50 @@ pub fn AllocPicture(
 }
 
 /// Initializes scaled intermediate picture buffers if aspect-ratio scaling is required.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn WelsInitScaledPic(
+///
+/// **S5.C6a**: as [`JudgeNeedOfScaling`], which it hands its own parameter to — the
+/// single caller passes `&mut self.m_sScaledPicture`.
+pub fn WelsInitScaledPic(
     pParam: &SWelsSvcCodingParam,
-    pScaledPicture: *mut Scaled_Picture,
+    pScaledPicture: &mut Scaled_Picture,
 ) -> i32 {
     let bInputPicNeedScaling = JudgeNeedOfScaling(pParam, pScaledPicture);
     if bInputPicNeedScaling {
-        (*pScaledPicture).pScaledInputPicture = AllocPicture(
-            (*pParam).SUsedPicRect.iWidth,
-            (*pParam).SUsedPicRect.iHeight,
+        pScaledPicture.pScaledInputPicture = AllocPicture(
+            pParam.SUsedPicRect.iWidth,
+            pParam.SUsedPicRect.iHeight,
             false,
             0,
         );
-        if (*pScaledPicture).pScaledInputPicture.is_none() {
+        if pScaledPicture.pScaledInputPicture.is_none() {
             return -1;
         }
 
+        // S5.C6a: the plane triple, safely. `planes_mut3` is the same three planes
+        // `planes()` handed back as `data_ptr`s, and the `[origin..]` re-slice is what
+        // that pointer arithmetic spelled.
         let pPic = (*pScaledPicture)
             .pScaledInputPicture
             .as_deref_mut()
-            .expect("just allocated")
-            .planes();
-        ClearEndOfLinePadding(
-            pPic.pData[0],
-            pPic.iLineSize[0],
-            pPic.iWidthInPixel,
-            pPic.iHeightInPixel,
-        );
-        ClearEndOfLinePadding(
-            pPic.pData[1],
-            pPic.iLineSize[1],
-            pPic.iWidthInPixel >> 1,
-            pPic.iHeightInPixel >> 1,
-        );
-        ClearEndOfLinePadding(
-            pPic.pData[2],
-            pPic.iLineSize[2],
-            pPic.iWidthInPixel >> 1,
-            pPic.iHeightInPixel >> 1,
-        );
+            .expect("just allocated");
+        let (kiW, kiH) = (pPic.iWidthInPixel, pPic.iHeightInPixel);
+        let [py, pu, pv] = pPic.planes_mut3();
+        for (plane, kiPlaneW, kiPlaneH) in
+            [(py, kiW, kiH), (pu, kiW >> 1, kiH >> 1), (pv, kiW >> 1, kiH >> 1)]
+        {
+            let (o, kiStride) = (plane.origin(), plane.stride() as i32);
+            ClearEndOfLinePadding(&mut plane.as_mut_slice()[o..], kiStride, kiPlaneW, kiPlaneH);
+        }
     }
     0
 }
 
 /// Releases the scaled picture. **Since T6.F2 that is a drop** — the picture owns
 /// every byte it has, so `CMemoryAlign` is not involved and neither is a free walk.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn FreeScaledPic(pScaledPicture: *mut Scaled_Picture) {
-    if pScaledPicture.is_null() {
-        return;
-    }
-    (*pScaledPicture).pScaledInputPicture = None;
+/// **S5.C6a**: as [`WelsInitScaledPic`] — both call sites pass
+/// `&mut ..m_sScaledPicture`, so the null test could not fire.
+pub fn FreeScaledPic(pScaledPicture: &mut Scaled_Picture) {
+    pScaledPicture.pScaledInputPicture = None;
 }
 
 // ============================================================================
@@ -1626,10 +1619,7 @@ impl CWelsPreProcess {
         }
 
         let dIdx = kiDidx as usize;
-        Self::WelsExchangeSpatialPictures(
-            &mut self.m_pLastSpatialPicture[dIdx][1],
-            &mut self.m_pLastSpatialPicture[dIdx][0],
-        );
+        Self::WelsExchangeSpatialPictures(&mut self.m_pLastSpatialPicture[dIdx], 1, 0);
 
         let kiCurPos = self.GetCurPicPosition(kiDidx);
         if (iCurTid as i32) < kiCurPos || pCtx.param().iDecompStages == 0 {
@@ -1641,14 +1631,16 @@ impl CWelsPreProcess {
                 let kiAvailableLtrPos = self.m_uiSpatialLayersInTemporal[dIdx] as usize
                     + pCtx.vaa().expect("the frame's video-analysis block").uiMarkLongTermPicIdx as usize;
                 Self::WelsExchangeSpatialPictures(
-                    &mut self.m_pSpatialPic[dIdx][kiAvailableLtrPos],
-                    &mut self.m_pSpatialPic[dIdx][iCurTid as usize],
+                    &mut self.m_pSpatialPic[dIdx],
+                    kiAvailableLtrPos,
+                    iCurTid as usize,
                 );
                 pCtx.bRefOfCurTidIsLtr[dIdx][iCurTid as usize] = false;
             }
             Self::WelsExchangeSpatialPictures(
-                &mut self.m_pSpatialPic[dIdx][kiCurPos as usize],
-                &mut self.m_pSpatialPic[dIdx][iCurTid as usize],
+                &mut self.m_pSpatialPic[dIdx],
+                kiCurPos as usize,
+                iCurTid as usize,
             );
         }
 
@@ -1715,38 +1707,33 @@ impl CWelsPreProcess {
         bForceCopy: bool,
     ) -> i32 {
         let mut iRet = 0;
-        let mut sSrcPixMap = SPixMap::default();
-        let mut sDstPicMap = SPixMap::default();
 
-        // S37: resolve both pictures to their plane roots up front and work through
-        // raw cursors from here — `srcRef` and `dstRef` are frequently *the same*
-        // picture (no scaling configured), which no pair of references could express.
+        // **S5.C6a — the two `SPixMap` locals are gone, and the compiler is what
+        // found them.** `sSrcPixMap` and `sDstPicMap` were built field by field on
+        // every call — twenty assignments — and once `Padding` stopped taking plane
+        // roots, `rustc` reported every one of them as "value assigned is never
+        // read". They were **write-only**: `sSrcPixMap`'s single reader was
+        // `sDstPicMap = sSrcPixMap`, and `sDstPicMap`'s single reader was the
+        // `Padding` call. Deleting a write-only local cannot move a byte.
+        //
+        // What they were carrying is `Padding`'s question — *which picture* — and
+        // that is now one `SrcPicRef` (`padRef` below) instead of two descriptors.
+        //
+        // S37's note stood here: "resolve both pictures to their plane roots up front
+        // and work through raw cursors from here — `srcRef` and `dstRef` are
+        // frequently the same picture, which no pair of references could express."
+        // That is still true of `pSrc`/`pDstPic` below, which the copy arm hands to
+        // `WelsMoveMemory_c` as six raw roots, and it is why that arm stays raw.
         let pSrc = self.src_mut(srcRef).planes();
         let pDstPic = self.src_mut(dstRef).planes();
 
-        sSrcPixMap.pPixel[0] = pSrc.pData[0];
-        sSrcPixMap.pPixel[1] = pSrc.pData[1];
-        sSrcPixMap.pPixel[2] = pSrc.pData[2];
-        sSrcPixMap.iSizeInBits = g_kiPixMapSizeInBits;
-        sSrcPixMap.sRect.iRectWidth = iSrcWidth;
-        sSrcPixMap.sRect.iRectHeight = iSrcHeight;
-        sSrcPixMap.iStride[0] = pSrc.iLineSize[0];
-        sSrcPixMap.iStride[1] = pSrc.iLineSize[1];
-        sSrcPixMap.iStride[2] = pSrc.iLineSize[2];
-        sSrcPixMap.eFormat = VideoFormat::videoFormatI420;
+        // **S5.C6a**: the branch's condition, named. It is what the deleted
+        // `sDstPicMap` encoded — the destination when this arm writes into it, the
+        // source when it does not — and so it is what decides which picture `Padding`
+        // must borrow at the end.
+        let bDstIsWritten = iSrcWidth != iShrinkWidth || iSrcHeight != iShrinkHeight || bForceCopy;
 
-        if iSrcWidth != iShrinkWidth || iSrcHeight != iShrinkHeight || bForceCopy {
-            sDstPicMap.pPixel[0] = pDstPic.pData[0];
-            sDstPicMap.pPixel[1] = pDstPic.pData[1];
-            sDstPicMap.pPixel[2] = pDstPic.pData[2];
-            sDstPicMap.iSizeInBits = g_kiPixMapSizeInBits;
-            sDstPicMap.sRect.iRectWidth = iShrinkWidth;
-            sDstPicMap.sRect.iRectHeight = iShrinkHeight;
-            sDstPicMap.iStride[0] = pDstPic.iLineSize[0];
-            sDstPicMap.iStride[1] = pDstPic.iLineSize[1];
-            sDstPicMap.iStride[2] = pDstPic.iLineSize[2];
-            sDstPicMap.eFormat = VideoFormat::videoFormatI420;
-
+        if bDstIsWritten {
             if iSrcWidth != iShrinkWidth || iSrcHeight != iShrinkHeight {
                 // **`METHOD_DOWNSAMPLE`, ported in Phase 8b session C (T8b.C2).**
                 // This was `iRet = RET_NOTSUPPORTED` — and *both* callers dropped
@@ -1815,18 +1802,30 @@ impl CWelsPreProcess {
                     iSrcHeight,
                 );
             }
-        } else {
-            sDstPicMap = sSrcPixMap;
         }
 
         iShrinkWidth -= iShrinkWidth & 1;
         iShrinkHeight -= iShrinkHeight & 1;
-        self.Padding(
-            sDstPicMap.pPixel[0],
-            sDstPicMap.pPixel[1],
-            sDstPicMap.pPixel[2],
-            sDstPicMap.iStride[0],
-            sDstPicMap.iStride[1],
+        // **S5.C6a.** `sDstPicMap`'s three plane roots and its two strides were only
+        // ever a way to carry *one* picture's identity to this call, and which picture
+        // is what `bDstIsWritten` decides. Borrowing it here rather than describing it
+        // above is what makes a safe `Padding` possible: only one picture is live at
+        // this point, so S37's "no pair of references could express" — which is about
+        // holding source and destination at once — does not apply.
+        //
+        // `plane.stride()` is `SPicture::stride(i)`, which is what `iLineSize[i]` and
+        // so `sDstPicMap.iStride[i]` held; `[origin..]` is what `data_ptr(i)` pointed
+        // at. Same picture, same strides, same first byte.
+        let padRef = if bDstIsWritten { dstRef } else { srcRef };
+        let [py, pu, pv] = self.src_mut(padRef).planes_mut3();
+        let (oy, ou, ov) = (py.origin(), pu.origin(), pv.origin());
+        let (kiStrideY, kiStrideUV) = (py.stride() as i32, pu.stride() as i32);
+        Self::Padding(
+            &mut py.as_mut_slice()[oy..],
+            &mut pu.as_mut_slice()[ou..],
+            &mut pv.as_mut_slice()[ov..],
+            kiStrideY,
+            kiStrideUV,
             iShrinkWidth,
             iTargetWidth,
             iShrinkHeight,
@@ -2003,13 +2002,23 @@ impl CWelsPreProcess {
         }
     }
 
-    // unsafe-cat: port-raw(Phase 9)
-    #[allow(unsafe_code)]
-    pub unsafe fn Padding(
-        &self,
-        pSrcY: *mut u8,
-        pSrcU: *mut u8,
-        pSrcV: *mut u8,
+    /// **S5.C6a**: the three `*mut u8` plane roots became the planes themselves, and
+    /// `&self` went with them — the body never touched it. `Padding` writes into
+    /// *one* picture, which is what makes the conversion possible where the rest of
+    /// `DownsamplePadding` resisted it: S37's note that source and destination "are
+    /// frequently the same picture, which no pair of references could express" is
+    /// about holding both maps at once, and this call holds neither. Its one caller
+    /// resolves which picture to pad *after* the copy or downsample is done, so a
+    /// single `&mut` is all that is ever live here.
+    ///
+    /// The `is_null()` triple becomes `is_empty()`, the same question a plane answers
+    /// (see `ClearEndOfLinePadding`), and every write is a `fill` over a slice range
+    /// rather than a `write_bytes` at an offset — the same bytes, with the extent
+    /// checked instead of assumed.
+    pub fn Padding(
+        pSrcY: &mut [u8],
+        pSrcU: &mut [u8],
+        pSrcV: &mut [u8],
         iStrideY: i32,
         iStrideUV: i32,
         iActualWidth: i32,
@@ -2017,24 +2026,19 @@ impl CWelsPreProcess {
         iActualHeight: i32,
         iPaddingHeight: i32,
     ) {
-        if pSrcY.is_null() || pSrcU.is_null() || pSrcV.is_null() {
+        if pSrcY.is_empty() || pSrcU.is_empty() || pSrcV.is_empty() {
             return;
         }
 
         if iPaddingHeight > iActualHeight {
             for i in iActualHeight..iPaddingHeight {
-                std::ptr::write_bytes(pSrcY.offset((i * iStrideY) as isize), 0, iActualWidth as usize);
+                let at = (i * iStrideY) as usize;
+                pSrcY[at..at + iActualWidth as usize].fill(0);
                 if (i & 1) == 0 {
-                    std::ptr::write_bytes(
-                        pSrcU.offset(((i / 2) * iStrideUV) as isize),
-                        0x80,
-                        (iActualWidth / 2) as usize,
-                    );
-                    std::ptr::write_bytes(
-                        pSrcV.offset(((i / 2) * iStrideUV) as isize),
-                        0x80,
-                        (iActualWidth / 2) as usize,
-                    );
+                    let atc = ((i / 2) * iStrideUV) as usize;
+                    let kiW2 = (iActualWidth / 2) as usize;
+                    pSrcU[atc..atc + kiW2].fill(0x80);
+                    pSrcV[atc..atc + kiW2].fill(0x80);
                 }
             }
         }
@@ -2043,34 +2047,34 @@ impl CWelsPreProcess {
             let diff = (iPaddingWidth - iActualWidth) as usize;
             let diffUV = diff / 2;
             for i in 0..iPaddingHeight {
-                std::ptr::write_bytes(pSrcY.offset((i * iStrideY + iActualWidth) as isize), 0, diff);
+                let at = (i * iStrideY + iActualWidth) as usize;
+                pSrcY[at..at + diff].fill(0);
                 if (i & 1) == 0 {
-                    std::ptr::write_bytes(
-                        pSrcU.offset(((i / 2) * iStrideUV + iActualWidth / 2) as isize),
-                        0x80,
-                        diffUV,
-                    );
-                    std::ptr::write_bytes(
-                        pSrcV.offset(((i / 2) * iStrideUV + iActualWidth / 2) as isize),
-                        0x80,
-                        diffUV,
-                    );
+                    let atc = ((i / 2) * iStrideUV + iActualWidth / 2) as usize;
+                    pSrcU[atc..atc + diffUV].fill(0x80);
+                    pSrcV[atc..atc + diffUV].fill(0x80);
                 }
             }
         }
     }
 
-    // unsafe-cat: port-raw(Phase 9)
-    #[allow(unsafe_code)]
-    pub unsafe fn WelsExchangeSpatialPictures(
-        ppPic1: *mut Option<SrcPicId>,
-        ppPic2: *mut Option<SrcPicId>,
+    /// **S5.C6a**: the list and two indices, instead of two `*mut` into it.
+    ///
+    /// Every one of the six call sites was already naming positions in *one* array —
+    /// three of them as `&mut arr[i], &mut arr[j]` (which the raw parameters then
+    /// erased), and three as `list.offset(i)` off an `as_mut_ptr()` of the same array.
+    /// Two `&mut` into one array is the thing references cannot express and the reason
+    /// this was raw; a slice plus indices expresses it exactly, and `[T]::swap` is the
+    /// body. The null tests go with the pointers — an array element has no null.
+    ///
+    /// The three `.offset()` sites gain a bounds check they did not have. The three
+    /// `&mut arr[i]` sites had one already, so nothing there changes.
+    pub fn WelsExchangeSpatialPictures(
+        pPicList: &mut [Option<SrcPicId>],
+        iPos1: usize,
+        iPos2: usize,
     ) {
-        if !ppPic1.is_null() && !ppPic2.is_null() {
-            let tmp = *ppPic1;
-            *ppPic1 = *ppPic2;
-            *ppPic2 = tmp;
-        }
+        pPicList.swap(iPos1, iPos2);
     }
 
     pub fn InitLastSpatialPictures(&mut self, pCtx: &mut sWelsEncCtx) -> i32 {
@@ -2230,10 +2234,14 @@ impl CWelsPreProcess {
         );
 
         if kiTargetWidth > iSrcWidth || kiTargetHeight > iSrcHeight {
-            self.Padding(
-                pDstY,
-                pDstU,
-                pDstV,
+            // S5.C6a: the destination re-derived as planes, after the copy above has
+            // finished with its raw cursors. One picture, one borrow — see `Padding`.
+            let [py, pu, pv] = self.src_mut(pDstRef).planes_mut3();
+            let (oy, ou, ov) = (py.origin(), pu.origin(), pv.origin());
+            Self::Padding(
+                &mut py.as_mut_slice()[oy..],
+                &mut pu.as_mut_slice()[ou..],
+                &mut pv.as_mut_slice()[ov..],
                 kiDstStrideY,
                 kiDstStrideU,
                 iSrcWidth,
@@ -3026,7 +3034,6 @@ impl CWelsPreProcess {
         kiCurDid: i32,
         kuiShortRefCount: u32,
     ) {
-        let pRefSrcList = self.m_pSpatialPic[kiCurDid as usize].as_mut_ptr();
 
         let bCur = match pCurPicture {
             Some(id) => {
@@ -3040,14 +3047,15 @@ impl CWelsPreProcess {
                 let mut iRefIdx = kuiShortRefCount as i32 - 1;
                 while iRefIdx >= 0 {
                     Self::WelsExchangeSpatialPictures(
-                        pRefSrcList.offset((iRefIdx + 1) as isize),
-                        pRefSrcList.offset(iRefIdx as isize),
+                        &mut self.m_pSpatialPic[kiCurDid as usize],
+                        (iRefIdx + 1) as usize,
+                        iRefIdx as usize,
                     );
                     iRefIdx -= 1;
                 }
                 self.m_iAvaliableRefInSpatialPicList = kuiShortRefCount as i32;
             } else {
-                Self::WelsExchangeSpatialPictures(pRefSrcList, pRefSrcList.offset(1));
+                Self::WelsExchangeSpatialPictures(&mut self.m_pSpatialPic[kiCurDid as usize], 0, 1);
                 let mut i = MAX_SHORT_REF_COUNT as i32 - 1;
                 while i > 0 {
                     if let Some(id) = self.m_pSpatialPic[kiCurDid as usize][(i + 1) as usize] {
@@ -3072,7 +3080,6 @@ impl CWelsPreProcess {
         kuiMarkLongTermPicIdx: i32,
         pLongRefList: &crate::encoder::encoder_context::SRefList,
     ) {
-        let pLongRefSrcList = self.m_pSpatialPic[kiCurDid as usize].as_mut_ptr();
         for i in 0..MAX_REF_PIC_COUNT {
             // The *source* picture at `i + 1` and the *reconstruction* picture at `i`
             // — two pools, which is why the reference list arrives whole rather than
@@ -3093,8 +3100,9 @@ impl CWelsPreProcess {
             self.m_pSpatialPicPool.get_mut(idRef).SetUnref();
         }
         Self::WelsExchangeSpatialPictures(
-            pLongRefSrcList,
-            pLongRefSrcList.offset((1 + kuiMarkLongTermPicIdx) as isize),
+            &mut self.m_pSpatialPic[kiCurDid as usize],
+            0,
+            (1 + kuiMarkLongTermPicIdx) as usize,
         );
         self.m_iAvaliableRefInSpatialPicList = MAX_REF_PIC_COUNT as i32;
         if let Some(id) = self.GetCurrentOrigFrame(kiCurDid) {
