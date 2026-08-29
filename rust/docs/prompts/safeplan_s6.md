@@ -16,13 +16,9 @@ no matter how much safer it looks. All undefined behavior has already been
 eliminated from the port; what remains is *conversion* — raw pointers and `unsafe`
 functions that are sound but unnecessary, replaced stage by stage with safe Rust.
 The end state is `#![forbid(unsafe_code)]` in every file outside the C-ABI layer
-(`src/api/`), with three recorded exceptions: the two audited `unsafe impl` lines
-that make the multi-threaded seam possible (`Sync` for the reconstruction view,
-`Send` for the slice job handle), and the screen-content feature family, which the
-user has **descoped** (decision D-scope-5: its storage is structurally unreachable —
-the allocator was deliberately deleted — but its search path is public-API-reachable,
-so it is neither converted nor deleted; it stays raw and tagged
-`SCREEN_CONTENT(dormant)`; do not touch it).
+(`src/api/`), plus exactly two audited `unsafe impl` lines that make the
+multi-threaded seam possible (`Sync` for the reconstruction view, `Send` for the
+slice job handle).
 
 Progress is one number: `#[allow(unsafe_code)]` attributes outside `src/api/`.
 `bash rust/tools/safeplan_tracking.sh` prints it — 460 at the time of writing.
@@ -140,6 +136,52 @@ has 31 allows, *every one* on a signature with no raw pointer — blocked purely
 body calls into raw accessors, 17 of them `current_layer`. After the flip lands,
 rerun the de-unsafe cascade (below) and expect it to travel far.
 
+### Second: the screen-content conversion (user-directed)
+
+The screen-content feature family — `SScreenBlockFeatureStorage` in
+`encoder/picture.rs` and its machinery in `svc_motion_estimate.rs` — converts this
+session at the user's direction. Know its situation before touching it: **the
+storage is currently unreachable** (nothing in the tree allocates it — the field
+that would hold it is never assigned, and `PerformFMEPreprocess`, the only filler,
+has zero call sites), **but the search path that reads it is public-API-reachable**
+(any caller setting `iUsageType == SCREEN_CONTENT_REAL_TIME` gets the
+feature-search motion path). No sweep row, no existing test, and no gate executes
+a line of this code — the byte sweep proves nothing about it, logic must stay
+line-for-line, and the conversion must **create its own referee** (below).
+
+What the five raw fields actually are (read `InitializeHashforFeature_c` and
+`FillQpelLocationByFeatureValue_c` first — the whole design is those two loops):
+
+* `pFeatureOfBlockPointer: *mut u16` — one feature value per 8×8/16×16 block of
+  the reference frame.
+* `pTimesOfFeatureValue: *mut u32` — histogram: how many blocks carry each value.
+* `pLocationPointer: *mut u16` — one arena of (x, y) qpel position pairs, grouped
+  by feature value.
+* `pLocationOfFeature: *mut *mut u16` — per value, the stable start of its group
+  in the arena.
+* `pFeatureValuePointerList: *mut *mut u16` — per value, a roving cursor that
+  starts at the group base and advances by 2 as positions are written.
+
+**The shape, already ruled so you are not stopped on it** (recorded with decision
+D-scope-5's reversal): **full ownership**. The struct owns `Vec<u16>` /
+`Vec<u32>` / `Vec<u16>` for the first three, and the two pointer tables become
+**index tables** into the arena — `Vec<usize>` base plus `Vec<usize>` cursor.
+`PerformFMEPreprocess` currently *stores its caller's buffer* into the struct; it
+has zero call sites, so its signature is free — take the feature buffer by value
+(`Vec<u16>`) and move it in, which preserves the store-the-buffer semantics
+without aliasing. The three dispatch typedefs (`pfCalculateBlockFeatureOfFrame`,
+`pfInitializeHashforFeature`, `pfFillQpelLocationByFeatureValue`) and their `_c`
+bodies convert with the fields; the read side (`SetFeatureSearchIn`,
+`FeatureSearchOne` and the `SFeatureSearchIn` mirrors) follows.
+
+**The referee this checkpoint must ship** — the family's first test ever: owned
+storage is constructible by hand, so build a small one over a tiny synthetic
+frame, run `CalculateFeatureOfBlock`, and assert the arena invariants: the
+histogram sums to the block count; each cursor ends exactly `2 × times[value]`
+past its base; every written position lands inside the arena and inside the
+frame. Keep the null/`None` behavior of every reachable path identical — the
+guards that return `false` today keep doing exactly that.
+
 ### Then: the no-seam middle — the volume is here
 
 A census of every remaining allow, classified by what actually blocks it, says
@@ -154,7 +196,7 @@ in descending order (counts from the census — re-measure):
 | `ref_list_mgr_svc.rs` | 31 | all body-blocked; mostly unlocked by the layer flip |
 | `wels_preprocess.rs` | 26 | see the move-memory caveat below |
 | `wels_encoder_ext.rs` | 24 | 17 raw-signature |
-| `svc_motion_estimate.rs` | 22 | the screen-content sites among them are descoped — skip those |
+| `svc_motion_estimate.rs` | 22 | the screen-content sites among them belong to the checkpoint above |
 | `svc_enc_slice_segment.rs` | 21 | |
 | `encode_mb_aux.rs` | 12 | DCT kernels (pixel/coefficient pointers), **not** bit writing |
 | `nal_encap.rs` | 11 | first bite ready-made, below |
@@ -212,9 +254,8 @@ and stopping before it is an honest stop.
   `mod.rs` seals the whole subtree and will not compile until everything under it
   is done).
 * **The final flip**: delete `src/lib.rs`'s crate-wide `allow(unused_unsafe,
-  unsafe_op_in_unsafe_fn, …)`; reduce the census allowlist to the api island, the
-  two `unsafe impl` lines, and the screen-content family's enumerated sites
-  (the descope ruling); pin the ratchet at the floor.
+  unsafe_op_in_unsafe_fn, …)`; reduce the census allowlist to the api island and
+  the two `unsafe impl` lines; pin the ratchet at the floor.
 * **The exit battery** — `bash rust/tools/gates.sh exit`: ABI export list, dlopen
   harness, upstream gtest, full Miri including the differential tests **and the
   two full-encode fork probes deferred all along**, benches against
