@@ -577,13 +577,8 @@ impl SWelsRcFunc {
     /// `pfWelsRcPicDelayJudge`. Installed by `RC_TIMESTAMP_MODE` alone; every other
     /// mode left the slot `None`, and every call site guarded on that, so the other
     /// arm is empty.
-    ///
-    /// # Safety
-    /// As [`WelsRcPictureInit`](SWelsRcFunc::WelsRcPictureInit).
     #[inline]
-    // unsafe-cat: port-raw(Phase 9)
-    #[allow(unsafe_code)]
-    pub unsafe fn WelsRcPicDelayJudge(self, pCtx: &mut sWelsEncCtx, uiTimeStamp: i64, iDidIdx: i32) {
+    pub fn WelsRcPicDelayJudge(self, pCtx: &mut sWelsEncCtx, uiTimeStamp: i64, iDidIdx: i32) {
         if self.eInstalledMode == RCMode::RC_TIMESTAMP_MODE {
             WelsRcFrameDelayJudgeTimeStamp(pCtx, uiTimeStamp, iDidIdx);
         }
@@ -655,13 +650,8 @@ impl SWelsRcFunc {
 
     /// `pfWelsCheckSkipBasedMaxbr`. Absent for `RC_OFF`, `RC_BUFFERBASED` and
     /// `RC_TIMESTAMP`.
-    ///
-    /// # Safety
-    /// As [`WelsRcPictureInit`](SWelsRcFunc::WelsRcPictureInit).
     #[inline]
-    // unsafe-cat: port-raw(Phase 9)
-    #[allow(unsafe_code)]
-    pub unsafe fn WelsCheckSkipBasedMaxbr(
+    pub fn WelsCheckSkipBasedMaxbr(
         self,
         pCtx: &mut sWelsEncCtx,
         uiTimeStamp: i64,
@@ -677,13 +667,8 @@ impl SWelsRcFunc {
 
     /// `pfWelsUpdateBufferWhenSkip`. Absent for `RC_OFF`, `RC_BUFFERBASED` and
     /// `RC_TIMESTAMP`.
-    ///
-    /// # Safety
-    /// As [`WelsRcPictureInit`](SWelsRcFunc::WelsRcPictureInit).
     #[inline]
-    // unsafe-cat: port-raw(Phase 9)
-    #[allow(unsafe_code)]
-    pub unsafe fn WelsUpdateBufferWhenSkip(self, pCtx: &mut sWelsEncCtx, iSpatialNum: i32) {
+    pub fn WelsUpdateBufferWhenSkip(self, pCtx: &mut sWelsEncCtx, iSpatialNum: i32) {
         match self.eInstalledMode {
             RCMode::RC_BITRATE_MODE
             | RCMode::RC_BITRATE_MODE_POST_SKIP
@@ -694,13 +679,8 @@ impl SWelsRcFunc {
 
     /// `pfWelsUpdateMaxBrWindowStatus`. Absent for `RC_OFF`, `RC_BUFFERBASED` and
     /// `RC_TIMESTAMP`.
-    ///
-    /// # Safety
-    /// As [`WelsRcPictureInit`](SWelsRcFunc::WelsRcPictureInit).
     #[inline]
-    // unsafe-cat: port-raw(Phase 9)
-    #[allow(unsafe_code)]
-    pub unsafe fn WelsUpdateMaxBrWindowStatus(
+    pub fn WelsUpdateMaxBrWindowStatus(
         self,
         pCtx: &mut sWelsEncCtx,
         iSpatialNum: i32,
@@ -1818,9 +1798,7 @@ pub fn RcVBufferCalculationSkip(pEncCtx: &mut sWelsEncCtx) {
 }
 
 /// Enforces maximum bitrate constraints over dual sliding time windows.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe extern "C" fn CheckFrameSkipBasedMaxbr(
+pub extern "C" fn CheckFrameSkipBasedMaxbr(
     pEncCtx: &mut sWelsEncCtx,
     _uiTimeStamp: i64,
     iDidIdx: i32,
@@ -1910,9 +1888,7 @@ pub unsafe extern "C" fn CheckFrameSkipBasedMaxbr(
 }
 
 /// Evaluates frame skip status across active spatial layers.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn WelsRcCheckFrameStatus(
+pub fn WelsRcCheckFrameStatus(
     pEncCtx: &mut sWelsEncCtx,
     uiTimeStamp: i64,
     iSpatialNum: i32,
@@ -1989,9 +1965,7 @@ pub unsafe fn WelsRcCheckFrameStatus(
 }
 
 /// Adjusts virtual buffer fullness and bit quotas when a frame is skipped.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe extern "C" fn UpdateBufferWhenFrameSkipped(pEncCtx: &mut sWelsEncCtx, iCurDid: i32) {
+pub extern "C" fn UpdateBufferWhenFrameSkipped(pEncCtx: &mut sWelsEncCtx, iCurDid: i32) {
     let pWelsSvcRc = pEncCtx.rc_at_mut(iCurDid as usize);
     let kiOutputBits = (*pWelsSvcRc).iBitsPerFrame;
     let kiOutputMaxBits = (*pWelsSvcRc).iMaxBitsPerFrame;
@@ -2015,9 +1989,7 @@ pub unsafe extern "C" fn UpdateBufferWhenFrameSkipped(pEncCtx: &mut sWelsEncCtx,
 }
 
 /// Advances the 5000 ms sliding check window for maximum bitrate monitoring.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe extern "C" fn UpdateMaxBrCheckWindowStatus(
+pub extern "C" fn UpdateMaxBrCheckWindowStatus(
     pEncCtx: &mut sWelsEncCtx,
     iSpatialNum: i32,
     uiTimeStamp: i64,
@@ -2498,9 +2470,7 @@ pub unsafe extern "C" fn WelsRcMbInfoUpdateGom(
     }
 }
 
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe extern "C" fn WelsRcPictureInitDisable(pEncCtx: &mut sWelsEncCtx, _uiTimeStamp: i64) {
+pub extern "C" fn WelsRcPictureInitDisable(pEncCtx: &mut sWelsEncCtx, _uiTimeStamp: i64) {
     let did = pEncCtx.uiDependencyId as usize;
     let pDLayerParam = &pEncCtx.param().sSpatialLayers[did];
     let kiQp = pDLayerParam.iDLayerQp;
@@ -2581,9 +2551,7 @@ pub unsafe extern "C" fn WelsRcMbInfoUpdateDisable(
     _pSlice: &mut SSlice,
 ) {}
 
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe extern "C" fn WelRcPictureInitBufferBasedQp(
+pub extern "C" fn WelRcPictureInitBufferBasedQp(
     pEncCtx: &mut sWelsEncCtx,
     _uiTimeStamp: i64,
 ) {
@@ -2757,9 +2725,7 @@ pub unsafe extern "C" fn WelsRcMbInitScc(
     (*pCurMb).uiChromaQp = g_kuiChromaQpTable[CLIP3_QP_0_51((*pCurMb).uiLumaQp as i32 + offset)];
 }
 
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe extern "C" fn WelsRcFrameDelayJudgeTimeStamp(
+pub extern "C" fn WelsRcFrameDelayJudgeTimeStamp(
     pEncCtx: &mut sWelsEncCtx,
     uiTimeStamp: i64,
     iDidIdx: i32,

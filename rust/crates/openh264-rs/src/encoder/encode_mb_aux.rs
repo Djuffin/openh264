@@ -846,12 +846,9 @@ pub unsafe extern "C" fn WelsCopy16x16_c(pDst: *mut u8, iStrideD: i32, pSrc: *mu
 // ============================================================================
 
 /// Initializes the encoder function pointer table dynamically based on CPU feature flags.
-///
-/// # Safety
-/// - `pFuncList` must point to a valid, writable `SWelsFuncPtrList` instance.
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
-pub unsafe extern "C" fn WelsInitEncodingFuncs(pFuncList: &mut SWelsFuncPtrList, uiCpuFlag: u32) {
+pub extern "C" fn WelsInitEncodingFuncs(pFuncList: &mut SWelsFuncPtrList, uiCpuFlag: u32) {
 
     unsafe {
         let f = &mut *pFuncList;

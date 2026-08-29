@@ -1263,9 +1263,7 @@ pub fn FillNeighborCacheInterWithBGD(
     pMvComp.iRefIndexCache[23] = REF_NOT_AVAIL;
 }
 
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe extern "C" fn InitFillNeighborCacheInterFunc(
+pub extern "C" fn InitFillNeighborCacheInterFunc(
     pFuncList: &mut SWelsFuncPtrList,
     kiFlag: i32,
 ) {
@@ -1391,9 +1389,7 @@ pub unsafe extern "C" fn AnalysisVaaInfoIntra_c(pDataY: *mut u8, kiLineSize: i32
     iSumSqr - ((iSumAvg * iSumAvg) >> 4)
 }
 
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe extern "C" fn InitIntraAnalysisVaaInfo(
+pub extern "C" fn InitIntraAnalysisVaaInfo(
     pFuncList: &mut SWelsFuncPtrList,
     _kuiCpuFlag: u32,
 ) {

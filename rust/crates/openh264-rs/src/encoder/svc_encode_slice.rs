@@ -2069,9 +2069,7 @@ pub unsafe fn WelsGetNextMbOfSlice(pCurDq: *mut SDqLayer, kiMbXY: i32) -> i32 {
     }
 }
 
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
-pub unsafe fn WelsInitInterMDStruc<'a>(
+pub fn WelsInitInterMDStruc<'a>(
     pCurMb: &SMB,
     pMvdCostTable: MvdCostCursor<'a>,
     kiMvdInterTableStride: i32,

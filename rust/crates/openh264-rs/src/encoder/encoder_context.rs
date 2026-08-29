@@ -2143,12 +2143,7 @@ pub fn WelsInitBGDFunc(
 }
 
 /// Initializes encoder compute kernel function pointers.
-///
-/// # Safety
-/// `pEncCtx` must point to a live encoder context whose parameters are built.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn InitFunctionPointers(
+pub fn InitFunctionPointers(
     pEncCtx: &mut sWelsEncCtx,
     _uiCpuFlag: u32,
 ) -> i32 {
@@ -3381,41 +3376,38 @@ mod tests {
     }
 
     #[test]
-    // unsafe-cat: instrument(test)
-    #[allow(unsafe_code)]
     fn test_init_function_pointers() {
-        unsafe {
-            let mut param = SWelsSvcCodingParam::default();
-            let mut ctx = sWelsEncCtx::default();
-            // T6.I1: the context brings its own table, so the fixture no longer
-            // aims the field at a stack one — it reads the context's back out.
-            ctx.pSvcParam = Some(Box::new(param.clone()));
+        // S5.E2b: every call this made is a safe `fn` now.
+        let mut param = SWelsSvcCodingParam::default();
+        let mut ctx = sWelsEncCtx::default();
+        // T6.I1: the context brings its own table, so the fixture no longer
+        // aims the field at a stack one — it reads the context's back out.
+        ctx.pSvcParam = Some(Box::new(param.clone()));
 
-            let ret = InitFunctionPointers(&mut ctx, 0);
-            assert_eq!(ret, ENC_RETURN_SUCCESS);
+        let ret = InitFunctionPointers(&mut ctx, 0);
+        assert_eq!(ret, ENC_RETURN_SUCCESS);
 
-            // Each assertion reads the table back through its owner rather than
-            // binding a reference to it once. That is not stylistic: the
-            // `InitCoeffFunc` call below *writes* the table, and a `&` held across
-            // it is the exact shape this session's step-1 checker exists to reject.
-            assert!(ctx.pFuncList.pfDctFourT4.is_some());
-            // pfInterMd is deliberately NOT asserted: C++ InitFunctionPointers
-            // (encoder.cpp) never sets it. It is assigned per-slice in
-            // svc_encode_slice.cpp:733/736. This assertion passed only because the
-            // port assigned the wrong function here behind a mem::transmute.
-            // The four entropy slots this used to assert `is_some()` on are one
-            // `EntropyCoder` since T4b.1, and "installed" is no longer a state it
-            // can be in. What is still worth asserting is that the flag reached
-            // it: `param` defaults to `iEntropyCodingModeFlag == 0`. The other
-            // arm goes through `InitCoeffFunc` rather than a second
-            // `InitFunctionPointers`, which would allocate a second parameter-set
-            // strategy over the first.
-            assert_eq!(ctx.pFuncList.eEntropyCoder, EntropyCoder::Cavlc);
-            InitCoeffFunc(ctx.func_list_mut(), 0, 1);
-            assert_eq!(ctx.pFuncList.eEntropyCoder, EntropyCoder::Cabac);
+        // Each assertion reads the table back through its owner rather than
+        // binding a reference to it once. That is not stylistic: the
+        // `InitCoeffFunc` call below *writes* the table, and a `&` held across
+        // it is the exact shape this session's step-1 checker exists to reject.
+        assert!(ctx.pFuncList.pfDctFourT4.is_some());
+        // pfInterMd is deliberately NOT asserted: C++ InitFunctionPointers
+        // (encoder.cpp) never sets it. It is assigned per-slice in
+        // svc_encode_slice.cpp:733/736. This assertion passed only because the
+        // port assigned the wrong function here behind a mem::transmute.
+        // The four entropy slots this used to assert `is_some()` on are one
+        // `EntropyCoder` since T4b.1, and "installed" is no longer a state it
+        // can be in. What is still worth asserting is that the flag reached
+        // it: `param` defaults to `iEntropyCodingModeFlag == 0`. The other
+        // arm goes through `InitCoeffFunc` rather than a second
+        // `InitFunctionPointers`, which would allocate a second parameter-set
+        // strategy over the first.
+        assert_eq!(ctx.pFuncList.eEntropyCoder, EntropyCoder::Cavlc);
+        InitCoeffFunc(ctx.func_list_mut(), 0, 1);
+        assert_eq!(ctx.pFuncList.eEntropyCoder, EntropyCoder::Cabac);
 
-            assert!(ctx.pFuncList.pfDeblocking.pfDeblockingFilterSlice.is_some());
-        }
+        assert!(ctx.pFuncList.pfDeblocking.pfDeblockingFilterSlice.is_some());
     }
 }
 

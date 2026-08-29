@@ -6442,3 +6442,73 @@ needs is one sentence: either the family is converted now, accepting that Phase 
 inherits an ownership shape chosen without a running caller, or it stays raw until
 Phase 10 ports it whole from the reference, as T7.C6 ruled for its allocations. This
 session took neither side; it measured the ground and stopped.
+
+## F230 — the de-unsafe cascade diverges if the `unsafe` keyword and the `unsafe {}` blocks are stripped together; the pass that converges strips only declarations whose signature carries no raw pointer
+
+**What S5's brief promises.** "The compiler-driven fixpoint (strip, read the errors,
+revert what fails, iterate) recently retired 87 signatures in one pass; rerun it after
+your conversions land — the de-unsafe cascade is where most of the tracking number's
+movement comes from." It does not say what to strip, and the obvious reading — strip
+everything that mentions `unsafe`, then restore what the compiler names — **does not
+terminate**.
+
+**Measured.** Stripping all three at once (492 `#[allow(unsafe_code)]`, 143 `unsafe fn`
+keywords, 166 `unsafe {` openers) and restoring at each error's enclosing declaration
+ran: 1976 errors → 217 → 191 → 217 → 279 → 340 → 404 → 459. It diverges after round 3
+and the reason is structural, not a bug in the restorer: restoring `unsafe` on a
+function makes every *call* to it an error, because the callers' `unsafe {}` blocks
+were stripped in the same pass. Each restore manufactures new errors one level out, so
+the frontier expands instead of closing. The run was discarded (`git checkout`), and
+the tracking number it left behind — 611 against a starting 501 — is what a diverged
+restore looks like.
+
+**The pass that converges strips one thing.** Take the `unsafe` keyword off `fn`
+*declarations*, and only where the signature carries **no raw pointer**; leave every
+block and every allow exactly where it is. Nothing then cascades to call sites: a
+caller's `unsafe {}` around a now-safe call is at worst an `unused_unsafe` warning. And
+the compiler is a two-sided oracle for the ones that must keep it, because `src/lib.rs`
+allows `unsafe_op_in_unsafe_fn` — an `unsafe fn` body *is* an unsafe context, so taking
+the keyword away turns every genuinely unsafe operation in that body into an E0133, and
+a body installed in an `unsafe fn` pointer slot into a type mismatch. That pass ran
+994 → 76 → 8 → 0 and reached its fixpoint in four rounds, twice, identically.
+
+**The raw-pointer filter is the part that makes it sound, not just convergent.** A
+declaration whose signature has a `*mut`/`*const` may carry a real precondition, and
+this pass does not touch it. What is left — a signature of references only — cannot,
+because the `# Safety` clauses on them say things like "`pCtx` must be a live encoder
+context", which a `&mut sWelsEncCtx` guarantees by construction. Of the 26 retired,
+every clause read that way; `InitFunctionPointers`'s adds "whose parameters are built",
+which is a correctness precondition whose violation is a panic, not undefined behavior,
+and so was never `unsafe`'s to state.
+
+**Second-order rule, learned twice in this pass.** Restoring or removing an annotation
+must be done at the enclosing **item**, never at the error's line. A restorer that
+inserts one `#[allow]` per *error* produces several per function and inflates the count
+(501 → 515 on the first attempt), and one that inserts into a macro body produces
+`error[E0658]: attributes on expressions are experimental` in the three files that have
+them (`encoder_context.rs`, `encoder/picture.rs`, `decoder/picture.rs`). Both were
+discarded and redone item-wise.
+
+## F231 — 70 `# Safety` clauses document preconditions for pointers their functions no longer take
+
+Found while auditing F230's 26 retirements for real contracts, which is the check that
+should precede any de-unsafing: `au_set::WelsWriteSpsSyntax` still says "`pSps` and
+`pBsWriter` must be non-null; `pSpsIdDelta` must point to an array indexable by
+`pSps->uiSpsId`", and its signature has been `&mut [u8]`, `&SWelsSPS`, `&mut BsWriter`,
+`&[i32]` for some sessions now. Not one of those claims is about anything that still
+exists: a reference is non-null by construction, and the array claim is a bounds
+question `&[i32]` answers with a panic.
+
+Swept: **70** `# Safety` clauses sit on functions that are safe `fn` today, across
+`get_intra_predictor.rs` (25 — the whole intra-prediction kernel family),
+`paraset_strategy.rs` (5), `au_set.rs` (6), `rc.rs` (5), `encoder_ext.rs` (3),
+`svc_enc_slice_segment.rs` (3), `decode_slice.rs` (3) and fourteen others. This session
+cleaned only the ones it created (5 files); the remaining ~55 predate it and are left
+named rather than silently swept, because the clean is mechanical but the *reading* is
+not — each one should be checked for a surviving precondition before its clause is
+deleted, exactly as the 26 here were.
+
+The reason it matters beyond tidiness: a stale `# Safety` clause is the evidence a
+future session will use to decide whether a signature may be de-unsafed. F230's pass
+consults precisely this text. Left in place, these clauses argue for keeping `unsafe`
+on functions that have not needed it for several phases.

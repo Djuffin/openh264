@@ -2409,9 +2409,7 @@ pub unsafe fn WelsMdInterJudgeSCDPskipFalse(
     false
 }
 
-// unsafe-cat: SCREEN_CONTENT(dormant)
-#[allow(unsafe_code)]
-pub unsafe extern "C" fn WelsInitSCDPskipFunc(
+pub extern "C" fn WelsInitSCDPskipFunc(
     pFuncList: &mut SWelsFuncPtrList,
     bScrollingDetection: bool,
 ) {

@@ -513,13 +513,7 @@ pub fn WelsWriteVUI(
 /// **Deviation.** C++ has `assert (0)` under `uiPocType == 1` behind a
 /// `// TODO: implement`. Here that returns 1 instead of aborting; `WelsInitSps` only
 /// ever sets POC type 2, so the branch is unreachable.
-///
-/// # Safety
-/// `pSps` and `pBsWriter` must be non-null; `pSpsIdDelta` must point to an array
-/// indexable by `pSps->uiSpsId`.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn WelsWriteSpsSyntax(
+pub fn WelsWriteSpsSyntax(
     buf: &mut [u8],
     pSps: &SWelsSPS,
     pBsWriter: &mut BsWriter,
@@ -607,12 +601,7 @@ pub unsafe fn WelsWriteSpsSyntax(
 }
 
 /// `WelsWriteSpsNal` — au_set.cpp:336.
-///
-/// # Safety
-/// See [`WelsWriteSpsSyntax`].
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn WelsWriteSpsNal(
+pub fn WelsWriteSpsNal(
     buf: &mut [u8],
     pSps: &SWelsSPS,
     pBsWriter: &mut BsWriter,
@@ -626,12 +615,7 @@ pub unsafe fn WelsWriteSpsNal(
 }
 
 /// `WelsWriteSubsetSpsSyntax` — au_set.cpp:358.
-///
-/// # Safety
-/// See [`WelsWriteSpsSyntax`].
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn WelsWriteSubsetSpsSyntax(
+pub fn WelsWriteSubsetSpsSyntax(
     buf: &mut [u8],
     pSubsetSps: &SSubsetSps,
     pBsWriter: &mut BsWriter,
@@ -1115,16 +1099,13 @@ mod tests {
 
     /// `WelsInitPps` rejects the combination C++ rejects: no SPS of either kind.
     #[test]
-    // unsafe-cat: instrument(test)
-    #[allow(unsafe_code)]
     fn init_pps_rejects_missing_sps() {
+        // S5.E2b: `WelsInitPps` is a safe `fn` now, so the wrapper goes with it.
         let mut pps = SWelsPPS::default();
-        unsafe {
-            assert_eq!(
-                WelsInitPps(&mut pps, None, None, 0, true, false, false),
-                1
-            );
-        }
+        assert_eq!(
+            WelsInitPps(&mut pps, None, None, 0, true, false, false),
+            1
+        );
     }
 
     /// `WelsGetPaddingOffset` — au_set.cpp:476. A 1920x1080 coded frame carrying
