@@ -965,8 +965,16 @@ pub unsafe fn layer_ref_pic<'a>(pLayer: *mut SDqLayer) -> Option<&'a SPicture> {
 pub unsafe fn layer_ref_feature_storage(
     pLayer: *mut SDqLayer,
 ) -> *mut crate::encoder::picture::SScreenBlockFeatureStorage {
+    // **S5.C6c**: the picture owns the storage as an `Option<Box<..>>` now, so the
+    // pointer is derived from it rather than copied out of it. The far end —
+    // `SWelsME::pRefFeatureStorage` — is still raw and is C5's to convert; this
+    // bridges the two without changing which address either side sees. In this tree
+    // the answer is always null, because nothing ever fills the `Option` (F229).
     match layer_ref_pic(pLayer) {
-        Some(p) => p.pScreenBlockFeatureStorage,
+        Some(p) => match p.pScreenBlockFeatureStorage.as_deref() {
+            Some(storage) => std::ptr::from_ref(storage).cast_mut(),
+            None => std::ptr::null_mut(),
+        },
         None => std::ptr::null_mut(),
     }
 }

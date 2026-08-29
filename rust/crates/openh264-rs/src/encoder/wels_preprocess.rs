@@ -2613,9 +2613,7 @@ impl CWelsPreProcess {
         }
     }
 
-    // unsafe-cat: SCREEN_CONTENT(dormant)
-    #[allow(unsafe_code)]
-    unsafe fn GetAvailableRefListLosslessScreenRefSelection(
+    fn GetAvailableRefListLosslessScreenRefSelection(
         &self,
         // T9.H2, F192 — see `GetBestRefPicScreen`.
         pCtx: &mut sWelsEncCtx,
@@ -2692,9 +2690,7 @@ impl CWelsPreProcess {
         }
     }
 
-    // unsafe-cat: port-raw(Phase 9)
-    #[allow(unsafe_code)]
-    unsafe fn GetAvailableRefList(
+    fn GetAvailableRefList(
         &self,
         pSrcPicList: &[Option<SrcPicId>],
         iCurTid: u8,
@@ -3021,9 +3017,7 @@ impl CWelsPreProcess {
     /// C++ passes the reference list and uses only its *count*. Deleted with the
     /// flip rather than converted, because converting it would have meant handing
     /// the preprocessor a handle type it has no pool for.
-    // unsafe-cat: port-raw(Phase 9)
-    #[allow(unsafe_code)]
-    pub unsafe fn UpdateSrcList(
+    pub fn UpdateSrcList(
         &mut self,
         pCurPicture: Option<SrcPicId>,
         kiCurDid: i32,
@@ -3066,9 +3060,7 @@ impl CWelsPreProcess {
         }
     }
 
-    // unsafe-cat: SCREEN_CONTENT(dormant)
-    #[allow(unsafe_code)]
-    pub unsafe fn UpdateSrcListLosslessScreenRefSelectionWithLtr(
+    pub fn UpdateSrcListLosslessScreenRefSelectionWithLtr(
         &mut self,
         _pCurPicture: Option<SrcPicId>,
         kiCurDid: i32,
