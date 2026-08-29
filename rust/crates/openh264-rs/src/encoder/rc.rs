@@ -2434,7 +2434,7 @@ pub unsafe extern "C" fn WelsRcMbInitGom(
     let pCurLayer = current_layer(pEncCtx);
     let kuiChromaQpIndexOffset = (*layer_pps(pEncCtx, pCurLayer)).uiChromaQpIndexOffset;
 
-    pSOverRc.iBsPosSlice = (*pEncCtx).func_list().eEntropyCoder.GetBsPosition(crate::encoder::svc_encode_slice::slice_writer(pEncCtx, std::ptr::addr_of_mut!((*pSlice).sSliceBs)), std::ptr::addr_of!((*pSlice).sCabacCtx));
+    pSOverRc.iBsPosSlice = (*pEncCtx).func_list().eEntropyCoder.GetBsPosition(&*crate::encoder::svc_encode_slice::slice_writer(pEncCtx, std::ptr::addr_of_mut!((*pSlice).sSliceBs)), &(*pSlice).sCabacCtx);
 
     if (*pWelsSvcRc).bEnableGomQp != 0 {
         if (*pWelsSvcRc).iNumberMbGom != 0
@@ -2483,7 +2483,7 @@ pub unsafe extern "C" fn WelsRcMbInfoUpdateGom(
     let pWelsSvcRc = (*pEncCtx).rc_at(did);
     let pSOverRc = &mut (*pSlice).sSlicingOverRc;
 
-    let cur_bs = (*pEncCtx).func_list().eEntropyCoder.GetBsPosition(crate::encoder::svc_encode_slice::slice_writer(pEncCtx, std::ptr::addr_of_mut!((*pSlice).sSliceBs)), std::ptr::addr_of!((*pSlice).sCabacCtx));
+    let cur_bs = (*pEncCtx).func_list().eEntropyCoder.GetBsPosition(&*crate::encoder::svc_encode_slice::slice_writer(pEncCtx, std::ptr::addr_of_mut!((*pSlice).sSliceBs)), &(*pSlice).sCabacCtx);
     let iCurMbBits = cur_bs - pSOverRc.iBsPosSlice;
     pSOverRc.iFrameBitsSlice += iCurMbBits;
     pSOverRc.iGomBitsSlice += iCurMbBits;

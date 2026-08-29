@@ -6371,3 +6371,74 @@ first because "a whole-struct shared borrow racing those writes is undefined
 behavior under Miri's model". That is right, and F228 is the same sentence about
 the *context* rather than the layer — the brief states the rule for `SDqLayer`
 only, and the property is not the layer's, it is every struct the fork shares.
+
+## F229 — C5's premise is not "dark code", it is *unreachable* code: nothing in the port can allocate `SScreenBlockFeatureStorage`, so converting its fields would invent the ownership shape T7.C6 deliberately declined to invent
+
+**What S5's brief says.** C5 is `SScreenBlockFeatureStorage`'s five raw buffer
+pointers, to be converted "to `Vec` + index tables, along with their mirrors in the
+motion-estimate code", and the brief warns that the path is dark: "the
+screen-content path installs only under `bScreenContent && bEnableSceneChangeDetect
+&& iComplexityMode < HIGH`, and no harness driver ever sets `bScreenContent`".
+
+**That is a claim about configuration. The truth is structural, and stronger.**
+Measured at this tree:
+
+* `SPicture::pScreenBlockFeatureStorage` is **never assigned** — anywhere in `src/`,
+  `tests/` or `benches/`. Its only writer would be `AllocPicture`, which *refuses*
+  `iNeedFeatureStorage != 0` and returns `None`, and all three of its call sites
+  pass `0` or `false`. The field is null for the life of every picture the port
+  can build, under every configuration, including ones no harness selects.
+* `PerformFMEPreprocess` — the only writer of `pFeatureOfBlockPointer` and the only
+  caller of `CalculateFeatureOfBlock` — is **declared and never called**. Zero call
+  sites in the whole repository.
+* `CalculateFeatureOfBlock` is the sole caller of the three dispatch slots the
+  family turns on (`pfCalculateBlockFeatureOfFrame`, `pfInitializeHashforFeature`,
+  `pfFillQpelLocationByFeatureValue`). The slots are installed in `WelsInitMeFunc`'s
+  `bScreenContent` arm and then reached by nothing.
+* The read side (`SetFeatureSearchIn`, `FeatureSearchOne`) is gated on
+  `SWelsME::pRefFeatureStorage`, which `layer_ref_feature_storage` resolves from the
+  same never-assigned field.
+
+So the family is not dormant behind a flag — it is unreachable behind a deleted
+allocator, and no flag can reach it.
+
+**Why that stops the checkpoint rather than merely colouring it.** The four
+allocations were transliterated once and then deleted at T7.C6, whose note states
+the reason in terms this checkpoint inherits verbatim: *"Deleted rather than
+converted, and the difference matters. Converting them would have produced four
+owned buffers behind a struct whose fields (`SScreenBlockFeatureStorage`'s raw
+pointers) are Phase 10's to design — a shape nobody has decided, on a path nobody
+runs."* C5 asks for exactly the conversion that note declined, one level in: the
+fields rather than the allocations. The design question is the same one, and it was
+already answered in the opposite direction by a session that had measured it.
+
+**And the shape is genuinely undecided, not merely undesigned.** `pLocationOfFeature`
+and `pFeatureValuePointerList` are arrays of pointers *into* `pLocationPointer`'s
+arena, so the safe form is an index table — but `pFeatureOfBlockPointer` is a buffer
+the storage does **not** own: `PerformFMEPreprocess` takes it as a parameter and
+stores it. Converting the struct to own `Vec`s therefore gets one field wrong, and
+converting it to hold indices requires naming an owner that does not exist in this
+tree. Whichever is chosen, Phase 10 inherits it.
+
+**What it would have bought.** Two `#[allow(unsafe_code)]` —
+`InitializeHashforFeature_c` and `FillQpelLocationByFeatureValue_c` — and only if
+their two `unsafe extern "C"` fn-pointer typedefs in `SWelsFuncPtrList` are
+converted with them. Everything else in the family stays `unsafe` on
+`*mut SScreenBlockFeatureStorage` or on the raw reference plane the frame-feature
+builders walk, neither of which is C5's. C5 does not move `svc_motion_estimate.rs`
+or `picture.rs` towards `forbid(unsafe_code)`, because `SWelsME::pRefFeatureStorage`,
+the union read of `uSadPredISatd` and the raw plane kernels all remain.
+
+**The referee C5 was given cannot see a mistake.** The brief's instruction — "Review
+the diff as the only referee it will get" — is accurate and is the problem: no
+sweep row, no unit test, no Miri probe and no gate executes a single line of this
+family, so a semantic error in the conversion is undetectable by every instrument
+this project has, and would sit in the tree until Phase 10 ran it.
+
+**Stopped, not skipped, and this is the ruling asked for.** Per S5's rule — "When a
+blocker needs the user's ruling, write the finding and stop that checkpoint rather
+than guessing" — C5 is left undone and named in the roll-forward. The decision it
+needs is one sentence: either the family is converted now, accepting that Phase 10
+inherits an ownership shape chosen without a running caller, or it stays raw until
+Phase 10 ports it whole from the reference, as T7.C6 ruled for its allocations. This
+session took neither side; it measured the ground and stopped.

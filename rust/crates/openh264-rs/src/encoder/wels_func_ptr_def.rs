@@ -285,19 +285,19 @@ impl EntropyCoder {
     /// the buffer that writer is positioned in.
     #[inline]
     // unsafe-cat: fork-shared(S63)
-    #[allow(unsafe_code)]
     /// **T9.E6**: `pSlice` became the three things the two arms touch — the
     /// CABAC coder state, the last macroblock QP as a value, and (on the pop
     /// side, at the call sites) the restore of that QP — so no argument of
     /// this call names `SSlice` and nothing here retags the slice when the
     /// family flips (the two shape-B sites q1c reported here were exactly the
     /// `slice_writer` result held across the future `&mut *pSlice` argument).
+    #[allow(unsafe_code)]
     pub unsafe fn StashMBStatus(
         self,
         buf: &mut [u8],
-        pBs: *mut BsWriter,
-        pDss: *mut SDynamicSlicingStack,
-        pCabacCtx: *mut crate::encoder::set_mb_syn_cabac::SCabacCtx,
+        pBs: &mut BsWriter,
+        pDss: &mut SDynamicSlicingStack,
+        pCabacCtx: &mut crate::encoder::set_mb_syn_cabac::SCabacCtx,
         kuiLastMbQp: u8,
         iMbSkipRun: i32,
     ) {
@@ -320,17 +320,17 @@ impl EntropyCoder {
     /// [`StashMBStatus`]: EntropyCoder::StashMBStatus
     #[inline]
     // unsafe-cat: fork-shared(S63)
-    #[allow(unsafe_code)]
     /// **T9.E6**, as [`StashMBStatus`]: the caller restores
     /// `uiLastMbQp` from `sDss` beside the call — it owns both.
     ///
     /// [`StashMBStatus`]: EntropyCoder::StashMBStatus
+    #[allow(unsafe_code)]
     pub unsafe fn StashPopMBStatus(
         self,
         buf: &mut [u8],
-        pBs: *mut BsWriter,
-        pDss: *mut SDynamicSlicingStack,
-        pCabacCtx: *mut crate::encoder::set_mb_syn_cabac::SCabacCtx,
+        pBs: &mut BsWriter,
+        pDss: &mut SDynamicSlicingStack,
+        pCabacCtx: &mut crate::encoder::set_mb_syn_cabac::SCabacCtx,
     ) -> i32 {
         match self {
             EntropyCoder::Cavlc => {
@@ -350,12 +350,10 @@ impl EntropyCoder {
     /// # Safety
     /// `pSlice` must be live and `pBs` must be its writer.
     #[inline]
-    // unsafe-cat: fork-shared(S63)
-    #[allow(unsafe_code)]
-    pub unsafe fn GetBsPosition(
+    pub fn GetBsPosition(
         self,
-        pBs: *mut BsWriter,
-        pCabacCtx: *const crate::encoder::set_mb_syn_cabac::SCabacCtx,
+        pBs: &BsWriter,
+        pCabacCtx: &crate::encoder::set_mb_syn_cabac::SCabacCtx,
     ) -> i32 {
         match self {
             EntropyCoder::Cavlc => crate::encoder::svc_set_mb_syn_cavlc::GetBsPosCavlc(pBs),
@@ -497,7 +495,7 @@ pub struct SWelsFuncPtrList {
 pub type TagWelsFuncPointerList = SWelsFuncPtrList;
 
 impl Default for SWelsFuncPtrList {
-    /// **T6.I1 — field-wise, replacing `unsafe { mem::zeroed() }`.**
+    /// **T6.I1 — field-wise, replacing `{ mem::zeroed() }`.**
     ///
     /// The zeroed version was sound and said so (S21): every member is a function
     /// pointer, an array of them, a POD sub-table of them, an `EntropyCoder` /
