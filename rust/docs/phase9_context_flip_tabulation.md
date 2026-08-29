@@ -53,7 +53,7 @@ cannot do. It is five errors:
 | # | site | error | what it is |
 |---|---|---|---|
 | 1 | `set_mb_syn_cabac.rs:830` | `E0596` cannot borrow `pEncCtx.sWelsCabacContexts` as mutable | **the only direct write through the context in the whole tree** |
-| 2 | `encoder_ext.rs:2858` | `E0502` | `ParasetStrategy(pCtx).UpdatePpsList(pCtx)` |
+| 2 | `encoder_ext.rs:2858` | `E0502` | `ParasetStrategy(pCtx).UpdatePpsList(pCtx)` — see §4(c): partly an artifact of the measurement's lifetime pass, and the underlying problem is worse |
 | 3 | `wels_encoder_ext.rs:415` | `E0502` | `ParasetStrategy(pCtx)` borrow live across `pCtx.pOut.as_deref_mut()` |
 | 4 | `wels_encoder_ext.rs:571` | `E0502` | as (3) |
 | 5 | `wels_encoder_ext.rs:601` | `E0502` | as (2) |
@@ -113,10 +113,30 @@ the field `&'a sWelsEncCtx` adds a lifetime parameter to the struct and requires
 shape the reconstruction view already uses, not a new kind of claim. **This is the design
 work of the flip**, and it should be its own checkpoint.
 
-**(c) Accessors that borrow the whole context.** `ParasetStrategy(pCtx)` returns a value
-borrowing the context, and three callers need a disjoint field (`pCtx.pOut`) mutably while
-it lives. The fix is the one S6 used for `DeblockingFilterFrameAvcbase`: split the disjoint
-fields directly instead of routing through a whole-context accessor. Four sites.
+**(c) `ParasetStrategy` — a self-referential borrow, and the second piece of design
+work.** *(Corrected after the first draft of this document; the first draft called this
+mechanical and it is not.)*
+
+`ParasetStrategy(pCtx)` returns `&'a mut CWelsParametersetIdStrategyObj`, and the object
+it returns **lives inside the context** — `ctx.pFuncList.pParametersetStrategy`. Its
+methods then take the context again: `UpdatePpsList(&mut self, pCtx: &mut sWelsEncCtx)`.
+So `ParasetStrategy(pCtx).UpdatePpsList(pCtx)` wants the strategy and the whole context
+mutably at the same time, which is why this call is spelled with raw pointers today.
+
+The four `E0502`s the measurement reported at these sites were **partly an artifact of the
+measurement**: the experiment's lifetime pass tied `ParasetStrategy`'s unbound `'a` to the
+context parameter, and that tie is what produced them. Without the tie the signature would
+hand out `&mut` derived from a `&`, which is unsound rather than merely inconvenient. The
+honest statement is therefore stronger than the first draft's: `ParasetStrategy` cannot
+take `&sWelsEncCtx` at all. It wants `&mut sWelsEncCtx` — it is not fork-reachable, so that
+is allowed — and then `ParasetStrategy(pCtx).UpdatePpsList(pCtx)` becomes a double-`&mut`
+(`E0499`), which needs the strategy lifted out of the context for the call
+(`Option::take`/`mem::replace`) or `UpdatePpsList` narrowed to the fields it actually
+touches. **22 call sites**, of which eight already spell the context
+`std::ptr::addr_of_mut!(*ctx)` from an owned `Box`.
+
+This is design work of the same kind as (b), and it should be its own checkpoint rather
+than a step inside the flip.
 
 Alongside these, the mechanical residue the measurement had to clear, which the landing
 will also have to: **56 context `is_null()` call sites**, most of which retire with the

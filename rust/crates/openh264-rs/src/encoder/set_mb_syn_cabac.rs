@@ -821,13 +821,13 @@ pub fn WelsCabacInitContexts(
 // **T8.C3: `#[unsafe(no_mangle)]` deleted here and on the two below** — see the note
 // in `common/sad_common.rs`. Internal names that a cdylib would have exported beside
 // upstream's seven, colliding with `libopenh264`'s own.
-// unsafe-cat: C-ABI
-#[allow(unsafe_code)]
-pub unsafe extern "C" fn WelsCabacInit(pEncCtx: *mut crate::encoder::encoder_context::sWelsEncCtx) {
-    if pEncCtx.is_null() {
-        return;
-    }
-    WelsCabacInitContexts(&mut (*pEncCtx).sWelsCabacContexts);
+pub extern "C" fn WelsCabacInit(pEncCtx: &mut crate::encoder::encoder_context::sWelsEncCtx) {
+    // **S7.A2**: `&mut`, because this is the one body in the tree that writes a context
+    // field through the parameter (the tabulation's only `E0596`). It is not
+    // fork-reachable — one caller, `WelsInitEncoderExt` at `encoder_ext.rs:1628`, which
+    // already passes `&mut *ctxBox` — so exclusive access is what it should have had.
+    // The `is_null()` guard retires with the pointer.
+    WelsCabacInitContexts(&mut pEncCtx.sWelsCabacContexts);
 }
 
 /// Initializes the slice's active context models from a precomputed table.
@@ -835,9 +835,7 @@ pub unsafe extern "C" fn WelsCabacInit(pEncCtx: *mut crate::encoder::encoder_con
 /// # Safety
 /// - `pCbCtx` must point to a valid, writable `SCabacCtx` instance.
 #[inline]
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
-pub unsafe fn WelsCabacContextInitFromContexts(
+pub fn WelsCabacContextInitFromContexts(
     pCbCtx: &mut SCabacCtx,
     contexts: &[[[SStateCtx; WELS_CONTEXT_COUNT]; (WELS_QP_MAX + 1) as usize]; 4],
     eSliceType: i32,
@@ -851,11 +849,11 @@ pub unsafe fn WelsCabacContextInitFromContexts(
     };
     let qp = (iGlobalQp.clamp(0, WELS_QP_MAX)) as usize;
     let model_idx = iIdx.min(3);
-    std::ptr::copy_nonoverlapping(
-        contexts[model_idx][qp].as_ptr(),
-        pCbCtx.m_sStateCtx.as_mut_ptr(),
-        WELS_CONTEXT_COUNT,
-    );
+    // **S7.A2**: both sides are `[SStateCtx; WELS_CONTEXT_COUNT]` — the same type and
+    // the same length, by declaration — and `SStateCtx` is `Copy`, so this is exactly
+    // `copy_from_slice`. The `copy_nonoverlapping` spelling carried a length the two
+    // arrays already agree on; a mismatch would now panic rather than run off the end.
+    pCbCtx.m_sStateCtx.copy_from_slice(&contexts[model_idx][qp]);
 }
 
 /// `WelsCabacContextInit` — set_mb_syn_cabac.cpp:86. Copies the model row for
@@ -868,17 +866,16 @@ pub unsafe fn WelsCabacContextInitFromContexts(
 /// # Safety
 /// - `pCtx` must point to a valid `sWelsEncCtx`.
 /// - `pCbCtx` must point to a valid, writable `SCabacCtx` instance.
-// unsafe-cat: C-ABI
-#[allow(unsafe_code)]
-pub unsafe extern "C" fn WelsCabacContextInit(
-    pCtx: *mut crate::encoder::encoder_context::sWelsEncCtx,
+pub extern "C" fn WelsCabacContextInit(
+    pCtx: &crate::encoder::encoder_context::sWelsEncCtx,
     pCbCtx: &mut SCabacCtx,
     iModel: i32,
 ) {
-    if pCtx.is_null() {
-        return;
-    }
-    let pEncCtx = pCtx as *mut crate::encoder::encoder_context::sWelsEncCtx;
+    // **S7.A2**: shared — this reads `sWelsCabacContexts` and writes only through
+    // `pCbCtx`. Its one caller (`WelsInitSliceCabac`) is fork-shared, which is exactly
+    // why the borrow must be `&` and not `&mut`. The guard and the re-cast of the
+    // parameter to its own type both retire with the pointer.
+    let pEncCtx = pCtx;
     WelsCabacContextInitFromContexts(
         pCbCtx,
         &(*pEncCtx).sWelsCabacContexts,
