@@ -92,7 +92,7 @@ fn GomSizeForMbWidth(kiMbWidth: i32) -> i32 {
 #[allow(unsafe_code)]
 pub unsafe fn CheckFixedSliceNumMultiSliceSetting(
     kiMbNumInFrame: i32,
-    pSliceArg: *mut SSliceArgument,
+    pSliceArg: &mut SSliceArgument,
 ) -> bool {
     let pSlicesAssignList = (*pSliceArg).uiSliceMbNum.as_mut_ptr() as *mut i32;
     let kuiSliceNum = (*pSliceArg).uiSliceNum;
@@ -127,7 +127,7 @@ pub unsafe fn CheckFixedSliceNumMultiSliceSetting(
 /// length.
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
-pub unsafe fn CheckRowMbMultiSliceSetting(kiMbWidth: i32, pSliceArg: *mut SSliceArgument) -> bool {
+pub unsafe fn CheckRowMbMultiSliceSetting(kiMbWidth: i32, pSliceArg: &mut SSliceArgument) -> bool {
     let pSlicesAssignList = (*pSliceArg).uiSliceMbNum.as_mut_ptr() as *mut i32;
     let kuiSliceNum = (*pSliceArg).uiSliceNum;
     let mut uiSliceIdx: u32 = 0;
@@ -151,7 +151,7 @@ pub unsafe fn CheckRowMbMultiSliceSetting(kiMbWidth: i32, pSliceArg: *mut SSlice
 #[allow(unsafe_code)]
 pub unsafe fn CheckRasterMultiSliceSetting(
     kiMbNumInFrame: i32,
-    pSliceArg: *mut SSliceArgument,
+    pSliceArg: &mut SSliceArgument,
 ) -> bool {
     let pSlicesAssignList = (*pSliceArg).uiSliceMbNum.as_mut_ptr() as *mut i32;
     let mut iActualSliceCount: i32 = 0;
@@ -245,7 +245,7 @@ pub unsafe fn GomValidCheckSliceNum(
 pub unsafe fn GomValidCheckSliceMbNum(
     kiMbWidth: i32,
     kiMbHeight: i32,
-    pSliceArg: *mut SSliceArgument,
+    pSliceArg: &mut SSliceArgument,
 ) -> bool {
     let pSlicesAssignList = (*pSliceArg).uiSliceMbNum.as_mut_ptr();
     let kuiSliceNum = (*pSliceArg).uiSliceNum;
@@ -315,7 +315,7 @@ pub unsafe fn GomValidCheckSliceMbNum(
 #[allow(unsafe_code)]
 pub unsafe fn SliceArgumentValidationFixedSliceMode(
     _pLogCtx: *mut SLogContext,
-    pSliceArgument: *mut SSliceArgument,
+    pSliceArgument: &mut SSliceArgument,
     kiRCMode: RC_MODES,
     kiPicWidth: i32,
     kiPicHeight: i32,
@@ -425,7 +425,7 @@ fn new_mb_map(kiCountMbNum: i32) -> Vec<AtomicU16> {
 #[allow(unsafe_code)]
 pub unsafe fn AssignMbMapMultipleSlices(
     pCurDq: &mut SDqLayer,
-    kpSliceArgument: *const SSliceArgument,
+    kpSliceArgument: &SSliceArgument,
 ) -> i32 {
     // T9.E2h: a plain field borrow — the `as *mut` spelling made a raw whose
     // parent temporary expired at the statement (S29's cast clause); under the
@@ -499,13 +499,11 @@ pub unsafe fn AssignMbMapMultipleSlices(
 ///
 /// # Safety
 /// `pSliceArgument` may be null, which returns -1 as in C++.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn GetInitialSliceNum(pSliceArgument: *const SSliceArgument) -> i32 {
-    if pSliceArgument.is_null() {
-        return -1;
-    }
-
+pub fn GetInitialSliceNum(pSliceArgument: &SSliceArgument) -> i32 {
+    // **S6.D1**, and T9.H's idiom: the `is_null()` guard (and its `-1`) retire with the
+    // parameter. Every caller reaches this through a *field* —
+    // `&(*pDLayer).sSliceArgument` at `encoder_ext.rs:193` and `:829`, and the third
+    // caller threads the same reference on — so the pointer was never absent.
     match (*pSliceArgument).uiSliceMode {
         SM_SINGLE_SLICE | SM_FIXEDSLCNUM_SLICE | SM_RASTER_SLICE => {
             (*pSliceArgument).uiSliceNum as i32
@@ -524,7 +522,7 @@ pub unsafe fn GetInitialSliceNum(pSliceArgument: *const SSliceArgument) -> i32 {
 #[allow(unsafe_code)]
 pub unsafe fn InitSliceSegment(
     pCurDq: &mut SDqLayer,
-    pSliceArgument: *mut SSliceArgument,
+    pSliceArgument: &SSliceArgument,
     kiMbWidth: i32,
     kiMbHeight: i32,
 ) -> i32 {
@@ -534,7 +532,10 @@ pub unsafe fn InitSliceSegment(
     let pSliceSeg = &mut pCurDq.sSliceEncCtx;
     let kiCountMbNum = kiMbWidth * kiMbHeight;
 
-    if pSliceArgument.is_null() || kiMbWidth == 0 || kiMbHeight == 0 {
+    // **S6.D1**: the `is_null()` disjunct goes with the parameter — `InitSliceSegment`
+    // has one caller (`InitSlicePEncCtx`), reached from `encoder_ext.rs:1009` with the
+    // address of a `sSliceArgument` field. The two dimension arms are the live guard.
+    if kiMbWidth == 0 || kiMbHeight == 0 {
         return 1;
     }
 
@@ -647,7 +648,7 @@ pub unsafe fn InitSlicePEncCtx(
     _bFmoUseFlag: bool,
     iMbWidth: i32,
     iMbHeight: i32,
-    pSliceArgument: *mut SSliceArgument,
+    pSliceArgument: &SSliceArgument,
 ) -> i32 {
     InitSliceSegment(pCurDq, pSliceArgument, iMbWidth, iMbHeight);
     0

@@ -1006,7 +1006,8 @@ pub unsafe fn InitDqLayers(
             false,
             (*pSps).iMbWidth as i32,
             (*pSps).iMbHeight as i32,
-            std::ptr::addr_of_mut!((*pDlayerParam).sSliceArgument),
+            // **S6.D1**: `InitSlicePEncCtx` takes `&SSliceArgument` now.
+            &(*pDlayerParam).sSliceArgument,
         );
         if iResult != 0 {
             return iResult;
