@@ -1007,45 +1007,39 @@ pub unsafe fn WelsWriteMbResidual(
 /// [`EntropyCoder`]: crate::encoder::wels_func_ptr_def::EntropyCoder
 // unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
-pub unsafe fn StashMBStatusCavlc(
-    pBs: *mut BsWriter,
-    pDss: *mut crate::encoder::svc_encode_slice::SDynamicSlicingStack,
+pub fn StashMBStatusCavlc(
+    pBs: &mut BsWriter,
+    pDss: &mut crate::encoder::svc_encode_slice::SDynamicSlicingStack,
     kuiLastMbQp: u8,
     iMbSkipRun: i32,
 ) {
-    if pDss.is_null() {
-        return;
-    }
-    if !pBs.is_null() {
-        // Three cursor fields become one value. `BsWriter` is `Copy`, which is
-        // the whole point of a detached cursor. The CABAC twin below now reads
-        // the same way — `sStoredCabac = *pCtx` — since T3.5 turned its triple
-        // into offsets; the two families end symmetric, and the only thing
-        // still asymmetric between them is CABAC's byte copy, which exists for
-        // `PropagateCarry` and not for the cursor.
-        (*pDss).sBsStack = *pBs;
-    }
-    (*pDss).uiLastMbQp = kuiLastMbQp;
-    (*pDss).iMbSkipRunStack = iMbSkipRun;
+    // **S5.D1**: both null tests are gone with the pointers. Every one of the
+    // family's fourteen call sites was enumerated before they were deleted: `pDss`
+    // is `&mut sDss`, a caller local, at all of them, and `pBs` is `slice_writer`'s
+    // result, whose own `# Safety` already requires it be dereferenceable. Neither
+    // branch could be taken; a reference says so in the type.
+    //
+    // Three cursor fields become one value. `BsWriter` is `Copy`, which is the whole
+    // point of a detached cursor. The CABAC twin below now reads the same way —
+    // `sStoredCabac = *pCtx` — since T3.5 turned its triple into offsets; the two
+    // families end symmetric, and the only thing still asymmetric between them is
+    // CABAC's byte copy, which exists for `PropagateCarry` and not for the cursor.
+    pDss.sBsStack = *pBs;
+    pDss.uiLastMbQp = kuiLastMbQp;
+    pDss.iMbSkipRunStack = iMbSkipRun;
 }
 
 /// See [`StashMBStatusCavlc`] for why this takes no buffer.
 ///
 /// **T9.E6**: the `uiLastMbQp` restore moved to the call sites (the caller owns
 /// `sDss` and the slice; this fn no longer names `SSlice` — S54's value rule).
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
-pub unsafe fn StashPopMBStatusCavlc(
-    pBs: *mut BsWriter,
-    pDss: *mut crate::encoder::svc_encode_slice::SDynamicSlicingStack,
+pub fn StashPopMBStatusCavlc(
+    pBs: &mut BsWriter,
+    pDss: &mut crate::encoder::svc_encode_slice::SDynamicSlicingStack,
 ) -> i32 {
-    if pDss.is_null() {
-        return 0;
-    }
-    if !pBs.is_null() {
-        *pBs = (*pDss).sBsStack;
-    }
-    (*pDss).iMbSkipRunStack
+    // S5.D1: as the stash side — the two null tests were unreachable, see there.
+    *pBs = pDss.sBsStack;
+    pDss.iMbSkipRunStack
 }
 
 /// `StashMBStatusCabac` — set_mb_syn_cavlc.cpp:250. (The three CABAC entry
@@ -1059,14 +1053,13 @@ pub unsafe fn StashPopMBStatusCavlc(
 #[allow(unsafe_code)]
 pub unsafe fn StashMBStatusCabac(
     buf: &mut [u8],
-    pDss: *mut crate::encoder::svc_encode_slice::SDynamicSlicingStack,
-    pCabacCtx: *mut crate::encoder::set_mb_syn_cabac::SCabacCtx,
+    pDss: &mut crate::encoder::svc_encode_slice::SDynamicSlicingStack,
+    pCabacCtx: &mut crate::encoder::set_mb_syn_cabac::SCabacCtx,
     kuiLastMbQp: u8,
     iMbSkipRun: i32,
 ) {
-    if pDss.is_null() || pCabacCtx.is_null() {
-        return;
-    }
+    // S5.D1: as `StashMBStatusCavlc` — the null test was unreachable at all
+    // fourteen call sites; `pCabacCtx` is `addr_of_mut!((*pSlice).sCabacCtx)`.
     let pCtx = pCabacCtx;
     // `SCabacCtx` is `Copy` and, since T3.5, holds no pointers — so the whole
     // snapshot is this one assignment, the same shape the CAVLC twin above
@@ -1075,7 +1068,7 @@ pub unsafe fn StashMBStatusCabac(
     // the cursor is not enough to restore the output.
     (*pDss).sStoredCabac = *pCtx;
     if !(*pDss).pRestoreBuffer.is_null() {
-        let iPosBitOffset = GetBsPosCabac(pCtx as *const _) - (*pDss).iStartPos;
+        let iPosBitOffset = GetBsPosCabac(pCtx) - pDss.iStartPos;
         let iLen = (iPosBitOffset >> 3) + if (iPosBitOffset & 0x07) != 0 { 1 } else { 0 };
         let start = (*pCtx).m_iBufStart;
         // Sliced, not offset: `buf[start..start + iLen]` is what bounds the
@@ -1097,17 +1090,15 @@ pub unsafe fn StashMBStatusCabac(
 #[allow(unsafe_code)]
 pub unsafe fn StashPopMBStatusCabac(
     buf: &mut [u8],
-    pDss: *mut crate::encoder::svc_encode_slice::SDynamicSlicingStack,
-    pCabacCtx: *mut crate::encoder::set_mb_syn_cabac::SCabacCtx,
+    pDss: &mut crate::encoder::svc_encode_slice::SDynamicSlicingStack,
+    pCabacCtx: &mut crate::encoder::set_mb_syn_cabac::SCabacCtx,
 ) -> i32 {
-    if pDss.is_null() || pCabacCtx.is_null() {
-        return 0;
-    }
+    // S5.D1: as the stash side — the null test was unreachable, see there.
     let pCtx = pCabacCtx;
     *pCtx = (*pDss).sStoredCabac;
     // Write-extent audit site 3: the one write that is not at the cursor.
     if !(*pDss).pRestoreBuffer.is_null() {
-        let iPosBitOffset = GetBsPosCabac(pCtx as *const _) - (*pDss).iStartPos;
+        let iPosBitOffset = GetBsPosCabac(pCtx) - pDss.iStartPos;
         let iLen = (iPosBitOffset >> 3) + if (iPosBitOffset & 0x07) != 0 { 1 } else { 0 };
         let start = (*pCtx).m_iBufStart;
         // Same bound as the stash side, on the write this time — this is the
@@ -1135,11 +1126,12 @@ pub unsafe fn StashPopMBStatusCabac(
 /// [`EntropyCoder::GetBsPosition`]: crate::encoder::wels_func_ptr_def::EntropyCoder::GetBsPosition
 // unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
-pub unsafe fn GetBsPosCabac(pCabacCtx: *const crate::encoder::set_mb_syn_cabac::SCabacCtx) -> i32 {
-    if pCabacCtx.is_null() {
-        return 0;
-    }
-    let pCtx = &*pCabacCtx;
+pub fn GetBsPosCabac(pCabacCtx: &crate::encoder::set_mb_syn_cabac::SCabacCtx) -> i32 {
+    // S5.D1: shared, and the null test goes with the pointer. Three call sites: the
+    // `EntropyCoder::GetBsPosition` dispatch, which passes `&(*pSlice).sCabacCtx` —
+    // an inline field of a live slice — and the two CABAC stash bodies above, which
+    // pass the coder state they were handed.
+    let pCtx = pCabacCtx;
     ((pCtx.m_iBufCur - pCtx.m_iBufStart) as i32) * 8 + (pCtx.m_iLowBitCnt - 9)
 }
 
@@ -1153,13 +1145,9 @@ pub unsafe fn GetBsPosCabac(pCabacCtx: *const crate::encoder::set_mb_syn_cabac::
 ///
 /// Takes the slice's writer (`slice_writer`) rather than the slice: the writer is
 /// all this reads, and the slice no longer stores it (Phase 6 session B).
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
-pub unsafe fn GetBsPosCavlc(pBs: *mut BsWriter) -> i32 {
-    if pBs.is_null() {
-        return 0;
-    }
-    crate::encoder::vlc_encoder::BsGetBitsPos(&*pBs)
+pub fn GetBsPosCavlc(pBs: &BsWriter) -> i32 {
+    // S5.D1: shared, not `&mut` — this reads the writer's position and nothing else.
+    crate::encoder::vlc_encoder::BsGetBitsPos(pBs)
 }
 
 #[cfg(test)]

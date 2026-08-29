@@ -2135,7 +2135,7 @@ pub unsafe fn WelsISliceMdEnc(pEncCtx: *mut sWelsEncCtx, pSlice: &mut SSlice) ->
                 let func_list = (*pEncCtx).func_list();
                 func_list
                     .eEntropyCoder
-                    .StashMBStatus(slice_bs_buffer(pEncCtx, std::ptr::addr_of_mut!((*pSlice).sSliceBs), (*pSlice).uiBufferIdx as usize), slice_writer(pEncCtx, std::ptr::addr_of_mut!((*pSlice).sSliceBs)), &mut sDss, std::ptr::addr_of_mut!((*pSlice).sCabacCtx), (*pSlice).uiLastMbQp, 0);
+                    .StashMBStatus(slice_bs_buffer(pEncCtx, std::ptr::addr_of_mut!((*pSlice).sSliceBs), (*pSlice).uiBufferIdx as usize), &mut *slice_writer(pEncCtx, std::ptr::addr_of_mut!((*pSlice).sSliceBs)), &mut sDss, &mut (*pSlice).sCabacCtx, (*pSlice).uiLastMbQp, 0);
             }
         }
         iCurMbIdx = iNextMbIdx;
@@ -2182,7 +2182,7 @@ pub unsafe fn WelsISliceMdEnc(pEncCtx: *mut sWelsEncCtx, pSlice: &mut SSlice) ->
                     let func_list = (*pEncCtx).func_list();
                     func_list
                         .eEntropyCoder
-                        .StashPopMBStatus(slice_bs_buffer(pEncCtx, std::ptr::addr_of_mut!((*pSlice).sSliceBs), (*pSlice).uiBufferIdx as usize), slice_writer(pEncCtx, std::ptr::addr_of_mut!((*pSlice).sSliceBs)), &mut sDss, std::ptr::addr_of_mut!((*pSlice).sCabacCtx));
+                        .StashPopMBStatus(slice_bs_buffer(pEncCtx, std::ptr::addr_of_mut!((*pSlice).sSliceBs), (*pSlice).uiBufferIdx as usize), &mut *slice_writer(pEncCtx, std::ptr::addr_of_mut!((*pSlice).sSliceBs)), &mut sDss, &mut (*pSlice).sCabacCtx);
                     (*pSlice).uiLastMbQp = sDss.uiLastMbQp;
                 }
                 UpdateQpForOverflow(mbs.cur_mut(), kuiChromaQpIndexOffset);
@@ -2274,7 +2274,7 @@ pub unsafe fn WelsISliceMdEncDynamic(pEncCtx: *mut sWelsEncCtx, pSlice: &mut SSl
             let func_list = (*pEncCtx).func_list();
             func_list
                 .eEntropyCoder
-                .StashMBStatus(slice_bs_buffer(pEncCtx, std::ptr::addr_of_mut!((*pSlice).sSliceBs), (*pSlice).uiBufferIdx as usize), slice_writer(pEncCtx, std::ptr::addr_of_mut!((*pSlice).sSliceBs)), &mut sDss, std::ptr::addr_of_mut!((*pSlice).sCabacCtx), (*pSlice).uiLastMbQp, 0);
+                .StashMBStatus(slice_bs_buffer(pEncCtx, std::ptr::addr_of_mut!((*pSlice).sSliceBs), (*pSlice).uiBufferIdx as usize), &mut *slice_writer(pEncCtx, std::ptr::addr_of_mut!((*pSlice).sSliceBs)), &mut sDss, &mut (*pSlice).sCabacCtx, (*pSlice).uiLastMbQp, 0);
             func_list
                 .pfRc
                 .WelsRcMbInit(pEncCtx as *mut _, mbs.cur_mut(), &mut *pSlice);
@@ -2315,7 +2315,7 @@ pub unsafe fn WelsISliceMdEncDynamic(pEncCtx: *mut sWelsEncCtx, pSlice: &mut SSl
                     let func_list = (*pEncCtx).func_list();
                     func_list
                         .eEntropyCoder
-                        .StashPopMBStatus(slice_bs_buffer(pEncCtx, std::ptr::addr_of_mut!((*pSlice).sSliceBs), (*pSlice).uiBufferIdx as usize), slice_writer(pEncCtx, std::ptr::addr_of_mut!((*pSlice).sSliceBs)), &mut sDss, std::ptr::addr_of_mut!((*pSlice).sCabacCtx));
+                        .StashPopMBStatus(slice_bs_buffer(pEncCtx, std::ptr::addr_of_mut!((*pSlice).sSliceBs), (*pSlice).uiBufferIdx as usize), &mut *slice_writer(pEncCtx, std::ptr::addr_of_mut!((*pSlice).sSliceBs)), &mut sDss, &mut (*pSlice).sCabacCtx);
                     (*pSlice).uiLastMbQp = sDss.uiLastMbQp;
                 }
                 UpdateQpForOverflow(mbs.cur_mut(), kuiChromaQpIndexOffset);
@@ -2330,7 +2330,7 @@ pub unsafe fn WelsISliceMdEncDynamic(pEncCtx: *mut sWelsEncCtx, pSlice: &mut SSl
 
         {  // A6: the block is the shared borrow's scope (F191/F212)
             let func_list = (*pEncCtx).func_list();
-            sDss.iCurrentPos = func_list.eEntropyCoder.GetBsPosition(slice_writer(pEncCtx, std::ptr::addr_of_mut!((*pSlice).sSliceBs)), std::ptr::addr_of!((*pSlice).sCabacCtx));
+            sDss.iCurrentPos = func_list.eEntropyCoder.GetBsPosition(&*slice_writer(pEncCtx, std::ptr::addr_of_mut!((*pSlice).sSliceBs)), &(*pSlice).sCabacCtx);
         }
 
         if DynSlcJudgeSliceBoundaryStepBack(
@@ -2344,7 +2344,7 @@ pub unsafe fn WelsISliceMdEncDynamic(pEncCtx: *mut sWelsEncCtx, pSlice: &mut SSl
                 let func_list = (*pEncCtx).func_list();
                 func_list
                     .eEntropyCoder
-                    .StashPopMBStatus(slice_bs_buffer(pEncCtx, std::ptr::addr_of_mut!((*pSlice).sSliceBs), (*pSlice).uiBufferIdx as usize), slice_writer(pEncCtx, std::ptr::addr_of_mut!((*pSlice).sSliceBs)), &mut sDss, std::ptr::addr_of_mut!((*pSlice).sCabacCtx));
+                    .StashPopMBStatus(slice_bs_buffer(pEncCtx, std::ptr::addr_of_mut!((*pSlice).sSliceBs), (*pSlice).uiBufferIdx as usize), &mut *slice_writer(pEncCtx, std::ptr::addr_of_mut!((*pSlice).sSliceBs)), &mut sDss, &mut (*pSlice).sCabacCtx);
                 (*pSlice).uiLastMbQp = sDss.uiLastMbQp;
             }
             (*pCurLayer).LastCodedMbIdxOfPartition[kiPartitionId] = iCurMbIdx - 1;
@@ -2468,9 +2468,9 @@ pub unsafe fn WelsMdInterMbLoop(
                 let func_list = (*pEncCtx).func_list();
                 func_list.eEntropyCoder.StashMBStatus(
                     slice_bs_buffer(pEncCtx, std::ptr::addr_of_mut!((*pSlice).sSliceBs), (*pSlice).uiBufferIdx as usize),
-                    slice_writer(pEncCtx, std::ptr::addr_of_mut!((*pSlice).sSliceBs)),
+                    &mut *slice_writer(pEncCtx, std::ptr::addr_of_mut!((*pSlice).sSliceBs)),
                     &mut sDss,
-                    std::ptr::addr_of_mut!((*pSlice).sCabacCtx),
+                    &mut (*pSlice).sCabacCtx,
                     (*pSlice).uiLastMbQp,
                     (*pSlice).iMbSkipRun,
                 );
@@ -2561,9 +2561,9 @@ pub unsafe fn WelsMdInterMbLoop(
                     let func_list = (*pEncCtx).func_list();
                     (*pSlice).iMbSkipRun = func_list.eEntropyCoder.StashPopMBStatus(
                         slice_bs_buffer(pEncCtx, std::ptr::addr_of_mut!((*pSlice).sSliceBs), (*pSlice).uiBufferIdx as usize),
-                        slice_writer(pEncCtx, std::ptr::addr_of_mut!((*pSlice).sSliceBs)),
+                        &mut *slice_writer(pEncCtx, std::ptr::addr_of_mut!((*pSlice).sSliceBs)),
                         &mut sDss,
-                        std::ptr::addr_of_mut!((*pSlice).sCabacCtx),
+                        &mut (*pSlice).sCabacCtx,
                     );
                     (*pSlice).uiLastMbQp = sDss.uiLastMbQp;
                 }
@@ -2665,9 +2665,9 @@ pub unsafe fn WelsMdInterMbLoopOverDynamicSlice(
             let func_list = (*pEncCtx).func_list();
             func_list.eEntropyCoder.StashMBStatus(
                 slice_bs_buffer(pEncCtx, std::ptr::addr_of_mut!((*pSlice).sSliceBs), (*pSlice).uiBufferIdx as usize),
-                slice_writer(pEncCtx, std::ptr::addr_of_mut!((*pSlice).sSliceBs)),
+                &mut *slice_writer(pEncCtx, std::ptr::addr_of_mut!((*pSlice).sSliceBs)),
                 &mut sDss,
-                std::ptr::addr_of_mut!((*pSlice).sCabacCtx),
+                &mut (*pSlice).sCabacCtx,
                 (*pSlice).uiLastMbQp,
                 (*pSlice).iMbSkipRun,
             );
@@ -2759,9 +2759,9 @@ pub unsafe fn WelsMdInterMbLoopOverDynamicSlice(
                     let func_list = (*pEncCtx).func_list();
                     (*pSlice).iMbSkipRun = func_list.eEntropyCoder.StashPopMBStatus(
                         slice_bs_buffer(pEncCtx, std::ptr::addr_of_mut!((*pSlice).sSliceBs), (*pSlice).uiBufferIdx as usize),
-                        slice_writer(pEncCtx, std::ptr::addr_of_mut!((*pSlice).sSliceBs)),
+                        &mut *slice_writer(pEncCtx, std::ptr::addr_of_mut!((*pSlice).sSliceBs)),
                         &mut sDss,
-                        std::ptr::addr_of_mut!((*pSlice).sCabacCtx),
+                        &mut (*pSlice).sCabacCtx,
                     );
                     (*pSlice).uiLastMbQp = sDss.uiLastMbQp;
                 }
@@ -2777,7 +2777,7 @@ pub unsafe fn WelsMdInterMbLoopOverDynamicSlice(
 
         {  // A6: the block is the shared borrow's scope (F191/F212)
             let func_list = (*pEncCtx).func_list();
-            sDss.iCurrentPos = func_list.eEntropyCoder.GetBsPosition(slice_writer(pEncCtx, std::ptr::addr_of_mut!((*pSlice).sSliceBs)), std::ptr::addr_of!((*pSlice).sCabacCtx));
+            sDss.iCurrentPos = func_list.eEntropyCoder.GetBsPosition(&*slice_writer(pEncCtx, std::ptr::addr_of_mut!((*pSlice).sSliceBs)), &(*pSlice).sCabacCtx);
         }
 
         if DynSlcJudgeSliceBoundaryStepBack(
@@ -2791,9 +2791,9 @@ pub unsafe fn WelsMdInterMbLoopOverDynamicSlice(
                 let func_list = (*pEncCtx).func_list();
                 (*pSlice).iMbSkipRun = func_list.eEntropyCoder.StashPopMBStatus(
                     slice_bs_buffer(pEncCtx, std::ptr::addr_of_mut!((*pSlice).sSliceBs), (*pSlice).uiBufferIdx as usize),
-                    slice_writer(pEncCtx, std::ptr::addr_of_mut!((*pSlice).sSliceBs)),
+                    &mut *slice_writer(pEncCtx, std::ptr::addr_of_mut!((*pSlice).sSliceBs)),
                     &mut sDss,
-                    std::ptr::addr_of_mut!((*pSlice).sCabacCtx),
+                    &mut (*pSlice).sCabacCtx,
                 );
                 (*pSlice).uiLastMbQp = sDss.uiLastMbQp;
             }
