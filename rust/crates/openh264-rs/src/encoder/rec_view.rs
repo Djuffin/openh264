@@ -483,6 +483,25 @@ impl RecPicView {
 ///
 /// `Sync` comes from [`SharedCells<u8>`]'s own audited impl; this type adds no new
 /// `unsafe impl`, which the end state's budget of exactly two depends on.
+///
+/// # The one constraint on cursors taken from here — **F117**, and no gate sees it
+///
+/// "Nothing writes a source plane" is true of every path any gate runs, and **false
+/// in general**. `VaaBackgroundMbDataUpdate` copies *previous source → current
+/// source* through raw roots, in-fork, and a probe measured the destination to be
+/// the very picture `pEncData` reads — `same:true` on 18 frames of 18. The
+/// diffharness sets `bEnableBackgroundDetection = false`, so that path is outside
+/// every sweep row in both profiles *and* outside the encoder-scoped Miri step.
+/// T9.B20 ruled those three copy sites stay raw for exactly that reason (rule S57:
+/// an ungated path argues for leaving a site raw, not for converting it carefully).
+///
+/// So the rule the rest of this family already follows applies to cursors from here
+/// too, and it is the discipline `svc_mode_decision.rs:630` states: **build a cursor
+/// at its use and drop it in the same call**. A shared slice held across a raw write
+/// to the same plane is a live tag when that write lands under it. Every converted
+/// caller in S9.0a satisfies this — the cursors are arguments to one kernel call —
+/// but a future caller that parks one across a mode-decision step would not, and no
+/// gate would tell it.
 #[derive(Debug)]
 pub struct RoPlane {
     cells: SharedCells<u8>,

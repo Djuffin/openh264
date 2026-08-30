@@ -7473,3 +7473,71 @@ So step 9's decoder half needed no conversion and has none available. Its second
 completely", is not reachable this session either: `common/mc.rs` (3) and
 `common/copy_mb.rs` (1) are F249 plane-root kernels. `common/` goes 6 -> 4 and
 `common/wels_trace.rs` seals on its own.
+
+## F252 — the plane views land for the source planes, and **S9.0b is refused by a standing ruling**: the VAA "cur" planes are a fork-visible *write* target on an ungated path
+
+S9.0a converted the source planes and the DCT family behind them (commit
+`08a2be27`): `RoPicView` through `&SPicture`, `pEncView` on `SDqLayer`, `PDctFunc`
+off `extern "C"` and onto `(&mut [i16], &PlaneCursor, &PlaneCursor)`, both shims
+safe, 13 call sites, Miri 296/0 and sweeps 583/583 in both profiles. Three things
+that conversion settled are worth keeping:
+
+* **The geometry proof came before the edit.** `mb_offset` is
+  `((iMbX + iMbY * stride) << shift)`, which expands to exactly `x + y * stride` for
+  `luma_origin`/`chroma_origin`'s `(x, y)`; the raw root is the plane's padded
+  origin, the same anchor `RoPlane::cursor` measures from.
+* **A trap that would have diverged on chroma only.** `mb_cursor` resolves *both*
+  chroma planes through `strides[1]` (`stride_idx`), while a view's plane carries
+  its own. They agree only because `AllocPicture` builds planes 1 and 2 with one
+  `kuiChromaStride` and `iLineSize` is read back off those planes. Had a picture
+  ever carried differing chroma strides, the conversion would have been silently
+  wrong on U and V and byte-identical on Y.
+* **The one new `unsafe` is intrinsic.** `RoPlane::buf` turns the stored base and
+  length back into a shared slice, because a view that outlives the borrow which
+  built it must store a base and a length and there is no safe way back. The
+  alternative is a lifetime on `SDqLayer` propagating into `sWelsEncCtx` and the
+  fork seam — F245's shape, where designs here die.
+
+**S9.0b does not follow, and the reason is a ruling this session would have had to
+override rather than a difficulty it could have worked through.**
+
+The user ruled "one checkpoint, both views together" on a presentation — mine —
+that both halves were the same kind of work. They are not, and the error was the
+same one F249 made: **inferring a family's kind from the shape of its obstruction
+instead of measuring the residue.** `SVAAFrameInfo`'s six plane fields *look* like
+the source planes one level over. Measured:
+
+1. `PCopyFunc` is `(pDst, iStrideD, pSrc, iStrideS)`, so at
+   `svc_mode_decision.rs:549` **`pCurY` is the destination**. The VAA background
+   path *writes* the current source picture; it does not read it. A read-only view
+   is the wrong type for three of the six fields.
+2. **F117 measured the destination to be the picture the encoder is reading** — a
+   probe comparing `(*pCtx).pEncPic` against `GetCurrentOrigFrame(did)` reported
+   `same:true` on **18 frames of 18** — and it happens in-fork, per macroblock.
+3. **No gate can see it.** The diffharness sets
+   `bEnableBackgroundDetection = false`, so the path is outside every sweep row in
+   both profiles *and* outside the encoder-scoped Miri step. S9.0a's own green
+   gates say nothing about it.
+4. **T9.B20 already decided it**: the three copy sites stay raw and tagged, for the
+   write-under-shared-view problem (D-mt-3) to take as a whole. Rule **S57** is the
+   generalisation — *before converting a site, ask whether any gate runs it; if none
+   does, that is an argument for leaving it raw, not for converting it carefully.*
+
+So S9.0b would have converted the one aliasing shape in this family that is
+genuinely hard, on the one path no gate exercises, against a standing decision.
+Refused, and the ruled checkpoint closes at its first half.
+
+**The point-of-use design was also not expressible as approved**, independently of
+the above. `VaaBackgroundMbDataUpdate(pFunc, …, pVaaInfo: &SVAAFrameInfo, pCurMb)`
+holds neither a pool nor a context, so a consumer cannot build a view at its own
+use; point-of-use would first require `SVAAFrameInfo` to carry picture *identity*
+(`SrcPicId`) rather than pointers — F241's index-table shape a third time — which
+is a larger change than the phrase suggests and belongs with D-mt-3.
+
+**What S9.0a inherits from F117, recorded on the type.** `RoPicView` hands out
+shared slices over the source picture, and F117's dark path writes that same
+picture through raw roots. The existing discipline covers it — *build a cursor at
+its use and drop it in the same call*, `svc_mode_decision.rs:630` — and every
+caller S9.0a converted satisfies it, since each cursor is an argument to one kernel
+call. But it is now a constraint on a public API, on a path no gate walks, so it is
+documented on `RoPicView` itself rather than left in the family's folklore.
