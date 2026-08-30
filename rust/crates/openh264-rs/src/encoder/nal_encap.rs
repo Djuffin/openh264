@@ -534,11 +534,9 @@ pub unsafe fn WelsEncodeNal(
 /// - `pBsWriter` must point to a valid `BsWriter`, and `buf` must be the
 ///   buffer that writer is positioned in.
 #[inline]
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
-pub unsafe fn WelsWriteSVCPrefixNal(
+pub fn WelsWriteSVCPrefixNal(
     buf: &mut [u8],
-    pBsWriter: *mut BsWriter,
+    pBsWriter: &mut BsWriter,
     kiNalRefIdc: i32,
     _kbIdrFlag: bool,
 ) -> i32 {

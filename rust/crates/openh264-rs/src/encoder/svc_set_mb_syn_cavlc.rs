@@ -248,9 +248,7 @@ pub fn CavlcParamCal_c(
 }
 
 /// Serializes transform coefficient block residuals into the CAVLC bitstream.
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
-pub unsafe fn WriteBlockResidualCavlc(
+pub fn WriteBlockResidualCavlc(
     pFuncList: &SWelsFuncPtrList,
     pCoffLevel: &[i16],
     iEndIdx: i32,
@@ -258,7 +256,7 @@ pub unsafe fn WriteBlockResidualCavlc(
     iResidualProperty: i32,
     iNC: i8,
     buf: &mut [u8],
-    pBs: *mut BsWriter,
+    pBs: &mut BsWriter,
 ) -> i32 {
     let mut iLevel = [0i16; 16];
     let mut uiRun = [0u8; 16];
@@ -731,7 +729,7 @@ pub unsafe fn WelsSpatialWriteMbSyn(
             );
             let pMbCache = &mut pSlice.sMbCacheInfo;
             let buf = crate::encoder::svc_encode_slice::slice_bs_buffer(pEncCtx, std::ptr::addr_of_mut!((*pSlice).sSliceBs), (*pSlice).uiBufferIdx as usize);
-            if WelsWriteMbResidual((*pEncCtx).func_list(), &mut *pMbCache, mbs.cur(), buf, pBs) != 0 {
+            if WelsWriteMbResidual((*pEncCtx).func_list(), &mut *pMbCache, mbs.cur(), buf, &mut *pBs) != 0 {
                 return ENC_RETURN_VLCOVERFLOWFOUND;
             }
         } else {
@@ -760,14 +758,12 @@ pub unsafe fn WelsSpatialWriteMbSyn(
 /// Serializes all macroblock quantized transform coefficient residuals using CAVLC.
 ///
 /// Matches `int32_t WelsWriteMbResidual (SWelsFuncPtrList* pFuncList, SMbCache* sMbCacheInfo, SMB* pCurMb, SBitStringAux* pBs)`
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
-pub unsafe fn WelsWriteMbResidual(
+pub fn WelsWriteMbResidual(
     pFuncList: &SWelsFuncPtrList,
     sMbCacheInfo: &mut SMbCache,
     pCurMb: &SMB,
     buf: &mut [u8],
-    pBs: *mut BsWriter,
+    pBs: &mut BsWriter,
 ) -> i32 {
     let uiMbType = pCurMb.uiMbType;
     let kiCbpChroma = (pCurMb.uiCbp >> 4) as i32;

@@ -1446,7 +1446,7 @@ unsafe fn WritePrefixNalForSlice(
         WelsLoadNalForSlice(pSliceBs, EWelsNalUnitType::NAL_UNIT_PREFIX as i32, eNalRefIdc as i32);
         WelsWriteSVCPrefixNal(
             thread_bs_buffer(pCtx, (*pSlice).uiBufferIdx as usize, (*pSlice).sSliceBs.uiSize),
-            std::ptr::addr_of_mut!((*pSliceBs).sBsWrite),
+            &mut (*pSliceBs).sBsWrite,
             eNalRefIdc as i32,
             EWelsNalUnitType::NAL_UNIT_CODED_SLICE_IDR == eNalType,
         );
