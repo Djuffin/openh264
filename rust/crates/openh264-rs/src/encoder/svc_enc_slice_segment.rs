@@ -46,7 +46,7 @@ use crate::api::codec_api::RC_MODES::RC_OFF_MODE;
 use crate::api::codec_api::{RC_MODES, SSliceArgument};
 use crate::encoder::encoder_context::SLogContext;
 use crate::encoder::slice_multi_threading::{
-    SSliceCtx, WelsSetMemMultiplebytes_c, DEFAULT_MAXPACKETSIZE_CONSTRAINT,
+    SSliceCtx, DEFAULT_MAXPACKETSIZE_CONSTRAINT,
 };
 use crate::encoder::svc_encode_slice::SDqLayer;
 use crate::encoder::rc::{
