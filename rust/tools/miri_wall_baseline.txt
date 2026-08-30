@@ -95,7 +95,7 @@
 # and against the stale S5 line the gate actually used, 1.23. Both are under the 1.3
 # tripwire but neither is flat, and this session ran six gates on a loaded machine, so
 # the next close should re-measure before reading a trend into it.
-540 15d52da6 2026-08-30 safeplan-S10-close-298-0-cpu-1458-vs-S9-1419-ratio-1.03 cpu=1458
+540 e539d195 2026-08-30 safeplan-S10-close-298-0-cpu-1458-vs-S9-1419-ratio-1.03 cpu=1458
 559 59fa12da 2026-08-30 safeplan-S9-close-297-0-cpu-1419-vs-S8-1224-ratio-1.16 cpu=1419
 562 7af6689d 2026-08-30 safeplan-S8-close-296-0-cpu-1224-vs-S5-1151-ratio-1.06-appended-so-unused cpu=1224
 541 1b3471c4 2026-08-28 safeplan-S5-close-295-0-cpu-ratio-1.00-vs-1147 cpu=1151
