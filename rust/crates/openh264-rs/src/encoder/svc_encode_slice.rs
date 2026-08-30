@@ -1662,8 +1662,11 @@ pub unsafe fn WelsSliceHeaderExtInit(pEncCtx: &sWelsEncCtx, pCurLayer: Option<&S
 
 // unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
-pub unsafe fn WriteReferenceReorder(buf: &mut [u8], pBs: *mut BsWriter, sSliceHeader: *mut SSliceHeader) {
-    if pBs.is_null() || sSliceHeader.is_null() {
+pub unsafe fn WriteReferenceReorder(buf: &mut [u8], pBs: &mut BsWriter, sSliceHeader: *mut SSliceHeader) {
+    // **S8.2**: the `pBs.is_null()` arm went with the parameter. It was already
+    // unreachable — every caller's writer comes from `slice_writer`, whose two arms
+    // both hand back `addr_of_mut!` of a live field and neither of which can be null.
+    if sSliceHeader.is_null() {
         return;
     }
     let pRefOrdering = &mut (*sSliceHeader).sRefReordering;
@@ -1690,8 +1693,9 @@ pub unsafe fn WriteReferenceReorder(buf: &mut [u8], pBs: *mut BsWriter, sSliceHe
 
 // unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
-pub unsafe fn WriteRefPicMarking(buf: &mut [u8], pBs: *mut BsWriter, pSliceHeader: *mut SSliceHeader, pNalHdrExt: *mut SNalUnitHeaderExt) {
-    if pBs.is_null() || pSliceHeader.is_null() || pNalHdrExt.is_null() {
+pub unsafe fn WriteRefPicMarking(buf: &mut [u8], pBs: &mut BsWriter, pSliceHeader: *mut SSliceHeader, pNalHdrExt: *mut SNalUnitHeaderExt) {
+    // S8.2, as `WriteReferenceReorder` above: the writer arm was unreachable.
+    if pSliceHeader.is_null() || pNalHdrExt.is_null() {
         return;
     }
     let sRefMarking = &mut (*pSliceHeader).sRefMarking;
@@ -1784,11 +1788,11 @@ pub unsafe fn WelsSliceHeaderWrite(
     }
 
     if !(*pNalHead).bIdrFlag {
-        WriteReferenceReorder(buf, pBs, pSliceHeader);
+        WriteReferenceReorder(buf, &mut *pBs, pSliceHeader);
     }
 
     if (*pNalHead).sNalUnitHeader.uiNalRefIdc != 0 {
-        WriteRefPicMarking(buf, pBs, pSliceHeader, pNalHead);
+        WriteRefPicMarking(buf, &mut *pBs, pSliceHeader, pNalHead);
     }
 
     if !pPps.is_null() && (*pPps).bEntropyCodingModeFlag && (*pSliceHeader).eSliceType != EWelsSliceType::I_SLICE {
@@ -1878,11 +1882,11 @@ pub unsafe fn WelsSliceHeaderExtWrite(
     }
 
     if !(*pNalHead).bIdrFlag {
-        WriteReferenceReorder(buf, pBs, pSliceHeader);
+        WriteReferenceReorder(buf, &mut *pBs, pSliceHeader);
     }
 
     if (*pNalHead).sNalUnitHeader.uiNalRefIdc != 0 {
-        WriteRefPicMarking(buf, pBs, pSliceHeader, pNalHead);
+        WriteRefPicMarking(buf, &mut *pBs, pSliceHeader, pNalHead);
         if !pSubSps.is_null() && !(*pSubSps).sSpsSvcExt.bSliceHeaderRestrictionFlag {
             BsWriteOneBit(buf, &mut *pBs, if pSliceHeadExt.bStoreRefBasePicFlag { 1 } else { 0 });
         }
@@ -3329,7 +3333,7 @@ pub unsafe fn WelsCodeOneSlice(pEncCtx: &sWelsEncCtx, pCurSlice: &mut SSlice, ki
     let pBs = slice_writer(pEncCtx, std::ptr::addr_of_mut!((*pCurSlice).sSliceBs));
     WelsWriteSliceEndSyn(
         slice_bs_buffer(pEncCtx, std::ptr::addr_of_mut!((*pCurSlice).sSliceBs), (*pCurSlice).uiBufferIdx as usize),
-        pBs,
+        &mut *pBs,
         std::ptr::addr_of_mut!((*pCurSlice).sCabacCtx),
         (*pEncCtx).param().iEntropyCodingModeFlag != 0,
     );
@@ -3355,7 +3359,7 @@ pub unsafe fn WelsCodeOneSlice(pEncCtx: &sWelsEncCtx, pCurSlice: &mut SSlice, ki
 #[allow(unsafe_code)]
 pub unsafe fn WelsWriteSliceEndSyn(
     buf: &mut [u8],
-    pBs: *mut BsWriter,
+    pBs: &mut BsWriter,
     pCabacCtx: *mut crate::encoder::set_mb_syn_cabac::SCabacCtx,
     bEntropyCodingModeFlag: bool,
 ) {
