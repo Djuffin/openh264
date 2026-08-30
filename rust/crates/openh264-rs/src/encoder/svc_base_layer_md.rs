@@ -39,7 +39,7 @@ use crate::encoder::svc_encode_slice::{
 };
 use crate::encoder::svc_encode_slice::current_layer;
 use crate::encoder::picture::{RecPicId, SrcPicId};
-use crate::common::mc::{mc_chroma, mc_luma, McChroma_c, McLuma_c};
+use crate::common::mc::{mc_chroma, mc_luma};
 use crate::common::copy_mb::{copy_16x16, copy_16x8, copy_8x16, copy_8x8};
 use crate::common::sad_common::sample_sad;
 use crate::encoder::sample::{satd_16x16, satd_4x4};

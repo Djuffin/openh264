@@ -1193,7 +1193,6 @@ fn encoder_recon_shims_stay_inside_the_spans_they_declare() {
         h: usize,
         rs: usize,
         ps: usize,
-        raw: RawRec,
         direct: impl Fn(&mut PlaneCursorMut<'_>, &PlaneCursor<'_>, &[i16; N]),
     ) {
         let mut pred = rng.bytes((h - 1) * ps + w);
@@ -1203,24 +1202,16 @@ fn encoder_recon_shims_stay_inside_the_spans_they_declare() {
         let dct: [i16; N] = core::array::from_fn(|_| rng.range_i32(-32768, 32767) as i16);
         let mut m_dct = dct;
 
-        unsafe {
-            raw(
-                rec.as_mut_ptr(),
-                rs as i32,
-                pred.as_mut_ptr(),
-                ps as i32,
-                m_dct.as_mut_ptr(),
-            )
-        };
-
-        let mut golden = rec_before.clone();
+        // **S9.1**: the `_c` shim this used to compare against is deleted — it was a
+        // wrapper over the very kernel on the other side of the assertion, kept alive
+        // only by this call. What was ever more than a tautology stays: the sources
+        // must not move, and nothing outside each row's block may be written.
         direct(
-            &mut PlaneCursorMut::new(&mut golden, 0, rs),
-            &PlaneCursor::new(&pred_before, 0, ps),
+            &mut PlaneCursorMut::new(&mut rec, 0, rs),
+            &PlaneCursor::new(&pred, 0, ps),
             &dct,
         );
-        assert_eq!(rec, golden, "{name} rs={rs} ps={ps}: shim vs direct at the contract's anchor");
-        assert_eq!((pred, m_dct), (pred_before, dct), "{name}: a source moved");
+        assert_eq!((&pred, m_dct), (&pred_before, dct), "{name}: a source moved");
         for y in 0..h {
             let tail = y * rs + w;
             let next = ((y + 1) * rs).min(rec.len());
@@ -1236,25 +1227,22 @@ fn encoder_recon_shims_stay_inside_the_spans_they_declare() {
 
     for &(rs, ps) in &[(4usize, 16usize), (21, 4), (240, 25)] {
         for _ in 0..scale(10) {
-            probe_rec::<16>("IDctT4Rec", &mut rng, 4, 4, rs, ps, eda::WelsIDctT4Rec_c, eda::idct_t4_rec);
+            probe_rec::<16>("IDctT4Rec", &mut rng, 4, 4, rs, ps, eda::idct_t4_rec);
         }
     }
     for &(rs, ps) in &[(8usize, 16usize), (21, 8), (240, 25)] {
         for _ in 0..scale(10) {
-            probe_rec::<64>("IDctFourT4Rec", &mut rng, 8, 8, rs, ps, eda::WelsIDctFourT4Rec_c, eda::idct_four_t4_rec);
+            probe_rec::<64>("IDctFourT4Rec", &mut rng, 8, 8, rs, ps, eda::idct_four_t4_rec);
         }
     }
     for &(rs, ps) in &[(16usize, 16usize), (21, 16), (240, 25)] {
         for _ in 0..scale(10) {
-            probe_rec::<16>("IDctRecI16x16Dc", &mut rng, 16, 16, rs, ps, eda::WelsIDctRecI16x16Dc_c, eda::idct_rec_i16x16_dc);
+            probe_rec::<16>("IDctRecI16x16Dc", &mut rng, 16, 16, rs, ps, eda::idct_rec_i16x16_dc);
         }
     }
 
-    // The null-tolerance guard the C++ has and the recon shims keep.
-    unsafe {
-        eda::WelsIDctT4Rec_c(std::ptr::null_mut(), 4, std::ptr::null_mut(), 4, std::ptr::null_mut());
-        eda::WelsIDctFourT4Rec_c(std::ptr::null_mut(), 8, std::ptr::null_mut(), 8, std::ptr::null_mut());
-    }
+    // S9.1: the null-tolerance guard went with the shims. A null cursor is not
+    // representable, so there is nothing left to tolerate.
 }
 
 // ===========================================================================
