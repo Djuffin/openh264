@@ -1317,8 +1317,13 @@ pub unsafe fn WelsMdPSkipEnc(
     let mut sMvp = SMVUnitXY { iMvX: 0, iMvY: 0 };
     let mut n: i32;
 
-    let mut iEncStride = (*pCurLayer).iEncStride[0];
-    let mut pEncMb = (*pMbCache).SPicData.mb_cursor(&(*pCurLayer).pEncData, &(*pCurLayer).iEncStride, 0);
+    // S9.0: `iEncStride` retires with the raw operands — it existed only to hand the
+    // DCT a stride the cursor now carries. The plane-2 call below relied on it still
+    // holding `iEncStride[1]`, which is the same rule `stride_idx` states and which
+    // the view reproduces by construction (both chroma planes share one stride).
+    let encView = crate::encoder::svc_encode_slice::layer_enc_view(&*pCurLayer)
+        .expect("the frame's source view is stamped with pEncData");
+    let mut pEncMb = (*pMbCache).SPicData.mb_cursor_ro(encView, 0);
     // T9.H2: `&sWelsEncCtx`. The layer id is read through the same raw beside it —
     // both are shared reads, so the argument and the borrow coexist by construction
     // rather than by the hoist T9.G6 needed when the callee took a `&mut`.
@@ -1442,35 +1447,31 @@ pub unsafe fn WelsMdPSkipEnc(
     // The residual path below is the forward DCT's, which still takes raw operands
     // (step 4 of session B3 flips it); `pDstLuma` is derived here, at the call, after
     // every borrow above has ended (F114a).
-    let pDstLuma = std::ptr::addr_of_mut!((*pMbCache).sSkipMb).cast::<u8>();
+    let pDstLuma = PlaneCursor::new(&(*pMbCache).sSkipMb, 0, 16);
     WelsDctMb(
-        std::ptr::addr_of_mut!((*pMbCache).sCoeffLevel).cast::<i16>(),
-        pEncMb,
-        iEncStride,
-        pDstLuma,
+        &mut (*pMbCache).sCoeffLevel,
+        &pEncMb,
+        &pDstLuma,
         (*pEncCtx).func_list().pfDctFourT4,
     );
 
     if WelsTryPYskip(pEncCtx, pCurMb, pMbCache) {
-        iEncStride = (*current_layer(pEncCtx)).iEncStride[1];
-        pEncMb = (*pMbCache).SPicData.mb_cursor(&(*pCurLayer).pEncData, &(*pCurLayer).iEncStride, 1);
+        pEncMb = (*pMbCache).SPicData.mb_cursor_ro(encView, 1);
         pEncBlockOffset = pStrideEncBlockOffset.add(16);
+        let pDstCb = PlaneCursor::new(&(*pMbCache).sSkipMb, 256, 8);
         (*pFunc).pfDctFourT4.expect("pfDctFourT4 unset")(
-            std::ptr::addr_of_mut!((*pMbCache).sCoeffLevel).cast::<i16>().add(256),
-            pEncMb.offset(*pEncBlockOffset as isize),
-            iEncStride,
-            std::ptr::addr_of_mut!((*pMbCache).sSkipMb).cast::<u8>().add(256),
-            8,
+            &mut (*pMbCache).sCoeffLevel[256..],
+            &pEncMb.advance(*pEncBlockOffset as isize, 0),
+            &pDstCb,
         );
         if WelsTryPUVskip(pEncCtx, pCurMb, pMbCache, 1) {
-            pEncMb = (*pMbCache).SPicData.mb_cursor(&(*pCurLayer).pEncData, &(*pCurLayer).iEncStride, 2);
+            pEncMb = (*pMbCache).SPicData.mb_cursor_ro(encView, 2);
             pEncBlockOffset = pStrideEncBlockOffset.add(20);
+            let pDstCr = PlaneCursor::new(&(*pMbCache).sSkipMb, 320, 8);
             (*pFunc).pfDctFourT4.expect("pfDctFourT4 unset")(
-                std::ptr::addr_of_mut!((*pMbCache).sCoeffLevel).cast::<i16>().add(320),
-                pEncMb.offset(*pEncBlockOffset as isize),
-                iEncStride,
-                std::ptr::addr_of_mut!((*pMbCache).sSkipMb).cast::<u8>().add(320),
-                8,
+                &mut (*pMbCache).sCoeffLevel[320..],
+                &pEncMb.advance(*pEncBlockOffset as isize, 0),
+                &pDstCr,
             );
             if WelsTryPUVskip(pEncCtx, pCurMb, pMbCache, 2) {
                 //update motion info to current MB

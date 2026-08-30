@@ -249,6 +249,48 @@ impl SPicData {
         roots[plane].wrapping_offset(self.mb_offset(strides[Self::stride_idx(plane)], plane))
     }
 
+    /// The same macroblock cursor, taken from a **read-only picture view** instead
+    /// of a raw plane root — S9.0, and the safe replacement for `mb_cursor` on the
+    /// source planes.
+    ///
+    /// **Byte-identical to the raw form, and the arithmetic is why.**
+    /// `mb_offset` is `((iMbX + iMbY * stride) << shift)`, which expands to
+    /// `(iMbX << shift) + (iMbY << shift) * stride` — exactly `x + y * stride` for
+    /// the `(x, y)` that [`luma_origin`](Self::luma_origin) and
+    /// [`chroma_origin`](Self::chroma_origin) give. The raw root is the plane's
+    /// *padded origin*, and `RoPlane::cursor` anchors from that same origin, so the
+    /// two name one address.
+    ///
+    /// **On the chroma stride rule** ([`stride_idx`](Self::stride_idx)): the raw
+    /// form resolves both chroma planes through `strides[1]`, while a view's plane
+    /// carries its own. They agree by construction — `AllocPicture` builds planes 1
+    /// and 2 with one `kuiChromaStride` (`picture.rs:262-273`) and `iLineSize` is
+    /// read back off those same planes — so this cannot be the divergence
+    /// `stride_idx` was written to prevent. The rule stays where it is for the raw
+    /// callers that remain.
+    #[inline]
+    pub fn mb_cursor_ro<'a>(
+        &self,
+        view: &'a crate::encoder::rec_view::RoPicView,
+        plane: usize,
+    ) -> crate::safe::plane::PlaneCursor<'a> {
+        let (x, y) = if plane == 0 { self.luma_origin() } else { self.chroma_origin() };
+        view.plane(plane).cursor(x, y)
+    }
+
+    /// The macroblock cursor over the **reconstruction** view — the write half's
+    /// counterpart to [`mb_cursor_ro`](Self::mb_cursor_ro), with the same geometry
+    /// argument. `pCsData`'s raw roots stand for exactly these bytes.
+    #[inline]
+    pub fn mb_cursor_rec<'a>(
+        &self,
+        view: &'a crate::encoder::rec_view::RecPicView,
+        plane: usize,
+    ) -> crate::encoder::rec_view::RecCursor<'a> {
+        let (x, y) = if plane == 0 { self.luma_origin() } else { self.chroma_origin() };
+        view.plane(plane).cursor(x, y)
+    }
+
     /// The macroblock's origin in luma samples — `(iMbX << 4, iMbY << 4)`.
     #[inline]
     pub fn luma_origin(&self) -> (isize, isize) {

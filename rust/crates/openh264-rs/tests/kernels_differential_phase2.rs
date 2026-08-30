@@ -875,38 +875,28 @@ fn encode_mb_aux_shims_stay_inside_the_spans_they_declare() {
     // forward-only reach), exact coefficient spans, golden direct run,
     // sources untouched.
     for &(s1, s2) in &[(4usize, 16usize), (21, 5), (240, 25)] {
-        let mut b1 = rng.bytes(3 * s1 + 4);
-        let mut b2 = rng.bytes(3 * s2 + 4);
+        let b1 = rng.bytes(3 * s1 + 4);
+        let b2 = rng.bytes(3 * s2 + 4);
         let (k1, k2) = (b1.clone(), b2.clone());
         let mut dct = [0i16; 16];
-        unsafe {
-            ema::WelsDctT4_c(
-                dct.as_mut_ptr(),
-                b1.as_mut_ptr(),
-                s1 as i32,
-                b2.as_mut_ptr(),
-                s2 as i32,
-            );
-        }
+        // S9.0: the shim takes cursors and shared slices now, so "moved a source
+        // byte" is unrepresentable rather than merely asserted — the assertion below
+        // stays as the record of what it used to be able to get wrong.
+        ema::WelsDctT4_c(&mut dct, &PlaneCursor::new(&b1, 0, s1), &PlaneCursor::new(&b2, 0, s2));
         let mut golden = [0i16; 16];
         ema::dct_4x4(&mut golden, &PlaneCursor::new(&k1, 0, s1), &PlaneCursor::new(&k2, 0, s2));
         assert_eq!(dct, golden, "DctT4 shim vs direct at s1={s1} s2={s2}");
         assert_eq!((b1, b2), (k1, k2), "DctT4 shim moved a source byte");
     }
     for &(s1, s2) in &[(8usize, 16usize), (21, 8), (240, 25)] {
-        let mut b1 = rng.bytes(7 * s1 + 8);
-        let mut b2 = rng.bytes(7 * s2 + 8);
+        let b1 = rng.bytes(7 * s1 + 8);
+        let b2 = rng.bytes(7 * s2 + 8);
         let (k1, k2) = (b1.clone(), b2.clone());
         let mut dct = [0i16; 64];
-        unsafe {
-            ema::WelsDctFourT4_c(
-                dct.as_mut_ptr(),
-                b1.as_mut_ptr(),
-                s1 as i32,
-                b2.as_mut_ptr(),
-                s2 as i32,
-            );
-        }
+        // S9.0: the shim takes cursors and shared slices now, so "moved a source
+        // byte" is unrepresentable rather than merely asserted — the assertion below
+        // stays as the record of what it used to be able to get wrong.
+        ema::WelsDctFourT4_c(&mut dct, &PlaneCursor::new(&b1, 0, s1), &PlaneCursor::new(&b2, 0, s2));
         let mut golden = [0i16; 64];
         ema::dct_four_4x4(&mut golden, &PlaneCursor::new(&k1, 0, s1), &PlaneCursor::new(&k2, 0, s2));
         assert_eq!(dct, golden, "DctFourT4 shim vs direct at s1={s1} s2={s2}");

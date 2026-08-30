@@ -200,7 +200,17 @@ pub const KI_TRUN_TABLE: [i32; 16] = [3, 2, 2, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 
 // ============================================================================
 
 pub type PCopyFunc = unsafe extern "C" fn(pDst: *mut u8, iStrideD: i32, pSrc: *mut u8, iStrideS: i32);
-pub type PDctFunc = unsafe extern "C" fn(pDct: *mut i16, pSample1: *mut u8, iStride1: i32, pSample2: *mut u8, iStride2: i32);
+/// The forward-DCT slot — **S9.0: safe, and no longer `extern "C"`.**
+///
+/// It took `(*mut i16, *mut u8, i32, *mut u8, i32)`: a coefficient block and two
+/// pixel roots with their strides. The strides travel *inside* the cursors now and
+/// the coefficient block is a slice, so the slot carries no raw pointer at all.
+///
+/// `extern "C"` had to go for the conversion to be expressible — `&mut [T]` in an
+/// `extern "C"` signature is not FFI-safe (`improper_ctypes_definitions`), which
+/// F241 established when the screen-content kernels dropped it. Nothing is lost:
+/// the slot is internal dispatch and was never reachable from C.
+pub type PDctFunc = fn(pDct: &mut [i16], pSample1: &PlaneCursor<'_>, pSample2: &PlaneCursor<'_>);
 
 // ---------------------------------------------------------------------------
 // **T9.D8 — the residual family's slots hold safe function pointers.**
@@ -673,23 +683,12 @@ pub fn get_none_zero_count(level: &[i16; 16]) -> i32 {
 /// macroblock cursor and a 16- or 8-stride prediction scratch
 /// (`svc_encode_mb.rs:684`, `svc_encode_slice.rs`).
 #[inline]
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
-pub unsafe extern "C" fn WelsDctT4_c(
-    pDct: *mut i16,
-    pPixel1: *mut u8,
-    iStride1: i32,
-    pPixel2: *mut u8,
-    iStride2: i32,
-) {
-    // SHIM(phase2) -> dct_4x4
-    let dct: &mut [i16; 16] = unsafe { std::slice::from_raw_parts_mut(pDct, 16) }
-        .try_into()
-        .unwrap();
-    let (s1, s2) = (iStride1 as usize, iStride2 as usize);
-    let b1 = unsafe { std::slice::from_raw_parts(pPixel1, 3 * s1 + 4) };
-    let b2 = unsafe { std::slice::from_raw_parts(pPixel2, 3 * s2 + 4) };
-    dct_4x4(dct, &PlaneCursor::new(b1, 0, s1), &PlaneCursor::new(b2, 0, s2));
+pub fn WelsDctT4_c(pDct: &mut [i16], pPixel1: &PlaneCursor<'_>, pPixel2: &PlaneCursor<'_>) {
+    // S9.0: an adapter and nothing else now. It was three `from_raw_parts` calls
+    // reconstituting exactly what the caller already had before it was flattened
+    // to a pointer and a stride.
+    let dct: &mut [i16; 16] = (&mut pDct[..16]).try_into().unwrap();
+    dct_4x4(dct, pPixel1, pPixel2);
 }
 
 /// Performs 4x4 FDCT on four adjacent 4x4 blocks forming an 8x8 quadrant.
@@ -701,23 +700,10 @@ pub unsafe extern "C" fn WelsDctT4_c(
 ///   the bytes `[0, 7*stride + 8)` from each pointer must be readable
 ///   (forward reach only). Both strides `>= 8` and positive. Only read.
 #[inline]
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
-pub unsafe extern "C" fn WelsDctFourT4_c(
-    pDct: *mut i16,
-    pPixel1: *mut u8,
-    iStride1: i32,
-    pPixel2: *mut u8,
-    iStride2: i32,
-) {
-    // SHIM(phase2) -> dct_four_4x4
-    let dct: &mut [i16; 64] = unsafe { std::slice::from_raw_parts_mut(pDct, 64) }
-        .try_into()
-        .unwrap();
-    let (s1, s2) = (iStride1 as usize, iStride2 as usize);
-    let b1 = unsafe { std::slice::from_raw_parts(pPixel1, 7 * s1 + 8) };
-    let b2 = unsafe { std::slice::from_raw_parts(pPixel2, 7 * s2 + 8) };
-    dct_four_4x4(dct, &PlaneCursor::new(b1, 0, s1), &PlaneCursor::new(b2, 0, s2));
+pub fn WelsDctFourT4_c(pDct: &mut [i16], pPixel1: &PlaneCursor<'_>, pPixel2: &PlaneCursor<'_>) {
+    // S9.0, as `WelsDctT4_c` above.
+    let dct: &mut [i16; 64] = (&mut pDct[..64]).try_into().unwrap();
+    dct_four_4x4(dct, pPixel1, pPixel2);
 }
 
 // ============================================================================
@@ -893,21 +879,17 @@ mod tests {
     use super::*;
     
     #[test]
-    // unsafe-cat: instrument(test)
-    #[allow(unsafe_code)]
     fn test_fdct_t4() {
-        let mut p1 = [
+        let p1 = [
             10u8, 20, 30, 40,
             15,   25, 35, 45,
             20,   30, 40, 50,
             25,   35, 45, 55,
         ];
-        let mut p2 = [0u8; 16];
+        let p2 = [0u8; 16];
         let mut dct = [0i16; 16];
 
-        unsafe {
-            WelsDctT4_c(dct.as_mut_ptr(), p1.as_mut_ptr(), 4, p2.as_mut_ptr(), 4);
-        }
+        WelsDctT4_c(&mut dct, &PlaneCursor::new(&p1, 0, 4), &PlaneCursor::new(&p2, 0, 4));
 
         assert_ne!(dct[0], 0);
     }

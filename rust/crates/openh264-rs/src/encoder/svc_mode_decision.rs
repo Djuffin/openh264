@@ -1444,19 +1444,30 @@ pub unsafe extern "C" fn WelsInterMbEncode(pEncCtx: &sWelsEncCtx, pSlice: &mut S
         return;
     }
 
-    let pCoeffLevel = std::ptr::addr_of_mut!((*pMbCache).sCoeffLevel).cast::<i16>();
-    let pEncMb = (*pMbCache).SPicData.mb_cursor(&(*pCurDqLayer).pEncData, &(*pCurDqLayer).iEncStride, 0);
-    let iEncStride = (*pCurDqLayer).iEncStride[0];
-    let pMemPredLuma = std::ptr::addr_of_mut!((*pMbCache).sMemPredMb)
-        .cast::<u8>()
-        .add(mem_pred_luma_off((*pMbCache).uiMemPredLumaHalf));
+    // S9.0: this is `WelsDctMb`'s body inlined, and it converts the same way — the
+    // four quadrants named in samples rather than in bytes-times-stride. The
+    // prediction scratch is stride 16, so its old `+8 / +128 / +136` are
+    // `(8,0) / (0,8) / (8,8)`.
+    //
+    // The three `is_null()` guards went with the raws. All three pointers came from
+    // `addr_of_mut!` on owned fields or from a plane root that had already been
+    // null-checked through `pCurDqLayer` above, so none of them could ever be null.
+    let encView = crate::encoder::svc_encode_slice::layer_enc_view(&*pCurDqLayer)
+        .expect("the frame's source view is stamped with pEncData");
+    let pEncMb = (*pMbCache).SPicData.mb_cursor_ro(encView, 0);
+    let pMemPredLuma = PlaneCursor::new(
+        &(*pMbCache).sMemPredMb,
+        mem_pred_luma_off((*pMbCache).uiMemPredLumaHalf),
+        16,
+    );
 
-    if !pCoeffLevel.is_null() && !pEncMb.is_null() && !pMemPredLuma.is_null() {
-        if let Some(dct_fn) = (*pFuncList).pfDctFourT4 {
-            dct_fn(pCoeffLevel, pEncMb, iEncStride, pMemPredLuma, 16);
-            dct_fn(pCoeffLevel.add(64), pEncMb.add(8), iEncStride, pMemPredLuma.add(8), 16);
-            dct_fn(pCoeffLevel.add(128), pEncMb.add((8 * iEncStride) as usize), iEncStride, pMemPredLuma.add(128), 16);
-            dct_fn(pCoeffLevel.add(192), pEncMb.add((8 * iEncStride + 8) as usize), iEncStride, pMemPredLuma.add(136), 16);
+    if let Some(dct_fn) = (*pFuncList).pfDctFourT4 {
+        for (k, (dx, dy)) in [(0isize, 0isize), (8, 0), (0, 8), (8, 8)].into_iter().enumerate() {
+            dct_fn(
+                &mut (*pMbCache).sCoeffLevel[k << 6..],
+                &pEncMb.advance(dx, dy),
+                &pMemPredLuma.advance(dx, dy),
+            );
         }
     }
 

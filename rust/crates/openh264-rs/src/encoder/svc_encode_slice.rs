@@ -300,6 +300,7 @@ impl Default for SSliceHeaderExt {
 }
 
 pub use crate::common::wels_common_defs::EWelsNalUnitType;
+use crate::safe::plane::PlaneCursor;
 pub use crate::safe::bits::BsWriter;
 use crate::safe::mb_grid::{MbArray, MbDims, MbWindow};
 use crate::safe::mvd_cost::MvdCostCursor;
@@ -1046,6 +1047,17 @@ pub fn layer_rec_view<'a>(
     (*pLayer).pRecView.as_ref()
 }
 
+/// The frame's source planes, as `layer_rec_view` is its reconstruction planes.
+///
+/// `None` on a layer whose frame has not been bound yet — the same state
+/// `pEncData`'s null roots stood for.
+#[inline]
+pub fn layer_enc_view<'a>(
+    pLayer: &'a SDqLayer,
+) -> Option<&'a crate::encoder::rec_view::RoPicView> {
+    (*pLayer).pEncView.as_ref()
+}
+
 // `layer_dec_pic_mut` stood here, and **F73 was its name**. It handed out
 // `&mut SPicture` — a fresh whole-picture retag at every call — and the frame
 // loop called it fifteen times per macroblock's worth of work, inside the fork.
@@ -1174,6 +1186,19 @@ pub struct SDqLayer {
     /// rebuilds it every frame, and nothing may read a view built for a frame
     /// that has ended.
     pub pRecView: Option<crate::encoder::rec_view::RecPicView>,
+
+    /// The frame's **source** planes, as a read-only view — the counterpart to
+    /// `pRecView` and the read half of the same seam (S9.0).
+    ///
+    /// `pEncData`'s three raw roots stand for exactly these bytes; this is the
+    /// safe spelling of them, and `PlaneCursor`s taken from it bounds-check
+    /// against the whole allocation, so the top and left borders a motion search
+    /// legally reaches stay reads rather than becoming fresh panics.
+    ///
+    /// Rebuilt every frame with `pRecView`, and for the same reason: the pool may
+    /// hand the next frame a different slot, so a view is only valid for the frame
+    /// that built it.
+    pub pEncView: Option<crate::encoder::rec_view::RoPicView>,
     // `sRefPicView` and `sDecPicView` stood here — T6.F5's per-frame stamped
     // copies of the two pictures' plane roots/strides/type. Phase 9 E3's harvest:
     // `sDecPicView` had **zero readers** (write-only since the seam took the
@@ -1270,6 +1295,7 @@ impl SDqLayer {
             // The seam, rebuilt per frame beside `pCsData`; `None` is "no frame
             // started", the same thing the null above means.
             pRecView: None,
+            pEncView: None,
             pEncData: [std::ptr::null_mut(); 3],
             iEncStride: [0; 3],
             // The macroblock records, sized by `InitMbListD` once the geometry is
@@ -1949,16 +1975,18 @@ pub unsafe fn WelsIMbChromaEncode(pEncCtx: &sWelsEncCtx, pCurMb: &mut SMB, pMbCa
     // non-zero-count / chroma-CBP step: without it `pCurRS` reached the IDCT holding
     // raw DCT coefficients, `pCurMb->uiCbp` never got its chroma bits and
     // `pNonZeroCount[16..24]` stayed zero, so no chroma residual was ever coded.
+    // S9.0: the source planes through the frame's read-only view; the strides the
+    // raw form passed alongside now ride inside the cursors.
+    let encView = layer_enc_view(&*pCurLayer)
+        .expect("the frame's source view is stamped with pEncData");
     let pFunc = (*pEncCtx).func_list();
     let pfDctFourT4 = (*pFunc).pfDctFourT4.expect("pfDctFourT4 unset");
 
     //cb
     pfDctFourT4(
-        std::ptr::addr_of_mut!((*pMbCache).sCoeffLevel).cast::<i16>(),
-        (*pMbCache).SPicData.mb_cursor(&(*pCurLayer).pEncData, &(*pCurLayer).iEncStride, 1),
-        kiEncStride,
-        std::ptr::addr_of_mut!((*pMbCache).sMemPredMb).cast::<u8>().add(kiBestPredOff),
-        8,
+        &mut (*pMbCache).sCoeffLevel,
+        &(*pMbCache).SPicData.mb_cursor_ro(encView, 1),
+        &PlaneCursor::new(&(*pMbCache).sMemPredMb, kiBestPredOff, 8),
     );
     crate::encoder::svc_encode_mb::WelsEncRecUV(&*pFunc, pCurMb, pMbCache, 0, 1);
     // **T9.C2.** `pCsCb` is the reconstruction Cb plane at this macroblock's
@@ -1974,11 +2002,9 @@ pub unsafe fn WelsIMbChromaEncode(pEncCtx: &sWelsEncCtx, pCurMb: &mut SMB, pMbCa
 
     //cr
     pfDctFourT4(
-        std::ptr::addr_of_mut!((*pMbCache).sCoeffLevel).cast::<i16>().add(64),
-        (*pMbCache).SPicData.mb_cursor(&(*pCurLayer).pEncData, &(*pCurLayer).iEncStride, 2),
-        kiEncStride,
-        std::ptr::addr_of_mut!((*pMbCache).sMemPredMb).cast::<u8>().add(kiBestPredOff + 64),
-        8,
+        &mut (*pMbCache).sCoeffLevel[64..],
+        &(*pMbCache).SPicData.mb_cursor_ro(encView, 2),
+        &PlaneCursor::new(&(*pMbCache).sMemPredMb, kiBestPredOff + 64, 8),
     );
     crate::encoder::svc_encode_mb::WelsEncRecUV(&*pFunc, pCurMb, pMbCache, 64, 2);
     idct_four_t4_rec_to_view(
@@ -2001,21 +2027,21 @@ pub unsafe fn WelsPMbChromaEncode(pEncCtx: &sWelsEncCtx, pSlice: &mut SSlice, pC
     // deriving it from `iUV`.
     let kiBestPredOff = mem_pred_chroma_off((*pMbCache).uiMemPredLumaHalf);
 
+    // S9.0: the source planes through the frame's read-only view; the strides the
+    // raw form passed alongside now ride inside the cursors.
+    let encView = layer_enc_view(&*pCurLayer)
+        .expect("the frame's source view is stamped with pEncData");
     let pFunc = (*pEncCtx).func_list();
     let dct = (*pFunc).pfDctFourT4.expect("pfDctFourT4 unset");
     dct(
-        std::ptr::addr_of_mut!((*pMbCache).sCoeffLevel).cast::<i16>().add(256),
-        (*pMbCache).SPicData.mb_cursor(&(*pCurLayer).pEncData, &(*pCurLayer).iEncStride, 1),
-        kiEncStride,
-        std::ptr::addr_of_mut!((*pMbCache).sMemPredMb).cast::<u8>().add(kiBestPredOff),
-        8,
+        &mut (*pMbCache).sCoeffLevel[256..],
+        &(*pMbCache).SPicData.mb_cursor_ro(encView, 1),
+        &PlaneCursor::new(&(*pMbCache).sMemPredMb, kiBestPredOff, 8),
     );
     dct(
-        std::ptr::addr_of_mut!((*pMbCache).sCoeffLevel).cast::<i16>().add(320),
-        (*pMbCache).SPicData.mb_cursor(&(*pCurLayer).pEncData, &(*pCurLayer).iEncStride, 2),
-        kiEncStride,
-        std::ptr::addr_of_mut!((*pMbCache).sMemPredMb).cast::<u8>().add(kiBestPredOff + 64),
-        8,
+        &mut (*pMbCache).sCoeffLevel[320..],
+        &(*pMbCache).SPicData.mb_cursor_ro(encView, 2),
+        &PlaneCursor::new(&(*pMbCache).sMemPredMb, kiBestPredOff + 64, 8),
     );
 
     // `svc_encode_slice.cpp:WelsPMbChromaEncode` quantises both chroma planes here.
