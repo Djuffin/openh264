@@ -254,6 +254,19 @@ impl<'a> RecCursor<'a> {
         }
     }
 
+    /// A cursor over **caller-owned** bytes — safe, with no raw pointer anywhere.
+    ///
+    /// `Cell::from_mut(..).as_slice_of_cells()` is the standard library's own door
+    /// from an exclusive borrow to shared-mutable cells. It is what lets a per-worker
+    /// scratch array on `SMbCache` feed the very kernel a shared picture plane feeds,
+    /// so a dispatch slot needs **one** operand type rather than two — which a
+    /// function-pointer table cannot express any other way, being unable to be
+    /// generic.
+    #[inline]
+    pub fn over_owned(buf: &'a mut [u8], center: usize, stride: usize) -> Self {
+        Self { cells: Cell::from_mut(buf).as_slice_of_cells(), center, stride }
+    }
+
     /// The same anchor moved by `(dx, dy)`.
     #[inline]
     #[must_use]
@@ -459,6 +472,21 @@ impl crate::safe::plane::SampleCursor for RecCursor<'_> {
     #[inline]
     fn advance(self, dx: isize, dy: isize) -> Self {
         RecCursor::advance(self, dx, dy)
+    }
+}
+
+/// `W` bytes of each of `height` rows, from one shared cursor to another.
+///
+/// The shared-seam twin of `mc::copy_rows`, and the kernel behind every `pfCopyNxM`
+/// slot since S9.0c. Both operands are [`RecCursor`] because the slot's two callers
+/// disagree about storage — the background path copies picture-to-picture, the
+/// mode-decision path copies an owned prediction scratch into a picture plane — and
+/// `RecCursor::over_owned` brings the scratch to the same type without a raw.
+#[inline(always)]
+pub fn copy_rows_shared<const W: usize>(dst: &RecCursor<'_>, src: &RecCursor<'_>, height: usize) {
+    for dy in 0..height as isize {
+        let row = src.row::<W>(dy, 0);
+        dst.write_row::<W>(dy, 0, &row);
     }
 }
 

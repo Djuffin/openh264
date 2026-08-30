@@ -496,12 +496,18 @@ pub struct SVAAFrameInfo {
     pub iPicStride: i32,
     pub iPicStrideUV: i32,
 
-    pub pRefY: *mut u8,
-    pub pCurY: *mut u8,
-    pub pRefU: *mut u8,
-    pub pCurU: *mut u8,
-    pub pRefV: *mut u8,
-    pub pCurV: *mut u8,
+    /// The reference and current **source** pictures, as shared three-plane views —
+    /// S9.0c, replacing six `*mut u8` plane roots.
+    ///
+    /// These are the operands of `VaaBackgroundMbDataUpdate`'s three copies, and the
+    /// copy runs *previous source -> current source* (F117: `PCopyFunc` is
+    /// `(pDst, .., pSrc, ..)`, so `pCur*` is the **destination**). It happens
+    /// in-fork, per macroblock, into the picture the encoder is simultaneously
+    /// reading — which is why these are `RoPicView`s over `SharedPlane` rather than
+    /// slice cursors: the cells make the concurrent write lawful by construction,
+    /// where a `&[u8]` over the plane would claim every byte and race it.
+    pub pRefView: Option<crate::encoder::rec_view::RoPicView>,
+    pub pCurView: Option<crate::encoder::rec_view::RoPicView>,
 
     /// One byte per macroblock, **owned since T6.F3** — `RequestMemorySvc`'s
     /// seventh and last `WelsMallocz` for the VAA block.
@@ -567,12 +573,8 @@ impl Default for SVAAFrameInfo {
             iPicHeight: 0,
             iPicStride: 0,
             iPicStrideUV: 0,
-            pRefY: std::ptr::null_mut(),
-            pCurY: std::ptr::null_mut(),
-            pRefU: std::ptr::null_mut(),
-            pCurU: std::ptr::null_mut(),
-            pRefV: std::ptr::null_mut(),
-            pCurV: std::ptr::null_mut(),
+            pRefView: None,
+            pCurView: None,
             pVaaBackgroundMbFlag: Vec::new(),
             pMotionTextureUnit: Vec::new(),
             pMotionTextureIndexToDeltaQp: Vec::new(),
@@ -1900,12 +1902,13 @@ impl CWelsPreProcess {
             pVaaInfo.iPicHeight = sCur.iHeightInPixel;
             pVaaInfo.iPicStride = sCur.iLineSize[0];
             pVaaInfo.iPicStrideUV = sCur.iLineSize[1];
-            pVaaInfo.pCurY = sCur.pData[0];
-            pVaaInfo.pRefY = sRef.pData[0];
-            pVaaInfo.pCurU = sCur.pData[1];
-            pVaaInfo.pRefU = sRef.pData[1];
-            pVaaInfo.pCurV = sCur.pData[2];
-            pVaaInfo.pRefV = sRef.pData[2];
+            // S9.0c: the six plane roots become two views, built where the
+            // pictures are reachable. Rebuilt every frame, as the layer's views are:
+            // the pool may hand the next frame a different slot.
+            pVaaInfo.pCurView = pCurPicture
+                .map(|id| crate::encoder::rec_view::RoPicView::build(self.m_pSpatialPicPool.get(id)));
+            pVaaInfo.pRefView = pRefPicture
+                .map(|id| crate::encoder::rec_view::RoPicView::build(self.m_pSpatialPicPool.get(id)));
 
             let mut sSrcPixMap = SPixMap::default();
             let mut sRefPixMap = SPixMap::default();

@@ -269,10 +269,17 @@ assert_size!(SWelsMD, 800);
 // and `pMotionTextureIndexToDeltaQp`, `encoder_ext.cpp:1721/:1724`, two allocations
 // the port had never made at all (F177); `sComplexityAnalysisParam` then loses two
 // more pointers (-16). **360, measured.**
-assert_size!(SVAAFrameInfo, 360);
+// **S9.0c**: +160. The six `*mut u8` plane roots (-48) become two
+// `Option<RoPicView>` (+208) — three `SharedPlane`s of (base, len, stride, origin)
+// is 96 bytes and the `Option` has no niche over a raw base, so 104 each. The pin is
+// a *drift tracker*, not an ABI contract — this struct has been off the C++'s 264
+// since Phase 6 session B and `repr(C)` came off with T6.F3 — so it moves with a
+// deliberate field change. **520, measured.**
+assert_size!(SVAAFrameInfo, 520);
 // **T6.F3**: +104, all of it its embedded `SVAAFrameInfo`. **1368, measured.**
 // **T9.X**: +8, all of it the same. **1376, measured.**
-assert_size!(SVAAFrameInfoExt, 1376);
+// **S9.0c**: +160, all of it its embedded `SVAAFrameInfo`. **1536, measured.**
+assert_size!(SVAAFrameInfoExt, 1536);
 // SSliceThreading is deliberately NOT asserted. C++ (mt_defs.h:68) embeds
 // WELS_EVENT (pthread_cond_t, 48 B) and WELS_MUTEX (pthread_mutex_t, 64 B) by
 // value, reaching 1256 bytes on darwin; those sizes are libc-specific, and this
