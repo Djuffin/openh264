@@ -1753,9 +1753,8 @@ fn report_abi_panic(
     // `WelsLog` returns without doing anything when there is no sink, which is the
     // whole of the `None` case — a decoder whose `this` was null has no trace to log
     // through and no state to have corrupted.
-    let mut ctx = log.unwrap_or_default();
     crate::common::wels_trace::WelsLog(
-        &mut ctx,
+        log.unwrap_or_default(),
         crate::common::wels_trace::WELS_LOG_ERROR,
         &format!("{slot}: a panic was caught at the C-ABI boundary and reported as a failure code instead of aborting the process (plan P13). Panic message: {what}"),
     );
@@ -2291,7 +2290,7 @@ impl Decoder {
         self.trace.SetTraceCallback(callback);
         self.sync_log_ctx();
         crate::common::wels_trace::WelsLog(
-            ptr::addr_of_mut!(self.trace.m_sLogCtx),
+            self.trace.m_sLogCtx,
             crate::common::wels_trace::WELS_LOG_INFO,
             "CWelsDecoder::SetOption():DECODER_OPTION_TRACE_CALLBACK callback set.",
         );
@@ -2422,7 +2421,7 @@ impl Decoder {
     /// which is the impl's; the thunk's job is to notice the null.
     pub(crate) fn report_init_null_param(&mut self) -> c_long {
         crate::common::wels_trace::WelsLog(
-            ptr::addr_of_mut!(self.trace.m_sLogCtx),
+            self.trace.m_sLogCtx,
             crate::common::wels_trace::WELS_LOG_ERROR,
             "CWelsDecoder::Initialize(), invalid input argument.",
         );
@@ -2608,7 +2607,7 @@ impl Decoder {
             if let Some(code) = reset_code {
                 let sPrevParam = (*p_ctx).pParam;
                 crate::decoder::decoder_core::WelsLog(
-                    ptr::addr_of_mut!((*p_ctx).sLogCtx),
+                    (*p_ctx).sLogCtx,
                     crate::decoder::decoder_core::WELS_LOG_INFO,
                     &format!(
                         "ResetDecoder(), context error code is {}",
@@ -2646,7 +2645,7 @@ impl Decoder {
             // incremented the counter, and nothing cleared the flag.
             if (*p_ctx).bPrintFrameErrorTraceFlag {
                 crate::decoder::decoder_core::WelsLog(
-                    ptr::addr_of_mut!((*p_ctx).sLogCtx),
+                    (*p_ctx).sLogCtx,
                     crate::decoder::decoder_core::WELS_LOG_INFO,
                     &format!("decode failed, failure type:{} \n", (*p_ctx).iErrorCode),
                 );
@@ -2656,7 +2655,7 @@ impl Decoder {
                     (*p_ctx).iIgnoredErrorInfoPacketCount.wrapping_add(1);
                 if (*p_ctx).iIgnoredErrorInfoPacketCount == i32::MAX {
                     crate::decoder::decoder_core::WelsLog(
-                        ptr::addr_of_mut!((*p_ctx).sLogCtx),
+                        (*p_ctx).sLogCtx,
                         crate::decoder::decoder_core::WELS_LOG_WARNING,
                         "continuous error reached INT_MAX! Restart as 0.",
                     );
@@ -2769,7 +2768,7 @@ impl Decoder {
         let p_ctx = Self::ctx_ptr(&mut self.ctx);
         if p_ctx.is_null() {
             crate::common::wels_trace::WelsLog(
-                ptr::addr_of_mut!(self.trace.m_sLogCtx),
+                self.trace.m_sLogCtx,
                 crate::common::wels_trace::WELS_LOG_ERROR,
                 "Call DecodeParser without Initialize.",
             );
@@ -2780,7 +2779,7 @@ impl Decoder {
             // already has: an entry point that refuses rather than half-works.
             if !(*p_ctx).pParam.bParseOnly {
                 crate::common::wels_trace::WelsLog(
-                    ptr::addr_of_mut!(self.trace.m_sLogCtx),
+                    self.trace.m_sLogCtx,
                     crate::common::wels_trace::WELS_LOG_ERROR,
                     "bParseOnly should be true for this API calling! \n",
                 );
@@ -2892,7 +2891,7 @@ impl Decoder {
 
             if (*p_ctx).iErrorCode != 0 && (*p_ctx).bPrintFrameErrorTraceFlag {
                 crate::common::wels_trace::WelsLog(
-                    ptr::addr_of_mut!(self.trace.m_sLogCtx),
+                    self.trace.m_sLogCtx,
                     crate::common::wels_trace::WELS_LOG_INFO,
                     &format!("decode failed, failure type:{} \n", (*p_ctx).iErrorCode),
                 );

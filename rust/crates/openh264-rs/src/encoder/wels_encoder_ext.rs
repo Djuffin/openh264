@@ -772,13 +772,13 @@ pub unsafe fn WelsEncoderParamAdjust(
     };
 
     /* Check validation in new parameters */
-    iReturn = ParamValidationExt(&mut ctx.sLogCtx, pNewParam);
+    iReturn = ParamValidationExt(ctx.sLogCtx, pNewParam);
     if iReturn != ENC_RETURN_SUCCESS {
         return iReturn;
     }
 
     iReturn = GetMultipleThreadIdc(
-        &mut ctx.sLogCtx,
+        ctx.sLogCtx,
         pNewParam,
         &mut iSliceNum,
         &mut iCacheLineSize,
@@ -952,7 +952,7 @@ pub unsafe fn WelsEncoderParamAdjust(
         WelsUninitEncoderExt(ppCtx.take());
 
         /* Update new parameters */
-        if WelsInitEncoderExt(ppCtx, pNewParam, &mut sLogCtx, pExistingParasetList) != 0 {
+        if WelsInitEncoderExt(ppCtx, pNewParam, sLogCtx, pExistingParasetList) != 0 {
             return 1;
         }
         // The context below this line is a different allocation from the one above
@@ -1130,7 +1130,7 @@ pub unsafe fn WelsEncoderApplyFrameRate(pParam: &mut SWelsSvcCodingParam) {
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe fn WelsEncoderApplyBitRate(
-    pLogCtx: *mut SLogContext,
+    pLogCtx: SLogContext,
     pParam: &mut SWelsSvcCodingParam,
     iLayer: i32,
 ) -> i32 {
@@ -1168,7 +1168,7 @@ pub unsafe fn WelsEncoderApplyBitRate(
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe fn WelsEncoderApplyLTR(
-    pLogCtx: *mut SLogContext,
+    pLogCtx: SLogContext,
     ppCtx: &mut Option<Box<sWelsEncCtx>>,
     pLTRValue: *mut SLTRConfig,
 ) -> i32 {
@@ -1220,7 +1220,7 @@ pub unsafe fn WelsEncoderApplyLTR(
 /// Complete port, including the RC-on bitrate loop and QP-range correction.
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
-pub unsafe fn ParamValidation(pLogCtx: *mut SLogContext, pCfg: *mut SWelsSvcCodingParam) -> i32 {
+pub unsafe fn ParamValidation(pLogCtx: SLogContext, pCfg: *mut SWelsSvcCodingParam) -> i32 {
     const fEpsn: f32 = 0.000001;
     debug_assert!(!pCfg.is_null());
 
@@ -1389,7 +1389,7 @@ pub unsafe fn ParamValidation(pLogCtx: *mut SLogContext, pCfg: *mut SWelsSvcCodi
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe fn ParamValidationExt(
-    pLogCtx: *mut SLogContext,
+    pLogCtx: SLogContext,
     pCodingParam: *mut SWelsSvcCodingParam,
 ) -> i32 {
     debug_assert!(!pCodingParam.is_null());
@@ -1684,10 +1684,8 @@ pub unsafe fn ParamValidationExt(
 }
 
 /// `CheckProfileSetting` — codec/encoder/core/src/encoder_ext.cpp:126.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn CheckProfileSetting(
-    pLogCtx: *mut SLogContext,
+pub fn CheckProfileSetting(
+    pLogCtx: SLogContext,
     pParam: &mut SWelsSvcCodingParam,
     iLayer: i32,
     uiProfileIdc: EProfileIdc,
@@ -1734,10 +1732,8 @@ pub unsafe fn CheckProfileSetting(
 /// `CheckLevelSetting` — codec/encoder/core/src/encoder_ext.cpp:151.
 /// Accepts `uiLevelIdc` only if it appears in the shared level-limits table,
 /// otherwise leaves the layer at `LEVEL_UNKNOWN`.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn CheckLevelSetting(
-    _pLogCtx: *mut SLogContext,
+pub fn CheckLevelSetting(
+    _pLogCtx: SLogContext,
     pParam: &mut SWelsSvcCodingParam,
     iLayer: i32,
     uiLevelIdc: ELevelIdc,
@@ -1758,10 +1754,8 @@ pub unsafe fn CheckLevelSetting(
 ///
 /// Out-of-range counts fall back to `AUTO_REF_PIC_COUNT`, not to the clamped
 /// value.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn CheckReferenceNumSetting(
-    _pLogCtx: *mut SLogContext,
+pub fn CheckReferenceNumSetting(
+    _pLogCtx: SLogContext,
     pParam: &mut SWelsSvcCodingParam,
     iNumRef: i32,
 ) {
@@ -1784,7 +1778,7 @@ pub unsafe fn CheckReferenceNumSetting(
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe fn WelsEncoderApplyBitVaryRang(
-    pLogCtx: *mut SLogContext,
+    pLogCtx: SLogContext,
     pParam: &mut SWelsSvcCodingParam,
     iRang: i32,
 ) -> i32 {
@@ -1854,8 +1848,8 @@ impl CWelsH264SVCEncoder {
 
     /// The trace destination for this encoder's own messages.
     #[inline]
-    fn log_ctx(&mut self) -> *mut SLogContext {
-        std::ptr::addr_of_mut!(self.m_pWelsTrace.m_sLogCtx)
+    fn log_ctx(&mut self) -> SLogContext {
+        self.m_pWelsTrace.m_sLogCtx
     }
 
     /// **T8.B6 — the write-through that replaces the reference's back-pointer.**
@@ -2057,7 +2051,7 @@ impl CWelsH264SVCEncoder {
             self.m_iMaxPicHeight = (*pCfg).iPicHeight;
 
             self.TraceParamInfo(&mut (*pCfg).to_param_ext());
-            let log_ctx = std::ptr::addr_of_mut!(self.m_pWelsTrace.m_sLogCtx);
+            let log_ctx = self.m_pWelsTrace.m_sLogCtx;
 
             if crate::encoder::encoder_ext::WelsInitEncoderExt(
                 &mut self.m_pEncContext,
@@ -2730,7 +2724,7 @@ uiResolutionChangeTimes={}, uIDRReqNum={}, uIDRSentNum={}, uLTRSentNum=NA, iTota
                         }
                         _ => return cmInitParaError,
                     }
-                    let log_ctx = std::ptr::addr_of_mut!(self.m_pWelsTrace.m_sLogCtx);
+                    let log_ctx = self.m_pWelsTrace.m_sLogCtx;
                     if WelsEncoderApplyBitRate(log_ctx, ctx.param_mut(), pInfo.iLayer as i32)
                         != 0
                     {
@@ -2758,7 +2752,7 @@ uiResolutionChangeTimes={}, uIDRReqNum={}, uIDRSentNum={}, uLTRSentNum=NA, iTota
                         }
                         _ => return cmInitParaError,
                     }
-                    let log_ctx = std::ptr::addr_of_mut!(self.m_pWelsTrace.m_sLogCtx);
+                    let log_ctx = self.m_pWelsTrace.m_sLogCtx;
                     if WelsEncoderApplyBitRate(log_ctx, ctx.param_mut(), pInfo.iLayer as i32)
                         != 0
                     {
@@ -2830,7 +2824,7 @@ uiResolutionChangeTimes={}, uIDRReqNum={}, uIDRSentNum={}, uLTRSentNum=NA, iTota
                 }
                 EncoderOption::ENCODER_OPTION_LTR => {
                     let pLTRValue = pOption as *mut SLTRConfig;
-                    let log_ctx = std::ptr::addr_of_mut!(self.m_pWelsTrace.m_sLogCtx);
+                    let log_ctx = self.m_pWelsTrace.m_sLogCtx;
                     if WelsEncoderApplyLTR(log_ctx, &mut self.m_pEncContext, pLTRValue) != 0 {
                         return cmInitParaError;
                     }
@@ -2913,7 +2907,7 @@ uiResolutionChangeTimes={}, uIDRReqNum={}, uIDRSentNum={}, uLTRSentNum=NA, iTota
                     {
                         return cmInitParaError;
                     }
-                    let log_ctx = std::ptr::addr_of_mut!(self.m_pWelsTrace.m_sLogCtx);
+                    let log_ctx = self.m_pWelsTrace.m_sLogCtx;
                     CheckProfileSetting(
                         log_ctx,
                         ctx.param_mut(),
@@ -2931,7 +2925,7 @@ uiResolutionChangeTimes={}, uIDRReqNum={}, uIDRSentNum={}, uLTRSentNum=NA, iTota
                     {
                         return cmInitParaError;
                     }
-                    let log_ctx = std::ptr::addr_of_mut!(self.m_pWelsTrace.m_sLogCtx);
+                    let log_ctx = self.m_pWelsTrace.m_sLogCtx;
                     CheckLevelSetting(
                         log_ctx,
                         ctx.param_mut(),
@@ -2944,7 +2938,7 @@ uiResolutionChangeTimes={}, uIDRReqNum={}, uIDRSentNum={}, uLTRSentNum=NA, iTota
                         return cmInitExpected;
                     };
                     let iValue = *(pOption as *const i32);
-                    let log_ctx = std::ptr::addr_of_mut!(self.m_pWelsTrace.m_sLogCtx);
+                    let log_ctx = self.m_pWelsTrace.m_sLogCtx;
                     CheckReferenceNumSetting(log_ctx, ctx.param_mut(), iValue);
                 }
                 EncoderOption::ENCODER_OPTION_DELIVERY_STATUS => {
@@ -2989,7 +2983,7 @@ uiResolutionChangeTimes={}, uIDRReqNum={}, uIDRSentNum={}, uLTRSentNum=NA, iTota
                     let iValue = *(pOption as *const i32);
                     ctx.param_mut().iBitsVaryPercentage =
                         WELS_CLIP3(iValue, 0, 100);
-                    let log_ctx = std::ptr::addr_of_mut!(self.m_pWelsTrace.m_sLogCtx);
+                    let log_ctx = self.m_pWelsTrace.m_sLogCtx;
                     let iRang = ctx.param().iBitsVaryPercentage;
                     WelsEncoderApplyBitVaryRang(
                         log_ctx,
@@ -3143,7 +3137,7 @@ impl Drop for CWelsH264SVCEncoder {
         // `welsEncoderExt.cpp:136` — the destructor announces itself first, then
         // uninitializes, so the two lines land in the reference's order.
         crate::common::wels_trace::WelsLog(
-            std::ptr::addr_of_mut!(self.m_pWelsTrace.m_sLogCtx),
+            self.m_pWelsTrace.m_sLogCtx,
             crate::common::wels_trace::WELS_LOG_INFO,
             "CWelsH264SVCEncoder::~CWelsH264SVCEncoder()",
         );

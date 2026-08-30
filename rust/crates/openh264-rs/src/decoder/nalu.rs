@@ -2114,7 +2114,7 @@ pub fn ParseSps(
     if (*pCtx).pParam.bParseOnly {
         if kpSrcNal.len() >= SPS_PPS_BS_SIZE - 4 {
             crate::decoder::decoder_core::WelsLog(
-                std::ptr::addr_of_mut!((*pCtx).sLogCtx),
+                (*pCtx).sLogCtx,
                 crate::decoder::decoder_core::WELS_LOG_WARNING,
                 &format!(
                     "sps payload size ({}) too large for parse only ({}), not supported!",
@@ -2139,7 +2139,7 @@ pub fn ParseSps(
             };
             if !ok {
                 crate::decoder::decoder_core::WelsLog(
-                    std::ptr::addr_of_mut!((*pCtx).sLogCtx),
+                    (*pCtx).sLogCtx,
                     crate::decoder::decoder_core::WELS_LOG_ERROR,
                     "subset sps rewrite does not fit the parse-only buffer",
                 );
@@ -2387,7 +2387,7 @@ pub fn ParsePps(
     if (*pCtx).pParam.bParseOnly {
         if kpSrcNal.len() >= SPS_PPS_BS_SIZE - 4 {
             crate::decoder::decoder_core::WelsLog(
-                std::ptr::addr_of_mut!((*pCtx).sLogCtx),
+                (*pCtx).sLogCtx,
                 crate::decoder::decoder_core::WELS_LOG_WARNING,
                 &format!(
                     "pps payload size ({}) too large for parse only ({}), not supported!",

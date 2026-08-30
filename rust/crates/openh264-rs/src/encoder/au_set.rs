@@ -177,7 +177,7 @@ fn level_idc_from_raw(uiLevelIdc: u8) -> ELevelIdc {
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe fn WelsBitRateVerification(
-    pLogCtx: *mut SLogContext,
+    pLogCtx: SLogContext,
     pLayerParam: *mut SSpatialLayerConfig,
     iLayerId: i32,
 ) -> i32 {
@@ -299,7 +299,7 @@ pub unsafe fn WelsBitRateVerification(
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe fn WelsCheckNumRefSetting(
-    pLogCtx: *mut SLogContext,
+    pLogCtx: SLogContext,
     pParam: *mut SWelsSvcCodingParam,
     bStrictCheck: bool,
 ) -> i32 {
@@ -385,7 +385,7 @@ pub unsafe fn WelsCheckNumRefSetting(
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe fn WelsCheckRefFrameLimitationNumRefFirst(
-    pLogCtx: *mut SLogContext,
+    pLogCtx: SLogContext,
     pParam: *mut SWelsSvcCodingParam,
 ) -> i32 {
     if WelsCheckNumRefSetting(pLogCtx, pParam, false) != 0 {
@@ -399,7 +399,7 @@ pub unsafe fn WelsCheckRefFrameLimitationNumRefFirst(
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe fn WelsCheckRefFrameLimitationLevelIdcFirst(
-    pLogCtx: *mut SLogContext,
+    pLogCtx: SLogContext,
     pParam: *mut SWelsSvcCodingParam,
 ) -> i32 {
     if (*pParam).iNumRefFrame == AUTO_REF_PIC_COUNT

@@ -314,7 +314,7 @@ pub unsafe fn GomValidCheckSliceMbNum(
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe fn SliceArgumentValidationFixedSliceMode(
-    _pLogCtx: *mut SLogContext,
+    _pLogCtx: SLogContext,
     pSliceArgument: &mut SSliceArgument,
     kiRCMode: RC_MODES,
     kiPicWidth: i32,
@@ -802,7 +802,7 @@ mod tests {
         let mut a = arg(2);
         unsafe {
             let ret = SliceArgumentValidationFixedSliceMode(
-                std::ptr::null_mut(),
+                crate::common::wels_trace::SLogContext::default(),
                 &mut a,
                 RC_OFF_MODE,
                 128,
@@ -823,7 +823,7 @@ mod tests {
         let mut a = arg(MAX_SLICES_NUM as u32 + 10);
         unsafe {
             let ret = SliceArgumentValidationFixedSliceMode(
-                std::ptr::null_mut(),
+                crate::common::wels_trace::SLogContext::default(),
                 &mut a,
                 RC_OFF_MODE,
                 1280,

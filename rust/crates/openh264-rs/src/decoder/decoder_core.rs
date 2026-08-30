@@ -1017,7 +1017,7 @@ pub fn SyncPictureResolutionExt(pCtx: &mut SWelsDecoderContext, iWidth: u32, iHe
             let capacity = pic_pool_mut(pCtx).map_or(0, |pool| pool.capacity());
             if capacity != iPicBufSize {
                 WelsLog(
-                    &mut (*pCtx).sLogCtx,
+                    (*pCtx).sLogCtx,
                     WELS_LOG_INFO,
                     &format!(
                         "WelsRequestMem(): memory re-alloc for no resolution change (size = {} * {}), ref list size change from {} to {}",
@@ -1307,7 +1307,7 @@ pub fn DecodeFrameConstruction(
                 // "2 reserved for sps+pps" — `decoder_core.cpp:113`.
                 if iNalNumAfter > iMaxNalNum(pCtx) - 2 {
                     WelsLog(
-                        std::ptr::addr_of_mut!((*pCtx).sLogCtx),
+                        (*pCtx).sLogCtx,
                         WELS_LOG_INFO,
                         &format!(
                             "DecodeFrameConstruction(): current NAL num ({}) plus sps & pps exceeds permitted num ({}). Will expand",
@@ -1324,7 +1324,7 @@ pub fn DecodeFrameConstruction(
             let iNalTotal = iNalNumAfter + iEndIdx0 - iIdx0 + 1;
             if iNalTotal > iMaxNalNum(pCtx) {
                 WelsLog(
-                    std::ptr::addr_of_mut!((*pCtx).sLogCtx),
+                    (*pCtx).sLogCtx,
                     WELS_LOG_INFO,
                     &format!(
                         "DecodeFrameConstruction(): current NAL num ({}) exceeds permitted num ({}). Will expand",
@@ -2390,7 +2390,7 @@ pub fn OutputStatisticsLog(pCtx: &mut SWelsDecoderContext) {
         return;
     }
     WelsLog(
-        std::ptr::addr_of_mut!(pCtx.sLogCtx),
+        pCtx.sLogCtx,
         WELS_LOG_INFO,
         &format!(
             "DecoderStatistics: uiWidth={}, uiHeight={}, fAverageFrameSpeedInMs={:.1}, \
@@ -2444,7 +2444,7 @@ pub fn DecoderConfigParam(pCtx: &mut SWelsDecoderContext, kpParam: &SDecodingPar
     // wire has 2^32 values.
     pCtx.eVideoType = pCtx.pParam.sVideoProperty.eVideoBsType;
     WelsLog(
-        std::ptr::addr_of_mut!(pCtx.sLogCtx),
+        pCtx.sLogCtx,
         WELS_LOG_INFO,
         &format!("eVideoType: {}", pCtx.eVideoType as i32),
     );
@@ -3322,7 +3322,7 @@ pub fn UpdateAccessUnit(pCtx: &mut SWelsDecoderContext) -> i32 {
                 }
                 if !(*pCtx).bParamSetsLostFlag {
                     WelsLog(
-                        std::ptr::addr_of_mut!((*pCtx).sLogCtx),
+                        (*pCtx).sLogCtx,
                         WELS_LOG_WARNING,
                         "UpdateAccessUnit():::::Key frame lost.....CAN NOT find IDR from current AU.",
                     );
@@ -4592,14 +4592,14 @@ pub fn DecodeCurrentAccessUnit(
                 if iRet == ERR_INFO_OUT_OF_MEMORY {
                     (*pCtx).iErrorCode |= dsOutOfMemory;
                     WelsLog(
-                        std::ptr::addr_of_mut!((*pCtx).sLogCtx),
+                        (*pCtx).sLogCtx,
                         WELS_LOG_ERROR,
                         "DecodeCurrentAccessUnit(), Fmo param alloc failed",
                     );
                 } else {
                     (*pCtx).iErrorCode |= dsBitstreamError;
                     WelsLog(
-                        std::ptr::addr_of_mut!((*pCtx).sLogCtx),
+                        (*pCtx).sLogCtx,
                         WELS_LOG_WARNING,
                         "DecodeCurrentAccessUnit(), FmoParamUpdate failed",
                     );
@@ -4653,7 +4653,7 @@ pub fn DecodeCurrentAccessUnit(
                         && pSh.iFrameNum != ((iPrevFrameNum + 1) & wrap)
                     {
                         WelsLog(
-                            std::ptr::addr_of_mut!((*pCtx).sLogCtx),
+                            (*pCtx).sLogCtx,
                             WELS_LOG_WARNING,
                             "referencing pictures lost due frame gaps exist",
                         );
@@ -4687,7 +4687,7 @@ pub fn DecodeCurrentAccessUnit(
                         // the trace surface, and it is the line that named this arm
                         // when the reference was run at `--trace=8`.
                         WelsLog(
-                            std::ptr::addr_of_mut!((*pCtx).sLogCtx),
+                            (*pCtx).sLogCtx,
                             WELS_LOG_DEBUG,
                             &format!(
                                 "reference picture introduced by this frame is lost during transmission! uiTId: {}",

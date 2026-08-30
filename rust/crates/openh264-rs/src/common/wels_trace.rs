@@ -151,22 +151,22 @@ impl Default for SLogContext {
 /// message, with the level and the tagged text — is the same.
 // unsafe-cat: C-ABI
 //
-// **Both `unsafe` sites in this function are the caller's ABI, not the port's**
+// **The one `unsafe` site left in this function is the caller's ABI, not the port's**
 // (tagged at session J's root `deny`, which is what first made this file visible —
 // it never carried a per-file `deny`). `SLogContext` holds the application's own
 // `pfLog` function pointer and its opaque `pLogCtx` handle, set through
 // `SetOption(ENCODER_OPTION_TRACE_CALLBACK)`; both cross `codec_api.h` and neither
-// can carry a lifetime. The deref below and the call at the tail are the two halves
-// of "invoke the caller's callback", which is this module's entire purpose.
+// can carry a lifetime. The call at the tail — "invoke the caller's callback" — is
+// this module's entire purpose and all that remains unsafe here.
+//
+// **S8.1**: the parameter was `*mut SLogContext` and the body opened by copying out
+// of it, precisely so a re-entrant callback could not alias a borrow of the caller's
+// storage. Taking the `Copy` struct by value *is* that copy, made one frame earlier,
+// so the deref and its null guard both retire: a null pointer and a
+// `SLogContext::default()` are observationally identical here, because `pfLog: None`
+// takes the same early return the null check did.
 #[allow(unsafe_code)]
-pub fn WelsLog(pLogCtx: *mut SLogContext, iLevel: i32, msg: &str) {
-    if pLogCtx.is_null() {
-        return;
-    }
-    // `SLogContext` is `Copy` and the caller owns the storage; taking a value here
-    // keeps the callback's own re-entry (a callback that calls back into the codec)
-    // from aliasing a borrow of it.
-    let ctx = unsafe { *pLogCtx };
+pub fn WelsLog(ctx: SLogContext, iLevel: i32, msg: &str) {
     let Some(pfLog) = ctx.pfLog else {
         return;
     };
