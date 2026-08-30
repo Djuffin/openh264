@@ -1,5 +1,5 @@
 {
-  "commit": "c221d514",
+  "commit": "e539d195",
   "metrics": ["unsafe_fn", "unsafe_block", "raw_ptr", "transmute", "unsafe_impl", "mem_zeroed", "no_mangle", "shim"],
   "files": {
     "api/abi_guard.rs": { "unsafe_fn": 0, "unsafe_block": 0, "raw_ptr": 0, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 0, "no_mangle": 0, "shim": 0 },
@@ -68,7 +68,7 @@
     "encoder/vlc_encoder.rs": { "unsafe_fn": 0, "unsafe_block": 0, "raw_ptr": 0, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 0, "no_mangle": 0, "shim": 0 },
     "encoder/wels_encoder_ext.rs": { "unsafe_fn": 7, "unsafe_block": 8, "raw_ptr": 50, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 0, "no_mangle": 2, "shim": 0 },
     "encoder/wels_func_ptr_def.rs": { "unsafe_fn": 3, "unsafe_block": 0, "raw_ptr": 0, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 0, "no_mangle": 0, "shim": 0 },
-    "encoder/wels_preprocess.rs": { "unsafe_fn": 17, "unsafe_block": 0, "raw_ptr": 24, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 0, "no_mangle": 0, "shim": 0 },
+    "encoder/wels_preprocess.rs": { "unsafe_fn": 16, "unsafe_block": 0, "raw_ptr": 24, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 0, "no_mangle": 0, "shim": 0 },
     "lib.rs": { "unsafe_fn": 0, "unsafe_block": 0, "raw_ptr": 0, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 0, "no_mangle": 0, "shim": 0 },
     "processing/adaptive_quantization.rs": { "unsafe_fn": 2, "unsafe_block": 1, "raw_ptr": 7, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 0, "no_mangle": 0, "shim": 0 },
     "processing/background_detection.rs": { "unsafe_fn": 5, "unsafe_block": 0, "raw_ptr": 5, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 0, "no_mangle": 0, "shim": 0 },

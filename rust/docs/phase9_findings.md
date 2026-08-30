@@ -7897,3 +7897,77 @@ Miri verdict it quotes — and ```text is not collected at all. Use it for any
 illustration that is not meant to compile. This is a cheap finding, but the gate's
 message names a count rather than a cause, and the next session to add a documented
 public accessor will otherwise spend the same ten minutes.
+
+## F262 — the remainder is three structural items and nothing else, and the cascade proves it
+
+After S10.5b's accessors landed, the per-file de-unsafe cascade was run over the
+seven files holding the bulk of the remainder — `wels_preprocess.rs`,
+`encoder_ext.rs`, `encoder_context.rs`, `svc_mode_decision.rs`,
+`svc_base_layer_md.rs`, `svc_motion_estimate.rs`, `md.rs`, **114 unsafe
+declarations between them**. It converted **one**.
+
+That is not a disappointing number; it is a *measurement of where the work is*, and
+it retires a question the plan has carried since S8: whether there is any harvest
+left that a mechanical pass could take. There is not. Blocker analysis over every
+remaining body attributes the **347** to exactly three structural items:
+
+| gate | what it blocks |
+|---|---|
+| the **plane family** (F259's re-scoped step 2) | `svc_mode_decision.rs`, `svc_base_layer_md.rs`, `md.rs`, `svc_motion_estimate.rs`, and the `SPixMap` plane roots in `wels_preprocess.rs` + the four `processing/` plugins |
+| the **slice bank and the bitstream writer** (F256's step 3) | `slice_in_layer`, `slice_writer`, `slice_bs_buffer` — the last twelve of `rc.rs`, four of `ref_list_mgr_svc.rs`, and most of `svc_encode_slice.rs` / `slice_multi_threading.rs` |
+| the **`ctx_*_raw` slot readers** | raw by ruling (F71); the three in-fork ones stay by design, and `ctx_param_raw`'s surviving callers are the `addr_of_mut!` cursor sites S29 protects |
+
+**A tool worth keeping.** The per-file blocker analyzer built for this — strip every
+`unsafe` declaration in one file, compile, attribute each remaining error to the body
+it lands in, and name its blocker — is what made the attribution above cheap and
+exact. It is strictly more informative than the whole-tree cascade, which answers
+"can this decl go?" but not "*what* is stopping it". Both matter; the cascade found
+`EndofUpdateRefList` that hand-reading missed (F260), and the analyzer is what showed
+`ParamValidationExt` was a single parameter flip away from free.
+
+**And a note on how the biggest win was found.** `wels_encoder_ext.rs`'s three
+largest bodies carried 56, 68 and 74 raw dereferences. That reads like a campaign;
+it was one parameter each. `ParamValidationExt` in particular had **no other
+blocker at all** — 70 errors, one cause. Before planning a body-deref campaign,
+check whether the derefs share a root: the analyzer's per-body blocker counts make
+that a two-minute question.
+
+## F263 — the slice-header writers convert except for the bitstream, and that is the *other* seam step 3 owns
+
+`WelsSliceHeaderWrite` and `WelsSliceHeaderExtWrite` were converted in full and then
+reverted. Recording the design, because it is ready and because the reason it did not
+land is exactly F256's rule rather than a difficulty.
+
+**What worked.** Their `pCurLayer: *mut SDqLayer` parameter flips to `&SDqLayer`
+cleanly: both bodies only *read* the layer (checked — zero writes through it), and a
+shared layer borrow is precisely what this file's two probes
+(`partition_counters_...` and `slice_banks_take_a_shared_layer_borrow_...`) exist to
+certify is lawful while sibling workers write. That flip also takes the `*mut
+SDqLayer` out of `PWelsSliceHeaderWriteFunc`'s **slot signature**, and with
+`layer_sps_ref` / `layer_pps_ref` beside it, **58 raw dereferences** go.
+
+Two details the conversion turned up, both worth keeping:
+
+* `layer_sps`/`layer_pps` answer null in real states, and the callers have real
+  fallbacks (`else 0`, `else 4`) whose comment says the C++ dereferences
+  unconditionally and the guards "follow the surrounding style in this port". So the
+  safe twins must return `Option` and every use keeps its own fallback verbatim —
+  `.expect()` would convert a handled state into a panic.
+* `WriteRefPicMarking`'s two raw parameters flip with them, and its null guards
+  become inexpressible on T9.H's convention.
+
+**Why it did not land.** The bodies still reach the bitstream through
+`slice_writer`, which returns `*mut BsWriter` because its two arms have **different
+owners** — the slice's own `sSliceBs`, or the context's `sBsWrite` reached via
+`ctx_out_raw`. A safe form must return `&mut BsWriter` borrowed from one of two
+places, which needs the caller to hold both mutably; `pCtx` is shared here. That is a
+**bitstream seam**, sibling to the slice-bank seam F256 describes, and it belongs to
+step 3 with it. Without it the conversion retires **no allow** — partial conversion
+inside a body retires nothing — and what it would leave behind is a half-migrated
+bitstream path, the same shape step 2 was declined for. So: designed, measured,
+reverted, written down.
+
+**Step 3 is therefore two seams, not one**, and the brief's framing should be
+amended: the slice *bank* (`slice_bank_root`, the worker-written `SSlice` fields) and
+the slice *bitstream writer* (`slice_writer`, `slice_bs_buffer`, `thread_bs_buffer`).
+They share callers and should be designed together.
