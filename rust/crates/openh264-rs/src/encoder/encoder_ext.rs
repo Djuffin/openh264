@@ -1417,7 +1417,7 @@ pub unsafe fn RequestMemorySvc(
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe fn InitSliceSettings(
-    pLogCtx: *mut SLogContext,
+    pLogCtx: SLogContext,
     pCodingParam: *mut SWelsSvcCodingParam,
     kiCpuCores: i32,
     pMaxSliceCount: *mut i16,
@@ -1501,7 +1501,7 @@ pub unsafe fn InitSliceSettings(
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe fn GetMultipleThreadIdc(
-    pLogCtx: *mut SLogContext,
+    pLogCtx: SLogContext,
     pCodingParam: *mut SWelsSvcCodingParam,
     iSliceNum: *mut i16,
     iCacheLineSize: *mut i32,
@@ -1555,7 +1555,7 @@ pub unsafe fn GetMultipleThreadIdc(
 pub unsafe fn WelsInitEncoderExt(
     ppCtx: &mut Option<Box<sWelsEncCtx>>,
     pCodingParam: *mut SWelsSvcCodingParam,
-    pLogCtx: *mut SLogContext,
+    pLogCtx: SLogContext,
     pExistingParasetList: *mut SExistingParasetList,
 ) -> i32 {
     let mut iSliceNum: i16 = 1; // number of slices used
@@ -1597,9 +1597,12 @@ pub unsafe fn WelsInitEncoderExt(
     // equivalent, and Default is the all-zero/null state for every member.
     let mut ctxBox = Box::new(sWelsEncCtx::default());
 
-    if !pLogCtx.is_null() {
-        ctxBox.sLogCtx = *pLogCtx;
-    }
+    // **S8.1**: this was guarded on `!pLogCtx.is_null()`, leaving the field at its
+    // `Default` when the caller had no trace context. The by-value parameter spells
+    // that same absence as `SLogContext::default()` — which is bit-for-bit what
+    // `sWelsEncCtx::default()` already put there — so the guard and the assignment
+    // it skipped collapse into one unconditional copy.
+    ctxBox.sLogCtx = pLogCtx;
 
     // **T7.C6**: `pCtx->pMemAlign = new CMemoryAlign(iCacheLineSize)` stood here
     // (`encoder_ext.cpp:1631`), the encoder's first allocation. Nothing in
@@ -1776,13 +1779,13 @@ mod tests {
         let mut iCacheLineSize: i32 = 16;
         let mut uiCpuFeatureFlags: u32 = 0;
         assert_eq!(
-            crate::encoder::wels_encoder_ext::ParamValidationExt(null_mut(), &mut param),
+            crate::encoder::wels_encoder_ext::ParamValidationExt(crate::common::wels_trace::SLogContext::default(), &mut param),
             ENC_RETURN_SUCCESS
         );
         assert_eq!(param.DetermineTemporalSettings(), ENC_RETURN_SUCCESS);
         assert_eq!(
             GetMultipleThreadIdc(
-                null_mut(),
+                crate::common::wels_trace::SLogContext::default(),
                 &mut param,
                 &mut iSliceNum,
                 &mut iCacheLineSize,
@@ -1928,7 +1931,7 @@ pub unsafe fn WelsUninitEncoderExt(pEncContext: Option<Box<sWelsEncCtx>>) {
         let iMultipleThreadIdc = ctxBox.param().iMultipleThreadIdc;
         let kpCtxForLog: *const sWelsEncCtx = std::ptr::addr_of!(*ctxBox);
         crate::common::wels_trace::WelsLog(
-            std::ptr::addr_of_mut!(ctxBox.sLogCtx),
+            ctxBox.sLogCtx,
             crate::common::wels_trace::WELS_LOG_INFO,
             &format!(
                 "WelsUninitEncoderExt(), pCtx= {:p}, iMultipleThreadIdc= {}.",
@@ -2915,7 +2918,7 @@ pub unsafe fn WriteSavcParaset_Listing(
     // to check number of layers / nals / slices dependencies
     if *iLayerNum > MAX_LAYER_NUM_OF_FRAME {
         crate::common::wels_trace::WelsLog(
-            std::ptr::addr_of_mut!(pCtx.sLogCtx),
+            pCtx.sLogCtx,
             crate::common::wels_trace::WELS_LOG_ERROR,
             &format!(
                 "WriteSavcParaset(), iLayerNum({}) > MAX_LAYER_NUM_OF_FRAME({})!",

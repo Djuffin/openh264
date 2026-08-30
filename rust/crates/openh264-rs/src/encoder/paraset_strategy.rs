@@ -607,7 +607,7 @@ impl CWelsParametersetIdStrategyObj {
     pub unsafe fn CheckParamCompatibility(
         &mut self,
         pCodingParam: *mut SWelsSvcCodingParam,
-        pLogCtx: *mut SLogContext,
+        pLogCtx: SLogContext,
     ) -> bool {
         if !self.eIdKind.is_listing() || pCodingParam.is_null() {
             return true;
