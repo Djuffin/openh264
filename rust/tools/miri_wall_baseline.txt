@@ -82,12 +82,19 @@
 # level, on the same four-shard lane, so S1's number is lane-comparable with
 # H3's. **This close seeds the cpu column**, which F170 asked the first close
 # after its note to do; from S2 on the tripwire compares CPU against CPU.
+# **ORDERING TRAP, and S8 fell into it (S9, 2026-08-30).** `gates.sh:206` reads the
+# baseline with `awk 'NF {print; exit}'` — the **first** non-comment line, not the
+# last. Appending a close therefore does not advance anything: S8's line was appended
+# and both S8's and S9's gates went on comparing against S5's 1151, which is also the
+# likeliest reason the file "still read an older session's close" when S8 opened.
+# **New closes are PREPENDED.** The lines below are newest-first.
+#
+# S9 (2026-08-30, six gated checkpoints, same session as S8): the lane gained one test
+# — S9.0b's `RecCursor`-vs-`PlaneCursor` twin, the referee for the generic DCT kernels
+# — so shard totals go 296 -> 297. **cpu 1419 s against S8's 1224 s is ratio 1.16**,
+# and against the stale S5 line the gate actually used, 1.23. Both are under the 1.3
+# tripwire but neither is flat, and this session ran six gates on a loaded machine, so
+# the next close should re-measure before reading a trend into it.
+559 59fa12da 2026-08-30 safeplan-S9-close-297-0-cpu-1419-vs-S8-1224-ratio-1.16 cpu=1419
+562 7af6689d 2026-08-30 safeplan-S8-close-296-0-cpu-1224-vs-S5-1151-ratio-1.06-appended-so-unused cpu=1224
 541 1b3471c4 2026-08-28 safeplan-S5-close-295-0-cpu-ratio-1.00-vs-1147 cpu=1151
-# GAP NOTE (S8, 2026-08-30): the line above is **S5's** close, not S7's. S6 and
-# S7 both closed at the `session` level and neither advanced this file, so the
-# ratio S8's runs printed (1.05, then 1.06) is measured against a baseline three
-# sessions old — it is a real comparison, but it spans S6's layer flip and S7's
-# context flip as well as S8's own work, and no single session owns the +6%.
-# The tripwire is 1.3x and this is nowhere near it; the point of the note is that
-# the next close should compare against S8 and get a one-session delta again.
-562 7af6689d 2026-08-30 safeplan-S8-close-296-0-cpu-ratio-1.06-vs-1151-baseline-3-sessions-stale cpu=1224
