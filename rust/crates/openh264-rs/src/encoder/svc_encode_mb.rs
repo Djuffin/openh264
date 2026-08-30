@@ -462,7 +462,7 @@ pub fn WelsDequantIHadamard2x2Dc(pDct: &mut [i16; 4], kuiMF: u16) {
 #[inline]
 pub fn WelsDctMb(
     pRes: &mut [i16],
-    pEncMb: &PlaneCursor<'_>,
+    pEncMb: &crate::encoder::rec_view::RecCursor<'_>,
     pBestPred: &PlaneCursor<'_>,
     pfDctFourT4: Option<PDctFunc>,
 ) {

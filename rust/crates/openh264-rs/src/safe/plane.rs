@@ -345,6 +345,48 @@ impl PaddedPlane {
 /// time. It is deliberately **read-only** — the reconstruction is an *operand* of
 /// intra prediction and never its destination, which is the macroblock cache's
 /// arena.
+/// A **read cursor** over pixel samples, in whichever storage the plane lives in.
+///
+/// `RefSamples` cannot carry `advance` because `PlaneCursorMut` implements it and
+/// holds a `&mut`, so it is not `Copy`. This trait is the `Copy` half: the kernels
+/// that walk sub-blocks need to rebase, and they need to do it over *both* a plain
+/// slice plane (`PlaneCursor`) and a shared interior-mutable one (`RecCursor`).
+///
+/// **Why a kernel must accept both** — S9.0b: the encoder's *source* picture is not
+/// read-only. `VaaBackgroundMbDataUpdate` copies previous-source into current-source
+/// in-fork, per macroblock (F117), so a source plane is reached through the shared
+/// seam exactly as the reconstruction planes are, while a prediction scratch on
+/// `SMbCache` is an owned array and stays a plain slice. One kernel, two storages.
+pub trait SampleCursor: Copy {
+    /// Sample at `(dx, dy)` from the anchor.
+    fn at(&self, dx: isize, dy: isize) -> u8;
+
+    /// `N` samples of row `dy` starting at `dx0`, by value — a shared view cannot
+    /// lend a slice into its cells.
+    fn row_n<const N: usize>(&self, dy: isize, dx0: isize) -> [u8; N];
+
+    /// The same anchor moved by `(dx, dy)`.
+    fn advance(self, dx: isize, dy: isize) -> Self;
+}
+
+impl SampleCursor for PlaneCursor<'_> {
+    #[inline]
+    fn at(&self, dx: isize, dy: isize) -> u8 {
+        PlaneCursor::at(self, dx, dy)
+    }
+    #[inline]
+    fn row_n<const N: usize>(&self, dy: isize, dx0: isize) -> [u8; N] {
+        let r = PlaneCursor::row(self, dy, dx0, N);
+        let mut out = [0u8; N];
+        out.copy_from_slice(r);
+        out
+    }
+    #[inline]
+    fn advance(self, dx: isize, dy: isize) -> Self {
+        PlaneCursor::advance(self, dx, dy)
+    }
+}
+
 pub trait RefSamples {
     /// Sample at `(dx, dy)` from the anchor.
     fn at(&self, dx: isize, dy: isize) -> u8;
