@@ -1117,6 +1117,24 @@ pub fn ctx_mb_index_y(pCtx: &sWelsEncCtx, kiDid: usize) -> *const i16 {
 // became safe" claims for them, and it is worth being exact about, because it is
 // the difference between this layer's `unsafe` and the next layer's.
 // ---------------------------------------------------------------------------
+/// The five disjoint borrows [`sWelsEncCtx::ltr_family_mut`] hands out.
+///
+/// One owner per field, so the compiler grants all five at once — which is the
+/// whole point: the raw roots this replaces existed only because two whole-context
+/// accessor calls could not coexist.
+pub struct LtrFamilyMut<'a> {
+    /// One dependency layer's parameter slot — `sDependencyLayers[kiDid]`.
+    pub param_layer: &'a mut crate::encoder::param_svc::SSpatialLayerInternal,
+    /// The video-analysis block, absent before the preprocess builds it.
+    pub vaa: Option<&'a mut SVAAFrameInfo>,
+    /// The dependency layer's reference list, absent before it is allocated.
+    pub ref_list: Option<&'a mut SRefList>,
+    /// The dependency layer's long-term-reference state.
+    pub ltr: &'a mut SLTRState,
+    /// `bRefOfCurTidIsLtr`, indexed `[did][tid]`.
+    pub ref_of_cur_tid_is_ltr: &'a mut [[bool; MAX_TEMPORAL_LEVEL]; MAX_DEPENDENCY_LAYER],
+}
+
 impl sWelsEncCtx {
     /// The **MVD cost table** — T6.H9, `pCtx->pMvdCostTable`.
     ///
@@ -1257,6 +1275,84 @@ impl sWelsEncCtx {
             ppRefPicListExt.get_mut(kiDid).and_then(|s| s.as_deref_mut()),
             &mut pLtr[kiDid],
         )
+    }
+
+    /// The **preprocess object and a dependency layer's reference list, from one
+    /// borrow** — §4.6's combined accessor, and what retires `ctx_vpp_raw` from
+    /// `ref_list_mgr_svc.rs` (S10.5a).
+    ///
+    /// Three bodies there hand the preprocess a `&SRefList` while holding it
+    /// `&mut`: `UpdateOriginalPicInfoFromCtx`, `UpdateSrcPicList` and
+    /// `UpdateSrcPicListLosslessScreenRefSelectionWithLtr`. Their comments describe
+    /// the workaround they used — "the vpp is *taken* (S3.B1) so the shared borrow
+    /// of the list and the `&mut` receiver are borrows of two different owners" —
+    /// which is a `ctx_vpp_raw` slot read standing in for a disjointness the
+    /// compiler could have granted. `pVpp` and `ppRefPicListExt` **are** two
+    /// different fields; projecting them together says so directly.
+    ///
+    /// This is the safe half of the pair `ctx_vpp_raw` / `ctx_vpp` documents. It
+    /// is **single-threaded only**, exactly as `ctx_vpp_raw` is: an in-fork body
+    /// must still take the shared `ctx_vpp` route, because a `&mut` retag of the
+    /// preprocess object from N workers is S63's violation with no read needed to
+    /// make it real.
+    #[inline]
+    pub fn vpp_and_ref_list_mut(
+        &mut self,
+        kiDid: usize,
+    ) -> (
+        Option<&mut crate::encoder::wels_preprocess::CWelsPreProcess>,
+        Option<&SRefList>,
+    ) {
+        let sWelsEncCtx { pVpp, ppRefPicListExt, .. } = self;
+        (
+            pVpp.as_deref_mut(),
+            ppRefPicListExt.get(kiDid).and_then(|s| s.as_deref()),
+        )
+    }
+
+    /// Every field the three LTR bodies touch, **from one borrow** — §4.6's
+    /// combined accessor taken to its natural end, and what retires
+    /// `ctx_param_raw` and two `addr_of_mut!` roots from this family (S10.5a).
+    ///
+    /// **The shape this dissolves is F239's.** `DeleteInvalidLTR`,
+    /// `HandleLTRMarkFeedback` and `LTRMarkProcess` each opened with
+    ///
+    /// ```text
+    /// let pParamInternal = addr_of_mut!((*ctx_param_raw(pCtx)).sDependencyLayers[uiDid]);
+    /// let bRefOfCurTidIsLtr = addr_of_mut!(pCtx.bRefOfCurTidIsLtr);
+    /// let (pVaa, pRefList, pLtr) = pCtx.vaa_ref_list_and_ltr_mut(uiDid);
+    /// ```
+    ///
+    /// — field-precise raw cursors **held across** a later whole-context reborrow,
+    /// which is the derivation F239 records as popped and sweep-invisible. Those
+    /// bodies carry a T9.H3 comment explaining the ordering they adopted to
+    /// survive it ("every raw root first, the reference-shaped borrows last"): a
+    /// hand-maintained rule that exists only because two accessors each claim the
+    /// whole context. One accessor projecting all five fields needs no ordering
+    /// rule, and the compiler — not a comment — is what keeps it true.
+    ///
+    /// A named struct rather than a five-tuple because the three callers want
+    /// different subsets, and `_` on a tuple position says nothing about which
+    /// field was skipped.
+    ///
+    /// `param_layer` is one dependency layer's slot, not the whole parameter
+    /// block: the bodies write `bEncCurFrmAsIdrFlag` and read `iFrameNum`, and
+    /// narrowing here is the safe spelling of the `addr_of_mut!` it replaces.
+    #[inline]
+    pub fn ltr_family_mut(&mut self, kiDid: usize) -> LtrFamilyMut<'_> {
+        let sWelsEncCtx {
+            pSvcParam, pVaa, ppRefPicListExt, pLtr, bRefOfCurTidIsLtr, ..
+        } = self;
+        LtrFamilyMut {
+            param_layer: &mut pSvcParam
+                .as_deref_mut()
+                .expect("the coding parameters are built by WelsInitEncoderExt")
+                .sDependencyLayers[kiDid],
+            vaa: pVaa.as_deref_mut(),
+            ref_list: ppRefPicListExt.get_mut(kiDid).and_then(|s| s.as_deref_mut()),
+            ltr: &mut pLtr[kiDid],
+            ref_of_cur_tid_is_ltr: bRefOfCurTidIsLtr,
+        }
     }
 
     /// [`ref_list_and_ltr_mut`](Self::ref_list_and_ltr_mut) **plus the

@@ -85,6 +85,7 @@ pub use crate::encoder::picture::SScreenBlockFeatureStorage;
 pub use crate::encoder::param_svc::SWelsSPS;
 pub use crate::encoder::svc_encode_slice::SSliceHeader;
 use crate::encoder::svc_encode_slice::ctx_sps;
+use crate::encoder::svc_encode_slice::ctx_sps_ref;
 use crate::encoder::svc_encode_slice::current_layer;
 pub use crate::encoder::svc_encode_slice::SSliceHeaderExt;
 pub use crate::encoder::encoder_context::EWelsSliceType;
@@ -398,27 +399,29 @@ pub fn CompareFrameNum(iFrameNumA: i32, iFrameNumB: i32, iMaxFrameNumPlus1: i32)
 }
 
 /// Purges unacknowledged or invalid LTR frames based on decoder feedback.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn DeleteInvalidLTR(pCtx: &mut sWelsEncCtx) {
+pub fn DeleteInvalidLTR(pCtx: &mut sWelsEncCtx) {
     // T9.H: the `pCtx.is_null()` disjunct is gone — a `&mut sWelsEncCtx`
     // cannot be null and every caller now holds one. The rest is unchanged.
-    if ctx_sps(pCtx).is_null() || pCtx.param_opt().is_none() {
+    let Some(sps) = ctx_sps_ref(pCtx) else {
+        return;
+    };
+    if pCtx.param_opt().is_none() {
         return;
     }
     let uiDid = pCtx.uiDependencyId as usize;
-    // **T9.H3 — T9.G4's order, inverted, and the inversion is the conversion.**
-    // T9.G4 put the reference-shaped accessor *before* the permanently-raw one so
-    // the raw world's retags could not pop it. In the reference world the borrow
-    // checker wants the opposite: every raw root first, the `&mut`-shaped LTR
-    // borrow last, so it coexists only with derefs of raws into other allocations
-    // (F71) and never with a second use of `pCtx`.
-    let iMaxFrameNumPlus1 = 1 << (*ctx_sps(pCtx)).uiLog2MaxFrameNum;
-    let pParamInternal = std::ptr::addr_of_mut!((*ctx_param_raw(pCtx)).sDependencyLayers[uiDid]);
-    // A3: the list and the LTR state are two fields of one context, so they come
-    // out of one borrow — §4.6's combined accessor.
-    let (pRefList, pLtr) = pCtx.ref_list_and_ltr_mut(uiDid);
-    let Some(pRefList) = pRefList else {
+    // **S10.5a — T9.H3's ordering rule is gone, and its going is the conversion.**
+    // That comment described the order this body had to keep so a raw
+    // `addr_of_mut!` cursor would survive the later whole-context reborrow: "every
+    // raw root first, the `&mut`-shaped LTR borrow last". It was a hand-maintained
+    // rule standing in for a guarantee, and F239 is what happens when such a rule
+    // is broken silently. `ltr_family_mut` projects the parameter slot, the list
+    // and the LTR state from **one** borrow, so there is no order to keep and the
+    // compiler enforces the disjointness the comment used to assert.
+    let iMaxFrameNumPlus1 = 1 << sps.uiLog2MaxFrameNum;
+    let ltr_family = pCtx.ltr_family_mut(uiDid);
+    let pParamInternal = ltr_family.param_layer;
+    let pLtr = ltr_family.ltr;
+    let Some(pRefList) = ltr_family.ref_list else {
         return;
     };
 
@@ -461,22 +464,21 @@ pub unsafe fn DeleteInvalidLTR(pCtx: &mut sWelsEncCtx) {
 }
 
 /// Handles asynchronous decoder confirmation or failure feedback for LTR marking.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn HandleLTRMarkFeedback(pCtx: &mut sWelsEncCtx) {
+pub fn HandleLTRMarkFeedback(pCtx: &mut sWelsEncCtx) {
     // T9.H: the `pCtx.is_null()` disjunct is gone — a `&mut sWelsEncCtx`
     // cannot be null and every caller now holds one. The rest is unchanged.
     if pCtx.param_opt().is_none() {
         return;
     }
     let uiDid = pCtx.uiDependencyId as usize;
-    // T9.H3: raw roots first, the reference-shaped borrows last — see
-    // `DeleteInvalidLTR`, and A3's combined accessor for why they are one call.
-    let pParamInternal = std::ptr::addr_of_mut!((*ctx_param_raw(pCtx)).sDependencyLayers[uiDid]);
-    // §4.6, combined accessor: the VAA stamp below sits inside the reference-list
-    // loop, so both come from one borrow.
-    let (mut pVaa, pRefList, pLtr) = pCtx.vaa_ref_list_and_ltr_mut(uiDid);
-    let Some(pRefList) = pRefList else {
+    // S10.5a: one borrow for all four — the parameter slot, the VAA the loop
+    // stamps, the list and the LTR state. See `DeleteInvalidLTR` for why T9.H3's
+    // ordering rule went with the raw root it protected.
+    let ltr_family = pCtx.ltr_family_mut(uiDid);
+    let pParamInternal = ltr_family.param_layer;
+    let mut pVaa = ltr_family.vaa;
+    let pLtr = ltr_family.ltr;
+    let Some(pRefList) = ltr_family.ref_list else {
         return;
     };
 
@@ -546,36 +548,38 @@ pub unsafe fn HandleLTRMarkFeedback(pCtx: &mut sWelsEncCtx) {
 }
 
 /// Executes promotion and movement of frames from short-term to long-term lists.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn LTRMarkProcess(pCtx: &mut sWelsEncCtx) {
+pub fn LTRMarkProcess(pCtx: &mut sWelsEncCtx) {
     // T9.H: the `pCtx.is_null()` disjunct is gone — a `&mut sWelsEncCtx`
     // cannot be null and every caller now holds one. The rest is unchanged.
-    if pCtx.param_opt().is_none() || ctx_sps(pCtx).is_null() {
+    if pCtx.param_opt().is_none() {
         return;
     }
+    let Some(sps) = ctx_sps_ref(pCtx) else {
+        return;
+    };
     let uiDid = pCtx.uiDependencyId as usize;
-    // T9.H3: every root and scalar first, the reference-shaped borrows last —
-    // see `DeleteInvalidLTR` for why T9.G4's order inverted, and A3's combined
-    // accessor for why the list and the LTR state are one call.
+    // S10.5a: the scalars are still read out first, because they are *reads* of
+    // fields this body does not otherwise borrow — that part of T9.H3 was never
+    // about raw roots. What is gone is the ordering rule protecting a raw cursor
+    // across a reborrow; `ltr_family_mut` projects all five fields at once.
     let gopSize = pCtx.param().uiGopSize;
     let iGoPFrameNumInterval = if (gopSize >> 1) > 1 {
         (gopSize >> 1) as i32
     } else {
         1
     };
-    let iMaxFrameNumPlus1 = 1 << (*ctx_sps(pCtx)).uiLog2MaxFrameNum;
+    let iMaxFrameNumPlus1 = 1 << sps.uiLog2MaxFrameNum;
     let mut i = 0usize;
     let mut bMoveLtrFromShortToLong = false;
-    let pParamInternal = std::ptr::addr_of_mut!((*ctx_param_raw(pCtx)).sDependencyLayers[uiDid]);
     let keSliceType = pCtx.eSliceType;
     let iLTRRefNum = pCtx.param().iLTRRefNum;
     let uiTemporalId = pCtx.uiTemporalId as usize;
-    let bRefOfCurTidIsLtr = std::ptr::addr_of_mut!(pCtx.bRefOfCurTidIsLtr);
-    // §4.6, combined accessor: `LTRMarkProcess` stamps the VAA from inside the
-    // reference-list walk, so both come from one borrow.
-    let (mut pVaa, pRefList, pLtr) = pCtx.vaa_ref_list_and_ltr_mut(uiDid);
-    let Some(pRefList) = pRefList else {
+    let ltr_family = pCtx.ltr_family_mut(uiDid);
+    let pParamInternal = ltr_family.param_layer;
+    let mut pVaa = ltr_family.vaa;
+    let pLtr = ltr_family.ltr;
+    let bRefOfCurTidIsLtr = ltr_family.ref_of_cur_tid_is_ltr;
+    let Some(pRefList) = ltr_family.ref_list else {
         return;
     };
 
@@ -906,24 +910,27 @@ pub unsafe fn WelsUpdateRefList(pCtx: &mut sWelsEncCtx) -> bool {
 }
 
 /// Checks whether candidate frame number is already occupied in LTR list.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn CheckCurMarkFrameNumUsed(pCtx: &mut sWelsEncCtx) -> bool {
+pub fn CheckCurMarkFrameNumUsed(pCtx: &mut sWelsEncCtx) -> bool {
     // T9.H: the `pCtx.is_null()` disjunct is gone — a `&mut sWelsEncCtx`
     // cannot be null and every caller now holds one. The rest is unchanged.
-    if pCtx.param_opt().is_none() || ctx_sps(pCtx).is_null() {
+    if pCtx.param_opt().is_none() {
         return false;
     }
+    let Some(sps) = ctx_sps_ref(pCtx) else {
+        return false;
+    };
     let uiDid = pCtx.uiDependencyId as usize;
-    // T9.H3: raw roots first, the reference-shaped borrows last — see
-    // `DeleteInvalidLTR`.
+    // S10.5a: the scalars still come out before the list's `&mut`, because they
+    // are reads of fields this body also borrows later — that half of T9.H3 was
+    // never about raw roots, and it stays. The raw SPS deref it also covered is
+    // gone: `ctx_sps_ref` is the shared twin, and this body reads one field.
     let gopSize = pCtx.param().uiGopSize;
     let iGoPFrameNumInterval = if (gopSize >> 1) > 1 {
         (gopSize >> 1) as i32
     } else {
         1
     };
-    let iMaxFrameNumPlus1 = 1 << (*ctx_sps(pCtx)).uiLog2MaxFrameNum;
+    let iMaxFrameNumPlus1 = 1 << sps.uiLog2MaxFrameNum;
     // A7, §4.6 reorder: the only field read out of the layer's parameter block is
     // `iFrameNum`, a scalar, so the borrow does not have to span the list's `&mut`.
     let kiParamFrameNum = pCtx.param().sDependencyLayers[uiDid].iFrameNum;
@@ -1459,32 +1466,26 @@ pub fn UpdateOriginalPicInfo(pOrigPic: &mut SPicture, pReconPic: &SPicture) {
 
 /// `UpdateOriginalPicInfo` over the context's current pair, resolving each handle in
 /// its own pool. A no-op if either is unset, as the C++'s null tests are.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-unsafe fn UpdateOriginalPicInfoFromCtx(pCtx: &mut sWelsEncCtx) {
+fn UpdateOriginalPicInfoFromCtx(pCtx: &mut sWelsEncCtx) {
     let (Some(idEnc), Some(idDec)) = (pCtx.pEncPic, pCtx.pDecPic) else {
         return;
     };
-    if pCtx.pVpp.is_none() {
-        return;
-    }
-    // Two owners — the reference list and the taken preprocess box — so both
-    // references are live at once without either borrow overlapping the other
-    // (S3.B1: the take is what says so to borrowck; the old raw parents said it
-    // only to Miri). The take comes first: it needs the `&mut`, and the list
-    // borrow that follows is shared.
-    let pVpp = crate::encoder::encoder_context::ctx_vpp_raw(pCtx);
-    let Some(pRefList) = pCtx.ref_list(pCtx.uiDependencyId as usize) else {
+    // S10.5a: two owners, said to the compiler instead of to Miri. The comment
+    // that stood here described taking the preprocess box out through
+    // `ctx_vpp_raw` so borrowck would grant the list borrow beside it; that is a
+    // slot read standing in for a disjointness `vpp_and_ref_list_mut` states
+    // directly, `pVpp` and `ppRefPicListExt` being two fields of one struct.
+    let uiDid = pCtx.uiDependencyId as usize;
+    let (pVpp, pRefList) = pCtx.vpp_and_ref_list_mut(uiDid);
+    let (Some(pVpp), Some(pRefList)) = (pVpp, pRefList) else {
         return;
     };
-    let pRecon: &SPicture = (*pRefList).pic(idDec);
+    let pRecon: &SPicture = pRefList.pic(idDec);
     let pOrig: &mut SPicture = pVpp.m_pSpatialPicPool.get_mut(idEnc);
     UpdateOriginalPicInfo(pOrig, pRecon);
 }
 
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn UpdateSrcPicListLosslessScreenRefSelectionWithLtr(pCtx: &mut sWelsEncCtx) {
+pub fn UpdateSrcPicListLosslessScreenRefSelectionWithLtr(pCtx: &mut sWelsEncCtx) {
     // T9.H: `if pCtx.is_null() { ... }` stood here. A `&mut sWelsEncCtx`
     // cannot be null and every caller now holds one, so the guard is not
     // merely dead — it is inexpressible. Nothing replaces it.
@@ -1492,15 +1493,15 @@ pub unsafe fn UpdateSrcPicListLosslessScreenRefSelectionWithLtr(pCtx: &mut sWels
     UpdateOriginalPicInfoFromCtx(pCtx);
     PrefetchNextBuffer(pCtx);
     if pCtx.pVpp.is_some() && pCtx.vaa().is_some() {
-        // §4.6, reorder: the scalars come out first, then the vpp is *taken*
-        // (S3.B1) so the shared borrow of the list and the `&mut` receiver are
-        // borrows of two different owners.
+        // S10.5a: the scalars still come out first — they are reads of fields the
+        // combined borrow below also claims. What is gone is the "take the vpp
+        // through the slot so borrowck grants both" step: `vpp_and_ref_list_mut`
+        // projects the two fields from one borrow and says the same thing safely.
         let idEnc = pCtx.pEncPic;
         let uiMarkLongTermPicIdx = pCtx.vaa().expect("the frame's video-analysis block").uiMarkLongTermPicIdx as i32;
-        let pVpp = crate::encoder::encoder_context::ctx_vpp_raw(pCtx);
-        let pRefList = pCtx
-            .ref_list(iDIdx as usize)
-            .expect("the dependency layer's reference list");
+        let (pVpp, pRefList) = pCtx.vpp_and_ref_list_mut(iDIdx as usize);
+        let pVpp = pVpp.expect("the preprocess object");
+        let pRefList = pRefList.expect("the dependency layer's reference list");
         // wels_preprocess.h:143 takes const int32_t; the uint8_t field promotes.
         pVpp.UpdateSrcListLosslessScreenRefSelectionWithLtr(
             idEnc,
@@ -1511,9 +1512,7 @@ pub unsafe fn UpdateSrcPicListLosslessScreenRefSelectionWithLtr(pCtx: &mut sWels
     }
 }
 
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn UpdateSrcPicList(pCtx: &mut sWelsEncCtx) {
+pub fn UpdateSrcPicList(pCtx: &mut sWelsEncCtx) {
     // T9.H: `if pCtx.is_null() { ... }` stood here. A `&mut sWelsEncCtx`
     // cannot be null and every caller now holds one, so the guard is not
     // merely dead — it is inexpressible. Nothing replaces it.
@@ -1521,12 +1520,15 @@ pub unsafe fn UpdateSrcPicList(pCtx: &mut sWelsEncCtx) {
     UpdateOriginalPicInfoFromCtx(pCtx);
     PrefetchNextBuffer(pCtx);
     if pCtx.pVpp.is_some() {
-        let pRefList = pCtx.ref_list((iDIdx as usize) as usize).expect("the dependency layer's reference list");
-        let shortCount = (*pRefList).uiShortRefCount;
-        // S3.B1: reached through the slot read (`ctx_vpp_raw`) so the `&mut`
-        // receiver and the shared list borrow above are siblings off two
-        // allocations, minting nothing that could pop `SDqLayer::pSrcPool`.
-        crate::encoder::encoder_context::ctx_vpp_raw(pCtx).UpdateSrcList(pCtx.pEncPic, iDIdx, shortCount as u32);
+        let idEnc = pCtx.pEncPic;
+        // S10.5a: `ctx_vpp_raw` was here so the `&mut` receiver and the shared
+        // list borrow would be "siblings off two allocations". They are two
+        // *fields*, which is a stronger statement and one the compiler can check.
+        let (pVpp, pRefList) = pCtx.vpp_and_ref_list_mut(iDIdx as usize);
+        let shortCount = pRefList
+            .expect("the dependency layer's reference list")
+            .uiShortRefCount;
+        pVpp.expect("the preprocess object").UpdateSrcList(idEnc, iDIdx, shortCount as u32);
     }
 }
 
@@ -2013,12 +2015,13 @@ impl RefStrategyKind {
     /// `EndofUpdateRefList` — `ref_list_mgr_svc.cpp:1041` / `:1057` / `:1073`. The one
     /// method where all three variants differ.
     ///
-    /// # Safety
-    /// `pCtx` must be a live encoder context.
+    /// **S10.5a: the `# Safety` clause is gone with the `unsafe`.** All three arms
+    /// went safe in this checkpoint, so the obligation this stated — "`pCtx` must be
+    /// a live encoder context" — is now the `&mut sWelsEncCtx`'s, which is where it
+    /// always belonged. The cascade is what found this: the declaration carried no
+    /// raw pointer and its body's last unsafe call went with `UpdateSrcPicList`.
     #[inline]
-    // unsafe-cat: port-raw(Phase 9)
-    #[allow(unsafe_code)]
-    pub unsafe fn EndofUpdateRefList(self, pCtx: &mut sWelsEncCtx) {
+    pub fn EndofUpdateRefList(self, pCtx: &mut sWelsEncCtx) {
         match self {
             RefStrategyKind::TemporalLayer => PrefetchNextBuffer(pCtx),
             RefStrategyKind::Screen => UpdateSrcPicList(pCtx),
