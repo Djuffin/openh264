@@ -7347,6 +7347,47 @@ the declarations whose signature is already clean.
 
 ## F249 — the pixel family is blocked on plane *roots*, which are storage and not parameters; steps 3, 4a and 5 are not executable in the brief's order
 
+> **AMENDED the same day, and the amendment retracts half of this finding.** The
+> ordering claim below stands: steps 3, 4a and 5 cannot convert parameters before
+> the roots have views. The *diagnosis* did not — this finding called the roots "a
+> storage-ownership question of the same kind F241 answered" and said it "needs the
+> user's ruling". **Ownership was never the question, and the tree already said so
+> in four places:**
+>
+> * `SPicture` **owns** its pixels — `[PaddedPlane; 3]`, owned since **T6.F2**.
+>   `encoder/picture.rs:513`'s `pData: [*mut u8; 3]`, which this finding cited as a
+>   root, is a *view* struct: its own doc says "copied out of it".
+> * Picture **identity** already exists and is already used at the stamping site —
+>   `pEncPic: Option<SrcPicId>`, `pDecPic: Option<RecPicId>`.
+> * The **view-and-cursor pattern is in production**: `RecPicView` is a field on
+>   `SDqLayer` (`pRecView`), resolved by `layer_rec_view()` at 28 sites, handing out
+>   safe `RecCursor`s at 64. `PlaneCursor { buf, center, stride }` is the brief's
+>   "biased-cursor form", already written.
+> * **The hard half is done.** `RecPicView` solves the *concurrent write* seam —
+>   workers writing one picture where no `&mut` can express the disjointness
+>   (D-mt-3 option A). What remains is the **read-only** half, which is strictly
+>   easier: `pEncData` is never written through (the `md.rs` hits are a local cursor
+>   walk), and `SVAAFrameInfo`'s six planes are stamped from the same
+>   `SPicture::planes()`. Both reuse `SharedPlane`/`SharedCells<u8>`, whose `Sync`
+>   is **already one of the two audited `unsafe impl` lines** the end state budgets
+>   for — so this adds no new one, no lifetime parameter, and no layout change
+>   (`SDqLayer` lives in `Vec<Option<Box<SDqLayer>>>`, outside the pinned image).
+>
+> So the plan was missing a **checkpoint**, not a ruling. The lesson is the one this
+> session kept relearning from the other side: this finding inferred a blocker's
+> *kind* from the shape of the obstruction, having measured only that the roots were
+> raw. Measuring what sat behind them — one `grep` for `struct SPicture` — would have
+> found the storage already owned and the pattern already built. **F248's rule
+> applies to blockers as well as to cascades: the residue is what must be measured,
+> not the thing in front of it.**
+>
+> **RULED (user, 2026-08-30): one checkpoint, both views together.** An
+> `EncPicView` for the layer's source planes and a VAA view for
+> `SVAAFrameInfo`, built on `RecPicView`'s template in a single gated
+> checkpoint (~99 sites: `mb_cursor` 18, `pEncData` 35, `pCsData` 10,
+> VAA planes 36), then steps 3/4a/4b/5 run behind it. It gates the largest
+> block left — **132 allows, 32% of the remaining 416, across 15 files**.
+
 S8's steps 3, 4a and 5 convert pixel and coefficient *parameters* onto slices and
 cursors. None of the three can start, and the reason is the same for all of them and
 sits outside every file they name.
