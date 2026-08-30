@@ -1565,7 +1565,7 @@ pub unsafe fn WelsInitEncoderExt(
         return 1;
     }
 
-    let mut iRet = crate::encoder::wels_encoder_ext::ParamValidationExt(pLogCtx, pCodingParam);
+    let mut iRet = crate::encoder::wels_encoder_ext::ParamValidationExt(pLogCtx, &mut *pCodingParam);
     if iRet != 0 {
         return iRet;
     }

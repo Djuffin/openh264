@@ -84,6 +84,9 @@ pub use crate::encoder::svc_encode_slice::SSliceHeader;
 use crate::encoder::svc_encode_slice::layer_pps;
 use crate::encoder::svc_encode_slice::ctx_pps;
 use crate::encoder::svc_encode_slice::current_layer;
+use crate::encoder::svc_encode_slice::current_layer_ref;
+use crate::encoder::svc_encode_slice::layer_pps_ref;
+use crate::encoder::svc_encode_slice::ctx_pps_ref;
 pub use crate::encoder::svc_encode_slice::SSliceHeaderExt;
 pub use crate::encoder::encoder_context::SSpatialPicIndex;
 pub use crate::encoder::wels_preprocess::SAdaptiveQuantizationParam;
@@ -1205,9 +1208,7 @@ pub fn RcUpdateTemporalZero(pEncCtx: &mut sWelsEncCtx) {
 }
 
 /// Calculates the quantization parameter for IDR keyframes.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn RcCalculateIdrQp(pEncCtx: &mut sWelsEncCtx) {
+pub fn RcCalculateIdrQp(pEncCtx: &mut sWelsEncCtx) {
     let dBpp: f64;
     let dBppArray: [[f64; 4]; 4] = [
         [0.25, 0.5, 0.75, 1.0],
@@ -1226,8 +1227,7 @@ pub unsafe fn RcCalculateIdrQp(pEncCtx: &mut sWelsEncCtx) {
     let mut iFrameComplexity = pEncCtx.vaa().expect("the frame's video-analysis block").sComplexityAnalysisParam.iFrameComplexity;
     let fix_rc_overshoot = pEncCtx.param().bFixRCOverShoot;
     if pEncCtx.param().iUsageType == EUsageType::SCREEN_CONTENT_REAL_TIME {
-        let pVaa = pEncCtx.vaa_ext();
-        iFrameComplexity = (*pVaa).sComplexityScreenParam.iFrameComplexity;
+        iFrameComplexity = pEncCtx.vaa_ext_screen_frame_complexity();
     }
 
     let did = pEncCtx.uiDependencyId as usize;
@@ -1315,9 +1315,7 @@ pub unsafe fn RcCalculateIdrQp(pEncCtx: &mut sWelsEncCtx) {
 }
 
 /// Calculates the base quantization parameter for Inter P-frames.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn RcCalculatePictureQp(pEncCtx: &mut sWelsEncCtx) {
+pub fn RcCalculatePictureQp(pEncCtx: &mut sWelsEncCtx) {
     let did = pEncCtx.uiDependencyId as usize;
     let iTl = pEncCtx.uiTemporalId as usize;
 
@@ -1325,8 +1323,7 @@ pub unsafe fn RcCalculatePictureQp(pEncCtx: &mut sWelsEncCtx) {
     let mut iDeltaQpTemporal: i32 = 0;
     let mut iFrameComplexity = pEncCtx.vaa().expect("the frame's video-analysis block").sComplexityAnalysisParam.iFrameComplexity;
     if pEncCtx.param().iUsageType == EUsageType::SCREEN_CONTENT_REAL_TIME {
-        let pVaa = pEncCtx.vaa_ext();
-        iFrameComplexity = (*pVaa).sComplexityScreenParam.iFrameComplexity;
+        iFrameComplexity = pEncCtx.vaa_ext_screen_frame_complexity();
     }
     // §4.6, reorder: the adaptive-quant pair is read here rather than inside the
     // branch below. `pVaa` is already dereferenced unconditionally two lines up,
@@ -1433,7 +1430,9 @@ pub unsafe fn RcInitSliceInformation(pEncCtx: &mut sWelsEncCtx) {
     let pCurDq = current_layer(pEncCtx);
     let did = pEncCtx.uiDependencyId as usize;
     // §4.6, reorder: the context reads go above the writer's `&mut`.
-    let kiSliceNum = (*current_layer(pEncCtx)).iMaxSliceNum;
+    let kiSliceNum = current_layer_ref(pEncCtx)
+        .expect("the frame's current layer is stamped")
+        .iMaxSliceNum;
     let rc_mode = pEncCtx.param().iRCMode;
     let pWelsSvcRc = pEncCtx.rc_at_mut(did);
 
@@ -1584,7 +1583,9 @@ pub unsafe fn RcInitGomParameters(pEncCtx: &mut sWelsEncCtx) {
     let pCurDq = current_layer(pEncCtx);
     let did = pEncCtx.uiDependencyId as usize;
     // §4.6, reorder: the context reads go above the writer's `&mut`.
-    let kiSliceNum = (*current_layer(pEncCtx)).iMaxSliceNum;
+    let kiSliceNum = current_layer_ref(pEncCtx)
+        .expect("the frame's current layer is stamped")
+        .iMaxSliceNum;
     let kiGlobalQp = pEncCtx.iGlobalQp;
 
     pEncCtx.rc_at_mut(did).iAverageFrameQp = 0;
@@ -1602,9 +1603,7 @@ pub unsafe fn RcInitGomParameters(pEncCtx: &mut sWelsEncCtx) {
 }
 
 /// Assigns final macroblock luma and chroma QPs.
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
-pub unsafe fn RcCalculateMbQp(
+pub fn RcCalculateMbQp(
     pEncCtx: &sWelsEncCtx,
     pSOverRc: &mut crate::encoder::svc_encode_slice::SRCSlicing,
     pCurMb: &mut SMB,
@@ -1613,8 +1612,10 @@ pub unsafe fn RcCalculateMbQp(
     let pWelsSvcRc = (*pEncCtx).rc_at(did);
 
     let mut iLumaQp = pSOverRc.iCalculatedQpSlice;
-    let pCurLayer = current_layer(pEncCtx);
-    let kuiChromaQpIndexOffset = (*layer_pps(pEncCtx, pCurLayer)).uiChromaQpIndexOffset;
+    let pCurLayer = current_layer_ref(pEncCtx).expect("the frame's current layer is stamped");
+    let kuiChromaQpIndexOffset = layer_pps_ref(pEncCtx, pCurLayer)
+        .expect("the layer's PPS is stamped")
+        .uiChromaQpIndexOffset;
 
     if (*pEncCtx).param().bEnableAdaptiveQuant {
         let pVaa = (*pEncCtx).vaa().expect("the frame's video-analysis block");
@@ -2107,7 +2108,15 @@ pub unsafe fn RcUpdatePictureQpBits(pEncCtx: &mut sWelsEncCtx, iCodedBits: i32) 
     let pCurDq = current_layer(pEncCtx);
     let did = pEncCtx.uiDependencyId as usize;
     // §4.6, reorder: the context reads go above the writer's `&mut`.
-    let pCurSliceCtx = &(*current_layer(pEncCtx)).sSliceEncCtx;
+    // S10.5a': the count is read out as a scalar rather than kept as a borrow.
+    // The raw parent this replaces let a `&` on the layer outlive `rc_at_mut`'s
+    // `&mut` on the context because borrowck could not see it; the one use is a
+    // single atomic load, so there is nothing to hold.
+    let iSliceNumInFrame = current_layer_ref(pEncCtx)
+        .expect("the frame's current layer is stamped")
+        .sSliceEncCtx
+        .iSliceNumInFrame
+        .load(Ordering::Relaxed);
     let eSliceType = pEncCtx.eSliceType;
     let iGlobalQp = pEncCtx.iGlobalQp;
     let tid = pEncCtx.uiTemporalId as usize;
@@ -2116,7 +2125,7 @@ pub unsafe fn RcUpdatePictureQpBits(pEncCtx: &mut sWelsEncCtx, iCodedBits: i32) 
     let mut iTotalMb = 0;
 
     if eSliceType as i32 == P_SLICE {
-        for i in 0..pCurSliceCtx.iSliceNumInFrame.load(Ordering::Relaxed) as usize {
+        for i in 0..iSliceNumInFrame as usize {
             let pSlice = crate::encoder::svc_encode_slice::slice_in_layer(pCurDq.as_ref(), i as i32);
             let pSOverRc = &(*pSlice).sSlicingOverRc;
             iTotalQp += pSOverRc.iTotalQpSlice;
@@ -2144,15 +2153,12 @@ pub unsafe fn RcUpdatePictureQpBits(pEncCtx: &mut sWelsEncCtx, iCodedBits: i32) 
 }
 
 /// Updates the exponential moving average of Intra frame complexity.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn RcUpdateIntraComplexity(pEncCtx: &mut sWelsEncCtx) {
+pub fn RcUpdateIntraComplexity(pEncCtx: &mut sWelsEncCtx) {
     let did = pEncCtx.uiDependencyId as usize;
     // §4.6, reorder: the analysis reads go above the writer's `&mut`.
     let mut iFrameComplexity = pEncCtx.vaa().expect("the frame's video-analysis block").sComplexityAnalysisParam.iFrameComplexity;
     if pEncCtx.param().iUsageType == EUsageType::SCREEN_CONTENT_REAL_TIME {
-        let pVaa = pEncCtx.vaa_ext();
-        iFrameComplexity = (*pVaa).sComplexityScreenParam.iFrameComplexity;
+        iFrameComplexity = pEncCtx.vaa_ext_screen_frame_complexity();
     }
     let pWelsSvcRc = pEncCtx.rc_at_mut(did);
     let iQStep = RcConvertQp2QStep((*pWelsSvcRc).iAverageFrameQp);
@@ -2182,9 +2188,7 @@ pub unsafe fn RcUpdateIntraComplexity(pEncCtx: &mut sWelsEncCtx) {
 }
 
 /// Updates the exponential moving average of Inter P-frame linear complexity.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn RcUpdateFrameComplexity(pEncCtx: &mut sWelsEncCtx) {
+pub fn RcUpdateFrameComplexity(pEncCtx: &mut sWelsEncCtx) {
     let did = pEncCtx.uiDependencyId as usize;
     let kiTl = pEncCtx.uiTemporalId as usize;
     // §4.6, reorder: the analysis reads go above the writer's `&mut`. This body
@@ -2194,8 +2198,7 @@ pub unsafe fn RcUpdateFrameComplexity(pEncCtx: &mut sWelsEncCtx) {
     // struct's own fields cannot both be live once they are references.
     let mut iFrameComplexity = pEncCtx.vaa().expect("the frame's video-analysis block").sComplexityAnalysisParam.iFrameComplexity;
     if pEncCtx.param().iUsageType == EUsageType::SCREEN_CONTENT_REAL_TIME {
-        let pVaa = pEncCtx.vaa_ext();
-        iFrameComplexity = (*pVaa).sComplexityScreenParam.iFrameComplexity;
+        iFrameComplexity = pEncCtx.vaa_ext_screen_frame_complexity();
     }
 
     let pWelsSvcRc = pEncCtx.rc_at_mut(did);
@@ -2251,7 +2254,9 @@ pub fn RcCalculateCascadingQp(pEncCtx: &mut sWelsEncCtx, iQp: i32) -> i32 {
 #[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsRcPictureInitGom(pEncCtx: &mut sWelsEncCtx, uiTimeStamp: i64) {
     let did = pEncCtx.uiDependencyId as usize;
-    let kiSliceNum = (*current_layer(pEncCtx)).iMaxSliceNum;
+    let kiSliceNum = current_layer_ref(pEncCtx)
+        .expect("the frame's current layer is stamped")
+        .iMaxSliceNum;
     let eSliceType = pEncCtx.eSliceType;
     // §4.6: this body is an orchestrator — every branch re-enters the rate
     // controller through the context — so it holds no borrow at all and
@@ -2397,8 +2402,10 @@ pub unsafe extern "C" fn WelsRcMbInitGom(
     let did = (*pEncCtx).uiDependencyId as usize;
     let pWelsSvcRc = (*pEncCtx).rc_at(did);
     let pSOverRc = &mut (*pSlice).sSlicingOverRc;
-    let pCurLayer = current_layer(pEncCtx);
-    let kuiChromaQpIndexOffset = (*layer_pps(pEncCtx, pCurLayer)).uiChromaQpIndexOffset;
+    let pCurLayer = current_layer_ref(pEncCtx).expect("the frame's current layer is stamped");
+    let kuiChromaQpIndexOffset = layer_pps_ref(pEncCtx, pCurLayer)
+        .expect("the layer's PPS is stamped")
+        .uiChromaQpIndexOffset;
 
     pSOverRc.iBsPosSlice = (*pEncCtx).func_list().eEntropyCoder.GetBsPosition(&*crate::encoder::svc_encode_slice::slice_writer(pEncCtx, std::ptr::addr_of_mut!((*pSlice).sSliceBs)), &(*pSlice).sCabacCtx);
 
@@ -2499,9 +2506,7 @@ pub extern "C" fn WelsRcPictureInitDisable(pEncCtx: &mut sWelsEncCtx, _uiTimeSta
 /// Matches `WelsRcPictureInfoUpdateDisable` in `ratectl.cpp:1298`.
 pub extern "C" fn WelsRcPictureInfoUpdateDisable(_pEncCtx: &mut sWelsEncCtx, _iLayerSize: i32) {}
 
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
-pub unsafe extern "C" fn WelsRcMbInitDisable(
+pub extern "C" fn WelsRcMbInitDisable(
     pEncCtx: &sWelsEncCtx,
     pCurMb: &mut SMB,
     _pSlice: &mut SSlice,
@@ -2509,8 +2514,10 @@ pub unsafe extern "C" fn WelsRcMbInitDisable(
     let mut iLumaQp = (*pEncCtx).iGlobalQp;
     let did = (*pEncCtx).uiDependencyId as usize;
     let pWelsSvcRc = (*pEncCtx).rc_at(did);
-    let pCurLayer = current_layer(pEncCtx);
-    let kuiChromaQpIndexOffset = (*layer_pps(pEncCtx, pCurLayer)).uiChromaQpIndexOffset;
+    let pCurLayer = current_layer_ref(pEncCtx).expect("the frame's current layer is stamped");
+    let kuiChromaQpIndexOffset = layer_pps_ref(pEncCtx, pCurLayer)
+        .expect("the layer's PPS is stamped")
+        .uiChromaQpIndexOffset;
 
     if (*pEncCtx).param().bEnableAdaptiveQuant && (*pEncCtx).eSliceType as i32 == P_SLICE {
         let pVaa = (*pEncCtx).vaa().expect("the frame's video-analysis block");
@@ -2577,18 +2584,15 @@ pub extern "C" fn WelRcPictureInitBufferBasedQp(
     (*pWelsSvcRc).iMinFrameQp = iGlobalQp;
 }
 
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe extern "C" fn WelRcPictureInitScc(pEncCtx: &mut sWelsEncCtx, uiTimeStamp: i64) {
+pub extern "C" fn WelRcPictureInitScc(pEncCtx: &mut sWelsEncCtx, uiTimeStamp: i64) {
     let did = pEncCtx.uiDependencyId as usize;
     let eSliceType = pEncCtx.eSliceType;
-    let pVaa = pEncCtx.vaa_ext();
     // A7, §4.6 reorder: both fields are scalars and the body writes `iGlobalQp` on
     // the context between their uses.
     let iBitRate = pEncCtx.param().sSpatialLayers[did].iSpatialBitrate;
     let fOutputFrameRate = pEncCtx.param().sDependencyLayers[did].fOutputFrameRate;
 
-    let iFrameCplx = (*pVaa).sComplexityScreenParam.iFrameComplexity;
+    let iFrameCplx = pEncCtx.vaa_ext_screen_frame_complexity();
 
     // §4.6: the body reads seven of the layer's scalars and writes `iGlobalQp` on
     // the context between them, so the reads are copied out once and the three
@@ -2674,18 +2678,19 @@ pub unsafe extern "C" fn WelRcPictureInitScc(pEncCtx: &mut sWelsEncCtx, uiTimeSt
     rc.uiLastTimeStamp = uiTimeStamp;
 }
 
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe extern "C" fn WelsRcPictureInfoUpdateScc(pEncCtx: &mut sWelsEncCtx, iNalSize: i32) {
+pub extern "C" fn WelsRcPictureInfoUpdateScc(pEncCtx: &mut sWelsEncCtx, iNalSize: i32) {
     let did = pEncCtx.uiDependencyId as usize;
     let iFrameBits = iNalSize << 3;
     // §4.6, reorder: the context reads go above the writer's `&mut`.
-    let pVaa = pEncCtx.vaa_ext();
     let iQstep = RcConvertQp2QStep(pEncCtx.iGlobalQp);
     let eSliceType = pEncCtx.eSliceType;
+    // S10.5a': the complexity read joins the other context reads above the
+    // writer's `&mut`, which is what this body's §4.6 comment already asks for —
+    // it was below only because it used to go through a raw the borrow checker
+    // could not see.
+    let screen_cmplx = pEncCtx.vaa_ext_screen_frame_complexity();
     let pWelsSvcRc = pEncCtx.rc_at_mut(did);
     (*pWelsSvcRc).iBufferFullnessSkip += iFrameBits as i64;
-    let screen_cmplx = (*pVaa).sComplexityScreenParam.iFrameComplexity;
     let iCost2Bits = if screen_cmplx != 0 {
         WELS_DIV_ROUND64(iFrameBits as i64 * iQstep as i64, screen_cmplx)
     } else {
@@ -2705,15 +2710,15 @@ pub unsafe extern "C" fn WelsRcPictureInfoUpdateScc(pEncCtx: &mut sWelsEncCtx, i
     }
 }
 
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe extern "C" fn WelsRcMbInitScc(
+pub extern "C" fn WelsRcMbInitScc(
     pEncCtx: &mut sWelsEncCtx,
     pCurMb: &mut SMB,
     _pSlice: &mut SSlice,
 ) {
     (*pCurMb).uiLumaQp = pEncCtx.iGlobalQp as u8;
-    let offset = (*ctx_pps(pEncCtx)).uiChromaQpIndexOffset as i32;
+    let offset = ctx_pps_ref(pEncCtx)
+        .expect("the context's PPS is stamped")
+        .uiChromaQpIndexOffset as i32;
     (*pCurMb).uiChromaQp = g_kuiChromaQpTable[CLIP3_QP_0_51((*pCurMb).uiLumaQp as i32 + offset)];
 }
 
