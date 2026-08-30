@@ -328,91 +328,21 @@ fn WelsClip1(val: i32) -> u8 {
     }
 }
 
-/// 4x4 recon IDCT: `dct` inverse-transformed, added to `pPred`'s block,
-/// saturated into `pRec`'s block.
-///
-/// # Safety
-/// * `pRec` points at sample `(0, 0)` of a 4x4 block; bytes
-///   `[0, 3*iStride + 4)` from it must be readable and writable.
-/// * `pPred` points at sample `(0, 0)` of a 4x4 block; bytes
-///   `[0, 3*iPredStride + 4)` from it must be readable. Only read.
-/// * Both reach forward only; strides `>= 4` and positive; the spans are either
-///   disjoint (the intra callers pair a recon plane or scratch with a separate
-///   prediction scratch) or **identical** — `pRec == pPred`, same stride — which is
-///   the inter reconstruction (`OutputPMbWithoutConstructCsRsNoCopy` passes
-///   `pDecY` as both, as the C++ does), and takes the in-place kernel. This
-///   contract used to claim "disjoint" at every caller and named that very
-///   caller as one; the encoder aliasing probe read the two overlapping
-///   references as UB the first time it reached a P frame (**F59**, Phase 6
-///   session B). No other overlap is legal.
-/// * `pDct` points at 16 readable, `i16`-aligned `i16`, disjoint from both.
-/// * Any argument may be null, in which case nothing happens (the C++'s own
-///   guard, kept).
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe extern "C" fn WelsIDctT4Rec_c(
-    pRec: *mut u8,
-    iStride: i32,
-    pPred: *mut u8,
-    iPredStride: i32,
-    pDct: *mut i16,
-) {
-    // SHIM(phase2) -> crate::encoder::decode_mb_aux::idct_t4_rec
-    if pRec.is_null() || pPred.is_null() || pDct.is_null() {
-        return;
-    }
-    let (rs, ps) = (iStride as usize, iPredStride as usize);
-    let dct: &[i16; 16] = std::slice::from_raw_parts(pDct, 16).try_into().unwrap();
-    if pRec == pPred && rs == ps {
-        // F59: the inter reconstruction is in place — one cursor, no aliasing pair.
-        let rec = std::slice::from_raw_parts_mut(pRec, 3 * rs + 4);
-        crate::encoder::decode_mb_aux::idct_t4_rec_in_place(&mut PlaneCursorMut::new(rec, 0, rs), dct);
-        return;
-    }
-    let rec = std::slice::from_raw_parts_mut(pRec, 3 * rs + 4);
-    let pred = std::slice::from_raw_parts(pPred, 3 * ps + 4);
-    crate::encoder::decode_mb_aux::idct_t4_rec(
-        &mut PlaneCursorMut::new(rec, 0, rs),
-        &PlaneCursor::new(pred, 0, ps),
-        dct,
-    );
-}
+// **S9.1: `WelsIDctT4Rec_c` deleted.** It was a shim over the safe kernel below it,
+// kept only because the differential tests drove it by name — its dispatch slot
+// was deleted in S18 (F138/F139: installed, asserted, never called), and the
+// production reconstruction has gone through the seam's kernels since T9.C2. The
+// probe now drives the safe kernel directly and keeps the two assertions that
+// were ever about more than the shim: sources unmoved, and no write beyond each
+// row's block.
 
-/// [`WelsIDctT4Rec_c`] over the four 4x4 blocks of one 8x8 quadrant.
-///
-/// # Safety
-/// As [`WelsIDctT4Rec_c`] with 8x8 spans: `[0, 7*iStride + 8)` writable from
-/// `pRec`, `[0, 7*iPredStride + 8)` readable from `pPred`, 64 `i16` from
-/// `pDct`; strides `>= 8`; nulls tolerated.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe extern "C" fn WelsIDctFourT4Rec_c(
-    pRec: *mut u8,
-    iStride: i32,
-    pPred: *mut u8,
-    iPredStride: i32,
-    pDct: *mut i16,
-) {
-    // SHIM(phase2) -> crate::encoder::decode_mb_aux::idct_four_t4_rec
-    if pRec.is_null() || pPred.is_null() || pDct.is_null() {
-        return;
-    }
-    let (rs, ps) = (iStride as usize, iPredStride as usize);
-    let dct: &[i16; 64] = std::slice::from_raw_parts(pDct, 64).try_into().unwrap();
-    if pRec == pPred && rs == ps {
-        // F59: the inter reconstruction is in place — one cursor, no aliasing pair.
-        let rec = std::slice::from_raw_parts_mut(pRec, 7 * rs + 8);
-        crate::encoder::decode_mb_aux::idct_four_t4_rec_in_place(&mut PlaneCursorMut::new(rec, 0, rs), dct);
-        return;
-    }
-    let rec = std::slice::from_raw_parts_mut(pRec, 7 * rs + 8);
-    let pred = std::slice::from_raw_parts(pPred, 7 * ps + 8);
-    crate::encoder::decode_mb_aux::idct_four_t4_rec(
-        &mut PlaneCursorMut::new(rec, 0, rs),
-        &PlaneCursor::new(pred, 0, ps),
-        dct,
-    );
-}
+// **S9.1: `WelsIDctFourT4Rec_c` deleted.** It was a shim over the safe kernel below it,
+// kept only because the differential tests drove it by name — its dispatch slot
+// was deleted in S18 (F138/F139: installed, asserted, never called), and the
+// production reconstruction has gone through the seam's kernels since T9.C2. The
+// probe now drives the safe kernel directly and keeps the two assertions that
+// were ever about more than the shim: sources unmoved, and no write beyond each
+// row's block.
 
 
 

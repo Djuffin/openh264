@@ -17,8 +17,7 @@
 use crate::encoder::wels_func_ptr_def::SWelsFuncPtrList;
 
 pub use crate::encoder::svc_encode_mb::{
-    WelsDequantIHadamard2x2Dc, WelsDequantLumaDc4x4, WelsIDctFourT4Rec_c, WelsIDctT4Rec_c,
-    WelsIHadamard4x4Dc,
+    WelsDequantIHadamard2x2Dc, WelsDequantLumaDc4x4, WelsIHadamard4x4Dc,
 };
 
 #[inline(always)]
@@ -412,38 +411,13 @@ pub fn dequant_ihadamard_2x2_dc(dct: &mut [i16; 4], mf: u16) {
 
 
 
-/// `decode_mb_aux.cpp:223`. Luma IDCT of an I16x16 macroblock when only the DC
-/// coefficients are non-zero.
-///
-/// # Safety
-/// * `pRec` points at sample `(0, 0)` of a 16x16 block; bytes
-///   `[0, 15*iStride + 16)` from it must be readable and writable.
-/// * `pPred` points at sample `(0, 0)` of a 16x16 block; bytes
-///   `[0, 15*iPredStride + 16)` from it must be readable. Only read.
-/// * Both reach forward only; strides `>= 16` and positive; the two spans
-///   are disjoint (the callers hand a recon-plane cursor and a prediction
-///   scratch, `svc_encode_mb.rs:640-651`).
-/// * `pDctDc` points at 16 readable, `i16`-aligned `i16`, disjoint from both.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe extern "C" fn WelsIDctRecI16x16Dc_c(
-    pRec: *mut u8,
-    iStride: i32,
-    pPred: *mut u8,
-    iPredStride: i32,
-    pDctDc: *mut i16,
-) {
-    // SHIM(phase2) -> idct_rec_i16x16_dc
-    let (rs, ps) = (iStride as usize, iPredStride as usize);
-    let rec = unsafe { std::slice::from_raw_parts_mut(pRec, 15 * rs + 16) };
-    let pred = unsafe { std::slice::from_raw_parts(pPred, 15 * ps + 16) };
-    let dc: &[i16; 16] = unsafe { std::slice::from_raw_parts(pDctDc, 16) }.try_into().unwrap();
-    idct_rec_i16x16_dc(
-        &mut PlaneCursorMut::new(rec, 0, rs),
-        &PlaneCursor::new(pred, 0, ps),
-        dc,
-    );
-}
+// **S9.1: `WelsIDctRecI16x16Dc_c` deleted.** It was a shim over the safe kernel below it,
+// kept only because the differential tests drove it by name — its dispatch slot
+// was deleted in S18 (F138/F139: installed, asserted, never called), and the
+// production reconstruction has gone through the seam's kernels since T9.C2. The
+// probe now drives the safe kernel directly and keeps the two assertions that
+// were ever about more than the shim: sources unmoved, and no write beyond each
+// row's block.
 
 // **`WelsIDctT4RecOnMb` stood here — deleted in T9.C2g.**
 //
@@ -695,8 +669,6 @@ mod tests {
     /// `WelsIDctRecI16x16Dc_c` adds a rounded DC per 4x4 block: block (i>>2, j>>2)
     /// takes `pDctDc[(i & 0x0C) + (j >> 2)]`.
     #[test]
-    // unsafe-cat: instrument(test)
-    #[allow(unsafe_code)]
     fn idct_reci16x16dc_adds_per_block_dc() {
         let stride = 32usize;
         let mut rec = vec![0u8; stride * 20];
@@ -705,15 +677,14 @@ mod tests {
         let mut dc = [0i16; 16];
         dc[5] = 64;
 
-        unsafe {
-            WelsIDctRecI16x16Dc_c(
-                rec.as_mut_ptr(),
-                stride as i32,
-                pred.as_ptr() as *mut u8,
-                stride as i32,
-                dc.as_mut_ptr(),
-            );
-        }
+        // S9.1: the `_c` shim is gone and this drives the kernel directly, so the
+        // test's own `instrument(test)` allow retires with the raw call it existed
+        // for — the assertions below are unchanged.
+        idct_rec_i16x16_dc(
+            &mut PlaneCursorMut::new(&mut rec, 0, stride),
+            &PlaneCursor::new(&pred, 0, stride),
+            &dc,
+        );
         for i in 0..16usize {
             for j in 0..16usize {
                 let idx = ((i as i32 & 0x0C) + (j as i32 >> 2)) as usize;

@@ -859,42 +859,42 @@ pub fn WelsCopy16x16_c(
 // ============================================================================
 
 /// Initializes the encoder function pointer table dynamically based on CPU feature flags.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
 pub extern "C" fn WelsInitEncodingFuncs(pFuncList: &mut SWelsFuncPtrList, uiCpuFlag: u32) {
 
-    unsafe {
-        let f = &mut *pFuncList;
+    // **S9.1**: the `unsafe` block that wrapped this whole body is gone. It was
+    // vestigial — `pFuncList` has been `&mut SWelsFuncPtrList` since the table flip,
+    // so `&mut *pFuncList` is a plain reborrow and nothing else in the body was ever
+    // unsafe. The allow and its tag retire with it.
+    let f = &mut *pFuncList;
 
-        // Baseline C fallback functions
-        f.pfCopy8x8Aligned = Some(WelsCopy8x8_c);
-        f.pfCopy16x16Aligned = Some(WelsCopy16x16_c);
-        f.pfCopy16x16NotAligned = Some(WelsCopy16x16_c);
-        f.pfCopy16x8NotAligned = Some(WelsCopy16x8_c);
-        f.pfCopy8x16Aligned = Some(WelsCopy8x16_c);
-        f.pfCopy4x4 = Some(WelsCopy4x4_c);
-        f.pfCopy8x4 = Some(WelsCopy8x4_c);
-        f.pfCopy4x8 = Some(WelsCopy4x8_c);
+    // Baseline C fallback functions
+    f.pfCopy8x8Aligned = Some(WelsCopy8x8_c);
+    f.pfCopy16x16Aligned = Some(WelsCopy16x16_c);
+    f.pfCopy16x16NotAligned = Some(WelsCopy16x16_c);
+    f.pfCopy16x8NotAligned = Some(WelsCopy16x8_c);
+    f.pfCopy8x16Aligned = Some(WelsCopy8x16_c);
+    f.pfCopy4x4 = Some(WelsCopy4x4_c);
+    f.pfCopy8x4 = Some(WelsCopy8x4_c);
+    f.pfCopy4x8 = Some(WelsCopy4x8_c);
 
-        f.pfQuantizationHadamard2x2 = Some(hadamard_quant_2x2);
-        f.pfQuantizationHadamard2x2Skip = Some(hadamard_quant_2x2_skip);
-        f.pfTransformHadamard4x4Dc = Some(hadamard_t4_dc);
+    f.pfQuantizationHadamard2x2 = Some(hadamard_quant_2x2);
+    f.pfQuantizationHadamard2x2Skip = Some(hadamard_quant_2x2_skip);
+    f.pfTransformHadamard4x4Dc = Some(hadamard_t4_dc);
 
-        f.pfDctT4 = Some(WelsDctT4_c);
-        f.pfDctFourT4 = Some(WelsDctFourT4_c);
+    f.pfDctT4 = Some(WelsDctT4_c);
+    f.pfDctFourT4 = Some(WelsDctFourT4_c);
 
-        f.pfScan4x4 = Some(scan_4x4_dc_ac);
-        f.pfScan4x4Ac = Some(scan_4x4_ac);
-        f.pfCalculateSingleCtr4x4 = Some(calculate_single_ctr_4x4);
+    f.pfScan4x4 = Some(scan_4x4_dc_ac);
+    f.pfScan4x4Ac = Some(scan_4x4_ac);
+    f.pfCalculateSingleCtr4x4 = Some(calculate_single_ctr_4x4);
 
-        f.pfGetNoneZeroCount = Some(get_none_zero_count);
+    f.pfGetNoneZeroCount = Some(get_none_zero_count);
 
-        f.pfQuantization4x4 = Some(quant_4x4);
-        f.pfQuantizationDc4x4 = Some(quant_4x4_dc);
-        f.pfQuantizationFour4x4 = Some(quant_four_4x4);
-        f.pfQuantizationFour4x4Max = Some(quant_four_4x4_max);
+    f.pfQuantization4x4 = Some(quant_4x4);
+    f.pfQuantizationDc4x4 = Some(quant_4x4_dc);
+    f.pfQuantizationFour4x4 = Some(quant_four_4x4);
+    f.pfQuantizationFour4x4Max = Some(quant_four_4x4_max);
 
-    }
 }
 
 // ============================================================================

@@ -1,3 +1,15 @@
+// **S9.1: `common/` is sealed, and this is the subtree statement of it.**
+//
+// Every leaf in this module carries `#![forbid(unsafe_code)]` in its own right — the
+// last two fell this session: `copy_mb.rs` when `copy_shim`'s only caller family
+// (the seven `WelsCopyNxM_c` block copies) went to cursors, and `mc.rs` when
+// `shim_wh`/`McLuma_c`/`McChroma_c` did the same. `wels_trace.rs` sealed at S8.9
+// when the trace callback's `void*` became a token owned by `src/api/`.
+//
+// A `forbid` here seals the subtree rather than restating the leaves, so a new file
+// added under `common/` inherits the rule instead of having to remember it.
+#![forbid(unsafe_code)]
+
 pub mod copy_mb;
 pub mod cpu_core;
 pub mod deblocking_common;

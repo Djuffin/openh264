@@ -36,7 +36,7 @@ pub use crate::encoder::param_svc::SWelsPPS;
 pub use crate::encoder::wels_preprocess::EStaticBlockIdc;
 pub use crate::encoder::md::SMcFunc;
 // Phase 4a: MC is called directly, not via `sMcFuncs`.
-use crate::common::mc::{mc_chroma, mc_luma, McChroma_c, McLuma_c};
+use crate::common::mc::{mc_chroma, mc_luma};
 use crate::common::sad_common::sample_sad;
 use crate::encoder::sample::satd_16x16;
 use crate::safe::plane::{PlaneCursor, PlaneCursorMut};
@@ -2110,57 +2110,49 @@ pub unsafe extern "C" fn SvcMdSCDMbEnc(
     let iLineSizeY = layer_ref_pic(&*pCurDqLayer).map_or(0, |p| p.stride(0));
     let iLineSizeUV = layer_ref_pic(&*pCurDqLayer).map_or(0, |p| p.stride(1));
 
-    let mut pDstLuma = std::ptr::addr_of_mut!((*pMbCache).sSkipMb).cast::<u8>();
-    let mut pDstCb = std::ptr::addr_of_mut!((*pMbCache).sSkipMb).cast::<u8>().add(256);
-    let mut pDstCr = std::ptr::addr_of_mut!((*pMbCache).sSkipMb).cast::<u8>().add(256 + 64);
-
-    let iOffsetY = (sCandidateMv.iMvX as i32 >> 2) + (sCandidateMv.iMvY as i32 >> 2) * iLineSizeY;
-    let iOffsetUV = (sCandidateMv.iMvX as i32 >> 3) + (sCandidateMv.iMvY as i32 >> 3) * iLineSizeUV;
-
-    if !bQpSimilarFlag || !bMbSkipFlag {
-        pDstLuma = std::ptr::addr_of_mut!((*pMbCache).sMemPredMb)
-            .cast::<u8>()
-            .add(mem_pred_luma_off((*pMbCache).uiMemPredLumaHalf));
-        pDstCb = std::ptr::addr_of_mut!((*pMbCache).sMemPredMb)
-            .cast::<u8>()
-            .add(mem_pred_chroma_off((*pMbCache).uiMemPredLumaHalf));
-        pDstCr = std::ptr::addr_of_mut!((*pMbCache).sMemPredMb)
-            .cast::<u8>()
-            .add(mem_pred_chroma_off((*pMbCache).uiMemPredLumaHalf))
-            .add(64);
-    }
+    // **S9.1: the three `Mc*_c` shims are gone and this calls the safe kernels**, on
+    // the pattern this same file already uses at `WelsMdBackgroundMbEnc`'s other MC
+    // block. `pRefLuma`/`pRefCb`/`pRefCr` and the two `iOffset*` collapse into the
+    // cursor anchors below and are dropped.
+    //
+    // The anchors name the same addresses: `mb_offset(stride, 0)` is
+    // `(iMbX << 4) + (iMbY << 4) * stride`, and `iOffsetY` adds
+    // `(mvX >> 2) + (mvY >> 2) * stride` — together a cursor at
+    // `(iMbX*16 + mvX>>2, iMbY*16 + mvY>>2)`. Chroma is the same at `<< 3` and
+    // `>> 3`, and **plane 2 keeps stride index 1**, which the raw form applied by
+    // hand and `SPicture::plane(2)` carries by construction.
+    let (lx, ly) = pd.luma_origin();
+    let (cx, cy) = pd.chroma_origin();
+    let (dx_l, dy_l) = ((sCandidateMv.iMvX as isize) >> 2, (sCandidateMv.iMvY as isize) >> 2);
+    let (dx_c, dy_c) = ((sCandidateMv.iMvX as isize) >> 3, (sCandidateMv.iMvY as isize) >> 3);
+    let to_pred = !bQpSimilarFlag || !bMbSkipFlag;
+    let luma_off = mem_pred_luma_off((*pMbCache).uiMemPredLumaHalf);
+    let chroma_off = mem_pred_chroma_off((*pMbCache).uiMemPredLumaHalf);
 
     // Motion Compensation
-    McLuma_c(
-        pRefLuma.offset(iOffsetY as isize),
-        iLineSizeY,
-        pDstLuma,
-        16,
-        0,
-        0,
-        16,
-        16,
-    );
-    McChroma_c(
-        pRefCb.offset(iOffsetUV as isize),
-        iLineSizeUV,
-        pDstCb,
-        8,
-        sMvp.iMvX,
-        sMvp.iMvY,
-        8,
-        8,
-    );
-    McChroma_c(
-        pRefCr.offset(iOffsetUV as isize),
-        iLineSizeUV,
-        pDstCr,
-        8,
-        sMvp.iMvX,
-        sMvp.iMvY,
-        8,
-        8,
-    );
+    {
+        let cRef = pRefPic.plane(0).cursor(lx + dx_l, ly + dy_l);
+        let mut cDst = if to_pred {
+            let p = &mut *std::ptr::addr_of_mut!((*pMbCache).sMemPredMb);
+            PlaneCursorMut::new(&mut p[luma_off..luma_off + 256], 0, 16)
+        } else {
+            let p = &mut *std::ptr::addr_of_mut!((*pMbCache).sSkipMb);
+            PlaneCursorMut::new(&mut p[..256], 0, 16)
+        };
+        mc_luma(&cRef, &mut cDst, 0, 0, 16, 16);
+    }
+    for (plane, base_skip, extra) in [(1usize, 256usize, 0usize), (2, 320, 64)] {
+        let cRef = pRefPic.plane(plane).cursor(cx + dx_c, cy + dy_c);
+        let mut cDst = if to_pred {
+            let o = chroma_off + extra;
+            let p = &mut *std::ptr::addr_of_mut!((*pMbCache).sMemPredMb);
+            PlaneCursorMut::new(&mut p[o..o + 64], 0, 8)
+        } else {
+            let p = &mut *std::ptr::addr_of_mut!((*pMbCache).sSkipMb);
+            PlaneCursorMut::new(&mut p[base_skip..base_skip + 64], 0, 8)
+        };
+        mc_chroma(&cRef, &mut cDst, sMvp.iMvX, sMvp.iMvY, 8, 8);
+    }
 
     (*pCurMb).uiCbp = 0;
     (*pWelsMd).iCostLuma = 0;

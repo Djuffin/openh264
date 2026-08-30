@@ -10,7 +10,11 @@
 //! records it. All three retire together in Phase 10, when `SvcMdSCDMbEnc` — their only
 //! caller, unreachable without `iUsageType == SCREEN_CONTENT_REAL_TIME` (F125) —
 //! converts behind a screen-content referee.
-#![deny(unsafe_code)]
+// **S9.1: `deny` becomes `forbid`.** The three raw shims this module still
+// carried (`shim_wh`, `McLuma_c`, `McChroma_c`) are deleted — their only callers,
+// `WelsMdBackgroundMbEnc`'s motion compensation, build cursors directly now — so
+// the exemption the `deny` left room for is gone and the stronger form holds.
+#![forbid(unsafe_code)]
 #![allow(
     non_snake_case,
     non_camel_case_types,
@@ -726,6 +730,15 @@ pub fn mc_hor_ver33(
 /// caller and no typedef, and the arms are in the table's `[iMvX & 3][iMvY & 3]`
 /// order so the two can be read against each other.
 #[inline(always)]
+// **S9.1: `shim_wh`, `McLuma_c` and `McChroma_c` are deleted, and this file seals.**
+//
+// They were raw-pointer adapters that rebuilt exact-reach spans and called the safe
+// `mc_luma`/`mc_chroma` below. Their three call sites — `WelsMdBackgroundMbEnc`'s
+// motion compensation — build the cursors directly now, on the pattern the same
+// function already used for its other MC block, so the adapters had no callers left.
+//
+// The path is byte-refereed: F126 planted a one-sample fault immediately after this
+// very `McLuma_c` and failed 32 of the `bg` preset's 48 rows.
 pub fn mc_luma(
     src: &PlaneCursor<'_>,
     dst: &mut PlaneCursorMut<'_>,
@@ -1164,54 +1177,6 @@ fn block_span(stride: usize, width: usize, height: usize) -> usize {
     (height - 1) * stride + width
 }
 
-/// Runs a safe `(src, dst, width, height)` kernel behind a raw-pointer entry point:
-/// **the one place in this module where a raw pointer becomes a slice.**
-///
-/// `span_width` is the width the *span* covers, which is the kernel's `width`
-/// everywhere except the copy path, where `McCopy_c` narrows it (see
-/// [`copy_width`]) and claiming the nominal width would over-assert validity.
-///
-/// A non-positive width or height returns without touching memory, matching the
-/// old kernels, whose loops simply did not run.
-///
-/// # Safety
-/// `pSrc` and `pDst` point at sample `(0, 0)` of the source and destination blocks;
-/// the source's `reach` neighbourhood and the destination's block must be valid for
-/// reads and writes respectively, at the given strides, and the two spans must not
-/// overlap.
-#[inline(always)]
-// SCREEN_CONTENT(dormant: Phase 10) — the span machinery `McLuma_c` and `McChroma_c`
-// below need, and nothing else: it materialises a raw pointer pair as the two slices
-// the safe kernels take, sized to the reach the caller declared. It is not itself
-// screen-content code, but it has exactly their lifetime and dies in the same commit.
-// unsafe-cat: SCREEN_CONTENT(dormant)
-#[allow(unsafe_code)]
-unsafe fn shim_wh(
-    pSrc: *const u8,
-    iSrcStride: i32,
-    pDst: *mut u8,
-    iDstStride: i32,
-    iWidth: i32,
-    iHeight: i32,
-    reach: Reach,
-    span_width: usize,
-    f: impl FnOnce(&PlaneCursor<'_>, &mut PlaneCursorMut<'_>, usize, usize),
-) {
-    if iWidth <= 0 || iHeight <= 0 {
-        return;
-    }
-    let (w, h) = (iWidth as usize, iHeight as usize);
-    let (ss, ds) = (iSrcStride as usize, iDstStride as usize);
-    let (slen, scenter) = src_span(ss, span_width, h, reach);
-    let src = unsafe { std::slice::from_raw_parts(pSrc.sub(scenter), slen) };
-    let dst = unsafe { std::slice::from_raw_parts_mut(pDst, block_span(ds, span_width, h)) };
-    f(
-        &PlaneCursor::new(src, scenter, ss),
-        &mut PlaneCursorMut::new(dst, 0, ds),
-        w,
-        h,
-    );
-}
 
 // The fifteen quarter-pel entry points. Written out one by one rather than generated
 // from a macro on purpose: a macro folds fifteen `unsafe extern "C" fn` definitions
@@ -1219,108 +1184,7 @@ unsafe fn shim_wh(
 // that did not happen (plan §7.1) — and it would hide each kernel's own reach behind a
 // table lookup in the one place a reader is looking for it.
 
-/// C++: `McLuma_c`, `codec/common/src/mc.cpp` — `SMcFunc::pMcLumaFunc`.
-///
-/// # Safety
-/// As the quarter-pel kernels this dispatches to (`LUMA_REACH[iMvX & 3][iMvY & 3]`
-/// selects both the kernel and its reach); the widest case is two samples and two
-/// rows before the block and three after, and the decoder's guarantee for it is the
-/// `BaseMC` clamp quoted in this section's header. `iWidth` and `iHeight` are at most
-/// 16, which is what the kernels' `[u8; 256]` scratch at stride 16 holds.
-// Phase 4a: the composites are `#[inline]` now that their callers name them
-// directly. Inlining is the mechanism the recovery thesis rests on — it is what
-// folds the shim's span arithmetic against the caller's constant block sizes.
-#[inline]
-// SCREEN_CONTENT(dormant: Phase 10) — F125. The only caller left is `SvcMdSCDMbEnc`
-// (`svc_mode_decision.rs:2043`/`:2053`/`:2063`), which `WelsInitSCDPskipFunc` reaches
-// only when `bScreenContent && bEnableSceneChangeDetect && iComplexityMode < HIGH` —
-// and `bScreenContent` is an axis neither diffharness driver expresses, so a probe
-// reads 0 entries in every one of the 48 `bg` rows. `WelsMdBackgroundMbEnc` was the
-// other caller and converted at T9.B4 behind that preset; this one cannot, because no
-// gate in Phase 9 can see it (S57).
-// unsafe-cat: SCREEN_CONTENT(dormant)
-#[allow(unsafe_code)]
-pub unsafe extern "C" fn McLuma_c(
-    pSrc: *const u8,
-    iSrcStride: i32,
-    pDst: *mut u8,
-    iDstStride: i32,
-    iMvX: i16,
-    iMvY: i16,
-    iWidth: i32,
-    iHeight: i32,
-) {
-    // SHIM(phase2) -> mc_luma
-    let (x, y) = ((iMvX & 0x03) as usize, (iMvY & 0x03) as usize);
-    let w = iWidth.max(0) as usize;
-    // (0, 0) is the copy path, which narrows the width it touches.
-    let span_width = if x == 0 && y == 0 { copy_width(w) } else { w };
-    unsafe {
-        shim_wh(
-            pSrc,
-            iSrcStride,
-            pDst,
-            iDstStride,
-            iWidth,
-            iHeight,
-            LUMA_REACH[x][y],
-            span_width,
-            |s, d, w, h| mc_luma(s, d, iMvX, iMvY, w, h),
-        )
-    };
-}
 
-/// C++: `McChroma_c`, `codec/common/src/mc.cpp` — `SMcFunc::pMcChromaFunc`.
-///
-/// # Safety
-/// As [`McChromaWithFragMv_c`] when either eighth-pel fraction is non-zero; as
-/// [`McCopy_c`] — block only, and the same narrowing of `iWidth` — when both are
-/// zero.
-// Phase 4a: the composites are `#[inline]` now that their callers name them
-// directly. Inlining is the mechanism the recovery thesis rests on — it is what
-// folds the shim's span arithmetic against the caller's constant block sizes.
-#[inline]
-// SCREEN_CONTENT(dormant: Phase 10) — F125. The only caller left is `SvcMdSCDMbEnc`
-// (`svc_mode_decision.rs:2043`/`:2053`/`:2063`), which `WelsInitSCDPskipFunc` reaches
-// only when `bScreenContent && bEnableSceneChangeDetect && iComplexityMode < HIGH` —
-// and `bScreenContent` is an axis neither diffharness driver expresses, so a probe
-// reads 0 entries in every one of the 48 `bg` rows. `WelsMdBackgroundMbEnc` was the
-// other caller and converted at T9.B4 behind that preset; this one cannot, because no
-// gate in Phase 9 can see it (S57).
-// unsafe-cat: SCREEN_CONTENT(dormant)
-#[allow(unsafe_code)]
-pub unsafe extern "C" fn McChroma_c(
-    pSrc: *const u8,
-    iSrcStride: i32,
-    pDst: *mut u8,
-    iDstStride: i32,
-    iMvX: i16,
-    iMvY: i16,
-    iWidth: i32,
-    iHeight: i32,
-) {
-    // SHIM(phase2) -> mc_chroma
-    let frag = (iMvX & 0x07) != 0 || (iMvY & 0x07) != 0;
-    let w = iWidth.max(0) as usize;
-    let (reach, span_width) = if frag {
-        (R_CHROMA, w)
-    } else {
-        (R_COPY, copy_width(w))
-    };
-    unsafe {
-        shim_wh(
-            pSrc,
-            iSrcStride,
-            pDst,
-            iDstStride,
-            iWidth,
-            iHeight,
-            reach,
-            span_width,
-            |s, d, w, h| mc_chroma(s, d, iMvX, iMvY, w, h),
-        )
-    };
-}
 
 pub fn InitMcFunc(pMcFuncs: &mut SMcFunc, _uiCpuFlag: u32) {
     let mc = pMcFuncs;
