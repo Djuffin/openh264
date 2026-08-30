@@ -2545,6 +2545,117 @@ pub fn SetScrollingMvToMdNull(_pVaa: &SVAAFrameInfo, _pWelsMd: &mut SWelsMD<'_>)
 mod tests {
     use super::*;
 
+    /// **F254's referee — one source plane, the in-fork background writer, and a
+    /// mode-decision reader.** S10 step 1.
+    ///
+    /// F254 recorded that *nothing in the battery could fail* on a source-plane
+    /// aliasing mistake. The `bg` preset is a **byte** referee and a data race need
+    /// not move a byte; the Miri lane is the instrument that could see it, but Miri
+    /// runs `--lib` tests and never the diffharness sweeps, so the one configuration
+    /// that turns the in-fork write on sits outside the one instrument that could
+    /// judge it. This probe closes that gap, and it is what licenses step 2's
+    /// twenty-one call sites to move.
+    ///
+    /// **The shape, and every part of it is the production shape.** `SPicture::new`
+    /// is the picture `AllocPicture` hands out; `RoPicView::build` is the view
+    /// `WelsInitCurrentLayer` stamps and `layer_enc_view` hands back; the writer is
+    /// `VaaBackgroundMbDataUpdate`'s luma copy (`pfCopy16x16Aligned` over
+    /// `pCurView.plane(0)`, sixteen 16-sample rows) reduced to one macroblock; the
+    /// reader is the 16x16 source fetch every `WelsMdI16x16`-family body performs.
+    /// Two macroblocks side by side in one plane, disjoint by construction — which
+    /// is the disjointness the slice partition gives the real fork, said in
+    /// miniature.
+    ///
+    /// Nothing here drives the encoder. The question is about two threads and one
+    /// plane, not about encoding — the same scoping every probe in
+    /// `svc_encode_slice.rs` uses, and the reason this costs seconds under Miri
+    /// rather than the fork/join probe's half hour.
+    ///
+    /// **It has teeth, checked rather than assumed (F234's rule).** Respelling the
+    /// reader as the route the twenty-one sites still use today —
+    ///
+    /// ```ignore
+    /// let src = pic.plane(0).cursor(16, 0);   // PlaneCursor: &[u8] over the plane
+    /// for _ in 0..ROUNDS { for dy in 0..16 { let _ = src.row(dy, 0, 16); } }
+    /// ```
+    ///
+    /// — makes this fail under Miri with "Data race detected between (1) non-atomic
+    /// write on thread `unnamed-2` and (2) **retag read of type `[u8]`** on thread
+    /// `unnamed-3`", pointing at `Vec`'s own deref as the second access and at
+    /// `RecCursor::set` as the first. The reader never touches a byte the writer
+    /// touches; what races is the **whole-allocation shared claim** the `&[u8]`
+    /// makes on its way to a byte-precise read. That is F254's defect in miniature,
+    /// and it is why the fix is the seam rather than a narrower slice.
+    ///
+    /// **The second control, for the other defect class.** Pointing the reader at
+    /// the writer's *own* macroblock — `view.plane(0).cursor(0, 0)`, still through
+    /// the seam — is red too: cells make a concurrent write *lawful*, not a
+    /// concurrent overlapping one *correct*, so the probe also fails if step 2 ever
+    /// gets a coordinate wrong. Both halves of the claim are refereed.
+    ///
+    /// **`ROUNDS` is measured, and the measurement contradicts F234 — deliberately
+    /// recorded.** The partition-counter probe in `svc_encode_slice.rs` needed 200
+    /// rounds because at 8 its control came back green, and its comment says the
+    /// number is load-bearing. **Here it is not**, and guessing that it was would
+    /// have been copying a conclusion rather than taking a measurement: both
+    /// controls above were run at 1, 8 and 32 rounds (and the first also at 4, the
+    /// second at 200) and were **red at every one of them**, down to a single round.
+    /// The reason is the access density — one round is sixteen 16-byte rows over
+    /// bytes the sibling is claiming wholesale, where F234's probe raced two
+    /// byte-precise scalars and needed a lucky schedule. So the count is chosen for
+    /// cost, not for sensitivity: 64 runs in 16.8 s under Miri where 200 takes
+    /// 35.8 s, and still leaves 64x margin over the smallest count seen red.
+    #[test]
+    fn source_plane_reads_do_not_race_the_in_fork_background_copy() {
+        use crate::encoder::picture::SPicture;
+        use crate::encoder::rec_view::RoPicView;
+
+        // Chosen for cost, not sensitivity — both controls are red at a single
+        // round. See the ladder in the doc comment above.
+        const ROUNDS: usize = 64;
+
+        // 32x16 luma: macroblock 0 at (0, 0) is what the background copy writes,
+        // macroblock 1 at (16, 0) is what the mode decision reads. `bNeedMbInfo`
+        // false — the side arrays are the reconstruction seam's business, not this
+        // one's.
+        let pic = SPicture::new(32, 16, false);
+        let view = RoPicView::build(&pic);
+
+        std::thread::scope(|s| {
+            // The writer: `VaaBackgroundMbDataUpdate` -> `pfCopy16x16Aligned`, whose
+            // destination cursor is `pCurView.plane(0).cursor(iMbX << 4, iMbY << 4)`
+            // and whose body is sixteen `write_row::<16>` calls.
+            s.spawn(|| {
+                let dst = view.plane(0).cursor(0, 0);
+                for r in 0..ROUNDS {
+                    let row = [(r & 0xff) as u8; 16];
+                    for dy in 0..16 {
+                        dst.write_row::<16>(dy, 0, &row);
+                    }
+                }
+            });
+            // The reader: the source fetch the mode-decision bodies perform, at the
+            // shape step 2 gives all twenty-one of them.
+            s.spawn(|| {
+                let src = view.plane(0).cursor(16, 0);
+                for _ in 0..ROUNDS {
+                    for dy in 0..16 {
+                        assert_eq!(
+                            src.row::<16>(dy, 0),
+                            [0u8; 16],
+                            "the reader's macroblock is nobody's destination"
+                        );
+                    }
+                }
+            });
+        });
+
+        // The writer's last round landed, and it landed only in its own macroblock.
+        assert_eq!(view.plane(0).at(0, 0), ((ROUNDS - 1) & 0xff) as u8);
+        assert_eq!(view.plane(0).at(15, 15), ((ROUNDS - 1) & 0xff) as u8);
+        assert_eq!(view.plane(0).at(16, 0), 0);
+    }
+
     #[test]
     // unsafe-cat: instrument(test)
     #[allow(unsafe_code)]
