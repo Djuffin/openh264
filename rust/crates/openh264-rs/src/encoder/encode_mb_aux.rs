@@ -199,7 +199,20 @@ pub const KI_TRUN_TABLE: [i32; 16] = [3, 2, 2, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 
 // Function Pointer Types
 // ============================================================================
 
-pub type PCopyFunc = unsafe extern "C" fn(pDst: *mut u8, iStrideD: i32, pSrc: *mut u8, iStrideS: i32);
+/// The fixed-shape block-copy slot — **S9.0c: safe, and no longer `extern "C"`.**
+///
+/// It took `(*mut u8, i32, *mut u8, i32)`. The strides ride inside the cursors now,
+/// and **both operands are `RecCursor`** because the slot's two callers disagree
+/// about storage: the background path copies picture-to-picture (F117), while the
+/// mode-decision path copies an owned prediction scratch into a picture plane. A
+/// function-pointer table cannot be generic, so the scratch reaches the same type
+/// through `RecCursor::over_owned` — `Cell::from_mut(..).as_slice_of_cells()`, safe
+/// and raw-free.
+///
+/// `extern "C"` goes for F241's reason: a reference operand is not FFI-safe, and the
+/// slot is internal dispatch that was never reachable from C.
+pub type PCopyFunc =
+    fn(pDst: &crate::encoder::rec_view::RecCursor<'_>, pSrc: &crate::encoder::rec_view::RecCursor<'_>);
 /// The forward-DCT slot — **S9.0: safe, and no longer `extern "C"`.**
 ///
 /// It took `(*mut i16, *mut u8, i32, *mut u8, i32)`: a coefficient block and two
@@ -341,7 +354,7 @@ pub fn hadamard_dc_span(a: &[i16], off: usize) -> &[i16; 241] {
 // conversions, kept where the C++ has them.
 // ---------------------------------------------------------------------------
 
-use crate::common::copy_mb::{copy_16x16, copy_16x8, copy_4x4, copy_4x8, copy_8x16, copy_8x4, copy_8x8, copy_shim};
+use crate::common::copy_mb::{copy_16x16, copy_16x8, copy_4x4, copy_4x8, copy_8x16, copy_8x4, copy_8x8};
 use crate::safe::plane::{PlaneCursor, PlaneCursorMut, SampleCursor};
 
 /// Residual of two 4x4 pixel blocks, then the 2-D forward integer DCT, into
@@ -764,73 +777,73 @@ pub fn WelsScan4x4Dc(pLevel: &mut [i16; 16], pDct: &[i16; 16]) {
 /// # Safety
 /// See [`copy_shim`] with `W = 4`, `H = 4`.
 #[inline]
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe extern "C" fn WelsCopy4x4_c(pDst: *mut u8, iStrideD: i32, pSrc: *mut u8, iStrideS: i32) {
-    // SHIM(phase2) -> copy_4x4
-    unsafe { copy_shim::<4, 4>(pDst, iStrideD, pSrc, iStrideS, copy_4x4) }
+pub fn WelsCopy4x4_c(
+    pDst: &crate::encoder::rec_view::RecCursor<'_>,
+    pSrc: &crate::encoder::rec_view::RecCursor<'_>,
+) {
+    crate::encoder::rec_view::copy_rows_shared::<4>(pDst, pSrc, 4);
 }
 
 /// # Safety
 /// See [`copy_shim`] with `W = 8`, `H = 4`.
 #[inline]
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe extern "C" fn WelsCopy8x4_c(pDst: *mut u8, iStrideD: i32, pSrc: *mut u8, iStrideS: i32) {
-    // SHIM(phase2) -> copy_8x4
-    unsafe { copy_shim::<8, 4>(pDst, iStrideD, pSrc, iStrideS, copy_8x4) }
+pub fn WelsCopy8x4_c(
+    pDst: &crate::encoder::rec_view::RecCursor<'_>,
+    pSrc: &crate::encoder::rec_view::RecCursor<'_>,
+) {
+    crate::encoder::rec_view::copy_rows_shared::<8>(pDst, pSrc, 4);
 }
 
 /// # Safety
 /// See [`copy_shim`] with `W = 4`, `H = 8`.
 #[inline]
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe extern "C" fn WelsCopy4x8_c(pDst: *mut u8, iStrideD: i32, pSrc: *mut u8, iStrideS: i32) {
-    // SHIM(phase2) -> copy_4x8
-    unsafe { copy_shim::<4, 8>(pDst, iStrideD, pSrc, iStrideS, copy_4x8) }
+pub fn WelsCopy4x8_c(
+    pDst: &crate::encoder::rec_view::RecCursor<'_>,
+    pSrc: &crate::encoder::rec_view::RecCursor<'_>,
+) {
+    crate::encoder::rec_view::copy_rows_shared::<4>(pDst, pSrc, 8);
 }
 
 /// # Safety
 /// See [`copy_shim`] with `W = 8`, `H = 8`. (The decoder's error-concealment
 /// module has its own same-named kernel — different function, never unify.)
 #[inline]
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
-pub unsafe extern "C" fn WelsCopy8x8_c(pDst: *mut u8, iStrideD: i32, pSrc: *mut u8, iStrideS: i32) {
-    // SHIM(phase2) -> copy_8x8
-    unsafe { copy_shim::<8, 8>(pDst, iStrideD, pSrc, iStrideS, copy_8x8) }
+pub fn WelsCopy8x8_c(
+    pDst: &crate::encoder::rec_view::RecCursor<'_>,
+    pSrc: &crate::encoder::rec_view::RecCursor<'_>,
+) {
+    crate::encoder::rec_view::copy_rows_shared::<8>(pDst, pSrc, 8);
 }
 
 /// # Safety
 /// See [`copy_shim`] with `W = 16`, `H = 8`.
 #[inline]
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe extern "C" fn WelsCopy16x8_c(pDst: *mut u8, iStrideD: i32, pSrc: *mut u8, iStrideS: i32) {
-    // SHIM(phase2) -> copy_16x8
-    unsafe { copy_shim::<16, 8>(pDst, iStrideD, pSrc, iStrideS, copy_16x8) }
+pub fn WelsCopy16x8_c(
+    pDst: &crate::encoder::rec_view::RecCursor<'_>,
+    pSrc: &crate::encoder::rec_view::RecCursor<'_>,
+) {
+    crate::encoder::rec_view::copy_rows_shared::<16>(pDst, pSrc, 8);
 }
 
 /// # Safety
 /// See [`copy_shim`] with `W = 8`, `H = 16`.
 #[inline]
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe extern "C" fn WelsCopy8x16_c(pDst: *mut u8, iStrideD: i32, pSrc: *mut u8, iStrideS: i32) {
-    // SHIM(phase2) -> copy_8x16
-    unsafe { copy_shim::<8, 16>(pDst, iStrideD, pSrc, iStrideS, copy_8x16) }
+pub fn WelsCopy8x16_c(
+    pDst: &crate::encoder::rec_view::RecCursor<'_>,
+    pSrc: &crate::encoder::rec_view::RecCursor<'_>,
+) {
+    crate::encoder::rec_view::copy_rows_shared::<8>(pDst, pSrc, 16);
 }
 
 /// # Safety
 /// See [`copy_shim`] with `W = 16`, `H = 16`. (Same name-collision note as
 /// [`WelsCopy8x8_c`].)
 #[inline]
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
-pub unsafe extern "C" fn WelsCopy16x16_c(pDst: *mut u8, iStrideD: i32, pSrc: *mut u8, iStrideS: i32) {
-    // SHIM(phase2) -> copy_16x16
-    unsafe { copy_shim::<16, 16>(pDst, iStrideD, pSrc, iStrideS, copy_16x16) }
+pub fn WelsCopy16x16_c(
+    pDst: &crate::encoder::rec_view::RecCursor<'_>,
+    pSrc: &crate::encoder::rec_view::RecCursor<'_>,
+) {
+    crate::encoder::rec_view::copy_rows_shared::<16>(pDst, pSrc, 16);
 }
 
 // ARM NEON fallbacks

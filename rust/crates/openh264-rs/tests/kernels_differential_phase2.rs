@@ -290,6 +290,7 @@ fn probe_span(
 // retired in T9.C2; the module has no raw surface left to drive.
 use openh264_rs::common::sad_common as sad;
 use openh264_rs::safe::plane::PlaneCursor;
+use openh264_rs::encoder::rec_view::RecCursor;
 
 /// A noise surface with at least `pad` rows and columns of margin around a `w` x `h`
 /// block, and a random legal anchor for it. The anchor is random so the block lands
@@ -1056,8 +1057,12 @@ fn encode_mb_aux_shims_stay_inside_the_spans_they_declare() {
     // --- The seven copies: exact spans both sides ((H-1)*stride + W), every
     // block byte equal to its source row (write-every-byte), bytes outside
     // the block untouched, source untouched.
-    type RawCopy = unsafe extern "C" fn(*mut u8, i32, *mut u8, i32);
-    let kernels: &[(&str, usize, usize, RawCopy)] = &[
+    // S9.0c: the slot is `fn(&RecCursor, &RecCursor)` now — both operands cell-based,
+    // because the background path copies picture-to-picture in-fork (F117) and the
+    // mode-decision path copies an owned scratch into a picture plane. Test buffers
+    // reach the same type through `RecCursor::over_owned`, which is safe.
+    type BlockCopy = fn(&RecCursor<'_>, &RecCursor<'_>);
+    let kernels: &[(&str, usize, usize, BlockCopy)] = &[
         ("Copy4x4", 4, 4, ema::WelsCopy4x4_c),
         ("Copy8x4", 8, 4, ema::WelsCopy8x4_c),
         ("Copy4x8", 4, 8, ema::WelsCopy4x8_c),
@@ -1073,7 +1078,11 @@ fn encode_mb_aux_shims_stay_inside_the_spans_they_declare() {
                 let mut dst = rng.bytes((h - 1) * ds + w);
                 let src_before = src.clone();
                 let dst_before = dst.clone();
-                unsafe { raw(dst.as_mut_ptr(), ds as i32, src.as_mut_ptr(), ss as i32) };
+                {
+                    let d = RecCursor::over_owned(&mut dst, 0, ds);
+                    let sc = RecCursor::over_owned(&mut src, 0, ss);
+                    raw(&d, &sc);
+                }
                 for y in 0..h {
                     assert_eq!(
                         &dst[y * ds..][..w],

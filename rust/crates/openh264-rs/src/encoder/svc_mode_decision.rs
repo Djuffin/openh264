@@ -15,7 +15,7 @@
 #![deny(unsafe_code)]
 
 
-use crate::encoder::rec_view::copy_block_to_view;
+use crate::encoder::rec_view::{copy_block_to_view, RecCursor};
 use crate::encoder::svc_encode_slice::{layer_enc_pic, layer_rec_view, layer_ref_pic};
 use crate::encoder::svc_encode_slice::layer_pps;
 use crate::encoder::svc_encode_slice::current_layer;
@@ -521,15 +521,7 @@ pub extern "C" fn WelsRecPskip(
 /// Translated from `VaaBackgroundMbDataUpdate` in
 /// `codec/encoder/core/src/svc_base_layer_md.cpp:1341`.
 #[inline(always)]
-// unsafe-cat: fork-shared(S63)
-// **S57 — dark, converts never (F117).** The copies below write the *current*
-// source picture (the brief that first read this had the direction backwards
-// against a dst-first typedef), and no gate runs the path:
-// `bEnableBackgroundDetection = false` in both diffharness drivers. T9.X confirmed
-// the allow is already item-level rather than module-wide, which is what "precise"
-// asked for; the census row keeps this note.
-#[allow(unsafe_code)]
-unsafe fn VaaBackgroundMbDataUpdate(
+fn VaaBackgroundMbDataUpdate(
     pFunc: &SWelsFuncPtrList,
     // S4.C3: `*mut` -> `&`. Every read below is a field read or a raw plane cursor
     // taken *out of* a field; nothing writes the block. Shared is also the only
@@ -539,32 +531,34 @@ unsafe fn VaaBackgroundMbDataUpdate(
     pVaaInfo: &crate::encoder::wels_preprocess::SVAAFrameInfo,
     pCurMb: &mut SMB,
 ) {
-    let kiPicStride = (*pVaaInfo).iPicStride;
-    let kiPicStrideUV = (*pVaaInfo).iPicStrideUV;
-    let kiOffsetY = (((*pCurMb).iMbY as i32) * kiPicStride + (*pCurMb).iMbX as i32) << 4;
-    let kiOffsetUV = (((*pCurMb).iMbY as i32) * kiPicStrideUV + (*pCurMb).iMbX as i32) << 3;
+    // **S9.0c — F117's three sites, and they are raw no longer.**
+    //
+    // T9.B20 left these raw because "no gate exercises them"; session B4's `bg`
+    // preset made that false (F126 plants a one-sample fault in this very luma copy
+    // and fails all three clips), so the deferral's premise had expired.
+    //
+    // The byte offsets become sample coordinates, and they name the same addresses:
+    // `kiOffsetY = ((iMbY * stride + iMbX) << 4)` expands to
+    // `(iMbY << 4) * stride + (iMbX << 4)`, which is a cursor at `(iMbX << 4,
+    // iMbY << 4)` anchored on the plane's padded origin — the very address
+    // `pCurY`/`pRefY` held. Chroma is the same with `<< 3`.
+    //
+    // `pCur*` is the **destination**: the copy runs previous-source -> current-source
+    // (F117), in-fork, into the picture the encoder is reading. That is exactly why
+    // both views are `SharedPlane`-backed — writing through a cell is lawful where a
+    // `&mut [u8]` into the plane would not be, and a `&[u8]` over it would race.
+    let (Some(curView), Some(refView)) = (&(*pVaaInfo).pCurView, &(*pVaaInfo).pRefView) else {
+        return;
+    };
+    let (lx, ly) = (((*pCurMb).iMbX as isize) << 4, ((*pCurMb).iMbY as isize) << 4);
+    let (cx, cy) = (((*pCurMb).iMbX as isize) << 3, ((*pCurMb).iMbY as isize) << 3);
 
     if let Some(copy16) = pFunc.pfCopy16x16Aligned {
-        copy16(
-            (*pVaaInfo).pCurY.offset(kiOffsetY as isize),
-            kiPicStride,
-            (*pVaaInfo).pRefY.offset(kiOffsetY as isize),
-            kiPicStride,
-        );
+        copy16(&curView.plane(0).cursor(lx, ly), &refView.plane(0).cursor(lx, ly));
     }
     if let Some(copy8) = pFunc.pfCopy8x8Aligned {
-        copy8(
-            (*pVaaInfo).pCurU.offset(kiOffsetUV as isize),
-            kiPicStrideUV,
-            (*pVaaInfo).pRefU.offset(kiOffsetUV as isize),
-            kiPicStrideUV,
-        );
-        copy8(
-            (*pVaaInfo).pCurV.offset(kiOffsetUV as isize),
-            kiPicStrideUV,
-            (*pVaaInfo).pRefV.offset(kiOffsetUV as isize),
-            kiPicStrideUV,
-        );
+        copy8(&curView.plane(1).cursor(cx, cy), &refView.plane(1).cursor(cx, cy));
+        copy8(&curView.plane(2).cursor(cx, cy), &refView.plane(2).cursor(cx, cy));
     }
 }
 
@@ -2242,33 +2236,28 @@ pub unsafe extern "C" fn SvcMdSCDMbEnc(
     );
 
     let pMbCache = &mut pSlice.sMbCacheInfo;
+    // S9.0c: reconstruction plane through the frame's shared view, prediction scratch
+    // through `RecCursor::over_owned` — the same operand type for two different
+    // storages, which is what lets the dispatch slot stop being a raw pointer pair.
+    // The chroma cursors both resolve at stride index 1, which is `stride_idx`'s rule
+    // and what the raw form passed by hand.
+    let recView = layer_rec_view(&*pCurDqLayer).expect("the frame's reconstruction view");
+    let luma_off = mem_pred_luma_off((*pMbCache).uiMemPredLumaHalf);
+    let chroma_off = mem_pred_chroma_off((*pMbCache).uiMemPredLumaHalf);
     if let Some(copy16) = (*pFunc).pfCopy16x16Aligned {
         copy16(
-            (*pMbCache).SPicData.mb_cursor(&(*pCurDqLayer).pCsData, &(*pCurDqLayer).iCsStride, 0),
-            (*pCurDqLayer).iCsStride[0],
-            std::ptr::addr_of_mut!((*pMbCache).sMemPredMb)
-                .cast::<u8>()
-                .add(mem_pred_luma_off((*pMbCache).uiMemPredLumaHalf)),
-            16,
+            &(*pMbCache).SPicData.mb_cursor_rec(recView, 0),
+            &RecCursor::over_owned(&mut (*pMbCache).sMemPredMb, luma_off, 16),
         );
     }
     if let Some(copy8) = (*pFunc).pfCopy8x8Aligned {
         copy8(
-            (*pMbCache).SPicData.mb_cursor(&(*pCurDqLayer).pCsData, &(*pCurDqLayer).iCsStride, 1),
-            (*pCurDqLayer).iCsStride[1],
-            std::ptr::addr_of_mut!((*pMbCache).sMemPredMb)
-                .cast::<u8>()
-                .add(mem_pred_chroma_off((*pMbCache).uiMemPredLumaHalf)),
-            8,
+            &(*pMbCache).SPicData.mb_cursor_rec(recView, 1),
+            &RecCursor::over_owned(&mut (*pMbCache).sMemPredMb, chroma_off, 8),
         );
         copy8(
-            (*pMbCache).SPicData.mb_cursor(&(*pCurDqLayer).pCsData, &(*pCurDqLayer).iCsStride, 2),
-            (*pCurDqLayer).iCsStride[1],
-            std::ptr::addr_of_mut!((*pMbCache).sMemPredMb)
-                .cast::<u8>()
-                .add(mem_pred_chroma_off((*pMbCache).uiMemPredLumaHalf))
-                .add(64),
-            8,
+            &(*pMbCache).SPicData.mb_cursor_rec(recView, 2),
+            &RecCursor::over_owned(&mut (*pMbCache).sMemPredMb, chroma_off + 64, 8),
         );
     }
 }

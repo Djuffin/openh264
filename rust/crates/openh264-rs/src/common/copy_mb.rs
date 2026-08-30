@@ -47,6 +47,7 @@
 //! calls to the kernels the encoder was already calling.
 
 #![allow(non_snake_case, non_camel_case_types, non_upper_case_globals, dead_code)]
+#![forbid(unsafe_code)]
 
 //! **T9.X — this module denies.** The seven kernels were always safe; the one
 //! remaining raw body is [`copy_shim`], the C-ABI-shaped span constructor the
@@ -98,29 +99,7 @@ pub fn copy_16x16(src: &PlaneCursor<'_>, dst: &mut PlaneCursorMut<'_>) {
     copy_rows::<16>(src, dst, 16);
 }
 
-/// One span construction for the fixed-shape copy shims (rule R-c: the span
-/// arithmetic lives in one place). Builds exact-reach views —
-/// `(H-1)*stride + W` bytes each side — and hands them to the named safe kernel.
-///
-/// # Safety
-/// `pDst` addresses a writable `(H-1)*iStrideD + W` byte span, `pSrc` a readable
-/// `(H-1)*iStrideS + W` byte span (both reach forward only from their block's
-/// `(0, 0)`); the spans are disjoint; strides `>= W` and positive.
-#[inline(always)]
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn copy_shim<const W: usize, const H: usize>(
-    pDst: *mut u8,
-    iStrideD: i32,
-    pSrc: *mut u8,
-    iStrideS: i32,
-    kernel: fn(&PlaneCursor<'_>, &mut PlaneCursorMut<'_>),
-) {
-    let (sd, ss) = (iStrideD as usize, iStrideS as usize);
-    let dst = unsafe { std::slice::from_raw_parts_mut(pDst, (H - 1) * sd + W) };
-    let src = unsafe { std::slice::from_raw_parts(pSrc, (H - 1) * ss + W) };
-    kernel(
-        &PlaneCursor::new(src, 0, ss),
-        &mut PlaneCursorMut::new(dst, 0, sd),
-    );
-}
+// **S9.0c: `copy_shim` is gone, and this file seals with it.** It built exact-reach
+// slices out of two raw pointers for the seven `WelsCopyNxM_c` shims. Those shims
+// take `RecCursor`s now — the dispatch slot carries no raw pointer — so the only
+// `unsafe` this module ever had retires with its single caller.
