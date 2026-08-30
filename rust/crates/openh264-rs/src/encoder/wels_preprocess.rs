@@ -2993,9 +2993,7 @@ impl CWelsPreProcess {
             .iLongTermPicNum
     }
 
-    // unsafe-cat: SCREEN_CONTENT(dormant)
-    #[allow(unsafe_code)]
-    pub unsafe fn UpdateBlockIdcForScreen(
+    pub fn UpdateBlockIdcForScreen(
         &self,
         pCurBlockStaticPointer: *mut u8,
         kpRefPic: Option<&PicPlanes>,
