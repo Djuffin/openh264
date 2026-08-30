@@ -87,99 +87,150 @@ ceiling. The regime:
 * Every remaining `unsafe` carries a `// unsafe-cat: …` tag; a tag comes off only
   with the unsafe it annotates.
 
-## Two opening duties (instruments, before any conversion)
+## The steps
 
-1. **Commit the span scanner as a tool.** The three-step-span scan that found the
-   five aliasing defects exists only in session history — an instrument in prose
-   is not an instrument. Rebuild it from the description above (finding F239 in
-   `rust/docs/phase9_findings.md` has the full spec), commit it under
-   `rust/tools/`, and prove both directions: the clean tree reports **zero**, and
-   an injected pattern (the recorded control: planting one in `WriteSliceBs`
-   produced a hit at `slice_multi_threading.rs:941`) reports **exactly it**. Run
-   it after every conversion batch this session — the pixel family below is made
-   of exactly the derivations it watches.
-2. **The Miri lane baseline is stale.** `rust/tools/miri_wall_baseline.txt`'s
-   data line still reads an older session's close. At your close, quote your
-   lane's CPU seconds against it and replace the data line.
+Numbered and ordered; each conversion step is one gated commit. Drop-from-the-end:
+if you must stop, stop at a commit boundary and name everything not done. After
+**every** conversion step: run the de-unsafe cascade (the converging form — strip
+`unsafe` only from declarations whose signature carries no raw pointer, iterate,
+revert what fails), then the span scanner, and seal any file whose last allow fell
+(`#![forbid(unsafe_code)]`, leaf files only — a `forbid` in a `mod.rs` seals the
+whole subtree). Counts below were measured at 431 the day this brief was written —
+re-measure each before starting its step.
 
-## What S8 does, in order (drop-from-the-end: if you must stop, stop at a commit
-boundary and name everything not done)
+### Step 0 — commit the span scanner (instrument, before any conversion)
 
-### The pixel family — the largest remaining block
+The three-step-span scan that found five aliasing defects last session exists only
+in session history — an instrument in prose is not an instrument. Rebuild it from
+finding F239's spec (`rust/docs/phase9_findings.md`): flag any binding derived
+`&mut`/`addr_of_mut!` from a struct field that is still used after a later
+whole-struct `&T`/`&*ptr` reborrow of the same struct. Commit it under
+`rust/tools/`, and prove both directions: the clean tree reports **zero**, and the
+recorded control — injecting the pattern into `WriteSliceBs` — reports exactly one
+hit (`slice_multi_threading.rs:941`). No gate needed beyond `cargo test` on the
+tool itself; it changes no product code.
 
-Of the remaining allows, the biggest tractable class is raw parameters whose
-pointee is pixels or coefficients: **53 `*mut u8` plane roots and 10 `*mut i16`
-coefficient blocks** at the last census (re-measure; the census method: classify
-every allow by the full signature of the item it heads). They concentrate in
-`encoder/deblocking.rs`, `mc.rs`, `copy_mb.rs` (motion compensation and copies),
-`encode_mb_aux.rs` (DCT kernels), and the mode-decision/ME files. The conversion
-currency already exists in the tree — the intra-prediction families take
-`&mut [u8; N]` + `&RecCursor`, and the MVD-cost conversion shows the
-biased-cursor form (a table plus an index, bias carried beside it).
+### Step 1 — the log-context family, by value
 
-The three rules that own this land:
+19 `*mut SLogContext` mentions across six files (`encoder_ext.rs`,
+`svc_enc_slice_segment.rs`, `au_set.rs`, `paraset_strategy.rs`,
+`wels_encoder_ext.rs`, `common/wels_trace.rs`), ~63 call sites, one sink
+(`WelsLog`, already a safe fn that copies the struct out). Convert **by value**
+per the analysis above — never `Option<&SLogContext>`. Null spells as
+`SLogContext::default()` (`pfLog: None`; `WelsLog` returns early on it, so a null
+pointer and a default context are observationally identical today). Gate:
+`family` — 63 sites cross the live path. Expected cascade: `au_set.rs` (10
+allows) and `paraset_strategy.rs` (7) should empty or nearly; `wels_trace.rs`
+drops to its irreducible `*mut c_void` core (step 9's subject).
 
-* **Two raw cursors must come off ONE derivation** — if a body takes `&mut [u8]`
-  and needs raw cursors inside, call `as_mut_ptr()` once and derive everything
-  from it; a second call pops the first cursor.
-* Every checkpoint here is a reference conversion → **Miri lane per checkpoint**,
-  plus a span-scanner pass.
-* A stride-based walk that C bounds by convention becomes a slice index that Rust
-  bounds by panic — **keep the slice the whole allocation** (plane, table), not
-  the row, so a stray-but-in-allocation read stays a read and not a new panic on
-  the first stream that produces it (this exact choice was made for the MVD
-  table; keep making it).
+### Step 2 — the entropy coder's last raw parameters
 
-### Stage D's remainder
+8 `*mut BsWriter` mentions: `svc_encode_slice.rs` 5, `svc_set_mb_syn_cavlc.rs` 2,
+`nal_encap.rs` 1. The safe bit-writer exists and earlier landings already moved
+the stash/position family onto references — this is the tail. Gate: `session`
+(reference conversion). Expected cascade: `nal_encap.rs` (9 allows) and the two
+`svc_set_mb_syn_*` files (7 + 8) close or nearly.
 
-* **`BsWriter`'s six sites** — the last of the entropy coder's raw parameters.
-* **`svc_encode_slice.rs` / `svc_enc_slice_segment.rs` remainder** — re-measure
-  what is left after both flips; the blockers now are body dereferences and the
-  files' own raw locals, not parameters.
-* **`slice_multi_threading.rs` residue** (~25 sites at last count) — fork
-  plumbing; anything that changes what workers share gets a targeted probe.
-* **The move-memory pair** (`WelsMoveMemory_c` / `WelsMoveMemoryWrapper` in the
-  preprocess area): its recorded constraints are that the source can be the
-  caller's own C-ABI `SSourcePicture` buffer (raw by ABI) and that source and
-  destination may be the same picture. Price it at the tree; if the safe form
-  costs more than an audited allow at the ABI edge, leave it tagged with one
-  line of reasoning and roll it to the exit list.
+### Step 3 — coefficient blocks and DCT kernels
 
-### The log-context family (analysed last session; the shape is decided)
+The `i16` family: `encode_mb_aux.rs` (12 allows; 13 `u8` + 4 `i16` raw mentions),
+`svc_encode_mb.rs` (6; 8 + 17), `decode_mb_aux.rs` (3). These are
+transform/quantisation kernels walking 4×4/8×8 coefficient blocks and their pixel
+sources. Whole-table slices (never row-bounded — a stray-but-in-allocation read
+must stay a read, not become a fresh panic); the biased-cursor form (table +
+index, bias carried beside) where a pointer parks mid-table. Gate: `session` +
+scanner pass.
 
-Eighteen raw `*mut SLogContext` parameters funnel into one sink, `WelsLog` —
-which is *already a safe fn* that null-checks and **copies the struct out**
-before calling the application's callback. The copy is deliberate and documented
-in the function: a tracing callback may re-enter the codec, and a live borrow
-across that re-entry would alias.
+### Step 4 — the mode-decision and motion-estimate land
 
-**Convert by value, not `Option<&SLogContext>`**: the struct is `Copy` and four
-words; a by-value parameter holds no borrow for a re-entrant callback to collide
-with, where `Option<&>` would put a live borrow in all 63 calling frames across
-a path no test exercises (nothing installs a re-entering callback). Null already
-has a spelling — `SLogContext::default()` has `pfLog: None` and `WelsLog`
-returns early on it, so a null pointer and a default context are observationally
-identical today. 18 parameters, 63 call sites.
+Two sub-checkpoints, both `session` + scanner:
 
-### The close (roll forward whatever doesn't fit)
+* **4a — the parameter roots**: `md.rs` (5 allows; 13 raw-`u8` mentions) and
+  `svc_motion_estimate.rs` (17; 6) — plane-root parameters onto slices/cursors,
+  same currency as step 3.
+* **4b — the body campaign in the MD pair**: `svc_mode_decision.rs` (33 allows;
+  only 3 raw-`u8` mentions — the blockage is *bodies*: bare dereferences and
+  calls into whatever steps 1–4a haven't yet cleared) and `svc_base_layer_md.rs`
+  (18; 1). Run the cascade first — much of these two may fall without hand
+  edits once their callees are safe; convert by hand only what the cascade
+  reports blocked on its own body.
 
-* **E1 rest**: decoder residue (re-measure `decoder/picture.rs` and friends —
-  largely retired); wrap the trace callback's user-supplied `*mut c_void` in a
-  newtype whose construction and invocation live only in `src/api/`, so
-  `common/` can seal.
-* **E2**: seal each file as its last allow falls (leaf files only — `forbid` in
-  a `mod.rs` seals the whole subtree); then delete `src/lib.rs`'s blanket
-  `allow(unused_unsafe, unsafe_op_in_unsafe_fn, …)`, reduce the census allowlist
-  to the api island plus the two `unsafe impl` lines, pin the ratchet at the
-  floor.
-* **E3 — the exit battery**: `bash rust/tools/gates.sh exit` — ABI export list,
-  dlopen harness, upstream gtest, full Miri including the differential tests
-  **and the two full-encode fork probes deferred all along**, both-profile
-  sweeps, and **the benches**. The bench debt is sixteen checkpoints deep and it
-  is the largest single risk left in the plan: if a bench regresses, every
-  checkpoint is its own commit — bisect over them rather than guessing, and
-  measure same-machine both sides with two after-runs (first runs have shown
-  phantom ±3% swings).
+### Step 5 — deblocking and the common pixel files
+
+`encoder/deblocking.rs` (5 allows; 3 raw-`u8`), `common/mc.rs` (3),
+`common/copy_mb.rs` (1), `common/deblocking_common.rs` (1). Small, finishes the
+old D4. Note the two `mc`/`copy_mb` files live in **`common/`**, not `encoder/`
+(this plan's own checkpoint table had that wrong). Gate: `session`.
+
+### Step 6 — the body-deref campaign in the big single-threaded files
+
+These files' allows sit on safe-looking signatures; the blockage is raw locals,
+slot reads and dereferences inside bodies. Two sub-checkpoints:
+
+* **6a — the camera path**: `ref_list_mgr_svc.rs` (27 allows — an earlier count
+  found ~52 bare dereferences inside; its accessor edges are safe now) and
+  `rc.rs` (22). Both sit near the project's historic flake — the five-times
+  re-run rule applies to any non-reproducing failure here. Gate: `family`
+  minimum, `session` if any reference conversion happens.
+* **6b — the frame-loop files**: `encoder_ext.rs` (32), `wels_encoder_ext.rs`
+  (24), `encoder_context.rs` (24 — this one holds the five `ctx_*_raw` slot
+  readers, of which two are flippable per the fork-split tool's own listing:
+  `ctx_src_pool_raw` and `ctx_vpp_raw`; the three in-fork ones stay). Gate:
+  `family`.
+
+### Step 7 — the slice core
+
+The biggest single item: `svc_encode_slice.rs` (67 allows; 13 fns still carry a
+raw parameter — five of them the `BsWriter`s step 2 takes), plus
+`svc_enc_slice_segment.rs` (20) and `slice_multi_threading.rs` (23). The nine
+layer-writer bodies stay raw by audit. Anything here that changes what worker
+threads share gets its own targeted two-thread Miri probe, control seen red.
+Likely two commits: the segment/slice-argument side, then the multi-threading
+residue. Gate: `session` + scanner on every commit.
+
+### Step 8 — preprocess and processing
+
+`wels_preprocess.rs` (17) — including the move-memory pair
+(`WelsMoveMemory_c`/`WelsMoveMemoryWrapper`): its recorded constraints are that
+the source can be the caller's own C-ABI `SSourcePicture` buffer and that source
+and destination may be the same picture. Price it at the tree; if the safe form
+costs more than an audited allow at the ABI edge, leave it tagged with one line
+of reasoning. Then the four `processing/` files (`background_detection.rs` 5,
+`complexity_analysis.rs` 4, `adaptive_quantization.rs` 2, `vaacalc.rs` 1). Gate:
+`family`.
+
+### Step 9 — E1: decoder residue and the trace newtype
+
+The decoder's 8 remaining allows (`picture.rs` 3, `pic_queue.rs` 2,
+`decoder_core.rs`/`nalu.rs`/`decode_slice.rs` 1 each), then the trace callback:
+wrap the user-supplied `*mut c_void` (`common/wels_trace.rs`, 2 allows) in a
+newtype whose construction and invocation live only in `src/api/`, so `common/`
+seals completely. Do this **after** step 1 — the by-value conversion reshapes the
+same file. Gate: `family`.
+
+### Step 10 — E2: the final flip
+
+Only when steps 1–9 are done (drop-from-the-end boundary): delete `src/lib.rs`'s
+crate-wide `allow(unused_unsafe, unsafe_op_in_unsafe_fn, …)`; reduce the census
+allowlist to the api island plus the two `unsafe impl` lines; regenerate the
+ratchet baseline and **pin it** — from here any new `unsafe` outside the island
+fails CI. Verify the seal enforces: plant a `fn __seal_probe(p: *const u8)`
+dereference in a sealed file, watch it rejected, remove it. Gate: `session`,
+plus `cargo check --all-targets` clean.
+
+### Step 11 — E3: the exit battery
+
+`bash rust/tools/gates.sh exit` — ABI export list, dlopen harness, upstream
+gtest against the known-failures ratchet, full Miri including the differential
+tests **and the two full-encode fork probes deferred all along** (~59 min as a
+parallel pair; run them via `rust/tools/fork_join_probe.sh`, which compares
+against the baseline and warns past 1.3×), both-profile sweeps, and **the
+benches**. The bench debt is sixteen checkpoints deep and is the largest single
+risk left: measure same-machine both sides, two after-runs (first runs have
+shown phantom ±3% swings), and if a regression is real, bisect over the
+per-checkpoint commits rather than guessing. At the close, advance
+`rust/tools/miri_wall_baseline.txt`'s data line — it still reads an older
+session's close.
 
 ## Working rules that earned their keep (beyond the aliasing section above)
 
