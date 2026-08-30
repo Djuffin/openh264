@@ -7262,3 +7262,173 @@ comment beside it — "keeps its raw context and its null … its parameter is s
 one, so nothing writes through the handle. `*const` states that; the `unsafe impl Send`
 is unchanged and still necessary, because raw pointers are `!Send` whatever their
 mutability.
+
+## F247 — the F239 span scanner, rebuilt: the clean tree did not report zero, and the extra hit was the instrument's fault
+
+S8's brief made the span scanner step 0 and named its acceptance exactly: "the clean
+tree reports **zero**, and the recorded control — injecting the pattern into
+`WriteSliceBs` — reports exactly one hit (`slice_multi_threading.rs:941`)". Both
+halves needed correcting, in opposite directions.
+
+**The control's line number has moved.** The derivation is at
+`slice_multi_threading.rs:945` now; the file gained four lines after S7 recorded 941.
+Injecting a whole-struct reborrow between that `addr_of_mut!` and its first use fires
+once, at the derivation, as recorded.
+
+**A stronger control exists and the brief did not know it.** S6.A1 landed the layer
+flip and its four narrowings in one commit, so the tree carrying F239's five live
+spans was never committed and the `WriteSliceBs` injection is a synthetic stand-in.
+But the narrowing is separable: `WelsInitCurrentLayer`'s own comment says the binding
+"stood 50 lines up, next to `iSliceCount`", and moving it back reconstructs the real
+defect. The scan reports it at derive@2209 / reborrow@2254 / use@2268 — Miri's
+2190/2236/2243, renumbered. **That tree still `cargo check`s clean**, which is the
+whole reason the instrument exists.
+
+**The clean tree reported one span, not zero.** `WelsEncoderEncodeExt` derives
+`pLayerBsInfo` from `(*pFbi).sLayerInfo` at 3496, `ClearFrameBsInfo(pCtx, &mut *pFbi)`
+retags the whole struct at 4068, and `(*pLayerBsInfo).rPsnr[0]` writes at 4177: F239's
+three steps in line order. It is not the defect — the reborrow's branch ends
+`return ENC_RETURN_SUCCESS;`, so the use is unreachable from it. **Line order is not
+execution order**, and a first-cut scanner cannot tell them apart.
+
+F123's clause decides what to do about that: a scanner that fires on a sound spelling
+trains the session to argue with it, and the next real hit gets the same argument. So
+the fix went into the instrument, not into a waiver table. Three refinements, each
+sound rather than convenient:
+
+| refinement | why it is sound | what it would otherwise do |
+|---|---|---|
+| a reborrow whose block unconditionally exits shields only what is *outside* that block | control flow provably cannot reach | the `WelsEncoderEncodeExt` false positive |
+| a derivation's live range ends when its own block closes | plain Rust scoping — the name past that point is a different binding | double-reports a nested re-derivation |
+| a re-binding ends the range only at the derivation's own nesting level | a `let` in a nested block is scoped to it | silently drops real spans |
+
+Calibration inherited rather than reinvented: `addr_of!`/`&(*R).f` are **not** flagged
+(F123 — a read does not remove `SharedReadWrite` items above the tag it reaches
+through, so the shared sibling survives), `addr_of_mut!` **is** (F239 recorded two such
+spans; F208's contrary second-order note is an argument the instrument reports rather
+than adjudicates). Statements are joined logically, because F208's line-based scan
+misses `let pParamInternal =` with its `addr_of_mut!` on the next line — a real shape
+in this tree.
+
+Clean tree: **0 spans / 123 exclusive field derivations / 2633 bodies / 84 files.**
+Selftest: 15 fixtures, both directions plus every calibration axis above.
+`rust/tools/f239_span_scan.py`, and it runs from the crate root or exits 2 rather than
+printing a green-looking zero.
+
+## F248 — the de-unsafe cascade's expected reach was inferred twice and wrong twice; the blocking edge is the coding-parameter family
+
+S8's brief predicts a cascade after each of its first two steps. Both predictions are
+*inferred* rows in the brief's own sense, and both are wrong — measured after the fact:
+
+| step | brief's prediction | measured |
+|---|---|---|
+| 1 (log context) | "`au_set.rs` (10 allows) and `paraset_strategy.rs` (7) should empty or nearly" | 10 and 7, **unchanged** |
+| 2 (`BsWriter`) | "`nal_encap.rs` (9) and the two `svc_set_mb_syn_*` files (7 + 8) close or nearly" | 9→8, 7→5, 8→**8** |
+
+**Why, from the compiler rather than from the shape.** Stripping `unsafe` from
+`au_set.rs`'s four log-context declarations yields **62** E0133s, every one a raw
+dereference of `*mut SSpatialLayerConfig` or `*mut SWelsSvcCodingParam` in the body;
+`paraset_strategy.rs`'s `CheckParamCompatibility` is blocked by
+`*mut SWelsSvcCodingParam` the same way. `svc_set_mb_syn_cabac.rs` has no writer
+parameter at all and could not have moved for step 2 under any outcome.
+
+The log context and the bit-writer were each *a* raw parameter on these signatures,
+never the blocking one. **The blocking edge across all four files is the coding-
+parameter family** — `SWelsSvcCodingParam` and `SSpatialLayerConfig` — which S8's
+plan does not carry as a step at all. It should: it is the cheapest remaining named
+edge, and two separate checkpoints have now been priced against it by accident.
+
+The general rule this earns, beside the brief's own "label rows measured or
+inferred": a signature with N raw parameters retires its allow when the **last** one
+goes, so a conversion's cascade is predicted by the *residue* on each signature, not
+by the parameter being converted. The cascade tool now makes that a measurement
+rather than an estimate — `rust/tools/deunsafe_cascade.py --dry-run` lists exactly
+the declarations whose signature is already clean.
+
+## F249 — the pixel family is blocked on plane *roots*, which are storage and not parameters; steps 3, 4a and 5 are not executable in the brief's order
+
+S8's steps 3, 4a and 5 convert pixel and coefficient *parameters* onto slices and
+cursors. None of the three can start, and the reason is the same for all of them and
+sits outside every file they name.
+
+**Step 3's DCT half.** `PDctFunc`'s kernels (`WelsDctT4_c`, `WelsDctFourT4_c`) are
+thin `extern "C"` shims that already reconstitute slices and call safe kernels
+(`dct_4x4`). Their pixel arguments come from `mb_cursor`, which is
+`encoder_context.rs:248`: `fn mb_cursor(&self, roots: &[*mut u8; 3], strides: &[i32; 3],
+plane: usize) -> *mut u8`. The roots are `SDqLayer::pCsData` and `pEncData`,
+`[*mut u8; 3]` each at `svc_encode_slice.rs:1098/1101`. Converting the parameter
+requires the caller to hold a slice; the caller holds a raw derived from a raw field.
+
+**Step 3's copy half.** `PCopyFunc`'s eight slots are called from
+`svc_mode_decision.rs:547` as `copy16((*pVaaInfo).pCurY.offset(kiOffsetY), …)`.
+`SVAAFrameInfo`'s six plane fields are `*mut u8` at `wels_preprocess.rs:499-504` —
+**step 8's file**, four steps later.
+
+**Step 5.** `common/mc.rs`'s three allows (`shim_wh`, `McLuma_c`, `McChroma_c`) and
+`common/copy_mb.rs`'s one (`copy_shim<W,H>`) are the same plane-root kernels one
+level down. `encoder/deblocking.rs`'s five are not convertible either, for unrelated
+reasons: two are the ruled-raw in-fork layer writers, one is a tagged test
+instrument, and the remaining two already take references and are body-blocked.
+
+The measured root inventory, all struct **storage** fields:
+
+| field | type | file |
+|---|---|---|
+| `SDqLayer::pCsData`, `pEncData` | `[*mut u8; 3]` ×2 | `svc_encode_slice.rs:1098,1101` |
+| `pEncMb`, `pRefMb`, `pCsMb` | `[*mut u8; 3]` ×3 | `svc_mode_decision.rs:190-192` |
+| `SPicture::pData` | `[*mut u8; 3]` | `encoder/picture.rs:513` |
+| `SVAAFrameInfo` planes | `*mut u8` ×6 | `wels_preprocess.rs:499-504` |
+| `pPixel`, `pVaaBlockStaticIdc`, … | `[*mut u8; 3]`, `[*mut u8; 16]`, … | `wels_preprocess.rs:268,600,601` |
+
+**This is a blocker that needs the user's ruling, and it stops three checkpoints.**
+The pixel family cannot be converted parameter-first: the roots are the work, and
+they are a storage-ownership question of the same kind F241 answered for the
+screen-content arena ("full ownership", index tables where pointers were stored).
+Until a plane-root step exists and lands, steps 3, 4a and 5 convert nothing — a
+kernel that takes `&mut [u8]` whose caller builds it with `from_raw_parts` has moved
+the `unsafe`, not retired it. The two `extern "C"` typedefs would additionally have
+to drop `extern "C"` first, on F241's precedent (`&mut [T]` is not FFI-safe, and
+these slots are internal dispatch).
+
+## F250 — the plan's single progress metric counted its own documentation: 431 was 424
+
+`safeplan_tracking.sh` greps for `#[allow(unsafe_code)]` and filtered nothing, so a
+**comment** mentioning the attribute scored as an allow. Seven did, outside
+`src/api/`:
+
+    opening commit f41fd200:  431 raw  ->  424 attributes   (api 45 -> 44)
+
+**Six of the seven are comments warning that this exact count is wrong.**
+`pic_queue.rs:31`, `decoder_core.rs:54`, `nalu.rs:12` and `decode_slice.rs:13` each
+state that `src/decoder/` "carries **two** `#[allow(unsafe_code)]` items in total
+(T8.A8)"; `pic_queue.rs:1088` states that it "reads **three by grep**". The tree
+diagnosed the defect in prose and the tool then committed it — the warnings became
+part of the number they warned about.
+
+F219 built this command *because* the figure is the plan's single progress metric and
+a hand correction had moved a right number to a wrong one. A command that counts
+prose is that failure with a longer lifetime. F246 found the same inflation in the
+context-flip tabulation's residue counts, and S8's brief carries the rule for
+checkers — "the prohibition checker counts comments … denominators, always" — applied
+to every instrument except the one that produces the headline.
+
+Fixed: matches behind `//` or `//!` are excluded, and both figures print, so the
+plan's existing tables stay readable against the basis that produced them. Every S8
+figure below is the attribute count.
+
+## F251 — the decoder residue was already complete: two mandated instruments, not eight convertible allows
+
+S8's step 9 opens "The decoder's 8 remaining allows (`picture.rs` 3, `pic_queue.rs` 2,
+`decoder_core.rs`/`nalu.rs`/`decode_slice.rs` 1 each)". Six of those eight are the
+comment mentions of F250. `src/decoder/` carries **two** real attributes, both in
+`picture.rs`'s test module, and both are **mandated instruments rather than tolerated
+debt**: S28 requires a Miri test that reads `data_ptr`'s full legal reach in both
+directions, and reading through a raw pointer is what that instrument *is*. The file's
+own comment says so, and says they retire with `data_ptr` itself when family 13's
+callers stop taking plane pointers — which is F249's plane-root work, not step 9's.
+
+So step 9's decoder half needed no conversion and has none available. Its second half
+— the trace newtype — did land (S8.9), but its stated purpose, "so `common/` seals
+completely", is not reachable this session either: `common/mc.rs` (3) and
+`common/copy_mb.rs` (1) are F249 plane-root kernels. `common/` goes 6 -> 4 and
+`common/wels_trace.rs` seals on its own.
