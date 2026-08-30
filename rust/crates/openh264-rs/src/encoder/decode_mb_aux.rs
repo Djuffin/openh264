@@ -696,14 +696,14 @@ mod tests {
 
     /// Every slot the reconstruction path dereferences must be filled.
     #[test]
-    // unsafe-cat: instrument(test)
-    #[allow(unsafe_code)]
     fn init_fills_every_reconstruction_slot() {
         // Zeroing this table is sound for the reason its own `Default` gives
         // (`wels_func_ptr_def.rs`, S21); session I converts both with the dispatch
         // tables. T6.H12 enumerated it here rather than leaving it to a grep.
         let mut fl = SWelsFuncPtrList::default();
-        unsafe { WelsInitReconstructionFuncs(&mut fl, 0) };
+        // S9.2: `WelsInitReconstructionFuncs` is a safe fn, so the block and this
+        // test's allow both retire.
+        WelsInitReconstructionFuncs(&mut fl, 0);
         assert!(fl.pfDequantization4x4.is_some());
         assert!(fl.pfDequantizationFour4x4.is_some());
         assert!(fl.pfDequantizationIHadamard4x4.is_some());

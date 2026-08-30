@@ -28,7 +28,13 @@
 //! `svc_enc_slice_segment.h`. It is kept here, with the functions it calls.
 #![allow(non_snake_case, non_camel_case_types, non_upper_case_globals)]
 
-#![deny(unsafe_code)]
+// **S9.2: sealed.** All 20 of this file's allows are gone — nine raw bodies (the
+// slice-argument validators, whose `*mut i32` cursors were type puns over a
+// `[u32; 35]`) and eleven test `unsafe` blocks that turned out to be vestigial:
+// they wrapped calls to those same nine, and became dead the moment the callees
+// went safe. They were not mandated instruments; nothing here reads a raw pointer
+// as its subject.
+#![forbid(unsafe_code)]
 
 use std::ffi::c_char;
 use std::sync::atomic::{AtomicU16, Ordering};
@@ -88,13 +94,13 @@ fn GomSizeForMbWidth(kiMbWidth: i32) -> i32 {
 /// # Safety
 /// `pSliceArg` must be non-null, and `uiSliceNum` must be non-zero and no greater than
 /// `uiSliceMbNum`'s length.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn CheckFixedSliceNumMultiSliceSetting(
+pub fn CheckFixedSliceNumMultiSliceSetting(
     kiMbNumInFrame: i32,
     pSliceArg: &mut SSliceArgument,
 ) -> bool {
-    let pSlicesAssignList = (*pSliceArg).uiSliceMbNum.as_mut_ptr() as *mut i32;
+    // **S9.2**: the raw cursor was `uiSliceMbNum.as_mut_ptr() as *mut i32` — a type
+    // pun, writing `i32` into a `[u32; MAX_SLICES_NUM_TMP]`. `v as u32` stores the
+    // same bits, so the array is written directly and the pun retires with the raw.
     let kuiSliceNum = (*pSliceArg).uiSliceNum;
     let mut uiSliceIdx: u32 = 0;
     let kiMbNumPerSlice = kiMbNumInFrame / kuiSliceNum as i32;
@@ -104,12 +110,12 @@ pub unsafe fn CheckFixedSliceNumMultiSliceSetting(
     // the pointer can never be null and the check is elided.
 
     while uiSliceIdx + 1 < kuiSliceNum {
-        *pSlicesAssignList.add(uiSliceIdx as usize) = kiMbNumPerSlice;
+        pSliceArg.uiSliceMbNum[uiSliceIdx as usize] = kiMbNumPerSlice as u32;
         iNumMbLeft -= kiMbNumPerSlice;
         uiSliceIdx += 1;
     }
 
-    *pSlicesAssignList.add(uiSliceIdx as usize) = iNumMbLeft;
+    pSliceArg.uiSliceMbNum[uiSliceIdx as usize] = iNumMbLeft as u32;
 
     if iNumMbLeft <= 0 || kiMbNumPerSlice <= 0 {
         return false;
@@ -125,15 +131,14 @@ pub unsafe fn CheckFixedSliceNumMultiSliceSetting(
 /// # Safety
 /// `pSliceArg` must be non-null and `uiSliceNum` no greater than `uiSliceMbNum`'s
 /// length.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn CheckRowMbMultiSliceSetting(kiMbWidth: i32, pSliceArg: &mut SSliceArgument) -> bool {
-    let pSlicesAssignList = (*pSliceArg).uiSliceMbNum.as_mut_ptr() as *mut i32;
+pub fn CheckRowMbMultiSliceSetting(kiMbWidth: i32, pSliceArg: &mut SSliceArgument) -> bool {
+    // S9.2, as `CheckFixedSliceNumMultiSliceSetting`: the `*mut i32` pun over a
+    // `[u32; _]` becomes a direct write of the same bits.
     let kuiSliceNum = (*pSliceArg).uiSliceNum;
     let mut uiSliceIdx: u32 = 0;
 
     while uiSliceIdx < kuiSliceNum {
-        *pSlicesAssignList.add(uiSliceIdx as usize) = kiMbWidth;
+        pSliceArg.uiSliceMbNum[uiSliceIdx as usize] = kiMbWidth as u32;
         uiSliceIdx += 1;
     }
     true
@@ -147,22 +152,23 @@ pub unsafe fn CheckRowMbMultiSliceSetting(kiMbWidth: i32, pSliceArg: &mut SSlice
 ///
 /// # Safety
 /// `pSliceArg` must be non-null.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn CheckRasterMultiSliceSetting(
+pub fn CheckRasterMultiSliceSetting(
     kiMbNumInFrame: i32,
     pSliceArg: &mut SSliceArgument,
 ) -> bool {
-    let pSlicesAssignList = (*pSliceArg).uiSliceMbNum.as_mut_ptr() as *mut i32;
+    // S9.2: the pun again, read *and* written here. `MAX_SLICES_NUM` and
+    // `MAX_SLICES_NUM_TMP` are both 35 — the loop bound is exactly the array's
+    // length — so indexing introduces no reachable panic where the raw read none.
     let mut iActualSliceCount: i32 = 0;
 
     // check mb_num setting
     let mut uiSliceIdx: u32 = 0;
     let mut iCountMb: i32 = 0;
 
-    while (uiSliceIdx < MAX_SLICES_NUM as u32) && (0 < *pSlicesAssignList.add(uiSliceIdx as usize))
+    while (uiSliceIdx < MAX_SLICES_NUM as u32)
+        && (0 < pSliceArg.uiSliceMbNum[uiSliceIdx as usize] as i32)
     {
-        iCountMb += *pSlicesAssignList.add(uiSliceIdx as usize);
+        iCountMb += pSliceArg.uiSliceMbNum[uiSliceIdx as usize] as i32;
         iActualSliceCount = uiSliceIdx as i32 + 1;
 
         if iCountMb >= kiMbNumInFrame {
@@ -178,10 +184,12 @@ pub unsafe fn CheckRasterMultiSliceSetting(
         // nothing to do
     } else if iCountMb > kiMbNumInFrame {
         // setting is more than iMbNumInFrame: cut the last uiSliceMbNum, adjust iCountMb
-        *pSlicesAssignList.add(iActualSliceCount as usize - 1) -= iCountMb - kiMbNumInFrame;
+        pSliceArg.uiSliceMbNum[iActualSliceCount as usize - 1] =
+            (pSliceArg.uiSliceMbNum[iActualSliceCount as usize - 1] as i32
+                - (iCountMb - kiMbNumInFrame)) as u32;
     } else if iActualSliceCount < MAX_SLICES_NUM as i32 {
         // iCountMb < iMbNumInFrame: make the last uiSliceMbNum the left num
-        *pSlicesAssignList.add(iActualSliceCount as usize) = kiMbNumInFrame - iCountMb;
+        pSliceArg.uiSliceMbNum[iActualSliceCount as usize] = (kiMbNumInFrame - iCountMb) as u32;
         iActualSliceCount += 1;
     } else {
         // iCountMb < iMbNumInFrame and iActualSliceCount == MAX_SLICES_NUM:
@@ -200,13 +208,7 @@ pub unsafe fn CheckRasterMultiSliceSetting(
 ///
 /// # Safety
 /// `pSliceNum` must be non-null.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn GomValidCheckSliceNum(
-    kiMbWidth: i32,
-    kiMbHeight: i32,
-    pSliceNum: *mut u32,
-) -> bool {
+pub fn GomValidCheckSliceNum(kiMbWidth: i32, kiMbHeight: i32, pSliceNum: &mut u32) -> bool {
     let kiCountNumMb = kiMbWidth * kiMbHeight;
     let mut iSliceNum: u32 = *pSliceNum;
     let iGomSize = GomSizeForMbWidth(kiMbWidth);
@@ -240,14 +242,13 @@ pub unsafe fn GomValidCheckSliceNum(
 /// # Safety
 /// `pSliceArg` must be non-null with a non-zero `uiSliceNum` no greater than
 /// `uiSliceMbNum`'s length.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn GomValidCheckSliceMbNum(
+pub fn GomValidCheckSliceMbNum(
     kiMbWidth: i32,
     kiMbHeight: i32,
     pSliceArg: &mut SSliceArgument,
 ) -> bool {
-    let pSlicesAssignList = (*pSliceArg).uiSliceMbNum.as_mut_ptr();
+    // S9.2: no pun here — the array is already `u32` — so the cursor is simply the
+    // array, indexed at each write.
     let kuiSliceNum = (*pSliceArg).uiSliceNum;
     let kiMbNumInFrame = kiMbWidth * kiMbHeight;
     let kiMbNumPerSlice = kiMbNumInFrame / kuiSliceNum as i32;
@@ -292,10 +293,10 @@ pub unsafe fn GomValidCheckSliceMbNum(
             return false;
         }
 
-        *pSlicesAssignList.add(uiSliceIdx as usize) = iCurNumMbAssigning as u32;
+        pSliceArg.uiSliceMbNum[uiSliceIdx as usize] = iCurNumMbAssigning as u32;
         uiSliceIdx += 1;
     }
-    *pSlicesAssignList.add(uiSliceIdx as usize) = iNumMbLeft as u32;
+    pSliceArg.uiSliceMbNum[uiSliceIdx as usize] = iNumMbLeft as u32;
     if iNumMbLeft < iMinimalMbNum {
         return false;
     }
@@ -311,9 +312,7 @@ pub unsafe fn GomValidCheckSliceMbNum(
 ///
 /// # Safety
 /// `pSliceArgument` must be non-null and writable.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn SliceArgumentValidationFixedSliceMode(
+pub fn SliceArgumentValidationFixedSliceMode(
     _pLogCtx: SLogContext,
     pSliceArgument: &mut SSliceArgument,
     kiRCMode: RC_MODES,
@@ -421,9 +420,7 @@ fn new_mb_map(kiCountMbNum: i32) -> Vec<AtomicU16> {
 ///
 /// # Safety
 /// `pCurDq` must be non-null with `sSliceEncCtx.pOverallMbMap` allocated.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn AssignMbMapMultipleSlices(
+pub fn AssignMbMapMultipleSlices(
     pCurDq: &mut SDqLayer,
     kpSliceArgument: &SSliceArgument,
 ) -> i32 {
@@ -457,14 +454,29 @@ pub unsafe fn AssignMbMapMultipleSlices(
     } else if (*pSliceSeg).uiSliceMode == SM_RASTER_SLICE
         || (*pSliceSeg).uiSliceMode == SM_FIXEDSLCNUM_SLICE
     {
-        let kpSlicesAssignList = (*kpSliceArgument).uiSliceMbNum.as_ptr() as *const i32;
+        // **S9.2**: the last of this file's `*const i32` puns over `[u32; 35]`.
+        //
+        // The loop below is bounded by `iSliceNumInFrame`, not by the array, so
+        // indexing is only lawful if that count cannot exceed the array — otherwise a
+        // defined-but-garbage read would become a fresh panic, which is the one rule
+        // this family has. It cannot: both modes that reach here set
+        // `iSliceNumInFrame = uiSliceNum` (`GetInitialSliceNum`), and `uiSliceNum` is
+        // capped at `MAX_SLICES_NUM` by `SliceArgumentValidationFixedSliceMode:353`
+        // for FIXEDSLCNUM and bounded by its own loop in `CheckRasterMultiSliceSetting`
+        // for RASTER. `MAX_SLICES_NUM` and `MAX_SLICES_NUM_TMP` are both 35.
+        debug_assert!(
+            (*pSliceSeg).iSliceNumInFrame.load(Ordering::Relaxed) as usize
+                <= (*kpSliceArgument).uiSliceMbNum.len(),
+            "AssignMbMapMultipleSlices: slice count exceeds uiSliceMbNum"
+        );
         let kiCountNumMbInFrame = (*pSliceSeg).iMbNumInFrame;
         let kiCountSliceNumInFrame = (*pSliceSeg).iSliceNumInFrame.load(Ordering::Relaxed);
         let mut iMbIdx: i32 = 0;
 
         iSliceIdx = 0;
         loop {
-            let kiCurRunLength = *kpSlicesAssignList.add(iSliceIdx as usize);
+            let kiCurRunLength =
+                (*kpSliceArgument).uiSliceMbNum[iSliceIdx as usize] as i32;
             let mut iRunIdx: i32 = 0;
 
             // the mb_assign_map has to be validated against the input data here, so
@@ -518,9 +530,7 @@ pub fn GetInitialSliceNum(pSliceArgument: &SSliceArgument) -> i32 {
 ///
 /// # Safety
 /// `pCurDq` and `pSliceArgument` must be non-null.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn InitSliceSegment(
+pub fn InitSliceSegment(
     pCurDq: &mut SDqLayer,
     pSliceArgument: &SSliceArgument,
     kiMbWidth: i32,
@@ -641,9 +651,7 @@ pub fn UninitSliceSegment(pCurDq: &mut SDqLayer) {
 ///
 /// # Safety
 /// `pCurDq` may be null, which returns 1 as in C++.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn InitSlicePEncCtx(
+pub fn InitSlicePEncCtx(
     pCurDq: &mut SDqLayer,
     _bFmoUseFlag: bool,
     iMbWidth: i32,
@@ -682,65 +690,45 @@ mod tests {
 
     /// 4 slices over 99 MBs: 24 each for the first three, 27 for the last.
     #[test]
-    // unsafe-cat: instrument(test)
-    #[allow(unsafe_code)]
     fn fixed_slice_num_splits_evenly_with_remainder_last() {
         let mut a = arg(4);
-        unsafe {
-            assert!(CheckFixedSliceNumMultiSliceSetting(99, &mut a));
-        }
+        assert!(CheckFixedSliceNumMultiSliceSetting(99, &mut a));
         assert_eq!(&a.uiSliceMbNum[0..4], &[24, 24, 24, 27]);
     }
 
     /// More slices than macroblocks leaves nothing for the last slice.
     #[test]
-    // unsafe-cat: instrument(test)
-    #[allow(unsafe_code)]
     fn fixed_slice_num_rejects_when_a_slice_would_be_empty() {
         let mut a = arg(8);
-        unsafe {
-            assert!(!CheckFixedSliceNumMultiSliceSetting(4, &mut a));
-        }
+        assert!(!CheckFixedSliceNumMultiSliceSetting(4, &mut a));
     }
 
     #[test]
-    // unsafe-cat: instrument(test)
-    #[allow(unsafe_code)]
     fn row_mb_assigns_one_row_per_slice() {
         let mut a = arg(3);
-        unsafe {
-            assert!(CheckRowMbMultiSliceSetting(10, &mut a));
-        }
+        assert!(CheckRowMbMultiSliceSetting(10, &mut a));
         assert_eq!(&a.uiSliceMbNum[0..3], &[10, 10, 10]);
     }
 
     /// A short total gets a trailing slice carrying the remainder, and uiSliceNum is
     /// rewritten to the actual count.
     #[test]
-    // unsafe-cat: instrument(test)
-    #[allow(unsafe_code)]
     fn raster_pads_a_short_assignment() {
         let mut a = arg(2);
         a.uiSliceMbNum[0] = 30;
         a.uiSliceMbNum[1] = 30;
-        unsafe {
-            assert!(CheckRasterMultiSliceSetting(99, &mut a));
-        }
+        assert!(CheckRasterMultiSliceSetting(99, &mut a));
         assert_eq!(a.uiSliceNum, 3);
         assert_eq!(&a.uiSliceMbNum[0..3], &[30, 30, 39]);
     }
 
     /// An over-long total is trimmed on the last used slice.
     #[test]
-    // unsafe-cat: instrument(test)
-    #[allow(unsafe_code)]
     fn raster_trims_an_over_long_assignment() {
         let mut a = arg(2);
         a.uiSliceMbNum[0] = 60;
         a.uiSliceMbNum[1] = 60;
-        unsafe {
-            assert!(CheckRasterMultiSliceSetting(99, &mut a));
-        }
+        assert!(CheckRasterMultiSliceSetting(99, &mut a));
         assert_eq!(a.uiSliceNum, 2);
         assert_eq!(&a.uiSliceMbNum[0..2], &[60, 39]);
     }
@@ -748,68 +736,48 @@ mod tests {
     /// 160x96 is 10x6 MBs; MB width 10 <= MB_WIDTH_THRESHOLD_90P so the GOM is
     /// 10 * GOM_ROW_MODE0_90P = 20 MBs, and 60 MBs cannot carry 4 slices of one GOM.
     #[test]
-    // unsafe-cat: instrument(test)
-    #[allow(unsafe_code)]
     fn gom_slice_num_reduces_to_an_even_count_that_fits() {
         let mut uiSliceNum: u32 = 4;
-        unsafe {
-            assert!(!GomValidCheckSliceNum(10, 6, &mut uiSliceNum));
-        }
+        assert!(!GomValidCheckSliceNum(10, 6, &mut uiSliceNum));
         assert_eq!(uiSliceNum, 2);
     }
 
     /// A count that already fits is returned unchanged and reports success.
     #[test]
-    // unsafe-cat: instrument(test)
-    #[allow(unsafe_code)]
     fn gom_slice_num_accepts_a_fitting_count() {
         let mut uiSliceNum: u32 = 2;
-        unsafe {
-            assert!(GomValidCheckSliceNum(10, 6, &mut uiSliceNum));
-        }
+        assert!(GomValidCheckSliceNum(10, 6, &mut uiSliceNum));
         assert_eq!(uiSliceNum, 2);
     }
 
     /// The minimum-per-slice guard added upstream: 4 slices x 20-MB GOM = 80 > 60 MBs.
     #[test]
-    // unsafe-cat: instrument(test)
-    #[allow(unsafe_code)]
     fn gom_slice_mb_num_rejects_when_minimums_exceed_the_frame() {
         let mut a = arg(4);
-        unsafe {
-            assert!(!GomValidCheckSliceMbNum(10, 6, &mut a));
-        }
+        assert!(!GomValidCheckSliceMbNum(10, 6, &mut a));
     }
 
     /// 2 slices over 10x12 MBs: GOM is 20 MBs, 120/2 = 60 rounds to 60, leaving 60.
     #[test]
-    // unsafe-cat: instrument(test)
-    #[allow(unsafe_code)]
     fn gom_slice_mb_num_assigns_gom_aligned_counts() {
         let mut a = arg(2);
-        unsafe {
-            assert!(GomValidCheckSliceMbNum(10, 12, &mut a));
-        }
+        assert!(GomValidCheckSliceMbNum(10, 12, &mut a));
         assert_eq!(&a.uiSliceMbNum[0..2], &[60, 60]);
     }
 
     /// 128x96 is 8x6 = 48 MBs, exactly MIN_NUM_MB_PER_SLICE, so fixed-slice mode falls
     /// back to a single slice (`encoder_ext.cpp:205`).
     #[test]
-    // unsafe-cat: instrument(test)
-    #[allow(unsafe_code)]
     fn fixed_slice_mode_falls_back_to_single_slice_at_min_mb_count() {
         let mut a = arg(2);
-        unsafe {
-            let ret = SliceArgumentValidationFixedSliceMode(
-                crate::common::wels_trace::SLogContext::default(),
-                &mut a,
-                RC_OFF_MODE,
-                128,
-                96,
-            );
-            assert_eq!(ret, ENC_RETURN_SUCCESS);
-        }
+        let ret = SliceArgumentValidationFixedSliceMode(
+            crate::common::wels_trace::SLogContext::default(),
+            &mut a,
+            RC_OFF_MODE,
+            128,
+            96,
+        );
+        assert_eq!(ret, ENC_RETURN_SUCCESS);
         assert_eq!(a.uiSliceMode, SM_SINGLE_SLICE);
         assert_eq!(a.uiSliceNum, 1);
     }
@@ -817,20 +785,16 @@ mod tests {
     /// uiSliceNum above MAX_SLICES_NUM is clamped rather than rejected
     /// (`encoder_ext.cpp:221`).
     #[test]
-    // unsafe-cat: instrument(test)
-    #[allow(unsafe_code)]
     fn fixed_slice_mode_clamps_slice_num_to_max() {
         let mut a = arg(MAX_SLICES_NUM as u32 + 10);
-        unsafe {
-            let ret = SliceArgumentValidationFixedSliceMode(
-                crate::common::wels_trace::SLogContext::default(),
-                &mut a,
-                RC_OFF_MODE,
-                1280,
-                720,
-            );
-            assert_eq!(ret, ENC_RETURN_SUCCESS);
-        }
+        let ret = SliceArgumentValidationFixedSliceMode(
+            crate::common::wels_trace::SLogContext::default(),
+            &mut a,
+            RC_OFF_MODE,
+            1280,
+            720,
+        );
+        assert_eq!(ret, ENC_RETURN_SUCCESS);
         assert!(a.uiSliceNum <= MAX_SLICES_NUM as u32);
     }
 }
