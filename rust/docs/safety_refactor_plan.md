@@ -2380,6 +2380,22 @@ S6=R-e, S7=R-c, S8=R-i, S9=R-o, S10=R-d, S14=R-g, S16=R-f+R-p.*
   reserved for the seam files — was therefore wrong in one specific way: the seam is
   what makes the *MT probes* necessary, but reference conversions are Miri's
   jurisdiction everywhere, seam or not. Gate them at `session`.
+- **S71 — in a tabulation, the measured sections hold and the inferred sections are
+  where the errors live** (safeplan session S7, F244/F245). S7's context-flip tabulation
+  had a measured write-set (§2) and two inferred blockers (§4b, §4c); the measured
+  section held exactly across 106 bodies, and *both* inferred entries were wrong, in
+  opposite directions — one called design work mechanical, the other called a
+  non-blocker a blocker while contradicting a ruled decision recorded in a comment the
+  author had read past. Label every tabulation row measured or inferred; before
+  executing on an inferred row, promote it to measured or treat it as a guess.
+- **S72 — a count over source text counts the documentation too: every grep-derived
+  number excludes comments or states that it does not** (F222, F246 — three instances of
+  one class). The prohibition checker flags accessor names in prose; "56 `is_null()`
+  call sites" was eleven, the other 45 being session-history notes; a tree that
+  documents its own work this thoroughly inflates any naive count of it. Corollary
+  (F242): a checker whose failure mode is a green-looking zero — the tools glob from
+  the crate root and print `0 scanned` from anywhere else — must have its result quoted
+  *with its denominator* (`0 violations / 106 bodies`), never as a bare zero.
 - **S60 — run the acceptance instrument before designing against it; its current
   failure list is the scope, and an acceptance that is a whole-system property cannot
   be a family session's exit criterion** (Phase 9 session C, F132). C's brief said
