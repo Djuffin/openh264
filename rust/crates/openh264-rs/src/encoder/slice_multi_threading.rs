@@ -65,7 +65,8 @@ use crate::encoder::nal_encap::{
 };
 use crate::common::wels_common_defs::{EWelsNalRefIdc, EWelsNalUnitType};
 use crate::encoder::svc_encode_slice::{
-    InitOneSliceInThread, ReallocateSliceInThread, SetSliceBoundaryInfo, WelsCodeOneSlice,
+    current_layer_ref, InitOneSliceInThread, ReallocateSliceInThread, SetSliceBoundaryInfo,
+    WelsCodeOneSlice,
 };
 use crate::encoder::vlc_encoder::BsWriter;
 use crate::encoder::wels_encoder_ext::WelsTime;
@@ -111,29 +112,15 @@ pub const ENC_RETURN_MEMALLOCERR: i32 = 0x01;
 /// `DEFAULT_MAXPACKETSIZE_CONSTRAINT` — `svc_enc_slice_segment.h:67`, in bytes.
 pub const DEFAULT_MAXPACKETSIZE_CONSTRAINT: u32 = 1200;
 
-/// `WelsSetMemUint16_c` — `codec/common/inc/macros.h:306`.
-///
-/// # Safety
-/// `pDst` must point to at least `iSizeOfData` writable `u16`s.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn WelsSetMemUint16_c(pDst: *mut u16, iValue: u16, iSizeOfData: i32) {
-    for i in 0..iSizeOfData as usize {
-        *pDst.add(i) = iValue;
-    }
-}
+// **S9.3: the three `WelsSetMem*_c` kernels are deleted — they were dead.**
+//
+// `WelsSetMemMultiplebytes_c` had no caller anywhere in `src/` or `tests/`, only a
+// stale import in `svc_enc_slice_segment.rs`, and it was in turn the *only* caller
+// of `WelsSetMemUint16_c` and `WelsSetMemUint32_c`. The closure is all three —
+// S18's rule that a dead-code deletion is a closure question, not a name question.
+// The port's own fills go through `Vec`/slice writes and need no memset primitive.
 
-/// `WelsSetMemUint32_c` — `codec/common/inc/macros.h:300`.
-///
-/// # Safety
-/// `pDst` must point to at least `iSizeOfData` writable `u32`s.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn WelsSetMemUint32_c(pDst: *mut u32, iValue: u32, iSizeOfData: i32) {
-    for i in 0..iSizeOfData as usize {
-        *pDst.add(i) = iValue;
-    }
-}
+
 
 /// `WelsSetMemMultiplebytes_c` — `codec/common/inc/macros.h:312`.
 ///
@@ -172,32 +159,6 @@ pub fn fill_mb_map(map: &[AtomicU16], kiFirstMb: i32, kiCount: i32, uiValue: u16
     }
 }
 
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn WelsSetMemMultiplebytes_c(
-    pDst: *mut u16,
-    iValue: u32,
-    iSizeOfData: i32,
-    iDataLengthOfData: i32,
-) {
-    debug_assert!(iDataLengthOfData == 4 || iDataLengthOfData == 2 || iDataLengthOfData == 1);
-
-    if 0 != iValue {
-        if 4 == iDataLengthOfData {
-            WelsSetMemUint32_c(pDst as *mut u32, iValue, iSizeOfData);
-        } else if 2 == iDataLengthOfData {
-            WelsSetMemUint16_c(pDst as *mut u16, iValue as u16, iSizeOfData);
-        } else {
-            std::ptr::write_bytes(pDst as *mut u8, iValue as u8, iSizeOfData as usize);
-        }
-    } else {
-        std::ptr::write_bytes(
-            pDst as *mut u8,
-            0,
-            (iSizeOfData * iDataLengthOfData) as usize,
-        );
-    }
-}
 
 // ============================================================================
 // Data Structures
@@ -864,7 +825,7 @@ pub unsafe fn AppendSliceToFrameBs(
     // T9.H4: the `is_null()` disjunct that opened this guard is gone — a
     // `&mut sWelsEncCtx` cannot be null, and every caller now holds one. The
     // remaining conditions are unchanged.
-    if pLbi.is_null() || current_layer(pCtx).is_null() {
+    if pLbi.is_null() || current_layer_ref(pCtx).is_none() {
         return 0;
     }
 
@@ -939,7 +900,7 @@ pub unsafe fn WriteSliceBs(
     iSliceSize: &mut i32,
 ) -> i32 {
     // **S7.A5**: the context arm retires with the parameter; the layer arm is live.
-    if current_layer(pCtx).is_null() {
+    if current_layer_ref(pCtx).is_none() {
         return 0;
     }
     let pSliceBs = std::ptr::addr_of_mut!((*pSlice).sSliceBs);
@@ -948,7 +909,7 @@ pub unsafe fn WriteSliceBs(
     let mut iNalIdx = 0i32;
     let mut iReturn = ENC_RETURN_SUCCESS;
     let iTotalLeftLength = ((*pSliceBs).uiBsSize - (*pSliceBs).uiBsPos) as i32;
-    let pNalHdrExt = std::ptr::addr_of!((*current_layer(pCtx)).sLayerInfo.sNalHeaderExt);
+    let pNalHdrExt = std::ptr::addr_of!(current_layer_ref(pCtx).expect("layer bound").sLayerInfo.sNalHeaderExt);
     // T7.C4: the write cursor is the slice's own buffer root, null when the slice
     // shares the frame's — which is what the raw `pBs` was, and `WelsEncodeNal`
     // rejects a null `dst` exactly as the C++ did.
@@ -1038,7 +999,7 @@ pub unsafe fn AdjustEnhanceLayer(pCtx: &mut sWelsEncCtx, iCurDid: i32) -> i32 {
     // T9.H4: the `is_null()` disjunct that opened this guard is gone — a
     // `&mut sWelsEncCtx` cannot be null, and every caller now holds one. The
     // remaining conditions are unchanged.
-    if ctx_dq_layer(pCtx, 0).is_null() || current_layer(pCtx).is_null() {
+    if ctx_dq_layer(pCtx, 0).is_null() || current_layer_ref(pCtx).is_none() {
         return 0;
     }
 
@@ -1056,7 +1017,7 @@ pub unsafe fn AdjustEnhanceLayer(pCtx: &mut sWelsEncCtx, iCurDid: i32) -> i32 {
     };
     let kiMultipleThreadIdc = pCtx.param().iMultipleThreadIdc;
 
-    let kbModelingFromSpatial = (*current_layer(pCtx)).pRefLayer.is_some()
+    let kbModelingFromSpatial = current_layer_ref(pCtx).expect("layer bound").pRefLayer.is_some()
         && match kPrevSliceArg {
             Some((uiSliceMode, uiSliceNum)) => {
                 uiSliceMode == SliceMode::SM_FIXEDSLCNUM_SLICE
@@ -1075,7 +1036,7 @@ pub unsafe fn AdjustEnhanceLayer(pCtx: &mut sWelsEncCtx, iCurDid: i32) -> i32 {
         // LAYER (base == current when iCurDid is the base), so the load is
         // hoisted above the retag.
         let kiSliceNumInFrame =
-            (*current_layer(pCtx)).sSliceEncCtx.iSliceNumInFrame.load(Ordering::Relaxed);
+            current_layer_ref(pCtx).expect("layer bound").sSliceEncCtx.iSliceNumInFrame.load(Ordering::Relaxed);
         iNeedAdj = NeedDynamicAdjust(&mut *pBaseLayer, kiSliceNumInFrame);
         if iNeedAdj != 0 {
             // T9.G6: hoisted (shape B).
@@ -1088,7 +1049,7 @@ pub unsafe fn AdjustEnhanceLayer(pCtx: &mut sWelsEncCtx, iCurDid: i32) -> i32 {
             return 0;
         }
         let kiSliceNumInFrame =
-            (*current_layer(pCtx)).sSliceEncCtx.iSliceNumInFrame.load(Ordering::Relaxed);
+            current_layer_ref(pCtx).expect("layer bound").sSliceEncCtx.iSliceNumInFrame.load(Ordering::Relaxed);
         iNeedAdj = NeedDynamicAdjust(&mut *pCurLayer, kiSliceNumInFrame);
         if iNeedAdj != 0 {
             // T9.G6: hoisted (shape B).
@@ -1502,7 +1463,7 @@ unsafe fn EncodeOneSliceInJob(
     if iReturn != ENC_RETURN_SUCCESS {
         return SliceJobResult { iResult: iReturn, bInitFailed: true };
     }
-    iReturn = SetSliceBoundaryInfo((current_layer(pCtx)).as_ref(), &mut *pSlice, iSliceIdx);
+    iReturn = SetSliceBoundaryInfo(current_layer_ref(pCtx), &mut *pSlice, iSliceIdx);
     if iReturn != ENC_RETURN_SUCCESS {
         return SliceJobResult { iResult: iReturn, bInitFailed: true };
     }
@@ -1652,7 +1613,7 @@ pub unsafe fn EncodeFixedSlicesForked(pCtx: &mut sWelsEncCtx, kiSliceCount: i32)
 pub unsafe fn UpdateMbMapForked(pCtx: &mut sWelsEncCtx, kiTaskCount: i32) {
     // T9.H: the `pCtx.is_null()` disjunct is gone — a `&mut sWelsEncCtx`
     // cannot be null and every caller now holds one. The rest is unchanged.
-    if kiTaskCount <= 0 || current_layer(pCtx).is_null()
+    if kiTaskCount <= 0 || current_layer_ref(pCtx).is_none()
         || pCtx.pSliceThreading.is_none()
     {
         return;
@@ -1727,7 +1688,7 @@ unsafe fn EncodeOnePartitionSizeLimited(
     if iReturn != ENC_RETURN_SUCCESS {
         return SliceJobResult { iResult: iReturn, bInitFailed: true };
     }
-    iReturn = SetSliceBoundaryInfo((current_layer(pCtx)).as_ref(), &mut *pSlice, iPartitionIdx);
+    iReturn = SetSliceBoundaryInfo(current_layer_ref(pCtx), &mut *pSlice, iPartitionIdx);
     if iReturn != ENC_RETURN_SUCCESS {
         return SliceJobResult { iResult: iReturn, bInitFailed: true };
     }

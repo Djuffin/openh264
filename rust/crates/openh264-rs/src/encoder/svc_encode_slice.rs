@@ -736,6 +736,32 @@ pub unsafe fn current_layer(pCtx: &sWelsEncCtx) -> *mut SDqLayer {
     ctx_dq_layer(pCtx, idx.get())
 }
 
+/// The current layer as a **shared reference** — F240's companion to
+/// [`current_layer`], and expressible with no `unsafe` at all.
+///
+/// F240 named this the cheap piece that moves `current_layer`'s callers and priced
+/// it exactly: `iCurDqLayer?` then `ppDqLayerList.get(idx)?.as_deref()`. Every field
+/// it touches is already owned and safe, so the whole body is three `?`s.
+///
+/// **Why a shared borrow is sound where `ctx_dq_layer`'s raw was needed.** F71 wrote
+/// that accessor to avoid *retagging* the layer, because two workers resolve the same
+/// one per call and an exclusive claim would race. A shared reference makes no
+/// exclusive claim — sibling `&SDqLayer`s coexist by construction, which is the whole
+/// premise of the S6 flip that put `&SDqLayer` in 28 signatures. Nothing writes
+/// `ppDqLayerList` inside the fork; the list is built at `InitDqLayers` and emptied at
+/// teardown.
+///
+/// `None` where `current_layer` answers null, so the two agree on the unset state.
+#[inline]
+pub fn current_layer_ref(pCtx: &sWelsEncCtx) -> Option<&SDqLayer> {
+    let idx = pCtx.iCurDqLayer?;
+    debug_assert!(
+        idx.get() < MAX_DEPENDENCY_LAYER,
+        "iCurDqLayer = {idx:?} is past the largest list InitDqLayers can build"
+    );
+    pCtx.ppDqLayerList.get(idx.get())?.as_deref()
+}
+
 /// Make `kIdx` the current layer — the setter half of [`current_layer`], and the
 /// only writer of `sWelsEncCtx::iCurDqLayer`.
 ///
