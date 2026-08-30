@@ -7476,6 +7476,19 @@ completely", is not reachable this session either: `common/mc.rs` (3) and
 
 ## F252 — the plane views land for the source planes, and **S9.0b is refused by a standing ruling**: the VAA "cur" planes are a fork-visible *write* target on an ungated path
 
+> **SUPERSEDED THE SAME DAY BY F253 — and the way it was wrong is the point.** This
+> finding refused the conversion on T9.B20's authority, quoting F117's "nothing in
+> the gate battery can see it". **That premise had been false since session B4**,
+> whose `bg` preset F126 calibrated with a planted fault in this very function's
+> luma copy, failing all three clips. The sites converted in S9.0c.
+>
+> What survives is the *diagnosis*: `pCur*` is the destination, the write is in-fork
+> into the picture the encoder reads, and a read-only view is the wrong type for it.
+> That is why the conversion needed S9.0b's `SharedPlane`-backed view first. What
+> does not survive is the conclusion — and it did not survive because a user
+> disputed it, not because any instrument flagged it. **A deferral's premise expires,
+> not just its conclusion**, and F126 sat 120 lines below F117 in this same file.
+
 S9.0a converted the source planes and the DCT family behind them (commit
 `08a2be27`): `RoPicView` through `&SPicture`, `pEncView` on `SDqLayer`, `PDctFunc`
 off `extern "C"` and onto `(&mut [i16], &PlaneCursor, &PlaneCursor)`, both shims
@@ -7541,3 +7554,187 @@ its use and drop it in the same call*, `svc_mode_decision.rs:630` — and every
 caller S9.0a converted satisfies it, since each cursor is an argument to one kernel
 call. But it is now a constraint on a public API, on a path no gate walks, so it is
 documented on `RoPicView` itself rather than left in the family's folklore.
+
+## F253 — a deferral's *premise* expires, not just its conclusion: F117's three copy sites convert, because the gate it said did not exist has existed since session B4
+
+T9.B20 left `VaaBackgroundMbDataUpdate`'s three copies raw, and stated its reason
+plainly: *"nothing in the gate battery can see it"* — the diffharness pinned
+`bEnableBackgroundDetection` false, so the path was outside every sweep row.
+**Session B4 built exactly that gate** (D-ref-1), and F126 recorded its calibration
+120 lines further down the same file: 48 rows, three clips, `t=4` chosen *because*
+the function writes the source picture from inside a slice thread, entry probed at
+thousands of `WelsMdBackgroundMbEnc` calls per row against a **dark control of
+zero**, and the load-bearing line — *"a planted one-sample fault in
+`VaaBackgroundMbDataUpdate`'s luma copy fails all three clips"*.
+
+So the deferral's premise had been false for several sessions. S9's brief, this
+session's own F252, and the report that accompanied it all repeated F117's sentence
+without checking whether a later finding had overtaken it; **the user disputed it,
+and the user was right.** The rule: *a decision's premise expires, not just its
+conclusion. A deferral resting on a measurement must be re-read against the
+measurements taken since — especially in a file that appends.*
+
+**The conversion, and what it needed.** `PCopyFunc` drops `extern "C"` and its two
+raw pointers for `fn(&RecCursor, &RecCursor)`. Both operands are cell-based, and
+that is forced rather than stylistic: the slot's two callers disagree about storage
+— the background path copies picture-to-picture, the mode-decision path copies an
+owned prediction scratch into a picture plane — and **a function-pointer table
+cannot be generic**. `RecCursor::over_owned` brings the scratch to the same type
+through `Cell::from_mut(..).as_slice_of_cells()`, the standard library's own safe
+door from an exclusive borrow to shared-mutable cells, so the unification costs no
+`unsafe` at all.
+
+`SVAAFrameInfo`'s six `*mut u8` plane roots become two `RoPicView`s. Storing a view
+is correct *here* where a slice-based one would not be: the destination is written
+in-fork into the picture the encoder is reading (F117's probe: `same:true` on 18
+frames of 18), and cells make that lawful where a `&[u8]` over the plane would claim
+every byte and race it.
+
+The byte offsets become sample coordinates and name the same addresses:
+`kiOffsetY = ((iMbY * stride + iMbX) << 4)` expands to
+`(iMbY << 4) * stride + (iMbX << 4)`, which is a cursor at `(iMbX << 4, iMbY << 4)`
+anchored on the plane's padded origin — the address `pCurY` held.
+
+**Results.** `VaaBackgroundMbDataUpdate` is a **safe fn** — the cascade found it and
+retired its allow. `copy_shim` had one caller family and dies with it, so
+`common/copy_mb.rs` carries `#![forbid(unsafe_code)]` and `common/` is down to
+`mc.rs` alone. Tracking 412 -> **403**; ratchet `raw_ptr` -26, `unsafe_block` -10,
+`unsafe_fn` -9, no per-file increase. Two size pins moved with measured numbers
+(`SVAAFrameInfo` 360 -> 520, `SVAAFrameInfoExt` 1376 -> 1536); both are drift
+trackers rather than ABI contracts — this struct has been off the C++'s 264 since
+Phase 6 session B, and `repr(C)` came off at T6.F3.
+
+## F254 — what remains: 22 slice cursors over a picture the fork writes, and the aliasing referee that does not exist
+
+The source-plane *read* path is still
+
+    layer_enc_pic(layer)?.plane(i).cursor(x, y)   ->   PlaneCursor { buf: &[u8], .. }
+
+at **22 call sites** — `svc_mode_decision.rs` (10), `svc_base_layer_md.rs` (11),
+`md.rs` (1). Each forms a shared slice over the **whole plane allocation** of a
+picture that F117's path writes in-fork, and `bEnableBackgroundDetection` is `true`
+by default (`param_svc.rs:293`). A whole-plane shared claim races a concurrent write
+to any byte inside it, where the raw pointers this family replaced were byte-precise
+and disjoint per worker.
+
+**This predates S9 and was not introduced by it.** S9.0a joined the 22 by giving its
+own new path a slice-based view; S9.0b corrected that one to the shared seam. The
+other 22 stand.
+
+**The blocker is an instrument, not effort.** The `bg` preset is a *byte* referee
+and it passes — a data race need not move a byte, which is the entire reason the
+Miri lane exists. But Miri runs `--lib` unit tests and never the diffharness sweeps,
+so the one configuration that exercises the background write sits outside the one
+instrument that could see the aliasing. **Nothing currently in the battery can fail
+on this.**
+
+So the next session's first step here is a targeted two-thread Miri probe over one
+source plane — one thread copying as `VaaBackgroundMbDataUpdate` does, another
+reading as the mode-decision path does — with its control seen red, on the model of
+the three probes already in `svc_encode_slice.rs`. Converting 22 sites before that
+probe exists would be converting on faith; this session found three design errors in
+this family already, and each was caught by a measurement rather than by care.
+
+## F255 — three of step 3/5/7a's "conversions" were deletions, and the tree had already recorded that they were dead
+
+Steps 3, 5 and 7a retired 38 allows, and **fewer than half were conversions.**
+
+| what | how it went | why |
+|---|---|---|
+| `WelsIDctT4Rec_c`, `WelsIDctFourT4Rec_c`, `WelsIDctRecI16x16Dc_c` | deleted | slots deleted in S18 (F138/F139: installed, asserted, never called); only the differential tests drove them |
+| `shim_wh`, `McLuma_c`, `McChroma_c` | deleted | their three call sites build cursors now, on a pattern the same function already used |
+| `WelsSetMemUint16_c`, `WelsSetMemUint32_c`, `WelsSetMemMultiplebytes_c` | deleted | the third had **no caller at all** and was the only caller of the other two |
+| `WelsInitEncodingFuncs`'s allow | deleted | its `unsafe` block wrapped `&mut *pFuncList` on a parameter that has been `&mut` since the table flip |
+| 9 slice-argument validators | converted | `as_mut_ptr() as *mut i32` over a `[u32; 35]` — a type pun; `v as u32` is the same bits |
+| 11 `svc_enc_slice_segment` test allows | deleted | vestigial `unsafe` blocks around calls to those nine |
+
+**The generalisation, and it is S18's rule pointed at `unsafe` rather than at dead
+code:** before converting a raw body, ask whether it has a caller. Three of these
+families were kept alive by nothing but their own differential test or a stale
+import, and a conversion would have carefully preserved code the tree had already
+decided it did not need. `WelsInitReconstructionFuncs`'s own comment said so in
+plain words — *"the kernels stay: the differential tests drive them by name"* —
+which is a statement that they are otherwise unreachable.
+
+**And a correction to this session's own accounting.** An earlier report classified
+`svc_enc_slice_segment.rs` as "11 of 20 test instruments" that would stay. They were
+not instruments; they were `unsafe` blocks wrapping calls that went safe under them.
+So I asked the compiler whether that generalised, instead of guessing twice:
+`unused_unsafe` is not suppressed in this crate (`lib.rs:34` deleted the allow
+because "it suppressed nothing"), and tree-wide it found exactly **two** unnecessary
+blocks. The other **38** `instrument(test)` allows outside `src/api/` are genuine —
+they read a raw pointer *as* the instrument, like the decoder's `data_ptr` reach
+tests. There is no test-allow harvest waiting.
+
+**`common/` is sealed.** `copy_mb.rs` and `mc.rs` were the last two, and
+`common/mod.rs` now carries a subtree `#![forbid(unsafe_code)]` so a new file
+inherits the rule. That is one of the plan's end-state milestones reached.
+
+## F256 — step 7's remainder is the fork seam, and partial conversion inside a body retires nothing
+
+`svc_enc_slice_segment.rs` went 20 -> 0 because its nine bodies converted
+*completely*. The other two files of step 7 do not behave that way, and the
+measurement says why.
+
+Stripping `slice_multi_threading.rs`'s declarations leaves **79 raw dereferences and
+61 unsafe calls** across 20 bodies — about seven blockers each. The named callees:
+
+| blocker | count |
+|---|---:|
+| `current_layer` | 17 |
+| `slice_in_layer` | 6 |
+| `ctx_dq_layer` | 5 |
+| `WelsLoadNalForSlice` / `WelsUnloadNalForSlice` | 8 |
+| `InitOneSliceInThread`, `WelsCodeOneSlice`, `thread_bs_buffer`, … | the rest |
+
+**F240's named lever was built and it paid nothing yet.** `current_layer_ref(ctx)
+-> Option<&SDqLayer>` is now in the tree, expressible with no `unsafe` at all
+exactly as F240 priced it, and ten call sites use it. **Zero allows retired**, because
+an allow comes off a body only when its *last* raw operation goes — the same rule
+F248 stated for signatures, one level down. Partial conversion inside a body is
+preparation, not progress, and should be reported as such.
+
+**What actually blocks the seam.** `slice_bank_root` hands out a raw into the slice
+bank *by design*: F71's note records that `&mut Vec<SSlice>` is a `Unique` retag over
+the `Vec`, that **every worker resolves bank 0** in the fixed slice modes, and that
+two of them retagging it at once is a data race even though neither writes the `Vec`.
+So the slices workers write are reached through raws deliberately, and converting
+them is the same problem `RecPicView` solved for the reconstruction picture: a shared
+view whose cells make concurrent writes lawful, plus a targeted two-thread probe with
+its control seen red.
+
+That is design work of the kind D-mt-3 exists for, not a mechanical flip — and the
+brief says so itself ("Anything here that changes what worker threads share gets its
+own targeted two-thread Miri probe"). It is the largest single design problem left in
+the plan, and it should open a session rather than close one.
+
+## F257 — the Miri baseline is read newest-**first**, so S8 advanced nothing by appending, and the number two sessions compared against was three closes stale
+
+S8's brief opened on an instrument debt: `miri_wall_baseline.txt` "still reads an
+older session's close". S8 duly wrote a new line — and **appended it**. The gate
+reads the baseline with
+
+    data=$(grep -v '^#' "$base" | awk 'NF {print; exit}')        # gates.sh:206
+
+— the **first** non-comment line. So the appended line sat where nothing looks, and
+both S8's and S9's six gates went on comparing against S5's `cpu=1151`. That is very
+likely how the file went stale in the first place: S6 and S7 were reported as not
+advancing it, but an append would look like advancing it and behave like not.
+
+Fixed by ordering: closes are **prepended**, the file says so in its own header, and
+S8's line is kept beside S9's with its ratio recomputed against the number it should
+have used.
+
+**The measurements, restated honestly.** S9's lane is `cpu 1419 s` (wall 559 s)
+against S8's `1224 s` — **ratio 1.16**, not the 1.23 the gate printed against the
+stale line. S8's own was 1224 against S5's 1151 — 1.06. Neither trips the 1.3 wire
+and both are real increases; the lane also gained a test at S9.0b. Six gates ran on
+one machine this session, so the next close should re-measure before reading a trend
+into two points.
+
+**The rule this earns, and it is the third instance today.** S8 fixed the tracking
+metric because it counted comments (F250); S9 found the ratchet baseline needed a
+field-by-field diff before regeneration, twice; and now the Miri baseline turns out
+to have been written in a direction nothing reads. **An instrument's output is not
+evidence that its input was consumed** — after advancing a baseline, read it back
+the way the tool reads it.
