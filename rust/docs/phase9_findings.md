@@ -7738,3 +7738,162 @@ field-by-field diff before regeneration, twice; and now the Miri baseline turns 
 to have been written in a direction nothing reads. **An instrument's output is not
 evidence that its input was consumed** — after advancing a baseline, read it back
 the way the tool reads it.
+
+## F258 — the source-plane referee exists now, and its control is red at *one* round: F234's calibration rule does not generalise
+
+F254 recorded that **nothing in the battery could fail** on a source-plane aliasing
+mistake. That is no longer true. `svc_mode_decision.rs`'s
+`source_plane_reads_do_not_race_the_in_fork_background_copy` puts two scoped threads
+over one `SPicture`'s luma plane, reached through the production `RoPicView`: a
+writer running `VaaBackgroundMbDataUpdate`'s luma copy into macroblock 0, a reader
+running the mode-decision 16x16 source fetch from macroblock 1. It is named under
+`encoder::`, so the Miri lane runs it from now on, and it is **entirely safe code** —
+no `allow(unsafe_code)`, unlike the four probes in `svc_encode_slice.rs`.
+
+**Two controls, both seen red.**
+
+| control | verdict |
+|---|---|
+| reader respelled as the route the remaining sites use — `pic.plane(0).cursor(16, 0)` | **RED**: "Data race detected between (1) non-atomic write on thread `unnamed-2` and (2) **retag read of type `[u8]`** on thread `unnamed-3`", naming `Vec`'s own deref as the second access and `RecCursor::set` as the first |
+| reader pointed at the writer's *own* macroblock, still through the seam | **RED** — cells make a concurrent write lawful, not an overlapping one correct |
+
+The first control is the one that matters: **the reader touches no byte the writer
+touches.** What races is the whole-allocation shared claim the `&[u8]` makes on its
+way to a byte-precise read. That is F254's defect in miniature, and it is why the fix
+is the seam and not a narrower slice.
+
+**The calibration, and it contradicts F234 — which is the finding.** The
+partition-counter probe needed 200 rounds because at 8 its control came back green,
+and its comment says the number is load-bearing. I did not inherit that number; I
+measured. **Both controls here are red at 1, 8 and 32 rounds** (the first also at 4,
+the second also at 200) — red at a *single* round. The reason is access density: one
+round is sixteen 16-byte rows against a sibling claiming the whole allocation, where
+F234's probe raced two byte-precise scalars and needed a lucky schedule. So the count
+was chosen for **cost**, not sensitivity: 64 costs 16.8 s under Miri where 200 costs
+35.8 s, and still leaves 64x margin over the smallest count seen red.
+
+**The rule.** A calibration is a property of the probe, not of the project. F234's
+"the round count is load-bearing" is true of F234's probe and false of this one, and
+copying it would have cost 19 s on every session gate forever while *reporting* a
+margin that was never measured. Calibrate each probe against its own control.
+
+## F259 — step 2 is not a call-site edit, it is a kernel-family migration, and the constraint that makes it one is a function pointer
+
+The brief priced step 2 as "the 22 slice-cursor sites migrate to the shared seam …
+each moves onto `SharedPlane` views, the shape S9.0b established". I measured the
+enumeration and then the blast radius, and both are wrong in the same direction.
+
+**First, the count.** F254's enumeration is 22 — `svc_mode_decision.rs` 10,
+`svc_base_layer_md.rs` 11, `md.rs` 1. Re-measured, non-comment `layer_enc_pic` call
+sites are **21**: 10 / **10** / 1. (Those 21 sites derive 27 plane cursors between
+them, so neither 21 nor 22 is the number of *cursors*; say which is meant.)
+
+**Second, and this is the finding.** Flipping all 21 to `layer_enc_view` compiles to
+**32 type errors in two classes** — 28 `&PlaneCursor` -> `&RecCursor` and 4
+`&PaddedPlane` -> `&SharedPlane`. Those are not the work; they are the entrance to
+it. The cost kernels the source cursors feed are reached through
+`PSampleSadSatdCostFunc = fn(&PlaneCursor<'_>, &PlaneCursor<'_>) -> i32` — a
+**function pointer**, which cannot be generic — and `svc_motion_estimate.rs` indexes
+it by a runtime `block_size`, so the slot cannot be bypassed.
+
+I checked whether the two operand positions could take different types, since a
+function pointer permits that. They cannot:
+
+| position | receives |
+|---|---|
+| 1 | enc plane (`md.rs:1647`), scratch buffer (`svc_mode_decision.rs:1194`) |
+| 2 | enc plane (`svc_mode_decision.rs:1194`), scratch (`md.rs:1474`), **reference plane** (`md.rs:1647`, and every `sad_fn(&cEnc, &pRefPlane.cursor(..))` in the ME) |
+
+So position 2 must be one type serving enc, scratch and reference alike. The moment
+the source operand becomes `RecCursor`, **the reference plane must follow** — and the
+reference cursor is what `MeRefineFracPixel` hands to `common/mc.rs`'s half-pel
+filters. `mc.rs` has **29 functions taking `&PlaneCursor`**, reads them through
+`row(dy, dx0, len)` at 18 sites with *runtime* lengths, is shared with the decoder,
+and carries measured comments on its loop shapes ("*A zipped column walk, not
+indexing*", "*A rolling window, not six fresh `row` calls per output row*").
+
+**So step 2's true scope is: the SAD/SATD/ME/MC kernel families migrate to a cursor
+type a shared cell view can produce.** That is a session of its own and it wants the
+bench referee, which the plan defers to the exit battery. It is not 21 call sites.
+
+**What was measured, and what it makes free.** Two objections that could have killed
+the design are dead, both by measurement rather than argument:
+
+* *`common` may not depend on `encoder`* — a rule this tree records at
+  `intra_pred_common.rs:118` and reached by making kernels generic over
+  `safe::plane::RefSamples`. That works here too: `sad_common.rs` went generic and
+  still serves `processing/scene_change_detection.rs`, which feeds it `PlaneCursor`
+  over borrowed `&[u8]` and **cannot** produce a `RecCursor` (`over_owned` needs
+  `&mut`). Any design that made the kernels concrete would have broken that caller.
+* *cells and by-value rows cost speed on the hottest kernel* — they do not. A
+  standalone 16x16 SAD over a 1952-stride plane, 4096 anchors x 300 iterations,
+  timed three ways: today's inherent `&[u8; N]` walk **33.8 ms**, a generic
+  by-value walk over a slice **33.8 ms**, the same over cells **33.9 ms** —
+  ratios 1.000 and 1.004. The bounds-check *fold* is what matters, not the row's
+  ownership, and `&[Cell<u8>]` can be lent so the fold survives.
+
+The working design is therefore known and priced: `RefSamples` gains a folded
+`row_blocks<const N>` returning `[u8; N]`; `sad_common` goes generic; `sample.rs`,
+the two cost slots and `pfCopyBlockByMode` go concrete on `RecCursor`; scratch
+operands use the existing `RecCursor::over_owned`; the reference plane gets
+`layer_ref_view`; `mc.rs`'s reachable filters go generic over a runtime-length row
+accessor that does not yet exist. **The work was built to the `mc.rs` boundary,
+measured, and reverted** — an incomplete type migration cannot be committed, and
+committing the infrastructure alone is F256's "lever built early that paid nothing".
+
+## F260 — `ctx_param_raw` and `ctx_vpp_raw` were holding up an ordering rule, not a requirement
+
+`ref_list_mgr_svc.rs` went **27 allows to 19** with no new concept — two combined
+accessors on §4.6's existing idiom, and one shared twin of an existing raw accessor.
+What the conversion actually removed is more interesting than the count.
+
+Three LTR bodies opened with a field-precise `addr_of_mut!` cursor off
+`ctx_param_raw` held across a later whole-context reborrow — **F239's shape**,
+single-threaded and sweep-invisible. They survived it by *ordering*, and said so in a
+comment (T9.H3): "every raw root first, the `&mut`-shaped LTR borrow last, so it
+coexists only with derefs of raws into other allocations and never with a second use
+of `pCtx`". Three more bodies reached the preprocess through `ctx_vpp_raw` with a
+comment explaining that the slot read made the `&mut` receiver and the shared list
+borrow "borrows of two different owners".
+
+Both comments are true. Both describe a **disjointness the compiler could have
+granted**, refused only because two accessor calls each claim the whole context.
+`ltr_family_mut` projects five fields at once (parameter slot, VAA, reference list,
+LTR state, `bRefOfCurTidIsLtr`); `vpp_and_ref_list_mut` projects two. After that
+there is no order to keep, and the rule is enforced by the compiler rather than by a
+comment that the next editor may not read.
+
+**The generalisation.** A hand-maintained ordering rule in a comment is a *symptom*
+of a missing combined accessor, and it is the exact precondition F239 punishes: the
+defect fires when someone reorders two statements that look independent. Where this
+plan finds such a comment, the accessor it is standing in for is the conversion.
+
+Two smaller notes from the same batch, both worth keeping:
+
+* **`ctx_sps`'s deferral was half-expired.** Its comment justifies the raw return —
+  "every caller holds it beside other reaches into the same context; a reference
+  would borrow the context for its whole lifetime". True of callers that *keep* it,
+  false of the three here that read one field on one line. `ctx_sps_ref` is the
+  shared twin those take. A deferral can expire for *part* of its caller set.
+* **The cascade found the eighth body, not I.** After the batch,
+  `deunsafe_cascade.py` reported `RefStrategyKind::EndofUpdateRefList` newly safe —
+  its three arms had all gone safe underneath it. Re-running the cascade *after* a
+  conversion batch, which the brief mandates, paid a whole allow here.
+
+## F261 — a ```ignore doc block on a public item is an ignored doctest, and the gate counts them
+
+The first `session` run of S10.5a failed on `cargo test (debug): ignored set is 21,
+must be 20 (plan §1.4)` — with no test added or ignored. The cause: a ```ignore
+fenced block in the doc comment of a new **public** accessor. `cargo test` collects
+doctests from public items, and an `ignore` fence is an ignored doctest.
+
+S10.1's probe carries the same fence and did *not* trip the gate, which is what makes
+the rule legible rather than mysterious: that one is inside `#[cfg(test)] mod tests`,
+from which doctests are not collected. So the trigger is **public item + ```ignore**,
+not the fence alone.
+
+The tree's own convention is already ```text — `ctx_vpp_raw`'s doc uses it for the
+Miri verdict it quotes — and ```text is not collected at all. Use it for any
+illustration that is not meant to compile. This is a cheap finding, but the gate's
+message names a count rather than a cause, and the next session to add a documented
+public accessor will otherwise spend the same ten minutes.
