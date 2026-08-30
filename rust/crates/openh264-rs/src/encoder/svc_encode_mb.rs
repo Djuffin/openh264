@@ -290,7 +290,9 @@ pub const MAX_DEPENDENCY_LAYER: usize = 4;
 
 
 // Function pointer signatures for SWelsFuncPtrList
-pub type PDctFunc = unsafe extern "C" fn(*mut i16, *mut u8, i32, *mut u8, i32);
+// S9.0: the duplicate declaration of `PDctFunc` that stood here is gone — the
+// canonical one is `encode_mb_aux`'s, which `wels_func_ptr_def` already imported.
+pub use crate::encoder::encode_mb_aux::PDctFunc;
 pub type PTransformHadamard4x4Func = unsafe extern "C" fn(*mut i16, *mut i16);
 pub type PQuantizationFunc = unsafe extern "C" fn(*mut i16, *const i16, *const i16);
 pub type PQuantizationDcFunc = unsafe extern "C" fn(*mut i16, i16, i16);
@@ -453,36 +455,25 @@ pub fn WelsDequantIHadamard2x2Dc(pDct: &mut [i16; 4], kuiMF: u16) {
 ///
 /// Divides the 16x16 macroblock into four 8x8 quadrants and executes `pfDctFourT4` once per quadrant.
 ///
-/// # Safety
-/// - `pRes` must point to a writable `int16_t` buffer of at least 256 elements.
-/// - `pEncMb` and `pBestPred` must point to valid image and prediction sample buffers.
+/// **S9.0**: the two strides are gone from the signature because the cursors carry
+/// them, and the four quadrant offsets are now stated in samples rather than in
+/// bytes-times-stride. They name the same addresses: the prediction scratch is
+/// stride 16, so its old `+8 / +128 / +136` are `(8,0) / (0,8) / (8,8)`.
 #[inline]
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
-pub unsafe fn WelsDctMb(
-    pRes: *mut i16,
-    pEncMb: *mut u8,
-    iEncStride: i32,
-    pBestPred: *mut u8,
+pub fn WelsDctMb(
+    pRes: &mut [i16],
+    pEncMb: &PlaneCursor<'_>,
+    pBestPred: &PlaneCursor<'_>,
     pfDctFourT4: Option<PDctFunc>,
 ) {
     if let Some(func) = pfDctFourT4 {
-        func(pRes, pEncMb, iEncStride, pBestPred, 16);
-        func(pRes.add(64), pEncMb.add(8), iEncStride, pBestPred.add(8), 16);
-        func(
-            pRes.add(128),
-            pEncMb.offset(8 * iEncStride as isize),
-            iEncStride,
-            pBestPred.add(128),
-            16,
-        );
-        func(
-            pRes.add(192),
-            pEncMb.offset(8 * iEncStride as isize + 8),
-            iEncStride,
-            pBestPred.add(136),
-            16,
-        );
+        for (k, (dx, dy)) in [(0isize, 0isize), (8, 0), (0, 8), (8, 8)].into_iter().enumerate() {
+            func(
+                &mut pRes[k << 6..],
+                &pEncMb.advance(dx, dy),
+                &pBestPred.advance(dx, dy),
+            );
+        }
     }
 }
 
@@ -508,9 +499,14 @@ pub unsafe fn WelsEncRecI16x16Y(
     // array and kills any raw held across it (F114).
     let pPred = (*pMbCache).SPicData.mb_cursor(&(*pCurDqLayer).pCsData, &(*pCurDqLayer).iCsStride, 0);
     let kiRecStride = (*pCurDqLayer).iCsStride[0];
-    let pBestPred = std::ptr::addr_of_mut!((*pMbCache).sMemPredMb)
-        .cast::<u8>()
-        .add(mem_pred_luma_off((*pMbCache).uiMemPredLumaHalf));
+    // S9.0: the prediction scratch is an owned `[u8; 2*256+16]` on the cache, so a
+    // cursor over it needs no raw at all. Stride 16 is the scratch's own geometry,
+    // which the raw form passed as a literal at every call.
+    let pBestPred = PlaneCursor::new(
+        &(*pMbCache).sMemPredMb,
+        mem_pred_luma_off((*pMbCache).uiMemPredLumaHalf),
+        16,
+    );
     let mut kpNoneZeroCountIdx = 0usize;
     let uiQp = (*pCurMb).uiLumaQp;
     let mut uiNoneZeroCountMbAc = 0u32;
@@ -518,11 +514,13 @@ pub unsafe fn WelsEncRecI16x16Y(
     let pMF = &g_kiQuantMF[uiQp as usize];
     let pFF = get_quant_intra_ff(uiQp as usize);
 
+    let encView = crate::encoder::svc_encode_slice::layer_enc_view(&*pCurDqLayer)
+        .expect("the frame's source view is stamped with pEncData");
+    let pEncCur = (*pMbCache).SPicData.mb_cursor_ro(encView, 0);
     WelsDctMb(
-        std::ptr::addr_of_mut!((*pMbCache).sCoeffLevel).cast::<i16>(),
-        (*pMbCache).SPicData.mb_cursor(&(*pCurDqLayer).pEncData, &(*pCurDqLayer).iEncStride, 0),
-        kiEncStride,
-        pBestPred,
+        &mut (*pMbCache).sCoeffLevel,
+        &pEncCur,
+        &pBestPred,
         (*pFuncList).pfDctFourT4,
     );
 
@@ -685,10 +683,17 @@ pub unsafe fn WelsEncRecI4x4Y(
     let iRecStride = (*pCurDqLayer).iCsStride[0];
 
     let uiOffset = g_kuiMbCountScan4Idx[uiI4x4Idx as usize] as usize;
-    let pEncMb = (*pMbCache).SPicData.mb_cursor(&(*pCurDqLayer).pEncData, &(*pCurDqLayer).iEncStride, 0);
-    let pBestPred = std::ptr::addr_of_mut!((*pMbCache).sMemPredBlk4)
-        .cast::<u8>()
-        .add(best_pred_i4x4_blk4_off((*pMbCache).uiBestPredI4x4Blk4Half));
+    // S9.0: source plane through the frame's read-only view, prediction scratch
+    // through its own owned `[u8; 2*16]`. Stride 4 is the blk4 scratch's geometry,
+    // which the raw form passed as a literal at the call.
+    let encView = crate::encoder::svc_encode_slice::layer_enc_view(&*pCurDqLayer)
+        .expect("the frame's source view is stamped with pEncData");
+    let pEncMb = (*pMbCache).SPicData.mb_cursor_ro(encView, 0);
+    let pBestPred = PlaneCursor::new(
+        &(*pMbCache).sMemPredBlk4,
+        best_pred_i4x4_blk4_off((*pMbCache).uiBestPredI4x4Blk4Half),
+        4,
+    );
     let kiBlk = uiI4x4Idx as usize;
 
     let pMF = &g_kiQuantMF[uiQp as usize];
@@ -708,12 +713,13 @@ pub unsafe fn WelsEncRecI4x4Y(
     let dec_block_offset = *pStrideDecBlockOffset.add(uiI4x4Idx as usize) as isize;
 
     if let Some(func) = (*pFuncList).pfDctT4 {
+        // S9.0: `advance(n, 0)` moves the centre by exactly `n` bytes, which is what
+        // `.offset(enc_block_offset)` did — the block offset is a byte offset, not a
+        // sample coordinate. The prediction scratch's stride 4 rides in its cursor.
         func(
-            std::ptr::addr_of_mut!((*pMbCache).sCoeffLevel).cast::<i16>(),
-            pEncMb.offset(enc_block_offset),
-            iEncStride,
-            pBestPred,
-            4,
+            &mut (*pMbCache).sCoeffLevel,
+            &pEncMb.advance(enc_block_offset, 0),
+            &pBestPred,
         );
     }
     if let Some(func) = (*pFuncList).pfQuantization4x4 {

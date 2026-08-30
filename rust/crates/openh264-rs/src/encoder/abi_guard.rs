@@ -423,7 +423,14 @@ assert_size!(SSliceBufferInfo, 32);
 // profiles, and the reason is not size: the banks had to leave the struct's own bytes
 // so that a worker writing its bank stops racing a sibling body's whole-layer shared
 // retag, which is what the `&SDqLayer` flip in D2/D3 needs (see the field's own note).
-assert_size_by_profile!(SDqLayer, debug 760, release 688);
+// **S9.0: +104 bytes in both profiles** — `pEncView: Option<RoPicView>`, the read
+// half of the reconstruction seam, stamped beside `pRecView`. Three `RoPlane`s of
+// (base, len, stride, origin) is 96 bytes and the `Option` has no niche to use over
+// a raw base, so the discriminant costs 8 more. This pin does not describe a C-ABI
+// contract — `SDqLayer` does not cross the boundary — it catches a *second
+// declaration* of the type read at the wrong offsets, so it moves with a deliberate
+// field addition. Both numbers measured, in the profile they name.
+assert_size_by_profile!(SDqLayer, debug 864, release 792);
 
 // codec/encoder/core/inc/wels_func_ptr_def.h
 // 1280 before Phase 4a; -8 for `SSampleDealingFunc`'s shrink above; -24 at T4b.1,

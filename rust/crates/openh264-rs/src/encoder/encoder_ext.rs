@@ -2332,6 +2332,13 @@ pub unsafe fn WelsInitCurrentLayer(pCtx: &mut sWelsEncCtx, _kiWidth: i32, _kiHei
     (*pCurDq).pRecView =
         Some(crate::encoder::rec_view::RecPicView::build((*pRefList).pic_mut(idDec)));
 
+    // S9.0: the read half of the seam, stamped beside the write half above and
+    // rebuilt every frame for the same reason. `get` and not `get_mut` — a
+    // read-only view makes no exclusive claim, which is the whole difference
+    // between this and `RecPicView`.
+    (*pCurDq).pEncView =
+        Some(crate::encoder::rec_view::RoPicView::build((*pSrcPool).get(idEnc)));
+
     (*pCurDq).pEncData[0] = pEncPic.pData[0];
     (*pCurDq).pEncData[1] = pEncPic.pData[1];
     (*pCurDq).pEncData[2] = pEncPic.pData[2];
