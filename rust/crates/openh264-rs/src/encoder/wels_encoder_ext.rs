@@ -3006,7 +3006,7 @@ uiResolutionChangeTimes={}, uIDRReqNum={}, uIDRSentNum={}, uLTRSentNum=NA, iTota
                     // is replaced and handed back to the callback untouched. Never
                     // dereferenced by this crate.
                     let ctx = pOption.cast::<*mut c_void>().read();
-                    self.m_pWelsTrace.SetTraceCallbackContext(ctx);
+                    self.m_pWelsTrace.SetTraceCallbackContext(crate::api::codec_api::TraceUserCtx::from_abi(ctx));
                     self.sync_log_ctx();
                 }
                 // C++ ends with `default: return cmInitParaError`. There is no

@@ -1100,6 +1100,89 @@ pub struct SBitrateInfo {
 pub type WelsTraceCallback =
     Option<unsafe extern "C" fn(ctx: *mut c_void, level: i32, string: *const c_char)>;
 
+/// The caller's opaque trace handle, as it travels *inside* the port.
+///
+/// **S8.9, and the newtype is the whole point.** `SLogContext` is reachable from
+/// `common/` and from every encoder file that logs, and the bare `*mut c_void` in it
+/// was the last thing making `common/wels_trace.rs` carry `unsafe`: a raw pointer in
+/// a struct is an obligation wherever that struct goes. Construction and invocation
+/// both live here, in the C-ABI island, so the field travels everywhere else as an
+/// opaque token with no obligation attached.
+///
+/// `repr(transparent)` over the pointer keeps `SLogContext`'s byte image
+/// **identical**, which matters more than usual here: that struct is a field of
+/// `sWelsEncCtx`, whose whole image is pinned against a `memset`-zero shell by
+/// `encoder_context.rs`'s equivalence test.
+///
+/// This crate never dereferences the handle — T8.B10's reason for `c_void` is
+/// unchanged, and `deliver` hands it straight back to the caller untouched.
+#[repr(transparent)]
+#[derive(Copy, Clone, Debug)]
+pub struct TraceUserCtx(*mut c_void);
+
+impl Default for TraceUserCtx {
+    /// No handle installed. `SLogContext::default()` is all-zero by design, and a
+    /// null handle is what the reference's `memset` leaves.
+    fn default() -> Self {
+        Self(std::ptr::null_mut())
+    }
+}
+
+impl TraceUserCtx {
+    /// The only door in: whatever the caller installed through
+    /// `ENCODER_OPTION_TRACE_CALLBACK_CONTEXT` or the decoder's equivalent.
+    #[inline]
+    pub fn from_abi(p: *mut c_void) -> Self {
+        Self(p)
+    }
+
+    /// Invoke the caller's sink — the one C-ABI call this handle exists for, and the
+    /// reason `WelsLog` no longer needs an `unsafe` of its own.
+    ///
+    /// # Safety of the call itself
+    /// `pfLog` and the handle were installed together by the application through
+    /// `SetOption`; neither can carry a lifetime across `codec_api.h`, so their
+    /// validity is the caller's contract exactly as it is in the reference.
+    #[inline]
+    // unsafe-cat: C-ABI
+    #[allow(unsafe_code)]
+    pub fn deliver(
+        self,
+        pfLog: unsafe extern "C" fn(ctx: *mut c_void, level: i32, string: *const c_char),
+        level: i32,
+        line: &std::ffi::CStr,
+    ) {
+        unsafe { pfLog(self.0, level, line.as_ptr()) };
+    }
+}
+
+/// The default trace sink — `welsCodecTrace.cpp`'s `welsStderrTrace`.
+///
+/// **S8.9: this lives in the island now.** It is an `extern "C" fn` whose whole body
+/// is C-ABI work (`CStr::from_ptr` on a buffer the caller's ABI describes), so it
+/// belongs on this side of the boundary rather than in `common/`, which is sealing.
+///
+/// # Safety
+/// `string` is the NUL-terminated buffer [`crate::common::wels_trace::WelsLog`] just
+/// formatted; `ctx` is whatever was installed beside the callback and is not read
+/// here, as it is not read in the reference.
+// unsafe-cat: C-ABI
+#[allow(unsafe_code)]
+pub unsafe extern "C" fn welsStderrTrace(_ctx: *mut c_void, _level: i32, string: *const c_char) {
+    if string.is_null() {
+        return;
+    }
+    // `fprintf(stderr, "%s\n", string)`. Written through `std::io::stderr()` rather
+    // than `libc::fprintf` so it interleaves correctly with the rest of this process's
+    // stderr; the reference's C `stderr` and Rust's are the same fd either way.
+    let bytes = unsafe { std::ffi::CStr::from_ptr(string) }.to_bytes();
+    use std::io::Write as _;
+    let out = std::io::stderr();
+    let mut lock = out.lock();
+    let _ = lock.write_all(bytes);
+    let _ = lock.write_all(b"\n");
+}
+
 // ============================================================================
 // C/C++ Virtual Function Tables & Interface Definitions
 // ============================================================================
@@ -1572,7 +1655,7 @@ impl Encoder {
     /// replaced or this encoder is dropped, so it must stay valid for that long.
     /// It is the caller's, and this crate never dereferences it.
     pub unsafe fn set_trace_callback_context(&mut self, ctx: *mut c_void) {
-        self.0.m_pWelsTrace.SetTraceCallbackContext(ctx);
+        self.0.m_pWelsTrace.SetTraceCallbackContext(crate::api::codec_api::TraceUserCtx::from_abi(ctx));
         self.0.sync_log_ctx();
     }
 
@@ -2434,7 +2517,7 @@ impl Decoder {
     /// replaced or this decoder is dropped, so it must stay valid for that long.
     /// It is the caller's, and this crate never dereferences it.
     pub unsafe fn set_trace_callback_context(&mut self, ctx: *mut c_void) {
-        self.trace.SetTraceCallbackContext(ctx);
+        self.trace.SetTraceCallbackContext(crate::api::codec_api::TraceUserCtx::from_abi(ctx));
         self.sync_log_ctx();
     }
 

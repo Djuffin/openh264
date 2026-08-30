@@ -1,8 +1,11 @@
 #![allow(non_snake_case, non_camel_case_types, non_upper_case_globals, dead_code)]
-// `WelsLog` takes the application's own `SLogContext*` and calls the callback
-// inside it; the pointer is the C ABI's and the null check above the deref is
-// the whole contract. See the `C-ABI` tag on the function.
-#![allow(clippy::not_unsafe_ptr_arg_deref)]
+// **S8.9: sealed.** `WelsLog` took the application's own `SLogContext*` and called
+// the callback inside it, so this file carried both the deref and the C-ABI call.
+// S8.1 retired the deref (the context travels by value) and S8.9 moved the call
+// behind `TraceUserCtx::deliver` in `src/api/`, so nothing here is unsafe any more —
+// and the `clippy::not_unsafe_ptr_arg_deref` allow that stood here went with the raw
+// parameter that earned it.
+#![forbid(unsafe_code)]
 
 //! The codec trace, shared by both codecs.
 //!
@@ -54,7 +57,7 @@
 
 use std::ffi::{CString, c_char, c_void};
 
-pub use crate::api::codec_api::WelsTraceCallback;
+pub use crate::api::codec_api::{TraceUserCtx, WelsTraceCallback};
 
 /// `codec_app_def.h:323-331` — the trace levels, and `WELS_LOG_DEFAULT`.
 ///
@@ -99,7 +102,12 @@ pub struct SLogContext {
     pub pfLog: WelsTraceCallback,
     /// **C-ABI**: the caller's opaque context, handed back to `pfLog` untouched.
     /// Never dereferenced by this crate.
-    pub pLogCtx: *mut c_void,
+    ///
+    /// **S8.9**: a [`TraceUserCtx`] rather than a bare `*mut c_void`. Same bytes
+    /// (`repr(transparent)`), but constructing one and invoking through one both
+    /// live in `src/api/`, so this field no longer carries an `unsafe` obligation
+    /// into every module that holds an `SLogContext`.
+    pub pLogCtx: TraceUserCtx,
     /// The boundary object's address, for the message tag's `this = 0x…` only.
     /// An address and not a pointer: `utils.cpp:51` formats it with `%p` and does
     /// nothing else with it, so a value that cannot be dereferenced is the honest
@@ -132,7 +140,7 @@ impl Default for SLogContext {
     fn default() -> Self {
         Self {
             pfLog: None,
-            pLogCtx: std::ptr::null_mut(),
+            pLogCtx: TraceUserCtx::default(),
             pCodecInstance: 0,
             iTraceLevel: WELS_LOG_QUIET,
             _reserved: 0,
@@ -149,23 +157,11 @@ impl Default for SLogContext {
 /// in this port formats first and passes a `&str`; the filter and the tag are both
 /// here, and the observable — one call to the caller's callback per delivered
 /// message, with the level and the tagged text — is the same.
-// unsafe-cat: C-ABI
-//
-// **The one `unsafe` site left in this function is the caller's ABI, not the port's**
-// (tagged at session J's root `deny`, which is what first made this file visible —
-// it never carried a per-file `deny`). `SLogContext` holds the application's own
-// `pfLog` function pointer and its opaque `pLogCtx` handle, set through
-// `SetOption(ENCODER_OPTION_TRACE_CALLBACK)`; both cross `codec_api.h` and neither
-// can carry a lifetime. The call at the tail — "invoke the caller's callback" — is
-// this module's entire purpose and all that remains unsafe here.
-//
-// **S8.1**: the parameter was `*mut SLogContext` and the body opened by copying out
-// of it, precisely so a re-entrant callback could not alias a borrow of the caller's
-// storage. Taking the `Copy` struct by value *is* that copy, made one frame earlier,
-// so the deref and its null guard both retire: a null pointer and a
-// `SLogContext::default()` are observationally identical here, because `pfLog: None`
-// takes the same early return the null check did.
-#[allow(unsafe_code)]
+// **S8.9: no `unsafe` left here at all.** The call to the application's sink is
+// `TraceUserCtx::deliver`, in `src/api/` — the C-ABI obligation lives at the
+// boundary that owns it, and this function is the plain formatter it always read
+// as. The by-value parameter (S8.1) had already retired the deref and its null
+// guard.
 pub fn WelsLog(ctx: SLogContext, iLevel: i32, msg: &str) {
     let Some(pfLog) = ctx.pfLog else {
         return;
@@ -201,7 +197,7 @@ pub fn WelsLog(ctx: SLogContext, iLevel: i32, msg: &str) {
     let Ok(cline) = CString::new(line) else {
         return;
     };
-    unsafe { pfLog(ctx.pLogCtx, iLevel, cline.as_ptr() as *const c_char) };
+    ctx.pLogCtx.deliver(pfLog, iLevel, &cline);
 }
 
 /// `welsCodecTrace` — `welsCodecTrace.h:41`.
@@ -227,27 +223,11 @@ pub struct welsCodecTrace {
 /// replaces it, and `GetOption(*_TRACE_CALLBACK)` hands its address back, so it has
 /// to be the same type as anything a consumer could install.
 ///
-/// # Safety
-///
-/// `string` is the NUL-terminated buffer [`WelsLog`] just formatted; `ctx` is
-/// whatever was installed beside the callback and is not read here, as it is not read
-/// in the reference.
-// unsafe-cat: C-ABI
-#[allow(unsafe_code)]
-pub unsafe extern "C" fn welsStderrTrace(_ctx: *mut c_void, _level: i32, string: *const c_char) {
-    if string.is_null() {
-        return;
-    }
-    // `fprintf(stderr, "%s\n", string)`. Written through `std::io::stderr()` rather
-    // than `libc::fprintf` so it interleaves correctly with the rest of this process's
-    // stderr; the reference's C `stderr` and Rust's are the same fd either way.
-    let bytes = unsafe { std::ffi::CStr::from_ptr(string) }.to_bytes();
-    use std::io::Write as _;
-    let out = std::io::stderr();
-    let mut lock = out.lock();
-    let _ = lock.write_all(bytes);
-    let _ = lock.write_all(b"\n");
-}
+/// The default trace sink now lives in the C-ABI island — see
+/// [`crate::api::codec_api::welsStderrTrace`]. Re-exported here because this is the
+/// module every caller reaches it through, and because `SLogContext`'s own default
+/// names it.
+pub use crate::api::codec_api::welsStderrTrace;
 
 impl Default for welsCodecTrace {
     /// `welsCodecTrace::welsCodecTrace()` — `welsCodecTrace.cpp:53`, both statements:
@@ -290,7 +270,9 @@ impl welsCodecTrace {
         self.m_sLogCtx.pfLog = func;
     }
 
-    pub fn SetTraceCallbackContext(&mut self, pCtx: *mut c_void) {
+    /// **S8.9**: takes the token, not the pointer. Callers at the C-ABI boundary
+    /// mint one with [`TraceUserCtx::from_abi`], which is where the rawness belongs.
+    pub fn SetTraceCallbackContext(&mut self, pCtx: TraceUserCtx) {
         self.m_sLogCtx.pLogCtx = pCtx;
     }
 
