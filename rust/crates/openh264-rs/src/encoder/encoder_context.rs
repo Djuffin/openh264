@@ -249,9 +249,15 @@ impl SPicData {
         roots[plane].wrapping_offset(self.mb_offset(strides[Self::stride_idx(plane)], plane))
     }
 
-    /// The same macroblock cursor, taken from a **read-only picture view** instead
-    /// of a raw plane root — S9.0, and the safe replacement for `mb_cursor` on the
-    /// source planes.
+    /// The same macroblock cursor, taken from a **picture view** instead of a raw
+    /// plane root — S9.0, and the safe replacement for `mb_cursor` on the source
+    /// planes.
+    ///
+    /// It hands back a [`RecCursor`](crate::encoder::rec_view::RecCursor), not a
+    /// `PlaneCursor`: the source picture is written in-fork by
+    /// `VaaBackgroundMbDataUpdate` (F117), so its planes live behind the shared seam
+    /// and no `&[u8]` may span them. See `RoPicView`'s note for why S9.0a's
+    /// slice-based form was wrong.
     ///
     /// **Byte-identical to the raw form, and the arithmetic is why.**
     /// `mb_offset` is `((iMbX + iMbY * stride) << shift)`, which expands to
@@ -273,7 +279,7 @@ impl SPicData {
         &self,
         view: &'a crate::encoder::rec_view::RoPicView,
         plane: usize,
-    ) -> crate::safe::plane::PlaneCursor<'a> {
+    ) -> crate::encoder::rec_view::RecCursor<'a> {
         let (x, y) = if plane == 0 { self.luma_origin() } else { self.chroma_origin() };
         view.plane(plane).cursor(x, y)
     }

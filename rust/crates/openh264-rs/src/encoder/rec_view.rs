@@ -92,18 +92,6 @@ impl<T: Copy> SharedCells<T> {
         Self::from_parts(v.as_mut_ptr(), v.len())
     }
 
-    /// The captured base and length, unchanged.
-    ///
-    /// Handed out for the **read-only** seam only ([`RoPlane::buf`]): a plain
-    /// shared slice over the capture is lawful exactly where no writer aliases it,
-    /// which is what `RoPlane`'s type-level precondition establishes. Nothing on
-    /// the writing side may use this — `cells()` is that side's door, and it hands
-    /// out `Cell`s precisely so no `&[T]` ever spans the buffer.
-    #[inline]
-    fn parts(&self) -> (*const T, usize) {
-        (self.base as *const T, self.len)
-    }
-
     /// An empty capture — the port's spelling of the null the C++ leaves where
     /// a picture was allocated without `bNeedMbInfo` (`picture_handle.cpp:104`).
     #[inline]
@@ -459,126 +447,53 @@ impl RecPicView {
     }
 }
 
-/// One plane of a **read-only** picture: the source surface the encode reads and
-/// never writes.
-///
-/// # Why this is a separate type from [`SharedPlane`], and not a method on it
-///
-/// `SharedPlane` sits under a *writer* — every worker writes the reconstruction
-/// picture through it, which is why its cells are `Cell<u8>` and why it can never
-/// hand out a `&[u8]`. `RoPlane` sits under no writer at all, and that difference
-/// buys the thing the whole pixel family wants: it can form a real shared slice
-/// over the allocation and hand out a plain [`PlaneCursor`] — the safe, already-
-/// written cursor type the DCT shims and the phase-2 kernels take.
-///
-/// **The soundness precondition, and it is enforced by types rather than by
-/// convention.** Forming `&[u8]` over these bytes is sound only if nothing writes
-/// them while the borrow lives. The source pictures live in `SrcPicPool` and the
-/// reconstruction pictures in `RecPicPool` (`picture.rs:682-683`), indexed by
-/// `SrcPicId` and `RecPicId` respectively — non-interchangeable types, so a
-/// picture under a `RecPicView` and a picture under a `RoPicView` cannot be the
-/// same allocation, and no `SharedPlane` writer can alias these bytes. Within the
-/// fork every worker forms its own shared borrow of the same read-only bytes,
-/// which is not a race.
-///
-/// `Sync` comes from [`SharedCells<u8>`]'s own audited impl; this type adds no new
-/// `unsafe impl`, which the end state's budget of exactly two depends on.
-///
-/// # The one constraint on cursors taken from here — **F117**, and no gate sees it
-///
-/// "Nothing writes a source plane" is true of every path any gate runs, and **false
-/// in general**. `VaaBackgroundMbDataUpdate` copies *previous source → current
-/// source* through raw roots, in-fork, and a probe measured the destination to be
-/// the very picture `pEncData` reads — `same:true` on 18 frames of 18. The
-/// diffharness sets `bEnableBackgroundDetection = false`, so that path is outside
-/// every sweep row in both profiles *and* outside the encoder-scoped Miri step.
-/// T9.B20 ruled those three copy sites stay raw for exactly that reason (rule S57:
-/// an ungated path argues for leaving a site raw, not for converting it carefully).
-///
-/// So the rule the rest of this family already follows applies to cursors from here
-/// too, and it is the discipline `svc_mode_decision.rs:630` states: **build a cursor
-/// at its use and drop it in the same call**. A shared slice held across a raw write
-/// to the same plane is a live tag when that write lands under it. Every converted
-/// caller in S9.0a satisfies this — the cursors are arguments to one kernel call —
-/// but a future caller that parks one across a mode-decision step would not, and no
-/// gate would tell it.
-#[derive(Debug)]
-pub struct RoPlane {
-    cells: SharedCells<u8>,
-    stride: usize,
-    origin: usize,
-}
-
-impl RoPlane {
-    /// Bytes per row — the C++ `iLineSize[i]`.
+impl crate::safe::plane::SampleCursor for RecCursor<'_> {
     #[inline]
-    pub fn stride(&self) -> usize {
-        self.stride
+    fn at(&self, dx: isize, dy: isize) -> u8 {
+        RecCursor::at(self, dx, dy)
     }
-
-    /// True where the picture was built without this plane at all.
     #[inline]
-    pub fn is_empty(&self) -> bool {
-        self.cells.is_empty()
+    fn row_n<const N: usize>(&self, dy: isize, dx0: isize) -> [u8; N] {
+        RecCursor::row::<N>(self, dy, dx0)
     }
-
-    /// The whole allocation, as a shared slice.
-    ///
-    /// **Whole-allocation and never row-bounded**, which is the rule the pixel
-    /// family turns on: a stray-but-in-allocation read — the top and left borders
-    /// a motion search legally reaches — must stay a read and must not become a
-    /// fresh panic. `PlaneCursor` bounds-checks against this whole span, exactly
-    /// as `PaddedPlane::at` does, so negative coordinates read the padding.
-    // unsafe-cat: recon-seam — the seam's **read half**, and the third audited item
-    // in this module beside `SharedCells::cells` and the `unsafe impl Sync`.
-    //
-    // It is intrinsic rather than incidental: a view that outlives the borrow which
-    // built it must store a base and a length, and there is no safe way back from
-    // those to a slice. The alternative is a lifetime parameter on `SDqLayer`, which
-    // propagates into `sWelsEncCtx` and the fork seam — the shape F245 already found
-    // is where designs die here. See the type's note for why a *shared slice* is
-    // lawful over these bytes and would not be over a `SharedPlane`'s.
     #[inline]
-    #[allow(unsafe_code)]
-    fn buf(&self) -> &[u8] {
-        let (base, len) = self.cells.parts();
-        // SAFETY: `base`/`len` are the picture plane's own allocation, captured from
-        // a live `&SPicture` that outlives this view; nothing writes a source plane
-        // while the view exists (see the type's note — the pools are disjoint by
-        // type), so a shared slice over it cannot alias a writer.
-        unsafe { std::slice::from_raw_parts(base, len) }
-    }
-
-    /// Sample at logical `(x, y)`; negative coordinates read the padding.
-    #[inline]
-    pub fn at(&self, x: isize, y: isize) -> u8 {
-        self.buf()[idx(self.origin, x, y, self.stride)]
-    }
-
-    /// A safe cursor anchored at logical `(x, y)` — the read-only analogue of
-    /// [`SharedPlane::cursor`], and the type the converted kernels take.
-    #[inline]
-    pub fn cursor(&self, x: isize, y: isize) -> crate::safe::plane::PlaneCursor<'_> {
-        crate::safe::plane::PlaneCursor::new(
-            self.buf(),
-            idx(self.origin, x, y, self.stride),
-            self.stride,
-        )
+    fn advance(self, dx: isize, dy: isize) -> Self {
+        RecCursor::advance(self, dx, dy)
     }
 }
 
-/// A **read-only** three-plane view of a picture — the source surface for the
-/// encode, and the analysis surface for the preprocess.
+/// A three-plane view of a picture the encode **reads** — the source surface, and
+/// the analysis surface for the preprocess.
 ///
-/// The counterpart to [`RecPicView`], and deliberately the cheaper one: it is built
-/// through `&SPicture` rather than `&mut SPicture`, because it makes no exclusive
-/// claim on anything. `RecPicView`'s module contract — one view per picture,
-/// through the exclusive borrow — exists to stop two *writers* aliasing; two
-/// readers of the same bytes need no such rule, so this constructor is public and
-/// unrestricted.
+/// # Why this is `SharedPlane` and not a plain slice — S9.0b corrects S9.0a
+///
+/// S9.0a shipped this as an `RoPlane` holding a base and a length, reconstructing a
+/// `&[u8]` over the whole plane at each use, on the argument that source pictures and
+/// reconstruction pictures live in disjoint pools so no writer could alias them.
+/// **That argument covers the wrong writer.** `VaaBackgroundMbDataUpdate` copies
+/// previous-source into current-source through raw roots, in-fork, per macroblock,
+/// and F117 measured the destination to be the very picture `pEncData` reads —
+/// `same:true` on 18 frames of 18. `bEnableBackgroundDetection` is `true` by default
+/// (`param_svc.rs:293`), so that is the ordinary configuration, not a corner.
+///
+/// A whole-plane `&[u8]` claims **every byte** of the plane, so it races a concurrent
+/// write to any of them — while the raw pointers it replaced were byte-precise and
+/// disjoint between workers. That is this project's own standing rule ("a shared `&T`
+/// claims the whole struct — it races any concurrent write to any byte inside")
+/// violated by the very type that quoted it.
+///
+/// So the source planes are reached exactly as the reconstruction planes are: through
+/// [`SharedPlane`], whose cells make a concurrent write lawful by construction, and
+/// whose [`RecCursor`] never lends a slice. The `unsafe` block S9.0a added here goes
+/// with the design that needed it.
+///
+/// Built through `&SPicture` — unlike [`RecPicView`] it makes no exclusive claim, so
+/// its constructor is public and unrestricted: several readers of one picture need no
+/// rule, and the writer this guards against reaches the plane through its own raw
+/// roots rather than through a second view.
 #[derive(Debug)]
 pub struct RoPicView {
-    planes: [RoPlane; 3],
+    planes: [SharedPlane; 3],
 }
 
 impl RoPicView {
@@ -587,9 +502,12 @@ impl RoPicView {
         let planes = [0usize, 1, 2].map(|i| {
             let p = pic.plane(i);
             if p.is_empty() {
-                RoPlane { cells: SharedCells::empty(), stride: p.stride(), origin: 0 }
+                SharedPlane { cells: SharedCells::empty(), stride: p.stride(), origin: 0 }
             } else {
-                RoPlane {
+                // `root_ptr_shared`, not `root_ptr` — F71's shape for the picture
+                // pool: `&mut self` would be a `Unique` retag over the plane header
+                // and every worker resolves the same picture.
+                SharedPlane {
                     cells: SharedCells::from_parts(p.root_ptr_shared(), p.buf_len()),
                     stride: p.stride(),
                     origin: p.origin(),
@@ -601,7 +519,7 @@ impl RoPicView {
 
     /// Plane `i` — 0 luma, 1 Cb, 2 Cr.
     #[inline]
-    pub fn plane(&self, i: usize) -> &RoPlane {
+    pub fn plane(&self, i: usize) -> &SharedPlane {
         &self.planes[i]
     }
 }

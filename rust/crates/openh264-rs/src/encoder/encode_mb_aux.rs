@@ -210,7 +210,11 @@ pub type PCopyFunc = unsafe extern "C" fn(pDst: *mut u8, iStrideD: i32, pSrc: *m
 /// `extern "C"` signature is not FFI-safe (`improper_ctypes_definitions`), which
 /// F241 established when the screen-content kernels dropped it. Nothing is lost:
 /// the slot is internal dispatch and was never reachable from C.
-pub type PDctFunc = fn(pDct: &mut [i16], pSample1: &PlaneCursor<'_>, pSample2: &PlaneCursor<'_>);
+pub type PDctFunc = fn(
+    pDct: &mut [i16],
+    pSample1: &crate::encoder::rec_view::RecCursor<'_>,
+    pSample2: &PlaneCursor<'_>,
+);
 
 // ---------------------------------------------------------------------------
 // **T9.D8 — the residual family's slots hold safe function pointers.**
@@ -338,7 +342,7 @@ pub fn hadamard_dc_span(a: &[i16], off: usize) -> &[i16; 241] {
 // ---------------------------------------------------------------------------
 
 use crate::common::copy_mb::{copy_16x16, copy_16x8, copy_4x4, copy_4x8, copy_8x16, copy_8x4, copy_8x8, copy_shim};
-use crate::safe::plane::{PlaneCursor, PlaneCursorMut};
+use crate::safe::plane::{PlaneCursor, PlaneCursorMut, SampleCursor};
 
 /// Residual of two 4x4 pixel blocks, then the 2-D forward integer DCT, into
 /// raster order.
@@ -352,14 +356,16 @@ use crate::safe::plane::{PlaneCursor, PlaneCursorMut};
 /// can overflow on any input the signature admits. (The C++ computes the same
 /// values in `int16_t` scratch; the two agree everywhere because the values
 /// fit `i16` too.)
-pub fn dct_4x4(dct: &mut [i16; 16], pix1: &PlaneCursor<'_>, pix2: &PlaneCursor<'_>) {
+pub fn dct_4x4<A: SampleCursor, B: SampleCursor>(dct: &mut [i16; 16], pix1: &A, pix2: &B) {
     let mut data = [0i32; 16];
     let mut s = [0i32; 4];
 
     for row in 0..4usize {
         let i = row << 2;
-        let r1: &[u8; 4] = pix1.row(row as isize, 0, 4).try_into().unwrap();
-        let r2: &[u8; 4] = pix2.row(row as isize, 0, 4).try_into().unwrap();
+        // S9.0b: `row_n` by value, because the source operand may be a shared
+        // interior-mutable plane and a shared view cannot lend a slice into cells.
+        let r1 = pix1.row_n::<4>(row as isize, 0);
+        let r2 = pix2.row_n::<4>(row as isize, 0);
         for k in 0..4 {
             data[i + k] = r1[k] as i32 - r2[k] as i32;
         }
@@ -400,7 +406,7 @@ pub fn dct_4x4(dct: &mut [i16; 16], pix1: &PlaneCursor<'_>, pix2: &PlaneCursor<'
 /// bottom-right.
 ///
 /// C++: `WelsDctFourT4_c`, `codec/encoder/core/src/encode_mb_aux.cpp`.
-pub fn dct_four_4x4(dct: &mut [i16; 64], pix1: &PlaneCursor<'_>, pix2: &PlaneCursor<'_>) {
+pub fn dct_four_4x4<A: SampleCursor, B: SampleCursor>(dct: &mut [i16; 64], pix1: &A, pix2: &B) {
     const SUBS: [(isize, isize); 4] = [(0, 0), (4, 0), (0, 4), (4, 4)];
     for (k, &(dx, dy)) in SUBS.iter().enumerate() {
         let sub: &mut [i16; 16] = (&mut dct[k << 4..][..16]).try_into().unwrap();
@@ -683,7 +689,11 @@ pub fn get_none_zero_count(level: &[i16; 16]) -> i32 {
 /// macroblock cursor and a 16- or 8-stride prediction scratch
 /// (`svc_encode_mb.rs:684`, `svc_encode_slice.rs`).
 #[inline]
-pub fn WelsDctT4_c(pDct: &mut [i16], pPixel1: &PlaneCursor<'_>, pPixel2: &PlaneCursor<'_>) {
+pub fn WelsDctT4_c(
+    pDct: &mut [i16],
+    pPixel1: &crate::encoder::rec_view::RecCursor<'_>,
+    pPixel2: &PlaneCursor<'_>,
+) {
     // S9.0: an adapter and nothing else now. It was three `from_raw_parts` calls
     // reconstituting exactly what the caller already had before it was flattened
     // to a pointer and a stride.
@@ -700,7 +710,11 @@ pub fn WelsDctT4_c(pDct: &mut [i16], pPixel1: &PlaneCursor<'_>, pPixel2: &PlaneC
 ///   the bytes `[0, 7*stride + 8)` from each pointer must be readable
 ///   (forward reach only). Both strides `>= 8` and positive. Only read.
 #[inline]
-pub fn WelsDctFourT4_c(pDct: &mut [i16], pPixel1: &PlaneCursor<'_>, pPixel2: &PlaneCursor<'_>) {
+pub fn WelsDctFourT4_c(
+    pDct: &mut [i16],
+    pPixel1: &crate::encoder::rec_view::RecCursor<'_>,
+    pPixel2: &PlaneCursor<'_>,
+) {
     // S9.0, as `WelsDctT4_c` above.
     let dct: &mut [i16; 64] = (&mut pDct[..64]).try_into().unwrap();
     dct_four_4x4(dct, pPixel1, pPixel2);
@@ -878,6 +892,51 @@ pub extern "C" fn WelsInitEncodingFuncs(pFuncList: &mut SWelsFuncPtrList, uiCpuF
 mod tests {
     use super::*;
     
+    /// **S9.0b's referee.** The DCT kernels are generic over [`SampleCursor`] now,
+    /// and the source operand reaches them as a `RecCursor` over a shared
+    /// interior-mutable plane rather than as a `PlaneCursor` over a slice — because
+    /// the source picture is written in-fork by `VaaBackgroundMbDataUpdate` (F117).
+    /// Two storages, one kernel: this pins that they read identically.
+    ///
+    /// **The control is in the test rather than in a session log** (the probe rule:
+    /// see a deliberately-broken variant red before trusting a pass). The second
+    /// assertion biases the shared cursor by one sample and requires the outputs to
+    /// *differ* — if the kernel ignored its source operand, or if both arms silently
+    /// read the same cursor, the equality above would pass for the wrong reason and
+    /// this line would fail.
+    #[test]
+    fn dct_reads_a_shared_source_plane_exactly_as_a_slice_cursor_does() {
+        use crate::encoder::rec_view::shared_plane_for_test;
+        use crate::safe::plane::PaddedPlane;
+
+        let (w, h, pad, stride) = (32usize, 16usize, 16usize, 64usize);
+        let mut plane = PaddedPlane::new(w, h, pad, stride);
+        for (i, b) in plane.as_mut_slice().iter_mut().enumerate() {
+            *b = ((i * 37 + 11) & 0xFF) as u8;
+        }
+        let pred = [7u8; 256];
+        let predc = PlaneCursor::new(&pred, 0, 16);
+
+        let mut via_slice = [0i16; 64];
+        dct_four_4x4(&mut via_slice, &plane.cursor(0, 0), &predc);
+
+        let shared = shared_plane_for_test(&mut plane);
+        let mut via_shared = [0i16; 64];
+        dct_four_4x4(&mut via_shared, &shared.cursor(0, 0), &predc);
+        assert_eq!(
+            via_slice, via_shared,
+            "a RecCursor source and a PlaneCursor source over the same bytes disagree"
+        );
+
+        // control, seen red by construction
+        let mut biased = [0i16; 64];
+        dct_four_4x4(&mut biased, &shared.cursor(1, 0), &predc);
+        assert_ne!(
+            via_shared, biased,
+            "control: a one-sample bias changed nothing, so this test cannot fail"
+        );
+    }
+
     #[test]
     fn test_fdct_t4() {
         let p1 = [
@@ -889,7 +948,7 @@ mod tests {
         let p2 = [0u8; 16];
         let mut dct = [0i16; 16];
 
-        WelsDctT4_c(&mut dct, &PlaneCursor::new(&p1, 0, 4), &PlaneCursor::new(&p2, 0, 4));
+        dct_4x4(&mut dct, &PlaneCursor::new(&p1, 0, 4), &PlaneCursor::new(&p2, 0, 4));
 
         assert_ne!(dct[0], 0);
     }
