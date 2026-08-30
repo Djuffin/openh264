@@ -895,6 +895,22 @@ pub fn ctx_sps(pCtx: &sWelsEncCtx) -> *mut SWelsSPS {
     arr.as_ptr().cast_mut().wrapping_add(id.get())
 }
 
+/// The context's active SPS **as a shared reference** — [`ctx_sps`]'s safe twin.
+///
+/// `ctx_sps` hands out a raw pointer for a stated reason: "every caller holds it
+/// beside other reaches into the same context; a reference would borrow the
+/// context for its whole lifetime". That is true of the callers that *keep* it.
+/// It is not true of the callers that read one field on one line and never look
+/// again — for those the borrow dies at the semicolon, and the raw deref they
+/// perform buys nothing. This is the accessor those callers take.
+///
+/// `None` in the two cases `ctx_sps` returns null: before `WelsInitEncoderExt`
+/// names an SPS, and before the array exists.
+#[inline]
+pub fn ctx_sps_ref(pCtx: &sWelsEncCtx) -> Option<&SWelsSPS> {
+    pCtx.sps_array().get(pCtx.iSps?.get())
+}
+
 /// The context's **active PPS**, resolved from its position — see [`ctx_sps`].
 #[inline]
 pub fn ctx_pps(pCtx: &sWelsEncCtx) -> *mut SWelsPPS {
