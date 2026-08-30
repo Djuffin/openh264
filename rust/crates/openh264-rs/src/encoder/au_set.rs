@@ -174,15 +174,13 @@ fn level_idc_from_raw(uiLevelIdc: u8) -> ELevelIdc {
 /// This is F177's rule reaching a parameter rather than a field: an unused name is
 /// evidence about *this* tree only, and the reference is where you find out whether
 /// it was ever supposed to be used. See F181.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn WelsBitRateVerification(
+pub fn WelsBitRateVerification(
     pLogCtx: SLogContext,
-    pLayerParam: *mut SSpatialLayerConfig,
+    pLayerParam: &mut SSpatialLayerConfig,
     iLayerId: i32,
 ) -> i32 {
-    if (*pLayerParam).iSpatialBitrate <= 0
-        || ((*pLayerParam).iSpatialBitrate as f32) < (*pLayerParam).fFrameRate
+    if pLayerParam.iSpatialBitrate <= 0
+        || (pLayerParam.iSpatialBitrate as f32) < pLayerParam.fFrameRate
     {
         WelsLog(
             pLogCtx,
@@ -190,8 +188,8 @@ pub unsafe fn WelsBitRateVerification(
             &format!(
                 "Invalid bitrate settings in layer {}, bitrate= {} at FrameRate({:.6})",
                 iLayerId,
-                (*pLayerParam).iSpatialBitrate,
-                (*pLayerParam).fFrameRate
+                pLayerParam.iSpatialBitrate,
+                pLayerParam.fFrameRate
             ),
         );
         return ENC_RETURN_UNSUPPORTED_PARA;
@@ -201,7 +199,7 @@ pub unsafe fn WelsBitRateVerification(
     let mut iCurLevelIdx = 0usize;
     while level_idc_from_raw(g_ksLevelLimits[iCurLevelIdx].uiLevelIdc) != ELevelIdc::LEVEL_5_2
         && level_idc_from_raw(g_ksLevelLimits[iCurLevelIdx].uiLevelIdc)
-            != (*pLayerParam).uiLevelIdc
+            != pLayerParam.uiLevelIdc
     {
         iCurLevelIdx += 1;
     }
@@ -209,23 +207,23 @@ pub unsafe fn WelsBitRateVerification(
     let iLevel52MaxBitrate = g_ksLevelLimits[LEVEL_NUMBER - 1].uiMaxBR as i32 * CpbBrNalFactor;
 
     if UNSPECIFIED_BIT_RATE != iLevelMaxBitrate {
-        if (*pLayerParam).iMaxSpatialBitrate == UNSPECIFIED_BIT_RATE
-            || (*pLayerParam).iMaxSpatialBitrate > iLevel52MaxBitrate
+        if pLayerParam.iMaxSpatialBitrate == UNSPECIFIED_BIT_RATE
+            || pLayerParam.iMaxSpatialBitrate > iLevel52MaxBitrate
         {
-            (*pLayerParam).iMaxSpatialBitrate = iLevelMaxBitrate;
+            pLayerParam.iMaxSpatialBitrate = iLevelMaxBitrate;
             WelsLog(
                 pLogCtx,
                 WELS_LOG_INFO,
                 &format!(
                     "Current MaxSpatialBitrate is invalid (UNSPECIFIED_BIT_RATE or larger than LEVEL5_2) but level setting is valid, set iMaxSpatialBitrate to {} from level ({})",
-                    (*pLayerParam).iMaxSpatialBitrate,
-                    (*pLayerParam).uiLevelIdc as i32
+                    pLayerParam.iMaxSpatialBitrate,
+                    pLayerParam.uiLevelIdc as i32
                 ),
             );
-        } else if (*pLayerParam).iMaxSpatialBitrate > iLevelMaxBitrate {
+        } else if pLayerParam.iMaxSpatialBitrate > iLevelMaxBitrate {
             // The reference reads the level id into `iCurLevel` *before* the adjust
             // and prints both; `WelsAdjustLevel` is what moves it.
-            let iCurLevel = (*pLayerParam).uiLevelIdc;
+            let iCurLevel = pLayerParam.uiLevelIdc;
             WelsAdjustLevel(&mut *pLayerParam, iCurLevelIdx);
             WelsLog(
                 pLogCtx,
@@ -233,13 +231,13 @@ pub unsafe fn WelsBitRateVerification(
                 &format!(
                     "LevelIdc is changed from ({}) to ({}) according to the iMaxSpatialBitrate({})",
                     iCurLevel as i32,
-                    (*pLayerParam).uiLevelIdc as i32,
-                    (*pLayerParam).iMaxSpatialBitrate
+                    pLayerParam.uiLevelIdc as i32,
+                    pLayerParam.iMaxSpatialBitrate
                 ),
             );
         }
-    } else if (*pLayerParam).iMaxSpatialBitrate != UNSPECIFIED_BIT_RATE
-        && (*pLayerParam).iMaxSpatialBitrate > iLevel52MaxBitrate
+    } else if pLayerParam.iMaxSpatialBitrate != UNSPECIFIED_BIT_RATE
+        && pLayerParam.iMaxSpatialBitrate > iLevel52MaxBitrate
     {
         // no level limitation, only guard against an unreasonably large max
         WelsLog(
@@ -247,10 +245,10 @@ pub unsafe fn WelsBitRateVerification(
             WELS_LOG_WARNING,
             &format!(
                 "No LevelIdc setting and iMaxSpatialBitrate ({}) is considered too big to be valid, changed to UNSPECIFIED_BIT_RATE",
-                (*pLayerParam).iMaxSpatialBitrate
+                pLayerParam.iMaxSpatialBitrate
             ),
         );
-        (*pLayerParam).iMaxSpatialBitrate = UNSPECIFIED_BIT_RATE;
+        pLayerParam.iMaxSpatialBitrate = UNSPECIFIED_BIT_RATE;
     }
 
     // deal with iSpatialBitrate and iMaxSpatialBitrate setting
@@ -258,25 +256,25 @@ pub unsafe fn WelsBitRateVerification(
     // The reference splits this into an `==` arm that only logs and a `<` arm that
     // logs and fails; the port had collapsed them to the failing comparison alone,
     // which is the same program and one message short of the same encoder.
-    if (*pLayerParam).iMaxSpatialBitrate != UNSPECIFIED_BIT_RATE {
-        if (*pLayerParam).iMaxSpatialBitrate == (*pLayerParam).iSpatialBitrate {
+    if pLayerParam.iMaxSpatialBitrate != UNSPECIFIED_BIT_RATE {
+        if pLayerParam.iMaxSpatialBitrate == pLayerParam.iSpatialBitrate {
             WelsLog(
                 pLogCtx,
                 WELS_LOG_INFO,
                 &format!(
                     "Setting MaxSpatialBitrate ({}) the same at SpatialBitrate ({}) will make the actual bit rate lower than SpatialBitrate",
-                    (*pLayerParam).iMaxSpatialBitrate,
-                    (*pLayerParam).iSpatialBitrate
+                    pLayerParam.iMaxSpatialBitrate,
+                    pLayerParam.iSpatialBitrate
                 ),
             );
-        } else if (*pLayerParam).iMaxSpatialBitrate < (*pLayerParam).iSpatialBitrate {
+        } else if pLayerParam.iMaxSpatialBitrate < pLayerParam.iSpatialBitrate {
             WelsLog(
                 pLogCtx,
                 WELS_LOG_ERROR,
                 &format!(
                     "MaxSpatialBitrate ({}) should be larger than SpatialBitrate ({}), considering it as error setting",
-                    (*pLayerParam).iMaxSpatialBitrate,
-                    (*pLayerParam).iSpatialBitrate
+                    pLayerParam.iMaxSpatialBitrate,
+                    pLayerParam.iSpatialBitrate
                 ),
             );
             return ENC_RETURN_UNSUPPORTED_PARA;
@@ -296,46 +294,44 @@ pub unsafe fn WelsBitRateVerification(
 /// when it resets `iLTRRefNum` and again when it resets `iNumRefFrame`; both
 /// describe a silent rewrite of a caller's setting, and the second fires on the
 /// strict path too — the reference logs *before* it decides whether to fail.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn WelsCheckNumRefSetting(
+pub fn WelsCheckNumRefSetting(
     pLogCtx: SLogContext,
-    pParam: *mut SWelsSvcCodingParam,
+    pParam: &mut SWelsSvcCodingParam,
     bStrictCheck: bool,
 ) -> i32 {
     // validate LTR num
-    let iCurrentSupportedLtrNum = if (*pParam).iUsageType == CAMERA_VIDEO_REAL_TIME {
+    let iCurrentSupportedLtrNum = if pParam.iUsageType == CAMERA_VIDEO_REAL_TIME {
         LONG_TERM_REF_NUM
     } else {
         LONG_TERM_REF_NUM_SCREEN
     };
-    if (*pParam).bEnableLongTermReference && iCurrentSupportedLtrNum != (*pParam).iLTRRefNum {
+    if pParam.bEnableLongTermReference && iCurrentSupportedLtrNum != pParam.iLTRRefNum {
         WelsLog(
             pLogCtx,
             WELS_LOG_WARNING,
             &format!(
                 "iLTRRefNum({}) does not equal to currently supported {}, will be reset",
-                (*pParam).iLTRRefNum,
+                pParam.iLTRRefNum,
                 iCurrentSupportedLtrNum
             ),
         );
-        (*pParam).iLTRRefNum = iCurrentSupportedLtrNum;
-    } else if !(*pParam).bEnableLongTermReference {
-        (*pParam).iLTRRefNum = 0;
+        pParam.iLTRRefNum = iCurrentSupportedLtrNum;
+    } else if !pParam.bEnableLongTermReference {
+        pParam.iLTRRefNum = 0;
     }
 
     // NB: the C++ carries a TODO saying the reasonable value is
     // WELS_MAX(1, WELS_LOG2(uiGopSize)) unconditionally, but changing it needs
     // reference-list updating changed too. Kept as-is.
-    let iCurrentStrNum = if (*pParam).iUsageType == SCREEN_CONTENT_REAL_TIME
-        && (*pParam).bEnableLongTermReference
+    let iCurrentStrNum = if pParam.iUsageType == SCREEN_CONTENT_REAL_TIME
+        && pParam.bEnableLongTermReference
     {
-        WELS_MAX(1, WELS_LOG2((*pParam).uiGopSize))
+        WELS_MAX(1, WELS_LOG2(pParam.uiGopSize))
     } else {
-        WELS_MAX(1, ((*pParam).uiGopSize >> 1) as i32)
+        WELS_MAX(1, (pParam.uiGopSize >> 1) as i32)
     };
-    let mut iNeededRefNum = if (*pParam).uiIntraPeriod != 1 {
-        iCurrentStrNum + (*pParam).iLTRRefNum
+    let mut iNeededRefNum = if pParam.uiIntraPeriod != 1 {
+        iCurrentStrNum + pParam.iLTRRefNum
     } else {
         0
     };
@@ -343,7 +339,7 @@ pub unsafe fn WelsCheckNumRefSetting(
     iNeededRefNum = WELS_CLIP3(
         iNeededRefNum,
         MIN_REF_PIC_COUNT,
-        if (*pParam).iUsageType == CAMERA_VIDEO_REAL_TIME {
+        if pParam.iUsageType == CAMERA_VIDEO_REAL_TIME {
             MAX_REFERENCE_PICTURE_COUNT_NUM_CAMERA
         } else {
             MAX_REFERENCE_PICTURE_COUNT_NUM_SCREEN
@@ -351,9 +347,9 @@ pub unsafe fn WelsCheckNumRefSetting(
     );
 
     // adjust default or invalid input so iNumRefFrame is valid for the next step
-    if (*pParam).iNumRefFrame == AUTO_REF_PIC_COUNT {
-        (*pParam).iNumRefFrame = iNeededRefNum;
-    } else if (*pParam).iNumRefFrame < iNeededRefNum {
+    if pParam.iNumRefFrame == AUTO_REF_PIC_COUNT {
+        pParam.iNumRefFrame = iNeededRefNum;
+    } else if pParam.iNumRefFrame < iNeededRefNum {
         // Logged before the strict-check return, as in the reference: a caller that
         // gets ENC_RETURN_UNSUPPORTED_PARA out of this still learns why.
         WelsLog(
@@ -361,32 +357,30 @@ pub unsafe fn WelsCheckNumRefSetting(
             WELS_LOG_WARNING,
             &format!(
                 "iNumRefFrame({}) setting does not support the temporal and LTR setting, will be reset to {}",
-                (*pParam).iNumRefFrame,
+                pParam.iNumRefFrame,
                 iNeededRefNum
             ),
         );
         if bStrictCheck {
             return ENC_RETURN_UNSUPPORTED_PARA;
         }
-        (*pParam).iNumRefFrame = iNeededRefNum;
+        pParam.iNumRefFrame = iNeededRefNum;
     }
 
     // if the setting is larger than needed, use the needed one and write the max
     // into the SPS, leaving memory sized for later expansion
-    if (*pParam).iMaxNumRefFrame < (*pParam).iNumRefFrame {
-        (*pParam).iMaxNumRefFrame = (*pParam).iNumRefFrame;
+    if pParam.iMaxNumRefFrame < pParam.iNumRefFrame {
+        pParam.iMaxNumRefFrame = pParam.iNumRefFrame;
     }
-    (*pParam).iNumRefFrame = iNeededRefNum;
+    pParam.iNumRefFrame = iNeededRefNum;
 
     ENC_RETURN_SUCCESS
 }
 
 /// `WelsCheckRefFrameLimitationNumRefFirst` — au_set.cpp:135.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn WelsCheckRefFrameLimitationNumRefFirst(
+pub fn WelsCheckRefFrameLimitationNumRefFirst(
     pLogCtx: SLogContext,
-    pParam: *mut SWelsSvcCodingParam,
+    pParam: &mut SWelsSvcCodingParam,
 ) -> i32 {
     if WelsCheckNumRefSetting(pLogCtx, pParam, false) != 0 {
         // num-ref is the honored setting but it conflicts with temporal and LTR
@@ -396,14 +390,12 @@ pub unsafe fn WelsCheckRefFrameLimitationNumRefFirst(
 }
 
 /// `WelsCheckRefFrameLimitationLevelIdcFirst` — au_set.cpp:144.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn WelsCheckRefFrameLimitationLevelIdcFirst(
+pub fn WelsCheckRefFrameLimitationLevelIdcFirst(
     pLogCtx: SLogContext,
-    pParam: *mut SWelsSvcCodingParam,
+    pParam: &mut SWelsSvcCodingParam,
 ) -> i32 {
-    if (*pParam).iNumRefFrame == AUTO_REF_PIC_COUNT
-        || (*pParam).iMaxNumRefFrame == AUTO_REF_PIC_COUNT
+    if pParam.iNumRefFrame == AUTO_REF_PIC_COUNT
+        || pParam.iMaxNumRefFrame == AUTO_REF_PIC_COUNT
     {
         // no need to do the checking
         return ENC_RETURN_SUCCESS;
@@ -412,8 +404,8 @@ pub unsafe fn WelsCheckRefFrameLimitationLevelIdcFirst(
     WelsCheckNumRefSetting(pLogCtx, pParam, false);
 
     // number of reference frames according to level limitation
-    for i in 0..(*pParam).iSpatialLayerNum as usize {
-        let pSpatialLayer = (*pParam).sSpatialLayers[i];
+    for i in 0..pParam.iSpatialLayerNum as usize {
+        let pSpatialLayer = pParam.sSpatialLayers[i];
         if pSpatialLayer.uiLevelIdc == LEVEL_UNKNOWN {
             continue;
         }
@@ -423,14 +415,14 @@ pub unsafe fn WelsCheckRefFrameLimitationLevelIdcFirst(
         let iRefFrame = (g_ksLevelLimits[pSpatialLayer.uiLevelIdc as usize - 1].uiMaxDPBMbs
             / uiPicInMBs) as i32;
 
-        if iRefFrame < (*pParam).iMaxNumRefFrame {
-            (*pParam).iMaxNumRefFrame = iRefFrame;
-            if iRefFrame < (*pParam).iNumRefFrame {
-                (*pParam).iNumRefFrame = iRefFrame;
+        if iRefFrame < pParam.iMaxNumRefFrame {
+            pParam.iMaxNumRefFrame = iRefFrame;
+            if iRefFrame < pParam.iNumRefFrame {
+                pParam.iNumRefFrame = iRefFrame;
             }
         } else {
             // level-idc first strategy: adjust max-ref up to what the level allows
-            (*pParam).iMaxNumRefFrame = iRefFrame;
+            pParam.iMaxNumRefFrame = iRefFrame;
         }
     }
 

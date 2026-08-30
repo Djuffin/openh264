@@ -867,6 +867,23 @@ pub unsafe fn layer_pps(pCtx: &sWelsEncCtx, pCurLayer: *const SDqLayer) -> *mut 
     arr.as_ptr().cast_mut().add(id.get())
 }
 
+/// The layer's active PPS **as a shared reference** — [`layer_pps`]'s safe twin.
+///
+/// Same argument as [`ctx_sps_ref`], one indirection out: the callers that read a
+/// single field (`uiChromaQpIndexOffset`, three times in `rc.rs`) never hold the
+/// pointer, so the raw return buys them nothing.
+///
+/// **Fork-safe, and refereed rather than asserted.** The `&SDqLayer` this takes is
+/// a *shared* borrow, which the two probes in this file
+/// (`partition_counters_take_a_shared_layer_borrow_across_the_forked_writes` and
+/// `slice_banks_take_a_shared_layer_borrow_across_the_forked_writes`) exist to
+/// certify may be held while sibling workers write the layer. The PPS array itself
+/// is written only before the fork.
+#[inline]
+pub fn layer_pps_ref<'a>(pCtx: &'a sWelsEncCtx, pCurLayer: &SDqLayer) -> Option<&'a SWelsPPS> {
+    pCtx.pps_array().get(pCurLayer.sLayerInfo.iPps?.get())
+}
+
 /// The context's **active SPS**, resolved from its position — T6.G3.
 ///
 /// `sWelsEncCtx::pSps` was a pointer into `pSpsArray`; `iSps` is the index, and this
@@ -909,6 +926,14 @@ pub fn ctx_sps(pCtx: &sWelsEncCtx) -> *mut SWelsSPS {
 #[inline]
 pub fn ctx_sps_ref(pCtx: &sWelsEncCtx) -> Option<&SWelsSPS> {
     pCtx.sps_array().get(pCtx.iSps?.get())
+}
+
+/// The context's active PPS **as a shared reference** — [`ctx_pps`]'s safe twin,
+/// and [`ctx_sps_ref`]'s sibling. Same argument: the callers that read one field
+/// and never look again do not need the raw return.
+#[inline]
+pub fn ctx_pps_ref(pCtx: &sWelsEncCtx) -> Option<&SWelsPPS> {
+    pCtx.pps_array().get(pCtx.iPps?.get())
 }
 
 /// The context's **active PPS**, resolved from its position — see [`ctx_sps`].

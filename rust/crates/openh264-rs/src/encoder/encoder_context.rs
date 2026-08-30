@@ -1695,6 +1695,35 @@ impl sWelsEncCtx {
         self.vaa_ptr().cast()
     }
 
+    /// The screen-content frame complexity — **the one read the dormant cast is
+    /// made for, named once so it is not six separate claims** (S10.5a').
+    ///
+    /// This is [`vaa_ext`](Self::vaa_ext)'s own rationale applied one level down.
+    /// That accessor exists because "the cast is not fifteen separate claims"; the
+    /// *read through* it was still spelled out at six sites in `rc.rs`, each
+    /// carrying its own `allow(unsafe_code)` and — wrongly — a
+    /// `port-raw(Phase 9)` tag. The operation they perform is not Phase 9's: it is
+    /// the `SVAAFrameInfoExt` downcast, which reads past the end of an
+    /// `SVAAFrameInfo` because the port never installs `RequestMemoryVaaScreen`
+    /// (F177). Six bodies were therefore counted as convertible when the thing
+    /// blocking them belongs to Phase 10.
+    ///
+    /// So the claim is made here, once, under the tag that actually describes it,
+    /// and the six callers become safe. Nothing about the read's correctness
+    /// changes — it is exactly as dormant and exactly as wrong as it was, and
+    /// Phase 10 now has one site to fix instead of six.
+    ///
+    /// # Safety
+    /// **Unsound whenever it is reached**, by construction — see
+    /// [`vaa_ext`](Self::vaa_ext). Every caller is inside the
+    /// `SCREEN_CONTENT(dormant)` fence, which no camera-usage preset can select.
+    #[inline]
+    // unsafe-cat: SCREEN_CONTENT(dormant: Phase 10)
+    #[allow(unsafe_code)]
+    pub fn vaa_ext_screen_frame_complexity(&self) -> i64 {
+        unsafe { (*self.vaa_ext()).sComplexityScreenParam.iFrameComplexity }
+    }
+
     /// [`vaa_ext`](Self::vaa_ext) for its **one** writer, `AnalyzePictureComplexity`'s
     /// screen arm (`wels_preprocess.rs`), which takes `&mut
     /// SVAAFrameInfoExt::sComplexityScreenParam`.

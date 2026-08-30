@@ -749,7 +749,7 @@ pub fn ForceCodingIDR(pCtx: &mut sWelsEncCtx, iLayerId: i32) -> i32 {
 #[allow(unsafe_code)]
 pub unsafe fn WelsEncoderParamAdjust(
     ppCtx: &mut Option<Box<sWelsEncCtx>>,
-    pNewParam: *mut SWelsSvcCodingParam,
+    pNewParam: &mut SWelsSvcCodingParam,
 ) -> i32 {
     const EPSN: f32 = 0.000001;
     let mut iReturn;
@@ -759,9 +759,10 @@ pub unsafe fn WelsEncoderParamAdjust(
     let mut iCacheLineSize: i32 = 16; // on chip cache line size in byte
     let mut uiCpuFeatureFlags: u32 = 0;
 
-    if pNewParam.is_null() {
-        return 1;
-    }
+    // T9.H: `if pNewParam.is_null() { return 1; }` stood here. A
+    // `&mut SWelsSvcCodingParam` cannot be null and all three callers pass
+    // `&mut sConfig`, so the guard is not merely dead — it is inexpressible.
+    // Nothing replaces it.
     // **T8.B5 (S42), converted in B3.** Everything below that used to spell `*ppCtx`
     // reads through this; the re-initialisation branch binds a *second* reference,
     // because the box this one came from is gone by then — and borrowck now enforces
@@ -772,7 +773,7 @@ pub unsafe fn WelsEncoderParamAdjust(
     };
 
     /* Check validation in new parameters */
-    iReturn = ParamValidationExt(ctx.sLogCtx, pNewParam);
+    iReturn = ParamValidationExt(ctx.sLogCtx, &mut *pNewParam);
     if iReturn != ENC_RETURN_SUCCESS {
         return iReturn;
     }
@@ -790,46 +791,46 @@ pub unsafe fn WelsEncoderParamAdjust(
 
     let pOldParam: &mut SWelsSvcCodingParam = ctx.param_mut();
 
-    if (*pOldParam).iUsageType != (*pNewParam).iUsageType {
+    if (*pOldParam).iUsageType != pNewParam.iUsageType {
         return ENC_RETURN_UNSUPPORTED_PARA;
     }
 
     /* Decide whether need reset for IDR frame based on adjusting prarameters changed */
     /* Temporal levels, spatial settings and/ or quality settings changed need update parameter sets related. */
-    bNeedReset = ((*pOldParam).bSimulcastAVC != (*pNewParam).bSimulcastAVC)
-        || ((*pOldParam).iSpatialLayerNum != (*pNewParam).iSpatialLayerNum)
-        || ((*pOldParam).iPicWidth != (*pNewParam).iPicWidth
-            || (*pOldParam).iPicHeight != (*pNewParam).iPicHeight)
-        || ((*pOldParam).SUsedPicRect.iWidth != (*pNewParam).SUsedPicRect.iWidth
-            || (*pOldParam).SUsedPicRect.iHeight != (*pNewParam).SUsedPicRect.iHeight)
-        || ((*pOldParam).bEnableLongTermReference != (*pNewParam).bEnableLongTermReference)
-        || ((*pOldParam).iLTRRefNum != (*pNewParam).iLTRRefNum)
-        || ((*pOldParam).iMultipleThreadIdc != (*pNewParam).iMultipleThreadIdc)
-        || ((*pOldParam).bEnableBackgroundDetection != (*pNewParam).bEnableBackgroundDetection)
-        || ((*pOldParam).bEnableAdaptiveQuant != (*pNewParam).bEnableAdaptiveQuant)
-        || ((*pOldParam).eSpsPpsIdStrategy != (*pNewParam).eSpsPpsIdStrategy);
-    if ((*pNewParam).iMaxNumRefFrame > (*pOldParam).iMaxNumRefFrame)
+    bNeedReset = ((*pOldParam).bSimulcastAVC != pNewParam.bSimulcastAVC)
+        || ((*pOldParam).iSpatialLayerNum != pNewParam.iSpatialLayerNum)
+        || ((*pOldParam).iPicWidth != pNewParam.iPicWidth
+            || (*pOldParam).iPicHeight != pNewParam.iPicHeight)
+        || ((*pOldParam).SUsedPicRect.iWidth != pNewParam.SUsedPicRect.iWidth
+            || (*pOldParam).SUsedPicRect.iHeight != pNewParam.SUsedPicRect.iHeight)
+        || ((*pOldParam).bEnableLongTermReference != pNewParam.bEnableLongTermReference)
+        || ((*pOldParam).iLTRRefNum != pNewParam.iLTRRefNum)
+        || ((*pOldParam).iMultipleThreadIdc != pNewParam.iMultipleThreadIdc)
+        || ((*pOldParam).bEnableBackgroundDetection != pNewParam.bEnableBackgroundDetection)
+        || ((*pOldParam).bEnableAdaptiveQuant != pNewParam.bEnableAdaptiveQuant)
+        || ((*pOldParam).eSpsPpsIdStrategy != pNewParam.eSpsPpsIdStrategy);
+    if (pNewParam.iMaxNumRefFrame > (*pOldParam).iMaxNumRefFrame)
         || ((*pOldParam).iMaxNumRefFrame == 1
             && (*pOldParam).iTemporalLayerNum == 1
-            && (*pNewParam).iTemporalLayerNum == 2)
+            && pNewParam.iTemporalLayerNum == 2)
     {
         bNeedReset = true;
     }
     if !bNeedReset {
         // Check its picture resolutions/quality settings respectively in each dependency layer
         iIndexD = 0;
-        debug_assert!((*pOldParam).iSpatialLayerNum == (*pNewParam).iSpatialLayerNum);
+        debug_assert!((*pOldParam).iSpatialLayerNum == pNewParam.iSpatialLayerNum);
         loop {
             let d = iIndexD as usize;
             let kpOldDlp = &(*pOldParam).sDependencyLayers[d];
-            let kpNewDlp = &(*pNewParam).sDependencyLayers[d];
+            let kpNewDlp = &pNewParam.sDependencyLayers[d];
             let mut fT1: f32 = 0.0;
             let mut fT2: f32 = 0.0;
 
             // check frame size settings
-            if (*pOldParam).sSpatialLayers[d].iVideoWidth != (*pNewParam).sSpatialLayers[d].iVideoWidth
+            if (*pOldParam).sSpatialLayers[d].iVideoWidth != pNewParam.sSpatialLayers[d].iVideoWidth
                 || (*pOldParam).sSpatialLayers[d].iVideoHeight
-                    != (*pNewParam).sSpatialLayers[d].iVideoHeight
+                    != pNewParam.sSpatialLayers[d].iVideoHeight
                 || kpOldDlp.iActualWidth != kpNewDlp.iActualWidth
                 || kpOldDlp.iActualHeight != kpNewDlp.iActualHeight
             {
@@ -838,9 +839,9 @@ pub unsafe fn WelsEncoderParamAdjust(
             }
 
             if (*pOldParam).sSpatialLayers[d].sSliceArgument.uiSliceMode
-                != (*pNewParam).sSpatialLayers[d].sSliceArgument.uiSliceMode
+                != pNewParam.sSpatialLayers[d].sSliceArgument.uiSliceMode
                 || (*pOldParam).sSpatialLayers[d].sSliceArgument.uiSliceNum
-                    != (*pNewParam).sSpatialLayers[d].sSliceArgument.uiSliceNum
+                    != pNewParam.sSpatialLayers[d].sSliceArgument.uiSliceNum
             {
                 bNeedReset = true;
                 break;
@@ -854,7 +855,7 @@ pub unsafe fn WelsEncoderParamAdjust(
                     - kpOldDlp.fOutputFrameRate / kpOldDlp.fInputFrameRate;
             }
             if kpNewDlp.fOutputFrameRate > EPSN && kpOldDlp.fOutputFrameRate > EPSN {
-                fT2 = (*pNewParam).fMaxFrameRate / kpNewDlp.fOutputFrameRate
+                fT2 = pNewParam.fMaxFrameRate / kpNewDlp.fOutputFrameRate
                     - (*pOldParam).fMaxFrameRate / kpOldDlp.fOutputFrameRate;
             }
             if fT1 > EPSN || fT1 < -EPSN || fT2 > EPSN || fT2 < -EPSN {
@@ -862,14 +863,14 @@ pub unsafe fn WelsEncoderParamAdjust(
                 break;
             }
             if (*pOldParam).sSpatialLayers[d].uiProfileIdc
-                != (*pNewParam).sSpatialLayers[d].uiProfileIdc
+                != pNewParam.sSpatialLayers[d].uiProfileIdc
             {
                 bNeedReset = true;
                 break;
             }
             // check level change, if new level is smaller than old level, don't reset
             // encoder. still use old level.
-            if (*pNewParam).sSpatialLayers[d].uiLevelIdc as i32
+            if pNewParam.sSpatialLayers[d].uiLevelIdc as i32
                 > (*pOldParam).sSpatialLayers[d].uiLevelIdc as i32
             {
                 bNeedReset = true;
@@ -916,7 +917,7 @@ pub unsafe fn WelsEncoderParamAdjust(
         let mut sExistingParasetList = SExistingParasetList::default();
         let mut pExistingParasetList: *mut SExistingParasetList = null_mut();
 
-        if iOldSpsPpsIdStrategy != CONSTANT_ID && (*pNewParam).eSpsPpsIdStrategy != CONSTANT_ID {
+        if iOldSpsPpsIdStrategy != CONSTANT_ID && pNewParam.eSpsPpsIdStrategy != CONSTANT_ID {
             // S67 blessed (H2): live across it are `sTempEncoderStatistics` (a **copy**, taken
             // by value at the top of this block), two stack arrays, and a receiver in the
             // strategy object's own `Box`.
@@ -943,7 +944,7 @@ pub unsafe fn WelsEncoderParamAdjust(
             );
 
             if (iOldSpsPpsIdStrategy as i32 & SPS_LISTING as i32) != 0
-                && ((*pNewParam).eSpsPpsIdStrategy as i32 & SPS_LISTING as i32) != 0
+                && (pNewParam.eSpsPpsIdStrategy as i32 & SPS_LISTING as i32) != 0
             {
                 pExistingParasetList = &mut sExistingParasetList;
             }
@@ -964,7 +965,7 @@ pub unsafe fn WelsEncoderParamAdjust(
         // if WelsInitEncoderExt succeed
         // for LTR or SPS,PPS ID update
         iIndexD = 0;
-        while iIndexD < (*pNewParam).iSpatialLayerNum {
+        while iIndexD < pNewParam.iSpatialLayerNum {
             ctx.param_mut().sDependencyLayers[iIndexD as usize].uiIdrPicId = uiMaxIdrPicId;
             iIndexD += 1;
         }
@@ -977,9 +978,9 @@ pub unsafe fn WelsEncoderParamAdjust(
         // for sEncoderStatistics
 
         // load back the needed structure for eSpsPpsIdStrategy
-        if (iOldSpsPpsIdStrategy != CONSTANT_ID && (*pNewParam).eSpsPpsIdStrategy != CONSTANT_ID)
+        if (iOldSpsPpsIdStrategy != CONSTANT_ID && pNewParam.eSpsPpsIdStrategy != CONSTANT_ID)
             || (iOldSpsPpsIdStrategy == SPS_PPS_LISTING
-                && (*pNewParam).eSpsPpsIdStrategy == SPS_PPS_LISTING)
+                && pNewParam.eSpsPpsIdStrategy == SPS_PPS_LISTING)
         {
             // `ParasetStrategy`'s raw parameter again — see the note at
             // `OutputCurrentStructure` above. Nothing of the context is live
@@ -991,93 +992,93 @@ pub unsafe fn WelsEncoderParamAdjust(
         }
     } else {
         /* maybe adjustment introduced in bitrate or little settings adjustment and so on.. */
-        (*pNewParam).iNumRefFrame = WELS_CLIP3(
-            (*pNewParam).iNumRefFrame,
+        pNewParam.iNumRefFrame = WELS_CLIP3(
+            pNewParam.iNumRefFrame,
             MIN_REF_PIC_COUNT,
-            if (*pNewParam).iUsageType == CAMERA_VIDEO_REAL_TIME {
+            if pNewParam.iUsageType == CAMERA_VIDEO_REAL_TIME {
                 MAX_REFERENCE_PICTURE_COUNT_NUM_CAMERA
             } else {
                 MAX_REFERENCE_PICTURE_COUNT_NUM_SCREEN
             },
         );
-        (*pNewParam).iLoopFilterDisableIdc = WELS_CLIP3((*pNewParam).iLoopFilterDisableIdc, 0, 6);
-        (*pNewParam).iLoopFilterAlphaC0Offset =
-            WELS_CLIP3((*pNewParam).iLoopFilterAlphaC0Offset, -6, 6);
-        (*pNewParam).iLoopFilterBetaOffset = WELS_CLIP3((*pNewParam).iLoopFilterBetaOffset, -6, 6);
-        (*pNewParam).fMaxFrameRate =
-            WELS_CLIP3((*pNewParam).fMaxFrameRate, MIN_FRAME_RATE, MAX_FRAME_RATE);
+        pNewParam.iLoopFilterDisableIdc = WELS_CLIP3(pNewParam.iLoopFilterDisableIdc, 0, 6);
+        pNewParam.iLoopFilterAlphaC0Offset =
+            WELS_CLIP3(pNewParam.iLoopFilterAlphaC0Offset, -6, 6);
+        pNewParam.iLoopFilterBetaOffset = WELS_CLIP3(pNewParam.iLoopFilterBetaOffset, -6, 6);
+        pNewParam.fMaxFrameRate =
+            WELS_CLIP3(pNewParam.fMaxFrameRate, MIN_FRAME_RATE, MAX_FRAME_RATE);
 
         // we can not use direct struct based memcpy due some fields need keep unchanged as before
-        (*pOldParam).fMaxFrameRate = (*pNewParam).fMaxFrameRate;
-        (*pOldParam).iComplexityMode = (*pNewParam).iComplexityMode;
-        (*pOldParam).uiIntraPeriod = (*pNewParam).uiIntraPeriod;
-        (*pOldParam).eSpsPpsIdStrategy = (*pNewParam).eSpsPpsIdStrategy;
-        (*pOldParam).bPrefixNalAddingCtrl = (*pNewParam).bPrefixNalAddingCtrl;
-        (*pOldParam).iNumRefFrame = (*pNewParam).iNumRefFrame;
-        (*pOldParam).uiGopSize = (*pNewParam).uiGopSize;
-        if (*pOldParam).iTemporalLayerNum != (*pNewParam).iTemporalLayerNum {
-            (*pOldParam).iTemporalLayerNum = (*pNewParam).iTemporalLayerNum;
+        (*pOldParam).fMaxFrameRate = pNewParam.fMaxFrameRate;
+        (*pOldParam).iComplexityMode = pNewParam.iComplexityMode;
+        (*pOldParam).uiIntraPeriod = pNewParam.uiIntraPeriod;
+        (*pOldParam).eSpsPpsIdStrategy = pNewParam.eSpsPpsIdStrategy;
+        (*pOldParam).bPrefixNalAddingCtrl = pNewParam.bPrefixNalAddingCtrl;
+        (*pOldParam).iNumRefFrame = pNewParam.iNumRefFrame;
+        (*pOldParam).uiGopSize = pNewParam.uiGopSize;
+        if (*pOldParam).iTemporalLayerNum != pNewParam.iTemporalLayerNum {
+            (*pOldParam).iTemporalLayerNum = pNewParam.iTemporalLayerNum;
             for d in 0..MAX_DEPENDENCY_LAYER as usize {
                 (*pOldParam).sDependencyLayers[d].iCodingIndex = 0;
             }
         }
-        (*pOldParam).iDecompStages = (*pNewParam).iDecompStages;
+        (*pOldParam).iDecompStages = pNewParam.iDecompStages;
         /* denoise control */
-        (*pOldParam).bEnableDenoise = (*pNewParam).bEnableDenoise;
+        (*pOldParam).bEnableDenoise = pNewParam.bEnableDenoise;
 
         /* background detection control */
-        (*pOldParam).bEnableBackgroundDetection = (*pNewParam).bEnableBackgroundDetection;
+        (*pOldParam).bEnableBackgroundDetection = pNewParam.bEnableBackgroundDetection;
 
         /* adaptive quantization control */
-        (*pOldParam).bEnableAdaptiveQuant = (*pNewParam).bEnableAdaptiveQuant;
+        (*pOldParam).bEnableAdaptiveQuant = pNewParam.bEnableAdaptiveQuant;
 
         /* int32_t term reference control */
-        (*pOldParam).bEnableLongTermReference = (*pNewParam).bEnableLongTermReference;
-        (*pOldParam).iLtrMarkPeriod = (*pNewParam).iLtrMarkPeriod;
+        (*pOldParam).bEnableLongTermReference = pNewParam.bEnableLongTermReference;
+        (*pOldParam).iLtrMarkPeriod = pNewParam.iLtrMarkPeriod;
 
         // keep below values unchanged as before
-        (*pOldParam).bEnableSSEI = (*pNewParam).bEnableSSEI;
-        (*pOldParam).bSimulcastAVC = (*pNewParam).bSimulcastAVC;
-        (*pOldParam).bEnableFrameCroppingFlag = (*pNewParam).bEnableFrameCroppingFlag;
+        (*pOldParam).bEnableSSEI = pNewParam.bEnableSSEI;
+        (*pOldParam).bSimulcastAVC = pNewParam.bSimulcastAVC;
+        (*pOldParam).bEnableFrameCroppingFlag = pNewParam.bEnableFrameCroppingFlag;
 
         /* Motion search */
 
         /* Deblocking loop filter */
-        (*pOldParam).iLoopFilterDisableIdc = (*pNewParam).iLoopFilterDisableIdc;
-        (*pOldParam).iLoopFilterAlphaC0Offset = (*pNewParam).iLoopFilterAlphaC0Offset;
-        (*pOldParam).iLoopFilterBetaOffset = (*pNewParam).iLoopFilterBetaOffset;
+        (*pOldParam).iLoopFilterDisableIdc = pNewParam.iLoopFilterDisableIdc;
+        (*pOldParam).iLoopFilterAlphaC0Offset = pNewParam.iLoopFilterAlphaC0Offset;
+        (*pOldParam).iLoopFilterBetaOffset = pNewParam.iLoopFilterBetaOffset;
 
         /* Rate Control */
-        (*pOldParam).iRCMode = (*pNewParam).iRCMode;
-        (*pOldParam).iTargetBitrate = (*pNewParam).iTargetBitrate;
-        (*pOldParam).iPaddingFlag = (*pNewParam).iPaddingFlag;
+        (*pOldParam).iRCMode = pNewParam.iRCMode;
+        (*pOldParam).iTargetBitrate = pNewParam.iTargetBitrate;
+        (*pOldParam).iPaddingFlag = pNewParam.iPaddingFlag;
 
         /* Layer definition */
-        (*pOldParam).bPrefixNalAddingCtrl = (*pNewParam).bPrefixNalAddingCtrl;
+        (*pOldParam).bPrefixNalAddingCtrl = pNewParam.bPrefixNalAddingCtrl;
 
         // d
         iIndexD = 0;
         loop {
             let d = iIndexD as usize;
             (*pOldParam).sDependencyLayers[d].fInputFrameRate =
-                (*pNewParam).sDependencyLayers[d].fInputFrameRate;
+                pNewParam.sDependencyLayers[d].fInputFrameRate;
             (*pOldParam).sDependencyLayers[d].fOutputFrameRate =
-                (*pNewParam).sDependencyLayers[d].fOutputFrameRate;
+                pNewParam.sDependencyLayers[d].fOutputFrameRate;
             (*pOldParam).sSpatialLayers[d].iSpatialBitrate =
-                (*pNewParam).sSpatialLayers[d].iSpatialBitrate;
+                pNewParam.sSpatialLayers[d].iSpatialBitrate;
             (*pOldParam).sSpatialLayers[d].iMaxSpatialBitrate =
-                (*pNewParam).sSpatialLayers[d].iMaxSpatialBitrate;
+                pNewParam.sSpatialLayers[d].iMaxSpatialBitrate;
             (*pOldParam).sSpatialLayers[d].uiProfileIdc =
-                (*pNewParam).sSpatialLayers[d].uiProfileIdc;
-            (*pOldParam).sSpatialLayers[d].iDLayerQp = (*pNewParam).sSpatialLayers[d].iDLayerQp;
+                pNewParam.sSpatialLayers[d].uiProfileIdc;
+            (*pOldParam).sSpatialLayers[d].iDLayerQp = pNewParam.sSpatialLayers[d].iDLayerQp;
 
             /* Derived variants below */
             (*pOldParam).sDependencyLayers[d].iTemporalResolution =
-                (*pNewParam).sDependencyLayers[d].iTemporalResolution;
+                pNewParam.sDependencyLayers[d].iTemporalResolution;
             (*pOldParam).sDependencyLayers[d].iDecompositionStages =
-                (*pNewParam).sDependencyLayers[d].iDecompositionStages;
+                pNewParam.sDependencyLayers[d].iDecompositionStages;
             (*pOldParam).sDependencyLayers[d].uiCodingIdx2TemporalId =
-                (*pNewParam).sDependencyLayers[d].uiCodingIdx2TemporalId;
+                pNewParam.sDependencyLayers[d].uiCodingIdx2TemporalId;
             iIndexD += 1;
             if iIndexD >= (*pOldParam).iSpatialLayerNum {
                 break;
@@ -1096,29 +1097,32 @@ pub unsafe fn WelsEncoderParamAdjust(
 /// output/input ratio. The clip to [`MIN_FRAME_RATE`, `MAX_FRAME_RATE`] is the
 /// *caller's* job in C++ (`SetOption` does it before calling); this function does
 /// not clip.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn WelsEncoderApplyFrameRate(pParam: &mut SWelsSvcCodingParam) {
+pub fn WelsEncoderApplyFrameRate(pParam: &mut SWelsSvcCodingParam) {
     const kfEpsn: f32 = 0.000001;
-    let kiNumLayer = (*pParam).iSpatialLayerNum;
-    let kfMaxFrameRate = (*pParam).fMaxFrameRate;
+    let kiNumLayer = pParam.iSpatialLayerNum;
+    let kfMaxFrameRate = pParam.fMaxFrameRate;
 
     // set input frame rate to each layer
     for i in 0..kiNumLayer as usize {
-        let pLayerParamInternal = std::ptr::addr_of_mut!((*pParam).sDependencyLayers[i]);
-        let fRatio = (*pLayerParamInternal).fOutputFrameRate / (*pLayerParamInternal).fInputFrameRate;
-        if (kfMaxFrameRate - (*pLayerParamInternal).fInputFrameRate) > kfEpsn
-            || (kfMaxFrameRate - (*pLayerParamInternal).fInputFrameRate) < -kfEpsn
+        // S10.5b: the `addr_of_mut!` cursor is gone. It existed when `pParam` was
+        // raw; the parameter has been `&mut` since the frame-rate family flipped,
+        // so the layer slot is reached by indexing, and the two fields written
+        // below (`sDependencyLayers[i]`, `sSpatialLayers[i]`) are sequential
+        // borrows rather than a live cursor beside a second claim.
+        let pLayerParamInternal = &mut pParam.sDependencyLayers[i];
+        let fRatio = pLayerParamInternal.fOutputFrameRate / pLayerParamInternal.fInputFrameRate;
+        if (kfMaxFrameRate - pLayerParamInternal.fInputFrameRate) > kfEpsn
+            || (kfMaxFrameRate - pLayerParamInternal.fInputFrameRate) < -kfEpsn
         {
-            (*pLayerParamInternal).fInputFrameRate = kfMaxFrameRate;
+            pLayerParamInternal.fInputFrameRate = kfMaxFrameRate;
             let fTargetOutputFrameRate = kfMaxFrameRate * fRatio;
-            (*pLayerParamInternal).fOutputFrameRate = if fTargetOutputFrameRate >= 6.0 {
+            pLayerParamInternal.fOutputFrameRate = if fTargetOutputFrameRate >= 6.0 {
                 fTargetOutputFrameRate
             } else {
-                (*pLayerParamInternal).fInputFrameRate
+                pLayerParamInternal.fInputFrameRate
             };
-            let fOut = (*pLayerParamInternal).fOutputFrameRate;
-            (*pParam).sSpatialLayers[i].fFrameRate = fOut;
+            let fOut = pLayerParamInternal.fOutputFrameRate;
+            pParam.sSpatialLayers[i].fFrameRate = fOut;
         }
     }
 }
@@ -1127,9 +1131,7 @@ pub unsafe fn WelsEncoderApplyFrameRate(pParam: &mut SWelsSvcCodingParam) {
 ///
 /// `SPATIAL_LAYER_ALL` re-splits `iTargetBitrate` across the layers in the ratio
 /// they already held; a single layer id only re-verifies that layer.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn WelsEncoderApplyBitRate(
+pub fn WelsEncoderApplyBitRate(
     pLogCtx: SLogContext,
     pParam: &mut SWelsSvcCodingParam,
     iLayer: i32,
@@ -1170,15 +1172,15 @@ pub unsafe fn WelsEncoderApplyBitRate(
 pub unsafe fn WelsEncoderApplyLTR(
     pLogCtx: SLogContext,
     ppCtx: &mut Option<Box<sWelsEncCtx>>,
-    pLTRValue: *mut SLTRConfig,
+    pLTRValue: &mut SLTRConfig,
 ) -> i32 {
     let mut sConfig: SWelsSvcCodingParam = match ppCtx.as_mut() {
         Some(pEncContext) => pEncContext.param().clone(),
         None => return 1,
     };
     let mut iNumRefFrame;
-    sConfig.bEnableLongTermReference = (*pLTRValue).bEnableLongTermReference;
-    sConfig.iLTRRefNum = (*pLTRValue).iLTRRefNum;
+    sConfig.bEnableLongTermReference = pLTRValue.bEnableLongTermReference;
+    sConfig.iLTRRefNum = pLTRValue.iLTRRefNum;
     let uiGopSize: i32 = 1 << (sConfig.iTemporalLayerNum - 1);
     if sConfig.iUsageType == SCREEN_CONTENT_REAL_TIME {
         if sConfig.bEnableLongTermReference {
@@ -1220,36 +1222,37 @@ pub unsafe fn WelsEncoderApplyLTR(
 /// Complete port, including the RC-on bitrate loop and QP-range correction.
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
-pub unsafe fn ParamValidation(pLogCtx: SLogContext, pCfg: *mut SWelsSvcCodingParam) -> i32 {
+pub fn ParamValidation(pLogCtx: SLogContext, pCfg: &mut SWelsSvcCodingParam) -> i32 {
     const fEpsn: f32 = 0.000001;
-    debug_assert!(!pCfg.is_null());
+    // T9.H: a `&mut SWelsSvcCodingParam` cannot be null, so the `debug_assert`
+    // that stood here is inexpressible. Nothing replaces it.
 
-    if !(((*pCfg).iUsageType as i32) < INPUT_CONTENT_TYPE_ALL as i32) {
+    if !((pCfg.iUsageType as i32) < INPUT_CONTENT_TYPE_ALL as i32) {
         return ENC_RETURN_UNSUPPORTED_PARA;
     }
-    if (*pCfg).iUsageType == SCREEN_CONTENT_REAL_TIME {
-        if (*pCfg).iSpatialLayerNum > 1 {
+    if pCfg.iUsageType == SCREEN_CONTENT_REAL_TIME {
+        if pCfg.iSpatialLayerNum > 1 {
             return ENC_RETURN_UNSUPPORTED_PARA;
         }
-        if (*pCfg).bEnableAdaptiveQuant {
-            (*pCfg).bEnableAdaptiveQuant = false;
+        if pCfg.bEnableAdaptiveQuant {
+            pCfg.bEnableAdaptiveQuant = false;
         }
-        if (*pCfg).bEnableBackgroundDetection {
-            (*pCfg).bEnableBackgroundDetection = false;
+        if pCfg.bEnableBackgroundDetection {
+            pCfg.bEnableBackgroundDetection = false;
         }
-        if !(*pCfg).bEnableSceneChangeDetect {
-            (*pCfg).bEnableSceneChangeDetect = true;
+        if !pCfg.bEnableSceneChangeDetect {
+            pCfg.bEnableSceneChangeDetect = true;
         }
     }
 
     // turn off adaptive quant now, algorithms needs to be refactored
-    (*pCfg).bEnableAdaptiveQuant = false;
+    pCfg.bEnableAdaptiveQuant = false;
 
-    if (*pCfg).iSpatialLayerNum > 1 {
-        let mut i = (*pCfg).iSpatialLayerNum - 1;
+    if pCfg.iSpatialLayerNum > 1 {
+        let mut i = pCfg.iSpatialLayerNum - 1;
         while i > 0 {
-            let fDlpUp = (*pCfg).sSpatialLayers[i as usize];
-            let fDlp = (*pCfg).sSpatialLayers[(i - 1) as usize];
+            let fDlpUp = pCfg.sSpatialLayers[i as usize];
+            let fDlp = pCfg.sSpatialLayers[(i - 1) as usize];
             if fDlp.iVideoWidth > fDlpUp.iVideoWidth || fDlp.iVideoHeight > fDlpUp.iVideoHeight {
                 return ENC_RETURN_UNSUPPORTED_PARA;
             }
@@ -1258,24 +1261,24 @@ pub unsafe fn ParamValidation(pLogCtx: SLogContext, pCfg: *mut SWelsSvcCodingPar
     }
 
     if !CheckInRangeCloseOpen(
-        (*pCfg).iLoopFilterDisableIdc as i16,
+        pCfg.iLoopFilterDisableIdc as i16,
         DEBLOCKING_IDC_0 as i16,
         (DEBLOCKING_IDC_2 + 1) as i16,
     ) || !CheckInRangeCloseOpen(
-        (*pCfg).iLoopFilterAlphaC0Offset as i16,
+        pCfg.iLoopFilterAlphaC0Offset as i16,
         DEBLOCKING_OFFSET_MINUS as i16,
         (DEBLOCKING_OFFSET + 1) as i16,
     ) || !CheckInRangeCloseOpen(
-        (*pCfg).iLoopFilterBetaOffset as i16,
+        pCfg.iLoopFilterBetaOffset as i16,
         DEBLOCKING_OFFSET_MINUS as i16,
         (DEBLOCKING_OFFSET + 1) as i16,
     ) {
         return ENC_RETURN_UNSUPPORTED_PARA;
     }
 
-    for i in 0..(*pCfg).iSpatialLayerNum as usize {
-        let fInput = (*pCfg).sDependencyLayers[i].fInputFrameRate;
-        let fOutput = (*pCfg).sDependencyLayers[i].fOutputFrameRate;
+    for i in 0..pCfg.iSpatialLayerNum as usize {
+        let fInput = pCfg.sDependencyLayers[i].fInputFrameRate;
+        let fOutput = pCfg.sDependencyLayers[i].fOutputFrameRate;
         if fOutput > fInput
             || (fInput >= -fEpsn && fInput <= fEpsn)
             || (fOutput >= -fEpsn && fOutput <= fEpsn)
@@ -1284,85 +1287,85 @@ pub unsafe fn ParamValidation(pLogCtx: SLogContext, pCfg: *mut SWelsSvcCodingPar
         }
         if GetLogFactor(fOutput, fInput) == u32::MAX {
             // AUTO CORRECT: output frame rate must be input/2^n
-            (*pCfg).sDependencyLayers[i].fOutputFrameRate = fInput;
-            (*pCfg).sSpatialLayers[i].fFrameRate = fInput;
+            pCfg.sDependencyLayers[i].fOutputFrameRate = fInput;
+            pCfg.sSpatialLayers[i].fFrameRate = fInput;
         }
     }
 
-    if (*pCfg).iRCMode != RC_OFF_MODE
-        && (*pCfg).iRCMode != RC_QUALITY_MODE
-        && (*pCfg).iRCMode != RC_BUFFERBASED_MODE
-        && (*pCfg).iRCMode != RC_BITRATE_MODE
-        && (*pCfg).iRCMode != RC_TIMESTAMP_MODE
+    if pCfg.iRCMode != RC_OFF_MODE
+        && pCfg.iRCMode != RC_QUALITY_MODE
+        && pCfg.iRCMode != RC_BUFFERBASED_MODE
+        && pCfg.iRCMode != RC_BITRATE_MODE
+        && pCfg.iRCMode != RC_TIMESTAMP_MODE
     {
         return ENC_RETURN_UNSUPPORTED_PARA;
     }
 
     // bitrate setting validation
-    if (*pCfg).iRCMode != RC_OFF_MODE {
-        if (*pCfg).iTargetBitrate <= 0 {
+    if pCfg.iRCMode != RC_OFF_MODE {
+        if pCfg.iTargetBitrate <= 0 {
             return ENC_RETURN_INVALIDINPUT;
         }
         let mut iTotalBitrate = 0i32;
-        for i in 0..(*pCfg).iSpatialLayerNum as usize {
-            iTotalBitrate += (*pCfg).sSpatialLayers[i].iSpatialBitrate;
-            if WelsBitRateVerification(pLogCtx, &mut (*pCfg).sSpatialLayers[i], i as i32)
+        for i in 0..pCfg.iSpatialLayerNum as usize {
+            iTotalBitrate += pCfg.sSpatialLayers[i].iSpatialBitrate;
+            if WelsBitRateVerification(pLogCtx, &mut pCfg.sSpatialLayers[i], i as i32)
                 != ENC_RETURN_SUCCESS
             {
                 return ENC_RETURN_INVALIDINPUT;
             }
         }
-        if iTotalBitrate > (*pCfg).iTargetBitrate {
+        if iTotalBitrate > pCfg.iTargetBitrate {
             return ENC_RETURN_INVALIDINPUT;
         }
         // `encoder_ext.cpp:370-374` — log-only: the bitrate cannot actually be
         // held without frame skipping, and the reference says so out loud.
-        if ((*pCfg).iRCMode == RC_QUALITY_MODE
-            || (*pCfg).iRCMode == RC_BITRATE_MODE
-            || (*pCfg).iRCMode == RC_TIMESTAMP_MODE)
-            && !(*pCfg).bEnableFrameSkip
+        if (pCfg.iRCMode == RC_QUALITY_MODE
+            || pCfg.iRCMode == RC_BITRATE_MODE
+            || pCfg.iRCMode == RC_TIMESTAMP_MODE)
+            && !pCfg.bEnableFrameSkip
         {
             WelsLog(
                 pLogCtx,
                 WELS_LOG_WARNING,
                 &format!(
                     "bEnableFrameSkip = {},bitrate can't be controlled for RC_QUALITY_MODE,RC_BITRATE_MODE and RC_TIMESTAMP_MODE without enabling skip frame.",
-                    (*pCfg).bEnableFrameSkip as i32
+                    pCfg.bEnableFrameSkip as i32
                 ),
             );
         }
-        if (*pCfg).iMaxQp <= 0 || (*pCfg).iMinQp <= 0 {
-            if (*pCfg).iUsageType == SCREEN_CONTENT_REAL_TIME {
+        if pCfg.iMaxQp <= 0 || pCfg.iMinQp <= 0 {
+            if pCfg.iUsageType == SCREEN_CONTENT_REAL_TIME {
                 WelsLog(
                     pLogCtx,
                     WELS_LOG_INFO,
                     &format!(
                         "Change QP Range from({},{}) to ({},{})",
-                        (*pCfg).iMinQp, (*pCfg).iMaxQp, MIN_SCREEN_QP, MAX_SCREEN_QP
+                        pCfg.iMinQp, pCfg.iMaxQp, MIN_SCREEN_QP, MAX_SCREEN_QP
                     ),
                 );
-                (*pCfg).iMinQp = MIN_SCREEN_QP;
-                (*pCfg).iMaxQp = MAX_SCREEN_QP;
+                pCfg.iMinQp = MIN_SCREEN_QP;
+                pCfg.iMaxQp = MAX_SCREEN_QP;
             } else {
                 WelsLog(
                     pLogCtx,
                     WELS_LOG_INFO,
                     &format!(
                         "Change QP Range from({},{}) to ({},{})",
-                        (*pCfg).iMinQp, (*pCfg).iMaxQp, GOM_MIN_QP_MODE, MAX_LOW_BR_QP
+                        pCfg.iMinQp, pCfg.iMaxQp, GOM_MIN_QP_MODE, MAX_LOW_BR_QP
                     ),
                 );
-                (*pCfg).iMinQp = GOM_MIN_QP_MODE;
-                (*pCfg).iMaxQp = MAX_LOW_BR_QP;
+                pCfg.iMinQp = GOM_MIN_QP_MODE;
+                pCfg.iMaxQp = MAX_LOW_BR_QP;
             }
         }
-        (*pCfg).iMinQp = WELS_CLIP3((*pCfg).iMinQp, GOM_MIN_QP_MODE, QP_MAX_VALUE);
-        (*pCfg).iMaxQp = WELS_CLIP3((*pCfg).iMaxQp, (*pCfg).iMinQp, QP_MAX_VALUE);
+        pCfg.iMinQp = WELS_CLIP3(pCfg.iMinQp, GOM_MIN_QP_MODE, QP_MAX_VALUE);
+        pCfg.iMaxQp = WELS_CLIP3(pCfg.iMaxQp, pCfg.iMinQp, QP_MAX_VALUE);
     }
 
     // ref-frames validation, encoder_ext.cpp:392-398
-    let bRefLimitFailed = if (*pCfg).iUsageType == CAMERA_VIDEO_REAL_TIME
-        || (*pCfg).iUsageType == SCREEN_CONTENT_REAL_TIME
+    let bRefLimitFailed = if pCfg.iUsageType == CAMERA_VIDEO_REAL_TIME
+        || pCfg.iUsageType == SCREEN_CONTENT_REAL_TIME
     {
         WelsCheckRefFrameLimitationNumRefFirst(pLogCtx, pCfg)
     } else {
@@ -1388,52 +1391,51 @@ pub unsafe fn ParamValidation(pLogCtx: SLogContext, pCfg: *mut SWelsSvcCodingPar
 /// reproduced.
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
-pub unsafe fn ParamValidationExt(
+pub fn ParamValidationExt(
     pLogCtx: SLogContext,
-    pCodingParam: *mut SWelsSvcCodingParam,
+    pCodingParam: &mut SWelsSvcCodingParam,
 ) -> i32 {
-    debug_assert!(!pCodingParam.is_null());
-    if pCodingParam.is_null() {
-        return ENC_RETURN_INVALIDINPUT;
-    }
+    // T9.H's convention: a `&mut SWelsSvcCodingParam` cannot be null, so the
+    // `debug_assert` and the `ENC_RETURN_INVALIDINPUT` guard that stood here are
+    // not merely dead — they are inexpressible. Nothing replaces them.
 
-    if (*pCodingParam).iUsageType != CAMERA_VIDEO_REAL_TIME
-        && (*pCodingParam).iUsageType != SCREEN_CONTENT_REAL_TIME
+    if pCodingParam.iUsageType != CAMERA_VIDEO_REAL_TIME
+        && pCodingParam.iUsageType != SCREEN_CONTENT_REAL_TIME
     {
         return ENC_RETURN_UNSUPPORTED_PARA;
     }
-    if (*pCodingParam).iUsageType == SCREEN_CONTENT_REAL_TIME
-        && !(*pCodingParam).bIsLosslessLink
-        && (*pCodingParam).bEnableLongTermReference
+    if pCodingParam.iUsageType == SCREEN_CONTENT_REAL_TIME
+        && !pCodingParam.bIsLosslessLink
+        && pCodingParam.bEnableLongTermReference
     {
-        (*pCodingParam).bEnableLongTermReference = false;
+        pCodingParam.bEnableLongTermReference = false;
     }
-    if (*pCodingParam).iSpatialLayerNum < 1
-        || (*pCodingParam).iSpatialLayerNum > MAX_DEPENDENCY_LAYER
-    {
-        return ENC_RETURN_UNSUPPORTED_PARA;
-    }
-    if (*pCodingParam).iTemporalLayerNum < 1
-        || (*pCodingParam).iTemporalLayerNum > MAX_TEMPORAL_LEVEL
+    if pCodingParam.iSpatialLayerNum < 1
+        || pCodingParam.iSpatialLayerNum > MAX_DEPENDENCY_LAYER
     {
         return ENC_RETURN_UNSUPPORTED_PARA;
     }
-    if (*pCodingParam).uiGopSize < 1 || (*pCodingParam).uiGopSize > MAX_GOP_SIZE {
-        return ENC_RETURN_UNSUPPORTED_PARA;
-    }
-    if (*pCodingParam).uiIntraPeriod != 0
-        && (*pCodingParam).uiIntraPeriod < (*pCodingParam).uiGopSize
+    if pCodingParam.iTemporalLayerNum < 1
+        || pCodingParam.iTemporalLayerNum > MAX_TEMPORAL_LEVEL
     {
         return ENC_RETURN_UNSUPPORTED_PARA;
     }
-    if (*pCodingParam).uiIntraPeriod != 0
-        && ((*pCodingParam).uiIntraPeriod & ((*pCodingParam).uiGopSize - 1)) != 0
+    if pCodingParam.uiGopSize < 1 || pCodingParam.uiGopSize > MAX_GOP_SIZE {
+        return ENC_RETURN_UNSUPPORTED_PARA;
+    }
+    if pCodingParam.uiIntraPeriod != 0
+        && pCodingParam.uiIntraPeriod < pCodingParam.uiGopSize
+    {
+        return ENC_RETURN_UNSUPPORTED_PARA;
+    }
+    if pCodingParam.uiIntraPeriod != 0
+        && (pCodingParam.uiIntraPeriod & (pCodingParam.uiGopSize - 1)) != 0
     {
         return ENC_RETURN_UNSUPPORTED_PARA;
     }
 
     // single thread => no parallel deblocking
-    (*pCodingParam).bDeblockingParallelFlag = (*pCodingParam).iMultipleThreadIdc != 1;
+    pCodingParam.bDeblockingParallelFlag = pCodingParam.iMultipleThreadIdc != 1;
 
     // eSpsPpsIdStrategy checkings — `encoder_ext.cpp:466-491`.
     //
@@ -1445,51 +1447,51 @@ pub unsafe fn ParamValidationExt(
     // says `bSimulcastAVC` and vice versa (`encoder_ext.cpp:487-489`); reproduced
     // rather than repaired, because a consumer grepping its logs matches on text.
     let sps_listing = SPS_LISTING as i32;
-    if (*pCodingParam).iSpatialLayerNum > 1
-        && !(*pCodingParam).bSimulcastAVC
-        && (sps_listing & (*pCodingParam).eSpsPpsIdStrategy as i32) != 0
+    if pCodingParam.iSpatialLayerNum > 1
+        && !pCodingParam.bSimulcastAVC
+        && (sps_listing & pCodingParam.eSpsPpsIdStrategy as i32) != 0
     {
         WelsLog(
             pLogCtx,
             WELS_LOG_WARNING,
             &format!(
                 "ParamValidationExt(), eSpsPpsIdStrategy setting ({}) with multiple svc SpatialLayers ({}) not supported! eSpsPpsIdStrategy adjusted to CONSTANT_ID",
-                (*pCodingParam).eSpsPpsIdStrategy as i32,
-                (*pCodingParam).iSpatialLayerNum
+                pCodingParam.eSpsPpsIdStrategy as i32,
+                pCodingParam.iSpatialLayerNum
             ),
         );
-        (*pCodingParam).eSpsPpsIdStrategy = CONSTANT_ID;
+        pCodingParam.eSpsPpsIdStrategy = CONSTANT_ID;
     }
-    if (*pCodingParam).iUsageType == SCREEN_CONTENT_REAL_TIME
-        && (sps_listing & (*pCodingParam).eSpsPpsIdStrategy as i32) != 0
+    if pCodingParam.iUsageType == SCREEN_CONTENT_REAL_TIME
+        && (sps_listing & pCodingParam.eSpsPpsIdStrategy as i32) != 0
     {
         WelsLog(
             pLogCtx,
             WELS_LOG_WARNING,
             &format!(
                 "ParamValidationExt(), eSpsPpsIdStrategy setting ({}) with iUsageType ({}) not supported! eSpsPpsIdStrategy adjusted to CONSTANT_ID",
-                (*pCodingParam).eSpsPpsIdStrategy as i32,
-                (*pCodingParam).iUsageType as i32
+                pCodingParam.eSpsPpsIdStrategy as i32,
+                pCodingParam.iUsageType as i32
             ),
         );
-        (*pCodingParam).eSpsPpsIdStrategy = CONSTANT_ID;
+        pCodingParam.eSpsPpsIdStrategy = CONSTANT_ID;
     }
-    if (*pCodingParam).bSimulcastAVC
-        && (sps_listing & (*pCodingParam).eSpsPpsIdStrategy as i32) != 0
+    if pCodingParam.bSimulcastAVC
+        && (sps_listing & pCodingParam.eSpsPpsIdStrategy as i32) != 0
     {
         WelsLog(
             pLogCtx,
             WELS_LOG_INFO,
             &format!(
                 "ParamValidationExt(), eSpsPpsIdStrategy({}) under bSimulcastAVC({}) not supported yet, adjusted to INCREASING_ID",
-                (*pCodingParam).eSpsPpsIdStrategy as i32,
-                (*pCodingParam).bSimulcastAVC as i32
+                pCodingParam.eSpsPpsIdStrategy as i32,
+                pCodingParam.bSimulcastAVC as i32
             ),
         );
-        (*pCodingParam).eSpsPpsIdStrategy = INCREASING_ID;
+        pCodingParam.eSpsPpsIdStrategy = INCREASING_ID;
     }
-    if (*pCodingParam).bSimulcastAVC && (*pCodingParam).bPrefixNalAddingCtrl {
-        (*pCodingParam).bPrefixNalAddingCtrl = false;
+    if pCodingParam.bSimulcastAVC && pCodingParam.bPrefixNalAddingCtrl {
+        pCodingParam.bPrefixNalAddingCtrl = false;
     }
 
     // -----------------------------------------------------------------------
@@ -1515,21 +1517,21 @@ pub unsafe fn ParamValidationExt(
     // `tests/encoder_force_idr_ltr_test.rs`'s 140x96 row failed at `InitializeExt`
     // against the first version of that check.
 
-    for i in 0..(*pCodingParam).iSpatialLayerNum {
+    for i in 0..pCodingParam.iSpatialLayerNum {
         let idx = i as usize;
-        let mut kiPicWidth = (*pCodingParam).sSpatialLayers[idx].iVideoWidth;
-        let mut kiPicHeight = (*pCodingParam).sSpatialLayers[idx].iVideoHeight;
+        let mut kiPicWidth = pCodingParam.sSpatialLayers[idx].iVideoWidth;
+        let mut kiPicHeight = pCodingParam.sSpatialLayers[idx].iVideoHeight;
 
-        if (*pCodingParam).iPicWidth > 0
-            && (*pCodingParam).iPicHeight > 0
+        if pCodingParam.iPicWidth > 0
+            && pCodingParam.iPicHeight > 0
             && kiPicWidth == 0
             && kiPicHeight == 0
-            && (*pCodingParam).iSpatialLayerNum == 1
+            && pCodingParam.iSpatialLayerNum == 1
         {
-            kiPicWidth = (*pCodingParam).iPicWidth;
-            kiPicHeight = (*pCodingParam).iPicHeight;
-            (*pCodingParam).sSpatialLayers[idx].iVideoWidth = kiPicWidth;
-            (*pCodingParam).sSpatialLayers[idx].iVideoHeight = kiPicHeight;
+            kiPicWidth = pCodingParam.iPicWidth;
+            kiPicHeight = pCodingParam.iPicHeight;
+            pCodingParam.sSpatialLayers[idx].iVideoWidth = kiPicWidth;
+            pCodingParam.sSpatialLayers[idx].iVideoHeight = kiPicHeight;
         }
 
         if kiPicWidth <= 0
@@ -1541,24 +1543,24 @@ pub unsafe fn ParamValidationExt(
         if (kiPicWidth & 0x0F) != 0 || (kiPicHeight & 0x0F) != 0 {
             return ENC_RETURN_UNSUPPORTED_PARA;
         }
-        if (*pCodingParam).sSpatialLayers[idx].sSliceArgument.uiSliceMode as i32
+        if pCodingParam.sSpatialLayers[idx].sSliceArgument.uiSliceMode as i32
             >= SM_RESERVED as i32
         {
             return ENC_RETURN_UNSUPPORTED_PARA;
         }
 
-        let uiProfileIdc = (*pCodingParam).sSpatialLayers[idx].uiProfileIdc;
-        let uiLevelIdc = (*pCodingParam).sSpatialLayers[idx].uiLevelIdc;
+        let uiProfileIdc = pCodingParam.sSpatialLayers[idx].uiProfileIdc;
+        let uiLevelIdc = pCodingParam.sSpatialLayers[idx].uiLevelIdc;
         CheckProfileSetting(pLogCtx, &mut *pCodingParam, i, uiProfileIdc);
         CheckLevelSetting(pLogCtx, &mut *pCodingParam, i, uiLevelIdc);
 
         // only one MB => single slice
         if kiPicWidth <= 16 && kiPicHeight <= 16 {
-            (*pCodingParam).sSpatialLayers[idx].sSliceArgument.uiSliceMode = SM_SINGLE_SLICE;
+            pCodingParam.sSpatialLayers[idx].sSliceArgument.uiSliceMode = SM_SINGLE_SLICE;
         }
-        match (*pCodingParam).sSpatialLayers[idx].sSliceArgument.uiSliceMode {
+        match pCodingParam.sSpatialLayers[idx].sSliceArgument.uiSliceMode {
             SM_SINGLE_SLICE => {
-                let pSliceArgument = &mut (*pCodingParam).sSpatialLayers[idx].sSliceArgument;
+                let pSliceArgument = &mut pCodingParam.sSpatialLayers[idx].sSliceArgument;
                 pSliceArgument.uiSliceNum = 1;
                 pSliceArgument.uiSliceSizeConstraint = 0;
                 for iIdx in 0..MAX_SLICES_NUM {
@@ -1569,8 +1571,8 @@ pub unsafe fn ParamValidationExt(
             SM_FIXEDSLCNUM_SLICE => {
                 let iReturn = SliceArgumentValidationFixedSliceMode(
                     pLogCtx,
-                    &mut (*pCodingParam).sSpatialLayers[idx].sSliceArgument,
-                    (*pCodingParam).iRCMode,
+                    &mut pCodingParam.sSpatialLayers[idx].sSliceArgument,
+                    pCodingParam.iRCMode,
                     kiPicWidth,
                     kiPicHeight,
                 );
@@ -1580,7 +1582,7 @@ pub unsafe fn ParamValidationExt(
             }
             // encoder_ext.cpp:560
             SM_RASTER_SLICE => {
-                (*pCodingParam).sSpatialLayers[idx]
+                pCodingParam.sSpatialLayers[idx]
                     .sSliceArgument
                     .uiSliceSizeConstraint = 0;
 
@@ -1590,7 +1592,7 @@ pub unsafe fn ParamValidationExt(
                 let iMaxSliceNum = MAX_SLICES_NUM as i32;
                 // **S6.D1**: the `as *mut SSliceArgument` cast is gone — it existed only
                 // to feed the raw-parameter checkers below, which take `&mut` now.
-                let pSliceArgument = &mut (*pCodingParam).sSpatialLayers[idx].sSliceArgument;
+                let pSliceArgument = &mut pCodingParam.sSpatialLayers[idx].sSliceArgument;
 
                 if (*pSliceArgument).uiSliceMbNum[0] == 0 {
                     if iMbHeight > iMaxSliceNum {
@@ -1633,8 +1635,8 @@ pub unsafe fn ParamValidationExt(
             SM_SIZELIMITED_SLICE => {
                 // encoder_ext.cpp:614-644. iMbWidth/iMbHeight are computed but
                 // unused in this arm in the C++ too.
-                let uiMaxNalSize = (*pCodingParam).uiMaxNalSize;
-                let pSliceArgument = &mut (*pCodingParam).sSpatialLayers[idx].sSliceArgument;
+                let uiMaxNalSize = pCodingParam.uiMaxNalSize;
+                let pSliceArgument = &mut pCodingParam.sSpatialLayers[idx].sSliceArgument;
                 if pSliceArgument.uiSliceSizeConstraint <= MAX_MACROBLOCK_SIZE_IN_BYTE {
                     return ENC_RETURN_UNSUPPORTED_PARA;
                 }
@@ -1655,11 +1657,11 @@ pub unsafe fn ParamValidationExt(
         }
     }
 
-    for i in 0..(*pCodingParam).iSpatialLayerNum as usize {
-        let uiProfileIdc = (*pCodingParam).sSpatialLayers[i].uiProfileIdc;
+    for i in 0..pCodingParam.iSpatialLayerNum as usize {
+        let uiProfileIdc = pCodingParam.sSpatialLayers[i].uiProfileIdc;
         if uiProfileIdc == PRO_BASELINE || uiProfileIdc == PRO_SCALABLE_BASELINE {
-            if (*pCodingParam).iEntropyCodingModeFlag != 0 {
-                (*pCodingParam).iEntropyCodingModeFlag = 0;
+            if pCodingParam.iEntropyCodingModeFlag != 0 {
+                pCodingParam.iEntropyCodingModeFlag = 0;
                 WelsLog(
                     pLogCtx,
                     WELS_LOG_WARNING,
@@ -1667,9 +1669,9 @@ pub unsafe fn ParamValidationExt(
                 );
             }
         } else if uiProfileIdc == PRO_UNKNOWN {
-            (*pCodingParam).sSpatialLayers[i].uiProfileIdc =
-                if i == 0 || (*pCodingParam).bSimulcastAVC {
-                    if (*pCodingParam).iEntropyCodingModeFlag != 0 {
+            pCodingParam.sSpatialLayers[i].uiProfileIdc =
+                if i == 0 || pCodingParam.bSimulcastAVC {
+                    if pCodingParam.iEntropyCodingModeFlag != 0 {
                         PRO_HIGH
                     } else {
                         PRO_BASELINE
@@ -1775,9 +1777,7 @@ pub fn CheckReferenceNumSetting(
 /// Lowers each layer's `iMaxSpatialBitrate` to at most `iSpatialBitrate * (1 +
 /// iRang/100)`. It does **not** write `iBitsVaryPercentage`; `SetOption` does
 /// that (with the clip) before calling.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn WelsEncoderApplyBitVaryRang(
+pub fn WelsEncoderApplyBitVaryRang(
     pLogCtx: SLogContext,
     pParam: &mut SWelsSvcCodingParam,
     iRang: i32,
@@ -2823,7 +2823,12 @@ uiResolutionChangeTimes={}, uIDRReqNum={}, uIDRSentNum={}, uLTRSentNum=NA, iTota
                     ctx.param_mut().iLtrMarkPeriod = iValue;
                 }
                 EncoderOption::ENCODER_OPTION_LTR => {
-                    let pLTRValue = pOption as *mut SLTRConfig;
+                    // S10.5b: the deref stays *here*, at the C-ABI edge where the
+                    // `void*` arrives, instead of travelling into
+                    // `WelsEncoderApplyLTR` as a raw parameter. This arm is one of
+                    // this dispatcher's many caller-supplied-pointer reads and its
+                    // allow is not going anywhere; the callee's is.
+                    let pLTRValue = &mut *(pOption as *mut SLTRConfig);
                     let log_ctx = self.m_pWelsTrace.m_sLogCtx;
                     if WelsEncoderApplyLTR(log_ctx, &mut self.m_pEncContext, pLTRValue) != 0 {
                         return cmInitParaError;
