@@ -127,7 +127,7 @@ fn leading_zero_bits_matches_the_table() {
 #[test]
 fn trailing_bits_matches_for_every_byte() {
     for b in 0..=255u8 {
-        let old = unsafe { BsGetTrailingBits(&b) };
+        let old = BsGetTrailingBits(&b);
         assert_eq!(old, trailing_bits(b), "byte {b:#04x}");
     }
 }
