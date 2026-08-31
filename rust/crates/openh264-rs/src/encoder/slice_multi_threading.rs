@@ -439,7 +439,12 @@ pub unsafe fn UpdateMbListNeighborParallel(
     let kiEndMbInSlice = kiFirst + kiCount - 1;
 
     while iIdx <= kiEndMbInSlice {
-        crate::encoder::svc_encode_slice::UpdateMbNeighbor(pCurDq.as_ref(), mbs.at_mut(iIdx as usize), kiMbWidth, kiSliceIdc as u16);
+        crate::encoder::svc_encode_slice::UpdateMbNeighbor(
+            pCurDq.as_ref().map(|l| &l.sSliceEncCtx),
+            mbs.at_mut(iIdx as usize),
+            kiMbWidth,
+            kiSliceIdc as u16,
+        );
         iIdx += 1;
     }
 }
