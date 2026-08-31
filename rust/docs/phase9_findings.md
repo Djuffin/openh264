@@ -8371,3 +8371,39 @@ fork-reachable code, classify the pointee's *owner*: slice-owned state may take
 context-owned state takes `&` only; and an unwritten `&mut` is not a milder
 version of the mistake — the retag is the race. S10.15 flipped six parameters
 and got five right; the classification step is what was missing, not care.
+
+## F275 — three seams fell to the same question in one session: *what does this callee actually read?*
+
+S11's conversion mass produced one reusable result, and it is not a technique
+but an ordering: **before designing anything for a raw, ask what the callee
+reads through it.** Three items the plan had scoped as structural work
+dissolved into parameter narrowing:
+
+* **`InitMbInfo`** (S11.2d). S10.3e priced it as blocked by the stride-table
+  arena — "a third seam, unrelated to the grid, scoped not started". The body
+  read exactly *two* things through its `&sWelsEncCtx`: the layer's macroblock
+  X/Y coordinate tables. Given those as bounded slices it is safe, and the
+  arena's `unsafe` stays where the arena is.
+* **`TryModeMerge`** (S11.2e). Sixteen `.add(i)` dereferences off one raw,
+  which existed only to read `sMe8x8` while writing `sMe16x8`/`sMe8x16` —
+  three disjoint fields of one struct. Destructured, the compiler grants them.
+* **The RC/layer pair** (S11.2c). Three bodies held the layer raw because
+  `rc_at_mut` and `current_layer_mut` are two `&mut` borrows of one context.
+  Destructured into `pWelsSvcRc` against `iCurDqLayer`/`ppDqLayerList` they are
+  disjoint, and `rc_and_current_layer_mut` grants both.
+
+All three are the same shape as S10.3c's `mb_window` finding (borrow *width*)
+and S10.3d's slice-bank measurement (single-threaded callers paying the fork's
+price). Stated as a rule for whatever remains: **a raw that exists to dodge the
+borrow checker is a question about borrow shape, not about ownership** —
+narrow the parameter, or destructure the owner into the fields actually used.
+The cases where that fails are the ones where a callee genuinely needs the
+whole struct *and* a `&mut` field of it, and those are worth recording rather
+than forcing: `DynamicAdjustSlicing` takes `&mut sWelsEncCtx` *and*
+`&mut SDqLayer` where the layer lives inside the context, and F71's slot-read
+is what keeps those two provenances apart. Restructuring that parameter list is
+a real design item; converting the layer resolution under it is not.
+
+**The cost of the question is minutes.** Each of the three above took one
+reading of the callee and one compile. The plan had them scoped as sessions.
+
