@@ -340,7 +340,7 @@ pub type PSample4SadCostFunc = fn(&RecCursor<'_>, &RecCursor<'_>, &mut [i32; 4])
 // state (the table is written only by `PreprocessSliceCoding`, before the
 // fork — F132 round 7's hoist is what makes the `&` lawful).
 
-pub type PMotionSearchFunc = unsafe fn(
+pub type PMotionSearchFunc = fn(
     pMeFuncs: &SMeFuncs,
     sdf: &SSampleDealingFunc,
     pMe: &mut SWelsME<'_>,
@@ -349,7 +349,7 @@ pub type PMotionSearchFunc = unsafe fn(
     pRefPlane: &SharedPlane,
 );
 
-pub type PSearchMethodFunc = unsafe fn(
+pub type PSearchMethodFunc = fn(
     pMeFuncs: &SMeFuncs,
     sdf: &SSampleDealingFunc,
     pMe: &mut SWelsME<'_>,
@@ -358,14 +358,14 @@ pub type PSearchMethodFunc = unsafe fn(
     pRefPlane: &SharedPlane,
 );
 
-pub type PCalculateSatdFunc = unsafe fn(
+pub type PCalculateSatdFunc = fn(
     pSatd: Option<PSampleSadSatdCostFunc>,
     pMe: &mut SWelsME<'_>,
     pEncPlane: &SharedPlane,
     pRefPlane: &SharedPlane,
 );
 
-pub type PCheckDirectionalMv = unsafe fn(
+pub type PCheckDirectionalMv = fn(
     pSad: Option<PSampleSadSatdCostFunc>,
     pMe: &mut SWelsME<'_>,
     ksMinMv: SMVUnitXY,
@@ -375,7 +375,7 @@ pub type PCheckDirectionalMv = unsafe fn(
     iBestSadCost: &mut i32,
 ) -> bool;
 
-pub type PLineFullSearchFunc = unsafe fn(
+pub type PLineFullSearchFunc = fn(
     sdf: &SSampleDealingFunc,
     pMe: &mut SWelsME<'_>,
     pMvdTable: MvdCostCursor<'_>,
@@ -423,7 +423,7 @@ pub type PCalculateBlockFeatureOfFrame = unsafe fn(
 /// holds the safe per-block twins below.
 pub type PCalculateSingleBlockFeature = fn(cRef: &RecCursor<'_>) -> i32;
 
-pub type PUpdateFMESwitch = unsafe extern "C" fn(pCurLayer: Option<&SDqLayer>);
+pub type PUpdateFMESwitch = extern "C" fn(pCurLayer: Option<&SDqLayer>);
 
 /// The motion-estimation dispatch group — every slot the search family reaches
 /// *through the table it used to be handed back* (session F, the Phase 4a

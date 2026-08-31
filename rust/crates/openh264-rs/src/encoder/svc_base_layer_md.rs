@@ -1001,12 +1001,8 @@ pub fn WelsMdInterInit(
 
 /// `svc_base_layer_md.cpp:1023`.
 ///
-/// # Safety
-/// All pointers must be valid and `pfMotionSearch[0]` assigned.
-// unsafe-cat: fork-shared(S63) — the layer/SMB cursors (E3's grid); the
 // dispatch cursor this tag used to name is a shared reference since T9.F4
-#[allow(unsafe_code)]
-pub unsafe extern "C" fn WelsMdP16x8<'a>(
+pub extern "C" fn WelsMdP16x8<'a>(
     pEncCtx: &'a sWelsEncCtx,
     pFunc: &SWelsFuncPtrList,
     pCurDqLayer: &'a SDqLayer,
@@ -1066,12 +1062,8 @@ pub unsafe extern "C" fn WelsMdP16x8<'a>(
 
 /// `svc_base_layer_md.cpp:1053`.
 ///
-/// # Safety
-/// All pointers must be valid and `pfMotionSearch[0]` assigned.
-// unsafe-cat: fork-shared(S63) — the layer/SMB cursors (E3's grid); the
 // dispatch cursor this tag used to name is a shared reference since T9.F4
-#[allow(unsafe_code)]
-pub unsafe extern "C" fn WelsMdP8x16<'a>(
+pub extern "C" fn WelsMdP8x16<'a>(
     pEncCtx: &'a sWelsEncCtx,
     pFunc: &SWelsFuncPtrList,
     pCurLayer: &'a SDqLayer,
@@ -1138,11 +1130,7 @@ pub unsafe extern "C" fn WelsMdP8x16<'a>(
 
 /// `svc_base_layer_md.cpp:1238`. The non-VAA (`!LOW_COMPLEXITY`) fine partition search.
 ///
-/// # Safety
-/// All pointers must be valid.
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
-pub unsafe fn WelsMdInterFinePartition<'a>(
+pub fn WelsMdInterFinePartition<'a>(
     pEncCtx: &'a sWelsEncCtx,
     pWelsMd: &mut SWelsMD<'a>,
     pSlice: &mut SSlice,
