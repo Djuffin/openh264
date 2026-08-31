@@ -3450,6 +3450,13 @@ pub unsafe fn WelsCodeOnePicPartition(
             crate::safe::mb_grid::MbArray::empty(),
         );
         let mut sMbWindow = crate::safe::mb_grid::MbWindow::whole(&mut sMbData, 0);
+        // S11.30: the CABAC restore scratch, taken beside the grid — partition
+        // 0 is the only one a single-threaded encode names (`kiSliceIdx %
+        // iActiveThreadsNum` with one thread). Empty means never allocated for
+        // this configuration — the old null.
+        let mut vRestoreBuf = std::mem::take(&mut pCtx.pDynamicBsBuffer[0]);
+        let pRestoreBuf =
+            if vRestoreBuf.is_empty() { None } else { Some(vRestoreBuf.as_mut_slice()) };
         iReturn = crate::encoder::svc_encode_slice::WelsCodeOneSlice(
             pCtx,
             &mut *pCurSlice,
@@ -3457,7 +3464,9 @@ pub unsafe fn WelsCodeOnePicPartition(
             vOutBsBuf.as_mut_slice(),
             &mut pCtxOutBs,
             &mut sMbWindow,
+            pRestoreBuf,
         );
+        pCtx.pDynamicBsBuffer[0] = vRestoreBuf;
         drop(sMbWindow);
         current_layer_mut(pCtx).expect("the frame's current layer is stamped").sMbDataP = sMbData;
         let pOutRef = pCtx.pOut.as_deref_mut().expect("pOut lives");
@@ -3978,8 +3987,16 @@ pub unsafe fn WelsEncoderEncodeExt(
                 crate::safe::mb_grid::MbArray::empty(),
             );
             let mut sMbWindow = crate::safe::mb_grid::MbWindow::whole(&mut sMbData, 0);
+            // S11.30: the CABAC restore scratch, taken beside the grid — partition
+            // 0 is the only one a single-threaded encode names (`kiSliceIdx %
+            // iActiveThreadsNum` with one thread). Empty means never allocated for
+            // this configuration — the old null.
+            let mut vRestoreBuf = std::mem::take(&mut pCtx.pDynamicBsBuffer[0]);
+            let pRestoreBuf =
+                if vRestoreBuf.is_empty() { None } else { Some(vRestoreBuf.as_mut_slice()) };
             let iCodeRet =
-                crate::encoder::svc_encode_slice::WelsCodeOneSlice(pCtx, &mut *pCurSlice, eNalType as i32, vOutBsBuf.as_mut_slice(), &mut pCtxOutBs, &mut sMbWindow);
+                crate::encoder::svc_encode_slice::WelsCodeOneSlice(pCtx, &mut *pCurSlice, eNalType as i32, vOutBsBuf.as_mut_slice(), &mut pCtxOutBs, &mut sMbWindow, pRestoreBuf);
+            pCtx.pDynamicBsBuffer[0] = vRestoreBuf;
             drop(sMbWindow);
             current_layer_mut(pCtx).expect("the frame's current layer is stamped").sMbDataP = sMbData;
             let pOutRef = pCtx.pOut.as_deref_mut().expect("pOut lives");
@@ -4230,13 +4247,22 @@ pub unsafe fn WelsEncoderEncodeExt(
                     crate::safe::mb_grid::MbArray::empty(),
                 );
                 let mut sMbWindow = crate::safe::mb_grid::MbWindow::whole(&mut sMbData, 0);
+                // S11.30: the CABAC restore scratch, taken beside the grid — partition
+                // 0 is the only one a single-threaded encode names (`kiSliceIdx %
+                // iActiveThreadsNum` with one thread). Empty means never allocated for
+                // this configuration — the old null.
+                let mut vRestoreBuf = std::mem::take(&mut pCtx.pDynamicBsBuffer[0]);
+                let pRestoreBuf =
+                    if vRestoreBuf.is_empty() { None } else { Some(vRestoreBuf.as_mut_slice()) };
                 let iCodeRet = crate::encoder::svc_encode_slice::WelsCodeOneSlice(pCtx,
                     &mut *pCurSlice,
                     eNalType as i32,
                     vOutBsBuf.as_mut_slice(),
                     &mut pCtxOutBs,
                     &mut sMbWindow,
+                    pRestoreBuf,
                 );
+                pCtx.pDynamicBsBuffer[0] = vRestoreBuf;
                 drop(sMbWindow);
                 current_layer_mut(pCtx).expect("the frame's current layer is stamped").sMbDataP = sMbData;
                 let pOutRef = pCtx.pOut.as_deref_mut().expect("pOut lives");
