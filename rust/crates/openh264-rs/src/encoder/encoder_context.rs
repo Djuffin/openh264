@@ -2558,25 +2558,36 @@ fn InitCoeffFunc(
 
 /// Increments the H.264 slice header `frame_num` syntax element for spatial layer `kiDidx`.
 ///
-/// # Safety
-/// `pEncCtx` must be non-null and initialized.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn UpdateFrameNum(pEncCtx: &mut sWelsEncCtx, kiDidx: i32) {
+pub fn UpdateFrameNum(pEncCtx: &mut sWelsEncCtx, kiDidx: i32) {
     // T9.H: the `pEncCtx.is_null()` disjunct is gone — a `&mut sWelsEncCtx`
     // cannot be null and every caller now holds one. The rest is unchanged.
-    if pEncCtx.param_opt().is_none() || ctx_sps(pEncCtx).is_null() {
+    // S11.7: guard and read in one — `ctx_sps_ref` answers `None` exactly where
+    // the raw answered null (S10.5b), so the separate test and the deref below
+    // collapse into a single binding, and the scalar is read out before any
+    // later `&mut` on the context.
+    if pEncCtx.param_opt().is_none() {
         return;
     }
+    let Some(kpSps) = crate::encoder::svc_encode_slice::ctx_sps_ref(pEncCtx) else {
+        return;
+    };
     // T9.G4: the `ctx_sps` read below is hoisted above the cursor rather than left
     // inside the branch. `uiLog2MaxFrameNum` is a sequence-parameter constant and
     // `ctx_sps` is null-guarded above, so reading it unconditionally is pure — and
     // it is the whole-context call this body used to make with a cursor live.
-    let max_frame_num_minus1 = (1 << (*ctx_sps(pEncCtx)).uiLog2MaxFrameNum) - 1;
-    let pParamInternal = std::ptr::addr_of_mut!((*ctx_param_raw(pEncCtx)).sDependencyLayers[kiDidx as usize]);
+    let max_frame_num_minus1 = (1 << kpSps.uiLog2MaxFrameNum) - 1;
+    // S11.7: `param_mut()` is the same place. The raw existed to hold a
+    // field-precise cursor while the body also touched the context — a borrow
+    // *width* question (S10.3c), not an aliasing one: the layer's parameter
+    // record and the context's other fields are disjoint, and every read this
+    // body makes of the context is a scalar taken before the write below.
+    // §4.6, reorder: the scalar comes out before the parameter record's `&mut`.
+    let kbLastNalWasRef =
+        pEncCtx.eLastNalPriority[kiDidx as usize] != EWelsNalRefIdc::NRI_PRI_LOWEST;
+    let pParamInternal = &mut pEncCtx.param_mut().sDependencyLayers[kiDidx as usize];
     let mut bNeedFrameNumIncreasing = false;
 
-    if pEncCtx.eLastNalPriority[kiDidx as usize] != EWelsNalRefIdc::NRI_PRI_LOWEST {
+    if kbLastNalWasRef {
         bNeedFrameNumIncreasing = true;
     }
 
@@ -2593,25 +2604,36 @@ pub unsafe fn UpdateFrameNum(pEncCtx: &mut sWelsEncCtx, kiDidx: i32) {
 
 /// Rolls back the `frame_num` counter if a reference frame encoding attempt fails.
 ///
-/// # Safety
-/// `pEncCtx` must be non-null and initialized.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn LoadBackFrameNum(pEncCtx: &mut sWelsEncCtx, kiDidx: i32) {
+pub fn LoadBackFrameNum(pEncCtx: &mut sWelsEncCtx, kiDidx: i32) {
     // T9.H: the `pEncCtx.is_null()` disjunct is gone — a `&mut sWelsEncCtx`
     // cannot be null and every caller now holds one. The rest is unchanged.
-    if pEncCtx.param_opt().is_none() || ctx_sps(pEncCtx).is_null() {
+    // S11.7: guard and read in one — `ctx_sps_ref` answers `None` exactly where
+    // the raw answered null (S10.5b), so the separate test and the deref below
+    // collapse into a single binding, and the scalar is read out before any
+    // later `&mut` on the context.
+    if pEncCtx.param_opt().is_none() {
         return;
     }
+    let Some(kpSps) = crate::encoder::svc_encode_slice::ctx_sps_ref(pEncCtx) else {
+        return;
+    };
     // T9.G4: the `ctx_sps` read below is hoisted above the cursor rather than left
     // inside the branch. `uiLog2MaxFrameNum` is a sequence-parameter constant and
     // `ctx_sps` is null-guarded above, so reading it unconditionally is pure — and
     // it is the whole-context call this body used to make with a cursor live.
-    let max_frame_num_minus1 = (1 << (*ctx_sps(pEncCtx)).uiLog2MaxFrameNum) - 1;
-    let pParamInternal = std::ptr::addr_of_mut!((*ctx_param_raw(pEncCtx)).sDependencyLayers[kiDidx as usize]);
+    let max_frame_num_minus1 = (1 << kpSps.uiLog2MaxFrameNum) - 1;
+    // S11.7: `param_mut()` is the same place. The raw existed to hold a
+    // field-precise cursor while the body also touched the context — a borrow
+    // *width* question (S10.3c), not an aliasing one: the layer's parameter
+    // record and the context's other fields are disjoint, and every read this
+    // body makes of the context is a scalar taken before the write below.
+    // §4.6, reorder: the scalar comes out before the parameter record's `&mut`.
+    let kbLastNalWasRef =
+        pEncCtx.eLastNalPriority[kiDidx as usize] != EWelsNalRefIdc::NRI_PRI_LOWEST;
+    let pParamInternal = &mut pEncCtx.param_mut().sDependencyLayers[kiDidx as usize];
     let mut bNeedFrameNumIncreasing = false;
 
-    if pEncCtx.eLastNalPriority[kiDidx as usize] != EWelsNalRefIdc::NRI_PRI_LOWEST {
+    if kbLastNalWasRef {
         bNeedFrameNumIncreasing = true;
     }
 
@@ -2649,11 +2671,7 @@ pub fn InitBitStream(pEncCtx: &mut sWelsEncCtx) {
 
 /// Configures slice types, NAL headers, and Picture Order Count (POC) for the frame.
 ///
-/// # Safety
-/// `pEncCtx` must be non-null and properly initialized.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn InitFrameCoding(
+pub fn InitFrameCoding(
     pEncCtx: &mut sWelsEncCtx,
     keFrameType: EVideoFrameType,
     kiDidx: i32,
@@ -2661,9 +2679,16 @@ pub unsafe fn InitFrameCoding(
     // T9.H4: the `is_null()` disjunct that opened this guard is gone — a
     // `&mut sWelsEncCtx` cannot be null, and every caller now holds one. The
     // remaining conditions are unchanged.
-    if pEncCtx.param_opt().is_none() || ctx_sps(pEncCtx).is_null() {
+    // S11.7: guard and read in one — `ctx_sps_ref` answers `None` exactly where
+    // the raw answered null (S10.5b), so the separate test and the deref below
+    // collapse into a single binding, and the scalar is read out before any
+    // later `&mut` on the context.
+    if pEncCtx.param_opt().is_none() {
         return;
     }
+    let Some(kpSps) = crate::encoder::svc_encode_slice::ctx_sps_ref(pEncCtx) else {
+        return;
+    };
     // T9.G4, with `UpdateFrameNum`'s: `iLog2MaxPocLsb` is hoisted above the cursor
     // (a sequence constant, and `ctx_sps` is null-guarded above), and the cursor is
     // derived **per branch** rather than once at the top. The three branches are
@@ -2671,10 +2696,15 @@ pub unsafe fn InitFrameCoding(
     // nothing here was unsound; deriving per branch is what makes that visible to a
     // reader and to the detector, and it is what the borrow checker will need when
     // this body takes `&mut`.
-    let max_poc_boundary = (1 << (*ctx_sps(pEncCtx)).iLog2MaxPocLsb) - 2;
+    let max_poc_boundary = (1 << kpSps.iLog2MaxPocLsb) - 2;
 
     if keFrameType == EVideoFrameType::videoFrameTypeP {
-        let pParamInternal = std::ptr::addr_of_mut!((*ctx_param_raw(pEncCtx)).sDependencyLayers[kiDidx as usize]);
+        // S11.7: `param_mut()` is the same place. The raw existed to hold a
+        // field-precise cursor while the body also wrote the context — a borrow
+        // *width* question (S10.3c), not an aliasing one: the layer's parameter
+        // record and the context's own fields are disjoint, so the two write
+        // groups simply do not overlap once each borrow ends at its group.
+        let pParamInternal = &mut pEncCtx.param_mut().sDependencyLayers[kiDidx as usize];
         (*pParamInternal).iFrameIndex += 1;
 
         if (*pParamInternal).iPOC < max_poc_boundary {
@@ -2689,19 +2719,32 @@ pub unsafe fn InitFrameCoding(
         pEncCtx.eSliceType = EWelsSliceType::P_SLICE;
         pEncCtx.eNalPriority = EWelsNalRefIdc::NRI_PRI_HIGH;
     } else if keFrameType == EVideoFrameType::videoFrameTypeIDR {
-        let pParamInternal = std::ptr::addr_of_mut!((*ctx_param_raw(pEncCtx)).sDependencyLayers[kiDidx as usize]);
-        (*pParamInternal).iFrameNum = 0;
-        (*pParamInternal).iPOC = 0;
-        (*pParamInternal).bEncCurFrmAsIdrFlag = false;
-        (*pParamInternal).iFrameIndex = 0;
+        // S11.7: `param_mut()` is the same place. The raw existed to hold a
+        // field-precise cursor while the body also wrote the context — a borrow
+        // *width* question (S10.3c), not an aliasing one: the layer's parameter
+        // record and the context's own fields are disjoint, so the two write
+        // groups simply do not overlap once each borrow ends at its group.
+        let pParamInternal = &mut pEncCtx.param_mut().sDependencyLayers[kiDidx as usize];
+        pParamInternal.iFrameNum = 0;
+        pParamInternal.iPOC = 0;
+        pParamInternal.bEncCurFrmAsIdrFlag = false;
+        pParamInternal.iFrameIndex = 0;
+        // S11.7: `iCodingIndex` stood below the three context writes. It is a
+        // write to a *different object* than they are, so hoisting it here ends
+        // the parameter borrow before the context's begins — byte-neutral, and
+        // the four parameter writes now read as the group they always were.
+        pParamInternal.iCodingIndex = 0;
 
         pEncCtx.eNalType = EWelsNalUnitType::NAL_UNIT_CODED_SLICE_IDR;
         pEncCtx.eSliceType = EWelsSliceType::I_SLICE;
         pEncCtx.eNalPriority = EWelsNalRefIdc::NRI_PRI_HIGHEST;
-
-        (*pParamInternal).iCodingIndex = 0;
     } else if keFrameType == EVideoFrameType::videoFrameTypeI {
-        let pParamInternal = std::ptr::addr_of_mut!((*ctx_param_raw(pEncCtx)).sDependencyLayers[kiDidx as usize]);
+        // S11.7: `param_mut()` is the same place. The raw existed to hold a
+        // field-precise cursor while the body also wrote the context — a borrow
+        // *width* question (S10.3c), not an aliasing one: the layer's parameter
+        // record and the context's own fields are disjoint, so the two write
+        // groups simply do not overlap once each borrow ends at its group.
+        let pParamInternal = &mut pEncCtx.param_mut().sDependencyLayers[kiDidx as usize];
         if (*pParamInternal).iPOC < max_poc_boundary {
             (*pParamInternal).iPOC += 2;
         } else {

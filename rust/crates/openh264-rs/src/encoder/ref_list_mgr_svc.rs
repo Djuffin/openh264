@@ -1131,7 +1131,12 @@ pub unsafe fn FilterLTRRecoveryRequest(
 
         // T9.H3 — the derivation order, inverted from T9.G4: scalar and the
         // permanently-raw root first, the LTR borrow last (see `DeleteInvalidLTR`).
-        let iMaxFrameNumPlus1 = 1 << (*ctx_sps(pCtx)).uiLog2MaxFrameNum;
+        // S11.7: the scalar comes off the shared twin; `ctx_sps_ref` answers
+        // `None` where the raw answered null, and the C++ dereferences here
+        // unconditionally — so an absent SPS keeps the raw form's shape by
+        // contributing the same `1 << 0` this expression would have read from a
+        // zeroed record.
+        let iMaxFrameNumPlus1 = 1 << ctx_sps_ref(pCtx).map_or(0, |s| s.uiLog2MaxFrameNum);
         let pParamInternal = std::ptr::addr_of_mut!((*ctx_param_raw(pCtx)).sDependencyLayers[iLayerId as usize]);
         let pLtr = ctx_ltr_at(pCtx, (iLayerId as usize) as usize);
 
@@ -1429,8 +1434,11 @@ pub unsafe fn WelsUpdateRefSyntax(pCtx: &mut sWelsEncCtx, kiPOC: i32, kiFrameTyp
         let pRefList = pCtx.ref_list(uiDid).expect("the dependency layer's reference list");
         if let Some(id) = pCtx.pRefList0[0] {
             iAbsDiffPicNumMinus1 = pParamD.iFrameNum - (*pRefList).pic(id).iFrameNum - 1;
-            if iAbsDiffPicNumMinus1 < 0 && !ctx_sps(pCtx).is_null() {
-                iAbsDiffPicNumMinus1 += 1 << (*ctx_sps(pCtx)).uiLog2MaxFrameNum;
+            if iAbsDiffPicNumMinus1 < 0 {
+                // S11.7: the guard is the `Option`, which is the same test.
+                if let Some(kpSps) = ctx_sps_ref(pCtx) {
+                    iAbsDiffPicNumMinus1 += 1 << kpSps.uiLog2MaxFrameNum;
+                }
             }
         }
     }
