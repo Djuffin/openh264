@@ -129,23 +129,23 @@ fn WELS_ROUND_f(x: f32) -> i32 {
 
 /// `WelsGetEncBlockStrideOffset` — `decode_mb_aux.cpp:235`.
 ///
-/// # Safety
-/// `pBlock` must point to at least 24 writable `i32`s.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn WelsGetEncBlockStrideOffset(pBlock: *mut i32, kiStrideY: i32, kiStrideUV: i32) {
+/// **S11.37: safe — the parameter states the extent the `# Safety` line
+/// promised.** "At least 24 writable `i32`s" is `&mut [i32; 24]`; the two
+/// callers (the stride-table fillers) make that claim once, where they derive
+/// the block from the arena, instead of this body assuming it 24 times.
+pub fn WelsGetEncBlockStrideOffset(pBlock: &mut [i32; 24], kiStrideY: i32, kiStrideUV: i32) {
     for j in 0..4i32 {
         let i = (j << 2) as usize;
-        let k = (j & 0x01) << 1;
+        let k = ((j & 0x01) << 1) as i32;
         let r = j & 0x02;
-        *pBlock.add(i) = (k + r * kiStrideY) << 2;
-        *pBlock.add(i + 1) = (1 + k + r * kiStrideY) << 2;
-        *pBlock.add(i + 2) = (k + (1 + r) * kiStrideY) << 2;
-        *pBlock.add(i + 3) = (1 + k + (1 + r) * kiStrideY) << 2;
+        pBlock[i] = (k + r * kiStrideY) << 2;
+        pBlock[i + 1] = (1 + k + r * kiStrideY) << 2;
+        pBlock[i + 2] = (k + (1 + r) * kiStrideY) << 2;
+        pBlock[i + 3] = (1 + k + (1 + r) * kiStrideY) << 2;
 
         let v = ((j & 0x01) + r * kiStrideUV) << 2;
-        *pBlock.add(16 + j as usize) = v;
-        *pBlock.add(20 + j as usize) = v;
+        pBlock[16 + j as usize] = v;
+        pBlock[20 + j as usize] = v;
     }
 }
 
@@ -157,9 +157,7 @@ pub unsafe fn WelsGetEncBlockStrideOffset(pBlock: *mut i32, kiStrideY: i32, kiSt
 /// # Safety
 /// `ppCtx` must point to a live context whose `pFuncList->pParametersetStrategy` is
 /// already set.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn AcquireLayersNals(
+pub fn AcquireLayersNals(
     ctx: &mut sWelsEncCtx,
     pCountLayers: &mut i32,
     pCountNals: &mut i32,
@@ -175,12 +173,14 @@ pub unsafe fn AcquireLayersNals(
     loop {
         // S29: `&mut X as *mut T` is the defect with the cast already written.
         // The callee takes `*mut`, so the reference existed only to be discarded.
-        let pDLayer = std::ptr::addr_of_mut!((*ctx_param_raw(&*ctx)).sSpatialLayers[iDIndex as usize]);
+        // S11.37: three shared reads — the cursor is gone (F284's test: the
+        // result never stayed a pointer).
+        let kSliceArgument = &ctx.param().sSpatialLayers[iDIndex as usize].sSliceArgument;
         let iOrgNumNals = iCountNumNals;
 
         // Note (Sep. 2010, upstream): the memory over-use here counts little towards
         // overall performance and should not be critical even on mobile.
-        if SM_SIZELIMITED_SLICE == (*pDLayer).sSliceArgument.uiSliceMode {
+        if SM_SIZELIMITED_SLICE == kSliceArgument.uiSliceMode {
             iCountNumNals += MAX_SLICES_NUM as i32;
             // plus prefix NALs
             if iDIndex == 0 {
@@ -191,7 +191,7 @@ pub unsafe fn AcquireLayersNals(
                 return 1;
             }
         } else {
-            let kiNumOfSlice = GetInitialSliceNum(&(*pDLayer).sSliceArgument);
+            let kiNumOfSlice = GetInitialSliceNum(kSliceArgument);
 
             // NEED check iCountNals value in case multiple slices are used
             iCountNumNals += kiNumOfSlice; // for slice VCL NALs
@@ -350,8 +350,10 @@ pub unsafe fn AllocStrideTables(ctx: &mut sWelsEncCtx, kiNumSpatialLayers: i32) 
             // is `&self`/`*const` now, and this is one of the four sites that fill
             // the block. Same arithmetic the accessor did: root + the offset just
             // stored.
+            // S11.37: the 24-entry claim, made once at the derivation — the
+            // arena reserves exactly this block at this offset (T9.C4).
             WelsGetEncBlockStrideOffset(
-                pPtr.root().add(pBaseDec as usize).cast::<i32>(),
+                &mut *(pPtr.root().add(pBaseDec as usize).cast::<[i32; 24]>()),
                 kiLumaWidth,
                 kiChromaWidth,
             );
@@ -767,7 +769,8 @@ pub unsafe fn InitDqLayers(
                 None => std::ptr::null_mut(),
             }
         };
-        WelsGetEncBlockStrideOffset(pEncBlockOffset, iPicWidth, iPicChromaWidth);
+        // S11.37: as at the dec-side fill — the 24-entry claim at the derivation.
+        WelsGetEncBlockStrideOffset(&mut *(pEncBlockOffset.cast::<[i32; 24]>()), iPicWidth, iPicChromaWidth);
 
         // Reference list. **`Box`-built with a real constructor since T6.F1** — it
         // owns this layer's reconstruction pool now, and a `WelsMallocz`'d shell is UB
@@ -1109,9 +1112,7 @@ pub unsafe fn InitDqLayers(
 /// # Safety
 /// `ppCtx` must point to a live context with `pMemAlign`, `pSvcParam` and
 /// `pFuncList->pParametersetStrategy` set.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn RequestMemorySvc(
+pub fn RequestMemorySvc(
     ctx: &mut sWelsEncCtx,
     pExistingParasetList: Option<&SExistingParasetList>,
 ) -> i32 {
@@ -1316,7 +1317,11 @@ pub unsafe fn RequestMemorySvc(
     }
 
     // stride tables
-    if AllocStrideTables(ctx, kiNumDependencyLayers) != 0 {
+    // S11.37: the callee's claim — the arena fill's raw block derivations
+    // (its own conversion is the stride-table family's tail).
+    // unsafe-cat: port-raw(Phase 9)
+    #[allow(unsafe_code)]
+    if unsafe { AllocStrideTables(ctx, kiNumDependencyLayers) } != 0 {
         return 1;
     }
 
@@ -1363,7 +1368,12 @@ pub unsafe fn RequestMemorySvc(
     // fills with the `Box`es themselves.
     ctx.ppDqLayerList = (0..kiNumDependencyLayers).map(|_| None).collect();
 
-    iResult = InitDqLayers(ctx, pExistingParasetList);
+    // S11.37: the callee's claim — the layer builder's remaining raw walks.
+    // unsafe-cat: port-raw(Phase 9)
+    #[allow(unsafe_code)]
+    {
+        iResult = unsafe { InitDqLayers(ctx, pExistingParasetList) };
+    }
     if iResult != 0 {
         return iResult;
     }
@@ -1433,9 +1443,7 @@ pub unsafe fn RequestMemorySvc(
 ///
 /// # Safety
 /// `pCodingParam` and `pMaxSliceCount` must be non-null.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn InitSliceSettings(
+pub fn InitSliceSettings(
     pLogCtx: SLogContext,
     // S11.13: the coding parameters arrive by reference — see `InitializeInternal`.
     pCodingParam: &mut SWelsSvcCodingParam,
@@ -1447,48 +1455,42 @@ pub unsafe fn InitSliceSettings(
     let mut iMaxSliceCount: u16 = 0;
 
     loop {
-        let pDlp = &mut pCodingParam.sSpatialLayers[iSpatialIdx as usize]
-            as *mut SSpatialLayerConfig;
-        // **F70, and S29 again.** This was `&mut (*pDlp).sSliceArgument` — a `Unique`
-        // retag over the whole slice-argument struct, held across the
-        // `SM_FIXEDSLCNUM_SLICE` arm below, which takes a **second** `&mut` to the
-        // same field for the validator and pops the first. The read at the bottom of
-        // that arm then goes through a dead tag. `addr_of_mut!` creates no reference,
-        // so there is no tag to pop and every read below is through the parameter
-        // struct's own provenance.
-        //
-        // Found by the T7.B4 fork/join probe on its **first** Miri run — not because
-        // the probe threads, but because it is the first test in this crate ever to
-        // ask for `SM_FIXEDSLCNUM_SLICE`. This arm is what the diffharness drives on
-        // 369 rows a sweep and what any multi-slice caller reaches; it has been UB
-        // since the parameter validation was written, and no byte gate could see it.
-        let pSliceArgument = std::ptr::addr_of_mut!((*pDlp).sSliceArgument);
+        // **S11.37: NLL does the whole F70 dance.** The Miri-found defect there
+        // was a *held* `&mut sSliceArgument` popped by the validator's second
+        // `&mut` to the same field; the raw cursor dodged it. With the borrow
+        // taken per use — the mode read, the validator's argument, the count
+        // reads after it — no borrow spans another derivation, which is the
+        // ordering the raw was hand-maintaining. The two geometry scalars are
+        // sibling fields, read out before the argument's `&mut`.
+        let pDlp = &mut pCodingParam.sSpatialLayers[iSpatialIdx as usize];
+        let (kiVideoWidth, kiVideoHeight) = (pDlp.iVideoWidth, pDlp.iVideoHeight);
 
-        match (*pSliceArgument).uiSliceMode {
+        match pDlp.sSliceArgument.uiSliceMode {
             SM_SIZELIMITED_SLICE => {
                 iMaxSliceCount = crate::encoder::svc_enc_slice_segment::AVERSLICENUM_CONSTRAINT
                     as u16;
             }
             crate::api::codec_api::SliceModeEnum::SM_FIXEDSLCNUM_SLICE => {
+                let kiRCMode = pCodingParam.iRCMode;
                 let iReturn =
                     crate::encoder::svc_enc_slice_segment::SliceArgumentValidationFixedSliceMode(
                         pLogCtx,
-                        &mut (*pDlp).sSliceArgument,
-                        pCodingParam.iRCMode,
-                        (*pDlp).iVideoWidth,
-                        (*pDlp).iVideoHeight,
+                        &mut pCodingParam.sSpatialLayers[iSpatialIdx as usize].sSliceArgument,
+                        kiRCMode,
+                        kiVideoWidth,
+                        kiVideoHeight,
                     );
                 if iReturn != 0 {
                     return ENC_RETURN_UNSUPPORTED_PARA;
                 }
 
-                if (*pSliceArgument).uiSliceNum as u16 > iMaxSliceCount {
-                    iMaxSliceCount = (*pSliceArgument).uiSliceNum as u16;
+                if pCodingParam.sSpatialLayers[iSpatialIdx as usize].sSliceArgument.uiSliceNum as u16 > iMaxSliceCount {
+                    iMaxSliceCount = pCodingParam.sSpatialLayers[iSpatialIdx as usize].sSliceArgument.uiSliceNum as u16;
                 }
             }
             SM_SINGLE_SLICE | crate::api::codec_api::SliceModeEnum::SM_RASTER_SLICE => {
-                if (*pSliceArgument).uiSliceNum as u16 > iMaxSliceCount {
-                    iMaxSliceCount = (*pSliceArgument).uiSliceNum as u16;
+                if pCodingParam.sSpatialLayers[iSpatialIdx as usize].sSliceArgument.uiSliceNum as u16 > iMaxSliceCount {
+                    iMaxSliceCount = pCodingParam.sSpatialLayers[iSpatialIdx as usize].sSliceArgument.uiSliceNum as u16;
                 }
             }
             _ => {}
@@ -1518,9 +1520,7 @@ pub unsafe fn InitSliceSettings(
 ///
 /// # Safety
 /// All three out-pointers must be writable and `pCodingParam` initialised.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn GetMultipleThreadIdc(
+pub fn GetMultipleThreadIdc(
     pLogCtx: SLogContext,
     // S11.13: the coding parameters arrive by reference — see `InitializeInternal`.
     pCodingParam: &mut SWelsSvcCodingParam,
@@ -1571,9 +1571,7 @@ pub unsafe fn GetMultipleThreadIdc(
 /// # Safety
 /// `ppCtx` and `pCodingParam` must be non-null; the context returned in `*ppCtx` is
 /// owned by the caller and must be released with [`WelsUninitEncoderExt`].
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn WelsInitEncoderExt(
+pub fn WelsInitEncoderExt(
     ppCtx: &mut Option<Box<sWelsEncCtx>>,
     // S11.13: the coding parameters arrive by reference — see `InitializeInternal`.
     pCodingParam: &mut SWelsSvcCodingParam,
@@ -1763,8 +1761,7 @@ mod tests {
     // code. It was tagged `port-raw(Phase 9)`, which put it in the convertible
     // queue; the queue is product work, and D-exit-4's enumerated floor is the
     // test instruments. Same allow, honest category.
-    #[allow(unsafe_code)]
-    unsafe fn build_gate_context() -> *mut sWelsEncCtx {
+    fn build_gate_context() -> *mut sWelsEncCtx {
         // Drive the same path the public API does: build an SEncParamExt and let
         // ParamTranscode fill sDependencyLayers, which ParamValidationExt then checks.
         // Setting SWelsSvcCodingParam's fields directly leaves the internal
@@ -1930,9 +1927,7 @@ mod tests {
 /// # Safety
 /// `ppCtx` must point to a context from [`WelsInitEncoderExt`], or be null/point to
 /// null.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn WelsUninitEncoderExt(pEncContext: Option<Box<sWelsEncCtx>>) {
+pub fn WelsUninitEncoderExt(pEncContext: Option<Box<sWelsEncCtx>>) {
     // **T8.B5 — the teardown takes the context by value**, which is what
     // `encoder_ext.cpp:1878`'s `*ppCtx = NULL` at the end was expressing: after
     // this call the caller has no context, and now that is a fact about the type
@@ -2011,9 +2006,9 @@ pub unsafe fn WelsUninitEncoderExt(pEncContext: Option<Box<sWelsEncCtx>>) {
         // own length now, not `iSpatialLayerNum` read back out of the parameters at
         // teardown — the silent-leak shape T6.H7 found next door.
         for ilayer in 0..ctxBox.ppDqLayerList.len() {
-            let pLayer = ctx_dq_layer(&*ctxBox, ilayer);
-            if !pLayer.is_null() {
-                FreeDqLayer(&mut *pLayer);
+            // S11.37: the safe accessor — `None` where the raw answered null.
+            if let Some(pLayer) = crate::encoder::encoder_context::dq_layer_mut(&mut *ctxBox, ilayer) {
+                FreeDqLayer(pLayer);
             }
         }
         // **T6.H7**: the reference-list entry stood here — a loop calling `FreeRefList`
@@ -2105,9 +2100,7 @@ pub fn WelsSwapDqLayers(pCtx: &mut sWelsEncCtx, kiNextDqIdx: i32) {
 
 
 /// `encoder_ext.cpp:2808`. Prefetch the reference picture after `WelsBuildRefList`.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn PrefetchReferencePicture(pCtx: &mut sWelsEncCtx, keFrameType: EVideoFrameType) {
+pub fn PrefetchReferencePicture(pCtx: &mut sWelsEncCtx, keFrameType: EVideoFrameType) {
     let kiSliceCount = current_layer_ref(pCtx).expect("the frame's current layer is stamped").iMaxSliceNum;
     // C++ declares `uint8_t uiRefIdx = -1;`, which wraps to 255.
     let mut uiRefIdx: u8 = 0xff;
@@ -2154,15 +2147,13 @@ pub fn ClearFrameBsInfo(pCtx: &mut sWelsEncCtx, pFbi: &mut SFrameBSInfo) {
 
 /// `encoder_ext.cpp:3341`. Roll the encoder state back one frame after the rate
 /// controller decides to drop it.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn StackBackEncoderStatus(pEncCtx: &mut sWelsEncCtx, keFrameType: EVideoFrameType) {
-    // A7: the cursor is a raw into the parameter block, taken with `addr_of_mut!`
-    // on the element (S29/F13) rather than `as_mut_ptr().add()`, so no reference to
-    // the array is formed and the `&mut` of the context ends with the statement.
+pub fn StackBackEncoderStatus(pEncCtx: &mut sWelsEncCtx, keFrameType: EVideoFrameType) {
+    // S11.37: S11.19's shape — the one context value the writes below interleave
+    // with (`ctx_sps`'s POC width) is read out as a scalar first, so the record's
+    // `&mut` is taken once, holds nothing across a context reach, and the raw
+    // cursor is gone.
     let kiDid = pEncCtx.uiDependencyId as usize;
-    let pParamInternal =
-        std::ptr::addr_of_mut!((*ctx_param_raw(pEncCtx)).sDependencyLayers[kiDid]);
+    let kiLog2MaxPocLsb = crate::encoder::svc_encode_slice::ctx_sps_ref(pEncCtx).map_or(0, |s| s.iLog2MaxPocLsb);
 
     // for bitstream writing
     pEncCtx.iPosBsBuffer = 0; // reset bs buffer position
@@ -2180,11 +2171,14 @@ pub unsafe fn StackBackEncoderStatus(pEncCtx: &mut sWelsEncCtx, keFrameType: EVi
     if keFrameType == EVideoFrameType::videoFrameTypeP
         || keFrameType == EVideoFrameType::videoFrameTypeI
     {
-        (*pParamInternal).iFrameIndex -= 1;
-        if (*pParamInternal).iPOC != 0 {
-            (*pParamInternal).iPOC -= 2;
-        } else {
-            (*pParamInternal).iPOC = (1 << (*ctx_sps(pEncCtx)).iLog2MaxPocLsb) - 2;
+        {
+            let pParamInternal = &mut pEncCtx.param_mut().sDependencyLayers[kiDid];
+            pParamInternal.iFrameIndex -= 1;
+            if pParamInternal.iPOC != 0 {
+                pParamInternal.iPOC -= 2;
+            } else {
+                pParamInternal.iPOC = (1 << kiLog2MaxPocLsb) - 2;
+            }
         }
 
         let iDid = pEncCtx.uiDependencyId as i32;
@@ -2194,7 +2188,7 @@ pub unsafe fn StackBackEncoderStatus(pEncCtx: &mut sWelsEncCtx, keFrameType: EVi
         pEncCtx.eSliceType = EWelsSliceType::P_SLICE;
         // eNalPriority is not stacked back: it is updated at the start of coding a frame.
     } else if keFrameType == EVideoFrameType::videoFrameTypeIDR {
-        (*pParamInternal).uiIdrPicId -= 1;
+        pEncCtx.param_mut().sDependencyLayers[kiDid].uiIdrPicId -= 1;
         // set the next frame to be IDR
         let iDid = pEncCtx.uiDependencyId as i32;
         crate::encoder::wels_encoder_ext::ForceCodingIDR(pEncCtx, iDid);
@@ -2411,9 +2405,7 @@ pub unsafe fn WelsInitCurrentLayer(pCtx: &mut sWelsEncCtx, _kiWidth: i32, _kiHei
 
 /// `encoder_ext.cpp:2954`. Emit the SVC prefix NAL that precedes each VCL NAL when
 /// `bNeedPrefixNalFlag` is set.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn AddPrefixNal(
+pub fn AddPrefixNal(
     pCtx: &mut sWelsEncCtx,
     _pLayerBsInfo: &mut SLayerBSInfo,
     pNalLen: *mut i32,
@@ -2455,10 +2447,11 @@ pub unsafe fn AddPrefixNal(
         crate::encoder::nal_encap::WelsUnloadNal(pCtx.pOut.as_deref_mut().expect("pOut lives"));
     }
 
-    // S3.B1 hoist: the layer lives in its own allocation; the raw read
-    // survives the shared `pOut`/context borrows in the argument list.
-    let pNalHeaderExt =
-        std::ptr::addr_of!(current_layer_ref(pCtx).expect("the frame's current layer is stamped").sLayerInfo.sNalHeaderExt);
+    // S11.37: a value, not a cursor — `SNalUnitHeaderExt` is `Copy`, the callee
+    // only reads it, and a copy survives the context destructure below without
+    // borrowing anything (the S3.B1 raw hoist said the same thing in provenance).
+    let kNalHeaderExt =
+        current_layer_ref(pCtx).expect("the frame's current layer is stamped").sLayerInfo.sNalHeaderExt;
     // **S11.17**: the context is destructured. The NAL entry and the
     // source bytes live in `pOut`; the destination is the tail of
     // `pFrameBs` — disjoint fields, so both borrows are live at once
@@ -2471,14 +2464,22 @@ pub unsafe fn AddPrefixNal(
     iReturn = crate::encoder::nal_encap::WelsEncodeNal(
         &kpOut.sNalList[(kpOut.iNalIndex - 1) as usize],
         &kpOut.sBsBuffer[..],
-        Some(&*pNalHeaderExt),
+        Some(&kNalHeaderExt),
         pDstTail,
-        &mut *pNalLen.add(*pNalIdxInLayer as usize),
+        // unsafe-cat: C-ABI — the out-array slot (S11.20's family).
+        #[allow(unsafe_code)]
+        unsafe {
+            &mut *pNalLen.add(*pNalIdxInLayer as usize)
+        },
     );
     if iReturn != ENC_RETURN_SUCCESS {
         return iReturn;
     }
-    *iPayloadSize = *pNalLen.add(*pNalIdxInLayer as usize);
+    // unsafe-cat: C-ABI
+    #[allow(unsafe_code)]
+    unsafe {
+        *iPayloadSize = *pNalLen.add(*pNalIdxInLayer as usize);
+    }
 
     pCtx.iPosBsBuffer += *iPayloadSize;
     *pNalIdxInLayer += 1;
@@ -2580,10 +2581,8 @@ fn SetNormalCodingFunc(pFuncList: &mut SWelsFuncPtrList) {
 ///
 /// The `SCREEN_CONTENT_REAL_TIME` block (`encoder_ext.cpp:2708-2771`) is the only part
 /// not translated; see the comment at its position below.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn PreprocessSliceCoding(pCtx: &mut sWelsEncCtx) {
-    let pCurLayer = current_layer(pCtx);
+pub fn PreprocessSliceCoding(pCtx: &mut sWelsEncCtx) {
+    let pCurLayer = current_layer_ref(pCtx).expect("the frame's current layer is stamped");
     let bFastMode = pCtx.param().iComplexityMode == LOW_COMPLEXITY;
     // **T6.I2**, as `InitFunctionPointers`: one `&mut` derived from the owner, not
     // one per call. This is the function the whole step-1 checker is about — it is
@@ -2604,13 +2603,17 @@ pub unsafe fn PreprocessSliceCoding(pCtx: &mut sWelsEncCtx) {
     let keNalPriority = pCtx.eNalPriority;
     let kiHighestTemporalId =
         pCtx.param().sDependencyLayers[kiCurDid].iHighestTemporalId as i32;
-    let kbBaseAvail = (*pCurLayer).bBaseLayerAvailableFlag;
+    let kbBaseAvail = pCurLayer.bBaseLayerAvailableFlag;
     let kbHighestSpatial = if pCtx.param_opt().is_some() {
         pCtx.param().iSpatialLayerNum
-            == ((*pCurLayer).sLayerInfo.sNalHeaderExt.uiDependencyId as i32 + 1)
+            == (pCurLayer.sLayerInfo.sNalHeaderExt.uiDependencyId as i32 + 1)
     } else {
         true
     };
+    // S11.37: the deblock-gate's two layer flags, read out with the rest — the
+    // shared layer borrow ends here, before the table's `&mut` below.
+    let kbDeblockingParallelFlag = pCurLayer.bDeblockingParallelFlag;
+    let kiLoopFilterDisableIdc = pCurLayer.iLoopFilterDisableIdc;
 
     let fl: &mut SWelsFuncPtrList = pCtx.func_list_mut();
 
@@ -2671,11 +2674,11 @@ pub unsafe fn PreprocessSliceCoding(pCtx: &mut sWelsEncCtx) {
     // makes it correct: `as_ptr()` here derived a *third* pointer from the
     // struct purely to compare, which under Stacked Borrows invalidated the
     // very pointers it was testing.
-    (*pCurLayer).bSatdInMdFlag =
+    let kbSatdInMd =
         sdf.pfMeCost == CostFamily::Satd && sdf.pfMdCost == CostFamily::Satd;
 
-    if (*pCurLayer).bDeblockingParallelFlag
-        && (*pCurLayer).iLoopFilterDisableIdc != 1
+    if kbDeblockingParallelFlag
+        && kiLoopFilterDisableIdc != 1
         // ENABLE_FRAME_DUMP is not defined, so this clause is compiled in.
         && keNalPriority != EWelsNalRefIdc::NRI_PRI_LOWEST
         && (kiHighestTemporalId == 0 || kiCurTid < kiHighestTemporalId)
@@ -2702,12 +2705,16 @@ pub unsafe fn PreprocessSliceCoding(pCtx: &mut sWelsEncCtx) {
     } else {
         Some(crate::encoder::svc_base_layer_md::WelsMdInterMb)
     };
+
+    // S11.37: the one layer write, re-derived after the table's `&mut` ends —
+    // the value was computed above from the table's final state.
+    current_layer_mut(pCtx)
+        .expect("the frame's current layer is stamped")
+        .bSatdInMdFlag = kbSatdInMd;
 }
 
 /// `encoder_ext.cpp:3131`. Write the parameter sets for (simulcast) SVC.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn WriteSsvcParaset(
+pub fn WriteSsvcParaset(
     pCtx: &mut sWelsEncCtx,
     kiSpatialNum: i32,
     // **S11.20**: the in/out layer cursor becomes the frame plus an index.
@@ -2733,12 +2740,14 @@ pub unsafe fn WriteSsvcParaset(
         return iReturn;
     }
 
+    // S11.37: the write borrow, taken per record — the cursor never crossed a
+    // context reach here, so it was never anything but this.
     for iSpatialId in 0..kiSpatialNum as usize {
-        let pParamInternal = std::ptr::addr_of_mut!((*ctx_param_raw(pCtx)).sDependencyLayers[iSpatialId]);
-        if (*pParamInternal).uiIdrPicId < 65535 {
-            (*pParamInternal).uiIdrPicId += 1;
+        let pParamInternal = &mut pCtx.param_mut().sDependencyLayers[iSpatialId];
+        if pParamInternal.uiIdrPicId < 65535 {
+            pParamInternal.uiIdrPicId += 1;
         } else {
-            (*pParamInternal).uiIdrPicId = 0;
+            pParamInternal.uiIdrPicId = 0;
         }
     }
 
@@ -2755,7 +2764,17 @@ pub unsafe fn WriteSsvcParaset(
     *iLbi += 1;
     pCtx.pOut.as_deref_mut().expect("pOut lives").iLayerBsIndex += 1;
     pFbi.sLayerInfo[*iLbi].pBsBuf = pCtx.frame_bs_cur();
-    pFbi.sLayerInfo[*iLbi].pNalLengthInByte = kpPrevNalLen.add(iCountNal as usize);
+    // unsafe-cat: C-ABI — the next layer's out-array is the previous one's
+    // tail, in the frozen `SFrameBSInfo` the application walks (S11.20).
+    #[allow(unsafe_code)]
+    unsafe {
+        // unsafe-cat: C-ABI — the next layer's out-array is the previous one's
+    // tail, in the frozen `SFrameBSInfo` (S11.20).
+    #[allow(unsafe_code)]
+    unsafe {
+        pFbi.sLayerInfo[*iLbi].pNalLengthInByte = kpPrevNalLen.add(iCountNal as usize);
+    }
+    }
 
     // update for external countings
     *iLayerNum += 1;
@@ -2764,9 +2783,7 @@ pub unsafe fn WriteSsvcParaset(
 }
 
 /// `encoder_ext.cpp:3163`. Write the parameter sets for simulcast AVC.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn WriteSavcParaset(
+pub fn WriteSavcParaset(
     pCtx: &mut sWelsEncCtx,
     iIdx: i32,
     // **S11.20**: the in/out layer cursor becomes the frame plus an index.
@@ -2800,7 +2817,11 @@ pub unsafe fn WriteSavcParaset(
         return iReturn;
     }
 
-    *pFbi.sLayerInfo[*iLbi].pNalLengthInByte = iNalSize;
+    // unsafe-cat: C-ABI — the frozen out-array slot (S11.20's family).
+    #[allow(unsafe_code)]
+    unsafe {
+        *pFbi.sLayerInfo[*iLbi].pNalLengthInByte = iNalSize;
+    }
     iNonVclSize += iNalSize;
     iCountNal = 1;
 
@@ -2816,7 +2837,12 @@ pub unsafe fn WriteSavcParaset(
     *iLbi += 1;
     pCtx.pOut.as_deref_mut().expect("pOut lives").iLayerBsIndex += 1;
     pFbi.sLayerInfo[*iLbi].pBsBuf = pCtx.frame_bs_cur();
-    pFbi.sLayerInfo[*iLbi].pNalLengthInByte = kpPrevNalLen.add(iCountNal as usize);
+    // unsafe-cat: C-ABI — the next layer's out-array is the previous one's
+    // tail, in the frozen `SFrameBSInfo` (S11.20).
+    #[allow(unsafe_code)]
+    unsafe {
+        pFbi.sLayerInfo[*iLbi].pNalLengthInByte = kpPrevNalLen.add(iCountNal as usize);
+    }
     *iLayerNum += 1;
 
     // --- PPS ---
@@ -2831,7 +2857,11 @@ pub unsafe fn WriteSavcParaset(
     if iReturn != ENC_RETURN_SUCCESS {
         return iReturn;
     }
-    *pFbi.sLayerInfo[*iLbi].pNalLengthInByte = iNalSize;
+    // unsafe-cat: C-ABI — the frozen out-array slot (S11.20's family).
+    #[allow(unsafe_code)]
+    unsafe {
+        *pFbi.sLayerInfo[*iLbi].pNalLengthInByte = iNalSize;
+    }
     iNonVclSize += iNalSize;
     iCountNal = 1;
 
@@ -2847,7 +2877,12 @@ pub unsafe fn WriteSavcParaset(
     *iLbi += 1;
     pCtx.pOut.as_deref_mut().expect("pOut lives").iLayerBsIndex += 1;
     pFbi.sLayerInfo[*iLbi].pBsBuf = pCtx.frame_bs_cur();
-    pFbi.sLayerInfo[*iLbi].pNalLengthInByte = kpPrevNalLen.add(iCountNal as usize);
+    // unsafe-cat: C-ABI — the next layer's out-array is the previous one's
+    // tail, in the frozen `SFrameBSInfo` (S11.20).
+    #[allow(unsafe_code)]
+    unsafe {
+        pFbi.sLayerInfo[*iLbi].pNalLengthInByte = kpPrevNalLen.add(iCountNal as usize);
+    }
     *iLayerNum += 1;
 
     *iFrameSize += iNonVclSize;
@@ -2877,9 +2912,7 @@ pub unsafe fn WriteSavcParaset(
 /// `pCtx` must be a live encoder context with its parameter-set arrays allocated to
 /// the counts `GetNeededSpsNum`/`GetNeededPpsNum` asked `RequestMemorySvc` for, and
 /// `ppLayerBsInfo` must name a slot with room for `2 * kiSpatialNum` more layers.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn WriteSavcParaset_Listing(
+pub fn WriteSavcParaset_Listing(
     pCtx: &mut sWelsEncCtx,
     kiSpatialNum: i32,
     // **S11.20**: the in/out layer cursor becomes the frame plus an index.
@@ -2897,12 +2930,12 @@ pub unsafe fn WriteSavcParaset_Listing(
 
     // --- SPS list, per spatial layer ---
     for iSpatialId in 0..kiSpatialNum {
-        let pParamInternal =
-            std::ptr::addr_of_mut!((*ctx_param_raw(pCtx)).sDependencyLayers[iSpatialId as usize]);
-        if (*pParamInternal).uiIdrPicId < 65535 {
-            (*pParamInternal).uiIdrPicId += 1;
+        // S11.37: the write borrow, taken per record (as `WriteSsvcParaset`).
+        let pParamInternal = &mut pCtx.param_mut().sDependencyLayers[iSpatialId as usize];
+        if pParamInternal.uiIdrPicId < 65535 {
+            pParamInternal.uiIdrPicId += 1;
         } else {
-            (*pParamInternal).uiIdrPicId = 0;
+            pParamInternal.uiIdrPicId = 0;
         }
 
         let mut iCountNal = 0i32;
@@ -2912,7 +2945,11 @@ pub unsafe fn WriteSavcParaset_Listing(
             if iReturn != ENC_RETURN_SUCCESS {
                 return iReturn;
             }
-            *pFbi.sLayerInfo[*iLbi].pNalLengthInByte.add(iCountNal as usize) = iNalSize;
+            // unsafe-cat: C-ABI — the frozen out-array slot (S11.20's family).
+            #[allow(unsafe_code)]
+            unsafe {
+                *pFbi.sLayerInfo[*iLbi].pNalLengthInByte.add(iCountNal as usize) = iNalSize;
+            }
             iNonVclSize += iNalSize;
             iCountNal += 1;
         }
@@ -2929,7 +2966,12 @@ pub unsafe fn WriteSavcParaset_Listing(
         *iLbi += 1;
         pCtx.pOut.as_deref_mut().expect("pOut lives").iLayerBsIndex += 1;
         pFbi.sLayerInfo[*iLbi].pBsBuf = pCtx.frame_bs_cur();
+        // unsafe-cat: C-ABI — the next layer's out-array is the previous one's
+    // tail, in the frozen `SFrameBSInfo` (S11.20).
+    #[allow(unsafe_code)]
+    unsafe {
         pFbi.sLayerInfo[*iLbi].pNalLengthInByte = kpPrevNalLen.add(iCountNal as usize);
+    }
         *iLayerNum += 1;
     }
 
@@ -2955,7 +2997,11 @@ pub unsafe fn WriteSavcParaset_Listing(
             if iReturn != ENC_RETURN_SUCCESS {
                 return iReturn;
             }
-            *pFbi.sLayerInfo[*iLbi].pNalLengthInByte.add(iCountNal as usize) = iNalSize;
+            // unsafe-cat: C-ABI — the frozen out-array slot (S11.20's family).
+            #[allow(unsafe_code)]
+            unsafe {
+                *pFbi.sLayerInfo[*iLbi].pNalLengthInByte.add(iCountNal as usize) = iNalSize;
+            }
             iNonVclSize += iNalSize;
             iCountNal += 1;
         }
@@ -2972,7 +3018,12 @@ pub unsafe fn WriteSavcParaset_Listing(
         *iLbi += 1;
         pCtx.pOut.as_deref_mut().expect("pOut lives").iLayerBsIndex += 1;
         pFbi.sLayerInfo[*iLbi].pBsBuf = pCtx.frame_bs_cur();
+        // unsafe-cat: C-ABI — the next layer's out-array is the previous one's
+    // tail, in the frozen `SFrameBSInfo` (S11.20).
+    #[allow(unsafe_code)]
+    unsafe {
         pFbi.sLayerInfo[*iLbi].pNalLengthInByte = kpPrevNalLen.add(iCountNal as usize);
+    }
         *iLayerNum += 1;
     }
 
@@ -2996,9 +3047,7 @@ pub unsafe fn WriteSavcParaset_Listing(
 
 /// `encoder_ext.cpp:3387`. Decide this frame's type, and for an IDR write the
 /// parameter sets ahead of the slice data.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn PrepareEncodeFrame(
+pub fn PrepareEncodeFrame(
     pCtx: &mut sWelsEncCtx,
     // **S11.20**: the in/out layer cursor becomes the frame plus an index.
     // `*mut *mut SLayerBSInfo` was C's out-parameter idiom for "advance the
@@ -3008,7 +3057,9 @@ pub unsafe fn PrepareEncodeFrame(
     pFbi: &mut SFrameBSInfo,
     iLbi: &mut usize,
     iSpatialNum: i32,
-    iCurDid: *mut i8,
+    // S11.37: `&mut` — the out-parameter idiom, stated (the callers pass a
+    // stack local's address).
+    iCurDid: &mut i8,
     iCurTid: &mut i32,
     iLayerNum: &mut i32,
     iFrameSize: &mut i32,
@@ -3050,17 +3101,13 @@ pub unsafe fn PrepareEncodeFrame(
             }
         }
     } else {
-        // S29/F13: `addr_of_mut!` on the element, so no reference to the array is
-        // formed and the context's `&mut` ends with the statement.
-        let pParamInternal = std::ptr::addr_of_mut!(
-            pCtx.param_mut().sDependencyLayers[*iCurDid as usize]
-        );
-
-        *iCurTid = GetTemporalLevel(
-            &*pParamInternal,
-            (*pParamInternal).iCodingIndex,
-            kuiGopSize,
-        );
+        // S11.37: a shared borrow for the read, ending at the semicolon — the
+        // held cursor existed to survive the paraset calls below, and the one
+        // write after them re-derives instead.
+        *iCurTid = {
+            let kParamInternal = &pCtx.param().sDependencyLayers[*iCurDid as usize];
+            GetTemporalLevel(kParamInternal, kParamInternal.iCodingIndex, kuiGopSize)
+        };
         pCtx.uiTemporalId = *iCurTid as u8;
 
         if eFrameType == EVideoFrameType::videoFrameTypeIDR {
@@ -3078,7 +3125,7 @@ pub unsafe fn PrepareEncodeFrame(
                         iLayerNum,
                         iFrameSize,
                     );
-                    (*pParamInternal).uiIdrPicId += 1;
+                    pCtx.param_mut().sDependencyLayers[*iCurDid as usize].uiIdrPicId += 1;
                 } else {
                     pCtx.iEncoderError =
                         WriteSsvcParaset(pCtx, iSpatialNum, pFbi, iLbi, iLayerNum, iFrameSize);
@@ -3116,8 +3163,6 @@ pub fn PicPartitionNumDecision(pCtx: &mut sWelsEncCtx) -> i32 {
 ///
 /// # Safety
 /// `pCurDq` must be live with `sMbDataP` allocated.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
 pub fn DynslcUpdateMbNeighbourInfoListForAllSlices(pCurDq: &mut SDqLayer) {
     // **S10.3c: no `mb_window`, and no `unsafe`.** This body held the whole layer
     // `&mut` and still went through `mb_window`'s `from_raw_parts_mut` — a mint
@@ -3259,15 +3304,17 @@ pub fn UpdateSlicepEncCtxWithPartition(pCurDq: &mut SDqLayer, mut iPartitionNum:
 ///
 /// # Safety
 /// `pCtx` must be a context built by [`WelsInitEncoderExt`].
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn WelsInitCurrentDlayerMltslc(pCtx: &mut sWelsEncCtx, iPartitionNum: i32) {
+pub fn WelsInitCurrentDlayerMltslc(pCtx: &mut sWelsEncCtx, iPartitionNum: i32) {
     /// `#define byte_complexIMBat26 (60)`, local to this function in the C++.
     const byte_complexIMBat26: u32 = 60;
 
-    let pCurDq = current_layer(pCtx);
-
-    UpdateSlicepEncCtxWithPartition(&mut *pCurDq, iPartitionNum);
+    // S11.37: the layer's `&mut` is scoped to the one call that writes it; the
+    // two scalar reads below re-derive shared, so the context reads between
+    // them are free (the raw cursor was the same ordering, unspoken).
+    UpdateSlicepEncCtxWithPartition(
+        current_layer_mut(pCtx).expect("the frame's current layer is stamped"),
+        iPartitionNum,
+    );
 
     if pCtx.eSliceType == EWelsSliceType::I_SLICE {
         // check if uiSliceSizeConstraint too small
@@ -3281,7 +3328,8 @@ pub unsafe fn WelsInitCurrentDlayerMltslc(pCtx: &mut sWelsEncCtx, iPartitionNum:
                 >> 3;
         } else {
             // fixed QP case
-            let iTtlMbNumInFrame = (*pCurDq).sSliceEncCtx.iMbNumInFrame;
+            let iTtlMbNumInFrame =
+                current_layer_ref(pCtx).expect("stamped").sSliceEncCtx.iMbNumInFrame;
             let mut iQDeltaTo26 = 26 - pCtx.param().sSpatialLayers[iCurDid].iDLayerQp;
 
             uiFrmByte = (iTtlMbNumInFrame as u32).wrapping_mul(byte_complexIMBat26);
@@ -3296,7 +3344,8 @@ pub unsafe fn WelsInitCurrentDlayerMltslc(pCtx: &mut sWelsEncCtx, iPartitionNum:
         }
 
         // MINPACKETSIZE_CONSTRAINT: suppose 16 byte per mb at average
-        let _uiMiniPacketSize = uiFrmByte / (*pCurDq).sSliceEncCtx.iMaxSliceNumConstraint as u32;
+        let _uiMiniPacketSize = uiFrmByte
+            / current_layer_ref(pCtx).expect("stamped").sSliceEncCtx.iMaxSliceNumConstraint as u32;
         // C++ only WelsLogs a warning here when uiSliceSizeConstraint is smaller.
     }
 
@@ -3307,9 +3356,7 @@ pub unsafe fn WelsInitCurrentDlayerMltslc(pCtx: &mut sWelsEncCtx, iPartitionNum:
 ///
 /// # Safety
 /// `pCtx` must be a context built by [`WelsInitEncoderExt`].
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn DynSliceRealloc(
+pub fn DynSliceRealloc(
     pCtx: &mut sWelsEncCtx,
     // S11.20: the frame and an index — see `FrameBsRealloc`.
     pFbi: &mut SFrameBSInfo,
@@ -3347,9 +3394,7 @@ pub unsafe fn DynSliceRealloc(
 /// # Safety
 /// `pCtx` must be a context built by [`WelsInitEncoderExt`]; `pLayerBsInfo` must
 /// have `pNalLengthInByte` installed.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn WelsCodeOnePicPartition(
+pub fn WelsCodeOnePicPartition(
     pCtx: &mut sWelsEncCtx,
     // S11.20: the frame and an index — see `FrameBsRealloc`. This body both
     // stamps its layer's fields and hands the pair to `DynSliceRealloc`, which
@@ -3505,10 +3550,11 @@ pub unsafe fn WelsCodeOnePicPartition(
         }
         crate::encoder::nal_encap::WelsUnloadNal(pCtx.pOut.as_deref_mut().expect("pOut lives"));
 
-        // S3.B1 hoist: the layer lives in its own allocation; the raw read
-        // survives the shared `pOut`/context borrows in the argument list.
-        let pNalHeaderExt =
-            std::ptr::addr_of!(current_layer_ref(pCtx).expect("the frame's current layer is stamped").sLayerInfo.sNalHeaderExt);
+        // S11.37: a value, not a cursor — `SNalUnitHeaderExt` is `Copy`, the
+        // callee only reads it, and a copy survives the context destructure
+        // with no borrow (the S3.B1 raw hoist said this in provenance).
+        let kNalHeaderExt =
+            current_layer_ref(pCtx).expect("the frame's current layer is stamped").sLayerInfo.sNalHeaderExt;
         // **S11.17**: the context is destructured. The NAL entry and the
         // source bytes live in `pOut`; the destination is the tail of
         // `pFrameBs` — disjoint fields, so both borrows are live at once
@@ -3521,14 +3567,20 @@ pub unsafe fn WelsCodeOnePicPartition(
         iReturn = crate::encoder::nal_encap::WelsEncodeNal(
             &kpOut.sNalList[(kpOut.iNalIndex - 1) as usize],
             &kpOut.sBsBuffer[..],
-            Some(&*pNalHeaderExt),
+            Some(&kNalHeaderExt),
             pDstTail,
-            &mut *pFbi.sLayerInfo[iLbi].pNalLengthInByte.add(iNalIdxInLayer as usize),
+            // unsafe-cat: C-ABI — the out-array slot (S11.20's family).
+            #[allow(unsafe_code)]
+            unsafe {
+                &mut *pFbi.sLayerInfo[iLbi].pNalLengthInByte.add(iNalIdxInLayer as usize)
+            },
         );
         if iReturn != ENC_RETURN_SUCCESS {
             return iReturn;
         }
-        let iSliceSize = *pFbi.sLayerInfo[iLbi].pNalLengthInByte.add(iNalIdxInLayer as usize);
+        // unsafe-cat: C-ABI
+        #[allow(unsafe_code)]
+        let iSliceSize = unsafe { *pFbi.sLayerInfo[iLbi].pNalLengthInByte.add(iNalIdxInLayer as usize) };
 
         pCtx.iPosBsBuffer += iSliceSize;
         iPartitionBsSize += iSliceSize;
@@ -4050,10 +4102,11 @@ pub unsafe fn WelsEncoderEncodeExt(
 
             crate::encoder::nal_encap::WelsUnloadNal(pCtx.pOut.as_deref_mut().expect("pOut lives"));
 
-            // S3.B1 hoist: the layer lives in its own allocation; the raw read
-            // survives the shared `pOut`/context borrows in the argument list.
-            let pNalHeaderExt =
-                std::ptr::addr_of!(current_layer_ref(pCtx).expect("the frame's current layer is stamped").sLayerInfo.sNalHeaderExt);
+            // S11.37: a value, not a cursor — `SNalUnitHeaderExt` is `Copy`, the
+            // callee only reads it, and a copy survives the context destructure
+            // with no borrow (the S3.B1 raw hoist said this in provenance).
+            let kNalHeaderExt =
+                current_layer_ref(pCtx).expect("the frame's current layer is stamped").sLayerInfo.sNalHeaderExt;
             // **S11.17**: the context is destructured. The NAL entry and the
             // source bytes live in `pOut`; the destination is the tail of
             // `pFrameBs` — disjoint fields, so both borrows are live at once
@@ -4066,7 +4119,7 @@ pub unsafe fn WelsEncoderEncodeExt(
             pCtx.iEncoderError = crate::encoder::nal_encap::WelsEncodeNal(
                 &kpOut.sNalList[kpOut.iNalIndex as usize - 1],
                 &kpOut.sBsBuffer[..],
-                Some(&*pNalHeaderExt),
+                Some(&kNalHeaderExt),
                 pDstTail,
                 &mut *pFbi.sLayerInfo[iLbi].pNalLengthInByte.add(iNalIdxInLayer as usize),
             );
@@ -4328,10 +4381,11 @@ pub unsafe fn WelsEncoderEncodeExt(
 
                 crate::encoder::nal_encap::WelsUnloadNal(pCtx.pOut.as_deref_mut().expect("pOut lives"));
 
-                // S3.B1 hoist: the layer lives in its own allocation; the raw read
-                // survives the shared `pOut`/context borrows in the argument list.
-                let pNalHeaderExt =
-                    std::ptr::addr_of!(current_layer_ref(pCtx).expect("the frame's current layer is stamped").sLayerInfo.sNalHeaderExt);
+                // S11.37: a value, not a cursor — `SNalUnitHeaderExt` is `Copy`, the
+                // callee only reads it, and a copy survives the context destructure
+                // with no borrow (the S3.B1 raw hoist said this in provenance).
+                let kNalHeaderExt =
+                    current_layer_ref(pCtx).expect("the frame's current layer is stamped").sLayerInfo.sNalHeaderExt;
                 // **S11.17**: the context is destructured. The NAL entry and the
                 // source bytes live in `pOut`; the destination is the tail of
                 // `pFrameBs` — disjoint fields, so both borrows are live at once
@@ -4344,7 +4398,7 @@ pub unsafe fn WelsEncoderEncodeExt(
                 pCtx.iEncoderError = crate::encoder::nal_encap::WelsEncodeNal(
                     &kpOut.sNalList[kpOut.iNalIndex as usize - 1],
                     &kpOut.sBsBuffer[..],
-                    Some(&*pNalHeaderExt),
+                    Some(&kNalHeaderExt),
                     pDstTail,
                     &mut *pFbi.sLayerInfo[iLbi].pNalLengthInByte.add(iNalIdxInLayer as usize),
                 );
