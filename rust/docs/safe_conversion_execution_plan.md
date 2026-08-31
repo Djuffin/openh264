@@ -13,8 +13,13 @@ Convert the remaining unsafe Rust in `src/` to safe Rust. "Done" means all of:
 
 1. **`#![forbid(unsafe_code)]`** at the top of every file under `src/` **except**:
    - `src/api/codec_api.rs` + `src/api/abi_guard.rs` — the C-ABI island (see §2),
-   - `src/encoder/rec_view.rs` and `src/encoder/slice_multi_threading.rs`, which carry
-     `#![deny(unsafe_code)]` plus **exactly one** `#[allow(unsafe_code)]` each (see D1).
+   - `src/encoder/rec_view.rs`, which carries `#![deny(unsafe_code)]` plus **exactly
+     one** product `#[allow(unsafe_code)]` — the `Sync for SharedCells` impl (see D1;
+     S10.13 retired the second line, `Send for SliceJobHandle`, by making it
+     compiler-derived, so the original two-file exception is now one),
+   - files whose test modules carry Miri/provenance instruments (~17 today, tag
+     `instrument(test)`), which take `#![deny(unsafe_code)]` with every test allow
+     enumerated in the pinned census (**D-exit-4**, 2026-08-31).
 2. **Zero raw-pointer types** (`*mut`/`*const`) in fields, parameters, returns, or locals
    outside `src/api/`.
 3. **The C-API is byte-for-byte preserved**: the exported symbol set (5 in
@@ -27,7 +32,8 @@ Convert the remaining unsafe Rust in `src/` to safe Rust. "Done" means all of:
    `--lib` *and* the differential integration tests, both benches within the perf budget
    (§6), ABI export list + external dlopen harness + gtest.
 6. The unsafe ratchet baseline reaches its floor and is **pinned**: the census allowlist
-   reduces to the api files plus the two D1 lines, so any new `unsafe` anywhere else fails CI.
+   reduces to the api files, `rec_view.rs`'s one product line, and the enumerated
+   `instrument(test)` set (D-exit-4), so any new `unsafe` anywhere else fails CI.
 7. `src/lib.rs` drops its crate-wide `allow(unused_unsafe, unsafe_op_in_unsafe_fn, …)` —
    those lints become meaningful again once the island is all that's left.
 
@@ -44,11 +50,20 @@ the C ABI is their job.
   sites), and the checkpoint ships the family's first-ever referee — an invariant unit
   test on hand-built storage. Deletion stays rejected (the search path is
   public-API-reachable, F233).
-- **D1 (user, 2026-08-27): keep the two MT `unsafe impl` lines.**
-  `unsafe impl<T: Copy> Sync for SharedCells<T>` (`rec_view.rs:152`) and
-  `unsafe impl Send for SliceJobHandle` (`slice_multi_threading.rs:1318`) stay as audited
-  exceptions. They are the keystone of the disjoint-write MT scheme (shared `Cell` view
-  over the reconstruction picture, fork via `std::thread::scope`). Their proof obligation
+- **D-exit-4 / D-scope-6 / D-gate-8 (user, 2026-08-31, at the remaining-work scoping)**:
+  test-instrument allows retire by deny-plus-enumeration in place; the 23 dormant
+  screen-content casts convert to safe form (dark-code discipline); benches remain
+  E3-only, reaffirmed with S10's 7% catch known. Full entries in
+  `safety_refactor_plan.md`'s decisions ledger.
+- **D1 (user, 2026-08-27): keep the two MT `unsafe impl` lines.** *(S10.13 amendment:
+  the `Send for SliceJobHandle` line is retired — the handle now carries
+  `&'a sWelsEncCtx` and `Send` is compiler-derived from `sWelsEncCtx: Sync` — so the
+  decision's intent, an audited MT seam, is preserved with one fewer hand assertion;
+  one line remains.)*
+  `unsafe impl<T: Copy> Sync for SharedCells<T>` (`rec_view.rs:152`) stays as the audited
+  exception; the `Send for SliceJobHandle` line is the one S10.13 retired. The Sync impl
+  is the keystone of the disjoint-write MT scheme (shared `Cell` view over the
+  reconstruction picture, fork via `std::thread::scope`). Its proof obligation
   is the pair of Miri data-race probes (fork/join and mid-row-boundary, in
   `svc_encode_slice.rs`), which stay in the suite permanently. The safe alternative
   (atomic storage) was considered and rejected: it buys nothing Miri doesn't already
