@@ -442,7 +442,7 @@ pub fn WelsEncRecI16x16Y(
     let pFF = get_quant_intra_ff(uiQp as usize);
 
     let encView = crate::encoder::svc_encode_slice::layer_enc_view(&*pCurDqLayer)
-        .expect("the frame's source view is stamped with pEncData");
+        .expect("the layer's source view is built for this frame");
     let pEncCur = (*pMbCache).SPicData.mb_cursor_ro(encView, 0);
     WelsDctMb(
         &mut (*pMbCache).sCoeffLevel,
@@ -612,7 +612,7 @@ pub fn WelsEncRecI4x4Y(
     // through its own owned `[u8; 2*16]`. Stride 4 is the blk4 scratch's geometry,
     // which the raw form passed as a literal at the call.
     let encView = crate::encoder::svc_encode_slice::layer_enc_view(&*pCurDqLayer)
-        .expect("the frame's source view is stamped with pEncData");
+        .expect("the layer's source view is built for this frame");
     let pEncMb = (*pMbCache).SPicData.mb_cursor_ro(encView, 0);
     let pBestPred = RecCursor::over_owned(
         &mut (*pMbCache).sMemPredBlk4,

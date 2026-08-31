@@ -839,7 +839,7 @@ pub fn WelsMdIntraFinePartitionVaa(
         .expect("the frame's current layer is stamped");
     // S10.5: the source macroblock through the seam, not `pEncData`'s raw root.
     let encView = crate::encoder::svc_encode_slice::layer_enc_view(&*pCurLayer)
-        .expect("the frame's source view is stamped with pEncData");
+        .expect("the layer's source view is built for this frame");
     let cEncMb = (*pMbCache).SPicData.mb_cursor_ro(encView, 0);
     if MdIntraAnalysisVaaInfo(pEncCtx, &cEncMb) {
         let iCosti4x4 = WelsMdI4x4Fast(pEncCtx, pWelsMd, pCurMb, pMbCache);
@@ -951,7 +951,7 @@ pub fn WelsMdInterInit(
             .expect("the frame's video-analysis block")
             .pVaaBackgroundMbFlag[..],
         layer_rec_view(&*pCurLayer)
-            .expect("the layer's reconstruction picture is bound")
+            .expect("the layer's reconstruction view is built for this frame")
             .mb_skip_sad(),
     ); //BGD spatial pFunc
 
@@ -968,13 +968,13 @@ pub fn WelsMdInterInit(
     (*pMbCache).SPicData.iMbX = kiMbX;
     (*pMbCache).SPicData.iMbY = kiMbY;
 
-    (*pMbCache).uiRefMbType = (&layer_ref_pic(pEncCtx, &*pCurLayer).expect("bound").uiRefMbType)[kiMbXY as usize];
+    (*pMbCache).uiRefMbType = (&layer_ref_pic(pEncCtx, &*pCurLayer).expect("the layer's reference picture is bound").uiRefMbType)[kiMbXY as usize];
     (*pMbCache).bCollocatedPredFlag = false;
 
     //comment: sometimes, mode decision process may skip the md_p16x16 and md_pskip function,
     mbs.cur_mut().sP16x16Mv = SMVUnitXY { iMvX: 0, iMvY: 0 };
     layer_rec_view(&*pCurLayer)
-        .expect("bound")
+        .expect("the layer's reconstruction view is built for this frame")
         .mv_list()
         .set(kiMbXY as usize, SMVUnitXY { iMvX: 0, iMvY: 0 });
 
@@ -1293,7 +1293,7 @@ pub fn WelsMdPSkipEnc(
     // holding `iEncStride[1]`, which is the same rule `stride_idx` states and which
     // the view reproduces by construction (both chroma planes share one stride).
     let encView = crate::encoder::svc_encode_slice::layer_enc_view(&*pCurLayer)
-        .expect("the frame's source view is stamped with pEncData");
+        .expect("the layer's source view is built for this frame");
     let mut pEncMb = (*pMbCache).SPicData.mb_cursor_ro(encView, 0);
     // T9.H2: `&sWelsEncCtx`. The layer id is read through the same raw beside it —
     // both are shared reads, so the argument and the borrow coexist by construction
@@ -1410,7 +1410,7 @@ pub fn WelsMdPSkipEnc(
         || iSadCostMb < (*pWelsMd).iSadPredSkip
         || (layer_ref_pic(pEncCtx, &*pCurLayer).map_or(false, |p| p.iPictureType == EWelsSliceType::P_SLICE as i32)
             && (*pMbCache).uiRefMbType == MB_TYPE_SKIP
-            && iSadCostMb < (&layer_ref_pic(pEncCtx, &*pCurLayer).expect("bound").pMbSkipSad)[(*pCurMb).iMbXY as usize])
+            && iSadCostMb < (&layer_ref_pic(pEncCtx, &*pCurLayer).expect("the layer's reference picture is bound").pMbSkipSad)[(*pCurMb).iMbXY as usize])
     {
         //update motion info to current MB
         AcceptPskip(pEncCtx, pWelsMd, pCurMb, pMbCache, &sMvp, iSadCostLuma, iSadCostMb);
@@ -1512,7 +1512,7 @@ fn AcceptPskip(
 
     (*pCurMb).sP16x16Mv = *sMvp;
     layer_rec_view(&*pCurLayer)
-        .expect("bound")
+        .expect("the layer's reconstruction view is built for this frame")
         .mv_list()
         .set((*pCurMb).iMbXY as usize, *sMvp);
 }

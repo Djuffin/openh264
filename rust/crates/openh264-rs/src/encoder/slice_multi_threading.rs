@@ -506,7 +506,7 @@ pub fn NeedDynamicAdjust(pCurDq: &mut SDqLayer, iSliceNum: i32) -> i32 {
         // The raw form dereferenced unconditionally (T9.H): absence was never a
         // handled state, and the loop above has already walked the same range.
         let pSlice = crate::encoder::svc_encode_slice::slice_in_layer_mut(pCurDq, iSliceIdx)
-            .expect("the layer's slice bank holds iSliceNum slices");
+            .expect("the layer's slice bank maps this slice index");
         let fRatio = pSlice.uiSliceConsumeTime as f32 / (uiTotalConsume as f32);
         let fDiffRatio = fRatio - kfMeanRatio;
         fRmse += fDiffRatio * fDiffRatio;
@@ -906,7 +906,7 @@ pub fn WriteSliceBs(
     // S11.34: shared, not raw — the slice this body writes lives in the taken
     // bank (a different allocation since the pre-fork take), so the layer's
     // header borrow coexists with it as a plain fact.
-    let kpNalHdrExt = &current_layer_ref(pCtx).expect("layer bound").sLayerInfo.sNalHeaderExt;
+    let kpNalHdrExt = &current_layer_ref(pCtx).expect("the frame's current layer is stamped").sLayerInfo.sNalHeaderExt;
     // T7.C4: the write cursor is the slice's own buffer, absent when the slice
     // shares the frame's — which is what the raw `pBs` was, and `WelsEncodeNal`
     // takes the `INVALIDINPUT` arm for `None` exactly as the C++ did for null.
@@ -1029,7 +1029,7 @@ pub fn AdjustEnhanceLayer(pCtx: &mut sWelsEncCtx, iCurDid: i32) -> i32 {
     };
     let kiMultipleThreadIdc = pCtx.param().iMultipleThreadIdc;
 
-    let kbModelingFromSpatial = current_layer_ref(pCtx).expect("layer bound").pRefLayer.is_some()
+    let kbModelingFromSpatial = current_layer_ref(pCtx).expect("the frame's current layer is stamped").pRefLayer.is_some()
         && match kPrevSliceArg {
             Some((uiSliceMode, uiSliceNum)) => {
                 uiSliceMode == SliceMode::SM_FIXEDSLCNUM_SLICE
@@ -1044,7 +1044,7 @@ pub fn AdjustEnhanceLayer(pCtx: &mut sWelsEncCtx, iCurDid: i32) -> i32 {
         // LAYER (base == current when iCurDid is the base), so the load is
         // hoisted above the exclusive borrow. S11.36: the safe accessor.
         let kiSliceNumInFrame =
-            current_layer_ref(pCtx).expect("layer bound").sSliceEncCtx.iSliceNumInFrame.load(Ordering::Relaxed);
+            current_layer_ref(pCtx).expect("the frame's current layer is stamped").sSliceEncCtx.iSliceNumInFrame.load(Ordering::Relaxed);
         let Some(pBaseLayer) = crate::encoder::encoder_context::dq_layer_mut(pCtx, iCurDid as usize - 1) else {
             return 0;
         };
@@ -1072,7 +1072,7 @@ pub fn AdjustEnhanceLayer(pCtx: &mut sWelsEncCtx, iCurDid: i32) -> i32 {
         }
     } else {
         let kiSliceNumInFrame =
-            current_layer_ref(pCtx).expect("layer bound").sSliceEncCtx.iSliceNumInFrame.load(Ordering::Relaxed);
+            current_layer_ref(pCtx).expect("the frame's current layer is stamped").sSliceEncCtx.iSliceNumInFrame.load(Ordering::Relaxed);
         // S11.36: the safe accessor; the raw's null had no arm here (the deref
         // was unchecked), so `expect` states the same liveness.
         let pCurLayer = crate::encoder::encoder_context::dq_layer_mut(pCtx, iCurDid as usize)
