@@ -903,13 +903,14 @@ pub unsafe fn WriteSliceBs(
     let mut iReturn = ENC_RETURN_SUCCESS;
     let iTotalLeftLength = ((*pSliceBs).uiBsSize - (*pSliceBs).uiBsPos) as i32;
     let pNalHdrExt = std::ptr::addr_of!(current_layer_ref(pCtx).expect("layer bound").sLayerInfo.sNalHeaderExt);
-    // T7.C4: the write cursor is the slice's own buffer root, null when the slice
+    // T7.C4: the write cursor is the slice's own buffer, absent when the slice
     // shares the frame's — which is what the raw `pBs` was, and `WelsEncodeNal`
-    // rejects a null `dst` exactly as the C++ did.
-    let mut pDst = match (*pSliceBs).pBs.as_mut() {
-        Some(v) => v.as_mut_ptr(),
-        None => std::ptr::null_mut(),
-    };
+    // takes the `INVALIDINPUT` arm for `None` exactly as the C++ did for null.
+    // **S11.17**: an offset into that buffer rather than a pointer into it, so
+    // the advance below is arithmetic the compiler checks against the Vec's own
+    // length instead of against the caller's `iTotalLeftLength` promise.
+    let bHasOwnBuffer = (*pSliceBs).pBs.is_some();
+    let mut iDstPos = 0usize;
 
     if kiNalCnt > 2 {
         return 0;
@@ -920,12 +921,24 @@ pub unsafe fn WriteSliceBs(
         let mut iNalSize = 0i32;
         // The slice's NAL list is offsets into the thread buffer its writer is
         // positioned in; that buffer is named here, beside the entry.
+        // The slice's own buffer is re-sliced from the running offset each
+        // iteration; `iTotalLeftLength - *iSliceSize` was the same bound said
+        // as a number, and the two agree by construction because `uiBsSize` is
+        // that buffer's length.
+        let kNalEntry = (*pSliceBs).sNalList[iNalIdx as usize];
+        let kiLeft = (iTotalLeftLength - *iSliceSize).max(0) as usize;
+        let pDstTail = if bHasOwnBuffer {
+            let buf = (*pSliceBs).pBs.as_mut().expect("checked above");
+            let kiEnd = (iDstPos + kiLeft).min(buf.len());
+            Some(&mut buf[iDstPos.min(kiEnd)..kiEnd])
+        } else {
+            None
+        };
         iReturn = WelsEncodeNal(
-            &(*pSliceBs).sNalList[iNalIdx as usize],
+            &kNalEntry,
             pSliceBsBuf,
             Some(&*pNalHdrExt),
-            pDst,
-            iTotalLeftLength - *iSliceSize,
+            pDstTail,
             &mut iNalSize,
         );
 
@@ -935,8 +948,8 @@ pub unsafe fn WriteSliceBs(
 
         (*pSliceBs).iNalLen[iNalIdx as usize] = iNalSize;
         *iSliceSize += iNalSize;
-        if !pDst.is_null() {
-            pDst = pDst.add(iNalSize as usize);
+        if bHasOwnBuffer {
+            iDstPos += iNalSize as usize;
         }
         iNalIdx += 1;
     }

@@ -1655,6 +1655,23 @@ impl sWelsEncCtx {
         self.pFrameBs.as_ptr() as *mut u8
     }
 
+    /// The frame bitstream **from the write cursor to the end**, as a slice —
+    /// S11.17, [`frame_bs_cur`](Self::frame_bs_cur)'s safe twin.
+    ///
+    /// `pFrameBs` is an owned `Vec<u8>` (T3.6), so the cursor form's pointer
+    /// plus its separately-passed `iFrameBsSize - iPosBsBuffer` length are one
+    /// borrow of the tail — the same bytes, with the extent carried instead of
+    /// recomputed at each call. `None` where the raw answered null: no buffer,
+    /// or a cursor past its end.
+    #[inline]
+    pub fn frame_bs_tail_mut(&mut self) -> Option<&mut [u8]> {
+        let kiPos = self.iPosBsBuffer;
+        if self.pFrameBs.is_empty() || kiPos < 0 || (kiPos as usize) > self.pFrameBs.len() {
+            return None;
+        }
+        Some(&mut self.pFrameBs[kiPos as usize..])
+    }
+
     /// The encoder's **coding parameters** — T6.H1, `pCtx->pSvcParam`, and the
     /// most-reached field on the struct: 258 textual sites when A7 opened.
     ///

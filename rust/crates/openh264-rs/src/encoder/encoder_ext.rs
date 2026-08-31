@@ -2451,13 +2451,20 @@ pub unsafe fn AddPrefixNal(
     // survives the shared `pOut`/context borrows in the argument list.
     let pNalHeaderExt =
         std::ptr::addr_of!(current_layer_ref(pCtx).expect("the frame's current layer is stamped").sLayerInfo.sNalHeaderExt);
+    // **S11.17**: the context is destructured. The NAL entry and the
+    // source bytes live in `pOut`; the destination is the tail of
+    // `pFrameBs` — disjoint fields, so both borrows are live at once
+    // where the argument list would have been two borrows of the whole
+    // context. No copy: the source is borrowed, not cloned.
+    let sWelsEncCtx { pOut, pFrameBs, iPosBsBuffer, .. } = &mut *pCtx;
+    let kpOut = pOut.as_deref().expect("pOut lives");
+    let kiPos = *iPosBsBuffer as usize;
+    let pDstTail = (kiPos <= pFrameBs.len()).then(|| &mut pFrameBs[kiPos..]);
     iReturn = crate::encoder::nal_encap::WelsEncodeNal(
-        &pCtx.pOut.as_deref().expect("pOut lives").sNalList
-            [(pCtx.pOut.as_deref().expect("pOut lives").iNalIndex - 1) as usize],
-        &pCtx.pOut.as_deref().expect("pOut lives").sBsBuffer[..],
+        &kpOut.sNalList[(kpOut.iNalIndex - 1) as usize],
+        &kpOut.sBsBuffer[..],
         Some(&*pNalHeaderExt),
-        pCtx.frame_bs_cur(),
-        pCtx.iFrameBsSize - pCtx.iPosBsBuffer,
+        pDstTail,
         &mut *pNalLen.add(*pNalIdxInLayer as usize),
     );
     if iReturn != ENC_RETURN_SUCCESS {
@@ -2473,9 +2480,7 @@ pub unsafe fn AddPrefixNal(
 }
 
 /// `encoder_ext.cpp:3003`. Emit a filler-data NAL of `iLen` bytes.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn WritePadding(pCtx: &mut sWelsEncCtx, iLen: i32, iSize: &mut i32) -> i32 {
+pub fn WritePadding(pCtx: &mut sWelsEncCtx, iLen: i32, iSize: &mut i32) -> i32 {
     let mut iNalLen = 0i32;
 
     *iSize = 0;
@@ -2520,8 +2525,9 @@ pub unsafe fn WritePadding(pCtx: &mut sWelsEncCtx, iLen: i32, iSize: &mut i32) -
         &pOut.sNalList[iNal as usize],
         &pOut.sBsBuffer[..],
         None,
-        pCtx.frame_bs_cur(),
-        pCtx.iFrameBsSize - pCtx.iPosBsBuffer,
+        // S11.17: `pOut` is already moved out of the context here, so the tail
+        // borrow has nothing to conflict with.
+        pCtx.frame_bs_tail_mut(),
         &mut iNalLen,
     );
     pCtx.pOut = Some(pOut);
@@ -3419,13 +3425,20 @@ pub unsafe fn WelsCodeOnePicPartition(
         // survives the shared `pOut`/context borrows in the argument list.
         let pNalHeaderExt =
             std::ptr::addr_of!(current_layer_ref(pCtx).expect("the frame's current layer is stamped").sLayerInfo.sNalHeaderExt);
+        // **S11.17**: the context is destructured. The NAL entry and the
+        // source bytes live in `pOut`; the destination is the tail of
+        // `pFrameBs` — disjoint fields, so both borrows are live at once
+        // where the argument list would have been two borrows of the whole
+        // context. No copy: the source is borrowed, not cloned.
+        let sWelsEncCtx { pOut, pFrameBs, iPosBsBuffer, .. } = &mut *pCtx;
+        let kpOut = pOut.as_deref().expect("pOut lives");
+        let kiPos = *iPosBsBuffer as usize;
+        let pDstTail = (kiPos <= pFrameBs.len()).then(|| &mut pFrameBs[kiPos..]);
         iReturn = crate::encoder::nal_encap::WelsEncodeNal(
-            &pCtx.pOut.as_deref().expect("pOut lives").sNalList
-                [(pCtx.pOut.as_deref().expect("pOut lives").iNalIndex - 1) as usize],
-            &pCtx.pOut.as_deref().expect("pOut lives").sBsBuffer[..],
+            &kpOut.sNalList[(kpOut.iNalIndex - 1) as usize],
+            &kpOut.sBsBuffer[..],
             Some(&*pNalHeaderExt),
-            pCtx.frame_bs_cur(),
-            pCtx.iFrameBsSize - pCtx.iPosBsBuffer,
+            pDstTail,
             &mut *(*pLayerBsInfo).pNalLengthInByte.add(iNalIdxInLayer as usize),
         );
         if iReturn != ENC_RETURN_SUCCESS {
@@ -3907,13 +3920,20 @@ pub unsafe fn WelsEncoderEncodeExt(
             // survives the shared `pOut`/context borrows in the argument list.
             let pNalHeaderExt =
                 std::ptr::addr_of!(current_layer_ref(pCtx).expect("the frame's current layer is stamped").sLayerInfo.sNalHeaderExt);
+            // **S11.17**: the context is destructured. The NAL entry and the
+            // source bytes live in `pOut`; the destination is the tail of
+            // `pFrameBs` — disjoint fields, so both borrows are live at once
+            // where the argument list would have been two borrows of the whole
+            // context. No copy: the source is borrowed, not cloned.
+            let sWelsEncCtx { pOut, pFrameBs, iPosBsBuffer, .. } = &mut *pCtx;
+            let kpOut = pOut.as_deref().expect("pOut lives");
+            let kiPos = *iPosBsBuffer as usize;
+            let pDstTail = (kiPos <= pFrameBs.len()).then(|| &mut pFrameBs[kiPos..]);
             pCtx.iEncoderError = crate::encoder::nal_encap::WelsEncodeNal(
-                &pCtx.pOut.as_deref().expect("pOut lives").sNalList
-                    [pCtx.pOut.as_deref().expect("pOut lives").iNalIndex as usize - 1],
-                &pCtx.pOut.as_deref().expect("pOut lives").sBsBuffer[..],
+                &kpOut.sNalList[kpOut.iNalIndex as usize - 1],
+                &kpOut.sBsBuffer[..],
                 Some(&*pNalHeaderExt),
-                pCtx.frame_bs_cur(),
-                pCtx.iFrameBsSize - pCtx.iPosBsBuffer,
+                pDstTail,
                 &mut *(*pLayerBsInfo).pNalLengthInByte.add(iNalIdxInLayer as usize),
             );
             if pCtx.iEncoderError != ENC_RETURN_SUCCESS {
@@ -4139,13 +4159,20 @@ pub unsafe fn WelsEncoderEncodeExt(
                 // survives the shared `pOut`/context borrows in the argument list.
                 let pNalHeaderExt =
                     std::ptr::addr_of!(current_layer_ref(pCtx).expect("the frame's current layer is stamped").sLayerInfo.sNalHeaderExt);
+                // **S11.17**: the context is destructured. The NAL entry and the
+                // source bytes live in `pOut`; the destination is the tail of
+                // `pFrameBs` — disjoint fields, so both borrows are live at once
+                // where the argument list would have been two borrows of the whole
+                // context. No copy: the source is borrowed, not cloned.
+                let sWelsEncCtx { pOut, pFrameBs, iPosBsBuffer, .. } = &mut *pCtx;
+                let kpOut = pOut.as_deref().expect("pOut lives");
+                let kiPos = *iPosBsBuffer as usize;
+                let pDstTail = (kiPos <= pFrameBs.len()).then(|| &mut pFrameBs[kiPos..]);
                 pCtx.iEncoderError = crate::encoder::nal_encap::WelsEncodeNal(
-                    &pCtx.pOut.as_deref().expect("pOut lives").sNalList
-                        [pCtx.pOut.as_deref().expect("pOut lives").iNalIndex as usize - 1],
-                    &pCtx.pOut.as_deref().expect("pOut lives").sBsBuffer[..],
+                    &kpOut.sNalList[kpOut.iNalIndex as usize - 1],
+                    &kpOut.sBsBuffer[..],
                     Some(&*pNalHeaderExt),
-                    pCtx.frame_bs_cur(),
-                    pCtx.iFrameBsSize - pCtx.iPosBsBuffer,
+                    pDstTail,
                     &mut *(*pLayerBsInfo).pNalLengthInByte.add(iNalIdxInLayer as usize),
                 );
                 if pCtx.iEncoderError != ENC_RETURN_SUCCESS {

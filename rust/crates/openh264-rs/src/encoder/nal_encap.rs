@@ -396,23 +396,24 @@ pub extern "C" fn WelsUnloadNalForSlice(pSliceBs: &mut SWelsSliceBs) {
 /// the NAL type is a prefix or an extension slice; the C++ took it as `void*` and
 /// cast back to the one type here.
 ///
-/// # Safety
-/// `dst` must be null (rejected with `ENC_RETURN_INVALIDINPUT`, as the C++ did) or
-/// point to `dst_len` writable bytes that do not overlap `src`.
 #[inline]
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
-pub unsafe fn WelsEncodeNal(
+/// **S11.17: `dst` is a slice.** It was `*mut u8` plus a separately-passed
+/// `dst_len`, which is one borrow said in two places — the classic pointer +
+/// length pair, with the null case standing for "this slice shares the frame's
+/// buffer and has no output block of its own". `Option<&mut [u8]>` says both:
+/// `None` takes the `ENC_RETURN_INVALIDINPUT` arm the null test took, and the
+/// length is carried rather than recomputed by each caller.
+pub fn WelsEncodeNal(
     raw: &SWelsNalRaw,
     src: &[u8],
     ext: Option<&SNalUnitHeaderExt>,
-    dst: *mut u8,
-    dst_len: i32,
+    dst: Option<&mut [u8]>,
     out_len: &mut i32,
 ) -> i32 {
-    if dst.is_null() {
+    let Some(dst) = dst else {
         return ENC_RETURN_INVALIDINPUT;
-    }
+    };
+    let dst_len = dst.len() as i32;
     let nal_type = raw.sNalExt.sNalUnitHeader.eNalUnitType;
     let kbNALExt = nal_type == EWelsNalUnitType::NAL_UNIT_PREFIX
         || nal_type == EWelsNalUnitType::NAL_UNIT_CODED_SLICE_EXT;
@@ -430,8 +431,9 @@ pub unsafe fn WelsEncodeNal(
         return ENC_RETURN_MEMALLOCERR;
     }
 
-    let pDstStart = dst;
-    let mut pDstPointer = pDstStart;
+    // S11.17: the write cursor is an index into `dst`; `*out_len` was
+    // `pDstPointer.offset_from(pDstStart)`, which is exactly this counter.
+    let mut iDstPos = 0usize;
     let payload = &src[raw.iStartPos as usize..(raw.iStartPos + raw.iPayloadSize) as usize];
     let mut iZeroCount: i32 = 0;
 
@@ -439,14 +441,14 @@ pub unsafe fn WelsEncodeNal(
 
     // 4-byte Annex B start code prefix: 0x00 0x00 0x00 0x01
     let kuiStartCodePrefix: [u8; 4] = [0, 0, 0, 1];
-    core::ptr::copy_nonoverlapping(kuiStartCodePrefix.as_ptr(), pDstPointer, 4);
-    pDstPointer = pDstPointer.add(4);
+    dst[iDstPos..iDstPos + 4].copy_from_slice(&kuiStartCodePrefix);
+    iDstPos += 4;
 
     // 1-Byte NAL Unit Header
     let nri = raw.sNalExt.sNalUnitHeader.uiNalRefIdc;
     let utype = raw.sNalExt.sNalUnitHeader.eNalUnitType as u8;
-    *pDstPointer = (nri << 5) | (utype & 0x1f);
-    pDstPointer = pDstPointer.add(1);
+    dst[iDstPos] = (nri << 5) | (utype & 0x1f);
+    iDstPos += 1;
 
     if kbNALExt {
         // The C++ dereferenced its `void*` here unconditionally; every caller
@@ -454,26 +456,26 @@ pub unsafe fn WelsEncodeNal(
         let sNalExt = ext.expect("a prefix or extension NAL is encoded with its SVC extension header");
 
         // Extension Byte 1: reserved_one_bit (0x80) | idr_flag (bit 6)
-        *pDstPointer = 0x80 | ((sNalExt.bIdrFlag as u8) << 6);
-        pDstPointer = pDstPointer.add(1);
+        dst[iDstPos] = 0x80 | ((sNalExt.bIdrFlag as u8) << 6);
+        iDstPos += 1;
 
         // Extension Byte 2: no_inter_layer_pred_flag (0x80) | dependency_id (bits 6..4)
-        *pDstPointer = 0x80 | ((sNalExt.uiDependencyId) << 4);
-        pDstPointer = pDstPointer.add(1);
+        dst[iDstPos] = 0x80 | ((sNalExt.uiDependencyId) << 4);
+        iDstPos += 1;
 
         // Extension Byte 3: temporal_id (bits 7..5) | discardable_flag (bit 3) | reserved_three_2bits (0x07)
-        *pDstPointer = ((sNalExt.uiTemporalId) << 5)
+        dst[iDstPos] = ((sNalExt.uiTemporalId) << 5)
             | ((sNalExt.bDiscardableFlag as u8) << 3)
             | 0x07;
-        pDstPointer = pDstPointer.add(1);
+        iDstPos += 1;
     }
 
     // Emulation prevention escaping loop
     for &byte_val in payload {
         if iZeroCount == 2 && byte_val <= 3 {
             // Add emulation prevention byte 0x03
-            *pDstPointer = 3;
-            pDstPointer = pDstPointer.add(1);
+            dst[iDstPos] = 3;
+            iDstPos += 1;
             iZeroCount = 0;
         }
         if byte_val == 0 {
@@ -481,11 +483,11 @@ pub unsafe fn WelsEncodeNal(
         } else {
             iZeroCount = 0;
         }
-        *pDstPointer = byte_val;
-        pDstPointer = pDstPointer.add(1);
+        dst[iDstPos] = byte_val;
+        iDstPos += 1;
     }
 
-    *out_len = pDstPointer.offset_from(pDstStart) as i32;
+    *out_len = iDstPos as i32;
 
     ENC_RETURN_SUCCESS
 }
@@ -537,8 +539,7 @@ mod tests {
                 &raw_nal,
                 &raw_payload,
                 None,
-                dst_buffer.as_mut_ptr(),
-                dst_buffer.len() as i32,
+                Some(&mut dst_buffer),
                 &mut dst_len,
             )
         };
@@ -586,8 +587,7 @@ mod tests {
                 &raw_nal,
                 &raw_payload,
                 Some(&ext_header),
-                dst_buffer.as_mut_ptr(),
-                dst_buffer.len() as i32,
+                Some(&mut dst_buffer),
                 &mut dst_len,
             )
         };
@@ -631,8 +631,7 @@ mod tests {
                 &raw_nal,
                 &raw_payload,
                 None,
-                dst_buffer.as_mut_ptr(),
-                dst_buffer.len() as i32,
+                Some(&mut dst_buffer),
                 &mut dst_len,
             )
         };
