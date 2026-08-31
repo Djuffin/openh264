@@ -8527,3 +8527,37 @@ The way to be wrong here is the way F276 was wrong: counting a family by its
 occurrences rather than by the bodies for which it is the *last* blocker. Ask
 the compiler, one family at a time.
 
+## F279 — the audited-boundary trade pays only where the resolver is the caller's *last* blocker, and that is measurable before you spend it
+
+S11.8 moved `current_layer`'s claim from its signature into one `unsafe {}`
+block, and the ratchet fell on **all three** metrics — six blocks, nine
+`unsafe fn`, five raw pointers — because its callers had nothing else stopping
+them. S11.9 applied the identical trade to the rest of the slot-read family
+(`ctx_param_raw`, `ctx_func_list_raw`, `ctx_dq_layer`, `slice_bank_root`,
+`slice_in_bank` — 55 call sites between them) and the result was **+6 blocks,
+−5 `unsafe fn`, and not one allow retired**: the cascade ran to convergence and
+kept nothing. **Reverted**, rather than banked as a cost with a promise
+attached.
+
+The difference is not the technique, it is where the callers stand. Narrowing a
+claim from a signature to a statement helps exactly the bodies for which *that*
+call was the last thing needing an unsafe context. `current_layer`'s callers
+were in that position; the parameter-block and slice-bank resolvers' callers
+are not — they dereference what they resolve, which is its own claim and stays.
+
+**This is F277's rule turned on my own method**, and it now has both signs
+measured: counting a blocker's *occurrences* over-prices removing it (F277,
+115 predicted / 12 delivered), and counting a technique's *past success*
+over-prices repeating it (here, one clean win / one net loss). Both are
+answered the same way, cheaply: make the change, run the cascade, read the
+ratchet — and revert when the trade does not pay. A conversion that moves no
+allow and adds blocks is not neutral, it is a regression in the metric the plan
+actually tracks.
+
+**What to do with the family instead.** These five resolvers are blocked *for*
+their callers by the dereference, not by the resolution. They convert when the
+thing they hand out becomes a reference — the slice bank's genuine seam
+(S10.3d: a shared twin is unsound because indexing the `Vec` retags the whole
+buffer against a sibling's write) or the parameter block's own conversion.
+Until then their signatures are the honest place for the claim.
+
