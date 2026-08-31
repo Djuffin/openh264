@@ -8561,3 +8561,147 @@ thing they hand out becomes a reference — the slice bank's genuine seam
 buffer against a sibling's write) or the parameter block's own conversion.
 Until then their signatures are the honest place for the claim.
 
+
+## F280 — the C-ABI parameter families were never C-ABI: 82 raw pointers retired on two signature flips (S11.13, S11.14)
+
+Two families carried `port-raw` allows on the strength of their position rather
+than their contents. `S11.13`'s pair take application-supplied structs; `S11.14`'s
+take scalar out-parameters. Both were classified as boundary work because the
+*outermost* function in each chain is an export — and neither family's members
+are exported. 43 dereferences retired on the first flip and 39 raw pointers on
+the second, with no signature on the frozen surface touched (`abi_exports.sh`
+7/7 through both).
+
+**The misclassification has a shape worth naming.** A body reached only from a
+C entry point inherits the entry point's *data* — pointers the application
+supplied — but not its *contract*. The contract binds the exported symbol: its
+name, its signature, its null-tolerance. Once the entry point has validated a
+pointer and formed a reference, everything downstream is ordinary Rust, and
+calling it "the ABI boundary" describes where the value came from rather than
+what the code may assume. The `unsafe-cat` labels encode the latter, so these
+were mislabelled.
+
+The practical test is one question: **is this function's signature in
+`abi_exports.sh`?** If not, its parameters are the port's own choice, whatever
+they were in the C. That test is mechanical and would have caught both families
+several sessions earlier.
+
+## F281 — eighteen `unsafe {}` blocks guarded nothing unsafe, and the compiler had been saying so all along (S11.10)
+
+`unused_unsafe` is a warn-by-default lint. Nineteen bodies went safe in S11.10
+by deleting blocks whose contents contained no unsafe operation at all — and
+the compiler emits a warning for every one of them. The warnings were invisible
+because `lib.rs` carries a crate-wide `allow(...)` (E2's target), and because a
+build that prints 39 warnings trains you to stop reading them.
+
+**This is the cheapest conversion class in the port and it was found last.** No
+analysis, no borrow surgery, no Miri: the lint names the file and the line, and
+the fix is deleting two lines. The reason it sat undone is that the census
+counts `#[allow(unsafe_code)]`, and an allow that covers a body whose blocks are
+all vacuous looks exactly like an allow that covers real work. Nothing in the
+tracking distinguished them.
+
+**The generalisation is that the instruments disagreed and nobody asked why.**
+The ratchet said 199 blocks; `unused_unsafe` said 18 of them were noise. Two
+counters over the same code, differing by a knowable amount, and the difference
+was the work. Wherever two instruments in this port can be diffed, the diff is
+worth reading before opening a new analysis — it costs a build.
+
+## F282 — "context beside a layer inside it" was never a seam: all three instances were parameter lists (S11.11, S11.12)
+
+F269 named three sites where `&mut sWelsEncCtx` sat beside a `&mut SDqLayer`
+owned by that context, and treated them as a genuine aliasing seam requiring
+F71's slot read. All three dissolved without one. `WelsUpdateSliceHeaderSyntax`
+was the clearest: sixteen context uses, **every one a read**, all either
+loop-invariant or indexed by the reordering slot — so the caller computes them
+and passes a struct, and the callee's context parameter is *deleted* rather
+than converted.
+
+**A seam is two live claims on overlapping memory. A parameter list that
+happens to name an owner and its field is not that** — it is a question about
+what the callee reads, asked in the wrong place. F275 and F278 recorded the
+same rule from five other families; these three are its cleanest form, because
+the answer was "nothing that has to be a borrow at all."
+
+The count that mattered was not three seams but **sixteen reads**, and reading
+them took one scan. The three-seam framing had stood for two sessions.
+
+## F283 — a walk direction inverted under a cursor-to-index rewrite, and two instruments caught it in the same minute (S11.20)
+
+`FrameBsRealloc` walked `pLayerBsInfo.offset(-iBack)` with `iBack` counting
+*down*, which visits layers **ascending**. The index form I wrote —
+`for iBack in (0..=iLbi).rev()` over `sLayerInfo[iBack]` — walks **descending**.
+The C's double negative (a negative offset from a decreasing counter) reads as
+"backwards" and is not.
+
+Both referees fired at once. `cargo test --lib` failed
+`encode_loop_runs_over_size_limited_dynamic_slices_under_the_aliasing_checker`
+with F60's message — *the NAL lengths sum to 6246 where the encoder reports a
+frame of 6668 bytes* — and the sweep diverged on the `sl` preset. The
+instrument named the invariant; the sweep named the configuration.
+
+**The lesson is about which rewrites need a direction check.** Converting a
+pointer cursor to an index is mechanical everywhere except the loop bound, and
+a reversed walk is invisible to review because both forms *look* like they
+mirror the C. The check is one line of arithmetic — evaluate the C's address
+expression at the first and last iteration and see which is lower — and it
+should be run on every cursor-to-index conversion over a signed offset, not
+just the ones that feel risky. 254 sites converted in this family; one had a
+sign that mattered.
+
+## F284 — `addr_of!` earns its place only where the result stays raw, and a third of the sites failed that test (S11.23, S11.24)
+
+Sixty-nine live `addr_of!`/`addr_of_mut!` sites, audited by what each result
+*becomes*. Eleven were `&mut *std::ptr::addr_of_mut!((*p).field)` where `p` is
+already `&mut T` — a no-op with extra steps, since `&mut *addr_of_mut!(place)`
+and `&mut place` produce the **same** `Unique` retag over the same place. The
+macro's purpose is to avoid retagging the *parent*; where the parent is already
+exclusively borrowed there is no parent to protect.
+
+**The test is two lines: does the result stay a pointer?** If a reference is
+formed from it on the next line, the macro contributed nothing, and F71's
+argument — that a slot read carries the heap block's own provenance — does not
+apply, because that argument is about pointers that are never converted. The
+seven-member slot-read family passes this test; the eleven ceremonial sites did
+not.
+
+**Sixteen more sites looked identical and were not.** The
+`addr_of_mut!((*ctx_param_raw(ctx)).sDependencyLayers[i])` cluster reads like
+the first group; converting it to `param_mut()` produced **68 borrow errors**,
+because those bodies hold the record across many context reads. Syntactic
+similarity is not the classifier — S11.24 resolved five of them by asking
+instead *what the body does with the record*, and three turned out never to
+write it at all.
+
+## F285 — S3.B1's Miri refusal outlived its cause by four sessions, and the field that caused it was deleted in S10.7 (S11.24, S11.25)
+
+`ctx_vpp_raw` carried a doc comment recording that an `Option::take` dance in
+its place had been **refused by Miri** at `WelsSliceHeaderExtInit`, with both
+byte sweeps 583/583 through the failure. That record was correct when written
+and stopped being correct in S10.7.
+
+The mechanism it described is precise: `SDqLayer::pSrcPool` stored
+`addr_of_mut!((*pVpp).m_pSpatialPicPool)` — a pointer **into the box's own
+allocation** — and the fork read it for a whole frame. Moving the `Box` out and
+back retags that allocation as `Unique`, popping the stored pointer. Stacked
+Borrows is per-allocation, so the refusal turned entirely on the stored raw
+pointing *inside* the `CWelsPreProcess` block.
+
+**S10.7 deleted the `pSrcPool` field.** What replaced it — `SDqLayer::pEncView`,
+an `RoPicView` built in `WelsInitCurrentLayer` — captures `root_ptr_shared()`
+into each plane's `buf: Vec<u8>`, which is a **separate heap allocation**. A
+retag of the box does not touch those tag stacks. The one surviving
+`ctx_src_pool_raw` call is local to `WelsInitCurrentLayer` and never stored.
+
+So the refusal expired, and `with_vpp` — the take-and-restore that S3.B1 could
+not have — retires `ctx_vpp_raw`'s nine callers. **This is the second expired
+refusal this session** (F187's was the first, in S11.18), and both had the same
+signature: a recorded "Miri says no" whose *premise* was a field or binding that
+later work removed, with nothing linking the record to the thing it depended on.
+
+**The actionable form: a refusal note should name the artifact it depends on.**
+"Miri refused the take dance" is unfalsifiable four sessions later; "Miri refused
+the take dance *because `SDqLayer::pSrcPool` stores a raw into the box's
+allocation*" expires visibly the day that field is deleted. Both of this
+session's expired refusals were re-checked only because a conversion happened to
+collide with them.

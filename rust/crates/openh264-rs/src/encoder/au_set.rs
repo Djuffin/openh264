@@ -1,6 +1,16 @@
+#![forbid(unsafe_code)]
 //! Port of `codec/encoder/core/src/au_set.cpp` — access-unit / parameter-set
 //! construction, the parameter-set writers, and the reference-frame limitation
 //! checks.
+//!
+//! **Sealed at S11.25**, and the last thing holding it open was documentation.
+//! S11.18 gave `WelsInitSps`/`WelsInitSubsetSps` reference parameters (F187's
+//! refusal had expired), which left the file's four remaining allows covering
+//! test blocks whose comment still read *"the callee is still `unsafe fn`"*.
+//! `unused_unsafe` had been reporting all four ever since; the warning was
+//! invisible under `lib.rs`'s crate-wide `allow` (E2's target). `forbid` here
+//! is what makes that class of drift a compile error rather than a warning
+//! nobody reads.
 //!
 //! Complete, with one documented deviation: `WelsWriteSpsSyntax` returns an error for
 //! `uiPocType == 1` where C++ has `assert(0)` behind a `// TODO: implement`. The
@@ -974,14 +984,10 @@ mod tests {
     /// gaps=0 crop=0 cs0=1 cs1=1 cs2=0 cs3=0
     /// ```
     #[test]
-    // unsafe-cat: instrument(test)
-    #[allow(unsafe_code)]
     fn init_sps_matches_cxx_for_the_gate_configuration() {
         let (mut lp, mut li) = gate_layer();
         let mut sps = SWelsSPS::default();
-        // S11.9: the callee is still `unsafe fn`; the instrument names that
-        // claim in a block rather than carrying it on its own signature.
-        unsafe { assert_eq!(WelsInitSps(&mut sps, &mut lp, &mut li, 0, 1, 0, true, false, 1, false), 0); }
+        assert_eq!(WelsInitSps(&mut sps, &mut lp, &mut li, 0, 1, 0, true, false, 1, false), 0);
 
         assert_eq!(sps.iMbWidth, 10);
         assert_eq!(sps.iMbHeight, 6);
@@ -1008,8 +1014,6 @@ mod tests {
     /// check that would have caught the missing VUI: the ad-hoc writer this replaced
     /// stopped after `vui_parameters_present_flag = 0` and emitted 8 bytes.
     #[test]
-    // unsafe-cat: instrument(test)
-    #[allow(unsafe_code)]
     fn write_sps_nal_is_byte_exact_with_cxx() {
         let (mut lp, mut li) = gate_layer();
         let mut sps = SWelsSPS::default();
@@ -1022,11 +1026,9 @@ mod tests {
         // test already owns, so there is no provenance to launder and nothing to
         // explain. Deleting it is a named deliverable of Phase 3 — see the module
         // header of `tests/safe_bits_differential.rs`.
-        let written = unsafe {
-            WelsInitSps(&mut sps, &mut lp, &mut li, 0, 1, 0, true, false, 1, false);
-            WelsWriteSpsNal(&mut buf, &mut sps, &mut bs, &delta);
-            bs.pos()
-        };
+        WelsInitSps(&mut sps, &mut lp, &mut li, 0, 1, 0, true, false, 1, false);
+        WelsWriteSpsNal(&mut buf, &mut sps, &mut bs, &delta);
+        let written = bs.pos();
 
         assert_eq!(
             &buf[..written],
@@ -1037,15 +1039,11 @@ mod tests {
 
     /// Against the C++ `WelsInitPps`: `ppsid=0 spsid=0 qp=26 qs=26 cqpo=0 ecm=0 dfcp=1`.
     #[test]
-    // unsafe-cat: instrument(test)
-    #[allow(unsafe_code)]
     fn init_pps_matches_cxx() {
         let (mut lp, mut li) = gate_layer();
         let mut sps = SWelsSPS::default();
         let mut pps = SWelsPPS::default();
-        // S11.9: the callee is still `unsafe fn`; the instrument names that
-        // claim in a block rather than carrying it on its own signature.
-        unsafe { WelsInitSps(&mut sps, &mut lp, &mut li, 0, 1, 0, true, false, 1, false); }
+        WelsInitSps(&mut sps, &mut lp, &mut li, 0, 1, 0, true, false, 1, false);
         assert_eq!(
             WelsInitPps(&mut pps, Some(&sps), None, 0, true, false, false),
             0
@@ -1063,8 +1061,6 @@ mod tests {
     /// `CWelsParametersetIdConstant`, which is what makes this a test of the id
     /// offsets too rather than only of the fixed syntax elements.
     #[test]
-    // unsafe-cat: instrument(test)
-    #[allow(unsafe_code)]
     fn write_pps_syntax_is_byte_exact_with_cxx() {
         use crate::api::codec_api::EParameterSetStrategy;
         use crate::encoder::paraset_strategy::CreateParametersetStrategy;
@@ -1077,15 +1073,13 @@ mod tests {
 
         // Second of the two F13 accommodations deleted at T3.4 — see the sibling
         // test above.
-        let written = unsafe {
-            WelsInitSps(&mut sps, &mut lp, &mut li, 0, 1, 0, true, false, 1, false);
-            WelsInitPps(&mut pps, Some(&sps), None, 0, true, false, false);
+        WelsInitSps(&mut sps, &mut lp, &mut li, 0, 1, 0, true, false, 1, false);
+        WelsInitPps(&mut pps, Some(&sps), None, 0, true, false, false);
 
-            let st = CreateParametersetStrategy(EParameterSetStrategy::CONSTANT_ID, false, 1)
-                .expect("CONSTANT_ID is ported");
-            WelsWritePpsSyntax(&mut buf, &mut pps, &mut bs, &st);
-            bs.pos()
-        };
+        let st = CreateParametersetStrategy(EParameterSetStrategy::CONSTANT_ID, false, 1)
+            .expect("CONSTANT_ID is ported");
+        WelsWritePpsSyntax(&mut buf, &mut pps, &mut bs, &st);
+        let written = bs.pos();
 
         assert_eq!(
             &buf[..written],

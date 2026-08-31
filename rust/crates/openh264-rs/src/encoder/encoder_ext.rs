@@ -3627,7 +3627,9 @@ pub unsafe fn WelsEncoderEncodeExt(
     // perform csc/denoise/downsample/padding, generate spatial layers
     // (S3.B1: the take dance — see `WelsInitEncoderExt`; `BuildSpatialPicList`
     // provably makes no cross-file call that could read the empty slot.)
-    let iRet = crate::encoder::encoder_context::ctx_vpp_raw(pCtx).BuildSpatialPicList(pCtx, pSrcPic, &mut iSpatialNum);
+    let iRet = crate::encoder::encoder_context::with_vpp(pCtx, |pVpp, pCtx| {
+        pVpp.BuildSpatialPicList(pCtx, pSrcPic, &mut iSpatialNum)
+    });
     if iRet != ENC_RETURN_SUCCESS {
         return iRet;
     }
@@ -3730,7 +3732,9 @@ pub unsafe fn WelsEncoderEncodeExt(
             }
         }
         crate::encoder::encoder_context::InitFrameCoding(pCtx, eFrameType, iCurDid as i32);
-        crate::encoder::encoder_context::ctx_vpp_raw(pCtx).AnalyzeSpatialPic(pCtx, iCurDid as i32);
+        crate::encoder::encoder_context::with_vpp(pCtx, |pVpp, pCtx| {
+            pVpp.AnalyzeSpatialPic(pCtx, iCurDid as i32)
+        });
 
         // **`iPOC` is read at each use below rather than through a held pointer.**
         // Every call in this loop — `InitFrameCoding`, `AnalyzeSpatialPic`,
@@ -3750,7 +3754,9 @@ pub unsafe fn WelsEncoderEncodeExt(
             // the owned box, and borrowck orders the block accordingly.
             let kiPictureType = pCtx.eSliceType as i32;
             let kiFramePoc = pCtx.param().sDependencyLayers[iCurDid as usize].iPOC;
-            let p = crate::encoder::encoder_context::ctx_vpp_raw(pCtx).m_pSpatialPicPool.get_mut(idEncPic);
+            let p = crate::encoder::encoder_context::ctx_vpp_mut(pCtx)
+                .m_pSpatialPicPool
+                .get_mut(idEncPic);
             p.iPictureType = kiPictureType;
             p.iFramePoc = kiFramePoc;
         }
@@ -3876,12 +3882,9 @@ pub unsafe fn WelsEncoderEncodeExt(
             let idEncPicForVaa = pCtx.pEncPic;
             let bBgd = pCtx.eSliceType == EWelsSliceType::P_SLICE
                 && pCtx.param().bEnableBackgroundDetection;
-            crate::encoder::encoder_context::ctx_vpp_raw(pCtx).AnalyzePictureComplexity(pCtx,
-                idEncPicForVaa,
-                pRef,
-                iCurDid as i32,
-                bBgd,
-            );
+            crate::encoder::encoder_context::with_vpp(pCtx, |pVpp, pCtx| {
+                pVpp.AnalyzePictureComplexity(pCtx, idEncPicForVaa, pRef, iCurDid as i32, bBgd)
+            });
         }
         // get reordering syntax used for writing the slice header
         crate::encoder::ref_list_mgr_svc::WelsUpdateRefSyntax(pCtx,
@@ -4335,7 +4338,7 @@ pub unsafe fn WelsEncoderEncodeExt(
             let pRefListPsnr = pCtx.ref_list(iCurDid as usize);
             if pRefListPsnr.is_some() && pCtx.pVpp.is_some() {
                 let recon = pRefListPsnr.expect("checked just above");
-                let vpp = &*crate::encoder::encoder_context::ctx_vpp_raw(pCtx);
+                let vpp = crate::encoder::encoder_context::ctx_vpp_ref(pCtx);
                 let plane_psnr = |i: usize, w: i32, h: i32| -> f32 {
                     let tar = recon.pic(idDecPic).plane(i);
                     let src = vpp.src_id(idEncPic).plane(i);
@@ -4459,7 +4462,10 @@ pub unsafe fn WelsEncoderEncodeExt(
             WelsSwapDqLayers(pCtx, iNextDid);
         }
 
-        if crate::encoder::encoder_context::ctx_vpp_raw(pCtx).UpdateSpatialPictures(pCtx, iCurTid as i8, iCurDid as i32) != 0 {
+        if crate::encoder::encoder_context::with_vpp(pCtx, |pVpp, pCtx| {
+            pVpp.UpdateSpatialPictures(pCtx, iCurTid as i8, iCurDid as i32)
+        }) != 0
+        {
             crate::encoder::wels_encoder_ext::ForceCodingIDR(pCtx, iCurDid as i32);
             // the above sets the next frame to IDR
             pFbi.eFrameType = eFrameType;
@@ -4499,7 +4505,9 @@ pub unsafe fn WelsEncoderEncodeExt(
         // Spelled through a derivation that lives and dies inside this statement, so
         // nothing is held across the two calls below — which is the whole hazard.
         let iDid = (*pCtx.sSpatialIndexMap.as_ptr().add(iSpatialIdx as usize)).iDid;
-        crate::encoder::encoder_context::ctx_vpp_raw(pCtx).UpdateSpatialPictures(pCtx, iCurTid as i8, iDid);
+        crate::encoder::encoder_context::with_vpp(pCtx, |pVpp, pCtx| {
+            pVpp.UpdateSpatialPictures(pCtx, iCurTid as i8, iDid)
+        });
         crate::encoder::wels_encoder_ext::ForceCodingIDR(pCtx, iDid);
         // the above sets the next frame to IDR
         pFbi.eFrameType = eFrameType;

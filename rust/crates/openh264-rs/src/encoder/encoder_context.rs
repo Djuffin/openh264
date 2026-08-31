@@ -1005,6 +1005,25 @@ pub fn ctx_vpp_ref(
 /// mentioned outside one comment. An unwind through the closure drops the object
 /// and leaves the slot empty, which matters only if a caught panic were followed
 /// by reuse of the context — the `expect`s here are bug reports, not states.
+/// The preprocess object as an exclusive reference — the `&mut` twin of
+/// [`ctx_vpp_ref`], for the sites that want the object **without** the context
+/// beside it.
+///
+/// Two of `ctx_vpp_raw`'s nine callers only ever reached the spatial pool
+/// (`m_pSpatialPicPool`) and passed no context to anything; for those the raw was
+/// never expressing disjointness, just the absence of this accessor. Where the
+/// context *is* wanted at the same time, [`with_vpp`] is the route — a `&mut`
+/// off the field cannot coexist with one to its owner, and that refusal is
+/// correct rather than something to spell around.
+#[inline]
+pub fn ctx_vpp_mut(
+    pCtx: &mut sWelsEncCtx,
+) -> &mut crate::encoder::wels_preprocess::CWelsPreProcess {
+    pCtx.pVpp
+        .as_deref_mut()
+        .expect("the preprocessor is built by WelsInitEncoderExt")
+}
+
 #[inline]
 pub fn with_vpp<R>(
     pCtx: &mut sWelsEncCtx,
@@ -3759,8 +3778,6 @@ mod tests {
     }
 
     #[test]
-    // unsafe-cat: instrument(test)
-    #[allow(unsafe_code)]
     fn test_decide_frame_type() {
         let mut param = SWelsSvcCodingParam::default();
         let mut ctx = sWelsEncCtx::new();
@@ -3769,9 +3786,7 @@ mod tests {
         // T6.H10: the context owns the block, so the fixture hands it one.
         ctx.pVaa = Some(Box::new(SVAAFrameInfo::default()));
 
-        // S11.9: the callee is still `unsafe fn`; the instrument names that
-        // claim in a block rather than carrying it on its own signature.
-        let ft = unsafe { DecideFrameType(&mut ctx, 1, 0, false) };
+        let ft = DecideFrameType(&mut ctx, 1, 0, false);
         assert_eq!(ft, EVideoFrameType::videoFrameTypeIDR);
     }
 
@@ -3823,3 +3838,121 @@ pub use crate::common::cpu_core::{WELS_CPU_AVX, WELS_CPU_AVX2, WELS_CPU_FMA, WEL
 
 
 
+
+#[cfg(test)]
+mod with_vpp_provenance {
+    use super::*;
+    use crate::encoder::picture::{SPicture, SrcPicPool};
+    use crate::encoder::rec_view::RoPicView;
+    use crate::encoder::wels_preprocess::CWelsPreProcess;
+
+    /// **S11.25 — the probe that replaces a thirty-minute one.**
+    ///
+    /// [`with_vpp`] moves the preprocessor's `Box` out of the context and stores
+    /// it back, which is the shape S3.B1 tried and Miri refused. That refusal was
+    /// recorded on `ctx_vpp_raw` with a precise mechanism: `SDqLayer::pSrcPool`
+    /// held `addr_of_mut!((*pVpp).m_pSpatialPicPool)` — a pointer **into the
+    /// box's own allocation** — across the frame, and moving the `Box` retags
+    /// that allocation as `Unique`, popping the stored pointer.
+    ///
+    /// **S10.7 deleted `pSrcPool`.** What stands in its place is
+    /// `SDqLayer::pEncView`, an `RoPicView` built in `WelsInitCurrentLayer` off a
+    /// picture *in* the pool. Its captured pointers are `root_ptr_shared()` into
+    /// each plane's `buf: Vec<u8>`, and a `Vec`'s buffer is a **separate
+    /// allocation** — Stacked Borrows is per-allocation, so retagging the
+    /// `CWelsPreProcess` block should not touch those stacks.
+    ///
+    /// That is an argument, and this is the check. The frame's ordering is
+    /// reproduced in miniature: stamp the view, run `with_vpp`, then read through
+    /// the view. Under Miri a popped tag fails here; without Miri it is still a
+    /// value assertion that the bytes are the ones written.
+    ///
+    /// **It is deliberately not a full encode.** `fork_join_encodes_*` covers this
+    /// shape too, but it costs ~985s per probe (F273) because it encodes a frame;
+    /// the question here is one retag against one captured pointer, and a probe
+    /// should be sized to its question.
+    #[test]
+    fn with_vpp_does_not_pop_a_view_built_off_the_spatial_pool() {
+        let mut ctx = sWelsEncCtx::new();
+        let mut vpp = CWelsPreProcess::default();
+
+        let mut pic = SPicture::new(176, 144, false);
+        pic.plane_mut(0).set(0, 0, 0x5A);
+        pic.plane_mut(0).set(3, 2, 0xC3);
+        vpp.m_pSpatialPicPool = SrcPicPool::new(vec![pic]);
+        ctx.pVpp = Some(Box::new(vpp));
+
+        // `WelsInitCurrentLayer`'s stamp, in miniature: a read-only view of a
+        // pooled source picture, held past the call below exactly as the layer
+        // holds it for the frame.
+        let id = ctx
+            .pVpp
+            .as_ref()
+            .expect("just installed")
+            .m_pSpatialPicPool
+            .ids()
+            .next()
+            .expect("one slot");
+        let view = RoPicView::build(
+            ctx.pVpp.as_ref().expect("just installed").m_pSpatialPicPool.get(id),
+        );
+
+        // The take-and-restore. If this retag popped the view's captured
+        // pointers, the reads below are through a dead tag.
+        with_vpp(&mut ctx, |pVpp, _pCtx| {
+            assert!(!pVpp.m_pSpatialPicPool.ids().next().is_none(), "the pool survives the move");
+        });
+
+        assert_eq!(view.plane(0).at(0, 0), 0x5A, "the view still reads its own plane");
+        assert_eq!(view.plane(0).at(3, 2), 0xC3);
+
+        // And the slot is restored, which is the property the closure form exists
+        // to guarantee on every path.
+        assert!(ctx.pVpp.is_some(), "with_vpp restores the box");
+    }
+
+    /// **The control, and it must be seen red.** A green probe proves nothing
+    /// unless the same probe fails on the shape it is meant to reject, so this
+    /// reconstructs S3.B1's derivation exactly: a pointer taken *into the box's
+    /// own allocation* (`m_pSpatialPicPool`, a field of `CWelsPreProcess`) and
+    /// read after [`with_vpp`] has moved the `Box` out and back.
+    ///
+    /// That is the pointer `SDqLayer::pSrcPool` used to hold across a frame, and
+    /// it is why Miri refused the take dance in S3.B1. Deleting the field (S10.7)
+    /// is what expired the refusal — not any change to `with_vpp`'s mechanics —
+    /// so the mechanism has to still be reproducible, or the sibling test above
+    /// is green for the wrong reason.
+    ///
+    /// `#[ignore]`d because Miri reports UB by aborting, which is not a failure a
+    /// harness can assert on. Run it deliberately:
+    ///
+    /// ```text
+    /// MIRIFLAGS='-Zmiri-ignore-leaks -Zmiri-disable-isolation' \
+    ///   cargo +nightly miri test --lib -- --ignored pointer_into_the_box
+    /// ```
+    ///
+    /// Expected: `Undefined Behavior: attempting a read access using <tag> ...
+    /// but that tag does not exist in the borrow stack`. Under plain `cargo test`
+    /// it passes and proves nothing — that is the point of the second referee.
+    #[test]
+    #[ignore = "Miri control: aborts on UB, so it is run deliberately, not by the harness"]
+    // unsafe-cat: instrument(test)
+    #[allow(unsafe_code)]
+    fn a_pointer_into_the_box_does_not_survive_with_vpp() {
+        let mut ctx = sWelsEncCtx::new();
+        let mut vpp = CWelsPreProcess::default();
+        vpp.m_pSpatialPicPool = SrcPicPool::new(vec![SPicture::new(176, 144, false)]);
+        ctx.pVpp = Some(Box::new(vpp));
+
+        // S3.B1's derivation: `ctx_src_pool_raw`'s answer, which points *inside*
+        // the `CWelsPreProcess` allocation rather than into a plane's own `Vec`.
+        let pPool: *mut SrcPicPool = unsafe { ctx_src_pool_raw(&ctx) };
+
+        with_vpp(&mut ctx, |_pVpp, _pCtx| {});
+
+        // The read Miri must refuse: the move above retagged the allocation this
+        // pointer names, so its tag is gone from that stack.
+        let n = unsafe { (*pPool).ids().count() };
+        assert_eq!(n, 1, "reached only if the tag survived — under Miri it must not");
+    }
+}
