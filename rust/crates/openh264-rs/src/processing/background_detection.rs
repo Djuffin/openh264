@@ -108,6 +108,14 @@ fn WELS_MIN(a: i32, b: i32) -> i32 {
     }
 }
 
+/// The three planes of each picture [`CBackgroundDetection::Process`] reads,
+/// from the logical origin — the family's `ScdPlanes` shape, three planes wide
+/// (the chroma edge check reads U and V).
+pub struct BgdPlanes<'a> {
+    pub cur: [&'a [u8]; 3],
+    pub refp: [&'a [u8]; 3],
+}
+
 impl CBackgroundDetection {
     /// `CBackgroundDetection::Set`. Typed since Phase 6 session B (the `IWelsVP`
     /// vtable's `void*` is gone). The C++ class has no `Get` override
@@ -130,10 +138,13 @@ impl CBackgroundDetection {
     /// cover the picture's macroblocks.
     // unsafe-cat: port-raw(Phase 9)
     #[allow(unsafe_code)]
-    pub unsafe fn Process(
+    pub fn Process(
         &mut self,
         pSrcPixMap: &SPixMap,
-        pRefPixMap: &SPixMap,
+        _pRefPixMap: &SPixMap,
+        // S11.43: the six planes as borrows (the family's `ScdPlanes` shape);
+        // the pixel maps carry geometry only.
+        planes: &BgdPlanes<'_>,
         calc: &SVAACalcResult,
         // S10.12: the caller's per-macroblock flag array, as a slice.
         pVaaBackgroundMbFlag: &mut [i8],
@@ -159,7 +170,7 @@ impl CBackgroundDetection {
         // 1st step: foreground/background coarse division
         self.ForegroundBackgroundDivision(calc);
         // 2nd step: foreground dilation and background erosion
-        self.ForegroundDilationAndBackgroundErosion(pSrcPixMap, pRefPixMap, pVaaBackgroundMbFlag);
+        self.ForegroundDilationAndBackgroundErosion(planes, pVaaBackgroundMbFlag);
         RET_SUCCESS
     }
 
@@ -229,16 +240,12 @@ impl CBackgroundDetection {
     }
 
     /// `CBackgroundDetection::CalculateAsdChromaEdge` — `BackgroundDetection.cpp:189`.
-    // unsafe-cat: port-raw(Phase 9)
-    #[allow(unsafe_code)]
-    unsafe fn CalculateAsdChromaEdge(pOriRef: *const u8, pOriCur: *const u8, iStride: i32) -> i32 {
+    fn CalculateAsdChromaEdge(pOriRef: &[u8], pOriCur: &[u8], iStride: i32) -> i32 {
         let mut ASD: i32 = 0;
-        let mut pRef = pOriRef;
-        let mut pCur = pOriCur;
+        let mut off = 0usize;
         for _idx in 0..BGD_OU_SIZE_UV {
-            ASD += *pCur as i32 - *pRef as i32;
-            pRef = pRef.offset(iStride as isize);
-            pCur = pCur.offset(iStride as isize);
+            ASD += pOriCur[off] as i32 - pOriRef[off] as i32;
+            off += iStride as usize;
         }
         ASD.abs()
     }
@@ -281,12 +288,9 @@ impl CBackgroundDetection {
     }
 
     /// `CBackgroundDetection::ForegroundDilation23Chroma` — `BackgroundDetection.cpp:232`.
-    // unsafe-cat: port-raw(Phase 9)
-    #[allow(unsafe_code)]
-    unsafe fn ForegroundDilation23Chroma(
+    fn ForegroundDilation23Chroma(
         &self,
-        pSrcPixMap: &SPixMap,
-        pRefPixMap: &SPixMap,
+        planes: &BgdPlanes<'_>,
         iNeighbourForegroundFlags: i8,
         iStartSamplePos: i32,
         iPicStrideUV: i32,
@@ -304,12 +308,16 @@ impl CBackgroundDetection {
         for plane in [2usize, 1usize] {
             for i in 0..4 {
                 if iNeighbourForegroundFlags & kaOUPos[i] != 0 {
-                    let off = (iStartSamplePos + aEdgeOffset[i]) as isize;
-                    // S10.12: the pixmaps are the caller's, handed in rather than
-                    // copied onto this struct at `Process`. Same two addresses.
-                    let pRefC = pRefPixMap.pPixel[plane].offset(off);
-                    let pCurC = pSrcPixMap.pPixel[plane].offset(off);
-                    if Self::CalculateAsdChromaEdge(pRefC, pCurC, iStride[i]) > BGD_THD_ASD_UV {
+                    let off = (iStartSamplePos + aEdgeOffset[i]) as usize;
+                    // S10.12 handed the pixmaps in rather than storing them;
+                    // S11.43 hands the planes themselves — the same addresses,
+                    // as tails whose every read is bounds-checked.
+                    if Self::CalculateAsdChromaEdge(
+                        &planes.refp[plane][off..],
+                        &planes.cur[plane][off..],
+                        iStride[i],
+                    ) > BGD_THD_ASD_UV
+                    {
                         return true;
                     }
                 }
@@ -319,12 +327,9 @@ impl CBackgroundDetection {
     }
 
     /// `CBackgroundDetection::ForegroundDilation` — `BackgroundDetection.cpp:263`.
-    // unsafe-cat: port-raw(Phase 9)
-    #[allow(unsafe_code)]
-    unsafe fn ForegroundDilation(
+    fn ForegroundDilation(
         &self,
-        pSrcPixMap: &SPixMap,
-        pRefPixMap: &SPixMap,
+        planes: &BgdPlanes<'_>,
         pBackgroundOU: &mut SBackgroundOU,
         nb: &[SBackgroundOU; 4],
         iChromaSampleStartPos: i32,
@@ -352,8 +357,7 @@ impl CBackgroundDetection {
                             | (n(nb[2].iBackgroundFlag) << 2)
                             | (n(nb[3].iBackgroundFlag) << 3);
                         pBackgroundOU.iBackgroundFlag = !self.ForegroundDilation23Chroma(
-                            pSrcPixMap,
-                            pRefPixMap,
+                            planes,
                             iNeighbourForegroundFlags,
                             iChromaSampleStartPos,
                             iPicStrideUV,
@@ -396,12 +400,9 @@ impl CBackgroundDetection {
     /// mutating. Rust's aliasing rules make that awkward, so each iteration copies
     /// the four neighbours by value before touching the current OU — every callee
     /// reads them and none writes them, so the values are the same.
-    // unsafe-cat: port-raw(Phase 9)
-    #[allow(unsafe_code)]
-    unsafe fn ForegroundDilationAndBackgroundErosion(
+    fn ForegroundDilationAndBackgroundErosion(
         &mut self,
-        pSrcPixMap: &SPixMap,
-        pRefPixMap: &SPixMap,
+        planes: &BgdPlanes<'_>,
         pVaaBackgroundMbFlag: &mut [i8],
     ) {
         let iPicStrideUV = self.m_BgdParam.iStride[1];
@@ -443,8 +444,7 @@ impl CBackgroundDetection {
                 let mut ou = self.m_BgdParam.pOU_array[cur];
                 if ou.iBackgroundFlag != 0 {
                     self.ForegroundDilation(
-                        pSrcPixMap,
-                        pRefPixMap,
+                        planes,
                         &mut ou,
                         &nb,
                         j * iOUStrideUV + (i << LOG2_BGD_OU_SIZE_UV),

@@ -389,6 +389,19 @@ impl SPicture {
         self.planes[i].stride() as i32
     }
 
+    /// Plane `i`'s samples from the logical origin, as the borrow they are —
+    /// [`data_ptr_shared`](Self::data_ptr_shared)'s reach as a slice (S11.43, for
+    /// the VAA passes). Empty where that answered null.
+    #[inline]
+    pub fn plane_tail(&self, i: usize) -> &[u8] {
+        let plane = &self.planes[i];
+        if plane.is_empty() {
+            return &[];
+        }
+        let origin = plane.origin();
+        &plane.as_slice()[origin..]
+    }
+
     /// Plane `i`, for a converted caller that wants the safe view.
     #[inline]
     pub fn plane(&self, i: usize) -> &PaddedPlane {

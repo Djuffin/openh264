@@ -664,44 +664,11 @@ fn vaa_shim_reads_each_quadrant_where_its_contract_says_it_does() {
     }
 }
 
-/// The variance probe's two spans, which are **independent** — it is the only kernel
-/// in this phase that reads two planes at two different strides, and a shim that
-/// sized both from one of them would pass every equal-stride case.
-///
-/// Both allocations are exactly `mb_span(stride)` long, so an over-claim is UB Miri
-/// reports and an under-claim panics.
-#[test]
-fn sample_variance_shim_stays_inside_the_spans_it_declares() {
-    let mut rng = Prng::new(0x7A08_0006);
-    for &ref_stride in &strides(16) {
-        for &src_stride in &strides(16) {
-            for _ in 0..scale(25) {
-                let refy = rng.bytes(aq::mb_span(ref_stride));
-                let srcy = rng.bytes(aq::mb_span(src_stride));
-                let mut got = SMotionTextureUnit {
-                    uiMotionIndex: 0xAAAA,
-                    uiTextureIndex: 0x5555,
-                };
-                unsafe {
-                    aq::SampleVariance16x16_c(
-                        refy.as_ptr(), ref_stride as i32,
-                        srcy.as_ptr(), src_stride as i32,
-                        &mut got,
-                    );
-                }
-                // Both fields must have been written — the sentinel is not a value
-                // this kernel can produce for both at once from random input.
-                assert!(
-                    !(got.uiMotionIndex == 0xAAAA && got.uiTextureIndex == 0x5555),
-                    "left the sentinel in place at strides {ref_stride}/{src_stride}"
-                );
-                let direct = aq::sample_variance_16x16(&refy, ref_stride, &srcy, src_stride);
-                assert_eq!(got.uiMotionIndex, direct.uiMotionIndex);
-                assert_eq!(got.uiTextureIndex, direct.uiTextureIndex);
-            }
-        }
-    }
-}
+// `sample_variance_shim_stays_inside_the_spans_it_declares` stood here — the
+// span instrument for `SampleVariance16x16_c`'s two `from_raw_parts` claims.
+// **S11.43, deleted with its subject**: the shim's last production caller now
+// drives `sample_variance_16x16` directly, and the property the probe pinned —
+// two independently-sized spans — is the kernel's two slice parameters.
 
 /// The two extremes of the variance probe's input domain, which the random sweep
 /// never reaches and which are where the C++'s integer widths would bite if they

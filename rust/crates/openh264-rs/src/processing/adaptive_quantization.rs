@@ -75,26 +75,11 @@ fn WELS_DIV_ROUND64(x: i64, y: i64) -> i64 {
 ///   `SPixMap`s, and they are not equal in general; each plane's span is computed
 ///   from its own.
 /// * `pMotionTexture` is writable.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn SampleVariance16x16_c(
-    pRefY: *const u8,
-    iRefStride: i32,
-    pSrcY: *const u8,
-    iSrcStride: i32,
-    pMotionTexture: *mut SMotionTextureUnit,
-) {
-    // SHIM(phase2) -> sample_variance_16x16
-    unsafe {
-        let (ref_stride, src_stride) = (iRefStride as usize, iSrcStride as usize);
-        *pMotionTexture = sample_variance_16x16(
-            core::slice::from_raw_parts(pRefY, mb_span(ref_stride)),
-            ref_stride,
-            core::slice::from_raw_parts(pSrcY, mb_span(src_stride)),
-            src_stride,
-        );
-    }
-}
+// `SampleVariance16x16_c` stood here — the raw-pointer shim over
+// [`sample_variance_16x16`]. **S11.43, deleted: its last production caller
+// (`Process`'s macroblock walk) drives the safe kernel directly**, and the
+// span-instrument test whose subject it was went with it — the property it
+// pinned (the shim's two declared spans) is the kernel's slice types now.
 
 //=================== Safe kernels =====================//
 
@@ -196,12 +181,13 @@ impl CAdaptiveQuantization {
     /// The pointers stored by the preceding [`Set`](Self::Set) must still be valid,
     /// both pixel maps must describe readable luma planes, and `calc`'s arrays must
     /// cover the picture's macroblocks.
-    // unsafe-cat: port-raw(Phase 9)
-    #[allow(unsafe_code)]
-    pub unsafe fn Process(
+    pub fn Process(
         &mut self,
         pSrcPixMap: &SPixMap,
-        pRefPixMap: &SPixMap,
+        _pRefPixMap: &SPixMap,
+        // S11.43: the two luma planes as borrows (`ScdPlanes`' shape); the pixel
+        // maps carry geometry only.
+        planes: crate::processing::vaacalc::VaaCalcPlanes<'_>,
         calc: &SVAACalcResult,
         pMotionTexture: &mut [SMotionTextureUnit],
         pMotionTextureIndexToDeltaQp: &mut [i8],
@@ -215,15 +201,16 @@ impl CAdaptiveQuantization {
         let mut iAverageMotionIndex: i64 = 0;
         let mut iAverageTextureIndex: i64 = 0;
 
-        let mut pRefFrameY = pRefPixMap.pPixel[0] as *const u8;
-        let mut pCurFrameY = pSrcPixMap.pPixel[0] as *const u8;
-        let iRefStride = pRefPixMap.iStride[0];
+        let iRefStride = _pRefPixMap.iStride[0];
         let iCurStride = pSrcPixMap.iStride[0];
 
         // Reuse the VAA statistics when they were computed over exactly this pair
         // of pictures; otherwise recompute per macroblock.
-        // S10.9: the comparison is between addresses, and both sides say so now.
-        if calc.pRefY == pRefFrameY as usize && calc.pCurY == pCurFrameY as usize {
+        // S10.9: the comparison is between addresses, and both sides say so now —
+        // a slice's address is the number the raw root was.
+        if calc.pRefY == planes.refp.as_ptr() as usize
+            && calc.pCurY == planes.cur.as_ptr() as usize
+        {
             let mut iMbIndex = 0isize;
             for _j in 0..iMbHeight {
                 for _i in 0..iMbWidth {
@@ -253,27 +240,28 @@ impl CAdaptiveQuantization {
                 }
             }
         } else {
+            // S11.43: the row/column pointer walk is the same arithmetic on
+            // indices, each macroblock's origin bounds-checked by the reslice.
             let mut iMbIndex = 0usize;
+            let (mut iRefRow, mut iCurRow) = (0usize, 0usize);
             for _j in 0..iMbHeight {
-                let mut pRefFrameTmp = pRefFrameY;
-                let mut pCurFrameTmp = pCurFrameY;
+                let (mut iRefOff, mut iCurOff) = (iRefRow, iCurRow);
                 for _i in 0..iMbWidth {
                     let mt = &mut pMotionTexture[iMbIndex];
-                    SampleVariance16x16_c(
-                        pRefFrameTmp,
-                        iRefStride,
-                        pCurFrameTmp,
-                        iCurStride,
-                        mt,
+                    *mt = sample_variance_16x16(
+                        &planes.refp[iRefOff..],
+                        iRefStride as usize,
+                        &planes.cur[iCurOff..],
+                        iCurStride as usize,
                     );
                     iAverageMotionIndex += mt.uiMotionIndex as i64;
                     iAverageTextureIndex += mt.uiTextureIndex as i64;
                     iMbIndex += 1;
-                    pRefFrameTmp = pRefFrameTmp.offset(MB_WIDTH_LUMA as isize);
-                    pCurFrameTmp = pCurFrameTmp.offset(MB_WIDTH_LUMA as isize);
+                    iRefOff += MB_WIDTH_LUMA as usize;
+                    iCurOff += MB_WIDTH_LUMA as usize;
                 }
-                pRefFrameY = pRefFrameY.offset((iRefStride << 4) as isize);
-                pCurFrameY = pCurFrameY.offset((iCurStride << 4) as isize);
+                iRefRow += (iRefStride << 4) as usize;
+                iCurRow += (iCurStride << 4) as usize;
             }
         }
 
