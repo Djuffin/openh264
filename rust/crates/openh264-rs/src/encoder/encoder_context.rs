@@ -2327,36 +2327,25 @@ impl Default for sWelsEncCtx {
 
 /// Initializes input source picture geometry, color planes, and line strides.
 ///
-/// # Safety
-/// `pSrcPic` must point to a valid, writable `SSourcePicture` or be null.
-///
-/// **`*mut`, not `*const`** (Phase 6 session B). The C++ signature is
-/// `InitPic(const void* kpSrc, …)` and its first act is
-/// `SSourcePicture* pSrcPic = (SSourcePicture*)kpSrc;` — it casts the `const`
-/// away and writes eight fields through it. Typing the parameter `*const` here
-/// preserved that lie, and the `exit` battery's Miri step caught what the lie
-/// costs in Rust: the unit test passed `&src_pic`, a *shared* reference, and the
-/// first write through the cast pointer is UB — "that tag only grants
-/// SharedReadOnly permission". A function that writes says `*mut`.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn InitPic(
-    pSrcPic: *mut SSourcePicture,
+pub fn InitPic(
+    // S11.19: a reference. The only caller (this file's own test) already
+    // passes `&mut src_pic`, and the null disjunct retires with the raw (T9.H).
+    pSrcPic: &mut SSourcePicture,
     kiColorspace: i32,
     kiWidth: i32,
     kiHeight: i32,
 ) -> i32 {
 
-    if pSrcPic.is_null() || kiWidth == 0 || kiHeight == 0 {
+    if kiWidth == 0 || kiHeight == 0 {
         return 1;
     }
 
     let vflip_mask = VideoFormat::videoFormatVFlip as i32;
     let base_colorspace = kiColorspace & !vflip_mask;
 
-    (*pSrcPic).iColorFormat = kiColorspace;
-    (*pSrcPic).iPicWidth = kiWidth;
-    (*pSrcPic).iPicHeight = kiHeight;
+    pSrcPic.iColorFormat = kiColorspace;
+    pSrcPic.iPicWidth = kiWidth;
+    pSrcPic.iPicHeight = kiHeight;
 
     if base_colorspace != VideoFormat::videoFormatI420 as i32 {
         return 2;
@@ -2366,43 +2355,43 @@ pub unsafe fn InitPic(
         cs if cs == VideoFormat::videoFormatI420 as i32
             || cs == VideoFormat::videoFormatYV12 as i32 =>
         {
-            (*pSrcPic).pData[0] = std::ptr::null_mut();
-            (*pSrcPic).pData[1] = std::ptr::null_mut();
-            (*pSrcPic).pData[2] = std::ptr::null_mut();
-            (*pSrcPic).pData[3] = std::ptr::null_mut();
-            (*pSrcPic).iStride[0] = kiWidth;
-            (*pSrcPic).iStride[1] = kiWidth >> 1;
-            (*pSrcPic).iStride[2] = kiWidth >> 1;
-            (*pSrcPic).iStride[3] = 0;
+            pSrcPic.pData[0] = std::ptr::null_mut();
+            pSrcPic.pData[1] = std::ptr::null_mut();
+            pSrcPic.pData[2] = std::ptr::null_mut();
+            pSrcPic.pData[3] = std::ptr::null_mut();
+            pSrcPic.iStride[0] = kiWidth;
+            pSrcPic.iStride[1] = kiWidth >> 1;
+            pSrcPic.iStride[2] = kiWidth >> 1;
+            pSrcPic.iStride[3] = 0;
         }
         cs if cs == VideoFormat::videoFormatYUY2 as i32
             || cs == VideoFormat::videoFormatYVYU as i32
             || cs == VideoFormat::videoFormatUYVY as i32 =>
         {
-            (*pSrcPic).pData[0] = std::ptr::null_mut();
-            (*pSrcPic).pData[1] = std::ptr::null_mut();
-            (*pSrcPic).pData[2] = std::ptr::null_mut();
-            (*pSrcPic).pData[3] = std::ptr::null_mut();
-            (*pSrcPic).iStride[0] = CALC_BI_STRIDE(kiWidth, 16);
-            (*pSrcPic).iStride[1] = 0;
-            (*pSrcPic).iStride[2] = 0;
-            (*pSrcPic).iStride[3] = 0;
+            pSrcPic.pData[0] = std::ptr::null_mut();
+            pSrcPic.pData[1] = std::ptr::null_mut();
+            pSrcPic.pData[2] = std::ptr::null_mut();
+            pSrcPic.pData[3] = std::ptr::null_mut();
+            pSrcPic.iStride[0] = CALC_BI_STRIDE(kiWidth, 16);
+            pSrcPic.iStride[1] = 0;
+            pSrcPic.iStride[2] = 0;
+            pSrcPic.iStride[3] = 0;
         }
         cs if cs == VideoFormat::videoFormatRGB as i32
             || cs == VideoFormat::videoFormatBGR as i32 =>
         {
-            (*pSrcPic).pData[0] = std::ptr::null_mut();
-            (*pSrcPic).pData[1] = std::ptr::null_mut();
-            (*pSrcPic).pData[2] = std::ptr::null_mut();
-            (*pSrcPic).pData[3] = std::ptr::null_mut();
-            (*pSrcPic).iStride[0] = CALC_BI_STRIDE(kiWidth, 24);
-            (*pSrcPic).iStride[1] = 0;
-            (*pSrcPic).iStride[2] = 0;
-            (*pSrcPic).iStride[3] = 0;
+            pSrcPic.pData[0] = std::ptr::null_mut();
+            pSrcPic.pData[1] = std::ptr::null_mut();
+            pSrcPic.pData[2] = std::ptr::null_mut();
+            pSrcPic.pData[3] = std::ptr::null_mut();
+            pSrcPic.iStride[0] = CALC_BI_STRIDE(kiWidth, 24);
+            pSrcPic.iStride[1] = 0;
+            pSrcPic.iStride[2] = 0;
+            pSrcPic.iStride[3] = 0;
             if (kiColorspace & vflip_mask) != 0 {
-                (*pSrcPic).iColorFormat = kiColorspace & !vflip_mask;
+                pSrcPic.iColorFormat = kiColorspace & !vflip_mask;
             } else {
-                (*pSrcPic).iColorFormat = kiColorspace | vflip_mask;
+                pSrcPic.iColorFormat = kiColorspace | vflip_mask;
             }
         }
         cs if cs == VideoFormat::videoFormatBGRA as i32
@@ -2410,18 +2399,18 @@ pub unsafe fn InitPic(
             || cs == VideoFormat::videoFormatARGB as i32
             || cs == VideoFormat::videoFormatABGR as i32 =>
         {
-            (*pSrcPic).pData[0] = std::ptr::null_mut();
-            (*pSrcPic).pData[1] = std::ptr::null_mut();
-            (*pSrcPic).pData[2] = std::ptr::null_mut();
-            (*pSrcPic).pData[3] = std::ptr::null_mut();
-            (*pSrcPic).iStride[0] = kiWidth << 2;
-            (*pSrcPic).iStride[1] = 0;
-            (*pSrcPic).iStride[2] = 0;
-            (*pSrcPic).iStride[3] = 0;
+            pSrcPic.pData[0] = std::ptr::null_mut();
+            pSrcPic.pData[1] = std::ptr::null_mut();
+            pSrcPic.pData[2] = std::ptr::null_mut();
+            pSrcPic.pData[3] = std::ptr::null_mut();
+            pSrcPic.iStride[0] = kiWidth << 2;
+            pSrcPic.iStride[1] = 0;
+            pSrcPic.iStride[2] = 0;
+            pSrcPic.iStride[3] = 0;
             if (kiColorspace & vflip_mask) != 0 {
-                (*pSrcPic).iColorFormat = kiColorspace & !vflip_mask;
+                pSrcPic.iColorFormat = kiColorspace & !vflip_mask;
             } else {
-                (*pSrcPic).iColorFormat = kiColorspace | vflip_mask;
+                pSrcPic.iColorFormat = kiColorspace | vflip_mask;
             }
         }
         _ => return 2,
@@ -2789,11 +2778,7 @@ pub fn InitFrameCoding(
 
 /// Evaluates VAA scene change analysis, LTR feedback, and rate control constraints to classify frame coding type.
 ///
-/// # Safety
-/// `pEncCtx` must be non-null and initialized.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn DecideFrameType(
+pub fn DecideFrameType(
     pEncCtx: &mut sWelsEncCtx,
     kiSpatialNum: i8,
     kiDidx: i32,
@@ -2815,8 +2800,12 @@ pub unsafe fn DecideFrameType(
     let kiSpatialLayerNum = pEncCtx.param().iSpatialLayerNum;
     let kbEnableLtr = pEncCtx.param().bEnableLongTermReference;
     let kiLTRRefNum = pEncCtx.param().iLTRRefNum;
-    let pParamInternal =
-        std::ptr::addr_of_mut!((*ctx_param_raw(pEncCtx)).sDependencyLayers[kiDidx as usize]);
+    // S11.19: `param_mut()`, as in `UpdateFrameNum` (S11.7) — the record and
+    // the context's other fields are disjoint, and every context read this body
+    // makes is a scalar taken above.
+    let kbEncCurFrmAsIdrFlag =
+        pEncCtx.param().sDependencyLayers[kiDidx as usize].bEncCurFrmAsIdrFlag;
+    let kiFrameIndex = pEncCtx.param().sDependencyLayers[kiDidx as usize].iFrameIndex;
     let mut iFrameType: EVideoFrameType;
     let mut bSceneChangeFlag = false;
 
@@ -2834,7 +2823,7 @@ pub unsafe fn DecideFrameType(
         }
 
         if vaa_idr
-            || (*pParamInternal).bEncCurFrmAsIdrFlag
+            || kbEncCurFrmAsIdrFlag
             || (!kbEnableLtr && bSceneChangeFlag && !bSkipFrameFlag)
         {
             iFrameType = EVideoFrameType::videoFrameTypeIDR;
@@ -2869,7 +2858,7 @@ pub unsafe fn DecideFrameType(
         if iFrameType == EVideoFrameType::videoFrameTypeP && bSkipFrameFlag {
             iFrameType = EVideoFrameType::videoFrameTypeSkip;
         } else if iFrameType == EVideoFrameType::videoFrameTypeIDR {
-            (*pParamInternal).iCodingIndex = 0;
+            pEncCtx.param_mut().sDependencyLayers[kiDidx as usize].iCodingIndex = 0;
             pEncCtx.bCurFrameMarkedAsSceneLtr = true;
         }
     } else {
@@ -2879,14 +2868,14 @@ pub unsafe fn DecideFrameType(
         if !kbSceneChangeDetect
             || vaa_idr
             || ((kiSpatialNum as i32) < kiSpatialLayerNum)
-            || ((*pParamInternal).iFrameIndex < (VGOP_SIZE << 1))
+            || (kiFrameIndex < (VGOP_SIZE << 1))
         {
             bSceneChangeFlag = false;
         } else if let Some(pVaa) = pVaa {
             bSceneChangeFlag = pVaa.bSceneChangeFlag;
         }
 
-        iFrameType = if vaa_idr || bSceneChangeFlag || (*pParamInternal).bEncCurFrmAsIdrFlag {
+        iFrameType = if vaa_idr || bSceneChangeFlag || kbEncCurFrmAsIdrFlag {
             EVideoFrameType::videoFrameTypeIDR
         } else {
             EVideoFrameType::videoFrameTypeP
@@ -2895,7 +2884,7 @@ pub unsafe fn DecideFrameType(
         if iFrameType == EVideoFrameType::videoFrameTypeP && bSkipFrameFlag {
             iFrameType = EVideoFrameType::videoFrameTypeSkip;
         } else if iFrameType == EVideoFrameType::videoFrameTypeIDR {
-            (*pParamInternal).iCodingIndex = 0;
+            pEncCtx.param_mut().sDependencyLayers[kiDidx as usize].iCodingIndex = 0;
         }
     }
 
@@ -3270,18 +3259,14 @@ mod tests {
     }
 
     #[test]
-    // unsafe-cat: instrument(test)
-    #[allow(unsafe_code)]
     fn test_init_pic() {
         let mut src_pic = SSourcePicture::default();
-        let ret = unsafe {
-            InitPic(
-                &mut src_pic,
-                VideoFormat::videoFormatI420 as i32,
-                640,
-                480,
-            )
-        };
+        let ret = InitPic(
+            &mut src_pic,
+            VideoFormat::videoFormatI420 as i32,
+            640,
+            480,
+        );
         assert_eq!(ret, 0);
         assert_eq!(src_pic.iPicWidth, 640);
         assert_eq!(src_pic.iPicHeight, 480);
