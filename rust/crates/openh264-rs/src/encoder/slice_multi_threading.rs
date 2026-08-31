@@ -1360,8 +1360,18 @@ pub struct SliceJobHandle<'a> {
     /// compiler proves the per-worker disjointness the per-use re-derivation
     /// could only assert. Restored to its slot after the join.
     pBsBuf: &'a mut [u8],
-    /// This worker's bs scratch slot index — still carried because the slice
-    /// *claim* (`InitOneSliceInThread`) is by slot number, and the slice's
+    /// **This worker's slices — S11.21, the last structural seam.** The slice
+    /// bank was the one storage a fork body still reached through a raw root
+    /// (`slice_in_bank`, F71's shape): in the fixed modes *every* worker
+    /// resolves bank 0, so two of them retagging the `Vec` at once is a race
+    /// even though neither writes the `Vec` itself. The fix is the one S10.4
+    /// used for the macroblock grid and S11.1b for the bitstream pool — carve
+    /// before the spawn. Worker `k` codes slices `k, k+step, k+2*step, …`, so
+    /// the bank is distributed by that rule on the calling thread while the
+    /// layer is `&mut`, and each worker holds `&mut SSlice`s **no sibling can
+    /// name**. Disjointness is the compiler's, not a comment's.
+    pSlices: Vec<&'a mut SSlice>,
+    /// This worker's bs scratch slot index — still carried because the slice's
     /// `uiBufferIdx` must agree with the buffer above (asserted in the job).
     iBsSlot: i32,
     iFirstSlice: i32,
@@ -1497,6 +1507,7 @@ impl<'a> SliceJobHandle<'a> {
     fn new(
         pCtx: &'a sWelsEncCtx,
         pBsBuf: &'a mut [u8],
+        pSlices: Vec<&'a mut SSlice>,
         iBsSlot: i32,
         iFirstSlice: i32,
         iSliceStep: i32,
@@ -1521,7 +1532,7 @@ impl<'a> SliceJobHandle<'a> {
             iBsSlot,
             pSmt.uiThreadBsBufferNum
         );
-        Self { pCtx, pBsBuf, iBsSlot, iFirstSlice, iSliceStep, iSliceCount, bRecordsTime }
+        Self { pCtx, pBsBuf, pSlices, iBsSlot, iFirstSlice, iSliceStep, iSliceCount, bRecordsTime }
     }
 }
 
@@ -1597,25 +1608,26 @@ unsafe fn EncodeOneSliceInJob(
     iBsSlot: i32,
     bRecordsTime: bool,
     pSlotBuf: &mut [u8],
+    pSlices: &mut [&mut SSlice],
+    iFirstSlice: i32,
+    iSliceStep: i32,
 ) -> SliceJobResult {
     // ---- CWelsSliceEncodingTask::InitTask
     let eNalType = (*pCtx).eNalType;
     let eNalRefIdc = (*pCtx).eNalPriority;
     let bNeedPrefix = (*pCtx).bNeedPrefixNalFlag;
 
-    // **S10.3a: one derivation, threaded.** `InitOneSliceInThread` hands the slice
-    // back by reference now, so this body's eleven raw operations — an out-pointer,
-    // three `addr_of_mut!((*pSlice).sSliceBs)`, five `&mut *pSlice` reborrows and a
-    // null test — are all gone. Nothing about which slice this worker touches
-    // changed: the resolution is still `slice_in_bank`'s, inside that function.
-    let Some(pSlice) = InitOneSliceInThread(
-        pCtx,
-        iBsSlot,
-        (*pCtx).uiDependencyId as i32,
-        iSliceIdx,
-    ) else {
+    // **S11.21: the slice comes from this worker's own list.** It used to be
+    // resolved out of the shared bank by index (`slice_in_bank`'s raw root);
+    // the fork entry carves that bank before spawning, so the worker already
+    // holds `&mut SSlice`s no sibling can name. `iSliceIdx` advances by
+    // `iSliceStep` from `iFirstSlice`, so this worker's `n`th slice is at
+    // position `(iSliceIdx - iFirstSlice) / iSliceStep` in its list.
+    let kiLocal = ((iSliceIdx - iFirstSlice) / iSliceStep) as usize;
+    let Some(pSlice) = pSlices.get_mut(kiLocal) else {
         return SliceJobResult { iResult: ENC_RETURN_UNEXPECTED, bInitFailed: true };
     };
+    InitOneSliceInThread(pCtx, pSlice, iBsSlot, iSliceIdx);
     let iReturn = SetSliceBoundaryInfo(current_layer_ref(pCtx), pSlice, iSliceIdx);
     if iReturn != ENC_RETURN_SUCCESS {
         return SliceJobResult { iResult: iReturn, bInitFailed: true };
@@ -1745,16 +1757,37 @@ pub unsafe fn EncodeFixedSlicesForked(pCtx: &mut sWelsEncCtx, kiSliceCount: i32)
             .collect()
     };
 
+    // **S11.21: the slice bank is carved the same way — the last structural
+    // seam.** In every fixed slice mode all workers resolve bank 0 (F71), so
+    // the bank leaves the layer here, while it is still `&mut`, and its slices
+    // are distributed by the rule the fork already uses: worker `k` codes
+    // slices `k, k+iWidth, k+2*iWidth, …`, which is `i % iWidth == k`. Every
+    // slice reaches exactly one worker because `iter_mut().enumerate()` yields
+    // each element once — the compiler carries that fact, where
+    // `slice_in_bank`'s raw could only assert it.
+    let mut vTakenBank: Vec<SSlice> = {
+        let pCurDq = crate::encoder::svc_encode_slice::current_layer_mut(pCtx)
+            .expect("the frame's current layer is stamped");
+        std::mem::take(&mut pCurDq.sSliceBufferInfo[0].pSliceBuffer)
+    };
+
     let mut iErr = ENC_RETURN_SUCCESS;
     {
-        // One handle per worker, each carrying its own slot and that slot's
-        // taken buffer — constructed here, on the calling thread, so the slot
-        // bound is checked before anything spawns.
+        // One handle per worker, each carrying its own slot, that slot's taken
+        // buffer, and its own slices — constructed here, on the calling thread,
+        // so the slot bound is checked before anything spawns.
         let pCtx: &sWelsEncCtx = pCtx;
+        let mut vPerWorker: Vec<Vec<&mut SSlice>> =
+            (0..iWidth as usize).map(|_| Vec::new()).collect();
+        for (i, slc) in vTakenBank.iter_mut().enumerate() {
+            if (i as i32) < kiSliceCount {
+                vPerWorker[i % iWidth as usize].push(slc);
+            }
+        }
         let mut jobs: Vec<SliceJobHandle<'_>> = Vec::with_capacity(iWidth as usize);
-        for (k, buf) in vTakenBsBufs.iter_mut().enumerate() {
+        for ((k, buf), slices) in vTakenBsBufs.iter_mut().enumerate().zip(vPerWorker) {
             let k = k as i32;
-            jobs.push(SliceJobHandle::new(pCtx, buf.as_mut_slice(), k, k, iWidth, kiSliceCount, bRecordsTime));
+            jobs.push(SliceJobHandle::new(pCtx, buf.as_mut_slice(), slices, k, k, iWidth, kiSliceCount, bRecordsTime));
         }
 
         std::thread::scope(|s| {
@@ -1773,6 +1806,9 @@ pub unsafe fn EncodeFixedSlicesForked(pCtx: &mut sWelsEncCtx, kiSliceCount: i32)
                             job.iBsSlot,
                             job.bRecordsTime,
                             &mut *job.pBsBuf,
+                            &mut job.pSlices,
+                            job.iFirstSlice,
+                            job.iSliceStep,
                         );
                         if !r.bInitFailed && r.iResult != ENC_RETURN_SUCCESS {
                             iWorkerErr |= r.iResult;
@@ -1802,6 +1838,12 @@ pub unsafe fn EncodeFixedSlicesForked(pCtx: &mut sWelsEncCtx, kiSliceCount: i32)
         for (k, buf) in vTakenBsBufs.into_iter().enumerate() {
             pSmt.pThreadBsBuffer[k] = buf;
         }
+    }
+    {
+        // S11.21: the bank goes back with them.
+        let pCurDq = crate::encoder::svc_encode_slice::current_layer_mut(pCtx)
+            .expect("the frame's current layer is stamped");
+        pCurDq.sSliceBufferInfo[0].pSliceBuffer = vTakenBank;
     }
 
     iErr
@@ -1957,10 +1999,9 @@ unsafe fn EncodeOnePartitionSizeLimited(
     // encode loop keeps `slice_in_bank`'s raw. That split is the honest shape of
     // step 3: the fixed modes partition, the size-limited mode reallocates.
     {
-        let Some(pSlice) = InitOneSliceInThread(
+        let Some(pSlice) = crate::encoder::svc_encode_slice::ResolveSliceInOwnBank(
             pCtx,
             iBsSlot,
-            (*pCtx).uiDependencyId as i32,
             iPartitionIdx,
         ) else {
             return SliceJobResult { iResult: ENC_RETURN_UNEXPECTED, bInitFailed: true };
@@ -2036,10 +2077,9 @@ unsafe fn EncodeOnePartitionSizeLimited(
             // no allow on its own (the reallocation and the bank re-resolve stay),
             // so it is left for step 3's dynamic half.
             let mut pNext: *mut SSlice = std::ptr::null_mut();
-            let Some(pNextRef) = InitOneSliceInThread(
+            let Some(pNextRef) = crate::encoder::svc_encode_slice::ResolveSliceInOwnBank(
                 pCtx,
                 iBsSlot,
-                (*pCtx).uiDependencyId as i32,
                 iLocalSliceIdx,
             ) else {
                 return ENC_RETURN_UNEXPECTED;
@@ -2162,7 +2202,10 @@ pub unsafe fn EncodeSizeLimitedSlicesForked(pCtx: &mut sWelsEncCtx, kiPartitionC
         let mut jobs: Vec<SliceJobHandle<'_>> = Vec::with_capacity(iWidth as usize);
         for (k, buf) in vTakenBsBufs.iter_mut().enumerate() {
             let k = k as i32;
-            jobs.push(SliceJobHandle::new(pCtx, buf.as_mut_slice(), k, k, iWidth, kiPartitionCnt, true));
+            // S11.21: the size-limited fork carries no carved slices — it
+            // resolves from its own bank inside the fork, because that bank
+            // grows there (`ResolveSliceInOwnBank`).
+            jobs.push(SliceJobHandle::new(pCtx, buf.as_mut_slice(), Vec::new(), k, k, iWidth, kiPartitionCnt, true));
         }
 
         std::thread::scope(|s| {
