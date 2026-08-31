@@ -1375,6 +1375,14 @@ pub struct SliceJobHandle<'a> {
     /// layer is `&mut`, and each worker holds `&mut SSlice`s **no sibling can
     /// name**. Disjointness is the compiler's, not a comment's.
     pSlices: Vec<&'a mut SSlice>,
+    /// **This worker's macroblock windows — S11.27, the grid's pre-fork carve.**
+    /// One per slice this worker codes (fixed modes, paired 1:1 with `pSlices`),
+    /// or the single partition run (size-limited). Each window is a disjoint
+    /// `&mut [SMB]` peeled off the taken grid by S10.4's `split_at_mut` chain,
+    /// so what `mb_window`'s `# Safety` asserted — "the caller owns these
+    /// records exclusively" — is the compiler's fact here, and the coding chain
+    /// and the deblocking walker both write through it.
+    pMbs: Vec<crate::safe::mb_grid::MbWindow<'a, SMB>>,
     /// This worker's bs scratch slot index — still carried because the slice's
     /// `uiBufferIdx` must agree with the buffer above (asserted in the job).
     iBsSlot: i32,
@@ -1512,6 +1520,7 @@ impl<'a> SliceJobHandle<'a> {
         pCtx: &'a sWelsEncCtx,
         pBsBuf: &'a mut [u8],
         pSlices: Vec<&'a mut SSlice>,
+        pMbs: Vec<crate::safe::mb_grid::MbWindow<'a, SMB>>,
         iBsSlot: i32,
         iFirstSlice: i32,
         iSliceStep: i32,
@@ -1536,7 +1545,7 @@ impl<'a> SliceJobHandle<'a> {
             iBsSlot,
             pSmt.uiThreadBsBufferNum
         );
-        Self { pCtx, pBsBuf, pSlices, iBsSlot, iFirstSlice, iSliceStep, iSliceCount, bRecordsTime }
+        Self { pCtx, pBsBuf, pSlices, pMbs, iBsSlot, iFirstSlice, iSliceStep, iSliceCount, bRecordsTime }
     }
 }
 
@@ -1613,6 +1622,11 @@ unsafe fn EncodeOneSliceInJob(
     bRecordsTime: bool,
     pSlotBuf: &mut [u8],
     pSlices: &mut [&mut SSlice],
+    // **S11.27: this worker's macroblock windows, one per slice it codes,
+    // indexed exactly as `pSlices` is.** Carved before the fork by the same
+    // `split_at_mut` chain `UpdateMbMapForked` uses (S10.4), so the `&mut`
+    // records are the compiler's fact, not `mb_window`'s claim.
+    pMbs: &mut [crate::safe::mb_grid::MbWindow<'_, SMB>],
     iFirstSlice: i32,
     iSliceStep: i32,
 ) -> SliceJobResult {
@@ -1664,7 +1678,8 @@ unsafe fn EncodeOneSliceInJob(
         }
         WelsLoadNalForSlice(&mut pSlice.sSliceBs, eNalType as i32, eNalRefIdc as i32);
         debug_assert_eq!(iSliceIdx, pSlice.iSliceIdx);
-        let mut iReturn = WelsCodeOneSlice(pCtx, pSlice, eNalType as i32, &mut *pSliceBsBuf, &mut pCtxOutBs);
+        let pMbRun = &mut pMbs[kiLocal];
+        let mut iReturn = WelsCodeOneSlice(pCtx, pSlice, eNalType as i32, &mut *pSliceBsBuf, &mut pCtxOutBs, pMbRun);
         if ENC_RETURN_SUCCESS != iReturn {
             return iReturn;
         }
@@ -1679,33 +1694,20 @@ unsafe fn EncodeOneSliceInJob(
         let pfDeblockingFilterSlice =
             (*pCtx).func_list().pfDeblocking.pfDeblockingFilterSlice.unwrap();
         {
+            // **S11.27: the S11.26 mint is dead — the walker's window is the
+            // worker's own carved run**, the same one the coding chain just
+            // wrote through. `uiFilterIdc == 1` (MT validation rewrites idc
+            // 0 → 2, `encoder_ext.rs:1506`) confines walk and neighbour reads
+            // to it, and the run came from the pre-fork `split_at_mut` — so
+            // this block is safe code, as S11.26 scheduled.
             let pCurDq = current_layer_ref(pCtx).expect("the frame's current layer is stamped");
             if let Some(view) = crate::encoder::svc_encode_slice::layer_rec_view(pCurDq) {
-                // **S11.26: the walker's window is this slice's own run.** The
-                // filter used to mint `[0 ..= cur]` for itself; every dispatch
-                // through this slot runs with `uiFilterIdc == 1` (MT validation
-                // rewrites idc 0 → 2, `encoder_ext.rs:1506`), which confines
-                // both the walk and the neighbour reads to the coded slice's
-                // records — so that run is what the claim covers now.
-                //
-                // The bounds come from the layer's pre-fork arrays, not from
-                // the slice's own `iCountMbNumInSlice` copy: the mid-row fork
-                // probe showed that copy is not a run descriptor at deblock
-                // time (a realloc-fresh slice carries 0). These arrays are what
-                // built the slice map the walk obeys — and what the carve will
-                // `split_at_mut` by, which is when this mint dies: handed a
-                // carved `&mut [SMB]` per worker, this block becomes safe code.
-                let kiFirst = pCurDq.pFirstMbIdxOfSlice[iSliceIdx as usize];
-                let kiCount = pCurDq.pCountMbNumInSlice[iSliceIdx as usize];
-                let mut sMbRun = unsafe {
-                    crate::encoder::svc_encode_slice::mb_window(pCurDq, kiFirst, kiCount, kiFirst)
-                };
                 pfDeblockingFilterSlice(
                     view,
                     &pCurDq.sSliceEncCtx,
                     &pCurDq.iCsStride,
                     pSlice,
-                    &mut sMbRun,
+                    &mut pMbs[kiLocal],
                 );
             }
         }
@@ -1802,6 +1804,28 @@ pub unsafe fn EncodeFixedSlicesForked(pCtx: &mut sWelsEncCtx, kiSliceCount: i32)
         std::mem::take(&mut pCurDq.sSliceBufferInfo[0].pSliceBuffer)
     };
 
+    // **S11.27: the macroblock grid is carved beside the bank** — S10.4's
+    // `split_at_mut` chain over `[pFirstMbIdxOfSlice[i] .. +pCountMbNumInSlice[i])`,
+    // the ranges the slice map itself was built from, and final before the fork
+    // (`SetSliceBoundaryInfo`, inside the worker, only *reads* them). Every
+    // slice index in `0..kiSliceCount` gets a window at its own position — no
+    // filtering and no reordering, because the job pairs windows with slices by
+    // `kiLocal` arithmetic, and the first carve attempt's mispairing came from
+    // exactly a filtered, re-sorted list.
+    let (vSliceRanges, kiGridWidth) = {
+        let pCurDq = crate::encoder::svc_encode_slice::current_layer_ref(pCtx)
+            .expect("the frame's current layer is stamped");
+        let r: Vec<(i32, i32)> = (0..kiSliceCount as usize)
+            .map(|i| (pCurDq.pFirstMbIdxOfSlice[i], pCurDq.pCountMbNumInSlice[i]))
+            .collect();
+        (r, pCurDq.sMbDataP.dims().mb_width())
+    };
+    let mut sTakenMbData = {
+        let pCurDq = crate::encoder::svc_encode_slice::current_layer_mut(pCtx)
+            .expect("the frame's current layer is stamped");
+        std::mem::replace(&mut pCurDq.sMbDataP, crate::safe::mb_grid::MbArray::empty())
+    };
+
     let mut iErr = ENC_RETURN_SUCCESS;
     {
         // One handle per worker, each carrying its own slot, that slot's taken
@@ -1815,10 +1839,41 @@ pub unsafe fn EncodeFixedSlicesForked(pCtx: &mut sWelsEncCtx, kiSliceCount: i32)
                 vPerWorker[i % iWidth as usize].push(slc);
             }
         }
+        // The peel: slice `i`'s records leave the taken grid as one chunk, in
+        // index order — the ranges are raster-consecutive in every fixed mode,
+        // and the assert is `mb_window`'s old `# Safety` sentence as a panic
+        // that names the coordinates.
+        let mut vMbPerWorker: Vec<Vec<crate::safe::mb_grid::MbWindow<'_, SMB>>> =
+            (0..iWidth as usize).map(|_| Vec::new()).collect();
+        {
+            let mut rest: &mut [SMB] = sTakenMbData.as_mut_slice();
+            let mut cursor = 0i32;
+            for (i, &(first, count)) in vSliceRanges.iter().enumerate() {
+                assert!(
+                    first >= cursor && count > 0,
+                    "slice {i} claims mbs [{first}..{}) against a carve cursor at {cursor} — \
+                     the macroblock partition is not disjoint raster order",
+                    first as i64 + count as i64,
+                );
+                let (_gap, tail) = rest.split_at_mut((first - cursor) as usize);
+                let (chunk, tail) = tail.split_at_mut(count as usize);
+                vMbPerWorker[i % iWidth as usize].push(crate::safe::mb_grid::MbWindow::new(
+                    chunk,
+                    first as usize,
+                    kiGridWidth,
+                    first as usize,
+                ));
+                rest = tail;
+                cursor = first + count;
+            }
+        }
+
         let mut jobs: Vec<SliceJobHandle<'_>> = Vec::with_capacity(iWidth as usize);
-        for ((k, buf), slices) in vTakenBsBufs.iter_mut().enumerate().zip(vPerWorker) {
+        for (((k, buf), slices), mbs) in
+            vTakenBsBufs.iter_mut().enumerate().zip(vPerWorker).zip(vMbPerWorker)
+        {
             let k = k as i32;
-            jobs.push(SliceJobHandle::new(pCtx, buf.as_mut_slice(), slices, k, k, iWidth, kiSliceCount, bRecordsTime));
+            jobs.push(SliceJobHandle::new(pCtx, buf.as_mut_slice(), slices, mbs, k, k, iWidth, kiSliceCount, bRecordsTime));
         }
 
         std::thread::scope(|s| {
@@ -1838,6 +1893,7 @@ pub unsafe fn EncodeFixedSlicesForked(pCtx: &mut sWelsEncCtx, kiSliceCount: i32)
                             job.bRecordsTime,
                             &mut *job.pBsBuf,
                             &mut job.pSlices,
+                            &mut job.pMbs,
                             job.iFirstSlice,
                             job.iSliceStep,
                         );
@@ -1871,10 +1927,12 @@ pub unsafe fn EncodeFixedSlicesForked(pCtx: &mut sWelsEncCtx, kiSliceCount: i32)
         }
     }
     {
-        // S11.21: the bank goes back with them.
+        // S11.21: the bank goes back with them. S11.27: so does the grid — a
+        // pointer move each way, contents carried.
         let pCurDq = crate::encoder::svc_encode_slice::current_layer_mut(pCtx)
             .expect("the frame's current layer is stamped");
         pCurDq.sSliceBufferInfo[0].pSliceBuffer = vTakenBank;
+        pCurDq.sMbDataP = sTakenMbData;
     }
 
     iErr
@@ -2017,6 +2075,9 @@ unsafe fn EncodeOnePartitionSizeLimited(
     iPartitionIdx: i32,
     iBsSlot: i32,
     pSlotBuf: &mut [u8],
+    // S11.27: this partition's records, carved before the fork — every slice
+    // this worker discovers lies inside the run.
+    pMbs: &mut crate::safe::mb_grid::MbWindow<'_, SMB>,
 ) -> SliceJobResult {
     // ---- InitTask (base), minus the slot claim
     let eNalType = (*pCtx).eNalType;
@@ -2137,7 +2198,7 @@ unsafe fn EncodeOnePartitionSizeLimited(
             WelsLoadNalForSlice(&mut *pSliceBs, eNalType as i32, eNalRefIdc as i32);
 
             debug_assert_eq!(iLocalSliceIdx, (*pSlice).iSliceIdx);
-            let mut iRet = WelsCodeOneSlice(pCtx, &mut *pSlice, eNalType as i32, &mut *pSliceBsBuf, &mut pCtxOutBs);
+            let mut iRet = WelsCodeOneSlice(pCtx, &mut *pSlice, eNalType as i32, &mut *pSliceBsBuf, &mut pCtxOutBs, pMbs);
             if ENC_RETURN_SUCCESS != iRet {
                 return iRet;
             }
@@ -2151,27 +2212,18 @@ unsafe fn EncodeOnePartitionSizeLimited(
             }
             let pfDeblockingFilterSlice =
                 (*pCtx).func_list().pfDeblocking.pfDeblockingFilterSlice.unwrap();
-            // S11.26: the window is this worker's whole *partition* — the unit
-            // the size-limited fork owns for the frame, and the bound inside
-            // which every slice it discovers lives. A slice-sized window is not
-            // derivable here: slice extents are discovered while coding, and
-            // the slice's `iCountMbNumInSlice` is not a run descriptor at this
-            // point (the mid-row probe's verdict). `uiFilterIdc == 1` keeps the
-            // walk and the neighbour reads inside the slice, hence inside the
-            // partition. See `EncodeOneSliceInJob` for the claim and its
-            // scheduled death at the carve.
+            // S11.27: the S11.26 mint is dead — the walker reuses the
+            // partition run the coding chain just wrote through, carved before
+            // the fork. `uiFilterIdc == 1` keeps the walk and the neighbour
+            // reads inside the slice, hence inside the run; safe code, as
+            // S11.26 scheduled.
             if let Some(view) = crate::encoder::svc_encode_slice::layer_rec_view(&*pCurDq) {
-                let kiFirst = kiFirstMbInPartition;
-                let kiCount = kiEndMbIdxInPartition - kiFirstMbInPartition + 1;
-                let mut sMbRun = unsafe {
-                    crate::encoder::svc_encode_slice::mb_window(&*pCurDq, kiFirst, kiCount, kiFirst)
-                };
                 pfDeblockingFilterSlice(
                     view,
                     &(*pCurDq).sSliceEncCtx,
                     &(*pCurDq).iCsStride,
                     &mut *pSlice,
-                    &mut sMbRun,
+                    pMbs,
                 );
             }
 
@@ -2249,16 +2301,67 @@ pub unsafe fn EncodeSizeLimitedSlicesForked(pCtx: &mut sWelsEncCtx, kiPartitionC
             .collect()
     };
 
+    // **S11.27: the grid is carved by *partition*.** Slice extents are
+    // discovered while coding under `SM_SIZELIMITED_SLICE`, so per-slice runs
+    // are not knowable here — but worker `p` owns partition `p` for the whole
+    // frame (the static-partition argument above), and
+    // `FirstMbIdxOfPartition`/`EndMbIdxOfPartition` are stamped before the
+    // fork. One contiguous run each; every slice a worker discovers lies
+    // inside its run, which is what lets the coding chain, the boundary
+    // walker and the deblocking all write through the same window.
+    let (vPartRanges, kiGridWidth) = {
+        let pCurDq = crate::encoder::svc_encode_slice::current_layer_ref(pCtx)
+            .expect("the frame's current layer is stamped");
+        let r: Vec<(i32, i32)> = (0..iWidth as usize)
+            .map(|p| {
+                let first = pCurDq.FirstMbIdxOfPartition[p];
+                let end = pCurDq.EndMbIdxOfPartition[p];
+                (first, end - first + 1)
+            })
+            .collect();
+        (r, pCurDq.sMbDataP.dims().mb_width())
+    };
+    let mut sTakenMbData = {
+        let pCurDq = crate::encoder::svc_encode_slice::current_layer_mut(pCtx)
+            .expect("the frame's current layer is stamped");
+        std::mem::replace(&mut pCurDq.sMbDataP, crate::safe::mb_grid::MbArray::empty())
+    };
+
     let mut iErr = ENC_RETURN_SUCCESS;
     {
         let pCtx: &sWelsEncCtx = pCtx;
+        let mut vMbPerWorker: Vec<Vec<crate::safe::mb_grid::MbWindow<'_, SMB>>> =
+            (0..iWidth as usize).map(|_| Vec::new()).collect();
+        {
+            let mut rest: &mut [SMB] = sTakenMbData.as_mut_slice();
+            let mut cursor = 0i32;
+            for (p, &(first, count)) in vPartRanges.iter().enumerate() {
+                assert!(
+                    first >= cursor && count > 0,
+                    "partition {p} claims mbs [{first}..{}) against a carve cursor at {cursor} — \
+                     the partition map is not disjoint raster order",
+                    first as i64 + count as i64,
+                );
+                let (_gap, tail) = rest.split_at_mut((first - cursor) as usize);
+                let (chunk, tail) = tail.split_at_mut(count as usize);
+                vMbPerWorker[p].push(crate::safe::mb_grid::MbWindow::new(
+                    chunk,
+                    first as usize,
+                    kiGridWidth,
+                    first as usize,
+                ));
+                rest = tail;
+                cursor = first + count;
+            }
+        }
         let mut jobs: Vec<SliceJobHandle<'_>> = Vec::with_capacity(iWidth as usize);
-        for (k, buf) in vTakenBsBufs.iter_mut().enumerate() {
+        for ((k, buf), mbs) in vTakenBsBufs.iter_mut().enumerate().zip(vMbPerWorker) {
             let k = k as i32;
             // S11.21: the size-limited fork carries no carved slices — it
             // resolves from its own bank inside the fork, because that bank
-            // grows there (`ResolveSliceInOwnBank`).
-            jobs.push(SliceJobHandle::new(pCtx, buf.as_mut_slice(), Vec::new(), k, k, iWidth, kiPartitionCnt, true));
+            // grows there (`ResolveSliceInOwnBank`). S11.27: it does carry its
+            // partition's one macroblock window.
+            jobs.push(SliceJobHandle::new(pCtx, buf.as_mut_slice(), Vec::new(), mbs, k, k, iWidth, kiPartitionCnt, true));
         }
 
         std::thread::scope(|s| {
@@ -2266,7 +2369,13 @@ pub unsafe fn EncodeSizeLimitedSlicesForked(pCtx: &mut sWelsEncCtx, kiPartitionC
             for job in jobs {
                 handles.push(s.spawn(move || {
                     let mut job = job;
-                    let r = EncodeOnePartitionSizeLimited(&*job.pCtx, job.iFirstSlice, job.iBsSlot, &mut *job.pBsBuf);
+                    let r = EncodeOnePartitionSizeLimited(
+                        &*job.pCtx,
+                        job.iFirstSlice,
+                        job.iBsSlot,
+                        &mut *job.pBsBuf,
+                        &mut job.pMbs[0],
+                    );
                     if !r.bInitFailed && r.iResult != ENC_RETURN_SUCCESS {
                         r.iResult
                     } else {
@@ -2288,6 +2397,12 @@ pub unsafe fn EncodeSizeLimitedSlicesForked(pCtx: &mut sWelsEncCtx, kiPartitionC
         for (k, buf) in vTakenBsBufs.into_iter().enumerate() {
             pSmt.pThreadBsBuffer[k] = buf;
         }
+    }
+    {
+        // S11.27: the grid goes back with them.
+        let pCurDq = crate::encoder::svc_encode_slice::current_layer_mut(pCtx)
+            .expect("the frame's current layer is stamped");
+        pCurDq.sMbDataP = sTakenMbData;
     }
 
     iErr
