@@ -2424,20 +2424,22 @@ pub fn IsSameMv(sMv0: &SMVUnitXY, sMv1: &SMVUnitXY) -> bool {
     sMv0.iMvX == sMv1.iMvX && sMv0.iMvY == sMv1.iMvY
 }
 
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn TryModeMerge(
+pub fn TryModeMerge(
     pMbCache: &mut SMbCache,
     pWelsMd: &mut SWelsMD<'_>,
     pCurMb: &mut SMB,
 ) -> bool {
-    let pMe8x8 = (*pWelsMd).sMe.sMe8x8.as_ptr();
+    // S11.2e: the raw existed to hold `sMe8x8` shared while writing `sMe16x8` /
+    // `sMe8x16` — three **disjoint fields** of `sMe`, which the compiler grants
+    // once they are destructured rather than reached through the whole struct.
+    // The reads are plain array indexing; nothing here needed a pointer.
+    let crate::encoder::md::SWelsMD_sMe { sMe8x8, sMe16x8, sMe8x16, .. } = &mut pWelsMd.sMe;
 
-    let bSameMv16x8_0 = IsSameMv(&(*pMe8x8.add(0)).sMv, &(*pMe8x8.add(1)).sMv);
-    let bSameMv16x8_1 = IsSameMv(&(*pMe8x8.add(2)).sMv, &(*pMe8x8.add(3)).sMv);
+    let bSameMv16x8_0 = IsSameMv(&sMe8x8[0].sMv, &sMe8x8[1].sMv);
+    let bSameMv16x8_1 = IsSameMv(&sMe8x8[2].sMv, &sMe8x8[3].sMv);
 
-    let bSameMv8x16_0 = IsSameMv(&(*pMe8x8.add(0)).sMv, &(*pMe8x8.add(2)).sMv);
-    let bSameMv8x16_1 = IsSameMv(&(*pMe8x8.add(1)).sMv, &(*pMe8x8.add(3)).sMv);
+    let bSameMv8x16_0 = IsSameMv(&sMe8x8[0].sMv, &sMe8x8[2].sMv);
+    let bSameMv8x16_1 = IsSameMv(&sMe8x8[1].sMv, &sMe8x8[3].sMv);
 
     let bSameRefIdx16x8_0 = true;
     let bSameRefIdx16x8_1 = true;
@@ -2451,17 +2453,19 @@ pub unsafe fn TryModeMerge(
     match iSameMv {
         2 => {
             (*pCurMb).uiMbType = MB_TYPE_16x8;
-            MergeSub16Me(&*pMe8x8.add(0), &*pMe8x8.add(1), &mut (*pWelsMd).sMe.sMe16x8[0]);
-            MergeSub16Me(&*pMe8x8.add(2), &*pMe8x8.add(3), &mut (*pWelsMd).sMe.sMe16x8[1]);
-            PredInter16x8Mv(&(*pMbCache).sMvComponents, 0, 0, &mut (*pWelsMd).sMe.sMe16x8[0].sMvp);
-            PredInter16x8Mv(&(*pMbCache).sMvComponents, 8, 0, &mut (*pWelsMd).sMe.sMe16x8[1].sMvp);
+            let (m0, m1) = sMe16x8.split_at_mut(1);
+            MergeSub16Me(&sMe8x8[0], &sMe8x8[1], &mut m0[0]);
+            MergeSub16Me(&sMe8x8[2], &sMe8x8[3], &mut m1[0]);
+            PredInter16x8Mv(&pMbCache.sMvComponents, 0, 0, &mut m0[0].sMvp);
+            PredInter16x8Mv(&pMbCache.sMvComponents, 8, 0, &mut m1[0].sMvp);
         }
         1 => {
             (*pCurMb).uiMbType = MB_TYPE_8x16;
-            MergeSub16Me(&*pMe8x8.add(0), &*pMe8x8.add(2), &mut (*pWelsMd).sMe.sMe8x16[0]);
-            MergeSub16Me(&*pMe8x8.add(1), &*pMe8x8.add(3), &mut (*pWelsMd).sMe.sMe8x16[1]);
-            PredInter8x16Mv(&(*pMbCache).sMvComponents, 0, 0, &mut (*pWelsMd).sMe.sMe8x16[0].sMvp);
-            PredInter8x16Mv(&(*pMbCache).sMvComponents, 4, 0, &mut (*pWelsMd).sMe.sMe8x16[1].sMvp);
+            let (m0, m1) = sMe8x16.split_at_mut(1);
+            MergeSub16Me(&sMe8x8[0], &sMe8x8[2], &mut m0[0]);
+            MergeSub16Me(&sMe8x8[1], &sMe8x8[3], &mut m1[0]);
+            PredInter8x16Mv(&pMbCache.sMvComponents, 0, 0, &mut m0[0].sMvp);
+            PredInter8x16Mv(&pMbCache.sMvComponents, 4, 0, &mut m1[0].sMvp);
         }
         _ => {}
     }
