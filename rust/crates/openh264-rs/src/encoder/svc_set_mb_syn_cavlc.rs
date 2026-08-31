@@ -406,16 +406,16 @@ pub fn WriteBlockResidualCavlc(
 /// Encodes macroblock prediction headers (macroblock type, intra modes, MVDs) for CAVLC.
 ///
 /// Matches `void WelsSpatialWriteMbPred (sWelsEncCtx* pEncCtx, SSlice* pSlice, SMB* pCurMb)`
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
-pub unsafe fn WelsSpatialWriteMbPred(
+pub fn WelsSpatialWriteMbPred(
     pEncCtx: &sWelsEncCtx,
     pSlice: &mut SSlice,
     pCurMb: &mut SMB,
+    pSliceBsBuf: &mut [u8],
+    pCtxOutBs: &mut Option<&mut BsWriter>,
 ) {
     let pMbCache = &mut (*pSlice).sMbCacheInfo;
-    let pBs = crate::encoder::svc_encode_slice::slice_writer(pEncCtx, std::ptr::addr_of_mut!((*pSlice).sSliceBs));
-    let buf = crate::encoder::svc_encode_slice::slice_bs_buffer(pEncCtx, std::ptr::addr_of_mut!((*pSlice).sSliceBs), (*pSlice).uiBufferIdx as usize);
+    let pBs = crate::encoder::svc_encode_slice::slice_bs_writer(&mut pSlice.sSliceBs, pCtxOutBs);
+    let buf = pSliceBsBuf;
     let pSliceHeadExt = &mut (*pSlice).sSliceHeaderExt;
     let iNumRefIdxl0ActiveMinus1 = (pSliceHeadExt.sSliceHeader.uiNumRefIdxL0Active as i32) - 1;
 
@@ -528,16 +528,16 @@ pub unsafe fn WelsSpatialWriteMbPred(
 /// Encodes 8x8 sub-macroblock prediction headers for CAVLC.
 ///
 /// Matches `void WelsSpatialWriteSubMbPred (sWelsEncCtx* pEncCtx, SSlice* pSlice, SMB* pCurMb)`
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
-pub unsafe fn WelsSpatialWriteSubMbPred(
+pub fn WelsSpatialWriteSubMbPred(
     pEncCtx: &sWelsEncCtx,
     pSlice: &mut SSlice,
     pCurMb: &mut SMB,
+    pSliceBsBuf: &mut [u8],
+    pCtxOutBs: &mut Option<&mut BsWriter>,
 ) {
     let pMbCache = &mut (*pSlice).sMbCacheInfo;
-    let pBs = crate::encoder::svc_encode_slice::slice_writer(pEncCtx, std::ptr::addr_of_mut!((*pSlice).sSliceBs));
-    let buf = crate::encoder::svc_encode_slice::slice_bs_buffer(pEncCtx, std::ptr::addr_of_mut!((*pSlice).sSliceBs), (*pSlice).uiBufferIdx as usize);
+    let pBs = crate::encoder::svc_encode_slice::slice_bs_writer(&mut pSlice.sSliceBs, pCtxOutBs);
+    let buf = pSliceBsBuf;
     let pSliceHeadExt = &mut (*pSlice).sSliceHeaderExt;
 
     let iNumRefIdxl0ActiveMinus1 = (pSliceHeadExt.sSliceHeader.uiNumRefIdxL0Active as i32) - 1;
@@ -671,15 +671,15 @@ pub unsafe fn WelsSpatialWriteMbSyn(
     pEncCtx: &sWelsEncCtx,
     pSlice: &mut SSlice,
     mbs: &mut crate::safe::mb_grid::MbWindow<'_, SMB>,
+    pSliceBsBuf: &mut [u8],
+    pCtxOutBs: &mut Option<&mut BsWriter>,
 ) -> i32 {
-    // **Derived at each use, not once at the top** — the ordering class session B
-    // closed for the other writers and the second encode probe (CAVLC + fine mode
-    // decision, T6.C2) found here on its first execution. `WelsSpatialWriteMbPred`
-    // and `WelsSpatialWriteSubMbPred` re-derive both the frame buffer and the
-    // slice's `sMbCacheInfo` for themselves, so a `&mut` of either taken before
-    // Step 1 is invalidated by Step 1 and used again in Steps 2-4. This is not a
-    // spelling: the borrow has to be taken after the call that pops it.
-    let pBs = crate::encoder::svc_encode_slice::slice_writer(pEncCtx, std::ptr::addr_of_mut!((*pSlice).sSliceBs));
+    // **The writer is minted at each use-cluster, not once at the top** — the
+    // ordering class session B closed (T6.C2's probe found it here first): the
+    // pred writers take `&mut *pSlice`, which would pop a slice-resident writer
+    // held across them. The buffer needs no such care since S11.1a: it arrives
+    // threaded, borrows nothing of the slice or the context, and survives every
+    // reborrow below.
     let kuiChromaQpIndexOffset = (*layer_pps(pEncCtx, current_layer(pEncCtx))).uiChromaQpIndexOffset;
 
     if IS_SKIP(mbs.cur().uiMbType) {
@@ -691,29 +691,29 @@ pub unsafe fn WelsSpatialWriteMbSyn(
         ENC_RETURN_SUCCESS
     } else {
         if (*pEncCtx).eSliceType != EWelsSliceType::I_SLICE {
-            let buf = crate::encoder::svc_encode_slice::slice_bs_buffer(pEncCtx, std::ptr::addr_of_mut!((*pSlice).sSliceBs), (*pSlice).uiBufferIdx as usize);
-            BsWriteUE(buf, &mut *pBs, (*pSlice).iMbSkipRun as u32);
+            let kiMbSkipRun = (*pSlice).iMbSkipRun as u32;
+            BsWriteUE(&mut *pSliceBsBuf, crate::encoder::svc_encode_slice::slice_bs_writer(&mut pSlice.sSliceBs, pCtxOutBs), kiMbSkipRun);
             (*pSlice).iMbSkipRun = 0;
         }
 
         // Step 1: write mb type and pred
         if IS_Inter_8x8(mbs.cur().uiMbType) {
-            WelsSpatialWriteSubMbPred(pEncCtx, &mut *pSlice, mbs.cur_mut());
+            WelsSpatialWriteSubMbPred(pEncCtx, &mut *pSlice, mbs.cur_mut(), &mut *pSliceBsBuf, &mut *pCtxOutBs);
         } else {
-            WelsSpatialWriteMbPred(pEncCtx, &mut *pSlice, mbs.cur_mut());
+            WelsSpatialWriteMbPred(pEncCtx, &mut *pSlice, mbs.cur_mut(), &mut *pSliceBsBuf, &mut *pCtxOutBs);
         }
-        // T9.E2f: the writer is re-minted after the pred writers — their slice
-        // parameters flip with their stage, and the whole-slice reborrow above
-        // pops a writer minted before it (WelsCodeOneSlice's shape; q1c cannot
-        // attribute either kind here).
-        let pBs = crate::encoder::svc_encode_slice::slice_writer(pEncCtx, std::ptr::addr_of_mut!((*pSlice).sSliceBs));
+        // T9.E2f: the writer is re-minted after the pred writers — their
+        // `&mut *pSlice` reborrows above end any writer borrow taken before
+        // them, and the borrow checker now enforces the placement the comment
+        // used to describe.
+        let pBs = crate::encoder::svc_encode_slice::slice_bs_writer(&mut pSlice.sSliceBs, pCtxOutBs);
 
         // Step 2: write coded block pattern
         if IS_INTRA4x4(mbs.cur().uiMbType) {
-            let buf = crate::encoder::svc_encode_slice::slice_bs_buffer(pEncCtx, std::ptr::addr_of_mut!((*pSlice).sSliceBs), (*pSlice).uiBufferIdx as usize);
+            let buf = &mut *pSliceBsBuf;
             BsWriteUE(buf, &mut *pBs, g_kuiIntra4x4CbpMap[mbs.cur().uiCbp as usize]);
         } else if !IS_INTRA16x16(mbs.cur().uiMbType) {
-            let buf = crate::encoder::svc_encode_slice::slice_bs_buffer(pEncCtx, std::ptr::addr_of_mut!((*pSlice).sSliceBs), (*pSlice).uiBufferIdx as usize);
+            let buf = &mut *pSliceBsBuf;
             BsWriteUE(buf, &mut *pBs, g_kuiInterCbpMap[mbs.cur().uiCbp as usize]);
         }
 
@@ -723,12 +723,12 @@ pub unsafe fn WelsSpatialWriteMbSyn(
             (*pSlice).uiLastMbQp = mbs.cur().uiLumaQp;
 
             BsWriteSE(
-                crate::encoder::svc_encode_slice::slice_bs_buffer(pEncCtx, std::ptr::addr_of_mut!((*pSlice).sSliceBs), (*pSlice).uiBufferIdx as usize),
+                &mut *pSliceBsBuf,
                 &mut *pBs,
                 kiDeltaQp,
             );
             let pMbCache = &mut pSlice.sMbCacheInfo;
-            let buf = crate::encoder::svc_encode_slice::slice_bs_buffer(pEncCtx, std::ptr::addr_of_mut!((*pSlice).sSliceBs), (*pSlice).uiBufferIdx as usize);
+            let buf = &mut *pSliceBsBuf;
             if WelsWriteMbResidual((*pEncCtx).func_list(), &mut *pMbCache, mbs.cur(), buf, &mut *pBs) != 0 {
                 return ENC_RETURN_VLCOVERFLOWFOUND;
             }
@@ -749,7 +749,7 @@ pub unsafe fn WelsSpatialWriteMbSyn(
         CheckBitstreamBuffer(
             (*pSlice).iSliceIdx as u32,
             pEncCtx,
-            crate::encoder::svc_encode_slice::slice_bs_buffer(pEncCtx, std::ptr::addr_of_mut!((*pSlice).sSliceBs), (*pSlice).uiBufferIdx as usize),
+            &mut *pSliceBsBuf,
             &*pBs,
         )
     }
@@ -1009,8 +1009,8 @@ pub fn StashMBStatusCavlc(
 ) {
     // **S5.D1**: both null tests are gone with the pointers. Every one of the
     // family's fourteen call sites was enumerated before they were deleted: `pDss`
-    // is `&mut sDss`, a caller local, at all of them, and `pBs` is `slice_writer`'s
-    // result, whose own `# Safety` already requires it be dereferenceable. Neither
+    // is `&mut sDss`, a caller local, at all of them, and `pBs` is the writer
+    // resolver's result (`slice_bs_writer` since S11.1a), a reference. Neither
     // branch could be taken; a reference says so in the type.
     //
     // Three cursor fields become one value. `BsWriter` is `Copy`, which is the whole
@@ -1135,7 +1135,7 @@ pub fn GetBsPosCabac(pCabacCtx: &crate::encoder::set_mb_syn_cabac::SCabacCtx) ->
 
 /// `extern "C"` came off at T4b.1 with the slot that required it.
 ///
-/// Takes the slice's writer (`slice_writer`) rather than the slice: the writer is
+/// Takes the slice's writer (`slice_bs_writer`) rather than the slice: the writer is
 /// all this reads, and the slice no longer stores it (Phase 6 session B).
 pub fn GetBsPosCavlc(pBs: &BsWriter) -> i32 {
     // S5.D1: shared, not `&mut` — this reads the writer's position and nothing else.

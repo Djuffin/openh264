@@ -53,13 +53,13 @@
 //! |  6 | `sWelsEncCtx::vaa_ext` — the video-analysis block downcast | **Phase 10** — the `SCREEN_CONTENT(dormant)` family, fenced |
 //! |  3 | `RcInitLayerMemory`'s carve-up of one `CMemoryAlign` block | **spent at T6.H6** — the carve-up is gone; this file no longer names `CMemoryAlign` at all |
 //!
-//! **The one that looks convertible and is not.** `GomRCInitForOneSlice` takes a raw
-//! `SSlice` and nothing else but an integer: a plain function with a single caller and
-//! a single-object parameter — R1's shape exactly. Its caller is `WelsCodeOneSlice`
-//! (`svc_encode_slice.rs`), which binds `pBs = slice_writer(pEncCtx, pCurSlice)`
-//! **before** this call and uses `pBs` **after** it. A `&mut SSlice` here is a
-//! `Unique` retag over the whole 6496-byte slice, so it would pop `pBs` — F13's
-//! family and S25's rule, the same shape `svc_set_mb_syn_cavlc`'s header comment
+//! **The one that looked convertible and was not — now both.** `GomRCInitForOneSlice`
+//! takes `&mut SSlice` today. When it was raw, the reason was its caller,
+//! `WelsCodeOneSlice` (`svc_encode_slice.rs`), which bound `pBs = slice_writer(..)`
+//! **before** this call and used it **after** — a `&mut SSlice` here would have
+//! popped it (F13's family, S25's rule). S11.1a retired the resolver and mints the
+//! writer below this call, so no popping shape survives, the same one
+//! `svc_set_mb_syn_cavlc`'s header comment
 //! records for its own writers. Converting it needs either the caller's binding
 //! moved after the call (a behavioural change to check, not a spelling) or a
 //! parameter narrowed to `&mut SRCSlicing` plus the two slice fields it reads,
@@ -608,46 +608,44 @@ impl SWelsRcFunc {
 
     /// `pfWelsRcMbInit`.
     ///
-    /// # Safety
-    /// As [`WelsRcPictureInit`](SWelsRcFunc::WelsRcPictureInit); `pCurMb` and
-    /// `pSlice` must be live.
     #[inline]
-    // unsafe-cat: fork-shared(S63)
-    #[allow(unsafe_code)]
-    pub unsafe fn WelsRcMbInit(self, pCtx: &sWelsEncCtx, pCurMb: &mut SMB, pSlice: &mut SSlice) {
+    pub fn WelsRcMbInit(
+        self,
+        pCtx: &sWelsEncCtx,
+        pCurMb: &mut SMB,
+        pSlice: &mut SSlice,
+        pCtxOutBs: Option<&crate::encoder::vlc_encoder::BsWriter>,
+    ) {
         match self.eInstalledMode {
             RCMode::RC_OFF_MODE | RCMode::RC_BUFFERBASED_MODE => {
-                WelsRcMbInitDisable(pCtx, pCurMb, pSlice)
+                WelsRcMbInitDisable(pCtx, pCurMb, pSlice, pCtxOutBs)
             }
             RCMode::RC_BITRATE_MODE
             | RCMode::RC_BITRATE_MODE_POST_SKIP
             | RCMode::RC_TIMESTAMP_MODE
-            | RCMode::RC_QUALITY_MODE => WelsRcMbInitGom(pCtx, pCurMb, pSlice),
+            | RCMode::RC_QUALITY_MODE => WelsRcMbInitGom(pCtx, pCurMb, pSlice, pCtxOutBs),
         }
     }
 
     /// `pfWelsRcMbInfoUpdate`.
     ///
-    /// # Safety
-    /// As [`WelsRcMbInit`](SWelsRcFunc::WelsRcMbInit).
     #[inline]
-    // unsafe-cat: fork-shared(S63)
-    #[allow(unsafe_code)]
-    pub unsafe fn WelsRcMbInfoUpdate(
+    pub fn WelsRcMbInfoUpdate(
         self,
         pCtx: &sWelsEncCtx,
         pCurMb: &mut SMB,
         iCostLuma: i32,
         pSlice: &mut SSlice,
+        pCtxOutBs: Option<&crate::encoder::vlc_encoder::BsWriter>,
     ) {
         match self.eInstalledMode {
             RCMode::RC_OFF_MODE | RCMode::RC_BUFFERBASED_MODE => {
-                WelsRcMbInfoUpdateDisable(pCtx, pCurMb, iCostLuma, pSlice)
+                WelsRcMbInfoUpdateDisable(pCtx, pCurMb, iCostLuma, pSlice, pCtxOutBs)
             }
             RCMode::RC_BITRATE_MODE
             | RCMode::RC_BITRATE_MODE_POST_SKIP
             | RCMode::RC_TIMESTAMP_MODE
-            | RCMode::RC_QUALITY_MODE => WelsRcMbInfoUpdateGom(pCtx, pCurMb, iCostLuma, pSlice),
+            | RCMode::RC_QUALITY_MODE => WelsRcMbInfoUpdateGom(pCtx, pCurMb, iCostLuma, pSlice, pCtxOutBs),
         }
     }
 
@@ -2392,12 +2390,11 @@ pub unsafe extern "C" fn WelsRcPictureInfoUpdateGom(pEncCtx: &mut sWelsEncCtx, i
     }
 }
 
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
-pub unsafe extern "C" fn WelsRcMbInitGom(
+pub extern "C" fn WelsRcMbInitGom(
     pEncCtx: &sWelsEncCtx,
     pCurMb: &mut SMB,
     pSlice: &mut SSlice,
+    pCtxOutBs: Option<&crate::encoder::vlc_encoder::BsWriter>,
 ) {
     let did = (*pEncCtx).uiDependencyId as usize;
     let pWelsSvcRc = (*pEncCtx).rc_at(did);
@@ -2407,7 +2404,10 @@ pub unsafe extern "C" fn WelsRcMbInitGom(
         .expect("the layer's PPS is stamped")
         .uiChromaQpIndexOffset;
 
-    pSOverRc.iBsPosSlice = (*pEncCtx).func_list().eEntropyCoder.GetBsPosition(&*crate::encoder::svc_encode_slice::slice_writer(pEncCtx, std::ptr::addr_of_mut!((*pSlice).sSliceBs)), &(*pSlice).sCabacCtx);
+    pSOverRc.iBsPosSlice = (*pEncCtx).func_list().eEntropyCoder.GetBsPosition(
+        crate::encoder::svc_encode_slice::slice_bs_writer_ref(&pSlice.sSliceBs, pCtxOutBs),
+        &pSlice.sCabacCtx,
+    );
 
     if (*pWelsSvcRc).bEnableGomQp != 0 {
         if (*pWelsSvcRc).iNumberMbGom != 0
@@ -2444,19 +2444,21 @@ pub unsafe extern "C" fn WelsRcMbInitGom(
     }
 }
 
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
-pub unsafe extern "C" fn WelsRcMbInfoUpdateGom(
+pub extern "C" fn WelsRcMbInfoUpdateGom(
     pEncCtx: &sWelsEncCtx,
     pCurMb: &mut SMB,
     _iCostLuma: i32,
     pSlice: &mut SSlice,
+    pCtxOutBs: Option<&crate::encoder::vlc_encoder::BsWriter>,
 ) {
     let did = (*pEncCtx).uiDependencyId as usize;
     let pWelsSvcRc = (*pEncCtx).rc_at(did);
     let pSOverRc = &mut (*pSlice).sSlicingOverRc;
 
-    let cur_bs = (*pEncCtx).func_list().eEntropyCoder.GetBsPosition(&*crate::encoder::svc_encode_slice::slice_writer(pEncCtx, std::ptr::addr_of_mut!((*pSlice).sSliceBs)), &(*pSlice).sCabacCtx);
+    let cur_bs = (*pEncCtx).func_list().eEntropyCoder.GetBsPosition(
+        crate::encoder::svc_encode_slice::slice_bs_writer_ref(&pSlice.sSliceBs, pCtxOutBs),
+        &pSlice.sCabacCtx,
+    );
     let iCurMbBits = cur_bs - pSOverRc.iBsPosSlice;
     pSOverRc.iFrameBitsSlice += iCurMbBits;
     pSOverRc.iGomBitsSlice += iCurMbBits;
@@ -2510,6 +2512,7 @@ pub extern "C" fn WelsRcMbInitDisable(
     pEncCtx: &sWelsEncCtx,
     pCurMb: &mut SMB,
     _pSlice: &mut SSlice,
+    _pCtxOutBs: Option<&crate::encoder::vlc_encoder::BsWriter>,
 ) {
     let mut iLumaQp = (*pEncCtx).iGlobalQp;
     let did = (*pEncCtx).uiDependencyId as usize;
@@ -2548,6 +2551,7 @@ pub extern "C" fn WelsRcMbInfoUpdateDisable(
     _pCurMb: &mut SMB,
     _iCostLuma: i32,
     _pSlice: &mut SSlice,
+    _pCtxOutBs: Option<&crate::encoder::vlc_encoder::BsWriter>,
 ) {}
 
 pub extern "C" fn WelRcPictureInitBufferBasedQp(
@@ -2922,7 +2926,7 @@ mod tests {
             WelsRcPictureInfoUpdateDisable(&mut ctx, 0);
             let mut sMb = SMB::default();
             let mut sSlice = crate::encoder::svc_encode_slice::SSlice::new();
-            WelsRcMbInfoUpdateDisable(&ctx, &mut sMb, 0, &mut sSlice);
+            WelsRcMbInfoUpdateDisable(&ctx, &mut sMb, 0, &mut sSlice, None);
         }
     }
 }
