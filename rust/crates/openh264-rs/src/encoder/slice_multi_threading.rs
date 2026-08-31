@@ -829,9 +829,14 @@ pub unsafe fn AppendSliceToFrameBs(
 
     let mut iSliceIdx = 0i32;
     while iSliceIdx < kiSliceCount {
-        let pSlice = crate::encoder::svc_encode_slice::slice_in_layer(Some(&*pCurDq), iSliceIdx);
-        if !pSlice.is_null() {
-            let pSliceBs = &mut (*pSlice).sSliceBs;
+        // S11.35: the safe twin — `None` where the raw answered null. This is
+        // post-join, on the calling thread, and `pCurDq` is exclusive here.
+        let Some(pSlice) = crate::encoder::svc_encode_slice::slice_in_layer_mut(&mut *pCurDq, iSliceIdx) else {
+            iSliceIdx += 1;
+            continue;
+        };
+        {
+            let pSliceBs = &mut pSlice.sSliceBs;
             if pSliceBs.uiBsPos > 0 {
                 let iCountNal = pSliceBs.iNalIndex;
 

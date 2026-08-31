@@ -2127,9 +2127,13 @@ pub unsafe fn PrefetchReferencePicture(pCtx: &mut sWelsEncCtx, keFrameType: EVid
 
     let mut iIdx = 0;
     while iIdx < kiSliceCount {
-        let pSlice = crate::encoder::svc_encode_slice::slice_in_layer(current_layer_ref(pCtx), iIdx);
-        if !pSlice.is_null() {
-            (*pSlice).sSliceHeaderExt.sSliceHeader.uiRefIndex = uiRefIdx;
+        // S11.35: the safe twin, per iteration — `None` where the raw answered
+        // null, and the borrow ends with the statement.
+        if let Some(pSlice) = crate::encoder::svc_encode_slice::slice_in_layer_mut(
+            current_layer_mut(pCtx).expect("the frame's current layer is stamped"),
+            iIdx,
+        ) {
+            pSlice.sSliceHeaderExt.sSliceHeader.uiRefIndex = uiRefIdx;
         }
         iIdx += 1;
     }
@@ -2220,14 +2224,7 @@ pub unsafe fn WelsInitCurrentLayer(pCtx: &mut sWelsEncCtx, _kiWidth: i32, _kiHei
         pCtx,
         pCtx.uiDependencyId as usize,
     );
-    // **S10.8: `pRefList`'s stamp is gone with the field.** It was a per-frame copy
-    // of `ctx.ppRefPicListExt[did]`; `layer_ref_pic` resolves that through the
-    // context on the layer's own dependency id now. The local below still needs the
-    // raw for `pic_mut` and the reconstruction view.
-    let pBaseSlice = crate::encoder::svc_encode_slice::slice_in_layer(Some(&*pCurDq), 0);
-    if pBaseSlice.is_null() {
-        return;
-    }
+    // S11.35: the base-slice cursor is gone — see the stamp loop below.
     let kiCurDid = pCtx.uiDependencyId;
     // A7, §4.6 reorder: the flag is a scalar and the cursor is a raw, so neither
     // has to be a live borrow of the context across the calls below.
@@ -2261,10 +2258,8 @@ pub unsafe fn WelsInitCurrentLayer(pCtx: &mut sWelsEncCtx, _kiWidth: i32, _kiHei
     // header's own `iPpsId`/`iSpsId` — already here, already the same numbers — are
     // what the header carries. The two pointer copies the header used to take are
     // gone with the fields.
-    (*pBaseSlice).sSliceHeaderExt.sSliceHeader.iPpsId = iCurPpsId;
     (*pCurDq).sLayerInfo.iPps = Some(PpsId(iCurPpsId as u16));
 
-    (*pBaseSlice).sSliceHeaderExt.sSliceHeader.iSpsId = iCurSpsId;
     // The null-versus-not that used to select the arm is the tag now — same two
     // arms, same `iCurSpsId`, indexing the same two different arrays.
     (*pCurDq).sLayerInfo.eSps = Some(if kbUseSubsetSpsFlag {
@@ -2273,14 +2268,23 @@ pub unsafe fn WelsInitCurrentLayer(pCtx: &mut sWelsEncCtx, _kiWidth: i32, _kiHei
         LayerSps::Avc(SpsId(iCurSpsId as u8))
     });
 
-    (*pBaseSlice).bSliceHeaderExtFlag =
-        pCtx.eNalType == EWelsNalUnitType::NAL_UNIT_CODED_SLICE_EXT;
-
-    let mut iIdx = 1;
+    // **S11.35: the base slice and its copy loop are one stamp loop.** The
+    // "base" carried exactly three scalars (`InitSliceHeadWithBase` copies
+    // `iPpsId`, `iSpsId`, `bSliceHeaderExtFlag`) and all three were computed
+    // right here — so every slice takes the values directly, slice 0 included,
+    // and the held base cursor that had to survive the loop's whole-layer
+    // retags is gone. Each iteration's `&mut *pCurDq` is a child of the raw's
+    // own root tag, ended within the iteration; the old raw form skipped
+    // missing slots and this keeps that (`None` where null answered).
+    let kbSliceHeaderExtFlag = pCtx.eNalType == EWelsNalUnitType::NAL_UNIT_CODED_SLICE_EXT;
+    let mut iIdx = 0;
     while iIdx < iSliceCount {
-        let pSlice = crate::encoder::svc_encode_slice::slice_in_layer(Some(&*pCurDq), iIdx);
-        if !pSlice.is_null() {
-            crate::encoder::svc_encode_slice::InitSliceHeadWithBase(&mut *pSlice, &*pBaseSlice);
+        if let Some(pSlice) =
+            crate::encoder::svc_encode_slice::slice_in_layer_mut(&mut *pCurDq, iIdx)
+        {
+            pSlice.sSliceHeaderExt.sSliceHeader.iPpsId = iCurPpsId;
+            pSlice.sSliceHeaderExt.sSliceHeader.iSpsId = iCurSpsId;
+            pSlice.bSliceHeaderExtFlag = kbSliceHeaderExtFlag;
         }
         iIdx += 1;
     }
@@ -3358,12 +3362,7 @@ pub unsafe fn WelsCodeOnePicPartition(
     iEndMbIdxInPartition: i32,
     iStartSliceIdx: i32,
 ) -> i32 {
-    let pCurLayer = current_layer(pCtx);
     let uSlcBuffIdx = 0usize;
-    let pStartSlice = crate::encoder::svc_encode_slice::slice_in_bank(&*pCurLayer, uSlcBuffIdx, iStartSliceIdx);
-    if pStartSlice.is_null() {
-        return ENC_RETURN_UNEXPECTED;
-    }
     let mut iNalIdxInLayer = *pNalIdxInLayer;
     let mut iSliceIdx = iStartSliceIdx;
     let kiSliceStep = pCtx.iActiveThreadsNum as i32;
@@ -3376,16 +3375,24 @@ pub unsafe fn WelsCodeOnePicPartition(
     let kiSliceIdxStep = pCtx.iActiveThreadsNum as i32;
     let mut iReturn;
 
-    (*pStartSlice)
-        .sSliceHeaderExt
-        .sSliceHeader
-        .iFirstMbInSlice = iFirstMbIdxInPartition;
+    // S11.35: the start slice's stamp is an index into the layer's own bank —
+    // `None` is the old null answer.
+    {
+        let pCurLayer = current_layer_mut(pCtx).expect("the frame's current layer is stamped");
+        let Some(pStartSlice) = pCurLayer.sSliceBufferInfo[uSlcBuffIdx]
+            .pSliceBuffer
+            .get_mut(iStartSliceIdx as usize)
+        else {
+            return ENC_RETURN_UNEXPECTED;
+        };
+        pStartSlice.sSliceHeaderExt.sSliceHeader.iFirstMbInSlice = iFirstMbIdxInPartition;
+    }
 
     while iAnyMbLeftInPartition > 0 {
         let mut iPayloadSize = 0i32;
 
         if iSliceIdx
-            >= ((*pCurLayer).sSliceBufferInfo[uSlcBuffIdx].iMaxSliceNum - kiSliceIdxStep)
+            >= (current_layer_ref(pCtx).expect("stamped").sSliceBufferInfo[uSlcBuffIdx].iMaxSliceNum - kiSliceIdxStep)
         {
             // insufficient memory in pSliceInLayer[]
             if pCtx.iActiveThreadsNum == 1 {
@@ -3393,7 +3400,7 @@ pub unsafe fn WelsCodeOnePicPartition(
                 if DynSliceRealloc(pCtx, pFbi, iLbi) != 0 {
                     return ENC_RETURN_MEMALLOCERR;
                 }
-            } else if iSliceIdx >= (*pCurLayer).iMaxSliceNum {
+            } else if iSliceIdx >= current_layer_ref(pCtx).expect("stamped").iMaxSliceNum {
                 return ENC_RETURN_MEMALLOCERR;
             }
         }
@@ -3418,21 +3425,25 @@ pub unsafe fn WelsCodeOnePicPartition(
         }
 
         crate::encoder::nal_encap::WelsLoadNal(pCtx.pOut.as_deref_mut().expect("pOut lives"), keNalType as i32, keNalRefIdc as i32);
-        let pCurSlice = crate::encoder::svc_encode_slice::slice_in_bank(current_layer_ref(pCtx).expect("the frame's current layer is stamped"), uSlcBuffIdx, iSliceIdx);
-        (*pCurSlice).iSliceIdx = iSliceIdx;
-        // **S11.33: the boundary's forward slot, resolved beside the current
-        // slice** — `AddSliceBoundary` used to walk the bank for it at fire
-        // time; the walk moves here, to the owner of the loop, as a sibling
-        // derivation (F71's discipline, and this path is single-threaded). The
-        // index is the old walk's ST arm exactly: current idc plus the step.
-        // Null was the old past-end tolerance; `None` is its spelling.
-        let pNextSliceRaw = crate::encoder::svc_encode_slice::slice_in_bank(
-            current_layer_ref(pCtx).expect("the frame's current layer is stamped"),
-            uSlcBuffIdx,
-            iSliceIdx + kiSliceIdxStep,
+        // **S11.35: the bank leaves the layer for the call** — the same move as
+        // the grid and the scratch below, one storage over: taking it lets the
+        // current and forward slots come from one `split_at_mut` while `pCtx`
+        // stays free for the `&mut` NAL machinery on either side of the call.
+        // The realloc arm above ran with the bank in place, as it must.
+        let mut sBank = std::mem::take(
+            &mut current_layer_mut(pCtx).expect("the frame's current layer is stamped").sSliceBufferInfo[uSlcBuffIdx],
         );
-        let pNextSlice: Option<&mut crate::encoder::svc_encode_slice::SSlice> =
-            if pNextSliceRaw.is_null() { None } else { Some(&mut *pNextSliceRaw) };
+        let kiCurSlot = iSliceIdx as usize;
+        if kiCurSlot >= sBank.pSliceBuffer.len() {
+            current_layer_mut(pCtx).expect("stamped").sSliceBufferInfo[uSlcBuffIdx] = sBank;
+            return ENC_RETURN_UNEXPECTED;
+        }
+        let (kpHead, kpTail) = sBank.pSliceBuffer.split_at_mut(kiCurSlot + 1);
+        let pCurSlice = &mut kpHead[kiCurSlot];
+        pCurSlice.iSliceIdx = iSliceIdx;
+        // The forward slot at the old ST index exactly (`iSliceIdx + step`,
+        // i.e. `tail[step - 1]`); `None` is the old past-end null.
+        let pNextSlice = kpTail.get_mut((kiSliceIdxStep - 1) as usize);
 
         // T7.C3: the layer-level half of `WelsCodeOneSlice`'s I_SLICE arm, one line
         // above the call it was lifted out of — this path is single-threaded, so the
@@ -3483,6 +3494,9 @@ pub unsafe fn WelsCodeOnePicPartition(
         pCtx.pDynamicBsBuffer[0] = vRestoreBuf;
         drop(sMbWindow);
         current_layer_mut(pCtx).expect("the frame's current layer is stamped").sMbDataP = sMbData;
+        // S11.35: the bank goes back before the error check, like everything
+        // taken — the boundary's forward write (if the limit fired) rides in it.
+        current_layer_mut(pCtx).expect("the frame's current layer is stamped").sSliceBufferInfo[uSlcBuffIdx] = sBank;
         let pOutRef = pCtx.pOut.as_deref_mut().expect("pOut lives");
         pOutRef.sBsBuffer = vOutBsBuf;
         pOutRef.sBsWrite = sOutBsWrite;
@@ -3521,8 +3535,8 @@ pub unsafe fn WelsCodeOnePicPartition(
 
         iNalIdxInLayer += 1;
         iSliceIdx += kiSliceStep; // iSliceIdx is not contiguous
-        iAnyMbLeftInPartition =
-            iEndMbIdxInPartition - (*pCurLayer).LastCodedMbIdxOfPartition[kiPartitionId].load(Ordering::Relaxed);
+        iAnyMbLeftInPartition = iEndMbIdxInPartition
+            - current_layer_ref(pCtx).expect("stamped").LastCodedMbIdxOfPartition[kiPartitionId].load(Ordering::Relaxed);
     }
 
     *pLayerSize = iPartitionBsSize;
@@ -3940,7 +3954,17 @@ pub unsafe fn WelsEncoderEncodeExt(
         if (*pParam).sSliceArgument.uiSliceMode == SM_SINGLE_SLICE {
             // only one slice within a quality layer
             let mut iPayloadSize = 0i32;
-            let pCurSlice = crate::encoder::svc_encode_slice::slice_in_bank(current_layer_ref(pCtx).expect("the frame's current layer is stamped"), 0, 0);
+            // **S11.35: the bank leaves the layer for the slice's span** — the
+            // raw resolved slot 0 and held it across the prefix NAL, the
+            // boundary stamp and the whole coding call; the take makes those
+            // coexistences ownership facts, and `pCtx` stays free throughout.
+            let mut sBank = std::mem::take(
+                &mut current_layer_mut(pCtx).expect("the frame's current layer is stamped").sSliceBufferInfo[0],
+            );
+            let pCurSlice = sBank
+                .pSliceBuffer
+                .get_mut(0)
+                .expect("the single-slice bank holds slot 0");
 
             if pCtx.bNeedPrefixNalFlag {
                 // S11.20: the C-ABI length pointer is read out before the record's
@@ -4014,6 +4038,8 @@ pub unsafe fn WelsEncoderEncodeExt(
             pCtx.pDynamicBsBuffer[0] = vRestoreBuf;
             drop(sMbWindow);
             current_layer_mut(pCtx).expect("the frame's current layer is stamped").sMbDataP = sMbData;
+            // S11.35: the bank goes back before the error check, like the rest.
+            current_layer_mut(pCtx).expect("the frame's current layer is stamped").sSliceBufferInfo[0] = sBank;
             let pOutRef = pCtx.pOut.as_deref_mut().expect("pOut lives");
             pOutRef.sBsBuffer = vOutBsBuf;
             pOutRef.sBsWrite = sOutBsWrite;
@@ -4228,8 +4254,16 @@ pub unsafe fn WelsEncoderEncodeExt(
                     eNalRefIdc as i32,
                 );
 
-                let pCurSlice = crate::encoder::svc_encode_slice::slice_in_bank(current_layer_ref(pCtx).expect("the frame's current layer is stamped"), 0, iSliceIdx);
-                debug_assert_eq!(iSliceIdx, (*pCurSlice).iSliceIdx);
+                // S11.35: the bank leaves the layer for the slice's span, as at
+                // the single-slice site; `expect` where the raw deref'd null.
+                let mut sBank = std::mem::take(
+                    &mut current_layer_mut(pCtx).expect("the frame's current layer is stamped").sSliceBufferInfo[0],
+                );
+                let pCurSlice = sBank
+                    .pSliceBuffer
+                    .get_mut(iSliceIdx as usize)
+                    .expect("the fixed-mode bank holds every stamped slice");
+                debug_assert_eq!(iSliceIdx, pCurSlice.iSliceIdx);
                 pCtx.iEncoderError = crate::encoder::svc_encode_slice::SetSliceBoundaryInfo(
                     current_layer_ref(pCtx),
                     &mut *pCurSlice,
@@ -4282,6 +4316,8 @@ pub unsafe fn WelsEncoderEncodeExt(
                 pCtx.pDynamicBsBuffer[0] = vRestoreBuf;
                 drop(sMbWindow);
                 current_layer_mut(pCtx).expect("the frame's current layer is stamped").sMbDataP = sMbData;
+                // S11.35: the bank goes back with the rest.
+                current_layer_mut(pCtx).expect("the frame's current layer is stamped").sSliceBufferInfo[0] = sBank;
                 let pOutRef = pCtx.pOut.as_deref_mut().expect("pOut lives");
                 pOutRef.sBsBuffer = vOutBsBuf;
                 pOutRef.sBsWrite = sOutBsWrite;

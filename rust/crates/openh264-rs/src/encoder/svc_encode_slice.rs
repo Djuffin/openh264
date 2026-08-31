@@ -585,35 +585,8 @@ impl SliceIdx {
     pub const NONE: SliceIdx = SliceIdx { bank: u8::MAX, offset: -1 };
 }
 
-/// The slice at layer-order position `kiSliceIdx`, resolved against its bank.
-///
-/// **Derived from the bank's root** (S28): the address is the bank's own
-/// `pSliceBuffer` plus the entry's offset, never a pointer narrowed to one slice,
-/// because callers walk a slice's inline scratch and `ReOrderSliceInLayer` walks the
-/// bank itself. Answers null exactly where the pointer spelling held null — an
-/// out-of-range position, an unfilled entry, or a bank that was never allocated.
-#[inline]
-// unsafe-cat: cursor
-#[allow(unsafe_code)]
-pub unsafe fn slice_in_layer(pCurLayer: Option<&SDqLayer>, kiSliceIdx: i32) -> *mut SSlice {
-    let Some(pCurLayer) = pCurLayer else {
-        return std::ptr::null_mut();
-    };
-    if kiSliceIdx < 0 {
-        return std::ptr::null_mut();
-    }
-    // An explicit `&` rather than `(*p).vec[i]`: indexing a `Vec` through a raw
-    // parent is an implicit autoref, which rustc denies by default
-    // (`dangerous_implicit_autorefs`) and session C met fifteen times.
-    let slices: &[SliceIdx] = &(*pCurLayer).ppSliceInLayer;
-    let Some(&s) = slices.get(kiSliceIdx as usize) else {
-        return std::ptr::null_mut();
-    };
-    if s.offset < 0 || s.bank as usize >= MAX_THREADS_NUM {
-        return std::ptr::null_mut();
-    }
-    slice_in_bank(pCurLayer, s.bank as usize, s.offset)
-}
+// **S11.35: `slice_in_layer` is deleted** — see the note at its siblings
+// below; `slice_in_layer_mut` is the surviving resolver.
 
 /// The bank's slices as an **exclusive slice** — the safe twin of
 /// [`slice_bank_root`], for the callers that hold the layer `&mut`.
@@ -672,39 +645,9 @@ pub fn slice_in_layer_mut(pCurLayer: &mut SDqLayer, kiSliceIdx: i32) -> Option<&
     slice_in_bank_mut(pCurLayer, s.bank as usize, s.offset)
 }
 
-/// The bank's slices as a raw pointer to their **root** — T6.D8, and S28's rule
-/// again: `AddSliceBoundary` and `ReOrderSliceInLayer` walk *neighbouring* slices out
-/// of the pointer they hold, so the pointer must carry the whole bank's provenance.
-/// Answers null for a bank that has not been sized.
-#[inline]
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
-pub unsafe fn slice_bank_root(pCurLayer: &SDqLayer, kiBank: usize) -> *mut SSlice {
-    // **F71.** `&mut Vec<SSlice>` + `as_mut_ptr()` is a `Unique` retag over the
-    // three-word `Vec`, and for every fixed slice mode **all** workers resolve bank
-    // 0 — so two of them retagging it at once is a data race even though neither
-    // writes the `Vec` itself. `addr_of!` + `as_ptr()` reads the buffer pointer out
-    // instead: the `Vec` is only ever read, and the pointer carries the buffer's own
-    // provenance, so the slices behind it stay writable. S28's rule is unchanged —
-    // this is still the bank's root, not a narrowed cursor.
-    let bank = std::ptr::addr_of!((*pCurLayer).sSliceBufferInfo[kiBank].pSliceBuffer);
-    if (*bank).is_empty() {
-        return std::ptr::null_mut();
-    }
-    (*bank).as_ptr() as *mut SSlice
-}
+// **S11.35: `slice_bank_root` is deleted** — the slice-bank family's raw resolver chain
 
-/// The slice at `kiOffset` in bank `kiBank`, derived from the bank's root.
-#[inline]
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
-pub unsafe fn slice_in_bank(pCurLayer: &SDqLayer, kiBank: usize, kiOffset: i32) -> *mut SSlice {
-    let root = slice_bank_root(pCurLayer, kiBank);
-    if root.is_null() || kiOffset < 0 {
-        return std::ptr::null_mut();
-    }
-    root.add(kiOffset as usize)
-}
+// **S11.35: `slice_in_bank` is deleted** — the slice-bank family's raw resolver chain
 
 // `mb_list_root` (T6.D5, S28's root hand-out) and `mb_at` stood here — the raw
 // per-record mints every neighbour walker offset out of. The grid conversion
