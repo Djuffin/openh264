@@ -53,9 +53,9 @@
 // `iMultipleThreadIdc == 1`, which is the rule the re-tag used. 9 are
 // `port-raw(Phase 9)`: the three `macros.h` memory helpers and the six
 // load-balancing functions, all of which run on the calling thread. The one
-// hand-written `Send` is `send-seam(Phase 9)`, D-mt-1's seam — and this sentence
-// avoids spelling the two words the ratchet counts, for the reason the seam's own
-// note gives.
+// hand-written `Send` this file carried — `send-seam(Phase 9)`, D-mt-1's seam —
+// was deleted at S10.13 when `sWelsEncCtx` became `Sync`; its obituary and the
+// three-part argument that justified it stay with `SliceJobHandle` below.
 
 
 use std::sync::atomic::{AtomicI32, AtomicU16, Ordering};
@@ -1246,11 +1246,11 @@ pub struct SliceJobHandle<'a> {
     bRecordsTime: bool,
 }
 
-// unsafe-cat: send-seam(Phase 9)
-//
-// **The one hand-written `Send` this phase permits** (decision D-mt-1, plan §7.4)
-// — and the ratchet's `unsafe_impl` metric is an occurrence count, so this comment
-// deliberately does not spell the two words it would otherwise double.
+// **`send-seam(Phase 9)` — retired at S10.13; no tag, because the tag's unsafe is
+// gone.** What follows is the seam's record: the hand-written `Send` decision
+// D-mt-1 (plan §7.4) permitted stood here, and the ratchet's `unsafe_impl` metric
+// is an occurrence count, so this comment deliberately does not spell the two
+// words it would otherwise double.
 //
 // **Its retirement condition, corrected by measurement — F164, Phase 9 session G.**
 // This comment used to say it retires "when Phase 9's context split makes this

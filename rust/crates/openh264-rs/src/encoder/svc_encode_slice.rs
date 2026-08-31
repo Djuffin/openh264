@@ -1118,7 +1118,7 @@ pub fn layer_ref_pic<'a>(
 /// `pLayer` is a reference since **S6.A1**, so liveness is no longer the caller's;
 /// what remains is that the layer be stamped for the frame in progress.
 #[inline]
-// unsafe-cat: SCREEN_CONTENT(dormant: Phase 10) — the pointer it hands out; the raw
+// unsafe-cat: SCREEN_CONTENT(dormant) — the pointer it hands out; the raw
 // layer parameter is the S63 seam (G's)
 pub fn layer_ref_feature_storage<'a>(
     pCtx: &'a sWelsEncCtx,
