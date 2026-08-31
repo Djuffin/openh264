@@ -296,8 +296,7 @@ pub fn WelsLoadNal(
 ///
 /// **S6.C1**: safe; the `# Safety` clause retired with the pointer it described.
 #[inline]
-// unsafe-cat: port-raw(Phase 9)
-// **T9.X — this is not a C-ABI boundary, and the tag stays `port-raw`.** The brief
+// **T9.X — this is not a C-ABI boundary** (the tag is gone with the unsafe; S11.44). The brief
 // calls it one of "the two `unsafe extern \"C\"` unload fns ... lawful remainder".
 // It carries no export attribute and is installed into no dispatch slot, so the
 // calling convention was a vestige of the raw translation rather than an ABI
@@ -332,11 +331,11 @@ pub fn WelsUnloadNal(pEncoderOuput: &mut SWelsEncoderOutput) {
 
 /// Initializes a raw NAL unit entry for a thread-local slice bitstream context.
 ///
-/// # Safety
-/// - `pSliceBs` must point to a valid `SWelsSliceBs` structure.
+/// (S11.44: the `# Safety` clause retired with the pointer it described —
+/// `pSliceBs` is a reference.)
 #[inline]
-// unsafe-cat: fork-shared(S63)
-// **T9.X — adjudicated: the seam's, not the bitstream's (H2's, not X's).** G left
+// **T9.X — adjudicated: the seam's, not the bitstream's (H2's, not X's);
+// the S63 tag is gone with the unsafe (S11.44).** G left
 // this tag unattributed. Every production caller is in `slice_multi_threading.rs`
 // (`:1369`, `:1379`, `:1442`, `:1732`) and the walker puts the body inside the fork:
 //     WelsLoadNalForSlice <- EncodeOneSliceInJob <- fork seed (thread::scope spawn)
@@ -363,11 +362,11 @@ pub extern "C" fn WelsLoadNalForSlice(
 
 /// Finalizes the slice-thread-local raw NAL unit payload size and advances the NAL index.
 ///
-/// # Safety
-/// - `pSliceBs` must point to a valid `SWelsSliceBs` structure.
+/// (S11.44: the `# Safety` clause retired with the pointer it described —
+/// `pSliceBs` is a reference.)
 #[inline]
-// unsafe-cat: fork-shared(S63)
-// **T9.X — adjudicated with [`WelsLoadNalForSlice`]: the seam's (H2's).**
+// **T9.X — adjudicated with [`WelsLoadNalForSlice`]: the seam's (H2's);
+// the S63 tag is gone with the unsafe (S11.44).**
 //     WelsUnloadNalForSlice <- EncodeOnePartitionSizeLimited <- fork seed
 // Note the brief also lists this function's line as one of "the two `unsafe extern
 // \"C\"` unload fns ... C-ABI boundary, lawful remainder". It is neither: it is one

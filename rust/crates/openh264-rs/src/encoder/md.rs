@@ -1292,7 +1292,6 @@ pub fn UpdateMbMv_c(pMvBuffer: &mut [SMVUnitXY; MB_BLOCK4x4_NUM], ksMv: SMVUnitX
     }
 }
 
-// unsafe-cat: fork-shared(S63)
 pub fn MdInterAnalysisVaaInfo_c(kpSad8x8: &[i32; 4]) -> u8 {
     // S11.28: the macroblock's four 8x8 SADs, by value off the bounded row —
     // the `*mut i32` walked the same four entries.

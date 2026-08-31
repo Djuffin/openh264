@@ -177,10 +177,8 @@ impl CAdaptiveQuantization {
     /// the VAA statistics of this picture pair, handed over at the call (the C++
     /// stored `pCalcResult` in the parameter block; take what you reach).
     ///
-    /// # Safety
-    /// The pointers stored by the preceding [`Set`](Self::Set) must still be valid,
-    /// both pixel maps must describe readable luma planes, and `calc`'s arrays must
-    /// cover the picture's macroblocks.
+    /// S11.43: the safety section is a signature now — the planes arrive as
+    /// borrows and `calc`'s arrays bound every read.
     pub fn Process(
         &mut self,
         pSrcPixMap: &SPixMap,

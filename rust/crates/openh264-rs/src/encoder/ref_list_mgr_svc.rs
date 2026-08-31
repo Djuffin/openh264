@@ -26,7 +26,7 @@ pub const STR_ROOM: i32 = 1;
 // `encoder_context.rs` from `wels_const.h`. This module previously had its own copies
 // with MAX_SHORT_REF_COUNT = 16 (C++: 4) and MAX_TEMPORAL_LEVEL = 8 (C++: 4).
 pub use crate::encoder::encoder_context::{MAX_GOP_SIZE, MAX_SHORT_REF_COUNT, MAX_TEMPORAL_LEVEL};
-use crate::encoder::encoder_context::{ctx_ltr_at, ctx_param_raw};
+use crate::encoder::encoder_context::ctx_ltr_at;
 pub const MAX_REF_PIC_COUNT: usize = 16;
 pub const LONG_TERM_REF_NUM: i32 = 2;
 pub const MAX_TEMPORAL_LAYER_NUM: usize = 4;
