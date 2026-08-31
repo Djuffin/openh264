@@ -8407,3 +8407,44 @@ a real design item; converting the layer resolution under it is not.
 **The cost of the question is minutes.** Each of the three above took one
 reading of the callee and one compile. The plan had them scoped as sessions.
 
+## F276 — the cascade's remaining blocker is a *slot type*, and six of them are already raw-free: the exact chain, measured
+
+S11.2e's survey said 115 bodies carry an allow while holding **no raw syntax
+and calling no named unsafe function**. That looked like the cascade
+under-reporting; it is not. Those bodies call through **function-pointer slots
+whose types are still `unsafe extern "C" fn`**, and an indirect call through an
+unsafe fn pointer needs an unsafe context exactly as a direct one does. The
+cascade is right and the bodies are genuinely blocked — by a *type*, not by
+anything in themselves.
+
+**Six slot types are already raw-free** (measured, not estimated —
+`pJudgeSkipFun`, `PDeblockingFilterSlice`, `PMdBackgroundInfoUpdateFunc`,
+`PWelsCodingSliceFunc`, `PWelsSliceHeaderWriteFunc`, `PUpdateFMESwitch`; the
+other 25 still carry `*mut i16`-style kernel parameters and want the
+pointer→slice work first). Dropping `unsafe` from those six compiles down to
+**five installee mismatches**, and dropping it from the installees in turn
+leaves a blocker set of exactly:
+
+    dereference of raw pointer   3   (svc_mode_decision, the JudgeSkip pair)
+    ctx_pic_ref                  2
+    mb_window                    1   (the fork's six callers, S10.3e)
+    WelsCodePSlice               1 } these two hold ZERO raw lines and are
+    WelsCodePOverDynamicSlice    1 } blocked only by their own MD callees
+    WelsISliceMdEnc              1   (current_layer + a slice-header cursor)
+    WelsISliceMdEncDynamic       1   (same, plus a slice-context cursor)
+
+That is the whole of it. **Attempted and reverted this session** rather than
+half-landed: the change does not compile until the chain's leaves convert, and
+a leaf conversion mid-batch would have gone in without its own byte referee.
+
+**Why this is the highest-leverage item left.** Every one of those 115 bodies
+retires behind this chain, and the chain is seven named functions deep, not a
+campaign. The order is bottom-up: `ctx_pic_ref` and the two `JudgeSkip` raw
+dereferences, then `WelsISliceMdEnc`/`Dynamic`'s two cursors (both the
+`addr_of_mut!((*pSlice).sSliceHeaderExt)` shape S11.2e's `TryModeMerge` turned
+out to be — a field cursor held across whole-struct reborrows, which
+destructuring answers), then the slot types, then the installees, then the
+cascade takes the rest in one pass. `mb_window`'s six fork callers are the one
+genuinely structural member and can stay raw behind their own tag if the rest
+lands without them.
+
