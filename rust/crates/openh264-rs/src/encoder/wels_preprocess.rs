@@ -715,9 +715,17 @@ pub fn ClearEndOfLinePadding(pData: &mut [u8], iStride: i32, iWidth: i32, iHeigh
     }
 }
 
-/// Row-by-row planar memory copy for I420 YUV buffers.
+/// Row-by-row planar memory copy for I420 YUV buffers — **the ingest
+/// primitive**: the source pointers are the application's plane buffers, raw
+/// C-ABI data with no owner on this side of the boundary, so the claim lives
+/// on this signature and is asserted once, by the wrapper's guards.
+///
+/// # Safety
+/// Every pointer must address a live plane of at least `iWidth x iHeight`
+/// (halved for chroma) bytes at its stride, and the source and destination
+/// planes must not overlap.
 #[inline]
-// unsafe-cat: port-raw(Phase 9)
+// unsafe-cat: C-ABI — the application's plane buffers (ingest).
 #[allow(unsafe_code)]
 pub unsafe fn WelsMoveMemory_c(
     mut pDstY: *mut u8,
@@ -1067,17 +1075,10 @@ impl CWelsPreProcess {
         }))
     }
 
-    /// Destructor releasing allocated picture buffers and plugin interfaces.
-    // unsafe-cat: port-raw(Phase 9)
-    #[allow(unsafe_code)]
-    pub unsafe fn Destroy(pPreProcess: *mut CWelsPreProcess) {
-        if !pPreProcess.is_null() {
-            FreeScaledPic(&mut (*pPreProcess).m_sScaledPicture);
-            // `WelsPreprocessDestroy` freed the vtable and its context here; the
-            // plugins are `m_vp` and drop with the object.
-            drop(Box::from_raw(pPreProcess));
-        }
-    }
+    // `Destroy(pPreProcess: *mut CWelsPreProcess)` stood here — the C++
+    // destructor's shape, `Box::from_raw` on a raw slot. **S11.42, deleted: no
+    // callers.** The object lives in `sWelsEncCtx::pVpp` as `Option<Box<..>>`
+    // and drops by ownership; `FreeScaledPic` runs from the owner's teardown.
 
     // `WelsPreprocessCreate` / `WelsPreprocessDestroy` (`wels_preprocess.cpp:198`)
     // were here: they allocated and freed the `IWelsVP` vtable and its `void*`
@@ -1233,12 +1234,7 @@ impl CWelsPreProcess {
         // rather than converts. Deriving one pointer at the callee's top would not
         // do either: the `self.` calls between the uses reborrow `self` and pop it.
         // Found by the encoder aliasing probe, Phase 6 session A.
-        // S11.41: the audited call at this body's boundary — the callee's own
-        // subtree (the layer preprocess walk, with the application's plane roots)
-        // is unconverted, and this call is the body's last raw op (F279).
-        // unsafe-cat: port-raw(Phase 9)
-        #[allow(unsafe_code)]
-        let iRet = unsafe { self.SingleLayerPreprocess(pCtx, kpSrcPic, pSpatialNum) };
+        let iRet = self.SingleLayerPreprocess(pCtx, kpSrcPic, pSpatialNum);
         if iRet != ENC_RETURN_SUCCESS {
             return iRet;
         }
@@ -1247,11 +1243,10 @@ impl CWelsPreProcess {
     }
 
     // unsafe-cat: port-raw(Phase 9)
-    #[allow(unsafe_code)]
-    pub unsafe fn SingleLayerPreprocess(
+    pub fn SingleLayerPreprocess(
         &mut self,
         pCtx: &mut sWelsEncCtx,
-        kpSrc: *const SSourcePicture,
+        kpSrc: &SSourcePicture,
         pSpatialNum: &mut i32,
     ) -> i32 {
         // A7, §4.6 reorder: the layer's geometry is four scalars, read here rather
@@ -1259,11 +1254,9 @@ impl CWelsPreProcess {
         let mut iDependencyId = pCtx.param().iSpatialLayerNum - 1;
 
         let depIdx = iDependencyId as usize;
-        // S29: this binding is read again at the bottom of the function, and the
-        // shared reborrows of the same array in between (the `iClosestDid` scan)
-        // pop a `Unique` where they would leave a `SharedReadWrite` alone.
-        let pDlayerParamInternal =
-            std::ptr::addr_of_mut!((*ctx_param_raw(pCtx)).sDependencyLayers[depIdx]);
+        // S11.42: S29's cursor is gone — its five uses were reads, and each
+        // re-derives through `param()` at its use (the loop below already spelled
+        // the same idiom), so nothing survives anything.
         let iTargetWidth = pCtx.param().sSpatialLayers[depIdx].iVideoWidth;
         let iTargetHeight = pCtx.param().sSpatialLayers[depIdx].iVideoHeight;
         let iSrcWidth = pCtx.param().SUsedPicRect.iWidth;
@@ -1271,7 +1264,7 @@ impl CWelsPreProcess {
         let uiIntraPeriod = pCtx.param().uiIntraPeriod;
 
         if uiIntraPeriod != 0 && pCtx.vaa().is_some() {
-            let iFrameIndex = (*pDlayerParamInternal).iFrameIndex;
+            let iFrameIndex = pCtx.param().sDependencyLayers[depIdx].iFrameIndex;
             pCtx.vaa_mut()
                 .expect("the frame's video-analysis block")
                 .bIdrPeriodFlag = (1 + iFrameIndex) >= uiIntraPeriod as i32;
@@ -1323,15 +1316,17 @@ impl CWelsPreProcess {
 
         if pCtx.param().bEnableSceneChangeDetect && pCtx.vaa().is_some() && !pCtx.vaa().expect("the frame's video-analysis block").bIdrPeriodFlag {
             if pCtx.param().iUsageType == EUsageType::SCREEN_CONTENT_REAL_TIME {
-                let idc = if (*pDlayerParamInternal).bEncCurFrmAsIdrFlag {
+                let idc = if pCtx.param().sDependencyLayers[depIdx].bEncCurFrmAsIdrFlag {
                     ESceneChangeIdc::LARGE_CHANGED_SCENE
                 } else {
                     self.DetectSceneChange(pCtx, pDstPic, None)
                 };
                 pCtx.vaa_mut().expect("the frame's video-analysis block").eSceneChangeIdc = idc;
                 pCtx.vaa_mut().expect("the frame's video-analysis block").bSceneChangeFlag = idc == ESceneChangeIdc::LARGE_CHANGED_SCENE;
-            } else if !(*pDlayerParamInternal).bEncCurFrmAsIdrFlag
-                && ((*pDlayerParamInternal).iCodingIndex & (pCtx.param().uiGopSize as i32 - 1)) == 0
+            } else if !pCtx.param().sDependencyLayers[depIdx].bEncCurFrmAsIdrFlag
+                && (pCtx.param().sDependencyLayers[depIdx].iCodingIndex
+                    & (pCtx.param().uiGopSize as i32 - 1))
+                    == 0
             {
                 let pRefPic = if ctx_ltr_at(pCtx, depIdx).bReceivedT0LostFlag {
                     let pos = self.m_uiSpatialLayersInTemporal[depIdx] as usize
@@ -1357,7 +1352,10 @@ impl CWelsPreProcess {
         }
 
         let gopMask = pCtx.param().uiGopSize as i32 - 1;
-        let tid = (*pDlayerParamInternal).uiCodingIdx2TemporalId[((*pDlayerParamInternal).iCodingIndex & gopMask) as usize];
+        let tid = {
+            let pInternal = &pCtx.param().sDependencyLayers[depIdx];
+            pInternal.uiCodingIdx2TemporalId[(pInternal.iCodingIndex & gopMask) as usize]
+        };
         let mut iActualSpatialNum = iSpatialNum - 1;
         if tid != INVALID_TEMPORAL_ID {
             let idDst = match pDstPic {
@@ -1423,9 +1421,7 @@ impl CWelsPreProcess {
         ENC_RETURN_SUCCESS
     }
 
-    // unsafe-cat: port-raw(Phase 9)
-    #[allow(unsafe_code)]
-    pub unsafe fn AnalyzeSpatialPic(&mut self, pCtx: &mut sWelsEncCtx, kiDidx: i32) -> i32 {
+    pub fn AnalyzeSpatialPic(&mut self, pCtx: &mut sWelsEncCtx, kiDidx: i32) -> i32 {
         // A7, §4.6 reorder: every parameter field this body reads is a scalar, and
         // this body hands the context to eight different callees, so nothing is held
         // as a borrow across them.
@@ -1731,9 +1727,7 @@ impl CWelsPreProcess {
         let _ = crate::processing::denoise::Denoise(uiType, &sSrcPixMap, &mut planes);
     }
 
-    // unsafe-cat: port-raw(Phase 9)
-    #[allow(unsafe_code)]
-    pub unsafe fn DownsamplePadding(
+    pub fn DownsamplePadding(
         &mut self,
         srcRef: SrcPicRef,
         dstRef: SrcPicRef,
@@ -1824,22 +1818,29 @@ impl CWelsPreProcess {
                 }
                 self.m_vp.sDownsample.m_pSampleBuffer = scratch;
             } else {
-                WelsMoveMemory_c(
-                    pDstPic.pData[0],
-                    pDstPic.pData[1],
-                    pDstPic.pData[2],
-                    pDstPic.iLineSize[0],
-                    pDstPic.iLineSize[1],
-                    pDstPic.iLineSize[2],
-                    pSrc.pData[0],
-                    pSrc.pData[1],
-                    pSrc.pData[2],
-                    pSrc.iLineSize[0],
-                    pSrc.iLineSize[1],
-                    pSrc.iLineSize[2],
-                    iSrcWidth,
-                    iSrcHeight,
-                );
+                // S11.42: the copy primitive's claim, at a pool-to-pool site —
+                // both `PicPlanes` were resolved from live pool pictures above
+                // (S37's shape), two distinct slots, geometry the pool's own.
+                // unsafe-cat: port-raw(Phase 9)
+                #[allow(unsafe_code)]
+                unsafe {
+                    WelsMoveMemory_c(
+                        pDstPic.pData[0],
+                        pDstPic.pData[1],
+                        pDstPic.pData[2],
+                        pDstPic.iLineSize[0],
+                        pDstPic.iLineSize[1],
+                        pDstPic.iLineSize[2],
+                        pSrc.pData[0],
+                        pSrc.pData[1],
+                        pSrc.pData[2],
+                        pSrc.iLineSize[0],
+                        pSrc.iLineSize[1],
+                        pSrc.iLineSize[2],
+                        iSrcWidth,
+                        iSrcHeight,
+                    );
+                }
             }
         }
 
@@ -1874,9 +1875,7 @@ impl CWelsPreProcess {
         iRet
     }
 
-    // unsafe-cat: port-raw(Phase 9)
-    #[allow(unsafe_code)]
-    pub unsafe fn VaaCalculation(
+    pub fn VaaCalculation(
         &mut self,
         pVaaInfo: &mut SVAAFrameInfo,
         pCurPicture: Option<SrcPicId>,
@@ -1920,12 +1919,18 @@ impl CWelsPreProcess {
         // METHOD_VAA_STATISTICS. The result is handed over at the call; the C++
         // stored `&pVaaInfo->sVaaCalcInfo` in the parameter block.
         self.m_vp.sVaaCalc.Set(&calc_param);
-        self.m_vp.sVaaCalc.Process(&sCurPixMap, &sRefPixMap, &mut pVaaInfo.sVaaCalcInfo);
+        // S11.42: the audited call at this body's boundary — the plugin's
+        // `Process` walks both pixmaps through raw plane cursors and is the
+        // processing/ family's to convert; the pixmaps were built from live
+        // pool pictures above (F279: the body's last raw op).
+        // unsafe-cat: port-raw(Phase 9)
+        #[allow(unsafe_code)]
+        unsafe {
+            self.m_vp.sVaaCalc.Process(&sCurPixMap, &sRefPixMap, &mut pVaaInfo.sVaaCalcInfo);
+        }
     }
 
-    // unsafe-cat: port-raw(Phase 9)
-    #[allow(unsafe_code)]
-    pub unsafe fn BackgroundDetection(
+    pub fn BackgroundDetection(
         &mut self,
         pVaaInfo: &mut SVAAFrameInfo,
         pCurPicture: Option<SrcPicId>,
@@ -1982,12 +1987,17 @@ impl CWelsPreProcess {
             // because the C++ makes it and the port mirrors the sequence.
             self.m_vp.sBackgroundDetection.Set(&BGDParam);
             let SVAAFrameInfo { sVaaCalcInfo, pVaaBackgroundMbFlag, .. } = pVaaInfo;
-            self.m_vp.sBackgroundDetection.Process(
-                &sSrcPixMap,
-                &sRefPixMap,
-                sVaaCalcInfo,
-                pVaaBackgroundMbFlag,
-            );
+            // S11.42: the plugin boundary, as at `VaaCalculation` (F279).
+            // unsafe-cat: port-raw(Phase 9)
+            #[allow(unsafe_code)]
+            unsafe {
+                self.m_vp.sBackgroundDetection.Process(
+                    &sSrcPixMap,
+                    &sRefPixMap,
+                    sVaaCalcInfo,
+                    pVaaBackgroundMbFlag,
+                );
+            }
         } else {
             let iPicWidthInMb = (sCur.iWidthInPixel + 15) >> 4;
             let iPicHeightInMb = (sCur.iHeightInPixel + 15) >> 4;
@@ -1997,9 +2007,7 @@ impl CWelsPreProcess {
         }
     }
 
-    // unsafe-cat: port-raw(Phase 9)
-    #[allow(unsafe_code)]
-    pub unsafe fn AdaptiveQuantCalculation(
+    pub fn AdaptiveQuantCalculation(
         &mut self,
         pVaaInfo: &mut SVAAFrameInfo,
         pCurPicture: Option<SrcPicId>,
@@ -2036,13 +2044,18 @@ impl CWelsPreProcess {
 
         // METHOD_ADAPTIVE_QUANT.
         self.m_vp.sAdaptiveQuant.Set(&pVaaInfo.sAdaptiveQuantParam);
-        let iRet = self.m_vp.sAdaptiveQuant.Process(
-            &pSrc,
-            &pRef,
-            &pVaaInfo.sVaaCalcInfo,
-            &mut pVaaInfo.pMotionTextureUnit,
-            &mut pVaaInfo.pMotionTextureIndexToDeltaQp,
-        );
+        // S11.42: the plugin boundary, as at `VaaCalculation` (F279).
+        // unsafe-cat: port-raw(Phase 9)
+        #[allow(unsafe_code)]
+        let iRet = unsafe {
+            self.m_vp.sAdaptiveQuant.Process(
+                &pSrc,
+                &pRef,
+                &pVaaInfo.sVaaCalcInfo,
+                &mut pVaaInfo.pMotionTextureUnit,
+                &mut pVaaInfo.pMotionTextureIndexToDeltaQp,
+            )
+        };
         if iRet == 0 {
             self.m_vp.sAdaptiveQuant.Get(&mut pVaaInfo.sAdaptiveQuantParam);
         }
@@ -2152,25 +2165,23 @@ impl CWelsPreProcess {
         0
     }
 
-    // unsafe-cat: port-raw(Phase 9)
-    #[allow(unsafe_code)]
-    pub unsafe fn WelsMoveMemoryWrapper(
+    pub fn WelsMoveMemoryWrapper(
         &mut self,
         pSvcParam: &SWelsSvcCodingParam,
         pDstRef: SrcPicRef,
-        kpSrc: *const SSourcePicture,
+        kpSrc: &SSourcePicture,
         kiTargetWidth: i32,
         kiTargetHeight: i32,
     ) -> i32 {
-        if (VideoFormat::videoFormatI420 as i32) != ((*kpSrc).iColorFormat & !(-0x80000000i32)) {
+        if (VideoFormat::videoFormatI420 as i32) != (kpSrc.iColorFormat & !(-0x80000000i32)) {
             return ENC_RETURN_INVALIDINPUT;
         }
 
         // S37: the destination resolved once to its plane roots.
         let pDstPic = self.src_mut(pDstRef).planes();
 
-        let mut iSrcWidth = (*kpSrc).iPicWidth;
-        let mut iSrcHeight = (*kpSrc).iPicHeight;
+        let mut iSrcWidth = kpSrc.iPicWidth;
+        let mut iSrcHeight = kpSrc.iPicHeight;
 
         if iSrcHeight > kiTargetHeight {
             iSrcHeight = kiTargetHeight;
@@ -2191,29 +2202,32 @@ impl CWelsPreProcess {
         let kiSrcLeftOffsetY = (*pSvcParam).SUsedPicRect.iLeft;
         let kiSrcLeftOffsetUV = kiSrcLeftOffsetY >> 1;
 
-        let iSrcOffset0 = (*kpSrc).iStride[0] * kiSrcTopOffsetY + kiSrcLeftOffsetY;
-        let iSrcOffset1 = (*kpSrc).iStride[1] * kiSrcTopOffsetUV + kiSrcLeftOffsetUV;
-        let iSrcOffset2 = (*kpSrc).iStride[2] * kiSrcTopOffsetUV + kiSrcLeftOffsetUV;
+        let iSrcOffset0 = kpSrc.iStride[0] * kiSrcTopOffsetY + kiSrcLeftOffsetY;
+        let iSrcOffset1 = kpSrc.iStride[1] * kiSrcTopOffsetUV + kiSrcLeftOffsetUV;
+        let iSrcOffset2 = kpSrc.iStride[2] * kiSrcTopOffsetUV + kiSrcLeftOffsetUV;
 
-        let pSrcY = if !(*kpSrc).pData[0].is_null() {
-            (*kpSrc).pData[0].offset(iSrcOffset0 as isize)
+        // S11.42: `wrapping_offset` — the arithmetic is safe Rust; whether the
+        // resulting pointers are valid is the copy's claim, asserted once at the
+        // `WelsMoveMemory_c` call below after the guards have run.
+        let pSrcY = if !kpSrc.pData[0].is_null() {
+            kpSrc.pData[0].wrapping_offset(iSrcOffset0 as isize)
         } else {
             std::ptr::null_mut()
         };
-        let pSrcU = if !(*kpSrc).pData[1].is_null() {
-            (*kpSrc).pData[1].offset(iSrcOffset1 as isize)
+        let pSrcU = if !kpSrc.pData[1].is_null() {
+            kpSrc.pData[1].wrapping_offset(iSrcOffset1 as isize)
         } else {
             std::ptr::null_mut()
         };
-        let pSrcV = if !(*kpSrc).pData[2].is_null() {
-            (*kpSrc).pData[2].offset(iSrcOffset2 as isize)
+        let pSrcV = if !kpSrc.pData[2].is_null() {
+            kpSrc.pData[2].wrapping_offset(iSrcOffset2 as isize)
         } else {
             std::ptr::null_mut()
         };
 
-        let kiSrcStrideY = (*kpSrc).iStride[0];
-        let kiSrcStrideU = (*kpSrc).iStride[1];
-        let kiSrcStrideV = (*kpSrc).iStride[2];
+        let kiSrcStrideY = kpSrc.iStride[0];
+        let kiSrcStrideU = kpSrc.iStride[1];
+        let kiSrcStrideV = kpSrc.iStride[2];
 
         let pDstY = pDstPic.pData[0];
         let pDstU = pDstPic.pData[1];
@@ -2262,6 +2276,12 @@ impl CWelsPreProcess {
             return ENC_RETURN_INVALIDINPUT;
         }
 
+        // unsafe-cat: C-ABI — the ingest copy from the application's buffers.
+        // The guards above have checked the null/size/stride contract the C++
+        // checks; what remains — that the application's pointers address what
+        // its strides promise — is the API's contract, named on the callee.
+        #[allow(unsafe_code)]
+        unsafe {
         WelsMoveMemory_c(
             pDstY,
             pDstU,
@@ -2278,6 +2298,7 @@ impl CWelsPreProcess {
             iSrcWidth,
             iSrcHeight,
         );
+        }
 
         if kiTargetWidth > iSrcWidth || kiTargetHeight > iSrcHeight {
             // S5.C6a: the destination re-derived as planes, after the copy above has

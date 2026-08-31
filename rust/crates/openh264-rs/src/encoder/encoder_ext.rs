@@ -3826,13 +3826,7 @@ pub fn WelsEncoderEncodeExt(
             }
         }
         crate::encoder::encoder_context::InitFrameCoding(pCtx, eFrameType, iCurDid as i32);
-        // S11.41: the audited call at this body's boundary — the callee's three
-        // VAA passes (`VaaCalculation`, `BackgroundDetection`,
-        // `AdaptiveQuantCalculation`) are its unconverted subtree, and this call
-        // is one of the body's last raw ops (F279).
-        // unsafe-cat: port-raw(Phase 9)
-        #[allow(unsafe_code)]
-        crate::encoder::encoder_context::with_vpp(pCtx, |pVpp, pCtx| unsafe {
+        crate::encoder::encoder_context::with_vpp(pCtx, |pVpp, pCtx| {
             pVpp.AnalyzeSpatialPic(pCtx, iCurDid as i32)
         });
 
