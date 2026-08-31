@@ -1512,16 +1512,12 @@ mod tests {
     }
 
     #[test]
-    // unsafe-cat: instrument(test)
-    #[allow(unsafe_code)]
     fn test_non_zero_count_c() {
         let mut nzc: [i8; 24] = [
             0, 5, 0, 12, -3, 0, 0, 1, 0, 0, 0, 4,
             0, 0, 0, 0, 2, 0, 0, 0, 0, 7, 0, 0,
         ];
-        unsafe {
-            WelsNonZeroCount_c(&mut nzc);
-        }
+        WelsNonZeroCount_c(&mut nzc);
         for (i, &val) in nzc.iter().enumerate() {
             if [1, 3, 4, 7, 11, 16, 21].contains(&i) {
                 assert_eq!(val, 1);

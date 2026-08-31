@@ -2882,8 +2882,6 @@ mod tests {
     }
 
     #[test]
-    // unsafe-cat: instrument(test)
-    #[allow(unsafe_code)]
     fn test_rc_intentional_noop_callbacks() {
         // **T9.H11: the context arguments are `&mut` now, so the nulls go.**
         // This test used to pass `null_mut()` for the context to prove these
@@ -2902,14 +2900,12 @@ mod tests {
         // production caller reaches this through `pfRc.WelsRcMbInfoUpdate`, whose
         // context is the encode path's and never null.
         let mut ctx = Box::new(sWelsEncCtx::default());
-        unsafe {
-            assert!(!WelsRcPostFrameSkipping(&mut ctx, 0, 0));
-            WelsRcPostFrameSkippedUpdate(&mut ctx, 0);
-            WelsRcPictureInfoUpdateDisable(&mut ctx, 0);
-            let mut sMb = SMB::default();
-            let mut sSlice = crate::encoder::svc_encode_slice::SSlice::new();
-            WelsRcMbInfoUpdateDisable(&ctx, &mut sMb, 0, &mut sSlice, None);
-        }
+        assert!(!WelsRcPostFrameSkipping(&mut ctx, 0, 0));
+        WelsRcPostFrameSkippedUpdate(&mut ctx, 0);
+        WelsRcPictureInfoUpdateDisable(&mut ctx, 0);
+        let mut sMb = SMB::default();
+        let mut sSlice = crate::encoder::svc_encode_slice::SSlice::new();
+        WelsRcMbInfoUpdateDisable(&ctx, &mut sMb, 0, &mut sSlice, None);
     }
 }
 

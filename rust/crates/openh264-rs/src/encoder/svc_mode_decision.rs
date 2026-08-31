@@ -2674,153 +2674,137 @@ mod tests {
     }
 
     #[test]
-    // unsafe-cat: instrument(test)
-    #[allow(unsafe_code)]
     fn test_pred_mv_basic_median() {
-        unsafe {
-            let mut mv_comp = SMVComponentUnit::default();
-            // Cache index 6 is Left (kuiLeftIdx), 1 is Top (kuiTopIdx), 5 is RightTop (kuiTopIdx + 4)
-            mv_comp.iRefIndexCache[6] = 0;
-            mv_comp.iRefIndexCache[1] = 0;
-            mv_comp.iRefIndexCache[5] = 0;
+        let mut mv_comp = SMVComponentUnit::default();
+        // Cache index 6 is Left (kuiLeftIdx), 1 is Top (kuiTopIdx), 5 is RightTop (kuiTopIdx + 4)
+        mv_comp.iRefIndexCache[6] = 0;
+        mv_comp.iRefIndexCache[1] = 0;
+        mv_comp.iRefIndexCache[5] = 0;
 
-            mv_comp.sMotionVectorCache[6] = SMVUnitXY { iMvX: 10, iMvY: 20 };
-            mv_comp.sMotionVectorCache[1] = SMVUnitXY { iMvX: 30, iMvY: 40 };
-            mv_comp.sMotionVectorCache[5] = SMVUnitXY { iMvX: 20, iMvY: 30 };
+        mv_comp.sMotionVectorCache[6] = SMVUnitXY { iMvX: 10, iMvY: 20 };
+        mv_comp.sMotionVectorCache[1] = SMVUnitXY { iMvX: 30, iMvY: 40 };
+        mv_comp.sMotionVectorCache[5] = SMVUnitXY { iMvX: 20, iMvY: 30 };
 
-            let mut sMvp = SMVUnitXY::default();
-            PredMv(&mv_comp, 0, 4, 0, &mut sMvp);
+        let mut sMvp = SMVUnitXY::default();
+        PredMv(&mv_comp, 0, 4, 0, &mut sMvp);
 
-            // Median of (10, 30, 20) is 20; Median of (20, 40, 30) is 30
-            assert_eq!(sMvp.iMvX, 20);
-            assert_eq!(sMvp.iMvY, 30);
-        }
+        // Median of (10, 30, 20) is 20; Median of (20, 40, 30) is 30
+        assert_eq!(sMvp.iMvX, 20);
+        assert_eq!(sMvp.iMvY, 30);
     }
 
     #[test]
-    // unsafe-cat: instrument(test)
-    #[allow(unsafe_code)]
     fn test_pred_skip_mv_zero_ref() {
-        unsafe {
-            // iSadCost/iSadCostSkip/bMbTypeSkip are fixed arrays in C++
-            // (mb_cache.h:81, :110, :111), not pointers; these tests only need the
-            // MV cache, so the rest comes from Default.
-            let mut mb_cache = SMbCache {
-                uiRefMbType: 0,
-                sMvComponents: SMVComponentUnit::default(),
-                sMbMvp: [SMVUnitXY::default(); 16],
-                uiNeighborIntra: 0,
-                uiLumaI16x16Mode: 0,
-                bCollocatedPredFlag: false,
-                ..Default::default()
-            };
+        // iSadCost/iSadCostSkip/bMbTypeSkip are fixed arrays in C++
+        // (mb_cache.h:81, :110, :111), not pointers; these tests only need the
+        // MV cache, so the rest comes from Default.
+        let mut mb_cache = SMbCache {
+            uiRefMbType: 0,
+            sMvComponents: SMVComponentUnit::default(),
+            sMbMvp: [SMVUnitXY::default(); 16],
+            uiNeighborIntra: 0,
+            uiLumaI16x16Mode: 0,
+            bCollocatedPredFlag: false,
+            ..Default::default()
+        };
 
-            // When left & top ref MVs are (0,0) and ref=0, PredSkipMv returns (0,0)
-            mb_cache.sMvComponents.iRefIndexCache[6] = 0;
-            mb_cache.sMvComponents.iRefIndexCache[1] = 0;
-            mb_cache.sMvComponents.sMotionVectorCache[6] = SMVUnitXY { iMvX: 0, iMvY: 0 };
-            mb_cache.sMvComponents.sMotionVectorCache[1] = SMVUnitXY { iMvX: 0, iMvY: 0 };
+        // When left & top ref MVs are (0,0) and ref=0, PredSkipMv returns (0,0)
+        mb_cache.sMvComponents.iRefIndexCache[6] = 0;
+        mb_cache.sMvComponents.iRefIndexCache[1] = 0;
+        mb_cache.sMvComponents.sMotionVectorCache[6] = SMVUnitXY { iMvX: 0, iMvY: 0 };
+        mb_cache.sMvComponents.sMotionVectorCache[1] = SMVUnitXY { iMvX: 0, iMvY: 0 };
 
-            let mut sMvp = SMVUnitXY { iMvX: 99, iMvY: 99 };
-            PredSkipMv(&mb_cache.sMvComponents, &mut sMvp);
+        let mut sMvp = SMVUnitXY { iMvX: 99, iMvY: 99 };
+        PredSkipMv(&mb_cache.sMvComponents, &mut sMvp);
 
-            assert_eq!(sMvp.iMvX, 0);
-            assert_eq!(sMvp.iMvY, 0);
-        }
+        assert_eq!(sMvp.iMvX, 0);
+        assert_eq!(sMvp.iMvY, 0);
     }
 
     #[test]
-    // unsafe-cat: instrument(test)
-    #[allow(unsafe_code)]
     fn test_pred_inter_16x8_8x16_mv() {
-        unsafe {
-            // iSadCost/iSadCostSkip/bMbTypeSkip are fixed arrays in C++
-            // (mb_cache.h:81, :110, :111), not pointers; these tests only need the
-            // MV cache, so the rest comes from Default.
-            let mut mb_cache = SMbCache {
-                uiRefMbType: 0,
-                sMvComponents: SMVComponentUnit::default(),
-                sMbMvp: [SMVUnitXY::default(); 16],
-                uiNeighborIntra: 0,
-                uiLumaI16x16Mode: 0,
-                bCollocatedPredFlag: false,
-                ..Default::default()
-            };
+        // iSadCost/iSadCostSkip/bMbTypeSkip are fixed arrays in C++
+        // (mb_cache.h:81, :110, :111), not pointers; these tests only need the
+        // MV cache, so the rest comes from Default.
+        let mut mb_cache = SMbCache {
+            uiRefMbType: 0,
+            sMvComponents: SMVComponentUnit::default(),
+            sMbMvp: [SMVUnitXY::default(); 16],
+            uiNeighborIntra: 0,
+            uiLumaI16x16Mode: 0,
+            bCollocatedPredFlag: false,
+            ..Default::default()
+        };
 
-            mb_cache.sMvComponents.iRefIndexCache[1] = 0; // Top ref for 16x8 part 0
-            mb_cache.sMvComponents.sMotionVectorCache[1] = SMVUnitXY { iMvX: 12, iMvY: 34 };
+        mb_cache.sMvComponents.iRefIndexCache[1] = 0; // Top ref for 16x8 part 0
+        mb_cache.sMvComponents.sMotionVectorCache[1] = SMVUnitXY { iMvX: 12, iMvY: 34 };
 
-            let mut sMvp = SMVUnitXY::default();
-            PredInter16x8Mv(&mb_cache.sMvComponents, 0, 0, &mut sMvp);
-            assert_eq!(sMvp.iMvX, 12);
-            assert_eq!(sMvp.iMvY, 34);
+        let mut sMvp = SMVUnitXY::default();
+        PredInter16x8Mv(&mb_cache.sMvComponents, 0, 0, &mut sMvp);
+        assert_eq!(sMvp.iMvX, 12);
+        assert_eq!(sMvp.iMvY, 34);
 
-            mb_cache.sMvComponents.iRefIndexCache[6] = 0; // Left ref for 8x16 part 0
-            mb_cache.sMvComponents.sMotionVectorCache[6] = SMVUnitXY { iMvX: 56, iMvY: 78 };
+        mb_cache.sMvComponents.iRefIndexCache[6] = 0; // Left ref for 8x16 part 0
+        mb_cache.sMvComponents.sMotionVectorCache[6] = SMVUnitXY { iMvX: 56, iMvY: 78 };
 
-            let mut sMvp8x16 = SMVUnitXY::default();
-            PredInter8x16Mv(&mb_cache.sMvComponents, 0, 0, &mut sMvp8x16);
-            assert_eq!(sMvp8x16.iMvX, 56);
-            assert_eq!(sMvp8x16.iMvY, 78);
-        }
+        let mut sMvp8x16 = SMVUnitXY::default();
+        PredInter8x16Mv(&mb_cache.sMvComponents, 0, 0, &mut sMvp8x16);
+        assert_eq!(sMvp8x16.iMvX, 56);
+        assert_eq!(sMvp8x16.iMvY, 78);
     }
 
     #[test]
-    // unsafe-cat: instrument(test)
-    #[allow(unsafe_code)]
     fn test_update_p16x16_motion_info() {
-        unsafe {
-            // iSadCost/iSadCostSkip/bMbTypeSkip are fixed arrays in C++
-            // (mb_cache.h:81, :110, :111), not pointers; these tests only need the
-            // MV cache, so the rest comes from Default.
-            let mut mb_cache = SMbCache {
-                uiRefMbType: 0,
-                sMvComponents: SMVComponentUnit::default(),
-                sMbMvp: [SMVUnitXY::default(); 16],
-                uiNeighborIntra: 0,
-                uiLumaI16x16Mode: 0,
-                bCollocatedPredFlag: false,
-                ..Default::default()
-            };
+        // iSadCost/iSadCostSkip/bMbTypeSkip are fixed arrays in C++
+        // (mb_cache.h:81, :110, :111), not pointers; these tests only need the
+        // MV cache, so the rest comes from Default.
+        let mut mb_cache = SMbCache {
+            uiRefMbType: 0,
+            sMvComponents: SMVComponentUnit::default(),
+            sMbMvp: [SMVUnitXY::default(); 16],
+            uiNeighborIntra: 0,
+            uiLumaI16x16Mode: 0,
+            bCollocatedPredFlag: false,
+            ..Default::default()
+        };
 
-            let mut cur_mb = SMB {
-                uiMbType: MB_TYPE_16x16,
-                uiSubMbType: [0; 4],
-                iMbXY: 0,
-                iMbX: 0,
-                iMbY: 0,
-                uiNeighborAvail: 0,
-                uiCbp: 0,
-                sMv: [SMVUnitXY::default(); MB_BLOCK4x4_NUM],
-                iRefIndex: [0; MB_BLOCK8x8_NUM],
-                iSadCost: 0,
-                iIntra4x4PredMode: [0; crate::encoder::md::INTRA_4x4_MODE_NUM],
-                iNonZeroCount: [0; MB_LUMA_CHROMA_BLOCK4x4_NUM],
-                sP16x16Mv: SMVUnitXY::default(),
-                uiLumaQp: 26,
-                uiChromaQp: 26,
-                uiSliceIdc: 0,
-                uiChromPredMode: 0,
-                iLumaDQp: 0,
-                sMvd: [SMVUnitXY::default(); 16],
-                iCbpDc: 0,
-            };
+        let mut cur_mb = SMB {
+            uiMbType: MB_TYPE_16x16,
+            uiSubMbType: [0; 4],
+            iMbXY: 0,
+            iMbX: 0,
+            iMbY: 0,
+            uiNeighborAvail: 0,
+            uiCbp: 0,
+            sMv: [SMVUnitXY::default(); MB_BLOCK4x4_NUM],
+            iRefIndex: [0; MB_BLOCK8x8_NUM],
+            iSadCost: 0,
+            iIntra4x4PredMode: [0; crate::encoder::md::INTRA_4x4_MODE_NUM],
+            iNonZeroCount: [0; MB_LUMA_CHROMA_BLOCK4x4_NUM],
+            sP16x16Mv: SMVUnitXY::default(),
+            uiLumaQp: 26,
+            uiChromaQp: 26,
+            uiSliceIdc: 0,
+            uiChromPredMode: 0,
+            iLumaDQp: 0,
+            sMvd: [SMVUnitXY::default(); 16],
+            iCbpDc: 0,
+        };
 
-            let mut target_mv = SMVUnitXY { iMvX: 42, iMvY: -15 };
-            UpdateP16x16MotionInfo(
-                &mut mb_cache.sMvComponents,
-                &mut cur_mb,
-                0,
-                &mut target_mv,
-            );
+        let mut target_mv = SMVUnitXY { iMvX: 42, iMvY: -15 };
+        UpdateP16x16MotionInfo(
+            &mut mb_cache.sMvComponents,
+            &mut cur_mb,
+            0,
+            &mut target_mv,
+        );
 
-            assert_eq!(cur_mb.sMv[0], target_mv);
-            assert_eq!(cur_mb.iRefIndex[0], 0);
-            assert_eq!(
-                mb_cache.sMvComponents.sMotionVectorCache[g_kuiCache30ScanIdx[0] as usize],
-                target_mv
-            );
-        }
+        assert_eq!(cur_mb.sMv[0], target_mv);
+        assert_eq!(cur_mb.iRefIndex[0], 0);
+        assert_eq!(
+            mb_cache.sMvComponents.sMotionVectorCache[g_kuiCache30ScanIdx[0] as usize],
+            target_mv
+        );
     }
 
     #[test]
@@ -2946,8 +2930,6 @@ mod tests {
     }
 
     #[test]
-    // unsafe-cat: instrument(test)
-    #[allow(unsafe_code)]
     fn test_svc_mode_decision_noop_callback() {
         // The MD argument used to be a null raw MD pointer; it is a `&mut` now, so
         // the null goes and a real record takes its place. **S4.C1 does the same to
@@ -2956,8 +2938,6 @@ mod tests {
         // callback is the no-op arm of `PSetScrollingMv` and reads neither.
         let sVaa = SVAAFrameInfo::default();
         let mut sMd = SWelsMD::default();
-        unsafe {
-            SetScrollingMvToMdNull(&sVaa, &mut sMd);
-        }
+        SetScrollingMvToMdNull(&sVaa, &mut sMd);
     }
 }
