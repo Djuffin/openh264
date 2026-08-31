@@ -2065,17 +2065,13 @@ mod tests {
     use super::*;
 
     #[test]
-    // unsafe-cat: instrument(test)
-    #[allow(unsafe_code)]
     fn test_ref_list_mgr_noop_callback() {
         // T9.H11: the context argument is `&mut` now, so the null goes — see
         // `rc.rs`'s `test_rc_intentional_noop_callbacks` for the reasoning. A
         // `&mut sWelsEncCtx` cannot be null, so the type enforces more than the
         // old `null_mut()` argument asserted.
         let mut ctx = Box::new(sWelsEncCtx::default());
-        unsafe {
-            DoNothing(&mut ctx);
-        }
+        DoNothing(&mut ctx);
     }
 
     /// The whole of `CreateReferenceStrategy`, which used to be a two-level `match`

@@ -1132,27 +1132,23 @@ mod tests {
     }
 
     #[test]
-    // unsafe-cat: instrument(test)
-    #[allow(unsafe_code)]
     fn test_cabac_encode_init_and_flush() {
-        unsafe {
-            let mut cb_ctx = SCabacCtx::default();
-            let mut buf = vec![0u8; 1024];
-            let len = buf.len();
+        let mut cb_ctx = SCabacCtx::default();
+        let mut buf = vec![0u8; 1024];
+        let len = buf.len();
 
-            WelsCabacEncodeInit(&mut cb_ctx, 0, len);
-            assert_eq!(cb_ctx.m_uiLow, 0);
-            assert_eq!(cb_ctx.m_iLowBitCnt, 9);
-            assert_eq!(cb_ctx.m_uiRange, 510);
-            assert_eq!(cb_ctx.m_iBufCur, 0);
+        WelsCabacEncodeInit(&mut cb_ctx, 0, len);
+        assert_eq!(cb_ctx.m_uiLow, 0);
+        assert_eq!(cb_ctx.m_iLowBitCnt, 9);
+        assert_eq!(cb_ctx.m_uiRange, 510);
+        assert_eq!(cb_ctx.m_iBufCur, 0);
 
-            // Encode a few bypass bits
-            WelsCabacEncodeBypassOne(&mut buf, &mut cb_ctx, 1);
-            WelsCabacEncodeBypassOne(&mut buf, &mut cb_ctx, 0);
+        // Encode a few bypass bits
+        WelsCabacEncodeBypassOne(&mut buf, &mut cb_ctx, 1);
+        WelsCabacEncodeBypassOne(&mut buf, &mut cb_ctx, 0);
 
-            WelsCabacEncodeFlush(&mut buf, &mut cb_ctx);
-            assert!(WelsCabacEncodePos(&mut cb_ctx) > 0);
-        }
+        WelsCabacEncodeFlush(&mut buf, &mut cb_ctx);
+        assert!(WelsCabacEncodePos(&mut cb_ctx) > 0);
     }
 
     /// A slice that does not start at the allocation's base: the walk must stop

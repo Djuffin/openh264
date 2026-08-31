@@ -974,9 +974,9 @@ mod tests {
     fn init_sps_matches_cxx_for_the_gate_configuration() {
         let (mut lp, mut li) = gate_layer();
         let mut sps = SWelsSPS::default();
-        unsafe {
-            assert_eq!(WelsInitSps(&mut sps, &mut lp, &mut li, 0, 1, 0, true, false, 1, false), 0);
-        }
+        // S11.9: the callee is still `unsafe fn`; the instrument names that
+        // claim in a block rather than carrying it on its own signature.
+        unsafe { assert_eq!(WelsInitSps(&mut sps, &mut lp, &mut li, 0, 1, 0, true, false, 1, false), 0); }
 
         assert_eq!(sps.iMbWidth, 10);
         assert_eq!(sps.iMbHeight, 6);
@@ -1038,13 +1038,13 @@ mod tests {
         let (mut lp, mut li) = gate_layer();
         let mut sps = SWelsSPS::default();
         let mut pps = SWelsPPS::default();
-        unsafe {
-            WelsInitSps(&mut sps, &mut lp, &mut li, 0, 1, 0, true, false, 1, false);
-            assert_eq!(
-                WelsInitPps(&mut pps, Some(&sps), None, 0, true, false, false),
-                0
-            );
-        }
+        // S11.9: the callee is still `unsafe fn`; the instrument names that
+        // claim in a block rather than carrying it on its own signature.
+        unsafe { WelsInitSps(&mut sps, &mut lp, &mut li, 0, 1, 0, true, false, 1, false); }
+        assert_eq!(
+            WelsInitPps(&mut pps, Some(&sps), None, 0, true, false, false),
+            0
+        );
         assert_eq!(pps.iPpsId, 0);
         assert_eq!(pps.iSpsId, 0);
         assert_eq!(pps.iPicInitQp, 26);

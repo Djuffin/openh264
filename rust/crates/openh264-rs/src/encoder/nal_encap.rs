@@ -641,35 +641,30 @@ mod tests {
     }
 
     #[test]
-    // unsafe-cat: C-ABI(test)
     // **T9.X — retagged from `MT`.** This is a test, and it drives a local
     // `SWelsSliceBs::default()` on the calling thread; nothing about it is
     // fork-reachable. Its `unsafe` is the ordinary one of calling an `unsafe extern
     // "C"` item from a test, which is what `C-ABI(test)` already means in this tree.
     // The other two `MT` tags in this file are real and stay.
-    // unsafe-cat: C-ABI(test) — named, per the note above.
-    #[allow(unsafe_code)]
     fn test_wels_load_and_unload_nal_slice() {
         let mut bs_buf = vec![0u8; 1024];
         let mut slice_bs = SWelsSliceBs::default();
         slice_bs.uiSize = 1024;
         slice_bs.sBsWrite = BsWriter::new();
 
-        unsafe {
-            WelsLoadNalForSlice(
-                &mut slice_bs,
-                EWelsNalUnitType::NAL_UNIT_CODED_SLICE as i32,
-                EWelsNalRefIdc::NRI_PRI_HIGH as i32,
-            );
-            assert_eq!(slice_bs.sNalList[0].iStartPos, 0);
+        WelsLoadNalForSlice(
+            &mut slice_bs,
+            EWelsNalUnitType::NAL_UNIT_CODED_SLICE as i32,
+            EWelsNalRefIdc::NRI_PRI_HIGH as i32,
+        );
+        assert_eq!(slice_bs.sNalList[0].iStartPos, 0);
 
-            // Simulate writing 16 bits (2 bytes)
-            BsWriteBits(&mut bs_buf, &mut slice_bs.sBsWrite, 16, 0xABCD);
-            BsFlush(&mut bs_buf, &mut slice_bs.sBsWrite);
+        // Simulate writing 16 bits (2 bytes)
+        BsWriteBits(&mut bs_buf, &mut slice_bs.sBsWrite, 16, 0xABCD);
+        BsFlush(&mut bs_buf, &mut slice_bs.sBsWrite);
 
-            WelsUnloadNalForSlice(&mut slice_bs);
-            assert_eq!(slice_bs.sNalList[0].iPayloadSize, 2);
-            assert_eq!(slice_bs.iNalIndex, 1);
-        }
+        WelsUnloadNalForSlice(&mut slice_bs);
+        assert_eq!(slice_bs.sNalList[0].iPayloadSize, 2);
+        assert_eq!(slice_bs.iNalIndex, 1);
     }
 }

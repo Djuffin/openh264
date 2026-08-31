@@ -1161,8 +1161,6 @@ mod tests {
     }
 
     #[test]
-    // unsafe-cat: instrument(test) — S11.5: a test, not a fork-reachable body.
-    #[allow(unsafe_code)]
     fn test_calc_slice_complex_ratio() {
         let mut dq_layer = layer_with_bank(2);
         for slice in dq_layer.sSliceBufferInfo[0].pSliceBuffer.iter_mut() {
@@ -1171,9 +1169,7 @@ mod tests {
         }
         dq_layer.sSliceEncCtx.iSliceNumInFrame.store(2, Ordering::Relaxed);
 
-        unsafe {
-            CalcSliceComplexRatio(&mut dq_layer);
-        }
+        CalcSliceComplexRatio(&mut dq_layer);
 
         assert_eq!(dq_layer.sSliceBufferInfo[0].pSliceBuffer[0].iSliceComplexRatio, 50);
         assert_eq!(dq_layer.sSliceBufferInfo[0].pSliceBuffer[1].iSliceComplexRatio, 50);

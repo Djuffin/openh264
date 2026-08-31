@@ -1036,13 +1036,9 @@ mod tests {
     }
 
     #[test]
-    // unsafe-cat: instrument(test)
-    #[allow(unsafe_code)]
     fn test_init_encoding_funcs() {
         let mut func_list = SWelsFuncPtrList::default();
-        unsafe {
-            WelsInitEncodingFuncs(&mut func_list, WELS_CPU_SSE2);
-        }
+        WelsInitEncodingFuncs(&mut func_list, WELS_CPU_SSE2);
 
         assert!(func_list.pfDctT4.is_some());
         assert!(func_list.pfQuantization4x4.is_some());

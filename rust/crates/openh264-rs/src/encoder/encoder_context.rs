@@ -3637,8 +3637,6 @@ mod tests {
     }
 
     #[test]
-    // unsafe-cat: instrument(test)
-    #[allow(unsafe_code)]
     fn test_update_and_loadback_framenum() {
         let mut param = SWelsSvcCodingParam::default();
         // Only the fields this test exercises; SWelsSPS is now the full
@@ -3667,15 +3665,13 @@ mod tests {
 
         let frame_num = |c: &sWelsEncCtx| c.pSvcParam.as_ref().unwrap().sDependencyLayers[0].iFrameNum;
 
-        unsafe {
-            UpdateFrameNum(&mut ctx, 0);
-            assert_eq!(frame_num(&ctx), 1);
-            assert_eq!(ctx.eLastNalPriority[0], EWelsNalRefIdc::NRI_PRI_LOWEST);
+        UpdateFrameNum(&mut ctx, 0);
+        assert_eq!(frame_num(&ctx), 1);
+        assert_eq!(ctx.eLastNalPriority[0], EWelsNalRefIdc::NRI_PRI_LOWEST);
 
-            ctx.eLastNalPriority[0] = EWelsNalRefIdc::NRI_PRI_HIGH;
-            LoadBackFrameNum(&mut ctx, 0);
-            assert_eq!(frame_num(&ctx), 0);
-        }
+        ctx.eLastNalPriority[0] = EWelsNalRefIdc::NRI_PRI_HIGH;
+        LoadBackFrameNum(&mut ctx, 0);
+        assert_eq!(frame_num(&ctx), 0);
     }
 
     #[test]
@@ -3689,10 +3685,10 @@ mod tests {
         // T6.H10: the context owns the block, so the fixture hands it one.
         ctx.pVaa = Some(Box::new(SVAAFrameInfo::default()));
 
-        unsafe {
-            let ft = DecideFrameType(&mut ctx, 1, 0, false);
-            assert_eq!(ft, EVideoFrameType::videoFrameTypeIDR);
-        }
+        // S11.9: the callee is still `unsafe fn`; the instrument names that
+        // claim in a block rather than carrying it on its own signature.
+        let ft = unsafe { DecideFrameType(&mut ctx, 1, 0, false) };
+        assert_eq!(ft, EVideoFrameType::videoFrameTypeIDR);
     }
 
     #[test]
