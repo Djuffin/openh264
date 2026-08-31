@@ -4461,8 +4461,13 @@ pub fn GetCurrentSliceNum(pCurDq: &SDqLayer) -> i32 {
 #[allow(unsafe_code)]
 pub unsafe fn FrameBsRealloc(
     pCtx: &mut sWelsEncCtx,
-    pFrameBsInfo: *mut SFrameBSInfo,
-    pLayerBsInfo: *mut SLayerBSInfo,
+    // **S11.20: the frame and an index.** The pointer pair carried an index
+    // the whole time — the body recovered it with `offset_from` and then
+    // walked *backwards* from it. Passing the index directly deletes both the
+    // recovery and the retag argument the comment below spent six lines on:
+    // there is no array-wide child tag to pop when the walk is `sLayerInfo[i]`.
+    pFbi: &mut SFrameBSInfo,
+    iLbi: usize,
     kiMaxSliceNumOld: i32,
 ) -> i32 {
     // (S3.B1: the S67/H2 audit note that stood here is borrowck's job now — this
@@ -4495,23 +4500,26 @@ pub unsafe fn FrameBsRealloc(
     // **Every write below goes through `pLayerBsInfo`, not through
     // `pFrameBsInfo`** — the probe's fourth red, and the first spelling of this fix
     // caused it. `WelsEncoderEncodeExt` builds its layer cursor once, as
-    // `(*pFbi).sLayerInfo.as_mut_ptr()` (`encoder_ext.rs`), which retags the whole
-    // array; `addr_of_mut!((*pFrameBsInfo).sLayerInfo[i])` creates no retag at all,
-    // so it writes with the *parent's* tag and pops that array-wide child — and the
-    // caller then reads `pNalLengthInByte` through it. Walking from `pLayerBsInfo`
-    // instead keeps every store inside the tag the caller is still holding. S28's
-    // rule in its other direction: derive from the root the consumers share.
-    let pFirstLayer = std::ptr::addr_of_mut!((*pFrameBsInfo).sLayerInfo).cast::<SLayerBSInfo>();
-    let kiLayersBefore = pLayerBsInfo.offset_from(pFirstLayer);
+    // S11.20: the walk is over indices `0..=iLbi`, back to front. The
+    // NAL-length values it distributes are the application's C-ABI pointer, so
+    // `cursor` stays raw; the *layers* it walks are checked array elements.
     debug_assert!(
-        kiLayersBefore >= 0 && (kiLayersBefore as usize) < MAX_LAYER_NUM_OF_FRAME,
-        "FrameBsRealloc: pLayerBsInfo is not one of pFrameBsInfo's layers"
+        iLbi < MAX_LAYER_NUM_OF_FRAME,
+        "FrameBsRealloc: layer index {iLbi} is outside pFbi.sLayerInfo"
     );
+    // **Ascending, and the order is load-bearing.** The raw form walked
+    // `pLayerBsInfo.offset(-iBack)` for `iBack` counting *down* from
+    // `kiLayersBefore`, which visits layer 0 first and this layer last — each
+    // layer's `pNalLengthInByte` is the previous one's plus its NAL count, so
+    // the cursor must accumulate front to back. Indexing `sLayerInfo[iBack]`
+    // over the same reversed range walks it backwards instead, which leaves
+    // every layer pointing at the wrong slot; `encode_loop_runs_over_size_
+    // limited_dynamic_slices_under_the_aliasing_checker` catches exactly that
+    // (F60's staleness assertion), and did.
     let mut cursor = pNalLen;
-    for iBack in (0..=kiLayersBefore).rev() {
-        let pLBI = pLayerBsInfo.offset(-iBack);
-        (*pLBI).pNalLengthInByte = cursor;
-        cursor = cursor.add((*pLBI).iNalCount as usize);
+    for i in 0..=iLbi {
+        pFbi.sLayerInfo[i].pNalLengthInByte = cursor;
+        cursor = cursor.add(pFbi.sLayerInfo[i].iNalCount as usize);
     }
 
     ENC_RETURN_SUCCESS
@@ -4521,8 +4529,9 @@ pub unsafe fn FrameBsRealloc(
 #[allow(unsafe_code)]
 pub unsafe fn SliceLayerInfoUpdate(
     pCtx: &mut sWelsEncCtx,
-    pFrameBsInfo: *mut SFrameBSInfo,
-    pLayerBsInfo: *mut SLayerBSInfo,
+    // S11.20: the frame and an index — see `FrameBsRealloc`.
+    pFbi: &mut SFrameBSInfo,
+    iLbi: usize,
     kuiSliceMode: SliceMode,
 ) -> i32 {
     let mut iMaxSliceNum = 0;
@@ -4548,13 +4557,13 @@ pub unsafe fn SliceLayerInfoUpdate(
     }
 
     let iCodedSliceNum = GetCurrentSliceNum(current_layer_ref(pCtx).expect("the frame's current layer is stamped"));
-    (*pLayerBsInfo).iNalCount = GetCurLayerNalCount(current_layer_mut(pCtx).expect("the frame's current layer is stamped"), iCodedSliceNum);
-    let iCodedNalCount = GetTotalCodedNalCount(&mut *pFrameBsInfo);
+    pFbi.sLayerInfo[iLbi].iNalCount = GetCurLayerNalCount(current_layer_mut(pCtx).expect("the frame's current layer is stamped"), iCodedSliceNum);
+    let iCodedNalCount = GetTotalCodedNalCount(pFbi);
 
     if iCodedNalCount > pCtx.pOut.as_deref().expect("pOut lives").sNalList.len() as i32 {
         // T9.G6: hoisted (shape B).
         let iCurMaxSliceNum = current_layer_ref(pCtx).expect("the frame's current layer is stamped").iMaxSliceNum;
-        iRet = FrameBsRealloc(pCtx, pFrameBsInfo, pLayerBsInfo, iCurMaxSliceNum);
+        iRet = FrameBsRealloc(pCtx, pFbi, iLbi, iCurMaxSliceNum);
         if iRet != ENC_RETURN_SUCCESS {
             return iRet;
         }

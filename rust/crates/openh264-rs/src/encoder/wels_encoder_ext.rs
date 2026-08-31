@@ -652,14 +652,12 @@ pub unsafe fn WelsWriteParameterSets(
 #[allow(unsafe_code)]
 pub unsafe fn WelsEncoderEncodeParameterSetsRust(
     pCtx: &mut sWelsEncCtx,
-    pBsInfo: *mut SFrameBSInfo,
+    // S11.20: by reference — its caller holds `&mut SFrameBSInfo`.
+    pBsInfo: &mut SFrameBSInfo,
 ) -> i32 {
     // T9.H: the `pCtx.is_null()` disjunct is gone — a `&mut sWelsEncCtx`
     // cannot be null and every caller now holds one. The rest is unchanged.
-    if pBsInfo.is_null() {
-        return ENC_RETURN_INVALIDINPUT;
-    }
-    let pLayerBsInfo = &mut (*pBsInfo).sLayerInfo[0];
+    let pLayerBsInfo = &mut pBsInfo.sLayerInfo[0];
     pLayerBsInfo.pBsBuf = pCtx.frame_bs();
     pLayerBsInfo.pNalLengthInByte = pCtx.pOut.as_deref_mut().expect("pOut lives").sNalLen.as_mut_ptr();
     // Was `InitBits(&…sBsWrite, …pBsBuffer, …uiSize)`. The buffer and its length stay
@@ -682,8 +680,8 @@ pub unsafe fn WelsEncoderEncodeParameterSetsRust(
     pLayerBsInfo.uiQualityId = 0;
     pLayerBsInfo.uiLayerType = NON_VIDEO_CODING_LAYER;
     pLayerBsInfo.iNalCount = iCountNal;
-    (*pBsInfo).iLayerNum = 1;
-    (*pBsInfo).eFrameType = EVideoFrameType::videoFrameTypeInvalid;
+    pBsInfo.iLayerNum = 1;
+    pBsInfo.eFrameType = EVideoFrameType::videoFrameTypeInvalid;
 
     ENC_RETURN_SUCCESS
 }
@@ -2164,7 +2162,7 @@ impl CWelsH264SVCEncoder {
 
             let kiBeforeFrameUs = WelsTime();
             let kiEncoderReturn =
-                crate::encoder::encoder_ext::WelsEncoderEncodeExt(pCtx, pBsInfo, pSrcPic);
+                crate::encoder::encoder_ext::WelsEncoderEncodeExt(pCtx, &mut *pBsInfo, pSrcPic);
             let kiCurrentFrameMs = (WelsTime() - kiBeforeFrameUs) / 1000;
 
             if kiEncoderReturn == ENC_RETURN_MEMALLOCERR
@@ -2187,7 +2185,8 @@ impl CWelsH264SVCEncoder {
         cmResultSuccess
     }
 
-    // unsafe-cat: port-raw(Phase 9)
+    // unsafe-cat: port-raw(Phase 9) — the one block below, on a callee whose own
+    // subtree (`WelsWriteParameterSets`) is unconverted.
     #[allow(unsafe_code)]
     pub fn EncodeParameterSets(&mut self, pBsInfo: &mut SFrameBSInfo) -> i32 {
         if !self.m_bInitialFlag {
@@ -2200,6 +2199,8 @@ impl CWelsH264SVCEncoder {
             return cmInitParaError;
         };
         // S67 blessed (H2): nothing of the context is live here; `pBsInfo` is the caller's.
+        // S11.20: the callee is still `unsafe fn` (its own `WelsWriteParameterSets`
+        // callee is unconverted); the claim is named at the call.
         unsafe { WelsEncoderEncodeParameterSetsRust(ctx, pBsInfo) }
     }
 
