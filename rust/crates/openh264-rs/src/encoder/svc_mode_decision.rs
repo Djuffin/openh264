@@ -577,7 +577,7 @@ fn VaaBackgroundMbDataUpdate(
 /// bitstream *or* a decision. Quote 32, not 48, when this body's coverage is cited.
 // unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
-pub unsafe extern "C" fn WelsMdBackgroundMbEnc(
+pub extern "C" fn WelsMdBackgroundMbEnc(
     pEncCtx: &sWelsEncCtx,
     pWelsMd: &mut SWelsMD<'_>,
     pCurMb: &mut SMB,
@@ -2069,7 +2069,7 @@ pub extern "C" fn JudgeScrollSkip(
 // filed under Phase 9's port-raw backlog where it reads as pending work.
 // unsafe-cat: SCREEN_CONTENT(dormant)
 #[allow(unsafe_code)]
-pub unsafe extern "C" fn SvcMdSCDMbEnc(
+pub extern "C" fn SvcMdSCDMbEnc(
     pEncCtx: &sWelsEncCtx,
     pWelsMd: &mut SWelsMD<'_>,
     pCurMb: &mut SMB,
@@ -2260,7 +2260,7 @@ pub unsafe extern "C" fn SvcMdSCDMbEnc(
 // filed under Phase 9's port-raw backlog where it reads as pending work.
 // unsafe-cat: SCREEN_CONTENT(dormant)
 #[allow(unsafe_code)]
-pub unsafe extern "C" fn MdInterSCDPskipProcess(
+pub extern "C" fn MdInterSCDPskipProcess(
     pEncCtx: &sWelsEncCtx,
     pWelsMd: &mut SWelsMD<'_>,
     pSlice: &mut SSlice,

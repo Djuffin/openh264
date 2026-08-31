@@ -1,3 +1,11 @@
+#![forbid(unsafe_code)]
+// **Sealed at S11.26.** The last unsafe thing in this file was the per-macroblock
+// window mint in `DeblockingFilterSliceAvcbase` — a `&mut [SMB]` conjured from a
+// shared `&SDqLayer`, claiming `[0 ..= cur]` exclusively while writing one field
+// of one record. The claim now lives in the signature: the walkers take the
+// window from their caller, and the per-macroblock tree takes `MbSplit` — the
+// current record exclusively, its two raster predecessors shared — so a
+// neighbour write is unrepresentable here, not merely absent.
 // Copyright (c) 2009-2013, Cisco Systems
 // All rights reserved.
 //
@@ -189,8 +197,7 @@ use std::sync::atomic::{AtomicU16, Ordering};
 use crate::common::deblocking_common::{
     deblock_chroma_eq4, deblock_chroma_lt4, deblock_luma_eq4, deblock_luma_lt4,
 };
-use crate::encoder::svc_encode_slice::current_layer;
-use crate::safe::mb_grid::MbWindow;
+use crate::safe::mb_grid::{MbSplit, MbWindow};
 
 /// Active parameters and pointers for macroblock deblocking filtering.
 /// Matches `struct TagDeblockingFilter` in `codec/encoder/core/inc/deblocking.h`.
@@ -277,7 +284,21 @@ pub use crate::encoder::md::{MB_BLOCK4x4_NUM, MB_LUMA_CHROMA_BLOCK4x4_NUM};
 // records through `mb_window` — and a shared layer borrow is what this file's two
 // probes certify is lawful while sibling workers write. The raw was carrying the
 // fork's price for a body that needs a `&`.
-pub type PDeblockingFilterSlice = extern "C" fn(pCurDq: &SDqLayer, pSlice: &mut SSlice);
+// **S11.26: the slot names deblocking's real inputs, and the grid arrives as a
+// window instead of being minted inside.** The old `&SDqLayer` was one parameter
+// doing four jobs — the map, the geometry, the seam view *and* the record grid —
+// and the grid's job needed a conjured `&mut` out of the shared layer
+// (`mb_window`'s claim). The window is now the caller's statement of what the
+// slice may touch; the other three arrive as the disjoint pieces they are, so
+// the one caller that owns the layer (`PerformDeblockingFilter`) can pass all
+// of them from a single destructured `&mut SDqLayer` with no unsafe at all.
+pub type PDeblockingFilterSlice = extern "C" fn(
+    view: &RecPicView,
+    pSliceCtx: &crate::encoder::slice_multi_threading::SSliceCtx,
+    kiCsStride: &[i32; 3],
+    pSlice: &mut SSlice,
+    pMbs: &mut MbWindow<'_, SMB>,
+);
 
 // `PSetNoneZeroCountZeroFunc` (T6.C1's safe slot type) stood here — deleted
 // with the `pfSetNZCZero` slot and `WelsBlockFuncInit` when session F made the
@@ -531,13 +552,18 @@ pub fn DeblockingBSMarginalMBAvcbase(pCurMb: &SMB, pNeighMb: &SMB, iEdge: usize)
 /// through `uint32_t` punning (`*(uint32_t*)uiBS[0][0]`); a 4-byte row
 /// assignment is the same store with the type kept.
 ///
-/// The left/top record reads are in-window by the guards' own construction:
+/// The left/top record reads are in-split by the guards' own construction:
 /// under the fork the flags come from the same-slice `pOverallMbMap` checks
-/// (`uiFilterIdc == 1`, F142's rewrite), and single-threaded callers hand a
-/// whole-grid window. A flag set with the neighbour outside the window is a
-/// bug, and [`MbWindow`]'s panic names it (F77).
+/// (`uiFilterIdc == 1`, F142's rewrite), and single-threaded callers split a
+/// whole-grid window. A flag set with the neighbour absent from the split is a
+/// bug, and [`MbSplit`]'s panic names it (F77).
+///
+/// **S11.26**: `&mut MbSplit`, not `&mut MbWindow` — the `&mut` exists for one
+/// write, the current record's `iNonZeroCount` normalisation below, and the
+/// split is the type that says so: everything else this body can reach is a
+/// shared predecessor.
 pub fn DeblockingBSCalc_c(
-    mbs: &mut MbWindow<'_, SMB>,
+    mbs: &mut MbSplit<'_, SMB>,
     uiBS: &mut [[[u8; 4]; 4]; 2],
     uiCurMbType: u32,
     iLeftFlag: i32,
@@ -819,7 +845,9 @@ fn FilteringEdgeChromaIntraV(
 pub fn DeblockingInterMb(
     view: &RecPicView,
     map: &[AtomicU16],
-    mbs: &mut MbWindow<'_, SMB>,
+    // S11.26: shared — this body reads the current record and the two
+    // predecessors' QPs; its writes are pixels, through the seam view.
+    mbs: &MbSplit<'_, SMB>,
     pFilter: &mut SDeblockingFilter,
     uiBS: &[[[u8; 4]; 4]; 2],
 ) {
@@ -997,7 +1025,7 @@ pub fn DeblockingInterMb(
 pub fn FilteringEdgeLumaHV(
     view: &RecPicView,
     map: &[AtomicU16],
-    mbs: &MbWindow<'_, SMB>,
+    mbs: &MbSplit<'_, SMB>,
     pFilter: &mut SDeblockingFilter,
 ) {
     let iLineSize = pFilter.iCsStride[0];
@@ -1076,7 +1104,7 @@ pub fn FilteringEdgeLumaHV(
 pub fn FilteringEdgeChromaHV(
     view: &RecPicView,
     map: &[AtomicU16],
-    mbs: &MbWindow<'_, SMB>,
+    mbs: &MbSplit<'_, SMB>,
     pFilter: &mut SDeblockingFilter,
 ) {
     let iLineSize = pFilter.iCsStride[1];
@@ -1168,7 +1196,7 @@ pub fn FilteringEdgeChromaHV(
 pub fn DeblockingIntraMb(
     view: &RecPicView,
     map: &[AtomicU16],
-    mbs: &MbWindow<'_, SMB>,
+    mbs: &MbSplit<'_, SMB>,
     pFilter: &mut SDeblockingFilter,
 ) {
     FilteringEdgeLumaHV(view, map, mbs, pFilter);
@@ -1178,7 +1206,12 @@ pub fn DeblockingIntraMb(
 pub fn DeblockingMbAvcbase(
     view: &RecPicView,
     map: &[AtomicU16],
-    mbs: &mut MbWindow<'_, SMB>,
+    // **S11.26: the split, not the window.** The walkers hold the window and
+    // hand each macroblock down as [`MbWindow::split_cur`]'s answer: one
+    // exclusive record, two shared predecessors. This tree can no longer
+    // express a write to a neighbour — the overclaim that kept the grid from
+    // being carved per worker is unrepresentable below this line.
+    mbs: &mut MbSplit<'_, SMB>,
     pFilter: &mut SDeblockingFilter,
 ) {
     // deblocking.cpp:629 — `uint8_t uiBS[2][4][4]`, two 4x4 planes (vertical and
@@ -1313,7 +1346,9 @@ pub fn DeblockingFilterFrameAvcbase(pCurDq: &mut SDqLayer) {
     for iMbY in 0..kiMbHeight as usize {
         for iMbX in 0..kiMbWidth as usize {
             mbs.set_cur(iMbY * kiMbWidth as usize + iMbX);
-            DeblockingMbAvcbase(view, map, &mut mbs, &mut pFilter);
+            // S11.26: each macroblock goes down as the split — the record
+            // exclusively, its two predecessors shared, from one borrow.
+            DeblockingMbAvcbase(view, map, &mut mbs.split_cur(), &mut pFilter);
         }
     }
 }
@@ -1332,18 +1367,29 @@ pub use crate::encoder::svc_encode_slice::GetCurrentSliceNum;
 // walks straight across slice boundaries for every other slice mode.
 pub use crate::encoder::svc_encode_slice::WelsGetNextMbOfSlice;
 
-// unsafe-cat: fork-shared(S63) — the in-fork *mut SDqLayer (S63, G's); the record
-// walk is the safe window since E3
-#[allow(unsafe_code)]
+/// The per-slice walker — safe since **S11.26**, and the window parameter is
+/// the whole story. This body used to mint a `&mut [SMB]` out of its *shared*
+/// `&SDqLayer` per macroblock (`mb_window`, the audited S11.4 block), asserting
+/// exclusive ownership the signature could not show. It now walks the window
+/// its caller handed it: `PerformDeblockingFilter` passes the whole grid off a
+/// destructured `&mut SDqLayer`; the two fork sites pass the coded slice's own
+/// run — the exact records `uiFilterIdc == 1` confines this walk to, since MT
+/// validation rewrites `iLoopFilterDisableIdc` 0 → 2 (`encoder_ext.rs:1506`)
+/// and single-slice clears the parallel flag. The old `kiFirstWindowMb` branch
+/// (window from 0 under `uiFilterIdc == 0`) is gone with the mint: the one
+/// walker that legitimately crosses slices is `DeblockingFilterFrameAvcbase`,
+/// which owns the layer and never dispatches through this slot.
 pub extern "C" fn DeblockingFilterSliceAvcbase(
-    pCurDq: &SDqLayer,
+    view: &RecPicView,
+    pSliceCtx: &crate::encoder::slice_multi_threading::SSliceCtx,
+    kiCsStride: &[i32; 3],
     pSlice: &mut SSlice,
+    pMbs: &mut MbWindow<'_, SMB>,
 ) {
     let sSliceHeaderExt = &(*pSlice).sSliceHeaderExt;
 
-    let kiMbWidth: i32 = (*pCurDq).iMbWidth as i32;
-    let kiMbHeight: i32 = (*pCurDq).iMbHeight as i32;
-    let kiTotalNumMb: i32 = kiMbWidth * kiMbHeight;
+    let kiMbWidth: i32 = pSliceCtx.iMbWidth as i32;
+    let kiTotalNumMb: i32 = pSliceCtx.iMbNumInFrame;
     let mut iNumMbFiltered = 0i32;
 
     if sSliceHeaderExt.sSliceHeader.uiDisableDeblockingFilterIdc == 1 {
@@ -1357,75 +1403,30 @@ pub extern "C" fn DeblockingFilterSliceAvcbase(
         0
     };
 
-    // **T9.C4**: this resolved the reconstruction picture to its plane roots with
-    // `layer_dec_pic_mut(..).planes()` — a whole-picture `&mut` retag, and F108
-    // measured that under multi-threading this filter runs *inside* the fork, so
-    // two workers took it at once. The layer already carries those three roots
-    // and their three strides: `WelsInitCurrentLayer` stamps `pCsData`/`iCsStride`
-    // from the same `planes()` call, before anything spawns. Same numbers, same
-    // addresses, one derivation instead of two.
-    //
-    // The guard is the old `None` arm's two conditions — the layer's handle
-    // (tested at the top of this function) and a bound reference list — plus a
-    // null root, which the old spelling would have carried into a null deref.
-    // **S10.8: the `pRefList.is_null()` guard is gone, subsumed by the one below.**
-    // `WelsInitCurrentLayer` stamps `pRefList` and then `pRecView`, and `pRecView`
-    // is only ever *set*, never cleared — so a null `pRefList` means the stamp has
-    // never run, and `pRecView` is `None` in exactly that state. Every case this
-    // returned on, the next guard returns on. It went with the field.
-    let Some(view) = crate::encoder::svc_encode_slice::layer_rec_view(&*pCurDq) else {
-        return;
-    };
-    pFilter.iCsStride[0] = (*pCurDq).iCsStride[0];
-    pFilter.iCsStride[1] = (*pCurDq).iCsStride[1];
-    pFilter.iCsStride[2] = (*pCurDq).iCsStride[2];
+    pFilter.iCsStride[0] = kiCsStride[0];
+    pFilter.iCsStride[1] = kiCsStride[1];
+    pFilter.iCsStride[2] = kiCsStride[2];
 
     pFilter.iSliceAlphaC0Offset = sSliceHeaderExt.sSliceHeader.iSliceAlphaC0Offset;
     pFilter.iSliceBetaOffset = sSliceHeaderExt.sSliceHeader.iSliceBetaOffset;
     pFilter.iMbStride = kiMbWidth as i16;
 
-    // Round 5 (F132): see DeblockingFilterFrameAvcbase — this walker is the
-    // one that runs *inside* the fork (uiFilterIdc == 1 under MT), so the map
-    // is exactly what its guards must read instead of the neighbour records.
-    let map: &[AtomicU16] = &(*pCurDq).sSliceEncCtx.pOverallMbMap;
+    // Round 5 (F132): this walker is the one that runs *inside* the fork
+    // (uiFilterIdc == 1 under MT), so the map is exactly what its guards must
+    // read instead of the neighbour records.
+    let map: &[AtomicU16] = &pSliceCtx.pOverallMbMap;
 
     let mut iNextMbIdx = sSliceHeaderExt.sSliceHeader.iFirstMbInSlice;
 
-    // The window's base is the guard mode's own reach: under `uiFilterIdc == 1`
-    // every record this walk touches is this slice's (the map guards refuse
-    // foreign edges — F142's in-fork state, and the ST idc==2 slice loop), so
-    // the window starts at the slice's first macroblock and a cross-slice read
-    // would name itself (F77). Under `uiFilterIdc == 0` — unreached today, since
-    // validation rewrites idc 0 to 2 wherever this walker runs — the guards may
-    // legally cross slices, and the window is the grid.
-    let kiFirstWindowMb = if pFilter.uiFilterIdc == 1 {
-        sSliceHeaderExt.sSliceHeader.iFirstMbInSlice
-    } else {
-        0
-    };
-
     loop {
         let iCurMbIdx = iNextMbIdx;
-        // **S11.4: the audited window mint, at the slot boundary.** This body is
-        // a `PDeblockingFilterSlice` target, and that slot type is a safe fn
-        // pointer now (F276) — so the one claim it still makes is here rather
-        // than on the whole function. `mb_window`'s contract is that the caller
-        // owns `[first .. first+count)` exclusively; **F108 measured this filter
-        // single-threaded per slice** and the window is this slice's own run,
-        // which is the same fact S10.4's `split_at_mut` proves for the map fork.
-        let mut mbs = unsafe {
-            crate::encoder::svc_encode_slice::mb_window(
-                &*pCurDq,
-                kiFirstWindowMb,
-                iCurMbIdx - kiFirstWindowMb + 1,
-                iCurMbIdx,
-            )
-        };
-
-        DeblockingMbAvcbase(view, map, &mut mbs, &mut pFilter);
+        // A walk step outside the caller's window panics with the coordinates
+        // (F77) — that is the old mint's `# Safety` sentence, now checked.
+        pMbs.set_cur(iCurMbIdx as usize);
+        DeblockingMbAvcbase(view, map, &mut pMbs.split_cur(), &mut pFilter);
 
         iNumMbFiltered += 1;
-        iNextMbIdx = WelsGetNextMbOfSlice(Some(&*pCurDq), iCurMbIdx);
+        iNextMbIdx = WelsGetNextMbOfSlice(pSliceCtx, iCurMbIdx);
         if iNextMbIdx == -1 || iNextMbIdx >= kiTotalNumMb || iNumMbFiltered >= kiTotalNumMb {
             break;
         }
@@ -1433,28 +1434,65 @@ pub extern "C" fn DeblockingFilterSliceAvcbase(
 }
 
 pub extern "C" fn DeblockingFilterSliceAvcbaseNull(
-    _pCurDq: &SDqLayer,
+    _view: &RecPicView,
+    _pSliceCtx: &crate::encoder::slice_multi_threading::SSliceCtx,
+    _kiCsStride: &[i32; 3],
     _pSlice: &mut SSlice,
+    _pMbs: &mut MbWindow<'_, SMB>,
 ) {
 }
 
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe extern "C" fn PerformDeblockingFilter(pEnc: &mut sWelsEncCtx) {
+pub extern "C" fn PerformDeblockingFilter(pEnc: &mut sWelsEncCtx) {
     // T9.H4: `if pEnc.is_null() { return; }` stood here. A `&mut
     // sWelsEncCtx` cannot be null and every caller now holds one, so the
     // guard is not merely dead — it is inexpressible. Nothing replaces it.
-    let pCurLayer = current_layer(pEnc);
+    // S11.26: safe throughout — the raw layer cursor and the raw slice walk
+    // are gone with the slot's new parameter list. The old `current_layer`
+    // answered null before any layer is stamped and this body dereferenced it
+    // unconditionally; the `expect` states that same precondition instead of
+    // deferring it to a fault.
+    let pCurDq = crate::encoder::svc_encode_slice::current_layer_mut(pEnc)
+        .expect("the frame's current layer is stamped");
 
-    if (*pCurLayer).iLoopFilterDisableIdc == 0 {
-        DeblockingFilterFrameAvcbase(&mut *pCurLayer);
-    } else if (*pCurLayer).iLoopFilterDisableIdc == 2 {
-        let iSliceCount = GetCurrentSliceNum(&*pCurLayer);
+    if pCurDq.iLoopFilterDisableIdc == 0 {
+        DeblockingFilterFrameAvcbase(pCurDq);
+    } else if pCurDq.iLoopFilterDisableIdc == 2 {
+        let iSliceCount = GetCurrentSliceNum(&*pCurDq);
+        // **The layer's disjoint fields, split once** — the grid becomes one
+        // whole window and each slice comes out of the banks, all from a single
+        // `&mut SDqLayer`. This is the shape the slot's parameter list exists
+        // for: `slice_in_layer_mut` takes the whole layer and so could not
+        // coexist with the window, so its two-step resolution
+        // (`ppSliceInLayer` → bank/offset) is inlined over the destructured
+        // fields; the guards are that accessor's own, minus the bank bound
+        // `get_mut` already asks.
+        let SDqLayer {
+            sMbDataP,
+            sSliceEncCtx,
+            sSliceBufferInfo,
+            ppSliceInLayer,
+            pRecView,
+            iCsStride,
+            ..
+        } = pCurDq;
+        let Some(view) = pRecView.as_ref() else {
+            return;
+        };
+        let mut sMbWindow = MbWindow::whole(sMbDataP, 0);
         for iSliceIdx in 0..iSliceCount {
-            let pSlice = crate::encoder::svc_encode_slice::slice_in_layer(Some(&*pCurLayer), iSliceIdx);
-            if !pSlice.is_null() {
-                DeblockingFilterSliceAvcbase(&*pCurLayer, &mut *pSlice);
+            let Some(&loc) = ppSliceInLayer.get(iSliceIdx as usize) else {
+                continue;
+            };
+            if loc.offset < 0 {
+                continue;
             }
+            let Some(pSlice) = sSliceBufferInfo
+                .get_mut(loc.bank as usize)
+                .and_then(|b| b.pSliceBuffer.get_mut(loc.offset as usize))
+            else {
+                continue;
+            };
+            DeblockingFilterSliceAvcbase(view, sSliceEncCtx, iCsStride, pSlice, &mut sMbWindow);
         }
     }
 }

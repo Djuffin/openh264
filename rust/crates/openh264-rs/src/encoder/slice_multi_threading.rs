@@ -1678,10 +1678,37 @@ unsafe fn EncodeOneSliceInJob(
 
         let pfDeblockingFilterSlice =
             (*pCtx).func_list().pfDeblocking.pfDeblockingFilterSlice.unwrap();
-        pfDeblockingFilterSlice(
-            current_layer_ref(pCtx).expect("the frame's current layer is stamped"),
-            pSlice,
-        );
+        {
+            let pCurDq = current_layer_ref(pCtx).expect("the frame's current layer is stamped");
+            if let Some(view) = crate::encoder::svc_encode_slice::layer_rec_view(pCurDq) {
+                // **S11.26: the walker's window is this slice's own run.** The
+                // filter used to mint `[0 ..= cur]` for itself; every dispatch
+                // through this slot runs with `uiFilterIdc == 1` (MT validation
+                // rewrites idc 0 → 2, `encoder_ext.rs:1506`), which confines
+                // both the walk and the neighbour reads to the coded slice's
+                // records — so that run is what the claim covers now.
+                //
+                // The bounds come from the layer's pre-fork arrays, not from
+                // the slice's own `iCountMbNumInSlice` copy: the mid-row fork
+                // probe showed that copy is not a run descriptor at deblock
+                // time (a realloc-fresh slice carries 0). These arrays are what
+                // built the slice map the walk obeys — and what the carve will
+                // `split_at_mut` by, which is when this mint dies: handed a
+                // carved `&mut [SMB]` per worker, this block becomes safe code.
+                let kiFirst = pCurDq.pFirstMbIdxOfSlice[iSliceIdx as usize];
+                let kiCount = pCurDq.pCountMbNumInSlice[iSliceIdx as usize];
+                let mut sMbRun = unsafe {
+                    crate::encoder::svc_encode_slice::mb_window(pCurDq, kiFirst, kiCount, kiFirst)
+                };
+                pfDeblockingFilterSlice(
+                    view,
+                    &pCurDq.sSliceEncCtx,
+                    &pCurDq.iCsStride,
+                    pSlice,
+                    &mut sMbRun,
+                );
+            }
+        }
         ENC_RETURN_SUCCESS
     })();
 
@@ -2124,7 +2151,29 @@ unsafe fn EncodeOnePartitionSizeLimited(
             }
             let pfDeblockingFilterSlice =
                 (*pCtx).func_list().pfDeblocking.pfDeblockingFilterSlice.unwrap();
-            pfDeblockingFilterSlice(&*pCurDq, &mut *pSlice);
+            // S11.26: the window is this worker's whole *partition* — the unit
+            // the size-limited fork owns for the frame, and the bound inside
+            // which every slice it discovers lives. A slice-sized window is not
+            // derivable here: slice extents are discovered while coding, and
+            // the slice's `iCountMbNumInSlice` is not a run descriptor at this
+            // point (the mid-row probe's verdict). `uiFilterIdc == 1` keeps the
+            // walk and the neighbour reads inside the slice, hence inside the
+            // partition. See `EncodeOneSliceInJob` for the claim and its
+            // scheduled death at the carve.
+            if let Some(view) = crate::encoder::svc_encode_slice::layer_rec_view(&*pCurDq) {
+                let kiFirst = kiFirstMbInPartition;
+                let kiCount = kiEndMbIdxInPartition - kiFirstMbInPartition + 1;
+                let mut sMbRun = unsafe {
+                    crate::encoder::svc_encode_slice::mb_window(&*pCurDq, kiFirst, kiCount, kiFirst)
+                };
+                pfDeblockingFilterSlice(
+                    view,
+                    &(*pCurDq).sSliceEncCtx,
+                    &(*pCurDq).iCsStride,
+                    &mut *pSlice,
+                    &mut sMbRun,
+                );
+            }
 
             iAnyMbLeftInPartition = kiEndMbIdxInPartition
                 - (*pCurDq).LastCodedMbIdxOfPartition[kiPartitionId as usize].load(Ordering::Relaxed);
