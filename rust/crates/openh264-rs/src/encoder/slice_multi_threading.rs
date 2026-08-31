@@ -1526,7 +1526,10 @@ unsafe fn EncodeOneSliceInJob(
 
         let pfDeblockingFilterSlice =
             (*pCtx).func_list().pfDeblocking.pfDeblockingFilterSlice.unwrap();
-        pfDeblockingFilterSlice(current_layer(pCtx), pSlice);
+        pfDeblockingFilterSlice(
+            current_layer_ref(pCtx).expect("the frame's current layer is stamped"),
+            pSlice,
+        );
         ENC_RETURN_SUCCESS
     })();
 
@@ -1894,7 +1897,7 @@ unsafe fn EncodeOnePartitionSizeLimited(
             }
             let pfDeblockingFilterSlice =
                 (*pCtx).func_list().pfDeblocking.pfDeblockingFilterSlice.unwrap();
-            pfDeblockingFilterSlice(pCurDq, &mut *pSlice);
+            pfDeblockingFilterSlice(&*pCurDq, &mut *pSlice);
 
             iAnyMbLeftInPartition = kiEndMbIdxInPartition
                 - (*pCurDq).LastCodedMbIdxOfPartition[kiPartitionId as usize].load(Ordering::Relaxed);
