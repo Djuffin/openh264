@@ -2885,7 +2885,6 @@ mod tests {
                 iCsStride: [STRIDE as i32; 3],
                 sLayerInfo: SLayerInfo::default(),
                 pEncPic: Some(src_id),
-                pSrcPool: &mut src_pool,
                 pRecView: Some(crate::encoder::rec_view::RecPicView::build(&mut rec_pic)),
                 // **S10.2: the source view is stamped too, because it is the route
                 // now.** `WelsInitCurrentLayer` builds this beside `pRecView` for

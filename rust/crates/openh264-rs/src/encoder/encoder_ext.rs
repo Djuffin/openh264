@@ -2333,7 +2333,12 @@ pub unsafe fn WelsInitCurrentLayer(pCtx: &mut sWelsEncCtx, _kiWidth: i32, _kiHei
     // field's cursor did. The `is_none` guard above has just proved `Some`.)
     let pSrcPool = crate::encoder::encoder_context::ctx_src_pool_raw(pCtx);
     (*pCurDq).pEncPic = Some(idEnc);
-    (*pCurDq).pSrcPool = pSrcPool;
+    // **S10.7: `pSrcPool`'s stamp is gone with the field.** `layer_enc_pic` was
+    // its only reader — it resolved `(*pLayer).pSrcPool` to reach the source
+    // picture — and step 2 deleted that accessor when the last of its twenty-one
+    // call sites moved to `pEncView`. The local below is still needed here, to
+    // build the view and the plane roots; the *field* was the frame's copy of a
+    // pointer nothing looked at again.
 
     let pEncPic = (*pSrcPool).get_mut(idEnc).planes();
     let pDecPic = (*pRefList).pic_mut(idDec).planes();
