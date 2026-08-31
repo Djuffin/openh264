@@ -1586,13 +1586,16 @@ pub fn UpdateNonZeroCountCache(pMb: &SMB, pMbCache: &mut SMbCache) {
 
 /// Computes the virtual slice identifier `uiSliceIdc` for a given macroblock linear index.
 #[inline]
-pub fn WelsMbToSliceIdc(pCurDq: Option<&SDqLayer>, kiMbXY: i32) -> u16 {
-    let Some(pCurDq) = pCurDq else {
+pub fn WelsMbToSliceIdc(pSliceCtx: Option<&SSliceCtx>, kiMbXY: i32) -> u16 {
+    // **S10.3c: the slice context, not the whole layer.** This body reads
+    // `sSliceEncCtx` and nothing else, and taking the layer meant a *whole-layer*
+    // shared borrow — which is what stopped a caller from holding `&mut` on the
+    // macroblock grid (a different field) at the same time, and so is what kept
+    // `mb_window`'s raw mint alive on the single-threaded path. Narrowing the
+    // parameter to what the body actually reads lets those two borrows coexist.
+    let Some(pSliceCtx) = pSliceCtx else {
         return u16::MAX;
     };
-    // `&`, T9.C5 — as `WelsGetNextMbOfSlice`: nothing here writes, and this runs
-    // per macroblock inside the fork.
-    let pSliceCtx = &(*pCurDq).sSliceEncCtx;
     let map: &[AtomicU16] = &(*pSliceCtx).pOverallMbMap;
     if kiMbXY >= 0 && kiMbXY < (*pSliceCtx).iMbNumInFrame {
         match map.get(kiMbXY as usize) {
@@ -1605,12 +1608,19 @@ pub fn WelsMbToSliceIdc(pCurDq: Option<&SDqLayer>, kiMbXY: i32) -> u16 {
 }
 
 /// Evaluates spatial neighbor availability masks for intra prediction and motion vector prediction.
-pub fn UpdateMbNeighbor(pCurDq: Option<&SDqLayer>, pMb: &mut SMB, kiMbWidth: i32, uiSliceIdc: u16) {
+pub fn UpdateMbNeighbor(
+    pSliceCtx: Option<&SSliceCtx>,
+    pMb: &mut SMB,
+    kiMbWidth: i32,
+    uiSliceIdc: u16,
+) {
     // **T9.D9**: `pMb.is_null()` went with the parameter — a reference cannot be
     // absent. **S6.A1**: the layer followed, and its null guard came with it — the
     // absent layer is the `None` arm now, so the obligation stayed in the callee
-    // rather than moving to the ~147 call sites.
-    let Some(pCurDq) = pCurDq else {
+    // rather than moving to the ~147 call sites. **S10.3c**: and the layer
+    // narrowed to `sSliceEncCtx`, the only field this body and `WelsMbToSliceIdc`
+    // read — see there for why the width of the borrow mattered.
+    let Some(pSliceCtx) = pSliceCtx else {
         return;
     };
     let mut uiNeighborAvailFlag: u32 = 0;
@@ -1624,10 +1634,10 @@ pub fn UpdateMbNeighbor(pCurDq: Option<&SDqLayer>, pMb: &mut SMB, kiMbWidth: i32
     let iLeftTopXY = iTopXY - 1;
     let iRightTopXY = iTopXY + 1;
 
-    let bLeft = (kiMbX > 0) && (uiSliceIdc == WelsMbToSliceIdc(Some(pCurDq), iLeftXY));
-    let bTop = (kiMbY > 0) && (uiSliceIdc == WelsMbToSliceIdc(Some(pCurDq), iTopXY));
-    let bLeftTop = (kiMbX > 0) && (kiMbY > 0) && (uiSliceIdc == WelsMbToSliceIdc(Some(pCurDq), iLeftTopXY));
-    let bRightTop = (kiMbX < (kiMbWidth - 1)) && (kiMbY > 0) && (uiSliceIdc == WelsMbToSliceIdc(Some(pCurDq), iRightTopXY));
+    let bLeft = (kiMbX > 0) && (uiSliceIdc == WelsMbToSliceIdc(Some(pSliceCtx), iLeftXY));
+    let bTop = (kiMbY > 0) && (uiSliceIdc == WelsMbToSliceIdc(Some(pSliceCtx), iTopXY));
+    let bLeftTop = (kiMbX > 0) && (kiMbY > 0) && (uiSliceIdc == WelsMbToSliceIdc(Some(pSliceCtx), iLeftTopXY));
+    let bRightTop = (kiMbX < (kiMbWidth - 1)) && (kiMbY > 0) && (uiSliceIdc == WelsMbToSliceIdc(Some(pSliceCtx), iRightTopXY));
 
     if bLeft {
         uiNeighborAvailFlag |= LEFT_MB_POS as u32;
@@ -1682,8 +1692,9 @@ pub unsafe fn UpdateMbNeighbourInfoForNextSlice(
         // call — once `UpdateMbNeighbor` takes `&mut SDqLayer`, its argument
         // retag would kill a same-call read through the raw. Nothing between
         // the read and the call reallocates.
-        let kiSliceIdc = WelsMbToSliceIdc(Some(pCurDq), mbs.at(iIdx as usize).iMbXY);
-        UpdateMbNeighbor(Some(pCurDq), mbs.at_mut(iIdx as usize), kiMbWidth, kiSliceIdc);
+        let kiSliceIdc = WelsMbToSliceIdc(Some(&pCurDq.sSliceEncCtx), mbs.at(iIdx as usize).iMbXY);
+        UpdateMbNeighbor(
+            Some(&pCurDq.sSliceEncCtx), mbs.at_mut(iIdx as usize), kiMbWidth, kiSliceIdc);
         iIdx += 1;
         if !((iIdx < kiEndMbNeedUpdate) && (iIdx <= kiLastMbIdxInPartition)) {
             break;

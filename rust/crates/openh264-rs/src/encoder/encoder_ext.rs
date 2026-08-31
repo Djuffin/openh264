@@ -617,19 +617,19 @@ unsafe fn InitMbInfo(
         pMb.iMbXY = iIdx as i32;
 
         // [0..65535] > 36864 of LEVEL5.2
-        let uiSliceIdc: u16 = WelsMbToSliceIdc(Some(&*pLayer), iIdx as i32);
+        let uiSliceIdc: u16 = WelsMbToSliceIdc(Some(&(*pLayer).sSliceEncCtx), iIdx as i32);
         let iLeftXY = iIdx as i32 - 1;
         let iTopXY = iIdx as i32 - iMbWidth;
         let iLeftTopXY = iTopXY - 1;
         let iRightTopXY = iTopXY + 1;
 
-        let bLeft = pMb.iMbX > 0 && uiSliceIdc == WelsMbToSliceIdc(Some(&*pLayer), iLeftXY);
-        let bTop = pMb.iMbY > 0 && uiSliceIdc == WelsMbToSliceIdc(Some(&*pLayer), iTopXY);
+        let bLeft = pMb.iMbX > 0 && uiSliceIdc == WelsMbToSliceIdc(Some(&(*pLayer).sSliceEncCtx), iLeftXY);
+        let bTop = pMb.iMbY > 0 && uiSliceIdc == WelsMbToSliceIdc(Some(&(*pLayer).sSliceEncCtx), iTopXY);
         let bLeftTop =
-            pMb.iMbX > 0 && pMb.iMbY > 0 && uiSliceIdc == WelsMbToSliceIdc(Some(&*pLayer), iLeftTopXY);
+            pMb.iMbX > 0 && pMb.iMbY > 0 && uiSliceIdc == WelsMbToSliceIdc(Some(&(*pLayer).sSliceEncCtx), iLeftTopXY);
         let bRightTop = (pMb.iMbX as i32) < (iMbWidth - 1)
             && pMb.iMbY > 0
-            && uiSliceIdc == WelsMbToSliceIdc(Some(&*pLayer), iRightTopXY);
+            && uiSliceIdc == WelsMbToSliceIdc(Some(&(*pLayer).sSliceEncCtx), iRightTopXY);
 
         let mut uiNeighborAvail: u8 = 0;
         if bLeft {
@@ -3059,20 +3059,38 @@ pub fn PicPartitionNumDecision(pCtx: &mut sWelsEncCtx) -> i32 {
 /// `pCurDq` must be live with `sMbDataP` allocated.
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
-pub unsafe fn DynslcUpdateMbNeighbourInfoListForAllSlices(pCurDq: &mut SDqLayer) {
-    let kiMbWidth = (*pCurDq).sSliceEncCtx.iMbWidth as i32;
-    let kiEndMbInSlice = (*pCurDq).sSliceEncCtx.iMbNumInFrame - 1;
+pub fn DynslcUpdateMbNeighbourInfoListForAllSlices(pCurDq: &mut SDqLayer) {
+    // **S10.3c: no `mb_window`, and no `unsafe`.** This body held the whole layer
+    // `&mut` and still went through `mb_window`'s `from_raw_parts_mut` — a mint
+    // that exists so *fork* workers can take `&mut` sub-ranges out of a **shared**
+    // layer, which is a claim the compiler cannot check and this caller never
+    // needed. It is single-threaded: `WelsInitCurrentQBLayerMltslc` reaches it
+    // from a `&mut sWelsEncCtx`.
+    //
+    // What blocked the safe form was borrow *width*, not aliasing: the two walkers
+    // took `Option<&SDqLayer>`, so a whole-layer shared borrow sat across the
+    // grid's `&mut`. They read `sSliceEncCtx` and nothing else, so narrowing them
+    // (S10.3c) lets the two fields be borrowed at once — which is what they always
+    // were.
+    let SDqLayer { sMbDataP, sSliceEncCtx, .. } = pCurDq;
+    let kiMbWidth = sSliceEncCtx.iMbWidth as i32;
+    let kiEndMbInSlice = sSliceEncCtx.iMbNumInFrame - 1;
     let mut iIdx = 0i32;
-    let mut mbs =
-        crate::encoder::svc_encode_slice::mb_window(pCurDq, 0, kiEndMbInSlice + 1, 0);
+    let dims = sMbDataP.dims();
+    let mut mbs = crate::safe::mb_grid::MbWindow::new(
+        sMbDataP.as_mut_slice(),
+        0,
+        dims.mb_width(),
+        0,
+    );
 
     loop {
         let uiSliceIdc = crate::encoder::svc_encode_slice::WelsMbToSliceIdc(
-            Some(&*pCurDq),
+            Some(sSliceEncCtx),
             mbs.at(iIdx as usize).iMbXY as i32,
         );
         crate::encoder::svc_encode_slice::UpdateMbNeighbor(
-            Some(&*pCurDq),
+            Some(sSliceEncCtx),
             mbs.at_mut(iIdx as usize),
             kiMbWidth,
             uiSliceIdc,
@@ -3086,16 +3104,10 @@ pub unsafe fn DynslcUpdateMbNeighbourInfoListForAllSlices(pCurDq: &mut SDqLayer)
 
 /// `WelsInitCurrentQBLayerMltslc` — encoder_ext.cpp:2423.
 ///
-/// # Safety
-/// `pCtx` must be a context built by [`WelsInitEncoderExt`].
-///
-/// **S10.3b: the layer comes from `current_layer_mut`, but the body stays
-/// `unsafe`** — `DynslcUpdateMbNeighbourInfoListForAllSlices` walks the
-/// macroblock grid through `mb_window`, which is the E3 grid seam and raw by
-/// design. One blocker, and it is not this body's.
-// unsafe-cat: fork-shared(S63) — inherited from `mb_window`, the grid seam
-#[allow(unsafe_code)]
-pub unsafe fn WelsInitCurrentQBLayerMltslc(pCtx: &mut sWelsEncCtx) {
+/// **S10.3c: safe.** Its one blocker was
+/// `DynslcUpdateMbNeighbourInfoListForAllSlices`'s `mb_window` mint, and that
+/// went when the neighbour walkers narrowed to the field they read.
+pub fn WelsInitCurrentQBLayerMltslc(pCtx: &mut sWelsEncCtx) {
     // pData init
     let Some(pCurDq) = current_layer_mut(pCtx) else {
         return;
