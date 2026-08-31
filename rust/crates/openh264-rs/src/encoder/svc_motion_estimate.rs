@@ -408,8 +408,8 @@ pub type PFillQpelLocationByFeatureValueFunc = fn(
 
 /// **S6.B1**: the two storage buffers are slices; `pRef` stays raw, because it is a
 /// *plane* root and the plane family is not this checkpoint's.
-pub type PCalculateBlockFeatureOfFrame = unsafe fn(
-    pRef: *mut u8,
+pub type PCalculateBlockFeatureOfFrame = fn(
+    kpRef: &[u8],
     kiWidth: i32,
     kiHeight: i32,
     kiRefStride: i32,
@@ -1288,60 +1288,56 @@ pub fn sum_of_16x16_single_block(cRef: &RecCursor<'_>) -> i32 {
     iSum
 }
 
-// unsafe-cat: SCREEN_CONTENT(dormant)
-#[allow(unsafe_code)]
-pub unsafe extern "C" fn SumOf8x8SingleBlock_c(pRef: *mut u8, kiRefStride: i32) -> i32 {
+pub fn SumOf8x8SingleBlock_c(kpRef: &[u8], kiRefStride: i32) -> i32 {
+    // S11.6: the pointer walk becomes an offset walk over the caller's slice.
+    // The rows are `kiRefStride` apart and `8` wide, exactly as the raw form
+    // read them, and every access is bounds-checked — where the raw version
+    // would have walked off a short plane silently, this panics.
     let mut iSum = 0i32;
-    let mut ptr = pRef;
-    for _ in 0..8 {
-        unsafe {
-            iSum += *ptr as i32
-                + *ptr.add(1) as i32
-                + *ptr.add(2) as i32
-                + *ptr.add(3) as i32
-                + *ptr.add(4) as i32
-                + *ptr.add(5) as i32
-                + *ptr.add(6) as i32
-                + *ptr.add(7) as i32;
-            ptr = ptr.offset(kiRefStride as isize);
-        }
+    for r in 0..8 {
+        let kiOff = r * kiRefStride as usize;
+        iSum += kpRef[kiOff] as i32
+            + kpRef[kiOff + 1] as i32
+            + kpRef[kiOff + 2] as i32
+            + kpRef[kiOff + 3] as i32
+            + kpRef[kiOff + 4] as i32
+            + kpRef[kiOff + 5] as i32
+            + kpRef[kiOff + 6] as i32
+            + kpRef[kiOff + 7] as i32;
     }
     iSum
 }
 
-// unsafe-cat: SCREEN_CONTENT(dormant)
-#[allow(unsafe_code)]
-pub unsafe extern "C" fn SumOf16x16SingleBlock_c(pRef: *mut u8, kiRefStride: i32) -> i32 {
+pub fn SumOf16x16SingleBlock_c(kpRef: &[u8], kiRefStride: i32) -> i32 {
+    // S11.6: the pointer walk becomes an offset walk over the caller's slice.
+    // The rows are `kiRefStride` apart and `16` wide, exactly as the raw form
+    // read them, and every access is bounds-checked — where the raw version
+    // would have walked off a short plane silently, this panics.
     let mut iSum = 0i32;
-    let mut ptr = pRef;
-    for _ in 0..16 {
-        unsafe {
-            iSum += *ptr as i32
-                + *ptr.add(1) as i32
-                + *ptr.add(2) as i32
-                + *ptr.add(3) as i32
-                + *ptr.add(4) as i32
-                + *ptr.add(5) as i32
-                + *ptr.add(6) as i32
-                + *ptr.add(7) as i32
-                + *ptr.add(8) as i32
-                + *ptr.add(9) as i32
-                + *ptr.add(10) as i32
-                + *ptr.add(11) as i32
-                + *ptr.add(12) as i32
-                + *ptr.add(13) as i32
-                + *ptr.add(14) as i32
-                + *ptr.add(15) as i32;
-            ptr = ptr.offset(kiRefStride as isize);
-        }
+    for r in 0..16 {
+        let kiOff = r * kiRefStride as usize;
+        iSum += kpRef[kiOff] as i32
+            + kpRef[kiOff + 1] as i32
+            + kpRef[kiOff + 2] as i32
+            + kpRef[kiOff + 3] as i32
+            + kpRef[kiOff + 4] as i32
+            + kpRef[kiOff + 5] as i32
+            + kpRef[kiOff + 6] as i32
+            + kpRef[kiOff + 7] as i32
+            + kpRef[kiOff + 8] as i32
+            + kpRef[kiOff + 9] as i32
+            + kpRef[kiOff + 10] as i32
+            + kpRef[kiOff + 11] as i32
+            + kpRef[kiOff + 12] as i32
+            + kpRef[kiOff + 13] as i32
+            + kpRef[kiOff + 14] as i32
+            + kpRef[kiOff + 15] as i32;
     }
     iSum
 }
 
-// unsafe-cat: SCREEN_CONTENT(dormant)
-#[allow(unsafe_code)]
-pub unsafe fn SumOf8x8BlockOfFrame_c(
-    pRefPicture: *mut u8,
+pub fn SumOf8x8BlockOfFrame_c(
+    kpRefPicture: &[u8],
     kiWidth: i32,
     kiHeight: i32,
     kiRefStride: i32,
@@ -1355,21 +1351,20 @@ pub unsafe fn SumOf8x8BlockOfFrame_c(
         // from exactly that bound, so the index is in range for every well-formed
         // storage. Out of range now panics where it used to write past the buffer.
         let row = (kiWidth * y) as usize;
-        unsafe {
-            let pRef = pRefPicture.offset((kiRefStride * y) as isize);
-            for x in 0..kiWidth {
-                let iSum = SumOf8x8SingleBlock_c(pRef.offset(x as isize), kiRefStride);
-                pFeatureOfBlock[row + x as usize] = iSum as u16;
-                pTimesOfFeatureValue[iSum as usize] += 1;
-            }
+        // S11.6: the plane walk is an offset now. The row base is the same
+        // `kiRefStride * y`, and each block starts `x` bytes into it.
+        let kiRowBase = (kiRefStride * y) as usize;
+        for x in 0..kiWidth {
+            let iSum =
+                SumOf8x8SingleBlock_c(&kpRefPicture[kiRowBase + x as usize..], kiRefStride);
+            pFeatureOfBlock[row + x as usize] = iSum as u16;
+            pTimesOfFeatureValue[iSum as usize] += 1;
         }
     }
 }
 
-// unsafe-cat: SCREEN_CONTENT(dormant)
-#[allow(unsafe_code)]
-pub unsafe fn SumOf16x16BlockOfFrame_c(
-    pRefPicture: *mut u8,
+pub fn SumOf16x16BlockOfFrame_c(
+    kpRefPicture: &[u8],
     kiWidth: i32,
     kiHeight: i32,
     kiRefStride: i32,
@@ -1383,13 +1378,14 @@ pub unsafe fn SumOf16x16BlockOfFrame_c(
         // from exactly that bound, so the index is in range for every well-formed
         // storage. Out of range now panics where it used to write past the buffer.
         let row = (kiWidth * y) as usize;
-        unsafe {
-            let pRef = pRefPicture.offset((kiRefStride * y) as isize);
-            for x in 0..kiWidth {
-                let iSum = SumOf16x16SingleBlock_c(pRef.offset(x as isize), kiRefStride);
-                pFeatureOfBlock[row + x as usize] = iSum as u16;
-                pTimesOfFeatureValue[iSum as usize] += 1;
-            }
+        // S11.6: the plane walk is an offset now. The row base is the same
+        // `kiRefStride * y`, and each block starts `x` bytes into it.
+        let kiRowBase = (kiRefStride * y) as usize;
+        for x in 0..kiWidth {
+            let iSum =
+                SumOf16x16SingleBlock_c(&kpRefPicture[kiRowBase + x as usize..], kiRefStride);
+            pFeatureOfBlock[row + x as usize] = iSum as u16;
+            pTimesOfFeatureValue[iSum as usize] += 1;
         }
     }
 }
@@ -1440,8 +1436,6 @@ pub fn FillQpelLocationByFeatureValue_c(
     }
 }
 
-// unsafe-cat: SCREEN_CONTENT(dormant)
-#[allow(unsafe_code)]
 pub fn CalculateFeatureOfBlock(
     pFunc: &SWelsFuncPtrList,
     pRef: &mut SPicture,
@@ -1485,12 +1479,14 @@ pub fn CalculateFeatureOfBlock(
     pTimesOfFeatureValue[..kiActualListSize as usize].fill(0);
 
     if let Some(calc_frame_feature) = pFunc.pfCalculateBlockFeatureOfFrame[iIs16x16] {
-        // The plane root is raw and the kernel is still `unsafe extern "C"` for it.
-        let pRefData = pRef.data_ptr(0);
+        // **S11.6: the plane arrives as a slice from its logical origin**, which
+        // is the same address `data_ptr(0)` returned — `as_slice()[origin()..]`
+        // is that accessor's own arithmetic, with the buffer's end now known to
+        // the callee. The slot and both kernels behind it are safe fns.
         let iRefStride = pRef.stride(0);
-        unsafe {
-            calc_frame_feature(pRefData, iWidth, kiHeight, iRefStride, pFeatureOfBlock, pTimesOfFeatureValue);
-        }
+        let plane = pRef.plane(0);
+        let kpRefData = &plane.as_slice()[plane.origin()..];
+        calc_frame_feature(kpRefData, iWidth, kiHeight, iRefStride, pFeatureOfBlock, pTimesOfFeatureValue);
     }
 
     if let Some(init_hash) = pFunc.pfInitializeHashforFeature {
@@ -1823,25 +1819,14 @@ mod tests {
 
     #[test]
     // unsafe-cat: instrument(test)
-    #[allow(unsafe_code)]
     fn test_single_block_sums() {
-        let mut buf8 = [0u8; 64];
-        for i in 0..64 {
-            buf8[i] = 1;
-        }
-        unsafe {
-            let sum8 = SumOf8x8SingleBlock_c(buf8.as_mut_ptr(), 8);
-            assert_eq!(sum8, 64);
-        }
+        // S11.6: the kernels take slices, so this instrument needs no `unsafe`
+        // and its allow retires with them.
+        let buf8 = [1u8; 64];
+        assert_eq!(SumOf8x8SingleBlock_c(&buf8, 8), 64);
 
-        let mut buf16 = [0u8; 256];
-        for i in 0..256 {
-            buf16[i] = 2;
-        }
-        unsafe {
-            let sum16 = SumOf16x16SingleBlock_c(buf16.as_mut_ptr(), 16);
-            assert_eq!(sum16, 512);
-        }
+        let buf16 = [2u8; 256];
+        assert_eq!(SumOf16x16SingleBlock_c(&buf16, 16), 512);
     }
 
     #[test]
