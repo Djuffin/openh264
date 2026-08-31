@@ -320,10 +320,22 @@ impl Default for SSceneChangeResult {
 
 #[derive(Debug)]
 pub struct SVAACalcResult {
-    /// The two plane roots the walk reads. Still raw, and Phase 9's: they are
-    /// `SPicture::data_ptr` cursors, handed over per frame by `VaaCalculation`.
-    pub pCurY: *mut u8,
-    pub pRefY: *mut u8,
+    /// The two source plane **addresses**, as integers — the identity of the pair
+    /// this result was computed over, and nothing else.
+    ///
+    /// **S10.9: `*mut u8` -> `usize`, because that is what they are.** They were
+    /// raw plane roots, and the whole-tree read is one comparison in
+    /// `adaptive_quantization.rs`: "reuse the VAA statistics when they were
+    /// computed over exactly this pair of pictures". Nothing dereferences them —
+    /// the walk that *reads* pixels takes its own cursors. Storing an identity as
+    /// a pointer bought nothing and cost `SVAAFrameInfo` its `*mut u8` `!Sync`
+    /// reason, which is one of the three that keep `sWelsEncCtx` off the fork
+    /// seam.
+    ///
+    /// An address is plain `Copy` data — the tree's own phrase, from the two-thread
+    /// probes that carry layer addresses across a spawn the same way.
+    pub pCurY: usize,
+    pub pRefY: usize,
     /// **The six per-frame result arrays, owned since T6.F3.** They were six
     /// `WelsMallocz` blocks `RequestMemorySvc` cut and `FreeMemorySvc` released one
     /// at a time, reachable only through this struct; each is one entry per
@@ -341,8 +353,8 @@ pub struct SVAACalcResult {
 impl Default for SVAACalcResult {
     fn default() -> Self {
         Self {
-            pCurY: std::ptr::null_mut(),
-            pRefY: std::ptr::null_mut(),
+            pCurY: 0,
+            pRefY: 0,
             pSad8x8: Vec::new(),
             pSsd16x16: Vec::new(),
             pSum16x16: Vec::new(),
@@ -431,21 +443,25 @@ pub struct SComplexityAnalysisParam {
     pub iCalcBgd: bool,
     pub iMbNumInGom: i32,
     pub iFrameComplexity: i64,
-    /// **T9.X — `pGomComplexity` and `pGomForegroundBlockNum` are gone from here.**
-    /// They were two `*mut`-i32 and they were never this block's memory: the caller
-    /// aimed them at the rate controller's `pCurrentFrameGomSad` and
-    /// `pGomForegroundBlockNum` `Vec`s one line before every `Process` call
-    /// (`wels_preprocess.cpp:859/:924` does the same, misnomer and all —
-    /// `pGomComplexity` is pointed at the *SAD* array). They reach the plugin as
-    /// slices now, which retires `SVAAFrameInfo`'s `*mut`-i32 `!Sync` reason.
-    ///
-    /// `pBackgroundMbFlag` and `uiRefMbType` stay: the first is a self-pointer into
-    /// `SVAAFrameInfo::pVaaBackgroundMbFlag` that `background_detection.rs` also
-    /// copies, and the second has **no writer in this port at all** — upstream fills
-    /// it through `SetRefMbType` (`wels_preprocess.cpp:916`), which was never ported.
-    /// See F177.
-    pub pBackgroundMbFlag: *mut i8,
-    pub uiRefMbType: *mut u32,
+    // **T9.X — `pGomComplexity` and `pGomForegroundBlockNum` are gone from here.**
+    // They were two `*mut`-i32 and they were never this block's memory: the caller
+    // aimed them at the rate controller's `pCurrentFrameGomSad` and
+    // `pGomForegroundBlockNum` `Vec`s one line before every `Process` call
+    // (`wels_preprocess.cpp:859/:924` does the same, misnomer and all —
+    // `pGomComplexity` is pointed at the *SAD* array). They reach the plugin as
+    // slices now, which retires `SVAAFrameInfo`'s `*mut`-i32 `!Sync` reason.
+    //
+    // **S10.9: `pBackgroundMbFlag` and `uiRefMbType` followed them out.** The note
+    // that stood here said they stay — the first "a self-pointer into
+    // `SVAAFrameInfo::pVaaBackgroundMbFlag`", the second with "no writer in this
+    // port at all". The second half was stale: `SetRefMbType` *is* ported and does
+    // aim the pointer at a reference picture's array. And "a self-pointer into a
+    // field of the enclosing struct" is a reason to remove it, not to keep it —
+    // the plugin can be handed the slice.
+    //
+    // Both reach `Process` as slices now, which retires `SVAAFrameInfo`'s last two
+    // `!Sync` reasons (`*mut i8`, `*mut u32`) alongside the `*mut i32` the earlier
+    // pair took.
 }
 
 impl Default for SComplexityAnalysisParam {
@@ -455,8 +471,6 @@ impl Default for SComplexityAnalysisParam {
             iCalcBgd: false,
             iMbNumInGom: 0,
             iFrameComplexity: 0,
-            pBackgroundMbFlag: std::ptr::null_mut(),
-            uiRefMbType: std::ptr::null_mut(),
         }
     }
 }
@@ -1851,8 +1865,8 @@ impl CWelsPreProcess {
         };
         let sCur = self.m_pSpatialPicPool.get_mut(idCur).planes();
         let sRef = self.m_pSpatialPicPool.get_mut(idRef).planes();
-        pVaaInfo.sVaaCalcInfo.pCurY = sCur.pData[0];
-        pVaaInfo.sVaaCalcInfo.pRefY = sRef.pData[0];
+        pVaaInfo.sVaaCalcInfo.pCurY = sCur.pData[0] as usize;
+        pVaaInfo.sVaaCalcInfo.pRefY = sRef.pData[0] as usize;
 
         let mut sCurPixMap = SPixMap::default();
         let mut sRefPixMap = SPixMap::default();
@@ -2741,7 +2755,17 @@ impl CWelsPreProcess {
     /// reference at or below the current temporal id.
     // unsafe-cat: port-raw(Phase 9)
     #[allow(unsafe_code)]
-    pub unsafe fn SetRefMbType(&self, pCtx: &mut sWelsEncCtx, pRefMbTypeArray: *mut *mut u32, _iRefPicType: i32) {
+    /// **S10.9: returns *which* picture, not a pointer into it.** The out-parameter
+    /// was `*mut *mut u32` and the body stored
+    /// `pic_mut(id).ref_mb_type_root()` — a raw into the reference picture's
+    /// `uiRefMbType` `Vec`, which then lived on `SComplexityAnalysisParam` and made
+    /// `SVAAFrameInfo` `!Sync`. An identity carries the same decision and lets the
+    /// caller take the slice under a borrow the compiler can see.
+    pub unsafe fn SetRefMbType(
+        &self,
+        pCtx: &mut sWelsEncCtx,
+        _iRefPicType: i32,
+    ) -> Option<crate::encoder::picture::RecPicId> {
         let uiTid = pCtx.uiTemporalId;
         let uiDid = pCtx.uiDependencyId;
         // §4.6, reorder: the branch condition is decided before the list borrow —
@@ -2750,32 +2774,29 @@ impl CWelsPreProcess {
         let bLtrRecovery = pCtx.param().bEnableLongTermReference
             && ctx_ltr_at(pCtx, uiDid as usize).bReceivedT0LostFlag
             && uiTid == 0;
-        let Some(pRefPicLlist) = pCtx.ref_list_mut(uiDid as usize) else {
-            return;
-        };
+        let pRefPicLlist = pCtx.ref_list(uiDid as usize)?;
 
         if bLtrRecovery {
-            for i in 0..(*pRefPicLlist).uiLongRefCount as usize {
-                let Some(id) = (*pRefPicLlist).pLongRefList[i] else {
+            for i in 0..pRefPicLlist.uiLongRefCount as usize {
+                let Some(id) = pRefPicLlist.pLongRefList[i] else {
                     continue;
                 };
-                if (*pRefPicLlist).pic(id).uiRecieveConfirmed == RECIEVE_SUCCESS {
-                    *pRefMbTypeArray = (*pRefPicLlist).pic_mut(id).ref_mb_type_root();
-                    break;
+                if pRefPicLlist.pic(id).uiRecieveConfirmed == RECIEVE_SUCCESS {
+                    return Some(id);
                 }
             }
         } else {
-            for i in 0..(*pRefPicLlist).uiShortRefCount as usize {
-                let Some(id) = (*pRefPicLlist).pShortRefList[i] else {
+            for i in 0..pRefPicLlist.uiShortRefCount as usize {
+                let Some(id) = pRefPicLlist.pShortRefList[i] else {
                     continue;
                 };
-                let pRef = (*pRefPicLlist).pic(id);
+                let pRef = pRefPicLlist.pic(id);
                 if pRef.bUsedAsRef && pRef.iFramePoc >= 0 && pRef.uiTemporalId <= uiTid {
-                    *pRefMbTypeArray = (*pRefPicLlist).pic_mut(id).ref_mb_type_root();
-                    break;
+                    return Some(id);
                 }
             }
         }
+        None
     }
 
     // unsafe-cat: port-raw(Phase 9)
@@ -2880,11 +2901,12 @@ impl CWelsPreProcess {
             // matches no reference leaves exactly what it left before (it writes
             // only on a match). None of the block's other writes are read by
             // `SetRefMbType`, so they move below it unchanged.
-            let mut uiRefMbType = pCtx
-                .vaa()
-                .expect("the frame's video-analysis block")
-                .sComplexityAnalysisParam
-                .uiRefMbType;
+            // **S10.9: an identity, not a pointer.** This used to read the raw
+            // `uiRefMbType` back off the analysis block, hand `SetRefMbType` a
+            // `*mut *mut u32` to overwrite, and store the result — a borrow of the
+            // reference picture's array living in a `Copy` struct. The identity is
+            // resolved to a slice below, under a borrow the compiler can see.
+            let mut idRefMbType: Option<crate::encoder::picture::RecPicId> = None;
             if let Some(idRef) = sRefPic {
                 // §4.6, reorder: the picture type is read out before
                 // `SetRefMbType` claims the context mutably.
@@ -2893,20 +2915,26 @@ impl CWelsPreProcess {
                     .expect("checked when `sRefPic` was filtered")
                     .pic(idRef)
                     .iPictureType;
-                self.SetRefMbType(pCtx, &mut uiRefMbType, iPictureType);
+                idRefMbType = self.SetRefMbType(pCtx, iPictureType);
             }
 
             // §4.6, combined accessor: `Process` below takes the analysis block's
             // `sVaaCalcInfo` shared and the rate controller's two GOM arrays
             // mutably, in one call.
-            let (pVaaInfo, pWelsSvcRc) = pCtx.vaa_and_rc_at_mut(kiDependencyId as usize);
+            let (pVaaInfo, pWelsSvcRc, pRefListShared) =
+                pCtx.vaa_rc_and_ref_list_mut(kiDependencyId as usize);
             let pVaaInfo = pVaaInfo.expect("the frame's video-analysis block");
-            let pBackgroundMbFlag = pVaaInfo.pVaaBackgroundMbFlag.as_mut_ptr();
+            // S10.9: the reference picture's per-macroblock type array, resolved
+            // from `SetRefMbType`'s identity. Empty where the raw was null — which
+            // is the state `ref_mb_type_root` answered null for, a picture built
+            // without `bNeedMbInfo`.
+            let uiRefMbType: &[u32] = match (idRefMbType, pRefListShared) {
+                (Some(id), Some(list)) => &list.pic(id).uiRefMbType,
+                _ => &[],
+            };
             let sComplexityAnalysisParam = &mut pVaaInfo.sComplexityAnalysisParam;
 
             sComplexityAnalysisParam.iComplexityAnalysisMode = iComplexityAnalysisMode;
-            sComplexityAnalysisParam.pBackgroundMbFlag = pBackgroundMbFlag;
-            sComplexityAnalysisParam.uiRefMbType = uiRefMbType;
             sComplexityAnalysisParam.iCalcBgd = bCalculateBGD;
             sComplexityAnalysisParam.iFrameComplexity = 0;
 
@@ -2950,6 +2978,8 @@ impl CWelsPreProcess {
                 &pVaaInfo.sVaaCalcInfo,
                 &mut (*pWelsSvcRc).pCurrentFrameGomSad,
                 &mut (*pWelsSvcRc).pGomForegroundBlockNum,
+                &pVaaInfo.pVaaBackgroundMbFlag,
+                uiRefMbType,
             );
             if iRet == 0 {
                 self.m_vp.sComplexityAnalysis.Get(sComplexityAnalysisParam);
