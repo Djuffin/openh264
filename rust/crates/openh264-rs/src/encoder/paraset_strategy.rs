@@ -277,7 +277,8 @@ impl CWelsParametersetIdStrategyObj {
         pSpsArray: &[SWelsSPS],
         pSubsetArray: &[SSubsetSps],
         pPpsArray: &[SWelsPPS],
-        pExistingParasetList: *mut SExistingParasetList,
+        // S11.13: `Option<&mut>` — this body writes the list back.
+        pExistingParasetList: Option<&mut SExistingParasetList>,
     ) {
         if !self.eIdKind.is_non_constant() {
             return;
@@ -297,26 +298,29 @@ impl CWelsParametersetIdStrategyObj {
 
         // T9.H8: the trailing `|| pCtx.is_null()` is gone — a `&mut sWelsEncCtx`
         // cannot be null. The listing and paraset-list conditions are unchanged.
-        if !self.eIdKind.is_listing() || pExistingParasetList.is_null() {
+        // S11.13: the null test is the `Option`.
+        let Some(pExistingParasetList) = pExistingParasetList else {
+            return;
+        };
+        if !self.eIdKind.is_listing() {
             return;
         }
         // `CWelsParametersetSpsListing::OutputCurrentStructure` — `:519`.
-        (*pExistingParasetList).uiInUseSpsNum = self.m_sParaSetOffset.uiInUseSpsNum;
+        pExistingParasetList.uiInUseSpsNum = self.m_sParaSetOffset.uiInUseSpsNum;
         // A4: the copy is a slice copy now. The listing kinds set
         // `m_iBasicNeededSpsNum = MAX_SPS_COUNT`, and this body has already
         // returned unless `eIdKind.is_listing()`, so both sides are exactly
         // `MAX_SPS_COUNT` long and `copy_from_slice` asserts what the raw copy
         // assumed.
-        (*pExistingParasetList).sSps.copy_from_slice(pSpsArray);
+        pExistingParasetList.sSps.copy_from_slice(pSpsArray);
         // The C tests `NULL != pCtx->pSubsetArray`; the port's accessor is a pointer
         // into the context's own storage and the test is the same one.
         if !pSubsetArray.is_empty() {
-            (*pExistingParasetList).uiInUseSubsetSpsNum = self.m_sParaSetOffset.uiInUseSubsetSpsNum;
-            (*pExistingParasetList)
-                .sSubsetSps
+            pExistingParasetList.uiInUseSubsetSpsNum = self.m_sParaSetOffset.uiInUseSubsetSpsNum;
+            pExistingParasetList.sSubsetSps
                 .copy_from_slice(pSubsetArray);
         } else {
-            (*pExistingParasetList).uiInUseSubsetSpsNum = 0;
+            pExistingParasetList.uiInUseSubsetSpsNum = 0;
         }
 
         if self.eIdKind != ParasetIdKind::SpsPpsListing {
@@ -328,8 +332,8 @@ impl CWelsParametersetIdStrategyObj {
         // `SWelsPPS` member — and copies `MAX_PPS_COUNT` of them out of it. That is an
         // over-read of 56 structs past the end of one; the port copies the array the
         // sentence means. See F94.
-        (*pExistingParasetList).uiInUsePpsNum = self.m_sParaSetOffset.uiInUsePpsNum;
-        (*pExistingParasetList).sPps.copy_from_slice(pPpsArray);
+        pExistingParasetList.uiInUsePpsNum = self.m_sParaSetOffset.uiInUsePpsNum;
+        pExistingParasetList.sPps.copy_from_slice(pPpsArray);
         if !pPpsIdList.is_null() {
             std::ptr::copy_nonoverlapping(
                 self.m_sParaSetOffset.iPpsIdList.as_ptr() as *const i32,
@@ -473,16 +477,20 @@ impl CWelsParametersetIdStrategyObj {
     /// allocates — but "it is in bounds" was an argument, and it is an assertion now.
     pub unsafe fn LoadPrevious(
         &mut self,
-        pExistingParasetList: *mut SExistingParasetList,
+        pExistingParasetList: Option<&SExistingParasetList>,
         pSpsArray: &mut [SWelsSPS],
         pSubsetArray: &mut [SSubsetSps],
         pPpsArray: &mut [SWelsPPS],
     ) {
-        if !self.eIdKind.is_listing() || pExistingParasetList.is_null() {
+        // S11.13: the null test is the `Option`.
+        let Some(pExistingParasetList) = pExistingParasetList else {
+            return;
+        };
+        if !self.eIdKind.is_listing() {
             return;
         }
         // `CWelsParametersetSpsListing::LoadPreviousSps` — `:424`.
-        self.m_sParaSetOffset.uiInUseSpsNum = (*pExistingParasetList).uiInUseSpsNum;
+        self.m_sParaSetOffset.uiInUseSpsNum = pExistingParasetList.uiInUseSpsNum;
         debug_assert!(
             pSpsArray.is_empty() || pSpsArray.len() >= MAX_SPS_COUNT,
             "pSpsArray holds {} entries; LoadPrevious copies {MAX_SPS_COUNT}",
@@ -493,14 +501,14 @@ impl CWelsParametersetIdStrategyObj {
             // `addr_of!` rather than `&(*raw).sSps[..n]`: the latter is an implicit
                 // autoref through a raw pointer, which the compiler now refuses.
                 let src = std::slice::from_raw_parts(
-                    std::ptr::addr_of!((*pExistingParasetList).sSps).cast::<SWelsSPS>(),
+                    std::ptr::addr_of!(pExistingParasetList.sSps).cast::<SWelsSPS>(),
                     n,
                 );
                 pSpsArray[..n].copy_from_slice(src);
         }
         if self.GetNeededSubsetSpsNum() > 0 {
             self.m_sParaSetOffset.uiInUseSubsetSpsNum =
-                (*pExistingParasetList).uiInUseSubsetSpsNum;
+                pExistingParasetList.uiInUseSubsetSpsNum;
             debug_assert!(
                 pSubsetArray.is_empty() || pSubsetArray.len() >= MAX_SPS_COUNT,
                 "pSubsetArray holds {} entries; LoadPrevious copies {MAX_SPS_COUNT}",
@@ -511,7 +519,7 @@ impl CWelsParametersetIdStrategyObj {
                 // `addr_of!` rather than `&(*raw).sSubsetSps[..n]`: the latter is an implicit
                 // autoref through a raw pointer, which the compiler now refuses.
                 let src = std::slice::from_raw_parts(
-                    std::ptr::addr_of!((*pExistingParasetList).sSubsetSps).cast::<SSubsetSps>(),
+                    std::ptr::addr_of!(pExistingParasetList.sSubsetSps).cast::<SSubsetSps>(),
                     n,
                 );
                 pSubsetArray[..n].copy_from_slice(src);
@@ -523,7 +531,7 @@ impl CWelsParametersetIdStrategyObj {
         // listing kinds inherit the empty `CWelsParametersetIdConstant` body
         // (`paraset_strategy.h:155`), so only this one carries PPSs across.
         if self.eIdKind == ParasetIdKind::SpsPpsListing {
-            self.m_sParaSetOffset.uiInUsePpsNum = (*pExistingParasetList).uiInUsePpsNum;
+            self.m_sParaSetOffset.uiInUsePpsNum = pExistingParasetList.uiInUsePpsNum;
             debug_assert!(
                 pPpsArray.is_empty() || pPpsArray.len() >= MAX_PPS_COUNT,
                 "pPpsArray holds {} entries; LoadPrevious copies {MAX_PPS_COUNT}",
@@ -534,7 +542,7 @@ impl CWelsParametersetIdStrategyObj {
                 // `addr_of!` rather than `&(*raw).sPps[..n]`: the latter is an implicit
                 // autoref through a raw pointer, which the compiler now refuses.
                 let src = std::slice::from_raw_parts(
-                    std::ptr::addr_of!((*pExistingParasetList).sPps).cast::<SWelsPPS>(),
+                    std::ptr::addr_of!(pExistingParasetList.sPps).cast::<SWelsPPS>(),
                     n,
                 );
                 pPpsArray[..n].copy_from_slice(src);
@@ -600,29 +608,28 @@ impl CWelsParametersetIdStrategyObj {
     /// see it: more than one SVC spatial layer and the strategy falls back to
     /// `CONSTANT_ID`.
     ///
-    /// # Safety
-    /// On a listing kind, `pCodingParam` must be a writable coding-parameter block.
-    // unsafe-cat: port-raw(Phase 9)
-    #[allow(unsafe_code)]
-    pub unsafe fn CheckParamCompatibility(
+    pub fn CheckParamCompatibility(
         &mut self,
-        pCodingParam: *mut SWelsSvcCodingParam,
+        // S11.13: by reference — see `InitializeInternal`. `&mut`: this body
+        // writes `eSpsPpsIdStrategy` back when the listing strategy is refused.
+        pCodingParam: &mut SWelsSvcCodingParam,
         pLogCtx: SLogContext,
     ) -> bool {
-        if !self.eIdKind.is_listing() || pCodingParam.is_null() {
+        // S11.13: the null disjunct retires with the raw (T9.H).
+        if !self.eIdKind.is_listing() {
             return true;
         }
-        if (*pCodingParam).iSpatialLayerNum > 1 && !(*pCodingParam).bSimulcastAVC {
+        if pCodingParam.iSpatialLayerNum > 1 && !pCodingParam.bSimulcastAVC {
             crate::common::wels_trace::WelsLog(
                 pLogCtx,
                 crate::common::wels_trace::WELS_LOG_WARNING,
                 &format!(
                     "ParamValidationExt(), eSpsPpsIdStrategy setting ({:?}) with multiple svc SpatialLayers ({}) not supported! eSpsPpsIdStrategy adjusted to CONSTANT_ID",
-                    (*pCodingParam).eSpsPpsIdStrategy,
-                    (*pCodingParam).iSpatialLayerNum
+                    pCodingParam.eSpsPpsIdStrategy,
+                    pCodingParam.iSpatialLayerNum
                 ),
             );
-            (*pCodingParam).eSpsPpsIdStrategy = EParameterSetStrategy::CONSTANT_ID;
+            pCodingParam.eSpsPpsIdStrategy = EParameterSetStrategy::CONSTANT_ID;
             return false;
         }
         true

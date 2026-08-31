@@ -915,7 +915,9 @@ pub unsafe fn WelsEncoderParamAdjust(
         // for sEncoderStatistics
 
         let mut sExistingParasetList = SExistingParasetList::default();
-        let mut pExistingParasetList: *mut SExistingParasetList = null_mut();
+        // S11.13: an `Option`, not a conditionally-set raw. The flag below is
+        // the same one the null did, said in the type.
+        let mut bHaveExistingParasetList = false;
 
         if iOldSpsPpsIdStrategy != CONSTANT_ID && pNewParam.eSpsPpsIdStrategy != CONSTANT_ID {
             // S67 blessed (H2): live across it are `sTempEncoderStatistics` (a **copy**, taken
@@ -940,19 +942,21 @@ pub unsafe fn WelsEncoderParamAdjust(
                 pSpsArray,
                 pSubsetArray,
                 pPpsArray,
-                &mut sExistingParasetList,
+                Some(&mut sExistingParasetList),
             );
 
             if (iOldSpsPpsIdStrategy as i32 & SPS_LISTING as i32) != 0
                 && (pNewParam.eSpsPpsIdStrategy as i32 & SPS_LISTING as i32) != 0
             {
-                pExistingParasetList = &mut sExistingParasetList;
+                bHaveExistingParasetList = true;
             }
         }
 
         WelsUninitEncoderExt(ppCtx.take());
 
         /* Update new parameters */
+        let pExistingParasetList =
+            bHaveExistingParasetList.then_some(&sExistingParasetList);
         if WelsInitEncoderExt(ppCtx, pNewParam, sLogCtx, pExistingParasetList) != 0 {
             return 1;
         }
@@ -1956,76 +1960,77 @@ impl CWelsH264SVCEncoder {
 
     // unsafe-cat: port-raw(Phase 9)
     #[allow(unsafe_code)]
-    pub fn InitializeInternal(&mut self, pCfg: *mut SWelsSvcCodingParam) -> i32 {
-        if pCfg.is_null() {
-            return cmInitParaError;
-        }
+    // **S11.13: the parameter is a reference.** Both callers pass `&mut sConfig`,
+    // a local they just built — the raw was the C signature's shape and nothing
+    // more, and the null guard it required is inexpressible on a reference
+    // (T9.H). 43 dereferences retire with it.
+    pub fn InitializeInternal(&mut self, pCfg: &mut SWelsSvcCodingParam) -> i32 {
 
         if self.m_bInitialFlag {
             self.Uninitialize();
         }
 
         unsafe {
-            let iNumOfLayers = (*pCfg).iSpatialLayerNum;
+            let iNumOfLayers = pCfg.iSpatialLayerNum;
             if iNumOfLayers < 1 || iNumOfLayers > MAX_DEPENDENCY_LAYER {
                 self.Uninitialize();
                 return cmInitParaError;
             }
-            if (*pCfg).iTemporalLayerNum < 1 {
-                (*pCfg).iTemporalLayerNum = 1;
+            if pCfg.iTemporalLayerNum < 1 {
+                pCfg.iTemporalLayerNum = 1;
             }
-            if (*pCfg).iTemporalLayerNum > MAX_TEMPORAL_LEVEL {
+            if pCfg.iTemporalLayerNum > MAX_TEMPORAL_LEVEL {
                 self.Uninitialize();
                 return cmInitParaError;
             }
 
-            if (*pCfg).uiGopSize < 1 || (*pCfg).uiGopSize > MAX_GOP_SIZE {
+            if pCfg.uiGopSize < 1 || pCfg.uiGopSize > MAX_GOP_SIZE {
                 self.Uninitialize();
                 return cmInitParaError;
             }
 
-            if !WELS_POWER2_IF((*pCfg).uiGopSize) {
+            if !WELS_POWER2_IF(pCfg.uiGopSize) {
                 self.Uninitialize();
                 return cmInitParaError;
             }
 
-            if (*pCfg).uiIntraPeriod != 0 && (*pCfg).uiIntraPeriod < (*pCfg).uiGopSize {
+            if pCfg.uiIntraPeriod != 0 && pCfg.uiIntraPeriod < pCfg.uiGopSize {
                 self.Uninitialize();
                 return cmInitParaError;
             }
 
-            if (*pCfg).uiIntraPeriod != 0 && ((*pCfg).uiIntraPeriod & ((*pCfg).uiGopSize - 1)) != 0
+            if pCfg.uiIntraPeriod != 0 && (pCfg.uiIntraPeriod & (pCfg.uiGopSize - 1)) != 0
             {
                 self.Uninitialize();
                 return cmInitParaError;
             }
 
-            if (*pCfg).iUsageType == EUsageType::SCREEN_CONTENT_REAL_TIME {
-                if (*pCfg).bEnableLongTermReference {
-                    (*pCfg).iLTRRefNum = LONG_TERM_REF_NUM_SCREEN;
-                    if (*pCfg).iNumRefFrame == AUTO_REF_PIC_COUNT {
-                        (*pCfg).iNumRefFrame =
-                            WELS_MAX(1, WELS_LOG2((*pCfg).uiGopSize)) + (*pCfg).iLTRRefNum;
+            if pCfg.iUsageType == EUsageType::SCREEN_CONTENT_REAL_TIME {
+                if pCfg.bEnableLongTermReference {
+                    pCfg.iLTRRefNum = LONG_TERM_REF_NUM_SCREEN;
+                    if pCfg.iNumRefFrame == AUTO_REF_PIC_COUNT {
+                        pCfg.iNumRefFrame =
+                            WELS_MAX(1, WELS_LOG2(pCfg.uiGopSize)) + pCfg.iLTRRefNum;
                     }
                 } else {
-                    (*pCfg).iLTRRefNum = 0;
-                    if (*pCfg).iNumRefFrame == AUTO_REF_PIC_COUNT {
-                        (*pCfg).iNumRefFrame = WELS_MAX(1, ((*pCfg).uiGopSize >> 1) as i32);
+                    pCfg.iLTRRefNum = 0;
+                    if pCfg.iNumRefFrame == AUTO_REF_PIC_COUNT {
+                        pCfg.iNumRefFrame = WELS_MAX(1, (pCfg.uiGopSize >> 1) as i32);
                     }
                 }
             } else {
-                (*pCfg).iLTRRefNum = if (*pCfg).bEnableLongTermReference {
+                pCfg.iLTRRefNum = if pCfg.bEnableLongTermReference {
                     LONG_TERM_REF_NUM
                 } else {
                     0
                 };
-                if (*pCfg).iNumRefFrame == AUTO_REF_PIC_COUNT {
-                    let ref_calc = if ((*pCfg).uiGopSize >> 1) > 1 {
-                        ((*pCfg).uiGopSize >> 1) as i32 + (*pCfg).iLTRRefNum
+                if pCfg.iNumRefFrame == AUTO_REF_PIC_COUNT {
+                    let ref_calc = if (pCfg.uiGopSize >> 1) > 1 {
+                        (pCfg.uiGopSize >> 1) as i32 + pCfg.iLTRRefNum
                     } else {
-                        MIN_REF_PIC_COUNT + (*pCfg).iLTRRefNum
+                        MIN_REF_PIC_COUNT + pCfg.iLTRRefNum
                     };
-                    (*pCfg).iNumRefFrame = WELS_CLIP3(
+                    pCfg.iNumRefFrame = WELS_CLIP3(
                         ref_calc,
                         MIN_REF_PIC_COUNT,
                         MAX_REFERENCE_PICTURE_COUNT_NUM_CAMERA,
@@ -2033,27 +2038,27 @@ impl CWelsH264SVCEncoder {
                 }
             }
 
-            if (*pCfg).iLtrMarkPeriod == 0 {
-                (*pCfg).iLtrMarkPeriod = 30;
+            if pCfg.iLtrMarkPeriod == 0 {
+                pCfg.iLtrMarkPeriod = 30;
             }
 
-            let kiDecStages = WELS_LOG2((*pCfg).uiGopSize);
-            (*pCfg).iTemporalLayerNum = 1 + kiDecStages;
-            (*pCfg).iLoopFilterAlphaC0Offset =
-                WELS_CLIP3((*pCfg).iLoopFilterAlphaC0Offset, -6, 6);
-            (*pCfg).iLoopFilterBetaOffset = WELS_CLIP3((*pCfg).iLoopFilterBetaOffset, -6, 6);
+            let kiDecStages = WELS_LOG2(pCfg.uiGopSize);
+            pCfg.iTemporalLayerNum = 1 + kiDecStages;
+            pCfg.iLoopFilterAlphaC0Offset =
+                WELS_CLIP3(pCfg.iLoopFilterAlphaC0Offset, -6, 6);
+            pCfg.iLoopFilterBetaOffset = WELS_CLIP3(pCfg.iLoopFilterBetaOffset, -6, 6);
 
-            self.m_iMaxPicWidth = (*pCfg).iPicWidth;
-            self.m_iMaxPicHeight = (*pCfg).iPicHeight;
+            self.m_iMaxPicWidth = pCfg.iPicWidth;
+            self.m_iMaxPicHeight = pCfg.iPicHeight;
 
-            self.TraceParamInfo(&mut (*pCfg).to_param_ext());
+            self.TraceParamInfo(&mut pCfg.to_param_ext());
             let log_ctx = self.m_pWelsTrace.m_sLogCtx;
 
             if crate::encoder::encoder_ext::WelsInitEncoderExt(
                 &mut self.m_pEncContext,
                 pCfg,
                 log_ctx,
-                null_mut(),
+                None,
             ) != 0
             {
                 self.Uninitialize();

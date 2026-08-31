@@ -727,7 +727,7 @@ pub fn InitMbListD(ctx: &mut sWelsEncCtx) -> i32 {
 #[allow(unsafe_code)]
 pub unsafe fn InitDqLayers(
     ctx: &mut sWelsEncCtx,
-    pExistingParasetList: *mut SExistingParasetList,
+    pExistingParasetList: Option<&SExistingParasetList>,
 ) -> i32 {
     let mut pSps: *mut crate::encoder::param_svc::SWelsSPS = null_mut();
     let mut pSubsetSps: *mut crate::encoder::param_svc::SSubsetSps = null_mut();
@@ -1116,7 +1116,7 @@ pub unsafe fn InitDqLayers(
 #[allow(unsafe_code)]
 pub unsafe fn RequestMemorySvc(
     ctx: &mut sWelsEncCtx,
-    pExistingParasetList: *mut SExistingParasetList,
+    pExistingParasetList: Option<&SExistingParasetList>,
 ) -> i32 {
     // **A7, and Miri found it**: this binding used to be `ctx_param(std::ptr::addr_of_mut!(*ctx))`, a raw
     // carrying the parameter block's own provenance, so it outlived every later
@@ -1440,16 +1440,17 @@ pub unsafe fn RequestMemorySvc(
 #[allow(unsafe_code)]
 pub unsafe fn InitSliceSettings(
     pLogCtx: SLogContext,
-    pCodingParam: *mut SWelsSvcCodingParam,
+    // S11.13: the coding parameters arrive by reference — see `InitializeInternal`.
+    pCodingParam: &mut SWelsSvcCodingParam,
     kiCpuCores: i32,
     pMaxSliceCount: *mut i16,
 ) -> i32 {
     let mut iSpatialIdx: i32 = 0;
-    let iSpatialNum = (*pCodingParam).iSpatialLayerNum;
+    let iSpatialNum = pCodingParam.iSpatialLayerNum;
     let mut iMaxSliceCount: u16 = 0;
 
     loop {
-        let pDlp = &mut (*pCodingParam).sSpatialLayers[iSpatialIdx as usize]
+        let pDlp = &mut pCodingParam.sSpatialLayers[iSpatialIdx as usize]
             as *mut SSpatialLayerConfig;
         // **F70, and S29 again.** This was `&mut (*pDlp).sSliceArgument` — a `Unique`
         // retag over the whole slice-argument struct, held across the
@@ -1476,7 +1477,7 @@ pub unsafe fn InitSliceSettings(
                     crate::encoder::svc_enc_slice_segment::SliceArgumentValidationFixedSliceMode(
                         pLogCtx,
                         &mut (*pDlp).sSliceArgument,
-                        (*pCodingParam).iRCMode,
+                        pCodingParam.iRCMode,
                         (*pDlp).iVideoWidth,
                         (*pDlp).iVideoHeight,
                     );
@@ -1502,11 +1503,11 @@ pub unsafe fn InitSliceSettings(
         }
     }
 
-    (*pCodingParam).iMultipleThreadIdc = std::cmp::min(kiCpuCores as u16, iMaxSliceCount);
+    pCodingParam.iMultipleThreadIdc = std::cmp::min(kiCpuCores as u16, iMaxSliceCount);
     // Loop filter requested to be enabled, with threading enabled: disable it on slice
     // boundaries, since that is not allowed with multithreading.
-    if (*pCodingParam).iLoopFilterDisableIdc == 0 && (*pCodingParam).iMultipleThreadIdc != 1 {
-        (*pCodingParam).iLoopFilterDisableIdc = 2;
+    if pCodingParam.iLoopFilterDisableIdc == 0 && pCodingParam.iMultipleThreadIdc != 1 {
+        pCodingParam.iLoopFilterDisableIdc = 2;
     }
     *pMaxSliceCount = iMaxSliceCount as i16;
 
@@ -1524,7 +1525,8 @@ pub unsafe fn InitSliceSettings(
 #[allow(unsafe_code)]
 pub unsafe fn GetMultipleThreadIdc(
     pLogCtx: SLogContext,
-    pCodingParam: *mut SWelsSvcCodingParam,
+    // S11.13: the coding parameters arrive by reference — see `InitializeInternal`.
+    pCodingParam: &mut SWelsSvcCodingParam,
     iSliceNum: *mut i16,
     iCacheLineSize: *mut i32,
     uiCpuFeatureFlags: *mut u32,
@@ -1536,24 +1538,24 @@ pub unsafe fn GetMultipleThreadIdc(
 
     *iCacheLineSize = 16; // 16 bytes aligned in default
 
-    if 0 == (*pCodingParam).iMultipleThreadIdc && uiCpuCores == 0 {
+    if 0 == pCodingParam.iMultipleThreadIdc && uiCpuCores == 0 {
         // cpuid not supported, or doesn't expose the number of cores: use the
         // high-level system API to detect physical/logical processors
         uiCpuCores = crate::encoder::slice_multi_threading::DynamicDetectCpuCores();
     }
 
-    if 0 == (*pCodingParam).iMultipleThreadIdc {
-        (*pCodingParam).iMultipleThreadIdc = if uiCpuCores > 0 { uiCpuCores as u16 } else { 1 };
+    if 0 == pCodingParam.iMultipleThreadIdc {
+        pCodingParam.iMultipleThreadIdc = if uiCpuCores > 0 { uiCpuCores as u16 } else { 1 };
     }
 
     // So many cpu cores up to MAX_THREADS_NUM means server platforms; for client
     // applications it is constrained to MAX_THREADS_NUM here.
-    (*pCodingParam).iMultipleThreadIdc = crate::encoder::rc::WELS_CLIP3(
-        (*pCodingParam).iMultipleThreadIdc,
+    pCodingParam.iMultipleThreadIdc = crate::encoder::rc::WELS_CLIP3(
+        pCodingParam.iMultipleThreadIdc,
         1,
         MAX_THREADS_NUM as u16,
     );
-    uiCpuCores = (*pCodingParam).iMultipleThreadIdc as i32;
+    uiCpuCores = pCodingParam.iMultipleThreadIdc as i32;
 
     if InitSliceSettings(pLogCtx, pCodingParam, uiCpuCores, iSliceNum) != 0 {
         return 1;
@@ -1576,22 +1578,20 @@ pub unsafe fn GetMultipleThreadIdc(
 #[allow(unsafe_code)]
 pub unsafe fn WelsInitEncoderExt(
     ppCtx: &mut Option<Box<sWelsEncCtx>>,
-    pCodingParam: *mut SWelsSvcCodingParam,
+    // S11.13: the coding parameters arrive by reference — see `InitializeInternal`.
+    pCodingParam: &mut SWelsSvcCodingParam,
     pLogCtx: SLogContext,
-    pExistingParasetList: *mut SExistingParasetList,
+    pExistingParasetList: Option<&SExistingParasetList>,
 ) -> i32 {
     let mut iSliceNum: i16 = 1; // number of slices used
     let mut iCacheLineSize: i32 = 16; // on-chip cache line size in bytes
     let mut uiCpuFeatureFlags: u32 = 0;
-    if pCodingParam.is_null() {
-        return 1;
-    }
-
-    let mut iRet = crate::encoder::wels_encoder_ext::ParamValidationExt(pLogCtx, &mut *pCodingParam);
+    // S11.13: the null guard retires with the raw (T9.H).
+    let mut iRet = crate::encoder::wels_encoder_ext::ParamValidationExt(pLogCtx, pCodingParam);
     if iRet != 0 {
         return iRet;
     }
-    iRet = (*pCodingParam).DetermineTemporalSettings();
+    iRet = pCodingParam.DetermineTemporalSettings();
     if iRet != ENC_RETURN_SUCCESS {
         return iRet;
     }
@@ -1655,7 +1655,7 @@ pub unsafe fn WelsInitEncoderExt(
         return iRet;
     }
 
-    ctxBox.iActiveThreadsNum = (*pCodingParam).iMultipleThreadIdc as i16;
+    ctxBox.iActiveThreadsNum = pCodingParam.iMultipleThreadIdc as i16;
     ctxBox.iMaxSliceCount = iSliceNum as i32;
     // **S3.B2.** `pCtxTmp` existed only to give the `*mut *mut sWelsEncCtx`
     // parameter an lvalue to point at. The parameter is a `&mut sWelsEncCtx` now,
@@ -1666,7 +1666,7 @@ pub unsafe fn WelsInitEncoderExt(
         return iRet;
     }
 
-    if (*pCodingParam).iEntropyCodingModeFlag != 0 {
+    if pCodingParam.iEntropyCodingModeFlag != 0 {
         crate::encoder::set_mb_syn_cabac::WelsCabacInit(&mut *ctxBox);
     }
     // T9.G6: hoisted — the call takes the context retag and this argument reads
@@ -1832,7 +1832,7 @@ mod tests {
         ctxBox.iActiveThreadsNum = param.iMultipleThreadIdc as i16;
         ctxBox.iMaxSliceCount = iSliceNum as i32;
 
-        assert_eq!(RequestMemorySvc(&mut ctxBox, null_mut()), 0, "RequestMemorySvc");
+        assert_eq!(RequestMemorySvc(&mut ctxBox, None), 0, "RequestMemorySvc");
         Box::into_raw(ctxBox)
     }
 
