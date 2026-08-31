@@ -1076,6 +1076,17 @@ pub fn ctx_ltr_at(pCtx: &mut sWelsEncCtx, kiDid: usize) -> &mut SLTRState {
     &mut pCtx.pLtr[kiDid]
 }
 
+/// [`ctx_ltr_at`]'s shared twin — S11.12.
+///
+/// The `&mut` form exists for the bodies that write LTR state; the readers were
+/// taking it only because it was the one that existed, which forced their whole
+/// enclosing signature to `&mut sWelsEncCtx` and so forced *their* callers to
+/// resolve the layer through a raw. Same panic on a bad index, same element.
+#[inline]
+pub fn ctx_ltr_at_ref(pCtx: &sWelsEncCtx, kiDid: usize) -> &SLTRState {
+    &pCtx.pLtr[kiDid]
+}
+
 /// `pCtx->pDqIdcMap`, as the slice it is — T6.H3, **converted at T9.H2 (step 4)**.
 ///
 /// This answered the root as `*mut SDqIdc` and both production callers immediately
