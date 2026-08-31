@@ -746,9 +746,7 @@ pub fn WelsGetMbCtxCabac(
     }
 }
 
-// unsafe-cat: fork-shared(S63) — pBlock, the residual cursor into the cache's sDct
-#[allow(unsafe_code)]
-pub unsafe fn WelsWriteBlockResidualCabac(
+pub fn WelsWriteBlockResidualCabac(
     buf: &mut [u8],
     kpNonZeroCoeffCount: &[i8; 48],
     mbs: &crate::safe::mb_grid::MbWindow<'_, SMB>,
@@ -756,10 +754,12 @@ pub unsafe fn WelsWriteBlockResidualCabac(
     eCtxBlockCat: ECtxBlockCat,
     iIdx: i16,
     iNonZeroCount: i16,
-    pBlock: *mut i16,
+    // S11.45: the residual cursor is the block it walked — every read below is
+    // bounds-checked against the caller's array.
+    pBlock: &[i16],
     iEndIdx: i16,
 ) {
-    unsafe {
+    {
         let mut iCtx = WelsGetMbCtxCabac(kpNonZeroCoeffCount, mbs, eCtxBlockCat, iIdx) as i32;
 
         if iNonZeroCount != 0 {
@@ -772,7 +772,7 @@ pub unsafe fn WelsWriteBlockResidualCabac(
 
             WelsCabacEncodeDecision(buf, pCabacCtx, iCtx, 1);
             loop {
-                let coeff = *pBlock.add(i);
+                let coeff = pBlock[i];
                 if coeff != 0 {
                     iLevel[iNonZeroIdx] = coeff;
                     iNonZeroIdx += 1;
@@ -790,7 +790,7 @@ pub unsafe fn WelsWriteBlockResidualCabac(
 
                 i += 1;
                 if (i as i16) == iEndIdx {
-                    iLevel[iNonZeroIdx] = *pBlock.add(i);
+                    iLevel[iNonZeroIdx] = pBlock[i];
                     iNonZeroIdx += 1;
                     break;
                 }
@@ -852,8 +852,6 @@ pub fn WelsCalNonZeroCount2x2Block(pBlock: &[i16; 4]) -> i32 {
         + ((pBlock[3] != 0) as i32)
 }
 
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
 pub fn WelsWriteMbResidualCabac(
     buf: &mut [u8],
     pFuncList: &SWelsFuncPtrList,
@@ -861,10 +859,10 @@ pub fn WelsWriteMbResidualCabac(
     mbs: &mut crate::safe::mb_grid::MbWindow<'_, SMB>,
     uiChromaQpIndexOffset: u32,
 ) -> i32 {
-    unsafe {
+    {
         let uiMbType = mbs.cur().uiMbType;
         // Both of these used to arrive as parameters *alongside* `pSlice`, which is
-        // where they come from — and the body reaches `(*pSlice).uiLastMbQp` between
+        // where they come from — and the body reaches `pSlice.uiLastMbQp` between
         // uses of them. Two live paths to one slice is the aliasing bug this session
         // is here to remove, so they are derived here and reborrowed per call: each
         // `&mut *` below is a child of `pSlice`'s tag that dies at the call it is
@@ -873,8 +871,8 @@ pub fn WelsWriteMbResidualCabac(
         // `pMbCache` from `pSlice` and never read the argument.
         let pMbCache = &mut pSlice.sMbCacheInfo;
         let pCabacCtx = &mut pSlice.sCabacCtx;
-        let kpNonZeroCoeffCount = &(*pMbCache).iNonZeroCoeffCount;
-        let pSliceHeadExt = &mut (*pSlice).sSliceHeaderExt;
+        let kpNonZeroCoeffCount = &pMbCache.iNonZeroCoeffCount;
+        let pSliceHeadExt = &mut pSlice.sSliceHeaderExt;
         let iSliceFirstMbXY = pSliceHeadExt.sSliceHeader.iFirstMbInSlice;
 
         {
@@ -887,20 +885,23 @@ pub fn WelsWriteMbResidualCabac(
             let iCbpChroma = (mbs.cur().uiCbp >> 4) as i32;
             let iCbpLuma = (mbs.cur().uiCbp & 15) as i32;
 
-            mbs.cur_mut().iLumaDQp = (mbs.cur().uiLumaQp as i32) - ((*pSlice).uiLastMbQp as i32);
+            mbs.cur_mut().iLumaDQp = (mbs.cur().uiLumaQp as i32) - (pSlice.uiLastMbQp as i32);
             let bFirstMbOfSlice = mbs.cur().iMbXY == iSliceFirstMbXY;
             WelsCabacMbDeltaQp(buf, mbs, &mut *pCabacCtx, bFirstMbOfSlice);
-            (*pSlice).uiLastMbQp = mbs.cur().uiLumaQp;
+            pSlice.uiLastMbQp = mbs.cur().uiLumaQp;
 
-            let pDct = std::ptr::addr_of_mut!((*pMbCache).sDct);
+            // S11.45: a shared borrow — every block below is read, and the
+            // non-zero-count array is a sibling field, so the two coexist by
+            // disjointness where the raw had to argue it.
+            let pDct = &pMbCache.sDct;
 
             if uiMbType == MB_TYPE_INTRA16x16 {
-                let dc_buf = (*pDct).iLumaI16x16Dc.as_mut_ptr();
+                let dc_buf = &pDct.iLumaI16x16Dc[..];
                 let iNonZeroCount = if pFuncList.pfGetNoneZeroCount.is_some()
                 {
-                    (pFuncList.pfGetNoneZeroCount.unwrap())(&(*pDct).iLumaI16x16Dc)
+                    (pFuncList.pfGetNoneZeroCount.unwrap())(&pDct.iLumaI16x16Dc)
                 } else {
-                    (*pDct).iLumaI16x16Dc.iter().filter(|&&x| x != 0).count() as i32
+                    pDct.iLumaI16x16Dc.iter().filter(|&&x| x != 0).count() as i32
                 };
 
                 WelsWriteBlockResidualCabac(buf, 
@@ -922,7 +923,7 @@ pub fn WelsWriteMbResidualCabac(
                     for i in 0..16 {
                         let iIdx = g_kuiCache48CountScan4Idx[i] as i16;
                         let nz = kpNonZeroCoeffCount[iIdx as usize] as i16;
-                        let block_buf = (*pDct).iLumaBlock[i].as_mut_ptr();
+                        let block_buf = &pDct.iLumaBlock[i][..];
 
                         WelsWriteBlockResidualCabac(buf, 
                             kpNonZeroCoeffCount,
@@ -941,7 +942,7 @@ pub fn WelsWriteMbResidualCabac(
                     if (iCbpLuma & (1 << (i >> 2))) != 0 {
                         let iIdx = g_kuiCache48CountScan4Idx[i] as i16;
                         let nz = kpNonZeroCoeffCount[iIdx as usize] as i16;
-                        let block_buf = (*pDct).iLumaBlock[i].as_mut_ptr();
+                        let block_buf = &pDct.iLumaBlock[i][..];
 
                         WelsWriteBlockResidualCabac(buf, 
                             kpNonZeroCoeffCount,
@@ -958,8 +959,8 @@ pub fn WelsWriteMbResidualCabac(
             }
 
             if iCbpChroma != 0 {
-                let mut iNonZeroCount = WelsCalNonZeroCount2x2Block(&(*pDct).iChromaDc[0]);
-                let cb_dc_buf = (*pDct).iChromaDc[0].as_mut_ptr();
+                let mut iNonZeroCount = WelsCalNonZeroCount2x2Block(&pDct.iChromaDc[0]);
+                let cb_dc_buf = &pDct.iChromaDc[0][..];
                 if iNonZeroCount != 0 {
                     mbs.cur_mut().iCbpDc |= 0x2;
                 }
@@ -974,8 +975,8 @@ pub fn WelsWriteMbResidualCabac(
                     3,
                 );
 
-                iNonZeroCount = WelsCalNonZeroCount2x2Block(&(*pDct).iChromaDc[1]);
-                let cr_dc_buf = (*pDct).iChromaDc[1].as_mut_ptr();
+                iNonZeroCount = WelsCalNonZeroCount2x2Block(&pDct.iChromaDc[1]);
+                let cr_dc_buf = &pDct.iChromaDc[1][..];
                 if iNonZeroCount != 0 {
                     mbs.cur_mut().iCbpDc |= 0x4;
                 }
@@ -997,7 +998,7 @@ pub fn WelsWriteMbResidualCabac(
                     for i in 0..4 {
                         let iIdx = g_kuiCache48CountScan4Idx_16base[i] as i16;
                         let nz = kpNonZeroCoeffCount[iIdx as usize] as i16;
-                        let block_buf = (*pDct).iChromaBlock[i].as_mut_ptr();
+                        let block_buf = &pDct.iChromaBlock[i][..];
 
                         WelsWriteBlockResidualCabac(buf, 
                             kpNonZeroCoeffCount,
@@ -1015,7 +1016,7 @@ pub fn WelsWriteMbResidualCabac(
                     for i in 0..4 {
                         let iIdx = (24 + g_kuiCache48CountScan4Idx_16base[i]) as i16;
                         let nz = kpNonZeroCoeffCount[iIdx as usize] as i16;
-                        let block_buf = (*pDct).iChromaBlock[4 + i].as_mut_ptr();
+                        let block_buf = &pDct.iChromaBlock[4 + i][..];
 
                         WelsWriteBlockResidualCabac(buf, 
                             kpNonZeroCoeffCount,
@@ -1032,7 +1033,7 @@ pub fn WelsWriteMbResidualCabac(
             }
         } else {
             mbs.cur_mut().iLumaDQp = 0;
-            mbs.cur_mut().uiLumaQp = (*pSlice).uiLastMbQp;
+            mbs.cur_mut().uiLumaQp = pSlice.uiLastMbQp;
             let qp_idx = CLIP3_QP_0_51((mbs.cur().uiLumaQp as i32) + (uiChromaQpIndexOffset as i32));
             mbs.cur_mut().uiChromaQp = g_kuiChromaQpTable[qp_idx];
         }
@@ -1095,7 +1096,7 @@ pub fn WelsSpatialWriteMbSynCabac(
     let pCabacCtx = &mut pSlice.sCabacCtx;
     let pMbCache = &mut pSlice.sMbCacheInfo;
     let uiMbType = mbs.cur().uiMbType;
-    let pSliceHeadExt = &mut (*pSlice).sSliceHeaderExt;
+    let pSliceHeadExt = &mut pSlice.sSliceHeaderExt;
     let uiNumRefIdxL0Active = (pSliceHeadExt.sSliceHeader.uiNumRefIdxL0Active as i32) - 1;
     let iSliceFirstMbXY = pSliceHeadExt.sSliceHeader.iFirstMbInSlice;
     let pCurDqLayer = current_layer_ref(pEncCtx)
@@ -1112,7 +1113,7 @@ pub fn WelsSpatialWriteMbSynCabac(
     }
 
     if IS_SKIP(mbs.cur().uiMbType) {
-        mbs.cur_mut().uiLumaQp = (*pSlice).uiLastMbQp;
+        mbs.cur_mut().uiLumaQp = pSlice.uiLastMbQp;
         let qp_idx = CLIP3_QP_0_51((mbs.cur().uiLumaQp as i32) + (uiChromaQpIndexOffset as i32));
         mbs.cur_mut().uiChromaQp = g_kuiChromaQpTable[qp_idx];
         WelsMbSkipCabac(buf, &mut *pCabacCtx, mbs, (*pEncCtx).eSliceType, 1);

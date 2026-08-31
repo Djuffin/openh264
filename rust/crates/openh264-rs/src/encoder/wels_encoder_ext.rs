@@ -765,9 +765,7 @@ pub fn ForceCodingIDR(pCtx: &mut sWelsEncCtx, iLayerId: i32) -> i32 {
 /// or needs a full uninit/init cycle, and does whichever it decides. `pNewParam`
 /// is `SWelsSvcCodingParam*` (non-const) in C++ and really is written back — the
 /// clip block in the no-reset arm mutates the caller's copy.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn WelsEncoderParamAdjust(
+pub fn WelsEncoderParamAdjust(
     ppCtx: &mut Option<Box<sWelsEncCtx>>,
     pNewParam: &mut SWelsSvcCodingParam,
 ) -> i32 {
@@ -957,7 +955,7 @@ pub unsafe fn WelsEncoderParamAdjust(
             let (strategy, pSpsArray, pSubsetArray, pPpsArray) =
                 crate::encoder::paraset_strategy::ctx_strategy_and_paraset_arrays(ctx);
             strategy.OutputCurrentStructure(
-                sTmpPsoVariable.as_mut_ptr(),
+                &mut sTmpPsoVariable,
                 &mut iTmpPpsIdList,
                 pSpsArray,
                 pSubsetArray,
@@ -1010,7 +1008,7 @@ pub unsafe fn WelsEncoderParamAdjust(
             // `OutputCurrentStructure` above. Nothing of the context is live
             // alongside the receiver here, so this is the plain form.
             ParasetStrategy(ctx).LoadPreviousStructure(
-                sTmpPsoVariable.as_mut_ptr(),
+                &sTmpPsoVariable,
                 &mut iTmpPpsIdList,
             );
         }
@@ -1191,9 +1189,7 @@ pub fn WelsEncoderApplyBitRate(
 ///
 /// Derives the reference-frame count the requested LTR setting needs, raises
 /// `iMaxNumRefFrame`/`iNumRefFrame` to reach it, and re-adjusts the encoder.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn WelsEncoderApplyLTR(
+pub fn WelsEncoderApplyLTR(
     pLogCtx: SLogContext,
     ppCtx: &mut Option<Box<sWelsEncCtx>>,
     pLTRValue: &mut SLTRConfig,

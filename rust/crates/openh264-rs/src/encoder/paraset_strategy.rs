@@ -260,18 +260,16 @@ impl CWelsParametersetIdStrategyObj {
     /// (SpsListing) / `:684` (SpsPpsListing). The three trailing parameters are
     /// unused by the first two and are what the listing kinds write through.
     ///
-    /// # Safety
-    /// On an `Increasing` object, `pParaSetOffsetVariable` must be writable for
-    /// `PARA_SET_TYPE` elements.
-    // unsafe-cat: port-raw(Phase 9)
-    #[allow(unsafe_code)]
+    /// (S11.45: the `# Safety` clause retired with the pointer — the array
+    /// arrives borrowed at its stated length.)
     /// **S7.A3**: the three arrays it copies out, not the context they live in — all
     /// three reads are shared, and taking the whole context made this call a second
     /// `&mut` claim beside the strategy's own. Callers use
     /// [`ctx_strategy_and_paraset_arrays`].
-    pub unsafe fn OutputCurrentStructure(
+    pub fn OutputCurrentStructure(
         &mut self,
-        pParaSetOffsetVariable: *mut SParaSetOffsetVariable,
+        // S11.45: the C's out-pointer is the caller's array, borrowed.
+        pParaSetOffsetVariable: &mut [SParaSetOffsetVariable; PARA_SET_TYPE],
         // S11.14: the PPS id list is a slice — the C's pointer + implicit
         // MAX_PPS_COUNT length, said in the type.
         pPpsIdList: &mut [i32; MAX_DQ_LAYER_NUM * MAX_PPS_COUNT],
@@ -291,11 +289,7 @@ impl CWelsParametersetIdStrategyObj {
             self.m_sParaSetOffset.sParaSetOffsetVariable[k].bUsedParaSetIdInBs =
                 [false; MAX_PPS_COUNT];
         }
-        std::ptr::copy_nonoverlapping(
-            self.m_sParaSetOffset.sParaSetOffsetVariable.as_ptr(),
-            pParaSetOffsetVariable,
-            PARA_SET_TYPE,
-        );
+        *pParaSetOffsetVariable = self.m_sParaSetOffset.sParaSetOffsetVariable;
 
         // T9.H8: the trailing `|| pCtx.is_null()` is gone — a `&mut sWelsEncCtx`
         // cannot be null. The listing and paraset-list conditions are unchanged.
@@ -335,26 +329,21 @@ impl CWelsParametersetIdStrategyObj {
         // sentence means. See F94.
         pExistingParasetList.uiInUsePpsNum = self.m_sParaSetOffset.uiInUsePpsNum;
         pExistingParasetList.sPps.copy_from_slice(pPpsArray);
-        {
-            std::ptr::copy_nonoverlapping(
-                self.m_sParaSetOffset.iPpsIdList.as_ptr() as *const i32,
-                pPpsIdList.as_mut_ptr(),
-                MAX_DQ_LAYER_NUM * MAX_PPS_COUNT,
-            );
+        // S11.45: the nested-to-flat cast is row copies — the same bytes in
+        // the same order, each row bounds-checked.
+        for (kiDid, kpRow) in self.m_sParaSetOffset.iPpsIdList.iter().enumerate() {
+            pPpsIdList[kiDid * MAX_PPS_COUNT..][..MAX_PPS_COUNT].copy_from_slice(kpRow);
         }
     }
 
     /// `LoadPreviousStructure` — `paraset_strategy.h:148` (Constant, empty) /
     /// `paraset_strategy.cpp:300` (`CWelsParametersetIdNonConstant`).
     ///
-    /// # Safety
-    /// On an `Increasing` object, `pParaSetOffsetVariable` must be readable for
-    /// `PARA_SET_TYPE` elements.
-    // unsafe-cat: port-raw(Phase 9)
-    #[allow(unsafe_code)]
-    pub unsafe fn LoadPreviousStructure(
+    /// (S11.45: the `# Safety` clause retired with the pointer — the array
+    /// arrives borrowed at its stated length.)
+    pub fn LoadPreviousStructure(
         &mut self,
-        pParaSetOffsetVariable: *mut SParaSetOffsetVariable,
+        pParaSetOffsetVariable: &[SParaSetOffsetVariable; PARA_SET_TYPE],
         // S11.14: the PPS id list is a slice — the C's pointer + implicit
         // MAX_PPS_COUNT length, said in the type.
         pPpsIdList: &mut [i32; MAX_DQ_LAYER_NUM * MAX_PPS_COUNT],
@@ -362,20 +351,14 @@ impl CWelsParametersetIdStrategyObj {
         if !self.eIdKind.is_non_constant() {
             return;
         }
-        std::ptr::copy_nonoverlapping(
-            pParaSetOffsetVariable as *const SParaSetOffsetVariable,
-            self.m_sParaSetOffset.sParaSetOffsetVariable.as_mut_ptr(),
-            PARA_SET_TYPE,
-        );
+        self.m_sParaSetOffset.sParaSetOffsetVariable = *pParaSetOffsetVariable;
         // `CWelsParametersetSpsPpsListing::LoadPreviousStructure` — `:676`. Only that
         // kind carries the id list back in; `SpsListing` and
         // `SpsListingPpsIncreasing` inherit the non-constant body above.
         if self.eIdKind == ParasetIdKind::SpsPpsListing {
-            std::ptr::copy_nonoverlapping(
-                pPpsIdList as *const i32,
-                self.m_sParaSetOffset.iPpsIdList.as_mut_ptr() as *mut i32,
-                MAX_DQ_LAYER_NUM * MAX_PPS_COUNT,
-            );
+            for (kiDid, kpRow) in self.m_sParaSetOffset.iPpsIdList.iter_mut().enumerate() {
+                kpRow.copy_from_slice(&pPpsIdList[kiDid * MAX_PPS_COUNT..][..MAX_PPS_COUNT]);
+            }
         }
     }
 
