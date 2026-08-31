@@ -3812,11 +3812,13 @@ pub fn FreeSliceBuffer(pDqLayer: &mut SDqLayer, kiBank: usize) {
     bank.shrink_to_fit();
 }
 
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn InitSliceList(
-    pDqLayer: &mut SDqLayer,
-    kiBank: i32,
+/// **S11.32: safe — the parameter is the bank it walks.** The layer form
+/// resolved each slot through `slice_in_bank`'s raw; the caller owns the layer
+/// (`InitSliceThreadInfo` holds `&mut SDqLayer`) and hands the one bank down.
+/// The old null answer for a missing slot is the loop bound itself now: the
+/// caller sized the bank to `kiMaxSliceNum` two lines before this call.
+pub fn InitSliceList(
+    pBank: &mut SSliceBufferInfo,
     kiMaxSliceNum: i32,
     kiMaxSliceBufferSize: i32,
     bIndependenceBsBuffer: bool,
@@ -3826,40 +3828,38 @@ pub unsafe fn InitSliceList(
     }
 
     for iSliceIdx in 0..kiMaxSliceNum {
-        let pSlice = slice_in_bank(pDqLayer, kiBank as usize, iSliceIdx);
-        if pSlice.is_null() {
+        let Some(pSlice) = pBank.pSliceBuffer.get_mut(iSliceIdx as usize) else {
             return ENC_RETURN_MEMALLOCERR;
-        }
+        };
 
-        (*pSlice).iSliceIdx = iSliceIdx;
-        (*pSlice).uiBufferIdx = 0;
-        (*pSlice).iCountMbNumInSlice = 0;
-        (*pSlice).sSliceHeaderExt.sSliceHeader.iFirstMbInSlice = 0;
+        pSlice.iSliceIdx = iSliceIdx;
+        pSlice.uiBufferIdx = 0;
+        pSlice.iCountMbNumInSlice = 0;
+        pSlice.sSliceHeaderExt.sSliceHeader.iFirstMbInSlice = 0;
 
-        let iRet = InitSliceBsBuffer(&mut *pSlice, bIndependenceBsBuffer, kiMaxSliceBufferSize);
+        let iRet = InitSliceBsBuffer(pSlice, bIndependenceBsBuffer, kiMaxSliceBufferSize);
         if iRet != ENC_RETURN_SUCCESS {
             return iRet;
         }
-
     }
 
     ENC_RETURN_SUCCESS
 }
 
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn InitAllSlicesInThread(pCtx: &mut sWelsEncCtx) -> i32 {
-    let pCurDqLayer = current_layer(pCtx);
-    for iSliceIdx in 0..(*pCurDqLayer).iMaxSliceNum {
-        let slice_ptr = slice_in_layer(Some(&*pCurDqLayer), iSliceIdx);
-        if slice_ptr.is_null() {
+/// **S11.32: safe** — this runs on the calling thread before the fork, under
+/// `&mut sWelsEncCtx`; the raw walk was the borrow checker's job all along.
+/// `slice_in_layer_mut` answers the same `None` the null answered.
+pub fn InitAllSlicesInThread(pCtx: &mut sWelsEncCtx) -> i32 {
+    let pCurDqLayer = current_layer_mut(pCtx).expect("the frame's current layer is stamped");
+    for iSliceIdx in 0..pCurDqLayer.iMaxSliceNum {
+        let Some(pSlice) = slice_in_layer_mut(pCurDqLayer, iSliceIdx) else {
             return ENC_RETURN_UNEXPECTED;
-        }
-        (*slice_ptr).iSliceIdx = -1;
+        };
+        pSlice.iSliceIdx = -1;
     }
 
     for iSlcBuffIdx in 0..pCtx.iActiveThreadsNum {
-        (*pCurDqLayer).sSliceBufferInfo[iSlcBuffIdx as usize].iCodedSliceNum = 0;
+        current_layer_mut(pCtx).expect("stamped").sSliceBufferInfo[iSlcBuffIdx as usize].iCodedSliceNum = 0;
     }
 
     ENC_RETURN_SUCCESS
@@ -3935,8 +3935,6 @@ pub fn InitOneSliceInThread(
     pSlice.sSliceBs.uiSize = pCtx.iFrameBsSize as u32;
 }
 
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
 pub fn InitSliceThreadInfo(
     pCtx: &mut sWelsEncCtx,
     pDqLayer: &mut SDqLayer,
@@ -3968,20 +3966,13 @@ pub fn InitSliceThreadInfo(
 
         // T9.E2h, shape B as above: the flag is read before the call.
         let kbSliceBsBufferFlag = (*pDqLayer).bSliceBsBufferFlag;
-        // S11.31: the callee's claim — `InitSliceList` seeds each slice's NAL
-        // tracking through the bank walk (the slice-bank family). Arguments are
-        // the references this body already holds.
-        // unsafe-cat: fork-shared(S63)
-        #[allow(unsafe_code)]
-        let iRet = unsafe {
-            InitSliceList(
-                pDqLayer,
-                iIdx,
-                iMaxSliceNum,
-                pCtx.iSliceBufferSize[kiDlayerIndex as usize],
-                kbSliceBsBufferFlag,
-            )
-        };
+        // S11.32: safe — the bank goes down exclusively, sized two lines up.
+        let iRet = InitSliceList(
+            &mut (*pDqLayer).sSliceBufferInfo[iIdx as usize],
+            iMaxSliceNum,
+            pCtx.iSliceBufferSize[kiDlayerIndex as usize],
+            kbSliceBsBufferFlag,
+        );
         if iRet != ENC_RETURN_SUCCESS {
             return iRet;
         }
@@ -4117,58 +4108,52 @@ pub fn InitSliceRC(pSlice: &mut SSlice, kiGlobalQp: i32) -> i32 {
 /// an error path the gates cannot reach — allocation failure, or a negative global
 /// QP — where this leaves the bank grown with an uninitialised tail and the C++ left
 /// a double free; both then propagate `ENC_RETURN_*` to the same caller.
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
-pub unsafe fn ReallocateSliceList(
-    pCtx: &sWelsEncCtx,
-    kuiSliceMode: SliceMode,
-    pDqLayer: *mut SDqLayer,
-    kiBank: usize,
+/// **S11.32: safe — the parameter is the bank it grows.** Slice 0 is the
+/// template every new slot copies its header and reference info from, and it
+/// stays readable across the new slots' writes because `split_at_mut` makes
+/// the old/new halves disjoint halves of one borrow — S28's re-derivation
+/// discipline ("the resize is what moves the root") becomes the compiler's:
+/// the split is taken *after* the resize, so there is no pre-resize derivation
+/// left to go stale.
+pub fn ReallocateSliceList(
+    // S11.32: four context scalars, not `&sWelsEncCtx` — a shared context
+    // parameter cannot coexist with a `&mut` to a bank *inside* it, which is
+    // exactly what the single-threaded caller holds (F275).
+    kiMaxSliceBufferSize: i32,
+    kbIndependenceBsBuffer: bool,
+    kiNumRef0: u8,
+    kiGlobalQp: i32,
+    pBank: &mut SSliceBufferInfo,
     kiMaxSliceNumOld: i32,
     kiMaxSliceNumNew: i32,
 ) -> i32 {
-    // A7 / S54: the parameter was a `*mut SSliceArgument` this body only ever read
-    // one field of. It is that field now — a `Copy` enum — so there is no cursor to
-    // keep alive across the callers' whole-context calls, and its null arm goes with
-    // it (a value cannot be null).
-    if pDqLayer.is_null() || kiMaxSliceNumNew < kiMaxSliceNumOld {
+    if kiMaxSliceNumNew < kiMaxSliceNumOld {
         return ENC_RETURN_INVALIDINPUT;
     }
 
-    let kiCurDid = (*pCtx).uiDependencyId as usize;
-    let iMaxSliceBufferSize = (*pCtx).iSliceBufferSize[kiCurDid];
-    let bIndependenceBsBuffer = (*pCtx).param().iMultipleThreadIdc > 1
-        && kuiSliceMode != SliceMode::SM_SINGLE_SLICE;
-
-    {
-        let bank: &mut Vec<SSlice> = &mut (*pDqLayer).sSliceBufferInfo[kiBank].pSliceBuffer;
-        if bank.is_empty() {
-            return ENC_RETURN_INVALIDINPUT;
-        }
-        bank.resize_with(kiMaxSliceNumNew as usize, SSlice::new);
+    if pBank.pSliceBuffer.is_empty() {
+        return ENC_RETURN_INVALIDINPUT;
     }
+    pBank.pSliceBuffer.resize_with(kiMaxSliceNumNew as usize, SSlice::new);
 
-    // Both are re-derived from the bank's root *after* the resize, because the resize
-    // is what moves it (S28, and the reason the pointer spelling needed re-stamping
-    // at all).
-    let pBaseSlice = slice_in_bank(&*pDqLayer, kiBank, 0);
+    let (kpHead, pNewSlices) = pBank.pSliceBuffer.split_at_mut(kiMaxSliceNumOld as usize);
+    let kpBaseSlice = &kpHead[0];
 
-    for iSliceIdx in kiMaxSliceNumOld..kiMaxSliceNumNew {
-        let pSlice = slice_in_bank(&*pDqLayer, kiBank, iSliceIdx);
-        (*pSlice).iSliceIdx = -1;
-        (*pSlice).uiBufferIdx = 0;
-        (*pSlice).iCountMbNumInSlice = 0;
-        (*pSlice).sSliceHeaderExt.sSliceHeader.iFirstMbInSlice = 0;
+    for pSlice in pNewSlices.iter_mut() {
+        pSlice.iSliceIdx = -1;
+        pSlice.uiBufferIdx = 0;
+        pSlice.iCountMbNumInSlice = 0;
+        pSlice.sSliceHeaderExt.sSliceHeader.iFirstMbInSlice = 0;
 
-        let mut iRet = InitSliceBsBuffer(&mut *pSlice, bIndependenceBsBuffer, iMaxSliceBufferSize);
+        let mut iRet = InitSliceBsBuffer(pSlice, kbIndependenceBsBuffer, kiMaxSliceBufferSize);
         if iRet != ENC_RETURN_SUCCESS {
             return iRet;
         }
 
-        InitSliceHeadWithBase(&mut *pSlice, &*pBaseSlice);
-        InitSliceRefInfoWithBase(&mut *pSlice, &*pBaseSlice, (*pCtx).iNumRef0);
+        InitSliceHeadWithBase(pSlice, kpBaseSlice);
+        InitSliceRefInfoWithBase(pSlice, kpBaseSlice, kiNumRef0);
 
-        iRet = InitSliceRC(&mut *pSlice, (*pCtx).iGlobalQp);
+        iRet = InitSliceRC(pSlice, kiGlobalQp);
         if iRet != ENC_RETURN_SUCCESS {
             return iRet;
         }
@@ -4179,7 +4164,11 @@ pub unsafe fn ReallocateSliceList(
 
 pub fn CalculateNewSliceNum(
     pCtx: &sWelsEncCtx,
-    pLastCodedSlice: &mut SSlice,
+    // S11.32: was `pLastCodedSlice: &mut SSlice` — the body reads exactly one
+    // field of it (`iSliceIdx`, to recover the partition), so it takes the
+    // `i32` (F114). The borrow that had to reach *into a bank inside the
+    // context* beside `&sWelsEncCtx` goes with it.
+    kiLastCodedSliceIdx: i32,
     iMaxSliceNumOld: i32,
     iMaxSliceNumNew: &mut i32,
 ) -> i32 {
@@ -4193,7 +4182,7 @@ pub fn CalculateNewSliceNum(
         return ENC_RETURN_SUCCESS;
     }
 
-    let iPartitionID = ((*pLastCodedSlice).iSliceIdx % ((*pCtx).iActiveThreadsNum as i32)) as usize;
+    let iPartitionID = (kiLastCodedSliceIdx % ((*pCtx).iActiveThreadsNum as i32)) as usize;
     let pCurLayer = current_layer_ref(pCtx)
         .expect("the frame's current layer is stamped");
     let iMBNumInPartition = (*pCurLayer).EndMbIdxOfPartition[iPartitionID] - (*pCurLayer).FirstMbIdxOfPartition[iPartitionID] + 1;
@@ -4224,33 +4213,38 @@ pub unsafe fn ReallocateSliceInThread(
     let iMaxSliceNum = (*pDqLayer).sSliceBufferInfo[KiSlcBuffIdx as usize].iMaxSliceNum;
     let iCodedSliceNum = (*pDqLayer).sSliceBufferInfo[KiSlcBuffIdx as usize].iCodedSliceNum;
     let mut iMaxSliceNumNew = 0;
-    let pLastCodedSlice = slice_in_bank(&*pDqLayer, KiSlcBuffIdx as usize, iCodedSliceNum - 1);
-    // **T7.C5, F71's idiom at the one site the workers still reached it from.**
-    // `&mut` here is a `Unique` retag over *shared* parameter state — this function
-    // runs on a worker (`EncodeOnePartitionSizeLimited`), every worker resolves the
-    // same layer's slice argument, and `ReallocateSliceList` only ever reads it.
-    // `addr_of_mut!` creates no reference, so two workers growing their own banks at
-    // the same instant no longer race on this borrow.
     let kuiSliceMode = (*pCtx)
         .param()
         .sSpatialLayers[kiDlayerIdx as usize]
         .sSliceArgument
         .uiSliceMode;
 
-    if pLastCodedSlice.is_null() {
-        // CalculateNewSliceNum's own null arm, hoisted with the parameter (T9.E2b).
+    // S11.32: the last-coded slice's one wanted field, as a scalar — the held
+    // cursor and its null arm collapse into `get`'s bound (T9.E2b's arm kept).
+    let pBankRef = &(*pDqLayer).sSliceBufferInfo[KiSlcBuffIdx as usize];
+    let Some(kiLastCodedSliceIdx) =
+        pBankRef.pSliceBuffer.get((iCodedSliceNum - 1) as usize).map(|s| s.iSliceIdx)
+    else {
         return ENC_RETURN_INVALIDINPUT;
-    }
-    let mut iRet = CalculateNewSliceNum(pCtx, &mut *pLastCodedSlice, iMaxSliceNum, &mut iMaxSliceNumNew);
+    };
+    let mut iRet = CalculateNewSliceNum(pCtx, kiLastCodedSliceIdx, iMaxSliceNum, &mut iMaxSliceNumNew);
     if iRet != ENC_RETURN_SUCCESS {
         return iRet;
     }
 
+    // S11.32: the bank goes down as `&mut`, derived from this worker's own slot
+    // — the same place expression the reads above already walk, so no new
+    // aliasing shape; Phase B of the bank design replaces the raw layer with
+    // the taken bank itself and this derivation with a parameter.
+    let kiMaxSliceBufferSize = (*pCtx).iSliceBufferSize[(*pCtx).uiDependencyId as usize];
+    let kbIndependenceBsBuffer = (*pCtx).param().iMultipleThreadIdc > 1
+        && kuiSliceMode != SliceMode::SM_SINGLE_SLICE;
     iRet = ReallocateSliceList(
-        pCtx,
-        kuiSliceMode,
-        pDqLayer,
-        KiSlcBuffIdx as usize,
+        kiMaxSliceBufferSize,
+        kbIndependenceBsBuffer,
+        (*pCtx).iNumRef0 as u8,
+        (*pCtx).iGlobalQp,
+        &mut (*pDqLayer).sSliceBufferInfo[KiSlcBuffIdx as usize],
         iMaxSliceNum,
         iMaxSliceNumNew,
     );
@@ -4300,54 +4294,80 @@ pub fn ExtendLayerBuffer(
     ENC_RETURN_SUCCESS
 }
 
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn ReallocSliceBuffer(pCtx: &mut sWelsEncCtx) -> i32 {
-    let pCurLayer = current_layer(pCtx);
-    let iMaxSliceNumOld = (*pCurLayer).sSliceBufferInfo[0].iMaxSliceNum;
-    let mut iMaxSliceNumNew = 0;
+/// **S11.32: safe.** This body runs single-threaded (the ST dynamic realloc
+/// path), and the raw layer cursor existed only to span `ExtendLayerBuffer` —
+/// which takes the whole `&mut` context. The layer is re-derived after that
+/// call instead (a bounds-checked index, once per realloc), and every bank
+/// touch is an index into storage the context exclusively owns here.
+pub fn ReallocSliceBuffer(pCtx: &mut sWelsEncCtx) -> i32 {
     let kiCurDid = pCtx.uiDependencyId as usize;
-    let pLastCodedSlice = slice_in_bank(&*pCurLayer, 0, iMaxSliceNumOld - 1);
     // A7: as `InitSliceInLayer` — the mode, not a cursor.
     let kuiSliceMode =
         pCtx.param().sSpatialLayers[kiCurDid].sSliceArgument.uiSliceMode;
 
-    if pLastCodedSlice.is_null() {
-        // CalculateNewSliceNum's own null arm, hoisted with the parameter (T9.E2b).
+    let pCurLayer = current_layer_mut(pCtx).expect("the frame's current layer is stamped");
+    let iMaxSliceNumOld = pCurLayer.sSliceBufferInfo[0].iMaxSliceNum;
+    let mut iMaxSliceNumNew = 0;
+
+    // The last slot's one wanted field, as a scalar — the held cursor and its
+    // null arm collapse into `get`'s bound (T9.E2b's arm kept).
+    let Some(kiLastCodedSliceIdx) = pCurLayer.sSliceBufferInfo[0]
+        .pSliceBuffer
+        .get((iMaxSliceNumOld - 1) as usize)
+        .map(|s| s.iSliceIdx)
+    else {
         return ENC_RETURN_INVALIDINPUT;
-    }
-    let mut iRet = CalculateNewSliceNum(pCtx, &mut *pLastCodedSlice, iMaxSliceNumOld, &mut iMaxSliceNumNew);
+    };
+    let mut iRet = CalculateNewSliceNum(pCtx, kiLastCodedSliceIdx, iMaxSliceNumOld, &mut iMaxSliceNumNew);
     if iRet != ENC_RETURN_SUCCESS {
         return iRet;
     }
 
-    iRet = ReallocateSliceList(pCtx, kuiSliceMode, pCurLayer, 0, iMaxSliceNumOld, iMaxSliceNumNew);
+    // The callee's four context inputs are scalars, read before the bank's
+    // `&mut` — which is why its context parameter is gone (F275).
+    let kiMaxSliceBufferSize = pCtx.iSliceBufferSize[kiCurDid];
+    let kbIndependenceBsBuffer = pCtx.param().iMultipleThreadIdc > 1
+        && kuiSliceMode != SliceMode::SM_SINGLE_SLICE;
+    let (kiNumRef0, kiGlobalQp) = (pCtx.iNumRef0 as u8, pCtx.iGlobalQp);
+    let pCurLayer = current_layer_mut(pCtx).expect("the frame's current layer is stamped");
+    iRet = ReallocateSliceList(
+        kiMaxSliceBufferSize,
+        kbIndependenceBsBuffer,
+        kiNumRef0,
+        kiGlobalQp,
+        &mut pCurLayer.sSliceBufferInfo[0],
+        iMaxSliceNumOld,
+        iMaxSliceNumNew,
+    );
     if iRet != ENC_RETURN_SUCCESS {
         return iRet;
     }
-    (*pCurLayer).sSliceBufferInfo[0].iMaxSliceNum = iMaxSliceNumNew;
+    let pCurLayer = current_layer_mut(pCtx).expect("the frame's current layer is stamped");
+    pCurLayer.sSliceBufferInfo[0].iMaxSliceNum = iMaxSliceNumNew;
 
     iMaxSliceNumNew = 0;
     for iSlcBuffIdx in 0..pCtx.iActiveThreadsNum {
-        iMaxSliceNumNew += (*pCurLayer).sSliceBufferInfo[iSlcBuffIdx as usize].iMaxSliceNum;
+        iMaxSliceNumNew += current_layer_ref(pCtx).expect("stamped").sSliceBufferInfo[iSlcBuffIdx as usize].iMaxSliceNum;
     }
 
-    iRet = ExtendLayerBuffer(pCtx, (*pCurLayer).iMaxSliceNum, iMaxSliceNumNew);
+    let kiMaxSliceNumOldLayer = current_layer_ref(pCtx).expect("stamped").iMaxSliceNum;
+    iRet = ExtendLayerBuffer(pCtx, kiMaxSliceNumOldLayer, iMaxSliceNumNew);
     if iRet != ENC_RETURN_SUCCESS {
         return iRet;
     }
 
+    let pCurLayer = current_layer_mut(pCtx).expect("the frame's current layer is stamped");
+    let SDqLayer { sSliceBufferInfo, ppSliceInLayer, iMaxSliceNum, .. } = &mut *pCurLayer;
     let mut iStartIdx = 0;
-    for iSlcBuffIdx in 0..pCtx.iActiveThreadsNum {
-        for iSliceIdx in 0..(*pCurLayer).sSliceBufferInfo[iSlcBuffIdx as usize].iMaxSliceNum {
-            let slices: &mut Vec<SliceIdx> = &mut (*pCurLayer).ppSliceInLayer;
-            slices[(iStartIdx + iSliceIdx) as usize] =
+    for (iSlcBuffIdx, bank) in sSliceBufferInfo.iter().enumerate() {
+        for iSliceIdx in 0..bank.iMaxSliceNum {
+            ppSliceInLayer[(iStartIdx + iSliceIdx) as usize] =
                 SliceIdx { bank: iSlcBuffIdx as u8, offset: iSliceIdx };
         }
-        iStartIdx += (*pCurLayer).sSliceBufferInfo[iSlcBuffIdx as usize].iMaxSliceNum;
+        iStartIdx += bank.iMaxSliceNum;
     }
 
-    (*pCurLayer).iMaxSliceNum = iMaxSliceNumNew;
+    *iMaxSliceNum = iMaxSliceNumNew;
 
     ENC_RETURN_SUCCESS
 }
@@ -4365,10 +4385,12 @@ pub fn CheckAllSliceBuffer(pCurLayer: &mut SDqLayer, kiCodedSliceNum: i32) -> i3
     ENC_RETURN_SUCCESS
 }
 
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn ReOrderSliceInLayer(pCtx: &mut sWelsEncCtx, kuiSliceMode: SliceMode, kiThreadNum: i32) -> i32 {
-    let pCurLayer = current_layer(pCtx);
+/// **S11.32: safe** — post-join, on the calling thread, under `&mut`. The two
+/// storages the walk writes (`sSliceBufferInfo`'s slices and `ppSliceInLayer`)
+/// are disjoint fields of one destructured `&mut SDqLayer`, so the interleaved
+/// stamp-and-index loop the raw cursor licensed is now the borrow checker's.
+pub fn ReOrderSliceInLayer(pCtx: &mut sWelsEncCtx, kuiSliceMode: SliceMode, kiThreadNum: i32) -> i32 {
+    let pCurLayer = current_layer_mut(pCtx).expect("the frame's current layer is stamped");
     let mut iEncodeSliceNum = 0;
     let mut iUsedSliceNum = 0;
     let mut iNonUsedBufferNum = 0;
@@ -4389,36 +4411,37 @@ pub unsafe fn ReOrderSliceInLayer(pCtx: &mut sWelsEncCtx, kuiSliceMode: SliceMod
         return ENC_RETURN_UNEXPECTED;
     }
 
-    for iSlcBuffIdx in 0..kiThreadNum {
-        let iSliceNumInThread = (*pCurLayer).sSliceBufferInfo[iSlcBuffIdx as usize].iMaxSliceNum;
+    // The two storages the walk writes, split from one `&mut SDqLayer` — the
+    // per-slot stamp and the layer-order index are disjoint fields, which is
+    // the whole aliasing question the raw bank walk was answering.
+    let SDqLayer { sSliceBufferInfo, ppSliceInLayer, iMaxSliceNum, .. } = &mut *pCurLayer;
+    for (iSlcBuffIdx, pBank) in sSliceBufferInfo.iter_mut().take(kiThreadNum as usize).enumerate() {
+        let iSliceNumInThread = pBank.iMaxSliceNum;
         for iSliceIdx in 0..iSliceNumInThread {
-            let pSliceBuffer = slice_in_bank(&*pCurLayer, iSlcBuffIdx as usize, iSliceIdx);
-            if pSliceBuffer.is_null() {
+            let Some(pSliceBuffer) = pBank.pSliceBuffer.get_mut(iSliceIdx as usize) else {
                 return ENC_RETURN_UNEXPECTED;
-            }
+            };
 
-            if (*pSliceBuffer).iSliceIdx != -1 {
-                let iPartitionID = (*pSliceBuffer).iSliceIdx % iPartitionNum;
-                let iActualSliceIdx = aiPartitionOffset[iPartitionID as usize] + (*pSliceBuffer).iSliceIdx / iPartitionNum;
-                (*pSliceBuffer).iSliceIdx = iActualSliceIdx;
-                let slices: &mut Vec<SliceIdx> = &mut (*pCurLayer).ppSliceInLayer;
-                slices[iActualSliceIdx as usize] =
+            if pSliceBuffer.iSliceIdx != -1 {
+                let iPartitionID = pSliceBuffer.iSliceIdx % iPartitionNum;
+                let iActualSliceIdx = aiPartitionOffset[iPartitionID as usize] + pSliceBuffer.iSliceIdx / iPartitionNum;
+                pSliceBuffer.iSliceIdx = iActualSliceIdx;
+                ppSliceInLayer[iActualSliceIdx as usize] =
                     SliceIdx { bank: iSlcBuffIdx as u8, offset: iSliceIdx };
                 iUsedSliceNum += 1;
             } else {
-                let slices: &mut Vec<SliceIdx> = &mut (*pCurLayer).ppSliceInLayer;
-                slices[(iEncodeSliceNum + iNonUsedBufferNum) as usize] =
+                ppSliceInLayer[(iEncodeSliceNum + iNonUsedBufferNum) as usize] =
                     SliceIdx { bank: iSlcBuffIdx as u8, offset: iSliceIdx };
                 iNonUsedBufferNum += 1;
             }
         }
     }
 
-    if iUsedSliceNum != iEncodeSliceNum || (*pCurLayer).iMaxSliceNum != (iNonUsedBufferNum + iUsedSliceNum) {
+    if iUsedSliceNum != iEncodeSliceNum || *iMaxSliceNum != (iNonUsedBufferNum + iUsedSliceNum) {
         return ENC_RETURN_UNEXPECTED;
     }
 
-    CheckAllSliceBuffer(&mut *pCurLayer, iEncodeSliceNum)
+    CheckAllSliceBuffer(current_layer_mut(pCtx).expect("stamped"), iEncodeSliceNum)
 }
 
 pub fn GetCurLayerNalCount(pCurDq: &mut SDqLayer, kiCodedSliceNum: i32) -> i32 {
@@ -4528,8 +4551,6 @@ pub fn FrameBsRealloc(
     ENC_RETURN_SUCCESS
 }
 
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
 pub fn SliceLayerInfoUpdate(
     pCtx: &mut sWelsEncCtx,
     // S11.20: the frame and an index — see `FrameBsRealloc`.
@@ -4554,11 +4575,8 @@ pub fn SliceLayerInfoUpdate(
 
     // T9.G6: hoisted (shape B).
     let iActiveThreadsNum = pCtx.iActiveThreadsNum as i32;
-    // S11.31: the callee's claim — `ReOrderSliceInLayer` walks neighbouring
-    // slices out of the bank roots (the slice-bank family).
-    // unsafe-cat: fork-shared(S63)
-    #[allow(unsafe_code)]
-    let mut iRet = unsafe { ReOrderSliceInLayer(pCtx, kuiSliceMode, iActiveThreadsNum) };
+    // S11.32: safe — the walk is a destructured `&mut SDqLayer` now.
+    let mut iRet = ReOrderSliceInLayer(pCtx, kuiSliceMode, iActiveThreadsNum);
     if iRet != ENC_RETURN_SUCCESS {
         return iRet;
     }
