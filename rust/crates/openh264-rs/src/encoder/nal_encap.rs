@@ -381,11 +381,11 @@ pub fn WelsUnloadNal(pEncoderOuput: &mut SWelsEncoderOutput) {
 // session that designs the seam.
 #[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsLoadNalForSlice(
-    pSliceBs: *mut SWelsSliceBs,
+    pSliceBs: &mut SWelsSliceBs,
     kiType: i32,
     kiNalRefIdc: i32,
 ) {
-    let pSlice = &mut *pSliceBs;
+    let pSlice = pSliceBs;
     let pRawNal = &mut pSlice.sNalList[pSlice.iNalIndex as usize];
     let sNalUnitHeader = &mut pRawNal.sNalExt.sNalUnitHeader;
     let kiStartPos = BsGetBitsPos(&pSlice.sBsWrite) >> 3;
@@ -410,8 +410,8 @@ pub unsafe extern "C" fn WelsLoadNalForSlice(
 // \"C\"` unload fns ... C-ABI boundary, lawful remainder". It is neither: it is one
 // of the three MT tags the same brief asks to adjudicate, and it is fork-reachable.
 #[allow(unsafe_code)]
-pub unsafe extern "C" fn WelsUnloadNalForSlice(pSliceBs: *mut SWelsSliceBs) {
-    let pSlice = &mut *pSliceBs;
+pub unsafe extern "C" fn WelsUnloadNalForSlice(pSliceBs: &mut SWelsSliceBs) {
+    let pSlice = pSliceBs;
     let pIdx = &mut pSlice.iNalIndex;
     let pRawNal = &mut pSlice.sNalList[*pIdx as usize];
     let kiEndPos = BsGetBitsPos(&pSlice.sBsWrite) >> 3;

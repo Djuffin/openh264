@@ -763,6 +763,23 @@ pub fn current_layer_ref(pCtx: &sWelsEncCtx) -> Option<&SDqLayer> {
     pCtx.ppDqLayerList.get(idx.get())?.as_deref()
 }
 
+/// [`current_layer_ref`] mutably — the layer the frame loop is stamping.
+///
+/// **Single-threaded only, and the type says so.** A `&mut sWelsEncCtx` cannot
+/// exist while the fork is live (every worker holds `&sWelsEncCtx`), so this
+/// accessor is unavailable in exactly the place a `&mut SDqLayer` would be a race.
+/// That is the whole difference between it and [`current_layer`]'s raw, which is
+/// reachable from anywhere and therefore carries the S63 tag.
+#[inline]
+pub fn current_layer_mut(pCtx: &mut sWelsEncCtx) -> Option<&mut SDqLayer> {
+    let idx = pCtx.iCurDqLayer?;
+    debug_assert!(
+        idx.get() < MAX_DEPENDENCY_LAYER,
+        "iCurDqLayer = {idx:?} is past the largest list InitDqLayers can build"
+    );
+    pCtx.ppDqLayerList.get_mut(idx.get())?.as_deref_mut()
+}
+
 /// Make `kIdx` the current layer — the setter half of [`current_layer`], and the
 /// only writer of `sWelsEncCtx::iCurDqLayer`.
 ///
@@ -3345,21 +3362,24 @@ pub unsafe fn slice_writer(pEncCtx: &sWelsEncCtx, pSliceBs: *mut SWelsSliceBs) -
 /// rather than a hoist. Each single-threaded caller keeps it exactly where the
 /// statement stood, one line above its own `WelsCodeOneSlice`.
 ///
-/// # Safety
-/// `pEncCtx` must be a live context whose current layer is set for this frame.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn StampLayerIdrFlagForSliceType(pEncCtx: &mut sWelsEncCtx) {
+/// **S10.3a: safe.** The `# Safety` clause that stood here required "a live context
+/// whose current layer is set for this frame"; both halves are now carried by the
+/// types — the `&mut sWelsEncCtx` and `current_layer_mut`'s `Option`.
+pub fn StampLayerIdrFlagForSliceType(pEncCtx: &mut sWelsEncCtx) {
     // T9.H: the `pEncCtx.is_null()` disjunct is gone — a `&mut sWelsEncCtx`
     // cannot be null and every caller now holds one. The rest is unchanged.
     if pEncCtx.eSliceType != EWelsSliceType::I_SLICE {
         return;
     }
-    let pCurLayer = current_layer(pEncCtx);
-    if pCurLayer.is_null() {
+    // **S10.3a.** This body runs on the calling thread *before* either fork
+    // spawns — T7.C3 hoisted it there precisely so the write would not race — so
+    // the `&mut sWelsEncCtx` it already holds can reach the layer directly.
+    // `current_layer`'s raw was carrying a fork-shared tag for a body that is by
+    // construction not in the fork.
+    let Some(pCurLayer) = current_layer_mut(pEncCtx) else {
         return;
-    }
-    (*pCurLayer).sLayerInfo.sNalHeaderExt.bIdrFlag = true;
+    };
+    pCurLayer.sLayerInfo.sNalHeaderExt.bIdrFlag = true;
 }
 
 // unsafe-cat: fork-shared(S63)
@@ -3832,13 +3852,23 @@ pub unsafe fn InitAllSlicesInThread(pCtx: &mut sWelsEncCtx) -> i32 {
 
 // unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
-pub unsafe fn InitOneSliceInThread(
-    pCtx: &sWelsEncCtx,
-    pSlice: *mut *mut SSlice,
+pub unsafe fn InitOneSliceInThread<'a>(
+    pCtx: &'a sWelsEncCtx,
     kiSlcBuffIdx: i32,
     kiDlayerIdx: i32,
     kiSliceIdx: i32,
-) -> i32 {
+) -> Option<&'a mut SSlice> {
+    // **S10.3a: the out-parameter is gone and the slice comes back by reference.**
+    // It was `pSlice: *mut *mut SSlice` — the C's out-pointer idiom — and every
+    // caller then wrote `&mut *pSlice` and `addr_of_mut!((*pSlice).sSliceBs)` for
+    // the rest of its body. `Option<&mut SSlice>` says the same two outcomes (a
+    // slice, or `ENC_RETURN_UNEXPECTED`'s null bank) and hands the callers a
+    // reference they can use without a single raw operation.
+    //
+    // The `unsafe` stays here, and only here: the bank is still reached through
+    // [`slice_in_bank`]'s raw root, which is F71's shape and step 3's remaining
+    // subject. What this moves is the *boundary* — one audited derivation instead
+    // of one per caller body.
     let pCurDq = current_layer(pCtx);
     let slc_ptr = if (*pCurDq).bThreadSlcBufferFlag {
         let kiCodedNumInThread = (*pCurDq).sSliceBufferInfo[kiSlcBuffIdx as usize].iCodedSliceNum;
@@ -3847,20 +3877,20 @@ pub unsafe fn InitOneSliceInThread(
         slice_in_bank(&*pCurDq, 0, kiSliceIdx)
     };
     if slc_ptr.is_null() {
-        return ENC_RETURN_UNEXPECTED;
+        return None;
     }
 
-    *pSlice = slc_ptr;
-    (*slc_ptr).iSliceIdx = kiSliceIdx;
-    (*slc_ptr).uiBufferIdx = kiSlcBuffIdx as u32;
+    let slice = &mut *slc_ptr;
+    slice.iSliceIdx = kiSliceIdx;
+    slice.uiBufferIdx = kiSlcBuffIdx as u32;
 
-    (*slc_ptr).sSliceBs.uiBsPos = 0;
-    (*slc_ptr).sSliceBs.iNalIndex = 0;
+    slice.sSliceBs.uiBsPos = 0;
+    slice.sSliceBs.iNalIndex = 0;
     // The C++ stamped `sSliceBs.pBsBuffer = pThreadBsBuffer[kiSlcBuffIdx]` here;
     // `uiBufferIdx` above already names that slot, and `thread_bs_buffer` reads it.
-    (*slc_ptr).sSliceBs.uiSize = (*pCtx).iFrameBsSize as u32;
+    slice.sSliceBs.uiSize = (*pCtx).iFrameBsSize as u32;
 
-    ENC_RETURN_SUCCESS
+    Some(slice)
 }
 
 // unsafe-cat: port-raw(Phase 9)

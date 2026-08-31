@@ -1397,25 +1397,42 @@ unsafe fn WritePrefixNalForSlice(
     eNalRefIdc: EWelsNalRefIdc,
     eNalType: EWelsNalUnitType,
 ) {
-    // Derived, not threaded (T9.E2b): both callers passed
-    // `addr_of_mut!((*pSlice).sSliceBs)` beside the slice, and the `&mut`
-    // argument reborrow pops a sibling cursor into the slice (F114b's
-    // protector, F114a's mechanism) — so the cursor is minted here, under the
-    // parameter's own tag.
-    let pSliceBs = std::ptr::addr_of_mut!((*pSlice).sSliceBs);
+    // **S10.3a: the `addr_of_mut!` cursor is gone.** T9.E2b's note explained why it
+    // was minted here rather than threaded: both callers used to pass
+    // `addr_of_mut!((*pSlice).sSliceBs)` *beside* the slice, and the `&mut`
+    // argument reborrow pops a sibling cursor into it. There is no sibling any
+    // more — the bs half is reached through this body's own `&mut SSlice`, one
+    // field projection at a time — so the reason for the raw went with the shape
+    // that needed it.
+    //
+    // The two scalars come out before the borrow because `thread_bs_buffer`'s
+    // argument list would otherwise read `sSliceBs` while it is borrowed for the
+    // writer; they are plain `Copy` reads and the values are the same ones the
+    // raw form passed.
+    let kiBufferIdx = pSlice.uiBufferIdx as usize;
+    let kuiSize = pSlice.sSliceBs.uiSize;
     if eNalRefIdc != EWelsNalRefIdc::NRI_PRI_LOWEST {
-        WelsLoadNalForSlice(pSliceBs, EWelsNalUnitType::NAL_UNIT_PREFIX as i32, eNalRefIdc as i32);
+        WelsLoadNalForSlice(
+            &mut pSlice.sSliceBs,
+            EWelsNalUnitType::NAL_UNIT_PREFIX as i32,
+            eNalRefIdc as i32,
+        );
+        let buf = thread_bs_buffer(pCtx, kiBufferIdx, kuiSize);
         WelsWriteSVCPrefixNal(
-            thread_bs_buffer(pCtx, (*pSlice).uiBufferIdx as usize, (*pSlice).sSliceBs.uiSize),
-            &mut (*pSliceBs).sBsWrite,
+            buf,
+            &mut pSlice.sSliceBs.sBsWrite,
             eNalRefIdc as i32,
             EWelsNalUnitType::NAL_UNIT_CODED_SLICE_IDR == eNalType,
         );
-        WelsUnloadNalForSlice(pSliceBs);
+        WelsUnloadNalForSlice(&mut pSlice.sSliceBs);
     } else {
         // No Prefix NAL Unit RBSP syntax here, but need add NAL Unit Header extension
-        WelsLoadNalForSlice(pSliceBs, EWelsNalUnitType::NAL_UNIT_PREFIX as i32, eNalRefIdc as i32);
-        WelsUnloadNalForSlice(pSliceBs);
+        WelsLoadNalForSlice(
+            &mut pSlice.sSliceBs,
+            EWelsNalUnitType::NAL_UNIT_PREFIX as i32,
+            eNalRefIdc as i32,
+        );
+        WelsUnloadNalForSlice(&mut pSlice.sSliceBs);
     }
 }
 
@@ -1452,56 +1469,57 @@ unsafe fn EncodeOneSliceInJob(
     let eNalRefIdc = (*pCtx).eNalPriority;
     let bNeedPrefix = (*pCtx).bNeedPrefixNalFlag;
 
-    let mut pSlice: *mut SSlice = std::ptr::null_mut();
-    let mut iReturn = InitOneSliceInThread(
+    // **S10.3a: one derivation, threaded.** `InitOneSliceInThread` hands the slice
+    // back by reference now, so this body's eleven raw operations — an out-pointer,
+    // three `addr_of_mut!((*pSlice).sSliceBs)`, five `&mut *pSlice` reborrows and a
+    // null test — are all gone. Nothing about which slice this worker touches
+    // changed: the resolution is still `slice_in_bank`'s, inside that function.
+    let Some(pSlice) = InitOneSliceInThread(
         pCtx,
-        &mut pSlice,
         iBsSlot,
         (*pCtx).uiDependencyId as i32,
         iSliceIdx,
-    );
+    ) else {
+        return SliceJobResult { iResult: ENC_RETURN_UNEXPECTED, bInitFailed: true };
+    };
+    let iReturn = SetSliceBoundaryInfo(current_layer_ref(pCtx), pSlice, iSliceIdx);
     if iReturn != ENC_RETURN_SUCCESS {
         return SliceJobResult { iResult: iReturn, bInitFailed: true };
     }
-    iReturn = SetSliceBoundaryInfo(current_layer_ref(pCtx), &mut *pSlice, iSliceIdx);
-    if iReturn != ENC_RETURN_SUCCESS {
-        return SliceJobResult { iResult: iReturn, bInitFailed: true };
-    }
-    let pSliceBs = std::ptr::addr_of_mut!((*pSlice).sSliceBs);
-    (*pSliceBs).sBsWrite = BsWriter::new();
+    pSlice.sSliceBs.sBsWrite = BsWriter::new();
     let iSliceStart = if bRecordsTime { WelsTime() } else { 0 };
 
     // ---- CWelsSliceEncodingTask::ExecuteTask
     let iResult = (|| {
         if bNeedPrefix {
-            WritePrefixNalForSlice(pCtx, &mut *pSlice, eNalRefIdc, eNalType);
+            WritePrefixNalForSlice(pCtx, pSlice, eNalRefIdc, eNalType);
         }
-        let pSliceBs = std::ptr::addr_of_mut!((*pSlice).sSliceBs);
-        WelsLoadNalForSlice(pSliceBs, eNalType as i32, eNalRefIdc as i32);
-        debug_assert_eq!(iSliceIdx, (*pSlice).iSliceIdx);
-        let mut iReturn = WelsCodeOneSlice(pCtx, &mut *pSlice, eNalType as i32);
+        WelsLoadNalForSlice(&mut pSlice.sSliceBs, eNalType as i32, eNalRefIdc as i32);
+        debug_assert_eq!(iSliceIdx, pSlice.iSliceIdx);
+        let mut iReturn = WelsCodeOneSlice(pCtx, pSlice, eNalType as i32);
         if ENC_RETURN_SUCCESS != iReturn {
             return iReturn;
         }
-        let pSliceBs = std::ptr::addr_of_mut!((*pSlice).sSliceBs);
-        WelsUnloadNalForSlice(pSliceBs);
+        WelsUnloadNalForSlice(&mut pSlice.sSliceBs);
 
         let mut iSliceSize = 0i32;
-        iReturn = WriteSliceBs(pCtx, &mut *pSlice, iSliceIdx, &mut iSliceSize);
+        iReturn = WriteSliceBs(pCtx, pSlice, iSliceIdx, &mut iSliceSize);
         if ENC_RETURN_SUCCESS != iReturn {
             return iReturn;
         }
 
         let pfDeblockingFilterSlice =
             (*pCtx).func_list().pfDeblocking.pfDeblockingFilterSlice.unwrap();
-        pfDeblockingFilterSlice(current_layer(pCtx), &mut *pSlice);
+        pfDeblockingFilterSlice(current_layer(pCtx), pSlice);
         ENC_RETURN_SUCCESS
     })();
 
     // ---- CWelsSliceEncodingTask::FinishTask (the load-balancing override's half;
     //      the base half was the slot release and the error OR, both now gone)
-    if bRecordsTime && !pSlice.is_null() {
-        (*pSlice).uiSliceConsumeTime = (WelsTime() - iSliceStart) as u32;
+    // The `!pSlice.is_null()` disjunct is gone with the raw: a `&mut SSlice`
+    // cannot be null, and the `else` above already took the absent case.
+    if bRecordsTime {
+        pSlice.uiSliceConsumeTime = (WelsTime() - iSliceStart) as u32;
     }
 
     SliceJobResult { iResult, bInitFailed: false }
@@ -1677,23 +1695,28 @@ unsafe fn EncodeOnePartitionSizeLimited(
     let eNalRefIdc = (*pCtx).eNalPriority;
     let bNeedPrefix = (*pCtx).bNeedPrefixNalFlag;
 
+    // **S10.3a: the init half takes the reference; the loop below cannot.** This
+    // body *re-resolves* its slice after every `ReallocateSliceInThread` — the
+    // dynamic mode grows its bank in-fork, so a `&mut` taken before the growth
+    // would name freed storage. The reference's scope therefore ends here, and the
+    // encode loop keeps `slice_in_bank`'s raw. That split is the honest shape of
+    // step 3: the fixed modes partition, the size-limited mode reallocates.
+    {
+        let Some(pSlice) = InitOneSliceInThread(
+            pCtx,
+            iBsSlot,
+            (*pCtx).uiDependencyId as i32,
+            iPartitionIdx,
+        ) else {
+            return SliceJobResult { iResult: ENC_RETURN_UNEXPECTED, bInitFailed: true };
+        };
+        let iReturn = SetSliceBoundaryInfo(current_layer_ref(pCtx), pSlice, iPartitionIdx);
+        if iReturn != ENC_RETURN_SUCCESS {
+            return SliceJobResult { iResult: iReturn, bInitFailed: true };
+        }
+        pSlice.sSliceBs.sBsWrite = BsWriter::new();
+    }
     let mut pSlice: *mut SSlice = std::ptr::null_mut();
-    let mut iReturn = InitOneSliceInThread(
-        pCtx,
-        &mut pSlice,
-        iBsSlot,
-        (*pCtx).uiDependencyId as i32,
-        iPartitionIdx,
-    );
-    if iReturn != ENC_RETURN_SUCCESS {
-        return SliceJobResult { iResult: iReturn, bInitFailed: true };
-    }
-    iReturn = SetSliceBoundaryInfo(current_layer_ref(pCtx), &mut *pSlice, iPartitionIdx);
-    if iReturn != ENC_RETURN_SUCCESS {
-        return SliceJobResult { iResult: iReturn, bInitFailed: true };
-    }
-    let pSliceBs = std::ptr::addr_of_mut!((*pSlice).sSliceBs);
-    (*pSliceBs).sBsWrite = BsWriter::new();
     // `CWelsConstrainedSizeSlicingEncodingTask` derives from the load-balancing task,
     // not from `CWelsSliceEncodingTask`, so it stamps the slice time *unconditionally*
     // — `bUseLoadBalancing` does not gate this one (`wels_task_encoder.h:110`).
@@ -1748,17 +1771,25 @@ unsafe fn EncodeOnePartitionSizeLimited(
                 }
             }
 
+            // **S10.3a: the size-limited loop keeps its raw, and the reason is the
+            // tail.** `FinishTask` below stamps `uiSliceConsumeTime` on **the last
+            // slice this partition coded**, which is what `pSlice` holds after the
+            // loop — so the pointer has to outlive each iteration. A per-iteration
+            // `&mut SSlice` cannot carry that, and stamping inside the loop instead
+            // would stamp *every* slice where the C++ stamps one. Converting this
+            // body needs the tail redesigned with its own referee, and it retires
+            // no allow on its own (the reallocation and the bank re-resolve stay),
+            // so it is left for step 3's dynamic half.
             let mut pNext: *mut SSlice = std::ptr::null_mut();
-            let mut iRet = InitOneSliceInThread(
+            let Some(pNextRef) = InitOneSliceInThread(
                 pCtx,
-                &mut pNext,
                 iBsSlot,
                 (*pCtx).uiDependencyId as i32,
                 iLocalSliceIdx,
-            );
-            if iRet != ENC_RETURN_SUCCESS {
-                return iRet;
-            }
+            ) else {
+                return ENC_RETURN_UNEXPECTED;
+            };
+            pNext = pNextRef;
             pSlice = pNext;
             let pSliceBs = std::ptr::addr_of_mut!((*pSlice).sSliceBs);
             (*pSliceBs).sBsWrite = BsWriter::new();
@@ -1767,15 +1798,15 @@ unsafe fn EncodeOnePartitionSizeLimited(
                 WritePrefixNalForSlice(pCtx, &mut *pSlice, eNalRefIdc, eNalType);
             }
             let pSliceBs = std::ptr::addr_of_mut!((*pSlice).sSliceBs);
-            WelsLoadNalForSlice(pSliceBs, eNalType as i32, eNalRefIdc as i32);
+            WelsLoadNalForSlice(&mut *pSliceBs, eNalType as i32, eNalRefIdc as i32);
 
             debug_assert_eq!(iLocalSliceIdx, (*pSlice).iSliceIdx);
-            iRet = WelsCodeOneSlice(pCtx, &mut *pSlice, eNalType as i32);
+            let mut iRet = WelsCodeOneSlice(pCtx, &mut *pSlice, eNalType as i32);
             if ENC_RETURN_SUCCESS != iRet {
                 return iRet;
             }
             let pSliceBs = std::ptr::addr_of_mut!((*pSlice).sSliceBs);
-            WelsUnloadNalForSlice(pSliceBs);
+            WelsUnloadNalForSlice(&mut *pSliceBs);
 
             let mut iSliceSize = 0i32;
             iRet = WriteSliceBs(pCtx, &mut *pSlice, iLocalSliceIdx, &mut iSliceSize);
