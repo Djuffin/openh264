@@ -604,10 +604,26 @@ unsafe fn InitMbInfo(
     pLayer: &mut SDqLayer,
     kiDlayerId: i32,
 ) {
-    let iMbWidth = (*pLayer).iMbWidth as i32;
-    let iMbHeight = (*pLayer).iMbHeight as i32;
+    let iMbWidth = pLayer.iMbWidth as i32;
+    let iMbHeight = pLayer.iMbHeight as i32;
     let iMbNum = iMbWidth * iMbHeight;
-    let mut mbs = crate::encoder::svc_encode_slice::mb_window(pLayer, 0, iMbNum, 0);
+    // **S10.3e: no `mb_window` here either.** Same shape as
+    // `DynslcUpdateMbNeighbourInfoListForAllSlices` (S10.3c): the layer is `&mut`,
+    // so there is no fork and no exclusivity claim to make; what needed the raw
+    // was the *width* of `WelsMbToSliceIdc`'s old whole-layer parameter, and that
+    // narrowed in S10.3c. The grid and the slice context are two fields.
+    //
+    // This body keeps its allow — `ctx_mb_index_x`/`_y` read the stride-table
+    // arena, a byte block carved at stored offsets, which is its own seam and the
+    // only thing left blocking it.
+    let SDqLayer { sMbDataP, sSliceEncCtx, .. } = pLayer;
+    let dims = sMbDataP.dims();
+    let mut mbs = crate::safe::mb_grid::MbWindow::new(
+        sMbDataP.as_mut_slice(),
+        0,
+        dims.mb_width(),
+        0,
+    );
 
     for iIdx in 0..iMbNum as usize {
         let pMb = mbs.at_mut(iIdx);
@@ -617,19 +633,19 @@ unsafe fn InitMbInfo(
         pMb.iMbXY = iIdx as i32;
 
         // [0..65535] > 36864 of LEVEL5.2
-        let uiSliceIdc: u16 = WelsMbToSliceIdc(Some(&(*pLayer).sSliceEncCtx), iIdx as i32);
+        let uiSliceIdc: u16 = WelsMbToSliceIdc(Some(sSliceEncCtx), iIdx as i32);
         let iLeftXY = iIdx as i32 - 1;
         let iTopXY = iIdx as i32 - iMbWidth;
         let iLeftTopXY = iTopXY - 1;
         let iRightTopXY = iTopXY + 1;
 
-        let bLeft = pMb.iMbX > 0 && uiSliceIdc == WelsMbToSliceIdc(Some(&(*pLayer).sSliceEncCtx), iLeftXY);
-        let bTop = pMb.iMbY > 0 && uiSliceIdc == WelsMbToSliceIdc(Some(&(*pLayer).sSliceEncCtx), iTopXY);
+        let bLeft = pMb.iMbX > 0 && uiSliceIdc == WelsMbToSliceIdc(Some(sSliceEncCtx), iLeftXY);
+        let bTop = pMb.iMbY > 0 && uiSliceIdc == WelsMbToSliceIdc(Some(sSliceEncCtx), iTopXY);
         let bLeftTop =
-            pMb.iMbX > 0 && pMb.iMbY > 0 && uiSliceIdc == WelsMbToSliceIdc(Some(&(*pLayer).sSliceEncCtx), iLeftTopXY);
+            pMb.iMbX > 0 && pMb.iMbY > 0 && uiSliceIdc == WelsMbToSliceIdc(Some(sSliceEncCtx), iLeftTopXY);
         let bRightTop = (pMb.iMbX as i32) < (iMbWidth - 1)
             && pMb.iMbY > 0
-            && uiSliceIdc == WelsMbToSliceIdc(Some(&(*pLayer).sSliceEncCtx), iRightTopXY);
+            && uiSliceIdc == WelsMbToSliceIdc(Some(sSliceEncCtx), iRightTopXY);
 
         let mut uiNeighborAvail: u8 = 0;
         if bLeft {
