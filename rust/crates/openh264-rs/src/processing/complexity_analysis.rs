@@ -94,19 +94,6 @@ impl CComplexityAnalysis {
     /// pair, handed over at the call (the C++ stored `pCalcResult` in the parameter
     /// block; take what you reach).
     ///
-    /// # Safety
-    /// The pointers stored by the preceding [`Set`](Self::Set) must still be valid,
-    /// `pSrcPixMap` must describe the current picture, and `calc`'s arrays must cover
-    /// its macroblocks.
-    // unsafe-cat: port-raw(Phase 9)
-    #[allow(unsafe_code)]
-    /// **T9.X** — `pGomComplexity` and `pGomForegroundBlockNum` arrive as slices
-    /// rather than as two `*mut`-i32 on the parameter block. They were never this
-    /// object's memory: they point into the *rate controller's* `pCurrentFrameGomSad`
-    /// and `pGomForegroundBlockNum` `Vec`s, which `AnalyzePictureComplexity` aims at
-    /// them one line before the call. Handing them over at the call is the move
-    /// session B made for `pCalcResult`, and it is what retires `SVAAFrameInfo`'s
-    /// `*mut`-i32 `!Sync` reason (F67/F164).
     pub fn Process(
         &mut self,
         pSrcPixMap: &SPixMap,
@@ -138,8 +125,6 @@ impl CComplexityAnalysis {
     }
 
     /// `CComplexityAnalysis::AnalyzeFrameComplexityViaSad` — `ComplexityAnalysis.cpp:96`.
-    // unsafe-cat: port-raw(Phase 9)
-    #[allow(unsafe_code)]
     fn AnalyzeFrameComplexityViaSad(
         &mut self,
         pSrcPixMap: &SPixMap,
@@ -166,8 +151,6 @@ impl CComplexityAnalysis {
     /// The C++ returns `int32_t` from a `uint32_t` accumulator; the sign of that
     /// conversion is what `iFrameComplexity` then sign-extends, so the cast chain is
     /// kept as-is.
-    // unsafe-cat: port-raw(Phase 9)
-    #[allow(unsafe_code)]
     fn GetFrameSadExcludeBackground(
         &mut self,
         pSrcPixMap: &SPixMap,
@@ -213,8 +196,6 @@ impl CComplexityAnalysis {
     ///
     /// `InitGomSadFunc` picks `GomSampleSad` or `GomSampleSadExceptBackground` from
     /// `iCalcBgd`; both are inlined below because the choice is a single predicate.
-    // unsafe-cat: port-raw(Phase 9)
-    #[allow(unsafe_code)]
     fn AnalyzeGomComplexityViaSad(
         &mut self,
         pSrcPixMap: &SPixMap,

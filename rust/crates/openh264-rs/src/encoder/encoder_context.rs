@@ -716,6 +716,35 @@ impl SStrideTables {
         let off = self.pMbIndexY[kiDid];
         self.at_i16(off)
     }
+
+    /// The macroblock X/Y coordinate tables of layer `kiDid` **as slices** —
+    /// `MbIndexX`/`MbIndexY` for the consumers that walk `kiMbNum` entries.
+    ///
+    /// S11.2d: the arena is still a byte block carved at stored offsets (S10.3e's
+    /// third seam), so the region roots stay raw *here*; what this adds is the
+    /// length, which the callers have always known — the region holds one `i16`
+    /// per macroblock, written by `AllocStrideTables` from the same
+    /// `iMbWidth * iMbHeight`. Handing back a bounded slice moves the indexing
+    /// under the compiler, and `None` answers exactly where the cursors were
+    /// null. The `unsafe` retires with the arena, not with its consumers.
+    // unsafe-cat: port-raw(Phase 9)
+    #[allow(unsafe_code)]
+    pub fn MbIndexXY(&self, kiDid: usize, kiMbNum: usize) -> Option<(&[i16], &[i16])> {
+        let x = self.MbIndexX(kiDid);
+        let y = self.MbIndexY(kiDid);
+        if x.is_null() || y.is_null() {
+            return None;
+        }
+        // SAFETY: as `at_i16`, plus the length: `AllocStrideTables` sizes both
+        // regions at one `i16` per macroblock of this layer, and the arena
+        // outlives `&self`.
+        unsafe {
+            Some((
+                std::slice::from_raw_parts(x, kiMbNum),
+                std::slice::from_raw_parts(y, kiMbNum),
+            ))
+        }
+    }
 }
 
 /// [`SStrideTables::StrideDecBlockOffset`] reached through the context — the
@@ -1001,6 +1030,29 @@ pub unsafe fn ctx_dq_layer(pCtx: &sWelsEncCtx, kiDid: usize) -> *mut SDqLayer {
     // The value read carries the heap block's own provenance — nothing here retags
     // the layer, which is what lets two workers resolve it at once.
     std::ptr::read((*arr).as_ptr().add(kiDid) as *const *mut SDqLayer)
+}
+
+/// Dependency layer `kiDid` **as a shared reference** — [`ctx_dq_layer`]'s safe
+/// twin, on `layer_pps_ref`'s template.
+///
+/// `None` exactly where the raw answered null: an index past the list, or an
+/// unbuilt slot. The raw's slot-*read* spelling exists so a worker's kept
+/// pointer survives later retags of the context (F71); a body that only reads
+/// the layer through a borrow it holds needs none of that, which is the same
+/// distinction S10.13 drew for `SliceJobHandle::new`.
+#[inline]
+pub fn dq_layer_ref(pCtx: &sWelsEncCtx, kiDid: usize) -> Option<&SDqLayer> {
+    pCtx.ppDqLayerList.get(kiDid)?.as_deref()
+}
+
+/// [`dq_layer_ref`] for the single-threaded writers.
+///
+/// **Single-threaded by construction**: a `&mut sWelsEncCtx` cannot exist while
+/// the fork is live, which is the type-level form of the restriction the raw
+/// only stated in a comment (S10.3b's rule, S10.3d's measurement).
+#[inline]
+pub fn dq_layer_mut(pCtx: &mut sWelsEncCtx, kiDid: usize) -> Option<&mut SDqLayer> {
+    pCtx.ppDqLayerList.get_mut(kiDid)?.as_deref_mut()
 }
 
 /// The long-term-reference state of dependency layer `kiDid` — `pLtr[did]`, which is

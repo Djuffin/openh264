@@ -594,15 +594,16 @@ pub unsafe fn GetMvMvdRange(
 /// twenty-two now, and the layer's `&mut` beside it no longer coexists with a
 /// context `&mut` at all.
 ///
-/// # Safety
-/// `pEnc` must have `pStrideTab` allocated; `pList` must hold at least
-/// `iMbWidth * iMbHeight` entries.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-unsafe fn InitMbInfo(
-    pEnc: &sWelsEncCtx,
+/// S11.2d: the context parameter is gone. This body read exactly two things
+/// through it — the layer's macroblock X/Y coordinate tables — so it takes
+/// those as slices (`SStrideTables::MbIndexXY`) instead of the whole context.
+/// That is S10.3c's borrow-*width* rule again, and it is what lets the caller
+/// hold the layer `&mut` and the tables `&` at once: they are two disjoint
+/// fields of the context, not the context twice.
+fn InitMbInfo(
+    kpMbIndexX: &[i16],
+    kpMbIndexY: &[i16],
     pLayer: &mut SDqLayer,
-    kiDlayerId: i32,
 ) {
     let iMbWidth = pLayer.iMbWidth as i32;
     let iMbHeight = pLayer.iMbHeight as i32;
@@ -613,9 +614,8 @@ unsafe fn InitMbInfo(
     // was the *width* of `WelsMbToSliceIdc`'s old whole-layer parameter, and that
     // narrowed in S10.3c. The grid and the slice context are two fields.
     //
-    // This body keeps its allow — `ctx_mb_index_x`/`_y` read the stride-table
-    // arena, a byte block carved at stored offsets, which is its own seam and the
-    // only thing left blocking it.
+    // S11.2d: the coordinate tables arrive as slices, so the arena seam
+    // (S10.3e's third) no longer reaches this body at all.
     let SDqLayer { sMbDataP, sSliceEncCtx, .. } = pLayer;
     let dims = sMbDataP.dims();
     let mut mbs = crate::safe::mb_grid::MbWindow::new(
@@ -628,8 +628,8 @@ unsafe fn InitMbInfo(
     for iIdx in 0..iMbNum as usize {
         let pMb = mbs.at_mut(iIdx);
 
-        pMb.iMbX = *ctx_mb_index_x(pEnc, kiDlayerId as usize).add(iIdx);
-        pMb.iMbY = *ctx_mb_index_y(pEnc, kiDlayerId as usize).add(iIdx);
+        pMb.iMbX = kpMbIndexX[iIdx];
+        pMb.iMbY = kpMbIndexY[iIdx];
         pMb.iMbXY = iIdx as i32;
 
         // [0..65535] > 36864 of LEVEL5.2
@@ -672,11 +672,7 @@ unsafe fn InitMbInfo(
 
 /// `InitMbListD` — encoder_ext.cpp:907.
 ///
-/// # Safety
-/// `ppCtx` must point to a live context with `ppDqLayerList` populated.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn InitMbListD(ctx: &mut sWelsEncCtx) -> i32 {
+pub fn InitMbListD(ctx: &mut sWelsEncCtx) -> i32 {
     let iNumDlayer = ctx.param().iSpatialLayerNum;
 
     if iNumDlayer > MAX_DEPENDENCY_LAYER as i32 {
@@ -695,15 +691,24 @@ pub unsafe fn InitMbListD(ctx: &mut sWelsEncCtx) -> i32 {
     for i in 0..iNumDlayer as usize {
         let iMbWidth = (ctx.param().sSpatialLayers[i].iVideoWidth + 15) >> 4;
         let iMbHeight = (ctx.param().sSpatialLayers[i].iVideoHeight + 15) >> 4;
-        let pLayer = ctx_dq_layer(ctx, i);
-        if pLayer.is_null() {
+        // S11.2d: the context splits into its two disjoint owners — the stride
+        // tables (shared) and this layer (mutable) — so both borrows are live at
+        // once and neither is the whole context. §4.6's destructuring shape.
+        let sWelsEncCtx { pStrideTab, ppDqLayerList, .. } = &mut *ctx;
+        let Some(pLayer) = ppDqLayerList.get_mut(i).and_then(|l| l.as_deref_mut()) else {
             return 1;
-        }
-        (*pLayer).sMbDataP = MbArray::new(
+        };
+        pLayer.sMbDataP = MbArray::new(
             MbDims::new(iMbWidth as usize, iMbHeight as usize),
             SMB::default(),
         );
-        InitMbInfo(&*ctx, &mut *pLayer, i as i32);
+        let Some((kpMbIndexX, kpMbIndexY)) = pStrideTab
+            .as_ref()
+            .and_then(|tab| tab.MbIndexXY(i, (iMbWidth * iMbHeight) as usize))
+        else {
+            return 1;
+        };
+        InitMbInfo(kpMbIndexX, kpMbIndexY, pLayer);
     }
 
     0
