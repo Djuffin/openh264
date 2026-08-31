@@ -302,7 +302,28 @@ pub struct SSceneChangeResult {
     pub eSceneChangeIdc: ESceneChangeIdc,
     pub iMotionBlockNum: i32,
     pub iFrameComplexity: i64,
-    pub pStaticBlockIdc: *mut u8,
+    /// The block-static array this scene-change result was computed against, as
+    /// an **address**.
+    ///
+    /// **S10.11: `*mut u8` -> `usize`, and it is the last thing keeping
+    /// `sWelsEncCtx` off `Sync` on this path** — `CSceneChangeDetection` owns one
+    /// of these, `CWelsPreProcess` owns the detector, and the context owns the
+    /// preprocess.
+    ///
+    /// It is a **ferry**: filled from `SVAAFrameInfoExt::pVaaBlockStaticIdc[i]` and
+    /// copied straight out again into `SRefInfoParam::pBestBlockStaticIdc`. Nothing
+    /// on this hop reads through it. The one site that does dereference the family
+    /// — `SetBlockStaticIdcToMd`, four reads off
+    /// `pVaaBestBlockStaticIdc` — is downstream of the copy-out and keeps its
+    /// pointer type, so the exposure has to survive the round trip: in through
+    /// `expose_provenance`, out through `with_exposed_provenance_mut`, as
+    /// `TraceUserCtx` does.
+    ///
+    /// (The whole family is `SCREEN_CONTENT(dormant)`: F177 records that the port
+    /// never allocates an `SVAAFrameInfoExt`, so every one of these is null and the
+    /// dereference is unreachable. The round trip is written to be sound if it ever
+    /// is reached, not because it is reached today.)
+    pub pStaticBlockIdc: usize,
     pub sScrollResult: SScrollDetectionParam,
 }
 
@@ -312,7 +333,7 @@ impl Default for SSceneChangeResult {
             eSceneChangeIdc: ESceneChangeIdc::SIMILAR_SCENE,
             iMotionBlockNum: 0,
             iFrameComplexity: 0,
-            pStaticBlockIdc: std::ptr::null_mut(),
+            pStaticBlockIdc: 0,
             sScrollResult: SScrollDetectionParam::default(),
         }
     }
@@ -2452,7 +2473,7 @@ impl CWelsPreProcess {
             let pCurBlockStaticPointer = (*pVaaExt).pVaaBlockStaticIdc[iScdIdx as usize];
             let mut sSceneChangeResult = SSceneChangeResult::default();
             sSceneChangeResult.eSceneChangeIdc = ESceneChangeIdc::SIMILAR_SCENE;
-            sSceneChangeResult.pStaticBlockIdc = pCurBlockStaticPointer;
+            sSceneChangeResult.pStaticBlockIdc = pCurBlockStaticPointer.expose_provenance();
 
             let pRefPicInfo = &mut sAvailableRefParam[iScdIdx as usize];
             let Some(idRefPic) = pRefPicInfo.pRefPicture else {
@@ -2619,7 +2640,8 @@ impl CWelsPreProcess {
     ) {
         {
             *pRefSaved = *pRefPicInfo;
-            (*pRefSaved).pBestBlockStaticIdc = sSceneChangeResult.pStaticBlockIdc;
+            (*pRefSaved).pBestBlockStaticIdc =
+                std::ptr::with_exposed_provenance_mut(sSceneChangeResult.pStaticBlockIdc);
         }
     }
 
