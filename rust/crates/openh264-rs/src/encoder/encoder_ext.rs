@@ -2169,34 +2169,35 @@ pub fn StackBackEncoderStatus(pEncCtx: &mut sWelsEncCtx, keFrameType: EVideoFram
 
 /// `encoder_ext.cpp:2534`. Bind the current DQ layer to this frame's parameter sets,
 /// NAL header and picture buffers.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn WelsInitCurrentLayer(pCtx: &mut sWelsEncCtx, _kiWidth: i32, _kiHeight: i32) {
-    let pCurDq = current_layer(pCtx);
-    // **T6.F1**: the layer is stamped with the list its handles belong to, here, once
-    // a frame — `pRefPic`/`pDecPic` on `SDqLayer` are slots of *this* list, and the
-    // per-macroblock mode-decision family resolves them through it.
-    // **A3 keeps this one derivation raw** — see `ctx_ref_list_raw`, whose only
-    // caller this is: the field it feeds crosses into the fork, so the value must
-    // carry the list's own provenance rather than a retag from this body's `&mut`.
-    // The two `pic_mut` derivations below want the same raw for the same reason.
-    let pRefList = crate::encoder::encoder_context::ctx_ref_list_raw(
-        pCtx,
-        pCtx.uiDependencyId as usize,
-    );
+pub fn WelsInitCurrentLayer(pCtx: &mut sWelsEncCtx, _kiWidth: i32, _kiHeight: i32) {
+    // **T6.F1**: the layer is stamped with this frame's picture handles here, once a
+    // frame, and the per-macroblock mode-decision family resolves them through it.
+    //
+    // **S11.39: A3's raw derivation is gone — its premise expired (F285's shape).**
+    // The ruling kept `ctx_ref_list_raw` because the value it fed was *stored* —
+    // `SDqLayer::pRefList`, read by the fork all frame — so it had to carry the
+    // list's own provenance rather than a retag from this body's `&mut`. S10.8
+    // deleted that field. What crosses the fork now is `RecPicView`/`RoPicView`,
+    // and those capture their plane roots from the plane `Vec` headers themselves
+    // (`SharedCells::from_parts`), so nothing a worker reads derives from the
+    // borrow chain that reached the picture here. The list is resolved per
+    // statement below, at the same slot the raw named.
     // S11.35: the base-slice cursor is gone — see the stamp loop below.
     let kiCurDid = pCtx.uiDependencyId;
-    // A7, §4.6 reorder: the flag is a scalar and the cursor is a raw, so neither
-    // has to be a live borrow of the context across the calls below.
+    // A7, §4.6 reorder: the flag is a scalar, so it does not have to be a live
+    // borrow of the context across the calls below.
     let kbUseSubsetSpsFlag =
         !pCtx.param().bSimulcastAVC && (kiCurDid as i32) > BASE_DEPENDENCY_ID;
-    let iSliceCount = (*pCurDq).iMaxSliceNum;
-    // S29 / F13's family: `addr_of_mut!` on the element, not `as_mut_ptr().add()` —
-    // the latter reborrows the whole array and a second such derivation pops the first.
-    let pParamInternal =
-        std::ptr::addr_of_mut!((*ctx_param_raw(pCtx)).sDependencyLayers[kiCurDid as usize]);
+    let iSliceCount =
+        current_layer_ref(pCtx).expect("the frame's current layer is stamped").iMaxSliceNum;
+    // S11.39: the parameter cursor is gone with the body's `unsafe` — both of its
+    // reads were scalars (`uiIdrPicId`, `iFrameNum`), and each now goes through
+    // `param()` at its use site, A7's route for a body that holds nothing.
 
-    (*pCurDq).pDecPic = pCtx.pDecPic;
+    // RHS first, then the place — assignment order is what lets the layer stamp
+    // sit beside a context read (`:2079`'s idiom).
+    current_layer_mut(pCtx).expect("the frame's current layer is stamped").pDecPic =
+        pCtx.pDecPic;
 
     debug_assert!(iSliceCount > 0);
 
@@ -2208,21 +2209,37 @@ pub unsafe fn WelsInitCurrentLayer(pCtx: &mut sWelsEncCtx, _kiWidth: i32, _kiHei
         (pDqIdc.iPpsId as i32, pDqIdc.iSpsId as i32)
     };
 
-    iCurPpsId = ParasetStrategy(pCtx).GetCurrentPpsId(
-        iCurPpsId,
-        ((*pParamInternal).uiIdrPicId as i32 - 1).abs() % MAX_PPS_COUNT as i32,
-    );
+    // The IDR loop index was this call's second argument, read through the deleted
+    // cursor; the same field, one statement earlier, and nothing between writes it.
+    let kiIdrLoop = (pCtx.param().sDependencyLayers[kiCurDid as usize].uiIdrPicId as i32 - 1)
+        .abs()
+        % MAX_PPS_COUNT as i32;
+    iCurPpsId = ParasetStrategy(pCtx).GetCurrentPpsId(iCurPpsId, kiIdrLoop);
 
     // T6.G3. The C++ writes the id and then an address derived from it, three times
     // over (`encoder_ext.cpp:2560-2576`); the layer keeps the id and the slice
     // header's own `iPpsId`/`iSpsId` — already here, already the same numbers — are
     // what the header carries. The two pointer copies the header used to take are
     // gone with the fields.
-    (*pCurDq).sLayerInfo.iPps = Some(PpsId(iCurPpsId as u16));
+    //
+    // **S11.39: every context scalar the stamps below read is hoisted here** —
+    // F114's width rule applied to a borrow instead of a signature — so a single
+    // `&mut` on the layer can span every stamp from `iPps` to `uiTemporalId`.
+    // Nothing between the old read sites and these writes touches the sources.
+    let kbSliceHeaderExtFlag = pCtx.eNalType == EWelsNalUnitType::NAL_UNIT_CODED_SLICE_EXT;
+    let keNalPriority = pCtx.eNalPriority;
+    let keNalType = pCtx.eNalType;
+    let kbNeedPrefixNalFlag = pCtx.bNeedPrefixNalFlag;
+    let keSliceType = pCtx.eSliceType;
+    let kuiTemporalId = pCtx.uiTemporalId;
+    let kiFrameNum = pCtx.param().sDependencyLayers[kiCurDid as usize].iFrameNum;
+    let pCurDq = current_layer_mut(pCtx).expect("the frame's current layer is stamped");
+
+    pCurDq.sLayerInfo.iPps = Some(PpsId(iCurPpsId as u16));
 
     // The null-versus-not that used to select the arm is the tag now — same two
     // arms, same `iCurSpsId`, indexing the same two different arrays.
-    (*pCurDq).sLayerInfo.eSps = Some(if kbUseSubsetSpsFlag {
+    pCurDq.sLayerInfo.eSps = Some(if kbUseSubsetSpsFlag {
         LayerSps::Subset(SubsetSpsId(iCurSpsId as u8))
     } else {
         LayerSps::Avc(SpsId(iCurSpsId as u8))
@@ -2231,12 +2248,9 @@ pub unsafe fn WelsInitCurrentLayer(pCtx: &mut sWelsEncCtx, _kiWidth: i32, _kiHei
     // **S11.35: the base slice and its copy loop are one stamp loop.** The
     // "base" carried exactly three scalars (`InitSliceHeadWithBase` copies
     // `iPpsId`, `iSpsId`, `bSliceHeaderExtFlag`) and all three were computed
-    // right here — so every slice takes the values directly, slice 0 included,
-    // and the held base cursor that had to survive the loop's whole-layer
-    // retags is gone. Each iteration's `&mut *pCurDq` is a child of the raw's
-    // own root tag, ended within the iteration; the old raw form skipped
-    // missing slots and this keeps that (`None` where null answered).
-    let kbSliceHeaderExtFlag = pCtx.eNalType == EWelsNalUnitType::NAL_UNIT_CODED_SLICE_EXT;
+    // right here — so every slice takes the values directly, slice 0 included.
+    // The old raw form skipped missing slots and this keeps that (`None` where
+    // null answered).
     let mut iIdx = 0;
     while iIdx < iSliceCount {
         if let Some(pSlice) =
@@ -2249,29 +2263,28 @@ pub unsafe fn WelsInitCurrentLayer(pCtx: &mut sWelsEncCtx, _kiWidth: i32, _kiHei
         iIdx += 1;
     }
 
-    // **S6.A1, and Miri found it where the byte sweep could not.** This binding stood
-    // 50 lines up, next to `iSliceCount`. That was sound while `slice_in_layer` took the
-    // layer raw; with `Option<&SDqLayer>` the two calls above take a *whole-layer*
-    // shared retag, which pops this `&mut`'s Unique tag at [0x208..0x220] and makes the
-    // write below use a dead tag. Nothing between the old site and here read it, so the
-    // binding moves to its first use and the live range no longer spans a shared borrow.
-    // Both sweeps called this byte-identical; only the aliasing checker saw it.
-    let pNalHdExt = &mut (*pCurDq).sLayerInfo.sNalHeaderExt;
-    std::ptr::write_bytes(pNalHdExt as *mut _ as *mut u8, 0, std::mem::size_of::<SNalUnitHeaderExt>());
-    let pNalHd = &mut pNalHdExt.sNalUnitHeader;
-    pNalHd.uiNalRefIdc = pCtx.eNalPriority as u8;
-    pNalHd.eNalUnitType = pCtx.eNalType;
+    // **S6.A1, and Miri found it where the byte sweep could not**: this binding once
+    // stood 50 lines up and a whole-layer shared retag popped it. S11.39 makes the
+    // fix structural — there is exactly one layer borrow now, and this is a field
+    // path of it, so a hoisted form no longer compiles.
+    let pNalHdExt = &mut pCurDq.sLayerInfo.sNalHeaderExt;
+    // S11.39: `write_bytes(0)` → `Default`, and they agree field-for-field: every
+    // default is its type's zero (`NAL_UNIT_UNSPEC_0` is 0), and the emitted
+    // stream reads fields, never padding.
+    *pNalHdExt = SNalUnitHeaderExt::default();
+    pNalHdExt.sNalUnitHeader.uiNalRefIdc = keNalPriority as u8;
+    pNalHdExt.sNalUnitHeader.eNalUnitType = keNalType;
 
     pNalHdExt.uiDependencyId = kiCurDid;
-    pNalHdExt.bDiscardableFlag = if pCtx.bNeedPrefixNalFlag {
-        pNalHd.uiNalRefIdc == EWelsNalRefIdc::NRI_PRI_LOWEST as u8
+    pNalHdExt.bDiscardableFlag = if kbNeedPrefixNalFlag {
+        pNalHdExt.sNalUnitHeader.uiNalRefIdc == EWelsNalRefIdc::NRI_PRI_LOWEST as u8
     } else {
         false
     };
-    pNalHdExt.bIdrFlag = ((*pParamInternal).iFrameNum == 0)
-        && (pCtx.eNalType == EWelsNalUnitType::NAL_UNIT_CODED_SLICE_IDR
-            || pCtx.eSliceType == EWelsSliceType::I_SLICE);
-    pNalHdExt.uiTemporalId = pCtx.uiTemporalId;
+    pNalHdExt.bIdrFlag = (kiFrameNum == 0)
+        && (keNalType == EWelsNalUnitType::NAL_UNIT_CODED_SLICE_IDR
+            || keSliceType == EWelsSliceType::I_SLICE);
+    pNalHdExt.uiTemporalId = kuiTemporalId;
 
     // pEncPic data. **S37, and the resolution sits here rather than at the top of the
     // function on purpose**: the C++ loads both `SPicture*`s at entry and dereferences
@@ -2284,33 +2297,25 @@ pub unsafe fn WelsInitCurrentLayer(pCtx: &mut sWelsEncCtx, _kiWidth: i32, _kiHei
     if pCtx.pVpp.is_none() {
         return;
     }
-    // The handle and its pool, beside the roots they stand for (T9.B21). `idEnc` is
-    // already resolved above and the pool is the one it indexes, so this is the same
-    // fact written twice — the point of a strangler step: both spellings live until
-    // the last reader of the raw one is gone.
-    //
-    // **The pool pointer is taken first and every access below goes through it**,
-    // which is `pRefList`'s shape one picture over (`:2074`, then `(*pRefList)
-    // .pic_mut(..)` on the next line) and is the ordering that keeps it valid. Taken
-    // the other way round — `get_mut` on the field, then `addr_of_mut!` of the same
-    // field — the two are competing paths into one place rather than parent and
-    // child, and whichever is written second pops the first. S29's boundary clause,
-    // and F114a is what it costs to get wrong.
-    // (S3.B1: the slot is read as a value — `Option<Box<T>>` is one pointer wide,
-    // F71's spelling — so `pSrcPool` still carries the vpp allocation's own
-    // provenance and outlives every later retag of the context, exactly as the raw
-    // field's cursor did. The `is_none` guard above has just proved `Some`.)
-    let pSrcPool = crate::encoder::encoder_context::ctx_src_pool_raw(pCtx);
-    (*pCurDq).pEncPic = Some(idEnc);
-    // **S10.7: `pSrcPool`'s stamp is gone with the field.** `layer_enc_pic` was
-    // its only reader — it resolved `(*pLayer).pSrcPool` to reach the source
-    // picture — and step 2 deleted that accessor when the last of its twenty-one
-    // call sites moved to `pEncView`. The local below is still needed here, to
-    // build the view and the plane roots; the *field* was the frame's copy of a
-    // pointer nothing looked at again.
+    current_layer_mut(pCtx).expect("the frame's current layer is stamped").pEncPic =
+        Some(idEnc);
+    // **S10.7: `pSrcPool`'s stamp is gone with the field**, and **S11.39: the pool
+    // local went with it.** The slot-read the local kept (`ctx_src_pool_raw`,
+    // deleted) existed so a *stored* pointer could carry the pool's own provenance;
+    // nothing stores one any more, so the pool is borrowed per statement through
+    // the `Box` — `ctx_vpp_mut`'s route, proved `Some` by the guard above. What
+    // each borrow yields is `PicPlanes` by value and a view whose roots come from
+    // the plane headers, so no derivation of these borrows outlives its statement.
 
-    let pEncPic = (*pSrcPool).get_mut(idEnc).planes();
-    let pDecPic = (*pRefList).pic_mut(idDec).planes();
+    let pEncPic = crate::encoder::encoder_context::ctx_vpp_mut(pCtx)
+        .m_pSpatialPicPool
+        .get_mut(idEnc)
+        .planes();
+    let pDecPic = pCtx
+        .ref_list_mut(kiCurDid as usize)
+        .expect("the layer's reference list is allocated")
+        .pic_mut(idDec)
+        .planes();
 
     // **The reconstruction seam is built here, and here is not an accident**
     // (T9.C2, D-mt-3 option A). This is the last point in the frame at which the
@@ -2323,32 +2328,40 @@ pub unsafe fn WelsInitCurrentLayer(pCtx: &mut sWelsEncCtx, _kiWidth: i32, _kiHei
     // Rebuilt every frame, unconditionally, because the pool may have handed
     // `idDec` a different slot: a view is only ever valid for the frame that
     // built it.
-    (*pCurDq).pRecView =
-        Some(crate::encoder::rec_view::RecPicView::build((*pRefList).pic_mut(idDec)));
+    let sRecView = crate::encoder::rec_view::RecPicView::build(
+        pCtx.ref_list_mut(kiCurDid as usize)
+            .expect("the layer's reference list is allocated")
+            .pic_mut(idDec),
+    );
 
-    // S9.0: the read half of the seam, stamped beside the write half above and
+    // S9.0: the read half of the seam, built beside the write half above and
     // rebuilt every frame for the same reason. `get` and not `get_mut` — a
     // read-only view makes no exclusive claim, which is the whole difference
     // between this and `RecPicView`.
-    (*pCurDq).pEncView =
-        Some(crate::encoder::rec_view::RoPicView::build((*pSrcPool).get(idEnc)));
+    let sEncView = crate::encoder::rec_view::RoPicView::build(
+        crate::encoder::encoder_context::ctx_vpp_ref(pCtx).m_pSpatialPicPool.get(idEnc),
+    );
+
+    let pCurDq = current_layer_mut(pCtx).expect("the frame's current layer is stamped");
+    pCurDq.pRecView = Some(sRecView);
+    pCurDq.pEncView = Some(sEncView);
 
     // **S10.5: `pEncData`'s three stamps are gone with the field.** They were
     // written here every frame and read by nobody — step 2 moved the last
     // source-plane reader onto `pEncView`, and the last raw one
     // (`AnalysisVaaInfoIntra_c`, through `mb_cursor`) followed in this checkpoint.
-    (*pCurDq).iEncStride[0] = pEncPic.iLineSize[0];
-    (*pCurDq).iEncStride[1] = pEncPic.iLineSize[1];
-    (*pCurDq).iEncStride[2] = pEncPic.iLineSize[2];
+    pCurDq.iEncStride[0] = pEncPic.iLineSize[0];
+    pCurDq.iEncStride[1] = pEncPic.iLineSize[1];
+    pCurDq.iEncStride[2] = pEncPic.iLineSize[2];
     // cs data
     // **S10.6: `pCsData`'s three stamps are gone with the field**, as `pEncData`'s
     // did — the reconstruction seam (`pRecView`, stamped a few lines above) took
     // every reader long ago, and the three that were left were dead bindings.
-    (*pCurDq).iCsStride[0] = pDecPic.iLineSize[0];
-    (*pCurDq).iCsStride[1] = pDecPic.iLineSize[1];
-    (*pCurDq).iCsStride[2] = pDecPic.iLineSize[2];
+    pCurDq.iCsStride[0] = pDecPic.iLineSize[0];
+    pCurDq.iCsStride[1] = pDecPic.iLineSize[1];
+    pCurDq.iCsStride[2] = pDecPic.iLineSize[2];
 
-    (*pCurDq).bBaseLayerAvailableFlag = (*pCurDq).pRefLayer.is_some();
+    pCurDq.bBaseLayerAvailableFlag = pCurDq.pRefLayer.is_some();
 
     // **T7.B4.** Was `pTaskManage->InitFrame(kiCurDid)`, whose whole body was "if the
     // layer wants re-slicing, dispatch the pre-encoding task list and wait". The task

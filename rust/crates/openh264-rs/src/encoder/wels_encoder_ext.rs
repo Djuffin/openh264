@@ -660,9 +660,7 @@ pub fn WelsWriteParameterSets(
 
 
 
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn WelsEncoderEncodeParameterSetsRust(
+pub fn WelsEncoderEncodeParameterSetsRust(
     pCtx: &mut sWelsEncCtx,
     // S11.20: by reference — its caller holds `&mut SFrameBSInfo`.
     pBsInfo: &mut SFrameBSInfo,
@@ -2197,9 +2195,6 @@ impl CWelsH264SVCEncoder {
         cmResultSuccess
     }
 
-    // unsafe-cat: port-raw(Phase 9) — the one block below, on a callee whose own
-    // subtree (`WelsWriteParameterSets`) is unconverted.
-    #[allow(unsafe_code)]
     pub fn EncodeParameterSets(&mut self, pBsInfo: &mut SFrameBSInfo) -> i32 {
         if !self.m_bInitialFlag {
             return cmInitParaError;
@@ -2211,9 +2206,7 @@ impl CWelsH264SVCEncoder {
             return cmInitParaError;
         };
         // S67 blessed (H2): nothing of the context is live here; `pBsInfo` is the caller's.
-        // S11.20: the callee is still `unsafe fn` (its own `WelsWriteParameterSets`
-        // callee is unconverted); the claim is named at the call.
-        unsafe { WelsEncoderEncodeParameterSetsRust(ctx, pBsInfo) }
+        WelsEncoderEncodeParameterSetsRust(ctx, pBsInfo)
     }
 
     // unsafe-cat: port-raw(Phase 9)
