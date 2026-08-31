@@ -161,8 +161,8 @@ pub unsafe fn WelsGetEncBlockStrideOffset(pBlock: *mut i32, kiStrideY: i32, kiSt
 #[allow(unsafe_code)]
 pub unsafe fn AcquireLayersNals(
     ctx: &mut sWelsEncCtx,
-    pCountLayers: *mut i32,
-    pCountNals: *mut i32,
+    pCountLayers: &mut i32,
+    pCountNals: &mut i32,
 ) -> i32 {
     // A7: the `pParam` argument is gone — see `InitFunctionPointers`; the caller
     // held it as a `&mut` across this call, which Miri refused.
@@ -233,12 +233,9 @@ pub unsafe fn AcquireLayersNals(
         return 1;
     }
 
-    if !pCountLayers.is_null() {
-        *pCountLayers = iCountNumLayers;
-    }
-    if !pCountNals.is_null() {
-        *pCountNals = iCountNumNals;
-    }
+    // S11.14: the null guards retire with the raws (T9.H).
+    *pCountLayers = iCountNumLayers;
+    *pCountNals = iCountNumNals;
     0
 }
 
@@ -529,14 +526,10 @@ pub unsafe fn AllocStrideTables(ctx: &mut sWelsEncCtx, kiNumSpatialLayers: i32) 
 
 /// `GetMvMvdRange` — encoder_ext.cpp:1508.
 ///
-/// # Safety
-/// `pParam` must be initialised.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn GetMvMvdRange(
+pub fn GetMvMvdRange(
     pParam: &SWelsSvcCodingParam,
-    iMvRange: *mut i32,
-    iMvdRange: *mut i32,
+    iMvRange: &mut i32,
+    iMvdRange: &mut i32,
 ) {
     let mut iMinLevelIdc = ELevelIdc::LEVEL_5_2;
     let iFixMvRange = if (*pParam).iUsageType as i32 != 0 {
@@ -1443,7 +1436,7 @@ pub unsafe fn InitSliceSettings(
     // S11.13: the coding parameters arrive by reference — see `InitializeInternal`.
     pCodingParam: &mut SWelsSvcCodingParam,
     kiCpuCores: i32,
-    pMaxSliceCount: *mut i16,
+    pMaxSliceCount: &mut i16,
 ) -> i32 {
     let mut iSpatialIdx: i32 = 0;
     let iSpatialNum = pCodingParam.iSpatialLayerNum;
@@ -1527,9 +1520,9 @@ pub unsafe fn GetMultipleThreadIdc(
     pLogCtx: SLogContext,
     // S11.13: the coding parameters arrive by reference — see `InitializeInternal`.
     pCodingParam: &mut SWelsSvcCodingParam,
-    iSliceNum: *mut i16,
-    iCacheLineSize: *mut i32,
-    uiCpuFeatureFlags: *mut u32,
+    iSliceNum: &mut i16,
+    iCacheLineSize: &mut i32,
+    uiCpuFeatureFlags: &mut u32,
 ) -> i32 {
     // number of logical processors on the physical processor package; zero means HTT
     // is not supported
@@ -2416,10 +2409,10 @@ pub unsafe fn AddPrefixNal(
     pCtx: &mut sWelsEncCtx,
     _pLayerBsInfo: *mut SLayerBSInfo,
     pNalLen: *mut i32,
-    pNalIdxInLayer: *mut i32,
+    pNalIdxInLayer: &mut i32,
     keNalType: EWelsNalUnitType,
     keNalRefIdc: EWelsNalRefIdc,
-    iPayloadSize: *mut i32,
+    iPayloadSize: &mut i32,
 ) -> i32 {
     let mut iReturn;
     *iPayloadSize = 0;
@@ -2704,8 +2697,8 @@ pub unsafe fn WriteSsvcParaset(
     pCtx: &mut sWelsEncCtx,
     kiSpatialNum: i32,
     ppLayerBsInfo: *mut *mut SLayerBSInfo,
-    iLayerNum: *mut i32,
-    iFrameSize: *mut i32,
+    iLayerNum: &mut i32,
+    iFrameSize: &mut i32,
 ) -> i32 {
     let mut iNonVclSize = 0i32;
     let mut iCountNal = 0i32;
@@ -2758,8 +2751,8 @@ pub unsafe fn WriteSavcParaset(
     pCtx: &mut sWelsEncCtx,
     iIdx: i32,
     ppLayerBsInfo: *mut *mut SLayerBSInfo,
-    iLayerNum: *mut i32,
-    iFrameSize: *mut i32,
+    iLayerNum: &mut i32,
+    iFrameSize: &mut i32,
 ) -> i32 {
     let mut iNonVclSize = 0i32;
     let mut iNalSize = 0i32;
@@ -2866,8 +2859,8 @@ pub unsafe fn WriteSavcParaset_Listing(
     pCtx: &mut sWelsEncCtx,
     kiSpatialNum: i32,
     ppLayerBsInfo: *mut *mut SLayerBSInfo,
-    iLayerNum: *mut i32,
-    iFrameSize: *mut i32,
+    iLayerNum: &mut i32,
+    iFrameSize: &mut i32,
 ) -> i32 {
     let mut iNonVclSize = 0i32;
     let mut iReturn = ENC_RETURN_SUCCESS;
@@ -2982,9 +2975,9 @@ pub unsafe fn PrepareEncodeFrame(
     ppLayerBsInfo: *mut *mut SLayerBSInfo,
     iSpatialNum: i32,
     iCurDid: *mut i8,
-    iCurTid: *mut i32,
-    iLayerNum: *mut i32,
-    iFrameSize: *mut i32,
+    iCurTid: &mut i32,
+    iLayerNum: &mut i32,
+    iFrameSize: &mut i32,
     uiTimeStamp: i64,
 ) -> EVideoFrameType {
     // A7, §4.6 reorder: `bSimulcastAVC` and `uiGopSize` are scalars, and the
@@ -3323,8 +3316,8 @@ pub unsafe fn WelsCodeOnePicPartition(
     pCtx: &mut sWelsEncCtx,
     pFrameBSInfo: *mut SFrameBSInfo,
     pLayerBsInfo: *mut SLayerBSInfo,
-    pNalIdxInLayer: *mut i32,
-    pLayerSize: *mut i32,
+    pNalIdxInLayer: &mut i32,
+    pLayerSize: &mut i32,
     iFirstMbIdxInPartition: i32,
     iEndMbIdxInPartition: i32,
     iStartSliceIdx: i32,

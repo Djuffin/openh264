@@ -397,7 +397,7 @@ pub use crate::encoder::rc::SWelsSvcRc;
 
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
-pub unsafe fn WelsWriteOneSPS(pCtx: &mut sWelsEncCtx, kiSpsIdx: i32, iNalSize: *mut i32) -> i32 {
+pub unsafe fn WelsWriteOneSPS(pCtx: &mut sWelsEncCtx, kiSpsIdx: i32, iNalSize: &mut i32) -> i32 {
     // S3.B1: `pOut` is re-borrowed per statement rather than bound once — the
     // borrows are transient, so the `ParasetStrategy(pCtx)` claim and the
     // `frame_bs_cur()` read in between conflict with nothing. §4.6: the parameter
@@ -448,7 +448,7 @@ pub unsafe fn WelsWriteOneSPS(pCtx: &mut sWelsEncCtx, kiSpsIdx: i32, iNalSize: *
 /// `WelsWriteOnePPS` — encoder_ext.cpp:2849.
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
-pub unsafe fn WelsWriteOnePPS(pCtx: &mut sWelsEncCtx, kiPpsIdx: i32, iNalSize: *mut i32) -> i32 {
+pub unsafe fn WelsWriteOnePPS(pCtx: &mut sWelsEncCtx, kiPpsIdx: i32, iNalSize: &mut i32) -> i32 {
     // S3.B1: as `WelsWriteOneSPS` — per-statement reborrows, arguments hoisted.
     let iNal = pCtx.pOut.as_deref().expect("pOut lives").iNalIndex;
     /* generate picture parameter set */
@@ -503,8 +503,8 @@ pub unsafe fn WelsWriteOnePPS(pCtx: &mut sWelsEncCtx, kiPpsIdx: i32, iNalSize: *
 pub unsafe fn WelsWriteParameterSets(
     pCtx: &mut sWelsEncCtx,
     pNalLen: *mut i32,
-    pNumNal: *mut i32,
-    pTotalLength: *mut i32,
+    pNumNal: &mut i32,
+    pTotalLength: &mut i32,
 ) -> i32 {
     let mut iSize = 0i32;
     let mut iNal: i32;
@@ -517,7 +517,7 @@ pub unsafe fn WelsWriteParameterSets(
     // T9.H9: the `pCtx.is_null()` disjunct that opened this multi-line guard
     // is gone — a `&mut sWelsEncCtx` cannot be null. The rest is unchanged.
     if pNalLen.is_null()
-        || pNumNal.is_null()
+
         || pCtx.func_list().pParametersetStrategy.is_none()
     {
         return ENC_RETURN_UNEXPECTED;
@@ -938,7 +938,7 @@ pub unsafe fn WelsEncoderParamAdjust(
                 crate::encoder::paraset_strategy::ctx_strategy_and_paraset_arrays(ctx);
             strategy.OutputCurrentStructure(
                 sTmpPsoVariable.as_mut_ptr(),
-                iTmpPpsIdList.as_mut_ptr(),
+                &mut iTmpPpsIdList,
                 pSpsArray,
                 pSubsetArray,
                 pPpsArray,
@@ -991,7 +991,7 @@ pub unsafe fn WelsEncoderParamAdjust(
             // alongside the receiver here, so this is the plain form.
             ParasetStrategy(ctx).LoadPreviousStructure(
                 sTmpPsoVariable.as_mut_ptr(),
-                iTmpPpsIdList.as_mut_ptr(),
+                &mut iTmpPpsIdList,
             );
         }
     } else {
