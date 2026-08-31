@@ -3903,46 +3903,72 @@ pub unsafe fn InitAllSlicesInThread(pCtx: &mut sWelsEncCtx) -> i32 {
 
 // unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
-pub unsafe fn InitOneSliceInThread<'a>(
+/// Stamps one slice for the frame it is about to code.
+///
+/// **S11.21: the slice arrives, it is not resolved here.** This used to reach
+/// the bank itself — `slice_in_bank`'s raw root, F71's shape and the last
+/// structural seam in the encoder — because the C's `InitOneSliceInThread`
+/// took a buffer index and looked the slice up. Its three callers are all fork
+/// bodies that *already know which slice is theirs*: the fork entries carve
+/// the bank before spawning (S10.4's pattern, and S11.1b's for the bitstream
+/// pool), so each worker holds `&mut SSlice`s no sibling can name. Resolution
+/// moved to where ownership is provable; what is left here is the stamping,
+/// which needs no `unsafe` at all.
+/// The size-limited fork's slice resolution — **S11.21's remainder**.
+///
+/// The fixed modes no longer need this: their bank is carved before the spawn
+/// and each worker holds its own `&mut SSlice`s. The size-limited mode cannot
+/// be carved the same way, because it **grows its bank inside the fork**
+/// (`ReallocateSliceInThread`), so a reference taken before the growth would
+/// name freed storage — the split S10.3a described and this checkpoint keeps.
+///
+/// **Its claim is weaker than the one that just retired, and that is the
+/// point.** F71's seam was the *fixed* modes, where every worker resolves bank
+/// **0** and two of them retagging that `Vec` at once is a race with nothing
+/// written. Here each worker resolves bank `kiSlcBuffIdx` — **its own slot**,
+/// by the same static partition that gives it a bitstream buffer — so no two
+/// workers name one bank at all. What remains is a per-worker `Vec` reached
+/// through a shared layer, which is the shape a future checkpoint closes by
+/// moving `sSliceBufferInfo[k]` out whole, the way S11.1b moved the buffers.
+///
+/// # Safety
+/// `kiSlcBuffIdx` must be this worker's own bank slot.
+// unsafe-cat: fork-shared(S63)
+#[allow(unsafe_code)]
+pub unsafe fn ResolveSliceInOwnBank<'a>(
     pCtx: &'a sWelsEncCtx,
     kiSlcBuffIdx: i32,
-    kiDlayerIdx: i32,
     kiSliceIdx: i32,
 ) -> Option<&'a mut SSlice> {
-    // **S10.3a: the out-parameter is gone and the slice comes back by reference.**
-    // It was `pSlice: *mut *mut SSlice` — the C's out-pointer idiom — and every
-    // caller then wrote `&mut *pSlice` and `addr_of_mut!((*pSlice).sSliceBs)` for
-    // the rest of its body. `Option<&mut SSlice>` says the same two outcomes (a
-    // slice, or `ENC_RETURN_UNEXPECTED`'s null bank) and hands the callers a
-    // reference they can use without a single raw operation.
-    //
-    // The `unsafe` stays here, and only here: the bank is still reached through
-    // [`slice_in_bank`]'s raw root, which is F71's shape and step 3's remaining
-    // subject. What this moves is the *boundary* — one audited derivation instead
-    // of one per caller body.
-    let pCurDq = current_layer_ref(pCtx)
-        .expect("the frame's current layer is stamped");
-    let slc_ptr = if (*pCurDq).bThreadSlcBufferFlag {
-        let kiCodedNumInThread = (*pCurDq).sSliceBufferInfo[kiSlcBuffIdx as usize].iCodedSliceNum;
-        slice_in_bank(&*pCurDq, kiSlcBuffIdx as usize, kiCodedNumInThread)
+    let pCurDq = current_layer_ref(pCtx).expect("the frame's current layer is stamped");
+    let kiCodedNumInThread = pCurDq.sSliceBufferInfo[kiSlcBuffIdx as usize].iCodedSliceNum;
+    let slc_ptr = if pCurDq.bThreadSlcBufferFlag {
+        slice_in_bank(pCurDq, kiSlcBuffIdx as usize, kiCodedNumInThread)
     } else {
-        slice_in_bank(&*pCurDq, 0, kiSliceIdx)
+        slice_in_bank(pCurDq, 0, kiSliceIdx)
     };
     if slc_ptr.is_null() {
         return None;
     }
+    let pSlice = &mut *slc_ptr;
+    InitOneSliceInThread(pCtx, pSlice, kiSlcBuffIdx, kiSliceIdx);
+    Some(pSlice)
+}
 
-    let slice = &mut *slc_ptr;
-    slice.iSliceIdx = kiSliceIdx;
-    slice.uiBufferIdx = kiSlcBuffIdx as u32;
+pub fn InitOneSliceInThread(
+    pCtx: &sWelsEncCtx,
+    pSlice: &mut SSlice,
+    kiSlcBuffIdx: i32,
+    kiSliceIdx: i32,
+) {
+    pSlice.iSliceIdx = kiSliceIdx;
+    pSlice.uiBufferIdx = kiSlcBuffIdx as u32;
 
-    slice.sSliceBs.uiBsPos = 0;
-    slice.sSliceBs.iNalIndex = 0;
+    pSlice.sSliceBs.uiBsPos = 0;
+    pSlice.sSliceBs.iNalIndex = 0;
     // The C++ stamped `sSliceBs.pBsBuffer = pThreadBsBuffer[kiSlcBuffIdx]` here;
-    // `uiBufferIdx` above already names that slot, and `thread_bs_buffer` reads it.
-    slice.sSliceBs.uiSize = (*pCtx).iFrameBsSize as u32;
-
-    Some(slice)
+    // `uiBufferIdx` above already names that slot.
+    pSlice.sSliceBs.uiSize = pCtx.iFrameBsSize as u32;
 }
 
 // unsafe-cat: port-raw(Phase 9)
