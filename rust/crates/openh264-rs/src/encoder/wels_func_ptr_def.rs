@@ -123,7 +123,7 @@ pub type PInterMdBackgroundDecisionFunc = unsafe fn(
 ) -> bool;
 
 /// `wels_func_ptr_def.h:118`
-pub type PMdBackgroundInfoUpdateFunc = unsafe extern "C" fn(
+pub type PMdBackgroundInfoUpdateFunc = extern "C" fn(
     // S10.8: the context, because the body resolves the reference picture through
     // it now that `SDqLayer::pRefList` is gone.
     pEncCtx: &sWelsEncCtx,
@@ -151,7 +151,7 @@ pub type PInterMdScrollingPSkipDecisionFunc = unsafe fn(
 /// real implementation only *reads* the block (the screen-content downcast, two
 /// scalars off `sScrollDetectInfo`); everything it writes goes through `pMd`,
 /// which is already exclusive and per-macroblock.
-pub type PSetScrollingMv = unsafe fn(pVaa: &SVAAFrameInfo, pMd: &mut SWelsMD<'_>);
+pub type PSetScrollingMv = fn(pVaa: &SVAAFrameInfo, pMd: &mut SWelsMD<'_>);
 
 /// `wels_func_ptr_def.h:125`
 pub type PInterMdFunc = for<'a> unsafe fn(

@@ -160,7 +160,7 @@ pub enum ESkipModes {
 }
 
 
-pub type pJudgeSkipFun = unsafe extern "C" fn(
+pub type pJudgeSkipFun = extern "C" fn(
     pEncCtx: &sWelsEncCtx,
     pCurMb: &mut SMB,
     pMbCache: &mut SMbCache,
@@ -1240,10 +1240,8 @@ pub(crate) fn InitMe<'a>(
     sWelsMe.pRefFeatureStorage = pRefFeatureStorage;
 }
 
-// unsafe-cat: fork-shared(S63) — the layer/SMB cursors (E3's grid); the
 // dispatch cursor this tag used to name is a shared reference since T9.F4
-#[allow(unsafe_code)]
-pub unsafe fn WelsMdP16x16<'a>(
+pub fn WelsMdP16x16<'a>(
     pEncCtx: &'a sWelsEncCtx,
     pFunc: &SWelsFuncPtrList,
     pCurLayer: &'a SDqLayer,
@@ -1337,10 +1335,8 @@ pub unsafe fn WelsMdP16x16<'a>(
     (*pMe16x16).uiSatdCost as i32
 }
 
-// unsafe-cat: fork-shared(S63) — the layer/SMB cursors (E3's grid); the
 // dispatch cursor this tag used to name is a shared reference since T9.F4
-#[allow(unsafe_code)]
-pub unsafe extern "C" fn WelsMdP8x8<'a>(
+pub extern "C" fn WelsMdP8x8<'a>(
     pEncCtx: &'a sWelsEncCtx,
     pFunc: &SWelsFuncPtrList,
     pCurDqLayer: &'a SDqLayer,

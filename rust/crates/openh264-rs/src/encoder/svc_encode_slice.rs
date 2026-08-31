@@ -1528,13 +1528,13 @@ pub use crate::encoder::md::SMB;
 // slice-owned writer arm needs no parameter: every body that needs it holds
 // `&mut SSlice` and resolves `sSliceBs.sBsWrite` field-precisely at the use
 // (`slice_bs_writer`).
-pub type PWelsCodingSliceFunc = unsafe extern "C" fn(
+pub type PWelsCodingSliceFunc = extern "C" fn(
     pCtx: &sWelsEncCtx,
     pSlice: &mut SSlice,
     pSliceBsBuf: &mut [u8],
     pCtxOutBs: &mut Option<&mut BsWriter>,
 ) -> i32;
-pub type PWelsSliceHeaderWriteFunc = unsafe extern "C" fn(
+pub type PWelsSliceHeaderWriteFunc = extern "C" fn(
     pCtx: &sWelsEncCtx,
     pCurLayer: &SDqLayer,
     pSlice: &mut SSlice,
@@ -2373,8 +2373,12 @@ pub unsafe fn WelsISliceMdEnc(
     // **S7.A5**: the `is_null()` guard and its early return retire with the
     // parameter — every context reaching this body comes from a `&mut sWelsEncCtx`
     // held by one of the three fork entry points or the frame loop, never a null.
-    let pCurLayer = current_layer(pEncCtx);
-    if pCurLayer.is_null() || (*pCurLayer).sMbDataP.dims().count() == 0 || (*pCurLayer).iMbWidth <= 0 || (*pCurLayer).iMbHeight <= 0 {
+    // S11.4: the layer is read-only in this body, so it takes the reference —
+    // and the null disjunct retires as inexpressible with it (T9.H).
+    let Some(pCurLayer) = current_layer_ref(pEncCtx) else {
+        return ENC_RETURN_SUCCESS;
+    };
+    if pCurLayer.sMbDataP.dims().count() == 0 || pCurLayer.iMbWidth <= 0 || pCurLayer.iMbHeight <= 0 {
         return ENC_RETURN_SUCCESS;
     }
     // S29 and the D-session playbook (T9.E7): the arena root is derived per
@@ -2382,8 +2386,7 @@ pub unsafe fn WelsISliceMdEnc(
     // the callees re-derive their own borrows of the same fields (the encode
     // probe's fourth red, session B), and after the flip each window is what
     // keeps the derivation alive.
-    let pSliceHdExt = std::ptr::addr_of_mut!((*pSlice).sSliceHeaderExt);
-    let kiSliceFirstMbXY = (*pSliceHdExt).sSliceHeader.iFirstMbInSlice;
+    let kiSliceFirstMbXY = pSlice.sSliceHeaderExt.sSliceHeader.iFirstMbInSlice;
     let mut iNextMbIdx = kiSliceFirstMbXY;
     let kiTotalNumMb: i32 = (*pCurLayer).iMbWidth as i32 * (*pCurLayer).iMbHeight as i32;
     let mut iCurMbIdx: i32;
@@ -2514,8 +2517,7 @@ pub unsafe fn WelsISliceMdEncDynamic(
     // its own `&mut (*pCurDq).sSliceEncCtx` every iteration, which pops the `Unique`
     // this binding held, and `DynSlcJudgeSliceBoundaryStepBack` then reads through
     // the dead tag. `pMbCache` is the encode probe's fourth red (session B).
-    let pSliceHdExt = std::ptr::addr_of_mut!((*pSlice).sSliceHeaderExt);
-    let kiSliceFirstMbXY = (*pSliceHdExt).sSliceHeader.iFirstMbInSlice;
+    let kiSliceFirstMbXY = pSlice.sSliceHeaderExt.sSliceHeader.iFirstMbInSlice;
     let mut iNextMbIdx = kiSliceFirstMbXY;
     let kiTotalNumMb: i32 = (*pCurLayer).iMbWidth as i32 * (*pCurLayer).iMbHeight as i32;
     let mut iCurMbIdx: i32;
@@ -3120,7 +3122,7 @@ pub unsafe fn WelsMdInterMbLoopOverDynamicSlice<'a>(
 
 // unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
-pub unsafe fn WelsPSliceMdEnc(
+pub fn WelsPSliceMdEnc(
     pEncCtx: &sWelsEncCtx,
     pSlice: &mut SSlice,
     kbIsHighestDlayerFlag: bool,
@@ -3141,12 +3143,14 @@ pub unsafe fn WelsPSliceMdEnc(
     sMd.bMdUsingSad = (*pEncCtx).param().iComplexityMode
         == crate::api::codec_api::ECOMPLEXITY_MODE::LOW_COMPLEXITY;
 
-    WelsMdInterMbLoop(pEncCtx, pSlice, &mut sMd, kiSliceFirstMbXY, pSliceBsBuf, pCtxOutBs)
+    // S11.4: the MD loop stays `unsafe fn` (its own callees are unconverted);
+    // the claim is the loop's own and nothing is derived here.
+    unsafe { WelsMdInterMbLoop(pEncCtx, pSlice, &mut sMd, kiSliceFirstMbXY, pSliceBsBuf, pCtxOutBs) }
 }
 
 // unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
-pub unsafe fn WelsPSliceMdEncDynamic(
+pub fn WelsPSliceMdEncDynamic(
     pEncCtx: &sWelsEncCtx,
     pSlice: &mut SSlice,
     kbIsHighestDlayerFlag: bool,
@@ -3164,12 +3168,12 @@ pub unsafe fn WelsPSliceMdEncDynamic(
     sMd.bMdUsingSad = (*pEncCtx).param().iComplexityMode
         == crate::api::codec_api::ECOMPLEXITY_MODE::LOW_COMPLEXITY;
 
-    WelsMdInterMbLoopOverDynamicSlice(pEncCtx, pSlice, &mut sMd, kiSliceFirstMbXY, pSliceBsBuf, pCtxOutBs)
+    // S11.4: the MD loop stays `unsafe fn` (its own callees are unconverted);
+    // the claim is the loop's own and nothing is derived here.
+    unsafe { WelsMdInterMbLoopOverDynamicSlice(pEncCtx, pSlice, &mut sMd, kiSliceFirstMbXY, pSliceBsBuf, pCtxOutBs) }
 }
 
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
-pub unsafe fn WelsCodePSlice(
+pub fn WelsCodePSlice(
     pEncCtx: &sWelsEncCtx,
     pSlice: &mut SSlice,
     pSliceBsBuf: &mut [u8],
@@ -3193,9 +3197,7 @@ pub unsafe fn WelsCodePSlice(
     WelsPSliceMdEnc(pEncCtx, pSlice, kbHighestSpatial, pSliceBsBuf, pCtxOutBs)
 }
 
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
-pub unsafe fn WelsCodePOverDynamicSlice(
+pub fn WelsCodePOverDynamicSlice(
     pEncCtx: &sWelsEncCtx,
     pSlice: &mut SSlice,
     pSliceBsBuf: &mut [u8],
@@ -3218,46 +3220,78 @@ pub unsafe fn WelsCodePOverDynamicSlice(
 
 // unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
-pub unsafe extern "C" fn WelsCodePSlice_c(
+pub extern "C" fn WelsCodePSlice_c(
     pCtx: &sWelsEncCtx,
     pSlice: &mut SSlice,
     pSliceBsBuf: &mut [u8],
     pCtxOutBs: &mut Option<&mut BsWriter>,
 ) -> i32 {
-    WelsCodePSlice(pCtx, pSlice, pSliceBsBuf, pCtxOutBs)
+    // **S11.4: the audited call, at the slot boundary.** The slot type
+    // (`PWelsCodingSliceFunc`) is a safe fn pointer now, which is what lets the
+    // ~115 bodies that only *call through* these tables drop their own
+    // `unsafe` (F276). This thunk is where the remaining claim lives: the
+    // target is still `unsafe fn` because its own callee subtree
+    // (`mb_window`, the entropy stash pair, `WelsMdIntraMb`) is unconverted.
+    // The claim is exactly the target's: the arguments are the references this
+    // signature already guarantees, and nothing here derives a pointer.
+    unsafe { WelsCodePSlice(pCtx, pSlice, pSliceBsBuf, pCtxOutBs) }
 }
 
 // unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
-pub unsafe extern "C" fn WelsCodePOverDynamicSlice_c(
+pub extern "C" fn WelsCodePOverDynamicSlice_c(
     pCtx: &sWelsEncCtx,
     pSlice: &mut SSlice,
     pSliceBsBuf: &mut [u8],
     pCtxOutBs: &mut Option<&mut BsWriter>,
 ) -> i32 {
-    WelsCodePOverDynamicSlice(pCtx, pSlice, pSliceBsBuf, pCtxOutBs)
+    // **S11.4: the audited call, at the slot boundary.** The slot type
+    // (`PWelsCodingSliceFunc`) is a safe fn pointer now, which is what lets the
+    // ~115 bodies that only *call through* these tables drop their own
+    // `unsafe` (F276). This thunk is where the remaining claim lives: the
+    // target is still `unsafe fn` because its own callee subtree
+    // (`mb_window`, the entropy stash pair, `WelsMdIntraMb`) is unconverted.
+    // The claim is exactly the target's: the arguments are the references this
+    // signature already guarantees, and nothing here derives a pointer.
+    unsafe { WelsCodePOverDynamicSlice(pCtx, pSlice, pSliceBsBuf, pCtxOutBs) }
 }
 
 // unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
-pub unsafe extern "C" fn WelsISliceMdEnc_c(
+pub extern "C" fn WelsISliceMdEnc_c(
     pCtx: &sWelsEncCtx,
     pSlice: &mut SSlice,
     pSliceBsBuf: &mut [u8],
     pCtxOutBs: &mut Option<&mut BsWriter>,
 ) -> i32 {
-    WelsISliceMdEnc(pCtx, pSlice, pSliceBsBuf, pCtxOutBs)
+    // **S11.4: the audited call, at the slot boundary.** The slot type
+    // (`PWelsCodingSliceFunc`) is a safe fn pointer now, which is what lets the
+    // ~115 bodies that only *call through* these tables drop their own
+    // `unsafe` (F276). This thunk is where the remaining claim lives: the
+    // target is still `unsafe fn` because its own callee subtree
+    // (`mb_window`, the entropy stash pair, `WelsMdIntraMb`) is unconverted.
+    // The claim is exactly the target's: the arguments are the references this
+    // signature already guarantees, and nothing here derives a pointer.
+    unsafe { WelsISliceMdEnc(pCtx, pSlice, pSliceBsBuf, pCtxOutBs) }
 }
 
 // unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
-pub unsafe extern "C" fn WelsISliceMdEncDynamic_c(
+pub extern "C" fn WelsISliceMdEncDynamic_c(
     pCtx: &sWelsEncCtx,
     pSlice: &mut SSlice,
     pSliceBsBuf: &mut [u8],
     pCtxOutBs: &mut Option<&mut BsWriter>,
 ) -> i32 {
-    WelsISliceMdEncDynamic(pCtx, pSlice, pSliceBsBuf, pCtxOutBs)
+    // **S11.4: the audited call, at the slot boundary.** The slot type
+    // (`PWelsCodingSliceFunc`) is a safe fn pointer now, which is what lets the
+    // ~115 bodies that only *call through* these tables drop their own
+    // `unsafe` (F276). This thunk is where the remaining claim lives: the
+    // target is still `unsafe fn` because its own callee subtree
+    // (`mb_window`, the entropy stash pair, `WelsMdIntraMb`) is unconverted.
+    // The claim is exactly the target's: the arguments are the references this
+    // signature already guarantees, and nothing here derives a pointer.
+    unsafe { WelsISliceMdEncDynamic(pCtx, pSlice, pSliceBsBuf, pCtxOutBs) }
 }
 
 pub extern "C" fn WelsSliceHeaderWrite_c(

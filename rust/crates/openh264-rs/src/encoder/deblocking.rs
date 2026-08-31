@@ -277,7 +277,7 @@ pub use crate::encoder::md::{MB_BLOCK4x4_NUM, MB_LUMA_CHROMA_BLOCK4x4_NUM};
 // records through `mb_window` — and a shared layer borrow is what this file's two
 // probes certify is lawful while sibling workers write. The raw was carrying the
 // fork's price for a body that needs a `&`.
-pub type PDeblockingFilterSlice = unsafe extern "C" fn(pCurDq: &SDqLayer, pSlice: &mut SSlice);
+pub type PDeblockingFilterSlice = extern "C" fn(pCurDq: &SDqLayer, pSlice: &mut SSlice);
 
 // `PSetNoneZeroCountZeroFunc` (T6.C1's safe slot type) stood here — deleted
 // with the `pfSetNZCZero` slot and `WelsBlockFuncInit` when session F made the
@@ -1335,7 +1335,7 @@ pub use crate::encoder::svc_encode_slice::WelsGetNextMbOfSlice;
 // unsafe-cat: fork-shared(S63) — the in-fork *mut SDqLayer (S63, G's); the record
 // walk is the safe window since E3
 #[allow(unsafe_code)]
-pub unsafe extern "C" fn DeblockingFilterSliceAvcbase(
+pub extern "C" fn DeblockingFilterSliceAvcbase(
     pCurDq: &SDqLayer,
     pSlice: &mut SSlice,
 ) {
@@ -1406,12 +1406,21 @@ pub unsafe extern "C" fn DeblockingFilterSliceAvcbase(
 
     loop {
         let iCurMbIdx = iNextMbIdx;
-        let mut mbs = crate::encoder::svc_encode_slice::mb_window(
-            &*pCurDq,
-            kiFirstWindowMb,
-            iCurMbIdx - kiFirstWindowMb + 1,
-            iCurMbIdx,
-        );
+        // **S11.4: the audited window mint, at the slot boundary.** This body is
+        // a `PDeblockingFilterSlice` target, and that slot type is a safe fn
+        // pointer now (F276) — so the one claim it still makes is here rather
+        // than on the whole function. `mb_window`'s contract is that the caller
+        // owns `[first .. first+count)` exclusively; **F108 measured this filter
+        // single-threaded per slice** and the window is this slice's own run,
+        // which is the same fact S10.4's `split_at_mut` proves for the map fork.
+        let mut mbs = unsafe {
+            crate::encoder::svc_encode_slice::mb_window(
+                &*pCurDq,
+                kiFirstWindowMb,
+                iCurMbIdx - kiFirstWindowMb + 1,
+                iCurMbIdx,
+            )
+        };
 
         DeblockingMbAvcbase(view, map, &mut mbs, &mut pFilter);
 

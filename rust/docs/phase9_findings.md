@@ -8448,3 +8448,45 @@ cascade takes the rest in one pass. `mb_window`'s six fork callers are the one
 genuinely structural member and can stay raw behind their own tag if the rest
 lands without them.
 
+## F277 — F276's slot-type prediction was right in kind and wrong in size, twice over — and the correction is the useful part
+
+S11.4 built what F276 scoped, and both of that finding's numbers were wrong.
+
+**Wrong low on the supply side.** F276 said "six slot types are already
+raw-free (the other 25 carry `*mut i16`-style kernel parameters)". The survey
+behind it matched `pub type X = unsafe extern "C" fn`, and **ten more slot
+types are declared `unsafe fn` without `extern "C"`** — the entire
+motion-estimation family (`PMotionSearchFunc`, `PSearchMethodFunc`,
+`PCalculateSatdFunc`, `PCheckDirectionalMv`, `PLineFullSearchFunc`) plus five
+mode-decision slots. All ten are raw-free. **A grep for a declaration form is
+not a census of the thing the form names** — the same class of mistake as F270,
+where a grep for a field name missed the prefixed spelling.
+
+**Wrong high on the demand side, and this is the more useful error.** F276
+predicted "every one of those 115 bodies retires behind this chain". Twelve of
+the sixteen raw-free slot types converted, and the cascade freed **twelve
+bodies**, not 115. The 115 figure came from a scan that asked "does this body
+contain raw syntax or call a *named* unsafe function" — an indirect call
+through a slot answers no to both, so the scan attributed each body's blockage
+entirely to the slot. In fact most of those bodies call through a slot **and**
+hold something else: another slot still carrying `*mut i16` kernel parameters,
+a deeper `unsafe fn` callee, or their own raw. Removing one blocker from a body
+with three retires nothing (F255's rule, from the other direction).
+
+**What actually landed**, and it is a real result: sixteen raw-free slot types
+found, twelve converted, four reverted because their installees' own subtrees
+are unconverted (`WelsMdIntraFinePartition`, `WelsMdFirstIntraMode`,
+`WelsMdInterJudgeBGDPskip`, `WelsMdInterJudgeSCDPskip`). `unsafe fn` fell
+**243 → 217** and raw pointers 592 → 584, for **7 added `unsafe {}` blocks** —
+six thunk/loop wrappers and one window mint, each an audited claim at a slot
+boundary rather than a whole-function one. That trade is the plan's own
+direction (`unsafe_op_in_unsafe_fn`, plan §7.1): a narrow block that names its
+claim beats a broad `unsafe fn` that implies it everywhere.
+
+**The estimation rule this earns.** A body's allow retires when its *last*
+blocker goes, so counting bodies that share one blocker over-counts the payoff
+of removing it — every time. Price a conversion by the bodies for which the
+blocker is the **only** one, and measure that with the compiler (drop the
+`unsafe` and read the errors) rather than with a syntactic scan that cannot see
+indirect calls.
+
