@@ -54,13 +54,20 @@ pub struct SBackgroundOU {
 /// the plugin sees it, and the C++ reallocates it on the same growth rule.
 #[derive(Default)]
 struct vBGDParam {
-    pCur: [*mut u8; 3],
-    pRef: [*mut u8; 3],
+    // **S10.12: `pCur`, `pRef` and `pBackgroundMbFlag` are gone from here.** They
+    // were the two pixmaps' plane roots and the caller's per-macroblock flag array,
+    // copied in at each `Process` and read back out two calls deeper — working
+    // state, stored. Storing them made `CBackgroundDetection`, and through it
+    // `CWelsPreProcess` and `sWelsEncCtx`, **`!Sync`**, which was the last thing
+    // between `SliceJobHandle` and carrying a reference across the encode fork.
+    //
+    // They are parameters now, which is the move T9.X made for the two GOM arrays
+    // and Phase 6 session B for `pCalcResult`. The geometry below stays: it is this
+    // plugin's own derived state, not a borrow of the caller's.
     iBgdWidth: i32,
     iBgdHeight: i32,
     iStride: [i32; 3],
     pOU_array: Vec<SBackgroundOU>,
-    pBackgroundMbFlag: *mut i8,
 }
 
 /// `CBackgroundDetection` — `BackgroundDetection.h:60`.
@@ -73,13 +80,10 @@ impl Default for CBackgroundDetection {
     fn default() -> Self {
         Self {
             m_BgdParam: vBGDParam {
-                pCur: [std::ptr::null_mut(); 3],
-                pRef: [std::ptr::null_mut(); 3],
                 iBgdWidth: 0,
                 iBgdHeight: 0,
                 iStride: [0; 3],
                 pOU_array: Vec::new(),
-                pBackgroundMbFlag: std::ptr::null_mut(),
             },
             m_iLargestFrameSize: 0,
         }
@@ -108,8 +112,11 @@ impl CBackgroundDetection {
     /// `CBackgroundDetection::Set`. Typed since Phase 6 session B (the `IWelsVP`
     /// vtable's `void*` is gone). The C++ class has no `Get` override
     /// (`IStrategy::Get` returned success without writing), and nothing called it.
-    pub fn Set(&mut self, param: &SBGDInterface) -> i32 {
-        self.m_BgdParam.pBackgroundMbFlag = param.pBackgroundMbFlag;
+    /// **S10.12: nothing left to store.** It stashed `param.pBackgroundMbFlag`,
+    /// which reaches `Process` as a slice now. Kept as the port's counterpart of
+    /// `CBackgroundDetection::Set` — the C++ method exists and the call site still
+    /// makes the call — but it has no state to take.
+    pub fn Set(&mut self, _param: &SBGDInterface) -> i32 {
         RET_SUCCESS
     }
 
@@ -123,10 +130,15 @@ impl CBackgroundDetection {
     /// cover the picture's macroblocks.
     // unsafe-cat: port-raw(Phase 9)
     #[allow(unsafe_code)]
-    pub unsafe fn Process(&mut self, pSrcPixMap: &SPixMap, pRefPixMap: &SPixMap, calc: &SVAACalcResult) -> i32 {
+    pub unsafe fn Process(
+        &mut self,
+        pSrcPixMap: &SPixMap,
+        pRefPixMap: &SPixMap,
+        calc: &SVAACalcResult,
+        // S10.12: the caller's per-macroblock flag array, as a slice.
+        pVaaBackgroundMbFlag: &mut [i8],
+    ) -> i32 {
         for i in 0..3 {
-            self.m_BgdParam.pCur[i] = pSrcPixMap.pPixel[i];
-            self.m_BgdParam.pRef[i] = pRefPixMap.pPixel[i];
             self.m_BgdParam.iStride[i] = pSrcPixMap.iStride[i];
         }
         self.m_BgdParam.iBgdWidth = pSrcPixMap.sRect.iRectWidth;
@@ -147,7 +159,7 @@ impl CBackgroundDetection {
         // 1st step: foreground/background coarse division
         self.ForegroundBackgroundDivision(calc);
         // 2nd step: foreground dilation and background erosion
-        self.ForegroundDilationAndBackgroundErosion();
+        self.ForegroundDilationAndBackgroundErosion(pSrcPixMap, pRefPixMap, pVaaBackgroundMbFlag);
         RET_SUCCESS
     }
 
@@ -273,6 +285,8 @@ impl CBackgroundDetection {
     #[allow(unsafe_code)]
     unsafe fn ForegroundDilation23Chroma(
         &self,
+        pSrcPixMap: &SPixMap,
+        pRefPixMap: &SPixMap,
         iNeighbourForegroundFlags: i8,
         iStartSamplePos: i32,
         iPicStrideUV: i32,
@@ -291,8 +305,10 @@ impl CBackgroundDetection {
             for i in 0..4 {
                 if iNeighbourForegroundFlags & kaOUPos[i] != 0 {
                     let off = (iStartSamplePos + aEdgeOffset[i]) as isize;
-                    let pRefC = self.m_BgdParam.pRef[plane].offset(off);
-                    let pCurC = self.m_BgdParam.pCur[plane].offset(off);
+                    // S10.12: the pixmaps are the caller's, handed in rather than
+                    // copied onto this struct at `Process`. Same two addresses.
+                    let pRefC = pRefPixMap.pPixel[plane].offset(off);
+                    let pCurC = pSrcPixMap.pPixel[plane].offset(off);
                     if Self::CalculateAsdChromaEdge(pRefC, pCurC, iStride[i]) > BGD_THD_ASD_UV {
                         return true;
                     }
@@ -307,6 +323,8 @@ impl CBackgroundDetection {
     #[allow(unsafe_code)]
     unsafe fn ForegroundDilation(
         &self,
+        pSrcPixMap: &SPixMap,
+        pRefPixMap: &SPixMap,
         pBackgroundOU: &mut SBackgroundOU,
         nb: &[SBackgroundOU; 4],
         iChromaSampleStartPos: i32,
@@ -334,6 +352,8 @@ impl CBackgroundDetection {
                             | (n(nb[2].iBackgroundFlag) << 2)
                             | (n(nb[3].iBackgroundFlag) << 3);
                         pBackgroundOU.iBackgroundFlag = !self.ForegroundDilation23Chroma(
+                            pSrcPixMap,
+                            pRefPixMap,
                             iNeighbourForegroundFlags,
                             iChromaSampleStartPos,
                             iPicStrideUV,
@@ -378,21 +398,32 @@ impl CBackgroundDetection {
     /// reads them and none writes them, so the values are the same.
     // unsafe-cat: port-raw(Phase 9)
     #[allow(unsafe_code)]
-    unsafe fn ForegroundDilationAndBackgroundErosion(&mut self) {
+    unsafe fn ForegroundDilationAndBackgroundErosion(
+        &mut self,
+        pSrcPixMap: &SPixMap,
+        pRefPixMap: &SPixMap,
+        pVaaBackgroundMbFlag: &mut [i8],
+    ) {
         let iPicStrideUV = self.m_BgdParam.iStride[1];
         let iPicWidthInOU = self.m_BgdParam.iBgdWidth >> LOG2_BGD_OU_SIZE;
         let iPicHeightInOU = self.m_BgdParam.iBgdHeight >> LOG2_BGD_OU_SIZE;
         let iOUStrideUV = iPicStrideUV << (LOG2_BGD_OU_SIZE - 1);
         let iPicWidthInMb = (15 + self.m_BgdParam.iBgdWidth) >> 4;
 
-        let mut pVaaBackgroundMbFlag = self.m_BgdParam.pBackgroundMbFlag;
+        // **S10.12: an index cursor, not a roving pointer.** The walk moved a
+        // `*mut i8` forward one OU-row at a time and reached *backwards* one row to
+        // clear the OU above (`offset(-(OU_SIZE_IN_MB * iPicWidthInMb))`). Both are
+        // integer arithmetic on the same array; as indices they are the same
+        // addresses and every one of them is bounds-checked.
+        let kiRowStep = (OU_SIZE_IN_MB * iPicWidthInMb) as isize;
+        let mut iRowBase: isize = 0;
 
         // Indices into pOU_array, mirroring the C++'s pointers.
         let mut cur = 0usize; // pBackgroundOU
         let mut nb_top = 0isize; // pOUNeighbours[2]
 
         for j in 0..iPicHeightInOU {
-            let mut pRowSkipFlag = pVaaBackgroundMbFlag;
+            let mut iSkipFlag = iRowBase;
             let mut nb_left = cur as isize;
             // `pBackgroundOU + (iPicWidthInOU & ((j == iPicHeightInOU-1) - 1))`:
             // the mask is 0 on the last row and -1 (all ones) otherwise.
@@ -412,6 +443,8 @@ impl CBackgroundDetection {
                 let mut ou = self.m_BgdParam.pOU_array[cur];
                 if ou.iBackgroundFlag != 0 {
                     self.ForegroundDilation(
+                        pSrcPixMap,
+                        pRefPixMap,
                         &mut ou,
                         &nb,
                         j * iOUStrideUV + (i << LOG2_BGD_OU_SIZE_UV),
@@ -438,24 +471,24 @@ impl CBackgroundDetection {
                             [(nb_top + iPicWidthInOU as isize) as usize]
                             .iBackgroundFlag;
                         if l + r + u + d <= 1 {
-                            *pRowSkipFlag.offset(-((OU_SIZE_IN_MB * iPicWidthInMb) as isize)) = 0;
+                            pVaaBackgroundMbFlag[(iSkipFlag - kiRowStep) as usize] = 0;
                             self.m_BgdParam.pOU_array[nb_top as usize].iBackgroundFlag = 0;
                         }
                     }
                 }
 
-                *pRowSkipFlag = self.m_BgdParam.pOU_array[cur].iBackgroundFlag as i8;
+                pVaaBackgroundMbFlag[iSkipFlag as usize] =
+                    self.m_BgdParam.pOU_array[cur].iBackgroundFlag as i8;
 
                 // preparation for the next OU
-                pRowSkipFlag = pRowSkipFlag.offset(OU_SIZE_IN_MB as isize);
+                iSkipFlag += OU_SIZE_IN_MB as isize;
                 nb_left = cur as isize;
                 nb_top += 1;
                 nb_bottom += 1;
                 cur += 1;
             }
             nb_top = cur as isize - iPicWidthInOU as isize;
-            pVaaBackgroundMbFlag =
-                pVaaBackgroundMbFlag.offset((OU_SIZE_IN_MB * iPicWidthInMb) as isize);
+            iRowBase += kiRowStep;
         }
     }
 }
