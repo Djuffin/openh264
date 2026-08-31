@@ -945,10 +945,12 @@ pub unsafe fn InitDqLayers(
     iDlayerIndex = 0;
     while iDlayerIndex < iDlayerCount {
         let bUseSubsetSps = !ctx.param().bSimulcastAVC && (iDlayerIndex > BASE_DEPENDENCY_ID as i32);
-        // S29, and the second site the encoder probe reached: `paraset_strategy.rs`
-        // re-derives this same layer inside `GenerateNewSps` below, which popped
-        // this binding's Unique tag before `InitSlicePEncCtx` read through it.
-        let pDlayerParam = std::ptr::addr_of_mut!((*ctx_param_raw(&*ctx)).sSpatialLayers[iDlayerIndex as usize]);
+        // **S11.18: the binding that made S29 a seam is gone.** It was derived
+        // here, spanned `GenerateNewSps` — which re-derives the same layer — and
+        // was read once, ~85 lines below. That span is the whole of F187's
+        // refusal to flip `WelsInitSps`'s layer parameters: a `&mut` retag
+        // inside the callee would pop this tag before the read. Derived *at* its
+        // one use instead, nothing spans the call and the premise expires.
         let bSvcBaselayer = !ctx.param().bSimulcastAVC
             && (iDlayerCount > BASE_DEPENDENCY_ID as i32)
             && (iDlayerIndex == BASE_DEPENDENCY_ID as i32);
@@ -1034,7 +1036,9 @@ pub unsafe fn InitDqLayers(
             (*pSps).iMbWidth as i32,
             (*pSps).iMbHeight as i32,
             // **S6.D1**: `InitSlicePEncCtx` takes `&SSliceArgument` now.
-            &(*pDlayerParam).sSliceArgument,
+            // S11.18: derived here, not 85 lines up — see the note at the top of
+            // this loop body.
+            &ctx.param().sSpatialLayers[iDlayerIndex as usize].sSliceArgument,
         );
         if iResult != 0 {
             return iResult;

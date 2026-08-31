@@ -661,16 +661,7 @@ impl CWelsParametersetIdStrategyObj {
 
     /// `GenerateNewSps` — `paraset_strategy.cpp:265`.
     ///
-    /// # Safety
-    /// `pCtx` must satisfy [`WelsGenerateNewSps`]'s contract.
-    // unsafe-cat: port-raw(Phase 9)
-    #[allow(unsafe_code)]
-    /// **S7.A3**: the four values `param_and_paraset_arrays_mut()` returned, not the
-    /// context they came from — that call was this method's only reach into it, and
-    /// taking the whole context made `ParasetStrategy(ctx).GenerateNewSps(ctx, ..)`
-    /// two `&mut` claims on one allocation. Callers use
-    /// [`ctx_strategy_and_param_arrays`].
-    pub unsafe fn GenerateNewSps(
+    pub fn GenerateNewSps(
         &mut self,
         pParam: &mut crate::encoder::param_svc::SWelsSvcCodingParam,
         pSpsArray: &mut [SWelsSPS],
@@ -874,12 +865,7 @@ impl CWelsParametersetIdStrategyObj {
 
 /// `WelsGenerateNewSps` — `paraset_strategy.cpp:78` (file-static).
 ///
-/// # Safety
-/// `pCtx` must have `pSvcParam` set and `pSpsArray`/`pSubsetArray` allocated to at
-/// least `kiSpsId + 1` entries.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn WelsGenerateNewSps(
+pub fn WelsGenerateNewSps(
     pParam: &mut crate::encoder::param_svc::SWelsSvcCodingParam,
     pSpsArray: &mut [SWelsSPS],
     pSubsetArray: &mut [SSubsetSps],
@@ -905,21 +891,32 @@ pub unsafe fn WelsGenerateNewSps(
     // accessor — `WelsInitSps` writes `uiLevelIdc` back into the layer's
     // configuration while the arrays are read, so both come out of one borrow — is
     // now the caller's split, and holds the same way.
-    // S29's named shape. `WelsInitSps` takes `*mut SSpatialLayerConfig`, so the
-    // reference here only existed to retag and be cast away — and its retag is
-    // what invalidated `InitDqLayers`'s live pointer into the same layer.
-    let pDlayerParam = std::ptr::addr_of_mut!((*pParam).sSpatialLayers[iDlayerIndex as usize]);
+    // **S11.18**: S29's refusal is retired. `WelsInitSps` takes references now,
+    // and the caller-side binding whose tag the retag would have popped is
+    // derived at its use (`encoder_ext.rs`, `InitDqLayers`) rather than across
+    // this call. The two layer records come out of one destructure because the
+    // callee writes `uiLevelIdc` back into the config while reading the
+    // internal record — disjoint fields of `pParam`.
+    // §4.6, reorder: the scalars come out before the two layer records' borrow.
+    let kuiIntraPeriod = pParam.uiIntraPeriod;
+    let kiMaxNumRefFrame = pParam.iMaxNumRefFrame;
+    let kbEnableFrameCropping = pParam.bEnableFrameCroppingFlag;
+    let kbEnableRc = pParam.iRCMode != RC_OFF_MODE;
+    let kiSpatialLayerNum = pParam.iSpatialLayerNum;
+    let SWelsSvcCodingParam { sSpatialLayers, sDependencyLayers, .. } = &mut *pParam;
+    let pDlayerParam = &mut sSpatialLayers[iDlayerIndex as usize];
+    let pDlayerInternal = &sDependencyLayers[iDlayerIndex as usize];
     // Need port pSps/pPps initialization due to spatial scalability changed
     if !kbUseSubsetSps {
         iRet = WelsInitSps(
             &mut pSpsArray[kiSpsId as usize],
             pDlayerParam,
-            std::ptr::addr_of_mut!((*pParam).sDependencyLayers[iDlayerIndex as usize]),
-            (*pParam).uiIntraPeriod,
-            (*pParam).iMaxNumRefFrame,
+            pDlayerInternal,
+            kuiIntraPeriod,
+            kiMaxNumRefFrame,
             kiSpsId as u32,
-            (*pParam).bEnableFrameCroppingFlag,
-            (*pParam).iRCMode != RC_OFF_MODE,
+            kbEnableFrameCropping,
+            kbEnableRc,
             iDlayerCount,
             bSVCBaselayer,
         );
@@ -927,12 +924,12 @@ pub unsafe fn WelsGenerateNewSps(
         iRet = WelsInitSubsetSps(
             &mut pSubsetArray[kiSpsId as usize],
             pDlayerParam,
-            std::ptr::addr_of_mut!((*pParam).sDependencyLayers[iDlayerIndex as usize]),
-            (*pParam).uiIntraPeriod,
-            (*pParam).iMaxNumRefFrame,
+            pDlayerInternal,
+            kuiIntraPeriod,
+            kiMaxNumRefFrame,
             kiSpsId as u32,
-            (*pParam).bEnableFrameCroppingFlag,
-            (*pParam).iRCMode != RC_OFF_MODE,
+            kbEnableFrameCropping,
+            kbEnableRc,
             iDlayerCount,
         );
     }
@@ -1278,12 +1275,7 @@ pub fn FindExistingPps(
 /// Returns the index of a stored parameter set matching the current configuration, or
 /// [`INVALID_ID`].
 ///
-/// # Safety
-/// `pParam` must be initialised; `pSpsArray`/`pSubsetArray` must hold at least
-/// `iSpsNumInUse` entries.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn FindExistingSps(
+pub fn FindExistingSps(
     pParam: &mut SWelsSvcCodingParam,
     kbUseSubsetSps: bool,
     iDlayerIndex: i32,
@@ -1293,22 +1285,33 @@ pub unsafe fn FindExistingSps(
     pSubsetArray: &[SSubsetSps],
     bSVCBaseLayer: bool,
 ) -> i32 {
-    // S29's named shape. `WelsInitSps` takes `*mut SSpatialLayerConfig`, so the
-    // reference here only existed to retag and be cast away — and its retag is
-    // what invalidated `InitDqLayers`'s live pointer into the same layer.
-    let pDlayerParam = std::ptr::addr_of_mut!((*pParam).sSpatialLayers[iDlayerIndex as usize]);
+    // **S11.18**: S29's refusal is retired. `WelsInitSps` takes references now,
+    // and the caller-side binding whose tag the retag would have popped is
+    // derived at its use (`encoder_ext.rs`, `InitDqLayers`) rather than across
+    // this call. The two layer records come out of one destructure because the
+    // callee writes `uiLevelIdc` back into the config while reading the
+    // internal record — disjoint fields of `pParam`.
+    // §4.6, reorder: the scalars come out before the two layer records' borrow.
+    let kuiIntraPeriod = pParam.uiIntraPeriod;
+    let kiMaxNumRefFrame = pParam.iMaxNumRefFrame;
+    let kbEnableFrameCropping = pParam.bEnableFrameCroppingFlag;
+    let kbEnableRc = pParam.iRCMode != RC_OFF_MODE;
+    let kiSpatialLayerNum = pParam.iSpatialLayerNum;
+    let SWelsSvcCodingParam { sSpatialLayers, sDependencyLayers, .. } = &mut *pParam;
+    let pDlayerParam = &mut sSpatialLayers[iDlayerIndex as usize];
+    let pDlayerInternal = &sDependencyLayers[iDlayerIndex as usize];
 
     if !kbUseSubsetSps {
         let mut sTmpSps = SWelsSPS::default();
         WelsInitSps(
             &mut sTmpSps,
             pDlayerParam,
-            std::ptr::addr_of_mut!((*pParam).sDependencyLayers[iDlayerIndex as usize]),
-            (*pParam).uiIntraPeriod,
-            (*pParam).iMaxNumRefFrame,
+            pDlayerInternal,
+            kuiIntraPeriod,
+            kiMaxNumRefFrame,
             0,
-            (*pParam).bEnableFrameCroppingFlag,
-            (*pParam).iRCMode != RC_OFF_MODE,
+            kbEnableFrameCropping,
+            kbEnableRc,
             iDlayerCount,
             bSVCBaseLayer,
         );
@@ -1322,12 +1325,12 @@ pub unsafe fn FindExistingSps(
         WelsInitSubsetSps(
             &mut sTmpSubsetSps,
             pDlayerParam,
-            std::ptr::addr_of_mut!((*pParam).sDependencyLayers[iDlayerIndex as usize]),
-            (*pParam).uiIntraPeriod,
-            (*pParam).iMaxNumRefFrame,
+            pDlayerInternal,
+            kuiIntraPeriod,
+            kiMaxNumRefFrame,
             0,
-            (*pParam).bEnableFrameCroppingFlag,
-            (*pParam).iRCMode != RC_OFF_MODE,
+            kbEnableFrameCropping,
+            kbEnableRc,
             iDlayerCount,
         );
 

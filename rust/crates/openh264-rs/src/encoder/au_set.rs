@@ -736,14 +736,20 @@ pub fn WelsGetPaddingOffset(
 ///
 /// `kuiIntraPeriod` and `bEnableRc` are accepted and unused, exactly as in C++.
 ///
-/// # Safety
-/// All three pointers must be non-null and point to writable values.
-// unsafe-cat: lawful-single(S29/F187)
-#[allow(unsafe_code)]
-pub unsafe fn WelsInitSps(
+/// **S11.18: the layer parameters are references, and F187's refusal expired.**
+///
+/// F187 (S29) refused this flip for a measured reason: `InitDqLayers` bound a
+/// raw into the same spatial layer, that binding *spanned* `GenerateNewSps`,
+/// and a `&mut` retag in here would pop it before the later read. The binding
+/// was read exactly once, ~85 lines below its derivation; S11.18 derives it at
+/// that use instead, so nothing spans the call and the retag has nothing to
+/// invalidate. The deferral's premise, re-verified rather than inherited — and
+/// this time it is gone, where S10.5b checked the same premise and found it
+/// still live.
+pub fn WelsInitSps(
     pSps: &mut SWelsSPS,
-    pLayerParam: *mut SSpatialLayerConfig,
-    pLayerParamInternal: *mut SSpatialLayerInternal,
+    pLayerParam: &mut SSpatialLayerConfig,
+    pLayerParamInternal: &SSpatialLayerInternal,
     _kuiIntraPeriod: u32,
     kiNumRefFrame: i32,
     kuiSpsId: u32,
@@ -757,8 +763,8 @@ pub unsafe fn WelsInitSps(
     // — `SWelsSPS::ZERO` is that memset as a value (T6.G3).
     *pSps = SWelsSPS::ZERO;
     pSps.uiSpsId = kuiSpsId;
-    pSps.iMbWidth = (((*pLayerParam).iVideoWidth + 15) >> 4) as i16;
-    pSps.iMbHeight = (((*pLayerParam).iVideoHeight + 15) >> 4) as i16;
+    pSps.iMbWidth = ((pLayerParam.iVideoWidth + 15) >> 4) as i16;
+    pSps.iMbHeight = ((pLayerParam.iVideoHeight + 15) >> 4) as i16;
 
     // max value of both iFrameNum and POC are 2^16-1; in this encoder iPOC = 2*iFrameNum,
     // so max of iFrameNum should be 2^15-1.
@@ -770,24 +776,24 @@ pub unsafe fn WelsInitSps(
 
     if kbEnableFrameCropping {
         pSps.bFrameCroppingFlag = WelsGetPaddingOffset(
-            (*pLayerParamInternal).iActualWidth,
-            (*pLayerParamInternal).iActualHeight,
-            (*pLayerParam).iVideoWidth,
-            (*pLayerParam).iVideoHeight,
+            pLayerParamInternal.iActualWidth,
+            pLayerParamInternal.iActualHeight,
+            pLayerParam.iVideoWidth,
+            pLayerParam.iVideoHeight,
             &mut pSps.sFrameCrop,
         );
     } else {
         pSps.bFrameCroppingFlag = false;
     }
-    pSps.uiProfileIdc = if (*pLayerParam).uiProfileIdc as u8 != 0 {
-        (*pLayerParam).uiProfileIdc as u8
+    pSps.uiProfileIdc = if pLayerParam.uiProfileIdc as u8 != 0 {
+        pLayerParam.uiProfileIdc as u8
     } else {
         PRO_BASELINE as u8
     };
-    if (*pLayerParam).uiProfileIdc == PRO_BASELINE {
+    if pLayerParam.uiProfileIdc == PRO_BASELINE {
         pSps.bConstraintSet0Flag = true;
     }
-    if ((*pLayerParam).uiProfileIdc as i32) <= PRO_MAIN as i32 {
+    if (pLayerParam.uiProfileIdc as i32) <= PRO_MAIN as i32 {
         pSps.bConstraintSet1Flag = true;
     }
     if (kiDlayerCount > 1) && bSVCBaselayer {
@@ -796,8 +802,8 @@ pub unsafe fn WelsInitSps(
 
     let mut uiLevel = WelsGetLevelIdc(
         pSps,
-        (*pLayerParamInternal).fOutputFrameRate,
-        (*pLayerParam).iSpatialBitrate,
+        pLayerParamInternal.fOutputFrameRate,
+        pLayerParam.iSpatialBitrate,
     );
     // update level
     // For Scalable Baseline/High/High Intra, level_idc 9 means level 1b.
@@ -811,12 +817,12 @@ pub unsafe fn WelsInitSps(
         uiLevel = ELevelIdc::LEVEL_1_1;
         pSps.bConstraintSet3Flag = true;
     }
-    if ((*pLayerParam).uiLevelIdc == LEVEL_UNKNOWN)
-        || (((*pLayerParam).uiLevelIdc as i32) < uiLevel as i32)
+    if (pLayerParam.uiLevelIdc == LEVEL_UNKNOWN)
+        || ((pLayerParam.uiLevelIdc as i32) < uiLevel as i32)
     {
-        (*pLayerParam).uiLevelIdc = uiLevel;
+        pLayerParam.uiLevelIdc = uiLevel;
     }
-    pSps.iLevelIdc = (*pLayerParam).uiLevelIdc as u8;
+    pSps.iLevelIdc = pLayerParam.uiLevelIdc as u8;
 
     // bGapsInFrameNumValueAllowedFlag is false when spatial and temporal layer counts
     // are both 1 and ltr is 0.
@@ -828,20 +834,20 @@ pub unsafe fn WelsInitSps(
 
     pSps.bVuiParamPresentFlag = true;
 
-    pSps.bAspectRatioPresent = (*pLayerParam).bAspectRatioPresent;
-    pSps.eAspectRatio = (*pLayerParam).eAspectRatio as i32;
-    pSps.sAspectRatioExtWidth = (*pLayerParam).sAspectRatioExtWidth;
-    pSps.sAspectRatioExtHeight = (*pLayerParam).sAspectRatioExtHeight;
+    pSps.bAspectRatioPresent = pLayerParam.bAspectRatioPresent;
+    pSps.eAspectRatio = pLayerParam.eAspectRatio as i32;
+    pSps.sAspectRatioExtWidth = pLayerParam.sAspectRatioExtWidth;
+    pSps.sAspectRatioExtHeight = pLayerParam.sAspectRatioExtHeight;
 
     // See codec_app_def.h and parameter_sets.h for more info about members
     // bVideoSignalTypePresent through uiColorMatrix.
-    pSps.bVideoSignalTypePresent = (*pLayerParam).bVideoSignalTypePresent;
-    pSps.uiVideoFormat = (*pLayerParam).uiVideoFormat;
-    pSps.bFullRange = (*pLayerParam).bFullRange;
-    pSps.bColorDescriptionPresent = (*pLayerParam).bColorDescriptionPresent;
-    pSps.uiColorPrimaries = (*pLayerParam).uiColorPrimaries;
-    pSps.uiTransferCharacteristics = (*pLayerParam).uiTransferCharacteristics;
-    pSps.uiColorMatrix = (*pLayerParam).uiColorMatrix;
+    pSps.bVideoSignalTypePresent = pLayerParam.bVideoSignalTypePresent;
+    pSps.uiVideoFormat = pLayerParam.uiVideoFormat;
+    pSps.bFullRange = pLayerParam.bFullRange;
+    pSps.bColorDescriptionPresent = pLayerParam.bColorDescriptionPresent;
+    pSps.uiColorPrimaries = pLayerParam.uiColorPrimaries;
+    pSps.uiTransferCharacteristics = pLayerParam.uiTransferCharacteristics;
+    pSps.uiColorMatrix = pLayerParam.uiColorMatrix;
 
     0
 }
@@ -851,12 +857,11 @@ pub unsafe fn WelsInitSps(
 /// # Safety
 /// All three pointers must be non-null and point to writable values.
 #[allow(clippy::too_many_arguments)]
-// unsafe-cat: lawful-single(S29/F187)
-#[allow(unsafe_code)]
-pub unsafe fn WelsInitSubsetSps(
+// S11.18: the layer parameters are references — see `WelsInitSps`.
+pub fn WelsInitSubsetSps(
     pSubsetSps: &mut SSubsetSps,
-    pLayerParam: *mut SSpatialLayerConfig,
-    pLayerParamInternal: *mut SSpatialLayerInternal,
+    pLayerParam: &mut SSpatialLayerConfig,
+    pLayerParamInternal: &SSpatialLayerInternal,
     kuiIntraPeriod: u32,
     kiNumRefFrame: i32,
     kuiSpsId: u32,
@@ -884,7 +889,7 @@ pub unsafe fn WelsInitSubsetSps(
 
     // Note: unlike WelsInitSps this takes uiProfileIdc verbatim, with no PRO_BASELINE
     // fallback for 0.
-    pSubsetSps.pSps.uiProfileIdc = (*pLayerParam).uiProfileIdc as u8;
+    pSubsetSps.pSps.uiProfileIdc = pLayerParam.uiProfileIdc as u8;
 
     pSubsetSps.sSpsSvcExt.iExtendedSpatialScalability = 0; /* ESS is 0 in default */
     pSubsetSps.sSpsSvcExt.bAdaptiveTcoeffLevelPredFlag = false;
