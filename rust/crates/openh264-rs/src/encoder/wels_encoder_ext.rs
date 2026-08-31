@@ -395,9 +395,7 @@ pub use crate::encoder::rc::SWelsSvcRc;
 // WelsInitEncoderExt, that mismatch corrupted the heap at Uninitialize (SIGTRAP in
 // libsystem_malloc), which is how it was found.
 
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn WelsWriteOneSPS(pCtx: &mut sWelsEncCtx, kiSpsIdx: i32, iNalSize: &mut i32) -> i32 {
+pub fn WelsWriteOneSPS(pCtx: &mut sWelsEncCtx, kiSpsIdx: i32, iNalSize: &mut i32) -> i32 {
     // S3.B1: `pOut` is re-borrowed per statement rather than bound once — the
     // borrows are transient, so the `ParasetStrategy(pCtx)` claim and the
     // `frame_bs_cur()` read in between conflict with nothing. §4.6: the parameter
@@ -428,13 +426,18 @@ pub unsafe fn WelsWriteOneSPS(pCtx: &mut sWelsEncCtx, kiSpsIdx: i32, iNalSize: &
     // The nal/buffer arguments and the frame-bs arguments are all shared reads or
     // raws off disjoint storage; the two `as_deref()`s and `frame_bs_cur()` are
     // shared reborrows of the context and coexist.
+    // **S11.17**: destructured — the NAL entry and source bytes are in
+    // `pOut`, the destination is `pFrameBs`'s tail; disjoint fields, both
+    // borrows live, no copy.
+    let sWelsEncCtx { pOut, pFrameBs, iPosBsBuffer, .. } = &mut *pCtx;
+    let kpOut = pOut.as_deref().expect("pOut lives");
+    let kiPos = *iPosBsBuffer as usize;
+    let pDstTail = (kiPos <= pFrameBs.len()).then(|| &mut pFrameBs[kiPos..]);
     let iReturn = crate::encoder::nal_encap::WelsEncodeNal(
-        &pCtx.pOut.as_deref().expect("pOut lives").sNalList[iNal as usize],
-        &pCtx.pOut.as_deref().expect("pOut lives").sBsBuffer[..],
+        &kpOut.sNalList[iNal as usize],
+        &kpOut.sBsBuffer[..],
         None,
-        pCtx.frame_bs_cur(),
-        // available buffer to be written, so need to subtract the used length
-        pCtx.iFrameBsSize - pCtx.iPosBsBuffer,
+        pDstTail,
         &mut *iNalSize,
     );
     if iReturn != ENC_RETURN_SUCCESS {
@@ -446,9 +449,7 @@ pub unsafe fn WelsWriteOneSPS(pCtx: &mut sWelsEncCtx, kiSpsIdx: i32, iNalSize: &
 }
 
 /// `WelsWriteOnePPS` — encoder_ext.cpp:2849.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn WelsWriteOnePPS(pCtx: &mut sWelsEncCtx, kiPpsIdx: i32, iNalSize: &mut i32) -> i32 {
+pub fn WelsWriteOnePPS(pCtx: &mut sWelsEncCtx, kiPpsIdx: i32, iNalSize: &mut i32) -> i32 {
     // S3.B1: as `WelsWriteOneSPS` — per-statement reborrows, arguments hoisted.
     let iNal = pCtx.pOut.as_deref().expect("pOut lives").iNalIndex;
     /* generate picture parameter set */
@@ -474,12 +475,18 @@ pub unsafe fn WelsWriteOnePPS(pCtx: &mut sWelsEncCtx, kiPpsIdx: i32, iNalSize: &
     }
     crate::encoder::nal_encap::WelsUnloadNal(pCtx.pOut.as_deref_mut().expect("pOut lives"));
 
+    // **S11.17**: destructured — the NAL entry and source bytes are in
+    // `pOut`, the destination is `pFrameBs`'s tail; disjoint fields, both
+    // borrows live, no copy.
+    let sWelsEncCtx { pOut, pFrameBs, iPosBsBuffer, .. } = &mut *pCtx;
+    let kpOut = pOut.as_deref().expect("pOut lives");
+    let kiPos = *iPosBsBuffer as usize;
+    let pDstTail = (kiPos <= pFrameBs.len()).then(|| &mut pFrameBs[kiPos..]);
     let iReturn = crate::encoder::nal_encap::WelsEncodeNal(
-        &pCtx.pOut.as_deref().expect("pOut lives").sNalList[iNal as usize],
-        &pCtx.pOut.as_deref().expect("pOut lives").sBsBuffer[..],
+        &kpOut.sNalList[iNal as usize],
+        &kpOut.sBsBuffer[..],
         None,
-        pCtx.frame_bs_cur(),
-        pCtx.iFrameBsSize - pCtx.iPosBsBuffer,
+        pDstTail,
         &mut *iNalSize,
     );
     if iReturn != ENC_RETURN_SUCCESS {
@@ -583,12 +590,18 @@ pub unsafe fn WelsWriteParameterSets(
         }
         crate::encoder::nal_encap::WelsUnloadNal(pCtx.pOut.as_deref_mut().expect("pOut lives"));
 
+        // **S11.17**: destructured — the NAL entry and source bytes are in
+        // `pOut`, the destination is `pFrameBs`'s tail; disjoint fields, both
+        // borrows live, no copy.
+        let sWelsEncCtx { pOut, pFrameBs, iPosBsBuffer, .. } = &mut *pCtx;
+        let kpOut = pOut.as_deref().expect("pOut lives");
+        let kiPos = *iPosBsBuffer as usize;
+        let pDstTail = (kiPos <= pFrameBs.len()).then(|| &mut pFrameBs[kiPos..]);
         iReturn = crate::encoder::nal_encap::WelsEncodeNal(
-            &pCtx.pOut.as_deref().expect("pOut lives").sNalList[iNal as usize],
-            &pCtx.pOut.as_deref().expect("pOut lives").sBsBuffer[..],
+            &kpOut.sNalList[iNal as usize],
+            &kpOut.sBsBuffer[..],
             None,
-            pCtx.frame_bs_cur(),
-            pCtx.iFrameBsSize - pCtx.iPosBsBuffer,
+            pDstTail,
             &mut iNalLength,
         );
         if iReturn != ENC_RETURN_SUCCESS {
