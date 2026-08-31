@@ -457,29 +457,7 @@ impl CWelsParametersetIdStrategyObj {
     /// parameter sets come back into the new one's arrays, so a configuration the
     /// decoder has already seen keeps its old id.
     ///
-    /// # Safety
-    /// On a listing kind the four pointers must be valid: `pExistingParasetList` for
-    /// reading, and the three arrays for `MAX_SPS_COUNT` / `MAX_SPS_COUNT` /
-    /// `MAX_PPS_COUNT` writable elements. A null `pExistingParasetList` is the C's own
-    /// early return.
-    // unsafe-cat: port-raw(Phase 9)
-    #[allow(unsafe_code)]
-    /// **T9.H2 — the three arrays are slices, and that is what unblocks X2's ~36.**
-    ///
-    /// They were three raw roots, supplied by three separate `ctx_*_array(*ppCtx)`
-    /// calls at the one call site. Three `&mut` out of one context through three
-    /// calls is exactly what the borrow checker refuses, which is why the charter
-    /// recorded this as S63's forbidden retag and folded the dependent sites into
-    /// this session. [`ctx_paraset_arrays`] answers all three from **one** borrow,
-    /// so the shape is legal and the raws are gone.
-    ///
-    /// The `is_null()` guards become `len()` guards, and they are **stronger than
-    /// what they replace**: `copy_nonoverlapping` wrote `MAX_SPS_COUNT` entries into
-    /// a block whose length nothing checked. It is in bounds — this body runs only
-    /// on the listing kinds, and `ParasetIdKind::SpsListing` and its two siblings
-    /// set `m_iBasicNeededSpsNum = MAX_SPS_COUNT`, which is what `RequestMemorySvc`
-    /// allocates — but "it is in bounds" was an argument, and it is an assertion now.
-    pub unsafe fn LoadPrevious(
+    pub fn LoadPrevious(
         &mut self,
         pExistingParasetList: Option<&SExistingParasetList>,
         pSpsArray: &mut [SWelsSPS],
@@ -502,13 +480,11 @@ impl CWelsParametersetIdStrategyObj {
         );
         if !pSpsArray.is_empty() {
             let n = MAX_SPS_COUNT.min(pSpsArray.len());
-            // `addr_of!` rather than `&(*raw).sSps[..n]`: the latter is an implicit
-                // autoref through a raw pointer, which the compiler now refuses.
-                let src = std::slice::from_raw_parts(
-                    std::ptr::addr_of!(pExistingParasetList.sSps).cast::<SWelsSPS>(),
-                    n,
-                );
-                pSpsArray[..n].copy_from_slice(src);
+            // S11.15: plain slicing. The `addr_of!` + `from_raw_parts` pair
+                // existed because the source was a raw pointer and `&(*raw).sSps[..n]`
+                // would have been an implicit autoref through it; with the list a
+                // reference (S11.13) the borrow is ordinary and the length checked.
+                pSpsArray[..n].copy_from_slice(&pExistingParasetList.sSps[..n]);
         }
         if self.GetNeededSubsetSpsNum() > 0 {
             self.m_sParaSetOffset.uiInUseSubsetSpsNum =
@@ -520,13 +496,11 @@ impl CWelsParametersetIdStrategyObj {
             );
             if !pSubsetArray.is_empty() {
                 let n = MAX_SPS_COUNT.min(pSubsetArray.len());
-                // `addr_of!` rather than `&(*raw).sSubsetSps[..n]`: the latter is an implicit
-                // autoref through a raw pointer, which the compiler now refuses.
-                let src = std::slice::from_raw_parts(
-                    std::ptr::addr_of!(pExistingParasetList.sSubsetSps).cast::<SSubsetSps>(),
-                    n,
-                );
-                pSubsetArray[..n].copy_from_slice(src);
+                // S11.15: plain slicing. The `addr_of!` + `from_raw_parts` pair
+                // existed because the source was a raw pointer and `&(*raw).sSubsetSps[..n]`
+                // would have been an implicit autoref through it; with the list a
+                // reference (S11.13) the borrow is ordinary and the length checked.
+                pSubsetArray[..n].copy_from_slice(&pExistingParasetList.sSubsetSps[..n]);
             }
         } else {
             self.m_sParaSetOffset.uiInUseSubsetSpsNum = 0;
@@ -543,13 +517,11 @@ impl CWelsParametersetIdStrategyObj {
             );
             if !pPpsArray.is_empty() {
                 let n = MAX_PPS_COUNT.min(pPpsArray.len());
-                // `addr_of!` rather than `&(*raw).sPps[..n]`: the latter is an implicit
-                // autoref through a raw pointer, which the compiler now refuses.
-                let src = std::slice::from_raw_parts(
-                    std::ptr::addr_of!(pExistingParasetList.sPps).cast::<SWelsPPS>(),
-                    n,
-                );
-                pPpsArray[..n].copy_from_slice(src);
+                // S11.15: plain slicing. The `addr_of!` + `from_raw_parts` pair
+                // existed because the source was a raw pointer and `&(*raw).sPps[..n]`
+                // would have been an implicit autoref through it; with the list a
+                // reference (S11.13) the borrow is ordinary and the length checked.
+                pPpsArray[..n].copy_from_slice(&pExistingParasetList.sPps[..n]);
             }
         }
     }
