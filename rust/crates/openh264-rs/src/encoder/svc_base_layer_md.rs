@@ -879,7 +879,7 @@ pub unsafe fn WelsMdIntraMb(
     //initial prediction memory for I_16x16
     (*pWelsMd).iCostLuma = crate::encoder::svc_mode_decision::WelsMdI16x16(
         (*pEncCtx).func_list(),
-        (current_layer(pEncCtx)).as_ref(),
+        current_layer_ref(pEncCtx),
         pMbCache,
         (*pWelsMd).iLambda,
     );
@@ -1865,7 +1865,7 @@ pub unsafe fn WelsMdFirstIntraMode(
 
     let iCostI16x16 = crate::encoder::svc_mode_decision::WelsMdI16x16(
         &*pFunc,
-        (current_layer(pEncCtx)).as_ref(),
+        current_layer_ref(pEncCtx),
         pMbCache,
         (*pWelsMd).iLambda,
     );
@@ -1885,7 +1885,7 @@ pub unsafe fn WelsMdFirstIntraMode(
 
         //chroma
         (*pWelsMd).iCostChroma =
-            WelsMdIntraChroma(&*pFunc, &*(current_layer(pEncCtx)), pMbCache, (*pWelsMd).iLambda);
+            WelsMdIntraChroma(&*pFunc, current_layer_ref(pEncCtx).expect("the frame's current layer is stamped"), pMbCache, (*pWelsMd).iLambda);
         crate::encoder::svc_encode_slice::WelsIMbChromaEncode(pEncCtx, pCurMb, pMbCache); //add pEnc&rec to MD--2010.3.15
         (*pCurMb).uiChromPredMode = (*pMbCache).uiChmaI8x8Mode as u32;
         (*pCurMb).iSadCost = 0;

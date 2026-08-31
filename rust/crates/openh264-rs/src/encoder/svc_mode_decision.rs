@@ -456,7 +456,7 @@ pub unsafe extern "C" fn WelsMdIntraSecondaryModesEnc(
     //chroma
     (*pWelsMd).iCostChroma = crate::encoder::svc_base_layer_md::WelsMdIntraChroma(
         &*pFunc,
-        &*(current_layer(pEncCtx)),
+        current_layer_ref(pEncCtx).expect("the frame's current layer is stamped"),
         pMbCache,
         (*pWelsMd).iLambda,
     );
@@ -1625,7 +1625,7 @@ pub unsafe fn WelsMdSpatialelInterMbIlfmdNoilp<'a>(
         let pMbCache = &mut pSlice.sMbCacheInfo;
         let kiCostI16x16 = WelsMdI16x16(
             (*pEncCtx).func_list(),
-            (current_layer(pEncCtx)).as_ref(),
+            current_layer_ref(pEncCtx),
             &mut *pMbCache,
             (*pWelsMd).iLambda,
         );
