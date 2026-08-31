@@ -1025,12 +1025,7 @@ pub unsafe fn ctx_pic_ref<'a>(pCtx: &'a sWelsEncCtx, r: PicRef) -> Option<&'a SP
 /// handle in the same pool. Every consumer below takes what it needs — a stride, a
 /// plane root, one array element — and drops the borrow in the same statement.
 ///
-/// # Safety
-/// `pLayer` must be stamped by `WelsInitCurrentLayer`. Liveness is the reference's
-/// to guarantee now; "stamped for this frame" is still the caller's.
 #[inline]
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
 pub fn layer_ref_pic<'a>(
     pCtx: &'a sWelsEncCtx,
     pLayer: &SDqLayer,
@@ -2498,7 +2493,7 @@ pub unsafe fn WelsISliceMdEnc(
         }
 
         iNumMbCoded += 1;
-        iNextMbIdx = WelsGetNextMbOfSlice(pCurLayer.as_ref(), iCurMbIdx);
+        iNextMbIdx = WelsGetNextMbOfSlice(Some(&*pCurLayer), iCurMbIdx);
         if iNextMbIdx == -1 || iNextMbIdx >= kiTotalNumMb || iNumMbCoded >= kiTotalNumMb {
             break;
         }
@@ -2656,7 +2651,7 @@ pub unsafe fn WelsISliceMdEncDynamic(
         }
 
         iNumMbCoded += 1;
-        iNextMbIdx = WelsGetNextMbOfSlice(pCurLayer.as_ref(), iCurMbIdx);
+        iNextMbIdx = WelsGetNextMbOfSlice(Some(&*pCurLayer), iCurMbIdx);
         if iNextMbIdx == -1 || iNextMbIdx >= kiTotalNumMb || iNumMbCoded >= kiTotalNumMb {
             (*pSlice).iCountMbNumInSlice = iCurMbIdx - (*pCurLayer).LastCodedMbIdxOfPartition[kiPartitionId].load(Ordering::Relaxed);
             (*pCurLayer).LastCodedMbIdxOfPartition[kiPartitionId].store(iCurMbIdx, Ordering::Relaxed);
@@ -2723,7 +2718,8 @@ pub unsafe fn WelsMdInterMbLoop<'a>(
         return ENC_RETURN_SUCCESS;
     }
     let pMd = pWelsMd;
-    let pCurLayer = current_layer(pEncCtx);
+    let pCurLayer = current_layer_ref(pEncCtx)
+        .expect("the frame's current layer is stamped");
     // S29: raw, held across the MB loop (see `WelsISliceMdEnc`).
     let mut iNumMbCoded = 0;
     let mut iNextMbIdx = kiSliceFirstMbXY;
@@ -2870,7 +2866,7 @@ pub unsafe fn WelsMdInterMbLoop<'a>(
         }
 
         mbs.cur_mut().uiSliceIdc = kiSliceIdx as u16;
-        OutputPMbWithoutConstructCsRsNoCopy(pEncCtx, pCurLayer.as_ref(), pSlice, mbs.cur());
+        OutputPMbWithoutConstructCsRsNoCopy(pEncCtx, Some(pCurLayer), pSlice, mbs.cur());
 
         {  // A6: the block is the shared borrow's scope (F191/F212)
             let func_list = (*pEncCtx).func_list();
@@ -2884,7 +2880,7 @@ pub unsafe fn WelsMdInterMbLoop<'a>(
         }
 
         iNumMbCoded += 1;
-        iNextMbIdx = WelsGetNextMbOfSlice(pCurLayer.as_ref(), iCurMbIdx);
+        iNextMbIdx = WelsGetNextMbOfSlice(Some(pCurLayer), iCurMbIdx);
         if iNextMbIdx == -1 || iNextMbIdx >= kiTotalNumMb || iNumMbCoded >= kiTotalNumMb {
             break;
         }
@@ -3096,7 +3092,7 @@ pub unsafe fn WelsMdInterMbLoopOverDynamicSlice<'a>(
         }
 
         mbs.cur_mut().uiSliceIdc = kiSliceIdx as u16;
-        OutputPMbWithoutConstructCsRsNoCopy(pEncCtx, pCurLayer.as_ref(), pSlice, mbs.cur());
+        OutputPMbWithoutConstructCsRsNoCopy(pEncCtx, Some(&*pCurLayer), pSlice, mbs.cur());
 
         {  // A6: the block is the shared borrow's scope (F191/F212)
             let func_list = (*pEncCtx).func_list();
@@ -3110,7 +3106,7 @@ pub unsafe fn WelsMdInterMbLoopOverDynamicSlice<'a>(
         }
 
         iNumMbCoded += 1;
-        iNextMbIdx = WelsGetNextMbOfSlice(pCurLayer.as_ref(), iCurMbIdx);
+        iNextMbIdx = WelsGetNextMbOfSlice(Some(&*pCurLayer), iCurMbIdx);
         if iNextMbIdx == -1 || iNextMbIdx >= kiTotalNumMb || iNumMbCoded >= kiTotalNumMb {
             (*pCurLayer).LastCodedMbIdxOfPartition[kiPartitionId].store(iCurMbIdx, Ordering::Relaxed);
             (*pCurLayer).NumSliceCodedOfPartition[kiPartitionId].fetch_add(1, Ordering::Relaxed);
@@ -3441,7 +3437,7 @@ pub unsafe fn WelsCodeOneSlice(
         (*pCurSlice).sScaleShift = if kuiTemporalId != 0 { kuiTemporalId.saturating_sub(ref_temporal) } else { 0 };
     }
 
-    WelsSliceHeaderExtInit(pEncCtx, pCurLayer.as_ref(), &mut *pCurSlice);
+    WelsSliceHeaderExtInit(pEncCtx, Some(&*pCurLayer), &mut *pCurSlice);
 
     //RomRC init slice by slice
     // A2: the raw accessor answered null on an empty array and this is the one
@@ -3472,7 +3468,7 @@ pub unsafe fn WelsCodeOneSlice(
     (*pCurSlice).uiLastMbQp =
         (pic_init_qp as i32 + (*pCurSlice).sSliceHeaderExt.sSliceHeader.iSliceQpDelta as i32) as u8;
 
-    // **S6.A1 / F239**: re-derived. `WelsSliceHeaderExtInit(.., pCurLayer.as_ref(), ..)`
+    // **S6.A1 / F239**: re-derived. `WelsSliceHeaderExtInit(.., Some(pCurLayer), ..)`
     // above is a whole-layer shared retag that pops the `addr_of_mut!` bound at the top
     // of this function; the two uses before it are still on the live tag, this one is not.
     let idr_idx = (*std::ptr::addr_of!((*pCurLayer).sLayerInfo.sNalHeaderExt)).bIdrFlag as usize;
@@ -3560,7 +3556,8 @@ pub unsafe fn AddSliceBoundary(
     if pSliceCtx.is_null() {
         return;
     }
-    let pCurLayer = current_layer(pEncCtx);
+    let pCurLayer = current_layer_ref(pEncCtx)
+        .expect("the frame's current layer is stamped");
     let buf_idx = (*pCurSlice).uiBufferIdx as usize;
     let pSliceBuffer = slice_bank_root(&*pCurLayer, buf_idx);
     let iCodedSliceNum = (*pCurLayer).sSliceBufferInfo[buf_idx].iCodedSliceNum;
@@ -3598,7 +3595,7 @@ pub unsafe fn AddSliceBoundary(
             );
         }
 
-        UpdateMbNeighbourInfoForNextSlice(pCurLayer.as_ref(), iFirstMbIdxOfNextSlice, kiLastMbIdxInPartition);
+        UpdateMbNeighbourInfoForNextSlice(Some(pCurLayer), iFirstMbIdxOfNextSlice, kiLastMbIdxInPartition);
     }
 }
 
@@ -3854,7 +3851,7 @@ pub unsafe fn InitSliceList(
 pub unsafe fn InitAllSlicesInThread(pCtx: &mut sWelsEncCtx) -> i32 {
     let pCurDqLayer = current_layer(pCtx);
     for iSliceIdx in 0..(*pCurDqLayer).iMaxSliceNum {
-        let slice_ptr = slice_in_layer(pCurDqLayer.as_ref(), iSliceIdx);
+        let slice_ptr = slice_in_layer(Some(&*pCurDqLayer), iSliceIdx);
         if slice_ptr.is_null() {
             return ENC_RETURN_UNEXPECTED;
         }
@@ -3887,7 +3884,8 @@ pub unsafe fn InitOneSliceInThread<'a>(
     // [`slice_in_bank`]'s raw root, which is F71's shape and step 3's remaining
     // subject. What this moves is the *boundary* — one audited derivation instead
     // of one per caller body.
-    let pCurDq = current_layer(pCtx);
+    let pCurDq = current_layer_ref(pCtx)
+        .expect("the frame's current layer is stamped");
     let slc_ptr = if (*pCurDq).bThreadSlcBufferFlag {
         let kiCodedNumInThread = (*pCurDq).sSliceBufferInfo[kiSlcBuffIdx as usize].iCodedSliceNum;
         slice_in_bank(&*pCurDq, kiSlcBuffIdx as usize, kiCodedNumInThread)
@@ -4167,7 +4165,8 @@ pub unsafe fn CalculateNewSliceNum(
     }
 
     let iPartitionID = ((*pLastCodedSlice).iSliceIdx % ((*pCtx).iActiveThreadsNum as i32)) as usize;
-    let pCurLayer = current_layer(pCtx);
+    let pCurLayer = current_layer_ref(pCtx)
+        .expect("the frame's current layer is stamped");
     let iMBNumInPartition = (*pCurLayer).EndMbIdxOfPartition[iPartitionID] - (*pCurLayer).FirstMbIdxOfPartition[iPartitionID] + 1;
     let iLeftMBNum = (*pCurLayer).EndMbIdxOfPartition[iPartitionID] - (*pCurLayer).LastCodedMbIdxOfPartition[iPartitionID].load(Ordering::Relaxed) + 1;
 
@@ -4836,8 +4835,6 @@ mod tests {
     /// detected between (1) retag write on thread `<unnamed>` and (2) retag write
     /// ... on thread `<unnamed>`", and removing it makes it pass.
     #[test]
-    // unsafe-cat: instrument(test)
-    #[allow(unsafe_code)]
     fn update_mb_map_forked_workers_share_the_layer_without_racing() {
         use crate::safe::mb_grid::{MbArray, MbDims};
         use crate::encoder::md::SMB;

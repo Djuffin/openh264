@@ -1220,8 +1220,6 @@ pub unsafe fn WelsEncoderApplyLTR(
 /// `ParamValidation` — codec/encoder/core/src/encoder_ext.cpp:264.
 ///
 /// Complete port, including the RC-on bitrate loop and QP-range correction.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
 pub fn ParamValidation(pLogCtx: SLogContext, pCfg: &mut SWelsSvcCodingParam) -> i32 {
     const fEpsn: f32 = 0.000001;
     // T9.H: a `&mut SWelsSvcCodingParam` cannot be null, so the `debug_assert`
@@ -1389,8 +1387,6 @@ pub fn ParamValidation(pLogCtx: SLogContext, pCfg: &mut SWelsSvcCodingParam) -> 
 /// The `WelsLog` calls that accompany each rejection in C++ have no counterpart here,
 /// as elsewhere in this port — only the control flow and the returned code are
 /// reproduced.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
 pub fn ParamValidationExt(
     pLogCtx: SLogContext,
     pCodingParam: &mut SWelsSvcCodingParam,

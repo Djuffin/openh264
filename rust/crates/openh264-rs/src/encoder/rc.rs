@@ -1441,7 +1441,7 @@ pub unsafe fn RcInitSliceInformation(pEncCtx: &mut sWelsEncCtx) {
     (*pWelsSvcRc).bGomRC = !(rc_mode == RCMode::RC_OFF_MODE || rc_mode == RCMode::RC_BUFFERBASED_MODE);
 
     for i in 0..kiSliceNum as usize {
-        let pSlice = crate::encoder::svc_encode_slice::slice_in_layer(pCurDq.as_ref(), i as i32);
+        let pSlice = crate::encoder::svc_encode_slice::slice_in_layer(Some(&*pCurDq), i as i32);
         let pSOverRc = &mut (*pSlice).sSlicingOverRc;
         pSOverRc.iTotalQpSlice = 0;
         pSOverRc.iTotalMbSlice = 0;
@@ -1587,7 +1587,7 @@ pub unsafe fn RcInitGomParameters(pEncCtx: &mut sWelsEncCtx) {
 
     pEncCtx.rc_at_mut(did).iAverageFrameQp = 0;
     for i in 0..kiSliceNum as usize {
-        let pSlice = crate::encoder::svc_encode_slice::slice_in_layer(pCurDq.as_ref(), i as i32);
+        let pSlice = crate::encoder::svc_encode_slice::slice_in_layer(Some(&*pCurDq), i as i32);
         let pSOverRc = &mut (*pSlice).sSlicingOverRc;
         pSOverRc.iComplexityIndexSlice = 0;
         pSOverRc.iCalculatedQpSlice = kiGlobalQp;
@@ -2123,7 +2123,7 @@ pub unsafe fn RcUpdatePictureQpBits(pEncCtx: &mut sWelsEncCtx, iCodedBits: i32) 
 
     if eSliceType as i32 == P_SLICE {
         for i in 0..iSliceNumInFrame as usize {
-            let pSlice = crate::encoder::svc_encode_slice::slice_in_layer(pCurDq.as_ref(), i as i32);
+            let pSlice = crate::encoder::svc_encode_slice::slice_in_layer(Some(&*pCurDq), i as i32);
             let pSOverRc = &(*pSlice).sSlicingOverRc;
             iTotalQp += pSOverRc.iTotalQpSlice;
             iTotalMb += pSOverRc.iTotalMbSlice;
