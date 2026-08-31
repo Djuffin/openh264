@@ -811,13 +811,14 @@ pub fn ReleaseMtResource(ctx: &mut sWelsEncCtx) {
 #[allow(unsafe_code)]
 pub unsafe fn AppendSliceToFrameBs(
     pCtx: &mut sWelsEncCtx,
-    pLbi: *mut SLayerBSInfo,
+    pLbi: &mut SLayerBSInfo,
     kiSliceCount: i32,
 ) -> i32 {
     // T9.H4: the `is_null()` disjunct that opened this guard is gone — a
     // `&mut sWelsEncCtx` cannot be null, and every caller now holds one. The
     // remaining conditions are unchanged.
-    if pLbi.is_null() || current_layer_ref(pCtx).is_none() {
+    // S11.20: the null disjunct retires with the raw (T9.H).
+    if current_layer_ref(pCtx).is_none() {
         return 0;
     }
 
