@@ -262,7 +262,9 @@ impl EntropyCoder {
     ///
     /// # Safety
     /// As the two implementations: `pEncCtx` and `pSlice` must be live and the
-    /// slice's writer positioned in the buffer `slice_bs_buffer` returns.
+    /// slice's writer positioned in `pSliceBsBuf` (S11.1a: the buffer arrives
+    /// threaded from the chain's top; deriving it here from the shared context
+    /// is the shape the seam conversion retired).
     #[inline]
     // unsafe-cat: fork-shared(S63)
     #[allow(unsafe_code)]
@@ -271,13 +273,15 @@ impl EntropyCoder {
         pEncCtx: &sWelsEncCtx,
         pSlice: &mut SSlice,
         mbs: &mut crate::safe::mb_grid::MbWindow<'_, SMB>,
+        pSliceBsBuf: &mut [u8],
+        pCtxOutBs: &mut Option<&mut crate::encoder::vlc_encoder::BsWriter>,
     ) -> i32 {
         match self {
             EntropyCoder::Cavlc => {
-                crate::encoder::svc_set_mb_syn_cavlc::WelsSpatialWriteMbSyn(pEncCtx, pSlice, mbs)
+                crate::encoder::svc_set_mb_syn_cavlc::WelsSpatialWriteMbSyn(pEncCtx, pSlice, mbs, pSliceBsBuf, pCtxOutBs)
             }
             EntropyCoder::Cabac => crate::encoder::svc_set_mb_syn_cabac::WelsSpatialWriteMbSynCabac(
-                pEncCtx, pSlice, mbs,
+                pEncCtx, pSlice, mbs, pSliceBsBuf, pCtxOutBs,
             ),
         }
     }
@@ -286,7 +290,7 @@ impl EntropyCoder {
     /// overflow or a slice-boundary step-back can re-encode it.
     ///
     /// `buf` is the slice's output buffer and is **used by the CABAC arm only**;
-    /// `pBs` is the slice's writer (`slice_writer`) and is **used by the CAVLC arm
+    /// `pBs` is the slice's writer (`slice_bs_writer`) and is **used by the CAVLC arm
     /// only** — see the type-level note. Both are parameters here because the
     /// caller cannot know which arm it is calling, and every caller holds the
     /// context both derive from.
@@ -301,7 +305,7 @@ impl EntropyCoder {
     /// side, at the call sites) the restore of that QP — so no argument of
     /// this call names `SSlice` and nothing here retags the slice when the
     /// family flips (the two shape-B sites q1c reported here were exactly the
-    /// `slice_writer` result held across the future `&mut *pSlice` argument).
+    /// writer-resolver result held across the future `&mut *pSlice` argument).
     #[allow(unsafe_code)]
     pub unsafe fn StashMBStatus(
         self,
@@ -355,7 +359,7 @@ impl EntropyCoder {
 
     /// `pfGetBsPosition` — the slice writer's bit position, in the units each coder
     /// counts in. Needs no buffer on either arm: CAVLC reads the writer's own
-    /// position (`pBs`, from `slice_writer`) and CABAC subtracts two offsets held
+    /// position (`pBs`, from `slice_bs_writer`) and CABAC subtracts two offsets held
     /// in the slice's coder state (T3.5).
     ///
     /// # Safety

@@ -1058,12 +1058,13 @@ pub fn WelsWriteMbResidualCabac(
 pub fn WelsInitSliceCabac(
     pEncCtx: &crate::encoder::encoder_context::sWelsEncCtx,
     pSlice: &mut SSlice,
+    pSliceBsBuf: &mut [u8],
+    pCtxOutBs: &mut Option<&mut crate::encoder::vlc_encoder::BsWriter>,
 ) {
     unsafe {
         /* alignment needed */
-        let pBs = crate::encoder::svc_encode_slice::slice_writer(pEncCtx, std::ptr::addr_of_mut!((*pSlice).sSliceBs));
-        let buf = crate::encoder::svc_encode_slice::slice_bs_buffer(pEncCtx, std::ptr::addr_of_mut!((*pSlice).sSliceBs), (*pSlice).uiBufferIdx as usize);
-        BsAlign(buf, &mut *pBs);
+        let buf = pSliceBsBuf;
+        BsAlign(buf, crate::encoder::svc_encode_slice::slice_bs_writer(&mut pSlice.sSliceBs, pCtxOutBs));
 
         /* init cabac */
         let iCabacInitIdc = (*pSlice).iCabacInitIdc;
@@ -1083,7 +1084,8 @@ pub fn WelsInitSliceCabac(
         // `base.add(pBs.pos())` / `base.add(buf.len())` is what it always
         // meant: where this slice begins, and where the buffer ends.
         let end = buf.len();
-        WelsCabacEncodeInit(&mut (*pSlice).sCabacCtx, (*pBs).pos(), end);
+        let kiBsPos = crate::encoder::svc_encode_slice::slice_bs_writer(&mut pSlice.sSliceBs, pCtxOutBs).pos();
+        WelsCabacEncodeInit(&mut (*pSlice).sCabacCtx, kiBsPos, end);
     }
 }
 
@@ -1093,14 +1095,18 @@ pub fn WelsSpatialWriteMbSynCabac(
     pEncCtx: &crate::encoder::encoder_context::sWelsEncCtx,
     pSlice: &mut SSlice,
     mbs: &mut crate::safe::mb_grid::MbWindow<'_, SMB>,
+    pSliceBsBuf: &mut [u8],
+    _pCtxOutBs: &mut Option<&mut crate::encoder::vlc_encoder::BsWriter>,
 ) -> i32 {
     unsafe {
-        // 4b's fence: this function sits behind `pfWelsSpatialWriteMbSyn`,
-        // whose signature 4b owns, so it gains no parameter — it derives the
-        // buffer from what it already has, exactly as `WelsInitSliceCabac`
-        // does. Session E's rule, second application: derive from the state
-        // that recorded the decision, not from the inputs to it.
-        let buf = crate::encoder::svc_encode_slice::slice_bs_buffer(pEncCtx, std::ptr::addr_of_mut!((*pSlice).sSliceBs), (*pSlice).uiBufferIdx as usize);
+        // **S11.1a reverses 4b's fence with the seam it guarded.** The fence
+        // kept this signature stable so the entropy dispatch would not carry a
+        // buffer; the bitstream pair now threads from the chain's top through
+        // that dispatch (F272), and deriving here from the shared context is
+        // the exact shape the conversion retires. The CABAC arm spends its bits
+        // through `sCabacCtx` and touches no `BsWriter`, so the threaded writer
+        // is unused here — the CAVLC arm is its consumer.
+        let buf = pSliceBsBuf;
         let pCabacCtx = &mut pSlice.sCabacCtx;
         let pMbCache = &mut pSlice.sMbCacheInfo;
         let uiMbType = mbs.cur().uiMbType;

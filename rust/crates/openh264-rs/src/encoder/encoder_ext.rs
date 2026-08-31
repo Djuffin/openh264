@@ -3389,10 +3389,23 @@ pub unsafe fn WelsCodeOnePicPartition(
         // sequence is unchanged.
         crate::encoder::svc_encode_slice::StampLayerIdrFlagForSliceType(pCtx);
 
+        // **S11.1a: the pOut arm's one derivation** — `slice_bs_buffer`'s and
+        // `slice_writer`'s else-arms (F217's main-thread-only side), hoisted to
+        // the chain's top and threaded down. Raw for the reason those were: this
+        // body holds `&mut pCtx` and the chain below takes `&pCtx`, so a safe
+        // `&mut` into `pOut` cannot coexist with it; the slot reads keep the
+        // heap block's own provenance (F71). Nothing uses the pair after the
+        // call, so the next `pOut` reborrow retires it harmlessly.
+        let pOut = crate::encoder::encoder_context::ctx_out_raw(pCtx);
+        let vOutBsBuf = std::ptr::addr_of_mut!((*pOut).sBsBuffer);
+        let pSliceBsBuf = std::slice::from_raw_parts_mut((*vOutBsBuf).as_mut_ptr(), (*vOutBsBuf).len());
+        let mut pCtxOutBs: Option<&mut crate::encoder::vlc_encoder::BsWriter> = Some(&mut (*pOut).sBsWrite);
         iReturn = crate::encoder::svc_encode_slice::WelsCodeOneSlice(
             pCtx,
             &mut *pCurSlice,
             keNalType as i32,
+            pSliceBsBuf,
+            &mut pCtxOutBs,
         );
         if iReturn != ENC_RETURN_SUCCESS {
             return iReturn;
@@ -3862,8 +3875,19 @@ pub unsafe fn WelsEncoderEncodeExt(
 
             // T7.C3, as above.
             crate::encoder::svc_encode_slice::StampLayerIdrFlagForSliceType(pCtx);
+            // **S11.1a: the pOut arm's one derivation** — `slice_bs_buffer`'s and
+            // `slice_writer`'s else-arms (F217's main-thread-only side), hoisted to
+            // the chain's top and threaded down. Raw for the reason those were: this
+            // body holds `&mut pCtx` and the chain below takes `&pCtx`, so a safe
+            // `&mut` into `pOut` cannot coexist with it; the slot reads keep the
+            // heap block's own provenance (F71). Nothing uses the pair after the
+            // call, so the next `pOut` reborrow retires it harmlessly.
+            let pOut = crate::encoder::encoder_context::ctx_out_raw(pCtx);
+            let vOutBsBuf = std::ptr::addr_of_mut!((*pOut).sBsBuffer);
+            let pSliceBsBuf = std::slice::from_raw_parts_mut((*vOutBsBuf).as_mut_ptr(), (*vOutBsBuf).len());
+            let mut pCtxOutBs: Option<&mut crate::encoder::vlc_encoder::BsWriter> = Some(&mut (*pOut).sBsWrite);
             pCtx.iEncoderError =
-                crate::encoder::svc_encode_slice::WelsCodeOneSlice(pCtx, &mut *pCurSlice, eNalType as i32);
+                crate::encoder::svc_encode_slice::WelsCodeOneSlice(pCtx, &mut *pCurSlice, eNalType as i32, pSliceBsBuf, &mut pCtxOutBs);
             if pCtx.iEncoderError != ENC_RETURN_SUCCESS {
                 return pCtx.iEncoderError;
             }
@@ -4073,9 +4097,22 @@ pub unsafe fn WelsEncoderEncodeExt(
 
                 // T7.C3, as above.
                 crate::encoder::svc_encode_slice::StampLayerIdrFlagForSliceType(pCtx);
+                // **S11.1a: the pOut arm's one derivation** — `slice_bs_buffer`'s and
+                // `slice_writer`'s else-arms (F217's main-thread-only side), hoisted to
+                // the chain's top and threaded down. Raw for the reason those were: this
+                // body holds `&mut pCtx` and the chain below takes `&pCtx`, so a safe
+                // `&mut` into `pOut` cannot coexist with it; the slot reads keep the
+                // heap block's own provenance (F71). Nothing uses the pair after the
+                // call, so the next `pOut` reborrow retires it harmlessly.
+                let pOut = crate::encoder::encoder_context::ctx_out_raw(pCtx);
+                let vOutBsBuf = std::ptr::addr_of_mut!((*pOut).sBsBuffer);
+                let pSliceBsBuf = std::slice::from_raw_parts_mut((*vOutBsBuf).as_mut_ptr(), (*vOutBsBuf).len());
+                let mut pCtxOutBs: Option<&mut crate::encoder::vlc_encoder::BsWriter> = Some(&mut (*pOut).sBsWrite);
                 pCtx.iEncoderError = crate::encoder::svc_encode_slice::WelsCodeOneSlice(pCtx,
                     &mut *pCurSlice,
                     eNalType as i32,
+                    pSliceBsBuf,
+                    &mut pCtxOutBs,
                 );
                 if pCtx.iEncoderError != ENC_RETURN_SUCCESS {
                     return pCtx.iEncoderError;
