@@ -107,7 +107,7 @@ impl CComplexityAnalysis {
     /// them one line before the call. Handing them over at the call is the move
     /// session B made for `pCalcResult`, and it is what retires `SVAAFrameInfo`'s
     /// `*mut`-i32 `!Sync` reason (F67/F164).
-    pub unsafe fn Process(
+    pub fn Process(
         &mut self,
         pSrcPixMap: &SPixMap,
         pRefPixMap: &SPixMap,
@@ -140,7 +140,7 @@ impl CComplexityAnalysis {
     /// `CComplexityAnalysis::AnalyzeFrameComplexityViaSad` — `ComplexityAnalysis.cpp:96`.
     // unsafe-cat: port-raw(Phase 9)
     #[allow(unsafe_code)]
-    unsafe fn AnalyzeFrameComplexityViaSad(
+    fn AnalyzeFrameComplexityViaSad(
         &mut self,
         pSrcPixMap: &SPixMap,
         pRefPixMap: &SPixMap,
@@ -168,7 +168,7 @@ impl CComplexityAnalysis {
     /// kept as-is.
     // unsafe-cat: port-raw(Phase 9)
     #[allow(unsafe_code)]
-    unsafe fn GetFrameSadExcludeBackground(
+    fn GetFrameSadExcludeBackground(
         &mut self,
         pSrcPixMap: &SPixMap,
         _pRefPixMap: &SPixMap,
@@ -215,7 +215,7 @@ impl CComplexityAnalysis {
     /// `iCalcBgd`; both are inlined below because the choice is a single predicate.
     // unsafe-cat: port-raw(Phase 9)
     #[allow(unsafe_code)]
-    unsafe fn AnalyzeGomComplexityViaSad(
+    fn AnalyzeGomComplexityViaSad(
         &mut self,
         pSrcPixMap: &SPixMap,
         _pRefPixMap: &SPixMap,

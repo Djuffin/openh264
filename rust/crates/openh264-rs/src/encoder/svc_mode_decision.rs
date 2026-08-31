@@ -1123,7 +1123,7 @@ pub extern "C" fn UpdateP8x8Motion2Cache(
 
 // unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
-pub unsafe extern "C" fn WelsMdI16x16(
+pub extern "C" fn WelsMdI16x16(
     pFunc: &SWelsFuncPtrList,
     pCurDqLayer: Option<&SDqLayer>,
     pMbCache: &mut SMbCache,
@@ -1818,7 +1818,7 @@ pub fn WelsMdInterJudgeBGDPskipFalse(
 
 // unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
-pub unsafe extern "C" fn WelsMdUpdateBGDInfo(
+pub extern "C" fn WelsMdUpdateBGDInfo(
     pEncCtx: &sWelsEncCtx,
     pCurLayer: &SDqLayer,
     pCurMb: &mut SMB,
@@ -1844,7 +1844,7 @@ pub unsafe extern "C" fn WelsMdUpdateBGDInfo(
 
 // unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
-pub unsafe extern "C" fn WelsMdUpdateBGDInfoNULL(
+pub extern "C" fn WelsMdUpdateBGDInfoNULL(
     pEncCtx: &sWelsEncCtx,
     pCurLayer: &SDqLayer,
     pCurMb: &mut SMB,

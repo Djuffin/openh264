@@ -737,7 +737,7 @@ pub unsafe extern "C" fn WelsMdI4x4Fast(
 /// must point at the 256-byte ping-pong buffer `WelsMdI16x16` selected.
 // unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
-pub unsafe extern "C" fn WelsMdIntraChroma(
+pub extern "C" fn WelsMdIntraChroma(
     pFunc: &SWelsFuncPtrList,
     pCurDqLayer: &SDqLayer,
     pMbCache: &mut SMbCache,
