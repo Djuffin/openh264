@@ -969,6 +969,56 @@ pub fn ctx_vpp_ref(
         .expect("the preprocessor is built by WelsInitEncoderExt")
 }
 
+/// The preprocess object **lifted out of the context for the duration of one
+/// call**, so the receiver and the context argument are disjoint by construction
+/// — S11.24's retirement of [`ctx_vpp_raw`]'s `&mut` half.
+///
+/// **What this replaces is a provenance argument, not a borrow.** Every one of
+/// the nine `ctx_vpp_raw` sites had the same shape:
+///
+/// ```text
+/// ctx_vpp_raw(pCtx).BuildSpatialPicList(pCtx, pSrcPic, &mut iSpatialNum)
+/// //               ^ &mut CWelsPreProcess  ^ &mut sWelsEncCtx
+/// ```
+///
+/// — a `&mut` to the boxed object held beside a `&mut` to the context that owns
+/// its slot. That is *sound*, and F71's spelling is exactly why: reading the slot
+/// as a pointer *value* gives the answer the heap block's own provenance, so the
+/// context retag on the next argument cannot pop it. But soundness by that route
+/// is a fact about how the pointer was derived, re-argued in a doc comment at
+/// each site and checkable only by Miri. `Option::take` moves the box out, so
+/// during the call the object is *not* reachable through `pCtx` — the same two
+/// references, disjoint as a matter of ownership the compiler can see.
+///
+/// The move is a pointer write each way and this runs once per frame per layer,
+/// which is why the cost was never the question — F279's was: it pays here
+/// because the raw is the *last* blocker in four of its callers.
+///
+/// **Restoring is the closure's job, not the caller's.** Six of the nine sites
+/// sit above an early `return` on the call's result, and a `take` those paths
+/// skip would leave the slot `None` for the next frame. Taking the closure means
+/// there is no path that returns without the store below it.
+///
+/// **Re-entry would break this and does not happen.** If any callee read
+/// `pCtx.pVpp` it would see `None` where the raw form saw the object; across the
+/// 106 functions reachable from the five methods called this way, the slot is not
+/// mentioned outside one comment. An unwind through the closure drops the object
+/// and leaves the slot empty, which matters only if a caught panic were followed
+/// by reuse of the context — the `expect`s here are bug reports, not states.
+#[inline]
+pub fn with_vpp<R>(
+    pCtx: &mut sWelsEncCtx,
+    f: impl FnOnce(&mut crate::encoder::wels_preprocess::CWelsPreProcess, &mut sWelsEncCtx) -> R,
+) -> R {
+    let mut pVpp = pCtx
+        .pVpp
+        .take()
+        .expect("the preprocessor is built by WelsInitEncoderExt");
+    let r = f(&mut pVpp, pCtx);
+    pCtx.pVpp = Some(pVpp);
+    r
+}
+
 /// The coding parameters **as a raw pointer, read out of the `Box`'s slot** — the
 /// root the twenty-six per-layer *cursors* are taken from.
 ///
