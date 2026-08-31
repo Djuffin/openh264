@@ -1531,6 +1531,12 @@ pub type PWelsCodingSliceFunc = extern "C" fn(
     // single-threaded callers take it around the call. `None` everywhere the
     // old pointer was null: CAVLC dynamic slicing, and every fixed mode.
     pRestoreBuf: Option<&mut [u8]>,
+    // **S11.33: the slot the dynamic boundary writes forward into** — the bank
+    // record right after the current slice, split off by the resolver where the
+    // bank is owned. `AddSliceBoundary` copies the current header here when the
+    // size limit fires; `None` on every fixed path (the boundary never fires)
+    // and where the next slot does not exist (the old null answer).
+    pNextSlice: Option<&mut SSlice>,
 ) -> i32;
 pub type PWelsSliceHeaderWriteFunc = extern "C" fn(
     pCtx: &sWelsEncCtx,
@@ -2362,6 +2368,7 @@ pub fn WelsISliceMdEnc(
     pCtxOutBs: &mut Option<&mut BsWriter>,
     pMbs: &mut crate::safe::mb_grid::MbWindow<'_, SMB>,
     pRestoreBuf: Option<&mut [u8]>,
+    pNextSlice: Option<&mut SSlice>,
 ) -> i32 {
     // **S7.A5**: the `is_null()` guard and its early return retire with the
     // parameter — every context reaching this body comes from a `&mut sWelsEncCtx`
@@ -2497,6 +2504,7 @@ pub fn WelsISliceMdEncDynamic(
     pCtxOutBs: &mut Option<&mut BsWriter>,
     pMbs: &mut crate::safe::mb_grid::MbWindow<'_, SMB>,
     pRestoreBuf: Option<&mut [u8]>,
+    mut pNextSlice: Option<&mut SSlice>,
 ) -> i32 {
     // **S7.A5**: the `is_null()` guard and its early return retire with the
     // parameter — every context reaching this body comes from a `&mut sWelsEncCtx`
@@ -2606,6 +2614,10 @@ pub fn WelsISliceMdEncDynamic(
             pMbs.cur().iMbXY,
             &mut sDss,
             pMbs,
+            // Reborrowed, not taken: the judge runs per macroblock and fires
+            // on one of them — a `take` here would consume the slot on the
+            // first (non-firing) call and hand the real boundary `None`.
+            pNextSlice.as_deref_mut(),
         ) {
             {  // A6: the block is the shared borrow's scope (F191/F212)
                 let func_list = (*pEncCtx).func_list();
@@ -2694,6 +2706,7 @@ pub fn WelsMdInterMbLoop<'a>(
     pCtxOutBs: &mut Option<&mut BsWriter>,
     pMbs: &mut crate::safe::mb_grid::MbWindow<'_, SMB>,
     pRestoreBuf: Option<&mut [u8]>,
+    pNextSlice: Option<&mut SSlice>,
 ) -> i32 {
     // **S7.A5**: the first arm retires with the parameter; the other four are live.
     // S11.27: the grid-emptiness arm reads the window, as in `WelsISliceMdEnc`.
@@ -2883,6 +2896,7 @@ pub fn WelsMdInterMbLoopOverDynamicSlice<'a>(
     pCtxOutBs: &mut Option<&mut BsWriter>,
     pMbs: &mut crate::safe::mb_grid::MbWindow<'_, SMB>,
     pRestoreBuf: Option<&mut [u8]>,
+    mut pNextSlice: Option<&mut SSlice>,
 ) -> i32 {
     // **S7.A5**: the first arm retires with the parameter; the other four are live.
     // S11.27: the grid-emptiness arm reads the window, as in `WelsISliceMdEnc`.
@@ -3049,6 +3063,10 @@ pub fn WelsMdInterMbLoopOverDynamicSlice<'a>(
             pMbs.cur().iMbXY,
             &mut sDss,
             pMbs,
+            // Reborrowed, not taken: the judge runs per macroblock and fires
+            // on one of them — a `take` here would consume the slot on the
+            // first (non-firing) call and hand the real boundary `None`.
+            pNextSlice.as_deref_mut(),
         ) {
             {  // A6: the block is the shared borrow's scope (F191/F212)
                 let func_list = (*pEncCtx).func_list();
@@ -3106,6 +3124,7 @@ pub fn WelsPSliceMdEnc(
     pCtxOutBs: &mut Option<&mut BsWriter>,
     pMbs: &mut crate::safe::mb_grid::MbWindow<'_, SMB>,
     pRestoreBuf: Option<&mut [u8]>,
+    pNextSlice: Option<&mut SSlice>,
 ) -> i32 {
     let kpShExt = &(*pSlice).sSliceHeaderExt;
     let kiSliceFirstMbXY = kpShExt.sSliceHeader.iFirstMbInSlice;
@@ -3123,7 +3142,7 @@ pub fn WelsPSliceMdEnc(
 
     // S11.4: the MD loop stays `unsafe fn` (its own callees are unconverted);
     // the claim is the loop's own and nothing is derived here.
-    WelsMdInterMbLoop(pEncCtx, pSlice, &mut sMd, kiSliceFirstMbXY, pSliceBsBuf, pCtxOutBs, pMbs, pRestoreBuf)
+    WelsMdInterMbLoop(pEncCtx, pSlice, &mut sMd, kiSliceFirstMbXY, pSliceBsBuf, pCtxOutBs, pMbs, pRestoreBuf, pNextSlice)
 }
 
 pub fn WelsPSliceMdEncDynamic(
@@ -3134,6 +3153,7 @@ pub fn WelsPSliceMdEncDynamic(
     pCtxOutBs: &mut Option<&mut BsWriter>,
     pMbs: &mut crate::safe::mb_grid::MbWindow<'_, SMB>,
     pRestoreBuf: Option<&mut [u8]>,
+    pNextSlice: Option<&mut SSlice>,
 ) -> i32 {
     let kpShExt = &(*pSlice).sSliceHeaderExt;
     let kiSliceFirstMbXY = kpShExt.sSliceHeader.iFirstMbInSlice;
@@ -3148,7 +3168,7 @@ pub fn WelsPSliceMdEncDynamic(
 
     // S11.4: the MD loop stays `unsafe fn` (its own callees are unconverted);
     // the claim is the loop's own and nothing is derived here.
-    WelsMdInterMbLoopOverDynamicSlice(pEncCtx, pSlice, &mut sMd, kiSliceFirstMbXY, pSliceBsBuf, pCtxOutBs, pMbs, pRestoreBuf)
+    WelsMdInterMbLoopOverDynamicSlice(pEncCtx, pSlice, &mut sMd, kiSliceFirstMbXY, pSliceBsBuf, pCtxOutBs, pMbs, pRestoreBuf, pNextSlice)
 }
 
 pub fn WelsCodePSlice(
@@ -3158,6 +3178,7 @@ pub fn WelsCodePSlice(
     pCtxOutBs: &mut Option<&mut BsWriter>,
     pMbs: &mut crate::safe::mb_grid::MbWindow<'_, SMB>,
     pRestoreBuf: Option<&mut [u8]>,
+    pNextSlice: Option<&mut SSlice>,
 ) -> i32 {
     // S10.15: the layer is only read here — `current_layer_ref`, not the
     // fork-shared raw.
@@ -3174,7 +3195,7 @@ pub fn WelsCodePSlice(
     } else {
         true
     };
-    WelsPSliceMdEnc(pEncCtx, pSlice, kbHighestSpatial, pSliceBsBuf, pCtxOutBs, pMbs, pRestoreBuf)
+    WelsPSliceMdEnc(pEncCtx, pSlice, kbHighestSpatial, pSliceBsBuf, pCtxOutBs, pMbs, pRestoreBuf, pNextSlice)
 }
 
 pub fn WelsCodePOverDynamicSlice(
@@ -3184,6 +3205,7 @@ pub fn WelsCodePOverDynamicSlice(
     pCtxOutBs: &mut Option<&mut BsWriter>,
     pMbs: &mut crate::safe::mb_grid::MbWindow<'_, SMB>,
     pRestoreBuf: Option<&mut [u8]>,
+    pNextSlice: Option<&mut SSlice>,
 ) -> i32 {
     // S10.15: the layer is only read here — `current_layer_ref`, not the
     // fork-shared raw.
@@ -3197,7 +3219,7 @@ pub fn WelsCodePOverDynamicSlice(
     } else {
         true
     };
-    WelsPSliceMdEncDynamic(pEncCtx, pSlice, kbHighestSpatial, pSliceBsBuf, pCtxOutBs, pMbs, pRestoreBuf)
+    WelsPSliceMdEncDynamic(pEncCtx, pSlice, kbHighestSpatial, pSliceBsBuf, pCtxOutBs, pMbs, pRestoreBuf, pNextSlice)
 }
 
 pub extern "C" fn WelsCodePSlice_c(
@@ -3207,6 +3229,7 @@ pub extern "C" fn WelsCodePSlice_c(
     pCtxOutBs: &mut Option<&mut BsWriter>,
     pMbs: &mut crate::safe::mb_grid::MbWindow<'_, SMB>,
     pRestoreBuf: Option<&mut [u8]>,
+    pNextSlice: Option<&mut SSlice>,
 ) -> i32 {
     // **S11.4: the audited call, at the slot boundary.** The slot type
     // (`PWelsCodingSliceFunc`) is a safe fn pointer now, which is what lets the
@@ -3216,7 +3239,7 @@ pub extern "C" fn WelsCodePSlice_c(
     // (`mb_window`, the entropy stash pair, `WelsMdIntraMb`) is unconverted.
     // The claim is exactly the target's: the arguments are the references this
     // signature already guarantees, and nothing here derives a pointer.
-    WelsCodePSlice(pCtx, pSlice, pSliceBsBuf, pCtxOutBs, pMbs, pRestoreBuf)
+    WelsCodePSlice(pCtx, pSlice, pSliceBsBuf, pCtxOutBs, pMbs, pRestoreBuf, pNextSlice)
 }
 
 pub extern "C" fn WelsCodePOverDynamicSlice_c(
@@ -3226,6 +3249,7 @@ pub extern "C" fn WelsCodePOverDynamicSlice_c(
     pCtxOutBs: &mut Option<&mut BsWriter>,
     pMbs: &mut crate::safe::mb_grid::MbWindow<'_, SMB>,
     pRestoreBuf: Option<&mut [u8]>,
+    pNextSlice: Option<&mut SSlice>,
 ) -> i32 {
     // **S11.4: the audited call, at the slot boundary.** The slot type
     // (`PWelsCodingSliceFunc`) is a safe fn pointer now, which is what lets the
@@ -3235,7 +3259,7 @@ pub extern "C" fn WelsCodePOverDynamicSlice_c(
     // (`mb_window`, the entropy stash pair, `WelsMdIntraMb`) is unconverted.
     // The claim is exactly the target's: the arguments are the references this
     // signature already guarantees, and nothing here derives a pointer.
-    WelsCodePOverDynamicSlice(pCtx, pSlice, pSliceBsBuf, pCtxOutBs, pMbs, pRestoreBuf)
+    WelsCodePOverDynamicSlice(pCtx, pSlice, pSliceBsBuf, pCtxOutBs, pMbs, pRestoreBuf, pNextSlice)
 }
 
 pub extern "C" fn WelsISliceMdEnc_c(
@@ -3245,6 +3269,7 @@ pub extern "C" fn WelsISliceMdEnc_c(
     pCtxOutBs: &mut Option<&mut BsWriter>,
     pMbs: &mut crate::safe::mb_grid::MbWindow<'_, SMB>,
     pRestoreBuf: Option<&mut [u8]>,
+    pNextSlice: Option<&mut SSlice>,
 ) -> i32 {
     // **S11.4: the audited call, at the slot boundary.** The slot type
     // (`PWelsCodingSliceFunc`) is a safe fn pointer now, which is what lets the
@@ -3254,7 +3279,7 @@ pub extern "C" fn WelsISliceMdEnc_c(
     // (`mb_window`, the entropy stash pair, `WelsMdIntraMb`) is unconverted.
     // The claim is exactly the target's: the arguments are the references this
     // signature already guarantees, and nothing here derives a pointer.
-    WelsISliceMdEnc(pCtx, pSlice, pSliceBsBuf, pCtxOutBs, pMbs, pRestoreBuf)
+    WelsISliceMdEnc(pCtx, pSlice, pSliceBsBuf, pCtxOutBs, pMbs, pRestoreBuf, pNextSlice)
 }
 
 pub extern "C" fn WelsISliceMdEncDynamic_c(
@@ -3264,6 +3289,7 @@ pub extern "C" fn WelsISliceMdEncDynamic_c(
     pCtxOutBs: &mut Option<&mut BsWriter>,
     pMbs: &mut crate::safe::mb_grid::MbWindow<'_, SMB>,
     pRestoreBuf: Option<&mut [u8]>,
+    pNextSlice: Option<&mut SSlice>,
 ) -> i32 {
     // **S11.4: the audited call, at the slot boundary.** The slot type
     // (`PWelsCodingSliceFunc`) is a safe fn pointer now, which is what lets the
@@ -3273,7 +3299,7 @@ pub extern "C" fn WelsISliceMdEncDynamic_c(
     // (`mb_window`, the entropy stash pair, `WelsMdIntraMb`) is unconverted.
     // The claim is exactly the target's: the arguments are the references this
     // signature already guarantees, and nothing here derives a pointer.
-    WelsISliceMdEncDynamic(pCtx, pSlice, pSliceBsBuf, pCtxOutBs, pMbs, pRestoreBuf)
+    WelsISliceMdEncDynamic(pCtx, pSlice, pSliceBsBuf, pCtxOutBs, pMbs, pRestoreBuf, pNextSlice)
 }
 
 pub extern "C" fn WelsSliceHeaderWrite_c(
@@ -3379,6 +3405,7 @@ pub fn WelsCodeOneSlice(
     pCtxOutBs: &mut Option<&mut BsWriter>,
     pMbs: &mut crate::safe::mb_grid::MbWindow<'_, SMB>,
     pRestoreBuf: Option<&mut [u8]>,
+    pNextSlice: Option<&mut SSlice>,
 ) -> i32 {
     // **S7.A5**: the `is_null()` guard and its early return retire with the
     // parameter — every context reaching this body comes from a `&mut sWelsEncCtx`
@@ -3457,7 +3484,7 @@ pub fn WelsCodeOneSlice(
     // the held cursor it explained.
     let idr_idx = pCurLayer.sLayerInfo.sNalHeaderExt.bIdrFlag as usize;
     let func = g_pWelsSliceCoding[idr_idx][kiDynamicSliceFlag];
-    let iEncReturn = func(pEncCtx, &mut *pCurSlice, &mut *pSliceBsBuf, &mut *pCtxOutBs, pMbs, pRestoreBuf);
+    let iEncReturn = func(pEncCtx, &mut *pCurSlice, &mut *pSliceBsBuf, &mut *pCtxOutBs, pMbs, pRestoreBuf, pNextSlice);
     if iEncReturn != ENC_RETURN_SUCCESS {
         return iEncReturn;
     }
@@ -3519,9 +3546,7 @@ pub fn WelsWriteSliceEndSyn(
 // Dynamic Slicing & Boundary Enforcement
 // ============================================================================
 
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
-pub unsafe fn AddSliceBoundary(
+pub fn AddSliceBoundary(
     pEncCtx: &sWelsEncCtx,
     pCurSlice: &mut SSlice,
     // **S11.30: shared.** Every touch through this parameter is a shared read
@@ -3540,15 +3565,19 @@ pub unsafe fn AddSliceBoundary(
     kiLastMbIdxInPartition: i32,
     // S11.27: the worker's own records, threaded down from the md loop.
     pMbs: &mut crate::safe::mb_grid::MbWindow<'_, SMB>,
+    // **S11.33: the forward slot arrives resolved.** This body used to walk
+    // the bank for it (`slice_bank_root` + the MT/ST index arms) — the last
+    // raw operation it had. The loop that owns the bank resolves the slot
+    // beside the current slice and threads it down; `None` is what the old
+    // null answered (the slot past the bank's end), and the write below is
+    // skipped for it exactly as before.
+    pNextSlice: Option<&mut SSlice>,
 ) {
     // **S7.A5**: the context arm retired with that parameter; S11.30 retires the
     // `pSliceCtx.is_null()` arm the same way — a `&SSliceCtx` cannot be null,
     // and both callers derive it from the layer they already hold.
     let pCurLayer = current_layer_ref(pEncCtx)
         .expect("the frame's current layer is stamped");
-    let buf_idx = (*pCurSlice).uiBufferIdx as usize;
-    let pSliceBuffer = slice_bank_root(&*pCurLayer, buf_idx);
-    let iCodedSliceNum = (*pCurLayer).sSliceBufferInfo[buf_idx].iCodedSliceNum;
     let iCurMbIdx = kiCurMbIdx;
     let iCurSliceIdc = {
         let map: &[AtomicU16] = &(*pSliceCtx).pOverallMbMap;
@@ -3559,16 +3588,10 @@ pub unsafe fn AddSliceBoundary(
 
     (*pCurSlice).sSliceHeaderExt.uiNumMbsInSlice = (1 + iCurMbIdx - (*pCurSlice).sSliceHeaderExt.sSliceHeader.iFirstMbInSlice) as u32;
 
-    let pNextSlice = if (*pEncCtx).iActiveThreadsNum > 1 {
-        pSliceBuffer.add((iCodedSliceNum + 1) as usize)
-    } else {
-        pSliceBuffer.add(iNextSliceIdc as usize)
-    };
-
-    if !pNextSlice.is_null() {
-        (*pNextSlice).bSliceHeaderExtFlag = (*pCurLayer).sLayerInfo.sNalHeaderExt.sNalUnitHeader.eNalUnitType == EWelsNalUnitType::NAL_UNIT_CODED_SLICE_EXT;
-        std::ptr::copy_nonoverlapping(&(*pCurSlice).sSliceHeaderExt, &mut (*pNextSlice).sSliceHeaderExt, 1);
-        (*pNextSlice).sSliceHeaderExt.sSliceHeader.iFirstMbInSlice = iFirstMbIdxOfNextSlice;
+    if let Some(pNextSlice) = pNextSlice {
+        pNextSlice.bSliceHeaderExtFlag = (*pCurLayer).sLayerInfo.sNalHeaderExt.sNalUnitHeader.eNalUnitType == EWelsNalUnitType::NAL_UNIT_CODED_SLICE_EXT;
+        pNextSlice.sSliceHeaderExt = (*pCurSlice).sSliceHeaderExt;
+        pNextSlice.sSliceHeaderExt.sSliceHeader.iFirstMbInSlice = iFirstMbIdxOfNextSlice;
 
         // C++ calls WelsSetMemMultiplebytes_c, whose count is a signed int32_t; the
         // open-coded `for i in 0..count as usize` here wrapped to ~2^64 iterations
@@ -3603,6 +3626,7 @@ pub fn DynSlcJudgeSliceBoundaryStepBack(
     kiCurMbIdx: i32,
     pDss: &mut SDynamicSlicingStack<'_>,
     pMbs: &mut crate::safe::mb_grid::MbWindow<'_, SMB>,
+    pNextSlice: Option<&mut SSlice>,
 ) -> bool {
     let iCurMbIdx = kiCurMbIdx;
     let kiActiveThreadsNum = (*pEncCtx).iActiveThreadsNum;
@@ -3664,16 +3688,10 @@ pub fn DynSlcJudgeSliceBoundaryStepBack(
             }
         };
         crate::encoder::slice_multi_threading::with_wels_mutex(pSmtMutex, || {
-            // S11.30: the judge's last unsafe claim, and it is the callee's —
-            // `AddSliceBoundary` walks neighbouring slices out of
-            // `slice_bank_root` (the slice-bank family, F71's remaining root
-            // here). Its reference arguments are the ones this body already
-            // holds; nothing is derived at this call.
-            // unsafe-cat: fork-shared(S63)
-            #[allow(unsafe_code)]
-            unsafe {
-                AddSliceBoundary(pEncCtx, pCurSlice, pSliceCtx, iCurMbIdx, iCurMbIdx, kiEndMbIdxOfPartition, pMbs);
-            }
+            // S11.33: safe — the boundary's forward slot arrives resolved
+            // (`pNextSlice`), so the callee's bank walk and the claim it
+            // carried are gone within one checkpoint of being written down.
+            AddSliceBoundary(pEncCtx, pCurSlice, pSliceCtx, iCurMbIdx, iCurMbIdx, kiEndMbIdxOfPartition, pMbs, pNextSlice);
             pSliceCtx.iSliceNumInFrame.fetch_add(1, Ordering::Relaxed);
         });
         return true;
