@@ -1091,13 +1091,21 @@ pub unsafe fn ctx_pic_ref<'a>(pCtx: &'a sWelsEncCtx, r: PicRef) -> Option<&'a SP
 #[inline]
 // unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
-pub unsafe fn layer_ref_pic<'a>(pLayer: &'a SDqLayer) -> Option<&'a SPicture> {
-    let id = (*pLayer).pRefPic?;
-    let pRefList = (*pLayer).pRefList;
-    if pRefList.is_null() {
-        return None;
-    }
-    Some((*pRefList).pic(id))
+pub fn layer_ref_pic<'a>(
+    pCtx: &'a sWelsEncCtx,
+    pLayer: &SDqLayer,
+) -> Option<&'a SPicture> {
+    // **S10.8: resolved through the context, on the layer's own dependency id.**
+    // `SDqLayer::pRefList` was a per-frame copy of `ctx.ppRefPicListExt[did]`,
+    // stamped by `WelsInitCurrentLayer` from `pCtx.uiDependencyId` — the same
+    // value it writes into `sLayerInfo.sNalHeaderExt.uiDependencyId` seventy lines
+    // later, in the same body. So this reads the layer's *own* id rather than the
+    // context's current one: under multi-layer SVC the frame loop moves
+    // `pCtx.uiDependencyId` on, and the stamped list is the one this layer's
+    // readers mean.
+    let id = pLayer.pRefPic?;
+    let did = pLayer.sLayerInfo.sNalHeaderExt.uiDependencyId as usize;
+    Some(pCtx.ref_list(did)?.pic(id))
 }
 
 /// The reference picture's screen-content feature storage, resolved per call —
@@ -1114,7 +1122,8 @@ pub unsafe fn layer_ref_pic<'a>(pLayer: &'a SDqLayer) -> Option<&'a SPicture> {
 // layer parameter is the S63 seam (G's)
 #[allow(unsafe_code)]
 pub unsafe fn layer_ref_feature_storage<'a>(
-    pLayer: &'a SDqLayer,
+    pCtx: &'a sWelsEncCtx,
+    pLayer: &SDqLayer,
 ) -> Option<&'a crate::encoder::picture::SScreenBlockFeatureStorage> {
     // **S5.C6c**: the picture owns the storage as an `Option<Box<..>>` now, so the
     // pointer is derived from it rather than copied out of it. The far end —
@@ -1123,7 +1132,7 @@ pub unsafe fn layer_ref_feature_storage<'a>(
     // the answer is always null, because nothing ever fills the `Option` (F229).
     // **S5.C6d**: an `Option<&..>` end to end now — the raw bridge C6c needed is gone
     // with `SWelsME::pRefFeatureStorage`, the far end that had required it.
-    layer_ref_pic(pLayer)?.pScreenBlockFeatureStorage.as_deref()
+    layer_ref_pic(pCtx, pLayer)?.pScreenBlockFeatureStorage.as_deref()
 }
 
 // `layer_enc_pic` stood here — "the **source** picture this layer encodes from,
@@ -1209,9 +1218,10 @@ pub fn layer_rec_view<'a>(
 // resolution this wraps; nothing raw is introduced here.
 #[allow(unsafe_code)]
 pub unsafe fn layer_ref_view(
+    pCtx: &sWelsEncCtx,
     pLayer: &SDqLayer,
 ) -> Option<crate::encoder::rec_view::RoPicView> {
-    Some(crate::encoder::rec_view::RoPicView::build(layer_ref_pic(pLayer)?))
+    Some(crate::encoder::rec_view::RoPicView::build(layer_ref_pic(pCtx, pLayer)?))
 }
 
 /// The frame's source planes, as `layer_rec_view` is its reconstruction planes.
@@ -1309,17 +1319,15 @@ pub struct SDqLayer {
     pub iInterLayerSliceBetaOffset: i8,
     pub bDeblockingParallelFlag: bool,
 
-    /// This layer's reference list — the **owner** of the reconstruction pool that
-    /// [`pRefPic`](Self::pRefPic) and [`pDecPic`](Self::pDecPic) name slots in.
-    ///
-    /// Raw, and for the same reason `sWelsEncCtx::ppRefPicListExt` is raw (session
-    /// F's boundary list): the pointee owns, the pointer does not. It exists because
-    /// the per-macroblock mode-decision family reaches the reference picture through
-    /// `pCurDqLayer` alone — `WelsMdP16x16`, `WelsMdUpdateBGDInfo` and the motion
-    /// search take no context — so without it a handle here would name a pool nothing
-    /// in scope could open. Stamped by `WelsInitCurrentLayer` from
-    /// `ppRefPicListExt[uiDependencyId]`, which is the list these handles belong to.
-    pub pRefList: *mut crate::encoder::encoder_context::SRefList,
+    // `pRefList: *mut SRefList` stood here — a per-frame copy of
+    // `sWelsEncCtx::ppRefPicListExt[did]`, stamped by `WelsInitCurrentLayer`.
+    //
+    // **S10.8, deleted.** Unlike `pEncData` / `pCsData` / `pSrcPool` this one was
+    // *live*: `layer_ref_pic` resolved through it, and two deblocking bodies
+    // null-tested it. It resolves through the context now, on the layer's **own**
+    // `sLayerInfo.sNalHeaderExt.uiDependencyId` — the same value the stamp used —
+    // so multi-layer SVC, where the frame loop moves `pCtx.uiDependencyId` on, still
+    // names this layer's list. **The last of `SDqLayer`'s four `Sync` blockers.**
 
     pub pRefPic: Option<RecPicId>,
     pub pDecPic: Option<RecPicId>,
@@ -1499,7 +1507,6 @@ impl SDqLayer {
             bDeblockingParallelFlag: false,
             // Picture slots, aimed per frame; `None` is "no picture bound", and the
             // list they name slots in is stamped with them (T6.F1).
-            pRefList: std::ptr::null_mut(),
             pRefPic: None,
             pDecPic: None,
             pEncPic: None,
@@ -2473,7 +2480,7 @@ pub unsafe fn WelsISliceMdEnc(pEncCtx: &sWelsEncCtx, pSlice: &mut SSlice) -> i32
         {  // A6: the block is the shared borrow's scope (F191/F212)
             let func_list = (*pEncCtx).func_list();
             if let Some(func) = func_list.pfMdBackgroundInfoUpdate {
-                func(&*pCurLayer, mbs.cur_mut(), pMbCache.bCollocatedPredFlag, I_SLICE);
+                func(pEncCtx, &*pCurLayer, mbs.cur_mut(), pMbCache.bCollocatedPredFlag, I_SLICE);
             }
             func_list.pfRc.WelsRcMbInfoUpdate(
                 pEncCtx,
@@ -2812,6 +2819,7 @@ pub unsafe fn WelsMdInterMbLoop<'a>(
 
                 if let Some(func) = func_list.pfMdBackgroundInfoUpdate {
                     func(
+                        pEncCtx,
                         &*pCurLayer,
                         mbs.cur_mut(),
                         (*pMbCache).bCollocatedPredFlag,
@@ -3013,6 +3021,7 @@ pub unsafe fn WelsMdInterMbLoopOverDynamicSlice<'a>(
                 let func_list = (*pEncCtx).func_list();
                 if let Some(func) = func_list.pfMdBackgroundInfoUpdate {
                     func(
+                        pEncCtx,
                         &*pCurLayer,
                         mbs.cur_mut(),
                         (*pMbCache).bCollocatedPredFlag,

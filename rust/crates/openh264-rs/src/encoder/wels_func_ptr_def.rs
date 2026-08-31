@@ -78,9 +78,14 @@ pub type PIntraFineMdFunc = unsafe fn(
 ) -> i32;
 
 /// `wels_func_ptr_def.h:107`
-pub type PInterFineMdFunc = unsafe fn(
-    pEncCtx: &sWelsEncCtx,
-    pWelsMd: &mut SWelsMD<'_>,
+pub type PInterFineMdFunc = for<'a> unsafe fn(
+    // **S10.8: the context and the mode-decision record share a lifetime.** The
+    // fine-partition body resolves the reference picture through the context now
+    // (`layer_ref_pic` takes it since `SDqLayer::pRefList` went), and that picture
+    // is what `SWelsMD`'s cursors point into — so the slot has to say the two
+    // outlive each other, where before the layer's own raw field hid the tie.
+    pEncCtx: &'a sWelsEncCtx,
+    pWelsMd: &mut SWelsMD<'a>,
     slice: &mut SSlice,
     pCurMb: &mut SMB,
     bestCost: i32,
@@ -119,6 +124,9 @@ pub type PInterMdBackgroundDecisionFunc = unsafe fn(
 
 /// `wels_func_ptr_def.h:118`
 pub type PMdBackgroundInfoUpdateFunc = unsafe extern "C" fn(
+    // S10.8: the context, because the body resolves the reference picture through
+    // it now that `SDqLayer::pRefList` is gone.
+    pEncCtx: &sWelsEncCtx,
     pCurLayer: &SDqLayer,
     pCurMb: &mut SMB,
     bFlag: bool,
@@ -146,9 +154,12 @@ pub type PInterMdScrollingPSkipDecisionFunc = unsafe fn(
 pub type PSetScrollingMv = unsafe fn(pVaa: &SVAAFrameInfo, pMd: &mut SWelsMD<'_>);
 
 /// `wels_func_ptr_def.h:125`
-pub type PInterMdFunc = unsafe fn(
-    pEncCtx: &sWelsEncCtx,
-    pWelsMd: &mut SWelsMD<'_>,
+pub type PInterMdFunc = for<'a> unsafe fn(
+    // S10.8, as `PInterFineMdFunc`: the reference picture is resolved through the
+    // context now, and `SWelsMD`'s cursors point into it, so the slot says the two
+    // share a lifetime.
+    pEncCtx: &'a sWelsEncCtx,
+    pWelsMd: &mut SWelsMD<'a>,
     slice: &mut SSlice,
     mbs: &mut crate::safe::mb_grid::MbWindow<'_, SMB>,
 );

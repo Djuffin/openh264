@@ -1587,7 +1587,7 @@ pub unsafe extern "C" fn MeRefineFracPixel(
     let kiBlockY = (*pMe).iCurMeBlockPixY as isize;
     let pEncPicture = layer_enc_view(&*pCurDqLayer).expect("the layer's source view is built for this frame");
     let cEnc = pEncPicture.plane(0).cursor(kiBlockX, kiBlockY);
-    let pRefPicture = layer_ref_view(&*pCurDqLayer).expect("the layer's reference view is built for this frame");
+    let pRefPicture = layer_ref_view(pEncCtx, &*pCurDqLayer).expect("the layer's reference view is built for this frame");
     let cRef = pRefPicture.plane(0).cursor(
         kiBlockX + ((iMvx as isize) >> 2),
         kiBlockY + ((iMvy as isize) >> 2),

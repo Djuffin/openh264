@@ -1273,9 +1273,11 @@ pub unsafe fn DeblockingFilterFrameAvcbase(pCurDq: &mut SDqLayer) {
     // `pCsData` — `mb_cursors` derives each macroblock's three cursors from the
     // seam view and the macroblock's own `(iMbX, iMbY)`, which is the same
     // arithmetic one level down and cannot drift out of step with the loop.
-    if (*pCurDq).pRefList.is_null() {
-        return;
-    }
+    // **S10.8: the `pRefList.is_null()` guard is gone, subsumed by the one below.**
+    // `WelsInitCurrentLayer` stamps `pRefList` and then `pRecView`, and `pRecView`
+    // is only ever *set*, never cleared — so a null `pRefList` means the stamp has
+    // never run, and `pRecView` is `None` in exactly that state. Every case this
+    // returned on, the next guard returns on. It went with the field.
     // **S6.A1**: the field, not [`layer_rec_view`]. That accessor's `'a` binds to
     // the layer now that it takes `&'a SDqLayer`, so its result borrows the *whole*
     // layer — which cannot coexist with the `&mut pCurDq.sMbDataP` window below.
@@ -1363,9 +1365,11 @@ pub unsafe extern "C" fn DeblockingFilterSliceAvcbase(
     // The guard is the old `None` arm's two conditions — the layer's handle
     // (tested at the top of this function) and a bound reference list — plus a
     // null root, which the old spelling would have carried into a null deref.
-    if (*pCurDq).pRefList.is_null() {
-        return;
-    }
+    // **S10.8: the `pRefList.is_null()` guard is gone, subsumed by the one below.**
+    // `WelsInitCurrentLayer` stamps `pRefList` and then `pRecView`, and `pRecView`
+    // is only ever *set*, never cleared — so a null `pRefList` means the stamp has
+    // never run, and `pRecView` is `None` in exactly that state. Every case this
+    // returned on, the next guard returns on. It went with the field.
     let Some(view) = crate::encoder::svc_encode_slice::layer_rec_view(&*pCurDq) else {
         return;
     };

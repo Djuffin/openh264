@@ -2218,7 +2218,10 @@ pub unsafe fn WelsInitCurrentLayer(pCtx: &mut sWelsEncCtx, _kiWidth: i32, _kiHei
         pCtx,
         pCtx.uiDependencyId as usize,
     );
-    (*pCurDq).pRefList = pRefList;
+    // **S10.8: `pRefList`'s stamp is gone with the field.** It was a per-frame copy
+    // of `ctx.ppRefPicListExt[did]`; `layer_ref_pic` resolves that through the
+    // context on the layer's own dependency id now. The local below still needs the
+    // raw for `pic_mut` and the reconstruction view.
     let pBaseSlice = crate::encoder::svc_encode_slice::slice_in_layer(pCurDq.as_ref(), 0);
     if pBaseSlice.is_null() {
         return;

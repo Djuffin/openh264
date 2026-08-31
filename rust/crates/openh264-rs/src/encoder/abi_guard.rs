@@ -437,12 +437,13 @@ assert_size!(SSliceBufferInfo, 32);
 // contract — `SDqLayer` does not cross the boundary — it catches a *second
 // declaration* of the type read at the wrong offsets, so it moves with a deliberate
 // field addition. Both numbers measured, in the profile they name.
-// **S10.5/S10.6/S10.7: -56 in both profiles** — `pEncData` and `pCsData` (the two
-// `[*mut u8; 3]` plane-root arrays) and `pSrcPool`, all deleted as write-only once
-// the seams (`pEncView`, `pRecView`) had taken every reader. Deliberate field
-// *removals*, so the pin moves with them for the reason stated above; every number
-// re-measured in the profile it names, not adjusted by arithmetic.
-assert_size_by_profile!(SDqLayer, debug 808, release 736);
+// **S10.5-S10.8: -64 in both profiles** — `pEncData`, `pCsData`, `pSrcPool` (all
+// three write-only once the seams had taken their readers) and `pRefList` (live,
+// re-resolved through the context on the layer's own dependency id). Deliberate
+// field *removals*, so the pin moves with them for the reason stated above; every
+// number re-measured in the profile it names, not adjusted by arithmetic.
+// **`SDqLayer` is `Sync` as of this pin** — the four raw fields are gone.
+assert_size_by_profile!(SDqLayer, debug 800, release 728);
 
 // codec/encoder/core/inc/wels_func_ptr_def.h
 // 1280 before Phase 4a; -8 for `SSampleDealingFunc`'s shrink above; -24 at T4b.1,

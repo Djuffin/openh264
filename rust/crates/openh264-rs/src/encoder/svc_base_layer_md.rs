@@ -987,7 +987,7 @@ pub unsafe fn WelsMdInterInit(
     (*pMbCache).SPicData.iMbX = kiMbX;
     (*pMbCache).SPicData.iMbY = kiMbY;
 
-    (*pMbCache).uiRefMbType = (&layer_ref_pic(&*pCurLayer).expect("bound").uiRefMbType)[kiMbXY as usize];
+    (*pMbCache).uiRefMbType = (&layer_ref_pic(pEncCtx, &*pCurLayer).expect("bound").uiRefMbType)[kiMbXY as usize];
     (*pMbCache).bCollocatedPredFlag = false;
 
     //comment: sometimes, mode decision process may skip the md_p16x16 and md_pskip function,
@@ -1016,6 +1016,7 @@ pub unsafe fn WelsMdInterInit(
 // dispatch cursor this tag used to name is a shared reference since T9.F4
 #[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsMdP16x8<'a>(
+    pEncCtx: &'a sWelsEncCtx,
     pFunc: &SWelsFuncPtrList,
     pCurDqLayer: &'a SDqLayer,
     pWelsMd: &mut SWelsMD<'a>,
@@ -1031,7 +1032,7 @@ pub unsafe extern "C" fn WelsMdP16x8<'a>(
             (*pWelsMd).iMbPixY,
             (*pWelsMd).pMvdCost,
             BLOCK_16x8 as i32,
-            crate::encoder::svc_encode_slice::layer_ref_feature_storage(pCurDqLayer),
+            crate::encoder::svc_encode_slice::layer_ref_feature_storage(pEncCtx, &*pCurDqLayer),
             sMe16x8,
         );
         //not putting the lines below into InitMe to avoid judging mode in InitMe
@@ -1044,7 +1045,7 @@ pub unsafe extern "C" fn WelsMdP16x8<'a>(
         PredInter16x8Mv(&(*pMbCache).sMvComponents, i << 3, 0, &mut (*sMe16x8).sMvp);
         {
             let pEncPicture = layer_enc_view(pCurDqLayer).expect("the layer's source view is built for this frame");
-            let pRefPicture = layer_ref_view(pCurDqLayer).expect("the layer's reference view is built for this frame");
+            let pRefPicture = layer_ref_view(pEncCtx, &*pCurDqLayer).expect("the layer's reference view is built for this frame");
             pFunc.pfMotionSearch[0].expect("pfMotionSearch[0] unset")(
                 &pFunc.sMeFuncs,
                 &pFunc.sSampleDealingFuncs,
@@ -1080,6 +1081,7 @@ pub unsafe extern "C" fn WelsMdP16x8<'a>(
 // dispatch cursor this tag used to name is a shared reference since T9.F4
 #[allow(unsafe_code)]
 pub unsafe extern "C" fn WelsMdP8x16<'a>(
+    pEncCtx: &'a sWelsEncCtx,
     pFunc: &SWelsFuncPtrList,
     pCurLayer: &'a SDqLayer,
     pWelsMd: &mut SWelsMD<'a>,
@@ -1095,7 +1097,7 @@ pub unsafe extern "C" fn WelsMdP8x16<'a>(
             (*pWelsMd).iMbPixY,
             (*pWelsMd).pMvdCost,
             BLOCK_8x16 as i32,
-            crate::encoder::svc_encode_slice::layer_ref_feature_storage(pCurLayer),
+            crate::encoder::svc_encode_slice::layer_ref_feature_storage(pEncCtx, &*pCurLayer),
             sMe8x16,
         );
         //not putting the lines below into InitMe to avoid judging mode in InitMe
@@ -1108,7 +1110,7 @@ pub unsafe extern "C" fn WelsMdP8x16<'a>(
         PredInter8x16Mv(&(*pMbCache).sMvComponents, i << 2, 0, &mut (*sMe8x16).sMvp);
         {
             let pEncPicture = layer_enc_view(pCurLayer).expect("the layer's source view is built for this frame");
-            let pRefPicture = layer_ref_view(pCurLayer).expect("the layer's reference view is built for this frame");
+            let pRefPicture = layer_ref_view(pEncCtx, &*pCurLayer).expect("the layer's reference view is built for this frame");
             pFunc.pfMotionSearch[0].expect("pfMotionSearch[0] unset")(
                 &pFunc.sMeFuncs,
                 &pFunc.sSampleDealingFuncs,
@@ -1149,15 +1151,16 @@ pub unsafe extern "C" fn WelsMdP8x16<'a>(
 /// All pointers must be valid.
 // unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
-pub unsafe fn WelsMdInterFinePartition(
-    pEncCtx: &sWelsEncCtx,
-    pWelsMd: &mut SWelsMD<'_>,
+pub unsafe fn WelsMdInterFinePartition<'a>(
+    pEncCtx: &'a sWelsEncCtx,
+    pWelsMd: &mut SWelsMD<'a>,
     pSlice: &mut SSlice,
     pCurMb: &mut SMB,
     iBestCost: i32,
 ) {
     let pCurDqLayer = current_layer(pEncCtx);
     let mut iCost = crate::encoder::svc_mode_decision::WelsMdP8x8(
+        pEncCtx,
         (*pEncCtx).func_list(),
         &*pCurDqLayer,
         pWelsMd,
@@ -1168,13 +1171,13 @@ pub unsafe fn WelsMdInterFinePartition(
         (*pCurMb).uiMbType = MB_TYPE_8x8;
         (*pCurMb).uiSubMbType = [SUB_MB_TYPE_8x8; 4];
 
-        let mut iCostPart = WelsMdP16x8((*pEncCtx).func_list(), &*pCurDqLayer, pWelsMd, pSlice);
+        let mut iCostPart = WelsMdP16x8(pEncCtx, (*pEncCtx).func_list(), &*pCurDqLayer, pWelsMd, pSlice);
         if iCostPart <= iCost {
             iCost = iCostPart;
             (*pCurMb).uiMbType = MB_TYPE_16x8;
         }
 
-        iCostPart = WelsMdP8x16((*pEncCtx).func_list(), &*pCurDqLayer, pWelsMd, pSlice);
+        iCostPart = WelsMdP8x16(pEncCtx, (*pEncCtx).func_list(), &*pCurDqLayer, pWelsMd, pSlice);
         if iCostPart <= iCost {
             (*pCurMb).uiMbType = MB_TYPE_8x16;
         }
@@ -1189,9 +1192,9 @@ pub unsafe fn WelsMdInterFinePartition(
 /// populated and `pfGetMbSignFromInterVaa` assigned.
 // unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
-pub unsafe fn WelsMdInterFinePartitionVaa(
-    pEncCtx: &sWelsEncCtx,
-    pWelsMd: &mut SWelsMD<'_>,
+pub unsafe fn WelsMdInterFinePartitionVaa<'a>(
+    pEncCtx: &'a sWelsEncCtx,
+    pWelsMd: &mut SWelsMD<'a>,
     pSlice: &mut SSlice,
     pCurMb: &mut SMB,
     iBestCostIn: i32,
@@ -1228,14 +1231,14 @@ pub unsafe fn WelsMdInterFinePartitionVaa(
 
     match uiMbSign {
         3 | 12 => {
-            let iCostP16x8 = WelsMdP16x8((*pEncCtx).func_list(), &*pCurDqLayer, pWelsMd, pSlice);
+            let iCostP16x8 = WelsMdP16x8(pEncCtx, (*pEncCtx).func_list(), &*pCurDqLayer, pWelsMd, pSlice);
             if iCostP16x8 < iBestCost {
                 iBestCost = iCostP16x8;
                 (*pCurMb).uiMbType = MB_TYPE_16x8;
             }
         }
         5 | 10 => {
-            let iCostP8x16 = WelsMdP8x16((*pEncCtx).func_list(), &*pCurDqLayer, pWelsMd, pSlice);
+            let iCostP8x16 = WelsMdP8x16(pEncCtx, (*pEncCtx).func_list(), &*pCurDqLayer, pWelsMd, pSlice);
             if iCostP8x16 < iBestCost {
                 iBestCost = iCostP8x16;
                 (*pCurMb).uiMbType = MB_TYPE_8x16;
@@ -1243,7 +1246,8 @@ pub unsafe fn WelsMdInterFinePartitionVaa(
         }
         6 | 9 => {
             let iCostP8x8 = crate::encoder::svc_mode_decision::WelsMdP8x8(
-                (*pEncCtx).func_list(),
+        pEncCtx,
+        (*pEncCtx).func_list(),
                 &*pCurDqLayer,
                 pWelsMd,
                 pSlice,
@@ -1256,7 +1260,8 @@ pub unsafe fn WelsMdInterFinePartitionVaa(
         }
         _ => {
             let iCostP8x8 = crate::encoder::svc_mode_decision::WelsMdP8x8(
-                (*pEncCtx).func_list(),
+        pEncCtx,
+        (*pEncCtx).func_list(),
                 &*pCurDqLayer,
                 pWelsMd,
                 pSlice,
@@ -1266,13 +1271,13 @@ pub unsafe fn WelsMdInterFinePartitionVaa(
                 (*pCurMb).uiMbType = MB_TYPE_8x8;
                 (*pCurMb).uiSubMbType = [SUB_MB_TYPE_8x8; 4];
 
-                let iCostP16x8 = WelsMdP16x8((*pEncCtx).func_list(), &*pCurDqLayer, pWelsMd, pSlice);
+                let iCostP16x8 = WelsMdP16x8(pEncCtx, (*pEncCtx).func_list(), &*pCurDqLayer, pWelsMd, pSlice);
                 if iCostP16x8 <= iBestCost {
                     iBestCost = iCostP16x8;
                     (*pCurMb).uiMbType = MB_TYPE_16x8;
                 }
 
-                let iCostP8x16 = WelsMdP8x16((*pEncCtx).func_list(), &*pCurDqLayer, pWelsMd, pSlice);
+                let iCostP8x16 = WelsMdP8x16(pEncCtx, (*pEncCtx).func_list(), &*pCurDqLayer, pWelsMd, pSlice);
                 if iCostP8x16 <= iBestCost {
                     iBestCost = iCostP8x16;
                     (*pCurMb).uiMbType = MB_TYPE_8x16;
@@ -1373,7 +1378,7 @@ pub unsafe fn WelsMdPSkipEnc(
 
     //luma
     {
-        let pRefPicture = layer_ref_view(&*pCurLayer).expect("the layer's reference view is built for this frame");
+        let pRefPicture = layer_ref_view(pEncCtx, &*pCurLayer).expect("the layer's reference view is built for this frame");
         let cRefLuma = pRefPicture.plane(0).cursor(
             kiMbXLuma + sQpelMvp.iMvX as isize,
             kiMbYLuma + sQpelMvp.iMvY as isize,
@@ -1402,7 +1407,7 @@ pub unsafe fn WelsMdPSkipEnc(
     // origin; in samples that is `(mvX >> 1, mvY >> 1)` from the same origin, and
     // `sQpelMvp` is already `sMvp >> 2`, so both are `sMvp >> 3`.
     {
-        let pRefPicture = layer_ref_view(&*pCurLayer).expect("the layer's reference view is built for this frame");
+        let pRefPicture = layer_ref_view(pEncCtx, &*pCurLayer).expect("the layer's reference view is built for this frame");
         let cRefCb = pRefPicture.plane(1).cursor(
             kiMbXChroma + (sQpelMvp.iMvX as isize >> 1),
             kiMbYChroma + (sQpelMvp.iMvY as isize >> 1),
@@ -1418,7 +1423,7 @@ pub unsafe fn WelsMdPSkipEnc(
     };
 
     {
-        let pRefPicture = layer_ref_view(&*pCurLayer).expect("the layer's reference view is built for this frame");
+        let pRefPicture = layer_ref_view(pEncCtx, &*pCurLayer).expect("the layer's reference view is built for this frame");
         let cRefCr = pRefPicture.plane(2).cursor(
             kiMbXChroma + (sQpelMvp.iMvX as isize >> 1),
             kiMbYChroma + (sQpelMvp.iMvY as isize >> 1),
@@ -1437,9 +1442,9 @@ pub unsafe fn WelsMdPSkipEnc(
 
     if iSadCostMb == 0
         || iSadCostMb < (*pWelsMd).iSadPredSkip
-        || (layer_ref_pic(&*pCurLayer).map_or(false, |p| p.iPictureType == EWelsSliceType::P_SLICE as i32)
+        || (layer_ref_pic(pEncCtx, &*pCurLayer).map_or(false, |p| p.iPictureType == EWelsSliceType::P_SLICE as i32)
             && (*pMbCache).uiRefMbType == MB_TYPE_SKIP
-            && iSadCostMb < (&layer_ref_pic(&*pCurLayer).expect("bound").pMbSkipSad)[(*pCurMb).iMbXY as usize])
+            && iSadCostMb < (&layer_ref_pic(pEncCtx, &*pCurLayer).expect("bound").pMbSkipSad)[(*pCurMb).iMbXY as usize])
     {
         //update motion info to current MB
         AcceptPskip(pEncCtx, pWelsMd, pCurMb, pMbCache, &sMvp, iSadCostLuma, iSadCostMb);
@@ -1609,7 +1614,7 @@ pub unsafe fn WelsMdInterMbRefinement(
     macro_rules! mc_chroma_at {
         ($plane:expr, $off:expr, $dx:expr, $dy:expr, $mv:expr, $w:expr, $h:expr) => {{
             let pRefPicture =
-                layer_ref_view(&*pCurDqLayer).expect("the layer's reference view is built for this frame");
+                layer_ref_view(pEncCtx, &*pCurDqLayer).expect("the layer's reference view is built for this frame");
             let cRef = pRefPicture
                 .plane($plane)
                 .cursor(kiMbXChroma + ($dx) as isize, kiMbYChroma + ($dy) as isize);
@@ -1921,9 +1926,9 @@ pub unsafe fn WelsMdFirstIntraMode(
 /// `pfSCDPSkipDecision` must be assigned (`WelsInitBGDFunc` / `WelsInitSCDPskipFunc`).
 // unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
-pub unsafe fn WelsMdInterMb(
-    pEncCtx: &sWelsEncCtx,
-    pWelsMd: &mut SWelsMD<'_>,
+pub unsafe fn WelsMdInterMb<'a>(
+    pEncCtx: &'a sWelsEncCtx,
+    pWelsMd: &mut SWelsMD<'a>,
     pSlice: &mut SSlice,
     mbs: &mut crate::safe::mb_grid::MbWindow<'_, SMB>,
 ) {
@@ -1997,6 +2002,7 @@ pub unsafe fn WelsMdInterMb(
 
         //step 2: P_16x16
         (*pWelsMd).iCostLuma = crate::encoder::svc_mode_decision::WelsMdP16x16(
+            pEncCtx,
             (*pEncCtx).func_list(),
             &*pCurDqLayer,
             pWelsMd,
