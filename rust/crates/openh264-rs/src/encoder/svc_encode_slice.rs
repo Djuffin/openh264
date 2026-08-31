@@ -2307,16 +2307,17 @@ pub fn UpdateQpForOverflow(pCurMb: &mut SMB, kuiChromaQpIndexOffset: u8) {
 // Macroblock Search & Traversal Loops
 // ============================================================================
 
-pub fn WelsGetNextMbOfSlice(pCurDq: Option<&SDqLayer>, kiMbXY: i32) -> i32 {
-    let Some(pCurDq) = pCurDq else {
-        return -1;
-    };
+// **S11.26: the parameter is the field the body reads.** The layer form dated
+// from the C++'s `SDqLayer*`; every use below is `sSliceEncCtx`, and the
+// deblocking walker now holds only the ctx (its layer parameter is gone), so
+// the borrow-width rule (F275) says the signature follows the reads. The old
+// `None` arm answered `-1` for a null layer no live caller passes.
+pub fn WelsGetNextMbOfSlice(pSliceSeg: &crate::encoder::slice_multi_threading::SSliceCtx, kiMbXY: i32) -> i32 {
     // **`&`, T9.C5.** Nothing below writes; the `&mut` was a transliteration of the
     // C++'s `SSliceCtx*`, and under multi-threading every worker walks its own
     // slice through this function per macroblock, so it was a whole-`SSliceCtx`
     // retag taken concurrently — Miri's fourth verdict on the fork/join probe,
     // and the same shape as the stride tables' (T9.C4).
-    let pSliceSeg = &(*pCurDq).sSliceEncCtx;
     if kiMbXY < 0 || kiMbXY >= pSliceSeg.iMbNumInFrame {
         return -1;
     }
@@ -2498,7 +2499,7 @@ pub unsafe fn WelsISliceMdEnc(
         }
 
         iNumMbCoded += 1;
-        iNextMbIdx = WelsGetNextMbOfSlice(Some(&*pCurLayer), iCurMbIdx);
+        iNextMbIdx = WelsGetNextMbOfSlice(&(*pCurLayer).sSliceEncCtx, iCurMbIdx);
         if iNextMbIdx == -1 || iNextMbIdx >= kiTotalNumMb || iNumMbCoded >= kiTotalNumMb {
             break;
         }
@@ -2655,7 +2656,7 @@ pub unsafe fn WelsISliceMdEncDynamic(
         }
 
         iNumMbCoded += 1;
-        iNextMbIdx = WelsGetNextMbOfSlice(Some(&*pCurLayer), iCurMbIdx);
+        iNextMbIdx = WelsGetNextMbOfSlice(&(*pCurLayer).sSliceEncCtx, iCurMbIdx);
         if iNextMbIdx == -1 || iNextMbIdx >= kiTotalNumMb || iNumMbCoded >= kiTotalNumMb {
             (*pSlice).iCountMbNumInSlice = iCurMbIdx - (*pCurLayer).LastCodedMbIdxOfPartition[kiPartitionId].load(Ordering::Relaxed);
             (*pCurLayer).LastCodedMbIdxOfPartition[kiPartitionId].store(iCurMbIdx, Ordering::Relaxed);
@@ -2884,7 +2885,7 @@ pub unsafe fn WelsMdInterMbLoop<'a>(
         }
 
         iNumMbCoded += 1;
-        iNextMbIdx = WelsGetNextMbOfSlice(Some(pCurLayer), iCurMbIdx);
+        iNextMbIdx = WelsGetNextMbOfSlice(&pCurLayer.sSliceEncCtx, iCurMbIdx);
         if iNextMbIdx == -1 || iNextMbIdx >= kiTotalNumMb || iNumMbCoded >= kiTotalNumMb {
             break;
         }
@@ -3110,7 +3111,7 @@ pub unsafe fn WelsMdInterMbLoopOverDynamicSlice<'a>(
         }
 
         iNumMbCoded += 1;
-        iNextMbIdx = WelsGetNextMbOfSlice(Some(&*pCurLayer), iCurMbIdx);
+        iNextMbIdx = WelsGetNextMbOfSlice(&(*pCurLayer).sSliceEncCtx, iCurMbIdx);
         if iNextMbIdx == -1 || iNextMbIdx >= kiTotalNumMb || iNumMbCoded >= kiTotalNumMb {
             (*pCurLayer).LastCodedMbIdxOfPartition[kiPartitionId].store(iCurMbIdx, Ordering::Relaxed);
             (*pCurLayer).NumSliceCodedOfPartition[kiPartitionId].fetch_add(1, Ordering::Relaxed);

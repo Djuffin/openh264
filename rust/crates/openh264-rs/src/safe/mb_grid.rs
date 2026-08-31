@@ -563,6 +563,86 @@ impl<'a, T> MbWindow<'a, T> {
         let i = self.rel(self.cur.wrapping_sub(1), "prev-in-coding-order");
         &self.mbs[i]
     }
+
+    /// The window split at its cursor — **deblocking's access pattern as a
+    /// borrow** (S11.26): exclusive access to the current record, shared access
+    /// to the two raster predecessors the filter's boundary-strength and QP
+    /// guards may read.
+    ///
+    /// The filter writes exactly one record field (`DeblockingBSCalc_c`
+    /// normalises the current macroblock's `iNonZeroCount`) and reads exactly
+    /// two neighbours (`cur - 1` and `cur - stride`, both strictly earlier in
+    /// raster order). A whole-window `&mut` therefore *overclaims*: it asserts
+    /// exclusive ownership of records the filter only ever reads — the claim
+    /// that blocked carving the grid per worker, because a slice's left and top
+    /// skirt can be another slice's records. The split states the real
+    /// footprint, and `split_at_mut` is the proof: `cur` and the predecessors
+    /// come from disjoint halves of one borrow.
+    ///
+    /// `left`/`top` are absent (`None` behind the accessors) at a grid edge or
+    /// where the neighbour's record lies outside this window. Calling the
+    /// accessor anyway panics with F77's message — the availability *flags* are
+    /// still computed by the filter from the slice map, and a validated edge
+    /// whose record the window cannot name is a bug that should say so, not an
+    /// index error three frames down.
+    #[inline]
+    #[track_caller]
+    pub fn split_cur(&mut self) -> MbSplit<'_, T> {
+        let local = self.cur - self.base;
+        let (done, rest) = self.mbs.split_at_mut(local);
+        MbSplit {
+            cur: &mut rest[0],
+            left: (self.cur % self.stride != 0 && self.cur > self.base)
+                .then(|| &done[local - 1]),
+            top: (self.cur >= self.stride && self.cur >= self.base + self.stride)
+                .then(|| &done[local - self.stride]),
+        }
+    }
+}
+
+/// One record held exclusively beside shared references to its raster
+/// predecessors — what [`MbWindow::split_cur`] answers, and the only shape the
+/// deblocking tree accepts since S11.26.
+///
+/// The fields are private so the split can only be built by a window that
+/// actually contains the records; the accessors mirror [`MbWindow`]'s so the
+/// per-macroblock bodies read identically through either.
+pub struct MbSplit<'a, T> {
+    cur: &'a mut T,
+    left: Option<&'a T>,
+    top: Option<&'a T>,
+}
+
+impl<'a, T> MbSplit<'a, T> {
+    /// The current macroblock's record.
+    #[inline]
+    pub fn cur(&self) -> &T {
+        self.cur
+    }
+
+    /// Mutable form of [`cur`](Self::cur) — the one record deblocking writes.
+    #[inline]
+    pub fn cur_mut(&mut self) -> &mut T {
+        self.cur
+    }
+
+    /// The left neighbour's record. The caller has already checked its
+    /// availability flag — a panic here means the flag and the window's
+    /// geometry disagree, which is exactly what it should say (F77).
+    #[inline]
+    #[track_caller]
+    pub fn left(&self) -> &T {
+        self.left
+            .expect("left neighbour read with no record in the window — the availability flag and the geometry disagree (F77)")
+    }
+
+    /// The record above. See [`left`](Self::left) for the contract.
+    #[inline]
+    #[track_caller]
+    pub fn top(&self) -> &T {
+        self.top
+            .expect("top neighbour read with no record in the window — the availability flag and the geometry disagree (F77)")
+    }
 }
 
 /// Reference lists per macroblock — the decoder's `LIST_A`.
@@ -739,6 +819,41 @@ mod mb_window_tests {
         assert_eq!(*w.at(9), 99);
         *w.at_mut(9) = 9;
         assert_eq!(*w.cur(), 9);
+    }
+
+    /// S11.26: the split hands out the current record exclusively and its two
+    /// raster predecessors shared, from one borrow — deblocking's footprint.
+    #[test]
+    fn split_cur_pairs_the_exclusive_record_with_its_shared_predecessors() {
+        let mut a = grid();
+        let mut w = MbWindow::whole(&mut a, 6); // row 1, col 2
+        {
+            let mut s = w.split_cur();
+            assert_eq!((*s.cur(), *s.left(), *s.top()), (6, 5, 2));
+            *s.cur_mut() = 66; // the one write deblocking makes
+        }
+        assert_eq!(*w.at(6), 66, "the split's write landed in the window");
+
+        w.set_cur(0); // top-left corner: no neighbour exists
+        let s = w.split_cur();
+        assert_eq!(*s.cur(), 0);
+
+        w.set_cur(4); // row start: left is off the grid row, top present
+        let s = w.split_cur();
+        assert_eq!(*s.top(), 0);
+    }
+
+    /// A sub-window's split refuses a neighbour whose record it cannot name —
+    /// F77's message, from the accessor rather than an index error.
+    #[test]
+    #[should_panic(expected = "availability flag and the geometry disagree")]
+    fn a_split_neighbour_outside_the_window_panics_with_f77s_message() {
+        let mut a = grid();
+        // Records [5..9) of the 4-wide grid; cur = 6 — its top (2) is outside.
+        let mut w = MbWindow::new(&mut a.as_mut_slice()[5..9], 5, 4, 6);
+        let s = w.split_cur();
+        assert_eq!(*s.left(), 5, "the in-window neighbour still answers");
+        let _ = s.top();
     }
 
     /// The encoder's sub-range mint: a slice's records only, base > 0.
