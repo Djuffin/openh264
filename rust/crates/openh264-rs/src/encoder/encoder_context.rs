@@ -1502,6 +1502,32 @@ impl sWelsEncCtx {
         &mut self.pWelsSvcRc[kiDid]
     }
 
+    /// The rate controller **and** the current DQ layer, from one `&mut` — §4.6's
+    /// combined-accessor family (`vaa_rc_and_ref_list_mut`'s shape).
+    ///
+    /// The three `rc.rs` slice-initialisation bodies need both at once:
+    /// `rc_at_mut` for the layer-indexed controller and the layer for its slice
+    /// bank. Taken separately they are two `&mut` borrows of one context and the
+    /// borrow checker refuses — which is what kept those bodies resolving the
+    /// layer through the raw `current_layer`. Destructured here they are borrows
+    /// of **disjoint fields** (`pWelsSvcRc` against `iCurDqLayer`/
+    /// `ppDqLayerList`), so the compiler grants both, and the raw goes.
+    ///
+    /// **Single-threaded only**, as `rc_at_mut`: a `&mut sWelsEncCtx` cannot
+    /// exist while the fork is live, which is the type-level statement of the
+    /// restriction the raw only described.
+    #[inline]
+    pub fn rc_and_current_layer_mut(
+        &mut self,
+        kiDid: usize,
+    ) -> (&mut SWelsSvcRc, Option<&mut crate::encoder::svc_encode_slice::SDqLayer>) {
+        let sWelsEncCtx { pWelsSvcRc, iCurDqLayer, ppDqLayerList, .. } = self;
+        let layer = iCurDqLayer
+            .and_then(|idx| ppDqLayerList.get_mut(idx.get()))
+            .and_then(|l| l.as_deref_mut());
+        (&mut pWelsSvcRc[kiDid], layer)
+    }
+
     /// The frame bitstream's **write cursor** — `pFrameBs + iPosBsBuffer`. See
     /// [`frame_bs`](Self::frame_bs), including why the return is **permanently
     /// raw** (F193: nine of its sites store the answer into

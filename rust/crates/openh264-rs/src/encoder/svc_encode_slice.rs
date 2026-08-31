@@ -2714,7 +2714,7 @@ pub unsafe fn WelsMdInterMbLoop<'a>(
     pCtxOutBs: &mut Option<&mut BsWriter>,
 ) -> i32 {
     // **S7.A5**: the first arm retires with the parameter; the other four are live.
-    if current_layer(pEncCtx).is_null() || (*current_layer(pEncCtx)).sMbDataP.dims().count() == 0 || (*current_layer(pEncCtx)).iMbWidth <= 0 || (*current_layer(pEncCtx)).iMbHeight <= 0 {
+    if current_layer(pEncCtx).is_null() || current_layer_ref(pEncCtx).expect("the frame's current layer is stamped").sMbDataP.dims().count() == 0 || current_layer_ref(pEncCtx).expect("the frame's current layer is stamped").iMbWidth <= 0 || current_layer_ref(pEncCtx).expect("the frame's current layer is stamped").iMbHeight <= 0 {
         return ENC_RETURN_SUCCESS;
     }
     let pMd = pWelsMd;
@@ -2907,7 +2907,7 @@ pub unsafe fn WelsMdInterMbLoopOverDynamicSlice<'a>(
     pCtxOutBs: &mut Option<&mut BsWriter>,
 ) -> i32 {
     // **S7.A5**: the first arm retires with the parameter; the other four are live.
-    if current_layer(pEncCtx).is_null() || (*current_layer(pEncCtx)).sMbDataP.dims().count() == 0 || (*current_layer(pEncCtx)).iMbWidth <= 0 || (*current_layer(pEncCtx)).iMbHeight <= 0 {
+    if current_layer(pEncCtx).is_null() || current_layer_ref(pEncCtx).expect("the frame's current layer is stamped").sMbDataP.dims().count() == 0 || current_layer_ref(pEncCtx).expect("the frame's current layer is stamped").iMbWidth <= 0 || current_layer_ref(pEncCtx).expect("the frame's current layer is stamped").iMbHeight <= 0 {
         return ENC_RETURN_SUCCESS;
     }
     let pMd = pWelsMd;
@@ -3614,7 +3614,7 @@ pub unsafe fn DynSlcJudgeSliceBoundaryStepBack(
     let iCurMbIdx = kiCurMbIdx;
     let kiActiveThreadsNum = (*pEncCtx).iActiveThreadsNum;
     let kiPartitionId = ((*pCurSlice).iSliceIdx % (kiActiveThreadsNum as i32)) as usize;
-    let kiEndMbIdxOfPartition = (*current_layer(pEncCtx)).EndMbIdxOfPartition[kiPartitionId];
+    let kiEndMbIdxOfPartition = current_layer_ref(pEncCtx).expect("the frame's current layer is stamped").EndMbIdxOfPartition[kiPartitionId];
 
     let kbCurMbNotFirstMbOfCurSlice = (iCurMbIdx > 0)
         && {
@@ -4489,12 +4489,12 @@ pub unsafe fn SliceLayerInfoUpdate(
 ) -> i32 {
     let mut iMaxSliceNum = 0;
     for iSlcBuffIdx in 0..pCtx.iActiveThreadsNum {
-        iMaxSliceNum += (*current_layer(pCtx)).sSliceBufferInfo[iSlcBuffIdx as usize].iMaxSliceNum;
+        iMaxSliceNum += current_layer_ref(pCtx).expect("the frame's current layer is stamped").sSliceBufferInfo[iSlcBuffIdx as usize].iMaxSliceNum;
     }
 
-    if iMaxSliceNum > (*current_layer(pCtx)).iMaxSliceNum {
+    if iMaxSliceNum > current_layer_ref(pCtx).expect("the frame's current layer is stamped").iMaxSliceNum {
         // T9.G6: hoisted (shape B).
-        let iCurMaxSliceNum = (*current_layer(pCtx)).iMaxSliceNum;
+        let iCurMaxSliceNum = current_layer_ref(pCtx).expect("the frame's current layer is stamped").iMaxSliceNum;
         let iRet = ExtendLayerBuffer(pCtx, iCurMaxSliceNum, iMaxSliceNum);
         if iRet != ENC_RETURN_SUCCESS {
             return iRet;
@@ -4515,7 +4515,7 @@ pub unsafe fn SliceLayerInfoUpdate(
 
     if iCodedNalCount > pCtx.pOut.as_deref().expect("pOut lives").sNalList.len() as i32 {
         // T9.G6: hoisted (shape B).
-        let iCurMaxSliceNum = (*current_layer(pCtx)).iMaxSliceNum;
+        let iCurMaxSliceNum = current_layer_ref(pCtx).expect("the frame's current layer is stamped").iMaxSliceNum;
         iRet = FrameBsRealloc(pCtx, pFrameBsInfo, pLayerBsInfo, iCurMaxSliceNum);
         if iRet != ENC_RETURN_SUCCESS {
             return iRet;

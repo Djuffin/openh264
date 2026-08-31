@@ -560,12 +560,8 @@ pub struct SWelsRcFunc {
 impl SWelsRcFunc {
     /// `pfWelsRcPictureInit`.
     ///
-    /// # Safety
-    /// As the callbacks: `pCtx` must be a live, initialized encoder context.
     #[inline]
-    // unsafe-cat: port-raw(Phase 9)
-    #[allow(unsafe_code)]
-    pub unsafe fn WelsRcPictureInit(self, pCtx: &mut sWelsEncCtx, uiTimeStamp: i64) {
+    pub fn WelsRcPictureInit(self, pCtx: &mut sWelsEncCtx, uiTimeStamp: i64) {
         match self.eInstalledMode {
             RCMode::RC_OFF_MODE => WelsRcPictureInitDisable(pCtx, uiTimeStamp),
             RCMode::RC_BUFFERBASED_MODE => WelRcPictureInitBufferBasedQp(pCtx, uiTimeStamp),
@@ -588,12 +584,8 @@ impl SWelsRcFunc {
 
     /// `pfWelsRcPictureInfoUpdate`.
     ///
-    /// # Safety
-    /// As [`WelsRcPictureInit`](SWelsRcFunc::WelsRcPictureInit).
     #[inline]
-    // unsafe-cat: port-raw(Phase 9)
-    #[allow(unsafe_code)]
-    pub unsafe fn WelsRcPictureInfoUpdate(self, pCtx: &mut sWelsEncCtx, iLayerSize: i32) {
+    pub fn WelsRcPictureInfoUpdate(self, pCtx: &mut sWelsEncCtx, iLayerSize: i32) {
         match self.eInstalledMode {
             RCMode::RC_OFF_MODE | RCMode::RC_BUFFERBASED_MODE => {
                 WelsRcPictureInfoUpdateDisable(pCtx, iLayerSize)
@@ -1421,28 +1413,30 @@ pub fn GomRCInitForOneSlice(pSlice: &mut SSlice, kiBitsPerMb: i32) {
 }
 
 /// Resets bit accumulators and macroblock counters across slices.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn RcInitSliceInformation(pEncCtx: &mut sWelsEncCtx) {
-    let pCurDq = current_layer(pEncCtx);
+pub fn RcInitSliceInformation(pEncCtx: &mut sWelsEncCtx) {
     let did = pEncCtx.uiDependencyId as usize;
     // §4.6, reorder: the context reads go above the writer's `&mut`.
-    let kiSliceNum = current_layer_ref(pEncCtx)
-        .expect("the frame's current layer is stamped")
-        .iMaxSliceNum;
     let rc_mode = pEncCtx.param().iRCMode;
-    let pWelsSvcRc = pEncCtx.rc_at_mut(did);
+    // S11.2c: one `&mut` yields both owners (`rc_and_current_layer_mut`), so the
+    // layer no longer has to come through `current_layer`'s raw to coexist with
+    // the controller's borrow.
+    let (pWelsSvcRc, pCurDq) = pEncCtx.rc_and_current_layer_mut(did);
+    let pCurDq = pCurDq.expect("the frame's current layer is stamped");
+    let kiSliceNum = pCurDq.iMaxSliceNum;
 
-    (*pWelsSvcRc).iBitsPerMb = WELS_DIV_ROUND64(
-        (*pWelsSvcRc).iTargetBits as i64 * INT_MULTIPLY as i64,
-        (*pWelsSvcRc).iNumberMbFrame as i64,
+    pWelsSvcRc.iBitsPerMb = WELS_DIV_ROUND64(
+        pWelsSvcRc.iTargetBits as i64 * INT_MULTIPLY as i64,
+        pWelsSvcRc.iNumberMbFrame as i64,
     ) as i32;
 
-    (*pWelsSvcRc).bGomRC = !(rc_mode == RCMode::RC_OFF_MODE || rc_mode == RCMode::RC_BUFFERBASED_MODE);
+    pWelsSvcRc.bGomRC = !(rc_mode == RCMode::RC_OFF_MODE || rc_mode == RCMode::RC_BUFFERBASED_MODE);
 
     for i in 0..kiSliceNum as usize {
-        let pSlice = crate::encoder::svc_encode_slice::slice_in_layer(Some(&*pCurDq), i as i32);
-        let pSOverRc = &mut (*pSlice).sSlicingOverRc;
+        // The raw form dereferenced unconditionally, so absence was never a
+        // handled state here (T9.H) — `expect`, not a skip, keeps that.
+        let pSlice = crate::encoder::svc_encode_slice::slice_in_layer_mut(pCurDq, i as i32)
+            .expect("the layer's slice bank holds iMaxSliceNum slices");
+        let pSOverRc = &mut pSlice.sSlicingOverRc;
         pSOverRc.iTotalQpSlice = 0;
         pSOverRc.iTotalMbSlice = 0;
         pSOverRc.iFrameBitsSlice = 0;
@@ -1574,21 +1568,21 @@ pub fn RcDecideTargetBitsTimestamp(pEncCtx: &mut sWelsEncCtx) {
 }
 
 /// Clears the GOM complexity tracking array.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn RcInitGomParameters(pEncCtx: &mut sWelsEncCtx) {
-    let pCurDq = current_layer(pEncCtx);
+pub fn RcInitGomParameters(pEncCtx: &mut sWelsEncCtx) {
     let did = pEncCtx.uiDependencyId as usize;
     // §4.6, reorder: the context reads go above the writer's `&mut`.
-    let kiSliceNum = current_layer_ref(pEncCtx)
-        .expect("the frame's current layer is stamped")
-        .iMaxSliceNum;
     let kiGlobalQp = pEncCtx.iGlobalQp;
 
-    pEncCtx.rc_at_mut(did).iAverageFrameQp = 0;
+    // S11.2c: both owners from one `&mut` — see `RcInitSliceInformation`.
+    let (pWelsSvcRc, pCurDq) = pEncCtx.rc_and_current_layer_mut(did);
+    let pCurDq = pCurDq.expect("the frame's current layer is stamped");
+    let kiSliceNum = pCurDq.iMaxSliceNum;
+
+    pWelsSvcRc.iAverageFrameQp = 0;
     for i in 0..kiSliceNum as usize {
-        let pSlice = crate::encoder::svc_encode_slice::slice_in_layer(Some(&*pCurDq), i as i32);
-        let pSOverRc = &mut (*pSlice).sSlicingOverRc;
+        let pSlice = crate::encoder::svc_encode_slice::slice_in_layer_mut(pCurDq, i as i32)
+            .expect("the layer's slice bank holds iMaxSliceNum slices");
+        let pSOverRc = &mut pSlice.sSlicingOverRc;
         pSOverRc.iComplexityIndexSlice = 0;
         pSOverRc.iCalculatedQpSlice = kiGlobalQp;
     }
@@ -2099,32 +2093,27 @@ pub fn RcTraceFrameBits(pEncCtx: &mut sWelsEncCtx, _uiTimeStamp: i64, _iFrameSiz
 }
 
 /// Computes average frame QP and updates temporal layer bit counters.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn RcUpdatePictureQpBits(pEncCtx: &mut sWelsEncCtx, iCodedBits: i32) {
-    let pCurDq = current_layer(pEncCtx);
+pub fn RcUpdatePictureQpBits(pEncCtx: &mut sWelsEncCtx, iCodedBits: i32) {
     let did = pEncCtx.uiDependencyId as usize;
     // §4.6, reorder: the context reads go above the writer's `&mut`.
-    // S10.5a': the count is read out as a scalar rather than kept as a borrow.
-    // The raw parent this replaces let a `&` on the layer outlive `rc_at_mut`'s
-    // `&mut` on the context because borrowck could not see it; the one use is a
-    // single atomic load, so there is nothing to hold.
-    let iSliceNumInFrame = current_layer_ref(pEncCtx)
-        .expect("the frame's current layer is stamped")
-        .sSliceEncCtx
-        .iSliceNumInFrame
-        .load(Ordering::Relaxed);
     let eSliceType = pEncCtx.eSliceType;
     let iGlobalQp = pEncCtx.iGlobalQp;
     let tid = pEncCtx.uiTemporalId as usize;
-    let pWelsSvcRc = pEncCtx.rc_at_mut(did);
+    // S11.2c: both owners from one `&mut` — see `RcInitSliceInformation`. S10.5a'
+    // read the slice count out as a scalar because a layer borrow could not
+    // outlive `rc_at_mut`'s; with the two borrows granted together the layer
+    // simply stays, and the loop reads its slices through it.
+    let (pWelsSvcRc, pCurDq) = pEncCtx.rc_and_current_layer_mut(did);
+    let pCurDq = pCurDq.expect("the frame's current layer is stamped");
+    let iSliceNumInFrame = pCurDq.sSliceEncCtx.iSliceNumInFrame.load(Ordering::Relaxed);
     let mut iTotalQp = 0;
     let mut iTotalMb = 0;
 
     if eSliceType as i32 == P_SLICE {
         for i in 0..iSliceNumInFrame as usize {
-            let pSlice = crate::encoder::svc_encode_slice::slice_in_layer(Some(&*pCurDq), i as i32);
-            let pSOverRc = &(*pSlice).sSlicingOverRc;
+            let pSlice = crate::encoder::svc_encode_slice::slice_in_layer_mut(pCurDq, i as i32)
+                .expect("the layer's slice bank holds iSliceNumInFrame slices");
+            let pSOverRc = &pSlice.sSlicingOverRc;
             iTotalQp += pSOverRc.iTotalQpSlice;
             iTotalMb += pSOverRc.iTotalMbSlice;
         }
@@ -2247,9 +2236,7 @@ pub fn RcCalculateCascadingQp(pEncCtx: &mut sWelsEncCtx, iQp: i32) -> i32 {
 // Function Pointer Target Callbacks
 // ============================================================================
 
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe extern "C" fn WelsRcPictureInitGom(pEncCtx: &mut sWelsEncCtx, uiTimeStamp: i64) {
+pub extern "C" fn WelsRcPictureInitGom(pEncCtx: &mut sWelsEncCtx, uiTimeStamp: i64) {
     let did = pEncCtx.uiDependencyId as usize;
     let kiSliceNum = current_layer_ref(pEncCtx)
         .expect("the frame's current layer is stamped")
@@ -2341,9 +2328,7 @@ static RC_DUMP: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
 /// Gate for the differential-bisection dump; see `encoder::dump_enabled`.
 static RC_MB_DUMP: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
 
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe extern "C" fn WelsRcPictureInfoUpdateGom(pEncCtx: &mut sWelsEncCtx, iLayerSize: i32) {
+pub extern "C" fn WelsRcPictureInfoUpdateGom(pEncCtx: &mut sWelsEncCtx, iLayerSize: i32) {
     let did = pEncCtx.uiDependencyId as usize;
     let iCodedBits = iLayerSize << 3;
     // §4.6: this body is an orchestrator — every branch re-enters the rate
@@ -2780,9 +2765,7 @@ pub extern "C" fn WelsRcFrameDelayJudgeTimeStamp(
     }
 }
 
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe extern "C" fn WelsRcPictureInfoUpdateGomTimeStamp(
+pub extern "C" fn WelsRcPictureInfoUpdateGomTimeStamp(
     pEncCtx: &mut sWelsEncCtx,
     iLayerSize: i32,
 ) {

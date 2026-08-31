@@ -2103,7 +2103,7 @@ pub fn WelsSwapDqLayers(pCtx: &mut sWelsEncCtx, kiNextDqIdx: i32) {
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe fn PrefetchReferencePicture(pCtx: &mut sWelsEncCtx, keFrameType: EVideoFrameType) {
-    let kiSliceCount = (*current_layer(pCtx)).iMaxSliceNum;
+    let kiSliceCount = current_layer_ref(pCtx).expect("the frame's current layer is stamped").iMaxSliceNum;
     // C++ declares `uint8_t uiRefIdx = -1;`, which wraps to 255.
     let mut uiRefIdx: u8 = 0xff;
 
@@ -2391,7 +2391,7 @@ pub unsafe fn WelsInitCurrentLayer(pCtx: &mut sWelsEncCtx, _kiWidth: i32, _kiHei
     // call, and only on the `SM_FIXEDSLCNUM_SLICE` arm.
     if pCtx.pSliceThreading.is_some()
         && !current_layer(pCtx).is_null()
-        && (*current_layer(pCtx)).bNeedAdjustingSlicing
+        && current_layer_ref(pCtx).expect("the frame's current layer is stamped").bNeedAdjustingSlicing
     {
         let kiTaskCount = pCtx.param().sSpatialLayers[kiCurDid as usize]
             .sSliceArgument
@@ -2449,7 +2449,7 @@ pub unsafe fn AddPrefixNal(
     // S3.B1 hoist: the layer lives in its own allocation; the raw read
     // survives the shared `pOut`/context borrows in the argument list.
     let pNalHeaderExt =
-        std::ptr::addr_of!((*current_layer(pCtx)).sLayerInfo.sNalHeaderExt);
+        std::ptr::addr_of!(current_layer_ref(pCtx).expect("the frame's current layer is stamped").sLayerInfo.sNalHeaderExt);
     iReturn = crate::encoder::nal_encap::WelsEncodeNal(
         &pCtx.pOut.as_deref().expect("pOut lives").sNalList
             [(pCtx.pOut.as_deref().expect("pOut lives").iNalIndex - 1) as usize],
@@ -3279,7 +3279,7 @@ pub unsafe fn DynSliceRealloc(
 ) -> i32 {
     // T9.G6: hoisted — the call takes the context retag and this argument reads
     // through the same context (shape B).
-    let iMaxSliceNum = (*current_layer(pCtx)).iMaxSliceNum;
+    let iMaxSliceNum = current_layer_ref(pCtx).expect("the frame's current layer is stamped").iMaxSliceNum;
     let mut iRet = crate::encoder::svc_encode_slice::FrameBsRealloc(
         pCtx,
         pFrameBsInfo,
@@ -3417,7 +3417,7 @@ pub unsafe fn WelsCodeOnePicPartition(
         // S3.B1 hoist: the layer lives in its own allocation; the raw read
         // survives the shared `pOut`/context borrows in the argument list.
         let pNalHeaderExt =
-            std::ptr::addr_of!((*current_layer(pCtx)).sLayerInfo.sNalHeaderExt);
+            std::ptr::addr_of!(current_layer_ref(pCtx).expect("the frame's current layer is stamped").sLayerInfo.sNalHeaderExt);
         iReturn = crate::encoder::nal_encap::WelsEncodeNal(
             &pCtx.pOut.as_deref().expect("pOut lives").sNalList
                 [(pCtx.pOut.as_deref().expect("pOut lives").iNalIndex - 1) as usize],
@@ -3905,7 +3905,7 @@ pub unsafe fn WelsEncoderEncodeExt(
             // S3.B1 hoist: the layer lives in its own allocation; the raw read
             // survives the shared `pOut`/context borrows in the argument list.
             let pNalHeaderExt =
-                std::ptr::addr_of!((*current_layer(pCtx)).sLayerInfo.sNalHeaderExt);
+                std::ptr::addr_of!(current_layer_ref(pCtx).expect("the frame's current layer is stamped").sLayerInfo.sNalHeaderExt);
             pCtx.iEncoderError = crate::encoder::nal_encap::WelsEncodeNal(
                 &pCtx.pOut.as_deref().expect("pOut lives").sNalList
                     [pCtx.pOut.as_deref().expect("pOut lives").iNalIndex as usize - 1],
@@ -3934,7 +3934,7 @@ pub unsafe fn WelsEncoderEncodeExt(
             && pCtx.param().iMultipleThreadIdc <= 1
         {
             // dynamic slicing, single threading
-            let kiLastMbInFrame = (*current_layer(pCtx)).sSliceEncCtx.iMbNumInFrame;
+            let kiLastMbInFrame = current_layer_ref(pCtx).expect("the frame's current layer is stamped").sSliceEncCtx.iMbNumInFrame;
             pCtx.iEncoderError = WelsCodeOnePicPartition(pCtx,
                 pFbi,
                 pLayerBsInfo,
@@ -4137,7 +4137,7 @@ pub unsafe fn WelsEncoderEncodeExt(
                 // S3.B1 hoist: the layer lives in its own allocation; the raw read
                 // survives the shared `pOut`/context borrows in the argument list.
                 let pNalHeaderExt =
-                    std::ptr::addr_of!((*current_layer(pCtx)).sLayerInfo.sNalHeaderExt);
+                    std::ptr::addr_of!(current_layer_ref(pCtx).expect("the frame's current layer is stamped").sLayerInfo.sNalHeaderExt);
                 pCtx.iEncoderError = crate::encoder::nal_encap::WelsEncodeNal(
                     &pCtx.pOut.as_deref().expect("pOut lives").sNalList
                         [pCtx.pOut.as_deref().expect("pOut lives").iNalIndex as usize - 1],
@@ -4192,7 +4192,7 @@ pub unsafe fn WelsEncoderEncodeExt(
 
         // deblocking filter. ENABLE_FRAME_DUMP is not defined, so the temporal-id
         // clause is compiled in.
-        if !(*current_layer(pCtx)).bDeblockingParallelFlag
+        if !current_layer_ref(pCtx).expect("the frame's current layer is stamped").bDeblockingParallelFlag
             && eNalRefIdc != EWelsNalRefIdc::NRI_PRI_LOWEST
             && ((*pParamInternal).iHighestTemporalId == 0
                 || iCurTid < (*pParamInternal).iHighestTemporalId as i32)
