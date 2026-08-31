@@ -603,6 +603,63 @@ pub unsafe fn slice_in_layer(pCurLayer: Option<&SDqLayer>, kiSliceIdx: i32) -> *
     slice_in_bank(pCurLayer, s.bank as usize, s.offset)
 }
 
+/// The bank's slices as an **exclusive slice** — the safe twin of
+/// [`slice_bank_root`], for the callers that hold the layer `&mut`.
+///
+/// # Why this can exist, and what F71 actually said
+///
+/// [`slice_bank_root`] reads the buffer pointer out with `addr_of!` + `as_ptr()`
+/// because `&mut Vec<SSlice>` is a `Unique` retag over the `Vec` header, and in
+/// every fixed slice mode **all workers resolve bank 0** — so two of them
+/// retagging it at once is a data race even though neither writes the `Vec`.
+/// That is true, and it is true of **workers**.
+///
+/// It is not true of a caller holding `&mut SDqLayer`, which by construction has
+/// no sibling: a `&mut` to the layer cannot exist while the fork is live, because
+/// every worker holds `&SDqLayer`. Measured at S10.3d, **29 of the 38 call sites**
+/// in the `slice_bank_root` / `slice_in_bank` / `slice_in_layer` family sit in
+/// bodies whose receiver is `&mut sWelsEncCtx` or `&mut SDqLayer`. They were
+/// paying the fork's price for single-threaded access; this is what they take.
+///
+/// `None` for a bank that has not been sized — the state the raw form answered
+/// null for.
+#[inline]
+pub fn slice_bank_mut(pCurLayer: &mut SDqLayer, kiBank: usize) -> Option<&mut [SSlice]> {
+    let bank = pCurLayer.sSliceBufferInfo.get_mut(kiBank)?;
+    if bank.pSliceBuffer.is_empty() {
+        return None;
+    }
+    Some(&mut bank.pSliceBuffer)
+}
+
+/// The slice at `kiOffset` in bank `kiBank`, exclusively — [`slice_in_bank`]'s
+/// safe twin. See [`slice_bank_mut`].
+#[inline]
+pub fn slice_in_bank_mut(
+    pCurLayer: &mut SDqLayer,
+    kiBank: usize,
+    kiOffset: i32,
+) -> Option<&mut SSlice> {
+    if kiOffset < 0 {
+        return None;
+    }
+    slice_bank_mut(pCurLayer, kiBank)?.get_mut(kiOffset as usize)
+}
+
+/// Slice `kiSliceIdx` of the layer, exclusively — [`slice_in_layer`]'s safe twin.
+/// Resolves through `ppSliceInLayer` exactly as the raw form does.
+#[inline]
+pub fn slice_in_layer_mut(pCurLayer: &mut SDqLayer, kiSliceIdx: i32) -> Option<&mut SSlice> {
+    if kiSliceIdx < 0 {
+        return None;
+    }
+    let &s = pCurLayer.ppSliceInLayer.get(kiSliceIdx as usize)?;
+    if s.offset < 0 || s.bank as usize >= MAX_THREADS_NUM {
+        return None;
+    }
+    slice_in_bank_mut(pCurLayer, s.bank as usize, s.offset)
+}
+
 /// The bank's slices as a raw pointer to their **root** — T6.D8, and S28's rule
 /// again: `AddSliceBoundary` and `ReOrderSliceInLayer` walk *neighbouring* slices out
 /// of the pointer they hold, so the pointer must carry the whole bank's provenance.
@@ -1706,9 +1763,7 @@ pub unsafe fn UpdateMbNeighbourInfoForNextSlice(
 // Slice Header Initialization & Serialization
 // ============================================================================
 
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
-pub unsafe fn WelsSliceHeaderScalExtInit(pCurLayer: Option<&SDqLayer>, pSlice: &mut SSlice) {
+pub fn WelsSliceHeaderScalExtInit(pCurLayer: Option<&SDqLayer>, pSlice: &mut SSlice) {
     let Some(pCurLayer) = pCurLayer else {
         return;
     };
@@ -1717,11 +1772,13 @@ pub unsafe fn WelsSliceHeaderScalExtInit(pCurLayer: Option<&SDqLayer>, pSlice: &
     // runs this function, so a `&mut` retag here is a write as far as the data-race
     // checker is concerned — and it is only ever read. See
     // `StampLayerIdrFlagForSliceType` for the family and why it is the last of it.
-    let pNalHeadExt = std::ptr::addr_of!((*pCurLayer).sLayerInfo.sNalHeaderExt);
+    // S10.3d: a shared borrow, not an `addr_of!` — the parameter is already
+    // `&SDqLayer` and every use below is a read.
+    let pNalHeadExt = &pCurLayer.sLayerInfo.sNalHeaderExt;
 
     pSliceHeadExt.bSliceSkipFlag = false;
 
-    if (*pNalHeadExt).uiDependencyId > 0 {
+    if pNalHeadExt.uiDependencyId > 0 {
         pSliceHeadExt.bAdaptiveBaseModeFlag = false;
         pSliceHeadExt.bAdaptiveMotionPredFlag = false;
         pSliceHeadExt.bAdaptiveResidualPredFlag = false;
@@ -3403,6 +3460,14 @@ pub unsafe fn WelsCodeOneSlice(pEncCtx: &sWelsEncCtx, pCurSlice: &mut SSlice, ki
     // S29: raw, not `&mut` — this is held across `g_pWelsWriteSliceHeader`, whose
     // two bodies derive `&mut` to the same field (`:816`, `:902`) and popped it
     // (the encode probe's first red on the walk, Phase 6 session B).
+    //
+    // **S10.3d: that premise looks expired and is not acted on here.** Both of
+    // those bodies use `addr_of_mut!` now, not `&mut` — a raw derivation creates
+    // no reference and so cannot pop a shared parent — and neither *writes*
+    // through it (checked: zero writes through `pNalHead` in either). A shared
+    // `&pCurLayer.sLayerInfo.sNalHeaderExt` here would very likely stand. The
+    // referee is the two full-encode Miri probes S29's red came from, not a
+    // reading of the code, so this is left for a checkpoint that runs them.
     let pNalHeadExt = std::ptr::addr_of_mut!((*pCurLayer).sLayerInfo.sNalHeaderExt);
 
     let kiDynamicSliceFlag = if (*pEncCtx).param_opt().is_some() {
@@ -4314,13 +4379,13 @@ pub unsafe fn ReallocSliceBuffer(pCtx: &mut sWelsEncCtx) -> i32 {
 }
 
 #[inline]
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn CheckAllSliceBuffer(pCurLayer: &mut SDqLayer, kiCodedSliceNum: i32) -> i32 {
+pub fn CheckAllSliceBuffer(pCurLayer: &mut SDqLayer, kiCodedSliceNum: i32) -> i32 {
+    // S10.3d: `&mut SDqLayer` proves there is no fork, so the bank is reached
+    // safely. The `is_null()` arm is `None`.
     for iSliceIdx in 0..kiCodedSliceNum {
-        let slice_ptr = slice_in_layer(Some(&*pCurLayer), iSliceIdx);
-        if slice_ptr.is_null() || iSliceIdx != (*slice_ptr).iSliceIdx {
-            return ENC_RETURN_UNEXPECTED;
+        match slice_in_layer_mut(pCurLayer, iSliceIdx) {
+            Some(slice) if iSliceIdx == slice.iSliceIdx => {}
+            _ => return ENC_RETURN_UNEXPECTED,
         }
     }
     ENC_RETURN_SUCCESS
@@ -4382,25 +4447,23 @@ pub unsafe fn ReOrderSliceInLayer(pCtx: &mut sWelsEncCtx, kuiSliceMode: SliceMod
     CheckAllSliceBuffer(&mut *pCurLayer, iEncodeSliceNum)
 }
 
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn GetCurLayerNalCount(pCurDq: &mut SDqLayer, kiCodedSliceNum: i32) -> i32 {
+pub fn GetCurLayerNalCount(pCurDq: &mut SDqLayer, kiCodedSliceNum: i32) -> i32 {
+    // S10.3d, as `CheckAllSliceBuffer`.
     let mut iTotalNalCount = 0;
     for iSliceIdx in 0..kiCodedSliceNum {
-        let slice_ptr = slice_in_layer(Some(&*pCurDq), iSliceIdx);
-        if !slice_ptr.is_null() && (*slice_ptr).sSliceBs.uiBsPos > 0 {
-            iTotalNalCount += (*slice_ptr).sSliceBs.iNalIndex;
+        if let Some(slice) = slice_in_layer_mut(pCurDq, iSliceIdx) {
+            if slice.sSliceBs.uiBsPos > 0 {
+                iTotalNalCount += slice.sSliceBs.iNalIndex;
+            }
         }
     }
     iTotalNalCount
 }
 
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn GetTotalCodedNalCount(pFbi: *mut SFrameBSInfo) -> i32 {
+pub fn GetTotalCodedNalCount(pFbi: &mut SFrameBSInfo) -> i32 {
     let mut iTotalCodedNalCount = 0;
     for iNalIdx in 0..MAX_LAYER_NUM_OF_FRAME {
-        iTotalCodedNalCount += (*pFbi).sLayerInfo[iNalIdx].iNalCount;
+        iTotalCodedNalCount += pFbi.sLayerInfo[iNalIdx].iNalCount;
     }
     iTotalCodedNalCount
 }
@@ -4507,7 +4570,7 @@ pub unsafe fn SliceLayerInfoUpdate(
 
     let iCodedSliceNum = GetCurrentSliceNum(&*current_layer(pCtx));
     (*pLayerBsInfo).iNalCount = GetCurLayerNalCount(&mut *current_layer(pCtx), iCodedSliceNum);
-    let iCodedNalCount = GetTotalCodedNalCount(pFrameBsInfo);
+    let iCodedNalCount = GetTotalCodedNalCount(&mut *pFrameBsInfo);
 
     if iCodedNalCount > pCtx.pOut.as_deref().expect("pOut lives").sNalList.len() as i32 {
         // T9.G6: hoisted (shape B).
