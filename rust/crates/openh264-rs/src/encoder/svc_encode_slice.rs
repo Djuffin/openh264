@@ -1340,7 +1340,14 @@ pub struct SDqLayer {
     /// not. Both are stamped by `WelsInitCurrentLayer` in the same statement
     /// that stamps `pEncData`, from the same already-resolved `idEnc`.
     pub pEncPic: Option<SrcPicId>,
-    pub pSrcPool: *mut crate::encoder::picture::SrcPicPool,
+    // `pSrcPool: *mut SrcPicPool` stood here — the spatial picture pool the layer
+    // resolves `pEncPic` against, stamped per frame by `WelsInitCurrentLayer`.
+    //
+    // **S10.7, deleted: write-only.** Its one reader was `layer_enc_pic`, and that
+    // accessor went in S10.2 when the last of F254's twenty-one source-plane sites
+    // moved onto `pEncView`. Third of `SDqLayer`'s four Sync blockers to go, and
+    // the third in a row that a conversion had already emptied without anyone
+    // noticing the field was now dead (F268).
     /// **The reconstruction seam** — D-mt-3 option A, built per frame by
     /// `WelsInitCurrentLayer` in the same statement that stamps
     /// [`pCsData`](Self::pCsData), from the same `&mut SPicture`.
@@ -1496,7 +1503,6 @@ impl SDqLayer {
             pRefPic: None,
             pDecPic: None,
             pEncPic: None,
-            pSrcPool: std::ptr::null_mut(),
             pRefOri: [None; MAX_REF_PIC_COUNT as usize],
             // Both are `iMultipleThreadIdc > 1` predicates that `InitSliceInLayer`
             // computes; false is the single-threaded answer and the honest default.
