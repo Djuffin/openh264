@@ -1435,7 +1435,7 @@ pub fn RcInitSliceInformation(pEncCtx: &mut sWelsEncCtx) {
         // The raw form dereferenced unconditionally, so absence was never a
         // handled state here (T9.H) — `expect`, not a skip, keeps that.
         let pSlice = crate::encoder::svc_encode_slice::slice_in_layer_mut(pCurDq, i as i32)
-            .expect("the layer's slice bank holds iMaxSliceNum slices");
+            .expect("the layer's slice bank maps this slice index");
         let pSOverRc = &mut pSlice.sSlicingOverRc;
         pSOverRc.iTotalQpSlice = 0;
         pSOverRc.iTotalMbSlice = 0;
@@ -1581,7 +1581,7 @@ pub fn RcInitGomParameters(pEncCtx: &mut sWelsEncCtx) {
     pWelsSvcRc.iAverageFrameQp = 0;
     for i in 0..kiSliceNum as usize {
         let pSlice = crate::encoder::svc_encode_slice::slice_in_layer_mut(pCurDq, i as i32)
-            .expect("the layer's slice bank holds iMaxSliceNum slices");
+            .expect("the layer's slice bank maps this slice index");
         let pSOverRc = &mut pSlice.sSlicingOverRc;
         pSOverRc.iComplexityIndexSlice = 0;
         pSOverRc.iCalculatedQpSlice = kiGlobalQp;
@@ -2112,7 +2112,7 @@ pub fn RcUpdatePictureQpBits(pEncCtx: &mut sWelsEncCtx, iCodedBits: i32) {
     if eSliceType as i32 == P_SLICE {
         for i in 0..iSliceNumInFrame as usize {
             let pSlice = crate::encoder::svc_encode_slice::slice_in_layer_mut(pCurDq, i as i32)
-                .expect("the layer's slice bank holds iSliceNumInFrame slices");
+                .expect("the layer's slice bank maps this slice index");
             let pSOverRc = &pSlice.sSlicingOverRc;
             iTotalQp += pSOverRc.iTotalQpSlice;
             iTotalMb += pSOverRc.iTotalMbSlice;

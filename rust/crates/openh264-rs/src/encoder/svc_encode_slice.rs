@@ -2108,7 +2108,7 @@ pub fn WelsIMbChromaEncode(pEncCtx: &sWelsEncCtx, pCurMb: &mut SMB, pMbCache: &m
     // S9.0: the source planes through the frame's read-only view; the strides the
     // raw form passed alongside now ride inside the cursors.
     let encView = layer_enc_view(&*pCurLayer)
-        .expect("the frame's source view is stamped with pEncData");
+        .expect("the layer's source view is built for this frame");
     let pFunc = (*pEncCtx).func_list();
     let pfDctFourT4 = (*pFunc).pfDctFourT4.expect("pfDctFourT4 unset");
 
@@ -2161,7 +2161,7 @@ pub fn WelsPMbChromaEncode(pEncCtx: &sWelsEncCtx, pSlice: &mut SSlice, pCurMb: &
     // S9.0: the source planes through the frame's read-only view; the strides the
     // raw form passed alongside now ride inside the cursors.
     let encView = layer_enc_view(&*pCurLayer)
-        .expect("the frame's source view is stamped with pEncData");
+        .expect("the layer's source view is built for this frame");
     let pFunc = (*pEncCtx).func_list();
     let dct = (*pFunc).pfDctFourT4.expect("pfDctFourT4 unset");
     dct(
@@ -2749,7 +2749,7 @@ pub fn WelsMdInterMbLoop<'a>(
                     // which is the shape no worker may hold under the fork.
                     crate::encoder::svc_base_layer_md::WelsMdInterSaveSadAndRefMbType(
                         layer_rec_view(&*pCurLayer)
-                            .expect("the layer's reconstruction picture is bound"),
+                            .expect("the layer's reconstruction view is built for this frame"),
                         pMbs.cur(),
                         pMd,
                     );
@@ -2944,7 +2944,7 @@ pub fn WelsMdInterMbLoopOverDynamicSlice<'a>(
                 // As above.
                 crate::encoder::svc_base_layer_md::WelsMdInterSaveSadAndRefMbType(
                     layer_rec_view(pCurLayer)
-                        .expect("the layer's reconstruction picture is bound"),
+                        .expect("the layer's reconstruction view is built for this frame"),
                     pMbs.cur(),
                     pMd,
                 );
@@ -3820,7 +3820,7 @@ pub fn InitAllSlicesInThread(pCtx: &mut sWelsEncCtx) -> i32 {
     }
 
     for iSlcBuffIdx in 0..pCtx.iActiveThreadsNum {
-        current_layer_mut(pCtx).expect("stamped").sSliceBufferInfo[iSlcBuffIdx as usize].iCodedSliceNum = 0;
+        current_layer_mut(pCtx).expect("the frame's current layer is stamped").sSliceBufferInfo[iSlcBuffIdx as usize].iCodedSliceNum = 0;
     }
 
     ENC_RETURN_SUCCESS
@@ -4264,10 +4264,10 @@ pub fn ReallocSliceBuffer(pCtx: &mut sWelsEncCtx) -> i32 {
 
     iMaxSliceNumNew = 0;
     for iSlcBuffIdx in 0..pCtx.iActiveThreadsNum {
-        iMaxSliceNumNew += current_layer_ref(pCtx).expect("stamped").sSliceBufferInfo[iSlcBuffIdx as usize].iMaxSliceNum;
+        iMaxSliceNumNew += current_layer_ref(pCtx).expect("the frame's current layer is stamped").sSliceBufferInfo[iSlcBuffIdx as usize].iMaxSliceNum;
     }
 
-    let kiMaxSliceNumOldLayer = current_layer_ref(pCtx).expect("stamped").iMaxSliceNum;
+    let kiMaxSliceNumOldLayer = current_layer_ref(pCtx).expect("the frame's current layer is stamped").iMaxSliceNum;
     iRet = ExtendLayerBuffer(pCtx, kiMaxSliceNumOldLayer, iMaxSliceNumNew);
     if iRet != ENC_RETURN_SUCCESS {
         return iRet;
@@ -4358,7 +4358,7 @@ pub fn ReOrderSliceInLayer(pCtx: &mut sWelsEncCtx, kuiSliceMode: SliceMode, kiTh
         return ENC_RETURN_UNEXPECTED;
     }
 
-    CheckAllSliceBuffer(current_layer_mut(pCtx).expect("stamped"), iEncodeSliceNum)
+    CheckAllSliceBuffer(current_layer_mut(pCtx).expect("the frame's current layer is stamped"), iEncodeSliceNum)
 }
 
 pub fn GetCurLayerNalCount(pCurDq: &mut SDqLayer, kiCodedSliceNum: i32) -> i32 {

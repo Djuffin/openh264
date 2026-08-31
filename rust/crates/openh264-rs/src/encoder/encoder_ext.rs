@@ -3295,7 +3295,7 @@ pub fn WelsInitCurrentDlayerMltslc(pCtx: &mut sWelsEncCtx, iPartitionNum: i32) {
         } else {
             // fixed QP case
             let iTtlMbNumInFrame =
-                current_layer_ref(pCtx).expect("stamped").sSliceEncCtx.iMbNumInFrame;
+                current_layer_ref(pCtx).expect("the frame's current layer is stamped").sSliceEncCtx.iMbNumInFrame;
             let mut iQDeltaTo26 = 26 - pCtx.param().sSpatialLayers[iCurDid].iDLayerQp;
 
             uiFrmByte = (iTtlMbNumInFrame as u32).wrapping_mul(byte_complexIMBat26);
@@ -3311,7 +3311,7 @@ pub fn WelsInitCurrentDlayerMltslc(pCtx: &mut sWelsEncCtx, iPartitionNum: i32) {
 
         // MINPACKETSIZE_CONSTRAINT: suppose 16 byte per mb at average
         let _uiMiniPacketSize = uiFrmByte
-            / current_layer_ref(pCtx).expect("stamped").sSliceEncCtx.iMaxSliceNumConstraint as u32;
+            / current_layer_ref(pCtx).expect("the frame's current layer is stamped").sSliceEncCtx.iMaxSliceNumConstraint as u32;
         // C++ only WelsLogs a warning here when uiSliceSizeConstraint is smaller.
     }
 
@@ -3403,7 +3403,7 @@ pub fn WelsCodeOnePicPartition(
         let mut iPayloadSize = 0i32;
 
         if iSliceIdx
-            >= (current_layer_ref(pCtx).expect("stamped").sSliceBufferInfo[uSlcBuffIdx].iMaxSliceNum - kiSliceIdxStep)
+            >= (current_layer_ref(pCtx).expect("the frame's current layer is stamped").sSliceBufferInfo[uSlcBuffIdx].iMaxSliceNum - kiSliceIdxStep)
         {
             // insufficient memory in pSliceInLayer[]
             if pCtx.iActiveThreadsNum == 1 {
@@ -3411,7 +3411,7 @@ pub fn WelsCodeOnePicPartition(
                 if DynSliceRealloc(pCtx, pFbi, iLbi) != 0 {
                     return ENC_RETURN_MEMALLOCERR;
                 }
-            } else if iSliceIdx >= current_layer_ref(pCtx).expect("stamped").iMaxSliceNum {
+            } else if iSliceIdx >= current_layer_ref(pCtx).expect("the frame's current layer is stamped").iMaxSliceNum {
                 return ENC_RETURN_MEMALLOCERR;
             }
         }
@@ -3446,7 +3446,7 @@ pub fn WelsCodeOnePicPartition(
         );
         let kiCurSlot = iSliceIdx as usize;
         if kiCurSlot >= sBank.pSliceBuffer.len() {
-            current_layer_mut(pCtx).expect("stamped").sSliceBufferInfo[uSlcBuffIdx] = sBank;
+            current_layer_mut(pCtx).expect("the frame's current layer is stamped").sSliceBufferInfo[uSlcBuffIdx] = sBank;
             return ENC_RETURN_UNEXPECTED;
         }
         let (kpHead, kpTail) = sBank.pSliceBuffer.split_at_mut(kiCurSlot + 1);
@@ -3554,7 +3554,7 @@ pub fn WelsCodeOnePicPartition(
         iNalIdxInLayer += 1;
         iSliceIdx += kiSliceStep; // iSliceIdx is not contiguous
         iAnyMbLeftInPartition = iEndMbIdxInPartition
-            - current_layer_ref(pCtx).expect("stamped").LastCodedMbIdxOfPartition[kiPartitionId].load(Ordering::Relaxed);
+            - current_layer_ref(pCtx).expect("the frame's current layer is stamped").LastCodedMbIdxOfPartition[kiPartitionId].load(Ordering::Relaxed);
     }
 
     *pLayerSize = iPartitionBsSize;

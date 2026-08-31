@@ -673,7 +673,7 @@ pub extern "C" fn WelsMdBackgroundMbEnc(
     };
     (*pCurMb).sP16x16Mv = SMVUnitXY::default();
     layer_rec_view(&*pCurDqLayer)
-        .expect("bound")
+        .expect("the layer's reconstruction view is built for this frame")
         .mv_list()
         .set((*pCurMb).iMbXY as usize, SMVUnitXY::default());
 
@@ -1273,13 +1273,13 @@ pub fn WelsMdP16x16<'a>(
     if layer_ref_pic(pEncCtx, &*pCurLayer).map_or(false, |p| p.iPictureType == P_SLICE) {
         if (mbs.cur().iMbX as i32) < kiMbWidth - 1 {
             let sTempMv =
-                layer_ref_pic(pEncCtx, &*pCurLayer).expect("bound").sMvList[(mbs.cur().iMbXY + 1) as usize];
+                layer_ref_pic(pEncCtx, &*pCurLayer).expect("the layer's reference picture is bound").sMvList[(mbs.cur().iMbXY + 1) as usize];
             (*pSlice).sMvc[(*pSlice).uiMvcNum as usize].iMvX = sTempMv.iMvX >> (*pSlice).sScaleShift;
             (*pSlice).sMvc[(*pSlice).uiMvcNum as usize].iMvY = sTempMv.iMvY >> (*pSlice).sScaleShift;
             (*pSlice).uiMvcNum += 1;
         }
         if (mbs.cur().iMbY as i32) < kiMbHeight - 1 {
-            let sTempMv = layer_ref_pic(pEncCtx, &*pCurLayer).expect("bound").sMvList
+            let sTempMv = layer_ref_pic(pEncCtx, &*pCurLayer).expect("the layer's reference picture is bound").sMvList
                 [(mbs.cur().iMbXY + kiMbWidth) as usize];
             (*pSlice).sMvc[(*pSlice).uiMvcNum as usize].iMvX = sTempMv.iMvX >> (*pSlice).sScaleShift;
             (*pSlice).sMvc[(*pSlice).uiMvcNum as usize].iMvY = sTempMv.iMvY >> (*pSlice).sScaleShift;
@@ -1317,7 +1317,7 @@ pub fn WelsMdP16x16<'a>(
     // without `bNeedMbInfo` carries no MV list at all (T6.F0). One view where
     // there were two picture borrows: the test and the write now read the same
     // capture rather than resolving the pool twice.
-    let sMvList = layer_rec_view(pCurLayer).expect("bound").mv_list();
+    let sMvList = layer_rec_view(pCurLayer).expect("the layer's reconstruction view is built for this frame").mv_list();
     if !sMvList.is_empty() {
         sMvList.set(mbs.cur().iMbXY as usize, (*pMe16x16).sMv);
     }
@@ -1426,7 +1426,7 @@ pub extern "C" fn WelsInterMbEncode(pEncCtx: &sWelsEncCtx, pSlice: &mut SSlice, 
     // `addr_of_mut!` on owned fields or from a plane root that had already been
     // null-checked through `pCurDqLayer` above, so none of them could ever be null.
     let encView = crate::encoder::svc_encode_slice::layer_enc_view(&*pCurDqLayer)
-        .expect("the frame's source view is stamped with pEncData");
+        .expect("the layer's source view is built for this frame");
     let pEncMb = (*pMbCache).SPicData.mb_cursor_ro(encView, 0);
     let pMemPredLuma = RecCursor::over_owned(
         &mut (*pMbCache).sMemPredMb,
@@ -1753,7 +1753,7 @@ pub fn WelsMdInterJudgeBGDPskip(
     let pCurDqLayer = current_layer_ref(pEncCtx)
         .expect("the frame's current layer is stamped");
 
-    let kiRefMbQp = (&layer_ref_pic(pEncCtx, &*pCurDqLayer).expect("bound").pRefMbQp)[(*pCurMb).iMbXY as usize] as i32;
+    let kiRefMbQp = (&layer_ref_pic(pEncCtx, &*pCurDqLayer).expect("the layer's reference picture is bound").pRefMbQp)[(*pCurMb).iMbXY as usize] as i32;
     let kiCurMbQp = (*pCurMb).uiLumaQp as i32;
     // **S11.28: the three neighbour reads are checked indexing.** The mint
     // walked `flags[xy-1]`, `flags[xy-mbw]`, `flags[xy-mbw+1]` behind
@@ -1813,9 +1813,9 @@ pub extern "C" fn WelsMdUpdateBGDInfo(
     let uiQp = if (*pCurMb).uiCbp != 0 || iRefPictureType == I_SLICE || !bCollocatedPredFlag {
         (*pCurMb).uiLumaQp
     } else {
-        (&layer_ref_pic(pEncCtx, &*pCurLayer).expect("bound").pRefMbQp)[kiMbXY]
+        (&layer_ref_pic(pEncCtx, &*pCurLayer).expect("the layer's reference picture is bound").pRefMbQp)[kiMbXY]
     };
-    layer_rec_view(pCurLayer).expect("bound").ref_mb_qp().set(kiMbXY, uiQp);
+    layer_rec_view(pCurLayer).expect("the layer's reconstruction view is built for this frame").ref_mb_qp().set(kiMbXY, uiQp);
 
     if (*pCurMb).uiMbType == MB_TYPE_BACKGROUND {
         (*pCurMb).uiMbType = MB_TYPE_SKIP;
@@ -2164,7 +2164,7 @@ pub extern "C" fn SvcMdSCDMbEnc(
 
     (*pCurMb).sP16x16Mv = sCandidateMv;
     layer_rec_view(&*pCurDqLayer)
-        .expect("bound")
+        .expect("the layer's reconstruction view is built for this frame")
         .mv_list()
         .set((*pCurMb).iMbXY as usize, sCandidateMv);
 
@@ -2218,7 +2218,7 @@ pub extern "C" fn SvcMdSCDMbEnc(
     // storages, which is what lets the dispatch slot stop being a raw pointer pair.
     // The chroma cursors both resolve at stride index 1, which is `stride_idx`'s rule
     // and what the raw form passed by hand.
-    let recView = layer_rec_view(&*pCurDqLayer).expect("the frame's reconstruction view");
+    let recView = layer_rec_view(&*pCurDqLayer).expect("the layer's reconstruction view is built for this frame");
     let luma_off = mem_pred_luma_off((*pMbCache).uiMemPredLumaHalf);
     let chroma_off = mem_pred_chroma_off((*pMbCache).uiMemPredLumaHalf);
     if let Some(copy16) = (*pFunc).pfCopy16x16Aligned {
@@ -2264,7 +2264,7 @@ pub extern "C" fn MdInterSCDPskipProcess(
     let pCurDqLayer = current_layer_ref(pEncCtx)
         .expect("the frame's current layer is stamped");
 
-    let kiRefMbQp = (&layer_ref_pic(pEncCtx, &*pCurDqLayer).expect("bound").pRefMbQp)[(*pCurMb).iMbXY as usize] as i32;
+    let kiRefMbQp = (&layer_ref_pic(pEncCtx, &*pCurDqLayer).expect("the layer's reference picture is bound").pRefMbQp)[(*pCurMb).iMbXY as usize] as i32;
     let kiCurMbQp = (*pCurMb).uiLumaQp as i32;
 
     let pJudgeSkip: [pJudgeSkipFun; 2] = [JudgeStaticSkip, JudgeScrollSkip];
