@@ -2789,7 +2789,7 @@ impl CWelsPreProcess {
     /// `uiRefMbType` `Vec`, which then lived on `SComplexityAnalysisParam` and made
     /// `SVAAFrameInfo` `!Sync`. An identity carries the same decision and lets the
     /// caller take the slice under a borrow the compiler can see.
-    pub unsafe fn SetRefMbType(
+    pub fn SetRefMbType(
         &self,
         pCtx: &mut sWelsEncCtx,
         _iRefPicType: i32,

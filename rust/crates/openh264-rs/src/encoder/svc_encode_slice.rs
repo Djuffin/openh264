@@ -1881,17 +1881,14 @@ pub unsafe fn WelsSliceHeaderExtInit(pEncCtx: &sWelsEncCtx, pCurLayer: Option<&S
     }
 }
 
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
-pub unsafe fn WriteReferenceReorder(buf: &mut [u8], pBs: &mut BsWriter, sSliceHeader: *mut SSliceHeader) {
+pub fn WriteReferenceReorder(buf: &mut [u8], pBs: &mut BsWriter, sSliceHeader: &mut SSliceHeader) {
     // **S8.2**: the `pBs.is_null()` arm went with the parameter. It was already
     // unreachable — every caller's writer comes from `slice_writer`, whose two arms
     // both hand back `addr_of_mut!` of a live field and neither of which can be null.
-    if sSliceHeader.is_null() {
-        return;
-    }
-    let pRefOrdering = &mut (*sSliceHeader).sRefReordering;
-    let eSliceType = (*sSliceHeader).eSliceType;
+    // S10.15: the guard is inexpressible on a reference. T9.H's convention, and the
+    // comment above already recorded that the arm was unreachable.
+    let pRefOrdering = &mut sSliceHeader.sRefReordering;
+    let eSliceType = sSliceHeader.eSliceType;
 
     if eSliceType != EWelsSliceType::I_SLICE && eSliceType != EWelsSliceType::SI_SLICE {
         BsWriteOneBit(buf, &mut *pBs, 1);
@@ -1912,17 +1909,13 @@ pub unsafe fn WriteReferenceReorder(buf: &mut [u8], pBs: &mut BsWriter, sSliceHe
     }
 }
 
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
-pub unsafe fn WriteRefPicMarking(buf: &mut [u8], pBs: &mut BsWriter, pSliceHeader: *mut SSliceHeader, pNalHdrExt: *mut SNalUnitHeaderExt) {
+pub fn WriteRefPicMarking(buf: &mut [u8], pBs: &mut BsWriter, pSliceHeader: &mut SSliceHeader, pNalHdrExt: &mut SNalUnitHeaderExt) {
     // S8.2, as `WriteReferenceReorder` above: the writer arm was unreachable.
-    if pSliceHeader.is_null() || pNalHdrExt.is_null() {
-        return;
-    }
-    let sRefMarking = &mut (*pSliceHeader).sRefMarking;
+    // S10.15: and inexpressible now that both are references.
+    let sRefMarking = &mut pSliceHeader.sRefMarking;
     let mut n: usize = 0;
 
-    if (*pNalHdrExt).bIdrFlag {
+    if pNalHdrExt.bIdrFlag {
         BsWriteOneBit(buf, &mut *pBs, if sRefMarking.bNoOutputOfPriorPicsFlag { 1 } else { 0 });
         BsWriteOneBit(buf, &mut *pBs, if sRefMarking.bLongTermRefFlag { 1 } else { 0 });
     } else {
@@ -2013,7 +2006,7 @@ pub unsafe fn WelsSliceHeaderWrite(
     }
 
     if (*pNalHead).sNalUnitHeader.uiNalRefIdc != 0 {
-        WriteRefPicMarking(buf, &mut *pBs, pSliceHeader, pNalHead);
+        WriteRefPicMarking(buf, &mut *pBs, pSliceHeader, &mut *pNalHead);
     }
 
     if !pPps.is_null() && (*pPps).bEntropyCodingModeFlag && (*pSliceHeader).eSliceType != EWelsSliceType::I_SLICE {
@@ -2107,7 +2100,7 @@ pub unsafe fn WelsSliceHeaderExtWrite(
     }
 
     if (*pNalHead).sNalUnitHeader.uiNalRefIdc != 0 {
-        WriteRefPicMarking(buf, &mut *pBs, pSliceHeader, pNalHead);
+        WriteRefPicMarking(buf, &mut *pBs, pSliceHeader, &mut *pNalHead);
         if !pSubSps.is_null() && !(*pSubSps).sSpsSvcExt.bSliceHeaderRestrictionFlag {
             BsWriteOneBit(buf, &mut *pBs, if pSliceHeadExt.bStoreRefBasePicFlag { 1 } else { 0 });
         }
@@ -2143,10 +2136,11 @@ pub unsafe fn WelsSliceHeaderExtWrite(
 // quantisation and reconstruction entirely. It was dead, but one unqualified
 // call in this file would have silently activated it.
 
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
-pub unsafe fn WelsIMbChromaEncode(pEncCtx: &sWelsEncCtx, pCurMb: &mut SMB, pMbCache: &mut SMbCache) {
-    let pCurLayer = current_layer(pEncCtx);
+pub fn WelsIMbChromaEncode(pEncCtx: &sWelsEncCtx, pCurMb: &mut SMB, pMbCache: &mut SMbCache) {
+    // S10.15: the layer is only read here — `current_layer_ref`, not the
+    // fork-shared raw.
+    let pCurLayer = current_layer_ref(pEncCtx)
+        .expect("the frame's current layer is stamped");
     let kiEncStride = (*pCurLayer).iEncStride[1];
     // `kiCsStride` stood here: the reconstruction stride, read for the two
     // `pfIDctFourT4` calls alone. T9.C2 gave those calls the seam's cursor, which
@@ -2210,10 +2204,11 @@ pub unsafe fn WelsIMbChromaEncode(pEncCtx: &sWelsEncCtx, pCurMb: &mut SMB, pMbCa
     );
 }
 
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
-pub unsafe fn WelsPMbChromaEncode(pEncCtx: &sWelsEncCtx, pSlice: &mut SSlice, pCurMb: &mut SMB) {
-    let pCurLayer = current_layer(pEncCtx);
+pub fn WelsPMbChromaEncode(pEncCtx: &sWelsEncCtx, pSlice: &mut SSlice, pCurMb: &mut SMB) {
+    // S10.15: the layer is only read here — `current_layer_ref`, not the
+    // fork-shared raw.
+    let pCurLayer = current_layer_ref(pEncCtx)
+        .expect("the frame's current layer is stamped");
     let kiEncStride = (*pCurLayer).iEncStride[1];
     let pMbCache = &mut pSlice.sMbCacheInfo;
     // **T9.D6**, as in `WelsIMbChromaEncode` — but note the base: this one starts at
@@ -3163,7 +3158,10 @@ pub unsafe fn WelsPSliceMdEncDynamic(pEncCtx: &sWelsEncCtx, pSlice: &mut SSlice,
 // unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
 pub unsafe fn WelsCodePSlice(pEncCtx: &sWelsEncCtx, pSlice: &mut SSlice) -> i32 {
-    let pCurLayer = current_layer(pEncCtx);
+    // S10.15: the layer is only read here — `current_layer_ref`, not the
+    // fork-shared raw.
+    let pCurLayer = current_layer_ref(pEncCtx)
+        .expect("the frame's current layer is stamped");
     // `svc_encode_slice.cpp:733/736` picks `pfInterMd` HERE, per slice, into the
     // shared function list — which under MT is every worker writing the same
     // bytes with no ordering (F132 round 7, the fixed-slice probe's verdict once
@@ -3181,7 +3179,10 @@ pub unsafe fn WelsCodePSlice(pEncCtx: &sWelsEncCtx, pSlice: &mut SSlice) -> i32 
 // unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
 pub unsafe fn WelsCodePOverDynamicSlice(pEncCtx: &sWelsEncCtx, pSlice: &mut SSlice) -> i32 {
-    let pCurLayer = current_layer(pEncCtx);
+    // S10.15: the layer is only read here — `current_layer_ref`, not the
+    // fork-shared raw.
+    let pCurLayer = current_layer_ref(pEncCtx)
+        .expect("the frame's current layer is stamped");
     // `svc_encode_slice.cpp:750/753`, the dynamic-slicing twin of
     // `WelsCodePSlice` — same hoist, same reason (F132 round 7): the per-slice
     // `pfInterMd` stamp lives in `PreprocessSliceCoding` now.
@@ -3568,7 +3569,7 @@ pub unsafe fn WelsCodeOneSlice(pEncCtx: &sWelsEncCtx, pCurSlice: &mut SSlice, ki
     WelsWriteSliceEndSyn(
         slice_bs_buffer(pEncCtx, std::ptr::addr_of_mut!((*pCurSlice).sSliceBs), (*pCurSlice).uiBufferIdx as usize),
         &mut *pBs,
-        std::ptr::addr_of_mut!((*pCurSlice).sCabacCtx),
+        &mut pCurSlice.sCabacCtx,
         (*pEncCtx).param().iEntropyCodingModeFlag != 0,
     );
 
@@ -3589,12 +3590,10 @@ pub unsafe fn WelsCodeOneSlice(pEncCtx: &sWelsEncCtx, pCurSlice: &mut SSlice, ki
 /// # Safety
 /// `pSlice` must be valid; `pBs` must be its writer (`slice_writer`) and `buf` the
 /// buffer that writer is positioned in (`slice_bs_buffer`).
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
-pub unsafe fn WelsWriteSliceEndSyn(
+pub fn WelsWriteSliceEndSyn(
     buf: &mut [u8],
     pBs: &mut BsWriter,
-    pCabacCtx: *mut crate::encoder::set_mb_syn_cabac::SCabacCtx,
+    pCabacCtx: &mut crate::encoder::set_mb_syn_cabac::SCabacCtx,
     bEntropyCodingModeFlag: bool,
 ) {
     if bEntropyCodingModeFlag {
