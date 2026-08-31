@@ -897,12 +897,16 @@ pub unsafe fn WriteSliceBs(
     if current_layer_ref(pCtx).is_none() {
         return 0;
     }
-    let pSliceBs = std::ptr::addr_of_mut!((*pSlice).sSliceBs);
+    // S11.23: `pSlice` is `&mut SSlice`, so this was `addr_of_mut!` over a place
+    // already behind an exclusive borrow — the macro's whole purpose is to avoid
+    // a retag of a *shared* parent, and there is none here. A field borrow is
+    // the same access with the same tag.
+    let pSliceBs = &mut pSlice.sSliceBs;
 
-    let kiNalCnt = (*pSliceBs).iNalIndex;
+    let kiNalCnt = pSliceBs.iNalIndex;
     let mut iNalIdx = 0i32;
     let mut iReturn = ENC_RETURN_SUCCESS;
-    let iTotalLeftLength = ((*pSliceBs).uiBsSize - (*pSliceBs).uiBsPos) as i32;
+    let iTotalLeftLength = (pSliceBs.uiBsSize - pSliceBs.uiBsPos) as i32;
     let pNalHdrExt = std::ptr::addr_of!(current_layer_ref(pCtx).expect("layer bound").sLayerInfo.sNalHeaderExt);
     // T7.C4: the write cursor is the slice's own buffer, absent when the slice
     // shares the frame's — which is what the raw `pBs` was, and `WelsEncodeNal`
@@ -910,7 +914,7 @@ pub unsafe fn WriteSliceBs(
     // **S11.17**: an offset into that buffer rather than a pointer into it, so
     // the advance below is arithmetic the compiler checks against the Vec's own
     // length instead of against the caller's `iTotalLeftLength` promise.
-    let bHasOwnBuffer = (*pSliceBs).pBs.is_some();
+    let bHasOwnBuffer = pSliceBs.pBs.is_some();
     let mut iDstPos = 0usize;
 
     if kiNalCnt > 2 {
@@ -926,10 +930,10 @@ pub unsafe fn WriteSliceBs(
         // iteration; `iTotalLeftLength - *iSliceSize` was the same bound said
         // as a number, and the two agree by construction because `uiBsSize` is
         // that buffer's length.
-        let kNalEntry = (*pSliceBs).sNalList[iNalIdx as usize];
+        let kNalEntry = pSliceBs.sNalList[iNalIdx as usize];
         let kiLeft = (iTotalLeftLength - *iSliceSize).max(0) as usize;
         let pDstTail = if bHasOwnBuffer {
-            let buf = (*pSliceBs).pBs.as_mut().expect("checked above");
+            let buf = pSliceBs.pBs.as_mut().expect("checked above");
             let kiEnd = (iDstPos + kiLeft).min(buf.len());
             Some(&mut buf[iDstPos.min(kiEnd)..kiEnd])
         } else {
@@ -947,14 +951,14 @@ pub unsafe fn WriteSliceBs(
             return iReturn;
         }
 
-        (*pSliceBs).iNalLen[iNalIdx as usize] = iNalSize;
+        pSliceBs.iNalLen[iNalIdx as usize] = iNalSize;
         *iSliceSize += iNalSize;
         if bHasOwnBuffer {
             iDstPos += iNalSize as usize;
         }
         iNalIdx += 1;
     }
-    (*pSliceBs).uiBsPos = *iSliceSize as u32;
+    pSliceBs.uiBsPos = *iSliceSize as u32;
 
     iReturn
 }

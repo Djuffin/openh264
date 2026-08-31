@@ -625,11 +625,11 @@ pub unsafe extern "C" fn WelsMdBackgroundMbEnc(
         let pRefPicture = layer_ref_view(pEncCtx, &*pCurDqLayer).expect("the layer's reference view is built for this frame");
         let cRefLuma = pRefPicture.plane(0).cursor(kiMbXLuma, kiMbYLuma);
         let mut cDstLuma = if bSkipMbFlag {
-            let pSkipMb = &mut *std::ptr::addr_of_mut!((*pMbCache).sSkipMb);
+            let pSkipMb = &mut pMbCache.sSkipMb;
             PlaneCursorMut::new(&mut pSkipMb[..256], 0, 16)
         } else {
             let kiOff = mem_pred_luma_off((*pMbCache).uiMemPredLumaHalf);
-            let pMemPredMb = &mut *std::ptr::addr_of_mut!((*pMbCache).sMemPredMb);
+            let pMemPredMb = &mut pMbCache.sMemPredMb;
             PlaneCursorMut::new(&mut pMemPredMb[kiOff..kiOff + 256], 0, 16)
         };
         mc_luma(&cRefLuma, &mut cDstLuma, 0, 0, 16, 16);
@@ -638,11 +638,11 @@ pub unsafe extern "C" fn WelsMdBackgroundMbEnc(
         let pRefPicture = layer_ref_view(pEncCtx, &*pCurDqLayer).expect("the layer's reference view is built for this frame");
         let cRefCb = pRefPicture.plane(1).cursor(kiMbXChroma, kiMbYChroma);
         let mut cDstCb = if bSkipMbFlag {
-            let pSkipMb = &mut *std::ptr::addr_of_mut!((*pMbCache).sSkipMb);
+            let pSkipMb = &mut pMbCache.sSkipMb;
             PlaneCursorMut::new(&mut pSkipMb[256..320], 0, 8)
         } else {
             let kiOff = mem_pred_chroma_off((*pMbCache).uiMemPredLumaHalf);
-            let pMemPredMb = &mut *std::ptr::addr_of_mut!((*pMbCache).sMemPredMb);
+            let pMemPredMb = &mut pMbCache.sMemPredMb;
             PlaneCursorMut::new(&mut pMemPredMb[kiOff..kiOff + 64], 0, 8)
         };
         mc_chroma(&cRefCb, &mut cDstCb, sMvp.iMvX, sMvp.iMvY, 8, 8); // Cb
@@ -651,11 +651,11 @@ pub unsafe extern "C" fn WelsMdBackgroundMbEnc(
         let pRefPicture = layer_ref_view(pEncCtx, &*pCurDqLayer).expect("the layer's reference view is built for this frame");
         let cRefCr = pRefPicture.plane(2).cursor(kiMbXChroma, kiMbYChroma);
         let mut cDstCr = if bSkipMbFlag {
-            let pSkipMb = &mut *std::ptr::addr_of_mut!((*pMbCache).sSkipMb);
+            let pSkipMb = &mut pMbCache.sSkipMb;
             PlaneCursorMut::new(&mut pSkipMb[320..384], 0, 8)
         } else {
             let kiOff = mem_pred_chroma_off((*pMbCache).uiMemPredLumaHalf) + 64;
-            let pMemPredMb = &mut *std::ptr::addr_of_mut!((*pMbCache).sMemPredMb);
+            let pMemPredMb = &mut pMbCache.sMemPredMb;
             PlaneCursorMut::new(&mut pMemPredMb[kiOff..kiOff + 64], 0, 8)
         };
         mc_chroma(&cRefCr, &mut cDstCr, sMvp.iMvX, sMvp.iMvY, 8, 8); // Cr
@@ -2128,10 +2128,10 @@ pub unsafe extern "C" fn SvcMdSCDMbEnc(
     {
         let cRef = pRefPic.plane(0).cursor(lx + dx_l, ly + dy_l);
         let mut cDst = if to_pred {
-            let p = &mut *std::ptr::addr_of_mut!((*pMbCache).sMemPredMb);
+            let p = &mut pMbCache.sMemPredMb;
             PlaneCursorMut::new(&mut p[luma_off..luma_off + 256], 0, 16)
         } else {
-            let p = &mut *std::ptr::addr_of_mut!((*pMbCache).sSkipMb);
+            let p = &mut pMbCache.sSkipMb;
             PlaneCursorMut::new(&mut p[..256], 0, 16)
         };
         mc_luma(&cRef, &mut cDst, 0, 0, 16, 16);
@@ -2140,10 +2140,10 @@ pub unsafe extern "C" fn SvcMdSCDMbEnc(
         let cRef = pRefPic.plane(plane).cursor(cx + dx_c, cy + dy_c);
         let mut cDst = if to_pred {
             let o = chroma_off + extra;
-            let p = &mut *std::ptr::addr_of_mut!((*pMbCache).sMemPredMb);
+            let p = &mut pMbCache.sMemPredMb;
             PlaneCursorMut::new(&mut p[o..o + 64], 0, 8)
         } else {
-            let p = &mut *std::ptr::addr_of_mut!((*pMbCache).sSkipMb);
+            let p = &mut pMbCache.sSkipMb;
             PlaneCursorMut::new(&mut p[base_skip..base_skip + 64], 0, 8)
         };
         mc_chroma(&cRef, &mut cDst, sMvp.iMvX, sMvp.iMvY, 8, 8);
