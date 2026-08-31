@@ -41,7 +41,7 @@
     unused_unsafe
 )]
 
-#![deny(unsafe_code)]
+#![forbid(unsafe_code)]
 
 pub use crate::encoder::encoder_context::SMVUnitXY;
 pub use crate::encoder::encoder_context::SMVComponentUnit;
@@ -714,7 +714,11 @@ pub type PFillInterNeighborCacheFunc = fn(
     kpMbSkipSad: &crate::encoder::rec_view::SharedMbArray<i32>,
 );
 pub type PGetVarianceFromIntraVaaFunc = extern "C" fn(cEnc: &RecCursor<'_>) -> i32;
-pub type PGetMbSignFromInterVaaFunc = unsafe extern "C" fn(pSad8x8: *mut i32) -> u8;
+// S11.28: the four SADs arrive as the `[i32; 4]` they are stored as
+// (`SVAACalcResult::pSad8x8` is `Vec<[i32; 4]>`, one entry per macroblock) —
+// the pointer form was the C++'s `int32_t*` into the same rows. `extern "C"`
+// came off with it: nothing in this table crosses the C ABI (T4b.1).
+pub type PGetMbSignFromInterVaaFunc = fn(kpSad8x8: &[i32; 4]) -> u8;
 /// **T6.C1**: the slot took `SMVUnitXY*` because the C++ hands it
 /// `pCurMb->sMv`, a pointer into the context-wide MV bank. The bank is an inline
 /// row of `SMB` now, and the kernel writes all sixteen entries, so it takes the row.
@@ -1289,21 +1293,15 @@ pub fn UpdateMbMv_c(pMvBuffer: &mut [SMVUnitXY; MB_BLOCK4x4_NUM], ksMv: SMVUnitX
 }
 
 // unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
-pub unsafe extern "C" fn MdInterAnalysisVaaInfo_c(pSad8x8: *mut i32) -> u8 {
-    let mut iSadBlock = [0i32; 4];
+pub fn MdInterAnalysisVaaInfo_c(kpSad8x8: &[i32; 4]) -> u8 {
+    // S11.28: the macroblock's four 8x8 SADs, by value off the bounded row —
+    // the `*mut i32` walked the same four entries.
+    let iSadBlock = *kpSad8x8;
     let mut iAverageSadBlock = [0i32; 4];
 
-    iSadBlock[0] = *pSad8x8.add(0);
     let mut iAverageSad = iSadBlock[0];
-
-    iSadBlock[1] = *pSad8x8.add(1);
     iAverageSad += iSadBlock[1];
-
-    iSadBlock[2] = *pSad8x8.add(2);
     iAverageSad += iSadBlock[2];
-
-    iSadBlock[3] = *pSad8x8.add(3);
     iAverageSad += iSadBlock[3];
 
     iAverageSad >>= 2;
@@ -1558,9 +1556,7 @@ pub fn MeRefineQuarPixel(
 /// sites the moment the parameter went in; the fix removes the pointer (S54: the
 /// information it carried is caller state, and an index no retag can invalidate says
 /// it).
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
-pub unsafe extern "C" fn MeRefineFracPixel(
+pub extern "C" fn MeRefineFracPixel(
     pEncCtx: &sWelsEncCtx,
     kiMemPredInterOff: usize,
     pMe: &mut SWelsME<'_>,
@@ -1622,7 +1618,7 @@ pub unsafe extern "C" fn MeRefineFracPixel(
     let pfMeCost = (*pFunc).sSampleDealingFuncs.me_cost((*pMe).uiBlockSize as usize).unwrap();
 
     if (*pCurDqLayer).bSatdInMdFlag {
-        iBestCost = (*pMe).uSadPredISatd.uiSatd as i32
+        iBestCost = (*pMe).uSadPredISatd.uiValue as i32
             + COST_MVD((*pMe).pMvdCost, (iMvx - (*pMe).sMvp.iMvX) as i32, (iMvy - (*pMe).sMvp.iMvY) as i32);
     } else {
         iBestCost = pfMeCost(&cEnc, &cRef)

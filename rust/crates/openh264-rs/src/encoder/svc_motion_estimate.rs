@@ -133,18 +133,20 @@ pub static QStepx16ByQp: [i32; 52] = [
 
 /// 2D Motion Vector displacement in integer or 1/4-pel units.
 
-/// Dual-use union storing predicted SAD threshold before search and SATD after search.
+/// Dual-use scalar storing the predicted-SAD threshold before the search and
+/// the SATD after it.
+///
+/// **S11.28: was `union { uiSadPred: u32, uiSatd: u32 }`** — two names for the
+/// same 32 bits, so every access was an unsafe union read of whatever the other
+/// name last stored, and the `unsafe` said nothing a `u32` read does not. One
+/// field at the same offset, size and alignment (`repr(C)` both ways); the
+/// phase naming the C++ union carried lives here instead: writers before the
+/// search store the SAD prediction, `CalculateSatdCost` overwrites it with the
+/// SATD, and each reader knows its phase exactly as it had to before.
 #[repr(C)]
-#[derive(Copy, Clone)]
-pub union SadPredISatdUnit {
-    pub uiSadPred: u32,
-    pub uiSatd: u32,
-}
-
-impl Default for SadPredISatdUnit {
-    fn default() -> Self {
-        Self { uiSadPred: 0 }
-    }
+#[derive(Copy, Clone, Default)]
+pub struct SadPredISatdUnit {
+    pub uiValue: u32,
 }
 
 /// Reference frame screen block feature storage and hash lookup index.
@@ -639,7 +641,7 @@ pub fn WelsMotionEstimateSearch(
                 (*pMe).sMvp.iMvY,
                 (*pMe).sMvBase.iMvX,
                 (*pMe).sMvBase.iMvY,
-                (*pMe).uSadPredISatd.uiSadPred,
+                (*pMe).uSadPredISatd.uiValue,
                 (*pSlice).uiMvcNum,
                 (*pSlice).sMvStartMin.iMvX,
                 (*pSlice).sMvStartMin.iMvY,
@@ -838,7 +840,7 @@ pub fn WelsMotionEstimateInitialPoint(
 
         UpdateMeResults(sMv, iBestSadCost as u32, pMe);
 
-        if iBestSadCost < (*pMe).uSadPredISatd.uiSadPred as i32 {
+        if iBestSadCost < (*pMe).uSadPredISatd.uiValue as i32 {
             MeEndIntepelSearch(pMe);
             return true;
         }
@@ -870,8 +872,8 @@ pub fn CalculateSatdCost(
                 kiX + (((*pMe).sMv.iMvX as isize) >> 2),
                 kiY + (((*pMe).sMv.iMvY as isize) >> 2),
             );
-            (*pMe).uSadPredISatd.uiSatd = satd_fn(&pEncPlane.cursor(kiX, kiY), &cRef) as u32;
-            (*pMe).uiSatdCost = (*pMe).uSadPredISatd.uiSatd
+            (*pMe).uSadPredISatd.uiValue = satd_fn(&pEncPlane.cursor(kiX, kiY), &cRef) as u32;
+            (*pMe).uiSatdCost = (*pMe).uSadPredISatd.uiValue
                 + COST_MVD(
                     (*pMe).pMvdCost,
                     ((*pMe).sMv.iMvX - (*pMe).sMvp.iMvX) as i32,

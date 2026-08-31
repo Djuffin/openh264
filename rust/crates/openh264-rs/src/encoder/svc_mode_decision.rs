@@ -369,9 +369,7 @@ pub extern "C" fn WelsMdInterDecidedPskip(
 /// # Safety
 /// All pointers must be valid and `pfFirstIntraMode`, `pfSetScrollingMv` and
 /// `pfInterFineMd` assigned — `PreprocessSliceCoding` does this for a P slice.
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
-pub unsafe extern "C" fn WelsMdInterSecondaryModesEnc<'a>(
+pub extern "C" fn WelsMdInterSecondaryModesEnc<'a>(
     pEncCtx: &'a sWelsEncCtx,
     pWelsMd: &mut SWelsMD<'a>,
     pSlice: &mut SSlice,
@@ -428,9 +426,7 @@ pub unsafe extern "C" fn WelsMdInterSecondaryModesEnc<'a>(
 /// All four pointers must be valid, `pEncCtx->pFuncList->pfIntraFineMd` must be
 /// assigned (`PreprocessSliceCoding` does this), and `WelsMdIntraInit` must have run
 /// for this macroblock.
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
-pub unsafe extern "C" fn WelsMdIntraSecondaryModesEnc(
+pub extern "C" fn WelsMdIntraSecondaryModesEnc(
     pEncCtx: &sWelsEncCtx,
     pWelsMd: &mut SWelsMD<'_>,
     pCurMb: &mut SMB,
@@ -575,8 +571,6 @@ fn VaaBackgroundMbDataUpdate(
 /// P_SKIP with no residual, and `WelsMdInterJudgeBGDPskip`'s decision inputs come
 /// from the analyzer's source-domain VAA planes, so the prediction never reaches the
 /// bitstream *or* a decision. Quote 32, not 48, when this body's coverage is cited.
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
 pub extern "C" fn WelsMdBackgroundMbEnc(
     pEncCtx: &sWelsEncCtx,
     pWelsMd: &mut SWelsMD<'_>,
@@ -1261,7 +1255,7 @@ pub fn WelsMdP16x16<'a>(
         pMe16x16,
     );
     //not putting the line below into InitMe to avoid judging mode in InitMe
-    (*pMe16x16).uSadPredISatd.uiSadPred = (*pWelsMd).iSadPredMb as u32;
+    (*pMe16x16).uSadPredISatd.uiValue = (*pWelsMd).iSadPredMb as u32;
 
     (*pSlice).uiMvcNum = 0;
     (*pSlice).sMvc[(*pSlice).uiMvcNum as usize] = (*pMe16x16).sMvBase;
@@ -1362,7 +1356,7 @@ pub extern "C" fn WelsMdP8x8<'a>(
         //not putting these three lines below into InitMe to avoid judging mode in InitMe
         (*sMe8x8).iCurMeBlockPixX = (*pWelsMd).iMbPixX + iPixelX;
         (*sMe8x8).iCurMeBlockPixY = (*pWelsMd).iMbPixY + iPixelY;
-        (*sMe8x8).uSadPredISatd.uiSadPred = ((*pWelsMd).iSadPredMb >> 2) as u32;
+        (*sMe8x8).uSadPredISatd.uiValue = ((*pWelsMd).iSadPredMb >> 2) as u32;
 
         (*pSlice).sMvc[0] = (*sMe8x8).sMvBase;
         (*pSlice).uiMvcNum = 1;
@@ -1551,9 +1545,7 @@ pub fn SetMvBaseEnhancelayer(
 }
 
 /// Core spatial enhancement layer mode decision without Inter-Layer Prediction.
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
-pub unsafe fn WelsMdSpatialelInterMbIlfmdNoilp<'a>(
+pub fn WelsMdSpatialelInterMbIlfmdNoilp<'a>(
     pEncCtx: &'a sWelsEncCtx,
     pWelsMd: &mut SWelsMD<'a>,
     pSlice: &mut SSlice,
@@ -1642,9 +1634,7 @@ pub unsafe fn WelsMdSpatialelInterMbIlfmdNoilp<'a>(
 }
 
 /// Top-level MD entry point for spatial enhancement layer inter MBs.
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
-pub unsafe fn WelsMdInterMbEnhancelayer<'a>(
+pub fn WelsMdInterMbEnhancelayer<'a>(
     pEncCtx: &'a sWelsEncCtx,
     pMd: &mut SWelsMD<'a>,
     pSlice: &mut SSlice,
@@ -1749,9 +1739,7 @@ pub fn CheckChromaCost(
     !bChromaCostCannotSkip && !bChromaTooLarge
 }
 
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
-pub unsafe fn WelsMdInterJudgeBGDPskip(
+pub fn WelsMdInterJudgeBGDPskip(
     pEncCtx: &sWelsEncCtx,
     pWelsMd: &mut SWelsMD<'_>,
     pSlice: &mut SSlice,
@@ -1767,20 +1755,24 @@ pub unsafe fn WelsMdInterJudgeBGDPskip(
 
     let kiRefMbQp = (&layer_ref_pic(pEncCtx, &*pCurDqLayer).expect("bound").pRefMbQp)[(*pCurMb).iMbXY as usize] as i32;
     let kiCurMbQp = (*pCurMb).uiLumaQp as i32;
-    // T9.E7, as svc_base_layer_md's mint (F132 round 8's class).
-    let pVaaBgMbFlag = {
-        let v = std::ptr::addr_of!((*pEncCtx).vaa().expect("the frame's video-analysis block").pVaaBackgroundMbFlag);
-        (*v).as_ptr().add((*pCurMb).iMbXY as usize) as *mut i8
-    };
-
-    let kiMbWidth: isize = (*pCurDqLayer).iMbWidth as isize;
+    // **S11.28: the three neighbour reads are checked indexing.** The mint
+    // walked `flags[xy-1]`, `flags[xy-mbw]`, `flags[xy-mbw+1]` behind
+    // `*bKeepSkip &&` — and `bKeepSkip` *is* the left/top/top-right
+    // availability conjunction (`WelsMdInterSecondaryModesEnc:1590`), so the
+    // short-circuit proves every read in-bounds exactly where the pointer
+    // form assumed it. An availability flag that lies now panics naming the
+    // index instead of reading a neighbour that does not exist.
+    let kpVaaBgFlags: &[i8] =
+        &(*pEncCtx).vaa().expect("the frame's video-analysis block").pVaaBackgroundMbFlag;
+    let kiXY = (*pCurMb).iMbXY as usize;
+    let kiMbWidth = (*pCurDqLayer).iMbWidth as usize;
 
     *bKeepSkip = *bKeepSkip
-        && (*pVaaBgMbFlag.offset(-1) == 0)
-        && (*pVaaBgMbFlag.offset(-kiMbWidth) == 0)
-        && (*pVaaBgMbFlag.offset(-kiMbWidth + 1) == 0);
+        && (kpVaaBgFlags[kiXY - 1] == 0)
+        && (kpVaaBgFlags[kiXY - kiMbWidth] == 0)
+        && (kpVaaBgFlags[kiXY - kiMbWidth + 1] == 0);
 
-    if *pVaaBgMbFlag != 0
+    if kpVaaBgFlags[kiXY] != 0
         && !IS_INTRA(pMbCache.uiRefMbType)
         && ((kiRefMbQp - kiCurMbQp <= DELTA_QP_BGD_THD) || (kiRefMbQp <= 26))
     {
@@ -2067,8 +2059,6 @@ pub extern "C" fn JudgeScrollSkip(
 // one of the 48 `bg` rows, including the row where `WelsMdBackgroundMbEnc` entered
 // 5771 times. This is Phase 10's family, and the retag says so rather than leaving it
 // filed under Phase 9's port-raw backlog where it reads as pending work.
-// unsafe-cat: SCREEN_CONTENT(dormant)
-#[allow(unsafe_code)]
 pub extern "C" fn SvcMdSCDMbEnc(
     pEncCtx: &sWelsEncCtx,
     pWelsMd: &mut SWelsMD<'_>,
@@ -2258,8 +2248,6 @@ pub extern "C" fn SvcMdSCDMbEnc(
 // one of the 48 `bg` rows, including the row where `WelsMdBackgroundMbEnc` entered
 // 5771 times. This is Phase 10's family, and the retag says so rather than leaving it
 // filed under Phase 9's port-raw backlog where it reads as pending work.
-// unsafe-cat: SCREEN_CONTENT(dormant)
-#[allow(unsafe_code)]
 pub extern "C" fn MdInterSCDPskipProcess(
     pEncCtx: &sWelsEncCtx,
     pWelsMd: &mut SWelsMD<'_>,
@@ -2329,7 +2317,7 @@ pub extern "C" fn MdInterSCDPskipProcess(
 // filed under Phase 9's port-raw backlog where it reads as pending work.
 // unsafe-cat: SCREEN_CONTENT(dormant)
 #[allow(unsafe_code)]
-pub unsafe fn SetBlockStaticIdcToMd(
+pub fn SetBlockStaticIdcToMd(
     // S4.C3: `*mut` -> `&`, as `VaaBackgroundMbDataUpdate` above and for the same
     // reason — read-only, and fork-reachable through `pfSCDPSkipDecision`.
     // `extern "C"` came off with it: nothing in this tree crosses the C ABI (T4b.1).
@@ -2358,7 +2346,14 @@ pub unsafe fn SetBlockStaticIdcToMd(
     // `vaa_ext_ref()`, which answers `None` by construction (S11.3, F177). The
     // conversion keeps the scaffolding a screen-content effort would inherit.
     let kiBlocks = (kiWidth as usize) * (((*pDqLayer).iMbHeight as usize) << 1);
-    let kpStatic = std::slice::from_raw_parts((*pVaaExt).pVaaBestBlockStaticIdc, kiBlocks);
+    // SAFETY: dormant — `SVAAFrameInfoExt` cannot be constructed in this port
+    // (S11.3, F177: `vaa_ext_ref()` answers `None` by construction), so no call
+    // reaches this line. The claim a screen-content port would owe here is the
+    // C++'s: `pVaaBestBlockStaticIdc` points at one `u8` per 8x8 block of the
+    // layer's grid, `kiBlocks` of them. The raw field is the preprocess
+    // screen-LTR family's (`SRefInfoParam` is `Copy` over the same pointer) and
+    // converts with it, not with the mode-decision chain.
+    let kpStatic = unsafe { std::slice::from_raw_parts((*pVaaExt).pVaaBestBlockStaticIdc, kiBlocks) };
 
     (*pWelsMd).iBlock8x8StaticIdc[0] = kpStatic[kiBlockIndexUp as usize] as i32;
     (*pWelsMd).iBlock8x8StaticIdc[1] = kpStatic[(kiBlockIndexUp + 1) as usize] as i32;
@@ -2375,9 +2370,7 @@ pub unsafe fn SetBlockStaticIdcToMd(
 // one of the 48 `bg` rows, including the row where `WelsMdBackgroundMbEnc` entered
 // 5771 times. This is Phase 10's family, and the retag says so rather than leaving it
 // filed under Phase 9's port-raw backlog where it reads as pending work.
-// unsafe-cat: SCREEN_CONTENT(dormant)
-#[allow(unsafe_code)]
-pub unsafe fn WelsMdInterJudgeSCDPskip(
+pub fn WelsMdInterJudgeSCDPskip(
     pEncCtx: &sWelsEncCtx,
     pWelsMd: &mut SWelsMD<'_>,
     slice: &mut SSlice,
@@ -2490,9 +2483,7 @@ pub fn TryModeMerge(
     (*pCurMb).uiMbType != MB_TYPE_8x8
 }
 
-// unsafe-cat: SCREEN_CONTENT(dormant)
-#[allow(unsafe_code)]
-pub unsafe fn WelsMdInterFinePartitionVaaOnScreen<'a>(
+pub fn WelsMdInterFinePartitionVaaOnScreen<'a>(
     pEncCtx: &'a sWelsEncCtx,
     pWelsMd: &mut SWelsMD<'a>,
     pSlice: &mut SSlice,
@@ -2502,19 +2493,16 @@ pub unsafe fn WelsMdInterFinePartitionVaaOnScreen<'a>(
     let pCurDqLayer = current_layer_ref(pEncCtx)
         .expect("the frame's current layer is stamped");
 
-    // T9.E7's spelling, which this site was missing: `as_mut_ptr` autorefs `&mut`
-    // on the *shared* VAA struct's vector — a retag every worker makes per
-    // macroblock — where `as_ptr` autorefs `&`. Same address, and the two sibling
-    // mints in `svc_base_layer_md.rs` already read it this way.
-    let pSad8x8_ptr = (*pEncCtx)
-        .vaa()
-        .expect("the frame's video-analysis block")
-        .sVaaCalcInfo
-        .pSad8x8
-        .as_ptr()
-        .add((*pCurMb).iMbXY as usize) as *mut i32;
+    // S11.28: a shared index into the bounded row — the mint (T9.E7's `as_ptr`
+    // spelling) is gone with the slot's pointer parameter.
     let get_sign = (*pEncCtx).func_list().pfGetMbSignFromInterVaa.unwrap();
-    let uiMbSign = get_sign(pSad8x8_ptr);
+    let uiMbSign = get_sign(
+        &(*pEncCtx)
+            .vaa()
+            .expect("the frame's video-analysis block")
+            .sVaaCalcInfo
+            .pSad8x8[(*pCurMb).iMbXY as usize],
+    );
 
     if uiMbSign == MBVAASIGN_FLAT {
         return;
@@ -2534,8 +2522,6 @@ pub unsafe fn WelsMdInterFinePartitionVaaOnScreen<'a>(
 // 5. Global Scrolling Motion Vector Dispatch
 // ============================================================================
 
-// unsafe-cat: SCREEN_CONTENT(dormant)
-#[allow(unsafe_code)]
 pub fn SetScrollingMvToMd(pVaa: &SVAAFrameInfo, pWelsMd: &mut SWelsMD<'_>) {
     // The screen-content downcast — the C++'s `static_cast<SVAAFrameInfoExt*>`.
     // It stays inside an `unsafe fn` rather than becoming an explicit block in a
