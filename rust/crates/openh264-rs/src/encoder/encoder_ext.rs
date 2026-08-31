@@ -243,9 +243,7 @@ pub fn AcquireLayersNals(
 ///
 /// # Safety
 /// `ppCtx` must point to a live context with `pMemAlign` and `pSvcParam` set.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn AllocStrideTables(ctx: &mut sWelsEncCtx, kiNumSpatialLayers: i32) -> i32 {
+pub fn AllocStrideTables(ctx: &mut sWelsEncCtx, kiNumSpatialLayers: i32) -> i32 {
     // A7: the binding is gone for the reason `RequestMemorySvc` records — a `&mut`
     // into the parameter block cannot be held across a call that reaches it again.
 
@@ -350,10 +348,10 @@ pub unsafe fn AllocStrideTables(ctx: &mut sWelsEncCtx, kiNumSpatialLayers: i32) 
             // is `&self`/`*const` now, and this is one of the four sites that fill
             // the block. Same arithmetic the accessor did: root + the offset just
             // stored.
-            // S11.37: the 24-entry claim, made once at the derivation — the
-            // arena reserves exactly this block at this offset (T9.C4).
+            // S11.38: the bounded write accessor — the 24-entry claim lives on
+            // `SStrideTables`, beside its read twin.
             WelsGetEncBlockStrideOffset(
-                &mut *(pPtr.root().add(pBaseDec as usize).cast::<[i32; 24]>()),
+                pPtr.i32_block24_mut(pBaseDec),
                 kiLumaWidth,
                 kiChromaWidth,
             );
@@ -438,19 +436,9 @@ pub unsafe fn AllocStrideTables(ctx: &mut sWelsEncCtx, kiNumSpatialLayers: i32) 
     // C++ scratch row both coordinate tables are stamped out of. A local `Vec` is
     // the same block with the same zeros and no free to forget.
     let mut sTmpRow = vec![0i16; (iRowSize as usize).div_ceil(std::mem::size_of::<i16>())];
-    let pRowX = sTmpRow.as_mut_ptr();
-    let pRowY = pRowX;
-    // initialize pRowX & pRowY
-    i = 0;
-    let mut p = pRowX;
-    while i < iMaxMbWidth {
-        *p = i as i16;
-        *p.add(1) = (1 + i) as i16;
-        *p.add(2) = (2 + i) as i16;
-        *p.add(3) = (3 + i) as i16;
-
-        p = p.add(4);
-        i += 4;
+    // initialize the scratch row: 0, 1, 2, ... — S11.38, the cursor is an index.
+    for (idx, v) in sTmpRow.iter_mut().take(iMaxMbWidth as usize).enumerate() {
+        *v = idx as i16;
     }
 
     iSpatialIdx = kiNumSpatialLayers;
@@ -459,45 +447,37 @@ pub unsafe fn AllocStrideTables(ctx: &mut sWelsEncCtx, kiNumSpatialLayers: i32) 
         if iSpatialIdx < 0 {
             break;
         }
-        // T9.C4, as above.
-        let mut pMbIndexX = match pPtr.pMbIndexX[iSpatialIdx as usize] {
-            Some(off) => pPtr.root().add(off as usize).cast::<i16>(),
-            None => std::ptr::null_mut(),
-        };
         let kiMbWidth = sMbSizeMap[iSpatialIdx as usize].iMbWidth;
         let kiMbHeight = sMbSizeMap[iSpatialIdx as usize].iCountMbNum / kiMbWidth;
-
-        i = 0;
-        while i < kiMbHeight {
-            std::ptr::copy_nonoverlapping(pRowX, pMbIndexX, kiMbWidth as usize);
-
-            pMbIndexX = pMbIndexX.add(kiMbWidth as usize);
-            i += 1;
+        // S11.38: the bounded region, row-copied — the raw cursor advanced by
+        // the same row width over the same extent.
+        if let Some(off) = pPtr.pMbIndexX[iSpatialIdx as usize] {
+            let kpRegion =
+                pPtr.i16_region_mut(off, (kiMbWidth * kiMbHeight) as usize);
+            for row in kpRegion.chunks_exact_mut(kiMbWidth as usize) {
+                row.copy_from_slice(&sTmpRow[..kiMbWidth as usize]);
+            }
         }
     }
 
-    std::ptr::write_bytes(pRowY as *mut u8, 0, iRowSize as usize);
+    sTmpRow.fill(0);
     let iMaxMbHeight = sMbSizeMap[(kiNumSpatialLayers - 1) as usize].iCountMbNum
         / sMbSizeMap[(kiNumSpatialLayers - 1) as usize].iMbWidth;
     i = 0;
     loop {
-        let mut t = [0i16; 4];
-
-        let mut j: i16 = 0;
-
         iSpatialIdx = kiNumSpatialLayers - 1;
         while iSpatialIdx >= 0 {
             let kiMbWidth = sMbSizeMap[iSpatialIdx as usize].iMbWidth;
             let kiMbHeight = sMbSizeMap[iSpatialIdx as usize].iCountMbNum / kiMbWidth;
-            // T9.C4, as above.
-            let pMbIndexY = match pPtr.pMbIndexY[iSpatialIdx as usize] {
-                Some(off) => pPtr.root().add(off as usize).cast::<i16>(),
-                None => std::ptr::null_mut(),
-            }
-            .add((i * kiMbWidth) as usize);
-
+            // S11.38: the bounded region again; the row copy targets row `i`
+            // of the same extent the raw cursor named.
             if i < kiMbHeight {
-                std::ptr::copy_nonoverlapping(pRowY, pMbIndexY, kiMbWidth as usize);
+                if let Some(off) = pPtr.pMbIndexY[iSpatialIdx as usize] {
+                    let kpRegion =
+                        pPtr.i16_region_mut(off, (kiMbWidth * kiMbHeight) as usize);
+                    kpRegion[(i * kiMbWidth) as usize..][..kiMbWidth as usize]
+                        .copy_from_slice(&sTmpRow[..kiMbWidth as usize]);
+                }
             }
             iSpatialIdx -= 1;
         }
@@ -506,19 +486,9 @@ pub unsafe fn AllocStrideTables(ctx: &mut sWelsEncCtx, kiNumSpatialLayers: i32) 
             break;
         }
 
-        // C++ builds a 4-element int16 row of the value `i` via two 32-bit stores.
-        t[0] = i as i16;
-        t[1] = i as i16;
-        t[2] = i as i16;
-        t[3] = i as i16;
-
-        p = pRowY;
-        while j < iMaxMbWidth as i16 {
-            std::ptr::copy_nonoverlapping(t.as_ptr(), p, 4);
-
-            p = p.add(4);
-            j += 4;
-        }
+        // The scratch becomes a row of the value `i` — the C++ builds it four
+        // halfwords at a time via two 32-bit stores; a fill is the same bytes.
+        sTmpRow[..iMaxMbWidth as usize].fill(i as i16);
     }
 
     drop(sTmpRow);
@@ -1317,11 +1287,7 @@ pub fn RequestMemorySvc(
     }
 
     // stride tables
-    // S11.37: the callee's claim — the arena fill's raw block derivations
-    // (its own conversion is the stride-table family's tail).
-    // unsafe-cat: port-raw(Phase 9)
-    #[allow(unsafe_code)]
-    if unsafe { AllocStrideTables(ctx, kiNumDependencyLayers) } != 0 {
+    if AllocStrideTables(ctx, kiNumDependencyLayers) != 0 {
         return 1;
     }
 

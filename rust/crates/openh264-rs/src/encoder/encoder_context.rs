@@ -655,6 +655,52 @@ impl SStrideTables {
         self.base.as_mut_ptr().cast::<u8>()
     }
 
+    /// A coordinate-table region as the `&mut [i16]` it is — **S11.38, the
+    /// arena fill's write half.** The offsets in `pMbIndexX`/`pMbIndexY` are
+    /// byte offsets into `base` (a `Vec<i32>`, so any even offset is
+    /// `i16`-aligned); the bounds and the alignment are asserted here, once,
+    /// where `AllocStrideTables` used to walk a raw cursor over the same
+    /// bytes with the same extent unstated.
+    #[inline]
+    // unsafe-cat: port-raw(Phase 9)
+    #[allow(unsafe_code)]
+    pub fn i16_region_mut(&mut self, kuiOffBytes: u32, kiLen: usize) -> &mut [i16] {
+        let off = kuiOffBytes as usize;
+        assert!(off % 2 == 0, "i16 region at odd byte offset {off}");
+        assert!(
+            off + 2 * kiLen <= self.base.len() * 4,
+            "i16 region [{off}..+{kiLen}*2) outside the arena's {} bytes",
+            self.base.len() * 4
+        );
+        // SAFETY: in-bounds and 2-aligned per the asserts; `base` is exclusively
+        // borrowed for the result's lifetime, and `i16` has no validity
+        // requirements beyond size.
+        unsafe {
+            std::slice::from_raw_parts_mut(
+                self.base.as_mut_ptr().cast::<u8>().add(off).cast::<i16>(),
+                kiLen,
+            )
+        }
+    }
+
+    /// A block-offset region as the `&mut [i32; 24]` it is — the write twin of
+    /// [`EncBlockOffsets`](Self::EncBlockOffsets), for the fills (S11.38).
+    #[inline]
+    // unsafe-cat: port-raw(Phase 9)
+    #[allow(unsafe_code)]
+    pub fn i32_block24_mut(&mut self, kuiOffBytes: u32) -> &mut [i32; 24] {
+        let off = kuiOffBytes as usize;
+        assert!(off % 4 == 0, "i32 block at unaligned byte offset {off}");
+        assert!(
+            off + 96 <= self.base.len() * 4,
+            "i32 block [{off}..+96) outside the arena's {} bytes",
+            self.base.len() * 4
+        );
+        // SAFETY: in-bounds and 4-aligned per the asserts; exclusive via `&mut
+        // self`.
+        unsafe { &mut *(self.base.as_mut_ptr().cast::<u8>().add(off).cast::<[i32; 24]>()) }
+    }
+
     /// **`&self`, and T9.C4 is why.** These tables are filled once by
     /// `WelsGetEncBlockStrideOffset` at `InitDqLayers` and read-only for the
     /// rest of the encode — but the accessors took `&mut self` all the way down
