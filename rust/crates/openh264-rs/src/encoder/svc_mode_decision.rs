@@ -16,7 +16,7 @@
 
 
 use crate::encoder::rec_view::{copy_block_to_view, RecCursor};
-use crate::encoder::svc_encode_slice::{layer_enc_view, layer_rec_view, layer_ref_pic, layer_ref_view, layer_pps_ref};
+use crate::encoder::svc_encode_slice::{layer_enc_view, layer_rec_view, layer_ref_pic, layer_ref_view, layer_pps_ref, current_layer_ref};
 use crate::encoder::svc_encode_slice::current_layer;
 use crate::encoder::picture::{RecPicId, SrcPicId};
 use crate::encoder::md::{PredictSad, PredictSadSkip, WelsMedian};
@@ -351,16 +351,13 @@ pub unsafe extern "C" fn WelsMdInterJudgePskip(
 /// Previously omitted `WelsRecPskip`, so a skipped macroblock's motion-compensated
 /// samples were never copied into the reconstruction.
 ///
-/// # Safety
-/// All four pointers must be valid.
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
-pub unsafe extern "C" fn WelsMdInterDecidedPskip(
+pub extern "C" fn WelsMdInterDecidedPskip(
     pEncCtx: &sWelsEncCtx,
     pSlice: &mut SSlice,
     pCurMb: &mut SMB,
 ) {
-    let pCurDqLayer = current_layer(pEncCtx);
+    let pCurDqLayer = current_layer_ref(pEncCtx)
+        .expect("the frame's current layer is stamped");
     (*pCurMb).uiMbType = MB_TYPE_SKIP;
     WelsRecPskip(&*pCurDqLayer, (*pEncCtx).func_list(), pCurMb, &mut pSlice.sMbCacheInfo);
     WelsMdInterUpdatePskip(pEncCtx, &*pCurDqLayer, &mut *pSlice, pCurMb);
@@ -595,7 +592,8 @@ pub unsafe extern "C" fn WelsMdBackgroundMbEnc(
     // last use precedes the whole-slice passes to WelsInterMbEncode and
     // WelsPMbChromaEncode below, so NLL ends it in time.
     let pMbCache = &mut pSlice.sMbCacheInfo;
-    let pCurDqLayer = current_layer(pEncCtx);
+    let pCurDqLayer = current_layer_ref(pEncCtx)
+        .expect("the frame's current layer is stamped");
     let pFunc = (*pEncCtx).func_list();
     let sMvp = SMVUnitXY::default();
 
@@ -1121,8 +1119,6 @@ pub extern "C" fn UpdateP8x8Motion2Cache(
     }
 }
 
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
 pub extern "C" fn WelsMdI16x16(
     pFunc: &SWelsFuncPtrList,
     pCurDqLayer: Option<&SDqLayer>,
@@ -1426,18 +1422,14 @@ pub unsafe extern "C" fn WelsMdP8x8<'a>(
     iCostP8x8
 }
 
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
-pub unsafe extern "C" fn WelsInterMbEncode(pEncCtx: &sWelsEncCtx, pSlice: &mut SSlice, pCurMb: &mut SMB) {
+pub extern "C" fn WelsInterMbEncode(pEncCtx: &sWelsEncCtx, pSlice: &mut SSlice, pCurMb: &mut SMB) {
     // Port-added guard deleted with the retyping: `svc_encode_slice.cpp:458` opens at
     // `SMbCache* pMbCache = &pSlice->sMbCacheInfo;` and checks nothing.
     let pMbCache = &mut pSlice.sMbCacheInfo;
-    let pCurDqLayer = current_layer(pEncCtx);
+    let pCurDqLayer = current_layer_ref(pEncCtx)
+        .expect("the frame's current layer is stamped");
     let pFuncList = (*pEncCtx).func_list();
     // T6.I1: the `|| pFuncList.is_null()` arm went with the raw table.
-    if pCurDqLayer.is_null() {
-        return;
-    }
 
     // S9.0: this is `WelsDctMb`'s body inlined, and it converts the same way — the
     // four quadrants named in samples rather than in bytes-times-stride. The
@@ -1571,7 +1563,8 @@ pub unsafe fn WelsMdSpatialelInterMbIlfmdNoilp<'a>(
     mbs: &mut crate::safe::mb_grid::MbWindow<'_, SMB>,
     kuiRefMbType: Mb_Type,
 ) {
-    let pCurDqLayer = current_layer(pEncCtx);
+    let pCurDqLayer = current_layer_ref(pEncCtx)
+        .expect("the frame's current layer is stamped");
     let kuiNeighborAvail = mbs.cur().uiNeighborAvail as u32;
 
     let kbMbLeftAvailPskip = if (kuiNeighborAvail & LEFT_MB_POS as u32) != 0 {
@@ -1705,9 +1698,7 @@ pub fn IsCostLessEqualSkipCost(
         })
 }
 
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
-pub unsafe fn CheckChromaCost(
+pub fn CheckChromaCost(
     pEncCtx: &sWelsEncCtx,
     pWelsMd: &mut SWelsMD<'_>,
     pMbCache: &mut SMbCache,
@@ -1719,7 +1710,8 @@ pub unsafe fn CheckChromaCost(
     // the stamped `SPicData.pEncMb[1]`/`pRefMb[1]` were exactly
     // plane-root + ((iMbX + iMbY*stride) << 3), T9.B30's identity.
     let pSad = (*pEncCtx).func_list().sSampleDealingFuncs.pfSampleSad[BLOCK_8x8];
-    let pCurDqLayer = current_layer(pEncCtx);
+    let pCurDqLayer = current_layer_ref(pEncCtx)
+        .expect("the frame's current layer is stamped");
 
     let kiMbXChroma = ((*pMbCache).SPicData.iMbX as isize) << 3;
     let kiMbYChroma = ((*pMbCache).SPicData.iMbY as isize) << 3;
@@ -1773,7 +1765,8 @@ pub unsafe fn WelsMdInterJudgeBGDPskip(
     // use is above the whole-slice pass to WelsMdBackgroundMbEnc, so NLL ends it
     // in time.
     let pMbCache = &mut pSlice.sMbCacheInfo;
-    let pCurDqLayer = current_layer(pEncCtx);
+    let pCurDqLayer = current_layer_ref(pEncCtx)
+        .expect("the frame's current layer is stamped");
 
     let kiRefMbQp = (&layer_ref_pic(pEncCtx, &*pCurDqLayer).expect("bound").pRefMbQp)[(*pCurMb).iMbXY as usize] as i32;
     let kiCurMbQp = (*pCurMb).uiLumaQp as i32;
@@ -1816,8 +1809,6 @@ pub fn WelsMdInterJudgeBGDPskipFalse(
     false
 }
 
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
 pub extern "C" fn WelsMdUpdateBGDInfo(
     pEncCtx: &sWelsEncCtx,
     pCurLayer: &SDqLayer,
@@ -1842,8 +1833,6 @@ pub extern "C" fn WelsMdUpdateBGDInfo(
     }
 }
 
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
 pub extern "C" fn WelsMdUpdateBGDInfoNULL(
     pEncCtx: &sWelsEncCtx,
     pCurLayer: &SDqLayer,
@@ -1953,7 +1942,8 @@ pub unsafe extern "C" fn JudgeStaticSkip(
     pMbCache: &mut SMbCache,
     pWelsMd: &mut SWelsMD<'_>,
 ) -> bool {
-    let pCurDqLayer = current_layer(pEncCtx);
+    let pCurDqLayer = current_layer_ref(pEncCtx)
+        .expect("the frame's current layer is stamped");
     let kiMbX = (*pCurMb).iMbX as i32;
     let kiMbY = (*pCurMb).iMbY as i32;
 
@@ -2013,7 +2003,8 @@ pub unsafe extern "C" fn JudgeScrollSkip(
     pMbCache: &mut SMbCache,
     pWelsMd: &mut SWelsMD<'_>,
 ) -> bool {
-    let pCurDqLayer = current_layer(pEncCtx);
+    let pCurDqLayer = current_layer_ref(pEncCtx)
+        .expect("the frame's current layer is stamped");
     let kiMbX = (*pCurMb).iMbX as i32;
     let kiMbY = (*pCurMb).iMbY as i32;
     let kiMbWidth: i32 = (*pCurDqLayer).iMbWidth as i32;
@@ -2091,7 +2082,8 @@ pub unsafe extern "C" fn SvcMdSCDMbEnc(
     eSkipMode: ESkipModes,
 ) {
     let pMbCache = &mut pSlice.sMbCacheInfo;
-    let pCurDqLayer = current_layer(pEncCtx);
+    let pCurDqLayer = current_layer_ref(pEncCtx)
+        .expect("the frame's current layer is stamped");
     let pFunc = (*pEncCtx).func_list();
     let skip_idx = eSkipMode as usize;
     let sCandidateMv = sCurMbMv[skip_idx];
@@ -2279,7 +2271,8 @@ pub unsafe extern "C" fn MdInterSCDPskipProcess(
 ) -> bool {
     let pMbCache = &mut pSlice.sMbCacheInfo;
     let pVaaExt = (*pEncCtx).vaa_ext();
-    let pCurDqLayer = current_layer(pEncCtx);
+    let pCurDqLayer = current_layer_ref(pEncCtx)
+        .expect("the frame's current layer is stamped");
 
     let kiRefMbQp = (&layer_ref_pic(pEncCtx, &*pCurDqLayer).expect("bound").pRefMbQp)[(*pCurMb).iMbXY as usize] as i32;
     let kiCurMbQp = (*pCurMb).uiLumaQp as i32;
@@ -2379,7 +2372,8 @@ pub unsafe fn WelsMdInterJudgeSCDPskip(
     slice: &mut SSlice,
     pCurMb: &mut SMB,
 ) -> bool {
-    let pCurDqLayer = current_layer(pEncCtx);
+    let pCurDqLayer = current_layer_ref(pEncCtx)
+        .expect("the frame's current layer is stamped");
     SetBlockStaticIdcToMd(&*(*pEncCtx).vaa_ext(), pWelsMd, pCurMb, &*pCurDqLayer);
 
     if MdInterSCDPskipProcess(pEncCtx, pWelsMd, slice, pCurMb, ESkipModes::STATIC) {
@@ -2484,7 +2478,8 @@ pub unsafe fn WelsMdInterFinePartitionVaaOnScreen<'a>(
     pCurMb: &mut SMB,
     mut iBestCost: i32,
 ) {
-    let pCurDqLayer = current_layer(pEncCtx);
+    let pCurDqLayer = current_layer_ref(pEncCtx)
+        .expect("the frame's current layer is stamped");
 
     // T9.E7's spelling, which this site was missing: `as_mut_ptr` autorefs `&mut`
     // on the *shared* VAA struct's vector — a retag every worker makes per

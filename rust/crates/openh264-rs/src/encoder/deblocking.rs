@@ -302,7 +302,7 @@ pub struct tagDeblockingFunc {
 pub type DeblockingFunc = tagDeblockingFunc;
 
 pub use crate::encoder::encoder_context::{SPicture, SWelsFuncPtrList, sWelsEncCtx};
-pub use crate::encoder::svc_encode_slice::{SDqLayer, SSlice};
+pub use crate::encoder::svc_encode_slice::{SDqLayer, SSlice, current_layer_ref};
 
 // ============================================================================
 // Math & Bitwise Inline Macros
@@ -1438,16 +1438,13 @@ pub unsafe extern "C" fn PerformDeblockingFilter(pEnc: &mut sWelsEncCtx) {
     // sWelsEncCtx` cannot be null and every caller now holds one, so the
     // guard is not merely dead — it is inexpressible. Nothing replaces it.
     let pCurLayer = current_layer(pEnc);
-    if pCurLayer.is_null() {
-        return;
-    }
 
     if (*pCurLayer).iLoopFilterDisableIdc == 0 {
         DeblockingFilterFrameAvcbase(&mut *pCurLayer);
     } else if (*pCurLayer).iLoopFilterDisableIdc == 2 {
         let iSliceCount = GetCurrentSliceNum(&*pCurLayer);
         for iSliceIdx in 0..iSliceCount {
-            let pSlice = crate::encoder::svc_encode_slice::slice_in_layer(pCurLayer.as_ref(), iSliceIdx);
+            let pSlice = crate::encoder::svc_encode_slice::slice_in_layer(Some(&*pCurLayer), iSliceIdx);
             if !pSlice.is_null() {
                 DeblockingFilterSliceAvcbase(&*pCurLayer, &mut *pSlice);
             }

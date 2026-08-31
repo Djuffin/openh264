@@ -825,7 +825,7 @@ pub unsafe fn AppendSliceToFrameBs(
 
     let mut iSliceIdx = 0i32;
     while iSliceIdx < kiSliceCount {
-        let pSlice = crate::encoder::svc_encode_slice::slice_in_layer(pCurDq.as_ref(), iSliceIdx);
+        let pSlice = crate::encoder::svc_encode_slice::slice_in_layer(Some(&*pCurDq), iSliceIdx);
         if !pSlice.is_null() {
             let pSliceBs = &mut (*pSlice).sSliceBs;
             if pSliceBs.uiBsPos > 0 {
@@ -961,9 +961,6 @@ pub unsafe fn AdjustBaseLayer(pCtx: &mut sWelsEncCtx) -> i32 {
     }
 
     let pCurDq = ctx_dq_layer(pCtx, 0);
-    if pCurDq.is_null() {
-        return 0;
-    }
 
     // T6.G2's one edit in an MT file: the field is a position now, and layer 0 is
     // the position this function has always meant (`ppDqLayerList[0]`, two lines
@@ -1035,9 +1032,6 @@ pub unsafe fn AdjustEnhanceLayer(pCtx: &mut sWelsEncCtx, iCurDid: i32) -> i32 {
         }
     } else {
         let pCurLayer = ctx_dq_layer(pCtx, iCurDid as usize);
-        if pCurLayer.is_null() {
-            return 0;
-        }
         let kiSliceNumInFrame =
             current_layer_ref(pCtx).expect("layer bound").sSliceEncCtx.iSliceNumInFrame.load(Ordering::Relaxed);
         iNeedAdj = NeedDynamicAdjust(&mut *pCurLayer, kiSliceNumInFrame);

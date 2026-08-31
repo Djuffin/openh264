@@ -56,6 +56,7 @@ pub use crate::encoder::encoder_context::SPicData;
 pub use crate::encoder::param_svc::SWelsPPS;
 pub use crate::encoder::encoder_context::SStrideTables;
 pub use crate::encoder::svc_encode_slice::SLayerInfo;
+use crate::encoder::svc_encode_slice::current_layer_ref;
 use crate::encoder::svc_encode_slice::current_layer;
 use crate::encoder::encode_mb_aux::{blk4x4, blk4x4_mut, blk_four4x4, blk_four4x4_mut, hadamard2x2_span,
     hadamard2x2_span_mut, hadamard_dc_span};
@@ -410,18 +411,15 @@ pub fn WelsDctMb(
 /// Full DCT, DC Hadamard, quantization, scanning, inverse quantization, and local reconstruction
 /// for an **Intra 16x16 Luma** macroblock.
 ///
-/// # Safety
-/// All pointers in `pEncCtx`, `pCurMb`, and `pMbCache` must be properly initialized and valid.
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
-pub unsafe fn WelsEncRecI16x16Y(
+pub fn WelsEncRecI16x16Y(
     pEncCtx: &sWelsEncCtx,
     pCurMb: &mut SMB,
     pMbCache: &mut SMbCache,
 ) {
     let mut aDctT4Dc = [0i16; 16];
     let pFuncList = (*pEncCtx).func_list();
-    let pCurDqLayer = current_layer(pEncCtx);
+    let pCurDqLayer = current_layer_ref(pEncCtx)
+        .expect("the frame's current layer is stamped");
     let kiEncStride = (*pCurDqLayer).iEncStride[0];
     // **T9.D11**: no long-lived raw into `sCoeffLevel`. The DC write-back below is
     // indexed, and the two plane-taking slots derive their cursor where they use it —
@@ -598,7 +596,8 @@ pub unsafe fn WelsEncRecI4x4Y(
     uiI4x4Idx: u8,
 ) {
     let pFuncList = (*pEncCtx).func_list();
-    let pCurDqLayer = current_layer(pEncCtx);
+    let pCurDqLayer = current_layer_ref(pEncCtx)
+        .expect("the frame's current layer is stamped");
     let iEncStride = (*pCurDqLayer).iEncStride[0];
     let uiQp = (*pCurMb).uiLumaQp;
 
@@ -1011,10 +1010,6 @@ pub fn WelsTryPYskip(
 /// - `true`: Chroma residual is zero or negligible, qualifying for `P_SKIP`.
 /// - `false`: Non-zero chroma DC or significant AC residual detected.
 ///
-/// # Safety
-/// All pointers in `pEncCtx`, `pCurMb`, and `pMbCache` must be valid.
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
 pub fn WelsTryPUVskip(
     pEncCtx: &sWelsEncCtx,
     pCurMb: &mut SMB,

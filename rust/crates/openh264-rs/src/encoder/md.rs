@@ -724,7 +724,7 @@ pub type PUpdateMbMvFunc = fn(pMvBuffer: &mut [SMVUnitXY; MB_BLOCK4x4_NUM], ksMv
 // had it with correctly typed pointers where this copy used *mut c_void.
 pub use crate::common::mc::SMcFunc;
 // Phase 4a: MC and the half-pel filters are called directly, not via `sMcFuncs`.
-use crate::encoder::svc_encode_slice::{layer_enc_view, layer_ref_pic, layer_ref_view};
+use crate::encoder::svc_encode_slice::{layer_enc_view, layer_ref_pic, layer_ref_view, current_layer_ref};
 use crate::encoder::picture::{RecPicId};
 use crate::common::mc::{mc_hor_ver02, mc_hor_ver20, mc_hor_ver22, pixel_avg};
 pub use crate::encoder::encoder_context::SPicData;
@@ -1340,8 +1340,6 @@ pub unsafe extern "C" fn MdInterAnalysisVaaInfo_c(pSad8x8: *mut i32) -> u8 {
     uiMbSign
 }
 
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
 pub extern "C" fn AnalysisVaaInfoIntra_c(cEnc: &RecCursor<'_>) -> i32 {
     // **S10.5: the source cursor, not a plane root and a stride.** This walked
     // `pEncData[0]` — one of the two raw plane-root arrays on `SDqLayer` — with
@@ -1387,8 +1385,6 @@ pub extern "C" fn InitIntraAnalysisVaaInfo(
     pFuncList.pfUpdateMbMv = Some(UpdateMbMv_c);
 }
 
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
 pub fn MdIntraAnalysisVaaInfo(pEncCtx: &sWelsEncCtx, cEncMb: &RecCursor<'_>) -> bool {
     // S10.5: the layer lookup went with the stride — the cursor carries it.
     let pfGetVariance = pEncCtx.func_list().pfGetVarianceFromIntraVaa.unwrap();
@@ -1579,7 +1575,8 @@ pub unsafe extern "C" fn MeRefineFracPixel(
 
     let mut iHalfMvx = iMvx;
     let mut iHalfMvy = iMvy;
-    let pCurDqLayer = current_layer(pEncCtx);
+    let pCurDqLayer = current_layer_ref(pEncCtx)
+        .expect("the frame's current layer is stamped");
 
     // The two blocks, by coordinate. `sMv` is quarter-pel here and the integer search
     // left `pRefMb` at its whole-sample part, so `>> 2` is the displacement.

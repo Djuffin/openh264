@@ -2781,8 +2781,6 @@ impl CWelsPreProcess {
     /// array feeds the complexity analyser: the first confirmed long-term reference
     /// when LTR is on and a T0 frame was lost, otherwise the first usable short-term
     /// reference at or below the current temporal id.
-    // unsafe-cat: port-raw(Phase 9)
-    #[allow(unsafe_code)]
     /// **S10.9: returns *which* picture, not a pointer into it.** The out-parameter
     /// was `*mut *mut u32` and the body stored
     /// `pic_mut(id).ref_mb_type_root()` — a raw into the reference picture's

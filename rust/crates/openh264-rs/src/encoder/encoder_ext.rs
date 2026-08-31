@@ -49,7 +49,7 @@ use crate::encoder::slice_multi_threading::{
     MAX_DEPENDENCY_LAYER, MAX_SLICES_NUM, MAX_THREADS_NUM,
 };
 use crate::encoder::svc_enc_slice_segment::{GetInitialSliceNum, InitSlicePEncCtx};
-use crate::encoder::svc_encode_slice::{InitSliceInLayer, WelsMbToSliceIdc};
+use crate::encoder::svc_encode_slice::{InitSliceInLayer, WelsMbToSliceIdc, current_layer_ref};
 use crate::encoder::svc_encode_slice::{ctx_sps, ctx_pps};
 use crate::encoder::svc_encode_slice::{current_layer, set_current_layer};
 use crate::encoder::svc_mode_decision::{
@@ -2204,9 +2204,6 @@ pub unsafe fn StackBackEncoderStatus(pEncCtx: &mut sWelsEncCtx, keFrameType: EVi
 #[allow(unsafe_code)]
 pub unsafe fn WelsInitCurrentLayer(pCtx: &mut sWelsEncCtx, _kiWidth: i32, _kiHeight: i32) {
     let pCurDq = current_layer(pCtx);
-    if pCurDq.is_null() {
-        return;
-    }
     // **T6.F1**: the layer is stamped with the list its handles belong to, here, once
     // a frame — `pRefPic`/`pDecPic` on `SDqLayer` are slots of *this* list, and the
     // per-macroblock mode-decision family resolves them through it.
@@ -2222,7 +2219,7 @@ pub unsafe fn WelsInitCurrentLayer(pCtx: &mut sWelsEncCtx, _kiWidth: i32, _kiHei
     // of `ctx.ppRefPicListExt[did]`; `layer_ref_pic` resolves that through the
     // context on the layer's own dependency id now. The local below still needs the
     // raw for `pic_mut` and the reconstruction view.
-    let pBaseSlice = crate::encoder::svc_encode_slice::slice_in_layer(pCurDq.as_ref(), 0);
+    let pBaseSlice = crate::encoder::svc_encode_slice::slice_in_layer(Some(&*pCurDq), 0);
     if pBaseSlice.is_null() {
         return;
     }
@@ -2276,7 +2273,7 @@ pub unsafe fn WelsInitCurrentLayer(pCtx: &mut sWelsEncCtx, _kiWidth: i32, _kiHei
 
     let mut iIdx = 1;
     while iIdx < iSliceCount {
-        let pSlice = crate::encoder::svc_encode_slice::slice_in_layer(pCurDq.as_ref(), iIdx);
+        let pSlice = crate::encoder::svc_encode_slice::slice_in_layer(Some(&*pCurDq), iIdx);
         if !pSlice.is_null() {
             crate::encoder::svc_encode_slice::InitSliceHeadWithBase(&mut *pSlice, &*pBaseSlice);
         }
