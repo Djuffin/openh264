@@ -4182,16 +4182,14 @@ pub unsafe fn ReallocateSliceList(
     ENC_RETURN_SUCCESS
 }
 
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
-pub unsafe fn CalculateNewSliceNum(
+pub fn CalculateNewSliceNum(
     pCtx: &sWelsEncCtx,
     pLastCodedSlice: &mut SSlice,
     iMaxSliceNumOld: i32,
-    iMaxSliceNumNew: *mut i32,
+    iMaxSliceNumNew: &mut i32,
 ) -> i32 {
     // **S7.A5**: the context arm retires; the other two are live.
-    if iMaxSliceNumOld == 0 || iMaxSliceNumNew.is_null() {
+    if iMaxSliceNumOld == 0 {
         return ENC_RETURN_INVALIDINPUT;
     }
 

@@ -273,7 +273,9 @@ impl CWelsParametersetIdStrategyObj {
     pub unsafe fn OutputCurrentStructure(
         &mut self,
         pParaSetOffsetVariable: *mut SParaSetOffsetVariable,
-        pPpsIdList: *mut i32,
+        // S11.14: the PPS id list is a slice — the C's pointer + implicit
+        // MAX_PPS_COUNT length, said in the type.
+        pPpsIdList: &mut [i32; MAX_DQ_LAYER_NUM * MAX_PPS_COUNT],
         pSpsArray: &[SWelsSPS],
         pSubsetArray: &[SSubsetSps],
         pPpsArray: &[SWelsPPS],
@@ -334,10 +336,10 @@ impl CWelsParametersetIdStrategyObj {
         // sentence means. See F94.
         pExistingParasetList.uiInUsePpsNum = self.m_sParaSetOffset.uiInUsePpsNum;
         pExistingParasetList.sPps.copy_from_slice(pPpsArray);
-        if !pPpsIdList.is_null() {
+        {
             std::ptr::copy_nonoverlapping(
                 self.m_sParaSetOffset.iPpsIdList.as_ptr() as *const i32,
-                pPpsIdList,
+                pPpsIdList.as_mut_ptr(),
                 MAX_DQ_LAYER_NUM * MAX_PPS_COUNT,
             );
         }
@@ -354,7 +356,9 @@ impl CWelsParametersetIdStrategyObj {
     pub unsafe fn LoadPreviousStructure(
         &mut self,
         pParaSetOffsetVariable: *mut SParaSetOffsetVariable,
-        pPpsIdList: *mut i32,
+        // S11.14: the PPS id list is a slice — the C's pointer + implicit
+        // MAX_PPS_COUNT length, said in the type.
+        pPpsIdList: &mut [i32; MAX_DQ_LAYER_NUM * MAX_PPS_COUNT],
     ) {
         if !self.eIdKind.is_non_constant() {
             return;
@@ -367,7 +371,7 @@ impl CWelsParametersetIdStrategyObj {
         // `CWelsParametersetSpsPpsListing::LoadPreviousStructure` — `:676`. Only that
         // kind carries the id list back in; `SpsListing` and
         // `SpsListingPpsIncreasing` inherit the non-constant body above.
-        if self.eIdKind == ParasetIdKind::SpsPpsListing && !pPpsIdList.is_null() {
+        if self.eIdKind == ParasetIdKind::SpsPpsListing {
             std::ptr::copy_nonoverlapping(
                 pPpsIdList as *const i32,
                 self.m_sParaSetOffset.iPpsIdList.as_mut_ptr() as *mut i32,
