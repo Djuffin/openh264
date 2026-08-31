@@ -345,29 +345,10 @@ pub fn WelsDivRound64(x: i64, y: i64) -> i64 {
 // so both helpers and their `Box::into_raw` dance are deleted rather than
 // converted, which is what plan §5's B1 row promised.)
 
-/// The slice-threading block **as a raw pointer, read out of the `Box`'s slot** —
-/// F71's spelling, the fourth member of the named-raw family (`ctx_param_raw`,
-/// `ctx_ref_list_raw`, `ctx_func_list_raw`).
-///
-/// **Why the fork cannot take a reference instead.** A worker resolving the block
-/// through `(*pCtx).pSliceThreading.as_deref()` forms a shared borrow *of the
-/// context's field*; N workers doing so concurrently is lawful, but a cursor into
-/// this worker's bs slot must then be derived under that borrow and dies at any
-/// sibling retag of the context. Read as a *value*, the answer carries the
-/// heap block's own provenance (`Option<Box<T>>` is one pointer wide, `None` is
-/// null), so per-slot cursors survive everything that happens to the context —
-/// which is exactly the property the raw field gave the workers before S3.B1.
-///
-/// Null exactly where the field is `None`: a single-threaded encoder.
-///
-/// # Safety
-/// `pCtx` must point to a live encoder context.
-#[inline]
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
-pub unsafe fn ctx_slice_threading_raw(pCtx: *const sWelsEncCtx) -> *mut SSliceThreading {
-    std::ptr::read(std::ptr::addr_of!((*pCtx).pSliceThreading) as *const *mut SSliceThreading)
-}
+// **S11.36: `ctx_slice_threading_raw` is deleted** — F71's slot read for the
+// threading struct. Its last caller (the judge's mutex lookup) took the
+// field-scoped shared borrow in S11.30; everything else reads
+// `pCtx.pSliceThreading` directly.
 
 /// Runs `f` holding `pMutex`, i.e. a `WelsMutexLock`/`WelsMutexUnlock` pair.
 ///
@@ -554,9 +535,7 @@ pub fn NeedDynamicAdjust(pCurDq: &mut SDqLayer, iSliceNum: i32) -> i32 {
 }
 
 /// Dynamically recalculates macroblock run-lengths assigned to each slice in a spatial layer.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn DynamicAdjustSlicing(
+pub fn DynamicAdjustSlicing(
     // **S11.12: the context parameter is narrowed to what this body reads.**
     // It was `&mut sWelsEncCtx` beside a `&mut SDqLayer` *that lives inside
     // that context* — the shape F71's slot read existed to keep apart, and the
@@ -651,17 +630,15 @@ pub unsafe fn DynamicAdjustSlicing(
         iRunLen[iSliceIdx as usize] = iMbNumLeft;
     }
 
-    let ret = DynamicAdjustSlicePEncCtxAll(pCurDqLayer, iRunLen.as_mut_ptr());
+    let ret = DynamicAdjustSlicePEncCtxAll(pCurDqLayer, &iRunLen);
     (*pCurDqLayer).bNeedAdjustingSlicing = ret == 0;
 }
 
 /// Applies newly calculated macroblock run-lengths to slice context structures.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn DynamicAdjustSlicePEncCtxAll(pCurDq: &mut SDqLayer, pRunLength: *mut i32) -> i32 {
-    if pRunLength.is_null() {
-        return 1;
-    }
+// S11.36: the run-length array arrives as the bounded slice it is — the caller
+// owns it on its stack (`iRunLen`), and this body only reads it. The null arm
+// went with the pointer (a reference cannot be null).
+pub fn DynamicAdjustSlicePEncCtxAll(pCurDq: &mut SDqLayer, pRunLength: &[i32]) -> i32 {
     let pSliceCtx = &mut (*pCurDq).sSliceEncCtx;
     let iCountNumMbInFrame = pSliceCtx.iMbNumInFrame;
     let iCountSliceNumInFrame = pSliceCtx.iSliceNumInFrame.load(Ordering::Relaxed);
@@ -671,7 +648,7 @@ pub unsafe fn DynamicAdjustSlicePEncCtxAll(pCurDq: &mut SDqLayer, pRunLength: *m
 
     while iSliceIdx < iCountSliceNumInFrame {
         let first: &[i32] = &(*pCurDq).pFirstMbIdxOfSlice;
-        if *pRunLength.add(iSliceIdx as usize) != first[iSliceIdx as usize] {
+        if pRunLength[iSliceIdx as usize] != first[iSliceIdx as usize] {
             iSameRunLenFlag = 0;
             break;
         }
@@ -683,7 +660,7 @@ pub unsafe fn DynamicAdjustSlicePEncCtxAll(pCurDq: &mut SDqLayer, pRunLength: *m
 
     iSliceIdx = 0;
     while iSliceIdx < iCountSliceNumInFrame && iFirstMbIdx < iCountNumMbInFrame {
-        let kiSliceRun = *pRunLength.add(iSliceIdx as usize);
+        let kiSliceRun = pRunLength[iSliceIdx as usize];
         {
             let first: &mut Vec<i32> = &mut (*pCurDq).pFirstMbIdxOfSlice;
             first[iSliceIdx as usize] = iFirstMbIdx;
@@ -807,9 +784,7 @@ pub fn ReleaseMtResource(ctx: &mut sWelsEncCtx) {
 }
 
 /// Aggregates individual thread-local slice bitstream buffers into the contiguous frame bitstream buffer.
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
-pub unsafe fn AppendSliceToFrameBs(
+pub fn AppendSliceToFrameBs(
     pCtx: &mut sWelsEncCtx,
     pLbi: &mut SLayerBSInfo,
     kiSliceCount: i32,
@@ -822,7 +797,18 @@ pub unsafe fn AppendSliceToFrameBs(
         return 0;
     }
 
-    let pCurDq = current_layer(pCtx);
+    // **S11.36: the context is destructured once** — the layer (whose slices
+    // this walks), the frame bitstream (the copy's destination) and the two
+    // counters are disjoint fields, which is what lets the slice's borrow and
+    // the frame writes coexist as plain facts (S11.17's move).
+    let sWelsEncCtx { ppDqLayerList, iCurDqLayer, pFrameBs, iPosBsBuffer, iFrameBsSize, iEncoderError, .. } =
+        &mut *pCtx;
+    let Some(pCurDq) = iCurDqLayer
+        .and_then(|idx| ppDqLayerList.get_mut(idx.get()))
+        .and_then(|l| l.as_deref_mut())
+    else {
+        return 0;
+    };
     let mut iLayerSize = 0i32;
     let mut iNalIdxBase = 0i32;
     (*pLbi).iNalCount = 0;
@@ -830,8 +816,8 @@ pub unsafe fn AppendSliceToFrameBs(
     let mut iSliceIdx = 0i32;
     while iSliceIdx < kiSliceCount {
         // S11.35: the safe twin — `None` where the raw answered null. This is
-        // post-join, on the calling thread, and `pCurDq` is exclusive here.
-        let Some(pSlice) = crate::encoder::svc_encode_slice::slice_in_layer_mut(&mut *pCurDq, iSliceIdx) else {
+        // post-join, on the calling thread, and the layer is exclusive here.
+        let Some(pSlice) = crate::encoder::svc_encode_slice::slice_in_layer_mut(pCurDq, iSliceIdx) else {
             iSliceIdx += 1;
             continue;
         };
@@ -840,38 +826,45 @@ pub unsafe fn AppendSliceToFrameBs(
             if pSliceBs.uiBsPos > 0 {
                 let iCountNal = pSliceBs.iNalIndex;
 
-                if (pCtx.iPosBsBuffer as u64) + (pSliceBs.uiBsPos as u64)
-                    > (pCtx.iFrameBsSize as u64)
+                if (*iPosBsBuffer as u64) + (pSliceBs.uiBsPos as u64)
+                    > (*iFrameBsSize as u64)
                 {
-                    pCtx.iEncoderError |= ENC_RETURN_MEMALLOCERR;
+                    *iEncoderError |= ENC_RETURN_MEMALLOCERR;
                     return 0;
                 }
 
-                // T7.C4: the slice owns its bitstream, so the source is the `Vec`'s
-                // root rather than a `CMemoryAlign` block. Same bytes, same length,
-                // same destination.
-                if !pCtx.frame_bs().is_null() {
+                // T7.C4: the slice owns its bitstream, and S11.36 bounds the
+                // destination too — the copy is a checked slice-to-slice write
+                // into the frame buffer's tail, where `frame_bs_cur()`'s raw
+                // cursor was bounded only by the guard above.
+                if !pFrameBs.is_empty() {
                     if let Some(src) = pSliceBs.pBs.as_ref() {
-                        std::ptr::copy(
-                            src.as_ptr(),
-                            pCtx.frame_bs_cur(),
-                            pSliceBs.uiBsPos as usize,
-                        );
+                        let kiPos = *iPosBsBuffer as usize;
+                        let kiLen = pSliceBs.uiBsPos as usize;
+                        pFrameBs[kiPos..kiPos + kiLen]
+                            .copy_from_slice(&src[..kiLen]);
                     }
                 }
 
-                pCtx.iPosBsBuffer += pSliceBs.uiBsPos as i32;
+                *iPosBsBuffer += pSliceBs.uiBsPos as i32;
                 iLayerSize += pSliceBs.uiBsPos as i32;
 
-                let mut iNalIdx = 0i32;
-                while iNalIdx < iCountNal {
-                    if !(*pLbi).pNalLengthInByte.is_null() {
-                        *(*pLbi)
-                            .pNalLengthInByte
-                            .add((iNalIdxBase + iNalIdx) as usize) =
-                            pSliceBs.iNalLen[iNalIdx as usize];
+                // S11.36: the one raw left is the C-ABI out array —
+                // `SLayerBSInfo::pNalLengthInByte` is application-visible
+                // frozen-ABI state, exactly `FrameBsRealloc`'s walk.
+                // unsafe-cat: C-ABI
+                #[allow(unsafe_code)]
+                unsafe {
+                    let mut iNalIdx = 0i32;
+                    while iNalIdx < iCountNal {
+                        if !(*pLbi).pNalLengthInByte.is_null() {
+                            *(*pLbi)
+                                .pNalLengthInByte
+                                .add((iNalIdxBase + iNalIdx) as usize) =
+                                pSliceBs.iNalLen[iNalIdx as usize];
+                        }
+                        iNalIdx += 1;
                     }
-                    iNalIdx += 1;
                 }
                 (*pLbi).iNalCount += iCountNal;
                 iNalIdxBase += iCountNal;
@@ -977,27 +970,23 @@ pub fn DynamicDetectCpuCores() -> i32 {
 }
 
 /// Evaluates load balance and dynamically adjusts slicing for the base spatial dependency layer.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn AdjustBaseLayer(pCtx: &mut sWelsEncCtx) -> i32 {
+pub fn AdjustBaseLayer(pCtx: &mut sWelsEncCtx) -> i32 {
     // T9.H4: the `is_null()` disjunct that opened this guard is gone — a
     // `&mut sWelsEncCtx` cannot be null, and every caller now holds one. The
     // remaining conditions are unchanged.
-    if ctx_dq_layer(pCtx, 0).is_null() {
+    // S11.36: the safe layer accessor — `None` where the raw answered null.
+    if crate::encoder::encoder_context::dq_layer_mut(pCtx, 0).is_none() {
         return 0;
     }
-
-    let pCurDq = ctx_dq_layer(pCtx, 0);
 
     // T6.G2's one edit in an MT file: the field is a position now, and layer 0 is
     // the position this function has always meant (`ppDqLayerList[0]`, two lines
     // up). Body otherwise untouched — Phase 7 owns everything else here.
     set_current_layer(pCtx, Some(LayerIdx(0)));
 
-    // T9.E2h, F66's shape B with an accessor-minted root the detector cannot
-    // see: the count is read before the call whose first argument retags.
-    let kiSliceNumInFrame = (*pCurDq).sSliceEncCtx.iSliceNumInFrame.load(Ordering::Relaxed);
-    let iNeedAdj = NeedDynamicAdjust(&mut *pCurDq, kiSliceNumInFrame);
+    let pCurDq = crate::encoder::encoder_context::dq_layer_mut(pCtx, 0).expect("checked above");
+    let kiSliceNumInFrame = pCurDq.sSliceEncCtx.iSliceNumInFrame.load(Ordering::Relaxed);
+    let iNeedAdj = NeedDynamicAdjust(pCurDq, kiSliceNumInFrame);
 
     if iNeedAdj != 0 {
         // S11.12: the two owners come out of one `&mut` by destructuring —
@@ -1017,13 +1006,12 @@ pub unsafe fn AdjustBaseLayer(pCtx: &mut sWelsEncCtx) -> i32 {
 }
 
 /// Evaluates load balance and dynamically adjusts slicing for spatial enhancement layers.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn AdjustEnhanceLayer(pCtx: &mut sWelsEncCtx, iCurDid: i32) -> i32 {
+pub fn AdjustEnhanceLayer(pCtx: &mut sWelsEncCtx, iCurDid: i32) -> i32 {
     // T9.H4: the `is_null()` disjunct that opened this guard is gone — a
     // `&mut sWelsEncCtx` cannot be null, and every caller now holds one. The
     // remaining conditions are unchanged.
-    if ctx_dq_layer(pCtx, 0).is_null() || current_layer_ref(pCtx).is_none() {
+    // S11.36: the safe accessor — `None` where the raw answered null.
+    if crate::encoder::encoder_context::dq_layer_ref(pCtx, 0).is_none() || current_layer_ref(pCtx).is_none() {
         return 0;
     }
 
@@ -1052,16 +1040,15 @@ pub unsafe fn AdjustEnhanceLayer(pCtx: &mut sWelsEncCtx, iCurDid: i32) -> i32 {
 
     let iNeedAdj: i32;
     if kbModelingFromSpatial {
-        let pBaseLayer = ctx_dq_layer(pCtx, iCurDid as usize - 1);
-        if pBaseLayer.is_null() {
-            return 0;
-        }
-        // T9.E2h, shape B again — and here the two arguments can NAME THE SAME
+        // T9.E2h, shape B again — and here the two names can be THE SAME
         // LAYER (base == current when iCurDid is the base), so the load is
-        // hoisted above the retag.
+        // hoisted above the exclusive borrow. S11.36: the safe accessor.
         let kiSliceNumInFrame =
             current_layer_ref(pCtx).expect("layer bound").sSliceEncCtx.iSliceNumInFrame.load(Ordering::Relaxed);
-        iNeedAdj = NeedDynamicAdjust(&mut *pBaseLayer, kiSliceNumInFrame);
+        let Some(pBaseLayer) = crate::encoder::encoder_context::dq_layer_mut(pCtx, iCurDid as usize - 1) else {
+            return 0;
+        };
+        iNeedAdj = NeedDynamicAdjust(pBaseLayer, kiSliceNumInFrame);
         if iNeedAdj != 0 {
             // T9.G6: hoisted (shape B). **S11.11: this one keeps the raw.**
             // `DynamicAdjustSlicing` takes `&mut sWelsEncCtx` *and* `&mut
@@ -1084,10 +1071,13 @@ pub unsafe fn AdjustEnhanceLayer(pCtx: &mut sWelsEncCtx, iCurDid: i32) -> i32 {
             DynamicAdjustSlicing(pSvcParam, pWelsSvcRc, pCurLayer, iCurDid);
         }
     } else {
-        let pCurLayer = ctx_dq_layer(pCtx, iCurDid as usize);
         let kiSliceNumInFrame =
             current_layer_ref(pCtx).expect("layer bound").sSliceEncCtx.iSliceNumInFrame.load(Ordering::Relaxed);
-        iNeedAdj = NeedDynamicAdjust(&mut *pCurLayer, kiSliceNumInFrame);
+        // S11.36: the safe accessor; the raw's null had no arm here (the deref
+        // was unchecked), so `expect` states the same liveness.
+        let pCurLayer = crate::encoder::encoder_context::dq_layer_mut(pCtx, iCurDid as usize)
+            .expect("the dependency layer is built");
+        iNeedAdj = NeedDynamicAdjust(pCurLayer, kiSliceNumInFrame);
         if iNeedAdj != 0 {
             // T9.G6: hoisted (shape B). **S11.11: this one keeps the raw.**
             // `DynamicAdjustSlicing` takes `&mut sWelsEncCtx` *and* `&mut
