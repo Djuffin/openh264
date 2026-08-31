@@ -85,6 +85,8 @@ pub fn WELS_ABS(iX: i32) -> i32 {
 // `phase2_findings.md` F8, where the intermediates *can* overflow and the port
 // therefore reproduces the old grouping operation for operation).
 
+use crate::safe::plane::RefSamples;
+#[cfg(test)]
 use crate::safe::plane::PlaneCursor;
 
 /// Sum of absolute differences between a `W` x `H` block at `sample1` and one at
@@ -95,9 +97,9 @@ use crate::safe::plane::PlaneCursor;
 /// folding the offset into the row lookup keeps the four probes at one bounds check
 /// per row each, which is where this family's checks are meant to land (plan §7.4).
 #[inline(always)]
-fn sad_at<const W: usize, const H: usize>(
-    sample1: &PlaneCursor<'_>,
-    sample2: &PlaneCursor<'_>,
+fn sad_at<const W: usize, const H: usize, S: RefSamples>(
+    sample1: &S,
+    sample2: &S,
     dx: isize,
     dy: isize,
 ) -> i32 {
@@ -107,8 +109,8 @@ fn sad_at<const W: usize, const H: usize>(
     // `row()` walk cannot fold its checks and a 16x8 emits 32 branches before reading
     // a sample — see `PlaneCursor::row_windows` for the measurement and for why this
     // is the right call here and the wrong one in `mc.rs`.
-    let rows1 = sample1.row_windows::<W>(0, 0, H);
-    let rows2 = sample2.row_windows::<W>(dy, dx, H);
+    let rows1 = sample1.row_blocks::<W>(0, 0, H);
+    let rows2 = sample2.row_blocks::<W>(dy, dx, H);
     for (a, b) in rows1.zip(rows2) {
         for (p, q) in a.iter().zip(b.iter()) {
             sum += p.abs_diff(*q) as i32;
@@ -122,11 +124,11 @@ fn sad_at<const W: usize, const H: usize>(
 ///
 /// Reads `x` in `0 .. W` and `y` in `0 .. H` from both cursors, and nothing else.
 #[inline(always)]
-pub fn sample_sad<const W: usize, const H: usize>(
-    sample1: &PlaneCursor<'_>,
-    sample2: &PlaneCursor<'_>,
+pub fn sample_sad<const W: usize, const H: usize, S: RefSamples>(
+    sample1: &S,
+    sample2: &S,
 ) -> i32 {
-    sad_at::<W, H>(sample1, sample2, 0, 0)
+    sad_at::<W, H, S>(sample1, sample2, 0, 0)
 }
 
 /// C++: `WelsSampleSadFour<W>x<H>_c`, `codec/common/src/sad_common.cpp` — the SAD of
@@ -139,15 +141,15 @@ pub fn sample_sad<const W: usize, const H: usize>(
 /// `-1 .. H + 1`. That reach is the whole reason this kernel takes a plane cursor and
 /// not a block slice — the diamond's arms leave the block.
 #[inline(always)]
-pub fn sample_sad_four<const W: usize, const H: usize>(
-    sample1: &PlaneCursor<'_>,
-    sample2: &PlaneCursor<'_>,
+pub fn sample_sad_four<const W: usize, const H: usize, S: RefSamples>(
+    sample1: &S,
+    sample2: &S,
     sad: &mut [i32; 4],
 ) {
-    sad[0] = sad_at::<W, H>(sample1, sample2, 0, -1);
-    sad[1] = sad_at::<W, H>(sample1, sample2, 0, 1);
-    sad[2] = sad_at::<W, H>(sample1, sample2, -1, 0);
-    sad[3] = sad_at::<W, H>(sample1, sample2, 1, 0);
+    sad[0] = sad_at::<W, H, S>(sample1, sample2, 0, -1);
+    sad[1] = sad_at::<W, H, S>(sample1, sample2, 0, 1);
+    sad[2] = sad_at::<W, H, S>(sample1, sample2, -1, 0);
+    sad[3] = sad_at::<W, H, S>(sample1, sample2, 1, 0);
 }
 
 #[cfg(test)]
@@ -170,14 +172,14 @@ mod tests {
     fn test_sample_sad_4x4_identical() {
         let buf = [42u8; 64];
         let c = PlaneCursor::new(&buf, 0, 8);
-        assert_eq!(sample_sad::<4, 4>(&c, &c), 0);
+        assert_eq!(sample_sad::<4, 4, _>(&c, &c), 0);
     }
 
     #[test]
     fn test_sample_sad_4x4_diff() {
         let buf1 = [10u8; 16];
         let buf2 = [20u8; 16];
-        let sad = sample_sad::<4, 4>(&PlaneCursor::new(&buf1, 0, 4), &PlaneCursor::new(&buf2, 0, 4));
+        let sad = sample_sad::<4, 4, _>(&PlaneCursor::new(&buf1, 0, 4), &PlaneCursor::new(&buf2, 0, 4));
         assert_eq!(sad, 16 * 10);
     }
 
@@ -185,7 +187,7 @@ mod tests {
     fn test_sample_sad_8x8_diff() {
         let buf1 = [5u8; 64];
         let buf2 = [15u8; 64];
-        let sad = sample_sad::<8, 8>(&PlaneCursor::new(&buf1, 0, 8), &PlaneCursor::new(&buf2, 0, 8));
+        let sad = sample_sad::<8, 8, _>(&PlaneCursor::new(&buf1, 0, 8), &PlaneCursor::new(&buf2, 0, 8));
         assert_eq!(sad, 64 * 10);
     }
 
@@ -194,7 +196,7 @@ mod tests {
         let buf1 = [0u8; 16 * 16];
         let buf2 = [2u8; 16 * 16];
         let sad =
-            sample_sad::<16, 16>(&PlaneCursor::new(&buf1, 0, 16), &PlaneCursor::new(&buf2, 0, 16));
+            sample_sad::<16, 16, _>(&PlaneCursor::new(&buf1, 0, 16), &PlaneCursor::new(&buf2, 0, 16));
         assert_eq!(sad, 256 * 2);
     }
 
@@ -205,12 +207,12 @@ mod tests {
         let c1 = PlaneCursor::new(&buf1, 0, 32);
         let c2 = PlaneCursor::new(&buf2, 0, 32);
 
-        assert!(sample_sad::<8, 4>(&c1, &c2) > 0);
-        assert!(sample_sad::<4, 8>(&c1, &c2) > 0);
+        assert!(sample_sad::<8, 4, _>(&c1, &c2) > 0);
+        assert!(sample_sad::<4, 8, _>(&c1, &c2) > 0);
         assert_eq!(
-            sample_sad::<16, 8>(&c1, &c2),
-            sample_sad::<8, 8>(&c1, &c2)
-                + sample_sad::<8, 8>(&c1.advance(8, 0), &c2.advance(8, 0))
+            sample_sad::<16, 8, _>(&c1, &c2),
+            sample_sad::<8, 8, _>(&c1, &c2)
+                + sample_sad::<8, 8, _>(&c1.advance(8, 0), &c2.advance(8, 0))
         );
     }
 
@@ -221,7 +223,7 @@ mod tests {
         let buf2 = vec![100u8; stride * 32];
 
         let mut sad_results = [0i32; 4];
-        sample_sad_four::<16, 16>(
+        sample_sad_four::<16, 16, _>(
             &PlaneCursor::new(&buf1, 0, stride),
             &PlaneCursor::new(&buf2, stride * 10 + 10, stride),
             &mut sad_results,

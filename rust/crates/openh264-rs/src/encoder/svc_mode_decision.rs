@@ -16,7 +16,7 @@
 
 
 use crate::encoder::rec_view::{copy_block_to_view, RecCursor};
-use crate::encoder::svc_encode_slice::{layer_enc_pic, layer_rec_view, layer_ref_pic};
+use crate::encoder::svc_encode_slice::{layer_enc_view, layer_rec_view, layer_ref_pic, layer_ref_view};
 use crate::encoder::svc_encode_slice::layer_pps;
 use crate::encoder::svc_encode_slice::current_layer;
 use crate::encoder::picture::{RecPicId, SrcPicId};
@@ -631,7 +631,7 @@ pub unsafe extern "C" fn WelsMdBackgroundMbEnc(
 
     // MC
     {
-        let pRefPicture = layer_ref_pic(&*pCurDqLayer).expect("the layer's reference picture is bound");
+        let pRefPicture = layer_ref_view(&*pCurDqLayer).expect("the layer's reference view is built for this frame");
         let cRefLuma = pRefPicture.plane(0).cursor(kiMbXLuma, kiMbYLuma);
         let mut cDstLuma = if bSkipMbFlag {
             let pSkipMb = &mut *std::ptr::addr_of_mut!((*pMbCache).sSkipMb);
@@ -644,7 +644,7 @@ pub unsafe extern "C" fn WelsMdBackgroundMbEnc(
         mc_luma(&cRefLuma, &mut cDstLuma, 0, 0, 16, 16);
     }
     {
-        let pRefPicture = layer_ref_pic(&*pCurDqLayer).expect("the layer's reference picture is bound");
+        let pRefPicture = layer_ref_view(&*pCurDqLayer).expect("the layer's reference view is built for this frame");
         let cRefCb = pRefPicture.plane(1).cursor(kiMbXChroma, kiMbYChroma);
         let mut cDstCb = if bSkipMbFlag {
             let pSkipMb = &mut *std::ptr::addr_of_mut!((*pMbCache).sSkipMb);
@@ -657,7 +657,7 @@ pub unsafe extern "C" fn WelsMdBackgroundMbEnc(
         mc_chroma(&cRefCb, &mut cDstCb, sMvp.iMvX, sMvp.iMvY, 8, 8); // Cb
     }
     {
-        let pRefPicture = layer_ref_pic(&*pCurDqLayer).expect("the layer's reference picture is bound");
+        let pRefPicture = layer_ref_view(&*pCurDqLayer).expect("the layer's reference view is built for this frame");
         let cRefCr = pRefPicture.plane(2).cursor(kiMbXChroma, kiMbYChroma);
         let mut cDstCr = if bSkipMbFlag {
             let pSkipMb = &mut *std::ptr::addr_of_mut!((*pMbCache).sSkipMb);
@@ -675,16 +675,16 @@ pub unsafe extern "C" fn WelsMdBackgroundMbEnc(
     (*pWelsMd).iCostLuma = 0; // BGD&RC integration
     // `pfSampleSadRaw[BLOCK_16x16]` is a compile-time index into a table with one
     // writer and no CPU flag (`WelsInitSampleSadFunc`), so the slot is constant from
-    // the first frame on and `sample_sad::<16, 16>` *is* what it held — F118's order,
+    // the first frame on and `sample_sad::<16, 16, _>` *is* what it held — F118's order,
     // with no table on the path. Both operands are pictures the layer already holds:
-    // the source through `layer_enc_pic` (the sample `SPicData.pEncMb[0]` named) and
+    // the source through `layer_enc_view` (the sample `SPicData.pEncMb[0]` named) and
     // the reference through `layer_ref_pic`, both at the macroblock's own origin.
     (*pCurMb).iSadCost = {
-        let pEncPicture = layer_enc_pic(&*pCurDqLayer).expect("the layer's source picture is bound");
-        let pRefPicture = layer_ref_pic(&*pCurDqLayer).expect("the layer's reference picture is bound");
+        let pEncPicture = layer_enc_view(&*pCurDqLayer).expect("the layer's source view is built for this frame");
+        let pRefPicture = layer_ref_view(&*pCurDqLayer).expect("the layer's reference view is built for this frame");
         let cEncLuma = pEncPicture.plane(0).cursor(kiMbXLuma, kiMbYLuma);
         let cRefLuma = pRefPicture.plane(0).cursor(kiMbXLuma, kiMbYLuma);
-        sample_sad::<16, 16>(&cEncLuma, &cRefLuma)
+        sample_sad::<16, 16, _>(&cEncLuma, &cRefLuma)
     };
     (*pCurMb).sP16x16Mv = SMVUnitXY::default();
     layer_rec_view(&*pCurDqLayer)
@@ -740,8 +740,8 @@ pub unsafe extern "C" fn WelsMdBackgroundMbEnc(
     } else {
         // `pfSampleSatd[BLOCK_16x16]`, constant after init (F118) — called direct, on
         // the same two picture cursors the SAD above used.
-        let pEncPicture = layer_enc_pic(&*pCurDqLayer).expect("the layer's source picture is bound");
-        let pRefPicture = layer_ref_pic(&*pCurDqLayer).expect("the layer's reference picture is bound");
+        let pEncPicture = layer_enc_view(&*pCurDqLayer).expect("the layer's source view is built for this frame");
+        let pRefPicture = layer_ref_view(&*pCurDqLayer).expect("the layer's reference view is built for this frame");
         let cEncLuma = pEncPicture.plane(0).cursor(kiMbXLuma, kiMbYLuma);
         let cRefLuma = pRefPicture.plane(0).cursor(kiMbXLuma, kiMbYLuma);
         (*pWelsMd).iCostLuma = satd_16x16(&cEncLuma, &cRefLuma);
@@ -1168,8 +1168,8 @@ pub unsafe extern "C" fn WelsMdI16x16(
     let pfMdCost16x16 = pFunc.sSampleDealingFuncs.md_cost(BLOCK_16x16).unwrap();
     // **T9.B30**: the source macroblock by coordinate — this function has neither an
     // `SMB` nor a slice in scope, which is what the carrier's `iMbX`/`iMbY` are for.
-    let pEncPicture = crate::encoder::svc_encode_slice::layer_enc_pic(pCurDqLayer)
-        .expect("the layer's source picture is bound");
+    let pEncPicture = crate::encoder::svc_encode_slice::layer_enc_view(pCurDqLayer)
+        .expect("the layer's source view is built for this frame");
     let (kiMbOrgX, kiMbOrgY) = (*pMbCache).SPicData.luma_origin();
 
     iBestMode = kpAvailMode[0] as i32;
@@ -1192,7 +1192,7 @@ pub unsafe extern "C" fn WelsMdI16x16(
             &view.plane(0).cursor(kiMbOrgX, kiMbOrgY),
         );
         let mut iCurCost = pfMdCost16x16(
-            &PlaneCursor::new(&(*pMbCache).sMemPredMb[kiDstOff..][..256], 0, 16),
+            &RecCursor::over_owned(&mut (*pMbCache).sMemPredMb[kiDstOff..][..256], 0, 16),
             &pEncPicture.plane(0).cursor(kiMbOrgX, kiMbOrgY),
         );
         let mode_val = g_kiMapModeI16x16[iCurMode as usize] as u32;
@@ -1316,8 +1316,8 @@ pub unsafe fn WelsMdP16x16<'a>(
         // cost tables — both shared reads of the pre-fork table) and the two
         // planes, resolved per call through the layer's frame-stable handles
         // (S37's value half; the pattern MeRefineFracPixel proved).
-        let pEncPicture = layer_enc_pic(pCurLayer).expect("the layer's source picture is bound");
-        let pRefPicture = layer_ref_pic(pCurLayer).expect("the layer's reference picture is bound");
+        let pEncPicture = layer_enc_view(pCurLayer).expect("the layer's source view is built for this frame");
+        let pRefPicture = layer_ref_view(pCurLayer).expect("the layer's reference view is built for this frame");
         search_fn(
             &pFunc.sMeFuncs,
             &pFunc.sSampleDealingFuncs,
@@ -1395,8 +1395,8 @@ pub unsafe extern "C" fn WelsMdP8x8<'a>(
             // writer of `iBlock8x8StaticIdc` is `SetBlockStaticIdcToMd`,
             // SCREEN_CONTENT(dormant). Both locks are stated so the dispatch
             // stays honest when Phase 10 lights them.
-            let pEncPicture = layer_enc_pic(pCurDqLayer).expect("the layer's source picture is bound");
-            let pRefPicture = layer_ref_pic(pCurDqLayer).expect("the layer's reference picture is bound");
+            let pEncPicture = layer_enc_view(pCurDqLayer).expect("the layer's source view is built for this frame");
+            let pRefPicture = layer_ref_view(pCurDqLayer).expect("the layer's reference view is built for this frame");
             pFunc.pfMotionSearch[(*pWelsMd).iBlock8x8StaticIdc[i as usize] as usize]
                 .expect("pfMotionSearch unset")(
                 &pFunc.sMeFuncs,
@@ -1449,8 +1449,8 @@ pub unsafe extern "C" fn WelsInterMbEncode(pEncCtx: &sWelsEncCtx, pSlice: &mut S
     let encView = crate::encoder::svc_encode_slice::layer_enc_view(&*pCurDqLayer)
         .expect("the frame's source view is stamped with pEncData");
     let pEncMb = (*pMbCache).SPicData.mb_cursor_ro(encView, 0);
-    let pMemPredLuma = PlaneCursor::new(
-        &(*pMbCache).sMemPredMb,
+    let pMemPredLuma = RecCursor::over_owned(
+        &mut (*pMbCache).sMemPredMb,
         mem_pred_luma_off((*pMbCache).uiMemPredLumaHalf),
         16,
     );
@@ -1676,8 +1676,8 @@ pub unsafe fn WelsMdInterMbEnhancelayer(
 /// the last interior pointer into the cost tables went with the raw triple).
 pub fn GetChromaCost(
     pSad: Option<crate::encoder::md::PSampleSadSatdCostFunc>,
-    cSrcChroma: &crate::safe::plane::PlaneCursor<'_>,
-    cRefChroma: &crate::safe::plane::PlaneCursor<'_>,
+    cSrcChroma: &crate::encoder::rec_view::RecCursor<'_>,
+    cRefChroma: &crate::encoder::rec_view::RecCursor<'_>,
 ) -> i32 {
     if let Some(f) = pSad {
         f(cSrcChroma, cRefChroma)
@@ -1722,8 +1722,8 @@ pub unsafe fn CheckChromaCost(
 
     let kiMbXChroma = ((*pMbCache).SPicData.iMbX as isize) << 3;
     let kiMbYChroma = ((*pMbCache).SPicData.iMbY as isize) << 3;
-    let pEncPicture = layer_enc_pic(&*pCurDqLayer).expect("the layer's source picture is bound");
-    let pRefPicture = layer_ref_pic(&*pCurDqLayer).expect("the layer's reference picture is bound");
+    let pEncPicture = layer_enc_view(&*pCurDqLayer).expect("the layer's source view is built for this frame");
+    let pRefPicture = layer_ref_view(&*pCurDqLayer).expect("the layer's reference view is built for this frame");
 
     let iCbSad = GetChromaCost(
         pSad,
@@ -1902,8 +1902,8 @@ pub fn IsMbScrolledStatic(pBlockType: &[i32; 4]) -> bool {
 // filed under Phase 9's port-raw backlog where it reads as pending work.
 pub fn CalUVSadCost(
     sdf: &crate::encoder::md::SSampleDealingFunc,
-    cEncOri: &crate::safe::plane::PlaneCursor<'_>,
-    cRefOri: &crate::safe::plane::PlaneCursor<'_>,
+    cEncOri: &crate::encoder::rec_view::RecCursor<'_>,
+    cRefOri: &crate::encoder::rec_view::RecCursor<'_>,
 ) -> i32 {
     if let Some(sad_func) = sdf.pfSampleSad[BLOCK_8x8] {
         sad_func(cEncOri, cRefOri)
@@ -1961,9 +1961,10 @@ pub unsafe extern "C" fn JudgeStaticSkip(
         // named live-as-code — and the raw-table read goes with the triple.
         let sdf = &(*pEncCtx).func_list().sSampleDealingFuncs;
         let pRefOriPic = (*pCurDqLayer).pRefOri[0]
-            .and_then(|r| crate::encoder::svc_encode_slice::ctx_pic_ref(pEncCtx, r));
+            .and_then(|r| crate::encoder::svc_encode_slice::ctx_pic_ref(pEncCtx, r))
+            .map(crate::encoder::rec_view::RoPicView::build);
         if let Some(pRefOriPic) = pRefOriPic {
-            let pEncPicture = layer_enc_pic(&*pCurDqLayer).expect("the layer's source picture is bound");
+            let pEncPicture = layer_enc_view(&*pCurDqLayer).expect("the layer's source view is built for this frame");
             let kiCx = (kiMbX as isize) << 3;
             let kiCy = (kiMbY as isize) << 3;
 
@@ -2027,14 +2028,15 @@ pub unsafe extern "C" fn JudgeScrollSkip(
         // Session F: as JudgeStaticSkip — shared picture route, safe cost slot.
         let sdf = &(*pEncCtx).func_list().sSampleDealingFuncs;
         let pRefOriPic = (*pCurDqLayer).pRefOri[0]
-            .and_then(|r| crate::encoder::svc_encode_slice::ctx_pic_ref(pEncCtx, r));
+            .and_then(|r| crate::encoder::svc_encode_slice::ctx_pic_ref(pEncCtx, r))
+            .map(crate::encoder::rec_view::RoPicView::build);
         if let Some(pRefOriPic) = pRefOriPic {
             let iScrollMvX = (*pVaaExt).sScrollDetectInfo.iScrollMvX;
             let iScrollMvY = (*pVaaExt).sScrollDetectInfo.iScrollMvY;
             if CheckBorder(kiMbX, kiMbY, iScrollMvX, iScrollMvY, kiMbWidth, kiMbHeight) {
                 bTryScrollSkip = false;
             } else {
-                let pEncPicture = layer_enc_pic(&*pCurDqLayer).expect("the layer's source picture is bound");
+                let pEncPicture = layer_enc_view(&*pCurDqLayer).expect("the layer's source view is built for this frame");
                 let kiCx = (kiMbX as isize) << 3;
                 let kiCy = (kiMbY as isize) << 3;
                 let kiRx = kiCx + (iScrollMvX >> 1) as isize;
@@ -2164,8 +2166,8 @@ pub unsafe extern "C" fn SvcMdSCDMbEnc(
     let kiMbXLuma = ((*pMbCache).SPicData.iMbX as isize) << 4;
     let kiMbYLuma = ((*pMbCache).SPicData.iMbY as isize) << 4;
     let sad_cost = {
-        let pEncPicture = layer_enc_pic(&*pCurDqLayer).expect("the layer's source picture is bound");
-        let pRefPicture = layer_ref_pic(&*pCurDqLayer).expect("the layer's reference picture is bound");
+        let pEncPicture = layer_enc_view(&*pCurDqLayer).expect("the layer's source view is built for this frame");
+        let pRefPicture = layer_ref_view(&*pCurDqLayer).expect("the layer's reference view is built for this frame");
         sad_16x16(
             &pEncPicture.plane(0).cursor(kiMbXLuma, kiMbYLuma),
             &pRefPicture.plane(0).cursor(
@@ -2212,8 +2214,8 @@ pub unsafe extern "C" fn SvcMdSCDMbEnc(
     if (*pWelsMd).bMdUsingSad {
         (*pWelsMd).iCostLuma = (*pCurMb).iSadCost;
     } else {
-        let pEncPicture = layer_enc_pic(&*pCurDqLayer).expect("the layer's source picture is bound");
-        let pRefPicture = layer_ref_pic(&*pCurDqLayer).expect("the layer's reference picture is bound");
+        let pEncPicture = layer_enc_view(&*pCurDqLayer).expect("the layer's source view is built for this frame");
+        let pRefPicture = layer_ref_view(&*pCurDqLayer).expect("the layer's reference view is built for this frame");
         (*pWelsMd).iCostLuma = sad_16x16(
             &pEncPicture.plane(0).cursor(kiMbXLuma, kiMbYLuma),
             &pRefPicture.plane(0).cursor(kiMbXLuma, kiMbYLuma),
@@ -2886,6 +2888,11 @@ mod tests {
                 pEncPic: Some(src_id),
                 pSrcPool: &mut src_pool,
                 pRecView: Some(crate::encoder::rec_view::RecPicView::build(&mut rec_pic)),
+                // **S10.2: the source view is stamped too, because it is the route
+                // now.** `WelsInitCurrentLayer` builds this beside `pRecView` for
+                // every real frame; the fixture was stamping only the pool, which
+                // was enough while the readers resolved `layer_enc_pic`.
+                pEncView: Some(crate::encoder::rec_view::RoPicView::build(src_pool.get(src_id))),
                 ..Default::default()
             };
 

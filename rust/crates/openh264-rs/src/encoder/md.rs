@@ -270,7 +270,7 @@ pub type PWelsLumaHalfpelMcFunc = unsafe extern "C" fn(
 /// each kernel (`common/sad_common.rs::sample_sad::<W, H>`, `encoder/sample.rs::
 /// satd_WxH`) reads `W` x `H` samples from both and nothing else. The block shape is
 /// the slot's index (`BLOCK_16x16` ..), exactly as it was for the raw kernels.
-pub type PSampleSadSatdCostFunc = fn(&PlaneCursor<'_>, &PlaneCursor<'_>) -> i32;
+pub type PSampleSadSatdCostFunc = fn(&RecCursor<'_>, &RecCursor<'_>) -> i32;
 
 // `PSampleSadSatdCostFuncRaw` stood here — T9.B25's transitional raw slot
 // shape, kept while the plane campaign converted the cost readers one
@@ -328,7 +328,7 @@ pub struct SMeRefinePointer {
     /// same reason the cost sites are (F118): `WelsInitEncodingFuncs`
     /// (`encode_mb_aux.rs:846`) is the only writer of `pfCopy*` and installs the
     /// shims onto exactly these kernels unconditionally.
-    pub pfCopyBlockByMode: Option<fn(&PlaneCursor<'_>, &mut PlaneCursorMut<'_>)>,
+    pub pfCopyBlockByMode: Option<fn(&RecCursor<'_>, &mut PlaneCursorMut<'_>)>,
 }
 
 /// Plane bases inside `SMbCache.sBufferInterPredMe`, in bytes.
@@ -415,7 +415,7 @@ fn quar_candidate(
     span: usize,
     a: &MeQuarSource,
     b: &MeQuarSource,
-    cRef: &PlaneCursor<'_>,
+    cRef: &RecCursor<'_>,
     w: usize,
     h: usize,
 ) {
@@ -427,6 +427,10 @@ fn quar_candidate(
     };
     assert!(a_off + span <= dst, "quarter-pixel destination overlaps its source");
     let (lo, hi) = pMbCache.sBufferInterPredMe.split_at_mut(dst);
+    // S10.2: these two stay `PlaneCursor`. They are read-only views of two
+    // *disjoint* ranges of one scratch buffer, and `pixel_avg` is generic over its
+    // two operands independently — so there is no reason to take the `&mut` that
+    // `over_owned` needs, and two of those on one buffer would not compile anyway.
     let cA = PlaneCursor::new(&lo[a_off..][..span], 0, stride);
     let mut cDst = PlaneCursorMut::new(&mut hi[..span], 0, stride);
     match *b {
@@ -720,13 +724,14 @@ pub type PUpdateMbMvFunc = fn(pMvBuffer: &mut [SMVUnitXY; MB_BLOCK4x4_NUM], ksMv
 // had it with correctly typed pointers where this copy used *mut c_void.
 pub use crate::common::mc::SMcFunc;
 // Phase 4a: MC and the half-pel filters are called directly, not via `sMcFuncs`.
-use crate::encoder::svc_encode_slice::{layer_enc_pic, layer_ref_pic};
+use crate::encoder::svc_encode_slice::{layer_enc_view, layer_ref_pic, layer_ref_view};
 use crate::encoder::picture::{RecPicId};
 use crate::common::mc::{mc_hor_ver02, mc_hor_ver20, mc_hor_ver22, pixel_avg};
 pub use crate::encoder::encoder_context::SPicData;
 pub use crate::encoder::encoder_context::SDCTCoeff;
 pub use crate::encoder::encoder_context::BLOCK_SIZE_ALL;
 pub use crate::encoder::svc_motion_estimate::PSample4SadCostFunc;
+use crate::encoder::rec_view::RecCursor;
 use crate::safe::plane::{PlaneCursor, PlaneCursorMut};
 pub use crate::encoder::svc_encode_slice::SDqLayer;
 pub use crate::encoder::wels_func_ptr_def::SWelsFuncPtrList;
@@ -1442,8 +1447,8 @@ pub fn MeRefineQuarPixel(
     pMe: &mut SWelsME<'_>,
     pMeRefine: &mut SMeRefinePointer,
     pMbCache: &mut SMbCache,
-    cEnc: &PlaneCursor<'_>,
-    cRef: &PlaneCursor<'_>,
+    cEnc: &RecCursor<'_>,
+    cRef: &RecCursor<'_>,
     kiWidth: i32,
     kiHeight: i32,
     pParams: &mut SQuarRefineParams,
@@ -1465,8 +1470,8 @@ pub fn MeRefineQuarPixel(
         h,
     );
     let mut iCurCost = {
-        let cTmp = PlaneCursor::new(
-            &pMbCache.sBufferInterPredMe[pMeRefine.quar_pix_tmp()..][..span],
+        let cTmp = RecCursor::over_owned(
+            &mut pMbCache.sBufferInterPredMe[pMeRefine.quar_pix_tmp()..][..span],
             0,
             ME_REFINE_BUF_STRIDE as usize,
         );
@@ -1490,8 +1495,8 @@ pub fn MeRefineQuarPixel(
         h,
     );
     iCurCost = {
-        let cTmp = PlaneCursor::new(
-            &pMbCache.sBufferInterPredMe[pMeRefine.quar_pix_tmp()..][..span],
+        let cTmp = RecCursor::over_owned(
+            &mut pMbCache.sBufferInterPredMe[pMeRefine.quar_pix_tmp()..][..span],
             0,
             ME_REFINE_BUF_STRIDE as usize,
         );
@@ -1515,8 +1520,8 @@ pub fn MeRefineQuarPixel(
         h,
     );
     iCurCost = {
-        let cTmp = PlaneCursor::new(
-            &pMbCache.sBufferInterPredMe[pMeRefine.quar_pix_tmp()..][..span],
+        let cTmp = RecCursor::over_owned(
+            &mut pMbCache.sBufferInterPredMe[pMeRefine.quar_pix_tmp()..][..span],
             0,
             ME_REFINE_BUF_STRIDE as usize,
         );
@@ -1540,8 +1545,8 @@ pub fn MeRefineQuarPixel(
         h,
     );
     iCurCost = {
-        let cTmp = PlaneCursor::new(
-            &pMbCache.sBufferInterPredMe[pMeRefine.quar_pix_tmp()..][..span],
+        let cTmp = RecCursor::over_owned(
+            &mut pMbCache.sBufferInterPredMe[pMeRefine.quar_pix_tmp()..][..span],
             0,
             ME_REFINE_BUF_STRIDE as usize,
         );
@@ -1600,9 +1605,9 @@ pub unsafe extern "C" fn MeRefineFracPixel(
     // left `pRefMb` at its whole-sample part, so `>> 2` is the displacement.
     let kiBlockX = (*pMe).iCurMeBlockPixX as isize;
     let kiBlockY = (*pMe).iCurMeBlockPixY as isize;
-    let pEncPicture = layer_enc_pic(&*pCurDqLayer).expect("the layer's source picture is bound");
+    let pEncPicture = layer_enc_view(&*pCurDqLayer).expect("the layer's source view is built for this frame");
     let cEnc = pEncPicture.plane(0).cursor(kiBlockX, kiBlockY);
-    let pRefPicture = layer_ref_pic(&*pCurDqLayer).expect("the layer's reference picture is bound");
+    let pRefPicture = layer_ref_view(&*pCurDqLayer).expect("the layer's reference view is built for this frame");
     let cRef = pRefPicture.plane(0).cursor(
         kiBlockX + ((iMvx as isize) >> 2),
         kiBlockY + ((iMvy as isize) >> 2),
@@ -1665,8 +1670,8 @@ pub unsafe extern "C" fn MeRefineFracPixel(
     // (0, -2) [TOP]
     iCurCost = {
         let off = pMeRefine.half_pix_v();
-        let cTmp = PlaneCursor::new(
-            &pMbCache.sBufferInterPredMe[off..][..span_wh(kiW, kiH)],
+        let cTmp = RecCursor::over_owned(
+            &mut pMbCache.sBufferInterPredMe[off..][..span_wh(kiW, kiH)],
             0,
             kiBufStride,
         );
@@ -1682,8 +1687,8 @@ pub unsafe extern "C" fn MeRefineFracPixel(
     // (0, 2) [BOTTOM]
     iCurCost = {
         let off = pMeRefine.half_pix_v() + kiBufStride;
-        let cTmp = PlaneCursor::new(
-            &pMbCache.sBufferInterPredMe[off..][..span_wh(kiW, kiH)],
+        let cTmp = RecCursor::over_owned(
+            &mut pMbCache.sBufferInterPredMe[off..][..span_wh(kiW, kiH)],
             0,
             kiBufStride,
         );
@@ -1710,8 +1715,8 @@ pub unsafe extern "C" fn MeRefineFracPixel(
     // (-2, 0) [LEFT]
     iCurCost = {
         let off = pMeRefine.half_pix_h();
-        let cTmp = PlaneCursor::new(
-            &pMbCache.sBufferInterPredMe[off..][..span_wh(kiW, kiH)],
+        let cTmp = RecCursor::over_owned(
+            &mut pMbCache.sBufferInterPredMe[off..][..span_wh(kiW, kiH)],
             0,
             kiBufStride,
         );
@@ -1727,8 +1732,8 @@ pub unsafe extern "C" fn MeRefineFracPixel(
     // (2, 0) [RIGHT]
     iCurCost = {
         let off = pMeRefine.half_pix_h() + 1;
-        let cTmp = PlaneCursor::new(
-            &pMbCache.sBufferInterPredMe[off..][..span_wh(kiW, kiH)],
+        let cTmp = RecCursor::over_owned(
+            &mut pMbCache.sBufferInterPredMe[off..][..span_wh(kiW, kiH)],
             0,
             kiBufStride,
         );
@@ -1898,7 +1903,7 @@ pub unsafe extern "C" fn MeRefineFracPixel(
             // borrows at once and no `split_at_mut` is needed.
             let SMbCache { sMemPredMb, sBufferInterPredMe, .. } = &mut *pMbCache;
             let cSrc =
-                PlaneCursor::new(&sBufferInterPredMe[off..][..span_wh(kiW, kiH)], 0, kiBufStride);
+                RecCursor::over_owned(&mut sBufferInterPredMe[off..][..span_wh(kiW, kiH)], 0, kiBufStride);
             let mut cDst = PlaneCursorMut::new(
                 &mut sMemPredMb[kiMemPredInterOff..][..kiDstSpan],
                 0,

@@ -26,7 +26,8 @@
 
 // CPU feature flags from cpu_core.h
 
-use crate::safe::plane::{PlaneCursor, PlaneCursorMut};
+use crate::safe::plane::{PlaneCursor, PlaneCursorMut, RefSamples};
+
 
 // Function pointer signatures matching mc.h.
 //
@@ -264,13 +265,14 @@ pub fn hor_filter_input_16bit(p: &[i16; 6]) -> i32 {
 ///
 /// The bounds check lands once per row either way.
 #[inline(always)]
-pub(crate) fn copy_rows<const WIDTH: usize>(
-    src: &PlaneCursor<'_>,
+pub(crate) fn copy_rows<const WIDTH: usize, S: RefSamples + Copy>(
+    src: &S,
     dst: &mut PlaneCursorMut<'_>,
     height: usize,
 ) {
     for dy in 0..height as isize {
-        let s: &[u8; WIDTH] = src.row(dy, 0, WIDTH).try_into().unwrap();
+        let sv = src.row_view(dy, 0, WIDTH);
+        let s: &[u8; WIDTH] = (&*sv).try_into().unwrap();
         let d: &mut [u8; WIDTH] = dst.row_mut(dy, 0, WIDTH).try_into().unwrap();
         *d = *s;
     }
@@ -278,26 +280,26 @@ pub(crate) fn copy_rows<const WIDTH: usize>(
 
 /// C++: `McCopyWidthEq2_c` — chroma only, the one width the copy path narrows to.
 #[inline(always)]
-pub fn mc_copy_width_eq2(src: &PlaneCursor<'_>, dst: &mut PlaneCursorMut<'_>, height: usize) {
-    copy_rows::<2>(src, dst, height);
+pub fn mc_copy_width_eq2<S: RefSamples + Copy>(src: &S, dst: &mut PlaneCursorMut<'_>, height: usize) {
+    copy_rows::<2, _>(src, dst, height);
 }
 
 /// C++: `McCopyWidthEq4_c`.
 #[inline(always)]
-pub fn mc_copy_width_eq4(src: &PlaneCursor<'_>, dst: &mut PlaneCursorMut<'_>, height: usize) {
-    copy_rows::<4>(src, dst, height);
+pub fn mc_copy_width_eq4<S: RefSamples + Copy>(src: &S, dst: &mut PlaneCursorMut<'_>, height: usize) {
+    copy_rows::<4, _>(src, dst, height);
 }
 
 /// C++: `McCopyWidthEq8_c`.
 #[inline(always)]
-pub fn mc_copy_width_eq8(src: &PlaneCursor<'_>, dst: &mut PlaneCursorMut<'_>, height: usize) {
-    copy_rows::<8>(src, dst, height);
+pub fn mc_copy_width_eq8<S: RefSamples + Copy>(src: &S, dst: &mut PlaneCursorMut<'_>, height: usize) {
+    copy_rows::<8, _>(src, dst, height);
 }
 
 /// C++: `McCopyWidthEq16_c`.
 #[inline(always)]
-pub fn mc_copy_width_eq16(src: &PlaneCursor<'_>, dst: &mut PlaneCursorMut<'_>, height: usize) {
-    copy_rows::<16>(src, dst, height);
+pub fn mc_copy_width_eq16<S: RefSamples + Copy>(src: &S, dst: &mut PlaneCursorMut<'_>, height: usize) {
+    copy_rows::<16, _>(src, dst, height);
 }
 
 /// The width `McCopy_c` actually copies for a nominal `width`.
@@ -318,14 +320,14 @@ fn copy_width(width: usize) -> usize {
 
 /// C++: `McCopy_c`.
 #[inline(always)]
-pub fn mc_copy(src: &PlaneCursor<'_>, dst: &mut PlaneCursorMut<'_>, width: usize, height: usize) {
+pub fn mc_copy<S: RefSamples + Copy>(src: &S, dst: &mut PlaneCursorMut<'_>, width: usize, height: usize) {
     // Dispatched exactly as the C++ dispatches, and for the same reason it does:
     // each arm is a constant-width copy. See [`copy_rows`].
     match width {
-        16 => copy_rows::<16>(src, dst, height),
-        8 => copy_rows::<8>(src, dst, height),
-        4 => copy_rows::<4>(src, dst, height),
-        _ => copy_rows::<2>(src, dst, height),
+        16 => copy_rows::<16, _>(src, dst, height),
+        8 => copy_rows::<8, _>(src, dst, height),
+        4 => copy_rows::<4, _>(src, dst, height),
+        _ => copy_rows::<2, _>(src, dst, height),
     }
 }
 
@@ -335,16 +337,22 @@ pub fn mc_copy(src: &PlaneCursor<'_>, dst: &mut PlaneCursorMut<'_>, width: usize
 /// refinement averages a `ME_REFINE_BUF_STRIDE` scratch buffer against the reference
 /// picture (`encoder/md.rs:1059`).
 #[inline(always)]
-pub fn pixel_avg(
+pub fn pixel_avg<A: RefSamples, B: RefSamples>(
     dst: &mut PlaneCursorMut<'_>,
-    a: &PlaneCursor<'_>,
-    b: &PlaneCursor<'_>,
+    a: &A,
+    b: &B,
     width: usize,
     height: usize,
 ) {
+    // **Two independent operand types, and both are needed.** The quarter-pel
+    // arms below average the *reference plane* against a scratch surface —
+    // `pixel_avg(dst, src, &PlaneCursor::new(&tmp, 0, 16), ..)` — so `a` is
+    // whatever the caller's plane cursor is (a `RecCursor` under the encoder's
+    // seam, a `PlaneCursor` under the decoder) while `b` is always the local
+    // scratch. One type parameter would force a conversion at every such site.
     for dy in 0..height as isize {
-        let ra = a.row(dy, 0, width);
-        let rb = b.row(dy, 0, width);
+        let ra = a.row_view(dy, 0, width);
+        let rb = b.row_view(dy, 0, width);
         let out = dst.row_mut(dy, 0, width);
         for j in 0..width {
             out[j] = (((ra[j] as u32) + (rb[j] as u32) + 1) >> 1) as u8;
@@ -356,16 +364,19 @@ pub fn pixel_avg(
 ///
 /// Reads `x` in `-2 .. width + 3`, `y` in `0 .. height`.
 #[inline(always)]
-pub fn mc_hor_ver20(
-    src: &PlaneCursor<'_>,
+pub fn mc_hor_ver20<S: RefSamples + Copy>(
+    src: &S,
     dst: &mut PlaneCursorMut<'_>,
     width: usize,
     height: usize,
 ) {
     for dy in 0..height as isize {
         // One row window per output row, six-sample sliding windows inside it: the
-        // bounds check lands per row, the filter arithmetic per sample.
-        let row = src.row(dy, -2, width + 5);
+        // bounds check lands per row, the filter arithmetic per sample. S10.2: the
+        // row is read into a reused stack buffer rather than borrowed, because a
+        // shared cell view cannot lend one — the walk and the check placement are
+        // unchanged.
+        let row = src.row_view(dy, -2, width + 5);
         let out = dst.row_mut(dy, 0, width);
         for (o, w) in out.iter_mut().zip(row.windows(6)) {
             *o = WelsClip1((filter_input_8bit(w.try_into().unwrap()) + 16) >> 5);
@@ -377,8 +388,8 @@ pub fn mc_hor_ver20(
 ///
 /// Reads `x` in `0 .. width`, `y` in `-2 .. height + 3`.
 #[inline(always)]
-pub fn mc_hor_ver02(
-    src: &PlaneCursor<'_>,
+pub fn mc_hor_ver02<S: RefSamples + Copy>(
+    src: &S,
     dst: &mut PlaneCursorMut<'_>,
     width: usize,
     height: usize,
@@ -387,24 +398,35 @@ pub fn mc_hor_ver02(
     //
     // *A zipped column walk, not indexing.* Indexing seven same-length slices by `j`
     // leaves LLVM to prove seven bounds facts per output *sample*, and it does not.
-    // The zip moves the whole check to the `row` calls, one per output row.
+    // The zip moves the whole check to the row reads, one per output row.
     //
-    // *A rolling window, not six fresh `row` calls per output row.* Six calls means
+    // *A rolling window, not six fresh row reads per output row.* Six reads means
     // six `center + dy * stride` multiplies per row where the C++ advanced one
-    // pointer by one add; rotating five slices down and fetching only the new bottom
-    // row costs one.
+    // pointer by one add; rotating the window and fetching only the new bottom row
+    // costs one.
+    //
+    // **S10.2 keeps both shapes exactly.** The rows are `S::Row<'_>` now rather
+    // than `&[u8]` — a borrow for the plane cursors, an owned `RowBuf` only for
+    // the shared cell view that cannot lend one (F264) — and both are cheap to
+    // move, so the five-row rotation below is the same tuple assignment it was.
     let (mut r0, mut r1, mut r2, mut r3, mut r4) = (
-        src.row(-2, 0, width),
-        src.row(-1, 0, width),
-        src.row(0, 0, width),
-        src.row(1, 0, width),
-        src.row(2, 0, width),
+        src.row_view(-2, 0, width),
+        src.row_view(-1, 0, width),
+        src.row_view(0, 0, width),
+        src.row_view(1, 0, width),
+        src.row_view(2, 0, width),
     );
     for dy in 0..height as isize {
-        let r5 = src.row(dy + 3, 0, width);
+        let r5 = src.row_view(dy + 3, 0, width);
         let out = dst.row_mut(dy, 0, width);
-        for ((((((o, &a), &b), &c), &d), &e), &f) in
-            out.iter_mut().zip(r0).zip(r1).zip(r2).zip(r3).zip(r4).zip(r5)
+        for ((((((o, &a), &b), &c), &d), &e), &f) in out
+            .iter_mut()
+            .zip(r0.iter())
+            .zip(r1.iter())
+            .zip(r2.iter())
+            .zip(r3.iter())
+            .zip(r4.iter())
+            .zip(r5.iter())
         {
             *o = WelsClip1((filter_input_8bit(&[a, b, c, d, e, f]) + 16) >> 5);
         }
@@ -422,8 +444,8 @@ pub fn mc_hor_ver02(
 /// encoder's half-pel refinement is what needs the 17: it filters `iWidth + 1`
 /// columns (`encoder/md.rs:1289`).
 #[inline(always)]
-pub fn mc_hor_ver22(
-    src: &PlaneCursor<'_>,
+pub fn mc_hor_ver22<S: RefSamples + Copy>(
+    src: &S,
     dst: &mut PlaneCursorMut<'_>,
     width: usize,
     height: usize,
@@ -432,16 +454,22 @@ pub fn mc_hor_ver22(
     let n = width + 5;
     // Zipped and rolling, for the reasons given in `mc_hor_ver02`.
     let (mut r0, mut r1, mut r2, mut r3, mut r4) = (
-        src.row(-2, -2, n),
-        src.row(-1, -2, n),
-        src.row(0, -2, n),
-        src.row(1, -2, n),
-        src.row(2, -2, n),
+        src.row_view(-2, -2, n),
+        src.row_view(-1, -2, n),
+        src.row_view(0, -2, n),
+        src.row_view(1, -2, n),
+        src.row_view(2, -2, n),
     );
     for dy in 0..height as isize {
-        let r5 = src.row(dy + 3, -2, n);
-        for ((((((t, &a), &b), &c), &d), &e), &f) in
-            iTmp[..n].iter_mut().zip(r0).zip(r1).zip(r2).zip(r3).zip(r4).zip(r5)
+        let r5 = src.row_view(dy + 3, -2, n);
+        for ((((((t, &a), &b), &c), &d), &e), &f) in iTmp[..n]
+            .iter_mut()
+            .zip(r0.iter())
+            .zip(r1.iter())
+            .zip(r2.iter())
+            .zip(r3.iter())
+            .zip(r4.iter())
+            .zip(r5.iter())
         {
             *t = filter_input_8bit(&[a, b, c, d, e, f]) as i16;
         }
@@ -462,8 +490,8 @@ fn scratch() -> [u8; 256] {
 
 /// C++: `McHorVer01_c`.
 #[inline(never)]
-pub fn mc_hor_ver01(
-    src: &PlaneCursor<'_>,
+pub fn mc_hor_ver01<S: RefSamples + Copy>(
+    src: &S,
     dst: &mut PlaneCursorMut<'_>,
     width: usize,
     height: usize,
@@ -475,8 +503,8 @@ pub fn mc_hor_ver01(
 
 /// C++: `McHorVer03_c`.
 #[inline(never)]
-pub fn mc_hor_ver03(
-    src: &PlaneCursor<'_>,
+pub fn mc_hor_ver03<S: RefSamples + Copy>(
+    src: &S,
     dst: &mut PlaneCursorMut<'_>,
     width: usize,
     height: usize,
@@ -494,8 +522,8 @@ pub fn mc_hor_ver03(
 
 /// C++: `McHorVer10_c`.
 #[inline(never)]
-pub fn mc_hor_ver10(
-    src: &PlaneCursor<'_>,
+pub fn mc_hor_ver10<S: RefSamples + Copy>(
+    src: &S,
     dst: &mut PlaneCursorMut<'_>,
     width: usize,
     height: usize,
@@ -507,8 +535,8 @@ pub fn mc_hor_ver10(
 
 /// C++: `McHorVer11_c`.
 #[inline(never)]
-pub fn mc_hor_ver11(
-    src: &PlaneCursor<'_>,
+pub fn mc_hor_ver11<S: RefSamples + Copy>(
+    src: &S,
     dst: &mut PlaneCursorMut<'_>,
     width: usize,
     height: usize,
@@ -528,8 +556,8 @@ pub fn mc_hor_ver11(
 
 /// C++: `McHorVer12_c`.
 #[inline(never)]
-pub fn mc_hor_ver12(
-    src: &PlaneCursor<'_>,
+pub fn mc_hor_ver12<S: RefSamples + Copy>(
+    src: &S,
     dst: &mut PlaneCursorMut<'_>,
     width: usize,
     height: usize,
@@ -549,8 +577,8 @@ pub fn mc_hor_ver12(
 
 /// C++: `McHorVer13_c`.
 #[inline(never)]
-pub fn mc_hor_ver13(
-    src: &PlaneCursor<'_>,
+pub fn mc_hor_ver13<S: RefSamples + Copy>(
+    src: &S,
     dst: &mut PlaneCursorMut<'_>,
     width: usize,
     height: usize,
@@ -575,8 +603,8 @@ pub fn mc_hor_ver13(
 
 /// C++: `McHorVer21_c`.
 #[inline(never)]
-pub fn mc_hor_ver21(
-    src: &PlaneCursor<'_>,
+pub fn mc_hor_ver21<S: RefSamples + Copy>(
+    src: &S,
     dst: &mut PlaneCursorMut<'_>,
     width: usize,
     height: usize,
@@ -596,8 +624,8 @@ pub fn mc_hor_ver21(
 
 /// C++: `McHorVer23_c`.
 #[inline(never)]
-pub fn mc_hor_ver23(
-    src: &PlaneCursor<'_>,
+pub fn mc_hor_ver23<S: RefSamples + Copy>(
+    src: &S,
     dst: &mut PlaneCursorMut<'_>,
     width: usize,
     height: usize,
@@ -622,8 +650,8 @@ pub fn mc_hor_ver23(
 
 /// C++: `McHorVer30_c`.
 #[inline(never)]
-pub fn mc_hor_ver30(
-    src: &PlaneCursor<'_>,
+pub fn mc_hor_ver30<S: RefSamples + Copy>(
+    src: &S,
     dst: &mut PlaneCursorMut<'_>,
     width: usize,
     height: usize,
@@ -641,8 +669,8 @@ pub fn mc_hor_ver30(
 
 /// C++: `McHorVer31_c`.
 #[inline(never)]
-pub fn mc_hor_ver31(
-    src: &PlaneCursor<'_>,
+pub fn mc_hor_ver31<S: RefSamples + Copy>(
+    src: &S,
     dst: &mut PlaneCursorMut<'_>,
     width: usize,
     height: usize,
@@ -667,8 +695,8 @@ pub fn mc_hor_ver31(
 
 /// C++: `McHorVer32_c`.
 #[inline(never)]
-pub fn mc_hor_ver32(
-    src: &PlaneCursor<'_>,
+pub fn mc_hor_ver32<S: RefSamples + Copy>(
+    src: &S,
     dst: &mut PlaneCursorMut<'_>,
     width: usize,
     height: usize,
@@ -693,8 +721,8 @@ pub fn mc_hor_ver32(
 
 /// C++: `McHorVer33_c`.
 #[inline(never)]
-pub fn mc_hor_ver33(
-    src: &PlaneCursor<'_>,
+pub fn mc_hor_ver33<S: RefSamples + Copy>(
+    src: &S,
     dst: &mut PlaneCursorMut<'_>,
     width: usize,
     height: usize,
@@ -739,8 +767,8 @@ pub fn mc_hor_ver33(
 //
 // The path is byte-refereed: F126 planted a one-sample fault immediately after this
 // very `McLuma_c` and failed 32 of the `bg` preset's 48 rows.
-pub fn mc_luma(
-    src: &PlaneCursor<'_>,
+pub fn mc_luma<S: RefSamples + Copy>(
+    src: &S,
     dst: &mut PlaneCursorMut<'_>,
     mv_x: i16,
     mv_y: i16,
@@ -771,8 +799,8 @@ pub fn mc_luma(
 ///
 /// Reads `x` in `0 .. width + 1`, `y` in `0 .. height + 1`.
 #[inline(always)]
-pub fn mc_chroma_with_frag_mv(
-    src: &PlaneCursor<'_>,
+pub fn mc_chroma_with_frag_mv<S: RefSamples + Copy>(
+    src: &S,
     dst: &mut PlaneCursorMut<'_>,
     mv_x: i16,
     mv_y: i16,
@@ -789,8 +817,8 @@ pub fn mc_chroma_with_frag_mv(
     let iD = pABCD[3] as i32;
 
     for dy in 0..height as isize {
-        let r0 = src.row(dy, 0, width + 1);
-        let r1 = src.row(dy + 1, 0, width + 1);
+        let r0 = src.row_view(dy, 0, width + 1);
+        let r1 = src.row_view(dy + 1, 0, width + 1);
         let out = dst.row_mut(dy, 0, width);
         for j in 0..width {
             out[j] = ((iA * (r0[j] as i32)
@@ -805,8 +833,8 @@ pub fn mc_chroma_with_frag_mv(
 
 /// C++: `McChroma_c` — the copy path when the eighth-pel fraction is zero.
 #[inline(always)]
-pub fn mc_chroma(
-    src: &PlaneCursor<'_>,
+pub fn mc_chroma<S: RefSamples + Copy>(
+    src: &S,
     dst: &mut PlaneCursorMut<'_>,
     mv_x: i16,
     mv_y: i16,
@@ -1188,12 +1216,27 @@ fn block_span(stride: usize, width: usize, height: usize) -> usize {
 
 pub fn InitMcFunc(pMcFuncs: &mut SMcFunc, _uiCpuFlag: u32) {
     let mc = pMcFuncs;
-    mc.pfLumaHalfpelHor = Some(mc_hor_ver20);
-    mc.pfLumaHalfpelVer = Some(mc_hor_ver02);
-    mc.pfLumaHalfpelCen = Some(mc_hor_ver22);
-    mc.pfSampleAveraging = Some(pixel_avg);
-    mc.pMcChromaFunc = Some(mc_chroma);
-    mc.pMcLumaFunc = Some(mc_luma);
+    // **S10.2: the four generic kernels are installed at their `PlaneCursor`
+    // instantiation, through non-capturing closures.** A generic `fn` item fixes
+    // its type parameter *and* the lifetimes inside it, so `Some(mc_hor_ver20)` no
+    // longer coerces to a slot type that is higher-ranked over the cursor's
+    // lifetime; a non-capturing closure is higher-ranked and coerces. The four
+    // kernels went generic because the encoder's reference cursor is a `RecCursor`
+    // under the source-plane seam while the decoder's is a `PlaneCursor` — see
+    // `RefSamples::row_into`.
+    //
+    // **These six slots are installed and never called** (whole-tree grep: the only
+    // mentions outside this file are one doc comment and one `is_none()`
+    // assertion), which is F255's "installed, asserted, never called" shape. They
+    // are not deleted here because `abi_guard.rs` pins `assert_size!(SMcFunc, 48)`
+    // and the struct's layout is part of the port's fidelity surface; that is its
+    // own checkpoint.
+    mc.pfLumaHalfpelHor = Some(|s, d, w, h| mc_hor_ver20(s, d, w, h));
+    mc.pfLumaHalfpelVer = Some(|s, d, w, h| mc_hor_ver02(s, d, w, h));
+    mc.pfLumaHalfpelCen = Some(|s, d, w, h| mc_hor_ver22(s, d, w, h));
+    mc.pfSampleAveraging = Some(|dst, a, b, w, h| pixel_avg(dst, a, b, w, h));
+    mc.pMcChromaFunc = Some(|s, d, mx, my, w, h| mc_chroma(s, d, mx, my, w, h));
+    mc.pMcLumaFunc = Some(|s, d, mx, my, w, h| mc_luma(s, d, mx, my, w, h));
 }
 
 #[cfg(test)]

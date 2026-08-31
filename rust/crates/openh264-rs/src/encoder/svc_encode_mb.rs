@@ -47,6 +47,7 @@
 
 #![deny(unsafe_code)]
 
+use crate::encoder::rec_view::RecCursor;
 use crate::encoder::rec_view::copy_block_to_view;
 use crate::safe::plane::{PlaneCursor, PlaneCursorMut};
 pub use crate::encoder::encoder_context::SMVUnitXY;
@@ -393,7 +394,7 @@ pub fn WelsDequantIHadamard2x2Dc(pDct: &mut [i16; 4], kuiMF: u16) {
 pub fn WelsDctMb(
     pRes: &mut [i16],
     pEncMb: &crate::encoder::rec_view::RecCursor<'_>,
-    pBestPred: &PlaneCursor<'_>,
+    pBestPred: &crate::encoder::rec_view::RecCursor<'_>,
     pfDctFourT4: Option<PDctFunc>,
 ) {
     if let Some(func) = pfDctFourT4 {
@@ -432,8 +433,8 @@ pub unsafe fn WelsEncRecI16x16Y(
     // S9.0: the prediction scratch is an owned `[u8; 2*256+16]` on the cache, so a
     // cursor over it needs no raw at all. Stride 16 is the scratch's own geometry,
     // which the raw form passed as a literal at every call.
-    let pBestPred = PlaneCursor::new(
-        &(*pMbCache).sMemPredMb,
+    let pBestPred = RecCursor::over_owned(
+        &mut (*pMbCache).sMemPredMb,
         mem_pred_luma_off((*pMbCache).uiMemPredLumaHalf),
         16,
     );
@@ -619,8 +620,8 @@ pub unsafe fn WelsEncRecI4x4Y(
     let encView = crate::encoder::svc_encode_slice::layer_enc_view(&*pCurDqLayer)
         .expect("the frame's source view is stamped with pEncData");
     let pEncMb = (*pMbCache).SPicData.mb_cursor_ro(encView, 0);
-    let pBestPred = PlaneCursor::new(
-        &(*pMbCache).sMemPredBlk4,
+    let pBestPred = RecCursor::over_owned(
+        &mut (*pMbCache).sMemPredBlk4,
         best_pred_i4x4_blk4_off((*pMbCache).uiBestPredI4x4Blk4Half),
         4,
     );

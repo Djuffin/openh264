@@ -47,6 +47,8 @@
 
 #![deny(unsafe_code)]
 
+use crate::encoder::rec_view::SharedPlane;
+use crate::encoder::rec_view::RecCursor;
 use crate::safe::plane::{PaddedPlane, PlaneCursor};
 use crate::safe::mvd_cost::MvdCostCursor;
 pub use crate::encoder::encoder_context::SMVUnitXY;
@@ -232,8 +234,8 @@ pub struct SFeatureSearchIn<'a> {
     pub pLocationPointer: &'a [u16],
     pub pMvdCostX: MvdCostCursor<'a>,
     pub pMvdCostY: MvdCostCursor<'a>,
-    pub pEncPlane: Option<&'a PaddedPlane>,
-    pub pRefPlane: Option<&'a PaddedPlane>,
+    pub pEncPlane: Option<&'a SharedPlane>,
+    pub pRefPlane: Option<&'a SharedPlane>,
     pub uiSadCostThresh: u16,
     pub iFeatureOfCurrent: i32,
     pub iCurPixX: i32,
@@ -314,7 +316,7 @@ pub use crate::encoder::md::PSampleSadSatdCostFunc;
 ///
 /// Safe since T9.B25; see [`PSampleSadSatdCostFunc`] for the rule and
 /// [`PSample4SadCostFuncRaw`] for the shape this replaces.
-pub type PSample4SadCostFunc = fn(&PlaneCursor<'_>, &PlaneCursor<'_>, &mut [i32; 4]);
+pub type PSample4SadCostFunc = fn(&RecCursor<'_>, &RecCursor<'_>, &mut [i32; 4]);
 
 // `PSample4SadCostFuncRaw` — the transitional raw four-candidate shape — went
 // with the raw triple (session F).
@@ -343,8 +345,8 @@ pub type PMotionSearchFunc = unsafe fn(
     sdf: &SSampleDealingFunc,
     pMe: &mut SWelsME<'_>,
     pSlice: &mut SSlice,
-    pEncPlane: &PaddedPlane,
-    pRefPlane: &PaddedPlane,
+    pEncPlane: &SharedPlane,
+    pRefPlane: &SharedPlane,
 );
 
 pub type PSearchMethodFunc = unsafe fn(
@@ -352,15 +354,15 @@ pub type PSearchMethodFunc = unsafe fn(
     sdf: &SSampleDealingFunc,
     pMe: &mut SWelsME<'_>,
     pSlice: &mut SSlice,
-    pEncPlane: &PaddedPlane,
-    pRefPlane: &PaddedPlane,
+    pEncPlane: &SharedPlane,
+    pRefPlane: &SharedPlane,
 );
 
 pub type PCalculateSatdFunc = unsafe fn(
     pSatd: Option<PSampleSadSatdCostFunc>,
     pMe: &mut SWelsME<'_>,
-    pEncPlane: &PaddedPlane,
-    pRefPlane: &PaddedPlane,
+    pEncPlane: &SharedPlane,
+    pRefPlane: &SharedPlane,
 );
 
 pub type PCheckDirectionalMv = unsafe fn(
@@ -368,8 +370,8 @@ pub type PCheckDirectionalMv = unsafe fn(
     pMe: &mut SWelsME<'_>,
     ksMinMv: SMVUnitXY,
     ksMaxMv: SMVUnitXY,
-    pEncPlane: &PaddedPlane,
-    pRefPlane: &PaddedPlane,
+    pEncPlane: &SharedPlane,
+    pRefPlane: &SharedPlane,
     iBestSadCost: &mut i32,
 ) -> bool;
 
@@ -377,8 +379,8 @@ pub type PLineFullSearchFunc = unsafe fn(
     sdf: &SSampleDealingFunc,
     pMe: &mut SWelsME<'_>,
     pMvdTable: MvdCostCursor<'_>,
-    pEncPlane: &PaddedPlane,
-    pRefPlane: &PaddedPlane,
+    pEncPlane: &SharedPlane,
+    pRefPlane: &SharedPlane,
     kiMinMv: i16,
     kiMaxMv: i16,
     bVerticalSearch: bool,
@@ -419,7 +421,7 @@ pub type PCalculateBlockFeatureOfFrame = unsafe fn(
 /// origin is a plane cursor now — the raw `SumOf*SingleBlock_c` kernels stay
 /// for the frame-feature builders, which walk a whole raw plane, and the slot
 /// holds the safe per-block twins below.
-pub type PCalculateSingleBlockFeature = fn(cRef: &PlaneCursor<'_>) -> i32;
+pub type PCalculateSingleBlockFeature = fn(cRef: &RecCursor<'_>) -> i32;
 
 pub type PUpdateFMESwitch = unsafe extern "C" fn(pCurLayer: Option<&SDqLayer>);
 
@@ -601,8 +603,8 @@ pub fn WelsMotionEstimateSearch(
     sdf: &SSampleDealingFunc,
     pMe: &mut SWelsME<'_>,
     pSlice: &mut SSlice,
-    pEncPlane: &PaddedPlane,
-    pRefPlane: &PaddedPlane,
+    pEncPlane: &SharedPlane,
+    pRefPlane: &SharedPlane,
 ) {
     unsafe {
         if crate::encoder::dump_enabled(&ME_DUMP, "OH264_MEDUMP") {
@@ -624,9 +626,9 @@ pub fn WelsMotionEstimateSearch(
             let mut rf = String::new();
             let mut rfup = String::new();
             for di in 0..8isize {
-                enc.push_str(&format!("{},", cEnc.row(0, di, 1)[0]));
-                rf.push_str(&format!("{},", cRef.row(0, di, 1)[0]));
-                rfup.push_str(&format!("{},", cRef.row(-1, di, 1)[0]));
+                enc.push_str(&format!("{},", cEnc.at(di, 0)));
+                rf.push_str(&format!("{},", cRef.at(di, 0)));
+                rfup.push_str(&format!("{},", cRef.at(di, -1)));
             }
             eprintln!(
                 "ME bs={} px={},{} mvp={},{} base={},{} sadpred={} mvcn={} min={},{} max={},{} mvc={} enc={} ref={} refup={} mvdc={},{}",
@@ -686,8 +688,8 @@ pub fn WelsMotionEstimateSearchStatic(
     sdf: &SSampleDealingFunc,
     pMe: &mut SWelsME<'_>,
     _pSlice: &mut SSlice,
-    pEncPlane: &PaddedPlane,
-    pRefPlane: &PaddedPlane,
+    pEncPlane: &SharedPlane,
+    pRefPlane: &SharedPlane,
 ) {
     unsafe {
         let block_size = (*pMe).uiBlockSize as usize;
@@ -720,8 +722,8 @@ pub fn WelsMotionEstimateSearchScrolled(
     sdf: &SSampleDealingFunc,
     pMe: &mut SWelsME<'_>,
     _pSlice: &mut SSlice,
-    pEncPlane: &PaddedPlane,
-    pRefPlane: &PaddedPlane,
+    pEncPlane: &SharedPlane,
+    pRefPlane: &SharedPlane,
 ) {
     unsafe {
         let block_size = (*pMe).uiBlockSize as usize;
@@ -766,8 +768,8 @@ pub fn WelsMotionEstimateInitialPoint(
     sdf: &SSampleDealingFunc,
     pMe: &mut SWelsME<'_>,
     pSlice: &mut SSlice,
-    pEncPlane: &PaddedPlane,
-    pRefPlane: &PaddedPlane,
+    pEncPlane: &SharedPlane,
+    pRefPlane: &SharedPlane,
 ) -> bool {
     unsafe {
         let block_size = (*pMe).uiBlockSize as usize;
@@ -857,8 +859,8 @@ pub fn WelsMotionEstimateInitialPoint(
 pub fn CalculateSatdCost(
     pSatd: Option<PSampleSadSatdCostFunc>,
     pMe: &mut SWelsME<'_>,
-    pEncPlane: &PaddedPlane,
-    pRefPlane: &PaddedPlane,
+    pEncPlane: &SharedPlane,
+    pRefPlane: &SharedPlane,
 ) {
     unsafe {
         if let Some(satd_fn) = pSatd {
@@ -882,8 +884,8 @@ pub fn CalculateSatdCost(
 pub fn NotCalculateSatdCost(
     _pSatd: Option<PSampleSadSatdCostFunc>,
     _pMe: &mut SWelsME<'_>,
-    _pEncPlane: &PaddedPlane,
-    _pRefPlane: &PaddedPlane,
+    _pEncPlane: &SharedPlane,
+    _pRefPlane: &SharedPlane,
 ) {
 }
 
@@ -944,8 +946,8 @@ pub fn WelsDiamondSearch(
     sdf: &SSampleDealingFunc,
     pMe: &mut SWelsME<'_>,
     pSlice: &mut SSlice,
-    pEncPlane: &PaddedPlane,
-    pRefPlane: &PaddedPlane,
+    pEncPlane: &SharedPlane,
+    pRefPlane: &SharedPlane,
 ) {
     {
         let block_size = (*pMe).uiBlockSize as usize;
@@ -1026,8 +1028,8 @@ pub fn CheckDirectionalMv(
     pMe: &mut SWelsME<'_>,
     ksMinMv: SMVUnitXY,
     ksMaxMv: SMVUnitXY,
-    pEncPlane: &PaddedPlane,
-    pRefPlane: &PaddedPlane,
+    pEncPlane: &SharedPlane,
+    pRefPlane: &SharedPlane,
     iBestSadCost: &mut i32,
 ) -> bool {
     {
@@ -1066,8 +1068,8 @@ pub fn CheckDirectionalMvFalse(
     _pMe: &mut SWelsME<'_>,
     _ksMinMv: SMVUnitXY,
     _ksMaxMv: SMVUnitXY,
-    _pEncPlane: &PaddedPlane,
-    _pRefPlane: &PaddedPlane,
+    _pEncPlane: &SharedPlane,
+    _pRefPlane: &SharedPlane,
     _iBestSadCost: &mut i32,
 ) -> bool {
     false
@@ -1090,8 +1092,8 @@ pub fn LineFullSearch_c(
     sdf: &SSampleDealingFunc,
     pMe: &mut SWelsME<'_>,
     pMvdTable: MvdCostCursor<'_>,
-    pEncPlane: &PaddedPlane,
-    pRefPlane: &PaddedPlane,
+    pEncPlane: &SharedPlane,
+    pRefPlane: &SharedPlane,
     iMinMv: i16,
     iMaxMv: i16,
     bVerticalSearch: bool,
@@ -1164,8 +1166,8 @@ pub fn WelsMotionCrossSearch(
     sdf: &SSampleDealingFunc,
     pMe: &mut SWelsME<'_>,
     pSlice: &mut SSlice,
-    pEncPlane: &PaddedPlane,
-    pRefPlane: &PaddedPlane,
+    pEncPlane: &SharedPlane,
+    pRefPlane: &SharedPlane,
 ) {
     unsafe {
         if let Some(vert_fn) = pMeFuncs.pfVerticalFullSearch {
@@ -1205,8 +1207,8 @@ pub fn WelsDiamondCrossSearch(
     sdf: &SSampleDealingFunc,
     pMe: &mut SWelsME<'_>,
     pSlice: &mut SSlice,
-    pEncPlane: &PaddedPlane,
-    pRefPlane: &PaddedPlane,
+    pEncPlane: &SharedPlane,
+    pRefPlane: &SharedPlane,
 ) {
     unsafe {
         WelsDiamondSearch(pMeFuncs, sdf, pMe, pSlice, pEncPlane, pRefPlane);
@@ -1229,8 +1231,8 @@ pub fn WelsDiamondCrossFeatureSearch(
     sdf: &SSampleDealingFunc,
     pMe: &mut SWelsME<'_>,
     pSlice: &mut SSlice,
-    pEncPlane: &PaddedPlane,
-    pRefPlane: &PaddedPlane,
+    pEncPlane: &SharedPlane,
+    pRefPlane: &SharedPlane,
 ) {
     unsafe {
         WelsDiamondCrossSearch(pMeFuncs, sdf, pMe, pSlice, pEncPlane, pRefPlane);
@@ -1264,10 +1266,10 @@ pub fn WelsDiamondCrossFeatureSearch(
 /// `pfCalculateSingleBlockFeature` slot holds since session F. The raw kernel
 /// stays for the frame-feature builders, which walk a whole raw plane.
 // SCREEN_CONTENT(dormant: Phase 10)
-pub fn sum_of_8x8_single_block(cRef: &PlaneCursor<'_>) -> i32 {
+pub fn sum_of_8x8_single_block(cRef: &RecCursor<'_>) -> i32 {
     let mut iSum = 0i32;
     for y in 0..8 {
-        for &b in cRef.row(y, 0, 8) {
+        for b in cRef.row::<8>(y, 0) {
             iSum += b as i32;
         }
     }
@@ -1276,10 +1278,10 @@ pub fn sum_of_8x8_single_block(cRef: &PlaneCursor<'_>) -> i32 {
 
 /// As [`sum_of_8x8_single_block`], 16x16.
 // SCREEN_CONTENT(dormant: Phase 10)
-pub fn sum_of_16x16_single_block(cRef: &PlaneCursor<'_>) -> i32 {
+pub fn sum_of_16x16_single_block(cRef: &RecCursor<'_>) -> i32 {
     let mut iSum = 0i32;
     for y in 0..16 {
-        for &b in cRef.row(y, 0, 16) {
+        for b in cRef.row::<16>(y, 0) {
             iSum += b as i32;
         }
     }
@@ -1546,8 +1548,8 @@ pub fn SetFeatureSearchIn<'a>(
     sMe: &SWelsME<'a>,
     pSlice: &SSlice,
     pRefFeatureStorage: Option<&'a SScreenBlockFeatureStorage>,
-    pEncPlane: &'a PaddedPlane,
-    pRefPlane: &'a PaddedPlane,
+    pEncPlane: &'a SharedPlane,
+    pRefPlane: &'a SharedPlane,
     pFeatureSearchIn: &mut SFeatureSearchIn<'a>,
 ) -> bool {
     unsafe {

@@ -226,7 +226,11 @@ pub type PCopyFunc =
 pub type PDctFunc = fn(
     pDct: &mut [i16],
     pSample1: &crate::encoder::rec_view::RecCursor<'_>,
-    pSample2: &PlaneCursor<'_>,
+    // S10.2: the prediction operand is a `RecCursor` too now. It is always a
+    // caller-owned scratch pane on `SMbCache`, reached through
+    // `RecCursor::over_owned` — the door this type documents for exactly this
+    // case, so a dispatch slot needs one operand type rather than two.
+    pSample2: &crate::encoder::rec_view::RecCursor<'_>,
 );
 
 // ---------------------------------------------------------------------------
@@ -705,7 +709,7 @@ pub fn get_none_zero_count(level: &[i16; 16]) -> i32 {
 pub fn WelsDctT4_c(
     pDct: &mut [i16],
     pPixel1: &crate::encoder::rec_view::RecCursor<'_>,
-    pPixel2: &PlaneCursor<'_>,
+    pPixel2: &crate::encoder::rec_view::RecCursor<'_>,
 ) {
     // S9.0: an adapter and nothing else now. It was three `from_raw_parts` calls
     // reconstituting exactly what the caller already had before it was flattened
@@ -726,7 +730,7 @@ pub fn WelsDctT4_c(
 pub fn WelsDctFourT4_c(
     pDct: &mut [i16],
     pPixel1: &crate::encoder::rec_view::RecCursor<'_>,
-    pPixel2: &PlaneCursor<'_>,
+    pPixel2: &crate::encoder::rec_view::RecCursor<'_>,
 ) {
     // S9.0, as `WelsDctT4_c` above.
     let dct: &mut [i16; 64] = (&mut pDct[..64]).try_into().unwrap();
@@ -881,8 +885,8 @@ pub extern "C" fn WelsInitEncodingFuncs(pFuncList: &mut SWelsFuncPtrList, uiCpuF
     f.pfQuantizationHadamard2x2Skip = Some(hadamard_quant_2x2_skip);
     f.pfTransformHadamard4x4Dc = Some(hadamard_t4_dc);
 
-    f.pfDctT4 = Some(WelsDctT4_c);
-    f.pfDctFourT4 = Some(WelsDctFourT4_c);
+    f.pfDctT4 = Some(|d, a, b| WelsDctT4_c(d, a, b));
+    f.pfDctFourT4 = Some(|d, a, b| WelsDctFourT4_c(d, a, b));
 
     f.pfScan4x4 = Some(scan_4x4_dc_ac);
     f.pfScan4x4Ac = Some(scan_4x4_ac);

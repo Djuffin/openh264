@@ -55,48 +55,48 @@
 #![deny(unsafe_code)]
 
 use crate::common::mc::copy_rows;
-use crate::safe::plane::{PlaneCursor, PlaneCursorMut};
+use crate::safe::plane::{PlaneCursor, PlaneCursorMut, RefSamples};
 
 /// C++: `WelsCopy4x4_c`.
 #[inline(always)]
-pub fn copy_4x4(src: &PlaneCursor<'_>, dst: &mut PlaneCursorMut<'_>) {
-    copy_rows::<4>(src, dst, 4);
+pub fn copy_4x4<S: RefSamples + Copy>(src: &S, dst: &mut PlaneCursorMut<'_>) {
+    copy_rows::<4, _>(src, dst, 4);
 }
 
 /// C++: `WelsCopy8x4_c`.
 #[inline(always)]
-pub fn copy_8x4(src: &PlaneCursor<'_>, dst: &mut PlaneCursorMut<'_>) {
-    copy_rows::<8>(src, dst, 4);
+pub fn copy_8x4<S: RefSamples + Copy>(src: &S, dst: &mut PlaneCursorMut<'_>) {
+    copy_rows::<8, _>(src, dst, 4);
 }
 
 /// C++: `WelsCopy4x8_c`.
 #[inline(always)]
-pub fn copy_4x8(src: &PlaneCursor<'_>, dst: &mut PlaneCursorMut<'_>) {
-    copy_rows::<4>(src, dst, 8);
+pub fn copy_4x8<S: RefSamples + Copy>(src: &S, dst: &mut PlaneCursorMut<'_>) {
+    copy_rows::<4, _>(src, dst, 8);
 }
 
 /// C++: `WelsCopy8x8_c`.
 #[inline(always)]
-pub fn copy_8x8(src: &PlaneCursor<'_>, dst: &mut PlaneCursorMut<'_>) {
-    copy_rows::<8>(src, dst, 8);
+pub fn copy_8x8<S: RefSamples + Copy>(src: &S, dst: &mut PlaneCursorMut<'_>) {
+    copy_rows::<8, _>(src, dst, 8);
 }
 
 /// C++: `WelsCopy16x8_c`.
 #[inline(always)]
-pub fn copy_16x8(src: &PlaneCursor<'_>, dst: &mut PlaneCursorMut<'_>) {
-    copy_rows::<16>(src, dst, 8);
+pub fn copy_16x8<S: RefSamples + Copy>(src: &S, dst: &mut PlaneCursorMut<'_>) {
+    copy_rows::<16, _>(src, dst, 8);
 }
 
 /// C++: `WelsCopy8x16_c`.
 #[inline(always)]
-pub fn copy_8x16(src: &PlaneCursor<'_>, dst: &mut PlaneCursorMut<'_>) {
-    copy_rows::<8>(src, dst, 16);
+pub fn copy_8x16<S: RefSamples + Copy>(src: &S, dst: &mut PlaneCursorMut<'_>) {
+    copy_rows::<8, _>(src, dst, 16);
 }
 
 /// C++: `WelsCopy16x16_c`.
 #[inline(always)]
-pub fn copy_16x16(src: &PlaneCursor<'_>, dst: &mut PlaneCursorMut<'_>) {
-    copy_rows::<16>(src, dst, 16);
+pub fn copy_16x16<S: RefSamples + Copy>(src: &S, dst: &mut PlaneCursorMut<'_>) {
+    copy_rows::<16, _>(src, dst, 16);
 }
 
 // **S9.0c: `copy_shim` is gone, and this file seals with it.** It built exact-reach

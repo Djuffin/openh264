@@ -244,6 +244,31 @@ impl<'a> RecCursor<'a> {
         std::array::from_fn(|i| row[i].get())
     }
 
+    /// `h` consecutive rows of `N` samples each, starting at `(dx0, dy0)` — the
+    /// cell mirror of [`PlaneCursor::row_windows`](crate::safe::plane::PlaneCursor::row_windows).
+    ///
+    /// **Why this can lend where [`row`](Self::row) cannot.** `row` returns by
+    /// value because a shared view cannot hand out `&[u8]` into its cells. It can
+    /// hand out `&[Cell<u8>]`, though — that is the point of a cell — so the block
+    /// walk keeps the shape `PlaneCursor::row_windows` was built for: **one bounds
+    /// check per block per side**, not two per row.
+    ///
+    /// # Panics
+    /// If the block leaves the buffer, at the first slicing.
+    #[inline]
+    pub fn row_windows<const N: usize>(
+        &self,
+        dy0: isize,
+        dx0: isize,
+        h: usize,
+    ) -> impl Iterator<Item = &[Cell<u8>; N]> {
+        let start = idx(self.center, dx0, dy0, self.stride);
+        let span = if h == 0 { 0 } else { (h - 1) * self.stride + N };
+        self.cells[start..][..span]
+            .chunks(self.stride)
+            .map(|r| r[..N].try_into().unwrap())
+    }
+
     /// Writes `N` samples into row `dy` starting at `dx0`.
     #[inline]
     pub fn write_row<const N: usize>(&self, dy: isize, dx0: isize, src: &[u8; N]) {
@@ -300,6 +325,44 @@ impl crate::safe::plane::RefSamples for RecCursor<'_> {
     #[inline]
     fn row_n<const N: usize>(&self, dy: isize, dx0: isize) -> [u8; N] {
         RecCursor::row::<N>(self, dy, dx0)
+    }
+
+    #[inline]
+    fn row_blocks<const N: usize>(
+        &self,
+        dy0: isize,
+        dx0: isize,
+        h: usize,
+    ) -> impl Iterator<Item = crate::safe::plane::RowBuf> {
+        RecCursor::row_windows::<N>(self, dy0, dx0, h).map(|r| {
+            let mut out = crate::safe::plane::RowBuf::new(N);
+            for (o, c) in out.as_mut().iter_mut().zip(r.iter()) {
+                *o = c.get();
+            }
+            out
+        })
+    }
+
+    /// The one implementor whose row is **owned** — cells cannot lend `&[u8]`.
+    type Row<'a>
+        = crate::safe::plane::RowBuf
+    where
+        Self: 'a;
+
+    #[inline]
+    fn advance(self, dx: isize, dy: isize) -> Self {
+        RecCursor::advance(self, dx, dy)
+    }
+
+    #[inline]
+    fn row_view(&self, dy: isize, dx0: isize, len: usize) -> crate::safe::plane::RowBuf {
+        let mut out = crate::safe::plane::RowBuf::new(len);
+        let start = idx(self.center, dx0, dy, self.stride);
+        let row = &self.cells[start..][..len];
+        for (o, c) in out.as_mut().iter_mut().zip(row.iter()) {
+            *o = c.get();
+        }
+        out
     }
 }
 
@@ -590,6 +653,67 @@ mod tests {
         // needs of the top and left borders.
         view.set(-1, -1, 77);
         assert_eq!(c.at(-5, -4), 77);
+    }
+
+    /// **The new row accessors must agree with the old ones, sample for sample.**
+    ///
+    /// S10.2 gave `RefSamples` two run-time row readers so the SAD family and
+    /// `common/mc.rs` could serve a shared cell view and a plain plane from one
+    /// body: `row_blocks` (the folded const-size block walk) and `row_view` (the
+    /// run-time-length row, borrowed for a plane and owned for a cell view). Each
+    /// exists only to move *where* the read comes from, never *what* is read — so
+    /// this asserts the three routes over one buffer give identical bytes:
+    /// `PlaneCursor`'s inherent `row`, the trait's `row_blocks`, and the trait's
+    /// `row_view`, on both cursor types.
+    ///
+    /// This is the same acceptance `row_windows_yields_the_same_samples_as_a_row_walk`
+    /// applies one level down, and it is what the byte sweep cannot localise: a
+    /// wrong offset here changes an encode by one sample in one filter, which the
+    /// differential harness reports as "a stream differs" and this reports as a
+    /// coordinate.
+    #[test]
+    fn the_row_accessors_agree_across_both_cursor_types() {
+        use crate::safe::plane::{PlaneCursor, RefSamples};
+
+        let mut rng_state = 0x51ED_270Fu32;
+        let mut next = move || {
+            rng_state = rng_state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            (rng_state >> 24) as u8
+        };
+        for &stride in &[16usize, 48, 96] {
+            let mut plane = PaddedPlane::new(stride - 16, 16, 8, stride);
+            for y in -8..24isize {
+                for x in -8..(stride as isize - 8) {
+                    let v = next();
+                    plane.set(x, y, v);
+                }
+            }
+            // One shared view and one plain cursor over the *same* storage.
+            let view = view_of(&mut plane);
+            let cells = view.cursor(3, 2);
+            let plain = plane.cursor(3, 2);
+
+            for &(dy, dx) in &[(0isize, 0isize), (1, -1), (-2, 2), (3, 0)] {
+                // `row_view`: the run-time-length read, both types.
+                for len in [1usize, 4, 8] {
+                    let want = plain.row(dy, dx, len).to_vec();
+                    assert_eq!(&*RefSamples::row_view(&plain, dy, dx, len), &want[..],
+                        "plane row_view, stride {stride}, ({dx},{dy}), len {len}");
+                    assert_eq!(&*RefSamples::row_view(&cells, dy, dx, len), &want[..],
+                        "cell row_view, stride {stride}, ({dx},{dy}), len {len}");
+                }
+                // `row_blocks`: the folded block walk, both types, against a
+                // straight `row` walk of the same block.
+                let want: Vec<Vec<u8>> =
+                    (0..3).map(|k| plain.row(dy + k, dx, 4).to_vec()).collect();
+                let got_plain: Vec<Vec<u8>> =
+                    plain.row_blocks::<4>(dy, dx, 3).map(|r| r.to_vec()).collect();
+                let got_cells: Vec<Vec<u8>> =
+                    cells.row_blocks::<4>(dy, dx, 3).map(|r| r.to_vec()).collect();
+                assert_eq!(got_plain, want, "plane row_blocks, stride {stride}, ({dx},{dy})");
+                assert_eq!(got_cells, want, "cell row_blocks, stride {stride}, ({dx},{dy})");
+            }
+        }
     }
 
     /// **The probe the seam's one `Sync` impl exists for, and the mid-row case in

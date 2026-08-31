@@ -38,7 +38,7 @@ pub struct ScdPlanes<'a> {
 // file because the block walk below read `SPixMap.pPixel` raw and so could not take a
 // `PlaneCursor` "until the preprocess family's own session converts the pixmap". This
 // is that session. The walk takes [`ScdPlanes`] now and the kernel is
-// `common::sad_common::sample_sad::<8, 8>`, which is the same summation over the same
+// `common::sad_common::sample_sad::<8, 8, _>`, which is the same summation over the same
 // 64 `|a - b|` terms with the same `i32` accumulator.
 //
 // F151's ratchet rebaseline for this file (+2 raw_ptr, +3 unsafe_block, +1 unsafe_fn)
@@ -115,7 +115,7 @@ impl CSceneChangeDetection {
                     j * 8 * planes.ref_stride + i * 8,
                     planes.ref_stride,
                 );
-                let iSad = sample_sad::<8, 8>(&cur, &refp);
+                let iSad = sample_sad::<8, 8, _>(&cur, &refp);
                 self.m_sSceneChangeParam.iMotionBlockNum +=
                     (iSad > HIGH_MOTION_BLOCK_THRESHOLD) as i32;
             }
