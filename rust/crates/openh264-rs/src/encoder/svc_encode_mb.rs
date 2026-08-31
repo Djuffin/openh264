@@ -428,7 +428,6 @@ pub unsafe fn WelsEncRecI16x16Y(
     // indexed, and the two plane-taking slots derive their cursor where they use it —
     // a `&mut` to this field (`blk_four4x4_mut`) is a Unique retag over the whole
     // array and kills any raw held across it (F114).
-    let pPred = (*pMbCache).SPicData.mb_cursor(&(*pCurDqLayer).pCsData, &(*pCurDqLayer).iCsStride, 0);
     let kiRecStride = (*pCurDqLayer).iCsStride[0];
     // S9.0: the prediction scratch is an owned `[u8; 2*256+16]` on the cache, so a
     // cursor over it needs no raw at all. Stride 16 is the scratch's own geometry,
@@ -610,7 +609,6 @@ pub unsafe fn WelsEncRecI4x4Y(
     // Unique retag over **the whole array** — `blk4x4_mut` takes `&mut [i16]`, so
     // the caller borrows all 384 coefficients before indexing. A raw held across
     // that call is dead, which is what Miri reported here (F114).
-    let pPred = (*pMbCache).SPicData.mb_cursor(&(*pCurDqLayer).pCsData, &(*pCurDqLayer).iCsStride, 0);
     let iRecStride = (*pCurDqLayer).iCsStride[0];
 
     let uiOffset = g_kuiMbCountScan4Idx[uiI4x4Idx as usize] as usize;
@@ -670,7 +668,6 @@ pub unsafe fn WelsEncRecI4x4Y(
     };
     (*pCurMb).iNonZeroCount[uiOffset] = iNoneZeroCount as i8;
 
-    let pPredI4x4 = pPred.offset(dec_block_offset);
     if iNoneZeroCount > 0 {
         (*pCurMb).uiCbp |= 1 << (uiI4x4Idx >> 2);
         if let Some(func) = (*pFuncList).pfDequantization4x4 {

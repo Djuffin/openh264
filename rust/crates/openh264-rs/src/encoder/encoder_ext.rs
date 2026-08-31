@@ -2367,9 +2367,9 @@ pub unsafe fn WelsInitCurrentLayer(pCtx: &mut sWelsEncCtx, _kiWidth: i32, _kiHei
     (*pCurDq).iEncStride[1] = pEncPic.iLineSize[1];
     (*pCurDq).iEncStride[2] = pEncPic.iLineSize[2];
     // cs data
-    (*pCurDq).pCsData[0] = pDecPic.pData[0];
-    (*pCurDq).pCsData[1] = pDecPic.pData[1];
-    (*pCurDq).pCsData[2] = pDecPic.pData[2];
+    // **S10.6: `pCsData`'s three stamps are gone with the field**, as `pEncData`'s
+    // did — the reconstruction seam (`pRecView`, stamped a few lines above) took
+    // every reader long ago, and the three that were left were dead bindings.
     (*pCurDq).iCsStride[0] = pDecPic.iLineSize[0];
     (*pCurDq).iCsStride[1] = pDecPic.iLineSize[1];
     (*pCurDq).iCsStride[2] = pDecPic.iLineSize[2];

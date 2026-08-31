@@ -1274,7 +1274,16 @@ pub struct SDqLayer {
     /// in it — T6.D4. See [`SliceIdx`] and [`slice_in_layer`].
     pub ppSliceInLayer: Vec<SliceIdx>,
     pub sSliceEncCtx: SSliceCtx,
-    pub pCsData: [*mut u8; 3],
+    // `pCsData: [*mut u8; 3]` stood here — the reconstruction picture's three
+    // plane roots, stamped by `WelsInitCurrentLayer` every frame.
+    //
+    // **S10.6, deleted: write-only, and its last three readers were dead
+    // bindings.** T9.C2 moved the reconstruction reads onto `pRecView`'s
+    // `RecPicView` and left `let pPred = ..mb_cursor(&layer.pCsData, ..)` behind in
+    // `WelsEncRecI16x16Y` and `WelsEncRecI4x4Y`, plus a `pPredI4x4` derived from
+    // one of them. Nothing read any of the three. `unused_variables` is allowed
+    // crate-wide *and* in `svc_encode_mb.rs`'s own module header, so the compiler
+    // never said so (F268).
     pub iCsStride: [i32; 3],
 
     pub iEncStride: [i32; 3],
@@ -1456,7 +1465,6 @@ impl SDqLayer {
             sSliceEncCtx: SSliceCtx::default(),
             // Plane aliases into the reconstructed and source pictures, re-aimed at
             // every frame by `WelsInitCurrentLayer`; null means "no frame started".
-            pCsData: [std::ptr::null_mut(); 3],
             iCsStride: [0; 3],
             // The seam, rebuilt per frame beside `pCsData`; `None` is "no frame
             // started", the same thing the null above means.
