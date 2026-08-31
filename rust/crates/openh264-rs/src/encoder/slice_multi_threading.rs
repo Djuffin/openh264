@@ -557,7 +557,16 @@ pub fn NeedDynamicAdjust(pCurDq: &mut SDqLayer, iSliceNum: i32) -> i32 {
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
 pub unsafe fn DynamicAdjustSlicing(
-    pCtx: &mut sWelsEncCtx,
+    // **S11.12: the context parameter is narrowed to what this body reads.**
+    // It was `&mut sWelsEncCtx` beside a `&mut SDqLayer` *that lives inside
+    // that context* — the shape F71's slot read existed to keep apart, and the
+    // reason `current_layer`'s raw survived at this call site. The body reads
+    // exactly two things through the context (the coding parameters and the
+    // rate controller) and writes only the layer, so it takes those two by
+    // shared reference: they are disjoint fields from `ppDqLayerList`, the
+    // caller can destructure, and no raw is needed at either end.
+    pSvcParam: &crate::encoder::param_svc::SWelsSvcCodingParam,
+    kpRc: &[crate::encoder::rc::SWelsSvcRc],
     pCurDqLayer: &mut SDqLayer,
     iCurDid: i32,
 ) {
@@ -574,19 +583,15 @@ pub unsafe fn DynamicAdjustSlicing(
     let mut iRunLen = [0i32; MAX_THREADS_NUM];
     let mut iSliceIdx: i32;
 
-    // A7: the null test went with the raw — `param_opt` is the question now, and
-    // this body's callers all run after `WelsInitEncoderExt`.
-    let Some(pSvcParam) = pCtx.param_opt() else {
-        return;
-    };
-
-    let rc_mode = (*pSvcParam).iRCMode;
+    // A7: the null test went with the raw; S11.12: the caller resolves the
+    // parameters, so the `param_opt` question is answered before the call.
+    let rc_mode = pSvcParam.iRCMode;
     let mut iNumMbInEachGom = 0i32;
     if rc_mode != RCMode::RC_OFF_MODE {
-        if pCtx.rc().is_empty() {
+        if kpRc.is_empty() {
             return;
         }
-        iNumMbInEachGom = pCtx.rc_at(iCurDid as usize).iNumberMbGom;
+        iNumMbInEachGom = kpRc[iCurDid as usize].iNumberMbGom;
 
         if iNumMbInEachGom <= 0 {
             return;
@@ -971,7 +976,17 @@ pub unsafe fn AdjustBaseLayer(pCtx: &mut sWelsEncCtx) -> i32 {
     let iNeedAdj = NeedDynamicAdjust(&mut *pCurDq, kiSliceNumInFrame);
 
     if iNeedAdj != 0 {
-        DynamicAdjustSlicing(pCtx, &mut *pCurDq, 0);
+        // S11.12: the two owners come out of one `&mut` by destructuring —
+        // `pSvcParam`/`pWelsSvcRc` against `ppDqLayerList`, disjoint fields —
+        // so the layer is a checked reference rather than a raw resolution.
+        let sWelsEncCtx { pSvcParam, pWelsSvcRc, ppDqLayerList, .. } = &mut *pCtx;
+        let Some(pSvcParam) = pSvcParam.as_deref() else {
+            return iNeedAdj;
+        };
+        let Some(pCurDq) = ppDqLayerList.get_mut(0).and_then(|l| l.as_deref_mut()) else {
+            return iNeedAdj;
+        };
+        DynamicAdjustSlicing(pSvcParam, pWelsSvcRc, pCurDq, 0);
     }
 
     iNeedAdj
@@ -1031,8 +1046,18 @@ pub unsafe fn AdjustEnhanceLayer(pCtx: &mut sWelsEncCtx, iCurDid: i32) -> i32 {
             // `current_layer_mut` here would be a second `&mut` on the context
             // and the borrow checker refuses it, correctly. Restructuring that
             // parameter list is the real fix and is its own checkpoint.
-            let pCurLayer = &mut *current_layer(pCtx);
-            DynamicAdjustSlicing(pCtx, pCurLayer, iCurDid);
+            // S11.12: destructured, as in `AdjustBaseLayer`.
+            let sWelsEncCtx { pSvcParam, pWelsSvcRc, ppDqLayerList, iCurDqLayer, .. } = &mut *pCtx;
+            let Some(pSvcParam) = pSvcParam.as_deref() else {
+                return iNeedAdj;
+            };
+            let Some(pCurLayer) = iCurDqLayer
+                .and_then(|idx| ppDqLayerList.get_mut(idx.get()))
+                .and_then(|l| l.as_deref_mut())
+            else {
+                return iNeedAdj;
+            };
+            DynamicAdjustSlicing(pSvcParam, pWelsSvcRc, pCurLayer, iCurDid);
         }
     } else {
         let pCurLayer = ctx_dq_layer(pCtx, iCurDid as usize);
@@ -1047,8 +1072,18 @@ pub unsafe fn AdjustEnhanceLayer(pCtx: &mut sWelsEncCtx, iCurDid: i32) -> i32 {
             // `current_layer_mut` here would be a second `&mut` on the context
             // and the borrow checker refuses it, correctly. Restructuring that
             // parameter list is the real fix and is its own checkpoint.
-            let pCurLayer = &mut *current_layer(pCtx);
-            DynamicAdjustSlicing(pCtx, pCurLayer, iCurDid);
+            // S11.12: destructured, as in `AdjustBaseLayer`.
+            let sWelsEncCtx { pSvcParam, pWelsSvcRc, ppDqLayerList, iCurDqLayer, .. } = &mut *pCtx;
+            let Some(pSvcParam) = pSvcParam.as_deref() else {
+                return iNeedAdj;
+            };
+            let Some(pCurLayer) = iCurDqLayer
+                .and_then(|idx| ppDqLayerList.get_mut(idx.get()))
+                .and_then(|l| l.as_deref_mut())
+            else {
+                return iNeedAdj;
+            };
+            DynamicAdjustSlicing(pSvcParam, pWelsSvcRc, pCurLayer, iCurDid);
         }
     }
 

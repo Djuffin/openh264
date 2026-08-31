@@ -1344,8 +1344,33 @@ pub unsafe fn UpdateBlockStatic(pCtx: &mut sWelsEncCtx) {
 }
 
 /// Serializes slice header reference picture reordering syntax and marking flags.
+/// The context values `WelsUpdateSliceHeaderSyntax` reads, resolved once by its
+/// caller — S11.12. Every field was a read through `&mut sWelsEncCtx` inside the
+/// slice loop; none of them can change while that loop runs, because the loop
+/// writes only slice headers.
+pub struct SliceHeaderSyntaxIn {
+    pub iNumRef0: i32,
+    pub bEnableLongTermReference: bool,
+    pub bScreenContent: bool,
+    pub bLtrMarkingFlag: bool,
+    /// `pRefList0[0]`'s picture is a long-term reference.
+    pub bFirstRefIsLongRef: bool,
+    /// `pRefList0[i]`'s long-term picture number, per reordering slot.
+    pub iLongTermPicNum: [Option<u16>; MAX_REFERENCE_REORDER_COUNT_NUM],
+}
+
+/// **S11.12: the context parameter is gone entirely.**
+///
+/// It was `&mut sWelsEncCtx` beside a `&mut SDqLayer` *that lives inside that
+/// context* — the shape F71's slot read existed to keep apart, and the last
+/// reason `current_layer`'s raw survived at a call site. Every one of this
+/// body's sixteen context uses was a **read**, and all of them are either
+/// loop-invariant or indexed by the reordering slot, so the caller computes
+/// them and passes the answers. Nothing here needs the context at all now, and
+/// the caller holds only a `&mut SDqLayer` — no whole-vs-field conflict, and
+/// no raw.
 pub fn WelsUpdateSliceHeaderSyntax(
-    pCtx: &mut sWelsEncCtx,
+    kSyn: &SliceHeaderSyntaxIn,
     iAbsDiffPicNumMinus1: i32,
     pCurDq: &mut SDqLayer,
     uiFrameType: i32,
@@ -1358,10 +1383,10 @@ pub fn WelsUpdateSliceHeaderSyntax(
     // second, independent path to the same object this function's `&mut`
     // already protects, and the read popped the protector.
     let kiCountSliceNum = pCurDq.iMaxSliceNum;
-    let uiDid = pCtx.uiDependencyId as usize;
-    // T9.H3: one bool, read once before the loop — the loop writes only slice
-    // headers, so the value cannot change while it runs.
-    let bLtrMarkingFlag = ctx_ltr_at(pCtx, (uiDid) as usize).bLTRMarkingFlag;
+    // T9.H3's rule, generalised: the loop writes only slice headers, so every
+    // context value it reads is fixed for the whole loop and is resolved once,
+    // by the caller, into `kSyn`.
+    let bLtrMarkingFlag = kSyn.bLtrMarkingFlag;
 
     for iIdx in 0..kiCountSliceNum {
         let Some(pSlice) = crate::encoder::svc_encode_slice::slice_in_layer_mut(pCurDq, iIdx)
@@ -1372,30 +1397,19 @@ pub fn WelsUpdateSliceHeaderSyntax(
         let pRefReorder = &mut pSliceHdr.sRefReordering;
         let pRefPicMark = &mut pSliceHdr.sRefMarking;
 
-        pSliceHdr.uiRefCount = pCtx.iNumRef0 as u8;
-        if pCtx.iNumRef0 > 0 {
-            // §4.6: the flag is read out, the borrow ends, and the parameter
-            // read below takes the context for itself.
-            let isLongRef = match pCtx.pRefList0[0] {
-                Some(id) => pCtx
-                    .ref_list(pCtx.uiDependencyId as usize)
-                    .expect("the dependency layer's reference list")
-                    .pic(id)
-                    .bIsLongRef,
-                None => false,
-            };
-            if !isLongRef || !pCtx.param().bEnableLongTermReference {
+        pSliceHdr.uiRefCount = kSyn.iNumRef0 as u8;
+        if kSyn.iNumRef0 > 0 {
+            if !kSyn.bFirstRefIsLongRef || !kSyn.bEnableLongTermReference {
                 pRefReorder.SReorderingSyntax[0].uiReorderingOfPicNumsIdc = 0;
                 pRefReorder.SReorderingSyntax[0].uiAbsDiffPicNumMinus1 = iAbsDiffPicNumMinus1 as u32;
                 pRefReorder.SReorderingSyntax[1].uiReorderingOfPicNumsIdc = 3;
             } else {
                 let mut iRefIdx = 0usize;
-                while (iRefIdx as i32) < pCtx.iNumRef0 as i32 {
+                while (iRefIdx as i32) < kSyn.iNumRef0 as i32 {
                     if iRefIdx < MAX_REFERENCE_REORDER_COUNT_NUM {
                         pRefReorder.SReorderingSyntax[iRefIdx].uiReorderingOfPicNumsIdc = 2;
-                        if let Some(id) = pCtx.pRefList0[iRefIdx] {
-                            pRefReorder.SReorderingSyntax[iRefIdx].iLongTermPicNum =
-                                pCtx.ref_list(pCtx.uiDependencyId as usize).expect("the dependency layer's reference list").pic(id).iLongTermPicNum as u16;
+                        if let Some(kiLongTermPicNum) = kSyn.iLongTermPicNum[iRefIdx] {
+                            pRefReorder.SReorderingSyntax[iRefIdx].iLongTermPicNum = kiLongTermPicNum;
                         }
                     }
                     iRefIdx += 1;
@@ -1408,22 +1422,20 @@ pub fn WelsUpdateSliceHeaderSyntax(
 
         if uiFrameType == EVideoFrameType::videoFrameTypeIDR as i32 {
             pRefPicMark.bNoOutputOfPriorPicsFlag = false;
-            pRefPicMark.bLongTermRefFlag = pCtx.param().bEnableLongTermReference;
+            pRefPicMark.bLongTermRefFlag = kSyn.bEnableLongTermReference;
         } else {
             // SCREEN_CONTENT(dormant: Phase 10)
-            if pCtx.param().iUsageType == EUsageType::SCREEN_CONTENT_REAL_TIME {
-                pRefPicMark.bAdaptiveRefPicMarkingModeFlag = pCtx.param().bEnableLongTermReference;
+            if kSyn.bScreenContent {
+                pRefPicMark.bAdaptiveRefPicMarkingModeFlag = kSyn.bEnableLongTermReference;
             } else {
-                pRefPicMark.bAdaptiveRefPicMarkingModeFlag = pCtx.param().bEnableLongTermReference && bLtrMarkingFlag;
+                pRefPicMark.bAdaptiveRefPicMarkingModeFlag = kSyn.bEnableLongTermReference && bLtrMarkingFlag;
             }
         }
     }
 }
 
 /// Updates reference picture syntax and picture number delta in slice headers.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn WelsUpdateRefSyntax(pCtx: &mut sWelsEncCtx, kiPOC: i32, kiFrameType: i32) {
+pub fn WelsUpdateRefSyntax(pCtx: &mut sWelsEncCtx, kiPOC: i32, kiFrameType: i32) {
     // T9.H4: the `is_null()` disjunct that opened this guard is gone — a
     // `&mut sWelsEncCtx` cannot be null, and every caller now holds one. The
     // remaining conditions are unchanged.
@@ -1449,19 +1461,49 @@ pub unsafe fn WelsUpdateRefSyntax(pCtx: &mut sWelsEncCtx, kiPOC: i32, kiFrameTyp
 
     if current_layer_ref(pCtx).is_some() {
         // The null arm of the callee's old guard, hoisted with the reborrow.
-        // **S11.11: the raw stays here.** `WelsUpdateSliceHeaderSyntax` takes
-        // `&mut sWelsEncCtx` *and* `&mut SDqLayer` where the layer lives inside
-        // that context — `DynamicAdjustSlicing`'s shape, and the third member of
-        // the seam list. F71's slot read keeps the two provenances apart; a
-        // `current_layer_mut` here would be a second `&mut` on the context and
-        // the borrow checker refuses it, correctly.
-        let pCurLayerForSh = &mut *current_layer(pCtx);
-        WelsUpdateSliceHeaderSyntax(
-            pCtx,
-            iAbsDiffPicNumMinus1,
-            pCurLayerForSh,
-            kiFrameType,
-        );
+        // **S11.12: the seam is gone.** The callee's context reads are resolved
+        // here, while the context is unborrowed, and only then is the layer
+        // taken `&mut`. Whole-vs-field never arises because the two are not
+        // live at the same time.
+        let uiDidSh = pCtx.uiDependencyId as usize;
+        let kSyn = {
+            let kpRefList = pCtx.ref_list(uiDidSh);
+            SliceHeaderSyntaxIn {
+                iNumRef0: pCtx.iNumRef0 as i32,
+                bEnableLongTermReference: pCtx.param().bEnableLongTermReference,
+                bScreenContent: pCtx.param().iUsageType
+                    == EUsageType::SCREEN_CONTENT_REAL_TIME,
+                bLtrMarkingFlag: crate::encoder::encoder_context::ctx_ltr_at_ref(pCtx, uiDidSh)
+                    .bLTRMarkingFlag,
+                bFirstRefIsLongRef: match pCtx.pRefList0[0] {
+                    Some(id) => kpRefList
+                        .expect("the dependency layer's reference list")
+                        .pic(id)
+                        .bIsLongRef,
+                    None => false,
+                },
+                iLongTermPicNum: std::array::from_fn(|i| {
+                    pCtx.pRefList0.get(i).copied().flatten().map(|id| {
+                        kpRefList
+                            .expect("the dependency layer's reference list")
+                            .pic(id)
+                            .iLongTermPicNum as u16
+                    })
+                }),
+            }
+        };
+        let sWelsEncCtx { ppDqLayerList, iCurDqLayer, .. } = &mut *pCtx;
+        let pCurLayerForSh = iCurDqLayer
+            .and_then(|idx| ppDqLayerList.get_mut(idx.get()))
+            .and_then(|l| l.as_deref_mut());
+        if let Some(pCurLayerForSh) = pCurLayerForSh {
+            WelsUpdateSliceHeaderSyntax(
+                &kSyn,
+                iAbsDiffPicNumMinus1,
+                pCurLayerForSh,
+                kiFrameType,
+            );
+        }
     }
 }
 
