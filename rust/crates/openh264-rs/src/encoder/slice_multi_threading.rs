@@ -884,9 +884,7 @@ pub unsafe fn AppendSliceToFrameBs(
 /// the NAL list is offsets into the thread buffer the slice was claimed into, and
 /// that buffer is `pThreadBsBuffer[pSlice->uiBufferIdx]` — the field that used to
 /// cache it is gone (Phase 6 session B).
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
-pub unsafe fn WriteSliceBs(
+pub fn WriteSliceBs(
     pCtx: &sWelsEncCtx,
     pSlice: &mut SSlice,
     _iSliceIdx: i32,
@@ -907,7 +905,10 @@ pub unsafe fn WriteSliceBs(
     let mut iNalIdx = 0i32;
     let mut iReturn = ENC_RETURN_SUCCESS;
     let iTotalLeftLength = (pSliceBs.uiBsSize - pSliceBs.uiBsPos) as i32;
-    let pNalHdrExt = std::ptr::addr_of!(current_layer_ref(pCtx).expect("layer bound").sLayerInfo.sNalHeaderExt);
+    // S11.34: shared, not raw — the slice this body writes lives in the taken
+    // bank (a different allocation since the pre-fork take), so the layer's
+    // header borrow coexists with it as a plain fact.
+    let kpNalHdrExt = &current_layer_ref(pCtx).expect("layer bound").sLayerInfo.sNalHeaderExt;
     // T7.C4: the write cursor is the slice's own buffer, absent when the slice
     // shares the frame's — which is what the raw `pBs` was, and `WelsEncodeNal`
     // takes the `INVALIDINPUT` arm for `None` exactly as the C++ did for null.
@@ -942,7 +943,7 @@ pub unsafe fn WriteSliceBs(
         iReturn = WelsEncodeNal(
             &kNalEntry,
             pSliceBsBuf,
-            Some(&*pNalHdrExt),
+            Some(kpNalHdrExt),
             pDstTail,
             &mut iNalSize,
         );
@@ -1387,6 +1388,11 @@ pub struct SliceJobHandle<'a> {
     /// taken from the context before the fork like everything else here; `None`
     /// for the fixed modes, which never stash-restore across a boundary.
     pDynBsBuf: Option<&'a mut [u8]>,
+    /// **This worker's slice bank — S11.34, owned for the frame.** Taken from
+    /// the layer before the spawn; the size-limited job grows it and resolves
+    /// every slice by index. `None` for the fixed modes, whose slices arrive
+    /// already carved (`pSlices`).
+    pBank: Option<&'a mut crate::encoder::svc_encode_slice::SSliceBufferInfo>,
     /// This worker's bs scratch slot index — still carried because the slice's
     /// `uiBufferIdx` must agree with the buffer above (asserted in the job).
     iBsSlot: i32,
@@ -1526,6 +1532,7 @@ impl<'a> SliceJobHandle<'a> {
         pSlices: Vec<&'a mut SSlice>,
         pMbs: Vec<crate::safe::mb_grid::MbWindow<'a, SMB>>,
         pDynBsBuf: Option<&'a mut [u8]>,
+        pBank: Option<&'a mut crate::encoder::svc_encode_slice::SSliceBufferInfo>,
         iBsSlot: i32,
         iFirstSlice: i32,
         iSliceStep: i32,
@@ -1550,7 +1557,7 @@ impl<'a> SliceJobHandle<'a> {
             iBsSlot,
             pSmt.uiThreadBsBufferNum
         );
-        Self { pCtx, pBsBuf, pSlices, pMbs, pDynBsBuf, iBsSlot, iFirstSlice, iSliceStep, iSliceCount, bRecordsTime }
+        Self { pCtx, pBsBuf, pSlices, pMbs, pDynBsBuf, pBank, iBsSlot, iFirstSlice, iSliceStep, iSliceCount, bRecordsTime }
     }
 }
 
@@ -1618,9 +1625,7 @@ struct SliceJobResult {
 /// The slot claim is gone because the slot is the worker's for the whole scope
 /// (part 1 of the seam's argument); the error mutex is gone because the result
 /// travels back through the join instead of being ORed from the worker.
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
-unsafe fn EncodeOneSliceInJob(
+fn EncodeOneSliceInJob(
     pCtx: &sWelsEncCtx,
     iSliceIdx: i32,
     iBsSlot: i32,
@@ -1754,9 +1759,7 @@ fn ForkWidth(pCtx: &mut sWelsEncCtx, iItemCount: i32) -> i32 {
 /// # Safety
 /// `pCtx` must be a live context with `pSliceThreading` built and the layer's
 /// slice bank sized for `kiSliceCount` slices.
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
-pub unsafe fn EncodeFixedSlicesForked(pCtx: &mut sWelsEncCtx, kiSliceCount: i32) -> i32 {
+pub fn EncodeFixedSlicesForked(pCtx: &mut sWelsEncCtx, kiSliceCount: i32) -> i32 {
     // T9.H4: the `is_null()` disjunct that opened this guard is gone — a
     // `&mut sWelsEncCtx` cannot be null, and every caller now holds one. The
     // remaining conditions are unchanged.
@@ -1882,7 +1885,7 @@ pub unsafe fn EncodeFixedSlicesForked(pCtx: &mut sWelsEncCtx, kiSliceCount: i32)
             vTakenBsBufs.iter_mut().enumerate().zip(vPerWorker).zip(vMbPerWorker)
         {
             let k = k as i32;
-            jobs.push(SliceJobHandle::new(pCtx, buf.as_mut_slice(), slices, mbs, None, k, k, iWidth, kiSliceCount, bRecordsTime));
+            jobs.push(SliceJobHandle::new(pCtx, buf.as_mut_slice(), slices, mbs, None, None, k, k, iWidth, kiSliceCount, bRecordsTime));
         }
 
         std::thread::scope(|s| {
@@ -1963,8 +1966,6 @@ pub unsafe fn EncodeFixedSlicesForked(pCtx: &mut sWelsEncCtx, kiSliceCount: i32)
 ///
 /// # Safety
 /// As [`EncodeFixedSlicesForked`].
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
 pub fn UpdateMbMapForked(pCtx: &mut sWelsEncCtx, kiTaskCount: i32) {
     // T9.H: the `pCtx.is_null()` disjunct is gone — a `&mut sWelsEncCtx`
     // cannot be null and every caller now holds one. The rest is unchanged.
@@ -2077,9 +2078,7 @@ pub fn UpdateMbMapForked(pCtx: &mut sWelsEncCtx, kiTaskCount: i32) {
 /// and bs slot `p`, which also makes `NumSliceCodedOfPartition[p]` and
 /// `LastCodedMbIdxOfPartition[p]` — written from inside the encode — disjoint by
 /// construction rather than by the claim.
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
-unsafe fn EncodeOnePartitionSizeLimited(
+fn EncodeOnePartitionSizeLimited(
     pCtx: &sWelsEncCtx,
     iPartitionIdx: i32,
     iBsSlot: i32,
@@ -2090,33 +2089,40 @@ unsafe fn EncodeOnePartitionSizeLimited(
     // S11.30: this partition's CABAC restore scratch, taken from the context
     // beside the bitstream slot — reborrowed per coded slice below.
     mut pRestoreBuf: Option<&mut [u8]>,
+    // **S11.34: this worker's slice bank, owned.** The size-limited mode grows
+    // its bank in-fork, which is why S10.3a/S11.21 left it as the one storage a
+    // fork body still reached raw — a `&mut` taken before the growth would name
+    // freed storage. Ownership dissolves that: the bank leaves the layer before
+    // the spawn (`std::mem::take`, like the grid and the scratch), the growth
+    // is an ordinary `Vec` resize on an exclusive borrow, and every resolve is
+    // an index. Restored after the join.
+    pBank: &mut crate::encoder::svc_encode_slice::SSliceBufferInfo,
 ) -> SliceJobResult {
     // ---- InitTask (base), minus the slot claim
     let eNalType = (*pCtx).eNalType;
     let eNalRefIdc = (*pCtx).eNalPriority;
     let bNeedPrefix = (*pCtx).bNeedPrefixNalFlag;
 
-    // **S10.3a: the init half takes the reference; the loop below cannot.** This
-    // body *re-resolves* its slice after every `ReallocateSliceInThread` — the
-    // dynamic mode grows its bank in-fork, so a `&mut` taken before the growth
-    // would name freed storage. The reference's scope therefore ends here, and the
-    // encode loop keeps `slice_in_bank`'s raw. That split is the honest shape of
-    // step 3: the fixed modes partition, the size-limited mode reallocates.
+    // S11.34: the resolve is an index into the owned bank — S10.3a's "a `&mut`
+    // taken before the growth would name freed storage" is answered by taking
+    // the borrow *after* each growth, per iteration, which ownership makes
+    // ordinary NLL.
     {
-        let Some(pSlice) = crate::encoder::svc_encode_slice::ResolveSliceInOwnBank(
-            pCtx,
-            iBsSlot,
-            iPartitionIdx,
-        ) else {
+        let kiCur = pBank.iCodedSliceNum as usize;
+        let Some(pSlice) = pBank.pSliceBuffer.get_mut(kiCur) else {
             return SliceJobResult { iResult: ENC_RETURN_UNEXPECTED, bInitFailed: true };
         };
+        crate::encoder::svc_encode_slice::InitOneSliceInThread(pCtx, pSlice, iBsSlot, iPartitionIdx);
         let iReturn = SetSliceBoundaryInfo(current_layer_ref(pCtx), pSlice, iPartitionIdx);
         if iReturn != ENC_RETURN_SUCCESS {
             return SliceJobResult { iResult: iReturn, bInitFailed: true };
         }
         pSlice.sSliceBs.sBsWrite = BsWriter::new();
     }
-    let mut pSlice: *mut SSlice = std::ptr::null_mut();
+    // S10.3a's tail, redesigned as it asked: the last coded slice is a
+    // remembered *index*, stamped after the loop — a pointer outliving the loop
+    // was only ever standing in for this `usize`.
+    let mut kiLastCodedSlot: Option<usize> = None;
     // `CWelsConstrainedSizeSlicingEncodingTask` derives from the load-balancing task,
     // not from `CWelsSliceEncodingTask`, so it stamps the slice time *unconditionally*
     // — `bUseLoadBalancing` does not gate this one (`wels_task_encoder.h:110`).
@@ -2124,31 +2130,28 @@ unsafe fn EncodeOnePartitionSizeLimited(
 
     // ---- ExecuteTaskConstrainedSize
     let iResult = (|| {
-        let pCurDq = current_layer(pCtx);
+        let pCurDq = current_layer_ref(pCtx).expect("the frame's current layer is stamped");
         let kiSliceIdxStep = (*pCtx).iActiveThreadsNum as i32;
         let kiPartitionId = iPartitionIdx % kiSliceIdxStep;
-        let kiFirstMbInPartition = (*pCurDq).FirstMbIdxOfPartition[kiPartitionId as usize];
-        let kiEndMbIdxInPartition = (*pCurDq).EndMbIdxOfPartition[kiPartitionId as usize];
-        let kiCodedSliceNumByThread =
-            (*pCurDq).sSliceBufferInfo[iBsSlot as usize].iCodedSliceNum;
-        pSlice = crate::encoder::svc_encode_slice::slice_in_bank(
-            &*pCurDq,
-            iBsSlot as usize,
-            kiCodedSliceNumByThread,
-        );
-        (*pSlice).sSliceHeaderExt.sSliceHeader.iFirstMbInSlice = kiFirstMbInPartition;
+        let kiFirstMbInPartition = pCurDq.FirstMbIdxOfPartition[kiPartitionId as usize];
+        let kiEndMbIdxInPartition = pCurDq.EndMbIdxOfPartition[kiPartitionId as usize];
+        let kiCodedSliceNumByThread = pBank.iCodedSliceNum as usize;
+        pBank.pSliceBuffer[kiCodedSliceNumByThread]
+            .sSliceHeaderExt
+            .sSliceHeader
+            .iFirstMbInSlice = kiFirstMbInPartition;
+        kiLastCodedSlot = Some(kiCodedSliceNumByThread);
 
         let iDiffMbIdx = kiEndMbIdxInPartition - kiFirstMbInPartition;
         if 0 == iDiffMbIdx {
-            (*pSlice).iSliceIdx = -1;
+            pBank.pSliceBuffer[kiCodedSliceNumByThread].iSliceIdx = -1;
             return ENC_RETURN_SUCCESS;
         }
 
         let mut iAnyMbLeftInPartition = iDiffMbIdx + 1;
         let mut iLocalSliceIdx = iPartitionIdx;
         while iAnyMbLeftInPartition > 0 {
-            let bNeedReallocate = (*pCurDq).sSliceBufferInfo[iBsSlot as usize].iCodedSliceNum
-                >= (*pCurDq).sSliceBufferInfo[iBsSlot as usize].iMaxSliceNum - 1;
+            let bNeedReallocate = pBank.iCodedSliceNum >= pBank.iMaxSliceNum - 1;
             if bNeedReallocate {
                 // **`mutexThreadSlcBuffReallocate` is gone — T7.C5**, and the C++ site
                 // it came from is `wels_task_encoder.cpp:258-261`. T7.B2 made the bank
@@ -2160,80 +2163,60 @@ unsafe fn EncodeOnePartitionSizeLimited(
                 // the fork), so there is nothing left to serialise. The lock's own note
                 // said it "retires with `pMemAlign`, not with the pool", and this is
                 // that.
-                let iRet = ReallocateSliceInThread(
+                let iRet = crate::encoder::svc_encode_slice::ReallocateSliceInThread(
                     pCtx,
-                    pCurDq,
                     (*pCtx).uiDependencyId as i32,
-                    iBsSlot,
+                    pBank,
                 );
                 if ENC_RETURN_SUCCESS != iRet {
                     return iRet;
                 }
             }
 
-            // **S10.3a: the size-limited loop keeps its raw, and the reason is the
-            // tail.** `FinishTask` below stamps `uiSliceConsumeTime` on **the last
-            // slice this partition coded**, which is what `pSlice` holds after the
-            // loop — so the pointer has to outlive each iteration. A per-iteration
-            // `&mut SSlice` cannot carry that, and stamping inside the loop instead
-            // would stamp *every* slice where the C++ stamps one. Converting this
-            // body needs the tail redesigned with its own referee, and it retires
-            // no allow on its own (the reallocation and the bank re-resolve stay),
-            // so it is left for step 3's dynamic half.
-            let mut pNext: *mut SSlice = std::ptr::null_mut();
-            let Some(pNextRef) = crate::encoder::svc_encode_slice::ResolveSliceInOwnBank(
-                pCtx,
-                iBsSlot,
-                iLocalSliceIdx,
-            ) else {
+            // **S11.34: the resolve is a split of the owned bank** — the
+            // current slot exclusively, the boundary's forward slot beside it,
+            // from one borrow (deblocking's `split_cur`, one level up). The
+            // borrow is taken *after* any growth above, which is S10.3a's whole
+            // objection answered; `tail.first_mut()` answers `None` exactly
+            // where the old walk answered null (the slot past the bank's end).
+            let kiCurSlot = pBank.iCodedSliceNum as usize;
+            if kiCurSlot >= pBank.pSliceBuffer.len() {
                 return ENC_RETURN_UNEXPECTED;
-            };
-            pNext = pNextRef;
-            pSlice = pNext;
-            let pSliceBs = std::ptr::addr_of_mut!((*pSlice).sSliceBs);
-            (*pSliceBs).sBsWrite = BsWriter::new();
+            }
+            let (kpHead, kpTail) = pBank.pSliceBuffer.split_at_mut(kiCurSlot + 1);
+            let pSlice = &mut kpHead[kiCurSlot];
+            let pNextSlice = kpTail.first_mut();
+            crate::encoder::svc_encode_slice::InitOneSliceInThread(pCtx, pSlice, iBsSlot, iLocalSliceIdx);
+            kiLastCodedSlot = Some(kiCurSlot);
+            pSlice.sSliceBs.sBsWrite = BsWriter::new();
 
             // S11.1b: the partition slot, subsliced per coded slice — re-taken
             // each iteration because `InitOneSliceInThread` re-resolves the
             // slice (and with it the claimed size) after every reallocation.
             // Same slot, same size the deep calls used to read for themselves;
             // see `EncodeOneSliceInJob` for the slot/size invariants.
-            debug_assert_eq!((*pSlice).uiBufferIdx as i32, iBsSlot, "the slice's claimed slot is this job's");
-            let kuiSize = (*pSlice).sSliceBs.uiSize;
+            debug_assert_eq!(pSlice.uiBufferIdx as i32, iBsSlot, "the slice's claimed slot is this job's");
+            let kuiSize = pSlice.sSliceBs.uiSize;
             let pSliceBsBuf = &mut pSlotBuf[..kuiSize as usize];
             let mut pCtxOutBs: Option<&mut BsWriter> = None;
 
             if bNeedPrefix {
-                WritePrefixNalForSlice(pCtx, &mut *pSlice, eNalRefIdc, eNalType, &mut *pSliceBsBuf);
+                WritePrefixNalForSlice(pCtx, pSlice, eNalRefIdc, eNalType, &mut *pSliceBsBuf);
             }
-            let pSliceBs = std::ptr::addr_of_mut!((*pSlice).sSliceBs);
-            WelsLoadNalForSlice(&mut *pSliceBs, eNalType as i32, eNalRefIdc as i32);
+            WelsLoadNalForSlice(&mut pSlice.sSliceBs, eNalType as i32, eNalRefIdc as i32);
 
-            debug_assert_eq!(iLocalSliceIdx, (*pSlice).iSliceIdx);
-            // **S11.33: the boundary's forward slot, resolved beside the
-            // current slice** — `AddSliceBoundary` used to walk the bank for
-            // it at fire time; the walk moves here, a sibling derivation of
-            // this worker's own bank (F71's discipline, and the realloc above
-            // guarantees the slot exists before coding starts). The index is
-            // the old walk's MT arm exactly: `iCodedSliceNum + 1`, read at the
-            // same moment the old code read it (the counter's increment is at
-            // the loop tail, after this call returns).
-            let pNextSliceRaw = crate::encoder::svc_encode_slice::slice_in_bank(
-                &*pCurDq,
-                iBsSlot as usize,
-                (*pCurDq).sSliceBufferInfo[iBsSlot as usize].iCodedSliceNum + 1,
-            );
-            let pNextSlice: Option<&mut SSlice> =
-                if pNextSliceRaw.is_null() { None } else { Some(&mut *pNextSliceRaw) };
-            let mut iRet = WelsCodeOneSlice(pCtx, &mut *pSlice, eNalType as i32, &mut *pSliceBsBuf, &mut pCtxOutBs, pMbs, pRestoreBuf.as_deref_mut(), pNextSlice);
+            debug_assert_eq!(iLocalSliceIdx, pSlice.iSliceIdx);
+            // S11.34: the forward slot is the split's other half — one borrow,
+            // no derivation, and the old MT index (`iCodedSliceNum + 1`) is the
+            // split point by construction.
+            let mut iRet = WelsCodeOneSlice(pCtx, pSlice, eNalType as i32, &mut *pSliceBsBuf, &mut pCtxOutBs, pMbs, pRestoreBuf.as_deref_mut(), pNextSlice);
             if ENC_RETURN_SUCCESS != iRet {
                 return iRet;
             }
-            let pSliceBs = std::ptr::addr_of_mut!((*pSlice).sSliceBs);
-            WelsUnloadNalForSlice(&mut *pSliceBs);
+            WelsUnloadNalForSlice(&mut pSlice.sSliceBs);
 
             let mut iSliceSize = 0i32;
-            iRet = WriteSliceBs(pCtx, &mut *pSlice, iLocalSliceIdx, &mut iSliceSize, &*pSliceBsBuf);
+            iRet = WriteSliceBs(pCtx, pSlice, iLocalSliceIdx, &mut iSliceSize, &*pSliceBsBuf);
             if ENC_RETURN_SUCCESS != iRet {
                 return iRet;
             }
@@ -2244,30 +2227,29 @@ unsafe fn EncodeOnePartitionSizeLimited(
             // the fork. `uiFilterIdc == 1` keeps the walk and the neighbour
             // reads inside the slice, hence inside the run; safe code, as
             // S11.26 scheduled.
-            if let Some(view) = crate::encoder::svc_encode_slice::layer_rec_view(&*pCurDq) {
+            if let Some(view) = crate::encoder::svc_encode_slice::layer_rec_view(pCurDq) {
                 pfDeblockingFilterSlice(
                     view,
-                    &(*pCurDq).sSliceEncCtx,
-                    &(*pCurDq).iCsStride,
-                    &mut *pSlice,
+                    &pCurDq.sSliceEncCtx,
+                    &pCurDq.iCsStride,
+                    pSlice,
                     pMbs,
                 );
             }
 
             iAnyMbLeftInPartition = kiEndMbIdxInPartition
-                - (*pCurDq).LastCodedMbIdxOfPartition[kiPartitionId as usize].load(Ordering::Relaxed);
+                - pCurDq.LastCodedMbIdxOfPartition[kiPartitionId as usize].load(Ordering::Relaxed);
             iLocalSliceIdx += kiSliceIdxStep;
-            // S11.11: the raw stays — this is a *fork* body holding
-            // `&sWelsEncCtx`, so no `&mut` to the context exists to resolve the
-            // layer through. The counter it bumps is the worker's own bank slot.
-            (*current_layer(pCtx)).sSliceBufferInfo[iBsSlot as usize].iCodedSliceNum += 1;
+            // S11.34: the counter is the owned bank's — the raw layer bump is
+            // gone with the storage it reached.
+            pBank.iCodedSliceNum += 1;
         }
         ENC_RETURN_SUCCESS
     })();
 
     // ---- FinishTask
-    if !pSlice.is_null() {
-        (*pSlice).uiSliceConsumeTime = (WelsTime() - iSliceStart) as u32;
+    if let Some(kiSlot) = kiLastCodedSlot {
+        pBank.pSliceBuffer[kiSlot].uiSliceConsumeTime = (WelsTime() - iSliceStart) as u32;
     }
 
     SliceJobResult { iResult, bInitFailed: false }
@@ -2283,9 +2265,7 @@ unsafe fn EncodeOnePartitionSizeLimited(
 /// # Safety
 /// As [`EncodeFixedSlicesForked`], and `iActiveThreadsNum` must be within the
 /// per-thread slice banks `InitSliceThreadInfo` sized.
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
-pub unsafe fn EncodeSizeLimitedSlicesForked(pCtx: &mut sWelsEncCtx, kiPartitionCnt: i32) -> i32 {
+pub fn EncodeSizeLimitedSlicesForked(pCtx: &mut sWelsEncCtx, kiPartitionCnt: i32) -> i32 {
     // T9.H4: the `is_null()` disjunct that opened this guard is gone — a
     // `&mut sWelsEncCtx` cannot be null, and every caller now holds one. The
     // remaining conditions are unchanged.
@@ -2362,6 +2342,19 @@ pub unsafe fn EncodeSizeLimitedSlicesForked(pCtx: &mut sWelsEncCtx, kiPartitionC
         .map(|k| std::mem::take(&mut pCtx.pDynamicBsBuffer[k]))
         .collect();
 
+    // **S11.34: the slice banks join the takes** — the last storage a fork body
+    // still reached raw (S11.21's own note names it: "it resolves from its own
+    // bank inside the fork, because that bank grows there"). Worker `k` owns
+    // bank `k` for the frame; growth is an owned `Vec` resize; restored after
+    // the join, grown size and coded slices carried.
+    let mut vTakenBanks: Vec<crate::encoder::svc_encode_slice::SSliceBufferInfo> = {
+        let pCurDq = crate::encoder::svc_encode_slice::current_layer_mut(pCtx)
+            .expect("the frame's current layer is stamped");
+        (0..iWidth as usize)
+            .map(|k| std::mem::take(&mut pCurDq.sSliceBufferInfo[k]))
+            .collect()
+    };
+
     let mut iErr = ENC_RETURN_SUCCESS;
     {
         let pCtx: &sWelsEncCtx = pCtx;
@@ -2390,20 +2383,20 @@ pub unsafe fn EncodeSizeLimitedSlicesForked(pCtx: &mut sWelsEncCtx, kiPartitionC
             }
         }
         let mut jobs: Vec<SliceJobHandle<'_>> = Vec::with_capacity(iWidth as usize);
-        for (((k, buf), mbs), dynbuf) in vTakenBsBufs
+        for ((((k, buf), mbs), dynbuf), bank) in vTakenBsBufs
             .iter_mut()
             .enumerate()
             .zip(vMbPerWorker)
             .zip(vTakenDynBufs.iter_mut())
+            .zip(vTakenBanks.iter_mut())
         {
             let k = k as i32;
-            // S11.21: the size-limited fork carries no carved slices — it
-            // resolves from its own bank inside the fork, because that bank
-            // grows there (`ResolveSliceInOwnBank`). S11.27: it does carry its
-            // partition's one macroblock window; S11.30 its restore scratch,
-            // `None` where the buffer was never allocated (the old null).
+            // S11.21: the size-limited fork carries no carved *slices* — S11.34
+            // carries the whole bank instead, owned, because it grows in-fork.
+            // S11.27: the partition's one macroblock window; S11.30 the restore
+            // scratch, `None` where the buffer was never allocated (the old null).
             let dynbuf = if dynbuf.is_empty() { None } else { Some(dynbuf.as_mut_slice()) };
-            jobs.push(SliceJobHandle::new(pCtx, buf.as_mut_slice(), Vec::new(), mbs, dynbuf, k, k, iWidth, kiPartitionCnt, true));
+            jobs.push(SliceJobHandle::new(pCtx, buf.as_mut_slice(), Vec::new(), mbs, dynbuf, Some(bank), k, k, iWidth, kiPartitionCnt, true));
         }
 
         std::thread::scope(|s| {
@@ -2418,6 +2411,7 @@ pub unsafe fn EncodeSizeLimitedSlicesForked(pCtx: &mut sWelsEncCtx, kiPartitionC
                         &mut *job.pBsBuf,
                         &mut job.pMbs[0],
                         job.pDynBsBuf.take(),
+                        job.pBank.take().expect("the size-limited job carries its bank"),
                     );
                     if !r.bInitFailed && r.iResult != ENC_RETURN_SUCCESS {
                         r.iResult
@@ -2449,6 +2443,15 @@ pub unsafe fn EncodeSizeLimitedSlicesForked(pCtx: &mut sWelsEncCtx, kiPartitionC
     }
     for (k, buf) in vTakenDynBufs.into_iter().enumerate() {
         pCtx.pDynamicBsBuffer[k] = buf;
+    }
+    {
+        // S11.34: the banks go back — grown size and coded slices carried, which
+        // is what `ReOrderSliceInLayer` and the NAL assembly read after this.
+        let pCurDq = crate::encoder::svc_encode_slice::current_layer_mut(pCtx)
+            .expect("the frame's current layer is stamped");
+        for (k, bank) in vTakenBanks.into_iter().enumerate() {
+            pCurDq.sSliceBufferInfo[k] = bank;
+        }
     }
 
     iErr

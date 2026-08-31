@@ -3883,59 +3883,14 @@ pub fn InitAllSlicesInThread(pCtx: &mut sWelsEncCtx) -> i32 {
     ENC_RETURN_SUCCESS
 }
 
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
-/// Stamps one slice for the frame it is about to code.
-///
-/// **S11.21: the slice arrives, it is not resolved here.** This used to reach
-/// the bank itself — `slice_in_bank`'s raw root, F71's shape and the last
-/// structural seam in the encoder — because the C's `InitOneSliceInThread`
-/// took a buffer index and looked the slice up. Its three callers are all fork
-/// bodies that *already know which slice is theirs*: the fork entries carve
-/// the bank before spawning (S10.4's pattern, and S11.1b's for the bitstream
-/// pool), so each worker holds `&mut SSlice`s no sibling can name. Resolution
-/// moved to where ownership is provable; what is left here is the stamping,
-/// which needs no `unsafe` at all.
-/// The size-limited fork's slice resolution — **S11.21's remainder**.
-///
-/// The fixed modes no longer need this: their bank is carved before the spawn
-/// and each worker holds its own `&mut SSlice`s. The size-limited mode cannot
-/// be carved the same way, because it **grows its bank inside the fork**
-/// (`ReallocateSliceInThread`), so a reference taken before the growth would
-/// name freed storage — the split S10.3a described and this checkpoint keeps.
-///
-/// **Its claim is weaker than the one that just retired, and that is the
-/// point.** F71's seam was the *fixed* modes, where every worker resolves bank
-/// **0** and two of them retagging that `Vec` at once is a race with nothing
-/// written. Here each worker resolves bank `kiSlcBuffIdx` — **its own slot**,
-/// by the same static partition that gives it a bitstream buffer — so no two
-/// workers name one bank at all. What remains is a per-worker `Vec` reached
-/// through a shared layer, which is the shape a future checkpoint closes by
-/// moving `sSliceBufferInfo[k]` out whole, the way S11.1b moved the buffers.
-///
-/// # Safety
-/// `kiSlcBuffIdx` must be this worker's own bank slot.
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
-pub unsafe fn ResolveSliceInOwnBank<'a>(
-    pCtx: &'a sWelsEncCtx,
-    kiSlcBuffIdx: i32,
-    kiSliceIdx: i32,
-) -> Option<&'a mut SSlice> {
-    let pCurDq = current_layer_ref(pCtx).expect("the frame's current layer is stamped");
-    let kiCodedNumInThread = pCurDq.sSliceBufferInfo[kiSlcBuffIdx as usize].iCodedSliceNum;
-    let slc_ptr = if pCurDq.bThreadSlcBufferFlag {
-        slice_in_bank(pCurDq, kiSlcBuffIdx as usize, kiCodedNumInThread)
-    } else {
-        slice_in_bank(pCurDq, 0, kiSliceIdx)
-    };
-    if slc_ptr.is_null() {
-        return None;
-    }
-    let pSlice = &mut *slc_ptr;
-    InitOneSliceInThread(pCtx, pSlice, kiSlcBuffIdx, kiSliceIdx);
-    Some(pSlice)
-}
+// **S11.34: `ResolveSliceInOwnBank` is deleted.** It minted `&mut SSlice` from
+// a *shared* layer on the claim "kiSlcBuffIdx must be this worker's own bank
+// slot" — true only by the static-partition argument. The size-limited job owns
+// its bank now (taken pre-fork beside the grid and the scratch), so the resolve
+// is `split_at_mut` at `iCodedSliceNum`: the current slot exclusively, the
+// boundary's forward slot beside it, and the claim is the compiler's. Its dead
+// arm (`bThreadSlcBufferFlag == false`, bank 0 by slice index) was unreachable
+// from its one caller — the flag is true exactly when the fork runs.
 
 pub fn InitOneSliceInThread(
     pCtx: &sWelsEncCtx,
@@ -4220,16 +4175,20 @@ pub fn CalculateNewSliceNum(
     ENC_RETURN_SUCCESS
 }
 
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
-pub unsafe fn ReallocateSliceInThread(
+/// **S11.34: safe — the worker owns the bank it grows.** The raw layer
+/// parameter carried exactly one storage this body touched (its own bank's
+/// counters, last-coded slice and buffer), and ownership makes the growth an
+/// ordinary `Vec` resize on an exclusive borrow. `CalculateNewSliceNum` reads
+/// the context shared (partition arrays, atomics) beside the bank's `&mut`
+/// with no conflict, because the bank is no longer *inside* the context — the
+/// pre-fork take is what makes that sentence true.
+pub fn ReallocateSliceInThread(
     pCtx: &sWelsEncCtx,
-    pDqLayer: *mut SDqLayer,
     kiDlayerIdx: i32,
-    KiSlcBuffIdx: i32,
+    pBank: &mut SSliceBufferInfo,
 ) -> i32 {
-    let iMaxSliceNum = (*pDqLayer).sSliceBufferInfo[KiSlcBuffIdx as usize].iMaxSliceNum;
-    let iCodedSliceNum = (*pDqLayer).sSliceBufferInfo[KiSlcBuffIdx as usize].iCodedSliceNum;
+    let iMaxSliceNum = pBank.iMaxSliceNum;
+    let iCodedSliceNum = pBank.iCodedSliceNum;
     let mut iMaxSliceNumNew = 0;
     let kuiSliceMode = (*pCtx)
         .param()
@@ -4237,11 +4196,12 @@ pub unsafe fn ReallocateSliceInThread(
         .sSliceArgument
         .uiSliceMode;
 
-    // S11.32: the last-coded slice's one wanted field, as a scalar — the held
-    // cursor and its null arm collapse into `get`'s bound (T9.E2b's arm kept).
-    let pBankRef = &(*pDqLayer).sSliceBufferInfo[KiSlcBuffIdx as usize];
-    let Some(kiLastCodedSliceIdx) =
-        pBankRef.pSliceBuffer.get((iCodedSliceNum - 1) as usize).map(|s| s.iSliceIdx)
+    // The last-coded slice's one wanted field, as a scalar — `get`'s bound is
+    // the old null arm (T9.E2b).
+    let Some(kiLastCodedSliceIdx) = pBank
+        .pSliceBuffer
+        .get((iCodedSliceNum - 1) as usize)
+        .map(|s| s.iSliceIdx)
     else {
         return ENC_RETURN_INVALIDINPUT;
     };
@@ -4250,10 +4210,6 @@ pub unsafe fn ReallocateSliceInThread(
         return iRet;
     }
 
-    // S11.32: the bank goes down as `&mut`, derived from this worker's own slot
-    // — the same place expression the reads above already walk, so no new
-    // aliasing shape; Phase B of the bank design replaces the raw layer with
-    // the taken bank itself and this derivation with a parameter.
     let kiMaxSliceBufferSize = (*pCtx).iSliceBufferSize[(*pCtx).uiDependencyId as usize];
     let kbIndependenceBsBuffer = (*pCtx).param().iMultipleThreadIdc > 1
         && kuiSliceMode != SliceMode::SM_SINGLE_SLICE;
@@ -4262,14 +4218,14 @@ pub unsafe fn ReallocateSliceInThread(
         kbIndependenceBsBuffer,
         (*pCtx).iNumRef0 as u8,
         (*pCtx).iGlobalQp,
-        &mut (*pDqLayer).sSliceBufferInfo[KiSlcBuffIdx as usize],
+        pBank,
         iMaxSliceNum,
         iMaxSliceNumNew,
     );
     if iRet != ENC_RETURN_SUCCESS {
         return iRet;
     }
-    (*pDqLayer).sSliceBufferInfo[KiSlcBuffIdx as usize].iMaxSliceNum = iMaxSliceNumNew;
+    pBank.iMaxSliceNum = iMaxSliceNumNew;
 
     ENC_RETURN_SUCCESS
 }
