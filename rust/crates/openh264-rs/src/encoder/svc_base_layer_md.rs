@@ -1272,12 +1272,7 @@ pub unsafe fn WelsMdInterFinePartitionVaa<'a>(
 /// `svc_base_layer_md.cpp:1423`. Motion-compensates the P_SKIP predictor and decides
 /// whether the macroblock can be coded as P_SKIP.
 ///
-/// # Safety
-/// All four pointers must be valid; `sMcFuncs`, `pfSampleSad`/`pfSampleSatd`,
-/// `pfDctFourT4` and `pfUpdateMbMv` must be assigned.
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
-pub unsafe fn WelsMdPSkipEnc(
+pub fn WelsMdPSkipEnc(
     pEncCtx: &sWelsEncCtx,
     pWelsMd: &mut SWelsMD<'_>,
     pCurMb: &mut SMB,
@@ -1316,11 +1311,13 @@ pub unsafe fn WelsMdPSkipEnc(
     // T9.H2: `&sWelsEncCtx`. The layer id is read through the same raw beside it —
     // both are shared reads, so the argument and the borrow coexist by construction
     // rather than by the hoist T9.G6 needed when the callee took a `&mut`.
-    let pStrideEncBlockOffset = crate::encoder::encoder_context::ctx_stride_enc_block_offset(
-        &*pEncCtx,
-        (*pEncCtx).uiDependencyId as usize,
-    );
-    let mut pEncBlockOffset: *const i32;
+    // S11.22: the 24-entry block-offset table as a slice, indexed at the two
+    // fixed positions this body uses.
+    let kpEncBlockOffset = pEncCtx
+        .pStrideTab
+        .as_ref()
+        .and_then(|tab| tab.EncBlockOffsets(pEncCtx.uiDependencyId as usize))
+        .expect("AllocStrideTables builds the block-offset table for every layer");
 
     let iSadCostLuma: i32;
     let mut iSadCostChroma: i32;
@@ -1446,20 +1443,20 @@ pub unsafe fn WelsMdPSkipEnc(
 
     if WelsTryPYskip(pEncCtx, pCurMb, pMbCache) {
         pEncMb = (*pMbCache).SPicData.mb_cursor_ro(encView, 1);
-        pEncBlockOffset = pStrideEncBlockOffset.add(16);
+
         let pDstCb = RecCursor::over_owned(&mut (*pMbCache).sSkipMb, 256, 8);
         (*pFunc).pfDctFourT4.expect("pfDctFourT4 unset")(
             &mut (*pMbCache).sCoeffLevel[256..],
-            &pEncMb.advance(*pEncBlockOffset as isize, 0),
+            &pEncMb.advance(kpEncBlockOffset[16] as isize, 0),
             &pDstCb,
         );
         if WelsTryPUVskip(pEncCtx, pCurMb, pMbCache, 1) {
             pEncMb = (*pMbCache).SPicData.mb_cursor_ro(encView, 2);
-            pEncBlockOffset = pStrideEncBlockOffset.add(20);
+
             let pDstCr = RecCursor::over_owned(&mut (*pMbCache).sSkipMb, 320, 8);
             (*pFunc).pfDctFourT4.expect("pfDctFourT4 unset")(
                 &mut (*pMbCache).sCoeffLevel[320..],
-                &pEncMb.advance(*pEncBlockOffset as isize, 0),
+                &pEncMb.advance(kpEncBlockOffset[20] as isize, 0),
                 &pDstCr,
             );
             if WelsTryPUVskip(pEncCtx, pCurMb, pMbCache, 2) {
