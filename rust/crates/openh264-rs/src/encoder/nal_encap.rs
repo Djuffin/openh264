@@ -102,42 +102,6 @@ impl Default for SWelsNalRaw {
     }
 }
 
-/// The one place that turns an encoder output buffer back into a slice.
-///
-/// SHIM(phase3) -> **the thread pool's own bitstream buffers, and nothing else
-/// now** — `SSliceThreading.pThreadBsBuffer[i]`, one raw allocation per worker,
-/// **Phase 7's** (F12/P10) with the pool that claims them. `BsWriter` is a position
-/// and nothing else, so the buffer has to be expressed at each write, and for those
-/// buffers it still means rebuilding a slice from a raw pointer and the `uiSize`
-/// recorded beside it. One helper does that arithmetic and nothing else does it,
-/// exactly as T3.1b's reader-side helper did until T3.3 deleted it.
-///
-/// **T3.6 took `SWelsEncoderOutput` off this path**: its buffer is a `Vec<u8>`,
-/// so its callers slice it directly and the length is `len()` rather than a
-/// field. **Phase 6 session B took `SWelsSliceBs.pBsBuffer` off it**: that field
-/// was a cache of `pThreadBsBuffer[uiBufferIdx]` and is gone; the three readers
-/// (`slice_bs_buffer`'s thread arm, the task's prefix NAL, `WriteSliceBs`) resolve
-/// the pool slot by index through `thread_bs_buffer` and come here for the slice.
-///
-/// **T3.5 narrowed what this guards.** The CABAC arithmetic coder used to hold
-/// its own `m_pBufStart`/`m_pBufCur`/`m_pBufEnd` pointer triple and reach the
-/// output without passing through here; its cursor is three `usize` offsets now,
-/// so both entropy coders write through this one boundary on the same
-/// convention. What remains on the far side is the *allocation*, not any cursor
-/// — which is precisely the residue T3.6 removes.
-///
-/// # Safety
-/// `ptr` must be non-null and point to `len` writable bytes that outlive `'a`, with
-/// no other live reference to them — which is what a claimed `pThreadBsBuffer[i]`
-/// plus the slice's `uiSize` is, and what the task-claiming invariant gives per
-/// thread.
-#[inline]
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
-pub unsafe fn bs_buffer<'a>(ptr: *mut u8, len: u32) -> &'a mut [u8] {
-    debug_assert!(!ptr.is_null(), "a writer's buffer must be allocated first");
-    unsafe { core::slice::from_raw_parts_mut(ptr, len as usize) }
-}
 
 /// Top-level frame bitstream output container and NAL descriptor list manager.
 ///

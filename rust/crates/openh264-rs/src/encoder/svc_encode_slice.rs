@@ -1569,7 +1569,7 @@ pub use crate::encoder::encoder_context::SPicData;
 pub use crate::encoder::encoder_context::SMVComponentUnit;
 pub use crate::encoder::nal_encap::SNalUnitHeaderExt;
 pub use crate::encoder::nal_encap::SNalUnitHeader;
-pub use crate::encoder::nal_encap::{bs_buffer, SWelsSliceBs};
+pub use crate::encoder::nal_encap::SWelsSliceBs;
 pub use crate::encoder::param_svc::SWelsSPS;
 pub use crate::encoder::param_svc::SWelsPPS;
 pub use crate::encoder::param_svc::SSubsetSps;
@@ -3379,42 +3379,6 @@ pub static g_pWelsWriteSliceHeader: [PWelsSliceHeaderWriteFunc; 2] = [
     WelsSliceHeaderWrite_c,
     WelsSliceHeaderExtWrite_c,
 ];
-
-/// The thread bitstream buffer a slice was claimed into:
-/// `pSliceThreading->pThreadBsBuffer[uiBufferIdx]`, `uiSize` bytes.
-///
-/// This replaces `SWelsSliceBs.pBsBuffer`, which was a cache of exactly this:
-/// both C++ stamp sites (`InitOneSliceInThread`, `SetOneSliceBsBufferUnderMultithread`)
-/// wrote `pThreadBsBuffer[idx]` with the same `idx` the first stores in
-/// `uiBufferIdx`. Resolved at each use, the pool's slot is named by index and no
-/// struct aliases its allocation. The pool itself is **Phase 7's** (F12/P10) — see
-/// `bs_buffer`, whose one remaining job this is.
-///
-/// # Safety
-/// `pEncCtx` and `(*pEncCtx).pSliceThreading` must be live, and `kiSlot` must be a
-/// thread slot a slice was claimed into (`InitOneSliceInThread`), with `kuiSize`
-/// that slice's `sSliceBs.uiSize`.
-///
-/// **T9.E6**: the two slice reads became the two values they read — the slot and
-/// the size — so this function's parameters no longer name `SSlice` at all
-/// (the D-session playbook's `usize`-offset rule, S54's shape).
-#[inline]
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
-pub unsafe fn thread_bs_buffer<'a>(pEncCtx: &'a sWelsEncCtx, kiSlot: usize, kuiSize: u32) -> &'a mut [u8] {
-    // **T7.C5, and the spelling is F71's.** The buffer is owned now, so the root has
-    // to come out of a `Vec` — and it comes out through `addr_of!` on *this worker's
-    // element*, never through a reborrow of the array or the struct that every worker
-    // shares. `as_ptr() as *mut u8` returns the buffer's own provenance without a
-    // `Unique` retag on the three-word header, which is the difference between a
-    // read two workers can make at once and a race.
-    // (S3.B1: the block resolves through `ctx_slice_threading_raw` — the slot
-    // read keeps the answer's provenance the heap block's own, so this worker's
-    // element cursor survives whatever happens to the context.)
-    let pSmt = crate::encoder::slice_multi_threading::ctx_slice_threading_raw(pEncCtx);
-    let v = std::ptr::addr_of!((*pSmt).pThreadBsBuffer[kiSlot]);
-    bs_buffer((*v).as_ptr() as *mut u8, kuiSize)
-}
 
 /// The CABAC restore buffer for one picture partition —
 /// `sWelsEncCtx::pDynamicBsBuffer[kiPartitionId]`, **owned since T7.C5**.
