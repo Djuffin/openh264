@@ -932,19 +932,20 @@ pub unsafe fn ctx_vpp_raw<'a>(
 /// direction is `&mut`-shaped derivations, and there are none here), so this is the
 /// route for every fork-reachable read.
 ///
-/// # Safety
-/// `pCtx` must point to a live encoder context whose `pVpp` is `Some`.
 #[inline]
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
-pub unsafe fn ctx_vpp_ref<'a>(
-    pCtx: *const sWelsEncCtx,
-) -> &'a crate::encoder::wels_preprocess::CWelsPreProcess {
-    let pVpp = std::ptr::read(
-        std::ptr::addr_of!((*pCtx).pVpp)
-            as *const *const crate::encoder::wels_preprocess::CWelsPreProcess,
-    );
-    &*pVpp
+pub fn ctx_vpp_ref(
+    pCtx: &sWelsEncCtx,
+) -> &crate::encoder::wels_preprocess::CWelsPreProcess {
+    // **S11.2f: the slot read retires for the *shared* half.** F71's spelling —
+    // reading the `Box`'s slot as a pointer value — exists so a derivation
+    // survives later `&mut` retags of the context, and so that no worker
+    // autorefs a field every worker shares. Neither applies to a shared borrow:
+    // N workers may hold `&pCtx.pVpp` at once (that is what makes `sWelsEncCtx:
+    // Sync` useful), and this is the same `as_deref()` S10.13 established for
+    // `pSliceThreading`. The `&mut` half (`ctx_vpp_raw`) keeps its raw.
+    pCtx.pVpp
+        .as_deref()
+        .expect("the preprocessor is built by WelsInitEncoderExt")
 }
 
 /// The coding parameters **as a raw pointer, read out of the `Box`'s slot** — the
@@ -1777,24 +1778,6 @@ impl sWelsEncCtx {
         }
     }
 
-    /// The video-analysis block **downcast to its screen-content extension** —
-    /// `static_cast<SVAAFrameInfoExt*>(pCtx->pVaa)`, upstream's spelling.
-    ///
-    /// **Named once here so the cast is not fifteen separate claims.** Every
-    /// consumer is inside the `SCREEN_CONTENT(dormant: Phase 10)` fence: the
-    /// screen strategies (`RefStrategyKind::Screen`/`LosslessWithLtr`), the SCC
-    /// rate-control arms, and `pfSetScrollingMv`'s judging arm — none of which a
-    /// camera-usage preset can select, and the port never installs the one
-    /// function that would allocate an `Ext` in the first place
-    /// (`RequestMemoryVaaScreen`, F177). So `pVaa` is an `SVAAFrameInfo` and
-    /// nothing else, the cast reads past the end of that allocation, and the
-    /// arms are kept **compiling** rather than kept *correct* — Phase 10's job,
-    /// which is what the tag says.
-    #[inline]
-    // unsafe-cat: SCREEN_CONTENT(dormant)
-    pub fn vaa_ext(&self) -> *mut SVAAFrameInfoExt {
-        self.vaa_ptr().cast()
-    }
 
     /// The screen-content frame complexity — **the one read the dormant cast is
     /// made for, named once so it is not six separate claims** (S10.5a').
@@ -1814,33 +1797,53 @@ impl sWelsEncCtx {
     /// changes — it is exactly as dormant and exactly as wrong as it was, and
     /// Phase 10 now has one site to fix instead of six.
     ///
-    /// # Safety
-    /// **Unsound whenever it is reached**, by construction — see
-    /// [`vaa_ext`](Self::vaa_ext). Every caller is inside the
-    /// `SCREEN_CONTENT(dormant)` fence, which no camera-usage preset can select.
     #[inline]
-    // unsafe-cat: SCREEN_CONTENT(dormant)
-    #[allow(unsafe_code)]
     pub fn vaa_ext_screen_frame_complexity(&self) -> i64 {
-        unsafe { (*self.vaa_ext()).sComplexityScreenParam.iFrameComplexity }
+        // S11.3: safe, and the answer is unchanged for every reachable state —
+        // `None` in this port (F177, see `vaa_ext_ref`), and 0 is what the six
+        // rate-control readers already treat as "no screen complexity measured".
+        self.vaa_ext_ref()
+            .map_or(0, |ext| ext.sComplexityScreenParam.iFrameComplexity)
     }
 
-    /// [`vaa_ext`](Self::vaa_ext) for its **one** writer, `AnalyzePictureComplexity`'s
-    /// screen arm (`wels_preprocess.rs`), which takes `&mut
-    /// SVAAFrameInfoExt::sComplexityScreenParam`.
+
+    /// The screen-content extension of the video-analysis block, **safely** —
+    /// S11.3's replacement for [`vaa_ext`](Self::vaa_ext)'s downcast
+    /// (decision D-scope-6).
     ///
-    /// It exists so that arm's pointer is derived through a `&mut self` rather
-    /// than through [`vaa_ext`](Self::vaa_ext)'s shared root: a write through a
-    /// `SharedReadOnly`-derived raw is UB the moment it is driven, and dormant
-    /// code should not be made *newly* wrong by the conversion that stops
-    /// driving it. Single-threaded only, like every other `*_mut` here.
+    /// **It answers `None`, and that is the whole point.** Upstream reaches the
+    /// extension with `static_cast<SVAAFrameInfoExt*>(pCtx->pVaa)`, which is
+    /// sound there because the screen-content path allocates an
+    /// `SVAAFrameInfoExt` and stores its address in `pVaa`. **This port never
+    /// calls `RequestMemoryVaaScreen`** (F177), so `pVaa` is always a plain
+    /// `Box<SVAAFrameInfo>` and the cast reads past the end of its allocation —
+    /// undefined, and reachable only from configurations the port cannot
+    /// select. The C-style downcast is therefore not merely dormant, it is
+    /// *unrepresentable* in the storage this port has, and the honest safe form
+    /// says so by construction rather than by a comment on an `unsafe` block.
+    ///
+    /// **What a future screen-content effort inherits.** Every consumer keeps
+    /// its shape — the reads, the branches, the arithmetic are line-for-line
+    /// what upstream does, now behind `if let Some(ext)`. Making them live is
+    /// one change *here*: give the context storage that can hold either form
+    /// (`enum { Base(Box<SVAAFrameInfo>), Screen(Box<SVAAFrameInfoExt>) }`) and
+    /// return the `Screen` arm. Nothing at the twenty-odd call sites moves.
+    ///
+    /// The `#[allow(unreachable_code)]`-shaped dead branches this leaves at the
+    /// call sites are deliberate and are the record of an unported feature.
     #[inline]
-    // unsafe-cat: SCREEN_CONTENT(dormant)
-    pub fn vaa_ext_mut(&mut self) -> *mut SVAAFrameInfoExt {
-        match self.pVaa.as_deref_mut() {
-            Some(v) => (v as *mut SVAAFrameInfo).cast(),
-            None => std::ptr::null_mut(),
-        }
+    pub fn vaa_ext_ref(&self) -> Option<&SVAAFrameInfoExt> {
+        // `pVaa` cannot hold an `SVAAFrameInfoExt`: its type is
+        // `Option<Box<SVAAFrameInfo>>` and the only allocator of the extension
+        // (`RequestMemoryVaaScreen`) is unported. There is nothing to borrow.
+        None
+    }
+
+    /// [`vaa_ext_ref`](Self::vaa_ext_ref) for the extension's one writer,
+    /// `AnalyzePictureComplexity`'s screen arm. `None` for the same reason.
+    #[inline]
+    pub fn vaa_ext_ref_mut(&mut self) -> Option<&mut SVAAFrameInfoExt> {
+        None
     }
 }
 

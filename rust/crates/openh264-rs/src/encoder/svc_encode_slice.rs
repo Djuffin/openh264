@@ -990,12 +990,8 @@ pub fn ctx_ref_pic<'a>(pCtx: &'a sWelsEncCtx) -> Option<&'a SPicture> {
 /// preprocessor. `SDqLayer::pRefOri` is the one field that holds either; see
 /// [`PicRef`]. Shared only: the exclusive form is deleted (see above).
 ///
-/// # Safety
-/// As [`ctx_ref_pic`].
 #[inline]
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
-pub unsafe fn ctx_pic_ref<'a>(pCtx: &'a sWelsEncCtx, r: PicRef) -> Option<&'a SPicture> {
+pub fn ctx_pic_ref<'a>(pCtx: &'a sWelsEncCtx, r: PicRef) -> Option<&'a SPicture> {
     match r {
         PicRef::Rec(id) => (*pCtx)
             .ref_list((*pCtx).uiDependencyId as usize)
@@ -1813,9 +1809,7 @@ pub fn WelsSliceHeaderScalExtInit(pCurLayer: Option<&SDqLayer>, pSlice: &mut SSl
     }
 }
 
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
-pub unsafe fn WelsSliceHeaderExtInit(pEncCtx: &sWelsEncCtx, pCurLayer: Option<&SDqLayer>, pSlice: &mut SSlice) {
+pub fn WelsSliceHeaderExtInit(pEncCtx: &sWelsEncCtx, pCurLayer: Option<&SDqLayer>, pSlice: &mut SSlice) {
     // **S7.A5**: the `is_null()` guard and its early return retire with the
     // parameter — every context reaching this body comes from a `&mut sWelsEncCtx`
     // held by one of the three fork entry points or the frame loop, never a null.

@@ -1295,9 +1295,13 @@ pub unsafe fn UpdateBlockStatic(pCtx: &mut sWelsEncCtx) {
     // survived that (F71/F211). Both fields wanted here are `Copy` — an `i32`
     // and a raw `*mut u8` — so they are read out before the loop and the
     // derivation never spans the `&mut`.
-    let pVaaExt = pCtx.vaa_ext();
-    let iVaaBestRefFrameNum = (*pVaaExt).iVaaBestRefFrameNum;
-    let pVaaBestBlockStaticIdc = (*pVaaExt).pVaaBestBlockStaticIdc;
+    // S11.3: `None` in this port (F177) — the screen path's best-reference
+    // candidates do not exist, so the walk below has nothing to consider.
+    let Some(pVaaExt) = pCtx.vaa_ext_ref() else {
+        return;
+    };
+    let iVaaBestRefFrameNum = pVaaExt.iVaaBestRefFrameNum;
+    let pVaaBestBlockStaticIdc = pVaaExt.pVaaBestBlockStaticIdc;
     // §4.6, reorder: the roots and scalars first, then the list per iteration,
     // held only across the two reads that need it. **S3.B1**: the vpp is *taken*
     // for the loop — the box moves out of the context, so the per-iteration
@@ -1639,7 +1643,9 @@ pub unsafe fn WelsBuildRefListScreen(
     // below calls `GetRefFrameInfo`, which reaches the same block again — and
     // `vaa_ext`'s answer is a child of a shared retag now, not the slot read that
     // outlived every later derivation (F71/F211).
-    let iNumOfAvailableRef = (*pCtx.vaa_ext()).iNumOfAvailableRef;
+    // S11.3: `None` in this port (F177); zero available screen references is
+    // the value every camera preset already computes here.
+    let iNumOfAvailableRef = pCtx.vaa_ext_ref().map_or(0, |ext| ext.iNumOfAvailableRef);
     pCtx.iNumRef0 = 0;
 
     if pCtx.eSliceType != EWelsSliceType::I_SLICE {

@@ -1612,9 +1612,7 @@ impl CWelsPreProcess {
         self.m_pSpatialPic[kiDidx as usize][iRefTemporalIdx as usize]
     }
 
-    // unsafe-cat: SCREEN_CONTENT(dormant)
-    #[allow(unsafe_code)]
-    pub unsafe fn GetBestRefPicScreen(
+    pub fn GetBestRefPicScreen(
         &self,
         // **T9.H2, F192.** The context is a parameter now, where this used to reach
         // it through `self.m_pEncCtx`. Miri calls that read Undefined Behavior: a
@@ -1630,11 +1628,13 @@ impl CWelsPreProcess {
         _kiDidx: i32,
         _iRefTemporalIdx: i32,
     ) -> Option<SrcPicId> {
-        let pVaaExt = pCtx.vaa_ext();
+        // S11.3: `None` in this port (F177) — there are no screen best-reference
+        // candidates, so there is no candidate picture to name.
+        let pVaaExt = pCtx.vaa_ext_ref()?;
         let pBest = if bSceneLtr {
-            &(*pVaaExt).sVaaLtrBestRefCandidate[0]
+            &pVaaExt.sVaaLtrBestRefCandidate[0]
         } else {
-            &(*pVaaExt).sVaaStrBestRefCandidate[0]
+            &pVaaExt.sVaaStrBestRefCandidate[0]
         };
         self.m_pSpatialPic[0][pBest.iSrcListIdx as usize]
     }
@@ -2298,9 +2298,7 @@ impl CWelsPreProcess {
         eSceneChangeIdc == ESceneChangeIdc::LARGE_CHANGED_SCENE
     }
 
-    // unsafe-cat: port-raw(Phase 9)
-    #[allow(unsafe_code)]
-    pub unsafe fn DetectSceneChange(
+    pub fn DetectSceneChange(
         &mut self,
         // T9.H2, F192: threaded from `SingleLayerPreprocess`, which already holds it,
         // so the screen arm below can stop reading `self.m_pEncCtx`. The video arm
@@ -2383,9 +2381,7 @@ impl CWelsPreProcess {
         sSceneChangeDetectResult.eSceneChangeIdc
     }
 
-    // unsafe-cat: port-raw(Phase 9)
-    #[allow(unsafe_code)]
-    unsafe fn DetectSceneChangeScreen(
+    fn DetectSceneChangeScreen(
         &mut self,
         // T9.H2, F192 — see `GetBestRefPicScreen`.
         pCtx: &mut sWelsEncCtx,
@@ -2400,7 +2396,16 @@ impl CWelsPreProcess {
 
         // A7, §4.6 reorder: four scalars out of the parameter block, none of them
         // held across the context calls below.
-        let pVaaExt = pCtx.vaa_ext();
+        // S11.3: `None` in this port (F177). This body both reads the screen
+        // candidates and writes them back, so it takes the mutable accessor;
+        // with no extension it takes the same exit `iTargetDid != 0` does two
+        // lines down, which is this screen arm's established "no usable scene
+        // analysis" answer.
+        if pCtx.vaa_ext_ref().is_none() {
+            return ESceneChangeIdc::LARGE_CHANGED_SCENE;
+        }
+        // §4.6, reorder: the scalar comes out before the extension's `&mut`.
+        let kiMvRange = pCtx.iMvRange;
         let iTargetDid = pCtx.param().iSpatialLayerNum - 1;
         if iTargetDid != 0 {
             return ESceneChangeIdc::LARGE_CHANGED_SCENE;
@@ -2476,7 +2481,7 @@ impl CWelsPreProcess {
         // the method is untranslated and its sites below say so.
 
         for iScdIdx in 0..iAvailableRefNum {
-            let pCurBlockStaticPointer = (*pVaaExt).pVaaBlockStaticIdc[iScdIdx as usize];
+            let pCurBlockStaticPointer = pCtx.vaa_ext_ref_mut().expect("guarded at this body's head").pVaaBlockStaticIdc[iScdIdx as usize];
             let mut sSceneChangeResult = SSceneChangeResult::default();
             sSceneChangeResult.eSceneChangeIdc = ESceneChangeIdc::SIMILAR_SCENE;
             sSceneChangeResult.pStaticBlockIdc = pCurBlockStaticPointer.expose_provenance();
@@ -2491,7 +2496,7 @@ impl CWelsPreProcess {
             let bIsClosestLtrFrame =
                 self.src_id(idRefPic).iLongTermPicNum == iClosestLtrFrameNum;
             if iScdIdx == 0 {
-                let pScrollDetectInfo = &mut (*pVaaExt).sScrollDetectInfo;
+                let pScrollDetectInfo = &mut pCtx.vaa_ext_ref_mut().expect("guarded at this body's head").sScrollDetectInfo;
                 *pScrollDetectInfo = SScrollDetectionParam::default();
 
                 // METHOD_SCROLL_DETECTION: untranslated (`crate::processing`). The
@@ -2505,14 +2510,14 @@ impl CWelsPreProcess {
                         if pScrollDetectInfo.bScrollDetectFlag {
                             pScrollDetectInfo.iScrollMvX = pScrollDetectInfo
                                 .iScrollMvX
-                                .clamp(-(*pCtx).iMvRange, (*pCtx).iMvRange);
+                                .clamp(-kiMvRange, kiMvRange);
                             pScrollDetectInfo.iScrollMvY = pScrollDetectInfo
                                 .iScrollMvY
-                                .clamp(-(*pCtx).iMvRange, (*pCtx).iMvRange);
+                                .clamp(-kiMvRange, kiMvRange);
                         }
                     }
                 }
-                sSceneChangeResult.sScrollResult = (*pVaaExt).sScrollDetectInfo;
+                sSceneChangeResult.sScrollResult = pCtx.vaa_ext_ref_mut().expect("guarded at this body's head").sScrollDetectInfo;
             }
 
             // METHOD_SCENE_CHANGE_DETECTION_SCREEN: untranslated (`crate::processing`);
@@ -2562,17 +2567,17 @@ impl CWelsPreProcess {
             ESceneChangeIdc::SIMILAR_SCENE
         };
 
-        self.SaveBestRefToVaa(&sLtrSaved, &mut (*pVaaExt).sVaaStrBestRefCandidate[0]);
+        self.SaveBestRefToVaa(&sLtrSaved, &mut pCtx.vaa_ext_ref_mut().expect("guarded at this body's head").sVaaStrBestRefCandidate[0]);
         if let Some(id) = sLtrSaved.pRefPicture {
-            (*pVaaExt).iVaaBestRefFrameNum = self.src_id(id).iFrameNum;
+            pCtx.vaa_ext_ref_mut().expect("guarded at this body's head").iVaaBestRefFrameNum = self.src_id(id).iFrameNum;
         }
-        (*pVaaExt).pVaaBestBlockStaticIdc = sLtrSaved.pBestBlockStaticIdc;
+        pCtx.vaa_ext_ref_mut().expect("guarded at this body's head").pVaaBestBlockStaticIdc = sLtrSaved.pBestBlockStaticIdc;
 
         if iAvailableSceneRefNum > 0 {
-            self.SaveBestRefToVaa(&sSceneLtrSaved, &mut (*pVaaExt).sVaaLtrBestRefCandidate[0]);
+            self.SaveBestRefToVaa(&sSceneLtrSaved, &mut pCtx.vaa_ext_ref_mut().expect("guarded at this body's head").sVaaLtrBestRefCandidate[0]);
         }
 
-        (*pVaaExt).iNumOfAvailableRef = 1;
+        pCtx.vaa_ext_ref_mut().expect("guarded at this body's head").iNumOfAvailableRef = 1;
         iVaaFrameSceneChangeIdc
     }
 
@@ -2825,9 +2830,7 @@ impl CWelsPreProcess {
         None
     }
 
-    // unsafe-cat: port-raw(Phase 9)
-    #[allow(unsafe_code)]
-    pub unsafe fn AnalyzePictureComplexity(
+    pub fn AnalyzePictureComplexity(
         &mut self,
         pCtx: &mut sWelsEncCtx,
         pCurPicture: Option<SrcPicId>,
@@ -2863,11 +2866,12 @@ impl CWelsPreProcess {
 
         let pSvcParam = pCtx.param_mut();
         if (*pSvcParam).iUsageType == EUsageType::SCREEN_CONTENT_REAL_TIME {
-            let pVaaExt = pCtx.vaa_ext_mut();
-            let sComplexityAnalysisParam = &mut (*pVaaExt).sComplexityScreenParam;
+            // S11.3: `None` in this port (F177) — the extension's complexity
+            // block does not exist, so the screen arm's analysis has nothing to
+            // write into. This is the extension's **one writer**, and it is the
+            // site a future screen-content effort makes live first.
             // §4.6, reorder: the slice type is read before the writer's `&mut`.
             let eSliceType = pCtx.eSliceType;
-            let pWelsSvcRc = pCtx.rc_at_mut(kiDependencyId as usize);
 
             let _iComplexityAnalysisMode = if eSliceType == EWelsSliceType::P_SLICE {
                 GOM_SAD
@@ -2877,13 +2881,28 @@ impl CWelsPreProcess {
                 return;
             };
 
-            (*pWelsSvcRc).pGomForegroundBlockNum.fill(0);
-            (*pWelsSvcRc).pCurrentFrameGomSad.fill(0);
+            // S11.3, §4.6: the rate controller's work and the values the
+            // extension needs from it come first, and its borrow ends before
+            // the extension's begins — they are two `&mut` of one context, the
+            // split S11.2c's `rc_and_current_layer_mut` makes for the layer.
+            // Ordering suffices here because nothing reads the two at once.
+            let (kpGomComplexity, kiGomNumInFrame) = {
+                let pWelsSvcRc = pCtx.rc_at_mut(kiDependencyId as usize);
+                pWelsSvcRc.pGomForegroundBlockNum.fill(0);
+                pWelsSvcRc.pCurrentFrameGomSad.fill(0);
+                (pWelsSvcRc.gom_sad_ptr(), pWelsSvcRc.iGomSize)
+            };
+            let kiIdrFlag = if eSliceType == EWelsSliceType::I_SLICE { 1 } else { 0 };
+
+            let Some(pVaaExt) = pCtx.vaa_ext_ref_mut() else {
+                return;
+            };
+            let sComplexityAnalysisParam = &mut pVaaExt.sComplexityScreenParam;
 
             sComplexityAnalysisParam.iFrameComplexity = 0;
-            sComplexityAnalysisParam.pGomComplexity = (*pWelsSvcRc).gom_sad_ptr();
-            sComplexityAnalysisParam.iGomNumInFrame = (*pWelsSvcRc).iGomSize;
-            sComplexityAnalysisParam.iIdrFlag = if pCtx.eSliceType == EWelsSliceType::I_SLICE { 1 } else { 0 };
+            sComplexityAnalysisParam.pGomComplexity = kpGomComplexity;
+            sComplexityAnalysisParam.iGomNumInFrame = kiGomNumInFrame;
+            sComplexityAnalysisParam.iIdrFlag = kiIdrFlag;
             sComplexityAnalysisParam.iMbRowInGom = GOM_H_SCC;
             sComplexityAnalysisParam.sScrollResult.bScrollDetectFlag = false;
             sComplexityAnalysisParam.sScrollResult.iScrollMvX = 0;
@@ -3019,12 +3038,7 @@ impl CWelsPreProcess {
     /// port previously declared this only as a vtable entry in `ref_list_mgr_svc.rs`
     /// with no body behind it.
     ///
-    /// # Safety
-    /// `pCtx`'s `pSvcParam`/`pVaa` and the selected `m_pSpatialPic` entry must be
-    /// valid, as in C++ where all three are dereferenced unconditionally.
-    // unsafe-cat: port-raw(Phase 9)
-    #[allow(unsafe_code)]
-    pub unsafe fn GetRefFrameInfo(
+    pub fn GetRefFrameInfo(
         &mut self,
         // T9.H2, F192 — see `GetBestRefPicScreen`. This is the one of the four whose
         // caller is reachable-shaped: `ref_list_mgr_svc.rs`'s `WelsBuildRefListScreen`
@@ -3036,11 +3050,15 @@ impl CWelsPreProcess {
         pRefOri: &mut Option<SrcPicId>,
     ) -> i32 {
         let iTargetDid = pCtx.param().iSpatialLayerNum - 1;
-        let pVaaExt = pCtx.vaa_ext();
+        // S11.3: `None` in this port (F177) — no screen candidates, so this
+        // reports the "no reference chosen" result its callers already handle.
+        let Some(pVaaExt) = pCtx.vaa_ext_ref() else {
+            return 0;
+        };
         let pBestRefCandidateParam = if bCurrentFrameIsSceneLtr {
-            &(*pVaaExt).sVaaLtrBestRefCandidate[iRefIdx as usize]
+            &pVaaExt.sVaaLtrBestRefCandidate[iRefIdx as usize]
         } else {
-            &(*pVaaExt).sVaaStrBestRefCandidate[iRefIdx as usize]
+            &pVaaExt.sVaaStrBestRefCandidate[iRefIdx as usize]
         };
         let pPic =
             self.m_pSpatialPic[iTargetDid as usize][pBestRefCandidateParam.iSrcListIdx as usize];
