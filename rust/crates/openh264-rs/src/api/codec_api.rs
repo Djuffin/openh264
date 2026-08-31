@@ -1116,15 +1116,36 @@ pub type WelsTraceCallback =
 ///
 /// This crate never dereferences the handle — T8.B10's reason for `c_void` is
 /// unchanged, and `deliver` hands it straight back to the caller untouched.
+///
+/// # S10.10: the handle is an **address**, and the type says so
+///
+/// It was `*mut c_void`, and that one field made `SLogContext` — and therefore
+/// `sWelsEncCtx`, which embeds it — **`!Sync`**, which is the last thing standing
+/// between `SliceJobHandle` and carrying a reference instead of a raw across the
+/// fork. Nothing here dereferences it, as the paragraph above already said; it is
+/// an opaque token this crate receives from the application and hands back.
+///
+/// So it is stored as its address. `usize` is `Sync` and `Send` on its own merits,
+/// no `unsafe impl` is minted (decision D1 pins the tree's hand-written ones at
+/// exactly two, and a trace handle is not the place to spend that), and
+/// `repr(transparent)` over a pointer-width integer keeps `SLogContext`'s byte
+/// image **identical** — which is the property the paragraph above says matters
+/// more than usual.
+///
+/// The round trip uses the strict-provenance pair, `expose_provenance` in and
+/// `with_exposed_provenance_mut` out, rather than a bare `as` cast: the pointer
+/// this returns goes straight to a C callback that will use it, so the exposure
+/// has to be the sanctioned one rather than an integer cast Miri reports as a
+/// guess.
 #[repr(transparent)]
 #[derive(Copy, Clone, Debug)]
-pub struct TraceUserCtx(*mut c_void);
+pub struct TraceUserCtx(usize);
 
 impl Default for TraceUserCtx {
     /// No handle installed. `SLogContext::default()` is all-zero by design, and a
     /// null handle is what the reference's `memset` leaves.
     fn default() -> Self {
-        Self(std::ptr::null_mut())
+        Self(0)
     }
 }
 
@@ -1133,7 +1154,10 @@ impl TraceUserCtx {
     /// `ENCODER_OPTION_TRACE_CALLBACK_CONTEXT` or the decoder's equivalent.
     #[inline]
     pub fn from_abi(p: *mut c_void) -> Self {
-        Self(p)
+        // `expose_provenance`, not `as usize`: the address is handed back to C at
+        // `deliver`, so the provenance has to be exposed here for that pointer to
+        // be usable rather than merely numerically equal.
+        Self(p.expose_provenance())
     }
 
     /// Invoke the caller's sink — the one C-ABI call this handle exists for, and the
@@ -1152,7 +1176,8 @@ impl TraceUserCtx {
         level: i32,
         line: &std::ffi::CStr,
     ) {
-        unsafe { pfLog(self.0, level, line.as_ptr()) };
+        let ctx: *mut c_void = std::ptr::with_exposed_provenance_mut(self.0);
+        unsafe { pfLog(ctx, level, line.as_ptr()) };
     }
 }
 
