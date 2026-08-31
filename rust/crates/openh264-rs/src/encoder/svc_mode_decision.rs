@@ -1146,7 +1146,6 @@ pub unsafe extern "C" fn WelsMdI16x16(
     // one bit — which 256-byte half of `sMemPredMb` the search last wrote — and
     // `iIdx` already *is* that bit, as the tail of this function has always said.
     // With the destination an offset, the pointers have nothing left to carry.
-    let pEnc = (*pMbCache).SPicData.mb_cursor(&(*pCurDqLayer).pEncData, &(*pCurDqLayer).iEncStride, 0);
     let view = layer_rec_view(pCurDqLayer)
         .expect("the layer's reconstruction view is built for this frame");
     let iLineSizeEnc = (*pCurDqLayer).iEncStride[0];

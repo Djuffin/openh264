@@ -2359,9 +2359,10 @@ pub unsafe fn WelsInitCurrentLayer(pCtx: &mut sWelsEncCtx, _kiWidth: i32, _kiHei
     (*pCurDq).pEncView =
         Some(crate::encoder::rec_view::RoPicView::build((*pSrcPool).get(idEnc)));
 
-    (*pCurDq).pEncData[0] = pEncPic.pData[0];
-    (*pCurDq).pEncData[1] = pEncPic.pData[1];
-    (*pCurDq).pEncData[2] = pEncPic.pData[2];
+    // **S10.5: `pEncData`'s three stamps are gone with the field.** They were
+    // written here every frame and read by nobody — step 2 moved the last
+    // source-plane reader onto `pEncView`, and the last raw one
+    // (`AnalysisVaaInfoIntra_c`, through `mb_cursor`) followed in this checkpoint.
     (*pCurDq).iEncStride[0] = pEncPic.iLineSize[0];
     (*pCurDq).iEncStride[1] = pEncPic.iLineSize[1];
     (*pCurDq).iEncStride[2] = pEncPic.iLineSize[2];

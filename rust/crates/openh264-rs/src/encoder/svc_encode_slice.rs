@@ -1277,7 +1277,6 @@ pub struct SDqLayer {
     pub pCsData: [*mut u8; 3],
     pub iCsStride: [i32; 3],
 
-    pub pEncData: [*mut u8; 3],
     pub iEncStride: [i32; 3],
 
     /// The layer's macroblock records, **owned** since T6.D5. `InitMbListD` used to
@@ -1463,7 +1462,6 @@ impl SDqLayer {
             // started", the same thing the null above means.
             pRecView: None,
             pEncView: None,
-            pEncData: [std::ptr::null_mut(); 3],
             iEncStride: [0; 3],
             // The macroblock records, sized by `InitMbListD` once the geometry is
             // known; empty is the raw spelling's null.

@@ -850,10 +850,11 @@ pub unsafe fn WelsMdIntraFinePartitionVaa(
     pMbCache: &mut SMbCache,
 ) -> i32 {
     let pCurLayer = current_layer(pEncCtx);
-    if MdIntraAnalysisVaaInfo(
-        pEncCtx,
-        (*pMbCache).SPicData.mb_cursor(&(*pCurLayer).pEncData, &(*pCurLayer).iEncStride, 0),
-    ) {
+    // S10.5: the source macroblock through the seam, not `pEncData`'s raw root.
+    let encView = crate::encoder::svc_encode_slice::layer_enc_view(&*pCurLayer)
+        .expect("the frame's source view is stamped with pEncData");
+    let cEncMb = (*pMbCache).SPicData.mb_cursor_ro(encView, 0);
+    if MdIntraAnalysisVaaInfo(pEncCtx, &cEncMb) {
         let iCosti4x4 = WelsMdI4x4Fast(pEncCtx, pWelsMd, pCurMb, pMbCache);
 
         if iCosti4x4 < (*pWelsMd).iCostLuma {

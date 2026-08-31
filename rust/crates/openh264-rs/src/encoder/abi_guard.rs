@@ -437,7 +437,11 @@ assert_size!(SSliceBufferInfo, 32);
 // contract — `SDqLayer` does not cross the boundary — it catches a *second
 // declaration* of the type read at the wrong offsets, so it moves with a deliberate
 // field addition. Both numbers measured, in the profile they name.
-assert_size_by_profile!(SDqLayer, debug 864, release 792);
+// **S10.5: -24 in both profiles** — `pEncData: [*mut u8; 3]`, deleted as write-only
+// once step 2's `pEncView` took its last reader. A deliberate field *removal*, so
+// the pin moves with it for the reason stated above; re-measured, not adjusted by
+// arithmetic.
+assert_size_by_profile!(SDqLayer, debug 840, release 768);
 
 // codec/encoder/core/inc/wels_func_ptr_def.h
 // 1280 before Phase 4a; -8 for `SSampleDealingFunc`'s shrink above; -24 at T4b.1,
