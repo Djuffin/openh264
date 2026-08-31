@@ -775,7 +775,7 @@ pub unsafe fn mb_window<'a>(
 #[inline]
 // unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
-pub unsafe fn current_layer(pCtx: &sWelsEncCtx) -> *mut SDqLayer {
+pub fn current_layer(pCtx: &sWelsEncCtx) -> *mut SDqLayer {
     let Some(idx) = (*pCtx).iCurDqLayer else {
         return std::ptr::null_mut();
     };
@@ -792,7 +792,15 @@ pub unsafe fn current_layer(pCtx: &sWelsEncCtx) -> *mut SDqLayer {
         idx.get() < MAX_DEPENDENCY_LAYER,
         "iCurDqLayer = {idx:?} is past the largest list InitDqLayers can build"
     );
-    ctx_dq_layer(pCtx, idx.get())
+    // **S11.8: the audited call, at this resolver's boundary.** `ctx_dq_layer`
+    // is `unsafe fn` because it reads the `Box` slot as a pointer *value*
+    // (`ptr::read`) — F71's spelling, so the answer carries the heap block's
+    // own provenance rather than a child of a context retag, which is what
+    // lets two workers resolve the layer at once. That claim is the same one
+    // this function has always made, and it needs only a live context, which
+    // the `&sWelsEncCtx` parameter is. Naming it here rather than on the
+    // signature lets this resolver be called from safe code.
+    unsafe { ctx_dq_layer(pCtx, idx.get()) }
 }
 
 /// The current layer as a **shared reference** — F240's companion to
@@ -4261,21 +4269,25 @@ pub unsafe fn ReallocateSliceInThread(
     ENC_RETURN_SUCCESS
 }
 
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn ExtendLayerBuffer(
+pub fn ExtendLayerBuffer(
     pCtx: &mut sWelsEncCtx,
     kiMaxSliceNumOld: i32,
     kiMaxSliceNumNew: i32,
 ) -> i32 {
-    let pCurLayer = current_layer(pCtx);
+    // S11.8: this body holds `&mut sWelsEncCtx` and only *writes* the layer's
+    // three vectors, so the layer comes through `current_layer_mut` — the
+    // borrow that cannot exist while the fork is live, which is the type-level
+    // form of the restriction the raw only stated (S10.3b).
+    let Some(pCurLayer) = current_layer_mut(pCtx) else {
+        return ENC_RETURN_SUCCESS;
+    };
 
     // The C++ allocated a new pointer array, dropped the old one **without copying
     // it**, and left every entry to `ReallocSliceBuffer`'s fill loop below. `resize`
     // is that, minus the allocation failure: the tail arrives as `SliceIdx::NONE`,
     // which is the zero `WelsMallocz` handed back.
     {
-        let slices: &mut Vec<SliceIdx> = &mut (*pCurLayer).ppSliceInLayer;
+        let slices: &mut Vec<SliceIdx> = &mut pCurLayer.ppSliceInLayer;
         slices.clear();
         slices.resize(kiMaxSliceNumNew as usize, SliceIdx::NONE);
     }
@@ -4285,9 +4297,9 @@ pub unsafe fn ExtendLayerBuffer(
     // keeps exactly the same guarantee: the existing entries survive at their indices
     // and the new tail is zero, as `WelsMallocz` left it.
     {
-        let first: &mut Vec<i32> = &mut (*pCurLayer).pFirstMbIdxOfSlice;
+        let first: &mut Vec<i32> = &mut pCurLayer.pFirstMbIdxOfSlice;
         first.resize(kiMaxSliceNumNew as usize, 0);
-        let count: &mut Vec<i32> = &mut (*pCurLayer).pCountMbNumInSlice;
+        let count: &mut Vec<i32> = &mut pCurLayer.pCountMbNumInSlice;
         count.resize(kiMaxSliceNumNew as usize, 0);
     }
     let _ = kiMaxSliceNumOld;
