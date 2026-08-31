@@ -457,9 +457,7 @@ pub fn UpdateMbListNeighborParallel(
 /// `bUseLoadBalancing = false`, as does the encode probe; the structural probe is
 /// `load_balancing_completes_frames_with_sane_slice_counts`. It is the project's
 /// second expected-divergent class after `CABA2_SVA_B` — see plan §1.5 and F72.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn CalcSliceComplexRatio(pCurDq: &mut SDqLayer) {
+pub fn CalcSliceComplexRatio(pCurDq: &mut SDqLayer) {
     let pSliceCtx = &mut (*pCurDq).sSliceEncCtx;
     let mut iSumAv = 0i32;
     let kiSliceCount = pSliceCtx.iSliceNumInFrame.load(Ordering::Relaxed);
@@ -472,8 +470,8 @@ pub unsafe fn CalcSliceComplexRatio(pCurDq: &mut SDqLayer) {
     WelsEmms();
 
     while iSliceIdx < kiSliceCount {
-        let pSlice = crate::encoder::svc_encode_slice::slice_in_layer(Some(&*pCurDq), iSliceIdx);
-        if !pSlice.is_null() {
+        let pSlice = crate::encoder::svc_encode_slice::slice_in_layer_mut(pCurDq, iSliceIdx);
+        if let Some(pSlice) = pSlice {
             let consume_time = (*pSlice).uiSliceConsumeTime as i32;
             let mb_num = (*pSlice).iCountMbNumInSlice;
             iAvI[iSliceIdx as usize] = WelsDivRound(INT_MULTIPLY * mb_num, consume_time);
@@ -484,8 +482,8 @@ pub unsafe fn CalcSliceComplexRatio(pCurDq: &mut SDqLayer) {
 
     while iSliceIdx > 0 {
         iSliceIdx -= 1;
-        let pSlice = crate::encoder::svc_encode_slice::slice_in_layer(Some(&*pCurDq), iSliceIdx);
-        if !pSlice.is_null() {
+        let pSlice = crate::encoder::svc_encode_slice::slice_in_layer_mut(pCurDq, iSliceIdx);
+        if let Some(pSlice) = pSlice {
             (*pSlice).iSliceComplexRatio =
                 WelsDivRound(INT_MULTIPLY * iAvI[iSliceIdx as usize], iSumAv);
         }
@@ -494,9 +492,7 @@ pub unsafe fn CalcSliceComplexRatio(pCurDq: &mut SDqLayer) {
 
 /// Statistical decision engine that evaluates whether the timing variance across
 /// slices exceeds the core-dependent threshold to justify dynamic slicing.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn NeedDynamicAdjust(pCurDq: &mut SDqLayer, iSliceNum: i32) -> i32 {
+pub fn NeedDynamicAdjust(pCurDq: &mut SDqLayer, iSliceNum: i32) -> i32 {
     if iSliceNum <= 0 {
         return 0;
     }
@@ -508,11 +504,11 @@ pub unsafe fn NeedDynamicAdjust(pCurDq: &mut SDqLayer, iSliceNum: i32) -> i32 {
     WelsEmms();
 
     while iSliceIdx < iSliceNum {
-        let pSlice = crate::encoder::svc_encode_slice::slice_in_layer(Some(&*pCurDq), iSliceIdx);
-        if pSlice.is_null() {
+        let Some(pSlice) = crate::encoder::svc_encode_slice::slice_in_layer_mut(pCurDq, iSliceIdx)
+        else {
             return 0;
-        }
-        uiTotalConsume += (*pSlice).uiSliceConsumeTime;
+        };
+        uiTotalConsume += pSlice.uiSliceConsumeTime;
         iSliceIdx += 1;
     }
 
@@ -526,8 +522,11 @@ pub unsafe fn NeedDynamicAdjust(pCurDq: &mut SDqLayer, iSliceNum: i32) -> i32 {
     let kfMeanRatio = 1.0f32 / (iSliceNum as f32);
 
     loop {
-        let pSlice = crate::encoder::svc_encode_slice::slice_in_layer(Some(&*pCurDq), iSliceIdx);
-        let fRatio = (*pSlice).uiSliceConsumeTime as f32 / (uiTotalConsume as f32);
+        // The raw form dereferenced unconditionally (T9.H): absence was never a
+        // handled state, and the loop above has already walked the same range.
+        let pSlice = crate::encoder::svc_encode_slice::slice_in_layer_mut(pCurDq, iSliceIdx)
+            .expect("the layer's slice bank holds iSliceNum slices");
+        let fRatio = pSlice.uiSliceConsumeTime as f32 / (uiTotalConsume as f32);
         let fDiffRatio = fRatio - kfMeanRatio;
         fRmse += fDiffRatio * fDiffRatio;
         iSliceIdx += 1;
@@ -613,10 +612,9 @@ pub unsafe fn DynamicAdjustSlicing(
 
     iSliceIdx = 0;
     while iSliceIdx + 1 < kiCountSliceNum {
-        let pSlice = crate::encoder::svc_encode_slice::slice_in_layer(Some(&*pCurDqLayer), iSliceIdx);
-        if pSlice.is_null() {
+        let Some(pSlice) = crate::encoder::svc_encode_slice::slice_in_layer_mut(pCurDqLayer, iSliceIdx) else {
             return;
-        }
+        };
         let mut iNumMbAssigning = WelsDivRound(
             kiCountNumMb * (*pSlice).iSliceComplexRatio,
             INT_MULTIPLY,

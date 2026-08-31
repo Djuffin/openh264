@@ -84,6 +84,7 @@ pub use crate::encoder::picture::SPicture;
 pub use crate::encoder::picture::SScreenBlockFeatureStorage;
 pub use crate::encoder::param_svc::SWelsSPS;
 pub use crate::encoder::svc_encode_slice::SSliceHeader;
+use crate::encoder::svc_encode_slice::current_layer_ref;
 use crate::encoder::svc_encode_slice::ctx_sps;
 use crate::encoder::svc_encode_slice::ctx_sps_ref;
 use crate::encoder::svc_encode_slice::current_layer;
@@ -960,9 +961,7 @@ pub fn CheckCurMarkFrameNumUsed(pCtx: &mut sWelsEncCtx) -> bool {
 }
 
 /// Replicates base slice header reference marking syntax across all slices.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn WelsMarkMMCORefInfoWithBase(
+pub fn WelsMarkMMCORefInfoWithBase(
     pCurDq: &mut SDqLayer,
     kBaseMarking: SRefPicMarking,
     kiCountSliceNum: i32,
@@ -976,17 +975,15 @@ pub unsafe fn WelsMarkMMCORefInfoWithBase(
     // byte-identical to the C++'s `memcpy` from the live field: the first
     // store is `base = base`.
     for iSliceIdx in 0..kiCountSliceNum {
-        let pSlice = crate::encoder::svc_encode_slice::slice_in_layer(Some(&*pCurDq), iSliceIdx);
-        if !pSlice.is_null() {
+        let pSlice = crate::encoder::svc_encode_slice::slice_in_layer_mut(pCurDq, iSliceIdx);
+        if let Some(pSlice) = pSlice {
             (*pSlice).sSliceHeaderExt.sSliceHeader.sRefMarking = kBaseMarking;
         }
     }
 }
 
 /// Constructs MMCO reference marking commands for slice headers.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn WelsMarkMMCORefInfo(
+pub fn WelsMarkMMCORefInfo(
     kuiGopSize: u32,
     kbEnableLongTermReference: bool,
     pLtr: &SLTRState,
@@ -1002,10 +999,9 @@ pub unsafe fn WelsMarkMMCORefInfo(
     if kiCountSliceNum <= 0 {
         return;
     }
-    let pBaseSlice = crate::encoder::svc_encode_slice::slice_in_layer(Some(&*pCurDq), 0);
-    if pBaseSlice.is_null() {
+    let Some(pBaseSlice) = crate::encoder::svc_encode_slice::slice_in_layer_mut(pCurDq, 0) else {
         return;
-    }
+    };
     let pRefPicMark = &mut (*pBaseSlice).sSliceHeaderExt.sSliceHeader.sRefMarking;
     let iGoPFrameNumInterval = if (kuiGopSize >> 1) > 1 {
         (kuiGopSize >> 1) as i32
@@ -1040,7 +1036,11 @@ pub unsafe fn WelsMarkMMCORefInfo(
         }
     }
 
-    WelsMarkMMCORefInfoWithBase(pCurDq, *pRefPicMark, kiCountSliceNum);
+    // S11.2c: the marking is copied out before the call, which ends the base
+    // slice's borrow — the callee needs the layer `&mut` again to reach the
+    // other slices, and the argument was always a by-value copy.
+    let kBaseMarking = *pRefPicMark;
+    WelsMarkMMCORefInfoWithBase(pCurDq, kBaseMarking, kiCountSliceNum);
 }
 
 /// Evaluates LTR marking criteria and populates slice header MMCO commands.
@@ -1068,7 +1068,7 @@ pub unsafe fn WelsMarkPic(pCtx: &mut sWelsEncCtx) {
     let kiLtrMarkPeriod = pCtx.param().iLtrMarkPeriod;
     let kuiGopSize = pCtx.param().uiGopSize;
     let kuiTid = pCtx.uiTemporalId;
-    let kiCountSliceNum = (*current_layer(pCtx)).iMaxSliceNum;
+    let kiCountSliceNum = current_layer_ref(pCtx).expect("the frame's current layer is stamped").iMaxSliceNum;
     // T9.G6: hoisted — the argument reads through the context, so it is derived
     // before the LTR borrows below (shape B).
     let pCurLayerForMmco = &mut *current_layer(pCtx);
@@ -1331,9 +1331,7 @@ pub unsafe fn UpdateBlockStatic(pCtx: &mut sWelsEncCtx) {
 }
 
 /// Serializes slice header reference picture reordering syntax and marking flags.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn WelsUpdateSliceHeaderSyntax(
+pub fn WelsUpdateSliceHeaderSyntax(
     pCtx: &mut sWelsEncCtx,
     iAbsDiffPicNumMinus1: i32,
     pCurDq: &mut SDqLayer,
@@ -1343,7 +1341,7 @@ pub unsafe fn WelsUpdateSliceHeaderSyntax(
     // cannot be null and every caller now holds one, so the guard is not
     // merely dead — it is inexpressible. Nothing replaces it.
     // T9.E2i (the close's Miri verdict, F114b's shape): the count is read
-    // through the parameter — `(*current_layer(pCtx)).iMaxSliceNum` was a
+    // through the parameter — `current_layer_ref(pCtx).expect("the frame's current layer is stamped").iMaxSliceNum` was a
     // second, independent path to the same object this function's `&mut`
     // already protects, and the read popped the protector.
     let kiCountSliceNum = pCurDq.iMaxSliceNum;
@@ -1353,11 +1351,11 @@ pub unsafe fn WelsUpdateSliceHeaderSyntax(
     let bLtrMarkingFlag = ctx_ltr_at(pCtx, (uiDid) as usize).bLTRMarkingFlag;
 
     for iIdx in 0..kiCountSliceNum {
-        let pSlice = crate::encoder::svc_encode_slice::slice_in_layer(Some(&*pCurDq), iIdx);
-        if pSlice.is_null() {
+        let Some(pSlice) = crate::encoder::svc_encode_slice::slice_in_layer_mut(pCurDq, iIdx)
+        else {
             continue;
-        }
-        let pSliceHdr = &mut (*pSlice).sSliceHeaderExt.sSliceHeader;
+        };
+        let pSliceHdr = &mut pSlice.sSliceHeaderExt.sSliceHeader;
         let pRefReorder = &mut pSliceHdr.sRefReordering;
         let pRefPicMark = &mut pSliceHdr.sRefMarking;
 
@@ -1721,9 +1719,7 @@ pub fn IsValidFrameNum(kiFrameNum: i32) -> bool {
     kiFrameNum < (1 << 30)
 }
 
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn WelsMarkMMCORefInfoScreen(
+pub fn WelsMarkMMCORefInfoScreen(
     kiNumRefFrame: i32,
     kbEnableLongTermReference: bool,
     pLtr: &SLTRState,
@@ -1739,10 +1735,9 @@ pub unsafe fn WelsMarkMMCORefInfoScreen(
     if kiCountSliceNum <= 0 {
         return;
     }
-    let pBaseSlice = crate::encoder::svc_encode_slice::slice_in_layer(Some(&*pCurDq), 0);
-    if pBaseSlice.is_null() {
+    let Some(pBaseSlice) = crate::encoder::svc_encode_slice::slice_in_layer_mut(pCurDq, 0) else {
         return;
-    }
+    };
     let pRefPicMark = &mut (*pBaseSlice).sSliceHeaderExt.sSliceHeader.sRefMarking;
     let iMaxLtrIdx = kiNumRefFrame - STR_ROOM - 1;
 
@@ -1759,7 +1754,11 @@ pub unsafe fn WelsMarkMMCORefInfoScreen(
         pRefPicMark.uiMmcoCount += 1;
     }
 
-    WelsMarkMMCORefInfoWithBase(pCurDq, *pRefPicMark, kiCountSliceNum);
+    // S11.2c: the marking is copied out before the call, which ends the base
+    // slice's borrow — the callee needs the layer `&mut` again to reach the
+    // other slices, and the argument was always a by-value copy.
+    let kBaseMarking = *pRefPicMark;
+    WelsMarkMMCORefInfoWithBase(pCurDq, kBaseMarking, kiCountSliceNum);
 }
 
 // unsafe-cat: port-raw(Phase 9)
@@ -1805,7 +1804,7 @@ pub unsafe fn WelsMarkPicScreen(pCtx: &mut sWelsEncCtx) {
     let pSps = ctx_sps(pCtx);
     let kuiTid = pCtx.uiTemporalId;
     let kbSceneLtr = pCtx.bCurFrameMarkedAsSceneLtr;
-    let iSliceNum = (*current_layer(pCtx)).iMaxSliceNum;
+    let iSliceNum = current_layer_ref(pCtx).expect("the frame's current layer is stamped").iMaxSliceNum;
     // T9.G6: hoisted — see `WelsMarkMMCORefInfo`.
     let pCurLayerForMmco = &mut *current_layer(pCtx);
     // A3: the list and the LTR state are read and written in the same branches

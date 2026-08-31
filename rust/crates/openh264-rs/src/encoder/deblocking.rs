@@ -1236,32 +1236,30 @@ pub fn DeblockingMbAvcbase(
 // Frame and Slice Level Traversal
 // ============================================================================
 
-// unsafe-cat: port-raw(Phase 9) — the raw-layer accessor calls (slice_in_layer,
 // layer_rec_view: the S63 seam, G's); the record walk itself is the safe window
-#[allow(unsafe_code)]
-pub unsafe fn DeblockingFilterFrameAvcbase(pCurDq: &mut SDqLayer) {
+pub fn DeblockingFilterFrameAvcbase(pCurDq: &mut SDqLayer) {
     if (*pCurDq).pDecPic.is_none() {
         return;
     }
-    let pSlice = crate::encoder::svc_encode_slice::slice_in_layer(Some(&*pCurDq), 0);
-    if pSlice.is_null() {
-        return;
-    }
+    // S11.2c: the slice's three values are read out as scalars (S10.5a''s
+    // pattern) so the bank borrow ends here — the rest of this body splits the
+    // layer's own disjoint fields, which a live slice borrow would block.
+    let (kuiDisableDeblockingFilterIdc, kiSliceAlphaC0Offset, kiSliceBetaOffset) = {
+        let Some(pSlice) = crate::encoder::svc_encode_slice::slice_in_layer_mut(pCurDq, 0) else {
+            return;
+        };
+        let sh = &pSlice.sSliceHeaderExt.sSliceHeader;
+        (sh.uiDisableDeblockingFilterIdc, sh.iSliceAlphaC0Offset, sh.iSliceBetaOffset)
+    };
     let kiMbWidth = (*pCurDq).iMbWidth;
     let kiMbHeight = (*pCurDq).iMbHeight;
 
-    let sSliceHeaderExt = &(*pSlice).sSliceHeaderExt;
-
-    if sSliceHeaderExt.sSliceHeader.uiDisableDeblockingFilterIdc == 1 {
+    if kuiDisableDeblockingFilterIdc == 1 {
         return;
     }
 
     let mut pFilter = SDeblockingFilter::default();
-    pFilter.uiFilterIdc = if sSliceHeaderExt.sSliceHeader.uiDisableDeblockingFilterIdc != 0 {
-        1
-    } else {
-        0
-    };
+    pFilter.uiFilterIdc = if kuiDisableDeblockingFilterIdc != 0 { 1 } else { 0 };
 
     // **T9.C4**: this resolved the reconstruction picture to its plane roots with
     // `layer_dec_pic_mut(..).planes()` — a whole-picture `&mut` retag, and F108
@@ -1296,8 +1294,8 @@ pub unsafe fn DeblockingFilterFrameAvcbase(pCurDq: &mut SDqLayer) {
     pFilter.iCsStride[1] = (*pCurDq).iCsStride[1];
     pFilter.iCsStride[2] = (*pCurDq).iCsStride[2];
 
-    pFilter.iSliceAlphaC0Offset = sSliceHeaderExt.sSliceHeader.iSliceAlphaC0Offset;
-    pFilter.iSliceBetaOffset = sSliceHeaderExt.sSliceHeader.iSliceBetaOffset;
+    pFilter.iSliceAlphaC0Offset = kiSliceAlphaC0Offset;
+    pFilter.iSliceBetaOffset = kiSliceBetaOffset;
     pFilter.iMbStride = kiMbWidth as i16;
 
     // Round 5 (F132): the guards' neighbour reads answer "is this edge inside
