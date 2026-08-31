@@ -1190,18 +1190,19 @@ impl CWelsPreProcess {
         self.m_pSpatialPicPool = SrcPicPool::empty();
     }
 
-    // unsafe-cat: port-raw(Phase 9)
-    #[allow(unsafe_code)]
-    pub unsafe fn BuildSpatialPicList(
+    pub fn BuildSpatialPicList(
         &mut self,
         pCtx: &mut sWelsEncCtx,
-        kpSrcPic: *const SSourcePicture,
+        // S11.41: the application's picture struct arrives as a reference — the
+        // API layer null-checks the C pointer once; only the plane roots inside
+        // it stay raw (they are the application's buffers).
+        kpSrcPic: &SSourcePicture,
         pSpatialNum: &mut i32,
     ) -> i32 {
         // A7, §4.6 reorder: three scalars, read where they are used — this body
         // hands the context to `WelsPreprocessReset` between them.
-        let iWidth = ((*kpSrcPic).iPicWidth >> 1) << 1;
-        let iHeight = ((*kpSrcPic).iPicHeight >> 1) << 1;
+        let iWidth = (kpSrcPic.iPicWidth >> 1) << 1;
+        let iHeight = (kpSrcPic.iPicHeight >> 1) << 1;
         *pSpatialNum = 0;
 
         if !self.m_bInitDone {
@@ -1232,7 +1233,12 @@ impl CWelsPreProcess {
         // rather than converts. Deriving one pointer at the callee's top would not
         // do either: the `self.` calls between the uses reborrow `self` and pop it.
         // Found by the encoder aliasing probe, Phase 6 session A.
-        let iRet = self.SingleLayerPreprocess(pCtx, kpSrcPic, pSpatialNum);
+        // S11.41: the audited call at this body's boundary — the callee's own
+        // subtree (the layer preprocess walk, with the application's plane roots)
+        // is unconverted, and this call is the body's last raw op (F279).
+        // unsafe-cat: port-raw(Phase 9)
+        #[allow(unsafe_code)]
+        let iRet = unsafe { self.SingleLayerPreprocess(pCtx, kpSrcPic, pSpatialNum) };
         if iRet != ENC_RETURN_SUCCESS {
             return iRet;
         }

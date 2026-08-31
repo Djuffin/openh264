@@ -19,18 +19,17 @@ use std::sync::atomic::{AtomicU16, Ordering};
 use crate::encoder::picture::{RecPicId, RecPicPool, SrcPicId, SrcPicPool};
 use crate::encoder::md::CostFamily;
 use std::ffi::c_char;
-use std::ptr::{null, null_mut};
 
 use crate::api::codec_api::EUsageType::{CAMERA_VIDEO_REAL_TIME, SCREEN_CONTENT_REAL_TIME};
 use crate::api::codec_api::SliceModeEnum;
 use crate::api::codec_api::SliceModeEnum::{SM_SINGLE_SLICE, SM_SIZELIMITED_SLICE};
 use crate::api::codec_api::RC_MODES::RC_OFF_MODE;
-use crate::api::codec_api::{ELevelIdc, SSpatialLayerConfig};
+use crate::api::codec_api::ELevelIdc;
 use crate::decoder::nalu::g_ksLevelLimits;
 use crate::encoder::encoder_context::{
     ctx_dq_idc_map, ctx_dq_layer, ctx_ltr_at, ctx_mb_index_x,
     ctx_paraset_arrays,
-    ctx_mb_index_y, ctx_param_raw,
+    ctx_mb_index_y,
     ctx_stride_enc_block_offset,
     sWelsEncCtx, SDqIdc, SLogContext, SRefList, SStrideTables, SSubsetSps, SWelsPPS,
     SWelsSPS, BASE_DEPENDENCY_ID,
@@ -3622,14 +3621,15 @@ pub fn WelsCodeOnePicPartition(
 /// reproduces this function's whole null path (`WelsUninitEncoderExt(take())`
 /// then `cmMallocMemeError`) rather than just its return code. The guard was not
 /// deleted; it was moved to the last place a null still exists.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn WelsEncoderEncodeExt(
+pub fn WelsEncoderEncodeExt(
     pCtx: &mut sWelsEncCtx,
     // S11.20: the frame bitstream info by reference — its one caller
     // (`EncodeFrameInternal`) already holds `&mut SFrameBSInfo`.
     pFbi: &mut SFrameBSInfo,
-    pSrcPic: *const SSourcePicture,
+    // S11.41: the application's picture struct by reference — the API layer
+    // null-checks the C pointer once; the plane roots inside stay raw (they
+    // are the application's buffers, C-ABI data).
+    pSrcPic: &SSourcePicture,
 ) -> i32 {
     // **T9.H3's re-stamp of `CWelsPreProcess::m_pEncCtx` stood here — gone at
     // T9.H2, because the field is gone (F192).**
@@ -3688,7 +3688,7 @@ pub unsafe fn WelsEncoderEncodeExt(
     pFbi.eFrameType = EVideoFrameType::videoFrameTypeSkip;
     pFbi.iLayerNum = 0; // for initialization
     pFbi.uiTimeStamp = crate::encoder::rc::GetTimestampForRc(
-        (*pSrcPic).uiTimeStamp,
+        pSrcPic.uiTimeStamp,
         pCtx.uiLastTimestamp,
         fFrameRateHighest,
     );
@@ -3781,28 +3781,30 @@ pub unsafe fn WelsEncoderEncodeExt(
         }
     } else {
         for iDidIdx in 0..pCtx.param().iSpatialLayerNum as usize {
-            let pParamInternal = std::ptr::addr_of_mut!((*ctx_param_raw(pCtx)).sDependencyLayers[iDidIdx]);
+            // S11.41: the cursor is three shared reads and one scoped write —
+            // A7's route; nothing is held across anything.
             let iTemporalId = GetTemporalLevel(
-                &*pParamInternal,
-                (*pParamInternal).iCodingIndex,
+                &pCtx.param().sDependencyLayers[iDidIdx],
+                pCtx.param().sDependencyLayers[iDidIdx].iCodingIndex,
                 pCtx.param().uiGopSize as i32,
             );
             if iTemporalId == INVALID_TEMPORAL_ID as i32 {
-                (*pParamInternal).iCodingIndex += 1;
+                pCtx.param_mut().sDependencyLayers[iDidIdx].iCodingIndex += 1;
             }
         }
     }
 
     while iSpatialIdx < iSpatialNum {
         iCurDid = pCtx.sSpatialIndexMap[iSpatialIdx as usize].iDid as i8;
-        // S29 / F13's family (the encode probe's sixth red, session B): `addr_of_mut!`
-        // on the element — `as_mut_ptr().add()` reborrowed the whole array, and the
-        // `.iPOC` reads below re-derived it and popped these.
-        let pParam: *mut SSpatialLayerConfig =
-            std::ptr::addr_of_mut!((*ctx_param_raw(pCtx)).sSpatialLayers[iCurDid as usize]);
-        let pParamInternal =
-            std::ptr::addr_of_mut!((*ctx_param_raw(pCtx)).sDependencyLayers[iCurDid as usize]);
-        let iDecompositionStages = (*pParamInternal).iDecompositionStages as i32;
+        // **S11.41: the layer body's two parameter cursors are gone with the
+        // body's `unsafe`.** They were S29's shape because a `&mut`-derived pair
+        // could not survive the layer body's many re-reaches into the parameter
+        // block; a raw cursor's read is memory at use time, and so is a `param()`
+        // re-derivation at the same statement — every read below re-derives at
+        // its use (A7's route, the same field, the same moment), and the one
+        // write is a scoped `param_mut`.
+        let iDecompositionStages =
+            pCtx.param().sDependencyLayers[iCurDid as usize].iDecompositionStages as i32;
         set_current_layer(pCtx, Some(LayerIdx(iCurDid as u8)));
         pCtx.uiDependencyId = iCurDid as u8;
 
@@ -3824,7 +3826,13 @@ pub unsafe fn WelsEncoderEncodeExt(
             }
         }
         crate::encoder::encoder_context::InitFrameCoding(pCtx, eFrameType, iCurDid as i32);
-        crate::encoder::encoder_context::with_vpp(pCtx, |pVpp, pCtx| {
+        // S11.41: the audited call at this body's boundary — the callee's three
+        // VAA passes (`VaaCalculation`, `BackgroundDetection`,
+        // `AdaptiveQuantCalculation`) are its unconverted subtree, and this call
+        // is one of the body's last raw ops (F279).
+        // unsafe-cat: port-raw(Phase 9)
+        #[allow(unsafe_code)]
+        crate::encoder::encoder_context::with_vpp(pCtx, |pVpp, pCtx| unsafe {
             pVpp.AnalyzeSpatialPic(pCtx, iCurDid as i32)
         });
 
@@ -3853,10 +3861,10 @@ pub unsafe fn WelsEncoderEncodeExt(
             p.iFramePoc = kiFramePoc;
         }
 
-        iCurWidth = (*pParam).iVideoWidth;
-        iCurHeight = (*pParam).iVideoHeight;
+        iCurWidth = pCtx.param().sSpatialLayers[iCurDid as usize].iVideoWidth;
+        iCurHeight = pCtx.param().sSpatialLayers[iCurDid as usize].iVideoHeight;
 
-        match (*pParam).sSliceArgument.uiSliceMode {
+        match pCtx.param().sSpatialLayers[iCurDid as usize].sSliceArgument.uiSliceMode {
             // **The consumer half of the load-balancing loop.** The producer,
             // `CalcSliceComplexRatio`, runs at the end of this same layer body under
             // the same four-term guard — added at T7.C1, which is what closed F72;
@@ -3992,7 +4000,7 @@ pub unsafe fn WelsEncoderEncodeExt(
         PreprocessSliceCoding(pCtx);
 
         iLayerSize = 0;
-        if (*pParam).sSliceArgument.uiSliceMode == SM_SINGLE_SLICE {
+        if pCtx.param().sSpatialLayers[iCurDid as usize].sSliceArgument.uiSliceMode == SM_SINGLE_SLICE {
             // only one slice within a quality layer
             let mut iPayloadSize = 0i32;
             // **S11.35: the bank leaves the layer for the slice's span** — the
@@ -4110,12 +4118,20 @@ pub unsafe fn WelsEncoderEncodeExt(
                 &kpOut.sBsBuffer[..],
                 Some(&kNalHeaderExt),
                 pDstTail,
-                &mut *pFbi.sLayerInfo[iLbi].pNalLengthInByte.add(iNalIdxInLayer as usize),
+                // unsafe-cat: C-ABI — the out-array slot (S11.20's family).
+                #[allow(unsafe_code)]
+                unsafe {
+                    &mut *pFbi.sLayerInfo[iLbi].pNalLengthInByte.add(iNalIdxInLayer as usize)
+                },
             );
             if pCtx.iEncoderError != ENC_RETURN_SUCCESS {
                 return pCtx.iEncoderError;
             }
-            let iSliceSize = *pFbi.sLayerInfo[iLbi].pNalLengthInByte.add(iNalIdxInLayer as usize);
+            // unsafe-cat: C-ABI — the slot just written, read back.
+            #[allow(unsafe_code)]
+            let iSliceSize = unsafe {
+                *pFbi.sLayerInfo[iLbi].pNalLengthInByte.add(iNalIdxInLayer as usize)
+            };
 
             iLayerSize += iSliceSize;
             pCtx.iPosBsBuffer += iSliceSize;
@@ -4127,7 +4143,8 @@ pub unsafe fn WelsEncoderEncodeExt(
             pFbi.sLayerInfo[iLbi].iNalCount = iNalIdxInLayer;
             pFbi.sLayerInfo[iLbi].eFrameType = eFrameType;
             pFbi.sLayerInfo[iLbi].iSubSeqId = GetSubSequenceId(pCtx, eFrameType);
-        } else if (*pParam).sSliceArgument.uiSliceMode == SM_SIZELIMITED_SLICE
+        } else if pCtx.param().sSpatialLayers[iCurDid as usize].sSliceArgument.uiSliceMode
+            == SM_SIZELIMITED_SLICE
             && pCtx.param().iMultipleThreadIdc <= 1
         {
             // dynamic slicing, single threading
@@ -4146,7 +4163,7 @@ pub unsafe fn WelsEncoderEncodeExt(
             if pCtx.iEncoderError != ENC_RETURN_SUCCESS {
                 return pCtx.iEncoderError;
             }
-        } else if (*pParam).sSliceArgument.uiSliceMode != SM_SIZELIMITED_SLICE
+        } else if pCtx.param().sSpatialLayers[iCurDid as usize].sSliceArgument.uiSliceMode != SM_SIZELIMITED_SLICE
             && pCtx.param().iMultipleThreadIdc > 1
         {
             // THREAD_FULLY_FIRE_MODE/THREAD_PICK_UP_MODE for any mode of
@@ -4192,7 +4209,8 @@ pub unsafe fn WelsEncoderEncodeExt(
             if pCtx.iEncoderError != ENC_RETURN_SUCCESS {
                 return pCtx.iEncoderError;
             }
-        } else if (*pParam).sSliceArgument.uiSliceMode == SM_SIZELIMITED_SLICE
+        } else if pCtx.param().sSpatialLayers[iCurDid as usize].sSliceArgument.uiSliceMode
+            == SM_SIZELIMITED_SLICE
             && pCtx.param().iMultipleThreadIdc > 1
         {
             // THREAD_FULLY_FIRE_MODE && SM_SIZELIMITED_SLICE
@@ -4200,22 +4218,22 @@ pub unsafe fn WelsEncoderEncodeExt(
 
             //TODO: use a function to remove duplicate code here and ln3994
             let iLayerBsIdx = pCtx.pOut.as_deref().expect("pOut lives").iLayerBsIndex;
-            // **T9.E6, the mid-row probe's verdict once round 5 stopped aborting
-            // first**: this was `&mut pFbi.sLayerInfo[..] as *mut` — a `&mut`
-            // element borrow whose Unique retag popped `pLayerBsInfo` (the raw
-            // over the whole array, minted at the top of this function) for the
-            // element's bytes, and `SliceLayerInfoUpdate` writes through
-            // `pLayerBsInfo` right below. S29's spelling reuses the parent's
-            // provenance and pops nothing — F70's rule, F114a's shape.
-            let pLbi = std::ptr::addr_of_mut!(pFbi.sLayerInfo[iLayerBsIdx as usize]);
-            (*pLbi).pBsBuf = pCtx.frame_bs_cur();
-            (*pLbi).uiLayerType = VIDEO_CODING_LAYER;
-            (*pLbi).uiSpatialId = pCtx.uiDependencyId;
-            (*pLbi).uiTemporalId = pCtx.uiTemporalId;
-            (*pLbi).uiQualityId = 0;
-            (*pLbi).eFrameType = eFrameType;
-            (*pLbi).iSubSeqId = GetSubSequenceId(pCtx, eFrameType);
-            (*pLbi).iNalCount = 0;
+            // **T9.E6's raw expired with the array cursor it protected against
+            // (S11.41).** The `&mut` element borrow was a hazard only while
+            // `pLayerBsInfo` — a raw over the whole array, minted at the top of
+            // this function — was live to be popped; S11.20 replaced that cursor
+            // with the `iLbi` index, so there is no sibling left to kill and the
+            // element borrow is just a borrow. The `pCtx` reads on the right are
+            // evaluated before each place, and borrow `pCtx`, not `pFbi`.
+            let pLbi = &mut pFbi.sLayerInfo[iLayerBsIdx as usize];
+            pLbi.pBsBuf = pCtx.frame_bs_cur();
+            pLbi.uiLayerType = VIDEO_CODING_LAYER;
+            pLbi.uiSpatialId = pCtx.uiDependencyId;
+            pLbi.uiTemporalId = pCtx.uiTemporalId;
+            pLbi.uiQualityId = 0;
+            pLbi.eFrameType = eFrameType;
+            pLbi.iSubSeqId = GetSubSequenceId(pCtx, eFrameType);
+            pLbi.iNalCount = 0;
 
             // A loop stamping `pFrameBsInfo` and `iSliceIndex` into
             // `pSliceThreading->pThreadPEncCtx[iIdx]` stood here. Nothing has ever
@@ -4243,11 +4261,15 @@ pub unsafe fn WelsEncoderEncodeExt(
                 return pCtx.iEncoderError;
             }
 
+            // S11.41: the mode is read before the call — argument one is a
+            // `&mut` on the context, evaluated first.
+            let kuiSliceMode =
+                pCtx.param().sSpatialLayers[iCurDid as usize].sSliceArgument.uiSliceMode;
             iRet = crate::encoder::svc_encode_slice::SliceLayerInfoUpdate(
                 pCtx,
                 pFbi,
                 iLbi,
-                (*pParam).sSliceArgument.uiSliceMode,
+                kuiSliceMode,
             );
             if iRet != 0 {
                 return ENC_RETURN_UNEXPECTED;
@@ -4389,12 +4411,20 @@ pub unsafe fn WelsEncoderEncodeExt(
                     &kpOut.sBsBuffer[..],
                     Some(&kNalHeaderExt),
                     pDstTail,
-                    &mut *pFbi.sLayerInfo[iLbi].pNalLengthInByte.add(iNalIdxInLayer as usize),
+                    // unsafe-cat: C-ABI — the out-array slot (S11.20's family).
+                    #[allow(unsafe_code)]
+                    unsafe {
+                        &mut *pFbi.sLayerInfo[iLbi].pNalLengthInByte.add(iNalIdxInLayer as usize)
+                    },
                 );
                 if pCtx.iEncoderError != ENC_RETURN_SUCCESS {
                     return pCtx.iEncoderError;
                 }
-                let iSliceSize = *pFbi.sLayerInfo[iLbi].pNalLengthInByte.add(iNalIdxInLayer as usize);
+                // unsafe-cat: C-ABI — the slot just written, read back.
+                #[allow(unsafe_code)]
+                let iSliceSize = unsafe {
+                    *pFbi.sLayerInfo[iLbi].pNalLengthInByte.add(iNalIdxInLayer as usize)
+                };
 
                 pCtx.iPosBsBuffer += iSliceSize;
                 iLayerSize += iSliceSize;
@@ -4438,8 +4468,8 @@ pub unsafe fn WelsEncoderEncodeExt(
         // clause is compiled in.
         if !current_layer_ref(pCtx).expect("the frame's current layer is stamped").bDeblockingParallelFlag
             && eNalRefIdc != EWelsNalRefIdc::NRI_PRI_LOWEST
-            && ((*pParamInternal).iHighestTemporalId == 0
-                || iCurTid < (*pParamInternal).iHighestTemporalId as i32)
+            && (pCtx.param().sDependencyLayers[iCurDid as usize].iHighestTemporalId == 0
+                || iCurTid < pCtx.param().sDependencyLayers[iCurDid as usize].iHighestTemporalId as i32)
         {
             crate::encoder::deblocking::PerformDeblockingFilter(pCtx);
         }
@@ -4516,13 +4546,13 @@ pub unsafe fn WelsEncoderEncodeExt(
                         )
                     }
                 };
-                if pCtx.param().bPsnrY || (*pSrcPic).bPsnrY {
+                if pCtx.param().bPsnrY || pSrcPic.bPsnrY {
                     fSnrY = plane_psnr(0, iCurWidth, iCurHeight);
                 }
-                if pCtx.param().bPsnrU || (*pSrcPic).bPsnrU {
+                if pCtx.param().bPsnrU || pSrcPic.bPsnrU {
                     fSnrU = plane_psnr(1, iCurWidth >> 1, iCurHeight >> 1);
                 }
-                if pCtx.param().bPsnrV || (*pSrcPic).bPsnrV {
+                if pCtx.param().bPsnrV || pSrcPic.bPsnrV {
                     fSnrV = plane_psnr(2, iCurWidth >> 1, iCurHeight >> 1);
                 }
             }
@@ -4531,13 +4561,13 @@ pub unsafe fn WelsEncoderEncodeExt(
         pFbi.sLayerInfo[iLbi].rPsnr[0] = 0.0;
         pFbi.sLayerInfo[iLbi].rPsnr[1] = 0.0;
         pFbi.sLayerInfo[iLbi].rPsnr[2] = 0.0;
-        if (*pSrcPic).bPsnrY {
+        if pSrcPic.bPsnrY {
             pFbi.sLayerInfo[iLbi].rPsnr[0] = fSnrY;
         }
-        if (*pSrcPic).bPsnrU {
+        if pSrcPic.bPsnrU {
             pFbi.sLayerInfo[iLbi].rPsnr[1] = fSnrU;
         }
-        if (*pSrcPic).bPsnrV {
+        if pSrcPic.bPsnrV {
             pFbi.sLayerInfo[iLbi].rPsnr[2] = fSnrV;
         }
 
@@ -4550,7 +4580,12 @@ pub unsafe fn WelsEncoderEncodeExt(
         iLbi += 1;
         pCtx.pOut.as_deref_mut().expect("pOut lives").iLayerBsIndex += 1;
         pFbi.sLayerInfo[iLbi].pBsBuf = pCtx.frame_bs_cur();
-        pFbi.sLayerInfo[iLbi].pNalLengthInByte = kpPrevNalLen.add(iCountNal as usize);
+        // unsafe-cat: C-ABI — the next layer's out-array is the previous one's
+        // tail, in the frozen `SFrameBSInfo` the application walks (S11.20).
+        #[allow(unsafe_code)]
+        unsafe {
+            pFbi.sLayerInfo[iLbi].pNalLengthInByte = kpPrevNalLen.add(iCountNal as usize);
+        }
 
         if pCtx.param().iPaddingFlag != 0
             && pCtx.rc_at(pCtx.uiDependencyId as usize).iPaddingSize > 0
@@ -4578,14 +4613,23 @@ pub unsafe fn WelsEncoderEncodeExt(
             pFbi.sLayerInfo[iLbi].uiQualityId = 0;
             pFbi.sLayerInfo[iLbi].uiLayerType = NON_VIDEO_CODING_LAYER;
             pFbi.sLayerInfo[iLbi].iNalCount = 1;
-            *pFbi.sLayerInfo[iLbi].pNalLengthInByte = iPaddingNalSize;
+            // unsafe-cat: C-ABI — the padding NAL's one length, into the
+            // application's frozen out-array (S11.20).
+            #[allow(unsafe_code)]
+            unsafe {
+                *pFbi.sLayerInfo[iLbi].pNalLengthInByte = iPaddingNalSize;
+            }
             pFbi.sLayerInfo[iLbi].eFrameType = eFrameType;
             pFbi.sLayerInfo[iLbi].iSubSeqId = GetSubSequenceId(pCtx, eFrameType);
             let kpPrevNalLen2 = pFbi.sLayerInfo[iLbi].pNalLengthInByte;
             iLbi += 1;
             pCtx.pOut.as_deref_mut().expect("pOut lives").iLayerBsIndex += 1;
             pFbi.sLayerInfo[iLbi].pBsBuf = pCtx.frame_bs_cur();
-            pFbi.sLayerInfo[iLbi].pNalLengthInByte = kpPrevNalLen2.add(1);
+            // unsafe-cat: C-ABI — as above: the next layer starts one entry on.
+            #[allow(unsafe_code)]
+            unsafe {
+                pFbi.sLayerInfo[iLbi].pNalLengthInByte = kpPrevNalLen2.add(1);
+            }
             iLayerNum += 1;
 
             iFrameSize += iPaddingNalSize;
@@ -4606,10 +4650,11 @@ pub unsafe fn WelsEncoderEncodeExt(
         // The `MT_DEBUG`-only `TrackSliceComplexities` that follows it in the C++ has
         // no counterpart here and needs none: `MT_DEBUG` is off in every build either
         // project makes.
-        if (*pParam).sSliceArgument.uiSliceMode == SliceModeEnum::SM_FIXEDSLCNUM_SLICE
+        if pCtx.param().sSpatialLayers[iCurDid as usize].sSliceArgument.uiSliceMode == SliceModeEnum::SM_FIXEDSLCNUM_SLICE
             && pCtx.param().bUseLoadBalancing
             && pCtx.param().iMultipleThreadIdc > 1
-            && pCtx.param().iMultipleThreadIdc >= (*pParam).sSliceArgument.uiSliceNum as u16
+            && pCtx.param().iMultipleThreadIdc
+                >= pCtx.param().sSpatialLayers[iCurDid as usize].sSliceArgument.uiSliceNum as u16
         {
             crate::encoder::slice_multi_threading::CalcSliceComplexRatio(current_layer_mut(pCtx).expect("the frame's current layer is stamped"));
         }
@@ -4648,7 +4693,7 @@ pub unsafe fn WelsEncoderEncodeExt(
             pCtx.bRefOfCurTidIsLtr[iCurDid as usize][iCurTid as usize] = true;
         }
         if pCtx.param().bSimulcastAVC {
-            (*pParamInternal).iCodingIndex += 1;
+            pCtx.param_mut().sDependencyLayers[iCurDid as usize].iCodingIndex += 1;
         }
     } // end of (iSpatialIdx/iSpatialNum)
 
@@ -4667,7 +4712,11 @@ pub unsafe fn WelsEncoderEncodeExt(
         // panic where this reads, and a panic is not byte-identical. F162.
         // Spelled through a derivation that lives and dies inside this statement, so
         // nothing is held across the two calls below — which is the whole hazard.
-        let iDid = (*pCtx.sSpatialIndexMap.as_ptr().add(iSpatialIdx as usize)).iDid;
+        // unsafe-cat: port-raw(F162) — a deliberate reproduction, not a debt:
+        // safe indexing would panic where the C++ reads, and a panic is not
+        // byte-identical.
+        #[allow(unsafe_code)]
+        let iDid = unsafe { (*pCtx.sSpatialIndexMap.as_ptr().add(iSpatialIdx as usize)).iDid };
         crate::encoder::encoder_context::with_vpp(pCtx, |pVpp, pCtx| {
             pVpp.UpdateSpatialPictures(pCtx, iCurTid as i8, iDid)
         });

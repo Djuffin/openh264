@@ -2136,8 +2136,6 @@ impl CWelsH264SVCEncoder {
         kiEncoderReturn
     }
 
-    // unsafe-cat: port-raw(Phase 9)
-    #[allow(unsafe_code)]
     pub fn EncodeFrameInternal(
         &mut self,
         pSrcPic: &SSourcePicture,
@@ -2159,38 +2157,33 @@ impl CWelsH264SVCEncoder {
         // fell into the arm below and ran `WelsUninitEncoderExt(take())` before
         // returning `cmMallocMemeError`. `take()` on an unset slot is `None`, so
         // this is the same two statements in the same order.
-        unsafe {
-            // Back to raw for the tree below the boundary, which is
-            // `port-raw(Phase 9)` and takes both blocks as pointers.
-            let pSrcPic: *const SSourcePicture = pSrcPic;
-            let pBsInfo: *mut SFrameBSInfo = pBsInfo;
+        // S11.41: the "back to raw for the tree below" downgrade retired with the
+        // tree — the frame root takes both blocks as references now.
+        let Some(pCtx) = self.m_pEncContext.as_deref_mut() else {
+            crate::encoder::encoder_ext::WelsUninitEncoderExt(None);
+            return cmMallocMemeError;
+        };
 
-            let Some(pCtx) = self.m_pEncContext.as_deref_mut() else {
-                crate::encoder::encoder_ext::WelsUninitEncoderExt(None);
-                return cmMallocMemeError;
-            };
+        let kiBeforeFrameUs = WelsTime();
+        let kiEncoderReturn =
+            crate::encoder::encoder_ext::WelsEncoderEncodeExt(pCtx, pBsInfo, pSrcPic);
+        let kiCurrentFrameMs = (WelsTime() - kiBeforeFrameUs) / 1000;
 
-            let kiBeforeFrameUs = WelsTime();
-            let kiEncoderReturn =
-                crate::encoder::encoder_ext::WelsEncoderEncodeExt(pCtx, &mut *pBsInfo, pSrcPic);
-            let kiCurrentFrameMs = (WelsTime() - kiBeforeFrameUs) / 1000;
-
-            if kiEncoderReturn == ENC_RETURN_MEMALLOCERR
-                || kiEncoderReturn == ENC_RETURN_MEMOVERFLOWFOUND
-                || kiEncoderReturn == ENC_RETURN_VLCOVERFLOWFOUND
-            {
-                crate::encoder::encoder_ext::WelsUninitEncoderExt(self.m_pEncContext.take());
-                return cmMallocMemeError;
-            } else if kiEncoderReturn == ENC_RETURN_INVALIDINPUT {
-                return cmUnsupportedData;
-            } else if kiEncoderReturn != ENC_RETURN_SUCCESS
-                && kiEncoderReturn == ENC_RETURN_CORRECTED
-            {
-                return cmUnknownReason;
-            }
-
-            self.UpdateStatistics(&*pBsInfo, kiCurrentFrameMs);
+        if kiEncoderReturn == ENC_RETURN_MEMALLOCERR
+            || kiEncoderReturn == ENC_RETURN_MEMOVERFLOWFOUND
+            || kiEncoderReturn == ENC_RETURN_VLCOVERFLOWFOUND
+        {
+            crate::encoder::encoder_ext::WelsUninitEncoderExt(self.m_pEncContext.take());
+            return cmMallocMemeError;
+        } else if kiEncoderReturn == ENC_RETURN_INVALIDINPUT {
+            return cmUnsupportedData;
+        } else if kiEncoderReturn != ENC_RETURN_SUCCESS
+            && kiEncoderReturn == ENC_RETURN_CORRECTED
+        {
+            return cmUnknownReason;
         }
+
+        self.UpdateStatistics(pBsInfo, kiCurrentFrameMs);
 
         cmResultSuccess
     }
