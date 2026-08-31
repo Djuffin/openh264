@@ -2120,17 +2120,17 @@ pub unsafe fn PrefetchReferencePicture(pCtx: &mut sWelsEncCtx, keFrameType: EVid
         debug_assert!(pCtx.iNumRef0 > 0);
         // always get item 0 due to reordering done
         pCtx.pRefPic = pCtx.pRefList0[0];
-        (*current_layer(pCtx)).pRefPic = pCtx.pRefPic;
+        current_layer_mut(pCtx).expect("the frame's current layer is stamped").pRefPic = pCtx.pRefPic;
         uiRefIdx = 0; // reordered reference index
     } else {
         // safe for IDR coding
         pCtx.pRefPic = None;
-        (*current_layer(pCtx)).pRefPic = None;
+        current_layer_mut(pCtx).expect("the frame's current layer is stamped").pRefPic = None;
     }
 
     let mut iIdx = 0;
     while iIdx < kiSliceCount {
-        let pSlice = crate::encoder::svc_encode_slice::slice_in_layer((current_layer(pCtx)).as_ref(), iIdx);
+        let pSlice = crate::encoder::svc_encode_slice::slice_in_layer(current_layer_ref(pCtx), iIdx);
         if !pSlice.is_null() {
             (*pSlice).sSliceHeaderExt.sSliceHeader.uiRefIndex = uiRefIdx;
         }
@@ -2398,7 +2398,7 @@ pub unsafe fn WelsInitCurrentLayer(pCtx: &mut sWelsEncCtx, _kiWidth: i32, _kiHei
     // `DynamicAdjustSlicing` alone, which only `AdjustBaseLayer`/`AdjustEnhanceLayer`
     // call, and only on the `SM_FIXEDSLCNUM_SLICE` arm.
     if pCtx.pSliceThreading.is_some()
-        && !current_layer(pCtx).is_null()
+        && !current_layer_ref(pCtx).is_none()
         && current_layer_ref(pCtx).expect("the frame's current layer is stamped").bNeedAdjustingSlicing
     {
         let kiTaskCount = pCtx.param().sSpatialLayers[kiCurDid as usize]
@@ -3386,7 +3386,7 @@ pub unsafe fn WelsCodeOnePicPartition(
         }
 
         crate::encoder::nal_encap::WelsLoadNal(pCtx.pOut.as_deref_mut().expect("pOut lives"), keNalType as i32, keNalRefIdc as i32);
-        let pCurSlice = crate::encoder::svc_encode_slice::slice_in_bank(&*(current_layer(pCtx)), uSlcBuffIdx, iSliceIdx);
+        let pCurSlice = crate::encoder::svc_encode_slice::slice_in_bank(current_layer_ref(pCtx).expect("the frame's current layer is stamped"), uSlcBuffIdx, iSliceIdx);
         (*pCurSlice).iSliceIdx = iSliceIdx;
 
         // T7.C3: the layer-level half of `WelsCodeOneSlice`'s I_SLICE arm, one line
@@ -3617,7 +3617,7 @@ pub unsafe fn WelsEncoderEncodeExt(
     (*pLayerBsInfo).pNalLengthInByte = pCtx.pOut.as_deref_mut().expect("pOut lives").sNalLen.as_mut_ptr();
     iCurDid = pCtx.sSpatialIndexMap[0].iDid as i8;
     set_current_layer(pCtx, Some(LayerIdx(iCurDid as u8)));
-    (*current_layer(pCtx)).pRefLayer = None;
+    current_layer_mut(pCtx).expect("the frame's current layer is stamped").pRefLayer = None;
 
     if !pCtx.param().bSimulcastAVC {
         eFrameType = PrepareEncodeFrame(pCtx,
@@ -3851,7 +3851,7 @@ pub unsafe fn WelsEncoderEncodeExt(
         if (*pParam).sSliceArgument.uiSliceMode == SM_SINGLE_SLICE {
             // only one slice within a quality layer
             let mut iPayloadSize = 0i32;
-            let pCurSlice = crate::encoder::svc_encode_slice::slice_in_bank(&*(current_layer(pCtx)), 0, 0);
+            let pCurSlice = crate::encoder::svc_encode_slice::slice_in_bank(current_layer_ref(pCtx).expect("the frame's current layer is stamped"), 0, 0);
 
             if pCtx.bNeedPrefixNalFlag {
                 pCtx.iEncoderError = AddPrefixNal(pCtx,
@@ -3875,7 +3875,7 @@ pub unsafe fn WelsEncoderEncodeExt(
             );
             debug_assert_eq!(0, (*pCurSlice).iSliceIdx);
             pCtx.iEncoderError = crate::encoder::svc_encode_slice::SetSliceBoundaryInfo(
-                (current_layer(pCtx)).as_ref(),
+                current_layer_ref(pCtx),
                 &mut *pCurSlice,
                 0,
             );
@@ -3963,7 +3963,7 @@ pub unsafe fn WelsEncoderEncodeExt(
             // THREAD_FULLY_FIRE_MODE/THREAD_PICK_UP_MODE for any mode of
             // non-SM_SIZELIMITED_SLICE
             iSliceCount =
-                crate::encoder::svc_encode_slice::GetCurrentSliceNum(&mut *current_layer(pCtx));
+                crate::encoder::svc_encode_slice::GetCurrentSliceNum(current_layer_mut(pCtx).expect("the frame's current layer is stamped"));
             if iLayerNum + 1 >= MAX_LAYER_NUM_OF_FRAME as i32 {
                 // check available layer_bs_info for further writing as followed
                 return ENC_RETURN_UNSUPPORTED_PARA;
@@ -4064,7 +4064,7 @@ pub unsafe fn WelsEncoderEncodeExt(
             }
 
             iSliceCount =
-                crate::encoder::svc_encode_slice::GetCurrentSliceNum(&mut *current_layer(pCtx));
+                crate::encoder::svc_encode_slice::GetCurrentSliceNum(current_layer_mut(pCtx).expect("the frame's current layer is stamped"));
             iLayerSize = crate::encoder::slice_multi_threading::AppendSliceToFrameBs(pCtx,
                 pLayerBsInfo,
                 iSliceCount,
@@ -4078,7 +4078,7 @@ pub unsafe fn WelsEncoderEncodeExt(
             let mut iSliceIdx = 0i32;
 
             iSliceCount =
-                crate::encoder::svc_encode_slice::GetCurrentSliceNum(&mut *current_layer(pCtx));
+                crate::encoder::svc_encode_slice::GetCurrentSliceNum(current_layer_mut(pCtx).expect("the frame's current layer is stamped"));
             while iSliceIdx < iSliceCount {
                 let mut iPayloadSize = 0i32;
 
@@ -4103,10 +4103,10 @@ pub unsafe fn WelsEncoderEncodeExt(
                     eNalRefIdc as i32,
                 );
 
-                let pCurSlice = crate::encoder::svc_encode_slice::slice_in_bank(&*(current_layer(pCtx)), 0, iSliceIdx);
+                let pCurSlice = crate::encoder::svc_encode_slice::slice_in_bank(current_layer_ref(pCtx).expect("the frame's current layer is stamped"), 0, iSliceIdx);
                 debug_assert_eq!(iSliceIdx, (*pCurSlice).iSliceIdx);
                 pCtx.iEncoderError = crate::encoder::svc_encode_slice::SetSliceBoundaryInfo(
-                    (current_layer(pCtx)).as_ref(),
+                    current_layer_ref(pCtx),
                     &mut *pCurSlice,
                     iSliceIdx,
                 );
@@ -4224,7 +4224,7 @@ pub unsafe fn WelsEncoderEncodeExt(
 
         // update scc related
         if let Some(f) = pCtx.func_list().pfUpdateFMESwitch {
-            f(current_layer(pCtx).as_ref());
+            f(current_layer_ref(pCtx));
         }
 
         // reference picture list update
@@ -4373,7 +4373,7 @@ pub unsafe fn WelsEncoderEncodeExt(
             && pCtx.param().iMultipleThreadIdc > 1
             && pCtx.param().iMultipleThreadIdc >= (*pParam).sSliceArgument.uiSliceNum as u16
         {
-            crate::encoder::slice_multi_threading::CalcSliceComplexRatio(&mut *current_layer(pCtx));
+            crate::encoder::slice_multi_threading::CalcSliceComplexRatio(current_layer_mut(pCtx).expect("the frame's current layer is stamped"));
         }
 
         pCtx.eLastNalPriority[iCurDid as usize] = eNalRefIdc;

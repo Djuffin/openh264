@@ -85,6 +85,7 @@ pub use crate::encoder::picture::SScreenBlockFeatureStorage;
 pub use crate::encoder::param_svc::SWelsSPS;
 pub use crate::encoder::svc_encode_slice::SSliceHeader;
 use crate::encoder::svc_encode_slice::current_layer_ref;
+use crate::encoder::svc_encode_slice::current_layer_mut;
 use crate::encoder::svc_encode_slice::ctx_sps;
 use crate::encoder::svc_encode_slice::ctx_sps_ref;
 use crate::encoder::svc_encode_slice::current_layer;
@@ -759,7 +760,7 @@ pub fn PrefetchNextBuffer(pCtx: &mut sWelsEncCtx) {
 pub unsafe fn WelsUpdateRefList(pCtx: &mut sWelsEncCtx) -> bool {
     // T9.H: the `pCtx.is_null()` disjunct is gone — a `&mut sWelsEncCtx`
     // cannot be null and every caller now holds one. The rest is unchanged.
-    if current_layer(pCtx).is_null() || pCtx.param_opt().is_none() {
+    if current_layer_ref(pCtx).is_none() || pCtx.param_opt().is_none() {
         return false;
     }
     let uiDid = pCtx.uiDependencyId as usize;
@@ -1044,12 +1045,10 @@ pub fn WelsMarkMMCORefInfo(
 }
 
 /// Evaluates LTR marking criteria and populates slice header MMCO commands.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn WelsMarkPic(pCtx: &mut sWelsEncCtx) {
+pub fn WelsMarkPic(pCtx: &mut sWelsEncCtx) {
     // T9.H: the `pCtx.is_null()` disjunct is gone — a `&mut sWelsEncCtx`
     // cannot be null and every caller now holds one. The rest is unchanged.
-    if current_layer(pCtx).is_null() || pCtx.param_opt().is_none() {
+    if current_layer_ref(pCtx).is_none() || pCtx.param_opt().is_none() {
         return;
     }
     let uiDid = pCtx.uiDependencyId as usize;
@@ -1069,10 +1068,12 @@ pub unsafe fn WelsMarkPic(pCtx: &mut sWelsEncCtx) {
     let kuiGopSize = pCtx.param().uiGopSize;
     let kuiTid = pCtx.uiTemporalId;
     let kiCountSliceNum = current_layer_ref(pCtx).expect("the frame's current layer is stamped").iMaxSliceNum;
-    // T9.G6: hoisted — the argument reads through the context, so it is derived
-    // before the LTR borrows below (shape B).
-    let pCurLayerForMmco = &mut *current_layer(pCtx);
-
+    // **S11.11: the hoist is reversed, and the reason inverted with it.** T9.G6
+    // derived this *before* the LTR block because the raw form's argument read
+    // through the context and the derivation had to precede the `&mut`s below.
+    // A `&mut SDqLayer` is the opposite: it must be taken *after* them, since
+    // it and `ctx_ltr_at`'s borrow are both of the context. The derivation moves
+    // to its one use, at the call.
     if kbEnableLtr && ctx_ltr_at(pCtx, uiDid).bLTRMarkEnable && kuiTid == 0 {
         let pLtr = &*ctx_ltr_at(pCtx, uiDid);
         let bMarkCandidate = !pLtr.bReceivedT0LostFlag
@@ -1092,11 +1093,14 @@ pub unsafe fn WelsMarkPic(pCtx: &mut sWelsEncCtx) {
         }
     }
 
+    // The LTR record is `Copy`-read out first so the layer's `&mut` and it are
+    // not both live borrows of the context at the call.
+    let kLtr = *ctx_ltr_at(pCtx, uiDid);
     WelsMarkMMCORefInfo(
         kuiGopSize,
         kbEnableLtr,
-        ctx_ltr_at(pCtx, uiDid),
-        pCurLayerForMmco,
+        &kLtr,
+        current_layer_mut(pCtx).expect("the frame's current layer is stamped"),
         kiCountSliceNum,
     );
 }
@@ -1208,7 +1212,7 @@ pub unsafe fn WelsBuildRefList(
 ) -> bool {
     // T9.H: the `pCtx.is_null()` disjunct is gone — a `&mut sWelsEncCtx`
     // cannot be null and every caller now holds one. The rest is unchanged.
-    if pCtx.param_opt().is_none() || current_layer(pCtx).is_null() {
+    if pCtx.param_opt().is_none() || current_layer_ref(pCtx).is_none() {
         return false;
     }
     let uiDid = pCtx.uiDependencyId as usize;
@@ -1242,7 +1246,7 @@ pub unsafe fn WelsBuildRefList(
                     let numRef0 = pCtx.iNumRef0 as usize;
                     // The camera path puts a *reconstruction* picture in `pRefOri`
                     // where the screen path puts a source picture — see `PicRef`.
-                    (*current_layer(pCtx)).pRefOri[numRef0] = Some(PicRef::Rec(idLong));
+                    current_layer_mut(pCtx).expect("the frame's current layer is stamped").pRefOri[numRef0] = Some(PicRef::Rec(idLong));
                     pCtx.pRefList0[numRef0] = Some(idLong);
                     pCtx.iNumRef0 += 1;
                     ctx_ltr_at(pCtx, (uiDid) as usize).iLastRecoverFrameNum = (*pParamD).iFrameNum;
@@ -1261,7 +1265,7 @@ pub unsafe fn WelsBuildRefList(
                 };
                 if bTake {
                     let numRef0 = pCtx.iNumRef0 as usize;
-                    (*current_layer(pCtx)).pRefOri[numRef0] = Some(PicRef::Rec(idRef));
+                    current_layer_mut(pCtx).expect("the frame's current layer is stamped").pRefOri[numRef0] = Some(PicRef::Rec(idRef));
                     pCtx.pRefList0[numRef0] = Some(idRef);
                     pCtx.iNumRef0 += 1;
                 }
@@ -1423,7 +1427,7 @@ pub unsafe fn WelsUpdateRefSyntax(pCtx: &mut sWelsEncCtx, kiPOC: i32, kiFrameTyp
     // T9.H4: the `is_null()` disjunct that opened this guard is gone — a
     // `&mut sWelsEncCtx` cannot be null, and every caller now holds one. The
     // remaining conditions are unchanged.
-    if pCtx.param_opt().is_none() || current_layer(pCtx).is_null() {
+    if pCtx.param_opt().is_none() || current_layer_ref(pCtx).is_none() {
         return;
     }
     let mut iAbsDiffPicNumMinus1 = -1i32;
@@ -1443,9 +1447,14 @@ pub unsafe fn WelsUpdateRefSyntax(pCtx: &mut sWelsEncCtx, kiPOC: i32, kiFrameTyp
         }
     }
 
-    if !current_layer(pCtx).is_null() {
+    if current_layer_ref(pCtx).is_some() {
         // The null arm of the callee's old guard, hoisted with the reborrow.
-        // T9.G6: hoisted — see `WelsMarkMMCORefInfo` above.
+        // **S11.11: the raw stays here.** `WelsUpdateSliceHeaderSyntax` takes
+        // `&mut sWelsEncCtx` *and* `&mut SDqLayer` where the layer lives inside
+        // that context — `DynamicAdjustSlicing`'s shape, and the third member of
+        // the seam list. F71's slot read keeps the two provenances apart; a
+        // `current_layer_mut` here would be a second `&mut` on the context and
+        // the borrow checker refuses it, correctly.
         let pCurLayerForSh = &mut *current_layer(pCtx);
         WelsUpdateSliceHeaderSyntax(
             pCtx,
@@ -1548,7 +1557,7 @@ pub fn UpdateSrcPicList(pCtx: &mut sWelsEncCtx) {
 pub unsafe fn WelsUpdateRefListScreen(pCtx: &mut sWelsEncCtx) -> bool {
     // T9.H: the `pCtx.is_null()` disjunct is gone — a `&mut sWelsEncCtx`
     // cannot be null and every caller now holds one. The rest is unchanged.
-    if current_layer(pCtx).is_null() || pCtx.param_opt().is_none() {
+    if current_layer_ref(pCtx).is_none() || pCtx.param_opt().is_none() {
         return false;
     }
     let uiDid = pCtx.uiDependencyId as usize;
@@ -1636,7 +1645,7 @@ pub unsafe fn WelsBuildRefListScreen(
 ) -> bool {
     // T9.H: the `pCtx.is_null()` disjunct is gone — a `&mut sWelsEncCtx`
     // cannot be null and every caller now holds one. The rest is unchanged.
-    if pCtx.param_opt().is_none() || pCtx.vaa().is_none() || current_layer(pCtx).is_null() {
+    if pCtx.param_opt().is_none() || pCtx.vaa().is_none() || current_layer_ref(pCtx).is_none() {
         return false;
     }
     let uiDid = pCtx.uiDependencyId as usize;
@@ -1694,7 +1703,7 @@ pub unsafe fn WelsBuildRefListScreen(
                 };
                 if bTake {
                     let num0 = pCtx.iNumRef0 as usize;
-                    (*current_layer(pCtx)).pRefOri[num0] = refOri;
+                    current_layer_mut(pCtx).expect("the frame's current layer is stamped").pRefOri[num0] = refOri;
                     pCtx.pRefList0[num0] = Some(idRefPic);
                     pCtx.iNumRef0 += 1;
                 }
@@ -1708,7 +1717,7 @@ pub unsafe fn WelsBuildRefListScreen(
                     let uiTemporalId = pCtx.ref_list(uiDid).expect("the dependency layer's reference list").pic(idLong).uiTemporalId;
                     if uiTemporalId == 0 || uiTemporalId < pCtx.uiTemporalId {
                         let num0 = pCtx.iNumRef0 as usize;
-                        (*current_layer(pCtx)).pRefOri[num0] = refOri;
+                        current_layer_mut(pCtx).expect("the frame's current layer is stamped").pRefOri[num0] = refOri;
                         pCtx.pRefList0[num0] = Some(idLong);
                         pCtx.iNumRef0 += 1;
                         break;
@@ -1780,7 +1789,7 @@ pub fn WelsMarkMMCORefInfoScreen(
 pub unsafe fn WelsMarkPicScreen(pCtx: &mut sWelsEncCtx) {
     // T9.H: the `pCtx.is_null()` disjunct is gone — a `&mut sWelsEncCtx`
     // cannot be null and every caller now holds one. The rest is unchanged.
-    if pCtx.param_opt().is_none() || current_layer(pCtx).is_null() {
+    if pCtx.param_opt().is_none() || current_layer_ref(pCtx).is_none() {
         return;
     }
     let uiDid = pCtx.uiDependencyId as usize;
@@ -1819,8 +1828,9 @@ pub unsafe fn WelsMarkPicScreen(pCtx: &mut sWelsEncCtx) {
     let kuiTid = pCtx.uiTemporalId;
     let kbSceneLtr = pCtx.bCurFrameMarkedAsSceneLtr;
     let iSliceNum = current_layer_ref(pCtx).expect("the frame's current layer is stamped").iMaxSliceNum;
-    // T9.G6: hoisted — see `WelsMarkMMCORefInfo`.
-    let pCurLayerForMmco = &mut *current_layer(pCtx);
+    // **S11.11**: the T9.G6 hoist is reversed here as in `WelsMarkPic` — a
+    // `&mut SDqLayer` must be taken *after* the context's other borrows, not
+    // before them, so it moves to its one use at the call below.
     // A3: the list and the LTR state are read and written in the same branches
     // here, so they come out of one borrow — §4.6's combined accessor.
     let (pRefList, pLtr) = pCtx.ref_list_and_ltr_mut(uiDid);
@@ -1905,11 +1915,15 @@ pub unsafe fn WelsMarkPicScreen(pCtx: &mut sWelsEncCtx) {
         }
     }
 
+    // S11.11: the LTR record is `Copy`-read out so it and the layer's `&mut`
+    // are not both live borrows of the context at the call — `WelsMarkPic`'s
+    // shape, and the callee only reads it.
+    let kLtr = *pLtr;
     WelsMarkMMCORefInfoScreen(
         iNumRef,
         kbEnableLtr,
-        pLtr,
-        pCurLayerForMmco,
+        &kLtr,
+        current_layer_mut(pCtx).expect("the frame's current layer is stamped"),
         iSliceNum,
     );
 }

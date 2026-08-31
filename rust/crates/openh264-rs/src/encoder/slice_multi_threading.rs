@@ -1024,7 +1024,13 @@ pub unsafe fn AdjustEnhanceLayer(pCtx: &mut sWelsEncCtx, iCurDid: i32) -> i32 {
             current_layer_ref(pCtx).expect("layer bound").sSliceEncCtx.iSliceNumInFrame.load(Ordering::Relaxed);
         iNeedAdj = NeedDynamicAdjust(&mut *pBaseLayer, kiSliceNumInFrame);
         if iNeedAdj != 0 {
-            // T9.G6: hoisted (shape B).
+            // T9.G6: hoisted (shape B). **S11.11: this one keeps the raw.**
+            // `DynamicAdjustSlicing` takes `&mut sWelsEncCtx` *and* `&mut
+            // SDqLayer` where the layer lives inside that context, and F71's
+            // slot read is what keeps the two provenances apart — a
+            // `current_layer_mut` here would be a second `&mut` on the context
+            // and the borrow checker refuses it, correctly. Restructuring that
+            // parameter list is the real fix and is its own checkpoint.
             let pCurLayer = &mut *current_layer(pCtx);
             DynamicAdjustSlicing(pCtx, pCurLayer, iCurDid);
         }
@@ -1034,7 +1040,13 @@ pub unsafe fn AdjustEnhanceLayer(pCtx: &mut sWelsEncCtx, iCurDid: i32) -> i32 {
             current_layer_ref(pCtx).expect("layer bound").sSliceEncCtx.iSliceNumInFrame.load(Ordering::Relaxed);
         iNeedAdj = NeedDynamicAdjust(&mut *pCurLayer, kiSliceNumInFrame);
         if iNeedAdj != 0 {
-            // T9.G6: hoisted (shape B).
+            // T9.G6: hoisted (shape B). **S11.11: this one keeps the raw.**
+            // `DynamicAdjustSlicing` takes `&mut sWelsEncCtx` *and* `&mut
+            // SDqLayer` where the layer lives inside that context, and F71's
+            // slot read is what keeps the two provenances apart — a
+            // `current_layer_mut` here would be a second `&mut` on the context
+            // and the borrow checker refuses it, correctly. Restructuring that
+            // parameter list is the real fix and is its own checkpoint.
             let pCurLayer = &mut *current_layer(pCtx);
             DynamicAdjustSlicing(pCtx, pCurLayer, iCurDid);
         }
@@ -2024,6 +2036,9 @@ unsafe fn EncodeOnePartitionSizeLimited(
             iAnyMbLeftInPartition = kiEndMbIdxInPartition
                 - (*pCurDq).LastCodedMbIdxOfPartition[kiPartitionId as usize].load(Ordering::Relaxed);
             iLocalSliceIdx += kiSliceIdxStep;
+            // S11.11: the raw stays — this is a *fork* body holding
+            // `&sWelsEncCtx`, so no `&mut` to the context exists to resolve the
+            // layer through. The counter it bumps is the worker's own bank slot.
             (*current_layer(pCtx)).sSliceBufferInfo[iBsSlot as usize].iCodedSliceNum += 1;
         }
         ENC_RETURN_SUCCESS
