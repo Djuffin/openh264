@@ -260,15 +260,8 @@ impl EntropyCoder {
     /// neighbours for context modelling and write the current record's QP and
     /// MVD state, so `mbs` is exactly "my slice's records so far, current last".
     ///
-    /// # Safety
-    /// As the two implementations: `pEncCtx` and `pSlice` must be live and the
-    /// slice's writer positioned in `pSliceBsBuf` (S11.1a: the buffer arrives
-    /// threaded from the chain's top; deriving it here from the shared context
-    /// is the shape the seam conversion retired).
     #[inline]
-    // unsafe-cat: fork-shared(S63)
-    #[allow(unsafe_code)]
-    pub unsafe fn WelsSpatialWriteMbSyn(
+    pub fn WelsSpatialWriteMbSyn(
         self,
         pEncCtx: &sWelsEncCtx,
         pSlice: &mut SSlice,

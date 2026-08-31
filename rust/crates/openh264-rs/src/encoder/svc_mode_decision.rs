@@ -16,8 +16,7 @@
 
 
 use crate::encoder::rec_view::{copy_block_to_view, RecCursor};
-use crate::encoder::svc_encode_slice::{layer_enc_view, layer_rec_view, layer_ref_pic, layer_ref_view};
-use crate::encoder::svc_encode_slice::layer_pps;
+use crate::encoder::svc_encode_slice::{layer_enc_view, layer_rec_view, layer_ref_pic, layer_ref_view, layer_pps_ref};
 use crate::encoder::svc_encode_slice::current_layer;
 use crate::encoder::picture::{RecPicId, SrcPicId};
 use crate::encoder::md::{PredictSad, PredictSadSkip, WelsMedian};
@@ -282,11 +281,7 @@ pub fn WELS_CLIP3(iX: i32, iMin: i32, iMax: i32) -> i32 {
 /// 4b's fence: both callers pass the `pEncCtx` they already have, and each was
 /// deriving `pCurDqLayer` from it one line earlier.
 ///
-/// # Safety
-/// All pointers must be valid and the layer's PPS position assigned.
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
-pub unsafe extern "C" fn WelsMdInterUpdatePskip(
+pub extern "C" fn WelsMdInterUpdatePskip(
     pEncCtx: &sWelsEncCtx,
     pCurDqLayer: &SDqLayer,
     pSlice: &mut SSlice,
@@ -296,7 +291,9 @@ pub unsafe extern "C" fn WelsMdInterUpdatePskip(
     //add pEnc&rec to MD--2010.3.15
     (*pCurMb).uiCbp = 0;
     (*pCurMb).uiLumaQp = (*pSlice).uiLastMbQp;
-    let kiChromaQpIndexOffset = (*layer_pps(pEncCtx, pCurDqLayer)).uiChromaQpIndexOffset as i32;
+    let kiChromaQpIndexOffset = layer_pps_ref(pEncCtx, &*pCurDqLayer)
+        .expect("the layer's PPS is stamped")
+        .uiChromaQpIndexOffset as i32;
     (*pCurMb).uiChromaQp = crate::encoder::svc_encode_slice::g_kuiChromaQpTable
         [WELS_CLIP3((*pCurMb).uiLumaQp as i32 + kiChromaQpIndexOffset, 0, 51) as usize];
     (*pMbCache).bCollocatedPredFlag = LD32_MV(&(*pCurMb).sMv[0]) == 0;
@@ -704,7 +701,10 @@ pub unsafe extern "C" fn WelsMdBackgroundMbEnc(
         (*pCurMb).uiLumaQp = (*pSlice).uiLastMbQp;
         (*pCurMb).uiChromaQp = crate::encoder::svc_encode_slice::g_kuiChromaQpTable
             [crate::encoder::svc_encode_slice::CLIP3_QP_0_51(
-                (*pCurMb).uiLumaQp as i32 + (*layer_pps(pEncCtx, pCurDqLayer)).uiChromaQpIndexOffset as i32,
+                (*pCurMb).uiLumaQp as i32
+                    + layer_pps_ref(pEncCtx, &*pCurDqLayer)
+                        .expect("the layer's PPS is stamped")
+                        .uiChromaQpIndexOffset as i32,
             )];
 
         WelsRecPskip(&*pCurDqLayer, &*pFunc, pCurMb, &mut *pMbCache);

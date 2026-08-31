@@ -857,92 +857,6 @@ pub fn set_current_layer(pCtx: &mut sWelsEncCtx, kIdx: Option<LayerIdx>) {
     pCtx.iCurDqLayer = kIdx;
 }
 
-/// A layer's **active SPS**, resolved from [`LayerSps`] — T6.G3.
-///
-/// This is `sLayerInfo.pSpsP`, and the pointer it replaces pointed into one of two
-/// allocations: `pSpsArray[id]`, or the `pSps` *embedded inside* `pSubsetArray[id]`.
-/// Both arms are reproduced exactly, including the inner one's spelling: the subset
-/// arm takes `addr_of_mut!` of the field rather than a reference to it, so the
-/// returned cursor carries the whole `SSubsetSps`'s provenance the way the C++'s
-/// `&pSubsetSpsP->pSps` does (S29).
-///
-/// Null when the layer has no SPS yet, or the array it names is not allocated —
-/// the two cases `pSpsP` was null in.
-///
-/// # Safety
-/// `pCtx` must point to a live encoder context and `pCurLayer` to one of its layers.
-#[inline]
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
-pub unsafe fn layer_sps(pCtx: &sWelsEncCtx, pCurLayer: *const SDqLayer) -> *mut SWelsSPS {
-    match (*pCurLayer).sLayerInfo.eSps {
-        None => std::ptr::null_mut(),
-        Some(LayerSps::Avc(id)) => {
-            // A4: the array is the safe reader now; the raw comes back out of it
-            // because the far end is `SDqLayer::sLayerInfo`, stage C's. Nothing in
-            // the fork writes a parameter set (whole-tree grep at the conversion),
-            // so a shared reborrow is the right root for this cursor.
-            let arr = (*pCtx).sps_array();
-            if arr.is_empty() {
-                return std::ptr::null_mut();
-            }
-            arr.as_ptr().cast_mut().add(id.get())
-        }
-        Some(LayerSps::Subset(id)) => {
-            let arr = (*pCtx).subset_array();
-            if arr.is_empty() {
-                return std::ptr::null_mut();
-            }
-            std::ptr::addr_of_mut!((*arr.as_ptr().cast_mut().add(id.get())).pSps)
-        }
-    }
-}
-
-/// A layer's **subset SPS**, or null when the layer is not on the SVC arm — T6.G3.
-///
-/// `pSubsetSpsP` was null in exactly the AVC case, and this answers null there for
-/// the same reason: [`LayerSps::Avc`] has no subset SPS to name.
-///
-/// # Safety
-/// As [`layer_sps`].
-#[inline]
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
-pub unsafe fn layer_subset_sps(
-    pCtx: &sWelsEncCtx,
-    pCurLayer: *const SDqLayer,
-) -> *mut SSubsetSps {
-    match (*pCurLayer).sLayerInfo.eSps {
-        Some(LayerSps::Subset(id)) => {
-            let arr = (*pCtx).subset_array();
-            if arr.is_empty() {
-                return std::ptr::null_mut();
-            }
-            arr.as_ptr().cast_mut().add(id.get())
-        }
-        _ => std::ptr::null_mut(),
-    }
-}
-
-/// A layer's **active PPS**, resolved from its position in `pCtx->pPPSArray` — the
-/// `sLayerInfo.pPpsP` of T6.G3, and the most-read of this family (26 sites).
-///
-/// # Safety
-/// As [`layer_sps`].
-#[inline]
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
-pub unsafe fn layer_pps(pCtx: &sWelsEncCtx, pCurLayer: *const SDqLayer) -> *mut SWelsPPS {
-    let Some(id) = (*pCurLayer).sLayerInfo.iPps else {
-        return std::ptr::null_mut();
-    };
-    let arr = (*pCtx).pps_array();
-    if arr.is_empty() {
-        return std::ptr::null_mut();
-    }
-    arr.as_ptr().cast_mut().add(id.get())
-}
-
 /// The layer's active PPS **as a shared reference** — [`layer_pps`]'s safe twin.
 ///
 /// Same argument as [`ctx_sps_ref`], one indirection out: the callers that read a
@@ -958,6 +872,31 @@ pub unsafe fn layer_pps(pCtx: &sWelsEncCtx, pCurLayer: *const SDqLayer) -> *mut 
 #[inline]
 pub fn layer_pps_ref<'a>(pCtx: &'a sWelsEncCtx, pCurLayer: &SDqLayer) -> Option<&'a SWelsPPS> {
     pCtx.pps_array().get(pCurLayer.sLayerInfo.iPps?.get())
+}
+
+/// A layer's active SPS **as a shared reference** — [`layer_sps`]'s safe twin, on
+/// [`layer_pps_ref`]'s template and its fork-safety argument. Answers `None`
+/// exactly where the raw answered null — no SPS named, or the array empty — and
+/// the subset arm answers the embedded AVC SPS, as the raw's `addr_of_mut!` into
+/// `pSps` did. (`get` also bounds-checks the id, which the raw trusted; equal
+/// wherever the raw was in bounds.)
+#[inline]
+pub fn layer_sps_ref<'a>(pCtx: &'a sWelsEncCtx, pCurLayer: &SDqLayer) -> Option<&'a SWelsSPS> {
+    match pCurLayer.sLayerInfo.eSps {
+        None => None,
+        Some(LayerSps::Avc(id)) => pCtx.sps_array().get(id.get()),
+        Some(LayerSps::Subset(id)) => pCtx.subset_array().get(id.get()).map(|s| &s.pSps),
+    }
+}
+
+/// A layer's subset SPS as a shared reference — [`layer_subset_sps`]'s safe twin;
+/// `None` on the AVC arm for the reason the raw was null there.
+#[inline]
+pub fn layer_subset_sps_ref<'a>(pCtx: &'a sWelsEncCtx, pCurLayer: &SDqLayer) -> Option<&'a SSubsetSps> {
+    match pCurLayer.sLayerInfo.eSps {
+        Some(LayerSps::Subset(id)) => pCtx.subset_array().get(id.get()),
+        _ => None,
+    }
 }
 
 /// The context's **active SPS**, resolved from its position — T6.G3.
@@ -1606,7 +1545,7 @@ pub type PWelsCodingSliceFunc = unsafe extern "C" fn(
 ) -> i32;
 pub type PWelsSliceHeaderWriteFunc = unsafe extern "C" fn(
     pCtx: &sWelsEncCtx,
-    pCurLayer: *mut SDqLayer,
+    pCurLayer: &SDqLayer,
     pSlice: &mut SSlice,
     pParametersetStrategy: Option<&CWelsParametersetIdStrategyObj>,
     pSliceBsBuf: &mut [u8],
@@ -1916,8 +1855,8 @@ pub unsafe fn WelsSliceHeaderExtInit(pEncCtx: &sWelsEncCtx, pCurLayer: Option<&S
 
     if (*pEncCtx).eSliceType == EWelsSliceType::P_SLICE {
         pCurSliceHeader.uiNumRefIdxL0Active = 1;
-        let num_ref = if !layer_sps(pEncCtx, pCurLayer).is_null() {
-            (*layer_sps(pEncCtx, pCurLayer)).iNumRefFrames
+        let num_ref = if let Some(sps) = layer_sps_ref(pEncCtx, pCurLayer) {
+            sps.iNumRefFrames
         } else {
             1
         };
@@ -1929,11 +1868,7 @@ pub unsafe fn WelsSliceHeaderExtInit(pEncCtx: &sWelsEncCtx, pCurLayer: Option<&S
         }
     }
 
-    let pic_init_qp = if !layer_pps(pEncCtx, pCurLayer).is_null() {
-        (*layer_pps(pEncCtx, pCurLayer)).iPicInitQp
-    } else {
-        26
-    };
+    let pic_init_qp = layer_pps_ref(pEncCtx, pCurLayer).map_or(26, |p| p.iPicInitQp);
     pCurSliceHeader.iSliceQpDelta = ((*pEncCtx).iGlobalQp - pic_init_qp as i32) as i8;
 
     pCurSliceHeader.uiDisableDeblockingFilterIdc = (*pCurLayer).iLoopFilterDisableIdc;
@@ -1982,7 +1917,11 @@ pub fn WriteReferenceReorder(buf: &mut [u8], pBs: &mut BsWriter, sSliceHeader: &
     }
 }
 
-pub fn WriteRefPicMarking(buf: &mut [u8], pBs: &mut BsWriter, pSliceHeader: &mut SSliceHeader, pNalHdrExt: &mut SNalUnitHeaderExt) {
+// **F274's fix**: `pNalHdrExt` is layer state read by every worker, so it is a
+// shared reference — S10.15's `&mut` here put a concurrent Unique retag over the
+// one header struct N workers share, the shape the probe below this file's tests
+// sees red ("retag write" vs "retag write").
+pub fn WriteRefPicMarking(buf: &mut [u8], pBs: &mut BsWriter, pSliceHeader: &mut SSliceHeader, pNalHdrExt: &SNalUnitHeaderExt) {
     // S8.2, as `WriteReferenceReorder` above: the writer arm was unreachable.
     // S10.15: and inexpressible now that both are references.
     let sRefMarking = &mut pSliceHeader.sRefMarking;
@@ -2018,19 +1957,18 @@ pub fn WriteRefPicMarking(buf: &mut [u8], pBs: &mut BsWriter, pSliceHeader: &mut
     }
 }
 
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
-pub unsafe fn WelsSliceHeaderWrite(
+pub fn WelsSliceHeaderWrite(
     pCtx: &sWelsEncCtx,
-    pCurLayer: *mut SDqLayer,
+    pCurLayer: &SDqLayer,
     pSlice: &mut SSlice,
     pParametersetStrategy: Option<&CWelsParametersetIdStrategyObj>,
     pSliceBsBuf: &mut [u8],
     pCtxOutBs: &mut Option<&mut BsWriter>,
 ) {
-    if pCurLayer.is_null() {
-        return;
-    }
+    // S11.2a: the null guard retires with the raw parameter (T9.H's convention —
+    // on a reference it is inexpressible), and the one caller dereferenced the
+    // layer before this call in any case.
+    //
     // **S11.1a: the pair arrives threaded.** T9.E2b's objection — a caller
     // cannot pass a writer cursor *beside* a `&mut SSlice`, the argument
     // reborrow pops it (F114a's mechanism at whole-struct width) — was about a
@@ -2039,12 +1977,12 @@ pub unsafe fn WelsSliceHeaderWrite(
     // here, field-precisely, from the parameter itself.
     let pBs = slice_bs_writer(&mut pSlice.sSliceBs, pCtxOutBs);
     let buf = pSliceBsBuf;
-    let pSps = layer_sps(pCtx, pCurLayer);
-    let pPps = layer_pps(pCtx, pCurLayer);
+    let pSps = layer_sps_ref(pCtx, pCurLayer);
+    let pPps = layer_pps_ref(pCtx, pCurLayer);
     let pSliceHeader = &mut (*pSlice).sSliceHeaderExt.sSliceHeader;
-    // T7.C3: `addr_of_mut!`, not `&mut` — layer state, read-only here, and every
-    // worker runs this. `WriteRefPicMarking` takes the raw pointer unchanged.
-    let pNalHead = std::ptr::addr_of_mut!((*pCurLayer).sLayerInfo.sNalHeaderExt);
+    // T7.C3, F274: **shared**, never `&mut` — layer state, read-only here, and
+    // every worker runs this. `WriteRefPicMarking` takes the shared reference.
+    let pNalHead = &pCurLayer.sLayerInfo.sNalHeaderExt;
 
     BsWriteUE(buf, &mut *pBs, (*pSliceHeader).iFirstMbInSlice as u32);
     BsWriteUE(buf, &mut *pBs, (*pSliceHeader).eSliceType as u32);
@@ -2052,20 +1990,23 @@ pub unsafe fn WelsSliceHeaderWrite(
     // svc_encode_slice.cpp:285 / :361 — `pPps->iPpsId + pParametersetStrategy->
     // GetPpsIdOffset (pPps->iPpsId)`. The offset is 0 under CONSTANT_ID but not under
     // INCREASING_ID, which is the FillDefault strategy. C++ dereferences both pointers
-    // unconditionally; the null guards here follow the surrounding style in this port.
-    let pps_id = if !pPps.is_null() { (*pPps).iPpsId } else { 0 };
+    // unconditionally; the null guards' fallbacks stay verbatim on the `_ref` twins
+    // (F263's rule — `.expect()` would convert a handled state into a panic).
+    let pps_id = pPps.map_or(0, |p| p.iPpsId);
     let iPpsIdOffset = pParametersetStrategy.map_or(0, |s| s.GetPpsIdOffset(pps_id as i32));
     BsWriteUE(buf, &mut *pBs, pps_id.wrapping_add(iPpsIdOffset as u32));
 
-    let log2_max_frame_num = if !pSps.is_null() { (*pSps).uiLog2MaxFrameNum } else { 4 };
+    let log2_max_frame_num = pSps.map_or(4, |s| s.uiLog2MaxFrameNum);
     BsWriteBits(buf, &mut *pBs, log2_max_frame_num as i32, (*pSliceHeader).iFrameNum as u32);
 
-    if (*pNalHead).bIdrFlag {
+    if pNalHead.bIdrFlag {
         BsWriteUE(buf, &mut *pBs, (*pSliceHeader).uiIdrPicId as u32);
     }
 
-    if !pSps.is_null() && (*pSps).uiPocType == 0 {
-        BsWriteBits(buf, &mut *pBs, (*pSps).iLog2MaxPocLsb, (*pSliceHeader).iPicOrderCntLsb as u32);
+    if let Some(sps) = pSps {
+        if sps.uiPocType == 0 {
+            BsWriteBits(buf, &mut *pBs, sps.iLog2MaxPocLsb, (*pSliceHeader).iPicOrderCntLsb as u32);
+        }
     }
 
     if (*pSliceHeader).eSliceType == EWelsSliceType::P_SLICE {
@@ -2076,21 +2017,21 @@ pub unsafe fn WelsSliceHeaderWrite(
         }
     }
 
-    if !(*pNalHead).bIdrFlag {
+    if !pNalHead.bIdrFlag {
         WriteReferenceReorder(buf, &mut *pBs, pSliceHeader);
     }
 
-    if (*pNalHead).sNalUnitHeader.uiNalRefIdc != 0 {
-        WriteRefPicMarking(buf, &mut *pBs, pSliceHeader, &mut *pNalHead);
+    if pNalHead.sNalUnitHeader.uiNalRefIdc != 0 {
+        WriteRefPicMarking(buf, &mut *pBs, pSliceHeader, pNalHead);
     }
 
-    if !pPps.is_null() && (*pPps).bEntropyCodingModeFlag && (*pSliceHeader).eSliceType != EWelsSliceType::I_SLICE {
+    if pPps.is_some_and(|p| p.bEntropyCodingModeFlag) && (*pSliceHeader).eSliceType != EWelsSliceType::I_SLICE {
         BsWriteUE(buf, &mut *pBs, (*pSlice).iCabacInitIdc as u32);
     }
 
     BsWriteSE(buf, &mut *pBs, (*pSliceHeader).iSliceQpDelta as i32);
 
-    if !pPps.is_null() && (*pPps).bDeblockingFilterControlPresentFlag {
+    if pPps.is_some_and(|p| p.bDeblockingFilterControlPresentFlag) {
         match (*pSliceHeader).uiDisableDeblockingFilterIdc {
             0 | 3 | 4 | 6 => {
                 BsWriteUE(buf, &mut *pBs, 0);
@@ -2112,31 +2053,25 @@ pub unsafe fn WelsSliceHeaderWrite(
     }
 }
 
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
-pub unsafe fn WelsSliceHeaderExtWrite(
+pub fn WelsSliceHeaderExtWrite(
     pCtx: &sWelsEncCtx,
-    pCurLayer: *mut SDqLayer,
+    pCurLayer: &SDqLayer,
     pSlice: &mut SSlice,
     pParametersetStrategy: Option<&CWelsParametersetIdStrategyObj>,
     pSliceBsBuf: &mut [u8],
     pCtxOutBs: &mut Option<&mut BsWriter>,
 ) {
-    if pCurLayer.is_null() {
-        return;
-    }
-    // **S11.1a: the pair arrives threaded** — see `WelsSliceHeaderWrite`'s note
-    // on why T9.E2b's objection does not apply to it.
+    // S11.2a: the null guard retires with the raw parameter, as in
+    // `WelsSliceHeaderWrite` — whose notes on the threaded pair (S11.1a) and the
+    // shared header (T7.C3/F274) both apply here.
     let pBs = slice_bs_writer(&mut pSlice.sSliceBs, pCtxOutBs);
     let buf = pSliceBsBuf;
-    let pSps = layer_sps(pCtx, pCurLayer);
-    let pPps = layer_pps(pCtx, pCurLayer);
-    let pSubSps = layer_subset_sps(pCtx, pCurLayer);
+    let pSps = layer_sps_ref(pCtx, pCurLayer);
+    let pPps = layer_pps_ref(pCtx, pCurLayer);
+    let pSubSps = layer_subset_sps_ref(pCtx, pCurLayer);
     let pSliceHeadExt = &mut (*pSlice).sSliceHeaderExt;
     let pSliceHeader = &mut pSliceHeadExt.sSliceHeader;
-    // T7.C3: `addr_of_mut!`, not `&mut` — layer state, read-only here, and every
-    // worker runs this. `WriteRefPicMarking` takes the raw pointer unchanged.
-    let pNalHead = std::ptr::addr_of_mut!((*pCurLayer).sLayerInfo.sNalHeaderExt);
+    let pNalHead = &pCurLayer.sLayerInfo.sNalHeaderExt;
 
     BsWriteUE(buf, &mut *pBs, (*pSliceHeader).iFirstMbInSlice as u32);
     BsWriteUE(buf, &mut *pBs, (*pSliceHeader).eSliceType as u32);
@@ -2144,20 +2079,23 @@ pub unsafe fn WelsSliceHeaderExtWrite(
     // svc_encode_slice.cpp:285 / :361 — `pPps->iPpsId + pParametersetStrategy->
     // GetPpsIdOffset (pPps->iPpsId)`. The offset is 0 under CONSTANT_ID but not under
     // INCREASING_ID, which is the FillDefault strategy. C++ dereferences both pointers
-    // unconditionally; the null guards here follow the surrounding style in this port.
-    let pps_id = if !pPps.is_null() { (*pPps).iPpsId } else { 0 };
+    // unconditionally; the null guards' fallbacks stay verbatim on the `_ref` twins
+    // (F263's rule — `.expect()` would convert a handled state into a panic).
+    let pps_id = pPps.map_or(0, |p| p.iPpsId);
     let iPpsIdOffset = pParametersetStrategy.map_or(0, |s| s.GetPpsIdOffset(pps_id as i32));
     BsWriteUE(buf, &mut *pBs, pps_id.wrapping_add(iPpsIdOffset as u32));
 
-    let log2_max_frame_num = if !pSps.is_null() { (*pSps).uiLog2MaxFrameNum } else { 4 };
+    let log2_max_frame_num = pSps.map_or(4, |s| s.uiLog2MaxFrameNum);
     BsWriteBits(buf, &mut *pBs, log2_max_frame_num as i32, (*pSliceHeader).iFrameNum as u32);
 
-    if (*pNalHead).bIdrFlag {
+    if pNalHead.bIdrFlag {
         BsWriteUE(buf, &mut *pBs, (*pSliceHeader).uiIdrPicId as u32);
     }
 
-    if !pSps.is_null() && (*pSps).uiPocType == 0 {
-        BsWriteBits(buf, &mut *pBs, (*pSps).iLog2MaxPocLsb, (*pSliceHeader).iPicOrderCntLsb as u32);
+    if let Some(sps) = pSps {
+        if sps.uiPocType == 0 {
+            BsWriteBits(buf, &mut *pBs, sps.iLog2MaxPocLsb, (*pSliceHeader).iPicOrderCntLsb as u32);
+        }
     }
 
     if (*pSliceHeader).eSliceType == EWelsSliceType::P_SLICE {
@@ -2168,24 +2106,24 @@ pub unsafe fn WelsSliceHeaderExtWrite(
         }
     }
 
-    if !(*pNalHead).bIdrFlag {
+    if !pNalHead.bIdrFlag {
         WriteReferenceReorder(buf, &mut *pBs, pSliceHeader);
     }
 
-    if (*pNalHead).sNalUnitHeader.uiNalRefIdc != 0 {
-        WriteRefPicMarking(buf, &mut *pBs, pSliceHeader, &mut *pNalHead);
-        if !pSubSps.is_null() && !(*pSubSps).sSpsSvcExt.bSliceHeaderRestrictionFlag {
+    if pNalHead.sNalUnitHeader.uiNalRefIdc != 0 {
+        WriteRefPicMarking(buf, &mut *pBs, pSliceHeader, pNalHead);
+        if pSubSps.is_some_and(|s| !s.sSpsSvcExt.bSliceHeaderRestrictionFlag) {
             BsWriteOneBit(buf, &mut *pBs, if pSliceHeadExt.bStoreRefBasePicFlag { 1 } else { 0 });
         }
     }
 
-    if !pPps.is_null() && (*pPps).bEntropyCodingModeFlag && (*pSliceHeader).eSliceType != EWelsSliceType::I_SLICE {
+    if pPps.is_some_and(|p| p.bEntropyCodingModeFlag) && (*pSliceHeader).eSliceType != EWelsSliceType::I_SLICE {
         BsWriteUE(buf, &mut *pBs, (*pSlice).iCabacInitIdc as u32);
     }
 
     BsWriteSE(buf, &mut *pBs, (*pSliceHeader).iSliceQpDelta as i32);
 
-    if !pPps.is_null() && (*pPps).bDeblockingFilterControlPresentFlag {
+    if pPps.is_some_and(|p| p.bDeblockingFilterControlPresentFlag) {
         BsWriteUE(buf, &mut *pBs, (*pSliceHeader).uiDisableDeblockingFilterIdc as u32);
         if (*pSliceHeader).uiDisableDeblockingFilterIdc != 1 {
             BsWriteSE(buf, &mut *pBs, ((*pSliceHeader).iSliceAlphaC0Offset as i32) >> 1);
@@ -2193,7 +2131,7 @@ pub unsafe fn WelsSliceHeaderExtWrite(
         }
     }
 
-    if !pSubSps.is_null() && !(*pSubSps).sSpsSvcExt.bSliceHeaderRestrictionFlag {
+    if pSubSps.is_some_and(|s| !s.sSpsSvcExt.bSliceHeaderRestrictionFlag) {
         BsWriteBits(buf, &mut *pBs, 4, 0);
         BsWriteBits(buf, &mut *pBs, 4, 15);
     }
@@ -2462,11 +2400,8 @@ pub unsafe fn WelsISliceMdEnc(
     let mut iCurMbIdx: i32;
     let mut iNumMbCoded = 0;
     let kiSliceIdx = (*pSlice).iSliceIdx;
-    let kuiChromaQpIndexOffset = if !layer_pps(pEncCtx, pCurLayer).is_null() {
-        (*layer_pps(pEncCtx, pCurLayer)).uiChromaQpIndexOffset
-    } else {
-        0
-    };
+    let kuiChromaQpIndexOffset =
+        layer_pps_ref(pEncCtx, &*pCurLayer).map_or(0, |p| p.uiChromaQpIndexOffset);
 
     let mut sMd = SWelsMD::default();
     let mut sDss = SDynamicSlicingStack::default();
@@ -2598,11 +2533,8 @@ pub unsafe fn WelsISliceMdEncDynamic(
     let mut iNumMbCoded = 0;
     let kiSliceIdx = (*pSlice).iSliceIdx;
     let kiPartitionId = (kiSliceIdx % ((*pEncCtx).iActiveThreadsNum as i32)) as usize;
-    let kuiChromaQpIndexOffset = if !layer_pps(pEncCtx, pCurLayer).is_null() {
-        (*layer_pps(pEncCtx, pCurLayer)).uiChromaQpIndexOffset
-    } else {
-        0
-    };
+    let kuiChromaQpIndexOffset =
+        layer_pps_ref(pEncCtx, &*pCurLayer).map_or(0, |p| p.uiChromaQpIndexOffset);
 
     let mut sMd = SWelsMD::default();
     let mut sDss = SDynamicSlicingStack::default();
@@ -2807,11 +2739,8 @@ pub unsafe fn WelsMdInterMbLoop<'a>(
         (*pEncCtx).iMvdCostTableSize,
     );
     let kiSliceIdx = (*pSlice).iSliceIdx;
-    let kuiChromaQpIndexOffset = if !layer_pps(pEncCtx, pCurLayer).is_null() {
-        (*layer_pps(pEncCtx, pCurLayer)).uiChromaQpIndexOffset
-    } else {
-        0
-    };
+    let kuiChromaQpIndexOffset =
+        layer_pps_ref(pEncCtx, &*pCurLayer).map_or(0, |p| p.uiChromaQpIndexOffset);
 
     let mut sDss = SDynamicSlicingStack::default();
 
@@ -3004,11 +2933,8 @@ pub unsafe fn WelsMdInterMbLoopOverDynamicSlice<'a>(
     );
     let kiSliceIdx = (*pSlice).iSliceIdx;
     let kiPartitionId = (kiSliceIdx % ((*pEncCtx).iActiveThreadsNum as i32)) as usize;
-    let kuiChromaQpIndexOffset = if !layer_pps(pEncCtx, pCurLayer).is_null() {
-        (*layer_pps(pEncCtx, pCurLayer)).uiChromaQpIndexOffset
-    } else {
-        0
-    };
+    let kuiChromaQpIndexOffset =
+        layer_pps_ref(pEncCtx, &*pCurLayer).map_or(0, |p| p.uiChromaQpIndexOffset);
 
     let mut sDss = SDynamicSlicingStack::default();
     if (*pEncCtx).param().iEntropyCodingModeFlag != 0 {
@@ -3344,11 +3270,9 @@ pub unsafe extern "C" fn WelsISliceMdEncDynamic_c(
     WelsISliceMdEncDynamic(pCtx, pSlice, pSliceBsBuf, pCtxOutBs)
 }
 
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
-pub unsafe extern "C" fn WelsSliceHeaderWrite_c(
+pub extern "C" fn WelsSliceHeaderWrite_c(
     pCtx: &sWelsEncCtx,
-    pCurLayer: *mut SDqLayer,
+    pCurLayer: &SDqLayer,
     pSlice: &mut SSlice,
     pParametersetStrategy: Option<&CWelsParametersetIdStrategyObj>,
     pSliceBsBuf: &mut [u8],
@@ -3357,11 +3281,9 @@ pub unsafe extern "C" fn WelsSliceHeaderWrite_c(
     WelsSliceHeaderWrite(pCtx, pCurLayer, pSlice, pParametersetStrategy, pSliceBsBuf, pCtxOutBs);
 }
 
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
-pub unsafe extern "C" fn WelsSliceHeaderExtWrite_c(
+pub extern "C" fn WelsSliceHeaderExtWrite_c(
     pCtx: &sWelsEncCtx,
-    pCurLayer: *mut SDqLayer,
+    pCurLayer: &SDqLayer,
     pSlice: &mut SSlice,
     pParametersetStrategy: Option<&CWelsParametersetIdStrategyObj>,
     pSliceBsBuf: &mut [u8],
@@ -3535,7 +3457,10 @@ pub unsafe fn WelsCodeOneSlice(
     let ext_hdr_idx = if (*pCurSlice).bSliceHeaderExtFlag { 1 } else { 0 };
     (g_pWelsWriteSliceHeader[ext_hdr_idx])(
         pEncCtx,
-        pCurLayer,
+        // S11.2a: the writers take the layer shared. This whole-layer retag sits
+        // where `WelsSliceHeaderExtInit`'s already did (the S6.A1/F239 note two
+        // lines up), so the re-derivation discipline below it is unchanged.
+        &*pCurLayer,
         &mut *pCurSlice,
         // T6.I1: was guarded on the table being non-null; it is owned now.
         (*pEncCtx).func_list().pParametersetStrategy.as_deref(),
@@ -3543,11 +3468,7 @@ pub unsafe fn WelsCodeOneSlice(
         &mut *pCtxOutBs,
     );
 
-    let pic_init_qp = if !layer_pps(pEncCtx, pCurLayer).is_null() {
-        (*layer_pps(pEncCtx, pCurLayer)).iPicInitQp
-    } else {
-        26
-    };
+    let pic_init_qp = layer_pps_ref(pEncCtx, &*pCurLayer).map_or(26, |p| p.iPicInitQp);
     (*pCurSlice).uiLastMbQp =
         (pic_init_qp as i32 + (*pCurSlice).sSliceHeaderExt.sSliceHeader.iSliceQpDelta as i32) as u8;
 
@@ -5029,6 +4950,62 @@ mod tests {
             0,
             "its top neighbour is in slice 0, so it must not be available"
         );
+    }
+
+    /// **S11.2a's referee — the layer's NAL header, read shared by every worker.**
+    ///
+    /// The slice-header writers read `pCurLayer.sLayerInfo.sNalHeaderExt` on every
+    /// slice, from every worker: `bIdrFlag`, `uiTemporalId`, the ref-marking gate.
+    /// T7.C3's discipline for that was a raw ferried retag-free (`addr_of_mut!`,
+    /// "layer state, read-only here, and every worker runs this"). S10.15's flip of
+    /// `WriteRefPicMarking` broke it — `pNalHdrExt: &mut SNalUnitHeaderExt`, with
+    /// both call sites forming `&mut *pNalHead` **inside fork-reachable bodies** —
+    /// F274. The sweeps could never see it (bytes never diverge) and the session
+    /// lane's encode probes are single-threaded (the fork pair is E3-only, F168),
+    /// which is why this probe exists: it asks Miri the two-worker question the
+    /// lane otherwise cannot.
+    ///
+    /// What it certifies: N workers may each take a **shared** borrow of the one
+    /// header struct and read it concurrently — the S11.2a shape
+    /// (`&SNalUnitHeaderExt` down the writer chain).
+    ///
+    /// **It has teeth, checked rather than assumed**: replacing the two shared
+    /// borrows below with the defect's own spelling — `&mut *p` in each worker,
+    /// unwritten, exactly S10.15's `&mut *pNalHead` — fails under Miri with "Data
+    /// race detected between (1) retag write of type `SNalUnitHeaderExt` on thread
+    /// `<unnamed>` and (2) retag write of type `SNalUnitHeaderExt` on thread
+    /// `<unnamed>`" on the first pair of rounds (control seen red; deterministic,
+    /// two rounds suffice — ROUNDS stays at 8 for margin, calibrated on this
+    /// probe's own failure, not inherited).
+    #[test]
+    // unsafe-cat: instrument(test)
+    #[allow(unsafe_code)]
+    fn workers_read_the_layer_nal_header_through_shared_borrows() {
+        use crate::common::wels_common_defs::SNalUnitHeaderExt;
+        const WORKERS: usize = 2;
+        const ROUNDS: usize = 8;
+
+        let mut sHdr = SNalUnitHeaderExt::default();
+        sHdr.bIdrFlag = true;
+        sHdr.uiTemporalId = 1;
+        let kHdrAddr = std::ptr::addr_of_mut!(sHdr) as usize;
+
+        std::thread::scope(|s| {
+            for _ in 0..WORKERS {
+                s.spawn(move || unsafe {
+                    let p = kHdrAddr as *mut SNalUnitHeaderExt;
+                    for _ in 0..ROUNDS {
+                        // The S11.2a shape: a shared reborrow per read, the way
+                        // `WelsCodeOneSlice` and both header writers take it now.
+                        let hdr: &SNalUnitHeaderExt = &*p;
+                        assert!(hdr.bIdrFlag);
+                        let _ = hdr.uiTemporalId;
+                    }
+                });
+            }
+        });
+
+        assert!(sHdr.bIdrFlag, "nothing wrote the header");
     }
 
     /// **S5.D2b's referee — the boxed banks, under the same two workers.**
