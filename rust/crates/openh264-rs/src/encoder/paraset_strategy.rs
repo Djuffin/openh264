@@ -46,7 +46,6 @@ use crate::api::codec_api::EParameterSetStrategy;
 use crate::api::codec_api::RC_MODES::RC_OFF_MODE;
 use crate::encoder::au_set::{WelsInitPps, WelsInitSps, WelsInitSubsetSps};
 use crate::encoder::encoder_context::{
-    ctx_func_list_raw,
     sWelsEncCtx, SLogContext,
     SParaSetOffset,
     SParaSetOffsetVariable, MAX_DQ_LAYER_NUM, MAX_PPS_COUNT, PARA_SET_TYPE,

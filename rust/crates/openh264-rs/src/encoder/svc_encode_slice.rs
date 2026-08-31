@@ -974,8 +974,8 @@ pub fn layer_ref_pic<'a>(
 /// `pLayer` is a reference since **S6.A1**, so liveness is no longer the caller's;
 /// what remains is that the layer be stamped for the frame in progress.
 #[inline]
-// unsafe-cat: SCREEN_CONTENT(dormant) — the pointer it hands out; the raw
-// layer parameter is the S63 seam (G's)
+// S11.44: the dormant-screen tag came off — the fn is safe and hands out a
+// borrow; the family marker belongs on allows, and this carries none.
 pub fn layer_ref_feature_storage<'a>(
     pCtx: &'a sWelsEncCtx,
     pLayer: &SDqLayer,
@@ -1069,8 +1069,8 @@ pub fn layer_rec_view<'a>(
 /// # Safety
 /// As [`layer_ref_pic`]: the layer must be stamped for the frame in progress.
 #[inline]
-// unsafe-cat: fork-shared(S63) — inherited from `layer_ref_pic`, whose pool
-// resolution this wraps; nothing raw is introduced here.
+// S11.44: the inherited S63 tag came off — its own text said nothing raw is
+// introduced here, and the census counts tags as claims.
 pub fn layer_ref_view(
     pCtx: &sWelsEncCtx,
     pLayer: &SDqLayer,

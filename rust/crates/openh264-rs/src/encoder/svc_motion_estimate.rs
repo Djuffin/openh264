@@ -1780,7 +1780,6 @@ mod tests {
     }
 
     #[test]
-    // unsafe-cat: instrument(test)
     fn test_single_block_sums() {
         // S11.6: the kernels take slices, so this instrument needs no `unsafe`
         // and its allow retires with them.

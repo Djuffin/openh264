@@ -74,7 +74,7 @@ pub const MAX_REF_PIC_COUNT: usize = 16;
 // MAX_SHORT_REF_COUNT was 16 where C++ derives 4, which over-sized `SRefList` here and
 // let the `WelsPreprocess` unref loop read one past `pShortRefList`.
 pub use crate::encoder::encoder_context::{MAX_GOP_SIZE, MAX_SHORT_REF_COUNT, MAX_TEMPORAL_LEVEL};
-use crate::encoder::encoder_context::{ctx_ltr_at, ctx_param_raw};
+use crate::encoder::encoder_context::ctx_ltr_at;
 pub use crate::encoder::encoder_context::SRefList;
 pub use crate::encoder::picture::SPicture;
 pub use crate::encoder::encoder_context::SLTRState;
@@ -1242,7 +1242,6 @@ impl CWelsPreProcess {
         ENC_RETURN_SUCCESS
     }
 
-    // unsafe-cat: port-raw(Phase 9)
     pub fn SingleLayerPreprocess(
         &mut self,
         pCtx: &mut sWelsEncCtx,

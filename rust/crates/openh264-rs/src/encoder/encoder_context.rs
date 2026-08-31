@@ -917,12 +917,9 @@ pub fn ctx_mb_index_x(pCtx: &sWelsEncCtx, kiDid: usize) -> *const i16 {
 ///
 /// # Safety
 /// `pCtx` must point to a live encoder context.
-#[inline]
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
-pub unsafe fn ctx_func_list_raw(pCtx: &sWelsEncCtx) -> *mut SWelsFuncPtrList {
-    std::ptr::read(std::ptr::addr_of!((*pCtx).pFuncList) as *const *mut SWelsFuncPtrList)
-}
+// (`ctx_func_list_raw`'s body stood here. **S11.44, deleted: no callers** —
+// the two bodies its doc named hold the context as references now and reach
+// the table through `func_list`/`func_list_mut` or the paraset splitters.)
 
 /// The encoder output block **as a raw pointer, read out of the `Box`'s slot** —
 /// F71's spelling, minted for the two fork-reachable bodies whose `pOut` arm is
@@ -935,12 +932,10 @@ pub unsafe fn ctx_func_list_raw(pCtx: &sWelsEncCtx) -> *mut SWelsFuncPtrList {
 ///
 /// # Safety
 /// `pCtx` must point to a live encoder context.
-#[inline]
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
-pub unsafe fn ctx_out_raw(pCtx: *const sWelsEncCtx) -> *mut SWelsEncoderOutput {
-    std::ptr::read(std::ptr::addr_of!((*pCtx).pOut) as *const *mut SWelsEncoderOutput)
-}
+// (`ctx_out_raw`'s body stood here. **S11.44, deleted: no callers** — the two
+// fork-reachable bodies it was minted for, `slice_bs_buffer` and
+// `slice_writer`, died with the bitstream seam; the main thread reaches `pOut`
+// by `as_deref`.)
 
 // `ctx_src_pool_raw` stood here — the spatial pool as a pointer into the vpp
 // box's own allocation, F71's spelling, "F211's *provenance* category rather
@@ -1099,12 +1094,10 @@ pub fn with_vpp<R>(
 /// # Safety
 /// `pCtx`'s parameter block must be built (`WelsInitEncoderExt`); the return is
 /// null before that, exactly as the raw field was.
-#[inline]
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn ctx_param_raw(pCtx: &sWelsEncCtx) -> *mut SWelsSvcCodingParam {
-    std::ptr::read(std::ptr::addr_of!(pCtx.pSvcParam) as *const *mut SWelsSvcCodingParam)
-}
+// (`ctx_param_raw`'s body stood here. **S11.44, deleted: no callers** — the
+// twenty-six per-layer cursors its doc defended became per-use `param()`/
+// `param_mut()` derivations across S11.39–S11.43, and the held-across-a-call
+// shape the F71 spelling existed for no longer occurs.)
 
 // `ctx_ref_list_raw` stood here — dependency layer `kiDid`'s reference list as
 // a slot-read raw, "the one derivation A3 left raw", kept because its answer
@@ -3012,15 +3005,8 @@ pub fn DecideFrameType(
 /// sites call this directly, and each already had this exact fallback in its
 /// `else` arm.
 ///
-/// # Safety
-/// `pDst` must point to valid writable memory of at least `iSize` bytes.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn WelsSetMemZero_c(pDst: *mut u8, iSize: i32) {
-    if !pDst.is_null() && iSize > 0 {
-        std::ptr::write_bytes(pDst, 0, iSize as usize);
-    }
-}
+/// **S11.44, deleted: no callers** — the seven call sites its doc counted have
+/// each become a `fill(0)` over the storage they own.
 
 // ============================================================================
 // Unit Tests

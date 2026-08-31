@@ -132,12 +132,8 @@ impl CBackgroundDetection {
     /// VAA statistics of this picture pair, handed over at the call (the C++ stored
     /// `pCalcRes` in the parameter block; take what you reach).
     ///
-    /// # Safety
-    /// Both pixel maps must describe readable Y/U/V planes, the pointer stored by
-    /// the preceding [`Set`](Self::Set) must still be valid, and `calc`'s arrays must
-    /// cover the picture's macroblocks.
-    // unsafe-cat: port-raw(Phase 9)
-    #[allow(unsafe_code)]
+    /// S11.43: the safety section is a signature now — the planes arrive as
+    /// borrows and `calc`'s arrays bound every read.
     pub fn Process(
         &mut self,
         pSrcPixMap: &SPixMap,
