@@ -911,9 +911,9 @@ pub fn ctx_mb_index_x(pCtx: &sWelsEncCtx, kiDid: usize) -> *const i16 {
 /// 121 sites and what these two keep.
 ///
 /// Everything else uses [`sWelsEncCtx::func_list`] /
-/// [`sWelsEncCtx::func_list_mut`]. `ctx_ref_list_raw` below survives A3 for the
-/// neighbouring reason (provenance rather than root shape) — F211's pair is a
-/// trio now.
+/// [`sWelsEncCtx::func_list_mut`]. (`ctx_ref_list_raw`, which survived A3 for the
+/// neighbouring provenance reason, is gone — S11.39 deleted the stored field its
+/// answer had to outlive.)
 ///
 /// # Safety
 /// `pCtx` must point to a live encoder context.
@@ -942,57 +942,30 @@ pub unsafe fn ctx_out_raw(pCtx: *const sWelsEncCtx) -> *mut SWelsEncoderOutput {
     std::ptr::read(std::ptr::addr_of!((*pCtx).pOut) as *const *mut SWelsEncoderOutput)
 }
 
-/// The preprocessor's **spatial picture pool** as a raw pointer, read out of
-/// `pVpp`'s slot — F71's spelling, and F211's *provenance* category rather than
-/// debt: the answer is **stored** in `SDqLayer::pSrcPool` and read by the fork for
-/// a whole frame, so it must carry the pool's own provenance. A `&mut`-derived
-/// cast would stamp a fresh `Unique` that the next `pVpp` reborrow pops, leaving
-/// the fork reading through a dead tag — and F208 is the proof that no byte gate
-/// sees that.
-///
-/// # Safety
-/// `pCtx` must point to a live encoder context whose `pVpp` is `Some`.
-#[inline]
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
-pub unsafe fn ctx_src_pool_raw(pCtx: *const sWelsEncCtx) -> *mut SrcPicPool {
-    let pVpp = std::ptr::read(
-        std::ptr::addr_of!((*pCtx).pVpp)
-            as *const *mut crate::encoder::wels_preprocess::CWelsPreProcess,
-    );
-    std::ptr::addr_of_mut!((*pVpp).m_pSpatialPicPool)
-}
+// `ctx_src_pool_raw` stood here — the spatial pool as a pointer into the vpp
+// box's own allocation, F71's spelling, "F211's *provenance* category rather
+// than debt: the answer is **stored** in `SDqLayer::pSrcPool` and read by the
+// fork for a whole frame".
+//
+// **S11.39, deleted: both halves of that premise had expired.** S10.7 removed
+// the stored field, and `WelsInitCurrentLayer` — the last production caller —
+// now borrows the pool per statement through the `Box` (`ctx_vpp_mut`), because
+// what it takes from each borrow is `PicPlanes` by value and views whose roots
+// `SharedCells::from_parts` captures from the plane `Vec` headers, never from
+// the reaching chain. The derivation itself lives on in one place: the Miri
+// control `a_pointer_into_the_box_does_not_survive_with_vpp`, where being
+// popped by a `Box` move is the property under test.
 
-/// The preprocess object **as a reference off a slot read** — the route every
-/// body uses that needs the vpp and the context at once.
-///
-/// **Why not `pVpp.as_deref_mut()`, and Miri is what said so.** `SDqLayer::pSrcPool`
-/// stores a raw into `m_pSpatialPicPool`, a *field of this allocation*, and the fork
-/// reads it for a whole frame. Reaching the object through the `Box` mints a fresh
-/// `Unique` over the whole block on every `as_deref`/store (F215's rule, one
-/// allocation further in), so the two routes pop each other: a shared retag through
-/// `pSrcPool` kills the `Box` tag, and re-storing the `Box` kills `pSrcPool`. The
-/// S3.B1 first draft used an `Option::take` dance here and Miri refused it at
-/// `WelsSliceHeaderExtInit` — the byte gates were 583/583 in both profiles through it.
-///
-/// Reading the slot as a *value* mints nothing: every derivation is a sibling off
-/// the allocation's own tag, which is exactly what the `*mut CWelsPreProcess` field
-/// gave these callers before B1 owned it. The ownership moved; the aliasing did not.
-///
-/// # Safety
-/// `pCtx` must point to a live encoder context whose `pVpp` is `Some`.
-#[inline]
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
-pub unsafe fn ctx_vpp_raw<'a>(
-    pCtx: *const sWelsEncCtx,
-) -> &'a mut crate::encoder::wels_preprocess::CWelsPreProcess {
-    let pVpp = std::ptr::read(
-        std::ptr::addr_of!((*pCtx).pVpp)
-            as *const *mut crate::encoder::wels_preprocess::CWelsPreProcess,
-    );
-    &mut *pVpp
-}
+// `ctx_vpp_raw` stood here — the preprocess object as `&mut` off a slot read,
+// "the route every body uses that needs the vpp and the context at once", held
+// against `SDqLayer::pSrcPool`'s stored raw into this allocation.
+//
+// **S11.39, deleted: it had no callers left.** S11.24 moved its nine sites onto
+// [`with_vpp`]/[`ctx_vpp_mut`] (ownership the compiler can see, instead of a
+// provenance argument re-made per site), and the stored raw it defended against
+// died with `SDqLayer::pSrcPool` at S10.7. The refused shape it documented —
+// a pointer into the box's allocation surviving a `Box` move — is pinned by the
+// Miri control `a_pointer_into_the_box_does_not_survive_with_vpp`.
 
 /// The preprocess object as a **shared** reference off the same slot read — the
 /// only route an **in-fork** body may take, and the reader half of the pair.
@@ -1133,34 +1106,19 @@ pub unsafe fn ctx_param_raw(pCtx: &sWelsEncCtx) -> *mut SWelsSvcCodingParam {
     std::ptr::read(std::ptr::addr_of!(pCtx.pSvcParam) as *const *mut SWelsSvcCodingParam)
 }
 
-/// Dependency layer `kiDid`'s reference list **as a raw pointer, read out of the
-/// slot** — the one derivation A3 left raw, and the only caller is
-/// `WelsInitCurrentLayer`'s stamp of `SDqLayer::pRefList`.
-///
-/// **Why it survives the conversion.** `SDqLayer::pRefList` is a raw *field*
-/// (stage C's, plan §3c-5), and the value stored in it is read for the whole
-/// frame by the fork — `layer_ref_pic`, and `deblocking.rs`'s two null guards. It
-/// must therefore carry the reference list's **own** provenance, which is what
-/// reading the slot as a pointer value gives it (F71). A `&mut`-derived cast
-/// would stamp a fresh `Unique` that the next
-/// [`ref_list_mut`](sWelsEncCtx::ref_list_mut) call pops, leaving the fork
-/// reading through a dead tag — a soundness regression the byte gates would not
-/// see. So the accessor's old body lives on here, at one site, until the field it
-/// feeds is gone. Everything else uses [`sWelsEncCtx::ref_list`] /
-/// [`sWelsEncCtx::ref_list_mut`].
-///
-/// # Safety
-/// `pCtx` must point to a live encoder context.
-#[inline]
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
-pub unsafe fn ctx_ref_list_raw(pCtx: &sWelsEncCtx, kiDid: usize) -> *mut SRefList {
-    let arr = std::ptr::addr_of!(pCtx.ppRefPicListExt);
-    if kiDid >= (*arr).len() {
-        return std::ptr::null_mut();
-    }
-    std::ptr::read((*arr).as_ptr().add(kiDid) as *const *mut SRefList)
-}
+// `ctx_ref_list_raw` stood here — dependency layer `kiDid`'s reference list as
+// a slot-read raw, "the one derivation A3 left raw", kept because its answer
+// was stored in `SDqLayer::pRefList` and read by the fork for a whole frame, so
+// it had to carry the list's own provenance.
+//
+// **S11.39, deleted: the accessor's own exit clause fired** — "until the field
+// it feeds is gone", and S10.8 deleted `SDqLayer::pRefList` (the fork resolves
+// the picture per call through [`sWelsEncCtx::ref_list`] on the layer's own id,
+// `layer_ref_pic`). The last caller, `WelsInitCurrentLayer`, consumed the raw
+// only to build the frame's views, whose plane roots `SharedCells::from_parts`
+// captures from the plane `Vec` headers — no stored value derives from the
+// reaching chain, so `ref_list_mut` per statement is the same provenance story
+// with the compiler holding it.
 
 /// Dependency layer `kiDid`'s **DQ layer** — `ppDqLayerList[did]`, and null where the
 /// slot's pointer was null. T6.H8; the same shape as [`sWelsEncCtx::ref_list`], and
@@ -4007,9 +3965,18 @@ mod with_vpp_provenance {
         vpp.m_pSpatialPicPool = SrcPicPool::new(vec![SPicture::new(176, 144, false)]);
         ctx.pVpp = Some(Box::new(vpp));
 
-        // S3.B1's derivation: `ctx_src_pool_raw`'s answer, which points *inside*
-        // the `CWelsPreProcess` allocation rather than into a plane's own `Vec`.
-        let pPool: *mut SrcPicPool = unsafe { ctx_src_pool_raw(&ctx) };
+        // S3.B1's derivation, spelled out — the production resolver that answered
+        // it (`ctx_src_pool_raw`) was deleted at S11.39 when nothing stored its
+        // answer any more, so the control builds the pointer by hand: the `pVpp`
+        // slot read as a value, then `addr_of_mut!` of the pool field — a pointer
+        // *inside* the `CWelsPreProcess` allocation rather than into a plane's
+        // own `Vec`.
+        let pPool: *mut SrcPicPool = unsafe {
+            let pVpp = std::ptr::read(
+                std::ptr::addr_of!(ctx.pVpp) as *const *mut CWelsPreProcess,
+            );
+            std::ptr::addr_of_mut!((*pVpp).m_pSpatialPicPool)
+        };
 
         with_vpp(&mut ctx, |_pVpp, _pCtx| {});
 
