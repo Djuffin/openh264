@@ -48,6 +48,7 @@
 
 #![deny(unsafe_code)]
 
+use crate::encoder::rec_view::RecCursor;
 use crate::encoder::decode_mb_aux::{
     idct_four_t4_rec_in_place_view, idct_four_t4_rec_to_view, idct_t4_rec_on_mb_in_place_view,
 };
@@ -1051,31 +1052,20 @@ pub unsafe fn layer_ref_feature_storage<'a>(
     layer_ref_pic(pLayer)?.pScreenBlockFeatureStorage.as_deref()
 }
 
-/// The **source** picture this layer encodes from, resolved through the spatial pool
-/// the layer was stamped with — the [`layer_ref_pic`] of the source half (T9.B21).
-///
-/// Shared only, and deliberately so. The source picture is read by every consumer and
-/// written by none of them on any path a gate runs, so a shared borrow handed out
-/// twice is **two siblings, not a stack** — which is what makes it safe to call this
-/// per macroblock where `SPicture::planes()` (a `&mut self` accessor, so a fresh
-/// exclusive borrow of the whole picture every time) is F73's retag. There is no
-/// `layer_enc_pic_mut` for that reason; if one is ever needed, read the `src` caveat
-/// in `phase9_plane_census.md` first.
-///
-/// # Safety
-/// `pLayer` must be stamped by `WelsInitCurrentLayer` — liveness is the reference's
-/// since **S6.A1**; the stamp is still the caller's.
-#[inline]
-// unsafe-cat: fork-shared(S63) — the pool behind `pSrcPool`, not the layer parameter
-#[allow(unsafe_code)]
-pub unsafe fn layer_enc_pic<'a>(pLayer: &'a SDqLayer) -> Option<&'a SPicture> {
-    let id = (*pLayer).pEncPic?;
-    let pSrcPool = (*pLayer).pSrcPool;
-    if pSrcPool.is_null() {
-        return None;
-    }
-    Some((*pSrcPool).get(id))
-}
+// `layer_enc_pic` stood here — "the **source** picture this layer encodes from,
+// resolved through the spatial pool the layer was stamped with" (T9.B21).
+//
+// **S10.2, deleted: it has no caller.** Its twenty-one call sites were the ones
+// F254 named — each formed a `PlaneCursor` over the whole plane allocation of a
+// picture the fork *writes* (`VaaBackgroundMbDataUpdate`, F117, with
+// `bEnableBackgroundDetection` true by default), which is a shared claim on every
+// byte racing a concurrent write to any of them. They all read the source through
+// [`layer_enc_view`] now, and the S10.1 probe in `svc_mode_decision.rs` is what
+// keeps them there: its control is exactly this function's old shape, and it is
+// red.
+//
+// The `unsafe fn` goes with it. Nothing else in the tree resolves a source
+// picture by hand.
 
 // `layer_ref_pic_mut` stood here — the `&mut` form of [`layer_ref_pic`], for handing
 // out plane roots from the owning buffer. **S18, deleted in T9.B21**: it had no caller
@@ -1112,6 +1102,42 @@ pub fn layer_rec_view<'a>(
     pLayer: &'a SDqLayer,
 ) -> Option<&'a crate::encoder::rec_view::RecPicView> {
     (*pLayer).pRecView.as_ref()
+}
+
+/// The layer's **reference** planes as a shared view — the read-only twin of
+/// [`layer_enc_view`], built on demand rather than stamped.
+///
+/// # Why this exists, and why it is built per call
+///
+/// S10.2 moved the source-plane readers onto the seam, and the cost kernels they
+/// feed are reached through a **function pointer**
+/// (`PSampleSadSatdCostFunc`), which cannot be generic. Its second operand
+/// position receives the enc plane, a scratch buffer **and the reference plane**
+/// at different call sites, so all three must be one type; the moment the source
+/// operand became `RecCursor` the reference operand had to follow. This is that
+/// route (F259).
+///
+/// Unlike `pEncView`/`pRecView` it is not a layer field, because the reference
+/// picture is chosen per macroblock (`pRefPic` moves with the reference index)
+/// where the source and reconstruction pictures are stamped once per frame. A
+/// build is three plane headers — twelve words, no allocation — against a pool
+/// resolution the caller was already paying for.
+///
+/// Sound for the same reason [`RoPicView::build`] is: it makes no exclusive
+/// claim. It uses the seam rather than a `&[u8]` because the slot's single
+/// operand type says so — and because arguing about *which* writer might touch a
+/// plane is the reasoning S9.0a got wrong.
+///
+/// # Safety
+/// As [`layer_ref_pic`]: the layer must be stamped for the frame in progress.
+#[inline]
+// unsafe-cat: fork-shared(S63) — inherited from `layer_ref_pic`, whose pool
+// resolution this wraps; nothing raw is introduced here.
+#[allow(unsafe_code)]
+pub unsafe fn layer_ref_view(
+    pLayer: &SDqLayer,
+) -> Option<crate::encoder::rec_view::RoPicView> {
+    Some(crate::encoder::rec_view::RoPicView::build(layer_ref_pic(pLayer)?))
 }
 
 /// The frame's source planes, as `layer_rec_view` is its reconstruction planes.
@@ -2053,7 +2079,7 @@ pub unsafe fn WelsIMbChromaEncode(pEncCtx: &sWelsEncCtx, pCurMb: &mut SMB, pMbCa
     pfDctFourT4(
         &mut (*pMbCache).sCoeffLevel,
         &(*pMbCache).SPicData.mb_cursor_ro(encView, 1),
-        &PlaneCursor::new(&(*pMbCache).sMemPredMb, kiBestPredOff, 8),
+        &RecCursor::over_owned(&mut (*pMbCache).sMemPredMb, kiBestPredOff, 8),
     );
     crate::encoder::svc_encode_mb::WelsEncRecUV(&*pFunc, pCurMb, pMbCache, 0, 1);
     // **T9.C2.** `pCsCb` is the reconstruction Cb plane at this macroblock's
@@ -2071,7 +2097,7 @@ pub unsafe fn WelsIMbChromaEncode(pEncCtx: &sWelsEncCtx, pCurMb: &mut SMB, pMbCa
     pfDctFourT4(
         &mut (*pMbCache).sCoeffLevel[64..],
         &(*pMbCache).SPicData.mb_cursor_ro(encView, 2),
-        &PlaneCursor::new(&(*pMbCache).sMemPredMb, kiBestPredOff + 64, 8),
+        &RecCursor::over_owned(&mut (*pMbCache).sMemPredMb, kiBestPredOff + 64, 8),
     );
     crate::encoder::svc_encode_mb::WelsEncRecUV(&*pFunc, pCurMb, pMbCache, 64, 2);
     idct_four_t4_rec_to_view(
@@ -2103,12 +2129,12 @@ pub unsafe fn WelsPMbChromaEncode(pEncCtx: &sWelsEncCtx, pSlice: &mut SSlice, pC
     dct(
         &mut (*pMbCache).sCoeffLevel[256..],
         &(*pMbCache).SPicData.mb_cursor_ro(encView, 1),
-        &PlaneCursor::new(&(*pMbCache).sMemPredMb, kiBestPredOff, 8),
+        &RecCursor::over_owned(&mut (*pMbCache).sMemPredMb, kiBestPredOff, 8),
     );
     dct(
         &mut (*pMbCache).sCoeffLevel[320..],
         &(*pMbCache).SPicData.mb_cursor_ro(encView, 2),
-        &PlaneCursor::new(&(*pMbCache).sMemPredMb, kiBestPredOff + 64, 8),
+        &RecCursor::over_owned(&mut (*pMbCache).sMemPredMb, kiBestPredOff + 64, 8),
     );
 
     // `svc_encode_slice.cpp:WelsPMbChromaEncode` quantises both chroma planes here.

@@ -397,6 +397,130 @@ pub trait RefSamples {
     /// slice into its cells; every reference row an intra predictor reads is 3,
     /// 4, 8 or 16 samples, so the copy is a register-file move.
     fn row_n<const N: usize>(&self, dy: isize, dx0: isize) -> [u8; N];
+
+    /// `h` consecutive rows of `N` samples each from `(dx0, dy0)` — the **folded
+    /// block walk**, and the reason the SAD family can be generic without paying
+    /// for it.
+    ///
+    /// # Why this is not called `row_windows`
+    ///
+    /// [`PlaneCursor::row_windows`] is an inherent method yielding `&[u8; N]`, and
+    /// an inherent method wins over a trait method of the same name whenever the
+    /// receiver's type is known — so a trait method by that name would mean one
+    /// thing in generic code and another in concrete code at the same spelling.
+    /// `RecCursor` has an inherent `row_windows` too, yielding `&[Cell<u8>; N]`;
+    /// neither can be *this* method, because no single referenced row type serves
+    /// both.
+    ///
+    /// # The row type, and why the fold is the point
+    ///
+    /// Yields [`Row`](Self::Row) — a borrow for the plane cursors, an owned
+    /// `RowBuf` only for the cell view — for the reason that type exists (F264).
+    /// `N` sizes the *slice*, not the returned type.
+    ///
+    /// What matters for cost is **where the bounds checks land**: this walk slices
+    /// once per block per side, where a per-row `row_n` walk makes a 16x8 SAD emit
+    /// 32 branches before reading a sample.
+    ///
+    /// **Measured, not assumed (F259).** A standalone 16x16 SAD over a
+    /// 1952-stride plane, 4096 anchors x 300 iterations, timed three ways — the
+    /// inherent `&[u8; N]` walk, a by-value walk over a slice, and the same over
+    /// cells — came out at **33.8 / 33.8 / 33.9 ms** on warm rounds: ratios 1.000
+    /// and 1.004. **Compiled, by-value costs nothing; interpreted it does not**
+    /// (F267), which is why this yields `Row` rather than `[u8; N]`.
+    ///
+    /// # Panics
+    /// If the block leaves the buffer, at the first slicing.
+    fn row_blocks<const N: usize>(
+        &self,
+        dy0: isize,
+        dx0: isize,
+        h: usize,
+    ) -> impl Iterator<Item = Self::Row<'_>>;
+
+    /// The same anchor moved by `(dx, dy)` — `pSrc.add(dy * stride + dx)`.
+    ///
+    /// Both plane cursors and the shared cell cursor already have an inherent
+    /// `advance` with this exact signature; this is the one generic code can call,
+    /// and `common/mc.rs`'s quarter-pel arms are what need it. **The inherent
+    /// method wins wherever the receiver's type is known**, so no concrete call
+    /// site changes meaning by this existing.
+    #[must_use]
+    fn advance(self, dx: isize, dy: isize) -> Self
+    where
+        Self: Sized;
+
+    /// A run-time-length row, **borrowed where the cursor can lend one and owned
+    /// only where it cannot**.
+    ///
+    /// [`row_blocks`](Self::row_blocks) covers the fixed-size block walks; the
+    /// motion-compensation filters in `common/mc.rs` read rows whose length is a
+    /// run-time `width`, so they need this.
+    ///
+    /// **This is an associated type because a copy here is measurable (F264).**
+    /// The first draft of this method copied every row into a caller-supplied
+    /// buffer, which is what a cell view must do — and made the *decoder*, which
+    /// can simply lend, pay for it: `decode_1080p_bench` fell from 358.8 to
+    /// 334.2 fps on Constrained Baseline (**-7%**, ratio 1.62 -> 1.73) and about
+    /// 3% on Main and High. With `Row<'a> = &'a [u8]` for the plane cursors the
+    /// borrow is restored and only [`RecCursor`](crate::encoder::rec_view::RecCursor)
+    /// pays, which is the one case with no alternative.
+    ///
+    /// The bound is `Deref<Target = [u8]>`, so a consumer writes `row[j]` and
+    /// `row.iter()` without knowing which it got.
+    type Row<'a>: std::ops::Deref<Target = [u8]>
+    where
+        Self: 'a;
+
+    /// `len` samples of row `dy` starting at `dx0`.
+    ///
+    /// # Panics
+    /// If the row leaves the buffer, at the slicing — same contract as
+    /// [`row_n`](Self::row_n).
+    fn row_view(&self, dy: isize, dx0: isize, len: usize) -> Self::Row<'_>;
+}
+
+/// Longest run-time row [`RefSamples::row_view`] will carry by value.
+///
+/// `common/mc.rs`'s widest read is `width + 5` with `width <= 17`, so 22 is the
+/// real bound; 32 is headroom.
+pub const ROW_BUF_MAX: usize = 32;
+
+/// An owned row — [`RefSamples::Row`] for the cursors that cannot lend one.
+///
+/// Exists for exactly one implementor: a shared cell view has no `&[u8]` to hand
+/// out, so its row is copied into this. Every other implementor's `Row` is a
+/// borrow and this type never appears.
+#[derive(Clone, Copy, Debug)]
+pub struct RowBuf {
+    buf: [u8; ROW_BUF_MAX],
+    len: usize,
+}
+
+impl RowBuf {
+    /// An empty row of `len` samples, to be filled by the caller.
+    ///
+    /// # Panics
+    /// If `len` exceeds [`ROW_BUF_MAX`].
+    #[inline]
+    pub fn new(len: usize) -> Self {
+        assert!(len <= ROW_BUF_MAX, "row of {len} samples exceeds ROW_BUF_MAX");
+        Self { buf: [0; ROW_BUF_MAX], len }
+    }
+
+    /// The writable prefix.
+    #[inline]
+    pub fn as_mut(&mut self) -> &mut [u8] {
+        &mut self.buf[..self.len]
+    }
+}
+
+impl std::ops::Deref for RowBuf {
+    type Target = [u8];
+    #[inline]
+    fn deref(&self) -> &[u8] {
+        &self.buf[..self.len]
+    }
 }
 
 
@@ -422,6 +546,31 @@ impl RefSamples for PlaneCursor<'_> {
     fn row_n<const N: usize>(&self, dy: isize, dx0: isize) -> [u8; N] {
         let r = PlaneCursor::row(self, dy, dx0, N);
         std::array::from_fn(|i| r[i])
+    }
+
+    #[inline]
+    fn row_blocks<const N: usize>(
+        &self,
+        dy0: isize,
+        dx0: isize,
+        h: usize,
+    ) -> impl Iterator<Item = &[u8]> {
+        PlaneCursor::row_windows::<N>(self, dy0, dx0, h).map(|r| &r[..])
+    }
+
+    type Row<'a>
+        = &'a [u8]
+    where
+        Self: 'a;
+
+    #[inline]
+    fn row_view(&self, dy: isize, dx0: isize, len: usize) -> &[u8] {
+        PlaneCursor::row(self, dy, dx0, len)
+    }
+
+    #[inline]
+    fn advance(self, dx: isize, dy: isize) -> Self {
+        PlaneCursor::advance(self, dx, dy)
     }
 }
 
@@ -686,6 +835,38 @@ impl RefSamples for PlaneCursorMut<'_> {
     fn row_n<const N: usize>(&self, dy: isize, dx0: isize) -> [u8; N] {
         let r = PlaneCursorMut::row(self, dy, dx0, N);
         std::array::from_fn(|i| r[i])
+    }
+
+    #[inline]
+    fn row_blocks<const N: usize>(
+        &self,
+        dy0: isize,
+        dx0: isize,
+        h: usize,
+    ) -> impl Iterator<Item = &[u8]> {
+        let start = idx(self.center, dx0, dy0, self.stride);
+        let span = if h == 0 { 0 } else { (h - 1) * self.stride + N };
+        self.buf[start..][..span].chunks(self.stride).map(|r| &r[..N])
+    }
+
+    type Row<'a>
+        = &'a [u8]
+    where
+        Self: 'a;
+
+    #[inline]
+    fn row_view(&self, dy: isize, dx0: isize, len: usize) -> &[u8] {
+        PlaneCursorMut::row(self, dy, dx0, len)
+    }
+
+    /// The write cursor's `advance` **consumes** it, unlike the two read cursors'
+    /// — a `&mut [u8]` cannot be copied. Nothing calls it through the trait; it is
+    /// here because `RefSamples` is implemented for this type and the method is
+    /// expressible.
+    #[inline]
+    fn advance(self, dx: isize, dy: isize) -> Self {
+        let center = idx(self.center, dx, dy, self.stride);
+        Self { buf: self.buf, center, stride: self.stride }
     }
 }
 

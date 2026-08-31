@@ -32,17 +32,22 @@
 #![deny(unsafe_code)]
 #![forbid(unsafe_code)]
 
+use crate::encoder::rec_view::RecCursor;
+use crate::safe::plane::RefSamples;
+#[cfg(test)]
 use crate::safe::plane::PlaneCursor;
 
 /// Hadamard 4x4 sum of absolute transformed differences of two 4x4 blocks.
 ///
 /// C++: `WelsSampleSatd4x4_c`, `codec/encoder/core/src/sample.cpp`.
-pub fn satd_4x4(c1: &PlaneCursor<'_>, c2: &PlaneCursor<'_>) -> i32 {
+pub fn satd_4x4<A: RefSamples + Copy, B: RefSamples + Copy>(c1: &A, c2: &B) -> i32 {
     let mut mix = [[0i32; 4]; 4];
 
     for (i, row) in mix.iter_mut().enumerate() {
-        let r1: &[u8; 4] = c1.row(i as isize, 0, 4).try_into().unwrap();
-        let r2: &[u8; 4] = c2.row(i as isize, 0, 4).try_into().unwrap();
+        // S10.2: `RecCursor::row` is const-sized and returns by value — a shared
+        // cell view cannot lend a row. Same four samples, same order.
+        let r1: [u8; 4] = c1.row_n::<4>(i as isize, 0);
+        let r2: [u8; 4] = c2.row_n::<4>(i as isize, 0);
         for k in 0..4 {
             row[k] = r1[k] as i32 - r2[k] as i32;
         }
@@ -69,18 +74,18 @@ pub fn satd_4x4(c1: &PlaneCursor<'_>, c2: &PlaneCursor<'_>) -> i32 {
 }
 
 /// C++: `WelsSampleSatd8x4_c` — two 4x4s left-to-right.
-pub fn satd_8x4(c1: &PlaneCursor<'_>, c2: &PlaneCursor<'_>) -> i32 {
+pub fn satd_8x4<A: RefSamples + Copy, B: RefSamples + Copy>(c1: &A, c2: &B) -> i32 {
     satd_4x4(c1, c2) + satd_4x4(&c1.advance(4, 0), &c2.advance(4, 0))
 }
 
 /// C++: `WelsSampleSatd4x8_c` — two 4x4s top-to-bottom.
-pub fn satd_4x8(c1: &PlaneCursor<'_>, c2: &PlaneCursor<'_>) -> i32 {
+pub fn satd_4x8<A: RefSamples + Copy, B: RefSamples + Copy>(c1: &A, c2: &B) -> i32 {
     satd_4x4(c1, c2) + satd_4x4(&c1.advance(0, 4), &c2.advance(0, 4))
 }
 
 /// C++: `WelsSampleSatd8x8_c` — four 4x4s: top-left, top-right, bottom-left,
 /// bottom-right (the C++'s summation order, kept).
-pub fn satd_8x8(c1: &PlaneCursor<'_>, c2: &PlaneCursor<'_>) -> i32 {
+pub fn satd_8x8<A: RefSamples + Copy, B: RefSamples + Copy>(c1: &A, c2: &B) -> i32 {
     let mut satd = satd_4x4(c1, c2);
     satd += satd_4x4(&c1.advance(4, 0), &c2.advance(4, 0));
     satd += satd_4x4(&c1.advance(0, 4), &c2.advance(0, 4));
@@ -89,17 +94,17 @@ pub fn satd_8x8(c1: &PlaneCursor<'_>, c2: &PlaneCursor<'_>) -> i32 {
 }
 
 /// C++: `WelsSampleSatd16x8_c` — two 8x8s left-to-right.
-pub fn satd_16x8(c1: &PlaneCursor<'_>, c2: &PlaneCursor<'_>) -> i32 {
+pub fn satd_16x8<A: RefSamples + Copy, B: RefSamples + Copy>(c1: &A, c2: &B) -> i32 {
     satd_8x8(c1, c2) + satd_8x8(&c1.advance(8, 0), &c2.advance(8, 0))
 }
 
 /// C++: `WelsSampleSatd8x16_c` — two 8x8s top-to-bottom.
-pub fn satd_8x16(c1: &PlaneCursor<'_>, c2: &PlaneCursor<'_>) -> i32 {
+pub fn satd_8x16<A: RefSamples + Copy, B: RefSamples + Copy>(c1: &A, c2: &B) -> i32 {
     satd_8x8(c1, c2) + satd_8x8(&c1.advance(0, 8), &c2.advance(0, 8))
 }
 
 /// C++: `WelsSampleSatd16x16_c` — four 8x8s in the same quadrant order.
-pub fn satd_16x16(c1: &PlaneCursor<'_>, c2: &PlaneCursor<'_>) -> i32 {
+pub fn satd_16x16<A: RefSamples + Copy, B: RefSamples + Copy>(c1: &A, c2: &B) -> i32 {
     let mut satd = satd_8x8(c1, c2);
     satd += satd_8x8(&c1.advance(8, 0), &c2.advance(8, 0));
     satd += satd_8x8(&c1.advance(0, 8), &c2.advance(0, 8));
@@ -139,30 +144,30 @@ pub fn WelsInitSampleSadFunc(pFuncList: &mut SWelsFuncPtrList, _uiCpuFlag: u32) 
     let sdf = &mut pFuncList.sSampleDealingFuncs;
 
     //pfSampleSad init
-    sdf.pfSampleSad[BLOCK_16x16] = Some(sample_sad::<16, 16>);
-    sdf.pfSampleSad[BLOCK_16x8] = Some(sample_sad::<16, 8>);
-    sdf.pfSampleSad[BLOCK_8x16] = Some(sample_sad::<8, 16>);
-    sdf.pfSampleSad[BLOCK_8x8] = Some(sample_sad::<8, 8>);
-    sdf.pfSampleSad[BLOCK_4x4] = Some(sample_sad::<4, 4>);
-    sdf.pfSampleSad[BLOCK_8x4] = Some(sample_sad::<8, 4>);
-    sdf.pfSampleSad[BLOCK_4x8] = Some(sample_sad::<4, 8>);
+    sdf.pfSampleSad[BLOCK_16x16] = Some(|a, b| sample_sad::<16, 16, _>(a, b));
+    sdf.pfSampleSad[BLOCK_16x8] = Some(|a, b| sample_sad::<16, 8, _>(a, b));
+    sdf.pfSampleSad[BLOCK_8x16] = Some(|a, b| sample_sad::<8, 16, _>(a, b));
+    sdf.pfSampleSad[BLOCK_8x8] = Some(|a, b| sample_sad::<8, 8, _>(a, b));
+    sdf.pfSampleSad[BLOCK_4x4] = Some(|a, b| sample_sad::<4, 4, _>(a, b));
+    sdf.pfSampleSad[BLOCK_8x4] = Some(|a, b| sample_sad::<8, 4, _>(a, b));
+    sdf.pfSampleSad[BLOCK_4x8] = Some(|a, b| sample_sad::<4, 8, _>(a, b));
 
     //pfSampleSatd init
-    sdf.pfSampleSatd[BLOCK_16x16] = Some(satd_16x16);
-    sdf.pfSampleSatd[BLOCK_16x8] = Some(satd_16x8);
-    sdf.pfSampleSatd[BLOCK_8x16] = Some(satd_8x16);
-    sdf.pfSampleSatd[BLOCK_8x8] = Some(satd_8x8);
-    sdf.pfSampleSatd[BLOCK_4x4] = Some(satd_4x4);
-    sdf.pfSampleSatd[BLOCK_8x4] = Some(satd_8x4);
-    sdf.pfSampleSatd[BLOCK_4x8] = Some(satd_4x8);
+    sdf.pfSampleSatd[BLOCK_16x16] = Some(|a, b| satd_16x16(a, b));
+    sdf.pfSampleSatd[BLOCK_16x8] = Some(|a, b| satd_16x8(a, b));
+    sdf.pfSampleSatd[BLOCK_8x16] = Some(|a, b| satd_8x16(a, b));
+    sdf.pfSampleSatd[BLOCK_8x8] = Some(|a, b| satd_8x8(a, b));
+    sdf.pfSampleSatd[BLOCK_4x4] = Some(|a, b| satd_4x4(a, b));
+    sdf.pfSampleSatd[BLOCK_8x4] = Some(|a, b| satd_8x4(a, b));
+    sdf.pfSampleSatd[BLOCK_4x8] = Some(|a, b| satd_4x8(a, b));
 
-    sdf.pfSample4Sad[BLOCK_16x16] = Some(sample_sad_four::<16, 16>);
-    sdf.pfSample4Sad[BLOCK_16x8] = Some(sample_sad_four::<16, 8>);
-    sdf.pfSample4Sad[BLOCK_8x16] = Some(sample_sad_four::<8, 16>);
-    sdf.pfSample4Sad[BLOCK_8x8] = Some(sample_sad_four::<8, 8>);
-    sdf.pfSample4Sad[BLOCK_4x4] = Some(sample_sad_four::<4, 4>);
-    sdf.pfSample4Sad[BLOCK_8x4] = Some(sample_sad_four::<8, 4>);
-    sdf.pfSample4Sad[BLOCK_4x8] = Some(sample_sad_four::<4, 8>);
+    sdf.pfSample4Sad[BLOCK_16x16] = Some(|a, b, sad| sample_sad_four::<16, 16, _>(a, b, sad));
+    sdf.pfSample4Sad[BLOCK_16x8] = Some(|a, b, sad| sample_sad_four::<16, 8, _>(a, b, sad));
+    sdf.pfSample4Sad[BLOCK_8x16] = Some(|a, b, sad| sample_sad_four::<8, 16, _>(a, b, sad));
+    sdf.pfSample4Sad[BLOCK_8x8] = Some(|a, b, sad| sample_sad_four::<8, 8, _>(a, b, sad));
+    sdf.pfSample4Sad[BLOCK_4x4] = Some(|a, b, sad| sample_sad_four::<4, 4, _>(a, b, sad));
+    sdf.pfSample4Sad[BLOCK_8x4] = Some(|a, b, sad| sample_sad_four::<8, 4, _>(a, b, sad));
+    sdf.pfSample4Sad[BLOCK_4x8] = Some(|a, b, sad| sample_sad_four::<4, 8, _>(a, b, sad));
 
     // The transitional raw tables (T9.B25) were installed here beside the safe
     // ones, from the same fourteen raw SAD shims and seven raw SATD bodies.

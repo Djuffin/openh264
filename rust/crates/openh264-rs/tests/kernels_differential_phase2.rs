@@ -316,25 +316,25 @@ fn sad_surface(
 /// the shape its raw counterpart claims.
 fn safe_sad(w: usize, h: usize, c1: &PlaneCursor<'_>, c2: &PlaneCursor<'_>) -> i32 {
     match (w, h) {
-        (4, 4) => sad::sample_sad::<4, 4>(c1, c2),
-        (8, 4) => sad::sample_sad::<8, 4>(c1, c2),
-        (4, 8) => sad::sample_sad::<4, 8>(c1, c2),
-        (8, 8) => sad::sample_sad::<8, 8>(c1, c2),
-        (16, 8) => sad::sample_sad::<16, 8>(c1, c2),
-        (8, 16) => sad::sample_sad::<8, 16>(c1, c2),
-        _ => sad::sample_sad::<16, 16>(c1, c2),
+        (4, 4) => sad::sample_sad::<4, 4, _>(c1, c2),
+        (8, 4) => sad::sample_sad::<8, 4, _>(c1, c2),
+        (4, 8) => sad::sample_sad::<4, 8, _>(c1, c2),
+        (8, 8) => sad::sample_sad::<8, 8, _>(c1, c2),
+        (16, 8) => sad::sample_sad::<16, 8, _>(c1, c2),
+        (8, 16) => sad::sample_sad::<8, 16, _>(c1, c2),
+        _ => sad::sample_sad::<16, 16, _>(c1, c2),
     }
 }
 
 fn safe_sad_four(w: usize, h: usize, c1: &PlaneCursor<'_>, c2: &PlaneCursor<'_>, out: &mut [i32; 4]) {
     match (w, h) {
-        (4, 4) => sad::sample_sad_four::<4, 4>(c1, c2, out),
-        (8, 4) => sad::sample_sad_four::<8, 4>(c1, c2, out),
-        (4, 8) => sad::sample_sad_four::<4, 8>(c1, c2, out),
-        (8, 8) => sad::sample_sad_four::<8, 8>(c1, c2, out),
-        (16, 8) => sad::sample_sad_four::<16, 8>(c1, c2, out),
-        (8, 16) => sad::sample_sad_four::<8, 16>(c1, c2, out),
-        _ => sad::sample_sad_four::<16, 16>(c1, c2, out),
+        (4, 4) => sad::sample_sad_four::<4, 4, _>(c1, c2, out),
+        (8, 4) => sad::sample_sad_four::<8, 4, _>(c1, c2, out),
+        (4, 8) => sad::sample_sad_four::<4, 8, _>(c1, c2, out),
+        (8, 8) => sad::sample_sad_four::<8, 8, _>(c1, c2, out),
+        (16, 8) => sad::sample_sad_four::<16, 8, _>(c1, c2, out),
+        (8, 16) => sad::sample_sad_four::<8, 16, _>(c1, c2, out),
+        _ => sad::sample_sad_four::<16, 16, _>(c1, c2, out),
     }
 }
 
@@ -1260,13 +1260,13 @@ use openh264_rs::encoder::sample as satd;
 type SafeSatd = fn(&PlaneCursor<'_>, &PlaneCursor<'_>) -> i32;
 
 const SATD_SHAPES: &[(&str, usize, usize, SafeSatd)] = &[
-    ("Satd4x4", 4, 4, satd::satd_4x4),
-    ("Satd8x4", 8, 4, satd::satd_8x4),
-    ("Satd4x8", 4, 8, satd::satd_4x8),
-    ("Satd8x8", 8, 8, satd::satd_8x8),
-    ("Satd16x8", 16, 8, satd::satd_16x8),
-    ("Satd8x16", 8, 16, satd::satd_8x16),
-    ("Satd16x16", 16, 16, satd::satd_16x16),
+    ("Satd4x4", 4, 4, |a, b| satd::satd_4x4(a, b)),
+    ("Satd8x4", 8, 4, |a, b| satd::satd_8x4(a, b)),
+    ("Satd4x8", 4, 8, |a, b| satd::satd_4x8(a, b)),
+    ("Satd8x8", 8, 8, |a, b| satd::satd_8x8(a, b)),
+    ("Satd16x8", 16, 8, |a, b| satd::satd_16x8(a, b)),
+    ("Satd8x16", 8, 16, |a, b| satd::satd_8x16(a, b)),
+    ("Satd16x16", 16, 16, |a, b| satd::satd_16x16(a, b)),
 ];
 
 /// The safe kernels' declared reach is `(h-1)*stride + w` from the anchor on
