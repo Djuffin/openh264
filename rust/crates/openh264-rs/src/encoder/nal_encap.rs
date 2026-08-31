@@ -647,6 +647,7 @@ mod tests {
     // fork-reachable. Its `unsafe` is the ordinary one of calling an `unsafe extern
     // "C"` item from a test, which is what `C-ABI(test)` already means in this tree.
     // The other two `MT` tags in this file are real and stay.
+    // unsafe-cat: C-ABI(test) — named, per the note above.
     #[allow(unsafe_code)]
     fn test_wels_load_and_unload_nal_slice() {
         let mut bs_buf = vec![0u8; 1024];

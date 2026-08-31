@@ -1762,7 +1762,10 @@ mod tests {
     /// `WelsInitEncoderExt` does before the preprocessor. This is the direct test of
     /// baseline blocker C: before this phase `pSpsArray`/`pPPSArray` were never
     /// allocated, `iSpsNum`/`iPpsNum` never assigned and `ppDqLayerList` never filled.
-    // unsafe-cat: port-raw(Phase 9)
+    // unsafe-cat: instrument(test) — S11.5: this is a *test helper*, not port
+    // code. It was tagged `port-raw(Phase 9)`, which put it in the convertible
+    // queue; the queue is product work, and D-exit-4's enumerated floor is the
+    // test instruments. Same allow, honest category.
     #[allow(unsafe_code)]
     unsafe fn build_gate_context() -> *mut sWelsEncCtx {
         // Drive the same path the public API does: build an SEncParamExt and let

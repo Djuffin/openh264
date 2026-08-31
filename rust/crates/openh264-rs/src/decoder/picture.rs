@@ -736,6 +736,7 @@ mod tests {
     /// the raw reads below *are* the instrument. It retires with `data_ptr` itself,
     /// when family 13's callers stop taking plane pointers (W6 step 3).
     #[test]
+    // unsafe-cat: instrument(test)
     #[allow(unsafe_code)]
     fn data_ptr_reaches_the_padding_behind_the_logical_origin() {
         let (w, h, pad, stride) = (176usize, 144usize, 32usize, 240usize);
@@ -795,6 +796,7 @@ mod tests {
     /// "attempting a write access using <tag> but that tag does not exist in the
     /// borrow stack", and passes every other test in the file.
     #[test]
+    // unsafe-cat: instrument(test)
     #[allow(unsafe_code)]
     fn data_ptr_twice_leaves_the_first_cursor_usable() {
         let (w, h, pad, stride) = (176usize, 144usize, 32usize, 240usize);

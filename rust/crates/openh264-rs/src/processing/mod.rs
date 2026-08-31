@@ -40,6 +40,11 @@
 //! Every one is off in the gate configuration, and 341/341 holds with all five
 //! unsupported.
 
+// **S11.5 (step 5): NOT sealed, and the reason is `forbid`'s scope.** This
+// file holds no `unsafe` itself, but `#![forbid]` in a module root applies to
+// the module's whole subtree — every `mod` it declares — so sealing here would
+// forbid `unsafe` across files that still carry audited allows. A module root
+// seals when its subtree does, which is E2's business, not a per-file one.
 #![deny(unsafe_code)]
 
 pub mod adaptive_quantization;
