@@ -4935,21 +4935,54 @@ mod tests {
         dq.pFirstMbIdxOfSlice = (0..SLICES).map(|s| (s * MB_W) as i32).collect();
         dq.pCountMbNumInSlice = (0..SLICES).map(|_| MB_W as i32).collect();
 
-        // The layer's address, carried as an integer so the workers can share it
-        // without this probe minting a **third** `unsafe impl Send` in the tree:
-        // decision D1 pins that count at two (`SharedCells`'s `Sync` and
-        // `SliceJobHandle`'s `Send`), and a test is not the place to spend the pin.
-        // An address is plain `Copy` data; the safety argument is the same one
-        // `UpdateMbMapForked` relies on and is what this probe exists to keep
-        // honest — every worker only *reads* the layer struct, and each writes only
-        // its own slice's macroblock records, disjoint by
-        // `pFirstMbIdxOfSlice`/`pCountMbNumInSlice`.
-        let layer_addr = (&mut dq as *mut SDqLayer) as usize;
+        // **S10.4: the address-as-integer is gone, and so is the argument it
+        // carried.** This probe used to hand every worker the layer's address so
+        // each could resolve the grid itself — the production shape at the time —
+        // and its job was to keep honest the claim that "each writes only its own
+        // slice's macroblock records, disjoint by `pFirstMbIdxOfSlice` /
+        // `pCountMbNumInSlice`".
+        //
+        // That claim is not asserted any more; it is *constructed*. The grid is
+        // carved into per-slice `&mut [SMB]` before the spawn, exactly as
+        // `UpdateMbMapForked` now does, so two workers naming one record is not a
+        // race this test could catch — it is a program that does not compile.
+        // What the probe still checks is the half that could still be wrong: that
+        // the partition arithmetic hands each worker the records it should, and
+        // that the neighbour walk respects the slice boundary.
+        let SDqLayer { sMbDataP, sSliceEncCtx, pFirstMbIdxOfSlice, pCountMbNumInSlice, .. } =
+            &mut dq;
+        let kiGridWidth = sMbDataP.dims().mb_width();
+        let mut rest: &mut [SMB] = sMbDataP.as_mut_slice();
+        let mut cursor = 0i32;
+        let mut chunks: Vec<(i32, i32, i32, &mut [SMB])> = Vec::new();
+        for idc in 0..SLICES as i32 {
+            let first = pFirstMbIdxOfSlice[idc as usize];
+            let count = pCountMbNumInSlice[idc as usize];
+            let (_gap, tail) = rest.split_at_mut((first - cursor) as usize);
+            let (chunk, tail) = tail.split_at_mut(count as usize);
+            chunks.push((idc, first, count, chunk));
+            rest = tail;
+            cursor = first + count;
+        }
+        let pSliceCtx = &*sSliceEncCtx;
 
         std::thread::scope(|s| {
-            for slice_idc in 0..SLICES as i32 {
-                s.spawn(move || unsafe {
-                    UpdateMbListNeighborParallel(layer_addr as *mut SDqLayer, slice_idc);
+            for (idc, first, count, chunk) in chunks {
+                s.spawn(move || {
+                    let mut mbs = crate::safe::mb_grid::MbWindow::new(
+                        chunk,
+                        first as usize,
+                        kiGridWidth,
+                        first as usize,
+                    );
+                    UpdateMbListNeighborParallel(
+                        &mut mbs,
+                        pSliceCtx,
+                        MB_W as i32,
+                        idc,
+                        first,
+                        count,
+                    );
                 });
             }
         });

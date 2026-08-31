@@ -65,7 +65,8 @@ use crate::encoder::nal_encap::{
 };
 use crate::common::wels_common_defs::{EWelsNalRefIdc, EWelsNalUnitType};
 use crate::encoder::svc_encode_slice::{
-    current_layer_ref, InitOneSliceInThread, ReallocateSliceInThread, SetSliceBoundaryInfo,
+    current_layer_mut, current_layer_ref, InitOneSliceInThread, ReallocateSliceInThread,
+    SetSliceBoundaryInfo,
     WelsCodeOneSlice,
 };
 use crate::encoder::vlc_encoder::BsWriter;
@@ -398,49 +399,30 @@ pub fn WelsEmms() {
 
 /// Updates macroblock spatial neighbor availability bitmasks for all macroblocks
 /// belonging to a specific slice partition in parallel.
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
-pub unsafe fn UpdateMbListNeighborParallel(
-    pCurDq: *mut SDqLayer,
+/// **S10.4: the partition is handed in, not resolved.** The window is the
+/// caller's — carved out of the grid before the fork by
+/// [`UpdateMbMapForked`] — so this body has no layer, no `mb_window` mint and no
+/// `unsafe`.
+///
+/// F226's note, which stood here, described the defect the old shape had: a
+/// `&mut (*pCurDq).sSliceEncCtx` reborrow taken for one scalar read, by N workers
+/// on the *same* layer at once, which is a write-write race in the data-race
+/// model with nothing written. It survives as history in
+/// `update_mb_map_forked_workers_share_the_layer_without_racing`; the shape it
+/// warned about is now inexpressible, because no worker here can name the layer.
+pub fn UpdateMbListNeighborParallel(
+    mbs: &mut crate::safe::mb_grid::MbWindow<'_, SMB>,
+    pSliceCtx: &crate::encoder::svc_encode_slice::SSliceCtx,
+    kiMbWidth: i32,
     kiSliceIdc: i32,
+    kiFirst: i32,
+    kiCount: i32,
 ) {
-    if pCurDq.is_null() {
-        return;
-    }
-    // **F226.** This was `let pSliceCtx = &mut (*pCurDq).sSliceEncCtx;` — an
-    // exclusive reborrow taken for the one scalar read below and never written
-    // through. `UpdateMbMapForked` has every worker call this body on the *same*
-    // layer, so N of them took that retag at once, and F223's third rule is exact:
-    // in-fork a `&mut` retag is a **write** to the data-race model. The retag
-    // covered the whole `SSliceCtx` — `iSliceNumInFrame`'s atomic and
-    // `pOverallMbMap`'s `Vec` header included — so it was a write-write race with
-    // nothing written, the same shape as F223's own defect 2.
-    //
-    // No gate in this project could see it: both diffharness drivers and both §4.7
-    // MT probes pin `bUseLoadBalancing` off, and this fork is reachable only with it
-    // on, so the covering test is `load_balancing_completes_frames_with_sane_slice_counts`
-    // — which is `#[cfg_attr(miri, ignore)]`. The probe below is the referee that
-    // was missing.
-    let kiMbWidth = (*pCurDq).sSliceEncCtx.iMbWidth as i32;
-    let first: &[i32] = &(*pCurDq).pFirstMbIdxOfSlice;
-    let count: &[i32] = &(*pCurDq).pCountMbNumInSlice;
-    let kiFirst = first[kiSliceIdc as usize];
-    let kiCount = count[kiSliceIdc as usize];
-    if kiCount <= 0 {
-        // The old `while` simply did not run; the window mint requires a
-        // non-empty range, so the empty case returns before it.
-        return;
-    }
-    // Each worker's window is exactly its own slice's records — the
-    // fork-disjointness this walker's name promises, now enforced (E3).
-    let mut mbs =
-        crate::encoder::svc_encode_slice::mb_window(&*pCurDq, kiFirst, kiCount, kiFirst);
-    let mut iIdx = kiFirst;
     let kiEndMbInSlice = kiFirst + kiCount - 1;
-
+    let mut iIdx = kiFirst;
     while iIdx <= kiEndMbInSlice {
         crate::encoder::svc_encode_slice::UpdateMbNeighbor(
-            pCurDq.as_ref().map(|l| &l.sSliceEncCtx),
+            Some(pSliceCtx),
             mbs.at_mut(iIdx as usize),
             kiMbWidth,
             kiSliceIdc as u16,
@@ -1633,7 +1615,7 @@ pub unsafe fn EncodeFixedSlicesForked(pCtx: &mut sWelsEncCtx, kiSliceCount: i32)
 /// As [`EncodeFixedSlicesForked`].
 // unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
-pub unsafe fn UpdateMbMapForked(pCtx: &mut sWelsEncCtx, kiTaskCount: i32) {
+pub fn UpdateMbMapForked(pCtx: &mut sWelsEncCtx, kiTaskCount: i32) {
     // T9.H: the `pCtx.is_null()` disjunct is gone — a `&mut sWelsEncCtx`
     // cannot be null and every caller now holds one. The rest is unchanged.
     if kiTaskCount <= 0 || current_layer_ref(pCtx).is_none()
@@ -1642,20 +1624,77 @@ pub unsafe fn UpdateMbMapForked(pCtx: &mut sWelsEncCtx, kiTaskCount: i32) {
         return;
     }
     let iWidth = ForkWidth(pCtx, kiTaskCount);
-    let mut jobs: Vec<SliceJobHandle> = Vec::with_capacity(iWidth as usize);
-    for k in 0..iWidth {
-        jobs.push(SliceJobHandle::new(pCtx, k, k, iWidth, kiTaskCount, false));
+    let Some(pCurDq) = current_layer_mut(pCtx) else {
+        return;
+    };
+
+    // **S10.4: the pre-fork partition, and it needs no `unsafe` at all.**
+    //
+    // Every worker used to resolve the layer itself — `current_layer(&*job.pCtx)`
+    // through `SliceJobHandle`'s raw — and then mint a `&mut [SMB]` window out of
+    // a *shared* layer with `mb_window`, whose safety contract is the unverifiable
+    // "the caller owns these records exclusively". That contract is true here, and
+    // it is true for a reason the compiler can be shown instead of told: each
+    // slice's records are the contiguous run
+    // `[pFirstMbIdxOfSlice[i] .. + pCountMbNumInSlice[i])`, and the runs are
+    // disjoint. A chain of `split_at_mut` **is** that fact.
+    //
+    // So the grid is carved here, on the calling thread, while the layer is `&mut`
+    // — the borrow that cannot coexist with the fork — and each worker is handed
+    // its own chunks. Nothing crosses the spawn but `&mut [SMB]` and a shared
+    // `&SSliceCtx`, both `Send` on their own merits, so this fork no longer needs
+    // `SliceJobHandle` or its hand-written `Send`.
+    let SDqLayer { sMbDataP, sSliceEncCtx, pFirstMbIdxOfSlice, pCountMbNumInSlice, .. } =
+        pCurDq;
+    let kiMbWidth = sSliceEncCtx.iMbWidth as i32;
+    let kiGridWidth = sMbDataP.dims().mb_width();
+
+    // The ranges, in macroblock order. `kiCount <= 0` was the old body's early
+    // return and stays one: an empty slice contributes no chunk.
+    let mut ranges: Vec<(i32, i32, i32)> = (0..kiTaskCount)
+        .filter_map(|idc| {
+            let first = *pFirstMbIdxOfSlice.get(idc as usize)?;
+            let count = *pCountMbNumInSlice.get(idc as usize)?;
+            (count > 0 && first >= 0).then_some((first, count, idc))
+        })
+        .collect();
+    ranges.sort_unstable();
+
+    // One `&mut [SMB]` per slice, peeled off the front in order. The assert is the
+    // disjointness claim `mb_window`'s `# Safety` used to make in prose: if the
+    // ranges ever overlapped, this panics naming the coordinates instead of
+    // handing two workers the same record.
+    let mut rest: &mut [SMB] = sMbDataP.as_mut_slice();
+    let mut cursor = 0i32;
+    let mut per_worker: Vec<Vec<(i32, i32, i32, &mut [SMB])>> =
+        (0..iWidth).map(|_| Vec::new()).collect();
+    for (first, count, idc) in ranges {
+        assert!(
+            first >= cursor,
+            "slice {idc} starts at mb {first}, inside the previous slice's records \
+             (which end at {cursor}) — the macroblock partition is not disjoint"
+        );
+        let (_gap, tail) = rest.split_at_mut((first - cursor) as usize);
+        let (chunk, tail) = tail.split_at_mut(count as usize);
+        per_worker[(idc % iWidth) as usize].push((idc, first, count, chunk));
+        rest = tail;
+        cursor = first + count;
     }
 
+    let pSliceCtx: &crate::encoder::svc_encode_slice::SSliceCtx = sSliceEncCtx;
     std::thread::scope(|s| {
-        for job in jobs {
+        for group in per_worker {
             s.spawn(move || {
-                let job = job;
-                let pCurDq = current_layer(&*job.pCtx);
-                let mut iSliceIdc = job.iFirstSlice;
-                while iSliceIdc < job.iSliceCount {
-                    UpdateMbListNeighborParallel(pCurDq, iSliceIdc);
-                    iSliceIdc += job.iSliceStep;
+                for (idc, first, count, chunk) in group {
+                    let mut mbs = crate::safe::mb_grid::MbWindow::new(
+                        chunk,
+                        first as usize,
+                        kiGridWidth,
+                        first as usize,
+                    );
+                    UpdateMbListNeighborParallel(
+                        &mut mbs, pSliceCtx, kiMbWidth, idc, first, count,
+                    );
                 }
             });
         }
