@@ -1045,11 +1045,9 @@ pub fn StashPopMBStatusCavlc(
 /// only has to remember three bitstream cursor fields — copies out the bytes
 /// already emitted, because CABAC renormalisation can rewrite them via
 /// `PropagateCarry`.
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
-pub unsafe fn StashMBStatusCabac(
+pub fn StashMBStatusCabac(
     buf: &mut [u8],
-    pDss: &mut crate::encoder::svc_encode_slice::SDynamicSlicingStack,
+    pDss: &mut crate::encoder::svc_encode_slice::SDynamicSlicingStack<'_>,
     pCabacCtx: &mut crate::encoder::set_mb_syn_cabac::SCabacCtx,
     kuiLastMbQp: u8,
     iMbSkipRun: i32,
@@ -1063,16 +1061,18 @@ pub unsafe fn StashMBStatusCabac(
     // CABAC's `PropagateCarry` rewrites bytes it already emitted, so restoring
     // the cursor is not enough to restore the output.
     (*pDss).sStoredCabac = *pCtx;
-    if !(*pDss).pRestoreBuffer.is_null() {
+    if let Some(pRestore) = pDss.pRestoreBuffer.as_deref_mut() {
         let iPosBitOffset = GetBsPosCabac(pCtx) - pDss.iStartPos;
         let iLen = (iPosBitOffset >> 3) + if (iPosBitOffset & 0x07) != 0 { 1 } else { 0 };
         let start = (*pCtx).m_iBufStart;
-        // Sliced, not offset: `buf[start..start + iLen]` is what bounds the
-        // read against the output buffer, which the C++ never did. The
-        // destination stays a raw pointer — `pRestoreBuffer` is one of the
-        // `pDynamicBsBuffer` allocations, and those are Phase 6's.
+        // Sliced, not offset: `buf[start..start + iLen]` bounds the read
+        // against the output buffer, which the C++ never did — and S11.30
+        // bounds the *write* too, which the raw `copy_nonoverlapping` never
+        // did: the scratch is a slice now, so a stash longer than the
+        // partition's buffer panics naming the length instead of writing past
+        // the allocation.
         let src = &buf[start..start + iLen as usize];
-        std::ptr::copy_nonoverlapping(src.as_ptr(), (*pDss).pRestoreBuffer, iLen as usize);
+        pRestore[..iLen as usize].copy_from_slice(src);
     }
     (*pDss).uiLastMbQp = kuiLastMbQp;
     (*pDss).iMbSkipRunStack = iMbSkipRun;
@@ -1082,26 +1082,25 @@ pub unsafe fn StashMBStatusCabac(
 ///
 /// Note the offset is recomputed from the *restored* context, so
 /// `GetBsPosCabac` is called after `sStoredCabac` has been copied back.
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
-pub unsafe fn StashPopMBStatusCabac(
+pub fn StashPopMBStatusCabac(
     buf: &mut [u8],
-    pDss: &mut crate::encoder::svc_encode_slice::SDynamicSlicingStack,
+    pDss: &mut crate::encoder::svc_encode_slice::SDynamicSlicingStack<'_>,
     pCabacCtx: &mut crate::encoder::set_mb_syn_cabac::SCabacCtx,
 ) -> i32 {
     // S5.D1: as the stash side — the null test was unreachable, see there.
     let pCtx = pCabacCtx;
     *pCtx = (*pDss).sStoredCabac;
     // Write-extent audit site 3: the one write that is not at the cursor.
-    if !(*pDss).pRestoreBuffer.is_null() {
+    if let Some(pRestore) = pDss.pRestoreBuffer.as_deref() {
         let iPosBitOffset = GetBsPosCabac(pCtx) - pDss.iStartPos;
         let iLen = (iPosBitOffset >> 3) + if (iPosBitOffset & 0x07) != 0 { 1 } else { 0 };
         let start = (*pCtx).m_iBufStart;
         // Same bound as the stash side, on the write this time — this is the
         // one write in the whole engine that is not at the cursor, and
-        // `buf[start..start + iLen]` is what says how far it may reach.
+        // `buf[start..start + iLen]` is what says how far it may reach; the
+        // scratch read is bounded by its own slice since S11.30.
         let dst = &mut buf[start..start + iLen as usize];
-        std::ptr::copy_nonoverlapping((*pDss).pRestoreBuffer, dst.as_mut_ptr(), iLen as usize);
+        dst.copy_from_slice(&pRestore[..iLen as usize]);
     }
     (*pDss).iMbSkipRunStack
 }

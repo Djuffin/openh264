@@ -42,9 +42,11 @@
     non_upper_case_globals,
     dead_code,
     unused_variables,
-    unused_unsafe,
     unused_mut
 )]
+// S11.30: `unused_unsafe` left the allow list above — a muzzled lint is how
+// eighteen vacuous blocks accumulated crate-wide (F281), and this file's six
+// around the coding thunks were invisible for exactly this reason.
 
 #![deny(unsafe_code)]
 
@@ -408,8 +410,8 @@ impl Default for SSlice {
 
 
 #[repr(C)]
-#[derive(Debug, Copy, Clone)]
-pub struct SDynamicSlicingStack {
+#[derive(Debug)]
+pub struct SDynamicSlicingStack<'a> {
     pub iStartPos: i32,
     pub iCurrentPos: i32,
     /// The CAVLC rollback snapshot. Was `pBsStackBufPtr`/`uiBsStackCurBits`/
@@ -419,10 +421,19 @@ pub struct SDynamicSlicingStack {
     pub sStoredCabac: crate::encoder::set_mb_syn_cabac::SCabacCtx,
     pub iMbSkipRunStack: i32,
     pub uiLastMbQp: u8,
-    pub pRestoreBuffer: *mut u8,
+    /// **S11.30: the CABAC restore scratch, as the borrow it always was.** The
+    /// `*mut u8` named one of `pDynamicBsBuffer`'s per-partition allocations,
+    /// reached through the shared context in-fork (`dynamic_bs_buffer`, F71's
+    /// mint — deleted with this field's conversion). It now arrives like the
+    /// bitstream pair (S11.1a): taken from the context by the owner — pre-fork
+    /// for the size-limited workers, around the call for the single-threaded
+    /// callers — and threaded down the coding slot. `None` is what null was:
+    /// CAVLC dynamic slicing, and every fixed mode. `Copy` came off with the
+    /// pointer; nothing ever copied the stack whole.
+    pub pRestoreBuffer: Option<&'a mut [u8]>,
 }
 
-impl Default for SDynamicSlicingStack {
+impl Default for SDynamicSlicingStack<'_> {
     fn default() -> Self {
         Self {
             iStartPos: 0,
@@ -431,7 +442,7 @@ impl Default for SDynamicSlicingStack {
             sStoredCabac: crate::encoder::set_mb_syn_cabac::SCabacCtx::default(),
             iMbSkipRunStack: 0,
             uiLastMbQp: 0,
-            pRestoreBuffer: std::ptr::null_mut(),
+            pRestoreBuffer: None,
         }
     }
 }
@@ -1513,6 +1524,13 @@ pub type PWelsCodingSliceFunc = extern "C" fn(
     // `&mut MbArray`. The bodies move the cursor with `set_cur` instead of
     // re-minting.
     pMbs: &mut crate::safe::mb_grid::MbWindow<'_, SMB>,
+    // **S11.30: the CABAC restore scratch, threaded like the pair above.** The
+    // dynamic loops used to mint it from the shared context per slice
+    // (`dynamic_bs_buffer`, F71); the owner hands it down now — the size-limited
+    // fork takes the partition's buffer beside its bitstream slot, the
+    // single-threaded callers take it around the call. `None` everywhere the
+    // old pointer was null: CAVLC dynamic slicing, and every fixed mode.
+    pRestoreBuf: Option<&mut [u8]>,
 ) -> i32;
 pub type PWelsSliceHeaderWriteFunc = extern "C" fn(
     pCtx: &sWelsEncCtx,
@@ -2337,14 +2355,13 @@ pub fn WelsInitInterMDStruc<'a>(
     (*pMd).iBlock8x8StaticIdc.fill(0);
 }
 
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
-pub unsafe fn WelsISliceMdEnc(
+pub fn WelsISliceMdEnc(
     pEncCtx: &sWelsEncCtx,
     pSlice: &mut SSlice,
     pSliceBsBuf: &mut [u8],
     pCtxOutBs: &mut Option<&mut BsWriter>,
     pMbs: &mut crate::safe::mb_grid::MbWindow<'_, SMB>,
+    pRestoreBuf: Option<&mut [u8]>,
 ) -> i32 {
     // **S7.A5**: the `is_null()` guard and its early return retire with the
     // parameter — every context reaching this body comes from a `&mut sWelsEncCtx`
@@ -2380,7 +2397,7 @@ pub unsafe fn WelsISliceMdEnc(
     let kbCabac = (*pEncCtx).param().iEntropyCodingModeFlag != 0;
     if kbCabac {
         crate::encoder::svc_set_mb_syn_cabac::WelsInitSliceCabac(pEncCtx, pSlice, &mut *pSliceBsBuf, &mut *pCtxOutBs);
-        sDss.pRestoreBuffer = std::ptr::null_mut();
+        sDss.pRestoreBuffer = None;
         sDss.iStartPos = 0;
         sDss.iCurrentPos = 0;
     }
@@ -2473,19 +2490,19 @@ pub unsafe fn WelsISliceMdEnc(
     ENC_RETURN_SUCCESS
 }
 
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
-pub unsafe fn WelsISliceMdEncDynamic(
+pub fn WelsISliceMdEncDynamic(
     pEncCtx: &sWelsEncCtx,
     pSlice: &mut SSlice,
     pSliceBsBuf: &mut [u8],
     pCtxOutBs: &mut Option<&mut BsWriter>,
     pMbs: &mut crate::safe::mb_grid::MbWindow<'_, SMB>,
+    pRestoreBuf: Option<&mut [u8]>,
 ) -> i32 {
     // **S7.A5**: the `is_null()` guard and its early return retire with the
     // parameter — every context reaching this body comes from a `&mut sWelsEncCtx`
     // held by one of the three fork entry points or the frame loop, never a null.
-    let pCurLayer = current_layer(pEncCtx);
+    let pCurLayer = current_layer_ref(pEncCtx)
+        .expect("the frame's current layer is stamped");
     // S29: raw, not `&mut` — both of these are held across the macroblock loop,
     // whose callees derive their own borrows of the same fields. `sSliceEncCtx` is
     // the dynamic-slice probe's third red (session D): `WelsGetNextMbOfSlice` takes
@@ -2494,19 +2511,19 @@ pub unsafe fn WelsISliceMdEncDynamic(
     // the dead tag. `pMbCache` is the encode probe's fourth red (session B).
     let kiSliceFirstMbXY = pSlice.sSliceHeaderExt.sSliceHeader.iFirstMbInSlice;
     let mut iNextMbIdx = kiSliceFirstMbXY;
-    let kiTotalNumMb: i32 = (*pCurLayer).iMbWidth as i32 * (*pCurLayer).iMbHeight as i32;
+    let kiTotalNumMb: i32 = pCurLayer.iMbWidth as i32 * pCurLayer.iMbHeight as i32;
     let mut iCurMbIdx: i32;
     let mut iNumMbCoded = 0;
-    let kiSliceIdx = (*pSlice).iSliceIdx;
+    let kiSliceIdx = pSlice.iSliceIdx;
     let kiPartitionId = (kiSliceIdx % ((*pEncCtx).iActiveThreadsNum as i32)) as usize;
     let kuiChromaQpIndexOffset =
-        layer_pps_ref(pEncCtx, &*pCurLayer).map_or(0, |p| p.uiChromaQpIndexOffset);
+        layer_pps_ref(pEncCtx, pCurLayer).map_or(0, |p| p.uiChromaQpIndexOffset);
 
     let mut sMd = SWelsMD::default();
     let mut sDss = SDynamicSlicingStack::default();
     if (*pEncCtx).param().iEntropyCodingModeFlag != 0 {
         crate::encoder::svc_set_mb_syn_cabac::WelsInitSliceCabac(pEncCtx, pSlice, &mut *pSliceBsBuf, &mut *pCtxOutBs);
-        sDss.pRestoreBuffer = dynamic_bs_buffer(pEncCtx, kiPartitionId);
+        sDss.pRestoreBuffer = pRestoreBuf;
         sDss.iStartPos = 0;
         sDss.iCurrentPos = 0;
     } else {
@@ -2521,13 +2538,13 @@ pub unsafe fn WelsISliceMdEncDynamic(
             let func_list = (*pEncCtx).func_list();
             func_list
                 .eEntropyCoder
-                .StashMBStatus(&mut *pSliceBsBuf, slice_bs_writer(&mut pSlice.sSliceBs, pCtxOutBs), &mut sDss, &mut (*pSlice).sCabacCtx, (*pSlice).uiLastMbQp, 0);
+                .StashMBStatus(&mut *pSliceBsBuf, slice_bs_writer(&mut pSlice.sSliceBs, pCtxOutBs), &mut sDss, &mut pSlice.sCabacCtx, pSlice.uiLastMbQp, 0);
             func_list
                 .pfRc
                 .WelsRcMbInit(pEncCtx, pMbs.cur_mut(), &mut *pSlice, pCtxOutBs.as_deref());
         }
 
-        if (*pSlice).bDynamicSlicingSliceSizeCtrlFlag {
+        if pSlice.bDynamicSlicingSliceSizeCtrlFlag {
             let max_qp = (*pEncCtx).rc_at((*pEncCtx).uiDependencyId as usize).iMaxQp;
             pMbs.cur_mut().uiLumaQp = max_qp as u8;
             pMbs.cur_mut().uiChromaQp = g_kuiChromaQpTable[CLIP3_QP_0_51(max_qp as i32 + kuiChromaQpIndexOffset as i32)];
@@ -2562,8 +2579,8 @@ pub unsafe fn WelsISliceMdEncDynamic(
                     let func_list = (*pEncCtx).func_list();
                     func_list
                         .eEntropyCoder
-                        .StashPopMBStatus(&mut *pSliceBsBuf, slice_bs_writer(&mut pSlice.sSliceBs, pCtxOutBs), &mut sDss, &mut (*pSlice).sCabacCtx);
-                    (*pSlice).uiLastMbQp = sDss.uiLastMbQp;
+                        .StashPopMBStatus(&mut *pSliceBsBuf, slice_bs_writer(&mut pSlice.sSliceBs, pCtxOutBs), &mut sDss, &mut pSlice.sCabacCtx);
+                    pSlice.uiLastMbQp = sDss.uiLastMbQp;
                 }
                 UpdateQpForOverflow(pMbs.cur_mut(), kuiChromaQpIndexOffset);
                 continue;
@@ -2577,17 +2594,15 @@ pub unsafe fn WelsISliceMdEncDynamic(
 
         {  // A6: the block is the shared borrow's scope (F191/F212)
             let func_list = (*pEncCtx).func_list();
-            sDss.iCurrentPos = func_list.eEntropyCoder.GetBsPosition(slice_bs_writer_ref(&pSlice.sSliceBs, pCtxOutBs.as_deref()), &(*pSlice).sCabacCtx);
+            sDss.iCurrentPos = func_list.eEntropyCoder.GetBsPosition(slice_bs_writer_ref(&pSlice.sSliceBs, pCtxOutBs.as_deref()), &pSlice.sCabacCtx);
         }
 
         if DynSlcJudgeSliceBoundaryStepBack(
             pEncCtx,
             pSlice,
-            // **S6.A1 / F239**: derived here, not 100 lines up. A `&SDqLayer` argument
-            // anywhere above is a shared retag over the *whole* layer, which pops a
-            // field-precise `addr_of_mut!` held across it — the defect Miri found in
-            // `WelsInitCurrentLayer`. Deriving at the use keeps this a fresh sibling.
-            std::ptr::addr_of_mut!((*pCurLayer).sSliceEncCtx),
+            // S11.30: a shared field borrow at the use — the `addr_of_mut!` that
+            // stood here fed a `*mut SSliceCtx` parameter that only ever read.
+            &pCurLayer.sSliceEncCtx,
             pMbs.cur().iMbXY,
             &mut sDss,
             pMbs,
@@ -2596,11 +2611,11 @@ pub unsafe fn WelsISliceMdEncDynamic(
                 let func_list = (*pEncCtx).func_list();
                 func_list
                     .eEntropyCoder
-                    .StashPopMBStatus(&mut *pSliceBsBuf, slice_bs_writer(&mut pSlice.sSliceBs, pCtxOutBs), &mut sDss, &mut (*pSlice).sCabacCtx);
-                (*pSlice).uiLastMbQp = sDss.uiLastMbQp;
+                    .StashPopMBStatus(&mut *pSliceBsBuf, slice_bs_writer(&mut pSlice.sSliceBs, pCtxOutBs), &mut sDss, &mut pSlice.sCabacCtx);
+                pSlice.uiLastMbQp = sDss.uiLastMbQp;
             }
-            (*pCurLayer).LastCodedMbIdxOfPartition[kiPartitionId].store(iCurMbIdx - 1, Ordering::Relaxed);
-            (*pCurLayer).NumSliceCodedOfPartition[kiPartitionId].fetch_add(1, Ordering::Relaxed);
+            pCurLayer.LastCodedMbIdxOfPartition[kiPartitionId].store(iCurMbIdx - 1, Ordering::Relaxed);
+            pCurLayer.NumSliceCodedOfPartition[kiPartitionId].fetch_add(1, Ordering::Relaxed);
             break;
         }
 
@@ -2618,11 +2633,11 @@ pub unsafe fn WelsISliceMdEncDynamic(
         }
 
         iNumMbCoded += 1;
-        iNextMbIdx = WelsGetNextMbOfSlice(&(*pCurLayer).sSliceEncCtx, iCurMbIdx);
+        iNextMbIdx = WelsGetNextMbOfSlice(&pCurLayer.sSliceEncCtx, iCurMbIdx);
         if iNextMbIdx == -1 || iNextMbIdx >= kiTotalNumMb || iNumMbCoded >= kiTotalNumMb {
-            (*pSlice).iCountMbNumInSlice = iCurMbIdx - (*pCurLayer).LastCodedMbIdxOfPartition[kiPartitionId].load(Ordering::Relaxed);
-            (*pCurLayer).LastCodedMbIdxOfPartition[kiPartitionId].store(iCurMbIdx, Ordering::Relaxed);
-            (*pCurLayer).NumSliceCodedOfPartition[kiPartitionId].fetch_add(1, Ordering::Relaxed);
+            pSlice.iCountMbNumInSlice = iCurMbIdx - pCurLayer.LastCodedMbIdxOfPartition[kiPartitionId].load(Ordering::Relaxed);
+            pCurLayer.LastCodedMbIdxOfPartition[kiPartitionId].store(iCurMbIdx, Ordering::Relaxed);
+            pCurLayer.NumSliceCodedOfPartition[kiPartitionId].fetch_add(1, Ordering::Relaxed);
             break;
         }
     }
@@ -2670,9 +2685,7 @@ fn mb_dump(pCurMb: &SMB, pMd: &SWelsMD<'_>, pSlice: & SSlice) {
     );
 }
 
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
-pub unsafe fn WelsMdInterMbLoop<'a>(
+pub fn WelsMdInterMbLoop<'a>(
     pEncCtx: &'a sWelsEncCtx,
     pSlice: &mut SSlice,
     pWelsMd: &mut SWelsMD<'a>,
@@ -2680,6 +2693,7 @@ pub unsafe fn WelsMdInterMbLoop<'a>(
     pSliceBsBuf: &mut [u8],
     pCtxOutBs: &mut Option<&mut BsWriter>,
     pMbs: &mut crate::safe::mb_grid::MbWindow<'_, SMB>,
+    pRestoreBuf: Option<&mut [u8]>,
 ) -> i32 {
     // **S7.A5**: the first arm retires with the parameter; the other four are live.
     // S11.27: the grid-emptiness arm reads the window, as in `WelsISliceMdEnc`.
@@ -2712,7 +2726,7 @@ pub unsafe fn WelsMdInterMbLoop<'a>(
     let kbCabac = (*pEncCtx).param().iEntropyCodingModeFlag != 0;
     if kbCabac {
         crate::encoder::svc_set_mb_syn_cabac::WelsInitSliceCabac(pEncCtx, pSlice, &mut *pSliceBsBuf, &mut *pCtxOutBs);
-        sDss.pRestoreBuffer = std::ptr::null_mut();
+        sDss.pRestoreBuffer = None;
         sDss.iStartPos = 0;
         sDss.iCurrentPos = 0;
     }
@@ -2860,9 +2874,7 @@ pub unsafe fn WelsMdInterMbLoop<'a>(
     ENC_RETURN_SUCCESS
 }
 
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
-pub unsafe fn WelsMdInterMbLoopOverDynamicSlice<'a>(
+pub fn WelsMdInterMbLoopOverDynamicSlice<'a>(
     pEncCtx: &'a sWelsEncCtx,
     pSlice: &mut SSlice,
     pWelsMd: &mut SWelsMD<'a>,
@@ -2870,6 +2882,7 @@ pub unsafe fn WelsMdInterMbLoopOverDynamicSlice<'a>(
     pSliceBsBuf: &mut [u8],
     pCtxOutBs: &mut Option<&mut BsWriter>,
     pMbs: &mut crate::safe::mb_grid::MbWindow<'_, SMB>,
+    pRestoreBuf: Option<&mut [u8]>,
 ) -> i32 {
     // **S7.A5**: the first arm retires with the parameter; the other four are live.
     // S11.27: the grid-emptiness arm reads the window, as in `WelsISliceMdEnc`.
@@ -2877,11 +2890,12 @@ pub unsafe fn WelsMdInterMbLoopOverDynamicSlice<'a>(
         return ENC_RETURN_SUCCESS;
     }
     let pMd = pWelsMd;
-    let pCurLayer = current_layer(pEncCtx);
+    let pCurLayer = current_layer_ref(pEncCtx)
+        .expect("the frame's current layer is stamped");
     // S29, both: held across the MB loop, whose callees re-derive the same fields.
     // See `WelsISliceMdEncDynamic` for `sSliceEncCtx`'s red and its invalidator.
     let mut iNumMbCoded = 0;
-    let kiTotalNumMb: i32 = (*pCurLayer).iMbWidth as i32 * (*pCurLayer).iMbHeight as i32;
+    let kiTotalNumMb: i32 = pCurLayer.iMbWidth as i32 * pCurLayer.iMbHeight as i32;
     let mut iNextMbIdx = kiSliceFirstMbXY;
     let mut iCurMbIdx: i32;
     let kiMvdInterTableStride = (*pEncCtx).iMvdCostTableStride;
@@ -2893,22 +2907,22 @@ pub unsafe fn WelsMdInterMbLoopOverDynamicSlice<'a>(
         &(&(*pEncCtx).pMvdCostTable)[..],
         (*pEncCtx).iMvdCostTableSize,
     );
-    let kiSliceIdx = (*pSlice).iSliceIdx;
+    let kiSliceIdx = pSlice.iSliceIdx;
     let kiPartitionId = (kiSliceIdx % ((*pEncCtx).iActiveThreadsNum as i32)) as usize;
     let kuiChromaQpIndexOffset =
-        layer_pps_ref(pEncCtx, &*pCurLayer).map_or(0, |p| p.uiChromaQpIndexOffset);
+        layer_pps_ref(pEncCtx, pCurLayer).map_or(0, |p| p.uiChromaQpIndexOffset);
 
     let mut sDss = SDynamicSlicingStack::default();
     if (*pEncCtx).param().iEntropyCodingModeFlag != 0 {
         crate::encoder::svc_set_mb_syn_cabac::WelsInitSliceCabac(pEncCtx, pSlice, &mut *pSliceBsBuf, &mut *pCtxOutBs);
         sDss.iStartPos = 0;
         sDss.iCurrentPos = 0;
-        sDss.pRestoreBuffer = dynamic_bs_buffer(pEncCtx, kiPartitionId);
+        sDss.pRestoreBuffer = pRestoreBuf;
     } else {
         // Minted at the use (T9.E2e): before the loop; the post-loop use mints its own.
         sDss.iStartPos = slice_bs_writer(&mut pSlice.sSliceBs, pCtxOutBs).bits_pos();
     }
-    (*pSlice).iMbSkipRun = 0;
+    pSlice.iMbSkipRun = 0;
 
     loop {
         {  // A6: the block is the shared borrow's scope (F191/F212)
@@ -2917,9 +2931,9 @@ pub unsafe fn WelsMdInterMbLoopOverDynamicSlice<'a>(
                 &mut *pSliceBsBuf,
                 slice_bs_writer(&mut pSlice.sSliceBs, pCtxOutBs),
                 &mut sDss,
-                &mut (*pSlice).sCabacCtx,
-                (*pSlice).uiLastMbQp,
-                (*pSlice).iMbSkipRun,
+                &mut pSlice.sCabacCtx,
+                pSlice.uiLastMbQp,
+                pSlice.iMbSkipRun,
             );
         }
         iCurMbIdx = iNextMbIdx;
@@ -2932,7 +2946,7 @@ pub unsafe fn WelsMdInterMbLoopOverDynamicSlice<'a>(
                 .WelsRcMbInit(pEncCtx, pMbs.cur_mut(), &mut *pSlice, pCtxOutBs.as_deref());
         }
 
-        if (*pSlice).bDynamicSlicingSliceSizeCtrlFlag {
+        if pSlice.bDynamicSlicingSliceSizeCtrlFlag {
             let max_qp = (*pEncCtx).rc_at((*pEncCtx).uiDependencyId as usize).iMaxQp;
             pMbs.cur_mut().uiLumaQp = max_qp as u8;
             pMbs.cur_mut().uiChromaQp = g_kuiChromaQpTable[CLIP3_QP_0_51(max_qp as i32 + kuiChromaQpIndexOffset as i32)];
@@ -2972,7 +2986,7 @@ pub unsafe fn WelsMdInterMbLoopOverDynamicSlice<'a>(
             {
                 // As above.
                 crate::encoder::svc_base_layer_md::WelsMdInterSaveSadAndRefMbType(
-                    layer_rec_view(&*pCurLayer)
+                    layer_rec_view(pCurLayer)
                         .expect("the layer's reconstruction picture is bound"),
                     pMbs.cur(),
                     pMd,
@@ -2983,7 +2997,7 @@ pub unsafe fn WelsMdInterMbLoopOverDynamicSlice<'a>(
                 if let Some(func) = func_list.pfMdBackgroundInfoUpdate {
                     func(
                         pEncCtx,
-                        &*pCurLayer,
+                        pCurLayer,
                         pMbs.cur_mut(),
                         (*pMbCache).bCollocatedPredFlag,
                         ctx_ref_pic(pEncCtx).map_or(0, |p| p.iPictureType),
@@ -3003,13 +3017,13 @@ pub unsafe fn WelsMdInterMbLoopOverDynamicSlice<'a>(
             if iEncReturn == ENC_RETURN_VLCOVERFLOWFOUND && pMbs.cur().uiLumaQp < 50 {
                 {  // A6: the block is the shared borrow's scope (F191/F212)
                     let func_list = (*pEncCtx).func_list();
-                    (*pSlice).iMbSkipRun = func_list.eEntropyCoder.StashPopMBStatus(
+                    pSlice.iMbSkipRun = func_list.eEntropyCoder.StashPopMBStatus(
                         &mut *pSliceBsBuf,
                         slice_bs_writer(&mut pSlice.sSliceBs, pCtxOutBs),
                         &mut sDss,
-                        &mut (*pSlice).sCabacCtx,
+                        &mut pSlice.sCabacCtx,
                     );
-                    (*pSlice).uiLastMbQp = sDss.uiLastMbQp;
+                    pSlice.uiLastMbQp = sDss.uiLastMbQp;
                 }
                 UpdateQpForOverflow(pMbs.cur_mut(), kuiChromaQpIndexOffset);
                 continue;
@@ -3023,38 +3037,36 @@ pub unsafe fn WelsMdInterMbLoopOverDynamicSlice<'a>(
 
         {  // A6: the block is the shared borrow's scope (F191/F212)
             let func_list = (*pEncCtx).func_list();
-            sDss.iCurrentPos = func_list.eEntropyCoder.GetBsPosition(slice_bs_writer_ref(&pSlice.sSliceBs, pCtxOutBs.as_deref()), &(*pSlice).sCabacCtx);
+            sDss.iCurrentPos = func_list.eEntropyCoder.GetBsPosition(slice_bs_writer_ref(&pSlice.sSliceBs, pCtxOutBs.as_deref()), &pSlice.sCabacCtx);
         }
 
         if DynSlcJudgeSliceBoundaryStepBack(
             pEncCtx,
             pSlice,
-            // **S6.A1 / F239**: derived here, not 100 lines up. A `&SDqLayer` argument
-            // anywhere above is a shared retag over the *whole* layer, which pops a
-            // field-precise `addr_of_mut!` held across it — the defect Miri found in
-            // `WelsInitCurrentLayer`. Deriving at the use keeps this a fresh sibling.
-            std::ptr::addr_of_mut!((*pCurLayer).sSliceEncCtx),
+            // S11.30: a shared field borrow at the use — the `addr_of_mut!` that
+            // stood here fed a `*mut SSliceCtx` parameter that only ever read.
+            &pCurLayer.sSliceEncCtx,
             pMbs.cur().iMbXY,
             &mut sDss,
             pMbs,
         ) {
             {  // A6: the block is the shared borrow's scope (F191/F212)
                 let func_list = (*pEncCtx).func_list();
-                (*pSlice).iMbSkipRun = func_list.eEntropyCoder.StashPopMBStatus(
+                pSlice.iMbSkipRun = func_list.eEntropyCoder.StashPopMBStatus(
                     &mut *pSliceBsBuf,
                     slice_bs_writer(&mut pSlice.sSliceBs, pCtxOutBs),
                     &mut sDss,
-                    &mut (*pSlice).sCabacCtx,
+                    &mut pSlice.sCabacCtx,
                 );
-                (*pSlice).uiLastMbQp = sDss.uiLastMbQp;
+                pSlice.uiLastMbQp = sDss.uiLastMbQp;
             }
-            (*pCurLayer).LastCodedMbIdxOfPartition[kiPartitionId].store(iCurMbIdx - 1, Ordering::Relaxed);
-            (*pCurLayer).NumSliceCodedOfPartition[kiPartitionId].fetch_add(1, Ordering::Relaxed);
+            pCurLayer.LastCodedMbIdxOfPartition[kiPartitionId].store(iCurMbIdx - 1, Ordering::Relaxed);
+            pCurLayer.NumSliceCodedOfPartition[kiPartitionId].fetch_add(1, Ordering::Relaxed);
             break;
         }
 
         pMbs.cur_mut().uiSliceIdc = kiSliceIdx as u16;
-        OutputPMbWithoutConstructCsRsNoCopy(pEncCtx, Some(&*pCurLayer), pSlice, pMbs.cur());
+        OutputPMbWithoutConstructCsRsNoCopy(pEncCtx, Some(pCurLayer), pSlice, pMbs.cur());
 
         {  // A6: the block is the shared borrow's scope (F191/F212)
             let func_list = (*pEncCtx).func_list();
@@ -3068,26 +3080,24 @@ pub unsafe fn WelsMdInterMbLoopOverDynamicSlice<'a>(
         }
 
         iNumMbCoded += 1;
-        iNextMbIdx = WelsGetNextMbOfSlice(&(*pCurLayer).sSliceEncCtx, iCurMbIdx);
+        iNextMbIdx = WelsGetNextMbOfSlice(&pCurLayer.sSliceEncCtx, iCurMbIdx);
         if iNextMbIdx == -1 || iNextMbIdx >= kiTotalNumMb || iNumMbCoded >= kiTotalNumMb {
-            (*pCurLayer).LastCodedMbIdxOfPartition[kiPartitionId].store(iCurMbIdx, Ordering::Relaxed);
-            (*pCurLayer).NumSliceCodedOfPartition[kiPartitionId].fetch_add(1, Ordering::Relaxed);
+            pCurLayer.LastCodedMbIdxOfPartition[kiPartitionId].store(iCurMbIdx, Ordering::Relaxed);
+            pCurLayer.NumSliceCodedOfPartition[kiPartitionId].fetch_add(1, Ordering::Relaxed);
             break;
         }
     }
 
-    if (*pSlice).iMbSkipRun > 0 {
+    if pSlice.iMbSkipRun > 0 {
         // Minted at the use, after the loop (T9.E2e's placement) — field-precise
         // now, so the discipline the comment described is borrow-checked.
-        let kiMbSkipRun = (*pSlice).iMbSkipRun as u32;
+        let kiMbSkipRun = pSlice.iMbSkipRun as u32;
         BsWriteUE(&mut *pSliceBsBuf, slice_bs_writer(&mut pSlice.sSliceBs, pCtxOutBs), kiMbSkipRun);
     }
 
     ENC_RETURN_SUCCESS
 }
 
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
 pub fn WelsPSliceMdEnc(
     pEncCtx: &sWelsEncCtx,
     pSlice: &mut SSlice,
@@ -3095,6 +3105,7 @@ pub fn WelsPSliceMdEnc(
     pSliceBsBuf: &mut [u8],
     pCtxOutBs: &mut Option<&mut BsWriter>,
     pMbs: &mut crate::safe::mb_grid::MbWindow<'_, SMB>,
+    pRestoreBuf: Option<&mut [u8]>,
 ) -> i32 {
     let kpShExt = &(*pSlice).sSliceHeaderExt;
     let kiSliceFirstMbXY = kpShExt.sSliceHeader.iFirstMbInSlice;
@@ -3112,11 +3123,9 @@ pub fn WelsPSliceMdEnc(
 
     // S11.4: the MD loop stays `unsafe fn` (its own callees are unconverted);
     // the claim is the loop's own and nothing is derived here.
-    unsafe { WelsMdInterMbLoop(pEncCtx, pSlice, &mut sMd, kiSliceFirstMbXY, pSliceBsBuf, pCtxOutBs, pMbs) }
+    WelsMdInterMbLoop(pEncCtx, pSlice, &mut sMd, kiSliceFirstMbXY, pSliceBsBuf, pCtxOutBs, pMbs, pRestoreBuf)
 }
 
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
 pub fn WelsPSliceMdEncDynamic(
     pEncCtx: &sWelsEncCtx,
     pSlice: &mut SSlice,
@@ -3124,6 +3133,7 @@ pub fn WelsPSliceMdEncDynamic(
     pSliceBsBuf: &mut [u8],
     pCtxOutBs: &mut Option<&mut BsWriter>,
     pMbs: &mut crate::safe::mb_grid::MbWindow<'_, SMB>,
+    pRestoreBuf: Option<&mut [u8]>,
 ) -> i32 {
     let kpShExt = &(*pSlice).sSliceHeaderExt;
     let kiSliceFirstMbXY = kpShExt.sSliceHeader.iFirstMbInSlice;
@@ -3138,7 +3148,7 @@ pub fn WelsPSliceMdEncDynamic(
 
     // S11.4: the MD loop stays `unsafe fn` (its own callees are unconverted);
     // the claim is the loop's own and nothing is derived here.
-    unsafe { WelsMdInterMbLoopOverDynamicSlice(pEncCtx, pSlice, &mut sMd, kiSliceFirstMbXY, pSliceBsBuf, pCtxOutBs, pMbs) }
+    WelsMdInterMbLoopOverDynamicSlice(pEncCtx, pSlice, &mut sMd, kiSliceFirstMbXY, pSliceBsBuf, pCtxOutBs, pMbs, pRestoreBuf)
 }
 
 pub fn WelsCodePSlice(
@@ -3147,6 +3157,7 @@ pub fn WelsCodePSlice(
     pSliceBsBuf: &mut [u8],
     pCtxOutBs: &mut Option<&mut BsWriter>,
     pMbs: &mut crate::safe::mb_grid::MbWindow<'_, SMB>,
+    pRestoreBuf: Option<&mut [u8]>,
 ) -> i32 {
     // S10.15: the layer is only read here — `current_layer_ref`, not the
     // fork-shared raw.
@@ -3163,7 +3174,7 @@ pub fn WelsCodePSlice(
     } else {
         true
     };
-    WelsPSliceMdEnc(pEncCtx, pSlice, kbHighestSpatial, pSliceBsBuf, pCtxOutBs, pMbs)
+    WelsPSliceMdEnc(pEncCtx, pSlice, kbHighestSpatial, pSliceBsBuf, pCtxOutBs, pMbs, pRestoreBuf)
 }
 
 pub fn WelsCodePOverDynamicSlice(
@@ -3172,6 +3183,7 @@ pub fn WelsCodePOverDynamicSlice(
     pSliceBsBuf: &mut [u8],
     pCtxOutBs: &mut Option<&mut BsWriter>,
     pMbs: &mut crate::safe::mb_grid::MbWindow<'_, SMB>,
+    pRestoreBuf: Option<&mut [u8]>,
 ) -> i32 {
     // S10.15: the layer is only read here — `current_layer_ref`, not the
     // fork-shared raw.
@@ -3185,17 +3197,16 @@ pub fn WelsCodePOverDynamicSlice(
     } else {
         true
     };
-    WelsPSliceMdEncDynamic(pEncCtx, pSlice, kbHighestSpatial, pSliceBsBuf, pCtxOutBs, pMbs)
+    WelsPSliceMdEncDynamic(pEncCtx, pSlice, kbHighestSpatial, pSliceBsBuf, pCtxOutBs, pMbs, pRestoreBuf)
 }
 
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
 pub extern "C" fn WelsCodePSlice_c(
     pCtx: &sWelsEncCtx,
     pSlice: &mut SSlice,
     pSliceBsBuf: &mut [u8],
     pCtxOutBs: &mut Option<&mut BsWriter>,
     pMbs: &mut crate::safe::mb_grid::MbWindow<'_, SMB>,
+    pRestoreBuf: Option<&mut [u8]>,
 ) -> i32 {
     // **S11.4: the audited call, at the slot boundary.** The slot type
     // (`PWelsCodingSliceFunc`) is a safe fn pointer now, which is what lets the
@@ -3205,17 +3216,16 @@ pub extern "C" fn WelsCodePSlice_c(
     // (`mb_window`, the entropy stash pair, `WelsMdIntraMb`) is unconverted.
     // The claim is exactly the target's: the arguments are the references this
     // signature already guarantees, and nothing here derives a pointer.
-    unsafe { WelsCodePSlice(pCtx, pSlice, pSliceBsBuf, pCtxOutBs, pMbs) }
+    WelsCodePSlice(pCtx, pSlice, pSliceBsBuf, pCtxOutBs, pMbs, pRestoreBuf)
 }
 
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
 pub extern "C" fn WelsCodePOverDynamicSlice_c(
     pCtx: &sWelsEncCtx,
     pSlice: &mut SSlice,
     pSliceBsBuf: &mut [u8],
     pCtxOutBs: &mut Option<&mut BsWriter>,
     pMbs: &mut crate::safe::mb_grid::MbWindow<'_, SMB>,
+    pRestoreBuf: Option<&mut [u8]>,
 ) -> i32 {
     // **S11.4: the audited call, at the slot boundary.** The slot type
     // (`PWelsCodingSliceFunc`) is a safe fn pointer now, which is what lets the
@@ -3225,17 +3235,16 @@ pub extern "C" fn WelsCodePOverDynamicSlice_c(
     // (`mb_window`, the entropy stash pair, `WelsMdIntraMb`) is unconverted.
     // The claim is exactly the target's: the arguments are the references this
     // signature already guarantees, and nothing here derives a pointer.
-    unsafe { WelsCodePOverDynamicSlice(pCtx, pSlice, pSliceBsBuf, pCtxOutBs, pMbs) }
+    WelsCodePOverDynamicSlice(pCtx, pSlice, pSliceBsBuf, pCtxOutBs, pMbs, pRestoreBuf)
 }
 
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
 pub extern "C" fn WelsISliceMdEnc_c(
     pCtx: &sWelsEncCtx,
     pSlice: &mut SSlice,
     pSliceBsBuf: &mut [u8],
     pCtxOutBs: &mut Option<&mut BsWriter>,
     pMbs: &mut crate::safe::mb_grid::MbWindow<'_, SMB>,
+    pRestoreBuf: Option<&mut [u8]>,
 ) -> i32 {
     // **S11.4: the audited call, at the slot boundary.** The slot type
     // (`PWelsCodingSliceFunc`) is a safe fn pointer now, which is what lets the
@@ -3245,17 +3254,16 @@ pub extern "C" fn WelsISliceMdEnc_c(
     // (`mb_window`, the entropy stash pair, `WelsMdIntraMb`) is unconverted.
     // The claim is exactly the target's: the arguments are the references this
     // signature already guarantees, and nothing here derives a pointer.
-    unsafe { WelsISliceMdEnc(pCtx, pSlice, pSliceBsBuf, pCtxOutBs, pMbs) }
+    WelsISliceMdEnc(pCtx, pSlice, pSliceBsBuf, pCtxOutBs, pMbs, pRestoreBuf)
 }
 
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
 pub extern "C" fn WelsISliceMdEncDynamic_c(
     pCtx: &sWelsEncCtx,
     pSlice: &mut SSlice,
     pSliceBsBuf: &mut [u8],
     pCtxOutBs: &mut Option<&mut BsWriter>,
     pMbs: &mut crate::safe::mb_grid::MbWindow<'_, SMB>,
+    pRestoreBuf: Option<&mut [u8]>,
 ) -> i32 {
     // **S11.4: the audited call, at the slot boundary.** The slot type
     // (`PWelsCodingSliceFunc`) is a safe fn pointer now, which is what lets the
@@ -3265,7 +3273,7 @@ pub extern "C" fn WelsISliceMdEncDynamic_c(
     // (`mb_window`, the entropy stash pair, `WelsMdIntraMb`) is unconverted.
     // The claim is exactly the target's: the arguments are the references this
     // signature already guarantees, and nothing here derives a pointer.
-    unsafe { WelsISliceMdEncDynamic(pCtx, pSlice, pSliceBsBuf, pCtxOutBs, pMbs) }
+    WelsISliceMdEncDynamic(pCtx, pSlice, pSliceBsBuf, pCtxOutBs, pMbs, pRestoreBuf)
 }
 
 pub extern "C" fn WelsSliceHeaderWrite_c(
@@ -3300,34 +3308,12 @@ pub static g_pWelsWriteSliceHeader: [PWelsSliceHeaderWriteFunc; 2] = [
     WelsSliceHeaderExtWrite_c,
 ];
 
-/// The CABAC restore buffer for one picture partition —
-/// `sWelsEncCtx::pDynamicBsBuffer[kiPartitionId]`, **owned since T7.C5**.
-///
-/// Under `SM_SIZELIMITED_SLICE` with CABAC, renormalisation can rewrite bytes already
-/// emitted, so stepping back over a slice boundary has to restore the bytes as well as
-/// the coder state; this is the scratch it restores from
-/// (`SDynamicSlicingStack::pRestoreBuffer`). One per partition, and a partition is a
-/// worker, so the buffers are disjoint by the same static partition the bs slots are.
-///
-/// Null when the encoder was not built for that combination — which is what the raw
-/// array's null entry meant, and `svc_set_mb_syn_cavlc.rs` tests for it at both ends
-/// of the stash/restore pair.
-///
-/// The derivation is `thread_bs_buffer`'s and for the same reason: `addr_of!` on this
-/// worker's element, never a reborrow of the array every worker shares (F71).
-///
-/// # Safety
-/// `pEncCtx` must be live, and `kiPartitionId` within `MAX_THREADS_NUM`.
-#[inline]
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
-pub unsafe fn dynamic_bs_buffer(pEncCtx: &sWelsEncCtx, kiPartitionId: usize) -> *mut u8 {
-    let v = std::ptr::addr_of!((*pEncCtx).pDynamicBsBuffer[kiPartitionId]);
-    if (*v).is_empty() {
-        return std::ptr::null_mut();
-    }
-    (*v).as_ptr() as *mut u8
-}
+// **S11.30: `dynamic_bs_buffer` is deleted.** The mint read the per-partition
+// restore scratch out of the shared context inside the fork (F71's spelling);
+// the scratch now travels as `Option<&mut [u8]>` down the coding slot — taken
+// pre-fork by the size-limited entry beside its bitstream slot, and around the
+// call by the single-threaded callers. `SDynamicSlicingStack::pRestoreBuffer`
+// carries the borrow, and both CABAC stash arms are safe slice copies.
 
 /// **F71's residue, closed — T7.C3.** The one write `WelsCodeOneSlice` made into
 /// *layer* state rather than slice state, lifted out of the slice encode to the
@@ -3394,6 +3380,7 @@ pub unsafe fn WelsCodeOneSlice(
     pSliceBsBuf: &mut [u8],
     pCtxOutBs: &mut Option<&mut BsWriter>,
     pMbs: &mut crate::safe::mb_grid::MbWindow<'_, SMB>,
+    pRestoreBuf: Option<&mut [u8]>,
 ) -> i32 {
     // **S7.A5**: the `is_null()` guard and its early return retire with the
     // parameter — every context reaching this body comes from a `&mut sWelsEncCtx`
@@ -3476,7 +3463,7 @@ pub unsafe fn WelsCodeOneSlice(
     // of this function; the two uses before it are still on the live tag, this one is not.
     let idr_idx = (*std::ptr::addr_of!((*pCurLayer).sLayerInfo.sNalHeaderExt)).bIdrFlag as usize;
     let func = g_pWelsSliceCoding[idr_idx][kiDynamicSliceFlag];
-    let iEncReturn = func(pEncCtx, &mut *pCurSlice, &mut *pSliceBsBuf, &mut *pCtxOutBs, pMbs);
+    let iEncReturn = func(pEncCtx, &mut *pCurSlice, &mut *pSliceBsBuf, &mut *pCtxOutBs, pMbs, pRestoreBuf);
     if iEncReturn != ENC_RETURN_SUCCESS {
         return iEncReturn;
     }
@@ -3543,7 +3530,10 @@ pub fn WelsWriteSliceEndSyn(
 pub unsafe fn AddSliceBoundary(
     pEncCtx: &sWelsEncCtx,
     pCurSlice: &mut SSlice,
-    pSliceCtx: *mut SSliceCtx,
+    // **S11.30: shared.** Every touch through this parameter is a shared read
+    // or an element-wise atomic store (`pOverallMbMap`) — the borrow-width
+    // rule (F275), measured by stripping and reading the errors.
+    pSliceCtx: &SSliceCtx,
     // **T9.D11**: this was `pCurMb: &SMB`, and the reference — not the read — was the
     // defect. A `&`/`&mut` *argument* is **strongly protected** for the whole call, and
     // this one covers a macroblock that `UpdateMbNeighbourInfoForNextSlice` re-borrows
@@ -3557,10 +3547,9 @@ pub unsafe fn AddSliceBoundary(
     // S11.27: the worker's own records, threaded down from the md loop.
     pMbs: &mut crate::safe::mb_grid::MbWindow<'_, SMB>,
 ) {
-    // **S7.A5**: the context arm retires with the parameter; `pSliceCtx` is still raw.
-    if pSliceCtx.is_null() {
-        return;
-    }
+    // **S7.A5**: the context arm retired with that parameter; S11.30 retires the
+    // `pSliceCtx.is_null()` arm the same way — a `&SSliceCtx` cannot be null,
+    // and both callers derive it from the layer they already hold.
     let pCurLayer = current_layer_ref(pEncCtx)
         .expect("the frame's current layer is stamped");
     let buf_idx = (*pCurSlice).uiBufferIdx as usize;
@@ -3609,17 +3598,16 @@ pub unsafe fn AddSliceBoundary(
     }
 }
 
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
-pub unsafe fn DynSlcJudgeSliceBoundaryStepBack(
+pub fn DynSlcJudgeSliceBoundaryStepBack(
     pEncCtx: &sWelsEncCtx,
     pCurSlice: &mut SSlice,
-    pSliceCtx: *mut SSliceCtx,
+    // S11.30: shared, as `AddSliceBoundary` — reads and atomics only.
+    pSliceCtx: &SSliceCtx,
     // **T9.D11**, as `AddSliceBoundary` above: the body reads one field of the
     // macroblock, and a reference parameter would protect it across the
     // `AddSliceBoundary` call below.
     kiCurMbIdx: i32,
-    pDss: *mut SDynamicSlicingStack,
+    pDss: &mut SDynamicSlicingStack<'_>,
     pMbs: &mut crate::safe::mb_grid::MbWindow<'_, SMB>,
 ) -> bool {
     let iCurMbIdx = kiCurMbIdx;
@@ -3673,19 +3661,26 @@ pub unsafe fn DynSlcJudgeSliceBoundaryStepBack(
             let bMt = (*pEncCtx).param_opt().is_some()
                 && (*pEncCtx).param().iMultipleThreadIdc > 1;
             if bMt {
-                // S3.B1: the block resolves through the slot read and the shared
-                // reference is formed *into its own allocation* — every worker may
-                // hold one at once, and locking takes `&self`.
-                let pSmt =
-                    crate::encoder::slice_multi_threading::ctx_slice_threading_raw(pEncCtx);
-                if pSmt.is_null() { None } else { Some(&(*pSmt).mutexSliceNumUpdate) }
+                // S11.30: a field-scoped shared borrow (S10.13's route) — every
+                // worker may hold `&pCtx.pSliceThreading` at once, and locking
+                // takes `&self`. The slot read (S3.B1) retired with the raw.
+                pEncCtx.pSliceThreading.as_deref().map(|pSmt| &pSmt.mutexSliceNumUpdate)
             } else {
                 None
             }
         };
         crate::encoder::slice_multi_threading::with_wels_mutex(pSmtMutex, || {
-            AddSliceBoundary(pEncCtx, pCurSlice, pSliceCtx, iCurMbIdx, iCurMbIdx, kiEndMbIdxOfPartition, pMbs);
-            (*pSliceCtx).iSliceNumInFrame.fetch_add(1, Ordering::Relaxed);
+            // S11.30: the judge's last unsafe claim, and it is the callee's —
+            // `AddSliceBoundary` walks neighbouring slices out of
+            // `slice_bank_root` (the slice-bank family, F71's remaining root
+            // here). Its reference arguments are the ones this body already
+            // holds; nothing is derived at this call.
+            // unsafe-cat: fork-shared(S63)
+            #[allow(unsafe_code)]
+            unsafe {
+                AddSliceBoundary(pEncCtx, pCurSlice, pSliceCtx, iCurMbIdx, iCurMbIdx, kiEndMbIdxOfPartition, pMbs);
+            }
+            pSliceCtx.iSliceNumInFrame.fetch_add(1, Ordering::Relaxed);
         });
         return true;
     }
