@@ -685,17 +685,18 @@ pub fn InitMbListD(ctx: &mut sWelsEncCtx) -> i32 {
 /// then `pSpsArray`/`pSubsetArray`/`pPPSArray`, and drives the parameter-set strategy
 /// to fill them and set `iSpsNum`/`iSubsetSpsNum`/`iPpsNum`.
 ///
-/// # Safety
-/// `ppCtx` must point to a live context with `pMemAlign`, `pSvcParam`, `pStrideTab`,
-/// `ppRefPicListExt`, `ppDqLayerList` and `pFuncList->pParametersetStrategy` set.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn InitDqLayers(
+/// Expects a live context with `pSvcParam`, `pStrideTab`, `ppRefPicListExt`,
+/// `ppDqLayerList` and `pFuncList->pParametersetStrategy` set — each `expect`
+/// below names the initializer that owes it.
+pub fn InitDqLayers(
     ctx: &mut sWelsEncCtx,
     pExistingParasetList: Option<&SExistingParasetList>,
 ) -> i32 {
-    let mut pSps: *mut crate::encoder::param_svc::SWelsSPS = null_mut();
-    let mut pSubsetSps: *mut crate::encoder::param_svc::SSubsetSps = null_mut();
+    // S11.40: the two hoisted SPS cursors are per-iteration borrows now. The C++
+    // hoists them because C hoists declarations; each iteration assigned `pSps`
+    // before reading it, and `pSubsetSps` was only ever read as the null it
+    // started as in the arm that never assigns it (subset layers are a suffix of
+    // the layer order, so no stale value can survive into a non-subset arm).
     let mut iSpsId: i32 = 0;
     let mut iPpsId: u32 = 0;
     let mut iResult: i32;
@@ -729,18 +730,17 @@ pub unsafe fn InitDqLayers(
         iPicWidth = WELS_ALIGN(iPicWidth, 32);
         iPicChromaWidth = WELS_ALIGN(iPicChromaWidth, 16);
 
-        // T9.C4, as above — the fourth and last writer, and the one that reaches
-        // the tables through the context rather than through `AllocStrideTables`'
-        // own `&mut`.
-        let pEncBlockOffset = {
+        // T9.C4, as above — the fourth and last writer, now through S11.38's
+        // bounded accessor: the 24-entry claim and the bounds check live at
+        // `i32_block24_mut`, and the `None` arm that used to become a null
+        // cursor (UB at the callee's first write) is an expect — F77's spelling
+        // of the same crash.
+        {
             let tab = ctx.pStrideTab.as_mut().expect("pStrideTab allocated");
-            match tab.pStrideEncBlockOffset[iDlayerIndex as usize] {
-                Some(off) => tab.root().add(off as usize).cast::<i32>(),
-                None => std::ptr::null_mut(),
-            }
-        };
-        // S11.37: as at the dec-side fill — the 24-entry claim at the derivation.
-        WelsGetEncBlockStrideOffset(&mut *(pEncBlockOffset.cast::<[i32; 24]>()), iPicWidth, iPicChromaWidth);
+            let kuiOff = tab.pStrideEncBlockOffset[iDlayerIndex as usize]
+                .expect("AllocStrideTables filled the enc-side offset for every layer");
+            WelsGetEncBlockStrideOffset(tab.i32_block24_mut(kuiOff), iPicWidth, iPicChromaWidth);
+        }
 
         // Reference list. **`Box`-built with a real constructor since T6.F1** — it
         // owns this layer's reconstruction pool now, and a `WelsMallocz`'d shell is UB
@@ -780,21 +780,24 @@ pub unsafe fn InitDqLayers(
 
     iDlayerIndex = 0;
     while iDlayerIndex < iDlayerCount {
-        // S29's named shape — `&mut X as *mut T` is the defect with the cast already
-        // written: the reference retags before the cast discards it, and the tag is
-        // what `InitSliceInLayer` used to pop. `addr_of_mut!` derives from the raw
-        // parent and creates no reference at all.
-        let pDlayer = std::ptr::addr_of_mut!((*ctx_param_raw(&*ctx)).sSpatialLayers[iDlayerIndex as usize]);
-        let pParamInternal = std::ptr::addr_of_mut!((*ctx_param_raw(&*ctx)).sDependencyLayers[iDlayerIndex as usize]);
-        let kiMbW = ((*pDlayer).iVideoWidth + 0x0f) >> 4;
-        let kiMbH = ((*pDlayer).iVideoHeight + 0x0f) >> 4;
+        // S11.40: the two parameter cursors are gone with the body's `unsafe`.
+        // They were S29's shape because they had to survive `InitSliceInLayer`
+        // reaching the block again; nothing spans that call now — the two width
+        // scalars copy out here, the six resets are one `param_mut` borrow that
+        // ends on its brace, and each later read re-derives at its use.
+        let kiMbW = (ctx.param().sSpatialLayers[iDlayerIndex as usize].iVideoWidth + 0x0f) >> 4;
+        let kiMbH = (ctx.param().sSpatialLayers[iDlayerIndex as usize].iVideoHeight + 0x0f) >> 4;
 
-        (*pParamInternal).iCodingIndex = 0;
-        (*pParamInternal).iFrameIndex = 0;
-        (*pParamInternal).iFrameNum = 0;
-        (*pParamInternal).iPOC = 0;
-        (*pParamInternal).uiIdrPicId = 0;
-        (*pParamInternal).bEncCurFrmAsIdrFlag = true; // make sure the first frame is IDR
+        {
+            let pParamInternal =
+                &mut ctx.param_mut().sDependencyLayers[iDlayerIndex as usize];
+            pParamInternal.iCodingIndex = 0;
+            pParamInternal.iFrameIndex = 0;
+            pParamInternal.iFrameNum = 0;
+            pParamInternal.iPOC = 0;
+            pParamInternal.uiIdrPicId = 0;
+            pParamInternal.bEncCurFrmAsIdrFlag = true; // make sure the first frame is IDR
+        }
 
         // **`Box`, not `WelsMallocz` — T6.D3, and it is the enabler for everything
         // this session's later faces do.** `SDqLayer` is reached only through a
@@ -804,49 +807,57 @@ pub unsafe fn InitDqLayers(
         // struct may not (S21, read the other way). `SDqLayer::new` writes every
         // field the zero block used to stand in for.
         // **T6.H8**: `Box::into_raw` stood here and the slot took the raw pointer.
-        // The slot owns the `Box` now; every consumer still gets the same cursor out
-        // of `ctx_dq_layer`, and this function keeps one for the rest of the loop.
-        let pDqLayerBox = Box::new(SDqLayer::new(LayerIdx(iDlayerIndex as u8)));
-        (&mut ctx.ppDqLayerList)[iDlayerIndex as usize] = Some(pDqLayerBox);
-        let pDqLayer = ctx_dq_layer(ctx, iDlayerIndex as usize);
+        // **S11.40**: the layer is a *local* until it is fully built — this
+        // function's own `pRefListBox` shape one loop up — so every stamp below
+        // sits beside its `ctx.param()` read with no borrow of the context held,
+        // and `InitSliceInLayer`'s two `&mut`s are disjoint by ownership (its
+        // callees read only context scalars, never the layer list). The store
+        // moves to the end of the build; on the two failure returns the partial
+        // layer now drops instead of parking in the slot, which only teardown
+        // could ever have seen.
+        let mut pDqLayerBox = Box::new(SDqLayer::new(LayerIdx(iDlayerIndex as u8)));
 
-        (*pDqLayer).iMbWidth = kiMbW as i16;
-        (*pDqLayer).iMbHeight = kiMbH as i16;
+        pDqLayerBox.iMbWidth = kiMbW as i16;
+        pDqLayerBox.iMbHeight = kiMbH as i16;
 
         let mut iMaxSliceNum: i32 = 1;
-        let kiSliceNum = GetInitialSliceNum(&(*pDlayer).sSliceArgument);
+        let kiSliceNum = GetInitialSliceNum(
+            &ctx.param().sSpatialLayers[iDlayerIndex as usize].sSliceArgument,
+        );
         if iMaxSliceNum < kiSliceNum {
             iMaxSliceNum = kiSliceNum;
         }
-        (*pDqLayer).iMaxSliceNum = iMaxSliceNum;
+        pDqLayerBox.iMaxSliceNum = iMaxSliceNum;
 
-        // S67 blessed (H2): `pDqLayer` is in the layer's `Box`;
-        // `pParam`/`pDlayer`/`pParamInternal` in `pSvcParam`'s.
-        iResult = InitSliceInLayer(&mut *ctx, &mut *pDqLayer, iDlayerIndex);
+        iResult = InitSliceInLayer(ctx, &mut pDqLayerBox, iDlayerIndex);
         if iResult != 0 {
             return iResult;
         }
 
         // deblocking parameters initialization; target-layer deblocking
-        (*pDqLayer).iLoopFilterDisableIdc = ctx.param().iLoopFilterDisableIdc as u8;
-        (*pDqLayer).iLoopFilterAlphaC0Offset = (ctx.param().iLoopFilterAlphaC0Offset << 1) as i8;
-        (*pDqLayer).iLoopFilterBetaOffset = (ctx.param().iLoopFilterBetaOffset << 1) as i8;
+        pDqLayerBox.iLoopFilterDisableIdc = ctx.param().iLoopFilterDisableIdc as u8;
+        pDqLayerBox.iLoopFilterAlphaC0Offset = (ctx.param().iLoopFilterAlphaC0Offset << 1) as i8;
+        pDqLayerBox.iLoopFilterBetaOffset = (ctx.param().iLoopFilterBetaOffset << 1) as i8;
         // parallel deblocking
-        (*pDqLayer).bDeblockingParallelFlag = ctx.param().bDeblockingParallelFlag;
+        pDqLayerBox.bDeblockingParallelFlag = ctx.param().bDeblockingParallelFlag;
 
         // deblocking parameter adjustment
-        if SM_SINGLE_SLICE == (*pDlayer).sSliceArgument.uiSliceMode {
+        if SM_SINGLE_SLICE
+            == ctx.param().sSpatialLayers[iDlayerIndex as usize].sSliceArgument.uiSliceMode
+        {
             // iLoopFilterDisableIdc will be 0 or 1 under single slice
             if 2 == ctx.param().iLoopFilterDisableIdc {
-                (*pDqLayer).iLoopFilterDisableIdc = 0;
+                pDqLayerBox.iLoopFilterDisableIdc = 0;
             }
-            (*pDqLayer).bDeblockingParallelFlag = false;
+            pDqLayerBox.bDeblockingParallelFlag = false;
         } else {
             // multi-slice
-            if 0 == (*pDqLayer).iLoopFilterDisableIdc {
-                (*pDqLayer).bDeblockingParallelFlag = false;
+            if 0 == pDqLayerBox.iLoopFilterDisableIdc {
+                pDqLayerBox.bDeblockingParallelFlag = false;
             }
         }
+
+        (&mut ctx.ppDqLayerList)[iDlayerIndex as usize] = Some(pDqLayerBox);
 
         // Screen-content feature search storage is not ported; C++ allocates
         // pFeatureSearchPreparation here when kiNeedFeatureStorage is set, which only
@@ -955,63 +966,71 @@ pub unsafe fn InitDqLayers(
         // spelling the callee used, including the subset arm's inner SPS, which
         // lines 945-946 below read and which this block did *not* previously
         // reassign.
-        // **A4 derives these three from the *readers*, deliberately.** They are
-        // read-only cursors — `InitPps` takes them as `Option<&_>` and the two
-        // `iMb*` reads below are reads — and they must survive the parameter-set
-        // calls, which reach the same arrays again. `as_ptr` through a shared
-        // borrow is the derivation the raw accessor performed, and it is what
-        // makes those coexistences lawful (F71); a `&mut`-derived raw would be
-        // popped by the next shared read of the same buffer.
-        if !bUseSubsetSps {
-            pSps = ctx.sps_array().as_ptr().cast_mut().add(iSpsId as usize);
-        } else {
-            pSubsetSps = ctx
-                .subset_array()
-                .as_ptr()
-                .cast_mut()
-                .add(iSpsId as usize);
-            pSps = std::ptr::addr_of_mut!((*pSubsetSps).pSps);
-        }
-
-        // S67 blessed (H2): as `GenerateNewSps` above; the two `as_ref()` arguments point into
-        // the paraset Vec buffers, which this retag does not cover.
-        // **S3.B2.** Receiver and the entropy-mode read both hoisted above the call:
-        // argument one is a `&mut` on the context, and the `param()` read that used
-        // to sit in argument eleven is a *shared* reborrow of the same context taken
-        // while it is live — F208's shape, and the reason it was invisible before is
-        // that `ctx` was a raw. The read is a `bool`.
-        // **S7.A3**: the flag is read *before* the split, so no borrow of the context
-        // is live across it — F208's shape, resolved by ordering rather than by a raw.
+        // **A4's cursors are gone (S11.40).** They were derived from the readers so
+        // they could survive `InitPps` reaching the arrays again; the call takes
+        // every array it touches split off *one* `&mut` context now — the wide
+        // splitter `LoadPrevious` already uses — so the SPS arms are shared
+        // reborrows of two of its components while the PPS component stays
+        // exclusive, and nothing has to survive anything.
+        //
+        // **S7.A3**: the entropy flag is read *before* the split, so no borrow of
+        // the context is live across it — F208's shape, resolved by ordering.
         let kbEntropyCodingModeFlag = ctx.param().iEntropyCodingModeFlag != 0;
-        let (pParasetStrategy, pps, _) =
-            crate::encoder::paraset_strategy::ctx_strategy_and_pps(ctx);
+        let (pParasetStrategy, pSpsArray, pSubsetArray, pPpsArray) =
+            crate::encoder::paraset_strategy::ctx_strategy_and_paraset_arrays(ctx);
+        // T6.G3: `InitPps` takes the arm it will actually use, not both plus a
+        // flag; the branch has just proved which is live. The non-subset arm's
+        // subset argument is `None` — the hoisted C++ cursor was always its
+        // initial null there (see the note at the top of the function).
+        let (kpSps, kpSubsetSps): (&SWelsSPS, Option<&SSubsetSps>) = if !bUseSubsetSps {
+            (&pSpsArray[iSpsId as usize], None)
+        } else {
+            let kpSubset = &pSubsetArray[iSpsId as usize];
+            (&kpSubset.pSps, Some(kpSubset))
+        };
         iPpsId = pParasetStrategy.InitPps(
-            pps,
+            pPpsArray,
             iSpsId as u32,
-            // T6.G3: `InitPps` takes the arm it will actually use, not both plus a
-            // flag. The two locals are still raw here — they are cursors into the
-            // context's arrays, which are session H's — so the reference is formed
-            // at this one boundary, where the branch above has just proved which of
-            // them is live.
-            pSps.as_ref(),
-            pSubsetSps.as_ref(),
+            Some(kpSps),
+            kpSubsetSps,
             iPpsId,
             true,
             bUseSubsetSps,
             kbEntropyCodingModeFlag,
         );
-        let pPps = ctx.pps_array().as_ptr().cast_mut().add(iPpsId as usize);
+        // The C++ takes `pPps = &pPPSArray[iPpsId]` here and hands it to
+        // `InitSlicePEncCtx`'s final parameter, which the port's callee never
+        // had (nothing reads it); S11.40 deletes the dead binding that
+        // mirrored it.
+
+        // S11.18's rule, at the cursor's one read pair: re-derived after
+        // `InitPps`, which held the SPS shared and cannot have written it.
+        let (kiSpsMbWidth, kiSpsMbHeight) = {
+            let kpSps = if !bUseSubsetSps {
+                &ctx.sps_array()[iSpsId as usize]
+            } else {
+                &ctx.subset_array()[iSpsId as usize].pSps
+            };
+            (kpSps.iMbWidth as i32, kpSps.iMbHeight as i32)
+        };
 
         // FMO is not used in SVC coding so far; come back if FMO is needed
+        // **S6.D1**: `InitSlicePEncCtx` takes `&SSliceArgument`. §4.6's
+        // destructure — `InitMbListD`'s shape: the layer (mutable) and the slice
+        // argument (shared) are disjoint fields of one context borrow.
+        let sWelsEncCtx { ppDqLayerList, pSvcParam, .. } = &mut *ctx;
         iResult = InitSlicePEncCtx(
-            &mut *ctx_dq_layer(ctx, iDlayerIndex as usize),
+            ppDqLayerList[iDlayerIndex as usize]
+                .as_deref_mut()
+                .expect("the layer was stored by the loop above"),
             false,
-            (*pSps).iMbWidth as i32,
-            (*pSps).iMbHeight as i32,
-            // **S6.D1**: `InitSlicePEncCtx` takes `&SSliceArgument` now.
-            // S11.18: derived here, not 85 lines up — see the note at the top of
-            // this loop body.
-            &ctx.param().sSpatialLayers[iDlayerIndex as usize].sSliceArgument,
+            kiSpsMbWidth,
+            kiSpsMbHeight,
+            &pSvcParam
+                .as_deref()
+                .expect("the coding parameters are built by WelsInitEncoderExt")
+                .sSpatialLayers[iDlayerIndex as usize]
+                .sSliceArgument,
         );
         if iResult != 0 {
             return iResult;
@@ -1334,12 +1353,8 @@ pub fn RequestMemorySvc(
     // fills with the `Box`es themselves.
     ctx.ppDqLayerList = (0..kiNumDependencyLayers).map(|_| None).collect();
 
-    // S11.37: the callee's claim — the layer builder's remaining raw walks.
-    // unsafe-cat: port-raw(Phase 9)
-    #[allow(unsafe_code)]
-    {
-        iResult = unsafe { InitDqLayers(ctx, pExistingParasetList) };
-    }
+    // S11.40: the audited call block retired with the callee's last raw walk.
+    iResult = InitDqLayers(ctx, pExistingParasetList);
     if iResult != 0 {
         return iResult;
     }
@@ -2747,12 +2762,7 @@ pub fn WriteSsvcParaset(
     // tail, in the frozen `SFrameBSInfo` the application walks (S11.20).
     #[allow(unsafe_code)]
     unsafe {
-        // unsafe-cat: C-ABI — the next layer's out-array is the previous one's
-    // tail, in the frozen `SFrameBSInfo` (S11.20).
-    #[allow(unsafe_code)]
-    unsafe {
         pFbi.sLayerInfo[*iLbi].pNalLengthInByte = kpPrevNalLen.add(iCountNal as usize);
-    }
     }
 
     // update for external countings

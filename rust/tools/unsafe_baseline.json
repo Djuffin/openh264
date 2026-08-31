@@ -1,5 +1,5 @@
 {
-  "commit": "eed14045",
+  "commit": "e16ca93a",
   "metrics": ["unsafe_fn", "unsafe_block", "raw_ptr", "transmute", "unsafe_impl", "mem_zeroed", "no_mangle", "shim"],
   "files": {
     "api/abi_guard.rs": { "unsafe_fn": 0, "unsafe_block": 0, "raw_ptr": 0, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 0, "no_mangle": 0, "shim": 0 },
@@ -44,7 +44,7 @@
     "encoder/decode_mb_aux.rs": { "unsafe_fn": 0, "unsafe_block": 0, "raw_ptr": 0, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 0, "no_mangle": 0, "shim": 0 },
     "encoder/encode_mb_aux.rs": { "unsafe_fn": 0, "unsafe_block": 0, "raw_ptr": 0, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 0, "no_mangle": 0, "shim": 0 },
     "encoder/encoder_context.rs": { "unsafe_fn": 5, "unsafe_block": 35, "raw_ptr": 47, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 0, "no_mangle": 0, "shim": 0 },
-    "encoder/encoder_ext.rs": { "unsafe_fn": 2, "unsafe_block": 17, "raw_ptr": 7, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 0, "no_mangle": 0, "shim": 0 },
+    "encoder/encoder_ext.rs": { "unsafe_fn": 1, "unsafe_block": 15, "raw_ptr": 5, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 0, "no_mangle": 0, "shim": 0 },
     "encoder/get_intra_predictor.rs": { "unsafe_fn": 0, "unsafe_block": 0, "raw_ptr": 0, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 0, "no_mangle": 0, "shim": 0 },
     "encoder/md.rs": { "unsafe_fn": 0, "unsafe_block": 0, "raw_ptr": 7, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 0, "no_mangle": 0, "shim": 0 },
     "encoder/mod.rs": { "unsafe_fn": 0, "unsafe_block": 0, "raw_ptr": 0, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 0, "no_mangle": 0, "shim": 0 },
