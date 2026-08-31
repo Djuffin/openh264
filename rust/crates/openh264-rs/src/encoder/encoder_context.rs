@@ -1741,7 +1741,7 @@ impl sWelsEncCtx {
     /// [`vaa_ext`](Self::vaa_ext). Every caller is inside the
     /// `SCREEN_CONTENT(dormant)` fence, which no camera-usage preset can select.
     #[inline]
-    // unsafe-cat: SCREEN_CONTENT(dormant: Phase 10)
+    // unsafe-cat: SCREEN_CONTENT(dormant)
     #[allow(unsafe_code)]
     pub fn vaa_ext_screen_frame_complexity(&self) -> i64 {
         unsafe { (*self.vaa_ext()).sComplexityScreenParam.iFrameComplexity }

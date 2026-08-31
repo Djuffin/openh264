@@ -7971,3 +7971,355 @@ reverted, written down.
 amended: the slice *bank* (`slice_bank_root`, the worker-written `SSlice` fields) and
 the slice *bitstream writer* (`slice_writer`, `slice_bs_buffer`, `thread_bs_buffer`).
 They share callers and should be designed together.
+
+---
+
+*F264–F272 were written at S11's open, paying the debt the S10 continuation left:
+eighteen checkpoints (S10.2, S10.3a–e, S10.4–S10.15) landed after the S10 close-docs
+commit with their reasoning only in commit messages. F268's number was pre-assigned
+by S10.6's own message and is honored here. Each finding names its checkpoints; the
+commit messages remain the detailed record.*
+
+## F264 — step 2 landed as F259 priced it, and the first bench in thirty checkpoints caught a real regression (S10.2)
+
+All twenty-one source-plane readers go through `layer_enc_view`'s `SharedPlane`;
+`layer_enc_pic` lost its last caller and is deleted with its `unsafe fn`. The
+families moved as F259's design said they must: `common/sad_common.rs` generic over
+`RefSamples` (forced — `processing/scene_change_detection.rs` feeds it `PlaneCursor`
+over borrowed `&[u8]` and *cannot* produce a `RecCursor`), `common/mc.rs` (25 fns)
+and `common/copy_mb.rs` (7) generic over `RefSamples + Copy`, `encoder/sample.rs`'s
+satd generic over **two independent** operand types so a source-plane `RecCursor`
+and an owned-scratch `PlaneCursor` meet without conversion, and four fn-pointer
+slots concrete on `RecCursor` behind non-capturing closures (a generic fn item
+cannot coerce to a higher-ranked slot type). `common/` gained no dependency on
+`encoder/` and its three files stayed at zero allows.
+
+**It retires no allow and that was never the point**: F254's defect class — a
+whole-allocation shared claim over a picture the fork writes — is now structurally
+unmintable. Nothing on `SharedPlane`/`RecCursor` lends a `&[u8]` over a picture
+plane, and the S10.1 probe's red control is exactly the shape production can no
+longer reach.
+
+**The bench is what kept it honest.** The first draft gave `RefSamples` a
+`row_into(out: &mut [u8])` — a copy, which a cell view must do — and made the
+*decoder*, which can simply lend, pay for it: `decode_1080p_bench` fell 358.8 →
+334.2 fps on Constrained Baseline (−7%). **The byte sweep was green and always
+would have been.** The fix is an associated type `Row<'a>: Deref<Target = [u8]>` —
+a borrow for the plane cursors, an owned `RowBuf` only for the cell view — and
+354.8 fps came back. Thirty checkpoints without a bench, and the first baseline
+caught a real regression for eight minutes of work. The user reaffirmed D-gate-8
+with this catch known: the bench debt still clears at E3, whole.
+
+Instrument added: an agreement test in `rec_view.rs` pins the three row routes
+against each other on both cursor types, both controls seen red (a one-sample
+offset in either the cell or the plane path fails it).
+
+## F265 — the resolver boundary moves, the first safe twin, and two conversions reverted with their reasons (S10.3a, S10.3b)
+
+`InitOneSliceInThread` was `pSlice: *mut *mut SSlice` — the C's out-pointer idiom —
+so every caller spent its body on `&mut *pSlice` reborrows and
+`addr_of_mut!((*pSlice).sSliceBs)` cursors. It returns `Option<&mut SSlice>` now:
+same two outcomes, **one audited derivation instead of one per caller body**. The
+`unsafe` stays exactly where the bank's raw root still is (F71's shape).
+`WritePrefixNalForSlice` lost seven raw operations whose reason had already left:
+its `addr_of_mut!` existed because T9.E2b's callers passed the bs cursor *beside*
+the slice and the argument reborrow popped it — no sibling exists any more, so the
+raw went with the shape that needed it.
+
+`current_layer_mut(&mut sWelsEncCtx) -> Option<&mut SDqLayer>` is the first safe
+twin on the seam-splitting pattern: **the type is the restriction**. A `&mut` to the
+context cannot exist while the fork is live (every worker holds `&sWelsEncCtx`), so
+a body that can call it is single-threaded by construction, where `current_layer`'s
+raw only stated the rule in a comment. `WelsSwapDqLayers`,
+`WelsInitCurrentQBLayerMltslc` and `StampLayerIdrFlagForSliceType` (T7.C3's hoist)
+took it immediately.
+
+Two conversions were **built and reverted with the reason recorded at the site**:
+`EncodeOnePartitionSizeLimited`'s encode loop re-resolves its slice after every
+`ReallocateSliceInThread`, and `FinishTask` then stamps `uiSliceConsumeTime` on
+**the last slice the partition coded** — a per-iteration `&mut SSlice` cannot carry
+that across the loop, and stamping inside it would stamp every slice where the C++
+stamps one. And the three fork bodies were each down to the single blocker
+`&*job.pCtx`, which is not a step-3 item at all — it retires with the fork seam
+(which S10.13 then delivered).
+
+## F266 — `mb_window`'s raw was a borrow-width problem, and the fork's price was being paid single-threaded at scale (S10.3c, S10.3d, S10.3e)
+
+The correction first: I had called `mb_window` "deliberately raw" and stopped.
+Nothing outside `src/api/` is deliberately raw — a `// unsafe-cat:` tag records *why
+a conversion has not happened yet*, never that it should not happen. Treating a tag
+as a stopping point is the exact premise-expiry mistake the plan warns about.
+
+**The width insight.** `mb_window` mints `&mut [SMB]` over a sub-range of a
+**shared** `&SDqLayer` so fork workers can each take their own records — a caller
+obligation no compiler checks, and for the fork it is real. But
+`DynslcUpdateMbNeighbourInfoListForAllSlices` holds the layer `&mut` with no fork
+anywhere near it, and still went through `from_raw_parts_mut`. What blocked the
+safe form was not aliasing but **borrow width**: the two neighbour walkers took
+`Option<&SDqLayer>` — a whole-layer shared borrow that cannot coexist with `&mut`
+on the grid — to read `sSliceEncCtx` and nothing else. Narrowed to
+`Option<&SSliceCtx>` (15 call sites), the two borrows are of two fields and the
+compiler grants them: no raw mint, no `unsafe`, no caller obligation.
+
+**Measured, the mispricing was systematic.** The `slice_bank_root` /
+`slice_in_bank` / `slice_in_layer` family has 38 call sites: **29 sit in bodies
+whose receiver is `&mut sWelsEncCtx` or `&mut SDqLayer`** — single-threaded by
+construction — 7 are genuinely fork-reachable, 2 are the resolvers. `mb_window`'s
+eleven: 2 converted, 6 genuinely fork, 3 in its covering test. Both seams split
+roughly 4:1 single-threaded. The safe twins (`slice_bank_mut`, `slice_in_bank_mut`,
+`slice_in_layer_mut`) are plain `Vec` indexing with `&mut SDqLayer` as the
+type-enforced proof of no sibling. **A shared twin would be unsound**: from
+`&SDqLayer`, indexing the `Vec` retags the *whole buffer* as shared, which races a
+sibling worker writing its own slice — F254's whole-allocation claim one level up,
+so `&mut` is the gate rather than `&`.
+
+**Two classifier traps, both caught by tracing.** Matching the enclosing signature
+for `&mut` reported `WelsISliceMdEnc` single-threaded — it had matched
+`pSlice: &mut SSlice`, not the layer, and the body is a slice encode (fork). And
+`Option<&SDqLayer>` on `UpdateMbNeighbourInfoForNextSlice` proves nothing — two
+hops of call-tracing put it inside the dynamic-slice encode loop. **Signature shape
+is a hint; the call tree is the answer.** Classify before designing.
+
+Two scoped residues: `InitMbInfo` converted but retires nothing — its last blocker
+is the stride-table arena (`ctx_mb_index_x`/`_y` over `AllocStrideTables`' raw-carved
+`Vec<i32>` regions), a separate seam, scoped not started. And S29's
+`WelsCodeOneSlice` premise (`g_pWelsWriteSliceHeader` bodies "derive `&mut` to the
+same field") *looks* expired — both bodies use `addr_of_mut!` today — but S29's
+evidence was a red from the two full-encode Miri probes, so re-deciding it needs
+those probes, not a reading. Noted at the site for a checkpoint that runs them (E3).
+
+## F267 — the pre-fork partition: disjointness the compiler can be shown, and F226's race shape is now inexpressible (S10.4)
+
+`UpdateMbMapForked`'s workers each used to resolve the layer through
+`SliceJobHandle`'s raw and mint `&mut [SMB]` from a shared layer under `mb_window`'s
+unverifiable "caller owns these records exclusively". That contract is true for a
+reason the compiler can be **shown rather than told**: a slice's records are the
+contiguous run `[pFirstMbIdxOfSlice[i] .. +pCountMbNumInSlice[i])` and the runs are
+disjoint — **a chain of `split_at_mut` is that fact.** The grid is carved on the
+calling thread while the layer is `&mut` (the borrow that cannot coexist with a
+fork), and each worker is handed its own chunks; nothing crosses the spawn but
+`&mut [SMB]` and `&SSliceCtx`, both `Send` on their own merits. Both walker fns are
+safe now, and this fork no longer uses `SliceJobHandle` at all.
+
+F226's defect — N workers each taking a `&mut (*pCurDq).sSliceEncCtx` reborrow, a
+write-write race with nothing written — is not merely fixed but **inexpressible**:
+no worker here can name the layer. And the prose contract became an assert: if the
+ranges ever overlap, the carve panics naming the slice and the macroblock, where
+`mb_window`'s `# Safety` could only ask the caller to promise.
+
+**The probe was re-aimed at what can still be wrong.** Its old claim (two workers
+naming one record race-free by disjointness) is now a program that does not
+compile, so `update_mb_map_forked_workers_share_the_layer_without_racing` carves
+the grid the way production does and checks the partition arithmetic and the
+slice-boundary walk — teeth re-verified by feeding the walker a wrong slice index
+and watching the boundary assertion fail. A probe outlives its claim only by
+re-aiming at what remains falsifiable.
+
+Coverage fact worth its own sentence: **both diffharness drivers pin
+`bUseLoadBalancing` off**, so no sweep row reaches the load-balancing fork;
+`load_balancing_completes_frames_with_sane_slice_counts` is that path's only
+end-to-end cover, which is why S10.4 leaned on the unit tests and Miri rather than
+on 583/583.
+
+## F268 — three write-only fields, and the lint that would have said so is allowed crate-wide (S10.5, S10.6, S10.7)
+
+`SDqLayer::pEncData` (S10.5), `pCsData` (S10.6) and `pSrcPool` (S10.7) were deleted
+as **write-only**: completed conversions (T9.C2, step 2) had already moved every
+reader elsewhere, and each field had been a per-frame store nothing loads —
+invisible, because `lib.rs` sets `#![allow(unused_variables)]` (defensible for a C
+port full of unused parameters) and **a field that is only ever written draws no
+lint at all**. Three dead raw *bindings* in `svc_encode_mb.rs` (`pPred` twice,
+`pPredI4x4`) survived an otherwise-complete conversion the same way. All were found
+by grepping for readers; none by the compiler.
+
+Stated plainly: the plan's `raw_ptr` metric counted **15 pointers this session that
+no longer had a purpose**, and the way to find them was to ask **"who reads this?"
+rather than "how do I convert this?"**. Ask it first for any field the metric
+prices as work. `SDqLayer` shrank 840/768 → 808/736 across the trio, each pin
+re-measured in both profiles off a temporary probe, per the pin's own rule for
+deliberate field changes.
+
+## F269 — the fork seam's blocker, measured: three roots, six pointer types, and the ladder to `sWelsEncCtx: Sync` (S10.5, S10.8–S10.12)
+
+The encode fork never needed a slice partition: after S10.3a its bodies were each
+down to `&*job.pCtx`, raw because **`sWelsEncCtx` was not `Sync`**. S10.5 asked the
+compiler what blocks `Sync` (a temporary `assert_sync` probe) and got a critical
+path instead of a vague "raw pointers everywhere": `SDqLayer` (four fields),
+`SVAAFrameInfo` (three pointer families), `SLogContext` (`TraceUserCtx`). Two more
+blockers (`SSceneChangeResult::pStaticBlockIdc`, `vBGDParam`'s three) **were masked
+by the earlier failures and surfaced only as those cleared** — the probe's first
+answer is a frontier, not an inventory; re-ask after every removal.
+
+The ladder, eight checkpoints, with the fix chosen by the *reason* each pointer
+existed:
+
+    S10.5   pEncData         deleted        (write-only — F268)
+    S10.6   pCsData          deleted        (write-only — F268)
+    S10.7   pSrcPool         deleted        (write-only — F268)
+    S10.8   pRefList         re-resolved through the context
+    S10.9   pCurY/pRefY      identity → usize; the two arrays → Process slices
+    S10.10  TraceUserCtx     opaque token → usize, no third unsafe impl
+    S10.11  pStaticBlockIdc  ferried address → usize (one hop retyped)
+    S10.12  vBGDParam        stored working state → parameters
+
+The distinct kinds, each reusable: **identity-as-pointer** (`pCurY`/`pRefY`'s
+whole-tree read is one same-pictures comparison; nothing dereferences them — an
+address is plain `Copy` data) costs `Sync` and buys nothing. **Opaque-token-as-
+pointer** (`TraceUserCtx`, never dereferenced by this crate) is the same mistake;
+`usize` is `Sync` on its own merits and **no `unsafe impl` was minted** — D1 pins
+the hand-written impls, and a trace handle is not where to spend a pin. Both
+round trips use the strict-provenance pair (`expose_provenance` /
+`with_exposed_provenance_mut`) precisely where the pointer that comes back out is
+*used* — a bare `as` cast would be a provenance guess, and Miri says so.
+**Stored-working-state** (`vBGDParam`'s plane roots and flag array, copied in at
+`Process` and read two calls deeper) becomes parameters threaded to the kernels —
+T9.X's move, applied to the last plugin holding borrowed state; its erosion walk's
+back-reaching pointer cursor became an index cursor over one array. And **an
+expired doc premise**: `SComplexityAnalysisParam`'s pair was kept on "no writer in
+this port at all — `SetRefMbType` was never ported"; it *is* ported now, and a
+self-pointer into a field of the enclosing struct is a reason to *remove* a field,
+not keep it. `SetRefMbType` returns `Option<RecPicId>` rather than writing a
+`*mut *mut u32` out-parameter.
+
+`pRefList` (S10.8) was the one **live** field: 68 tree-wide mentions turned out to
+be four real ones. `layer_ref_pic` re-resolves `ctx.ppRefPicListExt[did]` on the
+layer's **own** `sLayerInfo.sNalHeaderExt.uiDependencyId`, not the context's
+current one — load-bearing under multi-layer SVC, where the frame loop advances
+`pCtx.uiDependencyId` (the `dl` preset is what would have caught the wrong choice).
+The two deblocking null-guards went as **subsumed, not removed**: a null `pRefList`
+means the stamp never ran, and `pRecView` — set in the same body, never cleared —
+is `None` in exactly that state, with both guards sitting immediately above a
+`pRecView` guard. And the cost worth budgeting elsewhere: the reference picture now
+visibly borrows from the context, so nine bodies and **two dispatch slot types**
+(`PInterMdFunc`, `PInterFineMdFunc`) had to say the context and `SWelsMD` share a
+lifetime. The tie was always true; the raw field was hiding it.
+
+Nothing asserted `Sync` mid-campaign: at S10.12 the property became *true*, and
+claiming it (the borrow crossing the spawn) was gated on its own as S10.13.
+
+## F270 — a grep that cannot see the name it hunts: S10.10's absence claim, corrected by S10.11
+
+S10.10's message said of the block-static ferry chain that "the last of those is
+write-only". **Wrong**: `SVAAFrameInfoExt::pVaaBestBlockStaticIdc` is dereferenced
+four times in `SetBlockStaticIdcToMd`. The check behind the claim was a grep for
+`pBestBlockStaticIdc`, which does not match `pVaaBestBlockStaticIdc` — the
+prefixed name does not contain the shorter one — so the four sites were invisible
+to the instrument and the absence was reported as a fact. The standing rule ("a
+claim that something is absent gets its own grep") is necessary but not
+sufficient: **the grep must be shown to cover the aliases of the thing**, and a
+field reached through a chain of differently-named hops has aliases by
+construction.
+
+The conversion S10.11 then wrote is for a chain that *is* dereferenced: only the
+ferry hop (`SSceneChangeResult::pStaticBlockIdc`) is retyped to a held address,
+both neighbours keep their pointer types, the dereference site is untouched, and
+the round trip is the sanctioned strict-provenance pair precisely *because* the
+far end dereferences. The family stays `SCREEN_CONTENT(dormant)` — F177: the port
+never allocates an `SVAAFrameInfoExt`, so every such pointer is null today and the
+deref unreachable; the code is written to be sound if that ever changes.
+
+## F271 — the second audited `unsafe impl` is deleted, and an ordering comment became a compile error (S10.13)
+
+`unsafe impl Send for SliceJobHandle {}` is gone — a **reduction of the stated end
+state**, which had pinned two hand-written impls (D1) and kept both. The handle
+carried `*const sWelsEncCtx` for exactly one reason: `sWelsEncCtx` was `!Sync`, so
+`&sWelsEncCtx` was not `Send` and could not cross `thread::scope`'s spawn. With
+F269's ladder complete the auto impl applies — a shared reference to a `Sync` type
+is `Send`, **checked by the compiler rather than asserted by hand**. The three
+numbered arguments that justified the impl (disjointness by static index,
+order-based assembly, the buffer-count bound) are all still true and still worth
+reading; none is load-bearing, and the obituary where the impl stood says so.
+
+The instructive side effect: `StampLayerIdrFlagForSliceType` took
+`&mut sWelsEncCtx` *after* the handles were built, which no longer compiles when
+the handles hold `&sWelsEncCtx` — so the stamp moved before them. T7.C3 required
+"before anything spawns" and that is still exactly what happens; the ordering is
+now **enforced rather than described**. The general rule: when a seam converts
+from raws to borrows, prose scheduling constraints upgrade into borrow errors —
+read what newly fails to compile as *found constraints*, not as obstacles.
+
+A smaller calibration in the same checkpoint: `SliceJobHandle::new` reached
+`pSliceThreading` through `ctx_slice_threading_raw`, whose slot-read spelling
+exists so a *worker's* kept pointer survives later context retags (F71). Two
+`debug_assert!`s on the calling thread need none of that — `as_deref()` is the
+whole of it. **Match the derivation's strength to the use**, not to the strongest
+user of the field.
+
+D1's pin is now one: `rec_view.rs`'s `Sync for SharedCells`, the reconstruction
+seam's genuinely unprovable byte-disjointness claim, refereed by the probes in
+`svc_encode_slice.rs`. That is the tree's single remaining `unsafe impl`.
+
+## F272 — with the seam gone the slice core is ordinary work, and the last structural item is scoped (S10.14, S10.15)
+
+The two checkpoints after the seam fell are deliberately unremarkable, which is
+the finding: **nothing in the slice core needed a design any more.** The NAL
+load/unload pair went safe because nothing kept them `unsafe` once
+`EncodeOneSliceInJob` stopped needing them raw — the cascade found it.
+`PDeblockingFilterSlice`'s slot takes `&SDqLayer`: both targets only *read* the
+layer (reconstruction writes go through `pRecView`'s cells, macroblock records
+through `mb_window`), so the raw slot was charging the fork's price to bodies that
+need a `&` — the same shape as F266, at a dispatch slot. Six raw parameters
+flipped to references, each with a null-guard whose own comment already said the
+arm was unreachable (T9.H's convention: on a reference the guard is not dead, it
+is **inexpressible**); four bodies stopped resolving the layer raw to *read* two
+fields (`current_layer_ref` is the whole fix). Ten bodies in a batch, 337 → 327.
+
+What remains in the slice core is **one thing**: the bitstream seam.
+`slice_bs_buffer` hands a worker `&'a mut [u8]` carved out of a *shared* context,
+with 25 call sites across the entropy coders (`svc_encode_slice.rs`,
+`svc_set_mb_syn_cavlc.rs`, `svc_set_mb_syn_cabac.rs`), and `thread_bs_buffer` is
+the same shape (it is `WritePrefixNalForSlice`'s single remaining blocker). The
+answer is the same pre-fork partition `UpdateMbMapForked` already uses (F267) —
+disjoint `&mut [u8]` ranges carved before the spawn, carried in `SliceJobHandle`
+(possible since S10.13), threaded down the writer chain instead of re-derived
+from the context inside it. A session's work, not a batch's, and the last
+structural item in the encoder.
+
+## F273 — the 2.16 settles at 2.09, it is the encode loop itself, and E3's probe pair inherits the bill
+
+S10's continuation left the session-level Miri lane unsettled: an in-session gate
+read **2.16** against the 1.3 tripwire, and S11's brief (the only record — the
+reading was never committed, and **no committed change matches the "fix" it says
+was applied**) ordered one settle run. The settle ran at S11's open on the
+S10.15 tree plus comment-only edits: **299 passed / 0 failed, cpu 3041 s against
+the S10 close's 1458 s — ratio 2.09 [CPU, F170]**; wall 1166 s against 540 s =
+**2.16**, which is where the brief's number came from (it quoted the wall ratio).
+The reading **reproduces**; this is not machine noise.
+
+**Attribution, from the lane's own shard logs.** The lane is four concurrent
+shards, and the cost is not where the tests are:
+
+    shard cavlc        1 test    1147.90 s   (encode_loop_runs_with_cavlc)
+    shard sizelimited  1 test    1063.66 s   (encode_loop_runs_over_size_limited)
+    shard enc          149 tests  352.04 s
+    shard other        148 tests  574.11 s
+
+The two full-encode fork probes are **73% of the lane's cpu**, and the cavlc
+probe alone pins the lane's wall (1148 of 1166 s — a single test defeats the
+lane's parallelism). Their drives are unchanged (no `miri_scaled` or
+`#[cfg(miri)]` edit anywhere in the continuation), and at the S10 close the
+*whole* lane was 1458 s, so the pair was ≲600 s combined then against 2211 s
+now: **the continuation made the encode loop ~4× costlier under Miri.** The
+lane's one new test is immaterial (S10.2's row-agreement test: 4.5 s, measured
+solo).
+
+**Hypotheses, ranked and deliberately not bisected.** (1) S10.2's kernel
+migration: the encode loop's pixel reads now go through cursor rows, and the
+cell view's row is an owned `RowBuf` filled by per-element reads — exactly the
+op mix a native bench barely sees (F264 fixed the borrowing cursors' copy; the
+cell view keeps it by design) and Miri interprets slowest, in the loop that is
+pixel-volume-dominated. (2) S10.14/15's parameter flips: more reference retags
+per call on the hot slice path under Stacked Borrows. (3) S10.13's handle
+borrow. Each bisection point costs a ~20-minute Miri run and **no S11 decision
+changes with the answer**, so the split is left unmeasured and this finding is
+the record of why.
+
+**What does change.** (a) Every `session` gate this session carries a ~19-minute
+Miri lane, wall-pinned by one shard. (b) The baseline is prepended at the
+settled level (1166 / cpu=3041), so the tripwire re-arms against today's cost
+instead of warning on every gate for the rest of the session; the next genuine
+regression reads against 3041. (c) **E3's full-drive fork pair runs the same
+path at ~30× the drive** — its ~59-minute pair budget predates this inflation,
+and if the ×4 carries, the pair is a 3–4 hour item. Re-measure one probe at
+`MIRI_FULL=1` *before* scheduling E3's battery, and budget from the measurement,
+not from the baseline file's table.

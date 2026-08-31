@@ -17,8 +17,8 @@
 //!   workers, so its reachable bodies keep raw context parameters permanently. The
 //!   soundness argument is written once, at `rust/docs/phase9_disposition.md` §2,
 //!   and refereed by the two multi-threaded fork/join Miri probes.
-//! - `recon-seam`, `send-seam(Phase 9)` — D-mt-3's and D-mt-1's single seams, each
-//!   with its argument at the site.
+//! - `recon-seam` — D-mt-3's single seam, its argument at the site. (`send-seam
+//!   (Phase 9)`, D-mt-1's, retired at S10.13 with its `unsafe impl`.)
 //! - `SCREEN_CONTENT(dormant)` — Phase 10's lane.
 //! - `lawful-single(...)`, `instrument(test)` — named singles and tags on tests.
 //! - `port-raw(Phase 9)` / `cursor` — the **queue**, not a category: the conversion
