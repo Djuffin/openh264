@@ -3420,6 +3420,19 @@ pub unsafe fn WelsCodeOnePicPartition(
         crate::encoder::nal_encap::WelsLoadNal(pCtx.pOut.as_deref_mut().expect("pOut lives"), keNalType as i32, keNalRefIdc as i32);
         let pCurSlice = crate::encoder::svc_encode_slice::slice_in_bank(current_layer_ref(pCtx).expect("the frame's current layer is stamped"), uSlcBuffIdx, iSliceIdx);
         (*pCurSlice).iSliceIdx = iSliceIdx;
+        // **S11.33: the boundary's forward slot, resolved beside the current
+        // slice** — `AddSliceBoundary` used to walk the bank for it at fire
+        // time; the walk moves here, to the owner of the loop, as a sibling
+        // derivation (F71's discipline, and this path is single-threaded). The
+        // index is the old walk's ST arm exactly: current idc plus the step.
+        // Null was the old past-end tolerance; `None` is its spelling.
+        let pNextSliceRaw = crate::encoder::svc_encode_slice::slice_in_bank(
+            current_layer_ref(pCtx).expect("the frame's current layer is stamped"),
+            uSlcBuffIdx,
+            iSliceIdx + kiSliceIdxStep,
+        );
+        let pNextSlice: Option<&mut crate::encoder::svc_encode_slice::SSlice> =
+            if pNextSliceRaw.is_null() { None } else { Some(&mut *pNextSliceRaw) };
 
         // T7.C3: the layer-level half of `WelsCodeOneSlice`'s I_SLICE arm, one line
         // above the call it was lifted out of — this path is single-threaded, so the
@@ -3465,6 +3478,7 @@ pub unsafe fn WelsCodeOnePicPartition(
             &mut pCtxOutBs,
             &mut sMbWindow,
             pRestoreBuf,
+            pNextSlice,
         );
         pCtx.pDynamicBsBuffer[0] = vRestoreBuf;
         drop(sMbWindow);
@@ -3994,8 +4008,9 @@ pub unsafe fn WelsEncoderEncodeExt(
             let mut vRestoreBuf = std::mem::take(&mut pCtx.pDynamicBsBuffer[0]);
             let pRestoreBuf =
                 if vRestoreBuf.is_empty() { None } else { Some(vRestoreBuf.as_mut_slice()) };
+            // S11.33: single-slice — the dynamic boundary never fires.
             let iCodeRet =
-                crate::encoder::svc_encode_slice::WelsCodeOneSlice(pCtx, &mut *pCurSlice, eNalType as i32, vOutBsBuf.as_mut_slice(), &mut pCtxOutBs, &mut sMbWindow, pRestoreBuf);
+                crate::encoder::svc_encode_slice::WelsCodeOneSlice(pCtx, &mut *pCurSlice, eNalType as i32, vOutBsBuf.as_mut_slice(), &mut pCtxOutBs, &mut sMbWindow, pRestoreBuf, None);
             pCtx.pDynamicBsBuffer[0] = vRestoreBuf;
             drop(sMbWindow);
             current_layer_mut(pCtx).expect("the frame's current layer is stamped").sMbDataP = sMbData;
@@ -4254,6 +4269,7 @@ pub unsafe fn WelsEncoderEncodeExt(
                 let mut vRestoreBuf = std::mem::take(&mut pCtx.pDynamicBsBuffer[0]);
                 let pRestoreBuf =
                     if vRestoreBuf.is_empty() { None } else { Some(vRestoreBuf.as_mut_slice()) };
+                // S11.33: fixed-mode ST — the dynamic boundary never fires.
                 let iCodeRet = crate::encoder::svc_encode_slice::WelsCodeOneSlice(pCtx,
                     &mut *pCurSlice,
                     eNalType as i32,
@@ -4261,6 +4277,7 @@ pub unsafe fn WelsEncoderEncodeExt(
                     &mut pCtxOutBs,
                     &mut sMbWindow,
                     pRestoreBuf,
+                    None,
                 );
                 pCtx.pDynamicBsBuffer[0] = vRestoreBuf;
                 drop(sMbWindow);

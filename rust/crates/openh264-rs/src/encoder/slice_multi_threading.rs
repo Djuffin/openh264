@@ -1686,7 +1686,9 @@ unsafe fn EncodeOneSliceInJob(
         let pMbRun = &mut pMbs[kiLocal];
         // S11.30: `None` — the fixed loops never used the CABAC restore
         // scratch (the old pointer was null on every fixed path).
-        let mut iReturn = WelsCodeOneSlice(pCtx, pSlice, eNalType as i32, &mut *pSliceBsBuf, &mut pCtxOutBs, pMbRun, None);
+        // S11.33: `None` next-slice too — the fixed modes never hit the
+        // dynamic boundary, so `AddSliceBoundary` never fires here.
+        let mut iReturn = WelsCodeOneSlice(pCtx, pSlice, eNalType as i32, &mut *pSliceBsBuf, &mut pCtxOutBs, pMbRun, None, None);
         if ENC_RETURN_SUCCESS != iReturn {
             return iReturn;
         }
@@ -2208,7 +2210,22 @@ unsafe fn EncodeOnePartitionSizeLimited(
             WelsLoadNalForSlice(&mut *pSliceBs, eNalType as i32, eNalRefIdc as i32);
 
             debug_assert_eq!(iLocalSliceIdx, (*pSlice).iSliceIdx);
-            let mut iRet = WelsCodeOneSlice(pCtx, &mut *pSlice, eNalType as i32, &mut *pSliceBsBuf, &mut pCtxOutBs, pMbs, pRestoreBuf.as_deref_mut());
+            // **S11.33: the boundary's forward slot, resolved beside the
+            // current slice** — `AddSliceBoundary` used to walk the bank for
+            // it at fire time; the walk moves here, a sibling derivation of
+            // this worker's own bank (F71's discipline, and the realloc above
+            // guarantees the slot exists before coding starts). The index is
+            // the old walk's MT arm exactly: `iCodedSliceNum + 1`, read at the
+            // same moment the old code read it (the counter's increment is at
+            // the loop tail, after this call returns).
+            let pNextSliceRaw = crate::encoder::svc_encode_slice::slice_in_bank(
+                &*pCurDq,
+                iBsSlot as usize,
+                (*pCurDq).sSliceBufferInfo[iBsSlot as usize].iCodedSliceNum + 1,
+            );
+            let pNextSlice: Option<&mut SSlice> =
+                if pNextSliceRaw.is_null() { None } else { Some(&mut *pNextSliceRaw) };
+            let mut iRet = WelsCodeOneSlice(pCtx, &mut *pSlice, eNalType as i32, &mut *pSliceBsBuf, &mut pCtxOutBs, pMbs, pRestoreBuf.as_deref_mut(), pNextSlice);
             if ENC_RETURN_SUCCESS != iRet {
                 return iRet;
             }
