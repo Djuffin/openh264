@@ -2544,7 +2544,15 @@ uiResolutionChangeTimes={}, uIDRReqNum={}, uIDRSentNum={}, uLTRSentNum=NA, iTota
         }
     }
 
-    // unsafe-cat: port-raw(Phase 9)
+    // **S11.16: `C-ABI`, not `port-raw`.** This was tagged as convertible port
+    // work, and it is not: the parameter is the C interface's untyped
+    // `void* pOption`, whose real type is named by `eOptionId` and by nothing
+    // else the compiler can see. Each arm's cast *is* that enum's contract with
+    // the application, `codec_api.rs`'s thunks pass the caller's pointer
+    // straight through, and there is no Rust shape that removes the cast
+    // without changing the exported interface — which is frozen (plan §7.1).
+    // Same allow, honest category; it stops sitting in the conversion queue.
+    // unsafe-cat: C-ABI
     #[allow(unsafe_code)]
     /// `pOption` is **C-ABI** and stays a `c_void` (T8.B10): its type is a function
     /// of `eOptionId` and of nothing else, over thirty-two ids, and no Rust type
@@ -3026,7 +3034,15 @@ uiResolutionChangeTimes={}, uIDRReqNum={}, uIDRSentNum={}, uLTRSentNum=NA, iTota
         0
     }
 
-    // unsafe-cat: port-raw(Phase 9)
+    // **S11.16: `C-ABI`, not `port-raw`.** This was tagged as convertible port
+    // work, and it is not: the parameter is the C interface's untyped
+    // `void* pOption`, whose real type is named by `eOptionId` and by nothing
+    // else the compiler can see. Each arm's cast *is* that enum's contract with
+    // the application, `codec_api.rs`'s thunks pass the caller's pointer
+    // straight through, and there is no Rust shape that removes the cast
+    // without changing the exported interface — which is frozen (plan §7.1).
+    // Same allow, honest category; it stops sitting in the conversion queue.
+    // unsafe-cat: C-ABI
     #[allow(unsafe_code)]
     /// `pOption` is **C-ABI**, as in [`Self::SetOption`], with the blob written.
     pub fn GetOption(&mut self, eOptionId: EncoderOption, pOption: *mut c_void) -> i32 {
