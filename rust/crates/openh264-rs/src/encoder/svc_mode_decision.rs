@@ -1934,9 +1934,7 @@ pub fn CheckBorder(
 // one of the 48 `bg` rows, including the row where `WelsMdBackgroundMbEnc` entered
 // 5771 times. This is Phase 10's family, and the retag says so rather than leaving it
 // filed under Phase 9's port-raw backlog where it reads as pending work.
-// unsafe-cat: SCREEN_CONTENT(dormant)
-#[allow(unsafe_code)]
-pub unsafe extern "C" fn JudgeStaticSkip(
+pub extern "C" fn JudgeStaticSkip(
     pEncCtx: &sWelsEncCtx,
     pCurMb: &mut SMB,
     pMbCache: &mut SMbCache,
@@ -1995,9 +1993,7 @@ pub unsafe extern "C" fn JudgeStaticSkip(
 // one of the 48 `bg` rows, including the row where `WelsMdBackgroundMbEnc` entered
 // 5771 times. This is Phase 10's family, and the retag says so rather than leaving it
 // filed under Phase 9's port-raw backlog where it reads as pending work.
-// unsafe-cat: SCREEN_CONTENT(dormant)
-#[allow(unsafe_code)]
-pub unsafe extern "C" fn JudgeScrollSkip(
+pub extern "C" fn JudgeScrollSkip(
     pEncCtx: &sWelsEncCtx,
     pCurMb: &mut SMB,
     pMbCache: &mut SMbCache,
@@ -2009,10 +2005,15 @@ pub unsafe extern "C" fn JudgeScrollSkip(
     let kiMbY = (*pCurMb).iMbY as i32;
     let kiMbWidth: i32 = (*pCurDqLayer).iMbWidth as i32;
     let kiMbHeight: i32 = (*pCurDqLayer).iMbHeight as i32;
-    let pVaaExt = (*pEncCtx).vaa_ext();
+    // S11.3: the screen-content extension, safely — `None` in this port
+    // (F177: nothing allocates an `SVAAFrameInfoExt`), which takes the same
+    // exit the `bScrollDetectFlag == false` arm below always took.
+    let Some(pVaaExt) = pEncCtx.vaa_ext_ref() else {
+        return false;
+    };
 
     let mut bTryScrollSkip;
-    if (*pVaaExt).sScrollDetectInfo.bScrollDetectFlag {
+    if pVaaExt.sScrollDetectInfo.bScrollDetectFlag {
         bTryScrollSkip = IsMbScrolledStatic(&(*pWelsMd).iBlock8x8StaticIdc);
     } else {
         return false;
@@ -2025,8 +2026,8 @@ pub unsafe extern "C" fn JudgeScrollSkip(
             .and_then(|r| crate::encoder::svc_encode_slice::ctx_pic_ref(pEncCtx, r))
             .map(crate::encoder::rec_view::RoPicView::build);
         if let Some(pRefOriPic) = pRefOriPic {
-            let iScrollMvX = (*pVaaExt).sScrollDetectInfo.iScrollMvX;
-            let iScrollMvY = (*pVaaExt).sScrollDetectInfo.iScrollMvY;
+            let iScrollMvX = pVaaExt.sScrollDetectInfo.iScrollMvX;
+            let iScrollMvY = pVaaExt.sScrollDetectInfo.iScrollMvY;
             if CheckBorder(kiMbX, kiMbY, iScrollMvX, iScrollMvY, kiMbWidth, kiMbHeight) {
                 bTryScrollSkip = false;
             } else {
@@ -2270,7 +2271,11 @@ pub unsafe extern "C" fn MdInterSCDPskipProcess(
     eSkipMode: ESkipModes,
 ) -> bool {
     let pMbCache = &mut pSlice.sMbCacheInfo;
-    let pVaaExt = (*pEncCtx).vaa_ext();
+    // S11.3: `None` in this port (F177), and the SCROLLED arm below is the only
+    // consumer — with no extension there is no scroll vector and no skip.
+    let Some(pVaaExt) = pEncCtx.vaa_ext_ref() else {
+        return false;
+    };
     let pCurDqLayer = current_layer_ref(pEncCtx)
         .expect("the frame's current layer is stamped");
 
@@ -2288,12 +2293,12 @@ pub unsafe extern "C" fn MdInterSCDPskipProcess(
 
         if eSkipMode == ESkipModes::SCROLLED {
             sCurMbMv[1].iMvX = (WELS_CLIP3(
-                (*pVaaExt).sScrollDetectInfo.iScrollMvX,
+                pVaaExt.sScrollDetectInfo.iScrollMvX,
                 -(*pEncCtx).iMvRange,
                 (*pEncCtx).iMvRange,
             ) << 2) as i16;
             sCurMbMv[1].iMvY = (WELS_CLIP3(
-                (*pVaaExt).sScrollDetectInfo.iScrollMvY,
+                pVaaExt.sScrollDetectInfo.iScrollMvY,
                 -(*pEncCtx).iMvRange,
                 (*pEncCtx).iMvRange,
             ) << 2) as i16;
@@ -2374,7 +2379,13 @@ pub unsafe fn WelsMdInterJudgeSCDPskip(
 ) -> bool {
     let pCurDqLayer = current_layer_ref(pEncCtx)
         .expect("the frame's current layer is stamped");
-    SetBlockStaticIdcToMd(&*(*pEncCtx).vaa_ext(), pWelsMd, pCurMb, &*pCurDqLayer);
+    // S11.3: `None` in this port (F177) — with no extension there are no
+    // block-static indices to stamp, which is the state every camera preset is
+    // already in (the array the raw form read is null there).
+    let Some(pVaaExt) = pEncCtx.vaa_ext_ref() else {
+        return false;
+    };
+    SetBlockStaticIdcToMd(pVaaExt, pWelsMd, pCurMb, &*pCurDqLayer);
 
     if MdInterSCDPskipProcess(pEncCtx, pWelsMd, slice, pCurMb, ESkipModes::STATIC) {
         return true;
@@ -2519,7 +2530,7 @@ pub unsafe fn WelsMdInterFinePartitionVaaOnScreen<'a>(
 
 // unsafe-cat: SCREEN_CONTENT(dormant)
 #[allow(unsafe_code)]
-pub unsafe fn SetScrollingMvToMd(pVaa: &SVAAFrameInfo, pWelsMd: &mut SWelsMD<'_>) {
+pub fn SetScrollingMvToMd(pVaa: &SVAAFrameInfo, pWelsMd: &mut SWelsMD<'_>) {
     // The screen-content downcast — the C++'s `static_cast<SVAAFrameInfoExt*>`.
     // It stays inside an `unsafe fn` rather than becoming an explicit block in a
     // safe one: A5 centralised this cast in `sWelsEncCtx::vaa_ext` so it would not
@@ -2528,11 +2539,17 @@ pub unsafe fn SetScrollingMvToMd(pVaa: &SVAAFrameInfo, pWelsMd: &mut SWelsMD<'_>
     // file's ratchet row for no aliasing gain. What C1 changes is the parameter,
     // not the cast: `*mut SVAAFrameInfo` -> `&SVAAFrameInfo`, so the slot can
     // never hand a worker an exclusive reference to the one shared block.
-    let pVaaExt = pVaa as *const SVAAFrameInfo as *const SVAAFrameInfoExt;
-    let sTempMv = SMVUnitXY {
-        iMvX: (*pVaaExt).sScrollDetectInfo.iScrollMvX as i16,
-        iMvY: (*pVaaExt).sScrollDetectInfo.iScrollMvY as i16,
-    };
+    // **S11.3: the last of the downcast family.** The cast stood here because
+    // this body is handed the *base* block and upstream's screen path passes an
+    // `SVAAFrameInfoExt` in that slot. Two facts make it unrepresentable here:
+    // the port never allocates an extension (F177, see `vaa_ext_ref`), and
+    // **this function has no installer at all** — `pfSetScrollingMv` is only
+    // ever stamped with `SetScrollingMvToMdNull` (`encoder_ext.rs`), whose body
+    // is empty. So the C++'s read would be of whatever lies past the base
+    // allocation, and the value this port produces on every reachable path is
+    // the default the `Null` twin leaves. Written that way rather than cast.
+    let _ = pVaa;
+    let sTempMv = SMVUnitXY::default();
 
     pWelsMd.sMe.sMe16x16.sDirectionalMv = sTempMv;
     pWelsMd.sMe.sMe8x8[0].sDirectionalMv = sTempMv;
