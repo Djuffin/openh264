@@ -272,7 +272,12 @@ pub use crate::encoder::md::{MB_BLOCK4x4_NUM, MB_LUMA_CHROMA_BLOCK4x4_NUM};
 /// parallel-deblocking conditions hold, `..Null` otherwise, re-stamped every
 /// frame by `PreprocessSliceCoding`). De-virtualized in session F: the table
 /// parameter is gone — the walkers reach nothing through it any more.
-pub type PDeblockingFilterSlice = unsafe extern "C" fn(pCurDq: *mut SDqLayer, pSlice: &mut SSlice);
+// **S10.14: the layer is shared, not raw.** Both targets only *read* the layer —
+// the reconstruction writes go through `pRecView`'s cells and the macroblock
+// records through `mb_window` — and a shared layer borrow is what this file's two
+// probes certify is lawful while sibling workers write. The raw was carrying the
+// fork's price for a body that needs a `&`.
+pub type PDeblockingFilterSlice = unsafe extern "C" fn(pCurDq: &SDqLayer, pSlice: &mut SSlice);
 
 // `PSetNoneZeroCountZeroFunc` (T6.C1's safe slot type) stood here — deleted
 // with the `pfSetNZCZero` slot and `WelsBlockFuncInit` when session F made the
@@ -1333,7 +1338,7 @@ pub use crate::encoder::svc_encode_slice::WelsGetNextMbOfSlice;
 // walk is the safe window since E3
 #[allow(unsafe_code)]
 pub unsafe extern "C" fn DeblockingFilterSliceAvcbase(
-    pCurDq: *mut SDqLayer,
+    pCurDq: &SDqLayer,
     pSlice: &mut SSlice,
 ) {
     let sSliceHeaderExt = &(*pSlice).sSliceHeaderExt;
@@ -1420,10 +1425,8 @@ pub unsafe extern "C" fn DeblockingFilterSliceAvcbase(
     }
 }
 
-// unsafe-cat: fork-shared(S63) — the slot type's in-fork *mut SDqLayer (S63)
-#[allow(unsafe_code)]
-pub unsafe extern "C" fn DeblockingFilterSliceAvcbaseNull(
-    _pCurDq: *mut SDqLayer,
+pub extern "C" fn DeblockingFilterSliceAvcbaseNull(
+    _pCurDq: &SDqLayer,
     _pSlice: &mut SSlice,
 ) {
 }
@@ -1446,7 +1449,7 @@ pub unsafe extern "C" fn PerformDeblockingFilter(pEnc: &mut sWelsEncCtx) {
         for iSliceIdx in 0..iSliceCount {
             let pSlice = crate::encoder::svc_encode_slice::slice_in_layer(pCurLayer.as_ref(), iSliceIdx);
             if !pSlice.is_null() {
-                DeblockingFilterSliceAvcbase(pCurLayer, &mut *pSlice);
+                DeblockingFilterSliceAvcbase(&*pCurLayer, &mut *pSlice);
             }
         }
     }

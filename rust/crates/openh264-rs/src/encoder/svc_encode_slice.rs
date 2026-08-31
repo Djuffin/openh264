@@ -1120,8 +1120,7 @@ pub fn layer_ref_pic<'a>(
 #[inline]
 // unsafe-cat: SCREEN_CONTENT(dormant: Phase 10) — the pointer it hands out; the raw
 // layer parameter is the S63 seam (G's)
-#[allow(unsafe_code)]
-pub unsafe fn layer_ref_feature_storage<'a>(
+pub fn layer_ref_feature_storage<'a>(
     pCtx: &'a sWelsEncCtx,
     pLayer: &SDqLayer,
 ) -> Option<&'a crate::encoder::picture::SScreenBlockFeatureStorage> {
@@ -1216,8 +1215,7 @@ pub fn layer_rec_view<'a>(
 #[inline]
 // unsafe-cat: fork-shared(S63) — inherited from `layer_ref_pic`, whose pool
 // resolution this wraps; nothing raw is introduced here.
-#[allow(unsafe_code)]
-pub unsafe fn layer_ref_view(
+pub fn layer_ref_view(
     pCtx: &sWelsEncCtx,
     pLayer: &SDqLayer,
 ) -> Option<crate::encoder::rec_view::RoPicView> {

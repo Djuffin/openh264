@@ -379,8 +379,7 @@ pub fn WelsUnloadNal(pEncoderOuput: &mut SWelsEncoderOutput) {
 // `SWelsSliceBs` is the per-worker bitstream, so S63 applies: this route's end
 // states are interior mutability or lawful raw, and naming it belongs to the
 // session that designs the seam.
-#[allow(unsafe_code)]
-pub unsafe extern "C" fn WelsLoadNalForSlice(
+pub extern "C" fn WelsLoadNalForSlice(
     pSliceBs: &mut SWelsSliceBs,
     kiType: i32,
     kiNalRefIdc: i32,
@@ -409,8 +408,7 @@ pub unsafe extern "C" fn WelsLoadNalForSlice(
 // Note the brief also lists this function's line as one of "the two `unsafe extern
 // \"C\"` unload fns ... C-ABI boundary, lawful remainder". It is neither: it is one
 // of the three MT tags the same brief asks to adjudicate, and it is fork-reachable.
-#[allow(unsafe_code)]
-pub unsafe extern "C" fn WelsUnloadNalForSlice(pSliceBs: &mut SWelsSliceBs) {
+pub extern "C" fn WelsUnloadNalForSlice(pSliceBs: &mut SWelsSliceBs) {
     let pSlice = pSliceBs;
     let pIdx = &mut pSlice.iNalIndex;
     let pRawNal = &mut pSlice.sNalList[*pIdx as usize];
