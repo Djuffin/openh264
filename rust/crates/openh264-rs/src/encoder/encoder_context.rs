@@ -3588,3 +3588,4 @@ mod tests {
 // used to live in this module disagreed with cpu_core.h and with each other --
 // WELS_CPU_NEON alone had seven distinct values across eight modules.
 pub use crate::common::cpu_core::{WELS_CPU_AVX, WELS_CPU_AVX2, WELS_CPU_FMA, WELS_CPU_MMX, WELS_CPU_MMXEXT, WELS_CPU_NEON, WELS_CPU_SSE, WELS_CPU_SSE2, WELS_CPU_SSE3, WELS_CPU_SSE41, WELS_CPU_SSE42, WELS_CPU_SSSE3};
+

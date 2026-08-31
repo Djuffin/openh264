@@ -713,7 +713,7 @@ pub type PFillInterNeighborCacheFunc = fn(
     pVaaBgMbFlag: &[i8],
     kpMbSkipSad: &crate::encoder::rec_view::SharedMbArray<i32>,
 );
-pub type PGetVarianceFromIntraVaaFunc = unsafe extern "C" fn(pDataY: *mut u8, kiLineSize: i32) -> i32;
+pub type PGetVarianceFromIntraVaaFunc = extern "C" fn(cEnc: &RecCursor<'_>) -> i32;
 pub type PGetMbSignFromInterVaaFunc = unsafe extern "C" fn(pSad8x8: *mut i32) -> u8;
 /// **T6.C1**: the slot took `SMVUnitXY*` because the C++ hands it
 /// `pCurMb->sMv`, a pointer into the context-wide MV bank. The bank is an inline
@@ -1342,40 +1342,24 @@ pub unsafe extern "C" fn MdInterAnalysisVaaInfo_c(pSad8x8: *mut i32) -> u8 {
 
 // unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
-pub unsafe extern "C" fn AnalysisVaaInfoIntra_c(pDataY: *mut u8, kiLineSize: i32) -> i32 {
+pub extern "C" fn AnalysisVaaInfoIntra_c(cEnc: &RecCursor<'_>) -> i32 {
+    // **S10.5: the source cursor, not a plane root and a stride.** This walked
+    // `pEncData[0]` — one of the two raw plane-root arrays on `SDqLayer` — with
+    // four `offset` chains per 4x4 block and a per-row-group rebase. The block
+    // sums are the same sixteen 4x4 means over the same sixteen rows; the stride
+    // travels inside the cursor, which is where `mb_cursor_ro` already puts it.
     let mut uiAvgBlock = [0u16; 16];
-    let mut pEncData = pDataY;
-    let kiLineSize2 = kiLineSize << 1;
-    let kiLineSize3 = kiLineSize + kiLineSize2;
-    let kiLineSize4 = kiLineSize << 2;
-
     let mut blk_idx = 0usize;
-    for _j in (0..16).step_by(4) {
-        for i in (0..16).step_by(4) {
-            let mut sum: u32 = *pEncData.add(i) as u32
-                + *pEncData.add(i + 1) as u32
-                + *pEncData.add(i + 2) as u32
-                + *pEncData.add(i + 3) as u32;
-
-            sum += *pEncData.offset(kiLineSize as isize + i as isize) as u32
-                + *pEncData.offset(kiLineSize as isize + i as isize + 1) as u32
-                + *pEncData.offset(kiLineSize as isize + i as isize + 2) as u32
-                + *pEncData.offset(kiLineSize as isize + i as isize + 3) as u32;
-
-            sum += *pEncData.offset(kiLineSize2 as isize + i as isize) as u32
-                + *pEncData.offset(kiLineSize2 as isize + i as isize + 1) as u32
-                + *pEncData.offset(kiLineSize2 as isize + i as isize + 2) as u32
-                + *pEncData.offset(kiLineSize2 as isize + i as isize + 3) as u32;
-
-            sum += *pEncData.offset(kiLineSize3 as isize + i as isize) as u32
-                + *pEncData.offset(kiLineSize3 as isize + i as isize + 1) as u32
-                + *pEncData.offset(kiLineSize3 as isize + i as isize + 2) as u32
-                + *pEncData.offset(kiLineSize3 as isize + i as isize + 3) as u32;
-
+    for j in (0..16isize).step_by(4) {
+        for i in (0..16isize).step_by(4) {
+            let mut sum: u32 = 0;
+            for dy in 0..4isize {
+                let row = cEnc.row::<4>(j + dy, i);
+                sum += row[0] as u32 + row[1] as u32 + row[2] as u32 + row[3] as u32;
+            }
             uiAvgBlock[blk_idx] = (sum >> 4) as u16;
             blk_idx += 1;
         }
-        pEncData = pEncData.offset(kiLineSize4 as isize);
     }
 
     let mut iSumAvg: i32 = 0;
@@ -1405,14 +1389,10 @@ pub extern "C" fn InitIntraAnalysisVaaInfo(
 
 // unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
-pub unsafe extern "C" fn MdIntraAnalysisVaaInfo(
-    pEncCtx: &sWelsEncCtx,
-    pEncMb: *mut u8,
-) -> bool {
-    let pCurDqLayer = current_layer(pEncCtx);
-    let kiLineSize = (*pCurDqLayer).iEncStride[0];
-    let pfGetVariance = (*pEncCtx).func_list().pfGetVarianceFromIntraVaa.unwrap();
-    let kiVariance = pfGetVariance(pEncMb, kiLineSize);
+pub fn MdIntraAnalysisVaaInfo(pEncCtx: &sWelsEncCtx, cEncMb: &RecCursor<'_>) -> bool {
+    // S10.5: the layer lookup went with the stride — the cursor carries it.
+    let pfGetVariance = pEncCtx.func_list().pfGetVarianceFromIntraVaa.unwrap();
+    let kiVariance = pfGetVariance(cEncMb);
     kiVariance >= INTRA_VARIANCE_SAD_THRESHOLD
 }
 
