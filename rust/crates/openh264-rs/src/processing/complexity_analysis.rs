@@ -114,13 +114,20 @@ impl CComplexityAnalysis {
         calc: &SVAACalcResult,
         pGomComplexity: &mut [i32],
         pGomForegroundBlockNum: &mut [i32],
+        // S10.9: the two per-macroblock arrays, as slices — they were raws on
+        // `SComplexityAnalysisParam` and are the caller's storage, not this
+        // plugin's, exactly as the two GOM arrays above already were.
+        pBackgroundMbFlag: &[i8],
+        uiRefMbType: &[u32],
     ) -> i32 {
         match self.m_sComplexityAnalysisParam.iComplexityAnalysisMode {
             FRAME_SAD => self.AnalyzeFrameComplexityViaSad(
                 pSrcPixMap, pRefPixMap, calc, pGomForegroundBlockNum,
+                pBackgroundMbFlag, uiRefMbType,
             ),
             GOM_SAD => self.AnalyzeGomComplexityViaSad(
                 pSrcPixMap, pRefPixMap, calc, pGomComplexity, pGomForegroundBlockNum,
+                pBackgroundMbFlag, uiRefMbType,
             ),
             GOM_VAR => self.AnalyzeGomComplexityViaVar(
                 pSrcPixMap, pRefPixMap, calc, pGomComplexity, pGomForegroundBlockNum,
@@ -139,6 +146,8 @@ impl CComplexityAnalysis {
         pRefPixMap: &SPixMap,
         calc: &SVAACalcResult,
         pGomForegroundBlockNum: &mut [i32],
+        pBackgroundMbFlag: &[i8],
+        uiRefMbType: &[u32],
     ) {
         self.m_sComplexityAnalysisParam.iFrameComplexity = calc.iFrameSad as i64;
 
@@ -147,6 +156,7 @@ impl CComplexityAnalysis {
             self.m_sComplexityAnalysisParam.iFrameComplexity =
                 self.GetFrameSadExcludeBackground(
                     pSrcPixMap, pRefPixMap, calc, pGomForegroundBlockNum,
+                    pBackgroundMbFlag, uiRefMbType,
                 ) as i64;
         }
     }
@@ -164,6 +174,8 @@ impl CComplexityAnalysis {
         _pRefPixMap: &SPixMap,
         calc: &SVAACalcResult,
         pGomForegroundBlockNum: &mut [i32],
+        pBackgroundMbFlag: &[i8],
+        uiRefMbType: &[u32],
     ) -> i32 {
         let iWidth = pSrcPixMap.sRect.iRectWidth;
         let iHeight = pSrcPixMap.sRect.iRectHeight;
@@ -174,8 +186,6 @@ impl CComplexityAnalysis {
         let iMbNumInGom = self.m_sComplexityAnalysisParam.iMbNumInGom;
         let iGomMbNum = (iMbNum + iMbNumInGom - 1) / iMbNumInGom;
 
-        let pBackgroundMbFlag = self.m_sComplexityAnalysisParam.pBackgroundMbFlag;
-        let uiRefMbType = self.m_sComplexityAnalysisParam.uiRefMbType;
 
         let mut uiFrameSad: u32 = 0;
         for j in 0..iGomMbNum {
@@ -183,8 +193,8 @@ impl CComplexityAnalysis {
             let iGomMbEndIndex = WELS_MIN((j + 1) * iMbNumInGom, iMbNum);
 
             for i in iGomMbStartIndex..iGomMbEndIndex {
-                if *pBackgroundMbFlag.offset(i as isize) == 0
-                    || IS_INTRA(*uiRefMbType.offset(i as isize))
+                if pBackgroundMbFlag[i as usize] == 0
+                    || IS_INTRA(uiRefMbType[i as usize])
                 {
                     pGomForegroundBlockNum[j as usize] += 1;
                     let sad8x8 = &calc.pSad8x8[(i as isize) as usize];
@@ -212,6 +222,8 @@ impl CComplexityAnalysis {
         calc: &SVAACalcResult,
         pGomComplexity: &mut [i32],
         pGomForegroundBlockNum: &mut [i32],
+        pBackgroundMbFlag: &[i8],
+        uiRefMbType: &[u32],
     ) {
         let iWidth = pSrcPixMap.sRect.iRectWidth;
         let iHeight = pSrcPixMap.sRect.iRectHeight;
@@ -222,8 +234,6 @@ impl CComplexityAnalysis {
         let iMbNumInGom = self.m_sComplexityAnalysisParam.iMbNumInGom;
         let iGomMbNum = (iMbNum + iMbNumInGom - 1) / iMbNumInGom;
 
-        let pBackgroundMbFlag = self.m_sComplexityAnalysisParam.pBackgroundMbFlag;
-        let uiRefMbType = self.m_sComplexityAnalysisParam.uiRefMbType;
 
         let mut uiFrameSad: u32 = 0;
         // `InitGomSadFunc (m_pfGomSad, iCalcBgd)`.
@@ -251,8 +261,8 @@ impl CComplexityAnalysis {
                     // `uiRefMbType` may legitimately be null (`AnalyzePictureComplexity`
                     // only assigns it when there is a reference picture).
                     let uiBackgroundMbFlag = bExceptBackground
-                        && *pBackgroundMbFlag.offset(i as isize) != 0
-                        && !IS_INTRA(*uiRefMbType.offset(i as isize));
+                        && pBackgroundMbFlag[i as usize] != 0
+                        && !IS_INTRA(uiRefMbType[i as usize]);
                     if !bExceptBackground || !uiBackgroundMbFlag {
                         pGomForegroundBlockNum[j as usize] += 1;
                         let sad8x8 = &calc.pSad8x8[(i as isize) as usize];

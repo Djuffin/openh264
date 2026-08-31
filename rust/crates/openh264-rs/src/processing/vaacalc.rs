@@ -466,8 +466,8 @@ impl CVAACalculation {
             return RET_INVALIDPARAM;
         }
 
-        result.pCurY = pCurData;
-        result.pRefY = pRefData;
+        result.pCurY = pCurData as usize;
+        result.pRefY = pRefData as usize;
 
         // **T6.F3**: the five `VAACalc*_c` shims stood here, each handed the six out
         // arrays as bare pointers and each rebuilding a slice over them with

@@ -275,11 +275,19 @@ assert_size!(SWelsMD, 800);
 // a *drift tracker*, not an ABI contract — this struct has been off the C++'s 264
 // since Phase 6 session B and `repr(C)` came off with T6.F3 — so it moves with a
 // deliberate field change. **520, measured.**
-assert_size!(SVAAFrameInfo, 520);
+// **S10.9: -16.** `sComplexityAnalysisParam` loses its last two pointers
+// (`pBackgroundMbFlag`, `uiRefMbType`), which reach the plugin as slices at the
+// `Process` call — the same move T9.X made for the two GOM arrays and Phase 6
+// session B for `pCalcResult`. **`SVAAFrameInfo` is `Sync` as of this pin**; the
+// `pCurY`/`pRefY` pair went to `usize` in the same checkpoint and cost no bytes.
+// **504, measured.**
+assert_size!(SVAAFrameInfo, 504);
+// **S10.9: -16**, all of it its embedded `SVAAFrameInfo`. **1520, measured.**
+assert_size!(SVAAFrameInfoExt, 1520);
 // **T6.F3**: +104, all of it its embedded `SVAAFrameInfo`. **1368, measured.**
 // **T9.X**: +8, all of it the same. **1376, measured.**
 // **S9.0c**: +160, all of it its embedded `SVAAFrameInfo`. **1536, measured.**
-assert_size!(SVAAFrameInfoExt, 1536);
+
 // SSliceThreading is deliberately NOT asserted. C++ (mt_defs.h:68) embeds
 // WELS_EVENT (pthread_cond_t, 48 B) and WELS_MUTEX (pthread_mutex_t, 64 B) by
 // value, reaching 1256 bytes on darwin; those sizes are libc-specific, and this
@@ -299,7 +307,10 @@ assert_size!(SAdaptiveQuantizationParam, 8);
 // **T9.X**: 56 -> 40 — `pGomComplexity` and `pGomForegroundBlockNum` are the rate
 // controller's `Vec`s and reach the plugin as slices; see `SAdaptiveQuantizationParam`
 // above. **40, measured.**
-assert_size!(SComplexityAnalysisParam, 40);
+// **S10.9**: 40 -> 24 — `pBackgroundMbFlag` and `uiRefMbType` go the same way, and
+// with them `SVAAFrameInfo`'s last two `!Sync` reasons. **24, measured.**
+assert_size!(SComplexityAnalysisParam, 24);
+
 assert_size!(SComplexityAnalysisScreenParam, 72);
 
 // Mid-tier types.

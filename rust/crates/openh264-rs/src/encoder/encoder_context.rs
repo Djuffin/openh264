@@ -1310,6 +1310,29 @@ impl sWelsEncCtx {
         )
     }
 
+    /// The **video-analysis block, one layer's rate-control state, and that layer's
+    /// reference list, from one borrow** — §4.6's combined accessor, widened by one
+    /// field for S10.9.
+    ///
+    /// `AnalyzePictureComplexity` hands `CComplexityAnalysis::Process` three things
+    /// that live in three different fields of the context: the VAA block's own
+    /// `sVaaCalcInfo` and `pVaaBackgroundMbFlag`, the rate controller's two GOM
+    /// arrays, and — since the `uiRefMbType` raw left
+    /// `SComplexityAnalysisParam` — the *reference picture's* per-macroblock type
+    /// array. Three owners, one call.
+    #[inline]
+    pub fn vaa_rc_and_ref_list_mut(
+        &mut self,
+        kiDid: usize,
+    ) -> (Option<&mut SVAAFrameInfo>, &mut SWelsSvcRc, Option<&SRefList>) {
+        let sWelsEncCtx { pVaa, pWelsSvcRc, ppRefPicListExt, .. } = self;
+        (
+            pVaa.as_deref_mut(),
+            &mut pWelsSvcRc[kiDid],
+            ppRefPicListExt.get(kiDid).and_then(|s| s.as_deref()),
+        )
+    }
+
     /// Every field the three LTR bodies touch, **from one borrow** — §4.6's
     /// combined accessor taken to its natural end, and what retires
     /// `ctx_param_raw` and two `addr_of_mut!` roots from this family (S10.5a).
@@ -3588,6 +3611,7 @@ mod tests {
 // used to live in this module disagreed with cpu_core.h and with each other --
 // WELS_CPU_NEON alone had seven distinct values across eight modules.
 pub use crate::common::cpu_core::{WELS_CPU_AVX, WELS_CPU_AVX2, WELS_CPU_FMA, WELS_CPU_MMX, WELS_CPU_MMXEXT, WELS_CPU_NEON, WELS_CPU_SSE, WELS_CPU_SSE2, WELS_CPU_SSE3, WELS_CPU_SSE41, WELS_CPU_SSE42, WELS_CPU_SSSE3};
+
 
 
 

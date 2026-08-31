@@ -222,9 +222,8 @@ impl CAdaptiveQuantization {
 
         // Reuse the VAA statistics when they were computed over exactly this pair
         // of pictures; otherwise recompute per macroblock.
-        if calc.pRefY as *const u8 == pRefFrameY
-            && calc.pCurY as *const u8 == pCurFrameY
-        {
+        // S10.9: the comparison is between addresses, and both sides say so now.
+        if calc.pRefY == pRefFrameY as usize && calc.pCurY == pCurFrameY as usize {
             let mut iMbIndex = 0isize;
             for _j in 0..iMbHeight {
                 for _i in 0..iMbWidth {
