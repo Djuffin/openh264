@@ -8490,3 +8490,40 @@ blocker is the **only** one, and measure that with the compiler (drop the
 `unsafe` and read the errors) rather than with a syntactic scan that cannot see
 indirect calls.
 
+## F278 — the same borrow-width question has now answered five distinct families, and it is the port's dominant remaining shape
+
+F275 recorded three; S11.6 and S11.7 added two more, and at five the pattern is
+worth stating as the working hypothesis for what is left rather than as a
+recurring surprise:
+
+| body / family | what the raw was for | what it actually needed |
+|---|---|---|
+| `mb_window`'s walkers (S10.3c) | mint `&mut [SMB]` from a shared layer | the callee read *one field*; narrow the parameter |
+| `InitMbInfo` (S11.2d) | reach the stride-table arena | two coordinate tables as slices |
+| `TryModeMerge` (S11.2e) | read `sMe8x8` while writing `sMe16x8` | three disjoint fields; destructure |
+| the RC/layer pair (S11.2c) | `rc_at_mut` beside the layer | disjoint context fields; one combined accessor |
+| **the per-layer parameter record (S11.7)** | a cursor into `sDependencyLayers[did]` held while the body writes the context | the two write groups never overlap; end each borrow at its group |
+
+**Not one of the five was an aliasing problem.** Every one was the borrow
+checker refusing a shape that happened to be expressed too widely — a whole
+struct where a field was meant, or two borrows whose live ranges merely had to
+be separated. The remedies are correspondingly cheap and all four are now in
+the tree with precedents: narrow the parameter, destructure the owner, add a
+combined accessor in §4.6's shape, or reorder so each borrow ends at its group.
+
+**The estimation consequence.** 192 product allows remain, 103 tagged
+`port-raw(Phase 9)` and 72 `fork-shared(S63)`. The `fork-shared` tag names a
+body as *reachable from the fork*, which is a fact about the call tree and not
+by itself a reason for a raw — S10.3d measured that seam at 4:1
+single-threaded, and S11 has yet to find a `port-raw` body whose raw survived
+the width question when asked properly. So the honest prior for the remainder
+is **not** "190 hard conversions": it is a large majority of width questions
+with a small residue of genuine seams, of which exactly three are named and
+measured today — `rec_view.rs`'s `Sync` impl (the tree's one `unsafe impl`),
+`DynamicAdjustSlicing`'s context-plus-inner-layer parameter pair (S11.2d), and
+`WelsISliceMdEncDynamic`'s field cursor under a shared layer borrow (S11.4).
+
+The way to be wrong here is the way F276 was wrong: counting a family by its
+occurrences rather than by the bodies for which it is the *last* blocker. Ask
+the compiler, one family at a time.
+
