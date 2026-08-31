@@ -1152,7 +1152,7 @@ mod tests {
     }
 
     #[test]
-    // unsafe-cat: fork-shared(S63)
+    // unsafe-cat: instrument(test) — S11.5: a test, not a fork-reachable body.
     #[allow(unsafe_code)]
     fn test_need_dynamic_adjust_zero_consume() {
         let mut dq_layer = layer_with_bank(2);
@@ -1161,7 +1161,7 @@ mod tests {
     }
 
     #[test]
-    // unsafe-cat: fork-shared(S63)
+    // unsafe-cat: instrument(test) — S11.5: a test, not a fork-reachable body.
     #[allow(unsafe_code)]
     fn test_calc_slice_complex_ratio() {
         let mut dq_layer = layer_with_bank(2);

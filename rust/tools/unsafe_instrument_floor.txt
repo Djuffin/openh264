@@ -1,0 +1,96 @@
+# The enumerated instrument floor — decision D-exit-4, built at S11.5 (plan step 5).
+#
+# The plan's end state is `#![forbid(unsafe_code)]` in every file outside the
+# C-ABI island (`src/api/`), with two exceptions: `encoder/rec_view.rs`, whose
+# one product `unsafe impl Sync for SharedCells` is the reconstruction seam,
+# and the files below, whose *test modules* carry Miri and provenance
+# instruments. Those files take `#![deny(unsafe_code)]` with each test allow
+# enumerated here rather than `forbid`, which no inner allow can reopen.
+#
+# So the tracking number's honest floor is this list, not zero. A test allow
+# that is not listed here fails E2's census; a listed one that disappears is a
+# line to delete, not a failure.
+#
+# Key is `<file> <tag> <item>`. Regenerate with the snippet in the S11 close.
+
+# decoder/picture.rs
+decoder/picture.rs instrument data_ptr_reaches_the_padding_behind_the_logical_origin
+decoder/picture.rs instrument data_ptr_twice_leaves_the_first_cursor_usable
+
+# encoder/au_set.rs
+encoder/au_set.rs instrument init_pps_matches_cxx
+encoder/au_set.rs instrument init_sps_matches_cxx_for_the_gate_configuration
+encoder/au_set.rs instrument write_pps_syntax_is_byte_exact_with_cxx
+encoder/au_set.rs instrument write_sps_nal_is_byte_exact_with_cxx
+
+# encoder/deblocking.rs
+encoder/deblocking.rs instrument test_non_zero_count_c
+
+# encoder/encode_mb_aux.rs
+encoder/encode_mb_aux.rs instrument test_init_encoding_funcs
+
+# encoder/encoder_context.rs
+encoder/encoder_context.rs instrument ctx_new_reproduces_the_zeroed_shell
+encoder/encoder_context.rs instrument ctx_stride_accessors_are_sibling_derivations
+encoder/encoder_context.rs instrument every_container_accessor_hands_out_sibling_cursors
+encoder/encoder_context.rs instrument frame_bs_cursors_are_siblings
+encoder/encoder_context.rs instrument stride_table_accessors_leave_the_first_cursor_usable
+encoder/encoder_context.rs instrument test_decide_frame_type
+encoder/encoder_context.rs instrument test_init_pic
+encoder/encoder_context.rs instrument test_update_and_loadback_framenum
+
+# encoder/encoder_ext.rs
+encoder/encoder_ext.rs instrument build_gate_context
+encoder/encoder_ext.rs instrument request_memory_svc_builds_the_dq_layers
+encoder/encoder_ext.rs instrument request_memory_svc_builds_the_parameter_sets
+
+# encoder/nal_encap.rs
+encoder/nal_encap.rs C-ABI test_wels_load_and_unload_nal_slice
+encoder/nal_encap.rs instrument test_wels_encode_nal_buffer_too_small
+encoder/nal_encap.rs instrument test_wels_encode_nal_standard_avc
+encoder/nal_encap.rs instrument test_wels_encode_nal_svc_extension
+
+# encoder/picture.rs
+encoder/picture.rs instrument data_ptr_reaches_the_padding_behind_the_logical_origin
+encoder/picture.rs instrument data_ptr_shared_reaches_the_padding_and_survives_sibling_mints
+
+# encoder/rc.rs
+encoder/rc.rs instrument test_rc_intentional_noop_callbacks
+
+# encoder/ref_list_mgr_svc.rs
+encoder/ref_list_mgr_svc.rs instrument ref_strategy_zero_is_the_default_arm
+encoder/ref_list_mgr_svc.rs instrument test_ref_list_mgr_noop_callback
+
+# encoder/set_mb_syn_cabac.rs
+encoder/set_mb_syn_cabac.rs instrument test_cabac_encode_init_and_flush
+
+# encoder/slice_multi_threading.rs
+encoder/slice_multi_threading.rs instrument test_calc_slice_complex_ratio
+encoder/slice_multi_threading.rs instrument test_need_dynamic_adjust_zero_consume
+
+# encoder/svc_encode_slice.rs
+encoder/svc_encode_slice.rs instrument mb_window_reaches_its_range_and_disjoint_windows_coexist
+encoder/svc_encode_slice.rs instrument mvd_cursor_survives_a_slice_held_across_the_forked_workers
+encoder/svc_encode_slice.rs instrument partition_counters_take_a_shared_layer_borrow_across_the_forked_writes
+encoder/svc_encode_slice.rs instrument slice_banks_take_a_shared_layer_borrow_across_the_forked_writes
+encoder/svc_encode_slice.rs instrument workers_read_the_layer_nal_header_through_shared_borrows
+
+# encoder/svc_mode_decision.rs
+encoder/svc_mode_decision.rs instrument test_pred_inter_16x8_8x16_mv
+encoder/svc_mode_decision.rs instrument test_pred_mv_basic_median
+encoder/svc_mode_decision.rs instrument test_pred_skip_mv_zero_ref
+encoder/svc_mode_decision.rs instrument test_svc_mode_decision_noop_callback
+encoder/svc_mode_decision.rs instrument test_update_p16x16_motion_info
+encoder/svc_mode_decision.rs instrument test_wels_md_i16x16_cost
+
+# encoder/svc_motion_estimate.rs
+encoder/svc_motion_estimate.rs instrument test_fme_noop_callback
+encoder/svc_motion_estimate.rs instrument test_single_block_sums
+
+# encoder/svc_set_mb_syn_cabac.rs
+encoder/svc_set_mb_syn_cabac.rs C-ABI test_cabac_mb_skip_logic
+encoder/svc_set_mb_syn_cabac.rs instrument test_cabac_encode_init_and_terminate
+
+# total: 46 test allows across 16 files
+#   C-ABI: 2
+#   instrument: 44

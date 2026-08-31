@@ -3166,25 +3166,9 @@ impl Drop for CWelsH264SVCEncoder {
 // carried into step 2's contracts, where writing a `# Safety` window for a slot
 // nothing can call would have documented a fiction. **F78.**
 
-pub static G_ST_CODEC_VERSION: OpenH264Version = OpenH264Version {
-    uMajor: 2,
-    uMinor: 6,
-    uRevision: 0,
-    uReserved: 0,
-};
-
-#[unsafe(no_mangle)]
-// unsafe-cat: C-ABI
-#[allow(unsafe_code)]
-pub extern "C" fn WelsGetCodecVersion() -> OpenH264Version {
-    G_ST_CODEC_VERSION
-}
-
-#[unsafe(no_mangle)]
-// unsafe-cat: C-ABI
-#[allow(unsafe_code)]
-pub unsafe extern "C" fn WelsGetCodecVersionEx(pVersion: *mut OpenH264Version) {
-    if !pVersion.is_null() {
-        *pVersion = G_ST_CODEC_VERSION;
-    }
-}
+// **S11.5 (step 4): the two version exports moved to `api/version.rs`**, with
+// `G_ST_CODEC_VERSION` beside them. They are `#[unsafe(no_mangle)]` C-ABI
+// entry points, and the plan's end state puts the ABI island — not this file —
+// among the places `unsafe` may live. The identifier string below still reads
+// the constant, now through `crate::api::version`.
+pub use crate::api::version::G_ST_CODEC_VERSION;

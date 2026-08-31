@@ -12,7 +12,11 @@
 
 #![allow(non_snake_case, dead_code)]
 
-#![deny(unsafe_code)]
+// **S11.5 (step 5): sealed.** the encoder-side inverse-transform kernels holds no `unsafe` at all —
+// no product allow and no test instrument — so the `deny` it carried
+// since its conversion becomes `forbid`, which no inner `allow` can
+// reopen. This is the end state for a file that is simply done.
+#![forbid(unsafe_code)]
 
 use crate::encoder::wels_func_ptr_def::SWelsFuncPtrList;
 
