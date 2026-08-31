@@ -1220,7 +1220,7 @@ mod tests {
 /// slices `iFirstSlice`, `iFirstSlice + iSliceStep`, ... below `iSliceCount` — a
 /// static partition where the pool did a dynamic claim, which is strictly more
 /// deterministic and is why the claiming mutex can go.
-pub struct SliceJobHandle {
+pub struct SliceJobHandle<'a> {
     /// The encoder context, held raw exactly as `CWelsBaseTask::m_pCtx` held it.
     /// The encoder context. **S7.A5**: `*const`, not `*mut` — the three sites that
     /// read it form `&*job.pCtx` and nothing writes through it (S7.A1 measured the
@@ -1228,7 +1228,12 @@ pub struct SliceJobHandle {
     /// and still behind the hand-written `Send` below: `sWelsEncCtx` cannot be `Sync`
     /// while `sLogCtx` holds the caller's `void*` (F245), so the pointer crosses the
     /// spawn and each worker derives its own shared reference after arrival.
-    pCtx: *const sWelsEncCtx,
+    // **S10.13: a reference, not a raw.** It was `*const sWelsEncCtx` for exactly
+    // one reason — `sWelsEncCtx` was not `Sync`, so `&sWelsEncCtx` was not `Send`
+    // and could not cross a spawn. Twelve field conversions (S10.5-S10.12) cleared
+    // the four raw families that made it so, and the borrow now crosses on its own
+    // merits under `thread::scope`.
+    pCtx: &'a sWelsEncCtx,
     /// This worker's bs scratch slot: `pSliceThreading->pThreadBsBuffer[iBsSlot]`,
     /// reached from the slice through `SSlice::uiBufferIdx`.
     iBsSlot: i32,
@@ -1338,17 +1343,32 @@ pub struct SliceJobHandle {
 // for more slices than threads, which the sweep does routinely (`t=2`, `sm=1 n=4`).
 // The worker count here is `min(slices, uiThreadBsBufferNum)` and
 // `SliceJobHandle::new` `debug_assert!`s the bound at construction.
-#[allow(unsafe_code)]
-unsafe impl Send for SliceJobHandle {}
+// **S10.13: `unsafe impl Send for SliceJobHandle` stood here, and it is gone.**
+//
+// It was one of the two hand-written impls decision D1 pins the tree at, and the
+// three numbered arguments above are its justification — disjointness by static
+// index, order-based assembly, and the buffer-count bound. Every one of them is
+// still true and still worth reading; none of them is *load-bearing* any more.
+//
+// The impl existed because the handle carried `*const sWelsEncCtx`, and it carried
+// a raw because `sWelsEncCtx` was `!Sync` — so `&sWelsEncCtx` was not `Send` and
+// could not cross `thread::scope`'s spawn. S10.5-S10.12 removed the four raw
+// families behind that (`SDqLayer`'s four fields, `SVAAFrameInfo`'s four,
+// `SLogContext`'s handle, `CBackgroundDetection`'s three), and the auto impl now
+// applies: a shared reference to a `Sync` type is `Send`, checked by the compiler
+// rather than asserted here.
+//
+// **D1's pin drops from two to one.** What remains is `SharedCells`'s `Sync`, the
+// reconstruction seam's, which is a genuinely unprovable claim about byte
+// disjointness and is refereed by the probes in `svc_encode_slice.rs`.
 
-impl SliceJobHandle {
+impl<'a> SliceJobHandle<'a> {
     /// # Safety
-    /// `pCtx` must be a live context whose `pSliceThreading` has been built by
-    /// `RequestMtResource`, and `iBsSlot` must be a slot that call allocated.
-    // unsafe-cat: fork-shared(S63)
-    #[allow(unsafe_code)]
-    unsafe fn new(
-        pCtx: &sWelsEncCtx,
+    /// `pCtx`'s `pSliceThreading` must have been built by `RequestMtResource`, and
+    /// `iBsSlot` must be a slot that call allocated. Liveness is the reference's
+    /// since S10.13.
+    fn new(
+        pCtx: &'a sWelsEncCtx,
         iBsSlot: i32,
         iFirstSlice: i32,
         iSliceStep: i32,
@@ -1357,17 +1377,26 @@ impl SliceJobHandle {
     ) -> Self {
         // Part 3 of the safety argument, checked where the handle is made rather
         // than trusted where it is used. Both entry points refuse a null
-        // `pSliceThreading` before they get here, so the deref is the same one the
-        // workers will do.
-        let pSmt = ctx_slice_threading_raw(pCtx);
+        // `pSliceThreading` before they get here.
+        //
+        // **S10.13: the field, not `ctx_slice_threading_raw`.** That accessor reads
+        // the `Box`'s slot as a *value* so the answer survives later retags of the
+        // context (F71) — which matters for a pointer a worker will keep, and not
+        // at all for two `debug_assert!`s on the calling thread. The shared borrow
+        // is the whole of what this needs, and it is what makes this constructor
+        // safe.
+        let pSmt = pCtx
+            .pSliceThreading
+            .as_deref()
+            .expect("both fork entry points refuse a null pSliceThreading");
         debug_assert!(
-            iBsSlot >= 0 && (iBsSlot as usize) < (*pSmt).uiThreadBsBufferNum,
+            iBsSlot >= 0 && (iBsSlot as usize) < pSmt.uiThreadBsBufferNum,
             "job slot {} is outside the {} allocated bs buffers — F67's bound",
             iBsSlot,
-            (*pSmt).uiThreadBsBufferNum
+            pSmt.uiThreadBsBufferNum
         );
         debug_assert!(
-            !(*pSmt).pThreadBsBuffer[iBsSlot as usize].is_empty(),
+            !pSmt.pThreadBsBuffer[iBsSlot as usize].is_empty(),
             "job slot {iBsSlot} has no buffer behind it"
         );
         Self { pCtx, iBsSlot, iFirstSlice, iSliceStep, iSliceCount, bRecordsTime }
@@ -1544,19 +1573,25 @@ pub unsafe fn EncodeFixedSlicesForked(pCtx: &mut sWelsEncCtx, kiSliceCount: i32)
     let bRecordsTime = pCtx.param_opt().is_some() && pCtx.param().bUseLoadBalancing;
     let iWidth = ForkWidth(pCtx, kiSliceCount);
 
-    // One handle per worker, each carrying its own slot — constructed here, on the
-    // calling thread, so the slot bound is checked before anything spawns.
-    let mut jobs: Vec<SliceJobHandle> = Vec::with_capacity(iWidth as usize);
-    for k in 0..iWidth {
-        jobs.push(SliceJobHandle::new(pCtx, k, k, iWidth, kiSliceCount, bRecordsTime));
-    }
-
     // **T7.C3 — F71's residue, hoisted out of the fork.** `WelsCodeOneSlice` wrote
     // `sLayerInfo.sNalHeaderExt.bIdrFlag` once per slice per worker; the write is the
     // same constant on every worker and no worker reads the field before its own
     // write, so running it once here, on the calling thread, before anything spawns,
     // is byte-for-byte what the race produced. See `StampLayerIdrFlagForSliceType`.
+    //
+    // **S10.13 moved it above the handles**, and the compiler is why: the handles
+    // hold `&sWelsEncCtx` now, and this is the body's last `&mut` use. "Before
+    // anything spawns" is what T7.C3 required and is still what happens — the
+    // ordering is now enforced rather than described.
     crate::encoder::svc_encode_slice::StampLayerIdrFlagForSliceType(pCtx);
+
+    // One handle per worker, each carrying its own slot — constructed here, on the
+    // calling thread, so the slot bound is checked before anything spawns.
+    let pCtx: &sWelsEncCtx = pCtx;
+    let mut jobs: Vec<SliceJobHandle<'_>> = Vec::with_capacity(iWidth as usize);
+    for k in 0..iWidth {
+        jobs.push(SliceJobHandle::new(pCtx, k, k, iWidth, kiSliceCount, bRecordsTime));
+    }
 
     let mut iErr = ENC_RETURN_SUCCESS;
     std::thread::scope(|s| {
@@ -1906,17 +1941,16 @@ pub unsafe fn EncodeSizeLimitedSlicesForked(pCtx: &mut sWelsEncCtx, kiPartitionC
         "a size-limited partition would go unencoded: {kiPartitionCnt} partitions, {iWidth} buffers"
     );
 
-    let mut jobs: Vec<SliceJobHandle> = Vec::with_capacity(iWidth as usize);
+    // **T7.C3 — F71's residue, hoisted out of the fork**, and moved above the
+    // handles at S10.13 for the reason `EncodeFixedSlicesForked` gives: this is the
+    // body's last `&mut` use and the handles hold a shared borrow now.
+    crate::encoder::svc_encode_slice::StampLayerIdrFlagForSliceType(pCtx);
+
+    let pCtx: &sWelsEncCtx = pCtx;
+    let mut jobs: Vec<SliceJobHandle<'_>> = Vec::with_capacity(iWidth as usize);
     for k in 0..iWidth {
         jobs.push(SliceJobHandle::new(pCtx, k, k, iWidth, kiPartitionCnt, true));
     }
-
-    // **T7.C3 — F71's residue, hoisted out of the fork.** `WelsCodeOneSlice` wrote
-    // `sLayerInfo.sNalHeaderExt.bIdrFlag` once per slice per worker; the write is the
-    // same constant on every worker and no worker reads the field before its own
-    // write, so running it once here, on the calling thread, before anything spawns,
-    // is byte-for-byte what the race produced. See `StampLayerIdrFlagForSliceType`.
-    crate::encoder::svc_encode_slice::StampLayerIdrFlagForSliceType(pCtx);
 
     let mut iErr = ENC_RETURN_SUCCESS;
     std::thread::scope(|s| {
