@@ -313,11 +313,7 @@ fn LD32_MV(pMv: &SMVUnitXY) -> u32 {
 /// Previously a stub: it ran `PredictSadSkip` unconditionally and always returned
 /// `false`, so no macroblock could ever be coded as P_SKIP.
 ///
-/// # Safety
-/// All pointers must be valid; `pEncCtx->pRefPic` must be assigned.
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
-pub unsafe extern "C" fn WelsMdInterJudgePskip(
+pub extern "C" fn WelsMdInterJudgePskip(
     pEncCtx: &sWelsEncCtx,
     pWelsMd: &mut SWelsMD<'_>,
     pSlice: &mut SSlice,
@@ -1469,15 +1465,17 @@ pub extern "C" fn WelsInterMbEncode(pEncCtx: &sWelsEncCtx, pSlice: &mut SSlice, 
 /// `SDqLayer` than `pCurDqLayer`, which is why this reads through the list rather
 /// than through the current layer.
 #[inline(always)]
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
-pub unsafe fn GetRefMb(pEncCtx: &sWelsEncCtx, pCurMb: &SMB) -> SMB {
-    let kRefIdx = (*current_layer(pEncCtx))
+pub fn GetRefMb(pEncCtx: &sWelsEncCtx, pCurMb: &SMB) -> SMB {
+    // S11.22: both layer resolutions take the safe twins — this body only
+    // *reads* the two layers, and the record it returns is `Copy`.
+    let kRefIdx = current_layer_ref(pEncCtx)
+        .expect("the frame's current layer is stamped")
         .pRefLayer
         .expect("GetRefMb on a layer with no base layer: bBaseLayerAvailableFlag gates every caller");
-    let kpRefLayer = ctx_dq_layer(pEncCtx, kRefIdx.get());
+    let kpRefLayer = crate::encoder::encoder_context::dq_layer_ref(pEncCtx, kRefIdx.get())
+        .expect("the base layer is built before its enhancement layer encodes");
     let kiRefMbIdx =
-        ((pCurMb.iMbY as i32 >> 1) * (*kpRefLayer).iMbWidth as i32) + (pCurMb.iMbX as i32 >> 1);
+        ((pCurMb.iMbY as i32 >> 1) * kpRefLayer.iMbWidth as i32) + (pCurMb.iMbX as i32 >> 1);
     // The base layer is quiescent by the time its enhancement layer encodes
     // (the fork joins per layer), so a shared read of its record — through the
     // MbArray's own checked indexing — is the whole access, copied out (SMB is
@@ -1509,12 +1507,15 @@ pub unsafe fn GetRefMb(pEncCtx: &sWelsEncCtx, pCurMb: &SMB) -> SMB {
     // Neither is *correct* — the mode decision below is seeded from a base-layer
     // macroblock that does not collocate with this one either way — but one is
     // defined and the other is not, and only the defined one lets the suite run.
-    let ref_mbs = (*std::ptr::addr_of!((*kpRefLayer).sMbDataP)).dims().count();
+    // S11.22: `kpRefLayer` is a reference now, so the `addr_of!` that kept this
+    // read off a retag of the layer is vestigial — a field borrow is the whole
+    // of it.
+    let ref_mbs = kpRefLayer.sMbDataP.dims().count();
     // A base layer with no macroblocks at all cannot be a reference layer (it
     // would have no reconstruction to predict from), so this leaves the checked
     // read to fail loudly rather than inventing a record for it.
     let kiClampedIdx = (kiRefMbIdx as usize).min(ref_mbs.saturating_sub(1));
-    *(*std::ptr::addr_of!((*kpRefLayer).sMbDataP)).get(kiClampedIdx)
+    *kpRefLayer.sMbDataP.get(kiClampedIdx)
 }
 
 /// Scales base-layer motion vectors by 2x to initialize enhancement-layer candidates.
@@ -2346,14 +2347,23 @@ pub unsafe fn SetBlockStaticIdcToMd(
     let kiBlockIndexUp = (kiMbY << 1) * kiWidth + (kiMbX << 1);
     let kiBlockIndexLow = ((kiMbY << 1) + 1) * kiWidth + (kiMbX << 1);
 
-    (*pWelsMd).iBlock8x8StaticIdc[0] =
-        *(*pVaaExt).pVaaBestBlockStaticIdc.offset(kiBlockIndexUp as isize) as i32;
-    (*pWelsMd).iBlock8x8StaticIdc[1] =
-        *(*pVaaExt).pVaaBestBlockStaticIdc.offset((kiBlockIndexUp + 1) as isize) as i32;
-    (*pWelsMd).iBlock8x8StaticIdc[2] =
-        *(*pVaaExt).pVaaBestBlockStaticIdc.offset(kiBlockIndexLow as isize) as i32;
-    (*pWelsMd).iBlock8x8StaticIdc[3] =
-        *(*pVaaExt).pVaaBestBlockStaticIdc.offset((kiBlockIndexLow + 1) as isize) as i32;
+    // **S11.22: the four offsets become checked reads of a bounded slice.** The
+    // block-static table is one `u8` per 8x8 block, so its extent is the layer's
+    // macroblock grid doubled in both axes — a length the caller has and the
+    // pointer did not carry. Building the slice once, from the geometry this
+    // body already computes, is the same move `SStrideTables::MbIndexXY` made
+    // for the coordinate tables (S11.2d).
+    //
+    // This arm is unreachable in this port: `pVaaExt` can only be obtained from
+    // `vaa_ext_ref()`, which answers `None` by construction (S11.3, F177). The
+    // conversion keeps the scaffolding a screen-content effort would inherit.
+    let kiBlocks = (kiWidth as usize) * (((*pDqLayer).iMbHeight as usize) << 1);
+    let kpStatic = std::slice::from_raw_parts((*pVaaExt).pVaaBestBlockStaticIdc, kiBlocks);
+
+    (*pWelsMd).iBlock8x8StaticIdc[0] = kpStatic[kiBlockIndexUp as usize] as i32;
+    (*pWelsMd).iBlock8x8StaticIdc[1] = kpStatic[(kiBlockIndexUp + 1) as usize] as i32;
+    (*pWelsMd).iBlock8x8StaticIdc[2] = kpStatic[kiBlockIndexLow as usize] as i32;
+    (*pWelsMd).iBlock8x8StaticIdc[3] = kpStatic[(kiBlockIndexLow + 1) as usize] as i32;
 }
 
 // SCREEN_CONTENT(dormant: Phase 10) — F125. `WelsInitSCDPskipFunc`

@@ -703,6 +703,27 @@ impl SStrideTables {
         self.at_i32(off)
     }
 
+    /// [`StrideEncBlockOffset`](Self::StrideEncBlockOffset) **as a slice** —
+    /// S11.22, on `MbIndexXY`'s template (S11.2d).
+    ///
+    /// The region holds **24** `i32`s, which is not a guess: it is what
+    /// `WelsGetEncBlockStrideOffset`'s own contract states ("`pBlock` must point
+    /// to at least 24 writable `i32`s") and what `AllocStrideTables` reserves.
+    /// Its consumers index it at fixed positions (0, 16, 20) and the pointer
+    /// carried none of that; the slice does, and the arena's `unsafe` stays at
+    /// the region root where it belongs.
+    // unsafe-cat: port-raw(Phase 9)
+    #[allow(unsafe_code)]
+    pub fn EncBlockOffsets(&self, kiDid: usize) -> Option<&[i32; 24]> {
+        let p = self.StrideEncBlockOffset(kiDid);
+        if p.is_null() {
+            return None;
+        }
+        // SAFETY: as `at_i32`, plus the 24-entry extent above; the arena
+        // outlives `&self`.
+        unsafe { Some(&*(p as *const [i32; 24])) }
+    }
+
     /// `pMbIndexX[kiDid]` as the cursor it used to be.
     #[inline]
     pub fn MbIndexX(&self, kiDid: usize) -> *const i16 {
