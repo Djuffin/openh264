@@ -72,7 +72,6 @@ use crate::encoder::svc_encode_slice::{
 use crate::encoder::vlc_encoder::BsWriter;
 use crate::encoder::wels_encoder_ext::WelsTime;
 pub const ENC_RETURN_UNEXPECTED: i32 = 0x04;
-use crate::encoder::svc_encode_slice::thread_bs_buffer;
 use crate::encoder::svc_encode_slice::{current_layer, set_current_layer, LayerIdx};
 use crate::{
     RCMode, SEncParamExt, SFrameBSInfo, SLayerBSInfo, SliceMode, MAX_SPATIAL_LAYER_NUM,
@@ -210,7 +209,10 @@ pub struct SSliceThreading {
     /// rather than a stylistic one: `addr_of!((*pSmt).pThreadBsBuffer[i])` names one
     /// worker's element directly, where indexing an outer `Vec` would have to reborrow
     /// the outer container that *every* worker shares — which is F71's class exactly.
-    /// `thread_bs_buffer` derives its slice that way.
+    /// `thread_bs_buffer` derived its slice that way until **S11.1b**, which made
+    /// the question moot: the fork entries `mem::take` each worker's `Vec` out of
+    /// this array before the spawn and restore it after the join, so no worker
+    /// derives from the shared context at all — the pre-fork partition.
     pub pThreadBsBuffer: [Vec<u8>; MAX_THREADS_NUM],
     /// How many of the `MAX_THREADS_NUM` slots actually have a buffer behind them:
     /// `min(iMultipleThreadIdc, MAX_THREADS_NUM)`. **F67's bound, made readable.**
@@ -1071,6 +1073,73 @@ mod tests {
         assert_eq!(WelsDivRound(104, 10), 10);
     }
 
+    /// **S11.1b's referee — the bitstream-pool partition's take/split/restore.**
+    ///
+    /// The per-worker disjointness itself is a compile fact now (each worker's
+    /// `&mut [u8]` borrows a distinct `Vec` held by the fork entry's local), so
+    /// what remains falsifiable is the machinery around it: that slot `k`'s
+    /// bytes are the ones worker `k` wrote, through the take, the spawn, the
+    /// join, and the restore. Two workers write distinct patterns into their
+    /// own taken slots while both hold a shared borrow of the pool's owner —
+    /// the aliasing shape production has after S11.1b (`&sWelsEncCtx` beside
+    /// `&mut` partition slots) — and the patterns must land back in the
+    /// owner's own slots. The Miri lane runs this and certifies the aliasing
+    /// half; natively it certifies the arithmetic.
+    ///
+    /// **Teeth**: swapping the restore's indices (buffer `k` into slot
+    /// `WORKERS-1-k`) fails the pattern assertion on every run — the failure
+    /// is deterministic, so the calibration is a control run, not an iteration
+    /// count (control seen red before this landed; see the checkpoint's log).
+    #[test]
+    fn bs_pool_partition_carves_disjoint_slots_and_restores_them() {
+        const WORKERS: usize = 2;
+        const LEN: usize = 64;
+
+        let mut pSmt = SSliceThreading::default();
+        for k in 0..WORKERS {
+            pSmt.pThreadBsBuffer[k] = vec![0u8; LEN];
+        }
+        pSmt.uiThreadBsBufferNum = WORKERS;
+
+        // The take — the fork entries' partition, same spelling.
+        let mut vTakenBsBufs: Vec<Vec<u8>> = (0..WORKERS)
+            .map(|k| std::mem::take(&mut pSmt.pThreadBsBuffer[k]))
+            .collect();
+
+        {
+            let pSmtShared: &SSliceThreading = &pSmt;
+            std::thread::scope(|s| {
+                for (k, buf) in vTakenBsBufs.iter_mut().enumerate() {
+                    s.spawn(move || {
+                        // Production's shape: a shared borrow of the owner held
+                        // beside this worker's `&mut` slot, both live across
+                        // the writes.
+                        assert_eq!(pSmtShared.uiThreadBsBufferNum, WORKERS);
+                        for (i, b) in buf.iter_mut().enumerate() {
+                            *b = (k as u8) ^ (i as u8);
+                        }
+                        assert_eq!(pSmtShared.uiThreadBsBufferNum, WORKERS);
+                    });
+                }
+            });
+        }
+
+        // The restore — buffer `k` to slot `k`.
+        for (k, buf) in vTakenBsBufs.into_iter().enumerate() {
+            pSmt.pThreadBsBuffer[k] = buf;
+        }
+
+        for k in 0..WORKERS {
+            for i in 0..LEN {
+                assert_eq!(
+                    pSmt.pThreadBsBuffer[k][i],
+                    (k as u8) ^ (i as u8),
+                    "slot {k} byte {i} did not come back from its own worker"
+                );
+            }
+        }
+    }
+
     #[test]
     fn test_dynamic_detect_cpu_cores() {
         let cores = DynamicDetectCpuCores();
@@ -1235,8 +1304,16 @@ pub struct SliceJobHandle<'a> {
     // the four raw families that made it so, and the borrow now crosses on its own
     // merits under `thread::scope`.
     pCtx: &'a sWelsEncCtx,
-    /// This worker's bs scratch slot: `pSliceThreading->pThreadBsBuffer[iBsSlot]`,
-    /// reached from the slice through `SSlice::uiBufferIdx`.
+    /// This worker's bs scratch bytes — `pThreadBsBuffer[iBsSlot]`'s buffer,
+    /// **taken out of the context before the fork and handed here** (S11.1b: the
+    /// pre-fork partition, `UpdateMbMapForked`'s pattern on the bitstream pool).
+    /// It borrows the fork entry's local, not the shared context, so the
+    /// compiler proves the per-worker disjointness the per-use re-derivation
+    /// could only assert. Restored to its slot after the join.
+    pBsBuf: &'a mut [u8],
+    /// This worker's bs scratch slot index — still carried because the slice
+    /// *claim* (`InitOneSliceInThread`) is by slot number, and the slice's
+    /// `uiBufferIdx` must agree with the buffer above (asserted in the job).
     iBsSlot: i32,
     iFirstSlice: i32,
     iSliceStep: i32,
@@ -1364,12 +1441,13 @@ pub struct SliceJobHandle<'a> {
 // disjointness and is refereed by the probes in `svc_encode_slice.rs`.
 
 impl<'a> SliceJobHandle<'a> {
-    /// # Safety
-    /// `pCtx`'s `pSliceThreading` must have been built by `RequestMtResource`, and
-    /// `iBsSlot` must be a slot that call allocated. Liveness is the reference's
-    /// since S10.13.
+    /// `pCtx`'s `pSliceThreading` must have been built by `RequestMtResource`,
+    /// `iBsSlot` must be a slot that call allocated, and `pBsBuf` must be that
+    /// slot's taken buffer (the fork entries' partition is the only maker).
+    /// Liveness is the references' since S10.13; nothing here is `unsafe`.
     fn new(
         pCtx: &'a sWelsEncCtx,
+        pBsBuf: &'a mut [u8],
         iBsSlot: i32,
         iFirstSlice: i32,
         iSliceStep: i32,
@@ -1380,12 +1458,10 @@ impl<'a> SliceJobHandle<'a> {
         // than trusted where it is used. Both entry points refuse a null
         // `pSliceThreading` before they get here.
         //
-        // **S10.13: the field, not `ctx_slice_threading_raw`.** That accessor reads
-        // the `Box`'s slot as a *value* so the answer survives later retags of the
-        // context (F71) — which matters for a pointer a worker will keep, and not
-        // at all for two `debug_assert!`s on the calling thread. The shared borrow
-        // is the whole of what this needs, and it is what makes this constructor
-        // safe.
+        // **S11.1b: the buffer-allocated check moved to the take** (the buffer
+        // the handle sees IS the slot's, by the partition's construction), so
+        // what remains here is F67's slot bound. The shared borrow is the whole
+        // of what this needs (S10.13).
         let pSmt = pCtx
             .pSliceThreading
             .as_deref()
@@ -1396,11 +1472,7 @@ impl<'a> SliceJobHandle<'a> {
             iBsSlot,
             pSmt.uiThreadBsBufferNum
         );
-        debug_assert!(
-            !pSmt.pThreadBsBuffer[iBsSlot as usize].is_empty(),
-            "job slot {iBsSlot} has no buffer behind it"
-        );
-        Self { pCtx, iBsSlot, iFirstSlice, iSliceStep, iSliceCount, bRecordsTime }
+        Self { pCtx, pBsBuf, iBsSlot, iFirstSlice, iSliceStep, iSliceCount, bRecordsTime }
     }
 }
 
@@ -1475,6 +1547,7 @@ unsafe fn EncodeOneSliceInJob(
     iSliceIdx: i32,
     iBsSlot: i32,
     bRecordsTime: bool,
+    pSlotBuf: &mut [u8],
 ) -> SliceJobResult {
     // ---- CWelsSliceEncodingTask::InitTask
     let eNalType = (*pCtx).eNalType;
@@ -1501,16 +1574,22 @@ unsafe fn EncodeOneSliceInJob(
     pSlice.sSliceBs.sBsWrite = BsWriter::new();
     let iSliceStart = if bRecordsTime { WelsTime() } else { 0 };
 
-    // **S11.1a: the slice's bitstream buffer is derived once, here**, and
-    // threaded down the writer chain — prefix, slice coding, and NAL
-    // encapsulation all reborrow this one derivation instead of re-deriving
-    // from the shared context inside the fork (F272's seam). The values are
-    // the ones every deep call read: the slice's claimed slot and its size.
+    // **S11.1b: the slice's bitstream buffer is the job's partition slot**,
+    // subsliced to the claimed size — no derivation from the shared context at
+    // all. The slot buffer left the context before the fork (the pre-fork
+    // partition), so this `&mut` is the compiler's, not an assertion; the
+    // assert bridges the old resolution path (by the slice's recorded
+    // `uiBufferIdx`) to the partition's (by the job's slot) — equal by
+    // construction, since `InitOneSliceInThread` stamps the claim with this
+    // job's slot. The subslice length is the claimed size every deep call used
+    // to pass to `thread_bs_buffer`; `uiSize` cannot exceed the slot (both are
+    // `iCountBsLen`, single writer), and a safe slice would panic where the
+    // raw form would have quietly overrun.
     // The `pOut` writer option is `None` on this side: F217 measured that arm
     // main-thread-only, and every slice of a forked layer has its own writer.
-    let kiBufferIdx = pSlice.uiBufferIdx as usize;
+    debug_assert_eq!(pSlice.uiBufferIdx as i32, iBsSlot, "the slice's claimed slot is this job's");
     let kuiSize = pSlice.sSliceBs.uiSize;
-    let pSliceBsBuf = crate::encoder::svc_encode_slice::thread_bs_buffer(pCtx, kiBufferIdx, kuiSize);
+    let pSliceBsBuf = &mut pSlotBuf[..kuiSize as usize];
     let mut pCtxOutBs: Option<&mut BsWriter> = None;
 
     // ---- CWelsSliceEncodingTask::ExecuteTask
@@ -1596,49 +1675,85 @@ pub unsafe fn EncodeFixedSlicesForked(pCtx: &mut sWelsEncCtx, kiSliceCount: i32)
     // ordering is now enforced rather than described.
     crate::encoder::svc_encode_slice::StampLayerIdrFlagForSliceType(pCtx);
 
-    // One handle per worker, each carrying its own slot — constructed here, on the
-    // calling thread, so the slot bound is checked before anything spawns.
-    let pCtx: &sWelsEncCtx = pCtx;
-    let mut jobs: Vec<SliceJobHandle<'_>> = Vec::with_capacity(iWidth as usize);
-    for k in 0..iWidth {
-        jobs.push(SliceJobHandle::new(pCtx, k, k, iWidth, kiSliceCount, bRecordsTime));
-    }
+    // **S11.1b: the pre-fork partition of the bitstream pool** — S10.4's pattern
+    // (`UpdateMbMapForked`'s grid carve) applied to the pair's buffer half. The
+    // worker buffers leave the context while it is still `&mut` — the borrow
+    // that cannot coexist with the fork — so each worker's `&mut [u8]` borrows
+    // this local, never the shared context, and the compiler proves the
+    // disjointness the per-use re-derivation could only assert. Taken, not
+    // copied: the pool is `[Vec<u8>; MAX_THREADS_NUM]`, and moving a `Vec`
+    // moves no bytes. Restored below, after the join, behind the same `&mut`.
+    let mut vTakenBsBufs: Vec<Vec<u8>> = {
+        let pSmt = pCtx.pSliceThreading.as_deref_mut().expect("guarded above");
+        (0..iWidth as usize)
+            .map(|k| {
+                let buf = std::mem::take(&mut pSmt.pThreadBsBuffer[k]);
+                // Part 3's allocation check, moved here from the handle: the
+                // buffer the handle will see is this one.
+                debug_assert!(!buf.is_empty(), "job slot {k} has no buffer behind it");
+                buf
+            })
+            .collect()
+    };
 
     let mut iErr = ENC_RETURN_SUCCESS;
-    std::thread::scope(|s| {
-        let mut handles = Vec::with_capacity(jobs.len());
-        for job in jobs {
-            handles.push(s.spawn(move || {
-                // `job` is the whole capture: the seam is this one move, and
-                // nothing else crosses.
-                let job = job;
-                let mut iWorkerErr = ENC_RETURN_SUCCESS;
-                let mut iSliceIdx = job.iFirstSlice;
-                while iSliceIdx < job.iSliceCount {
-                    let r = EncodeOneSliceInJob(
-                        &*job.pCtx,
-                        iSliceIdx,
-                        job.iBsSlot,
-                        job.bRecordsTime,
-                    );
-                    if !r.bInitFailed && r.iResult != ENC_RETURN_SUCCESS {
-                        iWorkerErr |= r.iResult;
-                    }
-                    if r.bInitFailed {
-                        // `Execute`'s early return: this task is over, and it
-                        // reports nothing. The remaining slices of this worker
-                        // were separate tasks and still run, as they would have.
-                    }
-                    iSliceIdx += job.iSliceStep;
-                }
-                iWorkerErr
-            }));
+    {
+        // One handle per worker, each carrying its own slot and that slot's
+        // taken buffer — constructed here, on the calling thread, so the slot
+        // bound is checked before anything spawns.
+        let pCtx: &sWelsEncCtx = pCtx;
+        let mut jobs: Vec<SliceJobHandle<'_>> = Vec::with_capacity(iWidth as usize);
+        for (k, buf) in vTakenBsBufs.iter_mut().enumerate() {
+            let k = k as i32;
+            jobs.push(SliceJobHandle::new(pCtx, buf.as_mut_slice(), k, k, iWidth, kiSliceCount, bRecordsTime));
         }
-        // The join IS the barrier `WelsTaskBarrier` was.
-        for h in handles {
-            iErr |= h.join().unwrap_or(ENC_RETURN_UNEXPECTED);
+
+        std::thread::scope(|s| {
+            let mut handles = Vec::with_capacity(jobs.len());
+            for job in jobs {
+                handles.push(s.spawn(move || {
+                    // `job` is the whole capture: the seam is this one move, and
+                    // nothing else crosses.
+                    let mut job = job;
+                    let mut iWorkerErr = ENC_RETURN_SUCCESS;
+                    let mut iSliceIdx = job.iFirstSlice;
+                    while iSliceIdx < job.iSliceCount {
+                        let r = EncodeOneSliceInJob(
+                            &*job.pCtx,
+                            iSliceIdx,
+                            job.iBsSlot,
+                            job.bRecordsTime,
+                            &mut *job.pBsBuf,
+                        );
+                        if !r.bInitFailed && r.iResult != ENC_RETURN_SUCCESS {
+                            iWorkerErr |= r.iResult;
+                        }
+                        if r.bInitFailed {
+                            // `Execute`'s early return: this task is over, and it
+                            // reports nothing. The remaining slices of this worker
+                            // were separate tasks and still run, as they would have.
+                        }
+                        iSliceIdx += job.iSliceStep;
+                    }
+                    iWorkerErr
+                }));
+            }
+            // The join IS the barrier `WelsTaskBarrier` was.
+            for h in handles {
+                iErr |= h.join().unwrap_or(ENC_RETURN_UNEXPECTED);
+            }
+        });
+    }
+
+    // The buffers go back to their slots, contents carried — a worker's bytes
+    // live in the `Vec` it wrote, and post-join assembly (`WriteSliceIToFrameBs`
+    // and friends) reads them from the context exactly as before.
+    {
+        let pSmt = pCtx.pSliceThreading.as_deref_mut().expect("guarded above");
+        for (k, buf) in vTakenBsBufs.into_iter().enumerate() {
+            pSmt.pThreadBsBuffer[k] = buf;
         }
-    });
+    }
 
     iErr
 }
@@ -1779,6 +1894,7 @@ unsafe fn EncodeOnePartitionSizeLimited(
     pCtx: &sWelsEncCtx,
     iPartitionIdx: i32,
     iBsSlot: i32,
+    pSlotBuf: &mut [u8],
 ) -> SliceJobResult {
     // ---- InitTask (base), minus the slot claim
     let eNalType = (*pCtx).eNalType;
@@ -1884,13 +2000,14 @@ unsafe fn EncodeOnePartitionSizeLimited(
             let pSliceBs = std::ptr::addr_of_mut!((*pSlice).sSliceBs);
             (*pSliceBs).sBsWrite = BsWriter::new();
 
-            // S11.1a: one derivation per coded slice, re-taken each iteration
-            // because `InitOneSliceInThread` re-resolves the slice (and with it
-            // the claimed size) after every reallocation. Same slot, same size
-            // the deep calls used to read for themselves.
-            let kiBufferIdx = (*pSlice).uiBufferIdx as usize;
+            // S11.1b: the partition slot, subsliced per coded slice — re-taken
+            // each iteration because `InitOneSliceInThread` re-resolves the
+            // slice (and with it the claimed size) after every reallocation.
+            // Same slot, same size the deep calls used to read for themselves;
+            // see `EncodeOneSliceInJob` for the slot/size invariants.
+            debug_assert_eq!((*pSlice).uiBufferIdx as i32, iBsSlot, "the slice's claimed slot is this job's");
             let kuiSize = (*pSlice).sSliceBs.uiSize;
-            let pSliceBsBuf = crate::encoder::svc_encode_slice::thread_bs_buffer(pCtx, kiBufferIdx, kuiSize);
+            let pSliceBsBuf = &mut pSlotBuf[..kuiSize as usize];
             let mut pCtxOutBs: Option<&mut BsWriter> = None;
 
             if bNeedPrefix {
@@ -1966,30 +2083,64 @@ pub unsafe fn EncodeSizeLimitedSlicesForked(pCtx: &mut sWelsEncCtx, kiPartitionC
     // body's last `&mut` use and the handles hold a shared borrow now.
     crate::encoder::svc_encode_slice::StampLayerIdrFlagForSliceType(pCtx);
 
-    let pCtx: &sWelsEncCtx = pCtx;
-    let mut jobs: Vec<SliceJobHandle<'_>> = Vec::with_capacity(iWidth as usize);
-    for k in 0..iWidth {
-        jobs.push(SliceJobHandle::new(pCtx, k, k, iWidth, kiPartitionCnt, true));
-    }
+    // **S11.1b: the pre-fork partition of the bitstream pool** — S10.4's pattern
+    // (`UpdateMbMapForked`'s grid carve) applied to the pair's buffer half. The
+    // worker buffers leave the context while it is still `&mut` — the borrow
+    // that cannot coexist with the fork — so each worker's `&mut [u8]` borrows
+    // this local, never the shared context, and the compiler proves the
+    // disjointness the per-use re-derivation could only assert. Taken, not
+    // copied: the pool is `[Vec<u8>; MAX_THREADS_NUM]`, and moving a `Vec`
+    // moves no bytes. Restored below, after the join, behind the same `&mut`.
+    let mut vTakenBsBufs: Vec<Vec<u8>> = {
+        let pSmt = pCtx.pSliceThreading.as_deref_mut().expect("guarded above");
+        (0..iWidth as usize)
+            .map(|k| {
+                let buf = std::mem::take(&mut pSmt.pThreadBsBuffer[k]);
+                // Part 3's allocation check, moved here from the handle: the
+                // buffer the handle will see is this one.
+                debug_assert!(!buf.is_empty(), "job slot {k} has no buffer behind it");
+                buf
+            })
+            .collect()
+    };
 
     let mut iErr = ENC_RETURN_SUCCESS;
-    std::thread::scope(|s| {
-        let mut handles = Vec::with_capacity(jobs.len());
-        for job in jobs {
-            handles.push(s.spawn(move || {
-                let job = job;
-                let r = EncodeOnePartitionSizeLimited(&*job.pCtx, job.iFirstSlice, job.iBsSlot);
-                if !r.bInitFailed && r.iResult != ENC_RETURN_SUCCESS {
-                    r.iResult
-                } else {
-                    ENC_RETURN_SUCCESS
-                }
-            }));
+    {
+        let pCtx: &sWelsEncCtx = pCtx;
+        let mut jobs: Vec<SliceJobHandle<'_>> = Vec::with_capacity(iWidth as usize);
+        for (k, buf) in vTakenBsBufs.iter_mut().enumerate() {
+            let k = k as i32;
+            jobs.push(SliceJobHandle::new(pCtx, buf.as_mut_slice(), k, k, iWidth, kiPartitionCnt, true));
         }
-        for h in handles {
-            iErr |= h.join().unwrap_or(ENC_RETURN_UNEXPECTED);
+
+        std::thread::scope(|s| {
+            let mut handles = Vec::with_capacity(jobs.len());
+            for job in jobs {
+                handles.push(s.spawn(move || {
+                    let mut job = job;
+                    let r = EncodeOnePartitionSizeLimited(&*job.pCtx, job.iFirstSlice, job.iBsSlot, &mut *job.pBsBuf);
+                    if !r.bInitFailed && r.iResult != ENC_RETURN_SUCCESS {
+                        r.iResult
+                    } else {
+                        ENC_RETURN_SUCCESS
+                    }
+                }));
+            }
+            for h in handles {
+                iErr |= h.join().unwrap_or(ENC_RETURN_UNEXPECTED);
+            }
+        });
+    }
+
+    // The buffers go back to their slots, contents carried — a worker's bytes
+    // live in the `Vec` it wrote, and post-join assembly (`WriteSliceIToFrameBs`
+    // and friends) reads them from the context exactly as before.
+    {
+        let pSmt = pCtx.pSliceThreading.as_deref_mut().expect("guarded above");
+        for (k, buf) in vTakenBsBufs.into_iter().enumerate() {
+            pSmt.pThreadBsBuffer[k] = buf;
         }
-    });
+    }
 
     iErr
 }

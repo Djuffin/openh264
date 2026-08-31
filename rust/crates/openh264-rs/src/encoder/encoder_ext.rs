@@ -3389,24 +3389,29 @@ pub unsafe fn WelsCodeOnePicPartition(
         // sequence is unchanged.
         crate::encoder::svc_encode_slice::StampLayerIdrFlagForSliceType(pCtx);
 
-        // **S11.1a: the pOut arm's one derivation** — `slice_bs_buffer`'s and
-        // `slice_writer`'s else-arms (F217's main-thread-only side), hoisted to
-        // the chain's top and threaded down. Raw for the reason those were: this
-        // body holds `&mut pCtx` and the chain below takes `&pCtx`, so a safe
-        // `&mut` into `pOut` cannot coexist with it; the slot reads keep the
-        // heap block's own provenance (F71). Nothing uses the pair after the
-        // call, so the next `pOut` reborrow retires it harmlessly.
-        let pOut = crate::encoder::encoder_context::ctx_out_raw(pCtx);
-        let vOutBsBuf = std::ptr::addr_of_mut!((*pOut).sBsBuffer);
-        let pSliceBsBuf = std::slice::from_raw_parts_mut((*vOutBsBuf).as_mut_ptr(), (*vOutBsBuf).len());
-        let mut pCtxOutBs: Option<&mut crate::encoder::vlc_encoder::BsWriter> = Some(&mut (*pOut).sBsWrite);
+        // **S11.1b: the pOut pair leaves the context for the call — safe now.**
+        // The buffer is taken (a `Vec` move, no bytes) and the writer read out
+        // (`BsWriter` is `Copy`); both are restored immediately after the call,
+        // before the error check, so every exit path sees them back. Nothing in
+        // the chain reaches `pOut` through the context any more (S11.1a threaded
+        // the pair), which is what makes the momentary absence invisible — and
+        // what S11.1a's raw hoist could only assert, the borrow checker now
+        // proves: the chain's `&pCtx` coexists with `&mut` locals, not with
+        // `&mut` context fields.
+        let pOutRef = pCtx.pOut.as_deref_mut().expect("pOut lives");
+        let mut vOutBsBuf = std::mem::take(&mut pOutRef.sBsBuffer);
+        let mut sOutBsWrite = pOutRef.sBsWrite;
+        let mut pCtxOutBs: Option<&mut crate::encoder::vlc_encoder::BsWriter> = Some(&mut sOutBsWrite);
         iReturn = crate::encoder::svc_encode_slice::WelsCodeOneSlice(
             pCtx,
             &mut *pCurSlice,
             keNalType as i32,
-            pSliceBsBuf,
+            vOutBsBuf.as_mut_slice(),
             &mut pCtxOutBs,
         );
+        let pOutRef = pCtx.pOut.as_deref_mut().expect("pOut lives");
+        pOutRef.sBsBuffer = vOutBsBuf;
+        pOutRef.sBsWrite = sOutBsWrite;
         if iReturn != ENC_RETURN_SUCCESS {
             return iReturn;
         }
@@ -3875,19 +3880,25 @@ pub unsafe fn WelsEncoderEncodeExt(
 
             // T7.C3, as above.
             crate::encoder::svc_encode_slice::StampLayerIdrFlagForSliceType(pCtx);
-            // **S11.1a: the pOut arm's one derivation** — `slice_bs_buffer`'s and
-            // `slice_writer`'s else-arms (F217's main-thread-only side), hoisted to
-            // the chain's top and threaded down. Raw for the reason those were: this
-            // body holds `&mut pCtx` and the chain below takes `&pCtx`, so a safe
-            // `&mut` into `pOut` cannot coexist with it; the slot reads keep the
-            // heap block's own provenance (F71). Nothing uses the pair after the
-            // call, so the next `pOut` reborrow retires it harmlessly.
-            let pOut = crate::encoder::encoder_context::ctx_out_raw(pCtx);
-            let vOutBsBuf = std::ptr::addr_of_mut!((*pOut).sBsBuffer);
-            let pSliceBsBuf = std::slice::from_raw_parts_mut((*vOutBsBuf).as_mut_ptr(), (*vOutBsBuf).len());
-            let mut pCtxOutBs: Option<&mut crate::encoder::vlc_encoder::BsWriter> = Some(&mut (*pOut).sBsWrite);
-            pCtx.iEncoderError =
-                crate::encoder::svc_encode_slice::WelsCodeOneSlice(pCtx, &mut *pCurSlice, eNalType as i32, pSliceBsBuf, &mut pCtxOutBs);
+            // **S11.1b: the pOut pair leaves the context for the call — safe now.**
+            // The buffer is taken (a `Vec` move, no bytes) and the writer read out
+            // (`BsWriter` is `Copy`); both are restored immediately after the call,
+            // before the error check, so every exit path sees them back. Nothing in
+            // the chain reaches `pOut` through the context any more (S11.1a threaded
+            // the pair), which is what makes the momentary absence invisible — and
+            // what S11.1a's raw hoist could only assert, the borrow checker now
+            // proves: the chain's `&pCtx` coexists with `&mut` locals, not with
+            // `&mut` context fields.
+            let pOutRef = pCtx.pOut.as_deref_mut().expect("pOut lives");
+            let mut vOutBsBuf = std::mem::take(&mut pOutRef.sBsBuffer);
+            let mut sOutBsWrite = pOutRef.sBsWrite;
+            let mut pCtxOutBs: Option<&mut crate::encoder::vlc_encoder::BsWriter> = Some(&mut sOutBsWrite);
+            let iCodeRet =
+                crate::encoder::svc_encode_slice::WelsCodeOneSlice(pCtx, &mut *pCurSlice, eNalType as i32, vOutBsBuf.as_mut_slice(), &mut pCtxOutBs);
+            let pOutRef = pCtx.pOut.as_deref_mut().expect("pOut lives");
+            pOutRef.sBsBuffer = vOutBsBuf;
+            pOutRef.sBsWrite = sOutBsWrite;
+            pCtx.iEncoderError = iCodeRet;
             if pCtx.iEncoderError != ENC_RETURN_SUCCESS {
                 return pCtx.iEncoderError;
             }
@@ -4097,23 +4108,29 @@ pub unsafe fn WelsEncoderEncodeExt(
 
                 // T7.C3, as above.
                 crate::encoder::svc_encode_slice::StampLayerIdrFlagForSliceType(pCtx);
-                // **S11.1a: the pOut arm's one derivation** — `slice_bs_buffer`'s and
-                // `slice_writer`'s else-arms (F217's main-thread-only side), hoisted to
-                // the chain's top and threaded down. Raw for the reason those were: this
-                // body holds `&mut pCtx` and the chain below takes `&pCtx`, so a safe
-                // `&mut` into `pOut` cannot coexist with it; the slot reads keep the
-                // heap block's own provenance (F71). Nothing uses the pair after the
-                // call, so the next `pOut` reborrow retires it harmlessly.
-                let pOut = crate::encoder::encoder_context::ctx_out_raw(pCtx);
-                let vOutBsBuf = std::ptr::addr_of_mut!((*pOut).sBsBuffer);
-                let pSliceBsBuf = std::slice::from_raw_parts_mut((*vOutBsBuf).as_mut_ptr(), (*vOutBsBuf).len());
-                let mut pCtxOutBs: Option<&mut crate::encoder::vlc_encoder::BsWriter> = Some(&mut (*pOut).sBsWrite);
-                pCtx.iEncoderError = crate::encoder::svc_encode_slice::WelsCodeOneSlice(pCtx,
+                // **S11.1b: the pOut pair leaves the context for the call — safe now.**
+                // The buffer is taken (a `Vec` move, no bytes) and the writer read out
+                // (`BsWriter` is `Copy`); both are restored immediately after the call,
+                // before the error check, so every exit path sees them back. Nothing in
+                // the chain reaches `pOut` through the context any more (S11.1a threaded
+                // the pair), which is what makes the momentary absence invisible — and
+                // what S11.1a's raw hoist could only assert, the borrow checker now
+                // proves: the chain's `&pCtx` coexists with `&mut` locals, not with
+                // `&mut` context fields.
+                let pOutRef = pCtx.pOut.as_deref_mut().expect("pOut lives");
+                let mut vOutBsBuf = std::mem::take(&mut pOutRef.sBsBuffer);
+                let mut sOutBsWrite = pOutRef.sBsWrite;
+                let mut pCtxOutBs: Option<&mut crate::encoder::vlc_encoder::BsWriter> = Some(&mut sOutBsWrite);
+                let iCodeRet = crate::encoder::svc_encode_slice::WelsCodeOneSlice(pCtx,
                     &mut *pCurSlice,
                     eNalType as i32,
-                    pSliceBsBuf,
+                    vOutBsBuf.as_mut_slice(),
                     &mut pCtxOutBs,
                 );
+                let pOutRef = pCtx.pOut.as_deref_mut().expect("pOut lives");
+                pOutRef.sBsBuffer = vOutBsBuf;
+                pOutRef.sBsWrite = sOutBsWrite;
+                pCtx.iEncoderError = iCodeRet;
                 if pCtx.iEncoderError != ENC_RETURN_SUCCESS {
                     return pCtx.iEncoderError;
                 }
