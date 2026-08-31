@@ -3371,9 +3371,7 @@ pub fn StampLayerIdrFlagForSliceType(pEncCtx: &mut sWelsEncCtx) {
     pCurLayer.sLayerInfo.sNalHeaderExt.bIdrFlag = true;
 }
 
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
-pub unsafe fn WelsCodeOneSlice(
+pub fn WelsCodeOneSlice(
     pEncCtx: &sWelsEncCtx,
     pCurSlice: &mut SSlice,
     kiNalType: i32,
@@ -3385,19 +3383,16 @@ pub unsafe fn WelsCodeOneSlice(
     // **S7.A5**: the `is_null()` guard and its early return retire with the
     // parameter — every context reaching this body comes from a `&mut sWelsEncCtx`
     // held by one of the three fork entry points or the frame loop, never a null.
-    let pCurLayer = current_layer(pEncCtx);
-    // S29: raw, not `&mut` — this is held across `g_pWelsWriteSliceHeader`, whose
-    // two bodies derive `&mut` to the same field (`:816`, `:902`) and popped it
-    // (the encode probe's first red on the walk, Phase 6 session B).
-    //
-    // **S10.3d: that premise looks expired and is not acted on here.** Both of
-    // those bodies use `addr_of_mut!` now, not `&mut` — a raw derivation creates
-    // no reference and so cannot pop a shared parent — and neither *writes*
-    // through it (checked: zero writes through `pNalHead` in either). A shared
-    // `&pCurLayer.sLayerInfo.sNalHeaderExt` here would very likely stand. The
-    // referee is the two full-encode Miri probes S29's red came from, not a
-    // reading of the code, so this is left for a checkpoint that runs them.
-    let pNalHeadExt = std::ptr::addr_of_mut!((*pCurLayer).sLayerInfo.sNalHeaderExt);
+    let pCurLayer = current_layer_ref(pEncCtx)
+        .expect("the frame's current layer is stamped");
+    // **S11.31: the held NAL-header cursor is two scalar reads.** S29 kept it
+    // raw so it would survive the header writers' derivations; S10.3d recorded
+    // that premise as looking expired but deferred to the full-encode probes,
+    // because a *held* shared borrow across those calls is what they refereed.
+    // Reading `bIdrFlag` and `uiTemporalId` out here holds nothing across
+    // anything — each read is a momentary shared retag, both values are stable
+    // for the slice (`StampLayerIdrFlagForSliceType` runs pre-fork, T7.C3) —
+    // so the question those probes would have answered no longer exists.
 
     let kiDynamicSliceFlag = if (*pEncCtx).param_opt().is_some() {
         let did = (*pEncCtx).uiDependencyId as usize;
@@ -3417,17 +3412,17 @@ pub unsafe fn WelsCodeOneSlice(
         // own and stays. The assert is the hoist's contract, checked where the
         // statement used to be.
         debug_assert!(
-            (*pNalHeadExt).bIdrFlag,
+            pCurLayer.sLayerInfo.sNalHeaderExt.bIdrFlag,
             "StampLayerIdrFlagForSliceType was not run before WelsCodeOneSlice on an I_SLICE"
         );
         (*pCurSlice).sScaleShift = 0;
     } else {
-        let kuiTemporalId = (*pNalHeadExt).uiTemporalId;
+        let kuiTemporalId = pCurLayer.sLayerInfo.sNalHeaderExt.uiTemporalId;
         let ref_temporal = ctx_ref_pic(pEncCtx).map_or(0, |p| p.uiTemporalId);
         (*pCurSlice).sScaleShift = if kuiTemporalId != 0 { kuiTemporalId.saturating_sub(ref_temporal) } else { 0 };
     }
 
-    WelsSliceHeaderExtInit(pEncCtx, Some(&*pCurLayer), &mut *pCurSlice);
+    WelsSliceHeaderExtInit(pEncCtx, Some(pCurLayer), &mut *pCurSlice);
 
     //RomRC init slice by slice
     // A2: the raw accessor answered null on an empty array and this is the one
@@ -3446,7 +3441,7 @@ pub unsafe fn WelsCodeOneSlice(
         // S11.2a: the writers take the layer shared. This whole-layer retag sits
         // where `WelsSliceHeaderExtInit`'s already did (the S6.A1/F239 note two
         // lines up), so the re-derivation discipline below it is unchanged.
-        &*pCurLayer,
+        pCurLayer,
         &mut *pCurSlice,
         // T6.I1: was guarded on the table being non-null; it is owned now.
         (*pEncCtx).func_list().pParametersetStrategy.as_deref(),
@@ -3454,14 +3449,13 @@ pub unsafe fn WelsCodeOneSlice(
         &mut *pCtxOutBs,
     );
 
-    let pic_init_qp = layer_pps_ref(pEncCtx, &*pCurLayer).map_or(26, |p| p.iPicInitQp);
+    let pic_init_qp = layer_pps_ref(pEncCtx, pCurLayer).map_or(26, |p| p.iPicInitQp);
     (*pCurSlice).uiLastMbQp =
         (pic_init_qp as i32 + (*pCurSlice).sSliceHeaderExt.sSliceHeader.iSliceQpDelta as i32) as u8;
 
-    // **S6.A1 / F239**: re-derived. `WelsSliceHeaderExtInit(.., Some(pCurLayer), ..)`
-    // above is a whole-layer shared retag that pops the `addr_of_mut!` bound at the top
-    // of this function; the two uses before it are still on the live tag, this one is not.
-    let idr_idx = (*std::ptr::addr_of!((*pCurLayer).sLayerInfo.sNalHeaderExt)).bIdrFlag as usize;
+    // S11.31: a fresh scalar read — the F239 re-derivation note retired with
+    // the held cursor it explained.
+    let idr_idx = pCurLayer.sLayerInfo.sNalHeaderExt.bIdrFlag as usize;
     let func = g_pWelsSliceCoding[idr_idx][kiDynamicSliceFlag];
     let iEncReturn = func(pEncCtx, &mut *pCurSlice, &mut *pSliceBsBuf, &mut *pCtxOutBs, pMbs, pRestoreBuf);
     if iEncReturn != ENC_RETURN_SUCCESS {
@@ -3943,7 +3937,7 @@ pub fn InitOneSliceInThread(
 
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
-pub unsafe fn InitSliceThreadInfo(
+pub fn InitSliceThreadInfo(
     pCtx: &mut sWelsEncCtx,
     pDqLayer: &mut SDqLayer,
     kiDlayerIndex: i32,
@@ -3974,13 +3968,20 @@ pub unsafe fn InitSliceThreadInfo(
 
         // T9.E2h, shape B as above: the flag is read before the call.
         let kbSliceBsBufferFlag = (*pDqLayer).bSliceBsBufferFlag;
-        let iRet = InitSliceList(
-            pDqLayer,
-            iIdx,
-            iMaxSliceNum,
-            pCtx.iSliceBufferSize[kiDlayerIndex as usize],
-            kbSliceBsBufferFlag,
-        );
+        // S11.31: the callee's claim — `InitSliceList` seeds each slice's NAL
+        // tracking through the bank walk (the slice-bank family). Arguments are
+        // the references this body already holds.
+        // unsafe-cat: fork-shared(S63)
+        #[allow(unsafe_code)]
+        let iRet = unsafe {
+            InitSliceList(
+                pDqLayer,
+                iIdx,
+                iMaxSliceNum,
+                pCtx.iSliceBufferSize[kiDlayerIndex as usize],
+                kbSliceBsBufferFlag,
+            )
+        };
         if iRet != ENC_RETURN_SUCCESS {
             return iRet;
         }
@@ -3997,9 +3998,7 @@ pub unsafe fn InitSliceThreadInfo(
     ENC_RETURN_SUCCESS
 }
 
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn InitSliceInLayer(
+pub fn InitSliceInLayer(
     pCtx: &mut sWelsEncCtx,
     pDqLayer: &mut SDqLayer,
     kiDlayerIndex: i32,
@@ -4455,7 +4454,7 @@ pub fn GetCurrentSliceNum(pCurDq: &SDqLayer) -> i32 {
 /// passes and what the C++'s own `while (pLBI1 != pLayerBsInfo)` assumes.
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
-pub unsafe fn FrameBsRealloc(
+pub fn FrameBsRealloc(
     pCtx: &mut sWelsEncCtx,
     // **S11.20: the frame and an index.** The pointer pair carried an index
     // the whole time — the body recovered it with `offset_from` and then
@@ -4512,10 +4511,18 @@ pub unsafe fn FrameBsRealloc(
     // every layer pointing at the wrong slot; `encode_loop_runs_over_size_
     // limited_dynamic_slices_under_the_aliasing_checker` catches exactly that
     // (F60's staleness assertion), and did.
-    let mut cursor = pNalLen;
-    for i in 0..=iLbi {
-        pFbi.sLayerInfo[i].pNalLengthInByte = cursor;
-        cursor = cursor.add(pFbi.sLayerInfo[i].iNalCount as usize);
+    // S11.31: the body's one remaining op, in its own block — the cursor walks
+    // `pNalLengthInByte`, a raw the frozen C ABI mandates (`SFrameBSInfo` is
+    // application-visible), advancing by each layer's NAL count over the array
+    // the realloc above just rebuilt.
+    // unsafe-cat: C-ABI
+    #[allow(unsafe_code)]
+    unsafe {
+        let mut cursor = pNalLen;
+        for i in 0..=iLbi {
+            pFbi.sLayerInfo[i].pNalLengthInByte = cursor;
+            cursor = cursor.add(pFbi.sLayerInfo[i].iNalCount as usize);
+        }
     }
 
     ENC_RETURN_SUCCESS
@@ -4523,7 +4530,7 @@ pub unsafe fn FrameBsRealloc(
 
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
-pub unsafe fn SliceLayerInfoUpdate(
+pub fn SliceLayerInfoUpdate(
     pCtx: &mut sWelsEncCtx,
     // S11.20: the frame and an index — see `FrameBsRealloc`.
     pFbi: &mut SFrameBSInfo,
@@ -4547,7 +4554,11 @@ pub unsafe fn SliceLayerInfoUpdate(
 
     // T9.G6: hoisted (shape B).
     let iActiveThreadsNum = pCtx.iActiveThreadsNum as i32;
-    let mut iRet = ReOrderSliceInLayer(pCtx, kuiSliceMode, iActiveThreadsNum);
+    // S11.31: the callee's claim — `ReOrderSliceInLayer` walks neighbouring
+    // slices out of the bank roots (the slice-bank family).
+    // unsafe-cat: fork-shared(S63)
+    #[allow(unsafe_code)]
+    let mut iRet = unsafe { ReOrderSliceInLayer(pCtx, kuiSliceMode, iActiveThreadsNum) };
     if iRet != ENC_RETURN_SUCCESS {
         return iRet;
     }
