@@ -1901,77 +1901,47 @@ pub unsafe extern "C" fn MeRefineFracPixel(
 // indirection never had a consumer here. One `port-raw` tag retires with it.
 
 
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn MvdCostInit(pMvdCostInter: &mut [u16], kiMvdSz: i32) {
-    // S4.C4: the table arrives as the slice its one caller already holds
-    // (`ctx.mvd_cost_table_mut()`, previously `.as_mut_ptr()`d at the call). The two
-    // walking cursors below stay raw — they run 52 x kiMvdSz interleaved writes from
-    // both ends of the table and are the hottest init loop in the encoder; what the
-    // slice buys is that the *extent* is now carried rather than trusted, and the
-    // root is derived from it here instead of at a call site that could pass anything.
+pub fn MvdCostInit(pMvdCostInter: &mut [u16], kiMvdSz: i32) {
+    // S4.C4: the table arrives as the slice its one caller already holds.
+    //
+    // **S11.15: the two walking cursors are indices.** They ran 52 x kiMvdSz
+    // interleaved writes from both ends of each row, and F227 recorded the trap
+    // they had to avoid — two `as_mut_ptr()` calls are two `Unique` retags, the
+    // second popping the first, so both cursors had to be siblings of one root.
+    // As indices that hazard does not exist to avoid: there is no tag to pop,
+    // the two positions are plain integers into one `&mut [u16]`, and every
+    // write is bounds-checked. Same rows, same order, same values.
     let kiSz = kiMvdSz >> 1;
-    // **F227, and it is F215's rule one container in.** These were two separate
-    // `pMvdCostInter.as_mut_ptr()` calls. `as_mut_ptr` takes `&mut self`, so the
-    // second call is a *fresh* `Unique` retag over the slice and it pops the tag the
-    // first cursor was still holding — the next write through `pNegMvd` is then a
-    // write with a dead tag. Two raw cursors into one buffer may only coexist if
-    // they come off the **same** derivation, so the root is taken once and both
-    // cursors are siblings of it.
-    let pRoot = pMvdCostInter.as_mut_ptr();
-    let mut pNegMvd = pRoot;
-    let mut pPosMvd = pRoot.offset((kiSz + 1) as isize);
     debug_assert!(
         (52 * kiMvdSz as usize) <= pMvdCostInter.len(),
         "the MVD cost table is smaller than the 52 QP rows this fills"
     );
-    let kpQpLambda = g_kiQpCostTable.as_ptr();
+    let mut iNegMvd = 0usize;
+    let mut iPosMvd = (kiSz + 1) as usize;
 
     for i in 0..52 {
-        let kiLambda = *kpQpLambda.add(i) as u16;
+        let kiLambda = g_kiQpCostTable[i] as u16;
         let mut iNegSe = -kiSz;
         let mut iPosSe = 1i32;
 
         let mut j = 0;
         while j < kiSz {
-            *pNegMvd = kiLambda.wrapping_mul(BsSizeSE(iNegSe) as u16);
-            pNegMvd = pNegMvd.add(1);
-            iNegSe += 1;
-
-            *pNegMvd = kiLambda.wrapping_mul(BsSizeSE(iNegSe) as u16);
-            pNegMvd = pNegMvd.add(1);
-            iNegSe += 1;
-
-            *pNegMvd = kiLambda.wrapping_mul(BsSizeSE(iNegSe) as u16);
-            pNegMvd = pNegMvd.add(1);
-            iNegSe += 1;
-
-            *pNegMvd = kiLambda.wrapping_mul(BsSizeSE(iNegSe) as u16);
-            pNegMvd = pNegMvd.add(1);
-            iNegSe += 1;
-
-            *pPosMvd = kiLambda.wrapping_mul(BsSizeSE(iPosSe) as u16);
-            pPosMvd = pPosMvd.add(1);
-            iPosSe += 1;
-
-            *pPosMvd = kiLambda.wrapping_mul(BsSizeSE(iPosSe) as u16);
-            pPosMvd = pPosMvd.add(1);
-            iPosSe += 1;
-
-            *pPosMvd = kiLambda.wrapping_mul(BsSizeSE(iPosSe) as u16);
-            pPosMvd = pPosMvd.add(1);
-            iPosSe += 1;
-
-            *pPosMvd = kiLambda.wrapping_mul(BsSizeSE(iPosSe) as u16);
-            pPosMvd = pPosMvd.add(1);
-            iPosSe += 1;
-
+            for _ in 0..4 {
+                pMvdCostInter[iNegMvd] = kiLambda.wrapping_mul(BsSizeSE(iNegSe) as u16);
+                iNegMvd += 1;
+                iNegSe += 1;
+            }
+            for _ in 0..4 {
+                pMvdCostInter[iPosMvd] = kiLambda.wrapping_mul(BsSizeSE(iPosSe) as u16);
+                iPosMvd += 1;
+                iPosSe += 1;
+            }
             j += 4;
         }
 
-        *pNegMvd = kiLambda;
-        pNegMvd = pNegMvd.offset((kiSz + 1) as isize);
-        pPosMvd = pPosMvd.offset((kiSz + 1) as isize);
+        pMvdCostInter[iNegMvd] = kiLambda;
+        iNegMvd += (kiSz + 1) as usize;
+        iPosMvd += (kiSz + 1) as usize;
     }
 }
 
