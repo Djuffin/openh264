@@ -3439,13 +3439,27 @@ pub unsafe fn WelsCodeOnePicPartition(
         let mut vOutBsBuf = std::mem::take(&mut pOutRef.sBsBuffer);
         let mut sOutBsWrite = pOutRef.sBsWrite;
         let mut pCtxOutBs: Option<&mut crate::encoder::vlc_encoder::BsWriter> = Some(&mut sOutBsWrite);
+        // **S11.27: the macroblock grid leaves the layer for the call**, exactly
+        // as the `pOut` pair above does and for the same reason: the chain takes
+        // `&sWelsEncCtx`, so a `&mut` to a field inside it cannot span the call.
+        // `MbArray::empty()` is a `Vec::new()` — the swap moves two pointers and
+        // no records — and the restore precedes the error check, so every exit
+        // path sees the grid back.
+        let mut sMbData = std::mem::replace(
+            &mut current_layer_mut(pCtx).expect("the frame's current layer is stamped").sMbDataP,
+            crate::safe::mb_grid::MbArray::empty(),
+        );
+        let mut sMbWindow = crate::safe::mb_grid::MbWindow::whole(&mut sMbData, 0);
         iReturn = crate::encoder::svc_encode_slice::WelsCodeOneSlice(
             pCtx,
             &mut *pCurSlice,
             keNalType as i32,
             vOutBsBuf.as_mut_slice(),
             &mut pCtxOutBs,
+            &mut sMbWindow,
         );
+        drop(sMbWindow);
+        current_layer_mut(pCtx).expect("the frame's current layer is stamped").sMbDataP = sMbData;
         let pOutRef = pCtx.pOut.as_deref_mut().expect("pOut lives");
         pOutRef.sBsBuffer = vOutBsBuf;
         pOutRef.sBsWrite = sOutBsWrite;
@@ -3953,8 +3967,21 @@ pub unsafe fn WelsEncoderEncodeExt(
             let mut vOutBsBuf = std::mem::take(&mut pOutRef.sBsBuffer);
             let mut sOutBsWrite = pOutRef.sBsWrite;
             let mut pCtxOutBs: Option<&mut crate::encoder::vlc_encoder::BsWriter> = Some(&mut sOutBsWrite);
+            // **S11.27: the macroblock grid leaves the layer for the call**, exactly
+            // as the `pOut` pair above does and for the same reason: the chain takes
+            // `&sWelsEncCtx`, so a `&mut` to a field inside it cannot span the call.
+            // `MbArray::empty()` is a `Vec::new()` — the swap moves two pointers and
+            // no records — and the restore precedes the error check, so every exit
+            // path sees the grid back.
+            let mut sMbData = std::mem::replace(
+                &mut current_layer_mut(pCtx).expect("the frame's current layer is stamped").sMbDataP,
+                crate::safe::mb_grid::MbArray::empty(),
+            );
+            let mut sMbWindow = crate::safe::mb_grid::MbWindow::whole(&mut sMbData, 0);
             let iCodeRet =
-                crate::encoder::svc_encode_slice::WelsCodeOneSlice(pCtx, &mut *pCurSlice, eNalType as i32, vOutBsBuf.as_mut_slice(), &mut pCtxOutBs);
+                crate::encoder::svc_encode_slice::WelsCodeOneSlice(pCtx, &mut *pCurSlice, eNalType as i32, vOutBsBuf.as_mut_slice(), &mut pCtxOutBs, &mut sMbWindow);
+            drop(sMbWindow);
+            current_layer_mut(pCtx).expect("the frame's current layer is stamped").sMbDataP = sMbData;
             let pOutRef = pCtx.pOut.as_deref_mut().expect("pOut lives");
             pOutRef.sBsBuffer = vOutBsBuf;
             pOutRef.sBsWrite = sOutBsWrite;
@@ -4192,12 +4219,26 @@ pub unsafe fn WelsEncoderEncodeExt(
                 let mut vOutBsBuf = std::mem::take(&mut pOutRef.sBsBuffer);
                 let mut sOutBsWrite = pOutRef.sBsWrite;
                 let mut pCtxOutBs: Option<&mut crate::encoder::vlc_encoder::BsWriter> = Some(&mut sOutBsWrite);
+                // **S11.27: the macroblock grid leaves the layer for the call**, exactly
+                // as the `pOut` pair above does and for the same reason: the chain takes
+                // `&sWelsEncCtx`, so a `&mut` to a field inside it cannot span the call.
+                // `MbArray::empty()` is a `Vec::new()` — the swap moves two pointers and
+                // no records — and the restore precedes the error check, so every exit
+                // path sees the grid back.
+                let mut sMbData = std::mem::replace(
+                    &mut current_layer_mut(pCtx).expect("the frame's current layer is stamped").sMbDataP,
+                    crate::safe::mb_grid::MbArray::empty(),
+                );
+                let mut sMbWindow = crate::safe::mb_grid::MbWindow::whole(&mut sMbData, 0);
                 let iCodeRet = crate::encoder::svc_encode_slice::WelsCodeOneSlice(pCtx,
                     &mut *pCurSlice,
                     eNalType as i32,
                     vOutBsBuf.as_mut_slice(),
                     &mut pCtxOutBs,
+                    &mut sMbWindow,
                 );
+                drop(sMbWindow);
+                current_layer_mut(pCtx).expect("the frame's current layer is stamped").sMbDataP = sMbData;
                 let pOutRef = pCtx.pOut.as_deref_mut().expect("pOut lives");
                 pOutRef.sBsBuffer = vOutBsBuf;
                 pOutRef.sBsWrite = sOutBsWrite;
