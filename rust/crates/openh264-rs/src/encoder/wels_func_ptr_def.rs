@@ -70,7 +70,7 @@ pub type PGetChromaPredFunc = fn(pred: &mut [u8; 64], rec: &RecCursor<'_>);
 pub type PGetLumaI16x16PredFunc = fn(pred: &mut [u8; 256], rec: &RecCursor<'_>);
 
 /// `wels_func_ptr_def.h:106`
-pub type PIntraFineMdFunc = unsafe fn(
+pub type PIntraFineMdFunc = fn(
     pEncCtx: &sWelsEncCtx,
     pWelsMd: &mut SWelsMD<'_>,
     pCurMb: &mut SMB,
@@ -78,7 +78,13 @@ pub type PIntraFineMdFunc = unsafe fn(
 ) -> i32;
 
 /// `wels_func_ptr_def.h:107`
-pub type PInterFineMdFunc = for<'a> unsafe fn(
+///
+/// **S11.28: the six mode-decision slot types are safe fn pointers** — F276's
+/// chain, one family later. Every installed target went safe first (the union
+/// collapse, the SAD-row slot, the background-flag indexing, and sixteen
+/// bodies whose `unsafe` guarded nothing the compiler could find), so the
+/// types follow, and the dispatch sites' claims go with them.
+pub type PInterFineMdFunc = for<'a> fn(
     // **S10.8: the context and the mode-decision record share a lifetime.** The
     // fine-partition body resolves the reference picture through the context now
     // (`layer_ref_pic` takes it since `SDqLayer::pRefList` went), and that picture
@@ -92,7 +98,7 @@ pub type PInterFineMdFunc = for<'a> unsafe fn(
 );
 
 /// `wels_func_ptr_def.h:108`
-pub type PInterMdFirstIntraModeFunc = unsafe fn(
+pub type PInterMdFirstIntraModeFunc = fn(
     pEncCtx: &sWelsEncCtx,
     pWelsMd: &mut SWelsMD<'_>,
     pCurMb: &mut SMB,
@@ -114,7 +120,7 @@ pub type PInterMdFirstIntraModeFunc = unsafe fn(
 /// only read-modify-write it. The leading context stays raw: this slot is
 /// dispatched inside the fork, so S63 keeps it a pointer until the root converts.
 /// `extern "C"` came off — nothing in this table crosses the C ABI (T4b.1).
-pub type PInterMdBackgroundDecisionFunc = unsafe fn(
+pub type PInterMdBackgroundDecisionFunc = fn(
     pEncCtx: &sWelsEncCtx,
     pWelsMd: &mut SWelsMD<'_>,
     slice: &mut SSlice,
@@ -134,7 +140,7 @@ pub type PMdBackgroundInfoUpdateFunc = extern "C" fn(
 );
 
 /// `wels_func_ptr_def.h:121`
-pub type PInterMdScrollingPSkipDecisionFunc = unsafe fn(
+pub type PInterMdScrollingPSkipDecisionFunc = fn(
     pEncCtx: &sWelsEncCtx,
     pWelsMd: &mut SWelsMD<'_>,
     slice: &mut SSlice,
@@ -154,7 +160,7 @@ pub type PInterMdScrollingPSkipDecisionFunc = unsafe fn(
 pub type PSetScrollingMv = fn(pVaa: &SVAAFrameInfo, pMd: &mut SWelsMD<'_>);
 
 /// `wels_func_ptr_def.h:125`
-pub type PInterMdFunc = for<'a> unsafe fn(
+pub type PInterMdFunc = for<'a> fn(
     // S10.8, as `PInterFineMdFunc`: the reference picture is resolved through the
     // context now, and `SWelsMD`'s cursors point into it, so the slot says the two
     // share a lifetime.

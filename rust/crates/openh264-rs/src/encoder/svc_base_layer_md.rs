@@ -32,7 +32,7 @@
 
 // Phase 4a: MC is called directly, not via `sMcFuncs`.
 
-#![deny(unsafe_code)]
+#![forbid(unsafe_code)]
 use crate::encoder::rec_view::RecCursor;
 use crate::encoder::rec_view::copy_block_to_view;
 use crate::encoder::svc_encode_slice::{
@@ -364,9 +364,7 @@ pub fn WelsMdIntraInit(
 /// See [`WelsMdIntraInit`]. The I4x4 scratch (`sMemPredBlk4`) and both intra-mode
 /// flag arrays are inline in `SMbCache` since T6.C3, so there is nothing left for a
 /// caller to have allocated.
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
-pub unsafe extern "C" fn WelsMdI4x4(
+pub extern "C" fn WelsMdI4x4(
     pEncCtx: &sWelsEncCtx,
     pWelsMd: &mut SWelsMD<'_>,
     pCurMb: &mut SMB,
@@ -511,9 +509,7 @@ fn StoreIntra4x4PredModeToMb(pCurMb: &mut SMB, pMbCache: &mut SMbCache) {
 ///
 /// # Safety
 /// Same as [`WelsMdI4x4`].
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
-pub unsafe extern "C" fn WelsMdI4x4Fast(
+pub extern "C" fn WelsMdI4x4Fast(
     pEncCtx: &sWelsEncCtx,
     pWelsMd: &mut SWelsMD<'_>,
     pCurMb: &mut SMB,
@@ -812,9 +808,7 @@ pub extern "C" fn WelsMdIntraChroma(
 ///
 /// # Safety
 /// Same as [`WelsMdI4x4`].
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
-pub unsafe fn WelsMdIntraFinePartition(
+pub fn WelsMdIntraFinePartition(
     pEncCtx: &sWelsEncCtx,
     pWelsMd: &mut SWelsMD<'_>,
     pCurMb: &mut SMB,
@@ -835,9 +829,7 @@ pub unsafe fn WelsMdIntraFinePartition(
 ///
 /// # Safety
 /// Same as [`WelsMdI4x4Fast`].
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
-pub unsafe fn WelsMdIntraFinePartitionVaa(
+pub fn WelsMdIntraFinePartitionVaa(
     pEncCtx: &sWelsEncCtx,
     pWelsMd: &mut SWelsMD<'_>,
     pCurMb: &mut SMB,
@@ -868,9 +860,7 @@ pub unsafe fn WelsMdIntraFinePartitionVaa(
 /// # Safety
 /// `pEncCtx`, `pWelsMd`, `pCurMb` and `pMbCache` must be valid, and
 /// [`WelsMdIntraInit`] must have run for this macroblock.
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
-pub unsafe fn WelsMdIntraMb(
+pub fn WelsMdIntraMb(
     pEncCtx: &sWelsEncCtx,
     pWelsMd: &mut SWelsMD<'_>,
     pCurMb: &mut SMB,
@@ -1024,7 +1014,7 @@ pub extern "C" fn WelsMdP16x8<'a>(
         );
         //not putting the lines below into InitMe to avoid judging mode in InitMe
         (*sMe16x8).iCurMeBlockPixY = (*pWelsMd).iMbPixY + iPixelY;
-        (*sMe16x8).uSadPredISatd.uiSadPred = ((*pWelsMd).iSadPredMb >> 1) as u32;
+        (*sMe16x8).uSadPredISatd.uiValue = ((*pWelsMd).iSadPredMb >> 1) as u32;
 
         (*pSlice).sMvc[0] = (*sMe16x8).sMvBase;
         (*pSlice).uiMvcNum = 1;
@@ -1085,7 +1075,7 @@ pub extern "C" fn WelsMdP8x16<'a>(
         );
         //not putting the lines below into InitMe to avoid judging mode in InitMe
         (*sMe8x16).iCurMeBlockPixX = (*pWelsMd).iMbPixX + iPixelX;
-        (*sMe8x16).uSadPredISatd.uiSadPred = ((*pWelsMd).iSadPredMb >> 1) as u32;
+        (*sMe8x16).uSadPredISatd.uiValue = ((*pWelsMd).iSadPredMb >> 1) as u32;
 
         (*pSlice).sMvc[0] = (*sMe8x16).sMvBase;
         (*pSlice).uiMvcNum = 1;
@@ -1170,9 +1160,7 @@ pub fn WelsMdInterFinePartition<'a>(
 /// # Safety
 /// All pointers must be valid; `pEncCtx->pVaa->sVaaCalcInfo.pSad8x8` must be
 /// populated and `pfGetMbSignFromInterVaa` assigned.
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
-pub unsafe fn WelsMdInterFinePartitionVaa<'a>(
+pub fn WelsMdInterFinePartitionVaa<'a>(
     pEncCtx: &'a sWelsEncCtx,
     pWelsMd: &mut SWelsMD<'a>,
     pSlice: &mut SSlice,
@@ -1182,14 +1170,13 @@ pub unsafe fn WelsMdInterFinePartitionVaa<'a>(
     let pCurDqLayer = current_layer_ref(pEncCtx)
         .expect("the frame's current layer is stamped");
     let mut iBestCost = iBestCostIn;
+    // S11.28: the mint (T9.E7's spelling) is gone with the slot's pointer
+    // parameter — a shared index into the bounded row.
     let uiMbSign = (*pEncCtx).func_list()
         .pfGetMbSignFromInterVaa
         .expect("pfGetMbSignFromInterVaa unset")(
-        {
-            // T9.E7, as the background-flag mint above (F132 round 8's class).
-            let v = std::ptr::addr_of!((*pEncCtx).vaa().expect("the frame's video-analysis block").sVaaCalcInfo.pSad8x8);
-            (*v).as_ptr().add((*pCurMb).iMbXY as usize) as *mut i32
-        },
+        &(*pEncCtx).vaa().expect("the frame's video-analysis block").sVaaCalcInfo.pSad8x8
+            [(*pCurMb).iMbXY as usize],
     );
 
     if crate::encoder::dump_enabled(&FP_DUMP, "OH264_FPDUMP") {
@@ -1536,9 +1523,7 @@ fn AcceptPskip(
 /// # Safety
 /// All four pointers must be valid; the `pfCopy*` slots and `sMcFuncs.pMcChromaFunc`
 /// must be assigned.
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
-pub unsafe fn WelsMdInterMbRefinement(
+pub fn WelsMdInterMbRefinement(
     pEncCtx: &sWelsEncCtx,
     pWelsMd: &mut SWelsMD<'_>,
     pCurMb: &mut SMB,
@@ -1850,9 +1835,7 @@ pub unsafe fn WelsMdInterMbRefinement(
 ///
 /// # Safety
 /// All four pointers must be valid and `pfIntraFineMd` assigned.
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
-pub unsafe fn WelsMdFirstIntraMode(
+pub fn WelsMdFirstIntraMode(
     pEncCtx: &sWelsEncCtx,
     pWelsMd: &mut SWelsMD<'_>,
     pCurMb: &mut SMB,
@@ -1901,9 +1884,7 @@ pub unsafe fn WelsMdFirstIntraMode(
 /// # Safety
 /// All pointers except `pUnused` must be valid; `pfInterMdBackgroundDecision` and
 /// `pfSCDPSkipDecision` must be assigned (`WelsInitBGDFunc` / `WelsInitSCDPskipFunc`).
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
-pub unsafe fn WelsMdInterMb<'a>(
+pub fn WelsMdInterMb<'a>(
     pEncCtx: &'a sWelsEncCtx,
     pWelsMd: &mut SWelsMD<'a>,
     pSlice: &mut SSlice,

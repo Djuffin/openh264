@@ -724,6 +724,23 @@ impl SStrideTables {
         unsafe { Some(&*(p as *const [i32; 24])) }
     }
 
+    /// [`StrideDecBlockOffset`](Self::StrideDecBlockOffset) **as a slice** —
+    /// S11.28, the dec-side twin of [`EncBlockOffsets`](Self::EncBlockOffsets):
+    /// the same 24-entry extent (16 luma + 8 chroma block offsets), the same
+    /// arena, one more raw cursor's callers gone.
+    #[inline]
+    // unsafe-cat: port-raw(Phase 9)
+    #[allow(unsafe_code)]
+    pub fn DecBlockOffsets(&self, kiDid: usize, kiTid0: usize) -> Option<&[i32; 24]> {
+        let p = self.StrideDecBlockOffset(kiDid, kiTid0);
+        if p.is_null() {
+            return None;
+        }
+        // SAFETY: as `at_i32`, plus the 24-entry extent above; the arena
+        // outlives `&self`.
+        unsafe { Some(&*(p as *const [i32; 24])) }
+    }
+
     /// `pMbIndexX[kiDid]` as the cursor it used to be.
     #[inline]
     pub fn MbIndexX(&self, kiDid: usize) -> *const i16 {

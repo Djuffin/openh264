@@ -45,7 +45,7 @@
     unused_unsafe
 )]
 
-#![deny(unsafe_code)]
+#![forbid(unsafe_code)]
 
 use crate::encoder::rec_view::RecCursor;
 use crate::encoder::rec_view::copy_block_to_view;
@@ -587,9 +587,7 @@ pub fn WelsEncRecI16x16Y(
 ///
 /// # Safety
 /// All pointers in `pEncCtx`, `pCurMb`, and `pMbCache` must be properly initialized and valid.
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
-pub unsafe fn WelsEncRecI4x4Y(
+pub fn WelsEncRecI4x4Y(
     pEncCtx: &sWelsEncCtx,
     pCurMb: &mut SMB,
     pMbCache: &mut SMbCache,
@@ -628,16 +626,15 @@ pub unsafe fn WelsEncRecI4x4Y(
 
     let did = (*pEncCtx).uiDependencyId as usize;
     let tid_is_zero = if (*pEncCtx).uiTemporalId == 0 { 1 } else { 0 };
-    // T9.H2: the two lookups take `&sWelsEncCtx` now — a shared reborrow of the
-    // in-fork raw, which every worker may hold at once. Nothing here writes the
-    // tables; the cursors point into the arena, a different allocation.
-    let pStrideEncBlockOffset =
-        crate::encoder::encoder_context::ctx_stride_enc_block_offset(&*pEncCtx, did);
-    let pStrideDecBlockOffset =
-        crate::encoder::encoder_context::ctx_stride_dec_block_offset(&*pEncCtx, did, tid_is_zero);
-
-    let enc_block_offset = *pStrideEncBlockOffset.add(uiI4x4Idx as usize) as isize;
-    let dec_block_offset = *pStrideDecBlockOffset.add(uiI4x4Idx as usize) as isize;
+    // T9.H2: the two lookups take `&sWelsEncCtx` — a shared reborrow every
+    // worker may hold at once. S11.28: through the *bounded* accessors
+    // (S11.2d's template), so the per-block read is an index into `[i32; 24]`
+    // rather than a raw `.add` — the last two raw cursor reads in this file.
+    let tab = (*pEncCtx).pStrideTab.as_ref().expect("the stride tables are built at init");
+    let enc_block_offset =
+        tab.EncBlockOffsets(did).expect("the enc block-offset table is built")[uiI4x4Idx as usize] as isize;
+    let dec_block_offset =
+        tab.DecBlockOffsets(did, tid_is_zero).expect("the dec block-offset table is built")[uiI4x4Idx as usize] as isize;
 
     if let Some(func) = (*pFuncList).pfDctT4 {
         // S9.0: `advance(n, 0)` moves the centre by exactly `n` bytes, which is what
