@@ -439,6 +439,14 @@ pub fn vaa_calc_sad_ssd_bgd(
     )
 }
 
+/// The two luma planes [`CVAACalculation::Process`] reads, from each picture's
+/// logical origin — the family's [`ScdPlanes`] shape
+/// (`crate::processing::scene_change_detection::ScdPlanes`).
+pub struct VaaCalcPlanes<'a> {
+    pub cur: &'a [u8],
+    pub refp: &'a [u8],
+}
+
 impl CVAACalculation {
     /// `CVAACalculation::Set` — copies the caller's parameter block. Typed since
     /// Phase 6 session B (the `IWelsVP` vtable's `void*` is gone).
@@ -448,26 +456,31 @@ impl CVAACalculation {
     }
 
     /// `CVAACalculation::Process` — `vaacalculation.cpp:120`. Reads the current
-    /// picture from `src` and the reference from `ref_pic` (the C++ passes the
-    /// reference as `pDstPixMap`), and writes into `result`, which the caller hands
-    /// over at the call rather than storing a pointer to it in the parameter block
-    /// (take what you reach — the C++'s `pCalcResult` was that stored pointer).
+    /// picture from `planes.cur` and the reference from `planes.refp` (the C++
+    /// passes the reference as `pDstPixMap`), geometry from `src`, and writes into
+    /// `result`, which the caller hands over at the call rather than storing a
+    /// pointer to it in the parameter block (take what you reach — the C++'s
+    /// `pCalcResult` was that stored pointer).
     ///
-    /// # Safety
-    /// The pixel maps must describe readable luma planes of the stated geometry, and
-    /// `result`'s arrays (`pSad8x8`, ...) must have room for the picture.
-    // unsafe-cat: port-raw(Phase 9)
-    #[allow(unsafe_code)]
-    pub unsafe fn Process(&mut self, src: &SPixMap, ref_pic: &SPixMap, result: &mut SVAACalcResult) -> i32 {
-        let pCurData = src.pPixel[0];
-        let pRefData = ref_pic.pPixel[0];
+    /// **S11.43: the pixel maps carry geometry only** — the two luma planes arrive
+    /// as the slices they are (`VaaCalcPlanes`, the family's `ScdPlanes` shape),
+    /// and the null guard is the empty guard. `pCurY`/`pRefY` still record the
+    /// planes' addresses: the adaptive-quant pass compares them for identity, and
+    /// a slice's address is the same number `data_ptr` produced.
+    pub fn Process(
+        &mut self,
+        src: &SPixMap,
+        _ref_pic: &SPixMap,
+        planes: VaaCalcPlanes<'_>,
+        result: &mut SVAACalcResult,
+    ) -> i32 {
         let (iPicWidth, iPicHeight, iPicStride) = (src.sRect.iRectWidth, src.sRect.iRectHeight, src.iStride[0]);
-        if pCurData.is_null() || pRefData.is_null() {
+        if planes.cur.is_empty() || planes.refp.is_empty() {
             return RET_INVALIDPARAM;
         }
 
-        result.pCurY = pCurData as usize;
-        result.pRefY = pRefData as usize;
+        result.pCurY = planes.cur.as_ptr() as usize;
+        result.pRefY = planes.refp.as_ptr() as usize;
 
         // **T6.F3**: the five `VAACalc*_c` shims stood here, each handed the six out
         // arrays as bare pointers and each rebuilding a slice over them with
@@ -481,12 +494,14 @@ impl CVAACalculation {
         // were the entry points of their own tests and nothing else. Both properties
         // now drive the safe kernels.
         //
-        // The two planes still arrive as raw roots (`SPicture::data_ptr`), so they are
-        // the one `from_raw_parts` left — over `vaa_span`, the exact reach the walk
-        // has, which the same differential test pins.
+        // **S11.43: and the last `from_raw_parts` is gone** — the sentence that
+        // stood here said the two planes "still arrive as raw roots"; they arrive
+        // as borrows of the pool pictures now, and `vaa_span` bounds a reslice.
+        // The exact reach the walk has, now a bounds-checked reslice of the
+        // caller's borrow rather than a claim over a raw root.
         let span = vaa_span(iPicWidth, iPicHeight, iPicStride);
-        let cur = core::slice::from_raw_parts(pCurData, span);
-        let refp = core::slice::from_raw_parts(pRefData, span);
+        let cur = &planes.cur[..span];
+        let refp = &planes.refp[..span];
 
         // `vaacalculation.cpp:135` — the same nesting, in the same order.
         result.iFrameSad = if self.m_sCalcParam.iCalcBgd {

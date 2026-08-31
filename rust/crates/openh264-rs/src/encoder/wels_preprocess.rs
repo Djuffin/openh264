@@ -1884,32 +1884,33 @@ impl CWelsPreProcess {
         bCalculateVar: bool,
         bCalculateBGD: bool,
     ) {
-        // S37: both pictures resolved once to their plane roots; everything below
-        // walks raw cursors, so no borrow of the pool outlives this prologue.
         let (Some(idCur), Some(idRef)) = (pCurPicture, pRefPicture) else {
             return;
         };
-        let sCur = self.m_pSpatialPicPool.get_mut(idCur).planes();
-        let sRef = self.m_pSpatialPicPool.get_mut(idRef).planes();
-        pVaaInfo.sVaaCalcInfo.pCurY = sCur.pData[0] as usize;
-        pVaaInfo.sVaaCalcInfo.pRefY = sRef.pData[0] as usize;
+        // §4.6 (S11.43): the plugin and the pool are sibling fields, split by
+        // destructure so the pass can run while both pictures stay borrowed —
+        // the plane slices replace the raw roots the pixel maps used to carry
+        // (S37's prologue resolved raw cursors here for the same reach).
+        let CWelsPreProcess { m_vp, m_pSpatialPicPool, .. } = &mut *self;
+        let (kpCur, kpRef) = (m_pSpatialPicPool.get(idCur), m_pSpatialPicPool.get(idRef));
+        let (kpCurY, kpRefY) = (kpCur.plane_tail(0), kpRef.plane_tail(0));
+        pVaaInfo.sVaaCalcInfo.pCurY = kpCurY.as_ptr() as usize;
+        pVaaInfo.sVaaCalcInfo.pRefY = kpRefY.as_ptr() as usize;
 
         let mut sCurPixMap = SPixMap::default();
         let mut sRefPixMap = SPixMap::default();
         let mut calc_param = SVAACalcParam::default();
 
-        sCurPixMap.pPixel[0] = sCur.pData[0];
         sCurPixMap.iSizeInBits = g_kiPixMapSizeInBits;
-        sCurPixMap.sRect.iRectWidth = sCur.iWidthInPixel;
-        sCurPixMap.sRect.iRectHeight = sCur.iHeightInPixel;
-        sCurPixMap.iStride[0] = sCur.iLineSize[0];
+        sCurPixMap.sRect.iRectWidth = kpCur.iWidthInPixel;
+        sCurPixMap.sRect.iRectHeight = kpCur.iHeightInPixel;
+        sCurPixMap.iStride[0] = kpCur.stride(0);
         sCurPixMap.eFormat = VideoFormat::videoFormatI420;
 
-        sRefPixMap.pPixel[0] = sRef.pData[0];
         sRefPixMap.iSizeInBits = g_kiPixMapSizeInBits;
-        sRefPixMap.sRect.iRectWidth = sRef.iWidthInPixel;
-        sRefPixMap.sRect.iRectHeight = sRef.iHeightInPixel;
-        sRefPixMap.iStride[0] = sRef.iLineSize[0];
+        sRefPixMap.sRect.iRectWidth = kpRef.iWidthInPixel;
+        sRefPixMap.sRect.iRectHeight = kpRef.iHeightInPixel;
+        sRefPixMap.iStride[0] = kpRef.stride(0);
         sRefPixMap.eFormat = VideoFormat::videoFormatI420;
 
         calc_param.iCalcVar = bCalculateVar;
@@ -1918,16 +1919,13 @@ impl CWelsPreProcess {
 
         // METHOD_VAA_STATISTICS. The result is handed over at the call; the C++
         // stored `&pVaaInfo->sVaaCalcInfo` in the parameter block.
-        self.m_vp.sVaaCalc.Set(&calc_param);
-        // S11.42: the audited call at this body's boundary — the plugin's
-        // `Process` walks both pixmaps through raw plane cursors and is the
-        // processing/ family's to convert; the pixmaps were built from live
-        // pool pictures above (F279: the body's last raw op).
-        // unsafe-cat: port-raw(Phase 9)
-        #[allow(unsafe_code)]
-        unsafe {
-            self.m_vp.sVaaCalc.Process(&sCurPixMap, &sRefPixMap, &mut pVaaInfo.sVaaCalcInfo);
-        }
+        m_vp.sVaaCalc.Set(&calc_param);
+        m_vp.sVaaCalc.Process(
+            &sCurPixMap,
+            &sRefPixMap,
+            crate::processing::vaacalc::VaaCalcPlanes { cur: kpCurY, refp: kpRefY },
+            &mut pVaaInfo.sVaaCalcInfo,
+        );
     }
 
     pub fn BackgroundDetection(
@@ -1940,67 +1938,63 @@ impl CWelsPreProcess {
         let Some(idCur) = pCurPicture else {
             return;
         };
-        // S37 again — resolved once, then raw cursors.
-        let sCur = self.m_pSpatialPicPool.get_mut(idCur).planes();
-        let sRef = pRefPicture.map(|id| self.m_pSpatialPicPool.get_mut(id).planes());
-        if let (true, Some(sRef)) = (bDetectFlag, sRef) {
-            pVaaInfo.iPicWidth = sCur.iWidthInPixel;
-            pVaaInfo.iPicHeight = sCur.iHeightInPixel;
-            pVaaInfo.iPicStride = sCur.iLineSize[0];
-            pVaaInfo.iPicStrideUV = sCur.iLineSize[1];
+        // §4.6 (S11.43): as at `VaaCalculation` — the plugin and the pool split
+        // by destructure, the six plane roots now six borrows (S37's raw-cursor
+        // prologue retired with them).
+        let CWelsPreProcess { m_vp, m_pSpatialPicPool, .. } = &mut *self;
+        let kpCur = m_pSpatialPicPool.get(idCur);
+        let kpRef = pRefPicture.map(|id| m_pSpatialPicPool.get(id));
+        if let (true, Some(kpRef)) = (bDetectFlag, kpRef) {
+            pVaaInfo.iPicWidth = kpCur.iWidthInPixel;
+            pVaaInfo.iPicHeight = kpCur.iHeightInPixel;
+            pVaaInfo.iPicStride = kpCur.stride(0);
+            pVaaInfo.iPicStrideUV = kpCur.stride(1);
             // S9.0c: the six plane roots become two views, built where the
             // pictures are reachable. Rebuilt every frame, as the layer's views are:
             // the pool may hand the next frame a different slot.
-            pVaaInfo.pCurView = pCurPicture
-                .map(|id| crate::encoder::rec_view::RoPicView::build(self.m_pSpatialPicPool.get(id)));
-            pVaaInfo.pRefView = pRefPicture
-                .map(|id| crate::encoder::rec_view::RoPicView::build(self.m_pSpatialPicPool.get(id)));
+            pVaaInfo.pCurView =
+                Some(crate::encoder::rec_view::RoPicView::build(kpCur));
+            pVaaInfo.pRefView =
+                Some(crate::encoder::rec_view::RoPicView::build(kpRef));
 
             let mut sSrcPixMap = SPixMap::default();
             let mut sRefPixMap = SPixMap::default();
-            let mut BGDParam = SBGDInterface::default();
+            let BGDParam = SBGDInterface::default();
 
-            sSrcPixMap.pPixel[0] = sCur.pData[0];
-            sSrcPixMap.pPixel[1] = sCur.pData[1];
-            sSrcPixMap.pPixel[2] = sCur.pData[2];
             sSrcPixMap.iSizeInBits = g_kiPixMapSizeInBits;
-            sSrcPixMap.iStride[0] = sCur.iLineSize[0];
-            sSrcPixMap.iStride[1] = sCur.iLineSize[1];
-            sSrcPixMap.iStride[2] = sCur.iLineSize[2];
-            sSrcPixMap.sRect.iRectWidth = sCur.iWidthInPixel;
-            sSrcPixMap.sRect.iRectHeight = sCur.iHeightInPixel;
+            sSrcPixMap.iStride[0] = kpCur.stride(0);
+            sSrcPixMap.iStride[1] = kpCur.stride(1);
+            sSrcPixMap.iStride[2] = kpCur.stride(2);
+            sSrcPixMap.sRect.iRectWidth = kpCur.iWidthInPixel;
+            sSrcPixMap.sRect.iRectHeight = kpCur.iHeightInPixel;
             sSrcPixMap.eFormat = VideoFormat::videoFormatI420;
 
-            sRefPixMap.pPixel[0] = sRef.pData[0];
-            sRefPixMap.pPixel[1] = sRef.pData[1];
-            sRefPixMap.pPixel[2] = sRef.pData[2];
             sRefPixMap.iSizeInBits = g_kiPixMapSizeInBits;
-            sRefPixMap.iStride[0] = sRef.iLineSize[0];
-            sRefPixMap.iStride[1] = sRef.iLineSize[1];
-            sRefPixMap.iStride[2] = sRef.iLineSize[2];
-            sRefPixMap.sRect.iRectWidth = sRef.iWidthInPixel;
-            sRefPixMap.sRect.iRectHeight = sRef.iHeightInPixel;
+            sRefPixMap.iStride[0] = kpRef.stride(0);
+            sRefPixMap.iStride[1] = kpRef.stride(1);
+            sRefPixMap.iStride[2] = kpRef.stride(2);
+            sRefPixMap.sRect.iRectWidth = kpRef.iWidthInPixel;
+            sRefPixMap.sRect.iRectHeight = kpRef.iHeightInPixel;
             sRefPixMap.eFormat = VideoFormat::videoFormatI420;
 
             // S10.12: the flag array reaches `Process` as a slice. `Set` no longer
             // stashes it — see `CBackgroundDetection::Set` — but the call stays,
             // because the C++ makes it and the port mirrors the sequence.
-            self.m_vp.sBackgroundDetection.Set(&BGDParam);
+            m_vp.sBackgroundDetection.Set(&BGDParam);
             let SVAAFrameInfo { sVaaCalcInfo, pVaaBackgroundMbFlag, .. } = pVaaInfo;
-            // S11.42: the plugin boundary, as at `VaaCalculation` (F279).
-            // unsafe-cat: port-raw(Phase 9)
-            #[allow(unsafe_code)]
-            unsafe {
-                self.m_vp.sBackgroundDetection.Process(
-                    &sSrcPixMap,
-                    &sRefPixMap,
-                    sVaaCalcInfo,
-                    pVaaBackgroundMbFlag,
-                );
-            }
+            m_vp.sBackgroundDetection.Process(
+                &sSrcPixMap,
+                &sRefPixMap,
+                &crate::processing::background_detection::BgdPlanes {
+                    cur: [kpCur.plane_tail(0), kpCur.plane_tail(1), kpCur.plane_tail(2)],
+                    refp: [kpRef.plane_tail(0), kpRef.plane_tail(1), kpRef.plane_tail(2)],
+                },
+                sVaaCalcInfo,
+                pVaaBackgroundMbFlag,
+            );
         } else {
-            let iPicWidthInMb = (sCur.iWidthInPixel + 15) >> 4;
-            let iPicHeightInMb = (sCur.iHeightInPixel + 15) >> 4;
+            let iPicWidthInMb = (kpCur.iWidthInPixel + 15) >> 4;
+            let iPicHeightInMb = (kpCur.iHeightInPixel + 15) >> 4;
             let n = ((iPicWidthInMb * iPicHeightInMb).max(0) as usize)
                 .min(pVaaInfo.pVaaBackgroundMbFlag.len());
             (&mut pVaaInfo.pVaaBackgroundMbFlag)[..n].fill(0);
@@ -2013,13 +2007,13 @@ impl CWelsPreProcess {
         pCurPicture: Option<SrcPicId>,
         pRefPicture: Option<SrcPicId>,
     ) {
-        // S37: both pictures resolved once to their plane roots; everything below
-        // walks raw cursors, so no borrow of the pool outlives this prologue.
         let (Some(idCur), Some(idRef)) = (pCurPicture, pRefPicture) else {
             return;
         };
-        let sCur = self.m_pSpatialPicPool.get_mut(idCur).planes();
-        let sRef = self.m_pSpatialPicPool.get_mut(idRef).planes();
+        // §4.6 (S11.43): as at `VaaCalculation` — the plugin and the pool split
+        // by destructure, the two luma planes as borrows.
+        let CWelsPreProcess { m_vp, m_pSpatialPicPool, .. } = &mut *self;
+        let (kpCur, kpRef) = (m_pSpatialPicPool.get(idCur), m_pSpatialPicPool.get(idRef));
         // The C++ stored `&pVaaInfo->sVaaCalcInfo` *inside* `pVaaInfo` here
         // (`sAdaptiveQuantParam.pCalcResult`) — a self-pointer; the result is
         // handed over at the `Process` call instead.
@@ -2028,36 +2022,33 @@ impl CWelsPreProcess {
         let mut pSrc = SPixMap::default();
         let mut pRef = SPixMap::default();
 
-        pSrc.pPixel[0] = sCur.pData[0];
         pSrc.iSizeInBits = g_kiPixMapSizeInBits;
-        pSrc.iStride[0] = sCur.iLineSize[0];
-        pSrc.sRect.iRectWidth = sCur.iWidthInPixel;
-        pSrc.sRect.iRectHeight = sCur.iHeightInPixel;
+        pSrc.iStride[0] = kpCur.stride(0);
+        pSrc.sRect.iRectWidth = kpCur.iWidthInPixel;
+        pSrc.sRect.iRectHeight = kpCur.iHeightInPixel;
         pSrc.eFormat = VideoFormat::videoFormatI420;
 
-        pRef.pPixel[0] = sRef.pData[0];
         pRef.iSizeInBits = g_kiPixMapSizeInBits;
-        pRef.iStride[0] = sRef.iLineSize[0];
-        pRef.sRect.iRectWidth = sRef.iWidthInPixel;
-        pRef.sRect.iRectHeight = sRef.iHeightInPixel;
+        pRef.iStride[0] = kpRef.stride(0);
+        pRef.sRect.iRectWidth = kpRef.iWidthInPixel;
+        pRef.sRect.iRectHeight = kpRef.iHeightInPixel;
         pRef.eFormat = VideoFormat::videoFormatI420;
 
         // METHOD_ADAPTIVE_QUANT.
-        self.m_vp.sAdaptiveQuant.Set(&pVaaInfo.sAdaptiveQuantParam);
-        // S11.42: the plugin boundary, as at `VaaCalculation` (F279).
-        // unsafe-cat: port-raw(Phase 9)
-        #[allow(unsafe_code)]
-        let iRet = unsafe {
-            self.m_vp.sAdaptiveQuant.Process(
-                &pSrc,
-                &pRef,
-                &pVaaInfo.sVaaCalcInfo,
-                &mut pVaaInfo.pMotionTextureUnit,
-                &mut pVaaInfo.pMotionTextureIndexToDeltaQp,
-            )
-        };
+        m_vp.sAdaptiveQuant.Set(&pVaaInfo.sAdaptiveQuantParam);
+        let iRet = m_vp.sAdaptiveQuant.Process(
+            &pSrc,
+            &pRef,
+            crate::processing::vaacalc::VaaCalcPlanes {
+                cur: kpCur.plane_tail(0),
+                refp: kpRef.plane_tail(0),
+            },
+            &pVaaInfo.sVaaCalcInfo,
+            &mut pVaaInfo.pMotionTextureUnit,
+            &mut pVaaInfo.pMotionTextureIndexToDeltaQp,
+        );
         if iRet == 0 {
-            self.m_vp.sAdaptiveQuant.Get(&mut pVaaInfo.sAdaptiveQuantParam);
+            m_vp.sAdaptiveQuant.Get(&mut pVaaInfo.sAdaptiveQuantParam);
         }
     }
 
