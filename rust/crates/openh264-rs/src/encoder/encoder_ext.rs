@@ -40,6 +40,7 @@ use crate::encoder::param_svc::{
     SExistingParasetList, SWelsSvcCodingParam, MB_WIDTH_LUMA, UNSPECIFIED_BIT_RATE,
 };
 use crate::encoder::param_svc::{PpsId, SpsId, SubsetSpsId};
+use crate::encoder::svc_encode_slice::current_layer_mut;
 use crate::encoder::svc_encode_slice::LayerSps;
 use crate::encoder::paraset_strategy::{ParasetStrategy, PARA_SET_TYPE_AVCSPS, PARA_SET_TYPE_PPS};
 use crate::api::codec_api::EParameterSetStrategy;
@@ -2059,9 +2060,7 @@ pub fn GetSubSequenceId(pCtx: &mut sWelsEncCtx, eFrameType: EVideoFrameType) -> 
 
 /// `encoder_ext.cpp:2797`. Swap the current DQ layer with the next one and make the
 /// outgoing layer the reference.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
-pub unsafe fn WelsSwapDqLayers(pCtx: &mut sWelsEncCtx, kiNextDqIdx: i32) {
+pub fn WelsSwapDqLayers(pCtx: &mut sWelsEncCtx, kiNextDqIdx: i32) {
     // The outgoing layer's *position*, not its address — T6.D3, and since T6.G2 the
     // context holds nothing else: `iCurDqLayer` **is** the index, so the round trip
     // through `pCurDqLayer->iDqIdx` that this site used to need is gone. The
@@ -2069,7 +2068,12 @@ pub unsafe fn WelsSwapDqLayers(pCtx: &mut sWelsEncCtx, kiNextDqIdx: i32) {
     // before any swap — and the old spelling dereferenced a null pointer there.
     let kRefIdx = pCtx.iCurDqLayer.expect("WelsSwapDqLayers with no current layer");
     set_current_layer(pCtx, Some(LayerIdx(kiNextDqIdx as u8)));
-    (*current_layer(pCtx)).pRefLayer = Some(kRefIdx);
+    // S10.3b: `current_layer_mut` — this body holds `&mut sWelsEncCtx`, which is
+    // the borrow that cannot exist while the fork is live, so the fork-shared raw
+    // was carrying a tag for a single-threaded write.
+    if let Some(pCurLayer) = current_layer_mut(pCtx) {
+        pCurLayer.pRefLayer = Some(kRefIdx);
+    }
 }
 
 // `StampLayerPictureViews` stood here — the once-per-frame stamp of
@@ -3084,16 +3088,24 @@ pub unsafe fn DynslcUpdateMbNeighbourInfoListForAllSlices(pCurDq: &mut SDqLayer)
 ///
 /// # Safety
 /// `pCtx` must be a context built by [`WelsInitEncoderExt`].
-// unsafe-cat: port-raw(Phase 9)
+///
+/// **S10.3b: the layer comes from `current_layer_mut`, but the body stays
+/// `unsafe`** — `DynslcUpdateMbNeighbourInfoListForAllSlices` walks the
+/// macroblock grid through `mb_window`, which is the E3 grid seam and raw by
+/// design. One blocker, and it is not this body's.
+// unsafe-cat: fork-shared(S63) — inherited from `mb_window`, the grid seam
 #[allow(unsafe_code)]
 pub unsafe fn WelsInitCurrentQBLayerMltslc(pCtx: &mut sWelsEncCtx) {
     // pData init
-    let pCurDq = current_layer(pCtx);
+    let Some(pCurDq) = current_layer_mut(pCtx) else {
+        return;
+    };
     // mb_neighbor
-    // T9.E2h, F66's shape B with an accessor-minted root the detector cannot
-    // see: the MB-list root is minted BEFORE the layer argument's retag (its
-    // buffer is a separate allocation, so the retag cannot reach it).
-    DynslcUpdateMbNeighbourInfoListForAllSlices(&mut *pCurDq);
+    // T9.E2h's note explained why the layer root had to be minted before the
+    // argument's retag: an accessor-minted raw the detector could not see. With
+    // `current_layer_mut` there is one borrow and the compiler holds it, so
+    // there is no ordering to preserve.
+    DynslcUpdateMbNeighbourInfoListForAllSlices(pCurDq);
 }
 
 /// `UpdateSlicepEncCtxWithPartition` — encoder_ext.cpp:2430.
