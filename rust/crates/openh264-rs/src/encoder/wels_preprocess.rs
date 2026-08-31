@@ -1971,11 +1971,17 @@ impl CWelsPreProcess {
             sRefPixMap.sRect.iRectHeight = sRef.iHeightInPixel;
             sRefPixMap.eFormat = VideoFormat::videoFormatI420;
 
-            BGDParam.pBackgroundMbFlag = pVaaInfo.pVaaBackgroundMbFlag.as_mut_ptr();
-
-            // METHOD_BACKGROUND_DETECTION; the VAA result handed over at the call.
+            // S10.12: the flag array reaches `Process` as a slice. `Set` no longer
+            // stashes it — see `CBackgroundDetection::Set` — but the call stays,
+            // because the C++ makes it and the port mirrors the sequence.
             self.m_vp.sBackgroundDetection.Set(&BGDParam);
-            self.m_vp.sBackgroundDetection.Process(&sSrcPixMap, &sRefPixMap, &pVaaInfo.sVaaCalcInfo);
+            let SVAAFrameInfo { sVaaCalcInfo, pVaaBackgroundMbFlag, .. } = pVaaInfo;
+            self.m_vp.sBackgroundDetection.Process(
+                &sSrcPixMap,
+                &sRefPixMap,
+                sVaaCalcInfo,
+                pVaaBackgroundMbFlag,
+            );
         } else {
             let iPicWidthInMb = (sCur.iWidthInPixel + 15) >> 4;
             let iPicHeightInMb = (sCur.iHeightInPixel + 15) >> 4;
