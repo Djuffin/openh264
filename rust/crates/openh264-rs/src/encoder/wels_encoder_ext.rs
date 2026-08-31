@@ -507,7 +507,7 @@ pub fn WelsWriteOnePPS(pCtx: &mut sWelsEncCtx, kiPpsIdx: i32, iNalSize: &mut i32
 /// blocker C into a silent success.
 // unsafe-cat: port-raw(Phase 9)
 #[allow(unsafe_code)]
-pub unsafe fn WelsWriteParameterSets(
+pub fn WelsWriteParameterSets(
     pCtx: &mut sWelsEncCtx,
     pNalLen: *mut i32,
     pNumNal: &mut i32,
@@ -548,7 +548,11 @@ pub unsafe fn WelsWriteParameterSets(
 
         WelsWriteOneSPS(pCtx, iId, &mut iNalLength);
 
-        *pNalLen.add(iCountNal as usize) = iNalLength;
+        // unsafe-cat: C-ABI — the frozen out-array slot (S11.20's family).
+        #[allow(unsafe_code)]
+        unsafe {
+            *pNalLen.add(iCountNal as usize) = iNalLength;
+        }
         iSize += iNalLength;
 
         iIdx += 1;
@@ -607,7 +611,11 @@ pub unsafe fn WelsWriteParameterSets(
         if iReturn != ENC_RETURN_SUCCESS {
             return iReturn;
         }
-        *pNalLen.add(iCountNal as usize) = iNalLength;
+        // unsafe-cat: C-ABI — the frozen out-array slot (S11.20's family).
+        #[allow(unsafe_code)]
+        unsafe {
+            *pNalLen.add(iCountNal as usize) = iNalLength;
+        }
 
         pCtx.iPosBsBuffer += iNalLength;
         iSize += iNalLength;
@@ -632,7 +640,11 @@ pub unsafe fn WelsWriteParameterSets(
 
         WelsWriteOnePPS(pCtx, iIdx, &mut iNalLength);
 
-        *pNalLen.add(iCountNal as usize) = iNalLength;
+        // unsafe-cat: C-ABI — the frozen out-array slot (S11.20's family).
+        #[allow(unsafe_code)]
+        unsafe {
+            *pNalLen.add(iCountNal as usize) = iNalLength;
+        }
         iSize += iNalLength;
 
         iIdx += 1;
