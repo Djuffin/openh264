@@ -20,7 +20,6 @@ pub use crate::encoder::encoder_context::EWelsSliceType;
 pub use crate::encoder::encoder_context::SMVUnitXY;
 pub use crate::encoder::encoder_context::SDCTCoeff;
 pub use crate::encoder::svc_encode_slice::SSliceHeader;
-use crate::encoder::svc_encode_slice::layer_pps;
 use crate::encoder::svc_encode_slice::current_layer;
 pub use crate::encoder::svc_encode_slice::SSliceHeaderExt;
 pub use crate::encoder::md::SMbCache;
@@ -665,9 +664,7 @@ pub fn CheckBitstreamBuffer(
 ///
 /// `extern "C"` came off at T4b.1 with the slot that required it — and with the
 /// thunk its CABAC twin needed to reach the same slot.
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
-pub unsafe fn WelsSpatialWriteMbSyn(
+pub fn WelsSpatialWriteMbSyn(
     pEncCtx: &sWelsEncCtx,
     pSlice: &mut SSlice,
     mbs: &mut crate::safe::mb_grid::MbWindow<'_, SMB>,
@@ -680,7 +677,12 @@ pub unsafe fn WelsSpatialWriteMbSyn(
     // held across them. The buffer needs no such care since S11.1a: it arrives
     // threaded, borrows nothing of the slice or the context, and survives every
     // reborrow below.
-    let kuiChromaQpIndexOffset = (*layer_pps(pEncCtx, current_layer(pEncCtx))).uiChromaQpIndexOffset;
+    let kuiChromaQpIndexOffset = crate::encoder::svc_encode_slice::layer_pps_ref(
+        pEncCtx,
+        crate::encoder::svc_encode_slice::current_layer_ref(pEncCtx).expect("the frame's current layer is stamped"),
+    )
+    .expect("the layer's PPS is stamped")
+    .uiChromaQpIndexOffset;
 
     if IS_SKIP(mbs.cur().uiMbType) {
         mbs.cur_mut().uiLumaQp = (*pSlice).uiLastMbQp;

@@ -56,7 +56,6 @@ pub use crate::encoder::encoder_context::SPicData;
 pub use crate::encoder::param_svc::SWelsPPS;
 pub use crate::encoder::encoder_context::SStrideTables;
 pub use crate::encoder::svc_encode_slice::SLayerInfo;
-use crate::encoder::svc_encode_slice::layer_pps;
 use crate::encoder::svc_encode_slice::current_layer;
 use crate::encoder::encode_mb_aux::{blk4x4, blk4x4_mut, blk_four4x4, blk_four4x4_mut, hadamard2x2_span,
     hadamard2x2_span_mut, hadamard_dc_span};
@@ -1016,7 +1015,7 @@ pub fn WelsTryPYskip(
 /// All pointers in `pEncCtx`, `pCurMb`, and `pMbCache` must be valid.
 // unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
-pub unsafe fn WelsTryPUVskip(
+pub fn WelsTryPUVskip(
     pEncCtx: &sWelsEncCtx,
     pCurMb: &mut SMB,
     pMbCache: &mut SMbCache,
@@ -1025,9 +1024,11 @@ pub unsafe fn WelsTryPUVskip(
     // **T9.D8**: the base is an offset now, not a cursor.
     let kiResOff = if iUV == 1 { 256usize } else { 256 + 64 };
 
-    let pPpsP = layer_pps(pEncCtx, current_layer(pEncCtx));
-    let chroma_qp_index_offset = if !pPpsP.is_null() {
-        (*pPpsP).uiChromaQpIndexOffset as i32
+    let chroma_qp_index_offset = if let Some(pps) = crate::encoder::svc_encode_slice::layer_pps_ref(
+        pEncCtx,
+        crate::encoder::svc_encode_slice::current_layer_ref(pEncCtx).expect("the frame's current layer is stamped"),
+    ) {
+        pps.uiChromaQpIndexOffset as i32
     } else {
         0
     };

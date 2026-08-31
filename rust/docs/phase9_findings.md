@@ -8323,3 +8323,51 @@ path at ~30× the drive** — its ~59-minute pair budget predates this inflation
 and if the ×4 carries, the pair is a 3–4 hour item. Re-measure one probe at
 `MIRI_FULL=1` *before* scheduling E3's battery, and budget from the measurement,
 not from the baseline file's table.
+
+## F274 — S10.15 formed a `&mut` to layer state inside the fork, against the comment directly above the call — and no gate between here and E3 could see it
+
+`WriteRefPicMarking`'s S10.15 flip made its fourth parameter
+`pNalHdrExt: &mut SNalUnitHeaderExt`, and both call sites — the slice-header
+writers, which every worker runs on every slice — formed `&mut *pNalHead` over
+`pCurLayer.sLayerInfo.sNalHeaderExt`: **one layer-owned struct, N concurrent
+`&mut`s**. The body only reads `bIdrFlag`; the reference is unwritten, and that
+is no comfort — under Miri's model a `Unique` retag is write-flavoured, so two
+workers forming one is itself the data race. The binding's own comment, two
+lines above the call, said exactly why the raw had to stay: "T7.C3:
+`addr_of_mut!`, not `&mut` — layer state, read-only here, and every worker runs
+this. `WriteRefPicMarking` takes the raw pointer unchanged." **The flip
+contradicted the sentence directly above it.**
+
+**Why every referee stayed green.** The byte sweeps cannot see it — nothing is
+written, so no byte ever diverges (F239's lesson, again). The session lane's
+two full-encode probes are **single-threaded** — the genuine multi-threaded
+fork pair runs only at `full`/`exit` (F168) — and the lane's synthetic
+two-thread probes certify the *layer-body* and *bank* claims, not the header
+writers. So S10.14 and S10.15, which re-shaped fork-reachable parameter lists,
+ran at a cadence (`cargo test` + sweep + ratchet) with **no aliasing referee at
+all for the shapes they changed**. The defect would have surfaced at E3, ~59+
+minutes into the fork pair, several sessions and hundreds of commits away from
+its cause.
+
+**Proven, not asserted.** The new probe
+(`workers_read_the_layer_nal_header_through_shared_borrows`) runs two workers
+against one header struct. With the defect's own spelling — `&mut *p` per
+worker, unwritten — Miri answers: "Data race detected between (1) retag write
+on thread `unnamed-2` and (2) retag write of type `SNalUnitHeaderExt` on
+thread `unnamed-3`". Deterministic on the first pair of rounds, so the
+calibration is one control run. With shared reborrows it is green (1.30 s;
+joins the lane).
+
+**The fix** rode S11.2a's layer flip: `pNalHdrExt: &SNalUnitHeaderExt`, and the
+call sites pass `&pCurLayer.sLayerInfo.sNalHeaderExt` — the shape the probe
+certifies. The rest of S10.15's batch was re-audited under the same question
+and is lawful: `WriteReferenceReorder`'s and `WriteRefPicMarking`'s slice
+headers and `WelsWriteSliceEndSyn`'s CABAC context are **slice-owned** (one
+worker each), and S10.14's `PDeblockingFilterSlice` takes the layer **shared**.
+
+**The rule this buys.** Before flipping any raw parameter to a reference in
+fork-reachable code, classify the pointee's *owner*: slice-owned state may take
+`&mut` (per-worker disjoint by the bank's construction); layer- or
+context-owned state takes `&` only; and an unwritten `&mut` is not a milder
+version of the mistake — the retag is the race. S10.15 flipped six parameters
+and got five right; the classification step is what was missing, not care.

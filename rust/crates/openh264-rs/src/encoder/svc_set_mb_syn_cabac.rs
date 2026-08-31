@@ -152,7 +152,6 @@ pub const g_kuiChromaQpTable: [u8; 52] = [
 
 
 pub use crate::encoder::svc_encode_slice::SSliceHeader;
-use crate::encoder::svc_encode_slice::layer_pps;
 use crate::encoder::svc_encode_slice::current_layer;
 pub use crate::encoder::svc_encode_slice::SSliceHeaderExt;
 pub use crate::encoder::encoder_context::EWelsSliceType;
@@ -1115,7 +1114,9 @@ pub fn WelsSpatialWriteMbSynCabac(
         let iSliceFirstMbXY = pSliceHeadExt.sSliceHeader.iFirstMbInSlice;
         let pCurDqLayer = current_layer(pEncCtx);
 
-        let uiChromaQpIndexOffset = (*layer_pps(pEncCtx, pCurDqLayer)).uiChromaQpIndexOffset;
+        let uiChromaQpIndexOffset = crate::encoder::svc_encode_slice::layer_pps_ref(pEncCtx, &*pCurDqLayer)
+            .expect("the layer's PPS is stamped")
+            .uiChromaQpIndexOffset;
         let mut sMvd = SMVUnitXY::default();
         let mut iRet = 0;
 
