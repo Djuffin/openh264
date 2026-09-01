@@ -2471,17 +2471,22 @@ pub fn AddPrefixNal(
     let kiPos = *iPosBsBuffer as usize;
     let pDstTail = (kiPos <= pFrameBs.len()).then(|| &mut pFrameBs[kiPos..]);
     let kiSlot = *iNalLenBase + (*pNalIdxInLayer).max(0) as usize;
+    let mut kiNalLenOut = 0i32;
     iReturn = crate::encoder::nal_encap::WelsEncodeNal(
         &sNalList[(*iNalIndex - 1) as usize],
         &sBsBuffer[..],
         Some(&kNalHeaderExt),
         pDstTail,
-        &mut sNalLen[kiSlot],
+        &mut kiNalLenOut,
     );
+    // S13.1 (F312): written through `&AtomicI32`, never `&mut i32` — a `&mut`
+    // here retags the whole buffer `Unique` and pops the C-ABI pointer the
+    // application holds. Stored where the callee's own write landed.
+    sNalLen[kiSlot].store(kiNalLenOut, std::sync::atomic::Ordering::Relaxed);
     if iReturn != ENC_RETURN_SUCCESS {
         return iReturn;
     }
-    *iPayloadSize = sNalLen[kiSlot];
+    *iPayloadSize = kiNalLenOut;
 
     pCtx.iPosBsBuffer += *iPayloadSize;
     *pNalIdxInLayer += 1;
@@ -2813,7 +2818,7 @@ pub fn WriteSavcParaset(
         return iReturn;
     }
 
-    *pCtx.pOut.as_deref_mut().expect("pOut lives").nal_len_at_mut(0) = iNalSize;
+    pCtx.pOut.as_deref().expect("pOut lives").set_nal_len_at(0, iNalSize);
     iNonVclSize += iNalSize;
     iCountNal = 1;
 
@@ -2849,7 +2854,7 @@ pub fn WriteSavcParaset(
     if iReturn != ENC_RETURN_SUCCESS {
         return iReturn;
     }
-    *pCtx.pOut.as_deref_mut().expect("pOut lives").nal_len_at_mut(0) = iNalSize;
+    pCtx.pOut.as_deref().expect("pOut lives").set_nal_len_at(0, iNalSize);
     iNonVclSize += iNalSize;
     iCountNal = 1;
 
@@ -2933,11 +2938,10 @@ pub fn WriteSavcParaset_Listing(
             if iReturn != ENC_RETURN_SUCCESS {
                 return iReturn;
             }
-            *pCtx
-                .pOut
-                .as_deref_mut()
+            pCtx.pOut
+                .as_deref()
                 .expect("pOut lives")
-                .nal_len_at_mut(iCountNal.max(0) as usize) = iNalSize;
+                .set_nal_len_at(iCountNal.max(0) as usize, iNalSize);
             iNonVclSize += iNalSize;
             iCountNal += 1;
         }
@@ -2985,11 +2989,10 @@ pub fn WriteSavcParaset_Listing(
             if iReturn != ENC_RETURN_SUCCESS {
                 return iReturn;
             }
-            *pCtx
-                .pOut
-                .as_deref_mut()
+            pCtx.pOut
+                .as_deref()
                 .expect("pOut lives")
-                .nal_len_at_mut(iCountNal.max(0) as usize) = iNalSize;
+                .set_nal_len_at(iCountNal.max(0) as usize, iNalSize);
             iNonVclSize += iNalSize;
             iCountNal += 1;
         }
@@ -3554,14 +3557,19 @@ pub fn WelsCodeOnePicPartition(
         } = &mut **pOut.as_mut().expect("pOut lives");
         let kiPos = *iPosBsBuffer as usize;
         let pDstTail = (kiPos <= pFrameBs.len()).then(|| &mut pFrameBs[kiPos..]);
-        let pNalLenSlot = &mut sNalLen[*iNalLenBase + iNalIdxInLayer.max(0) as usize];
+        let kiSlot = *iNalLenBase + iNalIdxInLayer.max(0) as usize;
+        let mut kiNalLenOut = 0i32;
         iReturn = crate::encoder::nal_encap::WelsEncodeNal(
             &sNalList[(*iNalIndex - 1) as usize],
             &sBsBuffer[..],
             Some(&kNalHeaderExt),
             pDstTail,
-            pNalLenSlot,
+            &mut kiNalLenOut,
         );
+        // S13.1 (F312): written through `&AtomicI32`, never `&mut i32` — a `&mut`
+        // here retags the whole buffer `Unique` and pops the C-ABI pointer the
+        // application holds. Stored where the callee's own write landed.
+        sNalLen[kiSlot].store(kiNalLenOut, std::sync::atomic::Ordering::Relaxed);
         if iReturn != ENC_RETURN_SUCCESS {
             return iReturn;
         }
@@ -4112,14 +4120,22 @@ pub fn WelsEncoderEncodeExt(
             } = &mut **pOut.as_mut().expect("pOut lives");
             let kiPos = *iPosBsBuffer as usize;
             let pDstTail = (kiPos <= pFrameBs.len()).then(|| &mut pFrameBs[kiPos..]);
-            let pNalLenSlot = &mut sNalLen[*iNalLenBase + iNalIdxInLayer.max(0) as usize];
-            pCtx.iEncoderError = crate::encoder::nal_encap::WelsEncodeNal(
+            let kiSlot = *iNalLenBase + iNalIdxInLayer.max(0) as usize;
+            let mut kiNalLenOut = 0i32;
+            let kiEncodeNalRet = crate::encoder::nal_encap::WelsEncodeNal(
                 &sNalList[*iNalIndex as usize - 1],
                 &sBsBuffer[..],
                 Some(&kNalHeaderExt),
                 pDstTail,
-                pNalLenSlot,
+                &mut kiNalLenOut,
             );
+            // S13.1 (F312): written through `&AtomicI32`, never `&mut i32` — a `&mut`
+            // here retags the whole buffer `Unique` and pops the C-ABI pointer the
+            // application holds. Stored where the callee's own write landed; the return
+            // code lands in `pCtx` only afterwards, because the store is the last use of
+            // the `pOut` split borrow and assigning `pCtx.iEncoderError` ends it.
+            sNalLen[kiSlot].store(kiNalLenOut, std::sync::atomic::Ordering::Relaxed);
+            pCtx.iEncoderError = kiEncodeNalRet;
             if pCtx.iEncoderError != ENC_RETURN_SUCCESS {
                 return pCtx.iEncoderError;
             }
@@ -4401,14 +4417,22 @@ pub fn WelsEncoderEncodeExt(
                 } = &mut **pOut.as_mut().expect("pOut lives");
                 let kiPos = *iPosBsBuffer as usize;
                 let pDstTail = (kiPos <= pFrameBs.len()).then(|| &mut pFrameBs[kiPos..]);
-                let pNalLenSlot = &mut sNalLen[*iNalLenBase + iNalIdxInLayer.max(0) as usize];
-                pCtx.iEncoderError = crate::encoder::nal_encap::WelsEncodeNal(
+                let kiSlot = *iNalLenBase + iNalIdxInLayer.max(0) as usize;
+                let mut kiNalLenOut = 0i32;
+                let kiEncodeNalRet = crate::encoder::nal_encap::WelsEncodeNal(
                     &sNalList[*iNalIndex as usize - 1],
                     &sBsBuffer[..],
                     Some(&kNalHeaderExt),
                     pDstTail,
-                    pNalLenSlot,
+                    &mut kiNalLenOut,
                 );
+                // S13.1 (F312): written through `&AtomicI32`, never `&mut i32` — a `&mut`
+                // here retags the whole buffer `Unique` and pops the C-ABI pointer the
+                // application holds. Stored where the callee's own write landed; the return
+                // code lands in `pCtx` only afterwards, because the store is the last use of
+                // the `pOut` split borrow and assigning `pCtx.iEncoderError` ends it.
+                sNalLen[kiSlot].store(kiNalLenOut, std::sync::atomic::Ordering::Relaxed);
+                pCtx.iEncoderError = kiEncodeNalRet;
                 if pCtx.iEncoderError != ENC_RETURN_SUCCESS {
                     return pCtx.iEncoderError;
                 }
@@ -4605,7 +4629,7 @@ pub fn WelsEncoderEncodeExt(
             pFbi.sLayerInfo[iLbi].uiQualityId = 0;
             pFbi.sLayerInfo[iLbi].uiLayerType = NON_VIDEO_CODING_LAYER;
             pFbi.sLayerInfo[iLbi].iNalCount = 1;
-            *pCtx.pOut.as_deref_mut().expect("pOut lives").nal_len_at_mut(0) = iPaddingNalSize;
+            pCtx.pOut.as_deref().expect("pOut lives").set_nal_len_at(0, iPaddingNalSize);
             pFbi.sLayerInfo[iLbi].eFrameType = eFrameType;
             pFbi.sLayerInfo[iLbi].iSubSeqId = GetSubSequenceId(pCtx, eFrameType);
             iLbi += 1;

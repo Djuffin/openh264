@@ -77,6 +77,11 @@ pub use crate::common::wels_common_defs::{
 };
 pub use crate::safe::bits::BsWriter;
 
+// **S13.1 (F312).** `sNalLen`'s elements are `AtomicI32` so that the C-ABI
+// pointer `nal_len_ptr` hands the application stays valid while the encoder keeps
+// writing lengths. See the field's own note for the aliasing argument.
+use std::sync::atomic::{AtomicI32, Ordering};
+
 /// Raw payload data descriptor for a NAL unit before encapsulation.
 ///
 /// **The payload is `iStartPos .. iStartPos + iPayloadSize` of a buffer this record
@@ -128,7 +133,7 @@ pub struct SWelsEncoderOutput {
     pub sBsBuffer: Vec<u8>,
     pub sBsWrite: BsWriter,
     pub sNalList: Vec<SWelsNalRaw>,
-    pub sNalLen: Vec<i32>,
+    pub sNalLen: Vec<AtomicI32>,
     pub iNalIndex: i32,
     pub iLayerBsIndex: i32,
     /// **Where the current layer's NAL lengths start in [`sNalLen`](Self::sNalLen)
@@ -191,7 +196,7 @@ impl SWelsEncoderOutput {
             sBsBuffer: vec![0u8; kiBsLen],
             sBsWrite: BsWriter::new(),
             sNalList: vec![SWelsNalRaw::default(); kiCountNals],
-            sNalLen: vec![0i32; kiCountNals],
+            sNalLen: (0..kiCountNals).map(|_| AtomicI32::new(0)).collect(),
             iNalIndex: 0,
             iLayerBsIndex: 0,
             iNalLenBase: 0,
@@ -205,24 +210,41 @@ impl SWelsEncoderOutput {
     /// the array's length yields the one-past-the-end address, which is what the
     /// raw `.add(count)` chain produced at the last layer and what the
     /// application never dereferences (its `iNalCount` is zero there).
+    ///
+    /// **S13.1 (F312): the borrow is shared, and that is the whole fix.** This
+    /// pointer escapes into `SLayerBSInfo::pNalLengthInByte` and the application
+    /// reads it after `EncodeFrame` returns, while the encoder goes on writing
+    /// lengths. Taken off `&mut self`, the root was a `Unique` retag over the
+    /// whole buffer and *every* later `&mut sNalLen[i]` popped it — the read was
+    /// then a dead-tag access, which no byte gate can see and Miri's full-drive
+    /// CAVLC probe reports. Off `&self` into `AtomicI32`, the root is
+    /// `SharedReadWrite` and the writes below are its siblings, not its
+    /// invalidators.
     #[inline]
-    pub fn nal_len_ptr(&mut self) -> *mut i32 {
+    pub fn nal_len_ptr(&self) -> *mut i32 {
         let kiBase = self.iNalLenBase.min(self.sNalLen.len());
-        self.sNalLen[kiBase..].as_mut_ptr()
+        self.sNalLen[kiBase..].as_ptr().cast::<i32>().cast_mut()
     }
 
     /// The NAL length at `kiIdx` **within the current layer** — the safe form of
     /// `*pNalLengthInByte.add(kiIdx)`.
     #[inline]
     pub fn nal_len_at(&self, kiIdx: usize) -> i32 {
-        self.sNalLen[self.iNalLenBase + kiIdx]
+        self.sNalLen[self.iNalLenBase + kiIdx].load(Ordering::Relaxed)
     }
 
     /// [`nal_len_at`](Self::nal_len_at)'s write half.
+    ///
+    /// **Takes `&self`, and returns nothing** (S13.1, F312). It was
+    /// `nal_len_at_mut(&mut self) -> &mut i32`, and that `&mut` was the retag that
+    /// invalidated the application's `pNalLengthInByte`. `Relaxed` is the right
+    /// ordering: these slots are published to the application by `EncodeFrame`'s
+    /// own return, which is the synchronisation edge, and no worker reads another
+    /// worker's slot.
     #[inline]
-    pub fn nal_len_at_mut(&mut self, kiIdx: usize) -> &mut i32 {
+    pub fn set_nal_len_at(&self, kiIdx: usize, kiLen: i32) {
         let kiBase = self.iNalLenBase;
-        &mut self.sNalLen[kiBase + kiIdx]
+        self.sNalLen[kiBase + kiIdx].store(kiLen, Ordering::Relaxed);
     }
 
     /// Advance to the next layer's slot — the safe form of the ABI chain's
