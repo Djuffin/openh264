@@ -2095,7 +2095,14 @@ fn EncodeOnePartitionSizeLimited(
     pSlotBuf: &mut [u8],
     // S11.27: this partition's records, carved before the fork — every slice
     // this worker discovers lies inside the run.
-    pMbs: &mut crate::safe::mb_grid::MbWindow<'_, SMB>,
+    //
+    // **S13.2 (F313): a slice, not a single window** — the shape
+    // `EncodeOneSliceRange` above already uses. A partition whose span is zero
+    // codes nothing and carries NO window: `MbWindow`'s invariant is that a
+    // window always has a current macroblock (F77), so the empty partition
+    // cannot be given one. Every read below is past the `iDiffMbIdx == 0`
+    // guard, where the slice is known to hold exactly one.
+    pMbs: &mut [crate::safe::mb_grid::MbWindow<'_, SMB>],
     // S11.30: this partition's CABAC restore scratch, taken from the context
     // beside the bitstream slot — reborrowed per coded slice below.
     mut pRestoreBuf: Option<&mut [u8]>,
@@ -2219,7 +2226,7 @@ fn EncodeOnePartitionSizeLimited(
             // S11.34: the forward slot is the split's other half — one borrow,
             // no derivation, and the old MT index (`iCodedSliceNum + 1`) is the
             // split point by construction.
-            let mut iRet = WelsCodeOneSlice(pCtx, pSlice, eNalType as i32, &mut *pSliceBsBuf, &mut pCtxOutBs, pMbs, pRestoreBuf.as_deref_mut(), pNextSlice);
+            let mut iRet = WelsCodeOneSlice(pCtx, pSlice, eNalType as i32, &mut *pSliceBsBuf, &mut pCtxOutBs, &mut pMbs[0], pRestoreBuf.as_deref_mut(), pNextSlice);
             if ENC_RETURN_SUCCESS != iRet {
                 return iRet;
             }
@@ -2243,7 +2250,7 @@ fn EncodeOnePartitionSizeLimited(
                     &pCurDq.sSliceEncCtx,
                     &pCurDq.iCsStride,
                     pSlice,
-                    pMbs,
+                    &mut pMbs[0],
                 );
             }
 
@@ -2333,7 +2340,18 @@ pub fn EncodeSizeLimitedSlicesForked(pCtx: &mut sWelsEncCtx, kiPartitionCnt: i32
             .map(|p| {
                 let first = pCurDq.FirstMbIdxOfPartition[p];
                 let end = pCurDq.EndMbIdxOfPartition[p];
-                (first, end - first + 1)
+                // **S13.2 (F313): a partition whose span is zero codes NOTHING**, and
+                // the count must say so. `EncodeOnePartitionSizeLimited` above is the
+                // authority — `iDiffMbIdx == 0` stamps `iSliceIdx = -1` and returns
+                // before it reads the window — and this is the same rule at the carve.
+                // `end - first + 1` read such a partition as claiming ONE macroblock,
+                // which is what made the carve assert on a map that was never
+                // malformed: `WelsInitCurrentQBLayerMltslc` clamps `iPartitionNum` to 1
+                // whenever `kiMbNumInFrame / iPartitionNum` is 0 or 1, then zeroes
+                // every remaining slot, while the fork still runs `iActiveThreadsNum`
+                // workers. 32x16 with 3 threads is two macroblocks and three workers.
+                let span = end - first;
+                (first, if span == 0 { 0 } else { span + 1 })
             })
             .collect();
         (r, pCurDq.sMbDataP.dims().mb_width())
@@ -2374,6 +2392,12 @@ pub fn EncodeSizeLimitedSlicesForked(pCtx: &mut sWelsEncCtx, kiPartitionCnt: i32
             let mut rest: &mut [SMB] = sTakenMbData.as_mut_slice();
             let mut cursor = 0i32;
             for (p, &(first, count)) in vPartRanges.iter().enumerate() {
+                if count == 0 {
+                    // No window: `MbWindow` requires a current macroblock (F77)
+                    // and this partition has none. The worker's own
+                    // `iDiffMbIdx == 0` guard returns before it would index one.
+                    continue;
+                }
                 assert!(
                     first >= cursor && count > 0,
                     "partition {p} claims mbs [{first}..{}) against a carve cursor at {cursor} — \
@@ -2419,7 +2443,7 @@ pub fn EncodeSizeLimitedSlicesForked(pCtx: &mut sWelsEncCtx, kiPartitionCnt: i32
                         job.iFirstSlice,
                         job.iBsSlot,
                         &mut *job.pBsBuf,
-                        &mut job.pMbs[0],
+                        &mut job.pMbs[..],
                         job.pDynBsBuf.take(),
                         job.pBank.take().expect("the size-limited job carries its bank"),
                     );
