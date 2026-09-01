@@ -22,8 +22,23 @@
 # is a failure in itself: the tag is where the reason lives, and an allow with no
 # reason is the shape every session's clean-up pass exists to find.
 #
-# `src/api/` is out of scope here, as it is for the tracking number: it is the
-# frozen C-ABI layer, watched by `abi_exports.sh` and `abi_sizes.sh` instead.
+# **`src/api/` is out of scope for the tracking number, but not for this pin —
+# S12.11, and the reason is the whole of `api_island_scope.md`.** The exemption used
+# to be the directory: every allow under `src/api/` was skipped, on the grounds that
+# it is "the frozen C-ABI layer, watched by `abi_exports.sh` and `abi_sizes.sh`
+# instead". Measured, that covered far more than the boundary — 193 of
+# `codec_api.rs`'s 218 raw dereferences were in **non-`extern "C"`** bodies, decoder
+# picture-reordering logic that had simply never been looked at, because the two
+# referees that do watch the island watch its *surface* (seven exported symbols, 170
+# type sizes) and neither reads a body.
+#
+# So the exemption is now the **ABI surface**, not the directory. An allow under
+# `src/api/` is skipped only when the item it attaches to is `extern "C"`; every
+# other one is pinned as an `island-nonextern(<cat>)` row and fails in both
+# directions like the rest. They are not counted into the tracking number — that
+# stays "allows outside `src/api/`", so the series remains comparable — but a *new*
+# one cannot appear unannounced, which is exactly what happened for eleven sessions.
+# An allow whose item cannot be classified is pinned rather than skipped.
 #
 # **`cfg-region(...)` rows — S12.5, F303.** Everything above counts what the host
 # build compiles, and that is not the whole tree. `WelsEmms`'s `asm!("emms")` sat
@@ -74,12 +89,24 @@ for root, _, files in os.walk(src):
             continue
         path = os.path.join(root, f)
         rel = os.path.relpath(path, src)
-        if rel.startswith('api/'):
-            continue
+        island = rel.startswith('api/')
         lines = open(path).read().splitlines()
         for i, line in enumerate(lines):
             if line.strip() != '#[allow(unsafe_code)]':
                 continue
+            if island:
+                # The ABI surface is the exemption, not the directory (S12.11): find
+                # the item this allow attaches to and skip it only if it is
+                # `extern "C"`. Anything else — and anything unclassifiable — pins.
+                item = ''
+                for c in lines[i + 1:i + 9]:
+                    t = c.strip()
+                    if not t or t.startswith('//') or t.startswith('#['):
+                        continue
+                    item = t
+                    break
+                if 'extern "C"' in item:
+                    continue
             cat = None
             for c in lines[max(0, i - 4):i]:
                 m = re.search(r'unsafe-cat:\s*([A-Za-z0-9_()-]+)', c)
@@ -88,6 +115,8 @@ for root, _, files in os.walk(src):
             if cat is None:
                 untagged.append(f'{rel}:{i + 1}')
                 cat = 'UNTAGGED'
+            if island:
+                cat = f'island-nonextern({cat})'
             rows[(rel, cat)] = rows.get((rel, cat), 0) + 1
 # F303: the conditional regions the host build never compiles. Whole tree,
 # `api/` included — the blindness is architectural, not layered.
@@ -134,6 +163,7 @@ case "$MODE" in
       echo "#   fork-shared(S63)        the MT fork's shared-context reads"
       echo "#   recon-seam              D-mt-3's one seam (holds the last unsafe impl)"
       echo "#   port-raw(...)           named residue, each with its reason at the site"
+      echo "#   island-nonextern(...)   inside src/api/ but NOT on an extern \"C\" item (S12.11)"
       echo "#   cfg-region(...)         a conditional region the host build never sees (F303)"
       echo "#"
       census
@@ -145,11 +175,15 @@ case "$MODE" in
     # totalled apart: TOTAL is the tracking number (allows outside src/api/), and
     # the cfg regions are a separate list of blind spots, not unsafe.
     census | awk '{ n = substr($3, 2)
-                    if ($2 ~ /^cfg-region\(/) { g[$2] += n; tg += n } else { c[$2] += n; t += n } }
-                  END { for (k in c) printf "  %-30s %d\n", k, c[k]
-                        printf "  %-30s %d\n", "TOTAL (allows outside api/)", t
-                        for (k in g) printf "  %-30s %d\n", k, g[k]
-                        printf "  %-30s %d\n", "TOTAL cfg-regions", tg }' \
+                    if ($2 ~ /^cfg-region\(/)            { g[$2] += n; tg += n }
+                    else if ($2 ~ /^island-nonextern\(/)  { s[$2] += n; ts += n }
+                    else                                  { c[$2] += n; t  += n } }
+                  END { for (k in c) printf "  %-34s %d\n", k, c[k]
+                        printf "  %-34s %d\n", "TOTAL (allows outside api/)", t
+                        for (k in s) printf "  %-34s %d\n", k, s[k]
+                        printf "  %-34s %d\n", "TOTAL island non-extern", ts
+                        for (k in g) printf "  %-34s %d\n", k, g[k]
+                        printf "  %-34s %d\n", "TOTAL cfg-regions", tg }' \
            | sort -k2 -rn
     echo "--- by file"
     census | sed 's/^/  /'
