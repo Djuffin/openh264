@@ -2342,7 +2342,7 @@ pub fn WelsISliceMdEnc(
             crate::encoder::svc_base_layer_md::WelsMdIntraMb(pEncCtx, &mut sMd, pMbs.cur_mut(), &mut *pMbCache);
             UpdateNonZeroCountCache(pMbs.cur(), &mut *pMbCache);
 
-            let mut iEncReturn = ENC_RETURN_SUCCESS;
+            let mut iEncReturn;
             {  // A6: the block is the shared borrow's scope (F191/F212)
                 let func_list = (*pEncCtx).func_list();
                 iEncReturn = func_list
@@ -2472,7 +2472,7 @@ pub fn WelsISliceMdEncDynamic(
             crate::encoder::svc_base_layer_md::WelsMdIntraMb(pEncCtx, &mut sMd, pMbs.cur_mut(), &mut *pMbCache);
             UpdateNonZeroCountCache(pMbs.cur(), &mut *pMbCache);
 
-            let mut iEncReturn = ENC_RETURN_SUCCESS;
+            let mut iEncReturn;
             {  // A6: the block is the shared borrow's scope (F191/F212)
                 let func_list = (*pEncCtx).func_list();
                 iEncReturn = func_list
@@ -2725,7 +2725,7 @@ pub fn WelsMdInterMbLoop<'a>(
             let pMbCache = &mut pSlice.sMbCacheInfo;
             UpdateNonZeroCountCache(pMbs.cur(), &mut *pMbCache);
 
-            let mut iEncReturn = ENC_RETURN_SUCCESS;
+            let mut iEncReturn;
             {  // A6: the block is the shared borrow's scope (F191/F212)
                 let func_list = (*pEncCtx).func_list();
                 iEncReturn = func_list
@@ -2918,7 +2918,7 @@ pub fn WelsMdInterMbLoopOverDynamicSlice<'a>(
             }
             UpdateNonZeroCountCache(pMbs.cur(), &mut *pMbCache);
 
-            let mut iEncReturn = ENC_RETURN_SUCCESS;
+            let mut iEncReturn;
             {  // A6: the block is the shared borrow's scope (F191/F212)
                 let func_list = (*pEncCtx).func_list();
                 iEncReturn = func_list

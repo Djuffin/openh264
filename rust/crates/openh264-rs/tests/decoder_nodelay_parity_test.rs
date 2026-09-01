@@ -131,7 +131,7 @@ unsafe fn nodelay_row(data: &[u8]) -> (usize, (i32, i32), String, Vec<i32>, Vec<
         let mut codes = Vec::new();
         let mut bufs = Vec::new();
 
-        let mut take = |info: &SBufferInfo, dst: [*mut u8; 3], hasher: &mut Sha1Hasher, frames: &mut usize, first: &mut (i32, i32)| {
+        let take = |info: &SBufferInfo, dst: [*mut u8; 3], hasher: &mut Sha1Hasher, frames: &mut usize, first: &mut (i32, i32)| {
             if info.iBufferStatus != 1 {
                 return;
             }

@@ -926,7 +926,7 @@ pub fn WelsEncoderParamAdjust(
         // nothing between the old position and this one writes any of them, so the
         // move is behaviour-preserving by construction. Under the old raw root this
         // conflict was invisible to every gate except Miri.
-        let mut sLogCtx = ctx.sLogCtx;
+        let sLogCtx = ctx.sLogCtx;
 
         // for sEncoderStatistics
         let sTempEncoderStatistics = ctx.sEncoderStatistics;

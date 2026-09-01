@@ -1116,7 +1116,7 @@ pub fn ParseInterInfo(
     let mb_type = *(*pDec).pMbType.get(iMbXy);
     match mb_type {
         MB_TYPE_16x16 => {
-            let mut iRefIdx = 0i32;
+            let mut iRefIdx: i32;
             if bAdaptiveMotionPredFlag {
                 let ret = crate::decoder::dec_golomb::BsGetOneBit(buf, pBs, &mut uiCode);
                 if ret != 0 {

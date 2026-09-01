@@ -70,7 +70,7 @@ unsafe fn force_idr_frame_types(width: i32, height: i32, slices: i32, frames: us
             CM_RESULT_SUCCESS
         );
 
-        let mut set = |id: ENCODER_OPTION, p: *mut std::ffi::c_void| {
+        let set = |id: ENCODER_OPTION, p: *mut std::ffi::c_void| {
             assert_eq!(ISVCEncoder::SetOption(enc, id, p), CM_RESULT_SUCCESS, "SetOption {id:?}");
         };
         let mut trace = 0i32; // WELS_LOG_QUIET

@@ -251,7 +251,6 @@ impl CWelsH264SVCEncoder {
                             ctx.param_mut().sSpatialLayers[pInfo.iLayer as usize]
                                 .iSpatialBitrate = iBitrate;
                         }
-                        _ => return cmInitParaError,
                     }
                     let log_ctx = self.m_pWelsTrace.m_sLogCtx;
                     if WelsEncoderApplyBitRate(log_ctx, ctx.param_mut(), pInfo.iLayer as i32)
@@ -279,7 +278,6 @@ impl CWelsH264SVCEncoder {
                             ctx.param_mut().sSpatialLayers[pInfo.iLayer as usize]
                                 .iMaxSpatialBitrate = iBitrate;
                         }
-                        _ => return cmInitParaError,
                     }
                     let log_ctx = self.m_pWelsTrace.m_sLogCtx;
                     if WelsEncoderApplyBitRate(log_ctx, ctx.param_mut(), pInfo.iLayer as i32)

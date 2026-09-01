@@ -458,7 +458,6 @@ fn sad_kernels_stay_inside_the_spans_they_declare() {
 // or claims less than the walk needs (a panic inside the safe kernel).
 // ---------------------------------------------------------------------------
 
-use openh264_rs::encoder::wels_preprocess::SMotionTextureUnit;
 use openh264_rs::processing::adaptive_quantization as aq;
 use openh264_rs::processing::vaacalc as vaa;
 
@@ -992,7 +991,7 @@ fn encode_mb_aux_shims_stay_inside_the_spans_they_declare() {
     // --- Scans and scorers: exact 16-element views, sources untouched.
     for _ in 0..scale(20) {
         let dct: [i16; 16] = coeffs(&mut rng);
-        let mut src = dct;
+        let src = dct;
 
         let mut g = [0i16; 16];
         ema::scan_4x4_dc_ac(&mut g, &dct);
@@ -1162,12 +1161,12 @@ fn encoder_recon_shims_stay_inside_the_spans_they_declare() {
         ps: usize,
         direct: impl Fn(&mut PlaneCursorMut<'_>, &PlaneCursor<'_>, &[i16; N]),
     ) {
-        let mut pred = rng.bytes((h - 1) * ps + w);
+        let pred = rng.bytes((h - 1) * ps + w);
         let mut rec = rng.bytes((h - 1) * rs + w);
         let pred_before = pred.clone();
         let rec_before = rec.clone();
         let dct: [i16; N] = core::array::from_fn(|_| rng.range_i32(-32768, 32767) as i16);
-        let mut m_dct = dct;
+        let m_dct = dct;
 
         // **S9.1**: the `_c` shim this used to compare against is deleted — it was a
         // wrapper over the very kernel on the other side of the assertion, kept alive

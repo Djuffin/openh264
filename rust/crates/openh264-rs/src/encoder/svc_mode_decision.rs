@@ -2958,7 +2958,7 @@ mod tests {
                         .fill(138);
                 }
             }
-            let mut src_pool = crate::encoder::picture::SrcPicPool::new(vec![src_pic]);
+            let src_pool = crate::encoder::picture::SrcPicPool::new(vec![src_pic]);
             let src_id = src_pool.at(0);
             // The prediction ping-pong is `SMbCache::sMemPredMb` since T6.C3 —
             // `[u8; 2 * 256 + 16]`, and the `+ 16` is F14's accommodation, documented

@@ -1400,7 +1400,7 @@ fn BiWeightPrediction(
     let Some(pwt) = pwt else {
         return;
     };
-    let (mut iWoc1, mut iOoc1, mut iWoc2, mut iOoc2) = (0i32, 0i32, 0i32, 0i32);
+    let (mut iWoc1, mut iOoc1, mut iWoc2, mut iOoc2);
 
     // luma
     let mut iLog2denom = pwt.uiLumaLog2WeightDenom as i32;
@@ -1411,7 +1411,9 @@ fn BiWeightPrediction(
         iOoc2 = pwt.sPredList[LIST_1].iLumaOffset[iRefIdx2 as usize];
     } else {
         iWoc1 = pwt.iImplicitWeight[iRefIdx1 as usize][iRefIdx2 as usize];
+        iOoc1 = 0;
         iWoc2 = 64 - iWoc1;
+        iOoc2 = 0;
     }
 
     {
@@ -1635,10 +1637,10 @@ pub fn GetInterBPred(
     let bUseWeightedBiPredIdc = pCurDqLayer.bUseWeightedBiPredIdc;
     let mb = McDst::mb(pCurDqLayer.iMbX, pCurDqLayer.iMbY);
 
-    let mut iMVs = [0i16; 2];
+    let mut iMVs;
     let mut iRefIndex0: i8 = 0;
     let mut iRefIndex1: i8 = 0;
-    let mut iRefIndex: i8 = 0;
+    let mut iRefIndex: i8;
 
     /// LIST_0's hypothesis, into `pDec`.
     macro_rules! mc0 {
@@ -1799,8 +1801,6 @@ pub fn GetInterBPred(
             if IS_TYPE_L0(iSubMBType) && IS_TYPE_L1(iSubMBType) {
                 iRefIndex0 = pRef(LIST_0, iIIdx);
                 iRefIndex1 = pRef(LIST_1, iIIdx);
-            } else {
-                iRefIndex = pRef(if IS_TYPE_L0(iSubMBType) { LIST_0 } else { LIST_1 }, iIIdx);
             }
 
             if IS_SUB_8x8(iSubMBType) {
@@ -2582,8 +2582,8 @@ pub fn WelsActualDecodeMbCavlcISlice(pCtx: &mut SliceCtx<'_>, buf: &[u8], pBs: &
         let mut uiCode = 0u32;
         let mut iCode = 0i32;
         let mut uiCbp;
-        let mut uiCbpC = 0u32;
-        let mut uiCbpL = 0u32;
+        let mut uiCbpC;
+        let mut uiCbpL;
 
         let mut sNeighAvail = SWelsNeighAvail::default();
         let mut pNonZeroCount = [0u8; 48];
@@ -2628,7 +2628,6 @@ pub fn WelsActualDecodeMbCavlcISlice(pCtx: &mut SliceCtx<'_>, buf: &[u8], pBs: &
                 *(*dq).grid.transform_size8x8_flag.get_mut(iMbXy) = uiCode != 0;
                 if uiCode != 0 {
                     *pDec.pMbType.get_mut(iMbXy) = MB_TYPE_INTRA8x8;
-                    uiMbType = MB_TYPE_INTRA8x8;
                 }
             }
             pCtx.eIntraPredConstraint.FillCacheIntraNxN(

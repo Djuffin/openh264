@@ -144,7 +144,7 @@ unsafe fn parseonly_rows(data: &[u8]) -> Vec<String> {
         let mut call = 0usize;
         let mut emitted = 0usize;
 
-        let mut one = |dec: *mut ISVCDecoder,
+        let one = |dec: *mut ISVCDecoder,
                        buf: *const u8,
                        len: i32,
                        info: &mut SParserBsInfo,

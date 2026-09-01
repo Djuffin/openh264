@@ -996,7 +996,7 @@ mod tests {
     /// grid's now, there is no second path to it, and the write is an ordinary one.
     #[test]
     fn test_need_error_con() {
-        let mut sps = SSps {
+        let sps = SSps {
             iMbWidth: 2,
             iMbHeight: 2,
             ..Default::default()
@@ -1074,7 +1074,7 @@ mod tests {
             let mut src = SPicture::with_planes(planes(0x11), MbDims::none());
             src.iFramePoc = 7; // duplicate POC on purpose
 
-            let mut sps = SSps { iMbWidth: W as u32, iMbHeight: H as u32, ..Default::default() };
+            let sps = SSps { iMbWidth: W as u32, iMbHeight: H as u32, ..Default::default() };
             // every MB lost, so EC has work to do. `MbGrid::new` zero-fills, and
             // `false` is this array's zero, so the fill is the state the layer
             // starts a sequence in rather than one the test invents (T5.L6).
@@ -1090,7 +1090,7 @@ mod tests {
                 // popping the tag it held). Slot 0 is the destination, slot 1 the
                 // source; `PicPool::over` stamps each with its `PicId`, which is what
                 // makes the identity this test is about a slot comparison.
-                let mut pool = crate::decoder::pic_queue::PicPool::over(vec![
+                let pool = crate::decoder::pic_queue::PicPool::over(vec![
                     Some(Box::new(dst)),
                     Some(Box::new(src)),
                 ]);
@@ -1166,7 +1166,7 @@ mod tests {
             let mut ctx = SWelsDecoderContext::new_boxed();
 
             let dst_id = {
-                let mut pool = crate::decoder::pic_queue::PicPool::over(vec![
+                let pool = crate::decoder::pic_queue::PicPool::over(vec![
                     Some(Box::new(dst)),
                     Some(Box::new(src)),
                 ]);
@@ -1211,7 +1211,7 @@ mod tests {
 
     #[test]
     fn test_implement_error_con_disable() {
-        let mut param = SDecodingParam {
+        let param = SDecodingParam {
             eEcActiveIdc: ERROR_CON_IDC::ERROR_CON_DISABLE,
             ..Default::default()
         };

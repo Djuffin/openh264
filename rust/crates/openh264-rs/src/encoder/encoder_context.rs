@@ -221,7 +221,7 @@ impl SPicData {
     #[inline]
     pub fn mb_offset(&self, stride: i32, plane: usize) -> isize {
         let shift = if plane == 0 { 4 } else { 3 };
-        (((self.iMbX + self.iMbY * stride) as isize) << shift)
+        ((self.iMbX + self.iMbY * stride) as isize) << shift
     }
 
     // **S12.6 deleted `mb_cursor`** — S4.C2's raw macroblock cursor, `roots[plane]`
@@ -3503,7 +3503,7 @@ mod tests {
 
     #[test]
     fn test_update_and_loadback_framenum() {
-        let mut param = SWelsSvcCodingParam::default();
+        let param = SWelsSvcCodingParam::default();
         // Only the fields this test exercises; SWelsSPS is now the full
         // parameter_sets.h:43 struct rather than the four-field copy that used to
         // live in this module.
@@ -3555,7 +3555,7 @@ mod tests {
     #[test]
     fn test_init_function_pointers() {
         // S5.E2b: every call this made is a safe `fn` now.
-        let mut param = SWelsSvcCodingParam::default();
+        let param = SWelsSvcCodingParam::default();
         let mut ctx = sWelsEncCtx::default();
         // T6.I1: the context brings its own table, so the fixture no longer
         // aims the field at a stack one — it reads the context's back out.
