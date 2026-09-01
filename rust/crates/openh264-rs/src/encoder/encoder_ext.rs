@@ -2119,7 +2119,12 @@ pub fn PrefetchReferencePicture(pCtx: &mut sWelsEncCtx, keFrameType: EVideoFrame
 /// `encoder_ext.cpp:3376`.
 pub fn ClearFrameBsInfo(pCtx: &mut sWelsEncCtx, pFbi: &mut SFrameBSInfo) {
     (*pFbi).sLayerInfo[0].pBsBuf = pCtx.frame_bs();
-    (*pFbi).sLayerInfo[0].pNalLengthInByte = pCtx.pOut.as_deref_mut().expect("pOut lives").sNalLen.as_mut_ptr();
+    {
+        // S11.47: the frame's first layer starts at entry 0 of `pOut.sNalLen`.
+        let pOut = pCtx.pOut.as_deref_mut().expect("pOut lives");
+        pOut.iNalLenBase = 0;
+        (*pFbi).sLayerInfo[0].pNalLengthInByte = pOut.nal_len_ptr();
+    }
 
     for i in 0..(*pFbi).iLayerNum as usize {
         (*pFbi).sLayerInfo[i].iNalCount = 0;
@@ -2405,7 +2410,8 @@ pub fn WelsInitCurrentLayer(pCtx: &mut sWelsEncCtx, _kiWidth: i32, _kiHeight: i3
 pub fn AddPrefixNal(
     pCtx: &mut sWelsEncCtx,
     _pLayerBsInfo: &mut SLayerBSInfo,
-    pNalLen: *mut i32,
+    // S11.47: the out-array pointer is gone — the slot is `pOut.sNalLen` at the
+    // current layer's base plus this index, which the body reaches directly.
     pNalIdxInLayer: &mut i32,
     keNalType: EWelsNalUnitType,
     keNalRefIdc: EWelsNalRefIdc,
@@ -2455,28 +2461,24 @@ pub fn AddPrefixNal(
     // where the argument list would have been two borrows of the whole
     // context. No copy: the source is borrowed, not cloned.
     let sWelsEncCtx { pOut, pFrameBs, iPosBsBuffer, .. } = &mut *pCtx;
-    let kpOut = pOut.as_deref().expect("pOut lives");
+    // S11.47: `pOut`'s own fields split too — see the partition writer.
+    let crate::encoder::nal_encap::SWelsEncoderOutput {
+        sNalList, sBsBuffer, sNalLen, iNalIndex, iNalLenBase, ..
+    } = &mut **pOut.as_mut().expect("pOut lives");
     let kiPos = *iPosBsBuffer as usize;
     let pDstTail = (kiPos <= pFrameBs.len()).then(|| &mut pFrameBs[kiPos..]);
+    let kiSlot = *iNalLenBase + (*pNalIdxInLayer).max(0) as usize;
     iReturn = crate::encoder::nal_encap::WelsEncodeNal(
-        &kpOut.sNalList[(kpOut.iNalIndex - 1) as usize],
-        &kpOut.sBsBuffer[..],
+        &sNalList[(*iNalIndex - 1) as usize],
+        &sBsBuffer[..],
         Some(&kNalHeaderExt),
         pDstTail,
-        // unsafe-cat: C-ABI — the out-array slot (S11.20's family).
-        #[allow(unsafe_code)]
-        unsafe {
-            &mut *pNalLen.add(*pNalIdxInLayer as usize)
-        },
+        &mut sNalLen[kiSlot],
     );
     if iReturn != ENC_RETURN_SUCCESS {
         return iReturn;
     }
-    // unsafe-cat: C-ABI
-    #[allow(unsafe_code)]
-    unsafe {
-        *iPayloadSize = *pNalLen.add(*pNalIdxInLayer as usize);
-    }
+    *iPayloadSize = sNalLen[kiSlot];
 
     pCtx.iPosBsBuffer += *iPayloadSize;
     *pNalIdxInLayer += 1;
@@ -2729,7 +2731,6 @@ pub fn WriteSsvcParaset(
 
     let iReturn = crate::encoder::wels_encoder_ext::WelsWriteParameterSets(
         pCtx,
-        pFbi.sLayerInfo[*iLbi].pNalLengthInByte,
         &mut iCountNal,
         &mut iNonVclSize,
     );
@@ -2757,15 +2758,15 @@ pub fn WriteSsvcParaset(
     pFbi.sLayerInfo[*iLbi].iSubSeqId = GetSubSequenceId(pCtx, EVideoFrameType::videoFrameTypeIDR);
 
     // point to next pLayerBsInfo
-    let kpPrevNalLen = pFbi.sLayerInfo[*iLbi].pNalLengthInByte;
     *iLbi += 1;
-    pCtx.pOut.as_deref_mut().expect("pOut lives").iLayerBsIndex += 1;
     pFbi.sLayerInfo[*iLbi].pBsBuf = pCtx.frame_bs_cur();
-    // unsafe-cat: C-ABI — the next layer's out-array is the previous one's
-    // tail, in the frozen `SFrameBSInfo` the application walks (S11.20).
-    #[allow(unsafe_code)]
-    unsafe {
-        pFbi.sLayerInfo[*iLbi].pNalLengthInByte = kpPrevNalLen.add(iCountNal as usize);
+    // S11.47: the next layer's slot is this one's plus its NAL count — the
+    // pointer chain's arithmetic, in `sNalLen`'s own units.
+    {
+        let pOut = pCtx.pOut.as_deref_mut().expect("pOut lives");
+        pOut.iLayerBsIndex += 1;
+        pOut.advance_nal_len_base(iCountNal.max(0) as usize);
+        pFbi.sLayerInfo[*iLbi].pNalLengthInByte = pOut.nal_len_ptr();
     }
 
     // update for external countings
@@ -2809,11 +2810,7 @@ pub fn WriteSavcParaset(
         return iReturn;
     }
 
-    // unsafe-cat: C-ABI — the frozen out-array slot (S11.20's family).
-    #[allow(unsafe_code)]
-    unsafe {
-        *pFbi.sLayerInfo[*iLbi].pNalLengthInByte = iNalSize;
-    }
+    *pCtx.pOut.as_deref_mut().expect("pOut lives").nal_len_at_mut(0) = iNalSize;
     iNonVclSize += iNalSize;
     iCountNal = 1;
 
@@ -2825,15 +2822,15 @@ pub fn WriteSavcParaset(
     pFbi.sLayerInfo[*iLbi].eFrameType = EVideoFrameType::videoFrameTypeIDR;
     pFbi.sLayerInfo[*iLbi].iSubSeqId = GetSubSequenceId(pCtx, EVideoFrameType::videoFrameTypeIDR);
 
-    let kpPrevNalLen = pFbi.sLayerInfo[*iLbi].pNalLengthInByte;
     *iLbi += 1;
-    pCtx.pOut.as_deref_mut().expect("pOut lives").iLayerBsIndex += 1;
     pFbi.sLayerInfo[*iLbi].pBsBuf = pCtx.frame_bs_cur();
-    // unsafe-cat: C-ABI — the next layer's out-array is the previous one's
-    // tail, in the frozen `SFrameBSInfo` (S11.20).
-    #[allow(unsafe_code)]
-    unsafe {
-        pFbi.sLayerInfo[*iLbi].pNalLengthInByte = kpPrevNalLen.add(iCountNal as usize);
+    // S11.47: the next layer's slot is this one's plus its NAL count —
+    // the pointer chain's arithmetic, in `sNalLen`'s own units.
+    {
+        let pOut = pCtx.pOut.as_deref_mut().expect("pOut lives");
+        pOut.iLayerBsIndex += 1;
+        pOut.advance_nal_len_base(iCountNal.max(0) as usize);
+        pFbi.sLayerInfo[*iLbi].pNalLengthInByte = pOut.nal_len_ptr();
     }
     *iLayerNum += 1;
 
@@ -2849,11 +2846,7 @@ pub fn WriteSavcParaset(
     if iReturn != ENC_RETURN_SUCCESS {
         return iReturn;
     }
-    // unsafe-cat: C-ABI — the frozen out-array slot (S11.20's family).
-    #[allow(unsafe_code)]
-    unsafe {
-        *pFbi.sLayerInfo[*iLbi].pNalLengthInByte = iNalSize;
-    }
+    *pCtx.pOut.as_deref_mut().expect("pOut lives").nal_len_at_mut(0) = iNalSize;
     iNonVclSize += iNalSize;
     iCountNal = 1;
 
@@ -2865,15 +2858,15 @@ pub fn WriteSavcParaset(
     pFbi.sLayerInfo[*iLbi].eFrameType = EVideoFrameType::videoFrameTypeIDR;
     pFbi.sLayerInfo[*iLbi].iSubSeqId = GetSubSequenceId(pCtx, EVideoFrameType::videoFrameTypeIDR);
 
-    let kpPrevNalLen = pFbi.sLayerInfo[*iLbi].pNalLengthInByte;
     *iLbi += 1;
-    pCtx.pOut.as_deref_mut().expect("pOut lives").iLayerBsIndex += 1;
     pFbi.sLayerInfo[*iLbi].pBsBuf = pCtx.frame_bs_cur();
-    // unsafe-cat: C-ABI — the next layer's out-array is the previous one's
-    // tail, in the frozen `SFrameBSInfo` (S11.20).
-    #[allow(unsafe_code)]
-    unsafe {
-        pFbi.sLayerInfo[*iLbi].pNalLengthInByte = kpPrevNalLen.add(iCountNal as usize);
+    // S11.47: the next layer's slot is this one's plus its NAL count —
+    // the pointer chain's arithmetic, in `sNalLen`'s own units.
+    {
+        let pOut = pCtx.pOut.as_deref_mut().expect("pOut lives");
+        pOut.iLayerBsIndex += 1;
+        pOut.advance_nal_len_base(iCountNal.max(0) as usize);
+        pFbi.sLayerInfo[*iLbi].pNalLengthInByte = pOut.nal_len_ptr();
     }
     *iLayerNum += 1;
 
@@ -2937,11 +2930,11 @@ pub fn WriteSavcParaset_Listing(
             if iReturn != ENC_RETURN_SUCCESS {
                 return iReturn;
             }
-            // unsafe-cat: C-ABI — the frozen out-array slot (S11.20's family).
-            #[allow(unsafe_code)]
-            unsafe {
-                *pFbi.sLayerInfo[*iLbi].pNalLengthInByte.add(iCountNal as usize) = iNalSize;
-            }
+            *pCtx
+                .pOut
+                .as_deref_mut()
+                .expect("pOut lives")
+                .nal_len_at_mut(iCountNal.max(0) as usize) = iNalSize;
             iNonVclSize += iNalSize;
             iCountNal += 1;
         }
@@ -2954,16 +2947,16 @@ pub fn WriteSavcParaset_Listing(
         pFbi.sLayerInfo[*iLbi].eFrameType = EVideoFrameType::videoFrameTypeIDR;
         pFbi.sLayerInfo[*iLbi].iSubSeqId = GetSubSequenceId(pCtx, EVideoFrameType::videoFrameTypeIDR);
 
-        let kpPrevNalLen = pFbi.sLayerInfo[*iLbi].pNalLengthInByte;
         *iLbi += 1;
-        pCtx.pOut.as_deref_mut().expect("pOut lives").iLayerBsIndex += 1;
         pFbi.sLayerInfo[*iLbi].pBsBuf = pCtx.frame_bs_cur();
-        // unsafe-cat: C-ABI — the next layer's out-array is the previous one's
-    // tail, in the frozen `SFrameBSInfo` (S11.20).
-    #[allow(unsafe_code)]
-    unsafe {
-        pFbi.sLayerInfo[*iLbi].pNalLengthInByte = kpPrevNalLen.add(iCountNal as usize);
-    }
+        // S11.47: the next layer's slot is this one's plus its NAL count —
+        // the pointer chain's arithmetic, in `sNalLen`'s own units.
+        {
+            let pOut = pCtx.pOut.as_deref_mut().expect("pOut lives");
+            pOut.iLayerBsIndex += 1;
+            pOut.advance_nal_len_base(iCountNal.max(0) as usize);
+            pFbi.sLayerInfo[*iLbi].pNalLengthInByte = pOut.nal_len_ptr();
+        }
         *iLayerNum += 1;
     }
 
@@ -2989,11 +2982,11 @@ pub fn WriteSavcParaset_Listing(
             if iReturn != ENC_RETURN_SUCCESS {
                 return iReturn;
             }
-            // unsafe-cat: C-ABI — the frozen out-array slot (S11.20's family).
-            #[allow(unsafe_code)]
-            unsafe {
-                *pFbi.sLayerInfo[*iLbi].pNalLengthInByte.add(iCountNal as usize) = iNalSize;
-            }
+            *pCtx
+                .pOut
+                .as_deref_mut()
+                .expect("pOut lives")
+                .nal_len_at_mut(iCountNal.max(0) as usize) = iNalSize;
             iNonVclSize += iNalSize;
             iCountNal += 1;
         }
@@ -3006,16 +2999,16 @@ pub fn WriteSavcParaset_Listing(
         pFbi.sLayerInfo[*iLbi].eFrameType = EVideoFrameType::videoFrameTypeIDR;
         pFbi.sLayerInfo[*iLbi].iSubSeqId = GetSubSequenceId(pCtx, EVideoFrameType::videoFrameTypeIDR);
 
-        let kpPrevNalLen = pFbi.sLayerInfo[*iLbi].pNalLengthInByte;
         *iLbi += 1;
-        pCtx.pOut.as_deref_mut().expect("pOut lives").iLayerBsIndex += 1;
         pFbi.sLayerInfo[*iLbi].pBsBuf = pCtx.frame_bs_cur();
-        // unsafe-cat: C-ABI — the next layer's out-array is the previous one's
-    // tail, in the frozen `SFrameBSInfo` (S11.20).
-    #[allow(unsafe_code)]
-    unsafe {
-        pFbi.sLayerInfo[*iLbi].pNalLengthInByte = kpPrevNalLen.add(iCountNal as usize);
-    }
+        // S11.47: the next layer's slot is this one's plus its NAL count —
+        // the pointer chain's arithmetic, in `sNalLen`'s own units.
+        {
+            let pOut = pCtx.pOut.as_deref_mut().expect("pOut lives");
+            pOut.iLayerBsIndex += 1;
+            pOut.advance_nal_len_base(iCountNal.max(0) as usize);
+            pFbi.sLayerInfo[*iLbi].pNalLengthInByte = pOut.nal_len_ptr();
+        }
         *iLayerNum += 1;
     }
 
@@ -3443,13 +3436,9 @@ pub fn WelsCodeOnePicPartition(
         }
 
         if kbNeedPrefix {
-            // S11.20: the C-ABI length pointer is read out before the record's
-            // `&mut` — one field of it, taken as a value.
-            let kpNalLen = pFbi.sLayerInfo[iLbi].pNalLengthInByte;
             iReturn = AddPrefixNal(
                 pCtx,
                 &mut pFbi.sLayerInfo[iLbi],
-                kpNalLen,
                 &mut iNalIdxInLayer,
                 keNalType,
                 keNalRefIdc,
@@ -3553,26 +3542,31 @@ pub fn WelsCodeOnePicPartition(
         // where the argument list would have been two borrows of the whole
         // context. No copy: the source is borrowed, not cloned.
         let sWelsEncCtx { pOut, pFrameBs, iPosBsBuffer, .. } = &mut *pCtx;
-        let kpOut = pOut.as_deref().expect("pOut lives");
+        // S11.47: `pOut`'s own fields split too — the NAL entry and the source
+        // bytes are read while the length slot is written, three disjoint
+        // fields of one output block where the C-ABI pointer used to stand in
+        // for the last of them.
+        let crate::encoder::nal_encap::SWelsEncoderOutput {
+            sNalList, sBsBuffer, sNalLen, iNalIndex, iNalLenBase, ..
+        } = &mut **pOut.as_mut().expect("pOut lives");
         let kiPos = *iPosBsBuffer as usize;
         let pDstTail = (kiPos <= pFrameBs.len()).then(|| &mut pFrameBs[kiPos..]);
+        let pNalLenSlot = &mut sNalLen[*iNalLenBase + iNalIdxInLayer.max(0) as usize];
         iReturn = crate::encoder::nal_encap::WelsEncodeNal(
-            &kpOut.sNalList[(kpOut.iNalIndex - 1) as usize],
-            &kpOut.sBsBuffer[..],
+            &sNalList[(*iNalIndex - 1) as usize],
+            &sBsBuffer[..],
             Some(&kNalHeaderExt),
             pDstTail,
-            // unsafe-cat: C-ABI — the out-array slot (S11.20's family).
-            #[allow(unsafe_code)]
-            unsafe {
-                &mut *pFbi.sLayerInfo[iLbi].pNalLengthInByte.add(iNalIdxInLayer as usize)
-            },
+            pNalLenSlot,
         );
         if iReturn != ENC_RETURN_SUCCESS {
             return iReturn;
         }
-        // unsafe-cat: C-ABI
-        #[allow(unsafe_code)]
-        let iSliceSize = unsafe { *pFbi.sLayerInfo[iLbi].pNalLengthInByte.add(iNalIdxInLayer as usize) };
+        let iSliceSize = pCtx
+            .pOut
+            .as_deref()
+            .expect("pOut lives")
+            .nal_len_at(iNalIdxInLayer.max(0) as usize);
 
         pCtx.iPosBsBuffer += iSliceSize;
         iPartitionBsSize += iSliceSize;
@@ -3759,7 +3753,12 @@ pub fn WelsEncoderEncodeExt(
     // so an index is a field read, not a cursor.
     crate::encoder::encoder_context::InitBitStream(pCtx);
     pFbi.sLayerInfo[iLbi].pBsBuf = pCtx.frame_bs();
-    pFbi.sLayerInfo[iLbi].pNalLengthInByte = pCtx.pOut.as_deref_mut().expect("pOut lives").sNalLen.as_mut_ptr();
+    {
+        // S11.47: the frame's first layer starts at entry 0 of `pOut.sNalLen`.
+        let pOut = pCtx.pOut.as_deref_mut().expect("pOut lives");
+        pOut.iNalLenBase = 0;
+        pFbi.sLayerInfo[iLbi].pNalLengthInByte = pOut.nal_len_ptr();
+    }
     iCurDid = pCtx.sSpatialIndexMap[0].iDid as i8;
     set_current_layer(pCtx, Some(LayerIdx(iCurDid as u8)));
     current_layer_mut(pCtx).expect("the frame's current layer is stamped").pRefLayer = None;
@@ -4014,12 +4013,8 @@ pub fn WelsEncoderEncodeExt(
                 .expect("the single-slice bank holds slot 0");
 
             if pCtx.bNeedPrefixNalFlag {
-                // S11.20: the C-ABI length pointer is read out before the record's
-                // `&mut` — one field of it, taken as a value.
-                let kpNalLen = pFbi.sLayerInfo[iLbi].pNalLengthInByte;
                 pCtx.iEncoderError = AddPrefixNal(pCtx,
                     &mut pFbi.sLayerInfo[iLbi],
-                    kpNalLen,
                     &mut iNalIdxInLayer,
                     eNalType,
                     eNalRefIdc,
@@ -4108,28 +4103,28 @@ pub fn WelsEncoderEncodeExt(
             // where the argument list would have been two borrows of the whole
             // context. No copy: the source is borrowed, not cloned.
             let sWelsEncCtx { pOut, pFrameBs, iPosBsBuffer, .. } = &mut *pCtx;
-            let kpOut = pOut.as_deref().expect("pOut lives");
+            // S11.47: as at the partition writer — `pOut`'s three fields split.
+            let crate::encoder::nal_encap::SWelsEncoderOutput {
+                sNalList, sBsBuffer, sNalLen, iNalIndex, iNalLenBase, ..
+            } = &mut **pOut.as_mut().expect("pOut lives");
             let kiPos = *iPosBsBuffer as usize;
             let pDstTail = (kiPos <= pFrameBs.len()).then(|| &mut pFrameBs[kiPos..]);
+            let pNalLenSlot = &mut sNalLen[*iNalLenBase + iNalIdxInLayer.max(0) as usize];
             pCtx.iEncoderError = crate::encoder::nal_encap::WelsEncodeNal(
-                &kpOut.sNalList[kpOut.iNalIndex as usize - 1],
-                &kpOut.sBsBuffer[..],
+                &sNalList[*iNalIndex as usize - 1],
+                &sBsBuffer[..],
                 Some(&kNalHeaderExt),
                 pDstTail,
-                // unsafe-cat: C-ABI — the out-array slot (S11.20's family).
-                #[allow(unsafe_code)]
-                unsafe {
-                    &mut *pFbi.sLayerInfo[iLbi].pNalLengthInByte.add(iNalIdxInLayer as usize)
-                },
+                pNalLenSlot,
             );
             if pCtx.iEncoderError != ENC_RETURN_SUCCESS {
                 return pCtx.iEncoderError;
             }
-            // unsafe-cat: C-ABI — the slot just written, read back.
-            #[allow(unsafe_code)]
-            let iSliceSize = unsafe {
-                *pFbi.sLayerInfo[iLbi].pNalLengthInByte.add(iNalIdxInLayer as usize)
-            };
+            let iSliceSize = pCtx
+                .pOut
+                .as_deref()
+                .expect("pOut lives")
+                .nal_len_at(iNalIdxInLayer.max(0) as usize);
 
             iLayerSize += iSliceSize;
             pCtx.iPosBsBuffer += iSliceSize;
@@ -4293,12 +4288,8 @@ pub fn WelsEncoderEncodeExt(
                 let mut iPayloadSize = 0i32;
 
                 if bNeedPrefix {
-                    // S11.20: the C-ABI length pointer is read out before the record's
-                    // `&mut` — one field of it, taken as a value.
-                    let kpNalLen = pFbi.sLayerInfo[iLbi].pNalLengthInByte;
                     pCtx.iEncoderError = AddPrefixNal(pCtx,
                         &mut pFbi.sLayerInfo[iLbi],
-                        kpNalLen,
                         &mut iNalIdxInLayer,
                         eNalType,
                         eNalRefIdc,
@@ -4401,28 +4392,28 @@ pub fn WelsEncoderEncodeExt(
                 // where the argument list would have been two borrows of the whole
                 // context. No copy: the source is borrowed, not cloned.
                 let sWelsEncCtx { pOut, pFrameBs, iPosBsBuffer, .. } = &mut *pCtx;
-                let kpOut = pOut.as_deref().expect("pOut lives");
+                // S11.47: as at the partition writer — `pOut`'s three fields split.
+                let crate::encoder::nal_encap::SWelsEncoderOutput {
+                    sNalList, sBsBuffer, sNalLen, iNalIndex, iNalLenBase, ..
+                } = &mut **pOut.as_mut().expect("pOut lives");
                 let kiPos = *iPosBsBuffer as usize;
                 let pDstTail = (kiPos <= pFrameBs.len()).then(|| &mut pFrameBs[kiPos..]);
+                let pNalLenSlot = &mut sNalLen[*iNalLenBase + iNalIdxInLayer.max(0) as usize];
                 pCtx.iEncoderError = crate::encoder::nal_encap::WelsEncodeNal(
-                    &kpOut.sNalList[kpOut.iNalIndex as usize - 1],
-                    &kpOut.sBsBuffer[..],
+                    &sNalList[*iNalIndex as usize - 1],
+                    &sBsBuffer[..],
                     Some(&kNalHeaderExt),
                     pDstTail,
-                    // unsafe-cat: C-ABI — the out-array slot (S11.20's family).
-                    #[allow(unsafe_code)]
-                    unsafe {
-                        &mut *pFbi.sLayerInfo[iLbi].pNalLengthInByte.add(iNalIdxInLayer as usize)
-                    },
+                    pNalLenSlot,
                 );
                 if pCtx.iEncoderError != ENC_RETURN_SUCCESS {
                     return pCtx.iEncoderError;
                 }
-                // unsafe-cat: C-ABI — the slot just written, read back.
-                #[allow(unsafe_code)]
-                let iSliceSize = unsafe {
-                    *pFbi.sLayerInfo[iLbi].pNalLengthInByte.add(iNalIdxInLayer as usize)
-                };
+                let iSliceSize = pCtx
+                    .pOut
+                    .as_deref()
+                    .expect("pOut lives")
+                    .nal_len_at(iNalIdxInLayer.max(0) as usize);
 
                 pCtx.iPosBsBuffer += iSliceSize;
                 iLayerSize += iSliceSize;
@@ -4574,15 +4565,15 @@ pub fn WelsEncoderEncodeExt(
         // The NAL-length array is the application's `pNalLengthInByte`, a
         // C-ABI field: still a pointer, still advanced by the previous layer's
         // NAL count. Only the *layer* walk became an index.
-        let kpPrevNalLen = pFbi.sLayerInfo[iLbi].pNalLengthInByte;
         iLbi += 1;
-        pCtx.pOut.as_deref_mut().expect("pOut lives").iLayerBsIndex += 1;
         pFbi.sLayerInfo[iLbi].pBsBuf = pCtx.frame_bs_cur();
-        // unsafe-cat: C-ABI — the next layer's out-array is the previous one's
-        // tail, in the frozen `SFrameBSInfo` the application walks (S11.20).
-        #[allow(unsafe_code)]
-        unsafe {
-            pFbi.sLayerInfo[iLbi].pNalLengthInByte = kpPrevNalLen.add(iCountNal as usize);
+        // S11.47: the next layer's slot is this one's plus its NAL count —
+        // the pointer chain's arithmetic, in `sNalLen`'s own units.
+        {
+            let pOut = pCtx.pOut.as_deref_mut().expect("pOut lives");
+            pOut.iLayerBsIndex += 1;
+            pOut.advance_nal_len_base(iCountNal.max(0) as usize);
+            pFbi.sLayerInfo[iLbi].pNalLengthInByte = pOut.nal_len_ptr();
         }
 
         if pCtx.param().iPaddingFlag != 0
@@ -4611,22 +4602,18 @@ pub fn WelsEncoderEncodeExt(
             pFbi.sLayerInfo[iLbi].uiQualityId = 0;
             pFbi.sLayerInfo[iLbi].uiLayerType = NON_VIDEO_CODING_LAYER;
             pFbi.sLayerInfo[iLbi].iNalCount = 1;
-            // unsafe-cat: C-ABI — the padding NAL's one length, into the
-            // application's frozen out-array (S11.20).
-            #[allow(unsafe_code)]
-            unsafe {
-                *pFbi.sLayerInfo[iLbi].pNalLengthInByte = iPaddingNalSize;
-            }
+            *pCtx.pOut.as_deref_mut().expect("pOut lives").nal_len_at_mut(0) = iPaddingNalSize;
             pFbi.sLayerInfo[iLbi].eFrameType = eFrameType;
             pFbi.sLayerInfo[iLbi].iSubSeqId = GetSubSequenceId(pCtx, eFrameType);
-            let kpPrevNalLen2 = pFbi.sLayerInfo[iLbi].pNalLengthInByte;
             iLbi += 1;
-            pCtx.pOut.as_deref_mut().expect("pOut lives").iLayerBsIndex += 1;
             pFbi.sLayerInfo[iLbi].pBsBuf = pCtx.frame_bs_cur();
-            // unsafe-cat: C-ABI — as above: the next layer starts one entry on.
-            #[allow(unsafe_code)]
-            unsafe {
-                pFbi.sLayerInfo[iLbi].pNalLengthInByte = kpPrevNalLen2.add(1);
+            // S11.47: the next layer's slot is this one's plus its NAL count —
+            // the pointer chain's arithmetic, in `sNalLen`'s own units.
+            {
+                let pOut = pCtx.pOut.as_deref_mut().expect("pOut lives");
+                pOut.iLayerBsIndex += 1;
+                pOut.advance_nal_len_base(1);
+                pFbi.sLayerInfo[iLbi].pNalLengthInByte = pOut.nal_len_ptr();
             }
             iLayerNum += 1;
 

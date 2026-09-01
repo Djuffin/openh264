@@ -801,8 +801,14 @@ pub fn AppendSliceToFrameBs(
     // this walks), the frame bitstream (the copy's destination) and the two
     // counters are disjoint fields, which is what lets the slice's borrow and
     // the frame writes coexist as plain facts (S11.17's move).
-    let sWelsEncCtx { ppDqLayerList, iCurDqLayer, pFrameBs, iPosBsBuffer, iFrameBsSize, iEncoderError, .. } =
-        &mut *pCtx;
+    let sWelsEncCtx {
+        ppDqLayerList, iCurDqLayer, pFrameBs, iPosBsBuffer, iFrameBsSize, iEncoderError, pOut, ..
+    } = &mut *pCtx;
+    // S11.47: the length array joins the destructure — the NAL lengths this
+    // walk distributes are entries of `pOut.sNalLen`, and the C-ABI pointer on
+    // the record is the reslice of it the application reads.
+    let crate::encoder::nal_encap::SWelsEncoderOutput { sNalLen, iNalLenBase, .. } =
+        &mut **pOut.as_mut().expect("pOut lives");
     let Some(pCurDq) = iCurDqLayer
         .and_then(|idx| ppDqLayerList.get_mut(idx.get()))
         .and_then(|l| l.as_deref_mut())
@@ -849,22 +855,18 @@ pub fn AppendSliceToFrameBs(
                 *iPosBsBuffer += pSliceBs.uiBsPos as i32;
                 iLayerSize += pSliceBs.uiBsPos as i32;
 
-                // S11.36: the one raw left is the C-ABI out array —
-                // `SLayerBSInfo::pNalLengthInByte` is application-visible
-                // frozen-ABI state, exactly `FrameBsRealloc`'s walk.
-                // unsafe-cat: C-ABI
-                #[allow(unsafe_code)]
-                unsafe {
-                    let mut iNalIdx = 0i32;
-                    while iNalIdx < iCountNal {
-                        if !(*pLbi).pNalLengthInByte.is_null() {
-                            *(*pLbi)
-                                .pNalLengthInByte
-                                .add((iNalIdxBase + iNalIdx) as usize) =
-                                pSliceBs.iNalLen[iNalIdx as usize];
-                        }
-                        iNalIdx += 1;
+                // S11.36 kept this raw as the C-ABI out array; **S11.47 writes
+                // the entries themselves** — `pNalLengthInByte` is the reslice of
+                // `pOut.sNalLen` at this layer's base, so the slot is that base
+                // plus the running NAL index, and the `is_null` guard is the
+                // range check the slice performs.
+                let mut iNalIdx = 0i32;
+                while iNalIdx < iCountNal {
+                    let kiSlot = *iNalLenBase + (iNalIdxBase + iNalIdx).max(0) as usize;
+                    if kiSlot < sNalLen.len() {
+                        sNalLen[kiSlot] = pSliceBs.iNalLen[iNalIdx as usize];
                     }
+                    iNalIdx += 1;
                 }
                 (*pLbi).iNalCount += iCountNal;
                 iNalIdxBase += iCountNal;

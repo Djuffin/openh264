@@ -504,11 +504,11 @@ pub fn WelsWriteOnePPS(pCtx: &mut sWelsEncCtx, kiPpsIdx: i32, iNalSize: &mut i32
 /// the parameter-set arrays. The previous version of this function substituted a count
 /// of 1 when those were zero and swallowed each writer's return value; that turned
 /// blocker C into a silent success.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
 pub fn WelsWriteParameterSets(
     pCtx: &mut sWelsEncCtx,
-    pNalLen: *mut i32,
+    // S11.47: the out-array pointer is gone — every caller passed the *current
+    // layer's* slot, which is `pOut.iNalLenBase`, and the storage behind it is
+    // `pOut.sNalLen`. The lengths are written by index below.
     pNumNal: &mut i32,
     pTotalLength: &mut i32,
 ) -> i32 {
@@ -521,11 +521,10 @@ pub fn WelsWriteParameterSets(
     let mut iReturn;
 
     // T9.H9: the `pCtx.is_null()` disjunct that opened this multi-line guard
-    // is gone — a `&mut sWelsEncCtx` cannot be null. The rest is unchanged.
-    if pNalLen.is_null()
-
-        || pCtx.func_list().pParametersetStrategy.is_none()
-    {
+    // is gone — a `&mut sWelsEncCtx` cannot be null. S11.47: so is the
+    // `pNalLen.is_null()` one, which asked whether the caller had a length array
+    // — `pOut`'s own, and the `expect`s below are that question.
+    if pCtx.func_list().pParametersetStrategy.is_none() {
         return ENC_RETURN_UNEXPECTED;
     }
     // Every access below re-acquires. `WelsWriteOneSPS` and `WelsWriteOnePPS` reach
@@ -547,11 +546,8 @@ pub fn WelsWriteParameterSets(
 
         WelsWriteOneSPS(pCtx, iId, &mut iNalLength);
 
-        // unsafe-cat: C-ABI — the frozen out-array slot (S11.20's family).
-        #[allow(unsafe_code)]
-        unsafe {
-            *pNalLen.add(iCountNal as usize) = iNalLength;
-        }
+        *pCtx.pOut.as_deref_mut().expect("pOut lives").nal_len_at_mut(iCountNal as usize) =
+            iNalLength;
         iSize += iNalLength;
 
         iIdx += 1;
@@ -610,11 +606,8 @@ pub fn WelsWriteParameterSets(
         if iReturn != ENC_RETURN_SUCCESS {
             return iReturn;
         }
-        // unsafe-cat: C-ABI — the frozen out-array slot (S11.20's family).
-        #[allow(unsafe_code)]
-        unsafe {
-            *pNalLen.add(iCountNal as usize) = iNalLength;
-        }
+        *pCtx.pOut.as_deref_mut().expect("pOut lives").nal_len_at_mut(iCountNal as usize) =
+            iNalLength;
 
         pCtx.iPosBsBuffer += iNalLength;
         iSize += iNalLength;
@@ -639,11 +632,8 @@ pub fn WelsWriteParameterSets(
 
         WelsWriteOnePPS(pCtx, iIdx, &mut iNalLength);
 
-        // unsafe-cat: C-ABI — the frozen out-array slot (S11.20's family).
-        #[allow(unsafe_code)]
-        unsafe {
-            *pNalLen.add(iCountNal as usize) = iNalLength;
-        }
+        *pCtx.pOut.as_deref_mut().expect("pOut lives").nal_len_at_mut(iCountNal as usize) =
+            iNalLength;
         iSize += iNalLength;
 
         iIdx += 1;
@@ -668,7 +658,13 @@ pub fn WelsEncoderEncodeParameterSetsRust(
     // cannot be null and every caller now holds one. The rest is unchanged.
     let pLayerBsInfo = &mut pBsInfo.sLayerInfo[0];
     pLayerBsInfo.pBsBuf = pCtx.frame_bs();
-    pLayerBsInfo.pNalLengthInByte = pCtx.pOut.as_deref_mut().expect("pOut lives").sNalLen.as_mut_ptr();
+    {
+        // S11.47: the frame's first layer starts at entry 0 of `pOut.sNalLen`;
+        // the ABI pointer is that position, resliced.
+        let pOut = pCtx.pOut.as_deref_mut().expect("pOut lives");
+        pOut.iNalLenBase = 0;
+        pLayerBsInfo.pNalLengthInByte = pOut.nal_len_ptr();
+    }
     // Was `InitBits(&…sBsWrite, …pBsBuffer, …uiSize)`. The buffer and its length stay
     // where they were; the writer is a position, and resetting it is all `InitBits`
     // did that still means anything. Its `kpBuf: *const u8` parameter — stored as
@@ -679,7 +675,7 @@ pub fn WelsEncoderEncodeParameterSetsRust(
 
     let mut iCountNal = 0;
     let mut iTotalLength = 0;
-    let ret = WelsWriteParameterSets(pCtx, pLayerBsInfo.pNalLengthInByte, &mut iCountNal, &mut iTotalLength);
+    let ret = WelsWriteParameterSets(pCtx, &mut iCountNal, &mut iTotalLength);
     if ret != ENC_RETURN_SUCCESS {
         return ret;
     }
@@ -2399,18 +2395,33 @@ uiResolutionChangeTimes={}, uIDRReqNum={}, uIDRSentNum={}, uLTRSentNum=NA, iTota
             for iDid in 0..=iMaxDid {
                 let mut eFrameType = EVideoFrameType::videoFrameTypeSkip;
                 let mut kiCurrentFrameSize = 0;
-                for iLayerNum in 0..((*pBsInfo).iLayerNum as usize).min(MAX_LAYER_NUM_OF_FRAME as usize) {
-                    let pLayerInfo = &(*pBsInfo).sLayerInfo[iLayerNum];
+                // **S11.47: the lengths are read out of `pOut.sNalLen` by
+                // index.** Each layer's `pNalLengthInByte` is the previous one's
+                // advanced by the previous one's `iNalCount` — so the running sum
+                // below *is* the pointer chain, in the units the storage is made
+                // of, and this walk visits the layers in the order that chain was
+                // built. `is_null` becomes the range check the slice performs.
+                let kpNalLen: &[i32] = match self.m_pEncContext.as_deref() {
+                    Some(ctx) => match ctx.pOut.as_deref() {
+                        Some(pOut) => &pOut.sNalLen,
+                        None => &[],
+                    },
+                    None => &[],
+                };
+                let mut kiBase = 0usize;
+                for iLayerNum in 0..(pBsInfo.iLayerNum as usize).min(MAX_LAYER_NUM_OF_FRAME as usize) {
+                    let pLayerInfo = &pBsInfo.sLayerInfo[iLayerNum];
+                    let kiCount = pLayerInfo.iNalCount.max(0) as usize;
                     if pLayerInfo.uiLayerType == VIDEO_CODING_LAYER
                         && pLayerInfo.uiSpatialId as i32 == iDid
                     {
-                        eFrameType = (*pBsInfo).eFrameType;
-                        if !pLayerInfo.pNalLengthInByte.is_null() {
-                            for iNalIdx in 0..pLayerInfo.iNalCount {
-                                kiCurrentFrameSize += *pLayerInfo.pNalLengthInByte.offset(iNalIdx as isize);
-                            }
+                        eFrameType = pBsInfo.eFrameType;
+                        if kiBase + kiCount <= kpNalLen.len() {
+                            kiCurrentFrameSize +=
+                                kpNalLen[kiBase..][..kiCount].iter().sum::<i32>();
                         }
                     }
+                    kiBase += kiCount;
                 }
 
                 let mut bLogStatisticsNow = false;

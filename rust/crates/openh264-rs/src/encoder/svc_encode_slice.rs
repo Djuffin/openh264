@@ -4422,7 +4422,6 @@ pub fn FrameBsRealloc(
     let pOut = pCtx.pOut.as_deref_mut().expect("pOut lives");
     pOut.sNalList.resize(iCountNals as usize, SWelsNalRaw::default());
     pOut.sNalLen.resize(iCountNals as usize, 0);
-    let pNalLen = pOut.sNalLen.as_mut_ptr();
 
     // **F60**, and the C++'s closing loop is the fix (`svc_encode_slice.cpp:1589`).
     // The resize moves `sNalLen`, so every `sLayerInfo[..].pNalLengthInByte` handed
@@ -4451,18 +4450,18 @@ pub fn FrameBsRealloc(
     // every layer pointing at the wrong slot; `encode_loop_runs_over_size_
     // limited_dynamic_slices_under_the_aliasing_checker` catches exactly that
     // (F60's staleness assertion), and did.
-    // S11.31: the body's one remaining op, in its own block — the cursor walks
-    // `pNalLengthInByte`, a raw the frozen C ABI mandates (`SFrameBSInfo` is
-    // application-visible), advancing by each layer's NAL count over the array
-    // the realloc above just rebuilt.
-    // unsafe-cat: C-ABI
-    #[allow(unsafe_code)]
-    unsafe {
-        let mut cursor = pNalLen;
-        for i in 0..=iLbi {
-            pFbi.sLayerInfo[i].pNalLengthInByte = cursor;
-            cursor = cursor.add(pFbi.sLayerInfo[i].iNalCount as usize);
-        }
+    // S11.31 kept the cursor raw here because `pNalLengthInByte` is frozen ABI;
+    // **S11.47: the walk is over indices into `pOut.sNalLen`**, which is the
+    // array the realloc above just rebuilt and the thing every one of those
+    // pointers points into. Each layer's base is the previous one's plus that
+    // layer's NAL count — the same accumulation, and the ABI pointer is the
+    // reslice at each stop. The current layer's base is restored last, so the
+    // encoder's own writes continue where they left off.
+    let mut kiBase = 0usize;
+    for i in 0..=iLbi {
+        pOut.iNalLenBase = kiBase;
+        pFbi.sLayerInfo[i].pNalLengthInByte = pOut.nal_len_ptr();
+        kiBase += pFbi.sLayerInfo[i].iNalCount.max(0) as usize;
     }
 
     ENC_RETURN_SUCCESS
