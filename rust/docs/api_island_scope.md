@@ -51,6 +51,15 @@ commands are given so they can be re-run.*
 > What §5 called the end state holds: `codec_api.rs` now carries only ABI-shaped
 > unsafe — the `extern "C"` thunks, the vtable dispatches, and the deliberate C-ABI
 > test drivers.
+>
+> **Follow-on, S12.12–S12.15.** Asking the same question of what the island's
+> conversion left behind retired three more categories: `fork-shared(S63)` (a sound
+> provenance argument attached to dead code), `lawful-single(F162)` (a sound
+> byte-identity argument covering one configuration in four), and five of D-exit-4's
+> `instrument(test)` allows that wrapped *safe* functions — the last found only
+> because `unused_unsafe` was removed from 22 allow lists. **F307–F308**, and the
+> crate ends S12 at 21 allows outside `src/api/`, `unsafe_fn` 52, `unsafe_block`
+> 122, `raw_ptr` 393, 70 of 86 files sealed.
 
 ---
 
