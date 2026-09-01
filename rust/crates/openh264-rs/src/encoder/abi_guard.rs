@@ -285,7 +285,15 @@ assert_size!(SWelsMD, 800);
 // **504, measured.**
 assert_size!(SVAAFrameInfo, 504);
 // **S10.9: -16**, all of it its embedded `SVAAFrameInfo`. **1520, measured.**
-assert_size!(SVAAFrameInfoExt, 1520);
+// **S12.3: +176.** The screen block-static family stopped being pointers.
+// `pVaaBlockStaticIdc` is one owned `SBlockStaticIdcStore` (40) where sixteen
+// `*mut u8` stood (128), -88; `pVaaBestBlockStaticIdc` is an `Option<usize>` row
+// number (16) where a pointer stood (8), +8; and the same swap inside
+// `SRefInfoParam` (24 -> 32) is paid 32 times, once per slot of
+// `sVaaStrBestRefCandidate` and `sVaaLtrBestRefCandidate`, +256. Nothing in the
+// port allocates this struct (F177), so the growth is bytes no run ever takes.
+// **1696, measured.**
+assert_size!(SVAAFrameInfoExt, 1696);
 // **T6.F3**: +104, all of it its embedded `SVAAFrameInfo`. **1368, measured.**
 // **T9.X**: +8, all of it the same. **1376, measured.**
 // **S9.0c**: +160, all of it its embedded `SVAAFrameInfo`. **1536, measured.**

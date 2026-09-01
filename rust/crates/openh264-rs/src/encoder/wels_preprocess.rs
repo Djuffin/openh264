@@ -236,7 +236,12 @@ pub struct SRefInfoParam {
     pub pRefPicture: Option<SrcPicId>,
     pub iSrcListIdx: i32,
     pub bSceneLtrFlag: bool,
-    pub pBestBlockStaticIdc: *mut u8,
+    /// **S12.3: `*mut u8` -> a row selector.** This never addressed memory of its
+    /// own: it is a copy of `SVAAFrameInfoExt::pVaaBlockStaticIdc[i]`, and those
+    /// sixteen are equal-stride rows of one allocation
+    /// (`encoder_ext.cpp:1482-1489`), so the pointer's whole content is *which
+    /// reference*. `None` is the C++'s `NULL` — no allocation, or no row chosen.
+    pub pBestBlockStaticIdc: Option<usize>,
 }
 
 impl Default for SRefInfoParam {
@@ -245,7 +250,7 @@ impl Default for SRefInfoParam {
             pRefPicture: None,
             iSrcListIdx: 0,
             bSceneLtrFlag: false,
-            pBestBlockStaticIdc: std::ptr::null_mut(),
+            pBestBlockStaticIdc: None,
         }
     }
 }
@@ -302,28 +307,22 @@ pub struct SSceneChangeResult {
     pub eSceneChangeIdc: ESceneChangeIdc,
     pub iMotionBlockNum: i32,
     pub iFrameComplexity: i64,
-    /// The block-static array this scene-change result was computed against, as
-    /// an **address**.
+    /// The block-static array this scene-change result was computed against —
+    /// **which** of them, not where it is.
     ///
-    /// **S10.11: `*mut u8` -> `usize`, and it is the last thing keeping
-    /// `sWelsEncCtx` off `Sync` on this path** — `CSceneChangeDetection` owns one
-    /// of these, `CWelsPreProcess` owns the detector, and the context owns the
-    /// preprocess.
+    /// S10.11 made this `*mut u8` -> `usize` (an exposed address) because it is a
+    /// **ferry**: filled from `SVAAFrameInfoExt::pVaaBlockStaticIdc[i]` and copied
+    /// straight out again into `SRefInfoParam::pBestBlockStaticIdc`, with nothing on
+    /// the hop reading through it. The address had to survive the round trip only
+    /// because the one site that *does* dereference the family —
+    /// `SetBlockStaticIdcToMd`'s four reads off `pVaaBestBlockStaticIdc` — still held
+    /// a pointer at the far end.
     ///
-    /// It is a **ferry**: filled from `SVAAFrameInfoExt::pVaaBlockStaticIdc[i]` and
-    /// copied straight out again into `SRefInfoParam::pBestBlockStaticIdc`. Nothing
-    /// on this hop reads through it. The one site that does dereference the family
-    /// — `SetBlockStaticIdcToMd`, four reads off
-    /// `pVaaBestBlockStaticIdc` — is downstream of the copy-out and keeps its
-    /// pointer type, so the exposure has to survive the round trip: in through
-    /// `expose_provenance`, out through `with_exposed_provenance_mut`, as
-    /// `TraceUserCtx` does.
-    ///
-    /// (The whole family is `SCREEN_CONTENT(dormant)`: F177 records that the port
-    /// never allocates an `SVAAFrameInfoExt`, so every one of these is null and the
-    /// dereference is unreachable. The round trip is written to be sound if it ever
-    /// is reached, not because it is reached today.)
-    pub pStaticBlockIdc: usize,
+    /// **S12.3 removed that far end**, so the round trip has no subject: this is the
+    /// row index now, `expose_provenance`/`with_exposed_provenance_mut` are gone
+    /// from the crate with it, and the value is exactly what it always meant.
+    /// `None` is the C++'s `NULL`.
+    pub pStaticBlockIdc: Option<usize>,
     pub sScrollResult: SScrollDetectionParam,
 }
 
@@ -333,7 +332,7 @@ impl Default for SSceneChangeResult {
             eSceneChangeIdc: ESceneChangeIdc::SIMILAR_SCENE,
             iMotionBlockNum: 0,
             iFrameComplexity: 0,
-            pStaticBlockIdc: 0,
+            pStaticBlockIdc: None,
             sScrollResult: SScrollDetectionParam::default(),
         }
     }
@@ -622,6 +621,89 @@ impl Default for SVAAFrameInfo {
     }
 }
 
+/// The screen-content block-static tables — `uint8_t* pVaaBlockStaticIdc[16]`,
+/// the field `wels_preprocess.h:115` annotates `//real memory`.
+///
+/// **S12.3: sixteen raw pointers -> one owned buffer, because that is what the
+/// C++ allocates.** `RequestMemoryVaaScreen` takes a single block of
+/// `iNumRef * iCountMax8x8BNum` bytes and walks the sixteen slots across it at
+/// one stride (`encoder_ext.cpp:1482-1489`); `WelsFree` frees slot 0 alone and
+/// nulls the rest, which is the same statement read backwards. So the array was
+/// never sixteen allocations, and a pointer copied out of it — into
+/// `SSceneChangeResult`, into `SRefInfoParam`, into `pVaaBestBlockStaticIdc` —
+/// never carried anything but a **row number**.
+///
+/// This port does not call `RequestMemoryVaaScreen` (F177), so the buffer is empty
+/// and every selector is `None` — exactly the `NULL` the C++ reads in the same
+/// state. A screen-content effort fills `buf`/`stride` in the allocator's place and
+/// every consumer below works unchanged.
+#[derive(Debug, Default)]
+pub struct SBlockStaticIdcStore {
+    /// `iNumRef * iCountMax8x8BNum` bytes, or empty when unallocated.
+    buf: Vec<u8>,
+    /// `iCountMax8x8BNum` — one row, one reference.
+    stride: usize,
+    /// `iNumRef`, capped by the C++ array's sixteen slots.
+    rows: usize,
+}
+
+impl SBlockStaticIdcStore {
+    /// `pVaaBlockStaticIdc[16]`'s slot count.
+    pub const MAX_ROWS: usize = 16;
+
+    /// The allocator's side — `RequestMemoryVaaScreen`'s one `WelsMallocz`, for the
+    /// screen-content effort that ports it. Unused today, and that is F177.
+    pub fn alloc(&mut self, rows: usize, stride: usize) {
+        let rows = rows.min(Self::MAX_ROWS);
+        self.buf = vec![0u8; rows * stride];
+        self.stride = stride;
+        self.rows = rows;
+    }
+
+    /// `pVaaBlockStaticIdc[i]` — the value the C++ copies out as a pointer.
+    /// `None` wherever it would read `NULL`: nothing allocated, or `i` past the rows.
+    #[inline]
+    pub fn select(&self, i: usize) -> Option<usize> {
+        (i < self.rows && !self.buf.is_empty()).then_some(i)
+    }
+
+    /// A selected row's first `len` bytes — the deref the C++ does, bounds-checked.
+    /// `None` if nothing is selected, or the row is shorter than `len`.
+    ///
+    /// **`len > stride` is a refusal, not a longer slice**, and the distinction is
+    /// not academic: the sixteen rows are one allocation, so bounding this by the
+    /// *buffer* rather than the row would let a caller asking for more blocks than a
+    /// reference has read the next reference's — silently, and only for rows that
+    /// are not the last. The raw pointer this replaced could do exactly that. (The
+    /// first draft of this accessor did too; the test in `svc_mode_decision.rs`
+    /// caught it on its first run, which is the whole reason that test exists.)
+    #[inline]
+    pub fn row(&self, sel: Option<usize>, len: usize) -> Option<&[u8]> {
+        let start = self.row_start(sel, len)?;
+        self.buf.get(start..start + len)
+    }
+
+    /// [`row`](Self::row) for the writer. The C++ hands `pCurBlockStaticPointer`
+    /// to the screen scene-change plugin, which fills it
+    /// (`UpdateBlockIdcForScreen`); that plugin is untranslated, so today the only
+    /// caller is the test that pins the reader's indexing.
+    #[inline]
+    pub fn row_mut(&mut self, sel: Option<usize>, len: usize) -> Option<&mut [u8]> {
+        let start = self.row_start(sel, len)?;
+        self.buf.get_mut(start..start + len)
+    }
+
+    /// Where row `sel` begins, if it exists and holds `len` bytes of its own.
+    #[inline]
+    fn row_start(&self, sel: Option<usize>, len: usize) -> Option<usize> {
+        let i = sel?;
+        if len > self.stride {
+            return None;
+        }
+        i.checked_mul(self.stride)
+    }
+}
+
 // SCREEN_CONTENT(dormant: Phase 10) — see `SVAAFrameInfoExt_t`.
 #[repr(C)]
 #[derive(Debug)]
@@ -634,8 +716,12 @@ pub struct SVAAFrameInfoExt {
     pub iNumOfAvailableRef: i32,
 
     pub iVaaBestRefFrameNum: i32,
-    pub pVaaBestBlockStaticIdc: *mut u8,
-    pub pVaaBlockStaticIdc: [*mut u8; 16],
+    /// `//pointer` in `wels_preprocess.h:114` — and the comment is the whole story:
+    /// it aliases one row of `pVaaBlockStaticIdc` and owns nothing. **S12.3** makes
+    /// it the row number it always was; `None` is the C++'s `NULL`.
+    pub pVaaBestBlockStaticIdc: Option<usize>,
+    /// `//real memory` in `wels_preprocess.h:115`. See [`SBlockStaticIdcStore`].
+    pub pVaaBlockStaticIdc: SBlockStaticIdcStore,
 }
 
 impl Default for SVAAFrameInfoExt {
@@ -648,8 +734,8 @@ impl Default for SVAAFrameInfoExt {
             sVaaLtrBestRefCandidate: [SRefInfoParam::default(); MAX_REF_PIC_COUNT],
             iNumOfAvailableRef: 0,
             iVaaBestRefFrameNum: 0,
-            pVaaBestBlockStaticIdc: std::ptr::null_mut(),
-            pVaaBlockStaticIdc: [std::ptr::null_mut(); 16],
+            pVaaBestBlockStaticIdc: None,
+            pVaaBlockStaticIdc: SBlockStaticIdcStore::default(),
         }
     }
 }
@@ -2508,10 +2594,13 @@ impl CWelsPreProcess {
         // the method is untranslated and its sites below say so.
 
         for iScdIdx in 0..iAvailableRefNum {
-            let pCurBlockStaticPointer = pCtx.vaa_ext_ref_mut().expect("guarded at this body's head").pVaaBlockStaticIdc[iScdIdx as usize];
+            // S12.3: `pVaaBlockStaticIdc[iScdIdx]` was an indexing read whose value
+            // was then exposed as an address. `select` is the same read and the same
+            // `NULL`-or-not answer, with the row number kept as a row number.
+            let pCurBlockStaticPointer = pCtx.vaa_ext_ref_mut().expect("guarded at this body's head").pVaaBlockStaticIdc.select(iScdIdx as usize);
             let mut sSceneChangeResult = SSceneChangeResult::default();
             sSceneChangeResult.eSceneChangeIdc = ESceneChangeIdc::SIMILAR_SCENE;
-            sSceneChangeResult.pStaticBlockIdc = pCurBlockStaticPointer.expose_provenance();
+            sSceneChangeResult.pStaticBlockIdc = pCurBlockStaticPointer;
 
             let pRefPicInfo = &mut sAvailableRefParam[iScdIdx as usize];
             let Some(idRefPic) = pRefPicInfo.pRefPicture else {
@@ -2678,8 +2767,10 @@ impl CWelsPreProcess {
     ) {
         {
             *pRefSaved = *pRefPicInfo;
-            (*pRefSaved).pBestBlockStaticIdc =
-                std::ptr::with_exposed_provenance_mut(sSceneChangeResult.pStaticBlockIdc);
+            // S12.3: was `with_exposed_provenance_mut(..)`, the other half of a round
+            // trip that existed only to hand a pointer to `SetBlockStaticIdcToMd`.
+            // Both halves are gone; this is the copy the C++ writes.
+            (*pRefSaved).pBestBlockStaticIdc = sSceneChangeResult.pStaticBlockIdc;
         }
     }
 
@@ -3096,7 +3187,9 @@ impl CWelsPreProcess {
 
     pub fn UpdateBlockIdcForScreen(
         &self,
-        pCurBlockStaticPointer: *mut u8,
+        // S12.3: the block-static **row**, as everywhere else in the family. This
+        // body never dereferenced it — see the `let _` below.
+        pCurBlockStaticPointer: Option<usize>,
         kpRefPic: Option<&PicPlanes>,
         kpSrcPic: Option<&PicPlanes>,
     ) -> i32 {

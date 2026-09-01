@@ -23,7 +23,6 @@ encoder/ref_list_mgr_svc.rs instrument(test) x1
 encoder/slice_multi_threading.rs instrument(test) x1
 encoder/svc_encode_slice.rs fork-shared(S63) x1
 encoder/svc_encode_slice.rs instrument(test) x4
-encoder/svc_mode_decision.rs SCREEN_CONTENT(dormant) x1
 encoder/svc_mode_decision.rs instrument(test) x1
 encoder/svc_set_mb_syn_cabac.rs C-ABI(test) x1
 encoder/wels_preprocess.rs C-ABI x2
