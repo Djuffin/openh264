@@ -1633,7 +1633,7 @@ impl CWelsPreProcess {
                 .planes();
             let iMbNum = ((sCurGeom.iWidthInPixel + 15) >> 4)
                 * ((sCurGeom.iHeightInPixel + 15) >> 4);
-            let (mut aq, mut bg, mut sad, mut ssd, mut sd, mut mad, mut sum, mut sqsum) =
+            let (aq, mut bg, mut sad, mut ssd, mut sd, mut mad, mut sum, mut sqsum) =
                 (0i64, 0i64, 0i64, 0i64, 0i64, 0i64, 0i64, 0i64);
             for i in 0..iMbNum as isize {
                 let w = i as i64 + 1;
@@ -2465,19 +2465,12 @@ impl CWelsPreProcess {
         // METHOD_SCENE_CHANGE_DETECTION_VIDEO: no `Set` in the C++ either.
         let mut sSceneChangeDetectResult = SSceneChangeResult::default();
         let mut sSrcPixMap = SPixMap::default();
-        let mut sRefPixMap = SPixMap::default();
 
         sSrcPixMap.iSizeInBits = g_kiPixMapSizeInBits;
         sSrcPixMap.iStride[0] = cur_y.stride() as i32;
         sSrcPixMap.sRect.iRectWidth = cur_w;
         sSrcPixMap.sRect.iRectHeight = cur_h;
         sSrcPixMap.eFormat = VideoFormat::videoFormatI420;
-
-        sRefPixMap.iSizeInBits = g_kiPixMapSizeInBits;
-        sRefPixMap.iStride[0] = ref_y.stride() as i32;
-        sRefPixMap.sRect.iRectWidth = ref_w;
-        sRefPixMap.sRect.iRectHeight = ref_h;
-        sRefPixMap.eFormat = VideoFormat::videoFormatI420;
 
         let planes = crate::processing::scene_change_detection::ScdPlanes {
             cur: &cur_y.as_slice()[cur_y.origin()..],

@@ -1099,7 +1099,7 @@ mod tests {
 
     #[test]
     fn test_alloc_and_free_picture() {
-        let mut param = SDecodingParam::default();
+        let param = SDecodingParam::default();
         let mut ctx = SWelsDecoderContext::new_boxed();
         ctx.pParam = param;
 
@@ -1147,7 +1147,7 @@ mod tests {
         // production caller passes and this asserts the two agree — the mechanical
         // pass through this file set the argument to `false` here and the test caught
         // it, which is the whole reason the flag is read back rather than written in.
-        let mut param = SDecodingParam { bParseOnly: true, ..Default::default() };
+        let param = SDecodingParam { bParseOnly: true, ..Default::default() };
         let mut ctx = SWelsDecoderContext::new_boxed();
         ctx.pParam = param;
 
@@ -1175,7 +1175,7 @@ mod tests {
 
     #[test]
     fn test_prefetch_pic_circular_scan() {
-        let mut param = SDecodingParam::default();
+        let param = SDecodingParam::default();
         let mut ctx = SWelsDecoderContext::new_boxed();
         ctx.pParam = param;
 
@@ -1223,7 +1223,7 @@ mod tests {
     /// checks rather than the thing Miri had to be asked about.
     #[test]
     fn f42_a_reference_list_entry_naming_the_current_picture_resolves_not_panics() {
-        let mut param = SDecodingParam::default();
+        let param = SDecodingParam::default();
         let mut ctx = SWelsDecoderContext::new_boxed();
         ctx.pParam = param;
 
@@ -1278,7 +1278,7 @@ mod tests {
     fn destroying_the_pool_resets_the_reordering_buffers() {
         use crate::decoder::decoder_context::{IMinInt32, SPictInfo, SPictReoderingStatus};
 
-        let mut param = SDecodingParam::default();
+        let param = SDecodingParam::default();
         let mut ctx = SWelsDecoderContext::new_boxed();
         // A mutable reference coerces to a raw pointer at an assignment or an
         // argument, so this fixture spells no pointer type at all (S16: the metric
@@ -1330,7 +1330,7 @@ mod tests {
     fn pooled_pictures_are_identified_by_slot_not_by_poc() {
         use crate::decoder::picture::same_picture;
 
-        let mut param = SDecodingParam::default();
+        let param = SDecodingParam::default();
         let mut ctx = SWelsDecoderContext::new_boxed();
         ctx.pParam = param;
 
@@ -1386,7 +1386,7 @@ mod tests {
     /// Releasing a slot then has to be found by the wrap, since the cursor is past it.
     #[test]
     fn prefetch_wraps_and_survives_an_exhausted_pool() {
-        let mut param = SDecodingParam::default();
+        let param = SDecodingParam::default();
         let mut ctx = SWelsDecoderContext::new_boxed();
         ctx.pParam = param;
 
@@ -1424,7 +1424,7 @@ mod tests {
 
     #[test]
     fn test_prefetch_pic_for_thread() {
-        let mut param = SDecodingParam::default();
+        let param = SDecodingParam::default();
         let mut ctx = SWelsDecoderContext::new_boxed();
         ctx.pParam = param;
 

@@ -101,7 +101,7 @@ unsafe fn options_transcript(data: &[u8]) -> Vec<String> {
 
         let mut lines = Vec::new();
         let mut idx = 0usize;
-        let mut feed = |dec: *mut ISVCDecoder, src: *const u8, len: i32, lines: &mut Vec<String>, idx: &mut usize| {
+        let feed = |dec: *mut ISVCDecoder, src: *const u8, len: i32, lines: &mut Vec<String>, idx: &mut usize| {
             let mut dst: [*mut u8; 3] = [std::ptr::null_mut(); 3];
             let mut info = SBufferInfo::default();
             ISVCDecoder::DecodeFrame2(dec, src, len, dst.as_mut_ptr(), &mut info);

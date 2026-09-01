@@ -1019,7 +1019,7 @@ mod tests {
         let mut sps = SWelsSPS::default();
         let mut buf = [0u8; 512];
         let mut bs = BsWriter::new();
-        let mut delta = [0i32; 32];
+        let delta = [0i32; 32];
 
         // The `as_mut_ptr() as *const u8` accommodation that used to stand here is
         // gone with `InitBits` (F13's third site): the buffer is a `&mut [u8]` the

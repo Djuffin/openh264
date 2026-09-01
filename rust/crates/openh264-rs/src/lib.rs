@@ -84,10 +84,6 @@
 // Inside the 13 wrapped bodies it buys nothing; those stay watched by the ratchet's
 // `unsafe_fn` metric and by the census (plan §7.1).
 //
-// Not allowed here, and deliberately visible: `unused_assignments` (17) and
-// `unreachable_patterns` (2), the C's `int x = 0; … x = f();` idiom and its
-// switch arms. They have been warnings since before this phase; leaving them
-// visible is what keeps a *new* one findable.
 #![allow(
     non_snake_case,
     non_camel_case_types,
@@ -95,7 +91,13 @@
     unused_imports,
     unused_variables
 )]
-#![deny(unsafe_op_in_unsafe_fn)]
+#![deny(
+    unsafe_op_in_unsafe_fn,
+    unused_assignments,
+    unused_mut,
+    unreachable_patterns,
+    unused_parens
+)]
 
 
 pub mod common;

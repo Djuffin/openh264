@@ -1148,7 +1148,7 @@ pub fn RequestMemorySvc(
     let iNonVclLayersBsSizeCount = SSEI_BUFFER_SIZE + kiSpsSize + kiPpsSize;
 
     let mut bDynamicSlice = false;
-    let mut iSliceBufferSize: i32 = 0;
+    let mut iSliceBufferSize: i32;
     let mut iMaxSliceBufferSize: i32 = 0;
     let mut iIndex: i32 = 0;
     while iIndex < ctx.param().iSpatialLayerNum {
@@ -3689,7 +3689,7 @@ pub fn WelsEncoderEncodeExt(
     let mut iCurHeight;
     let mut eNalType = EWelsNalUnitType::NAL_UNIT_UNSPEC_0;
     let mut eNalRefIdc;
-    let mut iCurDid: i8 = 0;
+    let mut iCurDid: i8;
     let mut iCurTid: i32 = 0;
 
     pCtx.iEncoderError = ENC_RETURN_SUCCESS;
@@ -3909,7 +3909,7 @@ pub fn WelsEncoderEncodeExt(
         }
 
         // coding each spatial layer, only one quality layer within spatial support
-        let mut iSliceCount;
+        let iSliceCount;
         if iLayerNum >= MAX_LAYER_NUM_OF_FRAME {
             return ENC_RETURN_UNSUPPORTED_PARA;
         }
@@ -4467,16 +4467,12 @@ pub fn WelsEncoderEncodeExt(
             StackBackEncoderStatus(pCtx, eFrameType);
             ClearFrameBsInfo(pCtx, &mut *pFbi);
 
-            iFrameSize = 0;
-            iLayerNum = 0;
-
             pCtx.func_list()
                 .pfRc
                 .WelsUpdateBufferWhenSkip(pCtx, iSpatialNum);
 
             crate::encoder::rc::WelsRcPostFrameSkippedUpdate(pCtx, iCurDid as i32);
             pCtx.iEncoderError = ENC_RETURN_SUCCESS;
-            let _ = iLayerNum;
             return ENC_RETURN_SUCCESS;
         }
 

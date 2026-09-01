@@ -1628,8 +1628,8 @@ mod tests {
 
     #[test]
     fn test_add_long_term_sorted_order() {
-        let mut pic1 = SPicture::default();
-        let mut pic2 = SPicture::default();
+        let pic1 = SPicture::default();
+        let pic2 = SPicture::default();
 
         {
             let pool = crate::decoder::pic_queue::PicPool::over(vec![

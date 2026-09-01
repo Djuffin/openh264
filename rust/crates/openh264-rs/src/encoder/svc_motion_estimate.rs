@@ -1791,7 +1791,7 @@ mod tests {
 
     #[test]
     fn test_me_sad_cost_select() {
-        let mut sad_costs = [100i32, 50, 120, 80];
+        let sad_costs = [100i32, 50, 120, 80];
         let mvd_cost_table = vec![0u16; 512];
         let mut best_cost = 200i32;
         let mut ix = 0i32;

@@ -234,7 +234,7 @@ fn cavlc_mode_matches_the_raw_pair_from_prng_cursor_states() {
         let size_bits = payload.len() as i32 * 8;
 
         let mut c = BsCursor::init(&buf, size_bits).unwrap();
-        let mut raw = raw_of(&c);
+        let mut raw;
 
         for step in 0..scale(24).max(4) {
             let n = 1 + rng.below(16) as i32;
