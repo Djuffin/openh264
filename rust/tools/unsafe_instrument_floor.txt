@@ -1,6 +1,8 @@
 # The enumerated instrument floor — decision D-exit-4, built at S11.5 (plan step 5),
 # regenerated at S11.25 (46 -> 26 across 16 -> 11 files) and again at **S11.51**
-# (26 -> 21 across 11 -> 10 files), after the conversion mass closed.
+# (26 -> 21 across 11 -> 10 files), after the conversion mass closed, and at
+# **S11.52** (21 -> 22): the differential referee for `copy_planes_from`, which
+# the byte sweep is structurally unable to see.
 #
 # The plan's end state is `#![forbid(unsafe_code)]` in every file outside the
 # C-ABI island (`src/api/`), with two exceptions: `encoder/rec_view.rs`, whose
@@ -108,7 +110,7 @@
 # cannot carry. Regenerate both in the same commit.
 #
 # ---------------------------------------------------------------------------
-# 21 test allows across 10 files
+# 22 test allows across 10 files
 
 # decoder/picture.rs
 decoder/picture.rs instrument data_ptr_reaches_the_padding_behind_the_logical_origin
@@ -132,6 +134,7 @@ encoder/nal_encap.rs instrument test_wels_encode_nal_buffer_too_small
 # encoder/picture.rs
 encoder/picture.rs instrument data_ptr_reaches_the_padding_behind_the_logical_origin
 encoder/picture.rs instrument data_ptr_shared_reaches_the_padding_and_survives_sibling_mints
+encoder/picture.rs instrument copy_planes_from_matches_the_raw_primitive_it_replaced
 
 # encoder/ref_list_mgr_svc.rs
 encoder/ref_list_mgr_svc.rs instrument ref_strategy_zero_is_the_default_arm

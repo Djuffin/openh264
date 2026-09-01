@@ -402,6 +402,52 @@ impl SPicture {
         &plane.as_slice()[origin..]
     }
 
+    /// [`plane_tail`](Self::plane_tail)'s write half — [`data_ptr`](Self::data_ptr)'s
+    /// reach as a slice (S11.51).
+    #[inline]
+    pub fn plane_tail_mut(&mut self, i: usize) -> &mut [u8] {
+        let plane = &mut self.planes[i];
+        if plane.is_empty() {
+            return &mut [];
+        }
+        let origin = plane.origin();
+        &mut plane.as_mut_slice()[origin..]
+    }
+
+    /// Copy the top-left `kiWidth x kiHeight` samples of `kpSrc` into `self`,
+    /// each plane at its own stride — **the pool-to-pool half of
+    /// `WelsMoveMemory_c`, as the safe operation it always was** (S11.51).
+    ///
+    /// The two pictures arrive as `&mut self` and `&SPicture`, so the compiler has
+    /// already proved they are different pictures — which is the whole precondition
+    /// `copy_nonoverlapping` needed and that the raw form could only assert in
+    /// prose. Chroma takes half the geometry in each dimension, as the C++ does
+    /// (`iWidth >> 1`, `iHeight >> 1`); both pictures keep their own strides, so a
+    /// copy between differently-padded allocations is the same walk.
+    ///
+    /// Every row is a `copy_from_slice` between bounds-checked ranges. A plane
+    /// short of the geometry panics here, where the raw walk read past the
+    /// allocation — unreachable in this tree, since the pool sizes all three planes
+    /// from the same dimensions this is called with.
+    pub fn copy_planes_from(&mut self, kpSrc: &SPicture, kiWidth: i32, kiHeight: i32) {
+        let (kuiW, kuiH) = (kiWidth.max(0) as usize, kiHeight.max(0) as usize);
+        for i in 0..3 {
+            let (kuiRow, kuiRows) =
+                if i == 0 { (kuiW, kuiH) } else { (kuiW >> 1, kuiH >> 1) };
+            if kuiRow == 0 || kuiRows == 0 {
+                continue;
+            }
+            let kuiSrcStride = kpSrc.planes[i].stride();
+            let kuiDstStride = self.planes[i].stride();
+            let kpFrom = kpSrc.plane_tail(i);
+            let pInto = self.plane_tail_mut(i);
+            for y in 0..kuiRows {
+                pInto[y * kuiDstStride..][..kuiRow]
+                    .copy_from_slice(&kpFrom[y * kuiSrcStride..][..kuiRow]);
+            }
+        }
+    }
+
     /// Plane `i`, for a converted caller that wants the safe view.
     #[inline]
     pub fn plane(&self, i: usize) -> &PaddedPlane {
@@ -844,4 +890,88 @@ mod tests {
         assert_eq!(pic.iLongTermPicNum, -1);
         assert_eq!(pic.iMarkFrameNum, -1);
     }
+    /// **The referee for [`SPicture::copy_planes_from`], and the reason it is a
+    /// differential rather than an assertion about content: the byte sweep cannot
+    /// see this conversion at all.**
+    ///
+    /// S11.51 replaced a `WelsMoveMemory_c` call in `DownsamplePadding`'s forced-copy
+    /// arm with this method. That arm needs two spatial layers configured at *the
+    /// same* resolution, and the `dl` sweep preset — the only multi-layer preset —
+    /// gives layer `i` the input halved `n-1-i` times, so adjacent layers always
+    /// differ. Measured, not assumed: an `eprintln!` in the arm fired **zero** times
+    /// across all 76 `dl` configurations. So 847/847 says the change broke nothing
+    /// *elsewhere* and says nothing whatever about the change.
+    ///
+    /// What can referee it is the function it replaced. Both run on identical
+    /// picture pairs and the **whole allocation** of each destination is compared —
+    /// so a copy that wrote the right visible samples into the wrong rows, or
+    /// touched a padding byte, fails here.
+    ///
+    /// The strides differ between source and destination on purpose (176x144 pads to
+    /// a different luma stride than 160x128 does), which is the case a same-stride
+    /// test would pass while a flat `copy_from_slice` over the whole plane also
+    /// passed.
+    #[test]
+    // unsafe-cat: instrument(test)
+    #[allow(unsafe_code)]
+    fn copy_planes_from_matches_the_raw_primitive_it_replaced() {
+        use crate::encoder::wels_preprocess::WelsMoveMemory_c;
+
+        for &(sw, sh, dw, dh, w, h) in &[
+            (176, 144, 176, 144, 176, 144), // same geometry, the arm's own case
+            (176, 144, 160, 128, 160, 128), // destination narrower: strides differ
+            (320, 240, 176, 144, 176, 144),
+            (176, 144, 176, 144, 32, 16),   // a sub-rectangle of both
+        ] {
+            let mut src = SPicture::new(sw, sh, false);
+            // A pattern that is different in every plane and every row, so a
+            // stride slip or a plane swap cannot survive it.
+            for i in 0..3 {
+                let stride = src.planes[i].stride();
+                let origin = src.planes[i].origin();
+                let buf = src.planes[i].as_mut_slice();
+                for (k, b) in buf.iter_mut().enumerate() {
+                    *b = (k.wrapping_mul(31).wrapping_add(i * 7).wrapping_add(origin)
+                        ^ (k / stride.max(1)))  as u8;
+                }
+            }
+
+            let mut dst_raw = SPicture::new(dw, dh, false);
+            let mut dst_safe = SPicture::new(dw, dh, false);
+            for i in 0..3 {
+                dst_raw.planes[i].as_mut_slice().fill(0xA5);
+                dst_safe.planes[i].as_mut_slice().fill(0xA5);
+            }
+
+            // The raw primitive, exactly as `DownsamplePadding` called it.
+            let ksrc = src.planes();
+            let kdst = dst_raw.planes();
+            unsafe {
+                WelsMoveMemory_c(
+                    kdst.pData[0], kdst.pData[1], kdst.pData[2],
+                    kdst.iLineSize[0], kdst.iLineSize[1], kdst.iLineSize[2],
+                    ksrc.pData[0], ksrc.pData[1], ksrc.pData[2],
+                    ksrc.iLineSize[0], ksrc.iLineSize[1], ksrc.iLineSize[2],
+                    w, h,
+                );
+            }
+
+            dst_safe.copy_planes_from(&src, w, h);
+
+            for i in 0..3 {
+                assert_eq!(
+                    dst_safe.planes[i].as_slice(),
+                    dst_raw.planes[i].as_slice(),
+                    "plane {i} differs for src {sw}x{sh} -> dst {dw}x{dh}, copying {w}x{h}"
+                );
+            }
+            // And the copy actually happened — a method that did nothing would pass
+            // every comparison above if the raw one also did nothing.
+            assert!(
+                dst_safe.planes[0].as_slice().iter().any(|&b| b != 0xA5),
+                "nothing was written for {w}x{h}"
+            );
+        }
+    }
+
 }

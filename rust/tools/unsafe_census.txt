@@ -17,7 +17,7 @@ encoder/encoder_context.rs instrument(test) x4
 encoder/encoder_ext.rs instrument(test) x2
 encoder/encoder_ext.rs port-raw(F162) x1
 encoder/nal_encap.rs instrument(test) x3
-encoder/picture.rs instrument(test) x2
+encoder/picture.rs instrument(test) x3
 encoder/rec_view.rs recon-seam x2
 encoder/ref_list_mgr_svc.rs instrument(test) x1
 encoder/slice_multi_threading.rs instrument(test) x1
@@ -28,4 +28,3 @@ encoder/svc_mode_decision.rs instrument(test) x1
 encoder/svc_set_mb_syn_cabac.rs C-ABI(test) x1
 encoder/wels_encoder_ext.rs C-ABI x2
 encoder/wels_preprocess.rs C-ABI x2
-encoder/wels_preprocess.rs port-raw(Phase x1

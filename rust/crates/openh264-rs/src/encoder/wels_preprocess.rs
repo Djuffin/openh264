@@ -716,9 +716,16 @@ pub fn ClearEndOfLinePadding(pData: &mut [u8], iStride: i32, iWidth: i32, iHeigh
 }
 
 /// Row-by-row planar memory copy for I420 YUV buffers — **the ingest
-/// primitive**: the source pointers are the application's plane buffers, raw
-/// C-ABI data with no owner on this side of the boundary, so the claim lives
-/// on this signature and is asserted once, by the wrapper's guards.
+/// primitive, and since S11.51 nothing else**: the source pointers are the
+/// application's plane buffers, raw C-ABI data with no owner on this side of
+/// the boundary, so the claim lives on this signature and is asserted once, by
+/// the wrapper's guards.
+///
+/// Its second caller was a *pool-to-pool* copy in `DownsamplePadding`, where
+/// both sides were pictures this crate owns; that site takes two disjoint
+/// borrows out of the pool and calls [`SPicture::copy_planes_from`] instead, so
+/// the last thing reaching this function through a raw pointer is the one thing
+/// that has to.
 ///
 /// # Safety
 /// Every pointer must address a live plane of at least `iWidth x iHeight`
@@ -1751,13 +1758,29 @@ impl CWelsPreProcess {
         // What they were carrying is `Padding`'s question — *which picture* — and
         // that is now one `SrcPicRef` (`padRef` below) instead of two descriptors.
         //
-        // S37's note stood here: "resolve both pictures to their plane roots up front
-        // and work through raw cursors from here — `srcRef` and `dstRef` are
+        // **S11.51: the two up-front plane-root resolutions are gone, and S37's
+        // note with them.** It read: "resolve both pictures to their plane roots up
+        // front and work through raw cursors from here — `srcRef` and `dstRef` are
         // frequently the same picture, which no pair of references could express."
-        // That is still true of `pSrc`/`pDstPic` below, which the copy arm hands to
-        // `WelsMoveMemory_c` as six raw roots, and it is why that arm stays raw.
-        let pSrc = self.src_mut(srcRef).planes();
-        let pDstPic = self.src_mut(dstRef).planes();
+        // The first half was a consequence of the second, and the second is true of
+        // *this function* but not of either arm that writes.
+        //
+        // **`bDstIsWritten` implies `srcRef != dstRef`**, which is what makes both
+        // write arms expressible as a pair of borrows:
+        //
+        //   * `SingleLayerPreprocess` passes `pDstPic = pSrcPic` only on its
+        //     **non-scaling** path, and there the shrink dimensions are the source
+        //     dimensions and `bForceCopy` is false — so the flag is false and
+        //     neither arm runs. Same picture, no write, only the padding below.
+        //   * the multi-layer loop passes the closer layer's picture as source and
+        //     `GetCurrentOrigFrame(iDependencyId)` as destination, which index
+        //     *different rows* of `m_pSpatialPic`. Different rows are different
+        //     pool slots.
+        //
+        // `src_pair_mut` asserts the same thing at the moment of use, so the
+        // argument is enforced rather than merely written down — and a violation is
+        // a panic where the raw form was a self-overlapping `copy_nonoverlapping`,
+        // which is UB in C as well as in Rust.
 
         // **S5.C6a**: the branch's condition, named. It is what the deleted
         // `sDstPicMap` encoded — the destination when this arm writes into it, the
@@ -1817,29 +1840,16 @@ impl CWelsPreProcess {
                 }
                 self.m_vp.sDownsample.m_pSampleBuffer = scratch;
             } else {
-                // S11.42: the copy primitive's claim, at a pool-to-pool site —
-                // both `PicPlanes` were resolved from live pool pictures above
-                // (S37's shape), two distinct slots, geometry the pool's own.
-                // unsafe-cat: port-raw(Phase 9)
-                #[allow(unsafe_code)]
-                unsafe {
-                    WelsMoveMemory_c(
-                        pDstPic.pData[0],
-                        pDstPic.pData[1],
-                        pDstPic.pData[2],
-                        pDstPic.iLineSize[0],
-                        pDstPic.iLineSize[1],
-                        pDstPic.iLineSize[2],
-                        pSrc.pData[0],
-                        pSrc.pData[1],
-                        pSrc.pData[2],
-                        pSrc.iLineSize[0],
-                        pSrc.iLineSize[1],
-                        pSrc.iLineSize[2],
-                        iSrcWidth,
-                        iSrcHeight,
-                    );
-                }
+                // **S11.51: the forced copy is a picture-to-picture copy.** The
+                // same `src_pair_mut` the downsample arm above uses, for the same
+                // reason and with the same guarantee — and here the source is
+                // downgraded to a shared borrow, because a copy reads it. What
+                // `WelsMoveMemory_c` did with six raw roots and two stride triples
+                // is `copy_planes_from`'s row walk over the same bytes: each plane
+                // from its own logical origin, at its own stride, luma at the full
+                // geometry and chroma at half.
+                let (kpSrcPic, pDstPic) = self.src_pair_mut(srcRef, dstRef);
+                pDstPic.copy_planes_from(kpSrcPic, iSrcWidth, iSrcHeight);
             }
         }
 
