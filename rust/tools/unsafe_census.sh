@@ -25,6 +25,32 @@
 # `src/api/` is out of scope here, as it is for the tracking number: it is the
 # frozen C-ABI layer, watched by `abi_exports.sh` and `abi_sizes.sh` instead.
 #
+# **`cfg-region(...)` rows — S12.5, F303.** Everything above counts what the host
+# build compiles, and that is not the whole tree. `WelsEmms`'s `asm!("emms")` sat
+# behind `#[cfg(target_arch = "x86_64")]` for eleven sessions with no
+# `#[allow(unsafe_code)]`: on this aarch64 host the block is stripped before the
+# lint runs, so `#![deny(unsafe_code)]` never fired, this census had no attribute
+# to count, and an x86_64 build simply did not compile. No instrument here could
+# have caught it, because every one of them measures one architecture.
+#
+# So the conditional regions themselves are pinned, over the **whole** of `src/`
+# including `api/`: one row per `#[cfg(...)]` on a target, feature or `not(test)`
+# predicate, keyed by the predicate text. They are not unsafe and are not the
+# tracking number — they are the list of places where the other rows are only
+# true for the host you measured on, and a new one has to be justified the same
+# way a new allow does.
+#
+# **The pinned set is empty, and that is the intended state.** S12.5 deleted the
+# `emms` rather than tagging it: upstream declares `WelsEmms` only under
+# `#if defined(X86_ASM)`, this port translates none of the assembly kernels, and
+# a crate that executes no MMX has nothing for `emms` to clear. So the list has
+# no members and this check is a tripwire — the next `#[cfg(target_*)]` anyone
+# adds fails it and has to be argued for.
+#
+# Two predicate families are excluded because the gates already compile both
+# arms, so nothing is blind: `cfg(test)` (the test battery) and
+# `debug_assertions` (every gate runs debug **and** release).
+#
 # Comments are not attributes (S8's defect, F219): a line whose match sits behind
 # `//` is documentation and is not counted. This tool reuses that rule verbatim.
 set -eu
@@ -63,6 +89,30 @@ for root, _, files in os.walk(src):
                 untagged.append(f'{rel}:{i + 1}')
                 cat = 'UNTAGGED'
             rows[(rel, cat)] = rows.get((rel, cat), 0) + 1
+# F303: the conditional regions the host build never compiles. Whole tree,
+# `api/` included — the blindness is architectural, not layered.
+cfgre = re.compile(r'#\[cfg\(([^\n]*)\)\]\s*$')
+for root, _, files in os.walk(src):
+    for f in sorted(files):
+        if not f.endswith('.rs'):
+            continue
+        path = os.path.join(root, f)
+        rel = os.path.relpath(path, src)
+        for line in open(path).read().splitlines():
+            t = line.strip()
+            if t.startswith('//'):
+                continue
+            m = cfgre.match(t)
+            if not m:
+                continue
+            pred = m.group(1)
+            if 'test' in pred and 'not(' not in pred:
+                continue
+            if not re.search(r'target_|feature|not\(test', pred):
+                continue
+            key = 'cfg-region(' + re.sub(r'[\s"]', '', pred) + ')'
+            rows[(rel, key)] = rows.get((rel, key), 0) + 1
+
 for (rel, cat), n in sorted(rows.items()):
     print(f'{rel} {cat} x{n}')
 if untagged:
@@ -84,15 +134,22 @@ case "$MODE" in
       echo "#   fork-shared(S63)        the MT fork's shared-context reads"
       echo "#   recon-seam              D-mt-3's one seam (holds the last unsafe impl)"
       echo "#   port-raw(...)           named residue, each with its reason at the site"
-      echo "#   SCREEN_CONTENT(dormant) Phase 10's lane"
+      echo "#   cfg-region(...)         a conditional region the host build never sees (F303)"
       echo "#"
       census
     } > "$PIN"
     echo "unsafe_census: wrote $(grep -vc '^#' "$PIN") rows to tools/unsafe_census.txt"
     ;;
   report)
-    census | awk '{ c[$2] += substr($3, 2); t += substr($3, 2) }
-                  END { for (k in c) printf "  %-24s %d\n", k, c[k]; printf "  %-24s %d\n", "TOTAL", t }' \
+    # The allow rows and the cfg-region rows are different quantities and are
+    # totalled apart: TOTAL is the tracking number (allows outside src/api/), and
+    # the cfg regions are a separate list of blind spots, not unsafe.
+    census | awk '{ n = substr($3, 2)
+                    if ($2 ~ /^cfg-region\(/) { g[$2] += n; tg += n } else { c[$2] += n; t += n } }
+                  END { for (k in c) printf "  %-30s %d\n", k, c[k]
+                        printf "  %-30s %d\n", "TOTAL (allows outside api/)", t
+                        for (k in g) printf "  %-30s %d\n", k, g[k]
+                        printf "  %-30s %d\n", "TOTAL cfg-regions", tg }' \
            | sort -k2 -rn
     echo "--- by file"
     census | sed 's/^/  /'

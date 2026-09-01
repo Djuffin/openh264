@@ -367,13 +367,25 @@ pub fn with_wels_mutex<R>(pMutex: Option<&std::sync::Mutex<()>>, f: impl FnOnce(
     f()
 }
 
-pub fn WelsEmms() {
-    #[cfg(target_arch = "x86_64")]
-    unsafe {
-        std::arch::asm!("emms");
-    }
-}
-
+// **S12.5 deleted `WelsEmms` and its four call sites.**
+//
+// `cpu.h:55-73` declares it only inside `#if defined(X86_ASM)`, beside
+// `WelsCPURestore`, `WelsCPUId`, `WelsCPUIdVerify`, `WelsCPUSupportAVX` and
+// `WelsCPUDetectAVX512` — **none of which this port translated**. Its body is one
+// `emms` in `common/x86/cpuid.asm:207`, clearing the x87 tag word the MMX kernels
+// leave dirty, and this port translates no assembly kernels at all: every dispatch
+// table installs the `_c` variants, and after this checkpoint the crate contains no
+// `asm!`, no `std::arch` and no SIMD intrinsic. No MMX instruction is ever executed,
+// so there is nothing for `emms` to clear and never will be — a Rust port that ever
+// gains SIMD reaches for SSE/AVX/NEON intrinsics, none of which need it.
+//
+// So this was the one member of that `#if` block transliterated into a crate that
+// is on the other side of it, and upstream's own `#else` arm — `#define WelsEmms()`
+// — is what this port has been all along. It carried a real defect while it stood:
+// the `unsafe { asm!(..) }` had no `#[allow(unsafe_code)]`, and on an aarch64 host
+// the `#[cfg(target_arch = "x86_64")]` hid that from `#![deny(unsafe_code)]` and
+// from every instrument in the repository, so an **x86_64 build did not compile**
+// (F303).
 // ============================================================================
 // Core Multithreading Functions
 // ============================================================================
@@ -448,8 +460,6 @@ pub fn CalcSliceComplexRatio(pCurDq: &mut SDqLayer) {
     if kiSliceCount > MAX_SLICES_NUM as i32 {
         return;
     }
-    WelsEmms();
-
     while iSliceIdx < kiSliceCount {
         let pSlice = crate::encoder::svc_encode_slice::slice_in_layer_mut(pCurDq, iSliceIdx);
         if let Some(pSlice) = pSlice {
@@ -481,8 +491,6 @@ pub fn NeedDynamicAdjust(pCurDq: &mut SDqLayer, iSliceNum: i32) -> i32 {
     let mut uiTotalConsume: u32 = 0;
     let mut iSliceIdx: i32 = 0;
     let mut iNeedAdj: i32 = 0;
-
-    WelsEmms();
 
     while iSliceIdx < iSliceNum {
         let Some(pSlice) = crate::encoder::svc_encode_slice::slice_in_layer_mut(pCurDq, iSliceIdx)
@@ -592,8 +600,6 @@ pub fn DynamicAdjustSlicing(
     }
 
     iMaximalMbNum = kiCountNumMb - (kiCountSliceNum - 1) * iMinimalMbNum;
-    WelsEmms();
-
     iSliceIdx = 0;
     while iSliceIdx + 1 < kiCountSliceNum {
         let Some(pSlice) = crate::encoder::svc_encode_slice::slice_in_layer_mut(pCurDqLayer, iSliceIdx) else {

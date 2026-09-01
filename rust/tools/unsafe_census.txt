@@ -9,7 +9,7 @@
 #   fork-shared(S63)        the MT fork's shared-context reads
 #   recon-seam              D-mt-3's one seam (holds the last unsafe impl)
 #   port-raw(...)           named residue, each with its reason at the site
-#   SCREEN_CONTENT(dormant) Phase 10's lane
+#   cfg-region(...)         a conditional region the host build never sees (F303)
 #
 decoder/picture.rs instrument(test) x2
 encoder/encoder_context.rs fork-shared(S63) x1
