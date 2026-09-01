@@ -206,52 +206,36 @@ impl SPicData {
     /// `WelsMdInterInit` computed each cursor before stamping it (S4.C2).
     ///
     /// **Chroma reads stride index 1 for both chroma planes**, not 2 — the stamps
-    /// computed one `iOffsetUV` from `stride(1)` and applied it to planes 1 *and* 2.
-    /// [`stride_idx`](Self::stride_idx) is that rule, named once so a resolver
-    /// cannot get it subtly wrong.
+    /// computed one `iOffsetUV` from `stride(1)` and applied it to planes 1 *and* 2,
+    /// so a caller passing `stride(2)` for plane 2 would be wrong on any picture
+    /// whose chroma strides differ. **The rule lives on this doc comment, and its
+    /// callers are why**: `WelsMdInterInit`'s three surviving raw resolutions
+    /// (`svc_mode_decision.rs`, `pRefLuma`/`pRefCb`/`pRefCr`) pass `stride(1)` for
+    /// planes 1 and 2 by hand, and they are the only callers left that can get it
+    /// wrong. Every view-based resolver is immune by construction — `AllocPicture`
+    /// builds planes 1 and 2 with one `kuiChromaStride` and each plane carries it.
+    ///
+    /// **S12.6 deleted `stride_idx`**, a two-line helper stating the same rule. Its
+    /// only caller was `mb_cursor`, which went with it; a rule with no consumer is
+    /// documentation, and this is where the documentation belongs.
     #[inline]
     pub fn mb_offset(&self, stride: i32, plane: usize) -> isize {
         let shift = if plane == 0 { 4 } else { 3 };
         (((self.iMbX + self.iMbY * stride) as isize) << shift)
     }
 
-    /// The stride index a plane resolves through: luma 0, **both chroma planes 1**.
-    #[inline]
-    pub fn stride_idx(plane: usize) -> usize {
-        if plane == 0 { 0 } else { 1 }
-    }
+    // **S12.6 deleted `mb_cursor`** — S4.C2's raw macroblock cursor, `roots[plane]`
+    // offset by `mb_offset`. Its safe successors below, `mb_cursor_ro` and
+    // `mb_cursor_rec`, took every caller during S9.0; by S12 the only two mentions
+    // left in the tree were comments saying so. Deleting it compiles clean across
+    // all targets, and takes with it the last consumer of `stride_idx` and the
+    // `&[*mut u8; 3]` parameter that was the crate's only raw-root-triple signature.
+    // F291's shape, found by S12's posture sweep rather than by the cascade tool,
+    // which works at function granularity and reported "kept 0 of 0" throughout.
 
-    /// **The macroblock cursor the twelve stored pointers used to be** (S4.C2), and
-    /// a **safe** fn: forming and offsetting a raw pointer needs no `unsafe` — only
-    /// dereferencing one does, and that belongs to the kernels these are handed to.
-    ///
-    /// `SPicData` carried three `[*mut u8; 3]` triples that `WelsMdIntraInit` and
-    /// `WelsMdInterInit` stamped once per macroblock and then **walked** — advancing
-    /// each by one macroblock width for every macroblock that was neither its row's
-    /// first nor its slice's first. Every one of them was
-    /// `roots[plane] + ((iMbX + iMbY * stride) << shift)`, which is what T9.B30 put
-    /// the coordinate pair here to say: "a reader that has the pair and the picture
-    /// does not need the pointer". This resolves that expression at use.
-    ///
-    /// **It is byte-identical, and the walk's own guard is why**: the advance ran
-    /// exactly when the previous macroblock was this one's left neighbour, so
-    /// `previous + 16` and the absolute form name the same address. The invariant
-    /// was spread over two functions and nine assignments; now there is nothing to
-    /// keep in sync.
-    ///
-    /// **The chroma stride rule lives here and nowhere else.** Both chroma planes
-    /// resolve through stride index **1** — the stamps computed a single `iOffsetUV`
-    /// from `stride(1)` and applied it to planes 1 *and* 2 — so a caller passing
-    /// `strides[2]` for plane 2 would be wrong on any picture whose chroma strides
-    /// differ. [`stride_idx`](Self::stride_idx) is that rule; this is its consumer.
-    #[inline]
-    pub fn mb_cursor(&self, roots: &[*mut u8; 3], strides: &[i32; 3], plane: usize) -> *mut u8 {
-        roots[plane].wrapping_offset(self.mb_offset(strides[Self::stride_idx(plane)], plane))
-    }
 
-    /// The same macroblock cursor, taken from a **picture view** instead of a raw
-    /// plane root — S9.0, and the safe replacement for `mb_cursor` on the source
-    /// planes.
+    /// The macroblock cursor, taken from a **picture view** — S9.0, and the safe
+    /// replacement for the raw `mb_cursor` that S12.6 deleted above.
     ///
     /// It hands back a [`RecCursor`](crate::encoder::rec_view::RecCursor), not a
     /// `PlaneCursor`: the source picture is written in-fork by
@@ -267,13 +251,12 @@ impl SPicData {
     /// *padded origin*, and `RoPlane::cursor` anchors from that same origin, so the
     /// two name one address.
     ///
-    /// **On the chroma stride rule** ([`stride_idx`](Self::stride_idx)): the raw
-    /// form resolves both chroma planes through `strides[1]`, while a view's plane
-    /// carries its own. They agree by construction — `AllocPicture` builds planes 1
-    /// and 2 with one `kuiChromaStride` (`picture.rs:262-273`) and `iLineSize` is
-    /// read back off those same planes — so this cannot be the divergence
-    /// `stride_idx` was written to prevent. The rule stays where it is for the raw
-    /// callers that remain.
+    /// **On the chroma stride rule** (stated on [`mb_offset`](Self::mb_offset)): the
+    /// raw form resolved both chroma planes through `strides[1]`, while a view's
+    /// plane carries its own. They agree by construction — `AllocPicture` builds
+    /// planes 1 and 2 with one `kuiChromaStride` (`picture.rs:262-273`) and
+    /// `iLineSize` is read back off those same planes — so this cannot be the
+    /// divergence the rule exists to prevent.
     #[inline]
     pub fn mb_cursor_ro<'a>(
         &self,

@@ -2450,7 +2450,15 @@ pub fn DecoderConfigParam(pCtx: &mut SWelsDecoderContext, kpParam: &SDecodingPar
     );
 }
 
-pub fn WelsOpenDecoder(pCtx: &mut SWelsDecoderContext, _pLogCtx: *mut c_void) -> i32 {
+/// **S12.6 dropped the `SLogContext* pLogCtx` parameter.** `decoder.cpp:600` takes
+/// one and uses it in exactly one place — the `WelsLog` on
+/// `WelsInitStaticMemory`'s failure arm. This port has no such arm in this body,
+/// so the parameter had no subject: it was `_pLogCtx: *mut c_void`, ignored, and
+/// all three callers passed `null_mut()`. Were the arm ever ported it would log
+/// through `pCtx.sLogCtx`, which the body beside it already does — the context
+/// carries its own log now (T8's flip), so the C's out-of-band parameter has
+/// nothing left to say. S18's `pShortRefList` deletion, second instance.
+pub fn WelsOpenDecoder(pCtx: &mut SWelsDecoderContext) -> i32 {
     let mut cpu_cores = 0i32;
     (*pCtx).uiCpuFlag = { WelsCPUFeatureDetect(&mut cpu_cores) } as u32;
     { WelsInitDecoderFuncs(pCtx) };
@@ -2517,7 +2525,7 @@ pub fn WelsEndDecoder(pCtx: &mut SWelsDecoderContext) {
 
 pub fn WelsInitStaticMemory(pCtx: &mut SWelsDecoderContext) -> i32 {
     {
-        WelsOpenDecoder(pCtx, std::ptr::null_mut());
+        WelsOpenDecoder(pCtx);
         // F19: freed by the context's drop glue. `MAX_NAL_UNIT_NUM_IN_AU` is still the
         // caller's argument, exactly as `decoder_core.cpp:763` passes it.
         (*pCtx).access_unit = Some(SAccessUnit::with_nodes(MAX_NAL_UNIT_NUM_IN_AU));
@@ -5304,7 +5312,7 @@ mod tests {
                 // T5.Z4: this asserted the null-context guard too. `WelsOpenDecoder`
                 // on a real context is the success path `Initialize` takes.
                 assert_eq!(
-                    WelsOpenDecoder(&mut SWelsDecoderContext::new_boxed(), std::ptr::null_mut()),
+                    WelsOpenDecoder(&mut SWelsDecoderContext::new_boxed()),
                     ERR_NONE
                 );
                 WelsEndDecoder(&mut SWelsDecoderContext::new_boxed());
@@ -5335,7 +5343,7 @@ mod tests {
         {
             {
                 let mut ctx = SWelsDecoderContext::new_boxed();
-                assert_eq!(WelsOpenDecoder(&mut *ctx, std::ptr::null_mut()), ERR_NONE);
+                assert_eq!(WelsOpenDecoder(&mut *ctx), ERR_NONE);
                 assert!(ctx.bParamSetsLostFlag);
                 assert!(ctx.bNewSeqBegin);
                 assert!(ctx.bPrintFrameErrorTraceFlag);

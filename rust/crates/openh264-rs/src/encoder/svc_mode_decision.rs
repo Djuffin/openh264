@@ -2216,8 +2216,10 @@ pub extern "C" fn SvcMdSCDMbEnc(
     // S9.0c: reconstruction plane through the frame's shared view, prediction scratch
     // through `RecCursor::over_owned` — the same operand type for two different
     // storages, which is what lets the dispatch slot stop being a raw pointer pair.
-    // The chroma cursors both resolve at stride index 1, which is `stride_idx`'s rule
-    // and what the raw form passed by hand.
+    // The chroma cursors both resolve at stride index 1 — `mb_offset`'s rule, and
+    // what the raw form passed by hand. (S12.6 deleted `stride_idx`, the helper that
+    // used to name it; the rule is on `mb_offset`'s doc now, where its last hand-
+    // spelling lives.)
     let recView = layer_rec_view(&*pCurDqLayer).expect("the layer's reconstruction view is built for this frame");
     let luma_off = mem_pred_luma_off((*pMbCache).uiMemPredLumaHalf);
     let chroma_off = mem_pred_chroma_off((*pMbCache).uiMemPredLumaHalf);

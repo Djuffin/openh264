@@ -1290,8 +1290,9 @@ pub fn WelsMdPSkipEnc(
 
     // S9.0: `iEncStride` retires with the raw operands — it existed only to hand the
     // DCT a stride the cursor now carries. The plane-2 call below relied on it still
-    // holding `iEncStride[1]`, which is the same rule `stride_idx` states and which
-    // the view reproduces by construction (both chroma planes share one stride).
+    // holding `iEncStride[1]`, which is the same rule `mb_offset`'s doc states (S12.6
+    // deleted `stride_idx`, the helper) and which the view reproduces by construction
+    // (both chroma planes share one stride).
     let encView = crate::encoder::svc_encode_slice::layer_enc_view(&*pCurLayer)
         .expect("the layer's source view is built for this frame");
     let mut pEncMb = (*pMbCache).SPicData.mb_cursor_ro(encView, 0);
