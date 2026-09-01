@@ -27,10 +27,8 @@ use crate::api::codec_api::RC_MODES::RC_OFF_MODE;
 use crate::api::codec_api::ELevelIdc;
 use crate::decoder::nalu::g_ksLevelLimits;
 use crate::encoder::encoder_context::{
-    ctx_dq_idc_map, ctx_dq_layer, ctx_ltr_at, ctx_mb_index_x,
+    ctx_dq_idc_map, ctx_dq_layer, ctx_ltr_at,
     ctx_paraset_arrays,
-    ctx_mb_index_y,
-    ctx_stride_enc_block_offset,
     sWelsEncCtx, SDqIdc, SLogContext, SRefList, SStrideTables, SSubsetSps, SWelsPPS,
     SWelsSPS, BASE_DEPENDENCY_ID,
 };
@@ -315,21 +313,27 @@ pub fn AllocStrideTables(ctx: &mut sWelsEncCtx, kiNumSpatialLayers: i32) -> i32 
         }
         iTemporalIdx += 1;
     }
-    let iSizeDec = kiUnit1Size * (iCountLayersNeedCs[0] + iCountLayersNeedCs[1]);
-    let iSizeEnc = kiUnit1Size * kiNumSpatialLayers;
+    // **S11.46: the same carve, counted in elements.** The C++ sums four byte
+    // sizes and cuts one block; the two stores are typed now, so the dec and enc
+    // regions are counted in 24-`i32` blocks (`kiUnit1Size` is exactly one) and
+    // the coordinate tables in `i16`s (`iSizeAllMbAlignCache` is `iCountMbNum *
+    // sizeof(int16_t)`, so `iUnit2Size` bytes is `iUnit2Size / 2` entries per
+    // table). Same regions, same order, same sharing.
+    let kiBlockCount = (iCountLayersNeedCs[0] + iCountLayersNeedCs[1] + kiNumSpatialLayers)
+        .max(0) as usize;
+    let kiCoordLen = (iUnit2Size.max(0) as usize / 2) * 2;
 
-    let iNeedAllocSize = iSizeDec + iSizeEnc + (iUnit2Size << 1);
-
-    ctx.pStrideTab = Some(Box::new(SStrideTables::new(iNeedAllocSize)));
+    ctx.pStrideTab = Some(Box::new(SStrideTables::new(kiBlockCount, kiCoordLen)));
     let pPtr: &mut SStrideTables = ctx.pStrideTab.as_mut().unwrap();
 
-    // The C++ carves the block with four running `uint8_t*` cursors. They are byte
-    // *offsets* into the same block here, advanced by the same amounts in the same
-    // order — the arithmetic below is unchanged, only its unit is.
-    let mut pBaseDec: u32 = 0; // iCountLayersNeedCs
-    let mut pBaseEnc: u32 = iSizeDec as u32; // iNumSpatialLayers
-    let mut pBaseMbX: u32 = pBaseEnc + iSizeEnc as u32; // iNumSpatialLayers
-    let mut pBaseMbY: u32 = pBaseMbX + iUnit2Size as u32; // iNumSpatialLayers
+    // The C++ carves the block with four running `uint8_t*` cursors. They are
+    // *indices* into the two typed stores here, advanced by the same regions in
+    // the same order — the arithmetic below is the same walk, in the units the
+    // storage is made of.
+    let mut pBaseDec: u32 = 0; // iCountLayersNeedCs, in blocks
+    let mut pBaseEnc: u32 = (iCountLayersNeedCs[0] + iCountLayersNeedCs[1]).max(0) as u32;
+    let mut pBaseMbX: u32 = 0; // in i16 entries
+    let mut pBaseMbY: u32 = (iUnit2Size.max(0) as u32) / 2;
 
     iTemporalIdx = 0;
     while iTemporalIdx < iCntTid {
@@ -354,7 +358,7 @@ pub fn AllocStrideTables(ctx: &mut sWelsEncCtx, kiNumSpatialLayers: i32) -> i32 
                 kiLumaWidth,
                 kiChromaWidth,
             );
-            pBaseDec += kiUnit1Size as u32;
+            pBaseDec += 1;
 
             iSpatialIdx += 1;
         }
@@ -408,9 +412,10 @@ pub fn AllocStrideTables(ctx: &mut sWelsEncCtx, kiNumSpatialLayers: i32) -> i32 
         pPtr.pMbIndexX[iSpatialIdx as usize] = Some(pBaseMbX);
         pPtr.pMbIndexY[iSpatialIdx as usize] = Some(pBaseMbY);
 
-        pBaseEnc += kiUnit1Size as u32;
-        pBaseMbX += kiAllocMbSize as u32;
-        pBaseMbY += kiAllocMbSize as u32;
+        pBaseEnc += 1;
+        // `iSizeAllMbAlignCache` is bytes; the store counts `i16`s.
+        pBaseMbX += (kiAllocMbSize as u32) / 2;
+        pBaseMbY += (kiAllocMbSize as u32) / 2;
 
         iSpatialIdx += 1;
     }
