@@ -29,7 +29,7 @@ use crate::decoder::nalu::g_ksLevelLimits;
 use crate::encoder::encoder_context::{
     ctx_dq_idc_map, ctx_ltr_at,
     ctx_paraset_arrays,
-    sWelsEncCtx, SDqIdc, SLogContext, SRefList, SStrideTables, SSubsetSps, SWelsPPS,
+    sWelsEncCtx, SDqIdc, SLogContext, SRefList, SSpatialPicIndex, SStrideTables, SSubsetSps, SWelsPPS,
     SWelsSPS, BASE_DEPENDENCY_ID,
 };
 use crate::encoder::md::INTRA_4x4_MODE_NUM;
@@ -1853,6 +1853,41 @@ mod tests {
         }
     }
 
+    /// **F162's referee.** The arm this guards is entered zero times across the
+    /// test suite and zero times across all 583 sweep configurations — measured
+    /// with an `eprintln`, not assumed — so `583/583 byte-identical` says the rest
+    /// of the encoder is untouched and says nothing about this line. Same blindness
+    /// S11.52 and S12.3 met; same answer.
+    ///
+    /// It pins two different claims: that **1, 2 and 3 layers are unchanged** (the
+    /// exit index is in bounds, so `get` returns what the raw read returned), and
+    /// that **4 is the only case that ever ran off the end**, where the answer is
+    /// now `0` rather than whatever follows the map in the context.
+    #[test]
+    fn corrected_arm_reads_the_unwritten_slot_and_answers_zero_past_the_fourth() {
+        let mut map = [SSpatialPicIndex::default(); MAX_DEPENDENCY_LAYER];
+        for (i, e) in map.iter_mut().enumerate() {
+            // Distinct per slot, so reading the wrong one is a distinct failure from
+            // reading the right one.
+            e.iDid = 10 + i as i32;
+        }
+
+        // The loop exits at `iSpatialIdx == iSpatialNum`. For 1..=3 that slot exists
+        // and holds whatever a previous frame left; the raw form read the same byte.
+        assert_eq!(corrected_arm_did(&map, 1), 11, "1 layer: slot 1, in bounds");
+        assert_eq!(corrected_arm_did(&map, 2), 12, "2 layers: slot 2, in bounds");
+        assert_eq!(corrected_arm_did(&map, 3), 13, "3 layers: slot 3, in bounds");
+
+        // 4 layers: `(pSpatialIndexMap + 4)->iDid` in the C++, one past the end.
+        assert_eq!(corrected_arm_did(&map, 4), 0, "4 layers: refused, not read");
+
+        // And the shape of the refusal, so a future `min`/`saturating_sub` cannot
+        // pass by silently clamping onto a real slot.
+        assert_eq!(corrected_arm_did(&map, 4), 0);
+        assert_ne!(corrected_arm_did(&map, 4), map[3].iDid);
+        assert_eq!(corrected_arm_did(&map, 0), 10, "slot 0 is not special");
+    }
+
     /// Blocker C, second half: the DQ layers, reference lists and macroblock list
     /// exist, which is what `pCurDqLayer` is selected from.
     #[test]
@@ -3622,6 +3657,25 @@ pub fn WelsCodeOnePicPartition(
 /// reproduces this function's whole null path (`WelsUninitEncoderExt(take())`
 /// then `cmMallocMemeError`) rather than just its return code. The guard was not
 /// deleted; it was moved to the last place a null still exists.
+/// The dependency id the `ENC_RETURN_CORRECTED` arm reports — **F162, closed at
+/// S12.13**, and a named function only because its one caller sits 1,000 lines
+/// inside `WelsEncoderEncodeExt` where no test can reach it.
+///
+/// `iSpatialIdx` arrives as the spatial loop's *exit* value, so it addresses the
+/// slot after the last one the frame wrote. Upstream indexes it anyway
+/// (`encoder_ext.cpp:4109-4110`) and the port reproduced that with a raw `add()`.
+/// The map is `[SSpatialPicIndex; 4]`, so **only the 4-layer case ran off the end**;
+/// at 1, 2 or 3 the read is in bounds and `get` returns the same byte it always
+/// did. The fifth slot answers `0` — what an unwritten `SSpatialPicIndex` holds,
+/// which is what the in-bounds cases are reading anyway.
+///
+/// No gate reaches this arm: zero entries across 569 tests and all 583 sweep
+/// configurations, measured. The test beside it is the only referee.
+#[inline]
+fn corrected_arm_did(map: &[SSpatialPicIndex], iSpatialIdx: i32) -> i32 {
+    map.get(iSpatialIdx as usize).map_or(0, |e| e.iDid)
+}
+
 pub fn WelsEncoderEncodeExt(
     pCtx: &mut sWelsEncCtx,
     // S11.20: the frame bitstream info by reference — its one caller
@@ -4692,26 +4746,10 @@ pub fn WelsEncoderEncodeExt(
     }
 
     if ENC_RETURN_CORRECTED == pCtx.iEncoderError {
-        // **`iSpatialIdx == iSpatialNum` here** — the loop above ran to completion —
-        // so with 4 spatial layers configured this reads **one past the end** of a
-        // `[SSpatialPicIndex; 4]`. Upstream does the identical thing at
-        // `encoder_ext.cpp:4109-4110` (`(pSpatialIndexMap + iSpatialIdx)->iDid`,
-        // twice), so the port reproduces it rather than fixing it: an index would
-        // panic where this reads, and a panic is not byte-identical. F162.
-        // Spelled through a derivation that lives and dies inside this statement, so
-        // nothing is held across the two calls below — which is the whole hazard.
-        // **S12.4 retagged this from `port-raw(F162)`.** `port-raw(...)` is the tag
-        // lib.rs's preamble defines as *the queue* — conversion work a phase did not
-        // finish — and S11.52 emptied that queue. This item was never in it: it is a
-        // named permanent exception, which is what `lawful-single` means. The tag now
-        // says which of the two it is, because the census is an equality test over
-        // categories and a category that lies is the one thing it cannot catch.
-        //
-        // unsafe-cat: lawful-single(F162) — a deliberate reproduction, not a debt:
-        // safe indexing would panic where the C++ reads, and a panic is not
-        // byte-identical.
-        #[allow(unsafe_code)]
-        let iDid = unsafe { (*pCtx.sSpatialIndexMap.as_ptr().add(iSpatialIdx as usize)).iDid };
+        // `iSpatialIdx == iSpatialNum` here — the loop above ran to completion — so
+        // this addresses the slot **after** the last one the frame wrote. See
+        // [`corrected_arm_did`], which names the rule and is what F162 became.
+        let iDid = corrected_arm_did(&pCtx.sSpatialIndexMap, iSpatialIdx);
         crate::encoder::encoder_context::with_vpp(pCtx, |pVpp, pCtx| {
             pVpp.UpdateSpatialPictures(pCtx, iCurTid as i8, iDid)
         });
