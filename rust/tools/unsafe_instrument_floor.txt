@@ -110,6 +110,28 @@
 # cannot carry. Regenerate both in the same commit.
 #
 # ---------------------------------------------------------------------------
+# S12.4: **the list did not move, and that is the result.**
+#
+# S12 made the last three code changes of the refactoring — the
+# `unsafe_op_in_unsafe_fn` promotion, the `SetOption`/`GetOption` move into
+# `src/api/`, and the block-static conversion that closed
+# `SCREEN_CONTENT(dormant)` — and none of them retired an instrument or needed a
+# new one. Regenerated here against the tree at S12.4: **22 across 10, the same
+# 22 items in the same order** as S11.52 left them.
+#
+# One test arrived in S12 and is deliberately absent from this file:
+# `svc_mode_decision.rs`'s `set_block_static_idc_reads_the_selected_row_at_the_cpp_indices`,
+# S12.3's referee. It is a plain safe test — it constructs the extension, fills
+# rows and checks four indices — so it carries no allow and belongs on no floor.
+# That is the shape every future referee should have; the 22 below are the ones
+# that cannot, because what they instrument *is* the raw form.
+#
+# The tracking number outside `src/api/` is **29** at S12.4: these 22, plus seven
+# production allows — 2 `fork-shared(S63)`, 2 `recon-seam`, 2 `C-ABI`
+# (`WelsMoveMemory_c` and its ingest caller) and 1 `lawful-single(F162)`.
+# `tools/unsafe_census.sh` pins all 29 by file and category.
+#
+# ---------------------------------------------------------------------------
 # 22 test allows across 10 files
 
 # decoder/picture.rs

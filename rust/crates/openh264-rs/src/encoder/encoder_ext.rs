@@ -4697,7 +4697,14 @@ pub fn WelsEncoderEncodeExt(
         // panic where this reads, and a panic is not byte-identical. F162.
         // Spelled through a derivation that lives and dies inside this statement, so
         // nothing is held across the two calls below — which is the whole hazard.
-        // unsafe-cat: port-raw(F162) — a deliberate reproduction, not a debt:
+        // **S12.4 retagged this from `port-raw(F162)`.** `port-raw(...)` is the tag
+        // lib.rs's preamble defines as *the queue* — conversion work a phase did not
+        // finish — and S11.52 emptied that queue. This item was never in it: it is a
+        // named permanent exception, which is what `lawful-single` means. The tag now
+        // says which of the two it is, because the census is an equality test over
+        // categories and a category that lies is the one thing it cannot catch.
+        //
+        // unsafe-cat: lawful-single(F162) — a deliberate reproduction, not a debt:
         // safe indexing would panic where the C++ reads, and a panic is not
         // byte-identical.
         #[allow(unsafe_code)]

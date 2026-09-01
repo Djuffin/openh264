@@ -19,11 +19,23 @@
 //!   and refereed by the two multi-threaded fork/join Miri probes.
 //! - `recon-seam` — D-mt-3's single seam, its argument at the site. (`send-seam
 //!   (Phase 9)`, D-mt-1's, retired at S10.13 with its `unsafe impl`.)
-//! - `SCREEN_CONTENT(dormant)` — Phase 10's lane.
 //! - `lawful-single(...)`, `instrument(test)` — named singles and tags on tests.
-//! - `port-raw(Phase 9)` / `cursor` — the **queue**, not a category: the conversion
-//!   work the phase did not finish, itemized in `phase9_disposition.md` §4-5 and
-//!   handed to maintenance by D-exit-3. It only ever shrinks (D-exit-1).
+//!
+//! **Two categories left this list and are not coming back.**
+//! `port-raw(Phase 9)` / `cursor` was never a category but the **queue** — the
+//! conversion work a phase had not finished — and S11.52 emptied it. The single
+//! item still spelled `port-raw` was retagged `lawful-single(F162)` at S12.4; it
+//! is a deliberate reproduction of an out-of-bounds read the C++ performs, kept
+//! because safe indexing would panic where upstream reads and a panic is not
+//! byte-identical. `SCREEN_CONTENT(dormant)` was Phase 10's lane and held one
+//! `from_raw_parts`; S12.3 converted it, so the lane's code is all safe and the
+//! category has no members.
+//!
+//! **The floor is a list, not a number** (D-exit-4). `tools/unsafe_census.sh`
+//! pins every allow outside `src/api/` by file and category and fails in both
+//! directions — a new one and a retired one both take it red —
+//! and `tools/unsafe_instrument_floor.txt` names the test instruments item by
+//! item. Regenerate them in the commit that moves them, never to make a gate pass.
 #![deny(unsafe_code)]
 // The naming allows are a requirement, not debt: this crate is a line-by-line port
 // and every identifier is diffable against the C++ it came from (`CODING_STYLE`).
