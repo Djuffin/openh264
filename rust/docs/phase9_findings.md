@@ -8705,3 +8705,291 @@ the take dance *because `SDqLayer::pSrcPool` stores a raw into the box's
 allocation*" expires visibly the day that field is deleted. Both of this
 session's expired refusals were re-checked only because a conversion happened to
 collide with them.
+
+## F286 — the neighbour walk splits at the cursor: one `&mut` record and N shared predecessors from a single borrow (S11.26)
+
+Deblocking reads its macroblock's left and top neighbours while writing the
+macroblock itself, which is why the whole per-macroblock tree took a raw grid
+pointer: a `&mut [SMB]` cannot hand out one exclusive element and two shared
+ones, and every attempt to express it had reached for a raw.
+
+`split_at_mut` at the cursor does express it. `MbWindow::split_cur` cuts the
+window at the current index, so `done` is everything before it and `rest[0]` is
+the record being written:
+
+```rust
+let (done, rest) = self.mbs.split_at_mut(local);
+MbSplit {
+    cur: &mut rest[0],
+    left: (self.cur % self.stride != 0 && self.cur > self.base).then(|| &done[local - 1]),
+    top:  (self.cur >= self.stride && self.cur >= self.base + self.stride).then(|| &done[local - self.stride]),
+}
+```
+
+Both neighbours are *behind* the cursor in raster order — that is not an
+accident of this filter, it is what "neighbour" means in a raster walk — so the
+split direction is the algorithm's own, and the two `Option`s are exactly the
+availability tests the C++ writes as `iMbX > 0` and `iMbY > 0`.
+
+**The generalisable part is the question, not the type.** "Which borrow rule is
+this raw dodging?" (S10's rule) has a third answer beyond width and
+exclusivity: *partition*. When a body writes one element of a container and
+reads others, the raw is standing in for a split the compiler will perform if
+asked at the right index. The reusable test: are the read elements at indices
+the write index dominates? If yes, one `split_at_mut` replaces the raw and the
+availability guards become the `Option`s.
+
+## F287 — a filtered list and its index are two different numberings, and the panic said so (S11.26, S11.27)
+
+The first grid carve built per-slice macroblock windows from a list of slice
+ranges that had been **filtered and sorted** before use, then paired window `k`
+with slice `k`. That pairing is only valid when the list is dense and in slice
+order, and filtering had made it neither. The failure was immediate and loud —
+`current mb 0 outside window [24..49)` — and its first diagnosis was wrong: it
+read as "cross-slice deblocking is fundamental", a design conclusion, from what
+was an off-by-a-numbering.
+
+The fix is one word: build windows for **all** indices `0..kiSliceCount`,
+unfiltered, and let the empty ones be empty. Slice `k`'s window is then at index
+`k` by construction rather than by an invariant nobody stated.
+
+**Two lessons, and the second is the expensive one.** First: when a panic names
+two ranges, check whether the two sides are indexed by the same thing before
+theorising about the algorithm. Second: the same turn produced a *real*
+discovery underneath the false one — deblocking's `kiFirstWindowMb == 0` arm was
+reachable only because the topology proof (`uiFilterIdc == 1` always holds at
+the slice walker) had never been written down. A misdiagnosis that is corrected
+by reading the code often leaves a genuine finding behind it; the correction is
+not the end of the investigation.
+
+## F288 — `iCountMbNumInSlice` is not a run descriptor, and a realloc-fresh slice reads zero (S11.27, S11.32)
+
+Two mb-window panics in the bank work (`mb window [6..6)`, then `[24..73)
+outside a grid of 49`) traced to the same wrong source: taking each slice's
+macroblock range from `SSlice::iCountMbNumInSlice`. The field is a *running
+count the encoder fills in*, not a description of the slice's extent — a slice
+that `ReallocateSliceList` has just created carries `0`, and a slice that was
+re-sliced carries last frame's number.
+
+The correct sources are the ones the fork was already using: the per-layer
+`pFirstMbIdxOfSlice` / `pCountMbNumInSlice` arrays for the fixed modes (built
+pre-fork, read by every worker) and the partition bounds for
+`SM_SIZELIMITED_SLICE`. Both are computed *before* anything runs, which is what
+makes them descriptors rather than counters.
+
+**The actionable form: when a value is used as a bound, ask when it is written
+relative to when it is read.** A field written *during* the walk cannot describe
+the walk. This is the same class as F60's stale pointer, one field over — the
+name (`Count...InSlice`) reads like a description in both cases.
+
+## F289 — lend, don't move: `Option::take` on a capability threaded through a repeated judgement (S11.33)
+
+The dynamic-slicing path passes the *next* slice down so the boundary writer can
+stamp its header when a boundary actually fires. The first conversion passed it
+as `Option<&mut SSlice>` and consumed it with `.take()` at the use site.
+
+The judgement runs **per macroblock**, and it fires at most once. So the first
+non-firing call took the `Option`, the real boundary got `None`, the next
+slice's header stayed zero, and the failure surfaced far away as an F77 expect
+panic — not at the take, not at the boundary, but at the first reader of the
+unstamped header.
+
+`as_deref_mut()` per call is the fix: the capability is *lent* for the duration
+of one judgement and returned, so every call sees it and only the firing call
+uses it.
+
+**The rule: a capability threaded into a repeated decision must be reborrowed,
+never moved.** `.take()` is correct exactly when the caller knows the callee will
+use it; when the callee decides, `as_deref_mut()` is the only shape that
+survives the calls that decline. The compiler cannot catch this — both spellings
+typecheck — so it is a review question: *how many times does this run, and how
+many times does it fire?*
+
+## F290 — a resolver's own exit clause is the queue, and three fired at once (S11.39)
+
+`ctx_ref_list_raw`'s doc said it survived A3 "until the field it feeds is gone".
+`ctx_src_pool_raw`'s said its answer "is **stored** in `SDqLayer::pSrcPool`".
+`ctx_vpp_raw`'s described nine callers that S11.24 had already moved. All three
+conditions had become false — `SDqLayer::pRefList` deleted at S10.8,
+`SDqLayer::pSrcPool` at S10.7, the callers at S11.24 — and all three accessors
+were still there, each with a paragraph explaining why it had to be.
+
+They were deleted in one checkpoint, and the last body that used them
+(`WelsInitCurrentLayer`) went safe with them.
+
+**This is F285's pattern at file scale, and it suggests an instrument.** A
+recorded justification that names its dependency — a field, a caller set, a
+stored value — is *checkable*: grep for the artifact, and if it is gone the
+justification is expired. Three of this session's largest deletions were found
+by reading exit clauses rather than by reading code. The cheap version of the
+instrument is a habit: when a doc says "until X", put X in the sentence in a
+form a grep can find.
+
+## F291 — four accessors had zero callers and only their imports were left (S11.44)
+
+`ctx_param_raw`, `ctx_out_raw`, `ctx_func_list_raw` and `WelsSetMemZero_c` were
+each carrying a paragraph of live-sounding justification — twenty-six per-layer
+cursors, two fork-reachable `pOut` arms, two raw-rooted `SetOption` bodies,
+seven zeroing sites. Every one of those callers had converted across S11.39–43,
+and what remained in the tree was **four `use` statements**.
+
+The grep that finds this is not the one the docs invite. Searching for the
+accessor's *name* returns its definition, its doc mentions, and its imports —
+the imports read as callers at a glance. The measurement that matters filters
+those out:
+
+```bash
+grep -rn "ctx_param_raw" src/ | grep -vE "use |fn ctx_param_raw|^\s*//"
+```
+
+**Actionable: a caller map is a command, not a memory.** Re-run it per
+conversion batch, not per session. The same batch that retires an accessor's
+last caller is the batch that should delete the accessor, or the doc starts
+describing a tree that no longer exists — which is how four dead functions
+survived with confident prose attached.
+
+## F292 — the census tags outlived their `unsafe` nine times, and a tag is a claim (S11.44)
+
+`// unsafe-cat:` markers are the project's category census: the plan prioritises
+by them, and the end state enumerates its exceptions with them. Nine of them sat
+above bodies whose `unsafe` had retired in earlier checkpoints — the `nal_encap`
+trio's T9.X adjudications, `layer_ref_view`'s (whose own text said "nothing raw
+is introduced here"), `md`'s `MdInterAnalysisVaaInfo_c`, and three that S11.43
+itself had left behind two checkpoints earlier.
+
+Every one inflated a category the plan reads as remaining work. `fork-shared`
+looked like five items when it was two; `port-raw` looked like nine when it was
+seven.
+
+**The instrument is a scan, and it is four lines**: for each `unsafe-cat:` line,
+look ahead a few lines for `#[allow(unsafe_code)]` or an `unsafe` token outside
+a comment; report the ones with neither. Run it in the same pass as the
+cascade. The deeper point is that a census keyed on comments decays silently in
+exactly the direction that flatters the project — tags are added with the
+`unsafe` and removed by hand.
+
+## F293 — "a bound the C++ never had" was the element type all along (S11.46)
+
+`SStrideTables` owned one `Vec<i32>` arena with sixteen per-layer **byte
+offsets** into it, and the accessor family above it returned `*const i32` /
+`*const i16`. The reason was written at the accessor: "`SStrideTables` stores
+byte *offsets* into one flat `Vec<i32>` and records no region lengths, so a
+slice API cannot be formed here without inventing a bound the C++ never had."
+
+The bound was not an invention. The arena holds exactly two kinds of region and
+they never interleave: block-offset regions are `kiUnit1Size = 24 * sizeof(i32)`
+each, and the coordinate tables are `i16` runs of one entry per macroblock
+(`iSizeAllMbAlignCache = iCountMbNum * sizeof(int16_t)`). So the arena splits
+into `Vec<[i32; 24]>` and `Vec<i16>`, the offsets become **indices**, and every
+length is the element type.
+
+**What the byte arena was actually protecting is preserved, and naming it is
+what made the split safe to do.** Two layers can share one region — a spatial
+layer absent from the temporal map is assigned the matching layer's table — so
+per-*field* `Vec`s were correctly refused: they would have made two names for
+one region into two regions. Copying an **index** reproduces the sharing exactly
+as copying an offset did. Nineteen `unsafe` blocks and seven raw accessors
+retired; the seven had only test callers, and every production consumer was
+already reading through the bounded slice accessors.
+
+**Actionable: when an arena's "no lengths" argument blocks a conversion, count
+the *kinds* of region before believing it.** One arena of N element types splits
+into N typed stores whenever the regions do not interleave, and "the offsets are
+in bytes because the C++'s arithmetic is" is a translation artifact, not a
+constraint.
+
+## F294 — a raw pointer in a frozen ABI struct does not make its storage raw (S11.47)
+
+`SLayerBSInfo::pNalLengthInByte` is a `*mut i32` the application walks, and 25
+`unsafe` blocks across four files existed to read and write through it. Every
+one of them was reaching into `pOut.sNalLen` — **the encoder's own `Vec<i32>`**.
+The published pointer is a *view* of that array; the array is not the
+application's.
+
+So the pointer stops being state and the position becomes state:
+`pOut.iNalLenBase`, tracked beside `pOut.iLayerBsIndex` exactly as S11.20
+tracked the layer index the same records carry. The encoder reads and writes by
+index; the ABI field is stamped by **safe reslice** —
+`sNalLen[base..].as_mut_ptr()` — which yields the one-past-the-end address at
+the last layer precisely as `.add(count)` did. Two dead pointer parameters went
+with it.
+
+Three walks that consume the *published* chain convert on one invariant:
+`base(i+1) = base(i) + sLayerInfo[i].iNalCount`. That is the pointer chain's own
+arithmetic, so the index form is not an approximation of it — it is the same
+computation in the units the storage is made of. Each `is_null()` guard becomes
+the range check the slice performs.
+
+**Actionable: for every raw pointer in a `#[repr(C)]` struct, ask who owns the
+memory.** If the answer is "we do", the ABI obligation is to *publish* a
+pointer at the boundary, not to compute with one — and the whole interior
+converts, leaving exactly one derivation site. The one raw pointer this added is
+that site's return type, and it is written in safe code.
+
+## F295 — a whole-body `unsafe {` outlives its contents invisibly, because nothing lints an empty claim (S11.45, S11.48)
+
+F281 found eighteen `unsafe {}` blocks that guarded nothing and had been raising
+`unused_unsafe` all along. This session found the *other* granularity twice
+more: bodies whose entire content sat inside one `unsafe {` at the top, where
+the block still contains code — so `unused_unsafe` is silent — but none of that
+code is an unsafe operation any more.
+
+Seven fell this way: `WelsEncoderParamAdjust`, `WelsEncoderApplyLTR`,
+`UpdateStatistics`, `InitializeInternal`, `Uninitialize`, `ForceIntraFrame` and
+`WelsWriteMbResidualCabac`'s enclosing scope. Each had been converted piecemeal
+across earlier sessions, and the scope was inherited rather than claimed.
+
+**Only strip-and-read finds these.** A scan for `unsafe` reports them as unsafe;
+the compiler reports nothing; the ratchet counts them as one block each and is
+satisfied when the number does not grow. Removing the block and letting rustc
+re-derive the set of blocked operations is the measurement — it is the sixth
+time this session that a syntactic scan mispriced work in the *pessimistic*
+direction.
+
+## F296 — the memset's audit was already prose; the derive makes the compiler recheck it (S11.48)
+
+`SSliceHeader` and `SSliceHeaderExt` had `Default` implemented as
+`unsafe { mem::zeroed() }`, above a paragraph auditing why the zeros are valid:
+every member is an integer, a `bool`, or a POD sub-struct of those, plus
+`eSliceType`, whose zero discriminant `P_SLICE` is a declared variant.
+
+Every one of those facts is stated by a type today — both sub-structs
+`#[derive(Default)]`, and `EWelsSliceType` carries `#[default]` on
+`P_SLICE = 0`. So `#[derive(Default)]` writes the same bytes field by field.
+
+**The difference is not the bytes; it is who rechecks the audit.** A memset keeps
+compiling when a non-zeroable field is added — a `String`, an `Option<Box<T>>`,
+an enum with no zero variant — and the audit above it silently stops being true.
+The derive fails to compile. When a hand-written safety audit enumerates
+properties the type system can state, the audit belongs in the type.
+
+## F297 — the exceptions must be pinned as a list, and the pin must be seen red in both directions (S11.50, E2)
+
+The ratchet (`unsafe_ratchet.sh`) counts `unsafe` syntax per file and refuses
+increases. That is the right instrument for a conversion campaign and the wrong
+one for an exit criterion: D-exit-4's floor is an *enumerated set* — these
+instruments, in these files, for these reasons — and a count cannot say whether
+the item that stayed is the item that was ruled to stay.
+
+`unsafe_census.sh` is the equality test beside it: every
+`#[allow(unsafe_code)]` outside `src/api/`, by file and category, pinned in a
+checked-in file. It fails in **both** directions, and an **untagged** allow fails
+on its own, because the tag is where the reason lives.
+
+It was exercised four ways before being trusted, and the second one is the
+reason a count is insufficient:
+
+1. a new *untagged* allow — FAIL, with `file:line`;
+2. a new allow tagged with a **real** category — FAIL (a count-only check passes
+   this; it is the case that matters);
+3. a pinned row the tree no longer has — FAIL, listed separately from (1);
+4. an allow inside a `#![forbid]` file — `E0453` from rustc, before the tool runs.
+
+(4) is the point of S11.49's sealing pass: for the 65 sealed files the exception
+list is enforced by the compiler and the census is a second opinion.
+
+**And the gate immediately caught its own drift**: the `#[ignore]` count was 21
+against a pin of 20, because S11.24 added a Miri control (Miri reports UB by
+aborting, which no harness can assert on, so its controls must be `#[ignore]`d).
+The pin moved *with the reason written at the check* — which is the only lawful
+way a pinned number moves, and the reason to pin it at all.

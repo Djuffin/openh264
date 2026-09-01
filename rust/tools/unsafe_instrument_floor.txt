@@ -1,5 +1,6 @@
 # The enumerated instrument floor — decision D-exit-4, built at S11.5 (plan step 5),
-# regenerated at S11.25 (46 -> 26 across 16 -> 11 files; 25 after the cleanup, +1 for S11.25's own Miri control).
+# regenerated at S11.25 (46 -> 26 across 16 -> 11 files) and again at **S11.51**
+# (26 -> 21 across 11 -> 10 files), after the conversion mass closed.
 #
 # The plan's end state is `#![forbid(unsafe_code)]` in every file outside the
 # C-ABI island (`src/api/`), with two exceptions: `encoder/rec_view.rs`, whose
@@ -84,29 +85,42 @@
 #       for t,i in byfile[f]: print(f"{f} {t} {i}")
 #   EOF
 #
-# A second pass in the same checkpoint took it 30 -> 25. Clearing the five
-# `unused_unsafe` warnings retired four more allows outright: `au_set.rs`'s test
-# blocks wrapped calls whose callees stopped being `unsafe fn` in S11.18, and
-# `encoder_context.rs`'s `test_decide_frame_type` the same for S11.19. That file
-# is now allow-free and carries `#![forbid(unsafe_code)]`.
 # ---------------------------------------------------------------------------
-
-# 26 test allows across 11 files
+# S11.51: **what left the list between S11.25 and here, and the instrument that
+# supersedes the manual half of it.**
+#
+#   The S11.26-S11.48 conversions took their instruments with the bodies those
+#   instruments watched — a probe for a raw accessor retires with the accessor
+#   (S40's rule read backwards). Two were *converted* rather than deleted:
+#   S11.46's pair of stride-arena tests kept the properties that were not about
+#   cursors (two layers naming one region; `None` where the C++ read null) and
+#   dropped the cursor-stability question, which no longer has a subject.
+#
+#   One arrival: S11.24's `a_pointer_into_the_box_does_not_survive_with_vpp`,
+#   the Miri control for F285's expired refusal — `#[ignore]`d because Miri
+#   reports UB by aborting, which no harness can assert on, and the reason the
+#   gate's pinned ignore count moved 20 -> 21 at S11.50.
+#
+# **This file is now the itemized record; `tools/unsafe_census.sh` is the
+# gate** (E2, S11.50). The census pins *every* allow outside `src/api/` by file
+# and category and fails in both directions, so the floor no longer has to be
+# checked by hand — what it adds is the per-item names, which a category count
+# cannot carry. Regenerate both in the same commit.
+#
+# ---------------------------------------------------------------------------
+# 21 test allows across 10 files
 
 # decoder/picture.rs
 decoder/picture.rs instrument data_ptr_reaches_the_padding_behind_the_logical_origin
 decoder/picture.rs instrument data_ptr_twice_leaves_the_first_cursor_usable
 
 # encoder/encoder_context.rs
-encoder/encoder_context.rs instrument stride_table_accessors_leave_the_first_cursor_usable
 encoder/encoder_context.rs instrument every_container_accessor_hands_out_sibling_cursors
 encoder/encoder_context.rs instrument frame_bs_cursors_are_siblings
-encoder/encoder_context.rs instrument ctx_stride_accessors_are_sibling_derivations
 encoder/encoder_context.rs instrument ctx_new_reproduces_the_zeroed_shell
 encoder/encoder_context.rs instrument a_pointer_into_the_box_does_not_survive_with_vpp
 
 # encoder/encoder_ext.rs
-encoder/encoder_ext.rs instrument build_gate_context
 encoder/encoder_ext.rs instrument request_memory_svc_builds_the_parameter_sets
 encoder/encoder_ext.rs instrument request_memory_svc_builds_the_dq_layers
 
@@ -130,13 +144,9 @@ encoder/svc_encode_slice.rs instrument workers_read_the_layer_nal_header_through
 encoder/svc_encode_slice.rs instrument slice_banks_take_a_shared_layer_borrow_across_the_forked_writes
 encoder/svc_encode_slice.rs instrument partition_counters_take_a_shared_layer_borrow_across_the_forked_writes
 encoder/svc_encode_slice.rs instrument mvd_cursor_survives_a_slice_held_across_the_forked_workers
-encoder/svc_encode_slice.rs instrument mb_window_reaches_its_range_and_disjoint_windows_coexist
 
 # encoder/svc_mode_decision.rs
 encoder/svc_mode_decision.rs instrument test_wels_md_i16x16_cost
-
-# encoder/svc_motion_estimate.rs
-encoder/svc_motion_estimate.rs instrument test_fme_noop_callback
 
 # encoder/svc_set_mb_syn_cabac.rs
 encoder/svc_set_mb_syn_cabac.rs C-ABI test_cabac_mb_skip_logic
