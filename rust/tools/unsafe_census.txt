@@ -18,7 +18,6 @@ api/encoder_options.rs island-nonextern(C-ABI) x2
 decoder/picture.rs instrument(test) x2
 encoder/encoder_context.rs instrument(test) x4
 encoder/encoder_ext.rs instrument(test) x2
-encoder/encoder_ext.rs lawful-single(F162) x1
 encoder/nal_encap.rs instrument(test) x3
 encoder/picture.rs instrument(test) x3
 encoder/rec_view.rs recon-seam x2
