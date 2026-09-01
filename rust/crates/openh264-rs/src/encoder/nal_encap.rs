@@ -39,8 +39,7 @@
     non_camel_case_types,
     non_upper_case_globals,
     dead_code,
-    unused_variables,
-    unused_unsafe
+    unused_variables
 )]
 
 
@@ -49,6 +48,11 @@
 // ============================================================================
 
 #![deny(unsafe_code)]
+// **S12.14 sealed this file.** Its three allows guarded `unsafe {}` blocks around
+// `WelsEncodeNal`, which is a safe `pub fn` taking `&SWelsNalRaw`, `&[u8]` and
+// `&mut [u8]` — the wrappers had outlived the signature and the file's own
+// `unused_unsafe` allow hid the fact.
+#![forbid(unsafe_code)]
 
 /// Size in bytes of the Annex B 4-byte start code prefix (`0x00 0x00 0x00 0x01`).
 pub const NAL_HEADER_SIZE: usize = 4;
@@ -569,8 +573,6 @@ mod tests {
     use super::*;
     
     #[test]
-    // unsafe-cat: instrument(test)
-    #[allow(unsafe_code)]
     fn test_wels_encode_nal_standard_avc() {
         let raw_payload = [0x00, 0x00, 0x01, 0xAA, 0x00, 0x00, 0x00, 0xBB];
         let mut raw_nal = SWelsNalRaw::default();
@@ -581,15 +583,13 @@ mod tests {
         let mut dst_buffer = [0u8; 128];
         let mut dst_len: i32 = 0;
 
-        let ret = unsafe {
-            WelsEncodeNal(
-                &raw_nal,
-                &raw_payload,
-                None,
-                Some(&mut dst_buffer),
-                &mut dst_len,
-            )
-        };
+        let ret = WelsEncodeNal(
+            &raw_nal,
+            &raw_payload,
+            None,
+            Some(&mut dst_buffer),
+            &mut dst_len,
+        );
 
         assert_eq!(ret, ENC_RETURN_SUCCESS);
         assert!(dst_len > 0);
@@ -611,8 +611,6 @@ mod tests {
     }
 
     #[test]
-    // unsafe-cat: instrument(test)
-    #[allow(unsafe_code)]
     fn test_wels_encode_nal_svc_extension() {
         let raw_payload = [0x12, 0x34];
         let mut raw_nal = SWelsNalRaw::default();
@@ -629,15 +627,13 @@ mod tests {
         let mut dst_buffer = [0u8; 128];
         let mut dst_len: i32 = 0;
 
-        let ret = unsafe {
-            WelsEncodeNal(
-                &raw_nal,
-                &raw_payload,
+        let ret = WelsEncodeNal(
+            &raw_nal,
+            &raw_payload,
                 Some(&ext_header),
-                Some(&mut dst_buffer),
-                &mut dst_len,
-            )
-        };
+            Some(&mut dst_buffer),
+            &mut dst_len,
+        );
 
         assert_eq!(ret, ENC_RETURN_SUCCESS);
 
@@ -662,8 +658,6 @@ mod tests {
     }
 
     #[test]
-    // unsafe-cat: instrument(test)
-    #[allow(unsafe_code)]
     fn test_wels_encode_nal_buffer_too_small() {
         let raw_payload = [0x00; 100];
         let mut raw_nal = SWelsNalRaw::default();
@@ -673,15 +667,13 @@ mod tests {
         let mut dst_buffer = [0u8; 10]; // Much too small
         let mut dst_len: i32 = 0;
 
-        let ret = unsafe {
-            WelsEncodeNal(
-                &raw_nal,
-                &raw_payload,
-                None,
-                Some(&mut dst_buffer),
-                &mut dst_len,
-            )
-        };
+        let ret = WelsEncodeNal(
+            &raw_nal,
+            &raw_payload,
+            None,
+            Some(&mut dst_buffer),
+            &mut dst_len,
+        );
 
         assert_eq!(ret, ENC_RETURN_MEMALLOCERR);
     }
@@ -689,9 +681,11 @@ mod tests {
     #[test]
     // **T9.X — retagged from `MT`.** This is a test, and it drives a local
     // `SWelsSliceBs::default()` on the calling thread; nothing about it is
-    // fork-reachable. Its `unsafe` is the ordinary one of calling an `unsafe extern
-    // "C"` item from a test, which is what `C-ABI(test)` already means in this tree.
-    // The other two `MT` tags in this file are real and stay.
+    // fork-reachable. (T9.X went on to say "its `unsafe` is the ordinary one of
+    // calling an `unsafe extern "C"` item from a test" — **S12.14 deleted that
+    // `unsafe`**, along with the three in this file's other tests: the callees had
+    // long since taken safe signatures and `unused_unsafe` was allowed file-wide,
+    // so nothing said so.)
     fn test_wels_load_and_unload_nal_slice() {
         let mut bs_buf = vec![0u8; 1024];
         let mut slice_bs = SWelsSliceBs::default();

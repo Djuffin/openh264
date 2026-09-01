@@ -154,7 +154,28 @@
 # So this file is unchanged at 22 across 10, and D-exit-4's floor is untouched.
 #
 # ---------------------------------------------------------------------------
-# 22 test allows across 10 files
+# S12.14: **22 -> 17, and the five that left were never instruments.**
+#
+# `unused_unsafe` was in the allow list of **22 files**, and with it removed the
+# compiler reported nine `unsafe {}` blocks that guarded nothing — five of them on
+# this floor. `nal_encap.rs`'s three wrapped `WelsEncodeNal`, a safe `pub fn` taking
+# `&SWelsNalRaw`/`&[u8]`/`&mut [u8]`; `slice_multi_threading.rs`'s wrapped
+# `NeedDynamicAdjust(&mut SDqLayer, ..)`; and `svc_set_mb_syn_cabac.rs`'s — the
+# tree's last `C-ABI(test)` — wrapped `WelsCabacEncodeInit(&mut SCabacCtx, ..)`, a
+# safe `extern "C" fn`. `extern "C"` is a calling convention, not a safety claim.
+#
+# None of the five had raw-pointer semantics as its subject, which is the property
+# D-exit-4 rules on. They were swept onto this floor because they sat in test
+# modules and carried the tag — F306's shape, a category applied by *where a thing
+# lives* rather than by what makes it true. The 17 below are the ones where the
+# ruling's premise actually holds: fork/join race probes, sibling-cursor
+# derivations, plane-padding dereferences, and one Miri control.
+#
+# Three files sealed `#![forbid(unsafe_code)]` on the way out (70 of 86 now), and
+# `C-ABI(test)` is no longer a category outside the island. Tracking: **21**.
+#
+# ---------------------------------------------------------------------------
+# 17 test allows across 7 files
 
 # decoder/picture.rs
 decoder/picture.rs instrument data_ptr_reaches_the_padding_behind_the_logical_origin
@@ -170,11 +191,6 @@ encoder/encoder_context.rs instrument a_pointer_into_the_box_does_not_survive_wi
 encoder/encoder_ext.rs instrument request_memory_svc_builds_the_parameter_sets
 encoder/encoder_ext.rs instrument request_memory_svc_builds_the_dq_layers
 
-# encoder/nal_encap.rs
-encoder/nal_encap.rs instrument test_wels_encode_nal_standard_avc
-encoder/nal_encap.rs instrument test_wels_encode_nal_svc_extension
-encoder/nal_encap.rs instrument test_wels_encode_nal_buffer_too_small
-
 # encoder/picture.rs
 encoder/picture.rs instrument data_ptr_reaches_the_padding_behind_the_logical_origin
 encoder/picture.rs instrument data_ptr_shared_reaches_the_padding_and_survives_sibling_mints
@@ -182,9 +198,6 @@ encoder/picture.rs instrument copy_planes_from_matches_the_raw_primitive_it_repl
 
 # encoder/ref_list_mgr_svc.rs
 encoder/ref_list_mgr_svc.rs instrument ref_strategy_zero_is_the_default_arm
-
-# encoder/slice_multi_threading.rs
-encoder/slice_multi_threading.rs instrument test_need_dynamic_adjust_zero_consume
 
 # encoder/svc_encode_slice.rs
 encoder/svc_encode_slice.rs instrument workers_read_the_layer_nal_header_through_shared_borrows
@@ -194,6 +207,3 @@ encoder/svc_encode_slice.rs instrument mvd_cursor_survives_a_slice_held_across_t
 
 # encoder/svc_mode_decision.rs
 encoder/svc_mode_decision.rs instrument test_wels_md_i16x16_cost
-
-# encoder/svc_set_mb_syn_cabac.rs
-encoder/svc_set_mb_syn_cabac.rs C-ABI test_cabac_mb_skip_logic
