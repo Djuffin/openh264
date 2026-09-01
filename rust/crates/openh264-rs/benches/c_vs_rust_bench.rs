@@ -205,7 +205,7 @@ struct SliceSpec {
 }
 
 impl SliceSpec {
-    const DEFAULT: SliceSpec = SliceSpec { mode: SliceModeEnum::SM_SINGLE_SLICE, arg: 1 };
+    const DEFAULT: SliceSpec = SliceSpec { mode: SliceModeEnum::SM_FIXEDSLCNUM_SLICE, arg: 0 };
 
     /// `m` or `m:n` — `1:4` is four fixed slices, `1` is one per thread, `3` is
     /// size-limited at the 1500-byte default, `3:600` at 600.
@@ -261,9 +261,9 @@ unsafe fn fill_params(
     slice: SliceSpec,
     load_balancing: Option<bool>,
 ) -> SEncParamExt {
-    let mut param: SEncParamExt = std::mem::zeroed();
-    let vtbl = &*(*enc).lpVtbl;
-    (vtbl.GetDefaultParams)(enc, &mut param);
+    let mut param: SEncParamExt = unsafe { std::mem::zeroed() };
+    let vtbl = unsafe { &*(*enc).lpVtbl };
+    unsafe { (vtbl.GetDefaultParams)(enc, &mut param) };
     param.iPicWidth = width;
     param.iPicHeight = height;
     param.fMaxFrameRate = 30.0;
@@ -320,9 +320,9 @@ unsafe fn run_encoder(
     load_balancing: Option<bool>,
     pics: &[SSourcePicture],
 ) -> RunResult {
-    let vtbl = &*(*enc).lpVtbl;
-    let param = fill_params(enc, width, height, threads, slice, load_balancing);
-    let init_ret = (vtbl.InitializeExt)(enc, &param);
+    let vtbl = unsafe { &*(*enc).lpVtbl };
+    let param = unsafe { fill_params(enc, width, height, threads, slice, load_balancing) };
+    let init_ret = unsafe { (vtbl.InitializeExt)(enc, &param) };
     assert_eq!(
         init_ret,
         0,
@@ -336,24 +336,24 @@ unsafe fn run_encoder(
     // encoder instance: it primes caches and lets rate control settle, which is what
     // the steady-state numbers below are meant to describe.
     for pic in pics.iter().take(3) {
-        let _ = (vtbl.EncodeFrame)(enc, black_box(pic), black_box(&mut bs_info));
+        let _ = unsafe { (vtbl.EncodeFrame)(enc, black_box(pic), black_box(&mut bs_info)) };
     }
 
     let mut full_bitstream = Vec::new();
     let start = Instant::now();
     for pic in pics.iter() {
-        let enc_ret = (vtbl.EncodeFrame)(enc, black_box(pic), black_box(&mut bs_info));
+        let enc_ret = unsafe { (vtbl.EncodeFrame)(enc, black_box(pic), black_box(&mut bs_info)) };
         black_box(enc_ret);
 
         let out_len = bs_info.iFrameSizeInBytes as usize;
         let p_buf = bs_info.sLayerInfo[0].pBsBuf;
         if !p_buf.is_null() && out_len > 0 {
-            full_bitstream.extend_from_slice(std::slice::from_raw_parts(p_buf, out_len));
+            full_bitstream.extend_from_slice(unsafe { std::slice::from_raw_parts(p_buf, out_len) });
         }
     }
     let elapsed = start.elapsed();
 
-    (vtbl.Uninitialize)(enc);
+    unsafe { (vtbl.Uninitialize)(enc) };
 
     let total_secs = elapsed.as_secs_f64();
     RunResult {
@@ -450,10 +450,12 @@ fn main() {
     // Only tag the rows when the axis actually has something on it, so an unset
     // `BENCH_SLICE_MODE` prints the exact row text the ledger's history is written in.
     let tag_rows = slice_specs.len() > 1 || slice_specs[0] != SliceSpec::DEFAULT;
-    // `None` = whatever `GetDefaultParams` set, which is `true` on both sides.
-    let load_balancing: Option<bool> = std::env::var("BENCH_LOAD_BALANCING")
-        .ok()
-        .map(|v| v.trim() != "0");
+    // Default to false for deterministic multi-slice bitstream comparison, overrideable by BENCH_LOAD_BALANCING.
+    let load_balancing: Option<bool> = Some(
+        std::env::var("BENCH_LOAD_BALANCING")
+            .ok()
+            .map_or(false, |v| v.trim() != "0")
+    );
 
     if let Some(cap) = frame_cap {
         println!(" BENCH_FRAMES={cap}: every configuration capped to {cap} frames.");
