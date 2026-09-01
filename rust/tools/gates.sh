@@ -277,7 +277,17 @@ fi
 # The counts matter as much as the exit status. A decoder error silently drops
 # frames rather than failing a test, and a test that stops being compiled in
 # looks exactly like a test that passes. So: totals AND the ignored count, which
-# is a permanent fixture set of 20 (plan §1.4) and must never move.
+# is a fixture set that moves only deliberately (plan §1.4).
+#
+# **21 since S11.24, and the +1 has a name.**
+# `a_pointer_into_the_box_does_not_survive_with_vpp` is a Miri *control*: it
+# reconstructs S3.B1's refused derivation — a pointer into the vpp box's own
+# allocation, read after `with_vpp` moves the box out and back — so that the
+# green probe beside it is not green for the wrong reason. Miri reports UB by
+# aborting, which no harness can assert on, so it is `#[ignore]`d and run
+# deliberately. This gate caught the discrepancy at S11.50, which is what a
+# pinned count is for; the number moves with the reason written down, never to
+# make the gate pass.
 # ---------------------------------------------------------------------------
 run_cargo_test() {  # $1 = profile label, $2.. = extra cargo args
   local label=$1; shift
@@ -292,10 +302,10 @@ run_cargo_test() {  # $1 = profile label, $2.. = extra cargo args
   printf '  totals: %s passed / %s failed / %s ignored\n' "$passed" "$failed" "$ignored"
   if [ "$rc" -ne 0 ] || [ "$failed" -ne 0 ]; then
     fail "cargo test ($label): $passed/$failed/$ignored"
-  elif [ "$ignored" -ne 20 ]; then
-    fail "cargo test ($label): ignored set is $ignored, must be 20 (plan §1.4)"
+  elif [ "$ignored" -ne 21 ]; then
+    fail "cargo test ($label): ignored set is $ignored, must be 21 (plan §1.4)"
   else
-    pass "cargo test ($label): $passed passed / 0 failed / 20 ignored"
+    pass "cargo test ($label): $passed passed / 0 failed / 21 ignored"
   fi
 }
 
@@ -346,6 +356,29 @@ if bash "$HERE/unsafe_ratchet.sh" check; then
   pass "unsafe ratchet: no per-file increase"
 else
   fail "unsafe ratchet: a file x metric increased"
+fi
+
+# ---------------------------------------------------------------------------
+# 2a. The **pinned unsafe census** (plan step E2, added S11.50).
+#
+# The ratchet above is a ratchet: it refuses per-file *increases* and lets a
+# checkpoint trade one shape for another. This is the equality test beside it —
+# every remaining `#[allow(unsafe_code)]` outside `src/api/` is enumerated in
+# tools/unsafe_census.txt by file and category, and a tree that does not match
+# fails, in either direction. D-exit-4's floor is a list, and a number cannot say
+# whether the thing that stayed is the thing that was ruled to stay.
+#
+# Seen red four ways at the commit that added it: an untagged new allow, a
+# *tagged* new allow in a real category (which a count-only check passes), a
+# retired row still pinned, and — the compiler's own half — an allow inside a
+# `#![forbid]` file, which is E0453 before this tool runs at all.
+# ---------------------------------------------------------------------------
+hdr "unsafe census"
+if bash "$HERE/unsafe_census.sh" check > "$LOGS/unsafe_census.log" 2>&1; then
+  pass "unsafe census: $(grep -vc '^#' "$HERE/unsafe_census.txt") pinned rows match"
+else
+  sed -n '1,40p' "$LOGS/unsafe_census.log"
+  fail "unsafe census: the tree's unsafe posture changed — see $LOGS/unsafe_census.log"
 fi
 
 # ---------------------------------------------------------------------------
@@ -899,6 +932,7 @@ skip "fuzz corpus replay: the fuzz crate (Phase 0 T7) was never built — no cor
 #                        its emptiness is not a signal and is not checked  sound
 #   run_cargo_test       PIPESTATUS[0] + parsed totals + the ignored set   sound
 #   unsafe_ratchet.sh    direct exit status, no pipeline                   sound
+#   unsafe_census.sh     direct exit status, output redirected to a log     sound
 #   diffharness build.sh redirect, not a pipe                              sound
 #   sweep_gate           PIPESTATUS[0] + tally corroboration (fixed here)  sound
 #   decode / encode bench PIPESTATUS[0] + [2] + MISMATCH/DIFFER (fixed)    sound
