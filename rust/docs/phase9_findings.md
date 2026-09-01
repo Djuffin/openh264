@@ -9305,3 +9305,75 @@ one's referees were real, green, and answering a different question.
 This is F292's shape at the level of the tool rather than the tag: nine census
 tags had outlived their `unsafe` there, and here a whole exemption outlived the
 claim that licensed it. The instruments need the same audit the code gets.
+
+## F307 — an exemption's argument and its extent are two claims, and the argument being sound says nothing about the extent (S12.12, S12.13, S12.14)
+
+Three categories left the census in three consecutive checkpoints, and in all
+three the *reason written at the site was correct*. What had gone stale was how
+far it reached.
+
+**`fork-shared(S63)`** — `ctx_dq_layer` read the `Box` slot as a pointer value
+(`ptr::read`) so the answer carried the heap block's own provenance rather than a
+child of a context retag, which is what let two forked workers resolve one layer
+at once. That argument is right, and F71 established it properly. It was attached
+to **dead code**: `current_layer`, its only non-test caller, had none of its own —
+F240's safe twins had taken all ~150, leaving ten `use` lines and some comments.
+
+**`lawful-single(F162)`** — safe indexing would panic where the C++ reads, and a
+panic is not byte-identical. Also right. But `sSpatialIndexMap` is
+`[SSpatialPicIndex; 4]`, so the exit index is **in bounds for 1, 2 and 3 spatial
+layers**; only the 4-layer case ever ran off the end. The argument covered one
+configuration in four and was written as though it covered the site.
+
+**`instrument(test)`** — D-exit-4's ruling, that a probe whose subject is
+raw-pointer semantics cannot be made safe without unmaking what it verifies. Right
+for 17 of 22. The other five wrapped calls to `WelsEncodeNal`, `NeedDynamicAdjust`
+and `WelsCabacEncodeInit` — all **safe** functions. They were on the floor because
+they sat in test modules and carried the tag.
+
+**The generalisation.** A tagged exemption asserts two independent things: *this
+property makes the unsafe lawful*, and *this code has that property*. Review, and
+the census, check the first. Nothing checks the second, and it is the one the
+conversion campaign keeps invalidating underneath — every safe twin that takes a
+caller, every signature that loses a raw parameter, narrows some exemption's
+extent without touching its text. So the audit question is not "is this reason
+good?" but "**does this code still have the property the reason names?**" —
+answerable with a caller count, a bounds check, or a look at the callee's
+signature, and none of those is a matter of judgement.
+
+One sub-case worth its own line, from the fifth instrument: **`extern "C"` is a
+calling convention, not a safety claim.** `WelsCabacEncodeInit` is
+`pub extern "C" fn(&mut SCabacCtx, usize, usize)` — entirely safe — and the tree's
+last `C-ABI(test)` tag existed because someone read the `extern "C"` and stopped.
+
+## F308 — a muzzled lint stops being evidence, and the debt it hides compounds inside a single session (S12.14)
+
+`unused_unsafe` was in the `#![allow(..)]` list of **22 files**. Removed, the
+compiler immediately reported **nine** `unsafe {}` blocks that guard nothing.
+
+The project already knew. S11.30 took the allow out of `svc_encode_slice.rs` with
+the note "a muzzled lint is how [this happens]"; `au_set.rs` records the same
+lesson ("`unused_unsafe` had been reporting all four ever since"); `dec_golomb.rs`
+records it a third time ("`unused_unsafe` was allowed file-wide, so nothing said
+so"). Three files learned it individually and the allow survived in twenty-two
+others, because nobody asked the crate-wide question.
+
+**The compounding is the part worth recording.** Three of the nine were created by
+**S12.1, in this same session** — that checkpoint wrapped the C-ABI thunk bodies in
+one `unsafe {` each, which made their inner `unsafe { decoder_log(this) }` blocks
+redundant on the spot. `codec_api.rs` allowed `unused_unsafe`, so the compiler said
+nothing, and the same author who created them measured the file twice more (S12.7,
+S12.11) without seeing them. A switched-off lint does not merely fail to catch old
+debt; it silently absorbs new debt at the rate you produce it.
+
+F281 counted eighteen empty blocks at S11.10 and F295 observed that "nothing lints
+an empty claim". F295's premise was wrong, and that is the correction: something
+does lint it, and had been switched off. The allow is gone crate-wide now.
+
+**Process note, because it happened twice in one session.** The edits for these
+sites were text replaces, and both times the pattern matched more than the lint had
+flagged — S12.7 caught two `extern "C"` thunks whose signatures *are* the ABI, and
+S12.14 caught seven `abi_guard!` sites whose bodies genuinely need their block.
+Both were caught (once on the diff, once by seven compile errors) and reverted. In
+a 5,000-line file where two functions can look identical and mean opposite things,
+a blind replace must be read back against the thing that identified the site.
