@@ -2827,7 +2827,7 @@ impl Decoder {
             (*p_ctx).dDecTime += dec_started.elapsed().as_secs_f64() * 1e3;
             crate::decoder::decoder_core::OutputStatisticsLog(&mut *p_ctx);
             // `:885–890`, `GetThreadCount` 0 in this port.
-            ReorderPicturesInDisplay(p_ctx, ppDst.as_mut_ptr(), ptr::from_mut(pDstInfo));
+            ReorderPicturesInDisplay(p_ctx, ppDst, pDstInfo);
             // **F46, T5.T1.** `welsDecoderExt.cpp:892` — the accumulator, whole.
             return DECODING_STATE((*p_ctx).iErrorCode);
         }
@@ -2846,7 +2846,7 @@ impl Decoder {
         }
         (*p_ctx).dDecTime += dec_started.elapsed().as_secs_f64() * 1e3;
         // `ReorderPicturesInDisplay` at the tail of DecodeFrame2WithCtx.
-        ReorderPicturesInDisplay(p_ctx, ppDst.as_mut_ptr(), ptr::from_mut(pDstInfo));
+        ReorderPicturesInDisplay(p_ctx, ppDst, pDstInfo);
 
             DECODING_STATE::dsErrorFree
         }
@@ -3034,7 +3034,6 @@ impl Decoder {
                 // `false` is the C's `NULL` context argument
                 // (`welsDecoderExt.cpp:1103`): drain the slot list without touching
                 // the live pool. See `pool_for`.
-                let (ppDst, pDstInfo) = (ppDst.as_mut_ptr(), ptr::from_mut(pDstInfo));
                 if !(*p_ctx).pPictReoderingStatus.bHasBSlice {
                     ReleaseBufferedReadyPictureNoReorder(p_ctx, false, ppDst, pDstInfo);
                 } else {
@@ -3311,8 +3310,8 @@ unsafe fn pool_for(
 #[allow(unsafe_code)]
 unsafe fn BufferingReadyPicture(
     pCtx: *mut crate::decoder::decoder_core::SWelsDecoderContext,
-    _ppDst: *mut *mut u8,
-    pDstInfo: *mut SBufferInfo,
+    _ppDst: &mut [*mut u8; 3],
+    pDstInfo: &mut SBufferInfo,
 ) { unsafe {
     if (*pDstInfo).iBufferStatus == 0 {
         return;
@@ -3378,14 +3377,14 @@ unsafe fn BufferingReadyPicture(
 unsafe fn EmitBufferedPicture(
     pCtx: *mut crate::decoder::decoder_core::SWelsDecoderContext,
     pPicBuff: *mut crate::decoder::pic_queue::SPicBuff,
-    ppDst: *mut *mut u8,
-    pDstInfo: *mut SBufferInfo,
+    ppDst: &mut [*mut u8; 3],
+    pDstInfo: &mut SBufferInfo,
 ) { unsafe {
     let idx = (*pCtx).pPictReoderingStatus.iPictInfoIndex as usize;
     *pDstInfo = (*pCtx).pPictInfoList[idx].sBufferInfo;
-    *ppDst.add(0) = (*pDstInfo).pDst[0];
-    *ppDst.add(1) = (*pDstInfo).pDst[1];
-    *ppDst.add(2) = (*pDstInfo).pDst[2];
+    ppDst[0] = (*pDstInfo).pDst[0];
+    ppDst[1] = (*pDstInfo).pDst[1];
+    ppDst[2] = (*pDstInfo).pDst[2];
     (*pCtx).pPictInfoList[idx].iPOC = crate::decoder::decoder_context::IMinInt32;
     let iPicBuffIdx = (*pCtx).pPictInfoList[idx].iPicBuffIdx;
     if !pPicBuff.is_null() {
@@ -3437,8 +3436,8 @@ unsafe fn EmitBufferedPicture(
 unsafe fn ReleaseBufferedReadyPictureNoReorder(
     pCtx: *mut crate::decoder::decoder_core::SWelsDecoderContext,
     bUsePool: bool,
-    ppDst: *mut *mut u8,
-    pDstInfo: *mut SBufferInfo,
+    ppDst: &mut [*mut u8; 3],
+    pDstInfo: &mut SBufferInfo,
 ) { unsafe {
     let mut firstValidIdx: i32 = -1;
     let mut uiDecodingTimeStamp: u32 = 0;
@@ -3488,8 +3487,8 @@ unsafe fn ReleaseBufferedReadyPictureNoReorder(
 unsafe fn ReleaseBufferedReadyPictureReorder(
     pCtx: *mut crate::decoder::decoder_core::SWelsDecoderContext,
     bUsePool: bool,
-    ppDst: *mut *mut u8,
-    pDstInfo: *mut SBufferInfo,
+    ppDst: &mut [*mut u8; 3],
+    pDstInfo: &mut SBufferInfo,
     isFlush: bool,
 ) { unsafe {
     let IMinInt32 = crate::decoder::decoder_context::IMinInt32;
@@ -3570,8 +3569,8 @@ unsafe fn ReleaseBufferedReadyPictureReorder(
 /// the buffer stays empty.
 unsafe fn ReorderPicturesInDisplay(
     pCtx: *mut crate::decoder::decoder_core::SWelsDecoderContext,
-    ppDst: *mut *mut u8,
-    pDstInfo: *mut SBufferInfo,
+    ppDst: &mut [*mut u8; 3],
+    pDstInfo: &mut SBufferInfo,
 ) { unsafe {
     // **The null test moves ahead of the lookup** (T5.Z1). It used to sit after it,
     // and only the accessor's own internal `pCtx.is_null()` arm made that safe; with
@@ -3604,9 +3603,9 @@ unsafe fn ReorderPicturesInDisplay(
             // issue #3478: B-slice type is a more reliable ordering signal than POC.
             (*pCtx).pPictReoderingStatus.iLastWrittenPOC = sh_poc;
             (*pCtx).pPictReoderingStatus.iLastWrittenSeqNum = (*pCtx).iSeqNum;
-            *ppDst.add(0) = (*pDstInfo).pDst[0];
-            *ppDst.add(1) = (*pDstInfo).pDst[1];
-            *ppDst.add(2) = (*pDstInfo).pDst[2];
+            ppDst[0] = (*pDstInfo).pDst[0];
+            ppDst[1] = (*pDstInfo).pDst[1];
+            ppDst[2] = (*pDstInfo).pDst[2];
             return;
         }
     }
