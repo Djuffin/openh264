@@ -2827,7 +2827,7 @@ impl Decoder {
             (*p_ctx).dDecTime += dec_started.elapsed().as_secs_f64() * 1e3;
             crate::decoder::decoder_core::OutputStatisticsLog(&mut *p_ctx);
             // `:885–890`, `GetThreadCount` 0 in this port.
-            ReorderPicturesInDisplay(p_ctx, ppDst, pDstInfo);
+            ReorderPicturesInDisplay(&mut *p_ctx, ppDst, pDstInfo);
             // **F46, T5.T1.** `welsDecoderExt.cpp:892` — the accumulator, whole.
             return DECODING_STATE((*p_ctx).iErrorCode);
         }
@@ -2846,7 +2846,7 @@ impl Decoder {
         }
         (*p_ctx).dDecTime += dec_started.elapsed().as_secs_f64() * 1e3;
         // `ReorderPicturesInDisplay` at the tail of DecodeFrame2WithCtx.
-        ReorderPicturesInDisplay(p_ctx, ppDst, pDstInfo);
+        ReorderPicturesInDisplay(&mut *p_ctx, ppDst, pDstInfo);
 
             DECODING_STATE::dsErrorFree
         }
@@ -3035,9 +3035,9 @@ impl Decoder {
                 // (`welsDecoderExt.cpp:1103`): drain the slot list without touching
                 // the live pool. See `pool_for`.
                 if !(*p_ctx).pPictReoderingStatus.bHasBSlice {
-                    ReleaseBufferedReadyPictureNoReorder(p_ctx, false, ppDst, pDstInfo);
+                    ReleaseBufferedReadyPictureNoReorder(&mut *p_ctx, false, ppDst, pDstInfo);
                 } else {
-                    ReleaseBufferedReadyPictureReorder(p_ctx, false, ppDst, pDstInfo, true);
+                    ReleaseBufferedReadyPictureReorder(&mut *p_ctx, false, ppDst, pDstInfo, true);
                 }
             }
         }
@@ -3295,35 +3295,31 @@ unsafe extern "C" fn decoder_decode_frame_nodelay_c(
 /// bool is what lets the reordering state move into the context — a null context
 /// argument cannot carry the state the callee now reads out of it.
 #[inline]
-unsafe fn pool_for(
-    pCtx: *mut crate::decoder::decoder_core::SWelsDecoderContext,
+fn pool_for(
+    pCtx: &mut crate::decoder::decoder_core::SWelsDecoderContext,
     bUsePool: bool,
-) -> crate::decoder::pic_queue::PPicBuff { unsafe {
-    if !bUsePool || pCtx.is_null() {
-        return ptr::null_mut();
+) -> Option<&mut crate::decoder::pic_queue::SPicBuff> {
+    if !bUsePool {
+        return None;
     }
-    crate::decoder::decoder_context::pic_pool_ptr(&mut (*pCtx).pPicBuff)
-        .map_or(ptr::null_mut(), |pool| pool)
-}}
+    crate::decoder::decoder_context::pic_pool_ptr(&mut pCtx.pPicBuff)
+}
 
-// unsafe-cat: C-ABI
-#[allow(unsafe_code)]
-unsafe fn BufferingReadyPicture(
-    pCtx: *mut crate::decoder::decoder_core::SWelsDecoderContext,
+fn BufferingReadyPicture(
+    pCtx: &mut crate::decoder::decoder_core::SWelsDecoderContext,
     _ppDst: &mut [*mut u8; 3],
     pDstInfo: &mut SBufferInfo,
-) { unsafe {
+) {
     if (*pDstInfo).iBufferStatus == 0 {
         return;
     }
-    // The null guard stays here — this is the boundary that still holds a pointer,
-    // and `active_sps` takes the parameter-set field by reference now (T5.Z1).
-    if !pCtx.is_null() {
-        if let Some(sps) =
-            crate::decoder::decoder_context::active_sps(&(*pCtx).sSpsPpsCtx, (*pCtx).active_sps)
-        {
-            (*pCtx).bIsBaseline = sps.uiProfileIdc == 66 || sps.uiProfileIdc == 83;
-        }
+    // **S12.8 deleted the null guard that stood here.** It was already vacuous —
+    // the very next statement dereferences `pCtx` unconditionally — and the
+    // parameter is a `&mut` now, so the state it tested is unrepresentable.
+    if let Some(sps) =
+        crate::decoder::decoder_context::active_sps(&(*pCtx).sSpsPpsCtx, (*pCtx).active_sps)
+    {
+        (*pCtx).bIsBaseline = sps.uiProfileIdc == 66 || sps.uiProfileIdc == 83;
     }
     if !(*pCtx).bIsBaseline {
         // T5b.3: `pCtx->pSliceHeader` was a raw alias into a NAL node; the node is an
@@ -3367,19 +3363,17 @@ unsafe fn BufferingReadyPicture(
             break;
         }
     }
-}}
+}
 
-// unsafe-cat: C-ABI
-#[allow(unsafe_code)]
 /// Releases the buffered picture whose slot is referenced by `iPictInfoIndex`,
 /// dropping the DPB reference taken in [`BufferingReadyPicture`]. Shared tail of
 /// both `ReleaseBufferedReadyPicture*` functions in `welsDecoderExt.cpp`.
-unsafe fn EmitBufferedPicture(
-    pCtx: *mut crate::decoder::decoder_core::SWelsDecoderContext,
-    pPicBuff: *mut crate::decoder::pic_queue::SPicBuff,
+fn EmitBufferedPicture(
+    pCtx: &mut crate::decoder::decoder_core::SWelsDecoderContext,
+    bUsePool: bool,
     ppDst: &mut [*mut u8; 3],
     pDstInfo: &mut SBufferInfo,
-) { unsafe {
+) {
     let idx = (*pCtx).pPictReoderingStatus.iPictInfoIndex as usize;
     *pDstInfo = (*pCtx).pPictInfoList[idx].sBufferInfo;
     ppDst[0] = (*pDstInfo).pDst[0];
@@ -3387,33 +3381,36 @@ unsafe fn EmitBufferedPicture(
     ppDst[2] = (*pDstInfo).pDst[2];
     (*pCtx).pPictInfoList[idx].iPOC = crate::decoder::decoder_context::IMinInt32;
     let iPicBuffIdx = (*pCtx).pPictInfoList[idx].iPicBuffIdx;
-    if !pPicBuff.is_null() {
+    // **S12.8: the pool is resolved here, not by the caller.** Both callers computed
+    // `pool_for(pCtx, bUsePool)` on the line immediately above their call and passed
+    // the result in; with the context a `&mut` that is two borrows of one object, so
+    // the flag comes down instead and the borrow is taken — and ended — inside this
+    // block. Nothing between the old resolution point and this one touches
+    // `pPicBuff`, so the value is the same one the caller computed.
+    if let Some(pPicBuff) = pool_for(pCtx, bUsePool) {
         // `slot_at_mut` carries the C's `>= 0 && < iCapacity` test, so the range check
         // and the indexing are one expression instead of two that could disagree.
         //
         // **The flip's one boundary cost** (T5.Q2): with owned slots this release has
         // to *derive* the picture rather than copy a pointer out of the array, so it
         // needs the mutable form — it decrements `iRefCount` and hands the picture to
-        // `pSetUnRef`. That is api-shaped work forced by a decoder change; it is not
-        // F41/F23's `src/api/` inventory, which stays Phase 8's.
-        let pPic = (*pPicBuff).slot_at_mut(iPicBuffIdx);
-        if !pPic.is_null() {
-            (*pPic).iRefCount -= 1;
-            if (*pPic).iRefCount <= 0 {
-                if let Some(set_unref) = (*pPic).pSetUnRef {
-                    // T5.AC1: the callback takes `&mut SPicture`, so the null test
-                    // above is what licenses the borrow — one derivation, for the
-                    // length of the call, out of the pointer this boundary holds.
-                    set_unref(&mut *pPic);
+        // `pSetUnRef`. S12.8: that derivation is a borrow now, and the C's failed
+        // range test is its `None`.
+        if let Some(pPic) = pPicBuff.slot_at_mut(iPicBuffIdx) {
+            pPic.iRefCount -= 1;
+            if pPic.iRefCount <= 0 {
+                if let Some(set_unref) = pPic.pSetUnRef {
+                    // T5.AC1: the callback takes `&mut SPicture`, and it is a safe
+                    // `extern "C" fn`, so with the picture resolved as a borrow the
+                    // whole chain from pool to callback is checked.
+                    set_unref(pPic);
                 }
             }
         }
     }
     (*pCtx).pPictReoderingStatus.iNumOfPicts -= 1;
-}}
+}
 
-// unsafe-cat: C-ABI
-#[allow(unsafe_code)]
 /// Matches `void CWelsDecoder::ReleaseBufferedReadyPictureNoReorder (...)`.
 ///
 /// Picks the buffered picture with the smallest decoding timestamp, i.e. plain
@@ -3433,12 +3430,12 @@ unsafe fn EmitBufferedPicture(
 /// `DecodeFrameNoDelay` never produces the tie.) POC is the actual display
 /// order key, so it is the correct tiebreaker; this engages on an exact tie
 /// only, and non-tied ordering is bit-identical to C++.
-unsafe fn ReleaseBufferedReadyPictureNoReorder(
-    pCtx: *mut crate::decoder::decoder_core::SWelsDecoderContext,
+fn ReleaseBufferedReadyPictureNoReorder(
+    pCtx: &mut crate::decoder::decoder_core::SWelsDecoderContext,
     bUsePool: bool,
     ppDst: &mut [*mut u8; 3],
     pDstInfo: &mut SBufferInfo,
-) { unsafe {
+) {
     let mut firstValidIdx: i32 = -1;
     let mut uiDecodingTimeStamp: u32 = 0;
     let mut iChosenPOC: i32 = 0;
@@ -3471,32 +3468,36 @@ unsafe fn ReleaseBufferedReadyPictureNoReorder(
         (*pCtx).pPictReoderingStatus.iLastWrittenPOC = (*pCtx).pPictInfoList[idx].iPOC;
         (*pCtx).pPictReoderingStatus.iLastWrittenSeqNum = (*pCtx).pPictInfoList[idx].iSeqNum;
         // `PPicBuff pPicBuff = pCtx ? pCtx->pPicBuff : m_pPicBuff;`
-        // (`welsDecoderExt.cpp:1026`), as a flag — see [`pool_for`].
-        let pPicBuff = pool_for(pCtx, bUsePool);
-        EmitBufferedPicture(pCtx, pPicBuff, ppDst, pDstInfo);
+        // (`welsDecoderExt.cpp:1026`), as a flag — see [`pool_for`]. S12.8 hands the
+        // flag down rather than the resolved pool: one `&mut` context, one borrow.
+        EmitBufferedPicture(pCtx, bUsePool, ppDst, pDstInfo);
     }
-}}
+}
 
-// unsafe-cat: C-ABI
-#[allow(unsafe_code)]
 /// Matches `void CWelsDecoder::ReleaseBufferedReadyPictureReorder (...)`.
 ///
 /// Picks the buffered picture with the smallest (seqNum, POC) and emits it only
 /// once it is safe to do so — either it directly follows the last written POC,
 /// or the decoder has moved past it. `isFlush` forces the emit.
-unsafe fn ReleaseBufferedReadyPictureReorder(
-    pCtx: *mut crate::decoder::decoder_core::SWelsDecoderContext,
+fn ReleaseBufferedReadyPictureReorder(
+    pCtx: &mut crate::decoder::decoder_core::SWelsDecoderContext,
     bUsePool: bool,
     ppDst: &mut [*mut u8; 3],
     pDstInfo: &mut SBufferInfo,
     isFlush: bool,
-) { unsafe {
+) {
     let IMinInt32 = crate::decoder::decoder_context::IMinInt32;
     // `PPicBuff pPicBuff = pCtx ? pCtx->pPicBuff : m_pPicBuff;` (`:1128`), which in
     // the C++ is evaluated *before* `if (!pCtx) pCtx = m_pDecContext;` restores the
     // live context for everything below. Both halves are `bUsePool` now — see
     // [`pool_for`] — and the restore is what makes the flag the whole difference.
-    let pPicBuff = pool_for(pCtx, bUsePool);
+    //
+    // **S12.8 moved the resolution down into `EmitBufferedPicture`.** Held here it
+    // would be a borrow of `pCtx` spanning the whole body below, which reads `pCtx`
+    // throughout. The move is behaviour-identical and that was checked rather than
+    // assumed: between this point and the call the only functions invoked are
+    // `slice_header_of`, `wrapping_sub` and `Option`'s own, none of which writes
+    // `pCtx.pPicBuff`, and `bUsePool` is a by-value `bool`.
 
     if (*pCtx).pPictReoderingStatus.iNumOfPicts > 0 {
         (*pCtx).pPictReoderingStatus.iMinPOC = IMinInt32;
@@ -3537,15 +3538,15 @@ unsafe fn ReleaseBufferedReadyPictureReorder(
         let mut isReady = true;
         if !isFlush {
             let last_idx = (*pCtx).iLastBufferedIdx as usize;
-            let iLastPOC = match if pCtx.is_null() { None } else { slice_header_of(&*pCtx) } {
+            // **S12.8 deleted two null tests here, and they were worse than
+            // vacuous — both were self-contradictory.** `iLastPOC`'s `None` arm
+            // dereferenced `pCtx`, and so did `iLastSeqNum`'s `else`, so a null
+            // `pCtx` would have taken exactly the branch that reads through it.
+            let iLastPOC = match slice_header_of(&*pCtx) {
                 Some(sh) => sh.iPicOrderCntLsb,
                 None => (*pCtx).pPictInfoList[last_idx].iPOC,
             };
-            let iLastSeqNum = if !pCtx.is_null() {
-                (*pCtx).iSeqNum
-            } else {
-                (*pCtx).pPictInfoList[last_idx].iSeqNum
-            };
+            let iLastSeqNum = (*pCtx).iSeqNum;
             let st = (*pCtx).pPictReoderingStatus;
             isReady = (st.iLastWrittenPOC > IMinInt32 && st.iMinPOC - st.iLastWrittenPOC <= 1)
                 || st.iMinPOC < iLastPOC
@@ -3555,30 +3556,25 @@ unsafe fn ReleaseBufferedReadyPictureReorder(
             (*pCtx).pPictReoderingStatus.iLastWrittenPOC = (*pCtx).pPictReoderingStatus.iMinPOC;
             (*pCtx).pPictReoderingStatus.iLastWrittenSeqNum =
                 (*pCtx).pPictReoderingStatus.iMinSeqNum;
-            EmitBufferedPicture(pCtx, pPicBuff, ppDst, pDstInfo);
+            EmitBufferedPicture(pCtx, bUsePool, ppDst, pDstInfo);
             (*pCtx).pPictReoderingStatus.iMinPOC = IMinInt32;
         }
     }
-}}
+}
 
-// unsafe-cat: C-ABI
-#[allow(unsafe_code)]
 /// Matches `DECODING_STATE CWelsDecoder::ReorderPicturesInDisplay (...)`.
 ///
 /// Baseline streams never reorder, so the picture passes straight through and
 /// the buffer stays empty.
-unsafe fn ReorderPicturesInDisplay(
-    pCtx: *mut crate::decoder::decoder_core::SWelsDecoderContext,
+fn ReorderPicturesInDisplay(
+    pCtx: &mut crate::decoder::decoder_core::SWelsDecoderContext,
     ppDst: &mut [*mut u8; 3],
     pDstInfo: &mut SBufferInfo,
-) { unsafe {
-    // **The null test moves ahead of the lookup** (T5.Z1). It used to sit after it,
-    // and only the accessor's own internal `pCtx.is_null()` arm made that safe; with
-    // the parameter-set field taken by reference the guard has to precede the call,
-    // which is the same order the C++ has.
-    if pCtx.is_null() {
-        return;
-    }
+) {
+    // T5.Z1 moved a null test ahead of the lookup here, because `active_sps` takes
+    // the parameter-set field by reference and the guard had to precede the call.
+    // **S12.8 deleted it**: `pCtx` is a `&mut`, so there is no null to test, and
+    // `decode` already returns early on the empty context at both call sites.
     let Some(profile) =
         crate::decoder::decoder_context::active_sps(&(*pCtx).sSpsPpsCtx, (*pCtx).active_sps)
             .map(|sps| sps.uiProfileIdc)
@@ -3615,7 +3611,7 @@ unsafe fn ReorderPicturesInDisplay(
     } else {
         ReleaseBufferedReadyPictureReorder(pCtx, true, ppDst, pDstInfo, false);
     }
-}}
+}
 
 // unsafe-cat: C-ABI
 #[allow(unsafe_code)]
