@@ -8993,3 +8993,166 @@ against a pin of 20, because S11.24 added a Miri control (Miri reports UB by
 aborting, which no harness can assert on, so its controls must be `#[ignore]`d).
 The pin moved *with the reason written at the check* — which is the only lawful
 way a pinned number moves, and the reason to pin it at all.
+
+## F298 — the estimate that kept a lint allowed was wrong by two orders of magnitude, and nobody had measured it in eleven sessions (S12.1)
+
+`lib.rs` carried `unsafe_op_in_unsafe_fn` in the crate-wide allow since session
+J, with a reason written out at length: requiring an inner `unsafe {}` per deref
+"would add **thousands** of blocks to code the phase is deleting rather than
+blessing."
+
+Measured after the conversion mass closed, the whole crate holds **135 unguarded
+unsafe operations, in 13 `unsafe fn` bodies, across 4 files** — 121 sites / 10
+fns in `api/codec_api.rs`, 9 / 1 in `encoder/wels_preprocess.rs`, 4 / 1 in
+`encoder/encoder_context.rs`, 1 / 1 in `api/version.rs`. Not thousands: 135, in
+thirteen places. The estimate was plausible when it was written and was never
+re-taken; the conversion campaign that made it false is the same campaign that
+kept quoting it.
+
+**The generalisation is not "the estimate was stale" but "the estimate was never
+an instrument."** Every other number in this port's record — the 82 raw pointers
+of F280, the 18 empty blocks of F281, the nine dead tags of F292 — arrived from a
+tool that could be re-run. This one arrived from a sentence, and a sentence does
+not go red when the tree moves under it. A justification that carries a number
+should carry the command that produced it.
+
+**A second thing the measurement decided.** The 13 blocks wrap *bodies*, not
+operations, and the choice is forced rather than stylistic: 108 of the 135 are
+raw-pointer derefs in **place** expressions (`&(*pCtx).sSpsPpsCtx`,
+`(*pCtx).pPictInfoList[i].iPOC`), and a block is a value expression. Marking each
+one individually means rewriting the statement around it into a `let` and
+rebinding — 135 restructured statements in code whose whole value is that it is
+line-for-line diffable against the C++. Thirteen `) -> T { unsafe {` … `}}` wraps
+(rustc's own machine-applied shape) move **no interior line at all**.
+
+State what such a deny buys, honestly: inside those 13 bodies, nothing — they
+stay watched by the ratchet's `unsafe_fn` metric and the census. Outside them it
+buys the other **46** `unsafe fn` in the crate, all of which hold zero unguarded
+operations today, and every `unsafe fn` written from here on.
+
+## F299 — a module move is a re-resolution, and a named import shadowing a glob is how it changes meaning silently (S12.2)
+
+Moving `SetOption`/`GetOption` to `api/encoder_options.rs` moved 605 lines
+byte-identically. What does not move byte-identically is **what the names in
+those lines resolve to**: `wels_encoder_ext.rs` imports seven enum globs, and the
+new module needed only the four the body actually uses.
+
+The first attempt brought `RC_OFF_MODE` in from `wels_preprocess` — an `i32`
+sentinel of `-1` — where the original resolved it through
+`use crate::api::codec_api::RC_MODES::*` to the enum variant. A **named import
+shadows a glob**, so the new module silently bound a different item of the same
+name. Here the compiler caught it on a type mismatch. It would not have, had both
+been `i32`.
+
+So the class was audited rather than trusted, and the audit is cheap enough to be
+the standard for any cross-module move:
+
+* of the **40** names those seven globs provide, **none is provided by more than
+  one** — so no glob-vs-glob resolution can differ (Rust would call it ambiguous
+  and error anyway);
+* **none** of the new module's named imports shadows a glob name the moved body
+  uses;
+* the **14** glob names the body does use come from exactly the four globs
+  imported, and the three globs left behind supply nothing it references.
+
+**The second referee needed no argument at all**, and it is the better one to
+reach for first: the ratchet's per-file counts must *conserve*. `unsafe_block`
+2 → 0 in the source file and 0 → 2 in the destination; `raw_ptr` 39 → 1 and
+0 → 38. The 39th is a `*mut c_char` struct field that was never in either method.
+Totals flat. A move that is only a move says so numerically, and any name that
+re-resolved to something of a different shape would show up as a count that
+failed to conserve.
+
+## F300 — an allow that suppresses zero sites is silence without a subject, and this one had been documenting 44 of them (S12.2)
+
+`wels_encoder_ext.rs` opened with `#![allow(clippy::not_unsafe_ptr_arg_deref)]`
+under a header naming **44 sites** — "every site is a method of
+`CWelsH264SVCEncoder` … the `void*` of `SetOption`" — and explaining at length
+why marking them `unsafe fn` would be the wrong trade.
+
+Removed and re-measured with clippy 0.1.97: the lint fires **zero** times, in
+that file and in the whole crate. The conversion campaign turned those pointer
+parameters into references somewhere between session J and here, and the header
+kept asserting a number that had gone to zero underneath it — the same failure
+shape as F298, one file down.
+
+A copy of the allow written for the new `api/encoder_options.rs` (whose two
+methods really do deref the caller's `pOption`) was measured the same way, found
+equally empty, and **deleted before it landed**. Session J's own rule, applied to
+a fifth lint: measure what an allow suppresses, and delete it when the answer is
+nothing.
+
+**Method note, because it cost a wrong conclusion first.** The first two
+measurements ran `timeout 600 cargo clippy …`; macOS has no `timeout`, the shell
+answered `command not found`, and the empty grep read as "clean". A tool that is
+not on the box reports as a passing gate. Check that the command ran — a
+`--version`, a line count of the log — before reading its silence as a result.
+
+## F301 — `//pointer` and `//real memory`: the header said the family carried row numbers, and sixteen pointers were one allocation (S12.3)
+
+`SVAAFrameInfoExt` ends with two fields the C++ annotates itself
+(`wels_preprocess.h:114-115`):
+
+    uint8_t*    pVaaBestBlockStaticIdc;   //pointer
+    uint8_t*    pVaaBlockStaticIdc[16];   //real memory,
+
+and the allocator says the same thing in code — `encoder_ext.cpp:1482-1489`
+takes **one** block of `iNumRef * iCountMax8x8BNum` bytes and walks the sixteen
+slots across it at a single stride; `WelsFree` frees slot 0 alone and nulls the
+rest, which is that statement read backwards.
+
+So the array was never sixteen allocations, and a pointer copied out of it
+carried exactly one fact: **which reference**. Every hop of the family was
+ferrying a row number in a pointer — through `SSceneChangeResult`, through
+`SRefInfoParam`, into `pVaaBestBlockStaticIdc`, and out to
+`UpdateBlockIdcForScreen`, which never dereferenced it at all. One site in the
+whole tree did: `SetBlockStaticIdcToMd`'s four reads.
+
+Converting the family to one owned `Vec<u8>` plus a stride, with `Option<usize>`
+row selectors, took the port's **last `SCREEN_CONTENT(dormant)` allow** and, as a
+side effect, **S10.11's `expose_provenance`/`with_exposed_provenance_mut` round
+trip** — whose own doc said it existed only because "the one site that does
+dereference the family keeps its pointer type."
+
+**Two things generalise.** First, the brief's preferred move — *dissolution*, the
+S11.3 trick of making the storage unable to represent the cast — does not reach a
+site that derefs a field **of** an extension already held by reference; it makes
+the body unreachable and leaves the `unsafe` compiling. Reachability is not
+representability. Second, upstream's own comments were the design document: two
+words on two fields answered a question four sessions of tagging had filed under
+"dormant, convert later."
+
+## F302 — a test written for dark code caught the defect in its own subject, on its first run (S12.3)
+
+`SetBlockStaticIdcToMd` is unreachable in this port: `vaa_ext_ref()` answers
+`None` by construction (S11.3, F177), so no sweep row in any preset or profile
+executes a line of it. 583/583 byte-identical proves the rest of the encoder is
+untouched and proves *nothing* about the change — the same structural blindness
+S11.52 met, and the same answer: build the referee out of the subject rather than
+out of the pipeline.
+
+The test constructs the extension itself, allocates **three** rows with distinct
+contents, selects the **second**, and checks the four `iBlock8x8StaticIdc` values
+against `svc_mode_decision.cpp:516-519`'s arithmetic transcribed independently.
+The reason for three rows and the second one is the shape of what changed: under
+the raw pointer, "which row" and "where the row starts" were a single unchecked
+fact; splitting them into a selector and a store makes a reader that silently
+used row 0, or dropped the stride, a *different* failure from one that miscounted
+the index.
+
+**It failed on its first run — on the accessor, not the transcription.** The
+first `row()` bounded the slice by the **buffer** rather than by the row, so a
+caller asking for more blocks than a reference has would be served bytes out of
+the *next reference's* row: silently, and for every row but the last. The raw
+pointer it replaced could do exactly that, which is why nothing else in the tree
+would have complained. `len > stride` is now a refusal.
+
+Kill list, run afterwards: selector ignored, stride dropped, low index read as
+up, row bounds taken from the buffer — **four mutations, four reds**. The fourth
+is the defect above, kept as a mutation so the fix cannot silently regress.
+
+**The generalisation for a port at its exit.** Converting dark code is where the
+project's referees are weakest and its confidence is highest, because nothing goes
+red either way. The rule S11.52 set and this confirms: *a change the sweep cannot
+see must ship with an instrument that can*, and the instrument earns its place by
+being written before you are sure the code is right — not after.
