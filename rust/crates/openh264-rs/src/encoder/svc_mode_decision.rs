@@ -2313,10 +2313,13 @@ pub extern "C" fn MdInterSCDPskipProcess(
 // diffharness driver expresses. So no camera-usage preset can reach this body, and
 // B4's `bg` preset does not either: a probe in `SvcMdSCDMbEnc` read **0** in every
 // one of the 48 `bg` rows, including the row where `WelsMdBackgroundMbEnc` entered
-// 5771 times. This is Phase 10's family, and the retag says so rather than leaving it
-// filed under Phase 9's port-raw backlog where it reads as pending work.
-// unsafe-cat: SCREEN_CONTENT(dormant)
-#[allow(unsafe_code)]
+// 5771 times. This is Phase 10's family; the body stays, whole, for the effort that
+// makes it live.
+//
+// **S12.3 took the `unsafe` off it** — the last one outside `src/api/` that was not
+// an instrument, a fork seam or the recon seam. It was a `from_raw_parts` over
+// `pVaaBestBlockStaticIdc`, and that field is now a row number into storage the
+// extension owns, so the four reads below index a bounds-checked slice.
 pub fn SetBlockStaticIdcToMd(
     // S4.C3: `*mut` -> `&`, as `VaaBackgroundMbDataUpdate` above and for the same
     // reason — read-only, and fork-reachable through `pfSCDPSkipDecision`.
@@ -2346,14 +2349,19 @@ pub fn SetBlockStaticIdcToMd(
     // `vaa_ext_ref()`, which answers `None` by construction (S11.3, F177). The
     // conversion keeps the scaffolding a screen-content effort would inherit.
     let kiBlocks = (kiWidth as usize) * (((*pDqLayer).iMbHeight as usize) << 1);
-    // SAFETY: dormant — `SVAAFrameInfoExt` cannot be constructed in this port
-    // (S11.3, F177: `vaa_ext_ref()` answers `None` by construction), so no call
-    // reaches this line. The claim a screen-content port would owe here is the
-    // C++'s: `pVaaBestBlockStaticIdc` points at one `u8` per 8x8 block of the
-    // layer's grid, `kiBlocks` of them. The raw field is the preprocess
-    // screen-LTR family's (`SRefInfoParam` is `Copy` over the same pointer) and
-    // converts with it, not with the mode-decision chain.
-    let kpStatic = unsafe { std::slice::from_raw_parts((*pVaaExt).pVaaBestBlockStaticIdc, kiBlocks) };
+    // **S12.3.** The claim the raw form asserted — `pVaaBestBlockStaticIdc` addresses
+    // one `u8` per 8x8 block of the layer's grid, `kiBlocks` of them — is now checked
+    // instead: the extension owns the rows, the selector names one, and `row` refuses
+    // a row that is absent or short. That is a state the C++ reaches by dereferencing
+    // `NULL`, so returning is the only defined thing to do and it costs nothing a
+    // live screen-content path would notice: there the row is always allocated and
+    // always the full grid.
+    let Some(kpStatic) = (*pVaaExt)
+        .pVaaBlockStaticIdc
+        .row((*pVaaExt).pVaaBestBlockStaticIdc, kiBlocks)
+    else {
+        return;
+    };
 
     (*pWelsMd).iBlock8x8StaticIdc[0] = kpStatic[kiBlockIndexUp as usize] as i32;
     (*pWelsMd).iBlock8x8StaticIdc[1] = kpStatic[(kiBlockIndexUp + 1) as usize] as i32;
@@ -2557,6 +2565,104 @@ pub fn SetScrollingMvToMdNull(_pVaa: &SVAAFrameInfo, _pWelsMd: &mut SWelsMD<'_>)
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// **S12.3's referee: `SetBlockStaticIdcToMd` reads the right four bytes of the
+    /// right row.**
+    ///
+    /// The body it guards is dark — `vaa_ext_ref()` answers `None` by construction
+    /// (S11.3, F177), so no sweep row, in any preset or profile, executes a line of
+    /// it. That was true of the `from_raw_parts` this checkpoint replaced too, which
+    /// is exactly why the replacement needs a referee that does not depend on
+    /// reaching it the normal way: the test builds the extension itself.
+    ///
+    /// What it pins is the whole of what changed. The old form indexed off a bare
+    /// pointer, so *which* row was selected and *where* the row began were the same
+    /// fact and neither was checked. Now they are separate — `pVaaBestBlockStaticIdc`
+    /// names a row, `SBlockStaticIdcStore` owns them — so the store is given three
+    /// rows with different contents and the **second** is selected. A reader that
+    /// silently used row 0, or dropped the stride, fails here; under the pointer form
+    /// it would have read whatever the pointer happened to hold.
+    #[test]
+    fn set_block_static_idc_reads_the_selected_row_at_the_cpp_indices() {
+        use crate::encoder::wels_preprocess::SVAAFrameInfoExt;
+
+        // 5x3 macroblocks -> a 10x6 grid of 8x8 blocks, 60 of them. The stride is
+        // wider than the grid on purpose: `iCountMax8x8BNum` is sized from the
+        // encoder's maximum geometry, not this layer's, so a reader that assumed
+        // "row length == kiBlocks" would pass on a coincidence.
+        const MB_W: i16 = 5;
+        const MB_H: i16 = 3;
+        const STRIDE: usize = 64;
+        const ROWS: usize = 3;
+        const SELECTED: usize = 1;
+
+        let mut ext = SVAAFrameInfoExt::default();
+        ext.pVaaBlockStaticIdc.alloc(ROWS, STRIDE);
+        for r in 0..ROWS {
+            let row = ext
+                .pVaaBlockStaticIdc
+                .row_mut(Some(r), STRIDE)
+                .expect("just allocated");
+            for (i, b) in row.iter_mut().enumerate() {
+                // Distinct per row *and* per index, so a wrong row and a wrong
+                // offset are different failures.
+                *b = (r * 100 + i) as u8;
+            }
+        }
+        ext.pVaaBestBlockStaticIdc = ext.pVaaBlockStaticIdc.select(SELECTED);
+        assert_eq!(ext.pVaaBestBlockStaticIdc, Some(SELECTED));
+
+        let mut layer = SDqLayer::default();
+        layer.iMbWidth = MB_W;
+        layer.iMbHeight = MB_H;
+
+        let mut mb = SMB::default();
+        mb.iMbX = 2;
+        mb.iMbY = 1;
+
+        let mut md = SWelsMD::default();
+        SetBlockStaticIdcToMd(&ext, &mut md, &mut mb, &layer);
+
+        // svc_mode_decision.cpp:516-519, arithmetic transcribed rather than
+        // reproduced from the body under test:
+        //   kiWidth        = iMbWidth * 2                     = 10
+        //   kiBlockIndexUp  = (iMbY * 2)     * kiWidth + iMbX * 2 = 24
+        //   kiBlockIndexLow = (iMbY * 2 + 1) * kiWidth + iMbX * 2 = 34
+        let up = 24usize;
+        let low = 34usize;
+        let byte = |i: usize| (SELECTED * 100 + i) as u8 as i32;
+        assert_eq!(md.iBlock8x8StaticIdc[0], byte(up));
+        assert_eq!(md.iBlock8x8StaticIdc[1], byte(up + 1));
+        assert_eq!(md.iBlock8x8StaticIdc[2], byte(low));
+        assert_eq!(md.iBlock8x8StaticIdc[3], byte(low + 1));
+
+        // And the refusals, which are the states the raw form met by dereferencing
+        // `NULL`: nothing selected, a row past the end, and a row too short for the
+        // layer's grid.
+        let kiBlocks = (MB_W as usize * 2) * (MB_H as usize * 2);
+        assert_eq!(ext.pVaaBlockStaticIdc.row(None, kiBlocks), None);
+        assert_eq!(ext.pVaaBlockStaticIdc.select(ROWS), None);
+        // A row is `stride` bytes and not one more. The sixteen live in one
+        // allocation, so an over-long request must be refused rather than served out
+        // of the next reference's row — the exact bug this assertion caught when the
+        // accessor first bounded by the buffer instead of the row.
+        assert_eq!(ext.pVaaBlockStaticIdc.row(Some(SELECTED), STRIDE + 1), None);
+        let whole = ext
+            .pVaaBlockStaticIdc
+            .row(Some(SELECTED), STRIDE)
+            .expect("a full row of the selected reference");
+        assert!(
+            whole.iter().all(|&b| b >= 100 && b < 200),
+            "every byte of row {SELECTED} is row {SELECTED}'s"
+        );
+        assert_eq!(
+            SVAAFrameInfoExt::default()
+                .pVaaBlockStaticIdc
+                .select(0),
+            None,
+            "the port never allocates the store, so every selector is the C++'s NULL"
+        );
+    }
 
     /// **F254's referee — one source plane, the in-fork background writer, and a
     /// mode-decision reader.** S10 step 1.
