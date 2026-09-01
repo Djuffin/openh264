@@ -4726,8 +4726,6 @@ pub fn WelsEncoderEncodeExt(
 
     pFbi.iLayerNum = iLayerNum;
 
-    crate::encoder::slice_multi_threading::WelsEmms();
-
     pFbi.sLayerInfo[iLbi].eFrameType = eFrameType;
     pFbi.iFrameSizeInBytes = iFrameSize;
     pFbi.eFrameType = eFrameType;
