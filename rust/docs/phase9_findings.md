@@ -9156,3 +9156,90 @@ project's referees are weakest and its confidence is highest, because nothing go
 red either way. The rule S11.52 set and this confirms: *a change the sweep cannot
 see must ship with an instrument that can*, and the instrument earns its place by
 being written before you are sure the code is right — not after.
+
+## F303 — every instrument in this repository measures one architecture, and an `unsafe` block hid behind a `cfg` for eleven sessions (S12.5)
+
+`slice_multi_threading.rs` held:
+
+    pub fn WelsEmms() {
+        #[cfg(target_arch = "x86_64")]
+        unsafe { std::arch::asm!("emms"); }
+    }
+
+with **no `#[allow(unsafe_code)]`**, in a file that `#![deny(unsafe_code)]`, in a
+crate whose root denies too. It compiled because the host is aarch64: `cfg`
+stripping happens before lints run, so the block did not exist for rustc to
+complain about. Proved by flipping the predicate to `aarch64` and running
+`cargo check` — `error: usage of an unsafe block`. **An x86_64 build of this
+crate did not compile**, and had not for as long as the line existed.
+
+**No instrument could have caught it, and the reason is structural rather than
+an oversight in any one of them.** `unsafe_census.sh` counts *attributes*, and
+there was no attribute. `unsafe_ratchet.sh` counts *text*, so it counted the
+block — as one of 148, indistinguishable. `gates.sh` at every level compiles for
+the host. `f239_span_scan.py`, `deunsafe_cascade.py`, Miri, the sweeps: all of
+them see the post-`cfg` tree. The posture the whole campaign measured was the
+posture of one target triple.
+
+**The fix was to delete it, not to tag it, and upstream said so twice.** `cpu.h`
+declares `WelsEmms()` only inside `#if defined(X86_ASM)`, beside
+`WelsCPURestore`, `WelsCPUId`, `WelsCPUIdVerify`, `WelsCPUSupportAVX` and
+`WelsCPUDetectAVX512` — **none of which this port translated** — and the `#else`
+arm is `#define WelsEmms()`, expanding to nothing. Its body is one `emms`
+(`common/x86/cpuid.asm:207`) clearing the x87 tag word the **MMX kernels** dirty,
+and this port translates no assembly kernels: grepped across `src/`, `tests/`,
+`benches/` and `examples/`, the crate held exactly one `asm!`/`std::arch`
+occurrence — the `emms` itself. Nothing here executes MMX, and nothing will: a
+Rust port that gains SIMD reaches for SSE/AVX/NEON intrinsics, none of which need
+`emms`.
+
+So this was the single member of an `#if` block transliterated into a crate that
+lives on the other side of it. **The generalisation for a transliteration: a
+`#if` in the source is a fork in what you are porting, and porting one arm's body
+into a tree built on the other arm produces code that is dead, unreviewable, and —
+here — uncompilable.** Check which arm you are in before you translate the
+contents of either.
+
+**The tripwire that replaces it.** `unsafe_census.sh` now pins `cfg-region(...)`
+rows over the whole of `src/`, `api/` included: one per `#[cfg(...)]` on a
+target, feature or `not(test)` predicate, keyed by predicate text. The pinned set
+is **empty** — that was the crate's only one — so it is armed at zero and the
+next such region has to be argued for. Seen red both ways before being trusted,
+on F297's rule. `cfg(test)` and `debug_assertions` are excluded by design: the
+gates compile both arms of each, so neither is blind.
+
+## F304 — the cascade tool cannot see a converted function that nobody calls, and three raw pointers survived on that blind spot (S12.6)
+
+Asked which of the port's remaining raw pointers are *not* about the external C
+API, the classification found 36 tokens in production code outside `src/api/` —
+and three of them pointed at nothing at all.
+
+`SPicData::mb_cursor` (S4.C2's raw macroblock cursor, carrying the crate's only
+`&[*mut u8; 3]` parameter) had been superseded by `mb_cursor_ro`/`mb_cursor_rec`
+during S9.0. By S12 its only two mentions in the tree were **comments recording
+that it had been superseded**. `stride_idx` fell with it as its sole caller, and
+`WelsOpenDecoder`'s `_pLogCtx: *mut c_void` was an ignored parameter whose three
+callers all passed `null_mut()`.
+
+**Why eleven sessions of tooling missed them.** `deunsafe_cascade.py` reported
+"kept 0 of 0" from S11.45 onward and that reading was correct: it works at
+function granularity over *convertible bodies*, so it answers "what can still be
+made safe", not "what is still called". A function that was converted, or one
+whose callers were rewritten to use its successor, leaves nothing for it to say.
+`dead_code` cannot say it either — these are `pub fn` on `pub` types in `pub`
+modules, reachable by definition. The ratchet counts them as tokens like any
+other.
+
+The question that did find them was **not a tool but a classification**: split
+every remaining pointer by *what it is for*, and the ones that are for nothing
+stop being invisible. That is the same instrument F291 used at S11.44 (four
+accessors with zero callers and only their imports left) and it has now paid
+twice, which suggests it belongs in the exit routine rather than in whoever
+happens to ask.
+
+A note on where a rule should live. Deleting `stride_idx` — a two-line helper
+naming "both chroma planes resolve through stride index 1" — moved that rule to
+`mb_offset`'s doc, because `mb_offset`'s three surviving raw callers spell it
+**by hand** (`stride(1)` for plane 2) and are the only callers left that can get
+it wrong. A rule stated on a helper nobody calls is documentation filed where
+nobody who needs it will look.
