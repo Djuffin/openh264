@@ -88,7 +88,6 @@ use crate::encoder::svc_encode_slice::current_layer_ref;
 use crate::encoder::svc_encode_slice::current_layer_mut;
 use crate::encoder::svc_encode_slice::ctx_sps;
 use crate::encoder::svc_encode_slice::ctx_sps_ref;
-use crate::encoder::svc_encode_slice::current_layer;
 pub use crate::encoder::svc_encode_slice::SSliceHeaderExt;
 pub use crate::encoder::encoder_context::EWelsSliceType;
 pub use crate::encoder::encoder_context::SLTRState;

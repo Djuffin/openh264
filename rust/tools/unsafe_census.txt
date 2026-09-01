@@ -16,7 +16,6 @@ api/codec_api.rs island-nonextern(C-ABI(test)) x5
 api/codec_api.rs island-nonextern(C-ABI) x20
 api/encoder_options.rs island-nonextern(C-ABI) x2
 decoder/picture.rs instrument(test) x2
-encoder/encoder_context.rs fork-shared(S63) x1
 encoder/encoder_context.rs instrument(test) x4
 encoder/encoder_ext.rs instrument(test) x2
 encoder/encoder_ext.rs lawful-single(F162) x1
@@ -25,7 +24,6 @@ encoder/picture.rs instrument(test) x3
 encoder/rec_view.rs recon-seam x2
 encoder/ref_list_mgr_svc.rs instrument(test) x1
 encoder/slice_multi_threading.rs instrument(test) x1
-encoder/svc_encode_slice.rs fork-shared(S63) x1
 encoder/svc_encode_slice.rs instrument(test) x4
 encoder/svc_mode_decision.rs instrument(test) x1
 encoder/svc_set_mb_syn_cabac.rs C-ABI(test) x1

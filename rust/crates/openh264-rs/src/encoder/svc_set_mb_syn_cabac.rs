@@ -153,7 +153,6 @@ pub const g_kuiChromaQpTable: [u8; 52] = [
 
 pub use crate::encoder::svc_encode_slice::SSliceHeader;
 use crate::encoder::svc_encode_slice::current_layer_ref;
-use crate::encoder::svc_encode_slice::current_layer;
 pub use crate::encoder::svc_encode_slice::SSliceHeaderExt;
 pub use crate::encoder::encoder_context::EWelsSliceType;
 pub use crate::encoder::vlc_encoder::ECtxBlockCat;

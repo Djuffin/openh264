@@ -69,7 +69,7 @@ use crate::{
 
 pub use crate::encoder::encoder_context::EWelsSliceType;
 use crate::encoder::encoder_context::{
-    ctx_dq_layer,
+    
 };
 
 pub const P_SLICE: i32 = 0;
@@ -659,59 +659,21 @@ pub fn slice_in_layer_mut(pCurLayer: &mut SDqLayer, kiSliceIdx: i32) -> Option<&
 // and the frame-level walkers destructure their `&mut SDqLayer`. The claim is
 // the compiler's everywhere the mint used to assert it.
 
-/// The layer the context is currently working on — **T6.G2's resolution accessor,
-/// and the only reader of `sWelsEncCtx::iCurDqLayer`.**
-///
-/// `pCurDqLayer` used to be a `*mut SDqLayer` alias into `ppDqLayerList`. It is now
-/// the *position*, and this resolves it back to the same raw cursor the ~150
-/// consumers were already holding: they bind it once at the top of a function
-/// (`let pCurDqLayer = current_layer(pEncCtx);`) and offset out of it exactly as
-/// before. Nothing downstream changed, which is the point — the identity moved, the
-/// idiom did not.
-///
-/// **The spelling is S40's.** T6.H8 made the list a `Vec<Option<Box<SDqLayer>>>`, and
-/// [`ctx_dq_layer`] reads the `Box`'s address without forming a reference to the
-/// layer it points at — so repeated calls are still sibling derivations that cannot
-/// pop each other's results. That property is what lets a caller keep the cursor
-/// across another call to this function, which is what the frame loop does, twice
-/// per spatial layer.
-///
-/// Answers **null** exactly where the old field was null: before any layer is
-/// current (`iCurDqLayer == None`), and before the list exists. Every `is_null()`
-/// guard in the tree therefore still asks the question it was written to ask.
-///
-/// # Safety
-/// `pCtx` must point to a live encoder context.
-#[inline]
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
-pub fn current_layer(pCtx: &sWelsEncCtx) -> *mut SDqLayer {
-    let Some(idx) = (*pCtx).iCurDqLayer else {
-        return std::ptr::null_mut();
-    };
-    // A `Some` index with no list is a programming error, not a state: every writer
-    // names a layer the list already holds. It cannot arise on a live path — the
-    // field starts `None` and the list only empties at teardown — so it is asserted
-    // rather than handled, and answers null in release for the same reason the
-    // field's null answered there.
-    debug_assert!(
-        !(*pCtx).ppDqLayerList.is_empty(),
-        "iCurDqLayer = {idx:?} with no ppDqLayerList"
-    );
-    debug_assert!(
-        idx.get() < MAX_DEPENDENCY_LAYER,
-        "iCurDqLayer = {idx:?} is past the largest list InitDqLayers can build"
-    );
-    // **S11.8: the audited call, at this resolver's boundary.** `ctx_dq_layer`
-    // is `unsafe fn` because it reads the `Box` slot as a pointer *value*
-    // (`ptr::read`) — F71's spelling, so the answer carries the heap block's
-    // own provenance rather than a child of a context retag, which is what
-    // lets two workers resolve the layer at once. That claim is the same one
-    // this function has always made, and it needs only a live context, which
-    // the `&sWelsEncCtx` parameter is. Naming it here rather than on the
-    // signature lets this resolver be called from safe code.
-    unsafe { ctx_dq_layer(pCtx, idx.get()) }
-}
+// **S12.12 deleted `current_layer`, T6.G2's resolution accessor.**
+//
+// It resolved `iCurDqLayer` back to the `*mut SDqLayer` cursor that ~150 consumers
+// held, and carried the `fork-shared(S63)` tag because `ctx_dq_layer` beneath it
+// read the `Box` slot as a pointer *value* — so two workers could resolve the layer
+// at once without one retagging the other's answer (F71). That argument was real
+// while the fork's bodies took the raw.
+//
+// F240's `current_layer_ref` and `current_layer_mut` took those callers, and by S12
+// this had **none left**: every remaining mention in the tree was a `use` or a
+// comment, which is F291's shape and the second time this session that the cascade
+// tool could not see it (F304 — it works on convertible *bodies*, and a converted
+// function nobody calls has no body to offer). Deleting it took eight dangling
+// imports with it and `ctx_dq_layer` beneath it, whose only non-test caller this
+// was.
 
 /// The current layer as a **shared reference** — F240's companion to
 /// [`current_layer`], and expressible with no `unsafe` at all.
