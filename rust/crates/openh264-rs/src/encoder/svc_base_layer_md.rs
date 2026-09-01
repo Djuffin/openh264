@@ -39,7 +39,6 @@ use crate::encoder::svc_encode_slice::{
     layer_enc_view, layer_rec_view, layer_ref_pic, layer_ref_view,
     current_layer_ref,
 };
-use crate::encoder::svc_encode_slice::current_layer;
 use crate::encoder::picture::{RecPicId, SrcPicId};
 use crate::common::mc::{mc_chroma, mc_luma};
 use crate::common::copy_mb::{copy_16x16, copy_16x8, copy_8x16, copy_8x8};

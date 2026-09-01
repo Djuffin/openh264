@@ -72,7 +72,7 @@ use crate::encoder::svc_encode_slice::{
 use crate::encoder::vlc_encoder::BsWriter;
 use crate::encoder::wels_encoder_ext::WelsTime;
 pub const ENC_RETURN_UNEXPECTED: i32 = 0x04;
-use crate::encoder::svc_encode_slice::{current_layer, set_current_layer, LayerIdx};
+use crate::encoder::svc_encode_slice::{set_current_layer, LayerIdx};
 use crate::{
     RCMode, SEncParamExt, SFrameBSInfo, SLayerBSInfo, SliceMode, MAX_SPATIAL_LAYER_NUM,
 };
@@ -88,7 +88,7 @@ pub use crate::encoder::encoder_context::sWelsEncCtx;
 // accessors. Field spellings only — no body in this file is touched, and the
 // thread machinery is Phase 7's.
 use crate::encoder::encoder_context::{
-    ctx_dq_layer,
+    
 };
 
 // ============================================================================

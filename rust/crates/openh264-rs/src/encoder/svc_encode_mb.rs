@@ -57,7 +57,6 @@ pub use crate::encoder::param_svc::SWelsPPS;
 pub use crate::encoder::encoder_context::SStrideTables;
 pub use crate::encoder::svc_encode_slice::SLayerInfo;
 use crate::encoder::svc_encode_slice::current_layer_ref;
-use crate::encoder::svc_encode_slice::current_layer;
 use crate::encoder::encode_mb_aux::{blk4x4, blk4x4_mut, blk_four4x4, blk_four4x4_mut, hadamard2x2_span,
     hadamard2x2_span_mut, hadamard_dc_span};
 pub use crate::encoder::md::SMbCache;

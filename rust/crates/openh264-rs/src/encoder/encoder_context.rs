@@ -901,29 +901,16 @@ pub fn with_vpp<R>(
 // reaching chain, so `ref_list_mut` per statement is the same provenance story
 // with the compiler holding it.
 
-/// Dependency layer `kiDid`'s **DQ layer** — `ppDqLayerList[did]`, and null where the
-/// slot's pointer was null. T6.H8; the same shape as [`sWelsEncCtx::ref_list`], and
-/// [`current_layer`](crate::encoder::svc_encode_slice::current_layer) resolves
-/// `iCurDqLayer` through it.
-///
-/// # Safety
-/// `pCtx` must point to a live encoder context.
-#[inline]
-// unsafe-cat: fork-shared(S63)
-#[allow(unsafe_code)]
-pub unsafe fn ctx_dq_layer(pCtx: &sWelsEncCtx, kiDid: usize) -> *mut SDqLayer { unsafe {
-    // **F71.** No `&mut` to the `Vec` and no reference to the slot. See the family
-    // note above `ctx_func_list_raw`.
-    let arr = std::ptr::addr_of!((*pCtx).ppDqLayerList);
-    if kiDid >= (*arr).len() {
-        return std::ptr::null_mut();
-    }
-    // `Option<Box<T>>` is guaranteed to be one pointer wide with `None` as null, so
-    // the slot is *read as a pointer value* rather than borrowed as an `Option`.
-    // The value read carries the heap block's own provenance — nothing here retags
-    // the layer, which is what lets two workers resolve it at once.
-    std::ptr::read((*arr).as_ptr().add(kiDid) as *const *mut SDqLayer)
-}}
+// **S12.12 deleted `ctx_dq_layer`** — T6.H8's raw resolver for `ppDqLayerList[did]`,
+// and the encoder's last `fork-shared(S63)` production item. Its `ptr::read` of the
+// `Box` slot was F71's spelling: the value carried the heap block's own provenance
+// rather than a child of a context retag, which is what let two forked workers
+// resolve one layer at once. Its safe twin `dq_layer_ref` sits below.
+//
+// The argument stopped having a subject. `current_layer`, its only non-test caller,
+// was deleted dead in the same checkpoint, and the three that remained were its own
+// instruments — which retire with the accessor they watch, S40's rule read
+// backwards, as `tools/unsafe_instrument_floor.txt` has said since S11.51.
 
 /// Dependency layer `kiDid` **as a shared reference** — [`ctx_dq_layer`]'s safe
 /// twin, on `layer_pps_ref`'s template.
@@ -2882,19 +2869,17 @@ mod tests {
 
         let p: *mut sWelsEncCtx = &mut *ctx;
 
-        // Each arm: derive, derive again, then use the FIRST cursor. The write goes
-        // through cursor 1 and the read back through cursor 2, so a spelling that
-        // pops the first tag fails on the write and one that pops the second fails
-        // on the read.
-        macro_rules! siblings {
-            ($name:literal, $get:expr, $write:expr, $read:expr) => {{
-                let first = unsafe { $get };
-                let second = unsafe { $get };
-                assert_eq!(first, second, concat!($name, ": same slot, same address"));
-                unsafe { $write(first) };
-                assert!(unsafe { $read(second) }, concat!($name, ": the first cursor is still live"));
-            }};
-        }
+        // **The `siblings!` macro stood here and S12.12 deleted it with its last
+        // row.** Each arm derived a cursor twice, wrote through the first and read
+        // back through the second, so a spelling that popped either tag failed. It
+        // ran out of subjects one accessor at a time — the retirement notes below
+        // are that history — and `ctx_dq_layer`, the last, went with the resolver
+        // that called it. `rustc` said so directly: `unused macro definition`.
+        //
+        // What survives is the `held` interleave at the bottom, which is the same
+        // property posed across accessors rather than within one: take every raw
+        // cursor the context still hands out, hold them all at once, then read
+        // through each. Two rows left, `vaa_ptr` and `frame_bs`.
 
         // **T9.H12, amended by T9.H3: the `&mut`-taking, raw-returning middle
         // state is gone from this family.** When this comment was written,
@@ -2947,9 +2932,18 @@ mod tests {
         // `Option<&SRefList>` now, so it joins the references above: no sibling
         // property to assert, and the borrow checker referees the coexistences
         // that Miri used to.
-        siblings!("ctx_dq_layer", ctx_dq_layer(&*p, 0),
-            |q: *mut crate::encoder::svc_encode_slice::SDqLayer| (*q).iMbWidth = 11,
-            |q: *mut crate::encoder::svc_encode_slice::SDqLayer| (*q).iMbWidth == 11);
+        // `ctx_dq_layer` had the last row here until S12.12, and it leaves for a
+        // different reason from every entry above: not that its successor returns a
+        // reference, but that the accessor itself is **gone**. Its one non-test
+        // caller, `current_layer`, had no callers of its own — F240's
+        // `current_layer_ref`/`_mut` had taken all of them — so the raw resolver and
+        // the sibling property it asserted retired together. `dq_layer_ref` answers
+        // with `Option<&SDqLayer>`, which the borrow checker referees.
+        //
+        // **This list is now empty of rows.** It was the instrument for a family of
+        // raw context accessors that no longer exists; what it measured — that two
+        // derivations can coexist without popping each other — is a question only a
+        // raw accessor can pose.
 
         // The rate controller's own five hung off `ctx_rc_at` here, one level
         // down — the only accessors in the family that reached through another
@@ -2978,8 +2972,11 @@ mod tests {
                 // `mvd_cost_origin` left at S5.C4b for exactly that reason: its
                 // successor answers with a `MvdCostCursor`, and a borrow is not
                 // something this list can hold beside three raw cursors.
-                (*p).vaa_ptr().cast(),
-                ctx_dq_layer(&*p, 0).cast(), (*p).frame_bs().cast(),
+                // `ctx_dq_layer` held a cursor here until S12.12, when the
+                // accessor was deleted with its last caller. `dq_layer_ref` is a
+                // borrow and a borrow is not something this list can hold beside
+                // raw cursors — the same reason `mvd_cost_origin` left at S5.C4b.
+                (*p).vaa_ptr().cast(), (*p).frame_bs().cast(),
             ]
         };
         // `frame_bs` is null here (no bitstream in this fixture), which is itself

@@ -82,7 +82,6 @@ use std::sync::atomic::Ordering;
 use crate::{RCMode, SSliceArgument, SSpatialLayerConfig, EUsageType};
 pub use crate::encoder::svc_encode_slice::SSliceHeader;
 use crate::encoder::svc_encode_slice::ctx_pps;
-use crate::encoder::svc_encode_slice::current_layer;
 use crate::encoder::svc_encode_slice::current_layer_ref;
 use crate::encoder::svc_encode_slice::layer_pps_ref;
 use crate::encoder::svc_encode_slice::ctx_pps_ref;

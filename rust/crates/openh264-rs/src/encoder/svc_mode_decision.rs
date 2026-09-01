@@ -17,7 +17,6 @@
 
 use crate::encoder::rec_view::{copy_block_to_view, RecCursor};
 use crate::encoder::svc_encode_slice::{layer_enc_view, layer_rec_view, layer_ref_pic, layer_ref_view, layer_pps_ref, current_layer_ref};
-use crate::encoder::svc_encode_slice::current_layer;
 use crate::encoder::picture::{RecPicId, SrcPicId};
 use crate::encoder::md::{PredictSad, PredictSadSkip, WelsMedian};
 use crate::encoder::md::{mem_pred_chroma_off, mem_pred_luma_off};
@@ -26,7 +25,6 @@ use crate::encoder::svc_encode_slice::WelsPMbChromaEncode;
 use crate::encoder::svc_set_mb_syn_cavlc::IS_INTRA16x16;
 use crate::encoder::vlc_encoder::BsSizeUE;
 pub use crate::encoder::encoder_context::SMVUnitXY;
-use crate::encoder::encoder_context::ctx_dq_layer;
 pub use crate::encoder::encoder_context::SMVComponentUnit;
 pub use crate::encoder::encoder_context::EWelsSliceType;
 pub use crate::encoder::picture::SScreenBlockFeatureStorage;

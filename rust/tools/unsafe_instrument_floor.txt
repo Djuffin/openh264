@@ -132,6 +132,28 @@
 # `tools/unsafe_census.sh` pins all 29 by file and category.
 #
 # ---------------------------------------------------------------------------
+# S12.12: **the last `fork-shared(S63)` pair retired, and this list did not move.**
+#
+# `current_layer` had no callers left — F240's `current_layer_ref`/`_mut` had taken
+# all ~150 of them and only `use` lines remained (F291's shape) — so it and
+# `ctx_dq_layer` beneath it were deleted, and `fork-shared(S63)` left the census
+# entirely. The tracking number is **27**.
+#
+# The expectation going in was that three instruments would retire with the
+# accessor, on S40's rule read backwards. **They did not, and the distinction is
+# worth keeping**: none of the three was an instrument *for* `ctx_dq_layer`. Two
+# were larger probes that merely listed it among several accessors
+# (`every_container_accessor_hands_out_sibling_cursors`, whose `siblings!` macro
+# ran out of rows and was deleted for it, and whose `held` interleave still holds
+# `vaa_ptr` and `frame_bs`), and the third,
+# `request_memory_svc_builds_the_dq_layers`, only used it to *reach* the layer —
+# it takes `dq_layer_ref` now, and its `unsafe` was always `build_gate_context`'s
+# raw context, not the resolution. A probe retires with its subject; a probe that
+# merely mentioned the subject loses a line.
+#
+# So this file is unchanged at 22 across 10, and D-exit-4's floor is untouched.
+#
+# ---------------------------------------------------------------------------
 # 22 test allows across 10 files
 
 # decoder/picture.rs

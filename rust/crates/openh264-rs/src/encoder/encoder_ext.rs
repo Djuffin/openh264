@@ -27,7 +27,7 @@ use crate::api::codec_api::RC_MODES::RC_OFF_MODE;
 use crate::api::codec_api::ELevelIdc;
 use crate::decoder::nalu::g_ksLevelLimits;
 use crate::encoder::encoder_context::{
-    ctx_dq_idc_map, ctx_dq_layer, ctx_ltr_at,
+    ctx_dq_idc_map, ctx_ltr_at,
     ctx_paraset_arrays,
     sWelsEncCtx, SDqIdc, SLogContext, SRefList, SStrideTables, SSubsetSps, SWelsPPS,
     SWelsSPS, BASE_DEPENDENCY_ID,
@@ -48,7 +48,7 @@ use crate::encoder::slice_multi_threading::{
 use crate::encoder::svc_enc_slice_segment::{GetInitialSliceNum, InitSlicePEncCtx};
 use crate::encoder::svc_encode_slice::{InitSliceInLayer, WelsMbToSliceIdc, current_layer_ref};
 use crate::encoder::svc_encode_slice::{ctx_sps, ctx_pps};
-use crate::encoder::svc_encode_slice::{current_layer, set_current_layer};
+use crate::encoder::svc_encode_slice::{set_current_layer};
 use crate::encoder::svc_mode_decision::{
     LEFT_MB_POS, TOPLEFT_MB_POS, TOPRIGHT_MB_POS, TOP_MB_POS,
 };
@@ -75,6 +75,7 @@ use crate::encoder::wels_encoder_ext::{NON_VIDEO_CODING_LAYER, VIDEO_CODING_LAYE
 use crate::common::wels_common_defs::{EWelsNalRefIdc, EWelsNalUnitType, EWelsSliceType};
 use crate::encoder::param_svc::{SSpatialLayerInternal, INVALID_TEMPORAL_ID};
 use crate::encoder::encoder_context::MAX_PPS_COUNT;
+use crate::encoder::encoder_context::dq_layer_ref;
 use crate::common::wels_common_defs::SNalUnitHeaderExt;
 use crate::encoder::wels_encoder_ext::ENC_RETURN_MEMOVERFLOWFOUND;
 use crate::encoder::wels_func_ptr_def::SWelsFuncPtrList;
@@ -1861,8 +1862,10 @@ mod tests {
         unsafe {
             let pCtx = build_gate_context();
 
-            let pDq = ctx_dq_layer(&*pCtx, 0);
-            assert!(!pDq.is_null());
+            // S12.12: was `ctx_dq_layer`, deleted with its last caller. The test's
+            // `unsafe` is `build_gate_context`'s raw context, not this resolution —
+            // `dq_layer_ref` is safe, and its `None` is the null this asserted away.
+            let pDq = dq_layer_ref(&*pCtx, 0).expect("RequestMemorySvc built layer 0");
             assert_eq!((*pDq).iMbWidth, 10);
             assert_eq!((*pDq).iMbHeight, 6);
             assert_eq!((*pDq).sSliceEncCtx.iMbNumInFrame, 60);
