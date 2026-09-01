@@ -52,8 +52,8 @@ pub extern "C" fn WelsGetCodecVersion() -> OpenH264Version {
 #[unsafe(no_mangle)]
 // unsafe-cat: C-ABI
 #[allow(unsafe_code)]
-pub unsafe extern "C" fn WelsGetCodecVersionEx(pVersion: *mut OpenH264Version) {
+pub unsafe extern "C" fn WelsGetCodecVersionEx(pVersion: *mut OpenH264Version) { unsafe {
     if !pVersion.is_null() {
         *pVersion = G_ST_CODEC_VERSION;
     }
-}
+}}

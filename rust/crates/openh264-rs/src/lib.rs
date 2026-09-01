@@ -50,10 +50,27 @@
 //                            signatures, and `_`-prefixing them costs the
 //                            diffability the naming allows above exist to protect.
 //
-// `unsafe_op_in_unsafe_fn` stays for the same transliteration reason: requiring an
-// inner `unsafe {}` per deref would add thousands of blocks to code the phase is
-// deleting rather than blessing. The ratchet's `unsafe_fn` metric is what watches
-// that surface instead (plan §7.1).
+// `unsafe_op_in_unsafe_fn` **left this list at S12.1 and is now denied below.** The
+// reason it stayed — "an inner `unsafe {}` per deref would add thousands of blocks"
+// — was an estimate, and when S11 finally measured it the estimate was wrong by two
+// orders of magnitude: after the conversion mass closed, the whole crate holds
+// **135 unguarded unsafe operations, in 13 `unsafe fn` bodies, across 4 files**
+// (121 sites / 10 fns in `api/codec_api.rs`, 9 / 1 in `encoder/wels_preprocess.rs`,
+// 4 / 1 in `encoder/encoder_context.rs`, 1 / 1 in `api/version.rs`). 108 of the 135
+// are raw-pointer derefs on the decoder's reordering thunks.
+//
+// The 13 blocks are rustc's own machine-applied shape — `) -> T { unsafe {` … `}}`
+// — chosen over wrapping each of the 135 operations individually because most of
+// them are *place* expressions (`&(*pCtx).sSpsPpsCtx`), which cannot take a block
+// without restructuring the statement around them. Body-wrapping moves no interior
+// line at all, so every line stays diffable against the C++ it was transliterated
+// from, which is the property the whole allow list above exists to protect.
+//
+// What the deny buys, given that: the other 46 `unsafe fn` in the crate hold zero
+// unguarded operations today, and a new one in any of them — or in any `unsafe fn`
+// written from here on — is now a compile error rather than a warning nobody reads.
+// Inside the 13 wrapped bodies it buys nothing; those stay watched by the ratchet's
+// `unsafe_fn` metric and by the census (plan §7.1).
 //
 // Not allowed here, and deliberately visible: `unused_assignments` (17) and
 // `unreachable_patterns` (2), the C's `int x = 0; … x = f();` idiom and its
@@ -64,9 +81,9 @@
     non_camel_case_types,
     non_upper_case_globals,
     unused_imports,
-    unused_variables,
-    unsafe_op_in_unsafe_fn
+    unused_variables
 )]
+#![deny(unsafe_op_in_unsafe_fn)]
 
 
 pub mod common;

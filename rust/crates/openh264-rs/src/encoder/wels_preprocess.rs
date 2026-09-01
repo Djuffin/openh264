@@ -749,7 +749,7 @@ pub unsafe fn WelsMoveMemory_c(
     iSrcStrideV: i32,
     iWidth: i32,
     iHeight: i32,
-) {
+) { unsafe {
     let iWidth2 = (iWidth >> 1) as usize;
     let iHeight2 = iHeight >> 1;
     let iWidthY = iWidth as usize;
@@ -768,7 +768,7 @@ pub unsafe fn WelsMoveMemory_c(
         pSrcU = pSrcU.offset(iSrcStrideU as isize);
         pSrcV = pSrcV.offset(iSrcStrideV as isize);
     }
-}
+}}
 
 /// Updates the spatial index map pointer for a dependency layer.
 #[inline]

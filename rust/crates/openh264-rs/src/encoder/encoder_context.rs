@@ -928,7 +928,7 @@ pub fn with_vpp<R>(
 #[inline]
 // unsafe-cat: fork-shared(S63)
 #[allow(unsafe_code)]
-pub unsafe fn ctx_dq_layer(pCtx: &sWelsEncCtx, kiDid: usize) -> *mut SDqLayer {
+pub unsafe fn ctx_dq_layer(pCtx: &sWelsEncCtx, kiDid: usize) -> *mut SDqLayer { unsafe {
     // **F71.** No `&mut` to the `Vec` and no reference to the slot. See the family
     // note above `ctx_func_list_raw`.
     let arr = std::ptr::addr_of!((*pCtx).ppDqLayerList);
@@ -940,7 +940,7 @@ pub unsafe fn ctx_dq_layer(pCtx: &sWelsEncCtx, kiDid: usize) -> *mut SDqLayer {
     // The value read carries the heap block's own provenance — nothing here retags
     // the layer, which is what lets two workers resolve it at once.
     std::ptr::read((*arr).as_ptr().add(kiDid) as *const *mut SDqLayer)
-}
+}}
 
 /// Dependency layer `kiDid` **as a shared reference** — [`ctx_dq_layer`]'s safe
 /// twin, on `layer_pps_ref`'s template.
