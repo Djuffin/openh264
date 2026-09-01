@@ -2408,6 +2408,21 @@ S6=R-e, S7=R-c, S8=R-i, S9=R-o, S10=R-d, S14=R-g, S16=R-f+R-p.*
   (F242): a checker whose failure mode is a green-looking zero — the tools glob from
   the crate root and print `0 scanned` from anywhere else — must have its result quoted
   *with its denominator* (`0 violations / 106 bodies`), never as a bare zero.
+- **S73 — an exemption's argument and its extent are two claims, and review checks only
+  the first** (safeplan session S12, F307 — three categories retired in three consecutive
+  checkpoints, each a sound argument attached to the wrong extent). A tagged exemption
+  asserts both "this property makes the unsafe lawful" and "this code has that property";
+  a conversion campaign keeps invalidating the second underneath the first — every safe
+  twin that takes a caller narrows some exemption's extent without touching its text.
+  The audit question is "does this code still have the property the reason names?" —
+  answerable with a caller count, a bounds check, or a callee signature, none of which
+  is judgement. Sub-case: `extern "C"` is a calling convention, not a safety claim.
+- **S74 — a muzzled lint stops being evidence: it doesn't just miss old debt, it absorbs
+  new debt at the rate you produce it** (safeplan session S12, F308 — three of the nine
+  vacuous unsafe blocks were created in the same session that finally unmuzzled
+  `unused_unsafe` in 22 files, and two re-measurements of the file never saw them).
+  Corollary: before citing "nothing lints X", check whether something does and is off —
+  F295 claimed exactly that, wrongly.
 - **S60 — run the acceptance instrument before designing against it; its current
   failure list is the scope, and an acceptance that is a whole-system property cannot
   be a family session's exit criterion** (Phase 9 session C, F132). C's brief said

@@ -8,10 +8,11 @@ battery itself surfaces.*
 
 `rust/crates/openh264-rs/` is a line-by-line Rust port of Cisco's OpenH264 that
 must stay **byte-identical** to the C++ on every harness stream. Every code
-change of the safe-conversion refactoring is complete (S12 closed the last
-four items; verify its close row and re-run the census before starting —
-expect the enumerated floor of ~30 allows, one `unsafe impl`, the ratchet
-pinned). What has **not** run is the verification that two standing rulings
+change of the safe-conversion refactoring is complete (S12 ran to fifteen
+checkpoints and closed; verify its close row and re-run the census before
+starting — expect the enumerated floor of **21 allows in exactly three
+categories** (17 `instrument(test)`, 2 `recon-seam`, 2 `C-ABI`), one
+`unsafe impl`, 70 of 86 files sealed, the ratchet pinned at 393/52/122). What has **not** run is the verification that two standing rulings
 deferred to the end:
 
 * **D-gate-9** struck the per-checkpoint Miri lane mid-S11 — **53 checkpoints
@@ -36,7 +37,13 @@ pieces it doesn't fold in:
 Full test suite, both profiles; both-profile differential sweeps (all 847
 configs, byte-compared against the C++); ABI export list; dlopen harness;
 upstream gtest against `tools/abi_harness/gtest_known_failures.txt` —
-ratcheted, no new failures.
+ratcheted, no new failures. **Plus a cross-target check this battery was
+missing**: this host is aarch64, and an x86_64-only build failure (F303) was
+caught in S12 only because someone happened to build there — the battery run
+on one architecture is structurally blind to the class. Run
+`cargo check --all-targets --target x86_64-apple-darwin` (and
+`x86_64-unknown-linux-gnu` if the target is installed; `rustup target add`
+either as needed) and quote both verdicts.
 
 ### 2 — full Miri
 
