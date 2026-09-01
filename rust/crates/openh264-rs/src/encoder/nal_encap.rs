@@ -127,6 +127,18 @@ pub struct SWelsEncoderOutput {
     pub sNalLen: Vec<i32>,
     pub iNalIndex: i32,
     pub iLayerBsIndex: i32,
+    /// **Where the current layer's NAL lengths start in [`sNalLen`](Self::sNalLen)
+    /// — S11.47, the safe half of `SLayerBSInfo::pNalLengthInByte`.**
+    ///
+    /// The ABI struct the application walks carries a `*mut i32` per layer, each
+    /// the previous layer's pointer advanced by that layer's NAL count. The
+    /// storage behind every one of them is this struct's own `sNalLen`, so the
+    /// pointer is a *derived* value and the position is the real state: tracked
+    /// here, exactly as [`iLayerBsIndex`](Self::iLayerBsIndex) tracks the layer
+    /// index the same records also carry (S11.20's move, one field over). The
+    /// encoder reads and writes lengths by index; the pointer is stamped from
+    /// this by [`nal_len_ptr`](Self::nal_len_ptr) wherever the ABI needs it.
+    pub iNalLenBase: usize,
 }
 
 impl Default for SWelsEncoderOutput {
@@ -138,6 +150,7 @@ impl Default for SWelsEncoderOutput {
             sNalLen: Vec::new(),
             iNalIndex: 0,
             iLayerBsIndex: 0,
+            iNalLenBase: 0,
         }
     }
 }
@@ -177,7 +190,42 @@ impl SWelsEncoderOutput {
             sNalLen: vec![0i32; kiCountNals],
             iNalIndex: 0,
             iLayerBsIndex: 0,
+            iNalLenBase: 0,
         })
+    }
+
+    /// The current layer's NAL-length slot **as the C-ABI pointer the application
+    /// walks** — `sNalLen`'s tail from [`iNalLenBase`](Self::iNalLenBase).
+    ///
+    /// Safe: a bounds-checked reslice, then the slice's own root. A base equal to
+    /// the array's length yields the one-past-the-end address, which is what the
+    /// raw `.add(count)` chain produced at the last layer and what the
+    /// application never dereferences (its `iNalCount` is zero there).
+    #[inline]
+    pub fn nal_len_ptr(&mut self) -> *mut i32 {
+        let kiBase = self.iNalLenBase.min(self.sNalLen.len());
+        self.sNalLen[kiBase..].as_mut_ptr()
+    }
+
+    /// The NAL length at `kiIdx` **within the current layer** — the safe form of
+    /// `*pNalLengthInByte.add(kiIdx)`.
+    #[inline]
+    pub fn nal_len_at(&self, kiIdx: usize) -> i32 {
+        self.sNalLen[self.iNalLenBase + kiIdx]
+    }
+
+    /// [`nal_len_at`](Self::nal_len_at)'s write half.
+    #[inline]
+    pub fn nal_len_at_mut(&mut self, kiIdx: usize) -> &mut i32 {
+        let kiBase = self.iNalLenBase;
+        &mut self.sNalLen[kiBase + kiIdx]
+    }
+
+    /// Advance to the next layer's slot — the safe form of the ABI chain's
+    /// `next.pNalLengthInByte = prev.pNalLengthInByte.add(iNalCount)`.
+    #[inline]
+    pub fn advance_nal_len_base(&mut self, kiCount: usize) {
+        self.iNalLenBase += kiCount;
     }
 }
 
