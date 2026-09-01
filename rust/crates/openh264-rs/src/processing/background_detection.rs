@@ -14,7 +14,7 @@
 //! the OU grid and the macroblock grid coincide for the sizes this encoder builds.
 //! The code is transcribed as written rather than specialised to that.
 
-#![deny(unsafe_code)]
+#![forbid(unsafe_code)]
 
 use crate::encoder::wels_preprocess::{SBGDInterface, SPixMap, SVAACalcResult};
 

@@ -16,7 +16,7 @@
 //! never true of the file and would have sent a straggler sweep looking for four
 //! kernels that were already here.)
 
-#![deny(unsafe_code)]
+#![forbid(unsafe_code)]
 
 use crate::encoder::wels_preprocess::{SPixMap, SVAACalcParam, SVAACalcResult};
 

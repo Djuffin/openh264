@@ -27,7 +27,7 @@
 //! promotion of `uint16_t`), and the result is stored back into a `uint16_t` field,
 //! so the truncation happens at the store.
 
-#![deny(unsafe_code)]
+#![forbid(unsafe_code)]
 
 use crate::encoder::wels_preprocess::{SAdaptiveQuantizationParam, SMotionTextureUnit, SPixMap, SVAACalcResult};
 

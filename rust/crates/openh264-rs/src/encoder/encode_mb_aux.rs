@@ -47,7 +47,7 @@
     unused_unsafe
 )]
 
-#![deny(unsafe_code)]
+#![forbid(unsafe_code)]
 
 pub use crate::encoder::wels_func_ptr_def::SWelsFuncPtrList;
 

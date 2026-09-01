@@ -117,7 +117,7 @@
 // Constants & Bit-Width Definitions
 // ============================================================================
 
-#![deny(unsafe_code)]
+#![forbid(unsafe_code)]
 
 /// Maximum Quantization Parameter (QP) defined in H.264 standard.
 pub const WELS_QP_MAX: i32 = 51;
