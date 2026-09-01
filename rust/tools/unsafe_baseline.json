@@ -1,9 +1,9 @@
 {
-  "commit": "9fca1fb9",
+  "commit": "b773879f",
   "metrics": ["unsafe_fn", "unsafe_block", "raw_ptr", "transmute", "unsafe_impl", "mem_zeroed", "no_mangle", "shim"],
   "files": {
     "api/abi_guard.rs": { "unsafe_fn": 0, "unsafe_block": 0, "raw_ptr": 0, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 0, "no_mangle": 0, "shim": 0 },
-    "api/codec_api.rs": { "unsafe_fn": 56, "unsafe_block": 87, "raw_ptr": 267, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 0, "no_mangle": 5, "shim": 0 },
+    "api/codec_api.rs": { "unsafe_fn": 50, "unsafe_block": 81, "raw_ptr": 260, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 0, "no_mangle": 5, "shim": 0 },
     "api/encoder_options.rs": { "unsafe_fn": 0, "unsafe_block": 2, "raw_ptr": 38, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 0, "no_mangle": 0, "shim": 0 },
     "api/mod.rs": { "unsafe_fn": 0, "unsafe_block": 0, "raw_ptr": 0, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 0, "no_mangle": 0, "shim": 0 },
     "api/version.rs": { "unsafe_fn": 1, "unsafe_block": 1, "raw_ptr": 1, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 0, "no_mangle": 2, "shim": 0 },
@@ -35,7 +35,7 @@
     "decoder/parameter_sets.rs": { "unsafe_fn": 0, "unsafe_block": 0, "raw_ptr": 0, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 0, "no_mangle": 0, "shim": 0 },
     "decoder/parse_mb_syn_cabac.rs": { "unsafe_fn": 0, "unsafe_block": 0, "raw_ptr": 0, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 0, "no_mangle": 0, "shim": 0 },
     "decoder/parse_mb_syn_cavlc.rs": { "unsafe_fn": 0, "unsafe_block": 0, "raw_ptr": 0, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 0, "no_mangle": 0, "shim": 0 },
-    "decoder/pic_queue.rs": { "unsafe_fn": 0, "unsafe_block": 0, "raw_ptr": 2, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 0, "no_mangle": 0, "shim": 0 },
+    "decoder/pic_queue.rs": { "unsafe_fn": 0, "unsafe_block": 0, "raw_ptr": 1, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 0, "no_mangle": 0, "shim": 0 },
     "decoder/picture.rs": { "unsafe_fn": 0, "unsafe_block": 11, "raw_ptr": 2, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 0, "no_mangle": 0, "shim": 0 },
     "decoder/slice.rs": { "unsafe_fn": 0, "unsafe_block": 0, "raw_ptr": 0, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 0, "no_mangle": 0, "shim": 0 },
     "decoder/vlc_tables.rs": { "unsafe_fn": 0, "unsafe_block": 0, "raw_ptr": 0, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 0, "no_mangle": 0, "shim": 0 },

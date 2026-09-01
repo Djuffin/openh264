@@ -307,22 +307,12 @@ impl RefSlot<'_> {
     }
 }
 
-// **T5b.9: `slot_ptr` deleted dead with `slot_at` (S18).** Its doc named three
-// consumers needing an address — `PicRefs::get`'s F42 arm, `slot_at`, and the
-// thread prefetch F36 owns. The first became an identity at T5b.1 and the third
-// went with F36's probe, so the shared form was left serving only `slot_at`, which
-// had no callers of its own. The mutable form below still has one, across the ABI.
-
-/// The pointer form of a resolved slot, spelled **once** (S7) — so that
-/// [`PicPool::slot_at_mut`], the boundary's accessor, is the only place in the
-/// decoder that writes the cast.
-#[inline]
-fn slot_ptr_mut(p: Option<&mut SPicture>) -> *mut SPicture {
-    match p {
-        Some(p) => p,
-        None => std::ptr::null_mut(),
-    }
-}
+// **T5b.9: `slot_ptr` deleted dead with `slot_at` (S18); `slot_ptr_mut` followed at
+// S12.8.** Between them these named four consumers needing an address — `PicRefs::
+// get`'s F42 arm, `slot_at`, the thread prefetch F36 owns, and `slot_at_mut`. The
+// first became an identity at T5b.1, the third went with F36's probe, and the last
+// stopped wanting a pointer when `EmitBufferedPicture` — its only caller in the
+// tree — took the decoder context by reference. There is no cast left to spell.
 
 impl PicPool {
     /// Slot count — the C's `iCapacity`.
@@ -373,19 +363,23 @@ impl PicPool {
     // `welsDecoderExt.cpp`'s release path reaches the *mutable* form below; the
     // shared one has had no caller since T5b.1.
 
-    /// The picture in slot `index`, or null if `index` is outside the pool.
+    /// The picture in slot `index`, or `None` if `index` is outside the pool.
     ///
     /// The out-of-range arm is the C's own: `welsDecoderExt.cpp`'s release path
     /// tests the index against `iCapacity` before indexing and means "no picture"
-    /// by a failed test. **Phase 8's**, with [`PPicture`]: the one consumer is
-    /// `api/codec_api.rs`, across the C ABI.
+    /// by a failed test. **S12.8 made that `None` rather than a null pointer.** The
+    /// accessor was `-> PPicture` because its one consumer, `EmitBufferedPicture` in
+    /// `api/codec_api.rs`, held the decoder context as a raw pointer and could not
+    /// have named a borrow out of it. It holds a `&mut` now, so the two arms this
+    /// already had — a resolved slot and a failed range test — are exactly `Option`,
+    /// and `slot_ptr_mut` retires with the cast.
     #[inline]
-    pub fn slot_at_mut(&mut self, index: i32) -> PPicture {
+    pub fn slot_at_mut(&mut self, index: i32) -> Option<&mut SPicture> {
         if index >= 0 && index < self.capacity() {
             let id = self.id(index as usize);
-            slot_ptr_mut(self.slot_mut(id))
+            self.slot_mut(id)
         } else {
-            std::ptr::null_mut()
+            None
         }
     }
 
