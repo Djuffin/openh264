@@ -3195,7 +3195,7 @@ unsafe extern "C" fn decoder_decode_frame_c(
     pStride: *mut i32,
     iWidth: *mut i32,
     iHeight: *mut i32,
-) -> DECODING_STATE {
+) -> DECODING_STATE { unsafe {
     abi_guard!("ISVCDecoder::DecodeFrame", unsafe { decoder_log(this) }, DECODING_STATE::dsBitstreamError, {
         let mut buf_info = SBufferInfo::default();
         let state = decoder_decode_frame2_c(this, pSrc, iSrcLen, ppDst, &mut buf_info);
@@ -3220,7 +3220,7 @@ unsafe extern "C" fn decoder_decode_frame_c(
         }
         state
     })
-}
+}}
 
 // unsafe-cat: C-ABI
 #[allow(unsafe_code)]
@@ -3262,7 +3262,7 @@ unsafe extern "C" fn decoder_decode_frame_nodelay_c(
     kiSrcLen: i32,
     ppDst: *mut *mut u8,
     pDstInfo: *mut SBufferInfo,
-) -> DECODING_STATE {
+) -> DECODING_STATE { unsafe {
     abi_guard!("ISVCDecoder::DecodeFrameNoDelay", unsafe { decoder_log(this) }, DECODING_STATE::dsBitstreamError, {
         // `iRet |=` on `DECODING_STATE`, which is a bitset of `ds*` flags — the two
         // calls' states are ORed, not replaced, so an error in either half survives.
@@ -3270,7 +3270,7 @@ unsafe extern "C" fn decoder_decode_frame_nodelay_c(
         let second = decoder_decode_frame2_c(this, ptr::null(), 0, ppDst, pDstInfo);
         DECODING_STATE(first.0 | second.0)
     })
-}
+}}
 
 
 // unsafe-cat: C-ABI
@@ -3299,13 +3299,13 @@ unsafe extern "C" fn decoder_decode_frame_nodelay_c(
 unsafe fn pool_for(
     pCtx: *mut crate::decoder::decoder_core::SWelsDecoderContext,
     bUsePool: bool,
-) -> crate::decoder::pic_queue::PPicBuff {
+) -> crate::decoder::pic_queue::PPicBuff { unsafe {
     if !bUsePool || pCtx.is_null() {
         return ptr::null_mut();
     }
     crate::decoder::decoder_context::pic_pool_ptr(&mut (*pCtx).pPicBuff)
         .map_or(ptr::null_mut(), |pool| pool)
-}
+}}
 
 // unsafe-cat: C-ABI
 #[allow(unsafe_code)]
@@ -3313,7 +3313,7 @@ unsafe fn BufferingReadyPicture(
     pCtx: *mut crate::decoder::decoder_core::SWelsDecoderContext,
     _ppDst: *mut *mut u8,
     pDstInfo: *mut SBufferInfo,
-) {
+) { unsafe {
     if (*pDstInfo).iBufferStatus == 0 {
         return;
     }
@@ -3368,7 +3368,7 @@ unsafe fn BufferingReadyPicture(
             break;
         }
     }
-}
+}}
 
 // unsafe-cat: C-ABI
 #[allow(unsafe_code)]
@@ -3380,7 +3380,7 @@ unsafe fn EmitBufferedPicture(
     pPicBuff: *mut crate::decoder::pic_queue::SPicBuff,
     ppDst: *mut *mut u8,
     pDstInfo: *mut SBufferInfo,
-) {
+) { unsafe {
     let idx = (*pCtx).pPictReoderingStatus.iPictInfoIndex as usize;
     *pDstInfo = (*pCtx).pPictInfoList[idx].sBufferInfo;
     *ppDst.add(0) = (*pDstInfo).pDst[0];
@@ -3411,7 +3411,7 @@ unsafe fn EmitBufferedPicture(
         }
     }
     (*pCtx).pPictReoderingStatus.iNumOfPicts -= 1;
-}
+}}
 
 // unsafe-cat: C-ABI
 #[allow(unsafe_code)]
@@ -3439,7 +3439,7 @@ unsafe fn ReleaseBufferedReadyPictureNoReorder(
     bUsePool: bool,
     ppDst: *mut *mut u8,
     pDstInfo: *mut SBufferInfo,
-) {
+) { unsafe {
     let mut firstValidIdx: i32 = -1;
     let mut uiDecodingTimeStamp: u32 = 0;
     let mut iChosenPOC: i32 = 0;
@@ -3476,7 +3476,7 @@ unsafe fn ReleaseBufferedReadyPictureNoReorder(
         let pPicBuff = pool_for(pCtx, bUsePool);
         EmitBufferedPicture(pCtx, pPicBuff, ppDst, pDstInfo);
     }
-}
+}}
 
 // unsafe-cat: C-ABI
 #[allow(unsafe_code)]
@@ -3491,7 +3491,7 @@ unsafe fn ReleaseBufferedReadyPictureReorder(
     ppDst: *mut *mut u8,
     pDstInfo: *mut SBufferInfo,
     isFlush: bool,
-) {
+) { unsafe {
     let IMinInt32 = crate::decoder::decoder_context::IMinInt32;
     // `PPicBuff pPicBuff = pCtx ? pCtx->pPicBuff : m_pPicBuff;` (`:1128`), which in
     // the C++ is evaluated *before* `if (!pCtx) pCtx = m_pDecContext;` restores the
@@ -3560,7 +3560,7 @@ unsafe fn ReleaseBufferedReadyPictureReorder(
             (*pCtx).pPictReoderingStatus.iMinPOC = IMinInt32;
         }
     }
-}
+}}
 
 // unsafe-cat: C-ABI
 #[allow(unsafe_code)]
@@ -3572,7 +3572,7 @@ unsafe fn ReorderPicturesInDisplay(
     pCtx: *mut crate::decoder::decoder_core::SWelsDecoderContext,
     ppDst: *mut *mut u8,
     pDstInfo: *mut SBufferInfo,
-) {
+) { unsafe {
     // **The null test moves ahead of the lookup** (T5.Z1). It used to sit after it,
     // and only the accessor's own internal `pCtx.is_null()` arm made that safe; with
     // the parameter-set field taken by reference the guard has to precede the call,
@@ -3616,7 +3616,7 @@ unsafe fn ReorderPicturesInDisplay(
     } else {
         ReleaseBufferedReadyPictureReorder(pCtx, true, ppDst, pDstInfo, false);
     }
-}
+}}
 
 // unsafe-cat: C-ABI
 #[allow(unsafe_code)]
@@ -3981,7 +3981,7 @@ unsafe extern "C" fn decoder_get_opt_c(this: *mut ISVCDecoder, eOptionId: DECODE
 // unsafe-cat: C-ABI
 #[allow(unsafe_code)]
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn WelsCreateSVCEncoder(ppEncoder: *mut *mut ISVCEncoder) -> i32 {
+pub unsafe extern "C" fn WelsCreateSVCEncoder(ppEncoder: *mut *mut ISVCEncoder) -> i32 { unsafe {
     abi_guard!("WelsCreateSVCEncoder", None, CM_MALLOC_MEM_ERROR, {
         if ppEncoder.is_null() {
             return CM_INIT_PARA_ERROR;
@@ -4006,7 +4006,7 @@ pub unsafe extern "C" fn WelsCreateSVCEncoder(ppEncoder: *mut *mut ISVCEncoder) 
         *ppEncoder = Box::into_raw(enc) as *mut ISVCEncoder;
         CM_RESULT_SUCCESS
     })
-}
+}}
 
 // unsafe-cat: C-ABI
 #[allow(unsafe_code)]
@@ -4093,7 +4093,7 @@ unsafe extern "C" fn decoder_decode_parser_c(this: *mut ISVCDecoder, pSrc: *cons
 // unsafe-cat: C-ABI
 #[allow(unsafe_code)]
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn WelsCreateDecoder(ppDecoder: *mut *mut ISVCDecoder) -> c_long {
+pub unsafe extern "C" fn WelsCreateDecoder(ppDecoder: *mut *mut ISVCDecoder) -> c_long { unsafe {
     abi_guard!("WelsCreateDecoder", None, CM_MALLOC_MEM_ERROR as c_long, {
         if ppDecoder.is_null() {
             return CM_INIT_PARA_ERROR as c_long;
@@ -4140,7 +4140,7 @@ pub unsafe extern "C" fn WelsCreateDecoder(ppDecoder: *mut *mut ISVCDecoder) -> 
         *ppDecoder = dec as *mut ISVCDecoder;
         CM_RESULT_SUCCESS as c_long
     })
-}
+}}
 
 // unsafe-cat: C-ABI
 #[allow(unsafe_code)]
