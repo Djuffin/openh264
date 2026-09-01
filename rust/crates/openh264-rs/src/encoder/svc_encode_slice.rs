@@ -4374,7 +4374,8 @@ pub fn FrameBsRealloc(
     // (`WelsMallocz` zeroed it too).
     let pOut = pCtx.pOut.as_deref_mut().expect("pOut lives");
     pOut.sNalList.resize(iCountNals as usize, SWelsNalRaw::default());
-    pOut.sNalLen.resize(iCountNals as usize, 0);
+    pOut.sNalLen
+        .resize_with(iCountNals as usize, || std::sync::atomic::AtomicI32::new(0));
 
     // **F60**, and the C++'s closing loop is the fix (`svc_encode_slice.cpp:1589`).
     // The resize moves `sNalLen`, so every `sLayerInfo[..].pNalLengthInByte` handed

@@ -547,8 +547,10 @@ pub fn WelsWriteParameterSets(
 
         WelsWriteOneSPS(pCtx, iId, &mut iNalLength);
 
-        *pCtx.pOut.as_deref_mut().expect("pOut lives").nal_len_at_mut(iCountNal as usize) =
-            iNalLength;
+        pCtx.pOut
+            .as_deref()
+            .expect("pOut lives")
+            .set_nal_len_at(iCountNal as usize, iNalLength);
         iSize += iNalLength;
 
         iIdx += 1;
@@ -607,8 +609,10 @@ pub fn WelsWriteParameterSets(
         if iReturn != ENC_RETURN_SUCCESS {
             return iReturn;
         }
-        *pCtx.pOut.as_deref_mut().expect("pOut lives").nal_len_at_mut(iCountNal as usize) =
-            iNalLength;
+        pCtx.pOut
+            .as_deref()
+            .expect("pOut lives")
+            .set_nal_len_at(iCountNal as usize, iNalLength);
 
         pCtx.iPosBsBuffer += iNalLength;
         iSize += iNalLength;
@@ -633,8 +637,10 @@ pub fn WelsWriteParameterSets(
 
         WelsWriteOnePPS(pCtx, iIdx, &mut iNalLength);
 
-        *pCtx.pOut.as_deref_mut().expect("pOut lives").nal_len_at_mut(iCountNal as usize) =
-            iNalLength;
+        pCtx.pOut
+            .as_deref()
+            .expect("pOut lives")
+            .set_nal_len_at(iCountNal as usize, iNalLength);
         iSize += iNalLength;
 
         iIdx += 1;
@@ -2389,7 +2395,7 @@ uiResolutionChangeTimes={}, uIDRReqNum={}, uIDRSentNum={}, uLTRSentNum=NA, iTota
             // below *is* the pointer chain, in the units the storage is made
             // of, and this walk visits the layers in the order that chain was
             // built. `is_null` becomes the range check the slice performs.
-            let kpNalLen: &[i32] = match self.m_pEncContext.as_deref() {
+            let kpNalLen: &[std::sync::atomic::AtomicI32] = match self.m_pEncContext.as_deref() {
                 Some(ctx) => match ctx.pOut.as_deref() {
                     Some(pOut) => &pOut.sNalLen,
                     None => &[],
@@ -2405,8 +2411,10 @@ uiResolutionChangeTimes={}, uIDRReqNum={}, uIDRSentNum={}, uLTRSentNum=NA, iTota
                 {
                     eFrameType = pBsInfo.eFrameType;
                     if kiBase + kiCount <= kpNalLen.len() {
-                        kiCurrentFrameSize +=
-                            kpNalLen[kiBase..][..kiCount].iter().sum::<i32>();
+                        kiCurrentFrameSize += kpNalLen[kiBase..][..kiCount]
+                            .iter()
+                            .map(|a| a.load(std::sync::atomic::Ordering::Relaxed))
+                            .sum::<i32>();
                     }
                 }
                 kiBase += kiCount;

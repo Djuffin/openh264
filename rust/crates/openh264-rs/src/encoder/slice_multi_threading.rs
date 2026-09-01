@@ -874,7 +874,8 @@ pub fn AppendSliceToFrameBs(
                 while iNalIdx < iCountNal {
                     let kiSlot = *iNalLenBase + (iNalIdxBase + iNalIdx).max(0) as usize;
                     if kiSlot < sNalLen.len() {
-                        sNalLen[kiSlot] = pSliceBs.iNalLen[iNalIdx as usize];
+                        sNalLen[kiSlot]
+                            .store(pSliceBs.iNalLen[iNalIdx as usize], std::sync::atomic::Ordering::Relaxed);
                     }
                     iNalIdx += 1;
                 }
