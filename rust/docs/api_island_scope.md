@@ -2,8 +2,55 @@
 
 *Scoping report, S12 (2026-08-31). Written in answer to one question the plan never
 asks: **which of the port's remaining `unsafe` and raw pointers are about the
-external C API?** Every number here was re-run against the tree at S12.6; the
+external C API?** Every number below was measured against the tree at S12.6; the
 commands are given so they can be re-run.*
+
+> ## STATUS: **DONE**, S12.7–S12.11 (2026-08-31)
+>
+> The user directed this be executed immediately rather than after S13, overriding
+> §6's recommendation. It landed in **five** gated checkpoints, not six — A.2 and
+> A.3 merged, for a reason §5 had not seen (below). Every `family` gate PASSed;
+> `abi_sizes.sh --check` stayed current at 170 lines and `abi_exports.sh` at 7/7
+> throughout, which is the constraint on any work inside this file.
+>
+> | | estimate | actual |
+> |---|---|---|
+> | checkpoints | 6 | **5** |
+> | crate `unsafe_fn` | 59 → 53 | **59 → 53** ✔ exact |
+> | `codec_api.rs` `unsafe fn` | 56 → 50 | **56 → 50** ✔ exact |
+> | `codec_api.rs` allows | 44 → 40 | **44 → 39** — one better |
+> | crate `unsafe_block` | — | 147 → **138** |
+> | crate `raw_ptr` | — | 418 → **399** |
+>
+> **Three things the estimate got wrong, all in the useful direction.**
+>
+> *A.2 and A.3 could not be separated.* `pool_for` returning `Option<&mut SPicBuff>`
+> needs the context to be a reference for its lifetime, and once it is, the *caller*
+> would hold two `&mut` of one object — the pool borrow and the context it came
+> from. Resolving the pool inside `EmitBufferedPicture` and passing `bUsePool` down
+> fixes both at once, and is behaviour-identical (checked: nothing between the old
+> resolution point and the call writes `pCtx.pPicBuff`).
+>
+> *A.4's blocker was not one.* `self.initialize(&sPrevParam)` compiled unchanged.
+> NLL ends a borrow at its last use **per path**, and on the branch that calls
+> `initialize` the next two statements return. §5 predicted the conflict from the
+> borrow *set*; liveness is what decides it. The checkpoint that was flagged
+> "take it alone, do not batch" was the cheapest of the five.
+>
+> *Three deletions the scoping did not anticipate*: `ctx_ptr` (S42's decoder-side
+> root, dead with its last caller), `PicPool::slot_at_mut`'s pointer return, and
+> `slot_ptr_mut` beneath it — the last two outside the island entirely.
+>
+> **A.6 landed as specified and is the part that outlasts the rest**: the census
+> now exempts the *ABI surface* (`extern "C"` items) rather than the *directory*,
+> pinning **27** `island-nonextern(...)` rows that were invisible before. Most are
+> the nineteen vtable dispatch helpers, which are irreducibly boundary and stay —
+> pinning them is the difference between an exception argued and one inherited.
+> The tracking number is unchanged at **29**, so the series stays comparable.
+>
+> What §5 called the end state holds: `codec_api.rs` now carries only ABI-shaped
+> unsafe — the `extern "C"` thunks, the vtable dispatches, and the deliberate C-ABI
+> test drivers.
 
 ---
 
