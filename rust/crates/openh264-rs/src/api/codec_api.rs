@@ -2876,141 +2876,143 @@ impl Decoder {
         src: Option<&[u8]>,
         pDstInfo: &mut SParserBsInfo,
     ) -> DECODING_STATE {
-        let p_ctx = Self::ctx_ptr(&mut self.ctx);
-        if p_ctx.is_null() {
+        // **S12.10**, as [`Self::decode`]: `as_deref_mut` is `ctx_ptr` with the null
+        // arm as its `else`. The three `self.trace.m_sLogCtx` reads below coexist
+        // with the context borrow by construction — `trace` and `ctx` are sibling
+        // fields and the borrow names one of them, which is the field-scoped
+        // spelling this port has used since F282.
+        let Some(p_ctx) = self.ctx.as_deref_mut() else {
             crate::common::wels_trace::WelsLog(
                 self.trace.m_sLogCtx,
                 crate::common::wels_trace::WELS_LOG_ERROR,
                 "Call DecodeParser without Initialize.",
             );
             return DECODING_STATE::dsInitialOptExpected;
-        }
-        unsafe {
-            // `:1189-1193` — the mode check. This is the S48 shape the reference
-            // already has: an entry point that refuses rather than half-works.
-            if !(*p_ctx).pParam.bParseOnly {
-                crate::common::wels_trace::WelsLog(
-                    self.trace.m_sLogCtx,
-                    crate::common::wels_trace::WELS_LOG_ERROR,
-                    "bParseOnly should be true for this API calling! \n",
-                );
-                (*p_ctx).iErrorCode |= DECODING_STATE::dsInvalidArgument.0;
-                return DECODING_STATE::dsInvalidArgument;
-            }
-            let dec_started = std::time::Instant::now();
-
-            if src.is_some() {
-                (*p_ctx).bEndOfStreamFlag = false;
-            } else {
-                // "for CONSOLE MODE, when decoding LAST AU, kiSrcLen==0 && kpSrc==NULL"
-                (*p_ctx).bEndOfStreamFlag = true;
-                (*p_ctx).bInstantDecFlag = true;
-            }
-
-            (*p_ctx).iErrorCode = DECODING_STATE::dsErrorFree.0;
-            // "add protection to disable EC here" (`:1216`).
-            (*p_ctx).pParam.eEcActiveIdc = ERROR_CON_IDC::ERROR_CON_DISABLE;
-            (*p_ctx).iFeedbackNalRefIdc = -1;
-            if !(*p_ctx).bFramePending {
-                // `:1219-1220`. **The reference's `memset` counts bytes where the
-                // array is `int32_t`** — `memset (pNalLenInByte, 0,
-                // MAX_NAL_UNITS_IN_LAYER)` clears the first 32 of 130 elements, the
-                // elem/byte confusion `find_elem_byte_confusion.py` looks for. It is
-                // unobservable in either tree: every slot is written by
-                // `pNalLenInByte[iNalNum++] = …` before anything reads it, and the one
-                // reader sums `0..iNalNum`. Cleared whole here. See F90.
-                if let Some(p) = crate::decoder::decoder_context::parser_bs(
-                    &mut (*p_ctx).pParserBsInfo,
-                ) {
-                    p.iNalNum = 0;
-                    p.pNalLenInByte.fill(0);
-                }
-            }
-            pDstInfo.iNalNum = 0;
-            pDstInfo.iSpsWidthInPixel = 0;
-            pDstInfo.iSpsHeightInPixel = 0;
-            (*p_ctx).uiTimeStamp = pDstInfo.uiInBsTimeStamp;
-            pDstInfo.uiOutBsTimeStamp = 0;
-
-            // `WelsDecodeBs (pDecContext, kpSrc, kiSrcLen, NULL, NULL, pDstInfo)`
-            // (`:1230`). The two nulls are the picture-output parameters, which
-            // parse-only never reaches: `DecodeFrameConstruction` returns out of its
-            // `bParseOnly` arm before the reconstruction path touches either. They are
-            // locals here rather than nulls, so the port cannot fault where the
-            // reference would; nothing reads them back.
-            let mut ppDstUnused: [*mut u8; 3] = [ptr::null_mut(); 3];
-            let mut sDstInfoUnused = SBufferInfo::default();
-            let (bs, len): (&[u8], i32) = match src {
-                Some(s) => (s, s.len() as i32),
-                None => (&[], 0),
-            };
-            crate::decoder::decoder_core::WelsDecodeBs(
-                &mut *p_ctx,
-                bs,
-                len,
-                &mut ppDstUnused,
-                &mut sDstInfoUnused,
-                ptr::null_mut(),
+        };
+        // `:1189-1193` — the mode check. This is the S48 shape the reference
+        // already has: an entry point that refuses rather than half-works.
+        if !(*p_ctx).pParam.bParseOnly {
+            crate::common::wels_trace::WelsLog(
+                self.trace.m_sLogCtx,
+                crate::common::wels_trace::WELS_LOG_ERROR,
+                "bParseOnly should be true for this API calling! \n",
             );
+            (*p_ctx).iErrorCode |= DECODING_STATE::dsInvalidArgument.0;
+            return DECODING_STATE::dsInvalidArgument;
+        }
+        let dec_started = std::time::Instant::now();
 
-            // `:1231-1236` — out of memory rebuilds the decoder and reports success,
-            // because the rebuild is the recovery. `ResetDecoder` is `initialize` over
-            // the saved parameter block, as in `decode`'s error-reporting block.
-            if (*p_ctx).iErrorCode & crate::decoder::decoder_core::dsOutOfMemory != 0 {
-                let sPrevParam = (*p_ctx).pParam;
-                let _ = self.initialize(&sPrevParam);
-                return DECODING_STATE::dsOutOfMemory;
+        if src.is_some() {
+            (*p_ctx).bEndOfStreamFlag = false;
+        } else {
+            // "for CONSOLE MODE, when decoding LAST AU, kiSrcLen==0 && kpSrc==NULL"
+            (*p_ctx).bEndOfStreamFlag = true;
+            (*p_ctx).bInstantDecFlag = true;
+        }
+
+        (*p_ctx).iErrorCode = DECODING_STATE::dsErrorFree.0;
+        // "add protection to disable EC here" (`:1216`).
+        (*p_ctx).pParam.eEcActiveIdc = ERROR_CON_IDC::ERROR_CON_DISABLE;
+        (*p_ctx).iFeedbackNalRefIdc = -1;
+        if !(*p_ctx).bFramePending {
+            // `:1219-1220`. **The reference's `memset` counts bytes where the
+            // array is `int32_t`** — `memset (pNalLenInByte, 0,
+            // MAX_NAL_UNITS_IN_LAYER)` clears the first 32 of 130 elements, the
+            // elem/byte confusion `find_elem_byte_confusion.py` looks for. It is
+            // unobservable in either tree: every slot is written by
+            // `pNalLenInByte[iNalNum++] = …` before anything reads it, and the one
+            // reader sums `0..iNalNum`. Cleared whole here. See F90.
+            if let Some(p) = crate::decoder::decoder_context::parser_bs(
+                &mut (*p_ctx).pParserBsInfo,
+            ) {
+                p.iNalNum = 0;
+                p.pNalLenInByte.fill(0);
             }
+        }
+        pDstInfo.iNalNum = 0;
+        pDstInfo.iSpsWidthInPixel = 0;
+        pDstInfo.iSpsHeightInPixel = 0;
+        (*p_ctx).uiTimeStamp = pDstInfo.uiInBsTimeStamp;
+        pDstInfo.uiOutBsTimeStamp = 0;
 
-            // `:1238-1249` — the copy-out. Upstream this is one `memcpy` because the
-            // decoder-side descriptor and the boundary struct are the same C type;
-            // here they are two (T8.C7), so it is field by field and the two raw
-            // pointers are minted from the `Vec`s that own the bytes.
-            let bFrameDone = !(*p_ctx).bFramePending;
-            if bFrameDone {
-                let filled = match crate::decoder::decoder_context::parser_bs(
-                    &mut (*p_ctx).pParserBsInfo,
-                ) {
-                    Some(p) if p.iNalNum != 0 => {
-                        pDstInfo.iNalNum = p.iNalNum;
-                        pDstInfo.pNalLenInByte = p.pNalLenInByte.as_mut_ptr();
-                        pDstInfo.pDstBuff = p.pDstBuff.as_mut_ptr();
-                        pDstInfo.iSpsWidthInPixel = p.iSpsWidthInPixel;
-                        pDstInfo.iSpsHeightInPixel = p.iSpsHeightInPixel;
-                        // The reference's `memcpy` copies **both** timestamps, and
-                        // nothing anywhere writes the decoder-side `uiInBsTimeStamp` —
-                        // so the caller's input timestamp is overwritten with zero on
-                        // every completed frame. Reproduced rather than repaired: it
-                        // is observable behaviour on a documented out-parameter. F90.
-                        pDstInfo.uiInBsTimeStamp = p.uiInBsTimeStamp;
-                        pDstInfo.uiOutBsTimeStamp = p.uiOutBsTimeStamp;
-                        true
-                    }
-                    _ => false,
-                };
-                if filled && (*p_ctx).iErrorCode == crate::decoder::decoder_core::ERR_NONE {
-                    let stat = &mut (*p_ctx).pDecoderStatistics;
+        // `WelsDecodeBs (pDecContext, kpSrc, kiSrcLen, NULL, NULL, pDstInfo)`
+        // (`:1230`). The two nulls are the picture-output parameters, which
+        // parse-only never reaches: `DecodeFrameConstruction` returns out of its
+        // `bParseOnly` arm before the reconstruction path touches either. They are
+        // locals here rather than nulls, so the port cannot fault where the
+        // reference would; nothing reads them back.
+        let mut ppDstUnused: [*mut u8; 3] = [ptr::null_mut(); 3];
+        let mut sDstInfoUnused = SBufferInfo::default();
+        let (bs, len): (&[u8], i32) = match src {
+            Some(s) => (s, s.len() as i32),
+            None => (&[], 0),
+        };
+        crate::decoder::decoder_core::WelsDecodeBs(
+            &mut *p_ctx,
+            bs,
+            len,
+            &mut ppDstUnused,
+            &mut sDstInfoUnused,
+            ptr::null_mut(),
+        );
+
+        // `:1231-1236` — out of memory rebuilds the decoder and reports success,
+        // because the rebuild is the recovery. `ResetDecoder` is `initialize` over
+        // the saved parameter block, as in `decode`'s error-reporting block.
+        if (*p_ctx).iErrorCode & crate::decoder::decoder_core::dsOutOfMemory != 0 {
+            let sPrevParam = (*p_ctx).pParam;
+            let _ = self.initialize(&sPrevParam);
+            return DECODING_STATE::dsOutOfMemory;
+        }
+
+        // `:1238-1249` — the copy-out. Upstream this is one `memcpy` because the
+        // decoder-side descriptor and the boundary struct are the same C type;
+        // here they are two (T8.C7), so it is field by field and the two raw
+        // pointers are minted from the `Vec`s that own the bytes.
+        let bFrameDone = !(*p_ctx).bFramePending;
+        if bFrameDone {
+            let filled = match crate::decoder::decoder_context::parser_bs(
+                &mut (*p_ctx).pParserBsInfo,
+            ) {
+                Some(p) if p.iNalNum != 0 => {
+                    pDstInfo.iNalNum = p.iNalNum;
+                    pDstInfo.pNalLenInByte = p.pNalLenInByte.as_mut_ptr();
+                    pDstInfo.pDstBuff = p.pDstBuff.as_mut_ptr();
+                    pDstInfo.iSpsWidthInPixel = p.iSpsWidthInPixel;
+                    pDstInfo.iSpsHeightInPixel = p.iSpsHeightInPixel;
+                    // The reference's `memcpy` copies **both** timestamps, and
+                    // nothing anywhere writes the decoder-side `uiInBsTimeStamp` —
+                    // so the caller's input timestamp is overwritten with zero on
+                    // every completed frame. Reproduced rather than repaired: it
+                    // is observable behaviour on a documented out-parameter. F90.
+                    pDstInfo.uiInBsTimeStamp = p.uiInBsTimeStamp;
+                    pDstInfo.uiOutBsTimeStamp = p.uiOutBsTimeStamp;
+                    true
+                }
+                _ => false,
+            };
+            if filled && (*p_ctx).iErrorCode == crate::decoder::decoder_core::ERR_NONE {
+                let stat = &mut (*p_ctx).pDecoderStatistics;
+                stat.uiDecodedFrameCount = stat.uiDecodedFrameCount.wrapping_add(1);
+                if stat.uiDecodedFrameCount == 0 {
+                    crate::decoder::decoder_core::ResetDecStatNums(stat);
                     stat.uiDecodedFrameCount = stat.uiDecodedFrameCount.wrapping_add(1);
-                    if stat.uiDecodedFrameCount == 0 {
-                        crate::decoder::decoder_core::ResetDecStatNums(stat);
-                        stat.uiDecodedFrameCount = stat.uiDecodedFrameCount.wrapping_add(1);
-                    }
                 }
             }
-
-            (*p_ctx).bInstantDecFlag = false; // reset no-delay flag
-
-            if (*p_ctx).iErrorCode != 0 && (*p_ctx).bPrintFrameErrorTraceFlag {
-                crate::common::wels_trace::WelsLog(
-                    self.trace.m_sLogCtx,
-                    crate::common::wels_trace::WELS_LOG_INFO,
-                    &format!("decode failed, failure type:{} \n", (*p_ctx).iErrorCode),
-                );
-                (*p_ctx).bPrintFrameErrorTraceFlag = false;
-            }
-            (*p_ctx).dDecTime += dec_started.elapsed().as_secs_f64() * 1e3;
-            DECODING_STATE((*p_ctx).iErrorCode)
         }
+
+        (*p_ctx).bInstantDecFlag = false; // reset no-delay flag
+
+        if (*p_ctx).iErrorCode != 0 && (*p_ctx).bPrintFrameErrorTraceFlag {
+            crate::common::wels_trace::WelsLog(
+                self.trace.m_sLogCtx,
+                crate::common::wels_trace::WELS_LOG_INFO,
+                &format!("decode failed, failure type:{} \n", (*p_ctx).iErrorCode),
+            );
+            (*p_ctx).bPrintFrameErrorTraceFlag = false;
+        }
+        (*p_ctx).dDecTime += dec_started.elapsed().as_secs_f64() * 1e3;
+        DECODING_STATE((*p_ctx).iErrorCode)
     }
 
     /// `CWelsDecoder::FlushFrame` — `welsDecoderExt.cpp:1094`: drains the display
@@ -3028,20 +3030,17 @@ impl Decoder {
         // copies here and finds `iNumOfPicts == 0` for the same two reasons: the
         // constructor full-resets them (`welsDecoderExt.cpp:169`) and
         // `DestroyPicBuff` resets them on the way out (F37).
-        let p_ctx = Self::ctx_ptr(&mut self.ctx);
-        if p_ctx.is_null() {
+        let Some(p_ctx) = self.ctx.as_deref_mut() else {
             return DECODING_STATE::dsErrorFree;
-        }
-        unsafe {
-            if (*p_ctx).bEndOfStreamFlag && (*p_ctx).pPictReoderingStatus.iNumOfPicts > 0 {
-                // `false` is the C's `NULL` context argument
-                // (`welsDecoderExt.cpp:1103`): drain the slot list without touching
-                // the live pool. See `pool_for`.
-                if !(*p_ctx).pPictReoderingStatus.bHasBSlice {
-                    ReleaseBufferedReadyPictureNoReorder(&mut *p_ctx, false, ppDst, pDstInfo);
-                } else {
-                    ReleaseBufferedReadyPictureReorder(&mut *p_ctx, false, ppDst, pDstInfo, true);
-                }
+        };
+        if (*p_ctx).bEndOfStreamFlag && (*p_ctx).pPictReoderingStatus.iNumOfPicts > 0 {
+            // `false` is the C's `NULL` context argument
+            // (`welsDecoderExt.cpp:1103`): drain the slot list without touching
+            // the live pool. See `pool_for`.
+            if !(*p_ctx).pPictReoderingStatus.bHasBSlice {
+                ReleaseBufferedReadyPictureNoReorder(&mut *p_ctx, false, ppDst, pDstInfo);
+            } else {
+                ReleaseBufferedReadyPictureReorder(&mut *p_ctx, false, ppDst, pDstInfo, true);
             }
         }
         DECODING_STATE::dsErrorFree
@@ -3055,25 +3054,13 @@ impl Decoder {
     }
 }
 
-impl Decoder {
-    /// **S42's root on the decoder side** — the one expression that turns the
-    /// boundary object's ownership back into the `*mut SWelsDecoderContext` the
-    /// decoder's own helpers still take. Derived from the `Box` for the duration of
-    /// one call and never stored; the slot rather than `&mut self`, so that a
-    /// derivation here does not retag the trace object next door.
-    ///
-    /// Null exactly when the decoder is not initialised, which is what
-    /// `pCtx == NULL` meant.
-    #[inline]
-    fn ctx_ptr(
-        slot: &mut Option<Box<crate::decoder::decoder_core::SWelsDecoderContext>>,
-    ) -> *mut crate::decoder::decoder_core::SWelsDecoderContext {
-        match slot {
-            Some(pCtx) => ptr::addr_of_mut!(**pCtx),
-            None => ptr::null_mut(),
-        }
-    }
-}
+// **S42's `ctx_ptr` stood here; S12.10 deleted it dead.** It was the one expression
+// that turned the boundary object's ownership back into the
+// `*mut SWelsDecoderContext` the decoder's own helpers took — derived from the
+// `Box` for one call, never stored, null exactly when the decoder was not
+// initialised. Its three callers were `decode`, `decode_parser` and `flush`, and
+// all three now take `self.ctx.as_deref_mut()`, whose `None` *is* that null. The
+// helpers it fed take `&mut SWelsDecoderContext` since S12.8.
 
 // ===========================================================================
 // The decoder's ten vtable slots. See the encoder block above for what a `# Safety`
