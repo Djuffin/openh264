@@ -214,14 +214,16 @@ assert_size!(SMcFunc, 48);
 // and deleted the triple — back to 176, exactly as this pin promised.**
 assert_size!(SSampleDealingFunc, 176);
 assert_size!(SRCSlicing, 44);
-// **160 in the C++, and 184 is the port's own number since T6.H1** — the same
-// move `SPicture` made at T6.F0. The struct held sixteen raw pointers into one
-// block it did not own; it now owns the block (`Vec<i32>`, 24 bytes) and the
-// sixteen pointers are `Option<u32>` byte offsets into it (8 each where a pointer
-// was 8). The pin stays because what it catches is unchanged — a field added,
-// dropped, or given the wrong width, and a second declaration read at the wrong
-// offsets — it just no longer claims correspondence with a C++ `sizeof`.
-assert_size!(SStrideTables, 184);
+// **160 in the C++, and 208 is the port's own number since S11.46.** The struct
+// held sixteen raw pointers into one block it did not own; T6.H1 gave it the
+// block (`Vec<i32>`, 24 bytes) with the pointers as `Option<u32>` offsets (184),
+// and S11.46 split that byte arena into two typed stores — `Vec<[i32; 24]>` and
+// `Vec<i16>`, 24 bytes each — so the offsets became indices and the last raw
+// cursor in the family went with them (+24). The pin stays because what it
+// catches is unchanged — a field added, dropped, or given the wrong width, and a
+// second declaration read at the wrong offsets — it just no longer claims
+// correspondence with a C++ `sizeof`.
+assert_size!(SStrideTables, 208);
 // **96 -> 64 at session F**: the three per-block plane cursors (`pEncMb`/
 // `pRefMb`/`pColoRefMb`) left the search block — the coordinates already in
 // the struct carry the same information (the verified identity), and the
