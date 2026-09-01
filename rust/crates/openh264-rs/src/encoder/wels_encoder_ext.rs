@@ -1970,8 +1970,6 @@ impl CWelsH264SVCEncoder {
         self.InitializeInternal(&mut sConfig)
     }
 
-    // unsafe-cat: port-raw(Phase 9)
-    #[allow(unsafe_code)]
     // **S11.13: the parameter is a reference.** Both callers pass `&mut sConfig`,
     // a local they just built — the raw was the C signature's shape and nothing
     // more, and the null guard it required is inexpressible on a reference
@@ -1982,109 +1980,105 @@ impl CWelsH264SVCEncoder {
             self.Uninitialize();
         }
 
-        unsafe {
-            let iNumOfLayers = pCfg.iSpatialLayerNum;
-            if iNumOfLayers < 1 || iNumOfLayers > MAX_DEPENDENCY_LAYER {
-                self.Uninitialize();
-                return cmInitParaError;
-            }
-            if pCfg.iTemporalLayerNum < 1 {
-                pCfg.iTemporalLayerNum = 1;
-            }
-            if pCfg.iTemporalLayerNum > MAX_TEMPORAL_LEVEL {
-                self.Uninitialize();
-                return cmInitParaError;
-            }
+        let iNumOfLayers = pCfg.iSpatialLayerNum;
+        if iNumOfLayers < 1 || iNumOfLayers > MAX_DEPENDENCY_LAYER {
+            self.Uninitialize();
+            return cmInitParaError;
+        }
+        if pCfg.iTemporalLayerNum < 1 {
+            pCfg.iTemporalLayerNum = 1;
+        }
+        if pCfg.iTemporalLayerNum > MAX_TEMPORAL_LEVEL {
+            self.Uninitialize();
+            return cmInitParaError;
+        }
 
-            if pCfg.uiGopSize < 1 || pCfg.uiGopSize > MAX_GOP_SIZE {
-                self.Uninitialize();
-                return cmInitParaError;
-            }
+        if pCfg.uiGopSize < 1 || pCfg.uiGopSize > MAX_GOP_SIZE {
+            self.Uninitialize();
+            return cmInitParaError;
+        }
 
-            if !WELS_POWER2_IF(pCfg.uiGopSize) {
-                self.Uninitialize();
-                return cmInitParaError;
-            }
+        if !WELS_POWER2_IF(pCfg.uiGopSize) {
+            self.Uninitialize();
+            return cmInitParaError;
+        }
 
-            if pCfg.uiIntraPeriod != 0 && pCfg.uiIntraPeriod < pCfg.uiGopSize {
-                self.Uninitialize();
-                return cmInitParaError;
-            }
+        if pCfg.uiIntraPeriod != 0 && pCfg.uiIntraPeriod < pCfg.uiGopSize {
+            self.Uninitialize();
+            return cmInitParaError;
+        }
 
-            if pCfg.uiIntraPeriod != 0 && (pCfg.uiIntraPeriod & (pCfg.uiGopSize - 1)) != 0
-            {
-                self.Uninitialize();
-                return cmInitParaError;
-            }
+        if pCfg.uiIntraPeriod != 0 && (pCfg.uiIntraPeriod & (pCfg.uiGopSize - 1)) != 0
+        {
+            self.Uninitialize();
+            return cmInitParaError;
+        }
 
-            if pCfg.iUsageType == EUsageType::SCREEN_CONTENT_REAL_TIME {
-                if pCfg.bEnableLongTermReference {
-                    pCfg.iLTRRefNum = LONG_TERM_REF_NUM_SCREEN;
-                    if pCfg.iNumRefFrame == AUTO_REF_PIC_COUNT {
-                        pCfg.iNumRefFrame =
-                            WELS_MAX(1, WELS_LOG2(pCfg.uiGopSize)) + pCfg.iLTRRefNum;
-                    }
-                } else {
-                    pCfg.iLTRRefNum = 0;
-                    if pCfg.iNumRefFrame == AUTO_REF_PIC_COUNT {
-                        pCfg.iNumRefFrame = WELS_MAX(1, (pCfg.uiGopSize >> 1) as i32);
-                    }
+        if pCfg.iUsageType == EUsageType::SCREEN_CONTENT_REAL_TIME {
+            if pCfg.bEnableLongTermReference {
+                pCfg.iLTRRefNum = LONG_TERM_REF_NUM_SCREEN;
+                if pCfg.iNumRefFrame == AUTO_REF_PIC_COUNT {
+                    pCfg.iNumRefFrame =
+                        WELS_MAX(1, WELS_LOG2(pCfg.uiGopSize)) + pCfg.iLTRRefNum;
                 }
             } else {
-                pCfg.iLTRRefNum = if pCfg.bEnableLongTermReference {
-                    LONG_TERM_REF_NUM
-                } else {
-                    0
-                };
+                pCfg.iLTRRefNum = 0;
                 if pCfg.iNumRefFrame == AUTO_REF_PIC_COUNT {
-                    let ref_calc = if (pCfg.uiGopSize >> 1) > 1 {
-                        (pCfg.uiGopSize >> 1) as i32 + pCfg.iLTRRefNum
-                    } else {
-                        MIN_REF_PIC_COUNT + pCfg.iLTRRefNum
-                    };
-                    pCfg.iNumRefFrame = WELS_CLIP3(
-                        ref_calc,
-                        MIN_REF_PIC_COUNT,
-                        MAX_REFERENCE_PICTURE_COUNT_NUM_CAMERA,
-                    );
+                    pCfg.iNumRefFrame = WELS_MAX(1, (pCfg.uiGopSize >> 1) as i32);
                 }
             }
-
-            if pCfg.iLtrMarkPeriod == 0 {
-                pCfg.iLtrMarkPeriod = 30;
+        } else {
+            pCfg.iLTRRefNum = if pCfg.bEnableLongTermReference {
+                LONG_TERM_REF_NUM
+            } else {
+                0
+            };
+            if pCfg.iNumRefFrame == AUTO_REF_PIC_COUNT {
+                let ref_calc = if (pCfg.uiGopSize >> 1) > 1 {
+                    (pCfg.uiGopSize >> 1) as i32 + pCfg.iLTRRefNum
+                } else {
+                    MIN_REF_PIC_COUNT + pCfg.iLTRRefNum
+                };
+                pCfg.iNumRefFrame = WELS_CLIP3(
+                    ref_calc,
+                    MIN_REF_PIC_COUNT,
+                    MAX_REFERENCE_PICTURE_COUNT_NUM_CAMERA,
+                );
             }
-
-            let kiDecStages = WELS_LOG2(pCfg.uiGopSize);
-            pCfg.iTemporalLayerNum = 1 + kiDecStages;
-            pCfg.iLoopFilterAlphaC0Offset =
-                WELS_CLIP3(pCfg.iLoopFilterAlphaC0Offset, -6, 6);
-            pCfg.iLoopFilterBetaOffset = WELS_CLIP3(pCfg.iLoopFilterBetaOffset, -6, 6);
-
-            self.m_iMaxPicWidth = pCfg.iPicWidth;
-            self.m_iMaxPicHeight = pCfg.iPicHeight;
-
-            self.TraceParamInfo(&mut pCfg.to_param_ext());
-            let log_ctx = self.m_pWelsTrace.m_sLogCtx;
-
-            if crate::encoder::encoder_ext::WelsInitEncoderExt(
-                &mut self.m_pEncContext,
-                pCfg,
-                log_ctx,
-                None,
-            ) != 0
-            {
-                self.Uninitialize();
-                return cmInitParaError;
-            }
-
-            self.m_bInitialFlag = true;
         }
+
+        if pCfg.iLtrMarkPeriod == 0 {
+            pCfg.iLtrMarkPeriod = 30;
+        }
+
+        let kiDecStages = WELS_LOG2(pCfg.uiGopSize);
+        pCfg.iTemporalLayerNum = 1 + kiDecStages;
+        pCfg.iLoopFilterAlphaC0Offset =
+            WELS_CLIP3(pCfg.iLoopFilterAlphaC0Offset, -6, 6);
+        pCfg.iLoopFilterBetaOffset = WELS_CLIP3(pCfg.iLoopFilterBetaOffset, -6, 6);
+
+        self.m_iMaxPicWidth = pCfg.iPicWidth;
+        self.m_iMaxPicHeight = pCfg.iPicHeight;
+
+        self.TraceParamInfo(&mut pCfg.to_param_ext());
+        let log_ctx = self.m_pWelsTrace.m_sLogCtx;
+
+        if crate::encoder::encoder_ext::WelsInitEncoderExt(
+            &mut self.m_pEncContext,
+            pCfg,
+            log_ctx,
+            None,
+        ) != 0
+        {
+            self.Uninitialize();
+            return cmInitParaError;
+        }
+
+        self.m_bInitialFlag = true;
 
         cmResultSuccess
     }
 
-    // unsafe-cat: port-raw(Phase 9)
-    #[allow(unsafe_code)]
     pub fn Uninitialize(&mut self) -> i32 {
         if !self.m_bInitialFlag {
             return 0;
@@ -2104,7 +2098,7 @@ impl CWelsH264SVCEncoder {
         // root: `WelsUninitEncoderExt` takes the context *by value* since T8.B5, so
         // there is no aliasing question left at this call — only the free cascade's
         // own raw walk, which is `port-raw(Phase 9)`.
-        unsafe { crate::encoder::encoder_ext::WelsUninitEncoderExt(self.m_pEncContext.take()) };
+        crate::encoder::encoder_ext::WelsUninitEncoderExt(self.m_pEncContext.take());
         self.m_bInitialFlag = false;
         0
     }
@@ -2193,8 +2187,6 @@ impl CWelsH264SVCEncoder {
         WelsEncoderEncodeParameterSetsRust(ctx, pBsInfo)
     }
 
-    // unsafe-cat: port-raw(Phase 9)
-    #[allow(unsafe_code)]
     pub fn ForceIntraFrame(&mut self, bIDR: bool, iLayerId: i32) -> i32 {
         if bIDR {
             if !self.m_bInitialFlag {
@@ -2209,9 +2201,7 @@ impl CWelsH264SVCEncoder {
             let Some(pCtx) = self.m_pEncContext.as_deref_mut() else {
                 return 1;
             };
-            unsafe {
-                ForceCodingIDR(pCtx, iLayerId);
-            }
+            ForceCodingIDR(pCtx, iLayerId);
         }
         0
     }
@@ -2368,196 +2358,192 @@ uiResolutionChangeTimes={}, uIDRReqNum={}, uIDRSentNum={}, uLTRSentNum=NA, iTota
         }
     }
 
-    // unsafe-cat: port-raw(Phase 9)
-    #[allow(unsafe_code)]
     pub fn UpdateStatistics(&mut self, pBsInfo: &SFrameBSInfo, kiCurrentFrameMs: i64) {
-        unsafe {
-            // **B3.** The context resolves off its own slot per use rather than being
-            // held as `ctx_ptr`'s raw for the whole body. The two scalars below are
-            // `Copy`, so this borrow ends before the loop; the loop re-takes it per
-            // iteration, which is what lets `LogStatistics` — a `&mut self` method —
-            // be called from inside the loop at all. The null guard becomes the
-            // `None` arm and returns where `pCtx.is_null()` did.
-            let kiCurrentFrameTs = pBsInfo.uiTimeStamp;
-            let (kiTimeDiff, iMaxDid) = {
-                let Some(ctx) = self.m_pEncContext.as_deref_mut() else {
-                    return;
-                };
-                if ctx.param_opt().is_none() {
-                    return;
-                }
-                ctx.uiLastTimestamp = kiCurrentFrameTs;
-                (
-                    kiCurrentFrameTs - ctx.iLastStatisticsLogTs,
-                    ctx.param().iSpatialLayerNum - 1,
-                )
+        // **B3.** The context resolves off its own slot per use rather than being
+        // held as `ctx_ptr`'s raw for the whole body. The two scalars below are
+        // `Copy`, so this borrow ends before the loop; the loop re-takes it per
+        // iteration, which is what lets `LogStatistics` — a `&mut self` method —
+        // be called from inside the loop at all. The null guard becomes the
+        // `None` arm and returns where `pCtx.is_null()` did.
+        let kiCurrentFrameTs = pBsInfo.uiTimeStamp;
+        let (kiTimeDiff, iMaxDid) = {
+            let Some(ctx) = self.m_pEncContext.as_deref_mut() else {
+                return;
             };
-            for iDid in 0..=iMaxDid {
-                let mut eFrameType = EVideoFrameType::videoFrameTypeSkip;
-                let mut kiCurrentFrameSize = 0;
-                // **S11.47: the lengths are read out of `pOut.sNalLen` by
-                // index.** Each layer's `pNalLengthInByte` is the previous one's
-                // advanced by the previous one's `iNalCount` — so the running sum
-                // below *is* the pointer chain, in the units the storage is made
-                // of, and this walk visits the layers in the order that chain was
-                // built. `is_null` becomes the range check the slice performs.
-                let kpNalLen: &[i32] = match self.m_pEncContext.as_deref() {
-                    Some(ctx) => match ctx.pOut.as_deref() {
-                        Some(pOut) => &pOut.sNalLen,
-                        None => &[],
-                    },
+            if ctx.param_opt().is_none() {
+                return;
+            }
+            ctx.uiLastTimestamp = kiCurrentFrameTs;
+            (
+                kiCurrentFrameTs - ctx.iLastStatisticsLogTs,
+                ctx.param().iSpatialLayerNum - 1,
+            )
+        };
+        for iDid in 0..=iMaxDid {
+            let mut eFrameType = EVideoFrameType::videoFrameTypeSkip;
+            let mut kiCurrentFrameSize = 0;
+            // **S11.47: the lengths are read out of `pOut.sNalLen` by
+            // index.** Each layer's `pNalLengthInByte` is the previous one's
+            // advanced by the previous one's `iNalCount` — so the running sum
+            // below *is* the pointer chain, in the units the storage is made
+            // of, and this walk visits the layers in the order that chain was
+            // built. `is_null` becomes the range check the slice performs.
+            let kpNalLen: &[i32] = match self.m_pEncContext.as_deref() {
+                Some(ctx) => match ctx.pOut.as_deref() {
+                    Some(pOut) => &pOut.sNalLen,
                     None => &[],
-                };
-                let mut kiBase = 0usize;
-                for iLayerNum in 0..(pBsInfo.iLayerNum as usize).min(MAX_LAYER_NUM_OF_FRAME as usize) {
-                    let pLayerInfo = &pBsInfo.sLayerInfo[iLayerNum];
-                    let kiCount = pLayerInfo.iNalCount.max(0) as usize;
-                    if pLayerInfo.uiLayerType == VIDEO_CODING_LAYER
-                        && pLayerInfo.uiSpatialId as i32 == iDid
-                    {
-                        eFrameType = pBsInfo.eFrameType;
-                        if kiBase + kiCount <= kpNalLen.len() {
-                            kiCurrentFrameSize +=
-                                kpNalLen[kiBase..][..kiCount].iter().sum::<i32>();
-                        }
-                    }
-                    kiBase += kiCount;
-                }
-
-                let mut bLogStatisticsNow = false;
+                },
+                None => &[],
+            };
+            let mut kiBase = 0usize;
+            for iLayerNum in 0..(pBsInfo.iLayerNum as usize).min(MAX_LAYER_NUM_OF_FRAME as usize) {
+                let pLayerInfo = &pBsInfo.sLayerInfo[iLayerNum];
+                let kiCount = pLayerInfo.iNalCount.max(0) as usize;
+                if pLayerInfo.uiLayerType == VIDEO_CODING_LAYER
+                    && pLayerInfo.uiSpatialId as i32 == iDid
                 {
+                    eFrameType = pBsInfo.eFrameType;
+                    if kiBase + kiCount <= kpNalLen.len() {
+                        kiCurrentFrameSize +=
+                            kpNalLen[kiBase..][..kiCount].iter().sum::<i32>();
+                    }
+                }
+                kiBase += kiCount;
+            }
+
+            let mut bLogStatisticsNow = false;
+            {
+            let Some(ctx) = self.m_pEncContext.as_deref_mut() else {
+                return;
+            };
+            // **T9.H14: hoisted above `pStatistics` — T9.G6's shape, found by
+            // the session gate's Miri lane.** `ctx_ltr(&mut *pCtx)` stood
+            // here — a `Unique` retag of the **whole context** at
+            // [0x0..0x17f10] that popped the held `pStatistics` (a `&mut`
+            // into `sEncoderStatistics[iDid]`, inside that same allocation),
+            // so the flag is read into a `bool` before that cursor exists.
+            // **T9.H3**: `ctx_ltr` itself is gone with the raw family — this
+            // was its last caller — and the read is the safe Vec projection
+            // of the root's element 0, with the old empty-array null check
+            // becoming `first()`. The hoist stays: the shared borrow here
+            // still must end before `pStatistics` is derived — and since B3 the
+            // compiler is what says so.
+            let bLtrMarkingFlag = ctx
+                .pLtr
+                .first()
+                .map_or(false, |pLtr| pLtr.bLTRMarkingFlag);
+            // **F208, and B3 changed who enforces it.** The average QP is read
+            // *here*, before `pStatistics` is derived, for the reason the comment
+            // above gives for `bLtrMarkingFlag`: the reader is a shared reborrow
+            // of the whole context, and a `SharedReadOnly` retag over it
+            // invalidates any `Unique` derived from the same context — including
+            // one into a disjoint field. When this body held `ctx_ptr`'s raw,
+            // borrowck could not see either derivation and Miri was the only
+            // referee; it refused this exact shape at A2's spelling of line 2412.
+            // The root is a `&mut sWelsEncCtx` now, so **borrowck referees it**:
+            // moving this read below `pStatistics` is a compile error rather than
+            // silent UB, and `f208_reader_retag_scan.py` no longer lists the body.
+            // The order is kept as it stands because it is also the correct one.
+            let uiAverageFrameQP = if !ctx.rc().is_empty() {
+                ctx.rc_at(iDid as usize).iAverageFrameQp as u32
+            } else {
+                26
+            };
+            // **F208 again, and at the same three lines.** The reads of the
+            // parameter block move *above* the `&mut`, not beside it: every one
+            // of them is a `&self` accessor, i.e. a `SharedReadOnly` retag over
+            // `[0x0..0x17f10]` that pops `pStatistics`. A7 adds two more such
+            // reads to this body (`fMaxFrameRate` below), and both are scalars.
+            let kiActualWidth =
+                ctx.param().sDependencyLayers[iDid as usize].iActualWidth;
+            let kiActualHeight =
+                ctx.param().sDependencyLayers[iDid as usize].iActualHeight;
+            let kfMaxFrameRate = ctx.param().fMaxFrameRate;
+            let kiStatisticsLogInterval = ctx.iStatisticsLogInterval;
+            let pStatistics =
+                &mut ctx.sEncoderStatistics[iDid as usize];
+
+            if pStatistics.uiWidth != 0
+                && pStatistics.uiHeight != 0
+                && (pStatistics.uiWidth != kiActualWidth as u32
+                    || pStatistics.uiHeight != kiActualHeight as u32)
+            {
+                pStatistics.uiResolutionChangeTimes += 1;
+            }
+            pStatistics.uiWidth = kiActualWidth as u32;
+            pStatistics.uiHeight = kiActualHeight as u32;
+
+            let kbCurrentFrameSkipped =
+                eFrameType == EVideoFrameType::videoFrameTypeSkip;
+            pStatistics.uiInputFrameCount += 1;
+            if kbCurrentFrameSkipped {
+                pStatistics.uiSkippedFrameCount += 1;
+            }
+            let iProcessedFrameCount =
+                (pStatistics.uiInputFrameCount - pStatistics.uiSkippedFrameCount) as i32;
+            if !kbCurrentFrameSkipped && iProcessedFrameCount != 0 {
+                pStatistics.fAverageFrameSpeedInMs += (kiCurrentFrameMs as f32
+                    - pStatistics.fAverageFrameSpeedInMs)
+                    / (iProcessedFrameCount as f32);
+            }
+
+            if ctx.uiStartTimestamp != 0 {
+                if kiCurrentFrameTs > ctx.uiStartTimestamp + 800 {
+                    pStatistics.fAverageFrameRate = (pStatistics.uiInputFrameCount as f32
+                        * 1000.0)
+                        / ((kiCurrentFrameTs - ctx.uiStartTimestamp) as f32);
+                }
+            } else {
+                ctx.uiStartTimestamp = kiCurrentFrameTs;
+            }
+
+            pStatistics.uiAverageFrameQP = uiAverageFrameQP;
+
+            if eFrameType == EVideoFrameType::videoFrameTypeIDR
+                || eFrameType == EVideoFrameType::videoFrameTypeI
+            {
+                pStatistics.uiIDRSentNum += 1;
+            }
+            if bLtrMarkingFlag {
+                pStatistics.uiLTRSentNum += 1;
+            }
+
+            pStatistics.iTotalEncodedBytes += kiCurrentFrameSize as u64;
+
+            let kiDeltaFrames = (pStatistics.uiInputFrameCount
+                - pStatistics.iLastStatisticsFrameCount)
+                as i32;
+            if kiDeltaFrames as f32 > kfMaxFrameRate * 2.0 {
+                if kiTimeDiff >= kiStatisticsLogInterval as i64 {
+                    let fTimeDiffSec = kiTimeDiff as f32 / 1000.0;
+                    if fTimeDiffSec > 0.0 {
+                        pStatistics.fLatestFrameRate = (pStatistics.uiInputFrameCount
+                            - pStatistics.iLastStatisticsFrameCount)
+                            as f32
+                            / fTimeDiffSec;
+                        pStatistics.uiBitRate =
+                            ((pStatistics.iTotalEncodedBytes as f32) * 8.0 / fTimeDiffSec)
+                                as u32;
+                    }
+                    pStatistics.iLastStatisticsBytes = pStatistics.iTotalEncodedBytes;
+                    pStatistics.iLastStatisticsFrameCount = pStatistics.uiInputFrameCount;
+                    ctx.iLastStatisticsLogTs = kiCurrentFrameTs;
+                    // `LogStatistics` takes `&mut self` and the reset writes
+                    // back into the statistics this scope is holding, so both
+                    // move below the borrow. The C++ order — log, *then* reset
+                    // `iTotalEncodedBytes` — is preserved exactly, and the log
+                    // still sees every mutation above it because they are
+                    // written through the context, not to a copy.
+                    bLogStatisticsNow = true;
+                }
+            }
+            }
+            if bLogStatisticsNow {
+                self.LogStatistics(kiCurrentFrameTs, iMaxDid);
                 let Some(ctx) = self.m_pEncContext.as_deref_mut() else {
                     return;
                 };
-                // **T9.H14: hoisted above `pStatistics` — T9.G6's shape, found by
-                // the session gate's Miri lane.** `ctx_ltr(&mut *pCtx)` stood
-                // here — a `Unique` retag of the **whole context** at
-                // [0x0..0x17f10] that popped the held `pStatistics` (a `&mut`
-                // into `sEncoderStatistics[iDid]`, inside that same allocation),
-                // so the flag is read into a `bool` before that cursor exists.
-                // **T9.H3**: `ctx_ltr` itself is gone with the raw family — this
-                // was its last caller — and the read is the safe Vec projection
-                // of the root's element 0, with the old empty-array null check
-                // becoming `first()`. The hoist stays: the shared borrow here
-                // still must end before `pStatistics` is derived — and since B3 the
-                // compiler is what says so.
-                let bLtrMarkingFlag = ctx
-                    .pLtr
-                    .first()
-                    .map_or(false, |pLtr| pLtr.bLTRMarkingFlag);
-                // **F208, and B3 changed who enforces it.** The average QP is read
-                // *here*, before `pStatistics` is derived, for the reason the comment
-                // above gives for `bLtrMarkingFlag`: the reader is a shared reborrow
-                // of the whole context, and a `SharedReadOnly` retag over it
-                // invalidates any `Unique` derived from the same context — including
-                // one into a disjoint field. When this body held `ctx_ptr`'s raw,
-                // borrowck could not see either derivation and Miri was the only
-                // referee; it refused this exact shape at A2's spelling of line 2412.
-                // The root is a `&mut sWelsEncCtx` now, so **borrowck referees it**:
-                // moving this read below `pStatistics` is a compile error rather than
-                // silent UB, and `f208_reader_retag_scan.py` no longer lists the body.
-                // The order is kept as it stands because it is also the correct one.
-                let uiAverageFrameQP = if !ctx.rc().is_empty() {
-                    ctx.rc_at(iDid as usize).iAverageFrameQp as u32
-                } else {
-                    26
-                };
-                // **F208 again, and at the same three lines.** The reads of the
-                // parameter block move *above* the `&mut`, not beside it: every one
-                // of them is a `&self` accessor, i.e. a `SharedReadOnly` retag over
-                // `[0x0..0x17f10]` that pops `pStatistics`. A7 adds two more such
-                // reads to this body (`fMaxFrameRate` below), and both are scalars.
-                let kiActualWidth =
-                    ctx.param().sDependencyLayers[iDid as usize].iActualWidth;
-                let kiActualHeight =
-                    ctx.param().sDependencyLayers[iDid as usize].iActualHeight;
-                let kfMaxFrameRate = ctx.param().fMaxFrameRate;
-                let kiStatisticsLogInterval = ctx.iStatisticsLogInterval;
-                let pStatistics =
-                    &mut ctx.sEncoderStatistics[iDid as usize];
-
-                if pStatistics.uiWidth != 0
-                    && pStatistics.uiHeight != 0
-                    && (pStatistics.uiWidth != kiActualWidth as u32
-                        || pStatistics.uiHeight != kiActualHeight as u32)
-                {
-                    pStatistics.uiResolutionChangeTimes += 1;
-                }
-                pStatistics.uiWidth = kiActualWidth as u32;
-                pStatistics.uiHeight = kiActualHeight as u32;
-
-                let kbCurrentFrameSkipped =
-                    eFrameType == EVideoFrameType::videoFrameTypeSkip;
-                pStatistics.uiInputFrameCount += 1;
-                if kbCurrentFrameSkipped {
-                    pStatistics.uiSkippedFrameCount += 1;
-                }
-                let iProcessedFrameCount =
-                    (pStatistics.uiInputFrameCount - pStatistics.uiSkippedFrameCount) as i32;
-                if !kbCurrentFrameSkipped && iProcessedFrameCount != 0 {
-                    pStatistics.fAverageFrameSpeedInMs += (kiCurrentFrameMs as f32
-                        - pStatistics.fAverageFrameSpeedInMs)
-                        / (iProcessedFrameCount as f32);
-                }
-
-                if ctx.uiStartTimestamp != 0 {
-                    if kiCurrentFrameTs > ctx.uiStartTimestamp + 800 {
-                        pStatistics.fAverageFrameRate = (pStatistics.uiInputFrameCount as f32
-                            * 1000.0)
-                            / ((kiCurrentFrameTs - ctx.uiStartTimestamp) as f32);
-                    }
-                } else {
-                    ctx.uiStartTimestamp = kiCurrentFrameTs;
-                }
-
-                pStatistics.uiAverageFrameQP = uiAverageFrameQP;
-
-                if eFrameType == EVideoFrameType::videoFrameTypeIDR
-                    || eFrameType == EVideoFrameType::videoFrameTypeI
-                {
-                    pStatistics.uiIDRSentNum += 1;
-                }
-                if bLtrMarkingFlag {
-                    pStatistics.uiLTRSentNum += 1;
-                }
-
-                pStatistics.iTotalEncodedBytes += kiCurrentFrameSize as u64;
-
-                let kiDeltaFrames = (pStatistics.uiInputFrameCount
-                    - pStatistics.iLastStatisticsFrameCount)
-                    as i32;
-                if kiDeltaFrames as f32 > kfMaxFrameRate * 2.0 {
-                    if kiTimeDiff >= kiStatisticsLogInterval as i64 {
-                        let fTimeDiffSec = kiTimeDiff as f32 / 1000.0;
-                        if fTimeDiffSec > 0.0 {
-                            pStatistics.fLatestFrameRate = (pStatistics.uiInputFrameCount
-                                - pStatistics.iLastStatisticsFrameCount)
-                                as f32
-                                / fTimeDiffSec;
-                            pStatistics.uiBitRate =
-                                ((pStatistics.iTotalEncodedBytes as f32) * 8.0 / fTimeDiffSec)
-                                    as u32;
-                        }
-                        pStatistics.iLastStatisticsBytes = pStatistics.iTotalEncodedBytes;
-                        pStatistics.iLastStatisticsFrameCount = pStatistics.uiInputFrameCount;
-                        ctx.iLastStatisticsLogTs = kiCurrentFrameTs;
-                        // `LogStatistics` takes `&mut self` and the reset writes
-                        // back into the statistics this scope is holding, so both
-                        // move below the borrow. The C++ order — log, *then* reset
-                        // `iTotalEncodedBytes` — is preserved exactly, and the log
-                        // still sees every mutation above it because they are
-                        // written through the context, not to a copy.
-                        bLogStatisticsNow = true;
-                    }
-                }
-                }
-                if bLogStatisticsNow {
-                    self.LogStatistics(kiCurrentFrameTs, iMaxDid);
-                    let Some(ctx) = self.m_pEncContext.as_deref_mut() else {
-                        return;
-                    };
-                    ctx.sEncoderStatistics[iDid as usize].iTotalEncodedBytes = 0;
-                }
+                ctx.sEncoderStatistics[iDid as usize].iTotalEncodedBytes = 0;
             }
         }
     }
