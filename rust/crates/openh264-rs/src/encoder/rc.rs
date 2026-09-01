@@ -75,7 +75,7 @@
     unused_unsafe
 )]
 
-#![deny(unsafe_code)]
+#![forbid(unsafe_code)]
 
 use std::sync::atomic::Ordering;
 

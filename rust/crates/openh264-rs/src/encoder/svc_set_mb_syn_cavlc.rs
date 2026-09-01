@@ -12,7 +12,7 @@
 //! Translated from `codec/encoder/core/src/svc_set_mb_syn_cavlc.cpp` and
 //! `codec/encoder/core/inc/svc_set_mb_syn.h`.
 
-#![deny(unsafe_code)]
+#![forbid(unsafe_code)]
 
 use crate::safe::bits::BsWriter;
 use crate::encoder::set_mb_syn_cabac::SCabacCtx;

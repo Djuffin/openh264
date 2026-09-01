@@ -14,6 +14,9 @@
 //! module path moved; the symbols, their signatures and their values are
 //! untouched.
 
+// S11.49: the posture, stated at the file — nothing here needs `unsafe`, and
+// the two allows below are the C-ABI exports' own.
+#![deny(unsafe_code)]
 use crate::api::codec_api::OpenH264Version;
 
 /// The version this build reports — `2.6.0`, matching the C++ tree at the root.

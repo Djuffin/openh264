@@ -12,7 +12,7 @@
 //! members; it is 1280 bytes and every entry is dispatched through at encode time, so
 //! a missing member silently shifts every later one.
 
-#![deny(unsafe_code)]
+#![forbid(unsafe_code)]
 
 
 use crate::encoder::rec_view::RecCursor;

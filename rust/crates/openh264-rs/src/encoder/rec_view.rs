@@ -1,3 +1,8 @@
+// **`deny`, not `forbid`, and the end state names this file as the one product
+// exception**: the seam below crosses `UnsafeCell` at exactly one accessor and
+// carries the tree's single remaining `unsafe impl`. S11.49 writes the posture
+// down at the file it applies to.
+#![deny(unsafe_code)]
 // Copyright (c) 2009-2013, Cisco Systems
 // All rights reserved.
 //

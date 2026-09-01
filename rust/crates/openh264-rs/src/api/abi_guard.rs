@@ -50,7 +50,7 @@
 // T8.C7. This module is pure `const` assertion and has never contained an `unsafe`
 // token; the deny is here so that it cannot acquire one silently, which is the only
 // way a layout pin could ever start lying.
-#![deny(unsafe_code)]
+#![forbid(unsafe_code)]
 
 use crate::api::codec_api::*;
 use core::mem::{align_of, size_of};
