@@ -9243,3 +9243,65 @@ naming "both chroma planes resolve through stride index 1" — moved that rule t
 **by hand** (`stride(1)` for plane 2) and are the only callers left that can get
 it wrong. A rule stated on a helper nobody calls is documentation filed where
 nobody who needs it will look.
+
+## F305 — predict a borrow conflict from liveness, not from the borrow set (S12.9)
+
+`api_island_scope.md` §5 named one genuine blocker in the whole C-ABI island
+conversion: `decode` holds a `&mut` into `self.ctx` and calls
+`self.initialize(&sPrevParam)`, a `&mut self` method, in the middle of its body.
+Two `&mut` of one object. The report recommended taking that checkpoint alone,
+with the Miri decoder probes, and not batching it.
+
+It compiled unchanged. NLL ends a borrow at its **last use, per path**, and on the
+branch that reaches `initialize` the next two statements are
+`pDstInfo.iBufferStatus = 0; return code;` — the context borrow is dead there, so
+its region never spans the call. The parameter `initialize` needs was already
+copied out of the context by value on the line above.
+
+**The generalisation.** A conflict predicted by asking *which objects are
+borrowed* can evaporate once you ask *over which paths the borrow is live*. The
+borrow set is a static over-approximation; liveness is what borrowck actually
+computes. Estimating conversion cost from "this method needs `&mut self` while
+that borrow exists" will systematically over-price the work — here it mispriced
+the single riskiest step in a five-checkpoint plan as the one to slow down for,
+and it turned out to be the cheapest.
+
+The two cheap-looking steps were the ones that merged: `pool_for` returning
+`Option<&mut SPicBuff>` needs its context by reference for the lifetime, and once
+the context *is* a reference the caller holds the pool borrow **and** the context
+it came from. Resolving the pool one frame down fixes both. That coupling is
+invisible in a borrow-set reading too, and in the opposite direction.
+
+## F306 — an exemption written by directory outlives the reason it was written for (S12.11)
+
+`unsafe_census.sh` — the instrument that pins D-exit-4's floor — skipped every
+`#[allow(unsafe_code)]` under `src/api/`, with a reason at the top of the file:
+that directory is "the frozen C-ABI layer, watched by `abi_exports.sh` and
+`abi_sizes.sh` instead".
+
+Both halves of that were true when written and neither survived. `abi_exports.sh`
+asserts the exported symbol set is exactly upstream's seven names;
+`abi_sizes.sh` asserts 170 type-size lines. Both watch the island's **surface**.
+Neither reads a body — so "watched instead" meant, for every body in the file,
+*watched by nothing*. And the directory was never all boundary: measured at S12,
+**193 of `codec_api.rs`'s 218 raw dereferences sat in non-`extern "C"` bodies** —
+the decoder's picture-reordering family and its decode loop, ordinary logic with a
+context pointer, none of it exported, four sessions' worth of conversion work that
+no instrument in the repository could see.
+
+The fix is to exempt the **thing** rather than the **place**: an allow under
+`src/api/` is skipped only when the item it attaches to is `extern "C"`, and every
+other one pins as an `island-nonextern(<cat>)` row. An allow whose item cannot be
+classified pins rather than skips — the conservative direction, since the failure
+being fixed was a silent exemption. 27 rows appeared the moment the rule changed.
+
+**Two rules worth carrying.** First: when an instrument exempts a region, the
+exemption must name the *property* that makes it safe to skip (here: "is an
+`extern "C"` item"), never a path — because a path accumulates whatever is put
+inside it, and nobody re-derives the justification when it does. Second: when an
+exemption says "watched by X instead", check what X actually watches. Both of this
+one's referees were real, green, and answering a different question.
+
+This is F292's shape at the level of the tool rather than the tag: nine census
+tags had outlived their `unsafe` there, and here a whole exemption outlived the
+claim that licensed it. The instruments need the same audit the code gets.
