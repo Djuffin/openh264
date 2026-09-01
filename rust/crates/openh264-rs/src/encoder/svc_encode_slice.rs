@@ -221,7 +221,7 @@ pub fn WELS_CEILLOG2(v: u32) -> i32 {
 
 
 #[repr(C)]
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, Default)]
 pub struct SSliceHeader {
     pub iFirstMbInSlice: i32,
     pub iFrameNum: i32,
@@ -256,23 +256,22 @@ pub struct SSliceHeader {
     pub sRefReordering: SRefPicListReorderSyntax,
 }
 
-impl Default for SSliceHeader {
-    /// **Zeroed, and it stays zeroed** — T6.H12's rule applied: a type gets a
-    /// field-wise constructor only if it holds an owned or `Option` field, and this
-    /// one holds neither. Every member is an integer, a `bool`, or a POD sub-struct
-    /// of those (`SRefPicMarking`, `SRefPicListReorderSyntax`), plus `eSliceType`,
-    /// whose zero discriminant `P_SLICE` is a declared variant — the same audit that
-    /// keeps `sWelsEncCtx::new`'s `eSliceType: P_SLICE` honest. The C++ memsets the
-    /// slice header before `InitSliceHeadWithBase` fills it, and this is that memset.
-    // unsafe-cat: fork-shared(S63)
-    #[allow(unsafe_code)]
-    fn default() -> Self {
-        unsafe { std::mem::zeroed() }
-    }
-}
+// `impl Default for SSliceHeader` stood here as `unsafe { mem::zeroed() }`, with
+// T6.H12's audit for why the zeros are right: every member is an integer, a
+// `bool`, or a POD sub-struct of those (`SRefPicMarking`,
+// `SRefPicListReorderSyntax`), plus `eSliceType`, whose zero discriminant
+// `P_SLICE` is a declared variant. The C++ memsets the slice header before
+// `InitSliceHeadWithBase` fills it, and this was that memset.
+//
+// **S11.48: the audit is the derive.** Every one of those facts is now stated by
+// the type — both sub-structs `#[derive(Default)]`, and `EWelsSliceType` carries
+// `#[default]` on `P_SLICE = 0` — so `#[derive(Default)]` writes the same zeros
+// field by field, and the compiler rechecks the audit whenever a field changes.
+// A memset cannot do that: adding a non-zeroable field would have kept
+// compiling.
 
 #[repr(C)]
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, Default)]
 pub struct SSliceHeaderExt {
     pub sSliceHeader: SSliceHeader,
     // **`pSubsetSps` stood here and is deleted** (T6.G3): declared by the C++,
@@ -292,15 +291,9 @@ pub struct SSliceHeaderExt {
     pub uiDisableInterLayerDeblockingFilterIdc: u8,
 }
 
-impl Default for SSliceHeaderExt {
-    /// Zeroed, and it stays — see [`SSliceHeader::default`]. It is that struct plus
-    /// eleven `bool`s and two integers.
-    // unsafe-cat: fork-shared(S63)
-    #[allow(unsafe_code)]
-    fn default() -> Self {
-        unsafe { std::mem::zeroed() }
-    }
-}
+// `impl Default for SSliceHeaderExt` stood here for the same reason and is
+// derived for the same reason (S11.48): that struct plus eleven `bool`s and two
+// integers.
 
 pub use crate::common::wels_common_defs::EWelsNalUnitType;
 use crate::safe::plane::PlaneCursor;
@@ -4392,8 +4385,6 @@ pub fn GetCurrentSliceNum(pCurDq: &SDqLayer) -> i32 {
 /// `pCtx` must be a context built by `WelsInitEncoderExt`; `pLayerBsInfo` must be
 /// one of `(*pFrameBsInfo).sLayerInfo`'s entries, which is what every caller
 /// passes and what the C++'s own `while (pLBI1 != pLayerBsInfo)` assumes.
-// unsafe-cat: port-raw(Phase 9)
-#[allow(unsafe_code)]
 pub fn FrameBsRealloc(
     pCtx: &mut sWelsEncCtx,
     // **S11.20: the frame and an index.** The pointer pair carried an index
