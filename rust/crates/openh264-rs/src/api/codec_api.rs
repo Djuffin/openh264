@@ -2563,11 +2563,15 @@ impl Decoder {
         ppDst: &mut [*mut u8; 3],
         pDstInfo: &mut SBufferInfo,
     ) -> DECODING_STATE {
-        let p_ctx = Self::ctx_ptr(&mut self.ctx);
-        if p_ctx.is_null() {
+        // **S12.9: the context is a borrow.** `ctx_ptr` resolved
+        // `Option<Box<SWelsDecoderContext>>` to a raw and this body dereferenced it
+        // 46 times; `as_deref_mut` is the same resolution with the null arm as the
+        // `else`, which is what the `is_null` test below it was. Every `(*p_ctx)`
+        // expression stays as the C++ wrote it — it is valid on a `&mut` — so the
+        // whole body is unchanged apart from losing its `unsafe` wrapper.
+        let Some(p_ctx) = self.ctx.as_deref_mut() else {
             return DECODING_STATE::dsInitialOptExpected;
-        }
-        unsafe {
+        };
         (*p_ctx).iErrorCode = DECODING_STATE::dsErrorFree.0;
         // `welsDecoderExt.cpp:783`'s `iStart = WelsTime()`. The reference's
         // `dDecTime` is a millisecond accumulator over `gettimeofday`; a monotonic
@@ -2848,8 +2852,7 @@ impl Decoder {
         // `ReorderPicturesInDisplay` at the tail of DecodeFrame2WithCtx.
         ReorderPicturesInDisplay(&mut *p_ctx, ppDst, pDstInfo);
 
-            DECODING_STATE::dsErrorFree
-        }
+        DECODING_STATE::dsErrorFree
     }
 
     /// `CWelsDecoder::DecodeParser` — `welsDecoderExt.cpp:1180-1262`, whole
