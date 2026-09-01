@@ -38,8 +38,7 @@
     non_camel_case_types,
     non_upper_case_globals,
     dead_code,
-    unused_variables,
-    unused_unsafe
+    unused_variables
 )]
 // **T9.C2**: the file's last raw pointer left with the two `(pPred, pRef, kiStride)`
 // shims, so the port's safety floor applies here now.

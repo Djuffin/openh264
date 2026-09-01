@@ -32,7 +32,6 @@
     non_upper_case_globals,
     dead_code,
     unused_variables,
-    unused_unsafe,
     unused_mut
 )]
 
@@ -42,6 +41,11 @@
 //! `codec/encoder/core/inc/svc_set_mb_syn.h`, and `codec/encoder/core/inc/set_mb_syn_cabac.h`.
 
 #![deny(unsafe_code)]
+// **S12.14 sealed this file.** Its one allow — the tree's last `C-ABI(test)` —
+// covered an `unsafe {}` around `WelsCabacEncodeInit(&mut SCabacCtx, ..)`, which
+// is a safe `extern "C" fn`. `extern "C"` is a calling convention, not a safety
+// claim, and the tag had been reading it as one.
+#![forbid(unsafe_code)]
 
 pub use crate::encoder::encoder_context::SMVUnitXY;
 pub use crate::encoder::encoder_context::SDCTCoeff;
@@ -1264,8 +1268,6 @@ mod tests {
     }
 
     #[test]
-    // unsafe-cat: C-ABI(test) — WelsCabacEncodeInit keeps its frozen boundary shape
-    #[allow(unsafe_code)]
     fn test_cabac_mb_skip_logic() {
         let mut buffer = vec![0u8; 128];
         let mut cabac_ctx = SCabacCtx::default();
@@ -1274,7 +1276,7 @@ mod tests {
         grid.get_mut(0).uiMbType = MB_TYPE_SKIP;
 
         let end = buffer.len();
-        unsafe { WelsCabacEncodeInit(&mut cabac_ctx, 0, end) };
+        WelsCabacEncodeInit(&mut cabac_ctx, 0, end);
 
         let mut mbs = crate::safe::mb_grid::MbWindow::whole(&mut grid, 0);
         WelsMbSkipCabac(

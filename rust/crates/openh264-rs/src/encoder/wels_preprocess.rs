@@ -46,8 +46,7 @@ pub use crate::processing::complexity_analysis::{FRAME_SAD, GOM_SAD, GOM_VAR};
     non_camel_case_types,
     non_upper_case_globals,
     dead_code,
-    unused_variables,
-    unused_unsafe
+    unused_variables
 )]
 
 use crate::encoder::picture::{PicPlanes, RecPicId, RecPicPool, SrcPicId, SrcPicPool};

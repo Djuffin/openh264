@@ -3,8 +3,7 @@
     non_camel_case_types,
     non_upper_case_globals,
     dead_code,
-    unused_variables,
-    unused_unsafe
+    unused_variables
 )]
 
 //! Reference picture list management and Long-Term Reference (LTR) control.

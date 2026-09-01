@@ -9,8 +9,7 @@
     non_camel_case_types,
     non_upper_case_globals,
     dead_code,
-    unused_variables,
-    unused_unsafe
+    unused_variables
 )]
 
 // **T8.C7 — the C-ABI module is denied like every other module.**
@@ -2218,7 +2217,9 @@ impl Decoder {
     /// type's normalisation run on the *wire* values, at the thunk, for the reason
     /// F76/T8.B1 gives.
     pub fn initialize(&mut self, pParam: &SDecodingParam) -> c_long {
-        unsafe {
+        // **S12.14: was `unsafe {`, and it guarded nothing.** The rebuild below
+        // reaches the decoder context through owned slots now; the block outlived
+        // its contents and `unused_unsafe`, allowed file-wide, is why nothing said so.
         // **F76, T8.B2 — a second `Initialize` on a live decoder rebuilds.**
         //
         // `CWelsDecoder::InitDecoder` (`welsDecoderExt.cpp:373`) calls
@@ -2237,63 +2238,63 @@ impl Decoder {
         // that diverged. This is `decoder_uninit_c`'s body, and it is the same
         // teardown for the same reason.
         if let Some(mut pCtx) = self.ctx.take() {
-            crate::decoder::decoder_core::WelsEndDecoder(&mut pCtx);
+        crate::decoder::decoder_core::WelsEndDecoder(&mut pCtx);
         }
         {
-            // In-place heap construction: the context is several MiB, and since T3.3
-            // it owns `Vec`s, so neither `Box::default()` (stack round-trip) nor
-            // `new_zeroed().assume_init()` (invalid zeroed `Vec`) is usable.
-            let mut ctx_box = crate::decoder::decoder_context::SWelsDecoderContext::new_boxed();
-            // Mirror CWelsDecoder::InitDecoderCtx (welsDecoderExt.cpp): wire the
-            // decoder-owned members into the context, then fill in defaults.
-            //
-            // **T8.A5–A8: the ten `addr_of_mut!` stamps stood here, and F38 was
-            // why they were spelled that way.** Each derived a pointer from a
-            // `CWelsDecoderImpl` field and stored it into a struct that outlives
-            // the expression — S29's worst class, where `&mut (*dec_impl).field`
-            // retags the field's range and the next write through `dec_impl`
-            // itself pops the stored tag. `addr_of_mut!` was the fix; owning the
-            // fields is the answer, and there is nothing left to stamp.
-            //
-            // The caller's parameters, before `WelsDecoderDefaults` — the position
-            // the stamped alias put them in, kept because everything built below
-            // this line may read them. `DecoderConfigParam` writes the same block
-            // again at the tail of this function, which is where the C++ has its
-            // one copy; the two are the same store.
-            ctx_box.pParam = *pParam;
-            // `CWelsDecoder::InitDecoder` runs this over `m_sLastDecPicInfo` just
-            // before it calls `InitDecoderCtx` (`welsDecoderExt.cpp:386`); the field
-            // is the context's since T8.A6, so its defaults are set where the context
-            // is built. They are **not** zeros — `iPrevFrameNum` starts at -1.
-            crate::decoder::decoder_core::WelsDecoderLastDecPicInfoDefaults(
-                &mut ctx_box.pLastDecPicInfo,
-            );
-            // `ResetReorderingPictureBuffers (&m_sReoderingStatus, m_sPictInfoList,
-            // true)` — the `CWelsDecoder` constructor's full reset
-            // (`welsDecoderExt.cpp:169`), which is where a fresh reordering buffer
-            // comes from. `IMinInt32` in every slot's `iPOC` is what "empty" is;
-            // zeroes are a valid POC.
-            let crate::decoder::decoder_core::SWelsDecoderContext {
-                pPictReoderingStatus, pPictInfoList, ..
-            } = &mut *ctx_box;
-            crate::decoder::decoder_core::ResetReorderingPictureBuffers(
-                pPictReoderingStatus,
-                pPictInfoList,
-                true,
-            );
-            // `welsDecoderExt.cpp:415` — `WelsDecoderDefaults (pCtx,
-            // &m_pWelsTrace->m_sLogCtx)`. T8.B6: the second argument was a null
-            // `*mut c_void` and the callee ignored it.
-            let log_ctx = self.trace.log_context();
-            crate::decoder::decoder_core::WelsDecoderDefaults(&mut ctx_box, Some(&log_ctx));
-            crate::decoder::decoder_core::WelsDecoderSpsPpsDefaults(&mut ctx_box.sSpsPpsCtx);
-            if crate::decoder::decoder_core::WelsInitStaticMemory(&mut ctx_box) != 0 {
-                // T8.B8: `drop(Box::from_raw(p_ctx))` stood here. The failure path
-                // is the `Box` going out of scope, which is one fewer place that
-                // has to remember.
-                return CM_INIT_PARA_ERROR as c_long;
-            }
-            self.ctx = Some(ctx_box);
+        // In-place heap construction: the context is several MiB, and since T3.3
+        // it owns `Vec`s, so neither `Box::default()` (stack round-trip) nor
+        // `new_zeroed().assume_init()` (invalid zeroed `Vec`) is usable.
+        let mut ctx_box = crate::decoder::decoder_context::SWelsDecoderContext::new_boxed();
+        // Mirror CWelsDecoder::InitDecoderCtx (welsDecoderExt.cpp): wire the
+        // decoder-owned members into the context, then fill in defaults.
+        //
+        // **T8.A5–A8: the ten `addr_of_mut!` stamps stood here, and F38 was
+        // why they were spelled that way.** Each derived a pointer from a
+        // `CWelsDecoderImpl` field and stored it into a struct that outlives
+        // the expression — S29's worst class, where `&mut (*dec_impl).field`
+        // retags the field's range and the next write through `dec_impl`
+        // itself pops the stored tag. `addr_of_mut!` was the fix; owning the
+        // fields is the answer, and there is nothing left to stamp.
+        //
+        // The caller's parameters, before `WelsDecoderDefaults` — the position
+        // the stamped alias put them in, kept because everything built below
+        // this line may read them. `DecoderConfigParam` writes the same block
+        // again at the tail of this function, which is where the C++ has its
+        // one copy; the two are the same store.
+        ctx_box.pParam = *pParam;
+        // `CWelsDecoder::InitDecoder` runs this over `m_sLastDecPicInfo` just
+        // before it calls `InitDecoderCtx` (`welsDecoderExt.cpp:386`); the field
+        // is the context's since T8.A6, so its defaults are set where the context
+        // is built. They are **not** zeros — `iPrevFrameNum` starts at -1.
+        crate::decoder::decoder_core::WelsDecoderLastDecPicInfoDefaults(
+            &mut ctx_box.pLastDecPicInfo,
+        );
+        // `ResetReorderingPictureBuffers (&m_sReoderingStatus, m_sPictInfoList,
+        // true)` — the `CWelsDecoder` constructor's full reset
+        // (`welsDecoderExt.cpp:169`), which is where a fresh reordering buffer
+        // comes from. `IMinInt32` in every slot's `iPOC` is what "empty" is;
+        // zeroes are a valid POC.
+        let crate::decoder::decoder_core::SWelsDecoderContext {
+            pPictReoderingStatus, pPictInfoList, ..
+        } = &mut *ctx_box;
+        crate::decoder::decoder_core::ResetReorderingPictureBuffers(
+            pPictReoderingStatus,
+            pPictInfoList,
+            true,
+        );
+        // `welsDecoderExt.cpp:415` — `WelsDecoderDefaults (pCtx,
+        // &m_pWelsTrace->m_sLogCtx)`. T8.B6: the second argument was a null
+        // `*mut c_void` and the callee ignored it.
+        let log_ctx = self.trace.log_context();
+        crate::decoder::decoder_core::WelsDecoderDefaults(&mut ctx_box, Some(&log_ctx));
+        crate::decoder::decoder_core::WelsDecoderSpsPpsDefaults(&mut ctx_box.sSpsPpsCtx);
+        if crate::decoder::decoder_core::WelsInitStaticMemory(&mut ctx_box) != 0 {
+            // T8.B8: `drop(Box::from_raw(p_ctx))` stood here. The failure path
+            // is the `Box` going out of scope, which is one fewer place that
+            // has to remember.
+            return CM_INIT_PARA_ERROR as c_long;
+        }
+        self.ctx = Some(ctx_box);
         }
 
         // **F44, T5.S1.** `InitErrorCon` had no production caller in this port —
@@ -2312,10 +2313,9 @@ impl Decoder {
         // It is placed outside the `pCtx.is_null()` block on purpose: the C++ runs it
         // on every `Initialize`, and the parameters it reads are re-copied above.
         if let Some(pCtx) = self.ctx.as_mut() {
-            crate::decoder::decoder_core::DecoderConfigParam(pCtx, pParam);
+        crate::decoder::decoder_core::DecoderConfigParam(pCtx, pParam);
         }
 
-        }
         CM_RESULT_SUCCESS as c_long
     }
 
@@ -3185,7 +3185,7 @@ unsafe extern "C" fn decoder_decode_frame_c(
     iWidth: *mut i32,
     iHeight: *mut i32,
 ) -> DECODING_STATE { unsafe {
-    abi_guard!("ISVCDecoder::DecodeFrame", unsafe { decoder_log(this) }, DECODING_STATE::dsBitstreamError, {
+    abi_guard!("ISVCDecoder::DecodeFrame", decoder_log(this), DECODING_STATE::dsBitstreamError, {
         let mut buf_info = SBufferInfo::default();
         let state = decoder_decode_frame2_c(this, pSrc, iSrcLen, ppDst, &mut buf_info);
         if buf_info.iBufferStatus != 1 {
@@ -3195,17 +3195,17 @@ unsafe extern "C" fn decoder_decode_frame_c(
         // written only on the frame-emitted path; the contract's "two writable `i32`s"
         // for `pStride` is what makes the two-element slice the honest translation.
         let sys = buf_info.UsrData.sys();
-        unsafe {
-            if let Some(pStride) = pStride.cast::<[i32; 2]>().as_mut() {
-                pStride[0] = sys.iStride[0];
-                pStride[1] = sys.iStride[1];
-            }
-            if let Some(iWidth) = iWidth.as_mut() {
-                *iWidth = sys.iWidth;
-            }
-            if let Some(iHeight) = iHeight.as_mut() {
-                *iHeight = sys.iHeight;
-            }
+        // S12.14: was `unsafe {`. S12.1 wrapped this whole thunk body in one, so the
+        // inner block guarded nothing; `unused_unsafe` was allowed here and hid it.
+        if let Some(pStride) = pStride.cast::<[i32; 2]>().as_mut() {
+            pStride[0] = sys.iStride[0];
+            pStride[1] = sys.iStride[1];
+        }
+        if let Some(iWidth) = iWidth.as_mut() {
+            *iWidth = sys.iWidth;
+        }
+        if let Some(iHeight) = iHeight.as_mut() {
+            *iHeight = sys.iHeight;
         }
         state
     })
@@ -3252,7 +3252,7 @@ unsafe extern "C" fn decoder_decode_frame_nodelay_c(
     ppDst: *mut *mut u8,
     pDstInfo: *mut SBufferInfo,
 ) -> DECODING_STATE { unsafe {
-    abi_guard!("ISVCDecoder::DecodeFrameNoDelay", unsafe { decoder_log(this) }, DECODING_STATE::dsBitstreamError, {
+    abi_guard!("ISVCDecoder::DecodeFrameNoDelay", decoder_log(this), DECODING_STATE::dsBitstreamError, {
         // `iRet |=` on `DECODING_STATE`, which is a bitset of `ds*` flags — the two
         // calls' states are ORed, not replaced, so an error in either half survives.
         let first = decoder_decode_frame2_c(this, kpSrc, kiSrcLen, ppDst, pDstInfo);

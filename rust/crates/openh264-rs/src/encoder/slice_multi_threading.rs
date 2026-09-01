@@ -1,4 +1,9 @@
 #![deny(unsafe_code)]
+// **S12.14 sealed this file.** Its one allow covered an `unsafe {}` around
+// `NeedDynamicAdjust(&mut SDqLayer, ..)` — a safe call whose wrapper outlived the
+// signature, invisible while this file allowed `unused_unsafe`. S12.5 had already
+// taken `WelsEmms`'s inline assembly out of the same file.
+#![forbid(unsafe_code)]
 // Copyright (c) 2010-2013, Cisco Systems
 // All rights reserved.
 //
@@ -40,8 +45,7 @@
     non_snake_case,
     non_camel_case_types,
     non_upper_case_globals,
-    unused_variables,
-    unused_unsafe
+    unused_variables
 )]
 
 // **The deny landed — T7.C8, and this file was the last one in `src/encoder` without
@@ -1221,11 +1225,13 @@ mod tests {
     }
 
     #[test]
-    // unsafe-cat: instrument(test) — S11.5: a test, not a fork-reachable body.
-    #[allow(unsafe_code)]
+    // S11.5 tagged this `instrument(test)` — "a test, not a fork-reachable body" —
+    // and **S12.14 deleted the allow with the `unsafe` it covered**:
+    // `NeedDynamicAdjust` takes `&mut SDqLayer` and has for some time. The file's
+    // `unused_unsafe` allow is why the wrapper outlived the signature.
     fn test_need_dynamic_adjust_zero_consume() {
         let mut dq_layer = layer_with_bank(2);
-        let ret = unsafe { NeedDynamicAdjust(&mut dq_layer, 2) };
+        let ret = NeedDynamicAdjust(&mut dq_layer, 2);
         assert_eq!(ret, 0);
     }
 

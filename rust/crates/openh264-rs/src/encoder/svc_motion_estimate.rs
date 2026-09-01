@@ -41,7 +41,6 @@
     non_upper_case_globals,
     dead_code,
     unused_variables,
-    unused_unsafe,
     clippy::too_many_arguments
 )]
 

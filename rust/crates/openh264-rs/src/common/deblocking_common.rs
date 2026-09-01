@@ -1,4 +1,4 @@
-#![allow(non_snake_case, non_camel_case_types, non_upper_case_globals, dead_code, unused_variables, unused_unsafe)]
+#![allow(non_snake_case, non_camel_case_types, non_upper_case_globals, dead_code, unused_variables)]
 //! **Sealed at S4.D4** — `forbid(unsafe_code)` below. With the twelve raw
 //! `Deblock*_c` shims and the dispatch table they filled deleted, nothing in this
 //! file is unsafe: the deblocking kernels are the safe ones the decoder and encoder
