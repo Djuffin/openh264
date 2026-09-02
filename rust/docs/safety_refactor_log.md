@@ -19483,3 +19483,79 @@ accessors, H3's recipe proven at 75 sites). **To whoever resumes verification**:
 F207's list — the unscoped Miri `--lib`, both full-drive encode probes, the fork
 pair, the differential tests. **To D-perf-6's owner**: a fresh `perfpair` anchor
 is needed before any recovery target is picked (F206).
+
+---
+
+## 2026-09-01 — Safe-conversion plan, session S13 (the exit battery)
+
+**What this session was.** The two rulings that deferred verification to the end
+— D-gate-9 (the per-checkpoint Miri lane, struck mid-S11) and D-gate-8 (benches,
+postponed "till we're done") — were both lifted at its launch. S13 is the payment
+of a 53-checkpoint Miri debt and an 81-checkpoint bench debt.
+
+**It found two real defects, and both were invisible to every gate that ran.**
+
+### F312 — S11.47 (`65f45f00`), fixed as S13.1 (`9479c55a`)
+
+`nal_len_ptr` published a `SharedReadWrite` root over `sNalLen`'s heap buffer into
+`SLayerBSInfo::pNalLengthInByte`; `nal_len_at_mut`'s `&mut self.sNalLen[i]` derefs
+`Vec` to `&mut [i32]` over the **whole** buffer, popping it. The application's read
+is then a dead tag. Values identical, so the sweeps passed 583/583 in both
+profiles over it — twice, in this session. Fixed with `Vec<AtomicI32>` at the
+user's direction: writes through `&AtomicI32`, `nal_len_ptr` off `&self`.
+`AtomicI32` is `Sync`, so the context's `Sync` and the fork's derived `Send` hold
+and D1's hand-written-impl count stays at 1.
+
+### F313 — S11.27 (`7b9ab6d3`), fixed as S13.2 (`b117f968`)
+
+Upstream's own `test/api` had `EncodeTestAPI.SetEncOptionSize/25` red — 9 failed
+against an 8-row allowlist. **Bisected over 200 commits** (`c3ff096e` GOOD).
+`WelsInitCurrentQBLayerMltslc` clamps `iPartitionNum` to 1 and zeroes the rest
+while the fork still runs `iActiveThreadsNum` workers; at 32x16 with 3 threads
+that is two macroblocks and three workers. The worker has always handled it
+(`iDiffMbIdx == 0` returns), but S11.27's carve computed `end - first + 1` and
+read a zeroed slot as a claim of one macroblock. Both panics in the log were one
+defect: the carve holds the grid by `mem::replace` and the first panic unwound
+before the restore, leaving an empty grid for every later frame.
+
+### The battery, piece by piece
+
+Green on `b117f968`: `cargo test` 569/0/21 debug and 562/0/21 release; sweeps
+**583/583 both profiles**, plus **`qp` 312/312 both profiles** — 895/895 per
+profile, the true `all`; both benches bit-identical across **two** after-runs;
+Miri `--lib` **404/0** unscoped (1540.58 s); CAVLC full-drive probe **1/0**;
+three differential Miri suites **10/0, 7/0, 3/0**; `abi_exports` **7/7**; dlopen
+harness **14/0**; `gtest_stretch --check` **191/199, allowlist 8, rc=0**; ratchet
+**pinned** 393/52/122, `unsafe_impl` 1; both censuses clean. Cross-target
+`cargo check --all-targets` clean on **aarch64-apple-darwin, x86_64-apple-darwin
+and x86_64-unknown-linux-gnu** — the F303 blind spot the brief asked to close.
+
+### The two holes, named (F314)
+
+The **fork/join pair** and the **size-limited full drive** have **no verdict on
+HEAD**. Both were stopped by the user still running: the pair at 174 min CPU per
+probe against a 57.7/58.8 min baseline (**3.0x**, machine quiet, CPU == elapsed),
+the size-limited probe at 418 min CPU having already passed its own ~6.3 h on the
+S13.1 tree. Neither baseline data line was replaced with a number from a killed
+run; `fork_join_baseline.txt` keeps S4's.
+
+**D1's `unsafe impl Sync for SharedCells` therefore has its proof obligation
+unverified since S4, 147 commits back.** That is the single largest thing standing
+between this tree and a clean exit.
+
+### Perf, the 81-checkpoint debt
+
+Both benches, two after-runs, same machine, decoder and encoder. Decode moved
+−1.19% / +0.43% / −0.12% between runs with the **unchanged C++ binary tracking it**
+(−1.08% / −0.20% / +0.46%); encoder median **+0.00%** on both sides across 30
+rows, residual median +0.08%. The fix's own cost was measured the same way
+(pre-fix vs post-fix, C++ as the null): encoder residual median **−0.24%**, zero
+rows over +5%.
+
+**The absolute rows are not comparable to `perf_baseline.md`'s anchor and this
+session did not pretend otherwise**: the C++ dylib now reports `SIMD ACTIVE
+(0x000006)` where the anchor recorded `INACTIVE (0x000000)`, so every C++-vs-Rust
+ratio in that document describes a different comparison. What is owed and **not
+delivered** is a `perfpair` span over the unmeasured window (`1b3471c4`, S5's
+close, to HEAD — 147 commits); the two-run protocol answers "did this session
+regress anything", not "did S5–S12".

@@ -53,4 +53,35 @@
 #
 # Format: <probe-a-seconds> <probe-b-seconds> <pair-wall-seconds> <commit> <date> <note>
 #   probe-a = ..._a_multi_slice_frame_...   probe-b = ..._a_frame_whose_slice_boundary_...
+# ---------------------------------------------------------------------------
+# S13 (2026-09-01): THE PAIR DID NOT COMPLETE, SO THE DATA LINE BELOW STANDS.
+#
+# This file's rule is that a session close replaces the data line with its own
+# numbers. **S13 does not**, because it has none: the pair was run on `b117f968`
+# in the prescribed parallel form and was **stopped by the user, still running,
+# at 2 h 55 m elapsed / 174 min CPU per probe** — against a baseline of 57.7 and
+# 58.8 minutes. That is **3.0x and 2.95x, still climbing**, and it is the reading
+# this file exists to produce, so it is recorded here rather than discarded:
+#
+#     S13  probe_a >= 10446 s   probe_b >= 10447 s   pair wall >= 10514 s
+#          parallel pair, `b117f968`, NO VERDICT (killed), machine quiet
+#          (CPU == elapsed on both probes, so this is not contention; a third
+#           single-threaded Miri process was running on a separate core of 8)
+#
+# **Both probes are equally slow, and that is the useful part.** `probe_a` is
+# SM_FIXEDSLCNUM_SLICE and goes through `EncodeOneSliceRange`, which S13.2 never
+# touched; `probe_b` is SM_SIZELIMITED_SLICE and goes through the function it did.
+# Equal slowdown across a changed and an unchanged path says S13.2 is not the
+# cause. The likely cause is cumulative: this baseline was taken at `410b9c13` on
+# 2026-08-27 and S5-S12 landed ~150 commits of conversion after it, each trading
+# raw access for safe abstraction — which is retag traffic, which is what Miri
+# charges for. **No session between S4 and S13 ran this pair**: D-gate-9 struck
+# the per-checkpoint lane, and the pair runs only at `full`/`exit` or by explicit
+# command. Filed as F314.
+#
+# So the honest status of D1's proof obligation is: **unverified on `b117f968`**.
+# The last green verdict for these two probes is S4's, at `410b9c13`, 147 commits
+# back. A future session owes them a completed run before D1's kept `unsafe impl`
+# can be called refereed again.
+
 3463.45 3530.38 3535 410b9c13 2026-08-27 S4-step0-B1-fix-verified-GREEN-ratio-1.015-1.011-vs-T9.H
