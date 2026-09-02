@@ -95,6 +95,36 @@
 # and against the stale S5 line the gate actually used, 1.23. Both are under the 1.3
 # tripwire but neither is flat, and this session ran six gates on a loaded machine, so
 # the next close should re-measure before reading a trend into it.
+# ---------------------------------------------------------------------------
+# S13 (2026-09-01, the exit battery). READ THIS BEFORE COMPARING.
+#
+# **The data line below is S13's, and it is an `exit`-level SERIAL number** — the
+# third regime this file carries. It is NOT comparable to the S11 line it
+# replaces, which was a `session`-level parallel LANE number (one compile + four
+# concurrent shards, small probe drives). Battery 2's own S61 line printed the
+# mismatch as `ratio 8.52` and that figure means nothing: it divides a serial
+# full-drive step by a parallel scaled one. **Compare exit to exit from here.**
+#
+# The number is battery 2's, measured complete on the S13.1 tree (`9479c55a`):
+#     miri cpu 25909 s / wall 26000 s, FORK_PAIR=external
+#       = --lib 1554.35 s + cavlc probe (full) + size-limited probe (full)
+#
+# S13's third battery, on `b117f968` (S13.2), was **stopped by the user at the
+# size-limited probe** after 6 h 59 m elapsed / 6 h 58 m CPU on that one step,
+# with everything before it green:
+#     --lib   404 passed / 0 failed, 1540.58 s
+#     cavlc probe (full drive)  1 passed / 0 failed, 1554.16 s
+#     size-limited probe (full drive)  NO VERDICT — killed at 418 min CPU
+# That step had already exceeded battery 2's ~6.3 h for the same probe on a
+# quiet machine (CPU == elapsed, no contention), which is a real cost signal and
+# is filed as F314. The leading hypothesis is S13.2's `&mut pMbs[0]`: a retag per
+# slice iteration where the old signature took one borrow for the whole call.
+#
+# **What a future session should do first**: re-run the size-limited probe alone
+# on `b117f968` and on `9479c55a` and compare. If the hypothesis holds, the fix
+# is to hoist the reborrow out of the loop; the correctness argument does not
+# depend on where it is taken.
+25909 9479c55a 2026-09-01 S13-battery2-EXIT-SERIAL-full-drives-fork-pair-external-cpu-25909 cpu=25909
 1166 27e2c206 2026-08-31 safeplan-S11-open-settle-299-0-cpu-3041-vs-S10-1458-ratio-2.09-F273 cpu=3041
 540 e539d195 2026-08-30 safeplan-S10-close-298-0-cpu-1458-vs-S9-1419-ratio-1.03 cpu=1458
 559 59fa12da 2026-08-30 safeplan-S9-close-297-0-cpu-1419-vs-S8-1224-ratio-1.16 cpu=1419

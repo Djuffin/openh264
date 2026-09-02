@@ -9377,3 +9377,207 @@ S12.14 caught seven `abi_guard!` sites whose bodies genuinely need their block.
 Both were caught (once on the diff, once by seven compile errors) and reverted. In
 a 5,000-line file where two functions can look identical and mean opposite things,
 a blind replace must be read back against the thing that identified the site.
+
+## F309 — the exit sweep does not run `qp`: 312 configurations have no gate at any tier (S13)
+
+`gates.sh`'s `sweep_gate` runs `sweep.sh st mt def sl ltr ps dl bg` — **583**
+configurations per profile, measured green in both profiles this session.
+`sweep.sh`'s own header documents nine presets, and **`qp` (312 configurations —
+all 52 quantiser values x cabac x input) is in the script's `case` and in `all`,
+and in no gate level at any tier.** No comment explains it: the block above the
+invocation narrates 369 -> 535 -> 583 and names `ps`, `dl` and `bg` as the
+additions without ever saying why `qp` is out.
+
+The arithmetic: st 210 + mt 120 + def 11 + sl 12 + ltr 16 + ps 90 + dl 76 = 535,
+plus `bg` 48 = **583**. The header's documented total — which *includes* `qp` and
+*excludes* the undocumented `bg` — is **847**. The true `all` is **895**.
+
+So three different numbers are in circulation for "the sweep", and no two of them
+describe the same set. S11.27's commit message says "sweep 847/847 byte-identical
+(all eight presets)"; the gate says 583. Neither is `all`.
+
+**Run by hand at S13: `qp` is 312/312 PASS in both profiles.** A real coverage
+gap, not a latent bug — and note that running it would not have caught F313
+either, because that defect is reachable only through the C API's `SetOption`
+resolution-change path, which no sweep preset drives.
+
+This is the same class as the "505" the `sweep_gate` comment itself corrects: a
+configuration count carried in prose, wrong since `dl` landed, and fixed only by
+running the list and reading the tally. A count in a comment has no tripwire.
+
+## F310 — 40 files carry `#![deny(unsafe_code)]` underneath `#![forbid(unsafe_code)]` (S13)
+
+Of the 86 files under `src/`, **69** carry a real `#![forbid(unsafe_code)]`, and
+**40 of those 69 also carry `#![deny(unsafe_code)]` immediately above it**
+(`decoder/nalu.rs:9-10` is the pattern). `forbid` strictly dominates `deny` for
+the same lint, so the `deny` line is inert text — residue from the seal being
+added without the older line being taken away. `nalu.rs`'s own comment explains
+the seal and says nothing about keeping both.
+
+Not a defect and **not fixed here**: touching 40 files at the exit gate would
+invalidate the battery that had just measured them, for zero behavioural gain.
+Recorded because it is exactly the shape this project deletes elsewhere —
+`api/encoder_options.rs`'s header calls an allow that suppresses nothing "silence
+without a subject", and session J's crate-root pass deleted four of them.
+
+## F311 — "70 of 86 files sealed" is 69; the seventieth match is a doc comment (S13)
+
+`tools/unsafe_instrument_floor.txt` (S12.14) and S13's brief both say 70 of 86.
+A grep anchored to a line start finds **69**. The seventieth match is
+`src/api/encoder_options.rs:20` — a `//!` doc comment that *quotes* the attribute
+while describing a **different** file (`encoder/wels_encoder_ext.rs`, which the
+`SetOption`/`GetOption` move emptied and which really is sealed).
+`encoder_options.rs` itself carries `#![deny(unsafe_code)]`, correctly: it is the
+C-ABI island.
+
+F284's recorded shape, and the third time this port has miscounted by letting a
+scan read comment text as code — the same error the instrument-floor file's own
+header warns about twice, in the file that carries the wrong number.
+
+## F312 — S11.47 handed the application a pointer and then popped its tag (S13.1)
+
+**The defect the deferred Miri lane was deferring, found on its first full run.**
+
+`gates.sh exit`'s full-drive CAVLC probe, at `codec_api.rs:4649` — the
+application's read of `SLayerBSInfo::pNalLengthInByte`:
+
+> attempting a read access using `<2053873>` at `alloc301628[0x0]`, but that tag
+> does not exist in the borrow stack for this location
+
+created by a `SharedReadWrite` retag at `nal_encap.rs:211`
+(`self.sNalLen[kiBase..].as_mut_ptr()`), and *later invalidated at offsets
+[0x0..0x28] by a `Unique` retag* at `nal_encap.rs:225`
+(`&mut self.sNalLen[kiBase + kiIdx]`).
+
+`nal_len_ptr` published a root over `sNalLen`'s heap buffer into the ABI struct.
+`nal_len_at_mut` then took `&mut self.sNalLen[i]` — and `Vec`'s `IndexMut` derefs
+to `&mut [i32]` over the **whole** buffer, so a single element write popped the
+application's pointer. Every read through it afterwards is a dead-tag access.
+
+**The values are identical either way, so no byte gate can see it.** The sweeps
+passed 583/583 in both profiles over this defect, twice, in this very session.
+F114's class restated: a retag that changes no byte.
+
+**Introduced by S11.47 (`65f45f00`)**, the checkpoint that converted the array
+from a raw `WelsMalloc` block to a `Vec<i32>` written by index. The raw form's
+writes went through raw pointers and popped nothing; the safe form's writes pop.
+**A conversion that was correct on values and wrong on provenance** — which is
+the exact failure mode the Miri lane exists to catch, and the exact window in
+which it was not running.
+
+**Why it survived 53 checkpoints.** D-gate-9 struck the per-checkpoint Miri lane
+mid-S11, so S11.47 never ran Miri at all and everything after it was gated on
+bytes. The session lane would not have caught it either: it runs this probe
+*without* `MIRI_FULL`, and only the full drive walks the path.
+
+**Fix (user-directed shape), S13.1 `9479c55a`**: `sNalLen: Vec<i32>` ->
+`Vec<AtomicI32>`. Writes go through `&AtomicI32` (`set_nal_len_at(&self, ..)`,
+`store(Relaxed)`), so nothing ever takes a `Unique` over the buffer, and
+`nal_len_ptr` takes `&self` so its root is a `SharedReadWrite` sibling of the
+writes rather than their victim. `AtomicI32` is `Sync`, so `sWelsEncCtx: Sync`
+and the fork's compiler-derived `Send` are untouched and D1's hand-written-impl
+count stays at **1**. Layout identical; `SWelsEncoderOutput` is not a pinned ABI
+type, and `abi_sizes.txt` regenerates byte-identical.
+
+Probe green at 1692.70 s; sweeps 583/583 both profiles; ratchet flat at
+393/52/122. Cost: encoder residual median **-0.24%** over 30 rows against an
+unchanged-C++ drift floor, 0 rows over +5% — Relaxed atomics on aarch64 are plain
+load/store.
+
+**A wrong prediction, recorded because the reasoning was seductive.** I expected
+`SLayerBSInfo::pBsBuf` to be the same defect one line later
+(`codec_api.rs:4652`): it is stamped from `frame_bs_cur()` at eight sites and
+`pFrameBs` is written through `&mut pFrameBs[kiPos..]` at five, which is the same
+shape. The re-run passed. **The shape is necessary but not sufficient** — which
+path the probe actually walks decides it — and `f239_span_scan.py` (0 spans / 72
+derivations / 2670 bodies) does not cover this shape at all. The honest statement
+is that `pBsBuf` is *unrefuted on the paths driven*, not proven sound.
+
+## F313 — the pre-fork carve counted an empty partition as one macroblock, and upstream's own `test/api` had been red since S11.27 (S13.2)
+
+`gtest_stretch.sh --check` at the exit battery: **9 failed, 8 allowlisted** —
+`EncodeDecodeTestAPIBase/EncodeTestAPI.SetEncOptionSize/25` failing with no
+owner. Deterministic 3/3, and **not** S13.1's: it fails identically at
+`0f2ee1ba`, S12's close.
+
+**Bisected to `7b9ab6d3` (S11.27)** — "the grid is carved before the fork" —
+`git bisect run` over `c3ff096e..rust3`, 200 commits, with the filtered gtest as
+the predicate. `c3ff096e` (Phase 9's close) is GOOD.
+
+**The defect.** `WelsInitCurrentQBLayerMltslc` clamps `iPartitionNum` to 1
+whenever `kiMbNumInFrame / iPartitionNum` is 0 or 1, then zeroes every remaining
+`First/EndMbIdxOfPartition` slot — while the fork still runs `iActiveThreadsNum`
+workers. The failing parameter is **32x16 with 3 threads**: two macroblocks,
+three workers, one stamped partition.
+
+`EncodeOnePartitionSizeLimited` has always handled that — `iDiffMbIdx == 0`
+stamps `iSliceIdx = -1` and returns before it reads the window. **S11.27's carve
+did not carry the rule**: it computed `count = end - first + 1`, which reads a
+zeroed slot as a claim of ONE macroblock, so partition 1 claimed `[0..1)` against
+a cursor already at 2 and the disjointness assert fired.
+
+**Both panics in the log are one defect.** The carve holds the grid by
+`mem::replace(&mut pCurDq.sMbDataP, MbArray::empty())` and restores it after the
+join, so the first panic unwound before the restore and left the layer's grid
+empty — every later frame then hit `MbWindow::new`'s "zero-width grid". A
+cascade, not a second bug.
+
+**Fix, S13.2 `b117f968`**: the carve uses the worker's own rule (`span == 0` =>
+zero macroblocks), and an empty partition carries **no window at all** —
+`MbWindow`'s invariant is that a window always has a current macroblock (F77), so
+it cannot be handed an empty one. `EncodeOnePartitionSizeLimited` therefore takes
+`&mut [MbWindow]`, the shape `EncodeOneSliceRange` in the same file already uses,
+and indexes `[0]` at its two read sites, both past the guard. Nothing in the
+bitstream moves: the workers this repairs are the ones that code nothing.
+
+gtest **191/199, allowlist 8, rc=0**; sweeps 583/583 **and** qp 312/312 in both
+profiles (895/895 per profile); tests 569/562; ratchet flat.
+
+**What this says about the gate ladder, and it is the same sentence as F312's.**
+The gtest ratchet runs only at `exit`; the last `exit` battery was Phase 9's; the
+plan's twelve sessions all closed at `session` or `family`. So a C-API regression
+lived for ~200 commits behind green gates. The `gtest simulcast smoke` that does
+run at lower tiers is a filter that does not include this suite. **Two deferred
+gates, two real defects, both invisible to every gate that did run** — which is
+the argument for this session, twice over.
+
+## F314 — the Miri cost tripwire fired the first time it was run in 147 commits, and neither probe finished (S13)
+
+S61/F140 built two wall-time tripwires precisely because "a 2.6x Miri regression
+passed eight commits because nothing watches the instrument". S13 ran both for
+the first time since S4 and **both fired**.
+
+**The fork pair.** Run on `b117f968` in the prescribed parallel form, stopped by
+the user still running at **2 h 55 m elapsed / 174 min CPU per probe**, against a
+baseline of 57.7 s and 58.8 min — **3.0x and 2.95x, still climbing**. The machine
+was quiet: CPU == elapsed on both, so this is not contention.
+
+**Both probes are equally slow, and that is what makes it readable.** `probe_a` is
+SM_FIXEDSLCNUM_SLICE through `EncodeOneSliceRange`, which S13.2 never touched;
+`probe_b` is SM_SIZELIMITED_SLICE through the function it did. Equal slowdown
+across a changed and an unchanged path exonerates S13.2. The remaining candidate
+is cumulative: the baseline is `410b9c13` (2026-08-27) and S5-S12 landed ~150
+commits after it, each trading raw access for safe abstraction — which is retag
+traffic, which is exactly what Miri charges for. **The conversion has a Miri-cost
+bill and nobody had opened it**, for the same reason F312 survived: D-gate-9
+struck the lane, and the pair runs only at `full`/`exit`.
+
+**The size-limited probe.** Full drive, `b117f968`: killed at **6 h 59 m elapsed /
+418 min CPU on that one step**, having already passed ~6.3 h — its own cost on the
+S13.1 tree one commit earlier, measured complete in battery 2. Here the changed-vs-
+unchanged argument runs the other way: this probe *does* drive the function S13.2
+changed, and the leading hypothesis is `&mut pMbs[0]`, a retag per slice iteration
+where the old signature took one borrow for the whole call. **That is a cost I
+introduced**, and the fix if it holds is to hoist the reborrow out of the loop —
+the correctness argument does not depend on where the borrow is taken.
+
+**What this costs the exit claim.** Neither probe has a verdict on `b117f968`.
+D1's kept `unsafe impl Sync for SharedCells` has its proof obligation — the two
+fork/join probes — **unverified since S4, 147 commits back**. The size-limited
+full drive is verified on `9479c55a` (S13.1) and not on HEAD. Both are named
+holes in §1 condition 5, not silences.
+
+**The instrument worked and the schedule defeated it.** A 1.3x tripwire that runs
+once per 147 commits cannot tell a 3x regression from a 1.4x one plus drift,
+because it has no intermediate readings. The tripwire's value is its *cadence*,
+and D-gate-9 removed the cadence while leaving the tripwire.
