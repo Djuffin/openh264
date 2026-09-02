@@ -807,25 +807,10 @@ impl SWelsSvcRc {
         &self.pCurrentFrameGomSad
     }
 
-    /// [`gom_sad`](Self::gom_sad) as the raw root, for the **one** consumer that
-    /// needs one: `SComplexityAnalysisParam::pGomComplexity` is an `int*` member
-    /// of the VP plugin's parameter struct (`IWelsVP.h:226`), stamped at
-    /// `wels_preprocess.rs` exactly as `wels_preprocess.cpp:859` stamps it — the
-    /// field name is a misnomer and it really is aimed at the SAD array.
-    ///
-    /// **The value is inert**, and that is measured rather than assumed: `Set`
-    /// copies the parameter struct into the plugin and `Get` reads back
-    /// `iFrameComplexity` and nothing else, while the arrays themselves reach
-    /// `Process` as `&mut [i32]` slices. The store is kept because the C++ keeps
-    /// it. Empty answers null, as the raw root did — `as_mut_ptr` on an empty
-    /// `Vec` answers a dangling non-null address.
-    #[inline]
-    pub fn gom_sad_ptr(&mut self) -> *mut i32 {
-        if self.pCurrentFrameGomSad.is_empty() {
-            return std::ptr::null_mut();
-        }
-        self.pCurrentFrameGomSad.as_mut_ptr()
-    }
+    // `gom_sad_ptr` — [`gom_sad`](Self::gom_sad) as a raw root — stood here for one
+    // consumer, `SComplexityAnalysisScreenParam::pGomComplexity`. **P10.1.B2
+    // (D-scc-2) deleted the field and the accessor with it**: the screen plugin
+    // (P10.2) takes the array as `&mut [i32]`, as the camera plugin already does.
 }
 
 /// Converts a quantization parameter ($QP$) to its scaled quantization step size ($Q_{\text{step}}$).

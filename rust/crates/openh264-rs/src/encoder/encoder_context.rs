@@ -437,6 +437,7 @@ pub use crate::encoder::md::SMcFunc;
 pub use crate::encoder::slice_multi_threading::SSliceThreading;
 pub use crate::encoder::wels_preprocess::SVAAFrameInfo;
 pub use crate::encoder::wels_preprocess::SVAAFrameInfoExt;
+pub use crate::encoder::wels_preprocess::VaaBlock;
 pub use crate::encoder::svc_encode_slice::SLayerInfo;
 pub use crate::encoder::wels_func_ptr_def::{EntropyCoder, SWelsFuncPtrList};
 
@@ -1262,7 +1263,7 @@ impl sWelsEncCtx {
     ) -> (Option<&mut SVAAFrameInfo>, &mut SWelsSvcRc, Option<&SRefList>) {
         let sWelsEncCtx { pVaa, pWelsSvcRc, ppRefPicListExt, .. } = self;
         (
-            pVaa.as_deref_mut(),
+            pVaa.as_deref_mut().map(VaaBlock::base_mut),
             &mut pWelsSvcRc[kiDid],
             ppRefPicListExt.get(kiDid).and_then(|s| s.as_deref()),
         )
@@ -1306,7 +1307,7 @@ impl sWelsEncCtx {
                 .as_deref_mut()
                 .expect("the coding parameters are built by WelsInitEncoderExt")
                 .sDependencyLayers[kiDid],
-            vaa: pVaa.as_deref_mut(),
+            vaa: pVaa.as_deref_mut().map(VaaBlock::base_mut),
             ref_list: ppRefPicListExt.get_mut(kiDid).and_then(|s| s.as_deref_mut()),
             ltr: &mut pLtr[kiDid],
             ref_of_cur_tid_is_ltr: bRefOfCurTidIsLtr,
@@ -1332,7 +1333,7 @@ impl sWelsEncCtx {
     ) -> (Option<&mut SVAAFrameInfo>, Option<&mut SRefList>, &mut SLTRState) {
         let sWelsEncCtx { pVaa, ppRefPicListExt, pLtr, .. } = self;
         (
-            pVaa.as_deref_mut(),
+            pVaa.as_deref_mut().map(VaaBlock::base_mut),
             ppRefPicListExt.get_mut(kiDid).and_then(|s| s.as_deref_mut()),
             &mut pLtr[kiDid],
         )
@@ -1400,7 +1401,7 @@ impl sWelsEncCtx {
         kiDid: usize,
     ) -> (Option<&mut SVAAFrameInfo>, &mut SWelsSvcRc) {
         let sWelsEncCtx { pVaa, pWelsSvcRc, .. } = self;
-        (pVaa.as_deref_mut(), &mut pWelsSvcRc[kiDid])
+        (pVaa.as_deref_mut().map(VaaBlock::base_mut), &mut pWelsSvcRc[kiDid])
     }
 
     /// The rate-control state of spatial layer `kiDid` — `pWelsSvcRc[did]`, which
@@ -1706,7 +1707,7 @@ impl sWelsEncCtx {
     /// preprocessor and the reference-list managers, all single-threaded.
     #[inline]
     pub fn vaa(&self) -> Option<&SVAAFrameInfo> {
-        self.pVaa.as_deref()
+        self.pVaa.as_deref().map(VaaBlock::base)
     }
 
     /// [`vaa`](Self::vaa) for the preprocessor and the reference-list managers.
@@ -1714,7 +1715,7 @@ impl sWelsEncCtx {
     /// **Single-threaded only** — see [`rc_at_mut`](Self::rc_at_mut).
     #[inline]
     pub fn vaa_mut(&mut self) -> Option<&mut SVAAFrameInfo> {
-        self.pVaa.as_deref_mut()
+        self.pVaa.as_deref_mut().map(VaaBlock::base_mut)
     }
 
     /// [`vaa`](Self::vaa) for the 30 readers that **do not ask** — the analysis
@@ -1740,7 +1741,7 @@ impl sWelsEncCtx {
     /// asking, through [`vaa`](Self::vaa).
     #[inline]
     pub fn vaa_expect(&self) -> &SVAAFrameInfo {
-        self.pVaa.as_deref().expect("the frame's video-analysis block")
+        self.vaa().expect("the frame's video-analysis block")
     }
 
     /// [`vaa_expect`](Self::vaa_expect) for the ten writers — the reference-list
@@ -1757,7 +1758,7 @@ impl sWelsEncCtx {
     /// [`vaa_mut`](Self::vaa_mut).
     #[inline]
     pub fn vaa_expect_mut(&mut self) -> &mut SVAAFrameInfo {
-        self.pVaa.as_deref_mut().expect("the frame's video-analysis block")
+        self.vaa_mut().expect("the frame's video-analysis block")
     }
 
     /// [`vaa`](Self::vaa) **as a raw pointer**, null when the block is absent.
@@ -1771,7 +1772,7 @@ impl sWelsEncCtx {
     /// It is also the root [`vaa_ext`](Self::vaa_ext) casts.
     #[inline]
     pub fn vaa_ptr(&self) -> *mut SVAAFrameInfo {
-        match self.pVaa.as_deref() {
+        match self.vaa() {
             Some(v) => v as *const SVAAFrameInfo as *mut SVAAFrameInfo,
             None => std::ptr::null_mut(),
         }
@@ -1807,42 +1808,40 @@ impl sWelsEncCtx {
 
 
     /// The screen-content extension of the video-analysis block, **safely** —
-    /// S11.3's replacement for [`vaa_ext`](Self::vaa_ext)'s downcast
-    /// (decision D-scope-6).
+    /// S11.3's replacement for the `static_cast<SVAAFrameInfoExt*>(pCtx->pVaa)`
+    /// downcast (decision D-scope-6), answering the [`VaaBlock::Screen`] arm
+    /// (P10.1, D-scc-1).
     ///
-    /// **It answers `None`, and that is the whole point.** Upstream reaches the
-    /// extension with `static_cast<SVAAFrameInfoExt*>(pCtx->pVaa)`, which is
-    /// sound there because the screen-content path allocates an
-    /// `SVAAFrameInfoExt` and stores its address in `pVaa`. **This port never
-    /// calls `RequestMemoryVaaScreen`** (F177), so `pVaa` is always a plain
-    /// `Box<SVAAFrameInfo>` and the cast reads past the end of its allocation —
-    /// undefined, and reachable only from configurations the port cannot
-    /// select. The C-style downcast is therefore not merely dormant, it is
-    /// *unrepresentable* in the storage this port has, and the honest safe form
-    /// says so by construction rather than by a comment on an `unsafe` block.
+    /// Upstream's cast is sound because `RequestMemorySvc` allocates an
+    /// `SVAAFrameInfoExt` under `SCREEN_CONTENT_REAL_TIME` and a plain
+    /// `SVAAFrameInfo` otherwise (`encoder_ext.cpp:1707-1718`); the two arms of
+    /// [`VaaBlock`] are those two allocations, and this is `Some` exactly when the
+    /// C++ cast would have read an extension rather than past the end of the base
+    /// block. `None` is therefore camera content, and every consumer keeps its
+    /// shape — the reads, the branches, the arithmetic are line-for-line what
+    /// upstream does, behind `if let Some(ext)`: the screen reference strategies
+    /// (`ref_list_mgr_svc.rs`), the scroll/static P-skip and block-static
+    /// stamping (`svc_mode_decision.rs`), the preprocessor's screen reference
+    /// selection and complexity block (`wels_preprocess.rs`), and the rate
+    /// control's screen complexity reads through
+    /// [`vaa_ext_screen_frame_complexity`](Self::vaa_ext_screen_frame_complexity).
     ///
-    /// **What a future screen-content effort inherits.** Every consumer keeps
-    /// its shape — the reads, the branches, the arithmetic are line-for-line
-    /// what upstream does, now behind `if let Some(ext)`. Making them live is
-    /// one change *here*: give the context storage that can hold either form
-    /// (`enum { Base(Box<SVAAFrameInfo>), Screen(Box<SVAAFrameInfoExt>) }`) and
-    /// return the `Screen` arm. Nothing at the twenty-odd call sites moves.
-    ///
-    /// The `#[allow(unreachable_code)]`-shaped dead branches this leaves at the
-    /// call sites are deliberate and are the record of an unported feature.
+    /// Until P10.1.B3 lands `RequestMemoryVaaScreen` the `Screen` arm is never
+    /// built and this still answers `None` on every path; that checkpoint is
+    /// where the answer changes, and nothing at the call sites moves for it.
     #[inline]
     pub fn vaa_ext_ref(&self) -> Option<&SVAAFrameInfoExt> {
-        // `pVaa` cannot hold an `SVAAFrameInfoExt`: its type is
-        // `Option<Box<SVAAFrameInfo>>` and the only allocator of the extension
-        // (`RequestMemoryVaaScreen`) is unported. There is nothing to borrow.
-        None
+        self.pVaa.as_deref().and_then(VaaBlock::ext)
     }
 
-    /// [`vaa_ext_ref`](Self::vaa_ext_ref) for the extension's one writer,
-    /// `AnalyzePictureComplexity`'s screen arm. `None` for the same reason.
+    /// [`vaa_ext_ref`](Self::vaa_ext_ref) for the extension's writers —
+    /// `AnalyzePictureComplexity`'s screen arm and `DetectSceneChangeScreen`'s
+    /// best-reference stamping. **Single-threaded only**, as
+    /// [`vaa_mut`](Self::vaa_mut): the slice workers read the extension and never
+    /// write it (D-scc-5).
     #[inline]
     pub fn vaa_ext_ref_mut(&mut self) -> Option<&mut SVAAFrameInfoExt> {
-        None
+        self.pVaa.as_deref_mut().and_then(VaaBlock::ext_mut)
     }
 }
 
@@ -1992,7 +1991,12 @@ pub struct sWelsEncCtx {
     /// been `Box`-built and has owned its seven per-frame arrays since T6.F3; this is
     /// the last step, giving the `Box` an owner so `Create`/`Destroy` are `new`/`Drop`.
     /// `None` before the preprocessor runs. Resolve it with [`sWelsEncCtx::vaa`].
-    pub pVaa: Option<Box<SVAAFrameInfo>>,
+    ///
+    /// **P10.1 (D-scc-1): a [`VaaBlock`]**, `Base` for camera content and `Screen`
+    /// for `SCREEN_CONTENT_REAL_TIME` — the two allocations of
+    /// `encoder_ext.cpp:1707-1718`. The enum sits inside the `Box` so this stays one
+    /// word; [`vaa_ext_ref`](sWelsEncCtx::vaa_ext_ref) is the `Screen` arm.
+    pub pVaa: Option<Box<VaaBlock>>,
     /// **S3.B1 — owned.** The preprocess object, `Box`-built by
     /// [`CWelsPreProcess::CreatePreProcess`] and dropped by the teardown; `None` is
     /// the null the raw held before init and after `FreeMemorySvc`. The methods
@@ -2960,7 +2964,7 @@ mod tests {
         ctx.pWelsSvcRc = (0..2).map(|_| SWelsSvcRc::default()).collect();
         ctx.pMvdCostTable = vec![0u16; 64];
         ctx.iMvdCostTableSize = 8;
-        ctx.pVaa = Some(Box::new(SVAAFrameInfo::default()));
+        ctx.pVaa = Some(Box::new(VaaBlock::Base(SVAAFrameInfo::default())));
         ctx.pSvcParam = Some(Box::new(SWelsSvcCodingParam::default()));
         ctx.ppRefPicListExt = vec![Some(SRefList::new())];
         ctx.ppDqLayerList = vec![Some(Box::new(
@@ -3670,7 +3674,7 @@ mod tests {
         param.sDependencyLayers[0].bEncCurFrmAsIdrFlag = true;
         ctx.pSvcParam = Some(Box::new(param.clone()));
         // T6.H10: the context owns the block, so the fixture hands it one.
-        ctx.pVaa = Some(Box::new(SVAAFrameInfo::default()));
+        ctx.pVaa = Some(Box::new(VaaBlock::Base(SVAAFrameInfo::default())));
 
         let ft = DecideFrameType(&mut ctx, 1, 0, false);
         assert_eq!(ft, EVideoFrameType::videoFrameTypeIDR);

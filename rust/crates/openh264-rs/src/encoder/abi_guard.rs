@@ -293,7 +293,10 @@ assert_size!(SVAAFrameInfo, 504);
 // `sVaaStrBestRefCandidate` and `sVaaLtrBestRefCandidate`, +256. Nothing in the
 // port allocates this struct (F177), so the growth is bytes no run ever takes.
 // **1696, measured.**
-assert_size!(SVAAFrameInfoExt, 1696);
+// **P10.1.B2: -16**, all of it `sComplexityScreenParam` (D-scc-2). The struct is
+// allocated now — `RequestMemorySvc` builds it under `SCREEN_CONTENT_REAL_TIME`
+// as of P10.1.B3 — so the bytes are ones a screen encode takes. **1680, measured.**
+assert_size!(SVAAFrameInfoExt, 1680);
 // **T6.F3**: +104, all of it its embedded `SVAAFrameInfo`. **1368, measured.**
 // **T9.X**: +8, all of it the same. **1376, measured.**
 // **S9.0c**: +160, all of it its embedded `SVAAFrameInfo`. **1536, measured.**
@@ -321,7 +324,10 @@ assert_size!(SAdaptiveQuantizationParam, 8);
 // with them `SVAAFrameInfo`'s last two `!Sync` reasons. **24, measured.**
 assert_size!(SComplexityAnalysisParam, 24);
 
-assert_size!(SComplexityAnalysisScreenParam, 72);
+// **P10.1.B2 (D-scc-2)**: 72 -> 56 — `pGomComplexity` (`int*`) is gone; the screen
+// plugin takes the GOM array as a slice at the call, as the camera one does, and
+// the field was the last thing keeping `SVAAFrameInfoExt` `!Sync`. **56, measured.**
+assert_size!(SComplexityAnalysisScreenParam, 56);
 
 // Mid-tier types.
 assert_size!(SSpatialLayerInternal, 68);
