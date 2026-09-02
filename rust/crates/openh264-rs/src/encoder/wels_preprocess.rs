@@ -494,11 +494,18 @@ impl Default for SComplexityAnalysisParam {
     }
 }
 
+/// `SComplexityAnalysisScreenParam` — `IWelsVP.h`. **P10.1.B2 (D-scc-2): the
+/// `int* pGomComplexity` member is gone.** It was a raw pointer aimed at the rate
+/// controller's `pCurrentFrameGomSad` (`wels_preprocess.cpp:924` — the field name
+/// is a misnomer, as the camera block's note says), and nothing in the port read
+/// it. The extension this block sits in lives inside a `Sync` context and is read
+/// by slice workers, which a raw pointer forbids; the camera plugin already takes
+/// its GOM array as `&mut [i32]` at the call (`processing/complexity_analysis.rs`)
+/// and the screen plugin (P10.2) does the same.
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct SComplexityAnalysisScreenParam {
     pub iMbRowInGom: i32,
-    pub pGomComplexity: *mut i32,
     pub iGomNumInFrame: i32,
     pub iFrameComplexity: i64,
     pub iIdrFlag: i32,
@@ -509,7 +516,6 @@ impl Default for SComplexityAnalysisScreenParam {
     fn default() -> Self {
         Self {
             iMbRowInGom: GOM_H_SCC,
-            pGomComplexity: std::ptr::null_mut(),
             iGomNumInFrame: 0,
             iFrameComplexity: 0,
             iIdrFlag: 0,
@@ -735,6 +741,62 @@ impl Default for SVAAFrameInfoExt {
             iVaaBestRefFrameNum: 0,
             pVaaBestBlockStaticIdc: None,
             pVaaBlockStaticIdc: SBlockStaticIdcStore::default(),
+        }
+    }
+}
+
+/// `sWelsEncCtx::pVaa`'s block: `SVAAFrameInfo` for camera content,
+/// `SVAAFrameInfoExt` for screen content — `encoder_ext.cpp:1707-1718` allocates
+/// one or the other, and every reader downcasts with `static_cast<SVAAFrameInfoExt*>`.
+/// The two arms are what that cast was claiming (P10.1, D-scc-1).
+///
+/// The enum lives *inside* the context's `Box` (`Option<Box<VaaBlock>>`), so the
+/// field stays one word — `sWelsEncCtx` is `#[repr(C)]` and `Option<Box<_>>` is
+/// niche-optimised. [`base`](Self::base) projects the `SVAAFrameInfo` out of either
+/// arm, which is the read every camera-path consumer performs; [`ext`](Self::ext)
+/// answers the `Screen` arm and `None` for `Base`, which is where the cast would
+/// have read past the end of the allocation.
+#[derive(Debug)]
+pub enum VaaBlock {
+    Base(SVAAFrameInfo),
+    Screen(SVAAFrameInfoExt),
+}
+
+impl VaaBlock {
+    /// The base block, from either arm — `SVAAFrameInfoExt` inherits `SVAAFrameInfo`
+    /// (`wels_preprocess.h:106`), so the `Screen` arm's base is its first member.
+    #[inline]
+    pub fn base(&self) -> &SVAAFrameInfo {
+        match self {
+            Self::Base(b) => b,
+            Self::Screen(e) => &e.sVaaFrameInfo,
+        }
+    }
+
+    /// [`base`](Self::base) for the writers.
+    #[inline]
+    pub fn base_mut(&mut self) -> &mut SVAAFrameInfo {
+        match self {
+            Self::Base(b) => b,
+            Self::Screen(e) => &mut e.sVaaFrameInfo,
+        }
+    }
+
+    /// The screen-content extension: the `Screen` arm, or `None` for camera content.
+    #[inline]
+    pub fn ext(&self) -> Option<&SVAAFrameInfoExt> {
+        match self {
+            Self::Screen(e) => Some(e),
+            Self::Base(_) => None,
+        }
+    }
+
+    /// [`ext`](Self::ext) for the writers.
+    #[inline]
+    pub fn ext_mut(&mut self) -> Option<&mut SVAAFrameInfoExt> {
+        match self {
+            Self::Screen(e) => Some(e),
+            Self::Base(_) => None,
         }
     }
 }
@@ -2994,11 +3056,15 @@ impl CWelsPreProcess {
             // the extension's begins — they are two `&mut` of one context, the
             // split S11.2c's `rc_and_current_layer_mut` makes for the layer.
             // Ordering suffices here because nothing reads the two at once.
-            let (kpGomComplexity, kiGomNumInFrame) = {
+            // **P10.1.B2 (D-scc-2)**: the raw root `gom_sad_ptr()` used to hand out
+            // here is gone with the `pGomComplexity` field it filled; P10.2 hands
+            // `pWelsSvcRc.pCurrentFrameGomSad` to the plugin as `&mut [i32]`, as the
+            // camera arm below does.
+            let kiGomNumInFrame = {
                 let pWelsSvcRc = pCtx.rc_at_mut(kiDependencyId as usize);
                 pWelsSvcRc.pGomForegroundBlockNum.fill(0);
                 pWelsSvcRc.pCurrentFrameGomSad.fill(0);
-                (pWelsSvcRc.gom_sad_ptr(), pWelsSvcRc.iGomSize)
+                pWelsSvcRc.iGomSize
             };
             let kiIdrFlag = if eSliceType == EWelsSliceType::I_SLICE { 1 } else { 0 };
 
@@ -3008,7 +3074,6 @@ impl CWelsPreProcess {
             let sComplexityAnalysisParam = &mut pVaaExt.sComplexityScreenParam;
 
             sComplexityAnalysisParam.iFrameComplexity = 0;
-            sComplexityAnalysisParam.pGomComplexity = kpGomComplexity;
             sComplexityAnalysisParam.iGomNumInFrame = kiGomNumInFrame;
             sComplexityAnalysisParam.iIdrFlag = kiIdrFlag;
             sComplexityAnalysisParam.iMbRowInGom = GOM_H_SCC;
@@ -3016,13 +3081,18 @@ impl CWelsPreProcess {
             sComplexityAnalysisParam.sScrollResult.iScrollMvX = 0;
             sComplexityAnalysisParam.sScrollResult.iScrollMvY = 0;
 
-            // METHOD_COMPLEXITY_ANALYSIS_SCREEN: untranslated (`crate::processing`).
-            // The C++ builds the two pixel maps, hands the block above to the screen
-            // complexity plugin, runs it, and reads `iFrameComplexity` back on
-            // success; the port's dispatch returned `RET_NOTSUPPORTED` and the
-            // read-back was skipped, so the block keeps the values written into it
-            // above. Screen content only, off in every gate configuration (S18: no
-            // stub is invented, and the dead pixel maps are not built).
+            // METHOD_COMPLEXITY_ANALYSIS_SCREEN: untranslated (`crate::processing`)
+            // — **P10.2 replaces this tail.** The C++ builds the two pixel maps,
+            // hands the block above to the screen complexity plugin, runs it, and
+            // reads `iFrameComplexity` back on success; the port's dispatch returned
+            // `RET_NOTSUPPORTED` and the read-back was skipped, so the block keeps
+            // the values written into it above (S18: no stub is invented, and the
+            // dead pixel maps are not built). P10.2 hands
+            // `pWelsSvcRc.pCurrentFrameGomSad` to the plugin as `&mut [i32]`, as the
+            // camera arm does, and the zero `iFrameComplexity` this leaves flows into
+            // the rate control's screen reads until then — defined on both sides,
+            // since `WELS_DIV_ROUND64` guards the zero divisor exactly as upstream's
+            // macro does.
             let iRet = crate::processing::vaacalc::RET_NOTSUPPORTED;
             debug_assert_ne!(iRet, 0);
         } else {
@@ -3286,6 +3356,20 @@ impl CWelsPreProcess {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// **D-scc-5, by construction.** Slice workers read the screen extension and
+    /// the feature storage through a shared context, and every writer runs outside
+    /// the fork (the preprocessor, `PreprocessSliceCoding`, the post-join FME
+    /// switch), as in the C++. After D-scc-2 the block holds no raw pointer, so
+    /// the compiler is the referee: this fails to compile if either arm stops being
+    /// `Sync` — which is exactly what the deleted `*mut i32` did (B1 did not build
+    /// until B2 removed it; `thread::scope` refused the context).
+    #[test]
+    fn vaa_block_is_sync() {
+        fn assert_sync<T: Sync>() {}
+        assert_sync::<VaaBlock>();
+        assert_sync::<SVAAFrameInfoExt>();
+    }
 
     #[test]
     fn test_vaa_enum_defaults() {

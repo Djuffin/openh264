@@ -1337,10 +1337,14 @@ pub fn RequestMemorySvc(
     // `SVAAFrameInfo` is `Box`-built and owns its per-frame result arrays; the
     // background-detection pair exists exactly when the C++ allocates it.
     // **T6.H10**: `Box::into_raw` stood here; the context holds the `Box`.
-    ctx.pVaa = Some(crate::encoder::wels_preprocess::SVAAFrameInfo::new(
-        iCountMaxMbNum,
-        ctx.param().bEnableBackgroundDetection,
-    ));
+    // **P10.1.B1 (D-scc-1)**: the block is the `Base` arm of `VaaBlock`; `new`
+    // returns a `Box`, and `*` moves the value into the arm.
+    ctx.pVaa = Some(Box::new(crate::encoder::wels_preprocess::VaaBlock::Base(
+        *crate::encoder::wels_preprocess::SVAAFrameInfo::new(
+            iCountMaxMbNum,
+            ctx.param().bEnableBackgroundDetection,
+        ),
+    )));
 
     if ctx.param().bEnableAdaptiveQuant {
         // encoder_ext.cpp:1720, sAdaptiveQuantParam buffers. Not ported.
