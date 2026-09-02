@@ -19559,3 +19559,144 @@ ratio in that document describes a different comparison. What is owed and **not
 delivered** is a `perfpair` span over the unmeasured window (`1b3471c4`, S5's
 close, to HEAD — 147 commits); the two-run protocol answers "did this session
 regress anything", not "did S5–S12".
+
+---
+
+## 2026-09-02 — Phase 10, session P10.1 (the screen-content referee, and the fence comes down)
+
+**Goal:** the P10.1 brief — Part A, a byte referee for `SCREEN_CONTENT_REAL_TIME`
+(driver knobs, the `scc` preset, a synthetic scrolling-text clip); Part B, the three
+port-added refusals that stood where the C++ allocates, replaced by the allocations,
+so a screen `InitializeExt` succeeds and every `scc` row encodes to completion on
+both sides. **Deliberately not byte-identical at the exit** — the three screen
+video-processing plugins (P10.2) and the dispatch block (P10.3) are unported, and the
+C++ has no configuration with the plugins switched off.
+
+**Started at** `f8a51b08`, **ended at** the docs commit below. Working tree clean at
+both ends; no in-flight files (the brief's "13 uncommitted files" warning did not
+apply).
+
+**One ruling from the user, mid-session:** *"Don't run miri, translate to safe Rust
+directly."* So B6's D-scc-5 probe (two threads over the extension under Miri, with a
+raw-pointer control) and the `gates.sh session` Miri lane were struck; D-scc-5 rests
+on `vaa_block_is_sync`, a compile-time `Sync` assertion — and on F315, which is the
+compiler enforcing the same claim at the fork. The close ran `gates.sh family` in its
+place. No `unsafe`, no allow, no raw pointer was added anywhere in the session.
+
+### What landed
+
+| commit | checkpoint | what |
+|---|---|---|
+| `6f955eff` | P10.1.A | drivers take `usage`/`lossless`; `compare.sh` carries `setopt usage lossless`; `gen_screen_clip.py`; the `scc` preset (148 rows, `SCC_TIER=min` = 28) |
+| `00bbe73d` | P10.1.B1+B2 | `VaaBlock { Base, Screen }` inside the context's `Box` (D-scc-1); `pGomComplexity: *mut i32` and `gom_sad_ptr` deleted (D-scc-2); ratchet regenerated 393 -> 391 raw_ptr |
+| `c972d717` | P10.1.B3 | `RequestMemoryVaaScreen`: the `Screen` arm is built, with the block-static store allocated |
+| `9f324e3a` | P10.1.B4 | `SFeatureSearchPreparation` re-ported onto the last DQ layer |
+| `faa26008` | P10.1.B5 | `AllocPicture` attaches `SScreenBlockFeatureStorage` (`RequestScreenBlockFeatureStorage`); `pFeatureOfBlockPointer` deleted, `FmeKernels`, the two signatures (D-scc-3); the fence is down |
+| `786742a0` | P10.1.B6+B7 | the four API tests, the scroll-bounds test rewritten to upstream's, the F125/`PreprocessSliceCoding` comment rewrites |
+| *(this commit)* | close | this entry, `phase10_findings.md` (F315-F320), status/handoff/plan |
+
+### Gate verdicts, per checkpoint (denominators quoted)
+
+* **Baseline (`f8a51b08`)**: `gates.sh family` PASS — cargo test 566/0/21 debug,
+  559/0/21 release; sweeps **583/583 both profiles**; ratchet pinned 393 raw_ptr /
+  122 unsafe_block / 52 unsafe_fn / 1 unsafe_impl; unsafe census 12 rows; duplicate
+  census 56 allowlisted; `gtest_stretch --check` **191/199, allowlist 8**;
+  `port_census --classify` **19 missing**; tag grep count **37**.
+* **A**: camera row with `0 0 0` spelled out BYTE-IDENTICAL (32959 bytes);
+  `log_referee.sh` PASS (33/35 identical, 2 gap rows owned, exit 0); `sweep.sh scc`
+  **PASS=0 FAIL=148** in both profiles, **148/148** rows `!! rust_enc exited 101`,
+  0 C++ exits; the four clips deterministic across two runs (sha256 equal) and
+  exactly `N*w*h*3/2` bytes; `gates.sh commit` PASS.
+* **B1+B2**: `gates.sh family` PASS — 567/0/21 and 560/0/21; sweeps 583/583 both;
+  ratchet **regenerated** (raw_ptr 393 -> 391, the reason in the commit); census 12.
+* **B3**: `gates.sh commit` PASS — 567/560; the failure moved, by probe (F318).
+* **B4**: `gates.sh commit` PASS — 568/561 (+1 unit test); `SDqLayer` pin 800/728 ->
+  808/736 (F316).
+* **B5**: `gates.sh family` PASS — **569/0/21 and 562/0/21; sweeps 583/583 both
+  profiles, unchanged**; `sweep.sh scc` **PASS=0 FAIL=148 in both profiles, zero
+  `!!` lines, zero rows with a missing stream on either side, all 148 Rust streams
+  decode to the full frame count** (checked by size); the A5 hand row encodes 60
+  frames both sides (C++ 130593 / Rust 148650 bytes, `RESULT: DIFFER`, first
+  difference at byte 30611 — inside a P frame; the Rust stream decodes to 5529600
+  bytes); the camera `u0` row still BYTE-IDENTICAL; `gtest_stretch --check`
+  **193/199, allowlist 6, exit 0**; `port_census --classify` **14 missing, 101 renamed** (19 -> 14: the
+  five allocation rows reclassified `renamed` with their Rust sites);
+  `f239_span_scan` 0 spans / 72 exclusive derivations / 2687 bodies / 86 files.
+* **B6+B7**: `gates.sh commit` PASS — 573/0/21 debug, 566/0/21 release (+4 API
+  tests; the scroll-bounds test is a rewrite, not an addition).
+* **The close**, at `786742a0` — `gates.sh family` OVERALL: PASS: cargo test 573 passed / 0 failed / 21 ignored debug, 566 passed / 0 failed / 21 ignored release; camera sweeps PASS=583 FAIL=0 debug / PASS=583 FAIL=0 release; `sweep.sh scc` PASS=0 FAIL=148 debug (0 `!!` lines) / PASS=0 FAIL=148 release (0 `!!` lines); `gtest_stretch --check` gtest: 193/199, allowlist 6; `log_referee.sh` log referee: 33/35 messages identical, 2 gap rows owned (exit 0); unsafe_census: PASS — 12 pinned rows match the tree; ratchet raw_ptr 391      391        +0, no per-file increases vs baseline.; CENSUS: PASS; f239 span scan: 0 span(s) / 72 exclusive field derivations / 2687 bodies / 86 files; port census 327 missing by name: 14 missing, 101 renamed, 158 dead, 54 unclassified..
+
+### The `scc` tally, before and after
+
+Before B5 every row failed at init (`!! rust_enc exited 101`, the driver's
+`InitializeExt returned 1` assertion), 148/148 in both profiles. After B5 every row
+fails on bytes and nothing else: 148/148 `RESULT: DIFFER`, both streams present,
+every Rust stream decoding. That is the brief's required end state, and the reason
+`scc` is **not** in `gates.sh`'s family list (P10.4 adds it when it passes).
+
+### Counts that moved, with the reason
+
+| count | before | after | why |
+|---|---|---|---|
+| ratchet `raw_ptr` | 393 | 391 | D-scc-2: `SComplexityAnalysisScreenParam::pGomComplexity` and `gom_sad_ptr`'s return type deleted (B2; regenerated once) |
+| `SCREEN_CONTENT(dormant` grep count | 37 | 30 | B3: `SVAAFrameInfoExt` (1); B4: the deletion note (1) plus a prose mention inside it (1 — the grep counts mentions, not only tags); B5: `picture.rs` x4. Every remaining site is still unreachable or dark (the SCD family: F319; `PerformFMEPreprocess`; the searches) |
+| `port_census` missing | 19 | 14 | `RequestMemoryVaaScreen`, `ReleaseMemoryVaaScreen`, `RequestFeatureSearchPreparation`, `RequestScreenBlockFeatureStorage`, `ReleaseScreenBlockFeatureStorage` -> `renamed` (the Rust sites named in the classification file) |
+| gtest allowlist | 8 | 6 | `ScreenContentScrollMotionVectorBounds` and `ScreenContent_LosslessLink0_EnableLongTermReference` pass (init + encode, not bytes); the five `CompareOutput/8-12` rows reworded |
+| size pins | — | — | `SComplexityAnalysisScreenParam` 72 -> 56, `SVAAFrameInfoExt` 1696 -> 1680 (B2); `SDqLayer` 800/728 -> 808/736 (B4); `SScreenBlockFeatureStorage` 160 -> 136 (B5); all measured |
+| cargo test (debug/release) | 566/559 | 573/566 | +3 unit tests (`vaa_block_is_sync` at B2, `feature_search_preparation_sizes_and_flags_match_the_cpp` at B4, `alloc_picture_attaches_the_feature_storage_the_cpp_would` at B5) and +4 API tests at B6; the scroll-bounds test is a rewrite |
+
+### Where the brief was wrong, quoting it
+
+1. *"B1 — `VaaBlock` … This checkpoint changes no behaviour"* and *"It will not
+   compile until B2 (the raw pointer). Write it now, commit it with B2"* (of the
+   test) — B1 itself does not compile until B2: the fork's `thread::scope` refuses a
+   `!Sync` context (F315). B1 and B2 are one commit.
+2. *"There is no live `assert_size!(SDqLayer, ..)`"* — `assert_size_by_profile!
+   (SDqLayer, debug 800, release 728)` is live and fails the build; and
+   `assert_size!(SScreenBlockFeatureStorage, 160)` is live too (F316).
+3. *"`kiWidth`/`kiHeight` are the layer's `iVideoWidth`/`iVideoHeight`, already
+   bound at `:730-731`"* — bound in `InitDqLayers`'s first loop, not the DQ-layer
+   loop where B4's allocation goes (F317).
+4. *"After B3 a screen `InitializeExt` fails one step later — inside
+   `InitDqLayers` … Prove the failure moved: run the A5 hand row, read `r_*.log`,
+   quote the new failure"* — the log cannot show it (identical before and after,
+   F318); a probe can, and did. *"After B4 … still fails, now in `AllocPicture`.
+   Prove it moved again"* — it does not move at B4.
+5. *"Keep every tag on a body that is still unreachable (the SCD family …)"* and
+   the tags' own text *"an axis neither diffharness driver expresses"* — the
+   judging arm is installed and entered on every P macroblock of every `scc` row
+   (14160/14160 on the hand row, 0/1920 on the camera control); the skip decisions
+   stay dark. Tags kept, comments rewritten (F319).
+6. *"the port's screen encode differs from the reference on every P frame"* — the
+   first byte difference on the hand row is at byte 30611, i.e. the IDR frame is
+   identical and the difference begins in the first P frame; consistent with the
+   claim, and now measured.
+7. The B6 probe and `gates.sh session` — struck by the user, see above.
+8. *"`git status` … On 2026-09-02 the tree had 13 uncommitted files"* — clean.
+
+### Found but not fixed
+
+* `gen_screen_clip.py`'s `o_f = f * K` makes the frame after a hold frame sit `2K`
+  rows from the hold's content (the hold repeats frame `f-1` while `o_f` keeps
+  counting). Spelled out in the generator's docstring; P10.2's ground-truth tests
+  should read the generator, not the brief's "moved up by `K` rows" sentence.
+* The seven F125 comment blocks name `encoder_context.rs:1607-1612` for
+  `WelsInitSCDPskipFunc`; the installer lives in `svc_mode_decision.rs` (called from
+  `encoder_context.rs:2465`). Reworded in B7.
+
+### Next session's first action
+
+**P10.2 — the three plugins**: `METHOD_SCROLL_DETECTION`
+(`ScrollDetection.cpp:40-113`, `ScrollDetectionFuncs.cpp:37-198`),
+`METHOD_SCENE_CHANGE_DETECTION_SCREEN` (`SceneChangeDetection.h:141-192`),
+`METHOD_COMPLEXITY_ANALYSIS_SCREEN` (`ComplexityAnalysis.cpp:272-494`); their three
+call sites in `wels_preprocess.rs` (`DetectSceneChangeScreen`'s two
+`RET_NOTSUPPORTED` blocks, `AnalyzePictureComplexity`'s screen tail,
+`UpdateBlockIdcForScreen`); the two split-borrow accessors those sites need
+(`vaa_ext_mut_and_ref_list`, `rc_at_mut_and_ref_list`); the missing
+`iVaaFrameSceneChangeIdc` debug log line. **P10.3 — the dispatch**: `SetMeMethod`,
+`UpdateFMESwitch`/`CountFMECostDown`/`UpdateFMEGoodFrameCount`,
+`PreprocessSliceCoding`'s screen block (`encoder_ext.cpp:2708-2771`), the real
+`SetScrollingMvToMd` behind a retyped `PSetScrollingMv` (D-scc-4), the call to
+`PerformFMEPreprocess`, and the first byte gate on `SCC_TIER=min`. **P10.4 — widen
+and close.**
