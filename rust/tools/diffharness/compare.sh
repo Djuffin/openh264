@@ -1,7 +1,7 @@
 #!/bin/bash
 # Differential comparison: C++ reference encoder vs the Rust port, byte for byte.
 #
-#   usage: rust/tools/diffharness/compare.sh <yuv> <w> <h> <frames> <qp> <cabac> <gop> [rcmode] [baseinit] [slicemode] [slicenum] [threads] [complexity] [ltr] [ltrperiod] [ltrfb] [psstrategy] [dlayers] [denoise] [bgd]
+#   usage: rust/tools/diffharness/compare.sh <yuv> <w> <h> <frames> <qp> <cabac> <gop> [rcmode] [baseinit] [slicemode] [slicenum] [threads] [complexity] [ltr] [ltrperiod] [ltrfb] [psstrategy] [dlayers] [denoise] [bgd] [setopt] [usage] [lossless]
 #
 #   slicemode: 0 SM_SINGLE_SLICE (default), 1 SM_FIXEDSLCNUM_SLICE,
 #              2 SM_RASTER_SLICE, 3 SM_SIZELIMITED_SLICE.
@@ -72,15 +72,24 @@ DL=${18:-}; DN=${19:-}
 # (`SvcMdSCDMbEnc`, `CalUVSadCost`, `JudgeStaticSkip`/`JudgeScrollSkip`).
 # `WelsInitSCDPskipFunc` (`encoder_context.rs:1607-1612`) takes
 # `bScreenContent && bEnableSceneChangeDetect && iComplexityMode < HIGH_COMPLEXITY`,
-# and `bScreenContent` is `iUsageType == SCREEN_CONTENT_REAL_TIME` — an axis neither
-# driver expresses. That family is Phase 10's, not this one's (F125).
+# and `bScreenContent` is `iUsageType == SCREEN_CONTENT_REAL_TIME` — an axis the
+# drivers could not express until P10.1 added the 22nd argument below. That family
+# is Phase 10's (F125): see the `scc` preset in sweep.sh.
 BG=${20:-}
-TAG=$(basename "$YUV" .yuv)_${W}x${H}_qp${QP}_cabac${CABAC}_gop${GOP}${RC:+_rc$RC}${BASE:+_base$BASE}${SLM:+_sm$SLM}${SLN:+n$SLN}${THR:+_t$THR}${CPX:+_cx$CPX}${LTR:+_ltr$LTR}${LTRP:+p$LTRP}${LTRFB:+f$LTRFB}${PS:+_ps$PS}${DL:+_dl$DL}${DN:+_dn$DN}${BG:+_bg$BG}
+# 21st: setoptext — the drivers' 22nd argument (ENCODER_OPTION_SVC_ENCODE_PARAM_EXT
+# after frame N, 0 = never). This script never passed it; it is here so that the
+# two screen arguments after it land on the drivers' 23rd/24th positions. Driver
+# arguments are positional: whenever usage is given, setopt must be given too.
+SO=${21:-}
+# 22nd/23rd: iUsageType (0 camera, 1 screen) and bIsLosslessLink (P10.1). See the
+# `scc` preset in sweep.sh for what the axis reaches.
+USAGE=${22:-}; LL=${23:-}
+TAG=$(basename "$YUV" .yuv)_${W}x${H}_qp${QP}_cabac${CABAC}_gop${GOP}${RC:+_rc$RC}${BASE:+_base$BASE}${SLM:+_sm$SLM}${SLN:+n$SLN}${THR:+_t$THR}${CPX:+_cx$CPX}${LTR:+_ltr$LTR}${LTRP:+p$LTRP}${LTRFB:+f$LTRFB}${PS:+_ps$PS}${DL:+_dl$DL}${DN:+_dn$DN}${BG:+_bg$BG}${USAGE:+_u$USAGE}${LL:+_ll$LL}
 
 cd "$ROOT" || exit 1
-"$HERE/cxx_enc"                        "$YUV" "$W" "$H" "$N" "$QP" "$CABAC" "$GOP" "$OUT/c_$TAG.264"  $RC $BASE $SLM $SLN $THR $CPX $LTR $LTRP $LTRFB $PS $DL $DN $BG 2>"$OUT/c_$TAG.log"
+"$HERE/cxx_enc"                        "$YUV" "$W" "$H" "$N" "$QP" "$CABAC" "$GOP" "$OUT/c_$TAG.264"  $RC $BASE $SLM $SLN $THR $CPX $LTR $LTRP $LTRFB $PS $DL $DN $BG $SO $USAGE $LL 2>"$OUT/c_$TAG.log"
 cxx_rc=$?
-"$RUST_ENC"                            "$YUV" "$W" "$H" "$N" "$QP" "$CABAC" "$GOP" "$OUT/r_$TAG.264" $RC $BASE $SLM $SLN $THR $CPX $LTR $LTRP $LTRFB $PS $DL $DN $BG 2>"$OUT/r_$TAG.log"
+"$RUST_ENC"                            "$YUV" "$W" "$H" "$N" "$QP" "$CABAC" "$GOP" "$OUT/r_$TAG.264" $RC $BASE $SLM $SLN $THR $CPX $LTR $LTRP $LTRFB $PS $DL $DN $BG $SO $USAGE $LL 2>"$OUT/r_$TAG.log"
 rust_rc=$?
 
 # A driver that aborts leaves a short file, which otherwise reads as an ordinary
