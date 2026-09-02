@@ -21,6 +21,10 @@
 #                   -- measured 76/76 at T8b.C2; ps measured 90/90 the same day,
 #                      the first time it had ever been run
 #                   -- the only preset that runs METHOD_DOWNSAMPLE at all
+#             scc   SCREEN_CONTENT_REAL_TIME: 7 inputs x rc x gop x cabac x slices x
+#                   threads x LTR (148 configs; SCC_TIER=min for the 28-row byte tier)
+#                   -- P10.1: FAILS by design (every row DIFFER) until P10.3; not in
+#                      gates.sh's family list
 #             all   every preset above
 #
 # st and mt encode SWEEP_FRAMES (default 16, rounded up to 18-20 by looping) frames
@@ -186,6 +190,23 @@ loopfile() {
     : > "$LOOP_PATH"
     i=0
     while [ "$i" -lt "$reps" ]; do cat "$yuv" >> "$LOOP_PATH"; i=$((i + 1)); done
+  fi
+}
+
+# Build (once, cached in out/) a synthetic screen clip; see gen_screen_clip.py.
+#
+# The res/ clips are camera video: their text-free, unscrolled frames seldom satisfy
+# the scroll detector's line test (`CheckLine`, `ScrollDetectionFuncs.cpp:37`) and
+# never scroll by whole rows, so without these clips nothing in Phase 10 would ever
+# exercise `JudgeScrollSkip`, `WelsMotionEstimateSearchScrolled`,
+# `SetScrollingMvToMd` or `CheckDirectionalMv`. Reported in SCREEN_PATH.
+SCREEN_PATH=""
+screenclip() {  # name w h n k c d seed
+  SCREEN_PATH="$HERE/out/$1.yuv"
+  if [ ! -f "$SCREEN_PATH" ]; then
+    mkdir -p "$HERE/out"
+    python3 "$HERE/gen_screen_clip.py" --width "$2" --height "$3" --frames "$4" \
+      --scroll "$5" --cut-every "$6" --hold-every "$7" --seed "$8" --out "$SCREEN_PATH"
   fi
 }
 
@@ -442,6 +463,59 @@ sweep_bg() {
   done
 }
 
+sweep_scc() {
+  echo "-- preset: scc"
+  local tier=${SCC_TIER:-all}
+  local YUV W H N name rc gop cabac thr
+  # P10.1: the screen-content axis. Every row FAILS until P10.3 lands the dispatch
+  # block; until then this preset's job is to fail for the recorded reason (a Rust
+  # init failure before P10.1.B5, byte differences with every frame encoded after).
+  # It is deliberately NOT in gates.sh's family list; P10.4 adds it when it passes.
+  #
+  # Every row passes `so = 0` (compare.sh's 21st argument) before `usage = 1`:
+  # driver arguments are positional, and a row that omitted it would shift `usage`
+  # into the setoptext slot and encode camera content with a SetOption after frame
+  # 1 — two identical camera streams the sweep would happily call a PASS.
+  local INPUTS_SCC=()
+  loopfile res/CiscoVT2people_160x96_6fps.yuv 160 96 60;   INPUTS_SCC+=("$LOOP_PATH 160 96 $LOOP_FRAMES")
+  loopfile res/CiscoVT2people_320x192_12fps.yuv 320 192 60; INPUTS_SCC+=("$LOOP_PATH 320 192 $LOOP_FRAMES")
+  # 152 is not a multiple of 16, so this row also exercises the aligned-and-cropped
+  # path under screen usage.
+  loopfile res/Static_152_100.yuv 152 100 60;              INPUTS_SCC+=("$LOOP_PATH 152 100 $LOOP_FRAMES")
+  screenclip scc_text_320x192_k3  320 192 60 3  20 7 1;    INPUTS_SCC+=("$SCREEN_PATH 320 192 60")
+  screenclip scc_text_320x192_k17 320 192 60 17 20 0 2;    INPUTS_SCC+=("$SCREEN_PATH 320 192 60")
+  screenclip scc_text_160x96_k1   160 96  60 1  0  7 3;    INPUTS_SCC+=("$SCREEN_PATH 160 96 60")
+  screenclip scc_text_640x368_k8  640 368 40 8  20 7 4;    INPUTS_SCC+=("$SCREEN_PATH 640 368 40")
+
+  # tier min (28 rows): RC off, single slice, one thread, no LTR — P10.3's first byte gate.
+  for spec in "${INPUTS_SCC[@]}"; do
+    read -r YUV W H N <<< "$spec"; name=$(basename "$YUV" .yuv)
+    for gop in -1 4; do for cabac in 0 1; do
+      check "scc-min $name gop=$gop cabac=$cabac" \
+            "$YUV" "$W" "$H" "$N" 26 "$cabac" "$gop" -1 0 0 1 1 0 0 30 0 0 1 0 0 0 1 0
+    done; done
+  done
+  [ "$tier" = min ] && return
+
+  # tier wide (120 rows) on five inputs: the three res clips and two synthetic ones.
+  local WIDE=("${INPUTS_SCC[0]}" "${INPUTS_SCC[1]}" "${INPUTS_SCC[2]}" "${INPUTS_SCC[3]}" "${INPUTS_SCC[6]}")
+  for spec in "${WIDE[@]}"; do
+    read -r YUV W H N <<< "$spec"; name=$(basename "$YUV" .yuv)
+    # rate control x gop x cabac x {single slice/1 thread, size-limited slices/4 threads}
+    for rc in 1 2; do for gop in -1 4; do for cabac in 0 1; do
+      check "scc $name rc=$rc gop=$gop cabac=$cabac sm=0 t=1" \
+            "$YUV" "$W" "$H" "$N" 26 "$cabac" "$gop" "$rc" 0 0 1 1 0 0 30 0 0 1 0 0 0 1 0
+      check "scc $name rc=$rc gop=$gop cabac=$cabac sm=3 t=4" \
+            "$YUV" "$W" "$H" "$N" 26 "$cabac" "$gop" "$rc" 0 3 1500 4 0 0 30 0 0 1 0 0 0 1 0
+    done; done; done
+    # long-term reference over a lossless link (the CWelsReference_LosslessWithLtr path)
+    for rc in -1 2; do for cabac in 0 1; do for thr in 1 4; do
+      check "scc $name rc=$rc cabac=$cabac t=$thr ltr=4 lossless" \
+            "$YUV" "$W" "$H" "$N" 26 "$cabac" -1 "$rc" 0 0 1 "$thr" 0 4 30 0 0 1 0 0 0 1 1
+    done; done; done
+  done
+}
+
 sweep_qp() {
   echo "-- preset: qp"
   local YUV W H qp cabac
@@ -469,7 +543,8 @@ for preset in "$@"; do
     ps)  sweep_ps ;;
     dl)  sweep_dl ;;
     bg)  sweep_bg ;;
-    all) sweep_st; sweep_mt; sweep_qp; sweep_def; sweep_sl; sweep_ltr; sweep_ps; sweep_dl; sweep_bg ;;
+    scc) sweep_scc ;;
+    all) sweep_st; sweep_mt; sweep_qp; sweep_def; sweep_sl; sweep_ltr; sweep_ps; sweep_dl; sweep_bg; sweep_scc ;;
     *)   echo "unknown preset: $preset" >&2; exit 2 ;;
   esac
 done

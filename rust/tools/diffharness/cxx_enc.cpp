@@ -55,7 +55,7 @@ static void InstallTraceCapture (ISVCEncoder* pEnc) {
 
 int main (int argc, char** argv) {
   if (argc < 9) {
-    fprintf (stderr, "usage: %s <src.yuv> <w> <h> <frames> <qp> <cabac> <gop> <out.264> [rcmode] [baseinit 0|1|2] [slicemode] [slicenum] [threads] [complexity] [ltr] [ltrperiod] [ltrfb] [psstrategy] [dlayers] [denoise] [bgd] [setoptext]\n", argv[0]);
+    fprintf (stderr, "usage: %s <src.yuv> <w> <h> <frames> <qp> <cabac> <gop> <out.264> [rcmode] [baseinit 0|1|2] [slicemode] [slicenum] [threads] [complexity] [ltr] [ltrperiod] [ltrfb] [psstrategy] [dlayers] [denoise] [bgd] [setoptext] [usage 0|1] [lossless 0|1]\n", argv[0]);
     return 1;
   }
   const char* kpSrc    = argv[1];
@@ -142,6 +142,18 @@ int main (int argc, char** argv) {
   //
   // 0 (default) in every sweep row, so `sweep.sh` is untouched.
   const int   kiSetOptExt = (argc > 22) ? atoi (argv[22]) : 0;
+  // 23rd: iUsageType — 0 CAMERA_VIDEO_REAL_TIME (the default, and every preset
+  // before P10.1), 1 SCREEN_CONTENT_REAL_TIME. 24th: bIsLosslessLink, which the
+  // encoder reads only under screen usage: ParamValidationExt turns long-term
+  // reference off without it (encoder_ext.cpp:415-419).
+  //
+  // Under screen usage the encoder's own ParamValidation forces
+  // bEnableSceneChangeDetect ON and bEnableAdaptiveQuant / bEnableBackgroundDetection
+  // OFF (encoder_ext.cpp:274-290) whatever the three pins below say; the port does
+  // the same (wels_encoder_ext.rs), and the two trace logs show the same forcing —
+  // which is part of what a screen row compares. See the `scc` preset in sweep.sh.
+  const int   kiUsage    = (argc > 23) ? atoi (argv[23]) : 0;
+  const int   kiLossless = (argc > 24) ? atoi (argv[24]) : 0;
 
   ISVCEncoder* pEnc = NULL;
   if (WelsCreateSVCEncoder (&pEnc) != 0 || pEnc == NULL) {
@@ -170,7 +182,7 @@ int main (int argc, char** argv) {
     sParam.sSpatialLayers[0].iSpatialBitrate  = 2000000;
   } else {
   // ---- single spatial layer, single slice, RC off: the Phase-5 gate config ----
-  sParam.iUsageType                 = CAMERA_VIDEO_REAL_TIME;
+  sParam.iUsageType                 = kiUsage ? SCREEN_CONTENT_REAL_TIME : CAMERA_VIDEO_REAL_TIME;
   sParam.iPicWidth                  = kiWidth;
   sParam.iPicHeight                 = kiHeight;
   sParam.iTargetBitrate             = 500000;
@@ -205,7 +217,7 @@ int main (int argc, char** argv) {
   sParam.bEnableAdaptiveQuant       = false;
   sParam.bEnableFrameCroppingFlag   = true;
   sParam.bEnableSceneChangeDetect   = false;
-  sParam.bIsLosslessLink            = false;
+  sParam.bIsLosslessLink            = (kiLossless != 0);
   sParam.bFixRCOverShoot            = false;
   sParam.iIdrBitrateRatio           = 400;
   sParam.bPsnrY = sParam.bPsnrU = sParam.bPsnrV = false;

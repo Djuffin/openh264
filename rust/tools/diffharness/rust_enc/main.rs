@@ -79,7 +79,7 @@ unsafe fn install_trace_capture(pEnc: *mut ISVCEncoder) -> Option<Box<TraceSinkC
 fn main() {
     let a: Vec<String> = std::env::args().collect();
     if a.len() < 9 {
-        eprintln!("usage: rust_enc <src.yuv> <w> <h> <frames> <qp> <cabac> <gop> <out.264> [rcmode] [baseinit 0|1|2] [slicemode] [slicenum] [threads] [complexity] [ltr] [ltrperiod] [ltrfb] [psstrategy] [dlayers] [denoise] [bgd] [setoptext]");
+        eprintln!("usage: rust_enc <src.yuv> <w> <h> <frames> <qp> <cabac> <gop> <out.264> [rcmode] [baseinit 0|1|2] [slicemode] [slicenum] [threads] [complexity] [ltr] [ltrperiod] [ltrfb] [psstrategy] [dlayers] [denoise] [bgd] [setoptext] [usage 0|1] [lossless 0|1]");
         std::process::exit(1);
     }
     let src = &a[1];
@@ -132,14 +132,21 @@ fn main() {
     // Optional 21st: bEnableBackgroundDetection (Phase 9 session B4, D-ref-1). See
     // cxx_enc.cpp — pinned `false` by every driver before this session, which is what
     // left the background family dark. It does NOT reach the scene-change family:
-    // `WelsInitSCDPskipFunc` also requires `bScreenContent`, an axis neither driver
-    // expresses (F125).
+    // `WelsInitSCDPskipFunc` also requires `bScreenContent`, which is the `usage`
+    // argument below (P10.1; F125).
     let bgd: i32 = if a.len() > 21 { a[21].parse().unwrap() } else { 0 };
     // 23rd: the log referee's reach into `SetOption` — see `cxx_enc.cpp` for why.
     // N > 0 re-applies the same `SEncParamExt` through
     // `SetOption(ENCODER_OPTION_SVC_ENCODE_PARAM_EXT)` after frame N-1. 0 in every
     // sweep row.
     let setoptext: i32 = if a.len() > 22 { a[22].parse().unwrap() } else { 0 };
+    // 24th/25th: iUsageType (0 camera — the default and every preset before P10.1 —
+    // 1 SCREEN_CONTENT_REAL_TIME) and bIsLosslessLink, which the encoder reads only
+    // under screen usage (`ParamValidationExt` turns long-term reference off
+    // without it). See cxx_enc.cpp for the forcing screen usage applies to the
+    // three pinned flags below, and the `scc` preset in sweep.sh.
+    let usage: i32 = if a.len() > 23 { a[23].parse().unwrap() } else { 0 };
+    let lossless: i32 = if a.len() > 24 { a[24].parse().unwrap() } else { 0 };
 
     unsafe {
         let mut pEnc: *mut ISVCEncoder = std::ptr::null_mut();
@@ -166,7 +173,7 @@ fn main() {
             p.sSpatialLayers[0].fFrameRate = 30.0;
             p.sSpatialLayers[0].iSpatialBitrate = 2_000_000;
         } else {
-        p.iUsageType = EUsageType::CAMERA_VIDEO_REAL_TIME;
+        p.iUsageType = if usage != 0 { EUsageType::SCREEN_CONTENT_REAL_TIME } else { EUsageType::CAMERA_VIDEO_REAL_TIME };
         p.iPicWidth = w;
         p.iPicHeight = h;
         p.iTargetBitrate = 500000;
@@ -211,7 +218,7 @@ fn main() {
         p.bEnableAdaptiveQuant = false;
         p.bEnableFrameCroppingFlag = true;
         p.bEnableSceneChangeDetect = false;
-        p.bIsLosslessLink = false;
+        p.bIsLosslessLink = lossless != 0;
         p.bFixRCOverShoot = false;
         p.iIdrBitrateRatio = 400;
         p.bPsnrY = false;
