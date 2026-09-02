@@ -1787,21 +1787,20 @@ impl sWelsEncCtx {
     /// *read through* it was still spelled out at six sites in `rc.rs`, each
     /// carrying its own `allow(unsafe_code)` and — wrongly — a
     /// `port-raw(Phase 9)` tag. The operation they perform is not Phase 9's: it is
-    /// the `SVAAFrameInfoExt` downcast, which reads past the end of an
-    /// `SVAAFrameInfo` because the port never installs `RequestMemoryVaaScreen`
+    /// the `SVAAFrameInfoExt` downcast, which read past the end of an
+    /// `SVAAFrameInfo` while the port never installed `RequestMemoryVaaScreen`
     /// (F177). Six bodies were therefore counted as convertible when the thing
-    /// blocking them belongs to Phase 10.
+    /// blocking them belonged to Phase 10.
     ///
-    /// So the claim is made here, once, under the tag that actually describes it,
-    /// and the six callers become safe. Nothing about the read's correctness
-    /// changes — it is exactly as dormant and exactly as wrong as it was, and
-    /// Phase 10 now has one site to fix instead of six.
-    ///
+    /// So the claim is made here, once, and the six callers are safe. **P10.1.B3**
+    /// made the read real: under `SCREEN_CONTENT_REAL_TIME` the block is the
+    /// `Screen` arm and this answers its `iFrameComplexity` — which is 0 until
+    /// P10.2 ports the screen complexity plugin that writes it (defined on both
+    /// sides: `WELS_DIV_ROUND64` guards the zero divisor as upstream's macro does).
+    /// For camera content it is 0, which is what the six rate-control readers
+    /// already treat as "no screen complexity measured".
     #[inline]
     pub fn vaa_ext_screen_frame_complexity(&self) -> i64 {
-        // S11.3: safe, and the answer is unchanged for every reachable state —
-        // `None` in this port (F177, see `vaa_ext_ref`), and 0 is what the six
-        // rate-control readers already treat as "no screen complexity measured".
         self.vaa_ext_ref()
             .map_or(0, |ext| ext.sComplexityScreenParam.iFrameComplexity)
     }

@@ -1091,9 +1091,8 @@ pub fn InitDqLayers(
 /// Sizes and allocates everything the encoder needs for a frame, then calls
 /// [`InitDqLayers`] and [`InitMbListD`].
 ///
-/// **Deviations, all explicit** — and the list is shorter than it was (T8b.B4):
-/// * the screen-content VAA extension (`RequestMemoryVaaScreen`) returns
-///   `ENC_RETURN_UNSUPPORTED_PARA` (`:1199`). Phase 10.
+/// **Deviations, all explicit** — and the list is shorter than it was (T8b.B4,
+/// and P10.1.B3, which ported `RequestMemoryVaaScreen` and struck its line):
 /// * the adaptive-quantisation buffers return it too (`:1210`). The *plugin* is
 ///   ported (`processing/adaptive_quantization.rs`); these are the encoder-side
 ///   `sAdaptiveQuantParam` blocks, which are not.
@@ -1328,23 +1327,42 @@ pub fn RequestMemorySvc(
         .map(|_| crate::encoder::rc::SWelsSvcRc::default())
         .collect();
 
-    // pVaa memory allocation
-    if ctx.param().iUsageType == SCREEN_CONTENT_REAL_TIME {
-        // encoder_ext.cpp:1708, SVAAFrameInfoExt + RequestMemoryVaaScreen. Not ported.
-        return ENC_RETURN_UNSUPPORTED_PARA;
-    }
+    // pVaa memory allocation — encoder_ext.cpp:1707-1718.
+    //
     // **T6.F3**: one constructor where the C++ cuts seven `CMemoryAlign` blocks.
     // `SVAAFrameInfo` is `Box`-built and owns its per-frame result arrays; the
     // background-detection pair exists exactly when the C++ allocates it.
     // **T6.H10**: `Box::into_raw` stood here; the context holds the `Box`.
-    // **P10.1.B1 (D-scc-1)**: the block is the `Base` arm of `VaaBlock`; `new`
-    // returns a `Box`, and `*` moves the value into the arm.
-    ctx.pVaa = Some(Box::new(crate::encoder::wels_preprocess::VaaBlock::Base(
-        *crate::encoder::wels_preprocess::SVAAFrameInfo::new(
-            iCountMaxMbNum,
-            ctx.param().bEnableBackgroundDetection,
-        ),
-    )));
+    // **P10.1.B1 (D-scc-1)**: the block is one arm of `VaaBlock` — `Base` for
+    // camera content, `Screen` for `SCREEN_CONTENT_REAL_TIME`; `new` returns a
+    // `Box`, and `*` moves the value into the arm. **P10.1.B3**: the screen arm
+    // replaced an `ENC_RETURN_UNSUPPORTED_PARA` refusal that stood here from T6.
+    let kbBgd = ctx.param().bEnableBackgroundDetection;
+    let kiMaxNumRef = ctx.param().iMaxNumRefFrame;
+    if ctx.param().iUsageType == SCREEN_CONTENT_REAL_TIME {
+        // `RequestMemoryVaaScreen` (encoder_ext.cpp:1478-1491): one `WelsMallocz` of
+        // `iNumRef * (iCountMaxMbNum << 2)` bytes, walked by sixteen row pointers at
+        // one stride — which is what `SBlockStaticIdcStore::alloc` is. The C++
+        // passes `iMaxNumRefFrame` as the row count and leaves the slots past it
+        // null; `select()` answers `None` past `rows`. `ReleaseMemoryVaaScreen`
+        // (`:1493`) has no counterpart: `Drop`.
+        let rows = (kiMaxNumRef.max(0) as usize)
+            .min(crate::encoder::wels_preprocess::SBlockStaticIdcStore::MAX_ROWS);
+        let stride = (iCountMaxMbNum.max(0) as usize) << 2;
+        let mut ext = crate::encoder::wels_preprocess::SVAAFrameInfoExt {
+            sVaaFrameInfo: *crate::encoder::wels_preprocess::SVAAFrameInfo::new(
+                iCountMaxMbNum,
+                kbBgd,
+            ),
+            ..Default::default()
+        };
+        ext.pVaaBlockStaticIdc.alloc(rows, stride);
+        ctx.pVaa = Some(Box::new(crate::encoder::wels_preprocess::VaaBlock::Screen(ext)));
+    } else {
+        ctx.pVaa = Some(Box::new(crate::encoder::wels_preprocess::VaaBlock::Base(
+            *crate::encoder::wels_preprocess::SVAAFrameInfo::new(iCountMaxMbNum, kbBgd),
+        )));
+    }
 
     if ctx.param().bEnableAdaptiveQuant {
         // encoder_ext.cpp:1720, sAdaptiveQuantParam buffers. Not ported.
