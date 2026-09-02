@@ -638,10 +638,11 @@ impl Default for SVAAFrameInfo {
 /// `SSceneChangeResult`, into `SRefInfoParam`, into `pVaaBestBlockStaticIdc` —
 /// never carried anything but a **row number**.
 ///
-/// This port does not call `RequestMemoryVaaScreen` (F177), so the buffer is empty
-/// and every selector is `None` — exactly the `NULL` the C++ reads in the same
-/// state. A screen-content effort fills `buf`/`stride` in the allocator's place and
-/// every consumer below works unchanged.
+/// `RequestMemorySvc` fills `buf`/`stride` through [`alloc`](Self::alloc) under
+/// `SCREEN_CONTENT_REAL_TIME` (P10.1.B3, `encoder_ext.cpp:1707-1712`); for camera
+/// content the block is a plain `SVAAFrameInfo` and no store exists at all. An
+/// unallocated store answers `None` from every selector — exactly the `NULL` the
+/// C++ reads in the same state.
 #[derive(Debug, Default)]
 pub struct SBlockStaticIdcStore {
     /// `iNumRef * iCountMax8x8BNum` bytes, or empty when unallocated.
@@ -656,8 +657,9 @@ impl SBlockStaticIdcStore {
     /// `pVaaBlockStaticIdc[16]`'s slot count.
     pub const MAX_ROWS: usize = 16;
 
-    /// The allocator's side — `RequestMemoryVaaScreen`'s one `WelsMallocz`, for the
-    /// screen-content effort that ports it. Unused today, and that is F177.
+    /// The allocator's side — `RequestMemoryVaaScreen`'s one `WelsMallocz`
+    /// (`encoder_ext.cpp:1478-1491`), called from `RequestMemorySvc` with
+    /// `iMaxNumRefFrame` rows of `iCountMaxMbNum << 2` bytes (P10.1.B3).
     pub fn alloc(&mut self, rows: usize, stride: usize) {
         let rows = rows.min(Self::MAX_ROWS);
         self.buf = vec![0u8; rows * stride];
@@ -709,7 +711,10 @@ impl SBlockStaticIdcStore {
     }
 }
 
-// SCREEN_CONTENT(dormant: Phase 10) — see `SVAAFrameInfoExt_t`.
+/// `SVAAFrameInfoExt_t` — `wels_preprocess.h:106-116`. **Live since P10.1.B3**: the
+/// `Screen` arm of [`VaaBlock`], which `RequestMemorySvc` builds under
+/// `SCREEN_CONTENT_REAL_TIME`. `#[repr(C)]` with `sVaaFrameInfo` first, as the C++
+/// inheritance lays it out; do not reorder.
 #[repr(C)]
 #[derive(Debug)]
 pub struct SVAAFrameInfoExt {
@@ -1781,8 +1786,9 @@ impl CWelsPreProcess {
         _kiDidx: i32,
         _iRefTemporalIdx: i32,
     ) -> Option<SrcPicId> {
-        // S11.3: `None` in this port (F177) — there are no screen best-reference
-        // candidates, so there is no candidate picture to name.
+        // S11.3: `None` for camera content — no extension, so no candidate
+        // picture to name; `Some` under `SCREEN_CONTENT_REAL_TIME` since
+        // P10.1.B3 (D-scc-1).
         let pVaaExt = pCtx.vaa_ext_ref()?;
         let pBest = if bSceneLtr {
             &pVaaExt.sVaaLtrBestRefCandidate[0]
@@ -2561,7 +2567,8 @@ impl CWelsPreProcess {
 
         // A7, §4.6 reorder: four scalars out of the parameter block, none of them
         // held across the context calls below.
-        // S11.3: `None` in this port (F177). This body both reads the screen
+        // S11.3: `None` for camera content (P10.1.B3 made it `Some` under
+        // `SCREEN_CONTENT_REAL_TIME`, D-scc-1). This body both reads the screen
         // candidates and writes them back, so it takes the mutable accessor;
         // with no extension it takes the same exit `iTargetDid != 0` does two
         // lines down, which is this screen arm's established "no usable scene
@@ -3036,10 +3043,10 @@ impl CWelsPreProcess {
 
         let pSvcParam = pCtx.param_mut();
         if (*pSvcParam).iUsageType == EUsageType::SCREEN_CONTENT_REAL_TIME {
-            // S11.3: `None` in this port (F177) — the extension's complexity
-            // block does not exist, so the screen arm's analysis has nothing to
-            // write into. This is the extension's **one writer**, and it is the
-            // site a future screen-content effort makes live first.
+            // S11.3: `None` for camera content, where no extension exists;
+            // `Some` under `SCREEN_CONTENT_REAL_TIME` since P10.1.B3 (D-scc-1),
+            // so the block below is written on every screen frame. The plugin
+            // that reads it is P10.2's.
             // §4.6, reorder: the slice type is read before the writer's `&mut`.
             let eSliceType = pCtx.eSliceType;
 
@@ -3228,8 +3235,9 @@ impl CWelsPreProcess {
         pRefOri: &mut Option<SrcPicId>,
     ) -> i32 {
         let iTargetDid = pCtx.param().iSpatialLayerNum - 1;
-        // S11.3: `None` in this port (F177) — no screen candidates, so this
-        // reports the "no reference chosen" result its callers already handle.
+        // S11.3: `None` for camera content — no extension, so this reports the
+        // "no reference chosen" result its callers already handle; `Some` under
+        // `SCREEN_CONTENT_REAL_TIME` since P10.1.B3 (D-scc-1).
         let Some(pVaaExt) = pCtx.vaa_ext_ref() else {
             return 0;
         };

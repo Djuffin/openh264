@@ -208,8 +208,9 @@ impl Default for SSampleDealingPicData {
 
 
 
-// SCREEN_CONTENT(dormant: Phase 10) — `pVaa` is only ever an `SVAAFrameInfoExt`
-// under screen content, which `RequestMemorySvc` refuses. **F213**: this module
+// SCREEN_CONTENT(dormant: Phase 10) — `pVaa` is the `Screen` arm of `VaaBlock`
+// under screen content (P10.1.B3, D-scc-1); the P-skip family below stays dormant
+// until P10.2's plugins stamp what it reads and P10.3 installs it. **F213**: this module
 // used to declare its own three-field `SVAAFrameInfoExt_t` for the same C type,
 // and the two disagreed on layout — the canonical struct has
 // `sComplexityScreenParam` between the base and `sScrollDetectInfo`, so every
@@ -1971,9 +1972,10 @@ pub extern "C" fn JudgeScrollSkip(
     let kiMbY = (*pCurMb).iMbY as i32;
     let kiMbWidth: i32 = (*pCurDqLayer).iMbWidth as i32;
     let kiMbHeight: i32 = (*pCurDqLayer).iMbHeight as i32;
-    // S11.3: the screen-content extension, safely — `None` in this port
-    // (F177: nothing allocates an `SVAAFrameInfoExt`), which takes the same
-    // exit the `bScrollDetectFlag == false` arm below always took.
+    // S11.3: the screen-content extension, safely — `None` for camera content
+    // (no extension exists there), which takes the same exit the
+    // `bScrollDetectFlag == false` arm below always took; `Some` under
+    // `SCREEN_CONTENT_REAL_TIME` since P10.1.B3 (D-scc-1).
     let Some(pVaaExt) = pEncCtx.vaa_ext_ref() else {
         return false;
     };
@@ -2228,8 +2230,9 @@ pub extern "C" fn MdInterSCDPskipProcess(
     eSkipMode: ESkipModes,
 ) -> bool {
     let pMbCache = &mut pSlice.sMbCacheInfo;
-    // S11.3: `None` in this port (F177), and the SCROLLED arm below is the only
-    // consumer — with no extension there is no scroll vector and no skip.
+    // S11.3: `None` for camera content, where there is no extension, no scroll
+    // vector and no skip; `Some` under `SCREEN_CONTENT_REAL_TIME` since P10.1.B3
+    // (D-scc-1) — the SCROLLED arm below is the only consumer.
     let Some(pVaaExt) = pEncCtx.vaa_ext_ref() else {
         return false;
     };
@@ -2316,9 +2319,11 @@ pub fn SetBlockStaticIdcToMd(
     // body already computes, is the same move `SStrideTables::MbIndexXY` made
     // for the coordinate tables (S11.2d).
     //
-    // This arm is unreachable in this port: `pVaaExt` can only be obtained from
-    // `vaa_ext_ref()`, which answers `None` by construction (S11.3, F177). The
-    // conversion keeps the scaffolding a screen-content effort would inherit.
+    // `pVaaExt` comes from `vaa_ext_ref()`, `Some` only under
+    // `SCREEN_CONTENT_REAL_TIME` (P10.1.B3, D-scc-1) — and the selector read
+    // below is stamped only by P10.2's screen scene-change plugin, so until then
+    // it answers `None` and this arm's row read stays dark, as it was when S11.3's
+    // conversion kept the scaffolding.
     let kiBlocks = (kiWidth as usize) * (((*pDqLayer).iMbHeight as usize) << 1);
     // **S12.3.** The claim the raw form asserted — `pVaaBestBlockStaticIdc` addresses
     // one `u8` per 8x8 block of the layer's grid, `kiBlocks` of them — is now checked
@@ -2356,9 +2361,10 @@ pub fn WelsMdInterJudgeSCDPskip(
     pCurMb: &mut SMB,
 ) -> bool {
     let pCurDqLayer = current_layer_expect(pEncCtx);
-    // S11.3: `None` in this port (F177) — with no extension there are no
-    // block-static indices to stamp, which is the state every camera preset is
-    // already in (the array the raw form read is null there).
+    // S11.3: `None` for camera content — no extension, so no block-static
+    // indices to stamp (the array the raw form read is null there); `Some` under
+    // `SCREEN_CONTENT_REAL_TIME` since P10.1.B3 (D-scc-1), where the selector it
+    // reads is stamped by P10.2's screen scene-change plugin.
     let Some(pVaaExt) = pEncCtx.vaa_ext_ref() else {
         return false;
     };
@@ -2508,13 +2514,14 @@ pub fn SetScrollingMvToMd(pVaa: &SVAAFrameInfo, pWelsMd: &mut SWelsMD<'_>) {
     // never hand a worker an exclusive reference to the one shared block.
     // **S11.3: the last of the downcast family.** The cast stood here because
     // this body is handed the *base* block and upstream's screen path passes an
-    // `SVAAFrameInfoExt` in that slot. Two facts make it unrepresentable here:
-    // the port never allocates an extension (F177, see `vaa_ext_ref`), and
-    // **this function has no installer at all** — `pfSetScrollingMv` is only
-    // ever stamped with `SetScrollingMvToMdNull` (`encoder_ext.rs`), whose body
-    // is empty. So the C++'s read would be of whatever lies past the base
-    // allocation, and the value this port produces on every reachable path is
-    // the default the `Null` twin leaves. Written that way rather than cast.
+    // `SVAAFrameInfoExt` in that slot. The slot's type is what keeps it written
+    // this way: `PSetScrollingMv` takes the base block, and **this function has
+    // no installer** — `pfSetScrollingMv` is only ever stamped with
+    // `SetScrollingMvToMdNull` (`encoder_ext.rs`), whose body is empty — so the
+    // value this port produces on every reachable path is the default the `Null`
+    // twin leaves. P10.3 retypes the slot (D-scc-4) and installs this body from
+    // `PreprocessSliceCoding`'s screen block, reading the extension through
+    // `vaa_ext_ref` (`Some` under screen content since P10.1.B3).
     let _ = pVaa;
     let sTempMv = SMVUnitXY::default();
 
@@ -2536,11 +2543,14 @@ mod tests {
     /// **S12.3's referee: `SetBlockStaticIdcToMd` reads the right four bytes of the
     /// right row.**
     ///
-    /// The body it guards is dark — `vaa_ext_ref()` answers `None` by construction
-    /// (S11.3, F177), so no sweep row, in any preset or profile, executes a line of
-    /// it. That was true of the `from_raw_parts` this checkpoint replaced too, which
-    /// is exactly why the replacement needs a referee that does not depend on
-    /// reaching it the normal way: the test builds the extension itself.
+    /// The body it guards was dark when this was written — `vaa_ext_ref()`
+    /// answered `None` by construction (S11.3, F177), so no sweep row executed a
+    /// line of it. Since P10.1.B3 the `scc` preset enters it under screen usage,
+    /// but the selector it reads is stamped only by P10.2's screen scene-change
+    /// plugin, so the row read stays dark until then. That was true of the
+    /// `from_raw_parts` this checkpoint replaced too, which is exactly why the
+    /// replacement needs a referee that does not depend on reaching it the normal
+    /// way: the test builds the extension itself.
     ///
     /// What it pins is the whole of what changed. The old form indexed off a bare
     /// pointer, so *which* row was selected and *where* the row began were the same
