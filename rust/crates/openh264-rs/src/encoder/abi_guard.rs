@@ -149,7 +149,10 @@ assert_size_by_profile!(
 // `Option<Box<..>>`, so `assert_size!(SPicture, ..)` is untouched). It stays pinned for
 // the reason `SRefList` above is — one builder, one shape, and a silent change to it
 // would be a silent change to how a reference frame stores its feature arena.
-assert_size!(SScreenBlockFeatureStorage, 160);
+// **P10.1.B5 (D-scc-3): -24.** `pFeatureOfBlockPointer: Vec<u16>` is gone — it was
+// the address of the layer's scratch (`SFeatureSearchPreparation::pFeatureOfBlock`),
+// which reaches `CalculateFeatureOfBlock` as `&mut [u16]` now. **136, measured.**
+assert_size!(SScreenBlockFeatureStorage, 136);
 
 // codec/encoder/core/inc/parameter_sets.h
 assert_size!(SWelsSPS, 56);

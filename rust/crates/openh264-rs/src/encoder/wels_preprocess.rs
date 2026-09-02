@@ -1013,26 +1013,55 @@ pub fn JudgeNeedOfScaling(
 ///
 /// **Safe since T6.F2**: the picture owns every byte it has, so there is no allocator
 /// to be valid and no free contract to honour — dropping the `Box` releases it.
+///
+/// **P10.1.B5**: the `iNeedFeatureStorage != 0` arm is `picture_handle.cpp:115`'s
+/// call of `RequestScreenBlockFeatureStorage` (`svc_motion_estimate.cpp:683-725`),
+/// which stood here as a refusal (`return None`) from T6.F2. `None` is now what the
+/// C++ returns `NULL` for — FME asked for at both block sizes.
 pub fn AllocPicture(
     kiWidth: i32,
     kiHeight: i32,
     bNeedMbInfo: bool,
     iNeedFeatureStorage: i32,
 ) -> Option<Box<SPicture>> {
-    // `RequestScreenBlockFeatureStorage` is part of the screen-content path, which is
-    // outside the gate configuration and unported; refuse rather than hand back a
-    // picture whose storage the caller believes exists.
-    if iNeedFeatureStorage != 0 {
-        return None;
-    }
-
     // **T6.F2**: what is left of `picture_handle.cpp:51`. The struct, its four
     // per-macroblock side arrays *and* its three planes are all `SPicture::new`'s
     // now — the geometry, the padding, the stride alignment and the zeroing moved
-    // there with them, and this function is the refusal plus a constructor call.
-    // `CMemoryAlign` has nothing left to allocate for a picture, so the parameter is
-    // gone and `FreePicture` with it: a picture is released by dropping it.
-    Some(SPicture::new(kiWidth, kiHeight, bNeedMbInfo))
+    // there with them. `CMemoryAlign` has nothing left to allocate for a picture,
+    // so the parameter is gone and `FreePicture` with it: a picture is released by
+    // dropping it.
+    let mut pic = SPicture::new(kiWidth, kiHeight, bNeedMbInfo);
+    if iNeedFeatureStorage != 0 {
+        // picture_handle.cpp:115 -> RequestScreenBlockFeatureStorage.
+        let kiFeatureStrategyIndex = (iNeedFeatureStorage >> 16) as u8;
+        let kiMe8x8FME = iNeedFeatureStorage
+            & 0x0000FF
+            & crate::encoder::svc_motion_estimate::ME_FME as i32;
+        let kiMe16x16FME = ((iNeedFeatureStorage & 0x00FF00) >> 8)
+            & crate::encoder::svc_motion_estimate::ME_FME as i32;
+        if kiMe8x8FME == crate::encoder::svc_motion_estimate::ME_FME as i32
+            && kiMe16x16FME == crate::encoder::svc_motion_estimate::ME_FME as i32
+        {
+            // svc_motion_estimate.cpp:691: "the following memory allocation cannot
+            // support when FME at both size" — ENC_RETURN_UNSUPPORTED_PARA, which
+            // `picture_handle.cpp:116-119` turns into a freed picture and `NULL`.
+            return None;
+        }
+        // `for_frame`'s `bIsBlock8x8` is the C++'s `bIsBlock8x8 = (kiMe8x8FME ==
+        // ME_FME)` — the 8x8 FME bit and nothing else. With the fixed screen
+        // constants (`kiNeedFeatureStorage = 0x0307`) it is true: margin 8,
+        // `LIST_SIZE_SUM_8x8` entries.
+        let bIsBlock8x8 = kiMe8x8FME == crate::encoder::svc_motion_estimate::ME_FME as i32;
+        pic.pScreenBlockFeatureStorage = Some(Box::new(
+            crate::encoder::picture::SScreenBlockFeatureStorage::for_frame(
+                kiWidth,
+                kiHeight,
+                bIsBlock8x8,
+                kiFeatureStrategyIndex,
+            ),
+        ));
+    }
+    Some(pic)
 }
 
 /// Initializes scaled intermediate picture buffers if aspect-ratio scaling is required.
@@ -3377,6 +3406,29 @@ mod tests {
         fn assert_sync<T: Sync>() {}
         assert_sync::<VaaBlock>();
         assert_sync::<SVAAFrameInfoExt>();
+    }
+
+    /// `AllocPicture`'s screen arm (`picture_handle.cpp:115` ->
+    /// `RequestScreenBlockFeatureStorage`) at the harness geometry, with the three
+    /// `kiNeedFeatureStorage` values that matter: the screen content's fixed
+    /// `0x0307` (FME on 8x8 only), FME at both sizes (refused), and none.
+    #[test]
+    fn alloc_picture_attaches_the_feature_storage_the_cpp_would() {
+        let pic = AllocPicture(320, 192, true, 0x0307).expect("storage for 8x8 FME");
+        let storage = pic.pScreenBlockFeatureStorage.as_deref().expect("attached");
+        assert_eq!(storage.iIs16x16, 0);
+        assert_eq!(storage.uiFeatureStrategyIndex, 0);
+        assert_eq!(
+            storage.iActualListSize,
+            crate::encoder::svc_motion_estimate::LIST_SIZE_SUM_8x8 as i32
+        );
+        assert_eq!(storage.pLocationPointer.len(), 2 * 312 * 184);
+        assert!(!storage.bRefBlockFeatureCalculated);
+        // FME at both sizes: svc_motion_estimate.cpp:691 refuses.
+        assert!(AllocPicture(320, 192, true, 0x0707).is_none());
+        // no storage asked for: none attached (every camera picture).
+        let camera = AllocPicture(320, 192, true, 0).expect("a camera picture");
+        assert!(camera.pScreenBlockFeatureStorage.is_none());
     }
 
     #[test]

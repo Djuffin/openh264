@@ -168,7 +168,7 @@ name BsEndCavlc | renamed | safe/bits.rs:427's pair
 name WelsCabacEncodeGetPtr | renamed | set_mb_syn_cabac.rs:1137
 name CreateReferenceStrategy | renamed | ref_list_mgr_svc.rs:1662 — a match, not a factory
 name WelsEncoderEncodeParameterSets | renamed | wels_encoder_ext.rs:591 WelsEncoderEncodeParameterSetsRust
-name ReleaseFeatureSearchPreparation | renamed | svc_encode_slice.rs:1083 — screen-content-only allocation, see below
+name ReleaseFeatureSearchPreparation | renamed | P10.1.B4: `Drop` of `SFeatureSearchPreparation` (svc_motion_estimate.rs), released with the DQ layer as encoder_ext.cpp:973-977 does
 name UpdateFMESwitch | renamed | svc_motion_estimate.rs:377 (PUpdateFMESwitch) — the table entry exists
 name WelsFillingPred1to16_c | renamed | a 4-byte store; the port writes the slice
 name WelsFillingPred8to16_c | renamed | a store; the port writes the slice
@@ -208,8 +208,8 @@ name CWelsParametersetIdConstant | renamed | paraset_strategy.rs — the constan
 name SetBackgroundMbFlag | renamed | background_detection.rs — a flag store
 name UpperOUForegroundCheck | renamed | background_detection.rs's neighbour scan
 name BuildSceneChangeDetection | renamed | processing/mod.rs's plugin construction
-name RequestMemoryVaaScreen | missing | screen content (Phase 10): the VAA screen buffers, encoder_ext.cpp:1478, 7 statements
-name ReleaseMemoryVaaScreen | missing | screen content (Phase 10): encoder_ext.cpp:1493, 5 statements
+name RequestMemoryVaaScreen | renamed | P10.1.B3: `SBlockStaticIdcStore::alloc` (wels_preprocess.rs), called from `RequestMemorySvc`'s screen arm (encoder_ext.rs) — one `Vec` where the C++ walks sixteen row pointers over one `WelsMallocz`
+name ReleaseMemoryVaaScreen | renamed | P10.1.B3: `Drop` of `VaaBlock::Screen` (wels_preprocess.rs) — the context owns the box
 
 # =============================================================================
 # missing — the real gaps, by owner
@@ -264,9 +264,9 @@ name SelectTestLine | missing | Phase 10: ScrollDetectionFuncs.cpp:70, 15 statem
 name CompareLine | missing | Phase 10: ScrollDetectionFuncs.cpp:99, 6 statements
 name ScrollDetectionWithoutMask | missing | Phase 10: ScrollDetection.cpp:91, 15 statements
 name ScrollDetectionWithMask | missing | Phase 10: ScrollDetection.cpp:71, 11 statements
-name RequestScreenBlockFeatureStorage | missing | Phase 10: svc_motion_estimate.cpp:683, 20 statements (svc_motion_estimate.rs:1597 records the refusal)
-name ReleaseScreenBlockFeatureStorage | missing | Phase 10: svc_motion_estimate.cpp:727, 10 statements
-name RequestFeatureSearchPreparation | missing | Phase 10: svc_motion_estimate.cpp:648, 13 statements
+name RequestScreenBlockFeatureStorage | renamed | P10.1.B5: `SScreenBlockFeatureStorage::for_frame` (picture.rs), called from `AllocPicture`'s screen arm (wels_preprocess.rs) as picture_handle.cpp:115 does; the both-sizes refusal is `AllocPicture`'s `None`
+name ReleaseScreenBlockFeatureStorage | renamed | P10.1.B5: `Drop` of `SScreenBlockFeatureStorage` — the picture owns the box (`Option<Box<..>>`)
+name RequestFeatureSearchPreparation | renamed | P10.1.B4: `SFeatureSearchPreparation::new` (svc_motion_estimate.rs), called from `InitDqLayers` for the last layer (encoder_ext.rs)
 name CountFMECostDown | missing | Phase 10: svc_motion_estimate.cpp:1027, 8 statements (svc_motion_estimate.rs:1589)
 name UpdateFMEGoodFrameCount | missing | Phase 10: svc_motion_estimate.cpp:1043, 2 statements
 name GetReferenceSrcPicList | missing | Phase 10: CWelsPreProcessScreen, wels_preprocess.cpp:974

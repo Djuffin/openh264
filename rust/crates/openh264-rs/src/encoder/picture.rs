@@ -41,8 +41,8 @@ pub const LIST_SIZE: usize = 0x10000;
 ///
 /// **S6.B1 — owned, and the two pointer tables are index tables.** Every field was a
 /// raw pointer into a `CMemoryAlign` block (`svc_motion_estimate.cpp:690-721`); the
-/// storage owns its five buffers now. The shape is not a transliteration, because two
-/// of the five were *pointers into a third*:
+/// storage owns its four buffers now. The shape is not a transliteration, because two
+/// of the four were *pointers into a third*:
 ///
 /// * `pLocationPointer` is the **arena** — one flat run of (x, y) qpel pairs, grouped
 ///   by feature value, `2 * kiFrameSize` `u16`s wide.
@@ -62,12 +62,16 @@ pub const LIST_SIZE: usize = 0x10000;
 /// No longer `#[repr(C)]`: `Vec` has no C shape, and nothing crosses the ABI with this
 /// type — `SPicture` owns it as an `Option<Box<..>>` (S5.C6c) and the api island never
 /// names it.
-// SCREEN_CONTENT(dormant: Phase 10)
+///
+/// **P10.1.B5 (D-scc-3): the C++'s fifth member, `pFeatureOfBlockPointer`, is not
+/// here.** It was the *address* of the layer's `SFeatureSearchPreparation::
+/// pFeatureOfBlock` scratch, stored by `PerformFMEPreprocess` and read back only
+/// inside `CalculateFeatureOfBlock` — one owner, two names. The scratch belongs to
+/// the layer and reaches both functions as `&mut [u16]`. Live since this checkpoint:
+/// `AllocPicture` attaches one to every reference picture of the last layer under
+/// `SCREEN_CONTENT_REAL_TIME`.
 #[derive(Debug)]
 pub struct SScreenBlockFeatureStorage {
-    /// One feature value per block position of the reference frame, row-major over
-    /// `kiFrameSize` entries. `PerformFMEPreprocess` moves the caller's buffer in.
-    pub pFeatureOfBlockPointer: Vec<u16>,
     pub iIs16x16: i32,
     pub uiFeatureStrategyIndex: u8,
     /// Histogram: how many block positions carry each feature value. `iActualListSize`
@@ -92,7 +96,6 @@ impl Default for SScreenBlockFeatureStorage {
     /// (a derived `Default` would zero it, which is a different storage).
     fn default() -> Self {
         Self {
-            pFeatureOfBlockPointer: Vec::new(),
             iIs16x16: 0,
             uiFeatureStrategyIndex: 0,
             pTimesOfFeatureValue: Vec::new(),
@@ -114,10 +117,11 @@ impl SScreenBlockFeatureStorage {
     /// C++'s `WELS_MAX (LIST_SIZE_SUM_16x16, LIST_SIZE_MSE_16x16)` — deliberately not
     /// `kiListSize`. `uiSadCostThreshold` is `UINT_MAX`-filled there and here.
     ///
-    /// Nothing in the tree calls this yet — `AllocPicture` refuses
-    /// `iNeedFeatureStorage != 0` and F229 deleted the caller — so it exists for
-    /// Phase 10 and for this family's first test, which is the only referee the
-    /// conversion has (no sweep row reaches a line of this code).
+    /// Called from `AllocPicture` (`wels_preprocess.rs`) for the last layer's
+    /// reference pictures under `SCREEN_CONTENT_REAL_TIME` since P10.1.B5, as
+    /// `picture_handle.cpp:115` calls the C++; `bIsBlock8x8` is that function's
+    /// `(kiMe8x8FME == ME_FME)`. The `scc` sweep preset is its byte referee from
+    /// P10.3 on; until then the arena test below is the only one.
     pub fn for_frame(kiFrameWidth: i32, kiFrameHeight: i32, bIsBlock8x8: bool, kiFeatureStrategyIndex: u8) -> Self {
         let kiMarginSize = if bIsBlock8x8 { 8 } else { 16 };
         let kiFrameSize =
@@ -128,7 +132,6 @@ impl SScreenBlockFeatureStorage {
             256
         };
         Self {
-            pFeatureOfBlockPointer: Vec::new(),
             iIs16x16: i32::from(!bIsBlock8x8),
             uiFeatureStrategyIndex: kiFeatureStrategyIndex,
             pTimesOfFeatureValue: vec![0; kiListSize],
@@ -197,16 +200,13 @@ pub struct SPicture {
     pub iFrameAverageQp: i32,
 
     // for screen reference frames
-    // SCREEN_CONTENT(dormant: Phase 10)
-    /// **S5.C6c**: was `*mut SScreenBlockFeatureStorage`. Nothing in the tree assigns
-    /// this field — `AllocPicture` *refuses* `iNeedFeatureStorage != 0` and the
-    /// allocator that would have filled it was deleted at T7.C6 (F229) — so it is
-    /// `None` for the life of every picture the port can build. Owning it as an
-    /// `Option<Box<..>>` says that in the type, costs nothing (`Option<Box<T>>` is
-    /// niche-optimised to one word, so `assert_size!(SPicture, 344)` is unchanged),
-    /// and deletes the only reason `SetUnref` was `unsafe` — which had **16** call
-    /// sites. Phase 10 fills it with a `Some`; the struct and its fields stay, which
-    /// is the boundary T7.C6 drew.
+    /// **S5.C6c**: was `*mut SScreenBlockFeatureStorage`. Owning it as an
+    /// `Option<Box<..>>` costs nothing (`Option<Box<T>>` is niche-optimised to one
+    /// word, so `assert_size!(SPicture, 344)` is unchanged) and deleted the only
+    /// reason `SetUnref` was `unsafe` — which had **16** call sites. **P10.1.B5**:
+    /// `AllocPicture` fills it with a `Some` for the last layer's reference pictures
+    /// under `SCREEN_CONTENT_REAL_TIME` (`picture_handle.cpp:115`); `None` for every
+    /// other picture, which is the C++'s `NULL`.
     pub pScreenBlockFeatureStorage: Option<Box<SScreenBlockFeatureStorage>>,
 }
 
@@ -299,7 +299,7 @@ impl SPicture {
             uiSpatialId: 0,
             iFrameAverageQp: 0,
 
-            // SCREEN_CONTENT(dormant: Phase 10)
+            // `AllocPicture` attaches the storage after this (P10.1.B5).
             pScreenBlockFeatureStorage: None,
         })
     }
@@ -546,7 +546,7 @@ impl SPicture {
         self.iMarkFrameNum = -1;
         self.bUsedAsRef = false;
 
-        // SCREEN_CONTENT(dormant: Phase 10)
+        // picture_handle.cpp:245 — live for screen reference pictures since P10.1.B5.
         if let Some(storage) = self.pScreenBlockFeatureStorage.as_deref_mut() {
             storage.bRefBlockFeatureCalculated = false;
         }
