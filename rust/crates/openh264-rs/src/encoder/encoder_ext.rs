@@ -2620,7 +2620,10 @@ fn SetNormalCodingFunc(pFuncList: &mut SWelsFuncPtrList) {
 /// `pfWelsRcPictureInit()` and `WelsInitCurrentLayer()`.
 ///
 /// The `SCREEN_CONTENT_REAL_TIME` block (`encoder_ext.cpp:2708-2771`) is the only part
-/// not translated; see the comment at its position below.
+/// not translated; see the comment at its position below. It is P10.3's: the
+/// allocations it reads (`pFeatureSearchPreparation`, the reference pictures'
+/// `pScreenBlockFeatureStorage`, the VAA extension) exist since P10.1, and the
+/// plugins that fill what it dispatches on are P10.2's.
 pub fn PreprocessSliceCoding(pCtx: &mut sWelsEncCtx) {
     let pCurLayer = current_layer_expect(pCtx);
     let bFastMode = pCtx.param().iComplexityMode == LOW_COMPLEXITY;
@@ -2702,9 +2705,13 @@ pub fn PreprocessSliceCoding(pCtx: &mut sWelsEncCtx) {
     }
 
     // The SCREEN_CONTENT_REAL_TIME block of the C++ (encoder_ext.cpp:2708-2771) sets up
-    // feature-based motion search. It is outside the Phase-5 gate configuration
-    // (CAMERA_VIDEO_REAL_TIME) and depends on the unported mode-decision layer for
-    // pfInterFineMd, so it is not translated here.
+    // feature-based motion search: `WelsMdInterFinePartitionVaaOnScreen`, the
+    // scrolling-MV slot, the static/scrolled search slots, `SetMeMethod`,
+    // `PerformFMEPreprocess` on the reference's feature storage and the FME switch.
+    // **P10.3 translates it** (D-scc-6): since P10.1 a screen encode reaches this
+    // point with every block it reads allocated, and runs the camera dispatch
+    // instead — which is why the `scc` preset reads DIFFER on every P frame until
+    // then.
 
     // update some layer-dependent variables to save judgements at MB level
     let sdf = &fl.sSampleDealingFuncs;

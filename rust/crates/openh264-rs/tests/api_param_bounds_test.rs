@@ -94,6 +94,22 @@ fn test_encoder_very_large_slices() {
     }
 }
 
+/// Upstream's `EncoderInitTest.ScreenContentScrollMotionVectorBounds`
+/// (`test/api/encoder_test.cpp:303-360`), mirrored exactly: a 640x1800 screen
+/// encode *initializes* and encodes two frames, the second scrolled down by 512
+/// rows with one macroblock corrupted, so that scroll detection predicts a large
+/// vertical displacement and the MVD-table indexing has to stay in bounds.
+///
+/// **This test used to assert `CM_INIT_PARA_ERROR`**, on the claim that 1800 is
+/// not a multiple of 16 and `ParamValidationExt` rejects it (`encoder_ext.cpp:521`).
+/// Both were wrong: `ParamTranscode` aligns the layer size to 16 and crops
+/// (`param_svc.h:486-489`), so the `& 0x0F` check sees 1808, and upstream's own
+/// test passes on the C++ — `./codec_unittest
+/// --gtest_filter=EncoderInitTest.ScreenContentScrollMotionVectorBounds` -> `OK`,
+/// measured 2026-09-02. The port's copy had also left `iRCMode` at its default,
+/// which is the other rejection it could have seen. It passes since P10.1.B5, when
+/// the three screen-content allocations were ported; the same row left
+/// `gtest_known_failures.txt` in that commit.
 #[test]
 fn test_encoder_screen_content_scroll_motion_vector_bounds() {
     unsafe {
@@ -110,19 +126,83 @@ fn test_encoder_screen_content_scroll_motion_vector_bounds() {
         param.iPicHeight = 1800;
         param.fMaxFrameRate = 30.0;
         param.iSpatialLayerNum = 1;
+        param.iRCMode = RC_MODES::RC_OFF_MODE;
 
         param.sSpatialLayers[0].iVideoWidth = param.iPicWidth;
         param.sSpatialLayers[0].iVideoHeight = param.iPicHeight;
         param.sSpatialLayers[0].fFrameRate = param.fMaxFrameRate;
         param.sSpatialLayers[0].sSliceArgument.uiSliceMode = SliceModeEnum::SM_SINGLE_SLICE;
         param.sSpatialLayers[0].iDLayerQp = 51;
+        param.iMinQp = 51;
+        param.iMaxQp = 51;
 
-        // 1800 is not a multiple of 16, so ParamValidationExt rejects it
-        // (encoder_ext.cpp:521). Verified against the C++ reference encoder with
-        // these exact parameters: InitializeExt returns cmInitParaError. The test
-        // previously asserted cmResultSuccess, which upstream never returns here.
-        let init_ret = ISVCEncoder::InitializeExt(p_encoder, &param as *const SEncParamExt);
-        assert_eq!(init_ret, CM_INIT_PARA_ERROR);
+        let rv = ISVCEncoder::InitializeExt(p_encoder, &param as *const SEncParamExt);
+        assert_eq!(rv, 0);
+
+        let width = param.iPicWidth as usize;
+        let height = param.iPicHeight as usize;
+        let frame_size = width * height * 3 / 2;
+        let mut frame0 = vec![128u8; frame_size];
+        let mut frame1 = vec![128u8; frame_size];
+
+        // Fill frame0 luma with pseudo-random patterns to ensure CheckLine qualifies
+        for y in 0..height {
+            for x in 0..width {
+                frame0[y * width + x] = ((x * 29 + y * 43 + 17) % 251) as u8;
+            }
+        }
+
+        // Frame 1: shift vertically by -512 pixels (content moving downward by 512)
+        let scroll_mv: isize = -512;
+        for y in 0..height {
+            let src = y as isize + scroll_mv;
+            if src >= 0 && src < height as isize {
+                let src = src as usize;
+                frame1[y * width..(y + 1) * width]
+                    .copy_from_slice(&frame0[src * width..(src + 1) * width]);
+            } else {
+                for x in 0..width {
+                    frame1[y * width + x] = ((x * 53 + y * 71 + 101) & 0xFF) as u8;
+                }
+            }
+        }
+
+        // Modify macroblock (1, 32) at pixel rows 512..527 and cols 16..31 in frame1.
+        // MB(0, 32) will be skipped by scroll detection with MV -2048.
+        // MB(1, 32) cannot be skipped due to this modification, forcing it into
+        // motion estimation where it uses MB(0, 32)'s scrolled MV as a predictor
+        // during vertical full search.
+        for y in 512..528 {
+            for x in 16..32 {
+                frame1[y * width + x] ^= 0xFF;
+            }
+        }
+
+        let luma = width * height;
+        let mut pic = SSourcePicture::default();
+        pic.iPicWidth = width as i32;
+        pic.iPicHeight = height as i32;
+        pic.iColorFormat = EVideoFormatType::videoFormatI420 as i32;
+        pic.iStride[0] = width as i32;
+        pic.iStride[1] = (width >> 1) as i32;
+        pic.iStride[2] = (width >> 1) as i32;
+        pic.pData[0] = frame0.as_mut_ptr();
+        pic.pData[1] = frame0.as_mut_ptr().add(luma);
+        pic.pData[2] = frame0.as_mut_ptr().add(luma + (luma >> 2));
+
+        let mut info = SFrameBSInfo::default();
+
+        // Encode Frame 0 (Base pattern)
+        let rv = ISVCEncoder::EncodeFrame(p_encoder, &pic as *const SSourcePicture, &mut info);
+        assert_eq!(rv, 0);
+        pic.uiTimeStamp += 33;
+
+        // Encode Frame 1 (Scrolled pattern with modified MB)
+        pic.pData[0] = frame1.as_mut_ptr();
+        pic.pData[1] = frame1.as_mut_ptr().add(luma);
+        pic.pData[2] = frame1.as_mut_ptr().add(luma + (luma >> 2));
+        let rv = ISVCEncoder::EncodeFrame(p_encoder, &pic as *const SSourcePicture, &mut info);
+        assert_eq!(rv, 0);
 
         ISVCEncoder::Uninitialize(p_encoder);
         WelsDestroySVCEncoder(p_encoder);
