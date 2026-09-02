@@ -62,6 +62,8 @@ pub use crate::encoder::md::SMbCache;
 use crate::encoder::md::{best_pred_i4x4_blk4_off, mem_pred_luma_off};
 use crate::encoder::decode_mb_aux::{idct_four_t4_rec_to_view, idct_rec_i16x16_dc_to_view, idct_t4_rec_to_view};
 use crate::encoder::svc_encode_slice::layer_rec_view;
+use crate::encoder::svc_encode_slice::layer_rec_view_expect;
+use crate::encoder::svc_encode_slice::current_layer_expect;
 pub use crate::encoder::md::SMB;
 pub use crate::encoder::svc_encode_slice::SDqLayer;
 pub use crate::encoder::wels_func_ptr_def::SWelsFuncPtrList;
@@ -416,8 +418,7 @@ pub fn WelsEncRecI16x16Y(
 ) {
     let mut aDctT4Dc = [0i16; 16];
     let pFuncList = (*pEncCtx).func_list();
-    let pCurDqLayer = current_layer_ref(pEncCtx)
-        .expect("the frame's current layer is stamped");
+    let pCurDqLayer = current_layer_expect(pEncCtx);
     let kiEncStride = (*pCurDqLayer).iEncStride[0];
     // **T9.D11**: no long-lived raw into `sCoeffLevel`. The DC write-back below is
     // indexed, and the two plane-taking slots derive their cursor where they use it —
@@ -439,8 +440,7 @@ pub fn WelsEncRecI16x16Y(
     let pMF = &g_kiQuantMF[uiQp as usize];
     let pFF = get_quant_intra_ff(uiQp as usize);
 
-    let encView = crate::encoder::svc_encode_slice::layer_enc_view(&*pCurDqLayer)
-        .expect("the layer's source view is built for this frame");
+    let encView = crate::encoder::svc_encode_slice::layer_enc_view_expect(&*pCurDqLayer);
     let pEncCur = (*pMbCache).SPicData.mb_cursor_ro(encView, 0);
     WelsDctMb(
         &mut (*pMbCache).sCoeffLevel,
@@ -536,8 +536,7 @@ pub fn WelsEncRecI16x16Y(
         // byte-identically. `kiRecStride` leaves the call because the view
         // carries it.
         const QUADS: [(isize, isize); 4] = [(0, 0), (8, 0), (0, 8), (8, 8)];
-        let view = layer_rec_view(&*pCurDqLayer)
-            .expect("the layer's reconstruction view is built for this frame");
+        let view = layer_rec_view_expect(&*pCurDqLayer);
         let (lx, ly) = (*pMbCache).SPicData.luma_origin();
         let dst = view.plane(0).cursor(lx, ly);
         let kiPredOff = mem_pred_luma_off((*pMbCache).uiMemPredLumaHalf);
@@ -554,8 +553,7 @@ pub fn WelsEncRecI16x16Y(
         // the census knew neither the `pfIDctI16x16Dc` slot nor its
         // `WelsIDctRecI16x16Dc_c` kernel. It writes the reconstruction plane from
         // the same `pPred` / `pBestPred` pair as the four calls above.
-        let view = layer_rec_view(&*pCurDqLayer)
-            .expect("the layer's reconstruction view is built for this frame");
+        let view = layer_rec_view_expect(&*pCurDqLayer);
         let (lx, ly) = (*pMbCache).SPicData.luma_origin();
         let kiPredOff = mem_pred_luma_off((*pMbCache).uiMemPredLumaHalf);
         idct_rec_i16x16_dc_to_view(
@@ -567,8 +565,7 @@ pub fn WelsEncRecI16x16Y(
     } else {
         // **T9.C2.** The residual-free branch: the prediction *is* the
         // reconstruction, copied straight across from `sMemPredMb`'s luma half.
-        let view = layer_rec_view(&*pCurDqLayer)
-            .expect("the layer's reconstruction view is built for this frame");
+        let view = layer_rec_view_expect(&*pCurDqLayer);
         let (lx, ly) = (*pMbCache).SPicData.luma_origin();
         let kiPredOff = mem_pred_luma_off((*pMbCache).uiMemPredLumaHalf);
         copy_block_to_view::<16>(
@@ -592,8 +589,7 @@ pub fn WelsEncRecI4x4Y(
     uiI4x4Idx: u8,
 ) {
     let pFuncList = (*pEncCtx).func_list();
-    let pCurDqLayer = current_layer_ref(pEncCtx)
-        .expect("the frame's current layer is stamped");
+    let pCurDqLayer = current_layer_expect(pEncCtx);
     let iEncStride = (*pCurDqLayer).iEncStride[0];
     let uiQp = (*pCurMb).uiLumaQp;
 
@@ -609,8 +605,7 @@ pub fn WelsEncRecI4x4Y(
     // S9.0: source plane through the frame's read-only view, prediction scratch
     // through its own owned `[u8; 2*16]`. Stride 4 is the blk4 scratch's geometry,
     // which the raw form passed as a literal at the call.
-    let encView = crate::encoder::svc_encode_slice::layer_enc_view(&*pCurDqLayer)
-        .expect("the layer's source view is built for this frame");
+    let encView = crate::encoder::svc_encode_slice::layer_enc_view_expect(&*pCurDqLayer);
     let pEncMb = (*pMbCache).SPicData.mb_cursor_ro(encView, 0);
     let pBestPred = RecCursor::over_owned(
         &mut (*pMbCache).sMemPredBlk4,
@@ -676,8 +671,7 @@ pub fn WelsEncRecI4x4Y(
         // the stride is never below 16, so neither term can wrap into the other.
         // Prediction is `sMemPredBlk4` at stride 4 (not 16 — this is the 4x4
         // arena, and its rows are four bytes).
-        let view = layer_rec_view(&*pCurDqLayer)
-            .expect("the layer's reconstruction view is built for this frame");
+        let view = layer_rec_view_expect(&*pCurDqLayer);
         let (lx, ly) = (*pMbCache).SPicData.luma_origin();
         let (dx, dy) = (dec_block_offset % iRecStride as isize, dec_block_offset / iRecStride as isize);
         let kiPredOff = best_pred_i4x4_blk4_off((*pMbCache).uiBestPredI4x4Blk4Half);
@@ -691,8 +685,7 @@ pub fn WelsEncRecI4x4Y(
         // **T9.C2.** As the `pfIDctT4` branch above: `dec_block_offset` divides by
         // `iRecStride` into the 4x4 block's `(dx, dy)` within the macroblock, and
         // the prediction is `sMemPredBlk4` at stride 4.
-        let view = layer_rec_view(&*pCurDqLayer)
-            .expect("the layer's reconstruction view is built for this frame");
+        let view = layer_rec_view_expect(&*pCurDqLayer);
         let (lx, ly) = (*pMbCache).SPicData.luma_origin();
         let (dx, dy) =
             (dec_block_offset % iRecStride as isize, dec_block_offset / iRecStride as isize);
@@ -1016,7 +1009,7 @@ pub fn WelsTryPUVskip(
 
     let chroma_qp_index_offset = if let Some(pps) = crate::encoder::svc_encode_slice::layer_pps_ref(
         pEncCtx,
-        crate::encoder::svc_encode_slice::current_layer_ref(pEncCtx).expect("the frame's current layer is stamped"),
+        crate::encoder::svc_encode_slice::current_layer_expect(pEncCtx),
     ) {
         pps.uiChromaQpIndexOffset as i32
     } else {

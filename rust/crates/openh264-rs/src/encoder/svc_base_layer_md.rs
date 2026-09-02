@@ -71,6 +71,8 @@ use crate::encoder::wels_func_ptr_def::SWelsFuncPtrList;
 use crate::common::wels_common_defs::EWelsSliceType;
 use crate::encoder::md::{LEFT_MB_POS, TOPLEFT_MB_POS, TOPRIGHT_MB_POS, TOP_MB_POS};
 use crate::encoder::picture::SScreenBlockFeatureStorage;
+use crate::encoder::svc_encode_slice::{current_layer_expect, layer_rec_view_expect, layer_ref_pic_expect, layer_ref_view_expect};
+use crate::encoder::svc_encode_slice::layer_enc_view_expect;
 
 /// `wels_const.h:112` — `MB_WIDTH_LUMA`/`MB_WIDTH_CHROMA`, the per-macroblock advance
 /// applied to the cached plane pointers when walking right along a macroblock row.
@@ -321,8 +323,7 @@ pub fn WelsMdIntraInit(
     pMbCache: &mut SMbCache,
     iSliceFirstMbXY: i32,
 ) {
-    let pCurLayer = current_layer_ref(pEncCtx)
-        .expect("the frame's current layer is stamped");
+    let pCurLayer = current_layer_expect(pEncCtx);
 
     let kiMbX = mbs.cur().iMbX as i32;
     let kiMbY = mbs.cur().iMbY as i32;
@@ -370,8 +371,7 @@ pub extern "C" fn WelsMdI4x4(
     pMbCache: &mut SMbCache,
 ) -> i32 {
     let pFunc = (*pEncCtx).func_list();
-    let pCurDqLayer = current_layer_ref(pEncCtx)
-        .expect("the frame's current layer is stamped");
+    let pCurDqLayer = current_layer_expect(pEncCtx);
     let iLambda = (*pWelsMd).iLambda;
     let iBestCostLuma = (*pWelsMd).iCostLuma;
     // `pEncMb` and `kiLineSizeEnc` stood here — the source block as an address and
@@ -382,8 +382,7 @@ pub extern "C" fn WelsMdI4x4(
     // macroblock — and `kiLineSizeDec`, the stride the predictors were handed, are
     // both the seam's plane view now. The view carries the stride, and the
     // per-block cursors below come from the macroblock origin by coordinate.
-    let view = layer_rec_view(&*pCurDqLayer)
-        .expect("the layer's reconstruction view is built for this frame");
+    let view = layer_rec_view_expect(&*pCurDqLayer);
 
     let lambda: [i32; 2] = [iLambda << 2, iLambda];
     let kpNeighborIntraToI4x4 = &g_kiNeighborIntraToI4x4[(*pMbCache).uiNeighborIntra as usize];
@@ -391,7 +390,7 @@ pub extern "C" fn WelsMdI4x4(
     let mut iCosti4x4: i32 = 0;
 
     // `pfSampleSatd[BLOCK_4x4]`, a constant index — called direct (F118).
-    let pEncPicture = layer_enc_view(&*pCurDqLayer).expect("the layer's source view is built for this frame");
+    let pEncPicture = layer_enc_view_expect(&*pCurDqLayer);
     let (kiMbOrgX, kiMbOrgY) = (*pMbCache).SPicData.luma_origin();
 
     for i in 0..16usize {
@@ -515,8 +514,7 @@ pub extern "C" fn WelsMdI4x4Fast(
     pMbCache: &mut SMbCache,
 ) -> i32 {
     let pFunc = (*pEncCtx).func_list();
-    let pCurDqLayer = current_layer_ref(pEncCtx)
-        .expect("the frame's current layer is stamped");
+    let pCurDqLayer = current_layer_expect(pEncCtx);
     let iLambda = (*pWelsMd).iLambda;
     let iBestCostLuma = (*pWelsMd).iCostLuma;
     // `pEncMb` and `kiLineSizeEnc` stood here — the source block as an address and
@@ -527,8 +525,7 @@ pub extern "C" fn WelsMdI4x4Fast(
     // macroblock — and `kiLineSizeDec`, the stride the predictors were handed, are
     // both the seam's plane view now. The view carries the stride, and the
     // per-block cursors below come from the macroblock origin by coordinate.
-    let view = layer_rec_view(&*pCurDqLayer)
-        .expect("the layer's reconstruction view is built for this frame");
+    let view = layer_rec_view_expect(&*pCurDqLayer);
 
     let lambda: [i32; 2] = [iLambda << 2, iLambda];
     let kpNeighborIntraToI4x4 = &g_kiNeighborIntraToI4x4[(*pMbCache).uiNeighborIntra as usize];
@@ -536,7 +533,7 @@ pub extern "C" fn WelsMdI4x4Fast(
     let mut iCosti4x4: i32 = 0;
 
     let pfMdCost4x4 = (*pFunc).sSampleDealingFuncs.md_cost(BLOCK_4x4).unwrap();
-    let pEncPicture = layer_enc_view(&*pCurDqLayer).expect("the layer's source view is built for this frame");
+    let pEncPicture = layer_enc_view_expect(&*pCurDqLayer);
     let (kiMbOrgX, kiMbOrgY) = (*pMbCache).SPicData.luma_origin();
 
     for i in 0..16usize {
@@ -738,8 +735,7 @@ pub extern "C" fn WelsMdIntraChroma(
     // holds — the same shape `WelsMdI16x16`'s `pPredI16x16` had. With the
     // destination an offset (`kiDstOff` below), the pointers carry nothing.
     // `pEncCb`/`pEncCr` stood here; T9.B30's cost sites read the source picture.
-    let view = layer_rec_view(pCurDqLayer)
-        .expect("the layer's reconstruction view is built for this frame");
+    let view = layer_rec_view_expect(pCurDqLayer);
 
     let mut iBestCost = i32::MAX;
 
@@ -751,7 +747,7 @@ pub extern "C" fn WelsMdIntraChroma(
     // **T9.B30**: the two source blocks by coordinate. This function has neither an
     // `SMB` nor a slice in scope — it is one of the three readers the carrier's
     // `iMbX`/`iMbY` exist for.
-    let pEncPicture = layer_enc_view(pCurDqLayer).expect("the layer's source view is built for this frame");
+    let pEncPicture = layer_enc_view_expect(pCurDqLayer);
     let (kiChrOrgX, kiChrOrgY) = (*pMbCache).SPicData.chroma_origin();
     let kiPredOff = mem_pred_chroma_off((*pMbCache).uiMemPredLumaHalf);
 
@@ -834,11 +830,9 @@ pub fn WelsMdIntraFinePartitionVaa(
     pCurMb: &mut SMB,
     pMbCache: &mut SMbCache,
 ) -> i32 {
-    let pCurLayer = current_layer_ref(pEncCtx)
-        .expect("the frame's current layer is stamped");
+    let pCurLayer = current_layer_expect(pEncCtx);
     // S10.5: the source macroblock through the seam, not `pEncData`'s raw root.
-    let encView = crate::encoder::svc_encode_slice::layer_enc_view(&*pCurLayer)
-        .expect("the layer's source view is built for this frame");
+    let encView = crate::encoder::svc_encode_slice::layer_enc_view_expect(&*pCurLayer);
     let cEncMb = (*pMbCache).SPicData.mb_cursor_ro(encView, 0);
     if MdIntraAnalysisVaaInfo(pEncCtx, &cEncMb) {
         let iCosti4x4 = WelsMdI4x4Fast(pEncCtx, pWelsMd, pCurMb, pMbCache);
@@ -918,8 +912,7 @@ pub fn WelsMdInterInit(
     mbs: &mut crate::safe::mb_grid::MbWindow<'_, SMB>,
     iSliceFirstMbXY: i32,
 ) {
-    let pCurLayer = current_layer_ref(pEncCtx)
-        .expect("the frame's current layer is stamped");
+    let pCurLayer = current_layer_expect(pEncCtx);
     let pMbCache = &mut pSlice.sMbCacheInfo;
     let kiMbX = mbs.cur().iMbX as i32;
     let kiMbY = mbs.cur().iMbY as i32;
@@ -946,11 +939,8 @@ pub fn WelsMdInterInit(
         // goes with it: the callee indexes `iMbXY + <neighbour offset>` off the root
         // now, which is what T6.F0 did to `pMbSkipSad` beside it.
         &(*pEncCtx)
-            .vaa()
-            .expect("the frame's video-analysis block")
-            .pVaaBackgroundMbFlag[..],
-        layer_rec_view(&*pCurLayer)
-            .expect("the layer's reconstruction view is built for this frame")
+            .vaa_expect().pVaaBackgroundMbFlag[..],
+        layer_rec_view_expect(&*pCurLayer)
             .mb_skip_sad(),
     ); //BGD spatial pFunc
 
@@ -967,13 +957,12 @@ pub fn WelsMdInterInit(
     (*pMbCache).SPicData.iMbX = kiMbX;
     (*pMbCache).SPicData.iMbY = kiMbY;
 
-    (*pMbCache).uiRefMbType = (&layer_ref_pic(pEncCtx, &*pCurLayer).expect("the layer's reference picture is bound").uiRefMbType)[kiMbXY as usize];
+    (*pMbCache).uiRefMbType = (&layer_ref_pic_expect(pEncCtx, &*pCurLayer).uiRefMbType)[kiMbXY as usize];
     (*pMbCache).bCollocatedPredFlag = false;
 
     //comment: sometimes, mode decision process may skip the md_p16x16 and md_pskip function,
     mbs.cur_mut().sP16x16Mv = SMVUnitXY { iMvX: 0, iMvY: 0 };
-    layer_rec_view(&*pCurLayer)
-        .expect("the layer's reconstruction view is built for this frame")
+    layer_rec_view_expect(&*pCurLayer)
         .mv_list()
         .set(kiMbXY as usize, SMVUnitXY { iMvX: 0, iMvY: 0 });
 
@@ -1020,8 +1009,8 @@ pub extern "C" fn WelsMdP16x8<'a>(
 
         PredInter16x8Mv(&(*pMbCache).sMvComponents, i << 3, 0, &mut (*sMe16x8).sMvp);
         {
-            let pEncPicture = layer_enc_view(pCurDqLayer).expect("the layer's source view is built for this frame");
-            let pRefPicture = layer_ref_view(pEncCtx, &*pCurDqLayer).expect("the layer's reference view is built for this frame");
+            let pEncPicture = layer_enc_view_expect(pCurDqLayer);
+            let pRefPicture = layer_ref_view_expect(pEncCtx, &*pCurDqLayer);
             pFunc.pfMotionSearch[0].expect("pfMotionSearch[0] unset")(
                 &pFunc.sMeFuncs,
                 &pFunc.sSampleDealingFuncs,
@@ -1081,8 +1070,8 @@ pub extern "C" fn WelsMdP8x16<'a>(
 
         PredInter8x16Mv(&(*pMbCache).sMvComponents, i << 2, 0, &mut (*sMe8x16).sMvp);
         {
-            let pEncPicture = layer_enc_view(pCurLayer).expect("the layer's source view is built for this frame");
-            let pRefPicture = layer_ref_view(pEncCtx, &*pCurLayer).expect("the layer's reference view is built for this frame");
+            let pEncPicture = layer_enc_view_expect(pCurLayer);
+            let pRefPicture = layer_ref_view_expect(pEncCtx, &*pCurLayer);
             pFunc.pfMotionSearch[0].expect("pfMotionSearch[0] unset")(
                 &pFunc.sMeFuncs,
                 &pFunc.sSampleDealingFuncs,
@@ -1126,8 +1115,7 @@ pub fn WelsMdInterFinePartition<'a>(
     pCurMb: &mut SMB,
     iBestCost: i32,
 ) {
-    let pCurDqLayer = current_layer_ref(pEncCtx)
-        .expect("the frame's current layer is stamped");
+    let pCurDqLayer = current_layer_expect(pEncCtx);
     let mut iCost = crate::encoder::svc_mode_decision::WelsMdP8x8(
         pEncCtx,
         (*pEncCtx).func_list(),
@@ -1166,20 +1154,19 @@ pub fn WelsMdInterFinePartitionVaa<'a>(
     pCurMb: &mut SMB,
     iBestCostIn: i32,
 ) {
-    let pCurDqLayer = current_layer_ref(pEncCtx)
-        .expect("the frame's current layer is stamped");
+    let pCurDqLayer = current_layer_expect(pEncCtx);
     let mut iBestCost = iBestCostIn;
     // S11.28: the mint (T9.E7's spelling) is gone with the slot's pointer
     // parameter — a shared index into the bounded row.
     let uiMbSign = (*pEncCtx).func_list()
         .pfGetMbSignFromInterVaa
         .expect("pfGetMbSignFromInterVaa unset")(
-        &(*pEncCtx).vaa().expect("the frame's video-analysis block").sVaaCalcInfo.pSad8x8
+        &(*pEncCtx).vaa_expect().sVaaCalcInfo.pSad8x8
             [(*pCurMb).iMbXY as usize],
     );
 
     if crate::encoder::dump_enabled(&FP_DUMP, "OH264_FPDUMP") {
-        let sad = (&(*pEncCtx).vaa().expect("the frame's video-analysis block").sVaaCalcInfo.pSad8x8)[(*pCurMb).iMbXY as usize];
+        let sad = (&(*pEncCtx).vaa_expect().sVaaCalcInfo.pSad8x8)[(*pCurMb).iMbXY as usize];
         eprintln!(
             "FP mb={:3} sign={:2} best={:7} sad8x8={},{},{},{}",
             (*pCurMb).iMbXY,
@@ -1264,8 +1251,7 @@ pub fn WelsMdPSkipEnc(
     pCurMb: &mut SMB,
     pMbCache: &mut SMbCache,
 ) -> bool {
-    let pCurLayer = current_layer_ref(pEncCtx)
-        .expect("the frame's current layer is stamped");
+    let pCurLayer = current_layer_expect(pEncCtx);
     let pFunc = (*pEncCtx).func_list();
 
     // **T9.B22 — the three reference cursors are gone.** `SPicData.pRefMb[i]` was
@@ -1292,8 +1278,7 @@ pub fn WelsMdPSkipEnc(
     // holding `iEncStride[1]`, which is the same rule `mb_offset`'s doc states (S12.6
     // deleted `stride_idx`, the helper) and which the view reproduces by construction
     // (both chroma planes share one stride).
-    let encView = crate::encoder::svc_encode_slice::layer_enc_view(&*pCurLayer)
-        .expect("the layer's source view is built for this frame");
+    let encView = crate::encoder::svc_encode_slice::layer_enc_view_expect(&*pCurLayer);
     let mut pEncMb = (*pMbCache).SPicData.mb_cursor_ro(encView, 0);
     // T9.H2: `&sWelsEncCtx`. The layer id is read through the same raw beside it —
     // both are shared reads, so the argument and the borrow coexist by construction
@@ -1344,7 +1329,7 @@ pub fn WelsMdPSkipEnc(
 
     //luma
     {
-        let pRefPicture = layer_ref_view(pEncCtx, &*pCurLayer).expect("the layer's reference view is built for this frame");
+        let pRefPicture = layer_ref_view_expect(pEncCtx, &*pCurLayer);
         let cRefLuma = pRefPicture.plane(0).cursor(
             kiMbXLuma + sQpelMvp.iMvX as isize,
             kiMbYLuma + sQpelMvp.iMvY as isize,
@@ -1363,7 +1348,7 @@ pub fn WelsMdPSkipEnc(
     // borrowed **shared** — which does not pop the raw `pDstLuma` below the way a
     // `&mut` borrow would (F114a), and the raw is re-derived after it anyway.
     iSadCostLuma = {
-        let pEncPicture = layer_enc_view(&*pCurLayer).expect("the layer's source view is built for this frame");
+        let pEncPicture = layer_enc_view_expect(&*pCurLayer);
         let cEncLuma = pEncPicture.plane(0).cursor(kiMbXLuma, kiMbYLuma);
         let cSkipLuma = RecCursor::over_owned(&mut (*pMbCache).sSkipMb[..256], 0, 16);
         sample_sad::<16, 16, _>(&cEncLuma, &cSkipLuma)
@@ -1373,7 +1358,7 @@ pub fn WelsMdPSkipEnc(
     // origin; in samples that is `(mvX >> 1, mvY >> 1)` from the same origin, and
     // `sQpelMvp` is already `sMvp >> 2`, so both are `sMvp >> 3`.
     {
-        let pRefPicture = layer_ref_view(pEncCtx, &*pCurLayer).expect("the layer's reference view is built for this frame");
+        let pRefPicture = layer_ref_view_expect(pEncCtx, &*pCurLayer);
         let cRefCb = pRefPicture.plane(1).cursor(
             kiMbXChroma + (sQpelMvp.iMvX as isize >> 1),
             kiMbYChroma + (sQpelMvp.iMvY as isize >> 1),
@@ -1382,14 +1367,14 @@ pub fn WelsMdPSkipEnc(
         mc_chroma(&cRefCb, &mut cDstCb, sMvp.iMvX, sMvp.iMvY, 8, 8); //Cb
     }
     iSadCostChroma = {
-        let pEncPicture = layer_enc_view(&*pCurLayer).expect("the layer's source view is built for this frame");
+        let pEncPicture = layer_enc_view_expect(&*pCurLayer);
         let cEncCb = pEncPicture.plane(1).cursor(kiMbXChroma, kiMbYChroma);
         let cSkipCb = RecCursor::over_owned(&mut (*pMbCache).sSkipMb[256..320], 0, 8);
         sample_sad::<8, 8, _>(&cEncCb, &cSkipCb)
     };
 
     {
-        let pRefPicture = layer_ref_view(pEncCtx, &*pCurLayer).expect("the layer's reference view is built for this frame");
+        let pRefPicture = layer_ref_view_expect(pEncCtx, &*pCurLayer);
         let cRefCr = pRefPicture.plane(2).cursor(
             kiMbXChroma + (sQpelMvp.iMvX as isize >> 1),
             kiMbYChroma + (sQpelMvp.iMvY as isize >> 1),
@@ -1398,7 +1383,7 @@ pub fn WelsMdPSkipEnc(
         mc_chroma(&cRefCr, &mut cDstCr, sMvp.iMvX, sMvp.iMvY, 8, 8); //Cr
     }
     iSadCostChroma += {
-        let pEncPicture = layer_enc_view(&*pCurLayer).expect("the layer's source view is built for this frame");
+        let pEncPicture = layer_enc_view_expect(&*pCurLayer);
         let cEncCr = pEncPicture.plane(2).cursor(kiMbXChroma, kiMbYChroma);
         let cSkipCr = RecCursor::over_owned(&mut (*pMbCache).sSkipMb[320..384], 0, 8);
         sample_sad::<8, 8, _>(&cEncCr, &cSkipCr)
@@ -1410,7 +1395,7 @@ pub fn WelsMdPSkipEnc(
         || iSadCostMb < (*pWelsMd).iSadPredSkip
         || (layer_ref_pic(pEncCtx, &*pCurLayer).map_or(false, |p| p.iPictureType == EWelsSliceType::P_SLICE as i32)
             && (*pMbCache).uiRefMbType == MB_TYPE_SKIP
-            && iSadCostMb < (&layer_ref_pic(pEncCtx, &*pCurLayer).expect("the layer's reference picture is bound").pMbSkipSad)[(*pCurMb).iMbXY as usize])
+            && iSadCostMb < (&layer_ref_pic_expect(pEncCtx, &*pCurLayer).pMbSkipSad)[(*pCurMb).iMbXY as usize])
     {
         //update motion info to current MB
         AcceptPskip(pEncCtx, pWelsMd, pCurMb, pMbCache, &sMvp, iSadCostLuma, iSadCostMb);
@@ -1483,8 +1468,7 @@ fn AcceptPskip(
     iSadCostLuma: i32,
     iSadCostMb: i32,
 ) {
-    let pCurLayer = current_layer_ref(pEncCtx)
-        .expect("the frame's current layer is stamped");
+    let pCurLayer = current_layer_expect(pEncCtx);
     let pFunc = (*pEncCtx).func_list();
 
     // ST32 (pCurMb->pRefIndex, 0)
@@ -1496,7 +1480,7 @@ fn AcceptPskip(
         (*pWelsMd).iCostLuma = (*pCurMb).iSadCost;
     } else {
         // `pfSampleSatd[BLOCK_16x16]`, constant after init (F118) — called direct.
-        let pEncPicture = layer_enc_view(&*pCurLayer).expect("the layer's source view is built for this frame");
+        let pEncPicture = layer_enc_view_expect(&*pCurLayer);
         let cEncLuma = pEncPicture
             .plane(0)
             .cursor(((*pCurMb).iMbX as isize) << 4, ((*pCurMb).iMbY as isize) << 4);
@@ -1511,8 +1495,7 @@ fn AcceptPskip(
     (*pWelsMd).iCostSkipMb = iSadCostMb;
 
     (*pCurMb).sP16x16Mv = *sMvp;
-    layer_rec_view(&*pCurLayer)
-        .expect("the layer's reconstruction view is built for this frame")
+    layer_rec_view_expect(&*pCurLayer)
         .mv_list()
         .set((*pCurMb).iMbXY as usize, *sMvp);
 }
@@ -1529,8 +1512,7 @@ pub fn WelsMdInterMbRefinement(
     pCurMb: &mut SMB,
     pMbCache: &mut SMbCache,
 ) {
-    let pCurDqLayer = current_layer_ref(pEncCtx)
-        .expect("the frame's current layer is stamped");
+    let pCurDqLayer = current_layer_expect(pEncCtx);
     let pFunc = (*pEncCtx).func_list();
     let mut iBestSadCost = 0i32;
     let mut iBestSatdCost = 0i32;
@@ -1576,7 +1558,7 @@ pub fn WelsMdInterMbRefinement(
     macro_rules! mc_chroma_at {
         ($plane:expr, $off:expr, $dx:expr, $dy:expr, $mv:expr, $w:expr, $h:expr) => {{
             let pRefPicture =
-                layer_ref_view(pEncCtx, &*pCurDqLayer).expect("the layer's reference view is built for this frame");
+                layer_ref_view_expect(pEncCtx, &*pCurDqLayer);
             let cRef = pRefPicture
                 .plane($plane)
                 .cursor(kiMbXChroma + ($dx) as isize, kiMbYChroma + ($dy) as isize);
@@ -1627,7 +1609,7 @@ pub fn WelsMdInterMbRefinement(
             // source operand is the sample `SPicData.pEncMb[i]` named — the source
             // picture through the layer's handle at the macroblock's own origin.
             let pEncPicture =
-                layer_enc_view(&*pCurDqLayer).expect("the layer's source view is built for this frame");
+                layer_enc_view_expect(&*pCurDqLayer);
             let cEncLuma = pEncPicture.plane(0).cursor(kiMbXChroma << 1, kiMbYChroma << 1);
             let cEncCb = pEncPicture.plane(1).cursor(kiMbXChroma, kiMbYChroma);
             let cEncCr = pEncPicture.plane(2).cursor(kiMbXChroma, kiMbYChroma);
@@ -1865,7 +1847,7 @@ pub fn WelsMdFirstIntraMode(
 
         //chroma
         (*pWelsMd).iCostChroma =
-            WelsMdIntraChroma(&*pFunc, current_layer_ref(pEncCtx).expect("the frame's current layer is stamped"), pMbCache, (*pWelsMd).iLambda);
+            WelsMdIntraChroma(&*pFunc, current_layer_expect(pEncCtx), pMbCache, (*pWelsMd).iLambda);
         crate::encoder::svc_encode_slice::WelsIMbChromaEncode(pEncCtx, pCurMb, pMbCache); //add pEnc&rec to MD--2010.3.15
         (*pCurMb).uiChromPredMode = (*pMbCache).uiChmaI8x8Mode as u32;
         (*pCurMb).iSadCost = 0;
@@ -1890,8 +1872,7 @@ pub fn WelsMdInterMb<'a>(
     pSlice: &mut SSlice,
     mbs: &mut crate::safe::mb_grid::MbWindow<'_, SMB>,
 ) {
-    let pCurDqLayer = current_layer_ref(pEncCtx)
-        .expect("the frame's current layer is stamped");
+    let pCurDqLayer = current_layer_expect(pEncCtx);
     let kuiNeighborAvail = mbs.cur().uiNeighborAvail as u32;
     let bMbLeftAvailPskip = if (kuiNeighborAvail & LEFT_MB_POS) != 0 {
         IS_SKIP(mbs.left().uiMbType)
@@ -2012,8 +1993,7 @@ pub fn WelsMdInterEncode(
 ) {
     let pMbCache = &mut pSlice.sMbCacheInfo;
     let pFunc = (*pEncCtx).func_list();
-    let pCurDqLayer = current_layer_ref(pEncCtx)
-        .expect("the frame's current layer is stamped");
+    let pCurDqLayer = current_layer_expect(pEncCtx);
 
     //add pEnc&rec to MD--2010.3.15
     let kiCsStrideY = (*pCurDqLayer).iCsStride[0];
@@ -2035,8 +2015,7 @@ pub fn WelsMdInterEncode(
     // Slots bypassed, not flipped (F118) — the eight `pfCopy*` entries are
     // installed unconditionally by `WelsInitEncodingFuncs` and constant after
     // init, so a fixed-size site may call the kernel directly, byte-identically.
-    let view = layer_rec_view(&*pCurDqLayer)
-        .expect("the layer's reconstruction view is built for this frame");
+    let view = layer_rec_view_expect(&*pCurDqLayer);
     let pMbCache = &mut pSlice.sMbCacheInfo;
     let (lx, ly) = (*pMbCache).SPicData.luma_origin();
     let (cx, cy) = (*pMbCache).SPicData.chroma_origin();

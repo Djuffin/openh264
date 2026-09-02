@@ -87,6 +87,7 @@ use crate::encoder::svc_encode_slice::current_layer_ref;
 use crate::encoder::svc_encode_slice::current_layer_mut;
 use crate::encoder::svc_encode_slice::ctx_sps;
 use crate::encoder::svc_encode_slice::ctx_sps_ref;
+use crate::encoder::svc_encode_slice::{current_layer_expect, current_layer_expect_mut};
 pub use crate::encoder::svc_encode_slice::SSliceHeaderExt;
 pub use crate::encoder::encoder_context::EWelsSliceType;
 pub use crate::encoder::encoder_context::SLTRState;
@@ -683,7 +684,7 @@ pub fn LTRMarkProcessScreen(pCtx: &mut sWelsEncCtx) {
         return;
     };
     if pCtx.vaa().is_some() {
-        pCtx.vaa_mut().expect("the frame's video-analysis block").uiMarkLongTermPicIdx = iLtrIdx as u8;
+        pCtx.vaa_expect_mut().uiMarkLongTermPicIdx = iLtrIdx as u8;
     }
 
     let Some(pRefList) = pCtx.ref_list_mut(uiDid) else {
@@ -902,8 +903,8 @@ pub fn WelsUpdateRefList(pCtx: &mut sWelsEncCtx) -> bool {
             pLtr.uiLtrMarkInterval = 0;
 
             if pCtx.vaa().is_some() {
-                pCtx.vaa_mut().expect("the frame's video-analysis block").uiValidLongTermPicIdx = 0;
-                pCtx.vaa_mut().expect("the frame's video-analysis block").uiMarkLongTermPicIdx = 0;
+                pCtx.vaa_expect_mut().uiValidLongTermPicIdx = 0;
+                pCtx.vaa_expect_mut().uiMarkLongTermPicIdx = 0;
             }
         }
     }
@@ -1079,7 +1080,7 @@ pub fn WelsMarkPic(pCtx: &mut sWelsEncCtx) {
     let kiLtrMarkPeriod = pCtx.param().iLtrMarkPeriod;
     let kuiGopSize = pCtx.param().uiGopSize;
     let kuiTid = pCtx.uiTemporalId;
-    let kiCountSliceNum = current_layer_ref(pCtx).expect("the frame's current layer is stamped").iMaxSliceNum;
+    let kiCountSliceNum = current_layer_expect(pCtx).iMaxSliceNum;
     // **S11.11: the hoist is reversed, and the reason inverted with it.** T9.G6
     // derived this *before* the LTR block because the raw form's argument read
     // through the context and the derivation had to precede the `&mut`s below.
@@ -1112,7 +1113,7 @@ pub fn WelsMarkPic(pCtx: &mut sWelsEncCtx) {
         kuiGopSize,
         kbEnableLtr,
         &kLtr,
-        current_layer_mut(pCtx).expect("the frame's current layer is stamped"),
+        current_layer_expect_mut(pCtx),
         kiCountSliceNum,
     );
 }
@@ -1264,7 +1265,7 @@ pub fn WelsBuildRefList(
                     let numRef0 = pCtx.iNumRef0 as usize;
                     // The camera path puts a *reconstruction* picture in `pRefOri`
                     // where the screen path puts a source picture — see `PicRef`.
-                    current_layer_mut(pCtx).expect("the frame's current layer is stamped").pRefOri[numRef0] = Some(PicRef::Rec(idLong));
+                    current_layer_expect_mut(pCtx).pRefOri[numRef0] = Some(PicRef::Rec(idLong));
                     pCtx.pRefList0[numRef0] = Some(idLong);
                     pCtx.iNumRef0 += 1;
                     ctx_ltr_at(pCtx, (uiDid) as usize).iLastRecoverFrameNum = kiFrameNum;
@@ -1283,7 +1284,7 @@ pub fn WelsBuildRefList(
                 };
                 if bTake {
                     let numRef0 = pCtx.iNumRef0 as usize;
-                    current_layer_mut(pCtx).expect("the frame's current layer is stamped").pRefOri[numRef0] = Some(PicRef::Rec(idRef));
+                    current_layer_expect_mut(pCtx).pRefOri[numRef0] = Some(PicRef::Rec(idRef));
                     pCtx.pRefList0[numRef0] = Some(idRef);
                     pCtx.iNumRef0 += 1;
                 }
@@ -1402,7 +1403,7 @@ pub fn WelsUpdateSliceHeaderSyntax(
     // cannot be null and every caller now holds one, so the guard is not
     // merely dead — it is inexpressible. Nothing replaces it.
     // T9.E2i (the close's Miri verdict, F114b's shape): the count is read
-    // through the parameter — `current_layer_ref(pCtx).expect("the frame's current layer is stamped").iMaxSliceNum` was a
+    // through the parameter — `current_layer_expect(pCtx).iMaxSliceNum` was a
     // second, independent path to the same object this function's `&mut`
     // already protects, and the read popped the protector.
     let kiCountSliceNum = pCurDq.iMaxSliceNum;
@@ -1582,7 +1583,7 @@ pub fn UpdateSrcPicListLosslessScreenRefSelectionWithLtr(pCtx: &mut sWelsEncCtx)
         // through the slot so borrowck grants both" step: `vpp_and_ref_list_mut`
         // projects the two fields from one borrow and says the same thing safely.
         let idEnc = pCtx.pEncPic;
-        let uiMarkLongTermPicIdx = pCtx.vaa().expect("the frame's video-analysis block").uiMarkLongTermPicIdx as i32;
+        let uiMarkLongTermPicIdx = pCtx.vaa_expect().uiMarkLongTermPicIdx as i32;
         let (pVpp, pRefList) = pCtx.vpp_and_ref_list_mut(iDIdx as usize);
         let pVpp = pVpp.expect("the preprocess object");
         let pRefList = pRefList.expect("the dependency layer's reference list");
@@ -1693,7 +1694,7 @@ pub fn WelsUpdateRefListScreen(pCtx: &mut sWelsEncCtx) -> bool {
         pLtr.iSceneLtrIdx = 1;
         pLtr.uiLtrMarkInterval = 0;
         if pCtx.vaa().is_some() {
-            pCtx.vaa_mut().expect("the frame's video-analysis block").uiValidLongTermPicIdx = 0;
+            pCtx.vaa_expect_mut().uiValidLongTermPicIdx = 0;
         }
     }
 
@@ -1774,7 +1775,7 @@ pub fn WelsBuildRefListScreen(
                 };
                 if bTake {
                     let num0 = pCtx.iNumRef0 as usize;
-                    current_layer_mut(pCtx).expect("the frame's current layer is stamped").pRefOri[num0] = refOri;
+                    current_layer_expect_mut(pCtx).pRefOri[num0] = refOri;
                     pCtx.pRefList0[num0] = Some(idRefPic);
                     pCtx.iNumRef0 += 1;
                 }
@@ -1788,7 +1789,7 @@ pub fn WelsBuildRefListScreen(
                     let uiTemporalId = pCtx.ref_list(uiDid).expect("the dependency layer's reference list").pic(idLong).uiTemporalId;
                     if uiTemporalId == 0 || uiTemporalId < pCtx.uiTemporalId {
                         let num0 = pCtx.iNumRef0 as usize;
-                        current_layer_mut(pCtx).expect("the frame's current layer is stamped").pRefOri[num0] = refOri;
+                        current_layer_expect_mut(pCtx).pRefOri[num0] = refOri;
                         pCtx.pRefList0[num0] = Some(idLong);
                         pCtx.iNumRef0 += 1;
                         break;
@@ -1900,7 +1901,7 @@ pub fn WelsMarkPicScreen(pCtx: &mut sWelsEncCtx) {
     let kuiLog2MaxFrameNum = ctx_sps_ref(pCtx).map_or(0, |s| s.uiLog2MaxFrameNum);
     let kuiTid = pCtx.uiTemporalId;
     let kbSceneLtr = pCtx.bCurFrameMarkedAsSceneLtr;
-    let iSliceNum = current_layer_ref(pCtx).expect("the frame's current layer is stamped").iMaxSliceNum;
+    let iSliceNum = current_layer_expect(pCtx).iMaxSliceNum;
     // **S11.11**: the T9.G6 hoist is reversed here as in `WelsMarkPic` — a
     // `&mut SDqLayer` must be taken *after* the context's other borrows, not
     // before them, so it moves to its one use at the call below.
@@ -1996,7 +1997,7 @@ pub fn WelsMarkPicScreen(pCtx: &mut sWelsEncCtx) {
         iNumRef,
         kbEnableLtr,
         &kLtr,
-        current_layer_mut(pCtx).expect("the frame's current layer is stamped"),
+        current_layer_expect_mut(pCtx),
         iSliceNum,
     );
 }

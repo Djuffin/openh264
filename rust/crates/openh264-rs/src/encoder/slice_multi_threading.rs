@@ -94,6 +94,7 @@ pub use crate::encoder::encoder_context::sWelsEncCtx;
 use crate::encoder::encoder_context::{
     
 };
+use crate::encoder::svc_encode_slice::current_layer_expect;
 
 // ============================================================================
 // Constants and Thresholds
@@ -919,7 +920,7 @@ pub fn WriteSliceBs(
     // S11.34: shared, not raw — the slice this body writes lives in the taken
     // bank (a different allocation since the pre-fork take), so the layer's
     // header borrow coexists with it as a plain fact.
-    let kpNalHdrExt = &current_layer_ref(pCtx).expect("the frame's current layer is stamped").sLayerInfo.sNalHeaderExt;
+    let kpNalHdrExt = &current_layer_expect(pCtx).sLayerInfo.sNalHeaderExt;
     // T7.C4: the write cursor is the slice's own buffer, absent when the slice
     // shares the frame's — which is what the raw `pBs` was, and `WelsEncodeNal`
     // takes the `INVALIDINPUT` arm for `None` exactly as the C++ did for null.
@@ -1042,7 +1043,7 @@ pub fn AdjustEnhanceLayer(pCtx: &mut sWelsEncCtx, iCurDid: i32) -> i32 {
     };
     let kiMultipleThreadIdc = pCtx.param().iMultipleThreadIdc;
 
-    let kbModelingFromSpatial = current_layer_ref(pCtx).expect("the frame's current layer is stamped").pRefLayer.is_some()
+    let kbModelingFromSpatial = current_layer_expect(pCtx).pRefLayer.is_some()
         && match kPrevSliceArg {
             Some((uiSliceMode, uiSliceNum)) => {
                 uiSliceMode == SliceMode::SM_FIXEDSLCNUM_SLICE
@@ -1057,7 +1058,7 @@ pub fn AdjustEnhanceLayer(pCtx: &mut sWelsEncCtx, iCurDid: i32) -> i32 {
         // LAYER (base == current when iCurDid is the base), so the load is
         // hoisted above the exclusive borrow. S11.36: the safe accessor.
         let kiSliceNumInFrame =
-            current_layer_ref(pCtx).expect("the frame's current layer is stamped").sSliceEncCtx.iSliceNumInFrame.load(Ordering::Relaxed);
+            current_layer_expect(pCtx).sSliceEncCtx.iSliceNumInFrame.load(Ordering::Relaxed);
         let Some(pBaseLayer) = crate::encoder::encoder_context::dq_layer_mut(pCtx, iCurDid as usize - 1) else {
             return 0;
         };
@@ -1085,7 +1086,7 @@ pub fn AdjustEnhanceLayer(pCtx: &mut sWelsEncCtx, iCurDid: i32) -> i32 {
         }
     } else {
         let kiSliceNumInFrame =
-            current_layer_ref(pCtx).expect("the frame's current layer is stamped").sSliceEncCtx.iSliceNumInFrame.load(Ordering::Relaxed);
+            current_layer_expect(pCtx).sSliceEncCtx.iSliceNumInFrame.load(Ordering::Relaxed);
         // S11.36: the safe accessor; the raw's null had no arm here (the deref
         // was unchecked), so `expect` states the same liveness.
         let pCurLayer = crate::encoder::encoder_context::dq_layer_mut(pCtx, iCurDid as usize)
@@ -1724,7 +1725,7 @@ fn EncodeOneSliceInJob(
             // 0 → 2, `encoder_ext.rs:1506`) confines walk and neighbour reads
             // to it, and the run came from the pre-fork `split_at_mut` — so
             // this block is safe code, as S11.26 scheduled.
-            let pCurDq = current_layer_ref(pCtx).expect("the frame's current layer is stamped");
+            let pCurDq = current_layer_expect(pCtx);
             if let Some(view) = crate::encoder::svc_encode_slice::layer_rec_view(pCurDq) {
                 pfDeblockingFilterSlice(
                     view,
@@ -1821,8 +1822,7 @@ pub fn EncodeFixedSlicesForked(pCtx: &mut sWelsEncCtx, kiSliceCount: i32) -> i32
     // each element once — the compiler carries that fact, where
     // `slice_in_bank`'s raw could only assert it.
     let mut vTakenBank: Vec<SSlice> = {
-        let pCurDq = crate::encoder::svc_encode_slice::current_layer_mut(pCtx)
-            .expect("the frame's current layer is stamped");
+        let pCurDq = crate::encoder::svc_encode_slice::current_layer_expect_mut(pCtx);
         std::mem::take(&mut pCurDq.sSliceBufferInfo[0].pSliceBuffer)
     };
 
@@ -1835,16 +1835,14 @@ pub fn EncodeFixedSlicesForked(pCtx: &mut sWelsEncCtx, kiSliceCount: i32) -> i32
     // `kiLocal` arithmetic, and the first carve attempt's mispairing came from
     // exactly a filtered, re-sorted list.
     let (vSliceRanges, kiGridWidth) = {
-        let pCurDq = crate::encoder::svc_encode_slice::current_layer_ref(pCtx)
-            .expect("the frame's current layer is stamped");
+        let pCurDq = crate::encoder::svc_encode_slice::current_layer_expect(pCtx);
         let r: Vec<(i32, i32)> = (0..kiSliceCount as usize)
             .map(|i| (pCurDq.pFirstMbIdxOfSlice[i], pCurDq.pCountMbNumInSlice[i]))
             .collect();
         (r, pCurDq.sMbDataP.dims().mb_width())
     };
     let mut sTakenMbData = {
-        let pCurDq = crate::encoder::svc_encode_slice::current_layer_mut(pCtx)
-            .expect("the frame's current layer is stamped");
+        let pCurDq = crate::encoder::svc_encode_slice::current_layer_expect_mut(pCtx);
         std::mem::replace(&mut pCurDq.sMbDataP, crate::safe::mb_grid::MbArray::empty())
     };
 
@@ -1951,8 +1949,7 @@ pub fn EncodeFixedSlicesForked(pCtx: &mut sWelsEncCtx, kiSliceCount: i32) -> i32
     {
         // S11.21: the bank goes back with them. S11.27: so does the grid — a
         // pointer move each way, contents carried.
-        let pCurDq = crate::encoder::svc_encode_slice::current_layer_mut(pCtx)
-            .expect("the frame's current layer is stamped");
+        let pCurDq = crate::encoder::svc_encode_slice::current_layer_expect_mut(pCtx);
         pCurDq.sSliceBufferInfo[0].pSliceBuffer = vTakenBank;
         pCurDq.sMbDataP = sTakenMbData;
     }
@@ -2147,7 +2144,7 @@ fn EncodeOnePartitionSizeLimited(
 
     // ---- ExecuteTaskConstrainedSize
     let iResult = (|| {
-        let pCurDq = current_layer_ref(pCtx).expect("the frame's current layer is stamped");
+        let pCurDq = current_layer_expect(pCtx);
         let kiSliceIdxStep = (*pCtx).iActiveThreadsNum as i32;
         let kiPartitionId = iPartitionIdx % kiSliceIdxStep;
         let kiFirstMbInPartition = pCurDq.FirstMbIdxOfPartition[kiPartitionId as usize];
@@ -2334,8 +2331,7 @@ pub fn EncodeSizeLimitedSlicesForked(pCtx: &mut sWelsEncCtx, kiPartitionCnt: i32
     // inside its run, which is what lets the coding chain, the boundary
     // walker and the deblocking all write through the same window.
     let (vPartRanges, kiGridWidth) = {
-        let pCurDq = crate::encoder::svc_encode_slice::current_layer_ref(pCtx)
-            .expect("the frame's current layer is stamped");
+        let pCurDq = crate::encoder::svc_encode_slice::current_layer_expect(pCtx);
         let r: Vec<(i32, i32)> = (0..iWidth as usize)
             .map(|p| {
                 let first = pCurDq.FirstMbIdxOfPartition[p];
@@ -2357,8 +2353,7 @@ pub fn EncodeSizeLimitedSlicesForked(pCtx: &mut sWelsEncCtx, kiPartitionCnt: i32
         (r, pCurDq.sMbDataP.dims().mb_width())
     };
     let mut sTakenMbData = {
-        let pCurDq = crate::encoder::svc_encode_slice::current_layer_mut(pCtx)
-            .expect("the frame's current layer is stamped");
+        let pCurDq = crate::encoder::svc_encode_slice::current_layer_expect_mut(pCtx);
         std::mem::replace(&mut pCurDq.sMbDataP, crate::safe::mb_grid::MbArray::empty())
     };
 
@@ -2376,8 +2371,7 @@ pub fn EncodeSizeLimitedSlicesForked(pCtx: &mut sWelsEncCtx, kiPartitionCnt: i32
     // bank `k` for the frame; growth is an owned `Vec` resize; restored after
     // the join, grown size and coded slices carried.
     let mut vTakenBanks: Vec<crate::encoder::svc_encode_slice::SSliceBufferInfo> = {
-        let pCurDq = crate::encoder::svc_encode_slice::current_layer_mut(pCtx)
-            .expect("the frame's current layer is stamped");
+        let pCurDq = crate::encoder::svc_encode_slice::current_layer_expect_mut(pCtx);
         (0..iWidth as usize)
             .map(|k| std::mem::take(&mut pCurDq.sSliceBufferInfo[k]))
             .collect()
@@ -2471,8 +2465,7 @@ pub fn EncodeSizeLimitedSlicesForked(pCtx: &mut sWelsEncCtx, kiPartitionCnt: i32
     }
     {
         // S11.27: the grid goes back with them. S11.30: so does the scratch.
-        let pCurDq = crate::encoder::svc_encode_slice::current_layer_mut(pCtx)
-            .expect("the frame's current layer is stamped");
+        let pCurDq = crate::encoder::svc_encode_slice::current_layer_expect_mut(pCtx);
         pCurDq.sMbDataP = sTakenMbData;
     }
     for (k, buf) in vTakenDynBufs.into_iter().enumerate() {
@@ -2481,8 +2474,7 @@ pub fn EncodeSizeLimitedSlicesForked(pCtx: &mut sWelsEncCtx, kiPartitionCnt: i32
     {
         // S11.34: the banks go back — grown size and coded slices carried, which
         // is what `ReOrderSliceInLayer` and the NAL assembly read after this.
-        let pCurDq = crate::encoder::svc_encode_slice::current_layer_mut(pCtx)
-            .expect("the frame's current layer is stamped");
+        let pCurDq = crate::encoder::svc_encode_slice::current_layer_expect_mut(pCtx);
         for (k, bank) in vTakenBanks.into_iter().enumerate() {
             pCurDq.sSliceBufferInfo[k] = bank;
         }

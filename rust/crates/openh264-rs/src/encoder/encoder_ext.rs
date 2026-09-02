@@ -48,7 +48,7 @@ use crate::encoder::slice_multi_threading::{
 use crate::encoder::svc_enc_slice_segment::{GetInitialSliceNum, InitSlicePEncCtx};
 use crate::encoder::svc_encode_slice::{InitSliceInLayer, WelsMbToSliceIdc, current_layer_ref};
 use crate::encoder::svc_encode_slice::{ctx_sps, ctx_pps};
-use crate::encoder::svc_encode_slice::{set_current_layer};
+use crate::encoder::svc_encode_slice::set_current_layer;
 use crate::encoder::svc_mode_decision::{
     LEFT_MB_POS, TOPLEFT_MB_POS, TOPRIGHT_MB_POS, TOP_MB_POS,
 };
@@ -86,6 +86,7 @@ use crate::encoder::svc_motion_estimate::{
 use crate::api::codec_api::ECOMPLEXITY_MODE::LOW_COMPLEXITY;
 use crate::encoder::wels_preprocess::EStaticBlockIdc;
 use crate::encoder::ref_list_mgr_svc::MAX_TEMPORAL_LAYER_NUM;
+use crate::encoder::svc_encode_slice::{current_layer_expect, current_layer_expect_mut};
 
 /// `SPS_BUFFER_SIZE` — `wels_const.h:82`.
 pub const SPS_BUFFER_SIZE: i32 = 32;
@@ -2088,7 +2089,7 @@ pub fn WelsSwapDqLayers(pCtx: &mut sWelsEncCtx, kiNextDqIdx: i32) {
 
 /// `encoder_ext.cpp:2808`. Prefetch the reference picture after `WelsBuildRefList`.
 pub fn PrefetchReferencePicture(pCtx: &mut sWelsEncCtx, keFrameType: EVideoFrameType) {
-    let kiSliceCount = current_layer_ref(pCtx).expect("the frame's current layer is stamped").iMaxSliceNum;
+    let kiSliceCount = current_layer_expect(pCtx).iMaxSliceNum;
     // C++ declares `uint8_t uiRefIdx = -1;`, which wraps to 255.
     let mut uiRefIdx: u8 = 0xff;
 
@@ -2097,12 +2098,12 @@ pub fn PrefetchReferencePicture(pCtx: &mut sWelsEncCtx, keFrameType: EVideoFrame
         debug_assert!(pCtx.iNumRef0 > 0);
         // always get item 0 due to reordering done
         pCtx.pRefPic = pCtx.pRefList0[0];
-        current_layer_mut(pCtx).expect("the frame's current layer is stamped").pRefPic = pCtx.pRefPic;
+        current_layer_expect_mut(pCtx).pRefPic = pCtx.pRefPic;
         uiRefIdx = 0; // reordered reference index
     } else {
         // safe for IDR coding
         pCtx.pRefPic = None;
-        current_layer_mut(pCtx).expect("the frame's current layer is stamped").pRefPic = None;
+        current_layer_expect_mut(pCtx).pRefPic = None;
     }
 
     let mut iIdx = 0;
@@ -2110,7 +2111,7 @@ pub fn PrefetchReferencePicture(pCtx: &mut sWelsEncCtx, keFrameType: EVideoFrame
         // S11.35: the safe twin, per iteration — `None` where the raw answered
         // null, and the borrow ends with the statement.
         if let Some(pSlice) = crate::encoder::svc_encode_slice::slice_in_layer_mut(
-            current_layer_mut(pCtx).expect("the frame's current layer is stamped"),
+            current_layer_expect_mut(pCtx),
             iIdx,
         ) {
             pSlice.sSliceHeaderExt.sSliceHeader.uiRefIndex = uiRefIdx;
@@ -2124,7 +2125,7 @@ pub fn ClearFrameBsInfo(pCtx: &mut sWelsEncCtx, pFbi: &mut SFrameBSInfo) {
     (*pFbi).sLayerInfo[0].pBsBuf = pCtx.frame_bs();
     {
         // S11.47: the frame's first layer starts at entry 0 of `pOut.sNalLen`.
-        let pOut = pCtx.pOut.as_deref_mut().expect("pOut lives");
+        let pOut = pCtx.out_mut();
         pOut.iNalLenBase = 0;
         (*pFbi).sLayerInfo[0].pNalLengthInByte = pOut.nal_len_ptr();
     }
@@ -2149,8 +2150,8 @@ pub fn StackBackEncoderStatus(pEncCtx: &mut sWelsEncCtx, keFrameType: EVideoFram
 
     // for bitstream writing
     pEncCtx.iPosBsBuffer = 0; // reset bs buffer position
-    pEncCtx.pOut.as_deref_mut().expect("pOut lives").iNalIndex = 0; // reset NAL index
-    pEncCtx.pOut.as_deref_mut().expect("pOut lives").iLayerBsIndex = 0; // reset index of Layer Bs
+    pEncCtx.out_mut().iNalIndex = 0; // reset NAL index
+    pEncCtx.out_mut().iLayerBsIndex = 0; // reset index of Layer Bs
 
     // Was `InitBits(&pOut->sBsWrite, pOut->pBsBuffer, pOut->uiSize)`. The buffer
     // stays on `pOut` where it already was — owned outright since T3.6, so its
@@ -2158,7 +2159,7 @@ pub fn StackBackEncoderStatus(pEncCtx: &mut sWelsEncCtx, keFrameType: EVideoFram
     // and resetting it is the whole of what `InitBits` did that still means
     // anything (F13's third site: the `*const`-declared, `*mut`-stored, written-
     // through buffer parameter is gone, not amended).
-    pEncCtx.pOut.as_deref_mut().expect("pOut lives").sBsWrite = crate::encoder::vlc_encoder::BsWriter::new();
+    pEncCtx.out_mut().sBsWrite = crate::encoder::vlc_encoder::BsWriter::new();
 
     if keFrameType == EVideoFrameType::videoFrameTypeP
         || keFrameType == EVideoFrameType::videoFrameTypeI
@@ -2215,14 +2216,14 @@ pub fn WelsInitCurrentLayer(pCtx: &mut sWelsEncCtx, _kiWidth: i32, _kiHeight: i3
     let kbUseSubsetSpsFlag =
         !pCtx.param().bSimulcastAVC && (kiCurDid as i32) > BASE_DEPENDENCY_ID;
     let iSliceCount =
-        current_layer_ref(pCtx).expect("the frame's current layer is stamped").iMaxSliceNum;
+        current_layer_expect(pCtx).iMaxSliceNum;
     // S11.39: the parameter cursor is gone with the body's `unsafe` — both of its
     // reads were scalars (`uiIdrPicId`, `iFrameNum`), and each now goes through
     // `param()` at its use site, A7's route for a body that holds nothing.
 
     // RHS first, then the place — assignment order is what lets the layer stamp
     // sit beside a context read (`:2079`'s idiom).
-    current_layer_mut(pCtx).expect("the frame's current layer is stamped").pDecPic =
+    current_layer_expect_mut(pCtx).pDecPic =
         pCtx.pDecPic;
 
     debug_assert!(iSliceCount > 0);
@@ -2259,7 +2260,7 @@ pub fn WelsInitCurrentLayer(pCtx: &mut sWelsEncCtx, _kiWidth: i32, _kiHeight: i3
     let keSliceType = pCtx.eSliceType;
     let kuiTemporalId = pCtx.uiTemporalId;
     let kiFrameNum = pCtx.param().sDependencyLayers[kiCurDid as usize].iFrameNum;
-    let pCurDq = current_layer_mut(pCtx).expect("the frame's current layer is stamped");
+    let pCurDq = current_layer_expect_mut(pCtx);
 
     pCurDq.sLayerInfo.iPps = Some(PpsId(iCurPpsId as u16));
 
@@ -2323,7 +2324,7 @@ pub fn WelsInitCurrentLayer(pCtx: &mut sWelsEncCtx, _kiWidth: i32, _kiHeight: i3
     if pCtx.pVpp.is_none() {
         return;
     }
-    current_layer_mut(pCtx).expect("the frame's current layer is stamped").pEncPic =
+    current_layer_expect_mut(pCtx).pEncPic =
         Some(idEnc);
     // **S10.7: `pSrcPool`'s stamp is gone with the field**, and **S11.39: the pool
     // local went with it.** The slot-read the local kept (`ctx_src_pool_raw`,
@@ -2368,7 +2369,7 @@ pub fn WelsInitCurrentLayer(pCtx: &mut sWelsEncCtx, _kiWidth: i32, _kiHeight: i3
         crate::encoder::encoder_context::ctx_vpp_ref(pCtx).m_pSpatialPicPool.get(idEnc),
     );
 
-    let pCurDq = current_layer_mut(pCtx).expect("the frame's current layer is stamped");
+    let pCurDq = current_layer_expect_mut(pCtx);
     pCurDq.pRecView = Some(sRecView);
     pCurDq.pEncView = Some(sEncView);
 
@@ -2399,7 +2400,7 @@ pub fn WelsInitCurrentLayer(pCtx: &mut sWelsEncCtx, _kiWidth: i32, _kiHeight: i3
     // call, and only on the `SM_FIXEDSLCNUM_SLICE` arm.
     if pCtx.pSliceThreading.is_some()
         && !current_layer_ref(pCtx).is_none()
-        && current_layer_ref(pCtx).expect("the frame's current layer is stamped").bNeedAdjustingSlicing
+        && current_layer_expect(pCtx).bNeedAdjustingSlicing
     {
         let kiTaskCount = pCtx.param().sSpatialLayers[kiCurDid as usize]
             .sSliceArgument
@@ -2426,13 +2427,13 @@ pub fn AddPrefixNal(
     // S3.B1: per-statement reborrows — see `WelsWriteOneSPS`.
     if keNalRefIdc != EWelsNalRefIdc::NRI_PRI_LOWEST {
         crate::encoder::nal_encap::WelsLoadNal(
-            pCtx.pOut.as_deref_mut().expect("pOut lives"),
+            pCtx.out_mut(),
             EWelsNalUnitType::NAL_UNIT_PREFIX as i32,
             keNalRefIdc as i32,
         );
 
         {
-            let pOut = pCtx.pOut.as_deref_mut().expect("pOut lives");
+            let pOut = pCtx.out_mut();
             crate::encoder::nal_encap::WelsWriteSVCPrefixNal(
                 &mut pOut.sBsBuffer[..],
                 &mut pOut.sBsWrite,
@@ -2441,23 +2442,23 @@ pub fn AddPrefixNal(
             );
         }
 
-        crate::encoder::nal_encap::WelsUnloadNal(pCtx.pOut.as_deref_mut().expect("pOut lives"));
+        crate::encoder::nal_encap::WelsUnloadNal(pCtx.out_mut());
     } else {
         // No prefix NAL unit RBSP syntax here, but the NAL unit header extension is
         // still needed.
         crate::encoder::nal_encap::WelsLoadNal(
-            pCtx.pOut.as_deref_mut().expect("pOut lives"),
+            pCtx.out_mut(),
             EWelsNalUnitType::NAL_UNIT_PREFIX as i32,
             keNalRefIdc as i32,
         );
-        crate::encoder::nal_encap::WelsUnloadNal(pCtx.pOut.as_deref_mut().expect("pOut lives"));
+        crate::encoder::nal_encap::WelsUnloadNal(pCtx.out_mut());
     }
 
     // S11.37: a value, not a cursor — `SNalUnitHeaderExt` is `Copy`, the callee
     // only reads it, and a copy survives the context destructure below without
     // borrowing anything (the S3.B1 raw hoist said the same thing in provenance).
     let kNalHeaderExt =
-        current_layer_ref(pCtx).expect("the frame's current layer is stamped").sLayerInfo.sNalHeaderExt;
+        current_layer_expect(pCtx).sLayerInfo.sNalHeaderExt;
     // **S11.17**: the context is destructured. The NAL entry and the
     // source bytes live in `pOut`; the destination is the tail of
     // `pFrameBs` — disjoint fields, so both borrows are live at once
@@ -2589,7 +2590,7 @@ fn SetNormalCodingFunc(pFuncList: &mut SWelsFuncPtrList) {
 /// The `SCREEN_CONTENT_REAL_TIME` block (`encoder_ext.cpp:2708-2771`) is the only part
 /// not translated; see the comment at its position below.
 pub fn PreprocessSliceCoding(pCtx: &mut sWelsEncCtx) {
-    let pCurLayer = current_layer_ref(pCtx).expect("the frame's current layer is stamped");
+    let pCurLayer = current_layer_expect(pCtx);
     let bFastMode = pCtx.param().iComplexityMode == LOW_COMPLEXITY;
     // **T6.I2**, as `InitFunctionPointers`: one `&mut` derived from the owner, not
     // one per call. This is the function the whole step-1 checker is about — it is
@@ -2715,8 +2716,7 @@ pub fn PreprocessSliceCoding(pCtx: &mut sWelsEncCtx) {
 
     // S11.37: the one layer write, re-derived after the table's `&mut` ends —
     // the value was computed above from the table's final state.
-    current_layer_mut(pCtx)
-        .expect("the frame's current layer is stamped")
+    current_layer_expect_mut(pCtx)
         .bSatdInMdFlag = kbSatdInMd;
 }
 
@@ -2771,7 +2771,7 @@ pub fn WriteSsvcParaset(
     // S11.47: the next layer's slot is this one's plus its NAL count — the
     // pointer chain's arithmetic, in `sNalLen`'s own units.
     {
-        let pOut = pCtx.pOut.as_deref_mut().expect("pOut lives");
+        let pOut = pCtx.out_mut();
         pOut.iLayerBsIndex += 1;
         pOut.advance_nal_len_base(iCountNal.max(0) as usize);
         pFbi.sLayerInfo[*iLbi].pNalLengthInByte = pOut.nal_len_ptr();
@@ -2818,7 +2818,7 @@ pub fn WriteSavcParaset(
         return iReturn;
     }
 
-    pCtx.pOut.as_deref().expect("pOut lives").set_nal_len_at(0, iNalSize);
+    pCtx.out().set_nal_len_at(0, iNalSize);
     iNonVclSize += iNalSize;
     iCountNal = 1;
 
@@ -2835,7 +2835,7 @@ pub fn WriteSavcParaset(
     // S11.47: the next layer's slot is this one's plus its NAL count —
     // the pointer chain's arithmetic, in `sNalLen`'s own units.
     {
-        let pOut = pCtx.pOut.as_deref_mut().expect("pOut lives");
+        let pOut = pCtx.out_mut();
         pOut.iLayerBsIndex += 1;
         pOut.advance_nal_len_base(iCountNal.max(0) as usize);
         pFbi.sLayerInfo[*iLbi].pNalLengthInByte = pOut.nal_len_ptr();
@@ -2854,7 +2854,7 @@ pub fn WriteSavcParaset(
     if iReturn != ENC_RETURN_SUCCESS {
         return iReturn;
     }
-    pCtx.pOut.as_deref().expect("pOut lives").set_nal_len_at(0, iNalSize);
+    pCtx.out().set_nal_len_at(0, iNalSize);
     iNonVclSize += iNalSize;
     iCountNal = 1;
 
@@ -2871,7 +2871,7 @@ pub fn WriteSavcParaset(
     // S11.47: the next layer's slot is this one's plus its NAL count —
     // the pointer chain's arithmetic, in `sNalLen`'s own units.
     {
-        let pOut = pCtx.pOut.as_deref_mut().expect("pOut lives");
+        let pOut = pCtx.out_mut();
         pOut.iLayerBsIndex += 1;
         pOut.advance_nal_len_base(iCountNal.max(0) as usize);
         pFbi.sLayerInfo[*iLbi].pNalLengthInByte = pOut.nal_len_ptr();
@@ -2938,10 +2938,7 @@ pub fn WriteSavcParaset_Listing(
             if iReturn != ENC_RETURN_SUCCESS {
                 return iReturn;
             }
-            pCtx.pOut
-                .as_deref()
-                .expect("pOut lives")
-                .set_nal_len_at(iCountNal.max(0) as usize, iNalSize);
+            pCtx.out().set_nal_len_at(iCountNal.max(0) as usize, iNalSize);
             iNonVclSize += iNalSize;
             iCountNal += 1;
         }
@@ -2959,7 +2956,7 @@ pub fn WriteSavcParaset_Listing(
         // S11.47: the next layer's slot is this one's plus its NAL count —
         // the pointer chain's arithmetic, in `sNalLen`'s own units.
         {
-            let pOut = pCtx.pOut.as_deref_mut().expect("pOut lives");
+            let pOut = pCtx.out_mut();
             pOut.iLayerBsIndex += 1;
             pOut.advance_nal_len_base(iCountNal.max(0) as usize);
             pFbi.sLayerInfo[*iLbi].pNalLengthInByte = pOut.nal_len_ptr();
@@ -2989,10 +2986,7 @@ pub fn WriteSavcParaset_Listing(
             if iReturn != ENC_RETURN_SUCCESS {
                 return iReturn;
             }
-            pCtx.pOut
-                .as_deref()
-                .expect("pOut lives")
-                .set_nal_len_at(iCountNal.max(0) as usize, iNalSize);
+            pCtx.out().set_nal_len_at(iCountNal.max(0) as usize, iNalSize);
             iNonVclSize += iNalSize;
             iCountNal += 1;
         }
@@ -3010,7 +3004,7 @@ pub fn WriteSavcParaset_Listing(
         // S11.47: the next layer's slot is this one's plus its NAL count —
         // the pointer chain's arithmetic, in `sNalLen`'s own units.
         {
-            let pOut = pCtx.pOut.as_deref_mut().expect("pOut lives");
+            let pOut = pCtx.out_mut();
             pOut.iLayerBsIndex += 1;
             pOut.advance_nal_len_base(iCountNal.max(0) as usize);
             pFbi.sLayerInfo[*iLbi].pNalLengthInByte = pOut.nal_len_ptr();
@@ -3303,7 +3297,7 @@ pub fn WelsInitCurrentDlayerMltslc(pCtx: &mut sWelsEncCtx, iPartitionNum: i32) {
     // two scalar reads below re-derive shared, so the context reads between
     // them are free (the raw cursor was the same ordering, unspoken).
     UpdateSlicepEncCtxWithPartition(
-        current_layer_mut(pCtx).expect("the frame's current layer is stamped"),
+        current_layer_expect_mut(pCtx),
         iPartitionNum,
     );
 
@@ -3320,7 +3314,7 @@ pub fn WelsInitCurrentDlayerMltslc(pCtx: &mut sWelsEncCtx, iPartitionNum: i32) {
         } else {
             // fixed QP case
             let iTtlMbNumInFrame =
-                current_layer_ref(pCtx).expect("the frame's current layer is stamped").sSliceEncCtx.iMbNumInFrame;
+                current_layer_expect(pCtx).sSliceEncCtx.iMbNumInFrame;
             let mut iQDeltaTo26 = 26 - pCtx.param().sSpatialLayers[iCurDid].iDLayerQp;
 
             uiFrmByte = (iTtlMbNumInFrame as u32).wrapping_mul(byte_complexIMBat26);
@@ -3336,7 +3330,7 @@ pub fn WelsInitCurrentDlayerMltslc(pCtx: &mut sWelsEncCtx, iPartitionNum: i32) {
 
         // MINPACKETSIZE_CONSTRAINT: suppose 16 byte per mb at average
         let _uiMiniPacketSize = uiFrmByte
-            / current_layer_ref(pCtx).expect("the frame's current layer is stamped").sSliceEncCtx.iMaxSliceNumConstraint as u32;
+            / current_layer_expect(pCtx).sSliceEncCtx.iMaxSliceNumConstraint as u32;
         // C++ only WelsLogs a warning here when uiSliceSizeConstraint is smaller.
     }
 
@@ -3355,7 +3349,7 @@ pub fn DynSliceRealloc(
 ) -> i32 {
     // T9.G6: hoisted — the call takes the context retag and this argument reads
     // through the same context (shape B).
-    let iMaxSliceNum = current_layer_ref(pCtx).expect("the frame's current layer is stamped").iMaxSliceNum;
+    let iMaxSliceNum = current_layer_expect(pCtx).iMaxSliceNum;
     let mut iRet = crate::encoder::svc_encode_slice::FrameBsRealloc(
         pCtx,
         pFbi,
@@ -3414,7 +3408,7 @@ pub fn WelsCodeOnePicPartition(
     // S11.35: the start slice's stamp is an index into the layer's own bank —
     // `None` is the old null answer.
     {
-        let pCurLayer = current_layer_mut(pCtx).expect("the frame's current layer is stamped");
+        let pCurLayer = current_layer_expect_mut(pCtx);
         let Some(pStartSlice) = pCurLayer.sSliceBufferInfo[uSlcBuffIdx]
             .pSliceBuffer
             .get_mut(iStartSliceIdx as usize)
@@ -3428,7 +3422,7 @@ pub fn WelsCodeOnePicPartition(
         let mut iPayloadSize = 0i32;
 
         if iSliceIdx
-            >= (current_layer_ref(pCtx).expect("the frame's current layer is stamped").sSliceBufferInfo[uSlcBuffIdx].iMaxSliceNum - kiSliceIdxStep)
+            >= (current_layer_expect(pCtx).sSliceBufferInfo[uSlcBuffIdx].iMaxSliceNum - kiSliceIdxStep)
         {
             // insufficient memory in pSliceInLayer[]
             if pCtx.iActiveThreadsNum == 1 {
@@ -3436,7 +3430,7 @@ pub fn WelsCodeOnePicPartition(
                 if DynSliceRealloc(pCtx, pFbi, iLbi) != 0 {
                     return ENC_RETURN_MEMALLOCERR;
                 }
-            } else if iSliceIdx >= current_layer_ref(pCtx).expect("the frame's current layer is stamped").iMaxSliceNum {
+            } else if iSliceIdx >= current_layer_expect(pCtx).iMaxSliceNum {
                 return ENC_RETURN_MEMALLOCERR;
             }
         }
@@ -3456,18 +3450,18 @@ pub fn WelsCodeOnePicPartition(
             iPartitionBsSize += iPayloadSize;
         }
 
-        crate::encoder::nal_encap::WelsLoadNal(pCtx.pOut.as_deref_mut().expect("pOut lives"), keNalType as i32, keNalRefIdc as i32);
+        crate::encoder::nal_encap::WelsLoadNal(pCtx.out_mut(), keNalType as i32, keNalRefIdc as i32);
         // **S11.35: the bank leaves the layer for the call** — the same move as
         // the grid and the scratch below, one storage over: taking it lets the
         // current and forward slots come from one `split_at_mut` while `pCtx`
         // stays free for the `&mut` NAL machinery on either side of the call.
         // The realloc arm above ran with the bank in place, as it must.
         let mut sBank = std::mem::take(
-            &mut current_layer_mut(pCtx).expect("the frame's current layer is stamped").sSliceBufferInfo[uSlcBuffIdx],
+            &mut current_layer_expect_mut(pCtx).sSliceBufferInfo[uSlcBuffIdx],
         );
         let kiCurSlot = iSliceIdx as usize;
         if kiCurSlot >= sBank.pSliceBuffer.len() {
-            current_layer_mut(pCtx).expect("the frame's current layer is stamped").sSliceBufferInfo[uSlcBuffIdx] = sBank;
+            current_layer_expect_mut(pCtx).sSliceBufferInfo[uSlcBuffIdx] = sBank;
             return ENC_RETURN_UNEXPECTED;
         }
         let (kpHead, kpTail) = sBank.pSliceBuffer.split_at_mut(kiCurSlot + 1);
@@ -3491,7 +3485,7 @@ pub fn WelsCodeOnePicPartition(
         // what S11.1a's raw hoist could only assert, the borrow checker now
         // proves: the chain's `&pCtx` coexists with `&mut` locals, not with
         // `&mut` context fields.
-        let pOutRef = pCtx.pOut.as_deref_mut().expect("pOut lives");
+        let pOutRef = pCtx.out_mut();
         let mut vOutBsBuf = std::mem::take(&mut pOutRef.sBsBuffer);
         let mut sOutBsWrite = pOutRef.sBsWrite;
         let mut pCtxOutBs: Option<&mut crate::encoder::vlc_encoder::BsWriter> = Some(&mut sOutBsWrite);
@@ -3502,7 +3496,7 @@ pub fn WelsCodeOnePicPartition(
         // no records — and the restore precedes the error check, so every exit
         // path sees the grid back.
         let mut sMbData = std::mem::replace(
-            &mut current_layer_mut(pCtx).expect("the frame's current layer is stamped").sMbDataP,
+            &mut current_layer_expect_mut(pCtx).sMbDataP,
             crate::safe::mb_grid::MbArray::empty(),
         );
         let mut sMbWindow = crate::safe::mb_grid::MbWindow::whole(&mut sMbData, 0);
@@ -3525,23 +3519,23 @@ pub fn WelsCodeOnePicPartition(
         );
         pCtx.pDynamicBsBuffer[0] = vRestoreBuf;
         drop(sMbWindow);
-        current_layer_mut(pCtx).expect("the frame's current layer is stamped").sMbDataP = sMbData;
+        current_layer_expect_mut(pCtx).sMbDataP = sMbData;
         // S11.35: the bank goes back before the error check, like everything
         // taken — the boundary's forward write (if the limit fired) rides in it.
-        current_layer_mut(pCtx).expect("the frame's current layer is stamped").sSliceBufferInfo[uSlcBuffIdx] = sBank;
-        let pOutRef = pCtx.pOut.as_deref_mut().expect("pOut lives");
+        current_layer_expect_mut(pCtx).sSliceBufferInfo[uSlcBuffIdx] = sBank;
+        let pOutRef = pCtx.out_mut();
         pOutRef.sBsBuffer = vOutBsBuf;
         pOutRef.sBsWrite = sOutBsWrite;
         if iReturn != ENC_RETURN_SUCCESS {
             return iReturn;
         }
-        crate::encoder::nal_encap::WelsUnloadNal(pCtx.pOut.as_deref_mut().expect("pOut lives"));
+        crate::encoder::nal_encap::WelsUnloadNal(pCtx.out_mut());
 
         // S11.37: a value, not a cursor — `SNalUnitHeaderExt` is `Copy`, the
         // callee only reads it, and a copy survives the context destructure
         // with no borrow (the S3.B1 raw hoist said this in provenance).
         let kNalHeaderExt =
-            current_layer_ref(pCtx).expect("the frame's current layer is stamped").sLayerInfo.sNalHeaderExt;
+            current_layer_expect(pCtx).sLayerInfo.sNalHeaderExt;
         // **S11.17**: the context is destructured. The NAL entry and the
         // source bytes live in `pOut`; the destination is the tail of
         // `pFrameBs` — disjoint fields, so both borrows are live at once
@@ -3574,10 +3568,7 @@ pub fn WelsCodeOnePicPartition(
             return iReturn;
         }
         let iSliceSize = pCtx
-            .pOut
-            .as_deref()
-            .expect("pOut lives")
-            .nal_len_at(iNalIdxInLayer.max(0) as usize);
+            .out().nal_len_at(iNalIdxInLayer.max(0) as usize);
 
         pCtx.iPosBsBuffer += iSliceSize;
         iPartitionBsSize += iSliceSize;
@@ -3585,7 +3576,7 @@ pub fn WelsCodeOnePicPartition(
         iNalIdxInLayer += 1;
         iSliceIdx += kiSliceStep; // iSliceIdx is not contiguous
         iAnyMbLeftInPartition = iEndMbIdxInPartition
-            - current_layer_ref(pCtx).expect("the frame's current layer is stamped").LastCodedMbIdxOfPartition[kiPartitionId].load(Ordering::Relaxed);
+            - current_layer_expect(pCtx).LastCodedMbIdxOfPartition[kiPartitionId].load(Ordering::Relaxed);
     }
 
     *pLayerSize = iPartitionBsSize;
@@ -3766,13 +3757,13 @@ pub fn WelsEncoderEncodeExt(
     pFbi.sLayerInfo[iLbi].pBsBuf = pCtx.frame_bs();
     {
         // S11.47: the frame's first layer starts at entry 0 of `pOut.sNalLen`.
-        let pOut = pCtx.pOut.as_deref_mut().expect("pOut lives");
+        let pOut = pCtx.out_mut();
         pOut.iNalLenBase = 0;
         pFbi.sLayerInfo[iLbi].pNalLengthInByte = pOut.nal_len_ptr();
     }
     iCurDid = pCtx.sSpatialIndexMap[0].iDid as i8;
     set_current_layer(pCtx, Some(LayerIdx(iCurDid as u8)));
-    current_layer_mut(pCtx).expect("the frame's current layer is stamped").pRefLayer = None;
+    current_layer_expect_mut(pCtx).pRefLayer = None;
 
     if !pCtx.param().bSimulcastAVC {
         eFrameType = PrepareEncodeFrame(pCtx,
@@ -4016,7 +4007,7 @@ pub fn WelsEncoderEncodeExt(
             // boundary stamp and the whole coding call; the take makes those
             // coexistences ownership facts, and `pCtx` stays free throughout.
             let mut sBank = std::mem::take(
-                &mut current_layer_mut(pCtx).expect("the frame's current layer is stamped").sSliceBufferInfo[0],
+                &mut current_layer_expect_mut(pCtx).sSliceBufferInfo[0],
             );
             let pCurSlice = sBank
                 .pSliceBuffer
@@ -4038,7 +4029,7 @@ pub fn WelsEncoderEncodeExt(
             }
 
             crate::encoder::nal_encap::WelsLoadNal(
-                pCtx.pOut.as_deref_mut().expect("pOut lives"),
+                pCtx.out_mut(),
                 eNalType as i32,
                 eNalRefIdc as i32,
             );
@@ -4063,7 +4054,7 @@ pub fn WelsEncoderEncodeExt(
             // what S11.1a's raw hoist could only assert, the borrow checker now
             // proves: the chain's `&pCtx` coexists with `&mut` locals, not with
             // `&mut` context fields.
-            let pOutRef = pCtx.pOut.as_deref_mut().expect("pOut lives");
+            let pOutRef = pCtx.out_mut();
             let mut vOutBsBuf = std::mem::take(&mut pOutRef.sBsBuffer);
             let mut sOutBsWrite = pOutRef.sBsWrite;
             let mut pCtxOutBs: Option<&mut crate::encoder::vlc_encoder::BsWriter> = Some(&mut sOutBsWrite);
@@ -4074,7 +4065,7 @@ pub fn WelsEncoderEncodeExt(
             // no records — and the restore precedes the error check, so every exit
             // path sees the grid back.
             let mut sMbData = std::mem::replace(
-                &mut current_layer_mut(pCtx).expect("the frame's current layer is stamped").sMbDataP,
+                &mut current_layer_expect_mut(pCtx).sMbDataP,
                 crate::safe::mb_grid::MbArray::empty(),
             );
             let mut sMbWindow = crate::safe::mb_grid::MbWindow::whole(&mut sMbData, 0);
@@ -4090,10 +4081,10 @@ pub fn WelsEncoderEncodeExt(
                 crate::encoder::svc_encode_slice::WelsCodeOneSlice(pCtx, &mut *pCurSlice, eNalType as i32, vOutBsBuf.as_mut_slice(), &mut pCtxOutBs, &mut sMbWindow, pRestoreBuf, None);
             pCtx.pDynamicBsBuffer[0] = vRestoreBuf;
             drop(sMbWindow);
-            current_layer_mut(pCtx).expect("the frame's current layer is stamped").sMbDataP = sMbData;
+            current_layer_expect_mut(pCtx).sMbDataP = sMbData;
             // S11.35: the bank goes back before the error check, like the rest.
-            current_layer_mut(pCtx).expect("the frame's current layer is stamped").sSliceBufferInfo[0] = sBank;
-            let pOutRef = pCtx.pOut.as_deref_mut().expect("pOut lives");
+            current_layer_expect_mut(pCtx).sSliceBufferInfo[0] = sBank;
+            let pOutRef = pCtx.out_mut();
             pOutRef.sBsBuffer = vOutBsBuf;
             pOutRef.sBsWrite = sOutBsWrite;
             pCtx.iEncoderError = iCodeRet;
@@ -4101,13 +4092,13 @@ pub fn WelsEncoderEncodeExt(
                 return pCtx.iEncoderError;
             }
 
-            crate::encoder::nal_encap::WelsUnloadNal(pCtx.pOut.as_deref_mut().expect("pOut lives"));
+            crate::encoder::nal_encap::WelsUnloadNal(pCtx.out_mut());
 
             // S11.37: a value, not a cursor — `SNalUnitHeaderExt` is `Copy`, the
             // callee only reads it, and a copy survives the context destructure
             // with no borrow (the S3.B1 raw hoist said this in provenance).
             let kNalHeaderExt =
-                current_layer_ref(pCtx).expect("the frame's current layer is stamped").sLayerInfo.sNalHeaderExt;
+                current_layer_expect(pCtx).sLayerInfo.sNalHeaderExt;
             // **S11.17**: the context is destructured. The NAL entry and the
             // source bytes live in `pOut`; the destination is the tail of
             // `pFrameBs` — disjoint fields, so both borrows are live at once
@@ -4140,10 +4131,7 @@ pub fn WelsEncoderEncodeExt(
                 return pCtx.iEncoderError;
             }
             let iSliceSize = pCtx
-                .pOut
-                .as_deref()
-                .expect("pOut lives")
-                .nal_len_at(iNalIdxInLayer.max(0) as usize);
+                .out().nal_len_at(iNalIdxInLayer.max(0) as usize);
 
             iLayerSize += iSliceSize;
             pCtx.iPosBsBuffer += iSliceSize;
@@ -4160,7 +4148,7 @@ pub fn WelsEncoderEncodeExt(
             && pCtx.param().iMultipleThreadIdc <= 1
         {
             // dynamic slicing, single threading
-            let kiLastMbInFrame = current_layer_ref(pCtx).expect("the frame's current layer is stamped").sSliceEncCtx.iMbNumInFrame;
+            let kiLastMbInFrame = current_layer_expect(pCtx).sSliceEncCtx.iMbNumInFrame;
             pCtx.iEncoderError = WelsCodeOnePicPartition(pCtx,
                 pFbi,
                 iLbi,
@@ -4181,7 +4169,7 @@ pub fn WelsEncoderEncodeExt(
             // THREAD_FULLY_FIRE_MODE/THREAD_PICK_UP_MODE for any mode of
             // non-SM_SIZELIMITED_SLICE
             iSliceCount =
-                crate::encoder::svc_encode_slice::GetCurrentSliceNum(current_layer_mut(pCtx).expect("the frame's current layer is stamped"));
+                crate::encoder::svc_encode_slice::GetCurrentSliceNum(current_layer_expect_mut(pCtx));
             if iLayerNum + 1 >= MAX_LAYER_NUM_OF_FRAME as i32 {
                 // check available layer_bs_info for further writing as followed
                 return ENC_RETURN_UNSUPPORTED_PARA;
@@ -4229,7 +4217,7 @@ pub fn WelsEncoderEncodeExt(
             let kiPartitionCnt = pCtx.iActiveThreadsNum as i32;
 
             //TODO: use a function to remove duplicate code here and ln3994
-            let iLayerBsIdx = pCtx.pOut.as_deref().expect("pOut lives").iLayerBsIndex;
+            let iLayerBsIdx = pCtx.out().iLayerBsIndex;
             // **T9.E6's raw expired with the array cursor it protected against
             // (S11.41).** The `&mut` element borrow was a hazard only while
             // `pLayerBsInfo` — a raw over the whole array, minted at the top of
@@ -4288,7 +4276,7 @@ pub fn WelsEncoderEncodeExt(
             }
 
             iSliceCount =
-                crate::encoder::svc_encode_slice::GetCurrentSliceNum(current_layer_mut(pCtx).expect("the frame's current layer is stamped"));
+                crate::encoder::svc_encode_slice::GetCurrentSliceNum(current_layer_expect_mut(pCtx));
             iLayerSize = crate::encoder::slice_multi_threading::AppendSliceToFrameBs(pCtx,
                 &mut pFbi.sLayerInfo[iLbi],
                 iSliceCount,
@@ -4302,7 +4290,7 @@ pub fn WelsEncoderEncodeExt(
             let mut iSliceIdx = 0i32;
 
             iSliceCount =
-                crate::encoder::svc_encode_slice::GetCurrentSliceNum(current_layer_mut(pCtx).expect("the frame's current layer is stamped"));
+                crate::encoder::svc_encode_slice::GetCurrentSliceNum(current_layer_expect_mut(pCtx));
             while iSliceIdx < iSliceCount {
                 let mut iPayloadSize = 0i32;
 
@@ -4321,7 +4309,7 @@ pub fn WelsEncoderEncodeExt(
                 }
 
                 crate::encoder::nal_encap::WelsLoadNal(
-                    pCtx.pOut.as_deref_mut().expect("pOut lives"),
+                    pCtx.out_mut(),
                     eNalType as i32,
                     eNalRefIdc as i32,
                 );
@@ -4329,7 +4317,7 @@ pub fn WelsEncoderEncodeExt(
                 // S11.35: the bank leaves the layer for the slice's span, as at
                 // the single-slice site; `expect` where the raw deref'd null.
                 let mut sBank = std::mem::take(
-                    &mut current_layer_mut(pCtx).expect("the frame's current layer is stamped").sSliceBufferInfo[0],
+                    &mut current_layer_expect_mut(pCtx).sSliceBufferInfo[0],
                 );
                 let pCurSlice = sBank
                     .pSliceBuffer
@@ -4353,7 +4341,7 @@ pub fn WelsEncoderEncodeExt(
                 // what S11.1a's raw hoist could only assert, the borrow checker now
                 // proves: the chain's `&pCtx` coexists with `&mut` locals, not with
                 // `&mut` context fields.
-                let pOutRef = pCtx.pOut.as_deref_mut().expect("pOut lives");
+                let pOutRef = pCtx.out_mut();
                 let mut vOutBsBuf = std::mem::take(&mut pOutRef.sBsBuffer);
                 let mut sOutBsWrite = pOutRef.sBsWrite;
                 let mut pCtxOutBs: Option<&mut crate::encoder::vlc_encoder::BsWriter> = Some(&mut sOutBsWrite);
@@ -4364,7 +4352,7 @@ pub fn WelsEncoderEncodeExt(
                 // no records — and the restore precedes the error check, so every exit
                 // path sees the grid back.
                 let mut sMbData = std::mem::replace(
-                    &mut current_layer_mut(pCtx).expect("the frame's current layer is stamped").sMbDataP,
+                    &mut current_layer_expect_mut(pCtx).sMbDataP,
                     crate::safe::mb_grid::MbArray::empty(),
                 );
                 let mut sMbWindow = crate::safe::mb_grid::MbWindow::whole(&mut sMbData, 0);
@@ -4387,10 +4375,10 @@ pub fn WelsEncoderEncodeExt(
                 );
                 pCtx.pDynamicBsBuffer[0] = vRestoreBuf;
                 drop(sMbWindow);
-                current_layer_mut(pCtx).expect("the frame's current layer is stamped").sMbDataP = sMbData;
+                current_layer_expect_mut(pCtx).sMbDataP = sMbData;
                 // S11.35: the bank goes back with the rest.
-                current_layer_mut(pCtx).expect("the frame's current layer is stamped").sSliceBufferInfo[0] = sBank;
-                let pOutRef = pCtx.pOut.as_deref_mut().expect("pOut lives");
+                current_layer_expect_mut(pCtx).sSliceBufferInfo[0] = sBank;
+                let pOutRef = pCtx.out_mut();
                 pOutRef.sBsBuffer = vOutBsBuf;
                 pOutRef.sBsWrite = sOutBsWrite;
                 pCtx.iEncoderError = iCodeRet;
@@ -4398,13 +4386,13 @@ pub fn WelsEncoderEncodeExt(
                     return pCtx.iEncoderError;
                 }
 
-                crate::encoder::nal_encap::WelsUnloadNal(pCtx.pOut.as_deref_mut().expect("pOut lives"));
+                crate::encoder::nal_encap::WelsUnloadNal(pCtx.out_mut());
 
                 // S11.37: a value, not a cursor — `SNalUnitHeaderExt` is `Copy`, the
                 // callee only reads it, and a copy survives the context destructure
                 // with no borrow (the S3.B1 raw hoist said this in provenance).
                 let kNalHeaderExt =
-                    current_layer_ref(pCtx).expect("the frame's current layer is stamped").sLayerInfo.sNalHeaderExt;
+                    current_layer_expect(pCtx).sLayerInfo.sNalHeaderExt;
                 // **S11.17**: the context is destructured. The NAL entry and the
                 // source bytes live in `pOut`; the destination is the tail of
                 // `pFrameBs` — disjoint fields, so both borrows are live at once
@@ -4437,10 +4425,7 @@ pub fn WelsEncoderEncodeExt(
                     return pCtx.iEncoderError;
                 }
                 let iSliceSize = pCtx
-                    .pOut
-                    .as_deref()
-                    .expect("pOut lives")
-                    .nal_len_at(iNalIdxInLayer.max(0) as usize);
+                    .out().nal_len_at(iNalIdxInLayer.max(0) as usize);
 
                 pCtx.iPosBsBuffer += iSliceSize;
                 iLayerSize += iSliceSize;
@@ -4478,7 +4463,7 @@ pub fn WelsEncoderEncodeExt(
 
         // deblocking filter. ENABLE_FRAME_DUMP is not defined, so the temporal-id
         // clause is compiled in.
-        if !current_layer_ref(pCtx).expect("the frame's current layer is stamped").bDeblockingParallelFlag
+        if !current_layer_expect(pCtx).bDeblockingParallelFlag
             && eNalRefIdc != EWelsNalRefIdc::NRI_PRI_LOWEST
             && (pCtx.param().sDependencyLayers[iCurDid as usize].iHighestTemporalId == 0
                 || iCurTid < pCtx.param().sDependencyLayers[iCurDid as usize].iHighestTemporalId as i32)
@@ -4593,7 +4578,7 @@ pub fn WelsEncoderEncodeExt(
         // S11.47: the next layer's slot is this one's plus its NAL count —
         // the pointer chain's arithmetic, in `sNalLen`'s own units.
         {
-            let pOut = pCtx.pOut.as_deref_mut().expect("pOut lives");
+            let pOut = pCtx.out_mut();
             pOut.iLayerBsIndex += 1;
             pOut.advance_nal_len_base(iCountNal.max(0) as usize);
             pFbi.sLayerInfo[iLbi].pNalLengthInByte = pOut.nal_len_ptr();
@@ -4625,7 +4610,7 @@ pub fn WelsEncoderEncodeExt(
             pFbi.sLayerInfo[iLbi].uiQualityId = 0;
             pFbi.sLayerInfo[iLbi].uiLayerType = NON_VIDEO_CODING_LAYER;
             pFbi.sLayerInfo[iLbi].iNalCount = 1;
-            pCtx.pOut.as_deref().expect("pOut lives").set_nal_len_at(0, iPaddingNalSize);
+            pCtx.out().set_nal_len_at(0, iPaddingNalSize);
             pFbi.sLayerInfo[iLbi].eFrameType = eFrameType;
             pFbi.sLayerInfo[iLbi].iSubSeqId = GetSubSequenceId(pCtx, eFrameType);
             iLbi += 1;
@@ -4633,7 +4618,7 @@ pub fn WelsEncoderEncodeExt(
             // S11.47: the next layer's slot is this one's plus its NAL count —
             // the pointer chain's arithmetic, in `sNalLen`'s own units.
             {
-                let pOut = pCtx.pOut.as_deref_mut().expect("pOut lives");
+                let pOut = pCtx.out_mut();
                 pOut.iLayerBsIndex += 1;
                 pOut.advance_nal_len_base(1);
                 pFbi.sLayerInfo[iLbi].pNalLengthInByte = pOut.nal_len_ptr();
@@ -4664,7 +4649,7 @@ pub fn WelsEncoderEncodeExt(
             && pCtx.param().iMultipleThreadIdc
                 >= pCtx.param().sSpatialLayers[iCurDid as usize].sSliceArgument.uiSliceNum as u16
         {
-            crate::encoder::slice_multi_threading::CalcSliceComplexRatio(current_layer_mut(pCtx).expect("the frame's current layer is stamped"));
+            crate::encoder::slice_multi_threading::CalcSliceComplexRatio(current_layer_expect_mut(pCtx));
         }
 
         pCtx.eLastNalPriority[iCurDid as usize] = eNalRefIdc;
