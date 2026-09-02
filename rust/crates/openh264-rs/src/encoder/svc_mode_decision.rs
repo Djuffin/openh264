@@ -1840,9 +1840,11 @@ pub fn IsMbScrolledStatic(pBlockType: &[i32; 4]) -> bool {
 /// [`JudgeStaticSkip`] and [`JudgeScrollSkip`], and both are reached only through
 /// `pfSCDPSkipDecision`, which `WelsInitSCDPskipFunc` sets to the *judging* arm only
 /// when `bScreenContent && bEnableSceneChangeDetect && complexity < HIGH`
-/// (`encoder_context.rs:1574`). The diffharness driver encodes as
-/// `CAMERA_VIDEO_REAL_TIME`, so `bScreenContent` is false in every sweep preset in
-/// both profiles and the slot is `WelsMdInterJudgeSCDPskipFalse`. A probe printing
+/// (`encoder_context.rs:1574`). Every camera preset encodes as
+/// `CAMERA_VIDEO_REAL_TIME`, so `bScreenContent` is false there in both profiles and
+/// the slot is `WelsMdInterJudgeSCDPskipFalse`; the `scc` preset (P10.1) installs
+/// the judging arm, which reaches this function only once P10.2's plugins stamp a
+/// static or scrolled block. A probe printing
 /// once per entry read **0** across five configurations (CAVLC/CABAC, complexity
 /// LOW/HIGH, two streams, `sm=1 t=4` multi-threaded) against a calibration probe in
 /// `WelsMdI16x16` that read 2008/1882/300/377/2136 in the same runs.
@@ -1853,14 +1855,20 @@ pub fn IsMbScrolledStatic(pBlockType: &[i32; 4]) -> bool {
 /// extended to `SCREEN_CONTENT_REAL_TIME`.
 #[inline(always)]
 // SCREEN_CONTENT(dormant: Phase 10) — F125. `WelsInitSCDPskipFunc`
-// (`encoder_context.rs:1607-1612`) installs `pfSCDPSkipDecision`'s judging arm only
+// (`svc_mode_decision.rs`) installs `pfSCDPSkipDecision`'s judging arm only
 // when `bScreenContent && bEnableSceneChangeDetect && iComplexityMode < HIGH`, and
-// `bScreenContent` is `iUsageType == SCREEN_CONTENT_REAL_TIME` — an axis neither
-// diffharness driver expresses. So no camera-usage preset can reach this body, and
-// B4's `bg` preset does not either: a probe in `SvcMdSCDMbEnc` read **0** in every
-// one of the 48 `bg` rows, including the row where `WelsMdBackgroundMbEnc` entered
-// 5771 times. This is Phase 10's family, and the retag says so rather than leaving it
-// filed under Phase 9's port-raw backlog where it reads as pending work.
+// `bScreenContent` is `iUsageType == SCREEN_CONTENT_REAL_TIME` — an axis no
+// diffharness driver expressed before P10.1 (the `usage` argument and the `scc`
+// preset). No camera-usage preset reaches this body, and B4's `bg` preset does
+// not either: a probe in `SvcMdSCDMbEnc` read **0** in every one of the 48 `bg`
+// rows, including the row where `WelsMdBackgroundMbEnc` entered 5771 times.
+// Under the `scc` preset the judging arm is installed and entered since P10.1.B5
+// (measured: `WelsMdInterJudgeSCDPskip` on every P macroblock of the A5 hand row),
+// but what the skips read — the block-static row and the scroll vector — is
+// stamped only by P10.2's plugins, so `JudgeStaticSkip`/`JudgeScrollSkip` answer
+// false and `SvcMdSCDMbEnc` stays dark until then (0 entries in the same run).
+// This is Phase 10's family, and the retag says so rather than leaving it filed
+// under Phase 9's port-raw backlog where it reads as pending work.
 pub fn CalUVSadCost(
     sdf: &crate::encoder::md::SSampleDealingFunc,
     cEncOri: &crate::encoder::rec_view::RecCursor<'_>,
@@ -1895,14 +1903,20 @@ pub fn CheckBorder(
 /// gate runs. It converts to the shared route with the rest of this function, behind
 /// a referee.
 // SCREEN_CONTENT(dormant: Phase 10) — F125. `WelsInitSCDPskipFunc`
-// (`encoder_context.rs:1607-1612`) installs `pfSCDPSkipDecision`'s judging arm only
+// (`svc_mode_decision.rs`) installs `pfSCDPSkipDecision`'s judging arm only
 // when `bScreenContent && bEnableSceneChangeDetect && iComplexityMode < HIGH`, and
-// `bScreenContent` is `iUsageType == SCREEN_CONTENT_REAL_TIME` — an axis neither
-// diffharness driver expresses. So no camera-usage preset can reach this body, and
-// B4's `bg` preset does not either: a probe in `SvcMdSCDMbEnc` read **0** in every
-// one of the 48 `bg` rows, including the row where `WelsMdBackgroundMbEnc` entered
-// 5771 times. This is Phase 10's family, and the retag says so rather than leaving it
-// filed under Phase 9's port-raw backlog where it reads as pending work.
+// `bScreenContent` is `iUsageType == SCREEN_CONTENT_REAL_TIME` — an axis no
+// diffharness driver expressed before P10.1 (the `usage` argument and the `scc`
+// preset). No camera-usage preset reaches this body, and B4's `bg` preset does
+// not either: a probe in `SvcMdSCDMbEnc` read **0** in every one of the 48 `bg`
+// rows, including the row where `WelsMdBackgroundMbEnc` entered 5771 times.
+// Under the `scc` preset the judging arm is installed and entered since P10.1.B5
+// (measured: `WelsMdInterJudgeSCDPskip` on every P macroblock of the A5 hand row),
+// but what the skips read — the block-static row and the scroll vector — is
+// stamped only by P10.2's plugins, so `JudgeStaticSkip`/`JudgeScrollSkip` answer
+// false and `SvcMdSCDMbEnc` stays dark until then (0 entries in the same run).
+// This is Phase 10's family, and the retag says so rather than leaving it filed
+// under Phase 9's port-raw backlog where it reads as pending work.
 pub extern "C" fn JudgeStaticSkip(
     pEncCtx: &sWelsEncCtx,
     pCurMb: &mut SMB,
@@ -1953,14 +1967,20 @@ pub extern "C" fn JudgeStaticSkip(
 /// `sScrollDetectInfo.bScrollDetectFlag`, which only the screen-content preprocessor
 /// sets.
 // SCREEN_CONTENT(dormant: Phase 10) — F125. `WelsInitSCDPskipFunc`
-// (`encoder_context.rs:1607-1612`) installs `pfSCDPSkipDecision`'s judging arm only
+// (`svc_mode_decision.rs`) installs `pfSCDPSkipDecision`'s judging arm only
 // when `bScreenContent && bEnableSceneChangeDetect && iComplexityMode < HIGH`, and
-// `bScreenContent` is `iUsageType == SCREEN_CONTENT_REAL_TIME` — an axis neither
-// diffharness driver expresses. So no camera-usage preset can reach this body, and
-// B4's `bg` preset does not either: a probe in `SvcMdSCDMbEnc` read **0** in every
-// one of the 48 `bg` rows, including the row where `WelsMdBackgroundMbEnc` entered
-// 5771 times. This is Phase 10's family, and the retag says so rather than leaving it
-// filed under Phase 9's port-raw backlog where it reads as pending work.
+// `bScreenContent` is `iUsageType == SCREEN_CONTENT_REAL_TIME` — an axis no
+// diffharness driver expressed before P10.1 (the `usage` argument and the `scc`
+// preset). No camera-usage preset reaches this body, and B4's `bg` preset does
+// not either: a probe in `SvcMdSCDMbEnc` read **0** in every one of the 48 `bg`
+// rows, including the row where `WelsMdBackgroundMbEnc` entered 5771 times.
+// Under the `scc` preset the judging arm is installed and entered since P10.1.B5
+// (measured: `WelsMdInterJudgeSCDPskip` on every P macroblock of the A5 hand row),
+// but what the skips read — the block-static row and the scroll vector — is
+// stamped only by P10.2's plugins, so `JudgeStaticSkip`/`JudgeScrollSkip` answer
+// false and `SvcMdSCDMbEnc` stays dark until then (0 entries in the same run).
+// This is Phase 10's family, and the retag says so rather than leaving it filed
+// under Phase 9's port-raw backlog where it reads as pending work.
 pub extern "C" fn JudgeScrollSkip(
     pEncCtx: &sWelsEncCtx,
     pCurMb: &mut SMB,
@@ -2030,14 +2050,20 @@ pub extern "C" fn JudgeScrollSkip(
 /// **0** across five configurations. Its three motion compensations and two SAD
 /// calls stay raw.
 // SCREEN_CONTENT(dormant: Phase 10) — F125. `WelsInitSCDPskipFunc`
-// (`encoder_context.rs:1607-1612`) installs `pfSCDPSkipDecision`'s judging arm only
+// (`svc_mode_decision.rs`) installs `pfSCDPSkipDecision`'s judging arm only
 // when `bScreenContent && bEnableSceneChangeDetect && iComplexityMode < HIGH`, and
-// `bScreenContent` is `iUsageType == SCREEN_CONTENT_REAL_TIME` — an axis neither
-// diffharness driver expresses. So no camera-usage preset can reach this body, and
-// B4's `bg` preset does not either: a probe in `SvcMdSCDMbEnc` read **0** in every
-// one of the 48 `bg` rows, including the row where `WelsMdBackgroundMbEnc` entered
-// 5771 times. This is Phase 10's family, and the retag says so rather than leaving it
-// filed under Phase 9's port-raw backlog where it reads as pending work.
+// `bScreenContent` is `iUsageType == SCREEN_CONTENT_REAL_TIME` — an axis no
+// diffharness driver expressed before P10.1 (the `usage` argument and the `scc`
+// preset). No camera-usage preset reaches this body, and B4's `bg` preset does
+// not either: a probe in `SvcMdSCDMbEnc` read **0** in every one of the 48 `bg`
+// rows, including the row where `WelsMdBackgroundMbEnc` entered 5771 times.
+// Under the `scc` preset the judging arm is installed and entered since P10.1.B5
+// (measured: `WelsMdInterJudgeSCDPskip` on every P macroblock of the A5 hand row),
+// but what the skips read — the block-static row and the scroll vector — is
+// stamped only by P10.2's plugins, so `JudgeStaticSkip`/`JudgeScrollSkip` answer
+// false and `SvcMdSCDMbEnc` stays dark until then (0 entries in the same run).
+// This is Phase 10's family, and the retag says so rather than leaving it filed
+// under Phase 9's port-raw backlog where it reads as pending work.
 pub extern "C" fn SvcMdSCDMbEnc(
     pEncCtx: &sWelsEncCtx,
     pWelsMd: &mut SWelsMD<'_>,
@@ -2214,14 +2240,20 @@ pub extern "C" fn SvcMdSCDMbEnc(
 }
 
 // SCREEN_CONTENT(dormant: Phase 10) — F125. `WelsInitSCDPskipFunc`
-// (`encoder_context.rs:1607-1612`) installs `pfSCDPSkipDecision`'s judging arm only
+// (`svc_mode_decision.rs`) installs `pfSCDPSkipDecision`'s judging arm only
 // when `bScreenContent && bEnableSceneChangeDetect && iComplexityMode < HIGH`, and
-// `bScreenContent` is `iUsageType == SCREEN_CONTENT_REAL_TIME` — an axis neither
-// diffharness driver expresses. So no camera-usage preset can reach this body, and
-// B4's `bg` preset does not either: a probe in `SvcMdSCDMbEnc` read **0** in every
-// one of the 48 `bg` rows, including the row where `WelsMdBackgroundMbEnc` entered
-// 5771 times. This is Phase 10's family, and the retag says so rather than leaving it
-// filed under Phase 9's port-raw backlog where it reads as pending work.
+// `bScreenContent` is `iUsageType == SCREEN_CONTENT_REAL_TIME` — an axis no
+// diffharness driver expressed before P10.1 (the `usage` argument and the `scc`
+// preset). No camera-usage preset reaches this body, and B4's `bg` preset does
+// not either: a probe in `SvcMdSCDMbEnc` read **0** in every one of the 48 `bg`
+// rows, including the row where `WelsMdBackgroundMbEnc` entered 5771 times.
+// Under the `scc` preset the judging arm is installed and entered since P10.1.B5
+// (measured: `WelsMdInterJudgeSCDPskip` on every P macroblock of the A5 hand row),
+// but what the skips read — the block-static row and the scroll vector — is
+// stamped only by P10.2's plugins, so `JudgeStaticSkip`/`JudgeScrollSkip` answer
+// false and `SvcMdSCDMbEnc` stays dark until then (0 entries in the same run).
+// This is Phase 10's family, and the retag says so rather than leaving it filed
+// under Phase 9's port-raw backlog where it reads as pending work.
 pub extern "C" fn MdInterSCDPskipProcess(
     pEncCtx: &sWelsEncCtx,
     pWelsMd: &mut SWelsMD<'_>,
@@ -2281,14 +2313,18 @@ pub extern "C" fn MdInterSCDPskipProcess(
 }
 
 // SCREEN_CONTENT(dormant: Phase 10) — F125. `WelsInitSCDPskipFunc`
-// (`encoder_context.rs:1607-1612`) installs `pfSCDPSkipDecision`'s judging arm only
+// (`svc_mode_decision.rs`) installs `pfSCDPSkipDecision`'s judging arm only
 // when `bScreenContent && bEnableSceneChangeDetect && iComplexityMode < HIGH`, and
-// `bScreenContent` is `iUsageType == SCREEN_CONTENT_REAL_TIME` — an axis neither
-// diffharness driver expresses. So no camera-usage preset can reach this body, and
-// B4's `bg` preset does not either: a probe in `SvcMdSCDMbEnc` read **0** in every
-// one of the 48 `bg` rows, including the row where `WelsMdBackgroundMbEnc` entered
-// 5771 times. This is Phase 10's family; the body stays, whole, for the effort that
-// makes it live.
+// `bScreenContent` is `iUsageType == SCREEN_CONTENT_REAL_TIME` — an axis no
+// diffharness driver expressed before P10.1 (the `usage` argument and the `scc`
+// preset). No camera-usage preset reaches this body, and B4's `bg` preset does
+// not either: a probe in `SvcMdSCDMbEnc` read **0** in every one of the 48 `bg`
+// rows, including the row where `WelsMdBackgroundMbEnc` entered 5771 times.
+// Under the `scc` preset this body is entered on every P macroblock since
+// P10.1.B5 (`WelsMdInterJudgeSCDPskip` calls it first), but the selector it reads
+// is stamped only by P10.2's screen scene-change plugin, so `row` answers `None`
+// and the four reads below stay dark until then. This is Phase 10's family; the
+// body stays, whole, for the session that makes it live.
 //
 // **S12.3 took the `unsafe` off it** — the last one outside `src/api/` that was not
 // an instrument, a fork seam or the recon seam. It was a `from_raw_parts` over
@@ -2346,14 +2382,20 @@ pub fn SetBlockStaticIdcToMd(
 }
 
 // SCREEN_CONTENT(dormant: Phase 10) — F125. `WelsInitSCDPskipFunc`
-// (`encoder_context.rs:1607-1612`) installs `pfSCDPSkipDecision`'s judging arm only
+// (`svc_mode_decision.rs`) installs `pfSCDPSkipDecision`'s judging arm only
 // when `bScreenContent && bEnableSceneChangeDetect && iComplexityMode < HIGH`, and
-// `bScreenContent` is `iUsageType == SCREEN_CONTENT_REAL_TIME` — an axis neither
-// diffharness driver expresses. So no camera-usage preset can reach this body, and
-// B4's `bg` preset does not either: a probe in `SvcMdSCDMbEnc` read **0** in every
-// one of the 48 `bg` rows, including the row where `WelsMdBackgroundMbEnc` entered
-// 5771 times. This is Phase 10's family, and the retag says so rather than leaving it
-// filed under Phase 9's port-raw backlog where it reads as pending work.
+// `bScreenContent` is `iUsageType == SCREEN_CONTENT_REAL_TIME` — an axis no
+// diffharness driver expressed before P10.1 (the `usage` argument and the `scc`
+// preset). No camera-usage preset reaches this body, and B4's `bg` preset does
+// not either: a probe in `SvcMdSCDMbEnc` read **0** in every one of the 48 `bg`
+// rows, including the row where `WelsMdBackgroundMbEnc` entered 5771 times.
+// Under the `scc` preset the judging arm is installed and entered since P10.1.B5
+// (measured: `WelsMdInterJudgeSCDPskip` on every P macroblock of the A5 hand row),
+// but what the skips read — the block-static row and the scroll vector — is
+// stamped only by P10.2's plugins, so `JudgeStaticSkip`/`JudgeScrollSkip` answer
+// false and `SvcMdSCDMbEnc` stays dark until then (0 entries in the same run).
+// This is Phase 10's family, and the retag says so rather than leaving it filed
+// under Phase 9's port-raw backlog where it reads as pending work.
 pub fn WelsMdInterJudgeSCDPskip(
     pEncCtx: &sWelsEncCtx,
     pWelsMd: &mut SWelsMD<'_>,

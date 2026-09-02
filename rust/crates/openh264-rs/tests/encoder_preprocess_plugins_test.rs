@@ -142,6 +142,62 @@ fn encode_bytes(w: i32, h: i32, frames: usize, mutate: impl FnOnce(&mut SEncPara
     }
 }
 
+/// **P10.1: `SCREEN_CONTENT_REAL_TIME` is accepted at init.** Three port-added
+/// refusals stood where the C++ allocates — the VAA extension
+/// (`RequestMemoryVaaScreen`), the last layer's feature-search preparation
+/// (`RequestFeatureSearchPreparation`) and the reference pictures' feature storage
+/// (`RequestScreenBlockFeatureStorage`) — and `InitializeExt` answered
+/// `cmInitParaError`. P10.1.B3/B4/B5 ported the three allocations.
+#[test]
+fn screen_content_is_accepted_at_init() {
+    assert_eq!(
+        init_code(|p| p.iUsageType = EUsageType::SCREEN_CONTENT_REAL_TIME),
+        CM_RESULT_SUCCESS
+    );
+}
+
+/// Long-term reference over a lossless link: the `CWelsReference_LosslessWithLtr`
+/// strategy and the scene-LTR marking family behind it.
+#[test]
+fn screen_content_with_lossless_ltr_is_accepted_at_init() {
+    assert_eq!(
+        init_code(|p| {
+            p.iUsageType = EUsageType::SCREEN_CONTENT_REAL_TIME;
+            p.bEnableLongTermReference = true;
+            p.bIsLosslessLink = true;
+        }),
+        CM_RESULT_SUCCESS
+    );
+}
+
+/// Upstream's `EncodeDecodeTestAPI.ScreenContent_LosslessLink0_EnableLongTermReference`:
+/// LTR asked for without a lossless link. `ParamValidationExt` turns LTR off with a
+/// warning (`encoder_ext.cpp:415-419`) and the init succeeds.
+#[test]
+fn screen_content_ltr_without_lossless_link_is_accepted_at_init() {
+    assert_eq!(
+        init_code(|p| {
+            p.iUsageType = EUsageType::SCREEN_CONTENT_REAL_TIME;
+            p.bEnableLongTermReference = true;
+            p.bIsLosslessLink = false;
+        }),
+        CM_RESULT_SUCCESS
+    );
+}
+
+/// A screen-content sequence encodes to completion. **Deliberately not asserted:
+/// that the bytes differ from the camera encode.** They do (the two usage types
+/// already differ in MV range, QP range and reference count), but that assertion's
+/// *meaning* — "the screen-content algorithms ran" — is only true once P10.2 ports
+/// the three plugins and P10.3 the dispatch block; P10.3 adds
+/// `screen_content_changes_the_output` with that meaning. Byte-exactness against
+/// the reference is the `scc` sweep preset's, from P10.3 on.
+#[test]
+fn screen_content_encodes_a_sequence() {
+    let screen = encode_bytes(320, 192, 12, |p| p.iUsageType = EUsageType::SCREEN_CONTENT_REAL_TIME);
+    assert!(!screen.is_empty(), "a screen-content encode must produce a stream");
+}
+
 /// The control: the configuration every gate in this project uses is still accepted.
 /// Without this row the assertions below could be passing because *everything*
 /// works by accident.
