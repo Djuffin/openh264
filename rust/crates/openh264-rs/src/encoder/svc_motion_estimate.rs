@@ -1401,17 +1401,54 @@ pub fn FillQpelLocationByFeatureValue_c(
     }
 }
 
+/// The three dispatch slots `CalculateFeatureOfBlock` reads, copied out of the
+/// table so the caller can hold the reference picture and the table apart (they
+/// are `Copy` fn pointers; P10.3's caller in `PreprocessSliceCoding` needs the table
+/// `&mut` at the same time as the reference list). P10.1.B5 (D-scc-3).
+#[derive(Clone, Copy)]
+pub struct FmeKernels {
+    pub calc_frame: [Option<PCalculateBlockFeatureOfFrame>; 2],
+    pub init_hash: Option<PInitializeHashforFeatureFunc>,
+    pub fill_qpel: Option<PFillQpelLocationByFeatureValueFunc>,
+}
+
+impl FmeKernels {
+    /// The three reads off the table — `pfCalculateBlockFeatureOfFrame[2]`,
+    /// `pfInitializeHashforFeature`, `pfFillQpelLocationByFeatureValue`.
+    pub fn of(pFunc: &SWelsFuncPtrList) -> Self {
+        Self {
+            calc_frame: pFunc.pfCalculateBlockFeatureOfFrame,
+            init_hash: pFunc.pfInitializeHashforFeature,
+            fill_qpel: pFunc.pfFillQpelLocationByFeatureValue,
+        }
+    }
+}
+
+/// `CalculateFeatureOfBlock` — `svc_motion_estimate.cpp:843-878`.
+///
+/// **P10.1.B5 (D-scc-3)**: `pFeatureOfBlock` is the layer's scratch
+/// (`SFeatureSearchPreparation::pFeatureOfBlock`), which the C++ reaches through
+/// the address `PerformFMEPreprocess` stored in the storage; it arrives as a slice.
+/// `storage` is a separate parameter, not reached through `pRef`, on purpose:
+/// P10.3's caller takes the box out of the reference picture (`Option::take`), runs
+/// this with the picture's planes, and puts it back — the only way the picture's
+/// plane and its own storage can be borrowed together without a split accessor.
+/// Under LTR the planes come from a different picture anyway (`pRefOri[0]`). `pRef`
+/// supplies what the C++ reads off it: `pData[0]`/`iLineSize[0]` (`plane(0)`,
+/// `stride(0)`), `iWidthInPixel`, `iHeightInPixel`.
 pub fn CalculateFeatureOfBlock(
-    pFunc: &SWelsFuncPtrList,
-    pRef: &mut SPicture,
+    kernels: &FmeKernels,
+    pRef: &SPicture,
+    pFeatureOfBlock: &mut [u16],
     pScreenBlockFeatureStorage: &mut SScreenBlockFeatureStorage,
 ) -> bool {
     // **S6.B1**: the four `is_null()` arms became four `is_empty()` arms. An unbuilt
     // storage answers `false` here exactly as a storage with null buffers did — the
     // allocator either sized all four or none, so no arm changes which inputs are
-    // rejected. `pRef.data_ptr(0)` is still a raw plane root and still tested.
+    // rejected. The C++'s fifth arm, `NULL == pRef->pData[0]`, has no subject: a
+    // pool picture always has its three planes (`SPicture::new` builds them), so
+    // there is nothing to test (S37).
     let SScreenBlockFeatureStorage {
-        pFeatureOfBlockPointer: pFeatureOfBlock,
         pTimesOfFeatureValue,
         pLocationOfFeature,
         pLocationPointer: pBuf,
@@ -1428,7 +1465,6 @@ pub fn CalculateFeatureOfBlock(
         || pTimesOfFeatureValue.is_empty()
         || pLocationOfFeature.is_empty()
         || pBuf.is_empty()
-        || pRef.data_ptr(0).is_null()
     {
         return false;
     }
@@ -1443,7 +1479,7 @@ pub fn CalculateFeatureOfBlock(
     // `kiActualListSize` prefix, zeroed elementwise.
     pTimesOfFeatureValue[..kiActualListSize as usize].fill(0);
 
-    if let Some(calc_frame_feature) = pFunc.pfCalculateBlockFeatureOfFrame[iIs16x16] {
+    if let Some(calc_frame_feature) = kernels.calc_frame[iIs16x16] {
         // **S11.6: the plane arrives as a slice from its logical origin**, which
         // is the same address `data_ptr(0)` returned — `as_slice()[origin()..]`
         // is that accessor's own arithmetic, with the buffer's end now known to
@@ -1454,7 +1490,7 @@ pub fn CalculateFeatureOfBlock(
         calc_frame_feature(kpRefData, iWidth, kiHeight, iRefStride, pFeatureOfBlock, pTimesOfFeatureValue);
     }
 
-    if let Some(init_hash) = pFunc.pfInitializeHashforFeature {
+    if let Some(init_hash) = kernels.init_hash {
         init_hash(
             pTimesOfFeatureValue,
             kiActualListSize,
@@ -1463,29 +1499,28 @@ pub fn CalculateFeatureOfBlock(
         );
     }
 
-    if let Some(fill_qpel) = pFunc.pfFillQpelLocationByFeatureValue {
+    if let Some(fill_qpel) = kernels.fill_qpel {
         fill_qpel(pFeatureOfBlock, iWidth, kiHeight, pBuf, pFeatureValuePointerList);
     }
 
     true
 }
 
-// SCREEN_CONTENT(dormant: Phase 10)
+// SCREEN_CONTENT(dormant: Phase 10) — no caller after P10.1: P10.3 installs the
+// call from `PreprocessSliceCoding`'s screen block (`encoder_ext.cpp:2745-2749`).
+/// `PerformFMEPreprocess` — `svc_motion_estimate.cpp:880-893`.
+///
+/// **P10.1.B5 (D-scc-3)**: the C++ stores its caller's `pFeatureOfBlock` pointer
+/// into the storage (`:882`) and `CalculateFeatureOfBlock` reads it back — one
+/// owner, two names. The scratch stays the layer's and is passed through instead.
 pub fn PerformFMEPreprocess(
-    pFunc: &SWelsFuncPtrList,
-    pRef: &mut SPicture,
-    pFeatureOfBlock: Vec<u16>,
+    kernels: &FmeKernels,
+    pRef: &SPicture,
+    pFeatureOfBlock: &mut [u16],
     pScreenBlockFeatureStorage: &mut SScreenBlockFeatureStorage,
 ) {
-    // **S6.B1**: the buffer arrives by value and is *moved* in. The C++ stores its
-    // caller's pointer here (`svc_motion_estimate.cpp:868`) and the storage then walks
-    // it for the rest of the frame — one owner, two names. Owning it says the same
-    // thing without the alias, and this function has no call site in the tree (F229:
-    // `SPicture::pScreenBlockFeatureStorage` is never filled), so the signature was
-    // free to take the ownership the semantics already implied.
-    pScreenBlockFeatureStorage.pFeatureOfBlockPointer = pFeatureOfBlock;
     pScreenBlockFeatureStorage.bRefBlockFeatureCalculated =
-        CalculateFeatureOfBlock(pFunc, pRef, pScreenBlockFeatureStorage);
+        CalculateFeatureOfBlock(kernels, pRef, pFeatureOfBlock, pScreenBlockFeatureStorage);
 
     if pScreenBlockFeatureStorage.bRefBlockFeatureCalculated {
         let qp_idx = (pRef.iFrameAverageQp).clamp(0, 51) as usize;
@@ -1884,9 +1919,15 @@ mod tests {
         let bw = (W - MARGIN) as usize;
         let bh = (H - MARGIN) as usize;
         let mut storage = SScreenBlockFeatureStorage::for_frame(W, H, true, 0);
-        storage.pFeatureOfBlockPointer = vec![0u16; bw * bh];
+        // D-scc-3: the layer's scratch, passed through rather than aliased.
+        let mut feature_of_block = vec![0u16; bw * bh];
 
-        assert!(CalculateFeatureOfBlock(&func_list, &mut pic, &mut storage));
+        assert!(CalculateFeatureOfBlock(
+            &FmeKernels::of(&func_list),
+            &pic,
+            &mut feature_of_block,
+            &mut storage
+        ));
 
         let list_size = storage.iActualListSize as usize;
         assert_eq!(storage.pTimesOfFeatureValue.len(), list_size);
@@ -1934,7 +1975,7 @@ mod tests {
         // and the feature each position was filed under is the one the block carries
         for y in 0..bh {
             for x in 0..bw {
-                let v = storage.pFeatureOfBlockPointer[y * bw + x] as usize;
+                let v = feature_of_block[y * bw + x] as usize;
                 assert!(v < list_size, "feature {v} outside a list of {list_size}");
             }
         }

@@ -59,15 +59,23 @@
 # was the aarch64 dispatch *table*, which binds general-ratio luma to the accurate
 # downsampler where the scalar table binds the fast one.
 
-# --- BaseEncoderTest.cpp:92 / encode_options_test.cpp:2195 / encoder_test.cpp:323
-# --- screen content ----------------------------------------------------------
-EncodeFile/EncoderOutputTest.CompareOutput/8 | 10 | screen content: the D-scr-1 guard (encoder_ext.rs:817)
-EncodeFile/EncoderOutputTest.CompareOutput/9 | 10 | screen content: the D-scr-1 guard (encoder_ext.rs:817)
-EncodeFile/EncoderOutputTest.CompareOutput/10 | 10 | screen content: the D-scr-1 guard (encoder_ext.rs:817)
-EncodeFile/EncoderOutputTest.CompareOutput/11 | 10 | screen content: the D-scr-1 guard (encoder_ext.rs:817)
-EncodeFile/EncoderOutputTest.CompareOutput/12 | 10 | screen content: the D-scr-1 guard (encoder_ext.rs:817)
-EncodeDecodeTestAPI.ScreenContent_LosslessLink0_EnableLongTermReference | 10 | screen content: the D-scr-1 guard (encoder_ext.rs:817)
-EncoderInitTest.ScreenContentScrollMotionVectorBounds | 10 | screen content: the D-scr-1 guard (encoder_ext.rs:817)
+# --- BaseEncoderTest.cpp:92 — screen content ---------------------------------
+# **P10.1.B5 removed the three port-added refusals** that stood where the C++
+# allocates for `SCREEN_CONTENT_REAL_TIME` (the VAA extension, the feature-search
+# preparation, the reference pictures' feature storage), so `InitializeExt` accepts
+# screen content and the two rows here that asserted only init-and-encode —
+# `EncoderInitTest.ScreenContentScrollMotionVectorBounds` (encoder_test.cpp:323)
+# and `EncodeDecodeTestAPI.ScreenContent_LosslessLink0_EnableLongTermReference`
+# (encode_options_test.cpp:2195) — pass and left this list in that commit. The
+# five that hash the bytes stay: the three screen video-processing plugins are
+# P10.2's and the dispatch block (`PreprocessSliceCoding`'s screen half,
+# `SetMeMethod`, the FME switch) is P10.3's, and until both land every screen P
+# frame differs from the reference. The `scc` sweep preset is their referee.
+EncodeFile/EncoderOutputTest.CompareOutput/8 | 10 | screen content: bytes differ until P10.2 (plugins) and P10.3 (dispatch)
+EncodeFile/EncoderOutputTest.CompareOutput/9 | 10 | screen content: bytes differ until P10.2 (plugins) and P10.3 (dispatch)
+EncodeFile/EncoderOutputTest.CompareOutput/10 | 10 | screen content: bytes differ until P10.2 (plugins) and P10.3 (dispatch)
+EncodeFile/EncoderOutputTest.CompareOutput/11 | 10 | screen content: bytes differ until P10.2 (plugins) and P10.3 (dispatch)
+EncodeFile/EncoderOutputTest.CompareOutput/12 | 10 | screen content: bytes differ until P10.2 (plugins) and P10.3 (dispatch)
 
 # --- HashFunctions.h:20 — the POC tiebreak ----------------------------------
 # Deliberate divergence, argued at decoder_conformance_test.rs:238 and corroborated
