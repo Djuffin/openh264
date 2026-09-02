@@ -456,9 +456,9 @@ pub fn dequant_ihadamard_2x2_dc(dct: &mut [i16; 4], mf: u16) {
 pub fn WelsInitReconstructionFuncs(pFuncList: &mut SWelsFuncPtrList, _uiCpuFlag: u32) {
     let fl = &mut *pFuncList;
 
-    fl.pfDequantization4x4 = Some(dequant_4x4);
-    fl.pfDequantizationFour4x4 = Some(dequant_four_4x4);
-    fl.pfDequantizationIHadamard4x4 = Some(dequant_ihadamard_4x4);
+    fl.pfDequantization4x4 = dequant_4x4;
+    fl.pfDequantizationFour4x4 = dequant_four_4x4;
+    fl.pfDequantizationIHadamard4x4 = dequant_ihadamard_4x4;
 
     // The three `pfIDct*` installs stood here. The slots were write-only
     // (F138/F139: installed, asserted, never called — the reconstruction writes
@@ -698,18 +698,10 @@ mod tests {
         }
     }
 
-    /// Every slot the reconstruction path dereferences must be filled.
-    #[test]
-    fn init_fills_every_reconstruction_slot() {
-        // Zeroing this table is sound for the reason its own `Default` gives
-        // (`wels_func_ptr_def.rs`, S21); session I converts both with the dispatch
-        // tables. T6.H12 enumerated it here rather than leaving it to a grep.
-        let mut fl = SWelsFuncPtrList::default();
-        // S9.2: `WelsInitReconstructionFuncs` is a safe fn, so the block and this
-        // test's allow both retire.
-        WelsInitReconstructionFuncs(&mut fl, 0);
-        assert!(fl.pfDequantization4x4.is_some());
-        assert!(fl.pfDequantizationFour4x4.is_some());
-        assert!(fl.pfDequantizationIHadamard4x4.is_some());
-    }
+    // **`init_fills_every_reconstruction_slot` stood here and is deleted.** Its
+    // subject was "every slot the reconstruction path dereferences must be filled",
+    // asserted as three `is_some()`s after this installer ran. The three slots are
+    // plain `fn` since the `Option` sweep, so being filled is the type's claim, and
+    // an equality against `SWelsFuncPtrList::default()` — which names the same three
+    // kernels — would only check the constructor against itself.
 }

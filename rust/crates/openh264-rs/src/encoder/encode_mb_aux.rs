@@ -871,32 +871,38 @@ pub extern "C" fn WelsInitEncodingFuncs(pFuncList: &mut SWelsFuncPtrList, uiCpuF
     let f = &mut *pFuncList;
 
     // Baseline C fallback functions
-    f.pfCopy8x8Aligned = Some(WelsCopy8x8_c);
-    f.pfCopy16x16Aligned = Some(WelsCopy16x16_c);
-    f.pfCopy16x16NotAligned = Some(WelsCopy16x16_c);
-    f.pfCopy16x8NotAligned = Some(WelsCopy16x8_c);
-    f.pfCopy8x16Aligned = Some(WelsCopy8x16_c);
-    f.pfCopy4x4 = Some(WelsCopy4x4_c);
-    f.pfCopy8x4 = Some(WelsCopy8x4_c);
-    f.pfCopy4x8 = Some(WelsCopy4x8_c);
+    f.pfCopy8x8Aligned = WelsCopy8x8_c;
+    f.pfCopy16x16Aligned = WelsCopy16x16_c;
+    f.pfCopy16x16NotAligned = WelsCopy16x16_c;
+    f.pfCopy16x8NotAligned = WelsCopy16x8_c;
+    f.pfCopy8x16Aligned = WelsCopy8x16_c;
+    f.pfCopy4x4 = WelsCopy4x4_c;
+    f.pfCopy8x4 = WelsCopy8x4_c;
+    f.pfCopy4x8 = WelsCopy4x8_c;
 
-    f.pfQuantizationHadamard2x2 = Some(hadamard_quant_2x2);
-    f.pfQuantizationHadamard2x2Skip = Some(hadamard_quant_2x2_skip);
-    f.pfTransformHadamard4x4Dc = Some(hadamard_t4_dc);
+    f.pfQuantizationHadamard2x2 = hadamard_quant_2x2;
+    f.pfQuantizationHadamard2x2Skip = hadamard_quant_2x2_skip;
+    f.pfTransformHadamard4x4Dc = hadamard_t4_dc;
 
-    f.pfDctT4 = Some(|d, a, b| WelsDctT4_c(d, a, b));
-    f.pfDctFourT4 = Some(|d, a, b| WelsDctFourT4_c(d, a, b));
+    // S10.2's closures came off with the slots' `Option`s. They were there because
+    // a *generic* kernel's `fn` item fixes its lifetimes and will not coerce to a
+    // higher-ranked slot type — true of `common/mc.rs`'s four, but never of these
+    // two: `WelsDctT4_c` takes `&RecCursor<'_>` concretely. Naming them also makes
+    // `Default` and this installer the *same* symbol rather than two closures that
+    // merely call the same kernel.
+    f.pfDctT4 = WelsDctT4_c;
+    f.pfDctFourT4 = WelsDctFourT4_c;
 
-    f.pfScan4x4 = Some(scan_4x4_dc_ac);
-    f.pfScan4x4Ac = Some(scan_4x4_ac);
-    f.pfCalculateSingleCtr4x4 = Some(calculate_single_ctr_4x4);
+    f.pfScan4x4 = scan_4x4_dc_ac;
+    f.pfScan4x4Ac = scan_4x4_ac;
+    f.pfCalculateSingleCtr4x4 = calculate_single_ctr_4x4;
 
-    f.pfGetNoneZeroCount = Some(get_none_zero_count);
+    f.pfGetNoneZeroCount = get_none_zero_count;
 
-    f.pfQuantization4x4 = Some(quant_4x4);
-    f.pfQuantizationDc4x4 = Some(quant_4x4_dc);
-    f.pfQuantizationFour4x4 = Some(quant_four_4x4);
-    f.pfQuantizationFour4x4Max = Some(quant_four_4x4_max);
+    f.pfQuantization4x4 = quant_4x4;
+    f.pfQuantizationDc4x4 = quant_4x4_dc;
+    f.pfQuantizationFour4x4 = quant_four_4x4;
+    f.pfQuantizationFour4x4Max = quant_four_4x4_max;
 
 }
 
@@ -1034,14 +1040,14 @@ mod tests {
         assert_eq!(count, 3);
     }
 
-    #[test]
-    fn test_init_encoding_funcs() {
-        let mut func_list = SWelsFuncPtrList::default();
-        WelsInitEncodingFuncs(&mut func_list, WELS_CPU_SSE2);
-
-        assert!(func_list.pfDctT4.is_some());
-        assert!(func_list.pfQuantization4x4.is_some());
-    }
+    // **`test_init_encoding_funcs` stood here and is deleted, not repaired.** It
+    // asserted `pfDctT4.is_some()` and `pfQuantization4x4.is_some()` after this
+    // installer ran. Both slots are plain `fn` since the `Option` sweep, so the
+    // question cannot be asked; and the equality against `SWelsFuncPtrList::default()`
+    // that briefly replaced it was ceremony — `Default` names the same kernels this
+    // installer names, so the test compared the constructor with itself. What a wrong
+    // kernel here would actually break is the encoded bitstream, and the diffharness
+    // sweeps (583 configurations, both profiles) are what say it does not.
 }
 
 // WELS_CPU_* flags: one definition, in `common/cpu_core.rs`. The copies that

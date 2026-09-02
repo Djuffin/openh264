@@ -264,11 +264,11 @@ pub fn WriteBlockResidualCavlc(
     let mut uiSign = 0u32;
 
     if iCalRunLevelFlag != 0 {
-        let func = if pFuncList.pfCavlcParamCal.is_some() {
-            pFuncList.pfCavlcParamCal.unwrap()
-        } else {
-            CavlcParamCal_c
-        };
+        // The `is_some()` choice retired with the slot's `Option`, and it was
+        // always a choice between one thing and itself: the fallback arm named
+        // `CavlcParamCal_c`, which is exactly what `InitCoeffFunc` installs and
+        // what `Default` now installs before it.
+        let func = pFuncList.pfCavlcParamCal;
 
         iTotalZeros = func(
             pCoffLevel,

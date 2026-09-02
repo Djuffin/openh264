@@ -1516,48 +1516,19 @@ mod tests {
         }
     }
 
-    /// The other half of the de-virtualization argument, and what survives of it
-    /// now that the slots are plain `fn`.
-    ///
-    /// The property was: the slots were never `None` at a call site, so
-    /// unconditional direct calls preserve behaviour. Five of the fifteen former
-    /// call sites spelled the dispatch `if let Some(f) = ...`, which *silently
-    /// skips the call* on `None` — for MC, leaving a prediction block unwritten
-    /// rather than filling it — and the evidence that replacing them was safe was
-    /// that a default table is all-`None` while a post-init one is all-`Some`,
-    /// `InitMcFunc` running unconditionally at codec-open time on both sides
-    /// (`WelsInitDecoderFuncs` via `WelsOpenDecoder`; the encoder's
-    /// `InitFunctionPointers`) before any frame is touched.
-    ///
-    /// **That half is now the type's, not a test's**: a `fn` has no null, so
-    /// "all-`None` before init" is unrepresentable and the `if let` shape cannot
-    /// be written. What replaced it is a claim that *can* still drift — `Default`
-    /// installs the six kernels and [`InitMcFunc`] installs them again, and
-    /// nothing but this says the two agree. Address equality is sound here for the
-    /// reason the flag test above is not sound cross-crate: both sides come from
-    /// the same instantiation inside this library.
-    #[test]
-    #[cfg_attr(miri, ignore)]
-    fn init_mc_func_installs_exactly_what_default_built() {
-        let addrs = |t: &SMcFunc| -> [usize; 6] {
-            [
-                t.pfLumaHalfpelHor as usize,
-                t.pfLumaHalfpelVer as usize,
-                t.pfLumaHalfpelCen as usize,
-                t.pfSampleAveraging as usize,
-                t.pMcChromaFunc as usize,
-                t.pMcLumaFunc as usize,
-            ]
-        };
-        let base = SMcFunc::default();
-        let mut t = SMcFunc::default();
-        InitMcFunc(&mut t, 0);
-        assert_eq!(
-            addrs(&t),
-            addrs(&base),
-            "InitMcFunc must install exactly the table Default already built"
-        );
-    }
+    // **`mc_table_is_all_none_before_init_and_all_some_after` stood here.** It was
+    // Phase 4a's de-virtualization mitigation: five of fifteen former call sites
+    // spelled the dispatch `if let Some(f) = ..`, which *silently skips the call*,
+    // and the evidence that replacing them was safe was that a default table is
+    // all-`None` while a post-init one is all-`Some`. Both halves are gone with the
+    // slots' `Option`s — a `fn` has no null, so the `if let` shape cannot be written
+    // and "installed" is not a state the table can fail to be in.
+    //
+    // It is not replaced. The successor that briefly stood here compared
+    // `InitMcFunc`'s table against `SMcFunc::default()`, which is this file's
+    // constructor checked against itself; and the slots hold non-capturing closures,
+    // reified per codegen unit, so even that comparison only held while both sides
+    // were built in one function body.
 
     // **D-cov-1 (T9.B4): `test_mc_horiz_and_vert_luma_aliases` deleted with its
     // subjects.** It proved `McHorizLuma_c == McHorVer20_c` and

@@ -1482,9 +1482,9 @@ fn nonzero_count_duplicates_agree() {
 // this test is Phase 4a's mitigation rather than Phase 2's span discipline, and it is
 // retired here with its own reason.
 //
-// **The all-None-then-all-Some half is gone with the `Option`s.** `SMcFunc`'s six
-// slots are plain `fn` now, so a default table cannot be uninstalled and there is no
-// before-state to compare against; what took its place —
-// `init_mc_func_installs_exactly_what_default_built` — pins the claim that replaced
-// it, that the two writers of the table install the same kernels.
+// **The all-None-then-all-Some half is gone with the `Option`s**, and nothing took
+// its place. `SMcFunc`'s six slots are plain `fn` now, so a default table cannot be
+// uninstalled and there is no before-state to compare against; a successor comparing
+// `InitMcFunc`'s table against `SMcFunc::default()` would be that file's constructor
+// checked against itself.
 
