@@ -1284,6 +1284,13 @@ pub struct SDqLayer {
     // so multi-layer SVC, where the frame loop moves `pCtx.uiDependencyId` on, still
     // names this layer's list. **The last of `SDqLayer`'s four `Sync` blockers.**
 
+    /// `SDqLayer::pFeatureSearchPreparation` — `svc_enc_frame.h:126`. **P10.1.B4**:
+    /// `Some` on the last DQ layer under `SCREEN_CONTENT_REAL_TIME`
+    /// (`encoder_ext.cpp:1125-1135`), `None` otherwise; `Drop` is `FreeDqLayer`'s
+    /// release (`:973-977`). Written only outside the fork (`PreprocessSliceCoding`
+    /// and the post-join FME switch, both P10.3's); the workers read it (D-scc-5).
+    pub pFeatureSearchPreparation:
+        Option<Box<crate::encoder::svc_motion_estimate::SFeatureSearchPreparation>>,
     pub pRefPic: Option<RecPicId>,
     pub pDecPic: Option<RecPicId>,
     /// The **source** picture this frame encodes from, and the pool it is a slot
@@ -1462,6 +1469,7 @@ impl SDqLayer {
             bDeblockingParallelFlag: false,
             // Picture slots, aimed per frame; `None` is "no picture bound", and the
             // list they name slots in is stamped with them (T6.F1).
+            pFeatureSearchPreparation: None,
             pRefPic: None,
             pDecPic: None,
             pEncPic: None,

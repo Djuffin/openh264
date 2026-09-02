@@ -863,15 +863,25 @@ pub fn InitDqLayers(
             }
         }
 
-        (&mut ctx.ppDqLayerList)[iDlayerIndex as usize] = Some(pDqLayerBox);
-
-        // Screen-content feature search storage is not ported; C++ allocates
-        // pFeatureSearchPreparation here when kiNeedFeatureStorage is set, which only
-        // happens for SCREEN_CONTENT_REAL_TIME, and this returns before that. The
-        // field it used to null out is gone with the machinery behind it (T6.D2).
+        // encoder_ext.cpp:1125-1135 — the last layer alone carries the preparation.
+        // **P10.1.B4**: an `ENC_RETURN_UNSUPPORTED_PARA` refusal stood here from
+        // T6.D2; the C++ frees the block in `FreeDqLayer` (`:973-977`) — `Drop`.
+        // The C++ sizes it by `pDlayer->iVideoWidth`/`iVideoHeight`, this layer's
+        // own dimensions; the two scalars copy out of the parameter block here, as
+        // `kiMbW`/`kiMbH` did at the loop's head (§4.6).
         if kiNeedFeatureStorage != 0 && iDlayerIndex == iDlayerCount - 1 {
-            return ENC_RETURN_UNSUPPORTED_PARA;
+            let kiVideoWidth = ctx.param().sSpatialLayers[iDlayerIndex as usize].iVideoWidth;
+            let kiVideoHeight = ctx.param().sSpatialLayers[iDlayerIndex as usize].iVideoHeight;
+            pDqLayerBox.pFeatureSearchPreparation = Some(Box::new(
+                crate::encoder::svc_motion_estimate::SFeatureSearchPreparation::new(
+                    kiVideoWidth,
+                    kiVideoHeight,
+                    kiNeedFeatureStorage,
+                ),
+            ));
         }
+
+        (&mut ctx.ppDqLayerList)[iDlayerIndex as usize] = Some(pDqLayerBox);
 
         iDlayerIndex += 1;
     }
