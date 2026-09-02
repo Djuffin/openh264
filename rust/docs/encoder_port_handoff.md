@@ -362,17 +362,34 @@ become relevant at the same time.
 
 ### 4.2 `SCREEN_CONTENT_REAL_TIME`
 
-Interlocking, so treat it as one unit:
+**Phase 10 is under way (P10.1 landed 2026-09-02).** What now stands:
 
-- `METHOD_SCENE_CHANGE_DETECTION_SCREEN`, `METHOD_COMPLEXITY_ANALYSIS_SCREEN`,
-  `METHOD_SCROLL_DETECTION` — the screen scene-change detector reads the scroll
-  detector's result.
-- `PreprocessSliceCoding` does not translate `encoder_ext.cpp:2708-2771`.
-- `AllocPicture` refuses `iNeedFeatureStorage != 0` (`encoder_ext.rs:837`) rather
-  than calling the unported `RequestScreenBlockFeatureStorage`.
-- `RequestMemorySvc` refuses the `SVAAFrameInfoExt`/`RequestMemoryVaaScreen`
-  allocation (`encoder_ext.rs:1239`).
-- `GOM_H_SCC` is corrected (8, not 2) and waiting.
+- **The referee.** Both diffharness drivers take `usage`/`lossless` (their
+  23rd/24th arguments; `compare.sh`'s 21st..23rd are `setopt usage lossless` —
+  positional, so `setopt` must be spelled `0` whenever `usage` is). `sweep.sh scc`
+  is 148 rows over the three `res/` clips and four synthetic scrolling-text clips
+  from `gen_screen_clip.py` (deterministic, LCG-seeded); `SCC_TIER=min` is the
+  28-row byte tier P10.3 gates on first. It is **not** in `gates.sh`'s family list:
+  it reads `PASS=0 FAIL=148` with every row `RESULT: DIFFER` by design until P10.3.
+- **The fence is down.** `InitializeExt` accepts `SCREEN_CONTENT_REAL_TIME` (with
+  and without lossless LTR): `sWelsEncCtx::pVaa` is `Option<Box<VaaBlock>>`
+  (`Base(SVAAFrameInfo) | Screen(SVAAFrameInfoExt)`, D-scc-1), `RequestMemorySvc`
+  builds the extension with `RequestMemoryVaaScreen`'s block-static store,
+  `InitDqLayers` builds `SFeatureSearchPreparation` on the last layer, and
+  `AllocPicture` attaches `SScreenBlockFeatureStorage` to the last layer's
+  reference pictures. Every screen `scc` row encodes to completion on both sides and
+  every Rust stream decodes; the bytes differ on every P frame.
+- **Outstanding — P10.2, the three plugins**: `METHOD_SCROLL_DETECTION`,
+  `METHOD_SCENE_CHANGE_DETECTION_SCREEN`, `METHOD_COMPLEXITY_ANALYSIS_SCREEN` (the
+  screen scene-change detector reads the scroll detector's result) and their three
+  `RET_NOTSUPPORTED` tails in `wels_preprocess.rs`.
+- **Outstanding — P10.3, the dispatch**: `PreprocessSliceCoding`'s screen block
+  (`encoder_ext.cpp:2708-2771`), `SetMeMethod`, `UpdateFMESwitch`/`CountFMECostDown`/
+  `UpdateFMEGoodFrameCount`, the real `SetScrollingMvToMd` behind a retyped
+  `PSetScrollingMv` (D-scc-4), and the call to `PerformFMEPreprocess` (ported,
+  uncalled). Byte identity for screen content is P10.3's exit; the C++ has no
+  configuration with the plugins switched off, so it cannot come earlier.
+- `GOM_H_SCC` is corrected (8, not 2) and waiting on P10.2.
 
 ### 4.3 The three `SPS_LISTING` parameter-set strategies
 

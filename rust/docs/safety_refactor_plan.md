@@ -780,6 +780,16 @@ once Phase 6's encoder structures are settled.
 *Exit gate: the screen-content sweep byte-identical against the C++ in both
 profiles; the `SCREEN_CONTENT(dormant)` tag count reads zero.*
 
+**2026-09-02 — P10.1 landed** (`6f955eff` .. the docs commit; log entry of the same
+date): item 6's referee (the `usage`/`lossless` knobs, the `scc` preset,
+`gen_screen_clip.py`) and items 3-5's allocations (`VaaBlock`,
+`RequestMemoryVaaScreen`, `SFeatureSearchPreparation`, the reference pictures'
+`SScreenBlockFeatureStorage`; the three refusals gone). The Miri probe of item 6 was
+struck by the user for this session ("don't run miri, translate to safe Rust
+directly"): D-scc-5 rests on a compile-time `Sync` assertion. Remaining: the three
+plugins (P10.2), the dispatch block (P10.3), widen and close (P10.4). Tag count
+37 -> 30.
+
 ---
 
 ## 6. File → phase map

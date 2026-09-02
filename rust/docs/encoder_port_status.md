@@ -28,7 +28,9 @@ upstream's options; `todo!()` and `unimplemented!()` are both zero in `src/`.
 
 **The one axis still pinned is `iMultipleThreadIdc == 1`.** After that, one spatial
 layer (which needs `METHOD_DOWNSAMPLE`) and `SCREEN_CONTENT_REAL_TIME`. See
-*Phase 5.4*.
+*Phase 5.4*. *(2026-09-02: multi-threading and multi-layer have long since landed;
+`SCREEN_CONTENT_REAL_TIME` is Phase 10's, opened by P10.1 — see the Phase 10
+section at the end of this file.)*
 
 ---
 
@@ -1842,3 +1844,37 @@ Worth noting for whoever continues this: had `dead_code` been live on
 `common/wels_thread_pool.rs` earlier, it would have reported the entire 905-line
 pool as unused and the shadowing `CWelsThreadPool` would have been found by a
 compiler warning rather than by a deadlock.
+
+### Phase 10 — `SCREEN_CONTENT_REAL_TIME` — **P10.1 DONE (2026-09-02); P10.2-P10.4 outstanding**
+
+The last public usage type the port refused. Session P10.1 did two things, in
+order, at `6f955eff` .. the session's docs commit (branch `rust3`):
+
+**The referee first.** Both diffharness drivers gained `usage` and `lossless`
+arguments, `compare.sh` carries them (positional: `setopt` must be spelled `0`
+whenever `usage` is), `gen_screen_clip.py` makes deterministic scrolling-text I420
+clips, and `sweep.sh scc` runs 148 configurations over seven inputs (`SCC_TIER=min`
+for the 28-row byte tier). Baseline before the fence came down: `PASS=0 FAIL=148`,
+every row `!! rust_enc exited 101` (`InitializeExt returned 1`), in both profiles.
+A camera row with the new arguments spelled out stayed byte-identical.
+
+**Then the fence.** The three port-added refusals that stood where the C++
+allocates — `RequestMemorySvc`'s VAA extension, `InitDqLayers`'s feature-search
+preparation, `AllocPicture`'s feature storage — are ported: `sWelsEncCtx::pVaa` is
+an `Option<Box<VaaBlock>>` with `Base`/`Screen` arms (D-scc-1),
+`SComplexityAnalysisScreenParam` lost its raw `int*` so the extension is `Sync`
+(D-scc-2, enforced by the fork's `thread::scope` — F315), `SFeatureSearchPreparation`
+is back on the last DQ layer with its scratch as a `Vec<u16>` and the storage's alias
+of it deleted (D-scc-3), and every screen `scc` row now encodes to completion on both
+sides with every Rust stream decoding: `PASS=0 FAIL=148`, zero driver exits, every
+row `RESULT: DIFFER` — the bytes differ on every P frame because the three screen
+video-processing plugins and the dispatch block are still unported. The camera
+sweeps did not move by a byte (583/583 in both profiles at every checkpoint).
+
+**Not done, by the user's ruling:** the Miri probe of D-scc-5 ("don't run miri,
+translate to safe Rust directly"); the claim rests on `vaa_block_is_sync`, a
+compile-time assertion.
+
+Findings F315-F320 in [`phase10_findings.md`](phase10_findings.md). Next: P10.2 (the
+plugins), P10.3 (the dispatch — the first byte gate on `SCC_TIER=min`), P10.4
+(widen and close; add `scc` to `gates.sh`'s family list when it passes).
