@@ -34,15 +34,25 @@ use crate::safe::plane::{PlaneCursor, PlaneCursorMut, RefSamples};
 // now, not the raw ones.** They were `unsafe extern "C" fn(*const u8, i32, *mut u8,
 // i32, ...)` because `InitMcFunc` installed the strangler shims; the shims are gone
 // (26 of them, no `src/` caller since T9.B29), so the slots hold `mc_luma`,
-// `mc_chroma`, `mc_hor_ver20`/`_02`/`_22` and `pixel_avg` directly, on cursors. Six
-// `Option<fn>` slots, still 8 bytes each by null-pointer optimisation, so
-// `abi_guard.rs`'s `assert_size!(SMcFunc, 48)` holds unchanged — checked, not assumed.
+// `mc_chroma`, `mc_hor_ver20`/`_02`/`_22` and `pixel_avg` directly, on cursors.
+//
+// **The six slots are plain `fn` now, not `Option<fn>`** — the checkpoint the note
+// below `InitMcFunc` deferred. They were optional because `WelsMallocz`'s all-zero
+// image was the C++'s uninstalled table, and the port kept the null as a `None`;
+// but `InitMcFunc` runs unconditionally at codec-open time on both sides
+// (`WelsOpenDecoder` -> `WelsInitDecoderFuncs`, the encoder's
+// `InitFunctionPointers`) before any frame is touched, so no reader could ever
+// observe the absent state. `Default` installs the kernels instead, and the
+// question the type was asking stops being asked. Six `fn` at 8 bytes is the same
+// 48 the six `Option<fn>` occupied by null-pointer optimisation, so
+// `abi_guard.rs`'s `assert_size!(SMcFunc, 48)` holds unchanged — checked, not
+// assumed.
 //
 // **What reads these slots: nothing in `src/`.** The port de-virtualized both codecs'
 // motion compensation in Phase 4a — `BaseMC` names the kernels directly
-// (`decode_slice.rs:1081`) — so the only readers left are
-// `encoder_context.rs:2464`'s `is_none()` construction assertion and the Phase 4a
-// dispatch test. The table is kept, filled and pinned because it is upstream's
+// (`decode_slice.rs:1081`) — so the only reader left is `encoder_context.rs`'s
+// construction assertion, which now states that the table *is* installed rather
+// than that it is not. The table is kept, filled and pinned because it is upstream's
 // (`codec/common/inc/mc.h:46`) and the ABI guard's, not because anything dispatches
 // through it.
 pub type PWelsMcFunc =
@@ -66,25 +76,39 @@ pub type PWelsSampleAveragingFunc =
 #[repr(C)]
 #[derive(Copy, Clone, Debug)]
 pub struct TagMcFunc {
-    pub pfLumaHalfpelHor: Option<PWelsLumaHalfpelMcFunc>,
-    pub pfLumaHalfpelVer: Option<PWelsLumaHalfpelMcFunc>,
-    pub pfLumaHalfpelCen: Option<PWelsLumaHalfpelMcFunc>,
-    pub pMcChromaFunc: Option<PWelsMcFunc>,
-    pub pMcLumaFunc: Option<PWelsMcFunc>,
-    pub pfSampleAveraging: Option<PWelsSampleAveragingFunc>,
+    pub pfLumaHalfpelHor: PWelsLumaHalfpelMcFunc,
+    pub pfLumaHalfpelVer: PWelsLumaHalfpelMcFunc,
+    pub pfLumaHalfpelCen: PWelsLumaHalfpelMcFunc,
+    pub pMcChromaFunc: PWelsMcFunc,
+    pub pMcLumaFunc: PWelsMcFunc,
+    pub pfSampleAveraging: PWelsSampleAveragingFunc,
 }
 
 pub type SMcFunc = TagMcFunc;
 
 impl Default for TagMcFunc {
+    /// **The installed table is the only value this type has**, which is what
+    /// dropping the `Option`s means in practice.
+    ///
+    /// There used to be two values: the all-`None` image `sWelsEncCtx::new()` built
+    /// and the one [`InitMcFunc`] wrote over it at codec-open time. Nothing ever
+    /// dispatched through these slots — Phase 4a de-virtualized both codecs' motion
+    /// compensation — so the uninstalled image was never *called* through, only
+    /// asserted about; and a `fn` has no null to stand for it. `Default` therefore
+    /// installs, and [`InitMcFunc`] re-installs the same six.
+    ///
+    /// The kernels are wrapped in non-capturing closures rather than named
+    /// directly for the reason [`InitMcFunc`] records: they are generic over the
+    /// cursor type, so a bare path does not coerce to a slot type that is
+    /// higher-ranked over the cursor's lifetime, and a non-capturing closure does.
     fn default() -> Self {
         Self {
-            pfLumaHalfpelHor: None,
-            pfLumaHalfpelVer: None,
-            pfLumaHalfpelCen: None,
-            pMcChromaFunc: None,
-            pMcLumaFunc: None,
-            pfSampleAveraging: None,
+            pfLumaHalfpelHor: |s, d, w, h| mc_hor_ver20(s, d, w, h),
+            pfLumaHalfpelVer: |s, d, w, h| mc_hor_ver02(s, d, w, h),
+            pfLumaHalfpelCen: |s, d, w, h| mc_hor_ver22(s, d, w, h),
+            pMcChromaFunc: |s, d, mx, my, w, h| mc_chroma(s, d, mx, my, w, h),
+            pMcLumaFunc: |s, d, mx, my, w, h| mc_luma(s, d, mx, my, w, h),
+            pfSampleAveraging: |dst, a, b, w, h| pixel_avg(dst, a, b, w, h),
         }
     }
 }
@@ -1214,28 +1238,23 @@ fn block_span(stride: usize, width: usize, height: usize) -> usize {
 
 
 pub fn InitMcFunc(pMcFuncs: &mut SMcFunc, _uiCpuFlag: u32) {
-    let mc = pMcFuncs;
-    // **S10.2: the four generic kernels are installed at their `PlaneCursor`
-    // instantiation, through non-capturing closures.** A generic `fn` item fixes
-    // its type parameter *and* the lifetimes inside it, so `Some(mc_hor_ver20)` no
-    // longer coerces to a slot type that is higher-ranked over the cursor's
-    // lifetime; a non-capturing closure is higher-ranked and coerces. The four
-    // kernels went generic because the encoder's reference cursor is a `RecCursor`
-    // under the source-plane seam while the decoder's is a `PlaneCursor` — see
-    // `RefSamples::row_into`.
-    //
     // **These six slots are installed and never called** (whole-tree grep: the only
-    // mentions outside this file are one doc comment and one `is_none()`
+    // mentions outside this file are one doc comment and one construction
     // assertion), which is F255's "installed, asserted, never called" shape. They
     // are not deleted here because `abi_guard.rs` pins `assert_size!(SMcFunc, 48)`
-    // and the struct's layout is part of the port's fidelity surface; that is its
-    // own checkpoint.
-    mc.pfLumaHalfpelHor = Some(|s, d, w, h| mc_hor_ver20(s, d, w, h));
-    mc.pfLumaHalfpelVer = Some(|s, d, w, h| mc_hor_ver02(s, d, w, h));
-    mc.pfLumaHalfpelCen = Some(|s, d, w, h| mc_hor_ver22(s, d, w, h));
-    mc.pfSampleAveraging = Some(|dst, a, b, w, h| pixel_avg(dst, a, b, w, h));
-    mc.pMcChromaFunc = Some(|s, d, mx, my, w, h| mc_chroma(s, d, mx, my, w, h));
-    mc.pMcLumaFunc = Some(|s, d, mx, my, w, h| mc_luma(s, d, mx, my, w, h));
+    // and the struct's layout is part of the port's fidelity surface.
+    //
+    // **The six assignments moved into `Default`** when the slots stopped being
+    // `Option`s — the checkpoint the paragraph above this used to defer. A `fn` has
+    // no null, so a table cannot be constructed uninstalled and there is nothing
+    // for this function to be the *first* writer of; `Default` carries the kernel
+    // list (and S10.2's note on why each is a non-capturing closure rather than a
+    // named generic `fn`). This stays because it is upstream's (`mc.cpp`'s
+    // `InitMcFunc`), because both codecs call it at open time, and because the
+    // CPU-flag invariance it carries is a real property that
+    // `init_mc_func_ignores_the_cpu_flag` still checks. Assigning the default keeps
+    // the kernel list in one place rather than two that can drift apart.
+    *pMcFuncs = SMcFunc::default();
 }
 
 #[cfg(test)]
@@ -1433,7 +1452,7 @@ mod tests {
     /// port can produce rather than for the one this machine reports.
     ///
     /// **Why this compares two tables instead of a table against named
-    /// functions.** The obvious assert-map — `t.pMcLumaFunc.unwrap() as usize
+    /// functions.** The obvious assert-map — `t.pMcLumaFunc as usize
     /// == McLuma_c as usize`, the shape
     /// `encoder_deblocking_table_installs_the_common_shims` uses — is *unsound
     /// for these six functions*, and both a cross-crate and an in-crate draft
@@ -1471,12 +1490,12 @@ mod tests {
         InitMcFunc(&mut base, 0);
         let addrs = |t: &SMcFunc| -> [usize; 6] {
             [
-                t.pfLumaHalfpelHor.unwrap() as usize,
-                t.pfLumaHalfpelVer.unwrap() as usize,
-                t.pfLumaHalfpelCen.unwrap() as usize,
-                t.pfSampleAveraging.unwrap() as usize,
-                t.pMcChromaFunc.unwrap() as usize,
-                t.pMcLumaFunc.unwrap() as usize,
+                t.pfLumaHalfpelHor as usize,
+                t.pfLumaHalfpelVer as usize,
+                t.pfLumaHalfpelCen as usize,
+                t.pfSampleAveraging as usize,
+                t.pMcChromaFunc as usize,
+                t.pMcLumaFunc as usize,
             ]
         };
         const NAMES: [&str; 6] = [
@@ -1497,35 +1516,46 @@ mod tests {
         }
     }
 
-    /// The other half of the de-virtualization argument: the slots were never
-    /// `None` at a call site, so unconditional direct calls preserve behaviour.
+    /// The other half of the de-virtualization argument, and what survives of it
+    /// now that the slots are plain `fn`.
     ///
-    /// This is the half that is easy to wave through. Five of the fifteen
-    /// former call sites spelled the dispatch `if let Some(f) = ...`, which
-    /// *silently skips the call* on `None` — for MC, that means leaving a
-    /// prediction block unwritten rather than filling it. Replacing those with
-    /// unconditional calls is behaviour-preserving only because `InitMcFunc`
-    /// runs unconditionally at codec-open time on both sides
+    /// The property was: the slots were never `None` at a call site, so
+    /// unconditional direct calls preserve behaviour. Five of the fifteen former
+    /// call sites spelled the dispatch `if let Some(f) = ...`, which *silently
+    /// skips the call* on `None` — for MC, leaving a prediction block unwritten
+    /// rather than filling it — and the evidence that replacing them was safe was
+    /// that a default table is all-`None` while a post-init one is all-`Some`,
+    /// `InitMcFunc` running unconditionally at codec-open time on both sides
     /// (`WelsInitDecoderFuncs` via `WelsOpenDecoder`; the encoder's
-    /// `InitFunctionPointers`), before any frame is touched. A
-    /// default-constructed table being all-`None` is what makes the difference
-    /// observable rather than academic.
+    /// `InitFunctionPointers`) before any frame is touched.
+    ///
+    /// **That half is now the type's, not a test's**: a `fn` has no null, so
+    /// "all-`None` before init" is unrepresentable and the `if let` shape cannot
+    /// be written. What replaced it is a claim that *can* still drift — `Default`
+    /// installs the six kernels and [`InitMcFunc`] installs them again, and
+    /// nothing but this says the two agree. Address equality is sound here for the
+    /// reason the flag test above is not sound cross-crate: both sides come from
+    /// the same instantiation inside this library.
     #[test]
-    fn mc_table_is_all_none_before_init_and_all_some_after() {
-        let t = SMcFunc::default();
-        assert!(
-            t.pMcLumaFunc.is_none() && t.pMcChromaFunc.is_none() && t.pfSampleAveraging.is_none()
-                && t.pfLumaHalfpelHor.is_none() && t.pfLumaHalfpelVer.is_none()
-                && t.pfLumaHalfpelCen.is_none(),
-            "a default SMcFunc must be all-None, or the post-init claim proves nothing"
-        );
+    #[cfg_attr(miri, ignore)]
+    fn init_mc_func_installs_exactly_what_default_built() {
+        let addrs = |t: &SMcFunc| -> [usize; 6] {
+            [
+                t.pfLumaHalfpelHor as usize,
+                t.pfLumaHalfpelVer as usize,
+                t.pfLumaHalfpelCen as usize,
+                t.pfSampleAveraging as usize,
+                t.pMcChromaFunc as usize,
+                t.pMcLumaFunc as usize,
+            ]
+        };
+        let base = SMcFunc::default();
         let mut t = SMcFunc::default();
         InitMcFunc(&mut t, 0);
-        assert!(
-            t.pMcLumaFunc.is_some() && t.pMcChromaFunc.is_some() && t.pfSampleAveraging.is_some()
-                && t.pfLumaHalfpelHor.is_some() && t.pfLumaHalfpelVer.is_some()
-                && t.pfLumaHalfpelCen.is_some(),
-            "InitMcFunc must leave every slot populated"
+        assert_eq!(
+            addrs(&t),
+            addrs(&base),
+            "InitMcFunc must install exactly the table Default already built"
         );
     }
 

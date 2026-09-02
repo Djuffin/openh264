@@ -1476,10 +1476,15 @@ fn nonzero_count_duplicates_agree() {
 // different-but-plausible function — is now a type error at `InitMcFunc`, because the
 // three slot types name the safe signatures and nothing else has them.
 //
-// `init_mc_func_ignores_the_cpu_flag` and
-// `mc_table_is_all_none_before_init_and_all_some_after` (both in `common/mc.rs`) stay:
-// the flag-invariance and all-None-then-all-Some halves are still real properties of
-// `InitMcFunc`, and they are what `encoder_context.rs:2464`'s construction assertion
-// leans on. F124 was right that this test is Phase 4a's mitigation rather than Phase
-// 2's span discipline, and it is retired here with its own reason.
+// `init_mc_func_ignores_the_cpu_flag` and its neighbour (both in `common/mc.rs`)
+// stay: the flag-invariance half is still a real property of `InitMcFunc`, and it is
+// what `encoder_context.rs`'s construction assertion leans on. F124 was right that
+// this test is Phase 4a's mitigation rather than Phase 2's span discipline, and it is
+// retired here with its own reason.
+//
+// **The all-None-then-all-Some half is gone with the `Option`s.** `SMcFunc`'s six
+// slots are plain `fn` now, so a default table cannot be uninstalled and there is no
+// before-state to compare against; what took its place —
+// `init_mc_func_installs_exactly_what_default_built` — pins the claim that replaced
+// it, that the two writers of the table install the same kernels.
 

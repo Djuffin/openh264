@@ -3434,7 +3434,19 @@ mod tests {
         assert!(fl.pfGetChromaPred.iter().all(Option::is_none), "new(): no chroma predictors");
         assert!(fl.pfMotionSearch.iter().all(Option::is_none), "new(): no motion search");
         assert!(fl.sMeFuncs.pfSearchMethod.iter().all(Option::is_none), "new(): no search method");
-        assert!(fl.sMcFuncs.pMcLumaFunc.is_none(), "new(): no motion compensation");
+        // **The one member of the table `new()` leaves *installed*.** `SMcFunc`'s
+        // six slots dropped their `Option`s — nothing in `src/` dispatches through
+        // them and `InitMcFunc` runs at codec-open time on both sides, so the
+        // uninstalled image was never observable — which makes `Default` the
+        // installer and this assertion the opposite of its neighbours. Stated as
+        // an equality rather than deleted: the claim this test makes is field for
+        // field about `SWelsFuncPtrList::default()`, and dropping the line would
+        // quietly shrink it.
+        assert_eq!(
+            fl.sMcFuncs.pMcLumaFunc as usize,
+            crate::common::mc::SMcFunc::default().pMcLumaFunc as usize,
+            "new(): motion compensation is installed at construction"
+        );
         assert!(
             fl.sSampleDealingFuncs.pfSampleSad.iter().all(Option::is_none)
                 && fl.sSampleDealingFuncs.pfMdCost == crate::encoder::md::CostFamily::Unset
