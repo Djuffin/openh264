@@ -901,12 +901,12 @@ pub fn WelsWriteMbResidualCabac(
 
             if uiMbType == MB_TYPE_INTRA16x16 {
                 let dc_buf = &pDct.iLumaI16x16Dc[..];
-                let iNonZeroCount = if pFuncList.pfGetNoneZeroCount.is_some()
-                {
-                    (pFuncList.pfGetNoneZeroCount.unwrap())(&pDct.iLumaI16x16Dc)
-                } else {
-                    pDct.iLumaI16x16Dc.iter().filter(|&&x| x != 0).count() as i32
-                };
+                // The `is_some()` arm and its open-coded fallback (a filter/count
+                // over the same array) retired with the slot's `Option`:
+                // `pfGetNoneZeroCount` is installed by `Default` and re-installed by
+                // `WelsInitEncodingFuncs`, so the fallback was unreachable and the
+                // two arms had to be kept in agreement by hand.
+                let iNonZeroCount = (pFuncList.pfGetNoneZeroCount)(&pDct.iLumaI16x16Dc);
 
                 WelsWriteBlockResidualCabac(buf, 
                     kpNonZeroCoeffCount,

@@ -2399,11 +2399,11 @@ pub fn WelsInitBGDFunc(
     kbEnableBackgroundDetection: bool,
 ) {
     if kbEnableBackgroundDetection {
-        pFuncList.pfInterMdBackgroundDecision = Some(WelsMdInterJudgeBGDPskip);
-        pFuncList.pfMdBackgroundInfoUpdate = Some(WelsMdUpdateBGDInfo);
+        pFuncList.pfInterMdBackgroundDecision = WelsMdInterJudgeBGDPskip;
+        pFuncList.pfMdBackgroundInfoUpdate = WelsMdUpdateBGDInfo;
     } else {
-        pFuncList.pfInterMdBackgroundDecision = Some(WelsMdInterJudgeBGDPskipFalse);
-        pFuncList.pfMdBackgroundInfoUpdate = Some(WelsMdUpdateBGDInfoNULL);
+        pFuncList.pfInterMdBackgroundDecision = WelsMdInterJudgeBGDPskipFalse;
+        pFuncList.pfMdBackgroundInfoUpdate = WelsMdUpdateBGDInfoNULL;
     }
 }
 
@@ -2540,7 +2540,7 @@ fn InitCoeffFunc(
     _uiCpuFlag: u32,
     iEntropyCodingModeFlag: i32,
 ) {
-    pFuncList.pfCavlcParamCal = Some(crate::encoder::svc_set_mb_syn_cavlc::CavlcParamCal_c);
+    pFuncList.pfCavlcParamCal = crate::encoder::svc_set_mb_syn_cavlc::CavlcParamCal_c;
     pFuncList.eEntropyCoder = EntropyCoder::from_flag(iEntropyCodingModeFlag);
 }
 
@@ -3427,26 +3427,38 @@ mod tests {
         // Field for field the claim is `SWelsFuncPtrList::default()`'s own
         // definition; the three `init_fills_*` tests pin what gets written on top.
         let fl = &*built.pFuncList;
-        assert!(fl.pfFillInterNeighborCache.is_none(), "new(): the table is uninstalled");
-        assert!(fl.pfCavlcParamCal.is_none(), "new(): the table is uninstalled");
+        // **The leading and trailing plain slots have dropped out of this audit,
+        // and there is nothing to put in their place.** Twenty-nine slots on this
+        // table lost their `Option` because every one is written unconditionally
+        // by an installer `InitFunctionPointers` calls before any frame — so
+        // `None` was a state no dispatch could observe, while forty-one call sites
+        // nonetheless spelled the dispatch `if let Some(f) = ..` and would have
+        // skipped the call. `Default` names the kernel instead, which leaves this
+        // test no uninstalled state to assert: `fl` *is* what
+        // `SWelsFuncPtrList::default()` built, so any comparison against it would
+        // be the constructor checked against itself. The remaining members below
+        // still have a real `None`, and they still carry the claim.
         assert!(fl.pfGetLumaI16x16Pred.iter().all(Option::is_none), "new(): no I16x16 predictors");
         assert!(fl.pfGetLumaI4x4Pred.iter().all(Option::is_none), "new(): no I4x4 predictors");
         assert!(fl.pfGetChromaPred.iter().all(Option::is_none), "new(): no chroma predictors");
         assert!(fl.pfMotionSearch.iter().all(Option::is_none), "new(): no motion search");
         assert!(fl.sMeFuncs.pfSearchMethod.iter().all(Option::is_none), "new(): no search method");
-        // **The one member of the table `new()` leaves *installed*.** `SMcFunc`'s
-        // six slots dropped their `Option`s — nothing in `src/` dispatches through
-        // them and `InitMcFunc` runs at codec-open time on both sides, so the
-        // uninstalled image was never observable — which makes `Default` the
-        // installer and this assertion the opposite of its neighbours. Stated as
-        // an equality rather than deleted: the claim this test makes is field for
-        // field about `SWelsFuncPtrList::default()`, and dropping the line would
-        // quietly shrink it.
-        assert_eq!(
-            fl.sMcFuncs.pMcLumaFunc as usize,
-            crate::common::mc::SMcFunc::default().pMcLumaFunc as usize,
-            "new(): motion compensation is installed at construction"
-        );
+        // **`sMcFuncs.pMcLumaFunc.is_none()` stood here, and nothing can take its
+        // place.** `SMcFunc`'s six slots dropped their `Option`s — nothing in
+        // `src/` dispatches through them and `InitMcFunc` runs at codec-open time
+        // on both sides, so the uninstalled image was never observable — which
+        // makes `Default` the installer and the old claim false.
+        //
+        // An equality against `SMcFunc::default()` stood here briefly and was
+        // wrong in **release only**: those six slots hold non-capturing closures
+        // (the mc kernels are generic over the cursor type, so a named path will
+        // not coerce), and a closure is reified per codegen unit exactly as an
+        // `#[inline]` fn is — this module's `SMcFunc::default()` and the one baked
+        // into `SWelsFuncPtrList::default()` are different addresses for the same
+        // closure. Debug happened to merge them; the release sweep did not. The
+        // "embedded POD sub-table" kind this line stood for is still covered by
+        // the `sSampleDealingFuncs` assertion below, which has a real `None` to
+        // test; for `sMcFuncs` the claim is the type's now, not this test's.
         assert!(
             fl.sSampleDealingFuncs.pfSampleSad.iter().all(Option::is_none)
                 && fl.sSampleDealingFuncs.pfMdCost == crate::encoder::md::CostFamily::Unset
@@ -3680,7 +3692,23 @@ mod tests {
         // binding a reference to it once. That is not stylistic: the
         // `InitCoeffFunc` call below *writes* the table, and a `&` held across
         // it is the exact shape this session's step-1 checker exists to reject.
-        assert!(ctx.pFuncList.pfDctFourT4.is_some());
+        // **`pfDctFourT4.is_some()` stood here, and nothing can replace it in
+        // kind.** The slot is a plain `fn` now, so the question cannot be asked —
+        // and, more to the point, no slot `WelsInitEncodingFuncs` writes can
+        // witness its own call any more: `Default` installs the same kernel, so
+        // the value is identical whether the installer ran or not. An address
+        // comparison against `Default` would be either vacuous or, for the
+        // `#[inline]` kernels, wrong for a codegen-unit reason.
+        //
+        // What this line was really standing in for is that `InitFunctionPointers`
+        // walks its installer chain at all, and the installers whose slots are
+        // still `Option` can say so. The predictor table is one: `new()` asserts
+        // it is all-`None` above, and `WelsInitIntraPredFuncs` is the first call
+        // in the chain.
+        assert!(
+            ctx.pFuncList.pfGetLumaI16x16Pred.iter().any(Option::is_some),
+            "InitFunctionPointers must walk its installer chain"
+        );
         // pfInterMd is deliberately NOT asserted: C++ InitFunctionPointers
         // (encoder.cpp) never sets it. It is assigned per-slice in
         // svc_encode_slice.cpp:733/736. This assertion passed only because the

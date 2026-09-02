@@ -926,9 +926,7 @@ pub fn WelsMdInterInit(
     // `pDecPic->pMbSkipSad + kiMbXY` in `pMbCache->pEncSad` first and the callee walks
     // backwards off it; the array is the picture's own now, so the callee indexes
     // `iMbXY + <neighbour offset>` against its root under the same guards.
-    (*pEncCtx).func_list()
-        .pfFillInterNeighborCache
-        .expect("pfFillInterNeighborCache unset")(
+    ((*pEncCtx).func_list().pfFillInterNeighborCache)(
         &mut *pMbCache,
         &*mbs,
         // S4.C4: the whole array, shared. T9.E7 (F132 round 8) had to reach the
@@ -1158,9 +1156,7 @@ pub fn WelsMdInterFinePartitionVaa<'a>(
     let mut iBestCost = iBestCostIn;
     // S11.28: the mint (T9.E7's spelling) is gone with the slot's pointer
     // parameter — a shared index into the bounded row.
-    let uiMbSign = (*pEncCtx).func_list()
-        .pfGetMbSignFromInterVaa
-        .expect("pfGetMbSignFromInterVaa unset")(
+    let uiMbSign = ((*pEncCtx).func_list().pfGetMbSignFromInterVaa)(
         &(*pEncCtx).vaa_expect().sVaaCalcInfo.pSad8x8
             [(*pCurMb).iMbXY as usize],
     );
@@ -1417,7 +1413,7 @@ pub fn WelsMdPSkipEnc(
         pEncMb = (*pMbCache).SPicData.mb_cursor_ro(encView, 1);
 
         let pDstCb = RecCursor::over_owned(&mut (*pMbCache).sSkipMb, 256, 8);
-        (*pFunc).pfDctFourT4.expect("pfDctFourT4 unset")(
+        ((*pFunc).pfDctFourT4)(
             &mut (*pMbCache).sCoeffLevel[256..],
             &pEncMb.advance(kpEncBlockOffset[16] as isize, 0),
             &pDstCb,
@@ -1426,7 +1422,7 @@ pub fn WelsMdPSkipEnc(
             pEncMb = (*pMbCache).SPicData.mb_cursor_ro(encView, 2);
 
             let pDstCr = RecCursor::over_owned(&mut (*pMbCache).sSkipMb, 320, 8);
-            (*pFunc).pfDctFourT4.expect("pfDctFourT4 unset")(
+            ((*pFunc).pfDctFourT4)(
                 &mut (*pMbCache).sCoeffLevel[320..],
                 &pEncMb.advance(kpEncBlockOffset[20] as isize, 0),
                 &pDstCr,
@@ -1473,7 +1469,7 @@ fn AcceptPskip(
 
     // ST32 (pCurMb->pRefIndex, 0)
     (*pCurMb).iRefIndex = [0; crate::encoder::md::MB_BLOCK8x8_NUM];
-    (*pFunc).pfUpdateMbMv.expect("pfUpdateMbMv unset")(&mut (*pCurMb).sMv, *sMvp);
+    ((*pFunc).pfUpdateMbMv)(&mut (*pCurMb).sMv, *sMvp);
 
     if (*pWelsMd).bMdUsingSad {
         (*pCurMb).iSadCost = iSadCostLuma;
@@ -1900,9 +1896,7 @@ pub fn WelsMdInterMb<'a>(
     let bSkip;
 
     //try BGD skip
-    if (*pEncCtx).func_list()
-        .pfInterMdBackgroundDecision
-        .expect("pfInterMdBackgroundDecision unset")(
+    if ((*pEncCtx).func_list().pfInterMdBackgroundDecision)(
         pEncCtx,
         pWelsMd,
         pSlice,
@@ -1913,9 +1907,7 @@ pub fn WelsMdInterMb<'a>(
     }
 
     //try static or scrolled Pskip
-    if (*pEncCtx).func_list()
-        .pfSCDPSkipDecision
-        .expect("pfSCDPSkipDecision unset")(pEncCtx, pWelsMd, pSlice, mbs.cur_mut())
+    if ((*pEncCtx).func_list().pfSCDPSkipDecision)(pEncCtx, pWelsMd, pSlice, mbs.cur_mut())
     {
         return;
     }

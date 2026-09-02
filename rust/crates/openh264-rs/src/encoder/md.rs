@@ -1276,9 +1276,9 @@ pub extern "C" fn InitFillNeighborCacheInterFunc(
     kiFlag: i32,
 ) {
     pFuncList.pfFillInterNeighborCache = if kiFlag != 0 {
-        Some(FillNeighborCacheInterWithBGD)
+        FillNeighborCacheInterWithBGD
     } else {
-        Some(FillNeighborCacheInterWithoutBGD)
+        FillNeighborCacheInterWithoutBGD
     };
 }
 
@@ -1376,14 +1376,14 @@ pub extern "C" fn InitIntraAnalysisVaaInfo(
     pFuncList: &mut SWelsFuncPtrList,
     _kuiCpuFlag: u32,
 ) {
-    pFuncList.pfGetVarianceFromIntraVaa = Some(AnalysisVaaInfoIntra_c);
-    pFuncList.pfGetMbSignFromInterVaa = Some(MdInterAnalysisVaaInfo_c);
-    pFuncList.pfUpdateMbMv = Some(UpdateMbMv_c);
+    pFuncList.pfGetVarianceFromIntraVaa = AnalysisVaaInfoIntra_c;
+    pFuncList.pfGetMbSignFromInterVaa = MdInterAnalysisVaaInfo_c;
+    pFuncList.pfUpdateMbMv = UpdateMbMv_c;
 }
 
 pub fn MdIntraAnalysisVaaInfo(pEncCtx: &sWelsEncCtx, cEncMb: &RecCursor<'_>) -> bool {
     // S10.5: the layer lookup went with the stride — the cursor carries it.
-    let pfGetVariance = pEncCtx.func_list().pfGetVarianceFromIntraVaa.unwrap();
+    let pfGetVariance = pEncCtx.func_list().pfGetVarianceFromIntraVaa;
     let kiVariance = pfGetVariance(cEncMb);
     kiVariance >= INTRA_VARIANCE_SAD_THRESHOLD
 }

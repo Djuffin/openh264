@@ -2208,7 +2208,7 @@ pub fn WelsIMbChromaEncode(pEncCtx: &sWelsEncCtx, pCurMb: &mut SMB, pMbCache: &m
     // raw form passed alongside now ride inside the cursors.
     let encView = layer_enc_view_expect(&*pCurLayer);
     let pFunc = (*pEncCtx).func_list();
-    let pfDctFourT4 = (*pFunc).pfDctFourT4.expect("pfDctFourT4 unset");
+    let pfDctFourT4 = (*pFunc).pfDctFourT4;
 
     //cb
     pfDctFourT4(
@@ -2259,7 +2259,7 @@ pub fn WelsPMbChromaEncode(pEncCtx: &sWelsEncCtx, pSlice: &mut SSlice, pCurMb: &
     // raw form passed alongside now ride inside the cursors.
     let encView = layer_enc_view_expect(&*pCurLayer);
     let pFunc = (*pEncCtx).func_list();
-    let dct = (*pFunc).pfDctFourT4.expect("pfDctFourT4 unset");
+    let dct = (*pFunc).pfDctFourT4;
     dct(
         &mut (*pMbCache).sCoeffLevel[256..],
         &(*pMbCache).SPicData.mb_cursor_ro(encView, 1),
@@ -2513,9 +2513,13 @@ pub fn WelsISliceMdEnc(
         let pMbCache = &mut pSlice.sMbCacheInfo;
         {  // A6: the block is the shared borrow's scope (F191/F212)
             let func_list = (*pEncCtx).func_list();
-            if let Some(func) = func_list.pfMdBackgroundInfoUpdate {
-                func(pEncCtx, &*pCurLayer, pMbs.cur_mut(), pMbCache.bCollocatedPredFlag, I_SLICE);
-            }
+            (func_list.pfMdBackgroundInfoUpdate)(
+                pEncCtx,
+                &*pCurLayer,
+                pMbs.cur_mut(),
+                pMbCache.bCollocatedPredFlag,
+                I_SLICE,
+            );
             func_list.pfRc.WelsRcMbInfoUpdate(
                 pEncCtx,
                 pMbs.cur_mut(),
@@ -2847,15 +2851,13 @@ pub fn WelsMdInterMbLoop<'a>(
                     );
                 }
 
-                if let Some(func) = func_list.pfMdBackgroundInfoUpdate {
-                    func(
-                        pEncCtx,
-                        &*pCurLayer,
-                        pMbs.cur_mut(),
-                        (*pMbCache).bCollocatedPredFlag,
-                        ctx_ref_pic(pEncCtx).map_or(0, |p| p.iPictureType),
-                    );
-                }
+                (func_list.pfMdBackgroundInfoUpdate)(
+                    pEncCtx,
+                    &*pCurLayer,
+                    pMbs.cur_mut(),
+                    (*pMbCache).bCollocatedPredFlag,
+                    ctx_ref_pic(pEncCtx).map_or(0, |p| p.iPictureType),
+                );
                 mb_dump(pMbs.cur(), pMd, pSlice);
             }
             //step (5): update cache
@@ -3041,15 +3043,13 @@ pub fn WelsMdInterMbLoopOverDynamicSlice<'a>(
             }
             {  // A6: the block is the shared borrow's scope (F191/F212)
                 let func_list = (*pEncCtx).func_list();
-                if let Some(func) = func_list.pfMdBackgroundInfoUpdate {
-                    func(
-                        pEncCtx,
-                        pCurLayer,
-                        pMbs.cur_mut(),
-                        (*pMbCache).bCollocatedPredFlag,
-                        ctx_ref_pic(pEncCtx).map_or(0, |p| p.iPictureType),
-                    );
-                }
+                (func_list.pfMdBackgroundInfoUpdate)(
+                    pEncCtx,
+                    pCurLayer,
+                    pMbs.cur_mut(),
+                    (*pMbCache).bCollocatedPredFlag,
+                    ctx_ref_pic(pEncCtx).map_or(0, |p| p.iPictureType),
+                );
             }
             UpdateNonZeroCountCache(pMbs.cur(), &mut *pMbCache);
 

@@ -536,13 +536,10 @@ fn VaaBackgroundMbDataUpdate(
     let (lx, ly) = (((*pCurMb).iMbX as isize) << 4, ((*pCurMb).iMbY as isize) << 4);
     let (cx, cy) = (((*pCurMb).iMbX as isize) << 3, ((*pCurMb).iMbY as isize) << 3);
 
-    if let Some(copy16) = pFunc.pfCopy16x16Aligned {
-        copy16(&curView.plane(0).cursor(lx, ly), &refView.plane(0).cursor(lx, ly));
-    }
-    if let Some(copy8) = pFunc.pfCopy8x8Aligned {
-        copy8(&curView.plane(1).cursor(cx, cy), &refView.plane(1).cursor(cx, cy));
-        copy8(&curView.plane(2).cursor(cx, cy), &refView.plane(2).cursor(cx, cy));
-    }
+    (pFunc.pfCopy16x16Aligned)(&curView.plane(0).cursor(lx, ly), &refView.plane(0).cursor(lx, ly));
+    let copy8 = pFunc.pfCopy8x8Aligned;
+    copy8(&curView.plane(1).cursor(cx, cy), &refView.plane(1).cursor(cx, cy));
+    copy8(&curView.plane(2).cursor(cx, cy), &refView.plane(2).cursor(cx, cy));
 }
 
 /// Encodes a background macroblock: motion-compensates it from the reference frame at
@@ -677,9 +674,7 @@ pub extern "C" fn WelsMdBackgroundMbEnc(
 
         // update motion info to current MB
         (*pCurMb).iRefIndex = [0; MB_BLOCK8x8_NUM];
-        if let Some(pfUpdateMbMv) = (*pFunc).pfUpdateMbMv {
-            pfUpdateMbMv(&mut (*pCurMb).sMv, sMvp);
-        }
+        ((*pFunc).pfUpdateMbMv)(&mut (*pCurMb).sMv, sMvp);
 
         (*pCurMb).uiLumaQp = (*pSlice).uiLastMbQp;
         (*pCurMb).uiChromaQp = crate::encoder::svc_encode_slice::g_kuiChromaQpTable
@@ -1424,14 +1419,13 @@ pub extern "C" fn WelsInterMbEncode(pEncCtx: &sWelsEncCtx, pSlice: &mut SSlice, 
         16,
     );
 
-    if let Some(dct_fn) = (*pFuncList).pfDctFourT4 {
-        for (k, (dx, dy)) in [(0isize, 0isize), (8, 0), (0, 8), (8, 8)].into_iter().enumerate() {
-            dct_fn(
-                &mut (*pMbCache).sCoeffLevel[k << 6..],
-                &pEncMb.advance(dx, dy),
-                &pMemPredLuma.advance(dx, dy),
-            );
-        }
+    let dct_fn = (*pFuncList).pfDctFourT4;
+    for (k, (dx, dy)) in [(0isize, 0isize), (8, 0), (0, 8), (8, 8)].into_iter().enumerate() {
+        dct_fn(
+            &mut (*pMbCache).sCoeffLevel[k << 6..],
+            &pEncMb.advance(dx, dy),
+            &pMemPredLuma.advance(dx, dy),
+        );
     }
 
     WelsEncInterY(&*pFuncList, pCurMb, &mut *pMbCache);
@@ -1570,10 +1564,9 @@ pub fn WelsMdSpatialelInterMbIlfmdNoilp<'a>(
     let mut bKeepSkip = kbMbLeftAvailPskip & kbMbTopAvailPskip & kbMbTopRightAvailPskip;
     let bSkip: bool;
 
-    if let Some(pfBgd) = (*pEncCtx).func_list().pfInterMdBackgroundDecision {
-        if pfBgd(pEncCtx, pWelsMd, &mut *pSlice, mbs.cur_mut(), &mut bKeepSkip) {
-            return;
-        }
+    let pfBgd = (*pEncCtx).func_list().pfInterMdBackgroundDecision;
+    if pfBgd(pEncCtx, pWelsMd, &mut *pSlice, mbs.cur_mut(), &mut bKeepSkip) {
+        return;
     }
 
     // Step 1: Try SKIP
@@ -2152,9 +2145,7 @@ pub extern "C" fn SvcMdSCDMbEnc(
 
     if bQpSimilarFlag && bMbSkipFlag {
         (*pCurMb).iRefIndex = [0; MB_BLOCK8x8_NUM];
-        if let Some(pfUpdateMbMv) = (*pFunc).pfUpdateMbMv {
-            pfUpdateMbMv(&mut (*pCurMb).sMv, sMvp);
-        }
+        ((*pFunc).pfUpdateMbMv)(&mut (*pCurMb).sMv, sMvp);
         (*pCurMb).uiMbType = MB_TYPE_SKIP;
         WelsRecPskip(&*pCurDqLayer, &*pFunc, pCurMb, &mut *pMbCache);
         WelsMdInterUpdatePskip(pEncCtx, &*pCurDqLayer, &mut *pSlice, pCurMb);
@@ -2205,22 +2196,19 @@ pub extern "C" fn SvcMdSCDMbEnc(
     let recView = layer_rec_view_expect(&*pCurDqLayer);
     let luma_off = mem_pred_luma_off((*pMbCache).uiMemPredLumaHalf);
     let chroma_off = mem_pred_chroma_off((*pMbCache).uiMemPredLumaHalf);
-    if let Some(copy16) = (*pFunc).pfCopy16x16Aligned {
-        copy16(
-            &(*pMbCache).SPicData.mb_cursor_rec(recView, 0),
-            &RecCursor::over_owned(&mut (*pMbCache).sMemPredMb, luma_off, 16),
-        );
-    }
-    if let Some(copy8) = (*pFunc).pfCopy8x8Aligned {
-        copy8(
-            &(*pMbCache).SPicData.mb_cursor_rec(recView, 1),
-            &RecCursor::over_owned(&mut (*pMbCache).sMemPredMb, chroma_off, 8),
-        );
-        copy8(
-            &(*pMbCache).SPicData.mb_cursor_rec(recView, 2),
-            &RecCursor::over_owned(&mut (*pMbCache).sMemPredMb, chroma_off + 64, 8),
-        );
-    }
+    ((*pFunc).pfCopy16x16Aligned)(
+        &(*pMbCache).SPicData.mb_cursor_rec(recView, 0),
+        &RecCursor::over_owned(&mut (*pMbCache).sMemPredMb, luma_off, 16),
+    );
+    let copy8 = (*pFunc).pfCopy8x8Aligned;
+    copy8(
+        &(*pMbCache).SPicData.mb_cursor_rec(recView, 1),
+        &RecCursor::over_owned(&mut (*pMbCache).sMemPredMb, chroma_off, 8),
+    );
+    copy8(
+        &(*pMbCache).SPicData.mb_cursor_rec(recView, 2),
+        &RecCursor::over_owned(&mut (*pMbCache).sMemPredMb, chroma_off + 64, 8),
+    );
 }
 
 // SCREEN_CONTENT(dormant: Phase 10) — F125. `WelsInitSCDPskipFunc`
@@ -2400,9 +2388,9 @@ pub extern "C" fn WelsInitSCDPskipFunc(
     bScrollingDetection: bool,
 ) {
     if bScrollingDetection {
-        pFuncList.pfSCDPSkipDecision = Some(WelsMdInterJudgeSCDPskip);
+        pFuncList.pfSCDPSkipDecision = WelsMdInterJudgeSCDPskip;
     } else {
-        pFuncList.pfSCDPSkipDecision = Some(WelsMdInterJudgeSCDPskipFalse);
+        pFuncList.pfSCDPSkipDecision = WelsMdInterJudgeSCDPskipFalse;
     }
 }
 
@@ -2484,7 +2472,7 @@ pub fn WelsMdInterFinePartitionVaaOnScreen<'a>(
 
     // S11.28: a shared index into the bounded row — the mint (T9.E7's `as_ptr`
     // spelling) is gone with the slot's pointer parameter.
-    let get_sign = (*pEncCtx).func_list().pfGetMbSignFromInterVaa.unwrap();
+    let get_sign = (*pEncCtx).func_list().pfGetMbSignFromInterVaa;
     let uiMbSign = get_sign(
         &(*pEncCtx)
             .vaa_expect().sVaaCalcInfo

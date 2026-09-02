@@ -391,20 +391,20 @@ pub struct SWelsFuncPtrList {
     // and `common/expand_pic.rs::ExpandReferencingPicture` names them directly.
     // This is the first member deleted from this struct since T4b.1 -- and the
     // first time since Phase 4a's entry that `assert_size!` moves.
-    pub pfFillInterNeighborCache: Option<PFillInterNeighborCacheFunc>,
+    pub pfFillInterNeighborCache: PFillInterNeighborCacheFunc,
 
-    pub pfGetVarianceFromIntraVaa: Option<PGetVarianceFromIntraVaaFunc>,
-    pub pfGetMbSignFromInterVaa: Option<PGetMbSignFromInterVaaFunc>,
-    pub pfUpdateMbMv: Option<PUpdateMbMvFunc>,
+    pub pfGetVarianceFromIntraVaa: PGetVarianceFromIntraVaaFunc,
+    pub pfGetMbSignFromInterVaa: PGetMbSignFromInterVaaFunc,
+    pub pfUpdateMbMv: PUpdateMbMvFunc,
     pub pfFirstIntraMode: Option<PInterMdFirstIntraModeFunc>,
     pub pfIntraFineMd: Option<PIntraFineMdFunc>,
     pub pfInterFineMd: Option<PInterFineMdFunc>,
     pub pfInterMd: Option<PInterMdFunc>,
 
-    pub pfInterMdBackgroundDecision: Option<PInterMdBackgroundDecisionFunc>,
-    pub pfMdBackgroundInfoUpdate: Option<PMdBackgroundInfoUpdateFunc>,
+    pub pfInterMdBackgroundDecision: PInterMdBackgroundDecisionFunc,
+    pub pfMdBackgroundInfoUpdate: PMdBackgroundInfoUpdateFunc,
 
-    pub pfSCDPSkipDecision: Option<PInterMdScrollingPSkipDecisionFunc>,
+    pub pfSCDPSkipDecision: PInterMdScrollingPSkipDecisionFunc,
     pub pfSetScrollingMv: Option<PSetScrollingMv>,
 
     pub sMcFuncs: SMcFunc,
@@ -429,37 +429,37 @@ pub struct SWelsFuncPtrList {
     pub pfCalculateBlockFeatureOfFrame: [Option<PCalculateBlockFeatureOfFrame>; 2],
     pub pfUpdateFMESwitch: Option<PUpdateFMESwitch>,
 
-    pub pfCopy16x16Aligned: Option<PCopyFunc>,
-    pub pfCopy16x16NotAligned: Option<PCopyFunc>,
-    pub pfCopy8x8Aligned: Option<PCopyFunc>,
-    pub pfCopy16x8NotAligned: Option<PCopyFunc>,
-    pub pfCopy8x16Aligned: Option<PCopyFunc>,
-    pub pfCopy4x4: Option<PCopyFunc>,
-    pub pfCopy8x4: Option<PCopyFunc>,
-    pub pfCopy4x8: Option<PCopyFunc>,
+    pub pfCopy16x16Aligned: PCopyFunc,
+    pub pfCopy16x16NotAligned: PCopyFunc,
+    pub pfCopy8x8Aligned: PCopyFunc,
+    pub pfCopy16x8NotAligned: PCopyFunc,
+    pub pfCopy8x16Aligned: PCopyFunc,
+    pub pfCopy4x4: PCopyFunc,
+    pub pfCopy8x4: PCopyFunc,
+    pub pfCopy4x8: PCopyFunc,
 
-    pub pfDctT4: Option<PDctFunc>,
-    pub pfDctFourT4: Option<PDctFunc>,
+    pub pfDctT4: PDctFunc,
+    pub pfDctFourT4: PDctFunc,
 
-    pub pfCalculateSingleCtr4x4: Option<PCalculateSingleCtrFunc>,
+    pub pfCalculateSingleCtr4x4: PCalculateSingleCtrFunc,
     /// DC/AC
-    pub pfScan4x4: Option<PScanFunc>,
-    pub pfScan4x4Ac: Option<PScanFunc>,
+    pub pfScan4x4: PScanFunc,
+    pub pfScan4x4Ac: PScanFunc,
 
-    pub pfQuantization4x4: Option<PQuantization4x4Func>,
-    pub pfQuantizationFour4x4: Option<PQuantizationFunc>,
-    pub pfQuantizationDc4x4: Option<PQuantizationDcFunc>,
-    pub pfQuantizationFour4x4Max: Option<PQuantizationMaxFunc>,
-    pub pfQuantizationHadamard2x2: Option<PQuantizationHadamardFunc>,
-    pub pfQuantizationHadamard2x2Skip: Option<PQuantizationSkipFunc>,
+    pub pfQuantization4x4: PQuantization4x4Func,
+    pub pfQuantizationFour4x4: PQuantizationFunc,
+    pub pfQuantizationDc4x4: PQuantizationDcFunc,
+    pub pfQuantizationFour4x4Max: PQuantizationMaxFunc,
+    pub pfQuantizationHadamard2x2: PQuantizationHadamardFunc,
+    pub pfQuantizationHadamard2x2Skip: PQuantizationSkipFunc,
 
-    pub pfTransformHadamard4x4Dc: Option<PTransformHadamard4x4Func>,
+    pub pfTransformHadamard4x4Dc: PTransformHadamard4x4Func,
 
-    pub pfGetNoneZeroCount: Option<PGetNoneZeroCountFunc>,
+    pub pfGetNoneZeroCount: PGetNoneZeroCountFunc,
 
-    pub pfDequantization4x4: Option<PDeQuantization4x4Func>,
-    pub pfDequantizationFour4x4: Option<PDeQuantizationFunc>,
-    pub pfDequantizationIHadamard4x4: Option<PDeQuantizationHadamardFunc>,
+    pub pfDequantization4x4: PDeQuantization4x4Func,
+    pub pfDequantizationFour4x4: PDeQuantizationFunc,
+    pub pfDequantizationIHadamard4x4: PDeQuantizationHadamardFunc,
     // `pfIDctFourT4`/`pfIDctT4`/`pfIDctI16x16Dc` stood here — installed by
     // `WelsInitReconstructionFuncs`, asserted `is_some()`, and never called
     // (F138/F139): the reconstruction writes go through the seam's kernels
@@ -480,7 +480,7 @@ pub struct SWelsFuncPtrList {
     // call sites call `encoder_context::WelsSetMemZero_c` directly (S18, Phase 6
     // session B).
 
-    pub pfCavlcParamCal: Option<PCavlcParamCalFunc>,
+    pub pfCavlcParamCal: PCavlcParamCalFunc,
 
     /// `pfWelsSpatialWriteMbSyn`, `pfGetBsPosition`, `pfStashMBStatus` and
     /// `pfStashPopMBStatus` (`wels_func_ptr_def.h:192-195`) were four slots set
@@ -518,22 +518,58 @@ impl Default for SWelsFuncPtrList {
     ///
     /// Written out, the compiler checks it instead, and the table stops being the
     /// last thing in the encoder context that needs an `unsafe` block to come into
-    /// existence. Field for field this produces the same image the memset did; the
-    /// three `init_fills_*` tests are unmodified across this change and are the
+    /// existence. Field for field this produced the same image the memset did; the
+    /// three `init_fills_*` tests are unmodified across that change and are the
     /// proof, since they assert what `InitFunctionPointers` writes on top of it.
+    ///
+    /// **The table is no longer uniformly uninstalled**, and the twenty-nine slots
+    /// below that name a kernel are why. They were `Option<fn>` because
+    /// `WelsMallocz`'s all-zero image was the C++'s uninstalled table; but every
+    /// one of them is written unconditionally by an installer
+    /// (`WelsInitEncodingFuncs`, `WelsInitReconstructionFuncs`,
+    /// `InitIntraAnalysisVaaInfo`, `InitCoeffFunc`,
+    /// `InitFillNeighborCacheInterFunc`) that `InitFunctionPointers` calls on every
+    /// path, before any frame is touched — so `None` was a state no dispatch could
+    /// observe, and forty-one call sites nonetheless spelled the dispatch `if let
+    /// Some(f) = ..`, which *silently skips the call*. A `fn` has no null, so those
+    /// forty-one become unconditional calls and the shape stops being writable.
+    ///
+    /// Where an installer chooses between two kernels on a coding parameter —
+    /// `WelsInitBGDFunc`, `WelsInitSCDPskipFunc`, `InitFillNeighborCacheInterFunc`
+    /// — the flag picks *which*, never *whether*, so the slot is still always set.
+    /// `Default` names the **disabled** arm of each (`..PskipFalse`,
+    /// `..InfoNULL`, `..WithoutBGD`): a table nobody has configured yet should
+    /// read as "this feature is off", not as "background detection is on".
+    ///
+    /// The slots that keep their `Option` are the ones where absence is real: the
+    /// predictor and motion-search **arrays** (indexed by a mode the table does not
+    /// fill densely), the screen-content and background-detection slots that only
+    /// some configurations install, the per-frame `pfIntraFineMd` / `pfInterMd`
+    /// that `SetFastCodingFunc` re-aims, and `pParametersetStrategy`, whose `None`
+    /// is a construction *failure* this function's caller turns into
+    /// `ENC_RETURN_MEMALLOCERR`.
+    ///
+    /// Each of those twenty-nine slots now has two writers — this constructor and
+    /// the upstream installer that runs over the top — and **no test asserts they
+    /// agree**, deliberately. Such a test can only compare the constructor with
+    /// itself: it would name the same kernels this does, and for the ten slots
+    /// backed by `#[inline]` kernels it would not even do that, since an
+    /// `#[inline]` function's address is per-codegen-unit. What a wrong kernel in
+    /// either writer actually breaks is the encoded bitstream, and the diffharness
+    /// sweeps are what say it does not.
     fn default() -> Self {
         Self {
-            pfFillInterNeighborCache: None,
-            pfGetVarianceFromIntraVaa: None,
-            pfGetMbSignFromInterVaa: None,
-            pfUpdateMbMv: None,
+            pfFillInterNeighborCache: crate::encoder::md::FillNeighborCacheInterWithoutBGD,
+            pfGetVarianceFromIntraVaa: crate::encoder::md::AnalysisVaaInfoIntra_c,
+            pfGetMbSignFromInterVaa: crate::encoder::md::MdInterAnalysisVaaInfo_c,
+            pfUpdateMbMv: crate::encoder::md::UpdateMbMv_c,
             pfFirstIntraMode: None,
             pfIntraFineMd: None,
             pfInterFineMd: None,
             pfInterMd: None,
-            pfInterMdBackgroundDecision: None,
-            pfMdBackgroundInfoUpdate: None,
-            pfSCDPSkipDecision: None,
+            pfInterMdBackgroundDecision: crate::encoder::svc_mode_decision::WelsMdInterJudgeBGDPskipFalse,
+            pfMdBackgroundInfoUpdate: crate::encoder::svc_mode_decision::WelsMdUpdateBGDInfoNULL,
+            pfSCDPSkipDecision: crate::encoder::svc_mode_decision::WelsMdInterJudgeSCDPskipFalse,
             pfSetScrollingMv: None,
             sMcFuncs: SMcFunc::default(),
             sSampleDealingFuncs: SSampleDealingFunc::default(),
@@ -546,35 +582,36 @@ impl Default for SWelsFuncPtrList {
             pfFillQpelLocationByFeatureValue: None,
             pfCalculateBlockFeatureOfFrame: [None; 2],
             pfUpdateFMESwitch: None,
-            pfCopy16x16Aligned: None,
-            pfCopy16x16NotAligned: None,
-            pfCopy8x8Aligned: None,
-            pfCopy16x8NotAligned: None,
-            pfCopy8x16Aligned: None,
-            pfCopy4x4: None,
-            pfCopy8x4: None,
-            pfCopy4x8: None,
-            pfDctT4: None,
-            pfDctFourT4: None,
-            pfCalculateSingleCtr4x4: None,
-            pfScan4x4: None,
-            pfScan4x4Ac: None,
-            pfQuantization4x4: None,
-            pfQuantizationFour4x4: None,
-            pfQuantizationDc4x4: None,
-            pfQuantizationFour4x4Max: None,
-            pfQuantizationHadamard2x2: None,
-            pfQuantizationHadamard2x2Skip: None,
-            pfTransformHadamard4x4Dc: None,
-            pfGetNoneZeroCount: None,
-            pfDequantization4x4: None,
-            pfDequantizationFour4x4: None,
-            pfDequantizationIHadamard4x4: None,
+            pfCopy16x16Aligned: crate::encoder::encode_mb_aux::WelsCopy16x16_c,
+            pfCopy16x16NotAligned: crate::encoder::encode_mb_aux::WelsCopy16x16_c,
+            pfCopy8x8Aligned: crate::encoder::encode_mb_aux::WelsCopy8x8_c,
+            pfCopy16x8NotAligned: crate::encoder::encode_mb_aux::WelsCopy16x8_c,
+            pfCopy8x16Aligned: crate::encoder::encode_mb_aux::WelsCopy8x16_c,
+            pfCopy4x4: crate::encoder::encode_mb_aux::WelsCopy4x4_c,
+            pfCopy8x4: crate::encoder::encode_mb_aux::WelsCopy8x4_c,
+            pfCopy4x8: crate::encoder::encode_mb_aux::WelsCopy4x8_c,
+            pfDctT4: crate::encoder::encode_mb_aux::WelsDctT4_c,
+            pfDctFourT4: crate::encoder::encode_mb_aux::WelsDctFourT4_c,
+            pfCalculateSingleCtr4x4: crate::encoder::encode_mb_aux::calculate_single_ctr_4x4,
+            pfScan4x4: crate::encoder::encode_mb_aux::scan_4x4_dc_ac,
+            pfScan4x4Ac: crate::encoder::encode_mb_aux::scan_4x4_ac,
+            pfQuantization4x4: crate::encoder::encode_mb_aux::quant_4x4,
+            pfQuantizationFour4x4: crate::encoder::encode_mb_aux::quant_four_4x4,
+            pfQuantizationDc4x4: crate::encoder::encode_mb_aux::quant_4x4_dc,
+            pfQuantizationFour4x4Max: crate::encoder::encode_mb_aux::quant_four_4x4_max,
+            pfQuantizationHadamard2x2: crate::encoder::encode_mb_aux::hadamard_quant_2x2,
+            pfQuantizationHadamard2x2Skip: crate::encoder::encode_mb_aux::hadamard_quant_2x2_skip,
+            pfTransformHadamard4x4Dc: crate::encoder::encode_mb_aux::hadamard_t4_dc,
+            pfGetNoneZeroCount: crate::encoder::encode_mb_aux::get_none_zero_count,
+            pfDequantization4x4: crate::encoder::decode_mb_aux::dequant_4x4,
+            pfDequantizationFour4x4: crate::encoder::decode_mb_aux::dequant_four_4x4,
+            pfDequantizationIHadamard4x4: crate::encoder::decode_mb_aux::dequant_ihadamard_4x4,
             pfDeblocking: DeblockingFunc::default(),
             pfRc: SWelsRcFunc::default(),
-            pfCavlcParamCal: None,
+            pfCavlcParamCal: crate::encoder::svc_set_mb_syn_cavlc::CavlcParamCal_c,
             eEntropyCoder: EntropyCoder::default(),
             pParametersetStrategy: None,
         }
     }
 }
+
