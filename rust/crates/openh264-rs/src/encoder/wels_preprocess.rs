@@ -1313,8 +1313,8 @@ impl CWelsPreProcess {
         }
 
         if pCtx.vaa().is_some() {
-            pCtx.vaa_mut().expect("the frame's video-analysis block").bSceneChangeFlag = false;
-            pCtx.vaa_mut().expect("the frame's video-analysis block").bIdrPeriodFlag = false;
+            pCtx.vaa_expect_mut().bSceneChangeFlag = false;
+            pCtx.vaa_expect_mut().bIdrPeriodFlag = false;
         }
 
         // The `pScaledPic` argument stood here — `addr_of_mut!(self.m_sScaledPicture)`
@@ -1356,9 +1356,7 @@ impl CWelsPreProcess {
 
         if uiIntraPeriod != 0 && pCtx.vaa().is_some() {
             let iFrameIndex = pCtx.param().sDependencyLayers[depIdx].iFrameIndex;
-            pCtx.vaa_mut()
-                .expect("the frame's video-analysis block")
-                .bIdrPeriodFlag = (1 + iFrameIndex) >= uiIntraPeriod as i32;
+            pCtx.vaa_expect_mut().bIdrPeriodFlag = (1 + iFrameIndex) >= uiIntraPeriod as i32;
         }
 
         *pSpatialNum = 0;
@@ -1405,15 +1403,15 @@ impl CWelsPreProcess {
             false,
         );
 
-        if pCtx.param().bEnableSceneChangeDetect && pCtx.vaa().is_some() && !pCtx.vaa().expect("the frame's video-analysis block").bIdrPeriodFlag {
+        if pCtx.param().bEnableSceneChangeDetect && pCtx.vaa().is_some() && !pCtx.vaa_expect().bIdrPeriodFlag {
             if pCtx.param().iUsageType == EUsageType::SCREEN_CONTENT_REAL_TIME {
                 let idc = if pCtx.param().sDependencyLayers[depIdx].bEncCurFrmAsIdrFlag {
                     ESceneChangeIdc::LARGE_CHANGED_SCENE
                 } else {
                     self.DetectSceneChange(pCtx, pDstPic, None)
                 };
-                pCtx.vaa_mut().expect("the frame's video-analysis block").eSceneChangeIdc = idc;
-                pCtx.vaa_mut().expect("the frame's video-analysis block").bSceneChangeFlag = idc == ESceneChangeIdc::LARGE_CHANGED_SCENE;
+                pCtx.vaa_expect_mut().eSceneChangeIdc = idc;
+                pCtx.vaa_expect_mut().bSceneChangeFlag = idc == ESceneChangeIdc::LARGE_CHANGED_SCENE;
             } else if !pCtx.param().sDependencyLayers[depIdx].bEncCurFrmAsIdrFlag
                 && (pCtx.param().sDependencyLayers[depIdx].iCodingIndex
                     & (pCtx.param().uiGopSize as i32 - 1))
@@ -1421,14 +1419,14 @@ impl CWelsPreProcess {
             {
                 let pRefPic = if ctx_ltr_at(pCtx, depIdx).bReceivedT0LostFlag {
                     let pos = self.m_uiSpatialLayersInTemporal[depIdx] as usize
-                        + pCtx.vaa().expect("the frame's video-analysis block").uiValidLongTermPicIdx as usize;
+                        + pCtx.vaa_expect().uiValidLongTermPicIdx as usize;
                     self.m_pSpatialPic[depIdx][pos]
                 } else {
                     self.m_pLastSpatialPicture[depIdx][0]
                 };
                 let pRefPic = pRefPic.map(SrcPicRef::Pooled);
                 let idc = self.DetectSceneChange(pCtx, pDstPic, pRefPic);
-                pCtx.vaa_mut().expect("the frame's video-analysis block").bSceneChangeFlag = self.GetSceneChangeFlag(idc);
+                pCtx.vaa_expect_mut().bSceneChangeFlag = self.GetSceneChangeFlag(idc);
             }
         }
 
@@ -1542,7 +1540,7 @@ impl CWelsPreProcess {
             && ctx_ltr_at(pCtx, uiDidForLtr).bReceivedT0LostFlag
         {
             iRefTemporalIdx = self.m_uiSpatialLayersInTemporal[dIdx] as i32
-                + pCtx.vaa().expect("the frame's video-analysis block").uiValidLongTermPicIdx as i32;
+                + pCtx.vaa_expect().uiValidLongTermPicIdx as i32;
         }
 
         let pCurPic = self.m_pSpatialPic[dIdx][iCurTemporalIdx as usize];
@@ -1618,15 +1616,15 @@ impl CWelsPreProcess {
 
         if crate::encoder::dump_enabled(&VP_DUMP, "OH264_VPDUMP")
             && pCtx.eSliceType == EWelsSliceType::P_SLICE
-            && !pCtx.vaa().expect("the frame's video-analysis block").pVaaBackgroundMbFlag.is_empty()
-            && !pCtx.vaa().expect("the frame's video-analysis block").sVaaCalcInfo.pSad8x8.is_empty()
-            && !pCtx.vaa().expect("the frame's video-analysis block").sVaaCalcInfo.pSumOfDiff8x8.is_empty()
-            && !pCtx.vaa().expect("the frame's video-analysis block").sVaaCalcInfo.pMad8x8.is_empty()
-            && !pCtx.vaa().expect("the frame's video-analysis block").sVaaCalcInfo.pSsd16x16.is_empty()
-            && !pCtx.vaa().expect("the frame's video-analysis block").sVaaCalcInfo.pSum16x16.is_empty()
-            && !pCtx.vaa().expect("the frame's video-analysis block").sVaaCalcInfo.pSumOfSquare16x16.is_empty()
+            && !pCtx.vaa_expect().pVaaBackgroundMbFlag.is_empty()
+            && !pCtx.vaa_expect().sVaaCalcInfo.pSad8x8.is_empty()
+            && !pCtx.vaa_expect().sVaaCalcInfo.pSumOfDiff8x8.is_empty()
+            && !pCtx.vaa_expect().sVaaCalcInfo.pMad8x8.is_empty()
+            && !pCtx.vaa_expect().sVaaCalcInfo.pSsd16x16.is_empty()
+            && !pCtx.vaa_expect().sVaaCalcInfo.pSum16x16.is_empty()
+            && !pCtx.vaa_expect().sVaaCalcInfo.pSumOfSquare16x16.is_empty()
         {
-            let v = pCtx.vaa().expect("the frame's video-analysis block");
+            let v = pCtx.vaa_expect();
             let sCurGeom = self
                 .m_pSpatialPicPool
                 .get_mut(pCurPic.expect("the spatial pool is allocated"))
@@ -1755,7 +1753,7 @@ impl CWelsPreProcess {
             }
             if pCtx.bRefOfCurTidIsLtr[dIdx][iCurTid as usize] {
                 let kiAvailableLtrPos = self.m_uiSpatialLayersInTemporal[dIdx] as usize
-                    + pCtx.vaa().expect("the frame's video-analysis block").uiMarkLongTermPicIdx as usize;
+                    + pCtx.vaa_expect().uiMarkLongTermPicIdx as usize;
                 Self::WelsExchangeSpatialPictures(
                     &mut self.m_pSpatialPic[dIdx],
                     kiAvailableLtrPos,

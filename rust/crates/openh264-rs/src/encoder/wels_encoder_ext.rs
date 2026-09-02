@@ -400,9 +400,9 @@ pub fn WelsWriteOneSPS(pCtx: &mut sWelsEncCtx, kiSpsIdx: i32, iNalSize: &mut i32
     // borrows are transient, so the `ParasetStrategy(pCtx)` claim and the
     // `frame_bs_cur()` read in between conflict with nothing. §4.6: the parameter
     // set and the strategy's offset-list argument are hoisted out first.
-    let iNal = pCtx.pOut.as_deref().expect("pOut lives").iNalIndex;
+    let iNal = pCtx.out().iNalIndex;
     crate::encoder::nal_encap::WelsLoadNal(
-        pCtx.pOut.as_deref_mut().expect("pOut lives"),
+        pCtx.out_mut(),
         crate::encoder::nal_encap::EWelsNalUnitType::NAL_UNIT_SPS as i32,
         NRI_PRI_HIGHEST as i32,
     );
@@ -421,7 +421,7 @@ pub fn WelsWriteOneSPS(pCtx: &mut sWelsEncCtx, kiSpsIdx: i32, iNalSize: &mut i32
             pSpsIdOffsetList,
         );
     }
-    crate::encoder::nal_encap::WelsUnloadNal(pCtx.pOut.as_deref_mut().expect("pOut lives"));
+    crate::encoder::nal_encap::WelsUnloadNal(pCtx.out_mut());
 
     // The nal/buffer arguments and the frame-bs arguments are all shared reads or
     // raws off disjoint storage; the two `as_deref()`s and `frame_bs_cur()` are
@@ -451,10 +451,10 @@ pub fn WelsWriteOneSPS(pCtx: &mut sWelsEncCtx, kiSpsIdx: i32, iNalSize: &mut i32
 /// `WelsWriteOnePPS` — encoder_ext.cpp:2849.
 pub fn WelsWriteOnePPS(pCtx: &mut sWelsEncCtx, kiPpsIdx: i32, iNalSize: &mut i32) -> i32 {
     // S3.B1: as `WelsWriteOneSPS` — per-statement reborrows, arguments hoisted.
-    let iNal = pCtx.pOut.as_deref().expect("pOut lives").iNalIndex;
+    let iNal = pCtx.out().iNalIndex;
     /* generate picture parameter set */
     crate::encoder::nal_encap::WelsLoadNal(
-        pCtx.pOut.as_deref_mut().expect("pOut lives"),
+        pCtx.out_mut(),
         crate::encoder::nal_encap::EWelsNalUnitType::NAL_UNIT_PPS as i32,
         NRI_PRI_HIGHEST as i32,
     );
@@ -473,7 +473,7 @@ pub fn WelsWriteOnePPS(pCtx: &mut sWelsEncCtx, kiPpsIdx: i32, iNalSize: &mut i32
             pStrategy,
         );
     }
-    crate::encoder::nal_encap::WelsUnloadNal(pCtx.pOut.as_deref_mut().expect("pOut lives"));
+    crate::encoder::nal_encap::WelsUnloadNal(pCtx.out_mut());
 
     // **S11.17**: destructured — the NAL entry and source bytes are in
     // `pOut`, the destination is `pFrameBs`'s tail; disjoint fields, both
@@ -547,10 +547,7 @@ pub fn WelsWriteParameterSets(
 
         WelsWriteOneSPS(pCtx, iId, &mut iNalLength);
 
-        pCtx.pOut
-            .as_deref()
-            .expect("pOut lives")
-            .set_nal_len_at(iCountNal as usize, iNalLength);
+        pCtx.out().set_nal_len_at(iCountNal as usize, iNalLength);
         iSize += iNalLength;
 
         iIdx += 1;
@@ -560,7 +557,7 @@ pub fn WelsWriteParameterSets(
     /* write all Subset SPS */
     iIdx = 0;
     while iIdx < pCtx.iSubsetSpsNum {
-        iNal = pCtx.pOut.as_deref().expect("pOut lives").iNalIndex;
+        iNal = pCtx.out().iNalIndex;
 
         // **S7.A3**, as the SPS loop above.
         let uiSpsId = pCtx.subset_array()[iIdx as usize].pSps.uiSpsId;
@@ -570,7 +567,7 @@ pub fn WelsWriteParameterSets(
 
         /* generate Subset SPS */
         crate::encoder::nal_encap::WelsLoadNal(
-            pCtx.pOut.as_deref_mut().expect("pOut lives"),
+            pCtx.out_mut(),
             crate::encoder::nal_encap::EWelsNalUnitType::NAL_UNIT_SUBSET_SPS as i32,
             NRI_PRI_HIGHEST as i32,
         );
@@ -590,7 +587,7 @@ pub fn WelsWriteParameterSets(
                 pSpsIdOffsetList,
             );
         }
-        crate::encoder::nal_encap::WelsUnloadNal(pCtx.pOut.as_deref_mut().expect("pOut lives"));
+        crate::encoder::nal_encap::WelsUnloadNal(pCtx.out_mut());
 
         // **S11.17**: destructured — the NAL entry and source bytes are in
         // `pOut`, the destination is `pFrameBs`'s tail; disjoint fields, both
@@ -609,10 +606,7 @@ pub fn WelsWriteParameterSets(
         if iReturn != ENC_RETURN_SUCCESS {
             return iReturn;
         }
-        pCtx.pOut
-            .as_deref()
-            .expect("pOut lives")
-            .set_nal_len_at(iCountNal as usize, iNalLength);
+        pCtx.out().set_nal_len_at(iCountNal as usize, iNalLength);
 
         pCtx.iPosBsBuffer += iNalLength;
         iSize += iNalLength;
@@ -637,10 +631,7 @@ pub fn WelsWriteParameterSets(
 
         WelsWriteOnePPS(pCtx, iIdx, &mut iNalLength);
 
-        pCtx.pOut
-            .as_deref()
-            .expect("pOut lives")
-            .set_nal_len_at(iCountNal as usize, iNalLength);
+        pCtx.out().set_nal_len_at(iCountNal as usize, iNalLength);
         iSize += iNalLength;
 
         iIdx += 1;
@@ -668,7 +659,7 @@ pub fn WelsEncoderEncodeParameterSetsRust(
     {
         // S11.47: the frame's first layer starts at entry 0 of `pOut.sNalLen`;
         // the ABI pointer is that position, resliced.
-        let pOut = pCtx.pOut.as_deref_mut().expect("pOut lives");
+        let pOut = pCtx.out_mut();
         pOut.iNalLenBase = 0;
         pLayerBsInfo.pNalLengthInByte = pOut.nal_len_ptr();
     }
@@ -677,7 +668,7 @@ pub fn WelsEncoderEncodeParameterSetsRust(
     // did that still means anything. Its `kpBuf: *const u8` parameter — stored as
     // `pStartBuf: *mut u8` and written through — is deleted rather than amended
     // (`phase2_findings.md` F13, third site).
-    pCtx.pOut.as_deref_mut().expect("pOut lives").sBsWrite = crate::encoder::vlc_encoder::BsWriter::new();
+    pCtx.out_mut().sBsWrite = crate::encoder::vlc_encoder::BsWriter::new();
     pCtx.iPosBsBuffer = 0;
 
     let mut iCountNal = 0;

@@ -1450,8 +1450,7 @@ pub extern "C" fn PerformDeblockingFilter(pEnc: &mut sWelsEncCtx) {
     // answered null before any layer is stamped and this body dereferenced it
     // unconditionally; the `expect` states that same precondition instead of
     // deferring it to a fault.
-    let pCurDq = crate::encoder::svc_encode_slice::current_layer_mut(pEnc)
-        .expect("the frame's current layer is stamped");
+    let pCurDq = crate::encoder::svc_encode_slice::current_layer_expect_mut(pEnc);
 
     if pCurDq.iLoopFilterDisableIdc == 0 {
         DeblockingFilterFrameAvcbase(pCurDq);

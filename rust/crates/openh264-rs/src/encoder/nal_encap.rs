@@ -345,7 +345,7 @@ pub fn WelsLoadNal(
     kiNalRefIdc: i32,
 ) {
     // **S6.C1**: `&mut`, and no call site changed — all nine already passed
-    // `pCtx.pOut.as_deref_mut().expect("pOut lives")` or `&mut *pOut` and were relying
+    // `pCtx.out_mut()` or `&mut *pOut` and were relying
     // on the coercion. The `is_null()` disjunct goes with the parameter; the
     // `sNalList.is_empty()` one is the real guard and stays, answering for a list the
     // allocator never sized.

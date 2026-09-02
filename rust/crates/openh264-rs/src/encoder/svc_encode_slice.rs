@@ -718,6 +718,45 @@ pub fn current_layer_mut(pCtx: &mut sWelsEncCtx) -> Option<&mut SDqLayer> {
     pCtx.ppDqLayerList.get_mut(idx.get())?.as_deref_mut()
 }
 
+/// The current layer, **for the 86 readers that do not ask** — the frame loop's
+/// `pCtx->pCurDqLayer`, dereferenced exactly as the C++ dereferenced it.
+///
+/// **Why this is a third name and not [`current_layer_ref`]'s.** The split here
+/// is 86 unconditional reads against 24 sites that keep the `Option`, and the 24
+/// are two different things: 16 genuinely ask (`is_none()` early-outs in
+/// `ref_list_mgr_svc.rs` and `slice_multi_threading.rs`, `let Some(..) else` in
+/// `WelsISliceMdEnc`'s caller), and 8 hand the `Option` onward to a callee whose
+/// parameter *is* `Option<&SDqLayer>` (`SetSliceBoundaryInfo`,
+/// `WelsMdInterMbRefinement`'s cost helpers). So [`current_layer_ref`] keeps its
+/// name and its shape for all 24, and the unconditional readers take this one —
+/// [`sWelsEncCtx::param`]'s ruling, at a third the call count.
+///
+/// # Panics
+/// If no layer is stamped for the frame — `iCurDqLayer` unset, or the list not
+/// built by `InitDqLayers`. Every caller of this accessor dereferenced
+/// `pCurDqLayer` without asking, so the panic replaces a null dereference, not a
+/// branch; the callers that *do* ask keep asking, through [`current_layer_ref`].
+#[inline]
+pub fn current_layer_expect(pCtx: &sWelsEncCtx) -> &SDqLayer {
+    current_layer_ref(pCtx).expect("the frame's current layer is stamped")
+}
+
+/// [`current_layer_expect`] mutably — the 52 writers that stamp the layer.
+///
+/// **Single-threaded only, and the type says so.** A `&mut sWelsEncCtx` cannot
+/// exist while the fork is live (every worker holds `&sWelsEncCtx`), so this
+/// accessor is unavailable in exactly the place a `&mut SDqLayer` would be a
+/// race — the argument [`current_layer_mut`] already carries, unchanged by
+/// moving the `expect` off the call sites.
+///
+/// # Panics
+/// As [`current_layer_expect`]; the five asking callers keep
+/// [`current_layer_mut`].
+#[inline]
+pub fn current_layer_expect_mut(pCtx: &mut sWelsEncCtx) -> &mut SDqLayer {
+    current_layer_mut(pCtx).expect("the frame's current layer is stamped")
+}
+
 /// Make `kIdx` the current layer — the setter half of [`current_layer`], and the
 /// only writer of `sWelsEncCtx::iCurDqLayer`.
 ///
@@ -919,6 +958,38 @@ pub fn layer_ref_pic<'a>(
     Some(pCtx.ref_list(did)?.pic(id))
 }
 
+/// [`layer_ref_pic`] for the eight readers that **do not ask** — the motion-search
+/// and mode-decision bodies that run only on an inter macroblock, where a
+/// reference picture is bound by construction.
+///
+/// **Why both forms exist.** 8 sites dereference unconditionally; 5 keep the
+/// `Option` — four `map_or` defaults in `svc_base_layer_md.rs` /
+/// `svc_mode_decision.rs` that stand in for "no reference yet", and one that
+/// hands the `Option` to a callee typed for it. That is a real branch on each of
+/// the five, so [`layer_ref_pic`] keeps its name and its shape.
+///
+/// The `'a` is [`layer_ref_pic`]'s and is spelled out for the same reason: the
+/// borrow is the **context's**, not the layer's, and elision would retie it to
+/// `pCtx` only by accident of argument order.
+///
+/// # Panics
+/// If the layer has no reference picture bound — before the first inter frame,
+/// or on a layer not yet stamped for a frame. Every caller of this accessor
+/// dereferenced the answer without asking, so the panic replaces a null
+/// dereference, not a branch; the five that *do* ask keep [`layer_ref_pic`].
+///
+/// # Safety
+/// As [`layer_ref_pic`]: the layer must be stamped for the frame in progress,
+/// and the caller must not hold the result across a call that resolves another
+/// handle in the same pool.
+#[inline]
+pub fn layer_ref_pic_expect<'a>(
+    pCtx: &'a sWelsEncCtx,
+    pLayer: &SDqLayer,
+) -> &'a SPicture {
+    layer_ref_pic(pCtx, pLayer).expect("the layer's reference picture is bound")
+}
+
 /// The reference picture's screen-content feature storage, resolved per call —
 /// **the dormant Phase-10 pointer's home** after the `sRefPicView` harvest
 /// (E3): the pointer lives on `SPicture` and this is the one place the
@@ -997,6 +1068,33 @@ pub fn layer_rec_view<'a>(
     (*pLayer).pRecView.as_ref()
 }
 
+/// [`layer_rec_view`] for the 24 readers that **do not ask** — every consumer
+/// inside a frame, where `WelsInitCurrentLayer` has already stamped the view.
+///
+/// **Why both forms exist.** 24 sites dereference unconditionally; 2 ask, both
+/// in `slice_multi_threading.rs`, where the deblocking call is skipped entirely
+/// when no view is bound (`if let Some(view) = ..`). Deleting that branch would
+/// deblock a frame that has no reconstruction planes, so [`layer_rec_view`]
+/// keeps its name and its shape.
+///
+/// The `'a` is [`layer_rec_view`]'s: the borrow is the **layer's**, and there is
+/// no second reference here for elision to retie it to.
+///
+/// # Panics
+/// If no frame has started, or the picture is unbound. Every caller of this
+/// accessor dereferenced the answer without asking, so the panic replaces a null
+/// dereference, not a branch; the two that *do* ask keep [`layer_rec_view`].
+///
+/// # Safety
+/// As [`layer_rec_view`]: the layer must be stamped by `WelsInitCurrentLayer`,
+/// and the frame it stamped must still be the frame in progress.
+#[inline]
+pub fn layer_rec_view_expect<'a>(
+    pLayer: &'a SDqLayer,
+) -> &'a crate::encoder::rec_view::RecPicView {
+    layer_rec_view(pLayer).expect("the layer's reconstruction view is built for this frame")
+}
+
 /// The layer's **reference** planes as a shared view — the read-only twin of
 /// [`layer_enc_view`], built on demand rather than stamped.
 ///
@@ -1033,6 +1131,33 @@ pub fn layer_ref_view(
     Some(crate::encoder::rec_view::RoPicView::build(layer_ref_pic(pCtx, pLayer)?))
 }
 
+/// [`layer_ref_view`] for all 17 of its readers, which **none of them ask**.
+///
+/// **Why both forms exist even so.** Every call site is an unconditional
+/// dereference — the view feeds a `PSampleSadSatdCostFunc` slot on a path that
+/// has already selected an inter macroblock. The `Option` form stays beside it
+/// because the absence it reports is [`layer_ref_pic`]'s, which 5 sites *do*
+/// ask about; a future consumer that needs the question should find it typed
+/// rather than reinvent a `map_or`.
+///
+/// No `'a`: [`layer_ref_view`] returns a value, not a borrow — `RoPicView` is
+/// three plane headers built on the spot.
+///
+/// # Panics
+/// If the layer has no reference picture bound. Every caller of this accessor
+/// dereferenced the answer without asking, so the panic replaces a null
+/// dereference, not a branch.
+///
+/// # Safety
+/// As [`layer_ref_pic`]: the layer must be stamped for the frame in progress.
+#[inline]
+pub fn layer_ref_view_expect(
+    pCtx: &sWelsEncCtx,
+    pLayer: &SDqLayer,
+) -> crate::encoder::rec_view::RoPicView {
+    layer_ref_view(pCtx, pLayer).expect("the layer's reference view is built for this frame")
+}
+
 /// The frame's source planes, as `layer_rec_view` is its reconstruction planes.
 ///
 /// `None` on a layer whose frame has not been bound yet — the same state
@@ -1042,6 +1167,27 @@ pub fn layer_enc_view<'a>(
     pLayer: &'a SDqLayer,
 ) -> Option<&'a crate::encoder::rec_view::RoPicView> {
     (*pLayer).pEncView.as_ref()
+}
+
+/// [`layer_enc_view`] for all 28 of its readers, which **none of them ask**.
+///
+/// **Why both forms exist even so.** Every call site is inside a frame, past the
+/// bind that `pEncData`'s null roots used to stand for, and dereferences the
+/// answer. The `Option` form keeps its name beside this one so the unbound state
+/// still has a type — it is the same state [`layer_rec_view`] reports, and two
+/// sites there genuinely branch on it.
+///
+/// The `'a` is [`layer_enc_view`]'s: the borrow is the **layer's**.
+///
+/// # Panics
+/// If the layer's frame has not been bound yet. Every caller of this accessor
+/// dereferenced the answer without asking, so the panic replaces a null
+/// dereference, not a branch.
+#[inline]
+pub fn layer_enc_view_expect<'a>(
+    pLayer: &'a SDqLayer,
+) -> &'a crate::encoder::rec_view::RoPicView {
+    layer_enc_view(pLayer).expect("the layer's source view is built for this frame")
 }
 
 // `layer_dec_pic_mut` stood here, and **F73 was its name**. It handed out
@@ -2035,8 +2181,7 @@ pub fn WelsSliceHeaderExtWrite(
 pub fn WelsIMbChromaEncode(pEncCtx: &sWelsEncCtx, pCurMb: &mut SMB, pMbCache: &mut SMbCache) {
     // S10.15: the layer is only read here — `current_layer_ref`, not the
     // fork-shared raw.
-    let pCurLayer = current_layer_ref(pEncCtx)
-        .expect("the frame's current layer is stamped");
+    let pCurLayer = current_layer_expect(pEncCtx);
     let kiEncStride = (*pCurLayer).iEncStride[1];
     // `kiCsStride` stood here: the reconstruction stride, read for the two
     // `pfIDctFourT4` calls alone. T9.C2 gave those calls the seam's cursor, which
@@ -2051,8 +2196,7 @@ pub fn WelsIMbChromaEncode(pEncCtx: &sWelsEncCtx, pCurMb: &mut SMB, pMbCache: &m
     // **T9.C2**: `pCsCb`/`pCsCr` — two raw cursors into the reconstruction
     // chroma planes — are the seam's two plane views plus this macroblock's
     // chroma origin, which `SPicData`'s `iMbX`/`iMbY` carrier already holds.
-    let view_chroma = layer_rec_view(&*pCurLayer)
-        .expect("the layer's reconstruction view is built for this frame");
+    let view_chroma = layer_rec_view_expect(&*pCurLayer);
     let (kiChrOrgX, kiChrOrgY) = (*pMbCache).SPicData.chroma_origin();
 
     // This previously ran both DCTs and then both IDCTs, omitting the two
@@ -2062,8 +2206,7 @@ pub fn WelsIMbChromaEncode(pEncCtx: &sWelsEncCtx, pCurMb: &mut SMB, pMbCache: &m
     // `pNonZeroCount[16..24]` stayed zero, so no chroma residual was ever coded.
     // S9.0: the source planes through the frame's read-only view; the strides the
     // raw form passed alongside now ride inside the cursors.
-    let encView = layer_enc_view(&*pCurLayer)
-        .expect("the layer's source view is built for this frame");
+    let encView = layer_enc_view_expect(&*pCurLayer);
     let pFunc = (*pEncCtx).func_list();
     let pfDctFourT4 = (*pFunc).pfDctFourT4.expect("pfDctFourT4 unset");
 
@@ -2103,8 +2246,7 @@ pub fn WelsIMbChromaEncode(pEncCtx: &sWelsEncCtx, pCurMb: &mut SMB, pMbCache: &m
 pub fn WelsPMbChromaEncode(pEncCtx: &sWelsEncCtx, pSlice: &mut SSlice, pCurMb: &mut SMB) {
     // S10.15: the layer is only read here — `current_layer_ref`, not the
     // fork-shared raw.
-    let pCurLayer = current_layer_ref(pEncCtx)
-        .expect("the frame's current layer is stamped");
+    let pCurLayer = current_layer_expect(pEncCtx);
     let kiEncStride = (*pCurLayer).iEncStride[1];
     let pMbCache = &mut pSlice.sMbCacheInfo;
     // **T9.D6**, as in `WelsIMbChromaEncode` — but note the base: this one starts at
@@ -2115,8 +2257,7 @@ pub fn WelsPMbChromaEncode(pEncCtx: &sWelsEncCtx, pSlice: &mut SSlice, pCurMb: &
 
     // S9.0: the source planes through the frame's read-only view; the strides the
     // raw form passed alongside now ride inside the cursors.
-    let encView = layer_enc_view(&*pCurLayer)
-        .expect("the layer's source view is built for this frame");
+    let encView = layer_enc_view_expect(&*pCurLayer);
     let pFunc = (*pEncCtx).func_list();
     let dct = (*pFunc).pfDctFourT4.expect("pfDctFourT4 unset");
     dct(
@@ -2160,8 +2301,7 @@ pub fn OutputPMbWithoutConstructCsRsNoCopy(pCtx: &sWelsEncCtx, pDq: Option<&SDqL
         // retag with `iCsStride`, and the view carries those same numbers —
         // `WelsInitCurrentLayer` stamps `iCsStride[i]` and the view's plane
         // stride from one `SPicture::stride(i)`.
-        let view = layer_rec_view(pDq)
-            .expect("the layer's reconstruction view is built for this frame");
+        let view = layer_rec_view_expect(pDq);
         let (lx, ly) = (*pMbCache).SPicData.luma_origin();
         let (cx, cy) = (*pMbCache).SPicData.chroma_origin();
 
@@ -2407,8 +2547,7 @@ pub fn WelsISliceMdEncDynamic(
     // **S7.A5**: the `is_null()` guard and its early return retire with the
     // parameter — every context reaching this body comes from a `&mut sWelsEncCtx`
     // held by one of the three fork entry points or the frame loop, never a null.
-    let pCurLayer = current_layer_ref(pEncCtx)
-        .expect("the frame's current layer is stamped");
+    let pCurLayer = current_layer_expect(pEncCtx);
     // S29: raw, not `&mut` — both of these are held across the macroblock loop,
     // whose callees derive their own borrows of the same fields. `sSliceEncCtx` is
     // the dynamic-slice probe's third red (session D): `WelsGetNextMbOfSlice` takes
@@ -2608,12 +2747,11 @@ pub fn WelsMdInterMbLoop<'a>(
 ) -> i32 {
     // **S7.A5**: the first arm retires with the parameter; the other four are live.
     // S11.27: the grid-emptiness arm reads the window, as in `WelsISliceMdEnc`.
-    if current_layer_ref(pEncCtx).is_none() || pMbs.stride() == 0 || current_layer_ref(pEncCtx).expect("the frame's current layer is stamped").iMbWidth <= 0 || current_layer_ref(pEncCtx).expect("the frame's current layer is stamped").iMbHeight <= 0 {
+    if current_layer_ref(pEncCtx).is_none() || pMbs.stride() == 0 || current_layer_expect(pEncCtx).iMbWidth <= 0 || current_layer_expect(pEncCtx).iMbHeight <= 0 {
         return ENC_RETURN_SUCCESS;
     }
     let pMd = pWelsMd;
-    let pCurLayer = current_layer_ref(pEncCtx)
-        .expect("the frame's current layer is stamped");
+    let pCurLayer = current_layer_expect(pEncCtx);
     // S29: raw, held across the MB loop (see `WelsISliceMdEnc`).
     let mut iNumMbCoded = 0;
     let mut iNextMbIdx = kiSliceFirstMbXY;
@@ -2703,8 +2841,7 @@ pub fn WelsMdInterMbLoop<'a>(
                     // `&mut Vec` borrows this used to take retagged both arrays whole,
                     // which is the shape no worker may hold under the fork.
                     crate::encoder::svc_base_layer_md::WelsMdInterSaveSadAndRefMbType(
-                        layer_rec_view(&*pCurLayer)
-                            .expect("the layer's reconstruction view is built for this frame"),
+                        layer_rec_view_expect(&*pCurLayer),
                         pMbs.cur(),
                         pMd,
                     );
@@ -2798,12 +2935,11 @@ pub fn WelsMdInterMbLoopOverDynamicSlice<'a>(
 ) -> i32 {
     // **S7.A5**: the first arm retires with the parameter; the other four are live.
     // S11.27: the grid-emptiness arm reads the window, as in `WelsISliceMdEnc`.
-    if current_layer_ref(pEncCtx).is_none() || pMbs.stride() == 0 || current_layer_ref(pEncCtx).expect("the frame's current layer is stamped").iMbWidth <= 0 || current_layer_ref(pEncCtx).expect("the frame's current layer is stamped").iMbHeight <= 0 {
+    if current_layer_ref(pEncCtx).is_none() || pMbs.stride() == 0 || current_layer_expect(pEncCtx).iMbWidth <= 0 || current_layer_expect(pEncCtx).iMbHeight <= 0 {
         return ENC_RETURN_SUCCESS;
     }
     let pMd = pWelsMd;
-    let pCurLayer = current_layer_ref(pEncCtx)
-        .expect("the frame's current layer is stamped");
+    let pCurLayer = current_layer_expect(pEncCtx);
     // S29, both: held across the MB loop, whose callees re-derive the same fields.
     // See `WelsISliceMdEncDynamic` for `sSliceEncCtx`'s red and its invalidator.
     let mut iNumMbCoded = 0;
@@ -2898,8 +3034,7 @@ pub fn WelsMdInterMbLoopOverDynamicSlice<'a>(
             {
                 // As above.
                 crate::encoder::svc_base_layer_md::WelsMdInterSaveSadAndRefMbType(
-                    layer_rec_view(pCurLayer)
-                        .expect("the layer's reconstruction view is built for this frame"),
+                    layer_rec_view_expect(pCurLayer),
                     pMbs.cur(),
                     pMd,
                 );
@@ -3080,8 +3215,7 @@ pub fn WelsCodePSlice(
 ) -> i32 {
     // S10.15: the layer is only read here — `current_layer_ref`, not the
     // fork-shared raw.
-    let pCurLayer = current_layer_ref(pEncCtx)
-        .expect("the frame's current layer is stamped");
+    let pCurLayer = current_layer_expect(pEncCtx);
     // `svc_encode_slice.cpp:733/736` picks `pfInterMd` HERE, per slice, into the
     // shared function list — which under MT is every worker writing the same
     // bytes with no ordering (F132 round 7, the fixed-slice probe's verdict once
@@ -3107,8 +3241,7 @@ pub fn WelsCodePOverDynamicSlice(
 ) -> i32 {
     // S10.15: the layer is only read here — `current_layer_ref`, not the
     // fork-shared raw.
-    let pCurLayer = current_layer_ref(pEncCtx)
-        .expect("the frame's current layer is stamped");
+    let pCurLayer = current_layer_expect(pEncCtx);
     // `svc_encode_slice.cpp:750/753`, the dynamic-slicing twin of
     // `WelsCodePSlice` — same hoist, same reason (F132 round 7): the per-slice
     // `pfInterMd` stamp lives in `PreprocessSliceCoding` now.
@@ -3308,8 +3441,7 @@ pub fn WelsCodeOneSlice(
     // **S7.A5**: the `is_null()` guard and its early return retire with the
     // parameter — every context reaching this body comes from a `&mut sWelsEncCtx`
     // held by one of the three fork entry points or the frame loop, never a null.
-    let pCurLayer = current_layer_ref(pEncCtx)
-        .expect("the frame's current layer is stamped");
+    let pCurLayer = current_layer_expect(pEncCtx);
     // **S11.31: the held NAL-header cursor is two scalar reads.** S29 kept it
     // raw so it would survive the header writers' derivations; S10.3d recorded
     // that premise as looking expired but deferred to the full-encode probes,
@@ -3474,8 +3606,7 @@ pub fn AddSliceBoundary(
     // **S7.A5**: the context arm retired with that parameter; S11.30 retires the
     // `pSliceCtx.is_null()` arm the same way — a `&SSliceCtx` cannot be null,
     // and both callers derive it from the layer they already hold.
-    let pCurLayer = current_layer_ref(pEncCtx)
-        .expect("the frame's current layer is stamped");
+    let pCurLayer = current_layer_expect(pEncCtx);
     let iCurMbIdx = kiCurMbIdx;
     let iCurSliceIdc = {
         let map: &[AtomicU16] = &(*pSliceCtx).pOverallMbMap;
@@ -3529,7 +3660,7 @@ pub fn DynSlcJudgeSliceBoundaryStepBack(
     let iCurMbIdx = kiCurMbIdx;
     let kiActiveThreadsNum = (*pEncCtx).iActiveThreadsNum;
     let kiPartitionId = ((*pCurSlice).iSliceIdx % (kiActiveThreadsNum as i32)) as usize;
-    let kiEndMbIdxOfPartition = current_layer_ref(pEncCtx).expect("the frame's current layer is stamped").EndMbIdxOfPartition[kiPartitionId];
+    let kiEndMbIdxOfPartition = current_layer_expect(pEncCtx).EndMbIdxOfPartition[kiPartitionId];
 
     let kbCurMbNotFirstMbOfCurSlice = (iCurMbIdx > 0)
         && {
@@ -3766,7 +3897,7 @@ pub fn InitSliceList(
 /// `&mut sWelsEncCtx`; the raw walk was the borrow checker's job all along.
 /// `slice_in_layer_mut` answers the same `None` the null answered.
 pub fn InitAllSlicesInThread(pCtx: &mut sWelsEncCtx) -> i32 {
-    let pCurDqLayer = current_layer_mut(pCtx).expect("the frame's current layer is stamped");
+    let pCurDqLayer = current_layer_expect_mut(pCtx);
     for iSliceIdx in 0..pCurDqLayer.iMaxSliceNum {
         let Some(pSlice) = slice_in_layer_mut(pCurDqLayer, iSliceIdx) else {
             return ENC_RETURN_UNEXPECTED;
@@ -3775,7 +3906,7 @@ pub fn InitAllSlicesInThread(pCtx: &mut sWelsEncCtx) -> i32 {
     }
 
     for iSlcBuffIdx in 0..pCtx.iActiveThreadsNum {
-        current_layer_mut(pCtx).expect("the frame's current layer is stamped").sSliceBufferInfo[iSlcBuffIdx as usize].iCodedSliceNum = 0;
+        current_layer_expect_mut(pCtx).sSliceBufferInfo[iSlcBuffIdx as usize].iCodedSliceNum = 0;
     }
 
     ENC_RETURN_SUCCESS
@@ -4054,8 +4185,7 @@ pub fn CalculateNewSliceNum(
     }
 
     let iPartitionID = (kiLastCodedSliceIdx % ((*pCtx).iActiveThreadsNum as i32)) as usize;
-    let pCurLayer = current_layer_ref(pCtx)
-        .expect("the frame's current layer is stamped");
+    let pCurLayer = current_layer_expect(pCtx);
     let iMBNumInPartition = (*pCurLayer).EndMbIdxOfPartition[iPartitionID] - (*pCurLayer).FirstMbIdxOfPartition[iPartitionID] + 1;
     let iLeftMBNum = (*pCurLayer).EndMbIdxOfPartition[iPartitionID] - (*pCurLayer).LastCodedMbIdxOfPartition[iPartitionID].load(Ordering::Relaxed) + 1;
 
@@ -4177,7 +4307,7 @@ pub fn ReallocSliceBuffer(pCtx: &mut sWelsEncCtx) -> i32 {
     let kuiSliceMode =
         pCtx.param().sSpatialLayers[kiCurDid].sSliceArgument.uiSliceMode;
 
-    let pCurLayer = current_layer_mut(pCtx).expect("the frame's current layer is stamped");
+    let pCurLayer = current_layer_expect_mut(pCtx);
     let iMaxSliceNumOld = pCurLayer.sSliceBufferInfo[0].iMaxSliceNum;
     let mut iMaxSliceNumNew = 0;
 
@@ -4201,7 +4331,7 @@ pub fn ReallocSliceBuffer(pCtx: &mut sWelsEncCtx) -> i32 {
     let kbIndependenceBsBuffer = pCtx.param().iMultipleThreadIdc > 1
         && kuiSliceMode != SliceMode::SM_SINGLE_SLICE;
     let (kiNumRef0, kiGlobalQp) = (pCtx.iNumRef0 as u8, pCtx.iGlobalQp);
-    let pCurLayer = current_layer_mut(pCtx).expect("the frame's current layer is stamped");
+    let pCurLayer = current_layer_expect_mut(pCtx);
     iRet = ReallocateSliceList(
         kiMaxSliceBufferSize,
         kbIndependenceBsBuffer,
@@ -4214,21 +4344,21 @@ pub fn ReallocSliceBuffer(pCtx: &mut sWelsEncCtx) -> i32 {
     if iRet != ENC_RETURN_SUCCESS {
         return iRet;
     }
-    let pCurLayer = current_layer_mut(pCtx).expect("the frame's current layer is stamped");
+    let pCurLayer = current_layer_expect_mut(pCtx);
     pCurLayer.sSliceBufferInfo[0].iMaxSliceNum = iMaxSliceNumNew;
 
     iMaxSliceNumNew = 0;
     for iSlcBuffIdx in 0..pCtx.iActiveThreadsNum {
-        iMaxSliceNumNew += current_layer_ref(pCtx).expect("the frame's current layer is stamped").sSliceBufferInfo[iSlcBuffIdx as usize].iMaxSliceNum;
+        iMaxSliceNumNew += current_layer_expect(pCtx).sSliceBufferInfo[iSlcBuffIdx as usize].iMaxSliceNum;
     }
 
-    let kiMaxSliceNumOldLayer = current_layer_ref(pCtx).expect("the frame's current layer is stamped").iMaxSliceNum;
+    let kiMaxSliceNumOldLayer = current_layer_expect(pCtx).iMaxSliceNum;
     iRet = ExtendLayerBuffer(pCtx, kiMaxSliceNumOldLayer, iMaxSliceNumNew);
     if iRet != ENC_RETURN_SUCCESS {
         return iRet;
     }
 
-    let pCurLayer = current_layer_mut(pCtx).expect("the frame's current layer is stamped");
+    let pCurLayer = current_layer_expect_mut(pCtx);
     let SDqLayer { sSliceBufferInfo, ppSliceInLayer, iMaxSliceNum, .. } = &mut *pCurLayer;
     let mut iStartIdx = 0;
     for (iSlcBuffIdx, bank) in sSliceBufferInfo.iter().enumerate() {
@@ -4262,7 +4392,7 @@ pub fn CheckAllSliceBuffer(pCurLayer: &mut SDqLayer, kiCodedSliceNum: i32) -> i3
 /// are disjoint fields of one destructured `&mut SDqLayer`, so the interleaved
 /// stamp-and-index loop the raw cursor licensed is now the borrow checker's.
 pub fn ReOrderSliceInLayer(pCtx: &mut sWelsEncCtx, kuiSliceMode: SliceMode, kiThreadNum: i32) -> i32 {
-    let pCurLayer = current_layer_mut(pCtx).expect("the frame's current layer is stamped");
+    let pCurLayer = current_layer_expect_mut(pCtx);
     let mut iEncodeSliceNum = 0;
     let mut iUsedSliceNum = 0;
     let mut iNonUsedBufferNum = 0;
@@ -4313,7 +4443,7 @@ pub fn ReOrderSliceInLayer(pCtx: &mut sWelsEncCtx, kuiSliceMode: SliceMode, kiTh
         return ENC_RETURN_UNEXPECTED;
     }
 
-    CheckAllSliceBuffer(current_layer_mut(pCtx).expect("the frame's current layer is stamped"), iEncodeSliceNum)
+    CheckAllSliceBuffer(current_layer_expect_mut(pCtx), iEncodeSliceNum)
 }
 
 pub fn GetCurLayerNalCount(pCurDq: &mut SDqLayer, kiCodedSliceNum: i32) -> i32 {
@@ -4363,7 +4493,7 @@ pub fn FrameBsRealloc(
     // §4.6's reorder: the count is a scalar, so the `pOut` borrow ends on this line
     // and the `param()` reads below are free.
     let mut iCountNals =
-        pCtx.pOut.as_deref().expect("pOut lives").sNalList.len() as i32;
+        pCtx.out().sNalList.len() as i32;
     let spatial_layers = if pCtx.param_opt().is_some() { pCtx.param().iSpatialLayerNum } else { 1 };
     iCountNals += kiMaxSliceNumOld * (spatial_layers + if pCtx.bNeedPrefixNalFlag { 1 } else { 0 });
 
@@ -4372,7 +4502,7 @@ pub fn FrameBsRealloc(
     // is the same three steps and keeps the same guarantee, that the existing
     // `iCountNals` entries survive at their indices and the new tail is zeroed
     // (`WelsMallocz` zeroed it too).
-    let pOut = pCtx.pOut.as_deref_mut().expect("pOut lives");
+    let pOut = pCtx.out_mut();
     pOut.sNalList.resize(iCountNals as usize, SWelsNalRaw::default());
     pOut.sNalLen
         .resize_with(iCountNals as usize, || std::sync::atomic::AtomicI32::new(0));
@@ -4430,17 +4560,17 @@ pub fn SliceLayerInfoUpdate(
 ) -> i32 {
     let mut iMaxSliceNum = 0;
     for iSlcBuffIdx in 0..pCtx.iActiveThreadsNum {
-        iMaxSliceNum += current_layer_ref(pCtx).expect("the frame's current layer is stamped").sSliceBufferInfo[iSlcBuffIdx as usize].iMaxSliceNum;
+        iMaxSliceNum += current_layer_expect(pCtx).sSliceBufferInfo[iSlcBuffIdx as usize].iMaxSliceNum;
     }
 
-    if iMaxSliceNum > current_layer_ref(pCtx).expect("the frame's current layer is stamped").iMaxSliceNum {
+    if iMaxSliceNum > current_layer_expect(pCtx).iMaxSliceNum {
         // T9.G6: hoisted (shape B).
-        let iCurMaxSliceNum = current_layer_ref(pCtx).expect("the frame's current layer is stamped").iMaxSliceNum;
+        let iCurMaxSliceNum = current_layer_expect(pCtx).iMaxSliceNum;
         let iRet = ExtendLayerBuffer(pCtx, iCurMaxSliceNum, iMaxSliceNum);
         if iRet != ENC_RETURN_SUCCESS {
             return iRet;
         }
-        current_layer_mut(pCtx).expect("the frame's current layer is stamped").iMaxSliceNum = iMaxSliceNum;
+        current_layer_expect_mut(pCtx).iMaxSliceNum = iMaxSliceNum;
     }
 
     // T9.G6: hoisted (shape B).
@@ -4451,13 +4581,13 @@ pub fn SliceLayerInfoUpdate(
         return iRet;
     }
 
-    let iCodedSliceNum = GetCurrentSliceNum(current_layer_ref(pCtx).expect("the frame's current layer is stamped"));
-    pFbi.sLayerInfo[iLbi].iNalCount = GetCurLayerNalCount(current_layer_mut(pCtx).expect("the frame's current layer is stamped"), iCodedSliceNum);
+    let iCodedSliceNum = GetCurrentSliceNum(current_layer_expect(pCtx));
+    pFbi.sLayerInfo[iLbi].iNalCount = GetCurLayerNalCount(current_layer_expect_mut(pCtx), iCodedSliceNum);
     let iCodedNalCount = GetTotalCodedNalCount(pFbi);
 
-    if iCodedNalCount > pCtx.pOut.as_deref().expect("pOut lives").sNalList.len() as i32 {
+    if iCodedNalCount > pCtx.out().sNalList.len() as i32 {
         // T9.G6: hoisted (shape B).
-        let iCurMaxSliceNum = current_layer_ref(pCtx).expect("the frame's current layer is stamped").iMaxSliceNum;
+        let iCurMaxSliceNum = current_layer_expect(pCtx).iMaxSliceNum;
         iRet = FrameBsRealloc(pCtx, pFbi, iLbi, iCurMaxSliceNum);
         if iRet != ENC_RETURN_SUCCESS {
             return iRet;

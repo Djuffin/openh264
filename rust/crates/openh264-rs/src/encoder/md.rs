@@ -735,6 +735,7 @@ pub use crate::encoder::encoder_context::BLOCK_SIZE_ALL;
 pub use crate::encoder::svc_motion_estimate::PSample4SadCostFunc;
 use crate::encoder::rec_view::RecCursor;
 use crate::safe::plane::{PlaneCursor, PlaneCursorMut};
+use crate::encoder::svc_encode_slice::{current_layer_expect, layer_enc_view_expect, layer_ref_view_expect};
 pub use crate::encoder::svc_encode_slice::SDqLayer;
 pub use crate::encoder::wels_func_ptr_def::SWelsFuncPtrList;
 pub use crate::encoder::encoder_context::sWelsEncCtx;
@@ -1568,16 +1569,15 @@ pub extern "C" fn MeRefineFracPixel(
 
     let mut iHalfMvx = iMvx;
     let mut iHalfMvy = iMvy;
-    let pCurDqLayer = current_layer_ref(pEncCtx)
-        .expect("the frame's current layer is stamped");
+    let pCurDqLayer = current_layer_expect(pEncCtx);
 
     // The two blocks, by coordinate. `sMv` is quarter-pel here and the integer search
     // left `pRefMb` at its whole-sample part, so `>> 2` is the displacement.
     let kiBlockX = (*pMe).iCurMeBlockPixX as isize;
     let kiBlockY = (*pMe).iCurMeBlockPixY as isize;
-    let pEncPicture = layer_enc_view(&*pCurDqLayer).expect("the layer's source view is built for this frame");
+    let pEncPicture = layer_enc_view_expect(&*pCurDqLayer);
     let cEnc = pEncPicture.plane(0).cursor(kiBlockX, kiBlockY);
-    let pRefPicture = layer_ref_view(pEncCtx, &*pCurDqLayer).expect("the layer's reference view is built for this frame");
+    let pRefPicture = layer_ref_view_expect(pEncCtx, &*pCurDqLayer);
     let cRef = pRefPicture.plane(0).cursor(
         kiBlockX + ((iMvx as isize) >> 2),
         kiBlockY + ((iMvy as isize) >> 2),

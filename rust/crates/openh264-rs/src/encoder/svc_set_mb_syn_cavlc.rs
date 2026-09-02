@@ -677,7 +677,7 @@ pub fn WelsSpatialWriteMbSyn(
     // reborrow below.
     let kuiChromaQpIndexOffset = crate::encoder::svc_encode_slice::layer_pps_ref(
         pEncCtx,
-        crate::encoder::svc_encode_slice::current_layer_ref(pEncCtx).expect("the frame's current layer is stamped"),
+        crate::encoder::svc_encode_slice::current_layer_expect(pEncCtx),
     )
     .expect("the layer's PPS is stamped")
     .uiChromaQpIndexOffset;

@@ -1593,6 +1593,63 @@ impl sWelsEncCtx {
         self.pSvcParam.as_deref()
     }
 
+    /// The **encoder output block** — S3.B1, `pCtx->pOut`, and the frame's NAL
+    /// bookkeeping: the `sNalList` the writers load and unload, `iNalIndex`,
+    /// `iLayerBsIndex`, and the `sBsWrite` cursor. The field is
+    /// [`pOut`](Self::pOut), `Box`-built by `WelsInitEncoderExt` and dropped at
+    /// teardown.
+    ///
+    /// **Three accessors, because the sites ask two different questions.** 56 of
+    /// them dereference the answer unconditionally — until now spelled
+    /// `pCtx.pOut.as_deref().expect(..)` at the field itself, which is the shape a
+    /// missing accessor leaves behind; 2 ask whether the block is there at all
+    /// (`WelsUninitEncoderExt`'s `let Some(pOut) = .. else`, and the C-API's
+    /// `match` in `wels_encoder_ext.rs`). So the unconditional readers get a plain
+    /// reference and [`out_opt`](Self::out_opt) keeps the two guards' shape — the
+    /// same ruling [`param`](Self::param) took, at a fifth the call count.
+    ///
+    /// # Panics
+    /// If the output block is not built, which is to say `WelsInitEncoderExt` has
+    /// not run. Every caller of this accessor dereferenced the `Box` without
+    /// asking, so the panic replaces a null dereference, not a branch; the two
+    /// callers that *do* ask keep asking, through [`out_opt`](Self::out_opt).
+    #[inline]
+    pub fn out(&self) -> &SWelsEncoderOutput {
+        self.pOut
+            .as_deref()
+            .expect("the encoder output block is built by WelsInitEncoderExt")
+    }
+
+    /// [`out`](Self::out) for the writers — the NAL load/unload pairs in
+    /// `encoder_ext.rs` and `wels_encoder_ext.rs`, and the per-frame resets of
+    /// `iNalIndex` / `iLayerBsIndex` / `sBsWrite`.
+    ///
+    /// **Single-threaded only** — see [`rc_at_mut`](Self::rc_at_mut). A `&mut
+    /// sWelsEncCtx` cannot exist while the fork is live (every worker holds
+    /// `&sWelsEncCtx`), so this accessor is unavailable in exactly the place a
+    /// `&mut SWelsEncoderOutput` would be a race. That is the same measurement
+    /// [`pOut`](Self::pOut)'s own note records from the other side: the two
+    /// fork-reachable readers reach the block only on their main-thread-only arm.
+    ///
+    /// # Panics
+    /// As [`out`](Self::out).
+    #[inline]
+    pub fn out_mut(&mut self) -> &mut SWelsEncoderOutput {
+        self.pOut
+            .as_deref_mut()
+            .expect("the encoder output block is built by WelsInitEncoderExt")
+    }
+
+    /// [`out`](Self::out) **as the question the two guards ask** — "has the
+    /// output block been built yet, or has teardown already taken it?". Teardown
+    /// is why the question is real: `WelsUninitEncoderExt` drops the `Box` while
+    /// the context is still addressable, and the C-API's status query can arrive
+    /// on either side of that.
+    #[inline]
+    pub fn out_opt(&self) -> Option<&SWelsEncoderOutput> {
+        self.pOut.as_deref()
+    }
+
     /// The encoder's **kernel dispatch table** — T6.I1, `pCtx->pFuncList`, and
     /// never absent: the context owns the `Box` from its constructor on, which is
     /// why this is a plain `&` where `vaa` and `ref_list` are `Option`s. The
@@ -1658,6 +1715,49 @@ impl sWelsEncCtx {
     #[inline]
     pub fn vaa_mut(&mut self) -> Option<&mut SVAAFrameInfo> {
         self.pVaa.as_deref_mut()
+    }
+
+    /// [`vaa`](Self::vaa) for the 30 readers that **do not ask** — the analysis
+    /// consumers that run after the preprocessor has built the block and
+    /// dereference it exactly as the C++ dereferenced `pCtx->pVaa`.
+    ///
+    /// **Why this is a fourth name and not the plain one.** [`vaa`](Self::vaa)
+    /// and [`vaa_mut`](Self::vaa_mut) keep the `Option` and keep their names,
+    /// because the split here is not lopsided the way [`param`](Self::param)'s
+    /// is: 12 sites genuinely ask through this accessor and 6 more through
+    /// [`vaa_mut`](Self::vaa_mut) (`is_none()` / `is_some()` early-outs in
+    /// `ref_list_mgr_svc.rs` and `wels_preprocess.rs`, `is_some_and` in the IDR
+    /// decision, `if let Some(..)` around the preprocessor's own analysis calls),
+    /// and those guards are the *phase* question — has the preprocessor run for
+    /// this frame?
+    /// So the `Option` form stays where its callers can see it and the
+    /// unconditional readers take the `_expect` name instead.
+    ///
+    /// # Panics
+    /// If the analysis block is not built for this frame. Every caller of this
+    /// accessor dereferenced the answer without asking, so the panic replaces a
+    /// null dereference, not a branch; the twelve callers that *do* ask keep
+    /// asking, through [`vaa`](Self::vaa).
+    #[inline]
+    pub fn vaa_expect(&self) -> &SVAAFrameInfo {
+        self.pVaa.as_deref().expect("the frame's video-analysis block")
+    }
+
+    /// [`vaa_expect`](Self::vaa_expect) for the ten writers — the reference-list
+    /// managers and the preprocessor's own post-analysis stamping.
+    ///
+    /// **Single-threaded only** — see [`rc_at_mut`](Self::rc_at_mut). A `&mut
+    /// sWelsEncCtx` cannot exist while the fork is live, so this accessor is
+    /// unavailable in exactly the place a `&mut SVAAFrameInfo` would be a race;
+    /// in-fork the workers read the analysis the preprocessor wrote and never
+    /// write it back, which is [`vaa`](Self::vaa)'s own note.
+    ///
+    /// # Panics
+    /// As [`vaa_expect`](Self::vaa_expect); the six asking callers keep
+    /// [`vaa_mut`](Self::vaa_mut).
+    #[inline]
+    pub fn vaa_expect_mut(&mut self) -> &mut SVAAFrameInfo {
+        self.pVaa.as_deref_mut().expect("the frame's video-analysis block")
     }
 
     /// [`vaa`](Self::vaa) **as a raw pointer**, null when the block is absent.
