@@ -470,7 +470,12 @@ assert_size!(SSliceBufferInfo, 32);
 // field *removals*, so the pin moves with them for the reason stated above; every
 // number re-measured in the profile it names, not adjusted by arithmetic.
 // **`SDqLayer` is `Sync` as of this pin** — the four raw fields are gone.
-assert_size_by_profile!(SDqLayer, debug 800, release 728);
+// **P10.1.B4: +8 in both profiles** — `pFeatureSearchPreparation:
+// Option<Box<SFeatureSearchPreparation>>` (`svc_enc_frame.h:126`), one word,
+// niche-optimised. A deliberate field addition; both numbers measured in the
+// profile they name. (The brief said no live `SDqLayer` size pin existed — this
+// one is `assert_size_by_profile!`, which its grep for `assert_size!(` missed.)
+assert_size_by_profile!(SDqLayer, debug 808, release 736);
 
 // codec/encoder/core/inc/wels_func_ptr_def.h
 // 1280 before Phase 4a; -8 for `SSampleDealingFunc`'s shrink above; -24 at T4b.1,

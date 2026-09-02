@@ -1703,39 +1703,68 @@ pub extern "C" fn UpdateFMESwitchNull(_pCurLayer: Option<&SDqLayer>) {}
 // Feature Storage Dynamic Allocation & Deallocation
 // ============================================================================
 
-// `RequestFeatureSearchPreparation` / `ReleaseFeatureSearchPreparation` and
-// `SFeatureSearchPreparation` itself stood here, with `UpdateFMESwitch`,
-// `CountFMECostDown` and `UpdateFMEGoodFrameCount` above. Nothing called any of
-// them: `pfUpdateFMESwitch` is unconditionally `UpdateFMESwitchNull`
-// (`WelsInitMeFunc`), and the layer field the rest reached through was written only
-// with `null_mut()`, under a guard that refuses screen content two lines earlier.
-// S18 — deleted, enumerated by strip-and-build (T6.D2).
+/// `SFeatureSearchPreparation` — `svc_enc_frame.h:59-69`. One per encoder, on the
+/// last DQ layer (`encoder_ext.cpp:1125-1135`), screen content only.
+///
+/// **Re-ported at P10.1.B4.** T6.D2 deleted it with `RequestFeatureSearchPreparation`
+/// / `ReleaseFeatureSearchPreparation` (S18: nothing called them while `InitDqLayers`
+/// refused screen content two lines earlier); `InitDqLayers` builds it again now,
+/// and `Drop` is the release (`encoder_ext.cpp:973-977`).
+///
+/// `pRefBlockFeature` is not carried: the C++ writes it (`encoder_ext.cpp:2743`)
+/// and nothing reads it. `pFeatureOfBlock` is the per-frame scratch that every
+/// reference's `CalculateFeatureOfBlock` fills (D-scc-3) — the C++ stores its
+/// *address* into the reference's storage (`pFeatureOfBlockPointer`) and reads it
+/// back only inside that function; here it travels as `&mut [u16]` at the call.
+///
+/// `UpdateFMESwitch`, `CountFMECostDown` and `UpdateFMEGoodFrameCount`, deleted at
+/// the same time, are P10.3's, with the dispatch block that installs them.
+#[derive(Debug)]
+pub struct SFeatureSearchPreparation {
+    /// Feature of every block (8x8), begin with the point — `svc_enc_frame.h:62`.
+    pub pFeatureOfBlock: Vec<u16>,
+    /// index of hash strategy
+    pub uiFeatureStrategyIndex: u8,
+    /* for FME frame-level switch */
+    pub bFMESwitchFlag: bool,
+    pub uiFMEGoodFrameCount: u8,
+    pub iHighFreMbCount: i32,
+}
 
-// SCREEN_CONTENT(dormant: Phase 10)
-//
-// **`RequestScreenBlockFeatureStorage` and `ReleaseScreenBlockFeatureStorage` stood
-// here, and T7.C6 deleted them.** They were the last eight `WelsMallocz`/`WelsFree`
-// call sites in `src/encoder` — four allocations
-// (`pTimesOfFeatureValue`, `pLocationOfFeature`, `pLocationPointer`,
-// `pFeatureValuePointerList`) and their four frees, transliterated from
-// `svc_motion_estimate.cpp:683` and `:727`.
-//
-// **They had no caller, on either side of the port's own boundary.** The C++ calls
-// them from the picture constructor (`picture_handle.cpp:115` and `:173`); the port's
-// picture constructor refuses `iNeedFeatureStorage != 0` before it can reach them
-// (`wels_preprocess.rs`, the `SCREEN_CONTENT(dormant)` note there), so no live path
-// allocated any of this and none ever has. T6.H13's census recorded that and fenced
-// them; this session's step 2 asks the allocator itself to retire from the encoder,
-// and two unreachable functions are not a reason to keep a whole allocator wired into
-// the context.
-//
-// **Deleted rather than converted, and the difference matters.** Converting them
-// would have produced four owned buffers behind a struct whose *fields*
-// (`SScreenBlockFeatureStorage`'s raw pointers) are Phase 10's to design — a shape
-// nobody has decided, on a path nobody runs. Phase 10 ports this family whole, from
-// the reference, where both functions are eleven and thirty lines of plain
-// allocate-and-null. The struct and its fields are untouched, so the only thing gone
-// is a transliteration of an allocation nothing performs.
+impl SFeatureSearchPreparation {
+    /// `RequestFeatureSearchPreparation` — `svc_motion_estimate.cpp:648-672`, with
+    /// the `WelsMallocz` as a `Vec`.
+    pub fn new(kiFrameWidth: i32, kiFrameHeight: i32, iNeedFeatureStorage: i32) -> Self {
+        let kiFeatureStrategyIndex = (iNeedFeatureStorage >> 16) as u8;
+        let bFme8x8 = (iNeedFeatureStorage & 0x0000FF & ME_FME as i32) == ME_FME as i32;
+        let kiMarginSize = if bFme8x8 { 8 } else { 16 };
+        let w = (kiFrameWidth - kiMarginSize).max(0) as usize;
+        let h = (kiFrameHeight - kiMarginSize).max(0) as usize;
+        // The C++ sizes in bytes: `sizeof(uint16_t) * kiFrameSize` for strategy 0,
+        // plus `(kiFrameWidth - kiMarginSize) * sizeof(uint32_t) + kiFrameWidth * 8`
+        // for any other strategy (never taken: `FME_DEFAULT_FEATURE_INDEX` is 0).
+        // Same lengths, in `u16`s.
+        let len = if kiFeatureStrategyIndex == 0 {
+            w * h
+        } else {
+            w * h + 2 * w + 4 * kiFrameWidth.max(0) as usize
+        };
+        Self {
+            pFeatureOfBlock: vec![0u16; len],
+            uiFeatureStrategyIndex: kiFeatureStrategyIndex,
+            bFMESwitchFlag: true,
+            uiFMEGoodFrameCount: FMESWITCH_DEFAULT_GOODFRAME_NUM,
+            iHighFreMbCount: 0,
+        }
+    }
+}
+
+// `RequestScreenBlockFeatureStorage` / `ReleaseScreenBlockFeatureStorage`
+// (`svc_motion_estimate.cpp:683-754`) stood here until T7.C6 deleted them as the
+// last `WelsMallocz`/`WelsFree` sites in `src/encoder`. The allocator is
+// `SScreenBlockFeatureStorage::for_frame` (`picture.rs`); its call site is
+// `AllocPicture` (`wels_preprocess.rs`), as `picture_handle.cpp:115` calls it, from
+// P10.1.B5; the release is `Drop`.
 
 // ============================================================================
 // Unit Tests
@@ -1909,6 +1938,22 @@ mod tests {
                 assert!(v < list_size, "feature {v} outside a list of {list_size}");
             }
         }
+    }
+
+    /// `RequestFeatureSearchPreparation` at the harness geometry with the screen
+    /// content's fixed `kiNeedFeatureStorage` (`0x0307`: FME on 8x8, so margin 8).
+    #[test]
+    fn feature_search_preparation_sizes_and_flags_match_the_cpp() {
+        let prep = SFeatureSearchPreparation::new(320, 192, 0x0307);
+        assert_eq!(prep.pFeatureOfBlock.len(), 312 * 184);
+        assert_eq!(prep.uiFeatureStrategyIndex, 0);
+        assert!(prep.bFMESwitchFlag);
+        assert_eq!(prep.uiFMEGoodFrameCount, FMESWITCH_DEFAULT_GOODFRAME_NUM);
+        assert_eq!(prep.uiFMEGoodFrameCount, 2);
+        assert_eq!(prep.iHighFreMbCount, 0);
+        // 16x16 FME instead: margin 16.
+        let prep16 = SFeatureSearchPreparation::new(320, 192, 0x0703);
+        assert_eq!(prep16.pFeatureOfBlock.len(), 304 * 176);
     }
 
     #[test]
