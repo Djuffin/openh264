@@ -1223,6 +1223,42 @@ pub fn WelsDiamondCrossFeatureSearch(
     }
 }
 
+/// `SetMeMethod` — `encoder_ext.cpp:2639-2662`. Aims one `pfSearchMethod` slot at a
+/// search family; `false` means the request was not honoured and the slot holds the
+/// diamond search (`ME_FULL` and every unknown value).
+///
+/// **Re-ported at P10.3.D1.** S18, session F deleted it as callerless: the C++'s only
+/// caller is `PreprocessSliceCoding`'s SCREEN_CONTENT block, which the port did not
+/// translate until P10.3.D4. The slot is `&mut Option<PSearchMethodFunc>` where the
+/// C++ takes `PSearchMethodFunc&` — the table's entries are `Option`s here, so the
+/// out-parameter is the option, not the pointer inside it.
+pub fn SetMeMethod(uiMethod: u32, pSearchMethodFunc: &mut Option<PSearchMethodFunc>) -> bool {
+    match uiMethod {
+        ME_DIA => {
+            *pSearchMethodFunc = Some(WelsDiamondSearch);
+            true
+        }
+        ME_CROSS => {
+            *pSearchMethodFunc = Some(WelsMotionCrossSearch);
+            true
+        }
+        ME_DIA_CROSS => {
+            *pSearchMethodFunc = Some(WelsDiamondCrossSearch);
+            true
+        }
+        ME_DIA_CROSS_FME => {
+            *pSearchMethodFunc = Some(WelsDiamondCrossFeatureSearch);
+            true
+        }
+        // `ME_FULL` and the C++'s `default:` arm — one match arm because the two
+        // C++ cases have identical bodies (`WelsDiamondSearch`, `return false`).
+        _ => {
+            *pSearchMethodFunc = Some(WelsDiamondSearch);
+            false
+        }
+    }
+}
+
 // ============================================================================
 // Feature Search (FME / Screen Content Coding)
 // ============================================================================
@@ -2002,6 +2038,34 @@ mod tests {
         assert!(CalcFMESwitchFlag(2, 0, 40, false));
         assert!(!CalcFMESwitchFlag(0, 0, 40, false));
         assert!(CalcFMESwitchFlag(0, 0, 10, true));
+    }
+
+    /// `SetMeMethod` — every one of the C++'s five cases, by function address.
+    #[test]
+    fn set_me_method_aims_the_slot_at_the_named_family() {
+        let eq = |slot: &Option<PSearchMethodFunc>, want: PSearchMethodFunc| {
+            std::ptr::fn_addr_eq(slot.expect("the slot is filled on every arm"), want)
+        };
+        let mut slot: Option<PSearchMethodFunc> = None;
+
+        assert!(SetMeMethod(ME_DIA, &mut slot));
+        assert!(eq(&slot, WelsDiamondSearch as PSearchMethodFunc));
+        assert!(SetMeMethod(ME_CROSS, &mut slot));
+        assert!(eq(&slot, WelsMotionCrossSearch as PSearchMethodFunc));
+        assert!(SetMeMethod(ME_DIA_CROSS, &mut slot));
+        assert!(eq(&slot, WelsDiamondCrossSearch as PSearchMethodFunc));
+        assert!(SetMeMethod(ME_DIA_CROSS_FME, &mut slot));
+        assert!(eq(&slot, WelsDiamondCrossFeatureSearch as PSearchMethodFunc));
+
+        // The two `false` cases: `ME_FULL`, and anything else. Both still fill
+        // the slot — with the diamond search — which is why the C++'s callers
+        // only log a warning.
+        slot = None;
+        assert!(!SetMeMethod(ME_FULL, &mut slot));
+        assert!(eq(&slot, WelsDiamondSearch as PSearchMethodFunc));
+        slot = None;
+        assert!(!SetMeMethod(ME_FME, &mut slot));
+        assert!(eq(&slot, WelsDiamondSearch as PSearchMethodFunc));
     }
 
     #[test]

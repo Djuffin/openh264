@@ -2608,13 +2608,12 @@ fn SetNormalCodingFunc(pFuncList: &mut SWelsFuncPtrList) {
     // As `SetFastCodingFunc`: the three `Combined3` aims are deleted with the fields.
 }
 
-// `SetMeMethod` (`encoder_ext.cpp:2643`) stood here — the ME-method selector
-// that aims a `pfSearchMethod` slot at diamond/cross/feature search. **Zero
-// callers anywhere in src/ or tests/** (the C++ calls it from the
-// SCREEN_CONTENT block `PreprocessSliceCoding` did not translate; the camera
-// path installs `WelsDiamondSearch` for every block size directly). S18,
-// session F — Phase 10 re-ports it from the reference when the screen-content
-// dispatch arrives.
+// `SetMeMethod` (`encoder_ext.cpp:2639-2662`) lives in
+// `svc_motion_estimate::SetMeMethod` — beside the four search families it
+// selects between, rather than here beside its caller. Session F deleted it as
+// callerless (S18) because the C++'s only caller is the SCREEN_CONTENT block
+// below, which the port did not translate until P10.3.D4; the block calls it
+// twice now, for `BLOCK_16x16` and `BLOCK_8x8`.
 
 /// `encoder_ext.cpp:2665`. Per-frame function-pointer selection. MUST be called after
 /// `pfWelsRcPictureInit()` and `WelsInitCurrentLayer()`.
