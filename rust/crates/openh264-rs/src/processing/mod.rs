@@ -53,6 +53,7 @@ pub mod downsample;
 pub mod background_detection;
 pub mod complexity_analysis;
 pub mod scene_change_detection;
+pub mod scroll_detection;
 pub mod vaacalc;
 
 use adaptive_quantization::CAdaptiveQuantization;
