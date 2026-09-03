@@ -2725,9 +2725,11 @@ pub fn WelsInitCurrentQBLayerMltslc(pCtx: &mut sWelsEncCtx) {
 /// `UpdateSlicepEncCtxWithPartition` — encoder_ext.cpp:2430.
 ///
 /// Splits the frame into `iPartitionNum` macroblock ranges and stamps
-/// `pOverallMbMap` with the partition index. Note the trailing loop clears the
-/// *whole* of the four partition arrays out to `MAX_THREADS_NUM`, not just the
-/// entries beyond `iPartitionNum` that this call wrote.
+/// `pOverallMbMap` with the partition index. `iPartitionNum` is clamped to
+/// `MAX_THREADS_NUM`, the capacity of the four partition arrays, so the write
+/// loop and the trailing clear loop share one bound — see the clamp for why that
+/// bound differs from the C++. Note the trailing loop clears the *whole* of those
+/// arrays, not just the entries beyond `iPartitionNum` that this call wrote.
 pub fn UpdateSlicepEncCtxWithPartition(pCurDq: &mut SDqLayer, mut iPartitionNum: i32) {
     let pSliceCtx = &mut (*pCurDq).sSliceEncCtx;
     let kiMbNumInFrame = pSliceCtx.iMbNumInFrame;
@@ -2739,10 +2741,13 @@ pub fn UpdateSlicepEncCtxWithPartition(pCurDq: &mut SDqLayer, mut iPartitionNum:
 
     if iPartitionNum <= 0 {
         iPartitionNum = 1;
-    } else if iPartitionNum
-        > crate::encoder::svc_enc_slice_segment::AVERSLICENUM_CONSTRAINT as i32
-    {
-        iPartitionNum = crate::encoder::svc_enc_slice_segment::AVERSLICENUM_CONSTRAINT as i32;
+    } else if iPartitionNum > MAX_THREADS_NUM as i32 {
+        // Deliberate divergence: the C++ clamps to AVERSLICENUM_CONSTRAINT (35), but
+        // the four partition arrays written below are [_; MAX_THREADS_NUM]. Upstream
+        // writes out of bounds for any iPartitionNum in 5..=35. Identical for every
+        // input upstream defines: the sole caller passes iMultipleThreadIdc, already
+        // WELS_CLIP3'd to MAX_THREADS_NUM in GetMultipleThreadIdc.
+        iPartitionNum = MAX_THREADS_NUM as i32;
     }
     iCountMbNumPerPartition /= iPartitionNum;
     if iCountMbNumPerPartition == 0 || iCountMbNumPerPartition == 1 {
