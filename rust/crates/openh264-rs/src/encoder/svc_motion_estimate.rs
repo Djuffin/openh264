@@ -189,7 +189,10 @@ pub struct SWelsME<'a> {
     /// nothing ever fills, so this is `None` on every path the port can take. The
     /// lifetime is the one `pMvdCost` already introduced (C4b) — a search block borrows
     /// the frame's tables for the slice encode and no longer.
-    // SCREEN_CONTENT(dormant: Phase 10)
+    // Live since P10.3.D4: `InitMe` stamps the reference picture's storage here
+    // and `SetFeatureSearchIn` reads it (measured live at P10.3.D7 on three screen rows, zero on the camera control — 1304/4185/565 reads, and every one
+    // of them `Some`, because the accessor answers `false` for `None` and the
+    // feature search ran on all of them).
     pub pRefFeatureStorage: Option<&'a SScreenBlockFeatureStorage>,
 
     pub sMv: SMVUnitXY,
@@ -223,7 +226,8 @@ impl Default for SWelsME<'_> {
 /// `iCurPixX/Y` coordinates the struct already carried — the same identity
 /// the search family converted on. The mvd-cost and hash cursors stay raw
 /// (the ctx family's and Phase 10's respectively).
-// SCREEN_CONTENT(dormant: Phase 10)
+// Live since P10.3.D4 — `SetFeatureSearchIn` fills one per 8x8 feature search
+// (measured live at P10.3.D7 on three screen rows, zero on the camera control).
 pub struct SFeatureSearchIn<'a> {
     pub pSad: Option<PSampleSadSatdCostFunc>,
     /// **S6.B1**: the storage's three read-side buffers, borrowed rather than
@@ -281,7 +285,8 @@ impl Default for SFeatureSearchIn<'_> {
 /// Session F: `pBestRef: *mut u8` is deleted — it cached `colo + sBestMv`,
 /// which is `sBestMv`'s information (the identity the whole family converted
 /// on), and its one consumer wrote it into the deleted `SWelsME::pRefMb`.
-// SCREEN_CONTENT(dormant: Phase 10)
+// Live since P10.3.D4 — `SaveFeatureSearchOut` writes one per feature search
+// (measured live at P10.3.D7 on three screen rows, zero on the camera control).
 #[derive(Copy, Clone, Default)]
 pub struct SFeatureSearchOut {
     pub sBestMv: SMVUnitXY,
@@ -454,7 +459,8 @@ pub struct SMeFuncs {
     pub pfSearchMethod: [Option<PSearchMethodFunc>; BLOCK_SIZE_ALL],
     pub pfCalculateSatd: Option<PCalculateSatdFunc>,
     pub pfCheckDirectionalMv: Option<PCheckDirectionalMv>,
-    // SCREEN_CONTENT(dormant: Phase 10) — the cross/feature-search half.
+    // The cross/feature-search half. Live since P10.3.D4: `WelsMotionCrossSearch`
+    // takes both `if let Some(..)` on every screen frame (measured live at P10.3.D7 on three screen rows, zero on the camera control).
     pub pfVerticalFullSearch: Option<PLineFullSearchFunc>,
     pub pfHorizontalFullSearch: Option<PLineFullSearchFunc>,
     /// 0 - for 8x8, 1 for 16x16
@@ -539,7 +545,8 @@ pub fn SetMvWithinIntegerMvRange(
     }
 }
 
-// SCREEN_CONTENT(dormant: Phase 10)
+// Live since P10.3.D4 — `PreprocessSliceCoding`'s screen block calls it once per
+// screen P frame (measured live at P10.3.D7 on three screen rows, zero on the camera control: 57/57/59, which is the P-frame count of each clip).
 #[inline]
 pub fn CalcFMESwitchFlag(
     uiFMEGoodFrameCount: u8,
@@ -685,7 +692,7 @@ pub fn WelsMotionEstimateSearch(
 }
 
 /// Shortcut motion estimation search for static macroblocks (forced MV = (0,0)).
-// SCREEN_CONTENT(dormant: Phase 10)
+// Live since P10.3.D4 — `pfMotionSearch[COLLOCATED_STATIC]` (measured live at P10.3.D7 on three screen rows, zero on the camera control: 1228/1244/669).
 pub fn WelsMotionEstimateSearchStatic(
     pMeFuncs: &SMeFuncs,
     sdf: &SSampleDealingFunc,
@@ -715,7 +722,7 @@ pub fn WelsMotionEstimateSearchStatic(
 }
 
 /// Shortcut motion estimation search for scrolled macroblocks.
-// SCREEN_CONTENT(dormant: Phase 10)
+// Live since P10.3.D4 — `pfMotionSearch[SCROLLED_STATIC]` (measured live at P10.3.D7 on three screen rows, zero on the camera control: 3021/3300/1399).
 pub fn WelsMotionEstimateSearchScrolled(
     pMeFuncs: &SMeFuncs,
     sdf: &SSampleDealingFunc,
@@ -1068,13 +1075,11 @@ pub fn CheckDirectionalMvFalse(
 // 1D Orthogonal Cross Search (ME_CROSS)
 // ============================================================================
 
-// SCREEN_CONTENT(dormant: Phase 10) — F125. `WelsInitMeFunc` (`:508-528`) installs
-// this body into `pfVerticalFullSearch`/`pfHorizontalFullSearch` **only** in its
-// `bScreenContent` arm, and both slots default to `None` (`wels_func_ptr_def.rs:481`),
-// so the two call sites (`:1085`, `:1099`) take their `if let Some(..)` never for
-// camera content. Its sibling shortcuts `WelsMotionEstimateSearchStatic` and
-// `..Scrolled` were already carrying this tag; this one was still filed as `cursor`,
-// which read as a Phase 9 conversion still owed. It is not — it is Phase 10's.
+// F125's site, live since P10.3.D4. `WelsInitMeFunc` installs this body into
+// `pfVerticalFullSearch`/`pfHorizontalFullSearch` **only** in its `bScreenContent`
+// arm, and both slots default to `None`, so the two call sites in
+// `WelsMotionCrossSearch` take their `if let Some(..)` never for camera content and
+// on every screen frame (measured live at P10.3.D7 on three screen rows, zero on the camera control: 4333/12273/1709).
 pub fn LineFullSearch_c(
     sdf: &SSampleDealingFunc,
     pMe: &mut SWelsME<'_>,
@@ -1200,7 +1205,8 @@ pub fn WelsDiamondCrossSearch(
     }
 }
 
-// SCREEN_CONTENT(dormant: Phase 10)
+// Live since P10.3.D4 — `SetMeMethod(ME_DIA_CROSS_FME, ..)` puts it in
+// `pfSearchMethod[BLOCK_8x8]` (measured live at P10.3.D7 on three screen rows, zero on the camera control: 1599/4942/749).
 pub fn WelsDiamondCrossFeatureSearch(
     pMeFuncs: &SMeFuncs,
     sdf: &SSampleDealingFunc,
@@ -1274,7 +1280,8 @@ pub fn SetMeMethod(uiMethod: u32, pSearchMethodFunc: &mut Option<PSearchMethodFu
 /// The safe per-block twin of [`SumOf8x8SingleBlock_c`] — what the
 /// `pfCalculateSingleBlockFeature` slot holds since session F. The raw kernel
 /// stays for the frame-feature builders, which walk a whole raw plane.
-// SCREEN_CONTENT(dormant: Phase 10)
+// Live since P10.3.D4 — the `pfCalculateSingleBlockFeature[0]` slot, read by
+// `SetFeatureSearchIn` (measured live at P10.3.D7 on three screen rows, zero on the camera control: 1304/4185/565).
 pub fn sum_of_8x8_single_block(cRef: &RecCursor<'_>) -> i32 {
     let mut iSum = 0i32;
     for y in 0..8 {
@@ -1286,7 +1293,19 @@ pub fn sum_of_8x8_single_block(cRef: &RecCursor<'_>) -> i32 {
 }
 
 /// As [`sum_of_8x8_single_block`], 16x16.
-// SCREEN_CONTENT(dormant: Phase 10)
+///
+/// **Unreachable in upstream's own configuration, and not because anything here is
+/// unfinished — F332.** `pfCalculateSingleBlockFeature[1]` is selected only for a
+/// `BLOCK_16x16` feature search, and `encoder_ext.cpp:1030-1031` fixes
+/// `kiMe16x16 = ME_DIA_CROSS` (no `ME_FME` bit) against
+/// `kiMe8x8 = ME_DIA_CROSS_FME`, so `SetMeMethod` puts the feature search in
+/// `pfSearchMethod[BLOCK_8x8]` and never in `[BLOCK_16x16]`. The same pair of
+/// constants makes `bIsBlock8x8` always true in `AllocPicture`, hence
+/// `iIs16x16 == 0` on every storage and `pfCalculateBlockFeatureOfFrame[1]`
+/// (`SumOf16x16BlockOfFrame_c`) unreachable with it. Measured 0 on all three screen
+/// rows at P10.3.D7 while its 8x8 twin read 1304/4185/565. Kept because it is a
+/// faithful port of a body upstream ships; deleting it would be deleting the
+/// reference, not dead port code.
 pub fn sum_of_16x16_single_block(cRef: &RecCursor<'_>) -> i32 {
     let mut iSum = 0i32;
     for y in 0..16 {
@@ -1550,11 +1569,11 @@ pub fn CalculateFeatureOfBlock(
     true
 }
 
-// SCREEN_CONTENT(dormant: Phase 10) — the caller arrived at P10.3.D4:
-// `PreprocessSliceCoding`'s screen block (`encoder_ext.cpp:2745-2749`), which
-// takes the layer's scratch and the reference's storage out by `Option::take`
-// so this can hold the picture's planes and its storage at once (D-scc-14).
-// The tag comes off at D7, against the entry count D5 measures.
+// Live since P10.3.D4: `PreprocessSliceCoding`'s screen block
+// (`encoder_ext.cpp:2745-2749`) takes the layer's scratch and the reference's
+// storage out by `Option::take` so this can hold the picture's planes and its
+// storage at once (D-scc-14). measured live at P10.3.D7 on three screen rows, zero on the camera control: 57/57/59 — once per screen P frame whose
+// reference has no features yet.
 /// `PerformFMEPreprocess` — `svc_motion_estimate.cpp:880-893`.
 ///
 /// **P10.1.B5 (D-scc-3)**: the C++ stores its caller's `pFeatureOfBlock` pointer
@@ -1582,7 +1601,7 @@ pub fn PerformFMEPreprocess(
     }
 }
 
-// SCREEN_CONTENT(dormant: Phase 10)
+// Live since P10.3.D4 (measured live at P10.3.D7 on three screen rows, zero on the camera control: 1304/4185/565, every call returning `true`).
 pub fn SetFeatureSearchIn<'a>(
     pMeFuncs: &SMeFuncs,
     sdf: &SSampleDealingFunc,
@@ -1642,7 +1661,7 @@ pub fn SetFeatureSearchIn<'a>(
     true
 }
 
-// SCREEN_CONTENT(dormant: Phase 10)
+// Live since P10.3.D4 (measured live at P10.3.D7 on three screen rows, zero on the camera control: 1304/4185/565).
 pub fn SaveFeatureSearchOut(
     sBestMv: SMVUnitXY,
     uiBestSadCost: u32,
@@ -1652,7 +1671,7 @@ pub fn SaveFeatureSearchOut(
     pFeatureSearchOut.uiBestSadCost = uiBestSadCost;
 }
 
-// SCREEN_CONTENT(dormant: Phase 10)
+// Live since P10.3.D4 (measured live at P10.3.D7 on three screen rows, zero on the camera control: 1304/4185/565).
 pub fn FeatureSearchOne(
     sFeatureSearchIn: &SFeatureSearchIn<'_>,
     iFeatureDifference: i32,
@@ -1748,7 +1767,7 @@ pub fn FeatureSearchOne(
     }
 }
 
-// SCREEN_CONTENT(dormant: Phase 10)
+// Live since P10.3.D4 (measured live at P10.3.D7 on three screen rows, zero on the camera control: 1304/4185/565).
 pub fn MotionEstimateFeatureFullSearch(
     sFeatureSearchIn: SFeatureSearchIn<'_>,
     kuiMaxSearchPoint: u32,

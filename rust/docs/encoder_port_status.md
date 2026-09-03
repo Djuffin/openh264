@@ -29,9 +29,9 @@ upstream's options; `todo!()` and `unimplemented!()` are both zero in `src/`.
 **The one axis still pinned is `iMultipleThreadIdc == 1`.** After that, one spatial
 layer (which needs `METHOD_DOWNSAMPLE`) and `SCREEN_CONTENT_REAL_TIME`. See
 *Phase 5.4*. *(2026-09-02: multi-threading and multi-layer have long since landed;
-`SCREEN_CONTENT_REAL_TIME` is Phase 10's, opened by P10.1 and with its three
-video-processing plugins in since P10.2 — see the Phase 10
-section at the end of this file.)*
+`SCREEN_CONTENT_REAL_TIME` is Phase 10's, opened by P10.1, its three
+video-processing plugins in since P10.2, and byte-identical with the reference
+since P10.3 — see the Phase 10 section at the end of this file.)*
 
 ---
 
@@ -1846,7 +1846,7 @@ Worth noting for whoever continues this: had `dead_code` been live on
 pool as unused and the shadowing `CWelsThreadPool` would have been found by a
 compiler warning rather than by a deadlock.
 
-### Phase 10 — `SCREEN_CONTENT_REAL_TIME` — **P10.1 + P10.2 DONE (2026-09-02); P10.3-P10.4 outstanding**
+### Phase 10 — `SCREEN_CONTENT_REAL_TIME` — **P10.1 + P10.2 + P10.3 DONE (2026-09-02); the bytes match, P10.4 outstanding**
 
 The last public usage type the port refused. Session P10.1 did two things, in
 order, at `6f955eff` .. the session's docs commit (branch `rust3`):
@@ -1914,7 +1914,55 @@ entry count rather than an argument (F328: `SvcMdSCDMbEnc`, which read 0 in all 
 translate to safe Rust directly"); the claim rests on `vaa_block_is_sync`, a
 compile-time assertion. No Miri was run in P10.2 either.
 
-Findings F321-F328 in [`phase10_findings.md`](phase10_findings.md). Next: P10.3 (the
-dispatch — `PreprocessSliceCoding`'s screen block, `SetMeMethod`, the FME switch
-family, the real `SetScrollingMvToMd`; the first byte gate on `SCC_TIER=min`), P10.4
-(widen and close; add `scc` to `gates.sh`'s family list when it passes).
+Findings F321-F328 in [`phase10_findings.md`](phase10_findings.md).
+
+**Session P10.3 — the dispatch, and the bytes**, at `7051119b` .. the session's docs
+commit.
+
+*What was missing was one block.* `PreprocessSliceCoding`'s SCREEN_CONTENT arm
+(`encoder_ext.cpp:2708-2771`) had never been translated, so a screen encode ran the
+camera mode decision and motion search while every algorithm it was supposed to
+dispatch to sat in the tree, ported and unreachable. D1-D3 re-ported the four
+functions T6.D2 and session F had deleted as callerless (`SetMeMethod`,
+`CountFMECostDown`, `UpdateFMEGoodFrameCount`, `UpdateFMESwitch`) and retyped the two
+slots that could not carry their real bodies — `PSetScrollingMv` to take the VAA
+*extension* (D-scc-4, and the last of the `static_cast<SVAAFrameInfoExt*>` family
+goes with it) and `PUpdateFMESwitch` to take the layer exclusively (D-scc-13). D4
+translated the block.
+
+*The one shape that is not the C++'s.* The reference writes four table slots, runs
+`PerformFMEPreprocess`, then writes two more. The port cannot: the function-pointer
+table's `&mut` is derived from the context and the preprocess reaches the context
+four ways (§4.6). So the preparation half runs **before** the borrow is taken
+(D-scc-15) — behaviour-preserving because the three table slots it reads have
+exactly one writer in either tree, `WelsInitMeFunc` at init (F330) — and the
+reference's feature storage and the layer's scratch are *moved* out with
+`Option::take` rather than borrowed, so the picture's planes and its own storage can
+be held at once without a pointer (D-scc-14).
+
+*The gate.* `SCC_TIER=min sweep.sh scc` went `PASS=0 FAIL=28` -> **`PASS=28 FAIL=0`
+in both profiles**; the hand row `scc_text_320x192_k3` had differed at byte 30648
+(C++ 130593 / Rust 134667) and is byte-identical. **The wide tier followed with it:
+`sweep.sh scc` reads `PASS=148 FAIL=0` in both profiles** — rate control on,
+`SM_SIZELIMITED_SLICE` with four threads, lossless LTR, all of it, on the first run
+(F331). No bisection was needed on any row, so `OH264_RECDUMP`/`MBDUMP`/`MEDUMP` and
+the C++ side's throwaway patch went unused and `codec/` was never touched. The
+verdict referee held at 28/28 throughout, which is how we know the preprocessor was
+not disturbed; camera sweeps 583/583 in both profiles at every checkpoint.
+
+*The counts.* Census `missing` 2 -> **0**. `SCREEN_CONTENT(dormant: Phase 10)` tags
+20 -> **0** — the phase's own exit condition — every retirement against a measured
+entry count (D5's and D7's counters, reverted in the same commits), with F332 naming
+the one body that measured zero and the pair of upstream constants that keeps it
+dark. gtest allowlist 6 -> **1** rows: all five
+`EncodeFile/EncoderOutputTest.CompareOutput/8..12` pass (193/199 -> 198/199), leaving
+only the permanent decoder POC row. Unsafe instruments unmoved: raw_ptr 391,
+unsafe_block 122, unsafe_fn 52, census 12 pinned rows.
+
+**Not done, by the user's ruling:** no Miri in P10.3 either.
+
+Findings F329-F333 in [`phase10_findings.md`](phase10_findings.md) — F333
+corrects a misreading carried in D5's own commit message. Next: P10.4 —
+add `scc` to `gates.sh`'s family list with its comment and wall-clock cost (the axis
+is byte-exact and *unguarded* until then), a screen row in `c_vs_rust_bench` under
+the two-run `perfpair.py` protocol, and the phase's exit rows.

@@ -19782,3 +19782,101 @@ family, which is P10.3's whole subject.
 `kiWidth.max(12)` bytes"), the census baseline ("`0 unclassified`" — it was 54 before
 this session and is 54 after), and the GOM sizing question, which had a definite
 answer rather than a conditional one.
+
+## Session P10.3 — the dispatch block, and the bytes (2026-09-02, branch `rust3`)
+
+The last untranslated part of the screen path was one `if` in
+`PreprocessSliceCoding` (`encoder_ext.cpp:2708-2771`). Everything it dispatches to
+had been in the tree for two sessions, ported and unreachable; a screen encode ran
+the camera mode decision and motion search instead, which is why `SCC_TIER=min`
+read `PASS=0 FAIL=28` with the verdict referee already green at 28/28.
+
+**D1 — `SetMeMethod`** (`encoder_ext.cpp:2639-2662`), re-ported beside the four
+search families it selects between rather than beside its caller. Session F had
+deleted it as callerless (S18) for the same reason everything else here was
+dormant. Its out-parameter is `&mut Option<PSearchMethodFunc>`, because the table's
+entries are `Option`s; `ME_FULL` and the C++'s `default:` fold into one arm, their
+bodies being identical. Tested by function address, all five cases.
+
+**D2 — the FME switch family.** `CountFMECostDown`, `UpdateFMEGoodFrameCount`,
+`UpdateFMESwitch` (`svc_motion_estimate.cpp:1027-1058`), the census's last two
+`missing` rows and one stale `renamed` rule. **D-scc-13**: `PUpdateFMESwitch`
+becomes `fn(&mut SDqLayer)` — the real body writes `uiFMEGoodFrameCount` on the
+layer's preparation — and the call site copies the fn pointer out of the table
+before taking the layer `&mut` (§4.6). The slot is not fork-reachable: its one call
+site is after the join. Upstream's `uiSliceFMECostDown` never resets, and no reset
+was added.
+
+**D3 — the scrolling-MV slot.** **D-scc-4**: `PSetScrollingMv` becomes
+`fn(Option<&SVAAFrameInfoExt>, &mut SWelsMD<'_>)`, so `SetScrollingMvToMd`'s
+`static_cast<SVAAFrameInfoExt*>` has no subject — **the last of the downcast
+family (S11.3) goes with it** — and the body stops being a neutered zero-writer.
+Shared, not `&mut`: it is fork-reachable and only reads.
+
+**D4 — the block.** Split in two, and the split is along "does this touch the
+context", not along the C++'s statement order. The `SFeatureSearchPreparation` half
+runs **before** the function-pointer table's `&mut` is taken (D-scc-15); the table
+half stays at the C++'s own position with every write behind `kbScreenP`. The
+reorder is behaviour-preserving because the three slots the FME step reads have
+exactly one writer in either tree — `WelsInitMeFunc`, at init (F330) — and the step
+writes only what no table write reads. **D-scc-14**: the preparation box and the
+reference's feature storage are `Option::take`n out and put back in the same block,
+so the picture's planes can be borrowed shared while its own storage is written
+through; that is the only way `PerformFMEPreprocess` gets both without a pointer.
+`pRefBlockFeature` (`:2743`) has no counterpart — one write, no read, in the whole
+reference.
+
+**The hand row went from "differs at byte 30648" to byte-identical**, and the whole
+min tier with it: `PASS=0 FAIL=28` -> **`PASS=28 FAIL=0` in both profiles**, on the
+first run of the block. No bisection was needed on any row, so the dump machinery
+and the C++ side's throwaway patch went unused and `codec/` was never touched.
+
+**D5 — calibration** (S55, F126/F328's pattern; counters reverted in the same
+commit, so that commit is empty by construction). Every dormant body was measured
+running on three screen rows and reading **zero** on a camera control of the same
+clip. One reading worth keeping, and **it corrects what D5's own commit message
+says**. On `scc_text_320x192_k3` (two scene cuts, so 57 P frames and three I
+frames) `CalcFMESwitchFlag` and `PerformFMEPreprocess` both read 57 while
+`UpdateFMESwitch` reads 59. D5 read that gap as `!bRefBlockFeatureCalculated`
+skipping two rebuilds; D7's finer counters show otherwise. The preprocess runs on
+**every** screen P frame on all three rows (57/57, 57/57, 59/59) — `SetUnref`
+clears `bRefBlockFeatureCalculated` when a picture is recycled, so the features are
+always stale. The two extra `UpdateFMESwitch` entries are at the other end: the C++
+does not re-stamp `pfUpdateFMESwitch` on an I slice, so the previous P frame's
+choice survives into the two forced IDRs and runs there. The port matches, because
+it kept the same omission.
+
+**D6 — the API test, the gtest rows, the wide tier.** The brief asked for a
+camera-vs-screen `assert_ne!` whose meaning was "the screen algorithms ran". That
+is not what it would have meant: the two usage types already disagree about MV
+range, QP range and reference count, so it would have passed at P10.1 with
+everything dormant. The test scrolls its source and asserts **size** instead —
+85139 vs 105841 bytes, a 20% margin — because exploiting a scroll is exactly what
+the dispatch buys. All five `EncoderOutputTest/8..12` rows left the gtest allowlist
+(193/199 -> 198/199, allowlist 6 -> 1). And **the wide tier passed with the min
+tier**: `sweep.sh scc` reads 148/148 in both profiles, every axis, on the first run
+(F331) — so P10.4 is promotion, not repair.
+
+**D7 — tags, census, docs.** `SCREEN_CONTENT(dormant: Phase 10)` **20 -> 0**, the
+phase's own exit condition, every retirement against a measured entry count rather
+than an argument; the two prose mentions rewritten to past tense. One body measured
+zero — `sum_of_16x16_single_block` — and its tag came off anyway, because the tag
+meant "Phase 10 has not reached this" and Phase 10 had: F332 records the pair of
+compile-time constants (`kiMe16x16 = ME_DIA_CROSS` against
+`kiMe8x8 = ME_DIA_CROSS_FME`) that makes the whole 16x16 feature family unreachable
+in upstream's own configuration, and its doc comment carries the condition.
+Census `missing` **2 -> 0**.
+
+**Where the brief was wrong**, each quoted in the close report: the D6 test's
+stated meaning ("its meaning ... is true only now"); the F329 instruction to record
+a crash path as a finding (both port-only guards are unreachable, and the finding
+says why rather than warning about a crash); the expectation of a P10.4 work order
+("the wide tier's failing axes in order") — there are none; and the brief's own
+census note, since `port_census.py` counts `SetMeMethod` among the *unclassified*
+rather than the missing, so `missing` moved 2 -> 0 while the by-name total moved
+319 -> 315.
+
+No Miri was run. No new `unsafe`, allow or raw pointer: raw_ptr 391, unsafe_block
+122, unsafe_fn 52, unsafe_impl 1, census 12 pinned rows — all unmoved from the
+session baseline. Camera sweeps 583/583 in both profiles at every checkpoint.
+

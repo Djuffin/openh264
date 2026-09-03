@@ -1212,7 +1212,10 @@ pub(crate) fn InitMe<'a>(
     iMbPixY: i32,
     pMvdCost: MvdCostCursor<'a>,
     iBlockSize: i32,
-    // SCREEN_CONTENT(dormant: Phase 10)
+    // Live since P10.3.D4: `WelsMdP8x8` passes the reference picture's storage and
+    // the 8x8 feature search reads it back off `SWelsME`. Measured at P10.3.D7 —
+    // `SetFeatureSearchIn` ran 1304/4185/565 times on three screen rows and
+    // returned `true` every time, which it cannot do with a `None` here.
     pRefFeatureStorage: Option<&'a SScreenBlockFeatureStorage>,
     sWelsMe: &mut SWelsME<'a>,
 ) {

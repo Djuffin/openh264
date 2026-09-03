@@ -1481,7 +1481,11 @@ pub fn WelsUpdateSliceHeaderSyntax(
             pRefPicMark.bNoOutputOfPriorPicsFlag = false;
             pRefPicMark.bLongTermRefFlag = kSyn.bEnableLongTermReference;
         } else {
-            // SCREEN_CONTENT(dormant: Phase 10)
+            // Live since P10.1, when `InitializeExt` began accepting screen
+            // content: this arm drops `bLtrMarkingFlag` from the slice header's
+            // adaptive-marking decision. Measured at P10.3.D7 — 57 entries on
+            // `scc_text_320x192_k3` (its 57 non-IDR frames), zero on the camera
+            // control.
             if kSyn.bScreenContent {
                 pRefPicMark.bAdaptiveRefPicMarkingModeFlag = kSyn.bEnableLongTermReference;
             } else {

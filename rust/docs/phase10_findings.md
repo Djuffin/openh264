@@ -269,3 +269,144 @@ dispatch tag (whose *index* is live now, though its four entries are still ident
 until P10.3 installs the variants), and `rc.rs`'s raw-pointer table row. Twenty stay,
 sixteen of them the FME and feature-search family in `svc_motion_estimate.rs`, which is
 P10.3's whole subject.
+
+## F329 — the screen dispatch's two unconditional dereferences, and the parameter checks that keep the port's guards dark (P10.3, D4)
+
+`PreprocessSliceCoding`'s screen block dereferences two pointers without asking,
+and the port asks at both. Neither guard can fire, and the reason in each case is
+a check in a different file:
+
+| `encoder_ext.cpp` | the C++ | the port | what makes it unreachable |
+|---|---|---|---|
+| `:2742` | `pCurLayer->pRefPic->pScreenBlockFeatureStorage` | `kbFmeInstalled = false` | `AllocPicture`'s screen arm attaches a storage to every reconstruction picture under `SCREEN_CONTENT_REAL_TIME` (P10.1.B5), and the block runs only on a P slice, where a reference is bound |
+| `:2767-2768` | `pCurLayer->pFeatureSearchPreparation->..` on the I-slice arm | the reset is skipped | `ParamValidation` refuses screen content above one spatial layer (`:274-279`), so the only DQ layer *is* the last one — which is the layer `InitDqLayers` gives a preparation (`:1125-1135`, `iDlayerIndex == iDlayerCount - 1`) |
+
+Recorded because the guarantee is three files away in each case, and it is the
+kind that erodes: the day upstream allows a second spatial layer for screen
+content, the second row becomes a null dereference there and a **silently skipped
+reset** here — the port would carry `bFMESwitchFlag` and `uiFMEGoodFrameCount`
+across an IDR instead of restoring them. That is a behaviour difference, not a
+crash, which is the harder kind to notice. The evidence that neither fires today
+is the byte gate: `sweep.sh scc` reads 148/148 in both profiles.
+
+## F330 — the FME preprocess moved above the function-pointer table's `&mut`, and the one-writer proof that says it may (P10.3, D-scc-15)
+
+The C++ writes four table slots, runs `PerformFMEPreprocess`, then writes two
+more. The port cannot: `fl` is `&mut` derived from `pCtx`, and the preprocess
+reaches the layer, the reference list, the VAA block and the picture pools —
+every one of them through `pCtx` (§4.6). So the step runs **before** the borrow
+is taken.
+
+The reorder is behaviour-preserving, and the argument is a grep rather than an
+inspection. The step reads the table only through `FmeKernels::of`, which is
+exactly three slots — `pfCalculateBlockFeatureOfFrame[2]`,
+`pfInitializeHashforFeature`, `pfFillQpelLocationByFeatureValue`. Each has
+**exactly one writer in either tree**: `WelsInitMeFunc`, at initialisation
+(`svc_motion_estimate.rs:589-592`; `SetFastCodingFunc` and `SetNormalCodingFunc`
+write four other slots each, and the P-slice block writes none of the three).
+Symmetrically, the step writes only the reference's storage and the layer's
+preparation, which no table write reads. So the two halves commute, and the
+measured 148/148 is the check on the argument rather than its substitute.
+
+The same shape is why `SetMeMethod`'s two `SetMeMethod(...)` calls stay *inside*
+the table borrow and the `SFeatureSearchPreparation` half does not: the split is
+along "does this touch the context", not along the C++'s statement order.
+
+## F331 — the wide `scc` tier and the five gtest rows closed with the min tier, not after it (P10.3, D6)
+
+P10.3's charter was the 28-row `min` tier — rate control off, one slice, one
+thread, no LTR — and P10.4 was to be "widen and close": rate control on
+(`MIN/MAX_SCREEN_QP`, screen complexity into `RcCalculatePictureQp`),
+`SM_SIZELIMITED_SLICE` with four threads, lossless LTR
+(`CWelsReference_LosslessWithLtr`, `GetRefFrameInfo`, `UpdateBlockStatic`, the
+source-pool plane source for the FME preprocess).
+
+Measured after D4: **`sweep.sh scc` reads `PASS=148 FAIL=0` in both profiles** —
+the whole tier, all four axes, on the first run. The five
+`EncodeFile/EncoderOutputTest.CompareOutput/8..12` rows pass too (`--check`
+reported them "LISTED BUT PASSING"; 193/199 -> 198/199), and they are the harder
+half: `GetDefaultParams` leaves rate control **on** for all five, `/11` and `/12`
+run four threads, `/12` adds lossless LTR (`test/api/BaseEncoderTest.cpp:30-66`).
+
+Why the axes needed nothing of their own is worth stating, because "it passed"
+is not an explanation. Every one of them was already byte-exact on the *camera*
+path — `sweep.sh` has run `rc`, `sl`, `mt` and `ltr` presets green for phases —
+and the screen-specific parts of each were ported before this session: the screen
+QP bounds and `CComplexityAnalysisScreen`'s feed into rate control at P10.2.C5
+and C7 (refereed there by first-P-frame `iFrameComplexity` on five `rc=1` rows),
+the lossless-LTR reference strategy and `UpdateBlockStatic` at P10.1/P10.2. What
+was missing was only the dispatch, and the dispatch is not per-axis. The two
+halves met.
+
+The scope rule stands where it is: `scc` is **not** added to `gates.sh`'s family
+list here (D-scc-16), so P10.4's first item is that promotion and its cost, not a
+defect hunt.
+
+## F332 — the 16x16 feature-search family is unreachable in upstream's own configuration (P10.3, D7)
+
+Two ported bodies read **zero** on every screen row at D7's tag census while their
+8x8 twins read 1304/4185/565 and 57/57/59: `sum_of_16x16_single_block`
+(`pfCalculateSingleBlockFeature[1]`) and `SumOf16x16BlockOfFrame_c`
+(`pfCalculateBlockFeatureOfFrame[1]`).
+
+One pair of compile-time constants explains both. `encoder_ext.cpp:1030-1031`:
+
+    const int32_t kiMe16x16 = ME_DIA_CROSS;        // 0x03 — no ME_FME bit
+    const int32_t kiMe8x8   = ME_DIA_CROSS_FME;    // 0x07 — has it
+
+- `PreprocessSliceCoding` therefore calls `SetMeMethod(ME_DIA_CROSS_FME, ..)` on
+  `pfSearchMethod[BLOCK_8x8]` and `SetMeMethod(ME_DIA_CROSS, ..)` on
+  `[BLOCK_16x16]`, so `WelsDiamondCrossFeatureSearch` — the only caller of
+  `SetFeatureSearchIn`, which is the only reader of the single-block slot — runs
+  only for `uiBlockSize == BLOCK_8x8`, and that selects index 0.
+- The same `kiMe8x8` reaches `AllocPicture` as `bIsBlock8x8 = (kiMe8x8FME ==
+  ME_FME)`, always true, so every `SScreenBlockFeatureStorage` carries
+  `iIs16x16 == 0` and `CalculateFeatureOfBlock` indexes the frame builder at 0.
+  (`PreprocessSliceCoding` also refuses to install the feature search at all
+  unless `iIs16x16 == 0`, which is a third, redundant lock on the same value.)
+
+So this is not port debt. Both bodies are faithful and both are kept — deleting
+them would delete the reference, not dead port code — and neither carries a
+`SCREEN_CONTENT(dormant)` tag any more, because the tag meant "Phase 10 has not
+reached this yet" and Phase 10 has. `sum_of_16x16_single_block`'s doc states the
+condition instead; the tag count reads zero, which is the phase's exit.
+
+The reachable way in would be upstream changing `kiMe16x16` to carry `ME_FME`.
+Nothing in this port would need to change if it did, but nothing here has ever
+exercised that path either, so it would arrive untested.
+
+## F333 — `PerformFMEPreprocess` runs on every screen P frame: `bRefBlockFeatureCalculated` never survives a picture's recycle (P10.3, D7)
+
+D5's counters read `PerformFMEPreprocess` 57 and `UpdateFMESwitch` 59 on
+`scc_text_320x192_k3`, and D5's commit message read the gap as the
+`!pScreenBlockFeatureStorage->bRefBlockFeatureCalculated` guard (`:2744`) skipping
+two rebuilds. **That reading is wrong**, and D7's finer census says why: on all
+three screen rows `CalcFMESwitchFlag` and `PerformFMEPreprocess` are *equal* —
+57/57, 57/57, 59/59 — one of each per screen P frame, so the guard never fires.
+
+Two separate facts were being conflated.
+
+1. **The features are always stale.** `SetUnref` clears
+   `bRefBlockFeatureCalculated` when a reference picture is returned to the pool
+   (`picture.rs:549`, and the C++ the same), and the single-reference screen
+   configuration recycles the picture every frame. Nothing else sets the flag but
+   `PerformFMEPreprocess` itself. So the "already built" arm is dead in this
+   configuration — the guard exists for a reference held across frames, which the
+   `min` tier never produces. Note the asymmetry upstream leaves and the port
+   keeps: `uiSadCostThreshold` is **not** reset by `SetUnref`, only the flag is,
+   so a storage carries the previous reference's thresholds until the next
+   `PerformFMEPreprocess` overwrites them — harmless only because the rebuild
+   always happens.
+2. **`UpdateFMESwitch`'s two extra entries are at the other end of the frame.**
+   `PreprocessSliceCoding` writes `pfUpdateFMESwitch` only inside its P-slice arm;
+   the I-slice arm resets the preparation's two fields and leaves the slot alone.
+   The post-join call (`encoder_ext.cpp:3891-3897`) is unconditional. So on a
+   forced IDR the *previous* P frame's choice runs, and `k3`'s two scene cuts are
+   exactly the two extra entries (57 P + 2 forced IDR = 59; the first IDR still
+   holds `WelsInitMeFunc`'s `UpdateFMESwitchNull`). On `scc_text_160x96_k1`, which
+   has no cuts, all three counters read 59.
+
+Both are upstream's, both are ported as-is, and the bytes agree — which is the
+point of recording it: the counters looked like a guard doing work and were
+measuring a carry-over instead.
+

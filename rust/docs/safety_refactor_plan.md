@@ -790,6 +790,29 @@ directly"): D-scc-5 rests on a compile-time `Sync` assertion. Remaining: the thr
 plugins (P10.2), the dispatch block (P10.3), widen and close (P10.4). Tag count
 37 -> 30.
 
+**2026-09-02 — P10.2 landed** (`ac5cbcbc` .. `36b152ad`): item 2's other half, the
+three screen video-processing plugins (`METHOD_SCROLL_DETECTION`,
+`METHOD_SCENE_CHANGE_DETECTION_SCREEN`, `METHOD_COMPLEXITY_ANALYSIS_SCREEN`) and
+their three call sites, refereed by `scc_verdicts.sh` at 28/28. Census `missing`
+14 -> 2; tag count 30 -> 20.
+
+**2026-09-02 — P10.3 landed** (`7051119b` .. this session's docs commit): items 1
+and 2 finished — `SetMeMethod`, `UpdateFMESwitch`/`CountFMECostDown`/
+`UpdateFMEGoodFrameCount`, the real `SetScrollingMvToMd` behind a retyped
+`PSetScrollingMv` (D-scc-4), and `PreprocessSliceCoding`'s screen block itself
+(D-scc-14/15), which is what wakes the un-fenced search half.
+
+**Both halves of the exit gate are met.** `sweep.sh scc` reads **148/148 in both
+profiles** — the whole preset, not only the 28-row `min` tier this session was
+chartered on (F331) — and the `SCREEN_CONTENT(dormant: Phase 10)` **tag count
+reads 0** (20 -> 0, every retirement against a measured entry count; F332 is the
+one body that measured zero and why that is upstream's arithmetic rather than a
+gap). Census `missing` 2 -> 0. The gtest allowlist is 6 -> 1 rows, the survivor
+being the permanent decoder POC row.
+
+What is left is **not** in this section's scope but in P10.4's: `scc` is still
+outside `gates.sh`'s family list, so the axis is byte-exact and unguarded.
+
 ---
 
 ## 6. File → phase map
