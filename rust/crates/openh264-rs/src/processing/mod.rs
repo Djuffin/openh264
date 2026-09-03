@@ -24,21 +24,20 @@
 //!
 //! Implemented: `METHOD_VAA_STATISTICS` (all five SAD kernels),
 //! `METHOD_COMPLEXITY_ANALYSIS`, `METHOD_ADAPTIVE_QUANT`,
-//! `METHOD_BACKGROUND_DETECTION`, `METHOD_SCENE_CHANGE_DETECTION_VIDEO` and —
-//! Phase 8b session C — `METHOD_DENOISE` and `METHOD_DOWNSAMPLE`.
+//! `METHOD_BACKGROUND_DETECTION`, `METHOD_SCENE_CHANGE_DETECTION_VIDEO`,
+//! Phase 8b session C's `METHOD_DENOISE` and `METHOD_DOWNSAMPLE`, and — P10.2 —
+//! the three screen-content methods `METHOD_SCROLL_DETECTION`,
+//! `METHOD_SCENE_CHANGE_DETECTION_SCREEN` and `METHOD_COMPLEXITY_ANALYSIS_SCREEN`.
 //!
-//! **Not translated**, and each caller in `wels_preprocess.rs` says so at the
-//! site and skips the follow-up exactly as it did when the dispatch returned
-//! `RET_NOTSUPPORTED` (S18: no stub plugin is invented for them):
+//! **Every method the encoder calls is translated.** A table of untranslated
+//! methods stood here until P10.2 and is gone with the last row of it; no caller
+//! in `wels_preprocess.rs` skips a plugin any more, and no `RET_NOTSUPPORTED`
+//! stands on a live path (S18).
 //!
-//! | method | gated by |
-//! |---|---|
-//! | `METHOD_SCENE_CHANGE_DETECTION_SCREEN` | `SCREEN_CONTENT_REAL_TIME` |
-//! | `METHOD_COMPLEXITY_ANALYSIS_SCREEN` | `SCREEN_CONTENT_REAL_TIME` |
-//! | `METHOD_SCROLL_DETECTION` | `SCREEN_CONTENT_REAL_TIME` |
-//!
-//! Every one is off in the gate configuration, and 341/341 holds with all five
-//! unsupported.
+//! The reference's processing library ships two further methods that the encoder
+//! never requests, and neither is ported: `METHOD_IMAGE_ROTATE` (classified `dead`
+//! by D-scc-12 — `WelsFrameWork.cpp:292` constructs it and nothing invokes it) and
+//! `METHOD_COLORSPACE_CONVERT` (which upstream does not implement either).
 
 // **S11.5 (step 5): NOT sealed, and the reason is `forbid`'s scope.** This
 // file holds no `unsafe` itself, but `#![forbid]` in a module root applies to
@@ -61,7 +60,9 @@ use background_detection::CBackgroundDetection;
 use complexity_analysis::CComplexityAnalysis;
 use denoise::CDenoiser;
 use downsample::CDownsampling;
-use scene_change_detection::CSceneChangeDetection;
+use complexity_analysis::CComplexityAnalysisScreen;
+use scene_change_detection::{CSceneChangeDetection, CSceneChangeDetectionScreen};
+use scroll_detection::CScrollDetection;
 
 use vaacalc::CVAACalculation;
 
@@ -76,6 +77,12 @@ pub struct SWelsVpContext {
     pub sSceneChangeDetection: CSceneChangeDetection,
     pub sDenoise: CDenoiser,
     pub sDownsample: CDownsampling,
+    /// The three screen-content plugins (P10.2). `CWelsPreProcessScreen` drives all
+    /// three on every P frame; under camera usage they are constructed and never
+    /// called, which is what the C++'s plugin table does too.
+    pub sScrollDetection: CScrollDetection,
+    pub sSceneChangeDetectionScreen: CSceneChangeDetectionScreen,
+    pub sComplexityAnalysisScreen: CComplexityAnalysisScreen,
 }
 
 impl Default for SWelsVpContext {
@@ -88,6 +95,9 @@ impl Default for SWelsVpContext {
             sSceneChangeDetection: CSceneChangeDetection::default(),
             sDenoise: CDenoiser::default(),
             sDownsample: CDownsampling::default(),
+            sScrollDetection: CScrollDetection::default(),
+            sSceneChangeDetectionScreen: CSceneChangeDetectionScreen::default(),
+            sComplexityAnalysisScreen: CComplexityAnalysisScreen::default(),
         }
     }
 }

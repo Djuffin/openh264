@@ -690,10 +690,11 @@ impl SBlockStaticIdcStore {
         self.buf.get(start..start + len)
     }
 
-    /// [`row`](Self::row) for the writer. The C++ hands `pCurBlockStaticPointer`
-    /// to the screen scene-change plugin, which fills it
-    /// (`UpdateBlockIdcForScreen`); that plugin is untranslated, so today the only
-    /// caller is the test that pins the reader's indexing.
+    /// [`row`](Self::row) for the writer. The C++ hands `pCurBlockStaticPointer` to
+    /// the screen scene-change plugin, which fills it; since P10.2.C6 so does the
+    /// port, from both of that plugin's call sites — `DetectSceneChangeScreen`'s
+    /// per-reference loop and `UpdateBlockStatic`'s recomputation. `None` is where
+    /// the C++ writes through a null row (D-scc-8).
     #[inline]
     pub fn row_mut(&mut self, sel: Option<usize>, len: usize) -> Option<&mut [u8]> {
         let start = self.row_start(sel, len)?;
@@ -2678,8 +2679,17 @@ impl CWelsPreProcess {
             * STATIC_SCENE_MOTION_RATIO;
         let iNegligibleBlocks = iNegligibleMotionBlocks as i32;
 
-        // `iSceneChangeMethodIdx = METHOD_SCENE_CHANGE_DETECTION_SCREEN` was here;
-        // the method is untranslated and its sites below say so.
+        // `iSceneChangeMethodIdx = METHOD_SCENE_CHANGE_DETECTION_SCREEN` stood here as
+        // a `const` the C++ passes to the vtable. The dispatch is dissolved
+        // (`processing/mod.rs`), so the plugin is named directly at its call below.
+
+        // The block-static grid, from the *aligned* source picture — `(w >> 3) *
+        // (h >> 3)`, the same grid `SetBlockStaticIdcToMd` reads back with
+        // `kiBlocks = (kiMbWidth << 1) * (kiMbHeight << 1)`
+        // (`svc_mode_decision.rs`). A 152x100 input is allocated and analysed at
+        // 160x112, and both sides use the aligned size.
+        let kiBlocksInFrame =
+            ((sSrcMap.sRect.iRectWidth >> 3) * (sSrcMap.sRect.iRectHeight >> 3)).max(0) as usize;
 
         for iScdIdx in 0..iAvailableRefNum {
             // S12.3: `pVaaBlockStaticIdc[iScdIdx]` was an indexing read whose value
@@ -2699,18 +2709,56 @@ impl CWelsPreProcess {
 
             let bIsClosestLtrFrame =
                 self.src_id(idRefPic).iLongTermPicNum == iClosestLtrFrameNum;
-            if iScdIdx == 0 {
-                let pScrollDetectInfo = &mut pCtx.vaa_ext_ref_mut().expect("guarded at this body's head").sScrollDetectInfo;
-                *pScrollDetectInfo = SScrollDetectionParam::default();
 
-                // METHOD_SCROLL_DETECTION: untranslated (`crate::processing`). The
-                // C++ runs the scroll detector here and clamps its vector; the port's
-                // dispatch returned `RET_NOTSUPPORTED` and this block was skipped, so
-                // `sScrollDetectInfo` stays at its default. Screen content only, off
-                // in every gate configuration (S18: no stub).
-                {
-                    let ret = crate::processing::vaacalc::RET_NOTSUPPORTED;
+            // **The two plugin calls, inside one tightly scoped borrow of three
+            // fields of `self` (P10.2.C6).** `self.src(..)` and `self.src_id(..)`
+            // are `&self` *methods*, so a luma slice produced through either borrows
+            // the whole preprocessor — including `m_vp`, which the `Process` calls
+            // below need mutably. Destructuring names the pool, the scaled picture
+            // and the plugin table separately, and the compiler can then see that
+            // two shared borrows of the pool sit beside one `&mut` of the plugins.
+            // The scope ends before the judgement code, which wants `self` whole
+            // again (`JudgeBestRef`, `SaveBestRefToLocal`, `src_id`).
+            //
+            // `pCtx` is a different owner throughout, so the extension writes below
+            // are disjoint from all of it.
+            let ret = {
+                let Self { m_pSpatialPicPool, m_sScaledPicture, m_vp, .. } = self;
+                let cur_pic: &SPicture = match pCurPicture {
+                    SrcPicRef::Pooled(id) => m_pSpatialPicPool.get(id),
+                    SrcPicRef::Scaled => m_sScaledPicture
+                        .pScaledInputPicture
+                        .as_deref()
+                        .expect("the scaled input picture is allocated"),
+                };
+                let cur_y = cur_pic.plane(0);
+                let ref_y = m_pSpatialPicPool.get(idRefPic).plane(0);
+                let planes = crate::processing::scene_change_detection::ScdPlanes {
+                    cur: &cur_y.as_slice()[cur_y.origin()..],
+                    cur_stride: cur_y.stride(),
+                    refp: &ref_y.as_slice()[ref_y.origin()..],
+                    ref_stride: ref_y.stride(),
+                };
+
+                if iScdIdx == 0 {
+                    // `wels_preprocess.cpp:1180-1201`, in the C++'s order: the
+                    // extension's copy is zeroed, `Set` from it, `Process`, `Get`
+                    // back into it, clamped in place, and only then copied into the
+                    // scene-change result — which happens whether or not `Process`
+                    // succeeded, exactly as upstream writes it.
+                    let pScrollDetectInfo = &mut pCtx
+                        .vaa_ext_ref_mut()
+                        .expect("guarded at this body's head")
+                        .sScrollDetectInfo;
+                    *pScrollDetectInfo = SScrollDetectionParam::default();
+
+                    m_vp.sScrollDetection.Set(pScrollDetectInfo);
+                    let ret = m_vp.sScrollDetection.Process(&sSrcMap, &sRefMap, &planes);
+
                     if ret == 0 {
+                        m_vp.sScrollDetection.Get(pScrollDetectInfo);
+                        // Ensure detected scroll motion vectors stay within the
+                        // configured motion vector range.
                         if pScrollDetectInfo.bScrollDetectFlag {
                             pScrollDetectInfo.iScrollMvX = pScrollDetectInfo
                                 .iScrollMvX
@@ -2720,15 +2768,42 @@ impl CWelsPreProcess {
                                 .clamp(-kiMvRange, kiMvRange);
                         }
                     }
+                    sSceneChangeResult.sScrollResult = pCtx
+                        .vaa_ext_ref_mut()
+                        .expect("guarded at this body's head")
+                        .sScrollDetectInfo;
                 }
-                sSceneChangeResult.sScrollResult = pCtx.vaa_ext_ref_mut().expect("guarded at this body's head").sScrollDetectInfo;
-            }
 
-            // METHOD_SCENE_CHANGE_DETECTION_SCREEN: untranslated (`crate::processing`);
-            // the port's dispatch returned `RET_NOTSUPPORTED` and the block below was
-            // skipped. Screen content only, off in every gate configuration.
+                // METHOD_SCENE_CHANGE_DETECTION_SCREEN — `wels_preprocess.cpp:1203-1207`.
+                //
+                // **D-scc-8**: the C++ hands the plugin a `uint8_t*` copied out of
+                // `pVaaBlockStaticIdc[iScdIdx]`; here the *selector* rides in
+                // `sSceneChangeResult.pStaticBlockIdc` for the bookkeeping below and
+                // the row itself is resolved from the extension. A selector that
+                // names no row is where the C++ writes through `NULL`; the port
+                // refuses instead, and the refusal is spelled as a non-zero `ret`,
+                // which takes the same branch a failing `Process` would.
+                match pCtx
+                    .vaa_ext_ref_mut()
+                    .expect("guarded at this body's head")
+                    .pVaaBlockStaticIdc
+                    .row_mut(pCurBlockStaticPointer, kiBlocksInFrame)
+                {
+                    None => crate::processing::vaacalc::RET_INVALIDPARAM,
+                    Some(row) => {
+                        m_vp.sSceneChangeDetectionScreen.Set(&sSceneChangeResult);
+                        let ret = m_vp
+                            .sSceneChangeDetectionScreen
+                            .Process(&sSrcMap, &planes, row);
+                        if ret == 0 {
+                            m_vp.sSceneChangeDetectionScreen.Get(&mut sSceneChangeResult);
+                        }
+                        ret
+                    }
+                }
+            };
+
             {
-                let ret = crate::processing::vaacalc::RET_NOTSUPPORTED;
                 if ret == 0 {
 
                     let iFrameComplexity = sSceneChangeResult.iFrameComplexity;
@@ -3137,20 +3212,108 @@ impl CWelsPreProcess {
             sComplexityAnalysisParam.sScrollResult.iScrollMvX = 0;
             sComplexityAnalysisParam.sScrollResult.iScrollMvY = 0;
 
-            // METHOD_COMPLEXITY_ANALYSIS_SCREEN: untranslated (`crate::processing`)
-            // — **P10.2 replaces this tail.** The C++ builds the two pixel maps,
-            // hands the block above to the screen complexity plugin, runs it, and
-            // reads `iFrameComplexity` back on success; the port's dispatch returned
-            // `RET_NOTSUPPORTED` and the read-back was skipped, so the block keeps
-            // the values written into it above (S18: no stub is invented, and the
-            // dead pixel maps are not built). P10.2 hands
-            // `pWelsSvcRc.pCurrentFrameGomSad` to the plugin as `&mut [i32]`, as the
-            // camera arm does, and the zero `iFrameComplexity` this leaves flows into
-            // the rate control's screen reads until then — defined on both sides,
-            // since `WELS_DIV_ROUND64` guards the zero divisor exactly as upstream's
-            // macro does.
-            let iRet = crate::processing::vaacalc::RET_NOTSUPPORTED;
-            debug_assert_ne!(iRet, 0);
+            // METHOD_COMPLEXITY_ANALYSIS_SCREEN — `wels_preprocess.cpp:868-893`.
+            //
+            // **D-scc-10**: the block is copied *out* of the extension (it is `Copy`),
+            // handed to the plugin by value through `Set`, and written back after
+            // `Get` — because the GOM array the plugin fills is the rate controller's
+            // and the two live in different fields of one context. Taking the
+            // extension's `&mut` and the rate controller's `&mut` at once is what the
+            // combined accessor below is for, and it does not reach the extension.
+            //
+            // `Get` copies the **whole** block, so `iGomNumInFrame` comes back as the
+            // plugin's bucket count and overwrites the `iGomSize` staged above. That
+            // is upstream's behaviour and it is not "preserved" here.
+            let mut sScreenParam = *sComplexityAnalysisParam;
+            // §4.6: `SLogContext` is `Copy` and `WelsLog` takes it by value (S8.1),
+            // so it comes out before the combined accessor's `&mut`.
+            let kLogCtx = pCtx.sLogCtx;
+
+            // §4.6, combined accessor: the rate controller's GOM array and the
+            // reference list, from one borrow. The source picture comes from
+            // `self.m_pSpatialPicPool` and the plugin from `self.m_vp` — two more
+            // owners, disjoint from the context and from each other.
+            let (_, pWelsSvcRc, pRefListShared) =
+                pCtx.vaa_rc_and_ref_list_mut(kiDependencyId as usize);
+
+            let mut sSrcPixMap = SPixMap::default();
+            let mut sRefPixMap = SPixMap::default();
+
+            sSrcPixMap.pPixel[0] = sCur.pData[0];
+            sSrcPixMap.iSizeInBits = g_kiPixMapSizeInBits;
+            sSrcPixMap.iStride[0] = sCur.iLineSize[0];
+            sSrcPixMap.sRect.iRectWidth = sCur.iWidthInPixel;
+            sSrcPixMap.sRect.iRectHeight = sCur.iHeightInPixel;
+            sSrcPixMap.eFormat = VideoFormat::videoFormatI420;
+
+            // The C++ passes a zeroed `SPixMap` when there is no reference and the
+            // plugin tests `pRef == NULL`; `Option` spells the same thing, so the map
+            // is built only when there is one.
+            let bHasRef = sRefPic.is_some();
+            if bHasRef {
+                sRefPixMap.pPixel[0] = sRef.pData[0];
+                sRefPixMap.iSizeInBits = g_kiPixMapSizeInBits;
+                sRefPixMap.iStride[0] = sRef.iLineSize[0];
+                sRefPixMap.sRect.iRectWidth = sRef.iWidthInPixel;
+                sRefPixMap.sRect.iRectHeight = sRef.iHeightInPixel;
+                sRefPixMap.eFormat = VideoFormat::videoFormatI420;
+            }
+
+            // The luma planes, by field on both sides. The source is a spatial source
+            // picture, the reference a reconstruction from the layer's list — the two
+            // pools this body has crossed since the flip.
+            let cur_y = self.m_pSpatialPicPool.get(idCur).plane(0);
+            let ref_y = match (sRefPic, pRefListShared) {
+                (Some(id), Some(list)) => Some(list.pic(id).plane(0)),
+                _ => None,
+            };
+            let planes = crate::processing::scene_change_detection::ScdPlanes {
+                cur: &cur_y.as_slice()[cur_y.origin()..],
+                cur_stride: cur_y.stride(),
+                refp: ref_y.map_or(&[][..], |p| &p.as_slice()[p.origin()..]),
+                ref_stride: ref_y.map_or(1, |p| p.stride()),
+            };
+
+            // **The GOM array is long enough, and this is the proof rather than a
+            // hope.** The plugin writes `ceil(iMbHeight / GOM_H_SCC)` buckets with
+            // `GOM_H_SCC = 8`, and `RcInitSequenceParameter` sets `iGomSize =
+            // ceil(iNumberMbFrame / iNumberMbGom) = ceil(iMbHeight / iGomRowMode0)`
+            // (`ratectl.cpp:153-165`) where `iGomRowMode0` is interpolated between
+            // `GOM_ROW_MODE1_*` (1 or 2) and `GOM_ROW_MODE0_*` (2 or 4) and so never
+            // exceeds 4 (`rc.h:98-107`). `4 < 8`, so `iGomSize` is always at least
+            // the plugin's bucket count and the C++ cannot write past its own array
+            // either — there is no upstream defect here to refuse. The guard stays
+            // because a panic mid-frame is a worse way to learn that than a log line,
+            // and it costs one comparison per frame.
+            let kiGomsWritten =
+                ((sCur.iHeightInPixel >> 4) as usize).div_ceil(GOM_H_SCC.max(1) as usize);
+            if pWelsSvcRc.pCurrentFrameGomSad.len() < kiGomsWritten {
+                crate::common::wels_trace::WelsLog(
+                    kLogCtx,
+                    crate::common::wels_trace::WELS_LOG_ERROR,
+                    &format!(
+                        "AnalyzePictureComplexity(): pCurrentFrameGomSad holds {} entries, the screen complexity analysis writes {}",
+                        pWelsSvcRc.pCurrentFrameGomSad.len(),
+                        kiGomsWritten
+                    ),
+                );
+                return;
+            }
+
+            self.m_vp.sComplexityAnalysisScreen.Set(&sScreenParam);
+            let iRet = self.m_vp.sComplexityAnalysisScreen.Process(
+                &sSrcPixMap,
+                bHasRef.then_some(&sRefPixMap),
+                &planes,
+                &mut pWelsSvcRc.pCurrentFrameGomSad,
+            );
+            if iRet == 0 {
+                self.m_vp.sComplexityAnalysisScreen.Get(&mut sScreenParam);
+            }
+            // The borrows above have ended; the block goes home.
+            pCtx.vaa_ext_ref_mut()
+                .expect("checked when the block was staged")
+                .sComplexityScreenParam = sScreenParam;
         } else {
             // §4.6, reorder: the writer's `&mut` sinks past everything that still
             // needs the context — the slice-type reads and `SetRefMbType`'s own
@@ -3302,27 +3465,83 @@ impl CWelsPreProcess {
             .iLongTermPicNum
     }
 
+    /// `CWelsPreProcess::UpdateBlockIdcForScreen` — `wels_preprocess.cpp:1297-1316`.
+    ///
+    /// `WelsBuildRefList`'s `UpdateBlockStatic` calls this when the reference the
+    /// list actually chose is *not* the one `DetectSceneChangeScreen` computed the
+    /// best block-static map against, so the map has to be recomputed against the
+    /// reference that will really be used.
+    ///
+    /// **The signature carries the row and the reference's pixels, because the
+    /// caller is the only one that can reach them.** In the C++ this method takes two
+    /// `SPicture*` and reads `m_pInterfaceVp`'s parameter block for the row pointer;
+    /// here the row lives in the encoder context's extension and the reference in the
+    /// context's reference list, while `self` — the preprocessor — has been *taken
+    /// out* of that context by `with_vpp`. So the caller resolves both under one
+    /// borrow and hands them over. Only the source picture is still `self`'s.
+    ///
+    /// `pStaticBlockIdcSel` is the selector the C++ stores in the result's
+    /// `pStaticBlockIdc`. It is inert on this path — `Set` copies it in, the plugin
+    /// never reads it, `Get` copies it back, and the C++ discards the whole result —
+    /// but it is what upstream puts there, so it travels.
     pub fn UpdateBlockIdcForScreen(
-        &self,
-        // S12.3: the block-static **row**, as everywhere else in the family. This
-        // body never dereferenced it — see the `let _` below.
-        pCurBlockStaticPointer: Option<usize>,
-        kpRefPic: Option<&PicPlanes>,
-        kpSrcPic: Option<&PicPlanes>,
+        &mut self,
+        pStaticBlockIdcSel: Option<usize>,
+        pCurBlockStaticIdc: &mut [u8],
+        refp: &[u8],
+        ref_stride: usize,
+        idSrc: SrcPicId,
     ) -> i32 {
-        if kpRefPic.is_none() || kpSrcPic.is_none() {
-            return 1;
-        }
+        // Same borrow plan as `DetectSceneChangeScreen`: the pool and the plugin
+        // table are named as fields, so a shared borrow of the source picture can sit
+        // beside the `&mut` on `m_vp`.
+        let Self { m_pSpatialPicPool, m_vp, .. } = self;
 
-        // METHOD_SCENE_CHANGE_DETECTION_SCREEN: untranslated (`crate::processing`).
-        // The C++ hands `pCurBlockStaticPointer` to the screen scene-change plugin
-        // through an `SSceneChangeResult`, runs it over the two pixel maps and reads
-        // the result back on success; the port's dispatch returned `RET_NOTSUPPORTED`,
-        // which is what the caller gets, and the read-back was skipped. Screen
-        // content only, off in every gate configuration (S18: no stub is invented,
-        // and the dead pixel maps are not built).
-        let _ = pCurBlockStaticPointer;
-        crate::processing::vaacalc::RET_NOTSUPPORTED
+        let src_pic = m_pSpatialPicPool.get(idSrc);
+        let src_y = src_pic.plane(0);
+
+        // `InitPixMap (kpSrcPic, &sSrcMap)`. Only `sRect` reaches the screen
+        // scene-change plugin — it takes its pixels as slices — so the map is built
+        // from geometry alone rather than through `InitPixMap`, which wants a
+        // `PicPlanes` and so a `&mut` on the pool.
+        let mut sSrcMap = SPixMap::default();
+        sSrcMap.iSizeInBits = g_kiPixMapSizeInBits;
+        sSrcMap.iStride[0] = src_y.stride() as i32;
+        sSrcMap.sRect.iRectWidth = src_pic.iWidthInPixel;
+        sSrcMap.sRect.iRectHeight = src_pic.iHeightInPixel;
+        sSrcMap.eFormat = VideoFormat::videoFormatI420;
+
+        // **The C++'s `sRefMap` has no remaining consumer here and is not built.**
+        // It contributed `pPixel[0]` and `iStride[0]` to the screen scene-change
+        // detector, which are `refp` and `ref_stride` now; unlike the scroll
+        // detector's, its `sRect` was never read. (`DetectSceneChangeScreen` still
+        // builds one, because the scroll detector does read that map's rectangle.)
+
+        // `SSceneChangeResult sSceneChangeResult = {SIMILAR_SCENE, 0, 0, NULL}` plus
+        // the two field writes — the aggregate initialiser zeroes `sScrollResult`,
+        // which `Default` does too, so the explicit `bScrollDetectFlag = false` below
+        // is upstream's statement rather than a needed one.
+        let mut sSceneChangeResult = SSceneChangeResult::default();
+        sSceneChangeResult.eSceneChangeIdc = ESceneChangeIdc::SIMILAR_SCENE;
+        sSceneChangeResult.pStaticBlockIdc = pStaticBlockIdcSel;
+        sSceneChangeResult.sScrollResult.bScrollDetectFlag = false;
+
+        let planes = crate::processing::scene_change_detection::ScdPlanes {
+            cur: &src_y.as_slice()[src_y.origin()..],
+            cur_stride: src_y.stride(),
+            refp,
+            ref_stride,
+        };
+
+        m_vp.sSceneChangeDetectionScreen.Set(&sSceneChangeResult);
+        let iRet = m_vp
+            .sSceneChangeDetectionScreen
+            .Process(&sSrcMap, &planes, pCurBlockStaticIdc);
+        if iRet == 0 {
+            m_vp.sSceneChangeDetectionScreen.Get(&mut sSceneChangeResult);
+            return 0;
+        }
+        iRet
     }
 
     /// **`pShortRefList` stood in this signature and nothing read it** (S18): the
