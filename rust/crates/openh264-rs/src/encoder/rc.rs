@@ -2196,6 +2196,40 @@ pub fn RcUpdateFrameComplexity(pEncCtx: &mut sWelsEncCtx) {
     if pTOverRc[kiTl].iPFrameNum > 255 {
         pTOverRc[kiTl].iPFrameNum = 255;
     }
+
+    // `ratectl.cpp:1156-1161` — **P10.2.C7, and the second line is a referee's
+    // input.** The screen complexity plugin never touches a verdict; it feeds the
+    // rate controller, so it needs a referee of its own. On the first P frame of an
+    // `rc=1` row both sides compute `iFrameComplexity` from a source frame and a
+    // reconstruction that are byte-identical (the IDR is), so this line must show
+    // the same number on both. Later frames legitimately diverge: their
+    // reconstructions do.
+    //
+    // §4.6: `pTOverRc` is a `&mut` into the rate controller, so the two values are
+    // read out of it before the log call reaches `pEncCtx` again for `sLogCtx`.
+    let (kiFrameDqBitsLog, kiLinearCmplx, kiFrameCmplxMean) = (
+        iFrameDqBits,
+        pTOverRc[kiTl].iLinearCmplx,
+        pTOverRc[kiTl].iFrameCmplxMean,
+    );
+    let kiQStepRc = pEncCtx.rc_at(did).iQStep;
+    let kLogCtx = pEncCtx.sLogCtx;
+    crate::common::wels_trace::WelsLog(
+        kLogCtx,
+        crate::common::wels_trace::WELS_LOG_DEBUG,
+        &format!(
+            "RcUpdateFrameComplexity iFrameDqBits = {},iQStep= {},pWelsSvcRc->iQStep= {},pTOverRc->iLinearCmplx = {}",
+            kiFrameDqBitsLog, iQStep, kiQStepRc, kiLinearCmplx
+        ),
+    );
+    crate::common::wels_trace::WelsLog(
+        kLogCtx,
+        crate::common::wels_trace::WELS_LOG_DEBUG,
+        &format!(
+            "iFrameCmplxMean = {},iFrameComplexity = {}",
+            kiFrameCmplxMean, iFrameComplexity
+        ),
+    );
 }
 
 /// Derives cascaded temporal layer QPs when rate control is disabled (`RC_OFF_MODE`).
