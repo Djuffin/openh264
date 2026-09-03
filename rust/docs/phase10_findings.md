@@ -480,3 +480,56 @@ not the place to sample a known flake"). The 40 rows stay in `sweep.sh scc` and
 **Not a port defect, and not a repair this phase owes.** The port is deterministic on
 the configuration and agrees with the reference's correct output. There is nothing to
 fix in `src/`.
+
+---
+
+## F335 — the bench's screen rows and the `scc` preset referee disjoint halves of the screen path (P10.4, E3)
+
+`BENCH_USAGE=1` was added to measure the screen path's cost and, as a by-product,
+to referee its bytes over content the diffharness has no clip for. It does both —
+30/30 rows `[bit-identical]` — but calibrating it showed the referee's reach is
+*complementary* to `sweep.sh scc`, not a superset, and the difference is the scroll
+family.
+
+**The calibration that failed twice, and what it measured.** Two deliberate breaks
+in the port left all 30 rows bit-identical and the bench exiting 0:
+
+| break | rows changed under `BENCH_USAGE=1` | the same break against the family gate |
+|---|---|---|
+| `SetScrollingMvToMd` writing `iMvY + 1` | **0 of 30** | **48 of 108** `scc` rows |
+| `CComplexityAnalysisScreen`'s `pGomComplexity[iIdx] + 1` | **0 of 30** | — |
+
+Nothing in ffmpeg's `lavfi` catalogue — `testsrc`, `mandelbrot`, `smptebars`,
+`gradients`, the rest of the fifteen — scrolls by whole rows, so `CheckLine` never
+satisfies the scroll detector and `bScrollDetectFlag` stays false for every frame of
+every row. With it false the scrolled search is never selected, `sDirectionalMv` is
+never read, and `SetScrollingMvToMd`'s write is inert however wrong it is. That is
+exactly the gap `gen_screen_clip.py` was written for in P10.1, and it is still the
+only thing that fills it.
+
+**The calibration that worked.** Deleting the screen-only forcing in the port's
+`ParamValidation` (`wels_encoder_ext.rs:1252` — screen turns
+`bEnableBackgroundDetection` off, and `GetDefaultParams` leaves it on, which is why
+the reference prints `BackgroundDetection(1) is not supported yet for screen
+content, auto turned off`):
+
+```
+BENCH_USAGE=1   exit 1   23 of 30 rows MISMATCH
+BENCH_USAGE unset exit 0   30 of 30 rows [bit-identical]
+```
+
+Screen-only, reached by every screen encode, and the camera rows prove the knob
+selects a path rather than merely relabelling one. Reverted.
+
+**What the bench does referee, then.** The parameter-validation forcing, the screen
+scene-change detector, the screen complexity analysis feeding rate control, the
+static P-skip, and the whole `GetDefaultParams` + `InitializeExt` API flow at four
+resolutions with rate control on — none of which the `scc` preset drives, since it
+pins an explicit `SEncParamExt` with RC off in its byte tier. What it cannot referee
+is anything downstream of a detected scroll.
+
+**Consequence for whoever changes the screen path next.** Run both. A green
+`BENCH_USAGE=1` is not evidence about the scroll family, and a green `scc` sweep is
+not evidence about the default-parameter API flow. Pick a calibration break the
+content in front of you actually reaches — the first two attempts above looked like
+green gates and were measuring nothing.
