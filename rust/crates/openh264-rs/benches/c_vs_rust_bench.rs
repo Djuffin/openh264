@@ -17,6 +17,7 @@
 //! | `BENCH_THREADS=<a,b>` | `iMultipleThreadIdc` values to sweep (default `1,4`) |
 //! | `BENCH_SLICE_MODE=<m[:n],..>` | slice-mode axis (default `0`, i.e. `SM_SINGLE_SLICE`) |
 //! | `BENCH_LOAD_BALANCING=0\|1` | override `bUseLoadBalancing` (default: leave `GetDefaultParams`' value) |
+//! | `BENCH_USAGE=0\|1` | `iUsageType`: 0 camera (default), 1 `SCREEN_CONTENT_REAL_TIME` |
 //!
 //! **F68** (`phase7_findings.md`): before the slice-mode knob existed this bench
 //! set `iMultipleThreadIdc` and nothing else, so `GetDefaultParams`' `SM_SINGLE_SLICE`
@@ -39,6 +40,29 @@
 //! byte-checked multi-slice span wants; it is also the configuration the diffharness
 //! gates (`cxx_enc.cpp:119` sets it false). Leaving the knob unset keeps every
 //! historical row exactly as it was.
+//!
+//! **`BENCH_USAGE`, and why it is a byte referee rather than only a knob** (P10.4,
+//! D-scc-18). `iUsageType` was `CAMERA_VIDEO_REAL_TIME` on every row this bench has
+//! ever printed, so the screen path had no measurement at all — its cost against the
+//! reference was unknown at the moment Phase 10 declared it byte-identical. Setting
+//! it to 1 does more than time the path: the per-row SHA-1 comparison below is then
+//! refereeing a content family the diffharness never feeds the screen encoder —
+//! fifteen ffmpeg lavfi sources at four sizes under `GetDefaultParams`' own values
+//! (rate control ON, frame skip on, `SM_FIXEDSLCNUM_SLICE` one-slice-per-thread)
+//! rather than the harness's pinned gate configuration over three `res/` clips and
+//! four synthetic scrolling-text ones. A `MISMATCH` row here is a defect, not a knob
+//! misuse. The row label gains ` u=1` inside the bracket `perfpair.py` parses, so a
+//! screen row and a camera row are separate keys and no historical row moves.
+//!
+//! **What it does not reach (F335).** Nothing in `lavfi`'s catalogue scrolls by
+//! whole rows, so `bScrollDetectFlag` stays false and the scrolled search,
+//! `SetScrollingMvToMd` and `JudgeScrollSkip` are inert on every row here — a
+//! deliberate `iMvY + 1` in `SetScrollingMvToMd` leaves all 30 rows bit-identical,
+//! where the same break fails 48 of the family gate's 108 `scc` rows. This axis is a
+//! *complement* to `sweep.sh scc`, not a superset of it: it covers content and an
+//! API flow the harness has no clip for, and the harness covers the scroll family
+//! this content cannot express. Calibrating a change here means picking a break the
+//! content actually reaches.
 //!
 //! Exits non-zero if any configuration's bitstreams disagree, after running and
 //! reporting all of them — one mismatch should not cost you the other 29 rows.
@@ -260,10 +284,17 @@ unsafe fn fill_params(
     threads: u16,
     slice: SliceSpec,
     load_balancing: Option<bool>,
+    usage: EUsageType,
 ) -> SEncParamExt {
     let mut param: SEncParamExt = unsafe { std::mem::zeroed() };
     let vtbl = unsafe { &*(*enc).lpVtbl };
     unsafe { (vtbl.GetDefaultParams)(enc, &mut param) };
+    // D-scc-18. `GetDefaultParams` writes `CAMERA_VIDEO_REAL_TIME`, which is what
+    // every row before P10.4 measured. Under screen usage the encoder's own
+    // `ParamValidation` then forces `bEnableSceneChangeDetect` ON and
+    // `bEnableAdaptiveQuant`/`bEnableBackgroundDetection` OFF on both sides
+    // (`encoder_ext.cpp:274-290`), so the two remain configured identically.
+    param.iUsageType = usage;
     param.iPicWidth = width;
     param.iPicHeight = height;
     param.fMaxFrameRate = 30.0;
@@ -318,10 +349,11 @@ unsafe fn run_encoder(
     threads: u16,
     slice: SliceSpec,
     load_balancing: Option<bool>,
+    usage: EUsageType,
     pics: &[SSourcePicture],
 ) -> RunResult {
     let vtbl = unsafe { &*(*enc).lpVtbl };
-    let param = unsafe { fill_params(enc, width, height, threads, slice, load_balancing) };
+    let param = unsafe { fill_params(enc, width, height, threads, slice, load_balancing, usage) };
     let init_ret = unsafe { (vtbl.InitializeExt)(enc, &param) };
     assert_eq!(
         init_ret,
@@ -371,13 +403,14 @@ fn run_c_library_encoder(
     threads: u16,
     slice: SliceSpec,
     load_balancing: Option<bool>,
+    usage: EUsageType,
     pics: &[SSourcePicture],
 ) -> RunResult {
     unsafe {
         let mut enc: *mut ISVCEncoder = ptr::null_mut();
         assert_eq!((cpp_lib.create_fn)(&mut enc), 0, "C++ WelsCreateSVCEncoder failed");
         assert!(!enc.is_null());
-        let result = run_encoder(enc, width, height, threads, slice, load_balancing, pics);
+        let result = run_encoder(enc, width, height, threads, slice, load_balancing, usage, pics);
         (cpp_lib.destroy_fn)(enc);
         result
     }
@@ -389,13 +422,14 @@ fn run_rust_library_encoder(
     threads: u16,
     slice: SliceSpec,
     load_balancing: Option<bool>,
+    usage: EUsageType,
     pics: &[SSourcePicture],
 ) -> RunResult {
     unsafe {
         let mut enc: *mut ISVCEncoder = ptr::null_mut();
         assert_eq!(WelsCreateSVCEncoder(&mut enc), CM_RESULT_SUCCESS);
         assert!(!enc.is_null());
-        let result = run_encoder(enc, width, height, threads, slice, load_balancing, pics);
+        let result = run_encoder(enc, width, height, threads, slice, load_balancing, usage, pics);
         WelsDestroySVCEncoder(enc);
         result
     }
@@ -450,6 +484,19 @@ fn main() {
     // Only tag the rows when the axis actually has something on it, so an unset
     // `BENCH_SLICE_MODE` prints the exact row text the ledger's history is written in.
     let tag_rows = slice_specs.len() > 1 || slice_specs[0] != SliceSpec::DEFAULT;
+    // D-scc-18's knob. `0`/unset is camera — every row this bench has printed since
+    // it existed — and `1` is `SCREEN_CONTENT_REAL_TIME`. Anything else is a panic
+    // rather than a silent fallback to camera: a typo that quietly measured the
+    // camera path while the operator believed they were measuring the screen one is
+    // exactly the failure `BENCH_SLICE_MODE` had before F68 caught it.
+    let usage: EUsageType = match std::env::var("BENCH_USAGE").ok().as_deref() {
+        None | Some("") | Some("0") => EUsageType::CAMERA_VIDEO_REAL_TIME,
+        Some("1") => EUsageType::SCREEN_CONTENT_REAL_TIME,
+        Some(other) => panic!(
+            "BENCH_USAGE={other:?} is not one of 0 (CAMERA_VIDEO_REAL_TIME) or 1 (SCREEN_CONTENT_REAL_TIME)"
+        ),
+    };
+    let screen = usage == EUsageType::SCREEN_CONTENT_REAL_TIME;
     // Default to false for deterministic multi-slice bitstream comparison, overrideable by BENCH_LOAD_BALANCING.
     let load_balancing: Option<bool> = Some(
         std::env::var("BENCH_LOAD_BALANCING")
@@ -467,6 +514,9 @@ fn main() {
     }
     if let Some(lb) = load_balancing {
         println!(" bUseLoadBalancing forced to {lb}");
+    }
+    if screen {
+        println!(" Usage type: SCREEN_CONTENT_REAL_TIME");
     }
 
     let mut mismatches: Vec<String> = Vec::new();
@@ -516,12 +566,18 @@ fn main() {
             let spec = *spec;
             for threads in &thread_counts {
                 let threads = *threads;
+                // The tag goes INSIDE the bracket: `perfpair.py`'s row regex is
+                // `\[(\d+) thread([^\]]*)\]` (its F74 fix), so everything up to the
+                // `]` travels into the row key and a `u=1` row can never be paired
+                // against a camera row of the same size and thread count. An unset
+                // knob prints the exact historical text.
+                let usage_tag = if screen { " u=1" } else { "" };
                 let row = if tag_rows {
-                    format!("{:1} thread {}", threads, spec.label(threads))
+                    format!("{:1} thread {}{}", threads, spec.label(threads), usage_tag)
                 } else {
-                    format!("{threads:1} thread")
+                    format!("{threads:1} thread{usage_tag}")
                 };
-                let rust = run_rust_library_encoder(w, h, threads, spec, load_balancing, &src_pics);
+                let rust = run_rust_library_encoder(w, h, threads, spec, load_balancing, usage, &src_pics);
                 let Some(ref cpp) = cpp_lib else {
                     println!(
                         "  [{}] Rust: {:8.2} fps ({:6.3} ms) | {} bytes | SHA-1 {}",
@@ -529,7 +585,7 @@ fn main() {
                     );
                     continue;
                 };
-                let c = run_c_library_encoder(cpp, w, h, threads, spec, load_balancing, &src_pics);
+                let c = run_c_library_encoder(cpp, w, h, threads, spec, load_balancing, usage, &src_pics);
 
                 // A speedup over work that is not the same work is not a speedup. Report
                 // it either way, but never label a mismatched row with one.
