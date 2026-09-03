@@ -1089,6 +1089,13 @@ pub type WelsTraceCallback =
 /// `with_exposed_provenance_mut` out, rather than a bare `as` cast: the pointer
 /// this returns goes straight to a C callback that will use it, so the exposure
 /// has to be the sanctioned one rather than an integer cast.
+///
+/// The sink is only reachable from inside the crate:
+///
+/// ```compile_fail,E0624
+/// # unsafe extern "C" fn sink(_: *mut std::ffi::c_void, _: i32, _: *const std::ffi::c_char) {}
+/// openh264_rs::api::codec_api::TraceUserCtx::default().deliver(sink, 1, c"x");
+/// ```
 #[repr(transparent)]
 #[derive(Copy, Clone, Debug)]
 pub struct TraceUserCtx(usize);
@@ -1105,7 +1112,7 @@ impl TraceUserCtx {
     /// The only door in: whatever the caller installed through
     /// `ENCODER_OPTION_TRACE_CALLBACK_CONTEXT` or the decoder's equivalent.
     #[inline]
-    pub fn from_abi(p: *mut c_void) -> Self {
+    pub(crate) fn from_abi(p: *mut c_void) -> Self {
         // `expose_provenance`, not `as usize`: the address is handed back to C at
         // `deliver`, so the provenance has to be exposed here for that pointer to
         // be usable rather than merely numerically equal.
@@ -1117,9 +1124,14 @@ impl TraceUserCtx {
     /// `pfLog` and the handle were installed together by the application through
     /// `SetOption`; neither can carry a lifetime across `codec_api.h`, so their
     /// validity is the caller's contract exactly as it is in the reference.
+    ///
+    /// **Sound only because it is unreachable from safe code**: this method,
+    /// `from_abi` and `SLogContext`'s two callback fields are all `pub(crate)`, so
+    /// the pair can only have arrived through the `unsafe` installers that took on
+    /// that contract. Widening any one of those visibilities makes this unsound.
     #[inline]
     #[allow(unsafe_code)]
-    pub fn deliver(
+    pub(crate) fn deliver(
         self,
         pfLog: unsafe extern "C" fn(ctx: *mut c_void, level: i32, string: *const c_char),
         level: i32,
@@ -1576,7 +1588,20 @@ impl Encoder {
         self.0.sync_log_ctx();
     }
 
-    pub fn set_trace_callback(&mut self, callback: WelsTraceCallback) {
+    /// # Safety
+    ///
+    /// `callback` is entered on every delivered message until it is replaced or
+    /// this encoder is dropped, with the context installed beside it by
+    /// [`Self::set_trace_callback_context`]; it must be sound to enter for that
+    /// whole window. Neither half can carry a lifetime across `codec_api.h`, which
+    /// is why the promise is made here and not checked at the call.
+    ///
+    /// ```compile_fail,E0133
+    /// # unsafe extern "C" fn sink(_: *mut std::ffi::c_void, _: i32, _: *const std::ffi::c_char) {}
+    /// let mut e = openh264_rs::api::codec_api::Encoder::new();
+    /// e.set_trace_callback(Some(sink));
+    /// ```
+    pub unsafe fn set_trace_callback(&mut self, callback: WelsTraceCallback) {
         self.0.m_pWelsTrace.SetTraceCallback(callback);
         self.0.sync_log_ctx();
     }
@@ -1600,14 +1625,14 @@ impl Encoder {
     /// the one place the C ABI's shape reaches the safe surface, and it is `unsafe`
     /// because no Rust type can state that obligation.
     pub unsafe fn set_option_raw(&mut self, id: ENCODER_OPTION, option: *mut c_void) -> i32 {
-        self.0.SetOption(id, option)
+        unsafe { self.0.SetOption(id, option) }
     }
 
     /// # Safety
     ///
     /// As [`Self::set_option_raw`], with `option` **written**.
     pub unsafe fn get_option_raw(&mut self, id: ENCODER_OPTION, option: *mut c_void) -> i32 {
-        self.0.GetOption(id, option)
+        unsafe { self.0.GetOption(id, option) }
     }
 }
 
@@ -2239,7 +2264,10 @@ impl Decoder {
         self.sync_log_ctx();
     }
 
-    pub fn set_trace_callback(&mut self, callback: WelsTraceCallback) {
+    /// # Safety
+    ///
+    /// As [`Encoder::set_trace_callback`], for this decoder's lifetime.
+    pub unsafe fn set_trace_callback(&mut self, callback: WelsTraceCallback) {
         self.trace.SetTraceCallback(callback);
         self.sync_log_ctx();
         crate::common::wels_trace::WelsLog(
