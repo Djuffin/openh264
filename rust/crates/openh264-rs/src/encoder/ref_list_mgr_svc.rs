@@ -1349,19 +1349,51 @@ pub fn UpdateBlockStatic(pCtx: &mut sWelsEncCtx) {
             let Some(idRef) = pRefList0[idx] else {
                 continue;
             };
-            // Two pools again: the reference is a reconstruction picture, the current one
-            // a spatial source picture. Both are copied to geometry before the call.
-            let pRefList = pCtx
-                .ref_list_mut(uiDid)
-                .expect("the dependency layer's reference list");
-            let sRef = pRefList.pic_mut(idRef).planes();
+            let Some(idSrc) = idEnc else {
+                continue;
+            };
+            // **The block-static grid is the *source* picture's**, `(w >> 3) *
+            // (h >> 3)` of its aligned size — the same grid `SetBlockStaticIdcToMd`
+            // reads back with `kiBlocks = (kiMbWidth << 1) * (kiMbHeight << 1)`, and
+            // the same one `DetectSceneChangeScreen` wrote. Read from the
+            // preprocessor's pool, which `with_vpp` has made a separate owner, before
+            // the context borrow below begins.
+            let kiBlocksInFrame = {
+                let src_pic = pVpp.m_pSpatialPicPool.get(idSrc);
+                ((src_pic.iWidthInPixel >> 3) * (src_pic.iHeightInPixel >> 3)).max(0) as usize
+            };
+
+            // §4.6's combined accessor, and this site is why it exists: the row the
+            // plugin fills lives in the extension and the reconstruction it is
+            // measured against lives in the reference list, and both must be live at
+            // the call. Two pools again, too — the reference is a reconstruction
+            // picture, the source a spatial source picture.
+            let (pVaaExtMut, pRefList) = pCtx.vaa_ext_and_ref_list_mut(uiDid);
+            let (Some(pVaaExtMut), Some(pRefList)) = (pVaaExtMut, pRefList) else {
+                continue;
+            };
             let iFrameNum = pRefList.pic(idRef).iFrameNum;
             if iVaaBestRefFrameNum != iFrameNum {
-                let sSrc = idEnc.map(|id| pVpp.m_pSpatialPicPool.get_mut(id).planes());
+                let ref_y = pRefList.pic(idRef).plane(0);
+                // **The `None` here is where the C++ writes through a null row.**
+                // `pVaaBestBlockStaticIdc` names no row when the store is
+                // unallocated or the selector is past its rows — the state
+                // `pVaaExt->pVaaBestBlockStaticIdc == NULL` names — and the C++
+                // hands that null to the plugin, which post-increments through it.
+                // The port refuses instead, silently, because the C++ discards this
+                // call's return value and there is nothing to report it to.
+                let Some(row) = pVaaExtMut
+                    .pVaaBlockStaticIdc
+                    .row_mut(pVaaBestBlockStaticIdc, kiBlocksInFrame)
+                else {
+                    continue;
+                };
                 pVpp.UpdateBlockIdcForScreen(
                     pVaaBestBlockStaticIdc,
-                    Some(&sRef),
-                    sSrc.as_ref(),
+                    row,
+                    &ref_y.as_slice()[ref_y.origin()..],
+                    ref_y.stride(),
+                    idSrc,
                 );
             }
         }

@@ -1269,6 +1269,28 @@ impl sWelsEncCtx {
         )
     }
 
+    /// The **screen-content extension and one layer's reference list, from one
+    /// borrow** — `UpdateBlockStatic`'s pair (`ref_list_mgr_svc.cpp:648-660`): the
+    /// block-static row it rewrites, and the reconstruction it rewrites that row
+    /// against.
+    ///
+    /// The two halves are wanted at the same instant, not in sequence: `row_mut` on
+    /// the extension's store and `pic(..).plane(0)` on the list both have to be live
+    /// when the screen scene-change plugin is called, and the plugin itself is a
+    /// third owner (the preprocessor, taken out of the context by `with_vpp`). Two
+    /// whole-context accessors could not do that; one projection of two fields can.
+    #[inline]
+    pub fn vaa_ext_and_ref_list_mut(
+        &mut self,
+        kiDid: usize,
+    ) -> (Option<&mut SVAAFrameInfoExt>, Option<&SRefList>) {
+        let sWelsEncCtx { pVaa, ppRefPicListExt, .. } = self;
+        (
+            pVaa.as_deref_mut().and_then(VaaBlock::ext_mut),
+            ppRefPicListExt.get(kiDid).and_then(|s| s.as_deref()),
+        )
+    }
+
     /// Every field the three LTR bodies touch, **from one borrow** — §4.6's
     /// combined accessor taken to its natural end, and what retires
     /// `ctx_param_raw` and two `addr_of_mut!` roots from this family (S10.5a).
