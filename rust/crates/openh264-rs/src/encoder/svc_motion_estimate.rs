@@ -424,7 +424,15 @@ pub type PCalculateBlockFeatureOfFrame = fn(
 /// holds the safe per-block twins below.
 pub type PCalculateSingleBlockFeature = fn(cRef: &RecCursor<'_>) -> i32;
 
-pub type PUpdateFMESwitch = extern "C" fn(pCurLayer: Option<&SDqLayer>);
+/// **D-scc-13**: the layer arrives exclusively, and `Option` is gone from the
+/// parameter. `UpdateFMESwitch` writes `uiFMEGoodFrameCount` on the layer's
+/// `pFeatureSearchPreparation` — the C++'s `SDqLayer*` is not const — so the
+/// slot's shared borrow could not carry the real body. The **table's** wrapper
+/// stays (`SWelsFuncPtrList::pfUpdateFMESwitch: Option<PUpdateFMESwitch>`): that
+/// one says "unset", which is a different question. The slot's one call site is
+/// after the join (`WelsEncoderEncodeExt`, "update scc related"), where a
+/// `&mut sWelsEncCtx` exists again, so nothing fork-reachable is retyped here.
+pub type PUpdateFMESwitch = fn(pCurLayer: &mut SDqLayer);
 
 /// The motion-estimation dispatch group — every slot the search family reaches
 /// *through the table it used to be handed back* (session F, the Phase 4a
@@ -1766,9 +1774,80 @@ pub fn MotionEstimateFeatureFullSearch(
 // Adaptive FME Switch Management
 // ============================================================================
 
+/// `CountFMECostDown` — `svc_motion_estimate.cpp:1027-1041`: the sum of every
+/// coded slice's `uiSliceFMECostDown`.
+///
+/// **Re-ported at P10.3.D2**, with `UpdateFMEGoodFrameCount` and
+/// `UpdateFMESwitch`. T6.D2 deleted all three (S18) while the screen-content
+/// dispatch that installs them was untranslated; D4 translates it.
+///
+/// `&mut` where the C++ takes `const SDqLayer*`, and nothing here is written:
+/// the slice-bank family has only exclusive accessors, because S11.35 deleted
+/// `slice_in_layer`'s shared twin for having no callers. The C++'s dead first
+/// `pSlice` read (`:1031`) has no subject — the loop overwrites it before any
+/// use.
+fn CountFMECostDown(pCurLayer: &mut SDqLayer) -> u32 {
+    let kiSliceCount = GetCurrentSliceNum(pCurLayer);
+    let mut uiCostDownSum: u32 = 0;
+    if kiSliceCount >= 1 {
+        for iSliceIndex in 0..kiSliceCount {
+            if let Some(pSlice) =
+                crate::encoder::svc_encode_slice::slice_in_layer_mut(pCurLayer, iSliceIndex)
+            {
+                // `uint32_t +=`: the C++ wraps, so this does. `uiSliceFMECostDown`
+                // is itself a wrapping `+=`/`-=` pair in
+                // `WelsDiamondCrossFeatureSearch`, and **nothing ever resets it**
+                // (its three mentions in the whole reference are that pair and the
+                // sum here) — it accumulates for the life of the slice object.
+                uiCostDownSum = uiCostDownSum.wrapping_add(pSlice.uiSliceFMECostDown);
+            }
+        }
+    }
+    uiCostDownSum
+}
+
+/// `UpdateFMEGoodFrameCount` — `svc_motion_estimate.cpp:1043-1052`.
+/// `uiFMEGoodFrameCount` lies in `[0, FMESWITCH_GOODFRAMECOUNT_MAX]`, which is
+/// what the two guards are for; neither `+= 1` nor `-= 1` can overflow behind
+/// them, so they are plain arithmetic here as in the C++.
+fn UpdateFMEGoodFrameCount(iAvMBNormalizedRDcostDown: u32, uiFMEGoodFrameCount: &mut u8) {
+    //this strategy may be changed, here the number is derived from empirical-numbers
+    if iAvMBNormalizedRDcostDown > FMESWITCH_MBAVERCOSTSAVING_THRESHOLD {
+        if *uiFMEGoodFrameCount < FMESWITCH_GOODFRAMECOUNT_MAX {
+            *uiFMEGoodFrameCount += 1;
+        }
+    } else if *uiFMEGoodFrameCount > 0 {
+        *uiFMEGoodFrameCount -= 1;
+    }
+}
+
+/// `UpdateFMESwitch` — `svc_motion_estimate.cpp:1054-1058`. Called through
+/// `pfUpdateFMESwitch` after the fork joins, on the frame thread.
+///
+/// The C++ dereferences `pFeatureSearchPreparation` unconditionally and may do
+/// so safely: this body is installed only from inside
+/// `PreprocessSliceCoding`'s `if (pFeatureSearchPreparation)` (D4), so a layer
+/// reaching it without one does not exist. The port asks anyway, which costs a
+/// branch and removes a null dereference from the reachable set.
+///
+/// `kiMbNum` is never zero on any path that installs this — the layer's
+/// macroblock grid is sized in `InitDqLayers`, before any slice is coded — so
+/// the division mirrors the C++'s, which would be undefined at zero.
+pub fn UpdateFMESwitch(pCurLayer: &mut SDqLayer) {
+    let iFMECost = CountFMECostDown(pCurLayer);
+    // The C++ multiplies two `int32_t`s and divides a `uint32_t` by the product,
+    // so the division is unsigned. `iMbWidth`/`iMbHeight` are `int16_t` here and
+    // both are positive, so the product is the same number.
+    let kiMbNum = (pCurLayer.iMbWidth as i32 * pCurLayer.iMbHeight as i32) as u32;
+    let iAvMBNormalizedRDcostDown = iFMECost / kiMbNum;
+    if let Some(prep) = pCurLayer.pFeatureSearchPreparation.as_deref_mut() {
+        UpdateFMEGoodFrameCount(iAvMBNormalizedRDcostDown, &mut prep.uiFMEGoodFrameCount);
+    }
+}
+
 /// Intentional no-op motion estimation FME switch callback.
 /// Matches `void UpdateFMESwitchNull (SDqLayer* pCurLayer)` in `svc_motion_estimate.cpp:1059`.
-pub extern "C" fn UpdateFMESwitchNull(_pCurLayer: Option<&SDqLayer>) {}
+pub fn UpdateFMESwitchNull(_pCurLayer: &mut SDqLayer) {}
 
 // ============================================================================
 // Feature Storage Dynamic Allocation & Deallocation
@@ -2075,8 +2154,89 @@ mod tests {
         // null is unrepresentable and the test says the same thing with a real
         // layer — that the body is empty, which is the whole claim. S11.29: the
         // callee is a safe `fn`, so the block and its instrument allow retire.
-        let layer = crate::encoder::svc_encode_slice::SDqLayer::default();
-        UpdateFMESwitchNull(Some(&layer));
+        // **D-scc-13**: the parameter is `&mut SDqLayer` now, so the claim is
+        // the same one with an exclusive borrow — the body writes nothing.
+        let mut layer = crate::encoder::svc_encode_slice::SDqLayer::default();
+        UpdateFMESwitchNull(&mut layer);
+    }
+
+    /// A layer with two coded slices of known `uiSliceFMECostDown`, a 4x3
+    /// macroblock grid and a preparation — the shape `UpdateFMESwitch` reads.
+    fn fme_switch_layer(
+        costs: &[u32],
+        uiFMEGoodFrameCount: u8,
+    ) -> crate::encoder::svc_encode_slice::SDqLayer {
+        use crate::encoder::svc_encode_slice::{SDqLayer, SSlice, SliceIdx};
+        let mut layer = SDqLayer::default();
+        layer.iMbWidth = 4;
+        layer.iMbHeight = 3;
+        layer.sSliceBufferInfo[0].pSliceBuffer =
+            costs.iter().map(|_| SSlice::default()).collect();
+        for (i, &c) in costs.iter().enumerate() {
+            layer.sSliceBufferInfo[0].pSliceBuffer[i].uiSliceFMECostDown = c;
+            layer.ppSliceInLayer.push(SliceIdx { bank: 0, offset: i as i32 });
+        }
+        layer
+            .sSliceEncCtx
+            .iSliceNumInFrame
+            .store(costs.len() as i32, std::sync::atomic::Ordering::Relaxed);
+        let mut prep = SFeatureSearchPreparation::new(64, 48, 0x0307);
+        prep.uiFMEGoodFrameCount = uiFMEGoodFrameCount;
+        layer.pFeatureSearchPreparation = Some(Box::new(prep));
+        layer
+    }
+
+    /// `UpdateFMEGoodFrameCount` — `svc_motion_estimate.cpp:1043-1052`: both ends
+    /// of `[0, 5]` and both sides of the threshold (2).
+    #[test]
+    fn update_fme_good_frame_count_saturates_at_both_ends() {
+        let step = |cost: u32, from: u8| {
+            let mut n = from;
+            UpdateFMEGoodFrameCount(cost, &mut n);
+            n
+        };
+        // strictly above the threshold: up, and stuck at the maximum
+        assert_eq!(step(3, 2), 3);
+        assert_eq!(step(3, FMESWITCH_GOODFRAMECOUNT_MAX), FMESWITCH_GOODFRAMECOUNT_MAX);
+        assert_eq!(step(u32::MAX, 4), 5);
+        // at or below it: down, and stuck at zero (no `u8` underflow)
+        assert_eq!(step(FMESWITCH_MBAVERCOSTSAVING_THRESHOLD, 2), 1);
+        assert_eq!(step(0, 1), 0);
+        assert_eq!(step(0, 0), 0);
+    }
+
+    /// `UpdateFMESwitch` — `svc_motion_estimate.cpp:1054-1058`: the sum over the
+    /// layer's coded slices, divided by the macroblock count, decides the step.
+    #[test]
+    fn update_fme_switch_sums_the_slices_and_steps_the_count() {
+        // 12 macroblocks; 20 + 25 = 45; 45 / 12 = 3 > 2, so the count goes up.
+        let mut layer = fme_switch_layer(&[20, 25], 2);
+        UpdateFMESwitch(&mut layer);
+        assert_eq!(
+            layer.pFeatureSearchPreparation.as_ref().unwrap().uiFMEGoodFrameCount,
+            3
+        );
+
+        // 12 + 12 = 24; 24 / 12 = 2, which is *not* `> 2` — the count goes down.
+        let mut layer = fme_switch_layer(&[12, 12], 2);
+        UpdateFMESwitch(&mut layer);
+        assert_eq!(
+            layer.pFeatureSearchPreparation.as_ref().unwrap().uiFMEGoodFrameCount,
+            1
+        );
+
+        // `iSliceNumInFrame` is the bound, not the bank's length: a third slice
+        // the frame has not coded is not summed. 20 + 25 = 45 again.
+        let mut layer = fme_switch_layer(&[20, 25, 1000], 2);
+        layer
+            .sSliceEncCtx
+            .iSliceNumInFrame
+            .store(2, std::sync::atomic::Ordering::Relaxed);
+        UpdateFMESwitch(&mut layer);
+        assert_eq!(
+            layer.pFeatureSearchPreparation.as_ref().unwrap().uiFMEGoodFrameCount,
+            3
+        );
     }
 }
 
