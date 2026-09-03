@@ -397,8 +397,10 @@ pub extern "C" fn WelsMdInterSecondaryModesEnc<'a>(
         // S4.C1: `vaa_ptr()` was the raw form of this reach; the slot takes the
         // shared reference now, which is the same `&self` retag `func_list()` above
         // already makes and which two workers may hold at once.
+        // **D-scc-4**: the extension rather than the base block — `None` under
+        // camera content, where the slot holds the `Null` twin anyway.
         (*pFuncList).pfSetScrollingMv.expect("pfSetScrollingMv is unset")(
-            (*pEncCtx).vaa_expect(),
+            (*pEncCtx).vaa_ext_ref(),
             pWelsMd,
         ); //SCC
         (*pFuncList).pfInterFineMd.expect(
@@ -2611,27 +2613,36 @@ pub fn WelsMdInterFinePartitionVaaOnScreen<'a>(
 // 5. Global Scrolling Motion Vector Dispatch
 // ============================================================================
 
-pub fn SetScrollingMvToMd(pVaa: &SVAAFrameInfo, pWelsMd: &mut SWelsMD<'_>) {
-    // The screen-content downcast — the C++'s `static_cast<SVAAFrameInfoExt*>`.
-    // It stays inside an `unsafe fn` rather than becoming an explicit block in a
-    // safe one: A5 centralised this cast in `sWelsEncCtx::vaa_ext` so it would not
-    // be claimed in fifteen separate places, and re-spelling it here as a safe-fn
-    // block would make it a second claim *and* move an `unsafe_block` onto this
-    // file's ratchet row for no aliasing gain. What C1 changes is the parameter,
-    // not the cast: `*mut SVAAFrameInfo` -> `&SVAAFrameInfo`, so the slot can
-    // never hand a worker an exclusive reference to the one shared block.
-    // **S11.3: the last of the downcast family.** The cast stood here because
-    // this body is handed the *base* block and upstream's screen path passes an
-    // `SVAAFrameInfoExt` in that slot. The slot's type is what keeps it written
-    // this way: `PSetScrollingMv` takes the base block, and **this function has
-    // no installer** — `pfSetScrollingMv` is only ever stamped with
-    // `SetScrollingMvToMdNull` (`encoder_ext.rs`), whose body is empty — so the
-    // value this port produces on every reachable path is the default the `Null`
-    // twin leaves. P10.3 retypes the slot (D-scc-4) and installs this body from
-    // `PreprocessSliceCoding`'s screen block, reading the extension through
-    // `vaa_ext_ref` (`Some` under screen content since P10.1.B3).
-    let _ = pVaa;
-    let sTempMv = SMVUnitXY::default();
+/// `SetScrollingMvToMd` — `svc_mode_decision.cpp:675-687`. The frame's detected
+/// scroll vector, stamped as the directional MV of the 16x16 block and all four
+/// 8x8s; `WelsMotionEstimateSearchScrolled` is what reads it.
+///
+/// **P10.3.D3, and the body is live for the first time.** Until now
+/// `pfSetScrollingMv` was only ever stamped with the `Null` twin
+/// (`encoder_ext.rs`'s camera install), so the value this port produced on every
+/// reachable path was the zero the twin leaves — which is what this body wrote,
+/// with the extension read out. D4's screen block installs it.
+///
+/// **D-scc-4**: the slot carries the extension, so the C++'s
+/// `static_cast<SVAAFrameInfoExt*>` has no subject — the last of the downcast
+/// family (S11.3) goes with it. `None` cannot be reached once installed: the
+/// installer runs only where `vaa_ext_ref()` answered `Some`. It is the twin's
+/// answer, and `SMVUnitXY::default()` is `(0, 0)` exactly as the twin leaves.
+///
+/// The two scroll components are `int32_t` on the extension and `int16_t` in
+/// `SMVUnitXY`; the narrowing is the C++'s own assignment
+/// (`sTempMv.iMvX = pVaaExt->sScrollDetectInfo.iScrollMvX`), and
+/// `DetectSceneChangeScreen` has already clamped them to `±iMvRange`. The units
+/// are **integer pel** — `MeEndIntepelSearch` scales by four downstream, so
+/// nothing is pre-scaled here.
+pub fn SetScrollingMvToMd(pVaaExt: Option<&SVAAFrameInfoExt>, pWelsMd: &mut SWelsMD<'_>) {
+    let sTempMv = match pVaaExt {
+        Some(pVaaExt) => SMVUnitXY {
+            iMvX: pVaaExt.sScrollDetectInfo.iScrollMvX as i16,
+            iMvY: pVaaExt.sScrollDetectInfo.iScrollMvY as i16,
+        },
+        None => SMVUnitXY::default(),
+    };
 
     pWelsMd.sMe.sMe16x16.sDirectionalMv = sTempMv;
     pWelsMd.sMe.sMe8x8[0].sDirectionalMv = sTempMv;
@@ -2642,7 +2653,7 @@ pub fn SetScrollingMvToMd(pVaa: &SVAAFrameInfo, pWelsMd: &mut SWelsMD<'_>) {
 
 /// Intentional no-op mode decision scrolling MV callback.
 /// Matches `void SetScrollingMvToMdNull (SVAAFrameInfo* pVaa, SWelsMD* pWelsMd)` in `svc_mode_decision.cpp:689`.
-pub fn SetScrollingMvToMdNull(_pVaa: &SVAAFrameInfo, _pWelsMd: &mut SWelsMD<'_>) {}
+pub fn SetScrollingMvToMdNull(_pVaaExt: Option<&SVAAFrameInfoExt>, _pWelsMd: &mut SWelsMD<'_>) {}
 
 #[cfg(test)]
 mod tests {
@@ -3120,11 +3131,44 @@ mod tests {
     fn test_svc_mode_decision_noop_callback() {
         // The MD argument used to be a null raw MD pointer; it is a `&mut` now, so
         // the null goes and a real record takes its place. **S4.C1 does the same to
-        // `pVaa`**: the slot's parameter is `&SVAAFrameInfo` rather than a raw, so
+        // `pVaa`**: the slot's parameter is a reference rather than a raw, so
         // there is no null to pass and a real block takes its place here too. This
         // callback is the no-op arm of `PSetScrollingMv` and reads neither.
-        let sVaa = SVAAFrameInfo::default();
+        // **D-scc-4**: that block is the extension now, and `None` is the shape a
+        // camera frame arrives in.
+        let sVaaExt = SVAAFrameInfoExt::default();
         let mut sMd = SWelsMD::default();
-        SetScrollingMvToMdNull(&sVaa, &mut sMd);
+        SetScrollingMvToMdNull(Some(&sVaaExt), &mut sMd);
+        SetScrollingMvToMdNull(None, &mut sMd);
+    }
+
+    /// `SetScrollingMvToMd` — `svc_mode_decision.cpp:675-687`: the frame's scroll
+    /// vector reaches all five directional MVs, and only those.
+    #[test]
+    fn set_scrolling_mv_to_md_stamps_all_five_blocks() {
+        let mut sVaaExt = SVAAFrameInfoExt::default();
+        sVaaExt.sScrollDetectInfo.iScrollMvX = 0;
+        sVaaExt.sScrollDetectInfo.iScrollMvY = -8;
+
+        let mut sMd = SWelsMD::default();
+        SetScrollingMvToMd(Some(&sVaaExt), &mut sMd);
+
+        let want = SMVUnitXY { iMvX: 0, iMvY: -8 };
+        assert_eq!(sMd.sMe.sMe16x16.sDirectionalMv, want);
+        for i in 0..4 {
+            assert_eq!(sMd.sMe.sMe8x8[i].sDirectionalMv, want, "sMe8x8[{i}]");
+        }
+        // the two 16x8 / 8x16 families are not among the five the C++ writes
+        assert_eq!(sMd.sMe.sMe16x8[0].sDirectionalMv, SMVUnitXY::default());
+        assert_eq!(sMd.sMe.sMe8x16[0].sDirectionalMv, SMVUnitXY::default());
+
+        // `None` — the twin's answer, and unreachable once the body is installed.
+        let mut sMd = SWelsMD::default();
+        sMd.sMe.sMe16x16.sDirectionalMv = want;
+        SetScrollingMvToMd(None, &mut sMd);
+        assert_eq!(sMd.sMe.sMe16x16.sDirectionalMv, SMVUnitXY::default());
+        for i in 0..4 {
+            assert_eq!(sMd.sMe.sMe8x8[i].sDirectionalMv, SMVUnitXY::default());
+        }
     }
 }

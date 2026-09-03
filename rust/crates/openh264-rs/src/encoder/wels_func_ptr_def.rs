@@ -41,7 +41,7 @@ use crate::encoder::svc_motion_estimate::{
     PLineFullSearchFunc, PMotionSearchFunc, PSearchMethodFunc, SMeFuncs,
     PUpdateFMESwitch,
 };
-use crate::encoder::wels_preprocess::SVAAFrameInfo;
+use crate::encoder::wels_preprocess::SVAAFrameInfoExt;
 
 // ============================================================================
 // Function pointer typedefs that had no Rust counterpart
@@ -154,10 +154,20 @@ pub type PInterMdScrollingPSkipDecisionFunc = fn(
 /// exclusive reference here would be N workers each taking a `Unique` retag over
 /// the one video-analysis block every worker shares — F223's second defect
 /// verbatim, and a data race whether or not anything is written through it. The
-/// real implementation only *reads* the block (the screen-content downcast, two
-/// scalars off `sScrollDetectInfo`); everything it writes goes through `pMd`,
-/// which is already exclusive and per-macroblock.
-pub type PSetScrollingMv = fn(pVaa: &SVAAFrameInfo, pMd: &mut SWelsMD<'_>);
+/// real implementation only *reads* the block (two scalars off
+/// `sScrollDetectInfo`); everything it writes goes through `pMd`, which is
+/// already exclusive and per-macroblock.
+///
+/// **D-scc-4 (P10.3.D3): the slot carries the extension, not the base block.**
+/// The C++ hands this slot an `SVAAFrameInfo*` and `SetScrollingMvToMd`
+/// downcasts it (`static_cast<SVAAFrameInfoExt*>`) because upstream's screen
+/// path always passes an extension in that parameter. The port's caller reaches
+/// the extension through `sWelsEncCtx::vaa_ext_ref`, which answers `Some` only
+/// under screen content, so the downcast has no subject and the parameter says
+/// what the value is. `Option` because that accessor's answer is one — the arm
+/// is unreachable once the body is installed (the installer requires the
+/// extension), and it is the `Null` twin's answer.
+pub type PSetScrollingMv = fn(pVaaExt: Option<&SVAAFrameInfoExt>, pMd: &mut SWelsMD<'_>);
 
 /// `wels_func_ptr_def.h:125`
 pub type PInterMdFunc = for<'a> fn(
