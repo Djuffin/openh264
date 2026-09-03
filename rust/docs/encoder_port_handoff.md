@@ -362,55 +362,42 @@ become relevant at the same time.
 
 ### 4.2 `SCREEN_CONTENT_REAL_TIME`
 
-**Phase 10 is under way (P10.1 and P10.2 landed 2026-09-02).** What now stands:
+**Phase 10's byte gate is met (P10.1, P10.2 and P10.3 landed 2026-09-02).**
+`sweep.sh scc` reads **148/148 in both profiles** — the whole preset, not just the
+`min` tier P10.3 was chartered on. What stands:
 
-- **Two referees.** Both diffharness drivers take `usage`/`lossless` (their
-  23rd/24th arguments; `compare.sh`'s 21st..23rd are `setopt usage lossless` —
-  positional, so `setopt` must be spelled `0` whenever `usage` is) and, since
-  P10.2.C1, an `OH264_TRACE_LEVEL` override. `sweep.sh scc` is 148 rows over the
-  three `res/` clips and four synthetic scrolling-text clips from
-  `gen_screen_clip.py` (deterministic, LCG-seeded); `SCC_TIER=min` is the 28-row
-  byte tier P10.3 gates on first. It is **not** in `gates.sh`'s family list: it
-  reads `PASS=0 FAIL=148` with every row `RESULT: DIFFER` by design until P10.3.
-  `scc_verdicts.sh` is the *verdict* referee — see below.
-- **The fence is down.** `InitializeExt` accepts `SCREEN_CONTENT_REAL_TIME` (with
-  and without lossless LTR): `sWelsEncCtx::pVaa` is `Option<Box<VaaBlock>>`
-  (`Base(SVAAFrameInfo) | Screen(SVAAFrameInfoExt)`, D-scc-1), `RequestMemorySvc`
-  builds the extension with `RequestMemoryVaaScreen`'s block-static store,
-  `InitDqLayers` builds `SFeatureSearchPreparation` on the last layer, and
-  `AllocPicture` attaches `SScreenBlockFeatureStorage` to the last layer's
-  reference pictures.
-- **The three plugins are in (P10.2).** `METHOD_SCROLL_DETECTION`
-  (`processing/scroll_detection.rs`), `METHOD_SCENE_CHANGE_DETECTION_SCREEN`
-  (beside the video detector in `processing/scene_change_detection.rs`) and
-  `METHOD_COMPLEXITY_ANALYSIS_SCREEN` (at the foot of
-  `processing/complexity_analysis.rs`), all under their C++ names, all with
-  in-file unit tests, and all three call sites wired — no `RET_NOTSUPPORTED`
-  stands on a live path and `processing/mod.rs` lists no untranslated method the
-  encoder calls. `encoder_context::vaa_ext_and_ref_list_mut` is the §4.6 combined
-  accessor `UpdateBlockStatic` needs.
-- **The verdict referee is green.** `rust/tools/diffharness/scc_verdicts.sh` runs
-  both drivers at `OH264_TRACE_LEVEL=8` and diffs their
-  `iVaaFrameSceneChangeIdc = %d,codingIdx = %d` sequences (plus, on LTR rows, the
-  five `WelsBuildRefListScreen()` lines). Under `SCC_TIER=min` rate control is off,
-  so the preprocessor's inputs are identical on both sides frame by frame even
-  while the bytes differ — which is what makes it provable now. **28/28** on the
-  min tier and **20/20** on the wide tier's LTR rows; it read 0/28 (empty) before
-  the trace line was ported and 18/28 before the plugins were. F327 has the
-  calibration and why only ten of the 28 rows can fail.
-- The screen complexity plugin's own referee: the first P frame's
-  `iFrameComplexity` on the five `rc=1` wide-tier rows, equal to the reference's on
-  all five (C7; `RcUpdateFrameComplexity`'s two DEBUG lines were ported for it).
-- **Outstanding — P10.3, the dispatch**: `PreprocessSliceCoding`'s screen block
-  (`encoder_ext.cpp:2708-2771`), `SetMeMethod`, `UpdateFMESwitch`/`CountFMECostDown`/
-  `UpdateFMEGoodFrameCount`, the real `SetScrollingMvToMd` behind a retyped
-  `PSetScrollingMv` (D-scc-4), and the call to `PerformFMEPreprocess` (ported,
-  uncalled). Byte identity for screen content is P10.3's exit; the C++ has no
-  configuration with the plugins switched off, so it cannot come earlier. The
-  census's remaining two `missing` rows (`CountFMECostDown`,
-  `UpdateFMEGoodFrameCount`) and sixteen of the twenty surviving
-  `SCREEN_CONTENT(dormant: Phase 10)` tags are all in that block's subject.
-- `GOM_H_SCC` is corrected (8, not 2) and **live** since P10.2.C5.
+- **Three referees, all green.** `sweep.sh scc` (148 rows over the three `res/`
+  clips and four synthetic scrolling-text clips from `gen_screen_clip.py`;
+  `SCC_TIER=min` is its 28-row byte tier) is byte-exact in debug and release.
+  `scc_verdicts.sh` is the *verdict* referee — both drivers at
+  `OH264_TRACE_LEVEL=8`, their `iVaaFrameSceneChangeIdc = %d,codingIdx = %d`
+  sequences diffed, plus the five `WelsBuildRefListScreen()` lines on LTR rows —
+  and reads 28/28 on the min tier and 20/20 on the wide tier's LTR rows. F327 has
+  its calibration and why only ten of the 28 rows can fail. `log_referee.sh` exits
+  0. Both drivers take `usage`/`lossless` (their 23rd/24th arguments;
+  `compare.sh`'s 21st..23rd are `setopt usage lossless` — positional, so `setopt`
+  must be spelled `0` whenever `usage` is).
+- **The fence is down and the path is complete.** `InitializeExt` accepts screen
+  content with and without lossless LTR; the three plugins are in
+  (`METHOD_SCROLL_DETECTION`, `METHOD_SCENE_CHANGE_DETECTION_SCREEN`,
+  `METHOD_COMPLEXITY_ANALYSIS_SCREEN`, P10.2); and `PreprocessSliceCoding`'s
+  screen block is translated (P10.3.D4), so the FME and static/scrolled search
+  families are live rather than dormant. P10.3.D5's entry counters measured every
+  one of them running on a screen row and reading **zero** on a camera control.
+- **The census and the tags are at zero.** `port_census.py --classify` reports
+  `0 missing` (`SetMeMethod`, `CountFMECostDown`, `UpdateFMEGoodFrameCount` and
+  `UpdateFMESwitch` all ported under their C++ names at P10.3.D1/D2), and the
+  `SCREEN_CONTENT(dormant: Phase 10)` tag count reads **0** — the phase's own exit
+  condition (`safety_refactor_plan.md`).
+- **The gtest allowlist is down to one row.** The five
+  `EncodeFile/EncoderOutputTest.CompareOutput/8..12` screen rows left it at
+  P10.3.D6 (198/199); what remains is the permanent decoder POC row (D-poc-1).
+- `GOM_H_SCC` is corrected (8, not 2) and live since P10.2.C5.
+- **Outstanding — P10.4, and it is promotion rather than repair (F331).** `scc` is
+  still *not* in `gates.sh`'s family list (D-scc-16 kept this session inside its
+  charter), so nothing stops a regression on the screen axis today. P10.4 adds it
+  with its comment and its wall-clock cost, puts a screen row in `c_vs_rust_bench`
+  under the two-run `perfpair.py` protocol, and writes the phase's exit rows.
 
 ### 4.3 The three `SPS_LISTING` parameter-set strategies
 

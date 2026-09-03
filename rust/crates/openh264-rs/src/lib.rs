@@ -28,8 +28,10 @@
 //! is a deliberate reproduction of an out-of-bounds read the C++ performs, kept
 //! because safe indexing would panic where upstream reads and a panic is not
 //! byte-identical. `SCREEN_CONTENT(dormant)` was Phase 10's lane and held one
-//! `from_raw_parts`; S12.3 converted it, so the lane's code is all safe and the
-//! category has no members.
+//! `from_raw_parts`; S12.3 converted it, so the lane's code was all safe before it
+//! woke. P10.3.D4 translated the dispatch block that reaches it and P10.3.D7
+//! retired the last tag against measured entry counts, so that category has no
+//! members either — the lane is live code now, not a queue.
 //!
 //! **The floor is a list, not a number** (D-exit-4). `tools/unsafe_census.sh`
 //! pins every allow outside `src/api/` by file and category and fails in both

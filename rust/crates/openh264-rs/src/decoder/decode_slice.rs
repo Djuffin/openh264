@@ -5435,8 +5435,8 @@ pub fn WelsDecodeSlice(
 /// deny; and the thing a future porter most needs is exactly the *list above* of which
 /// reference statements are absent, which deleting the function would delete too. The
 /// fence is the change: F36 lived in the log and in scattered comments, and it is
-/// greppable now like `SCREEN_CONTENT(dormant)` and the retired
-/// `LOAD_BALANCING(incomplete: F72)`.
+/// greppable now like the retired `SCREEN_CONTENT(dormant)` and
+/// `LOAD_BALANCING(incomplete: F72)` lanes.
 ///
 /// Switching decoder threading on is already a deliberate multi-site act —
 /// `GetThreadCount`'s `0` is load-bearing (`api/codec_api.rs` branches on `<= 0` to
