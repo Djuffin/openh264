@@ -34,6 +34,23 @@ no SIMD at all. So the ratios compare two scalar implementations. They are meani
 as a regression detector and meaningless as a statement about libopenh264's real-world
 speed.
 
+> **2026-09-02 (P10.4.E4) — this stopped being true, and every span from S13 on is
+> affected.** The same line now reads
+>
+> ```
+> C++ SIMD   : ACTIVE (WelsCPUFeatureDetect = 0x000006)
+> ```
+>
+> The reference was rebuilt with `USE_ASM=Yes` during session S13 (the log records
+> the change; `nm libopenh264.a | grep -c AArch64_neon` reports 367 symbols), so it
+> has been dispatching its NEON kernels ever since. The port still has no SIMD.
+> **Every C++-vs-Rust ratio recorded after that rebuild is the port's scalar kernels
+> against the reference's NEON**, which is why the Phase 10 screen table at the end
+> of this file reads 0.40–0.88x where the Phase 0 camera table above reads
+> 1.13–2.00x. Nothing about the *port* changed direction between those two tables;
+> the reference did. Rust-vs-Rust spans — every `perfpair.py` number in this file —
+> are unaffected, because both sides of those are the port.
+
 ### 2. Without ffmpeg the encoder bench measures the frame-skip path, not encoding
 
 `c_vs_rust_bench` falls back to a synthetic pattern when it cannot run ffmpeg, and it
@@ -3293,3 +3310,101 @@ spatial layer with denoise off. Their cost is unmeasured, by construction: the s
 gap that made them invisible for eight phases. If multi-layer encoding ever becomes a
 performance concern, the instrument to build is a `dl` bench row, and the correctness
 referee for it already exists (the `dl` sweep preset, 76 configurations).
+
+---
+
+## Phase 10's span — `pre_p10` (`f8a51b08`, Phase 9's close) vs `p10_close` (`15e5b58b`)
+
+D-gate-1 puts the phase's benches at its close. Same machine, same two benches, 3
+pairs; the 3-pair null was taken on the head binary immediately before, and **two**
+after-runs were taken because one is not a measurement (S1/S3).
+
+**The null (`p10_close` against itself, 3 pairs) — this session's floor:**
+
+| | rows | median | min | max |
+|---|---|---|---|---|
+| decode | 3 | +0.09% | −0.19% | **+0.14%** |
+| encode | 28 | −0.10% | −2.22% | **+4.69%** |
+
+**The span, both after-runs (3 pairs each):**
+
+| | rows | median | min | max | over +5% |
+|---|---|---|---|---|---|
+| decode, run 1 | 3 | **−0.36%** | −0.65% | +0.02% | **0** |
+| decode, run 2 | 3 | **−0.26%** | −0.68% | −0.22% | **0** |
+| encode, run 1 | 28 | **+0.11%** | −4.44% | +3.82% | **0** |
+| encode, run 2 | 28 | **+0.24%** | −1.65% | +2.27% | **0** |
+
+Both codecs are at the floor in both runs, and no row is over +5% in either. That
+is what the work predicts: **Phase 10 added no camera code.** Everything it landed
+is behind `iUsageType == SCREEN_CONTENT_REAL_TIME`, and the two function-pointer
+slots it retyped (`PSetScrollingMv` at D-scc-4, `pfMotionSearch`'s four at D-scc-15)
+hold `Null` bodies on the camera path. The decoder was not touched at all.
+
+**Read this session's encode floor before reading any encode row.** The null's max
+is **+4.69%** — far wider than Phase 8b's +1.06% — because half the encode rows are
+sub-0.5 ms streams quantising in 0.001 ms steps. A single row over +5% in one
+after-run would be inside that noise, which is exactly why D-scc-20 asks for two.
+Neither run produced one.
+
+## Phase 10 — the screen path against the reference, first measurement
+
+`BENCH_USAGE=1` (P10.4.E3, D-scc-18) is the first measurement of
+`SCREEN_CONTENT_REAL_TIME` at any point in this project. Median of 3 runs, ms/frame,
+lavfi content, `GetDefaultParams` + `InitializeExt` with `iUsageType` set to screen.
+**Every row was bit-identical between C++ and Rust in all three runs** (30/30, exit
+0) — a `MISMATCH` row's timing would not be a measurement.
+
+| configuration | frames | thr | C++ ms | Rust ms | ratio | Rust runs |
+|---|---|---|---|---|---|---|
+| 320x240 (QVGA Moving Box) | 200 | 1 | 0.258 | 0.482 | 0.54x | 0.482, 0.481, 0.484 |
+| 320x240 (QVGA Moving Box) | 200 | 4 | 0.189 | 0.364 | 0.52x | 0.370, 0.358, 0.364 |
+| 320x240 (QVGA High-Contrast) | 200 | 1 | 0.395 | 0.850 | 0.46x | 0.846, 0.850, 0.857 |
+| 320x240 (QVGA High-Contrast) | 200 | 4 | 0.278 | 0.539 | 0.52x | 0.540, 0.530, 0.539 |
+| 320x240 (QVGA SMPTE Bars) | 200 | 1 | 0.295 | 0.357 | 0.83x | 0.357, 0.357, 0.356 |
+| 320x240 (QVGA SMPTE Bars) | 200 | 4 | 0.263 | 0.323 | 0.81x | 0.324, 0.319, 0.323 |
+| 320x240 (QVGA PAL 75%) | 200 | 1 | 0.290 | 0.348 | 0.83x | 0.348, 0.352, 0.348 |
+| 320x240 (QVGA PAL 75%) | 200 | 4 | 0.262 | 0.317 | 0.83x | 0.317, 0.317, 0.317 |
+| 320x240 (QVGA RGB Test) | 200 | 1 | 0.443 | 1.090 | 0.41x | 1.082, 1.101, 1.090 |
+| 320x240 (QVGA RGB Test) | 200 | 4 | 0.417 | 1.036 | 0.40x | 1.034, 1.036, 1.037 |
+| 320x240 (QVGA YUV Space) | 200 | 1 | 0.505 | 1.168 | 0.43x | 1.162, 1.168, 1.177 |
+| 320x240 (QVGA YUV Space) | 200 | 4 | 0.507 | 1.162 | 0.44x | 1.162, 1.159, 1.169 |
+| 320x240 (QVGA Spatial Ramps) ⚠ | 200 | 1 | 0.193 | 0.336 | 0.57x | 0.310, 0.385, 0.336 |
+| 320x240 (QVGA Spatial Ramps) ⚠ | 200 | 4 | 0.145 | 0.231 | 0.63x | 0.231, 0.276, 0.225 |
+| 320x240 (QVGA Mandelbrot) | 200 | 1 | 0.658 | 1.593 | 0.41x | 1.581, 1.593, 1.599 |
+| 320x240 (QVGA Mandelbrot) | 200 | 4 | 0.267 | 0.616 | 0.43x | 0.612, 0.617, 0.616 |
+| 640x480 (VGA Mandelbrot) | 100 | 1 | 2.208 | 5.356 | 0.41x | 5.330, 5.356, 5.363 |
+| 640x480 (VGA Mandelbrot) | 100 | 4 | 0.859 | 2.026 | 0.42x | 2.026, 2.015, 2.033 |
+| 640x480 (VGA SMPTE Bars) | 100 | 1 | 1.110 | 1.348 | 0.82x | 1.319, 1.359, 1.348 |
+| 640x480 (VGA SMPTE Bars) | 100 | 4 | 0.921 | 1.046 | 0.88x | 1.043, 1.046, 1.048 |
+| 1280x720 (720p HD Mandelbrot) | 50 | 1 | 4.373 | 10.234 | 0.43x | 10.133, 10.250, 10.234 |
+| 1280x720 (720p HD Mandelbrot) | 50 | 4 | 1.757 | 4.068 | 0.43x | 4.083, 4.068, 4.064 |
+| 1280x720 (720p HD SMPTE Bars) | 50 | 1 | 6.837 | 15.055 | 0.45x | 14.875, 15.055, 15.157 |
+| 1280x720 (720p HD SMPTE Bars) | 50 | 4 | 6.161 | 13.907 | 0.44x | 13.800, 13.907, 14.009 |
+| 1920x1080 (1080p Full HD Mandelbrot) | 30 | 1 | 6.659 | 15.693 | 0.42x | 15.488, 15.693, 15.765 |
+| 1920x1080 (1080p Full HD Mandelbrot) | 30 | 4 | 2.621 | 6.072 | 0.43x | 6.072, 6.084, 6.049 |
+| 1920x1080 (1080p Full HD SMPTE Bars) | 30 | 1 | 15.520 | 34.127 | 0.45x | 33.725, 34.168, 34.127 |
+| 1920x1080 (1080p Full HD SMPTE Bars) | 30 | 4 | 14.315 | 32.283 | 0.44x | 32.028, 32.283, 32.366 |
+| 1920x1080 (1080p Full HD Testsrc) | 30 | 1 | 16.056 | 36.178 | 0.44x | 35.778, 36.196, 36.178 |
+| 1920x1080 (1080p Full HD Testsrc) | 30 | 4 | 13.648 | 32.820 | 0.42x | 32.440, 32.880, 32.820 |
+
+The screen null (`BENCH_USAGE=1`, `p10_close` against itself, 3 pairs) reads
+median +0.16%, min −0.72%, max +1.64% over 28 encode rows — a *tighter* floor than
+the camera null above, because screen rows are 2–3x slower and so quantise less.
+
+**The port is 0.40–0.88x the reference on screen content, median 0.44x — recorded,
+not repaired (D-scc-20).** Two things have to be said about that number or it will
+be misread:
+
+1. **It is scalar against NEON.** `decode_1080p_bench` now prints
+   `C++ SIMD   : ACTIVE (WelsCPUFeatureDetect = 0x000006)`. See the dated note under
+   caveat 1: the reference has dispatched its NEON kernels since it was rebuilt with
+   `USE_ASM=Yes`, and the port has no SIMD at all.
+2. **Screen content leans on exactly the kernels NEON accelerates.** The rows that
+   stay near 0.83x (`SMPTE Bars`, `PAL 75%`) are the cheap ones; every row at
+   0.40–0.45x is SAD-dominated, which is where the feature search, the cross search
+   and the static/scrolled searches spend their time. This is a SIMD gap, not a
+   translation defect, and it is a later perf session's (D-gate-1).
+
+No ledger row, no swap. The number exists so that whoever ports NEON kernels has a
+before.

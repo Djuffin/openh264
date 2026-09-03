@@ -56,9 +56,25 @@ The 19 `missing`, by owner:
 | **8b.B** | **0** | ported at T8b.B2/T8b.B3 — see below |
 | **8b.C** | **0** | ported at T8b.C1/T8b.C2; the two residual kernels are `dead` (F97) |
 | **F80** | **0** | ported at T8b.C3 |
-| **Phase 10** | 19 | screen content: scroll detection (4 + 2), the screen complexity analysis (2), the feature-search storage (5), the VAA screen buffers (2), `imagerotate` (4) |
+| **Phase 10** | **0** | ported or reclassified 2026-09-02 — see below |
 
-**Every remaining row is Phase 10's.** Phase 8b's own inventory is empty.
+**Every remaining row was Phase 10's.** Phase 8b's own inventory is empty.
+
+> **2026-09-02, Phase 10's close — this row is 0 and the census reads `0 missing`.**
+> Of the 19: **fifteen were ported** under their C++ names across P10.1–P10.3 —
+> scroll detection (4 + 2) and the screen complexity analysis (2) as the plugins at
+> P10.2, the feature-search storage (5) at P10.1.B3/P10.3.D1, the VAA screen buffers
+> (2) at P10.1.B3. The remaining **four are `imagerotate`'s, reclassified `dead` at
+> P10.2** with the evidence line: `CImageRotating` is registered in upstream's
+> plugin table under `METHOD_IMAGE_ROTATE`, which no encoder path requests — the
+> only `Set(METHOD_IMAGE_ROTATE, ...)` in `codec/` is in the standalone processing
+> console demo, not in `encoder_ext.cpp`, so porting it would add a plugin with no
+> caller and no referee. Same rule as F97's two residual kernels.
+>
+> `port_census.py --classify` now reads
+> **`0 missing, 101 renamed, 161 dead, 53 unclassified`** — the first `0 missing` in
+> the project's history. The 53 `unclassified` all predate Phase 10; their
+> disposition is in `encoder_port_handoff.md` §5.
 
 **Session B's nine rows are gone, and one of them was never 8b.B's.**
 

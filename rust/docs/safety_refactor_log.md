@@ -19880,3 +19880,96 @@ No Miri was run. No new `unsafe`, allow or raw pointer: raw_ptr 391, unsafe_bloc
 122, unsafe_fn 52, unsafe_impl 1, census 12 pinned rows — all unmoved from the
 session baseline. Camera sweeps 583/583 in both profiles at every checkpoint.
 
+
+## Session P10.4 — promotion, the bench, and the phase's exit (2026-09-02, branch `rust3`)
+
+Phase 10's code was finished at P10.3; what was missing was every guard. This
+session added **no encoder code** — two prose comments in `src/` and the bench are
+the only Rust it touched — and put the screen axis into the family gate, the
+external-ABI loopback and the encoder bench, measured it twice, and wrote the
+phase's exit rows. Commits `33fc848f` (E1), `28272767` (E2), `15e5b58b` (E3),
+`b32db0d3` (E5), and this docs commit (E7). E4 and E6 are measurements and
+verdicts; neither committed code.
+
+**E1 — `scc` in `gates.sh family`, and the finding the promotion produced.**
+583 -> 691 configurations per profile, `PASS=691 FAIL=0` in both, calibrated red at
+`PASS=643 FAIL=48` (both profiles) with one line in `SetScrollingMvToMd` before
+being trusted.
+
+D-scc-17 made the tier a function of wall time — at most three minutes buys all 148
+rows — and time was never the constraint: 51s debug / 27s release for the full
+preset. **The calibration run is what decided it.** Promoting all 148 turned the
+gate red in *both* profiles, at a different `sm=3 t=4` row each time, and the port's
+stream was *longer* than the reference's — which is not F3's recorded shape. Running
+each driver solo, alternating in one loop (F3's own protocol), 100 runs each:
+
+    rust_enc   100 runs -> 1 distinct bitstream
+    cxx_enc    100 runs -> 12 distinct bitstreams
+
+and the port's single output is the reference's own 88-run majority. **The race is
+in the C++ reference.** It needs `SM_SIZELIMITED_SLICE` *and* multithreading (0/40
+on the screen `sm=0 t=4` LTR row), and screen usage widens its window about two
+orders of magnitude (0/40 on the camera version of the same row, which is F3's
+1-in-400–1000 rate). F334. F3's write-up and `gates.sh`'s retry block both read as
+though `rust_enc` emitted the wrong bytes; both corrected in place — nobody had run
+the two binaries solo and hashed them, because every prior observation came through
+`compare.sh`, which cannot say which side moved. The gate runs `SCC_TIER=gate` (108
+rows); the 40 stay in `sweep.sh all` under the retry rule, which is the same call
+`abi_harness/run.sh` already made for the same race.
+
+**E2 — the ABI loopback, 16/16 per profile.** `abi_harness enc` had documented
+argument compatibility with `cxx_enc`/`rust_enc` since T8.C5 and stopped parsing at
+argument 17 while `cxx_enc` grew to 24, so `ps`, `dl`, `bg` and screen rows could
+not be handed to it. Arguments 18–24 copied from `cxx_enc.cpp`; two screen rows
+added; `run.sh` sources `inputs.sh` for the clip rather than re-spelling
+`gen_screen_clip.py`. TALLY 14 passed / 0 failed.
+
+**E3 — `BENCH_USAGE`, 30/30 bit-identical, and F335.** The knob is in
+`BENCH_SLICE_MODE`'s shape and tags the row ` u=1` inside the bracket
+`perfpair.py` parses.
+
+**E4 — the two measurements.** Camera A/B across the phase, two after-runs, null
+first: decode −0.36% / −0.26% median, encode +0.11% / +0.24%, **zero rows over +5%
+in either**, all inside a null floor whose encode max is +4.69%. Phase 10 added no
+camera code and this says so. The screen rows run at **0.40–0.88x the reference,
+median 0.44x**, recorded as the baseline per D-scc-20 —
+`C++ SIMD : ACTIVE (WelsCPUFeatureDetect = 0x000006)`, so that is the port's scalar
+kernels against the reference's NEON, and `perf_baseline.md`'s first caveat now
+carries the dated note saying its scalar-vs-scalar claim stopped being true at S13.
+
+**E6 — the exit battery**, `gates.sh exit` minus its Miri lanes: `sweep.sh all`
+**1043/1043 in both profiles** (no F3 hit in either), family gate OVERALL PASS,
+`scc_verdicts.sh` 28/28, `log_referee.sh` PASS, exports 7/7, `abi_sizes` current,
+ABI harness 14/0, gtest 198/199 with allowlist 1, both unsafe instruments green,
+`census.sh` PASS, f239 0 spans, `port_census.py` **0 missing**, cross-target check
+rc=0.
+
+**Where the brief was wrong**, in its own words:
+
+* *"the cheapest honest break is `SetScrollingMvToMd` writing `iMvY + 1`"* — correct
+  for the family gate (48 of 108 rows), and it measures **nothing** in the bench:
+  lavfi content does not scroll, so all 30 rows stay bit-identical and the bench
+  exits 0. F335.
+* *"a wrong argument on one new row (`usage` spelled `2`) must make the driver fail
+  loudly"* — it does not. All three drivers read `kiUsage ? SCREEN : CAMERA`, so `2`
+  is truthy, the row stays screen and the loopback still passes. The calibration
+  with teeth is pinning `iUsageType` back to camera in `abi_harness` alone.
+* *"If the full 148 rows cost at most three minutes per profile, the whole preset
+  joins"* — the clock said yes (51s/27s) and the bytes said no. The ruling had no
+  term for a flaky subset; F334 supplies it.
+* *"`sweep.sh scc` … 148 configs; `SCC_TIER=min` for the 28-row byte tier"* — there
+  are three tiers now: `all` 148, `gate` 108, `min` 28.
+* The brief expected the two `SCREEN_CONTENT(dormant` mentions and "several"
+  future-tense P10 comments. The mentions were two as stated; the comments were
+  **seventeen sentences across ten sites**, seven of them copies of one block.
+
+**The four Phase 10 session briefs are not available to this session as files** —
+`find . -name 'phase10_session_p10*'` returns nothing and `rust/docs/prompts/` holds
+only the `safeplan_s*.md` series. Nothing was committed for them.
+
+No Miri was run: not `cargo miri`, not `gates.sh session|full|exit`, not
+`fork_join_probe.sh`. No new `unsafe`, allow or raw pointer — raw_ptr 391,
+unsafe_block 122, unsafe_fn 52, unsafe_impl 1, census 12 pinned rows, all unmoved
+from the session baseline and from Phase 10's start.
+
+**Phase 10 is closed.**

@@ -28,10 +28,21 @@ upstream's options; `todo!()` and `unimplemented!()` are both zero in `src/`.
 
 **The one axis still pinned is `iMultipleThreadIdc == 1`.** After that, one spatial
 layer (which needs `METHOD_DOWNSAMPLE`) and `SCREEN_CONTENT_REAL_TIME`. See
-*Phase 5.4*. *(2026-09-02: multi-threading and multi-layer have long since landed;
-`SCREEN_CONTENT_REAL_TIME` is Phase 10's, opened by P10.1, its three
-video-processing plugins in since P10.2, and byte-identical with the reference
-since P10.3 — see the Phase 10 section at the end of this file.)*
+*Phase 5.4*.
+
+> **2026-09-02, at Phase 10's close — none of the three is pinned any more, and no
+> configuration axis the harness can drive is refused or unrefereed.**
+> Multi-threading and multi-layer landed in Phases 5.4 and 8b;
+> `SCREEN_CONTENT_REAL_TIME` was Phase 10's — opened by P10.1, its three
+> video-processing plugins in at P10.2, byte-identical since P10.3's dispatch
+> block, and **guarded** since P10.4 put it in the family gate, the external-ABI
+> loopback and the encoder bench. The headline number is `sweep.sh all`:
+> **`PASS=1043 FAIL=0` in both build profiles** (2026-09-02, `b32db0d3`), spanning
+> all five rate-control modes, both entropy coders, all three init paths, all four
+> slice modes, `iMultipleThreadIdc` 1/2/4, all 52 QPs, the five
+> `eSpsPpsIdStrategy` values, 2/3/4 spatial layers with denoise, background
+> detection, long-term reference over a lossless link, and 148 screen-content
+> configurations. See the Phase 10 section at the end of this file.
 
 ---
 
@@ -1846,7 +1857,7 @@ Worth noting for whoever continues this: had `dead_code` been live on
 pool as unused and the shadowing `CWelsThreadPool` would have been found by a
 compiler warning rather than by a deadlock.
 
-### Phase 10 — `SCREEN_CONTENT_REAL_TIME` — **P10.1 + P10.2 + P10.3 DONE (2026-09-02); the bytes match, P10.4 outstanding**
+### Phase 10 — `SCREEN_CONTENT_REAL_TIME` — **DONE (2026-09-02)**
 
 The last public usage type the port refused. Session P10.1 did two things, in
 order, at `6f955eff` .. the session's docs commit (branch `rust3`):
@@ -1962,7 +1973,86 @@ unsafe_block 122, unsafe_fn 52, census 12 pinned rows.
 **Not done, by the user's ruling:** no Miri in P10.3 either.
 
 Findings F329-F333 in [`phase10_findings.md`](phase10_findings.md) — F333
-corrects a misreading carried in D5's own commit message. Next: P10.4 —
-add `scc` to `gates.sh`'s family list with its comment and wall-clock cost (the axis
-is byte-exact and *unguarded* until then), a screen row in `c_vs_rust_bench` under
-the two-run `perfpair.py` protocol, and the phase's exit rows.
+corrects a misreading carried in D5's own commit message.
+
+#### P10.4 — promotion, measurement, and the phase's close (`33fc848f` .. this commit)
+
+P10.3 left the axis byte-exact and **unguarded**. This session added no encoder
+code; it put the axis into every gate the project owns, measured it, and wrote the
+exit rows.
+
+**E1 — `scc` is in `gates.sh`'s family sweep list.** 583 -> 691 configurations per
+profile, `PASS=691 FAIL=0` in both. Calibrated red first (S55): one line in
+`SetScrollingMvToMd` (`iMvY.wrapping_add(1)`) takes it to `PASS=643 FAIL=48` in both
+profiles, the 48 named individually.
+
+The gate runs `SCC_TIER=gate` — 108 of the 148 rows — and **F334 is why, not the
+clock**. All 148 cost 51s debug / 27s release, well inside D-scc-17's three-minute
+threshold; but promoting them turned the gate red in both profiles at a different
+`sm=3 t=4` row each time. Run solo, alternating in one loop, 100 runs each:
+`rust_enc` produced **1** distinct bitstream and `cxx_enc` **12**, the port's single
+output being the reference's own 88-run majority. The `SM_SIZELIMITED_SLICE`
+multithreading race F3 has tracked since T5b is in the **reference**, and screen
+usage widens its window about two orders of magnitude (12/100 against 0/40 on the
+camera version of the row). Those 40 rows stay in `sweep.sh scc`/`all` under the F3
+retry rule. F3's own write-up and `gates.sh`'s retry block, both of which read as
+though `rust_enc` emitted the wrong bytes, are corrected in place.
+
+**E2 — the external-ABI loopback drives screen content.** `abi_harness enc` had
+claimed argument compatibility with `cxx_enc`/`rust_enc` since T8.C5 and stopped
+parsing at argument 17 while `cxx_enc` grew to 24 (D-scc-19), so `ps`, `dl`, `bg`
+and screen rows could not be handed to it at all. Arguments 18..24 now parse and
+apply as `cxx_enc.cpp` has them; two screen rows joined `CONFIGS`. **16/16 per
+profile, TALLY 14 passed / 0 failed.** Calibrated by pinning `iUsageType` back to
+camera in `abi_harness` alone: exactly the two new rows differ, in both profiles.
+
+**E3 — `BENCH_USAGE=1`, the screen path's first measurement of any kind.**
+`c_vs_rust_bench` takes the knob in `BENCH_SLICE_MODE`'s shape (D-scc-18); the row
+gains ` u=1` inside the bracket `perfpair.py` parses. **30/30 rows
+`[bit-identical]`, exit 0, in three runs.** F335 records that this referee and
+`sweep.sh scc` cover *disjoint* halves of the screen path: nothing in lavfi's
+catalogue scrolls by whole rows, so the scroll family is inert here — the
+`SetScrollingMvToMd` break that fails 48 `scc` rows changes nothing on any of the
+30. The break with teeth is the port's screen-only `bEnableBackgroundDetection`
+forcing: 23/30 MISMATCH with the knob on, 30/30 identical with it off.
+
+**E4 — the two measurements.** Camera A/B across the phase (`f8a51b08` -> HEAD, 3
+pairs, two after-runs, null taken first): decode −0.36% / −0.26% median, encode
++0.11% / +0.24% median, **zero rows over +5% in either run**, all inside a null
+floor of −0.10% (max +4.69%). Phase 10 added no camera code, and this says so. The
+screen rows run at **0.40–0.88x the reference, median 0.44x** — recorded as the
+phase's baseline, not repaired (D-scc-20). `decode_1080p_bench` now prints
+`C++ SIMD : ACTIVE (WelsCPUFeatureDetect = 0x000006)`, so that ratio is the port's
+scalar kernels against the reference's NEON; `perf_baseline.md`'s first caveat is
+annotated accordingly. Closing the gap is a later perf session's (D-gate-1).
+
+**E5 — the accounting.** `grep "SCREEN_CONTENT(dormant" src/` reads **0**
+(D-scc-21), and seventeen stale sentences across ten comment sites that still
+promised P10.x work now say what landed.
+
+**E6 — the exit battery**, assembled from what `gates.sh exit` runs besides its Miri
+lanes (struck by the user for every Phase 10 session):
+
+```
+sweep.sh all (debug)      PASS=1043 FAIL=0        111s
+sweep.sh all (release)    PASS=1043 FAIL=0         77s
+gates.sh family           OVERALL PASS   8 passed / 0 failed / 1 skipped
+  sweeps                  691/691 both profiles
+  cargo test              598 debug / 591 release, 0 failed, 21 ignored
+scc_verdicts.sh           PASS=28 FAIL=0
+log_referee.sh            33/35 messages identical, 2 gap rows owned — PASS
+abi_exports.sh release    exports: 7/7
+abi_sizes.sh --check      C/C++ agree on 170 lines, current
+abi_harness/run.sh        TALLY 14 passed / 0 failed; loopback 16/16 per profile
+gtest_stretch.sh --check  gtest: 198/199, allowlist 1  (D-poc-1, permanent)
+unsafe census / ratchet   12 pinned rows match / no per-file increase
+census.sh                 CENSUS: PASS  (164 duplicate-body groups, budget 195)
+f239_span_scan.py         0 spans / 72 exclusive field derivations / 2744 bodies
+port_census.py --classify 0 missing, 101 renamed, 161 dead, 53 unclassified
+cargo check --target x86_64-apple-darwin   rc=0  (F303)
+```
+
+`sweep.sh all` at 1043/1043 in both profiles includes all 148 `scc` rows — the 40
+the family gate declines to sample among them — and no F3 hit fired in either run.
+
+Findings F334-F335. **Phase 10 is closed.**
