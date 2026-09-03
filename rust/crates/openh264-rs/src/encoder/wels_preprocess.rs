@@ -85,9 +85,12 @@ pub const INVALID_TEMPORAL_ID: u8 = 0xff;
 pub const STATIC_SCENE_MOTION_RATIO: f32 = 0.01;
 pub const g_kiPixMapSizeInBits: i32 = (std::mem::size_of::<u8>() * 8) as i32;
 
-/// `rc.h:57` says **8**, not 2. Only `SComplexityAnalysisScreenParam` uses it and
-/// `METHOD_COMPLEXITY_ANALYSIS_SCREEN` is still unported, so the wrong value is
-/// dead today -- but it is the same shape as GOM_SAD/GOM_VAR in Phase 5.1.
+/// `rc.h:57` says **8**, not 2. Only `SComplexityAnalysisScreenParam` uses it, and
+/// since P10.2.C5 the value is live: `CComplexityAnalysisScreen` divides the frame
+/// into GOM buckets `GOM_H_SCC` macroblock rows tall, so a wrong value here would
+/// move `iFrameComplexity` and every rate-control decision downstream of it. C7's
+/// referee measured the first P frame's `iFrameComplexity` equal to the reference's
+/// on five geometries, which is that value being right as well as the kernels.
 pub use crate::encoder::rc::GOM_H_SCC;
 pub const MAX_MBS_PER_FRAME: i32 = 36864;
 
