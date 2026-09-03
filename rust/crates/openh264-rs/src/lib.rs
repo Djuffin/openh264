@@ -27,7 +27,8 @@
 //! item still spelled `port-raw` was retagged `lawful-single(F162)` at S12.4; it
 //! is a deliberate reproduction of an out-of-bounds read the C++ performs, kept
 //! because safe indexing would panic where upstream reads and a panic is not
-//! byte-identical. `SCREEN_CONTENT(dormant)` was Phase 10's lane and held one
+//! byte-identical. The screen-content dormancy lane — whose tag
+//! Phase 10 retired, so the token is gone from `src/` — held one
 //! `from_raw_parts`; S12.3 converted it, so the lane's code was all safe before it
 //! woke. P10.3.D4 translated the dispatch block that reaches it and P10.3.D7
 //! retired the last tag against measured entry counts, so that category has no

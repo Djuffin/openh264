@@ -1847,9 +1847,9 @@ impl sWelsEncCtx {
     /// control's screen complexity reads through
     /// [`vaa_ext_screen_frame_complexity`](Self::vaa_ext_screen_frame_complexity).
     ///
-    /// Until P10.1.B3 lands `RequestMemoryVaaScreen` the `Screen` arm is never
-    /// built and this still answers `None` on every path; that checkpoint is
-    /// where the answer changes, and nothing at the call sites moves for it.
+    /// P10.1.B3 landed `RequestMemoryVaaScreen`, so the `Screen` arm is built
+    /// under screen usage and this answers `Some` there; camera content still
+    /// answers `None` on every path. Nothing at the call sites moved for it.
     #[inline]
     pub fn vaa_ext_ref(&self) -> Option<&SVAAFrameInfoExt> {
         self.pVaa.as_deref().and_then(VaaBlock::ext)

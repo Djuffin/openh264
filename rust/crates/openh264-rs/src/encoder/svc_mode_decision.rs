@@ -212,7 +212,7 @@ impl Default for SSampleDealingPicData {
 // content (P10.1.B3, D-scc-1), and the P-skip family below now reads what P10.2's
 // three plugins stamp into it: `SetBlockStaticIdcToMd` fills
 // `iBlock8x8StaticIdc` from a real block-static row and both skips return true
-// (counts at `CalUVSadCost`). What is left for P10.3 is the *install* —
+// (counts at `CalUVSadCost`). P10.3.D4 landed the *install* —
 // `PreprocessSliceCoding`'s screen block, which points `pfMotionSearch`'s four
 // slots at the static and scrolled variants. **F213**: this module
 // used to declare its own three-field `SVAAFrameInfoExt_t` for the same C type,
@@ -1866,10 +1866,10 @@ pub fn IsMbScrolledStatic(pBlockType: &[i32; 4]) -> bool {
 /// LOW/HIGH, two streams, `sm=1 t=4` multi-threaded) against a calibration probe in
 /// `WelsMdI16x16` that read 2008/1882/300/377/2136 in the same runs.
 ///
-/// So this stays raw and tagged, with its two callers: session B3's brief listed it
-/// as step 1 item 3 and the reachability answer says otherwise. It converts behind a
-/// referee — the screen-content preset Phase 10 owns, or step 6's background preset
-/// extended to `SCREEN_CONTENT_REAL_TIME`.
+/// So it stayed raw and tagged through session B3, whose brief listed it as step 1
+/// item 3 while the reachability answer said otherwise. The referee it was waiting
+/// for is the `scc` preset (P10.1); it has been live and byte-refereed since
+/// P10.2.C6 — see the measurement immediately below.
 #[inline(always)]
 // **LIVE since P10.2.C6** — F125's tag is retired here, and the retirement is a
 // measurement rather than an argument. `WelsInitSCDPskipFunc` installs
@@ -1891,9 +1891,11 @@ pub fn IsMbScrolledStatic(pBlockType: &[i32; 4]) -> bool {
 //     JudgeScrollSkip -> true  >=  9000
 //
 // (lower bounds — the counter reported every thousandth entry.) `SvcMdSCDMbEnc`
-// encodes thousands of macroblocks now, and both skips return true. What is still
-// Phase 10's here is the *bytes*: P10.3's dispatch block is what makes this
-// family's output match the reference, and `SCC_TIER=min` is its gate.
+// encodes thousands of macroblocks now, and both skips return true. The *bytes*
+// were Phase 10's last question here, and they are answered: P10.3's dispatch
+// block is what makes this family's output match the reference, `sweep.sh scc`
+// reads 148/148 in both profiles, and the 108-row `gate` tier has been in
+// `gates.sh family` since P10.4.E1.
 pub fn CalUVSadCost(
     sdf: &crate::encoder::md::SSampleDealingFunc,
     cEncOri: &crate::encoder::rec_view::RecCursor<'_>,
@@ -1947,9 +1949,11 @@ pub fn CheckBorder(
 //     JudgeScrollSkip -> true  >=  9000
 //
 // (lower bounds — the counter reported every thousandth entry.) `SvcMdSCDMbEnc`
-// encodes thousands of macroblocks now, and both skips return true. What is still
-// Phase 10's here is the *bytes*: P10.3's dispatch block is what makes this
-// family's output match the reference, and `SCC_TIER=min` is its gate.
+// encodes thousands of macroblocks now, and both skips return true. The *bytes*
+// were Phase 10's last question here, and they are answered: P10.3's dispatch
+// block is what makes this family's output match the reference, `sweep.sh scc`
+// reads 148/148 in both profiles, and the 108-row `gate` tier has been in
+// `gates.sh family` since P10.4.E1.
 pub extern "C" fn JudgeStaticSkip(
     pEncCtx: &sWelsEncCtx,
     pCurMb: &mut SMB,
@@ -2019,9 +2023,11 @@ pub extern "C" fn JudgeStaticSkip(
 //     JudgeScrollSkip -> true  >=  9000
 //
 // (lower bounds — the counter reported every thousandth entry.) `SvcMdSCDMbEnc`
-// encodes thousands of macroblocks now, and both skips return true. What is still
-// Phase 10's here is the *bytes*: P10.3's dispatch block is what makes this
-// family's output match the reference, and `SCC_TIER=min` is its gate.
+// encodes thousands of macroblocks now, and both skips return true. The *bytes*
+// were Phase 10's last question here, and they are answered: P10.3's dispatch
+// block is what makes this family's output match the reference, `sweep.sh scc`
+// reads 148/148 in both profiles, and the 108-row `gate` tier has been in
+// `gates.sh family` since P10.4.E1.
 pub extern "C" fn JudgeScrollSkip(
     pEncCtx: &sWelsEncCtx,
     pCurMb: &mut SMB,
@@ -2110,9 +2116,11 @@ pub extern "C" fn JudgeScrollSkip(
 //     JudgeScrollSkip -> true  >=  9000
 //
 // (lower bounds — the counter reported every thousandth entry.) `SvcMdSCDMbEnc`
-// encodes thousands of macroblocks now, and both skips return true. What is still
-// Phase 10's here is the *bytes*: P10.3's dispatch block is what makes this
-// family's output match the reference, and `SCC_TIER=min` is its gate.
+// encodes thousands of macroblocks now, and both skips return true. The *bytes*
+// were Phase 10's last question here, and they are answered: P10.3's dispatch
+// block is what makes this family's output match the reference, `sweep.sh scc`
+// reads 148/148 in both profiles, and the 108-row `gate` tier has been in
+// `gates.sh family` since P10.4.E1.
 pub extern "C" fn SvcMdSCDMbEnc(
     pEncCtx: &sWelsEncCtx,
     pWelsMd: &mut SWelsMD<'_>,
@@ -2308,9 +2316,11 @@ pub extern "C" fn SvcMdSCDMbEnc(
 //     JudgeScrollSkip -> true  >=  9000
 //
 // (lower bounds — the counter reported every thousandth entry.) `SvcMdSCDMbEnc`
-// encodes thousands of macroblocks now, and both skips return true. What is still
-// Phase 10's here is the *bytes*: P10.3's dispatch block is what makes this
-// family's output match the reference, and `SCC_TIER=min` is its gate.
+// encodes thousands of macroblocks now, and both skips return true. The *bytes*
+// were Phase 10's last question here, and they are answered: P10.3's dispatch
+// block is what makes this family's output match the reference, `sweep.sh scc`
+// reads 148/148 in both profiles, and the 108-row `gate` tier has been in
+// `gates.sh family` since P10.4.E1.
 pub extern "C" fn MdInterSCDPskipProcess(
     pEncCtx: &sWelsEncCtx,
     pWelsMd: &mut SWelsMD<'_>,
@@ -2389,9 +2399,11 @@ pub extern "C" fn MdInterSCDPskipProcess(
 //     JudgeScrollSkip -> true  >=  9000
 //
 // (lower bounds — the counter reported every thousandth entry.) `SvcMdSCDMbEnc`
-// encodes thousands of macroblocks now, and both skips return true. What is still
-// Phase 10's here is the *bytes*: P10.3's dispatch block is what makes this
-// family's output match the reference, and `SCC_TIER=min` is its gate.
+// encodes thousands of macroblocks now, and both skips return true. The *bytes*
+// were Phase 10's last question here, and they are answered: P10.3's dispatch
+// block is what makes this family's output match the reference, `sweep.sh scc`
+// reads 148/148 in both profiles, and the 108-row `gate` tier has been in
+// `gates.sh family` since P10.4.E1.
 //
 // **S12.3 took the `unsafe` off it** — the last one outside `src/api/` that was not
 // an instrument, a fork seam or the recon seam. It was a `from_raw_parts` over
@@ -2468,9 +2480,11 @@ pub fn SetBlockStaticIdcToMd(
 //     JudgeScrollSkip -> true  >=  9000
 //
 // (lower bounds — the counter reported every thousandth entry.) `SvcMdSCDMbEnc`
-// encodes thousands of macroblocks now, and both skips return true. What is still
-// Phase 10's here is the *bytes*: P10.3's dispatch block is what makes this
-// family's output match the reference, and `SCC_TIER=min` is its gate.
+// encodes thousands of macroblocks now, and both skips return true. The *bytes*
+// were Phase 10's last question here, and they are answered: P10.3's dispatch
+// block is what makes this family's output match the reference, `sweep.sh scc`
+// reads 148/148 in both profiles, and the 108-row `gate` tier has been in
+// `gates.sh family` since P10.4.E1.
 pub fn WelsMdInterJudgeSCDPskip(
     pEncCtx: &sWelsEncCtx,
     pWelsMd: &mut SWelsMD<'_>,
