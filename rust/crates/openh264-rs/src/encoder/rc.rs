@@ -50,7 +50,7 @@
 //! | 61 | `pEncCtx`/`pCtx` parameters, raw `sWelsEncCtx` | **session I** — the context is the largest arena in the tree, and the S37 inventory decides `&mut` for all of it at once, not file by file |
 //! | 16 | `SWelsSvcRc`'s own five member pointers and the reaches through them | **spent at T6.H6** — the five are owned containers, reached through `rc_gom_fg_blocks` and its siblings (all four roots retired by A1) |
 //! |  7 | `pSlice` parameters, raw `SSlice` | **session I** — five sit behind `pfWelsRcMbInit`/`pfWelsRcMbInfoUpdate`, which is 4b's fence, and the two that do not are covered by the blocker below |
-//! |  6 | `sWelsEncCtx::vaa_ext` — the video-analysis block downcast | **Phase 10** — the `SCREEN_CONTENT(dormant)` family, fenced |
+//! |  6 | `sWelsEncCtx::vaa_ext` — the video-analysis block downcast | **spent**: the six are `vaa_ext_screen_frame_complexity()` now, and since P10.2.C5 that accessor answers a number the screen complexity plugin computed rather than the structural zero the unported plugin left |
 //! |  3 | `RcInitLayerMemory`'s carve-up of one `CMemoryAlign` block | **spent at T6.H6** — the carve-up is gone; this file no longer names `CMemoryAlign` at all |
 //!
 //! **The one that looked convertible and was not — now both.** `GomRCInitForOneSlice`

@@ -256,27 +256,26 @@ name GeneralBilinearFastDownsampler_c | dead | F97: the aarch64 table rebinds ge
 name GeneralBilinearDownsamplerWrap | dead | the SIMD wrapper (downsamplefuncs.cpp:251) — `static`, compiled only under X86_ASM/HAVE_NEON, and it exists to compute the fixed-point scales for an assembly kernel the port does not have
 
 # Phase 10 — screen content.
-name GomComplexityAnalysisInter | missing | Phase 10: ComplexityAnalysis.cpp:413, 46 statements
-name GomComplexityAnalysisIntra | missing | Phase 10: ComplexityAnalysis.cpp:357, 32 statements
-name ScrollDetectionCore | missing | Phase 10: ScrollDetectionFuncs.cpp:110, 57 statements
-name CheckLine | missing | Phase 10: ScrollDetectionFuncs.cpp:37, 21 statements
-name SelectTestLine | missing | Phase 10: ScrollDetectionFuncs.cpp:70, 15 statements
-name CompareLine | missing | Phase 10: ScrollDetectionFuncs.cpp:99, 6 statements
-name ScrollDetectionWithoutMask | missing | Phase 10: ScrollDetection.cpp:91, 15 statements
-name ScrollDetectionWithMask | missing | Phase 10: ScrollDetection.cpp:71, 11 statements
+#
+# The eight plugin rules that stood here are **deleted, not re-labelled**: P10.2
+# ported all eight under their C++ names (`processing/scroll_detection.rs` and
+# `processing/complexity_analysis.rs`), so the census finds them by name and a rule
+# for a present function is a stale row.
 name RequestScreenBlockFeatureStorage | renamed | P10.1.B5: `SScreenBlockFeatureStorage::for_frame` (picture.rs), called from `AllocPicture`'s screen arm (wels_preprocess.rs) as picture_handle.cpp:115 does; the both-sizes refusal is `AllocPicture`'s `None`
 name ReleaseScreenBlockFeatureStorage | renamed | P10.1.B5: `Drop` of `SScreenBlockFeatureStorage` — the picture owns the box (`Option<Box<..>>`)
 name RequestFeatureSearchPreparation | renamed | P10.1.B4: `SFeatureSearchPreparation::new` (svc_motion_estimate.rs), called from `InitDqLayers` for the last layer (encoder_ext.rs)
 name CountFMECostDown | missing | Phase 10: svc_motion_estimate.cpp:1027, 8 statements (svc_motion_estimate.rs:1589)
 name UpdateFMEGoodFrameCount | missing | Phase 10: svc_motion_estimate.cpp:1043, 2 statements
-name GetReferenceSrcPicList | missing | Phase 10: CWelsPreProcessScreen, wels_preprocess.cpp:974
+name GetReferenceSrcPicList | renamed | D-scc-12: inlined as the `pRefPicList` array in `DetectSceneChangeScreen` (wels_preprocess.rs) — the C++ body is one `return &m_pSpatialPic[iTargetDid][1]`, which the port spells as the `std::array::from_fn` that builds that window
 
 # imagerotate — reachable only through METHOD_IMAGE_ROTATE, which nothing in the
-# encoder ever requests (T8b.A5's grep). Kept as `missing` rather than `dead`
-# because it is a shipped plugin of the reference's processing library, and a
-# consumer that drives the processing interface directly can ask for it.
-file codec/processing/src/imagerotate/imagerotate.cpp | missing | Phase 10 hand-off: METHOD_IMAGE_ROTATE has no caller in the encoder
-file codec/processing/src/imagerotate/imagerotatefuncs.cpp | missing | Phase 10 hand-off: the three rotate kernels, 7 statements each
+# encoder ever requests (T8b.A5's grep). **D-scc-12 reclassifies it `dead`**: it
+# was held `missing` as a Phase 10 hand-off, and Phase 10 has now read it and
+# decided. The port ships a `libopenh264` — an encoder and a decoder — not the
+# reference's processing library as a separate product, so a method with no caller
+# in `codec/encoder` has no caller at all here.
+file codec/processing/src/imagerotate/imagerotate.cpp | dead | D-scc-12: METHOD_IMAGE_ROTATE has no caller in codec/encoder; WelsFrameWork.cpp:292 constructs it and nothing invokes it
+file codec/processing/src/imagerotate/imagerotatefuncs.cpp | dead | D-scc-12: the three rotate kernels, reachable only through METHOD_IMAGE_ROTATE, which nothing invokes
 
 # Small residue, each read and each genuinely absent.
 name FindExistingPps | missing | 8b.B: paraset_strategy.cpp:608, 8 statements — the listing strategies' PPS lookup

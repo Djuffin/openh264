@@ -29,7 +29,8 @@ upstream's options; `todo!()` and `unimplemented!()` are both zero in `src/`.
 **The one axis still pinned is `iMultipleThreadIdc == 1`.** After that, one spatial
 layer (which needs `METHOD_DOWNSAMPLE`) and `SCREEN_CONTENT_REAL_TIME`. See
 *Phase 5.4*. *(2026-09-02: multi-threading and multi-layer have long since landed;
-`SCREEN_CONTENT_REAL_TIME` is Phase 10's, opened by P10.1 — see the Phase 10
+`SCREEN_CONTENT_REAL_TIME` is Phase 10's, opened by P10.1 and with its three
+video-processing plugins in since P10.2 — see the Phase 10
 section at the end of this file.)*
 
 ---
@@ -1845,7 +1846,7 @@ Worth noting for whoever continues this: had `dead_code` been live on
 pool as unused and the shadowing `CWelsThreadPool` would have been found by a
 compiler warning rather than by a deadlock.
 
-### Phase 10 — `SCREEN_CONTENT_REAL_TIME` — **P10.1 DONE (2026-09-02); P10.2-P10.4 outstanding**
+### Phase 10 — `SCREEN_CONTENT_REAL_TIME` — **P10.1 + P10.2 DONE (2026-09-02); P10.3-P10.4 outstanding**
 
 The last public usage type the port refused. Session P10.1 did two things, in
 order, at `6f955eff` .. the session's docs commit (branch `rust3`):
@@ -1875,6 +1876,45 @@ sweeps did not move by a byte (583/583 in both profiles at every checkpoint).
 translate to safe Rust directly"); the claim rests on `vaa_block_is_sync`, a
 compile-time assertion.
 
-Findings F315-F320 in [`phase10_findings.md`](phase10_findings.md). Next: P10.2 (the
-plugins), P10.3 (the dispatch — the first byte gate on `SCC_TIER=min`), P10.4
+Findings F315-F320 in [`phase10_findings.md`](phase10_findings.md).
+
+**Session P10.2 — the three plugins**, at `1af668a4` .. the session's docs commit.
+
+*A referee that could be green before the bytes can.* Under `SCC_TIER=min` rate
+control is off, so both sides code every macroblock at QP 26 and nothing the screen
+preprocessor reads depends on the coded bytes: its inputs are identical frame by
+frame while the bitstreams differ by design. So the *sequence of scene-change
+verdicts* must match three checkpoints before P10.3's byte gate.
+`rust/tools/diffharness/scc_verdicts.sh` diffs the C++'s own
+`iVaaFrameSceneChangeIdc = %d,codingIdx = %d` DEBUG line between the two encoders
+(both drivers took an `OH264_TRACE_LEVEL` knob for it), and on LTR rows the five
+`WelsBuildRefListScreen()` lines with it. Calibrated at three points: **0/28** with
+every Rust extract empty, **18/28** once the trace line was ported and before the
+plugins were, **28/28** once they were wired — plus **20/20** on the wide tier's LTR
+rows, so the reference *selection* matches and not only the verdict.
+
+*The plugins.* `METHOD_SCROLL_DETECTION` (new
+`processing/scroll_detection.rs`), `METHOD_SCENE_CHANGE_DETECTION_SCREEN` (beside the
+video detector) and `METHOD_COMPLEXITY_ANALYSIS_SCREEN` (at the foot of
+`processing/complexity_analysis.rs`), each under its C++ name with in-file unit
+tests, and all three call sites wired: no `RET_NOTSUPPORTED` on a live path, and
+`processing/mod.rs` lists no untranslated method the encoder calls. All safe — no
+new `unsafe`, allow or raw pointer, and the two new files carry
+`#![forbid(unsafe_code)]`. The complexity plugin has a referee of its own: the first
+P frame's `iFrameComplexity` on the five `rc=1` wide-tier rows, equal to the
+reference's on all five (140312 / 420586 / 71452 / 2704751 / 10217697).
+
+Camera sweeps unmoved throughout: 583/583 in both profiles at every checkpoint. The
+census's `missing` fell 14 -> **2** (both P10.3's) and the
+`SCREEN_CONTENT(dormant: Phase 10)` tags 30 -> **20**, ten retired against a measured
+entry count rather than an argument (F328: `SvcMdSCDMbEnc`, which read 0 in all 48
+`bg` rows, encodes >= 11000 macroblocks now, and both P-skips return true).
+
+**Not done, by the user's ruling:** the Miri probe of D-scc-5 ("don't run miri,
+translate to safe Rust directly"); the claim rests on `vaa_block_is_sync`, a
+compile-time assertion. No Miri was run in P10.2 either.
+
+Findings F321-F328 in [`phase10_findings.md`](phase10_findings.md). Next: P10.3 (the
+dispatch — `PreprocessSliceCoding`'s screen block, `SetMeMethod`, the FME switch
+family, the real `SetScrollingMvToMd`; the first byte gate on `SCC_TIER=min`), P10.4
 (widen and close; add `scc` to `gates.sh`'s family list when it passes).

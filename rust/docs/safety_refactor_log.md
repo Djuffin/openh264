@@ -19700,3 +19700,85 @@ call sites in `wels_preprocess.rs` (`DetectSceneChangeScreen`'s two
 `SetScrollingMvToMd` behind a retyped `PSetScrollingMv` (D-scc-4), the call to
 `PerformFMEPreprocess`, and the first byte gate on `SCC_TIER=min`. **P10.4 — widen
 and close.**
+
+---
+
+## Session P10.2 — the three screen-content plugins (2026-09-02, branch `rust3`)
+
+`1af668a4` .. this commit. Eight checkpoints, seven commits. The user's two standing
+rules held throughout: **no Miri anywhere** (the close gate is `gates.sh family`,
+never `session`/`full`/`exit`, and no `fork_join_probe.sh`), and **safe Rust only** —
+no `unsafe` block, no `unsafe fn`, no raw-pointer field or parameter, no
+`#[allow(unsafe_code)]` in anything this session touched. Both new plugin bodies live
+under `#![forbid(unsafe_code)]`; `unsafe_census.sh check` (12 pinned rows) and
+`unsafe_ratchet.sh check` (raw_ptr 391, unchanged) passed at every commit.
+
+**C1 — the verdict referee, calibrated red.** The session's own referee, built
+before anything it judges. Under `SCC_TIER=min` rate control is off, so both encoders
+code every macroblock at QP 26 and nothing the screen preprocessor reads depends on
+the coded bytes — its inputs are identical frame by frame *while the bitstreams
+differ by design*. `scc_verdicts.sh` runs both drivers at `OH264_TRACE_LEVEL=8` (a
+new knob in each; the Rust driver's deliberate literal `4` default stays a literal,
+per D-fid-4) and diffs their `iVaaFrameSceneChangeIdc` sequences. An *empty* extract
+is a failure, not a match. Baseline: `PASS=0 FAIL=28`, every Rust extract empty
+against 30-62 C++ lines per row. `loopfile`/`screenclip` and the seven `scc` rows
+moved to a shared `inputs.sh` (sourcing `sweep.sh` is not an option: it exits 2 with
+no preset and resets its sourcer's tallies; `SCC_INPUTS` is a global because
+`/bin/bash` here is 3.2 and has no `local -n`).
+
+**C2 — the trace lines.** The verdict line and all five `WelsBuildRefListScreen()`
+lines, at their C++ levels and positions. Referee: **18/28**, not the brief's
+predicted 0/28 — twelve rows agree by accident and six by configuration, and only ten
+of the 28 can discriminate at all (F327).
+
+**C3-C5 — the plugins.** `processing/scroll_detection.rs` (new),
+`CSceneChangeDetectionScreen` beside the video detector, `CComplexityAnalysisScreen`
+at the foot of `processing/complexity_analysis.rs`. Every free function under its C++
+name so the census matches it. Findings F321-F326: `CompareLine`'s twelve-byte floor
+and its `iCmp = 1` seed (the brief's `kiWidth.max(12)` would have answered 0 where
+upstream answers 1); the zero-vector "detection" on a still frame; the two plugins'
+opposite sign conventions for one vector and the complexity kernel's bounds test that
+does not bound the read it guards; the three `NULL`-row refusals; the backwards SAD
+names; and the proof that neither side can overrun the GOM array.
+
+**One defect found while writing, not present in the C++**: the scrolled reference
+anchor must be computed in `isize`. Folding a negative `iScrollMvY` into a `usize`
+offset a component at a time wraps — an overflow panic in debug, a wrong read in
+release — and a downward scroll is exactly when the vector is negative. Both
+directions are pinned by tests; the negative one would have failed the first spelling.
+
+**C6 — the registry and the three call sites.** The borrow plan was the whole
+difficulty: `self.src(..)`/`self.src_id(..)` are `&self` *methods*, so a luma slice
+produced through either borrows `m_vp` along with the pool and forbids the `&mut` the
+`Process` calls need. Each site destructures `self` to name the pool, the scaled
+picture and the plugin table separately, in a scope that closes before the code that
+wants `self` whole. `UpdateBlockStatic` needed a new §4.6 combined accessor,
+`vaa_ext_and_ref_list_mut`: the row it rewrites is in the context's extension, the
+reconstruction it rewrites it against is in the context's reference list, and the
+plugin is a third owner that `with_vpp` has taken *out* of the context. Referee:
+**28/28** on the min tier, **20/20** on the wide tier's LTR rows. The `scc` byte
+sweep is still `PASS=0 FAIL=28` (P10.3's), with no `!!` line, and the hand row's
+first differing byte moved 30611 -> **30648** — later, so the IDR is still identical.
+
+**C7 — the complexity referee.** The screen complexity plugin feeds rate control, not
+verdicts, so it needed one of its own: the first P frame of an `rc=1` row is computed
+from a source frame and a reconstruction that are byte-identical on both sides.
+`RcUpdateFrameComplexity`'s two DEBUG lines were unported; with them,
+`iFrameComplexity` is equal on all five wide-tier inputs (140312, 420586, 71452,
+2704751, 10217697).
+
+**C8 — census, tags, docs.** Census `missing` 14 -> **2** (the eight plugin rules
+deleted rather than re-labelled — a rule for a present function is a stale row;
+`GetReferenceSrcPicList` -> `renamed`; `imagerotate` -> `dead` per D-scc-12).
+`SCREEN_CONTENT(dormant: Phase 10)` tags 30 -> **20**, and each retirement was earned
+by a temporary entry counter (F126's pattern), run on one `scc` row and reverted in
+the same commit: `SvcMdSCDMbEnc`, which read 0 in all 48 `bg` rows, entered >= 11000
+times, with `JudgeStaticSkip` and `JudgeScrollSkip` returning **true** >= 1000 and
+>= 9000 times (F328). Sixteen of the twenty survivors are the FME and feature-search
+family, which is P10.3's whole subject.
+
+**Where the brief was wrong**, each quoted in the close report: the C2 prediction
+("every row still fails... Record `0/28`"), `CompareLine` ("compare
+`kiWidth.max(12)` bytes"), the census baseline ("`0 unclassified`" — it was 54 before
+this session and is 54 after), and the GOM sizing question, which had a definite
+answer rather than a conditional one.
