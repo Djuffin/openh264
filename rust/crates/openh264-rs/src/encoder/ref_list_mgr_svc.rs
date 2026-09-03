@@ -105,15 +105,6 @@ pub use crate::encoder::encoder_context::sWelsEncCtx;
 // Core Data Structures
 // ============================================================================
 
-/// Long-Term Reference (LTR) state machine.
-
-
-/// Feature storage for screen content reference pictures.
-
-/// Reconstructed reference picture representation in the DPB.
-
-/// Reference picture lists for a spatial dependency layer.
-
 /// Reference picture list reordering syntax element.
 #[repr(C)]
 #[derive(Debug, Copy, Clone, Default)]
@@ -151,19 +142,6 @@ pub struct SRefPicMarking {
     pub bAdaptiveRefPicMarkingModeFlag: bool,
 }
 
-
-
-
-
-
-
-
-
-
-
-
-
-
 #[repr(C)]
 #[derive(Debug, Copy, Clone, Default)]
 pub struct SLTRRecoverRequest {
@@ -182,13 +160,6 @@ pub struct SLTRMarkingFeedback {
     pub iLTRFrameNum: i32,
     pub iLayerId: i32,
 }
-
-
-/// Master encoder context state for reference list management.
-
-// ============================================================================
-// Helper Utilities & Logging
-// ============================================================================
 
 // ============================================================================
 // Global Reference Picture List Lifecycle Functions
@@ -1813,9 +1784,6 @@ impl RefStrategyKind {
 
     /// `BuildRefList` — `WelsBuildRefList` for the temporal-layer and screen
     /// strategies, `WelsBuildRefListScreen` for lossless-with-LTR.
-    ///
-    /// # Safety
-    /// `pCtx` must be a live encoder context.
     #[inline]
     pub fn BuildRefList(self, pCtx: &mut sWelsEncCtx, iPOC: i32, iBestLtrRefIdx: i32) -> bool {
         match self {
@@ -1827,9 +1795,6 @@ impl RefStrategyKind {
     }
 
     /// `MarkPic` — `ref_list_mgr_svc.cpp`'s `WelsMarkPic` / `WelsMarkPicScreen`.
-    ///
-    /// # Safety
-    /// `pCtx` must be a live encoder context.
     #[inline]
     pub fn MarkPic(self, pCtx: &mut sWelsEncCtx) {
         match self {
@@ -1839,9 +1804,6 @@ impl RefStrategyKind {
     }
 
     /// `UpdateRefList`.
-    ///
-    /// # Safety
-    /// `pCtx` must be a live encoder context.
     #[inline]
     pub fn UpdateRefList(self, pCtx: &mut sWelsEncCtx) -> bool {
         match self {
@@ -1865,9 +1827,6 @@ impl RefStrategyKind {
 
     /// `AfterBuildRefList` — `DoNothing` for the temporal-layer strategy,
     /// `UpdateBlockStatic` for both screen ones.
-    ///
-    /// # Safety
-    /// `pCtx` must be a live encoder context.
     #[inline]
     pub fn AfterBuildRefList(self, pCtx: &mut sWelsEncCtx) {
         match self {

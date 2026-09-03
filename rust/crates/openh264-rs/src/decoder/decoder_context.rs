@@ -388,9 +388,8 @@ pub use crate::decoder::pic_queue::{PicPool, PicId, PicRefs, SPicBuff};
 /// The decoder picture buffer's three lists, as **slot handles**.
 ///
 /// `None` is the C's null slot. Every non-null entry is a pool picture — the lists
-/// are filled from `pPicBuff` and from nowhere else, which is the invariant
-/// [`insert_ref`](crate::decoder::manage_dec_ref::insert_ref) asserts — so
-/// `Option<PicId>` equality is exactly the pointer equality it replaces.
+/// are filled from `pPicBuff` and from nowhere else — so `Option<PicId>` equality is
+/// exactly the pointer equality it replaces.
 #[derive(Debug, Copy, Clone)]
 pub struct SRefPic {
     pub pRefList: [[Option<PicId>; MAX_DPB_COUNT]; LIST_A],
@@ -801,15 +800,15 @@ pub fn long_ref_pic<'a>(
 }
 
 /// The previous decoded picture's **handle**, without touching the pool — the
-/// `ref_id`-shaped half of [`prev_dpb_pic`], for the error-concealment brackets that
-/// resolve it through their own [`PicRefs`].
+/// `ref_id`-shaped accessor for the error-concealment brackets that resolve it
+/// through their own [`PicRefs`].
 #[inline]
 pub fn prev_dpb_id(pLastDecPicInfo: &SWelsLastDecPicInfo) -> Option<PicId> {
     pLastDecPicInfo.pPreviousDecodedPictureInDpb
 }
 
-/// [`prev_dpb_pic`]'s mutable form — the api layer's buffering path, which takes a
-/// DPB reference on it (`iRefCount += 1`).
+/// [`prev_dpb_id`]'s handle resolved through the pool — the api layer's buffering
+/// path, which takes a DPB reference on it (`iRefCount += 1`).
 #[inline]
 pub fn prev_dpb_pic_mut(
     pool: &mut Option<Box<SPicBuff>>,

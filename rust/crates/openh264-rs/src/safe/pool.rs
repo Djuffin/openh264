@@ -238,7 +238,8 @@ impl<T> Pool<T> {
     /// handle stays valid. That is the faithful reading of `IncreasePicBuff`
     /// (`decoder.cpp:143`), which `memcpy`s the old `PPicture` array into the front of
     /// the new one: a picture keeps its position, so a handle keeps its meaning. New
-    /// slots start at generation 0 and no handle to them can exist yet.
+    /// slots start one past the highest generation now live, not at 0, so an index
+    /// reused after a `reorder_and_shrink` cannot match a handle taken before it.
     pub fn grow(&mut self, extra: Vec<T>) {
         #[cfg(debug_assertions)]
         {

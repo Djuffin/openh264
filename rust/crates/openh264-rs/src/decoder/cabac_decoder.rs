@@ -20,9 +20,9 @@
 //! `left_bits ∈ [-16, 15]` on every path that reaches here (`init` and
 //! `init_read_bits` set −16, `dump_bits` refills from `>= 0` down by 16, `end_cavlc`
 //! sets `-16 + (idx & 7)`). **Needs `avail >= len + 3`**, which is why this is the one
-//! site that takes the wider [`BsReader::buf`] window rather than the RBSP one, and it
-//! reads through `get` so a violated contract is an error return, not a panic and not
-//! a read past the allocation.
+//! site that takes the wider [`RawDataBuffer::window_from`] window rather than the RBSP
+//! one, and it reads through `get` so a violated contract is an error return, not a
+//! panic and not a read past the allocation.
 //!
 //! ### 2. [`Read32BitsCabac`] — the 4/3/2/1 end ladder. Max index `len - 1`.
 //!
@@ -36,7 +36,7 @@
 //! | `>= 4` | `curr[0..4)` | `curr + 3 <= len - 1` |
 //!
 //! So the ladder is bounded by `len`, needs `avail >= len` and nothing more, and can be
-//! handed a slice of exactly `len` bytes — [`BsReader::rbsp_window`]. That makes
+//! handed a slice of exactly `len` bytes — [`RawDataBuffer::rbsp_window`]. That makes
 //! `buf.len()` *be* `pBuffEnd - pBuffStart`, so the engine computes no extent of its
 //! own and there is no second `readable_from`-shaped site to keep coherent.
 //!
@@ -641,7 +641,7 @@ pub type CabacModelTables = [[[SWelsCabacCtx; WELS_CONTEXT_COUNT]; WELS_QP_MAX a
 /// | `uiRange`, `uiOffset`, `iBitsLeft` | unchanged | the arithmetic state |
 /// | `pBuffCurr - pBuffStart` | `pos` | the position, the only thing that moves |
 /// | `pBuffStart` | — | the buffer is the caller's; it is passed per call |
-/// | `pBuffEnd` | — | `buf.len()` of the RBSP window ([`BsReader::rbsp_window`]) |
+/// | `pBuffEnd` | — | `buf.len()` of the RBSP window ([`RawDataBuffer::rbsp_window`]) |
 ///
 /// Field order is deliberate: `uiRange` and `uiOffset` stay adjacent so the pair load
 /// the release build already emits for them (`ldp x9, x11, [x0]`) survives.
@@ -816,7 +816,7 @@ pub fn RestoreCabacDecEngineToBS(pDecEngine: &mut SWelsCabacDecEngine, pBsAux: &
 // 3. Actual decoding
 /// The refill — **audit site 2**, the 4/3/2/1 end ladder, bounded by `len - 1`.
 ///
-/// `win` is the RBSP window ([`BsReader::rbsp_window`]): `win.len()` **is** the C++
+/// `win` is the RBSP window ([`RawDataBuffer::rbsp_window`]): `win.len()` **is** the C++
 /// `pBuffEnd - pBuffStart`, so the selector is the slice's own length and the engine
 /// computes no extent of its own.
 ///

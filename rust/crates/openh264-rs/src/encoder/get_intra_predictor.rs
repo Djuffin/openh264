@@ -2,25 +2,25 @@
 //! prediction sample generators and the `WelsInitIntraPredFuncs` table filler.
 //!
 //! These are **not** the decoder's predictors in `decoder/get_intra_predictor.rs`:
-//! the encoder's take a separate `pRef` pointer into the reconstructed frame and
-//! write into a packed prediction buffer (stride 4 for I4x4, 8 for chroma, 16 for
-//! I16x16), while the decoder's predict in place with a single stride argument.
+//! the encoder's take a separate cursor into the reconstructed frame and write into
+//! a packed prediction buffer (stride 4 for I4x4, 8 for chroma, 16 for I16x16),
+//! while the decoder's predict in place through a single plane cursor.
 //!
 //! Only the `_c` scalar variants exist here. The SIMD variants in the C++ are all
 //! behind `uiCpuFlag` tests that do not fire on any target this port builds for.
 //!
 //! # Three same-named families, and they must never be unified
 //!
-//! `WelsI4x4LumaPredV_c` and its siblings exist three times in this port, with three
-//! different signatures and three different destinations:
+//! The C++ `WelsI4x4LumaPredV_c` and its siblings are ported three times, into three
+//! modules with three different signatures and three different destinations:
 //!
-//! | module | signature | destination |
+//! | module | signature in this port | destination |
 //! |---|---|---|
-//! | `decoder/get_intra_predictor.rs` | `(pPred, kiStride)` | **in place**, strided |
-//! | `common/intra_pred_common.rs` | `(pPred, pRef, kiStride)` | packed, 16x16 only |
-//! | **this module** | `(pPred, pRef, kiStride)` | **packed** candidate buffer |
+//! | `decoder/get_intra_predictor.rs` | `(&mut PlaneCursorMut)` | **in place**, strided |
+//! | `common/intra_pred_common.rs` | `(&mut [u8; 256], top or ref)` | packed, 16x16 only |
+//! | **this module** | `(&mut [u8; N], &RecCursor)` | **packed** candidate buffer |
 //!
-//! Same names, different functions: never unify them, never delete one for the
+//! Same C++ names, different functions: never unify them, never delete one for the
 //! other. The two 16x16 modes this module *does* share with `intra_pred_common`
 //! (`V` and `H`) it imports rather than redefines — those two really are the same
 //! function, and the table below installs the imported ones.
@@ -63,8 +63,8 @@ fn WelsClip1(iX: i32) -> u8 {
 //     stride of 4 (I4x4), 64 at 8 (chroma), 256 at 16 (I16x16). It is one of the
 //     mode-decision ping-pong halves (`pMemPredBlk4`, `pMemPredChroma`,
 //     `pMemPredMb`; `svc_base_layer_md.rs:437`, `:734`, `svc_mode_decision.rs:1167`),
-//     never a picture plane, so it is a fixed-size array and `kiStride` says
-//     nothing about it;
+//     never a picture plane, so it is a fixed-size array and the reference
+//     cursor's stride says nothing about it;
 //   * the **reference** is the reconstructed plane, read at `x = -1` and
 //     `y = -1` around the block. Those reads are in-allocation because a picture
 //     plane is `PADDING_LENGTH`-padded on every side, and they are *correct*
@@ -77,12 +77,13 @@ fn WelsClip1(iX: i32) -> u8 {
 // **Per-kernel reference shapes, not one shared shape.** A predictor
 // that reads only the row above takes `&[u8; N]` — it *cannot* touch the left
 // column, which is the whole reason mode decision may offer it when the left
-// neighbour is missing. A predictor that reads the left column takes a
-// [`PlaneCursor`] whose span is that kernel's reach and no more. The reach table
-// is `REACH_*` below and `ref_span` is the only place it becomes a slice.
+// neighbour is missing. A predictor that reads the left column takes a sample
+// reader instead — `&impl RefSamples`, which a [`PlaneCursor`] and the `RecCursor`
+// the shims pass both satisfy — and reads only that kernel's reach. The reach table
+// is `REACH_*` below, and `ref_span` is the only place it becomes a byte span.
 
 /// What one predictor reads of the reconstructed plane, relative to the block's
-/// own `(0, 0)` — i.e. relative to `pRef`.
+/// own `(0, 0)` — i.e. relative to the cursor's anchor.
 ///
 /// This is the contract in data form: one `Reach` per kernel, never a union over a
 /// family. `WelsI4x4LumaPredDcTop_c` and `WelsI4x4LumaPredDDR_c` are both 4x4 luma
@@ -105,18 +106,18 @@ impl Reach {
     }
 }
 
-/// The byte span a [`Reach`] needs at `stride`, as `(len, center)`: the shim hands
-/// `from_raw_parts(pRef.sub(center), len)` to a [`PlaneCursor`] anchored at
-/// `center`, and the kernel's relative coordinates then land inside it by
-/// construction.
+/// The byte span a [`Reach`] needs at `stride`, as `(len, center)`: one row-major
+/// run of `len` bytes with the block's own `(0, 0)` at offset `center`, so a cursor
+/// anchored there addresses every sample the reach names and nothing outside it.
 ///
-/// The span covers **reads only** — nothing in this module writes
-/// the reference, and `pRef` itself is *not* read by any predictor — so it is the
-/// tightest claim each contract can make.
+/// The span covers **reads only** — nothing in this module writes the reference,
+/// and the anchor sample itself is *not* read by any predictor — so it is the
+/// tightest span a reach can be given, which `ref_span_is_tight_at_both_ends` pins
+/// at both ends.
 ///
 /// A consequence worth stating: for a reach that reads only the row above, the span
-/// lies **entirely above `pRef`** and `center >= len`, which no [`PlaneCursor`] will
-/// accept. That is not a defect — those kernels take `&[u8; N]` rather than a
+/// lies **entirely above the anchor** and `center >= len`, which no [`PlaneCursor`]
+/// will accept. That is not a defect — those kernels take `&[u8; N]` rather than a
 /// cursor, precisely because their whole reach is one contiguous run.
 ///
 /// # Panics
@@ -125,9 +126,9 @@ impl Reach {
 #[inline(always)]
 pub fn ref_span(stride: usize, reach: Reach) -> (usize, usize) {
     let s = stride as isize;
-    // Lowest byte read, and one past the highest, as signed offsets from `pRef`.
+    // Lowest byte read, and one past the highest, as signed offsets from the anchor.
     // Seeded from the first read rather than from zero: seeding at zero would drag
-    // `pRef` itself into every span, and no predictor in this module reads it.
+    // the anchor sample itself into every span, and no predictor here reads it.
     let (mut lo, mut hi) = if reach.corner {
         (-s - 1, -s)
     } else if reach.top > 0 {
@@ -787,20 +788,22 @@ pub fn i16x16_luma_pred_dc_na(pred: &mut [u8; 256]) {
 // C ABI shims
 // ============================================================================
 //
-// The twenty-six `Wels*_c` names below are shims: they materialise
-// this kernel's own reference span and hand the packed destination to the safe
-// kernel above.
+// The twenty-eight `Wels*_c` names below are shims: each takes off the cursor the
+// samples its own kernel reads — nothing at all for the three `DcNA` modes — and
+// hands them, with the packed destination, to the safe kernel above.
 //
-// The `# Safety` contracts share one availability argument, stated here once and
+// The per-kernel notes share one availability argument, stated here once and
 // referred to by each:
 //
-//   **Why the negative reads are legal.** `pRef` points at sample `(0, 0)` of the
-//   block in the *reconstructed* plane (`pMbCache->SPicData.pCsMb[i]` plus the
-//   block's coordinate offset), whose rows are `kiStride` bytes apart. Reads at
-//   `x = -1` and `y = -1` are in-allocation because both codecs allocate picture
-//   planes with `PADDING_LENGTH` samples of border on every side (32 luma, 16
-//   chroma — `pic_queue.rs:AllocPicture`, `wels_preprocess.rs`), so the padded
-//   prefix is part of the same buffer.
+//   **Why the negative reads land inside the plane.** `rec` is a `SharedPlane`
+//   cursor anchored at sample `(0, 0)` of the block in the *reconstructed* plane —
+//   the port's form of `pMbCache->SPicData.pCsMb[i]` plus the block's coordinate
+//   offset. Reads at `x = -1` and `y = -1` stay inside the allocation because both
+//   codecs allocate picture planes with `PADDING_LENGTH` samples of border on every
+//   side (32 luma, 16 chroma — `pic_queue.rs:AllocPicture`, `wels_preprocess.rs`),
+//   so the padded prefix is part of the same cell slice. An anchor that left no
+//   room for a kernel's reach would panic at the slice index rather than read out
+//   of bounds — which is what each `# Panics` below says.
 //
 //   **Why the reads are correct.** Mode decision does not call an arbitrary
 //   predictor: it indexes `g_kiIntra4AvailMode` / `g_kiIntra16AvaliMode` /
@@ -809,93 +812,97 @@ pub fn i16x16_luma_pred_dc_na(pred: &mut [u8; 256]) {
 //   `svc_mode_decision.rs:1167`). That correspondence is asserted, offset by
 //   offset, in `reach_table_agrees_with_the_availability_tables`.
 //
-//   **The destination.** `pPred` is a *packed* candidate buffer — 16 bytes for
-//   I4x4, 64 for chroma, 256 for I16x16, at implicit strides of 4, 8 and 16 — and
-//   `kiStride` says nothing about it. Every one of these kernels writes all of it,
-//   and none of them writes a byte more.
+//   **The destination.** `pred` is a *packed* candidate buffer — 16 bytes for
+//   I4x4, 64 for chroma, 256 for I16x16, at implicit strides of 4, 8 and 16, about
+//   which the cursor's own stride says nothing. Every one of these kernels writes
+//   all of it, and none of them writes a byte more.
 //
-// Per-kernel, each contract names only the samples that kernel reads. Those are
-// the `REACH_*` constants; `ref_span` turns one into a slice and nothing else in
-// this file does that arithmetic.
+// Per-kernel, each note names only the samples that kernel reads. Those are the
+// `REACH_*` constants; `ref_span` is where one becomes a byte span, and nothing
+// else in this file does that arithmetic.
 
 // --- I4x4 luma ---------------------------------------------------------------
 
 /// C++: `WelsI4x4LumaPredV_c`, `get_intra_predictor.cpp:79`.
 ///
-/// # Safety
-/// * `pPred` is writable for **16** bytes (packed 4x4, stride 4).
-/// * `pRef` has the four samples `[-kiStride, -kiStride + 4)` readable — the row
-///   above the block, and nothing else. This kernel never reads to the left.
-/// * `kiStride > 0`, and the two regions do not overlap.
+/// Reads [`REACH_I4X4_TOP`]: the four samples of the row above, at `(0..4, -1)`
+/// from the anchor, and nothing else — this kernel never reads to the left.
+///
+/// # Panics
+/// If `rec` is anchored so that this reach leaves the plane — `RecCursor` reads
+/// are slice indexes.
 pub fn WelsI4x4LumaPredV_c(pred: &mut [u8; 16], rec: &RecCursor<'_>) {
     i4x4_luma_pred_v(pred, &rec.row_n::<4>(-1, 0))
 }
 
 /// C++: `WelsI4x4LumaPredH_c`, `:87`.
 ///
-/// # Safety
-/// * `pPred` is writable for **16** bytes (packed 4x4, stride 4).
-/// * `pRef` has [`REACH_I4X4_LEFT`] readable: the four samples at `x = -1`,
-///   `y` in `0..4`, i.e. the bytes `[-1, 3 * kiStride)`. This kernel never reads
-///   the row above.
-/// * `kiStride > 0`, and the two regions do not overlap.
+/// Reads [`REACH_I4X4_LEFT`]: the four samples at `(-1, 0..4)`, the column left of
+/// the block. This kernel never reads the row above.
+///
+/// # Panics
+/// If `rec` is anchored so that this reach leaves the plane — `RecCursor` reads
+/// are slice indexes.
 pub fn WelsI4x4LumaPredH_c(pred: &mut [u8; 16], rec: &RecCursor<'_>) {
     i4x4_luma_pred_h(pred, rec)  // reach: REACH_I4X4_LEFT
 }
 
 /// C++: `WelsI4x4LumaPredDc_c`, `:106`.
 ///
-/// # Safety
-/// * `pPred` is writable for **16** bytes (packed 4x4, stride 4).
-/// * `pRef` has [`REACH_I4X4_DC`] readable: four samples above and four to the
-///   left, i.e. the bytes `[-kiStride, 3 * kiStride)`.
-/// * `kiStride > 0`, and the two regions do not overlap.
+/// Reads [`REACH_I4X4_DC`]: four samples above at `(0..4, -1)` and four to the
+/// left at `(-1, 0..4)`.
+///
+/// # Panics
+/// If `rec` is anchored so that this reach leaves the plane — `RecCursor` reads
+/// are slice indexes.
 pub fn WelsI4x4LumaPredDc_c(pred: &mut [u8; 16], rec: &RecCursor<'_>) {
     i4x4_luma_pred_dc(pred, rec)  // reach: REACH_I4X4_DC
 }
 
 /// C++: `WelsI4x4LumaPredDcLeft_c`, `:114`.
 ///
-/// # Safety
-/// * `pPred` is writable for **16** bytes (packed 4x4, stride 4).
-/// * `pRef` has [`REACH_I4X4_LEFT`] readable — the four samples at `x = -1`. This
-///   is the mode decision picks when the row above is *unavailable*, and the
-///   signature is why it cannot read one.
-/// * `kiStride > 0`, and the two regions do not overlap.
+/// Reads [`REACH_I4X4_LEFT`] — the four samples at `(-1, 0..4)`. This is the one
+/// mode decision picks when the row above is *unavailable*, and it reads nothing
+/// there.
+///
+/// # Panics
+/// If `rec` is anchored so that this reach leaves the plane — `RecCursor` reads
+/// are slice indexes.
 pub fn WelsI4x4LumaPredDcLeft_c(pred: &mut [u8; 16], rec: &RecCursor<'_>) {
     i4x4_luma_pred_dc_left(pred, rec)  // reach: REACH_I4X4_LEFT
 }
 
 /// C++: `WelsI4x4LumaPredDcTop_c`, `:121`.
 ///
-/// # Safety
-/// * `pPred` is writable for **16** bytes (packed 4x4, stride 4).
-/// * `pRef` has the four samples `[-kiStride, -kiStride + 4)` readable — the
-///   mirror of [`WelsI4x4LumaPredDcLeft_c`], offered when the left column is
-///   unavailable, and correspondingly unable to read one.
-/// * `kiStride > 0`, and the two regions do not overlap.
+/// Reads [`REACH_I4X4_TOP`]: the four samples at `(0..4, -1)` — the mirror of
+/// [`WelsI4x4LumaPredDcLeft_c`], offered when the left column is unavailable, and
+/// correspondingly handed the top row alone.
+///
+/// # Panics
+/// If `rec` is anchored so that this reach leaves the plane — `RecCursor` reads
+/// are slice indexes.
 pub fn WelsI4x4LumaPredDcTop_c(pred: &mut [u8; 16], rec: &RecCursor<'_>) {
     i4x4_luma_pred_dc_top(pred, &rec.row_n::<4>(-1, 0))
 }
 
 /// C++: `WelsI4x4LumaPredDcNA_c`, `:127`.
 ///
-/// # Safety
-/// * `pPred` is writable for **16** bytes (packed 4x4, stride 4).
-/// * `pRef` and `kiStride` are unread; the C++ takes them to fit the table's
-///   signature and this shim keeps them for the same reason. `pRef` may be null.
+/// Reads nothing ([`REACH_NONE`]) — neither neighbour exists. The C++ takes a
+/// `pRef` it never dereferences to fit the table's signature, and this shim keeps
+/// the parameter for the same reason.
 pub fn WelsI4x4LumaPredDcNA_c(pred: &mut [u8; 16], _rec: &RecCursor<'_>) {
     i4x4_luma_pred_dc_na(pred)
 }
 
 /// C++: `WelsI4x4LumaPredDDL_c`, `:134` — diagonal down-left.
 ///
-/// # Safety
-/// * `pPred` is writable for **16** bytes (packed 4x4, stride 4).
-/// * `pRef` has the **eight** samples `[-kiStride, -kiStride + 8)` readable: four
-///   past the block's right edge, which is why `g_kiIntra4AvailMode` offers this
-///   mode only at offsets whose top-right bit is set.
-/// * `kiStride > 0`, and the two regions do not overlap.
+/// Reads [`REACH_I4X4_TOP8`]: **eight** samples of the row above, `(0..8, -1)` —
+/// four past the block's right edge, which is why `g_kiIntra4AvailMode` offers this
+/// mode only at offsets whose top-right bit is set.
+///
+/// # Panics
+/// If `rec` is anchored so that this reach leaves the plane — `RecCursor` reads
+/// are slice indexes.
 pub fn WelsI4x4LumaPredDDL_c(pred: &mut [u8; 16], rec: &RecCursor<'_>) {
     i4x4_luma_pred_ddl(pred, &rec.row_n::<8>(-1, 0))
 }
@@ -903,35 +910,38 @@ pub fn WelsI4x4LumaPredDDL_c(pred: &mut [u8; 16], rec: &RecCursor<'_>) {
 /// C++: `WelsI4x4LumaPredDDLTop_c`, `:164` — down-left with the top-right
 /// neighbour substituted.
 ///
-/// # Safety
-/// * `pPred` is writable for **16** bytes (packed 4x4, stride 4).
-/// * `pRef` has the four samples `[-kiStride, -kiStride + 4)` readable.
-/// * `kiStride > 0`, and the two regions do not overlap.
+/// Reads [`REACH_I4X4_TOP`]: the four samples at `(0..4, -1)`.
 ///
 /// No availability offset offers this mode (see
 /// `reach_table_agrees_with_the_availability_tables`).
+///
+/// # Panics
+/// If `rec` is anchored so that this reach leaves the plane — `RecCursor` reads
+/// are slice indexes.
 pub fn WelsI4x4LumaPredDDLTop_c(pred: &mut [u8; 16], rec: &RecCursor<'_>) {
     i4x4_luma_pred_ddl_top(pred, &rec.row_n::<4>(-1, 0))
 }
 
 /// C++: `WelsI4x4LumaPredDDR_c`, `:186` — diagonal down-right.
 ///
-/// # Safety
-/// * `pPred` is writable for **16** bytes (packed 4x4, stride 4).
-/// * `pRef` has [`REACH_I4X4_DDR`] readable: the corner at `(-1, -1)`, four
-///   samples above and four to the left — the bytes `[-kiStride - 1, 3 * kiStride)`.
-/// * `kiStride > 0`, and the two regions do not overlap.
+/// Reads [`REACH_I4X4_DDR`]: the corner at `(-1, -1)`, four samples above at
+/// `(0..4, -1)` and four to the left at `(-1, 0..4)`.
+///
+/// # Panics
+/// If `rec` is anchored so that this reach leaves the plane — `RecCursor` reads
+/// are slice indexes.
 pub fn WelsI4x4LumaPredDDR_c(pred: &mut [u8; 16], rec: &RecCursor<'_>) {
     i4x4_luma_pred_ddr(pred, rec)  // reach: REACH_I4X4_DDR
 }
 
 /// C++: `WelsI4x4LumaPredVL_c`, `:228` — vertical left.
 ///
-/// # Safety
-/// * `pPred` is writable for **16** bytes (packed 4x4, stride 4).
-/// * `pRef` has the **seven** samples `[-kiStride, -kiStride + 7)` readable —
-///   three past the block's right edge, not four: `kuiVL9`'s last tap is `T6`.
-/// * `kiStride > 0`, and the two regions do not overlap.
+/// Reads [`REACH_I4X4_TOP7`]: **seven** samples of the row above, `(0..7, -1)` —
+/// three past the block's right edge, not four: the last tap (`vl9`) stops at `T6`.
+///
+/// # Panics
+/// If `rec` is anchored so that this reach leaves the plane — `RecCursor` reads
+/// are slice indexes.
 pub fn WelsI4x4LumaPredVL_c(pred: &mut [u8; 16], rec: &RecCursor<'_>) {
     i4x4_luma_pred_vl(pred, &rec.row_n::<7>(-1, 0))
 }
@@ -939,46 +949,48 @@ pub fn WelsI4x4LumaPredVL_c(pred: &mut [u8; 16], rec: &RecCursor<'_>) {
 /// C++: `WelsI4x4LumaPredVLTop_c`, `:265` — vertical left with the top-right
 /// neighbour substituted.
 ///
-/// # Safety
-/// * `pPred` is writable for **16** bytes (packed 4x4, stride 4).
-/// * `pRef` has the four samples `[-kiStride, -kiStride + 4)` readable.
-/// * `kiStride > 0`, and the two regions do not overlap.
+/// Reads [`REACH_I4X4_TOP`]: the four samples at `(0..4, -1)`.
 ///
 /// Like `DDL_TOP`, no availability offset offers this mode.
+///
+/// # Panics
+/// If `rec` is anchored so that this reach leaves the plane — `RecCursor` reads
+/// are slice indexes.
 pub fn WelsI4x4LumaPredVLTop_c(pred: &mut [u8; 16], rec: &RecCursor<'_>) {
     i4x4_luma_pred_vl_top(pred, &rec.row_n::<4>(-1, 0))
 }
 
 /// C++: `WelsI4x4LumaPredVR_c`, `:294` — vertical right.
 ///
-/// # Safety
-/// * `pPred` is writable for **16** bytes (packed 4x4, stride 4).
-/// * `pRef` has [`REACH_I4X4_VR`] readable: the corner, four samples above and
-///   **three** to the left — `L3` is never read, so the span stops at
-///   `2 * kiStride`.
-/// * `kiStride > 0`, and the two regions do not overlap.
+/// Reads [`REACH_I4X4_VR`]: the corner at `(-1, -1)`, four samples above and
+/// **three** to the left — `L3`, at `(-1, 3)`, is never read.
+///
+/// # Panics
+/// If `rec` is anchored so that this reach leaves the plane — `RecCursor` reads
+/// are slice indexes.
 pub fn WelsI4x4LumaPredVR_c(pred: &mut [u8; 16], rec: &RecCursor<'_>) {
     i4x4_luma_pred_vr(pred, rec)  // reach: REACH_I4X4_VR
 }
 
 /// C++: `WelsI4x4LumaPredHU_c`, `:332` — horizontal up.
 ///
-/// # Safety
-/// * `pPred` is writable for **16** bytes (packed 4x4, stride 4).
-/// * `pRef` has [`REACH_I4X4_LEFT`] readable — four samples at `x = -1`, nothing
-///   above.
-/// * `kiStride > 0`, and the two regions do not overlap.
+/// Reads [`REACH_I4X4_LEFT`] — the four samples at `(-1, 0..4)`, nothing above.
+///
+/// # Panics
+/// If `rec` is anchored so that this reach leaves the plane — `RecCursor` reads
+/// are slice indexes.
 pub fn WelsI4x4LumaPredHU_c(pred: &mut [u8; 16], rec: &RecCursor<'_>) {
     i4x4_luma_pred_hu(pred, rec)  // reach: REACH_I4X4_LEFT
 }
 
 /// C++: `WelsI4x4LumaPredHD_c`, `:363` — horizontal down.
 ///
-/// # Safety
-/// * `pPred` is writable for **16** bytes (packed 4x4, stride 4).
-/// * `pRef` has [`REACH_I4X4_HD`] readable: the corner, **three** samples above
-///   (`T3` is never read) and four to the left.
-/// * `kiStride > 0`, and the two regions do not overlap.
+/// Reads [`REACH_I4X4_HD`]: the corner at `(-1, -1)`, **three** samples above
+/// (`T3` is never read) and four to the left.
+///
+/// # Panics
+/// If `rec` is anchored so that this reach leaves the plane — `RecCursor` reads
+/// are slice indexes.
 pub fn WelsI4x4LumaPredHD_c(pred: &mut [u8; 16], rec: &RecCursor<'_>) {
     i4x4_luma_pred_hd(pred, rec)  // reach: REACH_I4X4_HD
 }
@@ -987,76 +999,78 @@ pub fn WelsI4x4LumaPredHD_c(pred: &mut [u8; 16], rec: &RecCursor<'_>) {
 
 /// C++: `WelsIChromaPredV_c`, `:404`.
 ///
-/// # Safety
-/// * `pPred` is writable for **64** bytes (packed 8x8, stride 8).
-/// * `pRef` has the eight samples `[-kiStride, -kiStride + 8)` readable.
-/// * `kiStride > 0`, and the two regions do not overlap.
+/// Reads [`REACH_CHROMA_TOP`]: the eight samples of the row above, `(0..8, -1)`.
+///
+/// # Panics
+/// If `rec` is anchored so that this reach leaves the plane — `RecCursor` reads
+/// are slice indexes.
 pub fn WelsIChromaPredV_c(pred: &mut [u8; 64], rec: &RecCursor<'_>) {
     chroma_pred_v(pred, &rec.row_n::<8>(-1, 0))
 }
 
 /// C++: `WelsIChromaPredH_c`, `:417`.
 ///
-/// # Safety
-/// * `pPred` is writable for **64** bytes (packed 8x8, stride 8).
-/// * `pRef` has [`REACH_CHROMA_LEFT`] readable: eight samples at `x = -1`, i.e.
-///   the bytes `[-1, 7 * kiStride)`.
-/// * `kiStride > 0`, and the two regions do not overlap.
+/// Reads [`REACH_CHROMA_LEFT`]: the eight samples at `(-1, 0..8)`, nothing above.
+///
+/// # Panics
+/// If `rec` is anchored so that this reach leaves the plane — `RecCursor` reads
+/// are slice indexes.
 pub fn WelsIChromaPredH_c(pred: &mut [u8; 64], rec: &RecCursor<'_>) {
     chroma_pred_h(pred, rec)  // reach: REACH_CHROMA_LEFT
 }
 
 /// C++: `WelsIChromaPredPlane_c`, `:433`.
 ///
-/// # Safety
-/// * `pPred` is writable for **64** bytes (packed 8x8, stride 8).
-/// * `pRef` has [`REACH_CHROMA_PLANE`] readable: the corner at `(-1, -1)`, eight
-///   samples above and eight to the left — the bytes
-///   `[-kiStride - 1, 7 * kiStride)`. The corner is reached by the `pTop[2 - i]`
-///   and `pLeft[(2 - i) * kiStride]` arms at `i == 3`.
-/// * `kiStride > 0`, and the two regions do not overlap.
+/// Reads [`REACH_CHROMA_PLANE`]: the corner at `(-1, -1)`, eight samples above at
+/// `(0..8, -1)` and eight to the left at `(-1, 0..8)`. The corner is reached by the
+/// `at(2 - i, -1)` and `at(-1, 2 - i)` arms at `i == 3`.
+///
+/// # Panics
+/// If `rec` is anchored so that this reach leaves the plane — `RecCursor` reads
+/// are slice indexes.
 pub fn WelsIChromaPredPlane_c(pred: &mut [u8; 64], rec: &RecCursor<'_>) {
     chroma_pred_plane(pred, rec)  // reach: REACH_CHROMA_PLANE
 }
 
 /// C++: `WelsIChromaPredDc_c`, `:457`.
 ///
-/// # Safety
-/// * `pPred` is writable for **64** bytes (packed 8x8, stride 8).
-/// * `pRef` has [`REACH_CHROMA_DC`] readable: eight samples above and eight to
-///   the left, i.e. the bytes `[-kiStride, 7 * kiStride)`.
-/// * `kiStride > 0`, and the two regions do not overlap.
+/// Reads [`REACH_CHROMA_DC`]: eight samples above at `(0..8, -1)` and eight to the
+/// left at `(-1, 0..8)`.
+///
+/// # Panics
+/// If `rec` is anchored so that this reach leaves the plane — `RecCursor` reads
+/// are slice indexes.
 pub fn WelsIChromaPredDc_c(pred: &mut [u8; 64], rec: &RecCursor<'_>) {
     chroma_pred_dc(pred, rec)  // reach: REACH_CHROMA_DC
 }
 
 /// C++: `WelsIChromaPredDcLeft_c`, `:489`.
 ///
-/// # Safety
-/// * `pPred` is writable for **64** bytes (packed 8x8, stride 8).
-/// * `pRef` has [`REACH_CHROMA_LEFT`] readable — eight samples at `x = -1`,
-///   nothing above.
-/// * `kiStride > 0`, and the two regions do not overlap.
+/// Reads [`REACH_CHROMA_LEFT`] — the eight samples at `(-1, 0..8)`, nothing above.
+///
+/// # Panics
+/// If `rec` is anchored so that this reach leaves the plane — `RecCursor` reads
+/// are slice indexes.
 pub fn WelsIChromaPredDcLeft_c(pred: &mut [u8; 64], rec: &RecCursor<'_>) {
     chroma_pred_dc_left(pred, rec)  // reach: REACH_CHROMA_LEFT
 }
 
 /// C++: `WelsIChromaPredDcTop_c`, `:512`.
 ///
-/// # Safety
-/// * `pPred` is writable for **64** bytes (packed 8x8, stride 8).
-/// * `pRef` has the eight samples `[-kiStride, -kiStride + 8)` readable, and
-///   nothing to the left.
-/// * `kiStride > 0`, and the two regions do not overlap.
+/// Reads [`REACH_CHROMA_TOP`]: the eight samples at `(0..8, -1)`, nothing to the
+/// left.
+///
+/// # Panics
+/// If `rec` is anchored so that this reach leaves the plane — `RecCursor` reads
+/// are slice indexes.
 pub fn WelsIChromaPredDcTop_c(pred: &mut [u8; 64], rec: &RecCursor<'_>) {
     chroma_pred_dc_top(pred, &rec.row_n::<8>(-1, 0))
 }
 
 /// C++: `WelsIChromaPredDcNA_c`, `:529`.
 ///
-/// # Safety
-/// * `pPred` is writable for **64** bytes (packed 8x8, stride 8).
-/// * `pRef` and `kiStride` are unread; `pRef` may be null.
+/// Reads nothing ([`REACH_NONE`]) — neither neighbour exists; the reference
+/// parameter is kept only to fit the dispatch table's signature.
 pub fn WelsIChromaPredDcNA_c(pred: &mut [u8; 64], _rec: &RecCursor<'_>) {
     chroma_pred_dc_na(pred)
 }
@@ -1065,54 +1079,57 @@ pub fn WelsIChromaPredDcNA_c(pred: &mut [u8; 64], _rec: &RecCursor<'_>) {
 
 /// C++: `WelsI16x16LumaPredPlane_c`, `:542`.
 ///
-/// # Safety
-/// * `pPred` is writable for **256** bytes (packed 16x16, stride 16).
-/// * `pRef` has [`REACH_I16X16_PLANE`] readable: the corner at `(-1, -1)`,
-///   sixteen samples above and sixteen to the left — the bytes
-///   `[-kiStride - 1, 15 * kiStride)`.
-/// * `kiStride > 0`, and the two regions do not overlap.
+/// Reads [`REACH_I16X16_PLANE`]: the corner at `(-1, -1)`, sixteen samples above at
+/// `(0..16, -1)` and sixteen to the left at `(-1, 0..16)` — the corner via the
+/// `at(6 - i, -1)` and `at(-1, 6 - i)` arms at `i == 7`.
+///
+/// # Panics
+/// If `rec` is anchored so that this reach leaves the plane — `RecCursor` reads
+/// are slice indexes.
 pub fn WelsI16x16LumaPredPlane_c(pred: &mut [u8; 256], rec: &RecCursor<'_>) {
     i16x16_luma_pred_plane(pred, rec)  // reach: REACH_I16X16_PLANE
 }
 
 /// C++: `WelsI16x16LumaPredDc_c`, `:566`.
 ///
-/// # Safety
-/// * `pPred` is writable for **256** bytes (packed 16x16, stride 16).
-/// * `pRef` has [`REACH_I16X16_DC`] readable: sixteen samples above and sixteen
-///   to the left, i.e. the bytes `[-kiStride, 15 * kiStride)`.
-/// * `kiStride > 0`, and the two regions do not overlap.
+/// Reads [`REACH_I16X16_DC`]: sixteen samples above at `(0..16, -1)` and sixteen to
+/// the left at `(-1, 0..16)`.
+///
+/// # Panics
+/// If `rec` is anchored so that this reach leaves the plane — `RecCursor` reads
+/// are slice indexes.
 pub fn WelsI16x16LumaPredDc_c(pred: &mut [u8; 256], rec: &RecCursor<'_>) {
     i16x16_luma_pred_dc(pred, rec)  // reach: REACH_I16X16_DC
 }
 
 /// C++: `WelsI16x16LumaPredDcTop_c`, `:582`.
 ///
-/// # Safety
-/// * `pPred` is writable for **256** bytes (packed 16x16, stride 16).
-/// * `pRef` has the sixteen samples `[-kiStride, -kiStride + 16)` readable, and
-///   nothing to the left.
-/// * `kiStride > 0`, and the two regions do not overlap.
+/// Reads [`REACH_I16X16_TOP`]: the sixteen samples at `(0..16, -1)`, nothing to the
+/// left.
+///
+/// # Panics
+/// If `rec` is anchored so that this reach leaves the plane — `RecCursor` reads
+/// are slice indexes.
 pub fn WelsI16x16LumaPredDcTop_c(pred: &mut [u8; 256], rec: &RecCursor<'_>) {
     i16x16_luma_pred_dc_top(pred, &rec.row_n::<16>(-1, 0))
 }
 
 /// C++: `WelsI16x16LumaPredDcLeft_c`, `:595`.
 ///
-/// # Safety
-/// * `pPred` is writable for **256** bytes (packed 16x16, stride 16).
-/// * `pRef` has [`REACH_I16X16_LEFT`] readable — sixteen samples at `x = -1`,
-///   nothing above.
-/// * `kiStride > 0`, and the two regions do not overlap.
+/// Reads [`REACH_I16X16_LEFT`] — the sixteen samples at `(-1, 0..16)`, nothing
+/// above.
+///
+/// # Panics
+/// If `rec` is anchored so that this reach leaves the plane — `RecCursor` reads
+/// are slice indexes.
 pub fn WelsI16x16LumaPredDcLeft_c(pred: &mut [u8; 256], rec: &RecCursor<'_>) {
     i16x16_luma_pred_dc_left(pred, rec)  // reach: REACH_I16X16_LEFT
 }
 
 /// C++: `WelsI16x16LumaPredDcNA_c`, `:610`.
 ///
-/// # Safety
-/// * `pPred` is writable for **256** bytes (packed 16x16, stride 16).
-/// * `pRef` and `kiStride` are unread; `pRef` may be null.
+/// Reads nothing ([`REACH_NONE`]) — neither neighbour exists; the reference
+/// parameter is kept only to fit the dispatch table's signature.
 pub fn WelsI16x16LumaPredDcNA_c(pred: &mut [u8; 256], _rec: &RecCursor<'_>) {
     i16x16_luma_pred_dc_na(pred)
 }
@@ -1122,6 +1139,10 @@ pub fn WelsI16x16LumaPredDcNA_c(pred: &mut [u8; 256], _rec: &RecCursor<'_>) {
 ///
 /// Reads [`REACH_I16X16_TOP`]: the sixteen samples of the row above, and nothing
 /// else — in particular never to the left.
+///
+/// # Panics
+/// If `rec` is anchored so that this reach leaves the plane — `RecCursor` reads
+/// are slice indexes.
 pub fn WelsI16x16LumaPredV_c(pred: &mut [u8; 256], rec: &RecCursor<'_>) {
     i16x16_luma_pred_v(pred, &rec.row_n::<16>(-1, 0))
 }
@@ -1132,6 +1153,10 @@ pub fn WelsI16x16LumaPredV_c(pred: &mut [u8; 256], rec: &RecCursor<'_>) {
 /// Reads [`REACH_I16X16_LEFT`]: one sample per row at `x = -1`, and never the row
 /// above — which is why it and the vertical one take different reference shapes
 /// rather than a shared span that would have each claiming the other's reach.
+///
+/// # Panics
+/// If `rec` is anchored so that this reach leaves the plane — `RecCursor` reads
+/// are slice indexes.
 pub fn WelsI16x16LumaPredH_c(pred: &mut [u8; 256], rec: &RecCursor<'_>) {
     i16x16_luma_pred_h(pred, rec)
 }
@@ -1350,10 +1375,10 @@ mod tests {
     /// **The availability argument, checked.** Every mode an availability table
     /// offers must read only neighbours that table's index says exist.
     ///
-    /// This is what the per-kernel [`Reach`] types are *for*. The shims' `# Safety`
-    /// contracts say the negative reads are in-allocation because the plane is
-    /// `PADDING_LENGTH`-padded; this test says they are *correct* because mode
-    /// decision never offers a mode whose neighbours are missing.
+    /// This is what the per-kernel [`Reach`] types are *for*. The shims' notes say
+    /// the negative reads land inside the plane because it is `PADDING_LENGTH`-
+    /// padded; this test says they are *correct* because mode decision never offers
+    /// a mode whose neighbours are missing.
     ///
     /// Two facts the test pins that are easy to lose:
     ///

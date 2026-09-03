@@ -621,18 +621,16 @@ pub fn get_none_zero_count(level: &[i16; 16]) -> i32 {
 
 /// Computes pixel residual differencing followed by the 2D 4x4 Forward Integer DCT.
 ///
-/// # Safety
-/// * `pDct` points at 16 writable, `i16`-aligned `i16`, disjoint from both
-///   pixel surfaces.
-/// * `pPixel1` and `pPixel2` each point at sample `(0, 0)` of a 4x4 block
-///   whose rows are `iStride1` / `iStride2` bytes apart; the bytes
-///   `[0, 3*stride + 4)` from each pointer must be readable (the kernel
-///   reaches forward only — no `-1` column, no `-stride` row). Both strides
-///   `>= 4` and positive. The pixel surfaces are only read.
+/// Both pixel cursors are anchored at sample `(0, 0)` of their 4x4 block and are
+/// only read; the kernel reaches forward only — no `-1` column, no `-stride` row.
 ///
-/// Every call path is a `pfDctT4` table slot; the callers hand a source
-/// macroblock cursor and a 16- or 8-stride prediction scratch
-/// (`svc_encode_mb.rs:684`, `svc_encode_slice.rs`).
+/// Every call path is a `pfDctT4` table slot; its one caller, `WelsEncRecI4x4Y`
+/// (`svc_encode_mb.rs`), hands a source macroblock cursor and the stride-4 I4x4
+/// prediction scratch.
+///
+/// # Panics
+/// If `pDct` holds fewer than 16 coefficients, or if either cursor's 4x4 block
+/// leaves its plane.
 #[inline]
 pub fn WelsDctT4_c(
     pDct: &mut [i16],
@@ -645,12 +643,12 @@ pub fn WelsDctT4_c(
 
 /// Performs 4x4 FDCT on four adjacent 4x4 blocks forming an 8x8 quadrant.
 ///
-/// # Safety
-/// * `pDct` points at 64 writable, `i16`-aligned `i16`, disjoint from both
-///   pixel surfaces.
-/// * `pPixel1` and `pPixel2` each point at sample `(0, 0)` of an 8x8 block;
-///   the bytes `[0, 7*stride + 8)` from each pointer must be readable
-///   (forward reach only). Both strides `>= 8` and positive. Only read.
+/// Both pixel cursors are anchored at sample `(0, 0)` of their 8x8 block and are
+/// only read; the kernel reaches forward only.
+///
+/// # Panics
+/// If `pDct` holds fewer than 64 coefficients, or if either cursor's 8x8 block
+/// leaves its plane.
 #[inline]
 pub fn WelsDctFourT4_c(
     pDct: &mut [i16],
@@ -702,8 +700,8 @@ pub fn WelsScan4x4Dc(pLevel: &mut [i16; 16], pDct: &[i16; 16]) {
 // Pixel Block Copy Fallbacks (matching copy_mb.h)
 // ============================================================================
 
-/// # Safety
-/// See [`copy_shim`] with `W = 4`, `H = 4`.
+/// Copies a 4x4 block of samples from `pSrc` to `pDst`, row by row through
+/// `copy_rows_shared`.
 #[inline]
 pub fn WelsCopy4x4_c(
     pDst: &crate::encoder::rec_view::RecCursor<'_>,
@@ -712,8 +710,8 @@ pub fn WelsCopy4x4_c(
     crate::encoder::rec_view::copy_rows_shared::<4>(pDst, pSrc, 4);
 }
 
-/// # Safety
-/// See [`copy_shim`] with `W = 8`, `H = 4`.
+/// Copies an 8-wide, 4-tall block of samples from `pSrc` to `pDst`, row by row
+/// through `copy_rows_shared`.
 #[inline]
 pub fn WelsCopy8x4_c(
     pDst: &crate::encoder::rec_view::RecCursor<'_>,
@@ -722,8 +720,8 @@ pub fn WelsCopy8x4_c(
     crate::encoder::rec_view::copy_rows_shared::<8>(pDst, pSrc, 4);
 }
 
-/// # Safety
-/// See [`copy_shim`] with `W = 4`, `H = 8`.
+/// Copies a 4-wide, 8-tall block of samples from `pSrc` to `pDst`, row by row
+/// through `copy_rows_shared`.
 #[inline]
 pub fn WelsCopy4x8_c(
     pDst: &crate::encoder::rec_view::RecCursor<'_>,
@@ -732,9 +730,11 @@ pub fn WelsCopy4x8_c(
     crate::encoder::rec_view::copy_rows_shared::<4>(pDst, pSrc, 8);
 }
 
-/// # Safety
-/// See [`copy_shim`] with `W = 8`, `H = 8`. (The decoder's error-concealment
-/// module has its own same-named kernel — different function, never unify.)
+/// Copies an 8x8 block of samples from `pSrc` to `pDst`, row by row through
+/// `copy_rows_shared`.
+///
+/// (The decoder's error-concealment module has its own same-named kernel —
+/// different function, never unify.)
 #[inline]
 pub fn WelsCopy8x8_c(
     pDst: &crate::encoder::rec_view::RecCursor<'_>,
@@ -743,8 +743,8 @@ pub fn WelsCopy8x8_c(
     crate::encoder::rec_view::copy_rows_shared::<8>(pDst, pSrc, 8);
 }
 
-/// # Safety
-/// See [`copy_shim`] with `W = 16`, `H = 8`.
+/// Copies a 16-wide, 8-tall block of samples from `pSrc` to `pDst`, row by row
+/// through `copy_rows_shared`.
 #[inline]
 pub fn WelsCopy16x8_c(
     pDst: &crate::encoder::rec_view::RecCursor<'_>,
@@ -753,8 +753,8 @@ pub fn WelsCopy16x8_c(
     crate::encoder::rec_view::copy_rows_shared::<16>(pDst, pSrc, 8);
 }
 
-/// # Safety
-/// See [`copy_shim`] with `W = 8`, `H = 16`.
+/// Copies an 8-wide, 16-tall block of samples from `pSrc` to `pDst`, row by row
+/// through `copy_rows_shared`.
 #[inline]
 pub fn WelsCopy8x16_c(
     pDst: &crate::encoder::rec_view::RecCursor<'_>,
@@ -763,9 +763,10 @@ pub fn WelsCopy8x16_c(
     crate::encoder::rec_view::copy_rows_shared::<8>(pDst, pSrc, 16);
 }
 
-/// # Safety
-/// See [`copy_shim`] with `W = 16`, `H = 16`. (Same name-collision note as
-/// [`WelsCopy8x8_c`].)
+/// Copies a 16x16 block of samples from `pSrc` to `pDst`, row by row through
+/// `copy_rows_shared`.
+///
+/// (Same name-collision note as [`WelsCopy8x8_c`].)
 #[inline]
 pub fn WelsCopy16x16_c(
     pDst: &crate::encoder::rec_view::RecCursor<'_>,

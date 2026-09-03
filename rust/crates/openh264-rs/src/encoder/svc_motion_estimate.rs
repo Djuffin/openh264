@@ -111,8 +111,6 @@ pub const ENC_RETURN_MEMALLOCERR: i32 = 0x01;
 pub const ENC_RETURN_UNSUPPORTED_PARA: i32 = 0x02;
 pub const ENC_RETURN_UNEXPECTED: i32 = 0x04;
 
-// CPU Capability Bit Flags
-
 /// Quantization Step Lookup Table ($16 \times Q_{\text{step}}$ for $\text{QP} \in [0, 51]$)
 pub static QStepx16ByQp: [i32; 52] = [
     10, 11, 13, 14, 16, 18,
@@ -130,8 +128,6 @@ pub static QStepx16ByQp: [i32; 52] = [
 // Core Data Structures
 // ============================================================================
 
-/// 2D Motion Vector displacement in integer or 1/4-pel units.
-
 /// Dual-use scalar storing the predicted-SAD threshold before the search and
 /// the SATD after it.
 #[repr(C)]
@@ -139,8 +135,6 @@ pub static QStepx16ByQp: [i32; 52] = [
 pub struct SadPredISatdUnit {
     pub uiValue: u32,
 }
-
-/// Reference frame screen block feature storage and hash lookup index.
 
 /// Central working state structure passed across all motion estimation search routines.
 #[repr(C)]
@@ -241,16 +235,6 @@ pub struct SFeatureSearchOut {
     pub sBestMv: SMVUnitXY,
     pub uiBestSadCost: u32,
 }
-
-/// Reconstructed or reference picture frame buffer descriptor.
-
-/// Slice context parameters for motion estimation.
-
-
-/// Slice context container.
-
-/// Spatial dependency layer representation in Scalable Video Coding.
-
 
 // ============================================================================
 // Function Pointer Types

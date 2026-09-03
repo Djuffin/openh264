@@ -416,9 +416,7 @@ pub fn WelsEncodeNal(
 
 /// Writes the RBSP payload for an SVC Prefix NAL unit (NAL unit type 14).
 ///
-/// # Safety
-/// - `pBsWriter` must point to a valid `BsWriter`, and `buf` must be the
-///   buffer that writer is positioned in.
+/// `buf` must be the buffer `pBsWriter` is positioned in.
 #[inline]
 pub fn WelsWriteSVCPrefixNal(
     buf: &mut [u8],

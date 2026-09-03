@@ -15,8 +15,8 @@
 //! | `BENCH_REQUIRE_FFMPEG=1` | abort rather than fall back to the synthetic pattern |
 //! | `BENCH_FRAMES=<n>` | cap every configuration's frame count at `n` |
 //! | `BENCH_THREADS=<a,b>` | `iMultipleThreadIdc` values to sweep (default `1,4`) |
-//! | `BENCH_SLICE_MODE=<m[:n],..>` | slice-mode axis (default `0`, i.e. `SM_SINGLE_SLICE`) |
-//! | `BENCH_LOAD_BALANCING=0\|1` | override `bUseLoadBalancing` (default: leave `GetDefaultParams`' value) |
+//! | `BENCH_SLICE_MODE=<m[:n],..>` | slice-mode axis (default `1`, i.e. `SM_FIXEDSLCNUM_SLICE` with one slice per thread) |
+//! | `BENCH_LOAD_BALANCING=0\|1` | `bUseLoadBalancing`, always forced on both sides (default `0`, i.e. off) |
 //! | `BENCH_USAGE=0\|1` | `iUsageType`: 0 camera (default), 1 `SCREEN_CONTENT_REAL_TIME` |
 //!
 //! **`BENCH_LOAD_BALANCING`, and why it exists.** `GetDefaultParams` sets
@@ -25,8 +25,10 @@
 //! `DynamicAdjustSlicing`, whose slice boundaries for frame N+1 are computed from
 //! frame N's measured per-slice encode *times* — so the bitstream is a function of
 //! the schedule. The C++ header says so itself (`codec_app_def.h:579`: the result of
-//! each run may be different). A row on that path can never be bit-identical, so
-//! `BENCH_LOAD_BALANCING=0` is what a byte-checked multi-slice span wants.
+//! each run may be different). A row on that path can never be bit-identical, and
+//! the default slice mode puts every row on it, so the bench overrides
+//! `bUseLoadBalancing` to `false` on both sides unless `BENCH_LOAD_BALANCING=1`
+//! asks for the C++ default back.
 //!
 //! Exits non-zero if any configuration's bitstreams disagree, after running and
 //! reporting all of them — one mismatch should not cost you the other 29 rows.

@@ -26,7 +26,7 @@
 //! nothing else may borrow the picture. From it the view captures, per
 //! storage, exactly two numbers: the allocation's base address and its length.
 //! Every later access re-derives a `&[Cell<T>]` from that captured pair
-//! ([`SharedCells::cells`], the one place raw parts cross into cell land), so no
+//! (`SharedCells::cells`, the one place raw parts cross into cell land), so no
 //! access is a child of any other and none of them can pop a sibling.
 //!
 //! Writes then go through [`Cell`] with **no synchronisation at all**, which is
@@ -50,9 +50,9 @@ use crate::encoder::picture::SPicture;
 /// The one place a captured base/length pair becomes a cell slice.
 ///
 /// Held by value in every view below, so the whole seam has exactly one
-/// `UnsafeCell`-crossing accessor ([`SharedCells::cells`]) and exactly one place
-/// raw parts are captured ([`SharedCells::from_parts`], which
-/// [`SharedCells::capture`] and the plane build both route through).
+/// `UnsafeCell`-crossing accessor (`SharedCells::cells`) and exactly one place
+/// raw parts are captured (`SharedCells::from_parts`, which
+/// `SharedCells::capture` and the plane build both route through).
 #[derive(Debug)]
 pub struct SharedCells<T: Copy> {
     /// The allocation's base, read out of the `Vec` header at capture time
@@ -91,8 +91,8 @@ impl<T: Copy> SharedCells<T> {
 
     /// The captured storage, as cells.
     ///
-    /// # Safety
-    /// The base/length pair was taken at [`from_parts`](Self::from_parts) from
+    /// **Why the `unsafe` inside is sound.** The base/length pair was taken at
+    /// [`from_parts`](Self::from_parts) from
     /// storage borrowed exclusively at that moment — a `&mut Vec<T>` through
     /// [`capture`](Self::capture), or a `PaddedPlane`'s `root_ptr`/`buf_len` pair
     /// — and the module contract keeps that exclusive borrow the last one for the

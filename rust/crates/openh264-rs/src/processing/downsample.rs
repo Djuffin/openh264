@@ -19,7 +19,7 @@
 //!
 //! 2. **`m_bNoSampleBuffer` selects the *other* arm than it reads like.** It is
 //!    `AllocateSampleBuffer()`'s return value, `false` on success and `true` only
-//!    when a `WelsMalloc` failed. So [`Process`]'s second arm — repeated halving
+//!    when a `WelsMalloc` failed. So [`Downsample`]'s second arm — repeated halving
 //!    through a scratch buffer — is the normal path, and the first arm is the
 //!    out-of-memory / oversized fallback. In particular a 4:1 step is **two cascaded
 //!    half-averages, not `pfQuarterDownsampler`**.
@@ -83,7 +83,7 @@ fn DyadicBilinearDownsampler(
 
 /// `DyadicBilinearQuarterDownsampler_c` — `downsamplefuncs.cpp:71`. The same 2x2
 /// average taken on a 4-pixel grid, so it averages a quarter of each 4x4 cell and
-/// drops the rest. Reachable only through [`Process`]'s first arm.
+/// drops the rest. Reachable only through [`Downsample`]'s first arm.
 fn DyadicBilinearQuarterDownsampler(
     pDst: &mut [u8],
     kiDstStride: usize,
@@ -113,7 +113,7 @@ fn DyadicBilinearQuarterDownsampler(
 ///
 /// Note the last parameter: unlike its two siblings this one takes the
 /// **destination** height, not the source height (the C++ names it `kiDstHeight` and
-/// `Process` passes `iDstHeightY`). Reachable only through [`Process`]'s first arm.
+/// `Process` passes `iDstHeightY`). Reachable only through [`Downsample`]'s first arm.
 fn DyadicBilinearOneThirdDownsampler(
     pDst: &mut [u8],
     kiDstStride: usize,

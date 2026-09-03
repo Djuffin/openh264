@@ -739,17 +739,11 @@ pub fn WelsCabacInitContexts(
 }
 
 /// `WelsCabacInit` — set_mb_syn_cabac.cpp:64. Fills `sWelsCabacContexts[4][52][460]`.
-///
-/// # Safety
-/// - `pEncCtx` must point to a valid `sWelsEncCtx`.
 pub extern "C" fn WelsCabacInit(pEncCtx: &mut crate::encoder::encoder_context::sWelsEncCtx) {
     WelsCabacInitContexts(&mut pEncCtx.sWelsCabacContexts);
 }
 
 /// Initializes the slice's active context models from a precomputed table.
-///
-/// # Safety
-/// - `pCbCtx` must point to a valid, writable `SCabacCtx` instance.
 #[inline]
 pub fn WelsCabacContextInitFromContexts(
     pCbCtx: &mut SCabacCtx,
@@ -770,10 +764,6 @@ pub fn WelsCabacContextInitFromContexts(
 
 /// `WelsCabacContextInit` — set_mb_syn_cabac.cpp:86. Copies the model row for
 /// this slice type and QP into the slice's own 460 context states.
-///
-/// # Safety
-/// - `pCtx` must point to a valid `sWelsEncCtx`.
-/// - `pCbCtx` must point to a valid, writable `SCabacCtx` instance.
 pub extern "C" fn WelsCabacContextInit(
     pCtx: &crate::encoder::encoder_context::sWelsEncCtx,
     pCbCtx: &mut SCabacCtx,
@@ -990,9 +980,6 @@ pub fn WelsCabacEncodeFlush(buf: &mut [u8], pCbCtx: &mut SCabacCtx) {
 
 /// Returns the current byte write cursor `m_iBufCur`, as an offset into the
 /// output buffer.
-///
-/// # Safety
-/// - `pCbCtx` must point to a valid `SCabacCtx` instance or null.
 #[inline(always)]
 pub fn WelsCabacEncodePos(pCbCtx: &SCabacCtx) -> usize {
     pCbCtx.m_iBufCur

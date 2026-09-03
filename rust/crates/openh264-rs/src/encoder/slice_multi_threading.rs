@@ -1227,9 +1227,10 @@ fn ForkWidth(pCtx: &mut sWelsEncCtx, iItemCount: i32) -> i32 {
 /// Returns the value `FinishTask` would have ORed into `pCtx->iEncoderError`; the
 /// caller ORs it, exactly where it read the field before.
 ///
-/// # Safety
-/// `pCtx` must be a live context with `pSliceThreading` built and the layer's
-/// slice bank sized for `kiSliceCount` slices.
+/// # Panics
+/// Panics if the layer's `pFirstMbIdxOfSlice` / `pCountMbNumInSlice` are not sized
+/// for `kiSliceCount` slices, or if the macroblock ranges they hold are not
+/// disjoint and in raster order.
 pub fn EncodeFixedSlicesForked(pCtx: &mut sWelsEncCtx, kiSliceCount: i32) -> i32 {
     if kiSliceCount <= 0 || pCtx.pSliceThreading.is_none() {
         return ENC_RETURN_SUCCESS;
@@ -1414,8 +1415,9 @@ pub fn EncodeFixedSlicesForked(pCtx: &mut sWelsEncCtx, kiSliceCount: i32) -> i32
 /// `DynamicAdjustSlicing` does — so this path is reachable only with
 /// `bUseLoadBalancing` on.
 ///
-/// # Safety
-/// As [`EncodeFixedSlicesForked`].
+/// # Panics
+/// Panics if the slices' macroblock ranges are not disjoint, as in
+/// [`EncodeFixedSlicesForked`]. Short per-slice tables are tolerated here.
 pub fn UpdateMbMapForked(pCtx: &mut sWelsEncCtx, kiTaskCount: i32) {
     if kiTaskCount <= 0 || current_layer_ref(pCtx).is_none()
         || pCtx.pSliceThreading.is_none()
@@ -1674,9 +1676,10 @@ fn EncodeOnePartitionSizeLimited(
 /// (`kiTaskCount = iActiveThreadsNum`, `wels_task_management.rs` `CreateTasks`).
 /// Returns the value `FinishTask` would have ORed into `pCtx->iEncoderError`.
 ///
-/// # Safety
-/// As [`EncodeFixedSlicesForked`], and `iActiveThreadsNum` must be within the
-/// per-thread slice banks `InitSliceThreadInfo` sized.
+/// # Panics
+/// Panics if the partitions' macroblock ranges are not disjoint and in raster
+/// order, or if `iActiveThreadsNum` exceeds the per-thread slice banks
+/// `InitSliceThreadInfo` sized.
 pub fn EncodeSizeLimitedSlicesForked(pCtx: &mut sWelsEncCtx, kiPartitionCnt: i32) -> i32 {
     if kiPartitionCnt <= 0 || pCtx.pSliceThreading.is_none() {
         return ENC_RETURN_SUCCESS;

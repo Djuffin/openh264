@@ -85,7 +85,7 @@ pub fn IS_INTRA(mb_type: u32) -> bool {
     (mb_type & MB_TYPE_INTRA) != 0
 }
 
-/// 4x4 block scan index mapping into pNonZeroCount[24]
+/// 4x4 block scan index mapping into the 24-entry `SMB::iNonZeroCount` array.
 pub static g_kuiMbCountScan4Idx: [u8; 24] = [
     0, 1, 4, 5, 2, 3, 6, 7, 8, 9, 12, 13, 10, 11, 14, 15, 16, 17, 20, 21, 18, 19, 22, 23,
 ];
@@ -505,9 +505,6 @@ pub fn WelsEncRecI16x16Y(
 
 /// Forward DCT, quantization, zigzag scan, inverse quantization, and local reconstruction
 /// for a single **Intra 4x4 Luma** sub-block.
-///
-/// # Safety
-/// All pointers in `pEncCtx`, `pCurMb`, and `pMbCache` must be properly initialized and valid.
 pub fn WelsEncRecI4x4Y(
     pEncCtx: &sWelsEncCtx,
     pCurMb: &mut SMB,
@@ -603,9 +600,6 @@ pub fn WelsEncRecI4x4Y(
 
 /// Quantization, coefficient zigzag scanning, JVT-O079 fast zero-residual thresholding,
 /// dequantization, and CBP assignment for **Inter Luma (P/B frames)**.
-///
-/// # Safety
-/// All pointers in `pFuncList`, `pCurMb`, and `pMbCache` must be properly initialized and valid.
 pub fn WelsEncInterY(
     pFuncList: &SWelsFuncPtrList,
     pCurMb: &mut SMB,
@@ -693,8 +687,9 @@ pub fn WelsEncInterY(
 /// (`:499`). The offset is caller state, not a function of `iUV`, so it stays a
 /// parameter.
 ///
-/// # Safety
-/// `kiResOff .. kiResOff + 128` must be in bounds of `pMbCache->sCoeffLevel`.
+/// # Panics
+/// If `kiResOff .. kiResOff + 64` is out of bounds of `pMbCache.sCoeffLevel` —
+/// one chroma group is 64 coefficients (the C's `128` counts bytes).
 pub fn WelsEncRecUV(
     pFuncList: &SWelsFuncPtrList,
     pCurMb: &mut SMB,
@@ -802,9 +797,6 @@ pub fn WelsEncRecUV(
 /// # Returns
 /// - `true`: Residual is zero or negligible ($iSingleCtrMb < 6$), qualifying for `P_SKIP`.
 /// - `false`: Non-zero significant residual detected.
-///
-/// # Safety
-/// All pointers in `pEncCtx`, `pCurMb`, and `pMbCache` must be valid.
 pub fn WelsTryPYskip(
     pEncCtx: &sWelsEncCtx,
     pCurMb: &mut SMB,

@@ -251,8 +251,6 @@ pub const LUMA_DC_AC_INTER_8: i32 = 18;
 pub const C_PRED_DC: u8 = 0;
 pub const MAX_PRED_MODE_ID_CHROMA: i32 = 3;
 
-// CPU Flags
-
 // ============================================================================
 // Lookup Tables
 // ============================================================================
@@ -721,9 +719,6 @@ impl IntraPredConstraint {
     }
 
     /// `pCtx->pFillInfoCacheIntraNxNFunc (…)`.
-    ///
-    /// # Safety
-    /// The pointers must satisfy `WelsFillCacheConstrain0IntraNxN`'s contract.
     #[inline]
     pub fn FillCacheIntraNxN(
         self,
@@ -753,9 +748,6 @@ impl IntraPredConstraint {
     }
 
     /// `pCtx->pMapNxNNeighToSampleFunc (…)`.
-    ///
-    /// # Safety
-    /// Both pointers must be non-null and writable for their element counts.
     #[inline]
     pub fn MapNxNNeighToSample(
         self,
@@ -773,9 +765,6 @@ impl IntraPredConstraint {
     }
 
     /// `pCtx->pMap16x16NeighToSampleFunc (…)`.
-    ///
-    /// # Safety
-    /// Both pointers must be non-null and writable.
     #[inline]
     pub fn Map16x16NeighToSample(
         self,
