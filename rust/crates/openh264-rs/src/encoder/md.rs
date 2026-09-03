@@ -746,50 +746,50 @@ pub fn FillNeighborCacheIntra(
         // `pIntra4x4PredMode - INTRA_4x4_MODE_NUM`). The arrays are inline, so
         // the same values come from the left macroblock's own struct.
         let pLeftMb = mbs.left();
-        (*pMbCache).iNonZeroCoeffCount[8] = pLeftMb.iNonZeroCount[3];
-        (*pMbCache).iNonZeroCoeffCount[16] = pLeftMb.iNonZeroCount[7];
-        (*pMbCache).iNonZeroCoeffCount[24] = pLeftMb.iNonZeroCount[11];
-        (*pMbCache).iNonZeroCoeffCount[32] = pLeftMb.iNonZeroCount[15];
+        pMbCache.iNonZeroCoeffCount[8] = pLeftMb.iNonZeroCount[3];
+        pMbCache.iNonZeroCoeffCount[16] = pLeftMb.iNonZeroCount[7];
+        pMbCache.iNonZeroCoeffCount[24] = pLeftMb.iNonZeroCount[11];
+        pMbCache.iNonZeroCoeffCount[32] = pLeftMb.iNonZeroCount[15];
 
-        (*pMbCache).iNonZeroCoeffCount[13] = pLeftMb.iNonZeroCount[17];
-        (*pMbCache).iNonZeroCoeffCount[21] = pLeftMb.iNonZeroCount[21];
-        (*pMbCache).iNonZeroCoeffCount[37] = pLeftMb.iNonZeroCount[19];
-        (*pMbCache).iNonZeroCoeffCount[45] = pLeftMb.iNonZeroCount[23];
+        pMbCache.iNonZeroCoeffCount[13] = pLeftMb.iNonZeroCount[17];
+        pMbCache.iNonZeroCoeffCount[21] = pLeftMb.iNonZeroCount[21];
+        pMbCache.iNonZeroCoeffCount[37] = pLeftMb.iNonZeroCount[19];
+        pMbCache.iNonZeroCoeffCount[45] = pLeftMb.iNonZeroCount[23];
 
         uiNeighborIntra |= LEFT_MB_POS;
 
         if (pLeftMb.uiMbType & MB_TYPE_INTRA4x4) != 0 {
-            (*pMbCache).iIntraPredMode[8] = pLeftMb.iIntra4x4PredMode[4];
-            (*pMbCache).iIntraPredMode[16] = pLeftMb.iIntra4x4PredMode[5];
-            (*pMbCache).iIntraPredMode[24] = pLeftMb.iIntra4x4PredMode[6];
-            (*pMbCache).iIntraPredMode[32] = pLeftMb.iIntra4x4PredMode[3];
+            pMbCache.iIntraPredMode[8] = pLeftMb.iIntra4x4PredMode[4];
+            pMbCache.iIntraPredMode[16] = pLeftMb.iIntra4x4PredMode[5];
+            pMbCache.iIntraPredMode[24] = pLeftMb.iIntra4x4PredMode[6];
+            pMbCache.iIntraPredMode[32] = pLeftMb.iIntra4x4PredMode[3];
         } else {
-            (*pMbCache).iIntraPredMode[8] = 2;
-            (*pMbCache).iIntraPredMode[16] = 2;
-            (*pMbCache).iIntraPredMode[24] = 2;
-            (*pMbCache).iIntraPredMode[32] = 2;
+            pMbCache.iIntraPredMode[8] = 2;
+            pMbCache.iIntraPredMode[16] = 2;
+            pMbCache.iIntraPredMode[24] = 2;
+            pMbCache.iIntraPredMode[32] = 2;
         }
     } else {
-        (*pMbCache).iNonZeroCoeffCount[8] = -1;
-        (*pMbCache).iNonZeroCoeffCount[16] = -1;
-        (*pMbCache).iNonZeroCoeffCount[24] = -1;
-        (*pMbCache).iNonZeroCoeffCount[32] = -1;
-        (*pMbCache).iNonZeroCoeffCount[13] = -1;
-        (*pMbCache).iNonZeroCoeffCount[21] = -1;
-        (*pMbCache).iNonZeroCoeffCount[37] = -1;
-        (*pMbCache).iNonZeroCoeffCount[45] = -1;
+        pMbCache.iNonZeroCoeffCount[8] = -1;
+        pMbCache.iNonZeroCoeffCount[16] = -1;
+        pMbCache.iNonZeroCoeffCount[24] = -1;
+        pMbCache.iNonZeroCoeffCount[32] = -1;
+        pMbCache.iNonZeroCoeffCount[13] = -1;
+        pMbCache.iNonZeroCoeffCount[21] = -1;
+        pMbCache.iNonZeroCoeffCount[37] = -1;
+        pMbCache.iNonZeroCoeffCount[45] = -1;
 
-        (*pMbCache).iIntraPredMode[8] = -1;
-        (*pMbCache).iIntraPredMode[16] = -1;
-        (*pMbCache).iIntraPredMode[24] = -1;
-        (*pMbCache).iIntraPredMode[32] = -1;
+        pMbCache.iIntraPredMode[8] = -1;
+        pMbCache.iIntraPredMode[16] = -1;
+        pMbCache.iIntraPredMode[24] = -1;
+        pMbCache.iIntraPredMode[32] = -1;
     }
 
     if (uiNeighborAvail & TOP_MB_POS) != 0 {
         let pTopMb = mbs.top();
         // One reborrow of each row rather than one per statement: the destination is
         // the cache's array and the source is the top macroblock's, two allocations.
-        let pCacheNzc = &mut (*pMbCache).iNonZeroCoeffCount;
+        let pCacheNzc = &mut pMbCache.iNonZeroCoeffCount;
         let pTopNzc = &pTopMb.iNonZeroCount;
         pCacheNzc[1..5].copy_from_slice(&pTopNzc[12..16]);
         pCacheNzc[6..8].copy_from_slice(&pTopNzc[20..22]);
@@ -798,20 +798,20 @@ pub fn FillNeighborCacheIntra(
         uiNeighborIntra |= TOP_MB_POS;
 
         if (pTopMb.uiMbType & MB_TYPE_INTRA4x4) != 0 {
-            let pCacheMode = &mut (*pMbCache).iIntraPredMode;
+            let pCacheMode = &mut pMbCache.iIntraPredMode;
             let pTopMode = &pTopMb.iIntra4x4PredMode;
             pCacheMode[1..5].copy_from_slice(&pTopMode[0..4]);
         } else {
-            (*pMbCache).iIntraPredMode[1] = 2;
-            (*pMbCache).iIntraPredMode[2] = 2;
-            (*pMbCache).iIntraPredMode[3] = 2;
-            (*pMbCache).iIntraPredMode[4] = 2;
+            pMbCache.iIntraPredMode[1] = 2;
+            pMbCache.iIntraPredMode[2] = 2;
+            pMbCache.iIntraPredMode[3] = 2;
+            pMbCache.iIntraPredMode[4] = 2;
         }
     } else {
-        (*pMbCache).iIntraPredMode[1..5].fill(-1);
-        (*pMbCache).iNonZeroCoeffCount[1..5].fill(-1);
-        (*pMbCache).iNonZeroCoeffCount[6..8].fill(-1);
-        (*pMbCache).iNonZeroCoeffCount[30..32].fill(-1);
+        pMbCache.iIntraPredMode[1..5].fill(-1);
+        pMbCache.iNonZeroCoeffCount[1..5].fill(-1);
+        pMbCache.iNonZeroCoeffCount[6..8].fill(-1);
+        pMbCache.iNonZeroCoeffCount[30..32].fill(-1);
     }
 
     if (uiNeighborAvail & TOPLEFT_MB_POS) != 0 {
@@ -820,7 +820,7 @@ pub fn FillNeighborCacheIntra(
     if (uiNeighborAvail & TOPRIGHT_MB_POS) != 0 {
         uiNeighborIntra |= 0x08;
     }
-    (*pMbCache).uiNeighborIntra = uiNeighborIntra as u8;
+    pMbCache.uiNeighborIntra = uiNeighborIntra as u8;
 }
 
 pub fn FillNeighborCacheInterWithoutBGD(
@@ -832,7 +832,7 @@ pub fn FillNeighborCacheInterWithoutBGD(
     let uiNeighborAvail = mbs.cur().uiNeighborAvail as u32;
     let kiMbXY = mbs.cur().iMbXY as isize;
     let iMbWidth = mbs.stride() as i32;
-    let pMvComp = &mut (*pMbCache).sMvComponents;
+    let pMvComp = &mut pMbCache.sMvComponents;
 
     if (uiNeighborAvail & LEFT_MB_POS) != 0 && IS_SVC_INTER(mbs.left().uiMbType) {
         pMvComp.sMotionVectorCache[6] = mbs.left().sMv[3];
@@ -843,14 +843,14 @@ pub fn FillNeighborCacheInterWithoutBGD(
         pMvComp.iRefIndexCache[12] = mbs.left().iRefIndex[1];
         pMvComp.iRefIndexCache[18] = mbs.left().iRefIndex[3];
         pMvComp.iRefIndexCache[24] = mbs.left().iRefIndex[3];
-        (*pMbCache).iSadCost[3] = mbs.left().iSadCost;
+        pMbCache.iSadCost[3] = mbs.left().iSadCost;
 
         if mbs.left().uiMbType == MB_TYPE_SKIP {
-            (*pMbCache).bMbTypeSkip[3] = true;
-            (*pMbCache).iSadCostSkip[3] = kpMbSkipSad.get((kiMbXY - 1) as usize);
+            pMbCache.bMbTypeSkip[3] = true;
+            pMbCache.iSadCostSkip[3] = kpMbSkipSad.get((kiMbXY - 1) as usize);
         } else {
-            (*pMbCache).bMbTypeSkip[3] = false;
-            (*pMbCache).iSadCostSkip[3] = 0;
+            pMbCache.bMbTypeSkip[3] = false;
+            pMbCache.iSadCostSkip[3] = 0;
         }
     } else {
         pMvComp.sMotionVectorCache[6] = SMVUnitXY::default();
@@ -862,9 +862,9 @@ pub fn FillNeighborCacheInterWithoutBGD(
         pMvComp.iRefIndexCache[12] = ref_val;
         pMvComp.iRefIndexCache[18] = ref_val;
         pMvComp.iRefIndexCache[24] = ref_val;
-        (*pMbCache).iSadCost[3] = 0;
-        (*pMbCache).bMbTypeSkip[3] = false;
-        (*pMbCache).iSadCostSkip[3] = 0;
+        pMbCache.iSadCost[3] = 0;
+        pMbCache.bMbTypeSkip[3] = false;
+        pMbCache.iSadCostSkip[3] = 0;
     }
 
     if (uiNeighborAvail & TOP_MB_POS) != 0 && IS_SVC_INTER(mbs.top().uiMbType) {
@@ -875,14 +875,14 @@ pub fn FillNeighborCacheInterWithoutBGD(
         pMvComp.iRefIndexCache[2] = mbs.top().iRefIndex[2];
         pMvComp.iRefIndexCache[3] = mbs.top().iRefIndex[3];
         pMvComp.iRefIndexCache[4] = mbs.top().iRefIndex[3];
-        (*pMbCache).iSadCost[1] = mbs.top().iSadCost;
+        pMbCache.iSadCost[1] = mbs.top().iSadCost;
 
         if mbs.top().uiMbType == MB_TYPE_SKIP {
-            (*pMbCache).bMbTypeSkip[1] = true;
-            (*pMbCache).iSadCostSkip[1] = kpMbSkipSad.get((kiMbXY - iMbWidth as isize) as usize);
+            pMbCache.bMbTypeSkip[1] = true;
+            pMbCache.iSadCostSkip[1] = kpMbSkipSad.get((kiMbXY - iMbWidth as isize) as usize);
         } else {
-            (*pMbCache).bMbTypeSkip[1] = false;
-            (*pMbCache).iSadCostSkip[1] = 0;
+            pMbCache.bMbTypeSkip[1] = false;
+            pMbCache.iSadCostSkip[1] = 0;
         }
     } else {
         pMvComp.sMotionVectorCache[1] = SMVUnitXY::default();
@@ -894,49 +894,49 @@ pub fn FillNeighborCacheInterWithoutBGD(
         pMvComp.iRefIndexCache[2] = ref_val;
         pMvComp.iRefIndexCache[3] = ref_val;
         pMvComp.iRefIndexCache[4] = ref_val;
-        (*pMbCache).iSadCost[1] = 0;
-        (*pMbCache).bMbTypeSkip[1] = false;
-        (*pMbCache).iSadCostSkip[1] = 0;
+        pMbCache.iSadCost[1] = 0;
+        pMbCache.bMbTypeSkip[1] = false;
+        pMbCache.iSadCostSkip[1] = 0;
     }
 
     if (uiNeighborAvail & TOPLEFT_MB_POS) != 0 && IS_SVC_INTER(mbs.top_left().uiMbType) {
         pMvComp.sMotionVectorCache[0] = mbs.top_left().sMv[15];
         pMvComp.iRefIndexCache[0] = mbs.top_left().iRefIndex[3];
-        (*pMbCache).iSadCost[0] = mbs.top_left().iSadCost;
+        pMbCache.iSadCost[0] = mbs.top_left().iSadCost;
 
         if mbs.top_left().uiMbType == MB_TYPE_SKIP {
-            (*pMbCache).bMbTypeSkip[0] = true;
-            (*pMbCache).iSadCostSkip[0] = kpMbSkipSad.get((kiMbXY - iMbWidth as isize - 1) as usize);
+            pMbCache.bMbTypeSkip[0] = true;
+            pMbCache.iSadCostSkip[0] = kpMbSkipSad.get((kiMbXY - iMbWidth as isize - 1) as usize);
         } else {
-            (*pMbCache).bMbTypeSkip[0] = false;
-            (*pMbCache).iSadCostSkip[0] = 0;
+            pMbCache.bMbTypeSkip[0] = false;
+            pMbCache.iSadCostSkip[0] = 0;
         }
     } else {
         pMvComp.sMotionVectorCache[0] = SMVUnitXY::default();
         pMvComp.iRefIndexCache[0] = if (uiNeighborAvail & TOPLEFT_MB_POS) != 0 { REF_NOT_IN_LIST } else { REF_NOT_AVAIL };
-        (*pMbCache).iSadCost[0] = 0;
-        (*pMbCache).bMbTypeSkip[0] = false;
-        (*pMbCache).iSadCostSkip[0] = 0;
+        pMbCache.iSadCost[0] = 0;
+        pMbCache.bMbTypeSkip[0] = false;
+        pMbCache.iSadCostSkip[0] = 0;
     }
 
     if (uiNeighborAvail & TOPRIGHT_MB_POS) != 0 && IS_SVC_INTER(mbs.top_right().uiMbType) {
         pMvComp.sMotionVectorCache[5] = mbs.top_right().sMv[12];
         pMvComp.iRefIndexCache[5] = mbs.top_right().iRefIndex[2];
-        (*pMbCache).iSadCost[2] = mbs.top_right().iSadCost;
+        pMbCache.iSadCost[2] = mbs.top_right().iSadCost;
 
         if mbs.top_right().uiMbType == MB_TYPE_SKIP {
-            (*pMbCache).bMbTypeSkip[2] = true;
-            (*pMbCache).iSadCostSkip[2] = kpMbSkipSad.get((kiMbXY - iMbWidth as isize + 1) as usize);
+            pMbCache.bMbTypeSkip[2] = true;
+            pMbCache.iSadCostSkip[2] = kpMbSkipSad.get((kiMbXY - iMbWidth as isize + 1) as usize);
         } else {
-            (*pMbCache).bMbTypeSkip[2] = false;
-            (*pMbCache).iSadCostSkip[2] = 0;
+            pMbCache.bMbTypeSkip[2] = false;
+            pMbCache.iSadCostSkip[2] = 0;
         }
     } else {
         pMvComp.sMotionVectorCache[5] = SMVUnitXY::default();
         pMvComp.iRefIndexCache[5] = if (uiNeighborAvail & TOPRIGHT_MB_POS) != 0 { REF_NOT_IN_LIST } else { REF_NOT_AVAIL };
-        (*pMbCache).iSadCost[2] = 0;
-        (*pMbCache).bMbTypeSkip[2] = false;
-        (*pMbCache).iSadCostSkip[2] = 0;
+        pMbCache.iSadCost[2] = 0;
+        pMbCache.bMbTypeSkip[2] = false;
+        pMbCache.iSadCostSkip[2] = 0;
     }
 
     pMvComp.sMotionVectorCache[9] = SMVUnitXY::default();
@@ -960,7 +960,7 @@ pub fn FillNeighborCacheInterWithBGD(
     let uiNeighborAvail = mbs.cur().uiNeighborAvail as u32;
     let kiMbXY = mbs.cur().iMbXY as isize;
     let iMbWidth = mbs.stride() as i32;
-    let pMvComp = &mut (*pMbCache).sMvComponents;
+    let pMvComp = &mut pMbCache.sMvComponents;
 
     if (uiNeighborAvail & LEFT_MB_POS) != 0 && IS_SVC_INTER(mbs.left().uiMbType) {
         pMvComp.sMotionVectorCache[6] = mbs.left().sMv[3];
@@ -971,14 +971,14 @@ pub fn FillNeighborCacheInterWithBGD(
         pMvComp.iRefIndexCache[12] = mbs.left().iRefIndex[1];
         pMvComp.iRefIndexCache[18] = mbs.left().iRefIndex[3];
         pMvComp.iRefIndexCache[24] = mbs.left().iRefIndex[3];
-        (*pMbCache).iSadCost[3] = mbs.left().iSadCost;
+        pMbCache.iSadCost[3] = mbs.left().iSadCost;
 
         if mbs.left().uiMbType == MB_TYPE_SKIP && pVaaBgMbFlag[(kiMbXY - 1) as usize] == 0 {
-            (*pMbCache).bMbTypeSkip[3] = true;
-            (*pMbCache).iSadCostSkip[3] = kpMbSkipSad.get((kiMbXY - 1) as usize);
+            pMbCache.bMbTypeSkip[3] = true;
+            pMbCache.iSadCostSkip[3] = kpMbSkipSad.get((kiMbXY - 1) as usize);
         } else {
-            (*pMbCache).bMbTypeSkip[3] = false;
-            (*pMbCache).iSadCostSkip[3] = 0;
+            pMbCache.bMbTypeSkip[3] = false;
+            pMbCache.iSadCostSkip[3] = 0;
         }
     } else {
         pMvComp.sMotionVectorCache[6] = SMVUnitXY::default();
@@ -990,9 +990,9 @@ pub fn FillNeighborCacheInterWithBGD(
         pMvComp.iRefIndexCache[12] = ref_val;
         pMvComp.iRefIndexCache[18] = ref_val;
         pMvComp.iRefIndexCache[24] = ref_val;
-        (*pMbCache).iSadCost[3] = 0;
-        (*pMbCache).bMbTypeSkip[3] = false;
-        (*pMbCache).iSadCostSkip[3] = 0;
+        pMbCache.iSadCost[3] = 0;
+        pMbCache.bMbTypeSkip[3] = false;
+        pMbCache.iSadCostSkip[3] = 0;
     }
 
     if (uiNeighborAvail & TOP_MB_POS) != 0 && IS_SVC_INTER(mbs.top().uiMbType) {
@@ -1003,14 +1003,14 @@ pub fn FillNeighborCacheInterWithBGD(
         pMvComp.iRefIndexCache[2] = mbs.top().iRefIndex[2];
         pMvComp.iRefIndexCache[3] = mbs.top().iRefIndex[3];
         pMvComp.iRefIndexCache[4] = mbs.top().iRefIndex[3];
-        (*pMbCache).iSadCost[1] = mbs.top().iSadCost;
+        pMbCache.iSadCost[1] = mbs.top().iSadCost;
 
         if mbs.top().uiMbType == MB_TYPE_SKIP && pVaaBgMbFlag[(kiMbXY - iMbWidth as isize) as usize] == 0 {
-            (*pMbCache).bMbTypeSkip[1] = true;
-            (*pMbCache).iSadCostSkip[1] = kpMbSkipSad.get((kiMbXY - iMbWidth as isize) as usize);
+            pMbCache.bMbTypeSkip[1] = true;
+            pMbCache.iSadCostSkip[1] = kpMbSkipSad.get((kiMbXY - iMbWidth as isize) as usize);
         } else {
-            (*pMbCache).bMbTypeSkip[1] = false;
-            (*pMbCache).iSadCostSkip[1] = 0;
+            pMbCache.bMbTypeSkip[1] = false;
+            pMbCache.iSadCostSkip[1] = 0;
         }
     } else {
         pMvComp.sMotionVectorCache[1] = SMVUnitXY::default();
@@ -1022,49 +1022,49 @@ pub fn FillNeighborCacheInterWithBGD(
         pMvComp.iRefIndexCache[2] = ref_val;
         pMvComp.iRefIndexCache[3] = ref_val;
         pMvComp.iRefIndexCache[4] = ref_val;
-        (*pMbCache).iSadCost[1] = 0;
-        (*pMbCache).bMbTypeSkip[1] = false;
-        (*pMbCache).iSadCostSkip[1] = 0;
+        pMbCache.iSadCost[1] = 0;
+        pMbCache.bMbTypeSkip[1] = false;
+        pMbCache.iSadCostSkip[1] = 0;
     }
 
     if (uiNeighborAvail & TOPLEFT_MB_POS) != 0 && IS_SVC_INTER(mbs.top_left().uiMbType) {
         pMvComp.sMotionVectorCache[0] = mbs.top_left().sMv[15];
         pMvComp.iRefIndexCache[0] = mbs.top_left().iRefIndex[3];
-        (*pMbCache).iSadCost[0] = mbs.top_left().iSadCost;
+        pMbCache.iSadCost[0] = mbs.top_left().iSadCost;
 
         if mbs.top_left().uiMbType == MB_TYPE_SKIP && pVaaBgMbFlag[(kiMbXY - iMbWidth as isize - 1) as usize] == 0 {
-            (*pMbCache).bMbTypeSkip[0] = true;
-            (*pMbCache).iSadCostSkip[0] = kpMbSkipSad.get((kiMbXY - iMbWidth as isize - 1) as usize);
+            pMbCache.bMbTypeSkip[0] = true;
+            pMbCache.iSadCostSkip[0] = kpMbSkipSad.get((kiMbXY - iMbWidth as isize - 1) as usize);
         } else {
-            (*pMbCache).bMbTypeSkip[0] = false;
-            (*pMbCache).iSadCostSkip[0] = 0;
+            pMbCache.bMbTypeSkip[0] = false;
+            pMbCache.iSadCostSkip[0] = 0;
         }
     } else {
         pMvComp.sMotionVectorCache[0] = SMVUnitXY::default();
         pMvComp.iRefIndexCache[0] = if (uiNeighborAvail & TOPLEFT_MB_POS) != 0 { REF_NOT_IN_LIST } else { REF_NOT_AVAIL };
-        (*pMbCache).iSadCost[0] = 0;
-        (*pMbCache).bMbTypeSkip[0] = false;
-        (*pMbCache).iSadCostSkip[0] = 0;
+        pMbCache.iSadCost[0] = 0;
+        pMbCache.bMbTypeSkip[0] = false;
+        pMbCache.iSadCostSkip[0] = 0;
     }
 
     if (uiNeighborAvail & TOPRIGHT_MB_POS) != 0 && IS_SVC_INTER(mbs.top_right().uiMbType) {
         pMvComp.sMotionVectorCache[5] = mbs.top_right().sMv[12];
         pMvComp.iRefIndexCache[5] = mbs.top_right().iRefIndex[2];
-        (*pMbCache).iSadCost[2] = mbs.top_right().iSadCost;
+        pMbCache.iSadCost[2] = mbs.top_right().iSadCost;
 
         if mbs.top_right().uiMbType == MB_TYPE_SKIP && pVaaBgMbFlag[(kiMbXY - iMbWidth as isize + 1) as usize] == 0 {
-            (*pMbCache).bMbTypeSkip[2] = true;
-            (*pMbCache).iSadCostSkip[2] = kpMbSkipSad.get((kiMbXY - iMbWidth as isize + 1) as usize);
+            pMbCache.bMbTypeSkip[2] = true;
+            pMbCache.iSadCostSkip[2] = kpMbSkipSad.get((kiMbXY - iMbWidth as isize + 1) as usize);
         } else {
-            (*pMbCache).bMbTypeSkip[2] = false;
-            (*pMbCache).iSadCostSkip[2] = 0;
+            pMbCache.bMbTypeSkip[2] = false;
+            pMbCache.iSadCostSkip[2] = 0;
         }
     } else {
         pMvComp.sMotionVectorCache[5] = SMVUnitXY::default();
         pMvComp.iRefIndexCache[5] = if (uiNeighborAvail & TOPRIGHT_MB_POS) != 0 { REF_NOT_IN_LIST } else { REF_NOT_AVAIL };
-        (*pMbCache).iSadCost[2] = 0;
-        (*pMbCache).bMbTypeSkip[2] = false;
-        (*pMbCache).iSadCostSkip[2] = 0;
+        pMbCache.iSadCost[2] = 0;
+        pMbCache.bMbTypeSkip[2] = false;
+        pMbCache.iSadCostSkip[2] = 0;
     }
 
     pMvComp.sMotionVectorCache[9] = SMVUnitXY::default();
@@ -1219,7 +1219,7 @@ pub fn MeRefineQuarPixel(
     kiHeight: i32,
     pParams: &mut SQuarRefineParams,
 ) {
-    let kuiPixel = (*pMe).uiBlockSize as usize;
+    let kuiPixel = pMe.uiBlockSize as usize;
     let pfMeCost = pFunc.sSampleDealingFuncs.me_cost(kuiPixel).unwrap();
     let (w, h) = (kiWidth as usize, kiHeight as usize);
     let span = (h - 1) * ME_REFINE_BUF_STRIDE as usize + w;
@@ -1343,9 +1343,9 @@ pub extern "C" fn MeRefineFracPixel(
     iWidth: i32,
     iHeight: i32,
 ) {
-    let pFunc = (*pEncCtx).func_list();
-    let iMvx = (*pMe).sMv.iMvX;
-    let iMvy = (*pMe).sMv.iMvY;
+    let pFunc = pEncCtx.func_list();
+    let iMvx = pMe.sMv.iMvX;
+    let iMvy = pMe.sMv.iMvY;
 
     let mut iHalfMvx = iMvx;
     let mut iHalfMvy = iMvy;
@@ -1353,8 +1353,8 @@ pub extern "C" fn MeRefineFracPixel(
 
     // The two blocks, by coordinate. `sMv` is quarter-pel here and the integer search
     // left `pRefMb` at its whole-sample part, so `>> 2` is the displacement.
-    let kiBlockX = (*pMe).iCurMeBlockPixX as isize;
-    let kiBlockY = (*pMe).iCurMeBlockPixY as isize;
+    let kiBlockX = pMe.iCurMeBlockPixX as isize;
+    let kiBlockY = pMe.iCurMeBlockPixY as isize;
     let pEncPicture = layer_enc_view_expect(&*pCurDqLayer);
     let cEnc = pEncPicture.plane(0).cursor(kiBlockX, kiBlockY);
     let pRefPicture = layer_ref_view_expect(pEncCtx, &*pCurDqLayer);
@@ -1392,14 +1392,14 @@ pub extern "C" fn MeRefineFracPixel(
     // filters, which write one extra row or column.
     let span_wh = |w: usize, h: usize| (h - 1) * kiBufStride + w;
 
-    let pfMeCost = (*pFunc).sSampleDealingFuncs.me_cost((*pMe).uiBlockSize as usize).unwrap();
+    let pfMeCost = pFunc.sSampleDealingFuncs.me_cost(pMe.uiBlockSize as usize).unwrap();
 
-    if (*pCurDqLayer).bSatdInMdFlag {
-        iBestCost = (*pMe).uSadPredISatd.uiValue as i32
-            + COST_MVD((*pMe).pMvdCost, (iMvx - (*pMe).sMvp.iMvX) as i32, (iMvy - (*pMe).sMvp.iMvY) as i32);
+    if pCurDqLayer.bSatdInMdFlag {
+        iBestCost = pMe.uSadPredISatd.uiValue as i32
+            + COST_MVD(pMe.pMvdCost, (iMvx - pMe.sMvp.iMvX) as i32, (iMvy - pMe.sMvp.iMvY) as i32);
     } else {
         iBestCost = pfMeCost(&cEnc, &cRef)
-            + COST_MVD((*pMe).pMvdCost, (iMvx - (*pMe).sMvp.iMvX) as i32, (iMvy - (*pMe).sMvp.iMvY) as i32);
+            + COST_MVD(pMe.pMvdCost, (iMvx - pMe.sMvp.iMvX) as i32, (iMvy - pMe.sMvp.iMvY) as i32);
     }
 
     iBestHalfPix = REFINE_ME_NO_BEST_HALF_PIXEL;
@@ -1427,7 +1427,7 @@ pub extern "C" fn MeRefineFracPixel(
         );
         pfMeCost(&cEnc, &cTmp)
     }
-        + COST_MVD((*pMe).pMvdCost, (iMvx - (*pMe).sMvp.iMvX) as i32, (iMvy - 2 - (*pMe).sMvp.iMvY) as i32);
+        + COST_MVD(pMe.pMvdCost, (iMvx - pMe.sMvp.iMvX) as i32, (iMvy - 2 - pMe.sMvp.iMvY) as i32);
     if iCurCost < iBestCost {
         iBestCost = iCurCost;
         iBestHalfPix = REFINE_ME_HALF_PIXEL_TOP;
@@ -1443,7 +1443,7 @@ pub extern "C" fn MeRefineFracPixel(
             kiBufStride,
         );
         pfMeCost(&cEnc, &cTmp)
-    } + COST_MVD((*pMe).pMvdCost, (iMvx - (*pMe).sMvp.iMvX) as i32, (iMvy + 2 - (*pMe).sMvp.iMvY) as i32);
+    } + COST_MVD(pMe.pMvdCost, (iMvx - pMe.sMvp.iMvX) as i32, (iMvy + 2 - pMe.sMvp.iMvY) as i32);
     if iCurCost < iBestCost {
         iBestCost = iCurCost;
         iBestHalfPix = REFINE_ME_HALF_PIXEL_BOTTOM;
@@ -1472,7 +1472,7 @@ pub extern "C" fn MeRefineFracPixel(
         );
         pfMeCost(&cEnc, &cTmp)
     }
-        + COST_MVD((*pMe).pMvdCost, (iMvx - 2 - (*pMe).sMvp.iMvX) as i32, (iMvy - (*pMe).sMvp.iMvY) as i32);
+        + COST_MVD(pMe.pMvdCost, (iMvx - 2 - pMe.sMvp.iMvX) as i32, (iMvy - pMe.sMvp.iMvY) as i32);
     if iCurCost < iBestCost {
         iBestCost = iCurCost;
         iBestHalfPix = REFINE_ME_HALF_PIXEL_LEFT;
@@ -1488,7 +1488,7 @@ pub extern "C" fn MeRefineFracPixel(
             kiBufStride,
         );
         pfMeCost(&cEnc, &cTmp)
-    } + COST_MVD((*pMe).pMvdCost, (iMvx + 2 - (*pMe).sMvp.iMvX) as i32, (iMvy - (*pMe).sMvp.iMvY) as i32);
+    } + COST_MVD(pMe.pMvdCost, (iMvx + 2 - pMe.sMvp.iMvX) as i32, (iMvy - pMe.sMvp.iMvY) as i32);
     if iCurCost < iBestCost {
         iBestCost = iCurCost;
         iBestHalfPix = REFINE_ME_HALF_PIXEL_RIGHT;
@@ -1511,10 +1511,10 @@ pub extern "C" fn MeRefineFracPixel(
         sParams.pSrcB[2] = MeQuarSource::Ref(0, 0);
         sParams.pSrcB[3] = MeQuarSource::Ref(0, 0);
 
-        sParams.iLms[0] = COST_MVD((*pMe).pMvdCost, (iHalfMvx - (*pMe).sMvp.iMvX) as i32, (iHalfMvy - 1 - (*pMe).sMvp.iMvY) as i32);
-        sParams.iLms[1] = COST_MVD((*pMe).pMvdCost, (iHalfMvx - (*pMe).sMvp.iMvX) as i32, (iHalfMvy + 1 - (*pMe).sMvp.iMvY) as i32);
-        sParams.iLms[2] = COST_MVD((*pMe).pMvdCost, (iHalfMvx - 1 - (*pMe).sMvp.iMvX) as i32, (iHalfMvy - (*pMe).sMvp.iMvY) as i32);
-        sParams.iLms[3] = COST_MVD((*pMe).pMvdCost, (iHalfMvx + 1 - (*pMe).sMvp.iMvX) as i32, (iHalfMvy - (*pMe).sMvp.iMvY) as i32);
+        sParams.iLms[0] = COST_MVD(pMe.pMvdCost, (iHalfMvx - pMe.sMvp.iMvX) as i32, (iHalfMvy - 1 - pMe.sMvp.iMvY) as i32);
+        sParams.iLms[1] = COST_MVD(pMe.pMvdCost, (iHalfMvx - pMe.sMvp.iMvX) as i32, (iHalfMvy + 1 - pMe.sMvp.iMvY) as i32);
+        sParams.iLms[2] = COST_MVD(pMe.pMvdCost, (iHalfMvx - 1 - pMe.sMvp.iMvX) as i32, (iHalfMvy - pMe.sMvp.iMvY) as i32);
+        sParams.iLms[3] = COST_MVD(pMe.pMvdCost, (iHalfMvx + 1 - pMe.sMvp.iMvX) as i32, (iHalfMvy - pMe.sMvp.iMvY) as i32);
     } else {
         match iBestHalfPix {
             REFINE_ME_HALF_PIXEL_LEFT => {
@@ -1608,10 +1608,10 @@ pub extern "C" fn MeRefineFracPixel(
             _ => {}
         }
 
-        sParams.iLms[0] = COST_MVD((*pMe).pMvdCost, (iHalfMvx - (*pMe).sMvp.iMvX) as i32, (iHalfMvy - 1 - (*pMe).sMvp.iMvY) as i32);
-        sParams.iLms[1] = COST_MVD((*pMe).pMvdCost, (iHalfMvx - (*pMe).sMvp.iMvX) as i32, (iHalfMvy + 1 - (*pMe).sMvp.iMvY) as i32);
-        sParams.iLms[2] = COST_MVD((*pMe).pMvdCost, (iHalfMvx - 1 - (*pMe).sMvp.iMvX) as i32, (iHalfMvy - (*pMe).sMvp.iMvY) as i32);
-        sParams.iLms[3] = COST_MVD((*pMe).pMvdCost, (iHalfMvx + 1 - (*pMe).sMvp.iMvX) as i32, (iHalfMvy - (*pMe).sMvp.iMvY) as i32);
+        sParams.iLms[0] = COST_MVD(pMe.pMvdCost, (iHalfMvx - pMe.sMvp.iMvX) as i32, (iHalfMvy - 1 - pMe.sMvp.iMvY) as i32);
+        sParams.iLms[1] = COST_MVD(pMe.pMvdCost, (iHalfMvx - pMe.sMvp.iMvX) as i32, (iHalfMvy + 1 - pMe.sMvp.iMvY) as i32);
+        sParams.iLms[2] = COST_MVD(pMe.pMvdCost, (iHalfMvx - 1 - pMe.sMvp.iMvX) as i32, (iHalfMvy - pMe.sMvp.iMvY) as i32);
+        sParams.iLms[3] = COST_MVD(pMe.pMvdCost, (iHalfMvx + 1 - pMe.sMvp.iMvX) as i32, (iHalfMvy - pMe.sMvp.iMvY) as i32);
     }
 
     MeRefineQuarPixel(
@@ -1624,9 +1624,9 @@ pub extern "C" fn MeRefineFracPixel(
     }
     let iBestQuarPix = sParams.iBestQuarPix;
 
-    (*pMe).sMv.iMvX = iHalfMvx + iMvQuarAddX[iBestQuarPix as usize] as i16;
-    (*pMe).sMv.iMvY = iHalfMvy + pMvQuarAddY[iBestQuarPix as usize] as i16;
-    (*pMe).uiSatdCost = iBestCost as u32;
+    pMe.sMv.iMvX = iHalfMvx + iMvQuarAddX[iBestQuarPix as usize] as i16;
+    pMe.sMv.iMvY = iHalfMvy + pMvQuarAddY[iBestQuarPix as usize] as i16;
+    pMe.uiSatdCost = iBestCost as u32;
 
     if iBestHalfPix + iBestQuarPix == NO_BEST_FRAC_PIX {
         pBestPredInter = BestPred::Ref;

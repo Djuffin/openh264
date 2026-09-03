@@ -163,7 +163,7 @@ pub use crate::decoder::decoder_context::{SWelsDecoderContext, SRefPic};
 
 /// Initializes error concealment function pointer dispatch table and resets freeze output flag.
 pub extern "C" fn InitErrorCon(pCtx: &mut SWelsDecoderContext) {
-    let ec_mode = (*pCtx).pParam.eEcActiveIdc;
+    let ec_mode = pCtx.pParam.eEcActiveIdc;
     if ec_mode == ERROR_CON_IDC::ERROR_CON_SLICE_COPY
         || ec_mode == ERROR_CON_IDC::ERROR_CON_SLICE_COPY_CROSS_IDR
         || ec_mode == ERROR_CON_IDC::ERROR_CON_SLICE_MV_COPY_CROSS_IDR
@@ -173,10 +173,10 @@ pub extern "C" fn InitErrorCon(pCtx: &mut SWelsDecoderContext) {
         if ec_mode != ERROR_CON_IDC::ERROR_CON_SLICE_MV_COPY_CROSS_IDR_FREEZE_RES_CHANGE
             && ec_mode != ERROR_CON_IDC::ERROR_CON_SLICE_COPY_CROSS_IDR_FREEZE_RES_CHANGE
         {
-            (*pCtx).bFreezeOutput = false;
+            pCtx.bFreezeOutput = false;
         }
 
-        (*pCtx).sCopyFunc.bInstalled = true;
+        pCtx.sCopyFunc.bInstalled = true;
     }
 }
 
@@ -185,14 +185,14 @@ pub extern "C" fn NeedErrorCon(pCtx: &mut SWelsDecoderContext, pCurDqLayer: Opti
     let Some(pCurDqLayer) = pCurDqLayer else {
         return false;
     };
-    let Some(sps) = active_sps(&(*pCtx).sSpsPpsCtx, (*pCtx).active_sps) else {
+    let Some(sps) = active_sps(&pCtx.sSpsPpsCtx, pCtx.active_sps) else {
         return false;
     };
 
     let iMbNum = sps.iMbWidth * sps.iMbHeight;
 
     for i in 0..iMbNum {
-        if !*(*pCurDqLayer).grid.mb_correctly_decoded_flag.get(i as usize) {
+        if !*pCurDqLayer.grid.mb_correctly_decoded_flag.get(i as usize) {
             return true;
         }
     }
@@ -201,11 +201,11 @@ pub extern "C" fn NeedErrorCon(pCtx: &mut SWelsDecoderContext, pCurDqLayer: Opti
 
 /// Performs full-frame error concealment by copying pixel planes from the previous reference picture.
 pub extern "C" fn DoErrorConFrameCopy(pCtx: &mut SWelsDecoderContext, pCurDqLayer: Option<&mut DqLayerState>) {
-    if (*pCtx).pDec.is_none() {
+    if pCtx.pDec.is_none() {
         return;
     }
     let Some((iMbWidth, iMbHeight)) =
-        active_sps(&(*pCtx).sSpsPpsCtx, (*pCtx).active_sps).map(|sps| (sps.iMbWidth, sps.iMbHeight))
+        active_sps(&pCtx.sSpsPpsCtx, pCtx.active_sps).map(|sps| (sps.iMbWidth, sps.iMbHeight))
     else {
         return;
     };
@@ -223,7 +223,7 @@ pub extern "C" fn DoErrorConFrameCopy(pCtx: &mut SWelsDecoderContext, pCurDqLaye
     pDstPic.iMbEcedNum = (iMbWidth * iMbHeight) as i32;
 
     if pCurDqLayer.is_some() {
-        if ec_active_idc(&(*pCtx).pParam) == ERROR_CON_IDC::ERROR_CON_FRAME_COPY
+        if ec_active_idc(&pCtx.pParam) == ERROR_CON_IDC::ERROR_CON_FRAME_COPY
             && pCurDqLayer.as_ref().unwrap().sLayerInfo.sNalHeaderExt.bIdrFlag
         {
             pSrcPic = RefSlot::Empty;
@@ -266,11 +266,11 @@ pub extern "C" fn DoErrorConSliceCopy(pCtx: &mut SWelsDecoderContext, pCurDqLaye
     let Some(pCurDqLayer) = pCurDqLayer else {
         return;
     };
-    if (*pCtx).pDec.is_none() {
+    if pCtx.pDec.is_none() {
         return;
     }
 
-    let Some((iMbWidth, iMbHeight)) = active_sps(&(*pCtx).sSpsPpsCtx, (*pCtx).active_sps)
+    let Some((iMbWidth, iMbHeight)) = active_sps(&pCtx.sSpsPpsCtx, pCtx.active_sps)
         .map(|sps| (sps.iMbWidth as usize, sps.iMbHeight as usize))
     else {
         return;
@@ -282,8 +282,8 @@ pub extern "C" fn DoErrorConSliceCopy(pCtx: &mut SWelsDecoderContext, pCurDqLaye
     };
     let mut pSrcPic = pRefs.classify(prev);
 
-    if ec_active_idc(&(*pCtx).pParam) == ERROR_CON_IDC::ERROR_CON_SLICE_COPY
-        && (*pCurDqLayer).sLayerInfo.sNalHeaderExt.bIdrFlag
+    if ec_active_idc(&pCtx.pParam) == ERROR_CON_IDC::ERROR_CON_SLICE_COPY
+        && pCurDqLayer.sLayerInfo.sNalHeaderExt.bIdrFlag
     {
         pSrcPic = RefSlot::Empty;
     }
@@ -299,12 +299,12 @@ pub extern "C" fn DoErrorConSliceCopy(pCtx: &mut SWelsDecoderContext, pCurDqLaye
         _ => None,
     };
 
-    let installed = (*pCtx).sCopyFunc.bInstalled;
+    let installed = pCtx.sCopyFunc.bInstalled;
 
     for iMbY in 0..iMbHeight {
         for iMbX in 0..iMbWidth {
             let iMbXyIndex = iMbY * iMbWidth + iMbX;
-            if *(*pCurDqLayer).grid.mb_correctly_decoded_flag.get(iMbXyIndex) {
+            if *pCurDqLayer.grid.mb_correctly_decoded_flag.get(iMbXyIndex) {
                 continue;
             }
             pDstPic.iMbEcedNum += 1;
@@ -489,132 +489,132 @@ pub extern "C" fn GetAvilInfoFromCorrectMb(pCtx: &mut SWelsDecoderContext, pCurD
     };
 
     let Some((iMbWidth, iMbHeight)) =
-        active_sps(&(*pCtx).sSpsPpsCtx, (*pCtx).active_sps).map(|sps| (sps.iMbWidth, sps.iMbHeight))
+        active_sps(&pCtx.sSpsPpsCtx, pCtx.active_sps).map(|sps| (sps.iMbWidth, sps.iMbHeight))
     else {
         return;
     };
-    let Some(pDec) = dec_pic(&mut (*pCtx).pPicBuff, (*pCtx).pDec) else {
+    let Some(pDec) = dec_pic(&mut pCtx.pPicBuff, pCtx.pDec) else {
         return;
     };
 
     let mut iInterMbCorrectNum = [0i32; 16];
 
     for r in 0..16 {
-        (*pCtx).iECMVs[r][0] = 0;
-        (*pCtx).iECMVs[r][1] = 0;
-        (*pCtx).pECRefPic[r] = None;
+        pCtx.iECMVs[r][0] = 0;
+        pCtx.iECMVs[r][1] = 0;
+        pCtx.pECRefPic[r] = None;
     }
 
     for iMbY in 0..iMbHeight {
         for iMbX in 0..iMbWidth {
             let iMbXyIndex = (iMbY * iMbWidth + iMbX) as usize;
-            if *(*pCurDqLayer).grid.mb_correctly_decoded_flag.get(iMbXyIndex)
-                && !(*pDec).pMbType.as_slice().is_empty() {
-                let iMBType = *(*pDec).pMbType.get(iMbXyIndex);
+            if *pCurDqLayer.grid.mb_correctly_decoded_flag.get(iMbXyIndex)
+                && !pDec.pMbType.as_slice().is_empty() {
+                let iMBType = *pDec.pMbType.get(iMbXyIndex);
                 if IS_INTER(iMBType) {
                     match iMBType {
                         MB_TYPE_SKIP | MB_TYPE_16x16 => {
-                            if !(*pDec).pRefIndex[0].as_slice().is_empty() && !(*pDec).pMv[0].as_slice().is_empty() {
-                                let ref_row = *(*pDec).pRefIndex[0].get(iMbXyIndex);
-                                let mv_row = *(*pDec).pMv[0].get(iMbXyIndex);
+                            if !pDec.pRefIndex[0].as_slice().is_empty() && !pDec.pMv[0].as_slice().is_empty() {
+                                let ref_row = *pDec.pRefIndex[0].get(iMbXyIndex);
+                                let mv_row = *pDec.pMv[0].get(iMbXyIndex);
                                 let iRefIdx = ref_row[0] as usize;
                                 if iRefIdx < 16 {
                                     let mv = mv_row[0];
-                                    (*pCtx).iECMVs[iRefIdx][0] += mv[0] as i32;
-                                    (*pCtx).iECMVs[iRefIdx][1] += mv[1] as i32;
-                                    (*pCtx).pECRefPic[iRefIdx] = (*pCtx).sRefPic.pRefList[LIST_0][iRefIdx];
+                                    pCtx.iECMVs[iRefIdx][0] += mv[0] as i32;
+                                    pCtx.iECMVs[iRefIdx][1] += mv[1] as i32;
+                                    pCtx.pECRefPic[iRefIdx] = pCtx.sRefPic.pRefList[LIST_0][iRefIdx];
                                     iInterMbCorrectNum[iRefIdx] += 1;
                                 }
                             }
                         }
                         MB_TYPE_16x8 => {
-                            if !(*pDec).pRefIndex[0].as_slice().is_empty() && !(*pDec).pMv[0].as_slice().is_empty() {
-                                let ref_row = *(*pDec).pRefIndex[0].get(iMbXyIndex);
-                                let mv_row = *(*pDec).pMv[0].get(iMbXyIndex);
+                            if !pDec.pRefIndex[0].as_slice().is_empty() && !pDec.pMv[0].as_slice().is_empty() {
+                                let ref_row = *pDec.pRefIndex[0].get(iMbXyIndex);
+                                let mv_row = *pDec.pMv[0].get(iMbXyIndex);
                                 // Partition 0
                                 let mut iRefIdx = ref_row[0] as usize;
                                 if iRefIdx < 16 {
                                     let mv0 = mv_row[0];
-                                    (*pCtx).iECMVs[iRefIdx][0] += mv0[0] as i32;
-                                    (*pCtx).iECMVs[iRefIdx][1] += mv0[1] as i32;
-                                    (*pCtx).pECRefPic[iRefIdx] = (*pCtx).sRefPic.pRefList[LIST_0][iRefIdx];
+                                    pCtx.iECMVs[iRefIdx][0] += mv0[0] as i32;
+                                    pCtx.iECMVs[iRefIdx][1] += mv0[1] as i32;
+                                    pCtx.pECRefPic[iRefIdx] = pCtx.sRefPic.pRefList[LIST_0][iRefIdx];
                                     iInterMbCorrectNum[iRefIdx] += 1;
                                 }
                                 // Partition 1
                                 iRefIdx = ref_row[8] as usize;
                                 if iRefIdx < 16 {
                                     let mv8 = mv_row[8];
-                                    (*pCtx).iECMVs[iRefIdx][0] += mv8[0] as i32;
-                                    (*pCtx).iECMVs[iRefIdx][1] += mv8[1] as i32;
-                                    (*pCtx).pECRefPic[iRefIdx] = (*pCtx).sRefPic.pRefList[LIST_0][iRefIdx];
+                                    pCtx.iECMVs[iRefIdx][0] += mv8[0] as i32;
+                                    pCtx.iECMVs[iRefIdx][1] += mv8[1] as i32;
+                                    pCtx.pECRefPic[iRefIdx] = pCtx.sRefPic.pRefList[LIST_0][iRefIdx];
                                     iInterMbCorrectNum[iRefIdx] += 1;
                                 }
                             }
                         }
                         MB_TYPE_8x16 => {
-                            if !(*pDec).pRefIndex[0].as_slice().is_empty() && !(*pDec).pMv[0].as_slice().is_empty() {
-                                let ref_row = *(*pDec).pRefIndex[0].get(iMbXyIndex);
-                                let mv_row = *(*pDec).pMv[0].get(iMbXyIndex);
+                            if !pDec.pRefIndex[0].as_slice().is_empty() && !pDec.pMv[0].as_slice().is_empty() {
+                                let ref_row = *pDec.pRefIndex[0].get(iMbXyIndex);
+                                let mv_row = *pDec.pMv[0].get(iMbXyIndex);
                                 // Partition 0
                                 let mut iRefIdx = ref_row[0] as usize;
                                 if iRefIdx < 16 {
                                     let mv0 = mv_row[0];
-                                    (*pCtx).iECMVs[iRefIdx][0] += mv0[0] as i32;
-                                    (*pCtx).iECMVs[iRefIdx][1] += mv0[1] as i32;
-                                    (*pCtx).pECRefPic[iRefIdx] = (*pCtx).sRefPic.pRefList[LIST_0][iRefIdx];
+                                    pCtx.iECMVs[iRefIdx][0] += mv0[0] as i32;
+                                    pCtx.iECMVs[iRefIdx][1] += mv0[1] as i32;
+                                    pCtx.pECRefPic[iRefIdx] = pCtx.sRefPic.pRefList[LIST_0][iRefIdx];
                                     iInterMbCorrectNum[iRefIdx] += 1;
                                 }
                                 // Partition 1
                                 iRefIdx = ref_row[2] as usize;
                                 if iRefIdx < 16 {
                                     let mv2 = mv_row[2];
-                                    (*pCtx).iECMVs[iRefIdx][0] += mv2[0] as i32;
-                                    (*pCtx).iECMVs[iRefIdx][1] += mv2[1] as i32;
-                                    (*pCtx).pECRefPic[iRefIdx] = (*pCtx).sRefPic.pRefList[LIST_0][iRefIdx];
+                                    pCtx.iECMVs[iRefIdx][0] += mv2[0] as i32;
+                                    pCtx.iECMVs[iRefIdx][1] += mv2[1] as i32;
+                                    pCtx.pECRefPic[iRefIdx] = pCtx.sRefPic.pRefList[LIST_0][iRefIdx];
                                     iInterMbCorrectNum[iRefIdx] += 1;
                                 }
                             }
                         }
                         MB_TYPE_8x8 | MB_TYPE_8x8_REF0 => {
-                            if !(*pDec).pRefIndex[0].as_slice().is_empty()
-                                && !(*pDec).pMv[0].as_slice().is_empty()
+                            if !pDec.pRefIndex[0].as_slice().is_empty()
+                                && !pDec.pMv[0].as_slice().is_empty()
                             {
-                                let sub_types = *(*pCurDqLayer).grid.sub_mb_type.get(iMbXyIndex);
-                                let ref_row = *(*pDec).pRefIndex[0].get(iMbXyIndex);
-                                let mv_row = *(*pDec).pMv[0].get(iMbXyIndex);
+                                let sub_types = *pCurDqLayer.grid.sub_mb_type.get(iMbXyIndex);
+                                let ref_row = *pDec.pRefIndex[0].get(iMbXyIndex);
+                                let mv_row = *pDec.pMv[0].get(iMbXyIndex);
                                 for i in 0..4 {
                                     let iSubMBType = sub_types[i];
                                     let iIIdx = ((i >> 1) << 3) + ((i & 1) << 1);
                                     let iRefIdx = ref_row[iIIdx] as usize;
                                     if iRefIdx < 16 {
-                                        (*pCtx).pECRefPic[iRefIdx] = (*pCtx).sRefPic.pRefList[LIST_0][iRefIdx];
+                                        pCtx.pECRefPic[iRefIdx] = pCtx.sRefPic.pRefList[LIST_0][iRefIdx];
                                         match iSubMBType {
                                             SUB_MB_TYPE_8x8 => {
                                                 let mv = mv_row[iIIdx];
-                                                (*pCtx).iECMVs[iRefIdx][0] += mv[0] as i32;
-                                                (*pCtx).iECMVs[iRefIdx][1] += mv[1] as i32;
+                                                pCtx.iECMVs[iRefIdx][0] += mv[0] as i32;
+                                                pCtx.iECMVs[iRefIdx][1] += mv[1] as i32;
                                                 iInterMbCorrectNum[iRefIdx] += 1;
                                             }
                                             SUB_MB_TYPE_8x4 => {
                                                 let mv0 = mv_row[iIIdx];
                                                 let mv4 = mv_row[iIIdx + 4];
-                                                (*pCtx).iECMVs[iRefIdx][0] += (mv0[0] as i32) + (mv4[0] as i32);
-                                                (*pCtx).iECMVs[iRefIdx][1] += (mv0[1] as i32) + (mv4[1] as i32);
+                                                pCtx.iECMVs[iRefIdx][0] += (mv0[0] as i32) + (mv4[0] as i32);
+                                                pCtx.iECMVs[iRefIdx][1] += (mv0[1] as i32) + (mv4[1] as i32);
                                                 iInterMbCorrectNum[iRefIdx] += 2;
                                             }
                                             SUB_MB_TYPE_4x8 => {
                                                 let mv0 = mv_row[iIIdx];
                                                 let mv1 = mv_row[iIIdx + 1];
-                                                (*pCtx).iECMVs[iRefIdx][0] += (mv0[0] as i32) + (mv1[0] as i32);
-                                                (*pCtx).iECMVs[iRefIdx][1] += (mv0[1] as i32) + (mv1[1] as i32);
+                                                pCtx.iECMVs[iRefIdx][0] += (mv0[0] as i32) + (mv1[0] as i32);
+                                                pCtx.iECMVs[iRefIdx][1] += (mv0[1] as i32) + (mv1[1] as i32);
                                                 iInterMbCorrectNum[iRefIdx] += 2;
                                             }
                                             SUB_MB_TYPE_4x4 => {
                                                 for j in 0..4 {
                                                     let iJIdx = ((j >> 1) << 2) + (j & 1);
                                                     let mv = mv_row[iIIdx + iJIdx];
-                                                    (*pCtx).iECMVs[iRefIdx][0] += mv[0] as i32;
-                                                    (*pCtx).iECMVs[iRefIdx][1] += mv[1] as i32;
+                                                    pCtx.iECMVs[iRefIdx][0] += mv[0] as i32;
+                                                    pCtx.iECMVs[iRefIdx][1] += mv[1] as i32;
                                                 }
                                                 iInterMbCorrectNum[iRefIdx] += 4;
                                             }
@@ -633,8 +633,8 @@ pub extern "C" fn GetAvilInfoFromCorrectMb(pCtx: &mut SWelsDecoderContext, pCurD
 
     for i in 0..16 {
         if iInterMbCorrectNum[i] > 0 {
-            (*pCtx).iECMVs[i][0] /= iInterMbCorrectNum[i];
-            (*pCtx).iECMVs[i][1] /= iInterMbCorrectNum[i];
+            pCtx.iECMVs[i][0] /= iInterMbCorrectNum[i];
+            pCtx.iECMVs[i][1] /= iInterMbCorrectNum[i];
         }
     }
 }
@@ -727,8 +727,8 @@ pub extern "C" fn MarkECFrameAsRef(pCtx: &mut SWelsDecoderContext, pCurDqLayer: 
         return iRet;
     }
 
-    if (*pCtx).pDec.is_some() {
-        if let Some(pDec) = dec_pic(&mut (*pCtx).pPicBuff, (*pCtx).pDec) {
+    if pCtx.pDec.is_some() {
+        if let Some(pDec) = dec_pic(&mut pCtx.pPicBuff, pCtx.pDec) {
             pDec.expand_as_reference();
         }
     }
@@ -738,10 +738,10 @@ pub extern "C" fn MarkECFrameAsRef(pCtx: &mut SWelsDecoderContext, pCurDqLayer: 
 
 /// Top-level error concealment dispatcher.
 pub extern "C" fn ImplementErrorCon(pCtx: &mut SWelsDecoderContext, mut pCurDqLayer: Option<&mut DqLayerState>) {
-    let ec_mode = (*pCtx).pParam.eEcActiveIdc;
+    let ec_mode = pCtx.pParam.eEcActiveIdc;
 
     if ec_mode == ERROR_CON_IDC::ERROR_CON_DISABLE {
-        (*pCtx).iErrorCode |= dsBitstreamError;
+        pCtx.iErrorCode |= dsBitstreamError;
         return;
     } else if ec_mode == ERROR_CON_IDC::ERROR_CON_FRAME_COPY
         || ec_mode == ERROR_CON_IDC::ERROR_CON_FRAME_COPY_CROSS_IDR
@@ -761,8 +761,8 @@ pub extern "C" fn ImplementErrorCon(pCtx: &mut SWelsDecoderContext, mut pCurDqLa
         }
     }
 
-    (*pCtx).iErrorCode |= dsDataErrorConcealed;
-    if let Some(pDec) = dec_pic(&mut (*pCtx).pPicBuff, (*pCtx).pDec) {
+    pCtx.iErrorCode |= dsDataErrorConcealed;
+    if let Some(pDec) = dec_pic(&mut pCtx.pPicBuff, pCtx.pDec) {
         pDec.bIsComplete = false;
     }
 }

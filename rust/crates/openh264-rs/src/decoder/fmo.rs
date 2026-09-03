@@ -109,9 +109,9 @@ impl Default for TagFmo {
 
 /// Generates the macroblock allocation map for Interleaved Slice Groups (Type 0).
 pub fn FmoGenerateMbAllocMapType0(pFmo: &mut TagFmo, pPps: &SPps) -> i32 {
-    let uiNumSliceGroups = (*pPps).uiNumSliceGroups;
-    let iMbNum = (*pFmo).iCountMbNum;
-    let pMbAllocMap = &mut (*pFmo).pMbAllocMap;
+    let uiNumSliceGroups = pPps.uiNumSliceGroups;
+    let iMbNum = pFmo.iCountMbNum;
+    let pMbAllocMap = &mut pFmo.pMbAllocMap;
 
     if pMbAllocMap.is_empty()
         || iMbNum <= 0
@@ -125,7 +125,7 @@ pub fn FmoGenerateMbAllocMapType0(pFmo: &mut TagFmo, pPps: &SPps) -> i32 {
     while i < iMbNum {
         let mut uiGroup: u8 = 0;
         while (uiGroup as u32) < uiNumSliceGroups && i < iMbNum {
-            let kiRunIdx = (*pPps).uiRunLength[uiGroup as usize] as i32;
+            let kiRunIdx = pPps.uiRunLength[uiGroup as usize] as i32;
             let mut j: i32 = 0;
             loop {
                 if (i + j) < iMbNum {
@@ -150,9 +150,9 @@ pub fn FmoGenerateMbAllocMapType0(pFmo: &mut TagFmo, pPps: &SPps) -> i32 {
 
 /// Generates the macroblock allocation map for Dispersed Slice Groups (Type 1).
 pub fn FmoGenerateMbAllocMapType1(pFmo: &mut TagFmo, pPps: &SPps, kiMbWidth: i32) -> i32 {
-    let uiNumSliceGroups = (*pPps).uiNumSliceGroups;
-    let iMbNum = (*pFmo).iCountMbNum;
-    let pMbAllocMap = &mut (*pFmo).pMbAllocMap;
+    let uiNumSliceGroups = pPps.uiNumSliceGroups;
+    let iMbNum = pFmo.iCountMbNum;
+    let pMbAllocMap = &mut pFmo.pMbAllocMap;
 
     if pMbAllocMap.is_empty()
         || iMbNum <= 0
@@ -191,16 +191,16 @@ pub fn FmoGenerateSliceGroup(
         return ERR_INFO_INVALID_PARAM;
     }
 
-    (*pFmo).pMbAllocMap = vec![0u8; iNumMb as usize];
+    pFmo.pMbAllocMap = vec![0u8; iNumMb as usize];
 
-    (*pFmo).iCountMbNum = iNumMb;
+    pFmo.iCountMbNum = iNumMb;
 
-    if (*kpPps).uiNumSliceGroups < 2 && iNumMb > 0 {
+    if kpPps.uiNumSliceGroups < 2 && iNumMb > 0 {
         // The C's `memset(pMbAllocMap, 0, iNumMb)` on this arm, even though the
         // allocation above already zeroed: it is what the single slice-group map
         // *is*, not a leftover of the allocator.
-        (*pFmo).pMbAllocMap.fill(0);
-        (*pFmo).iSliceGroupCount = 1;
+        pFmo.pMbAllocMap.fill(0);
+        pFmo.iSliceGroupCount = 1;
         return ERR_NONE;
     }
 
@@ -208,10 +208,10 @@ pub fn FmoGenerateSliceGroup(
     let bResolutionChanged = false;
 
     if bResolutionChanged
-        || ((*kpPps).uiSliceGroupMapType as i32 != (*pFmo).iSliceGroupType)
-        || ((*kpPps).uiNumSliceGroups as i32 != (*pFmo).iSliceGroupCount)
+        || (kpPps.uiSliceGroupMapType as i32 != pFmo.iSliceGroupType)
+        || (kpPps.uiNumSliceGroups as i32 != pFmo.iSliceGroupCount)
     {
-        match (*kpPps).uiSliceGroupMapType {
+        match kpPps.uiSliceGroupMapType {
             0 => {
                 iErr = FmoGenerateMbAllocMapType0(pFmo, kpPps);
             }
@@ -229,8 +229,8 @@ pub fn FmoGenerateSliceGroup(
     }
 
     if 0 == iErr {
-        (*pFmo).iSliceGroupCount = (*kpPps).uiNumSliceGroups as i32;
-        (*pFmo).iSliceGroupType = (*kpPps).uiSliceGroupMapType as i32;
+        pFmo.iSliceGroupCount = kpPps.uiNumSliceGroups as i32;
+        pFmo.iSliceGroupType = kpPps.uiSliceGroupMapType as i32;
     }
 
     iErr
@@ -286,10 +286,10 @@ pub fn FmoParamSetsChanged(
     let Some(pFmo) = pFmo else {
         return false;
     };
-    !(*pFmo).bActiveFlag
-        || (kiCountNumMb != (*pFmo).iCountMbNum)
-        || (kiSliceGroupType != (*pFmo).iSliceGroupType)
-        || (kiSliceGroupCount != (*pFmo).iSliceGroupCount)
+    !pFmo.bActiveFlag
+        || (kiCountNumMb != pFmo.iCountMbNum)
+        || (kiSliceGroupType != pFmo.iSliceGroupType)
+        || (kiSliceGroupCount != pFmo.iSliceGroupCount)
 }
 
 /// Updates/inserts an FMO parameter unit for the active access unit.
@@ -333,8 +333,8 @@ pub fn FmoMbToSliceGroup(pFmo: Option<&TagFmo>, kiMbXy: MB_XY_T) -> i32 {
         return -1;
     };
 
-    let kiMbNum = (*pFmo).iCountMbNum;
-    let kpMbMap = &(*pFmo).pMbAllocMap;
+    let kiMbNum = pFmo.iCountMbNum;
+    let kpMbMap = &pFmo.pMbAllocMap;
 
     if kiMbXy < 0 || kiMbXy >= kiMbNum || kpMbMap.is_empty() {
         return -1;
@@ -349,8 +349,8 @@ pub fn FmoNextMb(pFmo: Option<&TagFmo>, kiMbXy: MB_XY_T) -> MB_XY_T {
         return -1;
     };
 
-    let kiTotalMb = (*pFmo).iCountMbNum;
-    let kpMbMap = &(*pFmo).pMbAllocMap;
+    let kiTotalMb = pFmo.iCountMbNum;
+    let kpMbMap = &pFmo.pMbAllocMap;
     if kpMbMap.is_empty() {
         return -1;
     }

@@ -777,10 +777,10 @@ pub fn InitCabacDecEngineFromBS(
         uiOffset <<= 16;
         uiOffset |= ((b[3] as u64) << 8) | (b[4] as u64);
 
-        (*pDecEngine).uiOffset = uiOffset;
-        (*pDecEngine).iBitsLeft = 31;
-        (*pDecEngine).pos = curr + 5;
-        (*pDecEngine).uiRange = WELS_CABAC_HALF;
+        pDecEngine.uiOffset = uiOffset;
+        pDecEngine.iBitsLeft = 31;
+        pDecEngine.pos = curr + 5;
+        pDecEngine.uiRange = WELS_CABAC_HALF;
         pBsAux.cursor.hand_off_to_cabac();
 
         ERR_NONE
@@ -887,29 +887,29 @@ pub fn DecodeBinCabac(
 ) -> i32 {
     {
         let iErrorInfo: i32;
-        let uiState = (*pBinCtx).uiState as usize;
-        let mut uiBinVal = (*pBinCtx).uiMPS as u32;
-        let mut uiOffset = (*pDecEngine).uiOffset;
-        let mut uiRange = (*pDecEngine).uiRange;
+        let uiState = pBinCtx.uiState as usize;
+        let mut uiBinVal = pBinCtx.uiMPS as u32;
+        let mut uiOffset = pDecEngine.uiOffset;
+        let mut uiRange = pDecEngine.uiRange;
 
         let mut iRenorm: i32 = 1;
         let range_idx = ((uiRange >> 6) & 0x03) as usize;
         let uiRangeLPS = g_kuiCabacRangeLps[uiState][range_idx] as u64;
         uiRange -= uiRangeLPS;
 
-        if uiOffset >= (uiRange << (*pDecEngine).iBitsLeft) {
+        if uiOffset >= (uiRange << pDecEngine.iBitsLeft) {
             // LPS
-            uiOffset -= uiRange << (*pDecEngine).iBitsLeft;
+            uiOffset -= uiRange << pDecEngine.iBitsLeft;
             uiBinVal ^= 1;
             if uiState == 0 {
-                (*pBinCtx).uiMPS ^= 1;
+                pBinCtx.uiMPS ^= 1;
             }
-            (*pBinCtx).uiState = g_kuiStateTransTable[uiState][0];
+            pBinCtx.uiState = g_kuiStateTransTable[uiState][0];
             iRenorm = g_kRenormTable256[uiRangeLPS as usize] as i32;
             uiRange = uiRangeLPS << iRenorm;
         } else {
             // MPS
-            (*pBinCtx).uiState = g_kuiStateTransTable[uiState][1];
+            pBinCtx.uiState = g_kuiStateTransTable[uiState][1];
             if uiRange >= WELS_CABAC_QUARTER {
                 pDecEngine.uiRange = uiRange;
                 *uiBit = uiBinVal;
@@ -920,22 +920,22 @@ pub fn DecodeBinCabac(
         }
 
         // Renorm
-        (*pDecEngine).uiRange = uiRange;
+        pDecEngine.uiRange = uiRange;
         pDecEngine.iBitsLeft -= iRenorm;
         *uiBit = uiBinVal;
 
-        if (*pDecEngine).iBitsLeft > 0 {
-            (*pDecEngine).uiOffset = uiOffset;
+        if pDecEngine.iBitsLeft > 0 {
+            pDecEngine.uiOffset = uiOffset;
             return ERR_NONE;
         }
 
         let mut uiVal: u32 = 0;
         let mut iNumBitsRead: i32 = 0;
         iErrorInfo = Read32BitsCabac(win, pDecEngine, &mut uiVal, &mut iNumBitsRead);
-        (*pDecEngine).uiOffset = (uiOffset << iNumBitsRead) | (uiVal as u64);
-        (*pDecEngine).iBitsLeft += iNumBitsRead;
+        pDecEngine.uiOffset = (uiOffset << iNumBitsRead) | (uiVal as u64);
+        pDecEngine.iBitsLeft += iNumBitsRead;
 
-        if iErrorInfo != 0 && (*pDecEngine).iBitsLeft < 0 {
+        if iErrorInfo != 0 && pDecEngine.iBitsLeft < 0 {
             return iErrorInfo;
         }
         ERR_NONE
@@ -949,8 +949,8 @@ pub fn DecodeBypassCabac(
 ) -> i32 {
     {
         let iErrorInfo: i32;
-        let mut iBitsLeft = (*pDecEngine).iBitsLeft;
-        let mut uiOffset = (*pDecEngine).uiOffset;
+        let mut iBitsLeft = pDecEngine.iBitsLeft;
+        let mut uiOffset = pDecEngine.uiOffset;
 
         if iBitsLeft <= 0 {
             let mut uiVal: u32 = 0;
@@ -964,15 +964,15 @@ pub fn DecodeBypassCabac(
         }
 
         iBitsLeft -= 1;
-        let uiRangeValue = (*pDecEngine).uiRange << iBitsLeft;
+        let uiRangeValue = pDecEngine.uiRange << iBitsLeft;
         if uiOffset >= uiRangeValue {
-            (*pDecEngine).iBitsLeft = iBitsLeft;
+            pDecEngine.iBitsLeft = iBitsLeft;
             pDecEngine.uiOffset = uiOffset - uiRangeValue;
             *uiBinVal = 1;
             return ERR_NONE;
         }
 
-        (*pDecEngine).iBitsLeft = iBitsLeft;
+        pDecEngine.iBitsLeft = iBitsLeft;
         pDecEngine.uiOffset = uiOffset;
         *uiBinVal = 0;
         ERR_NONE
@@ -986,8 +986,8 @@ pub fn DecodeTerminateCabac(
 ) -> i32 {
     {
         let mut iErrorInfo = ERR_NONE;
-        let uiRange = (*pDecEngine).uiRange - 2;
-        let uiOffset = (*pDecEngine).uiOffset;
+        let uiRange = pDecEngine.uiRange - 2;
+        let uiOffset = pDecEngine.uiOffset;
 
         if uiOffset >= (uiRange << pDecEngine.iBitsLeft) {
             *uiBinVal = 1;
@@ -996,21 +996,21 @@ pub fn DecodeTerminateCabac(
             // Renorm
             if uiRange < WELS_CABAC_QUARTER {
                 let iRenorm = g_kRenormTable256[uiRange as usize] as i32;
-                (*pDecEngine).uiRange = uiRange << iRenorm;
-                (*pDecEngine).iBitsLeft -= iRenorm;
-                if (*pDecEngine).iBitsLeft < 0 {
+                pDecEngine.uiRange = uiRange << iRenorm;
+                pDecEngine.iBitsLeft -= iRenorm;
+                if pDecEngine.iBitsLeft < 0 {
                     let mut uiVal: u32 = 0;
                     let mut iNumBitsRead: i32 = 0;
                     iErrorInfo = Read32BitsCabac(win, pDecEngine, &mut uiVal, &mut iNumBitsRead);
-                    (*pDecEngine).uiOffset = ((*pDecEngine).uiOffset << iNumBitsRead) | (uiVal as u64);
-                    (*pDecEngine).iBitsLeft += iNumBitsRead;
+                    pDecEngine.uiOffset = (pDecEngine.uiOffset << iNumBitsRead) | (uiVal as u64);
+                    pDecEngine.iBitsLeft += iNumBitsRead;
                 }
-                if iErrorInfo != 0 && (*pDecEngine).iBitsLeft < 0 {
+                if iErrorInfo != 0 && pDecEngine.iBitsLeft < 0 {
                     return iErrorInfo;
                 }
                 return ERR_NONE;
             } else {
-                (*pDecEngine).uiRange = uiRange;
+                pDecEngine.uiRange = uiRange;
                 return ERR_NONE;
             }
         }

@@ -772,9 +772,9 @@ pub extern "C" fn WelsCabacContextInit(
     let pEncCtx = pCtx;
     WelsCabacContextInitFromContexts(
         pCbCtx,
-        &(*pEncCtx).sWelsCabacContexts,
-        (*pEncCtx).eSliceType as i32,
-        (*pEncCtx).iGlobalQp,
+        &pEncCtx.sWelsCabacContexts,
+        pEncCtx.eSliceType as i32,
+        pEncCtx.iGlobalQp,
         iModel,
     );
 }

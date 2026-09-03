@@ -614,10 +614,10 @@ impl SWelsRcFunc {
 
 /// Builds a spatial layer's rate-control arrays.
 pub fn RcInitLayerMemory(pWelsSvcRc: &mut SWelsSvcRc, kiMaxTl: i32) {
-    let kiGomSize = (*pWelsSvcRc).iGomSize.max(0) as usize;
-    (*pWelsSvcRc).pTemporalOverRc = vec![SRCTemporal::default(); kiMaxTl.max(0) as usize];
-    (*pWelsSvcRc).pGomForegroundBlockNum = vec![0i32; kiGomSize];
-    (*pWelsSvcRc).pCurrentFrameGomSad = vec![0i32; kiGomSize];
+    let kiGomSize = pWelsSvcRc.iGomSize.max(0) as usize;
+    pWelsSvcRc.pTemporalOverRc = vec![SRCTemporal::default(); kiMaxTl.max(0) as usize];
+    pWelsSvcRc.pGomForegroundBlockNum = vec![0i32; kiGomSize];
+    pWelsSvcRc.pCurrentFrameGomSad = vec![0i32; kiGomSize];
 }
 
 impl SWelsSvcRc {
@@ -653,77 +653,77 @@ pub fn RcInitSequenceParameter(pEncCtx: &mut sWelsEncCtx) {
         let (pSvcParam, pWelsSvcRc) = pEncCtx.param_and_rc_at_mut(j);
         let pDLayerParam = &pSvcParam.sSpatialLayers[j];
         let iMbWidth = pDLayerParam.iVideoWidth >> 4;
-        (*pWelsSvcRc).iNumberMbFrame = iMbWidth * (pDLayerParam.iVideoHeight >> 4);
+        pWelsSvcRc.iNumberMbFrame = iMbWidth * (pDLayerParam.iVideoHeight >> 4);
 
-        (*pWelsSvcRc).iRcVaryPercentage = (*pSvcParam).iBitsVaryPercentage;
-        (*pWelsSvcRc).iRcVaryRatio = (*pWelsSvcRc).iRcVaryPercentage;
+        pWelsSvcRc.iRcVaryPercentage = pSvcParam.iBitsVaryPercentage;
+        pWelsSvcRc.iRcVaryRatio = pWelsSvcRc.iRcVaryPercentage;
 
-        (*pWelsSvcRc).iBufferFullnessSkip = 0;
-        (*pWelsSvcRc).uiLastTimeStamp = 0;
-        (*pWelsSvcRc).iCost2BitsIntra = 1;
-        (*pWelsSvcRc).iAvgCost2Bits = 1;
-        (*pWelsSvcRc).iSkipBufferRatio = SKIP_RATIO;
-        (*pWelsSvcRc).iContinualSkipFrames = 0;
+        pWelsSvcRc.iBufferFullnessSkip = 0;
+        pWelsSvcRc.uiLastTimeStamp = 0;
+        pWelsSvcRc.iCost2BitsIntra = 1;
+        pWelsSvcRc.iAvgCost2Bits = 1;
+        pWelsSvcRc.iSkipBufferRatio = SKIP_RATIO;
+        pWelsSvcRc.iContinualSkipFrames = 0;
 
-        (*pWelsSvcRc).iQpRangeUpperInFrame = (QP_RANGE_UPPER_MODE1 * MAX_BITS_VARY_PERCENTAGE
-            - ((QP_RANGE_UPPER_MODE1 - QP_RANGE_MODE0) * (*pWelsSvcRc).iRcVaryRatio))
+        pWelsSvcRc.iQpRangeUpperInFrame = (QP_RANGE_UPPER_MODE1 * MAX_BITS_VARY_PERCENTAGE
+            - ((QP_RANGE_UPPER_MODE1 - QP_RANGE_MODE0) * pWelsSvcRc.iRcVaryRatio))
             / MAX_BITS_VARY_PERCENTAGE;
-        (*pWelsSvcRc).iQpRangeLowerInFrame = (QP_RANGE_LOWER_MODE1 * MAX_BITS_VARY_PERCENTAGE
-            - ((QP_RANGE_LOWER_MODE1 - QP_RANGE_MODE0) * (*pWelsSvcRc).iRcVaryRatio))
+        pWelsSvcRc.iQpRangeLowerInFrame = (QP_RANGE_LOWER_MODE1 * MAX_BITS_VARY_PERCENTAGE
+            - ((QP_RANGE_LOWER_MODE1 - QP_RANGE_MODE0) * pWelsSvcRc.iRcVaryRatio))
             / MAX_BITS_VARY_PERCENTAGE;
 
         let mut iGomRowMode0: i32;
         let iGomRowMode1: i32;
         if iMbWidth <= MB_WIDTH_THRESHOLD_90P {
-            (*pWelsSvcRc).iSkipQpValue = SKIP_QP_90P;
+            pWelsSvcRc.iSkipQpValue = SKIP_QP_90P;
             iGomRowMode0 = GOM_ROW_MODE0_90P;
             iGomRowMode1 = GOM_ROW_MODE1_90P;
         } else if iMbWidth <= MB_WIDTH_THRESHOLD_180P {
-            (*pWelsSvcRc).iSkipQpValue = SKIP_QP_180P;
+            pWelsSvcRc.iSkipQpValue = SKIP_QP_180P;
             iGomRowMode0 = GOM_ROW_MODE0_180P;
             iGomRowMode1 = GOM_ROW_MODE1_180P;
         } else if iMbWidth <= MB_WIDTH_THRESHOLD_360P {
-            (*pWelsSvcRc).iSkipQpValue = SKIP_QP_360P;
+            pWelsSvcRc.iSkipQpValue = SKIP_QP_360P;
             iGomRowMode0 = GOM_ROW_MODE0_360P;
             iGomRowMode1 = GOM_ROW_MODE1_360P;
         } else {
-            (*pWelsSvcRc).iSkipQpValue = SKIP_QP_720P;
+            pWelsSvcRc.iSkipQpValue = SKIP_QP_720P;
             iGomRowMode0 = GOM_ROW_MODE0_720P;
             iGomRowMode1 = GOM_ROW_MODE1_720P;
         }
 
         iGomRowMode0 = iGomRowMode1
-            + ((iGomRowMode0 - iGomRowMode1) * (*pWelsSvcRc).iRcVaryRatio
+            + ((iGomRowMode0 - iGomRowMode1) * pWelsSvcRc.iRcVaryRatio
                 / MAX_BITS_VARY_PERCENTAGE);
 
-        (*pWelsSvcRc).iNumberMbGom = iMbWidth * iGomRowMode0;
-        (*pWelsSvcRc).iMinQp = (*pSvcParam).iMinQp;
-        (*pWelsSvcRc).iMaxQp = (*pSvcParam).iMaxQp;
+        pWelsSvcRc.iNumberMbGom = iMbWidth * iGomRowMode0;
+        pWelsSvcRc.iMinQp = pSvcParam.iMinQp;
+        pWelsSvcRc.iMaxQp = pSvcParam.iMaxQp;
 
-        (*pWelsSvcRc).iFrameDeltaQpUpper = LAST_FRAME_QP_RANGE_UPPER_MODE1
+        pWelsSvcRc.iFrameDeltaQpUpper = LAST_FRAME_QP_RANGE_UPPER_MODE1
             - ((LAST_FRAME_QP_RANGE_UPPER_MODE1 - LAST_FRAME_QP_RANGE_UPPER_MODE0)
                 * (*pWelsSvcRc).iRcVaryRatio
                 / MAX_BITS_VARY_PERCENTAGE);
-        (*pWelsSvcRc).iFrameDeltaQpLower = LAST_FRAME_QP_RANGE_LOWER_MODE1
+        pWelsSvcRc.iFrameDeltaQpLower = LAST_FRAME_QP_RANGE_LOWER_MODE1
             - ((LAST_FRAME_QP_RANGE_LOWER_MODE1 - LAST_FRAME_QP_RANGE_LOWER_MODE0)
                 * (*pWelsSvcRc).iRcVaryRatio
                 / MAX_BITS_VARY_PERCENTAGE);
 
-        (*pWelsSvcRc).iSkipFrameNum = 0;
-        (*pWelsSvcRc).iGomSize = ((*pWelsSvcRc).iNumberMbFrame + (*pWelsSvcRc).iNumberMbGom - 1)
-            / (*pWelsSvcRc).iNumberMbGom;
-        (*pWelsSvcRc).bEnableGomQp = 1;
+        pWelsSvcRc.iSkipFrameNum = 0;
+        pWelsSvcRc.iGomSize = (pWelsSvcRc.iNumberMbFrame + pWelsSvcRc.iNumberMbGom - 1)
+            / pWelsSvcRc.iNumberMbGom;
+        pWelsSvcRc.bEnableGomQp = 1;
 
         RcInitLayerMemory(
             &mut *pWelsSvcRc,
-            1 + (*pSvcParam).sDependencyLayers[j].iHighestTemporalId as i32,
+            1 + pSvcParam.sDependencyLayers[j].iHighestTemporalId as i32,
         );
 
         let slice_mode = pDLayerParam.sSliceArgument.uiSliceMode as i32;
         let bMultiSliceMode =
             slice_mode == SM_RASTER_SLICE || slice_mode == SM_SIZELIMITED_SLICE;
         if bMultiSliceMode {
-            (*pWelsSvcRc).iNumberMbGom = (*pWelsSvcRc).iNumberMbFrame;
+            pWelsSvcRc.iNumberMbGom = pWelsSvcRc.iNumberMbFrame;
         }
     }
 }
@@ -735,7 +735,7 @@ pub fn RcInitTlWeight(pEncCtx: &mut sWelsEncCtx) {
     let kiDecompositionStages = pDLayerParam.iDecompositionStages as usize;
     let kiHighestTid = pDLayerParam.iHighestTemporalId;
     let pWelsSvcRc = pEncCtx.rc_at_mut(did);
-    let pTOverRc: &mut [SRCTemporal] = &mut (*pWelsSvcRc).pTemporalOverRc;
+    let pTOverRc: &mut [SRCTemporal] = &mut pWelsSvcRc.pTemporalOverRc;
 
     let iWeightArray: [[i32; 4]; 4] = [
         [2000, 0, 0, 0],
@@ -749,28 +749,28 @@ pub fn RcInitTlWeight(pEncCtx: &mut sWelsEncCtx) {
     while n <= kiHighestTid as i32 {
         let t_rc = &mut pTOverRc[n as usize];
         t_rc.iTlayerWeight = iWeightArray[kiDecompositionStages][n as usize];
-        t_rc.iMinQp = (*pWelsSvcRc).iMinQp + (n << 1);
+        t_rc.iMinQp = pWelsSvcRc.iMinQp + (n << 1);
         t_rc.iMinQp = WELS_CLIP3(t_rc.iMinQp, 0, 51);
-        t_rc.iMaxQp = (*pWelsSvcRc).iMaxQp + (n << 1);
+        t_rc.iMaxQp = pWelsSvcRc.iMaxQp + (n << 1);
         t_rc.iMaxQp = WELS_CLIP3(t_rc.iMaxQp, t_rc.iMinQp, 51);
         n += 1;
     }
 
     let mut n = 0;
     while n < VGOP_SIZE as i32 {
-        (*pWelsSvcRc).iTlOfFrames[n as usize] = 0;
+        pWelsSvcRc.iTlOfFrames[n as usize] = 0;
         for i in 1..=kiDecompositionStages as i32 {
             let step = kiGopSize >> (i - 1);
             let mut k = 1 << (kiDecompositionStages as i32 - i);
             while k < kiGopSize {
-                (*pWelsSvcRc).iTlOfFrames[(k + n) as usize] = i as i8;
+                pWelsSvcRc.iTlOfFrames[(k + n) as usize] = i as i8;
                 k += step;
             }
         }
         n += kiGopSize;
     }
-    (*pWelsSvcRc).iPreviousGopSize = kiGopSize;
-    (*pWelsSvcRc).iGopNumberInVGop = VGOP_SIZE as i32 / kiGopSize;
+    pWelsSvcRc.iPreviousGopSize = kiGopSize;
+    pWelsSvcRc.iGopNumberInVGop = VGOP_SIZE as i32 / kiGopSize;
 }
 
 /// Updates frame and temporal bit quotas whenever user bitrate or framerate changes.
@@ -781,7 +781,7 @@ pub fn RcUpdateBitrateFps(pEncCtx: &mut sWelsEncCtx) {
     let pDLayerParamInternal = &pParam.sDependencyLayers[did];
     let kiGopSize = 1 << pDLayerParamInternal.iDecompositionStages;
     let kiHighestTid = pDLayerParamInternal.iHighestTemporalId;
-    let pTOverRc: &mut [SRCTemporal] = &mut (*pWelsSvcRc).pTemporalOverRc;
+    let pTOverRc: &mut [SRCTemporal] = &mut pWelsSvcRc.pTemporalOverRc;
 
     let input_iBitsPerFrame = if pDLayerParamInternal.fOutputFrameRate > EPSN as f32 {
         WELS_ROUND(pDLayerParam.iSpatialBitrate as f64 / pDLayerParamInternal.fOutputFrameRate as f64)
@@ -790,10 +790,10 @@ pub fn RcUpdateBitrateFps(pEncCtx: &mut sWelsEncCtx) {
     };
     let kiGopBits = input_iBitsPerFrame as i64 * kiGopSize as i64;
 
-    (*pWelsSvcRc).iBitRate = pDLayerParam.iSpatialBitrate as i64;
-    (*pWelsSvcRc).fFrameRate = pDLayerParamInternal.fOutputFrameRate as f64;
+    pWelsSvcRc.iBitRate = pDLayerParam.iSpatialBitrate as i64;
+    pWelsSvcRc.fFrameRate = pDLayerParamInternal.fOutputFrameRate as f64;
 
-    let iTargetVaryRange = (MAX_BITS_VARY_PERCENTAGE - (*pWelsSvcRc).iRcVaryRatio) >> 1;
+    let iTargetVaryRange = (MAX_BITS_VARY_PERCENTAGE - pWelsSvcRc.iRcVaryRatio) >> 1;
     let iMinBitsRatio = MAX_BITS_VARY_PERCENTAGE - iTargetVaryRange;
     let iMaxBitsRatio = MAX_BITS_VARY_PERCENTAGE_x3d2;
 
@@ -810,23 +810,23 @@ pub fn RcUpdateBitrateFps(pEncCtx: &mut sWelsEncCtx) {
         ) as i32;
     }
 
-    (*pWelsSvcRc).iBufferSizeSkip = WELS_DIV_ROUND(
-        ((*pWelsSvcRc).iBitRate as i32).wrapping_mul((*pWelsSvcRc).iSkipBufferRatio),
+    pWelsSvcRc.iBufferSizeSkip = WELS_DIV_ROUND(
+        (pWelsSvcRc.iBitRate as i32).wrapping_mul(pWelsSvcRc.iSkipBufferRatio),
         INT_MULTIPLY,
     );
-    (*pWelsSvcRc).iBufferSizePadding = WELS_DIV_ROUND(
-        ((*pWelsSvcRc).iBitRate as i32).wrapping_mul(PADDING_BUFFER_RATIO),
+    pWelsSvcRc.iBufferSizePadding = WELS_DIV_ROUND(
+        (pWelsSvcRc.iBitRate as i32).wrapping_mul(PADDING_BUFFER_RATIO),
         INT_MULTIPLY,
     );
 
-    if (*pWelsSvcRc).iBitsPerFrame > REMAIN_BITS_TH {
-        (*pWelsSvcRc).iRemainingBits = WELS_DIV_ROUND64(
-            (*pWelsSvcRc).iRemainingBits as i64 * input_iBitsPerFrame as i64,
-            (*pWelsSvcRc).iBitsPerFrame as i64,
+    if pWelsSvcRc.iBitsPerFrame > REMAIN_BITS_TH {
+        pWelsSvcRc.iRemainingBits = WELS_DIV_ROUND64(
+            pWelsSvcRc.iRemainingBits as i64 * input_iBitsPerFrame as i64,
+            pWelsSvcRc.iBitsPerFrame as i64,
         ) as i32;
     }
-    (*pWelsSvcRc).iBitsPerFrame = input_iBitsPerFrame;
-    (*pWelsSvcRc).iMaxBitsPerFrame = if pDLayerParamInternal.fOutputFrameRate > EPSN as f32 {
+    pWelsSvcRc.iBitsPerFrame = input_iBitsPerFrame;
+    pWelsSvcRc.iMaxBitsPerFrame = if pDLayerParamInternal.fOutputFrameRate > EPSN as f32 {
         WELS_ROUND(pDLayerParam.iMaxSpatialBitrate as f64 / pDLayerParamInternal.fOutputFrameRate as f64)
     } else {
         0
@@ -839,33 +839,33 @@ pub fn RcInitVGop(pEncCtx: &mut sWelsEncCtx) {
     let kiHighestTid = pEncCtx.param().sDependencyLayers[kiDid].iHighestTemporalId;
     let fix_rc_overshoot = pEncCtx.param().bFixRCOverShoot;
     let pWelsSvcRc = pEncCtx.rc_at_mut(kiDid);
-    let pTOverRc: &mut [SRCTemporal] = &mut (*pWelsSvcRc).pTemporalOverRc;
+    let pTOverRc: &mut [SRCTemporal] = &mut pWelsSvcRc.pTemporalOverRc;
 
     if fix_rc_overshoot {
-        let iLeftInVGop = (*pWelsSvcRc).iGopNumberInVGop - (*pWelsSvcRc).iGopIndexInVGop;
-        if (*pWelsSvcRc).iGopNumberInVGop != 0 {
-            (*pWelsSvcRc).iRemainingBits -=
-                iLeftInVGop * ((*pWelsSvcRc).iLastAllocatedBits / (*pWelsSvcRc).iGopNumberInVGop);
+        let iLeftInVGop = pWelsSvcRc.iGopNumberInVGop - pWelsSvcRc.iGopIndexInVGop;
+        if pWelsSvcRc.iGopNumberInVGop != 0 {
+            pWelsSvcRc.iRemainingBits -=
+                iLeftInVGop * (pWelsSvcRc.iLastAllocatedBits / pWelsSvcRc.iGopNumberInVGop);
         }
     }
 
-    if fix_rc_overshoot && (*pWelsSvcRc).iRemainingBits < 0 {
-        (*pWelsSvcRc).iRemainingBits += VGOP_SIZE as i32 * (*pWelsSvcRc).iBitsPerFrame;
+    if fix_rc_overshoot && pWelsSvcRc.iRemainingBits < 0 {
+        pWelsSvcRc.iRemainingBits += VGOP_SIZE as i32 * pWelsSvcRc.iBitsPerFrame;
     } else {
-        (*pWelsSvcRc).iRemainingBits = VGOP_SIZE as i32 * (*pWelsSvcRc).iBitsPerFrame;
+        pWelsSvcRc.iRemainingBits = VGOP_SIZE as i32 * pWelsSvcRc.iBitsPerFrame;
     }
 
     if fix_rc_overshoot {
-        (*pWelsSvcRc).iLastAllocatedBits = (*pWelsSvcRc).iRemainingBits;
+        pWelsSvcRc.iLastAllocatedBits = pWelsSvcRc.iRemainingBits;
     }
-    (*pWelsSvcRc).iRemainingWeights = (*pWelsSvcRc).iGopNumberInVGop * WEIGHT_MULTIPLY;
-    (*pWelsSvcRc).iFrameCodedInVGop = 0;
-    (*pWelsSvcRc).iGopIndexInVGop = 0;
+    pWelsSvcRc.iRemainingWeights = pWelsSvcRc.iGopNumberInVGop * WEIGHT_MULTIPLY;
+    pWelsSvcRc.iFrameCodedInVGop = 0;
+    pWelsSvcRc.iGopIndexInVGop = 0;
 
     for i in 0..=kiHighestTid {
         pTOverRc[i as usize].iGopBitsDq = 0;
     }
-    (*pWelsSvcRc).iSkipFrameInVGop = 0;
+    pWelsSvcRc.iSkipFrameInVGop = 0;
 }
 
 /// Full reset of the rate control state machine upon encoder initialization or IDR insertion.
@@ -876,11 +876,11 @@ pub fn RcInitRefreshParameter(pEncCtx: &mut sWelsEncCtx) {
     let pDLayerParam = &pParam.sSpatialLayers[kiDid];
     let pDLayerParamInternal = &pParam.sDependencyLayers[kiDid];
     let kiHighestTid = pDLayerParamInternal.iHighestTemporalId;
-    let pTOverRc: &mut [SRCTemporal] = &mut (*pWelsSvcRc).pTemporalOverRc;
+    let pTOverRc: &mut [SRCTemporal] = &mut pWelsSvcRc.pTemporalOverRc;
 
-    (*pWelsSvcRc).iIntraComplexity = 0;
-    (*pWelsSvcRc).iIntraMbCount = 0;
-    (*pWelsSvcRc).iIntraComplxMean = 0;
+    pWelsSvcRc.iIntraComplexity = 0;
+    pWelsSvcRc.iIntraMbCount = 0;
+    pWelsSvcRc.iIntraComplxMean = 0;
 
     for i in 0..=kiHighestTid {
         let t_rc = &mut pTOverRc[i as usize];
@@ -889,23 +889,23 @@ pub fn RcInitRefreshParameter(pEncCtx: &mut sWelsEncCtx) {
         t_rc.iFrameCmplxMean = 0;
     }
 
-    (*pWelsSvcRc).iBufferFullnessSkip = 0;
-    (*pWelsSvcRc).iBufferMaxBRFullness[EVEN_TIME_WINDOW] = 0;
-    (*pWelsSvcRc).iBufferMaxBRFullness[ODD_TIME_WINDOW] = 0;
-    (*pWelsSvcRc).iPredFrameBit = 0;
-    (*pWelsSvcRc).iBufferFullnessPadding = 0;
+    pWelsSvcRc.iBufferFullnessSkip = 0;
+    pWelsSvcRc.iBufferMaxBRFullness[EVEN_TIME_WINDOW] = 0;
+    pWelsSvcRc.iBufferMaxBRFullness[ODD_TIME_WINDOW] = 0;
+    pWelsSvcRc.iPredFrameBit = 0;
+    pWelsSvcRc.iBufferFullnessPadding = 0;
 
-    (*pWelsSvcRc).iGopIndexInVGop = 0;
+    pWelsSvcRc.iGopIndexInVGop = 0;
     if fix_rc_overshoot {
-        (*pWelsSvcRc).iLastAllocatedBits = 0;
+        pWelsSvcRc.iLastAllocatedBits = 0;
     }
-    (*pWelsSvcRc).iRemainingBits = 0;
-    (*pWelsSvcRc).iBitsPerFrame = 0;
+    pWelsSvcRc.iRemainingBits = 0;
+    pWelsSvcRc.iBitsPerFrame = 0;
 
-    (*pWelsSvcRc).iPreviousBitrate = pDLayerParam.iSpatialBitrate;
-    (*pWelsSvcRc).dPreviousFps = pDLayerParamInternal.fOutputFrameRate as f64;
+    pWelsSvcRc.iPreviousBitrate = pDLayerParam.iSpatialBitrate;
+    pWelsSvcRc.dPreviousFps = pDLayerParamInternal.fOutputFrameRate as f64;
 
-    (*pWelsSvcRc).pCurrentFrameGomSad.fill(0);
+    pWelsSvcRc.pCurrentFrameGomSad.fill(0);
 
     RcInitTlWeight(pEncCtx);
     RcUpdateBitrateFps(pEncCtx);
@@ -919,10 +919,10 @@ pub fn RcJudgeBitrateFpsUpdate(pEncCtx: &mut sWelsEncCtx) -> bool {
     let pDLayerParamInternal = &pParam.sDependencyLayers[iCurDid];
     let pDLayerParam = &pParam.sSpatialLayers[iCurDid];
 
-    let diff = (*pWelsSvcRc).dPreviousFps - pDLayerParamInternal.fOutputFrameRate as f64;
-    if (*pWelsSvcRc).iPreviousBitrate != pDLayerParam.iSpatialBitrate || diff > EPSN || diff < -EPSN {
-        (*pWelsSvcRc).iPreviousBitrate = pDLayerParam.iSpatialBitrate;
-        (*pWelsSvcRc).dPreviousFps = pDLayerParamInternal.fOutputFrameRate as f64;
+    let diff = pWelsSvcRc.dPreviousFps - pDLayerParamInternal.fOutputFrameRate as f64;
+    if pWelsSvcRc.iPreviousBitrate != pDLayerParam.iSpatialBitrate || diff > EPSN || diff < -EPSN {
+        pWelsSvcRc.iPreviousBitrate = pDLayerParam.iSpatialBitrate;
+        pWelsSvcRc.dPreviousFps = pDLayerParamInternal.fOutputFrameRate as f64;
         true
     } else {
         false
@@ -1013,23 +1013,23 @@ pub fn RcCalculateIdrQp(pEncCtx: &mut sWelsEncCtx) {
 
     let mut iMaxQp = iQpRangeArray[i][0];
     let mut iMinQp = iQpRangeArray[i][1];
-    iMinQp = WELS_CLIP3(iMinQp, (*pWelsSvcRc).iMinQp, (*pWelsSvcRc).iMaxQp);
-    iMaxQp = WELS_CLIP3(iMaxQp, (*pWelsSvcRc).iMinQp, (*pWelsSvcRc).iMaxQp);
+    iMinQp = WELS_CLIP3(iMinQp, pWelsSvcRc.iMinQp, pWelsSvcRc.iMaxQp);
+    iMaxQp = WELS_CLIP3(iMaxQp, pWelsSvcRc.iMinQp, pWelsSvcRc.iMaxQp);
 
-    if (*pWelsSvcRc).iIdrNum == 0 {
-        (*pWelsSvcRc).iInitialQp = dInitialQPArray[iBppIndex][i];
+    if pWelsSvcRc.iIdrNum == 0 {
+        pWelsSvcRc.iInitialQp = dInitialQPArray[iBppIndex][i];
     } else {
-        if (*pWelsSvcRc).iNumberMbFrame != (*pWelsSvcRc).iIntraMbCount
-            && (*pWelsSvcRc).iIntraMbCount != 0
+        if pWelsSvcRc.iNumberMbFrame != pWelsSvcRc.iIntraMbCount
+            && pWelsSvcRc.iIntraMbCount != 0
         {
-            (*pWelsSvcRc).iIntraComplexity = (*pWelsSvcRc).iIntraComplexity
+            pWelsSvcRc.iIntraComplexity = pWelsSvcRc.iIntraComplexity
                 * (*pWelsSvcRc).iNumberMbFrame as i64
-                / (*pWelsSvcRc).iIntraMbCount as i64;
+                / pWelsSvcRc.iIntraMbCount as i64;
         }
 
         let mut iCmplxRatio = WELS_DIV_ROUND64(
             iFrameComplexity * INT_MULTIPLY as i64,
-            (*pWelsSvcRc).iIntraComplxMean,
+            pWelsSvcRc.iIntraComplxMean,
         );
         iCmplxRatio = WELS_CLIP3(
             iCmplxRatio,
@@ -1037,17 +1037,17 @@ pub fn RcCalculateIdrQp(pEncCtx: &mut sWelsEncCtx) {
             (INT_MULTIPLY + FRAME_CMPLX_RATIO_RANGE) as i64,
         );
 
-        let denom = (*pWelsSvcRc).iTargetBits as i64 * INT_MULTIPLY as i64;
-        (*pWelsSvcRc).iQStep = WELS_DIV_ROUND64((*pWelsSvcRc).iIntraComplexity * iCmplxRatio, denom) as i32;
-        (*pWelsSvcRc).iInitialQp = RcConvertQStep2Qp((*pWelsSvcRc).iQStep);
+        let denom = pWelsSvcRc.iTargetBits as i64 * INT_MULTIPLY as i64;
+        pWelsSvcRc.iQStep = WELS_DIV_ROUND64(pWelsSvcRc.iIntraComplexity * iCmplxRatio, denom) as i32;
+        pWelsSvcRc.iInitialQp = RcConvertQStep2Qp(pWelsSvcRc.iQStep);
     }
 
-    let iInitialQp = WELS_CLIP3((*pWelsSvcRc).iInitialQp, iMinQp, iMaxQp);
-    (*pWelsSvcRc).iInitialQp = iInitialQp;
-    (*pWelsSvcRc).iQStep = RcConvertQp2QStep(iInitialQp);
-    (*pWelsSvcRc).iLastCalculatedQScale = iInitialQp;
-    (*pWelsSvcRc).iMinFrameQp = WELS_CLIP3(iInitialQp - DELTA_QP_BGD_THD, iMinQp, iMaxQp);
-    (*pWelsSvcRc).iMaxFrameQp = WELS_CLIP3(iInitialQp + DELTA_QP_BGD_THD, iMinQp, iMaxQp);
+    let iInitialQp = WELS_CLIP3(pWelsSvcRc.iInitialQp, iMinQp, iMaxQp);
+    pWelsSvcRc.iInitialQp = iInitialQp;
+    pWelsSvcRc.iQStep = RcConvertQp2QStep(iInitialQp);
+    pWelsSvcRc.iLastCalculatedQScale = iInitialQp;
+    pWelsSvcRc.iMinFrameQp = WELS_CLIP3(iInitialQp - DELTA_QP_BGD_THD, iMinQp, iMaxQp);
+    pWelsSvcRc.iMaxFrameQp = WELS_CLIP3(iInitialQp + DELTA_QP_BGD_THD, iMinQp, iMaxQp);
     pEncCtx.iGlobalQp = iInitialQp;
 }
 
@@ -1067,18 +1067,18 @@ pub fn RcCalculatePictureQp(pEncCtx: &mut sWelsEncCtx) {
         .iAverMotionTextureIndexToDeltaQp;
 
     let pWelsSvcRc = pEncCtx.rc_at_mut(did);
-    let sTOverRc: SRCTemporal = (*pWelsSvcRc).pTemporalOverRc[iTl];
+    let sTOverRc: SRCTemporal = pWelsSvcRc.pTemporalOverRc[iTl];
 
     if sTOverRc.iPFrameNum == 0 {
-        iLumaQp = (*pWelsSvcRc).iInitialQp;
-    } else if (*pWelsSvcRc).iCurrentBitsLevel == BITS_EXCEEDED {
-        iLumaQp = (*pWelsSvcRc).iLastCalculatedQScale + DELTA_QP_BGD_THD;
+        iLumaQp = pWelsSvcRc.iInitialQp;
+    } else if pWelsSvcRc.iCurrentBitsLevel == BITS_EXCEEDED {
+        iLumaQp = pWelsSvcRc.iLastCalculatedQScale + DELTA_QP_BGD_THD;
 
-        let mut iLastIdxCodecInVGop = (*pWelsSvcRc).iFrameCodedInVGop - 1;
+        let mut iLastIdxCodecInVGop = pWelsSvcRc.iFrameCodedInVGop - 1;
         if iLastIdxCodecInVGop < 0 {
             iLastIdxCodecInVGop += VGOP_SIZE as i32;
         }
-        let iTlLast = (*pWelsSvcRc).iTlOfFrames[iLastIdxCodecInVGop as usize] as i32;
+        let iTlLast = pWelsSvcRc.iTlOfFrames[iLastIdxCodecInVGop as usize] as i32;
         iDeltaQpTemporal = iTl as i32 - iTlLast;
         if iTlLast == 0 && iTl > 0 {
             iDeltaQpTemporal += 1;
@@ -1096,15 +1096,15 @@ pub fn RcCalculatePictureQp(pEncCtx: &mut sWelsEncCtx) {
             (INT_MULTIPLY + FRAME_CMPLX_RATIO_RANGE) as i64,
         );
 
-        let denom = (*pWelsSvcRc).iTargetBits as i64 * INT_MULTIPLY as i64;
-        (*pWelsSvcRc).iQStep = WELS_DIV_ROUND64(sTOverRc.iLinearCmplx * iCmplxRatio, denom) as i32;
-        iLumaQp = RcConvertQStep2Qp((*pWelsSvcRc).iQStep);
+        let denom = pWelsSvcRc.iTargetBits as i64 * INT_MULTIPLY as i64;
+        pWelsSvcRc.iQStep = WELS_DIV_ROUND64(sTOverRc.iLinearCmplx * iCmplxRatio, denom) as i32;
+        iLumaQp = RcConvertQStep2Qp(pWelsSvcRc.iQStep);
 
-        let mut iLastIdxCodecInVGop = (*pWelsSvcRc).iFrameCodedInVGop - 1;
+        let mut iLastIdxCodecInVGop = pWelsSvcRc.iFrameCodedInVGop - 1;
         if iLastIdxCodecInVGop < 0 {
             iLastIdxCodecInVGop += VGOP_SIZE as i32;
         }
-        let iTlLast = (*pWelsSvcRc).iTlOfFrames[iLastIdxCodecInVGop as usize] as i32;
+        let iTlLast = pWelsSvcRc.iTlOfFrames[iLastIdxCodecInVGop as usize] as i32;
         iDeltaQpTemporal = iTl as i32 - iTlLast;
         if iTlLast == 0 && iTl > 0 {
             iDeltaQpTemporal += 1;
@@ -1113,39 +1113,39 @@ pub fn RcCalculatePictureQp(pEncCtx: &mut sWelsEncCtx) {
         }
     }
 
-    (*pWelsSvcRc).iMinFrameQp = WELS_CLIP3(
-        (*pWelsSvcRc).iLastCalculatedQScale - (*pWelsSvcRc).iFrameDeltaQpLower + iDeltaQpTemporal,
+    pWelsSvcRc.iMinFrameQp = WELS_CLIP3(
+        pWelsSvcRc.iLastCalculatedQScale - pWelsSvcRc.iFrameDeltaQpLower + iDeltaQpTemporal,
         sTOverRc.iMinQp,
         sTOverRc.iMaxQp,
     );
-    (*pWelsSvcRc).iMaxFrameQp = WELS_CLIP3(
-        (*pWelsSvcRc).iLastCalculatedQScale + (*pWelsSvcRc).iFrameDeltaQpUpper + iDeltaQpTemporal,
+    pWelsSvcRc.iMaxFrameQp = WELS_CLIP3(
+        pWelsSvcRc.iLastCalculatedQScale + pWelsSvcRc.iFrameDeltaQpUpper + iDeltaQpTemporal,
         sTOverRc.iMinQp,
         sTOverRc.iMaxQp,
     );
 
-    iLumaQp = WELS_CLIP3(iLumaQp, (*pWelsSvcRc).iMinFrameQp, (*pWelsSvcRc).iMaxFrameQp);
+    iLumaQp = WELS_CLIP3(iLumaQp, pWelsSvcRc.iMinFrameQp, pWelsSvcRc.iMaxFrameQp);
 
     if bEnableAdaptiveQuant {
         iLumaQp = WELS_DIV_ROUND(
             iLumaQp * INT_MULTIPLY - iAverMotionTextureIndexToDeltaQp,
             INT_MULTIPLY,
         );
-        iLumaQp = WELS_CLIP3(iLumaQp, (*pWelsSvcRc).iMinFrameQp, (*pWelsSvcRc).iMaxFrameQp);
+        iLumaQp = WELS_CLIP3(iLumaQp, pWelsSvcRc.iMinFrameQp, pWelsSvcRc.iMaxFrameQp);
     }
 
-    (*pWelsSvcRc).iQStep = RcConvertQp2QStep(iLumaQp);
-    (*pWelsSvcRc).iLastCalculatedQScale = iLumaQp;
+    pWelsSvcRc.iQStep = RcConvertQp2QStep(iLumaQp);
+    pWelsSvcRc.iLastCalculatedQScale = iLumaQp;
     pEncCtx.iGlobalQp = iLumaQp;
 }
 
 /// Initializes slice-level GOM rate control parameters.
 pub fn GomRCInitForOneSlice(pSlice: &mut SSlice, kiBitsPerMb: i32) {
-    let pSOverRc = &mut (*pSlice).sSlicingOverRc;
-    pSOverRc.iStartMbSlice = (*pSlice).sSliceHeaderExt.sSliceHeader.iFirstMbInSlice;
-    pSOverRc.iEndMbSlice = pSOverRc.iStartMbSlice + (*pSlice).iCountMbNumInSlice - 1;
+    let pSOverRc = &mut pSlice.sSlicingOverRc;
+    pSOverRc.iStartMbSlice = pSlice.sSliceHeaderExt.sSliceHeader.iFirstMbInSlice;
+    pSOverRc.iEndMbSlice = pSOverRc.iStartMbSlice + pSlice.iCountMbNumInSlice - 1;
     pSOverRc.iTargetBitsSlice = WELS_DIV_ROUND64(
-        kiBitsPerMb as i64 * (*pSlice).iCountMbNumInSlice as i64,
+        kiBitsPerMb as i64 * pSlice.iCountMbNumInSlice as i64,
         INT_MULTIPLY as i64,
     ) as i32;
 }
@@ -1190,41 +1190,41 @@ pub fn RcDecideTargetBits(pEncCtx: &mut sWelsEncCtx) {
     let bEnableFrameSkip = pEncCtx.param().bEnableFrameSkip;
 
     let pWelsSvcRc = pEncCtx.rc_at_mut(did);
-    let sTOverRc: SRCTemporal = (*pWelsSvcRc).pTemporalOverRc[tid];
+    let sTOverRc: SRCTemporal = pWelsSvcRc.pTemporalOverRc[tid];
 
-    (*pWelsSvcRc).iCurrentBitsLevel = BITS_NORMAL;
+    pWelsSvcRc.iCurrentBitsLevel = BITS_NORMAL;
 
     if eSliceType as i32 == I_SLICE {
-        if (*pWelsSvcRc).iIdrNum != 0 {
-            (*pWelsSvcRc).iTargetBits = (*pWelsSvcRc).iBitsPerFrame * iIdrBitrateRatio / 100;
+        if pWelsSvcRc.iIdrNum != 0 {
+            pWelsSvcRc.iTargetBits = pWelsSvcRc.iBitsPerFrame * iIdrBitrateRatio / 100;
         } else {
-            (*pWelsSvcRc).iTargetBits = (*pWelsSvcRc).iBitsPerFrame * IDR_BITRATE_RATIO;
+            pWelsSvcRc.iTargetBits = pWelsSvcRc.iBitsPerFrame * IDR_BITRATE_RATIO;
         }
     } else {
-        if (*pWelsSvcRc).iRemainingWeights > sTOverRc.iTlayerWeight
-            || (fix_rc_overshoot && (*pWelsSvcRc).iRemainingWeights == sTOverRc.iTlayerWeight)
+        if pWelsSvcRc.iRemainingWeights > sTOverRc.iTlayerWeight
+            || (fix_rc_overshoot && pWelsSvcRc.iRemainingWeights == sTOverRc.iTlayerWeight)
         {
-            (*pWelsSvcRc).iTargetBits = WELS_DIV_ROUND64(
-                (*pWelsSvcRc).iRemainingBits as i64 * sTOverRc.iTlayerWeight as i64,
-                (*pWelsSvcRc).iRemainingWeights as i64,
+            pWelsSvcRc.iTargetBits = WELS_DIV_ROUND64(
+                pWelsSvcRc.iRemainingBits as i64 * sTOverRc.iTlayerWeight as i64,
+                pWelsSvcRc.iRemainingWeights as i64,
             ) as i32;
         } else {
-            (*pWelsSvcRc).iTargetBits = (*pWelsSvcRc).iRemainingBits;
+            pWelsSvcRc.iTargetBits = pWelsSvcRc.iRemainingBits;
         }
 
-        if (*pWelsSvcRc).iTargetBits <= 0
+        if pWelsSvcRc.iTargetBits <= 0
             && rc_mode == RCMode::RC_BITRATE_MODE
             && !bEnableFrameSkip
         {
-            (*pWelsSvcRc).iCurrentBitsLevel = BITS_EXCEEDED;
+            pWelsSvcRc.iCurrentBitsLevel = BITS_EXCEEDED;
         }
-        (*pWelsSvcRc).iTargetBits = WELS_CLIP3(
-            (*pWelsSvcRc).iTargetBits,
+        pWelsSvcRc.iTargetBits = WELS_CLIP3(
+            pWelsSvcRc.iTargetBits,
             sTOverRc.iMinBitsTl,
             sTOverRc.iMaxBitsTl,
         );
     }
-    (*pWelsSvcRc).iRemainingWeights -= sTOverRc.iTlayerWeight;
+    pWelsSvcRc.iRemainingWeights -= sTOverRc.iTlayerWeight;
 }
 
 /// Target bit allocation routine used under `RC_TIMESTAMP_MODE`.
@@ -1235,15 +1235,15 @@ pub fn RcDecideTargetBitsTimestamp(pEncCtx: &mut sWelsEncCtx) {
     let (pParam, pWelsSvcRc) = pEncCtx.param_and_rc_at_mut(did);
     let pDLayerParam = &pParam.sSpatialLayers[did];
     let pDLayerParamInternal = &pParam.sDependencyLayers[did];
-    let sTOverRc: SRCTemporal = (*pWelsSvcRc).pTemporalOverRc[iTl];
-    (*pWelsSvcRc).iCurrentBitsLevel = BITS_NORMAL;
+    let sTOverRc: SRCTemporal = pWelsSvcRc.pTemporalOverRc[iTl];
+    pWelsSvcRc.iCurrentBitsLevel = BITS_NORMAL;
 
-    let iBufferTh = ((*pWelsSvcRc).iBufferSizeSkip as i64 - (*pWelsSvcRc).iBufferFullnessSkip) as i32;
+    let iBufferTh = (pWelsSvcRc.iBufferSizeSkip as i64 - pWelsSvcRc.iBufferFullnessSkip) as i32;
 
     if eSliceType as i32 == I_SLICE {
         if iBufferTh <= 0 {
-            (*pWelsSvcRc).iCurrentBitsLevel = BITS_EXCEEDED;
-            (*pWelsSvcRc).iTargetBits = sTOverRc.iMinBitsTl;
+            pWelsSvcRc.iCurrentBitsLevel = BITS_EXCEEDED;
+            pWelsSvcRc.iTargetBits = sTOverRc.iMinBitsTl;
         } else {
             let iMaxTh = iBufferTh * 3 / 4;
             let iMinTh = if pDLayerParam.fFrameRate < 8.0 {
@@ -1253,19 +1253,19 @@ pub fn RcDecideTargetBitsTimestamp(pEncCtx: &mut sWelsEncCtx) {
             };
 
             if pDLayerParam.fFrameRate < (IDR_BITRATE_RATIO + 1) as f32 {
-                (*pWelsSvcRc).iTargetBits =
+                pWelsSvcRc.iTargetBits =
                     (pDLayerParam.iSpatialBitrate as f64 / pDLayerParam.fFrameRate as f64) as i32;
             } else {
-                (*pWelsSvcRc).iTargetBits = ((pDLayerParam.iSpatialBitrate as f64
+                pWelsSvcRc.iTargetBits = ((pDLayerParam.iSpatialBitrate as f64
                     / pDLayerParam.fFrameRate as f64)
                     * IDR_BITRATE_RATIO as f64) as i32;
             }
-            (*pWelsSvcRc).iTargetBits = WELS_CLIP3((*pWelsSvcRc).iTargetBits, iMinTh, iMaxTh);
+            pWelsSvcRc.iTargetBits = WELS_CLIP3(pWelsSvcRc.iTargetBits, iMinTh, iMaxTh);
         }
     } else {
         if iBufferTh <= 0 {
-            (*pWelsSvcRc).iCurrentBitsLevel = BITS_EXCEEDED;
-            (*pWelsSvcRc).iTargetBits = sTOverRc.iMinBitsTl;
+            pWelsSvcRc.iCurrentBitsLevel = BITS_EXCEEDED;
+            pWelsSvcRc.iTargetBits = sTOverRc.iMinBitsTl;
         } else {
             let kiGopSize = 1 << pDLayerParamInternal.iDecompositionStages;
             let iAverageFrameSize = if pDLayerParam.fFrameRate > 0.0 {
@@ -1274,7 +1274,7 @@ pub fn RcDecideTargetBitsTimestamp(pEncCtx: &mut sWelsEncCtx) {
                 0
             };
             let kiGopBits = iAverageFrameSize * kiGopSize;
-            (*pWelsSvcRc).iTargetBits = WELS_DIV_ROUND(
+            pWelsSvcRc.iTargetBits = WELS_DIV_ROUND(
                 sTOverRc.iTlayerWeight * kiGopBits,
                 INT_MULTIPLY * 10 * 2,
             );
@@ -1285,7 +1285,7 @@ pub fn RcDecideTargetBitsTimestamp(pEncCtx: &mut sWelsEncCtx) {
             } else {
                 (iBufferTh as f64 * 2.0 / pDLayerParam.fFrameRate as f64) as i32
             };
-            (*pWelsSvcRc).iTargetBits = WELS_CLIP3((*pWelsSvcRc).iTargetBits, iMinTh, iMaxTh);
+            pWelsSvcRc.iTargetBits = WELS_CLIP3(pWelsSvcRc.iTargetBits, iMinTh, iMaxTh);
         }
     }
 }
@@ -1315,8 +1315,8 @@ pub fn RcCalculateMbQp(
     pSOverRc: &mut crate::encoder::svc_encode_slice::SRCSlicing,
     pCurMb: &mut SMB,
 ) {
-    let did = (*pEncCtx).uiDependencyId as usize;
-    let pWelsSvcRc = (*pEncCtx).rc_at(did);
+    let did = pEncCtx.uiDependencyId as usize;
+    let pWelsSvcRc = pEncCtx.rc_at(did);
 
     let mut iLumaQp = pSOverRc.iCalculatedQpSlice;
     let pCurLayer = current_layer_expect(pEncCtx);
@@ -1324,40 +1324,40 @@ pub fn RcCalculateMbQp(
         .expect("the layer's PPS is stamped")
         .uiChromaQpIndexOffset;
 
-    if (*pEncCtx).param().bEnableAdaptiveQuant {
-        let pVaa = (*pEncCtx).vaa_expect();
+    if pEncCtx.param().bEnableAdaptiveQuant {
+        let pVaa = pEncCtx.vaa_expect();
         let delta_qp: &[i8] = &pVaa.pMotionTextureIndexToDeltaQp;
-        let mb_xy = (*pCurMb).iMbXY as usize;
+        let mb_xy = pCurMb.iMbXY as usize;
         let delta = delta_qp[mb_xy] as i32;
         iLumaQp = WELS_CLIP3(
             iLumaQp + delta,
-            (*pWelsSvcRc).iMinFrameQp,
-            (*pWelsSvcRc).iMaxFrameQp,
+            pWelsSvcRc.iMinFrameQp,
+            pWelsSvcRc.iMaxFrameQp,
         );
     }
 
-    (*pCurMb).uiChromaQp = g_kuiChromaQpTable[CLIP3_QP_0_51(iLumaQp + kuiChromaQpIndexOffset as i32)];
-    (*pCurMb).uiLumaQp = iLumaQp as u8;
+    pCurMb.uiChromaQp = g_kuiChromaQpTable[CLIP3_QP_0_51(iLumaQp + kuiChromaQpIndexOffset as i32)];
+    pCurMb.uiLumaQp = iLumaQp as u8;
 }
 
 /// Evaluates if base layer GOM statistics can be reused for inter-layer prediction.
 pub fn RcJudgeBaseUsability<'a>(pEncCtx: &'a sWelsEncCtx) -> Option<&'a SWelsSvcRc> {
-    let did = (*pEncCtx).uiDependencyId as usize;
+    let did = pEncCtx.uiDependencyId as usize;
     if did == 0 {
         return None;
     }
-    let pDlpBaseInternal = &(*pEncCtx).param().sDependencyLayers[did - 1];
-    if (*pEncCtx).uiTemporalId as i32 <= pDlpBaseInternal.iDecompositionStages {
-        let pWelsSvcRc = (*pEncCtx).rc_at(did);
-        let pWelsSvcRc_Base = (*pEncCtx).rc_at(did - 1);
-        let pDLayerParam = &(*pEncCtx).param().sSpatialLayers[did];
-        let pDlpBase = &(*pEncCtx).param().sSpatialLayers[did - 1];
+    let pDlpBaseInternal = &pEncCtx.param().sDependencyLayers[did - 1];
+    if pEncCtx.uiTemporalId as i32 <= pDlpBaseInternal.iDecompositionStages {
+        let pWelsSvcRc = pEncCtx.rc_at(did);
+        let pWelsSvcRc_Base = pEncCtx.rc_at(did - 1);
+        let pDLayerParam = &pEncCtx.param().sSpatialLayers[did];
+        let pDlpBase = &pEncCtx.param().sSpatialLayers[did - 1];
 
-        if (*pWelsSvcRc).iNumberMbGom != 0 && (*pWelsSvcRc_Base).iNumberMbGom != 0 {
+        if pWelsSvcRc.iNumberMbGom != 0 && pWelsSvcRc_Base.iNumberMbGom != 0 {
             let ratio_cur = (pDLayerParam.iVideoWidth * pDLayerParam.iVideoHeight)
-                / (*pWelsSvcRc).iNumberMbGom;
+                / pWelsSvcRc.iNumberMbGom;
             let ratio_base = (pDlpBase.iVideoWidth * pDlpBase.iVideoHeight)
-                / (*pWelsSvcRc_Base).iNumberMbGom;
+                / pWelsSvcRc_Base.iNumberMbGom;
             if ratio_cur == ratio_base {
                 return Some(pWelsSvcRc_Base);
             }
@@ -1371,11 +1371,11 @@ pub fn RcGomTargetBits(
     pEncCtx: &sWelsEncCtx,
     pSOverRc: &mut crate::encoder::svc_encode_slice::SRCSlicing,
 ) {
-    let did = (*pEncCtx).uiDependencyId as usize;
-    let pWelsSvcRc = (*pEncCtx).rc_at(did);
+    let did = pEncCtx.uiDependencyId as usize;
+    let pWelsSvcRc = pEncCtx.rc_at(did);
 
     let kiComplexityIndex = pSOverRc.iComplexityIndexSlice;
-    let iLastGomIndex = pSOverRc.iEndMbSlice / (*pWelsSvcRc).iNumberMbGom;
+    let iLastGomIndex = pSOverRc.iEndMbSlice / pWelsSvcRc.iNumberMbGom;
     let iLeftBits = pSOverRc.iTargetBitsSlice - pSOverRc.iFrameBitsSlice;
 
     if iLeftBits <= 0 {
@@ -1413,8 +1413,8 @@ pub fn RcCalculateGomQp(
     pSOverRc: &mut crate::encoder::svc_encode_slice::SRCSlicing,
     _pCurMb: &mut SMB,
 ) {
-    let did = (*pEncCtx).uiDependencyId as usize;
-    let pWelsSvcRc = (*pEncCtx).rc_at(did);
+    let did = pEncCtx.uiDependencyId as usize;
+    let pWelsSvcRc = pEncCtx.rc_at(did);
 
     let iLeftBits = (pSOverRc.iTargetBitsSlice - pSOverRc.iFrameBitsSlice) as i64;
     let iTargetLeftBits = iLeftBits + pSOverRc.iGomBitsSlice as i64 - pSOverRc.iGomTargetBits as i64;
@@ -1443,8 +1443,8 @@ pub fn RcCalculateGomQp(
     }
     pSOverRc.iCalculatedQpSlice = WELS_CLIP3(
         pSOverRc.iCalculatedQpSlice,
-        (*pWelsSvcRc).iMinFrameQp,
-        (*pWelsSvcRc).iMaxFrameQp,
+        pWelsSvcRc.iMinFrameQp,
+        pWelsSvcRc.iMaxFrameQp,
     );
     pSOverRc.iGomBitsSlice = 0;
 }
@@ -1453,36 +1453,36 @@ pub fn RcCalculateGomQp(
 pub fn RcVBufferCalculationSkip(pEncCtx: &mut sWelsEncCtx) {
     let did = pEncCtx.uiDependencyId as usize;
     let pWelsSvcRc = pEncCtx.rc_at_mut(did);
-    let pTOverRc: &mut [SRCTemporal] = &mut (*pWelsSvcRc).pTemporalOverRc;
-    let kiOutputBits = (*pWelsSvcRc).iBitsPerFrame;
-    let kiOutputMaxBits = (*pWelsSvcRc).iMaxBitsPerFrame;
+    let pTOverRc: &mut [SRCTemporal] = &mut pWelsSvcRc.pTemporalOverRc;
+    let kiOutputBits = pWelsSvcRc.iBitsPerFrame;
+    let kiOutputMaxBits = pWelsSvcRc.iMaxBitsPerFrame;
 
-    (*pWelsSvcRc).iBufferFullnessSkip +=
-        ((*pWelsSvcRc).iFrameDqBits - kiOutputBits) as i64;
-    (*pWelsSvcRc).iBufferMaxBRFullness[EVEN_TIME_WINDOW] +=
-        ((*pWelsSvcRc).iFrameDqBits - kiOutputMaxBits) as i64;
-    (*pWelsSvcRc).iBufferMaxBRFullness[ODD_TIME_WINDOW] +=
-        ((*pWelsSvcRc).iFrameDqBits - kiOutputMaxBits) as i64;
+    pWelsSvcRc.iBufferFullnessSkip +=
+        (pWelsSvcRc.iFrameDqBits - kiOutputBits) as i64;
+    pWelsSvcRc.iBufferMaxBRFullness[EVEN_TIME_WINDOW] +=
+        (pWelsSvcRc.iFrameDqBits - kiOutputMaxBits) as i64;
+    pWelsSvcRc.iBufferMaxBRFullness[ODD_TIME_WINDOW] +=
+        (pWelsSvcRc.iFrameDqBits - kiOutputMaxBits) as i64;
 
     let mut iVGopBitsPred: i64 = 0;
-    for i in ((*pWelsSvcRc).iFrameCodedInVGop + 1)..VGOP_SIZE as i32 {
-        let tid = (*pWelsSvcRc).iTlOfFrames[i as usize] as usize;
+    for i in (pWelsSvcRc.iFrameCodedInVGop + 1)..VGOP_SIZE as i32 {
+        let tid = pWelsSvcRc.iTlOfFrames[i as usize] as usize;
         iVGopBitsPred += pTOverRc[tid].iMinBitsTl as i64;
     }
-    iVGopBitsPred -= (*pWelsSvcRc).iRemainingBits as i64;
+    iVGopBitsPred -= pWelsSvcRc.iRemainingBits as i64;
 
-    let denom = (*pWelsSvcRc).iBitsPerFrame as f64 * VGOP_SIZE as f64;
+    let denom = pWelsSvcRc.iBitsPerFrame as f64 * VGOP_SIZE as f64;
     let dIncPercent = if denom > 0.0 {
         iVGopBitsPred as f64 * 100.0 / denom - VGOP_BITS_PERCENTAGE_DIFF as f64
     } else {
         0.0
     };
 
-    if ((*pWelsSvcRc).iBufferFullnessSkip > (*pWelsSvcRc).iBufferSizeSkip as i64
-        && (*pWelsSvcRc).iAverageFrameQp > (*pWelsSvcRc).iSkipQpValue)
-        || (dIncPercent > (*pWelsSvcRc).iRcVaryPercentage as f64)
+    if (pWelsSvcRc.iBufferFullnessSkip > pWelsSvcRc.iBufferSizeSkip as i64
+        && pWelsSvcRc.iAverageFrameQp > pWelsSvcRc.iSkipQpValue)
+        || (dIncPercent > pWelsSvcRc.iRcVaryPercentage as f64)
     {
-        (*pWelsSvcRc).bSkipFlag = true;
+        pWelsSvcRc.bSkipFlag = true;
     }
 }
 
@@ -1503,14 +1503,14 @@ pub extern "C" fn CheckFrameSkipBasedMaxbr(
     let iCheckWindowIntervalShift = pEncCtx.iCheckWindowIntervalShift;
     let pWelsSvcRc = pEncCtx.rc_at_mut(iDidIdx as usize);
 
-    let iSentBits = (*pWelsSvcRc).iBitsPerFrame;
-    let kiOutputMaxBits = (*pWelsSvcRc).iMaxBitsPerFrame;
+    let iSentBits = pWelsSvcRc.iBitsPerFrame;
+    let kiOutputMaxBits = pWelsSvcRc.iMaxBitsPerFrame;
 
     let iPredSkipFramesTarBr =
-        (WELS_DIV_ROUND64((*pWelsSvcRc).iBufferFullnessSkip, iSentBits as i64) as i32 + 1) >> 1;
+        (WELS_DIV_ROUND64(pWelsSvcRc.iBufferFullnessSkip, iSentBits as i64) as i32 + 1) >> 1;
     let iPredSkipFramesMaxBr = (WELS_MAX(
         WELS_DIV_ROUND64(
-            (*pWelsSvcRc).iBufferMaxBRFullness[EVEN_TIME_WINDOW],
+            pWelsSvcRc.iBufferMaxBRFullness[EVEN_TIME_WINDOW],
             kiOutputMaxBits as i64,
         ) as i32,
         0,
@@ -1526,49 +1526,49 @@ pub extern "C" fn CheckFrameSkipBasedMaxbr(
         1000,
     ) as i32;
 
-    let bJudgeBufferFullSkip = ((*pWelsSvcRc).iContinualSkipFrames <= iPredSkipFramesTarBr)
-        && ((*pWelsSvcRc).iBufferFullnessSkip > (*pWelsSvcRc).iBufferSizeSkip as i64);
+    let bJudgeBufferFullSkip = (pWelsSvcRc.iContinualSkipFrames <= iPredSkipFramesTarBr)
+        && (pWelsSvcRc.iBufferFullnessSkip > pWelsSvcRc.iBufferSizeSkip as i64);
 
-    let bJudgeMaxBRbufferFullSkip = ((*pWelsSvcRc).iContinualSkipFrames <= iPredSkipFramesMaxBr)
+    let bJudgeMaxBRbufferFullSkip = (pWelsSvcRc.iContinualSkipFrames <= iPredSkipFramesMaxBr)
         && (iCheckWindowInterval > TIME_CHECK_WINDOW / 2)
-        && ((*pWelsSvcRc).iBufferMaxBRFullness[EVEN_TIME_WINDOW]
-            + (*pWelsSvcRc).iPredFrameBit as i64
+        && (pWelsSvcRc.iBufferMaxBRFullness[EVEN_TIME_WINDOW]
+            + pWelsSvcRc.iPredFrameBit as i64
             - iAvailableBitsInTimeWindow as i64
             > 0);
 
     let mut bJudgeMaxBRbSkip = [false; TIME_WINDOW_TOTAL];
     bJudgeMaxBRbSkip[EVEN_TIME_WINDOW] = (iCheckWindowInterval > TIME_CHECK_WINDOW / 2)
-        && ((*pWelsSvcRc).bNeedShiftWindowCheck[EVEN_TIME_WINDOW])
-        && ((*pWelsSvcRc).iBufferMaxBRFullness[EVEN_TIME_WINDOW]
-            + (*pWelsSvcRc).iPredFrameBit as i64
+        && (pWelsSvcRc.bNeedShiftWindowCheck[EVEN_TIME_WINDOW])
+        && (pWelsSvcRc.iBufferMaxBRFullness[EVEN_TIME_WINDOW]
+            + pWelsSvcRc.iPredFrameBit as i64
             - iAvailableBitsInTimeWindow as i64
             + kiOutputMaxBits as i64
             > 0);
 
     bJudgeMaxBRbSkip[ODD_TIME_WINDOW] =
         (iCheckWindowIntervalShift > TIME_CHECK_WINDOW / 2)
-            && ((*pWelsSvcRc).bNeedShiftWindowCheck[ODD_TIME_WINDOW])
-            && ((*pWelsSvcRc).iBufferMaxBRFullness[ODD_TIME_WINDOW]
-                + (*pWelsSvcRc).iPredFrameBit as i64
+            && (pWelsSvcRc.bNeedShiftWindowCheck[ODD_TIME_WINDOW])
+            && (pWelsSvcRc.iBufferMaxBRFullness[ODD_TIME_WINDOW]
+                + pWelsSvcRc.iPredFrameBit as i64
                 - iAvailableBitsInShiftTimeWindow as i64
                 + kiOutputMaxBits as i64
                 > 0);
 
-    (*pWelsSvcRc).bSkipFlag = false;
+    pWelsSvcRc.bSkipFlag = false;
     if bJudgeBufferFullSkip
         || bJudgeMaxBRbufferFullSkip
         || bJudgeMaxBRbSkip[EVEN_TIME_WINDOW]
         || bJudgeMaxBRbSkip[ODD_TIME_WINDOW]
     {
-        (*pWelsSvcRc).bSkipFlag = true;
+        pWelsSvcRc.bSkipFlag = true;
         if !fix_rc_overshoot {
-            (*pWelsSvcRc).iSkipFrameNum += 1;
-            (*pWelsSvcRc).iSkipFrameInVGop += 1;
-            (*pWelsSvcRc).iBufferFullnessSkip -= iSentBits as i64;
-            (*pWelsSvcRc).iRemainingBits += iSentBits;
-            (*pWelsSvcRc).iBufferMaxBRFullness[EVEN_TIME_WINDOW] -= kiOutputMaxBits as i64;
-            (*pWelsSvcRc).iBufferMaxBRFullness[ODD_TIME_WINDOW] -= kiOutputMaxBits as i64;
-            (*pWelsSvcRc).iBufferFullnessSkip = WELS_MAX((*pWelsSvcRc).iBufferFullnessSkip, 0);
+            pWelsSvcRc.iSkipFrameNum += 1;
+            pWelsSvcRc.iSkipFrameInVGop += 1;
+            pWelsSvcRc.iBufferFullnessSkip -= iSentBits as i64;
+            pWelsSvcRc.iRemainingBits += iSentBits;
+            pWelsSvcRc.iBufferMaxBRFullness[EVEN_TIME_WINDOW] -= kiOutputMaxBits as i64;
+            pWelsSvcRc.iBufferMaxBRFullness[ODD_TIME_WINDOW] -= kiOutputMaxBits as i64;
+            pWelsSvcRc.iBufferFullnessSkip = WELS_MAX(pWelsSvcRc.iBufferFullnessSkip, 0);
         }
     }
 }
@@ -1605,9 +1605,9 @@ pub fn WelsRcCheckFrameStatus(
 
         if bSkipMustFlag {
             let pRc = pEncCtx.rc_at_mut(iDidIdx as usize);
-            (*pRc).uiLastTimeStamp = uiTimeStamp;
-            (*pRc).bSkipFlag = false;
-            (*pRc).iContinualSkipFrames += 1;
+            pRc.uiLastTimeStamp = uiTimeStamp;
+            pRc.bSkipFlag = false;
+            pRc.iContinualSkipFrames += 1;
             return true;
         }
     } else {
@@ -1640,9 +1640,9 @@ pub fn WelsRcCheckFrameStatus(
             for i in 0..iSpatialNum as usize {
                 let iDidIdx = pEncCtx.sSpatialIndexMap[i].iDid;
                 let pRc = pEncCtx.rc_at_mut(iDidIdx as usize);
-                (*pRc).uiLastTimeStamp = uiTimeStamp;
-                (*pRc).bSkipFlag = false;
-                (*pRc).iContinualSkipFrames += 1;
+                pRc.uiLastTimeStamp = uiTimeStamp;
+                pRc.bSkipFlag = false;
+                pRc.iContinualSkipFrames += 1;
             }
             return true;
         }
@@ -1653,18 +1653,18 @@ pub fn WelsRcCheckFrameStatus(
 /// Adjusts virtual buffer fullness and bit quotas when a frame is skipped.
 pub extern "C" fn UpdateBufferWhenFrameSkipped(pEncCtx: &mut sWelsEncCtx, iCurDid: i32) {
     let pWelsSvcRc = pEncCtx.rc_at_mut(iCurDid as usize);
-    let kiOutputBits = (*pWelsSvcRc).iBitsPerFrame;
-    let kiOutputMaxBits = (*pWelsSvcRc).iMaxBitsPerFrame;
+    let kiOutputBits = pWelsSvcRc.iBitsPerFrame;
+    let kiOutputMaxBits = pWelsSvcRc.iMaxBitsPerFrame;
 
-    (*pWelsSvcRc).iBufferFullnessSkip -= kiOutputBits as i64;
-    (*pWelsSvcRc).iBufferMaxBRFullness[EVEN_TIME_WINDOW] -= kiOutputMaxBits as i64;
-    (*pWelsSvcRc).iBufferMaxBRFullness[ODD_TIME_WINDOW] -= kiOutputMaxBits as i64;
+    pWelsSvcRc.iBufferFullnessSkip -= kiOutputBits as i64;
+    pWelsSvcRc.iBufferMaxBRFullness[EVEN_TIME_WINDOW] -= kiOutputMaxBits as i64;
+    pWelsSvcRc.iBufferMaxBRFullness[ODD_TIME_WINDOW] -= kiOutputMaxBits as i64;
 
-    (*pWelsSvcRc).iBufferFullnessSkip = WELS_MAX((*pWelsSvcRc).iBufferFullnessSkip, 0);
+    pWelsSvcRc.iBufferFullnessSkip = WELS_MAX(pWelsSvcRc.iBufferFullnessSkip, 0);
 
-    (*pWelsSvcRc).iRemainingBits += kiOutputBits;
-    (*pWelsSvcRc).iSkipFrameNum += 1;
-    (*pWelsSvcRc).iSkipFrameInVGop += 1;
+    pWelsSvcRc.iRemainingBits += kiOutputBits;
+    pWelsSvcRc.iSkipFrameNum += 1;
+    pWelsSvcRc.iSkipFrameInVGop += 1;
     if crate::encoder::dump_enabled(&RC_DUMP, "OH264_RCDUMP") {
         let r = &*pWelsSvcRc;
         eprintln!(
@@ -1689,11 +1689,11 @@ pub extern "C" fn UpdateMaxBrCheckWindowStatus(
         for i in 0..iSpatialNum as usize {
             let iCurDid = pEncCtx.sSpatialIndexMap[i].iDid as usize;
             let pRc = pEncCtx.rc_at_mut(iCurDid);
-            (*pRc).iBufferFullnessSkip = 0;
-            (*pRc).iBufferMaxBRFullness[ODD_TIME_WINDOW] = 0;
-            (*pRc).iBufferMaxBRFullness[EVEN_TIME_WINDOW] = 0;
-            (*pRc).bNeedShiftWindowCheck[ODD_TIME_WINDOW] = false;
-            (*pRc).bNeedShiftWindowCheck[EVEN_TIME_WINDOW] = false;
+            pRc.iBufferFullnessSkip = 0;
+            pRc.iBufferMaxBRFullness[ODD_TIME_WINDOW] = 0;
+            pRc.iBufferMaxBRFullness[EVEN_TIME_WINDOW] = 0;
+            pRc.bNeedShiftWindowCheck[ODD_TIME_WINDOW] = false;
+            pRc.bNeedShiftWindowCheck[EVEN_TIME_WINDOW] = false;
         }
     }
 
@@ -1707,14 +1707,14 @@ pub extern "C" fn UpdateMaxBrCheckWindowStatus(
         for i in 0..iSpatialNum as usize {
             let iCurDid = pEncCtx.sSpatialIndexMap[i].iDid as usize;
             let pRc = pEncCtx.rc_at_mut(iCurDid);
-            if (*pRc).iBufferMaxBRFullness[ODD_TIME_WINDOW] > 0
-                && (*pRc).iBufferMaxBRFullness[ODD_TIME_WINDOW] != (*pRc).iBufferMaxBRFullness[0]
+            if pRc.iBufferMaxBRFullness[ODD_TIME_WINDOW] > 0
+                && pRc.iBufferMaxBRFullness[ODD_TIME_WINDOW] != pRc.iBufferMaxBRFullness[0]
             {
-                (*pRc).bNeedShiftWindowCheck[EVEN_TIME_WINDOW] = true;
+                pRc.bNeedShiftWindowCheck[EVEN_TIME_WINDOW] = true;
             } else {
-                (*pRc).bNeedShiftWindowCheck[EVEN_TIME_WINDOW] = false;
+                pRc.bNeedShiftWindowCheck[EVEN_TIME_WINDOW] = false;
             }
-            (*pRc).iBufferMaxBRFullness[ODD_TIME_WINDOW] = 0;
+            pRc.iBufferMaxBRFullness[ODD_TIME_WINDOW] = 0;
         }
     }
 
@@ -1733,12 +1733,12 @@ pub extern "C" fn UpdateMaxBrCheckWindowStatus(
         for i in 0..iSpatialNum as usize {
             let iCurDid = pEncCtx.sSpatialIndexMap[i].iDid as usize;
             let pRc = pEncCtx.rc_at_mut(iCurDid);
-            if (*pRc).iBufferMaxBRFullness[EVEN_TIME_WINDOW] > 0 {
-                (*pRc).bNeedShiftWindowCheck[ODD_TIME_WINDOW] = true;
+            if pRc.iBufferMaxBRFullness[EVEN_TIME_WINDOW] > 0 {
+                pRc.bNeedShiftWindowCheck[ODD_TIME_WINDOW] = true;
             } else {
-                (*pRc).bNeedShiftWindowCheck[ODD_TIME_WINDOW] = false;
+                pRc.bNeedShiftWindowCheck[ODD_TIME_WINDOW] = false;
             }
-            (*pRc).iBufferMaxBRFullness[EVEN_TIME_WINDOW] = 0;
+            pRc.iBufferMaxBRFullness[EVEN_TIME_WINDOW] = 0;
         }
     }
 }
@@ -1761,20 +1761,20 @@ pub fn WelsRcPostFrameSkippedUpdate(_pCtx: &mut sWelsEncCtx, _iDid: i32) {}
 pub fn RcVBufferCalculationPadding(pEncCtx: &mut sWelsEncCtx) {
     let did = pEncCtx.uiDependencyId as usize;
     let pWelsSvcRc = pEncCtx.rc_at_mut(did);
-    let kiOutputBits = (*pWelsSvcRc).iBitsPerFrame;
+    let kiOutputBits = pWelsSvcRc.iBitsPerFrame;
     let kiBufferThreshold = WELS_DIV_ROUND(
-        PADDING_THRESHOLD * (-(*pWelsSvcRc).iBufferSizePadding),
+        PADDING_THRESHOLD * (-pWelsSvcRc.iBufferSizePadding),
         INT_MULTIPLY,
     );
 
-    (*pWelsSvcRc).iBufferFullnessPadding += (*pWelsSvcRc).iFrameDqBits - kiOutputBits;
+    pWelsSvcRc.iBufferFullnessPadding += pWelsSvcRc.iFrameDqBits - kiOutputBits;
 
-    if (*pWelsSvcRc).iBufferFullnessPadding < kiBufferThreshold {
-        (*pWelsSvcRc).iPaddingSize = -(*pWelsSvcRc).iBufferFullnessPadding;
-        (*pWelsSvcRc).iPaddingSize >>= 3;
-        (*pWelsSvcRc).iBufferFullnessPadding = 0;
+    if pWelsSvcRc.iBufferFullnessPadding < kiBufferThreshold {
+        pWelsSvcRc.iPaddingSize = -pWelsSvcRc.iBufferFullnessPadding;
+        pWelsSvcRc.iPaddingSize >>= 3;
+        pWelsSvcRc.iBufferFullnessPadding = 0;
     } else {
-        (*pWelsSvcRc).iPaddingSize = 0;
+        pWelsSvcRc.iPaddingSize = 0;
     }
 }
 
@@ -1782,13 +1782,13 @@ pub fn RcVBufferCalculationPadding(pEncCtx: &mut sWelsEncCtx) {
 pub fn RcTraceFrameBits(pEncCtx: &mut sWelsEncCtx, _uiTimeStamp: i64, _iFrameSize: i32) {
     let did = pEncCtx.uiDependencyId as usize;
     let pWelsSvcRc = pEncCtx.rc_at_mut(did);
-    if (*pWelsSvcRc).iPredFrameBit != 0 {
-        (*pWelsSvcRc).iPredFrameBit = (LAST_FRAME_PREDICT_WEIGHT
+    if pWelsSvcRc.iPredFrameBit != 0 {
+        pWelsSvcRc.iPredFrameBit = (LAST_FRAME_PREDICT_WEIGHT
             * (*pWelsSvcRc).iFrameDqBits as f64
-            + (1.0 - LAST_FRAME_PREDICT_WEIGHT) * (*pWelsSvcRc).iPredFrameBit as f64)
+            + (1.0 - LAST_FRAME_PREDICT_WEIGHT) * pWelsSvcRc.iPredFrameBit as f64)
             as i32;
     } else {
-        (*pWelsSvcRc).iPredFrameBit = (*pWelsSvcRc).iFrameDqBits;
+        pWelsSvcRc.iPredFrameBit = pWelsSvcRc.iFrameDqBits;
     }
 }
 
@@ -1813,22 +1813,22 @@ pub fn RcUpdatePictureQpBits(pEncCtx: &mut sWelsEncCtx, iCodedBits: i32) {
             iTotalMb += pSOverRc.iTotalMbSlice;
         }
         if iTotalMb > 0 {
-            (*pWelsSvcRc).iAverageFrameQp = WELS_DIV_ROUND(
+            pWelsSvcRc.iAverageFrameQp = WELS_DIV_ROUND(
                 INT_MULTIPLY * iTotalQp,
                 iTotalMb * INT_MULTIPLY,
             );
         } else {
-            (*pWelsSvcRc).iAverageFrameQp = iGlobalQp;
+            pWelsSvcRc.iAverageFrameQp = iGlobalQp;
         }
     } else {
-        (*pWelsSvcRc).iAverageFrameQp = iGlobalQp;
+        pWelsSvcRc.iAverageFrameQp = iGlobalQp;
     }
 
-    (*pWelsSvcRc).iFrameDqBits = iCodedBits;
-    (*pWelsSvcRc).iLastCalculatedQScale = (*pWelsSvcRc).iAverageFrameQp;
+    pWelsSvcRc.iFrameDqBits = iCodedBits;
+    pWelsSvcRc.iLastCalculatedQScale = pWelsSvcRc.iAverageFrameQp;
 
-    let iFrameDqBits = (*pWelsSvcRc).iFrameDqBits;
-    (*pWelsSvcRc).pTemporalOverRc[tid].iGopBitsDq += iFrameDqBits;
+    let iFrameDqBits = pWelsSvcRc.iFrameDqBits;
+    pWelsSvcRc.pTemporalOverRc[tid].iGopBitsDq += iFrameDqBits;
 }
 
 /// Updates the exponential moving average of Intra frame complexity.
@@ -1839,29 +1839,29 @@ pub fn RcUpdateIntraComplexity(pEncCtx: &mut sWelsEncCtx) {
         iFrameComplexity = pEncCtx.vaa_ext_screen_frame_complexity();
     }
     let pWelsSvcRc = pEncCtx.rc_at_mut(did);
-    let iQStep = RcConvertQp2QStep((*pWelsSvcRc).iAverageFrameQp);
-    let iIntraCmplx = iQStep as i64 * (*pWelsSvcRc).iFrameDqBits as i64;
+    let iQStep = RcConvertQp2QStep(pWelsSvcRc.iAverageFrameQp);
+    let iIntraCmplx = iQStep as i64 * pWelsSvcRc.iFrameDqBits as i64;
 
-    if (*pWelsSvcRc).iIdrNum == 0 {
-        (*pWelsSvcRc).iIntraComplexity = iIntraCmplx;
-        (*pWelsSvcRc).iIntraComplxMean = iFrameComplexity;
+    if pWelsSvcRc.iIdrNum == 0 {
+        pWelsSvcRc.iIntraComplexity = iIntraCmplx;
+        pWelsSvcRc.iIntraComplxMean = iFrameComplexity;
     } else {
-        (*pWelsSvcRc).iIntraComplexity = WELS_DIV_ROUND64(
-            LINEAR_MODEL_DECAY_FACTOR as i64 * (*pWelsSvcRc).iIntraComplexity
+        pWelsSvcRc.iIntraComplexity = WELS_DIV_ROUND64(
+            LINEAR_MODEL_DECAY_FACTOR as i64 * pWelsSvcRc.iIntraComplexity
                 + (INT_MULTIPLY - LINEAR_MODEL_DECAY_FACTOR) as i64 * iIntraCmplx,
             INT_MULTIPLY as i64,
         );
-        (*pWelsSvcRc).iIntraComplxMean = WELS_DIV_ROUND64(
-            LINEAR_MODEL_DECAY_FACTOR as i64 * (*pWelsSvcRc).iIntraComplxMean
+        pWelsSvcRc.iIntraComplxMean = WELS_DIV_ROUND64(
+            LINEAR_MODEL_DECAY_FACTOR as i64 * pWelsSvcRc.iIntraComplxMean
                 + (INT_MULTIPLY - LINEAR_MODEL_DECAY_FACTOR) as i64 * iFrameComplexity,
             INT_MULTIPLY as i64,
         );
     }
 
-    (*pWelsSvcRc).iIntraMbCount = (*pWelsSvcRc).iNumberMbFrame;
-    (*pWelsSvcRc).iIdrNum += 1;
-    if (*pWelsSvcRc).iIdrNum > 255 {
-        (*pWelsSvcRc).iIdrNum = 255;
+    pWelsSvcRc.iIntraMbCount = pWelsSvcRc.iNumberMbFrame;
+    pWelsSvcRc.iIdrNum += 1;
+    if pWelsSvcRc.iIdrNum > 255 {
+        pWelsSvcRc.iIdrNum = 255;
     }
 }
 
@@ -1875,9 +1875,9 @@ pub fn RcUpdateFrameComplexity(pEncCtx: &mut sWelsEncCtx) {
     }
 
     let pWelsSvcRc = pEncCtx.rc_at_mut(did);
-    let iQStep = RcConvertQp2QStep((*pWelsSvcRc).iAverageFrameQp);
-    let iFrameDqBits = (*pWelsSvcRc).iFrameDqBits;
-    let pTOverRc: &mut [SRCTemporal] = &mut (*pWelsSvcRc).pTemporalOverRc;
+    let iQStep = RcConvertQp2QStep(pWelsSvcRc.iAverageFrameQp);
+    let iFrameDqBits = pWelsSvcRc.iFrameDqBits;
+    let pTOverRc: &mut [SRCTemporal] = &mut pWelsSvcRc.pTemporalOverRc;
 
     if pTOverRc[kiTl].iPFrameNum == 0 {
         pTOverRc[kiTl].iLinearCmplx = iFrameDqBits as i64 * iQStep as i64;
@@ -2079,24 +2079,24 @@ pub extern "C" fn WelsRcMbInitGom(
     pSlice: &mut SSlice,
     pCtxOutBs: Option<&crate::encoder::vlc_encoder::BsWriter>,
 ) {
-    let did = (*pEncCtx).uiDependencyId as usize;
-    let pWelsSvcRc = (*pEncCtx).rc_at(did);
-    let pSOverRc = &mut (*pSlice).sSlicingOverRc;
+    let did = pEncCtx.uiDependencyId as usize;
+    let pWelsSvcRc = pEncCtx.rc_at(did);
+    let pSOverRc = &mut pSlice.sSlicingOverRc;
     let pCurLayer = current_layer_expect(pEncCtx);
     let kuiChromaQpIndexOffset = layer_pps_ref(pEncCtx, pCurLayer)
         .expect("the layer's PPS is stamped")
         .uiChromaQpIndexOffset;
 
-    pSOverRc.iBsPosSlice = (*pEncCtx).func_list().eEntropyCoder.GetBsPosition(
+    pSOverRc.iBsPosSlice = pEncCtx.func_list().eEntropyCoder.GetBsPosition(
         crate::encoder::svc_encode_slice::slice_bs_writer_ref(&pSlice.sSliceBs, pCtxOutBs),
         &pSlice.sCabacCtx,
     );
 
-    if (*pWelsSvcRc).bEnableGomQp != 0 {
-        if (*pWelsSvcRc).iNumberMbGom != 0
-            && ((*pCurMb).iMbXY % (*pWelsSvcRc).iNumberMbGom == 0)
+    if pWelsSvcRc.bEnableGomQp != 0 {
+        if pWelsSvcRc.iNumberMbGom != 0
+            && (pCurMb.iMbXY % pWelsSvcRc.iNumberMbGom == 0)
         {
-            if (*pCurMb).iMbXY != pSOverRc.iStartMbSlice {
+            if pCurMb.iMbXY != pSOverRc.iStartMbSlice {
                 pSOverRc.iComplexityIndexSlice += 1;
                 RcCalculateGomQp(pEncCtx, &mut *pSOverRc, pCurMb);
             }
@@ -2104,16 +2104,16 @@ pub extern "C" fn WelsRcMbInitGom(
         }
         RcCalculateMbQp(pEncCtx, &mut *pSOverRc, pCurMb);
     } else {
-        (*pCurMb).uiLumaQp = (*pEncCtx).iGlobalQp as u8;
-        (*pCurMb).uiChromaQp = g_kuiChromaQpTable
-            [CLIP3_QP_0_51((*pCurMb).uiLumaQp as i32 + kuiChromaQpIndexOffset as i32)];
+        pCurMb.uiLumaQp = pEncCtx.iGlobalQp as u8;
+        pCurMb.uiChromaQp = g_kuiChromaQpTable
+            [CLIP3_QP_0_51(pCurMb.uiLumaQp as i32 + kuiChromaQpIndexOffset as i32)];
     }
     if crate::encoder::dump_enabled(&RC_MB_DUMP, "OH264_RCMBDUMP") {
         eprintln!(
             "RCMB xy={} lq={} cq={} cqs={} cis={} gtb={} tbs={} fbs={} gbs={} bps={} minfq={} maxfq={}",
-            (*pCurMb).iMbXY,
-            (*pCurMb).uiLumaQp,
-            (*pCurMb).uiChromaQp,
+            pCurMb.iMbXY,
+            pCurMb.uiLumaQp,
+            pCurMb.uiChromaQp,
             pSOverRc.iCalculatedQpSlice,
             pSOverRc.iComplexityIndexSlice,
             pSOverRc.iGomTargetBits,
@@ -2121,8 +2121,8 @@ pub extern "C" fn WelsRcMbInitGom(
             pSOverRc.iFrameBitsSlice,
             pSOverRc.iGomBitsSlice,
             pSOverRc.iBsPosSlice,
-            (*pWelsSvcRc).iMinFrameQp,
-            (*pWelsSvcRc).iMaxFrameQp
+            pWelsSvcRc.iMinFrameQp,
+            pWelsSvcRc.iMaxFrameQp
         );
     }
 }
@@ -2134,11 +2134,11 @@ pub extern "C" fn WelsRcMbInfoUpdateGom(
     pSlice: &mut SSlice,
     pCtxOutBs: Option<&crate::encoder::vlc_encoder::BsWriter>,
 ) {
-    let did = (*pEncCtx).uiDependencyId as usize;
-    let pWelsSvcRc = (*pEncCtx).rc_at(did);
-    let pSOverRc = &mut (*pSlice).sSlicingOverRc;
+    let did = pEncCtx.uiDependencyId as usize;
+    let pWelsSvcRc = pEncCtx.rc_at(did);
+    let pSOverRc = &mut pSlice.sSlicingOverRc;
 
-    let cur_bs = (*pEncCtx).func_list().eEntropyCoder.GetBsPosition(
+    let cur_bs = pEncCtx.func_list().eEntropyCoder.GetBsPosition(
         crate::encoder::svc_encode_slice::slice_bs_writer_ref(&pSlice.sSliceBs, pCtxOutBs),
         &pSlice.sCabacCtx,
     );
@@ -2147,7 +2147,7 @@ pub extern "C" fn WelsRcMbInfoUpdateGom(
     pSOverRc.iGomBitsSlice += iCurMbBits;
 
     if iCurMbBits > 0 {
-        pSOverRc.iTotalQpSlice += (*pCurMb).uiLumaQp as i32;
+        pSOverRc.iTotalQpSlice += pCurMb.uiLumaQp as i32;
         pSOverRc.iTotalMbSlice += 1;
     }
 }
@@ -2189,30 +2189,30 @@ pub extern "C" fn WelsRcMbInitDisable(
     _pSlice: &mut SSlice,
     _pCtxOutBs: Option<&crate::encoder::vlc_encoder::BsWriter>,
 ) {
-    let mut iLumaQp = (*pEncCtx).iGlobalQp;
-    let did = (*pEncCtx).uiDependencyId as usize;
-    let pWelsSvcRc = (*pEncCtx).rc_at(did);
+    let mut iLumaQp = pEncCtx.iGlobalQp;
+    let did = pEncCtx.uiDependencyId as usize;
+    let pWelsSvcRc = pEncCtx.rc_at(did);
     let pCurLayer = current_layer_expect(pEncCtx);
     let kuiChromaQpIndexOffset = layer_pps_ref(pEncCtx, pCurLayer)
         .expect("the layer's PPS is stamped")
         .uiChromaQpIndexOffset;
 
-    if (*pEncCtx).param().bEnableAdaptiveQuant && (*pEncCtx).eSliceType as i32 == P_SLICE {
-        let pVaa = (*pEncCtx).vaa_expect();
+    if pEncCtx.param().bEnableAdaptiveQuant && pEncCtx.eSliceType as i32 == P_SLICE {
+        let pVaa = pEncCtx.vaa_expect();
         let delta_qp: &[i8] = &pVaa.pMotionTextureIndexToDeltaQp;
-        let mb_xy = (*pCurMb).iMbXY as usize;
+        let mb_xy = pCurMb.iMbXY as usize;
         let delta = delta_qp[mb_xy] as i32;
         iLumaQp = WELS_CLIP3(
             iLumaQp + delta,
-            (*pWelsSvcRc).iMinQp,
-            (*pWelsSvcRc).iMaxQp,
+            pWelsSvcRc.iMinQp,
+            pWelsSvcRc.iMaxQp,
         );
     } else {
         iLumaQp = WELS_CLIP3(iLumaQp, 0, 51);
     }
 
-    (*pCurMb).uiChromaQp = g_kuiChromaQpTable[CLIP3_QP_0_51(iLumaQp + kuiChromaQpIndexOffset as i32)];
-    (*pCurMb).uiLumaQp = iLumaQp as u8;
+    pCurMb.uiChromaQp = g_kuiChromaQpTable[CLIP3_QP_0_51(iLumaQp + kuiChromaQpIndexOffset as i32)];
+    pCurMb.uiLumaQp = iLumaQp as u8;
 }
 
 /// Intentional no-op macroblock-level RC update callback when rate control is disabled.
@@ -2248,9 +2248,9 @@ pub extern "C" fn WelRcPictureInitBufferBasedQp(
     pEncCtx.iGlobalQp = WELS_CLIP3(pEncCtx.iGlobalQp, iMinQp, rcMaxQp);
     let iGlobalQp = pEncCtx.iGlobalQp;
     let pWelsSvcRc = pEncCtx.rc_at_mut(did);
-    (*pWelsSvcRc).iAverageFrameQp = iGlobalQp;
-    (*pWelsSvcRc).iMaxFrameQp = iGlobalQp;
-    (*pWelsSvcRc).iMinFrameQp = iGlobalQp;
+    pWelsSvcRc.iAverageFrameQp = iGlobalQp;
+    pWelsSvcRc.iMaxFrameQp = iGlobalQp;
+    pWelsSvcRc.iMinFrameQp = iGlobalQp;
 }
 
 pub extern "C" fn WelRcPictureInitScc(pEncCtx: &mut sWelsEncCtx, uiTimeStamp: i64) {
@@ -2349,7 +2349,7 @@ pub extern "C" fn WelsRcPictureInfoUpdateScc(pEncCtx: &mut sWelsEncCtx, iNalSize
     let eSliceType = pEncCtx.eSliceType;
     let screen_cmplx = pEncCtx.vaa_ext_screen_frame_complexity();
     let pWelsSvcRc = pEncCtx.rc_at_mut(did);
-    (*pWelsSvcRc).iBufferFullnessSkip += iFrameBits as i64;
+    pWelsSvcRc.iBufferFullnessSkip += iFrameBits as i64;
     let iCost2Bits = if screen_cmplx != 0 {
         WELS_DIV_ROUND64(iFrameBits as i64 * iQstep as i64, screen_cmplx)
     } else {
@@ -2357,13 +2357,13 @@ pub extern "C" fn WelsRcPictureInfoUpdateScc(pEncCtx: &mut sWelsEncCtx, iNalSize
     };
 
     if eSliceType as i32 == P_SLICE {
-        (*pWelsSvcRc).iAvgCost2Bits = WELS_DIV_ROUND64(
-            95 * (*pWelsSvcRc).iAvgCost2Bits + 5 * iCost2Bits,
+        pWelsSvcRc.iAvgCost2Bits = WELS_DIV_ROUND64(
+            95 * pWelsSvcRc.iAvgCost2Bits + 5 * iCost2Bits,
             INT_MULTIPLY as i64,
         );
     } else {
-        (*pWelsSvcRc).iCost2BitsIntra = WELS_DIV_ROUND64(
-            90 * (*pWelsSvcRc).iCost2BitsIntra + 10 * iCost2Bits,
+        pWelsSvcRc.iCost2BitsIntra = WELS_DIV_ROUND64(
+            90 * pWelsSvcRc.iCost2BitsIntra + 10 * iCost2Bits,
             INT_MULTIPLY as i64,
         );
     }
@@ -2374,11 +2374,11 @@ pub extern "C" fn WelsRcMbInitScc(
     pCurMb: &mut SMB,
     _pSlice: &mut SSlice,
 ) {
-    (*pCurMb).uiLumaQp = pEncCtx.iGlobalQp as u8;
+    pCurMb.uiLumaQp = pEncCtx.iGlobalQp as u8;
     let offset = ctx_pps_ref(pEncCtx)
         .expect("the context's PPS is stamped")
         .uiChromaQpIndexOffset as i32;
-    (*pCurMb).uiChromaQp = g_kuiChromaQpTable[CLIP3_QP_0_51((*pCurMb).uiLumaQp as i32 + offset)];
+    pCurMb.uiChromaQp = g_kuiChromaQpTable[CLIP3_QP_0_51(pCurMb.uiLumaQp as i32 + offset)];
 }
 
 pub extern "C" fn WelsRcFrameDelayJudgeTimeStamp(
@@ -2391,10 +2391,10 @@ pub extern "C" fn WelsRcFrameDelayJudgeTimeStamp(
     let pDLayerConfig = &pParam.sSpatialLayers[iDidIdx as usize];
 
     let iBitRate = pDLayerConfig.iSpatialBitrate;
-    let mut iEncTimeInv = if (*pWelsSvcRc).uiLastTimeStamp == 0 {
+    let mut iEncTimeInv = if pWelsSvcRc.uiLastTimeStamp == 0 {
         0
     } else {
-        (uiTimeStamp - (*pWelsSvcRc).uiLastTimeStamp) as i32
+        (uiTimeStamp - pWelsSvcRc.uiLastTimeStamp) as i32
     };
     if iEncTimeInv < 0 || iEncTimeInv > 1000 {
         iEncTimeInv = if pDLayerConfig.fFrameRate > 0.0 {
@@ -2402,34 +2402,34 @@ pub extern "C" fn WelsRcFrameDelayJudgeTimeStamp(
         } else {
             0
         };
-        (*pWelsSvcRc).uiLastTimeStamp = uiTimeStamp - iEncTimeInv as i64;
+        pWelsSvcRc.uiLastTimeStamp = uiTimeStamp - iEncTimeInv as i64;
     }
     let mut iSentBits = (iBitRate as f64 * iEncTimeInv as f64 * 1.0e-3 + 0.5) as i32;
     iSentBits = WELS_MAX(iSentBits, 0);
 
-    (*pWelsSvcRc).iBufferSizeSkip = WELS_DIV_ROUND(
-        pDLayerConfig.iSpatialBitrate * (*pWelsSvcRc).iSkipBufferRatio,
+    pWelsSvcRc.iBufferSizeSkip = WELS_DIV_ROUND(
+        pDLayerConfig.iSpatialBitrate * pWelsSvcRc.iSkipBufferRatio,
         INT_MULTIPLY,
     );
-    (*pWelsSvcRc).iBufferSizePadding = WELS_DIV_ROUND(
+    pWelsSvcRc.iBufferSizePadding = WELS_DIV_ROUND(
         pDLayerConfig.iSpatialBitrate * PADDING_BUFFER_RATIO,
         INT_MULTIPLY,
     );
 
-    (*pWelsSvcRc).iBufferFullnessSkip -= iSentBits as i64;
-    (*pWelsSvcRc).iBufferFullnessSkip = WELS_MAX(
+    pWelsSvcRc.iBufferFullnessSkip -= iSentBits as i64;
+    pWelsSvcRc.iBufferFullnessSkip = WELS_MAX(
         (-1i64) * (pDLayerConfig.iSpatialBitrate as i64 / 4),
-        (*pWelsSvcRc).iBufferFullnessSkip,
+        pWelsSvcRc.iBufferFullnessSkip,
     );
 
     if bEnableFrameSkip {
-        (*pWelsSvcRc).bSkipFlag = true;
-        if (*pWelsSvcRc).iBufferFullnessSkip < (*pWelsSvcRc).iBufferSizeSkip as i64 {
-            (*pWelsSvcRc).bSkipFlag = false;
+        pWelsSvcRc.bSkipFlag = true;
+        if pWelsSvcRc.iBufferFullnessSkip < pWelsSvcRc.iBufferSizeSkip as i64 {
+            pWelsSvcRc.bSkipFlag = false;
         }
-        if (*pWelsSvcRc).bSkipFlag {
-            (*pWelsSvcRc).iSkipFrameNum += 1;
-            (*pWelsSvcRc).uiLastTimeStamp = uiTimeStamp;
+        if pWelsSvcRc.bSkipFlag {
+            pWelsSvcRc.iSkipFrameNum += 1;
+            pWelsSvcRc.uiLastTimeStamp = uiTimeStamp;
         }
     }
 }

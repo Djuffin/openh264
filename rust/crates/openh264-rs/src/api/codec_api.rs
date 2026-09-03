@@ -3099,48 +3099,48 @@ fn BufferingReadyPicture(
     _ppDst: &mut [*mut u8; 3],
     pDstInfo: &mut SBufferInfo,
 ) {
-    if (*pDstInfo).iBufferStatus == 0 {
+    if pDstInfo.iBufferStatus == 0 {
         return;
     }
     if let Some(sps) =
-        crate::decoder::decoder_context::active_sps(&(*pCtx).sSpsPpsCtx, (*pCtx).active_sps)
+        crate::decoder::decoder_context::active_sps(&pCtx.sSpsPpsCtx, pCtx.active_sps)
     {
-        (*pCtx).bIsBaseline = sps.uiProfileIdc == 66 || sps.uiProfileIdc == 83;
+        pCtx.bIsBaseline = sps.uiProfileIdc == 66 || sps.uiProfileIdc == 83;
     }
-    if !(*pCtx).bIsBaseline {
+    if !pCtx.bIsBaseline {
         if slice_header_of(&*pCtx)
             .is_some_and(|sh| sh.eSliceType == crate::decoder::slice::EWelsSliceType::B_SLICE)
         {
-            (*pCtx).pPictReoderingStatus.bHasBSlice = true;
+            pCtx.pPictReoderingStatus.bHasBSlice = true;
         }
     }
     for i in 0..16usize {
-        if (*pCtx).pPictInfoList[i].iPOC == crate::decoder::decoder_context::IMinInt32 {
-            (*pCtx).pPictInfoList[i].sBufferInfo = *pDstInfo;
-            (*pCtx).pPictInfoList[i].iPOC =
+        if pCtx.pPictInfoList[i].iPOC == crate::decoder::decoder_context::IMinInt32 {
+            pCtx.pPictInfoList[i].sBufferInfo = *pDstInfo;
+            pCtx.pPictInfoList[i].iPOC =
                 slice_header_of(&*pCtx).map_or(0, |sh| sh.iPicOrderCntLsb);
-            (*pCtx).pPictInfoList[i].iSeqNum = (*pCtx).iSeqNum;
-            (*pCtx).pPictInfoList[i].uiDecodingTimeStamp = (*pCtx).uiDecodingTimeStamp;
+            pCtx.pPictInfoList[i].iSeqNum = pCtx.iSeqNum;
+            pCtx.pPictInfoList[i].uiDecodingTimeStamp = pCtx.uiDecodingTimeStamp;
             // The DPB's "previous picture" is a slot handle, so the resolve happens
             // here rather than the pointer being stored. The thread count is read
             // before the pool borrow opens: the picture is `pPicBuff`'s and
             // `GetThreadCount` takes the context.
             let bSingleThreaded = crate::decoder::decoder_core::GetThreadCount(&mut *pCtx) <= 1;
-            let prev_id = crate::decoder::decoder_context::prev_dpb_id(&(*pCtx).pLastDecPicInfo);
+            let prev_id = crate::decoder::decoder_context::prev_dpb_id(&pCtx.pLastDecPicInfo);
             if let Some(prev) =
-                crate::decoder::decoder_context::prev_dpb_pic_mut(&mut (*pCtx).pPicBuff, prev_id)
+                crate::decoder::decoder_context::prev_dpb_pic_mut(&mut pCtx.pPicBuff, prev_id)
             {
                 let iPicBuffIdx = prev.iPicBuffIdx;
                 if bSingleThreaded {
                     prev.iRefCount += 1;
                 }
-                (*pCtx).pPictInfoList[i].iPicBuffIdx = iPicBuffIdx;
+                pCtx.pPictInfoList[i].iPicBuffIdx = iPicBuffIdx;
             }
-            (*pCtx).iLastBufferedIdx = i as i32;
-            (*pDstInfo).iBufferStatus = 0;
-            (*pCtx).pPictReoderingStatus.iNumOfPicts += 1;
-            if i as i32 > (*pCtx).pPictReoderingStatus.iLargestBufferedPicIndex {
-                (*pCtx).pPictReoderingStatus.iLargestBufferedPicIndex = i as i32;
+            pCtx.iLastBufferedIdx = i as i32;
+            pDstInfo.iBufferStatus = 0;
+            pCtx.pPictReoderingStatus.iNumOfPicts += 1;
+            if i as i32 > pCtx.pPictReoderingStatus.iLargestBufferedPicIndex {
+                pCtx.pPictReoderingStatus.iLargestBufferedPicIndex = i as i32;
             }
             break;
         }
@@ -3156,13 +3156,13 @@ fn EmitBufferedPicture(
     ppDst: &mut [*mut u8; 3],
     pDstInfo: &mut SBufferInfo,
 ) {
-    let idx = (*pCtx).pPictReoderingStatus.iPictInfoIndex as usize;
-    *pDstInfo = (*pCtx).pPictInfoList[idx].sBufferInfo;
-    ppDst[0] = (*pDstInfo).pDst[0];
-    ppDst[1] = (*pDstInfo).pDst[1];
-    ppDst[2] = (*pDstInfo).pDst[2];
-    (*pCtx).pPictInfoList[idx].iPOC = crate::decoder::decoder_context::IMinInt32;
-    let iPicBuffIdx = (*pCtx).pPictInfoList[idx].iPicBuffIdx;
+    let idx = pCtx.pPictReoderingStatus.iPictInfoIndex as usize;
+    *pDstInfo = pCtx.pPictInfoList[idx].sBufferInfo;
+    ppDst[0] = pDstInfo.pDst[0];
+    ppDst[1] = pDstInfo.pDst[1];
+    ppDst[2] = pDstInfo.pDst[2];
+    pCtx.pPictInfoList[idx].iPOC = crate::decoder::decoder_context::IMinInt32;
+    let iPicBuffIdx = pCtx.pPictInfoList[idx].iPicBuffIdx;
     // The pool is resolved here, not by the caller: the flag comes down instead and
     // the borrow is taken — and ended — inside this block.
     if let Some(pPicBuff) = pool_for(pCtx, bUsePool) {
@@ -3180,7 +3180,7 @@ fn EmitBufferedPicture(
             }
         }
     }
-    (*pCtx).pPictReoderingStatus.iNumOfPicts -= 1;
+    pCtx.pPictReoderingStatus.iNumOfPicts -= 1;
 }
 
 /// Matches `void CWelsDecoder::ReleaseBufferedReadyPictureNoReorder (...)`.
@@ -3211,12 +3211,12 @@ fn ReleaseBufferedReadyPictureNoReorder(
     let mut firstValidIdx: i32 = -1;
     let mut uiDecodingTimeStamp: u32 = 0;
     let mut iChosenPOC: i32 = 0;
-    let largest = (*pCtx).pPictReoderingStatus.iLargestBufferedPicIndex;
+    let largest = pCtx.pPictReoderingStatus.iLargestBufferedPicIndex;
     for i in 0..=largest {
-        if (*pCtx).pPictInfoList[i as usize].iPOC != crate::decoder::decoder_context::IMinInt32 {
-            uiDecodingTimeStamp = (*pCtx).pPictInfoList[i as usize].uiDecodingTimeStamp;
-            iChosenPOC = (*pCtx).pPictInfoList[i as usize].iPOC;
-            (*pCtx).pPictReoderingStatus.iPictInfoIndex = i;
+        if pCtx.pPictInfoList[i as usize].iPOC != crate::decoder::decoder_context::IMinInt32 {
+            uiDecodingTimeStamp = pCtx.pPictInfoList[i as usize].uiDecodingTimeStamp;
+            iChosenPOC = pCtx.pPictInfoList[i as usize].iPOC;
+            pCtx.pPictReoderingStatus.iPictInfoIndex = i;
             firstValidIdx = i;
             break;
         }
@@ -3225,20 +3225,20 @@ fn ReleaseBufferedReadyPictureNoReorder(
         if i == firstValidIdx {
             continue;
         }
-        let info = (*pCtx).pPictInfoList[i as usize];
+        let info = pCtx.pPictInfoList[i as usize];
         if info.iPOC != crate::decoder::decoder_context::IMinInt32
             && (info.uiDecodingTimeStamp < uiDecodingTimeStamp
                 || (info.uiDecodingTimeStamp == uiDecodingTimeStamp && info.iPOC < iChosenPOC))
         {
             uiDecodingTimeStamp = info.uiDecodingTimeStamp;
             iChosenPOC = info.iPOC;
-            (*pCtx).pPictReoderingStatus.iPictInfoIndex = i;
+            pCtx.pPictReoderingStatus.iPictInfoIndex = i;
         }
     }
     if uiDecodingTimeStamp > 0 {
-        let idx = (*pCtx).pPictReoderingStatus.iPictInfoIndex as usize;
-        (*pCtx).pPictReoderingStatus.iLastWrittenPOC = (*pCtx).pPictInfoList[idx].iPOC;
-        (*pCtx).pPictReoderingStatus.iLastWrittenSeqNum = (*pCtx).pPictInfoList[idx].iSeqNum;
+        let idx = pCtx.pPictReoderingStatus.iPictInfoIndex as usize;
+        pCtx.pPictReoderingStatus.iLastWrittenPOC = pCtx.pPictInfoList[idx].iPOC;
+        pCtx.pPictReoderingStatus.iLastWrittenSeqNum = pCtx.pPictInfoList[idx].iSeqNum;
         // `PPicBuff pPicBuff = pCtx ? pCtx->pPicBuff : m_pPicBuff;`
         // (`welsDecoderExt.cpp:1026`), as a flag — see [`pool_for`].
         EmitBufferedPicture(pCtx, bUsePool, ppDst, pDstInfo);
@@ -3267,16 +3267,16 @@ fn ReleaseBufferedReadyPictureReorder(
     // throughout. Nothing between this point and the call writes `pCtx.pPicBuff`,
     // and `bUsePool` is a by-value `bool`.
 
-    if (*pCtx).pPictReoderingStatus.iNumOfPicts > 0 {
-        (*pCtx).pPictReoderingStatus.iMinPOC = IMinInt32;
+    if pCtx.pPictReoderingStatus.iNumOfPicts > 0 {
+        pCtx.pPictReoderingStatus.iMinPOC = IMinInt32;
         let mut firstValidIdx: i32 = -1;
-        let largest = (*pCtx).pPictReoderingStatus.iLargestBufferedPicIndex;
+        let largest = pCtx.pPictReoderingStatus.iLargestBufferedPicIndex;
         for i in 0..=largest {
-            let info = (*pCtx).pPictInfoList[i as usize];
-            if (*pCtx).pPictReoderingStatus.iMinPOC == IMinInt32 && info.iPOC > IMinInt32 {
-                (*pCtx).pPictReoderingStatus.iMinPOC = info.iPOC;
-                (*pCtx).pPictReoderingStatus.iMinSeqNum = info.iSeqNum;
-                (*pCtx).pPictReoderingStatus.iPictInfoIndex = i;
+            let info = pCtx.pPictInfoList[i as usize];
+            if pCtx.pPictReoderingStatus.iMinPOC == IMinInt32 && info.iPOC > IMinInt32 {
+                pCtx.pPictReoderingStatus.iMinPOC = info.iPOC;
+                pCtx.pPictReoderingStatus.iMinSeqNum = info.iSeqNum;
+                pCtx.pPictReoderingStatus.iPictInfoIndex = i;
                 firstValidIdx = i;
                 break;
             }
@@ -3285,9 +3285,9 @@ fn ReleaseBufferedReadyPictureReorder(
             if i == firstValidIdx {
                 continue;
             }
-            let info = (*pCtx).pPictInfoList[i as usize];
-            let min_seq = (*pCtx).pPictReoderingStatus.iMinSeqNum;
-            let min_poc = (*pCtx).pPictReoderingStatus.iMinPOC;
+            let info = pCtx.pPictInfoList[i as usize];
+            let min_seq = pCtx.pPictReoderingStatus.iMinSeqNum;
+            let min_poc = pCtx.pPictReoderingStatus.iMinPOC;
             if info.iPOC > IMinInt32
                 && (if info.iSeqNum == min_seq {
                     info.iPOC < min_poc
@@ -3295,33 +3295,33 @@ fn ReleaseBufferedReadyPictureReorder(
                     info.iSeqNum.wrapping_sub(min_seq) < 0
                 })
             {
-                (*pCtx).pPictReoderingStatus.iMinPOC = info.iPOC;
-                (*pCtx).pPictReoderingStatus.iMinSeqNum = info.iSeqNum;
-                (*pCtx).pPictReoderingStatus.iPictInfoIndex = i;
+                pCtx.pPictReoderingStatus.iMinPOC = info.iPOC;
+                pCtx.pPictReoderingStatus.iMinSeqNum = info.iSeqNum;
+                pCtx.pPictReoderingStatus.iPictInfoIndex = i;
             }
         }
     }
 
-    if (*pCtx).pPictReoderingStatus.iMinPOC > IMinInt32 {
+    if pCtx.pPictReoderingStatus.iMinPOC > IMinInt32 {
         let mut isReady = true;
         if !isFlush {
-            let last_idx = (*pCtx).iLastBufferedIdx as usize;
+            let last_idx = pCtx.iLastBufferedIdx as usize;
             let iLastPOC = match slice_header_of(&*pCtx) {
                 Some(sh) => sh.iPicOrderCntLsb,
-                None => (*pCtx).pPictInfoList[last_idx].iPOC,
+                None => pCtx.pPictInfoList[last_idx].iPOC,
             };
-            let iLastSeqNum = (*pCtx).iSeqNum;
-            let st = (*pCtx).pPictReoderingStatus;
+            let iLastSeqNum = pCtx.iSeqNum;
+            let st = pCtx.pPictReoderingStatus;
             isReady = (st.iLastWrittenPOC > IMinInt32 && st.iMinPOC - st.iLastWrittenPOC <= 1)
                 || st.iMinPOC < iLastPOC
                 || st.iMinSeqNum.wrapping_sub(iLastSeqNum) < 0;
         }
         if isReady {
-            (*pCtx).pPictReoderingStatus.iLastWrittenPOC = (*pCtx).pPictReoderingStatus.iMinPOC;
-            (*pCtx).pPictReoderingStatus.iLastWrittenSeqNum =
-                (*pCtx).pPictReoderingStatus.iMinSeqNum;
+            pCtx.pPictReoderingStatus.iLastWrittenPOC = pCtx.pPictReoderingStatus.iMinPOC;
+            pCtx.pPictReoderingStatus.iLastWrittenSeqNum =
+                pCtx.pPictReoderingStatus.iMinSeqNum;
             EmitBufferedPicture(pCtx, bUsePool, ppDst, pDstInfo);
-            (*pCtx).pPictReoderingStatus.iMinPOC = IMinInt32;
+            pCtx.pPictReoderingStatus.iMinPOC = IMinInt32;
         }
     }
 }
@@ -3336,37 +3336,37 @@ fn ReorderPicturesInDisplay(
     pDstInfo: &mut SBufferInfo,
 ) {
     let Some(profile) =
-        crate::decoder::decoder_context::active_sps(&(*pCtx).sSpsPpsCtx, (*pCtx).active_sps)
+        crate::decoder::decoder_context::active_sps(&pCtx.sSpsPpsCtx, pCtx.active_sps)
             .map(|sps| sps.uiProfileIdc)
     else {
         return;
     };
-    (*pCtx).bIsBaseline = profile == 66 || profile == 83;
-    if (*pCtx).bIsBaseline || (*pDstInfo).iBufferStatus != 1 {
+    pCtx.bIsBaseline = profile == 66 || profile == 83;
+    if pCtx.bIsBaseline || pDstInfo.iBufferStatus != 1 {
         return;
     }
     let sh_poc = slice_header_of(&*pCtx)
         .filter(|sh| sh.eSliceType == crate::decoder::slice::EWelsSliceType::B_SLICE)
         .map(|sh| sh.iPicOrderCntLsb);
     if let Some(sh_poc) = sh_poc {
-        let st = (*pCtx).pPictReoderingStatus;
-        let follows = if (*pCtx).iSeqNum == st.iLastWrittenSeqNum {
+        let st = pCtx.pPictReoderingStatus;
+        let follows = if pCtx.iSeqNum == st.iLastWrittenSeqNum {
             sh_poc <= st.iLastWrittenPOC + 2
         } else {
-            (*pCtx).iSeqNum - st.iLastWrittenSeqNum == 1 && sh_poc == 0
+            pCtx.iSeqNum - st.iLastWrittenSeqNum == 1 && sh_poc == 0
         };
         if follows {
             // issue #3478: B-slice type is a more reliable ordering signal than POC.
-            (*pCtx).pPictReoderingStatus.iLastWrittenPOC = sh_poc;
-            (*pCtx).pPictReoderingStatus.iLastWrittenSeqNum = (*pCtx).iSeqNum;
-            ppDst[0] = (*pDstInfo).pDst[0];
-            ppDst[1] = (*pDstInfo).pDst[1];
-            ppDst[2] = (*pDstInfo).pDst[2];
+            pCtx.pPictReoderingStatus.iLastWrittenPOC = sh_poc;
+            pCtx.pPictReoderingStatus.iLastWrittenSeqNum = pCtx.iSeqNum;
+            ppDst[0] = pDstInfo.pDst[0];
+            ppDst[1] = pDstInfo.pDst[1];
+            ppDst[2] = pDstInfo.pDst[2];
             return;
         }
     }
     BufferingReadyPicture(pCtx, ppDst, pDstInfo);
-    if !(*pCtx).pPictReoderingStatus.bHasBSlice && (*pCtx).pPictReoderingStatus.iNumOfPicts > 1 {
+    if !pCtx.pPictReoderingStatus.bHasBSlice && pCtx.pPictReoderingStatus.iNumOfPicts > 1 {
         ReleaseBufferedReadyPictureNoReorder(pCtx, true, ppDst, pDstInfo);
     } else {
         ReleaseBufferedReadyPictureReorder(pCtx, true, ppDst, pDstInfo, false);

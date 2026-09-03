@@ -1101,7 +1101,7 @@ pub fn DeblockingMbAvcbase(
 // ============================================================================
 
 pub fn DeblockingFilterFrameAvcbase(pCurDq: &mut SDqLayer) {
-    if (*pCurDq).pDecPic.is_none() {
+    if pCurDq.pDecPic.is_none() {
         return;
     }
     let (kuiDisableDeblockingFilterIdc, kiSliceAlphaC0Offset, kiSliceBetaOffset) = {
@@ -1111,8 +1111,8 @@ pub fn DeblockingFilterFrameAvcbase(pCurDq: &mut SDqLayer) {
         let sh = &pSlice.sSliceHeaderExt.sSliceHeader;
         (sh.uiDisableDeblockingFilterIdc, sh.iSliceAlphaC0Offset, sh.iSliceBetaOffset)
     };
-    let kiMbWidth = (*pCurDq).iMbWidth;
-    let kiMbHeight = (*pCurDq).iMbHeight;
+    let kiMbWidth = pCurDq.iMbWidth;
+    let kiMbHeight = pCurDq.iMbHeight;
 
     if kuiDisableDeblockingFilterIdc == 1 {
         return;
@@ -1124,9 +1124,9 @@ pub fn DeblockingFilterFrameAvcbase(pCurDq: &mut SDqLayer) {
     let Some(view) = pCurDq.pRecView.as_ref() else {
         return;
     };
-    pFilter.iCsStride[0] = (*pCurDq).iCsStride[0];
-    pFilter.iCsStride[1] = (*pCurDq).iCsStride[1];
-    pFilter.iCsStride[2] = (*pCurDq).iCsStride[2];
+    pFilter.iCsStride[0] = pCurDq.iCsStride[0];
+    pFilter.iCsStride[1] = pCurDq.iCsStride[1];
+    pFilter.iCsStride[2] = pCurDq.iCsStride[2];
 
     pFilter.iSliceAlphaC0Offset = kiSliceAlphaC0Offset;
     pFilter.iSliceBetaOffset = kiSliceBetaOffset;
@@ -1161,7 +1161,7 @@ pub extern "C" fn DeblockingFilterSliceAvcbase(
     pSlice: &mut SSlice,
     pMbs: &mut MbWindow<'_, SMB>,
 ) {
-    let sSliceHeaderExt = &(*pSlice).sSliceHeaderExt;
+    let sSliceHeaderExt = &pSlice.sSliceHeaderExt;
 
     let kiMbWidth: i32 = pSliceCtx.iMbWidth as i32;
     let kiTotalNumMb: i32 = pSliceCtx.iMbNumInFrame;

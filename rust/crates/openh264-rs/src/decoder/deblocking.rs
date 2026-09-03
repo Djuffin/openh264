@@ -417,7 +417,7 @@ pub fn IN_BS_EDGE(
 /// The macroblock's non-zero-count row.
 #[inline(always)]
 pub fn GetPNzc(pCurDqLayer: &DqLayerState, iMbXy: i32) -> &[i8; 24] {
-    (*pCurDqLayer).grid.nzc.get(iMbXy as usize)
+    pCurDqLayer.grid.nzc.get(iMbXy as usize)
 }
 
 // ============================================================================
@@ -512,13 +512,13 @@ pub fn DeblockingBSInsideMBNormal(
     let mut iRefs: [Option<PicId>; MB_BLOCK4x4_NUM] = [None; MB_BLOCK4x4_NUM];
     for i in 0..MB_BLOCK4x4_NUM {
         if iRefIdx[i] > REF_NOT_IN_LIST {
-            iRefs[i] = (*pFilter).ref_ids[LIST_0][iRefIdx[i] as usize];
+            iRefs[i] = pFilter.ref_ids[LIST_0][iRefIdx[i] as usize];
         } else {
             iRefs[i] = None;
         }
     }
 
-    let is_8x8 = *(*pCurDqLayer).grid.transform_size8x8_flag.get(iMbXy as usize);
+    let is_8x8 = *pCurDqLayer.grid.transform_size8x8_flag.get(iMbXy as usize);
     let pMv = pDec.pMv[LIST_0].get(iMbXy as usize);
 
     if is_8x8 {
@@ -643,7 +643,7 @@ pub fn DeblockingBSliceBSInsideMBNormal(
         let iRefIdx = *pDec.pRefIndex[l].get(iMbXy as usize);
         for i in 0..MB_BLOCK4x4_NUM {
             if iRefIdx[i] > REF_NOT_IN_LIST {
-                iRefs[l][i] = (*pFilter).ref_ids[l][iRefIdx[i] as usize];
+                iRefs[l][i] = pFilter.ref_ids[l][iRefIdx[i] as usize];
             } else {
                 iRefs[l][i] = None;
             }
@@ -651,7 +651,7 @@ pub fn DeblockingBSliceBSInsideMBNormal(
     }
 
     let pMv = [&pDec.pMv[LIST_0], &pDec.pMv[LIST_1]];
-    let is_8x8 = *(*pCurDqLayer).grid.transform_size8x8_flag.get(iMbXy as usize);
+    let is_8x8 = *pCurDqLayer.grid.transform_size8x8_flag.get(iMbXy as usize);
 
     if is_8x8 {
         let mut i8x8NnzTab = [0u8; 4];
@@ -793,8 +793,8 @@ pub fn DeblockingBsMarginalMBAvcbase(
 
     let pRefIdxArr = &pDec.pRefIndex[LIST_0];
 
-    let is_8x8_curr = *(*pCurDqLayer).grid.transform_size8x8_flag.get(iMbXy as usize);
-    let is_8x8_neigh = *(*pCurDqLayer).grid.transform_size8x8_flag.get(iNeighMb as usize);
+    let is_8x8_curr = *pCurDqLayer.grid.transform_size8x8_flag.get(iMbXy as usize);
+    let is_8x8_neigh = *pCurDqLayer.grid.transform_size8x8_flag.get(iNeighMb as usize);
 
     let pMvArr = &pDec.pMv[LIST_0];
 
@@ -820,12 +820,12 @@ pub fn DeblockingBsMarginalMBAvcbase(
                 let ref_idx1 = pRefIdxArr.get(iNeighMb as usize)[idx_neigh];
 
                 let ref0 = if ref_idx0 > REF_NOT_IN_LIST {
-                    (*pFilter).ref_ids[LIST_0][ref_idx0 as usize]
+                    pFilter.ref_ids[LIST_0][ref_idx0 as usize]
                 } else {
                     None
                 };
                 let ref1 = if ref_idx1 > REF_NOT_IN_LIST {
-                    (*pFilter).ref_ids[LIST_0][ref_idx1 as usize]
+                    pFilter.ref_ids[LIST_0][ref_idx1 as usize]
                 } else {
                     None
                 };
@@ -860,12 +860,12 @@ pub fn DeblockingBsMarginalMBAvcbase(
                     let ref_idx1 = pRefIdxArr.get(iNeighMb as usize)[bn_idx];
 
                     let ref0 = if ref_idx0 > REF_NOT_IN_LIST {
-                        (*pFilter).ref_ids[LIST_0][ref_idx0 as usize]
+                        pFilter.ref_ids[LIST_0][ref_idx0 as usize]
                     } else {
                         None
                     };
                     let ref1 = if ref_idx1 > REF_NOT_IN_LIST {
-                        (*pFilter).ref_ids[LIST_0][ref_idx1 as usize]
+                        pFilter.ref_ids[LIST_0][ref_idx1 as usize]
                     } else {
                         None
                     };
@@ -900,12 +900,12 @@ pub fn DeblockingBsMarginalMBAvcbase(
                     let ref_idx1 = pRefIdxArr.get(iNeighMb as usize)[bn_idx];
 
                     let ref0 = if ref_idx0 > REF_NOT_IN_LIST {
-                        (*pFilter).ref_ids[LIST_0][ref_idx0 as usize]
+                        pFilter.ref_ids[LIST_0][ref_idx0 as usize]
                     } else {
                         None
                     };
                     let ref1 = if ref_idx1 > REF_NOT_IN_LIST {
-                        (*pFilter).ref_ids[LIST_0][ref_idx1 as usize]
+                        pFilter.ref_ids[LIST_0][ref_idx1 as usize]
                     } else {
                         None
                     };
@@ -935,12 +935,12 @@ pub fn DeblockingBsMarginalMBAvcbase(
                 let ref_idx1 = pRefIdxArr.get(iNeighMb as usize)[bn_idx];
 
                 let ref0 = if ref_idx0 > REF_NOT_IN_LIST {
-                    (*pFilter).ref_ids[LIST_0][ref_idx0 as usize]
+                    pFilter.ref_ids[LIST_0][ref_idx0 as usize]
                 } else {
                     None
                 };
                 let ref1 = if ref_idx1 > REF_NOT_IN_LIST {
-                    (*pFilter).ref_ids[LIST_0][ref_idx1 as usize]
+                    pFilter.ref_ids[LIST_0][ref_idx1 as usize]
                 } else {
                     None
                 };
@@ -982,8 +982,8 @@ pub fn DeblockingBSliceBsMarginalMBAvcbase(
     let pNzcCurr = GetPNzc(pCurDqLayer, iMbXy);
     let pNzcNeigh = GetPNzc(pCurDqLayer, iNeighMb);
 
-    let is_8x8_curr = *(*pCurDqLayer).grid.transform_size8x8_flag.get(iMbXy as usize);
-    let is_8x8_neigh = *(*pCurDqLayer).grid.transform_size8x8_flag.get(iNeighMb as usize);
+    let is_8x8_curr = *pCurDqLayer.grid.transform_size8x8_flag.get(iMbXy as usize);
+    let is_8x8_neigh = *pCurDqLayer.grid.transform_size8x8_flag.get(iNeighMb as usize);
 
     if is_8x8_curr && is_8x8_neigh {
         for i in 0..2 {
@@ -1010,22 +1010,22 @@ pub fn DeblockingBSliceBsMarginalMBAvcbase(
                 let ref1_idx1 = iRefIdx1.get(iNeighMb as usize)[bn_idx];
 
                 let ref_p0 = if ref0_idx0 > REF_NOT_IN_LIST {
-                    (*pFilter).ref_ids[LIST_0][ref0_idx0 as usize]
+                    pFilter.ref_ids[LIST_0][ref0_idx0 as usize]
                 } else {
                     None
                 };
                 let ref_q0 = if ref0_idx1 > REF_NOT_IN_LIST {
-                    (*pFilter).ref_ids[LIST_0][ref0_idx1 as usize]
+                    pFilter.ref_ids[LIST_0][ref0_idx1 as usize]
                 } else {
                     None
                 };
                 let ref_p1 = if ref1_idx0 > REF_NOT_IN_LIST {
-                    (*pFilter).ref_ids[LIST_1][ref1_idx0 as usize]
+                    pFilter.ref_ids[LIST_1][ref1_idx0 as usize]
                 } else {
                     None
                 };
                 let ref_q1 = if ref1_idx1 > REF_NOT_IN_LIST {
-                    (*pFilter).ref_ids[LIST_1][ref1_idx1 as usize]
+                    pFilter.ref_ids[LIST_1][ref1_idx1 as usize]
                 } else {
                     None
                 };
@@ -1073,22 +1073,22 @@ pub fn DeblockingBSliceBsMarginalMBAvcbase(
                     let ref1_idx1 = iRefIdx1.get(iNeighMb as usize)[bn_idx];
 
                     let ref_p0 = if ref0_idx0 > REF_NOT_IN_LIST {
-                        (*pFilter).ref_ids[LIST_0][ref0_idx0 as usize]
+                        pFilter.ref_ids[LIST_0][ref0_idx0 as usize]
                     } else {
                         None
                     };
                     let ref_q0 = if ref0_idx1 > REF_NOT_IN_LIST {
-                        (*pFilter).ref_ids[LIST_0][ref0_idx1 as usize]
+                        pFilter.ref_ids[LIST_0][ref0_idx1 as usize]
                     } else {
                         None
                     };
                     let ref_p1 = if ref1_idx0 > REF_NOT_IN_LIST {
-                        (*pFilter).ref_ids[LIST_1][ref1_idx0 as usize]
+                        pFilter.ref_ids[LIST_1][ref1_idx0 as usize]
                     } else {
                         None
                     };
                     let ref_q1 = if ref1_idx1 > REF_NOT_IN_LIST {
-                        (*pFilter).ref_ids[LIST_1][ref1_idx1 as usize]
+                        pFilter.ref_ids[LIST_1][ref1_idx1 as usize]
                     } else {
                         None
                     };
@@ -1136,22 +1136,22 @@ pub fn DeblockingBSliceBsMarginalMBAvcbase(
                     let ref1_idx1 = iRefIdx1.get(iNeighMb as usize)[bn_idx];
 
                     let ref_p0 = if ref0_idx0 > REF_NOT_IN_LIST {
-                        (*pFilter).ref_ids[LIST_0][ref0_idx0 as usize]
+                        pFilter.ref_ids[LIST_0][ref0_idx0 as usize]
                     } else {
                         None
                     };
                     let ref_q0 = if ref0_idx1 > REF_NOT_IN_LIST {
-                        (*pFilter).ref_ids[LIST_0][ref0_idx1 as usize]
+                        pFilter.ref_ids[LIST_0][ref0_idx1 as usize]
                     } else {
                         None
                     };
                     let ref_p1 = if ref1_idx0 > REF_NOT_IN_LIST {
-                        (*pFilter).ref_ids[LIST_1][ref1_idx0 as usize]
+                        pFilter.ref_ids[LIST_1][ref1_idx0 as usize]
                     } else {
                         None
                     };
                     let ref_q1 = if ref1_idx1 > REF_NOT_IN_LIST {
-                        (*pFilter).ref_ids[LIST_1][ref1_idx1 as usize]
+                        pFilter.ref_ids[LIST_1][ref1_idx1 as usize]
                     } else {
                         None
                     };
@@ -1194,22 +1194,22 @@ pub fn DeblockingBSliceBsMarginalMBAvcbase(
                 let ref1_idx1 = iRefIdx1.get(iNeighMb as usize)[bn_idx];
 
                 let ref_p0 = if ref0_idx0 > REF_NOT_IN_LIST {
-                    (*pFilter).ref_ids[LIST_0][ref0_idx0 as usize]
+                    pFilter.ref_ids[LIST_0][ref0_idx0 as usize]
                 } else {
                     None
                 };
                 let ref_q0 = if ref0_idx1 > REF_NOT_IN_LIST {
-                    (*pFilter).ref_ids[LIST_0][ref0_idx1 as usize]
+                    pFilter.ref_ids[LIST_0][ref0_idx1 as usize]
                 } else {
                     None
                 };
                 let ref_p1 = if ref1_idx0 > REF_NOT_IN_LIST {
-                    (*pFilter).ref_ids[LIST_1][ref1_idx0 as usize]
+                    pFilter.ref_ids[LIST_1][ref1_idx0 as usize]
                 } else {
                     None
                 };
                 let ref_q1 = if ref1_idx1 > REF_NOT_IN_LIST {
-                    (*pFilter).ref_ids[LIST_1][ref1_idx1 as usize]
+                    pFilter.ref_ids[LIST_1][ref1_idx1 as usize]
                 } else {
                     None
                 };
@@ -1245,18 +1245,18 @@ pub fn DeblockingBSliceBsMarginalMBAvcbase(
 
 #[inline]
 pub fn DeblockingAvailableNoInterlayer(pCurDqLayer: &DqLayerState, iFilterIdc: i32) -> i32 {
-    let iMbY = (*pCurDqLayer).iMbY;
-    let iMbX = (*pCurDqLayer).iMbX;
-    let iMbXy = (*pCurDqLayer).iMbXyIndex;
+    let iMbY = pCurDqLayer.iMbY;
+    let iMbX = pCurDqLayer.iMbX;
+    let iMbXy = pCurDqLayer.iMbXyIndex;
     let bLeftFlag: bool;
     let bTopFlag: bool;
 
     if 2 == iFilterIdc {
-        let pSliceIdc = &(*pCurDqLayer).grid.slice_idc;
+        let pSliceIdc = &pCurDqLayer.grid.slice_idc;
         bLeftFlag = (iMbX > 0) && (*pSliceIdc.get(iMbXy as usize) == *pSliceIdc.get((iMbXy - 1) as usize));
         bTopFlag = (iMbY > 0)
             && (*pSliceIdc.get(iMbXy as usize)
-                == *pSliceIdc.get((iMbXy - (*pCurDqLayer).iMbWidth) as usize));
+                == *pSliceIdc.get((iMbXy - pCurDqLayer.iMbWidth) as usize));
     } else {
         bLeftFlag = iMbX > 0;
         bTopFlag = iMbY > 0;
@@ -1281,9 +1281,9 @@ pub fn FilteringEdgeLumaH(
     let mut tc = [0i8; 4];
 
     GET_ALPHA_BETA_FROM_QP(
-        (*pFilter).iLumaQP as i32,
-        (*pFilter).iSliceAlphaC0Offset as i32,
-        (*pFilter).iSliceBetaOffset as i32,
+        pFilter.iLumaQP as i32,
+        pFilter.iSliceAlphaC0Offset as i32,
+        pFilter.iSliceBetaOffset as i32,
         &mut iIndexA,
         &mut iAlpha,
         &mut iBeta,
@@ -1308,9 +1308,9 @@ pub fn FilteringEdgeLumaV(
     let mut tc = [0i8; 4];
 
     GET_ALPHA_BETA_FROM_QP(
-        (*pFilter).iLumaQP as i32,
-        (*pFilter).iSliceAlphaC0Offset as i32,
-        (*pFilter).iSliceBetaOffset as i32,
+        pFilter.iLumaQP as i32,
+        pFilter.iSliceAlphaC0Offset as i32,
+        pFilter.iSliceBetaOffset as i32,
         &mut iIndexA,
         &mut iAlpha,
         &mut iBeta,
@@ -1333,9 +1333,9 @@ pub fn FilteringEdgeLumaIntraH(
     let mut iBeta = 0i32;
 
     GET_ALPHA_BETA_FROM_QP(
-        (*pFilter).iLumaQP as i32,
-        (*pFilter).iSliceAlphaC0Offset as i32,
-        (*pFilter).iSliceBetaOffset as i32,
+        pFilter.iLumaQP as i32,
+        pFilter.iSliceAlphaC0Offset as i32,
+        pFilter.iSliceBetaOffset as i32,
         &mut iIndexA,
         &mut iAlpha,
         &mut iBeta,
@@ -1357,9 +1357,9 @@ pub fn FilteringEdgeLumaIntraV(
     let mut iBeta = 0i32;
 
     GET_ALPHA_BETA_FROM_QP(
-        (*pFilter).iLumaQP as i32,
-        (*pFilter).iSliceAlphaC0Offset as i32,
-        (*pFilter).iSliceBetaOffset as i32,
+        pFilter.iLumaQP as i32,
+        pFilter.iSliceAlphaC0Offset as i32,
+        pFilter.iSliceBetaOffset as i32,
         &mut iIndexA,
         &mut iAlpha,
         &mut iBeta,
@@ -1382,11 +1382,11 @@ pub fn FilteringEdgeChromaH<'a>(
     let mut iBeta = 0i32;
     let mut tc = [0i8; 4];
 
-    if (*pFilter).iChromaQP[0] == (*pFilter).iChromaQP[1] {
+    if pFilter.iChromaQP[0] == pFilter.iChromaQP[1] {
         GET_ALPHA_BETA_FROM_QP(
-            (*pFilter).iChromaQP[0] as i32,
-            (*pFilter).iSliceAlphaC0Offset as i32,
-            (*pFilter).iSliceBetaOffset as i32,
+            pFilter.iChromaQP[0] as i32,
+            pFilter.iSliceAlphaC0Offset as i32,
+            pFilter.iSliceBetaOffset as i32,
             &mut iIndexA,
             &mut iAlpha,
             &mut iBeta,
@@ -1398,9 +1398,9 @@ pub fn FilteringEdgeChromaH<'a>(
     } else {
         for i in 0..2 {
             GET_ALPHA_BETA_FROM_QP(
-                (*pFilter).iChromaQP[i] as i32,
-                (*pFilter).iSliceAlphaC0Offset as i32,
-                (*pFilter).iSliceBetaOffset as i32,
+                pFilter.iChromaQP[i] as i32,
+                pFilter.iSliceAlphaC0Offset as i32,
+                pFilter.iSliceBetaOffset as i32,
                 &mut iIndexA,
                 &mut iAlpha,
                 &mut iBeta,
@@ -1426,11 +1426,11 @@ pub fn FilteringEdgeChromaV<'a>(
     let mut iBeta = 0i32;
     let mut tc = [0i8; 4];
 
-    if (*pFilter).iChromaQP[0] == (*pFilter).iChromaQP[1] {
+    if pFilter.iChromaQP[0] == pFilter.iChromaQP[1] {
         GET_ALPHA_BETA_FROM_QP(
-            (*pFilter).iChromaQP[0] as i32,
-            (*pFilter).iSliceAlphaC0Offset as i32,
-            (*pFilter).iSliceBetaOffset as i32,
+            pFilter.iChromaQP[0] as i32,
+            pFilter.iSliceAlphaC0Offset as i32,
+            pFilter.iSliceBetaOffset as i32,
             &mut iIndexA,
             &mut iAlpha,
             &mut iBeta,
@@ -1442,9 +1442,9 @@ pub fn FilteringEdgeChromaV<'a>(
     } else {
         for i in 0..2 {
             GET_ALPHA_BETA_FROM_QP(
-                (*pFilter).iChromaQP[i] as i32,
-                (*pFilter).iSliceAlphaC0Offset as i32,
-                (*pFilter).iSliceBetaOffset as i32,
+                pFilter.iChromaQP[i] as i32,
+                pFilter.iSliceAlphaC0Offset as i32,
+                pFilter.iSliceBetaOffset as i32,
                 &mut iIndexA,
                 &mut iAlpha,
                 &mut iBeta,
@@ -1468,11 +1468,11 @@ pub fn FilteringEdgeChromaIntraH<'a>(
     let mut iAlpha = 0i32;
     let mut iBeta = 0i32;
 
-    if (*pFilter).iChromaQP[0] == (*pFilter).iChromaQP[1] {
+    if pFilter.iChromaQP[0] == pFilter.iChromaQP[1] {
         GET_ALPHA_BETA_FROM_QP(
-            (*pFilter).iChromaQP[0] as i32,
-            (*pFilter).iSliceAlphaC0Offset as i32,
-            (*pFilter).iSliceBetaOffset as i32,
+            pFilter.iChromaQP[0] as i32,
+            pFilter.iSliceAlphaC0Offset as i32,
+            pFilter.iSliceBetaOffset as i32,
             &mut iIndexA,
             &mut iAlpha,
             &mut iBeta,
@@ -1483,9 +1483,9 @@ pub fn FilteringEdgeChromaIntraH<'a>(
     } else {
         for i in 0..2 {
             GET_ALPHA_BETA_FROM_QP(
-                (*pFilter).iChromaQP[i] as i32,
-                (*pFilter).iSliceAlphaC0Offset as i32,
-                (*pFilter).iSliceBetaOffset as i32,
+                pFilter.iChromaQP[i] as i32,
+                pFilter.iSliceAlphaC0Offset as i32,
+                pFilter.iSliceBetaOffset as i32,
                 &mut iIndexA,
                 &mut iAlpha,
                 &mut iBeta,
@@ -1508,11 +1508,11 @@ pub fn FilteringEdgeChromaIntraV<'a>(
     let mut iAlpha = 0i32;
     let mut iBeta = 0i32;
 
-    if (*pFilter).iChromaQP[0] == (*pFilter).iChromaQP[1] {
+    if pFilter.iChromaQP[0] == pFilter.iChromaQP[1] {
         GET_ALPHA_BETA_FROM_QP(
-            (*pFilter).iChromaQP[0] as i32,
-            (*pFilter).iSliceAlphaC0Offset as i32,
-            (*pFilter).iSliceBetaOffset as i32,
+            pFilter.iChromaQP[0] as i32,
+            pFilter.iSliceAlphaC0Offset as i32,
+            pFilter.iSliceBetaOffset as i32,
             &mut iIndexA,
             &mut iAlpha,
             &mut iBeta,
@@ -1523,9 +1523,9 @@ pub fn FilteringEdgeChromaIntraV<'a>(
     } else {
         for i in 0..2 {
             GET_ALPHA_BETA_FROM_QP(
-                (*pFilter).iChromaQP[i] as i32,
-                (*pFilter).iSliceAlphaC0Offset as i32,
-                (*pFilter).iSliceBetaOffset as i32,
+                pFilter.iChromaQP[i] as i32,
+                pFilter.iSliceAlphaC0Offset as i32,
+                pFilter.iSliceBetaOffset as i32,
                 &mut iIndexA,
                 &mut iAlpha,
                 &mut iBeta,
@@ -1549,12 +1549,12 @@ fn DeblockingInterMb(
     nBS: &[[[u8; 4]; 4]; 2],
     iBoundryFlag: i32,
 ) {
-    let iMbXyIndex = (*pCurDqLayer).iMbXyIndex;
-    let iMbX = (*pCurDqLayer).iMbX;
-    let iMbY = (*pCurDqLayer).iMbY;
+    let iMbXyIndex = pCurDqLayer.iMbXyIndex;
+    let iMbX = pCurDqLayer.iMbX;
+    let iMbY = pCurDqLayer.iMbY;
 
-    let iCurLumaQp = *(*pCurDqLayer).grid.luma_qp.get(iMbXyIndex as usize) as i32;
-    let pCurChromaQp = *(*pCurDqLayer).grid.chroma_qp.get(iMbXyIndex as usize);
+    let iCurLumaQp = *pCurDqLayer.grid.luma_qp.get(iMbXyIndex as usize) as i32;
+    let pCurChromaQp = *pCurDqLayer.grid.chroma_qp.get(iMbXyIndex as usize);
     let iLineSize = pDec.linesize(0);
     let iLineSizeUV = pDec.linesize(1);
 
@@ -1565,11 +1565,11 @@ fn DeblockingInterMb(
     // Vertical margin
     if (iBoundryFlag & LEFT_FLAG_MASK) != 0 {
         let iLeftXyIndex = (iMbXyIndex - 1) as usize;
-        (*pFilter).iLumaQP =
-            ((iCurLumaQp + *(*pCurDqLayer).grid.luma_qp.get(iLeftXyIndex) as i32 + 1) >> 1) as i8;
+        pFilter.iLumaQP =
+            ((iCurLumaQp + *pCurDqLayer.grid.luma_qp.get(iLeftXyIndex) as i32 + 1) >> 1) as i8;
         for i in 0..2 {
-            (*pFilter).iChromaQP[i] = ((pCurChromaQp[i] as i32
-                + (*pCurDqLayer).grid.chroma_qp.get(iLeftXyIndex)[i] as i32
+            pFilter.iChromaQP[i] = ((pCurChromaQp[i] as i32
+                + pCurDqLayer.grid.chroma_qp.get(iLeftXyIndex)[i] as i32
                 + 1)
                 >> 1) as i8;
         }
@@ -1597,11 +1597,11 @@ fn DeblockingInterMb(
         }
     }
 
-    (*pFilter).iLumaQP = iCurLumaQp as i8;
-    (*pFilter).iChromaQP[0] = pCurChromaQp[0];
-    (*pFilter).iChromaQP[1] = pCurChromaQp[1];
+    pFilter.iLumaQP = iCurLumaQp as i8;
+    pFilter.iChromaQP[0] = pCurChromaQp[0];
+    pFilter.iChromaQP[1] = pCurChromaQp[1];
 
-    let is_8x8 = *(*pCurDqLayer).grid.transform_size8x8_flag.get(iMbXyIndex as usize);
+    let is_8x8 = *pCurDqLayer.grid.transform_size8x8_flag.get(iMbXyIndex as usize);
 
     let bs_01 = u32::from_ne_bytes(nBS[0][1]);
     if bs_01 != 0 && !is_8x8 {
@@ -1627,12 +1627,12 @@ fn DeblockingInterMb(
 
     // Horizontal margin
     if (iBoundryFlag & TOP_FLAG_MASK) != 0 {
-        let iTopXyIndex = (iMbXyIndex - (*pCurDqLayer).iMbWidth) as usize;
-        (*pFilter).iLumaQP =
-            ((iCurLumaQp + *(*pCurDqLayer).grid.luma_qp.get(iTopXyIndex) as i32 + 1) >> 1) as i8;
+        let iTopXyIndex = (iMbXyIndex - pCurDqLayer.iMbWidth) as usize;
+        pFilter.iLumaQP =
+            ((iCurLumaQp + *pCurDqLayer.grid.luma_qp.get(iTopXyIndex) as i32 + 1) >> 1) as i8;
         for i in 0..2 {
-            (*pFilter).iChromaQP[i] = ((pCurChromaQp[i] as i32
-                + (*pCurDqLayer).grid.chroma_qp.get(iTopXyIndex)[i] as i32
+            pFilter.iChromaQP[i] = ((pCurChromaQp[i] as i32
+                + pCurDqLayer.grid.chroma_qp.get(iTopXyIndex)[i] as i32
                 + 1)
                 >> 1) as i8;
         }
@@ -1660,9 +1660,9 @@ fn DeblockingInterMb(
         }
     }
 
-    (*pFilter).iLumaQP = iCurLumaQp as i8;
-    (*pFilter).iChromaQP[0] = pCurChromaQp[0];
-    (*pFilter).iChromaQP[1] = pCurChromaQp[1];
+    pFilter.iLumaQP = iCurLumaQp as i8;
+    pFilter.iChromaQP[0] = pCurChromaQp[0];
+    pFilter.iChromaQP[1] = pCurChromaQp[1];
 
     let bs_11 = u32::from_ne_bytes(nBS[1][1]);
     if bs_11 != 0 && !is_8x8 {
@@ -1697,44 +1697,44 @@ pub fn FilteringEdgeLumaHV(
     pFilter: &mut SDeblockingFilter,
     iBoundryFlag: i32,
 ) {
-    let iMbXyIndex = (*pCurDqLayer).iMbXyIndex;
-    let iMbX = (*pCurDqLayer).iMbX;
-    let iMbY = (*pCurDqLayer).iMbY;
-    let iMbWidth = (*pCurDqLayer).iMbWidth;
+    let iMbXyIndex = pCurDqLayer.iMbXyIndex;
+    let iMbX = pCurDqLayer.iMbX;
+    let iMbY = pCurDqLayer.iMbY;
+    let iMbWidth = pCurDqLayer.iMbWidth;
     let iLineSize = pDec.linesize(0);
 
     // The macroblock's origin as a coordinate, and the plane it walks.
     let planeY = pDec.plane_mut(0);
     let (xY, yY) = ((iMbX << 4) as isize, (iMbY << 4) as isize);
-    let iCurQp = *(*pCurDqLayer).grid.luma_qp.get(iMbXyIndex as usize) as i32;
+    let iCurQp = *pCurDqLayer.grid.luma_qp.get(iMbXyIndex as usize) as i32;
 
     let mut iTc = [0i8; 4];
     let uiBSx4 = [3u8; 4];
 
     // Luma V
     if (iBoundryFlag & LEFT_FLAG_MASK) != 0 {
-        (*pFilter).iLumaQP = ((iCurQp
-            + *(*pCurDqLayer).grid.luma_qp.get((iMbXyIndex - 1) as usize) as i32
+        pFilter.iLumaQP = ((iCurQp
+            + *pCurDqLayer.grid.luma_qp.get((iMbXyIndex - 1) as usize) as i32
             + 1)
             >> 1) as i8;
         FilteringEdgeLumaIntraV(pFilter, &mut planeY.cursor_mut(xY, yY), iLineSize);
     }
 
-    (*pFilter).iLumaQP = iCurQp as i8;
+    pFilter.iLumaQP = iCurQp as i8;
     let mut iIndexA = 0i32;
     let mut iAlpha = 0i32;
     let mut iBeta = 0i32;
 
     GET_ALPHA_BETA_FROM_QP(
-        (*pFilter).iLumaQP as i32,
-        (*pFilter).iSliceAlphaC0Offset as i32,
-        (*pFilter).iSliceBetaOffset as i32,
+        pFilter.iLumaQP as i32,
+        pFilter.iSliceAlphaC0Offset as i32,
+        pFilter.iSliceBetaOffset as i32,
         &mut iIndexA,
         &mut iAlpha,
         &mut iBeta,
     );
 
-    let is_8x8 = *(*pCurDqLayer).grid.transform_size8x8_flag.get(iMbXyIndex as usize);
+    let is_8x8 = *pCurDqLayer.grid.transform_size8x8_flag.get(iMbXyIndex as usize);
 
     if (iAlpha | iBeta) != 0 {
         TC0_TBL_LOOKUP(&mut iTc, iIndexA, &uiBSx4, 0);
@@ -1752,14 +1752,14 @@ pub fn FilteringEdgeLumaHV(
 
     // Luma H
     if (iBoundryFlag & TOP_FLAG_MASK) != 0 {
-        (*pFilter).iLumaQP = ((iCurQp
-            + *(*pCurDqLayer).grid.luma_qp.get((iMbXyIndex - iMbWidth) as usize) as i32
+        pFilter.iLumaQP = ((iCurQp
+            + *pCurDqLayer.grid.luma_qp.get((iMbXyIndex - iMbWidth) as usize) as i32
             + 1)
             >> 1) as i8;
         FilteringEdgeLumaIntraH(pFilter, &mut planeY.cursor_mut(xY, yY), iLineSize);
     }
 
-    (*pFilter).iLumaQP = iCurQp as i8;
+    pFilter.iLumaQP = iCurQp as i8;
     if (iAlpha | iBeta) != 0 {
         if !is_8x8 {
             deblock_luma_lt4(&mut planeY.cursor_mut(xY, yY + 4), iLineSize as isize, 1, iAlpha, iBeta, &iTc);
@@ -1779,15 +1779,15 @@ pub fn FilteringEdgeChromaHV(
     pFilter: &mut SDeblockingFilter,
     iBoundryFlag: i32,
 ) {
-    let iMbXyIndex = (*pCurDqLayer).iMbXyIndex;
-    let iMbX = (*pCurDqLayer).iMbX;
-    let iMbY = (*pCurDqLayer).iMbY;
-    let iMbWidth = (*pCurDqLayer).iMbWidth;
+    let iMbXyIndex = pCurDqLayer.iMbXyIndex;
+    let iMbX = pCurDqLayer.iMbX;
+    let iMbY = pCurDqLayer.iMbY;
+    let iMbWidth = pCurDqLayer.iMbWidth;
     let iLineSize = pDec.linesize(1);
 
     let [_, planeCb, planeCr] = pDec.planes_mut();
     let (xC, yC) = ((iMbX << 3) as isize, (iMbY << 3) as isize);
-    let pCurQp = *(*pCurDqLayer).grid.chroma_qp.get(iMbXyIndex as usize);
+    let pCurQp = *pCurDqLayer.grid.chroma_qp.get(iMbXyIndex as usize);
 
     let mut iTc = [0i8; 4];
     let uiBSx4 = [3u8; 4];
@@ -1795,8 +1795,8 @@ pub fn FilteringEdgeChromaHV(
     // Chroma V
     if (iBoundryFlag & LEFT_FLAG_MASK) != 0 {
         for i in 0..2 {
-            (*pFilter).iChromaQP[i] = ((pCurQp[i] as i32
-                + (*pCurDqLayer).grid.chroma_qp.get((iMbXyIndex - 1) as usize)[i] as i32
+            pFilter.iChromaQP[i] = ((pCurQp[i] as i32
+                + pCurDqLayer.grid.chroma_qp.get((iMbXyIndex - 1) as usize)[i] as i32
                 + 1)
                 >> 1) as i8;
         }
@@ -1808,18 +1808,18 @@ pub fn FilteringEdgeChromaHV(
         );
     }
 
-    (*pFilter).iChromaQP[0] = pCurQp[0];
-    (*pFilter).iChromaQP[1] = pCurQp[1];
+    pFilter.iChromaQP[0] = pCurQp[0];
+    pFilter.iChromaQP[1] = pCurQp[1];
 
     let mut iIndexA = 0i32;
     let mut iAlpha = 0i32;
     let mut iBeta = 0i32;
 
-    if (*pFilter).iChromaQP[0] == (*pFilter).iChromaQP[1] {
+    if pFilter.iChromaQP[0] == pFilter.iChromaQP[1] {
         GET_ALPHA_BETA_FROM_QP(
-            (*pFilter).iChromaQP[0] as i32,
-            (*pFilter).iSliceAlphaC0Offset as i32,
-            (*pFilter).iSliceBetaOffset as i32,
+            pFilter.iChromaQP[0] as i32,
+            pFilter.iSliceAlphaC0Offset as i32,
+            pFilter.iSliceBetaOffset as i32,
             &mut iIndexA,
             &mut iAlpha,
             &mut iBeta,
@@ -1839,9 +1839,9 @@ pub fn FilteringEdgeChromaHV(
     } else {
         for i in 0..2 {
             GET_ALPHA_BETA_FROM_QP(
-                (*pFilter).iChromaQP[i] as i32,
-                (*pFilter).iSliceAlphaC0Offset as i32,
-                (*pFilter).iSliceBetaOffset as i32,
+                pFilter.iChromaQP[i] as i32,
+                pFilter.iSliceAlphaC0Offset as i32,
+                pFilter.iSliceBetaOffset as i32,
                 &mut iIndexA,
                 &mut iAlpha,
                 &mut iBeta,
@@ -1861,8 +1861,8 @@ pub fn FilteringEdgeChromaHV(
     // Chroma H
     if (iBoundryFlag & TOP_FLAG_MASK) != 0 {
         for i in 0..2 {
-            (*pFilter).iChromaQP[i] = ((pCurQp[i] as i32
-                + (*pCurDqLayer).grid.chroma_qp.get((iMbXyIndex - iMbWidth) as usize)[i] as i32
+            pFilter.iChromaQP[i] = ((pCurQp[i] as i32
+                + pCurDqLayer.grid.chroma_qp.get((iMbXyIndex - iMbWidth) as usize)[i] as i32
                 + 1)
                 >> 1) as i8;
         }
@@ -1874,14 +1874,14 @@ pub fn FilteringEdgeChromaHV(
         );
     }
 
-    (*pFilter).iChromaQP[0] = pCurQp[0];
-    (*pFilter).iChromaQP[1] = pCurQp[1];
+    pFilter.iChromaQP[0] = pCurQp[0];
+    pFilter.iChromaQP[1] = pCurQp[1];
 
-    if (*pFilter).iChromaQP[0] == (*pFilter).iChromaQP[1] {
+    if pFilter.iChromaQP[0] == pFilter.iChromaQP[1] {
         GET_ALPHA_BETA_FROM_QP(
-            (*pFilter).iChromaQP[0] as i32,
-            (*pFilter).iSliceAlphaC0Offset as i32,
-            (*pFilter).iSliceBetaOffset as i32,
+            pFilter.iChromaQP[0] as i32,
+            pFilter.iSliceAlphaC0Offset as i32,
+            pFilter.iSliceBetaOffset as i32,
             &mut iIndexA,
             &mut iAlpha,
             &mut iBeta,
@@ -1901,9 +1901,9 @@ pub fn FilteringEdgeChromaHV(
     } else {
         for i in 0..2 {
             GET_ALPHA_BETA_FROM_QP(
-                (*pFilter).iChromaQP[i] as i32,
-                (*pFilter).iSliceAlphaC0Offset as i32,
-                (*pFilter).iSliceBetaOffset as i32,
+                pFilter.iChromaQP[i] as i32,
+                pFilter.iSliceAlphaC0Offset as i32,
+                pFilter.iSliceBetaOffset as i32,
                 &mut iIndexA,
                 &mut iAlpha,
                 &mut iBeta,
@@ -1944,10 +1944,10 @@ pub fn WelsDeblockingMb(
 ) {
     let mut nBS = [[[0u8; 4]; 4]; 2];
 
-    let iMbXyIndex = (*pCurDqLayer).iMbXyIndex;
+    let iMbXyIndex = pCurDqLayer.iMbXyIndex;
     let iCurMbType = *pDec.pMbType.get(iMbXyIndex as usize);
 
-    let pSliceHeader = &(*pCurDqLayer).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader;
+    let pSliceHeader = &pCurDqLayer.sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader;
     let bBSlice = pSliceHeader.eSliceType == EWelsSliceType::B_SLICE;
 
     match iCurMbType {
@@ -1972,7 +1972,7 @@ pub fn WelsDeblockingMb(
             }
 
             if (iBoundryFlag & TOP_FLAG_MASK) != 0 {
-                let iMbNb = iMbXyIndex - (*pCurDqLayer).iMbWidth;
+                let iMbNb = iMbXyIndex - pCurDqLayer.iMbWidth;
                 let uiMbType = *pDec.pMbType.get(iMbNb as usize);
 
                 let val = if IS_INTRA(uiMbType) {
@@ -1995,7 +1995,7 @@ pub fn WelsDeblockingMb(
                 nBS[1][2] = [0u8; 4];
                 nBS[1][3] = [0u8; 4];
             } else if IS_INTER_16x16(iCurMbType) {
-                let is_8x8 = *(*pCurDqLayer).grid.transform_size8x8_flag.get((*pCurDqLayer).iMbXyIndex as usize);
+                let is_8x8 = *pCurDqLayer.grid.transform_size8x8_flag.get(pCurDqLayer.iMbXyIndex as usize);
                 if !is_8x8 {
                     DeblockingBSInsideMBAvsbase(GetPNzc(pCurDqLayer, iMbXyIndex), &mut nBS, 1);
                 } else {
@@ -2042,8 +2042,8 @@ pub fn WelsDeblockingFilterSlice(
     pDec: &mut SPicture,
     pDeblockMb: Option<PDeblockingFilterMbFunc>,
 ) {
-    let pSliceHeaderExt = &(*pCurDqLayer).sLayerInfo.sSliceInLayer.sSliceHeaderExt;
-    let iMbWidth = (*pCurDqLayer).iMbWidth;
+    let pSliceHeaderExt = &pCurDqLayer.sLayerInfo.sSliceInLayer.sSliceHeaderExt;
+    let iMbWidth = pCurDqLayer.iMbWidth;
     let iTotalMbCount = pCtx
         .sps_of(pSliceHeaderExt.sSliceHeader.sps_ref)
         .map_or(0, |sps| sps.uiTotalMbCount as i32);
@@ -2051,13 +2051,13 @@ pub fn WelsDeblockingFilterSlice(
     let mut pFilter = SDeblockingFilter::default();
     let fmo_id = pCtx.fmo_id;
     let mut iNextMbXyIndex: i32;
-    let iTotalNumMb = (*pCurDqLayer).sLayerInfo.sSliceInLayer.iTotalMbInCurSlice;
+    let iTotalNumMb = pCurDqLayer.sLayerInfo.sSliceInLayer.iTotalMbInCurSlice;
     let mut iCountNumMb = 0i32;
     let mut iBoundryFlag: i32;
     let iFilterIdc = pSliceHeaderExt.sSliceHeader.uiDisableDeblockingFilterIdc as i32;
 
     // Step 1: Initialize filter parameters.
-    pFilter.eSliceType = (*pCurDqLayer).sLayerInfo.sSliceInLayer.eSliceType as i32;
+    pFilter.eSliceType = pCurDqLayer.sLayerInfo.sSliceInLayer.eSliceType as i32;
 
     pFilter.iSliceAlphaC0Offset = pSliceHeaderExt.sSliceHeader.iSliceAlphaC0Offset as i8;
     pFilter.iSliceBetaOffset = pSliceHeaderExt.sSliceHeader.iSliceBetaOffset as i8;
@@ -2069,9 +2069,9 @@ pub fn WelsDeblockingFilterSlice(
     // Step 2: Macroblock deblocking loop
     if iFilterIdc == 0 || iFilterIdc == 2 {
         iNextMbXyIndex = pSliceHeaderExt.sSliceHeader.iFirstMbInSlice;
-        (*pCurDqLayer).iMbX = iNextMbXyIndex % iMbWidth;
-        (*pCurDqLayer).iMbY = iNextMbXyIndex / iMbWidth;
-        (*pCurDqLayer).iMbXyIndex = iNextMbXyIndex;
+        pCurDqLayer.iMbX = iNextMbXyIndex % iMbWidth;
+        pCurDqLayer.iMbY = iNextMbXyIndex / iMbWidth;
+        pCurDqLayer.iMbXyIndex = iNextMbXyIndex;
 
         loop {
             iBoundryFlag = DeblockingAvailableNoInterlayer(pCurDqLayer, iFilterIdc);
@@ -2099,9 +2099,9 @@ pub fn WelsDeblockingFilterSlice(
                 break;
             }
 
-            (*pCurDqLayer).iMbX = iNextMbXyIndex % iMbWidth;
-            (*pCurDqLayer).iMbY = iNextMbXyIndex / iMbWidth;
-            (*pCurDqLayer).iMbXyIndex = iNextMbXyIndex;
+            pCurDqLayer.iMbX = iNextMbXyIndex % iMbWidth;
+            pCurDqLayer.iMbY = iNextMbXyIndex / iMbWidth;
+            pCurDqLayer.iMbXyIndex = iNextMbXyIndex;
         }
     }
 }
@@ -2112,17 +2112,17 @@ pub fn WelsDeblockingInitFilter(
     pFilter: &mut SDeblockingFilter,
     iFilterIdc: &mut i32,
 ) {
-    let pSliceHeaderExt = &(*pCurDqLayer).sLayerInfo.sSliceInLayer.sSliceHeaderExt;
+    let pSliceHeaderExt = &pCurDqLayer.sLayerInfo.sSliceInLayer.sSliceHeaderExt;
 
     *pFilter = SDeblockingFilter::default();
     *iFilterIdc = pSliceHeaderExt.sSliceHeader.uiDisableDeblockingFilterIdc as i32;
 
-    (*pFilter).eSliceType = (*pCurDqLayer).sLayerInfo.sSliceInLayer.eSliceType as i32;
+    pFilter.eSliceType = pCurDqLayer.sLayerInfo.sSliceInLayer.eSliceType as i32;
 
-    (*pFilter).iSliceAlphaC0Offset = pSliceHeaderExt.sSliceHeader.iSliceAlphaC0Offset as i8;
-    (*pFilter).iSliceBetaOffset = pSliceHeaderExt.sSliceHeader.iSliceBetaOffset as i8;
+    pFilter.iSliceAlphaC0Offset = pSliceHeaderExt.sSliceHeader.iSliceAlphaC0Offset as i8;
+    pFilter.iSliceBetaOffset = pSliceHeaderExt.sSliceHeader.iSliceBetaOffset as i8;
 
-    (*pFilter).ref_ids = snapshot_ref_ids(pCtx.sRefPic);
+    pFilter.ref_ids = snapshot_ref_ids(pCtx.sRefPic);
 }
 
 #[cfg(test)]
