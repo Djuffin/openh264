@@ -2657,6 +2657,140 @@ pub fn PreprocessSliceCoding(pCtx: &mut sWelsEncCtx) {
     let kbDeblockingParallelFlag = pCurLayer.bDeblockingParallelFlag;
     let kiLoopFilterDisableIdc = pCurLayer.iLoopFilterDisableIdc;
 
+    // ---- the SCREEN_CONTENT_REAL_TIME block, first half (`encoder_ext.cpp:2708-2771`).
+    //
+    // **P10.3.D4.** Every context read the block makes is lifted here with the rest
+    // (§4.6), and its `SFeatureSearchPreparation` half — which reaches the layer,
+    // the reference list, the VAA block and the picture pools — runs **before** the
+    // table's `&mut` is taken, where the C++ runs it after. **D-scc-15: that reorder
+    // is behaviour-preserving by construction.** The step reads the table only
+    // through `FmeKernels::of` (`pfCalculateBlockFeatureOfFrame[2]`,
+    // `pfInitializeHashforFeature`, `pfFillQpelLocationByFeatureValue`), and those
+    // three slots have exactly one writer in either tree — `WelsInitMeFunc`, at
+    // init. Nothing between here and the table writes below touches them
+    // (`SetFastCodingFunc`/`SetNormalCodingFunc` and the P-slice block write neither),
+    // and the step touches nothing the table writes set. The table half stays at the
+    // C++'s position, below.
+    let kbScreenP =
+        kiUsageType == SCREEN_CONTENT_REAL_TIME && keSliceType == EWelsSliceType::P_SLICE;
+    let kbScreenI =
+        kiUsageType == SCREEN_CONTENT_REAL_TIME && keSliceType != EWelsSliceType::P_SLICE;
+    // `SLogContext` is `Copy`; the two `SetMeMethod` warnings need it while `fl` lives.
+    let kLogCtx = pCtx.sLogCtx;
+    // `:2714-2716`. The scroll fields are the **extension's**; `iFrameSad` below is
+    // the **base block's** (trap 4).
+    let (kbScroll, kiScrollMvX, kiScrollMvY) = match pCtx.vaa_ext_ref() {
+        Some(pVaaExt) => (
+            pVaaExt.sScrollDetectInfo.bScrollDetectFlag,
+            pVaaExt.sScrollDetectInfo.iScrollMvX,
+            pVaaExt.sScrollDetectInfo.iScrollMvY,
+        ),
+        None => (false, 0, 0),
+    };
+    let kiFrameSad = pCtx.vaa().map_or(0, |pVaa| pVaa.sVaaCalcInfo.iFrameSad); // :2738
+    let kbLtr = pCtx.param().bEnableLongTermReference; // :2746
+    // The layer's own dependency id, as `layer_ref_pic` resolves it (S10.8) — not
+    // `pCtx.uiDependencyId`, which is the same value here and would not be under a
+    // multi-layer frame loop that had moved on.
+    let kiLayerDid = pCurLayer.sLayerInfo.sNalHeaderExt.uiDependencyId as usize;
+    let kiMbSize = pCurLayer.iMbWidth as i32 * pCurLayer.iMbHeight as i32; // :2736
+    let kbHasPrep = pCurLayer.pFeatureSearchPreparation.is_some();
+    let kpRefPicId = pCurLayer.pRefPic;
+    let kpRefOri0 = pCurLayer.pRefOri[0];
+
+    // `:2730-2765`, the preparation half. Its two outputs feed the table writes.
+    let (kbFmeSwitch, kbFmeInstalled) = if kbScreenP && kbHasPrep {
+        // **D-scc-14: moved out, not borrowed** — twice. The preparation box comes
+        // out of the layer and the reference's feature storage out of the
+        // reconstruction picture, so the picture's *planes* can be borrowed shared
+        // (`PerformFMEPreprocess` reads them) while its own storage is written
+        // through. Both go back below, inside this block, with no `return` in
+        // between: a box left taken out would be a silent behaviour change on the
+        // next frame — the features recomputed, or the switch never firing.
+        let mut prep = current_layer_expect_mut(pCtx).pFeatureSearchPreparation.take();
+        let mut out = (false, false);
+        if let Some(p) = prep.as_deref_mut() {
+            p.iHighFreMbCount = 0; // :2732
+            // `:2737-2739`. Both divisions are `int32_t`, as in the C++ — and the
+            // first numerator is the zero just written, so the percentage the
+            // reference still has a TODO about is always 0.
+            p.bFMESwitchFlag = crate::encoder::svc_motion_estimate::CalcFMESwitchFlag(
+                p.uiFMEGoodFrameCount,
+                p.iHighFreMbCount * 100 / kiMbSize,
+                kiFrameSad / kiMbSize,
+                kbScroll,
+            );
+            let kbSwitch = p.bFMESwitchFlag;
+
+            // `:2742`: the storage is the **reconstruction's** on every path — under
+            // LTR only the plane source below moves. `:2743`
+            // (`pFeatureSearchPreparation->pRefBlockFeature = ..`) has no counterpart:
+            // the port does not carry that field, because the whole reference writes
+            // it and never reads it (whole-tree grep: one write, no read).
+            let mut storage = kpRefPicId.and_then(|id| {
+                pCtx.ref_list_mut(kiLayerDid)
+                    .and_then(|pRefList| pRefList.pic_mut(id).pScreenBlockFeatureStorage.take())
+            });
+            let mut kbInstalled = false;
+            if let Some(st) = storage.as_deref_mut() {
+                if kbSwitch && !st.bRefBlockFeatureCalculated {
+                    // `:2744-2749`
+                    let kernels =
+                        crate::encoder::svc_motion_estimate::FmeKernels::of(pCtx.func_list());
+                    // `:2746` — the original frame under LTR, the reconstruction
+                    // otherwise. Under LTR `pRefOri[0]` is a *source-pool* picture on
+                    // the screen path, whose `iFrameAverageQp` `UpdateOriginalPicInfo`
+                    // copied off the reconstruction at the previous frame's end;
+                    // without LTR it is the picture whose storage was just taken out,
+                    // which is why the planes are borrowed shared (trap 3).
+                    let pRef: Option<&SPicture> = if kbLtr {
+                        kpRefOri0
+                            .and_then(|r| crate::encoder::svc_encode_slice::ctx_pic_ref(pCtx, r))
+                    } else {
+                        kpRefPicId.and_then(|id| pCtx.ref_list(kiLayerDid).map(|l| l.pic(id)))
+                    };
+                    if let Some(pRef) = pRef {
+                        crate::encoder::svc_motion_estimate::PerformFMEPreprocess(
+                            &kernels,
+                            pRef,
+                            &mut p.pFeatureOfBlock,
+                            st,
+                        );
+                    }
+                }
+                kbInstalled = kbSwitch && st.bRefBlockFeatureCalculated && st.iIs16x16 == 0; // :2752-2753
+            } // F329: a reference with no storage answers `false` here and is a
+              // null dereference there — unreachable on both sides, see the finding.
+            // Put the storage back, resolved exactly as the take resolved it.
+            if let (Some(id), Some(st)) = (kpRefPicId, storage) {
+                if let Some(pRefList) = pCtx.ref_list_mut(kiLayerDid) {
+                    pRefList.pic_mut(id).pScreenBlockFeatureStorage = Some(st);
+                }
+            }
+            out = (kbSwitch, kbInstalled);
+        }
+        current_layer_expect_mut(pCtx).pFeatureSearchPreparation = prep;
+        out
+    } else {
+        if kbScreenI {
+            // `:2766-2769` — reset some status when at I_SLICE. The C++ dereferences
+            // the preparation unconditionally here and may: `ParamValidation`
+            // refuses screen content above one spatial layer
+            // (`encoder_ext.cpp:274-279`), so the only DQ layer is the last one,
+            // which is the one that carries a preparation. The port asks anyway
+            // (F329).
+            if let Some(p) = current_layer_expect_mut(pCtx)
+                .pFeatureSearchPreparation
+                .as_deref_mut()
+            {
+                p.bFMESwitchFlag = true;
+                p.uiFMEGoodFrameCount =
+                    crate::encoder::svc_motion_estimate::FMESWITCH_DEFAULT_GOODFRAME_NUM;
+            }
+        }
+        (false, false)
+    };
+
     let fl: &mut SWelsFuncPtrList = pCtx.func_list_mut();
 
     // function pointers conditional assignment under sWelsEncCtx
@@ -2703,14 +2837,73 @@ pub fn PreprocessSliceCoding(pCtx: &mut sWelsEncCtx) {
         fl.sSampleDealingFuncs.pfMeCost = CostFamily::Unset;
     }
 
-    // The SCREEN_CONTENT_REAL_TIME block of the C++ (encoder_ext.cpp:2708-2771) sets up
-    // feature-based motion search: `WelsMdInterFinePartitionVaaOnScreen`, the
-    // scrolling-MV slot, the static/scrolled search slots, `SetMeMethod`,
-    // `PerformFMEPreprocess` on the reference's feature storage and the FME switch.
-    // **P10.3 translates it** (D-scc-6): since P10.1 a screen encode reaches this
-    // point with every block it reads allocated, and runs the camera dispatch
-    // instead — which is why the `scc` preset reads DIFFER on every P frame until
-    // then.
+    // ---- the SCREEN_CONTENT_REAL_TIME block, table half (`encoder_ext.cpp:2710-2765`),
+    // at the C++'s own position. Its preparation half ran above the table's `&mut`
+    // (D-scc-14/15); `kbFmeSwitch` and `kbFmeInstalled` are that half's two outputs,
+    // and every value below is a `Copy` scalar lifted with them. **Every write here
+    // sits behind `kbScreenP`**, so the camera path cannot move.
+    if kbScreenP {
+        //to init at each frame will be needed when dealing with hybrid content (camera+screen)
+        //MD related func pointers
+        fl.pfInterFineMd =
+            Some(crate::encoder::svc_mode_decision::WelsMdInterFinePartitionVaaOnScreen);
+
+        //ME related func pointers
+        fl.pfSetScrollingMv = Some(if kbScroll && (kiScrollMvX | kiScrollMvY) != 0 {
+            crate::encoder::svc_mode_decision::SetScrollingMvToMd
+        } else {
+            crate::encoder::svc_mode_decision::SetScrollingMvToMdNull
+        });
+
+        // Indexed by `EStaticBlockIdc`, which is **not** `pfSearchMethod`'s index
+        // space (trap 7). The P-slice block above filled all three with
+        // `WelsMotionEstimateSearch`; the C++ re-states `NO_STATIC` here and so
+        // does this.
+        fl.pfMotionSearch[EStaticBlockIdc::NO_STATIC as usize] =
+            Some(crate::encoder::svc_motion_estimate::WelsMotionEstimateSearch);
+        fl.pfMotionSearch[EStaticBlockIdc::COLLOCATED_STATIC as usize] =
+            Some(crate::encoder::svc_motion_estimate::WelsMotionEstimateSearchStatic);
+        fl.pfMotionSearch[EStaticBlockIdc::SCROLLED_STATIC as usize] =
+            Some(crate::encoder::svc_motion_estimate::WelsMotionEstimateSearchScrolled);
+
+        //ME16x16
+        if !crate::encoder::svc_motion_estimate::SetMeMethod(
+            ME_DIA_CROSS,
+            &mut fl.sMeFuncs.pfSearchMethod[BLOCK_16x16],
+        ) {
+            // Neither warning can fire — both constants are honoured cases — but
+            // both are ported, at WARNING as upstream has them: an INFO line here
+            // would move `log_referee.sh`'s capture.
+            crate::common::wels_trace::WelsLog(
+                kLogCtx,
+                crate::common::wels_trace::WELS_LOG_WARNING,
+                "SetMeMethod(BLOCK_16x16) ME_DIA_CROSS unsuccessful, switched to default search",
+            );
+        }
+
+        //ME8x8
+        if kbHasPrep {
+            if kbFmeInstalled
+                && !crate::encoder::svc_motion_estimate::SetMeMethod(
+                    ME_DIA_CROSS_FME,
+                    &mut fl.sMeFuncs.pfSearchMethod[BLOCK_8x8],
+                )
+            {
+                crate::common::wels_trace::WelsLog(
+                    kLogCtx,
+                    crate::common::wels_trace::WELS_LOG_WARNING,
+                    "SetMeMethod(BLOCK_8x8) ME_DIA_CROSS_FME unsuccessful, switched to default search",
+                );
+            }
+
+            //assign UpdateFMESwitch pointer
+            fl.pfUpdateFMESwitch = Some(if kbFmeSwitch {
+                crate::encoder::svc_motion_estimate::UpdateFMESwitch
+            } else {
+                crate::encoder::svc_motion_estimate::UpdateFMESwitchNull
+            });
+        }
+    }
 
     // update some layer-dependent variables to save judgements at MB level
     let sdf = &fl.sSampleDealingFuncs;

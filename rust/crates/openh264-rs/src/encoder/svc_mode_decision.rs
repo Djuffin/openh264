@@ -1364,18 +1364,22 @@ pub extern "C" fn WelsMdP8x8<'a>(
         );
 
         {
-            // **One of this dispatch's two locks came off at P10.2.C6.** The
-            // index is live now: `SetBlockStaticIdcToMd` is the only nonzero
-            // writer of `iBlock8x8StaticIdc`, and it stamps real values from the
+            // **Both of this dispatch's locks are off** — the index at P10.2.C6,
+            // the table at P10.3.D4. `SetBlockStaticIdcToMd` is the only nonzero
+            // writer of `iBlock8x8StaticIdc` and stamps real values from the
             // screen scene-change plugin's block-static row on every screen P
-            // macroblock (measured — see `CalUVSadCost`). The four entries are
-            // still identical, because the only writer of `pfMotionSearch` is
-            // `PreprocessSliceCoding`'s loop, which installs
-            // `WelsMotionEstimateSearch` in every slot: the C++'s SCREEN_CONTENT
-            // block that would install the static and scrolled variants is
-            // P10.3's. So the selection runs and selects the same function;
-            // P10.3 makes the four differ. The remaining lock is stated so the
-            // dispatch stays honest when it lights.
+            // macroblock; and `PreprocessSliceCoding`'s screen block now installs
+            // `WelsMotionEstimateSearchStatic` at `COLLOCATED_STATIC` and
+            // `..Scrolled` at `SCROLLED_STATIC`, where the P-slice loop above it
+            // had put `WelsMotionEstimateSearch` in all three. So the three slots
+            // differ under screen content and the selection picks between real
+            // alternatives; under camera content the loop is still the only
+            // writer and all three hold the same function, as before.
+            //
+            // Trap, and the reason this reads the index *here*:
+            // `SetBlockStaticIdcToMd` stamps the four indices **before** the
+            // static/scrolled skip tests, and P8x8 reads them only after those
+            // tests have failed.
             let pEncPicture = layer_enc_view_expect(pCurDqLayer);
             let pRefPicture = layer_ref_view_expect(pEncCtx, &*pCurDqLayer);
             pFunc.pfMotionSearch[(*pWelsMd).iBlock8x8StaticIdc[i as usize] as usize]
