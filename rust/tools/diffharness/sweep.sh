@@ -22,7 +22,8 @@
 #                      the first time it had ever been run
 #                   -- the only preset that runs METHOD_DOWNSAMPLE at all
 #             scc   SCREEN_CONTENT_REAL_TIME: 7 inputs x rc x gop x cabac x slices x
-#                   threads x LTR (148 configs; SCC_TIER=min for the 28-row byte tier)
+#                   threads x LTR (148 configs; SCC_TIER=gate for the 108 the family
+#                   gate runs, =min for the 28-row byte tier)
 #                   -- P10.1: FAILS by design (every row DIFFER) until P10.3; not in
 #                      gates.sh's family list
 #             all   every preset above
@@ -430,10 +431,32 @@ sweep_scc() {
   echo "-- preset: scc"
   local tier=${SCC_TIER:-all}
   local YUV W H N name rc gop cabac thr
-  # P10.1: the screen-content axis. Every row FAILS until P10.3 lands the dispatch
-  # block; until then this preset's job is to fail for the recorded reason (a Rust
-  # init failure before P10.1.B5, byte differences with every frame encoded after).
-  # It is deliberately NOT in gates.sh's family list; P10.4 adds it when it passes.
+  # P10.1: the screen-content axis, byte-identical since P10.3's dispatch block —
+  # 148/148 in both profiles. **In `gates.sh`'s family list since P10.4 (D-scc-17)**,
+  # the whole preset rather than `SCC_TIER=min`, because the full 148 rows measured
+  # 51s debug / 27s release and the ruling's threshold was three minutes. Before
+  # P10.3 every row FAILED and the preset's job was to fail for the recorded reason
+  # (a Rust init failure before P10.1.B5, byte differences with every frame encoded
+  # after), which is why it sat outside the gate while it existed.
+  #
+  # **The three tiers** (`SCC_TIER`, default `all`):
+  #   all   148 rows — the whole preset, what `sweep.sh all` and the phase exit run.
+  #   gate  108 rows — `all` minus the 40 `sm=3 t=4` rows. **This is what
+  #         `gates.sh family` runs, and F334 is why.** Those 40 rows sample a race
+  #         in the **C++ reference**, not in the port: 100 alternating solo runs of
+  #         one of them (`Static_152_100_loop60 rc=1 gop=4 cabac=0`) gave the port
+  #         100 identical bitstreams and the reference **12 distinct ones**, the
+  #         port's single output being the reference's own 88-run majority. It is
+  #         F3's `SM_SIZELIMITED_SLICE` + multithreading race, whose window screen
+  #         usage widens by about two orders of magnitude — the same reference
+  #         binary was 40/40 deterministic on the camera version of the row and
+  #         40/40 on the screen `sm=0 t=4` LTR row. At that rate every family run
+  #         would go red on a reference misencode, so the gate does not sample it,
+  #         exactly as `abi_harness/run.sh` already refuses to ("a gate is not the
+  #         place to sample a known flake"). The rows stay in `all`, under the F3
+  #         retry rule.
+  #   min    28 rows — RC off, single slice, one thread: P10.3's first byte gate,
+  #         and the tier `scc_verdicts.sh` referees.
   #
   # Every row passes `so = 0` (compare.sh's 21st argument) before `usage = 1`:
   # driver arguments are positional, and a row that omitted it would shift `usage`
@@ -462,6 +485,9 @@ sweep_scc() {
     for rc in 1 2; do for gop in -1 4; do for cabac in 0 1; do
       check "scc $name rc=$rc gop=$gop cabac=$cabac sm=0 t=1" \
             "$YUV" "$W" "$H" "$N" 26 "$cabac" "$gop" "$rc" 0 0 1 1 0 0 30 0 0 1 0 0 0 1 0
+      # F334: the reference's own race lives here — excluded from the `gate` tier,
+      # kept in `all`. See the tier block at the top of this function.
+      [ "$tier" = gate ] || \
       check "scc $name rc=$rc gop=$gop cabac=$cabac sm=3 t=4" \
             "$YUV" "$W" "$H" "$N" 26 "$cabac" "$gop" "$rc" 0 3 1500 4 0 0 30 0 0 1 0 0 0 1 0
     done; done; done

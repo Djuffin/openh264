@@ -410,3 +410,73 @@ Both are upstream's, both are ported as-is, and the bytes agree — which is the
 point of recording it: the counters looked like a guard doing work and were
 measuring a carry-over instead.
 
+
+---
+
+## F334 — the `sm=3` multithreading race is in the **C++ reference**, not the port, and screen usage widens it ~50x (P10.4, E1)
+
+**Found by the promotion itself.** E1 put `scc` in `gates.sh`'s family list and ran
+it. Both profiles went red, at a *different* row each time, and both were `sm=3 t=4`:
+
+```
+debug    scc Static_152_100_loop60 rc=2 gop=-1 cabac=0 sm=3 t=4 :: C++ 48513 bytes  Rust 49051 bytes
+release  scc Static_152_100_loop60 rc=1 gop=4  cabac=0 sm=3 t=4 :: C++ 71066 bytes  Rust 71110 bytes
+```
+
+That is F3's signature (`SM_SIZELIMITED_SLICE` + `iMultipleThreadIdc > 1`), so the
+retry rule applies — but two things did not fit. F3's recorded shapes are a
+*zero-byte* or a *short* output; here the port's stream was **longer** than the
+reference's, in both profiles. And F3's rate is 1 in 400–1000, while this fired on
+essentially every sweep.
+
+**The measurement.** Each driver run **solo**, alternating inside one loop so both
+see the same machine load (F3's own protocol), on
+`Static_152_100_loop60 152x100x60 qp=26 cabac=0 gop=4 rc=1 sm=3 n=1500 t=4 usage=1`,
+release:
+
+| binary | runs | distinct bitstreams |
+|---|---|---|
+| `rust_enc` | 100 | **1** |
+| `cxx_enc` (the reference) | 100 | **12** |
+
+The port's single output is byte-for-byte the reference's own **88-run majority**
+(`3715c7ad…`). The reference produced eleven other bitstreams in the remaining
+twelve runs. `compare.sh` reports that as a port failure because it reports any
+difference as one; what it actually caught was the reference misencoding.
+
+**It is `sm=3` plus threads, and screen usage widens the window.** Same binary, same
+clip, same session:
+
+| configuration | reference runs | distinct |
+|---|---|---|
+| screen, `sm=3 t=4`, rc on | 100 | **12** |
+| screen, `sm=0 t=4`, LTR + lossless | 40 | 1 |
+| **camera**, `sm=3 t=4` (F3's own row) | 40 | 1 |
+
+So the race needs size-limited slices *and* more than one thread — F3's signature
+exactly — and under `SCREEN_CONTENT_REAL_TIME` its window is roughly two orders of
+magnitude wider than the 1-in-400–1000 F3 recorded for camera content. A plausible
+mechanism, not measured here: screen usage forces `bEnableSceneChangeDetect` on and
+adds the scroll/static skips and the feature search to every macroblock, which
+changes how the slice workers interleave. The mechanism is a later session's; the
+attribution is what this finding settles.
+
+**What this corrects.** F3's title is "The multi-threaded dynamic-slicing *encoder*
+is nondeterministic", and both its write-up and `gates.sh`'s retry block are worded
+as though `rust_enc` emits the wrong bytes ("a zero-byte output while `rust_enc`
+still exits 0"). For this configuration that is backwards. Nobody had run the two
+binaries solo and hashed them; every prior observation came through `compare.sh`,
+which cannot say *which* side moved. Both comments are corrected in place, and F3's
+retry rule is unchanged — a retry works precisely because the reference re-encodes
+correctly next time.
+
+**What it costs the gate.** 40 of the 148 `scc` rows are `sm=3 t=4`. At this rate a
+family run samples a reference misencode nearly every time, which makes the gate
+noise rather than a verdict. `SCC_TIER=gate` (108 rows) is what `gates.sh family`
+runs — the same call `abi_harness/run.sh` already made for the same race ("a gate is
+not the place to sample a known flake"). The 40 rows stay in `sweep.sh scc` and
+`sweep.sh all`, under the F3 retry rule, which is where the phase exit runs them.
+
+**Not a port defect, and not a repair this phase owes.** The port is deterministic on
+the configuration and agrees with the reference's correct output. There is nothing to
+fix in `src/`.
