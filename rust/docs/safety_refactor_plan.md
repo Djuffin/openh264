@@ -810,8 +810,43 @@ one body that measured zero and why that is upstream's arithmetic rather than a
 gap). Census `missing` 2 -> 0. The gtest allowlist is 6 -> 1 rows, the survivor
 being the permanent decoder POC row.
 
-What is left is **not** in this section's scope but in P10.4's: `scc` is still
-outside `gates.sh`'s family list, so the axis is byte-exact and unguarded.
+**2026-09-02 — P10.4 landed (`33fc848f` .. the docs commit), and the phase is
+closed.** It added no encoder code; it made the axis guarded, measured and
+documented.
+
+*The exit gate, satisfied in both sentences:*
+
+* *"the screen-content sweep byte-identical against the C++ in both profiles"* —
+  `sweep.sh scc` reads **148/148 in both profiles**, and the phase-exit `sweep.sh
+  all` reads **`PASS=1043 FAIL=0` in both**, which is every preset this project has.
+* *"the `SCREEN_CONTENT(dormant)` tag count reads zero"* — `grep -rn
+  "SCREEN_CONTENT(dormant" src/` reads **0**. P10.3 removed the tags; P10.4 reworded
+  the two remaining prose mentions so the literal token is gone from the tree
+  (D-scc-21).
+
+*The guards it added, none of which existed at P10.3's close:* `scc` in
+`gates.sh`'s family sweep list (`SCC_TIER=gate`, 108 rows, 583 -> 691
+configurations per profile, calibrated red at 643/48 before being trusted); two
+screen rows in the external-ABI loopback (`abi_harness/run.sh`, 16/16 per profile,
+after arguments 18–24 were added to a driver that had claimed compatibility and
+stopped parsing at 17); and `BENCH_USAGE=1` in `c_vs_rust_bench` (30/30
+bit-identical), which is also the axis's first performance measurement.
+
+*What the promotion found:* **F334** — the `sm=3` multithreading race F3 has tracked
+since T5b is in the **C++ reference**, not the port (100 solo runs each: `rust_enc`
+1 distinct bitstream, `cxx_enc` 12, the port's output being the reference's own
+majority), and screen usage widens its window about two orders of magnitude. F3's
+write-up and `gates.sh`'s retry block are corrected. **F335** — the bench's screen
+rows and the `scc` preset referee disjoint halves of the path; lavfi content cannot
+express a scroll.
+
+*Item 6's Miri probe was struck by the user's ruling — "don't run miri, translate to
+safe Rust directly" — for **every** Phase 10 session, P10.1 through P10.4.* The
+phase's exit battery was assembled from what `gates.sh exit` runs besides its Miri
+lanes; the verdicts are in `encoder_port_status.md`'s Phase 10 section. D-scc-5's
+`Sync` question rests on a compile-time assertion instead, and the screen path is
+safe Rust throughout — the ratchet's `raw_ptr` count and the 12-row unsafe census
+are unchanged by the whole phase.
 
 ---
 

@@ -96,10 +96,14 @@ All measured with `compare.sh` (§2.1):
 | `SM_SIZELIMITED_SLICE` × 5 constraints × 2 QPs × mode × GOP × cabac × input | 320 | identical |
 | **`iMultipleThreadIdc` 2/4 × 4 slice modes × cabac × `iRCMode` × input** | **120** | **identical** |
 | the single-threaded re-run that guards it (5 `iRCMode` × init × GOP × cabac × input, plus slice modes) | 210 | identical |
+| **`SCREEN_CONTENT_REAL_TIME` × rate control × GOP × cabac × {single slice/1 thread, size-limited/4 threads} × 7 inputs, plus LTR over a lossless link** (Phase 10, `sweep.sh scc`) | **148** | **identical** |
+| the external-ABI loopback: the same rows through the `cdylib` by `dlopen`, against `rust_enc` in-process, both profiles (`abi_harness/run.sh`) | **16** | **identical** |
 
-**No configuration axis the harness can drive is refused any more.** What remains is
-more than one spatial layer (needs `METHOD_DOWNSAMPLE`) and
-`SCREEN_CONTENT_REAL_TIME`; neither has a harness knob yet.
+**No configuration axis the reference accepts is refused or unrefereed any more**
+(2026-09-02, Phase 10's close). Multi-layer landed in Phase 8b and
+`SCREEN_CONTENT_REAL_TIME` in Phase 10; both have harness knobs, sweep presets and
+gate rows. The single number that says so is `sweep.sh all`: **`PASS=1043 FAIL=0`
+in both build profiles.**
 
 Two limits on that claim, both measured, neither a port defect:
 
@@ -341,13 +345,24 @@ A third, about counting:
 
 ## 4. The work, in order
 
-**Where to start.** §4.1 is the big one and the only remaining item that unlocks a
-new configuration axis, so it is the natural next phase — but it needs a harness
-change first (a `layers` argument to `compare.sh` and both drivers), and until that
-exists you have no oracle. If you want a shorter first commit to get oriented, take
-§4.4 (`METHOD_DENOISE`, self-contained) or a slice of §5.1 (the `--dups` audit, which
-has yielded a real defect six times out of ten). Do not start §4.5 — it is
-unreachable in upstream too.
+> **2026-09-02 — this section is now a record, not a queue.** Every item in it has
+> landed: §4.1 `METHOD_DOWNSAMPLE` and multi-layer in Phase 8b, §4.2
+> `SCREEN_CONTENT_REAL_TIME` in Phase 10, §4.3 the three `SPS_LISTING` strategies in
+> Phase 8b, §4.4 `METHOD_DENOISE` in Phase 8b. §4.5 remains what it always was —
+> unreachable in upstream too, so there is nothing to port. **No configuration axis
+> the reference accepts is refused or unrefereed** (`sweep.sh all`: 1043/1043, both
+> profiles). The subsections are kept because each one is the map of the family it
+> describes, and §4.2 in particular was rewritten at Phase 10's close into exactly
+> that. Where to start is no longer here; it is §5 (cleanup) and the perf gap
+> §4.2 names.
+
+**Where to start** *(as written before Phase 8b, kept for the reasoning)*. §4.1 is
+the big one and the only remaining item that unlocks a new configuration axis, so it
+is the natural next phase — but it needs a harness change first (a `layers` argument
+to `compare.sh` and both drivers), and until that exists you have no oracle. If you
+want a shorter first commit to get oriented, take §4.4 (`METHOD_DENOISE`,
+self-contained) or a slice of §5.1 (the `--dups` audit, which has yielded a real
+defect six times out of ten). Do not start §4.5 — it is unreachable in upstream too.
 
 ### 4.1 `METHOD_DOWNSAMPLE`, and with it multi-layer SVC
 
@@ -360,44 +375,70 @@ out of the way.
 Expect the harness to need a `layers` argument, and expect `SPS_LISTING` (§4.3) to
 become relevant at the same time.
 
-### 4.2 `SCREEN_CONTENT_REAL_TIME`
+### 4.2 `SCREEN_CONTENT_REAL_TIME` — done; this is the maintainer's map
 
-**Phase 10's byte gate is met (P10.1, P10.2 and P10.3 landed 2026-09-02).**
-`sweep.sh scc` reads **148/148 in both profiles** — the whole preset, not just the
-`min` tier P10.3 was chartered on. What stands:
+**Phase 10 closed 2026-09-02.** `sweep.sh scc` reads **148/148 in both profiles**,
+the axis is in the family gate, the external-ABI loopback and the encoder bench, and
+`grep "SCREEN_CONTENT(dormant" src/` reads 0. Nothing here is a work order any more;
+what follows is where the screen path lives and what referees it.
 
-- **Three referees, all green.** `sweep.sh scc` (148 rows over the three `res/`
-  clips and four synthetic scrolling-text clips from `gen_screen_clip.py`;
-  `SCC_TIER=min` is its 28-row byte tier) is byte-exact in debug and release.
-  `scc_verdicts.sh` is the *verdict* referee — both drivers at
-  `OH264_TRACE_LEVEL=8`, their `iVaaFrameSceneChangeIdc = %d,codingIdx = %d`
-  sequences diffed, plus the five `WelsBuildRefListScreen()` lines on LTR rows —
-  and reads 28/28 on the min tier and 20/20 on the wide tier's LTR rows. F327 has
-  its calibration and why only ten of the 28 rows can fail. `log_referee.sh` exits
-  0. Both drivers take `usage`/`lossless` (their 23rd/24th arguments;
-  `compare.sh`'s 21st..23rd are `setopt usage lossless` — positional, so `setopt`
-  must be spelled `0` whenever `usage` is).
-- **The fence is down and the path is complete.** `InitializeExt` accepts screen
-  content with and without lossless LTR; the three plugins are in
-  (`METHOD_SCROLL_DETECTION`, `METHOD_SCENE_CHANGE_DETECTION_SCREEN`,
-  `METHOD_COMPLEXITY_ANALYSIS_SCREEN`, P10.2); and `PreprocessSliceCoding`'s
-  screen block is translated (P10.3.D4), so the FME and static/scrolled search
-  families are live rather than dormant. P10.3.D5's entry counters measured every
-  one of them running on a screen row and reading **zero** on a camera control.
-- **The census and the tags are at zero.** `port_census.py --classify` reports
-  `0 missing` (`SetMeMethod`, `CountFMECostDown`, `UpdateFMEGoodFrameCount` and
-  `UpdateFMESwitch` all ported under their C++ names at P10.3.D1/D2), and the
-  `SCREEN_CONTENT(dormant: Phase 10)` tag count reads **0** — the phase's own exit
-  condition (`safety_refactor_plan.md`).
-- **The gtest allowlist is down to one row.** The five
-  `EncodeFile/EncoderOutputTest.CompareOutput/8..12` screen rows left it at
-  P10.3.D6 (198/199); what remains is the permanent decoder POC row (D-poc-1).
-- `GOM_H_SCC` is corrected (8, not 2) and live since P10.2.C5.
-- **Outstanding — P10.4, and it is promotion rather than repair (F331).** `scc` is
-  still *not* in `gates.sh`'s family list (D-scc-16 kept this session inside its
-  charter), so nothing stops a regression on the screen axis today. P10.4 adds it
-  with its comment and its wall-clock cost, puts a screen row in `c_vs_rust_bench`
-  under the two-run `perfpair.py` protocol, and writes the phase's exit rows.
+**Where the code is.**
+
+| piece | where |
+|---|---|
+| the three video-processing plugins | `processing/scroll_detection.rs`, `processing/scene_change_detection.rs` (screen arm), `processing/complexity_analysis.rs` (`CComplexityAnalysisScreen`) |
+| the dispatch that reaches them | `encoder_ext.rs`'s `PreprocessSliceCoding` screen block (P10.3.D4) |
+| the FME preparation half | `svc_motion_estimate.rs` — `PerformFMEPreprocess`, `RequestFeatureSearchPreparation`, `UpdateFMESwitch`, `CountFMECostDown`, `UpdateFMEGoodFrameCount` |
+| the search half | `svc_motion_estimate.rs` static/scrolled/feature/cross searches, live since the dispatch block |
+| the two SCD P-skips | `svc_mode_decision.rs` — `JudgeStaticSkip`, `JudgeScrollSkip`, `SetBlockStaticIdcToMd`, `SetScrollingMvToMd` |
+| the VAA screen extension | `encoder_context.rs` — `VaaBlock`'s `Screen` arm, reached through `vaa_ext_ref`/`vaa_ext_ref_mut` |
+| the parameter forcing | `wels_encoder_ext.rs` — screen turns adaptive quant and background detection off and scene-change detection on, as `encoder_ext.cpp:274-290` does |
+
+**The four referees, and what each one cannot see.** Run more than one; they do not
+overlap the way you would guess.
+
+1. **`sweep.sh scc` — 148 byte rows.** Three `res/` clips and four synthetic
+   scrolling-text clips from `gen_screen_clip.py`. `SCC_TIER=min` is the 28-row byte
+   tier, `SCC_TIER=gate` the 108 the family gate runs. *Cannot see* the
+   `GetDefaultParams` API flow: every row pins an explicit `SEncParamExt`.
+2. **`scc_verdicts.sh` — 28/28.** The *verdict* referee: both drivers at
+   `OH264_TRACE_LEVEL=8`, `iVaaFrameSceneChangeIdc`/`codingIdx` sequences diffed,
+   plus the `WelsBuildRefListScreen()` lines on LTR rows. F327 has its calibration.
+3. **`abi_harness/run.sh` — 16/16 per profile.** Two screen rows through the
+   `cdylib` by `dlopen`. *Cannot see* anything in-process gates already cover; what
+   it uniquely covers is the C ABI itself.
+4. **`BENCH_USAGE=1 cargo bench --bench c_vs_rust_bench` — 30/30.** Fifteen lavfi
+   sources at four sizes under `GetDefaultParams` + `InitializeExt` with rate
+   control on. **Cannot see the scroll family at all** — nothing in lavfi's
+   catalogue scrolls by whole rows, so `bScrollDetectFlag` is false on every frame
+   and a deliberately wrong `SetScrollingMvToMd` changes none of the 30 rows while
+   failing 48 of the gate's 108. F335. Pick a calibration break the content in front
+   of you actually reaches.
+
+**The argument positions, which are positional and unforgiving.** `compare.sh` and
+both drivers take `... [setopt] [usage] [lossless]` as their 21st/22nd/23rd
+(`compare.sh`) and 23rd/24th/25th (`cxx_enc`, `rust_enc`, `abi_harness` — argv[23]
+and argv[24] after the output path at argv[8]). **`setopt` must be spelled `0`
+whenever `usage` is**, or the row shifts `usage` into the setoptext slot and encodes
+*camera* content with a SetOption after frame 1 — two identical camera streams any
+sweep would happily call a PASS.
+
+**The one place a future SIMD dispatch would have to be verified.** The port has no
+counterpart to upstream's x86 `SSE4.1` line search
+(`WelsScrollDetectionCore`'s vectorised arm) or to its SSE hash builders in
+`svc_motion_estimate.cpp`; the scalar bodies are the only ones. That is also where
+the measured cost sits — the port runs the screen path at **0.40–0.88x the
+reference, median 0.44x** (`perf_baseline.md`, Phase 10's span), against a reference
+whose NEON kernels are now active. Anyone adding SIMD there must re-verify against
+all four referees above, because a vectorised line search that disagrees with the
+scalar one by a single pixel changes `bScrollDetectFlag` and therefore the whole
+frame.
+
+**Known non-defect at this axis: F334.** `sm=3` with more than one thread hits a
+race *in the C++ reference* — 12 distinct bitstreams in 100 solo runs against the
+port's 1 — and screen usage widens it about two orders of magnitude. Those 40 rows
+are excluded from the family gate and kept in `sweep.sh all` under the F3 retry
+rule. A byte difference at that signature is not evidence about the port.
 
 ### 4.3 The three `SPS_LISTING` parameter-set strategies
 
@@ -426,6 +467,35 @@ correct-but-unreachable for the same reason. Low priority; do not "fix" the flag
 ## 5. Cleanup (Phase 6) — roughly a third done
 
 Do these alongside the above, not after.
+
+> **2026-09-02 (P10.4.E5) — the census's own numbers, re-run at Phase 10's close,
+> and a disposition for the one bucket nobody has read.**
+>
+> ```
+> port_census.py --classify   315 missing by name: 0 missing, 101 renamed,
+>                             161 dead, 53 unclassified
+> find_stub_bodies.py         77 Rust bodies under 1/4 the C++'s statement count
+> find_stub_bodies.py --dups  164 duplicated function names (census budget 195)
+> find_dup_types.sh           52 entries
+> ```
+>
+> **`missing` is 0** — the first time in the project's history. Phase 10 took the
+> last fifteen rows (P10.1–P10.3) and reclassified `imagerotate`'s four as `dead`.
+>
+> **The 53 `unclassified` are all older than Phase 10** (P10.2 measured 54 before
+> the phase, none of them screen content) and fall in four groups. Counted, *not*
+> classified — each needs its own evidence line, which is a later session's work:
+>
+> | group | rows | what makes it a candidate |
+> |---|---|---|
+> | `_c`-suffixed scalar kernels (`sad_common` 14, `deblocking_common` 12, `sample.cpp` 7, `expand_pic` 2, `mc.cpp` 1) | **37** | `renamed`: the C++ names its reference kernel `Foo_c` because a SIMD sibling shares the dispatch slot; the port has one body under the plain name. Check the slot, not the name. |
+> | the sub-8x8 partition family — `WelsMdP4x4`/`P8x4`/`P4x8`, `UpdateP{4x4,8x4,4x8}MotionInfo`, `UpdateP{4x4,8x4,4x8}Motion2Cache` | **9** | `dead` by rule: the sub-8x8 search is unreachable in upstream's own configuration, and `svc_base_layer_md.rs` carries the note. |
+> | `WelsBlockFuncInit` × 2 (encoder and decoder) | **2** | `dead` by rule: SIMD dispatch-table initialisers. |
+> | singletons — `InitBlkStrideWithRef`, `WelsIDctT4RecOnMb`, `WelsRcDropFrameUpdate`, `WelsDeblockingFilterMB`, `WelsGetFirstMbOfSlice` | **5** | genuinely unknown; read the C++. |
+>
+> So the bucket is roughly 37 `renamed` candidates, 11 `dead`-by-rule, and **5 that
+> actually need reading**. That is the shape of the remaining audit, and it is much
+> smaller than "53" suggests.
 
 1. **`find_stub_bodies.py --dups`: 83 groups, most unread.** Six of the ten inspected
    across Phases 5.2–5.4 were real defects — including the shadowed `CWelsThreadPool`
@@ -526,9 +596,12 @@ hollow and the pool they ran on deadlocked. **Treat "ported but never executed" 
 
 1. `compare.sh` exits 0 across the cross-product of: 5 `iRCMode` (−1…3, **not** 4)
    × both init paths × cabac 0/1 × the four inputs × GOP −1/2/8 × all four slice
-   modes × `iMultipleThreadIdc` 1/2/4, plus all 52 QPs at one size. Every axis here
-   has now been swept at least once; no single run has covered the whole
-   cross-product.
+   modes × `iMultipleThreadIdc` 1/2/4, plus all 52 QPs at one size, **plus
+   `iUsageType` 0/1 — the screen axis with its own seven inputs, its rate-control
+   and lossless-LTR rows, and the three plugins behind it** (Phase 10; `sweep.sh
+   scc`, 148 configurations). Every axis here has now been swept at least once, and
+   since 2026-09-02 one command covers the union: `sweep.sh all` reads
+   **`PASS=1043 FAIL=0` in both build profiles**.
 2. No configuration the C++ accepts is rejected by the port, and none is accepted and
    silently mishandled. Every remaining refusal is a documented C++ refusal too.
 3. `todo!()` and `unimplemented!()` both zero in `src/`.
