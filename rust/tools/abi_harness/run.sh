@@ -10,7 +10,7 @@
 #   part 1  decoder conformance: every asset `decoder_conformance_test.rs` pins, run
 #           through the dylib, per-asset SHA-1 == the in-process golden. The list is
 #           **extracted from that test file at run time**, so the two can never drift.
-#   part 2  encode loopback: fourteen configurations spanning the diffharness presets,
+#   part 2  encode loopback: sixteen configurations spanning the diffharness presets,
 #           encoded through the dylib and compared byte for byte with `rust_enc`'s
 #           in-process output. Both build profiles, on both sides.
 #   part 3  the version pair and the capability block against `codec_ver.h` and
@@ -96,10 +96,32 @@ fi
 
 export ABI_HARNESS_RES="$ROOT"
 
-# --- the fourteen encode configurations -------------------------------------
+# --- the screen-content clip the two `scc` rows need ------------------------
+# The synthetic scrolling-text clips are build products of the diffharness
+# (`diffharness/out/`), not assets in `res/`, so a row that names one has to
+# generate it first. `inputs.sh` is the single definition of the seven `scc` inputs
+# — sourcing it rather than re-spelling `gen_screen_clip.py`'s eight arguments here
+# is what keeps this harness and `sweep.sh` encoding the *same* clip. It wants
+# `HERE` = the diffharness directory and a working directory of the repository
+# root; `local HERE` shadows this script's own for the call (bash's dynamic scoping
+# reaches the sourced functions) and it is restored on return.
+build_scc_clip() {
+  local HERE="$DIFF"
+  cd "$ROOT" || return 1
+  . "$DIFF/inputs.sh"
+  screenclip scc_text_320x192_k3 320 192 60 3 20 7 1
+}
+if ! build_scc_clip || [ ! -f "$DIFF/out/scc_text_320x192_k3.yuv" ]; then
+  echo "FAIL  could not build the scc screen clip — see gen_screen_clip.py"
+  echo "TALLY screen clip generation failed"
+  exit 1
+fi
+
+# --- the sixteen encode configurations --------------------------------------
 # "<yuv> <w> <h> <frames> <qp> <cabac> <gop> [rc] [baseinit] [slicemode] [slicenum]
-#  [threads] [complexity] [ltr] [ltrperiod] [ltrfb]" — cxx_enc's own argv, minus the
-# output path, which this script supplies.
+#  [threads] [complexity] [ltr] [ltrperiod] [ltrfb] [psstrategy] [dlayers] [denoise]
+#  [bgd] [setoptext] [usage] [lossless]" — cxx_enc's own argv, minus the output
+# path, which this script supplies.
 #
 # Spanning the presets: both entropy coders, all five iRCMode values, all three init
 # paths, all four slice modes, threads 1/2, both complexity families, and LTR
@@ -121,6 +143,16 @@ CONFIGS=(
   "res/CiscoVT2people_160x96_6fps.yuv 160 96 16 26 0 0 -1 0 0 1 2"
   "res/CiscoVT2people_160x96_6fps.yuv 160 96 16 26 0 0 -1 0 0 1 1 1"
   "res/CiscoVT2people_160x96_6fps.yuv 160 96 16 26 0 0 -1 0 0 1 1 0 2 8 1"
+  # P10.4.E2 (D-scc-19): the screen axis. `iUsageType` was pinned
+  # `CAMERA_VIDEO_REAL_TIME` in this driver until now, so the whole screen family
+  # crossed the C ABI unrefereed. Both rows spell every intervening argument, since
+  # they are positional: `usage` is the 23rd, so `setoptext` must be `0` before it
+  # or the row would encode camera content with a SetOption after frame 1 — two
+  # identical camera streams the loopback would happily call a PASS.
+  #   1. synthetic scrolling text, RC off, single slice, one thread — the byte tier's shape
+  "rust/tools/diffharness/out/scc_text_320x192_k3.yuv 320 192 60 26 0 -1 -1 0 0 1 1 0 0 30 0 0 1 0 0 0 1 0"
+  #   2. camera clip under screen usage, buffer-based RC, lossless link + 4 LTR slots, CABAC
+  "res/CiscoVT2people_320x192_12fps.yuv 320 192 16 26 1 4 2 0 0 1 1 0 4 30 0 0 1 0 0 0 1 1"
 )
 
 cd "$ROOT" || exit 1

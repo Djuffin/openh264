@@ -602,11 +602,16 @@ static int mode_error (const char* asset) {
 
 // ---------------------------------------------------------------------------
 // Part 2's driver — `cxx_enc.cpp`'s `main`, with the two factory calls going
-// through `dlsym`ed pointers instead of the linker. Kept argument-compatible with
-// `cxx_enc` and `rust_enc` so `run.sh` can hand all three the same line.
+// through `dlsym`ed pointers instead of the linker. Argument-compatible with
+// `cxx_enc` and `rust_enc` so `run.sh` can hand all three the same line — and
+// **argument-complete since P10.4.E2**: it parsed 9..17 and stopped while
+// `cxx_enc` grew to 24, so the claim in this comment had been false since T8b.B3.
+// The three drivers must interpret one argument line identically or the loopback
+// compares two different encodes and calls the difference a defect; the parsing
+// and the assignments below are copied from `cxx_enc.cpp`, not paraphrased.
 // ---------------------------------------------------------------------------
 static int mode_enc (int argc, char** argv) {
-  if (argc < 9) { fprintf (stderr, "usage: abi_harness enc <src.yuv> <w> <h> <frames> <qp> <cabac> <gop> <out.264> [...]\n"); return 2; }
+  if (argc < 9) { fprintf (stderr, "usage: abi_harness enc <src.yuv> <w> <h> <frames> <qp> <cabac> <gop> <out.264> [rcmode] [baseinit] [slicemode] [slicenum] [threads] [complexity] [ltr] [ltrperiod] [ltrfb] [psstrategy] [dlayers] [denoise] [bgd] [setoptext] [usage] [lossless]\n"); return 2; }
   const char* kpSrc      = argv[1];
   const int   kiWidth    = atoi (argv[2]);
   const int   kiHeight   = atoi (argv[3]);
@@ -624,6 +629,19 @@ static int mode_enc (int argc, char** argv) {
   const int   kiLtrRefNum= (argc > 15) ? atoi (argv[15]) : 0;
   const int   kiLtrPeriod= (argc > 16) ? atoi (argv[16]) : 30;
   const int   kiLtrFb    = (argc > 17) ? atoi (argv[17]) : 0;
+  // 18..24, added at P10.4.E2 (D-scc-19). This driver's usage line has claimed
+  // argument compatibility with `cxx_enc`/`rust_enc` since T8.C5 and stopped
+  // parsing at 17 while `cxx_enc` grew to 24, so `run.sh` could not hand it a
+  // `ps`, `dl`, `bg` or screen row at all — the loopback covered nine of the
+  // sixteen axes the byte harness drives. The defaults below are `cxx_enc`'s, so
+  // every configuration that ran before this block reads exactly as it did.
+  const int   kiPsStrategy=(argc > 18) ? atoi (argv[18]) : (int) CONSTANT_ID;
+  const int   kiDLayers  = (argc > 19) ? atoi (argv[19]) : 1;
+  const int   kiDenoise  = (argc > 20) ? atoi (argv[20]) : 0;
+  const int   kiBgd      = (argc > 21) ? atoi (argv[21]) : 0;
+  const int   kiSetOptExt= (argc > 22) ? atoi (argv[22]) : 0;
+  const int   kiUsage    = (argc > 23) ? atoi (argv[23]) : 0;
+  const int   kiLossless = (argc > 24) ? atoi (argv[24]) : 0;
 
   ISVCEncoder* pEnc = NULL;
   if (g_CreateEnc (&pEnc) != 0 || pEnc == NULL) { fprintf (stderr, "WelsCreateSVCEncoder failed\n"); return 1; }
@@ -644,7 +662,7 @@ static int mode_enc (int argc, char** argv) {
     sParam.sSpatialLayers[0].fFrameRate       = 30.0f;
     sParam.sSpatialLayers[0].iSpatialBitrate  = 2000000;
   } else {
-    sParam.iUsageType                 = CAMERA_VIDEO_REAL_TIME;
+    sParam.iUsageType                 = kiUsage ? SCREEN_CONTENT_REAL_TIME : CAMERA_VIDEO_REAL_TIME;
     sParam.iPicWidth                  = kiWidth;
     sParam.iPicHeight                 = kiHeight;
     sParam.iTargetBitrate             = 500000;
@@ -656,7 +674,7 @@ static int mode_enc (int argc, char** argv) {
     sParam.iComplexityMode            = (ECOMPLEXITY_MODE) kiComplexity;
     sParam.uiIntraPeriod              = (unsigned int) kiGop;
     sParam.iNumRefFrame               = AUTO_REF_PIC_COUNT;
-    sParam.eSpsPpsIdStrategy          = CONSTANT_ID;
+    sParam.eSpsPpsIdStrategy          = (EParameterSetStrategy) kiPsStrategy;
     sParam.bPrefixNalAddingCtrl       = false;
     sParam.bEnableSSEI                = false;
     sParam.bSimulcastAVC              = false;
@@ -679,7 +697,7 @@ static int mode_enc (int argc, char** argv) {
     sParam.bEnableAdaptiveQuant       = false;
     sParam.bEnableFrameCroppingFlag   = true;
     sParam.bEnableSceneChangeDetect   = false;
-    sParam.bIsLosslessLink            = false;
+    sParam.bIsLosslessLink            = (kiLossless != 0);
     sParam.bFixRCOverShoot            = false;
     sParam.iIdrBitrateRatio           = 400;
     sParam.bPsnrY = sParam.bPsnrU = sParam.bPsnrV = false;
@@ -710,6 +728,22 @@ static int mode_enc (int argc, char** argv) {
       sParam.sSpatialLayers[0].sSliceArgument.uiSliceMode = SM_SINGLE_SLICE;
       sParam.sSpatialLayers[0].sSliceArgument.uiSliceNum  = 1;
       break;
+    }
+
+    sParam.bEnableDenoise = (kiDenoise != 0);
+    sParam.bEnableBackgroundDetection = (kiBgd != 0);
+    if (kiDLayers > 1) {
+      const SSpatialLayerConfig kTemplate = sParam.sSpatialLayers[0];
+      sParam.iSpatialLayerNum = kiDLayers;
+      for (int i = 0; i < kiDLayers; i++) {
+        sParam.sSpatialLayers[i] = kTemplate;
+        sParam.sSpatialLayers[i].iVideoWidth  = kiWidth  >> (kiDLayers - 1 - i);
+        sParam.sSpatialLayers[i].iVideoHeight = kiHeight >> (kiDLayers - 1 - i);
+        sParam.sSpatialLayers[i].fFrameRate   = 30.0f;
+        sParam.sSpatialLayers[i].iSpatialBitrate    = sParam.iTargetBitrate;
+        sParam.sSpatialLayers[i].iMaxSpatialBitrate = UNSPECIFIED_BIT_RATE;
+      }
+      sParam.iTargetBitrate *= kiDLayers;
     }
   }
 
@@ -756,6 +790,13 @@ static int mode_enc (int argc, char** argv) {
     sPic.uiTimeStamp = (long long) (f * (1000 / 30.0));
     int iRet = pEnc->EncodeFrame (&sPic, &sInfo);
     if (iRet != cmResultSuccess) { fprintf (stderr, "EncodeFrame failed at %d: %d\n", f, iRet); break; }
+    if (kiSetOptExt > 0 && f == kiSetOptExt - 1) {
+      int iOptRet = pEnc->SetOption (ENCODER_OPTION_SVC_ENCODE_PARAM_EXT, &sParam);
+      if (iOptRet != cmResultSuccess) {
+        fprintf (stderr, "SetOption(SVC_ENCODE_PARAM_EXT) failed at %d: %d\n", f, iOptRet);
+        break;
+      }
+    }
     if (sInfo.eFrameType == videoFrameTypeSkip) continue;
     for (int l = 0; l < sInfo.iLayerNum; ++l) {
       SLayerBSInfo* p = &sInfo.sLayerInfo[l];
